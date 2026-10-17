@@ -18,16 +18,16 @@ unchanged.
 ## Existing public boundary
 
 [`ControlledAuthorityExecuteRequest` and
-`execute_control_plane_authority_operation`](../serverware/app.py) serve
+`execute_control_plane_authority_operation`](../catchplate/app.py) serve
 `POST /api/authority/control-plane/execute` with the closed outer fields
 `requestId`, `operation` and `arguments`. The route uses authenticated, refreshed
 RBAC, operation-specific roles, bounded JSON framing and the existing exact-result
 request-ID machinery. It then constructs `ControlledWriterInput/v1` and calls
-[`db.dispatch_policy_authority_operation`](../serverware/db.py).
+[`db.dispatch_policy_authority_operation`](../catchplate/db.py).
 
 This remains legacy execution dispatch. Assertion presence at this route is a
 shape check, not signature admission; the actual
-[`AuthorityRuntimeClient.request`](../serverware/authority_service.py) rejects
+[`AuthorityRuntimeClient.request`](../catchplate/authority_service.py) rejects
 successor operations. Preparation must not inherit this endpoint's execution
 result or exact-retry contract.
 
@@ -38,26 +38,26 @@ specialized and seven internal. It grants neither operation a public role and
 does not widen legacy dispatch. No import or startup was executed to establish
 that result.
 
-[`authority_webauthn_challenge`](../serverware/app.py), at
+[`authority_webauthn_challenge`](../catchplate/app.py), at
 `POST /api/authority/webauthn/challenges`, checks the operation's assertion policy,
 the authenticated operator's role and ownership of the active credential before
 calling `db.issue_policy_authority_webauthn_challenge`. Its real challenge binds
 the requested operation arguments. A supplied actor, challenge or assertion
 object alone is not equivalent admission. Authentication, current OIDC-role
-refresh and cookie CSRF enforcement remain in [`auth.py`](../serverware/auth.py).
+refresh and cookie CSRF enforcement remain in [`auth.py`](../catchplate/auth.py).
 
 ## Registration: browser originals are not derived authority
 
 The existing options routes are `POST /api/webauthn/register/options` and
 `POST /api/auth/session/webauthn/register/options`. Their
-[`app.py`](../serverware/app.py) handlers distinguish authenticated operator
+[`app.py`](../catchplate/app.py) handlers distinguish authenticated operator
 bootstrap/MFA/two-person approval from pending-OIDC first enrollment. User and
 session identities, enrollment mode and authorization digest are derived from
 those checks, not accepted as browser assertions.
 
 The corresponding `/verify` routes accept `WebAuthnRegistrationFinish`:
 `label` and `response`. The reusable
-[`webauthn._capture_registration_originals`](../serverware/webauthn.py) now owns
+[`webauthn._capture_registration_originals`](../catchplate/webauthn.py) now owns
 the selected browser values and expected authorization before decode/database
 callbacks, preserves exact client-data/attestation bytes and credential/transports,
 and joins the unused stored challenge to user, label and server authorization.
@@ -72,7 +72,7 @@ ceremony scope, expected authorization, configured RP/origin, admitted trust-roo
 DER snapshot and evaluation time. Published trust/high-water, optional OIDC
 session and finalization's complete sibling/history populations require genuine
 state admission. The actual `_claims_on_work` and `_produce_on_work` in
-[`authority_webauthn_registration_production.py`](../serverware/authority_webauthn_registration_production.py)
+[`authority_webauthn_registration_production.py`](../catchplate/authority_webauthn_registration_production.py)
 perform semantic/evidence construction; client-supplied derived credentials,
 evidence digests or successful-verification objects cannot replace it.
 
@@ -130,7 +130,7 @@ authority. The existing `/verify` routes remain on their legacy continuation.
 
 ## Private caller-to-verifier source bridge
 
-The fixed [registration source caller bridge](../serverware/authority_webauthn_registration_source_caller.py)
+The fixed [registration source caller bridge](../catchplate/authority_webauthn_registration_source_caller.py)
 uses the existing control-plane → runtime relay → verifier topology. Both
 listeners admit their actual configured Unix peer before the request prefix;
 the verifier does not acquire a new direct control-plane peer. The canonical
@@ -155,7 +155,7 @@ same exchange before signing.
 This bridge does not connect the browser `/verify` routes. Their authenticated
 capture derives the live challenge ID and the actual pending-OIDC session ID
 (or no session). The new fixed
-[`db.observe_published_webauthn_trust_publication_id`](../serverware/db.py)
+[`db.observe_published_webauthn_trust_publication_id`](../catchplate/db.py)
 uses one bounded read to join the global published row to the
 `webauthn-metadata` high-water tuple (rollback epoch, publication sequence/digest
 and metadata-blob digest), rejects pending, absent or ambiguous state, and returns
@@ -169,7 +169,7 @@ Complete finalization populations and successor business execution remain
 separate. The source bridge itself neither consumes a grant nor writes custody,
 finalizes a credential or enables successor execution.
 
-The private [`prepare_registration_evidence(originals)`](../serverware/control_plane_registration_preparation.py)
+The private [`prepare_registration_evidence(originals)`](../catchplate/control_plane_registration_preparation.py)
 now composes the existing cold owners, candidate publication lookup and that
 source bridge with real enrollment issuance and signer-response verification:
 
@@ -217,7 +217,7 @@ legacy `/verify` parser or success contract.
 
 The handlers call only `prepare_registration_custody(originals)` and return
 no-store **202** with schema
-`serverware.webAuthnRegistrationCustodyPreparation/v1`, `status: prepared`,
+`catchplate.webAuthnRegistrationCustodyPreparation/v1`, `status: prepared`,
 `localDigest` and `registrationCompleted: false`. They do not forward or
 automatically retry, finalize a credential, activate a session, or fall back to
 legacy registration. A spent grant or local write can precede a failure; bounded
@@ -232,7 +232,7 @@ the candidate and derives current trust/withdrawal information. A successor
 continuation must preserve exact candidate bytes and independently bind the
 candidate key/policy, previous trust state, authenticated actor, complete
 withdrawal/dependent populations and approval to the proposed transition.
-[`authority_webauthn_trust_candidate._admit_on_work`](../serverware/authority_webauthn_trust_candidate.py)
+[`authority_webauthn_trust_candidate._admit_on_work`](../catchplate/authority_webauthn_trust_candidate.py)
 and the actual stage planner provide the existing private verification pieces.
 
 The authority-shaped branch of `_require_control_plane_mutation_mfa` merely
@@ -245,8 +245,8 @@ Completion requires independently committed stage bindings and genuine signed
 installer evidence for the configured target, not only a publication ID or local
 disk observation. The stage bindings include request/operation, receipt, roots,
 fence, witness and publication/high-water identities; see
-[`authority_transition_webauthn_completion.py`](../serverware/authority_transition_webauthn_completion.py).
-[`webauthn_trust.reconcile_trust_publications`](../serverware/webauthn_trust.py)
+[`authority_transition_webauthn_completion.py`](../catchplate/authority_transition_webauthn_completion.py).
+[`webauthn_trust.reconcile_trust_publications`](../catchplate/webauthn_trust.py)
 still uses legacy ID-only completion and explicitly does not supply that missing
 signed installation authority.
 
@@ -254,9 +254,9 @@ signed installation authority.
 
 Registration `/prepare` now reaches the verifier's actual
 `_prepare_webauthn_evidence_custody` in
-[`authority_service.py`](../serverware/authority_service.py). This evidence path
+[`authority_service.py`](../catchplate/authority_service.py). This evidence path
 does not supply a complete registration business transition. The fixed
-[`signer_response._verify_finalization_on_configuration`](../serverware/authority_webauthn_registration_signer_response.py)
+[`signer_response._verify_finalization_on_configuration`](../catchplate/authority_webauthn_registration_signer_response.py)
 derives a genuine finalization request and encoded empty transition inputs from
 one actual original grant/source/attestation/evidence replay. It accepts only
 bounded sorted sibling hints, not caller-produced finalization arguments or a

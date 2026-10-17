@@ -22,8 +22,8 @@ from types import MappingProxyType
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
-from serverware import authority_query_read_work
+from catchplate import authority_contract
+from catchplate import authority_query_read_work
 
 
 PHASE2 = (
@@ -127,18 +127,18 @@ COUNTED_COLUMNS = {
         "subtree_count", "index_revision"),
 }
 COUNTED_SIGNATURES = {
-    "serverware_policy_authority_counted_profile": ("text",),
-    "serverware_policy_authority_counted_frame_digest": ("text", "text[]"),
-    "serverware_policy_authority_counted_empty": ("text", "text"),
-    "serverware_policy_authority_counted_leaf": ("text", "text", "text", "text"),
-    "serverware_policy_authority_counted_branch": ("text", "text", "text[]", "bigint[]"),
-    "serverware_policy_authority_counted_expiry_micros": ("text",),
-    "serverware_policy_authority_counted_signed_order": ("bigint",),
-    "serverware_policy_authority_counted_challenge_id_order": ("text",),
-    "serverware_policy_authority_counted_field": ("jsonb", "text", "text"),
-    "serverware_policy_authority_counted_project": ("text", "jsonb"),
-    "serverware_policy_authority_counted_apply_index": ("text", "text", "jsonb", "jsonb"),
-    "serverware_policy_authority_counted_apply_event": ("text", "text", "jsonb", "jsonb"),
+    "catchplate_policy_authority_counted_profile": ("text",),
+    "catchplate_policy_authority_counted_frame_digest": ("text", "text[]"),
+    "catchplate_policy_authority_counted_empty": ("text", "text"),
+    "catchplate_policy_authority_counted_leaf": ("text", "text", "text", "text"),
+    "catchplate_policy_authority_counted_branch": ("text", "text", "text[]", "bigint[]"),
+    "catchplate_policy_authority_counted_expiry_micros": ("text",),
+    "catchplate_policy_authority_counted_signed_order": ("bigint",),
+    "catchplate_policy_authority_counted_challenge_id_order": ("text",),
+    "catchplate_policy_authority_counted_field": ("jsonb", "text", "text"),
+    "catchplate_policy_authority_counted_project": ("text", "jsonb"),
+    "catchplate_policy_authority_counted_apply_index": ("text", "text", "jsonb", "jsonb"),
+    "catchplate_policy_authority_counted_apply_event": ("text", "text", "jsonb", "jsonb"),
 }
 READ_ONLY = "_POLICY_AUTHORITY_RUNTIME_READ_ONLY_TABLES"
 LEGACY_UNIONS = {
@@ -241,8 +241,8 @@ def operation_manifest_material(tree):
 class AuthorityTableAclSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.db_source, cls.db_tree = read_source("serverware/db.py", 16 * 1024 * 1024)
-        cls.schema_source, cls.schema_tree = read_source("serverware/authority_store/schema.py", 2 * 1024 * 1024)
+        cls.db_source, cls.db_tree = read_source("catchplate/db.py", 16 * 1024 * 1024)
+        cls.schema_source, cls.schema_tree = read_source("catchplate/authority_store/schema.py", 2 * 1024 * 1024)
         cls.seal = named_function(cls.db_tree, "_seal_postgres_schema_acl")
 
     def assert_shape(self, node, expression):
@@ -301,7 +301,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         alias = named_assignment(spec_tree, "PHASE2_TABLES")
         self.assertIsInstance(alias, ast.AnnAssign)
         self.assert_shape(alias.value, "authority_contract.PHASE2_STORE_TABLES")
-        _, contract_tree = read_source("serverware/authority_contract.py", 2 * 1024 * 1024)
+        _, contract_tree = read_source("catchplate/authority_contract.py", 2 * 1024 * 1024)
         digest = named_assignment(contract_tree, "OPERATION_MANIFEST_DIGEST").value
         self.assertTrue(call_named(digest, "_digest"))
         self.assertEqual(len(digest.args), 2)
@@ -346,7 +346,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         verifier_guard = exact_guard("metadata verifier role/read closure is not source exact")
         self.assertIsInstance(verifier_guard, ast.If)
         self.assert_shape(verifier_guard.test,
-            "schema in {_POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME, 'serverware_candidate_authority_expected_v9'} "
+            "schema in {_POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME, 'catchplate_candidate_authority_expected_v9'} "
             "and (type(authority_verifier_role) is not str "
             "or re.fullmatch('[a-z][a-z0-9_]{0,62}', authority_verifier_role) is None "
             "or authority_verifier_role != _METADATA_STORE_AUTHORITY_VERIFIER_ROLE "
@@ -575,7 +575,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         returned = [node for node in function.body if isinstance(node, ast.Return)]
         self.assertEqual(len(returned), 1)
         self.assert_shape(returned[0].value,
-            "_policy_candidate_authority_framed_digest('serverware.policyCandidateAuthoritySourceContract/v1', material)")
+            "_policy_candidate_authority_framed_digest('catchplate.policyCandidateAuthoritySourceContract/v1', material)")
 
     def test_executor_and_planner_direct_dml_allowlists_are_not_expanded(self):
         self.assert_shape(named_assignment(self.db_tree, "_POLICY_AUTHORITY_CONTROLLED_WRITER_TABLES").value,
@@ -583,7 +583,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         self.assert_shape(named_assignment(self.db_tree,
             "_POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES").value,
             "_authority_planner_writer_sql.PLANNER_WRITER_TABLE_PRIVILEGES")
-        _, writer_tree = read_source("serverware/authority_store/planner_writer_sql.py", 128 * 1024)
+        _, writer_tree = read_source("catchplate/authority_store/planner_writer_sql.py", 128 * 1024)
         value = named_assignment(writer_tree, "PLANNER_WRITER_TABLE_PRIVILEGES").value
         self.assertTrue(call_named(value, "MappingProxyType"))
         self.assertIsInstance(value.args[0], ast.Dict)
@@ -619,16 +619,16 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
 
     def test_source_revision_and_all_seventeen_v9_ddl_checks_are_pinned(self):
         self.assertEqual(authority_contract.SOURCE_REVISION,
-            "serverware.policyCandidateAuthoritySource/2026-07-30.351")
-        _, executor = read_source("serverware/authority_store/executor_v9.py", 2 * 1024 * 1024)
+            "catchplate.policyCandidateAuthoritySource/2026-07-30.351")
+        _, executor = read_source("catchplate/authority_store/executor_v9.py", 2 * 1024 * 1024)
         self.assertFalse(any(isinstance(node, ast.FunctionDef)
             and node.name == "authority_v9_schema_source" for node in executor.body))
         aliases = [alias for node in executor.body if isinstance(node, ast.ImportFrom)
-            and node.module == "serverware.authority_store.v9_schema_source"
+            and node.module == "catchplate.authority_store.v9_schema_source"
             for alias in node.names]
         self.assertEqual([(alias.name, alias.asname) for alias in aliases],
             [("authority_v9_schema_source", None)])
-        _, tree = read_source("serverware/authority_store/v9_schema_source.py", 2 * 1024 * 1024)
+        _, tree = read_source("catchplate/authority_store/v9_schema_source.py", 2 * 1024 * 1024)
         function = named_function(tree, "authority_v9_schema_source")
         literals = [node.value for node in ast.walk(function)
             if isinstance(node, ast.Constant) and type(node.value) is str]
@@ -639,13 +639,13 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         # The 24 checks include the current-root commit marker; this count
         # already applied before the fresh .350 revision update.
         self.assertEqual(sum(value.count(authority_contract.SOURCE_REVISION) for value in literals), 24)
-        self.assertFalse(any("serverware.policyCandidateAuthoritySource/2026-07-30.26" in value for value in literals))
+        self.assertFalse(any("catchplate.policyCandidateAuthoritySource/2026-07-30.26" in value for value in literals))
 
     def test_planner_query_bookkeeping_contract_binds_narrow_cumulative_limits(self):
         contract = authority_contract.PLANNER_QUERY_BOOKKEEPING_CONTRACT
         self.assertIs(type(contract), MappingProxyType)
         self.assertEqual(dict(contract), {
-            "schema": "serverware.policyAuthorityPlannerQueryBookkeeping/v1",
+            "schema": "catchplate.policyAuthorityPlannerQueryBookkeeping/v1",
             "allocation": "once-per-typed-derive",
             "maxHashes": 8_000_000, "maxInputBytes": 64 * 1024 * 1024,
             "maxJsonNodes": 1_000_000, "maxJsonDepth": 128,
@@ -665,7 +665,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
                           authority_query_read_work.MAX_JSON_DEPTH),
                          (contract["maxHashes"], contract["maxInputBytes"],
                           contract["maxJsonNodes"], contract["maxJsonDepth"]))
-        _, tree = read_source("serverware/authority_contract.py", 2 * 1024 * 1024)
+        _, tree = read_source("catchplate/authority_contract.py", 2 * 1024 * 1024)
         material = operation_manifest_material(tree)
         fields = {key.value: value for key, value in zip(material.keys, material.values)}
         self.assert_shape(fields["plannerQueryBookkeeping"], "dict(PLANNER_QUERY_BOOKKEEPING_CONTRACT)")
@@ -675,23 +675,23 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
                          if isinstance(key, ast.Constant) and type(key.value) is str}
         self.assert_shape(source_fields["operationContractDigest"], "authority_contract.OPERATION_MANIFEST_DIGEST")
         self.assertEqual(authority_contract.SCHEMA_VERSION, 9)
-        self.assertEqual(authority_contract.CONTRACT_SCHEMA, "serverware.policyAuthorityOperationContract/v3")
+        self.assertEqual(authority_contract.CONTRACT_SCHEMA, "catchplate.policyAuthorityOperationContract/v3")
         self.assertEqual(authority_contract.MAX_PLAN_WORK_UNITS, 16386)
 
     def test_private_complete_acquisition_contract_binds_actual_limits_and_excludes_public_v3(self):
         contract = authority_contract.PLANNER_COMPLETE_ACQUISITION_CONTRACT
         self.assertIs(type(contract), MappingProxyType)
         self.assertEqual(dict(contract), {
-            "schema": "serverware.policyAuthorityPlannerCompleteAcquisition/v1",
+            "schema": "catchplate.policyAuthorityPlannerCompleteAcquisition/v1",
             "admission": "private-worker-only", "publicV3Enabled": False,
             "operation": "webauthn.credential.revoke",
             "producerReadPhase": "single-cutoff-source-program/v1",
             "producerAcquisitionPhase": "single-ledger-read-effects-write/v1",
             "retainedPrimaryEvidence": "detached-original-roots-and-proofs/v1",
-            "headTraceProfile": "serverware.policyAuthorityCountedHeadRead/v1",
-            "rangeTraceProfile": "serverware.policyAuthorityCountedIndexRead/v1",
-            "primaryTraceProfile": "serverware.policyAuthorityCompletePrimaryRead/v1",
-            "mutationTraceProfile": "serverware.policyAuthorityCountedIndexMutationRead/v1",
+            "headTraceProfile": "catchplate.policyAuthorityCountedHeadRead/v1",
+            "rangeTraceProfile": "catchplate.policyAuthorityCountedIndexRead/v1",
+            "primaryTraceProfile": "catchplate.policyAuthorityCompletePrimaryRead/v1",
+            "mutationTraceProfile": "catchplate.policyAuthorityCountedIndexMutationRead/v1",
             "maxSqlReads": 4096, "maxParameterBytes": 4 * 1024 * 1024,
             "maxReturnedFrameBytes": 4 * 1024 * 1024,
             "maxPrimaryRowBytes": 1024 * 1024, "maxRangeSqlReads": 20,
@@ -720,7 +720,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         self.assertIs(contract["publicV3Enabled"], False)
         with self.assertRaises(TypeError):
             contract["publicV3Enabled"] = True
-        _, tree = read_source("serverware/authority_contract.py", 2 * 1024 * 1024)
+        _, tree = read_source("catchplate/authority_contract.py", 2 * 1024 * 1024)
         material = operation_manifest_material(tree)
         fields = {key.value: value for key, value in zip(material.keys, material.values)}
         self.assert_shape(fields["plannerCompleteAcquisition"], "dict(PLANNER_COMPLETE_ACQUISITION_CONTRACT)")
@@ -728,14 +728,14 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         # modules. Their literal profiles are bound by source below, not eager
         # imports back into their own contract dependency.
         imports = {alias.name for node in tree.body if isinstance(node, ast.ImportFrom)
-                   and node.module == "serverware" for alias in node.names}
+                   and node.module == "catchplate" for alias in node.names}
         self.assertTrue({"authority_index_heads", "authority_index_reader", "authority_index_trace",
                          "authority_complete_acquisition"}.isdisjoint(imports))
         sources = {}
         for name in ("authority_index_heads", "authority_index_reader", "authority_index_trace",
                      "authority_complete_query", "authority_audit_trace", "authority_complete_acquisition",
                      "authority_index_mutation_reader"):
-            _, sources[name] = read_source(f"serverware/{name}.py", 256 * 1024)
+            _, sources[name] = read_source(f"catchplate/{name}.py", 256 * 1024)
         for module, constant, field in (
             ("authority_index_heads", "READ_PROFILE", "headTraceProfile"),
             ("authority_index_reader", "READ_PROFILE", "rangeTraceProfile"),
@@ -754,7 +754,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             ("MAX_SQL_READS", "1 + (MAX_OUTSIDE_PREFIXES + MAX_NODE_IDENTITIES - 1) // MAX_NODE_IDENTITIES"),
         ):
             self.assert_shape(named_assignment(reader, constant).value, expression)
-        _, frontier = read_source("serverware/authority_index_frontier.py", 128 * 1024)
+        _, frontier = read_source("catchplate/authority_index_frontier.py", 128 * 1024)
         self.assert_shape(named_assignment(frontier, "MAX_OUTSIDE_PREFIXES").value,
                           "2 * KEY_NIBBLES * 15")
         self.assertEqual(contract["maxRangeSqlReads"], 1 + (4800 + 255) // 256)
@@ -771,20 +771,20 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         # measured envelope. Schema9, operation-contract/v3 and business units
         # are unchanged; the old bookkeeping descriptor has its own full pin.
         self.assertEqual(authority_contract.SCHEMA_VERSION, 9)
-        self.assertEqual(authority_contract.CONTRACT_SCHEMA, "serverware.policyAuthorityOperationContract/v3")
+        self.assertEqual(authority_contract.CONTRACT_SCHEMA, "catchplate.policyAuthorityOperationContract/v3")
         self.assertEqual(authority_contract.MAX_PLAN_WORK_UNITS, 16386)
 
     def test_signed_revocation_verifier_contract_pins_private_v4_without_production_admission(self):
         contract = authority_contract.SIGNED_REVOCATION_PLAN_CONTRACT
         self.assertIs(type(contract), MappingProxyType)
         self.assertEqual(dict(contract), {
-            "schema": "serverware.policyAuthoritySignedRevocationPlanVerification/v1",
+            "schema": "catchplate.policyAuthoritySignedRevocationPlanVerification/v1",
             "admission": "private-verifier-only", "operation": "webauthn.credential.revoke",
             "publicV3Enabled": False, "productionV4Enabled": False,
-            "responseSchema": "serverware.policyAuthorityPlannerResponse/v4",
-            "measuredPlanSchema": "serverware.policyAuthorityMeasuredPlan/v4",
-            "signedPlanSchema": "serverware.signedPolicyAuthorityMeasuredPlan/v4",
-            "snapshotDomain": "serverware.policyAuthoritySnapshot/v4",
+            "responseSchema": "catchplate.policyAuthorityPlannerResponse/v4",
+            "measuredPlanSchema": "catchplate.policyAuthorityMeasuredPlan/v4",
+            "signedPlanSchema": "catchplate.signedPolicyAuthorityMeasuredPlan/v4",
+            "snapshotDomain": "catchplate.policyAuthoritySnapshot/v4",
             "writerTraceBinding": "exact-contiguous-source-batches-before-writes/v1",
             "maxPayloadBytes": 64 * 1024 * 1024, "maxSharedHashes": 8_000_000,
             "maxSharedInputBytes": 64 * 1024 * 1024, "maxSharedJsonNodes": 1_000_000,
@@ -808,14 +808,14 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         })
         with self.assertRaises(TypeError):
             contract["productionV4Enabled"] = True
-        _, tree = read_source("serverware/authority_contract.py", 2 * 1024 * 1024)
+        _, tree = read_source("catchplate/authority_contract.py", 2 * 1024 * 1024)
         material = operation_manifest_material(tree)
         fields = {key.value: value for key, value in zip(material.keys, material.values)}
         self.assert_shape(fields["signedRevocationPlanVerification"], "dict(SIGNED_REVOCATION_PLAN_CONTRACT)")
         imports = {alias.name for node in tree.body if isinstance(node, ast.ImportFrom)
-                   and node.module == "serverware" for alias in node.names}
+                   and node.module == "catchplate" for alias in node.names}
         self.assertTrue({"authority_revocation_plan", "authority_revocation_plan_contract"}.isdisjoint(imports))
-        _, shape = read_source("serverware/authority_revocation_plan_contract.py", 128 * 1024)
+        _, shape = read_source("catchplate/authority_revocation_plan_contract.py", 128 * 1024)
         for constant, field in (("PLANNER_RESPONSE_SCHEMA", "responseSchema"),
                                 ("MEASURED_PLAN_SCHEMA", "measuredPlanSchema"),
                                 ("SIGNED_MEASURED_PLAN_SCHEMA", "signedPlanSchema"),
@@ -824,20 +824,20 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         for constant, expression in (("MAX_PAYLOAD_BYTES", "64 * 1024 * 1024"),
                                       ("MAX_JSON_NODES", "1_000_000"), ("MAX_JSON_DEPTH", "128")):
             self.assert_shape(named_assignment(shape, constant).value, expression)
-        _, verifier = read_source("serverware/authority_revocation_plan.py", 128 * 1024)
+        _, verifier = read_source("catchplate/authority_revocation_plan.py", 128 * 1024)
         calls = {node.func.attr for node in ast.walk(verifier)
                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
         self.assertTrue({"_JSONCapture", "_PackagingLedger", "_verify",
                          "derive_authorization_sources", "verify"}.issubset(calls))
         # Source linkage and closed shapes are not runtime or enrollment proof.
         self.assertEqual(authority_contract.SCHEMA_VERSION, 9)
-        self.assertEqual(authority_contract.CONTRACT_SCHEMA, "serverware.policyAuthorityOperationContract/v3")
+        self.assertEqual(authority_contract.CONTRACT_SCHEMA, "catchplate.policyAuthorityOperationContract/v3")
 
     def test_original_signed_wire_contract_is_private_source_bound_and_immutable(self):
         contract = authority_contract.SIGNED_REVOCATION_WIRE_CONTRACT
         self.assertIs(type(contract), MappingProxyType)
         self.assertEqual(dict(contract), {
-            "schema": "serverware.policyAuthoritySignedRevocationWireAdmission/v1",
+            "schema": "catchplate.policyAuthoritySignedRevocationWireAdmission/v1",
             "admission": "private-wire-verifier-only", "operation": "webauthn.credential.revoke",
             "publicV3Enabled": False, "productionV4Enabled": False,
             "inputEncoding": "canonical-ascii-json/v1",
@@ -867,12 +867,12 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         })
         with self.assertRaises(TypeError):
             contract["productionV4Enabled"] = True
-        _, tree = read_source("serverware/authority_contract.py", 2 * 1024 * 1024)
+        _, tree = read_source("catchplate/authority_contract.py", 2 * 1024 * 1024)
         material = operation_manifest_material(tree)
         fields = {key.value: value for key, value in zip(material.keys, material.values)}
         self.assert_shape(fields["signedRevocationWireAdmission"], "dict(SIGNED_REVOCATION_WIRE_CONTRACT)")
         imports = {alias.name for node in tree.body if isinstance(node, ast.ImportFrom)
-                   and node.module == "serverware" for alias in node.names}
+                   and node.module == "catchplate" for alias in node.names}
         self.assertTrue({"authority_revocation_wire", "authority_revocation_plan"}.isdisjoint(imports))
         limits = authority_query_read_work.QueryReadValidationLimits()
         self.assertEqual((contract["maxSharedHashes"], contract["maxSharedInputBytes"],
@@ -880,18 +880,18 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
                          (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes,
                           authority_query_read_work.MAX_JSON_DEPTH))
         self.assertEqual(authority_contract.SCHEMA_VERSION, 9)
-        self.assertEqual(authority_contract.CONTRACT_SCHEMA, "serverware.policyAuthorityOperationContract/v3")
+        self.assertEqual(authority_contract.CONTRACT_SCHEMA, "catchplate.policyAuthorityOperationContract/v3")
 
     def test_private_signed_production_contract_binds_shared_replay_and_precharged_transport(self):
         contract = authority_contract.SIGNED_REVOCATION_PRODUCTION_CONTRACT
         self.assertIs(type(contract), MappingProxyType)
         self.assertEqual(dict(contract), {
-            "schema": "serverware.policyAuthoritySignedRevocationPlanProduction/v1",
+            "schema": "catchplate.policyAuthoritySignedRevocationPlanProduction/v1",
             "admission": "private-producer-only", "operation": "webauthn.credential.revoke",
             "publicV3Enabled": False, "productionV4Enabled": False,
             "proofPackaging": "genuine-mixed-replay-on-original-work/v1",
             "transportReservation": "measured-payload-and-envelope-before-signing/v1",
-            "contextSchema": "serverware.policyAuthorityRevocationEvaluationContext/v1",
+            "contextSchema": "catchplate.policyAuthorityRevocationEvaluationContext/v1",
             "maxContextBytes": 512 * 1024, "maxContextNodes": 4096, "maxContextDepth": 8,
             "maxPayloadBytes": 64 * 1024 * 1024, "maxSharedHashes": 8_000_000,
             "maxSharedInputBytes": 64 * 1024 * 1024, "maxSharedJsonNodes": 1_000_000,
@@ -920,13 +920,13 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         })
         with self.assertRaises(TypeError):
             contract["productionV4Enabled"] = True
-        _, tree = read_source("serverware/authority_contract.py", 2 * 1024 * 1024)
+        _, tree = read_source("catchplate/authority_contract.py", 2 * 1024 * 1024)
         material = operation_manifest_material(tree)
         fields = {key.value: value for key, value in zip(material.keys, material.values)}
         self.assert_shape(fields["signedRevocationPlanProduction"],
                           "dict(SIGNED_REVOCATION_PRODUCTION_CONTRACT)")
         imports = {alias.name for node in tree.body if isinstance(node, ast.ImportFrom)
-                   and node.module == "serverware" for alias in node.names}
+                   and node.module == "catchplate" for alias in node.names}
         self.assertTrue({"authority_planner", "authority_revocation_plan_production",
                          "authority_revocation_proof_bundle"}.isdisjoint(imports))
         limits = authority_query_read_work.QueryReadValidationLimits()
@@ -934,7 +934,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
                           contract["maxSharedJsonNodes"]),
                          (limits.max_hashes, limits.max_input_bytes, limits.max_json_nodes))
         self.assertEqual(authority_contract.SCHEMA_VERSION, 9)
-        self.assertEqual(authority_contract.CONTRACT_SCHEMA, "serverware.policyAuthorityOperationContract/v3")
+        self.assertEqual(authority_contract.CONTRACT_SCHEMA, "catchplate.policyAuthorityOperationContract/v3")
 
     def test_retained_record_contract_binds_private_postgres_storage_and_exact_fields(self):
         columns = ("planner_transaction_id", "plan_protocol", "exact_envelope_base64url",
@@ -958,14 +958,14 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         contract = authority_contract.REVOCATION_RETENTION_CONTRACT
         self.assertIs(type(contract), MappingProxyType)
         self.assertEqual(dict(contract), {
-            "schema": "serverware.policyAuthorityRevocationRetention/v1",
+            "schema": "catchplate.policyAuthorityRevocationRetention/v1",
             "operation": "webauthn.credential.revoke", "planProtocol": "revocation-v4",
             "publicExecutionEnabled": False, "postgresOnly": True, "sqliteAdmission": False,
             "retainedTable": "policy_authority_revocation_retained_plans", "retainedColumns": columns,
             "reservationImmutableColumns": reservation, "payloadImmutableColumns": payload,
             "terminalImmutableColumns": terminal,
-            "recordSchema": "serverware.policyAuthorityRevocationRetainedPlan/v1",
-            "contextSchema": "serverware.policyAuthorityRevocationEvaluationContext/v1",
+            "recordSchema": "catchplate.policyAuthorityRevocationRetainedPlan/v1",
+            "contextSchema": "catchplate.policyAuthorityRevocationEvaluationContext/v1",
             "contextFields": 18, "recordHeaderFields": 13, "maxEnvelopeBytes": 67108864,
             "maxContextBytes": 524288, "maxContextNodes": 4096, "maxContextDepth": 8,
             "parentBinding": "symmetric-deferred-composite-foreign-keys",
@@ -976,7 +976,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         })
         with self.assertRaises(TypeError):
             contract["publicExecutionEnabled"] = True
-        _, tree = read_source("serverware/authority_contract.py", 2 * 1024 * 1024)
+        _, tree = read_source("catchplate/authority_contract.py", 2 * 1024 * 1024)
         material = operation_manifest_material(tree)
         fields = {key.value: value for key, value in zip(material.keys, material.values)}
         self.assert_shape(fields["revocationRetention"], "dict(REVOCATION_RETENTION_CONTRACT)")
@@ -999,7 +999,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         installer = named_function(self.db_tree, "_install_policy_candidate_authority_guards")
         text = ast.get_source_segment(self.db_source, installer)
         self.assertIn("BEFORE UPDATE OR DELETE ON {table}", text)
-        self.assertIn("serverware_reject_policy_authority_mutation()", text)
+        self.assertIn("catchplate_reject_policy_authority_mutation()", text)
         for function in ("_legacy_migrate_policy_candidate_authority_offline", "_prepare_policy_candidate_authority_schema"):
             source = ast.get_source_segment(self.db_source, named_function(self.db_tree, function))
             guard = source.index("_metadata_table_exists(conn, authority_contract.REVOCATION_RETAINED_TABLE)")
@@ -1027,7 +1027,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         contract = authority_contract.REVOCATION_WRITER_REQUEST_CUSTODY_CONTRACT
         self.assertIs(type(contract), MappingProxyType)
         self.assertEqual(dict(contract), {
-            "schema": "serverware.policyAuthorityRevocationWriterRequestCustody/v1",
+            "schema": "catchplate.policyAuthorityRevocationWriterRequestCustody/v1",
             "operation": "webauthn.credential.revoke", "planProtocol": "revocation-v4",
             "postgresOnly": True, "sqliteAdmission": False, "publicExecutionEnabled": False,
             "requestTable": table, "requestColumns": columns,
@@ -1048,7 +1048,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         })
         with self.assertRaises(TypeError):
             contract["publicExecutionEnabled"] = True
-        _, ddl_tree = read_source("serverware/authority_store/v9_schema_source.py", 2 * 1024 * 1024)
+        _, ddl_tree = read_source("catchplate/authority_store/v9_schema_source.py", 2 * 1024 * 1024)
         ddl = v9_schema_literal(ddl_tree)
         start = ddl.index(table + " (")
         request = ddl[start:ddl.index("\n            );", start)]
@@ -1106,12 +1106,12 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         _, migration = read_source("scripts/authority/migrate_v8_to_v9.py", 2 * 1024 * 1024)
         self.assertIn(table, [node.value for node in
             named_assignment(migration, "_V9_NEW_TABLES").value.args[0].elts])
-        source, tree = read_source("serverware/authority_store/v9_schema_source.py", 2 * 1024 * 1024)
+        source, tree = read_source("catchplate/authority_store/v9_schema_source.py", 2 * 1024 * 1024)
         sqlite = ast.get_source_segment(source, named_function(tree, "planner_retention_sqlite_guards_sql"))
         self.assertIn("BEFORE INSERT ON " + table, sqlite)
         self.assertIn("SQLite writer request custody is disabled", sqlite)
-        self.assertIn('"serverware_writer_request_sqlite_insert_guard"', self.schema_source)
-        _, contract_tree = read_source("serverware/authority_contract.py", 2 * 1024 * 1024)
+        self.assertIn('"catchplate_writer_request_sqlite_insert_guard"', self.schema_source)
+        _, contract_tree = read_source("catchplate/authority_contract.py", 2 * 1024 * 1024)
         material = operation_manifest_material(contract_tree)
         fields = {key.value: value for key, value in zip(material.keys, material.values)}
         self.assert_shape(fields["revocationWriterRequestCustody"], "dict(REVOCATION_WRITER_REQUEST_CUSTODY_CONTRACT)")
@@ -1129,7 +1129,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         contract = authority_contract.REVOCATION_WRITER_ACK_CUSTODY_CONTRACT
         self.assertIs(type(contract), MappingProxyType)
         self.assertEqual(dict(contract), {
-            "schema": "serverware.policyAuthorityRevocationWriterAckCustody/v1",
+            "schema": "catchplate.policyAuthorityRevocationWriterAckCustody/v1",
             "operation": "webauthn.credential.revoke", "planProtocol": "revocation-v4",
             "postgresOnly": True, "sqliteAdmission": False, "publicExecutionEnabled": False,
             "ackTable": table, "ackColumns": columns, "primaryKey": ("ack_envelope_id",),
@@ -1143,7 +1143,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         })
         with self.assertRaises(TypeError):
             contract["publicExecutionEnabled"] = True
-        _, tree = read_source("serverware/authority_store/v9_schema_source.py", 2 * 1024 * 1024)
+        _, tree = read_source("catchplate/authority_store/v9_schema_source.py", 2 * 1024 * 1024)
         ddl = v9_schema_literal(tree)
         start = ddl.index(table + " (")
         ack = ddl[start:ddl.index("\n            );", start)]
@@ -1191,12 +1191,12 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             self.assertLess(guard, body.index('"DROP TABLE "', guard))
         _, migration = read_source("scripts/authority/migrate_v8_to_v9.py", 2 * 1024 * 1024)
         self.assertIn(table, [node.value for node in named_assignment(migration, "_V9_NEW_TABLES").value.args[0].elts])
-        source, tree = read_source("serverware/authority_store/v9_schema_source.py", 2 * 1024 * 1024)
+        source, tree = read_source("catchplate/authority_store/v9_schema_source.py", 2 * 1024 * 1024)
         sqlite = ast.get_source_segment(source, named_function(tree, "planner_retention_sqlite_guards_sql"))
         self.assertIn("BEFORE INSERT ON " + table, sqlite)
         self.assertIn("SQLite writer acknowledgment custody is disabled", sqlite)
-        self.assertIn('"serverware_writer_ack_sqlite_insert_guard"', self.schema_source)
-        _, contract_tree = read_source("serverware/authority_contract.py", 2 * 1024 * 1024)
+        self.assertIn('"catchplate_writer_ack_sqlite_insert_guard"', self.schema_source)
+        _, contract_tree = read_source("catchplate/authority_contract.py", 2 * 1024 * 1024)
         material = operation_manifest_material(contract_tree)
         fields = {key.value: value for key, value in zip(material.keys, material.values)}
         self.assert_shape(fields["revocationWriterAckCustody"], "dict(REVOCATION_WRITER_ACK_CUSTODY_CONTRACT)")
@@ -1232,7 +1232,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         contract = authority_contract.REVOCATION_CAPABILITY_CUSTODY_CONTRACT
         self.assertIs(type(contract), MappingProxyType)
         self.assertEqual(dict(contract), {
-            "schema": "serverware.policyAuthorityRevocationCapabilityCustody/v1",
+            "schema": "catchplate.policyAuthorityRevocationCapabilityCustody/v1",
             "operation": "webauthn.credential.revoke", "capabilityProtocol": "revocation-v4",
             "planProtocol": "revocation-v4", "postgresOnly": True, "sqliteAdmission": False,
             "installedSuccessorIssuer": True, "publicExecutionEnabled": False,
@@ -1249,7 +1249,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         })
         with self.assertRaises(TypeError):
             contract["installedSuccessorIssuer"] = True
-        _, tree = read_source("serverware/authority_contract.py", 2 * 1024 * 1024)
+        _, tree = read_source("catchplate/authority_contract.py", 2 * 1024 * 1024)
         material = operation_manifest_material(tree)
         fields = {key.value: value for key, value in zip(material.keys, material.values)}
         self.assert_shape(fields["revocationCapabilityCustody"], "dict(REVOCATION_CAPABILITY_CUSTODY_CONTRACT)")
@@ -1275,7 +1275,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         installer = named_function(self.db_tree, "_install_policy_candidate_authority_guards")
         text = ast.get_source_segment(self.db_source, installer)
         self.assertIn("BEFORE UPDATE OR DELETE ON {table}", text)
-        self.assertIn("serverware_reject_policy_authority_mutation()", text)
+        self.assertIn("catchplate_reject_policy_authority_mutation()", text)
         # The connector rejects effective table authority, including SELECT;
         # immutable/runtime inventories do not constitute an issuer grant.
         issuer = named_function(self.db_tree, "_policy_authority_capability_issuer_pg_connect_raw")
@@ -1309,7 +1309,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         self.assertEqual(authority_contract.POSTGRES_COUNTED_STORE_TABLES, tuple(COUNTED_COLUMNS))
         with self.assertRaises(TypeError):
             authority_contract.POSTGRES_COUNTED_STORE_COLUMNS["extra"] = ()
-        _, storage = read_source("serverware/authority_store/counted_store_sql.py", 128 * 1024)
+        _, storage = read_source("catchplate/authority_store/counted_store_sql.py", 128 * 1024)
         self.assert_shape(named_assignment(storage, "COUNTED_STORE_TABLES").value, repr(tuple(COUNTED_COLUMNS)))
         for name, table in (("COUNTED_HEAD_COLUMNS", "policy_authority_counted_index_heads"),
                 ("COUNTED_LEAF_COLUMNS", "policy_authority_counted_index_leaves"),
@@ -1349,7 +1349,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
         self.assertEqual(dict(authority_contract.POSTGRES_COUNTED_FUNCTION_SIGNATURES), COUNTED_SIGNATURES)
         observed = {}
         for relative in ("counted_hash_sql.py", "counted_projection_sql.py", "counted_path_sql.py", "counted_maintenance_sql.py"):
-            source, _ = read_source("serverware/authority_store/" + relative, 256 * 1024)
+            source, _ = read_source("catchplate/authority_store/" + relative, 256 * 1024)
             declarations = re.findall(
                 r"CREATE OR REPLACE FUNCTION \{namespace\}\.([a-z_][a-z0-9_]*)\((.*?)\)(.*?)AS \$counted_[a-z_][a-z0-9_]*\$",
                 source, re.DOTALL)
@@ -1363,7 +1363,7 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
                 self.assertIn("SECURITY INVOKER", header)
                 self.assertNotRegex(header, r"\bSTRICT\b")
                 mutation = name in {
-                    "serverware_policy_authority_counted_apply_index", "serverware_policy_authority_counted_apply_event"}
+                    "catchplate_policy_authority_counted_apply_index", "catchplate_policy_authority_counted_apply_event"}
                 projection = relative == "counted_projection_sql.py"
                 self.assertIn("VOLATILE" if mutation else "IMMUTABLE", header)
                 self.assertEqual(dict(authority_contract.POSTGRES_COUNTED_FUNCTION_CONTRACTS[name]), {
@@ -1437,17 +1437,17 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
 
     def test_counted_source_contract_pins_event_scope_without_activating_v3_queries(self):
         self.assertEqual(dict(authority_contract.POSTGRES_COUNTED_MAINTENANCE_CONTRACT), {
-            "schema": "serverware.policyAuthorityCountedMaintenanceAdmission/v1",
+            "schema": "catchplate.policyAuthorityCountedMaintenanceAdmission/v1",
             "maximumProfilesPerNormalizedEvent": 9,
             "workAccounting": "bounded-per-profile-not-whole-operation",
             "plannerCompleteQueryAdmission": False, "sqliteInstalled": False,
         })
-        _, maintenance = read_source("serverware/authority_store/counted_maintenance_sql.py", 256 * 1024)
+        _, maintenance = read_source("catchplate/authority_store/counted_maintenance_sql.py", 256 * 1024)
         self.assert_shape(named_assignment(maintenance, "MAX_EVENT_PROFILES").value, "9")
         dispatcher = named_function(maintenance, "counted_maintenance_functions_sql")
         self.assertTrue(any(isinstance(node, ast.Compare) and ast.dump(node) == ast.dump(
             ast.parse("len(ids) > MAX_EVENT_PROFILES", mode="eval").body) for node in ast.walk(dispatcher)))
-        _, contract = read_source("serverware/authority_contract.py", 2 * 1024 * 1024)
+        _, contract = read_source("catchplate/authority_contract.py", 2 * 1024 * 1024)
         material = operation_manifest_material(contract)
         fields = {key.value: value for key, value in zip(material.keys, material.values)}
         self.assert_shape(fields["postgresCountedStoreColumns"],
@@ -1456,12 +1456,12 @@ class AuthorityTableAclSourceTests(unittest.TestCase):
             "{name: {field: list(value) if isinstance(value, tuple) else value "
             "for field, value in contract.items()} for name, contract in POSTGRES_COUNTED_FUNCTION_CONTRACTS.items()}")
         self.assert_shape(fields["postgresCountedMaintenance"], "dict(POSTGRES_COUNTED_MAINTENANCE_CONTRACT)")
-        source, planner = read_source("serverware/authority_planner.py", 1024 * 1024)
+        source, planner = read_source("catchplate/authority_planner.py", 1024 * 1024)
         reader = named_function(planner, "_read_bounded_transition_rows")
         self.assertIn('raise AuthorityPlannerError("complete index query acquisition is not available")',
             ast.get_source_segment(source, reader))
         self.assert_shape(named_assignment(planner, "PLANNER_RESPONSE_SCHEMA").value,
-            "'serverware.policyAuthorityPlannerResponse/v3'")
+            "'catchplate.policyAuthorityPlannerResponse/v3'")
         validation = named_function(self.schema_tree, "_validate_policy_candidate_authority_structure")
         text = ast.get_source_segment(self.schema_source, validation)
         self.assertIn("if manifest != expected_manifest:", text)

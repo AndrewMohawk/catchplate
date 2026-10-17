@@ -10,15 +10,15 @@ use crate::policy_shadow::hash_domain_frames;
 use sha2::{Digest, Sha256};
 use std::os::unix::fs::FileExt;
 
-const API: &str = "serverware.custodyOrdinaryInitialHistory/v1";
-const STATE_API: &str = "serverware.custodyOrdinaryInitialState/v1";
-const GENESIS_API: &str = "serverware.custodyOrdinaryInitialHistory/v2";
-const GENESIS_STATE_API: &str = "serverware.custodyOrdinaryInitialState/v2";
-const ADOPTION_API: &str = "serverware.custodyOrdinaryInitialHistory/v3";
-const ADOPTION_STATE_API: &str = "serverware.custodyOrdinaryInitialState/v3";
-const PREDECESSOR: &[u8] = b"serverware.custodyOrdinaryInitialCheckpointPredecessor/v1";
-const HISTORY_ROOT: &[u8] = b"serverware.custodyOrdinaryInitialHistoryRoot/v1";
-const DURABLE_HEAD: &[u8] = b"serverware.custodyOrdinaryInitialDurableHead/v1";
+const API: &str = "catchplate.custodyOrdinaryInitialHistory/v1";
+const STATE_API: &str = "catchplate.custodyOrdinaryInitialState/v1";
+const GENESIS_API: &str = "catchplate.custodyOrdinaryInitialHistory/v2";
+const GENESIS_STATE_API: &str = "catchplate.custodyOrdinaryInitialState/v2";
+const ADOPTION_API: &str = "catchplate.custodyOrdinaryInitialHistory/v3";
+const ADOPTION_STATE_API: &str = "catchplate.custodyOrdinaryInitialState/v3";
+const PREDECESSOR: &[u8] = b"catchplate.custodyOrdinaryInitialCheckpointPredecessor/v1";
+const HISTORY_ROOT: &[u8] = b"catchplate.custodyOrdinaryInitialHistoryRoot/v1";
+const DURABLE_HEAD: &[u8] = b"catchplate.custodyOrdinaryInitialDurableHead/v1";
 const MAX_EXECUTABLE: u64 = 256 * 1024 * 1024;
 const ZERO: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 

@@ -68,11 +68,11 @@ use std::os::fd::{
 };
 
 const SERVICE_RESPONSE_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyServiceResponse/v3";
+    b"catchplate.policyCustodyServiceResponse/v3";
 const DURABLE_STATE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupAuthorizationConsumerState/v3";
+    b"catchplate.policyCustodyCleanupAuthorizationConsumerState/v3";
 const DURABLE_STATE_VERSION: &str =
-    "serverware.policyCustodyCleanupAuthorizationConsumerState/v3";
+    "catchplate.policyCustodyCleanupAuthorizationConsumerState/v3";
 const DURABLE_STATE_FILE: &str = "cleanup-consumer-state.v3.json";
 const DURABLE_STATE_LOCK: &str = "cleanup-consumer-state.v3.lock";
 const MAX_DURABLE_STATE_BYTES: usize = 64 * 1024 * 1024;

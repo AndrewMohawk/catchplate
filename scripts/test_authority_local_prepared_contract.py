@@ -24,17 +24,17 @@ from scripts.authority import atomic_provisioner_contract as contract
 from scripts.authority_history_roundtrip_fixture import build_package
 from scripts.test_authority_local_install import configuration as old_configuration
 from scripts.test_authority_local_install import plan as untrusted_plan
-from serverware import authority_artifact_spec as spec
-from serverware import authority_local_artifacts as artifacts
-from serverware import authority_local_install as install
-from serverware import authority_local_trust as trust
-from serverware import authority_local_trust_commit as commit
+from catchplate import authority_artifact_spec as spec
+from catchplate import authority_local_artifacts as artifacts
+from catchplate import authority_local_install as install
+from catchplate import authority_local_trust as trust
+from catchplate import authority_local_trust_commit as commit
 
 NOW = "2026-10-10T12:00:00Z"
 PIN = "sha256:" + "1" * 64
-CONFIGURATION_V2 = "serverware.authorityTrustedHostLocalInstallation/v2"
-PLAN_V3 = "serverware.authorityTrustedHostLocalProvisioningPlan/v3"
-RECEIPT_V2 = "serverware.authorityTrustedHostLocalProvisioningReceipt/v2"
+CONFIGURATION_V2 = "catchplate.authorityTrustedHostLocalInstallation/v2"
+PLAN_V3 = "catchplate.authorityTrustedHostLocalProvisioningPlan/v3"
+RECEIPT_V2 = "catchplate.authorityTrustedHostLocalProvisioningReceipt/v2"
 
 
 def synthetic_private(purpose):
@@ -131,7 +131,7 @@ class PreparedContractTests(unittest.TestCase):
 
     def test_configuration_v2_is_closed_and_old_v1_is_unchanged_grammar(self):
         previous = old_configuration()
-        self.assertEqual(install.CONFIGURATION_SCHEMA, "serverware.authorityTrustedHostLocalInstallation/v1")
+        self.assertEqual(install.CONFIGURATION_SCHEMA, "catchplate.authorityTrustedHostLocalInstallation/v1")
         self.assertEqual(install.configuration(spec.canonical_json_bytes(previous)), previous)
         current = dict(previous, schema=CONFIGURATION_V2, preparedStatic=selector())
         self.assertEqual(install.PREPARED_CONFIGURATION_SCHEMA, CONFIGURATION_V2)
@@ -207,9 +207,9 @@ class PreparedContractTests(unittest.TestCase):
             with self.assertRaises(contract.ProvisioningContractError):
                 contract.validate_provisioning_plan(wrong)
         self.assertEqual(contract.LOCAL_PROVISIONING_PLAN_SCHEMA,
-            "serverware.authorityTrustedHostLocalProvisioningPlan/v2")
+            "catchplate.authorityTrustedHostLocalProvisioningPlan/v2")
         self.assertEqual(contract.LOCAL_PROVISIONING_RECEIPT_SCHEMA,
-            "serverware.authorityTrustedHostLocalProvisioningReceipt/v1")
+            "catchplate.authorityTrustedHostLocalProvisioningReceipt/v1")
         plan = self.plan()
         self.assertEqual([row["step"] for row in plan["steps"]], list(contract.LOCAL_PREPARED_PROVISIONING_STEPS))
         self.assertIn("renameat2-prepared-staging-noreplace", contract.LOCAL_PREPARED_PROVISIONING_STEPS)

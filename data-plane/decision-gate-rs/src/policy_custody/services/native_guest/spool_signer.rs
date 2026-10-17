@@ -39,42 +39,42 @@ struct Payload {
 pub(crate) struct Configuration {payload:Payload,signature:CanonicalEd25519Signature}
 impl Configuration {
     pub(in crate::policy_shadow::policy_custody::services) fn completion_selected(&self)->bool {
-        matches!(self.payload.api_version.as_str(),"serverware.nativeShadowLedgerSpoolServiceAssignment/v2"|"serverware.nativeShadowLedgerSpoolServiceAssignment/v3"
-            |"serverware.nativeShadowTerminalSpoolServiceAssignment/v1"|"serverware.nativeShadowTerminalSpoolServiceAssignment/v2")
+        matches!(self.payload.api_version.as_str(),"catchplate.nativeShadowLedgerSpoolServiceAssignment/v2"|"catchplate.nativeShadowLedgerSpoolServiceAssignment/v3"
+            |"catchplate.nativeShadowTerminalSpoolServiceAssignment/v1"|"catchplate.nativeShadowTerminalSpoolServiceAssignment/v2")
     }
     fn domain(&self)->Result<&'static str,ShadowError>{Ok(match self.kind()? {
-        Kind::Ingress if self.payload.ordinary_services.is_some()=>"serverware.nativeShadowIngressServiceAssignment.signature/v2",
-        Kind::Ledger if self.payload.ordinary_services.is_some()=>"serverware.nativeShadowLedgerSpoolServiceAssignment.signature/v3",
-        Kind::Terminal if self.payload.ordinary_services.is_some()=>"serverware.nativeShadowTerminalSpoolServiceAssignment.signature/v2",
-        Kind::DispatchBarrier if self.payload.ordinary_services.is_some()=>"serverware.nativeShadowDispatchBarrierServiceAssignment.signature/v2",
-        Kind::ActiveEffectBarrier if self.payload.ordinary_services.is_some()=>"serverware.nativeShadowActiveEffectBarrierServiceAssignment.signature/v2",
-        Kind::ActiveEffectCommit if self.payload.ordinary_services.is_some()=>"serverware.nativeShadowActiveEffectCommitServiceAssignment.signature/v2",
-        Kind::Ingress=>"serverware.nativeShadowIngressServiceAssignment.signature/v1",
-        Kind::Ledger if self.completion_selected()=>"serverware.nativeShadowLedgerSpoolServiceAssignment.signature/v2",
-        Kind::Ledger=>"serverware.nativeShadowLedgerSpoolServiceAssignment.signature/v1",
-        Kind::Terminal=>"serverware.nativeShadowTerminalSpoolServiceAssignment.signature/v1",
-        Kind::DispatchBarrier=>"serverware.nativeShadowDispatchBarrierServiceAssignment.signature/v1",
-        Kind::ActiveEffectBarrier=>"serverware.nativeShadowActiveEffectBarrierServiceAssignment.signature/v1",
-        Kind::ActiveEffectCommit=>"serverware.nativeShadowActiveEffectCommitServiceAssignment.signature/v1",
+        Kind::Ingress if self.payload.ordinary_services.is_some()=>"catchplate.nativeShadowIngressServiceAssignment.signature/v2",
+        Kind::Ledger if self.payload.ordinary_services.is_some()=>"catchplate.nativeShadowLedgerSpoolServiceAssignment.signature/v3",
+        Kind::Terminal if self.payload.ordinary_services.is_some()=>"catchplate.nativeShadowTerminalSpoolServiceAssignment.signature/v2",
+        Kind::DispatchBarrier if self.payload.ordinary_services.is_some()=>"catchplate.nativeShadowDispatchBarrierServiceAssignment.signature/v2",
+        Kind::ActiveEffectBarrier if self.payload.ordinary_services.is_some()=>"catchplate.nativeShadowActiveEffectBarrierServiceAssignment.signature/v2",
+        Kind::ActiveEffectCommit if self.payload.ordinary_services.is_some()=>"catchplate.nativeShadowActiveEffectCommitServiceAssignment.signature/v2",
+        Kind::Ingress=>"catchplate.nativeShadowIngressServiceAssignment.signature/v1",
+        Kind::Ledger if self.completion_selected()=>"catchplate.nativeShadowLedgerSpoolServiceAssignment.signature/v2",
+        Kind::Ledger=>"catchplate.nativeShadowLedgerSpoolServiceAssignment.signature/v1",
+        Kind::Terminal=>"catchplate.nativeShadowTerminalSpoolServiceAssignment.signature/v1",
+        Kind::DispatchBarrier=>"catchplate.nativeShadowDispatchBarrierServiceAssignment.signature/v1",
+        Kind::ActiveEffectBarrier=>"catchplate.nativeShadowActiveEffectBarrierServiceAssignment.signature/v1",
+        Kind::ActiveEffectCommit=>"catchplate.nativeShadowActiveEffectCommitServiceAssignment.signature/v1",
     })}
     pub(in crate::policy_shadow::policy_custody::services) fn kind(&self)->Result<Kind,ShadowError>{
         if self.payload.ordinary_services.is_some(){return match(self.payload.api_version.as_str(),self.payload.purpose.as_str(),self.payload.commit_request.is_some()){
-            ("serverware.nativeShadowIngressServiceAssignment/v2","native-first-ingress",false)=>Ok(Kind::Ingress),
-            ("serverware.nativeShadowLedgerSpoolServiceAssignment/v3","native-ledger-spool-and-sampling-with-unavailability",true)=>Ok(Kind::Ledger),
-            ("serverware.nativeShadowTerminalSpoolServiceAssignment/v2","native-terminal-slot-append",false)=>Ok(Kind::Terminal),
-            ("serverware.nativeShadowDispatchBarrierServiceAssignment/v2","native-dispatch-barrier",false)=>Ok(Kind::DispatchBarrier),
-            ("serverware.nativeShadowActiveEffectBarrierServiceAssignment/v2","native-active-effect-barrier",false)=>Ok(Kind::ActiveEffectBarrier),
-            ("serverware.nativeShadowActiveEffectCommitServiceAssignment/v2","native-active-effect-commit",false)=>Ok(Kind::ActiveEffectCommit),
+            ("catchplate.nativeShadowIngressServiceAssignment/v2","native-first-ingress",false)=>Ok(Kind::Ingress),
+            ("catchplate.nativeShadowLedgerSpoolServiceAssignment/v3","native-ledger-spool-and-sampling-with-unavailability",true)=>Ok(Kind::Ledger),
+            ("catchplate.nativeShadowTerminalSpoolServiceAssignment/v2","native-terminal-slot-append",false)=>Ok(Kind::Terminal),
+            ("catchplate.nativeShadowDispatchBarrierServiceAssignment/v2","native-dispatch-barrier",false)=>Ok(Kind::DispatchBarrier),
+            ("catchplate.nativeShadowActiveEffectBarrierServiceAssignment/v2","native-active-effect-barrier",false)=>Ok(Kind::ActiveEffectBarrier),
+            ("catchplate.nativeShadowActiveEffectCommitServiceAssignment/v2","native-active-effect-commit",false)=>Ok(Kind::ActiveEffectCommit),
             _=>Err(ShadowError::BindingDrift),
         };}
         match (self.payload.api_version.as_str(),self.payload.purpose.as_str(),self.payload.commit_request.is_some()) {
-            ("serverware.nativeShadowIngressServiceAssignment/v1","native-first-ingress",false)=>Ok(Kind::Ingress),
-            ("serverware.nativeShadowLedgerSpoolServiceAssignment/v1","native-ledger-spool-and-sampling",true)=>Ok(Kind::Ledger),
-            ("serverware.nativeShadowLedgerSpoolServiceAssignment/v2","native-ledger-spool-and-sampling-with-unavailability",true)=>Ok(Kind::Ledger),
-            ("serverware.nativeShadowTerminalSpoolServiceAssignment/v1","native-terminal-slot-append",false)=>Ok(Kind::Terminal),
-            ("serverware.nativeShadowDispatchBarrierServiceAssignment/v1","native-dispatch-barrier",false)=>Ok(Kind::DispatchBarrier),
-            ("serverware.nativeShadowActiveEffectBarrierServiceAssignment/v1","native-active-effect-barrier",false)=>Ok(Kind::ActiveEffectBarrier),
-            ("serverware.nativeShadowActiveEffectCommitServiceAssignment/v1","native-active-effect-commit",false)=>Ok(Kind::ActiveEffectCommit),
+            ("catchplate.nativeShadowIngressServiceAssignment/v1","native-first-ingress",false)=>Ok(Kind::Ingress),
+            ("catchplate.nativeShadowLedgerSpoolServiceAssignment/v1","native-ledger-spool-and-sampling",true)=>Ok(Kind::Ledger),
+            ("catchplate.nativeShadowLedgerSpoolServiceAssignment/v2","native-ledger-spool-and-sampling-with-unavailability",true)=>Ok(Kind::Ledger),
+            ("catchplate.nativeShadowTerminalSpoolServiceAssignment/v1","native-terminal-slot-append",false)=>Ok(Kind::Terminal),
+            ("catchplate.nativeShadowDispatchBarrierServiceAssignment/v1","native-dispatch-barrier",false)=>Ok(Kind::DispatchBarrier),
+            ("catchplate.nativeShadowActiveEffectBarrierServiceAssignment/v1","native-active-effect-barrier",false)=>Ok(Kind::ActiveEffectBarrier),
+            ("catchplate.nativeShadowActiveEffectCommitServiceAssignment/v1","native-active-effect-commit",false)=>Ok(Kind::ActiveEffectCommit),
             _=>Err(ShadowError::BindingDrift),
         }
     }
@@ -233,7 +233,7 @@ impl Work {
                 let (generation,origin,runtime)=self.origin.as_ref().ok_or(ShadowError::BindingDrift)?;let (start,end)=generation.assignment_window_unix_nanos();
                 require(keys.assignment.payload().fleet.members.iter().any(|member|runtime.matches_member(member)))?;
                 require(earliest>=start && latest<end)?;
-                let payload=head::IngressPayload{api_version:"serverware.nativeIngressOriginAdmission/v1".into(),request:request.clone(),
+                let payload=head::IngressPayload{api_version:"catchplate.nativeIngressOriginAdmission/v1".into(),request:request.clone(),
                     native_grant_sha256:own,origin_original:origin_original.clone(),origin_sha256:origin.clone(),observed_earliest_unix_nanos:earliest,
                     observed_latest_unix_nanos:latest,trusted_time_checkpoint_sha256:trust.current_checkpoint()?.checkpoint_id,
                     observed_at_boottime_nanos:guest::now()?,signing_key_id:local.binding.key_id.clone(),signing_key_spki_sha256:local.binding.key_spki_sha256.clone()};
@@ -255,7 +255,7 @@ impl Work {
                 let runtime=&self.origin.as_ref().ok_or(ShadowError::BindingDrift)?.2;
                 require(keys.assignment.payload().fleet.members.iter().any(|member|runtime.matches_member(member)))?;
                 let sampling=keys.commitment.as_ref().ok_or(ShadowError::CustodyUnavailable)?.sample_ingress(&context,&generation,&keys.assignment,runtime)?;
-                let payload=head::SamplingPayload{api_version:"serverware.nativeIngressSamplingResult/v1".into(),claim_sha256:fixed::sha(claim).map_err(fail)?,
+                let payload=head::SamplingPayload{api_version:"catchplate.nativeIngressSamplingResult/v1".into(),claim_sha256:fixed::sha(claim).map_err(fail)?,
                     allocation_sha256:fixed::sha(allocation).map_err(fail)?,native_grant_sha256:own,sampling,computed_at_boottime_nanos:guest::now()?};
                 let signature=CanonicalEd25519Signature(URL_SAFE_NO_PAD.encode(local.key.sign(&signature_preimage(head::SAMPLE_DOMAIN,&canonical_json_bytes(&payload)?)).to_bytes()));
                 let result=head::Sampling{payload,signature};result.verify(claim,allocation,&grant.payload.ledger,&generation).map_err(fail)?;
@@ -321,7 +321,7 @@ impl Work {
                     let authority=scope.authority_payload(kind.signer(),payload).map_err(|_|fixed::invalid())?;
                     Ok(URL_SAFE_NO_PAD.encode(local.key.sign(&signature_preimage(kind.signer().signature_domain(),&authority)).to_bytes()))
                 }).map_err(fail)?;
-                let payload=head::CompletionPayload{api_version:"serverware.nativeSpoolCompletion/v1".into(),claim:flight.claim.clone(),
+                let payload=head::CompletionPayload{api_version:"catchplate.nativeSpoolCompletion/v1".into(),claim:flight.claim.clone(),
                     allocation:flight.allocation.as_ref().ok_or(ShadowError::BindingDrift)?.clone(),prepared:prepared.clone(),stored:stored.clone(),artifact,
                     completed_at_boottime_nanos:guest::now()?};
                 let signature=CanonicalEd25519Signature(URL_SAFE_NO_PAD.encode(local.key.sign(&signature_preimage(head::COMPLETE_DOMAIN,&canonical_json_bytes(&payload)?)).to_bytes()));

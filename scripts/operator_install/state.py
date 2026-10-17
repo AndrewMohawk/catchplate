@@ -13,7 +13,7 @@ import uuid
 
 from .config import InstallError, absolute_path, check_path, parse_json, read_file, validate
 
-SCHEMA = "serverware.standaloneInstallation/v1"
+SCHEMA = "catchplate.standaloneInstallation/v1"
 TOKEN_FILES = ("admin.token", "credential-lease.token", "audit.token", "grant-consume.token",
     "rate-limit-consume.token", "release-authorization.token", "management.token")
 PINNED_FILES = {"compose.json", "edge/nginx.conf", "edge-secrets/tls.crt", "edge-secrets/tls.key",
@@ -102,7 +102,7 @@ def write_file(path: Path, data: bytes, *, owner=0, mode=0o600, exclusive=True) 
 
 def artifact(value) -> dict:
     fields = {"schema", "sourceRevision", "sourceTreeDigest", "compilerInputsDigest", "dataPlaneBinaryDigest"}
-    if (type(value) is not dict or set(value) != fields or value["schema"] != "serverware.standaloneArtifact/v1"
+    if (type(value) is not dict or set(value) != fields or value["schema"] != "catchplate.standaloneArtifact/v1"
             or type(value["sourceRevision"]) is not str or not re.fullmatch(r"[0-9a-f]{40}", value["sourceRevision"])
             or any(type(value[field]) is not str or not _SHA.fullmatch(value[field]) for field in fields - {"schema", "sourceRevision"})):
         raise InstallError("Paired image artifact metadata is missing or malformed; rebuild the selected image explicitly.")
@@ -150,5 +150,5 @@ def load_manifest(state_dir: Path, *, verify_files=True) -> dict:
 
 def result(manifest, operation, status, **extra) -> dict:
     config = manifest["config"]
-    return {"schema": "serverware.standaloneResult/v1", "operation": operation, "status": status,
+    return {"schema": "catchplate.standaloneResult/v1", "operation": operation, "status": status,
         **{key: config[key] for key in ("state_dir", "project_name", "console_origin", "proxy_origin")}, **extra}

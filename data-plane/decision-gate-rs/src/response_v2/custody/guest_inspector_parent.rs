@@ -22,7 +22,7 @@ pub struct GuestInspectorConfiguration {
 }
 impl GuestInspectorConfiguration {
     pub fn validate(&self) -> Result<(), String> {
-        if self.api_version != "serverware.nativeGuestInspector/v1" || self.executable.path != image::EXECUTABLE
+        if self.api_version != "catchplate.nativeGuestInspector/v1" || self.executable.path != image::EXECUTABLE
             || !image::hash(&self.executable.sha256) || !image::hash(&self.configuration.sha256)
             || !image::hash(&self.delivery.sha256) || !image::path(&self.configuration.path)
             || !image::path(&self.delivery.path) || self.configuration.path == self.delivery.path
@@ -80,7 +80,7 @@ impl PreparedGuestInspector {
         }
         let nonce = URL_SAFE_NO_PAD.encode(nonce);
         let raw = crate::canonical_json_bytes(&Bootstrap {
-            api_version: "serverware.responseV2.guestInspectorBootstrap/v1",
+            api_version: "catchplate.responseV2.guestInspectorBootstrap/v1",
             configuration_path: &configuration.configuration.path, configuration_sha256: &configuration.configuration.sha256,
             delivery_path: &configuration.delivery.path, delivery_sha256: &configuration.delivery.sha256,
             gate_lifetime_deadline_boottime_ns: prepared.deadline().to_string(), channel_nonce: &nonce,

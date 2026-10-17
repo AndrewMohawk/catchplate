@@ -227,7 +227,7 @@ impl StartOwner {
         let parent = ParentOwner::open(&prepared.authorization.constraints.containment,
             &prepared.clock)?;
         let mut hash = Sha256::new();
-        hash.update(b"serverware.nativeWorkloadStartOperation/v1\0");
+        hash.update(b"catchplate.nativeWorkloadStartOperation/v1\0");
         for original in [prepared.authorization.original_sha256,
             prepared.authorization.root_key_id, parents.operation_sha256(),
             prepared.filesystem.manifest_sha256()] { hash.update(original); }

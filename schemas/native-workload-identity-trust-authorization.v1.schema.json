@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-workload-identity-trust-authorization.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-workload-identity-trust-authorization.v1.schema.json",
   "title": "Independent complete native workload trust startup authorization",
   "description": "Canonical ensure_ascii sorted compact JSON without LF, maximum 131072 bytes. Ed25519 signs UTF-8 payload schema, NUL and exact canonical payload. Separate opt-in native v22 startup joins independently pinned configuration/launch originals, actual ordered DER roots, current signed policy and retained generated TLS/Snapshot owner. Existing native session quotations remain subject to these live checks. Shape validation alone proves neither signature, independent approval, currentness nor pilot readiness. No issuance, hot reload, rotation, rollback witness or retry authority is created.",
   "type": "object",
@@ -12,7 +12,7 @@
   ],
   "properties": {
     "schema": {
-      "const": "serverware.signedNativeWorkloadIdentityTrustAuthorization/v1"
+      "const": "catchplate.signedNativeWorkloadIdentityTrustAuthorization/v1"
     },
     "payload": {
       "type": "object",
@@ -41,12 +41,12 @@
       ],
       "properties": {
         "schema": {
-          "const": "serverware.nativeWorkloadIdentityTrustAuthorization/v1"
+          "const": "catchplate.nativeWorkloadIdentityTrustAuthorization/v1"
         },
         "sourceRevision": {
           "type": "string",
           "maxLength": 128,
-          "pattern": "^serverware\\.policyCandidateAuthoritySource/[0-9]{4}-[0-9]{2}-[0-9]{2}\\.[0-9]+(?![\\s\\S])",
+          "pattern": "^catchplate\\.policyCandidateAuthoritySource/[0-9]{4}-[0-9]{2}-[0-9]{2}\\.[0-9]+(?![\\s\\S])",
           "description": "Must equal the actual shared source-owned authority contract revision, not a value selected by the request."
         },
         "purpose": {

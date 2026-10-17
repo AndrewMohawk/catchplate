@@ -9,8 +9,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_plan_request as source
-from serverware import authority_query_read_work as measured
+from catchplate import authority_challenge_plan_request as source
+from catchplate import authority_query_read_work as measured
 
 
 def work(**limits):
@@ -125,8 +125,8 @@ class ChallengePlanRequestControls(unittest.TestCase):
         value = fixture("webauthn.challenge.create")
         arguments = value["arguments"]
         identifier = "sha256:" + "1" * 64
-        domain = "serverware.policyAuthorityWebAuthnChallengeId/v1"
-        payload = dict(schema="serverware.policyAuthorityWebAuthnChallenge/v1", operationId=identifier,
+        domain = "catchplate.policyAuthorityWebAuthnChallengeId/v1"
+        payload = dict(schema="catchplate.policyAuthorityWebAuthnChallenge/v1", operationId=identifier,
             rpId="example.invalid", origin="https://example.invalid", issuedAtEpochNs=1767225600000000000,
             expiresAtEpochNs=1767225900000000000, credentialId=None)
         identity = source.commitment.framed_digest(domain, identifier.encode("ascii"), arguments["challenge"].encode("ascii"))

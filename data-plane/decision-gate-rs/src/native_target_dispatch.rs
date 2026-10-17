@@ -1,12 +1,12 @@
 //! One-shot gate executor. Credential injection, native identity, currentness,
 //! snapshot and dispatch mutation guards remain in this actual measured gate.
 use super::*;
-use serverware_decision_gate::native_target_dispatch_v1 as profile;
-use serverware_decision_gate::native_response_gate::{state_receipt::RawObjectReference, target_dispatch as wire};
+use catchplate_decision_gate::native_target_dispatch_v1 as profile;
+use catchplate_decision_gate::native_response_gate::{state_receipt::RawObjectReference, target_dispatch as wire};
 use rustls::{ClientConfig,ClientConnection,RootCertStore,StreamOwned};
 use rustls::pki_types::{CertificateDer,ServerName};
 
-const EXPORTER:&[u8]=b"EXPORTER-serverware-native-target-dispatch-v1";
+const EXPORTER:&[u8]=b"EXPORTER-catchplate-native-target-dispatch-v1";
 
 pub(super) fn tls_configuration(original:&str)->Result<Arc<ClientConfig>,String> {
     let certificates=pem_certificates(original);
@@ -37,7 +37,7 @@ fn epoch_ns()->Result<u64,String> {
         .try_into().map_err(|_|"capture epoch overflow".into())
 }
 fn now()->Result<u64,String> {
-    serverware_decision_gate::native_secret_broker_v1::now()
+    catchplate_decision_gate::native_secret_broker_v1::now()
 }
 
 /// Not deserializable, not Clone and not constructible from a lease DTO.
@@ -169,7 +169,7 @@ impl<'a> Prepared<'a> {
         Ok(result)
     }
     pub(super) fn begin_original(&self)->Result<wire::BeginRequest,String> {
-        Ok(wire::BeginRequest {api_version:"serverware.responseV2.targetDispatchBegin/v1".into(),
+        Ok(wire::BeginRequest {api_version:"catchplate.responseV2.targetDispatchBegin/v1".into(),
             original:self.original.clone(),gate_evidence:self.evidence()?})
     }
 }
@@ -183,7 +183,7 @@ fn serialize_request(request:&IncomingRequest,url:&Url,headers:&HeaderMap)->Resu
     let mut selected=BTreeMap::new();
     for (name,value) in headers {
         let name=name.as_str();
-        require(!name.starts_with(SERVERWARE_INTERNAL_HEADER_PREFIX)
+        require(!name.starts_with(CATCHPLATE_INTERNAL_HEADER_PREFIX)
             && !matches!(name,"proxy-authorization"|"cookie"|"set-cookie"|"transfer-encoding"|"upgrade"|"connection"|"host"|"content-length"))?;
         let value=value.to_str().map_err(|_|"capture header encoding")?;
         require(!value.bytes().any(|b|matches!(b,b'\r'|b'\n'|0)) && !selected.contains_key(name))?;

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-ordinary-history-grants.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-ordinary-history-grants.v1.schema.json",
   "description": "Eight explicit signed successors carry authenticated ordinary history/runtime originals without treating a native endpoint marker as production RPC configuration. Entire canonical signed grant <=4 MiB, each history <=1 MiB, each ordinary generation grant <=64 KiB. Version-specific signature domains use the corresponding API base plus .signature/vN. Legacy schemas and 64 KiB profiles are unchanged. Runtime verifies the outer independent supervisor before embedded roots, complete member history/generation signatures, byte hashes, same boot/time namespace, original interval containment, role independence and shared scope. Schema alone provides no authority or runtime evidence. GenerationCoordinator/v2 retains closed journal record bounds 8 MiB+1024 and total32 MiB; v1 remains512 KiB/4 MiB.",
   "type": "object",
   "additionalProperties": false,
@@ -226,7 +226,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.nativeShadowCommitRequestServiceAssignment/v2"
+              "const": "catchplate.nativeShadowCommitRequestServiceAssignment/v2"
             },
             "purpose": {
               "const": "native-shadow-ledger-commit-request"
@@ -261,12 +261,12 @@
           "properties": {
             "apiVersion": {
               "enum": [
-                "serverware.nativeShadowIngressServiceAssignment/v2",
-                "serverware.nativeShadowLedgerSpoolServiceAssignment/v3",
-                "serverware.nativeShadowTerminalSpoolServiceAssignment/v2",
-                "serverware.nativeShadowDispatchBarrierServiceAssignment/v2",
-                "serverware.nativeShadowActiveEffectBarrierServiceAssignment/v2",
-                "serverware.nativeShadowActiveEffectCommitServiceAssignment/v2"
+                "catchplate.nativeShadowIngressServiceAssignment/v2",
+                "catchplate.nativeShadowLedgerSpoolServiceAssignment/v3",
+                "catchplate.nativeShadowTerminalSpoolServiceAssignment/v2",
+                "catchplate.nativeShadowDispatchBarrierServiceAssignment/v2",
+                "catchplate.nativeShadowActiveEffectBarrierServiceAssignment/v2",
+                "catchplate.nativeShadowActiveEffectCommitServiceAssignment/v2"
               ]
             },
             "purpose": {
@@ -308,7 +308,7 @@
             {
               "properties": {
                 "apiVersion": {
-                  "const": "serverware.nativeShadowIngressServiceAssignment/v2"
+                  "const": "catchplate.nativeShadowIngressServiceAssignment/v2"
                 },
                 "purpose": {
                   "const": "native-first-ingress"
@@ -321,7 +321,7 @@
             {
               "properties": {
                 "apiVersion": {
-                  "const": "serverware.nativeShadowLedgerSpoolServiceAssignment/v3"
+                  "const": "catchplate.nativeShadowLedgerSpoolServiceAssignment/v3"
                 },
                 "purpose": {
                   "const": "native-ledger-spool-and-sampling-with-unavailability"
@@ -334,7 +334,7 @@
             {
               "properties": {
                 "apiVersion": {
-                  "const": "serverware.nativeShadowTerminalSpoolServiceAssignment/v2"
+                  "const": "catchplate.nativeShadowTerminalSpoolServiceAssignment/v2"
                 },
                 "purpose": {
                   "const": "native-terminal-slot-append"
@@ -347,7 +347,7 @@
             {
               "properties": {
                 "apiVersion": {
-                  "const": "serverware.nativeShadowDispatchBarrierServiceAssignment/v2"
+                  "const": "catchplate.nativeShadowDispatchBarrierServiceAssignment/v2"
                 },
                 "purpose": {
                   "const": "native-dispatch-barrier"
@@ -360,7 +360,7 @@
             {
               "properties": {
                 "apiVersion": {
-                  "const": "serverware.nativeShadowActiveEffectBarrierServiceAssignment/v2"
+                  "const": "catchplate.nativeShadowActiveEffectBarrierServiceAssignment/v2"
                 },
                 "purpose": {
                   "const": "native-active-effect-barrier"
@@ -373,7 +373,7 @@
             {
               "properties": {
                 "apiVersion": {
-                  "const": "serverware.nativeShadowActiveEffectCommitServiceAssignment/v2"
+                  "const": "catchplate.nativeShadowActiveEffectCommitServiceAssignment/v2"
                 },
                 "purpose": {
                   "const": "native-active-effect-commit"
@@ -404,7 +404,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.nativeGenerationCoordinatorAssignment/v2"
+              "const": "catchplate.nativeGenerationCoordinatorAssignment/v2"
             },
             "purpose": {
               "const": "native-generation-installation"

@@ -1,12 +1,12 @@
 use super::*;
 
 const TEE_VERIFICATION_RESULT_API_VERSION: &str =
-    "serverware.responseObservationV2AttestationVerifyResult/v2";
+    "catchplate.responseObservationV2AttestationVerifyResult/v2";
 const LOCAL_TEE_BOUNDARY: &str = "local-response-v2-custody";
 const LOCAL_TEE_SECURITY_CLAIM: &str =
     "hardware-attested-local-single-node-no-fault-tolerance";
 const PINNED_TEE_VERIFIER_API_VERSION: &str =
-    "serverware.responseObservationV2PinnedTeeVerifier/v1";
+    "catchplate.responseObservationV2PinnedTeeVerifier/v1";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -425,7 +425,7 @@ pub(super) fn verify_response_observation_v2_attestation(
                     })?;
             let expected = json!({
                 "apiVersion":
-                    "serverware.trustedHostEvidence.measurementBundle/v1",
+                    "catchplate.trustedHostEvidence.measurementBundle/v1",
                 "providerId":attestation.signer_provider_id,
                 "providerGeneration":attestation.provider_generation,
                 "requestSha256":request_sha256,
@@ -497,7 +497,7 @@ pub(super) fn verify_response_observation_v2_attestation(
                     verifier,
                     &json!({
                         "apiVersion":
-                            "serverware.responseObservationV2AttestationVerifyRequest/v2",
+                            "catchplate.responseObservationV2AttestationVerifyRequest/v2",
                         "purpose":"fresh-response",
                         "attestation":attestation,
                         "expected":{
@@ -665,7 +665,7 @@ where
             if expected_operation
                 == V2_CONSUME_AND_RETRIEVE_EXACT_OPERATION =>
         {
-            serverware_decision_gate::
+            catchplate_decision_gate::
                 V2_EXACT_RELEASE_CONSUMPTION_SIGNATURE_DOMAIN
         }
         "public-release-consumption" => {
@@ -813,7 +813,7 @@ pub(super) fn response_observation_v2_validate_provider_scope(
     let mut hasher = Sha256::new();
     response_observation_v2_hash_frame(
         &mut hasher,
-        b"serverware.response-v2/provider-authority-scope/v1",
+        b"catchplate.response-v2/provider-authority-scope/v1",
     );
     for value in [
         scope.role.as_bytes(),

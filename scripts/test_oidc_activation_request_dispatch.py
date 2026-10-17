@@ -20,9 +20,9 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import control_plane_oidc_session_activation_execution_bootstrap as activation
-from serverware import control_plane_oidc_session_activation_request_dispatch as source
-from serverware.authority_query_read_work import QueryReadValidationLimits, QueryReadWorkError, _ValidationWork
+from catchplate import control_plane_oidc_session_activation_execution_bootstrap as activation
+from catchplate import control_plane_oidc_session_activation_request_dispatch as source
+from catchplate.authority_query_read_work import QueryReadValidationLimits, QueryReadWorkError, _ValidationWork
 
 HEAD, AUTH = source.head, source.head.authorization
 VECTOR = AUTH.vector
@@ -116,7 +116,7 @@ def shape(schema):
 
 
 def body(name, function):
-    raw = (ROOT / "serverware" / (name + ".py")).read_text("utf-8")
+    raw = (ROOT / "catchplate" / (name + ".py")).read_text("utf-8")
     matches = [node for node in ast.parse(raw).body if isinstance(node, ast.FunctionDef) and node.name == function]
     if len(matches) != 1:
         raise AssertionError(function)

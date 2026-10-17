@@ -1,0 +1,294 @@
+"""Purpose-fixed public five-service grants. No key generation or native proof.
+
+Existing independently supplied C9/history-root keys authorize exact originals.
+The actual service still verifies the complete authority history and all local
+state; these offline data helpers never assert that a service is installed.
+"""
+import json
+import re
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+
+from catchplate import native_shadow_nitro_profile as p
+from catchplate import native_shadow_guest_delivery as c9
+
+ROLES = ("durable-recovery-store", "cleanup-authorization-consumer", "recovery-target-provider",
+    "current-signature-authority", "bounded-cleanup-helper")
+BUSINESS = {ROLES[0]: ("listener", "journal"), ROLES[1]: ("listener", "state", "journal"),
+    ROLES[2]: ("listener", "journal"), ROLES[3]: ("listener",), ROLES[4]: ("listener", "journal")}
+SCOPE = ("previousConfigurationBindingSha256", "successorConfigurationBindingSha256", "dispatchManifestSha256",
+    "kernelDriverIdentitySha256", "retainedDescriptorSetSha256", "driverGenerationReceiptSha256", "assignmentId",
+    "assignmentPayloadSha256", "assignmentRevision", "operationCoverageRootSha256", "fiveServiceProtocolSetSha256",
+    "envelopeAuthorityKeyId", "envelopeAuthorityKeySpkiSha256", "trustedTimeCheckpointSha256",
+    "trustedTimeRevocationGeneration", "trustedTimeRevocationRootSha256", "installationIssuedAtUnixNanos",
+    "installationExpiresAtUnixNanos")
+GRANT = ("apiVersion", "purpose", "serviceRole", "guest", "runtimeConfigurationSha256",
+    "authorityHistoryManifestSha256", "scope", "issuedAtBoottimeNanos", "expiresAtBoottimeNanos")
+HISTORY = ("apiVersion", "authorityRole", "rootAuthority", "retention", "firstRetainedEpoch",
+    "adjacentTransitions", "compactionAnchors", "replayTombstones", "manifestSha256")
+DOMAIN = b"catchplate.custodyServiceGenerationGrant.signature/v1"
+MAX_BYTES = 4 * 1024 * 1024
+
+
+def canonical(value):
+    # Rust's canonical integral JSON supports both i64 and u64, never binary64
+    # rounding. Preserve ASCII DEL exactly; retain fixed bounded work.
+    pending, count = [(value, 0)], 0
+    while pending:
+        item, depth = pending.pop(); count += 1
+        p.require(depth <= 32 and count <= 65536)
+        if type(item) is dict:
+            p.require(all(type(key) is str and key.isascii() for key in item))
+            pending.extend((child, depth + 1) for child in item.values())
+        elif type(item) in (list, tuple):
+            pending.extend((child, depth + 1) for child in item)
+        elif type(item) is str:
+            p.require(item.isascii())
+        elif type(item) is int:
+            p.require(-(1 << 63) <= item <= (1 << 64) - 1)
+        else:
+            p.require(item is None or type(item) is bool)
+    raw = json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("ascii")
+    p.require(len(raw) <= MAX_BYTES)
+    return raw
+
+
+def document(raw, bound):
+    p.require(type(raw) is bytes and 0 < len(raw) <= bound <= MAX_BYTES)
+    value = json.loads(raw.decode("ascii"), object_pairs_hook=p._pairs, parse_float=p._reject, parse_constant=p._reject)
+    p.require(type(value) is dict and canonical(value) == raw)
+    return value
+
+
+def configuration(raw, expected_sha, role):
+    value = p.fields(document(raw, 65536), ("apiVersion", "authority", "serviceRole", "uid", "gid"))
+    p.require(role in ROLES and p.sha(raw) == p.digest(expected_sha))
+    p.require(value["apiVersion"] == "catchplate.policyCustodyGuestConfiguration/v1" and value["serviceRole"] == role)
+    for field in ("uid", "gid"):
+        p.integer(value[field], maximum=(1 << 32) - 2)
+        p.require(value[field] not in {64988, 64989, 64990, 65534})
+    key = p.fields(value["authority"], ("publicKeyBase64url", "keyId"))
+    public = p.decoded(key["publicKeyBase64url"], size=32)
+    p.require(public != bytes(32) and key["keyId"] == p.sha(public))
+    Ed25519PublicKey.from_public_bytes(public)
+    return value
+
+
+def sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, startup, lifetime, now, signing_key):
+    return _sign_delivery(cold_raw=cold_raw,cold_sha=cold_sha,role=role,payload_raw=payload_raw,
+        activation=activation,boot=boot,startup=startup,lifetime=lifetime,now=now,signing_key=signing_key,commitment=False)
+
+
+def _delivery_values(*, cold_raw, cold_sha, role, payload_raw, activation, boot, startup, lifetime, now, commitment, spool=False, effects=False, adoption=False):
+    cold = configuration(cold_raw, cold_sha, role)
+    p.require(type(commitment) is bool and (not commitment or role in (ROLES[0],ROLES[3])))
+    names = BUSINESS[role] + ("generation-journal", "generation-grant")
+    if commitment:
+        names += ("dispatch-journal", "dispatch-grant")
+    p.require(type(spool) is bool and type(effects) is bool
+        and (not effects or spool and role in (ROLES[0], ROLES[1], ROLES[3])
+            and commitment == (role in (ROLES[0], ROLES[3])))
+        and (not spool or commitment or effects and role == ROLES[1]))
+    if spool:
+        prefix = "active-effect-cleanup" if effects and role == ROLES[1] else "spool-head" if role == ROLES[0] else "spool-current"
+        names += (prefix + "-journal", prefix + "-grant")
+    p.require(type(adoption) is bool and (not adoption or effects and commitment and role in (ROLES[0], ROLES[3])))
+    if adoption:
+        names += ("publication-journal", "publication-grant")
+    payload = p.fields(document(payload_raw, 65536), c9.FIELDS)
+    p.require(payload["configurationSha256"] == cold_sha and payload["authorityKeyId"] == cold["authority"]["keyId"]
+        and all(payload[field] == cold[field] for field in ("serviceRole", "uid", "gid"))
+        and canonical(payload["activation"]) == canonical(activation)
+        and tuple(item["name"] for item in activation) == names)
+    for index, entry in enumerate(activation, 6):
+        p.fields(entry, ("name", "fd", "device", "inode", "mode", "uid", "gid"))
+        p.require(entry["fd"] == index)
+    p.require((payload["bootIdBase64url"], payload["timeNamespaceDevice"], payload["timeNamespaceInode"]) == boot
+        and p.ns(payload["startupDeadlineBoottimeNs"]) == startup
+        and p.ns(payload["lifetimeDeadlineBoottimeNs"]) == lifetime
+        and p.ns(payload["issuedAtBoottimeNs"]) <= now < startup <= lifetime
+        and startup - p.ns(payload["issuedAtBoottimeNs"]) <= 30_000_000_000)
+    c9._pin(payload["runtimeConfig"])
+    credentials, names, total = payload["credentials"], set(), 0
+    p.require(type(credentials) is list and 1 <= len(credentials) <= 64)
+    for credential in credentials:
+        p.fields(credential, ("name", "original", "length", "signing"))
+        name = credential["name"]
+        p.require(type(name) is str and re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", name)
+            and name not in names and name != "generation-grant" and (not commitment or name != "dispatch-grant")
+            and (not spool or name not in {"spool-head-grant", "spool-current-grant"})
+            and (not effects or name != "active-effect-cleanup-grant")
+            and (not adoption or name != "publication-grant"))
+        names.add(name); c9._pin(credential["original"])
+        total += p.integer(credential["length"], maximum=MAX_BYTES)
+        if credential["signing"] is not None:
+            key = p.fields(credential["signing"], ("publicKeyBase64url", "keyId"))
+            raw = p.decoded(key["publicKeyBase64url"], size=32); p.digest(key["keyId"])
+            p.require(credential["length"] == 32 and raw != bytes(32)
+                and key["publicKeyBase64url"] != cold["authority"]["publicKeyBase64url"]
+                and key["keyId"] != cold["authority"]["keyId"])
+    p.require(total <= 16 * 1024 * 1024)
+    if adoption:
+        p.require(p.canonical(payload) == payload_raw)
+    return cold, payload
+
+
+def _delivery_guest(raw, payload):
+    guest = {field: payload[field] for field in p.GUEST_FIELDS if field not in {"deliverySha256", "runtimeConfigurationSha256"}}
+    guest.update(deliverySha256=p.sha(raw), runtimeConfigurationSha256=payload["runtimeConfig"]["sha256"])
+    p.guest(guest)
+    return guest
+
+
+def _sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, startup, lifetime, now, signing_key, commitment, spool=False, effects=False, adoption=False):
+    cold, payload = _delivery_values(cold_raw=cold_raw, cold_sha=cold_sha, role=role,
+        payload_raw=payload_raw, activation=activation, boot=boot, startup=startup,
+        lifetime=lifetime, now=now, commitment=commitment, spool=spool, effects=effects, adoption=adoption)
+    p.require(isinstance(signing_key, Ed25519PrivateKey))
+    public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    p.require(p.encoded(public) == cold["authority"]["publicKeyBase64url"])
+    signature = signing_key.sign(c9.DOMAIN + payload_raw)
+    signing_key.public_key().verify(signature, c9.DOMAIN + payload_raw)
+    result = canonical({"apiVersion": "catchplate.policyCustodyGuestDelivery/v1", "payload": payload,
+        "signatureBase64url": p.encoded(signature)})
+    p.require(len(result) <= 65536)
+    return result, _delivery_guest(result, payload)
+
+
+def _admit_delivery(*, signed_raw, cold_raw, cold_sha, role, activation, boot,
+                    startup, lifetime, now, commitment, spool=False, effects=False, adoption=False):
+    """Verify an exact external signature against retained cold/resource scope.
+
+    Profile flags are chosen by the real resource owner, never the envelope.
+    No signer, regenerated signature or serialized guest is accepted as proof.
+    """
+    envelope = p.fields(document(signed_raw, 65536), ("apiVersion", "payload", "signatureBase64url"))
+    p.require(envelope["apiVersion"] == "catchplate.policyCustodyGuestDelivery/v1")
+    payload_raw = canonical(envelope["payload"])
+    cold, payload = _delivery_values(cold_raw=cold_raw, cold_sha=cold_sha, role=role,
+        payload_raw=payload_raw, activation=activation, boot=boot, startup=startup,
+        lifetime=lifetime, now=now, commitment=commitment, spool=spool, effects=effects, adoption=adoption)
+    public = Ed25519PublicKey.from_public_bytes(p.decoded(cold["authority"]["publicKeyBase64url"], size=32))
+    public.verify(p.decoded(envelope["signatureBase64url"], size=64), c9.DOMAIN + payload_raw)
+    return signed_raw, _delivery_guest(signed_raw, payload)
+
+
+def sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, signing_key, now):
+    return _sign_grant(payload_raw=payload_raw,guest=guest,runtime_raw=runtime_raw,history_raw=history_raw,
+        delivery_raw=delivery_raw,signing_key=signing_key,now=now,commitment=False)
+
+
+def _grant_values(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, now, commitment, spool=False, effects=False, adoption=False):
+    payload = p.fields(document(payload_raw, 65536), GRANT)
+    runtime_value = document(runtime_raw, MAX_BYTES)
+    runtime = runtime_value["runtime"]
+    from catchplate import native_pilot_ordinary_initial_profile as initial
+    history = initial.runtime_manifest(history_raw, runtime=runtime, guest=guest)
+    delivery = document(delivery_raw, 65536)["payload"]
+    p.guest(guest)
+    scope = p.fields(payload["scope"], SCOPE)
+    role = guest["serviceRole"]
+    p.require(type(commitment) is bool and (not commitment or role in (ROLES[0],ROLES[3])))
+    p.require(role in ROLES and payload["apiVersion"] == "catchplate.custodyServiceGenerationGrant/v1"
+        and payload["purpose"] == "cold-service-generation-admission" and payload["serviceRole"] == role
+        and canonical(payload["guest"]) == canonical(guest) and p.sha(delivery_raw) == guest["deliverySha256"]
+        and p.sha(runtime_raw) == guest["runtimeConfigurationSha256"] == payload["runtimeConfigurationSha256"])
+    p.require(type(spool) is bool and type(effects) is bool
+        and (not effects or spool and role in (ROLES[0], ROLES[1], ROLES[3])
+            and commitment == (role in (ROLES[0], ROLES[3])))
+        and (not spool or commitment or effects and role == ROLES[1]))
+    p.require(type(adoption) is bool and (not adoption or effects and commitment and role in (ROLES[0], ROLES[3])))
+    helper = role == ROLES[-1] and runtime["apiVersion"] == initial.HELPER_RUNTIME_API
+    if helper:
+        p.require(not commitment and not spool and not effects)
+        from catchplate import native_pilot_ordinary_runtime_profile as helper_runtime
+        helper_runtime.validate_runtime(role, runtime_raw)
+        # Authenticate every role member under the independently pinned root,
+        # with this actual C9-selected primary original, before grant authority.
+        members = initial.helper_endpoint_histories(history_raw, runtime=runtime_value)
+        initial.helper_public_keys(runtime_value, members, delivery["credentials"])
+    else:
+        p.require(all(name not in runtime_value for name in ("initialEndpointHistories", "initialEndpointPins")))
+    version = 12 if adoption else 9 if helper else 8 if effects else 7 if spool else 6 if commitment else 5
+    p.require(runtime["apiVersion"] == f"catchplate.policyCustodyServiceRuntimeConfig/v{version}"
+        and runtime["generationAdmission"] == {"grantFdName": "generation-grant"}
+        and (runtime.get("dispatchAdmission") == {"grantFdName":"dispatch-grant"}
+            if commitment else runtime.get("dispatchAdmission") is None)
+        and (runtime.get("publicationAdmission") == {"grantFdName": "publication-grant"}
+            if adoption else runtime.get("publicationAdmission") is None))
+    if effects:
+        field, prefix = {ROLES[0]: ("spoolHead", "spool-head"), ROLES[1]: ("spoolCleanup", "active-effect-cleanup"),
+            ROLES[3]: ("spoolCurrent", "spool-current")}[role]
+        p.require(runtime.get(field) == {"grantFdName": prefix + "-grant"}
+            and all(runtime.get(other) is None for other in ("spoolHead", "spoolCurrent", "spoolCleanup") if other != field))
+    p.require(history["apiVersion"] == "catchplate.policyCustodyAuthorityHistory/v3"
+        and history["authorityRole"] == {"authorityKind": "isolated-service", "role": role})
+    semantic = p.framed(b"catchplate.policyCustodyAuthorityHistoryManifest/v3",
+        (canonical([history[field] for field in HISTORY[:-1]]),))
+    p.require(history["manifestSha256"] == semantic == runtime["authorityHistoryManifestSha256"]
+        == payload["authorityHistoryManifestSha256"])
+    selected = [entry for entry in delivery["credentials"] if entry["name"] == runtime["authorityHistoryManifestCredential"]]
+    p.require(len(selected) == 1 and selected[0]["original"]["sha256"] == p.sha(history_raw)
+        and selected[0]["length"] == len(history_raw) and selected[0]["signing"] is None)
+    root = p.fields(history["rootAuthority"], ("keyId", "keySpkiSha256", "publicKeySpkiBase64"))
+    spki = p.decoded(root["publicKeySpkiBase64"], size=44)
+    public = serialization.load_der_public_key(spki)
+    p.require(isinstance(public, Ed25519PublicKey)
+        and public.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw) != bytes(32)
+        and public.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo) == spki
+        and p.sha(spki) == root["keySpkiSha256"]
+        == runtime["authorityHistoryRootKeySpkiSha256"] and p.digest(root["keyId"]) == runtime["authorityHistoryRootKeyId"])
+    p.require(p.encoded(public.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw))
+        not in [entry["signing"]["publicKeyBase64url"] for entry in delivery["credentials"] if entry["signing"] is not None])
+    for field in SCOPE:
+        value = scope[field]
+        if field == "previousConfigurationBindingSha256" and value is None:
+            continue
+        if field in ("assignmentRevision", "trustedTimeRevocationGeneration", "installationIssuedAtUnixNanos", "installationExpiresAtUnixNanos"):
+            p.integer(value, maximum=(1 << 63) - 1 if field.startswith("installation") else (1 << 64) - 1)
+        else:
+            p.digest(value)
+    p.require(scope["installationIssuedAtUnixNanos"] < scope["installationExpiresAtUnixNanos"]
+        and scope["fiveServiceProtocolSetSha256"] == runtime["productionDispatchProtocolSetSha256"])
+    issued = p.integer(payload["issuedAtBoottimeNanos"], maximum=(1 << 64) - 1)
+    expires = p.integer(payload["expiresAtBoottimeNanos"], maximum=(1 << 64) - 1)
+    p.require(p.ns(guest["issuedAtBoottimeNs"]) <= issued <= now < expires <= p.ns(guest["lifetimeDeadlineBoottimeNs"]))
+    if adoption:
+        p.require(p.canonical(payload) == payload_raw)
+    return payload, public
+
+
+def _grant_message(payload_raw):
+    return b"catchplate-signature-v1\0" + len(DOMAIN).to_bytes(8, "big") + DOMAIN + len(payload_raw).to_bytes(8, "big") + payload_raw
+
+
+def _sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, signing_key, now, commitment, spool=False, effects=False, adoption=False):
+    payload, public = _grant_values(payload_raw=payload_raw, guest=guest, runtime_raw=runtime_raw,
+        history_raw=history_raw, delivery_raw=delivery_raw, now=now,
+        commitment=commitment, spool=spool, effects=effects, adoption=adoption)
+    p.require(isinstance(signing_key, Ed25519PrivateKey)
+        and signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        == public.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw))
+    message = _grant_message(payload_raw)
+    signature = signing_key.sign(message)
+    signing_key.public_key().verify(signature, message)
+    raw = canonical({"payload": payload, "signatureBase64url": p.encoded(signature)})
+    p.require(len(raw) <= 65536)
+    return raw
+
+
+def _admit_grant(*, signed_raw, guest, runtime_raw, history_raw, delivery_raw,
+                 now, commitment, spool=False, effects=False, adoption=False):
+    """Authenticate an external original with the already retained history root.
+
+    This is the same bounded preparation check as the signing producer. Full
+    history/current-state admission remains with the actual final-role service.
+    """
+    envelope = p.fields(document(signed_raw, 65536), ("payload", "signatureBase64url"))
+    payload_raw = canonical(envelope["payload"])
+    _, public = _grant_values(payload_raw=payload_raw, guest=guest, runtime_raw=runtime_raw,
+        history_raw=history_raw, delivery_raw=delivery_raw, now=now,
+        commitment=commitment, spool=spool, effects=effects, adoption=adoption)
+    public.verify(p.decoded(envelope["signatureBase64url"], size=64), _grant_message(payload_raw))
+    return signed_raw, public

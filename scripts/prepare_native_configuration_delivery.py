@@ -3,7 +3,7 @@
 
 Run python3 -I -B as root with --input-fd, its independently approved
 --input-sha256, and a distinct --output-fd write pipe. The canonical descriptor
-is serverware.nativeConfigurationDeliveryAssemblyInput/v1 with exactly:
+is catchplate.nativeConfigurationDeliveryAssemblyInput/v1 with exactly:
 apiVersion, challenge {fd,sha256}, issuedAtEpochNs, expiresAtEpochNs,
 deadlineBoottimeNs, configurationSha256, launchSha256, and artifacts
 [{label,fd,sha256}]. Challenge is the original unframed canonical receiver hello.
@@ -41,8 +41,8 @@ import threading
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import send_native_configuration as transport
 
-INPUT_API = "serverware.nativeConfigurationDeliveryAssemblyInput/v1"
-ROTATION_INPUT_API = "serverware.nativeConfigurationDeliveryAssemblyInput/v2"
+INPUT_API = "catchplate.nativeConfigurationDeliveryAssemblyInput/v1"
+ROTATION_INPUT_API = "catchplate.nativeConfigurationDeliveryAssemblyInput/v2"
 MAX_INPUT = 64 * 1024
 SEALS = fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
 

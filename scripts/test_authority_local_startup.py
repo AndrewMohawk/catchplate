@@ -18,8 +18,8 @@ from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import authority_local_startup as startup
-from serverware import authority_local_limits as limits
+from catchplate import authority_local_startup as startup
+from catchplate import authority_local_limits as limits
 from scripts.authority import local_startup as cli
 
 
@@ -29,7 +29,7 @@ def fixture():
         issuedAtBoottimeNs=100, deadlineBoottimeNs=200,
         issuedAtUnixNanos=1000, expiresAtUnixNanos=1100,
         credentialDirectory=dict(path="/run/credentials/test-authority", device=1, inode=2),
-        exchangeDirectory=dict(path="/run/serverware/test-exchange", device=1, inode=3),
+        exchangeDirectory=dict(path="/run/catchplate/test-exchange", device=1, inode=3),
         retainedFiles=[dict(path=path, sha256="sha256:" + "2" * 64)
             for path in sorted((startup.INTERPRETER, startup.ENTRYPOINT, startup.BOOTSTRAP))],
         retainedDirectories=[dict(path=path, device=1, inode=index + 10)
@@ -173,7 +173,7 @@ class LocalStartupTests(unittest.TestCase):
                 "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
             source.write(b"nonempty public original"); source.flush()
             self.assertEqual(startup._read(source.fileno(), 64), b"nonempty public original")
-        tree = ast.parse((ROOT / "serverware" / "authority_local_startup.py").read_text())
+        tree = ast.parse((ROOT / "catchplate" / "authority_local_startup.py").read_text())
         opted_in = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name) and node.func.id == "_read"
             and any(keyword.arg == "allow_empty" for keyword in node.keywords)]
@@ -211,7 +211,7 @@ class LocalStartupTests(unittest.TestCase):
         value = fixture()
         changes = []
         row = copy.deepcopy(value); row["argv"] = ["/bin/sh"]; changes.append(row)
-        row = copy.deepcopy(value); row["environment"]["SERVERWARE_METADATA_STORE_POSTGRES_DSN"] = "not-a-credential"; changes.append(row)
+        row = copy.deepcopy(value); row["environment"]["CATCHPLATE_METADATA_STORE_POSTGRES_DSN"] = "not-a-credential"; changes.append(row)
         row = copy.deepcopy(value); row["retainedFiles"] = row["retainedFiles"][1:]; changes.append(row)
         row = copy.deepcopy(value); row["retainedDirectories"] = row["retainedDirectories"][:-1]; changes.append(row)
         row = copy.deepcopy(value); row["exchangeDirectory"]["path"] = "/run/../tmp"; changes.append(row)
@@ -310,12 +310,12 @@ class LocalStartupTests(unittest.TestCase):
 
     def test_real_atomic_observation_publication_refreshes_mode_and_link_identity(self):
         self.assertEqual(os.geteuid(), 0, "this focused storage control requires the root test container")
-        with tempfile.TemporaryDirectory(prefix="serverware-local-observation-") as directory:
+        with tempfile.TemporaryDirectory(prefix="catchplate-local-observation-") as directory:
             self._effect(directory, startup.encode({"syntheticObservation": True}), process_churn=True)
 
     def test_real_atomic_observation_never_replaces_an_existing_original(self):
         self.assertEqual(os.geteuid(), 0, "this focused storage control requires the root test container")
-        with tempfile.TemporaryDirectory(prefix="serverware-local-observation-") as directory:
+        with tempfile.TemporaryDirectory(prefix="catchplate-local-observation-") as directory:
             self._effect(directory, b"{}", existing=True)
 
     def test_real_admission_notice_publication_is_no_replace_and_after_authenticated_receive(self):
@@ -323,7 +323,7 @@ class LocalStartupTests(unittest.TestCase):
         # admission fixture or a caller-supplied readiness acknowledgement.
         self.assertEqual(os.geteuid(), 0, "this focused storage control requires the root test container")
         for existing in (False, True):
-            with tempfile.TemporaryDirectory(prefix="serverware-local-admitted-") as directory:
+            with tempfile.TemporaryDirectory(prefix="catchplate-local-admitted-") as directory:
                 self._effect(directory, b'{"syntheticNotice":true}', existing=existing, name=startup.ADMITTED_NAME)
         source = Path(startup.__file__).read_text()
         receive = source.index("notice, _ = self._receive(admitted=True)")

@@ -22,11 +22,11 @@ SUBJECT = "18446744073709551001"
 ANCHOR = 2_000_000_000_000
 DAY = ANCHOR // 86_400_000
 SCOPE = ("agent:operator-demo:" + APP_A, "operator." + RULE, "sha256:" + "a" * 64)
-TEXT = "Serverware local check: caf\u00e9 & <verified>\n"
+TEXT = "Catchplate local check: caf\u00e9 & <verified>\n"
 BODIES = {
-    "node": b'{"text":"Serverware local check: caf\xc3\xa9 & <verified>\\n"}',
-    "python": b'{"text": "Serverware local check: caf\\u00e9 & <verified>\\n"}',
-    "go": b'{"text":"Serverware local check: caf\xc3\xa9 \\u0026 \\u003cverified\\u003e\\n"}',
+    "node": b'{"text":"Catchplate local check: caf\xc3\xa9 & <verified>\\n"}',
+    "python": b'{"text": "Catchplate local check: caf\\u00e9 & <verified>\\n"}',
+    "go": b'{"text":"Catchplate local check: caf\xc3\xa9 \\u0026 \\u003cverified\\u003e\\n"}',
 }
 
 
@@ -57,7 +57,7 @@ def provider():
             "responseBodySha256": sha(response), "responseBytes": len(response), "status": 201,
             "postId": str(9000000000000000000 + ordinal), "providerCredentialMatched": True,
             "proxyAuthorizationPresent": False})
-    return {"schema": "serverware.privateXQuotaProvider/v1", "syntheticOnly": True, "terminal": "running",
+    return {"schema": "catchplate.privateXQuotaProvider/v1", "syntheticOnly": True, "terminal": "running",
         "counts": {"total": 18, "authorize": 2, "code": 2, "refresh": 1, "identity": 3, "revoke": 6, "posts": 4, "rejected": 0},
         "initialAccessIssuedAtEpochMs": ANCHOR + 1000, "initialAccessExpiresAtEpochMs": ANCHOR + 121000,
         "initialAccessExpired": True, "refreshAfterInitialExpiry": True,
@@ -89,7 +89,7 @@ def quota_rows():
             "attempt_nonce": attempt, "recipient_digest": sha(b"recipient"), "request_binding_digest": sha(b"wire"),
             "expires_at_epoch_ms": ANCHOR + 5000 + index}
         for claimed in (False, True):
-            event = {"schema": "serverware.operatorXPostingQuota" + ("Claim/v1" if claimed else "Reservation/v1"),
+            event = {"schema": "catchplate.operatorXPostingQuota" + ("Claim/v1" if claimed else "Reservation/v1"),
                 "reservation_id": f"66666666-6666-4666-8666-{index:012d}", "bucket_key": bucket,
                 "utc_day": DAY, "expires_at_epoch_ms": binding["expires_at_epoch_ms"], "binding_digest": sha(binding),
                 "binding": deepcopy(binding), **({"claimed_at_epoch_ms": ANCHOR + 1000 + index} if claimed else {})}
@@ -102,13 +102,13 @@ def quota_rows():
 
 
 def terminal():
-    value = {"schema": "serverware.privateXQuotaCheck/v1", "ok": True, "syntheticOnly": True,
+    value = {"schema": "catchplate.privateXQuotaCheck/v1", "ok": True, "syntheticOnly": True,
         "realXVerified": False, "productionReady": False, "publicDnsVerified": False,
         "actualExampleEntrypoints": True, "actualManagedLifecycle": True, "auditChainVerified": True,
         "limit": 4, "dataPlaneBinaryDigest": sha(b"binary"), "goExampleSha256": "a" * 64,
         "dependenciesSha256": "b" * 64, "completed": [{"phase": phase, "exitCode": 0 if i < 4 else 2,
             "confirmed": i < 4} for i, phase in enumerate(check.PHASES)], "provider": provider(),
-        "restart": {"schema": "serverware.privateXQuotaRestartAck/v1", "request_sha256": sha(b"request"), "status": "retained_restarted"},
+        "restart": {"schema": "catchplate.privateXQuotaRestartAck/v1", "request_sha256": sha(b"request"), "status": "retained_restarted"},
         "preCallbackEpochMs": ANCHOR, "credentialIds": [CREDENTIAL, ALIAS], "applicationIds": [APP_A, APP_B], "utcDay": DAY,
         "attemptIds": [sha(bytes([i])) for i in range(7)], "chargedAttemptIds": [sha(bytes([i])) for i in range(4)],
         "deniedAttemptIds": [sha(bytes([i])) for i in range(4, 7)],

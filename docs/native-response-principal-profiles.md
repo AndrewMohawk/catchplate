@@ -14,8 +14,8 @@ expectations original, never from an incoming statement or a returned verdict.
 
 | Pinned expectations | Allowed statement APIs | Envelope / local verdict |
 | --- | --- | --- |
-| `serverware.nativeResponseAttestationExpectations/v1`, exact existing 16 fields | `serverware.proxyResponseStatement/v2`, `serverware.streamingResponseStatement/v1`, `serverware.responseObservationStatement/v1` | `serverware.nativeResponseRuntimeProof/v1` / `serverware.nativeResponseAttestationVerification/v1` |
-| [`serverware.nativeResponseAttestationExpectations/v2`](../schemas/native-response-attestation-expectations.v2.schema.json), those 16 fields plus `statementProfile: serverware.nativeResponseStatements/v1` | `serverware.nativeProxyResponseStatement/v1`, `serverware.nativeStreamingResponseStatement/v1`, `serverware.nativeResponseObservationStatement/v1` | `serverware.nativeResponseRuntimeProof/v2` / `serverware.nativeResponseAttestationVerification/v2` |
+| `catchplate.nativeResponseAttestationExpectations/v1`, exact existing 16 fields | `catchplate.proxyResponseStatement/v2`, `catchplate.streamingResponseStatement/v1`, `catchplate.responseObservationStatement/v1` | `catchplate.nativeResponseRuntimeProof/v1` / `catchplate.nativeResponseAttestationVerification/v1` |
+| [`catchplate.nativeResponseAttestationExpectations/v2`](../schemas/native-response-attestation-expectations.v2.schema.json), those 16 fields plus `statementProfile: catchplate.nativeResponseStatements/v1` | `catchplate.nativeProxyResponseStatement/v1`, `catchplate.nativeStreamingResponseStatement/v1`, `catchplate.nativeResponseObservationStatement/v1` | `catchplate.nativeResponseRuntimeProof/v2` / `catchplate.nativeResponseAttestationVerification/v2` |
 
 V1 rejects `statementProfile`, including null, and every new family/envelope.
 V2 requires its exact selector and rejects every old family/envelope. There is
@@ -64,16 +64,16 @@ bounds remain unchanged.
 
 Wide-principal response compatibility also requires the actual producer and full
 capture validators; accepting a top-level native statement alone is insufficient.
-The native contract uses `serverware.nativeControlPlaneAuthorizationReceipt/v1`
-with kind `ServerwareNativeControlPlaneAuthorizationReceipt`. Ordinary/durable
-release bindings use `serverware.nativeReleaseAuthorizationBinding/v1` and `/v2`,
+The native contract uses `catchplate.nativeControlPlaneAuthorizationReceipt/v1`
+with kind `CatchplateNativeControlPlaneAuthorizationReceipt`. Ordinary/durable
+release bindings use `catchplate.nativeReleaseAuthorizationBinding/v1` and `/v2`,
 including the actual normalized `approver_policy`; reserve, dispatch, complete
 and response APIs have explicit native versions. The response API is
-`serverware.nativeReleaseAuthorizationResponse/v1` or `/v2`, not a renamed legacy
+`catchplate.nativeReleaseAuthorizationResponse/v1` or `/v2`, not a renamed legacy
 `releaseAuthorization` object.
 
 The reduced native streaming commitment uses
-`serverware.nativeResponseAuthorizationCommitment/v1`: the existing twelve
+`catchplate.nativeResponseAuthorizationCommitment/v1`: the existing twelve
 commitment fields plus `apiVersion` and `approver_policy_sha256`, hashing the exact
 canonical ASCII-escaped policy value, including null. These nested originals,
 actor/current-policy authority, actual request/response/receipt digests and

@@ -1,6 +1,6 @@
 # Same-call consume grant, reserve and SQL dispatch
 
-[`control_plane_oidc_session_activation_consume_dispatch.py`](../serverware/control_plane_oidc_session_activation_consume_dispatch.py)
+[`control_plane_oidc_session_activation_consume_dispatch.py`](../catchplate/control_plane_oidc_session_activation_consume_dispatch.py)
 connects the actual signed consume authorization to the isolated grant,
 reservation and SQL roles. This is source-only, unbuilt, unexecuted and
 unprovisioned. It adds no consume completion, token release, public route,

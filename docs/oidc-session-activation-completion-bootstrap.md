@@ -10,9 +10,9 @@ F08.4e.6 remains partial until its complete named integration is landed.
 ## Originals and independent scope
 
 The closed schemas are
-`serverware.signedOidcSessionActivationCompletionBootstrap/v1`,
-`serverware.oidcSessionActivationCompletionBootstrap/v1` and the nested launch
-`serverware.oidcSessionActivationCompletionLaunch/v1` or explicit `/v2`.
+`catchplate.signedOidcSessionActivationCompletionBootstrap/v1`,
+`catchplate.oidcSessionActivationCompletionBootstrap/v1` and the nested launch
+`catchplate.oidcSessionActivationCompletionLaunch/v1` or explicit `/v2`.
 The operation is `oidc.session.activate`; the sole role/process mode is
 `oidc-session-activation-completion`, UID/GID **65503**, with request peer
 **65532**. Other receiving roles are not widened.
@@ -59,9 +59,9 @@ cohort checks remain strict; cross-version historical authority is still H05.
 | --- | --- |
 | 198 | Root public key |
 | 199 | Signed completion bootstrap, including historical custody |
-| 200 | Listener `/run/serverware/oidc-session-activation/completion.sock` |
+| 200 | Listener `/run/catchplate/oidc-session-activation/completion.sock` |
 | 201 | Actually enrolled completion signing key |
-| 202 | Journal directory `/var/lib/serverware/oidc-session-activation-completions` |
+| 202 | Journal directory `/var/lib/catchplate/oidc-session-activation-completions` |
 | 203 | Independently pinned bundle AES key |
 | 204 | Independently pinned delivery AES key |
 
@@ -79,10 +79,10 @@ certificate/key paths and no password or caller-supplied DSN. Both query and
 structural-catalog pins must be consumed by the actual reader owners. Matching
 endpoint/TLS fields alone do not prove same-database provenance.
 
-The five pinned files under `/run/serverware/oidc-session-activation-completion-tls/`
+The five pinned files under `/run/catchplate/oidc-session-activation-completion-tls/`
 are `ca.pem`, `custody.crt`, `custody.key`, `commit.crt` and `commit.key`.
 Certificates/CA are bounded at 64 KiB each; keys at 16 KiB each; minimum is two
-bytes. The fixed state endpoint is `/run/serverware/current-root/state.sock`:
+bytes. The fixed state endpoint is `/run/catchplate/current-root/state.sock`:
 state service UID/GID 65516, root-activated listener peer 0:0. Separate signed
 state-peer admission and narrowly provisioned socket access remain necessary.
 

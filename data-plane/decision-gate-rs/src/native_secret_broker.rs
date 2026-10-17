@@ -1,18 +1,18 @@
 //! Concrete proxy call sites after the existing full lease authentication.
 use super::*;
-use serverware_decision_gate::native_secret_broker_v1::{self as broker, CredentialWork};
+use catchplate_decision_gate::native_secret_broker_v1::{self as broker, CredentialWork};
 
 pub(super) fn request_version(bound: bool) -> &'static str {
-    if bound { "serverware.nativeBrokerCredentialLeaseRequest/v2" }
-    else { "serverware.nativeBrokerCredentialLeaseRequest/v1" }
+    if bound { "catchplate.nativeBrokerCredentialLeaseRequest/v2" }
+    else { "catchplate.nativeBrokerCredentialLeaseRequest/v1" }
 }
 pub(super) fn envelope_version(bound: bool) -> &'static str {
-    if bound { "serverware.nativeBrokerCredentialLeaseEnvelope/v2" }
-    else { "serverware.nativeBrokerCredentialLeaseEnvelope/v1" }
+    if bound { "catchplate.nativeBrokerCredentialLeaseEnvelope/v2" }
+    else { "catchplate.nativeBrokerCredentialLeaseEnvelope/v1" }
 }
 pub(super) fn set_version(bound: bool) -> &'static str {
-    if bound { "serverware.nativeBrokerCredentialLeaseSet/v2" }
-    else { "serverware.nativeBrokerCredentialLeaseSet/v1" }
+    if bound { "catchplate.nativeBrokerCredentialLeaseSet/v2" }
+    else { "catchplate.nativeBrokerCredentialLeaseSet/v1" }
 }
 
 pub(super) fn check(state: &GateState) -> Result<(), String> {

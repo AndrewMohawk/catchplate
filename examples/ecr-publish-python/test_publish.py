@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import patch
 
 import publish as example
-from serverware.ecr_artifact_staging import stage_artifact
+from catchplate.ecr_artifact_staging import stage_artifact
 
 example.isolate_environment()
 # Import first: urllib3 performs an optional local IPv6 capability probe.
@@ -58,7 +58,7 @@ class Raw:
 
 class ClientTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="serverware-ecr-example-")
+        temporary = tempfile.TemporaryDirectory(prefix="catchplate-ecr-example-")
         self.addCleanup(temporary.cleanup)
         self.directory = Path(temporary.name)
         self.vector = json.loads((example.ROOT / "scripts/fixtures/ecr_image_artifact_v1.json").read_bytes())
@@ -89,7 +89,7 @@ class ClientTests(unittest.TestCase):
         self.expires_at = time.time_ns() // 1_000_000 + 120000
 
     def dto(self, state):
-        return {"schema": "serverware.ecrPublication/v1", "id": PUBLICATION, "status": state,
+        return {"schema": "catchplate.ecrPublication/v1", "id": PUBLICATION, "status": state,
             "assurance": "host-trusted", "application_id": APP, "access_rule_id": RULE,
             "policy_hash": self.config["expected_policy_hash"],
             "scope": {key: self.config[key] for key in example.SCOPE_FIELDS},
@@ -191,8 +191,8 @@ class ClientTests(unittest.TestCase):
                 self.assertIn(headers["amz-sdk-request"], {"attempt=1", "attempt=1; max=1"})
                 example.uuid(headers["amz-sdk-invocation-id"])
                 self.assertIn("SignedHeaders=content-type;host;x-amz-date;x-amz-target,", headers["authorization"])
-                self.assertEqual(headers["user-agent"].count("ServerwarePublication/" + PUBLICATION), 1)
-                self.assertIn("ServerwarePublication/" + PUBLICATION, headers["user-agent"])
+                self.assertEqual(headers["user-agent"].count("CatchplatePublication/" + PUBLICATION), 1)
+                self.assertIn("CatchplatePublication/" + PUBLICATION, headers["user-agent"])
                 self.assertIn("Credential=" + example.CLIENT_ACCESS + "/", headers["authorization"])
                 self.assertNotIn(TOKEN, json.dumps(headers))
                 self.assertNotIn("proxy-authorization", headers)

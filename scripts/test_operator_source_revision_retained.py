@@ -29,9 +29,9 @@ def inputs():
 def startup_fixture():
     before = {'objects': [['table', 'audit_events']], 'orderedAudit': 'fixed-audit-digest',
         'persistentJournalFormat': 'wal', 'rows': {'audit_events': {'count': 497, 'sha256': 'fixed'},
-            'retained': {'count': 1, 'sha256': 'fixed'}, 'serverware_store_migrations': {'sha256': 'old'}}}
+            'retained': {'count': 1, 'sha256': 'fixed'}, 'catchplate_store_migrations': {'sha256': 'old'}}}
     after = copy.deepcopy(before)
-    after['rows']['serverware_store_migrations'] = {'sha256': 'new'}
+    after['rows']['catchplate_store_migrations'] = {'sha256': 'new'}
     timestamps = {'policy_candidate_authority': {'rowid': 1, 'applied_at': '2026-10-14T00:00:00+00:00'},
         'other': {'rowid': 2, 'applied_at': '2026-10-13T00:00:00+00:00'}}
     current = copy.deepcopy(timestamps)
@@ -166,7 +166,7 @@ class RetainedSourceControls(unittest.TestCase):
                     '--data-directory', '/data'])
 
     def test_host_receipt_requires_actual_terminal_and_cleanup(self):
-        value = dict(schema='serverware.sourceRevisionRetainedHost/v1', ok=True, role='plan',
+        value = dict(schema='catchplate.sourceRevisionRetainedHost/v1', ok=True, role='plan',
             inputsSha256='a' * 64, workerSha256='b' * 64, exitCode=0, oomKilled=False,
             restartCount=0, containerRemoved=True, containerId='c' * 64)
         with patch.object(worker, 'cfg', {'workerSha256': 'b' * 64}), patch.object(h, 'read', return_value=value):
@@ -376,7 +376,7 @@ class PromotionHashHandoffControls(unittest.TestCase):
 
     def test_freeze_reads_exact_fourteen_out_files_including_saved_phase(self):
         expected = {'plan.json', 'apply.json', 'migrated-database.json', 'migrated-database-bytes.json',
-            'freeze.json', 'expected-contract.json', 'serverware.sqlite3.baseline.json', 'baseline-contract.json',
+            'freeze.json', 'expected-contract.json', 'catchplate.sqlite3.baseline.json', 'baseline-contract.json',
             'recovered-files.json', 'phase-prepare.json', 'phase-recover.json', 'phase-plan.json',
             'phase-apply.json', 'phase-freeze.json'}
         with patch.object(h, 'raw_file', side_effect=lambda path: str(path).encode()) as read:

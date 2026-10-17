@@ -22,8 +22,8 @@ from unittest.mock import patch
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import serverware
-from serverware import authority_database_configuration as config
+import catchplate
+from catchplate import authority_database_configuration as config
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,7 +43,7 @@ def functions(path, names, namespace):
 
 
 def fixture():
-    tree = ast.parse((ROOT / "serverware/authority_service.py").read_bytes())
+    tree = ast.parse((ROOT / "catchplate/authority_service.py").read_bytes())
     original = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "MeasuredConfiguration")
     original.body = [node for node in original.body if isinstance(node, ast.AnnAssign)
         or isinstance(node, ast.FunctionDef) and node.name == "role"]
@@ -63,25 +63,25 @@ def fixture():
     roles["verifier"].update(signingPublicKeyBase64Url=base64.urlsafe_b64encode(raw).rstrip(b"=").decode(),
         signingSpkiDigest="sha256:" + hashlib.sha256(Ed25519PublicKey.from_public_bytes(raw).public_bytes(
             Encoding.DER, PublicFormat.SubjectPublicKeyInfo)).hexdigest())
-    payload = dict(schema="serverware.policyAuthorityServiceConfiguration/v6", roles=roles,
+    payload = dict(schema="catchplate.policyAuthorityServiceConfiguration/v6", roles=roles,
         generationSequence=7, generationBindingDigest=digest(40), verifierCredentialIssuanceDigest=digest(41),
         issuerCredentialIssuanceDigest=digest(42), replayWitness=dict(identityDigest=digest(43)),
         policyGenesis=dict(auditStoreIdentityDigest=digest(44), auditSignerPublicKeyDigest=digest(45)))
-    runtime = dict(schema="serverware.policyAuthorityRuntimeRoleIdentities/v1", configurationDigest=digest(1),
+    runtime = dict(schema="catchplate.policyAuthorityRuntimeRoleIdentities/v1", configurationDigest=digest(1),
         generationSequence=7, generationDigest=digest(46), roles=runtime_roles)
     measured = namespace["MeasuredConfiguration"](payload=payload, digest=digest(1), root_key=None,
         runtime_role_identities=runtime)
-    service = ModuleType("serverware.authority_service")
+    service = ModuleType("catchplate.authority_service")
     service.MeasuredConfiguration = namespace["MeasuredConfiguration"]
-    launch = ModuleType("serverware.authority_launch_guard")
+    launch = ModuleType("catchplate.authority_launch_guard")
     launch.generation = lambda: dict(sequence=7, digest=digest(46), configurationBindingDigest=digest(40))
     return measured, {service.__name__: service, launch.__name__: launch}
 
 
 @contextmanager
 def component_modules(modules):
-    with patch.dict(sys.modules, modules), patch.object(serverware, "authority_launch_guard",
-            modules["serverware.authority_launch_guard"], create=True):
+    with patch.dict(sys.modules, modules), patch.object(catchplate, "authority_launch_guard",
+            modules["catchplate.authority_launch_guard"], create=True):
         yield
 
 
@@ -136,16 +136,16 @@ def connector(selected, session):
         calls.append(name)
         return "component-only-dsn"
     namespace = dict(re=re, Any=Any, MetadataStoreError=ValueError,
-        os=SimpleNamespace(environ={"SERVERWARE_PROCESS_MODE": "policy-authority-executor",
-            "SERVERWARE_POLICY_AUTHORITY_EXECUTOR_TLS_CLIENT_DN": "wrong-ambient"}),
+        os=SimpleNamespace(environ={"CATCHPLATE_PROCESS_MODE": "policy-authority-executor",
+            "CATCHPLATE_POLICY_AUTHORITY_EXECUTOR_TLS_CLIENT_DN": "wrong-ambient"}),
         _POLICY_AUTHORITY_EXECUTOR_PROCESS_MODE="policy-authority-executor",
-        _POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME="serverware_metadata",
+        _POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME="catchplate_metadata",
         _POLICY_AUTHORITY_OWNER_CONTRACT_ID="component-contract", _POLICY_AUTHORITY_CONTROLLED_WRITER_TABLES={"component"},
         _policy_authority_dsn_from_descriptor=descriptor,
         _metadata_psycopg=lambda: (SimpleNamespace(connect=connect), "dict-row"),
         _postgres_bootstrap_options=lambda *args, **kwargs: "options",
         _validate_policy_authority_owner_apply_function=owner)
-    functions("serverware/db.py", {"_authority_database_pins", "_policy_authority_executor_pg_connect_raw"}, namespace)
+    functions("catchplate/db.py", {"_authority_database_pins", "_policy_authority_executor_pg_connect_raw"}, namespace)
     return namespace["_policy_authority_executor_pg_connect_raw"], calls
 
 
@@ -198,7 +198,7 @@ class ExecutorDatabaseConfigurationTests(unittest.TestCase):
             _require_serializable=lambda connection: events.append(("serializable", connection)),
             _require_database_role=lambda connection, role: events.append((role, connection)),
             _db_value=lambda name: (_ for _ in ()).throw(AssertionError("ambient role used")))
-        functions("serverware/authority_store/executor_v9.py", {"_require_executor"}, namespace)
+        functions("catchplate/authority_store/executor_v9.py", {"_require_executor"}, namespace)
         self.assertIs(namespace["_require_executor"](object(), expected_role="pilot_executor"), raw)
         self.assertEqual(events, [("serializable", raw), ("pilot_executor", raw)])
 

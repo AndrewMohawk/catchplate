@@ -88,7 +88,7 @@ expectations, not key enrollment, current roots or refreshed deadlines.
 ### Historical context
 
 Use a closed canonical eighteen-field document with schema
-`serverware.policyAuthorityRevocationEvaluationContext/v1`:
+`catchplate.policyAuthorityRevocationEvaluationContext/v1`:
 
 ```text
 schema, sourceRevision,
@@ -158,7 +158,7 @@ deferred foreign-key guarantee above covers only the parent/sidecar pair.
 ### Record commitment and retries
 
 Commit a canonical thirteen-field header under the new domain
-`serverware.policyAuthorityRevocationRetainedPlan/v1`:
+`catchplate.policyAuthorityRevocationRetainedPlan/v1`:
 
 ```text
 schema, sourceRevision, planProtocol,
@@ -272,7 +272,7 @@ the actual driver's cleanup behavior.
 
 ## Private SQL integrity binder
 
-[`authority_store.revocation_retained_sql`](../serverware/authority_store/revocation_retained_sql.py)
+[`authority_store.revocation_retained_sql`](../catchplate/authority_store/revocation_retained_sql.py)
 provides `revocation_retained_declarations_sql()` and
 `load_revocation_retained_sql(namespace)`. The latter requires an actual
 caller-locked `planner` record and reads its immutable sidecar with a strict
@@ -305,7 +305,7 @@ service replay paths remain unchanged and continue to reject v4 records.
 ## Private execution-envelope reservation
 
 The configured `RevocationPlannerPersistence.reserve_execution` path uses
-[`authority_store.revocation_execution`](../serverware/authority_store/revocation_execution.py).
+[`authority_store.revocation_execution`](../catchplate/authority_store/revocation_execution.py).
 It owns a `SERIALIZABLE READ WRITE NOT DEFERRABLE` transaction and reuses the
 actual stored-record replay body inside one savepoint, retaining the parent
 row lock through reservation and exact readback. The reader pins the same raw
@@ -322,7 +322,7 @@ through byte encoding, commitments and comparisons.
 Only after genuine replay does the store construct this closed request:
 
 ```text
-schema = serverware.policyAuthorityRevocationExecutionRequest/v1
+schema = catchplate.policyAuthorityRevocationExecutionRequest/v1
 planProtocol = revocation-v4
 retainedRecordDigest
 rootTransitionDigest
@@ -357,7 +357,7 @@ the legacy executor or public service. Its fixtures are authored and unexecuted.
 
 ## Private counted-head fresh-apply fragments
 
-[`authority_store.revocation_counted_sql`](../serverware/authority_store/revocation_counted_sql.py)
+[`authority_store.revocation_counted_sql`](../catchplate/authority_store/revocation_counted_sql.py)
 provides `revocation_counted_declarations_sql()`,
 `prepare_revocation_counted_transition_sql(namespace)`,
 `lock_and_assert_revocation_counted_before_sql(namespace)` and

@@ -14,8 +14,8 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-API = ROOT / "serverware/operator_catalog_api.py"
-DEMO = ROOT / "serverware/operator_demo.py"
+API = ROOT / "catchplate/operator_catalog_api.py"
+DEMO = ROOT / "catchplate/operator_demo.py"
 BASE = "/api/operator-demo/proxy/upstreams"
 
 
@@ -105,15 +105,15 @@ class UpstreamApiContractTests(unittest.TestCase):
         self.assertEqual(len(calls(node, "_blocking")), 1)
         self.assertFalse(any(isinstance(item, (ast.For, ast.While)) for item in ast.walk(node)), "transport must not replay core mutations")
         imports = [item for item in ast.walk(node) if isinstance(item, ast.ImportFrom)]
-        self.assertEqual({item.module for item in imports}, {"serverware", "serverware.operator_catalog_schema"})
+        self.assertEqual({item.module for item in imports}, {"catchplate", "catchplate.operator_catalog_schema"})
 
     def test_profile_admits_only_the_new_scoped_mutations(self):
         node = function(parsed(DEMO), "request_allowed")
-        package, google = ModuleType("serverware"), ModuleType("serverware.operator_catalog_oauth_profile")
+        package, google = ModuleType("catchplate"), ModuleType("catchplate.operator_catalog_oauth_profile")
         google.selected = lambda: False
         package.operator_catalog_oauth_profile = google
         namespace = {}
-        with patch.dict(sys.modules, {"serverware": package, "serverware.operator_catalog_oauth_profile": google}):
+        with patch.dict(sys.modules, {"catchplate": package, "catchplate.operator_catalog_oauth_profile": google}):
             exec(compile(ast.Module(body=[node], type_ignores=[]), str(DEMO), "exec"), namespace)
             allowed = namespace["request_allowed"]
             self.assertTrue(allowed("GET", BASE))

@@ -142,7 +142,7 @@ meet that prerequisite. The request ceiling is 32 MiB minus its channel LF;
 approval is at most 8 KiB, and input retains its existing per-job byte ceiling.
 
 The installer derives both destinations solely from the existing fixed job
-table, under `/etc/serverware/native-pilot-authority/<phase>/`. All ancestors
+table, under `/etc/catchplate/native-pilot-authority/<phase>/`. All ancestors
 must already be root-owned and non-group/other-writable. It refuses either
 existing target, writes the exact `<job>.input.json` first and
 `<job>.approval.json` last as exclusive root:root `0400` single-link files, then
@@ -165,7 +165,7 @@ service is started, and no execution/readiness result follows from installation.
 
 ## Exact input contracts
 
-The cohort command accepts `serverware.nativePilotCohortAuthorityInput/v1`,
+The cohort command accepts `catchplate.nativePilotCohortAuthorityInput/v1`,
 bounded to 2 MiB, with these exact common fields:
 
 | Field | Meaning |
@@ -183,7 +183,7 @@ The command reuses `native_shadow_proof_cohort_assignment.sign_precreation` or
 role, descriptor and original-window bindings. It does not reconstruct a live
 cohort from observations or turn a constructed notice into readiness.
 
-The scope command accepts `serverware.nativePilotScopeSigningInput/v1`, bounded
+The scope command accepts `catchplate.nativePilotScopeSigningInput/v1`, bounded
 to 4 MiB, with exactly `apiVersion` and these eight literal ASCII originals:
 
 ```text
@@ -193,7 +193,7 @@ publicBundleOriginal        deliveryConfigurationOriginal
 launchOriginal              bootstrapAdmissionOriginal
 ```
 
-It produces the existing `serverware.nativeShadowDriverScope/v4` signed envelope.
+It produces the existing `catchplate.nativeShadowDriverScope/v4` signed envelope.
 The approved configuration/window, bootstrap admission, actual operation and
 public bundle determine the scope. Existing signature domains and authority
 bindings remain unchanged. It supplies no live `DriverBootstrap` owner and does
@@ -208,12 +208,12 @@ file on an inherited FD. No authority private-key FD is accepted.
 
 | Purpose | Fixed destination |
 | --- | --- |
-| `cohort-precreation` | `/etc/serverware/native-shadow-proof-cohort-precreation.json` |
-| `cohort-release` | `/etc/serverware/native-pilot-inputs/cohort-release.json` |
-| `driver-scope` | `/etc/serverware/native-pilot-inputs/driver-scope.json` |
+| `cohort-precreation` | `/etc/catchplate/native-shadow-proof-cohort-precreation.json` |
+| `cohort-release` | `/etc/catchplate/native-pilot-inputs/cohort-release.json` |
+| `driver-scope` | `/etc/catchplate/native-pilot-inputs/driver-scope.json` |
 
 The additional purposes below use
-`/etc/serverware/native-pilot-inputs/<purpose>.json`. Role suffixes are the exact
+`/etc/catchplate/native-pilot-inputs/<purpose>.json`. Role suffixes are the exact
 fixed inventory, never a caller-supplied path or extensible role list.
 
 | Purpose family | Fixed selection | Maximum bytes |
@@ -235,10 +235,10 @@ fixed inventory, never a caller-supplied path or extensible role list.
 | `native-<role>-verifier` | Eleven independently pinned verifier transport originals | 32,768 |
 
 The precreation installer also uses `cohort-configuration`, `ordinary-launch`
-and `cohort-control` at their fixed `/etc/serverware/` loader paths. Their limits
+and `cohort-control` at their fixed `/etc/catchplate/` loader paths. Their limits
 are respectively 32,768, 65,536 and 4,096 bytes. The original three purposes keep
 their 32,768-byte ceilings. `bridge-outgoing` uses the fixed
-`/etc/serverware/native-shadow-driver-outgoing.json` loader path with an
+`/etc/catchplate/native-shadow-driver-outgoing.json` loader path with an
 8,192-byte bound. The 4 MiB global single-original ceiling does not enlarge any
 older per-purpose limit. Aggregate publication stays bounded to 128 originals
 and 32 MiB. Native C9 files are delivery originals, **not** endpoint/bridge launch
@@ -270,7 +270,7 @@ python3 -I -B scripts/authority/sign_native_pilot_delivery.py --input-fd 3 --aut
 python3 -I -B scripts/authority/sign_native_pilot_service.py --operation generation --role durable-recovery-store --input-fd 3 --authority-key-fd 4
 ```
 
-Driver input is the closed `serverware.nativePilotDriverAuthorityInput/v1`
+Driver input is the closed `catchplate.nativePilotDriverAuthorityInput/v1`
 wrapper (at most 24 MiB). Common fields are `apiVersion`, `operation`,
 `controlOriginal`, `configurationOriginal`, `windowOriginal`,
 `deliveryConfigurationOriginal` and `payloadOriginal`. Bootstrap adds
@@ -283,7 +283,7 @@ own key selection. The producer checks exact prepared payload associations and
 existing signature domains; it does not authenticate kernel observations or
 re-run hardware attestation merely by parsing exported originals.
 
-Delivery input is the closed `serverware.nativePilotDeliverySigningInput/v1`
+Delivery input is the closed `catchplate.nativePilotDeliverySigningInput/v1`
 wrapper (at most 1 MiB): `apiVersion`, `role`, `configurationOriginal`,
 `ownerConfigurationOriginal`, `windowOriginal`, `observationOriginal`,
 `runtimeOriginal`, `payloadOriginal`, `activationOriginal`. Endpoint owners use
@@ -293,7 +293,7 @@ operator observation. Fixed inventories select the exact endpoint descriptors
 or the runtime/v9-derived 41-descriptor bridge. No peer, socket, journal or
 runtime configuration is fabricated by the signer.
 
-Ordinary-service input is `serverware.nativePilotServiceAuthorityInput/v1`
+Ordinary-service input is `catchplate.nativePilotServiceAuthorityInput/v1`
 (at most 32 MiB), with common fields `apiVersion`, `operation`, `serviceRole`,
 `launchOriginal`, `payloadOriginal`. Operation and CLI role must agree:
 
@@ -321,7 +321,7 @@ with their purpose-specific receivers; no output is a service-ready verdict.
 python3 -I -B scripts/authority/sign_native_pilot_native_service.py --operation retrieval --input-fd 3 --authority-key-fd 4
 ```
 
-The approved `serverware.nativePilotNativeServiceAuthorityInput/v1` input is
+The approved `catchplate.nativePilotNativeServiceAuthorityInput/v1` input is
 bounded to 4 MiB and has these exact 15 common fields, plus only the selected
 operation's fields below:
 
@@ -346,16 +346,16 @@ Every signature domain is fixed by the operation:
 
 | Operation | Additional fields | Existing signature domain |
 | --- | --- | --- |
-| `ingress` | S | `serverware.nativeShadowIngressServiceAssignment.signature/v1` |
-| `ledger` | S, `companionPin`, `companionOriginal` | `serverware.nativeShadowLedgerSpoolServiceAssignment.signature/v2` |
-| `terminal` | S | `serverware.nativeShadowTerminalSpoolServiceAssignment.signature/v1` |
-| `dispatchBarrier` | S | `serverware.nativeShadowDispatchBarrierServiceAssignment.signature/v1` |
-| `activeEffectBarrier` | S | `serverware.nativeShadowActiveEffectBarrierServiceAssignment.signature/v1` |
-| `activeEffectCommit` | S | `serverware.nativeShadowActiveEffectCommitServiceAssignment.signature/v1` |
-| `retrieval` | `spoolScopeOriginal`, `proofScopeOriginal`, `endpointDeliveryResultOriginal`, `nativeGrantOriginals` | `serverware.nativeLedgerSpoolRetrievalGrant.signature/v3` |
-| `commitRequest` | `commitmentScopeOriginal` | `serverware.nativeShadowCommitRequestServiceAssignment.signature/v1` |
-| `persistence` | `proofScopeOriginal`, `genesisOriginal`, `journalOriginal`, `permissions` | `serverware.nativeShadowPersistenceServiceAssignment.signature/v1` |
-| `trustedTime` | `bootstrapOriginal` | `serverware.nativeShadowTrustedTimeServiceAssignment.signature/v1` |
+| `ingress` | S | `catchplate.nativeShadowIngressServiceAssignment.signature/v1` |
+| `ledger` | S, `companionPin`, `companionOriginal` | `catchplate.nativeShadowLedgerSpoolServiceAssignment.signature/v2` |
+| `terminal` | S | `catchplate.nativeShadowTerminalSpoolServiceAssignment.signature/v1` |
+| `dispatchBarrier` | S | `catchplate.nativeShadowDispatchBarrierServiceAssignment.signature/v1` |
+| `activeEffectBarrier` | S | `catchplate.nativeShadowActiveEffectBarrierServiceAssignment.signature/v1` |
+| `activeEffectCommit` | S | `catchplate.nativeShadowActiveEffectCommitServiceAssignment.signature/v1` |
+| `retrieval` | `spoolScopeOriginal`, `proofScopeOriginal`, `endpointDeliveryResultOriginal`, `nativeGrantOriginals` | `catchplate.nativeLedgerSpoolRetrievalGrant.signature/v3` |
+| `commitRequest` | `commitmentScopeOriginal` | `catchplate.nativeShadowCommitRequestServiceAssignment.signature/v1` |
+| `persistence` | `proofScopeOriginal`, `genesisOriginal`, `journalOriginal`, `permissions` | `catchplate.nativeShadowPersistenceServiceAssignment.signature/v1` |
+| `trustedTime` | `bootstrapOriginal` | `catchplate.nativeShadowTrustedTimeServiceAssignment.signature/v1` |
 
 Legacy outputs are the existing `{payload,signature}` envelopes, at most 65,536 bytes,
 published under `native-service-<operation>`. `commitRequest` produces the
@@ -392,7 +392,7 @@ python3 -I -B scripts/install_native_pilot_precreation.py --input-fd 3 --input-s
 ```
 
 This is a real filesystem mutation when invoked, not a planning command. Its
-closed `serverware.nativePilotPrecreationBundle/v1` input (at most 4 MiB) has
+closed `catchplate.nativePilotPrecreationBundle/v1` input (at most 4 MiB) has
 exactly `apiVersion`, `driverConfigurationOriginal`, `driverWindowOriginal`,
 `driverObservationOriginal`, `cohortConfigurationOriginal`,
 `cohortPrecreationOriginal`, `cohortControlOriginal`, `ordinaryLaunchOriginal`,
@@ -424,7 +424,7 @@ python3 -I -B scripts/install_native_pilot_bridge.py --input-fd 3 --input-sha256
 
 This command mutates only the two public files needed before actual bridge
 outgoing-resource allocation. The approved canonical no-LF input is
-`serverware.nativePilotBridgeRuntimeBundle/v1`, at most 512 KiB, with exactly:
+`catchplate.nativePilotBridgeRuntimeBundle/v1`, at most 512 KiB, with exactly:
 
 ```text
 apiVersion                 driverControlSha256
@@ -443,15 +443,15 @@ with that actual cold UID. It does not authenticate kernel provenance from JSON.
 
 After complete preflight, publication is exclusively:
 
-1. `/etc/serverware/native-pilot-inputs/bridge-runtime.json`
-2. `/etc/serverware/native-shadow-driver-outgoing.json`
+1. `/etc/catchplate/native-pilot-inputs/bridge-runtime.json`
+2. `/etc/catchplate/native-shadow-driver-outgoing.json`
 
 The outgoing original must pin the exact first file and retained driver
 configuration/window/observation/invocation. Existing `PublicPublisher` creates
 root:root `0400` originals with fsync/readback; all held inputs are rechecked
 around publication. Partial files remain on failure; no overwrite or retry is
 provided. Successful output contains installed pins under
-`serverware.nativePilotBridgeRuntimeInstallation/v1`, not a ready verdict or an
+`catchplate.nativePilotBridgeRuntimeInstallation/v1`, not a ready verdict or an
 automatic `bridge-runtime` protocol acknowledgment. Stdout remains clipped to
 the original startup deadline and the shared bounded pipe-write contract.
 
@@ -470,7 +470,7 @@ python3 -I -B scripts/authority/sign_native_pilot_generation_install.py --input-
 ```
 
 The independently approved no-LF wrapper uses
-`serverware.nativePilotGenerationInstallAuthorityInput/v1` and exactly:
+`catchplate.nativePilotGenerationInstallAuthorityInput/v1` and exactly:
 
 ```text
 apiVersion                    payloadOriginal
@@ -502,7 +502,7 @@ The output is the existing `nativeGenerationCoordinatorAssignment/v1` payload
 and `signature` envelope, bounded to 65,536 bytes. It retains the existing
 signature domain and original host/window/output deadline. The fixed public
 publication purpose is `native-generation-install-grant`, beneath
-`/etc/serverware/native-pilot-inputs/`; publication is not signature admission,
+`/etc/catchplate/native-pilot-inputs/`; publication is not signature admission,
 actual generation installation or pilot readiness.
 
 Explicit input/v2 preserves the fifteen-field input and selects
@@ -521,7 +521,7 @@ python3 -I -B scripts/install_native_pilot_launch.py --input-fd 3 --input-sha256
 
 This exclusive filesystem installer accepts a protected public input FD, never
 a signing key or credential FD. Its canonical no-LF
-`serverware.nativePilotLaunchBundle/v1` bundle is bounded to **16 MiB**, with
+`catchplate.nativePilotLaunchBundle/v1` bundle is bounded to **16 MiB**, with
 exactly these nine fields:
 
 ```text

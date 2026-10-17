@@ -9,10 +9,10 @@ this source change.
 ## Explicit selection and actual owners
 
 `native_startup_config::shadow::ShadowConfigV2` is a closed nested alternative:
-`apiVersion=serverware.nativeShadowConfiguration/v2`, the six original shadow
+`apiVersion=catchplate.nativeShadowConfiguration/v2`, the six original shadow
 fields, and required `workers`. The worker configuration has only
-`apiVersion=serverware.nativeShadowWorkers/v1` and the independently pinned fixed
-executable `/usr/local/bin/serverware-native-shadow-worker`. Outer v1–v14 keep
+`apiVersion=catchplate.nativeShadowWorkers/v1` and the independently pinned fixed
+executable `/usr/local/bin/catchplate-native-shadow-worker`. Outer v1–v14 keep
 their old exact shadow decoder. Outer v15 explicitly admits either the unchanged
 closed v1 fields or this closed v2 alternative; unknown markers/fields cannot
 fall back to v1. The paired v15 schema makes the same disjoint choice. No new

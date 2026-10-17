@@ -12,44 +12,44 @@ from typing import Any, Mapping, Sequence
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from serverware import authority_contract
-from serverware import authority_launcher
-from serverware import authority_transition_registry
-from serverware import authority_webauthn_evidence_policy as evidence_policy
-from serverware import authority_webauthn_transition_policy as transition_policy
-from serverware import authority_webauthn_enrollment_policy as enrollment_policy
-from serverware import authority_oauth_activation_policy as oauth_activation_policy
-from serverware import authority_oauth_exchange_policy as oauth_exchange_policy
-from serverware import authority_policy_candidate_policy as policy_candidate_policy
-from serverware import authority_transition_policy_genesis as genesis_policy
-from serverware import authority_setup_policy_admission as setup_policy_admission
-from serverware import authority_policy_canary_policy as policy_canary_policy
-from serverware import authority_policy_canary_heartbeat_policy as heartbeat_policy
-from serverware import authority_policy_canary_finalization_policy as finalization_policy
-from serverware import authority_policy_canary_native_readiness as native_readiness_policy
-from serverware import authority_policy_native_activation as native_activation
-from serverware import authority_policy_canary_delivery_policy as canary_delivery_policy
-from serverware import authority_oauth_measured_exchange_policy as oauth_measured_exchange_policy
-from serverware import authority_oauth_measured_setup_policy as oauth_measured_setup_policy
-from serverware import authority_oauth_reconnect_policy as oauth_reconnect_policy
-from serverware import authority_oauth_retirement_succession_policy as oauth_succession_policy
-from serverware import authority_oauth_refresh_policy as oauth_refresh_policy
-from serverware import authority_oauth_refresh_cleanup_policy as oauth_refresh_cleanup_policy
-from serverware import authority_oauth_measured_refresh_policy as oauth_measured_refresh_policy
-from serverware import authority_oauth_measured_cleanup_policy as oauth_measured_cleanup_policy
-from serverware import authority_oauth_measured_pending_retirement_policy as oauth_pending_retirement_policy
-from serverware import authority_oauth_measured_capture_retirement_policy as oauth_capture_retirement_policy
-from serverware import authority_credential_currentness_policy as credential_currentness_policy
-from serverware import authority_static_credential_create as static_create
-from serverware import authority_static_credential_rotate as static_rotate
-from serverware import authority_static_credential_custody as static_custody
-from serverware import authority_native_jit_review_custody as jit_review_custody
-from serverware import authority_native_jit_review_open_custody as jit_review_open_custody
-from serverware import authority_native_jit_review_service_policy as jit_review_service_policy
-from serverware import authority_oauth_revocation_policy as oauth_revocation_policy
-from serverware import authority_recovery_configuration as recovery_configuration
-from serverware import authority_challenge_policy as challenge_maintenance_policy
-from serverware.authority_artifact_spec import (
+from catchplate import authority_contract
+from catchplate import authority_launcher
+from catchplate import authority_transition_registry
+from catchplate import authority_webauthn_evidence_policy as evidence_policy
+from catchplate import authority_webauthn_transition_policy as transition_policy
+from catchplate import authority_webauthn_enrollment_policy as enrollment_policy
+from catchplate import authority_oauth_activation_policy as oauth_activation_policy
+from catchplate import authority_oauth_exchange_policy as oauth_exchange_policy
+from catchplate import authority_policy_candidate_policy as policy_candidate_policy
+from catchplate import authority_transition_policy_genesis as genesis_policy
+from catchplate import authority_setup_policy_admission as setup_policy_admission
+from catchplate import authority_policy_canary_policy as policy_canary_policy
+from catchplate import authority_policy_canary_heartbeat_policy as heartbeat_policy
+from catchplate import authority_policy_canary_finalization_policy as finalization_policy
+from catchplate import authority_policy_canary_native_readiness as native_readiness_policy
+from catchplate import authority_policy_native_activation as native_activation
+from catchplate import authority_policy_canary_delivery_policy as canary_delivery_policy
+from catchplate import authority_oauth_measured_exchange_policy as oauth_measured_exchange_policy
+from catchplate import authority_oauth_measured_setup_policy as oauth_measured_setup_policy
+from catchplate import authority_oauth_reconnect_policy as oauth_reconnect_policy
+from catchplate import authority_oauth_retirement_succession_policy as oauth_succession_policy
+from catchplate import authority_oauth_refresh_policy as oauth_refresh_policy
+from catchplate import authority_oauth_refresh_cleanup_policy as oauth_refresh_cleanup_policy
+from catchplate import authority_oauth_measured_refresh_policy as oauth_measured_refresh_policy
+from catchplate import authority_oauth_measured_cleanup_policy as oauth_measured_cleanup_policy
+from catchplate import authority_oauth_measured_pending_retirement_policy as oauth_pending_retirement_policy
+from catchplate import authority_oauth_measured_capture_retirement_policy as oauth_capture_retirement_policy
+from catchplate import authority_credential_currentness_policy as credential_currentness_policy
+from catchplate import authority_static_credential_create as static_create
+from catchplate import authority_static_credential_rotate as static_rotate
+from catchplate import authority_static_credential_custody as static_custody
+from catchplate import authority_native_jit_review_custody as jit_review_custody
+from catchplate import authority_native_jit_review_open_custody as jit_review_open_custody
+from catchplate import authority_native_jit_review_service_policy as jit_review_service_policy
+from catchplate import authority_oauth_revocation_policy as oauth_revocation_policy
+from catchplate import authority_recovery_configuration as recovery_configuration
+from catchplate import authority_challenge_policy as challenge_maintenance_policy
+from catchplate.authority_artifact_spec import (
     ARTIFACT_BUNDLE_SCHEMA,
     AUTHORITY_SCHEMA_VERSION,
     GENERATION_STATEMENT_SCHEMA,
@@ -87,33 +87,33 @@ from serverware.authority_artifact_spec import (
 )
 
 
-INPUT_SCHEMA = "serverware.authorityArtifactBundleGeneratorInput/v3"
+INPUT_SCHEMA = "catchplate.authorityArtifactBundleGeneratorInput/v3"
 INPUT_FIELDS = frozenset({
     "schema", "artifactRoot", "sourceRevision", "sourceCommitDigest", "authoritySchemaVersion",
     "trustMode", "files", "stableSnapshotReceipt", "closureReceipt", "schemas", "migrations",
     "configurations", "roleManifests", "sbom", "provenance", "ociImage", "operationManifest",
     "trustMaterial", "generation", "signingKeys",
 })
-SOURCE_TREE_DIGEST_DOMAIN = "serverware.authoritySourceTree/v1"
-ENUMERATED_TREE_DIGEST_DOMAIN = "serverware.authorityEnumeratedTree/v1"
+SOURCE_TREE_DIGEST_DOMAIN = "catchplate.authoritySourceTree/v1"
+ENUMERATED_TREE_DIGEST_DOMAIN = "catchplate.authorityEnumeratedTree/v1"
 SNAPSHOT_SIGNATURE_DOMAIN = (
-    "serverware.authorityStableSnapshotReceiptSignature/v1"
+    "catchplate.authorityStableSnapshotReceiptSignature/v1"
 )
 CLOSURE_SIGNATURE_DOMAIN = (
-    "serverware.authorityCompleteClosureReceiptSignature/v1"
+    "catchplate.authorityCompleteClosureReceiptSignature/v1"
 )
-ROLE_SET_DIGEST_DOMAIN = "serverware.authorityRoleSet/v1"
+ROLE_SET_DIGEST_DOMAIN = "catchplate.authorityRoleSet/v1"
 SERVICE_CONFIGURATION_SCHEMA = (
-    "serverware.signedPolicyAuthorityServiceConfiguration/v6"
+    "catchplate.signedPolicyAuthorityServiceConfiguration/v6"
 )
 SERVICE_CONFIGURATION_PAYLOAD_SCHEMA = (
-    "serverware.policyAuthorityServiceConfiguration/v6"
+    "catchplate.policyAuthorityServiceConfiguration/v6"
 )
 WITNESS_CONFIGURATION_SCHEMA = (
-    "serverware.signedPolicyAuthorityReplayWitnessConfiguration/v4"
+    "catchplate.signedPolicyAuthorityReplayWitnessConfiguration/v4"
 )
 WITNESS_CONFIGURATION_PAYLOAD_SCHEMA = (
-    "serverware.policyAuthorityReplayWitnessConfiguration/v4"
+    "catchplate.policyAuthorityReplayWitnessConfiguration/v4"
 )
 SERVICE_CONFIGURATION_ROLES = frozenset(
     {"verifier", "planner", "planner-writer", "issuer", "executor"}
@@ -798,9 +798,9 @@ def validate_configuration_payload(
             or _digest(payload["roleBindingDigest"], name="witness role binding")
                 != expected_role_bindings.get("witness")
             or payload["socketPath"]
-            != "/run/serverware/authority-witness/authority.sock"
+            != "/run/catchplate/authority-witness/authority.sock"
             or payload["socketActivationName"]
-            != "serverware-authority-witness"
+            != "catchplate-authority-witness"
             or not isinstance(authority_configuration_digests, list)
             or any(
                 not isinstance(value, str)
@@ -1086,7 +1086,7 @@ def _oci_document(
         raise GeneratorError(
             f"{name} is outside the measured tree"
         ) from exc
-    # OCI digests identify the original external encoding, not Serverware's
+    # OCI digests identify the original external encoding, not Catchplate's
     # canonical JSON encoding. Match the artifact verifier's strict parser
     # without rewriting key order, whitespace or escaped string characters.
     document_bytes = _read_exact_bundle_file(
@@ -1705,7 +1705,7 @@ def _build_bundle(
                 "entryCount": len(files),
                 "snapshotKind": snapshot_payload["snapshotKind"],
                 "snapshotIdentityDigest": domain_digest(
-                    "serverware.authoritySnapshotRootIdentity/v1",
+                    "catchplate.authoritySnapshotRootIdentity/v1",
                     canonical_json_bytes(root_identity),
                 ),
                 "readOnly": True,

@@ -11,7 +11,7 @@ use crate::policy_shadow::policy_custody::production_dispatch::PRODUCTION_AUTHOR
 use crate::policy_shadow::policy_custody::protocol::domain_separated_signature_preimage;
 use guest::retrieval_peer as peer;
 use std::os::fd::OwnedFd;
-const DOMAIN:&str="serverware.nativeShadowTrustedTimeServiceAssignment.signature/v1";
+const DOMAIN:&str="catchplate.nativeShadowTrustedTimeServiceAssignment.signature/v1";
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Payload {
@@ -27,7 +27,7 @@ pub(crate) struct Configuration {payload:Payload,signature:CanonicalEd25519Signa
 impl Configuration {
     pub(in crate::policy_shadow::policy_custody::services) fn validate_shape(&self)->Result<(),ShadowError> {
         let p=&self.payload;
-        require(p.api_version=="serverware.nativeShadowTrustedTimeServiceAssignment/v1"
+        require(p.api_version=="catchplate.nativeShadowTrustedTimeServiceAssignment/v1"
             && p.purpose=="native-shadow-trusted-time-response" && p.guest.service_role=="production-bridge"
             && p.expected_peer.uid!=0 && p.expected_peer.uid!=p.guest.uid && p.expected_peer.gid!=0
             && p.clock_bootstrap_sha256!=Sha256Digest::compute(&[]))?;
@@ -158,14 +158,14 @@ impl Service {
             require(sample.clock_bootstrap_sha256==self.configuration.payload.clock_bootstrap_sha256)?;
             let local=keys.keys.get(&AuthorityRole::CustodyTrustedTimeResponse).ok_or(ShadowError::SignerBindingMismatch)?;
             let result=ResultBody::TrustedTimeInterval(sample);
-            let result_sha256=hash_domain_frames(b"serverware.policyCustodyProductionAuthorityEndpointResponse/v4",&[&canonical_json_bytes(&result)?]);
+            let result_sha256=hash_domain_frames(b"catchplate.policyCustodyProductionAuthorityEndpointResponse/v4",&[&canonical_json_bytes(&result)?]);
             let mut reply=Reply{api_version:PRODUCTION_AUTHORITY_ENDPOINT_PROTOCOL_VERSION.into(),endpoint:request.endpoint,
                 request_sha256:request.request_sha256.clone(),replay_id_sha256:request.replay_id_sha256.clone(),
                 completed_at_boottime_nanos:guest::now()?,authority_key_id:local.binding.key_id.clone(),
                 authority_key_spki_sha256:local.binding.key_spki_sha256.clone(),result,result_sha256,signature_base64:String::new()};
             require(reply.completed_at_boottime_nanos<request.deadline_boottime_nanos)?;
             self.check(keys,trust,time)?;check()?;
-            let preimage=domain_separated_signature_preimage(b"serverware.policyCustodyProductionAuthorityEndpointSignature/v4",
+            let preimage=domain_separated_signature_preimage(b"catchplate.policyCustodyProductionAuthorityEndpointSignature/v4",
                 &reply.signature_payload().map_err(fail)?).map_err(fail)?;
             reply.signature_base64=URL_SAFE_NO_PAD.encode(local.key.sign(&preimage).to_bytes());
             let raw=services::common::encode_canonical_frame(&reply).map_err(fail)?;

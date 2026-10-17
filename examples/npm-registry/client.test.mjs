@@ -13,35 +13,35 @@ import { perform } from './worker.mjs';
 
 const bytes = Buffer.from('inert reviewed fixture bytes, not an archive');
 const env = {
-  SERVERWARE_PROXY_URL: 'https://proxy.example.invalid:8443',
-  SERVERWARE_APP_ID: '01234567-89ab-4cde-8fab-0123456789ab',
-  SERVERWARE_PROXY_TOKEN: 'private_application_token_canary',
-  SERVERWARE_CA_FILE: '/trusted/inner.pem', SERVERWARE_PROXY_CA_FILE: '/trusted/outer.pem',
-  SERVERWARE_NPM_PACKAGE: '@example/metadata', SERVERWARE_NPM_VERSION: '1.2.3',
-  SERVERWARE_NPM_TAG: 'preview', SERVERWARE_NPM_TARBALL: '/reviewed/package.tgz',
-  SERVERWARE_NPM_TARBALL_SHA256: createHash('sha256').update(bytes).digest('hex'),
-  SERVERWARE_NPM_PUBLISH_CONFIRM: 'publish-publicly',
+  CATCHPLATE_PROXY_URL: 'https://proxy.example.invalid:8443',
+  CATCHPLATE_APP_ID: '01234567-89ab-4cde-8fab-0123456789ab',
+  CATCHPLATE_PROXY_TOKEN: 'private_application_token_canary',
+  CATCHPLATE_CA_FILE: '/trusted/inner.pem', CATCHPLATE_PROXY_CA_FILE: '/trusted/outer.pem',
+  CATCHPLATE_NPM_PACKAGE: '@example/metadata', CATCHPLATE_NPM_VERSION: '1.2.3',
+  CATCHPLATE_NPM_TAG: 'preview', CATCHPLATE_NPM_TARBALL: '/reviewed/package.tgz',
+  CATCHPLATE_NPM_TARBALL_SHA256: createHash('sha256').update(bytes).digest('hex'),
+  CATCHPLATE_NPM_PUBLISH_CONFIRM: 'publish-publicly',
 };
 const paths = { root: '/private/task', cache: '/private/task/cache',
   trust: '/private/task/trust.pem', tarball: '/private/task/reviewed-package.tgz',
   npmCli: '/example/node_modules/npm/bin/npm-cli.js', npmrc: '/private/task/user.npmrc',
   globalrc: '/private/task/global.npmrc' };
-const metadata = { name: env.SERVERWARE_NPM_PACKAGE, version: '1.2.3', description: 'not printed' };
+const metadata = { name: env.CATCHPLATE_NPM_PACKAGE, version: '1.2.3', description: 'not printed' };
 const receipt = { ...metadata, id: metadata.name + '@1.2.3', size: bytes.length,
   integrity: 'sha512-' + createHash('sha512').update(bytes).digest('base64'),
   shasum: createHash('sha1').update(bytes).digest('hex') };
 const noCall = () => assert.fail('unexpected effect');
 const NOW = 1800000000000;
 const downloaded = (changes = {}) => ({
-  application_id: env.SERVERWARE_APP_ID, access_rule_id: '11111111-1111-4111-8111-111111111111',
-  proxy_authentication: 'basic_and_bearer_v1', proxy_username: env.SERVERWARE_APP_ID,
-  proxy_password: env.SERVERWARE_PROXY_TOKEN, proxy_url: env.SERVERWARE_PROXY_URL,
-  token_expires_at_epoch_ms: NOW + 60000, ca_file: './serverware-ca.pem',
+  application_id: env.CATCHPLATE_APP_ID, access_rule_id: '11111111-1111-4111-8111-111111111111',
+  proxy_authentication: 'basic_and_bearer_v1', proxy_username: env.CATCHPLATE_APP_ID,
+  proxy_password: env.CATCHPLATE_PROXY_TOKEN, proxy_url: env.CATCHPLATE_PROXY_URL,
+  token_expires_at_epoch_ms: NOW + 60000, ca_file: './catchplate-ca.pem',
   upstream_url: 'https://registry.npmjs.org/', operation_bundle: 'npm_metadata_read_v1', methods: ['GET'],
-  packages: [env.SERVERWARE_NPM_PACKAGE], client_recipe: {package: env.SERVERWARE_NPM_PACKAGE}, ...changes,
+  packages: [env.CATCHPLATE_NPM_PACKAGE], client_recipe: {package: env.CATCHPLATE_NPM_PACKAGE}, ...changes,
 });
 function withConfig(value, check) {
-  const directory = mkdtempSync(join(tmpdir(), 'serverware-npm-config-'));
+  const directory = mkdtempSync(join(tmpdir(), 'catchplate-npm-config-'));
   const path = join(directory, 'client.private.json');
   try { writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value), {mode: 0o600}); check(path, directory); }
   finally { rmSync(directory, {recursive: true}); }
@@ -49,10 +49,10 @@ function withConfig(value, check) {
 
 test('downloaded npm configuration selects connection/package values and relative CA files', () => {
   withConfig(downloaded(), (path, directory) => {
-    const config = loadClientConfig(path, {...env, SERVERWARE_PROXY_TOKEN: 'ambient', SERVERWARE_NPM_PACKAGE: 'ambient'}, 'view', NOW);
-    assert.equal(config.operation, 'view'); assert.equal(config.token, env.SERVERWARE_PROXY_TOKEN);
-    assert.equal(config.packageName, env.SERVERWARE_NPM_PACKAGE);
-    assert.equal(config.caFile, join(directory, 'serverware-ca.pem')); assert.equal(config.proxyCaFile, null);
+    const config = loadClientConfig(path, {...env, CATCHPLATE_PROXY_TOKEN: 'ambient', CATCHPLATE_NPM_PACKAGE: 'ambient'}, 'view', NOW);
+    assert.equal(config.operation, 'view'); assert.equal(config.token, env.CATCHPLATE_PROXY_TOKEN);
+    assert.equal(config.packageName, env.CATCHPLATE_NPM_PACKAGE);
+    assert.equal(config.caFile, join(directory, 'catchplate-ca.pem')); assert.equal(config.proxyCaFile, null);
   });
   withConfig(downloaded({proxy_ca_file: './outer.pem'}), (path, directory) => {
     assert.equal(loadClientConfig(path, env, 'view', NOW).proxyCaFile, join(directory, 'outer.pem'));
@@ -61,12 +61,12 @@ test('downloaded npm configuration selects connection/package values and relativ
 
 test('downloaded scope never selects publication, installs, local inputs or confirmation', () => {
   const publish = downloaded({operation_bundle: 'npm_publish_v1', methods: ['PUT'],
-    package: env.SERVERWARE_NPM_PACKAGE, tag: 'saved-tag', operation: 'publish',
-    environment: {SERVERWARE_NPM_PUBLISH_CONFIRM: 'publish-publicly'},
-    SERVERWARE_NPM_PUBLISH_CONFIRM: 'publish-publicly', request_body: 'never used'});
+    package: env.CATCHPLATE_NPM_PACKAGE, tag: 'saved-tag', operation: 'publish',
+    environment: {CATCHPLATE_NPM_PUBLISH_CONFIRM: 'publish-publicly'},
+    CATCHPLATE_NPM_PUBLISH_CONFIRM: 'publish-publicly', request_body: 'never used'});
   withConfig(publish, path => {
     assert.equal(loadClientConfig(path, {}, undefined, NOW).operation, 'view');
-    assert.throws(() => loadClientConfig(path, {...env, SERVERWARE_NPM_PUBLISH_CONFIRM: undefined}, 'publish', NOW));
+    assert.throws(() => loadClientConfig(path, {...env, CATCHPLATE_NPM_PUBLISH_CONFIRM: undefined}, 'publish', NOW));
     assert.equal(loadClientConfig(path, env, 'publish', NOW).tag, 'saved-tag');
     assert.throws(() => loadClientConfig(path, env, 'install', NOW));
   });
@@ -76,9 +76,9 @@ test('downloaded scope never selects publication, installs, local inputs or conf
     assert.throws(() => loadClientConfig(path, {}, 'manifest', NOW));
   });
   withConfig(downloaded({operation_bundle: 'npm_install_v1', methods: ['GET', 'POST']}), path => {
-    const local = {...env, SERVERWARE_NPM_PROJECT: '/reviewed/project', SERVERWARE_NPM_OUTPUT: '/reviewed/new-output'};
-    assert.equal(loadClientConfig(path, local, 'ci', NOW).output, local.SERVERWARE_NPM_OUTPUT);
-    assert.throws(() => loadClientConfig(path, {...local, SERVERWARE_NPM_PACKAGE: 'outside-grant'}, 'ci', NOW));
+    const local = {...env, CATCHPLATE_NPM_PROJECT: '/reviewed/project', CATCHPLATE_NPM_OUTPUT: '/reviewed/new-output'};
+    assert.equal(loadClientConfig(path, local, 'ci', NOW).output, local.CATCHPLATE_NPM_OUTPUT);
+    assert.throws(() => loadClientConfig(path, {...local, CATCHPLATE_NPM_PACKAGE: 'outside-grant'}, 'ci', NOW));
     assert.throws(() => loadClientConfig(path, env, 'ci', NOW));
   });
 });
@@ -110,26 +110,26 @@ test('CLI config flag keeps read-only default and explicit operations', () => {
 
 test('default is read-only; names, proxy identity and explicit write admission are closed', () => {
   assert.equal(configuration(env).operation, 'view');
-  assert.equal(configuration({ ...env, SERVERWARE_NPM_PACKAGE: 'metadata' }).packageName, 'metadata');
+  assert.equal(configuration({ ...env, CATCHPLATE_NPM_PACKAGE: 'metadata' }).packageName, 'metadata');
   for (const name of ['https://evil.invalid/a', 'file:a', 'foo@latest', 'Foo', '@scope/name/other', 'a\n']) {
-    assert.throws(() => configuration({ ...env, SERVERWARE_NPM_PACKAGE: name }));
+    assert.throws(() => configuration({ ...env, CATCHPLATE_NPM_PACKAGE: name }));
   }
   for (const url of ['http://proxy.invalid', 'https://u:p@proxy.invalid', 'https://proxy.invalid/path', 'https://proxy.invalid/?x']) {
-    assert.throws(() => configuration({ ...env, SERVERWARE_PROXY_URL: url }));
+    assert.throws(() => configuration({ ...env, CATCHPLATE_PROXY_URL: url }));
   }
   assert.throws(() => configuration(env, 'install'));
   assert.throws(() => configuration({ ...env, NODE_TLS_REJECT_UNAUTHORIZED: '0' }));
-  for (const key of ['SERVERWARE_NPM_TAG', 'SERVERWARE_NPM_TARBALL', 'SERVERWARE_NPM_TARBALL_SHA256', 'SERVERWARE_NPM_PUBLISH_CONFIRM']) {
+  for (const key of ['CATCHPLATE_NPM_TAG', 'CATCHPLATE_NPM_TARBALL', 'CATCHPLATE_NPM_TARBALL_SHA256', 'CATCHPLATE_NPM_PUBLISH_CONFIRM']) {
     assert.throws(() => configuration({ ...env, [key]: undefined }, 'publish'));
   }
-  assert.throws(() => configuration({ ...env, SERVERWARE_NPM_VERSION: '^1.0.0' }, 'manifest'));
+  assert.throws(() => configuration({ ...env, CATCHPLATE_NPM_VERSION: '^1.0.0' }, 'manifest'));
 });
 
 test('npmrc has public dummy and literal token interpolation; clean child trust/env preserve no ambient secrets', () => {
   const config = configuration(env);
   const text = npmConfiguration(config);
   assert.ok(text.includes(PUBLIC_NPM_DUMMY));
-  assert.ok(text.includes(':${SERVERWARE_PROXY_TOKEN}@proxy.example.invalid:8443'));
+  assert.ok(text.includes(':${CATCHPLATE_PROXY_TOKEN}@proxy.example.invalid:8443'));
   assert.ok(!text.includes(config.token));
   assert.ok(text.includes('strict-ssl=true\nfetch-retries=0\nfetch-timeout=10000'));
   assert.ok(!text.includes('cafile'));
@@ -138,7 +138,7 @@ test('npmrc has public dummy and literal token interpolation; clean child trust/
   for (const key of ['HOME', 'NPM_TOKEN', 'NODE_OPTIONS', 'NODE_TLS_REJECT_UNAUTHORIZED', 'HTTPS_PROXY', 'NO_PROXY', 'npm_config_registry']) {
     assert.ok(!Object.hasOwn(child, key));
   }
-  assert.equal(child.SERVERWARE_PROXY_TOKEN, config.token);
+  assert.equal(child.CATCHPLATE_PROXY_TOKEN, config.token);
 });
 
 test('pacote uses normal HTTPS proxy, exact dummy, strict TLS and zero retries', () => {
@@ -224,7 +224,7 @@ test('publish reviews local file before one stock command and validates the retu
 
 test('npm 11.21 publish requires one exact package key and preserves all archive identity checks', async () => {
   for (const packageName of ['metadata', '@example/metadata']) {
-    const config = configuration({ ...env, SERVERWARE_NPM_PACKAGE: packageName }, 'publish');
+    const config = configuration({ ...env, CATCHPLATE_NPM_PACKAGE: packageName }, 'publish');
     const inner = { ...receipt, name: packageName, id: packageName + '@' + config.version };
     const keyed = { [packageName]: inner };
     assert.equal(publishSummary(config, keyed, bytes).npmReportedSuccess, true);
@@ -247,11 +247,11 @@ test('npm 11.21 publish requires one exact package key and preserves all archive
 test('errors are neither printed nor retried, and an uncertain write has a fixed warning', async () => {
   let calls = 0;
   await assert.rejects(perform(configuration(env), paths, { pacote: {}, spawn() {
-    calls++; return { status: 1, signal: null, stdout: env.SERVERWARE_PROXY_TOKEN, stderr: env.SERVERWARE_PROXY_TOKEN };
+    calls++; return { status: 1, signal: null, stdout: env.CATCHPLATE_PROXY_TOKEN, stderr: env.CATCHPLATE_PROXY_TOKEN };
   } }));
   assert.equal(calls, 1);
   const safe = JSON.stringify(failure('publish'));
-  assert.ok(!safe.includes(env.SERVERWARE_PROXY_TOKEN));
+  assert.ok(!safe.includes(env.CATCHPLATE_PROXY_TOKEN));
   assert.ok(safe.includes('do not automatically retry'));
 });
 
@@ -293,11 +293,11 @@ test('launcher uses a separate process group and bounded captured pipes (mock on
 test('contained worker is internal metadata-view only and retains its supervisor process group', async () => {
   for (const operation of ['view', 'manifest', 'publish', 'install', 'ci'])
     assert.equal(containedMetadataWorker({}, operation), false);
-  assert.equal(containedMetadataWorker({SERVERWARE_MCP_CONTAINED_WORKER: '1'}, 'view'), true);
+  assert.equal(containedMetadataWorker({CATCHPLATE_MCP_CONTAINED_WORKER: '1'}, 'view'), true);
   for (const operation of ['manifest', 'publish', 'install', 'ci'])
-    assert.throws(() => containedMetadataWorker({SERVERWARE_MCP_CONTAINED_WORKER: '1'}, operation));
+    assert.throws(() => containedMetadataWorker({CATCHPLATE_MCP_CONTAINED_WORKER: '1'}, operation));
   for (const value of ['0', '', 'true', 1])
-    assert.throws(() => containedMetadataWorker({SERVERWARE_MCP_CONTAINED_WORKER: value}, 'view'));
+    assert.throws(() => containedMetadataWorker({CATCHPLATE_MCP_CONTAINED_WORKER: value}, 'view'));
   const fake = new EventEmitter();
   fake.stdout = new EventEmitter(); fake.stderr = new EventEmitter();
   fake.stdout.setEncoding = fake.stderr.setEncoding = () => {};

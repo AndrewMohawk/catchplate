@@ -18,7 +18,7 @@ from scripts import prepare_operator_build_snapshot as snapshot
 
 class BuildSnapshotTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="serverware-build-snapshot-test-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="catchplate-build-snapshot-test-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.repo = self.root / "repository"

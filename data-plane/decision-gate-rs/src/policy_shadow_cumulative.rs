@@ -2,7 +2,7 @@
 use super::*;
 use base64::Engine as _;
 
-pub(crate) const PROFILE:&str="serverware.nativeCumulativeCheckpoint/v1";
+pub(crate) const PROFILE:&str="catchplate.nativeCumulativeCheckpoint/v1";
 const LABELS:[&str;12]=["admitted","active-pre-dispatch-terminal","response-terminal-appended",
     "dispatch-barrier-appended","response-capture-enqueued","candidate-evaluated","response-evaluated",
     "sampled-out","transport-excluded","unsupported-required-ingress","cleanup-quarantined","failure"];
@@ -83,7 +83,7 @@ impl Checkpoint {
         let heartbeat_value:Value=serde_json::from_str(heartbeat).map_err(|_|ShadowError::BindingDrift)?;
         if canonical_json_bytes(&heartbeat_value)?!=heartbeat.as_bytes()
             || Sha256Digest::compute(heartbeat.as_bytes()).as_str()!=heartbeat_sha256
-            || heartbeat_value["apiVersion"]!="serverware.nativePolicyShadowHeartbeat/v1" {
+            || heartbeat_value["apiVersion"]!="catchplate.nativePolicyShadowHeartbeat/v1" {
             return Err(ShadowError::BindingDrift);
         }
         let statement=&heartbeat_value["evidence"]["statement"];
@@ -102,7 +102,7 @@ impl Checkpoint {
             Ok((*role,ProductionCustodyKeyBinding{role:*role,key_id:b.key_id.clone(),key_spki_sha256:b.key_spki_sha256.clone(),key_material_sha256:b.key_material_sha256.clone()}))
         }).collect::<Result<BTreeMap<_,_>,ShadowError>>()?;
         let authority=&a.custody_authority;
-        let scope=hash_domain_frames(b"serverware.policyShadowProductionCustodyProofScope/v1",&[&canonical_json_bytes(&(
+        let scope=hash_domain_frames(b"catchplate.policyShadowProductionCustodyProofScope/v1",&[&canonical_json_bytes(&(
             &a.assignment_id,assignment.payload_sha256(),a.assignment_revision,&authority.authority_id,
             &authority.storage_realm_sha256,&authority.retrieval_namespace_sha256,
             &a.authority_key_independence.independence_root_sha256,configuration,production_custody_key_set_root(&bindings)?,
@@ -118,7 +118,7 @@ impl Checkpoint {
             }
             let key=trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(role),&binding.key_id,&binding.key_spki_sha256)?;
             if ed25519_public_key_material_sha256(&key)!=binding.key_material_sha256 {return Err(ShadowError::SignerBindingMismatch);}
-            let bound=canonical_json_bytes(&("serverware.policyShadowAssignmentBoundCustodyReceipt/v1",&scope,
+            let bound=canonical_json_bytes(&("catchplate.policyShadowAssignmentBoundCustodyReceipt/v1",&scope,
                 &authority.execution_closure_manifest_sha256,&authority.structurally_verified_seccomp_policy_sha256,
                 signer,Sha256Digest::compute(&receipt.canonical_signature_payload()?)))?;
             key.verify_strict(&signature_preimage(signer.signature_domain(),&bound),&Signature::from_bytes(&receipt.signature.decode()?))

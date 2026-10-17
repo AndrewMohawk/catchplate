@@ -12,14 +12,14 @@ const TOKEN = 'synthetic-proxy-token-not-real-0123456789';
 const HASH = n => 'sha256:' + n.toString(16).padStart(64, '0');
 async function run(browserPage) {
   const source = JSON.parse(execFileSync('python3', ['-B', '-c',
-    'import json; from serverware import operator_common_apps as a, operator_demo as d; from serverware.operator_demo_portal import render; d.settings=lambda: {"allowed_upstreams": ["https://slack.com"]}; print(json.dumps({"capability":a.capability(),"html":render()}))'],
+    'import json; from catchplate import operator_common_apps as a, operator_demo as d; from catchplate.operator_demo_portal import render; d.settings=lambda: {"allowed_upstreams": ["https://slack.com"]}; print(json.dumps({"capability":a.capability(),"html":render()}))'],
     {cwd: ROOT, encoding: 'utf8', timeout: 5000, maxBuffer: 2 * 1024 * 1024}));
   const browser = browserPage.context().browser();
   const context = await browser.newContext({viewport: {width: 1280, height: 960}, acceptDownloads: true, serviceWorkers: 'block'});
-  const directory = mkdtempSync('/tmp/serverware-common-apps-ui-');
+  const directory = mkdtempSync('/tmp/catchplate-common-apps-ui-');
   const state = {revision: 1, sequence: 1, credentials: [], applications: [], access_rules: [], requests: [], errors: [], posts: []};
   const policy = () => ({policy_hash: HASH(state.sequence), loaded_policy_hash: HASH(state.sequence), sequence: state.sequence, activation: 'active'});
-  const catalog = () => ({schema: 'serverware.operatorCatalog/v1', mode: 'operator-development', productionReady: false, hardwareVerified: false,
+  const catalog = () => ({schema: 'catchplate.operatorCatalog/v1', mode: 'operator-development', productionReady: false, hardwareVerified: false,
     revision: state.revision, policy: policy(), proxy_url: 'https://proxy.example.test', allowed_upstreams: ['https://slack.com'],
     credentials: state.credentials.map(item => ({...item, active_rule_count: state.access_rules.length})),
     applications: state.applications.map(item => ({...item, active_rule_count: state.access_rules.length, access_status: state.access_rules.length ? 'active' : 'unassigned'})),
@@ -28,8 +28,8 @@ async function run(browserPage) {
     capabilities: {credential_types: ['bearer', 'header'], response_modes: ['unfiltered_json_or_empty_v2'],
       request_body_modes: ['preserve_json_v1'], credential_input_modes: ['insert', 'replace_exact'], oauth: false,
       token_lifetime_seconds: {min: 3600, max: 7776000, default: 2592000}, common_apps: source.capability,
-      application_proxy_authentication: {schema: 'serverware.operatorProxyAuthentication/v1', path: '/api/operator-demo/applications/proxy-authentication', modes: ['bearer', 'basic_and_bearer_v1']},
-      host_approvals: {schema: 'serverware.operatorHostApprovals/v1', mode: 'host_trusted_v1', available: true,
+      application_proxy_authentication: {schema: 'catchplate.operatorProxyAuthentication/v1', path: '/api/operator-demo/applications/proxy-authentication', modes: ['bearer', 'basic_and_bearer_v1']},
+      host_approvals: {schema: 'catchplate.operatorHostApprovals/v1', mode: 'host_trusted_v1', available: true,
         operation_bundles: [], generic_rules: true, setting_path: '/api/operator-demo/access-rules/approval'}}});
   await context.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url());
@@ -103,7 +103,7 @@ async function run(browserPage) {
     const download = await downloaded; const config = JSON.parse(readFileSync(await download.path(), 'utf8'));
     assert.equal(config.app_preset, 'slack'); assert.equal(config.app_operation, 'post_message');
     assert.deepEqual(config.scope, {channel: 'C0123456789'}); assert.equal(config.request_body.channel, 'C0123456789');
-    assert.equal(config.proxy_password, TOKEN); assert.equal(config.request_headers.Authorization, 'Bearer serverware-slack-placeholder-v1');
+    assert.equal(config.proxy_password, TOKEN); assert.equal(config.request_headers.Authorization, 'Bearer catchplate-slack-placeholder-v1');
     assert(!JSON.stringify(config).includes(SECRET)); assert.deepEqual(config.request_query, {});
     assert(config.note.includes('never automatic write intent')); assert.equal(state.posts.length, 3);
     await page.screenshot({path: join(directory, 'setup-mobile.png'), fullPage: true});

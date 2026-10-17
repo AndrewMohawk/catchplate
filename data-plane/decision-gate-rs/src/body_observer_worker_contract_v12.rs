@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::os::fd::RawFd;
 
-pub(super) const WORKER_STOP_VERSION: &str = "serverware.controllerBodyObserverNamespaceStop/v14";
+pub(super) const WORKER_STOP_VERSION: &str = "catchplate.controllerBodyObserverNamespaceStop/v14";
 pub(super) const MAX_WORKER_CONTROL_BYTES: usize = 4096;
 pub(super) const MAX_INITIAL_TASK_PACKET_BYTES: usize = 56 + 16 * 1024;
 const SCM_PIDFD: libc::c_int = 4;

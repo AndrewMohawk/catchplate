@@ -94,7 +94,7 @@ impl Store {
         let mut value=Self{directory,identity:id,lock,held:Vec::new(),originals:Vec::new(),sequence:0,
             head:admission.genesis_sha256.clone(),total:0,poisoned:false};
         let raw=value.retain("genesis.json".into(),false)?;let g:Genesis=exact(&raw)?;
-        require(Sha256Digest::compute(&raw)==admission.genesis_sha256 && g.api_version=="serverware.nativeLedgerSpoolStoreGenesis/v1"
+        require(Sha256Digest::compute(&raw)==admission.genesis_sha256 && g.api_version=="catchplate.nativeLedgerSpoolStoreGenesis/v1"
             && g.guest==*guest && g.proof_scope_sha256==*scope_sha)?;
         for sequence in 1..=admission.sequence {
             let raw=value.retain(format!("prepared-{sequence:020}.json"),false)?;let prepared:PreparedOriginal=exact(&raw)?;
@@ -106,7 +106,7 @@ impl Store {
                 && stored.payload.object_sha256==Sha256Digest::compute(&core)
                 && value.held[value.held.len()-2].verity.as_ref()==Some(&stored.payload.fsverity_sha256))?;
             let raw=value.retain(format!("head-{sequence:020}.json"),false)?;let head:Head=exact(&raw)?;
-            require(head.api_version=="serverware.nativeLedgerSpoolStoreHead/v1" && head.sequence==sequence
+            require(head.api_version=="catchplate.nativeLedgerSpoolStoreHead/v1" && head.sequence==sequence
                 && head.previous_head_sha256==value.head && head.stored_original_sha256==wire::sha(&stored).map_err(fail)?)?;
             value.sequence=sequence;value.head=Sha256Digest::compute(&raw);value.originals.push((prepared,stored));
         }
@@ -198,7 +198,7 @@ impl Store {
         require(exact.len()<=16384 && stored.payload.sequence==sequence && stored.payload.previous_head_sha256==self.head
             && stored.payload.core_sha256==prepared.identity()?)?;
         self.create(format!("stored-{sequence:020}.json"),&exact,false)?;check()?;
-        let head=canonical_json_bytes(&Head{api_version:"serverware.nativeLedgerSpoolStoreHead/v1".into(),sequence,
+        let head=canonical_json_bytes(&Head{api_version:"catchplate.nativeLedgerSpoolStoreHead/v1".into(),sequence,
             previous_head_sha256:self.head.clone(),stored_original_sha256:Sha256Digest::compute(&exact)})?;
         self.create(format!("head-{sequence:020}.json"),&head,false)?;check()?;
         self.sequence=sequence;self.head=Sha256Digest::compute(&head);self.originals.push((prepared,stored.clone()));

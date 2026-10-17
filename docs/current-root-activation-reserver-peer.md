@@ -10,9 +10,9 @@ unexecuted.
 ## Closed original profile
 
 The original envelope, payload and launch must use the matching schemas
-`serverware.signedCurrentRootStateBootstrap/v5`,
-`serverware.currentRootStateBootstrap/v5` and
-`serverware.currentRootStateLaunch/v5`. The root signature uses the distinct
+`catchplate.signedCurrentRootStateBootstrap/v5`,
+`catchplate.currentRootStateBootstrap/v5` and
+`catchplate.currentRootStateLaunch/v5`. The root signature uses the distinct
 v5 envelope domain. V5 retains the exact v4 launch fields and adds only
 `activationReservePeerUid: 65505` and `activationReservePeerGid: 65505`.
 Mixed versions, extra fields and caller-selected peer identities fail closed.
@@ -23,7 +23,7 @@ independently supplied checkpoint, finite original lifetime and all five false
 hardware/TEE/witness assurance flags. State remains trusted-host-local. There
 is no new descriptor, key, journal, listener or environment opt-in: state runs
 as `65516:65516` with the same five FDs `198..202` and fixed
-`/run/serverware/current-root/state.sock`.
+`/run/catchplate/current-root/state.sock`.
 
 Root delivery and nonroot startup each admit the actual original. Only the
 admitted v5 launch selects

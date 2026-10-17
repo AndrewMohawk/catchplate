@@ -44,20 +44,20 @@ path is added. Every complete endpoint frame still has the existing 8 MiB cap.
 event bytes, generation/ordinal/predecessor, observation, scope and signer.
 It deliberately contains **no** storage receipt or retrieval address.
 
-The typed core identity uses `serverware.nativeLedgerSpoolCore/v1`; retrieval ID
-and proof use `serverware.nativeLedgerSpoolRetrievalId/v1` and
-`serverware.nativeLedgerSpoolRetrievalProof/v1`. They use the existing framed
+The typed core identity uses `catchplate.nativeLedgerSpoolCore/v1`; retrieval ID
+and proof use `catchplate.nativeLedgerSpoolRetrievalId/v1` and
+`catchplate.nativeLedgerSpoolRetrievalProof/v1`. They use the existing framed
 domain-hash helper, not plain concatenation. Storage writes the canonical full
 core, measures its actual fs-verity SHA, retains its inode and returns a separately
-signed `serverware.nativeLedgerSpoolStorage/v1` original. The native final receipt
+signed `catchplate.nativeLedgerSpoolStorage/v1` original. The native final receipt
 then signs **all** final fields, including every storage/retrieval reference.
 `require_final_payload` reconstructs and compares that complete final payload
 from the retained core plus full storage original. No signed field is dropped,
 filled with a predicted hash or replaced by a generic successful proof.
 
 Prepared/storage signatures use existing signed-envelope framing with domains
-`serverware.nativeLedgerSpoolPreparation.signature/v1` and
-`serverware.nativeLedgerSpoolStorage.signature/v1`. The final assigned-role
+`catchplate.nativeLedgerSpoolPreparation.signature/v1` and
+`catchplate.nativeLedgerSpoolStorage.signature/v1`. The final assigned-role
 signature and final spool receipt/head calculations remain their actual existing
 algorithms. The new retrieval selector, not the old retrieval reader, admits the
 acyclic storage relation; old retrieval objects remain separately checked.
@@ -79,13 +79,13 @@ records and unknown transitions refuse restart rather than being repaired.
 | IngressAdmission | `nativeShadowIngressGuestLaunch/v1`, own key and grant |
 | Retrieval writer | `nativeShadowRetrievalGuestLaunch/v2`, own spool retrieval grant |
 | Ordinary DRS/current | service runtime/v7, ordinary guest launch/v5, inspected only |
-| Ordinary five launcher | `custodyFiveServiceLaunch/v5` at `/etc/serverware/custody-spool-five.json` |
+| Ordinary five launcher | `custodyFiveServiceLaunch/v5` at `/etc/catchplate/custody-spool-five.json` |
 | HMAC permission | `nativeShadowRequestCommitmentAssignment/v2`, `native-shadow-request-and-ingress-commitments` |
 | Protected opening | `nativeCustodyOpening/v2`, exact early-context event |
 
-All API names above have the `serverware.` prefix. The bridge runtime's only new
+All API names above have the `catchplate.` prefix. The bridge runtime's only new
 top-level field relative to v6 is `spool`, exact four fields:
-`apiVersion: serverware.nativeSpoolServices/v1`, `headGrantOriginal`,
+`apiVersion: catchplate.nativeSpoolServices/v1`, `headGrantOriginal`,
 `currentGrantOriginal`, `originFdName: generation-origin`. The two originals are
 raw canonical ASCII strings. `generationAdmission` and `commitRequest` remain
 required with their real original contracts. The complete runtime still must
@@ -93,10 +93,10 @@ fit the existing bound; bounded component sizes do not authorize an oversized
 aggregate.
 
 The seventh child's socket is
-`/run/serverware-shadow-ingress-admission/listener.sock`, activation
+`/run/catchplate-shadow-ingress-admission/listener.sock`, activation
 `ingress-admission-listener`, bridge directory
 `ingress-admission-peer-directory`, inspection API
-`serverware.nativeShadowIngressAdmissionInspection/v1`. It is a ParentSigner
+`catchplate.nativeShadowIngressAdmissionInspection/v1`. It is a ParentSigner
 IngressAdmission endpoint, **not** a fifth proof enum. Ledger retains its distinct
 `commit-request` socket. Actual Selection excludes these native signers from
 ordinary outgoing endpoint construction. `generation-origin` is a data socket,
@@ -139,7 +139,7 @@ file description continuously. A second OFD must conflict. No close/reopen
 interval is permitted. Public grant memfds remain fully sealed and bounded;
 the new lock allowance does not admit arbitrary regular activation files.
 
-The store parent `/var/lib/serverware/native-ledger-spool` and fixed listener
+The store parent `/var/lib/catchplate/native-ledger-spool` and fixed listener
 parent must be independently provisioned root-owned 0711 directories. The owner
 creates only a fresh invocation directory and never adopts/unlinks an old one.
 The writer requires writable ext4 or btrfs with working fs-verity and actual
@@ -170,7 +170,7 @@ the observation-only `/native-loaded` result is not reused as effect permission.
 
 `issue_native_generation_origin.py` is the independent issuer's fixed source
 entry: protected config FD3 at
-`/etc/serverware/native-generation-origin-issuer.json`, sealed independently
+`/etc/catchplate/native-generation-origin-issuer.json`, sealed independently
 provisioned seed FD4, genuine accepted TCP transport FD5, isolated interpreter.
 It issues one random signed challenge, verifies the actual role-4 signature,
 Nitro quote/PCR/EIF/module/root/collateral revocation and exact target originals,
@@ -185,11 +185,11 @@ original string at most 768 KiB and the request at most 4096 bytes. Issuer
 signatures use the existing signed-envelope preimage and dedicated
 `nativeGenerationOriginIssuerAuthorization.signature/v1`,
 `nativeGenerationOriginChallenge.signature/v1`, and
-`nativeGenerationOrigin.signature/v1` domains (all `serverware.` prefixed).
+`nativeGenerationOrigin.signature/v1` domains (all `catchplate.` prefixed).
 The measured statement uses its separate source-fixed statement/NSM preimages.
 
 The fixed root-protected relay config
-`/etc/serverware/native-generation-origin-relay.json` contains only a fixed
+`/etc/catchplate/native-generation-origin-relay.json` contains only a fixed
 issuer IP/port and admitted local management URL/token. It forwards exact raw
 evidence, verifies the issuer's signed result and makes one seqpacket handoff.
 It never vouches for the measurement. Missing response, partial contact, expired

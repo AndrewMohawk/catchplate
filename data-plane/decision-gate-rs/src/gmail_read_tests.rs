@@ -238,7 +238,7 @@ fn gmail_read_json_media_parameters_real_finalizer_preserves_success_and_error_b
             let parsed = parse_buffered_response(&wire).unwrap();
             assert_eq!(parsed.status, status, "{media}");
             assert_eq!(parsed.body, body);
-            assert!(parsed.headers.contains_key("x-serverware-policy-hash"));
+            assert!(parsed.headers.contains_key("x-catchplate-policy-hash"));
             assert!(!parsed.headers.contains_key("server"));
         }
     }
@@ -259,7 +259,7 @@ fn gmail_read_json_media_parameters_real_finalizer_refuses_ambiguity() {
                 upstream(status, extra, b"{}"), &ResponseSecretGuard::default());
             let parsed = parse_buffered_response(&wire).unwrap();
             assert_eq!(parsed.status, 502, "{extra}");
-            assert!(!parsed.headers.contains_key("x-serverware-policy-hash"));
+            assert!(!parsed.headers.contains_key("x-catchplate-policy-hash"));
         }
     }
 }
@@ -440,7 +440,7 @@ fn gmail_read_age_finalizer_requires_request_owned_evidence() {
     let wire = finalized(&snapshot,&state,&execution.decision,&execution.url,
         upstream(200,"Content-Type: application/json\r\n",b"{\"messages\":[]}"),&ResponseSecretGuard::default());
     let parsed = parse_buffered_response(&wire).unwrap();
-    assert_eq!(parsed.status,502); assert!(!parsed.headers.contains_key("x-serverware-policy-hash"));
+    assert_eq!(parsed.status,502); assert!(!parsed.headers.contains_key("x-catchplate-policy-hash"));
     assert!(String::from_utf8_lossy(parsed.body).contains("gmail_read_age_execution_missing"));
 }
 

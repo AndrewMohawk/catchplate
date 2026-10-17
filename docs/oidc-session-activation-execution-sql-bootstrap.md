@@ -11,9 +11,9 @@ account, current checkpoint or production authority is provisioned here.
 ## Closed role and original admission
 
 The exact matching schemas are
-`serverware.signedOidcSessionActivationExecutionSqlBootstrap/v1`,
-`serverware.oidcSessionActivationExecutionSqlBootstrap/v1` and
-`serverware.oidcSessionActivationExecutionSqlLaunch/v1`. The envelope schema is
+`catchplate.signedOidcSessionActivationExecutionSqlBootstrap/v1`,
+`catchplate.oidcSessionActivationExecutionSqlBootstrap/v1` and
+`catchplate.oidcSessionActivationExecutionSqlLaunch/v1`. The envelope schema is
 the distinct root-signature domain. The canonical role original is capped at
 4 MiB and the separate receiving original at 8 MiB; its signed `receivingCustody`
 record contains only `byteCount` and the original-byte `bytesDigest`.
@@ -85,7 +85,7 @@ check their real catalog under the same physical connection.
 
 Every generated DSN requires `sslmode=verify-full`, `passfile=/dev/null` and
 `gssencmode=disable`. Fixed TLS paths are under
-`/run/serverware/oidc-session-activation-execution-sql-tls/`:
+`/run/catchplate/oidc-session-activation-execution-sql-tls/`:
 
 | Logical TLS original | Fixed filename | Byte ceiling |
 | --- | --- | --- |
@@ -105,9 +105,9 @@ certificate-only PostgreSQL authentication remains necessary.
 
 The process is `oidc-session-activation-execution-sql`, UID/GID `65504`, with
 request peer `65532:65532`. The listener is
-`/run/serverware/oidc-session-activation-execution/sql.sock`; both its kernel
+`/run/catchplate/oidc-session-activation-execution/sql.sock`; both its kernel
 socket and pathname device/inode are signed. The fixed journal is
-`/var/lib/serverware/oidc-session-activation-execution-sql-attempts`, with signed
+`/var/lib/catchplate/oidc-session-activation-execution-sql-attempts`, with signed
 directory device/inode and `journalMaximumRecords`. Request timeout is integer
 1–30 seconds. Device values allow zero; inodes are positive UInt64 values.
 

@@ -2,6 +2,8 @@
 
 # Generated verification artifacts and local secret material.
 .tmp/
+catchplate-client.private*.json
+# Downloads from installations created before the Catchplate rename remain private.
 serverware-client.private*.json
 
 # Python/runtime caches.

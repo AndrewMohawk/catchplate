@@ -18,7 +18,7 @@ const options = changes => ({credentials: [npmCredential()], applications: [appl
   responseModes: ['projected_json', 'unfiltered_json_or_empty_v2'], credentialInputModes: ['insert', 'replace_exact'], ...changes});
 function catalog(state) {
   const result = publicCatalog(state); result.capabilities.npm = cap(); result.capabilities.npm_publish = state.publishCapability;
-  result.capabilities.application_proxy_authentication = {schema: 'serverware.operatorProxyAuthentication/v1',
+  result.capabilities.application_proxy_authentication = {schema: 'catchplate.operatorProxyAuthentication/v1',
     modes: ['bearer', 'basic_and_bearer_v1'], path: '/api/operator-demo/applications/proxy-authentication'};
   return result;
 }
@@ -54,7 +54,7 @@ async function fixture(browser, config, exercise) {
       } catch (error) { state.errors.push('npm publish fixture: ' + error.message); await route.abort(); }
     };
     for (const path of ['/api/operator-demo/catalog', GRANT]) await controls.context.route(ORIGIN + path, handler);
-    await page.reload({waitUntil: 'networkidle'}); assert.equal(await page.title(), 'Overview - Serverware operator workspace');
+    await page.reload({waitUntil: 'networkidle'}); assert.equal(await page.title(), 'Overview - Catchplate operator workspace');
     assert.equal(new URL(page.url()).origin, ORIGIN); await exercise(page, state, observed);
     assert.deepEqual(state.posts, [], 'no generic creation, revoke, token rotation, provider consent or proxy-login mutation');
     assert(observed.grants.length <= 1);
@@ -85,9 +85,9 @@ async function recipe(page) {
   await page.waitForFunction(() => !document.querySelector('#copy-command').disabled);
   assert(await page.locator('#npm-publish-client-controls').isVisible()); assert(await page.locator('#npm-client-controls').isHidden());
   const text = await page.locator('#client-command').innerText();
-  for (const expected of ['strict-ssl=true', 'NODE_EXTRA_CA_CERTS=', 'fetch-retries=0', 'cache=${SERVERWARE_NPM_CACHE}',
-    'https-proxy=https://' + IDS.application + ':${SERVERWARE_PROXY_TOKEN}@proxy.example.test',
-    '//registry.npmjs.org/:_authToken=serverware-npm-placeholder-v1', "publish ./package.tgz --access=public --tag='latest'",
+  for (const expected of ['strict-ssl=true', 'NODE_EXTRA_CA_CERTS=', 'fetch-retries=0', 'cache=${CATCHPLATE_NPM_CACHE}',
+    'https-proxy=https://' + IDS.application + ':${CATCHPLATE_PROXY_TOKEN}@proxy.example.test',
+    '//registry.npmjs.org/:_authToken=catchplate-npm-placeholder-v1', "publish ./package.tgz --access=public --tag='latest'",
     '--ignore-scripts=true --provenance=false --force=false --dry-run=false --workspaces=false --json']) assert(text.includes(expected), expected);
   assert(!/strict-ssl=false|NODE_TLS_REJECT_UNAUTHORIZED|--insecure|--proxy-insecure/.test(text));
   assert.match(await page.locator('#client-template-warning').innerText(), /public-publishing.*neither executes/);
@@ -143,12 +143,12 @@ const tests = [
 ];
 async function hashes() {
   const names = ['scripts/test_operator_npm_publish_browser.cjs', 'scripts/test_operator_npm_publish_ui.cjs', 'scripts/test_operator_npm_ui.cjs',
-    'scripts/test_operator_catalog_browser.cjs', 'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
-    ...(await readdir(join(ROOT, 'serverware/operator_demo_web'))).filter(name => /\.(html|css|js)$/.test(name)).sort().map(name => 'serverware/operator_demo_web/' + name)];
+    'scripts/test_operator_catalog_browser.cjs', 'scripts/test_operator_ordinary_modes_browser.cjs', 'catchplate/operator_demo_portal.py',
+    ...(await readdir(join(ROOT, 'catchplate/operator_demo_web'))).filter(name => /\.(html|css|js)$/.test(name)).sort().map(name => 'catchplate/operator_demo_web/' + name)];
   return Object.fromEntries(await Promise.all(names.map(async name => [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')])));
 }
 async function runSuite(browser) {
-  const before = await hashes(); const directory = await mkdtemp('/tmp/serverware-npm-publish-browser-');
+  const before = await hashes(); const directory = await mkdtemp('/tmp/catchplate-npm-publish-browser-');
   console.log(JSON.stringify({phase: 'source-before', hashes: before, artifactDirectory: directory}));
   const contexts = new Set(); let timer; let finished = false; let passed = 0;
   const bounded = {async newContext(...args) { assert(!finished); const context = await browser.newContext(...args);

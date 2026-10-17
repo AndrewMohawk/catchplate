@@ -5,7 +5,7 @@ BASE="${BASE:-http://localhost:3000}"
 GATE="${DECISION_GATE_BASE:-http://localhost:9091}"
 GATE_HOST="${DECISION_GATE_HOST:-localhost}"
 GATE_PORT="${DECISION_GATE_PORT:-9090}"
-ADMIN_HEADER=(-H "X-Serverware-Admin-Token: ${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}")
+ADMIN_HEADER=(-H "X-Catchplate-Admin-Token: ${CATCHPLATE_ADMIN_TOKEN:-dev-admin-token}")
 
 curl -fsS "${ADMIN_HEADER[@]}" -X POST "$BASE/api/demo/seed" >/dev/null
 
@@ -21,7 +21,7 @@ import urllib.request
 gate = sys.argv[1].rstrip("/")
 gate_host = sys.argv[2]
 gate_port = int(sys.argv[3])
-management_token = os.environ.get("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN", "").strip() or "dev-rust-management-token"
+management_token = os.environ.get("CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN", "").strip() or "dev-rust-management-token"
 
 
 def decide(text: str) -> dict:
@@ -29,7 +29,7 @@ def decide(text: str) -> dict:
         "clientIp": "127.0.0.1",
         "method": "POST",
         "url": "https://demo-upstream:8443/2/tweets",
-        "headers": {"X-Serverware-Agent": "demo-agent", "Content-Type": "application/json"},
+        "headers": {"X-Catchplate-Agent": "demo-agent", "Content-Type": "application/json"},
         "body": json.dumps({"text": text}, separators=(",", ":")),
         "preview": True,
     }
@@ -38,7 +38,7 @@ def decide(text: str) -> dict:
         data=json.dumps(payload, separators=(",", ":"), sort_keys=True).encode(),
         headers={
             "Content-Type": "application/json",
-            "X-Serverware-Data-Plane-Token": management_token,
+            "X-Catchplate-Data-Plane-Token": management_token,
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:
@@ -56,7 +56,7 @@ def release_store() -> dict:
     )
     """
     output = subprocess.check_output(
-        ["docker", "compose", "exec", "-T", "grant-store", "psql", "-U", "serverware", "-d", "serverware", "-Atq", "-c", query],
+        ["docker", "compose", "exec", "-T", "grant-store", "psql", "-U", "catchplate", "-d", "catchplate", "-Atq", "-c", query],
         text=True,
     )
     return json.loads(output)
@@ -67,7 +67,7 @@ def forward(text: str) -> tuple[int, dict]:
     raw = (
         "POST https://demo-upstream:8443/2/tweets HTTP/1.1\r\n"
         "Host: demo-upstream:8443\r\n"
-        "X-Serverware-Agent: demo-agent\r\n"
+        "X-Catchplate-Agent: demo-agent\r\n"
         "Content-Type: application/json\r\n"
         f"Content-Length: {len(body)}\r\n"
         "Connection: close\r\n\r\n"

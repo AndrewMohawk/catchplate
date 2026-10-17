@@ -33,10 +33,10 @@ The source base is always `docker-compose.production.yml`; the only permitted
 overlay is `docker-compose.enrollment.yml`. Enabled enrollment adds exactly two
 fixed read-only binds, both with `create_host_path: false`:
 
-- `SERVERWARE_CONTROL_PLANE_ENROLLMENT_SIGNING_KEY_FILE` to
-  `/run/secrets/serverware-control-plane-enrollment-signing-key`.
-- `SERVERWARE_REGISTRATION_EVIDENCE_SOCKET_DIR` to
-  `/run/serverware/registration-evidence`.
+- `CATCHPLATE_CONTROL_PLANE_ENROLLMENT_SIGNING_KEY_FILE` to
+  `/run/secrets/catchplate-control-plane-enrollment-signing-key`.
+- `CATCHPLATE_REGISTRATION_EVIDENCE_SOCKET_DIR` to
+  `/run/catchplate/registration-evidence`.
 
 Both host-source interpolation variables are required and nonempty; they select
 preprovisioned mount sources, never a process/browser endpoint or a private-key

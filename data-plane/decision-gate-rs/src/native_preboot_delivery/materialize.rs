@@ -18,13 +18,13 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{FileExt, MetadataExt};
 use zeroize::Zeroizing;
 
-const ROOTS: [&str; 2] = ["/run/serverware-preboot", "/run/serverware-role-key-provisioning"];
+const ROOTS: [&str; 2] = ["/run/catchplate-preboot", "/run/catchplate-role-key-provisioning"];
 const MAX_FILES: usize = 128;
 const MAX_DIRECTORIES: usize = 256;
 const MAX_ABSENT: usize = 128;
 const MAX_FILE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TOTAL_BYTES: usize = 32 * 1024 * 1024;
-const LEDGER: &str = "/run/serverware-preboot/attempt-ledger";
+const LEDGER: &str = "/run/catchplate-preboot/attempt-ledger";
 const LEDGER_UID: u32 = 65534;
 const MAX_LEDGER_MANIFEST: usize = 1024;
 const CHUNK: usize = 64 * 1024;
@@ -238,7 +238,7 @@ impl Materialized {
         require(contents.next().is_none(), "preboot fresh ledger is not empty")?;
         drop(contents);
         self.directories_unchanged()?; check()?;
-        serverware_decision_gate::CustodyRuntime::initialize_attempt_ledger_directory(std::path::Path::new(LEDGER))
+        catchplate_decision_gate::CustodyRuntime::initialize_attempt_ledger_directory(std::path::Path::new(LEDGER))
             .map_err(|_| "preboot fresh ledger initialization failed; partial state is retained")?;
         check()?; root_process(self.pid)?; self.directories_unchanged()?;
         let mut names = BTreeSet::new();

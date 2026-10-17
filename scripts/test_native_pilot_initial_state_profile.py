@@ -21,8 +21,8 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 from scripts import native_pilot_runtime_artifacts as artifacts
 from scripts import test_native_pilot_adopted_ordinary_inputs as ordinary_fixture
 from scripts import test_native_pilot_supervisor_runtime as runtime_fixture
-from serverware import native_pilot_initial_state_profile as profile
-from serverware import native_pilot_adopted_ordinary_install as installation
+from catchplate import native_pilot_initial_state_profile as profile
+from catchplate import native_pilot_adopted_ordinary_install as installation
 
 p, worker = profile.p, profile.worker
 ERRORS = (ValueError, KeyError, TypeError, InvalidSignature)
@@ -149,7 +149,7 @@ class InitialStateProfileControls(unittest.TestCase):
 
     def test_projection_accepts_only_base_input_and_fixed_total_budget(self):
         source = self.source; value = p.document(source["installation_original"], profile.MAX_INPUT)
-        value["apiVersion"] = "serverware.nativePilotAdoptedOrdinaryInstallationInput/v2"
+        value["apiVersion"] = "catchplate.nativePilotAdoptedOrdinaryInstallationInput/v2"
         with self.assertRaises(ERRORS): prepared(source, installation_original=p.canonical(value))
         with self.assertRaises(ERRORS): profile.prepare(b"x" * profile.MAX_INPUT, source["installation_original"],
             source["inventory_raw"], **source["clocks"])

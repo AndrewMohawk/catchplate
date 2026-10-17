@@ -80,7 +80,7 @@ business receipts in these fixtures remain structural, not native acceptance.
 
 Both source archives, unchanged first harness/log, affected-only harness/log and
 results are retained with checksums at
-`codex-offload/serverware/engineering-builds/ee8d9961-adopted-authorizations-IDvPsv/`.
+`codex-offload/catchplate/engineering-builds/ee8d9961-adopted-authorizations-IDvPsv/`.
 The runner used Python 3.11.15, one CPU and private user/network namespaces.
 Native source and dependency locks were unchanged; no native or artifact rebuild,
 actual protected owner/signer installation, cloud or paid action occurred. Passing

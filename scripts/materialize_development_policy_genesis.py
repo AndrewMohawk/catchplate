@@ -15,7 +15,7 @@ USAGE = """Usage: python -I -B scripts/materialize_development_policy_genesis.py
   --genesis-preparation-digest SHA256 --genesis-finalization-digest SHA256
 
 Requires root, a non-production image/development release, the explicit
-SERVERWARE_PROCESS_MODE=metadata-bootstrap offline invocation, existing public
+CATCHPLATE_PROCESS_MODE=metadata-bootstrap offline invocation, existing public
 signing trust, and the protected fixed genesis-materializer DSN path/SHA.
 Admin/executor DSNs are forbidden. The inherited policy original is root:root
 0400, read-only or sealed, and already signed. No keys, policy signing, genesis
@@ -50,7 +50,7 @@ def main(argv=None):
     owner = None
     try:
         kwargs = arguments(supplied)
-        from serverware.development_policy_genesis import OfflineDevelopmentGenesis
+        from catchplate.development_policy_genesis import OfflineDevelopmentGenesis
         owner = OfflineDevelopmentGenesis.open(**kwargs)
         result = owner.run()
     except BaseException as error:

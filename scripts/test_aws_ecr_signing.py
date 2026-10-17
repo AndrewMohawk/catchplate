@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import aws_ecr_signing as signing
+from catchplate import aws_ecr_signing as signing
 
 
 # Public documentation examples, NOT real credentials. Session key/token are
@@ -58,7 +58,7 @@ sys.addaudithook(prohibit_network)
 
 
 def bodies():
-    common = {"registryId": "123456789012", "repositoryName": "serverware-fixture"}
+    common = {"registryId": "123456789012", "repositoryName": "catchplate-fixture"}
     fields = (
         {"layerDigests": [DIGEST]}, {},
         {"uploadId": UPLOAD_ID, "partFirstByte": 0, "partLastByte": len(PART) - 1,
@@ -332,8 +332,8 @@ class AwsEcrSigningTests(unittest.TestCase):
         for failure in failures:
             for private in (canary, SECRET, TOKEN, ACCESS, SESSION_ACCESS):
                 self.assertNotIn(private, str(failure) + repr(failure))
-        self.assertNotIn("serverware.config", sys.modules)
-        self.assertNotIn("serverware.db", sys.modules)
+        self.assertNotIn("catchplate.config", sys.modules)
+        self.assertNotIn("catchplate.db", sys.modules)
 
 
 class AwsEcrBotocoreTests(unittest.TestCase):
@@ -372,7 +372,7 @@ if __name__ == "__main__":
     if "--emit-botocore-vectors" in sys.argv:
         if sys.argv[1:] != ["--emit-botocore-vectors"]:
             raise SystemExit("vector mode accepts no other arguments")
-        print(json.dumps({"schema": "serverware.syntheticEcrBotocoreVectors/v1", "botocoreVersion": "1.34.46",
+        print(json.dumps({"schema": "catchplate.syntheticEcrBotocoreVectors/v1", "botocoreVersion": "1.34.46",
             "region": REGION, "unixSeconds": NOW, "monotonicNs": MONO,
             "sessionExpiry": EXPIRY, "cases": [stock_vector(action, body, session)
                 for session in (False, True) for action, body in (*bodies(), ("UploadLayerPart", PART))]},

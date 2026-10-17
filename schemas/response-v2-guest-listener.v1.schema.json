@@ -1,14 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/response-v2-guest-listener.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/response-v2-guest-listener.v1.schema.json",
   "title": "Guest-local response-v2 listener and descriptor handoff",
   "$comment": "Structural data only. Root preparation verifies the independent signed router delivery before creating only a fresh fixed path and a bound, non-listening socket. Handoff metadata is not authority. Final activation requires the actual retained delivery owner, verified generation, exact descriptor/path originals, final router identity and unchanged original startup deadline. No launcher, inspector, TEE readiness or cleanup is supplied by this schema.",
   "oneOf": [{"$ref": "#/$defs/profile"}, {"$ref": "#/$defs/handoff"}, {"$ref": "#/$defs/nativeClient"}],
   "$defs": {
     "profile": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion"],
-      "properties": {"apiVersion": {"const": "serverware.responseV2.guestListener/v1"}},
-      "description": "Explicit guestListener in signed cold custody configuration or native response client v2. Omission preserves the host profile; explicit null is refused. Fixed path /run/serverware-response-v2-guest/transaction.sock, expectedClientUid and expectedSocketGid both 65534, signed router UID distinct and nonzero. Fresh root:65534 directory mode 0711 is socket-only; the routerUID:65534 socket is mode 0660."
+      "properties": {"apiVersion": {"const": "catchplate.responseV2.guestListener/v1"}},
+      "description": "Explicit guestListener in signed cold custody configuration or native response client v2. Omission preserves the host profile; explicit null is refused. Fixed path /run/catchplate-response-v2-guest/transaction.sock, expectedClientUid and expectedSocketGid both 65534, signed router UID distinct and nonzero. Fresh root:65534 directory mode 0711 is socket-only; the routerUID:65534 socket is mode 0660."
     },
     "uint": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
     "u32": {"type": "integer", "minimum": 0, "maximum": 4294967295},
@@ -38,7 +38,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "binding", "directory", "socketPath", "socketFd"],
       "properties": {
-        "apiVersion": {"const": "serverware.responseV2.guestListenerHandoff/v1"},
+        "apiVersion": {"const": "catchplate.responseV2.guestListenerHandoff/v1"},
         "binding": {"$ref": "#/$defs/binding"}, "directory": {"$ref": "#/$defs/identity"},
         "socketPath": {"$ref": "#/$defs/identity"}, "socketFd": {"$ref": "#/$defs/identity"}
       },
@@ -48,9 +48,9 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "guestListener", "socketPath", "expectedUid", "startupTimeoutMs", "signerKeySha256", "roleIdentityRootSha256", "proofPinsRootSha256", "teeVerifier", "transparencyTrustPin", "roleKeys", "generationId", "expectedSourceCommitSha256", "expectedSourceTreeSha256", "minimumRevocationEpoch"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeResponseObservationV2Config/v2"},
+        "apiVersion": {"const": "catchplate.nativeResponseObservationV2Config/v2"},
         "guestListener": {"$ref": "#/$defs/profile"},
-        "socketPath": {"const": "/run/serverware-response-v2-guest/transaction.sock"},
+        "socketPath": {"const": "/run/catchplate-response-v2-guest/transaction.sock"},
         "expectedUid": {"type": "integer", "minimum": 1, "maximum": 4294967295, "not": {"const": 65534}},
         "startupTimeoutMs": {"type": "integer", "minimum": 1, "maximum": 30000},
         "signerKeySha256": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/sha"},

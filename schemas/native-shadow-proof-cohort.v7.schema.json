@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-proof-cohort.v7.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-proof-cohort.v7.schema.json",
   "$ref": "#/$defs/configuration",
   "$defs": {
     "sha": {
@@ -49,7 +49,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowProofCohortConfiguration/v7"
+          "const": "catchplate.nativeShadowProofCohortConfiguration/v7"
         },
         "authority": {
           "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/authority"
@@ -124,7 +124,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowProofCohortOriginals/v6"
+          "const": "catchplate.nativeShadowProofCohortOriginals/v6"
         },
         "configurationSha256": {
           "$ref": "#/$defs/sha"
@@ -195,7 +195,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowProofCohortRelease/v6"
+          "const": "catchplate.nativeShadowProofCohortRelease/v6"
         },
         "configurationSha256": {
           "$ref": "#/$defs/sha"
@@ -262,7 +262,7 @@
           "$ref": "#/$defs/signature"
         }
       },
-      "description": "Independent existing C9 authority signs ASCII serverware.nativeShadowProofCohortRelease.signature/v6, NUL, complete canonical payload including externalDriverSha256. Ten endpoint inventories only; unchanged 32768-byte packet and 128-rights aggregate ceiling. External DriverBootstrap continuation remains a separate one-shot operation after actual ordinary listeners and endpoint release."
+      "description": "Independent existing C9 authority signs ASCII catchplate.nativeShadowProofCohortRelease.signature/v6, NUL, complete canonical payload including externalDriverSha256. Ten endpoint inventories only; unchanged 32768-byte packet and 128-rights aggregate ceiling. External DriverBootstrap continuation remains a separate one-shot operation after actual ordinary listeners and endpoint release."
     },
     "payload": {
       "type": "object",
@@ -283,7 +283,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowProofCohortCleanup/v6"
+          "const": "catchplate.nativeShadowProofCohortCleanup/v6"
         },
         "purpose": {
           "const": "terminate-owned-proof-cohort"
@@ -335,7 +335,7 @@
           "$ref": "#/$defs/signature"
         }
       },
-      "description": "Distinct cleanup authority signs ASCII serverware.nativeShadowProofCohortCleanup.signature/v6, NUL, complete canonical payload including externalDriverSha256. Original signed boot/lifetime and cleanup bounds remain unchanged; only ten locally owned endpoints may be signaled/reaped."
+      "description": "Distinct cleanup authority signs ASCII catchplate.nativeShadowProofCohortCleanup.signature/v6, NUL, complete canonical payload including externalDriverSha256. Original signed boot/lifetime and cleanup bounds remain unchanged; only ten locally owned endpoints may be signaled/reaped."
     },
     "terminal": {
       "type": "object",
@@ -354,7 +354,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowProofCohortTerminal/v6"
+          "const": "catchplate.nativeShadowProofCohortTerminal/v6"
         },
         "authorizationSha256": {
           "$ref": "#/$defs/sha"
@@ -443,7 +443,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowProofCohortCleanupResult/v6"
+          "const": "catchplate.nativeShadowProofCohortCleanupResult/v6"
         },
         "authorizationSha256": {
           "$ref": "#/$defs/sha"
@@ -507,7 +507,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowEndpointDriverBinding/v1"
+          "const": "catchplate.nativeShadowEndpointDriverBinding/v1"
         },
         "configurationOriginal": {
           "type": "string",
@@ -573,7 +573,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowEndpointDriverOriginal/v1"
+          "const": "catchplate.nativeShadowEndpointDriverOriginal/v1"
         },
         "bindingSha256": {
           "$ref": "#/$defs/sha"

@@ -9,8 +9,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.test_authority_local_provenance import fixture, repin
-from serverware import authority_local_composition as local
-from serverware import authority_local_provenance as observed
+from catchplate import authority_local_composition as local
+from catchplate import authority_local_provenance as observed
 from scripts.authority import local_composition as cli
 
 

@@ -19,7 +19,7 @@ import sys
 
 import operator_source_revision_retained as h
 
-ROOT = Path("/srv/catchplate-archive/homelab_data/serverware-source350-release.6kZhpc9d")
+ROOT = Path("/srv/catchplate-archive/homelab_data/catchplate-source350-release.6kZhpc9d")
 SOURCE_ROOT = ROOT / ("source-" + h.COMMIT)
 PROOFS = ROOT / "proofs"
 COMMIT = h.COMMIT
@@ -28,10 +28,10 @@ ROLES = ("prepare", "recover", "plan", "apply", "freeze", "startup1", "observe1"
 MAX_FILE_BYTES = 64 * 1024**2
 INPUT_KEYS = {"schema", "candidateCommit", "sourceFilesSha256", "sourceJoinSha256", "capturePins",
     "normalReceiptSha256", "normalSelectionSha256", "normalBinarySha256", "workerSha256", "helpersSha256"}
-INPUT_SCHEMA = "serverware.sourceRevisionRetainedInputs/v1"
+INPUT_SCHEMA = "catchplate.sourceRevisionRetainedInputs/v1"
 PROMOTION_ROOT_FILES = ("source-proof.json", "prepared.json", "auxiliary-preserved.json")
 PROMOTION_OUT_FILES = ("plan.json", "apply.json", "migrated-database.json", "migrated-database-bytes.json",
-    "freeze.json", "expected-contract.json", "serverware.sqlite3.baseline.json", "baseline-contract.json",
+    "freeze.json", "expected-contract.json", "catchplate.sqlite3.baseline.json", "baseline-contract.json",
     "recovered-files.json", "phase-prepare.json", "phase-recover.json", "phase-plan.json", "phase-apply.json", "phase-freeze.json")
 cfg = {}
 pinned = h.pinned
@@ -56,7 +56,7 @@ def source_proof():
 
 def host_receipt(role, inputs_sha):
     value = h.read(Path("/host-receipts") / (role + ".json"))
-    h.need(value["schema"] == "serverware.sourceRevisionRetainedHost/v1"
+    h.need(value["schema"] == "catchplate.sourceRevisionRetainedHost/v1"
         and value["ok"] is True and value["role"] == role and value["inputsSha256"] == inputs_sha
         and value["workerSha256"] == cfg["workerSha256"] and value["exitCode"] == 0
         and value["oomKilled"] is False and value["restartCount"] == 0
@@ -90,7 +90,7 @@ def preflight(role):
         if role == "recover":
             h.need(not os.statvfs("/recovery-data").f_flag & os.ST_RDONLY)
         if role.startswith("startup"):
-            for path in ("/startup.env", "/run/secrets/serverware", "/demo-upstream"):
+            for path in ("/startup.env", "/run/secrets/catchplate", "/demo-upstream"):
                 h.need(os.statvfs(path).f_flag & os.ST_RDONLY)
 
 
@@ -169,7 +169,7 @@ def freeze_migrated(inputs_sha, proof):
     pins = migration.pins()
     helpers = migration.source(pins, Path("/data"))
     shared.sidecars_absent(Path("/data"))
-    before = h.read("/out/serverware.sqlite3.baseline.json")
+    before = h.read("/out/catchplate.sqlite3.baseline.json")
     plan_raw, receipt_raw = h.raw_file("/out/plan.json"), h.raw_file("/out/apply.json")
     plan, receipt = h.strict_json(plan_raw), h.strict_json(receipt_raw)
     h.need(plan["schema"] == migration.SCHEMA and plan["transitionId"] == migration.TRANSITION
@@ -182,7 +182,7 @@ def freeze_migrated(inputs_sha, proof):
         and receipt["beforeContract"] == h.read("/out/baseline-contract.json")
         and receipt["rebuiltTables"] == list(migration.CHANGED_TABLES))
     with held_database_bytes(shared, Path("/data"), Path("/out")) as (commitment, verify):
-        with closing(sqlite3.connect("file:/data/serverware.sqlite3?mode=ro&immutable=1", uri=True, timeout=0)) as conn:
+        with closing(sqlite3.connect("file:/data/catchplate.sqlite3?mode=ro&immutable=1", uri=True, timeout=0)) as conn:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA query_only=ON")
             conn.execute("BEGIN")
@@ -206,7 +206,7 @@ def freeze_migrated(inputs_sha, proof):
         h.save("/out/expected-contract.json", admitted["contract"])
         h.need(h.raw_file("/out/plan.json") == plan_raw and h.raw_file("/out/apply.json") == receipt_raw)
         verify()
-        save_database_bytes("/out", {"schema": "serverware.sourceRevisionRetainedDatabaseBytes/v1",
+        save_database_bytes("/out", {"schema": "catchplate.sourceRevisionRetainedDatabaseBytes/v1",
             "candidateCommit": COMMIT, "inputsSha256": inputs_sha, "sourceProof": proof,
             "transitionId": migration.TRANSITION, "pinsSha256": migration.PIN_SHA256,
             "planSha256": receipt["planSha256"], "planFileSha256": h.sha(plan_raw),
@@ -240,7 +240,7 @@ def final_result(inputs_sha, proof):
         and value["auditCount"] == captured["rows"]["audit_events"]["count"] for value in (starts[0], starts[2])))
     auxiliary = h.verify_auxiliary()
     h.need(h.archives() == original)
-    result = {"schema": "serverware.sourceRevisionRetainedResult/v1", "ok": True,
+    result = {"schema": "catchplate.sourceRevisionRetainedResult/v1", "ok": True,
         "candidateCommit": COMMIT, "inputsSha256": inputs_sha, "sourceProof": proof,
         "capturePins": cfg["capturePins"], "migrationPinsSha256": h.PIN_SHA,
         "migrationReceiptSha256": h.sha(h.raw_file(out / "apply.json")),
@@ -258,7 +258,7 @@ def final_result(inputs_sha, proof):
 def phase_stdout(role):
     """Hash-only handoff from each existing UID; never broaden private mounts."""
     h.need(role in ROLES)
-    value = {"schema": "serverware.sourceRevisionRetainedPhase/v1", "ok": True, "role": role,
+    value = {"schema": "catchplate.sourceRevisionRetainedPhase/v1", "ok": True, "role": role,
         "liveAccess": False, "hostCleanupVerification": "required"}
     if role == "prepare":
         value["promotionFileSha256"] = {"copy/" + name: h.sha(h.raw_file(Path("/job") / name))
@@ -294,7 +294,7 @@ def main():
     sys.addaudithook(lambda event, _arguments: h.need(not event.startswith("socket.")))
     if not role.startswith("startup"):
         for key in tuple(os.environ):
-            if key.startswith("SERVERWARE_"):
+            if key.startswith("CATCHPLATE_"):
                 del os.environ[key]
     stage = "selected_role"
     if role == "prepare":
@@ -302,7 +302,7 @@ def main():
         h.prepare()
         baseline = pinned("/captured/preservation-baseline.json", cfg["capturePins"]["preservation-baseline.json"])
         value = h.strict_json(baseline)
-        h.need(value["schema"] == "serverware.authorityUpgradeDatabaseObservation/v1"
+        h.need(value["schema"] == "catchplate.authorityUpgradeDatabaseObservation/v1"
             and len(value["snapshot"]["rows"]) == 218)
         h.save("/job/out/capture-baseline.json", baseline, 10001)
     elif role == "recover":
@@ -321,7 +321,7 @@ def main():
     h.need(source_proof() == proof and h.sha(h.raw_file("/inputs.json")) == inputs_sha)
     stage = "phase_receipt"
     output = Path("/job/out") if role in ("prepare", "result") else Path("/out")
-    h.save(output / ("phase-" + role + ".json"), {"schema": "serverware.sourceRevisionRetainedPhase/v1",
+    h.save(output / ("phase-" + role + ".json"), {"schema": "catchplate.sourceRevisionRetainedPhase/v1",
         "ok": True, "role": role, "inputsSha256": inputs_sha, "workerSha256": cfg["workerSha256"],
         "sourceProof": proof, "liveAccess": False, "hostCleanupVerification": "required"}, 10001 if role == "prepare" else None)
     print(json.dumps(phase_stdout(role), sort_keys=True))
@@ -331,7 +331,7 @@ if __name__ == "__main__":
     try:
         main()
     except BaseException:
-        print(json.dumps({"schema": "serverware.sourceRevisionRetainedPhase/v1", "ok": False,
+        print(json.dumps({"schema": "catchplate.sourceRevisionRetainedPhase/v1", "ok": False,
             "role": selected_role, "stage": stage, "reason": "rehearsal_refused",
             "automaticRetry": False}, sort_keys=True))
         raise SystemExit(1) from None

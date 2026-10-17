@@ -1,0 +1,19 @@
+[Service]
+User=swpc-target
+Group=swpc-target
+StateDirectory=catchplate/policy-custody/recovery-target-provider/journal
+StateDirectoryMode=0700
+MemoryAccounting=yes
+MemoryHigh=384M
+MemoryMax=512M
+CPUAccounting=yes
+CPUQuota=100%
+TasksAccounting=yes
+TasksMax=96
+IOAccounting=yes
+# O_RDONLY is the only valid open mode for a Linux directory descriptor; the
+# owner-writable inode remains mutable through descriptor-relative syscalls.
+OpenFile=%S/catchplate/policy-custody/recovery-target-provider/journal:journal:read-only
+InaccessiblePaths=%S/catchplate/policy-custody/recovery-target-provider/journal
+# The target provider receives dynamic retained descriptors only over its
+# authenticated bootstrap exchange; systemd supplies no ambient target FDs.

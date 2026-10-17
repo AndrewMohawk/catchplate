@@ -611,7 +611,7 @@ def test_measured_preflight_module_replacement_race() -> None:
         original_module = verify_release_completion._MEASURED_PREFLIGHT_MODULE
         original_digest = verify_release_completion._MEASURED_PREFLIGHT_MODULE_SHA256
         original_sys_module = sys.modules.get(
-            "_serverware_measured_production_host_preflight"
+            "_catchplate_measured_production_host_preflight"
         )
         try:
             verify_release_completion.__file__ = str(verifier_path)
@@ -640,10 +640,10 @@ def test_measured_preflight_module_replacement_race() -> None:
             verify_release_completion._MEASURED_PREFLIGHT_MODULE = original_module
             verify_release_completion._MEASURED_PREFLIGHT_MODULE_SHA256 = original_digest
             if original_sys_module is None:
-                sys.modules.pop("_serverware_measured_production_host_preflight", None)
+                sys.modules.pop("_catchplate_measured_production_host_preflight", None)
             else:
                 sys.modules[
-                    "_serverware_measured_production_host_preflight"
+                    "_catchplate_measured_production_host_preflight"
                 ] = original_sys_module
 
 
@@ -656,12 +656,12 @@ KMS_MATERIAL_FIXTURES: dict[str, dict[str, Any]] = {
     "broker-kek": {
         "key_id": "arn:aws:kms:us-east-1:111122223333:key/1",
         "ciphertext": b"broker-ciphertext",
-        "encryption_context": {"material": "broker-kek", "service": "serverware"},
+        "encryption_context": {"material": "broker-kek", "service": "catchplate"},
     },
     "decision-gate-ca": {
         "key_id": "arn:aws:kms:us-east-1:111122223333:key/2",
         "ciphertext": b"ca-ciphertext",
-        "encryption_context": {"material": "decision-gate-ca", "service": "serverware"},
+        "encryption_context": {"material": "decision-gate-ca", "service": "catchplate"},
     },
 }
 
@@ -838,7 +838,7 @@ def refresh_release_provenance(summary: dict[str, Any], document: dict[str, Any]
             "signature": signature,
             "release_signing_key_id": key_info["key_id"],
             "production_launcher_binary_digest": provenance["images"][
-                "serverware-decision-gate"
+                "catchplate-decision-gate"
             ]["launcher_binary_digest"],
             "launch_authority_key_id": provenance["launch_authority"][
                 "launch_authority_key_id"
@@ -854,7 +854,7 @@ def refresh_release_provenance(summary: dict[str, Any], document: dict[str, Any]
     summary["provenance_digest"] = provenance_digest
     summary["release_signing_key_id"] = key_info["key_id"]
     summary["production_launcher_binary_digest"] = provenance["images"][
-        "serverware-decision-gate"
+        "catchplate-decision-gate"
     ]["launcher_binary_digest"]
     summary.update(provenance["launch_authority"])
     summary["reproducible_build_verification_sha256"] = provenance[
@@ -895,7 +895,7 @@ def nonce_rollback_contract_fixture() -> tuple[dict[str, Any], bytes, str, str]:
         )
     )
     assurance = {
-        "apiVersion": "serverware.nonceAuthorityAssurance/v1",
+        "apiVersion": "catchplate.nonceAuthorityAssurance/v1",
         "administrativeDomainSha256": digest("a"),
         "assuranceEvidenceSha256": digest("b"),
         "assuranceEvidenceType": "linearizableCasOperatorAttestation",
@@ -1016,7 +1016,7 @@ def launch_authorization_security_fixture() -> dict[str, Any]:
         "independentAdministration": True,
     }
     witness_store_unsigned = {
-        "apiVersion": "serverware.launchAuthorityWitnessStoreAssurance/v1",
+        "apiVersion": "catchplate.launchAuthorityWitnessStoreAssurance/v1",
         "kind": "LaunchAuthorityWitnessStoreAssurance",
         "statement": witness_store_statement,
     }
@@ -1024,7 +1024,7 @@ def launch_authorization_security_fixture() -> dict[str, Any]:
         **witness_store_unsigned,
         "signature": b64e(
             witness_store_key.sign(
-                b"serverware.launchAuthorityWitnessStoreAssurance/v1\0"
+                b"catchplate.launchAuthorityWitnessStoreAssurance/v1\0"
                 + launch_authorization.canonical_json_bytes(
                     witness_store_unsigned
                 )
@@ -1126,7 +1126,7 @@ def bootstrap_receipt_fixture(
             rollback_epoch=rollback_epoch,
             manifest_sha256=manifest_sha256,
         )
-        receipt["apiVersion"] = "serverware.bootstrapReceipt/v2"
+        receipt["apiVersion"] = "catchplate.bootstrapReceipt/v2"
         return receipt
 
     def metadata(*, mode: int = 0o400, link_count: int = 1) -> dict[str, int]:
@@ -1154,7 +1154,7 @@ def bootstrap_receipt_fixture(
     launcher_digest = digest("3")
     receipt = {
         "apiVersion": (
-            "serverware.bootstrapReceipt/v2"
+            "catchplate.bootstrapReceipt/v2"
             if legacy_v2
             else run_production_readiness.BOOTSTRAP_RECEIPT_API_VERSION
         ),
@@ -1162,40 +1162,40 @@ def bootstrap_receipt_fixture(
         "launchId": "1" * 64,
         "bootIdSha256": digest("2"),
         "launcher": file_record(
-            "/opt/serverware/launchers/sha256-"
+            "/opt/catchplate/launchers/sha256-"
             + launcher_digest.removeprefix("sha256:")
-            + "/serverware-production-launcher",
+            + "/catchplate-production-launcher",
             "3",
         ),
         "manifest": {
             **file_record(
-                "/etc/serverware/production-release-launch.json",
+                "/etc/catchplate/production-release-launch.json",
                 "4",
             ),
             "sha256": manifest_sha256 or digest("4"),
         },
         "sourceTreeDigest": SOURCE_TREE_DIGEST,
-        "productionEnv": file_record("/etc/serverware/production-readiness.env", "5"),
+        "productionEnv": file_record("/etc/catchplate/production-readiness.env", "5"),
         "python": {
-            **file_record("/opt/serverware/releases/fixture/runtime/python/bin/python3", "6"),
+            **file_record("/opt/catchplate/releases/fixture/runtime/python/bin/python3", "6"),
             "importRoots": [
                 {
-                    "path": "/opt/serverware/releases/fixture",
+                    "path": "/opt/catchplate/releases/fixture",
                     "sha256": digest("7"),
                     "metadata": metadata(mode=0o555, link_count=2),
                 },
                 {
-                    "path": "/opt/serverware/releases/fixture/runtime/python/lib/python3.11",
+                    "path": "/opt/catchplate/releases/fixture/runtime/python/lib/python3.11",
                     "sha256": digest("6"),
                     "metadata": metadata(mode=0o555, link_count=2),
                 },
                 {
-                    "path": "/opt/serverware/releases/fixture/runtime/python/lib/python3.11/lib-dynload",
+                    "path": "/opt/catchplate/releases/fixture/runtime/python/lib/python3.11/lib-dynload",
                     "sha256": digest("5"),
                     "metadata": metadata(mode=0o555, link_count=2),
                 },
                 {
-                    "path": "/opt/serverware/releases/fixture/vendor",
+                    "path": "/opt/catchplate/releases/fixture/vendor",
                     "sha256": digest("4"),
                     "metadata": metadata(mode=0o555, link_count=2),
                 },
@@ -1203,17 +1203,17 @@ def bootstrap_receipt_fixture(
         },
         "scripts": {
             "preflight": file_record(
-                "/opt/serverware/releases/fixture/scripts/production_host_preflight.py", "8"
+                "/opt/catchplate/releases/fixture/scripts/production_host_preflight.py", "8"
             ),
             "runner": file_record(
-                "/opt/serverware/releases/fixture/scripts/run_production_readiness.py", "9"
+                "/opt/catchplate/releases/fixture/scripts/run_production_readiness.py", "9"
             ),
         },
         "composeFile": file_record(
-            "/opt/serverware/releases/fixture/docker-compose.production.yml", "a"
+            "/opt/catchplate/releases/fixture/docker-compose.production.yml", "a"
         ),
         "inputs": {
-            name: file_record(f"/opt/serverware/releases/fixture/evidence/{name}.json", "b")
+            name: file_record(f"/opt/catchplate/releases/fixture/evidence/{name}.json", "b")
             for name in sorted(run_production_readiness.BOOTSTRAP_RECEIPT_INPUT_NAMES)
         },
         "argv": {"preflightSha256": digest("c"), "readinessSha256": digest("d")},
@@ -1232,7 +1232,7 @@ def bootstrap_receipt_fixture(
             "contractSha256": nonce_contract_sha256,
             "pinsFile": {
                 **file_record(
-                    "/etc/serverware/nonce-rollback-assurance-pins.json",
+                    "/etc/catchplate/nonce-rollback-assurance-pins.json",
                     "0",
                 ),
                 "sha256": nonce_pins_sha256,
@@ -1505,13 +1505,13 @@ def _obsolete_verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
     substituted_identity_version = clone_document(final_result)
     substituted_identity_version["aggregateAuthentication"][
         "completionIdentity"
-    ]["apiVersion"] = "serverware.finalCompletionIdentity/v1"
+    ]["apiVersion"] = "catchplate.finalCompletionIdentity/v1"
     final_result_negatives.append(
         ("aggregate identity v1 substitution", substituted_identity_version)
     )
     substituted_public_version = clone_document(final_result)
     substituted_public_version["publicVerifierResult"]["apiVersion"] = (
-        "serverware.publicNitroVerificationResult/v1"
+        "catchplate.publicNitroVerificationResult/v1"
     )
     final_result_negatives.append(
         ("public result version substitution", substituted_public_version)
@@ -1555,14 +1555,14 @@ def _obsolete_verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
     )
     obsolete_result_version = clone_document(final_result)
     obsolete_result_version["apiVersion"] = (
-        "serverware.releaseCompletionVerification/v0"
+        "catchplate.releaseCompletionVerification/v0"
     )
     final_result_negatives.append(
         ("obsolete final result version", obsolete_result_version)
     )
     readiness_envelope = {
-        "apiVersion": "serverware.completionProof/v6",
-        "kind": "ServerwarePreEnclaveReadiness",
+        "apiVersion": "catchplate.completionProof/v6",
+        "kind": "CatchplatePreEnclaveReadiness",
         "verificationOk": True,
         "finalCompletionVerified": False,
         "verification_mode": "readiness",
@@ -1572,7 +1572,7 @@ def _obsolete_verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
     )
     v6_as_final = {
         **readiness_envelope,
-        "kind": "ServerwareCompletionProof",
+        "kind": "CatchplateCompletionProof",
         "finalCompletionVerified": True,
         "verification_mode": "final",
         "result_scope": "final-completion",
@@ -1609,7 +1609,7 @@ def _obsolete_verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
     boundary_request_version_substitution = clone_document(final_result)
     boundary_request_version_substitution["hostBootstrapBoundary"][
         "launchAuthorizationRequestApiVersion"
-    ] = "serverware.launchAuthorizationRequest/v1"
+    ] = "catchplate.launchAuthorizationRequest/v1"
     refresh_boundary_digest(boundary_request_version_substitution)
     runtime_negatives.append(
         (
@@ -2089,10 +2089,10 @@ def verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
         "LANG",
         "LC_ALL",
         "PATH",
-        "SERVERWARE_BOOTSTRAP_RECEIPT_API_VERSION",
-        "SERVERWARE_BOOTSTRAP_RECEIPT_FD",
-        "SERVERWARE_BOOTSTRAP_RECEIPT_SHA256",
-        "SERVERWARE_LAUNCHER_IMPORT_MODE",
+        "CATCHPLATE_BOOTSTRAP_RECEIPT_API_VERSION",
+        "CATCHPLATE_BOOTSTRAP_RECEIPT_FD",
+        "CATCHPLATE_BOOTSTRAP_RECEIPT_SHA256",
+        "CATCHPLATE_LAUNCHER_IMPORT_MODE",
         "TZ",
     ]
     if receipt["environment"]["names"] != expected_environment_names:
@@ -2107,7 +2107,7 @@ def verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
             "missing import mode",
             [
                 name for name in expected_environment_names
-                if name != "SERVERWARE_LAUNCHER_IMPORT_MODE"
+                if name != "CATCHPLATE_LAUNCHER_IMPORT_MODE"
             ],
         ),
         ("extra name", sorted(expected_environment_names + ["UNEXPECTED_NAME"])),
@@ -2305,7 +2305,7 @@ def verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
             "final-v1 accepted a public Nitro integer above signed-64"
         )
     expected_public_domain = (
-        b"serverware.publicNitroLiveVerificationResultEnvelope/v1"
+        b"catchplate.publicNitroLiveVerificationResultEnvelope/v1"
         b"\x00signatureAlgorithm=Ed25519\x00"
     )
     if (
@@ -2406,7 +2406,7 @@ def verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
     )
     result_signing_private_key = Ed25519PrivateKey.from_private_bytes(
         hashlib.sha256(
-            b"serverware-fixture:release-completion-result"
+            b"catchplate-fixture:release-completion-result"
         ).digest()
     )
     signing_bytes = b64d(signing_request["signingBytesBase64url"])
@@ -2472,7 +2472,7 @@ def verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
     )
     obsolete_request_version = clone_document(signing_request)
     obsolete_request_version["apiVersion"] = (
-        "serverware.releaseCompletionResultSigningRequest/v0"
+        "catchplate.releaseCompletionResultSigningRequest/v0"
     )
     signing_request_structural_negatives.append(
         ("obsolete signing request version", obsolete_request_version)
@@ -2990,7 +2990,7 @@ def verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
 
     obsolete_version = clone_document(final_result)
     obsolete_version["apiVersion"] = (
-        "serverware.releaseCompletionVerification/v0"
+        "catchplate.releaseCompletionVerification/v0"
     )
     structural_negatives.append(("obsolete final version", obsolete_version))
 
@@ -3013,8 +3013,8 @@ def verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
     )
 
     readiness_as_final = {
-        "apiVersion": "serverware.completionProof/v6",
-        "kind": "ServerwarePreEnclaveReadiness",
+        "apiVersion": "catchplate.completionProof/v6",
+        "kind": "CatchplatePreEnclaveReadiness",
         "verificationOk": True,
         "finalCompletionVerified": False,
         "verification_mode": "readiness",
@@ -3026,7 +3026,7 @@ def verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
     )
     final_shaped_v6 = {
         **readiness_as_final,
-        "kind": "ServerwareCompletionProof",
+        "kind": "CatchplateCompletionProof",
         "finalCompletionVerified": True,
         "verification_mode": "final",
         "result_scope": "final-completion",
@@ -3229,7 +3229,7 @@ def launch_manifest_v3_verification_fixture(
     witness = statement["monotonicWitness"]
     witness_statement = witness["statement"]
     return {
-        "apiVersion": "serverware.productionReadinessLaunch/v3",
+        "apiVersion": "catchplate.productionReadinessLaunch/v3",
         "manifestSha256": receipt["manifest"]["sha256"],
         "authorizationScope": request["authorizationScope"],
         "freshnessAuthority": request["freshnessAuthority"],
@@ -3237,11 +3237,11 @@ def launch_manifest_v3_verification_fixture(
         "launchAttemptJournal": {
             "apiVersion": request["launchAttemptJournalDomain"],
             "path": (
-                "/var/lib/serverware/production-proof/"
+                "/var/lib/catchplate/production-proof/"
                 "launch-authorization-attempt.v1.json"
             ),
             "lockPath": (
-                "/var/lib/serverware/production-proof/"
+                "/var/lib/catchplate/production-proof/"
                 "launch-authorization-attempt.v1.lock"
             ),
             "domain": request["launchAttemptJournalDomain"],
@@ -3260,7 +3260,7 @@ def launch_manifest_v3_verification_fixture(
         ],
         "globalRoleRegistryPinsFile": {
             "path": (
-                "/etc/serverware/"
+                "/etc/catchplate/"
                 "production-launch-global-role-registry.json"
             ),
             "sha256": request["globalRoleRegistryPinsSha256"],
@@ -3412,7 +3412,7 @@ def verify_launcher_three_way_binding() -> None:
         else:
             raise AssertionError(f"launcher authorization accepted a {label} digest mismatch")
     wrong_path = json.loads(json.dumps(receipt))
-    wrong_path["launcher"]["path"] = "/opt/serverware/launchers/unbound/serverware-production-launcher"
+    wrong_path["launcher"]["path"] = "/opt/catchplate/launchers/unbound/catchplate-production-launcher"
     try:
         verify_release_completion.verify_bootstrap_launcher_authorization(
             wrong_path,
@@ -3730,8 +3730,8 @@ def verify_launcher_nonce_manifest_v3_binding() -> None:
         value = {
             "apiVersion": api_version,
             "kind": "ProductionReadinessLaunch",
-            "releaseRoot": "/opt/serverware/releases/fixture",
-            "stateDirectory": "/var/lib/serverware/production-proof",
+            "releaseRoot": "/opt/catchplate/releases/fixture",
+            "stateDirectory": "/var/lib/catchplate/production-proof",
             "sourceTreeDigest": SOURCE_TREE_DIGEST,
             "authorization": {
                 "authorizationScope": launch_authorization.AUTHORIZATION_SCOPE,
@@ -3770,11 +3770,11 @@ def verify_launcher_nonce_manifest_v3_binding() -> None:
                     launch_authorization.LAUNCH_ATTEMPT_JOURNAL_DOMAIN
                 ),
                 "path": (
-                    "/var/lib/serverware/production-proof/"
+                    "/var/lib/catchplate/production-proof/"
                     "launch-authorization-attempt.v1.json"
                 ),
                 "lockPath": (
-                    "/var/lib/serverware/production-proof/"
+                    "/var/lib/catchplate/production-proof/"
                     "launch-authorization-attempt.v1.lock"
                 ),
                 "domain": (
@@ -3788,10 +3788,10 @@ def verify_launcher_nonce_manifest_v3_binding() -> None:
             },
             "globalRoleRegistry": {
                 "apiVersion": (
-                    "serverware.productionLaunchGlobalRoleRegistryBinding/v1"
+                    "catchplate.productionLaunchGlobalRoleRegistryBinding/v1"
                 ),
                 "canonicalProfile": (
-                    "serverware.canonicalJson/"
+                    "catchplate.canonicalJson/"
                     "integer-string-bool-null-array-object-nfc-v1"
                 ),
                 "claimScope": (
@@ -3803,7 +3803,7 @@ def verify_launcher_nonce_manifest_v3_binding() -> None:
                 ],
                 "pinsFile": {
                     "path": (
-                        "/etc/serverware/"
+                        "/etc/catchplate/"
                         "production-launch-global-role-registry.json"
                     ),
                     "sha256": security[
@@ -3816,13 +3816,13 @@ def verify_launcher_nonce_manifest_v3_binding() -> None:
                     run_production_readiness.NONCE_ROLLBACK_ASSURANCE_BINDING_API_VERSION
                 ),
                 "canonicalProfile": (
-                    "serverware.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
+                    "catchplate.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
                 ),
                 "contract": clone_document(contract),
                 "contractSha256": contract_sha256,
                 "enforcement": "native-launcher-measured",
                 "pinsFile": {
-                    "path": "/etc/serverware/nonce-rollback-assurance-pins.json",
+                    "path": "/etc/catchplate/nonce-rollback-assurance-pins.json",
                     "sha256": pins_sha256,
                 },
                 "purpose": "readiness-only",
@@ -3844,21 +3844,21 @@ def verify_launcher_nonce_manifest_v3_binding() -> None:
             (
                 "valid v3",
                 manifest_document(
-                    "serverware.productionReadinessLaunch/v3"
+                    "catchplate.productionReadinessLaunch/v3"
                 ),
                 True,
             ),
             (
                 "v2 downgrade",
                 manifest_document(
-                    "serverware.productionReadinessLaunch/v2"
+                    "catchplate.productionReadinessLaunch/v2"
                 ),
                 False,
             ),
             (
                 "unknown field",
                 manifest_document(
-                    "serverware.productionReadinessLaunch/v3",
+                    "catchplate.productionReadinessLaunch/v3",
                     extra=True,
                 ),
                 False,
@@ -3912,27 +3912,27 @@ def verify_launcher_nonce_manifest_v3_binding() -> None:
         rejected_manifests: list[tuple[str, dict[str, Any]]] = []
 
         omitted_journal = manifest_document(
-            "serverware.productionReadinessLaunch/v3"
+            "catchplate.productionReadinessLaunch/v3"
         )
         del omitted_journal["launchAttemptJournal"]
         rejected_manifests.append(("omitted launch-attempt journal", omitted_journal))
 
         tampered_journal = manifest_document(
-            "serverware.productionReadinessLaunch/v3"
+            "catchplate.productionReadinessLaunch/v3"
         )
         tampered_journal["launchAttemptJournal"]["path"] = (
-            "/var/lib/serverware/production-proof/cross-wired.json"
+            "/var/lib/catchplate/production-proof/cross-wired.json"
         )
         rejected_manifests.append(("tampered launch-attempt journal", tampered_journal))
 
         omitted_registry = manifest_document(
-            "serverware.productionReadinessLaunch/v3"
+            "catchplate.productionReadinessLaunch/v3"
         )
         del omitted_registry["globalRoleRegistry"]
         rejected_manifests.append(("omitted global role registry", omitted_registry))
 
         cross_wired_registry = manifest_document(
-            "serverware.productionReadinessLaunch/v3"
+            "catchplate.productionReadinessLaunch/v3"
         )
         cross_wired_registry["globalRoleRegistry"]["registrySha256"] = digest("9")
         rejected_manifests.append(
@@ -3940,13 +3940,13 @@ def verify_launcher_nonce_manifest_v3_binding() -> None:
         )
 
         omitted_scope = manifest_document(
-            "serverware.productionReadinessLaunch/v3"
+            "catchplate.productionReadinessLaunch/v3"
         )
         del omitted_scope["authorization"]["authorizationScope"]
         rejected_manifests.append(("omitted readiness scope", omitted_scope))
 
         cross_wired_scope = manifest_document(
-            "serverware.productionReadinessLaunch/v3"
+            "catchplate.productionReadinessLaunch/v3"
         )
         cross_wired_scope["authorization"]["authorizationScope"] = (
             "cross-wired-scope"
@@ -3954,7 +3954,7 @@ def verify_launcher_nonce_manifest_v3_binding() -> None:
         rejected_manifests.append(("cross-wired readiness scope", cross_wired_scope))
 
         omitted_freshness = manifest_document(
-            "serverware.productionReadinessLaunch/v3"
+            "catchplate.productionReadinessLaunch/v3"
         )
         del omitted_freshness["authorization"]["freshnessAuthority"]
         rejected_manifests.append(
@@ -3962,7 +3962,7 @@ def verify_launcher_nonce_manifest_v3_binding() -> None:
         )
 
         cross_wired_freshness = manifest_document(
-            "serverware.productionReadinessLaunch/v3"
+            "catchplate.productionReadinessLaunch/v3"
         )
         cross_wired_freshness["authorization"]["freshnessAuthority"] = (
             "cross-wired-freshness"
@@ -3972,7 +3972,7 @@ def verify_launcher_nonce_manifest_v3_binding() -> None:
         )
 
         omitted_witness_assurance = manifest_document(
-            "serverware.productionReadinessLaunch/v3"
+            "catchplate.productionReadinessLaunch/v3"
         )
         del omitted_witness_assurance["authorization"]["monotonicWitness"][
             "storeAssurance"
@@ -3982,7 +3982,7 @@ def verify_launcher_nonce_manifest_v3_binding() -> None:
         )
 
         tampered_witness_assurance = manifest_document(
-            "serverware.productionReadinessLaunch/v3"
+            "catchplate.productionReadinessLaunch/v3"
         )
         tampered_witness_assurance["authorization"]["monotonicWitness"][
             "storeAssuranceSha256"
@@ -3992,7 +3992,7 @@ def verify_launcher_nonce_manifest_v3_binding() -> None:
         )
 
         cross_wired_witness = manifest_document(
-            "serverware.productionReadinessLaunch/v3"
+            "catchplate.productionReadinessLaunch/v3"
         )
         cross_wired_witness["authorization"]["monotonicWitness"][
             "identitySha256"
@@ -4002,7 +4002,7 @@ def verify_launcher_nonce_manifest_v3_binding() -> None:
         )
 
         obsolete_use_limit = manifest_document(
-            "serverware.productionReadinessLaunch/v3"
+            "catchplate.productionReadinessLaunch/v3"
         )
         obsolete_use_limit["authorization"]["useLimit"] = 1
         rejected_manifests.append(("obsolete useLimit", obsolete_use_limit))
@@ -4045,7 +4045,7 @@ def verify_launcher_nonce_manifest_v3_binding() -> None:
                 raise AssertionError(f"launcher manifest accepted {label}")
 
         substituted = manifest_document(
-            "serverware.productionReadinessLaunch/v3"
+            "catchplate.productionReadinessLaunch/v3"
         )
         substituted["nonceRollbackAssurance"]["contract"][
             "publicConfigPins"
@@ -4091,21 +4091,21 @@ def verify_launcher_nonce_manifest_v3_binding() -> None:
 
 
 PINNED_EXECUTABLE_NAMES = {
-    "SERVERWARE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE": "nsm-attest",
-    "SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE": "nsm-unseal",
-    "SERVERWARE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND": "lease-recipient-attest",
-    "SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND": "response-proof-attest",
-    "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND": "lease-recipient-verify",
-    "SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND": "control-plane-attestation-verify",
-    "SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND": "response-observation-v2-tee-verify",
-    "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND": "serverware-proof-client",
-    "SERVERWARE_PRODUCTION_PYTHON_EXECUTABLE": "production-python",
-    "SERVERWARE_DOCKER_EXECUTABLE": "production-docker",
+    "CATCHPLATE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE": "nsm-attest",
+    "CATCHPLATE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE": "nsm-unseal",
+    "CATCHPLATE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND": "lease-recipient-attest",
+    "CATCHPLATE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND": "response-proof-attest",
+    "CATCHPLATE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND": "lease-recipient-verify",
+    "CATCHPLATE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND": "control-plane-attestation-verify",
+    "CATCHPLATE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND": "response-observation-v2-tee-verify",
+    "CATCHPLATE_PROXY_PROOF_COLLECTOR_COMMAND": "catchplate-proof-client",
+    "CATCHPLATE_PRODUCTION_PYTHON_EXECUTABLE": "production-python",
+    "CATCHPLATE_DOCKER_EXECUTABLE": "production-docker",
 }
 
 
 def fixture_executable_bytes(setting: str) -> bytes:
-    if setting == "SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND":
+    if setting == "CATCHPLATE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND":
         # Byte-shape/digest fixture only; never execute this as a TEE verifier.
         code = b"\xb8\x3c\x00\x00\x00\x31\xff\x0f\x05"
         size = 64 + 56 + len(code)
@@ -4154,7 +4154,7 @@ OBSERVATION_CLIENT_REQUEST_DIGEST = sha256_prefixed_json(
 )
 PROXY_CLIENT_REQUEST_DIGEST = sha256_prefixed_json(
     {
-        "apiVersion": "serverware.clientProofRequest/v1",
+        "apiVersion": "catchplate.clientProofRequest/v1",
         "method": "GET",
         "scheme": "https",
         "authority": "demo-upstream:8443",
@@ -4166,7 +4166,7 @@ PROXY_CLIENT_REQUEST_DIGEST = sha256_prefixed_json(
 )
 PROXY_STREAM_CLIENT_REQUEST_DIGEST = sha256_prefixed_json(
     {
-        "apiVersion": "serverware.streamingClientProofRequest/v1",
+        "apiVersion": "catchplate.streamingClientProofRequest/v1",
         "method": "GET",
         "scheme": "https",
         "authority": "demo-upstream:8443",
@@ -4180,7 +4180,7 @@ PROXY_REQUEST_DIGEST = digest("1")
 PROXY_OPERATION_DIGEST = digest("2")
 PROXY_OPERATION_CONTEXT = {"operation": "demo.echo"}
 PROXY_OPERATION_CONTEXT_DIGEST = sha256_prefixed_json(PROXY_OPERATION_CONTEXT)
-PROXY_SERVER_INSTANCE_ID = "spiffe://prod.serverware.dev/decision-gate/instance-01"
+PROXY_SERVER_INSTANCE_ID = "spiffe://prod.catchplate.dev/decision-gate/instance-01"
 PROXY_TLS_PEER_LEAF_CERTIFICATE_DIGEST = digest("a")
 FIXTURE_HOST_A_MACHINE_ID = "0123456789abcdef0123456789abcdef"
 FIXTURE_HOST_A_PRODUCT_UUID = "11111111-2222-4333-8444-555555555555"
@@ -4355,7 +4355,7 @@ def release_authorization_durable_policy_fixture(
         }
     ]
     return {
-        "actorId": "spiffe://prod.serverware.dev/decision-gate/durable-fixture",
+        "actorId": "spiffe://prod.catchplate.dev/decision-gate/durable-fixture",
         "claimDigest": sha256_prefixed_json(claims),
         "claims": claims,
     }
@@ -4418,11 +4418,11 @@ def proxy_response_proof(
     selected_headers = {
         "content-length": str(len(body)),
         "content-type": "application/json",
-        "x-serverware-client-request-digest": client_request_digest,
-        "x-serverware-policy-hash": POLICY_DIGEST,
-        "x-serverware-request-digest": PROXY_REQUEST_DIGEST,
-        "x-serverware-operation-digest": PROXY_OPERATION_DIGEST,
-        "x-serverware-response-body-sha256": body_digest,
+        "x-catchplate-client-request-digest": client_request_digest,
+        "x-catchplate-policy-hash": POLICY_DIGEST,
+        "x-catchplate-request-digest": PROXY_REQUEST_DIGEST,
+        "x-catchplate-operation-digest": PROXY_OPERATION_DIGEST,
+        "x-catchplate-response-body-sha256": body_digest,
     }
     response = {
         "status": 200,
@@ -4481,10 +4481,10 @@ def proxy_response_proof(
         "dispatch_expires_at_epoch_ms": captured_at * 1000 + 300_000,
     }
     document = {
-        "apiVersion": "serverware.proxyResponseProof/v3",
-        "kind": "ServerwareProxyResponseProof",
+        "apiVersion": "catchplate.proxyResponseProof/v3",
+        "kind": "CatchplateProxyResponseProof",
         "external_capture": {
-            "apiVersion": "serverware.proxyResponseCapture/v2",
+            "apiVersion": "catchplate.proxyResponseCapture/v2",
             "environment": "production",
             "collection_mode": "external-client-capture",
             "captured_at_unix": captured_at,
@@ -4507,7 +4507,7 @@ def proxy_response_proof(
         },
         "collector_signature": {},
         "server_statement": {
-            "apiVersion": "serverware.proxyResponseStatement/v2",
+            "apiVersion": "catchplate.proxyResponseStatement/v2",
             "issued_at_unix": captured_at,
             "client_nonce": PROXY_CLIENT_NONCE,
             "client_request_digest": client_request_digest,
@@ -4538,8 +4538,8 @@ def proxy_response_proof(
                 "body_b64": b64e(b"test-only opaque vendor quote bytes " * 4),
             },
             "trusted_verifier": {
-                "apiVersion": "serverware.vendorTeeVerification/v1",
-                "kind": "ServerwareVendorTeeVerification",
+                "apiVersion": "catchplate.vendorTeeVerification/v1",
+                "kind": "CatchplateVendorTeeVerification",
                 "statement": {
                     "outcome": "verified",
                     "environment": "production",
@@ -4575,7 +4575,7 @@ def observation_attested_claims(document: dict[str, Any]) -> dict[str, Any]:
     upstream = statement["upstream_observation"]
     return {
         "server_statement_sha256": statement_digest,
-        "server_statement_api_version": "serverware.responseObservationStatement/v1",
+        "server_statement_api_version": "catchplate.responseObservationStatement/v1",
         "issued_at_unix": statement["issued_at_unix"],
         "observation_id": statement["observation_id"],
         "client_nonce_sha256": sha256_prefixed_bytes(b64d(statement["client_nonce"])),
@@ -4592,7 +4592,7 @@ def observation_attested_claims(document: dict[str, Any]) -> dict[str, Any]:
         "release_digest": statement["release_digest"],
         "server_instance_id": statement["server_instance"]["id"],
         "server_instance_identity_digest": statement["server_instance"]["identity_digest"],
-        "tls_exporter_label": "EXPORTER-Serverware-Response-Observation-v1",
+        "tls_exporter_label": "EXPORTER-Catchplate-Response-Observation-v1",
         "tls_channel_binding_sha256": sha256_prefixed_bytes(
             statement["tls_channel_binding"]["value"].encode("utf-8")
         ),
@@ -4669,7 +4669,7 @@ def response_observation_proof(
             {
                 "connection": "close",
                 "content-type": "application/json",
-                "trailer": "X-Serverware-Observation-Proof-B64, X-Serverware-Observation-Proof-SHA256",
+                "trailer": "X-Catchplate-Observation-Proof-B64, X-Catchplate-Observation-Proof-SHA256",
                 "transfer-encoding": "chunked",
             }
         ),
@@ -4725,12 +4725,12 @@ def response_observation_proof(
         "dispatch_expires_at_epoch_ms": captured_at * 1000 + 300_000,
     }
     statement = {
-        "apiVersion": "serverware.responseObservationStatement/v1",
+        "apiVersion": "catchplate.responseObservationStatement/v1",
         "issued_at_unix": captured_at,
         "observation_id": sha256_prefixed_json(
             {
                 "client_nonce": observation_nonce,
-                "contract": "serverware.responseObservationStatement/v1",
+                "contract": "catchplate.responseObservationStatement/v1",
             }
         ),
         "client_nonce": observation_nonce,
@@ -4771,7 +4771,7 @@ def response_observation_proof(
         },
         "tls_channel_binding": {
             "type": "tls-exporter",
-            "label": "EXPORTER-Serverware-Response-Observation-v1",
+            "label": "EXPORTER-Catchplate-Response-Observation-v1",
             "value": PROXY_TLS_CHANNEL_BINDING,
         },
         "observation_authority": {
@@ -4797,14 +4797,14 @@ def response_observation_proof(
         "body_b64": b64e(b"test-only opaque observation quote bytes " * 4),
     }
     document = {
-        "apiVersion": "serverware.responseObservationProof/v1",
-        "kind": "ServerwareResponseObservationProof",
+        "apiVersion": "catchplate.responseObservationProof/v1",
+        "kind": "CatchplateResponseObservationProof",
         "captured_at_unix": captured_at,
         "request": {field: value for field, value in request.items() if field != "body_observation"},
         "response": clone_document(emitted),
         "runtime_proof": {
-            "apiVersion": "serverware.responseObservationRuntimeProof/v1",
-            "kind": "ServerwareResponseObservationRuntimeProof",
+            "apiVersion": "catchplate.responseObservationRuntimeProof/v1",
+            "kind": "CatchplateResponseObservationRuntimeProof",
             "server_statement": statement,
             "server_statement_sha256": digest("0"),
             "server_signature": {},
@@ -4814,8 +4814,8 @@ def response_observation_proof(
                 "quote_sha256": sha256_prefixed_json(quote),
                 "quote": quote,
                 "trusted_verifier": {
-                    "apiVersion": "serverware.vendorTeeVerification/v1",
-                    "kind": "ServerwareVendorTeeVerification",
+                    "apiVersion": "catchplate.vendorTeeVerification/v1",
+                    "kind": "CatchplateVendorTeeVerification",
                     "statement": {
                         "outcome": "verified",
                         "environment": "production",
@@ -4953,8 +4953,8 @@ def resign_streaming_response_proof(
         )
     sign_proxy_vendor_verifier_statement(document, verifier_key_info)
     runtime_proof = {
-        "apiVersion": "serverware.streamingResponseRuntimeProof/v1",
-        "kind": "ServerwareStreamingResponseRuntimeProof",
+        "apiVersion": "catchplate.streamingResponseRuntimeProof/v1",
+        "kind": "CatchplateStreamingResponseRuntimeProof",
         "streaming_response_statement": statement,
         "streaming_response_statement_sha256": statement_digest,
         "server_signature": document["server_signature"],
@@ -4998,7 +4998,7 @@ def streaming_response_proof(
     wire_headers = {
         "connection": "close",
         "content-type": content_type,
-        "trailer": "X-Serverware-Stream-Proof-B64, X-Serverware-Stream-Proof-SHA256",
+        "trailer": "X-Catchplate-Stream-Proof-B64, X-Catchplate-Stream-Proof-SHA256",
         "transfer-encoding": "chunked",
     }
     released_response = {
@@ -5011,8 +5011,8 @@ def streaming_response_proof(
         "framing": "http1.1-chunked-trailers",
         "completion": "normal-eof",
         "trailer_names": [
-            "X-Serverware-Stream-Proof-B64",
-            "X-Serverware-Stream-Proof-SHA256",
+            "X-Catchplate-Stream-Proof-B64",
+            "X-Catchplate-Stream-Proof-SHA256",
         ],
     }
     binding_commitment = {
@@ -5038,7 +5038,7 @@ def streaming_response_proof(
         "value": PROXY_TLS_CHANNEL_BINDING,
     }
     statement = {
-        "apiVersion": "serverware.streamingResponseStatement/v1",
+        "apiVersion": "catchplate.streamingResponseStatement/v1",
         "issued_at_unix": captured_at,
         "client_nonce": PROXY_CLIENT_NONCE,
         "client_request_digest": PROXY_STREAM_CLIENT_REQUEST_DIGEST,
@@ -5074,10 +5074,10 @@ def streaming_response_proof(
     verifier_statement.pop("server_statement_sha256", None)
     verifier_statement.pop("attested_claims", None)
     document = {
-        "apiVersion": "serverware.streamingProxyResponseProof/v1",
-        "kind": "ServerwareStreamingProxyResponseProof",
+        "apiVersion": "catchplate.streamingProxyResponseProof/v1",
+        "kind": "CatchplateStreamingProxyResponseProof",
         "external_capture": {
-            "apiVersion": "serverware.streamingProxyResponseCapture/v1",
+            "apiVersion": "catchplate.streamingProxyResponseCapture/v1",
             "environment": "production",
             "collection_mode": "strict-incremental-stream-capture",
             "classification": "runtime-verified-complete-stream",
@@ -5111,8 +5111,8 @@ def streaming_response_proof(
             "quote_sha256": buffered["vendor_tee"]["quote_sha256"],
             "quote": clone_document(buffered["vendor_tee"]["quote"]),
             "trusted_verifier": {
-                "apiVersion": "serverware.vendorTeeVerification/v1",
-                "kind": "ServerwareVendorTeeVerification",
+                "apiVersion": "catchplate.vendorTeeVerification/v1",
+                "kind": "CatchplateVendorTeeVerification",
                 "statement": verifier_statement,
                 "signature": "",
             },
@@ -5181,7 +5181,7 @@ def signed_release_authorization_http_mock_response(
         (
             value
             for name, value in request_headers.items()
-            if name.lower() == "x-serverware-response-nonce"
+            if name.lower() == "x-catchplate-response-nonce"
         ),
         None,
     )
@@ -5218,13 +5218,13 @@ def signed_release_authorization_http_mock_response(
     }
     statement_bytes = canonical_json(statement).encode("utf-8")
     proof_headers = {
-        "X-Serverware-Response-Key-Id": signer["key_id"],
-        "X-Serverware-Response-Body-SHA256": body_digest,
-        "X-Serverware-Response-Statement-B64": b64e(statement_bytes),
-        "X-Serverware-Response-Statement-SHA256": sha256_prefixed_bytes(
+        "X-Catchplate-Response-Key-Id": signer["key_id"],
+        "X-Catchplate-Response-Body-SHA256": body_digest,
+        "X-Catchplate-Response-Statement-B64": b64e(statement_bytes),
+        "X-Catchplate-Response-Statement-SHA256": sha256_prefixed_bytes(
             statement_bytes
         ),
-        "X-Serverware-Response-Signature": "ed25519:"
+        "X-Catchplate-Response-Signature": "ed25519:"
         + b64e(signer["key"].sign(statement_bytes)),
     }
     return {
@@ -5392,7 +5392,7 @@ def control_plane_authorization_receipt(
     ]
     nonce = response_nonce or b64e(os.urandom(32))
     mock_response = signed_release_authorization_http_mock_response(
-        {"X-Serverware-Response-Nonce": nonce},
+        {"X-Catchplate-Response-Nonce": nonce},
         request_method="POST",
         request_path=verify_release_completion.CONTROL_PLANE_DISPATCH_PATH,
         request_query="",
@@ -5431,19 +5431,19 @@ def control_plane_authorization_receipt(
             "status": mock_response["status"],
             "body_b64": b64e(mock_response["body_bytes"]),
             "body_sha256": proof_headers[
-                "X-Serverware-Response-Body-SHA256"
+                "X-Catchplate-Response-Body-SHA256"
             ],
             "response_headers": mock_response["response_headers"],
             "response_signing_key_id": proof_headers[
-                "X-Serverware-Response-Key-Id"
+                "X-Catchplate-Response-Key-Id"
             ],
             "statement_b64": proof_headers[
-                "X-Serverware-Response-Statement-B64"
+                "X-Catchplate-Response-Statement-B64"
             ],
             "statement_sha256": proof_headers[
-                "X-Serverware-Response-Statement-SHA256"
+                "X-Catchplate-Response-Statement-SHA256"
             ],
-            "signature": proof_headers["X-Serverware-Response-Signature"],
+            "signature": proof_headers["X-Catchplate-Response-Signature"],
         },
     }
     return document
@@ -5845,8 +5845,8 @@ def test_exact_benchmark_nanosecond_contract() -> None:
 
 def production_image_refs(control_digest: str = digest("6"), gate_digest: str = digest("7")) -> list[str]:
     return [
-        "registry.prod.serverware.dev/serverware/control@" + control_digest,
-        "registry.prod.serverware.dev/serverware/decision-gate@" + gate_digest,
+        "registry.prod.catchplate.dev/catchplate/control@" + control_digest,
+        "registry.prod.catchplate.dev/catchplate/decision-gate@" + gate_digest,
     ]
 
 
@@ -5915,11 +5915,11 @@ def write_production_env_files(
     production_compose_plugin.write_bytes(b"#!/bin/sh\n# pinned Compose fixture\nexit 0\n")
     production_compose_plugin.chmod(0o755)
     (tmp / "production-images.env").write_text(
-        f"SERVERWARE_PRODUCTION_IMAGES={selected_images_value}\n",
+        f"CATCHPLATE_PRODUCTION_IMAGES={selected_images_value}\n",
         encoding="utf-8",
     )
     executable_commands = "".join(
-        f"{setting}=/opt/serverware/bin/{name}\n"
+        f"{setting}=/opt/catchplate/bin/{name}\n"
         for setting, name in PINNED_EXECUTABLE_NAMES.items()
         if setting
         not in {
@@ -5953,28 +5953,28 @@ def write_production_env_files(
             f"{proxy_max_observation_body_bytes}\n"
         )
     (tmp / "production.env").write_text(
-        f"SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST={digest('9')}\n"
-        f"SERVERWARE_DATA_PLANE_INSTANCE_ID={PROXY_SERVER_INSTANCE_ID}\n"
+        f"CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST={digest('9')}\n"
+        f"CATCHPLATE_DATA_PLANE_INSTANCE_ID={PROXY_SERVER_INSTANCE_ID}\n"
         f"{verify_release_completion.PROXY_PRINCIPAL_ENV_KEY}={PROXY_PRINCIPAL_ID}\n"
-        f"SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID={proxy_collector_key_info()['key_id']}\n"
-        f"SERVERWARE_PROXY_PROOF_VERIFIER_KEY_ID={proxy_vendor_verifier_key_info()['key_id']}\n"
-        f"SERVERWARE_PROXY_EXPECTED_CLIENT_REQUEST_DIGEST={proxy_client_request_digest}\n"
-        f"SERVERWARE_PROXY_EXPECTED_REQUEST_DIGEST={PROXY_REQUEST_DIGEST}\n"
-        f"SERVERWARE_PROXY_EXPECTED_OPERATION_DIGEST={PROXY_OPERATION_DIGEST}\n"
-        f"SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS=300\n"
+        f"CATCHPLATE_PROXY_PROOF_COLLECTOR_KEY_ID={proxy_collector_key_info()['key_id']}\n"
+        f"CATCHPLATE_PROXY_PROOF_VERIFIER_KEY_ID={proxy_vendor_verifier_key_info()['key_id']}\n"
+        f"CATCHPLATE_PROXY_EXPECTED_CLIENT_REQUEST_DIGEST={proxy_client_request_digest}\n"
+        f"CATCHPLATE_PROXY_EXPECTED_REQUEST_DIGEST={PROXY_REQUEST_DIGEST}\n"
+        f"CATCHPLATE_PROXY_EXPECTED_OPERATION_DIGEST={PROXY_OPERATION_DIGEST}\n"
+        f"CATCHPLATE_PROXY_PROOF_MAX_AGE_SECONDS=300\n"
         f"{verify_release_completion.PROXY_PROOF_CONTRACT_ENV_KEY}={proxy_proof_contract}\n"
         f"{stream_settings}"
         f"{observation_settings}"
-        f"SERVERWARE_COMPLETION_P99_LIMIT_MS=20.0\n"
+        f"CATCHPLATE_COMPLETION_P99_LIMIT_MS=20.0\n"
         f"{run_production_readiness.FINAL_LAUNCHER_CONTRACT_ENV}={run_production_readiness.FINAL_LAUNCHER_CONTRACT}\n"
-        f"SERVERWARE_ATTESTATION_HELPER_DIR={helper_dir}\n"
-        f"SERVERWARE_PRODUCTION_PYTHON_EXECUTABLE={production_python}\n"
-        f"SERVERWARE_DOCKER_EXECUTABLE={production_docker}\n"
+        f"CATCHPLATE_ATTESTATION_HELPER_DIR={helper_dir}\n"
+        f"CATCHPLATE_PRODUCTION_PYTHON_EXECUTABLE={production_python}\n"
+        f"CATCHPLATE_DOCKER_EXECUTABLE={production_docker}\n"
         f"{run_production_readiness.DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV}={production_compose_plugin}\n"
         f"{run_production_readiness.DOCKER_COMPOSE_PLUGIN_SHA256_ENV}={sha256_file(production_compose_plugin)}\n"
         f"{run_production_readiness.DOCKER_UNIX_SOCKET_ENV}=/run/docker.sock\n"
         f"{run_production_readiness.DOCKER_DAEMON_ID_ENV}=fixture-daemon-id\n"
-        f"{run_production_readiness.DOCKER_COMPOSE_PROJECT_NAME_ENV}=serverware-production\n"
+        f"{run_production_readiness.DOCKER_COMPOSE_PROJECT_NAME_ENV}=catchplate-production\n"
         f"{run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SCRIPT_SHA256_ENV}={sha256_file(ROOT / 'scripts' / 'production_host_preflight.py')}\n"
         f"{run_production_readiness.VERIFY_PRODUCTION_READINESS_SCRIPT_SHA256_ENV}={sha256_file(ROOT / 'scripts' / 'verify_production_readiness.py')}\n"
         f"{run_production_readiness.VERIFY_RELEASE_COMPLETION_SCRIPT_SHA256_ENV}={sha256_file(ROOT / 'scripts' / 'verify_release_completion.py')}\n"
@@ -5997,7 +5997,7 @@ def write_production_env_files(
         f"{run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ID_ENV}={activation_key_id}\n"
         f"{run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ENV}={tmp / 'reproducible-build-verification.pub.pem'}\n"
         f"{run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ID_ENV}={reproducible_key_id}\n"
-        f"SERVERWARE_PRODUCTION_IMAGES={selected_readiness_value}\n",
+        f"CATCHPLATE_PRODUCTION_IMAGES={selected_readiness_value}\n",
         encoding="utf-8",
     )
     (tmp / "production.env").chmod(0o600)
@@ -6329,11 +6329,11 @@ def test_final_production_env_binding() -> None:
             or binding.get("final_challenge_authority_public_key_id")
             != final_challenge_authority_key_info()["key_id"]
             or binding.get("hardware_assurance_expected_challenge_selector") != "nonce"
-            or binding.get("SERVERWARE_PROXY_EXPECTED_CLIENT_REQUEST_DIGEST")
+            or binding.get("CATCHPLATE_PROXY_EXPECTED_CLIENT_REQUEST_DIGEST")
             != PROXY_CLIENT_REQUEST_DIGEST
-            or binding.get("SERVERWARE_PROXY_EXPECTED_REQUEST_DIGEST")
+            or binding.get("CATCHPLATE_PROXY_EXPECTED_REQUEST_DIGEST")
             != PROXY_REQUEST_DIGEST
-            or binding.get("SERVERWARE_PROXY_EXPECTED_OPERATION_DIGEST")
+            or binding.get("CATCHPLATE_PROXY_EXPECTED_OPERATION_DIGEST")
             != PROXY_OPERATION_DIGEST
             or (binding.get("launcher_trust") or {}).get("path")
             != str(tmp / "production.env")
@@ -6342,7 +6342,7 @@ def test_final_production_env_binding() -> None:
             or binding.get("docker_executable")
             != configured[production_host_preflight_module.PRODUCTION_DOCKER_EXECUTABLE_SETTING]
             or binding.get("docker_compose_project_name")
-            != "serverware-production"
+            != "catchplate-production"
         ):
             raise AssertionError(f"valid final env binding omitted trust-root identities: {binding}")
 
@@ -6444,7 +6444,7 @@ def test_final_production_env_binding() -> None:
         else:
             raise AssertionError("direct final verifier accepted an alternate launcher env path")
 
-        for helper_name in ("serverware-proof-client", "response-observation-v2-tee-verify"):
+        for helper_name in ("catchplate-proof-client", "response-observation-v2-tee-verify"):
             changed_helper = tmp.resolve() / "attestation-helpers" / helper_name
             original_helper = changed_helper.read_bytes()
             changed_bytes = original_helper + b"\n# replaced fixture bytes\n"
@@ -6791,7 +6791,7 @@ def test_final_production_env_binding() -> None:
             omitted={verify_release_completion.FINAL_MODE_ENV_KEY},
         )
         readiness_summary, preflight_summary, config_summary = final_env_binding_summaries(tmp)
-        expect_failure("must set SERVERWARE_COMPLETION_VERIFICATION_MODE=final")
+        expect_failure("must set CATCHPLATE_COMPLETION_VERIFICATION_MODE=final")
 
         write_final_production_env_file(
             tmp,
@@ -6861,7 +6861,7 @@ def test_preflight_authenticity_and_freshness() -> None:
 
         def signed(generated_at: int) -> dict[str, Any]:
             document: dict[str, Any] = {
-                "apiVersion": "serverware.productionHostPreflight/v1",
+                "apiVersion": "catchplate.productionHostPreflight/v1",
                 "kind": "ProductionHostPreflight",
                 "ok": True,
                 "verification_mode": "readiness",
@@ -7001,7 +7001,7 @@ def transparency_leaf_hash(item: dict[str, Any]) -> str:
 def signed_tree_head(*, tree_size: int, tree_head_hash: str) -> dict[str, Any]:
     key_info = transparency_key_info()
     payload = {
-        "version": "serverware.transparencyLog/v1",
+        "version": "catchplate.transparencyLog/v1",
         "tree_size": tree_size,
         "tree_head_hash": tree_head_hash,
         "created_at": "2026-05-26T00:00:00+00:00",
@@ -7313,7 +7313,7 @@ def nitro_evidence(provenance_digest: str) -> dict[str, Any]:
             }
         )
     return {
-        "apiVersion": "serverware.nitroKmsEvidence/v1",
+        "apiVersion": "catchplate.nitroKmsEvidence/v1",
         "kind": "NitroKmsEvidence",
         "ok": True,
         "provider": "aws-nitro-enclaves",
@@ -7436,12 +7436,12 @@ def hardware_assurance_document(nitro: dict[str, Any], tmp: Path) -> dict[str, A
     }
     issued_at = int(time.time())
     document = {
-        "apiVersion": "serverware.hardwareAssurance/v1",
-        "kind": "ServerwareHardwareAssurance",
+        "apiVersion": "catchplate.hardwareAssurance/v1",
+        "kind": "CatchplateHardwareAssurance",
         "statement": {
             "verifier": {
                 "name": "fixture-independent-verifier",
-                "organization": "Serverware test assurance lab",
+                "organization": "Catchplate test assurance lab",
                 "independent": True,
             },
             "issued_at_unix": issued_at,
@@ -7533,15 +7533,15 @@ def production_readiness(nitro: dict[str, Any], tmp: Path) -> dict[str, Any]:
                 "stores": {
                     "metadata": {"ok": True, "tables": ["credentials"]},
                     "grant": {"ok": True, "tables": ["approval_grants"]},
-                    "audit": {"ok": True, "tables": ["serverware_audit_events"]},
+                    "audit": {"ok": True, "tables": ["catchplate_audit_events"]},
                 },
             },
             "nitro": nitro,
             "production_images_no_shell": {
                 "ok": True,
                 "images": [
-                    "registry.prod.serverware.dev/serverware/control@sha256:" + "6" * 64,
-                    "registry.prod.serverware.dev/serverware/decision-gate@sha256:" + "7" * 64,
+                    "registry.prod.catchplate.dev/catchplate/control@sha256:" + "6" * 64,
+                    "registry.prod.catchplate.dev/catchplate/decision-gate@sha256:" + "7" * 64,
                 ],
             },
             "apparmor": {"ok": True},
@@ -7559,19 +7559,19 @@ def release_provenance(
     }
     provenance = {
         "version": 2,
-        "source": "serverware-digest-pinned-production-release",
+        "source": "catchplate-digest-pinned-production-release",
         "source_tree": {"digest": SOURCE_TREE_DIGEST},
         "compose_config_sha256": digest("4"),
         "compose": {"file": "docker-compose.production.yml", "sha256": digest("4")},
         "sbom": {"cyclonedx": {"sha256": digest("5"), "components": 204}},
         "images": {
-            "serverware-control": {
+            "catchplate-control": {
                 "image_id": digest("6"),
                 "config_id": digest("a"),
                 "local_build_image_id": digest("a"),
                 "remote_image_id": digest("a"),
             },
-            "serverware-decision-gate": {
+            "catchplate-decision-gate": {
                 "image_id": digest("7"),
                 "config_id": digest("b"),
                 "local_build_image_id": digest("b"),
@@ -7583,7 +7583,7 @@ def release_provenance(
         },
         "launch_authority": launch_authority,
         "reproducible_build": {
-            "apiVersion": "serverware.reproducibleBuildVerification/v3",
+            "apiVersion": "catchplate.reproducibleBuildVerification/v3",
             "kind": "ReproducibleBuildVerification",
             "verification_sha256": reproducible_build_verification_sha256,
             "builders": [
@@ -7645,8 +7645,8 @@ def image_signatures(
     source_tree_digest: str = SOURCE_TREE_DIGEST,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     selected_release_key_id = release_signing_key_id or release_key_info()["key_id"]
-    control_ref = "registry.prod.serverware.dev/serverware/control@sha256:" + "6" * 64
-    gate_ref = "registry.prod.serverware.dev/serverware/decision-gate@sha256:" + "7" * 64
+    control_ref = "registry.prod.catchplate.dev/catchplate/control@sha256:" + "6" * 64
+    gate_ref = "registry.prod.catchplate.dev/catchplate/decision-gate@sha256:" + "7" * 64
     base_predicate = {
         "provenance_digest": provenance_digest,
         "release_signing_key_id": selected_release_key_id,
@@ -7656,7 +7656,7 @@ def image_signatures(
         "sbom_cyclonedx_components": 204,
     }
     payload = {
-        "apiVersion": "serverware.imageSignatures/v1",
+        "apiVersion": "catchplate.imageSignatures/v1",
         "kind": "ImageSignatureBundle",
         "metadata": {
             "provenanceDigest": provenance_digest,
@@ -7669,10 +7669,10 @@ def image_signatures(
         },
         "images": [
             {
-                "service": "serverware",
+                "service": "catchplate",
                 "image_id": digest("6"),
                 "statement": {
-                    "subject": [{"name": "serverware", "digest": {"sha256": "6" * 64}}],
+                    "subject": [{"name": "catchplate", "digest": {"sha256": "6" * 64}}],
                     "predicate": {**base_predicate, "image_id": digest("6"), "repo_digests": [control_ref]},
                 },
                 "sigstore": {
@@ -7817,7 +7817,7 @@ def add_reproducible_builder_fixture(tmp: Path) -> None:
 
 def production_images_build() -> dict[str, Any]:
     return {
-        "apiVersion": "serverware.productionImagesBuild/v2",
+        "apiVersion": "catchplate.productionImagesBuild/v2",
         "kind": "ProductionImagesBuild",
         "ok": True,
         "metadata": {
@@ -7827,9 +7827,9 @@ def production_images_build() -> dict[str, Any]:
         },
         "no_shell": {"ok": True},
         "images": [
-            {"service": "serverware-control", "dockerfile": "Dockerfile.production", "image_id": digest("a")},
+            {"service": "catchplate-control", "dockerfile": "Dockerfile.production", "image_id": digest("a")},
             {
-                "service": "serverware-decision-gate",
+                "service": "catchplate-decision-gate",
                 "dockerfile": "data-plane/decision-gate-rs/Dockerfile.production",
                 "image_id": digest("b"),
                 "binary_digest": digest("9"),
@@ -7842,27 +7842,27 @@ def production_images_build() -> dict[str, Any]:
 
 
 def production_images_published() -> dict[str, Any]:
-    control_ref = "registry.prod.serverware.dev/serverware/control@sha256:" + "6" * 64
-    gate_ref = "registry.prod.serverware.dev/serverware/decision-gate@sha256:" + "7" * 64
+    control_ref = "registry.prod.catchplate.dev/catchplate/control@sha256:" + "6" * 64
+    gate_ref = "registry.prod.catchplate.dev/catchplate/decision-gate@sha256:" + "7" * 64
     return {
-        "apiVersion": "serverware.productionImagesPublished/v2",
+        "apiVersion": "catchplate.productionImagesPublished/v2",
         "kind": "ProductionImagesPublished",
         "ok": True,
         "source_build_file": ".tmp/production-images-build.json",
         "images": [
             {
-                "service": "serverware-control",
+                "service": "catchplate-control",
                 "local_image_id": digest("a"),
                 "config_id": digest("a"),
-                "tag": "registry.prod.serverware.dev/serverware/control:production-candidate",
+                "tag": "registry.prod.catchplate.dev/catchplate/control:production-candidate",
                 "repo_digest": control_ref,
                 "remote_image_id": digest("a"),
             },
             {
-                "service": "serverware-decision-gate",
+                "service": "catchplate-decision-gate",
                 "local_image_id": digest("b"),
                 "config_id": digest("b"),
-                "tag": "registry.prod.serverware.dev/serverware/decision-gate:production-candidate",
+                "tag": "registry.prod.catchplate.dev/catchplate/decision-gate:production-candidate",
                 "repo_digest": gate_ref,
                 "remote_image_id": digest("b"),
                 "binary_digest": digest("9"),
@@ -7872,7 +7872,7 @@ def production_images_published() -> dict[str, Any]:
             },
         ],
         "remote_no_shell": {"ok": True},
-        "env": {"SERVERWARE_PRODUCTION_IMAGES": ",".join([control_ref, gate_ref])},
+        "env": {"CATCHPLATE_PRODUCTION_IMAGES": ",".join([control_ref, gate_ref])},
     }
 
 
@@ -7888,8 +7888,8 @@ def file_summary(path: Path, label: str) -> dict[str, Any]:
 
 def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_DIGEST) -> dict[str, Any]:
     configured = run_production_readiness.load_env_file(tmp / "production.env")
-    control_ref = "registry.prod.serverware.dev/serverware/control@sha256:" + "6" * 64
-    gate_ref = "registry.prod.serverware.dev/serverware/decision-gate@sha256:" + "7" * 64
+    control_ref = "registry.prod.catchplate.dev/catchplate/control@sha256:" + "6" * 64
+    gate_ref = "registry.prod.catchplate.dev/catchplate/decision-gate@sha256:" + "7" * 64
     policy_identity = verify_production_policy_identity.verify_persisted_report(
         bundle_path=tmp / "policy-bundle.json",
         trusted_public_key_path=tmp / "policy-signing.pub.pem",
@@ -7912,7 +7912,7 @@ def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_D
         kind=production_release_input_preflight.REPRODUCIBILITY_KIND,
     )
     return {
-        "apiVersion": "serverware.productionHostPreflight/v1",
+        "apiVersion": "catchplate.productionHostPreflight/v1",
         "kind": "ProductionHostPreflight",
         "ok": True,
         "verification_mode": "readiness",
@@ -7942,7 +7942,7 @@ def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_D
             "runtime_trust_materials": {
                 "ok": True,
                 "skipped": False,
-                "tls_files": ["ca.pem", "serverware.crt", "serverware.key"],
+                "tls_files": ["ca.pem", "catchplate.crt", "catchplate.key"],
                 "anchor_tls_files": ["audit-anchor.crt", "audit-anchor.key"],
                 "helper_files": [
                     "control-plane-attestation-verify",
@@ -7958,7 +7958,7 @@ def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_D
                     "proxy-ca.pem",
                     "proxy-proof-verifier.pub.pem",
                 ],
-                "proof_collector_files": ["serverware-proof-client"],
+                "proof_collector_files": ["catchplate-proof-client"],
                 "executable_digests": [
                     {
                         "setting": setting,
@@ -7968,7 +7968,7 @@ def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_D
                                 production_host_preflight_module.PRODUCTION_PYTHON_EXECUTABLE_SETTING,
                                 production_host_preflight_module.PRODUCTION_DOCKER_EXECUTABLE_SETTING,
                             }
-                            else f"/opt/serverware/bin/{PINNED_EXECUTABLE_NAMES[setting]}"
+                            else f"/opt/catchplate/bin/{PINNED_EXECUTABLE_NAMES[setting]}"
                         ),
                         "host_path": (
                             str(tmp.resolve() / PINNED_EXECUTABLE_NAMES[setting])
@@ -8032,10 +8032,10 @@ def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_D
                 "file": file_summary(tmp / "production-images.env", "production-images-env"),
                 "status": "valid",
                 "images": [
-                    {"ref": control_ref, "repository": "registry.prod.serverware.dev/serverware/control", "name": "control", "digest": digest("6")},
+                    {"ref": control_ref, "repository": "registry.prod.catchplate.dev/catchplate/control", "name": "control", "digest": digest("6")},
                     {
                         "ref": gate_ref,
-                        "repository": "registry.prod.serverware.dev/serverware/decision-gate",
+                        "repository": "registry.prod.catchplate.dev/catchplate/decision-gate",
                         "name": "decision-gate",
                         "digest": digest("7"),
                     },
@@ -8045,7 +8045,7 @@ def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_D
             },
             "production_images_env_merge": {
                 "ok": True,
-                "key": "SERVERWARE_PRODUCTION_IMAGES",
+                "key": "CATCHPLATE_PRODUCTION_IMAGES",
                 "production_env_has_key": True,
                 "matches_images_env": True,
                 "secret_values_redacted": True,
@@ -8092,8 +8092,8 @@ def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_D
                     "file": file_summary(tmp / "production-images-build.json", "production-images-build"),
                     "source_tree_digest": source_tree_digest,
                     "images": [
-                        {"service": "serverware-control", "image_id": digest("a")},
-                        {"service": "serverware-decision-gate", "image_id": digest("b")},
+                        {"service": "catchplate-control", "image_id": digest("a")},
+                        {"service": "catchplate-decision-gate", "image_id": digest("b")},
                     ],
                     "no_shell": "pass",
                 },
@@ -8178,7 +8178,7 @@ def run_verifier(
 ) -> subprocess.CompletedProcess[bytes]:
     env = clean_subprocess_env()
     if allow_host_bypass:
-        env["SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS"] = "1"
+        env["CATCHPLATE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS"] = "1"
     proxy_proof_args = []
     if include_proxy_proof:
         proxy_proof_args = [
@@ -8765,7 +8765,7 @@ def test_response_observation_proof_requirements(
     malformed_statement["observation_id"] = sha256_prefixed_json(
         {
             "client_nonce": malformed_statement["client_nonce"],
-            "contract": "serverware.responseObservationStatement/v1",
+            "contract": "catchplate.responseObservationStatement/v1",
         }
     )
     resign_observation_proof(malformed_nonce)
@@ -9207,7 +9207,7 @@ def test_streaming_proxy_response_proof_requirements(
 
     wrong_identity = clone_document(valid_document)
     wrong_identity["streaming_response_statement"]["server_instance"]["id"] = (
-        "spiffe://prod.serverware.dev/decision-gate/substituted"
+        "spiffe://prod.catchplate.dev/decision-gate/substituted"
     )
     wrong_identity["streaming_response_statement"]["server_instance"][
         "identity_digest"
@@ -9224,8 +9224,8 @@ def test_streaming_proxy_response_proof_requirements(
     bad_signature["server_signature"]["signature"] = "ed25519:" + b64e(b"s" * 64)
     bad_signature["external_capture"]["runtime_proof_sha256"] = sha256_prefixed_json(
         {
-            "apiVersion": "serverware.streamingResponseRuntimeProof/v1",
-            "kind": "ServerwareStreamingResponseRuntimeProof",
+            "apiVersion": "catchplate.streamingResponseRuntimeProof/v1",
+            "kind": "CatchplateStreamingResponseRuntimeProof",
             "streaming_response_statement": bad_signature[
                 "streaming_response_statement"
             ],
@@ -9294,8 +9294,8 @@ def test_streaming_proxy_response_proof_requirements(
     sign_proxy_vendor_verifier_statement(forged_claim)
     forged_claim["external_capture"]["runtime_proof_sha256"] = sha256_prefixed_json(
         {
-            "apiVersion": "serverware.streamingResponseRuntimeProof/v1",
-            "kind": "ServerwareStreamingResponseRuntimeProof",
+            "apiVersion": "catchplate.streamingResponseRuntimeProof/v1",
+            "kind": "CatchplateStreamingResponseRuntimeProof",
             "streaming_response_statement": forged_claim[
                 "streaming_response_statement"
             ],
@@ -9574,7 +9574,7 @@ def test_durable_receipt_full_binding_contract(
         raise AssertionError("full-binding API did not authenticate the valid signed v2 receipt")
 
     for field, substituted in (
-        ("actorId", "spiffe://prod.serverware.dev/decision-gate/substituted"),
+        ("actorId", "spiffe://prod.catchplate.dev/decision-gate/substituted"),
         ("claimDigest", digest("2")),
     ):
         candidate = clone_document(receipt)
@@ -10129,7 +10129,7 @@ def test_proxy_response_proof_requirements(
     for field, substituted, expected_error, description in (
         (
             "actorId",
-            "spiffe://prod.serverware.dev/decision-gate/substituted",
+            "spiffe://prod.catchplate.dev/decision-gate/substituted",
             "control-plane authorization receipt durable policy lifecycle mismatch",
             "durable request actor substitution",
         ),
@@ -10206,7 +10206,7 @@ def test_proxy_response_proof_requirements(
     for field, substituted, description in (
         (
             "actorId",
-            "spiffe://prod.serverware.dev/decision-gate/substituted",
+            "spiffe://prod.catchplate.dev/decision-gate/substituted",
             "durable actor substitution",
         ),
         ("claimDigest", digest("0"), "durable claim substitution"),
@@ -10306,7 +10306,7 @@ def test_proxy_response_proof_requirements(
 
     substituted_request_body_receipt = clone_document(valid_receipt)
     substituted_request_body = {
-        "apiVersion": "serverware.releaseAuthorizationDispatch/v1",
+        "apiVersion": "catchplate.releaseAuthorizationDispatch/v1",
         "attemptId": digest("0"),
         "bindingDigest": substituted_request_body_receipt["release_authority"][
             "consumption_identity_digest"
@@ -10459,7 +10459,7 @@ def test_proxy_response_proof_requirements(
     valid_document = proxy_response_proof(provenance_digest)
 
     wrong_version = clone_document(valid_document)
-    wrong_version["apiVersion"] = "serverware.proxyResponseProof/v2"
+    wrong_version["apiVersion"] = "catchplate.proxyResponseProof/v2"
     expect_proxy_proof_failure(
         tmp,
         wrong_version,
@@ -10468,7 +10468,7 @@ def test_proxy_response_proof_requirements(
     )
 
     wrong_capture_version = clone_document(valid_document)
-    wrong_capture_version["external_capture"]["apiVersion"] = "serverware.proxyResponseCapture/v1"
+    wrong_capture_version["external_capture"]["apiVersion"] = "catchplate.proxyResponseCapture/v1"
     expect_proxy_proof_failure(
         tmp,
         wrong_capture_version,
@@ -10514,7 +10514,7 @@ def test_proxy_response_proof_requirements(
     )
 
     wrong_statement_version = clone_document(valid_document)
-    wrong_statement_version["server_statement"]["apiVersion"] = "serverware.proxyResponseStatement/v1"
+    wrong_statement_version["server_statement"]["apiVersion"] = "catchplate.proxyResponseStatement/v1"
     resign_proxy_response_proof(wrong_statement_version)
     expect_proxy_proof_failure(
         tmp,
@@ -10571,7 +10571,7 @@ def test_proxy_response_proof_requirements(
     )
 
     unsigned_headers = clone_document(valid_document)
-    unsigned_headers["external_capture"]["response"]["selected_headers"]["x-serverware-request-id"] = "tampered"
+    unsigned_headers["external_capture"]["response"]["selected_headers"]["x-catchplate-request-id"] = "tampered"
     expect_proxy_proof_failure(
         tmp,
         unsigned_headers,
@@ -10595,7 +10595,7 @@ def test_proxy_response_proof_requirements(
 
     extra_selected_header = clone_document(valid_document)
     extra_headers = extra_selected_header["external_capture"]["response"]["selected_headers"]
-    extra_headers["x-serverware-request-id"] = "unexpected"
+    extra_headers["x-catchplate-request-id"] = "unexpected"
     extra_selected_header["external_capture"]["response"]["selected_headers_digest"] = sha256_prefixed_json(
         extra_headers
     )
@@ -10610,7 +10610,7 @@ def test_proxy_response_proof_requirements(
     capture_body_mismatch = clone_document(valid_document)
     capture_body_mismatch["external_capture"]["response"]["body_digest"] = digest("0")
     capture_body_headers = capture_body_mismatch["external_capture"]["response"]["selected_headers"]
-    capture_body_headers["x-serverware-response-body-sha256"] = digest("0")
+    capture_body_headers["x-catchplate-response-body-sha256"] = digest("0")
     capture_body_mismatch["external_capture"]["response"]["selected_headers_digest"] = sha256_prefixed_json(
         capture_body_headers
     )
@@ -10644,7 +10644,7 @@ def test_proxy_response_proof_requirements(
 
     mismatched_tls_peer = clone_document(valid_document)
     mismatched_tls_peer["external_capture"]["tls_peer"]["spiffe_id"] = (
-        "spiffe://prod.serverware.dev/decision-gate/instance-02"
+        "spiffe://prod.catchplate.dev/decision-gate/instance-02"
     )
     sign_proxy_external_capture(mismatched_tls_peer)
     expect_proxy_proof_failure(
@@ -11146,7 +11146,7 @@ def test_proxy_response_proof_requirements(
     if rejected_tls.returncode == 0 or "TLS channel binding mismatch" not in detail(rejected_tls):
         raise AssertionError(f"completion verifier accepted a proof from another TLS channel: {detail(rejected_tls)}")
 
-    prefix_only_spiffe = "spiffe://prod.serverware.dev/decision-gate"
+    prefix_only_spiffe = "spiffe://prod.catchplate.dev/decision-gate"
     rejected_instance = run_verifier(tmp, "--proxy-server-instance-id", prefix_only_spiffe)
     instance_error = detail(rejected_instance)
     if rejected_instance.returncode == 0 or not any(
@@ -11161,7 +11161,7 @@ def test_proxy_response_proof_requirements(
         )
 
     duplicate_json = json.dumps(valid_document, sort_keys=True)
-    api_version_field = '"apiVersion": "serverware.proxyResponseProof/v3"'
+    api_version_field = '"apiVersion": "catchplate.proxyResponseProof/v3"'
     if api_version_field not in duplicate_json:
         raise AssertionError("proxy proof fixture did not contain its expected apiVersion field")
     (tmp / "proxy-response-proof.json").write_text(
@@ -11176,7 +11176,7 @@ def test_proxy_response_proof_requirements(
 
 
 def test_live_runtime_projection_and_container_artifact_binding() -> None:
-    project_name = "serverware-production"
+    project_name = "catchplate-production"
     project_directory = ROOT
     value_hash = lambda value: sha256_prefixed_bytes(value.encode("utf-8"))
     service_model = {
@@ -11311,7 +11311,7 @@ def test_live_runtime_projection_and_container_artifact_binding() -> None:
             "PidMode": "",
             "IpcMode": "",
             "UTSMode": "",
-            "NetworkMode": "serverware-production_default",
+            "NetworkMode": "catchplate-production_default",
             "UsernsMode": "",
             "Ulimits": [],
             "Tmpfs": {},
@@ -11321,12 +11321,12 @@ def test_live_runtime_projection_and_container_artifact_binding() -> None:
             "Links": [],
         },
         "NetworkSettings": {
-            "Networks": {"serverware-production_default": {"IPAddress": "10.0.0.2"}}
+            "Networks": {"catchplate-production_default": {"IPAddress": "10.0.0.2"}}
         },
         "Mounts": [
             {
                 "Type": "volume",
-                "Name": "serverware-production_data",
+                "Name": "catchplate-production_data",
                 "Destination": "/data",
                 "RW": True,
                 "Propagation": "",
@@ -11356,11 +11356,11 @@ def test_live_runtime_projection_and_container_artifact_binding() -> None:
     )
 
     approved_config_ids = {
-        "serverware-control": digest("a"),
-        "serverware-decision-gate": digest("b"),
+        "catchplate-control": digest("a"),
+        "catchplate-decision-gate": digest("b"),
     }
     observed_config_ids = {
-        "serverware": digest("a"),
+        "catchplate": digest("a"),
         "audit-anchor": digest("a"),
         "decision-gate-rs": digest("b"),
         "custody-runtime": digest("b"),
@@ -11551,7 +11551,7 @@ def verify_release_artifact_authority_contracts() -> None:
         raise AssertionError("production image build lost its launch-authority binding")
 
     old_build = json.loads(json.dumps(build))
-    old_build["apiVersion"] = "serverware.productionImagesBuild/v1"
+    old_build["apiVersion"] = "catchplate.productionImagesBuild/v1"
     reject(
         "a productionImagesBuild/v1 artifact",
         lambda: verify_release_completion.verify_production_image_build(
@@ -11577,7 +11577,7 @@ def verify_release_artifact_authority_contracts() -> None:
         readiness_refs,
     )
     old_published = json.loads(json.dumps(published))
-    old_published["apiVersion"] = "serverware.productionImagesPublished/v1"
+    old_published["apiVersion"] = "catchplate.productionImagesPublished/v1"
     reject(
         "a productionImagesPublished/v1 artifact",
         lambda: verify_release_completion.verify_published_images(
@@ -11670,7 +11670,7 @@ def verify_release_artifact_authority_contracts() -> None:
     )
     mismatched_provenance_config = json.loads(json.dumps(provenance_document))
     mismatched_provenance_config["provenance"]["images"][
-        "serverware-control"
+        "catchplate-control"
     ]["remote_image_id"] = digest("c")
     mismatched_provenance_summary = json.loads(json.dumps(provenance_summary))
     refresh_release_provenance(
@@ -11702,7 +11702,7 @@ def test_readiness_checksum_publication_contract() -> None:
         token = "0123456789abcdef" * 2
         sidecar = output.with_name(output.name + ".sha256." + token)
         integrity = {
-            "apiVersion": "serverware.readinessChecksum/v1",
+            "apiVersion": "catchplate.readinessChecksum/v1",
             "publicationToken": token,
             "detached_sha256_path": str(sidecar),
             "scope": "checksum-only",
@@ -11735,7 +11735,7 @@ def test_readiness_checksum_publication_contract() -> None:
         if before.get("publicationToken") != token or before.get("sha256") != written_digest:
             raise AssertionError("pre-run capture did not bind the versioned publication token")
         invalid = [
-            ("version", {**integrity, "apiVersion": "serverware.readinessChecksum/v2"}),
+            ("version", {**integrity, "apiVersion": "catchplate.readinessChecksum/v2"}),
             ("unversioned", {key: value for key, value in integrity.items() if key != "apiVersion"}),
             ("legacy", {**{key: value for key, value in integrity.items() if key not in {"apiVersion", "publicationToken"}}, "generation": token}),
             ("alias", {**integrity, "generation": 7}),
@@ -11816,7 +11816,7 @@ def main() -> None:
         reproduced_images = []
         for image in production_build["images"]:
             item = {"service": image["service"], "image_id": image["image_id"]}
-            if image["service"] == "serverware-decision-gate":
+            if image["service"] == "catchplate-decision-gate":
                 item["rust_binary_sha256"] = image["binary_digest"]
                 item["launcher_binary_sha256"] = image["launcher_binary_digest"]
                 item["launch_authority_key_id"] = image[
@@ -12299,7 +12299,7 @@ def main() -> None:
                 "native host-context validator changed a valid readiness proof"
             )
         for label, update in (
-            ("version", {"apiVersion": "serverware.readinessChecksum/v2"}),
+            ("version", {"apiVersion": "catchplate.readinessChecksum/v2"}),
             ("boolean-token", {"publicationToken": True}),
             ("short-token", {"publicationToken": "a" * 31}),
             ("extra", {"unexpected": False}),
@@ -12450,7 +12450,7 @@ def main() -> None:
         final_shaped_v6 = clone_document(persisted_proof)
         final_shaped_v6.update(
             {
-                "kind": "ServerwareCompletionProof",
+                "kind": "CatchplateCompletionProof",
                 "verification_mode": "final",
                 "result_scope": "final-completion",
                 "readiness_only": False,
@@ -12493,7 +12493,7 @@ def main() -> None:
         if (
             proof.get("apiVersion")
             != verify_release_completion.COMPLETION_PROOF_API_VERSION
-            or proof.get("kind") != "ServerwarePreEnclaveReadiness"
+            or proof.get("kind") != "CatchplatePreEnclaveReadiness"
             or proof.get("verificationOk") is not True
             or proof.get("finalCompletionVerified") is not False
             or proof.get("actionAuthorization") is not None
@@ -12716,7 +12716,7 @@ def main() -> None:
                 "final completion identity v3 did not bind its release core"
             )
         legacy_identity = clone_document(final_completion_identity)
-        legacy_identity["apiVersion"] = "serverware.finalCompletionIdentity/v1"
+        legacy_identity["apiVersion"] = "catchplate.finalCompletionIdentity/v1"
         try:
             verify_release_completion.validate_final_v6_completion_identity(
                 legacy_identity
@@ -13110,7 +13110,7 @@ def main() -> None:
         write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
 
         same_value = production_images_env_value()
-        (tmp / "production.env").write_text(f"# semantic equivalent rewrite\nSERVERWARE_PRODUCTION_IMAGES='{same_value}'\n", encoding="utf-8")
+        (tmp / "production.env").write_text(f"# semantic equivalent rewrite\nCATCHPLATE_PRODUCTION_IMAGES='{same_value}'\n", encoding="utf-8")
         rejected_stale_env_preflight = run_verifier(tmp)
         if (
             rejected_stale_env_preflight.returncode == 0
@@ -13121,7 +13121,7 @@ def main() -> None:
         write_production_env_files(tmp)
         write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
 
-        (tmp / "production-images.env").write_text(f"# semantic equivalent rewrite\nSERVERWARE_PRODUCTION_IMAGES='{same_value}'\n", encoding="utf-8")
+        (tmp / "production-images.env").write_text(f"# semantic equivalent rewrite\nCATCHPLATE_PRODUCTION_IMAGES='{same_value}'\n", encoding="utf-8")
         rejected_stale_images_env_preflight = run_verifier(tmp)
         if (
             rejected_stale_images_env_preflight.returncode == 0
@@ -13137,7 +13137,7 @@ def main() -> None:
         rejected_env_merge = run_verifier(tmp)
         if (
             rejected_env_merge.returncode == 0
-            or "production readiness env SERVERWARE_PRODUCTION_IMAGES does not match production images env"
+            or "production readiness env CATCHPLATE_PRODUCTION_IMAGES does not match production images env"
             not in detail(rejected_env_merge)
         ):
             raise AssertionError(f"completion verifier accepted mismatched production env files: {detail(rejected_env_merge)}")
@@ -13208,7 +13208,7 @@ def main() -> None:
                 "release_signing_key_id": unauthorized_release_key["key_id"],
                 "production_launcher_binary_digest": unauthorized_provenance_document[
                     "provenance"
-                ]["images"]["serverware-decision-gate"][
+                ]["images"]["catchplate-decision-gate"][
                     "launcher_binary_digest"
                 ],
                 **unauthorized_provenance_document["provenance"]["launch_authority"],
@@ -13354,7 +13354,7 @@ def main() -> None:
         write(tmp / "image-signatures.json", bad_image_document)
         write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
         rejected_image_bundle_digest = run_verifier(tmp)
-        if rejected_image_bundle_digest.returncode == 0 or "image serverware Sigstore bundle digest mismatch" not in detail(rejected_image_bundle_digest):
+        if rejected_image_bundle_digest.returncode == 0 or "image catchplate Sigstore bundle digest mismatch" not in detail(rejected_image_bundle_digest):
             raise AssertionError(f"completion verifier accepted image signatures with a forged Sigstore bundle digest: {detail(rejected_image_bundle_digest)}")
         write(tmp / "image-signatures-summary.json", image_summary)
         write(tmp / "image-signatures.json", image_document)
@@ -13375,7 +13375,7 @@ def main() -> None:
         rejected_forged_sigstore = run_verifier(tmp)
         if (
             rejected_forged_sigstore.returncode == 0
-            or "image serverware Sigstore message signature verification failed"
+            or "image catchplate Sigstore message signature verification failed"
             not in detail(rejected_forged_sigstore)
         ):
             raise AssertionError(
@@ -13509,7 +13509,7 @@ def main() -> None:
         unauthorized_kms_materials["debug-material"] = {
             "key_id": "arn:aws:kms:us-east-1:111122223333:key/debug",
             "ciphertext_blob_b64": base64.b64encode(b"debug-ciphertext").decode("ascii"),
-            "encryption_context": {"material": "debug-material", "service": "serverware"},
+            "encryption_context": {"material": "debug-material", "service": "catchplate"},
         }
         write(tmp / "kms-materials.json", unauthorized_kms_materials)
         unauthorized_kms_preflight = production_host_preflight(tmp)

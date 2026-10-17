@@ -15,11 +15,11 @@ USAGE = """Usage: python -I -B scripts/commission_development_policy.py \\
   --policy-fd FD --policy-sha256 SHA256 --prepare-fd FD --prepare-sha256 SHA256 \\
   --finalize-fd FD --result-fd FD --deadline-monotonic-ns NS --expires-at-unix-ns NS
 
-Development image/channel only, SERVERWARE_PROCESS_MODE=serverware-control-plane.
+Development image/channel only, CATCHPLATE_PROCESS_MODE=catchplate-control-plane.
 The actual UID/GID and complete inherited FD set must already match independently
 signed AuthorityRuntimeClient trust. No privileged database/signing credentials.
 The policy is an existing signed exact demo. The selected current-signature input
-is {input:{schema:"serverware.policyAuthorityGenesisPrepare/v2",record,
+is {input:{schema:"catchplate.policyAuthorityGenesisPrepare/v2",record,
 verificationInputs:{key,head,revocationSequence}},webauthnAuthorization}.
 The admitted signed service configuration must include policyGenesis exact
 {auditStoreIdentityDigest,auditSignerPublicKeyDigest}. Supplied key/head originals
@@ -27,7 +27,7 @@ only select prestate; actual current transaction rows and signatures are checked
 Both are root:root0400 protected originals, pinned by their literal SHA256.
 
 Finalize is an initially empty root:root0400 unsealed memfd. Independent automation
-writes {input:{schema:"serverware.policyAuthorityGenesisFinalize/v2",
+writes {input:{schema:"catchplate.policyAuthorityGenesisFinalize/v2",
 genesisPreparationDigest,inclusionReceipt,auditStoreIdentityDigest,
 verificationInputs:{key,head,revocationSequence}},
 webauthnAuthorization}, then applies SEAL_SEAL|SHRINK|GROW|WRITE together.
@@ -87,7 +87,7 @@ def main(argv=None):
         kwargs = arguments(supplied)
         signal.signal(signal.SIGTERM, _cancel)
         signal.signal(signal.SIGINT, _cancel)
-        from serverware.development_policy_commissioning import DevelopmentPolicyCommissioning
+        from catchplate.development_policy_commissioning import DevelopmentPolicyCommissioning
         owner = DevelopmentPolicyCommissioning.open(**kwargs)
         owner.run()
         return 0

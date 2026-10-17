@@ -2,8 +2,8 @@
 //! No constructor accepts an observed-driver DTO or caller admission verdict.
 use super::*;
 use std::mem::{size_of,zeroed};
-use serverware_decision_gate::enclave_runtime_identity_v1::{PreparedShadowNsmV1,PreparedShadowTimeNsmV1};
-use serverware_decision_gate::native_secret_broker_v1::shadow_key_delivery::{Configuration as Transport,PreparedShadowKeyHelper};
+use catchplate_decision_gate::enclave_runtime_identity_v1::{PreparedShadowNsmV1,PreparedShadowTimeNsmV1};
+use catchplate_decision_gate::native_secret_broker_v1::shadow_key_delivery::{Configuration as Transport,PreparedShadowKeyHelper};
 #[path="driver_continuation_inputs.rs"] mod inputs;
 #[path="driver_continuation_run.rs"] mod running;
 #[path="driver_public_admission.rs"] mod public_admission;
@@ -20,10 +20,10 @@ pub(in crate::policy_shadow::policy_custody::services) struct Resources {
 impl Resources {
     pub(super) fn open(inputs:&ColdInputs,cold:&Cold)->Result<Self,ShadowError>{
         cold.check()?;require(matches!((cold.config.api_version.as_str(),inputs.api_version.as_str()),
-            ("serverware.nativeShadowDriverBootstrapConfiguration/v2","serverware.nativeShadowDriverContinuationPreparation/v1")
-            |("serverware.nativeShadowDriverBootstrapConfiguration/v3","serverware.nativeShadowDriverContinuationPreparation/v2")
-            |("serverware.nativeShadowDriverBootstrapConfiguration/v4","serverware.nativeShadowDriverContinuationPreparation/v3"))
-            && inputs.key_transport.api_version=="serverware.nativeShadowKeyKmsTransport/v1")?;
+            ("catchplate.nativeShadowDriverBootstrapConfiguration/v2","catchplate.nativeShadowDriverContinuationPreparation/v1")
+            |("catchplate.nativeShadowDriverBootstrapConfiguration/v3","catchplate.nativeShadowDriverContinuationPreparation/v2")
+            |("catchplate.nativeShadowDriverBootstrapConfiguration/v4","catchplate.nativeShadowDriverContinuationPreparation/v3"))
+            && inputs.key_transport.api_version=="catchplate.nativeShadowKeyKmsTransport/v1")?;
         inputs.key_transport.validate().map_err(fail)?;
         // Root owns only mechanisms here. No ciphertext, seed, business
         // request or native quote is consumed until both independent admissions.
@@ -66,7 +66,7 @@ impl Retained {
             && stat.st_mode&libc::S_IFMT==libc::S_IFSOCK
             && unsafe{libc::getsockopt(listener.as_raw_fd(),libc::SOL_SOCKET,libc::SO_ACCEPTCONN,
                 (&mut listening as *mut i32).cast(),&mut length)}==0 && length as usize==size_of::<i32>() && listening==1)?;
-        let raw=canonical_json_bytes(&serde_json::json!({"apiVersion":"serverware.nativeShadowDriverFacadeListening/v1",
+        let raw=canonical_json_bytes(&serde_json::json!({"apiVersion":"catchplate.nativeShadowDriverFacadeListening/v1",
             "observationSha256":Sha256Digest::compute(&canonical_json_bytes(&self.observation)?),
             "scopeSha256":Sha256Digest::compute(self.phase.scope()),"listenerDevice":stat.st_dev,"listenerInode":stat.st_ino}))?;
         // Same retained channel, original startup interval, one send attempt.
@@ -76,7 +76,7 @@ impl Retained {
         self.check_startup()?;
         let mut timer=self.prepared.startup_timer.lock().map_err(fail)?;
         require(timer.is_some())?;
-        let raw=canonical_json_bytes(&serde_json::json!({"apiVersion":"serverware.nativeShadowDriverBridgeConstructed/v1",
+        let raw=canonical_json_bytes(&serde_json::json!({"apiVersion":"catchplate.nativeShadowDriverBridgeConstructed/v1",
             "observationSha256":Sha256Digest::compute(&canonical_json_bytes(&self.observation)?),
             "scopeSha256":Sha256Digest::compute(self.phase.scope())}))?;
         // The genuine constructor has completed. Retire its timer before the

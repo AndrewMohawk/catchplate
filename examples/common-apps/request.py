@@ -1,4 +1,4 @@
-"""One explicit, bounded API request through Serverware; no provider credentials."""
+"""One explicit, bounded API request through Catchplate; no provider credentials."""
 import argparse
 from contextlib import contextmanager
 from importlib.metadata import version
@@ -35,7 +35,7 @@ PROVIDERS = {
     "cloudflare": ("api.cloudflare.com", "Authorization", "Bearer "),
     "sentry": ("sentry.io", "Authorization", "Bearer "),
 }
-FAILURE = "Request failed; inspect Serverware's audit log. If a write was sent, its outcome may be unknown: do not blindly retry."
+FAILURE = "Request failed; inspect Catchplate's audit log. If a write was sent, its outcome may be unknown: do not blindly retry."
 LOCAL_ERRORS = {
     "config_missing": "Private config not found. Use --config with the downloaded JSON file.",
     "config_invalid": "Private config is invalid or incompatible. Use the complete common-app download, not its nested recipe.",
@@ -143,7 +143,7 @@ def load_configuration(path):
             or len({key.lower() for key in headers}) != len(headers)):
         raise ValueError("Unexpected request headers")
     lowered = {key.lower(): value for key, value in headers.items()}
-    if lowered.get(auth_header.lower()) != prefix + "serverware-" + config["app_preset"] + "-placeholder-v1":
+    if lowered.get(auth_header.lower()) != prefix + "catchplate-" + config["app_preset"] + "-placeholder-v1":
         raise ValueError("Only the public provider placeholder belongs in client configuration")
     recipe = config.get("client_recipe", {})
     if type(recipe) is not dict or recipe.get("automatic_retries", 0) != 0:
@@ -298,7 +298,7 @@ def execute_body(config, body=None, execute_write=False, query=()):
         elif body is not None or execute_write:
             raise ValueError("This permission is read-only")
         headers = {"Accept": "application/json", "Accept-Encoding": "identity",
-            "User-Agent": "serverware-common-apps-example/1.0", **config["request_headers"]}
+            "User-Agent": "catchplate-common-apps-example/1.0", **config["request_headers"]}
         if body is not None:
             headers["Content-Type"] = "application/json"
         url = request_url(config, query)
@@ -338,7 +338,7 @@ def execute(config, body_path=None, execute_write=False, query=()):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Send one scoped request using the private Serverware client download.")
+    parser = argparse.ArgumentParser(description="Send one scoped request using the private Catchplate client download.")
     parser.add_argument("--config", required=True, metavar="PATH")
     parser.add_argument("--body", metavar="PATH", help="Explicit reviewed JSON body; required for POST")
     parser.add_argument("--execute-write", action="store_true", help="Confirm this invocation may perform one write or paid AI call")

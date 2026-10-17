@@ -15,13 +15,13 @@ const REGISTRY = 'https://registry.npmjs.org';
 const CREATE = '/api/operator-demo/credentials/npm-token';
 const GRANT = '/api/operator-demo/access-rules/npm-metadata';
 const BUNDLE = 'npm_metadata_read_v1';
-const DUMMY = 'serverware-npm-placeholder-v1';
+const DUMMY = 'catchplate-npm-placeholder-v1';
 const PRIVATE = 'synthetic-npm-token-NEVER-RENDER';
 const PACKAGES = ['@example/fixture', 'example-package'];
 const HEADERS = ['accept', 'npm-auth-type', 'npm-command', 'npm-in-ci', 'npm-scope', 'pacote-pkg-id', 'pacote-req-type', 'pacote-version', 'user-agent'];
 const clone = value => JSON.parse(JSON.stringify(value));
 // Independent server DTO oracle, never constructed from production helpers.
-const capability = (allowed = true) => ({schema: 'serverware.operatorNpmMetadata/v1', connection_type: 'npm_token_v1',
+const capability = (allowed = true) => ({schema: 'catchplate.operatorNpmMetadata/v1', connection_type: 'npm_token_v1',
   create_credential_path: CREATE, create_rule_path: GRANT, registry_origin: REGISTRY, destination_allowed: allowed,
   operation_bundles: [BUNDLE], sdk_auth_token: DUMMY, placeholder: 'Bearer ' + DUMMY,
   response_mode: 'npm_metadata_json_v1', source_pair_required: true, metadata_only: true, max_active_rules_per_application: 1});
@@ -35,7 +35,7 @@ const options = (changes = {}) => ({credentials: [npmCredential()],
   credentialInputModes: ['insert', 'replace_exact'], ...changes});
 function catalog(state) {
   const value = publicCatalog(state);
-  value.capabilities.application_proxy_authentication = {schema: 'serverware.operatorProxyAuthentication/v1',
+  value.capabilities.application_proxy_authentication = {schema: 'catchplate.operatorProxyAuthentication/v1',
     modes: ['bearer', 'basic_and_bearer_v1'], path: '/api/operator-demo/applications/proxy-authentication'};
   if (state.npmCapability !== undefined) value.capabilities.npm = clone(state.npmCapability);
   return value;
@@ -96,7 +96,7 @@ async function fixture(browser, config, exercise) {
     };
     for (const path of ['/api/operator-demo/catalog', CREATE, GRANT]) await controls.context.route(ORIGIN + path, handler);
     await page.reload({waitUntil: 'networkidle'});
-    assert.equal(await page.title(), 'Overview - Serverware operator workspace');
+    assert.equal(await page.title(), 'Overview - Catchplate operator workspace');
     assert.equal(new URL(page.url()).origin, ORIGIN);
     await exercise(page, state, observed);
     assert.deepEqual(state.posts, [], 'no generic creation, auth-mode change, token rotation, consent or revoke');
@@ -122,8 +122,8 @@ async function recipe(page, packageName = PACKAGES[0]) {
   assert(await page.locator('#npm-client-controls').isVisible()); assert(await page.locator('#github-client-controls').isHidden());
   const text = await page.locator('#client-command').innerText();
   for (const expected of ['npm 11.8.0', 'Node.js 25.5.0', 'strict-ssl=true', 'NODE_EXTRA_CA_CERTS=',
-    'registry=' + REGISTRY + '/', 'https-proxy=https://' + IDS.application + ':${SERVERWARE_PROXY_TOKEN}@proxy.example.test',
-    '//registry.npmjs.org/:_authToken=' + DUMMY, 'fetch-retries=0', 'cache=${SERVERWARE_NPM_CACHE}', '--globalconfig /dev/null',
+    'registry=' + REGISTRY + '/', 'https-proxy=https://' + IDS.application + ':${CATCHPLATE_PROXY_TOKEN}@proxy.example.test',
+    '//registry.npmjs.org/:_authToken=' + DUMMY, 'fetch-retries=0', 'cache=${CATCHPLATE_NPM_CACHE}', '--globalconfig /dev/null',
     "view '" + packageName + "' --json"]) assert(text.includes(expected), expected);
   assert(!/strict-ssl=false|NODE_TLS_REJECT_UNAUTHORIZED|--insecure|--proxy-insecure/.test(text)); assert(!text.includes(PRIVATE));
   assert.match(await page.locator('#client-guidance').innerText(), /No npm lookup was tested here/);
@@ -199,15 +199,15 @@ const tests = [
   })],
 ];
 async function hashes() {
-  const directory = join(ROOT, 'serverware/operator_demo_web');
+  const directory = join(ROOT, 'catchplate/operator_demo_web');
   const names = ['scripts/test_operator_npm_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
-    'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
-    ...(await readdir(directory)).filter(name => /\.(?:html|css|js)$/.test(name)).sort().map(name => 'serverware/operator_demo_web/' + name)];
+    'scripts/test_operator_ordinary_modes_browser.cjs', 'catchplate/operator_demo_portal.py',
+    ...(await readdir(directory)).filter(name => /\.(?:html|css|js)$/.test(name)).sort().map(name => 'catchplate/operator_demo_web/' + name)];
   return Object.fromEntries(await Promise.all(names.map(async name => [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')])));
 }
 async function runSuite(browser) {
   assert(browser && typeof browser.newContext === 'function', 'a Playwright Browser is required');
-  const before = await hashes(); const directory = await mkdtemp('/tmp/serverware-npm-browser-');
+  const before = await hashes(); const directory = await mkdtemp('/tmp/catchplate-npm-browser-');
   console.log(JSON.stringify({phase: 'source-before', hashes: before, artifactDirectory: directory}));
   let timeout; let passed = 0; let finished = false;
   // On timeout close only this suite's new contexts, never an MCP-owned browser.

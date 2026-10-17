@@ -16,8 +16,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from scripts.authority import generate_artifact_bundle as generator
 from scripts.authority import local_closure as cli
 from scripts.authority import atomic_provisioner_contract as provisioning
-from serverware import authority_local_closure as local
-from serverware import authority_local_artifacts as artifacts
+from catchplate import authority_local_closure as local
+from catchplate import authority_local_artifacts as artifacts
 
 PIN = "sha256:" + "1" * 64
 NOW = "2026-10-01T12:00:01Z"
@@ -42,19 +42,19 @@ def fixture():
         interpreter=dict(path="python", sha256=local.sha(elf_bytes()), size=120, runtimePath="/runtime/python"))
     native = dict(executables=[dict(path="python", runtimePath="/runtime/python", elfClass="ELF64", machine=62,
         ptInterp=None, needed=[], sha256=stage["interpreter"]["sha256"])], objects=[])
-    snapshot_payload = dict(schema="serverware.authorityStableSnapshotReceiptPayload/v1",
+    snapshot_payload = dict(schema="catchplate.authorityStableSnapshotReceiptPayload/v1",
         rootIdentity=dict(runtimePath="/synthetic/frozen", device=1, inode=2, generation=3, mountId=4, mode=0o500, uid=0, gid=0),
         snapshotKind="content-addressed-cas", readOnly=True, treeAlgorithm="canonical-path-tree-sha256-v1",
         treeDigest=PIN, treeEntryCount=2, totalBytes=125, enumeratedTreeDigest=PIN,
         createdAt="2026-10-01T12:00:00Z", expiresAt="2026-10-01T12:10:00Z")
-    snapshot_payload["receiptId"] = spec.domain_digest("serverware.authorityStableSnapshotReceiptId/v1", spec.canonical_json_bytes(snapshot_payload))
+    snapshot_payload["receiptId"] = spec.domain_digest("catchplate.authorityStableSnapshotReceiptId/v1", spec.canonical_json_bytes(snapshot_payload))
     snapshot = signed(snapshot_payload, spec.SNAPSHOT_RECEIPT_SCHEMA,
-        "serverware.authorityStableSnapshotReceiptSignature/v1", private, key.key_id)
-    payload = dict(schema="serverware.authorityTrustedHostLocalMeasuredRosterPayload/v1",
+        "catchplate.authorityStableSnapshotReceiptSignature/v1", private, key.key_id)
+    payload = dict(schema="catchplate.authorityTrustedHostLocalMeasuredRosterPayload/v1",
         snapshotReceiptDigest=spec.snapshot_receipt_digest(snapshot), treeDigest=PIN, treeEntryCount=2, totalBytes=125,
         pythonImportClosure=[], nativeClosure=native, stageZero=stage, assurance=dict(spec.LOCAL_CLOSURE_CLAIMS),
         createdAt="2026-10-01T12:00:00Z", expiresAt="2026-10-01T12:05:00Z")
-    payload["receiptId"] = spec.domain_digest("serverware.authorityTrustedHostLocalMeasuredRosterId/v1", spec.canonical_json_bytes(payload))
+    payload["receiptId"] = spec.domain_digest("catchplate.authorityTrustedHostLocalMeasuredRosterId/v1", spec.canonical_json_bytes(payload))
     receipt = signed(payload, spec.LOCAL_CLOSURE_RECEIPT_SCHEMA, spec.LOCAL_CLOSURE_SIGNATURE_DOMAIN, private, key.key_id)
     return receipt, snapshot, trust, private
 
@@ -94,19 +94,19 @@ class LocalClosureTests(unittest.TestCase):
         local_receipt, snapshot, trust, private = fixture()
         payload = copy.deepcopy(local_receipt["payload"])
         del payload["receiptId"]; del payload["assurance"]
-        payload["schema"] = "serverware.authorityCompleteClosureReceiptPayload/v1"
+        payload["schema"] = "catchplate.authorityCompleteClosureReceiptPayload/v1"
         payload["coverage"] = {name: True for name in ("pythonStaticImports", "pythonDynamicImports", "ptInterp", "dtNeeded",
             "rpath", "runpath", "audit", "depaudit", "filter", "auxiliary", "dlopen", "nss", "plugins", "ifunc", "hwcap")}
         payload["coverage"]["coverageEvidenceDigest"] = PIN
         payload["rootfs"] = dict(imageDigest=PIN, verityRootDigest=PIN, mountPolicyDigest=PIN,
             pivotRootRequired=True, oldRootDetached=True, enforcementEvidenceDigest=PIN)
-        payload["receiptId"] = local.spec.domain_digest("serverware.authorityCompleteClosureReceiptId/v1", local.spec.canonical_json_bytes(payload))
+        payload["receiptId"] = local.spec.domain_digest("catchplate.authorityCompleteClosureReceiptId/v1", local.spec.canonical_json_bytes(payload))
         receipt = signed(payload, local.spec.CLOSURE_RECEIPT_SCHEMA, generator.CLOSURE_SIGNATURE_DOMAIN,
                          private, local_receipt["signerKeyId"])
         local.spec.validate_closure_receipt(receipt)
         generator._verify_snapshot_and_closure(snapshot, receipt, trust=trust, validation_time=NOW)
         self.assertEqual(local.spec.closure_receipt_digest(receipt), local.spec.domain_digest(
-            "serverware.authorityCompleteClosureReceiptDigest/v1", local.spec.canonical_json_bytes(receipt)))
+            "catchplate.authorityCompleteClosureReceiptDigest/v1", local.spec.canonical_json_bytes(receipt)))
         for field in ("dlopen", "pythonDynamicImports"):
             changed = copy.deepcopy(receipt); changed["payload"]["coverage"][field] = False
             with self.assertRaises(local.spec.ArtifactContractError):

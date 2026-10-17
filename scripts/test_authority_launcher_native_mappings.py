@@ -24,7 +24,7 @@ from unittest.mock import call, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_launcher as subject
+from catchplate import authority_launcher as subject
 
 
 def sha(value):
@@ -116,7 +116,7 @@ class NativeMappingsTests(unittest.TestCase):
             self.assertIsInstance(failure.exception, ImportError)
 
     def test_missing_measured_module_never_reaches_downstream_finder(self):
-        name = "serverware_unmeasured_import_fixture"
+        name = "catchplate_unmeasured_import_fixture"
         self.assertNotIn(name, sys.modules)
         finder = subject._SealedClosureFinder({}, {})
         with patch.object(importlib.machinery.PathFinder, "find_spec") as downstream, \

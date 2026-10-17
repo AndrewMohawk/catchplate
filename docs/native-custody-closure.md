@@ -24,15 +24,15 @@ revocation state; wall-clock validity; and the assigned supervisor key ID/SPKI.
 The existing independently assigned `CustodySupervisorCapability` role is
 resolved at the actual current checkpoint, including actual public-key material
 association. It signs a NEW domain:
-`serverware.nativeCustodyClosureAssignment.signature/v1`.
+`catchplate.nativeCustodyClosureAssignment.signature/v1`.
 The exact Ed25519 preimage is the existing `signature_preimage` recipe:
-`serverware.signedEnvelope/v1`, NUL, new domain, NUL,
-`serverware.canonicalJson/ascii-integer-v1`, NUL, canonical payload bytes.
+`catchplate.signedEnvelope/v1`, NUL, new domain, NUL,
+`catchplate.canonicalJson/ascii-integer-v1`, NUL, canonical payload bytes.
 Signature encoding is canonical unpadded base64url64 with no prefix.
 This grants closure preparation only, not a role-signing key or provider effect.
 
 The manifest commitment is `hash_domain_frames` under
-`serverware.nativeCustodyExecutionClosure/v1` with one canonical JSON array
+`catchplate.nativeCustodyExecutionClosure/v1` with one canonical JSON array
 frame, in this order: apiVersion, profile, imageSha256, workerExecutableSha256,
 seccompPolicy, runtimeConfigurationSha256, buildProvenance. The old structural
 seccomp and build-provenance hash recipes remain unchanged. The policy
@@ -59,13 +59,13 @@ The complete image is limited to 512 MiB. It retains these fixed image files:
 
 | Original | Fixed path |
 | --- | --- |
-| Image outside the root | `/opt/serverware/native-shadow-custody-runtime.squashfs` |
-| Static guest executable | `/usr/local/bin/serverware-policy-shadow-custody-guest` |
-| Exact BPF | `/opt/serverware/native-shadow-custody/seccomp.bpf` |
-| Runtime config | `/opt/serverware/native-shadow-custody/runtime.json` |
-| Dependency lock | `/opt/serverware/native-shadow-custody/Cargo.lock` |
-| Build recipe | `/opt/serverware/native-shadow-custody/build-recipe.json` |
-| Provenance statement | `/opt/serverware/native-shadow-custody/provenance.json` |
+| Image outside the root | `/opt/catchplate/native-shadow-custody-runtime.squashfs` |
+| Static guest executable | `/usr/local/bin/catchplate-policy-shadow-custody-guest` |
+| Exact BPF | `/opt/catchplate/native-shadow-custody/seccomp.bpf` |
+| Runtime config | `/opt/catchplate/native-shadow-custody/runtime.json` |
+| Dependency lock | `/opt/catchplate/native-shadow-custody/Cargo.lock` |
+| Build recipe | `/opt/catchplate/native-shadow-custody/build-recipe.json` |
+| Provenance statement | `/opt/catchplate/native-shadow-custody/provenance.json` |
 
 These files and the new image/binary are **required future packaging inputs**,
 not presumed artifacts. The runtime config must be the exact same digest as

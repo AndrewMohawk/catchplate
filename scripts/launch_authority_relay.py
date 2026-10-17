@@ -28,9 +28,9 @@ import launch_authorization as protocol  # noqa: E402
 
 
 AUTHORIZATION_PATH = "/v1/launch-authorizations"
-REQUEST_CONTENT_TYPE = "application/serverware.launch-authorization-request+json"
-RESPONSE_CONTENT_TYPE = "application/serverware.launch-authorization+json"
-SOCKET_PATH = "/run/serverware/launch-authority.sock"
+REQUEST_CONTENT_TYPE = "application/catchplate.launch-authorization-request+json"
+RESPONSE_CONTENT_TYPE = "application/catchplate.launch-authorization+json"
+SOCKET_PATH = "/run/catchplate/launch-authority.sock"
 MAX_PACKET_BYTES = 16 * 1024
 DEFAULT_TIMEOUT_SECONDS = 2.0
 DEFAULT_MAX_RELAY_WORKERS = 8
@@ -801,7 +801,7 @@ def run_listener(listener: socket.socket, configuration: RelayConfiguration) -> 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Serverware local launch authority relay"
+        description="Catchplate local launch authority relay"
     )
     parser.add_argument("--systemd-socket", action="store_true", required=True)
     parser.add_argument("--authority-url", required=True)

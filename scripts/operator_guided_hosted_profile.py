@@ -8,13 +8,13 @@ import re
 import stat
 
 PROFILE = "github-hosted-v1"
-SCHEMA = "serverware.guidedHostedProvision/v1"
+SCHEMA = "catchplate.guidedHostedProvision/v1"
 CLIENT_IMAGE = "python@sha256:edd0b3ec946cc68bd20e39480bd03929016d0fb6254cbf870cd3bc55ea25116d"
 CLIENT_ID = "sha256:61d53b56a648da09aa966c5cc46a7e751aea2b38d01f33b04456a9f289685be9"
 GATE_IMAGE = "python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea"
 PYTHON, CURL = "/usr/local/bin/python3.12", "/usr/bin/curl"
 PROVISION_MOUNT = "/hosted-provision.json"
-LABEL = "serverware.guided-hosted"
+LABEL = "catchplate.guided-hosted"
 PIN_FILES = ("Dockerfile", "requirements.lock", ".dockerignore",
     "scripts/operator_guided_hosted_profile.py", "scripts/provision_operator_guided_hosted.py")
 HEX = re.compile(r"[0-9a-f]{64}")
@@ -44,7 +44,7 @@ def github_identity(environment):
 
 
 def namespace(github):
-    return "serverware-guided-hosted-" + github["runId"] + "-" + github["runAttempt"]
+    return "catchplate-guided-hosted-" + github["runId"] + "-" + github["runAttempt"]
 
 
 def validate_curl(value):

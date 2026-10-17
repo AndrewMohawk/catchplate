@@ -75,7 +75,7 @@ def decode(value):
 
 
 def approver_policy():
-    return {"schema": "serverware.jitApproverPolicy/v1", "requiredRoles": ["approver"],
+    return {"schema": "catchplate.jitApproverPolicy/v1", "requiredRoles": ["approver"],
         "roleMatch": "any", "allowedApproverIds": ["oidc:alpha", "oidc:beta"],
         "allowAnyApproverId": False, "requireWebAuthn": True, "threshold": 2,
         "credentialPolicy": {"allowedCredentialRecordIds": [],
@@ -117,7 +117,7 @@ def payload():
             "path": "/resource", "query": [["label", "caf\u00e9"], ["token", "synthetic-private-query"]],
             "headers": {"host": "synthetic.invalid"}, "body_sha256": sha(b"synthetic body")}}
     claims = [durable_claim()]
-    return {"apiVersion": "serverware.nativeReleaseAuthorizationPrepare/v2",
+    return {"apiVersion": "catchplate.nativeReleaseAuthorizationPrepare/v2",
         "attemptId": ATTEMPT, "flowId": ATTEMPT, "principalId": PRINCIPAL, "routeId": ROUTE,
         "credentialRef": CREDENTIAL, "credentialVersion": 7, "policyHash": POLICY,
         "requestDigest": sha(canonical(original)),
@@ -156,12 +156,12 @@ class PreparationASGITests(unittest.IsolatedAsyncioTestCase):
         cls.import_stack = ExitStack()
         cls.addClassCleanup(cls.import_stack.close)
         root = Path(cls.import_stack.enter_context(tempfile.TemporaryDirectory(prefix="native-jit-prepare-")))
-        environment = {k: v for k, v in os.environ.items() if not k.startswith("SERVERWARE_")}
-        environment.update(SERVERWARE_PROCESS_MODE="serverware-control-plane",
-            SERVERWARE_RELEASE_CHANNEL="dev", SERVERWARE_DATA_DIR=str(root),
-            SERVERWARE_WEBAUTHN_RP_ID="synthetic.invalid", SERVERWARE_WEBAUTHN_ORIGIN="https://synthetic.invalid")
+        environment = {k: v for k, v in os.environ.items() if not k.startswith("CATCHPLATE_")}
+        environment.update(CATCHPLATE_PROCESS_MODE="catchplate-control-plane",
+            CATCHPLATE_RELEASE_CHANNEL="dev", CATCHPLATE_DATA_DIR=str(root),
+            CATCHPLATE_WEBAUTHN_RP_ID="synthetic.invalid", CATCHPLATE_WEBAUTHN_ORIGIN="https://synthetic.invalid")
         cls.import_stack.enter_context(patch.dict(os.environ, environment, clear=True))
-        from serverware import app, attestation, policy_bundle, response_identity, native_release_jit_preparation
+        from catchplate import app, attestation, policy_bundle, response_identity, native_release_jit_preparation
         from scripts import test_authority_release_private_request as oracle
         cls.app, cls.attestation, cls.policy, cls.identity = app, attestation, policy_bundle, response_identity
         cls.preparation, cls.oracle = native_release_jit_preparation, oracle
@@ -239,7 +239,7 @@ class PreparationASGITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(inspect.signature(self.app.db.reserve_release_authorization_v2).parameters), 27)
         self.manifest = self.attestation.runtime_manifest(read_only=True)
         self.assertEqual(self.manifest["policy_signing_key_id"], self.key_id)
-        self.manifest_digest = sha(canonical({"apiVersion": "serverware.runtimeManifestDigest/v2", "manifest": self.manifest}))
+        self.manifest_digest = sha(canonical({"apiVersion": "catchplate.runtimeManifestDigest/v2", "manifest": self.manifest}))
         self.addCleanup(lambda: self.assertEqual(self.forbidden, []))
 
     def provision(self):
@@ -255,8 +255,8 @@ class PreparationASGITests(unittest.IsolatedAsyncioTestCase):
         messages = [] if messages is None else messages
         headers = [(b"host", b"synthetic.invalid"), (b"content-type", b"application/json")]
         if length: headers.append((b"content-length", str(len(body)).encode()))
-        if token is not None: headers.append((b"x-serverware-data-plane-token", token.encode()))
-        if nonce is not None: headers.append((b"x-serverware-response-nonce", nonce))
+        if token is not None: headers.append((b"x-catchplate-data-plane-token", token.encode()))
+        if nonce is not None: headers.append((b"x-catchplate-response-nonce", nonce))
         scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"}, "http_version": "1.1",
             "scheme": "https", "method": method, "path": PATH, "raw_path": PATH.encode(), "root_path": "",
             "query_string": query, "server": ("synthetic.invalid", 443), "client": ("127.0.0.1", 30001),
@@ -296,23 +296,23 @@ class PreparationASGITests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(TOKEN.encode(), body)
         self.assertEqual(headers["cache-control"], "no-store")
         if signed:
-            raw = decode(headers["x-serverware-response-statement-b64"])
+            raw = decode(headers["x-catchplate-response-statement-b64"])
             statement = json.loads(raw)
             self.assertEqual(raw, canonical(statement))
-            unsigned = sorted((k.lower(), v) for k, v in raw_headers if not k.lower().startswith(b"x-serverware-response-"))
+            unsigned = sorted((k.lower(), v) for k, v in raw_headers if not k.lower().startswith(b"x-catchplate-response-"))
             items = [{"name": k.decode("ascii"), "value_b64": b64(v)} for k, v in unsigned]
-            self.assertEqual(statement, {"version": "serverware.responseSignature/v3", "issued_at_ms": 1_800_000_000_250,
+            self.assertEqual(statement, {"version": "catchplate.responseSignature/v3", "issued_at_ms": 1_800_000_000_250,
                 "request": {"method": method, "path": PATH, "query_sha256": sha(query)},
                 "status_code": status, "body_sha256": sha(body), "response_headers_sha256": sha(canonical(items)),
                 "response_header_count": len(items), "nonce": nonce.decode(), "response_signing_key_id": self.key_id,
                 "context": {"runtime_manifest_digest": self.manifest_digest, "policy_bundle_digest": POLICY if status == 200 else None,
                     "provenance_digest": None, "image_signatures_digest": None, "source_tree_digest": None}})
-            self.assertEqual(headers["x-serverware-response-key-id"], self.key_id)
-            self.assertEqual(headers["x-serverware-response-body-sha256"], sha(body))
-            self.assertEqual(headers["x-serverware-response-statement-sha256"], sha(raw))
-            self.key.public_key().verify(decode(headers["x-serverware-response-signature"].removeprefix("ed25519:")), raw)
+            self.assertEqual(headers["x-catchplate-response-key-id"], self.key_id)
+            self.assertEqual(headers["x-catchplate-response-body-sha256"], sha(body))
+            self.assertEqual(headers["x-catchplate-response-statement-sha256"], sha(raw))
+            self.key.public_key().verify(decode(headers["x-catchplate-response-signature"].removeprefix("ed25519:")), raw)
         else:
-            self.assertFalse(any(k.startswith("x-serverware-response-") for k in headers))
+            self.assertFalse(any(k.startswith("x-catchplate-response-") for k in headers))
         return status, json.loads(body), body
 
     async def test_exact_originals_actual_asgi_signature_and_no_effects(self):
@@ -321,7 +321,7 @@ class PreparationASGITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 200)
         envelope = self.oracle.expected_envelope(raw_parent(value))
         self.assertEqual(len(raw_parent(value)), 27)
-        expected = {"apiVersion": "serverware.nativeReleaseJitPreparation/v1", "principalId": PRINCIPAL,
+        expected = {"apiVersion": "catchplate.nativeReleaseJitPreparation/v1", "principalId": PRINCIPAL,
             "routeId": ROUTE, "policyHash": POLICY, "requestDigest": value["requestDigest"],
             "operationDigest": value["operationDigest"], "approverPolicy": approver_policy(),
             "approverPolicySha256": sha(canonical(approver_policy())), "runtimeInput": canonical(envelope).decode(),
@@ -339,7 +339,7 @@ class PreparationASGITests(unittest.IsolatedAsyncioTestCase):
         if _fixture_output is not None:
             # Explicit root-owned generation only, after actual signer and all
             # independent original/response assertions. No token/key/proof export.
-            fixture = {"schema": "serverware.nativeReleaseJitPreparationFixture/v1", "request": value,
+            fixture = {"schema": "catchplate.nativeReleaseJitPreparationFixture/v1", "request": value,
                 "actorId": ACTOR, "responseBody": body.decode("ascii"), "route": {
                     "id": self.route.id, "principals": list(self.route.principals),
                     "host": self.route.host, "port": self.route.port, "scheme": self.route.scheme,
@@ -372,7 +372,7 @@ class PreparationASGITests(unittest.IsolatedAsyncioTestCase):
                     patch.object(self.app.db.grants, "GRANT_STORE_POSTGRES_DSN", grants_dsn):
                 # Manifest truth follows actual selected config, including refusals.
                 manifest = self.attestation.runtime_manifest(read_only=True)
-                self.manifest_digest = sha(canonical({"apiVersion": "serverware.runtimeManifestDigest/v2", "manifest": manifest}))
+                self.manifest_digest = sha(canonical({"apiVersion": "catchplate.runtimeManifestDigest/v2", "manifest": manifest}))
                 status, result, _ = self.response(await self.request())
                 self.assertEqual((status, result), (503, {"detail": "native JIT metadata authority is unavailable"}))
                 self.assertEqual(self.response(await self.request(token="wrong"))[0], 401)
@@ -380,10 +380,10 @@ class PreparationASGITests(unittest.IsolatedAsyncioTestCase):
                 self.generation.assert_not_called()
 
     async def test_exact_profile_jit_and_durable_gates(self):
-        for version, status in (("serverware.nativeReleaseAuthorizationPrepare/v1", 409),
-            ("serverware.policyAwareReleaseAuthorizationPrepare/v2", 422),
-            ("serverware.releaseAuthorizationPrepare/v2", 422),
-            ("serverware.nativeReleaseAuthorizationReserve/v2", 422)):
+        for version, status in (("catchplate.nativeReleaseAuthorizationPrepare/v1", 409),
+            ("catchplate.policyAwareReleaseAuthorizationPrepare/v2", 422),
+            ("catchplate.releaseAuthorizationPrepare/v2", 422),
+            ("catchplate.nativeReleaseAuthorizationReserve/v2", 422)):
             value = payload(); value["apiVersion"] = version
             if version.endswith("/v1"): value.pop("durablePolicy")
             with self.subTest(version=version): self.assertEqual(self.response(await self.request(value))[0], status)
@@ -441,7 +441,7 @@ class PreparationASGITests(unittest.IsolatedAsyncioTestCase):
 
     async def test_exact_nonce_method_and_query_binding(self):
         self.assertEqual(self.response(await self.request(nonce=None), signed=False)[0], 400)
-        for kwargs in ({"nonce": b"bad"}, {"extra_headers": ((b"x-serverware-response-nonce", NONCE),)}):
+        for kwargs in ({"nonce": b"bad"}, {"extra_headers": ((b"x-catchplate-response-nonce", NONCE),)}):
             self.assertEqual(self.response(await self.request(**kwargs), signed=False)[0], 400)
         self.assertEqual(self.response(await self.request(query=b"unexpected=1"), query=b"unexpected=1")[0], 400)
         self.assertEqual(self.response(await self.request(method="GET"), method="GET")[0], 405)
@@ -452,8 +452,8 @@ class PreparationASGITests(unittest.IsolatedAsyncioTestCase):
         self.response(messages)
         headers = {name.lower(): value for name, value in next(
             row["headers"] for row in messages if row["type"] == "http.response.start")}
-        raw = decode(headers[b"x-serverware-response-statement-b64"].decode())
-        signature = decode(headers[b"x-serverware-response-signature"].decode().split(":", 1)[1])
+        raw = decode(headers[b"x-catchplate-response-statement-b64"].decode())
+        signature = decode(headers[b"x-catchplate-response-signature"].decode().split(":", 1)[1])
         for field, changed in (("nonce", b64(bytes([122]) * 32)), ("status_code", 201),
             ("body_sha256", OTHER), ("response_headers_sha256", OTHER), ("response_header_count", 0),
             ("request", {"method": "POST", "path": PATH + "/other", "query_sha256": sha(b"")}),

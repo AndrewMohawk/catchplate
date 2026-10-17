@@ -25,7 +25,7 @@ descriptors, keeping the original work/window and delivery guard:
 | 205 | Root signing key, never a public-app resource |
 
 The public listener is fixed at
-`/run/serverware/oidc-session-activation-release-proof-inputs/grants.sock` and
+`/run/catchplate/oidc-session-activation-release-proof-inputs/grants.sock` and
 admits only kernel peer UID/GID 65532. The owner holds immutable configuration,
 original descriptor identities, the exact listener, TLS identities and actual
 `SuccessorExecutionRecoveryReader` configuration. It creates no new ledger,
@@ -72,7 +72,7 @@ resource guard, not a closure that recursively includes their own result.
 ## Exact staging before public response
 
 The actual `_DeliveryChannel` owns one nonblocking CLOEXEC outgoing socket to
-`/run/serverware/oidc-session-activation-token-release/proof-bootstrap.sock`.
+`/run/catchplate/oidc-session-activation-token-release/proof-bootstrap.sock`.
 It accepts only the actual issuer owner, original work, narrowing deadline and
 the exact `_IssuerOwner._current` bound method. The root peer is pinned before
 any body bytes. Transport never closes or detaches the owner's socket.
@@ -88,7 +88,7 @@ committed evidence; this service never receives that old token.
 
 Explicit nested launch `/v2` adds the independently signed
 `grantDeliveryEndpoint` at
-`/run/serverware/oidc-session-activation-token-release/grant-issuer-bootstrap.sock`.
+`/run/catchplate/oidc-session-activation-token-release/grant-issuer-bootstrap.sock`.
 Only after the worker ACK and normal close does the distinct source-owned
 `_GrantDeliveryChannel` open its fixed third socket slot, pin root peer 0:0 and
 stage the **same immutable bootstrap bytes** to the separate grant issuer. Its

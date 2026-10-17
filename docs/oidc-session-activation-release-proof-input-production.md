@@ -2,7 +2,7 @@
 
 This is source-only setup derivation, not private replay, proof production,
 resource provisioning, token release or runtime acceptance. The producer is
-[oidc_session_activation_release_proof_input_production.py](../serverware/oidc_session_activation_release_proof_input_production.py).
+[oidc_session_activation_release_proof_input_production.py](../catchplate/oidc_session_activation_release_proof_input_production.py).
 
 ## Original-only contract
 

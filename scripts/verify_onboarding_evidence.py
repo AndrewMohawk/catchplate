@@ -30,26 +30,26 @@ from cryptography.hazmat.primitives.asymmetric.utils import (
     encode_dss_signature,
 )
 
-API_VERSION = "serverware.onboardingEvidence/v3"
+API_VERSION = "catchplate.onboardingEvidence/v3"
 AUTHENTICATED_ENVELOPE_VERSION = (
-    "serverware.onboardingEvidenceVerifierEnvelope/v1"
+    "catchplate.onboardingEvidenceVerifierEnvelope/v1"
 )
 AUTHENTICATED_STATEMENT_TYPE = (
-    "serverware.onboardingEvidenceManifestDigest/v1"
+    "catchplate.onboardingEvidenceManifestDigest/v1"
 )
 AUTHENTICATED_ASSURANCE_PROFILE = "manifest-authentication-only-v1"
 AUTHENTICATED_VALIDITY_SCOPE = "envelope-signature-only"
 AUTHENTICATED_CHALLENGE_SCOPE = "envelope-response-only"
 AUTHENTICATED_RESULT_VERSION = (
-    "serverware.onboardingEvidenceAuthenticatedVerification/v1"
+    "catchplate.onboardingEvidenceAuthenticatedVerification/v1"
 )
 CHALLENGE_CONSUMPTION_VERSION = (
-    "serverware.onboardingEvidenceChallengeConsumption/v1"
+    "catchplate.onboardingEvidenceChallengeConsumption/v1"
 )
 AUTHENTICATED_SIGNATURE_ALGORITHM = "ES256-SHA256"
 AUTHENTICATED_SIGNATURE_ENCODING = "asn1-der-low-s"
 AUTHENTICATED_SIGNATURE_DOMAIN = (
-    b"serverware.onboardingEvidenceVerifierEnvelope/v1\x00"
+    b"catchplate.onboardingEvidenceVerifierEnvelope/v1\x00"
 )
 AUTHENTICATED_ASSURANCE = {
     "classification": "caller-pinned-envelope-integrity",
@@ -1881,14 +1881,14 @@ def _require_request_identity(
 ) -> None:
     headers = request["headers"]
     _literal(
-        headers.get("x-serverware-principal"),
+        headers.get("x-catchplate-principal"),
         principal_id,
-        name=f"{name} x-serverware-principal",
+        name=f"{name} x-catchplate-principal",
     )
     _literal(
-        headers.get("x-serverware-credential-id"),
+        headers.get("x-catchplate-credential-id"),
         credential_id,
-        name=f"{name} x-serverware-credential-id",
+        name=f"{name} x-catchplate-credential-id",
     )
 
 
@@ -1961,8 +1961,8 @@ def _derive_gmail(
         request,
         {
             "host",
-            "x-serverware-principal",
-            "x-serverware-credential-id",
+            "x-catchplate-principal",
+            "x-catchplate-credential-id",
         },
         name="Gmail request",
     )
@@ -2005,7 +2005,7 @@ def _derive_gmail(
     )
     _literal(
         body["schema"],
-        "serverware.gatewayNormalizedGmailMessages/v1",
+        "catchplate.gatewayNormalizedGmailMessages/v1",
         name="Gmail response schema",
     )
     _literal(
@@ -2083,8 +2083,8 @@ def _parse_x_post_request(
         request,
         {
             "host",
-            "x-serverware-principal",
-            "x-serverware-credential-id",
+            "x-catchplate-principal",
+            "x-catchplate-credential-id",
             "content-type",
             "content-length",
         },
@@ -2130,8 +2130,8 @@ def _derive_x(
         search_request,
         {
             "host",
-            "x-serverware-principal",
-            "x-serverware-credential-id",
+            "x-catchplate-principal",
+            "x-catchplate-credential-id",
         },
         name="X search request",
     )
@@ -2395,8 +2395,8 @@ def _derive_npm_publish(
         request,
         {
             "host",
-            "x-serverware-principal",
-            "x-serverware-credential-id",
+            "x-catchplate-principal",
+            "x-catchplate-credential-id",
             "content-type",
             "content-length",
         },
@@ -3164,7 +3164,7 @@ def _revalidate_output_chain(publication: _OutputPublication) -> None:
 
 def _pending_prefix(leaf: str) -> str:
     leaf_digest = hashlib.sha256(leaf.encode("utf-8")).hexdigest()[:20]
-    return f".serverware-onboarding-{leaf_digest}-"
+    return f".catchplate-onboarding-{leaf_digest}-"
 
 
 def _pending_entries(publication: _OutputPublication) -> list[str]:
@@ -4056,7 +4056,7 @@ class _RejectDuplicateAction(argparse.Action):
         values: object,
         option_string: str | None = None,
     ) -> None:
-        marker = f"_serverware_seen_{self.dest}"
+        marker = f"_catchplate_seen_{self.dest}"
         if getattr(namespace, marker, False):
             parser.error(f"{option_string or self.dest} may be supplied only once")
         setattr(namespace, marker, True)

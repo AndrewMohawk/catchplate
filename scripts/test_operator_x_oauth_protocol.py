@@ -14,8 +14,8 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, quote_plus, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import operator_x_oauth_profile as profiles
-from serverware import operator_x_oauth_protocol as p
+from catchplate import operator_x_oauth_profile as profiles
+from catchplate import operator_x_oauth_protocol as p
 
 HEADERS = (("Content-Type", "application/json; charset=utf-8"),)
 SECRET = "synthetic:s+e%cret λ"

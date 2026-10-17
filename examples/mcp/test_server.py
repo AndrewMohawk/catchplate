@@ -75,7 +75,7 @@ class FixturePrepared:
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         with open(self.log, "a", encoding="utf-8") as output:
             output.write(json.dumps({"case": self.case, "pid": os.getpid(), "group": os.getpgrp(),
-                "child": child.pid if child else None, "scratch": os.environ["SERVERWARE_MCP_CALL_TEMP"]}) + "\n")
+                "child": child.pid if child else None, "scratch": os.environ["CATCHPLATE_MCP_CALL_TEMP"]}) + "\n")
         if self.case in {"wait", "node_wait"}:
             time.sleep(60)
         if self.case == "exception":
@@ -203,7 +203,7 @@ def running(pid):
 
 class ProtocolTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="serverware-mcp-protocol-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="catchplate-mcp-protocol-")
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
         self.log = self.directory / "calls.jsonl"
@@ -413,7 +413,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(printed.stderr, b"")
         value = json.loads(printed.stdout)
         self.assertEqual(set(value), {"mcpServers"})
-        launch = value["mcpServers"]["serverware"]
+        launch = value["mcpServers"]["catchplate"]
         self.assertEqual(launch, {"command": str(Path(sys.executable).absolute()),
             "args": ["-I", "-B", script] + configurations})
         self.assertNotIn(SECRET.encode(), printed.stdout)
@@ -436,7 +436,7 @@ class ProtocolTests(unittest.TestCase):
             "--console-origin", "https://console.example.test/", "--print-client-config"],
             capture_output=True, timeout=10, check=False)
         self.assertEqual(enabled.returncode, 0, enabled.stderr)
-        args = json.loads(enabled.stdout)["mcpServers"]["serverware"]["args"]
+        args = json.loads(enabled.stdout)["mcpServers"]["catchplate"]["args"]
         self.assertEqual(args[-4:], ["--allow-actions", "message", "--console-origin", "https://console.example.test"])
         self.assertNotIn(SECRET.encode(), enabled.stdout)
 
@@ -450,7 +450,7 @@ class ProtocolTests(unittest.TestCase):
         with patch.object(sys, "argv", argv), patch.object(sys, "executable", selected), \
                 patch.object(server, "create_server", side_effect=AssertionError("Must not start MCP")), redirect_stdout(captured):
             server.main()
-        self.assertEqual(json.loads(captured.getvalue())["mcpServers"]["serverware"]["command"], selected)
+        self.assertEqual(json.loads(captured.getvalue())["mcpServers"]["catchplate"]["command"], selected)
         command = [sys.executable, "-I", "-B", str(Path(server.__file__).resolve())]
         for suffix in (["--config", "balance=" + str(configuration), "--allow-actions", "unknown", "--print-client-config"],
                 ["--config", "balance=" + str(self.directory / SECRET), "--print-client-config"],

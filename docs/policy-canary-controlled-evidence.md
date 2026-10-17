@@ -13,7 +13,7 @@ the actual measured authority configuration. The paired schema is
 `schemas/policy-canary-controlled-evidence.v1.schema.json`.
 
 The embedded intake policy is explicitly
-`serverware.policyCanaryIntakeAuthorityPolicy/v2`, with eight fields. It does
+`catchplate.policyCanaryIntakeAuthorityPolicy/v2`, with eight fields. It does
 not contain a self-pin to the enclosing configuration. The previous nine-field
 v1 shape is refused, not silently reinterpreted: that self-pin required a hash
 fixed point because the runtime custody digest is the full authority payload
@@ -41,7 +41,7 @@ SHA-256 identity from the exact assigned canary member. Neither substitutes for
 the other. The signature is `ed25519:` plus canonical base64url of 64 bytes,
 over the ASCII statement schema, one NUL byte, and the full canonical ASCII
 statement. The NSM nonce is SHA-256 of
-`serverware/canary-evidence-intake-attestation/v1`, NUL, nonce32,
+`catchplate/canary-evidence-intake-attestation/v1`, NUL, nonce32,
 SHA-256(statement bytes), and signature64. This is not the audit signature
 preimage. Native evidence retains the original role-4 NSM COSE document and
 raw Ed25519 public key; configured boot strings or successful-verifier DTOs
@@ -50,7 +50,7 @@ cannot stand in for those originals.
 The outer envelope adds the exact public client certificate DER. The genuine
 native TLS owner must retain its private key and send using that same identity.
 The URI is source-fixed as
-`spiffe://serverware.policy-canary/{deploymentId}/{instanceId}`. The receiver
+`spiffe://catchplate.policy-canary/{deploymentId}/{instanceId}`. The receiver
 requires the actual TLS 1.3 peer, exact leaf DER/SPKI, clientAuth EKU and sole
 URI SAN under the independently assigned measured CA. The authority verifier
 and planner independently verify the signed leaf/assignment and original NSM
@@ -63,7 +63,7 @@ The explicit `control-plane --policy-canary-intake` descriptor entrypoint adds
 only the new profile. Older startup selection is unchanged. It opens the fixed
 root-owned `policy-canary-intake.json`, `policy-canary-root-public-key`, and
 `policy-canary-authority-configuration.json` sources below
-`/run/serverware/authority-trust/`, retains distinct read-only descriptors, and
+`/run/catchplate/authority-trust/`, retains distinct read-only descriptors, and
 delivers their actual inventory before privilege drop. It accepts no caller
 pathname or private authority key.
 

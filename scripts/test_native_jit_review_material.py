@@ -33,11 +33,11 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from scripts import test_authority_jit_private_request as ingress
 from scripts import test_authority_jit_request as original
 from scripts import test_authority_release_private_request as release_fixture
-from serverware import authority_contract as contract
-from serverware import authority_jit_private_request as private
-from serverware import authority_planner as planner
-from serverware import authority_release_private_request as release_private
-from serverware import native_jit_review_material as material
+from catchplate import authority_contract as contract
+from catchplate import authority_jit_private_request as private
+from catchplate import authority_planner as planner
+from catchplate import authority_release_private_request as release_private
+from catchplate import native_jit_review_material as material
 
 
 NOW = 1_800_000_000_000_000_000
@@ -70,7 +70,7 @@ def fixture(raw=None):
     if explicit is not None:
         raise AssertionError("unexpected assertion channel")
     request = ingress.typed_request(public)
-    scope = {"schema": "serverware.nativeJitReviewScope/v1", "publicRequest": request,
+    scope = {"schema": "catchplate.nativeJitReviewScope/v1", "publicRequest": request,
         "sourceContractDigest": contract.OPERATION_MANIFEST_DIGEST,
         "controlPlaneConfigurationDigest": original.sha(b"synthetic JIT configuration"),
         "ownerScopeDigest": original.sha(b"synthetic JIT owner scope"),
@@ -81,7 +81,7 @@ def fixture(raw=None):
 
 def aad(scope, item, purpose, key_id=KEY_ID):
     # Independent literal protocol oracle, not material._aad or _identity.
-    return canonical({"schema": "serverware.nativeJitReviewAad/v1", "purpose": purpose,
+    return canonical({"schema": "catchplate.nativeJitReviewAad/v1", "purpose": purpose,
         "scope": scope, "keyId": key_id,
         "approvalRequestId": original.identity(scope["publicRequest"]["requestDigest"], "jit-approval-request"),
         **{name: item[name] for name in ("opaqueId", "valueKind", "plaintextSha256", "plaintextBytes")}})
@@ -100,7 +100,7 @@ def release_fixture_values(raw=None):
         raise AssertionError("release fixture original projection changed")
     parent = release_fixture.native_request_oracle("release.reserve", expected["arguments"])
     child = release_fixture.native_request_oracle("jit.request", expected["arguments"]["jit_approval_request"])
-    scope = {"schema": "serverware.nativeJitReviewScope/v2", "publicRequest": child,
+    scope = {"schema": "catchplate.nativeJitReviewScope/v2", "publicRequest": child,
         "parentRequestSha256": original.sha(canonical(parent)),
         "sourceContractDigest": contract.OPERATION_MANIFEST_DIGEST,
         "controlPlaneConfigurationDigest": original.sha(b"synthetic JIT configuration"),
@@ -113,7 +113,7 @@ def release_fixture_values(raw=None):
 def release_aad(scope, item, purpose, key_id=KEY_ID):
     # Independent literal v2 domain. A parent commitment is AAD, not evidence
     # that the material leaf independently authenticated a release request.
-    return canonical({"schema": "serverware.nativeJitReviewAad/v2", "purpose": purpose,
+    return canonical({"schema": "catchplate.nativeJitReviewAad/v2", "purpose": purpose,
         "scope": scope, "keyId": key_id,
         "approvalRequestId": original.identity(scope["publicRequest"]["requestDigest"], "jit-approval-request"),
         **{name: item[name] for name in ("opaqueId", "valueKind", "plaintextSha256", "plaintextBytes")}})
@@ -159,7 +159,7 @@ class NativeJitReviewMaterialTests(unittest.TestCase):
         self.assertEqual(planner.typed_request_digest(request), request["requestDigest"])
         pair = self.seal()
         self.assertEqual(set(pair), {"schema", "scope", "keyId", "items"})
-        self.assertEqual(pair["schema"], "serverware.nativeJitReviewPair/v1")
+        self.assertEqual(pair["schema"], "catchplate.nativeJitReviewPair/v1")
         self.assertEqual(pair["scope"], self.scope)
         self.assertEqual(pair["keyId"], KEY_ID)
         self.assertEqual(len(pair["items"]), 2)
@@ -173,7 +173,7 @@ class NativeJitReviewMaterialTests(unittest.TestCase):
 
     def test_independent_aesgcm_aad_and_plaintext_wrapper_digest_oracle(self):
         pair = self.seal()
-        plaintexts = (canonical({"schema": "serverware.jitCanonicalReviewPayload/v1",
+        plaintexts = (canonical({"schema": "catchplate.jitCanonicalReviewPayload/v1",
             "url": self.documents["url"], "canonical_request": self.documents["canonical_request"]}),
             canonical(self.documents["redacted_display"]))
         for index, (item, plaintext) in enumerate(zip(pair["items"], plaintexts)):
@@ -290,7 +290,7 @@ class NativeJitReviewMaterialTests(unittest.TestCase):
             # independent material size/depth check is the refusal under test.
             raw = {**ingress.raw_arguments(), **documents}
             public = {name: value for name, value in raw.items() if name not in ingress.PRIVATE_FIELDS}
-            public.update(schema="serverware.jitRequestCommitments/v2",
+            public.update(schema="catchplate.jitRequestCommitments/v2",
                 url_commitment=original.sha(documents["url"].encode("utf-8")),
                 canonical_request_digest=original.sha(canonical(documents["canonical_request"])),
                 redacted_display_digest=original.sha(canonical(documents["redacted_display"])),
@@ -416,12 +416,12 @@ class NativeReleaseJitReviewMaterialTests(unittest.TestCase):
     def test_release_actual_originals_independent_v2_aad_and_owned_roundtrip(self):
         before = canonical([self.scope, self.documents, self.parent])
         pair = self.seal()
-        self.assertEqual(pair["schema"], "serverware.nativeJitReviewPair/v2")
+        self.assertEqual(pair["schema"], "catchplate.nativeJitReviewPair/v2")
         self.assertEqual(set(pair), {"schema", "scope", "keyId", "items"})
         self.assertEqual(material.validate_release_scope(self.scope), self.scope)
         self.assertEqual(self.scope["parentRequestSha256"], original.sha(canonical(self.parent)))
         self.assertEqual(self.open(pair), self.documents)
-        plaintexts = (canonical({"schema": "serverware.jitCanonicalReviewPayload/v1",
+        plaintexts = (canonical({"schema": "catchplate.jitCanonicalReviewPayload/v1",
             "url": self.documents["url"], "canonical_request": self.documents["canonical_request"]}),
             canonical(self.documents["redacted_display"]))
         for index, (item, plaintext) in enumerate(zip(pair["items"], plaintexts)):
@@ -443,7 +443,7 @@ class NativeReleaseJitReviewMaterialTests(unittest.TestCase):
 
     def test_v1_and_v2_are_explicit_and_relabeling_never_reencrypts(self):
         v1_scope = {key: value for key, value in self.scope.items() if key != "parentRequestSha256"}
-        v1_scope["schema"] = "serverware.nativeJitReviewScope/v1"
+        v1_scope["schema"] = "catchplate.nativeJitReviewScope/v1"
         kwargs = {"key_id": KEY_ID, "kek": self.kek, "now_epoch_ns": NOW}
         v1 = material.seal_pair(v1_scope, self.documents, **kwargs)
         v2 = self.seal()
@@ -453,8 +453,8 @@ class NativeReleaseJitReviewMaterialTests(unittest.TestCase):
         self.refused(lambda: self.seal(scope=v1_scope))
         self.refused(lambda: material.open_pair(v2, expected_scope=self.scope, **kwargs))
         self.refused(lambda: self.open(v1, expected_scope=v1_scope))
-        self.refused(lambda: self.open({**v1, "schema": "serverware.nativeJitReviewPair/v2", "scope": self.scope}))
-        self.refused(lambda: material.open_pair({**v2, "schema": "serverware.nativeJitReviewPair/v1", "scope": v1_scope},
+        self.refused(lambda: self.open({**v1, "schema": "catchplate.nativeJitReviewPair/v2", "scope": self.scope}))
+        self.refused(lambda: material.open_pair({**v2, "schema": "catchplate.nativeJitReviewPair/v1", "scope": v1_scope},
             expected_scope=v1_scope, **kwargs))
         for index in range(2):
             self.assertEqual(v1["items"][index]["opaqueId"], v2["items"][index]["opaqueId"])
@@ -515,7 +515,7 @@ class NativeReleaseJitReviewMaterialTests(unittest.TestCase):
             self.refused(lambda: self.open(pair, now_epoch_ns=now))
         with patch.object(material, "MAX_PAIR_BYTES", len(canonical(pair)) - 1):
             self.refused(lambda: self.open(pair))
-        for domain in ("serverware.nativeJitReviewAad/v1", "serverware.nativeJitReviewAad/v3"):
+        for domain in ("catchplate.nativeJitReviewAad/v1", "catchplate.nativeJitReviewAad/v3"):
             value = copy.deepcopy(pair); item = value["items"][0]
             wrong_aad = json.loads(release_aad(self.scope, item, "wrap-dek")); wrong_aad["schema"] = domain
             item["wrappedKey"] = encoded(self.kek.encrypt(decoded(item["wrappedKeyNonce"]), b"d" * 32, canonical(wrong_aad)))

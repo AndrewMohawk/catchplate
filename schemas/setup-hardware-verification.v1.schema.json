@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/setup-hardware-verification.v1.schema.json",
-  "title": "Serverware Setup Hardware Verification v1",
+  "$id": "https://catchplate.invalid/schemas/setup-hardware-verification.v1.schema.json",
+  "title": "Catchplate Setup Hardware Verification v1",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "kind", "statement", "signing_key_id", "signature"],
   "properties": {
-    "apiVersion": {"const": "serverware.setupHardwareVerification/v1"},
+    "apiVersion": {"const": "catchplate.setupHardwareVerification/v1"},
     "kind": {"const": "SetupHardwareVerification"},
     "statement": {"$ref": "#/$defs/statement"},
     "signing_key_id": {"$ref": "#/$defs/sha256"},

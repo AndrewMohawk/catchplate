@@ -55,215 +55,215 @@ except ImportError:
     import verify_nitro_tee as _native_nitro_contract
 
 ISSUER_REQUEST_VERSION = (
-    "serverware.productionStableReleaseIssuerRequest/v1"
+    "catchplate.productionStableReleaseIssuerRequest/v1"
 )
-PRODUCER_REQUEST_VERSION = "serverware.publicAttestationProducerRequest/v2"
-LIVE_REQUEST_VERSION = "serverware.publicAttestationLiveRequest/v1"
+PRODUCER_REQUEST_VERSION = "catchplate.publicAttestationProducerRequest/v2"
+LIVE_REQUEST_VERSION = "catchplate.publicAttestationLiveRequest/v1"
 NONCE_CONSUMPTION_VERSION = (
-    "serverware.publicAttestationNonceConsumption/v1"
+    "catchplate.publicAttestationNonceConsumption/v1"
 )
 SIGNED_NONCE_RECEIPT_VERSION = (
-    "serverware.signedAttestationNonceConsumptionReceipt/v2"
+    "catchplate.signedAttestationNonceConsumptionReceipt/v2"
 )
 NONCE_RECEIPT_PAYLOAD_VERSION = (
-    "serverware.attestationNonceConsumptionReceiptPayload/v2"
+    "catchplate.attestationNonceConsumptionReceiptPayload/v2"
 )
 NONCE_AUTHORITY_ASSURANCE_VERSION = (
-    "serverware.nonceAuthorityAssurance/v1"
+    "catchplate.nonceAuthorityAssurance/v1"
 )
 SIGNED_NONCE_AUTHORITY_ASSURANCE_EVIDENCE_VERSION = (
-    "serverware.signedNonceAuthorityAssuranceEvidence/v1"
+    "catchplate.signedNonceAuthorityAssuranceEvidence/v1"
 )
 NONCE_AUTHORITY_ASSURANCE_EVIDENCE_VERSION = (
-    "serverware.nonceAuthorityAssuranceEvidence/v1"
+    "catchplate.nonceAuthorityAssuranceEvidence/v1"
 )
 SIGNED_VERIFIER_STATE_STORE_ASSURANCE_EVIDENCE_VERSION = (
-    "serverware.signedVerifierStateStoreAssuranceEvidence/v1"
+    "catchplate.signedVerifierStateStoreAssuranceEvidence/v1"
 )
 VERIFIER_STATE_STORE_ASSURANCE_EVIDENCE_VERSION = (
-    "serverware.verifierStateStoreAssuranceEvidence/v1"
+    "catchplate.verifierStateStoreAssuranceEvidence/v1"
 )
 SIGNED_VERIFIER_STATE_ROLE_SEPARATION_EVIDENCE_VERSION = (
-    "serverware.signedVerifierStateRoleSeparationEvidence/v1"
+    "catchplate.signedVerifierStateRoleSeparationEvidence/v1"
 )
 VERIFIER_STATE_ROLE_SEPARATION_EVIDENCE_VERSION = (
-    "serverware.verifierStateRoleSeparationEvidence/v1"
+    "catchplate.verifierStateRoleSeparationEvidence/v1"
 )
-NONCE_AUTHORITY_STATE_VERSION = "serverware.nonceAuthorityState/v1"
+NONCE_AUTHORITY_STATE_VERSION = "catchplate.nonceAuthorityState/v1"
 NONCE_AUTHORITY_HIGH_WATER_INPUT_VERSION = (
-    "serverware.nonceAuthorityHighWaterCommitment/v1"
+    "catchplate.nonceAuthorityHighWaterCommitment/v1"
 )
 SIGNED_NONCE_AUTHORITY_VERIFIER_STATE_VERSION = (
-    "serverware.signedNonceAuthorityVerifierState/v1"
+    "catchplate.signedNonceAuthorityVerifierState/v1"
 )
 NONCE_AUTHORITY_VERIFIER_STATE_VERSION = (
-    "serverware.nonceAuthorityVerifierState/v1"
+    "catchplate.nonceAuthorityVerifierState/v1"
 )
 NONCE_AUTHORITY_VERIFIER_STATE_AUTHORIZATION_VERSION = (
-    "serverware.nonceAuthorityVerifierStatePreparedAuthorization/v3"
+    "catchplate.nonceAuthorityVerifierStatePreparedAuthorization/v3"
 )
 NONCE_AUTHORITY_VERIFIER_STATE_COMMIT_RECEIPT_VERSION = (
-    "serverware.nonceAuthorityVerifierStateCommitReceipt/v3"
+    "catchplate.nonceAuthorityVerifierStateCommitReceipt/v3"
 )
 NONCE_AUTHORITY_VERIFIER_STATE_TRANSITION_VERSION = (
-    "serverware.nonceAuthorityVerifierStateTransition/v3"
+    "catchplate.nonceAuthorityVerifierStateTransition/v3"
 )
 NONCE_AUTHORITY_VERIFIER_STATE_READ_RESPONSE_VERSION = (
-    "serverware.nonceAuthorityVerifierStateReadResponse/v3"
+    "catchplate.nonceAuthorityVerifierStateReadResponse/v3"
 )
 NONCE_AUTHORITY_VERIFIER_STATE_COMMIT_REQUEST_VERSION = (
-    "serverware.attestationVerifierStateCommitRequest/v3"
+    "catchplate.attestationVerifierStateCommitRequest/v3"
 )
 SIGNED_VERIFIER_STATE_STORE_COMMIT_PROOF_VERSION = (
-    "serverware.signedVerifierStateStoreCommitProof/v3"
+    "catchplate.signedVerifierStateStoreCommitProof/v3"
 )
 VERIFIER_STATE_STORE_COMMIT_PROOF_VERSION = (
-    "serverware.verifierStateStoreCommitProof/v3"
+    "catchplate.verifierStateStoreCommitProof/v3"
 )
 VERIFIER_STATE_STORE_COMMIT_CANDIDATE_VERSION = (
-    "serverware.verifierStateStoreCommitCandidate/v2"
+    "catchplate.verifierStateStoreCommitCandidate/v2"
 )
 VERIFIER_STATE_CLIENT_VERSION = (
-    "serverware.attestationVerifierStateClient/v2"
+    "catchplate.attestationVerifierStateClient/v2"
 )
 VERIFIER_STATE_PREPARED_OPERATION_VERSION = (
-    "serverware.attestationVerifierStatePreparedOperation/v1"
+    "catchplate.attestationVerifierStatePreparedOperation/v1"
 )
 VERIFIER_STATE_REQUEST_BINDING_VERSION = (
-    "serverware.attestationVerifierStateRequestBinding/v1"
+    "catchplate.attestationVerifierStateRequestBinding/v1"
 )
 VERIFIER_STATE_PREPARE_REQUEST_VERSION = (
-    "serverware.attestationVerifierStatePrepareRequest/v4"
+    "catchplate.attestationVerifierStatePrepareRequest/v4"
 )
 VERIFIER_STATE_RECOVERY_BINDING_VERSION = (
-    "serverware.attestationVerifierStateRecoveryBinding/v1"
+    "catchplate.attestationVerifierStateRecoveryBinding/v1"
 )
 VERIFIER_STATE_RECOVERY_IDENTITY_VERSION = (
-    "serverware.attestationVerifierStateRecoveryIdentity/v1"
+    "catchplate.attestationVerifierStateRecoveryIdentity/v1"
 )
 VERIFIER_STATE_SUCCESSOR_INTENT_VERSION = (
-    "serverware.attestationVerifierStateSuccessorIntent/v1"
+    "catchplate.attestationVerifierStateSuccessorIntent/v1"
 )
 NONCE_CONSUME_ONCE_REQUEST_VERSION = (
-    "serverware.attestationNonceConsumeOnceRequest/v3"
+    "catchplate.attestationNonceConsumeOnceRequest/v3"
 )
 PRODUCER_INVOCATION_VERSION = (
-    "serverware.publicAttestationProducerInvocation/v1"
+    "catchplate.publicAttestationProducerInvocation/v1"
 )
 PRODUCER_BINDING_VERSION = (
-    "serverware.publicAttestationProducerBinding/v3"
+    "catchplate.publicAttestationProducerBinding/v3"
 )
 SIGNED_PRODUCER_BINDING_VERSION = (
-    "serverware.signedPublicAttestationProducerBinding/v1"
+    "catchplate.signedPublicAttestationProducerBinding/v1"
 )
-PUBLIC_BUNDLE_VERSION = "serverware.publicAttestationBundle/v3"
-RELEASE_GRAPH_VERSION = "serverware.publicReleaseGraph/v1"
-RELEASE_CONFIG_VERSION = "serverware.publicAttestationConfig/v2"
-STABLE_STATEMENT_VERSION = "serverware.stableReleaseStatement/v1"
-LIVE_WITNESS_HEAD_VERSION = "serverware.liveWitnessHead/v1"
-PROTECTED_WITNESS_VERSION = "serverware.protectedLiveWitnessState/v2"
-SIGN_REQUEST_VERSION = "serverware.retainedFdEd25519SignRequest/v1"
-SIGN_RESPONSE_VERSION = "serverware.retainedFdEd25519SignResponse/v1"
-WITNESS_REQUEST_VERSION = "serverware.attestationWitnessCurrentRequest/v2"
-WITNESS_RESPONSE_VERSION = "serverware.attestationWitnessCurrentResponse/v2"
+PUBLIC_BUNDLE_VERSION = "catchplate.publicAttestationBundle/v3"
+RELEASE_GRAPH_VERSION = "catchplate.publicReleaseGraph/v1"
+RELEASE_CONFIG_VERSION = "catchplate.publicAttestationConfig/v2"
+STABLE_STATEMENT_VERSION = "catchplate.stableReleaseStatement/v1"
+LIVE_WITNESS_HEAD_VERSION = "catchplate.liveWitnessHead/v1"
+PROTECTED_WITNESS_VERSION = "catchplate.protectedLiveWitnessState/v2"
+SIGN_REQUEST_VERSION = "catchplate.retainedFdEd25519SignRequest/v1"
+SIGN_RESPONSE_VERSION = "catchplate.retainedFdEd25519SignResponse/v1"
+WITNESS_REQUEST_VERSION = "catchplate.attestationWitnessCurrentRequest/v2"
+WITNESS_RESPONSE_VERSION = "catchplate.attestationWitnessCurrentResponse/v2"
 WITNESS_INVOCATION_BINDING_VERSION = (
-    "serverware.attestationWitnessInvocationBinding/v1"
+    "catchplate.attestationWitnessInvocationBinding/v1"
 )
 PUBLIC_NITRO_LIVE_RESULT_ENVELOPE_VERSION = (
-    "serverware.publicNitroLiveVerificationResultEnvelope/v1"
+    "catchplate.publicNitroLiveVerificationResultEnvelope/v1"
 )
 PUBLIC_NITRO_RESULT_SIGNING_REQUEST_VERSION = (
-    "serverware.publicNitroLiveVerificationResultSigningRequest/v1"
+    "catchplate.publicNitroLiveVerificationResultSigningRequest/v1"
 )
 PUBLIC_NITRO_RESULT_SIGNING_RESPONSE_VERSION = (
-    "serverware.publicNitroLiveVerificationResultSigningResponse/v1"
+    "catchplate.publicNitroLiveVerificationResultSigningResponse/v1"
 )
 PUBLIC_NITRO_RESULT_RECOVERY_REQUEST_VERSION = (
-    "serverware.publicNitroLiveVerificationResultRecoveryRequest/v1"
+    "catchplate.publicNitroLiveVerificationResultRecoveryRequest/v1"
 )
 PUBLIC_NITRO_RESULT_STATUS_REQUEST_VERSION = (
-    "serverware.publicNitroLiveVerificationResultStatusRequest/v1"
+    "catchplate.publicNitroLiveVerificationResultStatusRequest/v1"
 )
 
 STABLE_STATEMENT_DOMAIN = (
-    b"serverware.stableReleaseStatement/v1\x00Ed25519\x00"
+    b"catchplate.stableReleaseStatement/v1\x00Ed25519\x00"
 )
 PROTECTED_WITNESS_DOMAIN = (
-    b"serverware.protectedLiveWitnessState/v2\x00Ed25519\x00"
+    b"catchplate.protectedLiveWitnessState/v2\x00Ed25519\x00"
 )
 LIVE_WITNESS_HEAD_DOMAIN = (
-    b"serverware.liveWitnessHead/v1\x00Ed25519\x00"
+    b"catchplate.liveWitnessHead/v1\x00Ed25519\x00"
 )
 LIVE_WITNESS_HEAD_CHAIN_DOMAIN = (
-    b"serverware:live-witness-head-chain:v1:"
+    b"catchplate:live-witness-head-chain:v1:"
 )
 LIVE_WITNESS_CONTINUITY_DOMAIN = (
-    b"serverware:live-witness-continuity:v1:"
+    b"catchplate:live-witness-continuity:v1:"
 )
 LIVE_WITNESS_CONTINUITY_VERSION = (
-    "serverware.liveWitnessContinuity/v1"
+    "catchplate.liveWitnessContinuity/v1"
 )
 NONCE_RECEIPT_DOMAIN = (
-    b"serverware.attestationNonceConsumptionReceipt/v2\x00Ed25519\x00"
+    b"catchplate.attestationNonceConsumptionReceipt/v2\x00Ed25519\x00"
 )
 NONCE_CONSUME_REQUEST_DIGEST_DOMAIN = (
-    b"serverware.attestationNonceConsumeRequestDigest/v3\x00"
+    b"catchplate.attestationNonceConsumeRequestDigest/v3\x00"
 )
 VERIFIER_STATE_RECOVERY_KEY_DOMAIN = (
-    b"serverware.attestationVerifierStateRecoveryKey/v1\x00"
+    b"catchplate.attestationVerifierStateRecoveryKey/v1\x00"
 )
 VERIFIER_STATE_OPERATION_ID_DOMAIN = (
-    b"serverware.attestationVerifierStateOperationId/v1\x00"
+    b"catchplate.attestationVerifierStateOperationId/v1\x00"
 )
 VERIFIER_STATE_REQUEST_BINDING_DOMAIN = (
-    b"serverware.attestationVerifierStateRequestBinding/v1\x00"
+    b"catchplate.attestationVerifierStateRequestBinding/v1\x00"
 )
 NONCE_AUTHORITY_GENESIS_DOMAIN = (
-    b"serverware.nonceAuthorityGenesisCommitment/v1\x00"
+    b"catchplate.nonceAuthorityGenesisCommitment/v1\x00"
 )
 NONCE_AUTHORITY_HIGH_WATER_DOMAIN = (
-    b"serverware.nonceAuthorityHighWaterCommitment/v1\x00"
+    b"catchplate.nonceAuthorityHighWaterCommitment/v1\x00"
 )
 NONCE_AUTHORITY_ASSURANCE_EVIDENCE_DOMAIN = (
-    b"serverware.nonceAuthorityAssuranceEvidence/v1\x00Ed25519\x00"
+    b"catchplate.nonceAuthorityAssuranceEvidence/v1\x00Ed25519\x00"
 )
 VERIFIER_STATE_STORE_ASSURANCE_EVIDENCE_DOMAIN = (
-    b"serverware.verifierStateStoreAssuranceEvidence/v1\x00Ed25519\x00"
+    b"catchplate.verifierStateStoreAssuranceEvidence/v1\x00Ed25519\x00"
 )
 VERIFIER_STATE_ROLE_SEPARATION_EVIDENCE_DOMAIN = (
-    b"serverware.verifierStateRoleSeparationEvidence/v1\x00Ed25519\x00"
+    b"catchplate.verifierStateRoleSeparationEvidence/v1\x00Ed25519\x00"
 )
 NONCE_AUTHORITY_VERIFIER_STATE_DOMAIN = (
-    b"serverware.nonceAuthorityVerifierState/v1\x00Ed25519\x00"
+    b"catchplate.nonceAuthorityVerifierState/v1\x00Ed25519\x00"
 )
 NONCE_AUTHORITY_VERIFIER_STATE_AUTHORIZATION_DOMAIN = (
-    b"serverware.nonceAuthorityVerifierStatePreparedAuthorization/v3\x00"
+    b"catchplate.nonceAuthorityVerifierStatePreparedAuthorization/v3\x00"
     b"Ed25519\x00"
 )
 NONCE_AUTHORITY_VERIFIER_STATE_COMMIT_RECEIPT_DOMAIN = (
-    b"serverware.nonceAuthorityVerifierStateCommitReceipt/v3\x00"
+    b"catchplate.nonceAuthorityVerifierStateCommitReceipt/v3\x00"
     b"Ed25519\x00"
 )
 VERIFIER_STATE_STORE_COMMIT_PROOF_DOMAIN = (
-    b"serverware.verifierStateStoreCommitProof/v3\x00Ed25519\x00"
+    b"catchplate.verifierStateStoreCommitProof/v3\x00Ed25519\x00"
 )
 NONCE_AUTHORITY_VERIFIER_STATE_HEAD_DOMAIN = (
-    b"serverware.nonceAuthorityVerifierStateHead/v1\x00"
+    b"catchplate.nonceAuthorityVerifierStateHead/v1\x00"
 )
 PRODUCER_BINDING_DOMAIN = (
-    b"serverware.publicAttestationProducerBinding/v3\x00Ed25519\x00"
+    b"catchplate.publicAttestationProducerBinding/v3\x00Ed25519\x00"
 )
 PUBLIC_NITRO_LIVE_RESULT_ENVELOPE_DOMAIN = (
     _native_nitro_contract.PUBLIC_NITRO_LIVE_RESULT_ENVELOPE_DOMAIN
 )
 PUBLIC_NITRO_RESULT_SIGNING_OPERATION_DOMAIN = (
-    b"serverware.publicNitroLiveVerificationResultSigningOperation/v1\x00"
+    b"catchplate.publicNitroLiveVerificationResultSigningOperation/v1\x00"
 )
 PUBLIC_NITRO_RESULT_SIGNING_RECOVERY_DOMAIN = (
-    b"serverware.publicNitroLiveVerificationResultSigningRecovery/v1\x00"
+    b"catchplate.publicNitroLiveVerificationResultSigningRecovery/v1\x00"
 )
-TRUST_ROOTS_VERSION = "serverware.publicNitroTrustRoots/v4"
-RELEASE_IDENTITY_VERSION = "serverware.releaseIdentity/v1"
+TRUST_ROOTS_VERSION = "catchplate.publicNitroTrustRoots/v4"
+RELEASE_IDENTITY_VERSION = "catchplate.releaseIdentity/v1"
 RELEASE_PIPELINE = "manifest-v6-promoted-oci-nitro-eif"
 
 MAX_U64 = (1 << 64) - 1
@@ -3001,7 +3001,7 @@ def validate_issuer_request(
     require(
         containment["producerMakesContainmentClaim"] is False
         and containment["requiredLauncherContract"]
-        == "serverware.publicAttestationExecutionSandbox/v2",
+        == "catchplate.publicAttestationExecutionSandbox/v2",
         "issuer request attempts to claim local containment",
     )
     pins = statement_pins(
@@ -4212,7 +4212,7 @@ def validate_verifier_state_transition_prefix(
         and prepare_request["challengeIssueSha256"]
         == sha256_json(challenge_issue)
         and challenge_issue["apiVersion"]
-        == "serverware.attestationVerifierStateIssueChallengeResponse/v1"
+        == "catchplate.attestationVerifierStateIssueChallengeResponse/v1"
         and challenge_issue["operationIdBase64url"]
         == deterministic_operation_id
         and challenge_issue["recoveryKeySha256"]
@@ -4456,7 +4456,7 @@ def verify_signed_nonce_receipt(
     authority_state_sha256 = sha256_json(authority_state)
     consume_request = {
         "apiVersion":
-        "serverware.attestationNonceConsumeOnceRequest/v3",
+        "catchplate.attestationNonceConsumeOnceRequest/v3",
         "expiresAtUnix": receipt_expires,
         "nonceAuthorityVerifierStateAuthorizationSha256": (
             nonce_authority_verifier_state_authorization_sha256
@@ -5098,9 +5098,9 @@ def validate_tls_binding(value: Any) -> tuple[dict[str, Any], str]:
         "producer TLS binding",
     )
     require(
-        binding["apiVersion"] == "serverware.enclaveTlsScope/v2"
+        binding["apiVersion"] == "catchplate.enclaveTlsScope/v2"
         and binding["exporterLabel"]
-        == "EXPORTER-Serverware-Attestation-v1",
+        == "EXPORTER-Catchplate-Attestation-v1",
         "producer TLS binding version is invalid",
     )
     for field in (
@@ -6134,7 +6134,7 @@ def verify_live_witness_response(
     )
     require(
         store_identity["apiVersion"]
-        == "serverware.attestationWitnessStoreIdentity/v2"
+        == "catchplate.attestationWitnessStoreIdentity/v2"
         and store_identity["assurance"]
         == "externallyWitnessedRollbackProtected"
         and store_identity["storageBackend"]
@@ -6239,7 +6239,7 @@ def verify_live_witness_response(
         maximum=32,
     )
     require(
-        receipt["apiVersion"] == "serverware.liveWitnessCasReceipt/v1"
+        receipt["apiVersion"] == "catchplate.liveWitnessCasReceipt/v1"
         and receipt["checkpointSha256"] == current["checkpointSha256"]
         and receipt["committedRollbackContinuityCommitmentSha256"]
         == protected["rollbackContinuityCommitmentSha256"]
@@ -6497,13 +6497,13 @@ def build_public_bundle(
         "releaseGraph": release_graph,
         "schemaVersions": {
             "endpointBundle": PUBLIC_BUNDLE_VERSION,
-            "liveSessionProof": "serverware.liveSessionProof/v1",
+            "liveSessionProof": "catchplate.liveSessionProof/v1",
             "liveWitnessHead": LIVE_WITNESS_HEAD_VERSION,
             "nonceAuthorityVerifierStateTransition":
             NONCE_AUTHORITY_VERIFIER_STATE_TRANSITION_VERSION,
             "protectedLiveWitnessState": PROTECTED_WITNESS_VERSION,
             "releaseConfig": RELEASE_CONFIG_VERSION,
-            "releaseIdentity": "serverware.releaseIdentity/v1",
+            "releaseIdentity": "catchplate.releaseIdentity/v1",
             "stableReleaseStatement": STABLE_STATEMENT_VERSION,
             "trustRoots": TRUST_ROOTS_VERSION,
         },

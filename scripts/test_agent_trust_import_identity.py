@@ -11,17 +11,17 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import authority_launcher as launcher
+from catchplate import authority_launcher as launcher
 
 
 class AgentTrustImportIdentity(unittest.TestCase):
     def sealed_package(self):
-        raw = (ROOT / "serverware_agent_trust/__init__.py").read_bytes()
+        raw = (ROOT / "catchplate_agent_trust/__init__.py").read_bytes()
         fd = launcher._seal_bytes("public-agent-trust-init", raw)
         self.addCleanup(os.close, fd)
-        loader = launcher._SealedSourceLoader("serverware_agent_trust", fd,
-            "source/serverware_agent_trust/__init__.py")
-        spec = importlib.util.spec_from_loader("serverware_agent_trust", loader, is_package=True)
+        loader = launcher._SealedSourceLoader("catchplate_agent_trust", fd,
+            "source/catchplate_agent_trust/__init__.py")
+        spec = importlib.util.spec_from_loader("catchplate_agent_trust", loader, is_package=True)
         module = importlib.util.module_from_spec(spec)
         # Actual measured SourceLoader, but no admission/signature/service claim.
         with mock.patch("pathlib.Path.resolve", side_effect=AssertionError("metadata lookup at import")), \
@@ -58,7 +58,7 @@ class AgentTrustImportIdentity(unittest.TestCase):
             identity.assert_called_once_with()
 
     def test_normal_source_identity_remains_actual_and_strict(self):
-        import serverware_agent_trust as package
+        import catchplate_agent_trust as package
         project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
         self.assertEqual(package._project_identity(), (project["name"], project["version"]))
         self.assertEqual((package.DISTRIBUTION_NAME, package.ENROLLMENT_CLI_COMMAND, package.__version__),

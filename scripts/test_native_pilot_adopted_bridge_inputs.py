@@ -23,9 +23,9 @@ from cryptography.exceptions import InvalidSignature
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
 
-from serverware import native_pilot_adopted_bridge_inputs as compiler
-from serverware import native_pilot_driver_authority as driver_authority
-from serverware import native_pilot_scope_authority as scope
+from catchplate import native_pilot_adopted_bridge_inputs as compiler
+from catchplate import native_pilot_driver_authority as driver_authority
+from catchplate import native_pilot_scope_authority as scope
 from test_native_pilot_adopted_bridge_chain import fixture as bridge_fixture, delivery_options
 from test_native_pilot_adopted_current_head import fixture as head_fixture
 from test_native_pilot_adopted_interactive import fixture as interval_fixture, window_fixture, literal_rows, SECOND, BOOT
@@ -153,7 +153,7 @@ def _scope_case():
     selected = compiler.launch.prepare_input(launch_raw, **f["clocks"])
     installed = compiler.launch_publication.launch._installation_result("bridge",
         p.sha(selected["bundleOriginal"]), selected["window"], selected["pins"])
-    installed["apiVersion"] = "serverware.nativePilotLaunchInstallation/v3"
+    installed["apiVersion"] = "catchplate.nativePilotLaunchInstallation/v3"
     prior["install-launch-bridge"] = record(launch_raw, installed)
     for role, text in grants.items():
         prior["ordinary-generation-" + role]["result"] = output(text.encode("ascii"))
@@ -184,7 +184,7 @@ def _scope_case():
             "mode": stat.S_IFREG | 0o400, "uid": c9["payload"]["uid"], "gid": c9["payload"]["gid"], "length": row["length"]})
     descriptors.extend({"name": "activation:" + row["name"], "length": 0,
         **{name: row[name] for name in ("device", "inode", "mode", "uid", "gid")}} for row in c9["payload"]["activation"])
-    operation = {"apiVersion": "serverware.nativeShadowDriverOperation/v1", "launch": installed["launch"],
+    operation = {"apiVersion": "catchplate.nativeShadowDriverOperation/v1", "launch": installed["launch"],
         "descriptors": sorted(descriptors, key=lambda row: row["name"]), "production": common["measured"]["production"]}
     observations["release"] = {"operationOriginal": p.canonical(operation).decode("ascii")}
     return prior, observations, supervisor, f["clocks"]
@@ -266,8 +266,8 @@ class AdoptedBridgeInputControls(unittest.TestCase):
         options = scope_case(); raw = compose("driver-scope", {}, options)
         value = json.loads(raw)
         checked = scope.prepare_input(raw, **{name: options[name] for name in ("boot", "now_boottime_ns", "now_unix_ns")}, adopted=True)
-        self.assertEqual(checked["payload"]["apiVersion"], "serverware.nativeShadowDriverScope/v4")
-        self.assertEqual(json.loads(value["launchOriginal"])["apiVersion"], "serverware.nativeProofBridgeLaunch/v10")
+        self.assertEqual(checked["payload"]["apiVersion"], "catchplate.nativeShadowDriverScope/v4")
+        self.assertEqual(json.loads(value["launchOriginal"])["apiVersion"], "catchplate.nativeProofBridgeLaunch/v10")
         self.assertEqual(checked["payload"]["operation"], json.loads(options["observations"]["release"]["operationOriginal"]))
         with self.assertRaises(ERRORS):
             scope.prepare_input(raw, **{name: options[name] for name in ("boot", "now_boottime_ns", "now_unix_ns")})
@@ -375,7 +375,7 @@ class AdoptedBridgeInputControls(unittest.TestCase):
             changed = copy.deepcopy(options)
             if mutation == "prefix": changed["prior"].pop(next(iter(changed["prior"])))
             elif mutation == "measured": changed["supervisor_observation"]["measuredConfiguration"] = None
-            else: changed["supervisor_observation"]["apiVersion"] = "serverware.nativePilotSupervisorObservation/v1"
+            else: changed["supervisor_observation"]["apiVersion"] = "catchplate.nativePilotSupervisorObservation/v1"
             with self.subTest(mutation=mutation), self.assertRaises(ERRORS): compose(name, selection, changed)
 
 

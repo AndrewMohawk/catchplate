@@ -129,7 +129,7 @@ impl<'a> Attempt<'a> {
                     // Match the existing background-renewal public scope hash.
                     let scope_sha256 = digest_json(&json!({"principal_id":self.scope.principal_id,
                         "route_id":self.scope.route_id,"credential_id":self.scope.credential_id}));
-                    let record = json!({"schema":"serverware.operatorStaticPreparationFailure/v1",
+                    let record = json!({"schema":"catchplate.operatorStaticPreparationFailure/v1",
                         "ordinal":previous + 1,"stage":stage.label(),"error_code":error_code(error),
                         "scope_sha256":scope_sha256,
                         "policy_sha256":is_sha256_digest(&self.snapshot.hash).then_some(self.snapshot.hash.as_str())});

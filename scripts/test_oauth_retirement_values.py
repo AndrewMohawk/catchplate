@@ -13,12 +13,12 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import oauth_retirement_values as values
+from catchplate import oauth_retirement_values as values
 
 
 def grant():
     digest = "sha256:" + "1" * 64
-    return {"schema": "serverware.oauthRevocationAuthorization/v1",
+    return {"schema": "catchplate.oauthRevocationAuthorization/v1",
         "sourceRevision": "synthetic-source", "purpose": "retained-oauth-revocation",
         "authorizationId": "00000000-0000-4000-8000-000000000001",
         "configurationDigest": digest, "deploymentId": "synthetic:deployment-1",
@@ -52,12 +52,12 @@ import sys
 sys.path.insert(0, sys.argv[1])
 original_import = builtins.__import__
 def isolated_import(name, globals=None, locals=None, fromlist=(), level=0):
-    if name.startswith("serverware.authority_") or (name == "serverware" and any(
+    if name.startswith("catchplate.authority_") or (name == "catchplate" and any(
             item.startswith("authority_") for item in (fromlist or ()))):
         raise AssertionError("native receipt imported control-plane authority")
     return original_import(name, globals, locals, fromlist, level)
 builtins.__import__ = isolated_import
-from serverware import native_oauth_capture_retirement, native_oauth_pending_retirement
+from catchplate import native_oauth_capture_retirement, native_oauth_pending_retirement
 for wire, claim_operation in (
         (native_oauth_capture_retirement, "oauth.measured-capture-retirement.claim"),
         (native_oauth_pending_retirement, "oauth.measured-pending-retirement.claim")):

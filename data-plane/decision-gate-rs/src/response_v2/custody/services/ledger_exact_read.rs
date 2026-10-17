@@ -17,7 +17,7 @@ use super::super::super::state_authority::{AuthorityError, AuthorityResult, Boot
 use transport::Process;
 use wire::{Context, Object, Request, Response, Signed};
 
-const PROFILE: &str = "serverware.responseV2.ledgerExactRead/v1";
+const PROFILE: &str = "catchplate.responseV2.ledgerExactRead/v1";
 const LEAF: &str = "ledger-exact-read.sock";
 const FRAME: usize = 16 * 1024;
 

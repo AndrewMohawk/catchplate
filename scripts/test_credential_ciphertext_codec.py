@@ -32,11 +32,11 @@ sys.addaudithook(no_network)
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from jsonschema import Draft202012Validator
-from serverware import credential_ciphertext as projection
-from serverware import crypto
-from serverware import native_oauth_refresh as oauth_material
-from serverware import native_secret_broker_helper as broker
-from serverware import native_static_credential as static_material
+from catchplate import credential_ciphertext as projection
+from catchplate import crypto
+from catchplate import native_oauth_refresh as oauth_material
+from catchplate import native_secret_broker_helper as broker
+from catchplate import native_static_credential as static_material
 
 IDENTIFIER = "12345678-1234-4234-8234-123456789abc"
 KEY = bytes(range(32))  # Public synthetic test material, never deployed.
@@ -68,10 +68,10 @@ class StoredCredentialCodecTests(unittest.TestCase):
         # the known synthetic envelope. This is not a native owner/lease test.
         _, key_nonce, wrapped = transported["encryptedDek"].split(":")
         dek = AESGCM(KEY).decrypt(broker._stored(key_nonce, 12, 12), broker._stored(wrapped, 48, 48),
-            f"serverware:dek:{IDENTIFIER}:v1".encode())
+            f"catchplate:dek:{IDENTIFIER}:v1".encode())
         actual = AESGCM(dek).decrypt(broker._stored(transported["secretNonce"][3:], 12, 12),
             broker._stored(transported["secretCiphertext"][3:], projection.MAX_CIPHERTEXT_BYTES),
-            f"serverware:secret:{IDENTIFIER}:v1".encode())
+            f"catchplate:secret:{IDENTIFIER}:v1".encode())
         self.assertEqual(actual, plaintext)
         self.assertEqual(original, before)
 

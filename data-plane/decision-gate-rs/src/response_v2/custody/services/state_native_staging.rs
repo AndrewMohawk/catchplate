@@ -90,7 +90,7 @@ pub(in super::super::super) fn execute(config:&RootOwnedResponseObservationV2Con
             let originals=staging::inputs::retained_metadata(&prior_request,claim.previous_inputs().ok_or_else(||fail("actual Reserve inputs absent"))?)?;
             let mut files=originals.iter().map(|raw|seal(raw)).collect::<Result<Vec<_>,_>>()?;
             files.push(inputs.clone_file(0)?);files.push(inputs.clone_file(1)?);
-            let policy=wire::PolicyRequest{api_version:"serverware.responseV2.nativeStagingPolicy/v1".into(),
+            let policy=wire::PolicyRequest{api_version:"catchplate.responseV2.nativeStagingPolicy/v1".into(),
                 claim:signed_claim(config,key,&value)?,request:native_wire(&value)?,reserve_request:prior_request,reserve_result:prior};
             value.check(config)?;
             let (reply,extra)=invoke_service_wire(config,CustodyServiceRole::PolicyProofVerifier,ServiceOperationV1::TransitionAuthorize,
@@ -120,12 +120,12 @@ pub(in super::super::super) fn execute(config:&RootOwnedResponseObservationV2Con
                 "injectionPlanSha256":crate::native_staging_v1::sha256(&crate::canonical_json_bytes(injection).map_err(|_|fail("injection canonical original"))?)});
             let digest=crate::native_staging_v1::sha256(&crate::canonical_json_bytes(&commitment).map_err(|_|fail("credential commitment encoding"))?);
             if crate::canonical_json_bytes(&template).map_err(|_|fail("template encoding"))?!=inputs.bytes(0)?
-                ||template.get("apiVersion").and_then(|v|v.as_str())!=Some("serverware.responseObservationV2CredentialTemplate/v1")
+                ||template.get("apiVersion").and_then(|v|v.as_str())!=Some("catchplate.responseObservationV2CredentialTemplate/v1")
                 ||template.get("credentialRequired").and_then(|v|v.as_bool())!=Some(true)
                 ||template.get("credentialBindingSha256").and_then(|v|v.as_str())!=Some(digest.as_str())
                 ||binding.transaction.credential_binding_sha256.as_deref()!=Some(digest.as_str())||credential.credential_binding_sha256!=digest{
                 return Err(fail("Stage template does not bind the exact reserved credential and injection plan"));}
-            let put=wire::StagedPutRequest{api_version:"serverware.responseV2.nativeStagedPut/v1".into(),claim:signed_claim(config,key,&value)?,
+            let put=wire::StagedPutRequest{api_version:"catchplate.responseV2.nativeStagedPut/v1".into(),claim:signed_claim(config,key,&value)?,
                 request:native_wire(&value)?,authority_result:prior.clone()};
             let published=staging::ledger::put(config,&put,inputs.clone_file(1)?)?;
             value.check(config)?;

@@ -1,10 +1,10 @@
-# GitHub issues through Serverware: Node.js
+# GitHub issues through Catchplate: Node.js
 
 A runnable, read-only-by-default project using ordinary `@octokit/rest` **22.0.1**
 and Undici **8.11.2**. It lists issues, following pagination for one explicitly
 configured repository. Optional commands create one issue or one comment.
 
-The transport follows the existing Serverware Octokit fixture and generated
+The transport follows the existing Catchplate Octokit fixture and generated
 client recipe. This example's mocked and real-SDK offline tests are **not evidence
 of a successful request to public GitHub**. There are no provider requests in the
 tests, and no active workflow is installed by this directory.
@@ -24,7 +24,7 @@ This explicit installation downloads the versions in the checked-in
 `package-lock.json`, without dependency lifecycle scripts. Review the lock before
 use and deliberately review updates. The client itself does not install anything.
 
-## 2. Configure Serverware
+## 2. Configure Catchplate
 
 In the operator UI:
 
@@ -38,11 +38,11 @@ granting or using either connection still requires the enabled upstream.
    For a PAT, save a connection name and token. For an App, save its App ID,
    private-key PEM, exact repository owner/name and Issues
    access (`read`, or `write` for the creation commands). The App must already
-   be installed for that repository with the required permission. Serverware
+   be installed for that repository with the required permission. Catchplate
    discovers and verifies its installation ID during the existing repository
    lookup; the optional advanced installation-ID override must match exactly.
    Saved connections and renewals keep that verified ID pinned. Provider
-   credentials stay in Serverware, never in this project or the workflow.
+   credentials stay in Catchplate, never in this project or the workflow.
 2. Create an application with **Basic and Bearer** proxy authentication and keep
    its application ID and token. This example uses Basic CONNECT authentication.
 3. Grant that application **Read issues and comments** for one exact owner and
@@ -55,11 +55,11 @@ granting or using either connection still requires the enabled upstream.
    uses a private CA, obtain that separate outer CA too.
 
 Application-token expiry/revocation and the provider's own permissions still
-apply. Serverware stores the App private key encrypted and automatically obtains
+apply. Catchplate stores the App private key encrypted and automatically obtains
 and renews its short-lived installation tokens; PATs are not automatically
 renewed. The App's exact repository/Issues ceiling does not replace the separate
 application grant. A GitHub App installation is not GitHub OAuth user login, and
-its App ID is not `SERVERWARE_APP_ID`.
+its App ID is not `CATCHPLATE_APP_ID`.
 
 App token reuse requires a 65-second expiry margin. A mint failure is not retried
 in the same call; only a later separately authorized lease after a 60-second
@@ -74,18 +74,18 @@ perform hardware approval. The new App flow is **not yet verified against real G
 
 Select the application's GitHub permission in **Client setup**, then download
 the private client JSON and the proxy CA. Keep them outside your checkout, for
-example together in a private directory. The JSON contains the **Serverware
+example together in a private directory. The JSON contains the **Catchplate
 application token**, not the GitHub provider credential. Do not commit or share it.
 
 ```sh
-chmod 600 /path/serverware-client.private.json
-node client.mjs --config /path/serverware-client.private.json
+chmod 600 /path/catchplate-client.private.json
+node client.mjs --config /path/catchplate-client.private.json
 # Equivalent explicit read:
-node client.mjs --config /path/serverware-client.private.json list
+node client.mjs --config /path/catchplate-client.private.json list
 ```
 
 Put the downloaded CA at the JSON's `ca_file` path (normally
-`./serverware-ca.pem`). Relative CA paths are resolved against the JSON file's
+`./catchplate-ca.pem`). Relative CA paths are resolved against the JSON file's
 directory, not the shell's working directory. If supplied, the separate outer
 proxy CA in `client_recipe.proxy_ca_file` follows the same rule. Verify CA identity
 with the operator before trusting it.
@@ -103,13 +103,13 @@ Set these environment variables using your shell or secret manager:
 
 | Variable | Value |
 | --- | --- |
-| `SERVERWARE_PROXY_URL` | HTTPS proxy origin, including its port if needed; no URL credentials/path/query |
-| `SERVERWARE_APP_ID` | Saved application's UUID |
-| `SERVERWARE_PROXY_TOKEN` | Saved application's token, **not a GitHub token** |
-| `SERVERWARE_CA_FILE` | Local trusted Serverware interception CA PEM file |
-| `SERVERWARE_PROXY_CA_FILE` | Optional separate CA PEM for the outer HTTPS proxy; absent uses Node's normal trust |
-| `SERVERWARE_GITHUB_OWNER` | Exact owner from the saved permission |
-| `SERVERWARE_GITHUB_REPO` | Exact repository name from the saved permission |
+| `CATCHPLATE_PROXY_URL` | HTTPS proxy origin, including its port if needed; no URL credentials/path/query |
+| `CATCHPLATE_APP_ID` | Saved application's UUID |
+| `CATCHPLATE_PROXY_TOKEN` | Saved application's token, **not a GitHub token** |
+| `CATCHPLATE_CA_FILE` | Local trusted Catchplate interception CA PEM file |
+| `CATCHPLATE_PROXY_CA_FILE` | Optional separate CA PEM for the outer HTTPS proxy; absent uses Node's normal trust |
+| `CATCHPLATE_GITHUB_OWNER` | Exact owner from the saved permission |
+| `CATCHPLATE_GITHUB_REPO` | Exact repository name from the saved permission |
 
 Do not set `NODE_TLS_REJECT_UNAUTHORIZED=0`. Both TLS hops always verify the peer.
 CA files, `.env` files and `node_modules` are ignored by this example's Git rules;
@@ -117,7 +117,7 @@ they are not credentials to copy into source control. The CA is supplied as an
 explicit trusted input, not fetched over an unverified connection.
 
 Octokit receives only the fixed public value
-`serverware-github-placeholder-v1`. Serverware replaces it after authorization.
+`catchplate-github-placeholder-v1`. Catchplate replaces it after authorization.
 `GITHUB_TOKEN` and `GH_TOKEN` are not read. Proxy identity comes only from the
 downloaded configuration or listed environment variables, not URL userinfo or
 ambient proxy settings.
@@ -125,7 +125,7 @@ ambient proxy settings.
 ## 4. Run a read
 
 ```sh
-node client.mjs --config /path/serverware-client.private.json
+node client.mjs --config /path/catchplate-client.private.json
 # With the environment-only alternative:
 node client.mjs list
 ```
@@ -146,22 +146,22 @@ claiming a complete list. These are example limits, not a proxy latency SLA.
 These commands affect the configured repository if its saved write permission
 allows them. Do not execute them merely to test connectivity.
 
-For exactly one new issue, supply `SERVERWARE_ISSUE_TITLE` and a nonempty
-`SERVERWARE_ISSUE_BODY`, then run:
+For exactly one new issue, supply `CATCHPLATE_ISSUE_TITLE` and a nonempty
+`CATCHPLATE_ISSUE_BODY`, then run:
 
 ```sh
 node client.mjs create-issue
 # Or use a downloaded write-enabled permission:
-node client.mjs --config /path/serverware-client.private.json create-issue
+node client.mjs --config /path/catchplate-client.private.json create-issue
 ```
 
-For exactly one comment on an existing issue, supply `SERVERWARE_ISSUE_NUMBER`
-and a nonempty `SERVERWARE_COMMENT_BODY`, then run:
+For exactly one comment on an existing issue, supply `CATCHPLATE_ISSUE_NUMBER`
+and a nonempty `CATCHPLATE_COMMENT_BODY`, then run:
 
 ```sh
 node client.mjs create-comment
 # Or use a downloaded write-enabled permission:
-node client.mjs --config /path/serverware-client.private.json create-comment
+node client.mjs --config /path/catchplate-client.private.json create-comment
 ```
 
 Content comes from environment variables so it is not required in command-line
@@ -171,7 +171,7 @@ is automatically created as a prerequisite for a comment. There are no edit,
 delete, repository-management or arbitrary-request commands.
 
 There are **no automatic retries**. After a lost response or an uncertain
-creation result, inspect GitHub and Serverware audit records before deciding
+creation result, inspect GitHub and Catchplate audit records before deciding
 whether to submit again. Errors print only a fixed message and an optional HTTP
 status; raw Octokit errors can contain sensitive request details and are not
 logged.
@@ -222,18 +222,18 @@ under `.github/workflows/` in your own repository, keeping this project at
 It uses a normal **GitHub-hosted `ubuntu-24.04` runner**: checkout, install Node.js
 **25.5.0**, run `npm ci --ignore-scripts --no-audit --no-fund`, then read the selected
 repository. No preprovisioned runner or dependency directory is required. The
-install step has no Serverware token or CA inputs; only the final client step
+install step has no Catchplate token or CA inputs; only the final client step
 receives them. Package caching is disabled, and checkout does not persist its
 repository credential.
 
-Create the protected GitHub environment `serverware-demo`, allow only your
+Create the protected GitHub environment `catchplate-demo`, allow only your
 trusted default branch, and restrict who may approve/run it. Configure:
 
-- Environment secrets: `SERVERWARE_PROXY_TOKEN`, `SERVERWARE_CA_PEM`, and
-  optionally `SERVERWARE_PROXY_CA_PEM`. The PEM inputs must come from your trusted
+- Environment secrets: `CATCHPLATE_PROXY_TOKEN`, `CATCHPLATE_CA_PEM`, and
+  optionally `CATCHPLATE_PROXY_CA_PEM`. The PEM inputs must come from your trusted
   proxy operator; they are not blindly downloaded during the workflow.
-- Variables: `SERVERWARE_PROXY_URL`, `SERVERWARE_APP_ID`,
-  `SERVERWARE_GITHUB_OWNER`, `SERVERWARE_GITHUB_REPO`.
+- Variables: `CATCHPLATE_PROXY_URL`, `CATCHPLATE_APP_ID`,
+  `CATCHPLATE_GITHUB_OWNER`, `CATCHPLATE_GITHUB_REPO`.
 
 Use **Actions → Run workflow** on that default branch. There are no pull-request
 triggers, user-supplied workflow inputs or arbitrary checkout refs; the job also
@@ -244,7 +244,7 @@ be valid. This sample does not bypass network restrictions or renew tokens.
 
 The workflow performs **only a read**. Its `contents: read` permission is for
 checking out the example, not authentication to the target GitHub repository;
-the client uses the Serverware application token and fixed public GitHub dummy.
+the client uses the Catchplate application token and fixed public GitHub dummy.
 Do not add a real GitHub provider token, App private key, JWT or installation
 token to the workflow. Running this issues client in Actions does not grant
 access to Actions/workflow management APIs. The job has a five-minute

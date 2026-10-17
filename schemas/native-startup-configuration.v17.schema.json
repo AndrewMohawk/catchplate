@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v17.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-startup-configuration.v17.schema.json",
   "title": "Explicit native active-family reconnect startup",
   "$comment": "Retains v16 native owners and replaces only measuredSetup with the separately authorized measuredReconnect browser purpose. The enrollment Setup authorizer remains separate. No initial-issuance/Setup request is converted to reconnect authority. Data do not supply family grants, actual drains, native possession, provider success or activation.",
   "type": "object",
@@ -13,7 +13,7 @@
     "guestRoleKeyProvisioner", "measuredPendingRetirement", "gateCgroup", "measuredCaptureRetirement"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeStartupConfiguration/v17"},
+    "apiVersion": {"const": "catchplate.nativeStartupConfiguration/v17"},
     "gate": {"$ref": "native-startup-configuration.v16.schema.json#/properties/gate"},
     "native": {"$ref": "native-startup-configuration.v16.schema.json#/properties/native"},
     "shadow": {"$ref": "native-startup-configuration.v16.schema.json#/properties/shadow"},

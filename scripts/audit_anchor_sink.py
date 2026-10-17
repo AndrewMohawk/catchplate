@@ -27,29 +27,29 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
-from serverware.config import AUDIT_ANCHOR_TOKEN as ANCHOR_TOKEN
+from catchplate.config import AUDIT_ANCHOR_TOKEN as ANCHOR_TOKEN
 
 
-ANCHOR_PATH = Path(os.getenv("SERVERWARE_AUDIT_ANCHOR_PATH", "/anchors/transparency-log.jsonl"))
-SIGNING_KEY_PATH = Path(os.getenv("SERVERWARE_TRANSPARENCY_LOG_SIGNING_KEY", "/anchors/transparency-log-ed25519.pem"))
-CHECKPOINT_COMMAND = os.getenv("SERVERWARE_TRANSPARENCY_CHECKPOINT_COMMAND", "").strip()
-CHECKPOINT_REQUIRED = os.getenv("SERVERWARE_TRANSPARENCY_CHECKPOINT_REQUIRED", "0").lower() in {"1", "true", "yes"}
-CHECKPOINT_MODE = os.getenv("SERVERWARE_TRANSPARENCY_CHECKPOINT_MODE", "").strip().lower()
-EXPECTED_CHECKPOINT_LOG_ID = os.getenv("SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID", "").strip()
+ANCHOR_PATH = Path(os.getenv("CATCHPLATE_AUDIT_ANCHOR_PATH", "/anchors/transparency-log.jsonl"))
+SIGNING_KEY_PATH = Path(os.getenv("CATCHPLATE_TRANSPARENCY_LOG_SIGNING_KEY", "/anchors/transparency-log-ed25519.pem"))
+CHECKPOINT_COMMAND = os.getenv("CATCHPLATE_TRANSPARENCY_CHECKPOINT_COMMAND", "").strip()
+CHECKPOINT_REQUIRED = os.getenv("CATCHPLATE_TRANSPARENCY_CHECKPOINT_REQUIRED", "0").lower() in {"1", "true", "yes"}
+CHECKPOINT_MODE = os.getenv("CATCHPLATE_TRANSPARENCY_CHECKPOINT_MODE", "").strip().lower()
+EXPECTED_CHECKPOINT_LOG_ID = os.getenv("CATCHPLATE_TRANSPARENCY_EXPECTED_LOG_ID", "").strip()
 EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY_PATH = os.getenv(
-    "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY", ""
+    "CATCHPLATE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY", ""
 ).strip()
 TRUSTED_CHECKPOINT_PUBLIC_KEY_PATH = os.getenv(
-    "SERVERWARE_TRANSPARENCY_TRUSTED_PUBLIC_KEY", ""
+    "CATCHPLATE_TRANSPARENCY_TRUSTED_PUBLIC_KEY", ""
 ).strip()
 EXTERNAL_CHECKPOINT_LOG_PATH = os.getenv(
-    "SERVERWARE_EXTERNAL_TRANSPARENCY_LOG_PATH", ""
+    "CATCHPLATE_EXTERNAL_TRANSPARENCY_LOG_PATH", ""
 ).strip()
 EXTERNAL_CHECKPOINT_KEY_PATH = os.getenv(
-    "SERVERWARE_EXTERNAL_TRANSPARENCY_LOG_KEY", ""
+    "CATCHPLATE_EXTERNAL_TRANSPARENCY_LOG_KEY", ""
 ).strip()
-TLS_CERT_FILE = os.getenv("SERVERWARE_AUDIT_ANCHOR_TLS_CERT_FILE", "").strip()
-TLS_KEY_FILE = os.getenv("SERVERWARE_AUDIT_ANCHOR_TLS_KEY_FILE", "").strip()
+TLS_CERT_FILE = os.getenv("CATCHPLATE_AUDIT_ANCHOR_TLS_CERT_FILE", "").strip()
+TLS_KEY_FILE = os.getenv("CATCHPLATE_AUDIT_ANCHOR_TLS_KEY_FILE", "").strip()
 ANCHOR_LOCK = threading.Lock()
 ANCHOR_COUNT_LOCK = threading.Lock()
 ANCHOR_COUNT_CACHE: tuple[int, int, int, int, int, int] | None = None
@@ -182,7 +182,7 @@ def validate_anchor_json_limits(value: Any) -> None:
             )
 
 
-app = FastAPI(title="Serverware signed audit transparency log")
+app = FastAPI(title="Catchplate signed audit transparency log")
 app.add_middleware(AnchorBodyLimitMiddleware, max_body_bytes=MAX_ANCHOR_REQUEST_BODY_BYTES)
 
 
@@ -235,12 +235,12 @@ def require_token(candidate: str | None) -> None:
 
 
 def anchor_lock_path() -> Path:
-    configured = os.getenv("SERVERWARE_AUDIT_ANCHOR_LOCK_PATH", "").strip()
+    configured = os.getenv("CATCHPLATE_AUDIT_ANCHOR_LOCK_PATH", "").strip()
     return Path(configured) if configured else Path(f"{ANCHOR_PATH}.lock")
 
 
 def anchor_transaction_path() -> Path:
-    configured = os.getenv("SERVERWARE_AUDIT_ANCHOR_TRANSACTION_PATH", "").strip()
+    configured = os.getenv("CATCHPLATE_AUDIT_ANCHOR_TRANSACTION_PATH", "").strip()
     return Path(configured) if configured else Path(f"{ANCHOR_PATH}.txn")
 
 
@@ -310,18 +310,18 @@ def configured_signing_key_info(key: Ed25519PrivateKey | None = None) -> dict[st
 
 def trusted_checkpoint_key_path() -> tuple[Path, bool] | None:
     established = os.getenv(
-        "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY", ""
+        "CATCHPLATE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY", ""
     ).strip()
     compatibility_alias = os.getenv(
-        "SERVERWARE_TRANSPARENCY_TRUSTED_PUBLIC_KEY", ""
+        "CATCHPLATE_TRANSPARENCY_TRUSTED_PUBLIC_KEY", ""
     ).strip()
     if established and compatibility_alias:
         established_path = Path(established).expanduser().resolve(strict=False)
         alias_path = Path(compatibility_alias).expanduser().resolve(strict=False)
         if established_path != alias_path:
             raise ValueError(
-                "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY conflicts with "
-                "SERVERWARE_TRANSPARENCY_TRUSTED_PUBLIC_KEY"
+                "CATCHPLATE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY conflicts with "
+                "CATCHPLATE_TRANSPARENCY_TRUSTED_PUBLIC_KEY"
             )
     configured_public_key = established or compatibility_alias
     if configured_public_key:
@@ -342,7 +342,7 @@ def configured_checkpoint_key_info(*, required: bool) -> dict[str, Any] | None:
         if required:
             raise ValueError(
                 "external checkpoint trusted key is not configured; set "
-                "SERVERWARE_TRANSPARENCY_TRUSTED_PUBLIC_KEY"
+                "CATCHPLATE_TRANSPARENCY_TRUSTED_PUBLIC_KEY"
             )
         return None
     path, allow_private_fixture_key = configured
@@ -378,7 +378,7 @@ def configured_checkpoint_key_info(*, required: bool) -> dict[str, Any] | None:
     if EXPECTED_CHECKPOINT_LOG_ID and not hmac.compare_digest(EXPECTED_CHECKPOINT_LOG_ID, log_id):
         raise ValueError(
             "external checkpoint trusted key does not match "
-            "SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID"
+            "CATCHPLATE_TRANSPARENCY_EXPECTED_LOG_ID"
         )
     return {
         "public_key": public_key,
@@ -397,7 +397,7 @@ def sign_tree_head(
     key = key or load_signing_key()
     key_info = public_key_info(key)
     payload = {
-        "version": "serverware.transparencyLog/v1",
+        "version": "catchplate.transparencyLog/v1",
         "tree_size": tree_size,
         "tree_head_hash": tree_head_hash,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -628,7 +628,7 @@ def write_anchor_transaction_intent(
         raise RuntimeError("pending anchor append transaction requires recovery")
     stamp, tail_digest = base_identity
     intent = {
-        "version": "serverware.anchorAppendTransaction/v1",
+        "version": "catchplate.anchorAppendTransaction/v1",
         "base_exists": stamp is not None,
         "base_device": stamp[0] if stamp else None,
         "base_inode": stamp[1] if stamp else None,
@@ -682,7 +682,7 @@ def recover_anchor_transaction() -> bool:
         intent = json.loads(encoded_intent)
     except Exception as exc:
         raise RuntimeError("anchor append transaction intent is invalid JSON") from exc
-    if not isinstance(intent, dict) or intent.get("version") != "serverware.anchorAppendTransaction/v1":
+    if not isinstance(intent, dict) or intent.get("version") != "catchplate.anchorAppendTransaction/v1":
         raise RuntimeError("anchor append transaction intent has unsupported format")
     base_exists = intent.get("base_exists")
     base_size = intent.get("base_size")
@@ -1047,7 +1047,7 @@ def healthz() -> dict[str, Any]:
 
 def checkpoint_payload_for_item(item: dict[str, Any]) -> dict[str, Any]:
     return {
-        "version": "serverware.transparencyCheckpoint/v1",
+        "version": "catchplate.transparencyCheckpoint/v1",
         "mode": "signed-merkle-transparency-log",
         "sequence": item["sequence"],
         "record_digest": item["record_digest"],
@@ -1360,9 +1360,9 @@ def publish_external_checkpoint(item: dict[str, Any]) -> dict[str, Any] | None:
 @app.get("/anchors")
 def anchors_list(
     limit: int = Query(100, ge=1, le=1000),
-    x_serverware_audit_anchor_token: str | None = Header(default=None, alias="X-Serverware-Audit-Anchor-Token"),
+    x_catchplate_audit_anchor_token: str | None = Header(default=None, alias="X-Catchplate-Audit-Anchor-Token"),
 ) -> dict[str, Any]:
-    require_token(x_serverware_audit_anchor_token)
+    require_token(x_catchplate_audit_anchor_token)
     with ANCHOR_LOCK, anchor_file_lock(exclusive=True):
         recover_anchor_transaction()
         tail: deque[dict[str, Any]] = deque(maxlen=limit)
@@ -1402,9 +1402,9 @@ def anchors_list(
 @app.get("/anchors/inclusion/{sequence}")
 def anchor_inclusion(
     sequence: int,
-    x_serverware_audit_anchor_token: str | None = Header(default=None, alias="X-Serverware-Audit-Anchor-Token"),
+    x_catchplate_audit_anchor_token: str | None = Header(default=None, alias="X-Catchplate-Audit-Anchor-Token"),
 ) -> dict[str, Any]:
-    require_token(x_serverware_audit_anchor_token)
+    require_token(x_catchplate_audit_anchor_token)
     with ANCHOR_LOCK, anchor_file_lock(exclusive=True):
         recover_anchor_transaction()
         signing_key_info = configured_signing_key_info()
@@ -1455,9 +1455,9 @@ def anchor_inclusion(
 @app.post("/anchors")
 def anchors(
     batch: AnchorBatch,
-    x_serverware_audit_anchor_token: str | None = Header(default=None, alias="X-Serverware-Audit-Anchor-Token"),
+    x_catchplate_audit_anchor_token: str | None = Header(default=None, alias="X-Catchplate-Audit-Anchor-Token"),
 ) -> dict[str, Any]:
-    require_token(x_serverware_audit_anchor_token)
+    require_token(x_catchplate_audit_anchor_token)
     with ANCHOR_LOCK, anchor_file_lock(exclusive=True):
         recover_anchor_transaction()
         ANCHOR_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -1580,9 +1580,9 @@ def anchors(
 
 @app.get("/anchors/verify")
 def anchors_verify(
-    x_serverware_audit_anchor_token: str | None = Header(default=None, alias="X-Serverware-Audit-Anchor-Token"),
+    x_catchplate_audit_anchor_token: str | None = Header(default=None, alias="X-Catchplate-Audit-Anchor-Token"),
 ) -> dict[str, Any]:
-    require_token(x_serverware_audit_anchor_token)
+    require_token(x_catchplate_audit_anchor_token)
     with ANCHOR_LOCK, anchor_file_lock(exclusive=True):
         recover_anchor_transaction()
         signing_key_info = configured_signing_key_info()

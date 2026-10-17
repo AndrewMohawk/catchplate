@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/response-v2-durable-state.v1.schema.json",
-  "title": "Serverware Response v2 Durable State Snapshot",
+  "$id": "https://catchplate.invalid/schemas/response-v2-durable-state.v1.schema.json",
+  "title": "Catchplate Response v2 Durable State Snapshot",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -14,10 +14,10 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.responseV2.durableState/v1"
+      "const": "catchplate.responseV2.durableState/v1"
     },
     "kind": {
-      "const": "ServerwareResponseV2DurableState"
+      "const": "CatchplateResponseV2DurableState"
     },
     "schemaVersion": {
       "const": "1"

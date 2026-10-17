@@ -21,7 +21,7 @@ child/PIDFD and target-executable measurements described in the
 that a service has executed.
 
 `GenerationInputs.initial_resources_original()` adds a cached, rechecked
-`serverware.custodyFiveServiceInitialResources/v1` observation with exactly
+`catchplate.custodyFiveServiceInitialResources/v1` observation with exactly
 `apiVersion`, `preparationSha256`, `issuedAtBoottimeNs` and `services`. Each of the
 fixed five services has a `directories` map. Each entry contains exactly
 `identity` and `entryCount: 0`; identity is the existing seven-field
@@ -46,7 +46,7 @@ its service-originals observations. Neither observation is independent approval.
 
 ## Explicit initial state
 
-The independently approved `serverware.custodyOrdinaryInitialState/v1` has
+The independently approved `catchplate.custodyOrdinaryInitialState/v1` has
 exactly these 19 fields:
 
 ```text
@@ -75,9 +75,9 @@ INITIAL boundaries in existing v3 fields:
 
 | Existing field | Domain |
 | --- | --- |
-| Checkpoint `predecessorCheckpointSha256` | `serverware.custodyOrdinaryInitialCheckpointPredecessor/v1` |
-| Anchor `prunedHistoryRootSha256` | `serverware.custodyOrdinaryInitialHistoryRoot/v1` |
-| Epoch `durableEpochHeadSha256` | `serverware.custodyOrdinaryInitialDurableHead/v1` |
+| Checkpoint `predecessorCheckpointSha256` | `catchplate.custodyOrdinaryInitialCheckpointPredecessor/v1` |
+| Anchor `prunedHistoryRootSha256` | `catchplate.custodyOrdinaryInitialHistoryRoot/v1` |
+| Epoch `durableEpochHeadSha256` | `catchplate.custodyOrdinaryInitialDurableHead/v1` |
 
 Each uses the existing `p.framed(domain, (canonical(state),))` construction.
 These are authenticated typed initial-state commitments, **not evidence of a
@@ -104,7 +104,7 @@ one sealed key, never all three. Anchor calls first authenticate the actual
 checkpoint. Assembly verifies all three anchor signatures and the complete
 shared wrapper contract; it does not sign a substitute success result.
 
-The canonical input is `serverware.nativePilotOrdinaryInitialAuthorityInput/v1`,
+The canonical input is `catchplate.nativePilotOrdinaryInitialAuthorityInput/v1`,
 at most 8 MiB, with these exact common 11 fields:
 
 ```text
@@ -124,7 +124,7 @@ validity. Anchor operations add `initialCheckpointOriginal`; assembly also
 adds `anchorSignatures`, the three literal detached originals under those same
 key-role names. A detached record has exactly `apiVersion`, `signer`,
 `anchorPayloadSha256`, `keyId`, `keySpkiSha256`, `signatureBase64`, using
-`serverware.custodyOrdinaryInitialAnchorSignature/v1`. Its signature still uses
+`catchplate.custodyOrdinaryInitialAnchorSignature/v1`. Its signature still uses
 the existing retained-anchor signature preimage.
 
 Checkpoint sequence and checkpoint/consumer floors are one; endpoint floor is
@@ -137,7 +137,7 @@ Checkpoint, epoch, anchor and manifest retain their existing v3 wire formats.
 The final wrapper is exactly:
 
 ```text
-{apiVersion: "serverware.custodyOrdinaryInitialHistory/v1",
+{apiVersion: "catchplate.custodyOrdinaryInitialHistory/v1",
  initialState, initialCheckpoint, history}
 ```
 
@@ -175,7 +175,7 @@ owner, not an arbitrary raw-history file.
 
 ## Supervisor connection
 
-`serverware.nativePilotSupervisorCommissioningPolicy/v4` adds the closed
+`catchplate.nativePilotSupervisorCommissioningPolicy/v4` adds the closed
 `ordinaryInitialHistories` policy to v3. Its five role entries independently
 select the three public authorities, endpoint role, generations, deployment and
 revocation facts. Actual preparation and empty-resource observations supply
@@ -194,11 +194,11 @@ context/payload across each role's ceremony, and joins each anchor to the actual
 checkpoint and assembly to all three actual detached records.
 
 Only assembly publishes, at the fixed root-owned slot
-`/etc/serverware/native-pilot-inputs/ordinary-initial-history-<role>.json`.
+`/etc/catchplate/native-pilot-inputs/ordinary-initial-history-<role>.json`.
 Publication checks wrapper grammar and commitments, not independent authority.
 That root-owned file is not a service-owned C9 credential. Downstream delivery
 requires a separately installed public copy at
-`/etc/serverware/custody-<role>-initial-history.json`, owned by the actual cold
+`/etc/catchplate/custody-<role>-initial-history.json`, owned by the actual cold
 service UID/GID with mode `0400`. The executor retains and reads that file,
 requiring the exact assembled bytes, digest and length and `signing: null`;
 generic credential owner checks remain unchanged. Its approved runtime must
@@ -222,14 +222,14 @@ independent synthetic signatures, publication shape/pins and approval
 serialization. They do not execute protected owners, signers, installers or
 services. The original native source is unchanged and was not rebuilt.
 Commands, exact source archive and logs are retained at
-`codex-offload/serverware/engineering-builds/21eef81b-initial-commissioning-QZ3L75`.
+`codex-offload/catchplate/engineering-builds/21eef81b-initial-commissioning-QZ3L75`.
 The `.374` source adds the service-owned copy installer; its live execution and
 connected pilot acceptance remain open.
 
 The following is historical **`.372` verification**.
 
 Native source `c2542acb` passed one cached Rust 1.88 offline/frozen/locked
-`cargo check --bin serverware-decision-gate -j1` in 52.67 seconds, with no network,
+`cargo check --bin catchplate-decision-gate -j1` in 52.67 seconds, with no network,
 one CPU, an 8 GiB memory bound and a 20-minute outer limit. It reported 312
 library and 2,438 binary warnings; this is compilation, not native runtime proof.
 
@@ -243,6 +243,6 @@ protected owner, issuer entrypoint, CLI, installation, live signing, service or
 cloud operation ran. Cryptographic fixtures use synthetic in-memory test keys.
 
 Exact source archives, commands, logs and checksums are retained under
-`codex-offload/serverware/engineering-builds/c2542acb-initial-history-wdWcbZ`
+`codex-offload/catchplate/engineering-builds/c2542acb-initial-history-wdWcbZ`
 in the operator home. See [production status](production-status.md); no acceptance
 gate or additional supervisor composer is claimed by these checks.

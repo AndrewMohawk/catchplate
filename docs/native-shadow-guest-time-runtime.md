@@ -11,7 +11,7 @@ and its independently signed configuration are unchanged.
 `/shadow-time-issuer-output/native-shadow-time-issuer-runtime.squashfs` and its
 canonical `native-shadow-time-issuer-runtime.json` inventory. The separate
 `native-shadow-time-issuer-supervisor-artifact` exports the static, bounded
-`serverware-native-shadow-time-issuer` binary. Neither is copied into the
+`catchplate-native-shadow-time-issuer` binary. Neither is copied into the
 claimant enclave image. No private key, policy, launch configuration, certificate
 selection, or request is baked into either artifact.
 
@@ -23,7 +23,7 @@ their loader-resolved immutable dependency closure. Its explicit application
 inventory is `native_shadow_nitro_{profile,originals,verifier}.py`,
 `native_shadow_time_{profile,originals,issuer}.py`, the package initializer and
 the genuine `scripts.verify_nitro_tee` verifier. The only script entrypoint is
-`/opt/serverware/scripts/issue_native_shadow_guest_time.py`.
+`/opt/catchplate/scripts/issue_native_shadow_guest_time.py`.
 
 The image has no shells, installer, control-plane storage modules or arbitrary
 scripts. `/proc` and the empty root0400 issuer-policy placeholder are only fixed
@@ -38,15 +38,15 @@ artifact admission and the exact protected launch pins.
 The no-arguments/no-environment supervisor uses the separately selected
 `RuntimeAdmission::open_time_issuer()`. Old verifier launch labels, fixed
 entrypoints and sealed-evidence FD5 behavior are unchanged. The new launch is
-closed exact3 `serverware.nativeShadowGuestTimeIssuerLaunch/v1`:
+closed exact3 `catchplate.nativeShadowGuestTimeIssuerLaunch/v1`:
 `apiVersion`, `runtimeImage` (the existing exact5 immutable-image pins), and
 `issuerConfigurationSha256`.
 
 The independent operator must deliver these original public files before the
 one-shot launch, root:root0400, singly linked, canonical ASCII/no newline:
 
-- `/etc/serverware/native-shadow-time-issuer-launch.json` (at most 16 KiB).
-- `/etc/serverware/native-shadow-guest-time-issuer.json` (at most 512 KiB),
+- `/etc/catchplate/native-shadow-time-issuer-launch.json` (at most 16 KiB).
+- `/etc/catchplate/native-shadow-guest-time-issuer.json` (at most 512 KiB),
   matching the launch hash and the existing exact17 issuer contract.
 
 Inherited FD4 is the actual 32-byte, final issuer UID/GID0600, unlinked,

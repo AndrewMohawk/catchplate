@@ -24,7 +24,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 from scripts import test_native_pilot_startup_profile as fixtures
-from serverware import native_pilot_startup_child as child
+from catchplate import native_pilot_startup_child as child
 
 p = child.p
 
@@ -52,7 +52,7 @@ def actual_peer(action, *, inherited=False):
     if inherited:
         first, second = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
     else:
-        address = b"\0serverware.startup.test." + os.urandom(12).hex().encode("ascii")
+        address = b"\0catchplate.startup.test." + os.urandom(12).hex().encode("ascii")
         server = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         server.bind(address); server.listen(1); server.settimeout(2)
     pid = os.fork()

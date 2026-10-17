@@ -50,7 +50,7 @@ def no_network(event, _arguments):
 class Fixture(google.Fixture):
     def __init__(self):
         super().__init__()
-        from serverware import operator_upstream_setup
+        from catchplate import operator_upstream_setup
         self.upstream = operator_upstream_setup
 
     def rows(self, table):
@@ -65,11 +65,11 @@ class Fixture(google.Fixture):
             if conn.execute("SELECT 1 FROM sqlite_master WHERE name='operator_catalog_oauth_profile'").fetchone():
                 result["google_profile"] = [dict(row) for row in conn.execute("SELECT * FROM operator_catalog_oauth_profile")]
             if conn.execute("SELECT 1 FROM sqlite_master WHERE name='operator_notification_meta'").fetchone():
-                from serverware import operator_notification_custody as custody
+                from catchplate import operator_notification_custody as custody
                 result["notifications"] = {table: [{key: ({"hex": value.hex()} if isinstance(value, bytes) else value)
                     for key, value in dict(row).items()} for row in conn.execute("SELECT * FROM " + table + " ORDER BY " + order)]
                     for table, order in NOTIFICATION_TABLES.items()}
-                directory = Path(os.environ["SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR"])
+                directory = Path(os.environ["CATCHPLATE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR"])
                 key_path = directory / custody.FILENAME
                 info = key_path.stat()
                 result["notification_key"] = {"sha256": hashlib.sha256(key_path.read_bytes()).hexdigest(),
@@ -88,7 +88,7 @@ class Fixture(google.Fixture):
 
     def setup_review(self):
         result = self.call("GET")
-        assert result["schema"] == "serverware.operatorUpstreamSetupReview/v1"
+        assert result["schema"] == "catchplate.operatorUpstreamSetupReview/v1"
         assert result["cold_restart_required"] is True
         return result
 
@@ -101,7 +101,7 @@ class Fixture(google.Fixture):
 
     def public(self, identifier):
         result = self.call("GET", PATH + "/" + identifier)
-        assert result["schema"] == "serverware.operatorUpstreamSetup/v1"
+        assert result["schema"] == "catchplate.operatorUpstreamSetup/v1"
         return result
 
     def prepare(self, origins=None):
@@ -131,8 +131,8 @@ def seed():
 def prepare(*, activation_failure=False, active_google=False):
     fixture = Fixture()
     fixture.seed()
-    if os.environ.get("SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED") == "1":
-        from serverware import operator_notification_store as notifications
+    if os.environ.get("CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED") == "1":
+        from catchplate import operator_notification_store as notifications
         receipt = notifications.save({"operation_id": str(uuid.uuid4()), "slot": "audit_log.webhook",
             "expected_revision": 0, "label": "Disabled preservation fixture", "enabled": False,
             "event_types": ["operator_catalog.application.created"], "max_attempts": 1,
@@ -163,7 +163,7 @@ def activate(identifier):
     assert fixture.demo.settings()["fixture_cidrs"] == operation["target_settings"]["fixture_cidrs"] == google.CIDRS
     assert operation["revision"] == operation["staged_revision"] + 1
     receipt = operation["activation_receipt"]
-    assert receipt == {"schema": "serverware.operatorUpstreamSetupActivation/v1",
+    assert receipt == {"schema": "catchplate.operatorUpstreamSetupActivation/v1",
         "operation_id": identifier, "activated_revision": operation["revision"],
         "policy_hash": operation["policy_hash"], "settings_digest": operation["target_settings_digest"],
         "activated_at": operation["completed_at"]}
@@ -184,7 +184,7 @@ def refused(fixture, method, path=PATH, *, expected, **options):
 
 def refused_restart():
     before = google.readonly_snapshot()
-    from serverware import db
+    from catchplate import db
     initializers, contacts = [], []
 
     def forbidden_initializer():
@@ -222,7 +222,7 @@ def advance(kind):
 
 
 def activation_rollback():
-    from serverware import operator_demo, operator_upstream_setup
+    from catchplate import operator_demo, operator_upstream_setup
     original_bootstrap, boundary, contacts = operator_demo.bootstrap, [], []
 
     def observed_bootstrap():
@@ -253,14 +253,14 @@ def checks(name):
 
 class OperatorUpstreamBoundsTests(unittest.TestCase):
     def test_explicit_origin_capacity_matches_startup_and_prepare(self):
-        from serverware import operator_demo, operator_upstream_setup
+        from catchplate import operator_demo, operator_upstream_setup
         origins = ["https://service-" + str(index) + ".example.com" for index in range(32)]
         payload = {"expected_revision": 1, "expected_policy_hash": "sha256:" + "0" * 64,
             "operation_id": str(uuid.uuid4()), "allowed_upstreams": origins,
             "expected_settings_digest": "sha256:" + "1" * 64}
         self.assertEqual(operator_upstream_setup.PrepareInput(**payload).allowed_upstreams, origins)
         self.assertEqual(operator_demo._destinations(origins, []), (tuple(origins), ()))
-        from serverware import operator_google_setup
+        from catchplate import operator_google_setup
         retained = {"allowed_upstreams": origins, "fixture_cidrs": []}
         self.assertEqual(operator_google_setup._settings(json.dumps(retained, sort_keys=True)), retained)
         google_target = operator_google_setup._target({"allowed_upstreams": origins[:-1], "fixture_cidrs": []})
@@ -279,13 +279,13 @@ class OperatorUpstreamSetupTests(unittest.TestCase):
     def setUp(self):
         google.OperatorGoogleSetupTests.setUp(self)
         # No management health probe is part of this settings transaction test.
-        self.environment["SERVERWARE_DECISION_GATE_BASE"] = ""
-        self.google_environment["SERVERWARE_DECISION_GATE_BASE"] = ""
+        self.environment["CATCHPLATE_DECISION_GATE_BASE"] = ""
+        self.google_environment["CATCHPLATE_DECISION_GATE_BASE"] = ""
 
     def worker(self, operation, *, origins=None, google_enabled=False, changes=None, identifier=None):
         environment = dict(self.google_environment if google_enabled else self.environment)
         if origins is not None:
-            environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(origins)
+            environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(origins)
         environment.update(changes or {})
         command = [sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation]
         if identifier is not None:
@@ -297,8 +297,8 @@ class OperatorUpstreamSetupTests(unittest.TestCase):
     def test_review_prepare_exact_cold_activation_and_second_restart_preserve_authority(self):
         notification_directory = Path(self.scratch.name) / "notification-custody"
         notification_directory.mkdir(mode=0o700)
-        changes = {"SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED": "1",
-            "SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR": str(notification_directory)}
+        changes = {"CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED": "1",
+            "CATCHPLATE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR": str(notification_directory)}
         prepared = self.worker("prepare", changes=changes)
         self.assertIn("notifications", prepared["authority"])
         self.assertIn("notification_key", prepared["authority"])
@@ -321,11 +321,11 @@ class OperatorUpstreamSetupTests(unittest.TestCase):
         self.worker("prepare_existing")
         self.worker("refused_restart", origins=[*OLD, "https://different.example.com"])
         self.worker("refused_restart", origins=TARGET,
-            changes={"SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS": '["127.0.0.2/32"]'})
+            changes={"CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS": '["127.0.0.2/32"]'})
 
     def test_stale_catalog_revision_and_policy_hash_refuse_cold_activation(self):
         for kind in ("revision", "policy"):
-            changes = {"SERVERWARE_DATA_DIR": str(Path(self.scratch.name) / ("stale-" + kind))}
+            changes = {"CATCHPLATE_DATA_DIR": str(Path(self.scratch.name) / ("stale-" + kind))}
             self.worker("prepare", changes=changes)
             self.worker("advance_" + kind, changes=changes)
             self.worker("refused_restart", origins=TARGET, changes=changes)
@@ -342,12 +342,12 @@ class OperatorUpstreamSetupTests(unittest.TestCase):
 
     def test_pending_google_exclusion_and_retained_active_google_binding(self):
         self.worker("google_pending_checks")
-        changes = {"SERVERWARE_DATA_DIR": str(Path(self.scratch.name) / "active-google")}
+        changes = {"CATCHPLATE_DATA_DIR": str(Path(self.scratch.name) / "active-google")}
         prepared = self.worker("prepare_active_google", google_enabled=True, changes=changes)
         identifier = prepared["operation"]["operation_id"]
         self.worker("refused_restart", origins=GOOGLE_TARGET, changes=changes)
         self.worker("refused_restart", origins=GOOGLE_TARGET, google_enabled=True,
-            changes={**changes, "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID": "456-other.apps.googleusercontent.com"})
+            changes={**changes, "CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID": "456-other.apps.googleusercontent.com"})
         activated = self.worker("activate", origins=GOOGLE_TARGET, google_enabled=True, changes=changes, identifier=identifier)
         self.assertEqual(activated["authority"], prepared["authority"])
 

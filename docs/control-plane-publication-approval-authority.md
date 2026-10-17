@@ -30,7 +30,7 @@ Old generic callers are not silently promoted into this profile.
 
 `POST /api/control-plane/mutations/webauthn/options` accepts the new closed input:
 
-- `apiVersion`: `serverware.publicationApprovalOptions/v1`.
+- `apiVersion`: `catchplate.publicationApprovalOptions/v1`.
 - `action`: `control_plane.token.publication.resolve`.
 - `resourceId`: `admin-token`.
 - `payloadDigest`: SHA-256 of the existing canonical ASCII request binding.
@@ -51,9 +51,9 @@ ID it rereads the exact row: the same requester and approved state select
 `publication-approval.decide`. No caller-provided phase or approver identity
 overrides those joins.
 
-The result is exactly `{publicKey, serverware}`. `publicKey` has challenge, rpId,
+The result is exactly `{publicKey, catchplate}`. `publicKey` has challenge, rpId,
 one two-field public-key credential descriptor in allowCredentials, timeout
-120000, and userVerification `required`. `serverware` has exactly schema,
+120000, and userVerification `required`. `catchplate` has exactly schema,
 operation, operationId, challengeId, credentialRecordId, payloadDigest and
 expiresAt. Operation/challenge IDs are prefixed SHA-256 values; the credential
 record ID is opaque, not assumed to be a UUID. The authority-issued challenge is
@@ -63,7 +63,7 @@ verification or transferable permission.
 
 The unchanged resolver route receives publicationId, intentSha256, outcome,
 required nullable reason and mfa. The purpose MFA contains
-`publicationProfile: "serverware.publicationApprovalOptions/v1"` and the raw
+`publicationProfile: "catchplate.publicationApprovalOptions/v1"` and the raw
 assertion; only the continuing requester also supplies approvalId. The distinct
 approver uses the existing `/api/control-plane/approvals/{id}/approve` route with
 exactly `note: null` and purpose MFA. A fresh assertion is required separately for
@@ -103,7 +103,7 @@ that allowance. Options and later human actions are separate fresh requests;
 they do not renew an already executing resolver or replay a consumed attempt.
 
 Before the single controlled consumption attempt, an append-only
-`serverware.adminTokenPublicationResolutionClaim/v2` record pins the actual
+`catchplate.adminTokenPublicationResolutionClaim/v2` record pins the actual
 authorityRequestDigest and corresponding controlled audit UUID, alongside the
 unchanged exact file/intent/approval bindings. A claim is not committed-approval
 proof. Definite consumption permits fsync/readback of the already held token

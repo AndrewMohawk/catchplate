@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v22.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-startup-configuration.v22.schema.json",
   "title": "Explicit independently authorized native workload trust startup",
   "description": "Exact v21 successor with a separately admitted native trust authorizer. The signed native trust grant is a separately pinned retained launch original, not embedded in this configuration or the original launch; it binds both complete originals without a self-reference. Existing native root, policy, byte and lifetime bounds remain unchanged. Schema shape is not independent admission or runtime readiness.",
   "type": "object",
@@ -33,7 +33,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.nativeStartupConfiguration/v22"
+      "const": "catchplate.nativeStartupConfiguration/v22"
     },
     "gate": {
       "$ref": "native-startup-configuration.v21.schema.json#/properties/gate"

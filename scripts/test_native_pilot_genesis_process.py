@@ -14,8 +14,8 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.test_native_pilot_genesis_core import fixture as core_fixture
 from scripts.test_native_pilot_genesis_rendezvous import fixture
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_genesis_process as process
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_genesis_process as process
 
 p = process.p
 
@@ -81,7 +81,7 @@ class ColdProcessProtocolControls(unittest.TestCase):
                 sender(value, p.canonical(parsed | update))
         with self.assertRaises(ValueError): sender(value, value["sender_raw"] + b"\n")
         configuration = p.document(value["configuration_raw"], 4096)
-        configuration["apiVersion"] = "serverware.nativePilotGenesisListenerConfiguration/v1"
+        configuration["apiVersion"] = "catchplate.nativePilotGenesisListenerConfiguration/v1"
         with self.assertRaises(ValueError): sender(value | {"configuration_raw": p.canonical(configuration)})
 
     def test_selected_catalogue_has_exact_66_actual_dialogue_slots(self):

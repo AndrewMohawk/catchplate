@@ -25,23 +25,23 @@ use std::collections::BTreeSet;
 use crate::readiness::{ReadinessProbe, ReadinessRequestV12};
 
 pub const DOCKER_LANE_CAPABILITY_DOMAIN_V11: &str =
-    "serverware/docker-lane-capability/v11";
+    "catchplate/docker-lane-capability/v11";
 pub const DOCKER_API_REQUEST_DOMAIN_V11: &str =
-    "serverware/docker-api-request/v11";
+    "catchplate/docker-api-request/v11";
 pub const RUNNER_EXECUTION_DOMAIN_V12: &str =
-    "serverware/runner-execution/v12";
+    "catchplate/runner-execution/v12";
 pub const SERVICE_INSTANCE_DOMAIN_V12: &str =
-    "serverware/service-instance/v12";
+    "catchplate/service-instance/v12";
 pub const NETWORK_MEMBERSHIP_DOMAIN_V12: &str =
-    "serverware/docker-network-membership/v12";
+    "catchplate/docker-network-membership/v12";
 pub const PRIVATE_DIND_LIFECYCLE_PROTOCOL_V12: &str =
-    "serverware/private-dind-lifecycle/v12";
+    "catchplate/private-dind-lifecycle/v12";
 pub const PRIVATE_DIND_RESULT_VERSION_V12: &str =
-    "serverware/controller-plan-executor-result/v12";
+    "catchplate/controller-plan-executor-result/v12";
 pub const PRIVATE_DIND_PROXY_PAYLOAD_VERSION_V12: &str =
-    "serverware/controller-plan-proxy-payload/v12";
+    "catchplate/controller-plan-proxy-payload/v12";
 pub const PRIVATE_DIND_ROOT_RESPONSE_SIGNATURE_DOMAIN_V12: &[u8] =
-    b"serverware/private-dind-root-response-signature/v12\0";
+    b"catchplate/private-dind-root-response-signature/v12\0";
 pub const DOCKER_TOP_LEVEL_OBJECT_COUNT_SCOPE_V12: &str =
     "private-daemon-top-level-api:containers,images,nondefault-networks,volumes";
 pub const DOCKER_INTERNAL_STORAGE_ABSENCE_PROOF_V12: &str =
@@ -2154,7 +2154,7 @@ fn parse_fixed_headers(value: &Value) -> Result<Vec<DockerFixedHeaderV11>> {
                     | "application/x-tar"
                     | "application/octet-stream"
             ),
-            "user-agent" => value == "serverware-controller-v12",
+            "user-agent" => value == "catchplate-controller-v12",
             _ => false,
         };
         if !permitted
@@ -2183,7 +2183,7 @@ fn parse_fixed_headers(value: &Value) -> Result<Vec<DockerFixedHeaderV11>> {
     }
     if !result.iter().any(|header| {
         header.name == "user-agent"
-            && header.value == "serverware-controller-v12"
+            && header.value == "catchplate-controller-v12"
     }) {
         return Err(ControllerError::Rejected(
             "Docker fixed header set lacks the controller user agent",
@@ -2313,7 +2313,7 @@ fn parse_mounts_v12(value: &Value) -> Result<Vec<DockerMountV12>> {
         let size_bytes = integer(mount, "sizeBytes")?;
         if target == "/var/run/docker.sock"
             || target == "/run/docker.sock"
-            || target.starts_with("/run/serverware/")
+            || target.starts_with("/run/catchplate/")
             || result.last().is_some_and(|previous: &DockerMountV12| {
                 previous.target.as_str() >= target.as_str()
             })
@@ -2920,7 +2920,7 @@ fn identifier(value: &str) -> Result<String> {
 fn owner_namespace(value: &str) -> Result<String> {
     if value.len() < 18
         || value.len() > 63
-        || !value.starts_with("serverware-")
+        || !value.starts_with("catchplate-")
         || !value.bytes().all(|byte| {
             byte.is_ascii_lowercase()
                 || byte.is_ascii_digit()

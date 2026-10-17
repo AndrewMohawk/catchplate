@@ -49,7 +49,7 @@ expiry and signed-plan expiry remain checked through final output creation.
 The return is the existing ordinary `_ReplayedPlan`: bounded copied request,
 result, selected rows, mutations and work total; complete before/after vector
 bytes and identities; original signed-plan interval and identity; and a distinct
-`serverware.oidcSessionActivationExecutionOriginalsIdentity/v1` framed record ID.
+`catchplate.oidcSessionActivationExecutionOriginalsIdentity/v1` framed record ID.
 Its original inventory is **raw2: signed plan plus bundle ciphertext only**.
 Neither decrypted journal bytes, raw tokens nor either private key is included.
 The revocation-only signed snapshot/capability fields remain `None`.

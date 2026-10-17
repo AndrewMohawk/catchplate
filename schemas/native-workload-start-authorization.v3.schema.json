@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-workload-start-authorization.v3.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-workload-start-authorization.v3.schema.json",
   "title": "Independent native start, retirement and durable terminal publication constraints v3",
   "description": "Closed canonical sorted compact ASCII JSON without LF, at most 32768 original bytes, depth at most 6. Ed25519 signs payload schema ASCII plus NUL plus canonical payload. The cold caller explicitly selects v3; v1/v2 cannot obtain outcome permission by including fields or relabeling. Publication uses the same original signed cleanupBefore deadline, actual retained start/creation claims and terminal owners; neither source schema nor receipt supplies permission. No restart, archival, overwrite, repair or retry is authorized.",
   "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signature"],
   "properties": {
-    "schema": {"const": "serverware.signedNativeWorkloadStartAuthorization/v3"},
+    "schema": {"const": "catchplate.signedNativeWorkloadStartAuthorization/v3"},
     "signature": {"$ref": "native-workload-start-authorization.v2.schema.json#/properties/signature"},
     "payload": {"$ref": "#/$defs/payload"}
   },
@@ -26,7 +26,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "purpose", "trustMode", "creationMode", "authorizationId", "egressAuthorizationSha256", "attachmentAuthorizationSha256", "launchManifestSha256", "executionManifestSha256", "launcherBinarySha256", "machineIdSha256", "networkOwner", "isolation", "resources", "containment", "capability", "journal", "issuedAtEpochNs", "startBeforeEpochNs", "stopAtEpochNs", "cleanupBeforeEpochNs"],
       "properties": {
-        "schema": {"const": "serverware.nativeWorkloadStartAuthorization/v3"},
+        "schema": {"const": "catchplate.nativeWorkloadStartAuthorization/v3"},
         "sourceRevision": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/payload/properties/sourceRevision"},
         "purpose": {"const": "native-workload-start"}, "trustMode": {"const": "trusted-host-local"},
         "creationMode": {"const": "new-execution-child-v1"},

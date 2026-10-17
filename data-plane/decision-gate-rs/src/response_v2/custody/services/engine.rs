@@ -172,10 +172,10 @@ pub(super) fn execute(
 ) -> Result<EngineResult, V2RuntimeError> {
     if super::super::staging::transport::selection(config,scoped.role,request)?.is_some(){
         let label=request.payload.get("apiVersion").and_then(serde_json::Value::as_str);
-        if label==Some("serverware.responseV2.nativeStagingPolicy/v1"){
+        if label==Some("catchplate.responseV2.nativeStagingPolicy/v1"){
             return super::super::staging::policy::execute(config,scoped,request,signing_keys,request_exact_object_fds);
         }
-        if label==Some("serverware.responseV2.nativeStagedPut/v1"){
+        if label==Some("catchplate.responseV2.nativeStagedPut/v1"){
             return super::super::staging::ledger::execute(config,scoped,request,signing_keys,request_exact_object_fds);
         }
         let public:crate::response_observation_v2_api::V2ResponseDataRequest=serde_json::from_value(request.payload.clone())
@@ -1184,7 +1184,7 @@ fn execute_public_release_authorization(
     let exact_release_request_sha256 =
         canonical_sha256(&serde_json::json!({
             "apiVersion":
-                "serverware.responseV2ExactReleaseRequest/v1",
+                "catchplate.responseV2ExactReleaseRequest/v1",
             "generationId": observation.generation_id,
             "attemptId": observation.attempt_id,
             "attemptRevision": observation.attempt_revision,
@@ -1201,7 +1201,7 @@ fn execute_public_release_authorization(
     let authorization_id =
         canonical_sha256(&serde_json::json!({
             "apiVersion":
-                "serverware.responseV2ReleaseAuthorizationId/v1",
+                "catchplate.responseV2ReleaseAuthorizationId/v1",
             "operationId": request_id,
             "exactReleaseRequestSha256":
                 exact_release_request_sha256,
@@ -1209,7 +1209,7 @@ fn execute_public_release_authorization(
     let finalization_id =
         canonical_sha256(&serde_json::json!({
             "apiVersion":
-                "serverware.responseV2ReleaseFinalizationId/v1",
+                "catchplate.responseV2ReleaseFinalizationId/v1",
             "authorizationId": authorization_id,
             "inspectionReceiptSha256":
                 inspection.inspection_receipt_sha256,
@@ -1218,7 +1218,7 @@ fn execute_public_release_authorization(
     let one_use_nonce_sha256 =
         canonical_sha256(&serde_json::json!({
             "apiVersion":
-                "serverware.responseV2ReleaseOneUseNonce/v1",
+                "catchplate.responseV2ReleaseOneUseNonce/v1",
             "authorizationId": authorization_id,
             "exactReplayKeySha256":
                 params.exact_replay_key_sha256,
@@ -1550,7 +1550,7 @@ fn execute_public_consumption(
             let client_binding_sha256 =
                 canonical_sha256(&serde_json::json!({
                     "apiVersion":
-                        "serverware.responseV2ReleaseClientBinding/v1",
+                        "catchplate.responseV2ReleaseClientBinding/v1",
                     "clientIdentitySha256":
                         binding.client_identity_sha256,
                     "connectionIdentitySha256":
@@ -4084,7 +4084,7 @@ pub(in super::super) fn verify_pinned_authority_artifact(
         || artifact.authentication.authority_scope_sha256
             != body.authority_scope_sha256
         || artifact.authentication.signing_domain
-            != "serverware.responseV2.nestedAuthorityArtifact.signature/v1"
+            != "catchplate.responseV2.nestedAuthorityArtifact.signature/v1"
     {
         return Err(V2RuntimeError::new(
             "response_data_nested_authority_binding_mismatch",
@@ -5748,7 +5748,7 @@ fn canonical_sha256<T: Serialize>(
 }
 
 fn sealed_memfd(bytes: &[u8]) -> Result<OwnedFd, V2RuntimeError> {
-    let name = CString::new("serverware-response-v2-exact")
+    let name = CString::new("catchplate-response-v2-exact")
         .map_err(|_| {
             V2RuntimeError::new(
                 "exact_object_memfd_failed",

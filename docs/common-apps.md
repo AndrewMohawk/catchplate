@@ -1,6 +1,6 @@
 # Common app presets
 
-Serverware includes guided presets for OpenAI, Anthropic, Gemini, OpenRouter,
+Catchplate includes guided presets for OpenAI, Anthropic, Gemini, OpenRouter,
 Slack, Discord, Notion, Stripe, Resend, GitLab, Cloudflare and Sentry, alongside
 the existing GitHub, Google/Gmail, npm, X and Alchemy connections. Each preset
 is a specific useful operation, not permission to use every API of that service.
@@ -20,15 +20,15 @@ new TEE trust model. Existing credentials and permissions are unchanged.
 4. The proxy operator must approve the service's HTTPS destination under
    **Proxy setup**. A saved credential does not approve destinations. An
    unavailable preset is not permission to use a broad manual rule instead.
-5. Wait for the saved policy to load. Configure the client with its Serverware
+5. Wait for the saved policy to load. Configure the client with its Catchplate
    proxy token and trusted CA, using the public dummy provider credential from
    the permission. Never give the application the real provider key.
 6. Run the matching [client recipe](../examples/common-apps/README.md) and inspect
    both the provider result and **Audit log**. A saved permission or healthy
    proxy does not prove a real provider operation succeeded.
 
-The provider key and the client's Serverware proxy token are different secrets.
-Preset keys are static: Serverware does not obtain OAuth consent or automatically
+The provider key and the client's Catchplate proxy token are different secrets.
+Preset keys are static: Catchplate does not obtain OAuth consent or automatically
 renew them. Rotate the stored key when the provider requires it. Gemini API
 keys, for example, are separate from the managed Google/Gmail OAuth connection.
 
@@ -66,11 +66,11 @@ Provider API references: [OpenAI Responses](https://developers.openai.com/api/re
 ### Slack
 
 Use a bot token with `chat:write`, and invite the bot to the chosen channel.
-Serverware injects `Authorization: Bearer …`. The request is JSON to
+Catchplate injects `Authorization: Bearer …`. The request is JSON to
 `POST https://slack.com/api/chat.postMessage`; form-encoded SDK calls, blocks
 and attachments are outside this preset. Slack can return HTTP 200 with
 `ok:false`, so inspect that field. This is a client permission to call Slack,
-separate from Serverware's Slack notification destinations.
+separate from Catchplate's Slack notification destinations.
 [Slack method reference](https://docs.slack.dev/reference/methods/chat.postmessage).
 
 ```json
@@ -90,7 +90,7 @@ the message text appropriately.
 
 Store the raw bot token, **without** `Bot ` or `Bearer `. The typed preset
 injects `Authorization: Bot …`; the client sends the matching public
-`Bot serverware-discord-placeholder-v1` dummy. Install the bot with View Channel
+`Bot catchplate-discord-placeholder-v1` dummy. Install the bot with View Channel
 and Send Messages access. The route is
 `POST https://discord.com/api/v10/channels/<channel-id>/messages`.
 [Discord authentication](https://docs.discord.com/developers/reference#authentication),
@@ -140,7 +140,7 @@ Use a sending-only key restricted to the verified sender domain where possible.
 addresses must exactly match the permission; `to` is a single string, not an
 array. This preset does not admit HTML, CC/BCC, attachments, templates or arbitrary
 mail headers. An optional HTTP `Idempotency-Key` can reduce duplicate sends, but
-does not authorize Serverware or the client to replay an uncertain write.
+does not authorize Catchplate or the client to replay an uncertain write.
 [Send email](https://resend.com/docs/api-reference/emails/send-email).
 
 ```json
@@ -154,7 +154,7 @@ does not authorize Serverware or the client to replay an uncertain write.
 
 ### GitLab
 
-Use a project access token with `read_api`. Serverware injects `PRIVATE-TOKEN`.
+Use a project access token with `read_api`. Catchplate injects `PRIVATE-TOKEN`.
 The path is `GET https://gitlab.com/api/v4/projects/<numeric-project-id>/issues`;
 an encoded `group/project` path is not interchangeable with the numeric ID.
 The preset supports ordinary state/search/label/sort and page filters, but
@@ -217,7 +217,7 @@ CLI or pagination helper works without configuration.
   Disable automatic retries for writes and use bounded explicit pagination.
   Notion, Stripe and Cloudflare recipes use their JSON pagination fields; each
   invocation still makes only one request.
-- A provider operation can succeed even when Serverware withholds its response.
+- A provider operation can succeed even when Catchplate withholds its response.
   Inspect audit and provider state before deliberately repeating a write.
 - Optional host-trusted approval returns HTTP 428 before dispatch. Review the
   pending action and then explicitly retry the identical request. It is not a
@@ -245,10 +245,10 @@ AWS SigV4 forwarding, and broad OAuth providers are not implied by these presets
 ## Verification status
 
 The registry is source-controlled in
-[`operator_common_apps_services.py`](../serverware/operator_common_apps_services.py)
-and [`operator_common_apps_ai.py`](../serverware/operator_common_apps_ai.py), with
+[`operator_common_apps_services.py`](../catchplate/operator_common_apps_services.py)
+and [`operator_common_apps_ai.py`](../catchplate/operator_common_apps_ai.py), with
 server-side compilation in
-[`operator_common_apps.py`](../serverware/operator_common_apps.py).
+[`operator_common_apps.py`](../catchplate/operator_common_apps.py).
 The [project tracker](project-completion.md) records the actual focused,
 synthetic-proxy and deployment checks for the shipped revision.
 

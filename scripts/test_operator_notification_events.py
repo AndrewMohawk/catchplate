@@ -14,8 +14,8 @@ import unittest
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from serverware.db_common import audit_hash
-from serverware import operator_notification_events as events
+from catchplate.db_common import audit_hash
+from catchplate import operator_notification_events as events
 
 NOW = datetime(2026, 10, 10, 12, tzinfo=timezone.utc)
 NOW_MS = int(NOW.timestamp() * 1000)
@@ -30,7 +30,7 @@ def native_record(phase="prepare_available", *, expires_nanos=None):
     """Inert exact native-status fixture; never an observed live ceremony."""
     expiry = expires_nanos if expires_nanos is not None else NOW_MS * 1_000_000 + 60_000_000_000
     attempt, readiness = "sha256:" + "b" * 64, "sha256:" + "c" * 64
-    value = {"schema": "serverware.pilotActionStatus/v1", "attemptSha256": attempt,
+    value = {"schema": "catchplate.pilotActionStatus/v1", "attemptSha256": attempt,
         "readinessSha256": readiness, "phase": phase, "actionAvailable": True,
         "attemptNumber": 0 if phase == "prepare_available" else 1,
         "sourceSha256": readiness if phase == "prepare_available" else "sha256:" + "d" * 64,
@@ -43,13 +43,13 @@ def native_record(phase="prepare_available", *, expires_nanos=None):
         "eventType", "sourceSha256", "sourceExpiresAtUnixNanos")}
     value["eventId"] = "sha256:" + hashlib.sha256(json.dumps(digest_input, sort_keys=True,
         separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest()
-    return {"schema": "serverware.nativePilotNotificationObservation/v1",
+    return {"schema": "catchplate.nativePilotNotificationObservation/v1",
         "selection_sha256": "sha256:" + "e" * 64, "observation": value}
 
 
 class EventTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="serverware-notification-events-")
+        self.temp = tempfile.TemporaryDirectory(prefix="catchplate-notification-events-")
         self.path = Path(self.temp.name) / "test.sqlite3"
         self.writer = sqlite3.connect(self.path)
         self.writer.execute("PRAGMA journal_mode=WAL")
@@ -135,7 +135,7 @@ class EventTests(unittest.TestCase):
         return identifier, payload
 
     def test_imports_and_closed_filters(self):
-        for name in ("serverware.db", "serverware.config", "serverware.crypto", "serverware.app"):
+        for name in ("catchplate.db", "catchplate.config", "catchplate.crypto", "catchplate.app"):
             self.assertNotIn(name, sys.modules)
         self.assertEqual(events.AUDIT_EVENT_TYPES, tuple(sorted(set(events.AUDIT_EVENT_TYPES))))
         self.assertEqual(events.ACTION_EVENT_TYPES, tuple(sorted(set(events.ACTION_EVENT_TYPES))))
@@ -145,7 +145,7 @@ class EventTests(unittest.TestCase):
     def host_pending(self):
         self.writer.execute("ALTER TABLE approval_requests ADD COLUMN approver_policy_json TEXT")
         reviewer = "user:admin"
-        policy = {"schema": "serverware.hostTrustedApprovalReviewer/v1", "assurance": "host-trusted",
+        policy = {"schema": "catchplate.hostTrustedApprovalReviewer/v1", "assurance": "host-trusted",
             "reviewerId": reviewer, "maxUses": 1, "pendingTtlSeconds": 300, "approvalTtlSeconds": 60}
         policy_json = json.dumps(policy, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         payload = {"assurance": "host-trusted", "approval_request_id": str(uuid.uuid4()),

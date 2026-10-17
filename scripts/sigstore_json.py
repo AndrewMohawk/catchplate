@@ -1,4 +1,4 @@
-"""Representation-preserving JSON at the Serverware/Sigstore boundary.
+"""Representation-preserving JSON at the Catchplate/Sigstore boundary.
 
 ProtoJSON serializes Rekor int64 fields as decimal strings. Only the explicit
 bundle/proof/image-signatures scopes below admit them. Validation never edits
@@ -12,7 +12,7 @@ import re
 import unicodedata
 from typing import Any
 
-PROFILE = "serverware.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
+PROFILE = "catchplate.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
 SIGNED_MAX = (1 << 63) - 1
 Path = tuple[str | int, ...]
 
@@ -147,7 +147,7 @@ def _response_paths(value: Any, path: Path, paths: set[Path]) -> None:
     _transparency_paths(response.get("transparency"), path + ("transparency",), paths)
 
 
-def validate(value: Any, *, scope: str = "serverware", label: str = "canonical JSON value") -> None:
+def validate(value: Any, *, scope: str = "catchplate", label: str = "canonical JSON value") -> None:
     paths: set[Path] = set()
     if scope == "bundle":
         _bundle_paths(value, (), paths)
@@ -157,7 +157,7 @@ def validate(value: Any, *, scope: str = "serverware", label: str = "canonical J
         _transparency_paths(value, (), paths)
     elif scope == "image-signatures":
         document = _object(value, "image signatures")
-        require(document.get("apiVersion") == "serverware.imageSignatures/v1"
+        require(document.get("apiVersion") == "catchplate.imageSignatures/v1"
                 and document.get("kind") == "ImageSignatureBundle", "unsupported image signatures schema")
         images = document.get("images")
         require(isinstance(images, list) and 0 < len(images) <= 100_000, "image signatures must contain bounded images")
@@ -171,23 +171,23 @@ def validate(value: Any, *, scope: str = "serverware", label: str = "canonical J
         if "bundleSigstore" in metadata:
             _response_paths(metadata["bundleSigstore"], ("metadata", "bundleSigstore"), paths)
     else:
-        require(scope == "serverware", "unknown canonical JSON scope")
+        require(scope == "catchplate", "unknown canonical JSON scope")
     validate_profile(value, label=label, foreign_paths=frozenset(paths))
 
 
-def canonical_json(value: Any, *, scope: str = "serverware") -> str:
+def canonical_json(value: Any, *, scope: str = "catchplate") -> str:
     validate(value, scope=scope)
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
 
 
 def statement_json(value: dict[str, Any], *, kind: str | None = None) -> str:
     # This dispatch is used only at a Sigstore statement signing/verifying sink,
-    # never the generic Serverware parser. Explicit request kinds must agree.
-    image_bundle = value.get("apiVersion") == "serverware.imageSignatures/v1"
+    # never the generic Catchplate parser. Explicit request kinds must agree.
+    image_bundle = value.get("apiVersion") == "catchplate.imageSignatures/v1"
     if kind is not None:
         require((kind == "image-signature-bundle") == image_bundle,
                 "Sigstore request kind does not match statement schema")
-    return canonical_json(value, scope="image-signatures" if image_bundle else "serverware")
+    return canonical_json(value, scope="image-signatures" if image_bundle else "catchplate")
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -206,7 +206,7 @@ def parse_json(data: str | bytes) -> Any:
     """Reject ambiguous JSON before choosing any protocol-specific scope."""
     if isinstance(data, bytes):
         # json.loads(bytes) otherwise auto-detects UTF-16/32. Artifacts use the
-        # same UTF-8-only transport as the ordinary Serverware snapshot loader.
+        # same UTF-8-only transport as the ordinary Catchplate snapshot loader.
         data = data.decode("utf-8")
     return json.loads(data, object_pairs_hook=_unique_object,
                       parse_float=_reject_number, parse_constant=_reject_number)

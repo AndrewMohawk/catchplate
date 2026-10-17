@@ -22,7 +22,7 @@ from cryptography.exceptions import InvalidSignature
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import native_pilot_key_profile as profile
+from catchplate import native_pilot_key_profile as profile
 from test_native_pilot_closure_set import (KEY_ROLES, MANIFEST_FIELDS, canonical, frame,
     merkle_fixture, sha, synthetic)
 from test_native_pilot_generation_scope import NOW, encoded, key_fixture, signed_message
@@ -41,8 +41,8 @@ REQUIRED = {
 ROW_FIELDS = ("localRoles", "challengeBase64url", "issuedAtUnixNanos", "expiresAtUnixNanos")
 INPUT_FIELDS = ("apiVersion", "operation", "role", "deliveryInputOriginal", "deliveryOriginal",
     "recipeOriginals", "measured", "policy")
-KEY_DOMAIN = "serverware.nativeShadowRoleKeyAssignment.signature/v2"
-ADMISSION_DOMAIN = "serverware.nativeShadowKeyAdmissionAssignment.signature/v1"
+KEY_DOMAIN = "catchplate.nativeShadowRoleKeyAssignment.signature/v2"
+ADMISSION_DOMAIN = "catchplate.nativeShadowKeyAdmissionAssignment.signature/v1"
 GUEST_FIELDS = ("configurationSha256", "deliverySha256", "runtimeConfigurationSha256", "serviceRole", "uid", "gid") + WINDOW_FIELDS
 FIRST_ACTIVATIONS = {
     "retrieval": (("retrieval-listener", stat.S_IFSOCK), ("retrieval-objects", stat.S_IFDIR),
@@ -59,7 +59,7 @@ def public_keys():
 
 def key_root(keys):
     # Independent exact frame/Merkle arithmetic; no production key-root helper.
-    return merkle_fixture([frame("serverware.policyShadowCustodyAssertedKey/v1",
+    return merkle_fixture([frame("catchplate.policyShadowCustodyAssertedKey/v1",
         [row[name] for name in ("role", "keyId", "keySpkiSha256", "keyMaterialSha256")]) for row in keys])
 
 
@@ -67,9 +67,9 @@ def fixture():
     f = delivery_fixture()
     for index, role in enumerate(ROLES[:3]):
         cold = json.loads(f["cold"][role])
-        runtime = canonical({"apiVersion": "serverware.nativePilotEndpointRuntime/v1", "role": role})
+        runtime = canonical({"apiVersion": "catchplate.nativePilotEndpointRuntime/v1", "role": role})
         f["fragment"][role] = {"runtimeOriginal": runtime.decode("ascii"),
-            "runtimeConfig": {"path": "/etc/serverware/native-pilot-inputs/native-runtime-" + role + ".json",
+            "runtimeConfig": {"path": "/etc/catchplate/native-pilot-inputs/native-runtime-" + role + ".json",
                 "sha256": sha(runtime)},
             "credentials": copy.deepcopy(f["fragment"]["generationInstall"]["credentials"])}
         f["activations"][role] = [{"name": name, "fd": fd, "device": 7, "inode": 8000 + index * 10 + fd,
@@ -91,7 +91,7 @@ def fixture():
             **{name: cold[name] for name in ("serviceRole", "uid", "gid")},
             **{name: f["window"][name] for name in WINDOW_FIELDS}, "runtimeConfig": row["runtimeConfig"],
             "credentials": row["credentials"], "activation": f["activations"][role]}
-        raw = canonical({"apiVersion": "serverware.nativePilotDeliverySigningInput/v1", "role": role,
+        raw = canonical({"apiVersion": "catchplate.nativePilotDeliverySigningInput/v1", "role": role,
             "configurationOriginal": f["cold"][role],
             "ownerConfigurationOriginal": f["owner_configuration_raw"].decode("ascii"),
             "windowOriginal": f["window_raw"].decode("ascii"), "observationOriginal": f["observation_raw"].decode("ascii"),
@@ -136,10 +136,10 @@ def expected_payload(f, operation, role, *, role_key_raw=None):
         "issuedAtUnixNanos": row["issuedAtUnixNanos"], "expiresAtUnixNanos": row["expiresAtUnixNanos"],
         "signingKeyId": supervisor["keyId"], "signingKeySpkiSha256": supervisor["keySpkiSha256"]}
     if operation == "role-keys":
-        return {"apiVersion": "serverware.nativeShadowRoleKeyAssignment/v2", "profile": "preassigned-encrypted-local-v1",
+        return {"apiVersion": "catchplate.nativeShadowRoleKeyAssignment/v2", "profile": "preassigned-encrypted-local-v1",
             "purpose": "shadow-role-key-possession", "assignmentId": assignment["assignmentId"],
             "localRoles": row["localRoles"], **common}
-    return {"apiVersion": "serverware.nativeShadowKeyAdmissionAssignment/v1", "purpose": "native-shadow-key-admission",
+    return {"apiVersion": "catchplate.nativeShadowKeyAdmissionAssignment/v1", "purpose": "native-shadow-key-admission",
         "keyAuthorizationSha256": sha(role_key_raw),
         "localKeySetRootSha256": key_root([key for key in keys if key["role"] in row["localRoles"]]), **common}
 
@@ -243,7 +243,7 @@ class KeyAuthorizationControls(unittest.TestCase):
         for change in ("payload", "runtime-pin", "other-role"):
             value = json.loads(self.f["delivery_inputs"][role]); payload = json.loads(value["payloadOriginal"])
             if change == "payload": payload["uid"] += 1
-            elif change == "runtime-pin": payload["runtimeConfig"]["path"] = "/etc/serverware/other.json"
+            elif change == "runtime-pin": payload["runtimeConfig"]["path"] = "/etc/catchplate/other.json"
             else: value["role"] = ROLES[1]
             value["payloadOriginal"] = canonical(payload).decode("ascii")
             candidate = canonical(value); signed = result_for(self.f, role, candidate)["original"].encode("ascii")
@@ -266,12 +266,12 @@ class KeyAuthorizationControls(unittest.TestCase):
     def test_domains_result_hash_and_payload_are_exact(self):
         role = ROLES[0]; raw = build(self.f, "role-keys", role)
         payload = expected_payload(self.f, "role-keys", role)
-        for field, value in (("apiVersion", "serverware.nativePilotKeyAuthorityInput/v2"),
+        for field, value in (("apiVersion", "catchplate.nativePilotKeyAuthorityInput/v2"),
                 ("operation", "sign-arbitrary"), ("role", "bridge"), ("payloadOriginal", canonical(payload).decode("ascii"))):
             candidate = json.loads(raw); candidate[field] = value
             with self.subTest(input_field=field), self.assertRaises(ValueError):
                 profile.prepare_input("role-keys", role, canonical(candidate), **clocks(self.f))
-        for domain in ("serverware.nativeShadowRoleKeyAssignment.signature/v1", ADMISSION_DOMAIN):
+        for domain in ("catchplate.nativeShadowRoleKeyAssignment.signature/v1", ADMISSION_DOMAIN):
             _, result = signed_result(payload, "role-keys", domain=domain)
             with self.subTest(domain=domain), self.assertRaises(InvalidSignature):
                 profile.checked_result("role-keys", role, raw, result, **clocks(self.f))
@@ -319,7 +319,7 @@ class KeyAuthorizationControls(unittest.TestCase):
             if change == "assignment-signature":
                 envelope = json.loads(f["recipe_originals"]["assignmentOriginal"])
                 envelope["signature"] = encoded(self.f["key"].sign(signed_message(
-                    "serverware.policyShadowAssignment/v2", envelope["payload"])))
+                    "catchplate.policyShadowAssignment/v2", envelope["payload"])))
                 f["recipe_originals"]["assignmentOriginal"] = canonical(envelope).decode("ascii")
             elif change == "measured-hash": f["measured"]["configurationBindingSha256"] = synthetic("other-binding")
             else:

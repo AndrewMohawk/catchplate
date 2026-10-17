@@ -18,9 +18,9 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_jit_indexed_phases as source
-from serverware.authority_index_contract import IndexLeaf, OpaqueSubtree
-from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
+from catchplate import authority_jit_indexed_phases as source
+from catchplate.authority_index_contract import IndexLeaf, OpaqueSubtree
+from catchplate.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
 from test_authority_jit_assertion_replay import fixture as raw_fixture
 from test_authority_radix_mutation import IndependentTree
 from test_authority_radix_proof import sql_digest, sql_json
@@ -102,7 +102,7 @@ class JitIndexedPhaseControls(unittest.TestCase):
             row = mutations[profile.table]["row"]
             tree = trees[profile.table]
             selected = tree.selected(tree.key(row))
-            digest = sql_digest("serverware.policyAuthorityAuthenticatedRow/v1",
+            digest = sql_digest("catchplate.policyAuthorityAuthenticatedRow/v1",
                 profile.table.encode("ascii"), sql_json(row))
             leaf = source.projection.project_row(head.index_id, row,
                 primary_key_digest=selected["keyDigest"], primary_row_digest=digest)
@@ -227,7 +227,7 @@ class JitIndexedPhaseControls(unittest.TestCase):
                     mutation=mutations[table], work=meter())
         self.assertIs(caught.exception, error)
         self.assertTrue(owner._failed)
-        parsed = ast.parse((Path(__file__).resolve().parents[1] / "serverware/authority_jit_indexed_phases.py").read_text())
+        parsed = ast.parse((Path(__file__).resolve().parents[1] / "catchplate/authority_jit_indexed_phases.py").read_text())
         self.assertFalse(any(isinstance(item, ast.Call) and isinstance(item.func, ast.Name)
             and item.func.id in {"_ValidationWork", "QueryReadValidationLimits"} for item in ast.walk(parsed)))
 

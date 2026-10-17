@@ -26,7 +26,7 @@ from scripts.operator_alchemy_fixture_network import (
     FIXTURE_IP, PROVIDER_HOSTS, assert_isolated_network, prepare_network_files,
 )
 
-SCHEMA = "serverware.privateAlchemyExampleObservations/v1"
+SCHEMA = "catchplate.privateAlchemyExampleObservations/v1"
 CLIENTS = ("node", "python", "go")
 CASES = ("success", "rpc-error", "error429", "wrong-id", "oversize", "reflection", "invalid-json")
 MAX_ATTEMPTS, MAX_BODY = 24, 65536
@@ -36,7 +36,7 @@ ORIGIN = "https://" + HOSTS[CHAIN]
 CHAIN_IDS = {"eth-mainnet": "0x1", "eth-sepolia": "0xaa36a7"}
 BLOCK_NUMBER = "0x10"
 METHODS = ("eth_chainId", "eth_blockNumber")
-TOKEN = "serverware_alchemy_synthetic_only_8a4671d8096a47f488aad7ee207489ab"
+TOKEN = "catchplate_alchemy_synthetic_only_8a4671d8096a47f488aad7ee207489ab"
 AGENTS = {"node": "undici", "python": "web3.py/7.15.0/web3.providers.rpc.rpc.HTTPProvider", "go": "Go-http-client/1.1"}
 MEDIA = {"node": "application/json", "python": "*/*", "go": "application/json", "probe": "application/json"}
 ROW_KEYS = {"ordinal", "accepted", "client", "case", "method", "target", "chain", "rpcMethod", "requestId",
@@ -66,7 +66,7 @@ def classify(method, raw_target, fields):
         if headers.get("user-agent") == AGENTS[client]:
             return client, "success"
     for case in CASES[1:]:
-        if headers.get("user-agent") == "serverware-alchemy-probe/" + case:
+        if headers.get("user-agent") == "catchplate-alchemy-probe/" + case:
             return "probe", case
     raise ValueError("private Alchemy client fingerprint refused")
 
@@ -86,7 +86,7 @@ def validated_headers(client, fields, case="success"):
         and re.fullmatch(r"[1-9][0-9]{0,4}", headers["content-length"])
         and 1 <= int(headers["content-length"]) <= MAX_BODY
         and headers.get("connection", "close") in {"close", "keep-alive"})
-    require(headers["user-agent"] == ("serverware-alchemy-probe/" + case if client == "probe" else AGENTS[client]))
+    require(headers["user-agent"] == ("catchplate-alchemy-probe/" + case if client == "probe" else AGENTS[client]))
     if client == "node":
         require(headers["accept-language"] == "*" and headers["sec-fetch-mode"] == "cors")
     # Preserve observed framing for the checker to join independently to the
@@ -158,7 +158,7 @@ def setup(root, marker):
     require(root == Path("/upstream-data/alchemy") and not root.exists() and not root.is_symlink()
         and root.parent.is_dir() and root.parent.stat().st_uid == os.geteuid() == 10001)
     assert_isolated_network(attached=False)
-    require(json.loads(marker.read_bytes()) == {"schema": "serverware.privateOperatorAuditFixture/v1", "syntheticOnly": True})
+    require(json.loads(marker.read_bytes()) == {"schema": "catchplate.privateOperatorAuditFixture/v1", "syntheticOnly": True})
     now = datetime.now(timezone.utc)
     key, leaf_key = ec.generate_private_key(ec.SECP256R1()), ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Private synthetic Alchemy fixture CA")])

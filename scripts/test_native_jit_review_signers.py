@@ -8,8 +8,8 @@ constructed without startup or a root-signed configuration; none of these tests
 admits a reviewer, executes an authority operation or persists a receipt.
 
 The runner must mount one public nonroot/mode-0400 synthetic fixture read-only
-at SERVERWARE_TEST_NONROOT_KEY_FIXTURE and name its canonical nonzero UID with
-SERVERWARE_TEST_NONROOT_KEY_FIXTURE_UID. Its preparer verifies the exact public
+at CATCHPLATE_TEST_NONROOT_KEY_FIXTURE and name its canonical nonzero UID with
+CATCHPLATE_TEST_NONROOT_KEY_FIXTURE_UID. Its preparer verifies the exact public
 canary below; capless root deliberately cannot read that file. O_PATH observes
 its real metadata without changing ownership or granting a DAC capability.
 """
@@ -31,23 +31,23 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
-os.environ["SERVERWARE_RELEASE_CHANNEL"] = "test"
-os.environ["SERVERWARE_PRODUCTION_IMAGE"] = "0"
+os.environ["CATCHPLATE_PROCESS_MODE"] = "metadata-bootstrap"
+os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "test"
+os.environ["CATCHPLATE_PRODUCTION_IMAGE"] = "0"
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from serverware import authority_launch_guard as launch
-from serverware import authority_native_jit_review_open_signers as subject
-from serverware import authority_service as service
+from catchplate import authority_launch_guard as launch
+from catchplate import authority_native_jit_review_open_signers as subject
+from catchplate import authority_service as service
 
-AUTHOR = "SERVERWARE_NATIVE_JIT_REVIEW_AUTHORIZER_KEY"
-COMMIT = "SERVERWARE_NATIVE_JIT_REVIEW_COMMIT_KEY"
+AUTHOR = "CATCHPLATE_NATIVE_JIT_REVIEW_AUTHORIZER_KEY"
+COMMIT = "CATCHPLATE_NATIVE_JIT_REVIEW_COMMIT_KEY"
 FIELD = "nativeJitReviewOpeningPolicy"
 ERROR = "Native review purpose signer is unavailable"
 SEALS = fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
-NONROOT_CANARY = b"serverware synthetic nonroot signer fixture\n"
+NONROOT_CANARY = b"catchplate synthetic nonroot signer fixture\n"
 
 
 def private_bytes(key):
@@ -68,10 +68,10 @@ class ReviewSignerTests(unittest.TestCase):
     def setUpClass(cls):
         if os.getuid() != 0 or os.geteuid() != 0:
             raise AssertionError("Real root-owned signer metadata tests require isolated UID 0")
-        cls.nonroot_fixture = os.environ.get("SERVERWARE_TEST_NONROOT_KEY_FIXTURE", "")
+        cls.nonroot_fixture = os.environ.get("CATCHPLATE_TEST_NONROOT_KEY_FIXTURE", "")
         if not cls.nonroot_fixture or not Path(cls.nonroot_fixture).is_absolute():
             raise AssertionError("An explicit read-only public nonroot fixture is required")
-        uid = os.environ.get("SERVERWARE_TEST_NONROOT_KEY_FIXTURE_UID", "")
+        uid = os.environ.get("CATCHPLATE_TEST_NONROOT_KEY_FIXTURE_UID", "")
         if not uid.isascii() or not uid.isdecimal() or len(uid) > 10 or str(int(uid)) != uid \
                 or not 0 < int(uid) < 2**32 - 1:
             raise AssertionError("The preparer's canonical nonzero fixture UID is required")
@@ -388,7 +388,7 @@ class ReviewSignerTests(unittest.TestCase):
                 elif case == "role":
                     process.role_name = "executor"
                 elif case == "mode":
-                    process.process_mode = "serverware-control-plane"
+                    process.process_mode = "catchplate-control-plane"
                 else:
                     subject._OWNERS.pop(process)
                 self.refused(held.check)
@@ -475,7 +475,7 @@ class ReviewSignerTests(unittest.TestCase):
         self.refused(lambda: self.borrow_once(process))
 
     def test_real_startup_hook_follows_configuration_custody_and_rbac_admission(self):
-        tree = ast.parse((ROOT / "serverware/authority_service.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/authority_service.py").read_text())
         process = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "AuthorityProcess")
         initializer = next(node for node in process.body if isinstance(node, ast.FunctionDef) and node.name == "__init__")
         calls = [(node.func.value.id, node.func.attr, node.lineno) for node in ast.walk(initializer)
@@ -489,7 +489,7 @@ class ReviewSignerTests(unittest.TestCase):
             lines = [line for found_owner, found_method, line in calls if (found_owner, found_method) == (owner, method)]
             self.assertEqual(len(lines), 1)
             self.assertLess(lines[0], signer[0])
-        signer_source = (ROOT / "serverware/authority_native_jit_review_open_signers.py").read_text()
+        signer_source = (ROOT / "catchplate/authority_native_jit_review_open_signers.py").read_text()
         self.assertNotIn("process.signing_key", signer_source)
         self.assertNotIn("process.writer_response_signing_key", signer_source)
 

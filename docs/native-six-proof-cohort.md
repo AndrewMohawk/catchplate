@@ -54,7 +54,7 @@ and forbidden for v1/v2. They use an existing independently approved signing key
 they create no key or authority. Precreation keeps its existing purpose because
 its exact configuration digest already fixes the selected inventory. Six-child
 observations and release use `/v2`; release uses the separate
-`serverware.nativeShadowProofCohortRelease.signature/v2` domain followed by NUL
+`catchplate.nativeShadowProofCohortRelease.signature/v2` domain followed by NUL
 and the canonical ASCII payload. Old versions reject the extra role.
 
 `retain_activation_fds(role="commitRequest", ...)` retains the actual sixth
@@ -67,7 +67,7 @@ is refused before release; the limit is not multiplied per role.
 ## Six-child cancellation and recovery
 
 Cleanup uses distinct `/v2` authorization, terminal and result versions and
-`serverware.nativeShadowProofCohortCleanup.signature/v2` framing. The existing
+`catchplate.nativeShadowProofCohortCleanup.signature/v2` framing. The existing
 separate cleanup key and protected durable journal remain mandatory. A five-child
 authorization or terminal is rejected for this selection. Intent is written,
 fsynced and read back before signaling any child. All six are signaled before

@@ -1,6 +1,6 @@
 # Original OIDC activation admission
 
-[`authority_oidc_session_activation._derive_on_work`](../serverware/authority_oidc_session_activation.py)
+[`authority_oidc_session_activation._derive_on_work`](../catchplate/authority_oidc_session_activation.py)
 is a source-only prerequisite for separate OIDC activation. It verifies an
 original WebAuthn assertion and returns ordinary, bounded CAS intent. It is not
 a registered/plannable operation, permission token, currentness witness, SQL
@@ -45,7 +45,7 @@ token originals. The old digest must match the pending row; only their SHA-256
 digests leave this helper. It does not generate randomness, establish new-token
 uniqueness, encrypt/deliver a token, retain secret bytes, or claim zeroization.
 
-The returned `serverware.oidcSessionActivationCasIntent/v1` dict contains a
+The returned `catchplate.oidcSessionActivationCasIntent/v1` dict contains a
 subject, separately domain-separated complete row/policy commitments, exact
 original assertion digest, challenge payload digest, bounded validity, and
 challenge/counter/session CAS data. Those predicates require a future genuine
@@ -54,7 +54,7 @@ database-owned mutation timestamps, one-use challenge consumption, counter CAS,
 session CAS and durable token-delivery handling. The returned intent itself
 cannot authorize any of these operations.
 
-The [retained-finalization prerequisite](../serverware/control_plane_registration_activation_subject.py)
+The [retained-finalization prerequisite](../catchplate/control_plane_registration_activation_subject.py)
 is separate: its original replay is not called by this module. Same-call
 composition with it, fresh caller/key permission, protected operation/query
 contracts, action-time currentness, atomic persistence and delivery remain open.

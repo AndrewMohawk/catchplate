@@ -27,10 +27,10 @@ from scripts.test_native_pilot_adopted_supervisor import ticket
 from scripts.test_native_pilot_current_head import refresh_request
 from scripts.test_native_pilot_lifecycle_approval_channel import session
 from scripts.test_native_pilot_supervisor_approval_channel import copies, public_originals
-from serverware import native_pilot_approval_current_heads as decisions
-from serverware import native_pilot_bridge_preparation as bridge
-from serverware import native_pilot_supervisor_approval_channel as channel
-from serverware.native_pilot_adopted_supervisor_policy import catalogue_original
+from catchplate import native_pilot_approval_current_heads as decisions
+from catchplate import native_pilot_bridge_preparation as bridge
+from catchplate import native_pilot_supervisor_approval_channel as channel
+from catchplate.native_pilot_adopted_supervisor_policy import catalogue_original
 
 p = channel.p
 
@@ -78,7 +78,7 @@ def fixture(*, inner_duration_ns=6_000_000_000):
         request["conductorRequestSha256"] = p.sha(conductor_raw)
         if request["jobIndex"] == 1: request["conductorRequest"] = copy.deepcopy(conductor)
         request_raw = p.canonical(request)
-        observation_raw = p.canonical(dict(apiVersion="serverware.nativePilotAdoptedSupervisorObservation/v1",
+        observation_raw = p.canonical(dict(apiVersion="catchplate.nativePilotAdoptedSupervisorObservation/v1",
             policySha256=p.sha(b"synthetic-policy"), catalogueSha256=p.sha(catalogue_original()),
             intakeConfigurationSha256=p.sha(b"synthetic-intake"),
             conductorRequestOriginal=conductor_raw.decode("ascii"), measuredConfiguration=None, recipeOriginals=None))

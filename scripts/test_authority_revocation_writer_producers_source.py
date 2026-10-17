@@ -16,11 +16,11 @@ from test_authority_revocation_planning_source import assigned, call, calls, def
 class RevocationWriterProducersSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        _, cls.service = source("serverware/authority_service.py", 2 * 1024 * 1024)
+        _, cls.service = source("catchplate/authority_service.py", 2 * 1024 * 1024)
         cls.process = definition(cls.service, "AuthorityProcess")
         cls.intent = definition(cls.process, "_produce_revocation_writer_intent")
         cls.relay = definition(cls.process, "_produce_revocation_writer_relay")
-        cls.text, cls.producers = source("serverware/authority_revocation_writer_producers.py", 64 * 1024)
+        cls.text, cls.producers = source("catchplate/authority_revocation_writer_producers.py", 64 * 1024)
         cls.intent_worker = definition(cls.producers, "_produce_intent_on_configuration")
         cls.relay_worker = definition(cls.producers, "_produce_relay_on_configuration")
 
@@ -69,7 +69,7 @@ class RevocationWriterProducersSourceTests(unittest.TestCase):
         self.shape(callbacks[0], '''authority_revocation_configuration.production._callback(
             work, lambda: authority_launch_guard.require_active("verifier"))''')
         self.shape(callbacks[1], '''authority_revocation_configuration.production._callback(
-            work, lambda: _read_dsn_descriptor("SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN"))''')
+            work, lambda: _read_dsn_descriptor("CATCHPLATE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN"))''')
         reader = assigned(self.intent, "reader")
         self.shape(reader, '''authority_revocation_root_reader.RevocationRootReader(
             dsn=dsn, connect_timeout_seconds=pins[0], database_role=pins[1],
@@ -98,7 +98,7 @@ class RevocationWriterProducersSourceTests(unittest.TestCase):
             sorted([read.lineno, inventory.lineno, generation.lineno, produced.lineno]))
         self.assertIsInstance(self.intent.body[-1], ast.Return)
         self.assertIs(self.intent.body[-1].value, produced)
-        _, reader = source("serverware/authority_revocation_root_reader.py", 64 * 1024)
+        _, reader = source("catchplate/authority_revocation_root_reader.py", 64 * 1024)
         actual = definition(reader, "_read_on_configuration")
         self.assertEqual(len(calls(actual, "_context")), 2)
         self.assertEqual(len(calls(actual, "roots._read_revocation_root_inventory_on_work")), 1)
@@ -160,7 +160,7 @@ class RevocationWriterProducersSourceTests(unittest.TestCase):
         for dispatcher in (handle, served):
             self.assertNotIn("_produce_revocation_writer_intent", ast.unparse(dispatcher))
             self.assertNotIn("_produce_revocation_writer_relay", ast.unparse(dispatcher))
-        _, registry = source("serverware/authority_transition_registry.py")
+        _, registry = source("catchplate/authority_transition_registry.py")
         self.shape(assigned(registry, "_CLOSURE_ERRORS"), "_registry_closure_errors()")
         guard, = [node for node in registry.body if isinstance(node, ast.If)]
         self.shape(guard.test, "_CLOSURE_ERRORS")
@@ -183,7 +183,7 @@ class RevocationWriterProducersSourceTests(unittest.TestCase):
         for forbidden in ("_capture_payload", "configuration.production._callback",
                 "verifier._verifier_from_configuration_on_work", "owner.verify_handoff"):
             self.assertFalse(calls(captured, forbidden))
-        _, configured = source("serverware/authority_revocation_verifier.py", 64 * 1024)
+        _, configured = source("catchplate/authority_revocation_verifier.py", 64 * 1024)
         self.shape(assigned(configured, "_CALL_CONTEXT_FIELDS"),
             'handoff.retention.production._CONTEXT_FIELDS - _CONFIGURED_CONTEXT_FIELDS - {"expectedBefore"}')
 
@@ -220,10 +220,10 @@ class RevocationWriterProducersSourceTests(unittest.TestCase):
             expected_request=request, database_now=verified.database_now, work=work, **expectations)''')
         ordered = [captured, inventory, payload, mapper, fixed, verified, expectations, recaptured]
         self.assertEqual([node.lineno for node in ordered], sorted(node.lineno for node in ordered))
-        _, configured = source("serverware/authority_revocation_verifier.py", 64 * 1024)
+        _, configured = source("catchplate/authority_revocation_verifier.py", 64 * 1024)
         actual = definition(definition(configured, "RevocationPlanVerifier"), "verify_handoff")
         self.assertEqual(len(calls(actual, "handoff._verify_observed_plan_handoff_on_work")), 1)
-        _, handoff = source("serverware/authority_revocation_handoff.py", 64 * 1024)
+        _, handoff = source("catchplate/authority_revocation_handoff.py", 64 * 1024)
         actual_handoff = definition(handoff, "_verify_observed_plan_handoff_on_work")
         self.assertEqual(len(calls(actual_handoff, "retention._verify_record_on_work")), 1)
 
@@ -305,7 +305,7 @@ class RevocationWriterProducersSourceTests(unittest.TestCase):
         returned, = [node for node in ast.walk(worker) if isinstance(node, ast.Return)]
         self.shape(returned.value, "relay_bytes")
         self.assertLess(fresh.lineno, returned.lineno)
-        _, controls = source("serverware/authority_revocation_writer_commitment.py", 64 * 1024)
+        _, controls = source("catchplate/authority_revocation_writer_commitment.py", 64 * 1024)
         for name in ("_produce_intent_on_work", "_produce_relay_on_work"):
             actual = definition(controls, name)
             self.assertLess(call(actual, "production._key_binding").lineno, call(actual, "_sign_wire").lineno)

@@ -10,8 +10,8 @@ use super::{canonical_json_bytes, config::TrustRoots, decode_b64, digest, ensure
     ingress_session::clocks, json, parse_digest, text};
 use rustls::{ClientConnection, HandshakeKind, ProtocolVersion};
 use serde_json::Value;
-use serverware_decision_gate::native_ingress_challenge_v1::EXPORTER_LABEL;
-use serverware_decision_gate::native_principal_preflight_v1::{self as wire,
+use catchplate_decision_gate::native_ingress_challenge_v1::EXPORTER_LABEL;
+use catchplate_decision_gate::native_principal_preflight_v1::{self as wire,
     MAX_REQUEST_BYTES, MAX_STATEMENT_BYTES, REQUEST_EXPORTER_LABEL};
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
@@ -108,7 +108,7 @@ fn statement(raw: &[u8], expected_principal: &str, identity: [u8; 32],
     exact(&value, &["apiVersion", "principalId", "identityPolicySha256", "policySha256",
         "clientCertificateSha256", "clientSpkiSha256", "sourceAddress", "requestBindingSha256"])?;
     ensure(canonical_json_bytes(&value).map_err(|_| "encode native principal statement")? == raw
-        && text(&value, "apiVersion")? == "serverware.nativePrincipalPreflight/v1"
+        && text(&value, "apiVersion")? == "catchplate.nativePrincipalPreflight/v1"
         && text(&value, "principalId")? == expected_principal,
         "native principal statement encoding, profile or independently expected principal differs")?;
     let pin = |field| parse_digest::<32>(text(&value, field)?, "sha256:", true);
@@ -199,7 +199,7 @@ pub(super) fn verify(raw: &[u8], scope_raw: &[u8], roots_raw: &[u8], challenge: 
     let value = json::parse(&raw[..raw.len() - 1], MAX_EVIDENCE - 1)?;
     exact(&value, &["apiVersion", "evidenceScope", "okForAction", "clientChallengeBase64url",
         "tlsExporterBase64url", "publicIdentityBase64url", "principalPreflightBase64url"])?;
-    ensure(text(&value, "apiVersion")? == "serverware.nativeIngressSessionEvidence/v3"
+    ensure(text(&value, "apiVersion")? == "catchplate.nativeIngressSessionEvidence/v3"
         && text(&value, "evidenceScope")? == "unverified-session-public-material"
         && value.get("okForAction").and_then(Value::as_bool) == Some(false)
         && fixed_b64::<32>(text(&value, "clientChallengeBase64url")?)? == challenge

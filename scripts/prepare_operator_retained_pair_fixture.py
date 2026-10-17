@@ -23,13 +23,13 @@ import sys
 from types import SimpleNamespace
 
 COMMIT = "8a8d4b06678193d51e2b875a471cbeb7cb1b5ddf"
-SOURCE = Path("/srv/catchplate-fast/projects/serverware-operator-artifacts/source-" + COMMIT)
+SOURCE = Path("/srv/catchplate-fast/projects/catchplate-operator-artifacts/source-" + COMMIT)
 CANONICAL_MANIFEST = "b3ac8f02465089754e1b6ac5260af104a0a1303f11751fd7998ce1d24fb1bbd0"
-EVIDENCE_ROOT = Path("/srv/catchplate-fast/projects/serverware-operator-workspace-evidence")
+EVIDENCE_ROOT = Path("/srv/catchplate-fast/projects/catchplate-operator-workspace-evidence")
 SOURCE_RECEIPT = EVIDENCE_ROOT / "demo-ux-rollout.TCi8atvI/source-verification.json"
 BINARY_SHA = "e7529b4484228ebdbf2be1ebb471a80a78a3e127673f0bc6dcb4921db92489e2"
-BINARY = SOURCE.parent / ("sha256-" + BINARY_SHA) / "serverware-decision-gate"
-INITIALIZER = Path("/srv/catchplate-fast/projects/serverware-operator-audit-integration/scripts/private_operator_audit/initialize.py")
+BINARY = SOURCE.parent / ("sha256-" + BINARY_SHA) / "catchplate-decision-gate"
+INITIALIZER = Path("/srv/catchplate-fast/projects/catchplate-operator-audit-integration/scripts/private_operator_audit/initialize.py")
 ISOLATION_CHECKER = EVIDENCE_ROOT / "proxy-basic.PvuAduRH/verify-private-isolation.py"
 ISOLATION_SHA = "e0f58ef32560bd1de7bae3fa0c914550d0e0ed5acff799ff4a4f85410ef0b047"
 CHECKER_COMMIT = "3cfeb9a3ae088a7a8bce9bd063a569bf32a305e4"
@@ -65,7 +65,7 @@ def verify_files():
     root = Path("/client-dependencies")
     pinned(root / "manifest.json", DEPENDENCY_HASH)
     manifest = json.loads((root / "manifest.json").read_text())
-    require(manifest["schema"] == "serverware.syntheticRequestsDependencies/v1"
+    require(manifest["schema"] == "catchplate.syntheticRequestsDependencies/v1"
         and manifest["moduleSubdirectory"] == "site-packages" and len(manifest["files"]) == 143)
     expected = {row["path"]: row["sha256"] for row in manifest["files"]}
     require(len(expected) == 143)
@@ -234,9 +234,9 @@ def prepare(args):
     for path, expected in ((BINARY, BINARY_SHA), (INITIALIZER, base.INITIALIZER_SHA256), (ISOLATION_CHECKER, ISOLATION_SHA)):
         assert path.resolve() == path and path.is_file() and not path.is_symlink() and base.digest(path) == expected
     basic.dependency_inventory()
-    source_manifest = {"schema": "serverware.privateProxyBasicSource/v1", "sourceCommit": COMMIT, "files": files}
+    source_manifest = {"schema": "catchplate.privateProxyBasicSource/v1", "sourceCommit": COMMIT, "files": files}
     source_manifest_path = args.evidence_dir / "source-manifest.json"
-    plan = {"schema": "serverware.exactRetainedPairPreparation/v2", "sourceCommit": COMMIT,
+    plan = {"schema": "catchplate.exactRetainedPairPreparation/v2", "sourceCommit": COMMIT,
         "canonicalSourceManifestSha256": CANONICAL_MANIFEST, "binarySha256": BINARY_SHA,
         "checkerSourceCommit": CHECKER_COMMIT, "checkerSource": str(CHECKER), "checkerSha256": CHECKER_SHA,
         "checkerMountTarget": CHECKER_TARGET, "checkerHelperSourceCommit": COMMIT,

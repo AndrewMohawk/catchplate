@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-publication-resources.v2.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-publication-resources.v2.schema.json",
   "title": "Trusted-host publication resources with independently verified Nitro runtime originals",
   "$ref": "#/$defs/configuration",
   "$defs": {
@@ -9,7 +9,7 @@
       "additionalProperties": false,
       "required": ["apiVersion", "profile", "descriptorFd", "descriptorSha256", "checkpointFd", "checkpointSha256", "signingKeyFd", "journalFd"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeShadowPublicationResources/v2"},
+        "apiVersion": {"const": "catchplate.nativeShadowPublicationResources/v2"},
         "profile": {"const": "trusted-host-local"},
         "descriptorFd": {"$ref": "native-shadow-publication-resources.v1.schema.json#/$defs/fd"},
         "descriptorSha256": {"$ref": "native-shadow-publication-resources.v1.schema.json#/$defs/sha256"},

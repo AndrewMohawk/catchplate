@@ -1,7 +1,7 @@
 //! Source-owned supplemental native PostgreSQL report contract.
 //!
 //! The literal suite order and test identities mirror
-//! `serverware/native_postgres_inventory.py`; they are not discovered from a
+//! `catchplate/native_postgres_inventory.py`; they are not discovered from a
 //! report, imported Python, or a runtime-selected test tree. Independent signed
 //! preparation supplies the exact manifest and fifteen script digests. These
 //! pins and authored identities are not execution or cleanup evidence, and do

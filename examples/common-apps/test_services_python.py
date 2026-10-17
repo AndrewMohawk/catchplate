@@ -27,7 +27,7 @@ def config(provider, operation, scope=None):
         "upstream_url": template.format(**scope), "methods": ["POST" if provider == "slack" else "GET"],
         "request_query": {}, "query_keys": list(keys), "ca_file": certifi.where(), "proxy_ca_file": None,
         "proxy_url": "https://proxy.example.test", "proxy_username": "public-application",
-        "proxy_password": "private-serverware-test-token", "_proxy_url": "https://public-application:private-serverware-test-token@proxy.example.test"}
+        "proxy_password": "private-catchplate-test-token", "_proxy_url": "https://public-application:private-catchplate-test-token@proxy.example.test"}
 
 
 class FakeSlackSession:
@@ -62,7 +62,7 @@ class FakeSlackSession:
                 FakeSlackSession.seen.append((method, url, kwargs, owner.options))
                 if FakeSlackSession.connection_error:
                     from aiohttp import ClientConnectionError
-                    raise ClientConnectionError("private-serverware-test-token")
+                    raise ClientConnectionError("private-catchplate-test-token")
                 if FakeSlackSession.redirect:
                     for callback in trace.on_request_redirect:
                         await callback(owner, None, params)
@@ -125,7 +125,7 @@ class ServicesSDKTests(unittest.TestCase):
         result, request = self.capture(config("stripe", "balance"),
             {"object": "balance", "available": [], "pending": [], "livemode": False})
         self.assertTrue(result["ok"])
-        self.assertEqual(request.headers["authorization"], "Bearer serverware-stripe-placeholder-v1")
+        self.assertEqual(request.headers["authorization"], "Bearer catchplate-stripe-placeholder-v1")
         self.assertNotIn("content-type", request.headers)
         self.assertIn("stripe-version", request.headers)
         result, request = self.capture(config("stripe", "customers"),
@@ -219,7 +219,7 @@ class ServicesSDKTests(unittest.TestCase):
             self.assertEqual(method, "POST")
             self.assertEqual(url, configuration["upstream_url"])
             self.assertEqual(arguments["json"], json.loads(body))
-            self.assertEqual(arguments["headers"]["Authorization"], "Bearer serverware-slack-placeholder-v1")
+            self.assertEqual(arguments["headers"]["Authorization"], "Bearer catchplate-slack-placeholder-v1")
             self.assertFalse(options["trust_env"])
         for intent, wrong_body in [(False, body), (True, b"{}"), (True, body.replace(b"C0123456789", b"C9999999999"))]:
             with self.assertRaises(ValueError):

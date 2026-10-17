@@ -125,7 +125,7 @@ startup transcript. Six typed Rust query controls are authored but were **not
 compiled in test mode or executed** by the binary compiler check.
 
 The exact source archive, commands, manifest, logs and checksums are retained in
-`codex-offload/serverware/engineering-builds/0e1894b1-native-terminal-rsjJ1v/`.
+`codex-offload/catchplate/engineering-builds/0e1894b1-native-terminal-rsjJ1v/`.
 No end-to-end native runtime settlement, uncertain-operation recovery, external
 signer completion or production readiness is claimed. Source **36/46**, production
 **0/6**, commissioning **164/164** and **113 selectors** are unchanged. No cloud

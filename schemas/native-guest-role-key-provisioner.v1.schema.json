@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-guest-role-key-provisioner.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-guest-role-key-provisioner.v1.schema.json",
   "title": "Purpose-fixed boot role-key provisioning originals",
   "description": "Data shapes only. Signatures, current Prepared delivery owners, protected filesystem custody, original deadlines, KMS Recipient evidence, cryptographic joins and successful child exit are checked by the actual owners.",
   "oneOf": [
@@ -18,8 +18,8 @@
     "base64url": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_-]+$"},
     "context": {
       "type": "object", "minProperties": 1, "maxProperties": 32,
-      "required": ["serverwarePurpose"], "propertyNames": {"$ref": "#/$defs/text"},
-      "properties": {"serverwarePurpose": {"const": "guest-role-keys/v1"}},
+      "required": ["catchplatePurpose"], "propertyNames": {"$ref": "#/$defs/text"},
+      "properties": {"catchplatePurpose": {"const": "guest-role-keys/v1"}},
       "additionalProperties": {"$ref": "#/$defs/text"}
     },
     "helperImage": {
@@ -27,7 +27,7 @@
       "required": ["profile", "imagePath", "imageSha256", "interpreterSha256", "helperSha256"],
       "properties": {
         "profile": {"const": "sealed-memfd-squashfs-v1"},
-        "imagePath": {"const": "/opt/serverware/native-role-key-provisioner-runtime.squashfs"},
+        "imagePath": {"const": "/opt/catchplate/native-role-key-provisioner-runtime.squashfs"},
         "imageSha256": {"$ref": "#/$defs/sha256"}, "interpreterSha256": {"$ref": "#/$defs/sha256"},
         "helperSha256": {"$ref": "#/$defs/sha256"}
       }
@@ -36,7 +36,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "helperImage", "kmsParentPort", "kmsKeyId", "ciphertextBlobSha256", "encryptionContext", "kekSha256", "encryptedInventory"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeGuestRoleKeyProvisioner/v1"},
+        "apiVersion": {"const": "catchplate.nativeGuestRoleKeyProvisioner/v1"},
         "helperImage": {"$ref": "#/$defs/helperImage"},
         "kmsParentPort": {"type": "integer", "minimum": 1024, "maximum": 4294967294},
         "kmsKeyId": {"type": "string", "minLength": 1, "maxLength": 2048},
@@ -44,7 +44,7 @@
         "kekSha256": {"$ref": "#/$defs/sha256"},
         "encryptedInventory": {
           "type": "object", "additionalProperties": false, "required": ["path", "sha256"],
-          "properties": {"path": {"const": "/run/serverware-role-key-provisioning/inventory.enc.json"}, "sha256": {"$ref": "#/$defs/sha256"}}
+          "properties": {"path": {"const": "/run/catchplate-role-key-provisioning/inventory.enc.json"}, "sha256": {"$ref": "#/$defs/sha256"}}
         }
       }
     },
@@ -67,7 +67,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "configurationSha256", "generationId", "generation", "trustCheckpointSha256", "bootId", "deadlineBoottimeNs", "deliveries", "keys"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeGuestRoleKeyInventory/v1"},
+        "apiVersion": {"const": "catchplate.nativeGuestRoleKeyInventory/v1"},
         "configurationSha256": {"$ref": "#/$defs/sha256"}, "generationId": {"type": "string", "minLength": 1, "maxLength": 256},
         "generation": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
         "trustCheckpointSha256": {"$ref": "#/$defs/sha256"}, "bootId": {"$ref": "#/$defs/bootId"},
@@ -79,7 +79,7 @@
     "encryptedInventory": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "inventorySha256", "nonce", "ciphertext"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeGuestRoleKeyCiphertext/v1"}, "inventorySha256": {"$ref": "#/$defs/sha256"},
+        "apiVersion": {"const": "catchplate.nativeGuestRoleKeyCiphertext/v1"}, "inventorySha256": {"$ref": "#/$defs/sha256"},
         "nonce": {"type": "string", "pattern": "^[A-Za-z0-9_-]{16}$"},
         "ciphertext": {"allOf": [{"$ref": "#/$defs/base64url"}], "minLength": 23, "maxLength": 21846}
       }
@@ -88,7 +88,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "material", "configurationSha256", "deliveryInventorySha256", "provisionerConfigurationSha256", "helperImageSha256", "bootId", "deadlineBoottimeNs", "kmsKeyId", "ciphertextBlobSha256", "encryptionContext", "recipientPublicKeySha256", "nonce"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeRoleKeyKmsRecipientRequest/v1"}, "material": {"const": "guest-role-key-kek"},
+        "apiVersion": {"const": "catchplate.nativeRoleKeyKmsRecipientRequest/v1"}, "material": {"const": "guest-role-key-kek"},
         "configurationSha256": {"$ref": "#/$defs/sha256"}, "deliveryInventorySha256": {"$ref": "#/$defs/sha256"},
         "provisionerConfigurationSha256": {"$ref": "#/$defs/sha256"}, "helperImageSha256": {"$ref": "#/$defs/sha256"},
         "bootId": {"$ref": "#/$defs/bootId"}, "deadlineBoottimeNs": {"$ref": "#/$defs/deadline"},
@@ -101,7 +101,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "requestSha256", "ciphertextForRecipient", "ciphertextSha256"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeRoleKeyKmsRecipientCiphertext/v1"}, "requestSha256": {"$ref": "#/$defs/sha256"},
+        "apiVersion": {"const": "catchplate.nativeRoleKeyKmsRecipientCiphertext/v1"}, "requestSha256": {"$ref": "#/$defs/sha256"},
         "ciphertextForRecipient": {"allOf": [{"$ref": "#/$defs/base64url"}], "maxLength": 87382},
         "ciphertextSha256": {"$ref": "#/$defs/sha256"}
       }
@@ -110,7 +110,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "enclaveCid", "port", "kmsKeyId", "ciphertextBlob", "encryptionContext", "region", "configurationSha256", "deliveryInventorySha256", "provisionerConfigurationSha256", "helperImageSha256"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeRoleKeyKmsParent/v1"},
+        "apiVersion": {"const": "catchplate.nativeRoleKeyKmsParent/v1"},
         "enclaveCid": {"type": "integer", "minimum": 4, "maximum": 4294967294}, "port": {"type": "integer", "minimum": 1024, "maximum": 4294967294},
         "kmsKeyId": {"type": "string", "minLength": 1, "maxLength": 2048},
         "ciphertextBlob": {"allOf": [{"$ref": "#/$defs/base64url"}], "maxLength": 8192},
@@ -122,7 +122,7 @@
     "offlineAssignment": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "inventorySha256", "kekPath", "seedPaths"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeGuestRoleKeyOfflineAssignment/v1"}, "inventorySha256": {"$ref": "#/$defs/sha256"},
+        "apiVersion": {"const": "catchplate.nativeGuestRoleKeyOfflineAssignment/v1"}, "inventorySha256": {"$ref": "#/$defs/sha256"},
         "kekPath": {"$ref": "#/$defs/path"}, "seedPaths": {"type": "array", "minItems": 7, "maxItems": 64, "uniqueItems": true, "items": {"$ref": "#/$defs/path"}}
       }
     }

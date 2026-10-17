@@ -14,7 +14,7 @@ here. The static entrypoint and its fixed trust files remain strict; replacing
 
 The role and process mode are `oidc-session-activation-release-grant-issuer`, UID/GID
 65496. The root-created listener is
-`/run/serverware/oidc-session-activation-token-release/grants.sock`, pathname owner
+`/run/catchplate/oidc-session-activation-token-release/grants.sock`, pathname owner
 65496:65532 and mode 0660, with fixed request peer 65532:65532. Independent root
 provisioning supplies the listener and all signed originals before launch; this
 code creates no path, changes no file protection and installs no service.
@@ -22,8 +22,8 @@ code creates no path, changes no file protection and installs no service.
 ## Signed launch and exact originals
 
 The signed/payload schemas are
-`serverware.signedOidcSessionActivationReleaseGrantIssuerBootstrap/v1` and
-`serverware.oidcSessionActivationReleaseGrantIssuerBootstrap/v1`. Purpose is
+`catchplate.signedOidcSessionActivationReleaseGrantIssuerBootstrap/v1` and
+`catchplate.oidcSessionActivationReleaseGrantIssuerBootstrap/v1`. Purpose is
 `launch-oidc-session-activation-release-grant-issuer`; trust mode is
 `trusted-host-local`. The payload contains only schema/source/purpose/role/trust,
 the exact `issuerPolicyDigest` and `proofBootstrapDigest`,
@@ -65,11 +65,11 @@ readback. It does not produce or infer OS resource pins.
 | 203 | Sealed runtime root-signing-key PEM |
 
 The trust directory is
-`/run/serverware/oidc-session-activation-release-grant-issuer-trust`, with fixed
+`/run/catchplate/oidc-session-activation-release-grant-issuer-trust`, with fixed
 files `root-public-key.pem`, `bootstrap.json`, `issuer-policy.json` and
 `proof-bootstrap.json`, each root-owned mode 0444 and link count one. The sole
 secret path is
-`/run/secrets/serverware-oidc-session-activation-release-grant-issuer-root-signing-key`,
+`/run/secrets/catchplate-oidc-session-activation-release-grant-issuer-root-signing-key`,
 root-owned mode 0400 and link count one. Protected root-owned ancestor directories
 are opened component by component with no symlink following. No environment,
 request or signed payload can substitute these paths.

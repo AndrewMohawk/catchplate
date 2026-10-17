@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROFILE="$ROOT/security/apparmor/serverware-docker"
+PROFILE="$ROOT/security/apparmor/catchplate-docker"
 
 if ! command -v apparmor_parser >/dev/null 2>&1; then
   echo "apparmor_parser is required; install AppArmor on the Linux Docker host first" >&2
@@ -15,4 +15,4 @@ else
   sudo apparmor_parser -r "$PROFILE"
 fi
 
-echo "installed AppArmor profile serverware-docker"
+echo "installed AppArmor profile catchplate-docker"

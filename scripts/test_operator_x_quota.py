@@ -30,12 +30,12 @@ def no_external_effects(event, _args):
 
 
 sys.addaudithook(no_external_effects)
-from serverware import app, db, operator_publication as publication
-from serverware import operator_x_quota as quota
-from serverware import operator_x_configuration as configuration
-from serverware import operator_x_oauth_profile as profiles
-from serverware import operator_catalog_x_oauth as accounts
-from serverware import operator_catalog_x_post as posting
+from catchplate import app, db, operator_publication as publication
+from catchplate import operator_x_quota as quota
+from catchplate import operator_x_configuration as configuration
+from catchplate import operator_x_oauth_profile as profiles
+from catchplate import operator_catalog_x_oauth as accounts
+from catchplate import operator_catalog_x_post as posting
 
 IDS = [str(uuid.UUID(int=n)) for n in range(1, 20)]
 POLICY = "sha256:" + "a" * 64
@@ -133,7 +133,7 @@ class QuotaStorageTests(unittest.TestCase):
             "provider_subject": subject, "provider_account": "@Synthetic_User",
             "provider_identity_verified": True, "scopes": list(profiles.SCOPES), "refreshable": True,
             "injection_field": "access_token", "expires_at_epoch_ms": self.now + 4 * quota.DAY_MS,
-            "operator_x_account": {"schema": "serverware.operatorXAccountBinding/v1",
+            "operator_x_account": {"schema": "catchplate.operatorXAccountBinding/v1",
                 "owner_id": IDS[0], "configuration_operation_id": IDS[1], "config_version": 1,
                 "profile_binding_digest": self.profile.binding_digest, "intent_id": IDS[2]}}
         core = {"id": credential_id, "name": "Synthetic account", "kind": "oauth2", "metadata": metadata,

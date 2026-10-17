@@ -21,12 +21,12 @@ sys.path.insert(0, str(_SCRIPT))
 sys.path.insert(0, str(_SCRIPT.parent.parent))
 
 import native_pilot_authority_io as io
-from serverware import native_pilot_closure_set as closure_set
+from catchplate import native_pilot_closure_set as closure_set
 
 p = closure_set.p
-INPUT_API = "serverware.nativePilotClosureSetPreparation/v1"
-SUCCESSOR_INPUT_API = "serverware.nativePilotClosureSetPreparation/v2"
-GENESIS_BOOTSTRAP_INPUT_API = "serverware.nativePilotClosureSetPreparation/v3"
+INPUT_API = "catchplate.nativePilotClosureSetPreparation/v1"
+SUCCESSOR_INPUT_API = "catchplate.nativePilotClosureSetPreparation/v2"
+GENESIS_BOOTSTRAP_INPUT_API = "catchplate.nativePilotClosureSetPreparation/v3"
 
 
 class Parser(argparse.ArgumentParser):

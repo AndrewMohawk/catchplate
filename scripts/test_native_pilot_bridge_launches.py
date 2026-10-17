@@ -19,7 +19,7 @@ from cryptography.exceptions import InvalidSignature
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import native_pilot_launch_publication as launch
+from catchplate import native_pilot_launch_publication as launch
 from test_native_pilot_bridge_authorizations import (
     fixture as bridge_fixture, pair, expected_key, signed, clocks, public_keys)
 from test_native_pilot_bridge_runtime import helper_fixture
@@ -31,8 +31,8 @@ COMPONENTS = {"trust": "trust", "timeBootstrap": "time-bootstrap", "assignment":
     "admission": "admission", "verifierTransport": "verifier"}
 CLOCK = {"parentPort": 10444, "maximumBracketNanos": "1000000", "timestampErrorNanos": 1000,
     "maximumClockRateErrorPpm": 10}
-GRANT_DOMAIN = "serverware.nativeShadowTrustedTimeServiceAssignment.signature/v1"
-CLOSURE_DOMAIN = "serverware.nativeCustodyClosureAssignment.signature/v3"
+GRANT_DOMAIN = "catchplate.nativeShadowTrustedTimeServiceAssignment.signature/v1"
+CLOSURE_DOMAIN = "catchplate.nativeCustodyClosureAssignment.signature/v3"
 
 
 def detached(payload, domain):
@@ -54,17 +54,17 @@ def fixture(*, version=10, large=False):
     endpoint = next(row for row in runtime["proofEndpoints"] if row["endpointKind"] == "trusted-time")
     endpoint.update(authorityKeyId=trusted_key["keyId"], authorityKeySpkiSha256=trusted_key["keySpkiSha256"])
     if version == 9:
-        runtime["apiVersion"] = "serverware.policyCustodyProductionRpcRuntime/v9"
+        runtime["apiVersion"] = "catchplate.policyCustodyProductionRpcRuntime/v9"
         del runtime["ordinaryInitialHistories"]
     elif version == 11:
-        runtime["apiVersion"] = "serverware.policyCustodyProductionRpcRuntime/v11"
+        runtime["apiVersion"] = "catchplate.policyCustodyProductionRpcRuntime/v11"
         runtime["helperBootstrap"] = helper_fixture()
     runtime_raw = canonical(runtime)
     source["runtimeOriginal"] = runtime_raw.decode("ascii")
     c9 = json.loads(first["deliveryOriginal"])
     c9["payload"]["runtimeConfig"]["sha256"] = sha(runtime_raw)
     c9["signatureBase64url"] = encoded(key_fixture("bridge-c9")[0].sign(
-        b"serverware.policyCustodyGuestDelivery.signature/v1\0" + canonical(c9["payload"])))
+        b"catchplate.policyCustodyGuestDelivery.signature/v1\0" + canonical(c9["payload"])))
     delivery_raw = canonical(c9)
     source["payloadOriginal"] = canonical(c9["payload"]).decode("ascii")
     first.update(deliveryInputOriginal=canonical(source).decode("ascii"), deliveryOriginal=delivery_raw.decode("ascii"))
@@ -78,10 +78,10 @@ def fixture(*, version=10, large=False):
     closure_payload = {name: key[name] for name in ("assignmentId", "assignmentPayloadSha256", "assignmentRevision",
         "guest", "trustCheckpointId", "revocationGeneration", "revocationRootSha256", "issuedAtUnixNanos",
         "expiresAtUnixNanos", "signingKeyId", "signingKeySpkiSha256")}
-    closure_payload.update(apiVersion="serverware.nativeCustodyClosureAssignment/v3", purpose="shadow-custody-closure-set-member",
+    closure_payload.update(apiVersion="catchplate.nativeCustodyClosureAssignment/v3", purpose="shadow-custody-closure-set-member",
         profile="native-multi-guest-closure-set-v1", guestRole="bridge",
         **{name: leaf[name] for name in ("manifestSha256", "setRootSha256", "seccompSetRootSha256", "leafSha256")})
-    closure = {"apiVersion": "serverware.nativeCustodyClosure/v3", "manifest": manifest,
+    closure = {"apiVersion": "catchplate.nativeCustodyClosure/v3", "manifest": manifest,
         "closureSet": selected, "authorization": detached(closure_payload, CLOSURE_DOMAIN)}
     common = {name: key[name] for name in ("assignmentId", "assignmentPayloadSha256", "assignmentRevision", "guest",
         "fullKeySetRootSha256", "challengeBase64url", "trustCheckpointId", "revocationGeneration",
@@ -89,16 +89,16 @@ def fixture(*, version=10, large=False):
     common.update(keyAuthorizationSha256=sha(pair_context["roleKeyOriginal"].encode("ascii")),
         issuedAtUnixNanos=NOW - 100_000_000, expiresAtUnixNanos=NOW + 100_000_000)
     config = json.loads(source["ownerConfigurationOriginal"])
-    encrypted_payload = dict(common, apiVersion="serverware.nativeShadowEncryptedKeyDeliveryAssignment/v1",
+    encrypted_payload = dict(common, apiVersion="catchplate.nativeShadowEncryptedKeyDeliveryAssignment/v1",
         purpose="kms-recipient-shadow-local-keys", transport=config["continuation"]["keyTransport"],
         localKeySetRootSha256=json.loads(pair_context["admissionOriginal"])["payload"]["localKeySetRootSha256"])
     encrypted_raw, _ = signed("encrypted-delivery", encrypted_payload)
     verifier_key = public_keys()[-2]
-    verifier_payload = dict(common, apiVersion="serverware.nativeShadowVerifierTransportAssignment/v1",
+    verifier_payload = dict(common, apiVersion="catchplate.nativeShadowVerifierTransportAssignment/v1",
         purpose="public-shadow-nitro-verification", parentPort=11443, verifierKeyId=verifier_key["keyId"],
         verifierKeySpkiSha256=verifier_key["keySpkiSha256"], verifierKeyMaterialSha256=verifier_key["keyMaterialSha256"])
     verifier_raw, _ = signed("verifier-transport", verifier_payload)
-    clock = {"apiVersion": "serverware.nativeShadowGuestTimeBootstrap/v1", "guest": guest,
+    clock = {"apiVersion": "catchplate.nativeShadowGuestTimeBootstrap/v1", "guest": guest,
         "signingKeyId": trust["timeKey"]["keyId"], **CLOCK}
 
     # This is a different guest's grant: the bridge is its allowed client.
@@ -111,7 +111,7 @@ def fixture(*, version=10, large=False):
         startTimeTicks=observed["driver"]["processStartTimeTicks"])
     grant_payload = {name: key[name] for name in ("assignmentPayloadSha256", "trustCheckpointId",
         "revocationGeneration", "revocationRootSha256", "signingKeyId", "signingKeySpkiSha256")}
-    grant_payload.update(apiVersion="serverware.nativeShadowTrustedTimeServiceAssignment/v1",
+    grant_payload.update(apiVersion="catchplate.nativeShadowTrustedTimeServiceAssignment/v1",
         purpose="native-shadow-trusted-time-response", guest=time_guest,
         keyAuthorizationSha256=synthetic("actual-other-guest-authorization"), expectedPeer=peer,
         clockBootstrapSha256=synthetic("other-guest-clock-bootstrap"),
@@ -119,22 +119,22 @@ def fixture(*, version=10, large=False):
     grant_raw = canonical(detached(grant_payload, GRANT_DOMAIN))
     originals = {"trust": recipe["trustOriginal"], "timeBootstrap": canonical(clock).decode("ascii"),
         "assignment": recipe["assignmentOriginal"], "closure": canonical(closure).decode("ascii"),
-        "keys": canonical({"apiVersion": "serverware.nativeShadowRoleKeys/v2",
+        "keys": canonical({"apiVersion": "catchplate.nativeShadowRoleKeys/v2",
             "authorization": json.loads(pair_context["roleKeyOriginal"])}).decode("ascii"),
         "encryptedKeys": encrypted_raw.decode("ascii"), "admission": pair_context["admissionOriginal"],
         "verifierTransport": verifier_raw.decode("ascii")}
-    inner = {"apiVersion": "serverware.nativeShadowGuestLaunch/v1",
+    inner = {"apiVersion": "catchplate.nativeShadowGuestLaunch/v1",
         "deliveryConfiguration": config["deliveryConfiguration"], "delivery": {
-            "path": "/etc/serverware/native-pilot-inputs/native-delivery-bridge.json", "sha256": sha(delivery_raw)}}
+            "path": "/etc/catchplate/native-pilot-inputs/native-delivery-bridge.json", "sha256": sha(delivery_raw)}}
     for name, suffix in COMPONENTS.items():
-        inner[name] = {"path": "/etc/serverware/native-pilot-inputs/native-bridge-" + suffix + ".json",
+        inner[name] = {"path": "/etc/catchplate/native-pilot-inputs/native-bridge-" + suffix + ".json",
             "sha256": sha(originals[name].encode("ascii"))}
-    bundle = {"apiVersion": "serverware.nativePilotLaunchBundle/v1", "role": "bridge",
+    bundle = {"apiVersion": "catchplate.nativePilotLaunchBundle/v1", "role": "bridge",
         "ownerConfigurationSha256": sha(source["ownerConfigurationOriginal"].encode("ascii")),
         "windowSha256": sha(source["windowOriginal"].encode("ascii")),
         "observationOriginal": source["observationOriginal"], "runtimeOriginal": source["runtimeOriginal"],
         "keyAdmission": inner, "originals": originals, "serviceGrant": {
-            "path": "/etc/serverware/native-pilot-inputs/native-service-trustedTime.json", "sha256": sha(grant_raw)}}
+            "path": "/etc/catchplate/native-pilot-inputs/native-service-trustedTime.json", "sha256": sha(grant_raw)}}
     return bundle, pair_context, grant_raw
 
 
@@ -153,15 +153,15 @@ class BridgeLaunchControls(unittest.TestCase):
         context = launch.prepare_bridge_bundle(raw, **self.options(pair_context=pair_context))
         purposes = tuple("native-bridge-" + suffix for suffix in COMPONENTS.values()) + ("native-launch-bridge",)
         self.assertEqual(tuple(context["prepared"]), purposes)
-        pins = {name: {"path": "/etc/serverware/native-pilot-inputs/" + name + ".json", "sha256": sha(value)}
+        pins = {name: {"path": "/etc/catchplate/native-pilot-inputs/" + name + ".json", "sha256": sha(value)}
             for name, value in context["prepared"].items()}
         self.assertEqual(context["pins"], pins)
         self.assertEqual(set(context), {"role", "window", "deadline", "epochLimit", "prepared", "pins", "launch"})
-        self.assertEqual(json.loads(context["prepared"]["native-launch-bridge"])["apiVersion"], "serverware.nativeProofBridgeLaunch/v6")
-        self.assertEqual(json.loads(context["prepared"]["native-bridge-keys"])["apiVersion"], "serverware.nativeShadowRoleKeys/v2")
+        self.assertEqual(json.loads(context["prepared"]["native-launch-bridge"])["apiVersion"], "catchplate.nativeProofBridgeLaunch/v6")
+        self.assertEqual(json.loads(context["prepared"]["native-bridge-keys"])["apiVersion"], "catchplate.nativeShadowRoleKeys/v2")
         self.assertEqual(context["deadline"], 2_000_000_000)
         self.assertEqual(context["epochLimit"], NOW + 100_000_000)
-        result = {"apiVersion": "serverware.nativePilotLaunchInstallation/v1", "role": "bridge",
+        result = {"apiVersion": "catchplate.nativePilotLaunchInstallation/v1", "role": "bridge",
             "bundleSha256": sha(raw), "startupDeadlineBoottimeNs": "2000000000", "lifetimeDeadlineBoottimeNs": "60000000000",
             "launch": pins["native-launch-bridge"], "pins": pins}
         self.assertEqual(launch.checked_bridge_result(raw, result, **self.options()), result)
@@ -169,7 +169,7 @@ class BridgeLaunchControls(unittest.TestCase):
 
     def test_result_hash_deadlines_and_runtime_republication_are_rejected(self):
         raw = canonical(self.bundle); context = launch.prepare_bridge_bundle(raw, **self.options())
-        result = {"apiVersion": "serverware.nativePilotLaunchInstallation/v1", "role": "bridge",
+        result = {"apiVersion": "catchplate.nativePilotLaunchInstallation/v1", "role": "bridge",
             "bundleSha256": sha(raw), "startupDeadlineBoottimeNs": "2000000000", "lifetimeDeadlineBoottimeNs": "60000000000",
             "launch": context["launch"], "pins": context["pins"]}
         cases = [dict(result, bundleSha256=synthetic("other-bundle")), dict(result, installed=True),
@@ -260,7 +260,7 @@ class BridgeLaunchControls(unittest.TestCase):
             bundle, pair_context, grant = fixture(version=version, large=large)
             context = launch.prepare_bridge_bundle(canonical(bundle), **self.options(pair_context=pair_context, grant=grant))
             self.assertEqual(json.loads(context["prepared"]["native-launch-bridge"])["apiVersion"],
-                "serverware.nativeProofBridgeLaunch/v" + str(launch_version))
+                "catchplate.nativeProofBridgeLaunch/v" + str(launch_version))
             self.assertNotIn("bridge-runtime", context["prepared"])
         bundle, pair_context, grant = fixture(version=9, large=True)
         with self.assertRaises(ValueError):

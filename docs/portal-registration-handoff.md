@@ -39,7 +39,7 @@ the separate grant action must authorize before making a new plan.
 `/api/auth/session/webauthn/register/prepare-finalization-grant` counterpart,
 purpose `prepare-registration-finalization-grant`, and action
 `webauthn.registration.finalization.authorize`. Its closed ten-field success
-contract is `serverware.webAuthnRegistrationFinalizationGrantPreparation/v1`
+contract is `catchplate.webAuthnRegistrationFinalizationGrantPreparation/v1`
 with status `finalization-grant-prepared`, the unchanged evidence `localDigest`,
 a separate `finalizationGrantLocalDigest`, operation
 `webauthn.registration.finalize`, and all four execution/registration/currentness/
@@ -52,7 +52,7 @@ overwritten. Filling that input makes no further request.
 its `/api/auth/session/webauthn/register/reserve-finalization` counterpart,
 purpose `reserve-registration-finalization`, and action
 `webauthn.registration.finalization.reserve`. Its closed ten-field success
-contract is `serverware.webAuthnRegistrationFinalizationReservation/v1`, status
+contract is `catchplate.webAuthnRegistrationFinalizationReservation/v1`, status
 `reservation-recorded`, the submitted finalization-grant `localDigest`, operation
 `webauthn.registration.finalize`, `reservationRecorded: true`, and
 `finalizationExecuted`, `registrationCompleted`, `currentnessEstablished` and
@@ -66,7 +66,7 @@ its `/api/auth/session/webauthn/register/execute-finalization` counterpart,
 purpose `execute-registration-finalization`, and action
 `webauthn.registration.finalization.execute`. It uses only the finalization-grant
 input, never the evidence or older preparation-only locator. Its closed
-nine-field success contract is `serverware.webAuthnRegistrationFinalizationExecution/v1`,
+nine-field success contract is `catchplate.webAuthnRegistrationFinalizationExecution/v1`,
 status `observed-commit`, the submitted `localDigest`, and
 `observationAuthenticated`, `registrationCompleted`, `sessionActivated`,
 `currentnessEstablished` and `automaticRetryAllowed` all false. It exposes no
@@ -78,14 +78,14 @@ reservation never dispatches this action automatically.
 its `/api/auth/session/webauthn/register/complete-finalization` counterpart,
 purpose `complete-registration-finalization` and action
 `webauthn.registration.finalization.complete`. Its schema is
-`serverware.webAuthnRegistrationFinalizationCompletion/v1`, with status
+`catchplate.webAuthnRegistrationFinalizationCompletion/v1`, with status
 `finalization-completion-acknowledged`.
 
 **Recover finalization** uses `/api/webauthn/register/recover-finalization-completion`
 or its pending-session counterpart, purpose
 `recover-registration-finalization-completion` and action
 `webauthn.registration.finalization.recover`. Its schema is
-`serverware.webAuthnRegistrationFinalizationCompletionRecovery/v1`, with status
+`catchplate.webAuthnRegistrationFinalizationCompletionRecovery/v1`, with status
 `finalization-completion-recovered`.
 
 Both use only the finalization-grant input. Their success objects have exactly
@@ -124,7 +124,7 @@ only `purpose` and `localDigest` to the selected fixed pending endpoint:
 
 These requests use the pending cookie plus an explicitly acquired CSRF header
 even when an unrelated operator token is entered. The response must have exactly
-eight keys: `schema: "serverware.webAuthnRegistrationFinalizationPermissionOptions/v1"`,
+eight keys: `schema: "catchplate.webAuthnRegistrationFinalizationPermissionOptions/v1"`,
 `purpose`, `localDigest`, `action`, `resourceId`, `payloadDigest`, `publicKey`
 and `automaticRetryAllowed: false`. The panel compares every public binding to
 the held 412/428 negotiation **before** requesting WebAuthn. It bounds the
@@ -194,4 +194,4 @@ pending-cookie target-key proof after SQL, binding drift before WebAuthn,
 fresh options/assertions after approval negotiation, no use of the active-only
 options endpoint, immutable uncertainty and distinct finalization recovery.
 
-Source: [portal fragment](../serverware/portal_registration_handoff.py).
+Source: [portal fragment](../catchplate/portal_registration_handoff.py).

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify an original signed statement plus a fresh same-key native NSM quote.
 
-This distinct local adapter accepts serverware.nativeResponseRuntimeProof/v1,
+This distinct local adapter accepts catchplate.nativeResponseRuntimeProof/v1,
 not the legacy proof client's signed vendor-verifier envelope. It checks the
 closed outer/statement-family fields, actual Ed25519 signature, independently
 pinned key/scope, original client nonce, policy, binary commitment and ages.
@@ -60,21 +60,21 @@ from verify_nitro_tee import (
     sha256,
 )
 
-EVIDENCE_VERSION = "serverware.nativeResponseRuntimeProof/v1"
-EVIDENCE_KIND = "ServerwareNativeResponseRuntimeProof"
-EXPECTATIONS_VERSION = "serverware.nativeResponseAttestationExpectations/v1"
-TRUST_ROOTS_VERSION = "serverware.nativeResponseAttestationTrustRoots/v1"
-RESULT_VERSION = "serverware.nativeResponseAttestationVerification/v1"
-CHALLENGE_DOMAIN = b"serverware/native-response-attestation-challenge/v1\0"
+EVIDENCE_VERSION = "catchplate.nativeResponseRuntimeProof/v1"
+EVIDENCE_KIND = "CatchplateNativeResponseRuntimeProof"
+EXPECTATIONS_VERSION = "catchplate.nativeResponseAttestationExpectations/v1"
+TRUST_ROOTS_VERSION = "catchplate.nativeResponseAttestationTrustRoots/v1"
+RESULT_VERSION = "catchplate.nativeResponseAttestationVerification/v1"
+CHALLENGE_DOMAIN = b"catchplate/native-response-attestation-challenge/v1\0"
 MAX_INPUT_BYTES = 512 * 1024
 MAX_STATEMENT_BYTES = 256 * 1024
 MAX_RESULT_BYTES = 4 * 1024
 MAX_JSON_NODES = 100_000
 MAX_JSON_DEPTH = 64
 
-BUFFERED_VERSION = "serverware.proxyResponseStatement/v2"
-STREAMING_VERSION = "serverware.streamingResponseStatement/v1"
-OBSERVATION_VERSION = "serverware.responseObservationStatement/v1"
+BUFFERED_VERSION = "catchplate.proxyResponseStatement/v2"
+STREAMING_VERSION = "catchplate.streamingResponseStatement/v1"
+OBSERVATION_VERSION = "catchplate.responseObservationStatement/v1"
 COMMON_FIELDS = {
     "apiVersion", "issued_at_unix", "client_nonce", "principal_id", "route_id",
     "request_digest", "operation_digest", "runtime_manifest_digest",

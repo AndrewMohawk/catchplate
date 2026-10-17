@@ -12,9 +12,9 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import test_native_pilot_genesis_parent_authority as fixtures
-from serverware import custody_generation_grants as codec
-from serverware import native_pilot_bridge_preparation as binding
-from serverware import native_pilot_genesis_coordinator_peer as peer
+from catchplate import custody_generation_grants as codec
+from catchplate import native_pilot_bridge_preparation as binding
+from catchplate import native_pilot_genesis_coordinator_peer as peer
 
 p = codec.p
 

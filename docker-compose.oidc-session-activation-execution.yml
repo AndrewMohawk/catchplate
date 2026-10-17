@@ -2,17 +2,17 @@
 # Inputs are independently provisioned; this does not create keys or services.
 # Bootstrap v6 stays in the existing read-only authority-trust directory mount.
 services:
-  serverware:
+  catchplate:
     volumes:
       - type: bind
-        source: ${SERVERWARE_OIDC_SESSION_ACTIVATION_CALLER_KEY_FILE:?set root-owned mode 0400 activation caller key file}
-        target: /run/secrets/serverware-oidc-session-activation-execution-caller-key
+        source: ${CATCHPLATE_OIDC_SESSION_ACTIVATION_CALLER_KEY_FILE:?set root-owned mode 0400 activation caller key file}
+        target: /run/secrets/catchplate-oidc-session-activation-execution-caller-key
         read_only: true
         bind:
           create_host_path: false
       - type: bind
-        source: ${SERVERWARE_OIDC_SESSION_ACTIVATION_EXECUTION_SOCKET_DIR:?set preprovisioned activation execution socket directory}
-        target: /run/serverware/oidc-session-activation-execution
+        source: ${CATCHPLATE_OIDC_SESSION_ACTIVATION_EXECUTION_SOCKET_DIR:?set preprovisioned activation execution socket directory}
+        target: /run/catchplate/oidc-session-activation-execution
         read_only: true
         bind:
           create_host_path: false

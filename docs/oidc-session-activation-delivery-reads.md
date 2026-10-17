@@ -9,7 +9,7 @@ is unchanged and is not this operation's adapter.
 
 ## Closed operation and effects
 
-The [operation contract](../serverware/authority_contract.py) names the dedicated
+The [operation contract](../catchplate/authority_contract.py) names the dedicated
 `consume_oidc_session_activation_delivery` handler and typed-successor planning.
 There is no generic verified-assertion receipt substitute: its policy is
 `original-pending-token-possession`. The actual transition must independently
@@ -34,7 +34,7 @@ exported bounds **17, 3 and 130**. Those bounds are not execution evidence.
 
 ## Exact current read closure
 
-[`authority_oidc_session_activation_delivery_reads.py`](../serverware/authority_oidc_session_activation_delivery_reads.py)
+[`authority_oidc_session_activation_delivery_reads.py`](../catchplate/authority_oidc_session_activation_delivery_reads.py)
 declares nine business primary points: session, credential, challenge, delivery,
 trust high-water and its dependent publication, subject RBAC binding, RBAC
 authority state and absent deterministic audit ID. The capacity point makes

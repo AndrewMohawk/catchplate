@@ -6,9 +6,9 @@ schema and signed enrollment are not provisioned. This is not a completed pilot.
 Existing independent v1/v2 profiles
 and their production guarantees are unchanged.
 
-`serverware.trustedHostLocalRbacWitnessEnrollment/v1` is signed by the existing
+`catchplate.trustedHostLocalRbacWitnessEnrollment/v1` is signed by the existing
 offline RBAC enrollment-root mechanism in its own schema signature domain,
-inside `serverware.signedTrustedHostLocalRbacWitnessEnrollment/v1`. Its exact
+inside `catchplate.signedTrustedHostLocalRbacWitnessEnrollment/v1`. Its exact
 `assurance` says trusted-host-local, co-located, not hardware-backed, not
 independently administered, and not resistant to joint rollback. Its
 `faultDomainScope` is `separate-local-cluster-storage`: the distinct labels
@@ -16,7 +16,7 @@ describe actual separately retained local cluster storage, not different host
 administrators or physical independence. The operator must provision and
 verify that storage separation; labels alone do not prove it.
 
-`serverware.trustedHostLocalRbacWitnessStartup/v1` carries the existing eight
+`catchplate.trustedHostLocalRbacWitnessStartup/v1` carries the existing eight
 startup fields and only the matching local signed enrollment. It has no
 recovery permission. The runtime requires protected original FDs plus genuine
 already-admitted local authority launch and signed Service6 policy, or genuine

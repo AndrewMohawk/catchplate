@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from mitmproxy import http
-from serverware import adapters, github_issues as gh, policy_bundle as pb, policy_engine as engine
+from catchplate import adapters, github_issues as gh, policy_bundle as pb, policy_engine as engine
 import test_buffered_passthrough_response as buffered
 import test_gmail_read_bundle as gmail
 
@@ -28,7 +28,7 @@ LIST = gh.ORIGIN + gh.route_paths(REPOSITORY)[0]
 HEADERS = [(b"Accept", b"application/vnd.github.v3+json"),
     (b"Accept-Encoding", b"gzip, deflate"), (b"Accept-Language", b"*"),
     (b"Sec-Fetch-Mode", b"cors"), (b"User-Agent", b"synthetic-octokit-profile"),
-    (b"X-Serverware-Agent", b"buffered-fixture")]
+    (b"X-Catchplate-Agent", b"buffered-fixture")]
 
 
 def document(bundle=gh.READ):
@@ -93,8 +93,8 @@ class GithubIssuesTests(unittest.TestCase):
         value.response.headers = http.Headers(([(b"Content-Type", content_type)]
             if content_type is not None else []) + list(fields))
         value.response.raw_content = body
-        value.metadata.update(serverware_route=self.route, serverware_route_id=self.route.id,
-            serverware_operation={"operation": "github.issues.read"})
+        value.metadata.update(catchplate_route=self.route, catchplate_route_id=self.route.id,
+            catchplate_operation={"operation": "github.issues.read"})
         guard = engine._ResponseCredentialGuard()
         guard.add_text_encodings(secret)
         engine._install_response_credential_guard(value, guard)
@@ -239,9 +239,9 @@ class GithubIssuesTests(unittest.TestCase):
             self.assertFalse(engine._provider_request_matches_canonical(value, changed, self.credential, route=self.route))
         value.request.headers["Accept-Encoding"] = "identity"
         self.assertFalse(engine._provider_request_matches_canonical(value, canonical, self.credential, route=self.route))
-        for atomic, proof in (("1", None), ("0", b"x-serverware-proof-nonce")):
+        for atomic, proof in (("1", None), ("0", b"x-catchplate-proof-nonce")):
             headers = list(HEADERS) + ([(proof, b"synthetic")] if proof else [])
-            with patch.dict(os.environ, {"SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": atomic}), \
+            with patch.dict(os.environ, {"CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": atomic}), \
                     patch.object(engine, "get_policy_snapshot", return_value=self.snapshot), \
                     patch.object(engine.runtime, "get_credential_generation", side_effect=AssertionError("unexpected credential lookup")) as lookup:
                 result = engine.evaluate_request(flow(headers=headers))

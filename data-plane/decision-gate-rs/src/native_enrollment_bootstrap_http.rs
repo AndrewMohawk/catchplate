@@ -47,8 +47,8 @@ pub(super) fn handle(state: &GateState, head: &RequestHead,
             || head.prefetched_body.len() > head.content_length
             || head.headers.get("content-type").map(String::as_str) != Some("application/json")
             || head.headers.get("connection").map(String::as_str) != Some("close")
-            || ["transfer-encoding", "expect", "upgrade", "x-serverware-ingress-continuation",
-                "x-serverware-ingress-evidence"].iter().any(|name| head.headers.contains_key(*name)) {
+            || ["transfer-encoding", "expect", "upgrade", "x-catchplate-ingress-continuation",
+                "x-catchplate-ingress-evidence"].iter().any(|name| head.headers.contains_key(*name)) {
             return Err(Failure::BadRequest);
         }
         peer::request_challenge(head).map_err(|_| Failure::BadRequest)?;

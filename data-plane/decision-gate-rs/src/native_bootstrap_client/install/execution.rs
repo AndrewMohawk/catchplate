@@ -45,7 +45,7 @@ pub(in super::super) fn bind_for_execution(pending: Pending, parents: Arc<Execut
     let clock = parents.retain_original_clock();
     let grant = pending.authorization;
     let mut association = Sha256::new();
-    association.update(b"serverware/native-ca-installation-operation/v1\0");
+    association.update(b"catchplate/native-ca-installation-operation/v1\0");
     let ca_der = parents.installation_ca_original()?.to_vec();
     {
         let proof = parents.installation_proof()?;
@@ -86,7 +86,7 @@ pub(in super::super) fn bind_for_execution(pending: Pending, parents: Arc<Execut
         namespace_inode: grant.network_owner.namespace_inode, owner_uid: grant.network_owner.owner_uid,
     }, &clock)?;
     let mut slot = Sha256::new();
-    slot.update(b"serverware/native-ca-installation-slot/v1\0");
+    slot.update(b"catchplate/native-ca-installation-slot/v1\0");
     for scalar in [grant.journal.namespace.as_bytes(), grant.ca_install.capability_id.as_bytes()] {
         slot.update((scalar.len() as u64).to_be_bytes()); slot.update(scalar);
     }
@@ -185,7 +185,7 @@ impl PreparedInstallation {
                 "already-complete"
             },
         };
-        let receipt = json!({"apiVersion":"serverware.nativeCaInstallationReceipt/v1",
+        let receipt = json!({"apiVersion":"catchplate.nativeCaInstallationReceipt/v1",
             "resultScope":"local-authorized-native-ca-installation-only", "okForAction":false,
             "status":status, "authorizationSha256":digest_text(&g.original_sha256),
             "operationSha256":digest_text(&self.association), "reservationSha256":digest_text(&self.slot),

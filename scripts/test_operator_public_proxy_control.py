@@ -50,7 +50,7 @@ def owned():
 def audit_input():
     config = {"run_id": "public-proxy-" + "a" * 32, "application_id": APP, "credential_id": control.CREDENTIAL,
         "rule_id": RULE, "policy_hash": H, "ca_sha256": H2}
-    result = {"schema": "serverware.publicProxySmokeResult/v1", "ok": True, "mode": "positive", **config,
+    result = {"schema": "catchplate.publicProxySmokeResult/v1", "ok": True, "mode": "positive", **config,
         "peer": "203.0.113.10", "connect_status": 200, "http_status": 200, "proxy_tls_verify_result": 0,
         "request_digest": "sha256:" + "3" * 64, "operation_digest": "sha256:" + "4" * 64,
         "response_body_sha256": "sha256:" + "5" * 64, "response_body_bytes": 200}
@@ -204,7 +204,7 @@ class ControllerControls(unittest.TestCase):
         bootstrap = next(index for index, node in enumerate(statements)
             if isinstance(node, ast.Expr) and ast.unparse(node) == "managed.bootstrap()")
         imported = next(index for index, node in enumerate(statements)
-            if isinstance(node, ast.ImportFrom) and node.module == "serverware" and any(alias.name == "db" for alias in node.names))
+            if isinstance(node, ast.ImportFrom) and node.module == "catchplate" and any(alias.name == "db" for alias in node.names))
         self.assertLess(bootstrap, imported)
         self.assertIn("managed.selected() is False", ast.unparse(statements[bootstrap + 1]))
         calls = [ast.unparse(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)]

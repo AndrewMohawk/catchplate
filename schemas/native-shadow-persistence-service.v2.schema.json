@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-persistence-service.v2.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-persistence-service.v2.schema.json",
   "$ref": "#/$defs/assignment",
   "$defs": {
     "sha": {"$ref": "native-shadow-persistence-service.v1.schema.json#/$defs/sha"},
@@ -15,7 +15,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "purpose", "permissions", "guest", "assignmentPayloadSha256", "keyAuthorizationSha256", "proofScopeOriginalBase64url", "journal", "expectedPeer", "trustCheckpointId", "revocationGeneration", "revocationRootSha256", "issuedAtUnixNanos", "expiresAtUnixNanos", "signingKeyId", "signingKeySpkiSha256"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeShadowPersistenceServiceAssignment/v2"},
+        "apiVersion": {"const": "catchplate.nativeShadowPersistenceServiceAssignment/v2"},
         "purpose": {"const": "native-shadow-receipt-persistence"},
         "permissions": {"const": ["store-dispatch-original", "verify-persistence", "verify-completed-invocation"]},
         "guest": {"$ref": "native-shadow-persistence-service.v1.schema.json#/$defs/guest"},

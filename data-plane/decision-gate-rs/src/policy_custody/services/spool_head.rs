@@ -12,10 +12,10 @@ use crate::policy_shadow::{ShadowGenerationIdentity,AuthorityRole as Role,Shadow
     SignedShadowSpillReceipt,SpoolAppendReservationReceiptWire};
 use std::os::unix::fs::{FileExt,MetadataExt};
 use super::active_effect_values as effect;
-pub(super) const RUNTIME:&str="serverware.policyCustodyServiceRuntimeConfig/v7";
+pub(super) const RUNTIME:&str="catchplate.policyCustodyServiceRuntimeConfig/v7";
 pub(super) const GRANT_FD:&str="spool-head-grant";
 pub(super) const DIRECTORY:&str="spool-head-journal";
-const GRANT_DOMAIN:&[u8]=b"serverware.nativeSpoolHeadGrant.signature/v1";
+const GRANT_DOMAIN:&[u8]=b"catchplate.nativeSpoolHeadGrant.signature/v1";
 const MAX_RECORDS:usize=256;
 const MAX_BYTES:usize=64*1024*1024;
 #[derive(Debug,Clone,Serialize,Deserialize)]
@@ -59,8 +59,8 @@ impl EffectPolicy {
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(super) struct Grant {pub(super) payload:Payload,pub(super) signature_base64url:String}
 impl Grant {
-    pub(super) fn completion_selected(&self)->bool{matches!(self.payload.api_version.as_str(),"serverware.nativeSpoolHeadGrant/v2"|"serverware.nativeSpoolHeadGrant/v3")}
-    pub(super) fn effects_selected(&self)->bool{self.payload.api_version=="serverware.nativeSpoolHeadGrant/v3"}
+    pub(super) fn completion_selected(&self)->bool{matches!(self.payload.api_version.as_str(),"catchplate.nativeSpoolHeadGrant/v2"|"catchplate.nativeSpoolHeadGrant/v3")}
+    pub(super) fn effects_selected(&self)->bool{self.payload.api_version=="catchplate.nativeSpoolHeadGrant/v3"}
     pub(super) fn key(&self,request:&Dispatch)->Result<&RoleKey,ServiceError>{
         if matches!(request,Dispatch::ReserveSpoolAppend{..}|Dispatch::AppendSpoolEvent{..})
             && fixed::Event::from_request(request)?.1.phase==ShadowSpoolPhase::DispatchBarrier {
@@ -80,7 +80,7 @@ impl Grant {
     pub(super) fn verify(&self,history:&RuntimeAuthorityHistory)->Result<(),ServiceError>{
         let p=&self.payload;
         let completion=self.completion_selected();
-        require((completion || p.api_version=="serverware.nativeSpoolHeadGrant/v1") && completion==p.completion.is_some()
+        require((completion || p.api_version=="catchplate.nativeSpoolHeadGrant/v1") && completion==p.completion.is_some()
             && self.effects_selected()==p.effects.is_some()
             && p.purpose=="native-shared-spool-head"
             && p.guest.service_role=="durable-recovery-store"
@@ -110,7 +110,7 @@ impl Grant {
         let raw=URL_SAFE_NO_PAD.decode(&self.signature_base64url).map_err(|_|invalid())?;
         require(raw.len()==64 && URL_SAFE_NO_PAD.encode(&raw)==self.signature_base64url)?;
         history.root_authority_key().verify_strict(&super::super::protocol::domain_separated_signature_preimage(
-            if self.effects_selected(){b"serverware.nativeSpoolHeadGrant.signature/v3"}else if completion{b"serverware.nativeSpoolHeadGrant.signature/v2"}else{GRANT_DOMAIN},
+            if self.effects_selected(){b"catchplate.nativeSpoolHeadGrant.signature/v3"}else if completion{b"catchplate.nativeSpoolHeadGrant.signature/v2"}else{GRANT_DOMAIN},
             &encode_canonical_frame(p)?)?,&Signature::from_slice(&raw).map_err(|_|invalid())?).map_err(|_|invalid())
     }
 }
@@ -192,7 +192,7 @@ impl Gate {
         let transition_head=grant.payload.initial_transition_head_sha256.clone();
         // This is only the storage journal identity, never a fabricated spool
         // head. The spool remains absent until a genuine origin is consumed.
-        let journal_head=sha(&("serverware.nativeSpoolHeadJournal/v1",Sha256Digest::compute(&grant_raw)))?;
+        let journal_head=sha(&("catchplate.nativeSpoolHeadJournal/v1",Sha256Digest::compute(&grant_raw)))?;
         let mut value=Self{grant,grant_raw,grant_file,history,bootstrap:bootstrap.clone(),worker,records:Vec::new(),
             state:None,transition_head,journal_head,bytes:0,poisoned:false};
         value.check()?;
@@ -247,7 +247,7 @@ impl Gate {
                 return Ok(Some(State{generation:g.clone(),origin:original.sha256().clone(),ordinal:g.authoritative_ledger_event_ordinal(),
                     head:g.authoritative_ledger_head_sha256().clone(),next_ingress:g.ingress_range_start_sequence(),openings:BTreeMap::new(),pending:None,
                     terminals:BTreeSet::new(),regular_appends:0,effect_ordinal:0,
-                    effect_head:crate::policy_shadow::hash_domain_frames(b"serverware.nativeActiveEffectHeadOrigin/v1",
+                    effect_head:crate::policy_shadow::hash_domain_frames(b"catchplate.nativeActiveEffectHeadOrigin/v1",
                         &[&encode_canonical_frame(&(g.generation_id(),original.sha256(),g.authoritative_ledger_head_sha256()))?]),
                     effect_pending:None,effect_barriers:BTreeMap::new(),effect_consumed:BTreeSet::new(),
                     cleanup_head:self.grant.payload.effects.as_ref().map(|v|v.cleanup_initial_transition_head_sha256.clone())}));
@@ -285,7 +285,7 @@ impl Gate {
             disposition:if matches!(claim.request,Dispatch::ReserveSpoolAppend{..}) && state.regular_appends==policy.regular_append_capacity {
                 wire::CapacityDisposition::ReservationUnavailable}else{wire::CapacityDisposition::Proceed}});
         if let Some(value)=&completion{value.verify(&claim.request)?;}
-        Ok(AllocationPayload{api_version:if completion.is_some(){"serverware.nativeSpoolAllocation/v2"}else{"serverware.nativeSpoolAllocation/v1"}.into(),
+        Ok(AllocationPayload{api_version:if completion.is_some(){"catchplate.nativeSpoolAllocation/v2"}else{"catchplate.nativeSpoolAllocation/v1"}.into(),
             authority_epoch:self.history.current_epoch().map_err(|_|invalid())?.epoch_reference(),
             service_grant_sha256:Sha256Digest::compute(&self.grant_raw),claim_sha256:sha(claim)?,generation_id:self.grant.payload.scope.generation_id.clone(),
             origin_sha256:state.origin.clone(),owner_state_sha256:owner_state,event_ordinal:ordinal,predecessor_event_ordinal:predecessor,
@@ -312,7 +312,7 @@ impl Gate {
                 let raw=p.artifact.exact_bytes().map_err(|_|invalid())?;
                 let receipt:SpoolAppendReservationReceiptWire=if self.grant.completion_selected(){
                     let wire:crate::policy_shadow::NativeSpoolReservationOutcomeWire=decode_canonical_frame(&raw)?;
-                    require(wire.api_version=="serverware.nativeSpoolReservationOutcome/v1")?;
+                    require(wire.api_version=="catchplate.nativeSpoolReservationOutcome/v1")?;
                     let crate::policy_shadow::NativeSpoolReservationResultWire::Reserved(value)=wire.result else{return Err(invalid());};value
                 }else{decode_canonical_frame(&raw)?};
                 fixed::require_final_payload(&p.prepared.core,&p.stored,&receipt.canonical_signature_payload().map_err(|_|invalid())?)?;Ok(None)
@@ -333,7 +333,7 @@ impl Gate {
                 }else if p.prepared.core.phase==Phase::Unavailable {
                     require(p.artifact.kind==Kind::SpoolAppendReservationOutcome)?;
                     let wire:crate::policy_shadow::NativeSpoolReservationOutcomeWire=decode_canonical_frame(&p.artifact.exact_bytes().map_err(|_|invalid())?)?;
-                    require(wire.api_version=="serverware.nativeSpoolReservationOutcome/v1")?;
+                    require(wire.api_version=="catchplate.nativeSpoolReservationOutcome/v1")?;
                     let crate::policy_shadow::NativeSpoolReservationResultWire::Unavailable(value)=wire.result else{return Err(invalid());};value
                 }else{
                     require(p.artifact.kind==Kind::ShadowSpillReceipt)?;
@@ -438,9 +438,9 @@ impl Gate {
         require(generation==&self.grant.payload.scope.generation_id && state.openings.contains_key(&ingress)
             && !state.terminals.contains(&ingress) && !state.effect_consumed.contains(preparation.effect_id_sha256()))?;
         let ordinal=if barrier.is_none(){state.effect_ordinal.checked_add(1).ok_or_else(invalid)?}else{state.effect_ordinal};
-        let resulting=if barrier.is_none(){crate::policy_shadow::hash_domain_frames(b"serverware.nativeActiveEffectHead/v1",
+        let resulting=if barrier.is_none(){crate::policy_shadow::hash_domain_frames(b"catchplate.nativeActiveEffectHead/v1",
             &[&encode_canonical_frame(&(&state.origin,&preparation,ordinal,&state.effect_head))?])}else{state.effect_head.clone()};
-        Ok(effect::AllocationPayload{api_version:"serverware.nativeActiveEffectAllocation/v1".into(),
+        Ok(effect::AllocationPayload{api_version:"catchplate.nativeActiveEffectAllocation/v1".into(),
             authority_epoch:self.history.current_epoch().map_err(|_|invalid())?.epoch_reference(),service_grant_sha256:Sha256Digest::compute(&self.grant_raw),
             request_sha256:sha(request)?,owner_state_sha256:owner_state,origin_sha256:state.origin.clone(),preparation,barrier,
             barrier_ordinal:ordinal,predecessor_head_sha256:state.effect_head.clone(),resulting_head_sha256:resulting,
@@ -456,7 +456,7 @@ impl Gate {
     fn retain(&mut self,record:Record,reply:Reply)->Result<(),ServiceError>{
         let raw=encode_canonical_frame(&(&record,&reply))?;
         self.bytes=self.bytes.checked_add(raw.len()).ok_or_else(invalid)?;require(self.bytes<=MAX_BYTES && self.records.len()<MAX_RECORDS)?;
-        self.journal_head=sha(&("serverware.nativeSpoolHeadJournalStep/v1",&self.journal_head,&record,&reply))?;
+        self.journal_head=sha(&("catchplate.nativeSpoolHeadJournalStep/v1",&self.journal_head,&record,&reply))?;
         self.records.push((record,reply));Ok(())
     }
     pub(super) fn handle(&mut self,raw:&[u8],owner:&impl Owner)->Result<Option<Vec<u8>>,ServiceError>{

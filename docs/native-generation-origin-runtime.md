@@ -12,7 +12,7 @@ spool-head authority, readiness, or permission to perform a storage effect.
 The production Dockerfile has two independently selected output targets:
 
 - `native-generation-origin-issuer-supervisor-artifact`: the static, at most
-  64 MiB `serverware-native-generation-origin-issuer` executable.
+  64 MiB `catchplate-native-generation-origin-issuer` executable.
 - `native-generation-origin-issuer-runtime-artifact`:
   `/generation-origin-issuer-output/native-generation-origin-issuer-runtime.squashfs`
   and its canonical `native-generation-origin-issuer-runtime.json` inventory.
@@ -33,14 +33,14 @@ The fixed application inventory is the package initializer,
 `native_shadow_time_profile.py` (only the independent key-validity grammar),
 `native_generation_origin_{profile,originals,issuer}.py`, and the genuine
 `scripts.verify_nitro_tee` implementation. The sole entrypoint is
-`/opt/serverware/scripts/issue_native_generation_origin.py`.
+`/opt/catchplate/scripts/issue_native_generation_origin.py`.
 
 No time-issuer executable, general signing CLI, control-plane store module,
 key, policy, request or issuer configuration is installed in this image.
 The deferred build recipe imports the actual fixed modules without running
 issuance. It produces a bounded reproducible SquashFS and exact file inventory,
 image/interpreter/entrypoint hashes, package versions and source-manifest hash.
-Its manifest is `serverware.nativeGenerationOriginIssuerRuntimeBuild/v1`,
+Its manifest is `catchplate.nativeGenerationOriginIssuerRuntimeBuild/v1`,
 purpose `independent-native-generation-origin-issuer-v1`, `releaseAuthority:false`.
 These outputs are not an artifact-admission signature.
 
@@ -49,13 +49,13 @@ These outputs are not an artifact-admission signature.
 An independent operator must supply root:root0400, singly linked originals,
 canonical ASCII with no trailing newline:
 
-- `/etc/serverware/native-generation-origin-issuer-launch.json`, at most 16 KiB,
-  exact3 `serverware.nativeGenerationOriginIssuerLaunch/v1`: `apiVersion`,
+- `/etc/catchplate/native-generation-origin-issuer-launch.json`, at most 16 KiB,
+  exact3 `catchplate.nativeGenerationOriginIssuerLaunch/v1`: `apiVersion`,
   `runtimeImage`, `issuerConfigurationSha256`. The paired
   [launch schema](../schemas/native-generation-origin-issuer-launch.v1.schema.json)
   fixes all five image fields and the only allowed image path,
-  `/opt/serverware/native-generation-origin-issuer-runtime.squashfs`.
-- `/etc/serverware/native-generation-origin-issuer.json`, at most 512 KiB,
+  `/opt/catchplate/native-generation-origin-issuer-runtime.squashfs`.
+- `/etc/catchplate/native-generation-origin-issuer.json`, at most 512 KiB,
   with the unchanged exact11 issuer configuration and independently signed
   authorization. Its complete bytes must match the launch hash.
 

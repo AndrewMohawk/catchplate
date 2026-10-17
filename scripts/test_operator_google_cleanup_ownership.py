@@ -30,7 +30,7 @@ Fixture = cleanup_tests.Fixture
 def runtime_profile_drift(f):
     """Removing an already admitted capability is drift, not cold disablement."""
     with patch.dict(os.environ):
-        os.environ.pop("SERVERWARE_OPERATOR_GOOGLE_PROFILE", None)
+        os.environ.pop("CATCHPLATE_OPERATOR_GOOGLE_PROFILE", None)
         consent_tests.refused(f.profiles.selected, f.profiles.OperatorGoogleProfileError)
         consent_tests.refused(f.profiles.require_profile, f.profiles.OperatorGoogleProfileError)
         yield
@@ -424,7 +424,7 @@ def owner_schema(db):
 
 def guard_check():
     _config, db, store, _bundles = cleanup_tests.workspace.common.backend(initialize=False)
-    from serverware import operator_google_cleanup_store
+    from catchplate import operator_google_cleanup_store
     db.init_db()  # Protected v9 schema still passes; only the side guard drifted.
     before = owner_schema(db)
     consent_tests.refused(store.initialize, operator_google_cleanup_store.CleanupStoreError)
@@ -444,16 +444,16 @@ def valid_owned_prepare():
 
 def cold_disabled_check(change):
     """A new process has never admitted Google; retained ownership still denies."""
-    from serverware import operator_catalog_oauth_profile as profiles
-    assert "SERVERWARE_OPERATOR_GOOGLE_PROFILE" not in os.environ
+    from catchplate import operator_catalog_oauth_profile as profiles
+    assert "CATCHPLATE_OPERATOR_GOOGLE_PROFILE" not in os.environ
     assert all(key not in os.environ for key in profiles.GOOGLE_CONFIGURATION_KEYS)
     assert profiles.selected() is False
     # This is original static-profile activation, not Fixture() or an admission
     # reset. The existing core schema initializes normally; its Google catalog
     # pin must then refuse being reopened as an unconfigured Google workspace.
     config, db, store, _bundles = cleanup_tests.workspace.common.backend(initialize=False)
-    from serverware import app, oauth, operator_catalog_schema as schema
-    from serverware import operator_google_cleanup as cleanup, operator_google_cleanup_store as cleanup_store
+    from catchplate import app, oauth, operator_catalog_schema as schema
+    from catchplate import operator_google_cleanup as cleanup, operator_google_cleanup_store as cleanup_store
     db.init_db()
 
     def retained_snapshot():
@@ -526,9 +526,9 @@ class OperatorGoogleCleanupOwnershipTests(unittest.TestCase):
     def worker(self, operation, *, unconfigured=False):
         environment = self.environment.copy()
         if unconfigured:
-            for name in ("SERVERWARE_OPERATOR_GOOGLE_PROFILE", "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID",
-                    "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE", "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI",
-                    "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET"):
+            for name in ("CATCHPLATE_OPERATOR_GOOGLE_PROFILE", "CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID",
+                    "CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE", "CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI",
+                    "CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET"):
                 environment.pop(name, None)
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation],
             cwd=ROOT, env=environment, capture_output=True, text=True, timeout=90)

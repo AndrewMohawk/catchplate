@@ -3,8 +3,8 @@
 //! "capture succeeded" flag. Only the native transaction can create the owner.
 use super::*;
 use crate::response_v2::CommittedNativeCapture;
-use serverware_decision_gate::native_target_dispatch_v1 as native;
-use serverware_decision_gate::V2Http11TransferCodingV1;
+use catchplate_decision_gate::native_target_dispatch_v1 as native;
+use catchplate_decision_gate::V2Http11TransferCodingV1;
 
 pub(crate) struct NativeResponseRetention {
     _reservation: QueueByteReservation,
@@ -128,7 +128,7 @@ impl ShadowResponseHook {
         // These commitments retain their genuine native domains. Nothing
         // asserts that the legacy transport-receipt signature was produced.
         let transport_capture_receipt_sha256 = digest_json_ensure_ascii(&json!({
-            "domain":"serverware.policyShadowNativeTransportCapture/v1",
+            "domain":"catchplate.policyShadowNativeTransportCapture/v1",
             "capture":capture,
             "committedPersistence":completion,
         }));

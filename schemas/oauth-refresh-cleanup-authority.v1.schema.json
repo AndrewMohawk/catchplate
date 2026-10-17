@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/oauth-refresh-cleanup-authority.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/oauth-refresh-cleanup-authority.v1.schema.json",
   "title": "Independent OAuth refresh family-retirement authority and transport observations",
   "description": "Data-only closed projections; never permission by schema. Runtime requires independent family-retirement signature, exact retained history/current lineage, complete local inventory and genuine current send drain. Canonical ASCII originals, signature/root/FD/deadline joins are mandatory. Issued currentVersion equals refreshVersion; X superseded equals refreshVersion plus one. Local scope is not external ownership proof. HTTP acceptance never reactivates the fenced lineage. Grants are at most 64 KiB; current operation at most its original 30 seconds.",
   "oneOf": [
@@ -48,7 +48,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "purpose", "authorizationId", "configurationDigest", "deploymentId", "refreshId", "refreshRowSha256", "refreshVersion", "workId", "workSource", "credentialId", "credentialVersion", "credentialRowSha256", "generationRowSha256", "historicalBarrierSha256", "familyScope", "workRowSha256", "enrollmentSha256", "historicalEnrollmentRootSpkiSha256", "tokenEnvelopeSha256", "tokenSecretSha256", "providerId", "clientId", "clientMaterialSha256", "providerConfiguration", "tokenPurposes", "issuedAtEpochNs", "expiresAtEpochNs"],
       "properties": {
-        "schema": {"const": "serverware.oauthRefreshCleanupAuthorization/v1"},
+        "schema": {"const": "catchplate.oauthRefreshCleanupAuthorization/v1"},
         "sourceRevision": {"$ref": "#/$defs/text", "maxLength": 128},
         "purpose": {"const": "oauth-refresh-family-retirement"},
         "authorizationId": {"$ref": "#/$defs/uuid"},
@@ -84,7 +84,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "payload", "signatureBase64Url"],
       "properties": {
-        "schema": {"const": "serverware.signedOAuthRefreshCleanupAuthorization/v1"},
+        "schema": {"const": "catchplate.signedOAuthRefreshCleanupAuthorization/v1"},
         "payload": {"$ref": "#/$defs/authorizationPayload"},
         "signatureBase64Url": {"$ref": "#/$defs/original", "minLength": 86, "maxLength": 86}
       }
@@ -93,7 +93,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "grantRootPublicKeyBase64Url", "grantRootSpkiSha256", "controlPlaneConfigurationDigest", "deploymentId"],
       "properties": {
-        "schema": {"const": "serverware.oauthRefreshCleanupAuthorityPolicy/v1"},
+        "schema": {"const": "catchplate.oauthRefreshCleanupAuthorityPolicy/v1"},
         "grantRootPublicKeyBase64Url": {"$ref": "#/$defs/original", "minLength": 43, "maxLength": 43},
         "grantRootSpkiSha256": {"$ref": "#/$defs/digest"},
         "controlPlaneConfigurationDigest": {"$ref": "#/$defs/digest"},
@@ -104,7 +104,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "configurationDigest", "authorityRootFd", "authorityRootSha256", "authorizations"],
       "properties": {
-        "schema": {"const": "serverware.oauthRefreshCleanupStartup/v1"},
+        "schema": {"const": "catchplate.oauthRefreshCleanupStartup/v1"},
         "sourceRevision": {"$ref": "#/$defs/text", "maxLength": 128},
         "configurationDigest": {"$ref": "#/$defs/digest"},
         "authorityRootFd": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/fd"}]},
@@ -123,7 +123,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "contactRequestSha256", "status", "rawHeaders", "bodyBase64url", "errorCode"],
       "properties": {
-        "schema": {"const": "serverware.oauthRevocationTransport/v1"},
+        "schema": {"const": "catchplate.oauthRevocationTransport/v1"},
         "contactRequestSha256": {"$ref": "#/$defs/digest"},
         "status": {"type": ["integer", "null"], "minimum": 200, "maximum": 599},
         "rawHeaders": {"type": ["array", "null"], "maxItems": 128, "items": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "string"}}},

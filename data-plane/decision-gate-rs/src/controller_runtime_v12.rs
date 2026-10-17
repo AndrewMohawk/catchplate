@@ -81,9 +81,9 @@ use crate::source_cas::{
 };
 
 const DEFAULT_CONTROLLER_SOCKET: &str =
-    "/run/serverware/coder/v12/controller/control.sock";
+    "/run/catchplate/coder/v12/controller/control.sock";
 const DEFAULT_RELEASE_ROOT: &str =
-    "/opt/serverware/coder-controller-v12/current";
+    "/opt/catchplate/coder-controller-v12/current";
 const STRICT_PINS_BASENAME: &str = "strict-verifier-pins-v12.json";
 const MAX_CONFIG_BYTES: usize = 2 * 1024 * 1024;
 const MAX_TICKET_BYTES: usize = 256 * 1024;
@@ -91,15 +91,15 @@ const MAX_INTERNAL_BYTES: usize = 64 * 1024 * 1024;
 const MAX_LIFECYCLE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_LIFECYCLE_FDS: usize = 2;
 const PRIVATE_DIND_LIFECYCLE_PROTOCOL_V12: &str =
-    "serverware/private-dind-lifecycle/v12";
+    "catchplate/private-dind-lifecycle/v12";
 const PRIVATE_DIND_ROOT_RESPONSE_SIGNATURE_DOMAIN_V12: &[u8] =
-    b"serverware/private-dind-root-response-signature/v12\0";
+    b"catchplate/private-dind-root-response-signature/v12\0";
 const PRIVATE_DIND_TERMINAL_RECEIPT_SIGNATURE_DOMAIN_V12: &[u8] =
-    b"serverware/private-dind-terminal-receipt/v12\0";
+    b"catchplate/private-dind-terminal-receipt/v12\0";
 const PRIVILEGED_LIFECYCLE_CLEANUP_SIGNATURE_DOMAIN_V12: &[u8] =
-    b"serverware/privileged-lifecycle-cleanup-signature/v12\0";
+    b"catchplate/privileged-lifecycle-cleanup-signature/v12\0";
 const PLAN_TERMINAL_AGGREGATE_SIGNATURE_DOMAIN_V12: &[u8] =
-    b"serverware/private-dind-plan-aggregate-terminal/v12\0";
+    b"catchplate/private-dind-plan-aggregate-terminal/v12\0";
 const MAX_SOURCE_DESCRIPTOR_BYTES: usize = 1024 * 1024;
 const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
 const REQUIRED_MEMFD_SEALS: libc::c_int =
@@ -2053,7 +2053,7 @@ where
     R: DeserializeOwned,
 {
     let exact = canonical_json(request, MAX_INTERNAL_BYTES)?;
-    let payload = create_sealed_memfd("serverware-controller-v12-invocation", &exact)?;
+    let payload = create_sealed_memfd("catchplate-controller-v12-invocation", &exact)?;
     let socket = connect_seqpacket(path, deadline)?;
     let peer = peer_cred(socket.as_raw_fd())?;
     if peer.uid != expected_uid {
@@ -2109,7 +2109,7 @@ where
     request.validate()?;
     let exact = canonical_json(request, MAX_INTERNAL_BYTES)?;
     let payload = create_sealed_memfd(
-        "serverware-controller-v12-executor-invocation",
+        "catchplate-controller-v12-executor-invocation",
         &exact,
     )?;
     let socket = connect_seqpacket(path, deadline)?;
@@ -2207,7 +2207,7 @@ pub fn run_controller_cli() -> Result<()> {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
     if arguments.len() != 2 || arguments[0] != "--config" {
         return Err(RuntimeError::invalid(
-            "usage: serverware-coder-controller-v12 --config ABSOLUTE_PATH",
+            "usage: catchplate-coder-controller-v12 --config ABSOLUTE_PATH",
         ));
     }
     let config_path = PathBuf::from(&arguments[1]);
@@ -3051,7 +3051,7 @@ fn resolve_executor_invocation(
     let inputs: ExecutorInvocationInputsV12 =
         parse_canonical_json(&inputs_bytes, MAX_INTERNAL_BYTES)?;
     if inputs.version
-        != "serverware/controller-executor-inputs/v12"
+        != "catchplate/controller-executor-inputs/v12"
         || inputs.logical_plan_template.plan_id != [0; 32]
         || inputs.logical_plan_template.boot_id_sha256 != [0; 32]
         || inputs.logical_plan_template.deadline_boottime_ns != 0
@@ -3110,7 +3110,7 @@ fn resolve_executor_invocation(
     let mut plan = inputs.logical_plan_template.clone();
     plan.plan_id = sha256(
         &[
-            b"serverware/controller-plan-id/v12\0".as_slice(),
+            b"catchplate/controller-plan-id/v12\0".as_slice(),
             acceptance.request.exact_request_sha256.as_slice(),
             context.trust.identities.generation_sha256.as_slice(),
         ]
@@ -3128,7 +3128,7 @@ fn resolve_executor_invocation(
 
     let owner_identity_sha256 = sha256(
         &[
-            b"serverware/controller-executor-owner/v12\0".as_slice(),
+            b"catchplate/controller-executor-owner/v12\0".as_slice(),
             context.config.exact_sha256.as_slice(),
             &context
                 .trust
@@ -3235,7 +3235,7 @@ fn resolve_executor_invocation(
         peer_executable_sha256(peer.pid)?;
     let lane_capability_sha256 = sha256(
         &[
-            b"serverware/controller-lane-capability/v12\0".as_slice(),
+            b"catchplate/controller-lane-capability/v12\0".as_slice(),
             plan.plan_sha256.as_slice(),
             acceptance.request.exact_request_sha256.as_slice(),
             peer_identity_sha256.as_slice(),
@@ -3564,7 +3564,7 @@ fn cleanup_request(
 ) -> Result<LifecycleCleanupRequestV12> {
     let plan_id = sha256(
         &[
-            b"serverware/controller-plan-id/v12\0".as_slice(),
+            b"catchplate/controller-plan-id/v12\0".as_slice(),
             request.exact_request_sha256.as_slice(),
             configuration_generation_sha256.as_slice(),
         ]
@@ -3611,7 +3611,7 @@ fn finalize_receipt(
     require_live(deadline)?;
     let summary = extract_request_v11_summary(request_v11)?;
     let replay_identity = ReplayIdentityV12 {
-        replay_namespace: "serverware/controller-receipt/v12".to_owned(),
+        replay_namespace: "catchplate/controller-receipt/v12".to_owned(),
         replay_key: format!(
             "{}:{}",
             context.trust.pins.request_v11.principal_id,
@@ -4059,7 +4059,7 @@ fn send_receipt_reply(
         next_high_water: verified.next_high_water,
     };
     send_seqpacket_json(socket, &reply, deadline)?;
-    let payload = create_sealed_memfd("serverware-receipt-v12", exact_receipt)?;
+    let payload = create_sealed_memfd("catchplate-receipt-v12", exact_receipt)?;
     let header =
         AuthorityFrameHeaderV12::for_payload(exact_receipt, deadline, MAX_RECEIPT_BYTES)?
             .encode(MAX_RECEIPT_BYTES)?;
@@ -4167,7 +4167,7 @@ pub fn run_client_cli() -> Result<i32> {
     }
     let exact_request = built.request.exact_bytes();
     let request_payload =
-        create_sealed_memfd("serverware-controller-request-v11", exact_request)?;
+        create_sealed_memfd("catchplate-controller-request-v11", exact_request)?;
     let frame = built.frame.encode()?;
     send_fd_packet(
         socket.as_raw_fd(),
@@ -4303,13 +4303,13 @@ fn parse_client_arguments(
         },
         _ => {
             return Err(RuntimeError::invalid(
-                "usage: serverware-coder-controller-client-v12 submit-workflow-v12 --workflow=ID --deadline-profile=ID | submit-fixed-v12 --workflow=ID --lane=build|unit|integration|e2e|attestation --deadline-profile=ID",
+                "usage: catchplate-coder-controller-client-v12 submit-workflow-v12 --workflow=ID --deadline-profile=ID | submit-fixed-v12 --workflow=ID --lane=build|unit|integration|e2e|attestation --deadline-profile=ID",
             ))
         }
     };
     if !values.is_empty()
-        || workflow != "serverware-coder-five-lane-v12"
-        || deadline != "serverware-coder-five-lane-v12"
+        || workflow != "catchplate-coder-five-lane-v12"
+        || deadline != "catchplate-coder-five-lane-v12"
     {
         return Err(RuntimeError::rejected(
             "client workflow flags differ from installed v12 conventions",
@@ -4327,11 +4327,11 @@ fn client_timeout_ms(selection: WorkflowSelectionV12) -> Result<u64> {
         WorkflowSelectionV12::E2eNoBuild => 2_700_000,
         WorkflowSelectionV12::AttestationNoBuild => 900_000,
     };
-    let value = std::env::var("SERVERWARE_CONTROLLER_DEADLINE_MS")
+    let value = std::env::var("CATCHPLATE_CONTROLLER_DEADLINE_MS")
         .ok()
         .map(|value| value.parse::<u64>())
         .transpose()
-        .map_err(|_| RuntimeError::invalid("SERVERWARE_CONTROLLER_DEADLINE_MS is invalid"))?
+        .map_err(|_| RuntimeError::invalid("CATCHPLATE_CONTROLLER_DEADLINE_MS is invalid"))?
         .unwrap_or(default);
     if value == 0 || value > MAX_DEADLINE_FUTURE_MS {
         return Err(RuntimeError::rejected(
@@ -4344,23 +4344,23 @@ fn client_timeout_ms(selection: WorkflowSelectionV12) -> Result<u64> {
 fn lane_for_selection(selection: WorkflowSelectionV12) -> Result<Lane> {
     let (operation, plan) = match selection {
         WorkflowSelectionV12::FullWorkflow | WorkflowSelectionV12::Build => {
-            ("--operation=build", "--plan=serverware-build-v1")
+            ("--operation=build", "--plan=catchplate-build-v1")
         }
         WorkflowSelectionV12::UnitNoBuild => (
             "--operation=runNoBuild",
-            "--plan=serverware-unit-no-build-v1",
+            "--plan=catchplate-unit-no-build-v1",
         ),
         WorkflowSelectionV12::IntegrationNoBuild => (
             "--operation=runNoBuild",
-            "--plan=serverware-integration-no-build-v1",
+            "--plan=catchplate-integration-no-build-v1",
         ),
         WorkflowSelectionV12::E2eNoBuild => (
             "--operation=runNoBuild",
-            "--plan=serverware-e2e-no-build-v1",
+            "--plan=catchplate-e2e-no-build-v1",
         ),
         WorkflowSelectionV12::AttestationNoBuild => (
             "--operation=runNoBuild",
-            "--plan=serverware-attestation-no-build-v1",
+            "--plan=catchplate-attestation-no-build-v1",
         ),
     };
     Lane::parse_frozen_flags(operation, plan).map_err(Into::into)
@@ -4377,7 +4377,7 @@ fn selection_name(selection: WorkflowSelectionV12) -> &'static str {
 }
 
 fn load_request_template(selection: WorkflowSelectionV12) -> Result<Vec<u8>> {
-    let path = std::env::var_os("SERVERWARE_CODER_REQUEST_TEMPLATE_V11")
+    let path = std::env::var_os("CATCHPLATE_CODER_REQUEST_TEMPLATE_V11")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             Path::new(DEFAULT_RELEASE_ROOT)
@@ -4388,7 +4388,7 @@ fn load_request_template(selection: WorkflowSelectionV12) -> Result<Vec<u8>> {
 }
 
 fn load_client_pins() -> Result<StrictVerifierPinsV12> {
-    let path = std::env::var_os("SERVERWARE_CODER_STRICT_PINS_V12")
+    let path = std::env::var_os("CATCHPLATE_CODER_STRICT_PINS_V12")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             Path::new(DEFAULT_RELEASE_ROOT)
@@ -4402,12 +4402,12 @@ fn load_client_pins() -> Result<StrictVerifierPinsV12> {
 }
 
 fn load_requester_signing_key() -> Result<SigningKey> {
-    let path = std::env::var_os("SERVERWARE_CODER_REQUESTER_SIGNING_KEY")
+    let path = std::env::var_os("CATCHPLATE_CODER_REQUESTER_SIGNING_KEY")
         .map(PathBuf::from)
         .or_else(|| {
             std::env::var_os("XDG_CONFIG_HOME")
                 .map(PathBuf::from)
-                .map(|root| root.join("serverware/coder-v12/requester-signing-key.ed25519"))
+                .map(|root| root.join("catchplate/coder-v12/requester-signing-key.ed25519"))
         })
         .ok_or_else(|| {
             RuntimeError::unavailable(
@@ -4464,7 +4464,7 @@ fn client_state_root() -> Result<PathBuf> {
 
 fn client_high_water_path() -> Result<PathBuf> {
     Ok(client_state_root()?
-        .join("serverware")
+        .join("catchplate")
         .join("coder-v12")
         .join("verification-high-water.json"))
 }
@@ -4504,9 +4504,9 @@ fn persist_client_high_water(high_water: &VerificationHighWaterV12) -> Result<()
             "client state root must already exist as an owner-only directory",
         ));
     }
-    let serverware = state_root.join("serverware");
-    ensure_private_directory(&serverware, owner)?;
-    let parent = serverware.join("coder-v12");
+    let catchplate = state_root.join("catchplate");
+    ensure_private_directory(&catchplate, owner)?;
+    let parent = catchplate.join("coder-v12");
     ensure_private_directory(&parent, owner)?;
     let path = parent.join("verification-high-water.json");
     let bytes = canonical_json(high_water, MAX_CONFIG_BYTES)?;
@@ -4535,7 +4535,7 @@ pub fn run_lifecycle_cli() -> Result<()> {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
     if arguments.len() != 2 || arguments[0] != "--config" {
         return Err(RuntimeError::invalid(
-            "usage: serverware-coder-lifecycle-v12 --config ABSOLUTE_PATH",
+            "usage: catchplate-coder-lifecycle-v12 --config ABSOLUTE_PATH",
         ));
     }
     if unsafe { libc::geteuid() } == 0 {
@@ -4850,7 +4850,7 @@ fn settle_lifecycle_intent(
     }
     let expected_plan_id = sha256(
         &[
-            b"serverware/controller-plan-id/v12\0".as_slice(),
+            b"catchplate/controller-plan-id/v12\0".as_slice(),
             request.request_sha256.as_slice(),
             request
                 .configuration_generation_sha256
@@ -5124,7 +5124,7 @@ fn verify_plan_terminal_aggregate_v12(
             MAX_LIFECYCLE_BYTES,
         )?;
     if aggregate.protocol
-            != "serverware/private-dind-plan-aggregate-terminal/v12"
+            != "catchplate/private-dind-plan-aggregate-terminal/v12"
         || aggregate.plan_id != request.plan_id
         || aggregate.request_sha256_canonical
             != request.request_sha256_canonical
@@ -5369,7 +5369,7 @@ fn verify_delegated_terminal_receipt(
                     MAX_LIFECYCLE_BYTES,
                 )?;
             if query.version
-                != "serverware/controller-plan-proxy-payload/v12"
+                != "catchplate/controller-plan-proxy-payload/v12"
                 || query.plan_id != request.proxy_request.plan_id
                 || query.lane != request.proxy_request.lane
                 || query.original_request_sha256 == [0; 32]
@@ -5387,7 +5387,7 @@ fn verify_delegated_terminal_receipt(
             request.proxy_request.request_sha256
         };
     if receipt.version
-        != "serverware/private-dind-terminal-destruction/v12"
+        != "catchplate/private-dind-terminal-destruction/v12"
         || receipt.trust_profile
             != "trusted-host-userspace-digest-no-ima"
         || receipt.plan_id != request.proxy_request.plan_id
@@ -5747,7 +5747,7 @@ pub fn run_privileged_lifecycle_cli() -> Result<()> {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
     if arguments.len() != 2 || arguments[0] != "--config" {
         return Err(RuntimeError::invalid(
-            "usage: serverware-coder-lifecycle-privileged-v12 --config ABSOLUTE_PATH",
+            "usage: catchplate-coder-lifecycle-privileged-v12 --config ABSOLUTE_PATH",
         ));
     }
     if unsafe { libc::geteuid() } != 0 {
@@ -5927,7 +5927,7 @@ fn destroy_owned_cgroups(root: &Path, deadline: u64) -> Result<[u8; 32]> {
         let name = name
             .to_str()
             .ok_or_else(|| RuntimeError::rejected("owned cgroup name is not UTF-8"))?;
-        if !name.starts_with("serverware-coder-v12-") || !entry.file_type()?.is_dir() {
+        if !name.starts_with("catchplate-coder-v12-") || !entry.file_type()?.is_dir() {
             return Err(RuntimeError::rejected(
                 "foreign entry exists under owned cgroup root",
             ));

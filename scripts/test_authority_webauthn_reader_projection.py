@@ -18,7 +18,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "serverware" / "authority_service.py"
+SOURCE = ROOT / "catchplate" / "authority_service.py"
 
 
 def no_network(event, _args):
@@ -29,7 +29,7 @@ def no_network(event, _args):
 sys.addaudithook(no_network)
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_webauthn_bindings
+from catchplate import authority_webauthn_bindings
 
 
 def source_parts(binding="credential"):
@@ -76,7 +76,7 @@ def project(value):
 def binding_digest(value):
     # Independent oracle for the service's LENGTH-PREFIXED domain framing;
     # this is intentionally not the trust core's domain + NUL framing.
-    domain = b"serverware.policyAuthorityWebAuthnCredentialBinding/v1"
+    domain = b"catchplate.policyAuthorityWebAuthnCredentialBinding/v1"
     encoded = json.dumps(value, ensure_ascii=True, allow_nan=False,
         sort_keys=True, separators=(",", ":")).encode("ascii")
     framed = len(domain).to_bytes(8, "big") + domain + len(encoded).to_bytes(8, "big") + encoded
@@ -95,7 +95,7 @@ class WebAuthnReaderProjectionTests(unittest.TestCase):
                 selected, remainder = value.removeprefix("SELECT ").split(" FROM ", 1)
                 self.assertEqual([part.strip() for part in selected.split(",")], expected)
                 self.assertEqual(remainder,
-                    "serverware_metadata.webauthn_credentials WHERE " + column + " = %s LIMIT 2")
+                    "catchplate_metadata.webauthn_credentials WHERE " + column + " = %s LIMIT 2")
 
     def test_exact_projection_carries_row_trust_without_changing_existing_fields(self):
         value = row()
@@ -148,7 +148,7 @@ class WebAuthnReaderProjectionTests(unittest.TestCase):
         query = eval(compile(ast.Expression(sql), str(SOURCE), "eval"))
         selected, remainder = query.removeprefix("SELECT ").split(" FROM ", 1)
         self.assertEqual([part.strip() for part in selected.split(",")], fields)
-        self.assertEqual(remainder, "serverware_metadata.webauthn_challenges WHERE id = %s LIMIT 2")
+        self.assertEqual(remainder, "catchplate_metadata.webauthn_challenges WHERE id = %s LIMIT 2")
         value = {"id": "synthetic-challenge", "challenge": "synthetic-challenge-bytes",
             "challenge_type": "policy_authority", "user_id": "synthetic-user", "scope_key": "synthetic-operation",
             "approval_request_id": None, "payload_json": '{"synthetic":"fixture"}',
@@ -157,7 +157,7 @@ class WebAuthnReaderProjectionTests(unittest.TestCase):
         actual = eval(compile(ast.Expression(expression), str(SOURCE), "eval"), namespace)
         encoded = json.dumps(value, ensure_ascii=True, allow_nan=False,
             sort_keys=True, separators=(",", ":")).encode("ascii")
-        domain = b"serverware.policyAuthorityWebAuthnChallengeRow/v1"
+        domain = b"catchplate.policyAuthorityWebAuthnChallengeRow/v1"
         expected = "sha256:" + hashlib.sha256(domain + b"\0" + len(encoded).to_bytes(8, "big") + encoded).hexdigest()
         self.assertEqual(actual, {"synthetic": "fixture", "challengeId": value["id"],
             "challenge": value["challenge"], "challengeRowDigest": expected})

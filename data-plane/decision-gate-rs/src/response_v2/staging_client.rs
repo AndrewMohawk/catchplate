@@ -1,8 +1,8 @@
 //! Actual gate caller, same authenticated native session and original allowance.
 //! A lost result never enters the old re-sign/reopen/recovery loop.
 use super::*;
-use serverware_decision_gate::native_staging_v1 as profile;
-use serverware_decision_gate::native_response_gate::{staging as wire, state_receipt};
+use catchplate_decision_gate::native_staging_v1 as profile;
+use catchplate_decision_gate::native_response_gate::{staging as wire, state_receipt};
 fn invalid()->ResponseObservationV2TransactionError{ResponseObservationV2TransactionError::InvalidResponse}
 fn same<T:Serialize>(left:&T,right:&T)->Result<bool,ResponseObservationV2TransactionError>{
     Ok(profile::canonical(left).map_err(|_|invalid())?==profile::canonical(right).map_err(|_|invalid())?)
@@ -17,7 +17,7 @@ pub(super) fn execute(state:&GateState,snapshot:&Arc<Snapshot>,decision:&Value,s
     let admitted=preparation.request().map_err(|_|ResponseObservationV2TransactionError::Unavailable)?;
     let binding=request.mutation_binding().ok_or_else(invalid)?;
     let wrapped=V2ResponseDataRequest::NativeStaging{api_version:RESPONSE_OBSERVATION_V2_API_VERSION.into(),
-        request_id:binding.request_id.clone(),boot_id:session.client.boot_id.clone(),params:serverware_decision_gate::V2NativeStagingParams{
+        request_id:binding.request_id.clone(),boot_id:session.client.boot_id.clone(),params:catchplate_decision_gate::V2NativeStagingParams{
             binding:binding.clone(),stable_resume_id:stable_resume_id.into(),request:admitted.clone()}};
     let reply=session.execute_response_data(&wrapped,objects)?;
     let response:V2ResponseDataControlResponse=decode_canonical_custody_json(&reply.canonical_response).map_err(|_|invalid())?;

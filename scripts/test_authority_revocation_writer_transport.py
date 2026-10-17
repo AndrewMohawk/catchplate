@@ -22,7 +22,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_revocation_writer_transport as transport
+from catchplate import authority_revocation_writer_transport as transport
 
 
 REQUEST_MAGIC = b"SWRW\x00\x00\x00\x01"
@@ -388,8 +388,8 @@ class RevocationWriterTransportTests(unittest.TestCase):
             self.assertEqual(connection.close_count, int(after_open))
 
     def test_genuine_ack_verification_uses_original_bytes_and_independent_expected_fields(self):
-        from serverware import authority_query_read_work as accounting
-        from serverware import authority_revocation_writer_acknowledgment as acknowledgment
+        from catchplate import authority_query_read_work as accounting
+        from catchplate import authority_revocation_writer_acknowledgment as acknowledgment
         import test_authority_revocation_writer_acknowledgment as ack_oracle
 
         fixture = ack_oracle.AckFixture()

@@ -99,14 +99,14 @@ impl CustodyRuntime {
         if quote.public_key()!=key.as_slice() || sha256_prefixed(&ed25519_spki_der(&key))!=self.key_id{return Err(invalid_statement("opening actual signing key changed"));}
         admitted.check(broker,identity,deadline).map_err(native_proof_error)?;
         let signature=owner.sign(&preimage,deadline).map_err(native_proof_error)?;
-        let mut hash=Sha256::new();hash.update(format!("serverware/native-jit-review-open-{purpose}-attestation/v1\0").as_bytes());
+        let mut hash=Sha256::new();hash.update(format!("catchplate/native-jit-review-open-{purpose}-attestation/v1\0").as_bytes());
         hash.update(Sha256::digest(&canonical));hash.update(signature);let nonce:[u8;32]=hash.finalize().into();
         let fresh=owner.quote_fresh(identity,nonce,deadline).map_err(native_proof_error)?;
         if fresh.public_key()!=key.as_slice() || fresh.user_data()!=quote.user_data() || fresh.nonce()!=&nonce
             || fresh.document().is_empty() || fresh.document().len()>12*1024{return Err(invalid_statement("opening role-4 quote scope changed"));}
         admitted.check(broker,identity,deadline).map_err(native_proof_error)?;owner.verify_live(deadline).map_err(native_proof_error)?;
         let proof=serde_json::json!({"statement":statement,"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
-            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence":{"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1",
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key()),
                 "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document())},
             "assignmentOriginal":admitted.assignment_original()});

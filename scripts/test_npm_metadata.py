@@ -30,7 +30,7 @@ def no_external_state(event, args):
 
 
 sys.addaudithook(no_external_state)
-from serverware import npm_metadata as npm, policy_bundle as pb, policy_route_authority as authority
+from catchplate import npm_metadata as npm, policy_bundle as pb, policy_route_authority as authority
 
 PACKAGES = ["@fixture/package", "fixture-package"]
 URL = npm.ORIGIN + "/fixture-package"
@@ -38,12 +38,12 @@ SECRET = "synthetic-private-npm-value"
 
 
 def document():
-    return {"apiVersion": "serverware.policy/v1", "kind": "PolicyBundle",
+    return {"apiVersion": "catchplate.policy/v1", "kind": "PolicyBundle",
         "metadata": {"id": "npm-metadata-test", "sequence": 1, "rollbackEpoch": 1},
         "defaults": {"action": "deny", "failMode": "closed", "unknownHosts": "block",
             "unknownPaths": "block", "validationFailure": "block"},
         "principals": [{"id": "agent:fixture", "sourceCidrs": ["127.0.0.1/32"],
-            "requiredHeaders": {"X-Serverware-Agent": "fixture"}}],
+            "requiredHeaders": {"X-Catchplate-Agent": "fixture"}}],
         "credentials": [{"id": "credential:fixture", "credentialType": "static",
             "provider": "operator-demo", "providerSubject": "fixture-subject",
             "injection": {"type": "bearer", "header": "Authorization"}}],
@@ -108,7 +108,7 @@ class NpmMetadataPureTests(unittest.TestCase):
             self.assertIsNone(pb.adapter_operation_field_names(npm.ADAPTER, "npm.read"))
             self.assertIsNone(pb.request_query_mode(npm.ADAPTER, route.adapter_config))
             upgraded = deepcopy(value)
-            upgraded["apiVersion"] = "serverware.policy/v2"
+            upgraded["apiVersion"] = "catchplate.policy/v2"
             upgraded = authority.prepare_unsigned(upgraded, [])
             compile_route(upgraded, schema=schema)
             self.assertEqual(authority._builtin(npm.ADAPTER, npm.OPERATION), "read")
@@ -236,7 +236,7 @@ if not PURE:
         annotation_module.http = annotation_http
         sys.modules["mitmproxy"] = annotation_module
         sys.modules["mitmproxy.http"] = annotation_http
-    from serverware import adapters, policy_engine as engine
+    from catchplate import adapters, policy_engine as engine
 
     class ParsedHeaders(MutableMapping):
         """Fixture storage preserving every supplied physical pair, not a parser."""
@@ -288,8 +288,8 @@ if not PURE:
             flow = request()
             flow.response = SimpleNamespace(status_code=status, raw_content=body, content=body, trailers=None,
                 headers=ParsedHeaders(([(b"Content-Type", media)] if media is not None else []) + list(fields)))
-            flow.metadata.update(serverware_route=self.route,
-                serverware_operation=self.adapter.operation_fields(flow, self.route, self.params))
+            flow.metadata.update(catchplate_route=self.route,
+                catchplate_operation=self.adapter.operation_fields(flow, self.route, self.params))
             if guarded:
                 guard = engine._ResponseCredentialGuard()
                 guard.add_text_encodings(SECRET)
@@ -325,7 +325,7 @@ if not PURE:
             flow = request(headers=[(b"Accept", b"application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*"),
                 (b"Accept-Encoding", b"gzip,deflate"), (b"Npm-Session", b"synthetic-session"),
                 (b"Pacote-Version", b"21.0.4"), (b"Pacote-Req-Type", b"packument"),
-                (b"Pacote-Pkg-Id", b"registry:fixture-package"), (b"X-Serverware-Agent", b"fixture")])
+                (b"Pacote-Pkg-Id", b"registry:fixture-package"), (b"X-Catchplate-Agent", b"fixture")])
             principal = self.snapshot.principals["agent:fixture"]
             credential = self.snapshot.credentials[self.route.credential_ref]
             self.assertTrue(adapters.preflight_request_admission(flow, self.route,
@@ -382,7 +382,7 @@ if not PURE:
                     ('{"name":"fixture-package","x":"' + ''.join('\\u%04x' % ord(c) for c in SECRET) + '"}').encode()):
                 self.assertFalse(self.admit(self.response(body)).allowed)
             for fields in ([(b"X-Metadata", SECRET.encode())], [(b"X-Metadata", b"safe"), (b"x-metadata", SECRET.encode())],
-                    [(b"X_SeRVeRWaRe_Foo", b"reserved")], [(b"Set-Cookie", b"session=fixture")],
+                    [(b"X_Catchplate_Foo", b"reserved")], [(b"Set-Cookie", b"session=fixture")],
                     [(b"Content_Type", b"application/json")], [(b"X-Large", b"x" * 8193)]):
                 self.assertFalse(self.admit(self.response(fields=fields)).allowed)
             self.assertFalse(self.admit(self.response(guarded=False)).allowed)

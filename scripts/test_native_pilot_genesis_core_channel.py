@@ -20,23 +20,23 @@ import unittest
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import native_pilot_genesis_core_channel as c
+from catchplate import native_pilot_genesis_core_channel as c
 
 
 def fixture():
     """Only the closed transport projection; never a verified native result."""
     digest = "sha256:" + "1" * 64
     scope = dict(commissioningIdSha256=digest, issuedAtBoottimeNanos=10, expiresAtBoottimeNanos=100)
-    core = dict(apiVersion="serverware.nativeInitialPublicationCore/v1", nativeGrantSha256=digest,
+    core = dict(apiVersion="catchplate.nativeInitialPublicationCore/v1", nativeGrantSha256=digest,
         genesis={"scope": scope}, observedAtUnixNanos=1000, trustCheckpointSha256=digest,
         signingKeyId=digest, signingKeySpkiSha256=digest)
     core_raw = c.g.canonical(core)
     payload = {name: digest for name in c.profile.STORED_FIELDS}
-    payload.update(apiVersion="serverware.nativePublicationGenesisStorage/v1", sequence=1,
+    payload.update(apiVersion="catchplate.nativePublicationGenesisStorage/v1", sequence=1,
         guest=dict(uid=1001, gid=1002, deliverySha256=digest), objectSha256=c.p.sha(core_raw),
-        coreSha256=c.p.framed(b"serverware.nativeInitialPublicationCore/v1", (core_raw,)),
+        coreSha256=c.p.framed(b"catchplate.nativeInitialPublicationCore/v1", (core_raw,)),
         storedAtBoottimeNanos=30, originalDeadlineBoottimeNanos=100)
-    bundle = dict(completion=dict(apiVersion="serverware.nativePublicationGenesisCompletion/v1",
+    bundle = dict(completion=dict(apiVersion="catchplate.nativePublicationGenesisCompletion/v1",
         prepared=dict(core=core, preparedAtBoottimeNanos=20, signature="not-a-native-signature"),
         stored=dict(payload=payload, signature="not-a-retrieval-signature"), receiptOriginal="not-an-admitted-receipt",
         completedAtBoottimeNanos=40, signature="not-a-completion-signature"), durable={}, current={})
@@ -88,7 +88,7 @@ class CoreChannelControls(unittest.TestCase):
                 c.request_original(observed, bundle, public, deadline=deadline, expiry=expiry)
         raw = c.request_original(observed, bundle, public, deadline=80, expiry=1900)
         value = c.g.document(raw, c.MAX_PACKET)
-        for change in ({"sequence": 0}, {"apiVersion": "serverware.nativePilotCurrentHeadApprovalRequest/v1"},
+        for change in ({"sequence": 0}, {"apiVersion": "catchplate.nativePilotCurrentHeadApprovalRequest/v1"},
                 {"retry": True}):
             changed = copy.deepcopy(value); changed.update(change)
             with self.assertRaises(ValueError): c.request(c.g.canonical(changed))

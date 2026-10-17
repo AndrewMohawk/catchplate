@@ -13,14 +13,14 @@ signature, complete original chain, current policy, approval and original expiry
 
 | Docker artifact target | Independent role | Installed one-shot | Raw sealed-FD entry |
 | --- | --- | --- | --- |
-| `native-setup-hardware-artifact` | `hardware-verifier` | `serverware-setup-native-hardware` | `serverware-native-setup-hardware` |
-| `native-setup-proxy-artifact` | `proxy-verifier` | `serverware-setup-native-proxy` | `serverware-native-setup-proxy` |
-| `native-setup-final-artifact` | `final-authority` | `serverware-setup-native-final` | `serverware-native-setup-final` |
+| `native-setup-hardware-artifact` | `hardware-verifier` | `catchplate-setup-native-hardware` | `catchplate-native-setup-hardware` |
+| `native-setup-proxy-artifact` | `proxy-verifier` | `catchplate-setup-native-proxy` | `catchplate-native-setup-proxy` |
+| `native-setup-final-artifact` | `final-authority` | `catchplate-setup-native-final` | `catchplate-native-setup-final` |
 
 Each scratch artifact is a filesystem installation root, not a runnable Docker
 container. Its two static binaries are under `/usr/local/libexec`; the fixed
-SquashFS is under `/opt/serverware`, its recorded build inventory under
-`/usr/share/serverware`, and the corresponding unit/tmpfiles definitions under
+SquashFS is under `/opt/catchplate`, its recorded build inventory under
+`/usr/share/catchplate`, and the corresponding unit/tmpfiles definitions under
 `/usr/lib/systemd/system` and `/usr/lib/tmpfiles.d`. No artifact contains any
 policy, request, private key, generated authority or activation permission.
 
@@ -53,10 +53,10 @@ For the selected role, let `stem` be exactly one of:
 - `setup-native-proxy-verifier`
 - `setup-native-final-authority`
 
-Provision `/etc/serverware` under root-owned non-group/world-writable ancestors.
+Provision `/etc/catchplate` under root-owned non-group/world-writable ancestors.
 All four files below must be regular, singly linked, no symlinks, root:root0400:
 
-| File under `/etc/serverware` | Original |
+| File under `/etc/catchplate` | Original |
 | --- | --- |
 | `<stem>-launch.json` | Canonical ASCII closed launch4 below, no LF, at most16KiB |
 | `<stem>.json` | Existing independent-verifier configuration9, no LF, at most4MiB |
@@ -64,18 +64,18 @@ All four files below must be regular, singly linked, no symlinks, root:root0400:
 | `<stem>-request.json` | Exact existing canonical public producer request, no LF, at most4MiB |
 
 Launch4 is `{apiVersion,role,runtimeImage,issuerConfigurationSha256}` with
-`apiVersion: serverware.setupNativeIndependentIssuerLaunch/v1` and the exact role
+`apiVersion: catchplate.setupNativeIndependentIssuerLaunch/v1` and the exact role
 from the table. `runtimeImage` is the existing closed5
 `{profile,imagePath,imageSha256,interpreterSha256,entrypointSha256}` from the
 independently admitted build manifest; profile is `sealed-memfd-squashfs-v1`.
-The image path must be `/opt/serverware/<stem>-runtime.squashfs`. The fixed
+The image path must be `/opt/catchplate/<stem>-runtime.squashfs`. The fixed
 entrypoints are respectively `verify_native_setup_hardware.py`,
 `verify_native_setup_proxy.py`, `issue_native_setup_final.py` under the image's
-`/opt/serverware/scripts`. All SHA values use canonical nonzero `sha256:` form.
+`/opt/catchplate/scripts`. All SHA values use canonical nonzero `sha256:` form.
 `issuerConfigurationSha256` binds the exact actual `<stem>.json` original.
 
 Configuration9 remains the existing
-`serverware.setupNativeIndependentVerifierConfiguration/v1`:
+`catchplate.setupNativeIndependentVerifierConfiguration/v1`:
 `{apiVersion,role,uid,gid,operation,authorityRootPublicKeyPem,authorityConfigurationOriginal,authorityConfigurationSha256,controlPlaneConfigurationDigest}`.
 The source verifies the cold root's full signed authority configuration and
 the separately selected role key/provider. The provisioned seed's public key
@@ -107,9 +107,9 @@ unchanged actual producers before they can use the seed.
 ## Actual one-shot operation and recovery boundary
 
 Apply the selected tmpfiles definition to create only
-`/var/lib/serverware/<stem>` root:root0700; it does not create inputs or keys.
+`/var/lib/catchplate/<stem>` root:root0700; it does not create inputs or keys.
 After independent provisioning and unit installation, the operator explicitly
-starts the matching `serverware-setup-native-{hardware,proxy,final}.service`.
+starts the matching `catchplate-setup-native-{hardware,proxy,final}.service`.
 There is no enable-on-boot or restart policy. The installed binary accepts no
 arguments and reads only its source-fixed files. Neither this instruction nor
 a prepared unit means that installation/provisioning/invocation has occurred.
@@ -125,7 +125,7 @@ is available in the root runner.
 Before clone/issuer contact, the runner creates `intent.json` with O_EXCL,
 fsyncs it and its directory, and checks exact readback. Intent7 binds the role,
 actual launch/config/request SHA values and original BOOTTIME bounds under
-`serverware.setupNativeInstalledIssuerAttempt/v1`. A partial intent also fences
+`catchplate.setupNativeInstalledIssuerAttempt/v1`. A partial intent also fences
 the attempt. It is never removed or retried automatically.
 
 Only after the actual child exits, its same PIDFD/start/parent identity is
@@ -147,7 +147,7 @@ implement or authorize that operation. Ordinary file visibility alone is not
 an authenticated acceptance or durable effect guarantee; consumers require the
 full genuine signed original, and operator success also requires definite exit0.
 
-The lower-level `serverware-native-setup-*` binaries instead require actual
+The lower-level `catchplate-native-setup-*` binaries instead require actual
 inherited sealed FD4/FD5 and write-only FIFO FD1, accept no args, and retain the
 same fixed launch/config originals. They emit only after actual terminal/reap
 and mount retirement. Their caller owns its own durable precontact fence and
@@ -162,7 +162,7 @@ pycparser3.0/cbor2 5.9.0 and pinned native Debian tools. A bounded build-only AS
 walk follows module-scope imports of fixed producer roots; explicit actual
 lazy-call roots include the buffered capture/receipt, configuration and work
 accounting validators. It records each admitted module/file, including the
-real `serverware_agent_trust` package and original `pyproject.toml` identity.
+real `catchplate_agent_trust` package and original `pyproject.toml` identity.
 The existing enrollment-clock code imports shared pure proof/transition data
 modules; those import dependencies are recorded, not replaced with fake clock
 or authority modules. CP application/server/store/database modules and unknown

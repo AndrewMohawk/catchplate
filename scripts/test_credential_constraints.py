@@ -72,34 +72,34 @@ REQUEST_VALUE_PARITY_VECTORS = (
 )
 
 tmpdir = tempfile.TemporaryDirectory()
-os.environ["SERVERWARE_DATA_DIR"] = tmpdir.name
-os.environ["SERVERWARE_RELEASE_CHANNEL"] = "test"
-os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
+os.environ["CATCHPLATE_DATA_DIR"] = tmpdir.name
+os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "test"
+os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
 for name in (
-    "SERVERWARE_METADATA_STORE_POSTGRES_DSN",
-    "SERVERWARE_AUDIT_STORE_POSTGRES_DSN",
-    "SERVERWARE_GRANT_STORE_POSTGRES_DSN",
+    "CATCHPLATE_METADATA_STORE_POSTGRES_DSN",
+    "CATCHPLATE_AUDIT_STORE_POSTGRES_DSN",
+    "CATCHPLATE_GRANT_STORE_POSTGRES_DSN",
 ):
     os.environ.pop(name, None)
 
-from serverware import constraints, db, http_client, runtime
-from serverware.adapters import (
+from catchplate import constraints, db, http_client, runtime
+from catchplate.adapters import (
     X_V2_READ_OPERATION_PATHS,
     X_V2_READ_OPERATIONS,
     _x_read_operation,
     get_adapter,
     preflight_request_admission,
 )
-from serverware.constraints import (
+from catchplate.constraints import (
     _enforce_request_time_window,
     evaluate_request_constraints,
     evaluate_response_binding_sources,
     evaluate_response_constraints,
     reset_local_constraint_state,
 )
-from serverware.policy_bundle import (
+from catchplate.policy_bundle import (
     GMAIL_V1_REQUEST_HEADERS,
     GMAIL_V1_REQUEST_QUERY_KEYS,
     NPM_REGISTRY_REQUEST_HEADERS,
@@ -127,8 +127,8 @@ from serverware.policy_bundle import (
 )
 try:
     from mitmproxy import http as mitm_http
-    from serverware import policy_engine
-    from serverware.policy_engine import (
+    from catchplate import policy_engine
+    from catchplate.policy_engine import (
         LEGACY_MITM_TRANSPORT_METADATA_KEY,
         _canonical_credential_version,
         _canonical_forwarded_request_headers,
@@ -151,7 +151,7 @@ try:
         evaluate_request,
         evaluate_response,
     )
-    from serverware.mitm_addon import ServerwareAddon
+    from catchplate.mitm_addon import CatchplateAddon
 except ModuleNotFoundError as exc:
     if exc.name != "mitmproxy":
         raise
@@ -179,7 +179,7 @@ except ModuleNotFoundError as exc:
     mitm_http = None
     evaluate_response = None
     evaluate_request = None
-    ServerwareAddon = None
+    CatchplateAddon = None
 
 
 def require_consolidated_policy_runtime() -> None:
@@ -187,7 +187,7 @@ def require_consolidated_policy_runtime() -> None:
         name
         for name, value in {
             "mitmproxy.http": mitm_http,
-            "ServerwareAddon": ServerwareAddon,
+            "CatchplateAddon": CatchplateAddon,
             "_canonical_forwarded_request_headers": _canonical_forwarded_request_headers,
             "_canonical_query_wire": _canonical_query_wire,
             "_canonical_request": _canonical_request,
@@ -899,7 +899,7 @@ def _assert_no_upstream_connection(
 
 
 def _live_proxy_transport_assertions(runner_module) -> None:
-    from serverware.config import POLICY_BUNDLE_PATH
+    from catchplate.config import POLICY_BUNDLE_PATH
 
     deadline = time.monotonic() + _LIVE_PROXY_TIMEOUT_SECONDS
     bundle = demo_policy_bundle("cred-demo-bearer")
@@ -965,7 +965,7 @@ def _live_proxy_transport_assertions(runner_module) -> None:
                 (
                     f"CONNECT localhost:{upstream_port} HTTP/1.1\r\n"
                     f"Host: localhost:{upstream_port}\r\n"
-                    f"X-Serverware-Agent: {agent}\r\n"
+                    f"X-Catchplate-Agent: {agent}\r\n"
                     "\r\n"
                 ).encode("ascii")
             )
@@ -996,7 +996,7 @@ def _live_proxy_transport_assertions(runner_module) -> None:
 
         admitted_tunnel, admitted_headers = open_connect("demo-agent")
         assert admitted_headers.startswith(b"HTTP/1.1 200"), admitted_headers
-        admitted_tunnel.sendall(b"SERVERWARE-UNKNOWN-RAW-TCP\x00\x01\x02")
+        admitted_tunnel.sendall(b"CATCHPLATE-UNKNOWN-RAW-TCP\x00\x01\x02")
         admitted_tunnel.close()
         _assert_no_upstream_connection(
             upstream_listener,
@@ -1021,7 +1021,7 @@ def _live_proxy_transport_assertions(runner_module) -> None:
             (
                 "GET /echo HTTP/1.1\r\n"
                 f"Host: localhost:{upstream_port}\r\n"
-                "X-Serverware-Agent: demo-agent\r\n"
+                "X-Catchplate-Agent: demo-agent\r\n"
                 "Connection: close\r\n"
                 "\r\n"
             ).encode("ascii")
@@ -1105,14 +1105,14 @@ def _live_proxy_transport_assertions(runner_module) -> None:
 
 
 def run_proxy_transport_assertions() -> None:
-    if ServerwareAddon is None:
+    if CatchplateAddon is None:
         raise AssertionError("proxy transport assertions did not import the mitmproxy addon")
     assert version("mitmproxy") == "11.0.2"
 
     from mitmproxy import connection, http, tls
     from mitmproxy.options import Options
     from mitmproxy.proxy.context import Context
-    from serverware import mitm_addon, policy_engine, runner
+    from catchplate import mitm_addon, policy_engine, runner
 
     expected_command = [
         "mitmdump",
@@ -1176,13 +1176,13 @@ def run_proxy_transport_assertions() -> None:
     assert "def open_pinned_provider_connection" not in http_client_source
 
     production_env = os.environ.copy()
-    production_env["SERVERWARE_RELEASE_CHANNEL"] = "production"
+    production_env["CATCHPLATE_RELEASE_CHANNEL"] = "production"
     production_env["PYTHONPATH"] = os.pathsep.join(
         item for item in (str(ROOT), production_env.get("PYTHONPATH", "")) if item
     )
     for module_name, expected_error in (
-        ("serverware.runner", "legacy Python mitmproxy transport is development-only"),
-        ("serverware.mitm_addon", "legacy Python mitmproxy addon is development-only"),
+        ("catchplate.runner", "legacy Python mitmproxy transport is development-only"),
+        ("catchplate.mitm_addon", "legacy Python mitmproxy addon is development-only"),
     ):
         result = subprocess.run(
             [sys.executable, "-c", f"import {module_name}"],
@@ -1195,7 +1195,7 @@ def run_proxy_transport_assertions() -> None:
         assert result.returncode != 0, module_name
         assert expected_error in result.stderr, result.stderr
 
-    addon = ServerwareAddon()
+    addon = CatchplateAddon()
     original_snapshot = mitm_addon.get_policy_snapshot
     original_log_request = runtime.log_request
     route_policy = SimpleNamespace(
@@ -1206,7 +1206,7 @@ def run_proxy_transport_assertions() -> None:
     )
 
     def identify_principal(_client_ip, headers):
-        if headers.get("X-Serverware-Agent") == "connect-agent":
+        if headers.get("X-Catchplate-Agent") == "connect-agent":
             return SimpleNamespace(id="agent:connect-assigned")
         return None
 
@@ -1231,7 +1231,7 @@ def run_proxy_transport_assertions() -> None:
             "https://connect.example.test:443",
             headers={
                 "Host": "connect.example.test:443",
-                "X-Serverware-Agent": agent,
+                "X-Catchplate-Agent": agent,
             },
         )
         item.request.data.scheme = b""
@@ -1250,7 +1250,7 @@ def run_proxy_transport_assertions() -> None:
         denied = connect_flow("not-admitted")
         addon.http_connect(denied)
         assert denied.response.status_code == 403
-        assert denied.metadata["serverware_blocked_response"] is True
+        assert denied.metadata["catchplate_blocked_response"] is True
 
         admitted = connect_flow("connect-agent")
         addon.http_connect(admitted)
@@ -1434,7 +1434,7 @@ def main() -> None:
     original_generation_lookup = runtime.get_credential_generation
     original_request_log = runtime.log_request
     legacy_credential_flow.request.headers[
-        "X-Serverware-Agent"
+        "X-Catchplate-Agent"
     ] = "demo-agent"
     policy_engine.get_policy_snapshot = lambda: explicit_snapshot
     policy_engine.get_adapter = forbidden_admission_side_effect
@@ -1510,7 +1510,7 @@ def main() -> None:
         "https://demo-upstream:8443/echo",
     )
     missing_resolution_request.request.headers[
-        "X-Serverware-Agent"
+        "X-Catchplate-Agent"
     ] = "demo-agent"
     admission_side_effects.clear()
     original_snapshot_lookup = policy_engine.get_policy_snapshot
@@ -1847,7 +1847,7 @@ def main() -> None:
     assert request_decision(header_route, header_flow, "vectors.read").allowed
 
     path_flow = flow("GET", "https://example.test/repos/approved-owner")
-    path_flow.metadata["serverware_request_value_path_params"] = {"owner": "approved-owner"}
+    path_flow.metadata["catchplate_request_value_path_params"] = {"owner": "approved-owner"}
     path_route = SimpleNamespace(
         id="request-value-path",
         credential_ref=None,
@@ -2132,7 +2132,7 @@ def main() -> None:
         ({"type": "header", "name": "Authorization"}, "custom header injection into Authorization"),
         ({"type": "bearer", "header": "Host"}, "bearer injection into Host"),
         ({"type": "basic", "username": "service", "header": "Cookie"}, "Basic injection into Cookie"),
-        ({"type": "header", "name": "X-Serverware-Admin-Token"}, "header injection into service auth"),
+        ({"type": "header", "name": "X-Catchplate-Admin-Token"}, "header injection into service auth"),
         ({"type": "bearer", "name": "X-Api-Key"}, "bearer injection with a header-only name field"),
         ({"type": "basic", "username": "service", "prefix": "Basic "}, "Basic injection with a prefix"),
         ({"type": "header", "name": "X-Api-Key", "username": "service"}, "header injection with a username"),
@@ -2923,7 +2923,7 @@ def main() -> None:
 
         for field_name, widened_value in (
             ("allowedHeaders", "x-provider-profile-widening"),
-            ("allowedQueryKeys", "serverware_unknown_query"),
+            ("allowedQueryKeys", "catchplate_unknown_query"),
             ("allowedMediaTypes", "text/plain"),
         ):
             invalid = copy.deepcopy(examples)
@@ -3256,7 +3256,7 @@ def main() -> None:
         "x-goog-user-project",
         "x-custom-token",
         "x-forwarded-for",
-        "x_serverware_agent",
+        "x_catchplate_agent",
     ):
         invalid, _ = generic_discard_bundle([reserved_name])
         assert_policy_rejected(
@@ -4702,7 +4702,7 @@ def main() -> None:
         "https://objects.example.com/v1/buckets/agent-artifacts/objects/report-1",
         response={"ok": True, "id": "report-1", "sha256": expected_object_store_digest},
     )
-    object_store_response.metadata["serverware_operation"] = object_store_operation
+    object_store_response.metadata["catchplate_operation"] = object_store_operation
     assert evaluate_response_constraints(object_store_response, object_store_route).allowed
     mismatched_object_store_digest = copy.deepcopy(object_store_response)
     mismatched_object_store_digest.response.raw_content = json.dumps(
@@ -5012,10 +5012,10 @@ def main() -> None:
     )
     matching_stripe_response.metadata.update(
         {
-            "serverware_operation": stripe_operation,
-            "serverware_policy_hash": "sha256:" + "1" * 64,
-            "serverware_request_digest": "sha256:" + "2" * 64,
-            "serverware_operation_digest": "sha256:" + "3" * 64,
+            "catchplate_operation": stripe_operation,
+            "catchplate_policy_hash": "sha256:" + "1" * 64,
+            "catchplate_request_digest": "sha256:" + "2" * 64,
+            "catchplate_operation_digest": "sha256:" + "3" * 64,
         }
     )
     matching_binding_decision = evaluate_response_constraints(
@@ -5049,19 +5049,19 @@ def main() -> None:
             audited_response = copy.deepcopy(matching_stripe_response)
             audited_response.metadata.update(
                 {
-                    "serverware_route": stripe_route,
-                    "serverware_route_id": stripe_route.id,
-                    "serverware_params": {},
-                    "serverware_principal_id": "agent:example",
-                    "serverware_credential_id": stripe_route.credential_ref,
-                    "serverware_credential_version": 1,
+                    "catchplate_route": stripe_route,
+                    "catchplate_route_id": stripe_route.id,
+                    "catchplate_params": {},
+                    "catchplate_principal_id": "agent:example",
+                    "catchplate_credential_id": stripe_route.credential_ref,
+                    "catchplate_credential_version": 1,
                 }
             )
             assert evaluate_response(audited_response).allowed
             released_event = response_logs[-1][6]
             assert released_event["response_validation"]["ok"] is True
             assert len(released_event["response_validation"]["bindings"]) == 3
-            assert "serverware_operation" not in released_event
+            assert "catchplate_operation" not in released_event
             assert "pm_12345678" not in json.dumps(released_event)
 
             response_logs.clear()
@@ -5160,7 +5160,7 @@ def main() -> None:
             response={},
         )
         invalid_json_response.response.raw_content = invalid_body
-        invalid_json_response.metadata["serverware_operation"] = stripe_operation
+        invalid_json_response.metadata["catchplate_operation"] = stripe_operation
         decision = evaluate_response_constraints(
             invalid_json_response,
             stripe_route,
@@ -5220,7 +5220,7 @@ def main() -> None:
             "https://api.stripe.com/v1/payment_intents",
             response=response,
         )
-        mismatched.metadata["serverware_operation"] = stripe_operation
+        mismatched.metadata["catchplate_operation"] = stripe_operation
         decision = evaluate_response_constraints(
             mismatched,
             stripe_route,
@@ -5291,7 +5291,7 @@ def main() -> None:
             "https://api.example.test/i64",
             response={"value": boundary},
         )
-        boundary_response.metadata["serverware_operation"] = boundary_operation
+        boundary_response.metadata["catchplate_operation"] = boundary_operation
         assert evaluate_response_constraints(
             boundary_response,
             i64_route,
@@ -5313,7 +5313,7 @@ def main() -> None:
             "https://api.example.test/i64",
             response={"value": out_of_range},
         )
-        out_of_range_response.metadata["serverware_operation"] = {
+        out_of_range_response.metadata["catchplate_operation"] = {
             "authorized_value": str(max_i64 if out_of_range > 0 else min_i64)
         }
         assert_response_binding_denied(
@@ -5339,7 +5339,7 @@ def main() -> None:
                 "payment_method": "pm_12345678",
             },
         )
-        canary_response.metadata["serverware_operation"] = canary_operation
+        canary_response.metadata["catchplate_operation"] = canary_operation
         decision = evaluate_response_constraints(
             canary_response,
             stripe_route,
@@ -5613,7 +5613,7 @@ def main() -> None:
     gmail_request_adapter = get_adapter(gmail_request_route.adapter_type)
     gmail_bodyless_content_type = flow(
         "GET",
-        "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=serverware",
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=catchplate",
     )
     gmail_bodyless_content_type.request.headers["content-type"] = (
         ' Application/JSON ; charset="utf-8" '
@@ -5682,11 +5682,11 @@ def main() -> None:
     )
 
     x_route = route(example_snapshot, "example.x.search.seven_days")
-    x_request = flow("GET", "https://api.x.com/2/tweets/search/recent?query=serverware&tweet.fields=author_id")
+    x_request = flow("GET", "https://api.x.com/2/tweets/search/recent?query=catchplate&tweet.fields=author_id")
     x_adapter = get_adapter(x_route.adapter_type)
     x_bodyless_content_type = flow(
         "GET",
-        "https://api.x.com/2/tweets/search/recent?query=serverware",
+        "https://api.x.com/2/tweets/search/recent?query=catchplate",
     )
     x_bodyless_content_type.request.headers["content-type"] = "application/json"
     assert_denied(
@@ -5695,7 +5695,7 @@ def main() -> None:
     )
     x_recent_unknown_header = flow(
         "GET",
-        "https://api.x.com/2/tweets/search/recent?query=serverware",
+        "https://api.x.com/2/tweets/search/recent?query=catchplate",
     )
     x_recent_unknown_header.request.headers["x-agent-widening"] = "1"
     assert_denied(
@@ -5706,7 +5706,7 @@ def main() -> None:
         x_adapter.validate_request(
             flow(
                 "GET",
-                "https://api.x.com/2/tweets/search/recent?query=serverware&unknown=1",
+                "https://api.x.com/2/tweets/search/recent?query=catchplate&unknown=1",
             ),
             x_route,
             {},
@@ -5717,7 +5717,7 @@ def main() -> None:
         x_adapter.validate_request(
             flow(
                 "GET",
-                "https://api.x.com/2/tweets/search/recent?query=serverware",
+                "https://api.x.com/2/tweets/search/recent?query=catchplate",
                 {"forbidden": True},
             ),
             x_route,
@@ -5730,14 +5730,14 @@ def main() -> None:
     for historical_path in ("/2/tweets/search/all", "/2/tweets/counts/all"):
         assert_denied(
             x_adapter.validate_request(
-                flow("GET", f"https://api.x.com{historical_path}?query=serverware"),
+                flow("GET", f"https://api.x.com{historical_path}?query=catchplate"),
                 x_route,
                 {},
             ),
             "x_recent_search_endpoint_denied",
         )
     assert x_adapter.validate_request(
-        flow("GET", "https://api.x.com/2/tweets/counts/recent?query=serverware"),
+        flow("GET", "https://api.x.com/2/tweets/counts/recent?query=catchplate"),
         x_route,
         {},
     ).allowed
@@ -5776,8 +5776,8 @@ def main() -> None:
     expected_x_reads = {
         "https://api.x.com/2/tweets/123": "tweets.read",
         "https://api.x.com/2/tweets/analytics": "analytics.read",
-        "https://api.x.com/2/tweets/search/recent?query=serverware": "search.read",
-        "https://api.x.com/2/tweets/search/all?query=serverware": "search.read",
+        "https://api.x.com/2/tweets/search/recent?query=catchplate": "search.read",
+        "https://api.x.com/2/tweets/search/all?query=catchplate": "search.read",
         "https://api.x.com/2/users/me": "users.read",
         "https://api.x.com/2/users/123/bookmarks/folders/456": "bookmarks.read",
         "https://api.x.com/2/users/123/owned_lists": "lists.read",
@@ -5927,7 +5927,7 @@ def main() -> None:
                 encoding="utf-8"
             )
         )
-        assert parity_vector["apiVersion"] == "serverware.discardHeadersParity/v2"
+        assert parity_vector["apiVersion"] == "catchplate.discardHeadersParity/v2"
         raw_target_vector = parity_vector["rawAbsoluteTarget"]
         for target in raw_target_vector["valid"]:
             parts = validate_raw_absolute_target(target)
@@ -6073,7 +6073,7 @@ def main() -> None:
             )
             assert declared_discard == ("npm-session",)
             discarded_evidence = retry_request.metadata.get(
-                "serverware_discarded_request_headers"
+                "catchplate_discarded_request_headers"
             )
             assert discarded_evidence == discard_vector["discardedEvidence"]
             assert session_value not in canonical_json(discarded_evidence)
@@ -7064,8 +7064,8 @@ def main() -> None:
             runtime._credential_cache.clear()
             runtime._credential_cache.update(original_runtime_cache)
 
-    if ServerwareAddon is not None:
-        from serverware import policy_engine
+    if CatchplateAddon is not None:
+        from catchplate import policy_engine
 
         original_get_policy_snapshot = policy_engine.get_policy_snapshot
         original_get_credential = runtime.get_credential
@@ -7114,7 +7114,7 @@ def main() -> None:
         runtime.atomic_release_authorization_enabled = lambda: False
         try:
             admitted_x = flow("GET", "https://api.x.com/2/users/me")
-            admitted_x.request.headers["X-Serverware-Agent"] = "example-agent"
+            admitted_x.request.headers["X-Catchplate-Agent"] = "example-agent"
             admitted_x_decision = policy_engine.evaluate_request(
                 admitted_x
             ).decision
@@ -7146,7 +7146,7 @@ def main() -> None:
         runtime.dispatch_release_authorization = lambda **_kwargs: authorization_calls.append("dispatch")
         try:
             blocked_npm = flow("PUT", "https://registry.npmjs.org/@scope%2fexample")
-            blocked_npm.request.headers["X-Serverware-Agent"] = "example-agent"
+            blocked_npm.request.headers["X-Catchplate-Agent"] = "example-agent"
             blocked_npm.request.headers["content-type"] = "application/json"
             blocked_npm.request.raw_content = invalid_npm_publish_bodies[0]
             blocked_unknown_npm = flow(
@@ -7154,7 +7154,7 @@ def main() -> None:
                 "https://registry.npmjs.org/@scope%2fexample",
                 npm_document,
             )
-            blocked_unknown_npm.request.headers["X-Serverware-Agent"] = "example-agent"
+            blocked_unknown_npm.request.headers["X-Catchplate-Agent"] = "example-agent"
             blocked_dist_tag = flow(
                 "PUT",
                 "https://registry.npmjs.org/-/package/@scope%2fexample/dist-tags/next",
@@ -7207,23 +7207,23 @@ def main() -> None:
                 blocked_deprecation,
                 blocked_token_create,
             ):
-                blocked_npm_request.request.headers["X-Serverware-Agent"] = "example-agent"
+                blocked_npm_request.request.headers["X-Catchplate-Agent"] = "example-agent"
             blocked_gmail = flow(
                 "GET",
                 "https://gmail.googleapis.com/gmail/v1/users/me/messages?unknown=1",
             )
-            blocked_gmail.request.headers["X-Serverware-Agent"] = "example-agent"
+            blocked_gmail.request.headers["X-Catchplate-Agent"] = "example-agent"
             blocked_x_read = flow(
                 "GET",
-                "https://api.x.com/2/tweets/search/recent?query=serverware&unknown=1",
+                "https://api.x.com/2/tweets/search/recent?query=catchplate&unknown=1",
             )
-            blocked_x_read.request.headers["X-Serverware-Agent"] = "example-agent"
+            blocked_x_read.request.headers["X-Catchplate-Agent"] = "example-agent"
             blocked_x_write = flow(
                 "POST",
                 "https://api.x.com/2/tweets",
                 {"text": "must not reserve"},
             )
-            blocked_x_write.request.headers["X-Serverware-Agent"] = "example-agent"
+            blocked_x_write.request.headers["X-Catchplate-Agent"] = "example-agent"
             blocked_x_write.request.headers["content-type"] = "text/plain"
             for blocked_request, expected_error, expected_status in (
                 (blocked_gmail, "request_query_key_not_allowed", 403),
@@ -7237,10 +7237,10 @@ def main() -> None:
                 (blocked_deprecation, "npm_metadata_deprecation_required", 403),
                 (blocked_token_create, "npm_token_creation_denied", 403),
             ):
-                ServerwareAddon().request(blocked_request)
+                CatchplateAddon().request(blocked_request)
                 assert credential_reads == [], credential_reads
                 assert authorization_calls == [], authorization_calls
-                assert blocked_request.metadata.get("serverware_blocked_response") is True
+                assert blocked_request.metadata.get("catchplate_blocked_response") is True
                 assert blocked_request.response.status_code == expected_status
                 assert json.loads(blocked_request.response.raw_content)["error"] == expected_error
         finally:
@@ -7371,11 +7371,11 @@ def main() -> None:
             == "approval:successful-reserve"
         )
         assert (
-            lifecycle_metadata.metadata["serverware_release_grant_id"]
+            lifecycle_metadata.metadata["catchplate_release_grant_id"]
             == "grant:successful-reserve"
         )
         assert (
-            lifecycle_metadata.metadata["serverware_release_approval_request_id"]
+            lifecycle_metadata.metadata["catchplate_release_approval_request_id"]
             == "approval:successful-reserve"
         )
 
@@ -7445,7 +7445,7 @@ def main() -> None:
         )
         try:
             invalid_success = copy.deepcopy(npm_request)
-            invalid_success.request.headers["X-Serverware-Agent"] = "example-agent"
+            invalid_success.request.headers["X-Catchplate-Agent"] = "example-agent"
             invalid_success_decision = policy_engine.evaluate_request(
                 invalid_success
             ).decision
@@ -7456,7 +7456,7 @@ def main() -> None:
             assert invalid_reserve_credential_reads == []
             assert invalid_reserve_completions == ["not_forwarded"]
             invalid_guard = invalid_success.metadata.get(
-                "serverware_release_authorization_guard"
+                "catchplate_release_authorization_guard"
             )
             assert invalid_guard is not None
             assert invalid_guard.cleanup_emitted is True
@@ -7475,9 +7475,9 @@ def main() -> None:
             runtime.atomic_release_authorization_enabled = original_atomic_mode
             policy_engine.get_policy_snapshot = original_atomic_snapshot
 
-        from serverware import mitm_addon
+        from catchplate import mitm_addon
 
-        addon = ServerwareAddon()
+        addon = CatchplateAddon()
         original_connect_snapshot = mitm_addon.get_policy_snapshot
         original_connect_log = runtime.log_request
         connect_routes = (
@@ -7507,7 +7507,7 @@ def main() -> None:
                         "Proxy-Authorization",
                         "Basic must-not-enter-audit",
                     ),
-                    ("X-Serverware-Agent", "connect-agent"),
+                    ("X-Catchplate-Agent", "connect-agent"),
                 ]
             )
             item.request.data.headers = item.request.headers
@@ -7547,7 +7547,7 @@ def main() -> None:
             mitm_addon.get_policy_snapshot = lambda: connect_snapshot(None)
             addon.http_connect(unknown_principal)
             assert unknown_principal.response.status_code == 403
-            assert unknown_principal.metadata["serverware_blocked_response"] is True
+            assert unknown_principal.metadata["catchplate_blocked_response"] is True
             assert json.loads(unknown_principal.response.raw_content)["error"] == "unknown_connect_denied"
 
             unassigned_principal = connect_flow()
@@ -7556,7 +7556,7 @@ def main() -> None:
             )
             addon.http_connect(unassigned_principal)
             assert unassigned_principal.response.status_code == 403
-            assert unassigned_principal.metadata["serverware_blocked_response"] is True
+            assert unassigned_principal.metadata["catchplate_blocked_response"] is True
 
             snapshot_failure = connect_flow()
             mitm_addon.get_policy_snapshot = lambda: (_ for _ in ()).throw(
@@ -7575,7 +7575,7 @@ def main() -> None:
             )
             addon.http_connect(log_failure)
             assert log_failure.response.status_code == 503
-            assert log_failure.metadata["serverware_blocked_response"] is True
+            assert log_failure.metadata["catchplate_blocked_response"] is True
             assert json.loads(log_failure.response.raw_content) == {
                 "error": "connect_hook_failed_closed"
             }
@@ -7586,7 +7586,7 @@ def main() -> None:
             runtime.log_request = lambda *args, **kwargs: connect_logs.append((args, kwargs))
             addon.http_connect(assigned)
             assert getattr(assigned, "response", None) is None
-            assert assigned.metadata.get("serverware_blocked_response") is not True
+            assert assigned.metadata.get("catchplate_blocked_response") is not True
             assert identified_inputs[-1] == ("10.42.0.9", assigned.request.headers)
             assert "must-not-enter-audit" not in repr(connect_logs)
             reused_tunnel = connect_flow()
@@ -7684,11 +7684,11 @@ def main() -> None:
             )
             guard = runtime.ReleaseAuthorizationGuard(expected)
             guard.promote_reserved()
-            item.metadata["serverware_atomic_reservation_required"] = True
+            item.metadata["catchplate_atomic_reservation_required"] = True
             item.metadata[
-                "serverware_release_authorization_guard"
+                "catchplate_release_authorization_guard"
             ] = guard
-            item.metadata["serverware_release_authorization"] = {
+            item.metadata["catchplate_release_authorization"] = {
                 "attempt_id": expected.attempt_id,
                 "flow_id": expected.flow_id,
                 "binding_digest": expected.binding_digest,
@@ -7725,7 +7725,7 @@ def main() -> None:
 
         def fail_during_dispatch(item):
             dispatch_calls.append("dispatch")
-            item.metadata["serverware_release_authorization"]["dispatch_attempted"] = True
+            item.metadata["catchplate_release_authorization"]["dispatch_attempted"] = True
             raise RuntimeError("dispatch transport failed unexpectedly")
 
         runtime.complete_release_authorization = complete_failed_hook
@@ -7735,14 +7735,14 @@ def main() -> None:
 
             def deny_after_raw_ingress(item):
                 ingress_targets.append(
-                    item.metadata["serverware_raw_absolute_target"]
+                    item.metadata["catchplate_raw_absolute_target"]
                 )
                 assert (
-                    item.metadata["serverware_raw_target_validated"] is True
+                    item.metadata["catchplate_raw_target_validated"] is True
                 )
                 assert (
                     item.request.pretty_url
-                    == item.metadata["serverware_raw_absolute_target"]
+                    == item.metadata["catchplate_raw_absolute_target"]
                 )
                 assert (
                     item.metadata[LEGACY_MITM_TRANSPORT_METADATA_KEY]
@@ -7943,12 +7943,12 @@ def main() -> None:
             assert cleanup_unknown_guard.cleanup_emitted is True
             assert cleanup_unknown_guard.cleanup_error is True
             assert (
-                cleanup_unknown.metadata["serverware_release_state"]
+                cleanup_unknown.metadata["catchplate_release_state"]
                 == "cleanup_unknown"
             )
             assert (
                 cleanup_unknown.metadata[
-                    "serverware_release_authorization"
+                    "catchplate_release_authorization"
                 ]["cleanup_error"]
                 == "fixture cleanup transport loss"
             )
@@ -7979,13 +7979,13 @@ def main() -> None:
             addon.request(reserved_failure)
             assert reserved_failure.response is not None
             assert reserved_failure.response.status_code == 503
-            assert reserved_failure.metadata["serverware_blocked_response"] is True
+            assert reserved_failure.metadata["catchplate_blocked_response"] is True
             assert json.loads(reserved_failure.response.raw_content) == {
                 "error": "request_hook_failed_closed"
             }
             assert dispatch_calls == [], dispatch_calls
             assert completion_outcomes == ["not_forwarded"], completion_outcomes
-            assert reserved_failure.metadata["serverware_release_state"] == "cancelled"
+            assert reserved_failure.metadata["catchplate_release_state"] == "cancelled"
 
             mitm_addon.evaluate_request = allow_with_reservation
             mitm_addon.dispatch_release_authorization = fail_during_dispatch
@@ -7993,19 +7993,19 @@ def main() -> None:
             addon.request(dispatch_failure)
             assert dispatch_failure.response is not None
             assert dispatch_failure.response.status_code == 503
-            assert dispatch_failure.metadata["serverware_blocked_response"] is True
+            assert dispatch_failure.metadata["catchplate_blocked_response"] is True
             assert completion_outcomes == ["not_forwarded", "unknown"], completion_outcomes
-            assert dispatch_failure.metadata["serverware_release_state"] == "committed_indeterminate"
+            assert dispatch_failure.metadata["catchplate_release_state"] == "committed_indeterminate"
 
             forward_events: list[str] = []
 
             def authorize_dispatch(item):
                 forward_events.append("dispatch")
-                lifecycle = item.metadata["serverware_release_authorization"]
+                lifecycle = item.metadata["catchplate_release_authorization"]
                 lifecycle["state"] = "dispatch_authorized"
-                item.metadata["serverware_release_state"] = "dispatch_authorized"
+                item.metadata["catchplate_release_state"] = "dispatch_authorized"
                 item.metadata[
-                    "serverware_release_authorization_guard"
+                    "catchplate_release_authorization_guard"
                 ].mark_dispatch_authorized()
                 return policy_engine.PolicyDecision(True)
 
@@ -8024,10 +8024,10 @@ def main() -> None:
                 forwarded.response is not None
                 or forward_events
                 != ["dispatch", "dispatch_marker"]
-                or forwarded.metadata.get("serverware_release_state")
+                or forwarded.metadata.get("catchplate_release_state")
                 != "dispatching"
                 or not forwarded.metadata[
-                    "serverware_release_authorization_guard"
+                    "catchplate_release_authorization_guard"
                 ].dispatch_uncertain
             ):
                 raise AssertionError(
@@ -8361,13 +8361,13 @@ def main() -> None:
     search_route = route(demo, "demo.x.search.recent")
     old_search = flow(
         "GET",
-        f"https://demo-upstream:8443/2/tweets/search/recent?query=serverware&start_time={iso_days_ago(10)}&max_results=10",
+        f"https://demo-upstream:8443/2/tweets/search/recent?query=catchplate&start_time={iso_days_ago(10)}&max_results=10",
     )
     assert_denied(request_decision(search_route, old_search, "search.read"), "query_date_window_exceeded")
 
     huge_page = flow(
         "GET",
-        f"https://demo-upstream:8443/2/tweets/search/recent?query=serverware&start_time={iso_days_ago(1)}&max_results=500",
+        f"https://demo-upstream:8443/2/tweets/search/recent?query=catchplate&start_time={iso_days_ago(1)}&max_results=500",
     )
     assert_denied(request_decision(search_route, huge_page, "search.read"), "query_numeric_max_exceeded")
 
@@ -8375,7 +8375,7 @@ def main() -> None:
         non_finite_query = flow(
             "GET",
             "https://demo-upstream:8443/2/tweets/search/recent"
-            f"?query=serverware&start_time={iso_days_ago(1)}&max_results={non_finite}",
+            f"?query=catchplate&start_time={iso_days_ago(1)}&max_results={non_finite}",
         )
         assert_denied(
             request_decision(search_route, non_finite_query, "search.read"),
@@ -8384,7 +8384,7 @@ def main() -> None:
         non_finite_date_query = flow(
             "GET",
             "https://demo-upstream:8443/2/tweets/search/recent"
-            f"?query=serverware&start_time={non_finite}&max_results=10",
+            f"?query=catchplate&start_time={non_finite}&max_results=10",
         )
         assert_denied(
             request_decision(search_route, non_finite_date_query, "search.read"),
@@ -8393,7 +8393,7 @@ def main() -> None:
 
     old_response = flow(
         "GET",
-        "https://demo-upstream:8443/2/tweets/search/recent?query=serverware",
+        "https://demo-upstream:8443/2/tweets/search/recent?query=catchplate",
         response={"data": [{"id": "1", "text": "old", "created_at": iso_days_ago(10)}]},
     )
     assert_denied(evaluate_response_constraints(old_response, search_route), "response_date_window_exceeded")
@@ -8406,7 +8406,7 @@ def main() -> None:
     ):
         invalid_date_response = flow(
             "GET",
-            "https://demo-upstream:8443/2/tweets/search/recent?query=serverware",
+            "https://demo-upstream:8443/2/tweets/search/recent?query=catchplate",
             response={"data": []},
         )
         invalid_date_response.response.raw_content = invalid_date_body
@@ -8416,7 +8416,7 @@ def main() -> None:
         )
     empty_response = flow(
         "GET",
-        "https://demo-upstream:8443/2/tweets/search/recent?query=serverware",
+        "https://demo-upstream:8443/2/tweets/search/recent?query=catchplate",
         response={"data": []},
     )
     assert evaluate_response_constraints(empty_response, search_route).allowed
@@ -8427,7 +8427,7 @@ def main() -> None:
         "https://demo-upstream:8443/gmail/v1/users/me/messages",
         response={"messages": [{"id": "msg-old", "internalDate": str(epoch_ms_days_ago(45))}]},
     )
-    gmail_old_list.metadata["serverware_operation"] = {"operation": "gmail.messages.list"}
+    gmail_old_list.metadata["catchplate_operation"] = {"operation": "gmail.messages.list"}
     assert_denied(evaluate_response_constraints(gmail_old_list, gmail_route), "response_date_window_exceeded")
 
     gmail_detail = flow(
@@ -8436,7 +8436,7 @@ def main() -> None:
         response={"id": "recent-message-1", "internalDate": str(epoch_ms_days_ago(1))},
     )
     assert_denied(evaluate_response_constraints(gmail_detail, gmail_route), "response_operation_context_missing")
-    gmail_detail.metadata["serverware_operation"] = {"operation": "gmail.message.get"}
+    gmail_detail.metadata["catchplate_operation"] = {"operation": "gmail.message.get"}
     assert evaluate_response_constraints(gmail_detail, gmail_route).allowed
 
     gmail_adapter = get_adapter(gmail_route.adapter_type)
@@ -8620,7 +8620,7 @@ def main() -> None:
         },
     )
     gmail_error.response.status_code = 429
-    gmail_error.metadata["serverware_operation"] = {
+    gmail_error.metadata["catchplate_operation"] = {
         "operation": "gmail.message.get"
     }
     assert _evaluate_response_envelope(gmail_error, gmail_route).allowed
@@ -8652,7 +8652,7 @@ def main() -> None:
         response={"error": {"code": 418, "message": "not admitted"}},
     )
     unlisted_gmail_error.response.status_code = 418
-    unlisted_gmail_error.metadata["serverware_operation"] = {
+    unlisted_gmail_error.metadata["catchplate_operation"] = {
         "operation": "gmail.message.get"
     }
     assert_denied(
@@ -8679,7 +8679,7 @@ def main() -> None:
         + b"x" * 65_536
         + b'"}}'
     )
-    oversized_gmail_error.metadata["serverware_operation"] = {
+    oversized_gmail_error.metadata["catchplate_operation"] = {
         "operation": "gmail.message.get"
     }
     assert _evaluate_response_envelope(
@@ -8702,7 +8702,7 @@ def main() -> None:
     )
     bodyless_gmail_error.response.status_code = 429
     bodyless_gmail_error.response.raw_content = b""
-    bodyless_gmail_error.metadata["serverware_operation"] = {
+    bodyless_gmail_error.metadata["catchplate_operation"] = {
         "operation": "gmail.message.get"
     }
     assert_denied(
@@ -8728,7 +8728,7 @@ def main() -> None:
         response={"error": "denied", "reason": "policy", "internal": "must not release"},
     )
     npm_error.response.status_code = 403
-    npm_error.metadata["serverware_operation"] = {"operation": "npm.publish"}
+    npm_error.metadata["catchplate_operation"] = {"operation": "npm.publish"}
     npm_adapter = get_adapter(route(demo, "demo.npm.publish.jit").adapter_type)
     npm_demo_route = route(demo, "demo.npm.publish.jit")
     npm_public_route = route(public_npm_snapshot, "demo.npm.publish.jit")
@@ -8746,7 +8746,7 @@ def main() -> None:
             response=payload,
         )
         receipt.response.status_code = status_code
-        receipt.metadata["serverware_operation"] = {
+        receipt.metadata["catchplate_operation"] = {
             "operation": "npm.publish",
             "packageName": "@scope/example",
             "packageVersion": "1.2.3",
@@ -8905,7 +8905,7 @@ def main() -> None:
             "published": True,
         },
     )
-    npm_demo_success.metadata["serverware_operation"] = npm_demo_fields
+    npm_demo_success.metadata["catchplate_operation"] = npm_demo_fields
     assert evaluate_response_constraints(npm_demo_success, npm_demo_route).allowed
     npm_demo_wrong_version = copy.deepcopy(npm_demo_success)
     npm_demo_wrong_version.response.raw_content = json.dumps(
@@ -8925,7 +8925,7 @@ def main() -> None:
         response={"error": "must-not-release"},
     )
     npm_wrong_error_media_type.response.status_code = 403
-    npm_wrong_error_media_type.metadata["serverware_operation"] = {
+    npm_wrong_error_media_type.metadata["catchplate_operation"] = {
         "operation": "npm.publish"
     }
     npm_wrong_error_media_type.response.headers["content-type"] = "text/plain"
@@ -8966,7 +8966,7 @@ def main() -> None:
         response={"error": "invalid"},
     )
     npm_invalid_error.response.status_code = 500
-    npm_invalid_error.metadata["serverware_operation"] = {
+    npm_invalid_error.metadata["catchplate_operation"] = {
         "operation": "npm.publish"
     }
     npm_invalid_error.response.raw_content = b"not-json"
@@ -8980,7 +8980,7 @@ def main() -> None:
         "https://demo-upstream:8443/gmail/v1/users/me/messages",
         response={"messages": [{"id": "seconds", "internalDate": int(datetime.now(timezone.utc).timestamp())}]},
     )
-    wrong_epoch_format.metadata["serverware_operation"] = {"operation": "gmail.messages.list"}
+    wrong_epoch_format.metadata["catchplate_operation"] = {"operation": "gmail.messages.list"}
     assert_denied(evaluate_response_constraints(wrong_epoch_format, gmail_route), "response_date_field_invalid")
 
     if evaluate_response is not None:
@@ -8990,7 +8990,7 @@ def main() -> None:
             response={"secret": "must not escape"},
         )
         assert_denied(evaluate_response(missing_response_context), "response_policy_context_missing")
-        missing_response_context.metadata["serverware_blocked_response"] = True
+        missing_response_context.metadata["catchplate_blocked_response"] = True
         assert evaluate_response(missing_response_context).allowed
 
         guard_route = SimpleNamespace(
@@ -9011,13 +9011,13 @@ def main() -> None:
             guarded = flow("GET", "https://demo-upstream:8443/guarded", response=payload)
             guarded.metadata.update(
                 {
-                    "serverware_route": guard_route,
-                    "serverware_route_id": guard_route.id,
-                    "serverware_params": {},
-                    "serverware_principal_id": "agent:demo",
-                    "serverware_credential_id": guard_route.credential_ref,
-                    "serverware_credential_version": 1,
-                    "serverware_policy_hash": demo.hash,
+                    "catchplate_route": guard_route,
+                    "catchplate_route_id": guard_route.id,
+                    "catchplate_params": {},
+                    "catchplate_principal_id": "agent:demo",
+                    "catchplate_credential_id": guard_route.credential_ref,
+                    "catchplate_credential_version": 1,
+                    "catchplate_policy_hash": demo.hash,
                 }
             )
             _inject_credential(
@@ -9077,17 +9077,17 @@ def main() -> None:
                     encoded_response.response.headers = response_headers
                     encoded_response.metadata.update(
                         {
-                            "serverware_route": SimpleNamespace(
+                            "catchplate_route": SimpleNamespace(
                                 id=f"encoding.{adapter_type}.{status_code}",
                                 adapter_type=adapter_type,
                                 adapter_config={},
                                 constraints=[],
                                 credential_ref=None,
                             ),
-                            "serverware_route_id": (
+                            "catchplate_route_id": (
                                 f"encoding.{adapter_type}.{status_code}"
                             ),
-                            "serverware_params": {},
+                            "catchplate_params": {},
                         }
                     )
                     original_encoded_body = (
@@ -9110,7 +9110,7 @@ def main() -> None:
         original_log_request = runtime.log_request
         runtime.log_request = lambda *args, **kwargs: audit_calls.append((args, kwargs))
         try:
-            from serverware import mitm_addon
+            from catchplate import mitm_addon
 
             lifecycle_order: list[str] = []
             lifecycle_response = guarded_response(
@@ -9119,16 +9119,16 @@ def main() -> None:
             )
             lifecycle_response.metadata.update(
                 {
-                    "serverware_release_authorization": {
+                    "catchplate_release_authorization": {
                         "attempt_id": "attempt:response-completion",
                         "flow_id": "attempt:response-completion",
                         "binding_digest": "sha256:" + "7" * 64,
                         "state": "dispatching",
                         "dispatch_attempted": True,
                     },
-                    "serverware_release_attempt_id": "attempt:response-completion",
-                    "serverware_release_binding_digest": "sha256:" + "7" * 64,
-                    "serverware_release_state": "dispatching",
+                    "catchplate_release_attempt_id": "attempt:response-completion",
+                    "catchplate_release_binding_digest": "sha256:" + "7" * 64,
+                    "catchplate_release_state": "dispatching",
                 }
             )
             original_complete_release = runtime.complete_release_authorization
@@ -9158,7 +9158,7 @@ def main() -> None:
             )
             mitm_addon.evaluate_response = observe_response_policy
             try:
-                ServerwareAddon().response(lifecycle_response)
+                CatchplateAddon().response(lifecycle_response)
             finally:
                 mitm_addon.evaluate_response = original_addon_evaluate_response
                 runtime.validate_complete_release_authorization_response = (
@@ -9166,7 +9166,7 @@ def main() -> None:
                 )
                 runtime.complete_release_authorization = original_complete_release
             assert lifecycle_order == ["response_policy", "complete:forwarded"], lifecycle_order
-            assert lifecycle_response.metadata["serverware_release_state"] == "committed"
+            assert lifecycle_response.metadata["catchplate_release_state"] == "committed"
             lifecycle_actions = [call[0][3] for call in audit_calls]
             assert lifecycle_actions[-2:] == [
                 "response_validated",
@@ -9221,9 +9221,9 @@ def main() -> None:
                 }
                 item.metadata.update(
                     {
-                        "serverware_durable_policy_claims": [],
-                        "serverware_durable_policy_reservation": reservation,
-                        "serverware_release_authorization": {
+                        "catchplate_durable_policy_claims": [],
+                        "catchplate_durable_policy_reservation": reservation,
+                        "catchplate_release_authorization": {
                             "state": "dispatching",
                             "dispatch_expires_at_epoch_ms": (
                                 dispatch_deadline
@@ -9262,7 +9262,7 @@ def main() -> None:
                 assert evaluate_response(durable_success_flow).allowed
                 assert durable_order == ["finalizer"]
                 staged_success = durable_success_flow.metadata[
-                    "serverware_durable_policy_completion"
+                    "catchplate_durable_policy_completion"
                 ]
                 assert staged_success["outcome"] == "forwarded"
                 assert staged_success["response_body_sha256"] == (
@@ -9272,7 +9272,7 @@ def main() -> None:
                     ).hexdigest()
                 )
                 durable_success_flow.metadata[
-                    "serverware_durable_policy_reservation"
+                    "catchplate_durable_policy_reservation"
                 ]["state"] = "committed"
                 assert policy_engine.validate_response_completion(
                     durable_success_flow
@@ -9285,7 +9285,7 @@ def main() -> None:
                 )
                 assert evaluate_response(indeterminate_flow).allowed
                 indeterminate_flow.metadata[
-                    "serverware_durable_policy_reservation"
+                    "catchplate_durable_policy_reservation"
                 ]["state"] = "indeterminate"
                 indeterminate_decision = (
                     policy_engine.validate_response_completion(
@@ -9323,7 +9323,7 @@ def main() -> None:
                 assert durable_order == ["finalizer"]
                 assert (
                     reflected_durable_flow.metadata[
-                        "serverware_durable_policy_completion"
+                        "catchplate_durable_policy_completion"
                     ]["outcome"]
                     == "unknown"
                 )
@@ -9349,7 +9349,7 @@ def main() -> None:
                 assert durable_order == ["finalizer"]
                 assert (
                     finalizer_denial_flow.metadata[
-                        "serverware_durable_policy_completion"
+                        "catchplate_durable_policy_completion"
                     ]["outcome"]
                     == "unknown"
                 )
@@ -9373,13 +9373,13 @@ def main() -> None:
                 )
                 assert evaluate_response(staged_body_flow).allowed
                 staged_body_digest = staged_body_flow.metadata[
-                    "serverware_durable_policy_completion"
+                    "catchplate_durable_policy_completion"
                 ]["response_body_sha256"]
                 assert staged_body_digest == (
                     "sha256:" + hashlib.sha256(b'{"ok":false}').hexdigest()
                 )
                 staged_body_flow.metadata[
-                    "serverware_durable_policy_reservation"
+                    "catchplate_durable_policy_reservation"
                 ]["state"] = "committed"
                 staged_body_flow.response.raw_content = b'{"ok":"changed"}'
                 assert_denied(
@@ -9416,7 +9416,7 @@ def main() -> None:
                 assert durable_order == []
                 assert (
                     prepare_denial_flow.metadata[
-                        "serverware_durable_policy_completion"
+                        "catchplate_durable_policy_completion"
                     ]["outcome"]
                     == "unknown"
                 )
@@ -9445,7 +9445,7 @@ def main() -> None:
                 assert durable_order == []
                 assert (
                     evaluator_failure_flow.metadata[
-                        "serverware_durable_policy_completion"
+                        "catchplate_durable_policy_completion"
                     ]["outcome"]
                     == "unknown"
                 )
@@ -9467,7 +9467,7 @@ def main() -> None:
                     "durable-release-cleanup-secret"
                 )
                 release_cleanup_flow.metadata[
-                    "serverware_release_authorization"
+                    "catchplate_release_authorization"
                 ] = {
                     "attempt_id": "attempt:durable-order",
                     "binding_digest": "sha256:" + "7" * 64,
@@ -9475,7 +9475,7 @@ def main() -> None:
                     "dispatch_attempted": True,
                     "durable_policy": copy.deepcopy(
                         release_cleanup_flow.metadata[
-                            "serverware_durable_policy_reservation"
+                            "catchplate_durable_policy_reservation"
                         ]
                     ),
                 }
@@ -9496,13 +9496,13 @@ def main() -> None:
                 assert durable_order == []
                 assert (
                     release_cleanup_flow.metadata[
-                        "serverware_durable_policy_reservation"
+                        "catchplate_durable_policy_reservation"
                     ]["state"]
                     == "dispatched"
                 )
                 assert (
                     release_cleanup_flow.metadata[
-                        "serverware_durable_policy_completion"
+                        "catchplate_durable_policy_completion"
                     ]["outcome"]
                     == "unknown"
                 )
@@ -9523,7 +9523,7 @@ def main() -> None:
                     "durable-combined-cleanup-secret"
                 )
                 combined_cleanup_flow.metadata[
-                    "serverware_release_authorization"
+                    "catchplate_release_authorization"
                 ] = {
                     "attempt_id": "attempt:durable-order",
                     "binding_digest": "sha256:" + "7" * 64,
@@ -9531,7 +9531,7 @@ def main() -> None:
                     "dispatch_attempted": True,
                     "durable_policy": copy.deepcopy(
                         combined_cleanup_flow.metadata[
-                            "serverware_durable_policy_reservation"
+                            "catchplate_durable_policy_reservation"
                         ]
                     ),
                 }
@@ -9570,11 +9570,11 @@ def main() -> None:
                 RuntimeError("forced response evaluator failure")
             )
             try:
-                ServerwareAddon().response(evaluator_failure)
+                CatchplateAddon().response(evaluator_failure)
             finally:
                 mitm_addon.evaluate_response = original_addon_evaluate_response
             assert evaluator_failure.response is not original_evaluator_response
-            assert evaluator_failure.metadata["serverware_blocked_response"] is True
+            assert evaluator_failure.metadata["catchplate_blocked_response"] is True
             assert evaluator_failure.response.status_code == 503
             assert json.loads(evaluator_failure.response.get_text()) == {
                 "error": "response_hook_failed_closed"
@@ -9587,11 +9587,11 @@ def main() -> None:
             assert_denied(reflected_decision, "response_credential_reflection")
             assert reflected_decision.reason == "response credential reflection denied"
             assert escaped_secret not in repr(audit_calls)
-            assert not hasattr(reflected, "_serverware_response_credential_guard")
+            assert not hasattr(reflected, "_catchplate_response_credential_guard")
 
             addon_secret = "prototype-addon-reflection-83e1"
             addon_reflection = guarded_response(addon_secret, {"echo": addon_secret})
-            ServerwareAddon().response(addon_reflection)
+            CatchplateAddon().response(addon_reflection)
             assert addon_reflection.response.status_code == 502
             addon_payload = json.loads(addon_reflection.response.get_text())
             assert addon_payload == {"error": "response_credential_reflection"}, addon_payload
@@ -9650,16 +9650,16 @@ def main() -> None:
                 exact_secret,
                 {"safe": "released", "provider_status": "corrupt"},
             )
-            malformed_hidden.metadata["serverware_route"] = redacted_route
-            malformed_hidden.metadata["serverware_route_id"] = redacted_route.id
+            malformed_hidden.metadata["catchplate_route"] = redacted_route
+            malformed_hidden.metadata["catchplate_route_id"] = redacted_route.id
             assert_denied(evaluate_response(malformed_hidden), "response_json_field_enum_denied")
 
             redacted = guarded_response(
                 exact_secret,
                 {"safe": "released", "leak": exact_secret, "provider_status": "ok"},
             )
-            redacted.metadata["serverware_route"] = redacted_route
-            redacted.metadata["serverware_route_id"] = redacted_route.id
+            redacted.metadata["catchplate_route"] = redacted_route
+            redacted.metadata["catchplate_route_id"] = redacted_route.id
             assert evaluate_response(redacted).allowed
             assert exact_secret.encode("utf-8") not in redacted.response.raw_content
             assert json.loads(redacted.response.raw_content) == {"safe": "released"}
@@ -9845,13 +9845,13 @@ def source_only_policy_model_fixtures(validate_schema: bool) -> None:
     )
     mtls_flow = flow("GET", "https://example.test/")
     mtls_flow.client_conn.peername = ("10.1.2.3", 443)
-    mtls_flow.client_conn.serverware_mtls_verified = True
-    mtls_flow.client_conn.serverware_mtls_evidence = {
+    mtls_flow.client_conn.catchplate_mtls_verified = True
+    mtls_flow.client_conn.catchplate_mtls_evidence = {
         "san_spiffe_ids": [
             "spiffe://agents.example.test/agent/example"
         ],
         "san_dns_names": ["example-agent.agents.example.test"],
-        "san_uris": ["urn:serverware:agent:example"],
+        "san_uris": ["urn:catchplate:agent:example"],
         "certificate_sha256": (
             "sha256:"
             "c2a5140ef6d8a3bc5472798f00b4bd22d33826d0a7d17724e68a4bb86b87c21f"
@@ -9870,17 +9870,17 @@ def source_only_policy_model_fixtures(validate_schema: bool) -> None:
     assert (
         mtls_snapshot.identify_principal(
             "10.1.2.3",
-            RawHeaders([("X-Serverware-Agent", "example-agent-mtls")]),
+            RawHeaders([("X-Catchplate-Agent", "example-agent-mtls")]),
             verified_mtls,
         ).id
         == "agent:example-mtls"
     )
-    mismatched_mtls = dict(mtls_flow.client_conn.serverware_mtls_evidence)
+    mismatched_mtls = dict(mtls_flow.client_conn.catchplate_mtls_evidence)
     mismatched_mtls["spki_sha256"] = "sha256:" + "0" * 64
-    mtls_flow.client_conn.serverware_mtls_evidence = mismatched_mtls
+    mtls_flow.client_conn.catchplate_mtls_evidence = mismatched_mtls
     assert mtls_snapshot.identify_principal(
         "10.1.2.3",
-        RawHeaders([("X-Serverware-Agent", "example-agent-mtls")]),
+        RawHeaders([("X-Catchplate-Agent", "example-agent-mtls")]),
         _verified_mtls_evidence(mtls_flow),
     ) is None
     contradictory_mtls = dict(mismatched_mtls)
@@ -9888,7 +9888,7 @@ def source_only_policy_model_fixtures(validate_schema: bool) -> None:
         "spiffe://agents.example.test/agent/example",
         "spiffe://agents.example.test/agent/example",
     ]
-    mtls_flow.client_conn.serverware_mtls_evidence = contradictory_mtls
+    mtls_flow.client_conn.catchplate_mtls_evidence = contradictory_mtls
     assert _verified_mtls_evidence(mtls_flow) is None
 
     contradictory_alias_decision = _credential_policy_binding_decision(
@@ -10104,7 +10104,7 @@ def source_only_policy_model_fixtures(validate_schema: bool) -> None:
     )
 
     duplicate_header_flow = flow("GET", "https://example.test/")
-    duplicate_header_flow.metadata["serverware_operation"] = {
+    duplicate_header_flow.metadata["catchplate_operation"] = {
         "operation": "example.read"
     }
     duplicate_header_flow.response = mitm_http.Response.make(
@@ -10159,7 +10159,7 @@ def source_only_policy_model_fixtures(validate_schema: bool) -> None:
         ("Trailer", "x-checksum"),
     ):
         duplicate_transport_flow = flow("GET", "https://example.test/")
-        duplicate_transport_flow.metadata["serverware_operation"] = {
+        duplicate_transport_flow.metadata["catchplate_operation"] = {
             "operation": "example.read"
         }
         duplicate_transport_flow.response = mitm_http.Response.make(

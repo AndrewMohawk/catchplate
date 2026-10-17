@@ -24,9 +24,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_persistence as persistence
-from serverware import authority_revocation_writer_configuration as mapper
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_persistence as persistence
+from catchplate import authority_revocation_writer_configuration as mapper
 import test_authority_revocation_capability_producer as key_oracle
 import test_authority_revocation_configuration as configuration_oracle
 import test_authority_revocation_plan as oracle
@@ -37,7 +37,7 @@ IDENTITY_FIELDS = ("sessionIdentityDigest", "measurementDigest", "attestationRec
 DATABASE_FIELDS = ("databaseRole", "tlsClientDn", "tlsClientSerial", "tlsIssuerDn")
 WRITER_ALIASES = ("plannerSessionIdentityDigest", "plannerSigningSpkiDigest", "plannerSigningPublicKeyBase64Url")
 PLANNER_ALIASES = ("plannerSessionIdentityDigest", "signingSpkiDigest", "signingPublicKeyBase64Url")
-WRITER_ROLE = "serverware_policy_authority_planner_writer"
+WRITER_ROLE = "catchplate_policy_authority_planner_writer"
 
 
 class WriterConfigurationFixture:
@@ -224,7 +224,7 @@ class RevocationWriterConfigurationTests(unittest.TestCase):
     def test_writer_tls_role_and_descriptor_are_bounded_before_any_key_callback(self):
         for field in DATABASE_FIELDS:
             values = (None, False, "", "bad\x00value", "\ud800", "x" * 4097, "\u00e9" * 2049)
-            if field == "databaseRole": values += ("serverware_policy_authority_planner",)
+            if field == "databaseRole": values += ("catchplate_policy_authority_planner",)
             for value in values:
                 fixture = WriterConfigurationFixture()
                 fixture.payload["roles"]["planner-writer"][field] = value

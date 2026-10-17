@@ -34,14 +34,14 @@ that have no kernels in the policy, quota, or release registries:
 - `webauthn.trust.installation.admit`
 
 The original four have reserved legacy argument/evidence sets in
-`serverware/authority_transition_policy.py`; successor adapters and the two
+`catchplate/authority_transition_policy.py`; successor adapters and the two
 admission operations have their own closed sets described in
 [successor transitions](webauthn-successor-transitions.md). At `.83`, no complete configured
 implementations were registered. The two new admission operations also needed
 genuine callable database handlers before the controlled-writer dispatcher can
 install their boundaries; no placeholder handlers have been added.
 An unregistered explicit self-revocation candidate now exists in
-`serverware/authority_transition_webauthn.py`; its deliberately limited source
+`catchplate/authority_transition_webauthn.py`; its deliberately limited source
 boundary and outstanding activation requirements are documented in
 [webauthn-revocation-candidate.md](webauthn-revocation-candidate.md). It is not a
 repair of the legacy aggregate endpoint or any of the other three operations.
@@ -335,15 +335,15 @@ transaction composition requires an explicit contract design and review.
 
 Exact implementation references:
 
-- `serverware/authority_contract.py`: six operation declarations; proof
+- `catchplate/authority_contract.py`: six operation declarations; proof
   primitives, evidence types, relation permissions, and bounds are authoritative.
-- `serverware/authority_transition_policy.py`:
+- `catchplate/authority_transition_policy.py`:
   `_WEBAUTHN_TRUST_STAGE_FIELDS`, `_WEBAUTHN_TRUST_COMPLETE_FIELDS`,
   `_WEBAUTHN_TRUST_VERIFICATION_FIELDS`,
   `_WEBAUTHN_REGISTRATION_FINALIZE_FIELDS`,
   `_WEBAUTHN_REGISTRATION_VERIFICATION_FIELDS`, `_WEBAUTHN_REVOKE_FIELDS`,
   `_WEBAUTHN_EXACT_CASCADE_MAX`, and `_KERNEL_VALUES`.
-- `serverware/db.py`: `stage_webauthn_trust_publication`,
+- `catchplate/db.py`: `stage_webauthn_trust_publication`,
   `complete_webauthn_trust_publication`, `finalize_webauthn_registration`,
   `revoke_webauthn_credential`, and
   `_invalidate_live_webauthn_registration_challenges` document legacy behavior.
@@ -465,9 +465,9 @@ Source review identified additional prerequisites below the missing kernels.
 These are separate from provisioning the production services:
 
 - Business-row identity and authenticated-tree addressing use different digest
-  domains. `db.py`'s `serverware_policy_authority_authenticated_apply` stores
-  leaves under `serverware.policyAuthorityAuthenticatedKey/v1`; transport and
-  mutation plans identify rows with `serverware.policyAuthorityBusinessKey/v1`.
+  domains. `db.py`'s `catchplate_policy_authority_authenticated_apply` stores
+  leaves under `catchplate.policyAuthorityAuthenticatedKey/v1`; transport and
+  mutation plans identify rows with `catchplate.policyAuthorityBusinessKey/v1`.
   Proof production and reconstruction must derive the former from the exact
   table/key while preserving the latter in the closed transport schema. They
   cannot use the business digest as a database leaf lookup or radix path.

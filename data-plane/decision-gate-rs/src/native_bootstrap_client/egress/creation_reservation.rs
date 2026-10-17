@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 const MAGIC: &[u8; 8] = b"SWNEGCR1";
-const SLOT_DOMAIN: &[u8] = b"serverware.nativeEgressCreationSlot/v1\0";
+const SLOT_DOMAIN: &[u8] = b"catchplate.nativeEgressCreationSlot/v1\0";
 const RECORD_BYTES: usize = 73;
 const MAX_RECORDS: usize = 64;
 

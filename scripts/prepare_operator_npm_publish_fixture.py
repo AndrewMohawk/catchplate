@@ -19,12 +19,12 @@ FIXTURE = "scripts/operator_npm_publish_fixture.py"
 
 
 def build(source, binary, initializer, root, node, npm, *, expected_binary_sha256):
-    require(root.parent == base.SCRATCH and re.fullmatch(r"serverware-npm-publish-private\.[A-Za-z0-9]{6,32}", root.name),
+    require(root.parent == base.SCRATCH and re.fullmatch(r"catchplate-npm-publish-private\.[A-Za-z0-9]{6,32}", root.name),
         "fresh private npm publish root required")
-    old_root = root.with_name("serverware-npm-metadata-private." + root.name.split(".", 1)[1])
+    old_root = root.with_name("catchplate-npm-metadata-private." + root.name.split(".", 1)[1])
     config = metadata.build(source, binary, initializer, old_root, node, npm,
         expected_binary_sha256=expected_binary_sha256)
-    config["name"] = "serverware-npm-publish-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
+    config["name"] = "catchplate-npm-publish-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
     for service in config["services"].values():
         for mount in service["volumes"]:
             path = Path(mount["source"])
@@ -59,14 +59,14 @@ def prepare(args):
             and digest(path) == expected and path.stat().st_mode & 4, "pinned executable differs or unreadable")
     manifest = basic.pinned_json(args.npm_manifest, args.expected_npm_manifest_sha256)
     observed = basic.inventory(args.npm_root, limit=4096, byte_limit=64 * 1024**2)
-    require(len(observed) == 1782 and manifest == {"schema": "serverware.privateNpmMetadataDependencies/v1",
+    require(len(observed) == 1782 and manifest == {"schema": "catchplate.privateNpmMetadataDependencies/v1",
         "packages": metadata.PACKAGES, "files": observed}, "externally pinned full npm tree differs")
     for name, version in metadata.PACKAGES.items():
         relative = "package.json" if name == "npm" else "node_modules/" + name + "/package.json"
         package = json.loads((args.npm_root / relative).read_text())
         require(package.get("name") == name and package.get("version") == version, "stock npm dependency identity differs")
     compose = json.dumps(config, indent=2, sort_keys=True) + "\n"
-    receipt = {"schema": "serverware.privateNpmPublishPreparation/v1", "project": config["name"],
+    receipt = {"schema": "catchplate.privateNpmPublishPreparation/v1", "project": config["name"],
         "jobRoot": str(args.job_root), "source": str(args.source), "sourceCommit": args.expected_source_commit,
         "sourceManifestSha256": args.expected_source_manifest_sha256, "sourceSha256": source_files,
         "binary": str(args.binary), "binarySha256": args.expected_binary_sha256,

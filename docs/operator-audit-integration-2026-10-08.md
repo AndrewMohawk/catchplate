@@ -29,11 +29,11 @@ and embedded compile-time inputs. It is not a manifest of the entire checkout.
 The dirty audit additions are included explicitly. Source checks before and
 after the test batch matched; the same manifest was checked again before commit.
 
-- [714-input manifest](../../serverware-operator-audit-evidence/serverware-operator-audit-build.p9RGBK/source.sha256):
+- [714-input manifest](../../catchplate-operator-audit-evidence/catchplate-operator-audit-build.p9RGBK/source.sha256):
   `d25106e1fc21979b6833e89f99f19107fa4a1851d4a8f431aa18bb7d0c92f491`
-- [Exact 39 test names](../../serverware-operator-audit-evidence/serverware-operator-audit-build.p9RGBK/selected-test-names.txt):
+- [Exact 39 test names](../../catchplate-operator-audit-evidence/catchplate-operator-audit-build.p9RGBK/selected-test-names.txt):
   `c2f45d8193f70da9adc305addf0cbfb7f0314a35299f0a1d285d1f563eedcdef`
-- [Test receipt](../../serverware-operator-audit-evidence/serverware-operator-audit-build.p9RGBK/test-receipt.json):
+- [Test receipt](../../catchplate-operator-audit-evidence/catchplate-operator-audit-build.p9RGBK/test-receipt.json):
   `969593791709bfb311e0e471abd039ada8da667a55bd901f37b165c7fda5dfb0`
 
 The batch ran from `2026-10-08T19:22:32Z` to `19:29:56Z`, using Rust 1.92.0,
@@ -60,7 +60,7 @@ release build requires its own evidence and is not implied by this receipt.
 
 ## Python receiver and classification verification
 
-The [isolated receiver evidence directory](../../serverware-operator-audit-evidence/receiver-20261008-5AZVl5/receipt.json)
+The [isolated receiver evidence directory](../../catchplate-operator-audit-evidence/receiver-20261008-5AZVl5/receipt.json)
 retains the receipt, logs, inventory review, before/after manifests and checked
 `SHA256SUMS`. Receipt SHA-256:
 `34214c7de64e6a0339f198c6bd23c9066faa9062bb10267f506ad55bebba8d5c`.

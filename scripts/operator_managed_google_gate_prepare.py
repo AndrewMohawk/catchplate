@@ -23,7 +23,7 @@ ACTOR = "operator-managed-google-gate-fixture"
 WORK = Path("/managed-work")
 CLAIM = WORK / ".managed-google-prepare.claim"
 RESULT = WORK / "prepare-result.json"
-MARKER = {"schema": "serverware.privateOperatorAuditFixture/v1", "syntheticOnly": True}
+MARKER = {"schema": "catchplate.privateOperatorAuditFixture/v1", "syntheticOnly": True}
 _network_attempts = []
 
 
@@ -72,16 +72,16 @@ def _admit():
     require(_read(Path("/private-audit-fixture.json"), mode=0o400, maximum=1024) == MARKER)
     info = WORK.lstat()
     require(stat.S_ISDIR(info.st_mode) and info.st_uid == info.st_gid == 10001 and stat.S_IMODE(info.st_mode) == 0o700)
-    require(os.getenv("SERVERWARE_DATA_DIR") == "/data"
-        and os.getenv("SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR") == "/provider-custody")
-    from serverware import operator_catalog_oauth_profile as profiles
+    require(os.getenv("CATCHPLATE_DATA_DIR") == "/data"
+        and os.getenv("CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR") == "/provider-custody")
+    from catchplate import operator_catalog_oauth_profile as profiles
     require(profiles._raw_development_directory(managed=True) == Path("/data"))
 
 
 def _claim():
     value = _read(CLAIM, mode=0o600, maximum=1024)
     require(type(value) is dict and set(value) == {"schema", "operation_id", "actor_id", "syntheticOnly"}
-        and value["schema"] == "serverware.managedGoogleFixtureClaim/v1"
+        and value["schema"] == "catchplate.managedGoogleFixtureClaim/v1"
         and value["actor_id"] == ACTOR and value["syntheticOnly"] is True
         and type(value["operation_id"]) is str and str(uuid.UUID(value["operation_id"])) == value["operation_id"])
     return value
@@ -89,28 +89,28 @@ def _claim():
 
 def status_only():
     claim = _claim()
-    from serverware import operator_publication as publication, operator_google_setup as setup
+    from catchplate import operator_publication as publication, operator_google_setup as setup
     admission = publication.admit_bootstrap_reader(Path("/data"), operator_development=True,
         release_channel="dev", production_image=False, native_or_enrolled=False)
     with publication.bootstrap_read(admission) as conn:
         result = setup._public(setup._get(conn, claim["operation_id"], ACTOR))
     require(not _network_attempts)
-    return {"ok": True, "schema": "serverware.managedGoogleFixturePrepare/v1", "syntheticOnly": True,
+    return {"ok": True, "schema": "catchplate.managedGoogleFixturePrepare/v1", "syntheticOnly": True,
         "readOnlyRecovery": True, "operation": result, "providerCalls": 0}
 
 
 def prepare():
     require(set(os.listdir(WORK)) == set())
     operation_id = str(uuid.uuid4())
-    _write(CLAIM, {"schema": "serverware.managedGoogleFixtureClaim/v1", "operation_id": operation_id,
+    _write(CLAIM, {"schema": "catchplate.managedGoogleFixtureClaim/v1", "operation_id": operation_id,
         "actor_id": ACTOR, "syntheticOnly": True})
-    from serverware import operator_google_managed_config as managed
+    from catchplate import operator_google_managed_config as managed
     managed.bootstrap()
-    from serverware import operator_demo
+    from catchplate import operator_demo
     operator_demo.activate()
-    from serverware.control_plane_startup import validate_control_plane_startup
+    from catchplate.control_plane_startup import validate_control_plane_startup
     validate_control_plane_startup()
-    from serverware import operator_google_setup as setup, operator_catalog_oauth_profile as profiles
+    from catchplate import operator_google_setup as setup, operator_catalog_oauth_profile as profiles
     require(not profiles.selected())
     review = setup.review_configuration(ACTOR)
     require(review["eligible"] is True and review["expected_revision"] == 1
@@ -122,7 +122,7 @@ def prepare():
     require(result["status"] == "pending" and result["operation_id"] == operation_id
         and result["revision"] == 2 and result["activation_receipt"] is None
         and setup.status(operation_id, ACTOR) == result and not profiles.selected() and not _network_attempts)
-    receipt = {"ok": True, "schema": "serverware.managedGoogleFixturePrepare/v1", "syntheticOnly": True,
+    receipt = {"ok": True, "schema": "catchplate.managedGoogleFixturePrepare/v1", "syntheticOnly": True,
         "readOnlyRecovery": False, "operation": result, "providerCalls": 0}
     _write(RESULT, receipt)
     return receipt

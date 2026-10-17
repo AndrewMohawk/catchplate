@@ -45,7 +45,7 @@ def no_network(event, _arguments):
 
 def binding_functions(bundles):
     from fastapi import HTTPException
-    from serverware.policies import PolicyDecision
+    from catchplate.policies import PolicyDecision
 
     namespace = {"HTTPException": HTTPException, "PolicyDecision": PolicyDecision,
         "normalized_credential_provider": bundles.normalized_credential_provider,
@@ -55,7 +55,7 @@ def binding_functions(bundles):
         ("policy_engine.py", ("_credential_metadata_scopes", "_consistent_metadata_alias",
             "_credential_policy_binding_decision")),
     ):
-        source = ROOT / "serverware" / filename
+        source = ROOT / "catchplate" / filename
         definitions = {node.name: node for node in ast.parse(source.read_text()).body
             if isinstance(node, ast.FunctionDef)}
         module = ast.Module(body=[ast.ImportFrom(module="__future__",
@@ -128,7 +128,7 @@ def catalog_creation():
 
 
 def legacy_creation():
-    from serverware import operator_catalog_schema as schema
+    from catchplate import operator_catalog_schema as schema
     with patch.object(schema, "initialize", return_value=None):
         config, db, store, bundles = workspace.common.backend()
     assert not schema.active()

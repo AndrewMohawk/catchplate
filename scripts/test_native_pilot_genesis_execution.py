@@ -8,9 +8,9 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_genesis_execution_protocol as wire
-from serverware import native_pilot_genesis_jobs as jobs
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_genesis_execution_protocol as wire
+from catchplate import native_pilot_genesis_jobs as jobs
 
 p = g.p
 
@@ -133,7 +133,7 @@ class ProtocolControls(unittest.TestCase):
     def test_native_install_requires_both_exact_predecessors(self):
         role = "publicationGenesis"
         prior = {"native-launch-" + role: {"input": b'{"approved":1}', "result": b'{"bundle":1}'}}
-        value = dict(apiVersion="serverware.nativePilotGenesisLaunchInstallationInput/v1", role=role,
+        value = dict(apiVersion="catchplate.nativePilotGenesisLaunchInstallationInput/v1", role=role,
             launchInputOriginal='{"approved":1}', bundleOriginal='{"bundle":1}')
         wire.native_install(g.canonical(value), role, prior)
         for key in ("launchInputOriginal", "bundleOriginal"):

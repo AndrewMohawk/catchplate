@@ -32,14 +32,14 @@ Required components, with actual separately scoped identities:
 
 - PostgreSQL with separate, correctly restricted metadata/audit runtime and
   authority roles, plus the offline administrative connection. The exact source
-  schema, function and role checks are in the [database installer](../serverware/db.py).
+  schema, function and role checks are in the [database installer](../catchplate/db.py).
   A shared development superuser DSN is not a replacement for those role contracts.
 - The real authority runtime and its verifier, planner, planner-writer, issuer
   and executor, with their admitted configurations, actual measurements,
   credentials, replay protection and required independent audit service.
-  [AuthorityRuntimeClient](../serverware/authority_service.py) consumes protected
-  `SERVERWARE_POLICY_AUTHORITY_RUNTIME_ROOT_PUBLIC_KEY_FD` and
-  `SERVERWARE_POLICY_AUTHORITY_RUNTIME_TRUST_FD`; a JSON success flag is not trust.
+  [AuthorityRuntimeClient](../catchplate/authority_service.py) consumes protected
+  `CATCHPLATE_POLICY_AUTHORITY_RUNTIME_ROOT_PUBLIC_KEY_FD` and
+  `CATCHPLATE_POLICY_AUTHORITY_RUNTIME_TRUST_FD`; a JSON success flag is not trust.
 - Independently supplied signing/trust identities, issuance and attestation
   evidence, TLS pins and audit identity/signer bindings required by that source.
   The production first-policy maintenance ceremony additionally requires
@@ -69,13 +69,13 @@ condition, not permission to invent receipts or enable a fallback.
    [bootstrap entrypoint](../scripts/bootstrap_metadata_store.py) only after its
    required operator configuration is present. It requires the separate
    `metadata-bootstrap` process selection and delegates to
-   `db.init_db(bootstrap_contract_id="serverware.metadataStoreBootstrap/v1")`.
+   `db.init_db(bootstrap_contract_id="catchplate.metadataStoreBootstrap/v1")`.
    It does not provision roles, generate pins or admit authority services.
    Ordinary control-plane startup remains non-DDL and must subsequently verify
    the exact installed contract. A bootstrap failure is not a usable database.
 2. **Prepare genuine demo-policy genesis.** Have the selected authority approve
    the exact signed policy matching
-   [demo_policy_bundle](../serverware/policy_bundle.py) for `cred-demo-bearer`.
+   [demo_policy_bundle](../catchplate/policy_bundle.py) for `cred-demo-bearer`.
    Use the fixed [foreground caller](../scripts/commission_development_policy.py)
    with its four pre-admitted descriptors and the actual `AuthorityRuntimeClient`.
    It sends `policy.genesis.prepare`, retains the actual result, and waits for
@@ -91,9 +91,9 @@ condition, not permission to invent receipts or enable a fallback.
    the fixed [offline installer](../scripts/materialize_development_policy_genesis.py)
    consumes an inherited root-owned read-only/sealed policy FD, its SHA256 and
    the actual genesis preparation/finalization digests. Invoke it with
-   `python -I -B`, root, explicit `SERVERWARE_PROCESS_MODE=metadata-bootstrap`,
+   `python -I -B`, root, explicit `CATCHPLATE_PROCESS_MODE=metadata-bootstrap`,
    a development release and a non-production image. Existing public signing
-   trust and the protected `SERVERWARE_POLICY_FILE_GENESIS_DSN_PATH`/`_SHA256`
+   trust and the protected `CATCHPLATE_POLICY_FILE_GENESIS_DSN_PATH`/`_SHA256`
    configure its separately restricted read-lock connection; admin/executor
    DSNs are forbidden. See `--help` for the closed public argument list.
    It verifies exact signed demo semantics and the genuine finalized chain,
@@ -115,7 +115,7 @@ condition, not permission to invent receipts or enable a fallback.
    before fresh normal startup; never promote maintenance into service.
 4. **Seed demo data once.** After normal startup accepts the installed policy,
    use the existing authenticated `/api/demo/seed` endpoint. Its
-   [admission helper](../serverware/demo_seed_policy.py) requires current committed
+   [admission helper](../catchplate/demo_seed_policy.py) requires current committed
    authority and exact demo semantics before any credential/route write. It
    neither publishes policy nor advances its sequence. A
    `409 demo_policy_commissioning_required` means stop and correct commissioning;

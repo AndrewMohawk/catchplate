@@ -1,8 +1,8 @@
 # External verifier transport entrypoint
 
-`serverware-native-shadow-verifier-transport` is the explicitly selected,
+`catchplate-native-shadow-verifier-transport` is the explicitly selected,
 one-shot external supervisor for the existing [public exchange](native-shadow-verifier-transport.md).
-It is separate from the unchanged `serverware-native-shadow-verifier` FD4/FD5/FD1
+It is separate from the unchanged `catchplate-native-shadow-verifier` FD4/FD5/FD1
 interface. Neither a discovered FD6 nor incoming bytes select this mode.
 The only public Rust entry is process-exiting `run_transport() -> !`; it accepts
 no arguments, arbitrary descriptor, policy path, command or retry operation.

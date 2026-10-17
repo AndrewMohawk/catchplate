@@ -281,7 +281,7 @@ fn absent_release(directory: RawFd) -> PlanResult<()> {
 fn context(scope: &NamespaceWorkerScopeV12) -> PlanResult<()> {
     let deadline = scope.deadline_boottime_ns;
     let root = open_at(scope.target_proc_fd, c"root", true, true, deadline)?;
-    let launch = open_at(root.as_raw_fd(), c"serverware-controller-launch-v12", true, false, deadline)?;
+    let launch = open_at(root.as_raw_fd(), c"catchplate-controller-launch-v12", true, false, deadline)?;
     let directory = stat(launch.as_raw_fd())?;
     let mut mount: libc::statvfs = unsafe { std::mem::zeroed() };
     if directory.st_uid != 0 || directory.st_gid != 0 || directory.st_mode & 0o7777 != 0o555

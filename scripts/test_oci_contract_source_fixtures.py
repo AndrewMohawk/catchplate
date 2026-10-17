@@ -29,11 +29,11 @@ def _load_module(name: str, path: Path) -> Any:
 
 
 OCI = _load_module(
-    "serverware_oci_contract_fixture_target",
+    "catchplate_oci_contract_fixture_target",
     ROOT / "scripts/verify_agent_trust_same_journey.py",
 )
 CLEAN_ROOM = _load_module(
-    "serverware_clean_room_fixture_target",
+    "catchplate_clean_room_fixture_target",
     ROOT / "scripts/test_agent_trust_clean_room.py",
 )
 
@@ -71,7 +71,7 @@ def _wheel_archive(*, dist_info: str = "demo-1.0.dist-info") -> bytes:
         ),
         f"{dist_info}/WHEEL": (
             b"Wheel-Version: 1.0\n"
-            b"Generator: serverware-fixture\n"
+            b"Generator: catchplate-fixture\n"
             b"Root-Is-Purelib: true\n"
             b"Tag: py3-none-any\n\n"
         ),
@@ -192,7 +192,7 @@ class GitEvidenceFixtures(unittest.TestCase):
         verifier = (
             ROOT / "scripts/verify_agent_trust_same_journey.py"
         ).read_text(encoding="ascii")
-        self.assertIn("serverware.gitSourceInventory/v3", verifier)
+        self.assertIn("catchplate.gitSourceInventory/v3", verifier)
         self.assertIn('"indexInventoryRawSha256"', verifier)
         self.assertIn(
             "Git status and signed worktree changes differ",
@@ -205,7 +205,7 @@ class RequirementFixtures(unittest.TestCase):
     def test_versions_normalized_names_markers_and_extras(self) -> None:
         wheels = [
             _wheel(
-                "serverware_enrollment",
+                "catchplate_enrollment",
                 "1.4.0",
                 requires=[
                     'dep-name[fast]~=2.1,!=2.2.0; python_version == "3.11"',
@@ -234,7 +234,7 @@ class RequirementFixtures(unittest.TestCase):
 
     def test_unsatisfied_specifier_is_denied(self) -> None:
         wheels = [
-            _wheel("serverware-enrollment", "1", requires=["dep>=999"]),
+            _wheel("catchplate-enrollment", "1", requires=["dep>=999"]),
             _wheel("dep", "1"),
         ]
         with self.assertRaises(CLEAN_ROOM.ValidationError):
@@ -243,7 +243,7 @@ class RequirementFixtures(unittest.TestCase):
     def test_unselected_extra_is_denied(self) -> None:
         wheels = [
             _wheel(
-                "serverware-enrollment",
+                "catchplate-enrollment",
                 "1",
                 requires=["dep[fast]==1"],
             ),
@@ -259,7 +259,7 @@ class RequirementFixtures(unittest.TestCase):
         ):
             wheels = [
                 _wheel(
-                    "serverware-enrollment",
+                    "catchplate-enrollment",
                     "1",
                     requires=[requirement],
                 ),
@@ -270,7 +270,7 @@ class RequirementFixtures(unittest.TestCase):
 
     def test_duplicate_normalized_package_name_is_denied(self) -> None:
         wheels = [
-            _wheel("serverware-enrollment", "1"),
+            _wheel("catchplate-enrollment", "1"),
             _wheel("Dep_Name", "1"),
             _wheel("dep-name", "1"),
         ]
@@ -278,13 +278,13 @@ class RequirementFixtures(unittest.TestCase):
             CLEAN_ROOM._resolve_requirements(wheels, {})
 
     def test_noncanonical_selected_version_is_denied(self) -> None:
-        wheels = [_wheel("serverware-enrollment", "v1.0")]
+        wheels = [_wheel("catchplate-enrollment", "v1.0")]
         with self.assertRaises(CLEAN_ROOM.ValidationError):
             CLEAN_ROOM._resolve_requirements(wheels, {})
 
     def test_unreachable_dependency_cycle_is_denied(self) -> None:
         wheels = [
-            _wheel("serverware-enrollment", "1"),
+            _wheel("catchplate-enrollment", "1"),
             _wheel("cycle-a", "1", requires=["cycle-b==1"]),
             _wheel("cycle-b", "1", requires=["cycle-a==1"]),
         ]
@@ -354,7 +354,7 @@ class SourceContractFixtures(unittest.TestCase):
             return (
                 {
                     (
-                        "/opt/serverware/clean-room/wheelhouse/"
+                        "/opt/catchplate/clean-room/wheelhouse/"
                         "demo-1.0-py3-none-any.whl"
                     ): raw,
                 },
@@ -447,10 +447,10 @@ class SourceContractFixtures(unittest.TestCase):
             ROOT / "scripts/trusted_consolidated_launcher.py"
         ).read_text(encoding="ascii")
         for token in (
-            "serverware.ociDependencyBundle/v5",
-            "serverware.dependencyCapabilityAttestation/v1",
-            "serverware.dependencyCapabilityCatalog/v2",
-            "serverware.executableArgvPolicy/v1",
+            "catchplate.ociDependencyBundle/v5",
+            "catchplate.dependencyCapabilityAttestation/v1",
+            "catchplate.dependencyCapabilityCatalog/v2",
+            "catchplate.executableArgvPolicy/v1",
             '"pkg:pypi/packaging@25.0"',
         ):
             self.assertIn(token, verifier)
@@ -486,7 +486,7 @@ class SourceContractFixtures(unittest.TestCase):
 
     def test_fixture_inventory_is_canonical_json(self) -> None:
         fixture = {
-            "apiVersion": "serverware.ociHostileSourceFixtures/v1",
+            "apiVersion": "catchplate.ociHostileSourceFixtures/v1",
             "cases": [
                 "direct-url-denied",
                 "duplicate-normalized-name-denied",

@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import authority_local_rbac_bootstrap as local
+from catchplate import authority_local_rbac_bootstrap as local
 
 STAMP = 1_700_000_000_123_456_000
 
@@ -24,8 +24,8 @@ class LocalRbacBootstrapControls(unittest.TestCase):
         self.enterContext(patch.object(local.config, "PRODUCTION_IMAGE", False))
         self.release = self.enterContext(patch.object(local.config, "_production_release", return_value=False))
         self.clock = self.enterContext(patch.object(local.time, "time_ns", return_value=STAMP + 500_000_000))
-        self.enterContext(patch.dict(os.environ, {"SERVERWARE_PROCESS_MODE": "metadata-bootstrap",
-            "SERVERWARE_RELEASE_CHANNEL": "dev", "SERVERWARE_PRODUCTION_IMAGE": "0"}))
+        self.enterContext(patch.dict(os.environ, {"CATCHPLATE_PROCESS_MODE": "metadata-bootstrap",
+            "CATCHPLATE_RELEASE_CHANNEL": "dev", "CATCHPLATE_PRODUCTION_IMAGE": "0"}))
 
     def test_exact_utc_microseconds_without_selection_rewrite(self):
         value = selection(); original = copy.deepcopy(value)
@@ -72,11 +72,11 @@ class LocalRbacBootstrapControls(unittest.TestCase):
         self.release.return_value = True
         with self.assertRaises(ValueError): local.selected_timestamp(selection())
         self.release.return_value = False
-        for field, value in (("SERVERWARE_PRODUCTION_IMAGE", "1"), ("SERVERWARE_RELEASE_CHANNEL", "production")):
+        for field, value in (("CATCHPLATE_PRODUCTION_IMAGE", "1"), ("CATCHPLATE_RELEASE_CHANNEL", "production")):
             with patch.dict(os.environ, {field: value}), self.subTest(field=field):
                 with self.assertRaises(ValueError): local.selected_timestamp(selection())
-        for mode in ("", "serverware-control-plane", "policy-authority-runtime", "unknown"):
-            with patch.dict(os.environ, {"SERVERWARE_PROCESS_MODE": mode}), self.subTest(mode=mode):
+        for mode in ("", "catchplate-control-plane", "policy-authority-runtime", "unknown"):
+            with patch.dict(os.environ, {"CATCHPLATE_PROCESS_MODE": mode}), self.subTest(mode=mode):
                 with self.assertRaises(ValueError): local.selected_timestamp(selection())
         with patch.dict(os.environ, {}, clear=True), self.assertRaises(ValueError):
             local.selected_timestamp(selection())
@@ -84,7 +84,7 @@ class LocalRbacBootstrapControls(unittest.TestCase):
     def test_source_hooks_keep_default_flow_and_reject_existing_state(self):
         # Inspect the actual DB owner; never import or simulate its connections.
         root = Path(__file__).resolve().parents[1]
-        tree = ast.parse((root / "serverware/db.py").read_text())
+        tree = ast.parse((root / "catchplate/db.py").read_text())
         functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
         initialization = ast.unparse(functions["init_db"])
         self.assertLess(initialization.index("_install_policy_candidate_authority_guards(conn)"),

@@ -16,10 +16,10 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_index_contract as contract
-from serverware import authority_index_range as ranges
-from serverware import authority_index_range_count as counts
-from serverware import authority_query_read_work as measured
+from catchplate import authority_index_contract as contract
+from catchplate import authority_index_range as ranges
+from catchplate import authority_index_range_count as counts
+from catchplate import authority_query_read_work as measured
 from scripts.test_authority_index_range import (
     IndependentIndex, NIBBLES, TOP, WIDTH, bypassed, digest, key, leaf, span,
 )

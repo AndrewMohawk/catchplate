@@ -7,15 +7,15 @@ access or demonstrate a running state owner.
 
 ## Explicit v6 opt-in
 
-[`current_root_state_bootstrap.py`](../serverware/current_root_state_bootstrap.py)
-defines the closed schemas `serverware.signedCurrentRootStateBootstrap/v6`,
-`serverware.currentRootStateBootstrap/v6` and
-`serverware.currentRootStateLaunch/v6`. The v6 launch adds exactly
+[`current_root_state_bootstrap.py`](../catchplate/current_root_state_bootstrap.py)
+defines the closed schemas `catchplate.signedCurrentRootStateBootstrap/v6`,
+`catchplate.currentRootStateBootstrap/v6` and
+`catchplate.currentRootStateLaunch/v6`. The v6 launch adds exactly
 `activationCompletePeerUid` and `activationCompletePeerGid`, both fixed to
 **65503**, to the v5 launch shape. Root signature, enrollment, checkpoint,
 resource identity, lifetime and existing purpose pins remain required.
 
-[`current_root_state_startup.py`](../serverware/current_root_state_startup.py)
+[`current_root_state_startup.py`](../catchplate/current_root_state_startup.py)
 selects `CurrentRootDecisionService._with_activation_completion` only for the
 genuinely admitted v6 launch. The v1–v5 schemas, dispatch branches and admitted
 peer inventories are unchanged; none silently acquires UID 65503. V6 preserves
@@ -23,7 +23,7 @@ the existing peers while adding only this fixed purpose.
 
 ## Peer and signed-purpose restrictions
 
-[`authority_current_root_service.py`](../serverware/authority_current_root_service.py)
+[`authority_current_root_service.py`](../catchplate/authority_current_root_service.py)
 checks kernel peer credentials before reading the request prefix. For peer
 65503:65503, only these branches are admitted:
 
@@ -39,7 +39,7 @@ substitute a transport verdict, caller callback or returned data object for it.
 Framing and all owner work receive the existing bounded transport deadline.
 
 The actual state process remains UID/GID **65516**, at
-`/run/serverware/current-root/state.sock`; the inherited root-created listener
+`/run/catchplate/current-root/state.sock`; the inherited root-created listener
 has kernel peer **0:0** for the client. Filesystem access and signed peer admission
 are different requirements. The state socket's provisioned permissions/ACL must
 separately admit the completion worker without broadening unrelated access.
@@ -47,7 +47,7 @@ The source templates do not install that ACL or the v6 bootstrap.
 
 ## Known receipt filtering and uncertainty
 
-[`CurrentRootDecisionOwner`](../serverware/authority_current_root_decisions.py)
+[`CurrentRootDecisionOwner`](../catchplate/authority_current_root_decisions.py)
 authenticates the signed control and checks its requested action/operation before
 either returning a historical receipt or publishing a new completion decision.
 Ordinary state transition, pending, fence, capacity and durable journal checks

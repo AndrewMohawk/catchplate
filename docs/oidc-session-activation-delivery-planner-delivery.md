@@ -28,7 +28,7 @@ success token or renews an allowance within that call.
 
 Only protected source-fixed paths are opened, through nonsymlink root-owned
 ancestors. Trust files live under
-`/run/serverware/oidc-session-activation-delivery-planner-trust` as
+`/run/catchplate/oidc-session-activation-delivery-planner-trust` as
 `root-public-key.pem`, `bootstrap.json` and `history.json`. Their respective
 maximum sizes are 16 KiB, 4 MiB and 8 MiB. Original bytes are retained in sealed
 root-owned memfds; all private source files are single-link, root-owned mode
@@ -57,24 +57,24 @@ The actual signing key pair and SPKI join the dedicated planner identity.
 `(planner_private_key, bundle_key, delivery_key, journal_key, execution_bundle_key)` only after these
 checks. No key is serialized into a request, plan, environment value or response.
 
-The fixed key paths are `/run/secrets/serverware-oidc-session-activation-` plus
+The fixed key paths are `/run/secrets/catchplate-oidc-session-activation-` plus
 `bundle-key`, `delivery-key`, `delivery-planner-key` and
 `delivery-journal-key`, with the additional export key at
-`/run/secrets/serverware-oidc-session-activation-delivery-execution-bundle-key`.
+`/run/secrets/catchplate-oidc-session-activation-delivery-execution-bundle-key`.
 Shared historical bundle/delivery keys do not transfer
 completion or token-release authority to this role.
 
 ## Fixed process and resources
 
 The root entrypoint requires one activated listener named
-`serverware-oidc-session-activation-delivery-planner`. Its fixed path is
-`/run/serverware/oidc-session-activation/delivery-planner.sock`, with filesystem
+`catchplate-oidc-session-activation-delivery-planner`. Its fixed path is
+`/run/catchplate/oidc-session-activation/delivery-planner.sock`, with filesystem
 owner `65501:65532`, mode `0660`; kernel and filesystem socket identities are
 separate signed pins. The journal is exactly
-`/var/lib/serverware/oidc-session-activation-delivery-planner`, owned by
+`/var/lib/catchplate/oidc-session-activation-delivery-planner`, owned by
 `65501:65501`, mode `0700`, with signed device/inode and bounded count/quota.
 The separate execution store is exactly
-`/var/lib/serverware/oidc-session-activation-delivery-execution`, with the same
+`/var/lib/catchplate/oidc-session-activation-delivery-execution`, with the same
 UID/GID/mode requirements, independent device/inode and signed limits of at most
 1,024 records / 8 GiB. Its identity must differ from the consume journal and the
 historical activation journal/export store. `_execution_store(fd)` rechecks both
@@ -83,7 +83,7 @@ before and after the permanent identity drop.
 No resource is created, repaired or provisioned by the launcher.
 
 PostgreSQL uses only the admitted fixed TLS files below
-`/run/serverware/oidc-session-activation-delivery-planner-tls`: `ca.pem`,
+`/run/catchplate/oidc-session-activation-delivery-planner-tls`: `ca.pem`,
 `client.crt` and `client.key`. The two public files are root-owned mode `0444`;
 the private TLS key is root-owned mode `0440`, group `65501`, for the dropped
 libpq client. Bounded content hashing spends the supplied work allowance;
@@ -94,7 +94,7 @@ After checking originals and resources, root delivery permanently drops all
 three UID/GID identities to `65501`, clears supplementary groups, and retains
 exactly the eleven nonstandard descriptors above. The child environment contains
 only `PATH`, `LANG`, `TZ`, `LD_LIBRARY_PATH`, `PYTHONDONTWRITEBYTECODE`,
-`SERVERWARE_PROCESS_MODE`, and the two fixed root/bootstrap FD variables.
+`CATCHPLATE_PROCESS_MODE`, and the two fixed root/bootstrap FD variables.
 There are no ambient libpq credentials, caller-selected module paths or secret
 path overrides. The standalone launcher accepts only fixed `--root-delivery`
 and `--run` modes under isolated `/runtime/python/bin/python3`, with protected
@@ -113,8 +113,8 @@ idle poll may return `False`; the first accepted connection is terminal,
 including malformed input, rejection or uncertain retention/response outcome.
 There is no automatic replay, re-signing, resealing, token rotation or retry.
 
-The [socket](../ops/systemd/serverware-oidc-session-activation-delivery-planner.socket)
-and [service template](../ops/systemd/serverware-oidc-session-activation-delivery-planner.service.in)
+The [socket](../ops/systemd/catchplate-oidc-session-activation-delivery-planner.socket)
+and [service template](../ops/systemd/catchplate-oidc-session-activation-delivery-planner.service.in)
 are uninstalled deployment inputs. They require independently admitted accounts,
 release, originals, keys, TLS/database identity, separate journal/export directories
 and the state-v7 socket

@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-runtime-attestation-policy.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-runtime-attestation-policy.v1.schema.json",
   "title": "Independently pinned Nitro runtime verification policy",
   "type":"object","additionalProperties":false,
   "required":["apiVersion","trustRootsSha256","expectedPcrs","expectedEif","expectedModuleId","expectedRuntimeExecutableSha256","expectedRuntimeReleaseSha256","expectedTeeMeasurementSha256","maxAgeSeconds","futureSkewSeconds","startupReceiptAuthority","shadowRoleAuthority"],
   "properties": {
-    "apiVersion":{"const":"serverware.nativeShadowRuntimeAttestationPolicy/v1"},
+    "apiVersion":{"const":"catchplate.nativeShadowRuntimeAttestationPolicy/v1"},
     "trustRootsSha256":{"$ref":"#/$defs/sha256"},
     "expectedPcrs":{
       "type":"object","additionalProperties":false,"minProperties":3,"maxProperties":32,

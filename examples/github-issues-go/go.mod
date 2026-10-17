@@ -1,4 +1,4 @@
-module serverware.example/github-issues-go
+module catchplate.example/github-issues-go
 
 go 1.23.0
 

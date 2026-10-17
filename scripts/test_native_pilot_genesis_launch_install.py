@@ -17,11 +17,11 @@ from cryptography.exceptions import InvalidSignature
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_genesis_encrypted_authority as encrypted
-from serverware import native_pilot_genesis_verifier_authority as verifier
-from serverware import native_pilot_genesis_launch_install as install
-from serverware import native_pilot_genesis_launch_profile as launch
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_genesis_encrypted_authority as encrypted
+from catchplate import native_pilot_genesis_verifier_authority as verifier
+from catchplate import native_pilot_genesis_launch_install as install
+from catchplate import native_pilot_genesis_launch_profile as launch
 import test_native_pilot_genesis_launch as launches
 import test_native_pilot_genesis_transport_authority as transport
 import test_native_pilot_genesis_key_authority as key_tests
@@ -53,7 +53,7 @@ def _fixed_input(base, role, row, contexts, clocks):
     for name, pin in value["pins"].items():
         if name not in install.PREREQUISITES: pin["path"] = install.DESTINATIONS[role][name]
     api, operation = launch.SELECTORS[role]
-    selected = {"apiVersion": api, "keyAdmission": {"apiVersion": "serverware.nativeShadowGuestLaunch/v1",
+    selected = {"apiVersion": api, "keyAdmission": {"apiVersion": "catchplate.nativeShadowGuestLaunch/v1",
         **{name: value["pins"][name] for name in launch.INNER}}}
     if operation: selected[operation] = value["pins"]["serviceGrant"]
     value["pins"]["launch"]["sha256"] = p.sha(g.canonical(selected))
@@ -100,7 +100,7 @@ class GenesisLaunchInstallTests(unittest.TestCase):
             for row in plan["rows"]:
                 self.assertEqual(row["pin"]["path"], install.DESTINATIONS[role][row["name"]])
                 self.assertEqual(row["pin"]["sha256"], p.sha(row["raw"]))
-                self.assertNotEqual(row["pin"]["path"], "/etc/serverware/native-shadow-guest-launch.json")
+                self.assertNotEqual(row["pin"]["path"], "/etc/catchplate/native-shadow-guest-launch.json")
             self.assertEqual(install.checked_result(role, self.f["raw"][role], plan["result"], **self.f["clocks"]), plan["result"])
 
     def test_runtime_is_root_owned_and_only_encrypted_credential_is_role_owned(self):
@@ -115,7 +115,7 @@ class GenesisLaunchInstallTests(unittest.TestCase):
     def test_valid_bundle_with_a_different_approved_host_launch_destination_is_refused(self):
         role = install.ROLES[0]
         value = copy.deepcopy(self.f["inputs"][role])
-        value["pins"]["launch"]["path"] = "/etc/serverware/native-shadow-guest-launch.json"
+        value["pins"]["launch"]["path"] = "/etc/catchplate/native-shadow-guest-launch.json"
         # This remains an authentic pure launch bundle but is not this fixed
         # installer's destination; no success validator is monkeypatched.
         self.refused(role, envelope(role, value, self.f["clocks"]))

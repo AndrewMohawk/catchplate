@@ -70,7 +70,7 @@ class SandboxCheck:
         self.deadline = time.monotonic() + 45
         self.control = urlsplit(args.control_base)
         require(self.control.scheme == "http" and self.control.hostname in {
-            "serverware", "localhost", "127.0.0.1", "::1"
+            "catchplate", "localhost", "127.0.0.1", "::1"
         } and self.control.path in {"", "/"} and not any((
             self.control.query, self.control.fragment, self.control.username,
             self.control.password,
@@ -87,7 +87,7 @@ class SandboxCheck:
         headers = {}
         if authenticated:
             require(self.admin_token is not None, "admin token is not loaded")
-            headers["X-Serverware-Admin-Token"] = self.admin_token
+            headers["X-Catchplate-Admin-Token"] = self.admin_token
         connection = http.client.HTTPConnection(
             self.control.hostname, self.control.port or 80, timeout=self.timeout())
         try:
@@ -101,7 +101,7 @@ class SandboxCheck:
     def preflight(self) -> dict[str, Any]:
         profile = self.control_json("/api/sandbox/status")
         expected = {
-            "schema": "serverware.developmentSandbox/v1",
+            "schema": "catchplate.developmentSandbox/v1",
             "mode": "synthetic-development", "syntheticOnly": True,
             "productionReady": False, "hardwareVerified": False,
             "persistent": True, "allowedUpstreams": [UPSTREAM],
@@ -159,7 +159,7 @@ class SandboxCheck:
         try:
             headers = [f"CONNECT {UPSTREAM}:{port} HTTP/1.1", f"Host: {UPSTREAM}:{port}"]
             if agent:
-                headers.append(f"X-Serverware-Agent: {agent}")
+                headers.append(f"X-Catchplate-Agent: {agent}")
             if proxy_authorization:
                 headers.append(f"Proxy-Authorization: {proxy_authorization}")
             raw.sendall(("\r\n".join(headers) + "\r\n\r\n").encode("ascii"))
@@ -190,13 +190,13 @@ class SandboxCheck:
             raw.settimeout(self.timeout())
             with self.ca.wrap_socket(raw, server_hostname=UPSTREAM) as tls:
                 headers = [f"{method} {path} HTTP/1.1", f"Host: {AUTHORITY}",
-                           "X-Serverware-Agent: demo-agent", "Connection: close",
-                           f"User-Agent: serverware-test-run/{self.run_id}"]
+                           "X-Catchplate-Agent: demo-agent", "Connection: close",
+                           f"User-Agent: catchplate-test-run/{self.run_id}"]
                 if body:
                     headers.extend(["Content-Type: application/json", f"Content-Length: {len(body)}"])
                 if sensitive_headers:
                     headers.extend([f"Cookie: sandbox={self.client_secret}",
-                                    f"X-Serverware-Data-Plane-Token: {self.client_secret}"])
+                                    f"X-Catchplate-Data-Plane-Token: {self.client_secret}"])
                 if authorization_collision:
                     headers.append(f"Authorization: Bearer {self.client_secret}")
                 tls.sendall(("\r\n".join(headers) + "\r\n\r\n").encode("ascii") + body)
@@ -239,7 +239,7 @@ class SandboxCheck:
                 and payload.get("query", {}).get("_cookie_seen") is False,
                 "real credential injection or internal-header removal failed")
         require(not ({"authorization", "authorization_sha256", "proxy_authorization",
-                      "serverware_agent", "cookie", "x_api_key"} & payload.keys()),
+                      "catchplate_agent", "cookie", "x_api_key"} & payload.keys()),
                 "upstream credential fields escaped response redaction")
         self.results.append("connect_tls_credential_injection_and_header_redaction")
 
@@ -302,7 +302,7 @@ class SandboxCheck:
         require(self.upstream_count("GET") == 2 and self.upstream_count("POST") == 1
                 and self.upstream_count("DELETE") == 0,
                 "upstream dispatch counts differ from the accepted requests")
-        return {"ok": True, "schema": "serverware.developmentSandboxCheck/v1",
+        return {"ok": True, "schema": "catchplate.developmentSandboxCheck/v1",
                 "mode": "synthetic-development", "productionReady": False,
                 "hardwareVerified": False, "checks": self.results,
                 "unsupportedFeatures": ["transforming request streams (including nested JSON)"],
@@ -311,12 +311,12 @@ class SandboxCheck:
 
 
 def run_checks(*, expected_binary_sha256: str,
-               control_base: str = "http://serverware:3000",
+               control_base: str = "http://catchplate:3000",
                proxy_host: str = "decision-gate-rs", proxy_port: int = 9090,
                management_port: int = 9091,
                ca_file: str | Path = "/data/mitmproxy/mitmproxy-ca-cert.pem",
                upstream_ca_file: str | Path = "/demo-upstream/ca.pem",
-               admin_token_file: str | Path = "/run/secrets/serverware/admin.token") -> dict[str, Any]:
+               admin_token_file: str | Path = "/run/secrets/catchplate/admin.token") -> dict[str, Any]:
     """Run the fixed internal engineering flow; return only sanitized results.
 
     Callers must not accept these configuration arguments from browser input.
@@ -346,13 +346,13 @@ def run_checks(*, expected_binary_sha256: str,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--control-base", default="http://serverware:3000")
+    parser.add_argument("--control-base", default="http://catchplate:3000")
     parser.add_argument("--proxy-host", default="decision-gate-rs")
     parser.add_argument("--proxy-port", type=int, default=9090)
     parser.add_argument("--management-port", type=int, default=9091)
     parser.add_argument("--ca-file", type=Path, default=Path("/data/mitmproxy/mitmproxy-ca-cert.pem"))
     parser.add_argument("--upstream-ca-file", type=Path, default=Path("/demo-upstream/ca.pem"))
-    parser.add_argument("--admin-token-file", type=Path, default=Path("/run/secrets/serverware/admin.token"))
+    parser.add_argument("--admin-token-file", type=Path, default=Path("/run/secrets/catchplate/admin.token"))
     parser.add_argument("--expected-binary-sha256", required=True)
     args = parser.parse_args()
     result = run_checks(**vars(args))

@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-workload-start-authorization.v2.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-workload-start-authorization.v2.schema.json",
   "title": "Independent native workload start constraints v2 with explicit owned-leaf retirement",
   "description": "Closed canonical sorted compact ASCII JSON, no LF, at most 32768 original bytes and nesting depth 6. Ed25519 signs payload schema ASCII, one NUL, then canonical ASCII payload bytes. Shape validation is not signature admission, protected token possession, host/native-proof ownership, journal claim, actual containment or a start permit. The source-private owner must independently join genuine retained originals and the existing OriginalClock; stop/cleanup projections never renew that clock.",
   "type": "object", "additionalProperties": false,
   "required": ["schema", "payload", "signature"],
   "properties": {
-    "schema": {"const": "serverware.signedNativeWorkloadStartAuthorization/v2"},
+    "schema": {"const": "catchplate.signedNativeWorkloadStartAuthorization/v2"},
     "payload": {"$ref": "#/$defs/payload"},
     "signature": {
       "type": "string", "minLength": 94, "maxLength": 94,
@@ -107,8 +107,8 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "purpose", "trustMode", "creationMode", "authorizationId", "egressAuthorizationSha256", "attachmentAuthorizationSha256", "launchManifestSha256", "executionManifestSha256", "launcherBinarySha256", "machineIdSha256", "networkOwner", "isolation", "resources", "containment", "capability", "journal", "issuedAtEpochNs", "startBeforeEpochNs", "stopAtEpochNs", "cleanupBeforeEpochNs"],
       "properties": {
-        "schema": {"const": "serverware.nativeWorkloadStartAuthorization/v2"},
-        "sourceRevision": {"type": "string", "pattern": "^serverware\\.policyCandidateAuthoritySource/[0-9]{4}-[0-9]{2}-[0-9]{2}\\.[0-9]+(?![\\s\\S])", "description": "The source owner requires exact equality to its actual common SOURCE_REVISION; the pattern alone is not source compatibility."},
+        "schema": {"const": "catchplate.nativeWorkloadStartAuthorization/v2"},
+        "sourceRevision": {"type": "string", "pattern": "^catchplate\\.policyCandidateAuthoritySource/[0-9]{4}-[0-9]{2}-[0-9]{2}\\.[0-9]+(?![\\s\\S])", "description": "The source owner requires exact equality to its actual common SOURCE_REVISION; the pattern alone is not source compatibility."},
         "purpose": {"const": "native-workload-start"}, "trustMode": {"const": "trusted-host-local"},
         "creationMode": {"const": "new-execution-child-v1"},
         "authorizationId": {"$ref": "#/$defs/identifier"},

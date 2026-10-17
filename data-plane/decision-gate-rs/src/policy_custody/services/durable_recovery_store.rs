@@ -61,23 +61,23 @@ use std::os::fd::{
 };
 
 const RECOVERY_STORE_VERSION: &str =
-    "serverware.policyCustodyDurableRecoveryStoreVersion/v3";
+    "catchplate.policyCustodyDurableRecoveryStoreVersion/v3";
 const RECOVERY_STORE_TRANSACTION_VERSION: &str =
-    "serverware.policyCustodyDurableRecoveryStoreTransaction/v3";
+    "catchplate.policyCustodyDurableRecoveryStoreTransaction/v3";
 const RECOVERY_STORE_STATE_ROOT_DOMAIN: &[u8] =
-    b"serverware.policyCustodyDurableRecoveryStoreStateRoot/v3";
+    b"catchplate.policyCustodyDurableRecoveryStoreStateRoot/v3";
 const RECOVERY_STORE_VERSION_DOMAIN: &[u8] =
-    b"serverware.policyCustodyDurableRecoveryStoreVersion/v3";
+    b"catchplate.policyCustodyDurableRecoveryStoreVersion/v3";
 const RECOVERY_STORE_REQUEST_DOMAIN: &[u8] =
-    b"serverware.policyCustodyDurableRecoveryStoreRequest/v3";
+    b"catchplate.policyCustodyDurableRecoveryStoreRequest/v3";
 const RECOVERY_STORE_IDEMPOTENCY_DOMAIN: &[u8] =
-    b"serverware.policyCustodyDurableRecoveryStoreIdempotency/v3";
+    b"catchplate.policyCustodyDurableRecoveryStoreIdempotency/v3";
 const RECOVERY_STORE_CURRENT_HEAD_REQUEST_BINDING_DOMAIN: &[u8] =
-    b"serverware.policyCustodyDurableRecoveryStoreCurrentHeadRequestBinding/v3";
+    b"catchplate.policyCustodyDurableRecoveryStoreCurrentHeadRequestBinding/v3";
 const RECOVERY_STORE_RESPONSE_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyServiceResponse/v3";
+    b"catchplate.policyCustodyServiceResponse/v3";
 const OWNERSHIP_TRANSITION_STATE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyDurableOwnershipTransitionState/v3";
+    b"catchplate.policyCustodyDurableOwnershipTransitionState/v3";
 const RECOVERY_STORE_ENDPOINT_ROLE: PolicyCustodyEndpointRole =
     PolicyCustodyEndpointRole::SettlementStore;
 const MAX_RECOVERY_STORE_JOURNAL_RECORDS: usize = 1_000_000;

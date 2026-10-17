@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/release-completion-verification.v1.schema.json",
-  "title": "Serverware Release Completion Verification v1",
+  "$id": "https://catchplate.invalid/schemas/release-completion-verification.v1.schema.json",
+  "title": "Catchplate Release Completion Verification v1",
   "$comment": "Closed, non-actionable final verification output. The embedded public-Nitro result and the complete v1 result core have independent Ed25519 signatures whose providers, keys, SPKI digests, and global role registry must be pinned by the caller. Optional completionProof/v6 input is represented only as non-authoritative trusted-host readiness context. Structural validation does not authenticate signatures, recompute digests, prove TEE execution, establish trust-root provenance, or authorize an action.",
   "type": "object",
   "additionalProperties": false,
@@ -34,7 +34,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.releaseCompletionVerification/v1"
+      "const": "catchplate.releaseCompletionVerification/v1"
     },
     "verificationOk": {"const": true},
     "finalCompletionVerified": {"const": true},
@@ -116,7 +116,7 @@
       "const": "manifest-v6-promoted-oci-nitro-eif"
     },
     "canonicalProfile": {
-      "const": "serverware.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
+      "const": "catchplate.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
     },
     "pcrs": {
       "type": "object",
@@ -174,7 +174,7 @@
         "rollbackEpoch"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.finalCompletionIdentity/v3"},
+        "apiVersion": {"const": "catchplate.finalCompletionIdentity/v3"},
         "challengeNonceSha256": {"$ref": "#/$defs/sha256"},
         "coreDigests": {"$ref": "#/$defs/completionCoreDigests"},
         "pipeline": {"$ref": "#/$defs/pipeline"},
@@ -284,7 +284,7 @@
         "stateSha256"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.monotonicReleaseWitnessState/v2"},
+        "apiVersion": {"const": "catchplate.monotonicReleaseWitnessState/v2"},
         "challengeConsumptionSha256": {"$ref": "#/$defs/sha256"},
         "checkpointSha256": {"$ref": "#/$defs/sha256"},
         "logId": {"$ref": "#/$defs/sha256"},
@@ -349,7 +349,7 @@
         "rollbackResistanceBoundary"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.publicNitroStateCommit/v1"},
+        "apiVersion": {"const": "catchplate.publicNitroStateCommit/v1"},
         "status": {"const": "redemption-verified-non-actionable"},
         "actionable": {"const": false},
         "redemptionVerified": {"const": true},
@@ -444,7 +444,7 @@
         "roleRegistrySha256"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.publicNitroVerificationResult/v2"},
+        "apiVersion": {"const": "catchplate.publicNitroVerificationResult/v2"},
         "verificationOk": {"const": true},
         "finalCompletionVerified": {"const": true},
         "actionAuthorization": {"type": "null"},
@@ -503,7 +503,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.publicNitroLiveVerificationResultEnvelope/v1"
+          "const": "catchplate.publicNitroLiveVerificationResultEnvelope/v1"
         },
         "provider": {"$ref": "#/$defs/publicNitroProvider"},
         "signingKeyId": {"$ref": "#/$defs/sha256"},
@@ -547,11 +547,11 @@
         "authoritativeForFinalCompletion"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.hostReadinessContext/v1"},
+        "apiVersion": {"const": "catchplate.hostReadinessContext/v1"},
         "provided": {"type": "boolean"},
         "completionProofApiVersion": {
           "type": ["string", "null"],
-          "enum": ["serverware.completionProof/v6", null]
+          "enum": ["catchplate.completionProof/v6", null]
         },
         "completionProofFileSha256": {
           "oneOf": [
@@ -597,7 +597,7 @@
           "else": {
             "properties": {
               "completionProofApiVersion": {
-                "const": "serverware.completionProof/v6"
+                "const": "catchplate.completionProof/v6"
               },
               "completionProofFileSha256": {"$ref": "#/$defs/sha256"},
               "completionProofCoreSha256": {"$ref": "#/$defs/sha256"},
@@ -632,21 +632,21 @@
         "boundarySha256"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.hostBootstrapBoundary/v1"},
+        "apiVersion": {"const": "catchplate.hostBootstrapBoundary/v1"},
         "launchManifestApiVersion": {
-          "const": "serverware.productionReadinessLaunch/v3"
+          "const": "catchplate.productionReadinessLaunch/v3"
         },
         "launchAuthorizationRequestApiVersion": {
-          "const": "serverware.launchAuthorizationRequest/v2"
+          "const": "catchplate.launchAuthorizationRequest/v2"
         },
         "launchAuthorizationApiVersion": {
-          "const": "serverware.launchAuthorization/v2"
+          "const": "catchplate.launchAuthorization/v2"
         },
         "bootstrapReceiptApiVersion": {
-          "const": "serverware.bootstrapReceipt/v3"
+          "const": "catchplate.bootstrapReceipt/v3"
         },
         "nonceRollbackAssuranceBindingApiVersion": {
-          "const": "serverware.productionNonceRollbackAssuranceBinding/v1"
+          "const": "catchplate.productionNonceRollbackAssuranceBinding/v1"
         },
         "authorizationScope": {"const": "trusted-host-readiness"},
         "freshnessAuthority": {"const": "trusted-host-wall-clock"},
@@ -745,7 +745,7 @@
       "additionalProperties": false,
       "required": ["apiVersion", "roles", "registrySha256"],
       "properties": {
-        "apiVersion": {"const": "serverware.finalRoleRegistry/v1"},
+        "apiVersion": {"const": "catchplate.finalRoleRegistry/v1"},
         "roles": {
           "oneOf": [
             {"$ref": "#/$defs/globalRolesWithoutLaunchAuthority"},
@@ -814,7 +814,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.releaseCompletionVerification/v1"
+          "const": "catchplate.releaseCompletionVerification/v1"
         },
         "verificationOk": {"const": true},
         "finalCompletionVerified": {"const": true},
@@ -861,7 +861,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.releaseCompletionResultSignature/v1"
+          "const": "catchplate.releaseCompletionResultSignature/v1"
         },
         "provider": {"$ref": "#/$defs/identifier"},
         "signingKeyId": {"$ref": "#/$defs/sha256"},

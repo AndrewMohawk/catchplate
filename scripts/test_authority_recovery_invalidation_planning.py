@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_recovery_invalidation_planning as source
+from catchplate import authority_recovery_invalidation_planning as source
 from test_authority_recovery_invalidation import fixture, meter
 
 

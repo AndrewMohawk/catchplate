@@ -21,7 +21,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import operator_provider_key as keys
+from catchplate import operator_provider_key as keys
 
 
 class ProviderKeyTests(unittest.TestCase):
@@ -43,7 +43,7 @@ class ProviderKeyTests(unittest.TestCase):
         return value
 
     def initialize(self, admission=None):
-        with patch("serverware.operator_publication.assert_held") as held:
+        with patch("catchplate.operator_publication.assert_held") as held:
             result = keys.initialize_first(admission or self.admission, self.conn,
                 no_retained_provider_state=True)
         held.assert_called_once_with()
@@ -93,14 +93,14 @@ class ProviderKeyTests(unittest.TestCase):
 
     def test_real_publication_assertion_and_explicit_proof_are_required(self):
         self.refused(keys.initialize_first, self.admission, self.conn, no_retained_provider_state=True)
-        with patch("serverware.operator_publication.assert_held") as held:
+        with patch("catchplate.operator_publication.assert_held") as held:
             for proof in (False, None, 1, "true"):
                 self.refused(keys.initialize_first, self.admission, self.conn, no_retained_provider_state=proof)
             held.assert_not_called()
         self.assertFalse(self.path.exists())
 
     def test_live_writable_transaction_is_required(self):
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             self.conn.rollback()
             self.refused(keys.initialize_first, self.admission, self.conn, no_retained_provider_state=True)
             self.conn.execute("PRAGMA query_only=ON")
@@ -116,7 +116,7 @@ class ProviderKeyTests(unittest.TestCase):
         self.assertFalse(self.path.exists())
 
     def test_provider_namespace_even_malformed_or_case_variant_refuses(self):
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             for name in ("operator_provider_custody", "Operator_Provider_Custody_orphan"):
                 self.conn.execute('CREATE TABLE "' + name + '" (x)')
                 self.refused(keys.initialize_first, self.admission, self.conn, no_retained_provider_state=True)
@@ -132,7 +132,7 @@ class ProviderKeyTests(unittest.TestCase):
         self.assertEqual(second.owner_id, first.owner_id)
         self.assertTrue(second.material == first.material)
         self.assertTrue(self.file_state() == before)
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             self.refused(keys.initialize_first, self.admission, self.conn, no_retained_provider_state=False)
 
     def test_missing_key_with_retained_namespace_never_recreates(self):
@@ -140,7 +140,7 @@ class ProviderKeyTests(unittest.TestCase):
         keys.close_pin(value)
         self.path.unlink()
         self.conn.execute("CREATE TABLE operator_provider_custody_meta (owner)")
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             self.refused(keys.initialize_first, self.admission, self.conn, no_retained_provider_state=True)
         self.refused(keys.read_existing_pinned, self.admission, value.owner_id)
         self.assertFalse(self.path.exists())
@@ -155,7 +155,7 @@ class ProviderKeyTests(unittest.TestCase):
             self.assertEqual(synced.call_count, 2)
 
     def test_failed_fsync_leaves_valid_orphan_for_explicit_retry_only(self):
-        with patch("serverware.operator_publication.assert_held"), patch.object(keys.os, "fsync", side_effect=OSError("synthetic")):
+        with patch("catchplate.operator_publication.assert_held"), patch.object(keys.os, "fsync", side_effect=OSError("synthetic")):
             self.refused(keys.initialize_first, self.admission, self.conn, no_retained_provider_state=True)
         raw, inode = self.path.read_bytes(), self.path.stat().st_ino
         value = self.initialize()
@@ -164,10 +164,10 @@ class ProviderKeyTests(unittest.TestCase):
         keys.check_pin(value)
 
     def test_partial_write_is_never_repaired_or_overwritten(self):
-        with patch("serverware.operator_publication.assert_held"), patch.object(keys.os, "write", return_value=0):
+        with patch("catchplate.operator_publication.assert_held"), patch.object(keys.os, "write", return_value=0):
             self.refused(keys.initialize_first, self.admission, self.conn, no_retained_provider_state=True)
         before = self.file_state()
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             self.refused(keys.initialize_first, self.admission, self.conn, no_retained_provider_state=True)
         self.assertTrue(self.file_state() == before)
 
@@ -182,7 +182,7 @@ class ProviderKeyTests(unittest.TestCase):
             with self.subTest(record_size=len(raw)):
                 self.write_record(raw)
                 self.refused(keys.read_existing_pinned, self.admission, valid["owner_id"])
-                with patch("serverware.operator_publication.assert_held"):
+                with patch("catchplate.operator_publication.assert_held"):
                     self.refused(keys.initialize_first, self.admission, self.conn, no_retained_provider_state=True)
                 self.assertTrue(self.path.read_bytes() == raw)
 
@@ -234,10 +234,10 @@ class ProviderKeyTests(unittest.TestCase):
 
     def test_process_environment_and_owner_pins_refuse_drift(self):
         value = self.initialize()
-        with patch.dict(os.environ, {"SERVERWARE_PROVIDER_SYNTHETIC_TEST": "changed"}):
+        with patch.dict(os.environ, {"CATCHPLATE_PROVIDER_SYNTHETIC_TEST": "changed"}):
             self.refused(keys.check_pin, value)
             self.refused(keys.read_existing_pinned, self.admission, value.owner_id)
-        with patch.dict(os.environ, {"SERVERWARE_CONTROL_PLANE_STARTUP_VALIDATED_PID": str(os.getpid())}):
+        with patch.dict(os.environ, {"CATCHPLATE_CONTROL_PLANE_STARTUP_VALIDATED_PID": str(os.getpid())}):
             keys.check_pin(value)
         for admission in (replace(value, owner_id=str(uuid.uuid4())),
                 replace(value, directory=replace(self.admission, process=(os.getpid() + 1, os.geteuid(), os.getegid()))),
@@ -293,7 +293,7 @@ class ProviderKeyTests(unittest.TestCase):
                 self.write_record(raw)
             return original(path, flags, *args, **kwargs)
 
-        with patch("serverware.operator_publication.assert_held"), patch.object(keys.os, "open", side_effect=race):
+        with patch("catchplate.operator_publication.assert_held"), patch.object(keys.os, "open", side_effect=race):
             self.refused(keys.initialize_first, self.admission, self.conn, no_retained_provider_state=True)
         self.assertTrue(self.path.read_bytes() == raw)
 
@@ -309,16 +309,16 @@ class ProviderKeyTests(unittest.TestCase):
 import importlib.abc, pathlib, sys
 class Forbidden(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname in {"serverware.config", "serverware.db", "serverware.crypto"}:
+        if fullname in {"catchplate.config", "catchplate.db", "catchplate.crypto"}:
             raise AssertionError("configured import")
 sys.meta_path.insert(0, Forbidden())
 sys.path.insert(0, sys.argv[1])
-from serverware import operator_provider_key as k
+from catchplate import operator_provider_key as k
 d = k.admit_directory(sys.argv[2], data_directory=sys.argv[3])
 p = k.read_existing_pinned(d, sys.argv[4])
 k.check_pin(p)
 k.close_pin(p)
-assert not {"serverware.config", "serverware.db", "serverware.crypto"}.intersection(sys.modules)
+assert not {"catchplate.config", "catchplate.db", "catchplate.crypto"}.intersection(sys.modules)
 '''
         child = subprocess.run([sys.executable, "-B", "-c", program, str(ROOT),
             str(self.directory), str(self.data), value.owner_id], capture_output=True, timeout=15)
@@ -326,7 +326,7 @@ assert not {"serverware.config", "serverware.db", "serverware.crypto"}.intersect
         self.assertEqual(child.stdout, b"")
 
     def initialize_x(self):
-        with patch("serverware.operator_publication.assert_held") as held:
+        with patch("catchplate.operator_publication.assert_held") as held:
             result = keys.initialize_first_x(self.admission, self.conn,
                 no_retained_provider_state=True)
         held.assert_called_once_with()
@@ -335,9 +335,9 @@ assert not {"serverware.config", "serverware.db", "serverware.crypto"}.intersect
     def test_x_first_key_can_coexist_with_distinct_google_key_and_namespace(self):
         # Real keys/SQLite/AES; publication ownership and development admission
         # flags are synthetic component inputs, not a configured lifecycle.
-        from serverware import operator_provider_custody as custody
-        from serverware import operator_x_provider_custody as x_custody
-        from serverware import operator_x_oauth_profile as profiles
+        from catchplate import operator_provider_custody as custody
+        from catchplate import operator_x_provider_custody as x_custody
+        from catchplate import operator_x_oauth_profile as profiles
         google_directory = self.root / "google"
         google_directory.mkdir(mode=0o700)
         google_admission = keys.admit_directory(google_directory, data_directory=self.data)
@@ -346,7 +346,7 @@ assert not {"serverware.config", "serverware.db", "serverware.crypto"}.intersect
         before = google_path.read_bytes()
         self.conn.execute("CREATE TABLE operator_provider_custody_meta (synthetic)")
         self.conn.execute("CREATE TEMP TABLE operator_provider_custody_old (synthetic)")
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             self.refused(keys.initialize_first, self.admission, self.conn, no_retained_provider_state=True)
         value = self.initialize_x()
         self.assertNotEqual(value.owner_id, google_key.owner_id)
@@ -369,20 +369,20 @@ assert not {"serverware.config", "serverware.db", "serverware.crypto"}.intersect
                     "operator_x_configuration", "Operator_X_Configuration_partial"):
                 with self.subTest(temporary=temporary, name=name):
                     self.conn.execute('CREATE ' + ('TEMP ' if temporary else '') + 'TABLE "' + name + '" (x)')
-                    with patch("serverware.operator_publication.assert_held"):
+                    with patch("catchplate.operator_publication.assert_held"):
                         self.refused(keys.initialize_first_x, self.admission, self.conn,
                             no_retained_provider_state=True)
                     self.assertFalse(self.path.exists())
                     self.conn.execute('DROP TABLE ' + ('temp' if temporary else 'main') + '."' + name + '"')
         self.conn.execute("CREATE TABLE ordinary (x)")
         self.conn.execute("CREATE TRIGGER operator_x_configuration_trigger AFTER INSERT ON ordinary BEGIN SELECT 1; END")
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             self.refused(keys.initialize_first_x, self.admission, self.conn, no_retained_provider_state=True)
         self.assertFalse(self.path.exists())
 
     def test_x_explicit_proof_publication_and_real_transaction_required(self):
         self.refused(keys.initialize_first_x, self.admission, self.conn, no_retained_provider_state=True)
-        with patch("serverware.operator_publication.assert_held") as held:
+        with patch("catchplate.operator_publication.assert_held") as held:
             for proof in (False, None, 1, "true"):
                 self.refused(keys.initialize_first_x, self.admission, self.conn, no_retained_provider_state=proof)
             held.assert_not_called()
@@ -408,7 +408,7 @@ assert not {"serverware.config", "serverware.db", "serverware.crypto"}.intersect
         self.assertEqual(recovered.material, value.material)
         self.assertEqual(self.file_state(), before)
         self.conn.execute("CREATE TABLE operator_x_configuration_history (x)")
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             self.refused(keys.initialize_first_x, self.admission, self.conn, no_retained_provider_state=True)
         self.assertEqual(self.file_state(), before)
 
@@ -417,7 +417,7 @@ assert not {"serverware.config", "serverware.db", "serverware.crypto"}.intersect
         keys.close_pin(value)
         self.path.unlink()
         self.conn.execute("CREATE TEMP TABLE operator_x_provider_custody_lost (x)")
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             self.refused(keys.initialize_first_x, self.admission, self.conn, no_retained_provider_state=True)
         self.refused(keys.read_existing_pinned, self.admission, value.owner_id)
         self.assertFalse(self.path.exists())
@@ -425,7 +425,7 @@ assert not {"serverware.config", "serverware.db", "serverware.crypto"}.intersect
     def test_x_malformed_orphan_is_not_repaired_or_replaced(self):
         self.write_record(b"synthetic-partial-key")
         before = self.file_state()
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             self.refused(keys.initialize_first_x, self.admission, self.conn, no_retained_provider_state=True)
         self.assertEqual(self.file_state(), before)
 

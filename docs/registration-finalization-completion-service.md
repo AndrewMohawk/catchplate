@@ -16,12 +16,12 @@ unprovisioned; no production acceptance gate is established.
 | Role/process mode | `registration-finalization-completion` |
 | Service UID/GID | `65508:65508`, no supplementary groups |
 | Request peer | `65532:65532` |
-| Listener | `/run/serverware/registration-finalization/completion.sock` |
+| Listener | `/run/catchplate/registration-finalization/completion.sock` |
 | Root/bootstrap/listener/key/journal FDs | `198`, `199`, `200`, `201`, `202` |
-| Trust directory | `/run/serverware/registration-finalization-completion-trust` |
-| Completion key | `/run/serverware/registration-finalization-completion-key/completion.pem` |
-| Completion journal | `/var/lib/serverware/registration-finalization-completions` |
-| TLS directory | `/run/serverware/registration-finalization-completion-tls` |
+| Trust directory | `/run/catchplate/registration-finalization-completion-trust` |
+| Completion key | `/run/catchplate/registration-finalization-completion-key/completion.pem` |
+| Completion journal | `/var/lib/catchplate/registration-finalization-completions` |
+| TLS directory | `/run/catchplate/registration-finalization-completion-tls` |
 
 The root original is `root-public-key.pem` and the signed bootstrap is
 `bootstrap.json` in the fixed trust directory. Root/bootstrap/key originals
@@ -34,12 +34,12 @@ bootstrap before accessing private resources.
 
 ## Closed root-signed bootstrap
 
-[`registration_finalization_completion_bootstrap.py`](../serverware/registration_finalization_completion_bootstrap.py)
+[`registration_finalization_completion_bootstrap.py`](../catchplate/registration_finalization_completion_bootstrap.py)
 uses distinct schemas:
 
-- `serverware.signedRegistrationFinalizationCompletionBootstrap/v1`
-- `serverware.registrationFinalizationCompletionBootstrap/v1`
-- `serverware.registrationFinalizationCompletionLaunch/v1`
+- `catchplate.signedRegistrationFinalizationCompletionBootstrap/v1`
+- `catchplate.registrationFinalizationCompletionBootstrap/v1`
+- `catchplate.registrationFinalizationCompletionLaunch/v1`
 
 The original is at most 4 MiB. Its positive `issuedAtEpochNs`/`expiresAtEpochNs`
 interval is at most 300 seconds; `requestTimeoutSeconds` is an integer in
@@ -124,7 +124,7 @@ database authentication, restricted privileges and egress remain prerequisites.
 
 `stateEndpoint` is exactly `socketPath`, `requestTimeoutSeconds`, `serviceUid`,
 `serviceGid`, `listenerUid`, `listenerGid`: fixed
-`/run/serverware/current-root/state.sock`, integer timeout `1..30`, service
+`/run/catchplate/current-root/state.sock`, integer timeout `1..30`, service
 `65516:65516` and root listener `0:0`. Separate filesystem ACLs must permit the
 new peer; neither a bind mount nor this bootstrap grants that access.
 
@@ -135,7 +135,7 @@ the v3 legacy completion peer `65515` is restricted to evidence completion. Rese
 cannot complete or query. v1/v2 peer behavior is unchanged. A query response is
 not a new action grant or independently current lease.
 
-The [transport](../serverware/authority_registration_finalization_completion_transport.py)
+The [transport](../catchplate/authority_registration_finalization_completion_transport.py)
 uses `SWRFCM01` / `SWRFCR01`. Raw2 is the exact purpose
 `recover-registration-finalization-completion` and the canonical ASCII packet
 digest already independently pinned by the bootstrap. Raw4 is either
@@ -145,10 +145,10 @@ empty. Response framing supplies neither the expected packet nor signature
 verification. No exception text or incoming successful authority carrier is
 accepted.
 
-The [entrypoint](../serverware/registration_finalization_completion_entrypoint.py),
-[startup owner](../serverware/registration_finalization_completion_startup.py),
-[launcher](../serverware/registration_finalization_completion_launcher.py) and
-[runner](../serverware/registration_finalization_completion_runner.py) retain the
+The [entrypoint](../catchplate/registration_finalization_completion_entrypoint.py),
+[startup owner](../catchplate/registration_finalization_completion_startup.py),
+[launcher](../catchplate/registration_finalization_completion_launcher.py) and
+[runner](../catchplate/registration_finalization_completion_runner.py) retain the
 exact resources and original opening. At most one connection is accepted per
 launch, including a rejected peer/frame. One actual work allowance and live
 window open before peer/frame/body intake; the inherited absolute deadline,

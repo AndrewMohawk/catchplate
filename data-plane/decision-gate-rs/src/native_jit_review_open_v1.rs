@@ -18,10 +18,10 @@ mod policy;
 mod wire;
 pub use policy::Configuration;
 pub const MAX_ASSIGNMENT: usize = 64 * 1024;
-pub const SIGNED_ASSIGNMENT: &str = "serverware.signedNativeJitReviewOpeningAssignment/v1";
+pub const SIGNED_ASSIGNMENT: &str = "catchplate.signedNativeJitReviewOpeningAssignment/v1";
 const SOURCE_CONTRACT_DIGEST: &str = "sha256:ed6d471a03516c96aa4968b89e4d220f9d5aaa0dfc4c1f848acfcc58343de4f0";
-pub(crate) const CHALLENGE_SCHEMA: &str = "serverware.nativeJitReviewOpeningChallenge/v1";
-pub(crate) const PREPARATION_SCHEMA: &str = "serverware.nativeJitReviewOpeningPreparation/v1";
+pub(crate) const CHALLENGE_SCHEMA: &str = "catchplate.nativeJitReviewOpeningChallenge/v1";
+pub(crate) const PREPARATION_SCHEMA: &str = "catchplate.nativeJitReviewOpeningPreparation/v1";
 pub(crate) const NATIVE_FIELDS: &[&str] = &["holderId", "bootId", "keyId", "controlPlaneResponseSigningKeyId",
     "releaseRecordSha256", "policyHash", "configurationSha256", "caCertificateSha256", "caPublicKeySpkiSha256", "expectedBinaryDigest"];
 pub(crate) fn require(ok: bool) -> Result<(), String> {
@@ -195,7 +195,7 @@ impl Owner {
         // one-second window is usable. Exact wall/BOOTTIME gates still decide.
         let remaining = (item.expires - wall).div_ceil(1_000_000_000);
         let cookie = browser::cookie(id, &item.nonce, remaining)?;
-        let response = canonical_ascii_bytes(&json!({"apiVersion":"serverware.nativeJitReviewChallengeResponse/v1","challengeOriginal":original}))?;
+        let response = canonical_ascii_bytes(&json!({"apiVersion":"catchplate.nativeJitReviewChallengeResponse/v1","challengeOriginal":original}))?;
         item.phase = Phase::Challenged { recipient, original, statement };
         let result = request.respond("application/json", &response, Some(&cookie), "default-src 'none'; frame-ancestors 'none'");
         if result.is_err() { item.consume(); } result
@@ -217,7 +217,7 @@ impl Owner {
         require(expires <= item.expires && expires > wall)?;
         let deadline = item.deadline.min(request.deadline()).min(boot.checked_add(expires-wall).ok_or("review grant clock")?);
         request.narrow_deadline(deadline)?;
-        let command = json!({"apiVersion":"serverware.nativeJitReviewOpenChannel/v1","phase":"prepare",
+        let command = json!({"apiVersion":"catchplate.nativeJitReviewOpenChannel/v1","phase":"prepare",
             "challengeOriginal":original,"authorizationOriginal":authorization,
             "parentOriginal":text(&input,"parentOriginal",512*1024)?,"childOriginal":text(&input,"childOriginal",512*1024)?,
             "pairOriginal":text(&input,"pairOriginal",1024*1024)?,"evidenceOriginal":text(&input,"proofOriginal",128*1024)?,
@@ -241,7 +241,7 @@ impl Owner {
         let (prepared, mono) = clocks()?; require(prepared < plan.expires && mono < plan.deadline)?;
         let statement = json!({"schema":PREPARATION_SCHEMA,"operation":"nativeJitReviewOpen.prepare/v1",
             "authorizationSha256":plan.authorization_sha,"scope":plan.scope,"identity":self.identity,
-            "reviewDigest":sha(&view),"reviewFormat":"serverware.nativeJitImmutableReview/v1",
+            "reviewDigest":sha(&view),"reviewFormat":"catchplate.nativeJitImmutableReview/v1",
             "preparedAtEpochNs":prepared,"expiresAtEpochNs":plan.expires});
         item.expires = plan.expires; item.deadline = plan.deadline;
         item.phase = Phase::Prepared { view, statement: statement.clone(), proof_sha: None };
@@ -254,7 +254,7 @@ impl Owner {
         item.authenticate(&self.marker, request.cookie(id)?, wall, boot)?;
         let Phase::Prepared { proof_sha, .. } = &mut item.phase else { return Err("review preparation missing".into()); };
         require(proof_sha.is_none())?; *proof_sha = Some(sha(original.as_bytes()));
-        let response = canonical_ascii_bytes(&json!({"apiVersion":"serverware.nativeJitReviewPreparationResponse/v1","preparationOriginal":original}))?;
+        let response = canonical_ascii_bytes(&json!({"apiVersion":"catchplate.nativeJitReviewPreparationResponse/v1","preparationOriginal":original}))?;
         let result = request.respond("application/json", &response, None, "default-src 'none'; frame-ancestors 'none'");
         if result.is_err() { item.consume(); } result
     }

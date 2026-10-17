@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="620" viewBox="0 0 1120 620" role="img" aria-labelledby="title desc">
-  <title id="title">Serverware agent enrollment flow</title>
-  <desc id="desc">A screenshot-style diagram showing attestation verification, CA installation, proxy environment variables, egress control, and normal agent SDK calls through Serverware.</desc>
+  <title id="title">Catchplate agent enrollment flow</title>
+  <desc id="desc">A screenshot-style diagram showing attestation verification, CA installation, proxy environment variables, egress control, and normal agent SDK calls through Catchplate.</desc>
   <rect width="1120" height="620" fill="#f5f7f5"/>
   <text x="40" y="54" font-family="Arial, sans-serif" font-size="24" font-weight="700" fill="#17211d">Agent Enrollment Packet</text>
   <rect x="40" y="92" width="300" height="420" rx="8" fill="#ffffff" stroke="#d9dfd8"/>
-  <text x="66" y="132" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#17211d">1. Verify Serverware</text>
+  <text x="66" y="132" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#17211d">1. Verify Catchplate</text>
   <text x="66" y="166" font-family="Arial, sans-serif" font-size="13" fill="#17211d">Nonce-bound attestation</text>
   <text x="66" y="194" font-family="Arial, sans-serif" font-size="13" fill="#17211d">Policy signing key pin</text>
   <text x="66" y="222" font-family="Arial, sans-serif" font-size="13" fill="#17211d">CA SPKI hash</text>
@@ -14,12 +14,12 @@
   <rect x="410" y="92" width="300" height="420" rx="8" fill="#ffffff" stroke="#d9dfd8"/>
   <text x="436" y="132" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#17211d">2. Run Agent Through Proxy</text>
   <rect x="436" y="160" width="248" height="112" rx="6" fill="#f8fafc" stroke="#d9dfd8"/>
-  <text x="454" y="190" font-family="Arial, sans-serif" font-size="12" fill="#17211d">HTTPS_PROXY=http://serverware:8080</text>
-  <text x="454" y="216" font-family="Arial, sans-serif" font-size="12" fill="#17211d">HTTP_PROXY=http://serverware:8080</text>
-  <text x="454" y="242" font-family="Arial, sans-serif" font-size="12" fill="#17211d">SSL_CERT_FILE=/etc/serverware/</text>
-  <text x="454" y="260" font-family="Arial, sans-serif" font-size="12" fill="#17211d">serverware-ca.pem</text>
+  <text x="454" y="190" font-family="Arial, sans-serif" font-size="12" fill="#17211d">HTTPS_PROXY=http://catchplate:8080</text>
+  <text x="454" y="216" font-family="Arial, sans-serif" font-size="12" fill="#17211d">HTTP_PROXY=http://catchplate:8080</text>
+  <text x="454" y="242" font-family="Arial, sans-serif" font-size="12" fill="#17211d">SSL_CERT_FILE=/etc/catchplate/</text>
+  <text x="454" y="260" font-family="Arial, sans-serif" font-size="12" fill="#17211d">catchplate-ca.pem</text>
   <rect x="436" y="286" width="248" height="58" rx="6" fill="#fff7ed" stroke="#fed7aa"/>
-  <text x="454" y="320" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#9a3412">Egress only to Serverware</text>
+  <text x="454" y="320" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#9a3412">Egress only to Catchplate</text>
   <rect x="780" y="92" width="300" height="420" rx="8" fill="#ffffff" stroke="#d9dfd8"/>
   <text x="806" y="132" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#17211d">3. Normal SDK Calls</text>
   <text x="806" y="166" font-family="Arial, sans-serif" font-size="13" fill="#17211d">Gmail client lists messages</text>

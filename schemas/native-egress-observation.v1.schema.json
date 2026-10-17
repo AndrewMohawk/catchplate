@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-egress-observation.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-egress-observation.v1.schema.json",
   "title": "Local native egress observation before owner teardown v1",
   "description": "Closed ten-field nonactionable local projection, at most 8191 compact UTF-8 bytes. The producing client retains actual proof/host/creation/workload/kernel owners through bounded stdout and final checks. Workload scalars are observations, not portable authority or proof of continuing process/namespace ownership. Owner drop tears down the never-executed child. The SDK checks shape only and never consults a journal, socket, kernel or namespace. Preserve producer exit status; parsing cannot prove final producer success.",
   "type": "object", "additionalProperties": false,
   "required": ["apiVersion", "resultScope", "okForAction", "status", "authorizationSha256", "creationSlotSha256", "creationRecordSha256", "kernelSemanticSha256", "kernelEvidenceSha256", "workload"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeEgressObservation/v1"},
+    "apiVersion": {"const": "catchplate.nativeEgressObservation/v1"},
     "resultScope": {"const": "local-authorized-egress-observed-before-owner-teardown"},
     "okForAction": {"const": false},
     "status": {"enum": ["observed-created", "observed-complete"], "description": "Selected only from the actual retained Installed.created value. No new mutation is authorized by either spelling."},

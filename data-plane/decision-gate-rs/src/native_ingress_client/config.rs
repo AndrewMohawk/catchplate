@@ -35,7 +35,7 @@ pub(super) enum SessionInput {
 #[derive(Deserialize)]
 #[serde(tag = "apiVersion", deny_unknown_fields)]
 enum WireConfiguration {
-    #[serde(rename = "serverware.nativeIngressClient/v1", rename_all = "camelCase")]
+    #[serde(rename = "catchplate.nativeIngressClient/v1", rename_all = "camelCase")]
     V1 {
         endpoint: String,
         timeout_milliseconds: u64,
@@ -46,7 +46,7 @@ enum WireConfiguration {
         client_certificate: ArtifactV1,
         client_private_key: ArtifactV1,
     },
-    #[serde(rename = "serverware.nativeIngressClient/v2", rename_all = "camelCase")]
+    #[serde(rename = "catchplate.nativeIngressClient/v2", rename_all = "camelCase")]
     V2 {
         endpoint: String,
         timeout_milliseconds: u64,
@@ -57,7 +57,7 @@ enum WireConfiguration {
         client_certificate: ArtifactV1,
         client_private_key: ArtifactV1,
     },
-    #[serde(rename = "serverware.nativeIngressClient/v3", rename_all = "camelCase")]
+    #[serde(rename = "catchplate.nativeIngressClient/v3", rename_all = "camelCase")]
     V3 {
         endpoint: String,
         timeout_milliseconds: u64,

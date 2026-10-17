@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import authority_fd_entrypoint as entry
+from catchplate import authority_fd_entrypoint as entry
 
 
 def canonical(value):
@@ -92,7 +92,7 @@ class LocalEntrypointTests(unittest.TestCase):
     def test_late_selection_cannot_enter_native_or_control_plane(self):
         with patch.dict(os.environ, {}, clear=True), self.assertRaisesRegex(RuntimeError, "fixed authority selection"):
             entry._normal_main("issuer", local_admission=(10, "sha256:" + "0" * 64, 11))
-        with patch.dict(os.environ, {"SERVERWARE_AUTHORITY_TRUST_MODE": "trusted-host-local"}, clear=True), \
+        with patch.dict(os.environ, {"CATCHPLATE_AUTHORITY_TRUST_MODE": "trusted-host-local"}, clear=True), \
                 self.assertRaisesRegex(RuntimeError, "fixed authority selection"):
             entry._normal_main("control-plane", local_admission=(10, "sha256:" + "0" * 64, 11))
 
@@ -119,8 +119,8 @@ class LocalEntrypointTests(unittest.TestCase):
             captured.update(path=path, arguments=arguments, environment=environment)
             raise InterruptedError("captured final exec boundary")
 
-        ambient = {"SERVERWARE_AUTHORITY_TRUST_MODE": "trusted-host-local",
-                   "SERVERWARE_METADATA_STORE_ADMIN_POSTGRES_DSN": "must-never-cross",
+        ambient = {"CATCHPLATE_AUTHORITY_TRUST_MODE": "trusted-host-local",
+                   "CATCHPLATE_METADATA_STORE_ADMIN_POSTGRES_DSN": "must-never-cross",
                    "UNRELATED_SECRET": "must-never-cross", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
         # Duplicate the channel: the real entrypoint consumes its inherited copy.
         duplicate = os.dup(selection[2])
@@ -131,14 +131,14 @@ class LocalEntrypointTests(unittest.TestCase):
                 patch.object(os, "execve", side_effect=execute), \
                 self.assertRaisesRegex(InterruptedError, "final exec"):
             entry._normal_main("issuer", local_admission=(selection[0], selection[1], duplicate))
-        self.assertNotIn("serverware-authority-launch-certificate", opened)
+        self.assertNotIn("catchplate-authority-launch-certificate", opened)
         self.assertFalse(any("launch-manifest" in name or "attestation" in name for name in opened))
         self.assertEqual(captured["path"], "/runtime/python/bin/python3")
-        self.assertEqual(captured["environment"]["SERVERWARE_AUTHORITY_LAUNCH_CERTIFICATE_FD"], "257")
+        self.assertEqual(captured["environment"]["CATCHPLATE_AUTHORITY_LAUNCH_CERTIFICATE_FD"], "257")
         self.assertTrue(set(captured["environment"]) <= entry.LOCAL_EXEC_ENVIRONMENT)
         self.assertNotIn("must-never-cross", canonical(captured).decode())
-        self.assertIn("SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD=256", captured["arguments"])
-        self.assertIn("SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD=258", captured["arguments"])
+        self.assertIn("CATCHPLATE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD=256", captured["arguments"])
+        self.assertIn("CATCHPLATE_POLICY_AUTHORITY_ATTESTATION_FD=258", captured["arguments"])
 
 
 if __name__ == "__main__":

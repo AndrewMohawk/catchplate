@@ -36,7 +36,7 @@ def request_without_digest(payload: dict[str, Any]) -> dict[str, Any]:
 
 def attest() -> None:
     payload = read_stdin()
-    if payload.get("apiVersion") != "serverware.nitroAttestationRequest/v1":
+    if payload.get("apiVersion") != "catchplate.nitroAttestationRequest/v1":
         raise SystemExit("unexpected apiVersion")
     if payload.get("kind") != "NitroAttestationDocument":
         raise SystemExit("unexpected kind")
@@ -53,7 +53,7 @@ def attest() -> None:
         raise SystemExit("request digest mismatch")
 
     document_claims = json.loads(json.dumps(claims))
-    if os.getenv("SERVERWARE_NITRO_ATTESTATION_FIXTURE_BAD_DOCUMENT"):
+    if os.getenv("CATCHPLATE_NITRO_ATTESTATION_FIXTURE_BAD_DOCUMENT"):
         document_claims["nonce"] = f"{document_claims.get('nonce', '')}:tampered"
     response = {
         "ok": True,
@@ -62,9 +62,9 @@ def attest() -> None:
         "request_digest": payload["request_digest"],
         "attestation_document_b64": b64e(make_fixture_attestation_document(document_claims)),
     }
-    if os.getenv("SERVERWARE_NITRO_ATTESTATION_FIXTURE_BAD_B64"):
+    if os.getenv("CATCHPLATE_NITRO_ATTESTATION_FIXTURE_BAD_B64"):
         response["attestation_document_b64"] = "not-valid-@@@@"
-    if os.getenv("SERVERWARE_NITRO_ATTESTATION_FIXTURE_BAD_DIGEST"):
+    if os.getenv("CATCHPLATE_NITRO_ATTESTATION_FIXTURE_BAD_DIGEST"):
         response["request_digest"] = "sha256:" + "0" * 64
     print(canonical_json(response))
 

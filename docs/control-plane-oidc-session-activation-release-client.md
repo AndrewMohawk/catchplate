@@ -1,6 +1,6 @@
 # Configured private release caller
 
-[`control_plane_oidc_session_activation_release_client.py`](../serverware/control_plane_oidc_session_activation_release_client.py)
+[`control_plane_oidc_session_activation_release_client.py`](../catchplate/control_plane_oidc_session_activation_release_client.py)
 connects the actual cold control-plane owner to one private release exchange
 and [independent original response verification](oidc-session-activation-release-response.md).
 Its only successful result is the verified raw 64-byte token. This is authored
@@ -23,7 +23,7 @@ not current permission: the request path genuinely authenticates both originals
 under its supplied original allowance before any socket call.
 
 The binding must be the actual control-plane custody owner at UID/GID 65532
-and process mode `serverware-control-plane`. The component checks the same PID,
+and process mode `catchplate-control-plane`. The component checks the same PID,
 owner/global state, environment, custody binding, root public key, nested
 configuration identity, original runtime receipt and existing sealed-descriptor
 identities throughout its operation. It calls the actual metadata-only

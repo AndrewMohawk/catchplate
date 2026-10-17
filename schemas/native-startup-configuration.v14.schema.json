@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v14.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-startup-configuration.v14.schema.json",
   "title": "Explicit native gate-cgroup startup",
   "$comment": "Exact v13 owners plus mandatory gateCgroup. Earlier versions never create or attach this leaf. All existing encrypted-service, independent authority, native identity, original deadline, broker, guest cohort, actual readiness and secret provisioning requirements remain. Local cgroup creation grants neither staging nor target dispatch and is not evidence of supported/running Nitro kernel behavior.",
   "type": "object",
@@ -13,7 +13,7 @@
     "guestRoleKeyProvisioner", "measuredPendingRetirement", "gateCgroup"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeStartupConfiguration/v14"},
+    "apiVersion": {"const": "catchplate.nativeStartupConfiguration/v14"},
     "gate": {"$ref": "native-startup-configuration.v13.schema.json#/properties/gate"},
     "native": {"$ref": "native-startup-configuration.v13.schema.json#/properties/native"},
     "shadow": {"$ref": "native-startup-configuration.v13.schema.json#/properties/shadow"},

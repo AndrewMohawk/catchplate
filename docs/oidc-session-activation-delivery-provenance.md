@@ -5,7 +5,7 @@ distinct `oidc.session.activation-delivery.consume` typed request. It does not
 prove current rows, committed consumption, fresh public consent or token release.
 Source is unbuilt and unexecuted.
 
-[`authority_oidc_session_activation_delivery_provenance`](../serverware/authority_oidc_session_activation_delivery_provenance.py)
+[`authority_oidc_session_activation_delivery_provenance`](../catchplate/authority_oidc_session_activation_delivery_provenance.py)
 accepts the exact original signed activation plan/encrypted bundle, caller and
 grant with their enrollments, signed reserve/snapshot/reserve ACK, and returned
 signed complete/state ACK. Independent expectations, current-root enrollment,

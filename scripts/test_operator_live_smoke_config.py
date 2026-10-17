@@ -23,7 +23,7 @@ PIN = "sha256:" + "a" * 64
 
 
 def document(origins=None):
-    return {"schema": "serverware.operatorCatalog/v1", "mode": "operator-development",
+    return {"schema": "catchplate.operatorCatalog/v1", "mode": "operator-development",
         "productionReady": False, "hardwareVerified": False,
         "allowed_upstreams": [FIXTURE] if origins is None else deepcopy(origins),
         "revision": 7, "credentials": [], "applications": [], "access_rules": [],
@@ -202,7 +202,7 @@ class LiveSmokeConfigurationTests(unittest.TestCase):
         headers, body = sent.split(b"\r\n\r\n", 1)
         self.assertEqual(headers.decode("ascii").split("\r\n"), [
             "POST /echo?reflectCredential=1 HTTP/1.1", "Host: demo-upstream:8443", "Connection: close",
-            "User-Agent: serverware-test-run/synthetic-run", "Accept: application/json",
+            "User-Agent: catchplate-test-run/synthetic-run", "Accept: application/json",
             "Content-Type: application/json", "Content-Length: " + str(len(smoke.BODY)),
             "Authorization: " + smoke.DUMMY])
         self.assertEqual(body, smoke.BODY)

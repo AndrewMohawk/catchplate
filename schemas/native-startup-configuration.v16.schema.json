@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v16.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-startup-configuration.v16.schema.json",
   "title": "Explicit native measured capture-retirement startup",
   "$comment": "Exact v15 owners plus separately authorized measuredCaptureRetirement. Setup remains the single browser/helper issuance purpose. Capture retirement cannot borrow staged-pending or refresh-family permission, infer an authenticated subject, silently broaden a token-only request or reopen a retired provider scope. These cold data do not create grants, currentness barriers, native owners, signed receipts or provider success.",
   "type": "object",
@@ -13,7 +13,7 @@
     "guestRoleKeyProvisioner", "measuredPendingRetirement", "gateCgroup", "measuredCaptureRetirement"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeStartupConfiguration/v16"},
+    "apiVersion": {"const": "catchplate.nativeStartupConfiguration/v16"},
     "gate": {"$ref": "native-startup-configuration.v15.schema.json#/properties/gate"},
     "native": {"$ref": "native-startup-configuration.v15.schema.json#/properties/native"},
     "shadow": {"$ref": "native-startup-configuration.v15.schema.json#/properties/shadow"},

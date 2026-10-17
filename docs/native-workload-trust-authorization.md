@@ -42,20 +42,20 @@ is an operator invocation template, not an executed command:
 
 ```sh
 python3 scripts/authority/authorize_native_workload_identity_trust.py \
-  --configuration /srv/serverware-approval/native-configuration.json \
+  --configuration /srv/catchplate-approval/native-configuration.json \
   --configuration-sha256 'sha256:<approved-configuration-original-digest>' \
-  --launch /srv/serverware-approval/native-launch.json \
+  --launch /srv/catchplate-approval/native-launch.json \
   --launch-sha256 'sha256:<approved-launch-original-digest>' \
-  --policy /srv/serverware-approval/policy.json \
+  --policy /srv/catchplate-approval/policy.json \
   --policy-sha256 'sha256:<approved-policy-file-digest>' \
-  --policy-signing-public-key /srv/serverware-approval/policy-public.pem \
+  --policy-signing-public-key /srv/catchplate-approval/policy-public.pem \
   --policy-signing-public-key-sha256 'sha256:<approved-policy-public-PEM-digest>' \
   --authorizer-private-key-fd 3 \
   --issued-at-epoch-ns "$NATIVE_TRUST_ISSUED_EPOCH_NS" \
   --expires-at-epoch-ns "$NATIVE_TRUST_EXPIRES_EPOCH_NS" \
   --timeout-ms 30000 \
-  --output /srv/serverware-approval/grants/native-workload-trust.json \
-  3</srv/serverware-independent-authority/native-trust-authorizer.pem
+  --output /srv/catchplate-approval/grants/native-workload-trust.json \
+  3</srv/catchplate-independent-authority/native-trust-authorizer.pem
 ```
 
 The private key is not passed in argv or printed. Protected original FDs remain
@@ -86,7 +86,7 @@ consumer must independently enforce the copied target deadline and actual keys.
 The signed original is exactly canonical ASCII JSON without a final LF, at most
 128 KiB. Its envelope/payload schemas are
 `signedNativeWorkloadIdentityTrustAuthorization/v1` and
-`nativeWorkloadIdentityTrustAuthorization/v1` under the `serverware.` namespace.
+`nativeWorkloadIdentityTrustAuthorization/v1` under the `catchplate.` namespace.
 The signature preimage is the payload schema, NUL, and canonical payload; the
 revision comes only from the shared `authority_contract.SOURCE_REVISION`.
 Authorizer/CA/policy/control-plane/enrollment/setup keys must be distinct. The

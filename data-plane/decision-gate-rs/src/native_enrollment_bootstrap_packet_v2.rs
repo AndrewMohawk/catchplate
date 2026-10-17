@@ -73,7 +73,7 @@ pub(crate) fn decode_original(packet: &[u8]) -> Result<BootstrapPacketOriginalsV
     }
     require(!quoted && depth == 0 && strings == 14)?;
     let value: Packet = serde_json::from_slice(body).map_err(|_| invalid())?;
-    require(value.api_version == "serverware.nativeEnrollmentPacket/v2" && value.purpose == "workload-bootstrap")?;
+    require(value.api_version == "catchplate.nativeEnrollmentPacket/v2" && value.purpose == "workload-bootstrap")?;
     let fields: BTreeMap<&str, &str> = [
         ("apiVersion", value.api_version.as_str()), ("purpose", value.purpose.as_str()),
         ("delegationBase64url", value.delegation_base64url.as_str()),

@@ -72,7 +72,7 @@ def prepare_upstream(request):
     f = managed_tests.Fixture()
     google = request["operation"]
     assert_google(f, google)
-    from serverware import operator_upstream_setup as upstream
+    from catchplate import operator_upstream_setup as upstream
     # Real nonempty resources make authority preservation a meaningful oracle.
     credential = workspace.create_credential(f.db, f.store, f.schema, f.inputs, f.mutations)["credential"]
     application = workspace.create_application(f.db, f.store, f.schema, f.inputs, f.mutations)["application"]
@@ -107,8 +107,8 @@ def prepare_upstream(request):
 
 
 def activate_upstream(request):
-    from serverware import operator_upstream_setup_preflight as preflight
-    from serverware import operator_catalog_oauth_profile as profiles
+    from catchplate import operator_upstream_setup_preflight as preflight
+    from catchplate import operator_catalog_oauth_profile as profiles
     original, observed = preflight.validate_before_database_initialization, []
 
     def metadata_only_preflight():
@@ -122,12 +122,12 @@ def activate_upstream(request):
     with patch.object(preflight, "validate_before_database_initialization", side_effect=metadata_only_preflight):
         f = managed_tests.Fixture()
     assert observed == [True]
-    from serverware import operator_upstream_setup as upstream
+    from catchplate import operator_upstream_setup as upstream
     google, pending = request["operation"], request["upstream"]
     assert_google(f, google)
     operation = upstream.status(pending["operation_id"], ACTOR)
     assert operation["status"] == "activated" and operation["revision"] == pending["staged_revision"] + 1
-    assert operation["activation_receipt"] == {"schema": "serverware.operatorUpstreamSetupActivation/v1",
+    assert operation["activation_receipt"] == {"schema": "catchplate.operatorUpstreamSetupActivation/v1",
         "operation_id": pending["operation_id"], "activated_revision": operation["revision"],
         "policy_hash": pending["policy_hash"], "settings_digest": pending["target_settings_digest"],
         "activated_at": operation["completed_at"]}
@@ -136,7 +136,7 @@ def activate_upstream(request):
     settings, = f.rows("operator_demo_settings")
     assert json.loads(settings["settings_json"]) == pending["target_settings"]
     assert pending["target_settings"] != google["target_settings"]
-    assert json.loads(os.environ["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"]) == pending["target_settings"]["allowed_upstreams"]
+    assert json.loads(os.environ["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"]) == pending["target_settings"]["allowed_upstreams"]
     assert f.retained() == request["retained"] and profile_rows(f) == request["profile"]
     workspace.verify_signed(f.config, f.db, f.store, f.bundles)
     for credential in workspace.catalog(f.db, f.schema)["credentials"]:
@@ -156,12 +156,12 @@ def refused_restart(_request):
         raise AssertionError("refused upstream change reached generic DB initialization")
 
     try:
-        from serverware import operator_google_managed_config as managed
+        from catchplate import operator_google_managed_config as managed
         managed.bootstrap()
-        from serverware import operator_demo
+        from catchplate import operator_demo
         operator_demo.activate()
-        from serverware import db, oauth
-        from serverware.control_plane_startup import validate_control_plane_startup
+        from catchplate import db, oauth
+        from catchplate.control_plane_startup import validate_control_plane_startup
 
         def forbidden_provider(*_args, **_kwargs):
             contacts.append(True)
@@ -185,7 +185,7 @@ class ManagedGoogleLaterUpstreamTests(unittest.TestCase):
     def worker(self, name, request=None, *, origins=None, changes=None):
         environment = {**self.environment, **(changes or {})}
         if origins is not None:
-            environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(origins)
+            environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(origins)
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", name],
             input=json.dumps(request or {}), cwd=ROOT, env=environment, capture_output=True, text=True, timeout=90)
         self.assertEqual(result.returncode, 0, "\n".join(result.stderr.splitlines()[-45:]))
@@ -217,7 +217,7 @@ class ManagedGoogleLaterUpstreamTests(unittest.TestCase):
             data, provider = Path(self.scratch.name) / (kind + "-data"), Path(self.scratch.name) / (kind + "-provider")
             data.mkdir(mode=0o700)
             provider.mkdir(mode=0o700)
-            changes = {"SERVERWARE_DATA_DIR": str(data), managed_tests.KEY_DIRECTORY: str(provider)}
+            changes = {"CATCHPLATE_DATA_DIR": str(data), managed_tests.KEY_DIRECTORY: str(provider)}
             google = self.google(changes)
             prepared = self.worker("prepare_upstream", {**google, "stale": kind}, changes=changes)
             self.worker("refused_restart", origins=prepared["upstream"]["target_settings"]["allowed_upstreams"],

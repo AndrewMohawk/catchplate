@@ -37,15 +37,15 @@ const rule = (changes = {}) => ({id: IDS.rule, name: 'Read status', status: 'act
   response_mode: 'projected_json', credential_input: 'insert', enforcement: 'active', created_at: new Date(NOW).toISOString(), ...changes});
 
 function generatorChecks() {
-  const {buildCurlCommand} = require('../serverware/operator_demo_web/app.js');
-  const inputs = {proxyUrl: 'https://proxy.example.test', upstreamUrl: UPSTREAM + '/v1/status', method: 'GET', caPath: './serverware-ca.pem'};
+  const {buildCurlCommand} = require('../catchplate/operator_demo_web/app.js');
+  const inputs = {proxyUrl: 'https://proxy.example.test', upstreamUrl: UPSTREAM + '/v1/status', method: 'GET', caPath: './catchplate-ca.pem'};
   for (const method of METHODS) assert(buildCurlCommand({...inputs, method}).includes("--request '" + method + "'"));
   for (const method of ['HEAD', 'TRACE', 'CONNECT', 'get', 'GET\nPOST']) assert.throws(() => buildCurlCommand({...inputs, method}));
   for (const key of ['proxyUrl', 'upstreamUrl']) for (const value of ['http://example.test', 'https://user:pass@example.test', 'https://example.test/#fragment'])
     assert.throws(() => buildCurlCommand({...inputs, [key]: value}));
   const command = buildCurlCommand({...inputs, caPath: "./certificate's $(never-executed).pem", providerSecret: SECRET, clientToken: token(IDS.application)});
   assert(command.includes("--cacert './certificate'\\''s $(never-executed).pem'"), 'shell quoting keeps the complete CA path literal');
-  assert(command.includes('--proxy-header "Proxy-Authorization: Bearer $SERVERWARE_PROXY_TOKEN"'));
+  assert(command.includes('--proxy-header "Proxy-Authorization: Bearer $CATCHPLATE_PROXY_TOKEN"'));
   assert(!command.includes(SECRET) && !command.includes(token(IDS.application)), 'unknown credential fields do not enter public examples');
   for (const forbidden of ['--insecure', '--proxy-insecure', ' -k ']) assert(!command.includes(forbidden));
   assert(command.includes('--cacert ') && command.includes("--noproxy ''"));
@@ -62,7 +62,7 @@ function policy(state) {
 function catalog(state) {
   const activeRules = state.rules.filter(item => item.status === 'active');
   const loaded = state.active === state.loaded && policy(state).activation === 'active';
-  const value = {schema: 'serverware.operatorCatalog/v1', mode: 'operator-development', productionReady: false,
+  const value = {schema: 'catchplate.operatorCatalog/v1', mode: 'operator-development', productionReady: false,
     hardwareVerified: false, revision: state.revision, policy: policy(state), proxy_url: 'https://proxy.example.test',
     allowed_upstreams: state.allowedUpstreams, credentials: state.credentials.map(item => ({...item,
       active_rule_count: activeRules.filter(itemRule => itemRule.credential_id === item.id).length})),
@@ -154,7 +154,7 @@ async function fixture(browser, options, exercise) {
     catalogStatus: 200, cancelNextDialog: false, fault: options.fault, faultUsed: false};
   const context = await browser.newContext({viewport: {width: 1280, height: 960}, serviceWorkers: 'block',
     permissions: ['clipboard-read', 'clipboard-write']});
-  const document = execFileSync('python3', ['-B', '-c', 'from serverware.operator_demo_portal import render; print(render())'],
+  const document = execFileSync('python3', ['-B', '-c', 'from catchplate.operator_demo_portal import render; print(render())'],
     {cwd: ROOT, encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024});
   const answer = (route, body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
   await context.route('**/*', async route => {
@@ -435,11 +435,11 @@ const tests = [
     credentials: [credential()], applications: [application()], rules: [rule()], pending: true}, async (page, state) => {
     await ready(page); await view(page, 'proxy'); assert(await page.locator('#copy-command').isDisabled());
     assert.equal(await page.locator('#ca-download').getAttribute('href'), '/ca.pem');
-    assert.equal(await page.locator('#ca-download').getAttribute('download'), 'serverware-ca.pem');
+    assert.equal(await page.locator('#ca-download').getAttribute('download'), 'catchplate-ca.pem');
     state.loaded = state.active; await page.locator('#proxy-refresh').click();
     await page.waitForFunction(() => !document.querySelector('#copy-command').disabled);
     const command = await page.locator('#client-command').innerText();
-    assert(command.includes('--proxy') && command.includes('--cacert') && command.includes('$SERVERWARE_PROXY_TOKEN') && command.includes('/v1/status'));
+    assert(command.includes('--proxy') && command.includes('--cacert') && command.includes('$CATCHPLATE_PROXY_TOKEN') && command.includes('/v1/status'));
     assert(!command.includes('--insecure') && !command.includes(SECRET)); assert(await page.locator('#download-config').isDisabled());
     await page.locator('#copy-command').click();
     await page.waitForFunction(() => document.querySelector('#client-copy-status').textContent.startsWith('Copied.'));
@@ -449,7 +449,7 @@ const tests = [
   ['all six workspaces, audit filter and mobile controls are rendered and usable', browser => fixture(browser, {
     credentials: [credential()], applications: [application()], rules: [rule()]}, async (page, state) => {
     await ready(page);
-    const artifactRoot = '/srv/catchplate-fast/projects/serverware-operator-artifacts';
+    const artifactRoot = '/srv/catchplate-fast/projects/catchplate-operator-artifacts';
     assert((await stat(artifactRoot)).isDirectory());
     artifactDirectory = await mkdtemp(join(artifactRoot, 'catalog-browser-synthetic-'));
     for (const size of [{width: 1280, height: 960}, {width: 390, height: 844}]) {

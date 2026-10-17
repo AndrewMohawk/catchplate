@@ -14,7 +14,7 @@ fn configuration(expiry: u64) -> Value {
 }
 fn snapshot(config: &Value, signing_key: &SigningKey) -> Arc<Snapshot> {
     let mut value = (*crate::tests::test_snapshot_with_control_plane_response_key(1, signing_key)).clone();
-    value.policy_id = "serverware-operator-demo".into();
+    value.policy_id = "catchplate-operator-demo".into();
     value.principals[0].proxy_authorization = parse_proxy_authorization(Some(config), "agent:test").unwrap();
     Arc::new(value)
 }
@@ -58,8 +58,8 @@ fn ecr_control_routes_are_closed_and_never_review_or_admin() {
 
 #[test]
 fn ecr_control_framing_body_and_caller_identity_headers_are_bounded() {
-    for forbidden in ["x-serverware-principal-id", "x-serverware-data-plane-token", "x-serverware-client-token-sha256",
-        "x-serverware-policy-hash", "x-serverware-admin-token", "x-serverware-response-nonce", "cookie", "remote-user"] {
+    for forbidden in ["x-catchplate-principal-id", "x-catchplate-data-plane-token", "x-catchplate-client-token-sha256",
+        "x-catchplate-policy-hash", "x-catchplate-admin-token", "x-catchplate-response-nonce", "cookie", "remote-user"] {
         let mut request = head("POST", PATH, b"{}", Some("application/json"));
         request.headers.insert(forbidden.into(), "caller-controlled".into());
         assert_eq!(admit(&mut request).err(), Some(StatusCode::UNAUTHORIZED));
@@ -109,7 +109,7 @@ fn ecr_control_authenticates_current_basic_or_bearer_and_denies_revoked_expired_
         assert!(accepted.revalidate(&snapshot(&rotated, &key)).is_err());
         // Existing managed overlap remains valid for normal proxy auth, but
         // may not stage a new publication using a retired token generation.
-        rotated["managedRenewal"] = json!({"schema":"serverware.proxyTokenRenewal/v1",
+        rotated["managedRenewal"] = json!({"schema":"catchplate.proxyTokenRenewal/v1",
             "enrollmentId":ID, "enrollmentExpiresAtEpochMs":(now + 120_000) as u64,
             "rotatedAtEpochMs":(now - 1) as u64,
             "previousToken":{"tokenSha256":sha256_prefixed(token().as_bytes()),
@@ -149,14 +149,14 @@ fn loopback_reply(status: Option<StatusCode>, signed: bool, body: Value) -> Resu
                     let request = read_request_body_from_head(&mut stream, head, MAX_JSON as u64).unwrap();
                     assert_eq!(request.target, INTERNAL_PATH); assert_eq!(request.method, "POST");
                     assert_eq!(request.body, b" \n{}\n");
-                    assert_eq!(request.headers.get("x-serverware-principal-id").map(String::as_str), Some("agent:test"));
-                    assert_eq!(request.headers.get("x-serverware-client-token-sha256"), Some(&sha256_prefixed(token().as_bytes())));
-                    assert_eq!(request.headers.get("x-serverware-policy-hash"), Some(&expected_hash));
-                    assert_eq!(request.headers.get("x-serverware-data-plane-token").map(String::as_str), Some("synthetic-machine-token"));
+                    assert_eq!(request.headers.get("x-catchplate-principal-id").map(String::as_str), Some("agent:test"));
+                    assert_eq!(request.headers.get("x-catchplate-client-token-sha256"), Some(&sha256_prefixed(token().as_bytes())));
+                    assert_eq!(request.headers.get("x-catchplate-policy-hash"), Some(&expected_hash));
+                    assert_eq!(request.headers.get("x-catchplate-data-plane-token").map(String::as_str), Some("synthetic-machine-token"));
                     assert!(!request.headers.contains_key("authorization") && !request.headers.contains_key("proxy-authorization"));
                     if let Some(status) = status {
                         let raw = if signed { crate::tests::signed_control_plane_test_response(&key, &signer_snapshot,
-                            &request, request.headers.get("x-serverware-response-nonce").unwrap(), now_epoch_ms() as u64,
+                            &request, request.headers.get("x-catchplate-response-nonce").unwrap(), now_epoch_ms() as u64,
                             status, body.clone()) } else { response(status, serde_json::to_vec(&body).unwrap()) };
                         let _ = stream.write_all(&raw);
                     }

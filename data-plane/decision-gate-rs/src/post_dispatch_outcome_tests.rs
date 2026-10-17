@@ -111,7 +111,7 @@ fn enable_audit(state: &mut GateState) {
 
 fn fixture(method: &str) -> (Arc<GateState>, Arc<Snapshot>, Value) {
     let mut held = (*test_snapshot(1)).clone();
-    held.policy_id = "serverware-operator-demo".into();
+    held.policy_id = "catchplate-operator-demo".into();
     held.principals[0].proxy_authorization = Some(ProxyAuthorizationPolicy::BearerToken {
         token_sha256: sha256_prefixed(b"synthetic-app-token"), source_cidrs: vec![],
         expires_at_ms: Some(now_epoch_ms() + 60_000), basic_transport: None, managed_renewal: None,
@@ -296,7 +296,7 @@ fn alchemy_fixture() -> (GateState, Arc<Snapshot>, Value, DecisionRequest) {
     route.jit = json!({});
     held.credentials.insert("synthetic-alchemy".into(), Credential {provider:"operator-demo".into(),
         provider_subject:Some("synthetic-account".into()),
-        injection:json!({"type":"bearer","header":"Authorization","__serverwareCredentialType":"static"})});
+        injection:json!({"type":"bearer","header":"Authorization","__catchplateCredentialType":"static"})});
     let snapshot = Arc::new(held);
     let mut state = test_gate_state(snapshot.clone());
     enable_audit(&mut state);

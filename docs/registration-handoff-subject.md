@@ -1,7 +1,7 @@
 # Retained registration handoff subject
 
 The source implementation in
-[`control_plane_registration_handoff_subject.py`](../serverware/control_plane_registration_handoff_subject.py)
+[`control_plane_registration_handoff_subject.py`](../catchplate/control_plane_registration_handoff_subject.py)
 derives the owner of retained registration evidence before separately authorized
 SQL or live-completion actions. This is source-only implementation: it has not
 been built, executed or admitted for production.
@@ -35,7 +35,7 @@ enrollments, are checked. The association locates bytes; it does not prove that
 the grant belongs to the signer exchange or to a particular user.
 
 The narrow same-replay projection in
-[`authority_webauthn_registration_signer_response.py`](../serverware/authority_webauthn_registration_signer_response.py)
+[`authority_webauthn_registration_signer_response.py`](../catchplate/authority_webauthn_registration_signer_response.py)
 retains the existing full source-control, enrollment-authorization, ceremony,
 attestation and evidence-signature replay. It reconstructs the actual typed
 evidence-admission request before projecting subject scalars. Existing pair,

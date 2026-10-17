@@ -116,7 +116,7 @@ The fixed [helper](../data-plane/decision-gate-rs/src/body_observer_worker_v12.r
 receives only its fixed retained descriptors and private channel.
 It verifies its actual namespace and init identity before attaching to fixed
 namespace PID `1`, checks the genuine interrupt stop, and emits one bounded
-`serverware.controllerBodyObserverNamespaceStop/v14` original. The host parent
+`catchplate.controllerBodyObserverNamespaceStop/v14` original. The host parent
 joins that message to the exact child pidfd, kernel per-message credentials,
 launch and target identities, birth interval and actual target `TracerPid`/state.
 The private socketpair's creator credentials are not substituted for the helper's
@@ -166,7 +166,7 @@ The private
 starts with one canonical, closed, eleven-field JSON packet capped at 4 KiB over an
 inherited nonblocking, close-on-exec `AF_UNIX/SOCK_SEQPACKET` pair. The parent
 enables `SO_PASSCRED` before birth. Its private stop version is now
-`serverware.controllerBodyObserverNamespaceStop/v14`, which requires the task-
+`catchplate.controllerBodyObserverNamespaceStop/v14`, which requires the task-
 original transfer below; legacy stop-only traffic is not an accepted fallback.
 Unexpected received rights and ancillary pidfds are closed before rejection;
 truncation, duplicate credentials, malformed/trailing packets and a zero-length

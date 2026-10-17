@@ -47,26 +47,26 @@ pub(super) fn read(runtime: &[u8], parent: &[u8], child: &[u8]) -> Result<Releas
     }
     let envelope = originals::object(runtime)?;
     originals::keys(&envelope, &["schema", "handler", "operationManifestDigest", "arguments", "privateDocuments"])?;
-    exact(envelope["schema"], "serverware.policyAuthorityPrivateReleaseWriterInput/v1")?;
+    exact(envelope["schema"], "catchplate.policyAuthorityPrivateReleaseWriterInput/v1")?;
     exact(envelope["handler"], "reserve_release_authorization_v2")?;
     let request = originals::object(parent)?;
     originals::keys(&request, &["schema", "operation", "operationId", "requestDigest", "handler",
         "operationManifestDigest", "arguments"])?;
-    exact(request["schema"], "serverware.policyAuthorityV9Request/v1")?;
+    exact(request["schema"], "catchplate.policyAuthorityV9Request/v1")?;
     exact(request["operation"], "release.reserve")?;
     exact(request["handler"], "reserve_release_authorization_v2")?;
     ensure(request["operationManifestDigest"].get() == envelope["operationManifestDigest"].get(),
         "JIT release manifest differs")?;
     let arguments = originals::object(request["arguments"].get().as_bytes())?;
     originals::keys(&arguments, PARENT_ARGUMENTS)?;
-    exact(arguments["schema"], "serverware.releaseReserveCommitments/v1")?;
+    exact(arguments["schema"], "catchplate.releaseReserveCommitments/v1")?;
     let unsigned = raw_join(&arguments, &["businessIntent"])?;
     ensure(unsigned.as_slice() == envelope["arguments"].get().as_bytes(), "JIT release public/private arguments differ")?;
     let intent = originals::object(arguments["businessIntent"].get().as_bytes())?;
     originals::keys(&intent, &["schema", "operation", "planningAdapterId", "arguments"])?;
-    exact(intent["schema"], "serverware.policyAuthorityBusinessIntent/v2")?;
+    exact(intent["schema"], "catchplate.policyAuthorityBusinessIntent/v2")?;
     exact(intent["operation"], "release.reserve")?;
-    exact(intent["planningAdapterId"], "serverware.policyAuthorityPlanningAdapter/reserve_release_authorization_v2/v1")?;
+    exact(intent["planningAdapterId"], "catchplate.policyAuthorityPlanningAdapter/reserve_release_authorization_v2/v1")?;
     ensure(intent["arguments"].get().as_bytes() == unsigned.as_slice(), "JIT release business intent differs")?;
     ensure(arguments["native_profile"].get() == "true" && arguments["policy_aware_profile"].get() == "false"
         && arguments["require_jit_grant"].get() == "true", "JIT compound native profile differs")?;
@@ -74,7 +74,7 @@ pub(super) fn read(runtime: &[u8], parent: &[u8], child: &[u8]) -> Result<Releas
     // Derive the standalone private-v2 envelope without parsing any parent
     // context/quotas or private documents through serde_json::Value.
     let child_runtime = originals::join(&BTreeMap::from([
-        ("schema", b"\"serverware.policyAuthorityPrivateJitWriterInput/v2\"".as_slice()),
+        ("schema", b"\"catchplate.policyAuthorityPrivateJitWriterInput/v2\"".as_slice()),
         ("handler", b"\"ensure_jit_approval_request\"".as_slice()),
         ("operationManifestDigest", envelope["operationManifestDigest"].get().as_bytes()),
         ("arguments", arguments["jit_approval_request"].get().as_bytes()),
@@ -82,7 +82,7 @@ pub(super) fn read(runtime: &[u8], parent: &[u8], child: &[u8]) -> Result<Releas
     ]))?;
     let child = originals::read(&child_runtime, child)?;
     ensure(child.request["arguments"]["businessIntent"]["planningAdapterId"]
-        == "serverware.policyAuthorityPlanningAdapter/ensure_jit_approval_request/v1",
+        == "catchplate.policyAuthorityPlanningAdapter/ensure_jit_approval_request/v1",
         "JIT compound child intent differs")?;
     let nested = originals::object(arguments["jit_approval_request"].get().as_bytes())?;
     for name in INHERITED {
@@ -107,14 +107,14 @@ pub(super) fn read(runtime: &[u8], parent: &[u8], child: &[u8]) -> Result<Releas
     parent_grammar(&arguments)?;
 
     let authorization = originals::join(&BTreeMap::from([
-        ("schema", b"\"serverware.policyAuthorityV9Authorization/v1\"".as_slice()),
+        ("schema", b"\"catchplate.policyAuthorityV9Authorization/v1\"".as_slice()),
         ("operation", request["operation"].get().as_bytes()),
         ("handler", request["handler"].get().as_bytes()),
         ("operationManifestDigest", request["operationManifestDigest"].get().as_bytes()),
         ("arguments", request["arguments"].get().as_bytes()),
     ]))?;
-    let request_digest = framed("serverware.policyAuthorityV9Request/v1", &[&authorization]);
-    let operation_id = framed("serverware.policyAuthorityOperation/v2", &[b"release.reserve", request_digest.as_bytes()]);
+    let request_digest = framed("catchplate.policyAuthorityV9Request/v1", &[&authorization]);
+    let operation_id = framed("catchplate.policyAuthorityOperation/v2", &[b"release.reserve", request_digest.as_bytes()]);
     ensure(string(request["requestDigest"])? == request_digest && string(request["operationId"])? == operation_id,
         "JIT release public commitment differs")?;
     Ok(ReleaseOriginals { child, parent: ParentBindings { sha256: sha(parent), request_digest, operation_id } })

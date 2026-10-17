@@ -135,7 +135,7 @@ struct ConfigurationV4 {
     enrollment_authorizer: EnrollmentAuthorizerV1,
     enrollment_setup_authorizer: EnrollmentAuthorizerV1,
     enrollment_proxy_endpoint: String,
-    credential_currentness: serverware_decision_gate::native_currentness_v1::Configuration,
+    credential_currentness: catchplate_decision_gate::native_currentness_v1::Configuration,
 }
 
 #[derive(Deserialize)]
@@ -150,8 +150,8 @@ struct ConfigurationV5 {
     enrollment_authorizer: EnrollmentAuthorizerV1,
     enrollment_setup_authorizer: EnrollmentAuthorizerV1,
     enrollment_proxy_endpoint: String,
-    credential_currentness: serverware_decision_gate::native_currentness_v1::Configuration,
-    secret_broker: serverware_decision_gate::native_secret_broker_v1::Configuration,
+    credential_currentness: catchplate_decision_gate::native_currentness_v1::Configuration,
+    secret_broker: catchplate_decision_gate::native_secret_broker_v1::Configuration,
     measured_audit: super::native_audit_transport::Configuration,
 }
 
@@ -167,10 +167,10 @@ struct ConfigurationV6 {
     enrollment_authorizer: EnrollmentAuthorizerV1,
     enrollment_setup_authorizer: EnrollmentAuthorizerV1,
     enrollment_proxy_endpoint: String,
-    credential_currentness: serverware_decision_gate::native_currentness_v1::Configuration,
-    secret_broker: serverware_decision_gate::native_secret_broker_v1::Configuration,
+    credential_currentness: catchplate_decision_gate::native_currentness_v1::Configuration,
+    secret_broker: catchplate_decision_gate::native_secret_broker_v1::Configuration,
     measured_audit: super::native_audit_transport::Configuration,
-    encrypted_service_tokens: serverware_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
+    encrypted_service_tokens: catchplate_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
 }
 
 #[derive(Deserialize)]
@@ -185,11 +185,11 @@ struct ConfigurationV7 {
     enrollment_authorizer: EnrollmentAuthorizerV1,
     enrollment_setup_authorizer: EnrollmentAuthorizerV1,
     enrollment_proxy_endpoint: String,
-    credential_currentness: serverware_decision_gate::native_currentness_v1::Configuration,
-    secret_broker: serverware_decision_gate::native_secret_broker_v1::Configuration,
+    credential_currentness: catchplate_decision_gate::native_currentness_v1::Configuration,
+    secret_broker: catchplate_decision_gate::native_secret_broker_v1::Configuration,
     measured_audit: super::native_audit_transport::Configuration,
-    encrypted_service_tokens: serverware_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
-    measured_refresh: serverware_decision_gate::native_oauth_refresh_v1::Configuration,
+    encrypted_service_tokens: catchplate_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
+    measured_refresh: catchplate_decision_gate::native_oauth_refresh_v1::Configuration,
 }
 
 #[derive(Deserialize)]
@@ -204,12 +204,12 @@ struct ConfigurationV8 {
     enrollment_authorizer: EnrollmentAuthorizerV1,
     enrollment_setup_authorizer: EnrollmentAuthorizerV1,
     enrollment_proxy_endpoint: String,
-    credential_currentness: serverware_decision_gate::native_currentness_v1::Configuration,
-    secret_broker: serverware_decision_gate::native_secret_broker_v1::Configuration,
+    credential_currentness: catchplate_decision_gate::native_currentness_v1::Configuration,
+    secret_broker: catchplate_decision_gate::native_secret_broker_v1::Configuration,
     measured_audit: super::native_audit_transport::Configuration,
-    encrypted_service_tokens: serverware_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
-    measured_refresh: serverware_decision_gate::native_oauth_refresh_v1::Configuration,
-    guest_inspector: serverware_decision_gate::GuestInspectorConfiguration,
+    encrypted_service_tokens: catchplate_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
+    measured_refresh: catchplate_decision_gate::native_oauth_refresh_v1::Configuration,
+    guest_inspector: catchplate_decision_gate::GuestInspectorConfiguration,
 }
 
 #[derive(Deserialize)]
@@ -224,13 +224,13 @@ struct ConfigurationV9 {
     enrollment_authorizer: EnrollmentAuthorizerV1,
     enrollment_setup_authorizer: EnrollmentAuthorizerV1,
     enrollment_proxy_endpoint: String,
-    credential_currentness: serverware_decision_gate::native_currentness_v1::Configuration,
-    secret_broker: serverware_decision_gate::native_secret_broker_v1::Configuration,
+    credential_currentness: catchplate_decision_gate::native_currentness_v1::Configuration,
+    secret_broker: catchplate_decision_gate::native_secret_broker_v1::Configuration,
     measured_audit: super::native_audit_transport::Configuration,
-    encrypted_service_tokens: serverware_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
-    measured_refresh: serverware_decision_gate::native_oauth_refresh_v1::Configuration,
-    guest_inspector: serverware_decision_gate::GuestInspectorConfiguration,
-    measured_issuance: serverware_decision_gate::native_oauth_exchange_v1::Configuration,
+    encrypted_service_tokens: catchplate_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
+    measured_refresh: catchplate_decision_gate::native_oauth_refresh_v1::Configuration,
+    guest_inspector: catchplate_decision_gate::GuestInspectorConfiguration,
+    measured_issuance: catchplate_decision_gate::native_oauth_exchange_v1::Configuration,
 }
 
 #[derive(Deserialize)]
@@ -245,14 +245,14 @@ struct ConfigurationV10 {
     enrollment_authorizer: EnrollmentAuthorizerV1,
     enrollment_setup_authorizer: EnrollmentAuthorizerV1,
     enrollment_proxy_endpoint: String,
-    credential_currentness: serverware_decision_gate::native_currentness_v1::Configuration,
-    secret_broker: serverware_decision_gate::native_secret_broker_v1::Configuration,
+    credential_currentness: catchplate_decision_gate::native_currentness_v1::Configuration,
+    secret_broker: catchplate_decision_gate::native_secret_broker_v1::Configuration,
     measured_audit: super::native_audit_transport::Configuration,
-    encrypted_service_tokens: serverware_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
-    measured_refresh: serverware_decision_gate::native_oauth_refresh_v1::Configuration,
-    guest_inspector: serverware_decision_gate::GuestInspectorConfiguration,
-    measured_issuance: serverware_decision_gate::native_oauth_exchange_v1::Configuration,
-    guest_cohort: serverware_decision_gate::GuestCohortConfiguration,
+    encrypted_service_tokens: catchplate_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
+    measured_refresh: catchplate_decision_gate::native_oauth_refresh_v1::Configuration,
+    guest_inspector: catchplate_decision_gate::GuestInspectorConfiguration,
+    measured_issuance: catchplate_decision_gate::native_oauth_exchange_v1::Configuration,
+    guest_cohort: catchplate_decision_gate::GuestCohortConfiguration,
 }
 
 #[derive(Deserialize)]
@@ -267,15 +267,15 @@ struct ConfigurationV11 {
     enrollment_authorizer: EnrollmentAuthorizerV1,
     enrollment_setup_authorizer: EnrollmentAuthorizerV1,
     enrollment_proxy_endpoint: String,
-    credential_currentness: serverware_decision_gate::native_currentness_v1::Configuration,
-    secret_broker: serverware_decision_gate::native_secret_broker_v1::Configuration,
+    credential_currentness: catchplate_decision_gate::native_currentness_v1::Configuration,
+    secret_broker: catchplate_decision_gate::native_secret_broker_v1::Configuration,
     measured_audit: super::native_audit_transport::Configuration,
-    encrypted_service_tokens: serverware_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
-    measured_refresh: serverware_decision_gate::native_oauth_refresh_v1::Configuration,
-    guest_inspector: serverware_decision_gate::GuestInspectorConfiguration,
-    measured_issuance: serverware_decision_gate::native_oauth_exchange_v1::Configuration,
-    guest_cohort: serverware_decision_gate::GuestCohortConfiguration,
-    measured_cleanup: serverware_decision_gate::native_oauth_cleanup_v1::Configuration,
+    encrypted_service_tokens: catchplate_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
+    measured_refresh: catchplate_decision_gate::native_oauth_refresh_v1::Configuration,
+    guest_inspector: catchplate_decision_gate::GuestInspectorConfiguration,
+    measured_issuance: catchplate_decision_gate::native_oauth_exchange_v1::Configuration,
+    guest_cohort: catchplate_decision_gate::GuestCohortConfiguration,
+    measured_cleanup: catchplate_decision_gate::native_oauth_cleanup_v1::Configuration,
 }
 
 #[derive(Deserialize)]
@@ -290,18 +290,18 @@ struct ConfigurationV15 {
     enrollment_authorizer: EnrollmentAuthorizerV1,
     enrollment_setup_authorizer: EnrollmentAuthorizerV1,
     enrollment_proxy_endpoint: String,
-    credential_currentness: serverware_decision_gate::native_currentness_v1::Configuration,
-    secret_broker: serverware_decision_gate::native_secret_broker_v1::Configuration,
+    credential_currentness: catchplate_decision_gate::native_currentness_v1::Configuration,
+    secret_broker: catchplate_decision_gate::native_secret_broker_v1::Configuration,
     measured_audit: super::native_audit_transport::Configuration,
-    encrypted_service_tokens: serverware_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
-    measured_refresh: serverware_decision_gate::native_oauth_refresh_v1::Configuration,
-    guest_inspector: serverware_decision_gate::GuestInspectorConfiguration,
-    measured_setup: serverware_decision_gate::native_oauth_setup_v1::Configuration,
-    guest_cohort: serverware_decision_gate::GuestCohortConfiguration,
-    measured_cleanup: serverware_decision_gate::native_oauth_cleanup_v1::Configuration,
-    guest_role_key_provisioner: serverware_decision_gate::GuestRoleKeyProvisionerConfiguration,
-    measured_pending_retirement: serverware_decision_gate::native_oauth_pending_retirement_v1::Configuration,
-    gate_cgroup: serverware_decision_gate::native_gate_cgroup::Configuration,
+    encrypted_service_tokens: catchplate_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
+    measured_refresh: catchplate_decision_gate::native_oauth_refresh_v1::Configuration,
+    guest_inspector: catchplate_decision_gate::GuestInspectorConfiguration,
+    measured_setup: catchplate_decision_gate::native_oauth_setup_v1::Configuration,
+    guest_cohort: catchplate_decision_gate::GuestCohortConfiguration,
+    measured_cleanup: catchplate_decision_gate::native_oauth_cleanup_v1::Configuration,
+    guest_role_key_provisioner: catchplate_decision_gate::GuestRoleKeyProvisionerConfiguration,
+    measured_pending_retirement: catchplate_decision_gate::native_oauth_pending_retirement_v1::Configuration,
+    gate_cgroup: catchplate_decision_gate::native_gate_cgroup::Configuration,
 }
 
 #[derive(Deserialize)]
@@ -316,18 +316,18 @@ struct ConfigurationV14 {
     enrollment_authorizer: EnrollmentAuthorizerV1,
     enrollment_setup_authorizer: EnrollmentAuthorizerV1,
     enrollment_proxy_endpoint: String,
-    credential_currentness: serverware_decision_gate::native_currentness_v1::Configuration,
-    secret_broker: serverware_decision_gate::native_secret_broker_v1::Configuration,
+    credential_currentness: catchplate_decision_gate::native_currentness_v1::Configuration,
+    secret_broker: catchplate_decision_gate::native_secret_broker_v1::Configuration,
     measured_audit: super::native_audit_transport::Configuration,
-    encrypted_service_tokens: serverware_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
-    measured_refresh: serverware_decision_gate::native_oauth_refresh_v1::Configuration,
-    guest_inspector: serverware_decision_gate::GuestInspectorConfiguration,
-    measured_issuance: serverware_decision_gate::native_oauth_exchange_v1::Configuration,
-    guest_cohort: serverware_decision_gate::GuestCohortConfiguration,
-    measured_cleanup: serverware_decision_gate::native_oauth_cleanup_v1::Configuration,
-    guest_role_key_provisioner: serverware_decision_gate::GuestRoleKeyProvisionerConfiguration,
-    measured_pending_retirement: serverware_decision_gate::native_oauth_pending_retirement_v1::Configuration,
-    gate_cgroup: serverware_decision_gate::native_gate_cgroup::Configuration,
+    encrypted_service_tokens: catchplate_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
+    measured_refresh: catchplate_decision_gate::native_oauth_refresh_v1::Configuration,
+    guest_inspector: catchplate_decision_gate::GuestInspectorConfiguration,
+    measured_issuance: catchplate_decision_gate::native_oauth_exchange_v1::Configuration,
+    guest_cohort: catchplate_decision_gate::GuestCohortConfiguration,
+    measured_cleanup: catchplate_decision_gate::native_oauth_cleanup_v1::Configuration,
+    guest_role_key_provisioner: catchplate_decision_gate::GuestRoleKeyProvisionerConfiguration,
+    measured_pending_retirement: catchplate_decision_gate::native_oauth_pending_retirement_v1::Configuration,
+    gate_cgroup: catchplate_decision_gate::native_gate_cgroup::Configuration,
 }
 
 #[derive(Deserialize)]
@@ -342,17 +342,17 @@ struct ConfigurationV13 {
     enrollment_authorizer: EnrollmentAuthorizerV1,
     enrollment_setup_authorizer: EnrollmentAuthorizerV1,
     enrollment_proxy_endpoint: String,
-    credential_currentness: serverware_decision_gate::native_currentness_v1::Configuration,
-    secret_broker: serverware_decision_gate::native_secret_broker_v1::Configuration,
+    credential_currentness: catchplate_decision_gate::native_currentness_v1::Configuration,
+    secret_broker: catchplate_decision_gate::native_secret_broker_v1::Configuration,
     measured_audit: super::native_audit_transport::Configuration,
-    encrypted_service_tokens: serverware_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
-    measured_refresh: serverware_decision_gate::native_oauth_refresh_v1::Configuration,
-    guest_inspector: serverware_decision_gate::GuestInspectorConfiguration,
-    measured_issuance: serverware_decision_gate::native_oauth_exchange_v1::Configuration,
-    guest_cohort: serverware_decision_gate::GuestCohortConfiguration,
-    measured_cleanup: serverware_decision_gate::native_oauth_cleanup_v1::Configuration,
-    guest_role_key_provisioner: serverware_decision_gate::GuestRoleKeyProvisionerConfiguration,
-    measured_pending_retirement: serverware_decision_gate::native_oauth_pending_retirement_v1::Configuration,
+    encrypted_service_tokens: catchplate_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
+    measured_refresh: catchplate_decision_gate::native_oauth_refresh_v1::Configuration,
+    guest_inspector: catchplate_decision_gate::GuestInspectorConfiguration,
+    measured_issuance: catchplate_decision_gate::native_oauth_exchange_v1::Configuration,
+    guest_cohort: catchplate_decision_gate::GuestCohortConfiguration,
+    measured_cleanup: catchplate_decision_gate::native_oauth_cleanup_v1::Configuration,
+    guest_role_key_provisioner: catchplate_decision_gate::GuestRoleKeyProvisionerConfiguration,
+    measured_pending_retirement: catchplate_decision_gate::native_oauth_pending_retirement_v1::Configuration,
 }
 
 
@@ -368,40 +368,40 @@ struct ConfigurationV12 {
     enrollment_authorizer: EnrollmentAuthorizerV1,
     enrollment_setup_authorizer: EnrollmentAuthorizerV1,
     enrollment_proxy_endpoint: String,
-    credential_currentness: serverware_decision_gate::native_currentness_v1::Configuration,
-    secret_broker: serverware_decision_gate::native_secret_broker_v1::Configuration,
+    credential_currentness: catchplate_decision_gate::native_currentness_v1::Configuration,
+    secret_broker: catchplate_decision_gate::native_secret_broker_v1::Configuration,
     measured_audit: super::native_audit_transport::Configuration,
-    encrypted_service_tokens: serverware_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
-    measured_refresh: serverware_decision_gate::native_oauth_refresh_v1::Configuration,
-    guest_inspector: serverware_decision_gate::GuestInspectorConfiguration,
-    measured_issuance: serverware_decision_gate::native_oauth_exchange_v1::Configuration,
-    guest_cohort: serverware_decision_gate::GuestCohortConfiguration,
-    measured_cleanup: serverware_decision_gate::native_oauth_cleanup_v1::Configuration,
-    guest_role_key_provisioner: serverware_decision_gate::GuestRoleKeyProvisionerConfiguration,
+    encrypted_service_tokens: catchplate_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
+    measured_refresh: catchplate_decision_gate::native_oauth_refresh_v1::Configuration,
+    guest_inspector: catchplate_decision_gate::GuestInspectorConfiguration,
+    measured_issuance: catchplate_decision_gate::native_oauth_exchange_v1::Configuration,
+    guest_cohort: catchplate_decision_gate::GuestCohortConfiguration,
+    measured_cleanup: catchplate_decision_gate::native_oauth_cleanup_v1::Configuration,
+    guest_role_key_provisioner: catchplate_decision_gate::GuestRoleKeyProvisionerConfiguration,
 }
 
 // This is only a source-local decomposition after exact version-specific
 // decoding. It is never accepted as configuration or verification authority.
 struct ConfigurationParts {
-    measured_static_credential: Option<serverware_decision_gate::native_static_credential_v1::Configuration>,
-    measured_canary_delivery: Option<serverware_decision_gate::native_canary_delivery_v1::Configuration>,
-    measured_succession: Option<serverware_decision_gate::native_oauth_succession_v1::Configuration>,
-    historical_broker: Option<serverware_decision_gate::native_secret_broker_v1::history::HistoricalConfiguration>,
-    measured_reconnect: Option<serverware_decision_gate::native_oauth_reconnect_v1::Configuration>,
-    measured_capture_retirement: Option<serverware_decision_gate::native_oauth_capture_retirement_v1::Configuration>,
-    measured_setup: Option<serverware_decision_gate::native_oauth_setup_v1::Configuration>,
-    gate_cgroup: Option<serverware_decision_gate::native_gate_cgroup::Configuration>,
-    measured_pending_retirement: Option<serverware_decision_gate::native_oauth_pending_retirement_v1::Configuration>,
-    guest_role_key_provisioner: Option<serverware_decision_gate::GuestRoleKeyProvisionerConfiguration>,
-    measured_cleanup: Option<serverware_decision_gate::native_oauth_cleanup_v1::Configuration>,
-    guest_cohort: Option<serverware_decision_gate::GuestCohortConfiguration>,
-    guest_inspector: Option<serverware_decision_gate::GuestInspectorConfiguration>,
-    measured_issuance: Option<serverware_decision_gate::native_oauth_exchange_v1::Configuration>,
-    measured_refresh: Option<serverware_decision_gate::native_oauth_refresh_v1::Configuration>,
+    measured_static_credential: Option<catchplate_decision_gate::native_static_credential_v1::Configuration>,
+    measured_canary_delivery: Option<catchplate_decision_gate::native_canary_delivery_v1::Configuration>,
+    measured_succession: Option<catchplate_decision_gate::native_oauth_succession_v1::Configuration>,
+    historical_broker: Option<catchplate_decision_gate::native_secret_broker_v1::history::HistoricalConfiguration>,
+    measured_reconnect: Option<catchplate_decision_gate::native_oauth_reconnect_v1::Configuration>,
+    measured_capture_retirement: Option<catchplate_decision_gate::native_oauth_capture_retirement_v1::Configuration>,
+    measured_setup: Option<catchplate_decision_gate::native_oauth_setup_v1::Configuration>,
+    gate_cgroup: Option<catchplate_decision_gate::native_gate_cgroup::Configuration>,
+    measured_pending_retirement: Option<catchplate_decision_gate::native_oauth_pending_retirement_v1::Configuration>,
+    guest_role_key_provisioner: Option<catchplate_decision_gate::GuestRoleKeyProvisionerConfiguration>,
+    measured_cleanup: Option<catchplate_decision_gate::native_oauth_cleanup_v1::Configuration>,
+    guest_cohort: Option<catchplate_decision_gate::GuestCohortConfiguration>,
+    guest_inspector: Option<catchplate_decision_gate::GuestInspectorConfiguration>,
+    measured_issuance: Option<catchplate_decision_gate::native_oauth_exchange_v1::Configuration>,
+    measured_refresh: Option<catchplate_decision_gate::native_oauth_refresh_v1::Configuration>,
     service_tokens: super::native_service_tokens::Source,
-    secret_broker: Option<serverware_decision_gate::native_secret_broker_v1::Configuration>,
+    secret_broker: Option<catchplate_decision_gate::native_secret_broker_v1::Configuration>,
     measured_audit: Option<super::native_audit_transport::Configuration>,
-    credential_currentness: Option<serverware_decision_gate::native_currentness_v1::Configuration>,
+    credential_currentness: Option<catchplate_decision_gate::native_currentness_v1::Configuration>,
     gate: gate::GateConfigV1,
     native: parameters::NativeSettingsV1,
     shadow: shadow::ShadowConfigV15,
@@ -413,57 +413,57 @@ struct ConfigurationParts {
 fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, String> {
     let value = json::parse(raw, MAX_CONFIGURATION_BYTES)?;
     let version = value.get("apiVersion").and_then(Value::as_str);
-    ensure(!matches!(version, Some("serverware.nativeStartupConfiguration/v24" | "serverware.nativeStartupConfiguration/v25" | "serverware.nativeStartupConfiguration/v26" | "serverware.nativeStartupConfiguration/v27")),
+    ensure(!matches!(version, Some("catchplate.nativeStartupConfiguration/v24" | "catchplate.nativeStartupConfiguration/v25" | "catchplate.nativeStartupConfiguration/v26" | "catchplate.nativeStartupConfiguration/v27")),
         "postboot static configuration requires its explicit successor owner")?;
     ensure(match mode {
-        cli::Mode::Legacy => !matches!(version, Some("serverware.nativeStartupConfiguration/v6" | "serverware.nativeStartupConfiguration/v7" | "serverware.nativeStartupConfiguration/v8" | "serverware.nativeStartupConfiguration/v9" | "serverware.nativeStartupConfiguration/v10" | "serverware.nativeStartupConfiguration/v11" | "serverware.nativeStartupConfiguration/v12" | "serverware.nativeStartupConfiguration/v13" | "serverware.nativeStartupConfiguration/v14" | "serverware.nativeStartupConfiguration/v15" | "serverware.nativeStartupConfiguration/v16" | "serverware.nativeStartupConfiguration/v17" | "serverware.nativeStartupConfiguration/v18" | "serverware.nativeStartupConfiguration/v19" | "serverware.nativeStartupConfiguration/v20" | "serverware.nativeStartupConfiguration/v21" | "serverware.nativeStartupConfiguration/v22" | "serverware.nativeStartupConfiguration/v23")),
-        cli::Mode::EnclaveV5 => version == Some("serverware.nativeStartupConfiguration/v5"),
-        cli::Mode::EncryptedV6 => version == Some("serverware.nativeStartupConfiguration/v6"),
-        cli::Mode::MeasuredRefreshV7 => version == Some("serverware.nativeStartupConfiguration/v7"),
-        cli::Mode::GuestInspectorV8 => version == Some("serverware.nativeStartupConfiguration/v8"),
-        cli::Mode::MeasuredIssuanceV9 => version == Some("serverware.nativeStartupConfiguration/v9"),
-        cli::Mode::GuestCohortV10 => version == Some("serverware.nativeStartupConfiguration/v10"),
-        cli::Mode::MeasuredCleanupV11 => version == Some("serverware.nativeStartupConfiguration/v11"),
-        cli::Mode::GuestRoleKeysV12 => version == Some("serverware.nativeStartupConfiguration/v12"),
-        cli::Mode::MeasuredPendingRetirementV13 => version == Some("serverware.nativeStartupConfiguration/v13"),
-        cli::Mode::GateCgroupV14 => version == Some("serverware.nativeStartupConfiguration/v14"),
-        cli::Mode::MeasuredSetupV15 => version == Some("serverware.nativeStartupConfiguration/v15"),
-        cli::Mode::MeasuredCaptureRetirementV16 => version == Some("serverware.nativeStartupConfiguration/v16"),
-        cli::Mode::MeasuredReconnectV17 => version == Some("serverware.nativeStartupConfiguration/v17"),
-        cli::Mode::MeasuredSuccessionV18 => version == Some("serverware.nativeStartupConfiguration/v18"),
-        cli::Mode::MeasuredCanaryDeliveryV19 => version == Some("serverware.nativeStartupConfiguration/v19"),
-        cli::Mode::NativeHeartbeatV20 => version == Some("serverware.nativeStartupConfiguration/v20"),
-        cli::Mode::NativeReadinessV21 => version == Some("serverware.nativeStartupConfiguration/v21"),
+        cli::Mode::Legacy => !matches!(version, Some("catchplate.nativeStartupConfiguration/v6" | "catchplate.nativeStartupConfiguration/v7" | "catchplate.nativeStartupConfiguration/v8" | "catchplate.nativeStartupConfiguration/v9" | "catchplate.nativeStartupConfiguration/v10" | "catchplate.nativeStartupConfiguration/v11" | "catchplate.nativeStartupConfiguration/v12" | "catchplate.nativeStartupConfiguration/v13" | "catchplate.nativeStartupConfiguration/v14" | "catchplate.nativeStartupConfiguration/v15" | "catchplate.nativeStartupConfiguration/v16" | "catchplate.nativeStartupConfiguration/v17" | "catchplate.nativeStartupConfiguration/v18" | "catchplate.nativeStartupConfiguration/v19" | "catchplate.nativeStartupConfiguration/v20" | "catchplate.nativeStartupConfiguration/v21" | "catchplate.nativeStartupConfiguration/v22" | "catchplate.nativeStartupConfiguration/v23")),
+        cli::Mode::EnclaveV5 => version == Some("catchplate.nativeStartupConfiguration/v5"),
+        cli::Mode::EncryptedV6 => version == Some("catchplate.nativeStartupConfiguration/v6"),
+        cli::Mode::MeasuredRefreshV7 => version == Some("catchplate.nativeStartupConfiguration/v7"),
+        cli::Mode::GuestInspectorV8 => version == Some("catchplate.nativeStartupConfiguration/v8"),
+        cli::Mode::MeasuredIssuanceV9 => version == Some("catchplate.nativeStartupConfiguration/v9"),
+        cli::Mode::GuestCohortV10 => version == Some("catchplate.nativeStartupConfiguration/v10"),
+        cli::Mode::MeasuredCleanupV11 => version == Some("catchplate.nativeStartupConfiguration/v11"),
+        cli::Mode::GuestRoleKeysV12 => version == Some("catchplate.nativeStartupConfiguration/v12"),
+        cli::Mode::MeasuredPendingRetirementV13 => version == Some("catchplate.nativeStartupConfiguration/v13"),
+        cli::Mode::GateCgroupV14 => version == Some("catchplate.nativeStartupConfiguration/v14"),
+        cli::Mode::MeasuredSetupV15 => version == Some("catchplate.nativeStartupConfiguration/v15"),
+        cli::Mode::MeasuredCaptureRetirementV16 => version == Some("catchplate.nativeStartupConfiguration/v16"),
+        cli::Mode::MeasuredReconnectV17 => version == Some("catchplate.nativeStartupConfiguration/v17"),
+        cli::Mode::MeasuredSuccessionV18 => version == Some("catchplate.nativeStartupConfiguration/v18"),
+        cli::Mode::MeasuredCanaryDeliveryV19 => version == Some("catchplate.nativeStartupConfiguration/v19"),
+        cli::Mode::NativeHeartbeatV20 => version == Some("catchplate.nativeStartupConfiguration/v20"),
+        cli::Mode::NativeReadinessV21 => version == Some("catchplate.nativeStartupConfiguration/v21"),
         cli::Mode::WorkloadTrustV22 => false, // decoded only by the explicit successor owner
-        cli::Mode::StaticCredentialV23 => version == Some("serverware.nativeStartupConfiguration/v23"),
+        cli::Mode::StaticCredentialV23 => version == Some("catchplate.nativeStartupConfiguration/v23"),
         cli::Mode::PostbootStaticV24 => false, // decoded by the explicit postboot owner
         cli::Mode::StaticCredentialRotationV25 => false, // separate closed rotation owner
         cli::Mode::JitReviewV26 => false, // separate closed JIT owner
         cli::Mode::JitReviewOpenV27 => false, // separate closed combined JIT profile
     }, "native startup mode does not admit this configuration version")?;
     match value.get("apiVersion").and_then(Value::as_str) {
-        Some("serverware.nativeStartupConfiguration/v23") => static_credential::configuration(value),
-        Some("serverware.nativeStartupConfiguration/v20") => canary_heartbeat::configuration(value),
-        Some("serverware.nativeStartupConfiguration/v21") => canary_readiness::configuration(value),
-        Some("serverware.nativeStartupConfiguration/v19") => canary_delivery::configuration(value),
-        Some("serverware.nativeStartupConfiguration/v18") => succession::configuration(value),
-        Some("serverware.nativeStartupConfiguration/v17") => reconnect::configuration(value),
-        Some("serverware.nativeStartupConfiguration/v16") => capture_retirement::configuration(value),
-        Some("serverware.nativeStartupConfiguration/v1") => {
+        Some("catchplate.nativeStartupConfiguration/v23") => static_credential::configuration(value),
+        Some("catchplate.nativeStartupConfiguration/v20") => canary_heartbeat::configuration(value),
+        Some("catchplate.nativeStartupConfiguration/v21") => canary_readiness::configuration(value),
+        Some("catchplate.nativeStartupConfiguration/v19") => canary_delivery::configuration(value),
+        Some("catchplate.nativeStartupConfiguration/v18") => succession::configuration(value),
+        Some("catchplate.nativeStartupConfiguration/v17") => reconnect::configuration(value),
+        Some("catchplate.nativeStartupConfiguration/v16") => capture_retirement::configuration(value),
+        Some("catchplate.nativeStartupConfiguration/v1") => {
             let original: ConfigurationV1 = serde_json::from_value(value)
                 .map_err(|_| "native v1 configuration violates its closed contract")?;
-            ensure(original.api_version == "serverware.nativeStartupConfiguration/v1",
+            ensure(original.api_version == "catchplate.nativeStartupConfiguration/v1",
                 "native startup v1 configuration version differs")?;
             Ok(ConfigurationParts { measured_canary_delivery: None, measured_succession: None, historical_broker: None, measured_reconnect: None, measured_capture_retirement: None, measured_static_credential: None, measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: None, measured_issuance: None, measured_refresh: None, service_tokens: super::native_service_tokens::Source::Legacy,
                 secret_broker: None, measured_audit: None, credential_currentness: None, gate: original.gate, native: original.native,
                 shadow: original.shadow.into(), response_observation_v2: original.response_observation_v2,
                 policy: original.policy, enrollment: None })
         },
-        Some("serverware.nativeStartupConfiguration/v2") => {
+        Some("catchplate.nativeStartupConfiguration/v2") => {
             let original: ConfigurationV2 = serde_json::from_value(value)
                 .map_err(|_| "native v2 configuration violates its closed contract")?;
-            ensure(original.api_version == "serverware.nativeStartupConfiguration/v2"
-                && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1",
+            ensure(original.api_version == "catchplate.nativeStartupConfiguration/v2"
+                && original.enrollment_authorizer.api_version == "catchplate.nativeEnrollmentAuthorizer/v1",
                 "native startup v2 authorizer version differs")?;
             Ok(ConfigurationParts { measured_canary_delivery: None, measured_succession: None, historical_broker: None, measured_reconnect: None, measured_capture_retirement: None, measured_static_credential: None, measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: None, measured_issuance: None, measured_refresh: None, service_tokens: super::native_service_tokens::Source::Legacy,
                 secret_broker: None, measured_audit: None, credential_currentness: None, gate: original.gate, native: original.native,
@@ -472,12 +472,12 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                 enrollment: Some(EnrollmentParts { authorizer: original.enrollment_authorizer,
                     endpoint: original.enrollment_proxy_endpoint, setup_authorizer: None }) })
         },
-        Some("serverware.nativeStartupConfiguration/v3") => {
+        Some("catchplate.nativeStartupConfiguration/v3") => {
             let original: ConfigurationV3 = serde_json::from_value(value)
                 .map_err(|_| "native v3 configuration violates its closed contract")?;
-            ensure(original.api_version == "serverware.nativeStartupConfiguration/v3"
-                && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
-                && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+            ensure(original.api_version == "catchplate.nativeStartupConfiguration/v3"
+                && original.enrollment_authorizer.api_version == "catchplate.nativeEnrollmentAuthorizer/v1"
+                && original.enrollment_setup_authorizer.api_version == "catchplate.nativeEnrollmentSetupAuthorizer/v1",
                 "native startup v3 authorizer version differs")?;
             Ok(ConfigurationParts { measured_canary_delivery: None, measured_succession: None, historical_broker: None, measured_reconnect: None, measured_capture_retirement: None, measured_static_credential: None, measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: None, measured_issuance: None, measured_refresh: None, service_tokens: super::native_service_tokens::Source::Legacy,
                 secret_broker: None, measured_audit: None, credential_currentness: None, gate: original.gate, native: original.native,
@@ -487,12 +487,12 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                     endpoint: original.enrollment_proxy_endpoint,
                     setup_authorizer: Some(original.enrollment_setup_authorizer) }) })
         },
-        Some("serverware.nativeStartupConfiguration/v4") => {
+        Some("catchplate.nativeStartupConfiguration/v4") => {
             let original: ConfigurationV4 = serde_json::from_value(value)
                 .map_err(|_| "native v4 configuration violates its closed contract")?;
-            ensure(original.api_version == "serverware.nativeStartupConfiguration/v4"
-                && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
-                && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+            ensure(original.api_version == "catchplate.nativeStartupConfiguration/v4"
+                && original.enrollment_authorizer.api_version == "catchplate.nativeEnrollmentAuthorizer/v1"
+                && original.enrollment_setup_authorizer.api_version == "catchplate.nativeEnrollmentSetupAuthorizer/v1",
                 "native startup v4 authorizer version differs")?;
             original.credential_currentness.validate()?;
             Ok(ConfigurationParts { measured_canary_delivery: None, measured_succession: None, historical_broker: None, measured_reconnect: None, measured_capture_retirement: None, measured_static_credential: None, measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: None, measured_issuance: None, measured_refresh: None, service_tokens: super::native_service_tokens::Source::Legacy,
@@ -503,12 +503,12 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                     endpoint: original.enrollment_proxy_endpoint,
                     setup_authorizer: Some(original.enrollment_setup_authorizer) }) })
         },
-        Some("serverware.nativeStartupConfiguration/v5") => {
+        Some("catchplate.nativeStartupConfiguration/v5") => {
             let original: ConfigurationV5 = serde_json::from_value(value)
                 .map_err(|_| "native v5 configuration violates its closed contract")?;
-            ensure(original.api_version == "serverware.nativeStartupConfiguration/v5"
-                && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
-                && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+            ensure(original.api_version == "catchplate.nativeStartupConfiguration/v5"
+                && original.enrollment_authorizer.api_version == "catchplate.nativeEnrollmentAuthorizer/v1"
+                && original.enrollment_setup_authorizer.api_version == "catchplate.nativeEnrollmentSetupAuthorizer/v1",
                 "native startup v5 authorizer version differs")?;
             original.credential_currentness.validate()?;
             original.secret_broker.validate()?;
@@ -521,7 +521,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                     endpoint: original.enrollment_proxy_endpoint,
                     setup_authorizer: Some(original.enrollment_setup_authorizer) }) })
         },
-        Some("serverware.nativeStartupConfiguration/v15") => {
+        Some("catchplate.nativeStartupConfiguration/v15") => {
             let gate = value.get("gate").and_then(Value::as_object)
                 .ok_or("native v15 gate must be closed")?;
             for name in ["credentialLeaseToken", "grantConsumeToken", "rateLimitConsumeToken",
@@ -531,9 +531,9 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
             }
             let original: ConfigurationV15 = serde_json::from_value(value)
                 .map_err(|_| "native v15 configuration violates its closed contract")?;
-            ensure(original.api_version == "serverware.nativeStartupConfiguration/v15"
-                && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
-                && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+            ensure(original.api_version == "catchplate.nativeStartupConfiguration/v15"
+                && original.enrollment_authorizer.api_version == "catchplate.nativeEnrollmentAuthorizer/v1"
+                && original.enrollment_setup_authorizer.api_version == "catchplate.nativeEnrollmentSetupAuthorizer/v1",
                 "native v15 authorizer version differs")?;
             original.credential_currentness.validate()?;
             original.secret_broker.validate()?;
@@ -560,7 +560,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                     endpoint: original.enrollment_proxy_endpoint,
                     setup_authorizer: Some(original.enrollment_setup_authorizer) }) })
         },
-        Some("serverware.nativeStartupConfiguration/v14") => {
+        Some("catchplate.nativeStartupConfiguration/v14") => {
             let gate = value.get("gate").and_then(Value::as_object)
                 .ok_or("native v14 gate must be closed")?;
             for name in ["credentialLeaseToken", "grantConsumeToken", "rateLimitConsumeToken",
@@ -570,9 +570,9 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
             }
             let original: ConfigurationV14 = serde_json::from_value(value)
                 .map_err(|_| "native v14 configuration violates its closed contract")?;
-            ensure(original.api_version == "serverware.nativeStartupConfiguration/v14"
-                && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
-                && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+            ensure(original.api_version == "catchplate.nativeStartupConfiguration/v14"
+                && original.enrollment_authorizer.api_version == "catchplate.nativeEnrollmentAuthorizer/v1"
+                && original.enrollment_setup_authorizer.api_version == "catchplate.nativeEnrollmentSetupAuthorizer/v1",
                 "native v14 authorizer version differs")?;
             original.credential_currentness.validate()?;
             original.secret_broker.validate()?;
@@ -599,7 +599,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                     endpoint: original.enrollment_proxy_endpoint,
                     setup_authorizer: Some(original.enrollment_setup_authorizer) }) })
         },
-        Some("serverware.nativeStartupConfiguration/v13") => {
+        Some("catchplate.nativeStartupConfiguration/v13") => {
             let gate = value.get("gate").and_then(Value::as_object)
                 .ok_or("native v13 gate must be closed")?;
             for name in ["credentialLeaseToken", "grantConsumeToken", "rateLimitConsumeToken",
@@ -609,9 +609,9 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
             }
             let original: ConfigurationV13 = serde_json::from_value(value)
                 .map_err(|_| "native v13 configuration violates its closed contract")?;
-            ensure(original.api_version == "serverware.nativeStartupConfiguration/v13"
-                && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
-                && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+            ensure(original.api_version == "catchplate.nativeStartupConfiguration/v13"
+                && original.enrollment_authorizer.api_version == "catchplate.nativeEnrollmentAuthorizer/v1"
+                && original.enrollment_setup_authorizer.api_version == "catchplate.nativeEnrollmentSetupAuthorizer/v1",
                 "native v13 authorizer version differs")?;
             original.credential_currentness.validate()?;
             original.secret_broker.validate()?;
@@ -638,7 +638,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                     endpoint: original.enrollment_proxy_endpoint,
                     setup_authorizer: Some(original.enrollment_setup_authorizer) }) })
         },
-        Some("serverware.nativeStartupConfiguration/v12") => {
+        Some("catchplate.nativeStartupConfiguration/v12") => {
             let gate = value.get("gate").and_then(Value::as_object)
                 .ok_or("native v12 gate must be closed")?;
             for name in ["credentialLeaseToken", "grantConsumeToken", "rateLimitConsumeToken",
@@ -648,9 +648,9 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
             }
             let original: ConfigurationV12 = serde_json::from_value(value)
                 .map_err(|_| "native v12 configuration violates its closed contract")?;
-            ensure(original.api_version == "serverware.nativeStartupConfiguration/v12"
-                && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
-                && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+            ensure(original.api_version == "catchplate.nativeStartupConfiguration/v12"
+                && original.enrollment_authorizer.api_version == "catchplate.nativeEnrollmentAuthorizer/v1"
+                && original.enrollment_setup_authorizer.api_version == "catchplate.nativeEnrollmentSetupAuthorizer/v1",
                 "native v12 authorizer version differs")?;
             original.credential_currentness.validate()?;
             original.secret_broker.validate()?;
@@ -675,7 +675,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                     endpoint: original.enrollment_proxy_endpoint,
                     setup_authorizer: Some(original.enrollment_setup_authorizer) }) })
         },
-        Some("serverware.nativeStartupConfiguration/v11") => {
+        Some("catchplate.nativeStartupConfiguration/v11") => {
             let gate = value.get("gate").and_then(Value::as_object)
                 .ok_or("native v11 gate must be closed")?;
             for name in ["credentialLeaseToken", "grantConsumeToken", "rateLimitConsumeToken",
@@ -685,9 +685,9 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
             }
             let original: ConfigurationV11 = serde_json::from_value(value)
                 .map_err(|_| "native v11 configuration violates its closed contract")?;
-            ensure(original.api_version == "serverware.nativeStartupConfiguration/v11"
-                && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
-                && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+            ensure(original.api_version == "catchplate.nativeStartupConfiguration/v11"
+                && original.enrollment_authorizer.api_version == "catchplate.nativeEnrollmentAuthorizer/v1"
+                && original.enrollment_setup_authorizer.api_version == "catchplate.nativeEnrollmentSetupAuthorizer/v1",
                 "native v11 authorizer version differs")?;
             original.credential_currentness.validate()?;
             original.secret_broker.validate()?;
@@ -710,7 +710,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                     endpoint: original.enrollment_proxy_endpoint,
                     setup_authorizer: Some(original.enrollment_setup_authorizer) }) })
         },
-        Some("serverware.nativeStartupConfiguration/v10") => {
+        Some("catchplate.nativeStartupConfiguration/v10") => {
             let gate = value.get("gate").and_then(Value::as_object)
                 .ok_or("native v10 gate must be closed")?;
             for name in ["credentialLeaseToken", "grantConsumeToken", "rateLimitConsumeToken",
@@ -720,9 +720,9 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
             }
             let original: ConfigurationV10 = serde_json::from_value(value)
                 .map_err(|_| "native v10 configuration violates its closed contract")?;
-            ensure(original.api_version == "serverware.nativeStartupConfiguration/v10"
-                && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
-                && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+            ensure(original.api_version == "catchplate.nativeStartupConfiguration/v10"
+                && original.enrollment_authorizer.api_version == "catchplate.nativeEnrollmentAuthorizer/v1"
+                && original.enrollment_setup_authorizer.api_version == "catchplate.nativeEnrollmentSetupAuthorizer/v1",
                 "native v10 authorizer version differs")?;
             original.credential_currentness.validate()?;
             original.secret_broker.validate()?;
@@ -744,16 +744,16 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                     endpoint: original.enrollment_proxy_endpoint,
                     setup_authorizer: Some(original.enrollment_setup_authorizer) }) })
         },
-        Some("serverware.nativeStartupConfiguration/v9") => {
+        Some("catchplate.nativeStartupConfiguration/v9") => {
             let gate = value.get("gate").and_then(Value::as_object).ok_or("native v9 gate must be closed")?;
             for name in ["credentialLeaseToken", "grantConsumeToken", "rateLimitConsumeToken",
                 "releaseAuthorizationToken", "managementToken", "auditToken"] {
                 ensure(gate.get(name) == Some(&Value::Null), "native v9 requires explicit null plaintext bearer slots")?;
             }
             let original: ConfigurationV9 = serde_json::from_value(value).map_err(|_|"native v9 configuration violates its closed contract")?;
-            ensure(original.api_version == "serverware.nativeStartupConfiguration/v9"
-                && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
-                && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+            ensure(original.api_version == "catchplate.nativeStartupConfiguration/v9"
+                && original.enrollment_authorizer.api_version == "catchplate.nativeEnrollmentAuthorizer/v1"
+                && original.enrollment_setup_authorizer.api_version == "catchplate.nativeEnrollmentSetupAuthorizer/v1",
                 "native v9 authorizer version differs")?;
             original.credential_currentness.validate()?; original.secret_broker.validate()?; original.measured_refresh.validate()?;
             original.guest_inspector.validate()?; original.measured_issuance.validate()?;
@@ -765,16 +765,16 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                 enrollment: Some(EnrollmentParts { authorizer: original.enrollment_authorizer,
                     endpoint: original.enrollment_proxy_endpoint, setup_authorizer: Some(original.enrollment_setup_authorizer) }) })
         },
-        Some("serverware.nativeStartupConfiguration/v8") => {
+        Some("catchplate.nativeStartupConfiguration/v8") => {
             let gate = value.get("gate").and_then(Value::as_object).ok_or("native v8 gate must be closed")?;
             for name in ["credentialLeaseToken", "grantConsumeToken", "rateLimitConsumeToken",
                 "releaseAuthorizationToken", "managementToken", "auditToken"] {
                 ensure(gate.get(name) == Some(&Value::Null), "native v8 requires explicit null plaintext bearer slots")?;
             }
             let original: ConfigurationV8 = serde_json::from_value(value).map_err(|_|"native v8 configuration violates its closed contract")?;
-            ensure(original.api_version == "serverware.nativeStartupConfiguration/v8"
-                && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
-                && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+            ensure(original.api_version == "catchplate.nativeStartupConfiguration/v8"
+                && original.enrollment_authorizer.api_version == "catchplate.nativeEnrollmentAuthorizer/v1"
+                && original.enrollment_setup_authorizer.api_version == "catchplate.nativeEnrollmentSetupAuthorizer/v1",
                 "native v8 authorizer version differs")?;
             original.credential_currentness.validate()?; original.secret_broker.validate()?; original.measured_refresh.validate()?;
             original.guest_inspector.validate()?;
@@ -786,16 +786,16 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                 enrollment: Some(EnrollmentParts { authorizer: original.enrollment_authorizer,
                     endpoint: original.enrollment_proxy_endpoint, setup_authorizer: Some(original.enrollment_setup_authorizer) }) })
         },
-        Some("serverware.nativeStartupConfiguration/v7") => {
+        Some("catchplate.nativeStartupConfiguration/v7") => {
             let gate = value.get("gate").and_then(Value::as_object).ok_or("native v7 gate must be closed")?;
             for name in ["credentialLeaseToken", "grantConsumeToken", "rateLimitConsumeToken",
                 "releaseAuthorizationToken", "managementToken", "auditToken"] {
                 ensure(gate.get(name) == Some(&Value::Null), "native v7 requires explicit null plaintext bearer slots")?;
             }
             let original: ConfigurationV7 = serde_json::from_value(value).map_err(|_|"native v7 configuration violates its closed contract")?;
-            ensure(original.api_version == "serverware.nativeStartupConfiguration/v7"
-                && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
-                && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+            ensure(original.api_version == "catchplate.nativeStartupConfiguration/v7"
+                && original.enrollment_authorizer.api_version == "catchplate.nativeEnrollmentAuthorizer/v1"
+                && original.enrollment_setup_authorizer.api_version == "catchplate.nativeEnrollmentSetupAuthorizer/v1",
                 "native v7 authorizer version differs")?;
             original.credential_currentness.validate()?; original.secret_broker.validate()?; original.measured_refresh.validate()?;
             Ok(ConfigurationParts { measured_canary_delivery: None, measured_succession: None, historical_broker: None, measured_reconnect: None, measured_capture_retirement: None, measured_static_credential: None, measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: None, measured_issuance: None, measured_refresh: Some(original.measured_refresh),
@@ -806,7 +806,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                 enrollment: Some(EnrollmentParts { authorizer: original.enrollment_authorizer,
                     endpoint: original.enrollment_proxy_endpoint, setup_authorizer: Some(original.enrollment_setup_authorizer) }) })
         },
-        Some("serverware.nativeStartupConfiguration/v6") => {
+        Some("catchplate.nativeStartupConfiguration/v6") => {
             let gate = value.get("gate").and_then(Value::as_object)
                 .ok_or("native v6 gate must be a closed object")?;
             for name in ["credentialLeaseToken", "grantConsumeToken", "rateLimitConsumeToken",
@@ -816,9 +816,9 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
             }
             let original: ConfigurationV6 = serde_json::from_value(value)
                 .map_err(|_| "native v6 configuration violates its closed contract")?;
-            ensure(original.api_version == "serverware.nativeStartupConfiguration/v6"
-                && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
-                && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+            ensure(original.api_version == "catchplate.nativeStartupConfiguration/v6"
+                && original.enrollment_authorizer.api_version == "catchplate.nativeEnrollmentAuthorizer/v1"
+                && original.enrollment_setup_authorizer.api_version == "catchplate.nativeEnrollmentSetupAuthorizer/v1",
                 "native startup v6 authorizer version differs")?;
             original.credential_currentness.validate()?;
             original.secret_broker.validate()?;

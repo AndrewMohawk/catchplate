@@ -9,7 +9,7 @@ unchanged. The dynamic launcher is a separate source-selected executable.
 ## Fixed public inputs and activated listeners
 
 The public-only trust directory is
-`/run/serverware/oidc-session-activation-token-release-dynamic-trust`, with fixed
+`/run/catchplate/oidc-session-activation-token-release-dynamic-trust`, with fixed
 `root-public-key.pem`, `issuer-policy.json` and `proof-bootstrap.json` originals.
 Files must be root-owned mode 0444 with link count one. Protected root-owned
 ancestors and leaves are opened without following symlinks; bytes and metadata
@@ -17,18 +17,18 @@ are checked under the original work/current guard. No runtime root-signing key
 is present in this receiver.
 
 Exactly two initial descriptors, 3 and 4, must have the two distinct names
-`serverware-oidc-session-activation-token-release-bootstrap` and
-`serverware-oidc-session-activation-token-release`. Each name maps to its actual
+`catchplate-oidc-session-activation-token-release-bootstrap` and
+`catchplate-oidc-session-activation-token-release`. Each name maps to its actual
 descriptor and independently checked socket path and metadata; only the two valid
 permutations are accepted. Cross-unit descriptor order is unspecified by
 [systemd's socket documentation](https://raw.githubusercontent.com/systemd/systemd/main/man/systemd.socket.xml),
 so numbering alone never assigns a socket's purpose.
 
 The staging endpoint is
-`/run/serverware/oidc-session-activation-token-release/bootstrap.sock`, pathname
+`/run/catchplate/oidc-session-activation-token-release/bootstrap.sock`, pathname
 owner 0:65496 and mode 0660. Only the actual issuer peer 65496:65496 may send the
 bounded staging request. The release endpoint remains
-`/run/serverware/oidc-session-activation-token-release/release.sock`, pathname
+`/run/catchplate/oidc-session-activation-token-release/release.sock`, pathname
 owner 65502:65532 and mode 0660. Its signed listener device/inode pins must match
 the actual activated listener. The dedicated dynamic socket/service templates
 are an alternative to, not a silent replacement for, the fixed-bootstrap service.
@@ -58,9 +58,9 @@ The root receiver retains both actual pre-wait and receiving guards and their
 sticky epoch/monotonic observations; inner admission can only restrict them.
 
 Only after this admission does the receiver open the existing digest-derived
-outcome slot under `/var/lib/serverware/oidc-session-activation-release-outcomes`
+outcome slot under `/var/lib/catchplate/oidc-session-activation-release-outcomes`
 and the fixed raw32 delivery key at
-`/run/secrets/serverware-oidc-session-activation-token-release-delivery-key`.
+`/run/secrets/catchplate-oidc-session-activation-token-release-delivery-key`.
 No slot is created. Actual directory/listener pins are compared to signed pins,
 and the actual AES key digest is checked against genuine release custody before
 acknowledgment. No token is opened during staging.

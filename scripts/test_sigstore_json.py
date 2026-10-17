@@ -92,7 +92,7 @@ class SigstoreJsonTests(unittest.TestCase):
     def image_payload(self, *, strings: bool = True) -> dict:
         statement = {"subject": [{"name": "local-image", "digest": {"sha256": "a" * 64}}], "predicate": {"rollbackEpoch": 1}}
         proof = self.proof(statement, strings=strings)
-        return {"apiVersion": "serverware.imageSignatures/v1", "kind": "ImageSignatureBundle",
+        return {"apiVersion": "catchplate.imageSignatures/v1", "kind": "ImageSignatureBundle",
                 "metadata": {"sourceTreeDigest": "sha256:" + "b" * 64},
                 "images": [{"service": "local-image", "statement": statement,
                             "signature": proof["signature"], "statement_digest": proof["statement_digest"], "sigstore": proof}]}
@@ -153,7 +153,7 @@ class SigstoreJsonTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "logIndex (is invalid|is outside int64 range)"):
                     sigstore_json.validate(bundle, scope="bundle")
 
-    def test_serverware_counters_and_unrecognized_paths_remain_integer_only(self) -> None:
+    def test_catchplate_counters_and_unrecognized_paths_remain_integer_only(self) -> None:
         for field in ("rollbackEpoch", "sequence", "generation", "ordinal", "logIndex", "treeSize"):
             with self.subTest(field=field):
                 with self.assertRaisesRegex(ValueError, f"{field} must be an unsigned integer"):
@@ -234,14 +234,14 @@ class SigstoreJsonTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     completion.load_image_signatures_json_snapshot(invalid)
         with self.assertRaisesRegex(ValueError, "logIndex must be an unsigned integer"):
-            completion.load_json_bytes(raw, snapshot.path, "ordinary Serverware document")
+            completion.load_json_bytes(raw, snapshot.path, "ordinary Catchplate document")
         with patch.object(Path, "read_bytes", return_value=wire(outer["bundle"])):
             self.assertEqual(cosign_sigstore.load_bundle(Path("local.bundle.json")), outer["bundle"])
-        with patch.dict("os.environ", {"SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID": ""}):
+        with patch.dict("os.environ", {"CATCHPLATE_COSIGN_EXPECTED_REKOR_LOG_ID": ""}):
             transparency = cosign_sigstore.transparency_from_bundle(outer["bundle"])
         self.assertEqual(transparency["log_index"], "0")
         self.assertEqual(transparency["inclusion_proof"], outer["transparency"]["inclusion_proof"])
-        request = {"apiVersion": "serverware.sigstoreSignRequest/v1", "kind": "image-signature-bundle",
+        request = {"apiVersion": "catchplate.sigstoreSignRequest/v1", "kind": "image-signature-bundle",
                    "statement": payload, "statement_digest": digest(wire(payload))}
         cosign_sigstore.validate_statement_request(request)
         request["kind"] = "oci-image-statement"

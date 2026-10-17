@@ -2,7 +2,7 @@
 """Sign one independently approved bootstrap/constructed driver admission.
 
 Uses an existing sealed authority key and the closed full-original input grammar
-in serverware.native_pilot_driver_authority. No owner reconstruction, approvals,
+in catchplate.native_pilot_driver_authority. No owner reconstruction, approvals,
 key generation, installer, changed deadline or automatic retry. The independent
 supervisor must reject incomplete output or a failing invocation, and bound
 filesystem/crypto work. Python/OpenSSL key copies are not guaranteed zeroized.
@@ -19,8 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import native_pilot_authority_io as io
-from serverware import native_pilot_driver_authority as authority
-from serverware import native_shadow_nitro_originals as originals
+from catchplate import native_pilot_driver_authority as authority
+from catchplate import native_shadow_nitro_originals as originals
 
 
 class _Parser(argparse.ArgumentParser):

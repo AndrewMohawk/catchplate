@@ -22,7 +22,7 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
-const dummyToken = "serverware-alchemy-placeholder-v1" // Public placeholder, not a credential.
+const dummyToken = "catchplate-alchemy-placeholder-v1" // Public placeholder, not a credential.
 
 var (
 	uuidPattern     = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -44,29 +44,29 @@ func selectChain(chain string) (host, id string, err error) {
 	case "eth-sepolia":
 		return "eth-sepolia.g.alchemy.com", "0xaa36a7", nil
 	default:
-		return "", "", errors.New("SERVERWARE_ALCHEMY_CHAIN must be eth-mainnet or eth-sepolia")
+		return "", "", errors.New("CATCHPLATE_ALCHEMY_CHAIN must be eth-mainnet or eth-sepolia")
 	}
 }
 
 func readConfig(getenv func(string) string) (config, error) {
 	if getenv("SSL_CERT_FILE") != "" || getenv("SSL_CERT_DIR") != "" {
-		return config{}, errors.New("unset SSL_CERT_FILE and SSL_CERT_DIR; use SERVERWARE_PROXY_CA_FILE for an explicit outer proxy CA")
+		return config{}, errors.New("unset SSL_CERT_FILE and SSL_CERT_DIR; use CATCHPLATE_PROXY_CA_FILE for an explicit outer proxy CA")
 	}
 	c := config{
-		appID: getenv("SERVERWARE_APP_ID"), proxyToken: getenv("SERVERWARE_PROXY_TOKEN"),
-		caFile: getenv("SERVERWARE_CA_FILE"), proxyCAFile: getenv("SERVERWARE_PROXY_CA_FILE"),
-		chain: getenv("SERVERWARE_ALCHEMY_CHAIN"),
+		appID: getenv("CATCHPLATE_APP_ID"), proxyToken: getenv("CATCHPLATE_PROXY_TOKEN"),
+		caFile: getenv("CATCHPLATE_CA_FILE"), proxyCAFile: getenv("CATCHPLATE_PROXY_CA_FILE"),
+		chain: getenv("CATCHPLATE_ALCHEMY_CHAIN"),
 	}
 	var err error
 	c.providerHost, _, err = selectChain(c.chain)
 	if err != nil {
 		return config{}, err
 	}
-	p, err := url.Parse(getenv("SERVERWARE_PROXY_URL"))
+	p, err := url.Parse(getenv("CATCHPLATE_PROXY_URL"))
 	if err != nil || p.Scheme != "https" || p.Opaque != "" || p.User != nil ||
 		p.Host == "" || p.RawQuery != "" || p.ForceQuery || p.Fragment != "" ||
 		(p.Path != "" && p.Path != "/") || p.RawPath != "" {
-		return config{}, errors.New("SERVERWARE_PROXY_URL must be an HTTPS origin without credentials, query, or fragment")
+		return config{}, errors.New("CATCHPLATE_PROXY_URL must be an HTTPS origin without credentials, query, or fragment")
 	}
 	host := p.Hostname()
 	if host == "eth-mainnet.g.alchemy.com" || host == "eth-sepolia.g.alchemy.com" ||
@@ -89,10 +89,10 @@ func readConfig(getenv func(string) string) (config, error) {
 	decoded, err := base64.RawURLEncoding.DecodeString(c.proxyToken)
 	if !uuidPattern.MatchString(c.appID) || err != nil || len(decoded) != 32 ||
 		base64.RawURLEncoding.EncodeToString(decoded) != c.proxyToken {
-		return config{}, errors.New("set the saved application UUID and its issued SERVERWARE_PROXY_TOKEN")
+		return config{}, errors.New("set the saved application UUID and its issued CATCHPLATE_PROXY_TOKEN")
 	}
 	if c.caFile == "" {
-		return config{}, errors.New("set SERVERWARE_CA_FILE to the verified interception CA file")
+		return config{}, errors.New("set CATCHPLATE_CA_FILE to the verified interception CA file")
 	}
 	p.Path = ""
 	c.proxy = p
@@ -115,7 +115,7 @@ func readCAFile(path string) ([]byte, error) {
 func clientTLS(proxyHost, providerHost string, proxyRoots *x509.CertPool, innerPEM []byte) (*tls.Config, error) {
 	innerRoots := x509.NewCertPool()
 	if proxyRoots == nil || !innerRoots.AppendCertsFromPEM(innerPEM) {
-		return nil, errors.New("configured Serverware CA file is not a PEM certificate bundle")
+		return nil, errors.New("configured Catchplate CA file is not a PEM certificate bundle")
 	}
 	outerRoots := proxyRoots.Clone()
 	combined := outerRoots.Clone()
@@ -212,11 +212,11 @@ func chainStatus(ctx context.Context, chain string, transport http.RoundTripper)
 	params := []interface{}{}
 	var chainID string
 	if err := client.CallContext(ctx, &chainID, "eth_chainId", params...); err != nil || chainID != expectedID {
-		return summary{}, errors.New("Alchemy chain ID read failed; inspect Serverware audit records and the saved permission (no automatic retry)")
+		return summary{}, errors.New("Alchemy chain ID read failed; inspect Catchplate audit records and the saved permission (no automatic retry)")
 	}
 	var block string
 	if err := client.CallContext(ctx, &block, "eth_blockNumber", params...); err != nil || !quantityPattern.MatchString(block) {
-		return summary{}, errors.New("Alchemy block height read failed; inspect Serverware audit records and the saved permission (no automatic retry)")
+		return summary{}, errors.New("Alchemy block height read failed; inspect Catchplate audit records and the saved permission (no automatic retry)")
 	}
 	height, err := strconv.ParseUint(block[2:], 16, 64)
 	if err != nil {

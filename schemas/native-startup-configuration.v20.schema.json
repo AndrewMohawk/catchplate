@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v20.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-startup-configuration.v20.schema.json",
   "title": "Explicit native cumulative ledger and heartbeat startup",
   "$comment": "Requires delivery/v2 and independently root-signed heartbeat purpose alongside unchanged v18 owners. Old v19 remains delivery/v1. Native heartbeat is not Fleet heartbeat, full checkpoint or readiness. Recovery never retries contact.",
   "type": "object",
@@ -32,7 +32,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.nativeStartupConfiguration/v20"
+      "const": "catchplate.nativeStartupConfiguration/v20"
     },
     "gate": {
       "$ref": "native-startup-configuration.v18.schema.json#/properties/gate"

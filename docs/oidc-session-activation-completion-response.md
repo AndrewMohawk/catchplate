@@ -7,8 +7,8 @@ test, socket execution, provisioning or runtime verification was performed.
 
 ## Fixed transport
 
-[`authority_oidc_session_activation_completion_transport`](../serverware/authority_oidc_session_activation_completion_transport.py)
-uses `/run/serverware/oidc-session-activation/completion.sock`, with the expected
+[`authority_oidc_session_activation_completion_transport`](../catchplate/authority_oidc_session_activation_completion_transport.py)
+uses `/run/catchplate/oidc-session-activation/completion.sock`, with the expected
 root-created inherited listener's kernel peer UID/GID `0:0`. Actual service
 request-peer admission occurs before body reads; it is not performed by this
 client-side peer check. Installation and socket DAC remain separate.
@@ -31,7 +31,7 @@ No alternate endpoint, automatic resend or fallback exists.
 
 ## Genuine private receiving verification
 
-[`authority_oidc_session_activation_completion_response`](../serverware/authority_oidc_session_activation_completion_response.py)
+[`authority_oidc_session_activation_completion_response`](../catchplate/authority_oidc_session_activation_completion_response.py)
 provides `_verify_on_work` with original plan/bundle, caller/grant/enrollments,
 reserve/snapshot/ACK, independent keys/configuration/authorization and pending
 scope, exact historical custody owner, and current work/window/deadline.

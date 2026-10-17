@@ -9,7 +9,7 @@ or immediate invalidation of a lease already held by a data plane.
 
 Automatic refresh is authorized only by the mandatory `oauthRefreshPolicy`
 block in the actual independently signed measured authority configuration,
-with schema `serverware.oauthRefreshAuthorityPolicy/v1` and the three separately
+with schema `catchplate.oauthRefreshAuthorityPolicy/v1` and the three separately
 enabled fixed operations. The verifier and planner each admit that original
 configuration, purpose and enrollment independently. No additional envelope
 duplicates the configuration signature. The signed enrollment authenticates

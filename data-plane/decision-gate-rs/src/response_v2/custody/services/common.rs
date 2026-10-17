@@ -70,7 +70,7 @@ use super::super::{
 };
 
 const BACKEND_READINESS_API_VERSION: &str =
-    "serverware.responseObservationV2ServiceBackendReadiness/v1";
+    "catchplate.responseObservationV2ServiceBackendReadiness/v1";
 const SOCKET_MODE: u32 = 0o660;
 const READINESS_MODE: u32 = 0o640;
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
@@ -1996,7 +1996,7 @@ fn in_process_engine_readiness(
             }
             let mut hasher = Sha256::new();
             hasher.update(
-                b"serverware.response-v2/local-engine-readiness/v1",
+                b"catchplate.response-v2/local-engine-readiness/v1",
             );
             hasher.update(
                 record.reconciliation_state_sha256.as_bytes(),

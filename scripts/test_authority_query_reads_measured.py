@@ -22,10 +22,10 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_complete_query as complete
-from serverware import authority_query_read_work as work_component
-from serverware import authority_query_reads as reads
-from serverware import authority_transition_core as core
+from catchplate import authority_complete_query as complete
+from catchplate import authority_query_read_work as work_component
+from catchplate import authority_query_reads as reads
+from catchplate import authority_transition_core as core
 import test_authority_complete_query as complete_oracle
 import test_authority_query_reads as legacy_oracle
 

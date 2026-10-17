@@ -1,6 +1,6 @@
 # Complete installed route classification
 
-`serverware.policy/v2` is a new, explicit signed policy profile. Its route and
+`catchplate.policy/v2` is a new, explicit signed policy profile. Its route and
 adapter semantics remain the existing policy semantics, including JIT, finite
 numeric predicates, credential-free routes and generic adapters. The additional
 `routeAuthority` object pins a complete deterministic mapping; it is not an
@@ -65,7 +65,7 @@ no v1 migration, profile relabeling or first-expansion-cell fallback is implied.
 ## Finite-number canonical transcript
 
 V2 signature/hash bytes and all mapping hash bytes are the ASCII bytes of
-`serverware.policyTypedCanonical/v1`, NUL, and compact sorted-key JSON of a
+`catchplate.policyTypedCanonical/v1`, NUL, and compact sorted-key JSON of a
 fully tagged transcript. Object is `["object", [[key, child], ...]]` with keys
 sorted by Unicode scalar order; array is `["array", [child, ...]]`. Scalars are
 `["string", value]`, `["boolean", value]`, `["null"]`, `["integer", decimal]`

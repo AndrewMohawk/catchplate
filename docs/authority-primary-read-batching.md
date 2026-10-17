@@ -52,7 +52,7 @@ The separate counter adds 65 reads. These are acquisition bounds, not wall-time,
 query-planner, total SQL-byte, whole-operation or production capacity results.
 
 Every batch emits one trace entry for its one actual node SELECT. Its closed
-key profile is `serverware.policyAuthorityRadixReadBatch/v1`, containing a sorted
+key profile is `catchplate.policyAuthorityRadixReadBatch/v1`, containing a sorted
 unique list of one to sixteen parent identities with exact depth/prefix shapes.
 Producer and trace consumer use the same validator and limits. Unknown declared
 profiles, additional fields, duplicate/unsorted parents and overflow reject.

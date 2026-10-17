@@ -1,7 +1,7 @@
 # Private release cold bootstrap
 
 `oidc_session_activation_release_bootstrap.py` admits a fresh, root-signed
-`serverware.signedOidcSessionActivationReleaseBootstrap/v1` original for the
+`catchplate.signedOidcSessionActivationReleaseBootstrap/v1` original for the
 fixed `oidc-session-activation-token-release` process, UID/GID 65502. This is
 source-only resource authority, not a service, release proof or runtime claim.
 
@@ -40,7 +40,7 @@ The exact inherited descriptor inventory is fixed:
 The launch pins the directory's device, inode, UID/GID 65502 and mode 0700.
 There is no global single-slot path, caller-selected path, path creation or
 directory-derived checkpoint. The listener path is fixed at
-`/run/serverware/oidc-session-activation-token-release/release.sock`, with peer
+`/run/catchplate/oidc-session-activation-token-release/release.sock`, with peer
 UID/GID 65532 and signed socket/path device/inode pins. It is only validated and
 preserved by resource intake; this bootstrap does not accept, frame or deliver
 a request. No history key, signer, SQL/TLS credential or state client is part of

@@ -25,15 +25,15 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
 
-from serverware import native_pilot_ordinary_key_authority as authority
+from catchplate import native_pilot_ordinary_key_authority as authority
 from test_native_pilot_ordinary_keys import identity_fixture
 
-API = "serverware.policyCustodyAuthorityHistory/v3"
+API = "catchplate.policyCustodyAuthorityHistory/v3"
 ROLE = "durable-recovery-store"
-EPOCH_DOMAIN = b"serverware.policyCustodyAuthorityEpochStatement/v3"
-ANCHOR_SIGNATURE_DOMAIN = b"serverware.policyCustodyRetainedAuthorityEpochAnchor/v3"
-ANCHOR_DIGEST_DOMAIN = b"serverware.policyCustodyRetainedAuthorityEpochAnchorDigest/v3"
-HISTORY_DOMAIN = b"serverware.policyCustodyAuthorityHistoryManifest/v3"
+EPOCH_DOMAIN = b"catchplate.policyCustodyAuthorityEpochStatement/v3"
+ANCHOR_SIGNATURE_DOMAIN = b"catchplate.policyCustodyRetainedAuthorityEpochAnchor/v3"
+ANCHOR_DIGEST_DOMAIN = b"catchplate.policyCustodyRetainedAuthorityEpochAnchorDigest/v3"
+HISTORY_DOMAIN = b"catchplate.policyCustodyAuthorityHistoryManifest/v3"
 HISTORY_FIELDS = ("apiVersion", "authorityRole", "rootAuthority", "retention", "firstRetainedEpoch",
     "adjacentTransitions", "compactionAnchors", "replayTombstones")
 ANCHOR_FIELDS = ("apiVersion", "retainedEpoch", "prunedThroughEpochSequence", "prunedHistoryRootSha256",
@@ -115,7 +115,7 @@ def _fixture(*, reused_pair=None):
         "prunedHistoryRootSha256": _synthetic("supplied-pruned-history-root"), "prunedTerminalEpochSha256": None,
         "rootAuthorityKeyId": public["root"]["keyId"], "rootAuthorityKeySpkiSha256": public["root"]["keySpkiSha256"]}
     raw = _canonical([anchor[field] for field in ANCHOR_FIELDS])
-    preimage = (b"serverware-signature-v1\0" + len(ANCHOR_SIGNATURE_DOMAIN).to_bytes(8, "big")
+    preimage = (b"catchplate-signature-v1\0" + len(ANCHOR_SIGNATURE_DOMAIN).to_bytes(8, "big")
         + ANCHOR_SIGNATURE_DOMAIN + len(raw).to_bytes(8, "big") + raw)
     for field, name in zip(SIGNATURE_FIELDS, names, strict=True):
         anchor[field] = _encoded(keys[name].sign(preimage))

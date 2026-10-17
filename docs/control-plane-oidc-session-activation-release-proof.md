@@ -25,13 +25,13 @@ configured purpose pins and the running HTTP response key.
 
 The endpoint's exact fields are `socketPath`, `requestTimeoutSeconds`,
 `listenerUid`, `listenerGid`. Its path is fixed to
-`/run/serverware/oidc-session-activation-token-release/proof.sock`, timeout is
+`/run/catchplate/oidc-session-activation-token-release/proof.sock`, timeout is
 an integer 1–30 seconds and the root-created listener peer is `0:0`.
 `release_proof_enabled` reports configuration only.
 
 The optional `docker-compose.oidc-session-activation-release-proof.yml` overlay
 mounts the existing socket selected by
-`SERVERWARE_OIDC_SESSION_ACTIVATION_RELEASE_PROOF_SOCKET` at that exact path,
+`CATCHPLATE_OIDC_SESSION_ACTIVATION_RELEASE_PROOF_SOCKET` at that exact path,
 read-only with `create_host_path: false`. The environment value selects only a
 host mount, never transport authority. It creates no key, service or socket.
 

@@ -33,14 +33,14 @@ def offline(event, _args):
 
 
 sys.addaudithook(offline)
-import serverware
+import catchplate
 from fastapi import HTTPException, Request
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from serverware import operator_ecr_signing_api as api
-from serverware.response_identity import validate_response_nonce
+from catchplate import operator_ecr_signing_api as api
+from catchplate.response_identity import validate_response_nonce
 
 PUBLICATION = "12345678-1234-4234-8234-123456789abc"
 CHILD = "87654321-1234-4234-8234-123456789abc"
@@ -56,21 +56,21 @@ BODY = b'{"registryId":"123456789012","repositoryName":"fixture"}'
 def modules(**values):
     with ExitStack() as stack:
         for name, value in values.items():
-            stack.enter_context(patch.dict(sys.modules, {"serverware." + name: value}))
-            stack.enter_context(patch.object(serverware, name, value, create=True))
+            stack.enter_context(patch.dict(sys.modules, {"catchplate." + name: value}))
+            stack.enter_context(patch.object(catchplate, name, value, create=True))
         yield
 
 
 def app_double():
-    tree = ast.parse((ROOT / "serverware/app.py").read_text())
+    tree = ast.parse((ROOT / "catchplate/app.py").read_text())
     names = {"_require_data_plane_token", "_require_currentness_response_context", "_request_signature_inputs"}
     selected = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
     assert len(selected) == len(names)
-    module = ModuleType("serverware.app")
+    module = ModuleType("catchplate.app")
     module.__dict__.update(HTTPException=HTTPException, hmac=hmac, validate_response_nonce=validate_response_nonce,
         DATA_PLANE_INSTANCE_ID="inert-test-gate", EXPECTED_DATA_PLANE_BINARY_DIGEST=H)
     unit = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), *selected], type_ignores=[])
-    exec(compile(ast.fix_missing_locations(unit), str(ROOT / "serverware/app.py"), "exec"), module.__dict__)
+    exec(compile(ast.fix_missing_locations(unit), str(ROOT / "catchplate/app.py"), "exec"), module.__dict__)
 
     async def blocking(slots, function, *args):
         async with slots:
@@ -152,7 +152,7 @@ class SigningApiTests(unittest.TestCase):
             MASTER_KEY_PATH=Path("/never-read"), MASTER_KEY_UNSEAL_COMMAND="", RELEASE_CHANNEL="test",
             ensure_data_dirs=lambda: (_ for _ in ()).throw(AssertionError("no host directories")))
         with modules(config=cls.config):
-            from serverware import crypto
+            from catchplate import crypto
         cls.crypto = crypto
 
     def setUp(self):
@@ -186,7 +186,7 @@ class SigningApiTests(unittest.TestCase):
         self.assertEqual(api._sha(ciphertext), envelope["ciphertextSha256"])
         shared = self.recipient.exchange(X25519PublicKey.from_public_bytes(decode(envelope["serverEphemeralPublicKey"])))
         key = HKDF(algorithm=hashes.SHA256(), length=32, salt=decode(NONCE),
-            info=b"serverware:credential-lease-envelope:v2\0" + hashlib.sha256(api.canonical(aad)).digest()).derive(shared)
+            info=b"catchplate:credential-lease-envelope:v2\0" + hashlib.sha256(api.canonical(aad)).digest()).derive(shared)
         return json.loads(AESGCM(key).decrypt(decode(envelope["aeadNonce"]), ciphertext, api.canonical(aad)))
 
     def finish_wire(self, outcome="response", status=200):
@@ -240,7 +240,7 @@ class SigningApiTests(unittest.TestCase):
             self.open_credentials(conn, identifier, expected_version=expected_version)
             return api.signing.Credentials(kind="session", access_key_id="ASIA" + "T" * 16,
                 secret_access_key=SECRET, session_token=token, expires_at=expiry)
-        with patch.object(serverware.db, "open_operator_ecr_credentials", side_effect=session_credentials):
+        with patch.object(catchplate.db, "open_operator_ecr_credentials", side_effect=session_credentials):
             result = api.reserve(self.wire, NONCE)
         self.assertNotIn(token, json.dumps(result))
         plain = self.decrypt(result)
@@ -349,16 +349,16 @@ class SigningApiTests(unittest.TestCase):
             return {"type": "http.request", "body": api.canonical(self.wire) if body is None else body, "more_body": False}
         values = [(b"content-type", b"application/json"), *headers]
         if token is not None:
-            values.append((b"x-serverware-data-plane-token", token.encode()))
+            values.append((b"x-catchplate-data-plane-token", token.encode()))
         if nonce is not None:
-            values.append((b"x-serverware-response-nonce", nonce.encode()))
+            values.append((b"x-catchplate-response-nonce", nonce.encode()))
         return Request({"type": "http", "method": "POST", "scheme": "https", "path": path,
             "raw_path": path.encode() if raw_path is None else raw_path, "query_string": b"", "headers": values}, receive), reads
 
     def test_auth_nonce_exact_path_and_framing_refuse_before_body(self):
         cases = ({"token": None}, {"token": "wrong"}, {"nonce": None}, {"nonce": "bad"},
             {"raw_path": b"/api/data-plane/ecr-publications/%72eserve"},
-            {"headers": [(b"x-serverware-data-plane-token", TOKEN.encode())]},
+            {"headers": [(b"x-catchplate-data-plane-token", TOKEN.encode())]},
             {"headers": [(b"content-length", str(api.MAX_RESERVE_BYTES + 1).encode())]},
             {"headers": [(b"content-length", b"2"), (b"transfer-encoding", b"chunked")]},
             {"headers": [(b"content-encoding", b"gzip")]})

@@ -35,10 +35,10 @@ def definition(tree, name):
 class JitCompoundProcessSourceControls(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.module = read("serverware/authority_service.py")
+        cls.module = read("catchplate/authority_service.py")
         cls.process = definition(cls.module, "AuthorityProcess")
         cls.method = definition(cls.process, "_produce_jit_compound")
-        cls.service = definition(read("serverware/authority_jit_compound_service.py"),
+        cls.service = definition(read("catchplate/authority_jit_compound_service.py"),
             "_produce_on_work")
 
     def test_private_signature_matches_actual_service_without_optional_substitutes(self):
@@ -62,7 +62,7 @@ class JitCompoundProcessSourceControls(unittest.TestCase):
             self.method.body[0].value.value)
         imported = self.method.body[1]
         self.assertIsInstance(imported, ast.ImportFrom)
-        self.assertEqual(imported.module, "serverware")
+        self.assertEqual(imported.module, "catchplate")
         self.assertEqual(imported.level, 0)
         self.assertEqual([(alias.name, alias.asname) for alias in imported.names],
             [("authority_jit_compound_service", "jit")])

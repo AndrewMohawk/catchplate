@@ -1,6 +1,6 @@
 # Root-original-bound activation planning
 
-[`authority_oidc_session_activation_cold_planning.py`](../serverware/authority_oidc_session_activation_cold_planning.py)
+[`authority_oidc_session_activation_cold_planning.py`](../catchplate/authority_oidc_session_activation_cold_planning.py)
 connects independently root-authenticated launch originals and a fresh signed
 no-pending head to the actual [activation plan owner](oidc-session-activation-plan.md)
 and separate first-ciphertext execution-bundle store.

@@ -21,13 +21,13 @@ from cryptography.exceptions import InvalidSignature
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
 
-from serverware import native_pilot_bridge_authority as authority
-from serverware import native_pilot_bridge_key_profile as profile
-from serverware import native_pilot_closure_authority as closure
-from serverware import native_pilot_encrypted_authority as endpoint_encrypted
-from serverware import native_pilot_key_profile as endpoint_keys
-from serverware import native_pilot_measured_configuration as measured
-from serverware import native_pilot_verifier_authority as endpoint_verifier
+from catchplate import native_pilot_bridge_authority as authority
+from catchplate import native_pilot_bridge_key_profile as profile
+from catchplate import native_pilot_closure_authority as closure
+from catchplate import native_pilot_encrypted_authority as endpoint_encrypted
+from catchplate import native_pilot_key_profile as endpoint_keys
+from catchplate import native_pilot_measured_configuration as measured
+from catchplate import native_pilot_verifier_authority as endpoint_verifier
 from test_native_pilot_bridge_runtime import fixture as runtime_fixture
 from test_native_pilot_closure_set import canonical, sha, synthetic
 from test_native_pilot_generation_scope import fixture as scope_fixture, key_fixture, signed_message, encoded, NOW
@@ -50,10 +50,10 @@ PROOFS = {"retrieval": ("retrieval", "retrieval-peer-directory"),
 EXTERNAL = ("unavailable-ingress", "spool-compaction", "publication-reconciliation", "activation-publication")
 WINDOW = ("bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode", "issuedAtBoottimeNs",
     "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId")
-DOMAINS = {"role-keys": "serverware.nativeShadowRoleKeyAssignment.signature/v2",
-    "admission": "serverware.nativeShadowBridgeAdmissionAssignment.signature/v1",
-    "encrypted-delivery": "serverware.nativeShadowEncryptedKeyDelivery.signature/v1",
-    "verifier-transport": "serverware.nativeShadowVerifierTransport.signature/v1"}
+DOMAINS = {"role-keys": "catchplate.nativeShadowRoleKeyAssignment.signature/v2",
+    "admission": "catchplate.nativeShadowBridgeAdmissionAssignment.signature/v1",
+    "encrypted-delivery": "catchplate.nativeShadowEncryptedKeyDelivery.signature/v1",
+    "verifier-transport": "catchplate.nativeShadowVerifierTransport.signature/v1"}
 
 
 def clocks():
@@ -78,7 +78,7 @@ def fixture(*, large=False, ciphertext_matches=True):
             ("buildRecipeSha256", "buildRecipeSha256"), ("provenanceSha256", "provenanceStatementSha256")):
         image[target] = manifest["buildProvenance"][field]
     private, cold_key = _cold_key("bridge-c9")
-    cold = {"apiVersion": "serverware.policyCustodyGuestConfiguration/v1", "authority": cold_key,
+    cold = {"apiVersion": "catchplate.policyCustodyGuestConfiguration/v1", "authority": cold_key,
         "serviceRole": "production-bridge", "uid": config["uid"], "gid": config["gid"]}
     cold_raw = canonical(cold)
     config["deliveryConfiguration"]["sha256"] = sha(cold_raw)
@@ -87,12 +87,12 @@ def fixture(*, large=False, ciphertext_matches=True):
         "bootIdBase64url": clocks()["boot"][0], "timeNamespaceDevice": 4, "timeNamespaceInode": 5,
         "issuedAtBoottimeNs": "1000", "startupDeadlineBoottimeNs": "2000000000",
         "lifetimeDeadlineBoottimeNs": "60000000000", "invocationId": "1" * 32}
-    window_raw = canonical({"apiVersion": "serverware.nativeShadowDriverBootstrapWindow/v1", "payload": window,
+    window_raw = canonical({"apiVersion": "catchplate.nativeShadowDriverBootstrapWindow/v1", "payload": window,
         "signatureBase64url": encoded(key_fixture("window")[0].sign(
-            b"serverware.nativeShadowDriverBootstrapWindow.signature/v1\0" + canonical(window)))})
+            b"catchplate.nativeShadowDriverBootstrapWindow.signature/v1\0" + canonical(window)))})
     observed = json.loads(source["driver_observation_original"])
     observed.update(configurationSha256=sha(config_raw), windowSha256=sha(window_raw))
-    control = canonical({"apiVersion": "serverware.nativeShadowDriverBootstrapControl/v1",
+    control = canonical({"apiVersion": "catchplate.nativeShadowDriverBootstrapControl/v1",
         "supervisorExecutableSha256": synthetic("supervisor"),
         "configurationSha256": sha(config_raw), "windowSha256": sha(window_raw)})
 
@@ -109,7 +109,7 @@ def fixture(*, large=False, ciphertext_matches=True):
     other = [row["activationFdName"] for row in runtime["serviceSessions"]]
     for role in (*NATIVE_SIGNERS, *EXTERNAL):
         name = "signer-" + role
-        path = "/run/serverware-shadow-" + NATIVE_SIGNERS[role][0] + "/listener.sock" if role in NATIVE_SIGNERS else "/run/synthetic/" + role + ".sock"
+        path = "/run/catchplate-shadow-" + NATIVE_SIGNERS[role][0] + "/listener.sock" if role in NATIVE_SIGNERS else "/run/synthetic/" + role + ".sock"
         runtime["parentSignerEndpoints"].append({"signerRole": role, "activationFdName": name,
             "expectedSocketPath": path, "expectedPeer": copy.deepcopy(peer), "authorityBindingCredential": name,
             "authorityKeyId": synthetic(name + "/key"), "authorityKeySpkiSha256": synthetic(name + "/spki")})
@@ -120,7 +120,7 @@ def fixture(*, large=False, ciphertext_matches=True):
     for role, (directory, activation) in PROOFS.items():
         name = "proof-" + role
         runtime["proofEndpoints"].append({"endpointKind": role, "activationFdName": name,
-            "expectedSocketPath": "/run/serverware-shadow-" + directory + "/listener.sock", "expectedPeer": copy.deepcopy(peer),
+            "expectedSocketPath": "/run/catchplate-shadow-" + directory + "/listener.sock", "expectedPeer": copy.deepcopy(peer),
             "authorityBindingCredential": name, "authorityKeyId": synthetic(name + "/key"),
             "authorityKeySpkiSha256": synthetic(name + "/spki")})
         inventory[name] = stat.S_IFSOCK; inventory[activation] = stat.S_IFDIR
@@ -135,18 +135,18 @@ def fixture(*, large=False, ciphertext_matches=True):
     transport = config["continuation"]["keyTransport"]
     payload = {"configurationSha256": sha(cold_raw), "authorityKeyId": cold_key["keyId"],
         **{name: cold[name] for name in ("serviceRole", "uid", "gid")}, **{name: window[name] for name in WINDOW},
-        "runtimeConfig": {"path": "/etc/serverware/native-pilot-inputs/bridge-runtime.json", "sha256": sha(runtime_raw)},
+        "runtimeConfig": {"path": "/etc/catchplate/native-pilot-inputs/bridge-runtime.json", "sha256": sha(runtime_raw)},
         "activation": activation, "credentials": [{"name": "shadow-encrypted-role-inventory", "length": 256, "signing": None,
-            "original": {"path": "/etc/serverware/synthetic-encrypted-bridge.json", "sha256": transport["encryptedInventorySha256"]
+            "original": {"path": "/etc/catchplate/synthetic-encrypted-bridge.json", "sha256": transport["encryptedInventorySha256"]
                 if ciphertext_matches else synthetic("different-unprovisioned-ciphertext")}}]}
-    delivery_raw = canonical({"apiVersion": "serverware.policyCustodyGuestDelivery/v1", "payload": payload,
-        "signatureBase64url": encoded(private.sign(b"serverware.policyCustodyGuestDelivery.signature/v1\0" + canonical(payload)))})
-    delivery_input = canonical({"apiVersion": "serverware.nativePilotDeliverySigningInput/v1", "role": "bridge",
+    delivery_raw = canonical({"apiVersion": "catchplate.policyCustodyGuestDelivery/v1", "payload": payload,
+        "signatureBase64url": encoded(private.sign(b"catchplate.policyCustodyGuestDelivery.signature/v1\0" + canonical(payload)))})
+    delivery_input = canonical({"apiVersion": "catchplate.nativePilotDeliverySigningInput/v1", "role": "bridge",
         "configurationOriginal": cold_raw.decode("ascii"), "ownerConfigurationOriginal": config_raw.decode("ascii"),
         "windowOriginal": window_raw.decode("ascii"), "observationOriginal": canonical(observed).decode("ascii"),
         "runtimeOriginal": runtime_raw.decode("ascii"), "payloadOriginal": canonical(payload).decode("ascii"),
         "activationOriginal": canonical(activation).decode("ascii")})
-    value = {"apiVersion": "serverware.nativePilotBridgeKeyAuthorityInput/v1", "operation": "role-keys",
+    value = {"apiVersion": "catchplate.nativePilotBridgeKeyAuthorityInput/v1", "operation": "role-keys",
         "controlOriginal": control.decode("ascii"), "deliveryInputOriginal": delivery_input.decode("ascii"),
         "deliveryOriginal": delivery_raw.decode("ascii"), "recipeOriginals": originals, "measured": result,
         "policy": {"localRoles": ["custody-result-envelope"], "challengeBase64url": encoded(b"synthetic-bridge-challenge-32!!!".ljust(32, b"!")),
@@ -160,7 +160,7 @@ def expected_key(value, guest, manifest):
     envelope = json.loads(value["recipeOriginals"]["assignmentOriginal"])
     trust = json.loads(value["recipeOriginals"]["trustOriginal"])
     supervisor = public_keys()[-1]
-    return {"apiVersion": "serverware.nativeShadowRoleKeyAssignment/v2", "profile": "preassigned-encrypted-local-v1",
+    return {"apiVersion": "catchplate.nativeShadowRoleKeyAssignment/v2", "profile": "preassigned-encrypted-local-v1",
         "purpose": "shadow-role-key-possession", "assignmentId": envelope["payload"]["assignmentId"],
         "assignmentPayloadSha256": envelope["payloadSha256"], "assignmentRevision": envelope["payload"]["assignmentRevision"],
         "guest": guest, "executionClosureManifestSha256": manifest["manifestSha256"], "fullKeySetRootSha256": key_root(public_keys()),
@@ -175,7 +175,7 @@ def signed(operation, payload, *, domain=None):
     signature = encoded(key_fixture("custody-supervisor-capability")[0].sign(signed_message(domain or DOMAINS[operation], payload)))
     value = {"payload": payload, "signature": signature}
     if operation in ("encrypted-delivery", "verifier-transport"):
-        value = {"apiVersion": "serverware.nativeShadow" + ("EncryptedKeyDelivery" if operation == "encrypted-delivery" else "VerifierTransport") + "/v1",
+        value = {"apiVersion": "catchplate.nativeShadow" + ("EncryptedKeyDelivery" if operation == "encrypted-delivery" else "VerifierTransport") + "/v1",
             "authorization": value}
     raw = canonical(value)
     return raw, {"original": raw.decode("ascii"), "sha256": sha(raw)}
@@ -187,7 +187,7 @@ def pair(value, guest, manifest):
     first_raw, _ = signed("role-keys", first_payload)
     second = copy.deepcopy(value); second.update(operation="admission", roleKeyOriginal=first_raw.decode("ascii"))
     payload = {name: item for name, item in first_payload.items() if name not in ("apiVersion", "purpose", "profile", "assignmentId", "localRoles")}
-    payload.update(apiVersion="serverware.nativeShadowBridgeAdmissionAssignment/v1", purpose="native-shadow-context-and-production-admission",
+    payload.update(apiVersion="catchplate.nativeShadowBridgeAdmissionAssignment/v1", purpose="native-shadow-context-and-production-admission",
         keyAuthorizationSha256=sha(first_raw), localKeySetRootSha256=key_root([record for record in public_keys()
             if record["role"] in value["policy"]["localRoles"]]),
         productionConfigurationBindingSha256=value["measured"]["configurationBindingSha256"])
@@ -197,7 +197,7 @@ def pair(value, guest, manifest):
 
 
 def late_input(operation, pair_value):
-    value = {"apiVersion": "serverware.nativePilotBridgeLateAuthorityInput/v1", "operation": operation, **pair_value,
+    value = {"apiVersion": "catchplate.nativePilotBridgeLateAuthorityInput/v1", "operation": operation, **pair_value,
         "issuedAtUnixNanos": NOW - 100_000_000, "expiresAtUnixNanos": NOW + 100_000_000}
     if operation == "verifier-transport": value["parentPort"] = 11443
     return value
@@ -213,7 +213,7 @@ class BridgeAuthorizationControls(unittest.TestCase):
                 {"original": raw.decode("ascii"), "sha256": sha(raw)}, **clocks()), raw)
         admitted = profile.admitted_pair(*(records[name].encode("ascii") for name in authority.PAIR_FIELDS), **clocks())
         self.assertEqual(admitted["expectedScope"]["productionConfigurationBindingSha256"], value["measured"]["configurationBindingSha256"])
-        self.assertEqual(admitted["expectedScope"]["apiVersion"], "serverware.nativeShadowBridgeAdmissionScope/v1")
+        self.assertEqual(admitted["expectedScope"]["apiVersion"], "catchplate.nativeShadowBridgeAdmissionScope/v1")
         self.assertEqual(value, frozen)
 
     def test_encrypted_and_verifier_exact_outputs_use_original_transport_and_keys(self):
@@ -228,12 +228,12 @@ class BridgeAuthorizationControls(unittest.TestCase):
                 issuedAtUnixNanos=supplied["issuedAtUnixNanos"], expiresAtUnixNanos=supplied["expiresAtUnixNanos"])
             if operation == "encrypted-delivery":
                 config = json.loads(json.loads(value["deliveryInputOriginal"])["ownerConfigurationOriginal"])
-                expected = dict(common, apiVersion="serverware.nativeShadowEncryptedKeyDeliveryAssignment/v1",
+                expected = dict(common, apiVersion="catchplate.nativeShadowEncryptedKeyDeliveryAssignment/v1",
                     purpose="kms-recipient-shadow-local-keys", transport=config["continuation"]["keyTransport"],
                     localKeySetRootSha256=json.loads(records["admissionOriginal"])["payload"]["localKeySetRootSha256"])
             else:
                 verifier = public_keys()[-2]
-                expected = dict(common, apiVersion="serverware.nativeShadowVerifierTransportAssignment/v1",
+                expected = dict(common, apiVersion="catchplate.nativeShadowVerifierTransportAssignment/v1",
                     purpose="public-shadow-nitro-verification", parentPort=11443, verifierKeyId=verifier["keyId"],
                     verifierKeySpkiSha256=verifier["keySpkiSha256"], verifierKeyMaterialSha256=verifier["keyMaterialSha256"])
             raw, result = signed(operation, expected)
@@ -285,7 +285,7 @@ class BridgeAuthorizationControls(unittest.TestCase):
             supplied = late_input("verifier-transport", records)
             admitted = json.loads(supplied["admissionOriginal"])
             if change == "endpoint-domain":
-                raw, _ = signed("admission", admitted["payload"], domain="serverware.nativeShadowKeyAdmissionAssignment.signature/v1")
+                raw, _ = signed("admission", admitted["payload"], domain="catchplate.nativeShadowKeyAdmissionAssignment.signature/v1")
                 supplied["admissionOriginal"] = raw.decode("ascii")
             elif change == "production":
                 admitted["payload"]["productionConfigurationBindingSha256"] = synthetic("unbound-production")
@@ -324,10 +324,10 @@ class BridgeAuthorizationControls(unittest.TestCase):
         payload = {name: key[name] for name in ("assignmentId", "assignmentPayloadSha256", "assignmentRevision", "guest",
             "trustCheckpointId", "revocationGeneration", "revocationRootSha256", "issuedAtUnixNanos", "expiresAtUnixNanos",
             "signingKeyId", "signingKeySpkiSha256")}
-        payload.update(apiVersion="serverware.nativeCustodyClosureAssignment/v3", purpose="shadow-custody-closure-set-member",
+        payload.update(apiVersion="catchplate.nativeCustodyClosureAssignment/v3", purpose="shadow-custody-closure-set-member",
             profile="native-multi-guest-closure-set-v1", guestRole="bridge",
             **{name: member[name] for name in ("manifestSha256", "setRootSha256", "seccompSetRootSha256", "leafSha256")})
-        supplied = {"apiVersion": "serverware.nativePilotClosureAuthorityInput/v2", "guestRole": "bridge",
+        supplied = {"apiVersion": "catchplate.nativePilotClosureAuthorityInput/v2", "guestRole": "bridge",
             "controlOriginal": value["controlOriginal"], "configurationOriginal": source["ownerConfigurationOriginal"],
             "windowOriginal": source["windowOriginal"], "observationOriginal": source["observationOriginal"],
             "deliveryConfigurationOriginal": source["configurationOriginal"], "deliveryOriginal": value["deliveryOriginal"],
@@ -336,11 +336,11 @@ class BridgeAuthorizationControls(unittest.TestCase):
         prepared = closure.prepare_input(canonical(supplied), **clocks())
         self.assertEqual(prepared["payload"], payload)
         signature = encoded(key_fixture("custody-supervisor-capability")[0].sign(signed_message(
-            "serverware.nativeCustodyClosureAssignment.signature/v3", payload)))
-        raw = canonical({"apiVersion": "serverware.nativeCustodyClosure/v3", "manifest": manifest,
+            "catchplate.nativeCustodyClosureAssignment.signature/v3", payload)))
+        raw = canonical({"apiVersion": "catchplate.nativeCustodyClosure/v3", "manifest": manifest,
             "closureSet": selected, "authorization": {"payload": payload, "signature": signature}})
         self.assertEqual(closure.checked_result(canonical(supplied), {"original": raw.decode("ascii"), "sha256": sha(raw)}, **clocks()), raw)
-        old = json.loads(source["runtimeOriginal"]); old["apiVersion"] = "serverware.policyCustodyProductionRpcRuntime/v9"
+        old = json.loads(source["runtimeOriginal"]); old["apiVersion"] = "catchplate.policyCustodyProductionRpcRuntime/v9"
         old.pop("ordinaryInitialHistories"); supplied["runtimeOriginal"] = canonical(old).decode("ascii")
         with self.assertRaises(ValueError): closure.prepare_input(canonical(supplied), **clocks())
 

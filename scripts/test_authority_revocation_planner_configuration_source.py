@@ -18,11 +18,11 @@ from test_authority_revocation_planning_source import (
 class RevocationPlannerConfigurationSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.text, cls.tree = source("serverware/authority_revocation_planner_configuration.py", 64 * 1024)
-        cls.service_text, cls.service = source("serverware/authority_service.py", 2 * 1024 * 1024)
+        cls.text, cls.tree = source("catchplate/authority_revocation_planner_configuration.py", 64 * 1024)
+        cls.service_text, cls.service = source("catchplate/authority_service.py", 2 * 1024 * 1024)
         cls.process = definition(cls.service, "AuthorityProcess")
         cls.adapter = definition(cls.process, "_produce_revocation_observed_plan")
-        _, cls.planning = source("serverware/authority_revocation_planning.py", 64 * 1024)
+        _, cls.planning = source("catchplate/authority_revocation_planning.py", 64 * 1024)
 
     def shape(self, actual, expected):
         self.assertEqual(ast.dump(actual), ast.dump(ast.parse("(" + expected.strip() + ")", mode="eval").body))
@@ -76,7 +76,7 @@ class RevocationPlannerConfigurationSourceTests(unittest.TestCase):
         for actual, expected in zip(guarded, (
                 'authority_revocation_configuration.production._callback(work, lambda: authority_launch_guard.require_active("planner"))',
                 '''authority_revocation_configuration.production._callback(work,
-                    lambda: _read_dsn_descriptor("SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN"))''',
+                    lambda: _read_dsn_descriptor("CATCHPLATE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN"))''',
                 'authority_revocation_configuration.production._callback(work, lambda: dict(authority_launch_guard.generation()))')):
             self.shape(actual, expected)
         self.assertIs(assigned(adapter, "read_dsn"), guarded[1])
@@ -132,7 +132,7 @@ class RevocationPlannerConfigurationSourceTests(unittest.TestCase):
         # actual planner body while retaining its original parse/SPKI checks.
         planner_body = ast.Module(body=branch.body, type_ignores=[])
         descriptor = call(planner_body, "_read_bounded_descriptor")
-        self.shape(descriptor, '''_read_bounded_descriptor("SERVERWARE_POLICY_AUTHORITY_PLANNER_SIGNING_KEY",
+        self.shape(descriptor, '''_read_bounded_descriptor("CATCHPLATE_POLICY_AUTHORITY_PLANNER_SIGNING_KEY",
             maximum=64 * 1024, require_root_owned=True, require_descriptor=True)''')
         parsed = call(planner_body, "_load_ed25519_private_key")
         self.shape(parsed, "_load_ed25519_private_key(private_value)")
@@ -211,7 +211,7 @@ class RevocationPlannerConfigurationSourceTests(unittest.TestCase):
         order = (prefix, descriptor, role_loop[0], comparisons[1], timeouts[0],
                  timeout_guard[0], timeouts[1], identity, validated, *integers, first_key)
         self.assertEqual([node.lineno for node in order], sorted(node.lineno for node in order))
-        _, authority = source("serverware/authority_contract.py")
+        _, authority = source("catchplate/authority_contract.py")
         self.shape(assigned(authority, "VERIFIER_RESPONSE_MAX_AGE_NS"), "30 * 1_000_000_000")
         self.shape(assigned(authority, "VERIFIER_MAX_CLOCK_SKEW_NS"), "5 * 1_000_000_000")
 
@@ -260,7 +260,7 @@ class RevocationPlannerConfigurationSourceTests(unittest.TestCase):
             and node.func.attr in {"sign", "verify", "produce_observed"} for node in ast.walk(self.tree)))
 
     def test_shared_full_commitment_launch_capture_and_real_spki_work_keep_inert_closure(self):
-        _, shared = source("serverware/authority_revocation_configuration.py", 64 * 1024)
+        _, shared = source("catchplate/authority_revocation_configuration.py", 64 * 1024)
         prefix = definition(shared, "_capture_configuration_on_work")
         self.shape(assigned(prefix, "owned"), '''_ConfigurationCapture(
             ledger, maximum_bytes=authority.MAX_REQUEST_BYTES).visit(payload)''')
@@ -301,8 +301,8 @@ class RevocationPlannerConfigurationSourceTests(unittest.TestCase):
             ("cryptography.hazmat.primitives.asymmetric.ed25519", "Ed25519PublicKey"),
             ("cryptography.hazmat.primitives.serialization", "Encoding"),
             ("cryptography.hazmat.primitives.serialization", "PublicFormat"),
-            ("serverware", "authority_contract"), ("serverware", "authority_revocation_configuration"),
-            ("serverware", "authority_revocation_plan"), ("serverware", "authority_revocation_planning")})
+            ("catchplate", "authority_contract"), ("catchplate", "authority_revocation_configuration"),
+            ("catchplate", "authority_revocation_plan"), ("catchplate", "authority_revocation_planning")})
         self.assertEqual([ast.unparse(node) for node in self.tree.body if isinstance(node, ast.Import)], ["import math"])
         for forbidden in ("_ValidationWork", "QueryReadValidationLimits", "psycopg.connect", "json.loads",
                 "time.time_ns", "time.monotonic_ns", "eval", "exec", "_read_dsn_descriptor"):

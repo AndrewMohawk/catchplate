@@ -5,7 +5,7 @@ use std::{ffi::CString,fs::File,io::{self,Read,Write},os::{fd::{AsRawFd,FromRawF
     unix::{net::UnixStream,process::CommandExt}},process::{Child,Command,Stdio}};
 
 const FIRST_FD:i32=64;
-const HELPER:&str="/opt/serverware/serverware/native_role_key_provisioner.py";
+const HELPER:&str="/opt/catchplate/catchplate/native_role_key_provisioner.py";
 fn io_error(_:io::Error)->String{"role provisioner original process I/O failed".to_owned()}
 fn owned(fd:i32)->Result<OwnedFd,String>{ensure(fd>=0,"role provisioner descriptor unavailable")?;Ok(unsafe{OwnedFd::from_raw_fd(fd)})}
 #[repr(C)] struct CapabilityHeader { version:u32,pid:i32 }

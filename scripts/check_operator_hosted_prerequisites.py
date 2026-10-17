@@ -23,7 +23,7 @@ import time
 
 IMAGE = "python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea"
 WORK_SECONDS, CLEANUP_SECONDS = 60, 20
-LABEL = "serverware.hosted-prerequisites"
+LABEL = "catchplate.hosted-prerequisites"
 PROPERTIES = {"RuntimeMaxUSec": "3min 5s", "TimeoutStopUSec": "5s", "KillMode": "control-group",
     "Restart": "no", "MemoryMax": "2147483648", "TasksMax": "128", "CPUQuotaPerSecUSec": "1s",
     "UMask": "0077", "NRestarts": "0"}
@@ -81,7 +81,7 @@ with socket.socket() as s:
         while len(data)<64:
             part=c.recv(64-len(data)); assert part; data+=part
         assert len(data)==64 and all(x in b'0123456789abcdef' for x in data)
-        answer=hashlib.sha256(b'serverware-hosted-loopback/v1:'+data).hexdigest().encode()
+        answer=hashlib.sha256(b'catchplate-hosted-loopback/v1:'+data).hexdigest().encode()
         c.sendall(answer)
     print(json.dumps({'ok':True,'requestSha256':hashlib.sha256(data).hexdigest(),
         'responseSha256':hashlib.sha256(answer).hexdigest()}),flush=True)
@@ -93,7 +93,7 @@ with socket.create_connection(('127.0.0.1',40817),timeout=5) as s:
     s.settimeout(5); s.sendall(data); answer=b''
     while len(answer)<64:
         part=s.recv(64-len(answer)); assert part; answer+=part
-assert answer == hashlib.sha256(b'serverware-hosted-loopback/v1:'+data).hexdigest().encode()
+assert answer == hashlib.sha256(b'catchplate-hosted-loopback/v1:'+data).hexdigest().encode()
 print(json.dumps({'ok':True,'namespace':os.readlink('/proc/self/ns/net'),
     'requestSha256':hashlib.sha256(data).hexdigest(),'responseSha256':hashlib.sha256(answer).hexdigest()}))
 '''
@@ -299,7 +299,7 @@ class Probe:
         server = self.command(["/usr/bin/docker","logs",self.identities[self.names[0]]]).decode().splitlines()
         client = json.loads(self.command(["/usr/bin/docker","logs",self.identities[self.names[1]]]))
         request = hashlib.sha256(nonce.encode()).hexdigest()
-        answer = hashlib.sha256(b"serverware-hosted-loopback/v1:"+nonce.encode()).hexdigest().encode()
+        answer = hashlib.sha256(b"catchplate-hosted-loopback/v1:"+nonce.encode()).hexdigest().encode()
         expected = {"ok":True,"requestSha256":request,"responseSha256":hashlib.sha256(answer).hexdigest()}
         require(len(server) == 2 and json.loads(server[1]) == expected
             and client == {**expected,"namespace":self.network_namespace})
@@ -364,8 +364,8 @@ def main():
         and os.environ.get("DOCKER_HOST") == "unix:///var/run/docker.sock")
     environment = {"PATH":"/usr/bin:/bin","LANG":"C.UTF-8","XDG_RUNTIME_DIR":str(runtime),
         "DBUS_SESSION_BUS_ADDRESS":bus,"DOCKER_HOST":"unix:///var/run/docker.sock"}
-    namespace = "serverware-hosted-"+run+"-"+attempt
-    result = {"schema":"serverware.hostedPrerequisites/v1","ok":False,"runId":run,"runAttempt":attempt,
+    namespace = "catchplate-hosted-"+run+"-"+attempt
+    result = {"schema":"catchplate.hostedPrerequisites/v1","ok":False,"runId":run,"runAttempt":attempt,
         "scope":"setup-only user-cgroup and synthetic private loopback; not guided journey acceptance",
         "appExecuted":False,"browserExecuted":False,"providerExecuted":False,"runtimeTimerExpiryTested":False,
         "guidedArtifactChecksPerformed":False,
@@ -418,6 +418,6 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as error:
-        print(json.dumps({"schema":"serverware.hostedPrerequisites/v1","ok":False,
+        print(json.dumps({"schema":"catchplate.hostedPrerequisites/v1","ok":False,
             "stage":"input-or-receipt","failureType":type(error).__name__}),flush=True)
         raise SystemExit(1)

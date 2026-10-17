@@ -25,17 +25,17 @@ import yaml
 from scripts import test_operator_managed_google_deployment as google
 from scripts import test_operator_x_admission as admitted
 
-STACK = ROOT / "docker/serverware-operator-demo"
+STACK = ROOT / "docker/catchplate-operator-demo"
 LAYER = STACK / "docker-compose.managed-x.yml"
-FLAG = "SERVERWARE_OPERATOR_MANAGED_X_ENABLED"
-DIRECTORY = "SERVERWARE_OPERATOR_X_CUSTODY_DIR"
+FLAG = "CATCHPLATE_OPERATOR_MANAGED_X_ENABLED"
+DIRECTORY = "CATCHPLATE_OPERATOR_X_CUSTODY_DIR"
 INPUT = "OPERATOR_MANAGED_X_CUSTODY_DIR"
 SOURCE = "${OPERATOR_MANAGED_X_CUSTODY_DIR:?Set the reviewed app-only X custody directory}"
 
 
 def expected():
     return {"services": {
-        "serverware": {"environment": {FLAG: "1", DIRECTORY: "/x-custody"},
+        "catchplate": {"environment": {FLAG: "1", DIRECTORY: "/x-custody"},
             "volumes": [google.bind(SOURCE, "/x-custody", False)]},
         "decision-gate-rs": {"environment": {FLAG: "1"}},
     }}
@@ -53,7 +53,7 @@ class LayerTests(unittest.TestCase):
     def test_exact_optional_layer_has_no_other_permissions_or_inputs(self):
         validate(self.layer)
         self.assertNotIn("managed-x", (STACK / "docker-compose.yml").read_text())
-        app = self.layer["services"]["serverware"]
+        app = self.layer["services"]["catchplate"]
         self.assertEqual(app["volumes"], [google.bind(SOURCE, "/x-custody", False)])
         self.assertEqual(self.layer["services"]["decision-gate-rs"], {"environment": {FLAG: "1"}})
 
@@ -61,7 +61,7 @@ class LayerTests(unittest.TestCase):
         changes = []
         for field in ("ports", "networks", "command", "labels", "dns", "user"):
             changed = deepcopy(self.layer)
-            changed["services"]["serverware"][field] = "unreviewed"
+            changed["services"]["catchplate"][field] = "unreviewed"
             changes.append(changed)
         changed = deepcopy(self.layer)
         changed["services"]["decision-gate-rs"]["volumes"] = [google.bind(SOURCE, "/x-custody", True)]
@@ -69,10 +69,10 @@ class LayerTests(unittest.TestCase):
         for field, value in (("source", "${OPERATOR_MANAGED_X_CUSTODY_DIR:-/data/x}"),
                 ("target", "/data/x"), ("read_only", True), ("bind", {"create_host_path": True})):
             changed = deepcopy(self.layer)
-            changed["services"]["serverware"]["volumes"][0][field] = value
+            changed["services"]["catchplate"]["volumes"][0][field] = value
             changes.append(changed)
         changed = deepcopy(self.layer)
-        changed["services"]["serverware"]["environment"]["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = "[]"
+        changed["services"]["catchplate"]["environment"]["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = "[]"
         changes.append(changed)
         for changed in changes:
             with self.assertRaisesRegex(ValueError, "^managed X deployment layer differs$"):
@@ -136,7 +136,7 @@ class RenderTests(unittest.TestCase):
 
     def test_full_render_changes_only_three_env_entries_and_one_app_bind(self):
         candidate = deepcopy(self.candidate)
-        app = candidate["services"]["serverware"]
+        app = candidate["services"]["catchplate"]
         gate = candidate["services"]["decision-gate-rs"]
         self.assertEqual(app["environment"].pop(FLAG), "1")
         self.assertEqual(app["environment"].pop(DIRECTORY), "/x-custody")
@@ -159,7 +159,7 @@ class RenderTests(unittest.TestCase):
                 source, x = Path(mount["source"]), Path(self.env[INPUT])
                 if source == x or x.is_relative_to(source) or source.is_relative_to(x):
                     users.append((name, mount["target"]))
-        self.assertEqual(users, [("serverware", "/x-custody")])
+        self.assertEqual(users, [("catchplate", "/x-custody")])
         gate = self.candidate["services"]["decision-gate-rs"]
         data = next(item for item in gate["volumes"] if item["target"] == "/data")
         self.assertEqual(data["source"], self.env["OPERATOR_DEMO_DATA_ROOT"] + "/app-data/gate-runtime")

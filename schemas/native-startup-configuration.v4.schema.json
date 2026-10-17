@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v4.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-startup-configuration.v4.schema.json",
   "title": "Cold native startup with measured credential currentness",
   "$comment": "Source validates original bytes <=16MiB, duplicate-free integer-only JSON, protected original custody, exact URL/token/pin relationships, certificates, role assignments and original deadlines. Schema acceptance is not admission. Older startup versions are unchanged.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "gate", "native", "shadow", "responseObservationV2", "policy", "enrollmentAuthorizer", "enrollmentSetupAuthorizer", "enrollmentProxyEndpoint", "credentialCurrentness"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeStartupConfiguration/v4"},
+    "apiVersion": {"const": "catchplate.nativeStartupConfiguration/v4"},
     "gate": {"$ref": "#/$defs/gate"},
     "native": {"$ref": "#/$defs/native"},
     "shadow": {"$ref": "#/$defs/shadow"},
@@ -50,7 +50,7 @@
       "properties": {
         "policyHighWater": {
           "type": "object", "additionalProperties": false, "required": ["apiVersion", "policyId", "sequence", "rollbackEpoch", "policyHash"],
-          "properties": {"apiVersion": {"const": "serverware.policyHighWater/v1"}, "policyId": {"type": "string", "minLength": 1, "maxLength": 256}, "sequence": {"$ref": "#/$defs/positive"}, "rollbackEpoch": {"$ref": "#/$defs/positive"}, "policyHash": {"$ref": "#/$defs/sha"}}
+          "properties": {"apiVersion": {"const": "catchplate.policyHighWater/v1"}, "policyId": {"type": "string", "minLength": 1, "maxLength": 256}, "sequence": {"$ref": "#/$defs/positive"}, "rollbackEpoch": {"$ref": "#/$defs/positive"}, "policyHash": {"$ref": "#/$defs/sha"}}
         },
         "policyTrust": {
           "type": "object", "additionalProperties": false, "required": ["url", "verifier"],
@@ -103,7 +103,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "socketPath", "expectedUid", "startupTimeoutMs", "signerKeySha256", "roleIdentityRootSha256", "proofPinsRootSha256", "teeVerifier", "transparencyTrustPin", "roleKeys", "generationId", "expectedSourceCommitSha256", "expectedSourceTreeSha256", "minimumRevocationEpoch"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeResponseObservationV2Config/v1"}, "socketPath": {"$ref": "#/$defs/path"},
+        "apiVersion": {"const": "catchplate.nativeResponseObservationV2Config/v1"}, "socketPath": {"$ref": "#/$defs/path"},
         "expectedUid": {"type": "integer", "minimum": 0, "maximum": 4294967295}, "startupTimeoutMs": {"type": "integer", "minimum": 1, "maximum": 30000},
         "signerKeySha256": {"$ref": "#/$defs/sha"}, "roleIdentityRootSha256": {"$ref": "#/$defs/sha"}, "proofPinsRootSha256": {"$ref": "#/$defs/sha"},
         "teeVerifier": {"$ref": "#/$defs/teeVerifier"}, "transparencyTrustPin": {"$ref": "#/$defs/transparency"},
@@ -116,7 +116,7 @@
     },
     "teeVerifier": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "executable", "executableSha256", "expectations", "trustRoots"],
-      "properties": {"apiVersion": {"const": "serverware.responseObservationV2PinnedTeeVerifier/v1"}, "executable": {"$ref": "#/$defs/path"}, "arguments": {"type": "array", "maxItems": 0}, "executableSha256": {"$ref": "#/$defs/sha"}, "verifierModule": {"anyOf": [{"$ref": "#/$defs/artifact"}, {"type": "null"}]}, "expectations": {"$ref": "#/$defs/artifact"}, "trustRoots": {"$ref": "#/$defs/artifact"}}
+      "properties": {"apiVersion": {"const": "catchplate.responseObservationV2PinnedTeeVerifier/v1"}, "executable": {"$ref": "#/$defs/path"}, "arguments": {"type": "array", "maxItems": 0}, "executableSha256": {"$ref": "#/$defs/sha"}, "verifierModule": {"anyOf": [{"$ref": "#/$defs/artifact"}, {"type": "null"}]}, "expectations": {"$ref": "#/$defs/artifact"}, "trustRoots": {"$ref": "#/$defs/artifact"}}
     },
     "roleKey": {
       "type": "object", "additionalProperties": false,
@@ -126,7 +126,7 @@
     "transparency": {
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "kind", "schemaVersion", "generationId", "providerGeneration", "proofPinsRootSha256", "logId", "logKeyId", "logKeySpkiBase64", "logKeySpkiSha256", "anchorTreeSize", "anchorRootSha256", "trustCheckpointSha256", "revocationEpoch", "validFromEpochMs", "validUntilEpochMs", "maximumCheckpointAgeMs"],
-      "properties": {"apiVersion": {"const": "serverware.responseV2.releaseTransparencyTrustPin/v2"}, "kind": {"const": "ServerwareResponseV2ReleaseTransparencyTrustPin"}, "schemaVersion": {"$ref": "#/$defs/text"}, "generationId": {"$ref": "#/$defs/text"}, "providerGeneration": {"$ref": "#/$defs/uint"}, "proofPinsRootSha256": {"$ref": "#/$defs/sha"}, "logId": {"$ref": "#/$defs/text"}, "logKeyId": {"$ref": "#/$defs/text"}, "logKeySpkiBase64": {"$ref": "#/$defs/text"}, "logKeySpkiSha256": {"$ref": "#/$defs/sha"}, "anchorTreeSize": {"$ref": "#/$defs/uint"}, "anchorRootSha256": {"$ref": "#/$defs/sha"}, "trustCheckpointSha256": {"$ref": "#/$defs/sha"}, "revocationEpoch": {"$ref": "#/$defs/uint"}, "validFromEpochMs": {"$ref": "#/$defs/uint"}, "validUntilEpochMs": {"$ref": "#/$defs/uint"}, "revokedAtEpochMs": {"anyOf": [{"$ref": "#/$defs/uint"}, {"type": "null"}]}, "maximumCheckpointAgeMs": {"type": "integer", "minimum": 1, "maximum": 86400000}}
+      "properties": {"apiVersion": {"const": "catchplate.responseV2.releaseTransparencyTrustPin/v2"}, "kind": {"const": "CatchplateResponseV2ReleaseTransparencyTrustPin"}, "schemaVersion": {"$ref": "#/$defs/text"}, "generationId": {"$ref": "#/$defs/text"}, "providerGeneration": {"$ref": "#/$defs/uint"}, "proofPinsRootSha256": {"$ref": "#/$defs/sha"}, "logId": {"$ref": "#/$defs/text"}, "logKeyId": {"$ref": "#/$defs/text"}, "logKeySpkiBase64": {"$ref": "#/$defs/text"}, "logKeySpkiSha256": {"$ref": "#/$defs/sha"}, "anchorTreeSize": {"$ref": "#/$defs/uint"}, "anchorRootSha256": {"$ref": "#/$defs/sha"}, "trustCheckpointSha256": {"$ref": "#/$defs/sha"}, "revocationEpoch": {"$ref": "#/$defs/uint"}, "validFromEpochMs": {"$ref": "#/$defs/uint"}, "validUntilEpochMs": {"$ref": "#/$defs/uint"}, "revokedAtEpochMs": {"anyOf": [{"$ref": "#/$defs/uint"}, {"type": "null"}]}, "maximumCheckpointAgeMs": {"type": "integer", "minimum": 1, "maximum": 86400000}}
     }
   }
 }

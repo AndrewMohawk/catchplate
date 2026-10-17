@@ -28,7 +28,7 @@ base = google.base
 PROXY_URL = "https://" + basic.PROXY_HOST + ":8443"
 GO_TARGET = "/example-go/google-gmail"
 CHECKER = "/app/scripts/check_operator_gmail_sdk.py"
-RUNTIME_SERVICES = {"network", "provider", "serverware", "decision-gate-rs", "edge", "check"}
+RUNTIME_SERVICES = {"network", "provider", "catchplate", "decision-gate-rs", "edge", "check"}
 CHECKER_SECONDS, CHECKER_OUTER_SECONDS, PRECHECK_SECONDS = 180, 210, 75
 LIBATOMIC_SHA256 = "9d8a34468e614a71a6427dbabb0ac24eb8cb1e324dc6aa3bf95eb6f59201f000"
 
@@ -51,7 +51,7 @@ def paired_dependencies(node_modules, python_runtime, python_packages):
         path = python_runtime / "bin" / name
         base.require(path.is_symlink() and path.readlink().as_posix() == target, "paired Python interpreter linkage differs")
         links[name] = target
-    return {"schema": "serverware.privateGmailSdkDependencies/v1", "node": node, "python": python,
+    return {"schema": "catchplate.privateGmailSdkDependencies/v1", "node": node, "python": python,
         "pythonRuntime": {"pyvenvSha256": base.digest(config), "links": links}}
 
 
@@ -74,16 +74,16 @@ def build(source, binary, initializer, root, go, *, expected_binary_sha256, expe
         base.validated_binary_sha256(expected_go_sha256)
         base.require(all(value is None for value in (node, node_modules, python_runtime, python_packages,
             expected_dependencies_sha256)), "Go fixture refuses paired inputs")
-    base.require(root.parent == base.SCRATCH and re.fullmatch(r"serverware-gmail-sdk-private\.[A-Za-z0-9]{6,32}", root.name),
+    base.require(root.parent == base.SCRATCH and re.fullmatch(r"catchplate-gmail-sdk-private\.[A-Za-z0-9]{6,32}", root.name),
         "fresh private Gmail SDK root required")
-    template = root.with_name("serverware-google-private." + root.name.split(".", 1)[1])
+    template = root.with_name("catchplate-google-private." + root.name.split(".", 1)[1])
     # Reuse the pure, closed Gmail-job manifest; its Requests mount is removed
     # below, not inspected, imported, or required by this Go-only sibling.
     config = google.build(source, binary, initializer, template, profile=google.GMAIL_JOB_PROFILE,
         expected_binary_sha256=expected_binary_sha256,
         client_dependencies=google.GMAIL_CLIENT_DEPENDENCIES,
         client_dependencies_manifest_sha256=google.GMAIL_CLIENT_MANIFEST_SHA256)
-    config["name"] = "serverware-gmail-sdk-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
+    config["name"] = "catchplate-gmail-sdk-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
     services, runtime = config["services"], root / "runtime"
     for service in services.values():
         for mount in service["volumes"]:
@@ -120,8 +120,8 @@ def build(source, binary, initializer, root, go, *, expected_binary_sha256, expe
     if browser_permission:
         check["command"].append("--browser-permission")
         check["stdin_open"] = True
-        for name in ("serverware", "decision-gate-rs"):
-            services[name]["environment"]["SERVERWARE_OPERATOR_DEMO_PROXY_URL"] = BROWSER_PROXY_URL
+        for name in ("catchplate", "decision-gate-rs"):
+            services[name]["environment"]["CATCHPLATE_OPERATOR_DEMO_PROXY_URL"] = BROWSER_PROXY_URL
     check["volumes"] = [mount for mount in check["volumes"] if mount["target"] != "/client-dependencies"]
     pki = runtime / "https-proxy/basic-pki"
     if not sdk_pair:
@@ -220,7 +220,7 @@ def prepare(args):
         expected_binary_sha256=args.expected_binary_sha256, expected_go_sha256=args.expected_go_sha256,
         browser_permission=getattr(args, "browser_permission", False), **pair_kwargs(args))
     compose = json.dumps(config, sort_keys=True, indent=2) + "\n"
-    receipt = {"schema": "serverware.privateGmailSdkPreparation/v1", "sourceCommit": args.commit,
+    receipt = {"schema": "catchplate.privateGmailSdkPreparation/v1", "sourceCommit": args.commit,
         "source": str(args.source), "sourceCommitValidationRequiredByRunner": True,
         "binarySha256": args.expected_binary_sha256, "goSha256": args.expected_go_sha256,
         "initializerSha256": base.INITIALIZER_SHA256, "project": config["name"],
@@ -230,7 +230,7 @@ def prepare(args):
         "syntheticOnly": True, "automaticExecution": False, "realGoogleVerified": False}
     if getattr(args, "sdk_pair", False):
         receipt.pop("goSha256")
-        receipt.update(schema="serverware.privateGmailSdkPreparation/v2", nodeSha256=profiles.NODE_SHA256,
+        receipt.update(schema="catchplate.privateGmailSdkPreparation/v2", nodeSha256=profiles.NODE_SHA256,
             sdkDependenciesSha256=args.expected_dependencies_sha256)
     if getattr(args, "age_profile", False):
         receipt["ageProfile"] = True

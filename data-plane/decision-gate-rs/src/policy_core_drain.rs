@@ -142,7 +142,7 @@ impl Snapshot {
         if admissions!=self.attempts || included!=finished {return Err("final ledger has an admission without a complete actual lifecycle".into());}
         Ok(())
     }
-    pub(crate) fn value(&self)->Value {json!({"apiVersion":"serverware.nativePolicyShadowDrain/v1",
+    pub(crate) fn value(&self)->Value {json!({"apiVersion":"catchplate.nativePolicyShadowDrain/v1",
         "generationId":self.generation,"coverageStartedAtUnixNanos":self.armed_at,
         "windowEndsAtUnixNanos":self.window_end,"sealDeadlineUnixNanos":self.deadline,
         "admissionClosedAtUnixNanos":self.closed_at,"drainedAtUnixNanos":self.observed,"admissionAttempts":self.attempts,

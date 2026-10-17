@@ -21,7 +21,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import operator_audit_timing as timing
+from catchplate import operator_audit_timing as timing
 
 CANARY = "synthetic-secret-canary https://private.invalid/?token=secret"
 BODY = (b' {"events":[{"eventId":"sha256:' + b'1' * 64
@@ -69,7 +69,7 @@ def record(test, line):
     test.assertTrue(line.endswith("\n"))
     value = json.loads(line)
     test.assertEqual(set(value), {"schema", "event_count", "batch_digest", "outcome", "elapsed_ms", "marks"})
-    test.assertEqual(value["schema"], "serverware.operatorAuditTiming/v1")
+    test.assertEqual(value["schema"], "catchplate.operatorAuditTiming/v1")
     test.assertEqual(value["batch_digest"], DIGEST)
     test.assertIs(type(value["event_count"]), int)
     test.assertTrue(1 <= value["event_count"] <= 200)
@@ -94,7 +94,7 @@ class PolicyLookupFixture:
            "trust_recheck", "high_water", "publication"]
 
     def __init__(self, test, stack):
-        from serverware import policy_bundle as policy
+        from catchplate import policy_bundle as policy
         self.policy, self.calls = policy, []
         self.path = Path("/synthetic-audit-timing/policy.json")
         self.lock = threading.RLock()
@@ -376,7 +376,7 @@ class AuditTimingASGITests(unittest.IsolatedAsyncioTestCase):
         # Same isolated app-import boundary as test_legacy_audit_scheduling.
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-        from serverware import app, operator_demo, response_identity, control_plane_data_plane_audit
+        from catchplate import app, operator_demo, response_identity, control_plane_data_plane_audit
         self.app, self.identity, self.owner, self.measured = app, response_identity, operator_demo, control_plane_data_plane_audit
         self.stack = observations(self)
         self.stored, self.drains = [], []
@@ -416,8 +416,8 @@ class AuditTimingASGITests(unittest.IsolatedAsyncioTestCase):
             "scheme": "https", "method": "POST", "path": "/api/data-plane/audit", "raw_path": b"/api/data-plane/audit",
             "root_path": "", "query_string": b"", "server": ("synthetic.invalid", 443), "client": ("127.0.0.1", 30001),
             "headers": [(b"host", b"synthetic.invalid"), (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode()), (b"x-serverware-data-plane-token", token.encode()),
-                (b"x-serverware-response-nonce", NONCE)]}
+                (b"content-length", str(len(body)).encode()), (b"x-catchplate-data-plane-token", token.encode()),
+                (b"x-catchplate-response-nonce", NONCE)]}
         received, complete = False, asyncio.Event()
         async def receive():
             nonlocal received
@@ -434,7 +434,7 @@ class AuditTimingASGITests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(self.app.app(scope, receive, send), 5)
         finally:
             complete.set()
-        self.assertNotIn("serverware.operator_audit_timing", scope)
+        self.assertNotIn("catchplate.operator_audit_timing", scope)
         return messages
 
     def verified(self, messages):
@@ -443,11 +443,11 @@ class AuditTimingASGITests(unittest.IsolatedAsyncioTestCase):
         headers = {name.decode().lower(): value.decode() for name, value in starts[0]["headers"]}
         body = b"".join(row.get("body", b"") for row in messages if row["type"] == "http.response.body")
         decode = lambda raw: base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
-        statement = json.loads(decode(headers["x-serverware-response-statement-b64"]))
+        statement = json.loads(decode(headers["x-catchplate-response-statement-b64"]))
         canonical = json.dumps(statement, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
-        self.key.public_key().verify(decode(headers["x-serverware-response-signature"].split(":", 1)[1]), canonical)
+        self.key.public_key().verify(decode(headers["x-catchplate-response-signature"].split(":", 1)[1]), canonical)
         self.assertEqual(statement["body_sha256"], "sha256:" + hashlib.sha256(body).hexdigest())
-        unsigned = [(name, value) for name, value in starts[0]["headers"] if not name.lower().startswith(b"x-serverware-response-")]
+        unsigned = [(name, value) for name, value in starts[0]["headers"] if not name.lower().startswith(b"x-catchplate-response-")]
         digest, count = self.identity.response_headers_binding(unsigned)
         self.assertEqual((statement["response_headers_sha256"], statement["response_header_count"]), (digest, count))
         self.assertEqual(statement["request"], {"method": "POST", "path": "/api/data-plane/audit", "query_sha256": "sha256:" + hashlib.sha256(b"").hexdigest()})
@@ -457,7 +457,7 @@ class AuditTimingASGITests(unittest.IsolatedAsyncioTestCase):
 
     async def test_actual_route_csrf_and_outer_signer_preserve_exact_ack_and_all_marks(self):
         traced = await self.request()
-        self.assertEqual(self.verified(traced), (200, {"apiVersion": "serverware.dataPlaneAuditAck/v1", "ok": True,
+        self.assertEqual(self.verified(traced), (200, {"apiVersion": "catchplate.dataPlaneAuditAck/v1", "ok": True,
             "accepted": 1, "batchDigest": DIGEST, "instanceId": "synthetic-timing-instance"}))
         self.assertEqual(len(self.lines), 1)
         value = record(self, self.lines[0])

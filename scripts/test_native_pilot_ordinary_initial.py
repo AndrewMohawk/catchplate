@@ -24,8 +24,8 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
 
-from serverware import native_pilot_ordinary_initial_profile as initial
-from serverware import native_pilot_ordinary_key_authority as authority
+from catchplate import native_pilot_ordinary_initial_profile as initial
+from catchplate import native_pilot_ordinary_key_authority as authority
 from test_native_pilot_ordinary_keys import (
     ROLES, canonical, encoded, framed, identity_fixture, labelled, payload_fixture,
     preparation_fixture, sha,
@@ -40,12 +40,12 @@ DIRECTORIES = (
     ("journal", "generation-journal"),
 )
 DOMAINS = {
-    "predecessorCheckpointSha256": b"serverware.custodyOrdinaryInitialCheckpointPredecessor/v1",
-    "prunedHistoryRootSha256": b"serverware.custodyOrdinaryInitialHistoryRoot/v1",
-    "durableEpochHeadSha256": b"serverware.custodyOrdinaryInitialDurableHead/v1",
+    "predecessorCheckpointSha256": b"catchplate.custodyOrdinaryInitialCheckpointPredecessor/v1",
+    "prunedHistoryRootSha256": b"catchplate.custodyOrdinaryInitialHistoryRoot/v1",
+    "durableEpochHeadSha256": b"catchplate.custodyOrdinaryInitialDurableHead/v1",
 }
-KEY_DOMAIN = b"serverware.policyCustodyCurrentKeyAuthorization/v3"
-ANCHOR_DOMAIN = b"serverware.policyCustodyRetainedAuthorityEpochAnchor/v3"
+KEY_DOMAIN = b"catchplate.policyCustodyCurrentKeyAuthorization/v3"
+ANCHOR_DOMAIN = b"catchplate.policyCustodyRetainedAuthorityEpochAnchor/v3"
 ANCHOR_FIELDS = ("apiVersion", "retainedEpoch", "prunedThroughEpochSequence", "prunedHistoryRootSha256",
     "prunedTerminalEpochSha256", "rootAuthorityKeyId", "rootAuthorityKeySpkiSha256")
 SIGNATURE_FIELDS = ("rootSignatureBase64", "checkpointAuthoritySignatureBase64", "serviceKeySignatureBase64")
@@ -54,7 +54,7 @@ HISTORY_FIELDS = ("apiVersion", "authorityRole", "rootAuthority", "retention", "
 
 
 def signature_preimage(domain, raw):
-    return (b"serverware-signature-v1\0" + len(domain).to_bytes(8, "big") + domain
+    return (b"catchplate-signature-v1\0" + len(domain).to_bytes(8, "big") + domain
         + len(raw).to_bytes(8, "big") + raw)
 
 
@@ -68,10 +68,10 @@ def checkpoint(payload, public, key):
 
 def refresh_hashes(history):
     anchor = history["firstRetainedEpoch"]
-    anchor["retainedAnchorSha256"] = framed(b"serverware.policyCustodyRetainedAuthorityEpochAnchorDigest/v3",
+    anchor["retainedAnchorSha256"] = framed(b"catchplate.policyCustodyRetainedAuthorityEpochAnchorDigest/v3",
         (canonical([anchor[name] for name in ANCHOR_FIELDS]),
          *(anchor[name].encode("ascii") for name in SIGNATURE_FIELDS)))
-    history["manifestSha256"] = framed(b"serverware.policyCustodyAuthorityHistoryManifest/v3",
+    history["manifestSha256"] = framed(b"catchplate.policyCustodyAuthorityHistoryManifest/v3",
         (canonical([history[name] for name in HISTORY_FIELDS]),))
 
 
@@ -84,7 +84,7 @@ def sign_anchor(history, keys):
         ("endpointProcessIdentity", "endpointProcessIdentitySha256", "endpointGeneration", "serviceGeneration"),
         ("operationGeneration", "durableEpoch", "durableEpochHeadSha256", "deploymentGenerationSha256"),
     )
-    epoch["epochSha256"] = framed(b"serverware.policyCustodyAuthorityEpochStatement/v3",
+    epoch["epochSha256"] = framed(b"catchplate.policyCustodyAuthorityEpochStatement/v3",
         (canonical([[epoch[name] for name in group] for group in groups]),))
     message = signature_preimage(ANCHOR_DOMAIN, canonical([anchor[name] for name in ANCHOR_FIELDS]))
     for field, name in zip(SIGNATURE_FIELDS, ("root", "checkpoint", "service"), strict=True):
@@ -100,9 +100,9 @@ def fixture():
             "deviceMajor": 8, "deviceMinor": 2, "inode": 91000 + index * 10 + number,
             "uid": cold[role]["uid"], "gid": cold[role]["gid"], "mode": stat.S_IFDIR | 0o700},
             "entryCount": 0} for number, name in enumerate(names)}}
-    resources = {"apiVersion": "serverware.custodyFiveServiceInitialResources/v1",
+    resources = {"apiVersion": "catchplate.custodyFiveServiceInitialResources/v1",
         "preparationSha256": sha(canonical(preparation)), "issuedAtBoottimeNs": "1150", "services": services}
-    state = {"apiVersion": "serverware.custodyOrdinaryInitialState/v1", "serviceRole": ROLES[0],
+    state = {"apiVersion": "catchplate.custodyOrdinaryInitialState/v1", "serviceRole": ROLES[0],
         "preparationSha256": sha(canonical(preparation)), "resourcesSha256": sha(canonical(resources)),
         "launchSha256": sha(canonical(launch)), "endpointProcessIdentitySha256": identity_fixture()["identitySha256"],
         **{name: preparation[name] for name in ("bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode",
@@ -138,7 +138,7 @@ def fixture():
         deploymentGenerationSha256=state["deploymentGenerationSha256"])
     history["retention"].update(oldestRetainedCheckpointSequence=1, currentCheckpointSequence=1)
     sign_anchor(history, keys)
-    wrapper = {"apiVersion": "serverware.custodyOrdinaryInitialHistory/v1", "initialState": state,
+    wrapper = {"apiVersion": "catchplate.custodyOrdinaryInitialHistory/v1", "initialState": state,
         "initialCheckpoint": signed, "history": history}
     root_pin = {name: public["root"][name] for name in ("keyId", "keySpkiSha256")}
     return dict(preparation=preparation, launch=launch, cold=cold, window=window, now=now,
@@ -257,7 +257,7 @@ class SyntheticInitialHistoryControls(unittest.TestCase):
 
     def test_runtime_guest_original_directory_and_deadline_joins(self):
         f = fixture(); state = f["state"]
-        runtime = {"apiVersion": "serverware.policyCustodyServiceRuntimeConfig/v5",
+        runtime = {"apiVersion": "catchplate.policyCustodyServiceRuntimeConfig/v5",
             "authorityHistoryRootKeyId": f["root_pin"]["keyId"],
             "authorityHistoryRootKeySpkiSha256": f["root_pin"]["keySpkiSha256"],
             "operationGeneration": state["operationGeneration"], "serviceRestartEpoch": state["serviceGeneration"],
@@ -284,7 +284,7 @@ class SyntheticInitialHistoryControls(unittest.TestCase):
     def test_legacy_raw_history_remains_shape_only_without_initial_fallback(self):
         history, root_pin, _ = legacy_fixture()
         self.assertEqual(initial.manifest(canonical(history), role=ROLES[0], root_pin=root_pin), history)
-        f = fixture(); f["wrapper"]["apiVersion"] = "serverware.custodyOrdinaryInitialHistory/v2"
+        f = fixture(); f["wrapper"]["apiVersion"] = "catchplate.custodyOrdinaryInitialHistory/v2"
         with self.assertRaises(ValueError):
             self.manifest(f)
 

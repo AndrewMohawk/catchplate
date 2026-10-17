@@ -209,7 +209,7 @@ fn packet_original(delegation: &[u8], setup: &[u8], target_request: &[u8],
     // JSON, without changing either legacy or request/delegation codecs.
     let encode = |original: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(original);
     let value = json!({
-        "apiVersion":"serverware.nativeEnrollmentPacket/v2",
+        "apiVersion":"catchplate.nativeEnrollmentPacket/v2",
         "purpose":"workload-bootstrap",
         "delegationBase64url":encode(delegation),
         "setupAuthorizationBase64url":encode(setup),
@@ -217,7 +217,7 @@ fn packet_original(delegation: &[u8], setup: &[u8], target_request: &[u8],
         "targetIssuerCertificateDerBase64url":encode(target_issuer),
         "policyRequirementsBase64url":encode(policy_requirements),
     });
-    let mut original = serverware_decision_gate::canonical_json_bytes(&value)
+    let mut original = catchplate_decision_gate::canonical_json_bytes(&value)
         .map_err(|_| "native bootstrap packet canonical encoding failed")?;
     require(original.is_ascii() && original.len() < MAX_PACKET_BYTES,
         "native bootstrap packet exceeds its fixed original bound")?;
@@ -273,12 +273,12 @@ impl PreparedNativeBootstrapPacket<'_> {
     /// diagnostic. The policy read guard remains held through durable claim,
     /// key generation, signing, NSM and exact retained-output readback.
     pub(super) fn sign_once(mut self)
-        -> Result<serverware_decision_gate::enclave_runtime_identity_v1::BootstrapEnrollmentOriginalV1, String> {
+        -> Result<catchplate_decision_gate::enclave_runtime_identity_v1::BootstrapEnrollmentOriginalV1, String> {
         self.sign_original(false).map(|(original, _)| original)
     }
 
     fn sign_original(&mut self, include_session: bool)
-        -> Result<(serverware_decision_gate::enclave_runtime_identity_v1::BootstrapEnrollmentOriginalV1,
+        -> Result<(catchplate_decision_gate::enclave_runtime_identity_v1::BootstrapEnrollmentOriginalV1,
             Option<Vec<u8>>), String> {
         require(!std::mem::replace(&mut self.signing_started, true),
             "native bootstrap signing operation was already consumed")?;
@@ -380,7 +380,7 @@ impl PreparedNativeBootstrapPacket<'_> {
             "native bootstrap evidence exceeds its fixed original bound")?;
         let encode = |original: &[u8]| general_purpose::URL_SAFE_NO_PAD.encode(original);
         let evidence = json!({
-            "apiVersion":"serverware.nativeEnrollmentBootstrapEvidence/v1",
+            "apiVersion":"catchplate.nativeEnrollmentBootstrapEvidence/v1",
             "evidenceScope":"unverified-bootstrap-enrollment-public-material",
             "okForAction":false,
             "packetBase64url":encode(&self.original),
@@ -389,7 +389,7 @@ impl PreparedNativeBootstrapPacket<'_> {
             "enrollmentPublicKeyBase64url":encode(signed.public_key()),
             "enrollmentQuoteBase64url":encode(signed.quote_document()),
         });
-        let mut body = serverware_decision_gate::canonical_json_bytes(&evidence)
+        let mut body = catchplate_decision_gate::canonical_json_bytes(&evidence)
             .map_err(|_| "native bootstrap evidence canonical encoding failed")?;
         require(!body.is_empty() && body.len() < MAX_EVIDENCE_BYTES && body.is_ascii()
             && !body.contains(&b'\n') && !body.contains(&b'\r'),

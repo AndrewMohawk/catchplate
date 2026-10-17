@@ -20,11 +20,11 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
 
-from serverware import native_pilot_ordinary_runtime_profile as runtime
-from serverware import native_pilot_phase_execution as execution
-from serverware import native_pilot_supervisor as supervisor
-from serverware import native_pilot_supervisor_helper_initial_profile as profile
-from serverware import native_pilot_supervisor_policy as policy
+from catchplate import native_pilot_ordinary_runtime_profile as runtime
+from catchplate import native_pilot_phase_execution as execution
+from catchplate import native_pilot_supervisor as supervisor
+from catchplate import native_pilot_supervisor_helper_initial_profile as profile
+from catchplate import native_pilot_supervisor_policy as policy
 from test_native_pilot_endpoint_commissioning import peer
 from test_native_pilot_helper_initial import HELPER, HELPER_ROLES, fixture, refresh
 from test_native_pilot_initial_commissioning import OPERATIONS
@@ -34,7 +34,7 @@ from test_native_pilot_ordinary_keys import ROLES, canonical, encoded, labelled,
 
 def selection(f):
     primary = f["initial_policy"]["services"][HELPER]["endpointRole"]
-    return {"apiVersion": "serverware.nativePilotSupervisorHelperInitialPolicy/v1",
+    return {"apiVersion": "catchplate.nativePilotSupervisorHelperInitialPolicy/v1",
         "supplementalEndpointRoles": [role for role in HELPER_ROLES if role != primary]}
 
 
@@ -45,7 +45,7 @@ def stage(f, slot, operation, *, wrapper=None):
     checkpoint = wrapper["initialCheckpoint"]
     authorities = f["initial_policy"]["services"][HELPER]["authorities"]
     anchor = wrapper["history"]["firstRetainedEpoch"]
-    records = {name: {"apiVersion": "serverware.custodyOrdinaryInitialAnchorSignature/v1", "signer": name,
+    records = {name: {"apiVersion": "catchplate.custodyOrdinaryInitialAnchorSignature/v1", "signer": name,
         "anchorPayloadSha256": sha(canonical([anchor[field] for field in ANCHOR_FIELDS])),
         "keyId": authorities[name]["keyId"], "keySpkiSha256": authorities[name]["keySpkiSha256"],
         "signatureBase64": anchor[field]}
@@ -53,9 +53,9 @@ def stage(f, slot, operation, *, wrapper=None):
     # The pure result checker authenticates checkpoint/anchor outputs, not this
     # deliberately unsigned driver context or live provenance. Actual compose
     # must supply the retained, independently authenticated driver originals.
-    window = {"apiVersion": "serverware.nativeShadowDriverBootstrapWindow/v1", "payload": f["window"],
+    window = {"apiVersion": "catchplate.nativeShadowDriverBootstrapWindow/v1", "payload": f["window"],
         "signatureBase64url": encoded(b"S" * 64)}
-    value = {"apiVersion": "serverware.nativePilotOrdinaryInitialAuthorityInput/v1", "operation": operation,
+    value = {"apiVersion": "catchplate.nativePilotOrdinaryInitialAuthorityInput/v1", "operation": operation,
         "driverConfigurationOriginal": canonical({"syntheticUncheckedContext": True}).decode("ascii"),
         "driverWindowOriginal": canonical(window).decode("ascii"),
         "launchOriginal": canonical(f["launch"]).decode("ascii"),
@@ -252,7 +252,7 @@ class HelperCeremonyControls(unittest.TestCase):
                     v["anchorSignatures"][signer] = canonical(record).decode("ascii")
                 with self.subTest(signer=signer, change=change), self.assertRaises((ValueError, InvalidSignature)):
                     self.checked(1, "assemble", v, result)
-        for changed in (result | {"pin": {"path": "/etc/serverware/invented-helper-history.json", "sha256": result["sha256"]}},
+        for changed in (result | {"pin": {"path": "/etc/catchplate/invented-helper-history.json", "sha256": result["sha256"]}},
                 result | {"ready": True}):
             with self.assertRaises(ValueError): self.checked(1, "assemble", value, changed)
         wrapper = json.loads(result["original"]); wrapper["history"]["manifestSha256"] = labelled("false semantic hash")
@@ -274,15 +274,15 @@ class HelperCeremonyControls(unittest.TestCase):
             peer=peer(), helper_history_originals=selected)
         self.assertEqual(raw, self.f["runtimes"][HELPER])
         value = runtime.validate_runtime(HELPER, raw)
-        self.assertEqual(self.f["fragment"]["apiVersion"], "serverware.nativePilotOrdinaryRuntimePolicy/v2")
-        self.assertEqual(value["runtime"]["apiVersion"], "serverware.policyCustodyServiceRuntimeConfig/v9")
+        self.assertEqual(self.f["fragment"]["apiVersion"], "catchplate.nativePilotOrdinaryRuntimePolicy/v2")
+        self.assertEqual(value["runtime"]["apiVersion"], "catchplate.policyCustodyServiceRuntimeConfig/v9")
         for role in HELPER_ROLES:
             self.assertEqual(value["initialEndpointHistories"][role].encode("ascii"), selected[role])
             checkpoint = json.loads(selected[role])["initialCheckpoint"]
             self.assertEqual(value["initialEndpointPins"][role]["signedCurrentKeyAuthorization"], checkpoint)
         for change in ("legacy", "missing-member", "false-pin"):
             broken = copy.deepcopy(value)
-            if change == "legacy": broken["runtime"]["apiVersion"] = "serverware.policyCustodyServiceRuntimeConfig/v5"
+            if change == "legacy": broken["runtime"]["apiVersion"] = "catchplate.policyCustodyServiceRuntimeConfig/v5"
             elif change == "missing-member": del broken["initialEndpointHistories"][HELPER_ROLES[0]]
             else: broken["initialEndpointPins"][HELPER_ROLES[0]]["declaredSocketPath"] += "-other"
             with self.subTest(change=change), self.assertRaises((ValueError, InvalidSignature)):

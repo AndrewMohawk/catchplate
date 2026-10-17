@@ -1,0 +1,46 @@
+[Unit]
+Description=Catchplate Coder v12 root-owned privileged lifecycle helper
+PartOf=catchplate-coder-v12.target
+After=local-fs.target network-online.target catchplate-coder-runtime-v12.service catchplate-coder-private-dind-reconcile-v12.service catchplate-coder-lifecycle-privileged-v12.socket
+Requires=catchplate-coder-runtime-v12.service catchplate-coder-private-dind-reconcile-v12.service catchplate-coder-lifecycle-privileged-v12.socket
+Wants=network-online.target
+RequiresMountsFor=/sys/fs/cgroup /var/lib/catchplate/coder-controller-v12
+RefuseManualStart=yes
+
+[Service]
+Type=notify
+User=root
+Group=root
+UMask=0077
+Sockets=catchplate-coder-lifecycle-privileged-v12.socket
+LoadCredentialEncrypted=lifecycle-privileged-authority-key:@RELEASE_ROOT@/credentials/lifecycle-privileged-authority-key.cred
+ExecStart=@RELEASE_ROOT@/bin/catchplate-coder-lifecycle-privileged-v12 --config @RELEASE_ROOT@/config/lifecycle-privileged-v12.conf
+ExecStop=/bin/kill -TERM $MAINPID
+Restart=on-failure
+RestartSec=2s
+TimeoutStartSec=45s
+TimeoutStopSec=120s
+KillMode=control-group
+SendSIGKILL=yes
+FinalKillSignal=SIGKILL
+# Requires systemd254+: keep the delegated domain parent free of processes.
+Delegate=cpu memory pids
+DelegateSubgroup=supervisor
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_ADMIN CAP_SYS_PTRACE CAP_KILL CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_SETUID CAP_SETGID CAP_MKNOD CAP_SYS_CHROOT
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectKernelTunables=no
+ProtectControlGroups=no
+PrivateTmp=yes
+PrivateDevices=no
+PrivateIPC=yes
+PrivateMounts=no
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+SystemCallArchitectures=native
+ReadWritePaths=/run/catchplate/coder/v12/lifecycle-privileged /run/catchplate/coder/v12/dind /run/netns /var/lib/catchplate/coder-controller-v12/lifecycle-privileged /var/lib/catchplate/coder-controller-v12/dind /sys/fs/cgroup/system.slice/catchplate-coder-lifecycle-privileged-v12.service

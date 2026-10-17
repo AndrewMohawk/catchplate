@@ -11,7 +11,7 @@ const {fixture: baseFixture, ready, view, credential, application, rule, NOW} = 
 
 const ROOT = resolve(__dirname, '..');
 const PATH = '/api/operator-demo/notifications';
-const STORAGE = 'serverware.operator.notifications.operation.v1';
+const STORAGE = 'catchplate.operator.notifications.operation.v1';
 const SLOTS = ['action_required.slack', 'action_required.webhook', 'audit_log.slack', 'audit_log.webhook'];
 const STATES = ['queued', 'sending', 'acknowledged', 'failed', 'outcome_unknown', 'suppressed', 'expired'];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -39,11 +39,11 @@ const AUDIT_PRESETS = {
 };
 const EVENTS = JSON.parse(execFileSync('python3', ['-I', '-B', '-c',
   `import ast,json,pathlib
-tree=ast.parse(pathlib.Path("serverware/operator_notification_events.py").read_text())
+tree=ast.parse(pathlib.Path("catchplate/operator_notification_events.py").read_text())
 assignments={n.targets[0].id:n.value for n in tree.body if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name)}
 summaries=ast.literal_eval(assignments["_SUMMARIES"])
 summaries.update(ast.literal_eval(assignments["_GOOGLE_SUMMARIES"]))
-ecr_tree=ast.parse(pathlib.Path("serverware/operator_notification_ecr.py").read_text())
+ecr_tree=ast.parse(pathlib.Path("catchplate/operator_notification_ecr.py").read_text())
 ecr_assignments={n.targets[0].id:n.value for n in ecr_tree.body if isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name)}
 ecr_prefix=ast.literal_eval(ecr_assignments["PREFIX"])
 assert ecr_prefix=="operator.ecr_publication."
@@ -94,8 +94,8 @@ assert all(len(values)<=(128 if channel=="audit_log" else 64) and len(values)==l
 print(json.dumps(result))`],
 {cwd: ROOT, timeout: 5000, maxBuffer: 65536, encoding: 'utf8'})); // AST only: no application/config/database import.
 const INPUTS = ['scripts/test_operator_notifications_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
-  'serverware/operator_demo_portal.py', 'serverware/operator_notification_api.py', 'serverware/operator_notifications.py',
-  'serverware/operator_notification_store.py', 'serverware/operator_notification_events.py', 'serverware/operator_notification_ecr.py'];
+  'catchplate/operator_demo_portal.py', 'catchplate/operator_notification_api.py', 'catchplate/operator_notifications.py',
+  'catchplate/operator_notification_store.py', 'catchplate/operator_notification_events.py', 'catchplate/operator_notification_ecr.py'];
 let artifacts;
 let suiteRunning = false;
 
@@ -109,7 +109,7 @@ function delivery(changes = {}) {
     http_status: null, created_at_epoch_ms: NOW, updated_at_epoch_ms: NOW, ...changes};
 }
 function status(changes = {}) {
-  return {schema: 'serverware.operatorNotifications/v1', available: true, slots: SLOTS.map(name => slot(name)),
+  return {schema: 'catchplate.operatorNotifications/v1', available: true, slots: SLOTS.map(name => slot(name)),
     queue: Object.fromEntries(STATES.map(state => [state, 0])), cursor: null,
     backlog: {pending_source_events: 0, queue_capacity: 256, retained_capacity: 10000},
     capabilities: {audit_log: {source_available: true, event_types: [...EVENTS.audit_log]},
@@ -122,7 +122,7 @@ function status(changes = {}) {
     worker: {state: 'running', last_cycle_at_epoch_ms: NOW, last_code: 'ready'}, ...changes};
 }
 function operation(body, kind, changes = {}) {
-  return {schema: 'serverware.operatorNotificationOperation/v1', operation_id: body.operation_id, kind,
+  return {schema: 'catchplate.operatorNotificationOperation/v1', operation_id: body.operation_id, kind,
     slot: body.slot, revision: body.expected_revision + (kind === 'save' ? 1 : 0), status: kind === 'save' ? 'saved' : 'queued',
     delivery_id: kind === 'test' ? delivery().delivery_id : null, slot_state: null, ...changes};
 }
@@ -206,8 +206,8 @@ async function fixture(browser, options, exercise) {
     });
 }
 async function hashes() {
-  const frontend = (await readdir(join(ROOT, 'serverware/operator_demo_web'), {recursive: true}))
-    .filter(name => /\.(?:html|js|css)$/.test(name)).map(name => 'serverware/operator_demo_web/' + name);
+  const frontend = (await readdir(join(ROOT, 'catchplate/operator_demo_web'), {recursive: true}))
+    .filter(name => /\.(?:html|js|css)$/.test(name)).map(name => 'catchplate/operator_demo_web/' + name);
   const inputs = [...INPUTS, ...frontend].sort();
   return Object.fromEntries(await Promise.all(inputs.map(async name =>
     [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')])));
@@ -723,7 +723,7 @@ async function runSuite(browser, {fromGroup = 1, throughGroup = tests.length} = 
   }};
   try {
     before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
-    artifacts = await mkdtemp('/tmp/serverware-notifications-browser-');
+    artifacts = await mkdtemp('/tmp/catchplate-notifications-browser-');
     console.log(JSON.stringify({artifactDirectory: artifacts, scope: 'synthetic notification fixtures; no actual destinations'}));
     try {
       await Promise.race([(async () => {

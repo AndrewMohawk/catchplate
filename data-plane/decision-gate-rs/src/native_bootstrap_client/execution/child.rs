@@ -521,8 +521,8 @@ impl BlockedChild {
         let empty = empty?;
         // Serialize selected initialized waitid results and actual retained
         // pidfd identity, never padding from a raw siginfo_t or caller status.
-        let original = serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(
-            &serde_json::json!({"apiVersion":"serverware.nativeLeaderReapOriginal/v1",
+        let original = catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(
+            &serde_json::json!({"apiVersion":"catchplate.nativeLeaderReapOriginal/v1",
                 "operationSha256":format!("sha256:{}", self.operation_sha256().iter()
                     .map(|byte| format!("{byte:02x}")).collect::<String>()),
                 "leaderPid":self.leader.pid, "pidfdDevice":self.leader.identity.device,

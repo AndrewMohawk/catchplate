@@ -26,7 +26,7 @@ sys.path.insert(0, str(ROOT))
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
-from serverware import github_app as app, http_client
+from catchplate import github_app as app, http_client
 
 
 def forbid_network(event, args):

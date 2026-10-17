@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/native-pilot-publication-cold-binding-input.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/native-pilot-publication-cold-binding-input.v1.schema.json",
   "title": "Independently approved cold publication binding input",
   "description": "Complete canonical ASCII input is independently SHA-256 pinned and at most 4 MiB. The unsigned producer authenticates assignment v2 under the pinned trust, selects only cold closure-set v2 and derives a distinct cold-only commitment plus proofScope/v2. This is not a hot ProductionCustodyConfiguration, native admission, a signing approval or live process evidence. Signature, canonical-byte, exact key/root and original-interval joins are semantic producer checks beyond this schema.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "trustOriginal", "trustSha256", "assignmentOriginal", "closureSetOriginal", "commissioningIdSha256", "initialPublicationRevision", "window"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativePilotPublicationColdBindingInput/v1"},
+    "apiVersion": {"const": "catchplate.nativePilotPublicationColdBindingInput/v1"},
     "trustOriginal": {"type": "string", "minLength": 1, "maxLength": 1048576, "pattern": "^[\\x00-\\x7f]+$"},
     "trustSha256": {"$ref": "#/$defs/digest"},
     "assignmentOriginal": {"type": "string", "minLength": 1, "maxLength": 4194304, "pattern": "^[\\x00-\\x7f]+$"},

@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/native-execution-manifest.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/native-execution-manifest.v1.schema.json",
   "title": "Native immutable-image ELF execution manifest input",
   "description": "Data only, not execution permission. Exact canonical ASCII JSON with no LF, at most 32768 bytes. A distinct signed start authority must select this original; runtime admission retains actual descriptors under the original clock. The old never-exec launch manifest and static custody contracts are unchanged.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "profile", "rootfs", "entry", "argv", "environment", "cwd", "loaderPolicy"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeExecutionManifest/v1"},
+    "apiVersion": {"const": "catchplate.nativeExecutionManifest/v1"},
     "profile": {"const": "native-elf-erofs-v1"},
     "rootfs": {
       "type": "object",

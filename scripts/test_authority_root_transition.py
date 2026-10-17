@@ -22,14 +22,14 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_primary_contract as primary
-from serverware import authority_radix_mutation as radix_mutation
-from serverware import authority_root_transition as transition
-from serverware import authority_transition_core as core
-from serverware import authority_transition_policy as policy
-from serverware.authority_radix_mutation import PrimaryRadixMutationError
+from catchplate import authority_contract
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_primary_contract as primary
+from catchplate import authority_radix_mutation as radix_mutation
+from catchplate import authority_root_transition as transition
+from catchplate import authority_transition_core as core
+from catchplate import authority_transition_policy as policy
+from catchplate.authority_radix_mutation import PrimaryRadixMutationError
 from test_authority_radix_mutation import IndependentTree, change, refresh_proof_digest
 from test_authority_radix_proof import sql_json, wire_digest, wire_json
 import test_authority_global_audit_capacity as capacity_fixture
@@ -325,7 +325,7 @@ class AuthorityRootTransitionTests(unittest.TestCase):
         for source in sources:
             self.assertEqual(set(source), {"table", "selector", "present", "row", "rowDigest"})
             self.assertEqual(set(source["selector"]), set(primary.PRIMARY_KEY_COLUMNS[source["table"]]))
-            expected = wire_digest("serverware.policyAuthorityAuthorizationRow/v1", source["table"].encode("ascii"),
+            expected = wire_digest("catchplate.policyAuthorityAuthorizationRow/v1", source["table"].encode("ascii"),
                                    wire_json(source["selector"]), b"present" if source["present"] else b"absent",
                                    wire_json(source["row"]))
             self.assertEqual(source["rowDigest"], expected)
@@ -335,13 +335,13 @@ class AuthorityRootTransitionTests(unittest.TestCase):
 
     def test_framework_allowance_requires_new_profile_without_changing_business_caps(self) -> None:
         self.assertEqual(transition.TRANSITION_PROFILE,
-                         "serverware.policyAuthorityPrimaryRootTransitionProfile/v2")
+                         "catchplate.policyAuthorityPrimaryRootTransitionProfile/v2")
         bounds = transition.metric_bounds()
         self.assertEqual((bounds["selectedRows"], bounds["mutations"], bounds["proofVectors"],
                           bounds["proofChildSlots"], bounds["hashWork"]), (257, 513, 16448, 263168, 35018))
         self.assertEqual((authority_contract.MAX_QUERY_PROOFS, authority_contract.MAX_MUTATIONS), (256, 512))
         result = transition.derive_primary_root_transition(**self.arguments)
-        result["profile"] = "serverware.policyAuthorityPrimaryRootTransitionProfile/v1"
+        result["profile"] = "catchplate.policyAuthorityPrimaryRootTransitionProfile/v1"
         with self.assertRaisesRegex(PrimaryRadixMutationError, "profile is not closed"):
             transition.validate_primary_root_transition(result)
 
@@ -380,7 +380,7 @@ class AuthorityRootTransitionTests(unittest.TestCase):
         transition.derive_primary_root_transition(**arguments)
         source = next(entry for entry in transition.derive_authorization_sources(
             operation=REGISTRATION, selected_rows=arguments["selected_rows"]) if entry["table"] == tree.table)
-        domain = "serverware.policyAuthorityAuthorizationRow/v1"
+        domain = "catchplate.policyAuthorityAuthorizationRow/v1"
         self.assertEqual(source["rowDigest"], wire_digest(domain, tree.table.encode(), wire_json(source["selector"]),
                                                         b"present", wire_json(source["row"])))
         # The live SQL wire helper has a separate real-engine component oracle.
@@ -390,13 +390,13 @@ class AuthorityRootTransitionTests(unittest.TestCase):
                                                            b"present", sql_json(source["row"])))
 
     def test_source_wiring_recomputes_before_persistence_and_binds_snapshot_nine(self) -> None:
-        _, planner = source_module("serverware/authority_planner.py")
+        _, planner = source_module("catchplate/authority_planner.py")
         constants = {target.id: node.value.value for node in planner.body if isinstance(node, ast.Assign)
                      and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
                      for target in node.targets if isinstance(target, ast.Name)}
-        self.assertEqual(constants["PLANNER_RESPONSE_SCHEMA"], "serverware.policyAuthorityPlannerResponse/v3")
-        self.assertEqual(constants["MEASURED_PLAN_SCHEMA"], "serverware.policyAuthorityMeasuredPlan/v3")
-        self.assertEqual(constants["SIGNED_MEASURED_PLAN_SCHEMA"], "serverware.signedPolicyAuthorityMeasuredPlan/v3")
+        self.assertEqual(constants["PLANNER_RESPONSE_SCHEMA"], "catchplate.policyAuthorityPlannerResponse/v3")
+        self.assertEqual(constants["MEASURED_PLAN_SCHEMA"], "catchplate.policyAuthorityMeasuredPlan/v3")
+        self.assertEqual(constants["SIGNED_MEASURED_PLAN_SCHEMA"], "catchplate.signedPolicyAuthorityMeasuredPlan/v3")
         validator = function(planner, "validate_measured_plan_payload")
         closed_sets = {target.id: ast.literal_eval(node.value) for node in validator.body
                        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Set)
@@ -410,16 +410,16 @@ class AuthorityRootTransitionTests(unittest.TestCase):
         self.assertEqual(len(calls(derive, "validate_measured_plan_payload")), 1)
         snapshot = [call for call in calls(validator, "framed_digest")
                     if call.args and isinstance(call.args[0], ast.Constant)
-                    and call.args[0].value == "serverware.policyAuthoritySnapshot/v3"]
+                    and call.args[0].value == "catchplate.policyAuthoritySnapshot/v3"]
         self.assertEqual(len(snapshot), 1)
         self.assertEqual(len(snapshot[0].args), 10)  # domain plus nine frames
         self.assertIn("rootTransitionDigest", ast.unparse(snapshot[0].args[-1]))
-        _, executor = source_module("serverware/authority_store/executor_v9.py")
+        _, executor = source_module("catchplate/authority_store/executor_v9.py")
         compute = function(executor, "compute_authority_v9_snapshot_digest")
         self.assertIn("root_transition_digest", [argument.arg for argument in compute.args.kwonlyargs])
         frames = calls(compute, "_digest")
         self.assertEqual(len(frames), 1)
-        self.assertEqual(frames[0].args[0].value, "serverware.policyAuthoritySnapshot/v3")
+        self.assertEqual(frames[0].args[0].value, "catchplate.policyAuthoritySnapshot/v3")
         self.assertEqual(len(frames[0].args), 10)
         self.assertIn("root_transition_digest", ast.unparse(frames[0].args[-1]))
         persistence = function(executor, "complete_authority_planner_transaction")
@@ -431,13 +431,13 @@ class AuthorityRootTransitionTests(unittest.TestCase):
         self.assertEqual(len(calls(persistence, "primary_root_transition_digest")), 1)
         # Actual SQL execution of this narrow exception is covered separately
         # by the real-engine component, not by this source assertion.
-        database_path = ROOT / "serverware/db.py"
+        database_path = ROOT / "catchplate/db.py"
         self.assertLess(database_path.stat().st_size, 16 * 1024 * 1024)
         database = database_path.read_text(encoding="utf-8")
-        begin = database.index("                serverware_policy_authority_domain_digest(")
-        end = database.index("$serverware_digest$", database.index("AS $serverware_digest$", begin) + 4)
+        begin = database.index("                catchplate_policy_authority_domain_digest(")
+        end = database.index("$catchplate_digest$", database.index("AS $catchplate_digest$", begin) + 4)
         digest_body = database[begin:end]
-        self.assertIn("'serverware.policyAuthoritySnapshot/v3'", digest_body)
+        self.assertIn("'catchplate.policyAuthoritySnapshot/v3'", digest_body)
         self.assertIn("pg_catalog.cardinality(digest_frames) <> 9", digest_body)
         self.assertIn("NOT BETWEEN 1 AND 8 END", digest_body)
 

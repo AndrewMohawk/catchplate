@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-custody-guest-delivery.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/policy-custody-guest-delivery.v1.schema.json",
   "$ref": "#/$defs/delivery",
   "$defs": {
     "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
@@ -17,7 +17,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "authority", "serviceRole", "uid", "gid"],
       "properties": {
-        "apiVersion": { "const": "serverware.policyCustodyGuestConfiguration/v1" },
+        "apiVersion": { "const": "catchplate.policyCustodyGuestConfiguration/v1" },
         "authority": { "$ref": "#/$defs/authority" }, "serviceRole": { "$ref": "#/$defs/role" },
         "uid": { "type": "integer", "minimum": 1, "maximum": 4294967294, "not": { "enum": [64988, 64989, 64990, 65534] } },
         "gid": { "type": "integer", "minimum": 1, "maximum": 4294967294, "not": { "enum": [64988, 64989, 64990, 65534] } }
@@ -65,7 +65,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "payload", "signatureBase64url"],
       "properties": {
-        "apiVersion": { "const": "serverware.policyCustodyGuestDelivery/v1" },
+        "apiVersion": { "const": "catchplate.policyCustodyGuestDelivery/v1" },
         "payload": { "$ref": "#/$defs/payload" }, "signatureBase64url": { "type": "string", "pattern": "^[A-Za-z0-9_-]{86}$" }
       }
     },
@@ -73,7 +73,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "deliverySha256", "serviceRole", "invocationId", "phase"],
       "properties": {
-        "apiVersion": { "const": "serverware.policyCustodyGuestStartup/v1" }, "deliverySha256": { "$ref": "#/$defs/sha256" },
+        "apiVersion": { "const": "catchplate.policyCustodyGuestStartup/v1" }, "deliverySha256": { "$ref": "#/$defs/sha256" },
         "serviceRole": { "$ref": "#/$defs/role" }, "invocationId": { "type": "string", "pattern": "^[0-9a-f]{32}$" }, "phase": { "const": "constructed" }
       }
     }

@@ -31,16 +31,16 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from cryptography.x509.oid import NameOID, ObjectIdentifier
 
-from serverware import attestation
-from serverware import app as serverware_app
-from serverware import setup_receipts
+from catchplate import attestation
+from catchplate import app as catchplate_app
+from catchplate import setup_receipts
 from scripts import attestation_nonce_service
 from scripts import attestation_verifier_state_service
 from scripts import attestation_witness_service
 from scripts import production_attestation_producer_issuer
 from scripts import public_attestation_production_sandbox_launcher
 from scripts import verify_nitro_tee
-from serverware.setup_receipts import (
+from catchplate.setup_receipts import (
     Ed25519TrustRoot,
     FixedClock,
     HardwareVerificationExpected,
@@ -493,7 +493,7 @@ def trusted_scope(
         api_version=attestation.TRUSTED_TLS_SCOPE_VERSION,
         provider="enclave-nitro-tls",
         exporter=exporter,
-        exporter_label="EXPORTER-Serverware-Attestation-v1",
+        exporter_label="EXPORTER-Catchplate-Attestation-v1",
         connection_id="connection-0001",
         connection_nonce=b"n" * 32,
         issued_at_unix=1_000,
@@ -607,9 +607,9 @@ class ChallengeTests(unittest.TestCase):
             mock.patch.dict(
                 os.environ,
                 {
-                    "SERVERWARE_ATTESTATION_CHALLENGE_MODE": "single-worker",
-                    "SERVERWARE_ATTESTATION_SAME_CONNECTION_ROUTING": "required",
-                    "SERVERWARE_ATTESTATION_WORKER_COUNT": "2",
+                    "CATCHPLATE_ATTESTATION_CHALLENGE_MODE": "single-worker",
+                    "CATCHPLATE_ATTESTATION_SAME_CONNECTION_ROUTING": "required",
+                    "CATCHPLATE_ATTESTATION_WORKER_COUNT": "2",
                 },
                 clear=False,
             ),
@@ -651,7 +651,7 @@ class SignedTlsScopeTests(unittest.TestCase):
             "enclaveInstanceId": "enclave-instance-0001",
             "expiresAtUnix": 1_060,
             "exporter": attestation.b64e(b"x" * 32),
-            "exporterLabel": "EXPORTER-Serverware-Attestation-v1",
+            "exporterLabel": "EXPORTER-Catchplate-Attestation-v1",
             "issuedAtUnix": 1_000,
             "leafCertificateSha256": digest("leaf-certificate"),
             "leafSpkiSha256": digest("tls-leaf"),
@@ -757,7 +757,7 @@ class SignedTlsScopeTests(unittest.TestCase):
                 {
                     "extensions": {},
                     "headers": [
-                        (b"x-serverware-enclave-tls-scope", raw)
+                        (b"x-catchplate-enclave-tls-scope", raw)
                     ],
                 },
                 production_state=state,
@@ -804,7 +804,7 @@ class SignedTlsScopeTests(unittest.TestCase):
                         attestation.TRUSTED_TLS_SCOPE_EXTENSION: raw
                     },
                     "headers": [
-                        (b"x-serverware-enclave-tls-scope", b"forged")
+                        (b"x-catchplate-enclave-tls-scope", b"forged")
                     ],
                 },
                 descriptor=descriptor,
@@ -841,7 +841,7 @@ def canonical_line(value: object) -> bytes:
 def sealed_read_only_memfd(raw: bytes, label: str) -> int:
     """Fixture FD matching the producer's immutable retained-FD contract."""
     descriptor = os.memfd_create(
-        "serverware-fixture-" + label,
+        "catchplate-fixture-" + label,
         os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING,
     )
     try:
@@ -1070,7 +1070,7 @@ class FixtureNonceVerifierStateBoundary:
                 verify_nitro_tee.sha256_json(
                     {
                         "apiVersion":
-                        "serverware.fixtureNonceVerifierStateGenesis/v1",
+                        "catchplate.fixtureNonceVerifierStateGenesis/v1",
                         "assuranceSha256": assurance_sha256,
                         "stateStoreIdentitySha256":
                         state_store_identity_sha256,
@@ -1172,7 +1172,7 @@ class FixtureNonceVerifierStateBoundary:
         prior_payload = self._current_state["payload"]
         self._prior_read = {
             "apiVersion":
-            "serverware.nonceAuthorityVerifierStateReadResponse/v2",
+            "catchplate.nonceAuthorityVerifierStateReadResponse/v2",
             "challengeBase64url": attestation.b64e(verifier_challenge),
             "challengeExpiresAtUnix": now + 30,
             "challengeIssuedAtUnix": now,
@@ -1487,7 +1487,7 @@ class FixtureNonceVerifierStateBoundary:
         )
         commit_request = {
             "apiVersion":
-            "serverware.attestationVerifierStateCommitRequest/v3",
+            "catchplate.attestationVerifierStateCommitRequest/v3",
             "authorization": authorization,
             "nonceConsumptionReceipt": receipt,
             "preparedOperationSha256":
@@ -1542,7 +1542,7 @@ class FixtureNonceVerifierStateBoundary:
         }
         commit_candidate = {
             "apiVersion":
-            "serverware.verifierStateStoreCommitCandidate/v2",
+            "catchplate.verifierStateStoreCommitCandidate/v2",
             "assuranceSha256": self._assurance_sha256,
             "authorizationSha256": authorization_sha256,
             "commitRequestSha256": commit_request_sha256,
@@ -1566,15 +1566,15 @@ class FixtureNonceVerifierStateBoundary:
         }
         signed_store_commit_proof = self._signed_envelope(
             api_version=(
-                "serverware.signedVerifierStateStoreCommitProof/v3"
+                "catchplate.signedVerifierStateStoreCommitProof/v3"
             ),
             domain=(
-                b"serverware.verifierStateStoreCommitProof/v3"
+                b"catchplate.verifierStateStoreCommitProof/v3"
                 b"\x00Ed25519\x00"
             ),
             payload={
                 "apiVersion":
-                "serverware.verifierStateStoreCommitProof/v3",
+                "catchplate.verifierStateStoreCommitProof/v3",
                 "authorizationSha256": authorization_sha256,
                 "casCommitted": True,
                 "commitCandidateSha256":
@@ -1696,7 +1696,7 @@ class FixtureNonceVerifierStateBoundary:
             )
         final_read = {
             "apiVersion":
-            "serverware.nonceAuthorityVerifierStateReadResponse/v2",
+            "catchplate.nonceAuthorityVerifierStateReadResponse/v2",
             "challengeBase64url": attestation.b64e(final_challenge),
             "challengeExpiresAtUnix": committed_at_unix + 30,
             "challengeIssuedAtUnix": committed_at_unix,
@@ -1714,7 +1714,7 @@ class FixtureNonceVerifierStateBoundary:
             )
         self._transition = {
             "apiVersion":
-            "serverware.nonceAuthorityVerifierStateTransition/v3",
+            "catchplate.nonceAuthorityVerifierStateTransition/v3",
             "assurance": self._assurance,
             "assuranceEvidence": self._assurance_evidence,
             "assuranceEvidenceSha256":
@@ -1791,7 +1791,7 @@ def fixture_sandbox_descriptor(
 ) -> dict[str, object]:
     challenge = {
         "apiVersion":
-        "serverware.publicAttestationServiceChannelChallenge/v1",
+        "catchplate.publicAttestationServiceChannelChallenge/v1",
         "challengeBytes": 32,
         "required": True,
     }
@@ -1809,7 +1809,7 @@ def fixture_sandbox_descriptor(
             "access": "read-write",
             "direction": direction,
             "kind": "connected-unix-service",
-            "peerCgroupPath": "/serverware-attestation-services",
+            "peerCgroupPath": "/catchplate-attestation-services",
             "peerExecutableSha256": executable_sha256,
             "peerGid": 0,
             "peerUid": 0,
@@ -1824,7 +1824,7 @@ def fixture_sandbox_descriptor(
         service_fd(
             direction="producer-to-service",
             executable_sha256=nonce_service_executable_sha256,
-            protocol="serverware.attestationNonceService/v2",
+            protocol="catchplate.attestationNonceService/v2",
             role="nonceRequest",
             socket_type="SOCK_STREAM",
             target_fd=4,
@@ -1832,7 +1832,7 @@ def fixture_sandbox_descriptor(
         service_fd(
             direction="service-to-producer",
             executable_sha256=nonce_service_executable_sha256,
-            protocol="serverware.attestationNonceService/v2",
+            protocol="catchplate.attestationNonceService/v2",
             role="nonceResponse",
             socket_type="SOCK_STREAM",
             target_fd=5,
@@ -1909,7 +1909,7 @@ def fixture_sandbox_descriptor(
         service_fd(
             direction="producer-to-service",
             executable_sha256=witness_service_executable_sha256,
-            protocol="serverware.attestationWitnessService/v2",
+            protocol="catchplate.attestationWitnessService/v2",
             role="witnessRequest",
             socket_type="SOCK_SEQPACKET",
             target_fd=14,
@@ -1917,7 +1917,7 @@ def fixture_sandbox_descriptor(
         service_fd(
             direction="service-to-producer",
             executable_sha256=witness_service_executable_sha256,
-            protocol="serverware.attestationWitnessService/v2",
+            protocol="catchplate.attestationWitnessService/v2",
             role="witnessResponse",
             socket_type="SOCK_SEQPACKET",
             target_fd=15,
@@ -1925,7 +1925,7 @@ def fixture_sandbox_descriptor(
     ]
     return {
         "apiVersion":
-        "serverware.publicAttestationExecutionSandbox/v2",
+        "catchplate.publicAttestationExecutionSandbox/v2",
         "capabilities": {
             "ambient": [],
             "bounding": [],
@@ -1968,8 +1968,8 @@ def fixture_sandbox_descriptor(
                 "memorySwapMaxBytes": 0,
                 "pidsMax": 16,
             },
-            "membershipPath": "/serverware-public-attestation",
-            "path": "/sys/fs/cgroup/serverware-public-attestation",
+            "membershipPath": "/catchplate-public-attestation",
+            "path": "/sys/fs/cgroup/catchplate-public-attestation",
             "requireEmptyBeforeLaunch": True,
             "requireEmptyOnExit": True,
             "requiredControllers": ["cpu", "io", "memory", "pids"],
@@ -1979,7 +1979,7 @@ def fixture_sandbox_descriptor(
             "architecture": "x86_64",
             "command": {
                 "apiVersion":
-                "serverware.publicAttestationProducerCommand/v1",
+                "catchplate.publicAttestationProducerCommand/v1",
                 "expectedTrustRootsSha256": trust_roots_sha256,
                 "fdRoles": {
                     role: role
@@ -2014,7 +2014,7 @@ def fixture_sandbox_descriptor(
                 "access": "read-only",
                 "binding": {
                     "configApiVersion":
-                    "serverware.publicAttestationConfig/v2",
+                    "catchplate.publicAttestationConfig/v2",
                     "releaseIdentityConfigurationField":
                     "configuration",
                     "releaseIdentityField": "releaseIdentity",
@@ -2084,7 +2084,7 @@ def fixture_sandbox_descriptor(
             "nodev": True,
             "noexec": True,
             "nosuid": True,
-            "path": "/run/serverware/public-attestation-root",
+            "path": "/run/catchplate/public-attestation-root",
             "readOnlyAfterSetup": True,
             "rootDirectoryFdRole": "sandboxRoot",
             "rootDirectoryIdentity": {
@@ -4053,7 +4053,7 @@ def public_evidence_descriptor(
     return attestation.PublicEvidenceProducerDescriptor(
         descriptor_sha256=digest("producer-descriptor"),
         executable_path=Path(
-            "/run/serverware/public-evidence-producer"
+            "/run/catchplate/public-evidence-producer"
         ),
         executable_sha256=digest("producer-executable"),
         immutable_config_bytes=immutable_config,
@@ -4069,20 +4069,20 @@ def public_evidence_descriptor(
             attestation.b64e(tls_scope_der)
         ),
         sandbox_launcher_path=Path(
-            "/run/serverware/public-evidence-sandbox"
+            "/run/catchplate/public-evidence-sandbox"
         ),
         sandbox_launcher_sha256=digest("sandbox-launcher"),
         sandbox_descriptor_bytes=sandbox_descriptor,
         sandbox_descriptor_sha256=digest_bytes(sandbox_descriptor),
         stable_statement_sha256=digest("stable-statement"),
         sandbox_cgroup_path=Path(
-            "/sys/fs/cgroup/serverware-public-attestation"
+            "/sys/fs/cgroup/catchplate-public-attestation"
         ),
         sandbox_root_path=Path(
-            "/run/serverware/public-attestation-root"
+            "/run/catchplate/public-attestation-root"
         ),
         sandbox_seccomp_profile_path=Path(
-            "/run/serverware/public-attestation.seccomp"
+            "/run/catchplate/public-attestation.seccomp"
         ),
         sandbox_seccomp_profile_sha256=
         digest("fixture-seccomp-profile"),
@@ -4108,7 +4108,7 @@ def public_evidence_descriptor(
             digest("nonce-service-executable")
         ),
         nonce_service_expected_peer_cgroup_path=(
-            "/serverware-attestation-services"
+            "/catchplate-attestation-services"
         ),
         nonce_service_max_response_bytes=1024 * 1024,
         nonce_service_timeout_milliseconds=1_000,
@@ -4275,15 +4275,15 @@ class ExactResponseTests(unittest.TestCase):
             result.statement["httpResponse"]["detachedProofHeaders"],
             {
                 "statement": (
-                    "x-serverware-attestation-statement-b64:"
+                    "x-catchplate-attestation-statement-b64:"
                     "base64url(canonical-statement)"
                 ),
                 "statementSha256": (
-                    "x-serverware-attestation-statement-sha256:"
+                    "x-catchplate-attestation-statement-sha256:"
                     "sha256(canonical-statement)"
                 ),
                 "signature": (
-                    "x-serverware-attestation-signature:"
+                    "x-catchplate-attestation-signature:"
                     "ed25519(canonical-statement)"
                 ),
             },
@@ -4352,7 +4352,7 @@ class PublicEvidenceRouteTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         request = self.request(
-            b'{"apiVersion":"serverware.publicAttestationRequest/v1",'
+            b'{"apiVersion":"catchplate.publicAttestationRequest/v1",'
             b'"callerNonceBase64url":"'
             + attestation.b64e(b"u" * 32).encode("ascii")
             + b'"}',
@@ -4364,12 +4364,12 @@ class PublicEvidenceRouteTests(unittest.IsolatedAsyncioTestCase):
         )
         with (
             mock.patch.object(
-                serverware_app,
+                catchplate_app,
                 "_load_public_evidence_producer_descriptor",
             ) as descriptor_loader,
             self.assertRaises(HTTPException) as captured,
         ):
-            await serverware_app.attestation_public_evidence(request)
+            await catchplate_app.attestation_public_evidence(request)
         self.assertEqual(captured.exception.status_code, 503)
         receive.assert_not_awaited()
         descriptor_loader.assert_not_called()
@@ -4415,20 +4415,20 @@ class PublicEvidenceRouteTests(unittest.IsolatedAsyncioTestCase):
             with (
                 self.subTest(case=case),
                 mock.patch.object(
-                    serverware_app,
+                    catchplate_app,
                     "_load_public_evidence_producer_descriptor",
                 ) as descriptor_loader,
                 mock.patch.object(
-                    serverware_app,
+                    catchplate_app,
                     "trusted_public_tls_scope_from_asgi",
                 ) as tls_from_scope,
                 mock.patch.object(
-                    serverware_app,
+                    catchplate_app,
                     "production_public_evidence_response",
                 ) as producer,
                 self.assertRaises(HTTPException) as captured,
             ):
-                await serverware_app.attestation_public_evidence(request)
+                await catchplate_app.attestation_public_evidence(request)
             self.assertEqual(captured.exception.status_code, case["status"])
             receive.assert_not_awaited()
             descriptor_loader.assert_not_called()
@@ -4453,7 +4453,7 @@ class PublicEvidenceRouteTests(unittest.IsolatedAsyncioTestCase):
         expected_response = Response(status_code=204)
         call_next = mock.AsyncMock(return_value=expected_response)
         response = (
-            await serverware_app.bounded_control_plane_request_middleware(
+            await catchplate_app.bounded_control_plane_request_middleware(
                 accepted,
                 call_next,
             )
@@ -4475,7 +4475,7 @@ class PublicEvidenceRouteTests(unittest.IsolatedAsyncioTestCase):
         )
         call_next.reset_mock()
         response = (
-            await serverware_app.bounded_control_plane_request_middleware(
+            await catchplate_app.bounded_control_plane_request_middleware(
                 oversized,
                 call_next,
             )
@@ -4522,21 +4522,21 @@ class PublicEvidenceRouteTests(unittest.IsolatedAsyncioTestCase):
         )
         with (
             mock.patch.object(
-                serverware_app,
+                catchplate_app,
                 "_load_public_evidence_producer_descriptor",
             ) as descriptor_loader,
             mock.patch.object(
-                serverware_app,
+                catchplate_app,
                 "trusted_public_tls_scope_from_asgi",
             ) as tls_from_scope,
             mock.patch.object(
-                serverware_app.asyncio,
+                catchplate_app.asyncio,
                 "to_thread",
                 new=mock.AsyncMock(),
             ) as to_thread,
             self.assertRaises(HTTPException) as captured,
         ):
-            await serverware_app.attestation_public_evidence(request)
+            await catchplate_app.attestation_public_evidence(request)
         self.assertEqual(captured.exception.status_code, 413)
         self.assertEqual(receive_calls, 2)
         descriptor_loader.assert_not_called()
@@ -4570,28 +4570,28 @@ class PublicEvidenceRouteTests(unittest.IsolatedAsyncioTestCase):
         )
         with (
             mock.patch.object(
-                serverware_app,
+                catchplate_app,
                 "_load_public_evidence_producer_descriptor",
                 return_value=mock.sentinel.descriptor,
             ),
             mock.patch.object(
-                serverware_app,
+                catchplate_app,
                 "trusted_public_tls_scope_from_asgi",
                 return_value=trusted_scope(),
             ),
             mock.patch.object(
-                serverware_app,
+                catchplate_app,
                 "_PUBLIC_EVIDENCE_ROUTE_SLOTS",
                 route_slots,
             ),
             mock.patch.object(
-                serverware_app.asyncio,
+                catchplate_app.asyncio,
                 "to_thread",
                 new=mock.AsyncMock(),
             ) as to_thread,
             self.assertRaises(HTTPException) as captured,
         ):
-            await serverware_app.attestation_public_evidence(request)
+            await catchplate_app.attestation_public_evidence(request)
         self.assertEqual(captured.exception.status_code, 503)
         receive.assert_awaited()
         route_slots.acquire.assert_awaited_once()
@@ -4601,7 +4601,7 @@ class PublicEvidenceRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_route_serves_validated_bytes_without_reserialization(
         self,
     ) -> None:
-        body = b'{"apiVersion":"serverware.publicAttestationBundle/v3"}\n'
+        body = b'{"apiVersion":"catchplate.publicAttestationBundle/v3"}\n'
         response_result = attestation.PublicEvidenceHttpResponse(
             body=body,
             status_code=200,
@@ -4631,21 +4631,21 @@ class PublicEvidenceRouteTests(unittest.IsolatedAsyncioTestCase):
         )
         with (
             mock.patch.object(
-                serverware_app,
+                catchplate_app,
                 "_load_public_evidence_producer_descriptor",
                 return_value=mock.sentinel.descriptor,
             ),
             mock.patch.object(
-                serverware_app,
+                catchplate_app,
                 "trusted_public_tls_scope_from_asgi",
                 return_value=trusted_scope(),
             ) as tls_from_scope,
             mock.patch.object(
-                serverware_app,
+                catchplate_app,
                 "production_public_evidence_response",
             ) as producer,
             mock.patch.object(
-                serverware_app.asyncio,
+                catchplate_app.asyncio,
                 "to_thread",
                 new=mock.AsyncMock(
                     side_effect=lambda function, **kwargs: function(
@@ -4655,7 +4655,7 @@ class PublicEvidenceRouteTests(unittest.IsolatedAsyncioTestCase):
             ) as to_thread,
         ):
             response = (
-                await serverware_app.attestation_public_evidence(request)
+                await catchplate_app.attestation_public_evidence(request)
             )
         receive.assert_awaited()
         tls_from_scope.assert_called_once_with(
@@ -4667,7 +4667,7 @@ class PublicEvidenceRouteTests(unittest.IsolatedAsyncioTestCase):
             descriptor=mock.sentinel.descriptor,
         )
         to_thread.assert_awaited_once_with(
-            serverware_app._produce_public_evidence_from_scope,
+            catchplate_app._produce_public_evidence_from_scope,
             raw_request_body=b"{}",
             scope=request.scope,
         )
@@ -4710,18 +4710,18 @@ class PublicEvidenceRouteTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             mock.patch.object(
-                serverware_app,
+                catchplate_app,
                 "_PUBLIC_EVIDENCE_ROUTE_SLOTS",
                 route_slots,
             ),
             mock.patch.object(
-                serverware_app.asyncio,
+                catchplate_app.asyncio,
                 "to_thread",
                 new=mock.AsyncMock(side_effect=delayed_thread),
             ),
         ):
             request_task = asyncio.create_task(
-                serverware_app.attestation_public_evidence(request)
+                catchplate_app.attestation_public_evidence(request)
             )
             await worker_started.wait()
             request_task.cancel()
@@ -4755,10 +4755,10 @@ class PublicEvidenceProducerIsolationTests(unittest.TestCase):
             attestation.PUBLIC_EVIDENCE_PRODUCER_DESCRIPTOR_VERSION,
             "concurrencyLimit": 1,
             "executablePath":
-            "/run/serverware/public-evidence-producer",
+            "/run/catchplate/public-evidence-producer",
             "executableSha256": digest("producer-executable"),
             "immutableConfigPath":
-            "/run/serverware/public-evidence.json",
+            "/run/catchplate/public-evidence.json",
             "immutableConfigSha256": digest("producer-config"),
             "maxInputBytes": 64 * 1024,
             "maxOutputBytes": 4 * 1024 * 1024,
@@ -4770,7 +4770,7 @@ class PublicEvidenceProducerIsolationTests(unittest.TestCase):
             mock.patch.object(
                 attestation,
                 "_configured_production_path",
-                return_value=Path("/run/serverware/descriptor.json"),
+                return_value=Path("/run/catchplate/descriptor.json"),
             ),
             mock.patch.object(
                 attestation,
@@ -5346,7 +5346,7 @@ class PublicEvidenceTests(unittest.TestCase):
         )
         verifier_state_service = {
             "apiVersion":
-            "serverware.attestationVerifierStateClient/v2",
+            "catchplate.attestationVerifierStateClient/v2",
             "abortPath": "/v1/state/abort",
             "attachNonceStatusPath":
             "/v1/state/attach-nonce-status",
@@ -5608,18 +5608,18 @@ class PublicEvidenceTests(unittest.TestCase):
             attestation.PUBLIC_EVIDENCE_PRODUCER_DESCRIPTOR_VERSION,
             "concurrencyLimit": 1,
             "executablePath":
-            "/run/serverware/public-attestation-producer",
+            "/run/catchplate/public-attestation-producer",
             "executableSha256":
             digest_bytes(producer_executable_raw),
             "immutableConfigPath":
-            "/run/serverware/public-attestation-config.json",
+            "/run/catchplate/public-attestation-config.json",
             "maxInputBytes": 256 * 1024,
             "maxOutputBytes": 4 * 1024 * 1024,
             "nonceService": {
                 "apiVersion":
                 attestation_nonce_service.CONSUME_ONCE_REQUEST_VERSION,
                 "expectedPeerCgroupPath":
-                "/serverware-attestation-services",
+                "/catchplate-attestation-services",
                 "expectedPeerExecutableSha256":
                 digest_bytes(nonce_service_raw),
                 "expectedPeerGid": 10001,
@@ -5637,11 +5637,11 @@ class PublicEvidenceTests(unittest.TestCase):
             "producerRequestSchemaSha256":
             digest_bytes(producer_request_schema_raw),
             "sandboxDescriptorPath":
-            "/run/serverware/public-attestation-sandbox.json",
+            "/run/catchplate/public-attestation-sandbox.json",
             "sandboxDescriptorSha256":
             digest_bytes(sandbox_descriptor_raw),
             "sandboxLauncherPath":
-            "/run/serverware/public-attestation-sandbox-launcher",
+            "/run/catchplate/public-attestation-sandbox-launcher",
             "sandboxLauncherSha256":
             digest_bytes(sandbox_launcher_raw),
             "sandboxResources": {
@@ -5663,36 +5663,36 @@ class PublicEvidenceTests(unittest.TestCase):
                     {"role": "witnessResponse"},
                 ],
                 "rootPath":
-                "/run/serverware/public-attestation-root",
+                "/run/catchplate/public-attestation-root",
                 "sealedFiles": [
                     {
                         "path":
-                        "/run/serverware/public-attestation-producer-descriptor.json",
+                        "/run/catchplate/public-attestation-producer-descriptor.json",
                         "role": "producerDescriptor",
                     },
                     {
                         "path":
-                        "/run/serverware/public-attestation-producer-request.schema.json",
+                        "/run/catchplate/public-attestation-producer-request.schema.json",
                         "role": "producerRequestSchema",
                     },
                     {
                         "path":
-                        "/run/serverware/public-attestation-sandbox-launcher",
+                        "/run/catchplate/public-attestation-sandbox-launcher",
                         "role": "sandboxLauncher",
                     },
                     {
                         "path":
-                        "/run/serverware/stable-release-statement.json",
+                        "/run/catchplate/stable-release-statement.json",
                         "role": "stableReleaseStatement",
                     },
                     {
                         "path":
-                        "/run/serverware/public-nitro-trust-roots.json",
+                        "/run/catchplate/public-nitro-trust-roots.json",
                         "role": "trustRoots",
                     },
                 ],
                 "seccompProfilePath":
-                "/run/serverware/public-attestation.seccomp",
+                "/run/catchplate/public-attestation.seccomp",
             },
             "timeoutMilliseconds": 1_000,
             "trustRootsSha256": digest_bytes(trust_roots_raw),
@@ -5905,7 +5905,7 @@ class PublicEvidenceTests(unittest.TestCase):
             "containmentBoundary": {
                 "producerMakesContainmentClaim": False,
                 "requiredLauncherContract":
-                "serverware.publicAttestationExecutionSandbox/v2",
+                "catchplate.publicAttestationExecutionSandbox/v2",
             },
             "deploymentMode": "fixture-non-production-retained-fd",
             "fixtureMode": True,
@@ -7731,7 +7731,7 @@ class PublicEvidenceTests(unittest.TestCase):
                     request,
                     {
                         "apiVersion":
-                        "serverware.attestationVerifierStateRecoveryLookupRequest/v1",
+                        "catchplate.attestationVerifierStateRecoveryLookupRequest/v1",
                         "recoveryIdentity": recovery_identity,
                         "recoveryIdentitySha256":
                         document["recoveryIdentitySha256"],
@@ -7741,7 +7741,7 @@ class PublicEvidenceTests(unittest.TestCase):
                 )
                 return {
                     "apiVersion":
-                    "serverware.attestationVerifierStateRecoveryLookupResponse/v1",
+                    "catchplate.attestationVerifierStateRecoveryLookupResponse/v1",
                     "commitReceipt": None,
                     "nonActionable": True,
                     "nonceConsumptionReceipt": None,
@@ -7763,7 +7763,7 @@ class PublicEvidenceTests(unittest.TestCase):
                     request,
                     {
                         "apiVersion":
-                        "serverware.nonceAuthorityVerifierStateReadRequest/v2",
+                        "catchplate.nonceAuthorityVerifierStateReadRequest/v2",
                         "assuranceSha256":
                         config["nonceAuthorityAssuranceSha256"],
                     },
@@ -7773,7 +7773,7 @@ class PublicEvidenceTests(unittest.TestCase):
                 self.assertEqual(request, prepare_request)
                 return {
                     "apiVersion":
-                    "serverware.attestationVerifierStatePrepareResponse/v3",
+                    "catchplate.attestationVerifierStatePrepareResponse/v3",
                     "nonActionable": True,
                     "preparedOperation": prepared_operation,
                     "preparedOperationSha256":
@@ -8012,7 +8012,7 @@ class PublicEvidenceTests(unittest.TestCase):
         )
         observed_requests: list[tuple[str, dict[str, object]]] = []
         recovery_response_version = (
-            "serverware.attestationVerifierStateRecoveryResponse/v3"
+            "catchplate.attestationVerifierStateRecoveryResponse/v3"
         )
 
         def verifier_state_post(
@@ -8034,7 +8034,7 @@ class PublicEvidenceTests(unittest.TestCase):
                     request,
                     {
                         "apiVersion":
-                        "serverware.attestationVerifierStateRecoveryRequest/v3",
+                        "catchplate.attestationVerifierStateRecoveryRequest/v3",
                         "recoveryIdentity":
                         document["recoveryIdentity"],
                         "recoveryIdentitySha256":
@@ -8102,7 +8102,7 @@ class PublicEvidenceTests(unittest.TestCase):
             observed_requests[1][1],
             {
                 "apiVersion":
-                "serverware.attestationVerifierStateRecoveryRequest/v3",
+                "catchplate.attestationVerifierStateRecoveryRequest/v3",
                 "recoveryIdentity": document["recoveryIdentity"],
                 "recoveryIdentitySha256":
                 document["recoveryIdentitySha256"],
@@ -8111,10 +8111,10 @@ class PublicEvidenceTests(unittest.TestCase):
             },
         )
         for obsolete_response_version in (
-            "serverware.attestationVerifierStateRecoveryResponse/v1",
-            "serverware.attestationVerifierStateRecoveryResponse/v2",
-            "serverware.nonceAuthorityVerifierStateRecoveryResponse/v1",
-            "serverware.nonceAuthorityVerifierStateRecoveryResponse/v2",
+            "catchplate.attestationVerifierStateRecoveryResponse/v1",
+            "catchplate.attestationVerifierStateRecoveryResponse/v2",
+            "catchplate.nonceAuthorityVerifierStateRecoveryResponse/v1",
+            "catchplate.nonceAuthorityVerifierStateRecoveryResponse/v2",
         ):
             recovery_response_version = obsolete_response_version
             observed_requests.clear()
@@ -8911,7 +8911,7 @@ class DurableWitnessNonceServiceFixtures(unittest.TestCase):
             protected = first["protectedLiveWitnessState"]
             self.assertEqual(
                 protected["apiVersion"],
-                "serverware.protectedLiveWitnessState/v2",
+                "catchplate.protectedLiveWitnessState/v2",
             )
             self.assertEqual(
                 protected["payload"]["witnessStoreIdentitySha256"],
@@ -9141,7 +9141,7 @@ class DurableWitnessNonceServiceFixtures(unittest.TestCase):
             self.assertIs(consumption["oneUse"], True)
             self.assertEqual(
                 consumption["apiVersion"],
-                "serverware.publicAttestationNonceConsumption/v1",
+                "catchplate.publicAttestationNonceConsumption/v1",
             )
             self.assertEqual(
                 consumption["storeIdentitySha256"], identity_sha256
@@ -9641,15 +9641,15 @@ class ManifestSeparationTests(unittest.TestCase):
             capability,
             {
                 "apiVersion":
-                "serverware.credentialLeaseCapability/v1",
+                "catchplate.credentialLeaseCapability/v1",
                 "controlledDispatch": {
                     "request":
-                    "serverware.credentialLeaseRequest/v4",
+                    "catchplate.credentialLeaseRequest/v4",
                     "requestAuthority":
-                    "serverware.credentialLeaseRequestAuthority/v1",
+                    "catchplate.credentialLeaseRequestAuthority/v1",
                     "envelope":
-                    "serverware.credentialLeaseEnvelope/v3",
-                    "set": "serverware.credentialLeaseSet/v4",
+                    "catchplate.credentialLeaseEnvelope/v3",
+                    "set": "catchplate.credentialLeaseSet/v4",
                     "releaseKinds": [
                         "atomicReservation",
                         "decisionBound",
@@ -9659,11 +9659,11 @@ class ManifestSeparationTests(unittest.TestCase):
                 },
                 "uncontrolledDispatchCompatibility": {
                     "request":
-                    "serverware.credentialLeaseRequest/v3",
+                    "catchplate.credentialLeaseRequest/v3",
                     "requestAuthority": None,
                     "envelope":
-                    "serverware.credentialLeaseEnvelope/v2",
-                    "set": "serverware.credentialLeaseSet/v3",
+                    "catchplate.credentialLeaseEnvelope/v2",
+                    "set": "catchplate.credentialLeaseSet/v3",
                     "releaseKinds": [],
                     "decisionBound": False,
                 },
@@ -9674,7 +9674,7 @@ class ManifestSeparationTests(unittest.TestCase):
 
     def test_legacy_manifest_with_current_top_level_shape_is_rejected(self) -> None:
         manifest = {
-            "apiVersion": "serverware.consolidatedTestArtifacts/v5",
+            "apiVersion": "catchplate.consolidatedTestArtifacts/v5",
             "candidate": {},
             "companions": {},
             "imageMappings": {},
@@ -9758,7 +9758,7 @@ def setup_receipt_fixture(
     expected = setup_expected(proxy_raw)
     user_data = canonical_json_bytes(
         {
-            "apiVersion": "serverware.setupNitroUserData/v1",
+            "apiVersion": "catchplate.setupNitroUserData/v1",
             "currentHostIdentitySha256":
             expected.current_host_identity_sha256,
             "hardwareAssuranceSha256":
@@ -10012,7 +10012,7 @@ class SetupReceiptTests(unittest.TestCase):
 
     def test_nitro_trust_bundle_requires_roots_and_crls(self) -> None:
         document = {
-            "apiVersion": "serverware.setupNitroTrustBundle/v1",
+            "apiVersion": "catchplate.setupNitroTrustBundle/v1",
             "awsNitroCrlsDerBase64url": [],
             "awsNitroRootCertificatesPem": [],
             "nitroCertificateProfile": {
@@ -10073,9 +10073,9 @@ class SetupReceiptTests(unittest.TestCase):
         with mock.patch.dict(
             os.environ,
             {
-                "SERVERWARE_SETUP_HARDWARE_SUBPROOF_PROVIDER": "hardware",
-                "SERVERWARE_SETUP_HARDWARE_SUBPROOF_KEY_ID": digest("key"),
-                "SERVERWARE_SETUP_HARDWARE_SUBPROOF_PUBLIC_KEY_PATH":
+                "CATCHPLATE_SETUP_HARDWARE_SUBPROOF_PROVIDER": "hardware",
+                "CATCHPLATE_SETUP_HARDWARE_SUBPROOF_KEY_ID": digest("key"),
+                "CATCHPLATE_SETUP_HARDWARE_SUBPROOF_PUBLIC_KEY_PATH":
                 "../key.pem",
             },
             clear=False,
@@ -10088,9 +10088,9 @@ class SetupReceiptTests(unittest.TestCase):
             with mock.patch.dict(
                 os.environ,
                 {
-                    "SERVERWARE_SETUP_PROXY_SUBPROOF_PROVIDER": "proxy",
-                    "SERVERWARE_SETUP_PROXY_SUBPROOF_KEY_ID": digest("key"),
-                    "SERVERWARE_SETUP_PROXY_SUBPROOF_PUBLIC_KEY_PATH":
+                    "CATCHPLATE_SETUP_PROXY_SUBPROOF_PROVIDER": "proxy",
+                    "CATCHPLATE_SETUP_PROXY_SUBPROOF_KEY_ID": digest("key"),
+                    "CATCHPLATE_SETUP_PROXY_SUBPROOF_PUBLIC_KEY_PATH":
                     str(path),
                 },
                 clear=False,

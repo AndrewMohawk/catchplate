@@ -5,9 +5,9 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use crate::native_response_profile_v1::canonical_ascii_bytes;
 use sha2::{Digest,Sha256};
 
-pub const SCHEMA: &str = "serverware.nativeAuditStatement/v1";
-pub const SIGNATURE_DOMAIN: &[u8] = b"serverware.nativeAuditStatement/v1\0";
-pub const ATTESTATION_DOMAIN: &[u8] = b"serverware/native-audit-attestation/v1\0";
+pub const SCHEMA: &str = "catchplate.nativeAuditStatement/v1";
+pub const SIGNATURE_DOMAIN: &[u8] = b"catchplate.nativeAuditStatement/v1\0";
+pub const ATTESTATION_DOMAIN: &[u8] = b"catchplate/native-audit-attestation/v1\0";
 pub const MAX_EVENTS: usize = 1024 * 1024;
 pub const MAX_ENVELOPE: usize = 1536 * 1024;
 
@@ -38,7 +38,7 @@ pub fn uuid(value:&str)->bool {
 }
 pub fn workload_uri(deployment: &str, instance: &str) -> Result<String,String> {
     if !component(deployment) || !component(instance) { return Err("audit workload identity is invalid".into()); }
-    Ok(format!("spiffe://serverware.audit/{deployment}/{instance}"))
+    Ok(format!("spiffe://catchplate.audit/{deployment}/{instance}"))
 }
 impl Statement {
     pub fn validate(&self, now:u64)->Result<(),String> {

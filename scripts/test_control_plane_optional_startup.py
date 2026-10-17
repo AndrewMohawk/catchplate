@@ -12,14 +12,14 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULES = (
-    ("control_plane_data_plane_audit", "SERVERWARE_MEASURED_AUDIT_CONFIG_FD"),
-    ("control_plane_policy_canary_startup", "SERVERWARE_POLICY_CANARY_INTAKE_CONFIG_FD"),
+    ("control_plane_data_plane_audit", "CATCHPLATE_MEASURED_AUDIT_CONFIG_FD"),
+    ("control_plane_policy_canary_startup", "CATCHPLATE_POLICY_CANARY_INTAKE_CONFIG_FD"),
 )
 PRELUDE = """
 import importlib
 import sys
 sys.path.insert(0, sys.argv[1])
-module = importlib.import_module('serverware.' + sys.argv[2])
+module = importlib.import_module('catchplate.' + sys.argv[2])
 
 def refuses(call):
     try:
@@ -29,14 +29,14 @@ def refuses(call):
     raise AssertionError('closed startup operation unexpectedly succeeded')
 """
 DISABLED = """
-assert 'serverware.control_plane_custody_client' not in sys.modules
-assert 'serverware.authority_service' not in sys.modules
+assert 'catchplate.control_plane_custody_client' not in sys.modules
+assert 'catchplate.authority_service' not in sys.modules
 module.initialize_from_environment()
 assert module._state == 'disabled' and module._owner is None
 assert module.selected() is False
 assert module.configure_tls(None) is None
-assert 'serverware.control_plane_custody_client' not in sys.modules
-assert 'serverware.authority_service' not in sys.modules
+assert 'catchplate.control_plane_custody_client' not in sys.modules
+assert 'catchplate.authority_service' not in sys.modules
 refuses(module.initialize_from_environment)
 assert module._state == 'disabled'
 module.close()
@@ -61,10 +61,10 @@ class OptionalStartupTests(unittest.TestCase):
         # Fresh real processes preserve each startup module's one-shot globals.
         # No fake process mode, custody object or successful validator is used.
         environment = {name: value for name, value in os.environ.items()
-                       if not name.startswith("SERVERWARE_")}
-        with tempfile.TemporaryDirectory(prefix="serverware-optional-startup-") as directory:
-            environment.update({"SERVERWARE_RELEASE_CHANNEL": channel,
-                                "SERVERWARE_DATA_DIR": directory})
+                       if not name.startswith("CATCHPLATE_")}
+        with tempfile.TemporaryDirectory(prefix="catchplate-optional-startup-") as directory:
+            environment.update({"CATCHPLATE_RELEASE_CHANNEL": channel,
+                                "CATCHPLATE_DATA_DIR": directory})
             environment.update(settings or {})
             result = subprocess.run(
                 [sys.executable, "-I", "-B", "-c", PRELUDE + code, str(ROOT), module],

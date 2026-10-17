@@ -68,22 +68,22 @@ from verify_nitro_tee import (
     verify_native_recipient_nitro_document,
 )
 
-EVIDENCE_VERSION = "serverware.nativeCredentialRecipientEvidence/v1"
-EXPECTATIONS_VERSION = "serverware.nativeCredentialRecipientExpectations/v1"
-NATIVE_EXPECTATIONS_VERSION = "serverware.nativeCredentialRecipientExpectations/v2"
-NATIVE_REQUEST_PROFILE = "serverware.nativeCredentialLeaseRequest"
+EVIDENCE_VERSION = "catchplate.nativeCredentialRecipientEvidence/v1"
+EXPECTATIONS_VERSION = "catchplate.nativeCredentialRecipientExpectations/v1"
+NATIVE_EXPECTATIONS_VERSION = "catchplate.nativeCredentialRecipientExpectations/v2"
+NATIVE_REQUEST_PROFILE = "catchplate.nativeCredentialLeaseRequest"
 NATIVE_REQUEST_V1 = NATIVE_REQUEST_PROFILE + "/v1"
 NATIVE_REQUEST_V2 = NATIVE_REQUEST_PROFILE + "/v2"
-BROKER_EXPECTATIONS_VERSION = "serverware.nativeBrokerCredentialRecipientExpectations/v1"
-BROKER_REQUEST_PROFILE = "serverware.nativeBrokerCredentialLeaseRequest"
+BROKER_EXPECTATIONS_VERSION = "catchplate.nativeBrokerCredentialRecipientExpectations/v1"
+BROKER_REQUEST_PROFILE = "catchplate.nativeBrokerCredentialLeaseRequest"
 BROKER_REQUEST_V1 = BROKER_REQUEST_PROFILE + "/v1"
 BROKER_REQUEST_V2 = BROKER_REQUEST_PROFILE + "/v2"
-POLICY_AWARE_EXPECTATIONS_VERSION = "serverware.policyAwareCredentialRecipientExpectations/v1"
-POLICY_AWARE_REQUEST_PROFILE = "serverware.policyAwareCredentialLeaseRequest"
+POLICY_AWARE_EXPECTATIONS_VERSION = "catchplate.policyAwareCredentialRecipientExpectations/v1"
+POLICY_AWARE_REQUEST_PROFILE = "catchplate.policyAwareCredentialLeaseRequest"
 POLICY_AWARE_REQUEST_V1 = POLICY_AWARE_REQUEST_PROFILE + "/v1"
 POLICY_AWARE_REQUEST_V2 = POLICY_AWARE_REQUEST_PROFILE + "/v2"
-TRUST_ROOTS_VERSION = "serverware.nativeCredentialRecipientTrustRoots/v1"
-BINDING_DOMAIN = b"serverware/enclave-runtime-key-binding/v1\0"
+TRUST_ROOTS_VERSION = "catchplate.nativeCredentialRecipientTrustRoots/v1"
+BINDING_DOMAIN = b"catchplate/enclave-runtime-key-binding/v1\0"
 MAX_INPUT_BYTES = 64 * 1024
 MAX_EXPECTATIONS_BYTES = 16 * 1024
 MAX_TRUST_ROOTS_BYTES = 1024 * 1024

@@ -1,0 +1,22 @@
+# Uninstalled deployment input. Independently admitted accounts, release and
+# signed launch required. Recreating this socket invalidates its pinned identity.
+[Unit]
+Description=Catchplate dedicated registration completion recovery ingress
+Before=catchplate-registration-execution-completion.service
+After=systemd-tmpfiles-setup.service
+
+[Socket]
+ListenStream=/run/catchplate/registration-execution/completion.sock
+FileDescriptorName=catchplate-registration-execution-completion
+SocketUser=65515
+SocketGroup=65532
+SocketMode=0660
+DirectoryMode=0755
+Backlog=1
+Accept=no
+FlushPending=yes
+RemoveOnStop=yes
+Service=catchplate-registration-execution-completion.service
+
+[Install]
+WantedBy=sockets.target

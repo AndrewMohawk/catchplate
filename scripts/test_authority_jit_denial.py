@@ -29,12 +29,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 # Import-only offline validator mode; never start an app or adopt live state.
-os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
-os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
+os.environ["CATCHPLATE_PROCESS_MODE"] = "metadata-bootstrap"
+os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
 from scripts import test_authority_jit_approval as common
-from serverware import authority_transition_jit_denial as denial
-from serverware import authority_transition_jit_approval as approval
-from serverware.authority_store.jit_denial_sql import assert_jit_denial_sql
+from catchplate import authority_transition_jit_denial as denial
+from catchplate import authority_transition_jit_approval as approval
+from catchplate.authority_store.jit_denial_sql import assert_jit_denial_sql
 
 core, service, reads, verifier = common.core, common.service, common.reads, common.verifier
 canonical, sha, framed, b64, row = common.canonical, common.sha, common.framed, common.b64, common.row
@@ -59,8 +59,8 @@ class DenialFixture(common.Fixture):
             approver_credential_policy=self.policy["credentialPolicy"])
         args.update(overrides or {})
         request = service._controlled_writer_request_digest(OPERATION, args)
-        operation_id = framed("serverware.policyAuthorityOperation/v2", OPERATION.encode(), request.encode())
-        payload = {"schema": "serverware.policyAuthorityWebAuthnChallenge/v1", "operationId": operation_id,
+        operation_id = framed("catchplate.policyAuthorityOperation/v2", OPERATION.encode(), request.encode())
+        payload = {"schema": "catchplate.policyAuthorityWebAuthnChallenge/v1", "operationId": operation_id,
             "rpId": common.config.WEBAUTHN_RP_ID, "origin": common.config.WEBAUTHN_ORIGIN,
             "issuedAtEpochNs": self.now - 1_000_000_000, "expiresAtEpochNs": self.now + 25_000_000_000,
             "credentialId": credential["credential_id"]}
@@ -71,10 +71,10 @@ class DenialFixture(common.Fixture):
             retention_reference_mask=0)
         self.data["webauthn_challenges"].append(challenge)
         public_challenge = {**payload, "challengeId": challenge["id"], "challenge": challenge["challenge"],
-            "challengeRowDigest": framed("serverware.policyAuthorityWebAuthnChallengeRow/v1",
+            "challengeRowDigest": framed("catchplate.policyAuthorityWebAuthnChallengeRow/v1",
                 canonical({key: challenge[key] for key in approval.CHALLENGE_FIELDS}))}
         binding = {key: credential[key] for key in approval.CREDENTIAL_FIELDS}
-        policy_digest = framed("serverware.policyAuthorityCredentialPolicy/v1",
+        policy_digest = framed("catchplate.policyAuthorityCredentialPolicy/v1",
             canonical(common.trust.credential_policy_document(binding, self.high)))
         public_credential = common.actual_credential_projection(binding, policy_digest, self.trust_digest)
         client = canonical({"type": "webauthn.get", "challenge": challenge["challenge"],
@@ -173,8 +173,8 @@ def transition(fixture, signed, fetch=None):
 
 class JitDenialPureTests(unittest.TestCase):
     def test_installed_facade_passes_original_review_and_assertion_only_to_dispatch(self):
-        from serverware import db
-        from serverware.authority_store import authority_dispatch
+        from catchplate import db
+        from catchplate.authority_store import authority_dispatch
         fixture = DenialFixture()
         signed = fixture.sign()
         values = copy.deepcopy(signed["raw_arguments"])
@@ -194,7 +194,7 @@ class JitDenialPureTests(unittest.TestCase):
                 self.assertRaises(DispatchBoundary):
             db.deny_request(**values)
         self.assertEqual(calls, [(OPERATION, {
-            "schema": "serverware.policyAuthorityControlledWriterInput/v1", "handler": "deny_request",
+            "schema": "catchplate.policyAuthorityControlledWriterInput/v1", "handler": "deny_request",
             "operationManifestDigest": common.contract.OPERATION_MANIFEST_DIGEST,
             "arguments": authority_dispatch._authority_marshal_value(values)})])
         self.assertNotIn("businessIntent", calls[0][1]["arguments"])
@@ -215,14 +215,14 @@ class JitDenialPureTests(unittest.TestCase):
         for table in ("approval_review_receipts", "webauthn_challenges"):
             self.assertEqual(changed[table]["used_at"], fixture.stamp)
         authn = json.loads(changed["approval_requests"]["approval_authn"])
-        self.assertEqual(authn, {"schema": "serverware.jitDenialAuthnReceipt/v3",
+        self.assertEqual(authn, {"schema": "catchplate.jitDenialAuthnReceipt/v3",
             "approverPolicyDigest": fixture.policy_digest, "verifiedAssertionReceiptDigest": signed["receipt_digest"],
             "authorityCapabilityId": signed["capability_id"], "authorityRequestDigest": signed["request"],
             "reviewReceiptId": "review-0", "reviewDigest": signed["arguments"]["review_digest"]})
         audit = changed["metadata_audit_outbox"]
         self.assertEqual(audit["event_type"], "approval.denied")
         event = json.loads(audit["event_json"])
-        self.assertEqual(event["schema"], "serverware.jitApprovalDenied/v3")
+        self.assertEqual(event["schema"], "catchplate.jitApprovalDenied/v3")
         for key, value in authn.items():
             if key != "schema":
                 self.assertEqual(event[key], value)
@@ -347,7 +347,7 @@ class JitDenialPureTests(unittest.TestCase):
             raw = canonical(broken).decode()
             with self.subTest(policy_field=field), patch.dict(fixture.data["approval_requests"][0],
                     {"approver_policy_json": raw, "approver_policy_digest": framed(
-                        "serverware.jitApproverPolicy/v1", raw.encode())}), self.assertRaises(core.TransitionKernelError):
+                        "catchplate.jitApproverPolicy/v1", raw.encode())}), self.assertRaises(core.TransitionKernelError):
                 transition(fixture, signed)
         fixture.data["approval_grants"] = [row("approval_grants", id="approval:" + fixture.item)]
         with self.assertRaises(core.TransitionKernelError):

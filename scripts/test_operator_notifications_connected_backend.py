@@ -29,7 +29,7 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_DIRS = ("serverware", "serverware_agent_trust", "scripts", "schemas", "policies", "security")
+SOURCE_DIRS = ("catchplate", "catchplate_agent_trust", "scripts", "schemas", "policies", "security")
 SOURCE_FILES = ("pyproject.toml", "docker-compose.apparmor.yml", "data-plane/decision-gate-rs/src/main.rs")
 ORIGIN = "https://console.example.com"
 PREFIX = "/api/operator-demo/notifications"
@@ -169,7 +169,7 @@ def codec_test():
         pass
     else:
         raise AssertionError("case-insensitive response header duplicate admitted")
-    return {"pure_codec_cases": 20, "application_imported": any(name.startswith("serverware.") for name in sys.modules)}
+    return {"pure_codec_cases": 20, "application_imported": any(name.startswith("catchplate.") for name in sys.modules)}
 
 
 class FullASGI:
@@ -202,7 +202,7 @@ class FullASGI:
     async def request(self, method, path, headers, raw, *, authenticate=True):
         values = [("host", "console.example.com"), *headers]
         if authenticate:
-            values.append(("x-serverware-admin-token", self.administrator))
+            values.append(("x-catchplate-admin-token", self.administrator))
         scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
             "http_version": "1.1", "scheme": "https", "method": method, "path": path,
             "raw_path": path.encode("ascii"), "root_path": "", "query_string": b"",
@@ -338,7 +338,7 @@ class Story:
         current = self.fixture.store.current
 
         def inspect_current(claim, now):
-            from serverware import operator_publication
+            from catchplate import operator_publication
             try:
                 operator_publication.assert_held()
             except operator_publication.PublicationError:
@@ -402,7 +402,7 @@ class Story:
                     and json.loads(row["event_types_json"]) == [EVENTS[row["slot"]]] and row["max_attempts"] == 1, "saved slot changed")
                 require(f.custody.unseal(key, row["slot"], 1, row["nonce"], row["ciphertext"]) == URLS[row["slot"]], "exact encrypted destination mismatch")
         # Scan actual durable SQLite bytes too, not only its SQL projection.
-        for path in f.config.DATA_DIR.glob("serverware.sqlite3*"):
+        for path in f.config.DATA_DIR.glob("catchplate.sqlite3*"):
             require(path.stat().st_size <= 64 * 1024 * 1024, "fixture database size bound")
             public_clean(path.read_bytes())
         expected = {"saved": 0, "tested": 1, "complete": 2}[phase]
@@ -469,14 +469,14 @@ async def serve(args):
     # files to container disposal, never a TemporaryDirectory finalizer while
     # these threads can still be scheduled during interpreter shutdown.
     owner.scratch._finalizer.detach()
-    owner.environment.update(SERVERWARE_ADMIN_TOKEN=integration.ADMIN, SERVERWARE_ADMIN_USER="connected-browser-operator",
-        SERVERWARE_ADMIN_ROLES="admin")
+    owner.environment.update(CATCHPLATE_ADMIN_TOKEN=integration.ADMIN, CATCHPLATE_ADMIN_USER="connected-browser-operator",
+        CATCHPLATE_ADMIN_ROLES="admin")
     for name in tuple(owner.environment):
         if name.lower() in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}:
             owner.environment.pop(name)
     os.environ.clear()
     os.environ.update(owner.environment)
-    require("SERVERWARE_OPERATOR_NOTIFICATIONS_PILOT_SOURCE_JSON" not in os.environ, "native source must remain unconfigured")
+    require("CATCHPLATE_OPERATOR_NOTIFICATIONS_PILOT_SOURCE_JSON" not in os.environ, "native source must remain unconfigured")
     fixture = fixtures.Fixture()
     tls_fixture.TlsTests.setUpClass()
     receiver = Receiver(tls_fixture.TlsTests.server_context, integration.ACK)
@@ -486,7 +486,7 @@ async def serve(args):
     try:
         with ExitStack() as stack:
             story.seams(stack)
-            from serverware import app as application, operator_notifications
+            from catchplate import app as application, operator_notifications
             app = FullASGI(application.app, integration.ADMIN)
             receiver.thread.start()
             await app.start()

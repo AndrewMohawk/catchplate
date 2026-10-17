@@ -63,7 +63,7 @@ Interactive stop derives only the observed origin-handoff hash; its stop time
 and expiry are fixed by the independently selected bootstrap policy.
 
 Eight current-head jobs are **not delegated**. For each, the provider calls
-[`CandidateTranscript.current_head_evidence`](../serverware/native_pilot_approval_transcript.py)
+[`CandidateTranscript.current_head_evidence`](../catchplate/native_pilot_approval_transcript.py)
 over accepted predecessors and the actual current request's result/observation
 delta. It returns the existing `nativePilotCurrentHeadObservedRequest/v1`, with
 literal runtime/history/request sources, without advancing the transcript or
@@ -81,7 +81,7 @@ outer job and both original clocks.
 ## Independent decision-service workflow
 
 The selected packaged receiver is
-[`native_pilot_current_head_decision_service`](../serverware/native_pilot_current_head_decision_service.py).
+[`native_pilot_current_head_decision_service`](../catchplate/native_pilot_current_head_decision_service.py).
 Its supervisor entrypoint argument contract is:
 
 ```text
@@ -99,7 +99,7 @@ inventory SHA, actual provider PID/UID/GID/start, directory device/inode, boot a
 time namespace, and original BOOTTIME and UNIX validity intervals.
 
 Before starting, the operator must provision the empty fixed directory
-`/etc/serverware/native-pilot-current-head-decisions`, owned by root:root with
+`/etc/catchplate/native-pilot-current-head-decisions`, owned by root:root with
 mode `0700`, and independently approve its identity and configuration pin.
 The service does not create or clear this directory. The independent backend
 and its fresh-state policy must already be ready before commissioning starts:

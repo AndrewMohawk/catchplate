@@ -8,11 +8,11 @@ const {resolve} = require('node:path');
 const vm = require('node:vm');
 const ROOT = resolve(__dirname, '..');
 const source = execFileSync('python3', ['-B', '-c',
-  'import json; from serverware import operator_common_apps as a, operator_demo as d; from serverware.operator_demo_portal import SCRIPT_FILES; d.settings=lambda: {"allowed_upstreams": list({op["origin"] for p in a.presets() for op in p["operations"]})}; print(json.dumps({"capability":a.capability(),"scripts":SCRIPT_FILES}))'],
+  'import json; from catchplate import operator_common_apps as a, operator_demo as d; from catchplate.operator_demo_portal import SCRIPT_FILES; d.settings=lambda: {"allowed_upstreams": list({op["origin"] for p in a.presets() for op in p["operations"]})}; print(json.dumps({"capability":a.capability(),"scripts":SCRIPT_FILES}))'],
   {cwd: ROOT, encoding: 'utf8', timeout: 5000});
 const fixture = JSON.parse(source);
 const context = vm.createContext({URL, URLSearchParams, module: {exports: {}}, location: {origin: 'https://operator.example.test'}});
-for (const name of fixture.scripts) vm.runInContext(readFileSync(resolve(ROOT, 'serverware/operator_demo_web', name), 'utf8'), context, {timeout: 1000, filename: name});
+for (const name of fixture.scripts) vm.runInContext(readFileSync(resolve(ROOT, 'catchplate/operator_demo_web', name), 'utf8'), context, {timeout: 1000, filename: name});
 const copy = value => JSON.parse(JSON.stringify(value));
 const capability = context.projectCommonAppsCapability(fixture.capability);
 assert(capability); assert.equal(capability.presets.length, 12);
@@ -71,14 +71,14 @@ for (const preset of capability.presets) for (const operation of preset.operatio
   assert(command.includes(preset.placeholder)); assert(!command.includes('--insecure')); assert(!command.includes('--retry'));
   if (rule.methods[0] === 'POST') assert(command.includes('--data-binary'));
   if (preset.id === 'sentry') assert(command.includes('?project=12345'));
-  if (preset.id === 'discord') assert(command.includes('Authorization: Bot serverware-discord-placeholder-v1'));
+  if (preset.id === 'discord') assert(command.includes('Authorization: Bot catchplate-discord-placeholder-v1'));
   const payload = copy(context.commonAppRulePayload(rule));
   assert.deepEqual(Object.keys(payload).sort(), ['app_preset', 'application_id', 'credential_id', 'name', 'operation', 'scope']);
   assert.equal(payload.operation, operation.id);
   const missing = {...scope, unexpected: 'field'}; assert.throws(() => context.commonAppRuleFields(preset, operation.id, missing));
   operations++;
 }
-const connect = readFileSync(resolve(ROOT, 'serverware/operator_demo_web/workspace_connect.js'), 'utf8');
+const connect = readFileSync(resolve(ROOT, 'catchplate/operator_demo_web/workspace_connect.js'), 'utf8');
 assert.equal(operations, 17, 'all new and retained legacy descriptors remain valid and exportable');
 assert(connect.includes('commonAppCreationOperations(commonPreset()).map(item => ({id: item.id, name: item.label}))'));
 assert(connect.includes('commonAppCreationOperations(commonPreset()).find(item => item.id === element(\'connect-operation\').value)'));
@@ -101,7 +101,7 @@ for (const operationId of ['zones_sdk_v1', 'dns_records_sdk_v1', 'zones', 'dns_r
 assert(connect.includes("'access-rules/common-app'"));
 assert(connect.includes('commonAppRulePayload(result[key]), commonAppRulePayload(review.rule)'));
 assert(connect.includes('commonPolicyHash: result.policy.policy_hash'));
-const handoff = readFileSync(resolve(ROOT, 'serverware/operator_demo_web/workspace_proxy_audit.js'), 'utf8');
+const handoff = readFileSync(resolve(ROOT, 'catchplate/operator_demo_web/workspace_proxy_audit.js'), 'utf8');
 for (const field of ['common_app:', 'request_body: request.body', 'request_query: request.query', 'automatic_retries: 0']) assert(handoff.includes(field));
 console.log(JSON.stringify({ok: true, providers: capability.presets.length, operations, visibleOperations: visibleOperations.length, groups: 11,
   scope: 'pure catalog, derived authority, public request examples and download contract; no provider or browser traffic'}));

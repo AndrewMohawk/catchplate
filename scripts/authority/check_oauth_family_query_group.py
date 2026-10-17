@@ -2,8 +2,8 @@
 from dataclasses import replace
 import unittest
 
-from serverware import authority_oauth_family_query_group as group
-from serverware import authority_transition_core as core
+from catchplate import authority_oauth_family_query_group as group
+from catchplate import authority_transition_core as core
 
 
 class FamilyQueryGroupChecks(unittest.TestCase):

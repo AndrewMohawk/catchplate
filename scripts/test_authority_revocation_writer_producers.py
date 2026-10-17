@@ -24,10 +24,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_retention as retention
-from serverware import authority_revocation_writer_client as client
-from serverware import authority_revocation_writer_producers as producers
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_retention as retention
+from catchplate import authority_revocation_writer_client as client
+from catchplate import authority_revocation_writer_producers as producers
 import test_authority_revocation_plan as oracle
 import test_authority_revocation_observed as observed_oracle
 import test_authority_revocation_verifier as verifier_oracle
@@ -242,7 +242,7 @@ class RevocationWriterProducerTests(unittest.TestCase):
                 fixture.plan.payload["webauthnEvidence"]["verifierSignatureBase64url"] = oracle.encoded(bytes(64))
                 fixture.plan.payload["webauthnEvidence"]["verifierSignatureDigest"] = oracle.sha(bytes(64))
                 fixture.plan.payload["authorizationProjection"]["assertionEvidenceDigest"] = oracle.framed(
-                    "serverware.policyAuthorityWebAuthnAssertionEvidence/v1", oracle.wire(fixture.plan.payload["webauthnEvidence"]))
+                    "catchplate.policyAuthorityWebAuthnAssertionEvidence/v1", oracle.wire(fixture.plan.payload["webauthnEvidence"]))
                 fixture.plan.rehash()
             else:
                 fixture.plan.envelope["signatureBase64Url"] = oracle.encoded(bytes(64))

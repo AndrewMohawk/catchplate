@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/response-v2-staged-original.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/response-v2-staged-original.v1.schema.json",
   "title": "Response v2 fresh sequence execution and authenticated staged originals",
   "description": "Data-only shapes. Actual generation/profile, canonical bytes, signatures, SQL/replay originals, current owner/fence/state and original deadline are checked by the runtime. Never a migration or injected credential object.",
   "oneOf": [
@@ -19,7 +19,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "requestId", "operationId", "attemptId", "stableResumeId", "attemptRevision", "fencingToken", "deadlineBoottimeNs", "frame"],
       "properties": {
-        "apiVersion": {"const": "serverware.responseObservationV2SequenceStateAuthority/v1"},
+        "apiVersion": {"const": "catchplate.responseObservationV2SequenceStateAuthority/v1"},
         "requestId": {"$ref": "#/$defs/identifier"},
         "operationId": {"$ref": "#/$defs/identifier"},
         "attemptId": {"$ref": "#/$defs/identifier"},
@@ -55,7 +55,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "generationId", "generation", "requestId", "operationId", "attemptId", "expectedStableResumeId", "expectedRevision", "expectedFencingToken", "expectedState", "expectedDispatchRequestSha256", "deadlineBoottimeNs"],
       "properties": {
-        "apiVersion": {"const": "serverware.responseObservationV2StagedOriginalQuery/v1"},
+        "apiVersion": {"const": "catchplate.responseObservationV2StagedOriginalQuery/v1"},
         "generationId": {"$ref": "#/$defs/identifier"}, "generation": {"$ref": "#/$defs/positive"},
         "requestId": {"$ref": "#/$defs/identifier"}, "operationId": {"$ref": "#/$defs/identifier"},
         "attemptId": {"$ref": "#/$defs/identifier"}, "expectedStableResumeId": {"$ref": "#/$defs/digest"},
@@ -97,7 +97,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "generationId", "generation", "serviceRole", "serviceId", "logicalRole", "roleIdentityRootSha256", "keyId", "keyMaterialSha256", "operation", "operationId", "attemptId", "attemptRevision", "fencingToken", "executableSha256", "configurationSha256", "allowedOperations", "operationBindingSha256"],
       "properties": {
-        "apiVersion": {"const": "serverware.responseObservationV2ProviderAuthorityScope/v2"},
+        "apiVersion": {"const": "catchplate.responseObservationV2ProviderAuthorityScope/v2"},
         "generationId": {"$ref": "#/$defs/identifier"}, "generation": {"$ref": "#/$defs/positive"},
         "serviceRole": {"const": "state-authority"}, "serviceId": {"$ref": "#/$defs/identifier"},
         "logicalRole": {"const": "linearizable-store"}, "roleIdentityRootSha256": {"$ref": "#/$defs/digest"},
@@ -114,7 +114,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "generationId", "generation", "requestId", "operationId", "body", "authorityScope", "signerLogicalRole", "signerKeyId", "signature"],
       "properties": {
-        "apiVersion": {"const": "serverware.responseObservationV2StagedOriginal/v1"},
+        "apiVersion": {"const": "catchplate.responseObservationV2StagedOriginal/v1"},
         "generationId": {"$ref": "#/$defs/identifier"}, "generation": {"$ref": "#/$defs/positive"},
         "requestId": {"$ref": "#/$defs/identifier"}, "operationId": {"$ref": "#/$defs/identifier"},
         "body": {"$ref": "#/$defs/body"}, "authorityScope": {"$ref": "#/$defs/authorityScope"},

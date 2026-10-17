@@ -19,8 +19,8 @@ from cryptography.exceptions import InvalidSignature
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import native_pilot_adopted_endpoint_plan as plan
-from serverware import native_pilot_adopted_handoff_inputs as compiler
+from catchplate import native_pilot_adopted_endpoint_plan as plan
+from catchplate import native_pilot_adopted_handoff_inputs as compiler
 from test_native_pilot_adopted_bridge_keys import fixture as bridge_fixture, clocks
 from test_native_pilot_adopted_cohort_authority import fixture as cohort_fixture
 from test_native_pilot_adopted_ordinary import fixture as ordinary_fixture
@@ -47,7 +47,7 @@ def _peer_hash(peer):
     parts.extend((p.raw_digest(peer["executableSha256"]), peer["cgroupPathSha256"].encode("ascii"),
         peer["cgroupMountId"].to_bytes(8, "big"), peer["cgroupInode"].to_bytes(8, "big"),
         peer["securityLabelSha256"].encode("ascii"), peer["configurationGenerationSha256"].encode("ascii")))
-    peer["processIdentitySha256"] = p.framed(b"serverware.policyCustodyPeerProcessIdentity/v4", parts)
+    peer["processIdentitySha256"] = p.framed(b"catchplate.policyCustodyPeerProcessIdentity/v4", parts)
 
 
 def fixture():
@@ -57,7 +57,7 @@ def fixture():
     control, config = json.loads(bridge["controlOriginal"]), json.loads(source["ownerConfigurationOriginal"])
     window, observed = json.loads(source["windowOriginal"])["payload"], json.loads(source["observationOriginal"])
     authority = config["lifecycle"]["constructedAdmissionAuthority"]
-    payload = dict(apiVersion="serverware.nativeShadowBootstrapDriverAdmission/v1",
+    payload = dict(apiVersion="catchplate.nativeShadowBootstrapDriverAdmission/v1",
         purpose="native-driver-bootstrap-admission", configurationSha256=control["configurationSha256"],
         windowSha256=control["windowSha256"], bootstrapObservationOriginal=source["observationOriginal"],
         parent=dict(processId=42, startTimeTicks=99, parentId=2, pidfdDevice=0, pidfdInode=77),
@@ -65,7 +65,7 @@ def fixture():
         issuedAtUnixNanos=clock["now_unix_ns"] - 1_000_000_000, expiresAtUnixNanos=clock["now_unix_ns"] + 29_000_000_000,
         startupDeadlineBoottimeNs=window["startupDeadlineBoottimeNs"], lifetimeDeadlineBoottimeNs=window["lifetimeDeadlineBoottimeNs"],
         signingKeyId=authority["keyId"], signingKeySpkiSha256=authority["keySpkiSha256"])
-    first = dict(apiVersion="serverware.nativePilotDriverAuthorityInput/v1", operation="bootstrap",
+    first = dict(apiVersion="catchplate.nativePilotDriverAuthorityInput/v1", operation="bootstrap",
         controlOriginal=bridge["controlOriginal"], configurationOriginal=source["ownerConfigurationOriginal"],
         deliveryConfigurationOriginal=source["configurationOriginal"], windowOriginal=source["windowOriginal"],
         observationOriginal=source["observationOriginal"], payloadOriginal=p.canonical(payload).decode("ascii"))
@@ -87,14 +87,14 @@ def fixture():
     cohort_window.update(configurationSha256=p.sha(cohort_raw), authorityKeyId=cohort_config["authority"]["keyId"])
     cohort_input.update(configurationOriginal=cohort_raw.decode("ascii"), configurationSha256=p.sha(cohort_raw),
         payloadOriginal=p.canonical(cohort_window).decode("ascii"))
-    precreation_raw = p.canonical(dict(apiVersion="serverware.nativeShadowProofCohortPrecreation/v1",
+    precreation_raw = p.canonical(dict(apiVersion="catchplate.nativeShadowProofCohortPrecreation/v1",
         payload=cohort_window, signatureBase64url=p.encoded(cohort_key.sign(cohort.PRECREATE_DOMAIN + p.canonical(cohort_window)))))
     prior["cohort-precreation"] = _record(p.canonical(cohort_input), precreation_raw, "cohort-precreation")
-    binding = dict(apiVersion="serverware.nativeShadowEndpointDriverBinding/v1",
+    binding = dict(apiVersion="catchplate.nativeShadowEndpointDriverBinding/v1",
         **{name: first[name] for name in ("configurationOriginal", "windowOriginal", "observationOriginal")})
     pidfd, executable = observed["descriptors"][:2]
     kernel = observed["driver"]
-    external = dict(apiVersion="serverware.nativeShadowEndpointDriverOriginal/v1", bindingSha256=p.sha(p.canonical(binding)),
+    external = dict(apiVersion="catchplate.nativeShadowEndpointDriverOriginal/v1", bindingSha256=p.sha(p.canonical(binding)),
         **{name: cohort_config["externalDriver"][name] for name in plan.external_driver.CONFIG_FIELDS[:3]},
         supervisor={name: payload["parent"][name] for name in plan.external_driver.PROCESS_FIELDS},
         driver=dict(processId=observed["processId"], startTimeTicks=kernel["processStartTimeTicks"],
@@ -153,7 +153,7 @@ def fixture():
         row.update(runtimeOriginal=runtime_originals[row["serviceRole"]], historyOriginal=history_originals[row["serviceRole"]])
     raw = p.canonical(validation)
     signed_adoption = p.canonical(dict(payload=adopted, signature=p.encoded(key.sign(
-        p.preimage("serverware.nativePublicationAdoptionAuthorization.signature/v2", adopted)))))
+        p.preimage("catchplate.nativePublicationAdoptionAuthorization.signature/v2", adopted)))))
     control = dict(apiVersion=profile.adoption.CONTROL_API, validatorExecutableSha256=p.sha(b"synthetic validator"), inputSha256=p.sha(raw))
     prior["publication-adoption"] = _record(p.canonical(dict(apiVersion=profile.ADOPTION_INPUT_API,
         controlOriginal=p.canonical(control).decode("ascii"), validationInputOriginal=raw.decode("ascii"))),
@@ -163,7 +163,7 @@ def fixture():
     value = {name: dict(path=plan.publication.DESTINATIONS[purpose], sha256=p.sha(raw))
         for name, purpose, raw in zip(plan.PIN_FIELDS, plan.PURPOSES, originals, strict=True)}
     value.update(coldOriginals={role: copy.deepcopy(cohort_config[role + "Configuration"]) for role in profile.COMPOSITE},
-        production=copy.deepcopy(measured["production"]), objectDirectory="/var/lib/serverware/native-pilot-retrieval-objects",
+        production=copy.deepcopy(measured["production"]), objectDirectory="/var/lib/catchplate/native-pilot-retrieval-objects",
         adoptionAuthorization=copy.deepcopy(prior["publication-adoption"]["result"]["pin"]))
     selection = {"peerPath": value["peer"]["path"], "proofScopePath": value["proofScope"]["path"],
         "assignmentPath": value["assignment"]["path"], "retrievalManifest": value["retrievalManifest"], "objectDirectory": value["objectDirectory"]}
@@ -200,7 +200,7 @@ class EndpointPlanControls(unittest.TestCase):
 
     def test_each_fixed_pin_and_production_binding_are_required(self):
         for field in (*plan.PIN_FIELDS, "adoptionAuthorization"):
-            f = copy.deepcopy(self.source); f["value"][field]["path"] = "/etc/serverware/wrong.json"
+            f = copy.deepcopy(self.source); f["value"][field]["path"] = "/etc/catchplate/wrong.json"
             with self.subTest(field=field), self.assertRaises(FAILURES): plan.prepare(f["value"], prior=f["prior"], observations=f["observations"])
         f = copy.deepcopy(self.source); f["value"]["production"]["maximumInFlightCalls"] += 1
         with self.assertRaises(FAILURES): plan.prepare(f["value"], prior=f["prior"], observations=f["observations"])

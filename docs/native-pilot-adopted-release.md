@@ -91,7 +91,7 @@ complete owner graph.
 
 Both exact source archives, unsuccessful and successful attempts, harnesses,
 logs, results and checksums are retained locally at
-`codex-offload/serverware/engineering-builds/b9957b14-adopted-release-7DFGW6/`.
+`codex-offload/catchplate/engineering-builds/b9957b14-adopted-release-7DFGW6/`.
 
 ## Remaining pilot work
 

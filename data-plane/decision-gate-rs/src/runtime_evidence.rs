@@ -27,9 +27,9 @@ pub const TRUSTED_HOST_CLAIM: &str =
 pub const IMA_APPRAISED_CLAIM: &str =
     "externally-verified-IMA-EVM-appraisal";
 const EVIDENCE_VERSION: &str =
-    "serverware/controller-runtime-evidence/v12";
+    "catchplate/controller-runtime-evidence/v12";
 const IMA_ACTIVATION_VERSION: &str =
-    "serverware/controller-ima-activation/v12";
+    "catchplate/controller-ima-activation/v12";
 const FS_IOC_GETFLAGS: libc::c_ulong = 0x80086601;
 const FS_IMMUTABLE_FL: libc::c_uint = 0x00000010;
 const PT_LOAD: u32 = 1;
@@ -42,7 +42,7 @@ const DT_NEEDED: i64 = 1;
 const MAX_EXECUTABLE_MAPPINGS: usize = 4096;
 const MAX_MAPPING_PATH_BYTES: usize = 4096;
 const OBSERVER_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware/runtime-observer-evidence/v13\0";
+    b"catchplate/runtime-observer-evidence/v13\0";
 type EvidenceError = PlanProtocolError;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -199,7 +199,7 @@ pub struct AuthoritativeObserverEvidenceV12 {
 }
 
 impl AuthoritativeObserverEvidenceV12 {
-    pub const VERSION: &'static str = "serverware/runtime-observer-evidence/v13";
+    pub const VERSION: &'static str = "catchplate/runtime-observer-evidence/v13";
 
     fn validate_structure(&self) -> Result<(), EvidenceError> {
         if self.version != Self::VERSION
@@ -271,7 +271,7 @@ pub struct PinnedRuntimeObserverPolicyV12 {
 }
 
 impl PinnedRuntimeObserverPolicyV12 {
-    pub const VERSION: &'static str = "serverware/runtime-observer-policy/v12";
+    pub const VERSION: &'static str = "catchplate/runtime-observer-policy/v12";
 
     pub fn into_runtime(self) -> Result<RuntimeObserverPolicy, EvidenceError> {
         use base64::Engine as _;
@@ -651,7 +651,7 @@ impl ExternalImaActivationEvidenceV12 {
         let mut signed =
             Vec::with_capacity(64);
         signed.extend_from_slice(
-            b"serverware/controller-ima-activation-signature/v12\0",
+            b"catchplate/controller-ima-activation-signature/v12\0",
         );
         signed.extend_from_slice(&self.evidence_sha256);
         policy

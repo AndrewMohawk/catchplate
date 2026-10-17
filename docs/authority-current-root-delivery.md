@@ -16,7 +16,7 @@ or widening the lookup peer; SQL execution and cold provisioning remain separate
 
 ## Fixed decision exchange
 
-[`CurrentRootDecisionClient`](../serverware/authority_current_root_transport.py)
+[`CurrentRootDecisionClient`](../catchplate/authority_current_root_transport.py)
 holds the admitted socket path, timeout and exact server UID/GID. Its fixed
 exchange sends original request bytes and returns original receipt bytes.
 These bytes remain opaque to the transport; peer credentials do not replace
@@ -37,7 +37,7 @@ requires response EOF. The server requires request EOF. One supplied absolute
 monotonic deadline covers the exchange; the configured timeout can shorten it
 once but cannot renew it. There is no fallback, retry or error-response frame.
 
-[`CurrentRootDecisionService`](../serverware/authority_current_root_service.py)
+[`CurrentRootDecisionService`](../catchplate/authority_current_root_service.py)
 admits an actual peer against the configured reserve/completion peer pairs
 before reading the prefix, then requires the action's assigned peer. It calls
 the actual [durable decision owner](authority-current-root-decisions.md), whose
@@ -53,10 +53,10 @@ It does not route a query through `apply` or append a state decision.
 
 ## Read-only signed lookup
 
-[`CurrentRootDecisionOwner.lookup`](../serverware/authority_current_root_decisions.py)
+[`CurrentRootDecisionOwner.lookup`](../catchplate/authority_current_root_decisions.py)
 accepts the canonical five-field query: schema, source revision, enrollment
 digest, requested request digest and a 32-byte challenge encoded as 64 lowercase
-hex characters. The [dedicated lookup protocol](../serverware/authority_current_root_lookup.py)
+hex characters. The [dedicated lookup protocol](../catchplate/authority_current_root_lookup.py)
 binds the exact query digest and challenge in a separate state-observation
 signature domain, using the already enrolled state key.
 
@@ -76,14 +76,14 @@ lookup cannot cure startup from a valid but rolled-back journal prefix.
 
 ## Separate local delivery custody
 
-[`CurrentRootCompletionDelivery`](../serverware/authority_current_root_delivery.py)
+[`CurrentRootCompletionDelivery`](../catchplate/authority_current_root_delivery.py)
 takes ownership of a fresh, unrecovered actual `CurrentRootJournal` in a
 **separate, preprovisioned directory**.
 It does not reuse the state owner's journal directory or treat local storage
 as state authority. Its local chain records the original complete request
 first, followed by the corresponding authenticated acknowledgment record.
-The [closed record codec](../serverware/authority_current_root_delivery_records.py)
-uses `serverware.policyAuthorityCurrentRootDeliveryRecord/v1`: request records
+The [closed record codec](../catchplate/authority_current_root_delivery_records.py)
+uses `catchplate.policyAuthorityCurrentRootDeliveryRecord/v1`: request records
 have eight fields; acknowledgment records add the original receipt as a ninth.
 Base64url fields preserve original signed bytes, not reserialized payloads.
 

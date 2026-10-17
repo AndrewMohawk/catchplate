@@ -9,7 +9,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, os::fd::BorrowedFd, path::Path, sync::Arc};
 
-const EXECUTABLE: &str = "/usr/local/bin/serverware-response-v2-guest-role";
+const EXECUTABLE: &str = "/usr/local/bin/catchplate-response-v2-guest-role";
 const NONROUTER: [Role; 5] = [Role::CredentialTransport, Role::PolicyProofVerifier,
     Role::ImmutableArtifactLedger, Role::ReleaseAttestorPublisher, Role::CleanupWatchdog];
 
@@ -29,7 +29,7 @@ pub struct GuestCohortConfiguration {
 }
 impl GuestCohortConfiguration {
     pub fn validate(&self) -> Result<(), String> {
-        if self.api_version != "serverware.nativeGuestCohort/v1"
+        if self.api_version != "catchplate.nativeGuestCohort/v1"
             || self.executable.path != EXECUTABLE || !image::hash(&self.executable.sha256)
             || !image::path(&self.configuration.path) || !image::hash(&self.configuration.sha256)
             || self.configuration.path == self.executable.path || self.deliveries.len() != Role::ALL.len() {
@@ -150,7 +150,7 @@ impl StartedGuestCohort {
                 || nonce == [0; 32] { return Err("guest role channel nonce unavailable".into()); }
             let nonce = URL_SAFE_NO_PAD.encode(nonce);
             let raw = crate::canonical_json_bytes(&Bootstrap {
-                api_version: "serverware.responseV2.guestRoleBootstrap/v1",
+                api_version: "catchplate.responseV2.guestRoleBootstrap/v1",
                 configuration_path: &configuration.configuration.path,
                 configuration_sha256: original.configuration_sha256(),
                 delivery_path: &delivery.path, delivery_sha256: original.delivery_sha256(),

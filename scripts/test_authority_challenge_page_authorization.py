@@ -23,8 +23,8 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_page_authorization as source
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_challenge_page_authorization as source
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 from test_authority_challenge_page_control import arguments as control_arguments
 
 

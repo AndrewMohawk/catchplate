@@ -2,10 +2,10 @@
 //! contact follows a genuine definite writer receipt; recovery uses only the
 //! fixed encrypted acquisition route and never re-enters the token POST.
 use super::*;
-use serverware_decision_gate::native_oauth_exchange_v1::{self as wire, BrowserTls, Configuration, Prepared, Reply};
-use serverware_decision_gate::native_oauth_browser_v1::{Accepted,Kind};
-use serverware_decision_gate::native_secret_broker_v1 as broker;
-use serverware_decision_gate::enclave_vsock_v1::VsockShutdownV1;
+use catchplate_decision_gate::native_oauth_exchange_v1::{self as wire, BrowserTls, Configuration, Prepared, Reply};
+use catchplate_decision_gate::native_oauth_browser_v1::{Accepted,Kind};
+use catchplate_decision_gate::native_secret_broker_v1 as broker;
+use catchplate_decision_gate::enclave_vsock_v1::VsockShutdownV1;
 use std::collections::BTreeSet;
 
 pub(super) struct Owner {
@@ -49,14 +49,14 @@ fn evidence(state:&GateState,prepared:&Prepared,deadline:u64)->Result<Value,Stri
 fn post(state:&GateState,url:&str,body:Vec<u8>,deadline:u64)->Result<Value,String>{
     native_service_remaining(state)?;
     let remaining=deadline.checked_sub(broker::now()?).filter(|v|*v>0).ok_or("initial request interval expired")?;
-    let mut response=state.credential_lease_client.post(url).header("X-Serverware-Data-Plane-Token",
+    let mut response=state.credential_lease_client.post(url).header("X-Catchplate-Data-Plane-Token",
         state.credential_lease_token.as_deref().ok_or("initial service token absent")?)
         .header("Content-Type","application/json").body(body).timeout(Duration::from_nanos(remaining))
         .send().map_err(|_|"initial writer response uncertain; no resubmission")?;
     if !response.status().is_success(){return Err("initial writer refused; no fallback or retry".to_owned());}
     let raw=read_bounded_control_plane_response_body(&mut response,8*1024*1024,"native initial issuance")?;
     if broker::now()?>=deadline{return Err("initial writer response arrived after original interval".to_owned());}
-    serverware_decision_gate::native_oauth_refresh_v1::response_document(&raw)
+    catchplate_decision_gate::native_oauth_refresh_v1::response_document(&raw)
 }
 
 fn complete(state:&GateState,owner:&Owner,helper:&mut broker::Owner,mut reply:Reply,deadline:u64,recovery:bool)->Result<Reply,String>{
@@ -73,7 +73,7 @@ fn complete(state:&GateState,owner:&Owner,helper:&mut broker::Owner,mut reply:Re
                     return Err("initial issuance cannot replay, change owner or contact during recovery".to_owned());
                 }
                 exchange=Some(id);
-                let body=serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&prepared.wire(evidence(state,&prepared,deadline)?)?)?;
+                let body=catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&prepared.wire(evidence(state,&prepared,deadline)?)?)?;
                 let mut originals=post(state,&owner.endpoint,body,deadline)?;
                 if originals["apiVersion"]!=wire::HTTP_RESPONSE || originals.as_object().is_none_or(|v|v.len()!=3
                     || !["apiVersion","requestOriginal","responseOriginal"].iter().all(|name|v.contains_key(*name))) {
@@ -114,8 +114,8 @@ fn browser(state:&GateState,owner:&mut Owner,mut request:Accepted)->Result<(),St
             Reply::Prepared(prepared) if matches!(request.kind(),Kind::Draft)=>{
                 if prepared.operation()!="oauth.measured-exchange.prepare" {return Err("draft yielded an effect phase".to_owned());}
                 let public=prepared.wire(evidence(state,&prepared,deadline)?)?;
-                let body=serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&json!({
-                    "apiVersion":"serverware.nativeOAuthDraft/v1","arguments":public["arguments"],
+                let body=catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&json!({
+                    "apiVersion":"catchplate.nativeOAuthDraft/v1","arguments":public["arguments"],
                     "callbackOrigin":owner.config.callback_origin,"portalOrigin":owner.config.portal_origin}))?;
                 if body.len()>512*1024{return Err("native draft browser bound exceeded".to_owned());}
                 let Reply::DraftCookie{exchange_id,name,value,expires}=helper.exchange_draft_delivered(&prepared,deadline,relays)?
@@ -127,15 +127,15 @@ fn browser(state:&GateState,owner:&mut Owner,mut request:Accepted)->Result<(),St
                 request.respond("application/json",&body,Some(&cookie),"default-src 'none'; frame-ancestors 'none'")
             },
             Reply::Redirect{exchange_id,location} if matches!(request.kind(),Kind::Authorize)=>{
-                let body=serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&json!({
-                    "apiVersion":"serverware.nativeOAuthAuthorizationRedirect/v1","exchangeId":exchange_id,"location":location}))?;
+                let body=catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&json!({
+                    "apiVersion":"catchplate.nativeOAuthAuthorizationRedirect/v1","exchangeId":exchange_id,"location":location}))?;
                 request.respond("application/json",&body,None,"default-src 'none'; frame-ancestors 'none'")
             },
             reply if matches!(request.kind(),Kind::Callback)=>{
                 let Reply::Complete{exchange_id,status,..}=complete(state,owner,&mut helper,reply,deadline,false)?
                     else{return Err("callback did not terminate".to_owned());};
                 let page=native_oauth_browser_pages::terminal(&status,&owner.config.portal_origin)?;
-                let cookie=format!("__Host-serverware-native-oauth-{}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0",exchange_id.replace('-',""));
+                let cookie=format!("__Host-catchplate-native-oauth-{}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0",exchange_id.replace('-',""));
                 request.respond("text/html; charset=utf-8",&page,Some(&cookie),"default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
             },
             _=>Err("native browser/helper phase mismatch".to_owned()),
@@ -152,8 +152,8 @@ pub(super) fn initialize(state:&GateState)->Result<(),String>{
     let result=(||{
         for id in targets {
             let deadline=broker::now()?.checked_add(30_000_000_000).ok_or("initial recovery interval overflow")?.min(owner.ingress.deadline());
-            let original=post(state,&owner.recovery_endpoint,serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(
-                &json!({"apiVersion":"serverware.nativeOAuthRecoveryOriginalRequest/v1","exchangeId":id}))?,deadline)?;
+            let original=post(state,&owner.recovery_endpoint,catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(
+                &json!({"apiVersion":"catchplate.nativeOAuthRecoveryOriginalRequest/v1","exchangeId":id}))?,deadline)?;
             let relays=state.native_upstream_relays.as_ref().ok_or("initial recovery fixed relays absent")?;
             let mut helper=state.native_secret_broker.as_ref().ok_or("initial recovery helper absent")?.lock().map_err(|_|"initial recovery helper poisoned")?;
             let reply=helper.recover_exchange(&id,original,deadline,relays)?;

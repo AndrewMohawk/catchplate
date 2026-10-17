@@ -29,9 +29,9 @@ NETWORK_HELPER = "scripts/operator_npm_metadata_fixture_network.py"
 
 
 def build(source, binary, initializer, root, node, npm, *, expected_binary_sha256):
-    require(root.parent == base.SCRATCH and re.fullmatch(r"serverware-npm-metadata-private\.[A-Za-z0-9]{6,32}", root.name),
+    require(root.parent == base.SCRATCH and re.fullmatch(r"catchplate-npm-metadata-private\.[A-Za-z0-9]{6,32}", root.name),
         "fresh private npm metadata root required")
-    template = root.with_name("serverware-proxy-basic-private." + root.name.split(".", 1)[1])
+    template = root.with_name("catchplate-proxy-basic-private." + root.name.split(".", 1)[1])
     config = basic.build(source, binary, initializer, template, "172.16.249.48/28",
         expected_binary_sha256=expected_binary_sha256)
     for service in config["services"].values():
@@ -39,7 +39,7 @@ def build(source, binary, initializer, root, node, npm, *, expected_binary_sha25
             path = Path(mount["source"])
             if path.is_relative_to(template):
                 mount["source"] = str(root / path.relative_to(template))
-    config["name"] = "serverware-npm-metadata-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
+    config["name"] = "catchplate-npm-metadata-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
     config.pop("networks")
     services, runtime = config["services"], root / "runtime"
     common = deepcopy(services.pop("demo-upstream"))
@@ -49,15 +49,15 @@ def build(source, binary, initializer, root, node, npm, *, expected_binary_sha25
         cpus=0.5, mem_limit="256m", memswap_limit="256m", pids_limit=32)
     hosts = [bind(runtime / "upstream-data/npm-network/hosts", "/etc/hosts"),
         bind(runtime / "upstream-data/npm-network/resolv.conf", "/etc/resolv.conf")]
-    for name in ("serverware", "decision-gate-rs"):
-        services[name]["environment"]["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = '["https://registry.npmjs.org"]'
-        services[name]["environment"].pop("SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS")
+    for name in ("catchplate", "decision-gate-rs"):
+        services[name]["environment"]["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = '["https://registry.npmjs.org"]'
+        services[name]["environment"].pop("CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS")
         services[name]["volumes"] = [row for row in services[name]["volumes"] if row["target"] != "/demo-upstream"]
-    services["serverware"]["depends_on"] = {"npm-registry": {"condition": "service_healthy"}}
-    services["serverware"]["environment"]["SERVERWARE_DECISION_GATE_BASE"] = "http://127.0.0.1:9091"
+    services["catchplate"]["depends_on"] = {"npm-registry": {"condition": "service_healthy"}}
+    services["catchplate"]["environment"]["CATCHPLATE_DECISION_GATE_BASE"] = "http://127.0.0.1:9091"
     gate = services["decision-gate-rs"]
-    gate["environment"].update(SERVERWARE_UPSTREAM_CA_BUNDLE="/npm-public/ca.pem",
-        SERVERWARE_DECISION_GATE_HOST="127.0.0.1", SERVERWARE_DECISION_GATE_MANAGEMENT_HOST="127.0.0.1")
+    gate["environment"].update(CATCHPLATE_UPSTREAM_CA_BUNDLE="/npm-public/ca.pem",
+        CATCHPLATE_DECISION_GATE_HOST="127.0.0.1", CATCHPLATE_DECISION_GATE_MANAGEMENT_HOST="127.0.0.1")
     gate["volumes"].append(bind(runtime / "upstream-data/npm/ca.pem", "/npm-public/ca.pem"))
     gate["healthcheck"] = base.health("http://127.0.0.1:9091/healthz", start=20)
     services["npm-pki"] = {**deepcopy(common), "profiles": ["npm-pki"], "network_mode": "none",
@@ -88,7 +88,7 @@ def build(source, binary, initializer, root, node, npm, *, expected_binary_sha25
         command=["-m", "scripts.operator_npm_metadata_fixture_network", "edge"])
     check = services["check"]
     check["environment"] = {"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": "/app"}
-    check["command"] = ["/app/" + CHECKER, "--control-base", "http://serverware:3000",
+    check["command"] = ["/app/" + CHECKER, "--control-base", "http://catchplate:3000",
         "--management-base", "http://127.0.0.1:9091", "--proxy-url", "https://" + basic.PROXY_HOST + ":8443",
         "--operator-origin", base.ORIGIN, "--expected-binary-sha256", "sha256:" + expected_binary_sha256,
         "--ca-file", "/client-trust/inner-ca.pem", "--proxy-ca-file", "/client-trust/outer-ca.pem",
@@ -101,7 +101,7 @@ def build(source, binary, initializer, root, node, npm, *, expected_binary_sha25
         bind(runtime / "upstream-data/npm/ca.pem", "/client-trust/npm-ca.pem")]
     check["volumes"] += [bind(runtime / "basic-pki" / name, "/client-trust/" + name)
         for name in ("inner-ca.pem", "outer-ca.pem", "requests-ca.pem")]
-    for name in ("serverware", "decision-gate-rs", "npm-registry", "edge", "check"):
+    for name in ("catchplate", "decision-gate-rs", "npm-registry", "edge", "check"):
         service = services[name]; service.pop("networks", None); service.pop("dns", None)
         service["network_mode"] = "service:network"; service["volumes"] += deepcopy(hosts)
     services["initialize"].pop("dns", None)
@@ -127,14 +127,14 @@ def prepare(args):
             and digest(path) == expected and path.stat().st_mode & 4, "pinned executable differs or unreadable")
     manifest = basic.pinned_json(args.npm_manifest, args.expected_npm_manifest_sha256)
     observed = basic.inventory(args.npm_root, limit=4096, byte_limit=64 * 1024**2)
-    require(len(observed) == 1782 and manifest == {"schema": "serverware.privateNpmMetadataDependencies/v1",
+    require(len(observed) == 1782 and manifest == {"schema": "catchplate.privateNpmMetadataDependencies/v1",
         "packages": PACKAGES, "files": observed}, "externally pinned full npm tree differs")
     for name, version in PACKAGES.items():
         path = args.npm_root / ("package.json" if name == "npm" else "node_modules/" + name + "/package.json")
         package = json.loads(path.read_text())
         require(package.get("name") == name and package.get("version") == version, "stock npm dependency identity differs")
     compose = json.dumps(config, indent=2, sort_keys=True) + "\n"
-    receipt = {"schema": "serverware.privateNpmMetadataPreparation/v1", "project": config["name"],
+    receipt = {"schema": "catchplate.privateNpmMetadataPreparation/v1", "project": config["name"],
         "jobRoot": str(args.job_root), "source": str(args.source), "sourceCommit": args.expected_source_commit,
         "sourceManifestSha256": args.expected_source_manifest_sha256, "sourceSha256": source_files,
         "binary": str(args.binary), "binarySha256": args.expected_binary_sha256,

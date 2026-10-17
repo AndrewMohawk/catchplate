@@ -15,7 +15,7 @@ or silently extend any live grant/reserve/SQL role.
 | 203 | Sealed bundle AES key, exactly 32 bytes |
 | 204 | Sealed delivery AES key, exactly 32 bytes |
 
-Trust is fixed under `/run/serverware/oidc-session-activation-completion-trust`:
+Trust is fixed under `/run/catchplate/oidc-session-activation-completion-trust`:
 `root-public-key.pem` is bounded to 16 KiB and `bootstrap.json` to 16 MiB.
 The larger closed bootstrap carries the genuine historical-custody original;
 there is no separate custody descriptor or arbitrary path fallback.
@@ -24,10 +24,10 @@ precedes any private key, TLS or journal access. Startup repeats original
 admission, not a returned material.
 
 The completion PEM is fixed at
-`/run/serverware/oidc-session-activation-completion-key/completion.pem`, bounded
+`/run/catchplate/oidc-session-activation-completion-key/completion.pem`, bounded
 to 4096 bytes. It must match the genuinely enrolled completion public key.
 The bundle/delivery raw32 originals use fixed
-`/run/secrets/serverware-oidc-session-activation-{bundle,delivery}-key` paths.
+`/run/secrets/catchplate-oidc-session-activation-{bundle,delivery}-key` paths.
 They must differ and match independently admitted historical purpose digests.
 Signing and AES files are root-owned, single-link, mode `0400`; no passphrase,
 other purpose signer, planner-journal key or plaintext token is delivered.
@@ -37,12 +37,12 @@ other purpose signer, planner-journal key or plaintext token is delivered.
 Protected root-owned ancestors, no-follow opens, bounded exact reads and
 descriptor/path identities prevent accepting changed local originals during
 capture. Trust and private originals become sealed descriptors. The journal
-is separately preprovisioned at `/var/lib/serverware/oidc-session-activation-completions`,
+is separately preprovisioned at `/var/lib/catchplate/oidc-session-activation-completions`,
 owner `65503:65503`, mode `0700`, with independently signed device/inode and
 checkpoint. No directory is created, cleared, pruned or inferred current here.
 
 Five fixed TLS files live under
-`/run/serverware/oidc-session-activation-completion-tls`: `ca.pem`, `custody.crt`,
+`/run/catchplate/oidc-session-activation-completion-tls`: `ca.pem`, `custody.crt`,
 `custody.key`, `commit.crt`, `commit.key`. Public files are root-owned `0444`
 and at most 64 KiB; private TLS keys are root:65503 `0440` and at most 16 KiB
 so libpq can reopen them after the permanent drop. Signed exact lengths/digests
@@ -64,12 +64,12 @@ Late failure preserves durable originals rather than undoing publication.
 
 ## Uninstalled service inputs
 
-The [socket](../ops/systemd/serverware-oidc-session-activation-completion.socket)
-fixes `/run/serverware/oidc-session-activation/completion.sock`, owner 65503,
+The [socket](../ops/systemd/catchplate-oidc-session-activation-completion.socket)
+fixes `/run/catchplate/oidc-session-activation/completion.sock`, owner 65503,
 peer group 65532, mode `0660`, backlog one and `Accept=no`. Recreating it
 invalidates admitted inode pins. Its inherited kernel peer remains root 0:0.
 
-The [service template](../ops/systemd/serverware-oidc-session-activation-completion.service.in)
+The [service template](../ops/systemd/catchplate-oidc-session-activation-completion.service.in)
 requires independent `ACTIVATION_COMPLETION_` release/trust/key/TLS/journal
 paths. Only the completion journal is writable; trust, private keys, TLS and
 socket directories are read-only mounts. State-socket DAC access and a genuinely

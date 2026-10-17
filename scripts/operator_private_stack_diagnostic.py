@@ -18,26 +18,26 @@ import stat
 import sys
 
 
-ENTRYPOINT = "serverware.operator_demo_runner"
+ENTRYPOINT = "catchplate.operator_demo_runner"
 DUMP_AFTER_SECONDS = 50
-OUTPUT_DIRECTORY = "/run/serverware-private-diagnostic"
+OUTPUT_DIRECTORY = "/run/catchplate-private-diagnostic"
 OUTPUT_NAME = "frames.txt"
 MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 MARKER_PATH = "/private-audit-fixture.json"
-MARKER = {"schema": "serverware.privateOperatorAuditFixture/v1", "syntheticOnly": True}
+MARKER = {"schema": "catchplate.privateOperatorAuditFixture/v1", "syntheticOnly": True}
 _REQUIRED_ENV = {
-    "SERVERWARE_OPERATOR_DEMO": "1",
-    "SERVERWARE_RELEASE_CHANNEL": "dev",
-    "SERVERWARE_DATA_DIR": "/data",
-    "SERVERWARE_PUBLIC_URL": "https://serverware-demo.example.com",
-    "SERVERWARE_OPERATOR_DEMO_UPSTREAMS": '["https://registry.npmjs.org"]',
-    "SERVERWARE_OPERATOR_DEMO_PROXY_URL": "https://serverware-proxy.example.com",
-    "SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED": "1",
-    "SERVERWARE_ADMIN_USER": "user:operator-demo-operator",
-    "SERVERWARE_DATA_PLANE_INSTANCE_ID": "spiffe://operator-demo.serverware/decision-gate/local",
-    "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED": "0",
-    "SERVERWARE_DECISION_GATE_BASE": "http://127.0.0.1:9091",
-    **{"SERVERWARE_" + prefix + "_TOKEN_FILE": "/run/secrets/serverware/" + role + ".token"
+    "CATCHPLATE_OPERATOR_DEMO": "1",
+    "CATCHPLATE_RELEASE_CHANNEL": "dev",
+    "CATCHPLATE_DATA_DIR": "/data",
+    "CATCHPLATE_PUBLIC_URL": "https://catchplate-demo.example.com",
+    "CATCHPLATE_OPERATOR_DEMO_UPSTREAMS": '["https://registry.npmjs.org"]',
+    "CATCHPLATE_OPERATOR_DEMO_PROXY_URL": "https://catchplate-proxy.example.com",
+    "CATCHPLATE_DIRECT_CA_DOWNLOAD_ENABLED": "1",
+    "CATCHPLATE_ADMIN_USER": "user:operator-demo-operator",
+    "CATCHPLATE_DATA_PLANE_INSTANCE_ID": "spiffe://operator-demo.catchplate/decision-gate/local",
+    "CATCHPLATE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED": "0",
+    "CATCHPLATE_DECISION_GATE_BASE": "http://127.0.0.1:9091",
+    **{"CATCHPLATE_" + prefix + "_TOKEN_FILE": "/run/secrets/catchplate/" + role + ".token"
        for role, prefix in (
            ("admin", "ADMIN"), ("credential-lease", "DATA_PLANE_CREDENTIAL_LEASE"),
            ("audit", "DATA_PLANE_AUDIT"), ("grant-consume", "DATA_PLANE_GRANT_CONSUME"),
@@ -46,19 +46,19 @@ _REQUIRED_ENV = {
            ("management", "DATA_PLANE_MANAGEMENT"))},
 }
 _OPTIONAL_ENV = {
-    "SERVERWARE_PROCESS_MODE": "serverware-control-plane",
-    "SERVERWARE_METADATA_STORE_BACKEND": "sqlite",
-    "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite",
-    "SERVERWARE_GRANT_STORE_BACKEND": "sqlite",
-    "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
-    "SERVERWARE_KEY_RELEASE_REQUIRED": "0",
-    "SERVERWARE_DEV_AUTHENTICATOR": "0",
-    "SERVERWARE_DEV_DEMO_SEED": "0",
-    "SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED": "0",
-    "SERVERWARE_DEVELOPMENT_SANDBOX": "0",
-    "SERVERWARE_PRODUCTION_IMAGE": "0",
+    "CATCHPLATE_PROCESS_MODE": "catchplate-control-plane",
+    "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_AUDIT_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_GRANT_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
+    "CATCHPLATE_KEY_RELEASE_REQUIRED": "0",
+    "CATCHPLATE_DEV_AUTHENTICATOR": "0",
+    "CATCHPLATE_DEV_DEMO_SEED": "0",
+    "CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED": "0",
+    "CATCHPLATE_DEVELOPMENT_SANDBOX": "0",
+    "CATCHPLATE_PRODUCTION_IMAGE": "0",
 }
-_BINARY_ENV = "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST"
+_BINARY_ENV = "CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST"
 
 
 class DiagnosticRefused(RuntimeError):
@@ -74,7 +74,7 @@ def _admit_configuration():
     """No files, application configuration, authority admission or threads."""
     _require(os.getuid() == os.geteuid() == os.getgid() == os.getegid() == 10001)
     _require(sys.argv == ["/diagnostic/operator_private_stack_diagnostic.py"])
-    environment = {key: value for key, value in os.environ.items() if key.startswith("SERVERWARE_")}
+    environment = {key: value for key, value in os.environ.items() if key.startswith("CATCHPLATE_")}
     _require(set(environment) <= set(_REQUIRED_ENV) | set(_OPTIONAL_ENV) | {_BINARY_ENV})
     _require(all(environment.get(key) == value for key, value in _REQUIRED_ENV.items()))
     _require(all(environment.get(key, value) == value for key, value in _OPTIONAL_ENV.items()))
@@ -174,7 +174,7 @@ def _run_runner(frames):
 def main():
     try:
         _admit_configuration()
-        from serverware import control_plane_custody_startup as custody
+        from catchplate import control_plane_custody_startup as custody
         _require(custody.initialize_from_environment() is None)
         # The unchanged runner repeats this real initializer, which checks its
         # already pinned disabled namespace, not a fabricated descriptor list.

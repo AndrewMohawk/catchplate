@@ -11,8 +11,8 @@ use, or turn an app-only username-read permission into a posting grant.
 The official `@xdevplatform/xdk` **0.6.6** performs exactly one
 `client.posts.create({text})` call to `POST https://api.x.com/2/tweets`. Its
 `accessToken` selects OAuth2 user context, but its value here is only the fixed
-public dummy **`serverware-x-post-placeholder-v1`**. Never supply a real X token
-to this program. Serverware must separately store the authorized user's
+public dummy **`catchplate-x-post-placeholder-v1`**. Never supply a real X token
+to this program. Catchplate must separately store the authorized user's
 credential and replace this exact dummy under an explicit posting permission.
 Saving an app-only token or inventing scopes is not sufficient.
 
@@ -23,10 +23,10 @@ two posts when the posting permission is active.
 
 ## Use after the matching posting deployment is enabled
 
-Obtain a loaded posting permission, a Serverware application configured for
+Obtain a loaded posting permission, a Catchplate application configured for
 `basic_and_bearer_v1`, its scoped application token, and authenticated CA files
 from the operator. The account's genuine user authorization, posting scopes,
-entitlements and credential lifecycle must be handled on Serverware, not here.
+entitlements and credential lifecycle must be handled on Catchplate, not here.
 
 Use a dedicated process with Node **25.5.0**, the locally checked version. Both
 dependencies are exactly pinned (`@xdevplatform/xdk` 0.6.6, Undici 8.11.2), with
@@ -43,36 +43,36 @@ private client JSON and CA. Connection settings can come directly from the
 download, but text and confirmation must still be set locally:
 
 ```sh
-export SERVERWARE_X_POST_TEXT='Your explicitly reviewed text'
-export SERVERWARE_X_POST_CONFIRM='post-once'
-node client.mjs --config /private/path/serverware-client.private.json
-unset SERVERWARE_X_POST_CONFIRM SERVERWARE_X_POST_TEXT
+export CATCHPLATE_X_POST_TEXT='Your explicitly reviewed text'
+export CATCHPLATE_X_POST_CONFIRM='post-once'
+node client.mjs --config /private/path/catchplate-client.private.json
+unset CATCHPLATE_X_POST_CONFIRM CATCHPLATE_X_POST_TEXT
 ```
 
 Relative CA paths resolve beside the JSON file. Keep it private: it contains
-the scoped Serverware app token. The loader checks Basic login, token expiry
+the scoped Catchplate app token. The loader checks Basic login, token expiry
 and the exact posting permission. It imports connection fields only, never
 commands, environment entries, headers, post content or confirmation. The file
 alone cannot cause a post. TLS verification and the no-retry rule are unchanged.
 
 Alternatively, the existing environment-only invocation remains supported:
 
-Supply `SERVERWARE_PROXY_TOKEN` through a secret manager or protected environment;
+Supply `CATCHPLATE_PROXY_TOKEN` through a secret manager or protected environment;
 never put it in command arguments, a proxy URL, committed files or logs.
 `.env.example` is reference only and is not loaded automatically. Text may also
 be sensitive: the example never prints it, but it exists in process memory and
 the explicit environment.
 
 ```sh
-export SERVERWARE_PROXY_URL='https://your-approved-proxy.example:443'
-export SERVERWARE_APP_ID='your-application-uuid'
-export SERVERWARE_CA_FILE='/absolute/path/serverware-ca.pem'
+export CATCHPLATE_PROXY_URL='https://your-approved-proxy.example:443'
+export CATCHPLATE_APP_ID='your-application-uuid'
+export CATCHPLATE_CA_FILE='/absolute/path/catchplate-ca.pem'
 # Optional separate CA for a private outer HTTPS proxy:
-# export SERVERWARE_PROXY_CA_FILE='/absolute/path/outer-proxy-ca.pem'
-export SERVERWARE_X_POST_TEXT='Your explicitly reviewed text'
-export SERVERWARE_X_POST_CONFIRM='post-once'
+# export CATCHPLATE_PROXY_CA_FILE='/absolute/path/outer-proxy-ca.pem'
+export CATCHPLATE_X_POST_TEXT='Your explicitly reviewed text'
+export CATCHPLATE_X_POST_CONFIRM='post-once'
 node client.mjs
-unset SERVERWARE_X_POST_CONFIRM SERVERWARE_X_POST_TEXT SERVERWARE_PROXY_TOKEN
+unset CATCHPLATE_X_POST_CONFIRM CATCHPLATE_X_POST_TEXT CATCHPLATE_PROXY_TOKEN
 ```
 
 Text must be 1–16,384 UTF-8 bytes, with no NUL or ill-formed Unicode. LF, tab, CR
@@ -89,7 +89,7 @@ qualifying response was observed, not an independent readback of the post.
 
 Exit **2** means the posting outcome is **unknown**. A withheld HTTP 409, timeout,
 lost connection, redirect, malformed response or any failure after the SDK call
-may follow a completed write. Inspect Serverware's audit and the account before
+may follow a completed write. Inspect Catchplate's audit and the account before
 deciding on any new action. The client never automatically resubmits. Killing a
 local process cannot undo a post or prove remote cancellation.
 
@@ -112,12 +112,12 @@ it is not a real-time or remote-operation deadline.
 The SDK uses native fetch. Documented Undici `ProxyAgent` and
 `setGlobalDispatcher` configure transport without replacing fetch or rewriting
 SDK authentication/serialization. Basic CONNECT authentication carries only the
-Serverware application ID/token, separately from the credential-free proxy URI.
+Catchplate application ID/token, separately from the credential-free proxy URI.
 The inner Authorization header carries only the public X dummy.
 
-Both TLS legs verify certificates and hostnames. `SERVERWARE_CA_FILE` supplies
+Both TLS legs verify certificates and hostnames. `CATCHPLATE_CA_FILE` supplies
 the inner intercepted-connection trust. The optional
-`SERVERWARE_PROXY_CA_FILE` supplies separate outer-proxy trust; otherwise the
+`CATCHPLATE_PROXY_CA_FILE` supplies separate outer-proxy trust; otherwise the
 outer connection uses Node's default roots. The inner CA is not automatically
 added to outer trust. No system trust store is changed and no direct fallback
 exists. The isolated joined run verified these TLS boundaries separately from

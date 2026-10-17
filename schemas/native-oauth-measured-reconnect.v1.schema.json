@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-oauth-measured-reconnect.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-oauth-measured-reconnect.v1.schema.json",
   "title": "Explicit native active-family reconnect cold configuration",
   "$comment": "Data-only closed configuration. Runtime requires the retained native browser TLS/key owner, separate family permission, actual signed fence originals, same-account target ID/N+1 sealing and distinct-person activation. Neither initial issuance nor Setup authority selects reconnect.",
   "$ref": "#/$defs/configuration",
@@ -10,7 +10,7 @@
       "additionalProperties": false,
       "required": ["apiVersion", "sourceRevision", "authorityRootPublicKey", "authorityRootSpkiSha256", "authorityConfigurationOriginal", "controlPlaneConfigurationDigest", "deploymentId", "instanceId", "limits", "reconnectLimits", "windows", "applications", "recoveryTargets", "callbackOrigin", "portalOrigin", "browserVsockPort"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeOAuthReconnectExchangeConfiguration/v1"},
+        "apiVersion": {"const": "catchplate.nativeOAuthReconnectExchangeConfiguration/v1"},
         "sourceRevision": {"type": "string", "minLength": 1, "maxLength": 128},
         "authorityRootPublicKey": {"$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/bytes32"},
         "authorityRootSpkiSha256": {"$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/digest"},

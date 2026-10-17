@@ -114,4 +114,4 @@ was performed. The package joins are static checks, not packaged execution.
 
 Exact archives, commands, failure and success logs, `result.json` and verified
 `SHA256SUMS` are retained at
-`codex-offload/serverware/engineering-builds/04647c81-native-services-jPcuPf/`.
+`codex-offload/catchplate/engineering-builds/04647c81-native-services-jPcuPf/`.

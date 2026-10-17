@@ -64,10 +64,10 @@ dispatch a request.
 Use the [resource-root helper](native-pilot-resource-roots.md) to inspect or
 explicitly create only missing protected parent directories. Resource owners
 still create their own fresh children exclusively. The bridge uses
-`/run/serverware-native-pilot-bridge/listener.sock` and
-`/var/lib/serverware/native-pilot-bridge/production-journal`. GenerationInstall
-uses `/run/serverware-shadow-generation-install/listener.sock` and
-`/var/lib/serverware/native-shadow-generation-install/journal`.
+`/run/catchplate-native-pilot-bridge/listener.sock` and
+`/var/lib/catchplate/native-pilot-bridge/production-journal`. GenerationInstall
+uses `/run/catchplate-shadow-generation-install/listener.sock` and
+`/var/lib/catchplate/native-shadow-generation-install/journal`.
 
 An existing socket, non-empty preparation directory, changed original, expired
 window or failed handoff is not repaired or adopted. Attempts remain consumed.

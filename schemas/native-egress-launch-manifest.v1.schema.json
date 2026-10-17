@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-egress-launch-manifest.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-egress-launch-manifest.v1.schema.json",
   "title": "Native egress pre-exec launch manifest v1",
   "description": "Closed artifact-selection manifest only, not a complete execution configuration or launch permission. Runtime requires exact sorted compact canonical ASCII JSON using the native ensure_ascii codec, including DEL escaping, with no LF and at most 4096 original bytes. Values in this profile are ASCII. The actual retained executable original is at most 16 MiB, root-owned, regular and executable with protected non-group/world-writable root-owned ancestors; these are runtime observations, not schema proof. No public launcher or egress-effect entrypoint is conferred by this document.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "profile", "executable", "argv", "environment"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeEgressLaunchManifest/v1"},
+    "apiVersion": {"const": "catchplate.nativeEgressLaunchManifest/v1"},
     "profile": {"const": "native-egress-create-new-workload-v1"},
     "executable": {
       "type": "object",

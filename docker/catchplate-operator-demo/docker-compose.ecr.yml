@@ -1,0 +1,8 @@
+# Optional ordinary ECR publication profile. Precreate /data/ecr-artifacts as
+# an empty private directory owned by the app (10001:10001, mode 0700).
+# Four retained 1-GiB images plus two transient captures need this RAM budget.
+services:
+  catchplate:
+    mem_limit: 8g
+    environment:
+      CATCHPLATE_ECR_ARTIFACT_ROOT: /data/ecr-artifacts

@@ -109,7 +109,7 @@ seconds (exit **0**). The full 99-control pass was not repeated.
 
 Both source archives, exact commands/harnesses, logs, result and verified
 fifteen-file checksum manifest are retained locally at
-`/home/catchplate/codex-offload/serverware/engineering-builds/50f9d190-bridge-composition-GBktjq/`.
+`/home/catchplate/codex-offload/catchplate/engineering-builds/50f9d190-bridge-composition-GBktjq/`.
 Runs used one CPU, a private network namespace and a cleared environment.
 No protected owner, signing entrypoint, publisher, service, provider, hardware,
 cloud or paid operation ran. Native code/dependencies are unchanged and were

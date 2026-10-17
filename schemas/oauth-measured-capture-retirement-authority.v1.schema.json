@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/oauth-measured-capture-retirement-authority.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/oauth-measured-capture-retirement-authority.v1.schema.json",
   "title": "Measured pre-subject complete-provider retirement originals",
   "$comment": "Data shapes only. Actual independently signed configuration/grant, original Nitro evidence, protected exact pre-subject capture joins, complete local inventories, current all-holder drains and atomic one-use claims remain mandatory. A constructible object, accepted transport response, missing acknowledgement or elapsed deadline grants no contact/retry. Canonical ASCII no-LF: grant64KiB, arguments1MiB, authenticated response6MiB, HTTP envelope8MiB. The grant has35 fields; source canonical validation does not borrow the old32-field grant parser. Native cold configuration is a separate source-selected contract.",
   "oneOf": [{"$ref":"#/$defs/signedAuthorization"},{"$ref":"#/$defs/policy"},{"$ref":"#/$defs/httpRequest"},{"$ref":"#/$defs/httpResponse"},{"$ref":"#/$defs/transport"}],
@@ -33,7 +33,7 @@
       "type":"object","additionalProperties":false,
       "required":["schema","sourceRevision","purpose","authorizationId","configurationDigest","deploymentId","exchangeId","workSource","exchangeRowSha256","custodyRowSha256","workRowSha256","captureArgumentsSha256","enrollmentSha256","historicalEnrollmentRootSpkiSha256","rawResponseSha256","rawResponseEnvelopeSha256","tokenEnvelopeSha256","tokenSecretSha256","providerId","clientId","clientMaterialSha256","providerConfiguration","tokenPurposes","retirementScope","affectedLineages","setupSessionId","setupInitialSha256","setupStartedSha256","setupCurrentSha256","applicationMaterialSha256","providerTlsRootSha256","holderId","reason","issuedAtEpochNs","expiresAtEpochNs"],
       "properties":{
-        "schema":{"const":"serverware.oauthMeasuredCaptureRetirementAuthorization/v1"},
+        "schema":{"const":"catchplate.oauthMeasuredCaptureRetirementAuthorization/v1"},
         "purpose":{"const":"measured-oauth-pre-subject-provider-retirement"},
         "sourceRevision":{"type":"string","minLength":1,"maxLength":128},"authorizationId":{"$ref":"#/$defs/uuid"},
         "configurationDigest":{"$ref":"#/$defs/digest"},"deploymentId":{"$ref":"#/$defs/deployment"},
@@ -57,7 +57,7 @@
     },
     "signedAuthorization": {
       "type":"object","additionalProperties":false,"required":["schema","payload","signatureBase64Url"],
-      "properties":{"schema":{"const":"serverware.signedOAuthMeasuredCaptureRetirementAuthorization/v1"},"payload":{"$ref":"#/$defs/authorization"},"signatureBase64Url":{"type":"string","pattern":"^[A-Za-z0-9_-]{86}$"}}
+      "properties":{"schema":{"const":"catchplate.signedOAuthMeasuredCaptureRetirementAuthorization/v1"},"payload":{"$ref":"#/$defs/authorization"},"signatureBase64Url":{"type":"string","pattern":"^[A-Za-z0-9_-]{86}$"}}
     },
     "assignment": {
       "type":"object","additionalProperties":false,
@@ -84,12 +84,12 @@
     "policy": {
       "type":"object","additionalProperties":false,
       "required":["schema","grantRootPublicKeyBase64Url","grantRootSpkiSha256","controlPlaneConfigurationDigest","deploymentId","trustRoots","assignments"],
-      "properties":{"schema":{"const":"serverware.oauthMeasuredCaptureRetirementAuthorityPolicy/v1"},"grantRootPublicKeyBase64Url":{"$ref":"#/$defs/bytes32"},"grantRootSpkiSha256":{"$ref":"#/$defs/digest"},"controlPlaneConfigurationDigest":{"$ref":"#/$defs/digest"},"deploymentId":{"$ref":"#/$defs/deployment"},"trustRoots":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/trustRoots"},"assignments":{"type":"array","minItems":1,"maxItems":32,"items":{"$ref":"#/$defs/assignment"}}}
+      "properties":{"schema":{"const":"catchplate.oauthMeasuredCaptureRetirementAuthorityPolicy/v1"},"grantRootPublicKeyBase64Url":{"$ref":"#/$defs/bytes32"},"grantRootSpkiSha256":{"$ref":"#/$defs/digest"},"controlPlaneConfigurationDigest":{"$ref":"#/$defs/digest"},"deploymentId":{"$ref":"#/$defs/deployment"},"trustRoots":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/trustRoots"},"assignments":{"type":"array","minItems":1,"maxItems":32,"items":{"$ref":"#/$defs/assignment"}}}
     },
     "statement": {
       "type":"object","additionalProperties":false,
       "required":["apiVersion","phase","holderId","bootId","keyId","controlPlaneResponseSigningKeyId","deploymentId","instanceId","providerId","enrollmentSha256","exchangeId","authorizationSha256","inputSha256","challenge","policyHash","dataPlaneBinarySha256","issuedAtEpochNs","expiresAtEpochNs"],
-      "properties":{"apiVersion":{"const":"serverware.nativeOAuthCaptureRetirementStatement/v1"},"phase":{"enum":["inspect","claim","contact","finish","recover"]},"holderId":{"$ref":"#/$defs/digest"},"bootId":{"$ref":"#/$defs/bytes32"},"keyId":{"$ref":"#/$defs/digest"},"controlPlaneResponseSigningKeyId":{"$ref":"#/$defs/digest"},"deploymentId":{"$ref":"#/$defs/deployment"},"instanceId":{"$ref":"#/$defs/assignment/properties/instanceId"},"providerId":{"enum":["google","x"]},"enrollmentSha256":{"$ref":"#/$defs/digest"},"exchangeId":{"$ref":"#/$defs/uuid"},"authorizationSha256":{"$ref":"#/$defs/digest"},"inputSha256":{"$ref":"#/$defs/digest"},"challenge":{"$ref":"#/$defs/bytes32"},"policyHash":{"$ref":"#/$defs/digest"},"dataPlaneBinarySha256":{"$ref":"#/$defs/digest"},"issuedAtEpochNs":{"$ref":"#/$defs/epoch"},"expiresAtEpochNs":{"$ref":"#/$defs/epoch"}}
+      "properties":{"apiVersion":{"const":"catchplate.nativeOAuthCaptureRetirementStatement/v1"},"phase":{"enum":["inspect","claim","contact","finish","recover"]},"holderId":{"$ref":"#/$defs/digest"},"bootId":{"$ref":"#/$defs/bytes32"},"keyId":{"$ref":"#/$defs/digest"},"controlPlaneResponseSigningKeyId":{"$ref":"#/$defs/digest"},"deploymentId":{"$ref":"#/$defs/deployment"},"instanceId":{"$ref":"#/$defs/assignment/properties/instanceId"},"providerId":{"enum":["google","x"]},"enrollmentSha256":{"$ref":"#/$defs/digest"},"exchangeId":{"$ref":"#/$defs/uuid"},"authorizationSha256":{"$ref":"#/$defs/digest"},"inputSha256":{"$ref":"#/$defs/digest"},"challenge":{"$ref":"#/$defs/bytes32"},"policyHash":{"$ref":"#/$defs/digest"},"dataPlaneBinarySha256":{"$ref":"#/$defs/digest"},"issuedAtEpochNs":{"$ref":"#/$defs/epoch"},"expiresAtEpochNs":{"$ref":"#/$defs/epoch"}}
     },
     "evidence": {
       "type":"object","additionalProperties":false,"required":["statement","signature","nativeKeyEvidence"],
@@ -107,7 +107,7 @@
     "operation": {"enum":["oauth.measured-capture-retirement.inspect","oauth.measured-capture-retirement.claim","oauth.measured-capture-retirement.contact","oauth.measured-capture-retirement.finish","oauth.measured-capture-retirement.recover"]},
     "httpRequest": {
       "type":"object","additionalProperties":false,"required":["apiVersion","operation","arguments"],
-      "properties":{"apiVersion":{"const":"serverware.nativeOAuthCaptureRetirementRequest/v1"},"operation":{"$ref":"#/$defs/operation"},"arguments":{"$ref":"#/$defs/arguments"}},
+      "properties":{"apiVersion":{"const":"catchplate.nativeOAuthCaptureRetirementRequest/v1"},"operation":{"$ref":"#/$defs/operation"},"arguments":{"$ref":"#/$defs/arguments"}},
       "allOf":[
         {"if":{"properties":{"operation":{"enum":["oauth.measured-capture-retirement.inspect","oauth.measured-capture-retirement.recover"]}}},"then":{"properties":{"arguments":{"properties":{"request":{"$ref":"#/$defs/observationRequest"}}}}}},
         {"if":{"properties":{"operation":{"const":"oauth.measured-capture-retirement.claim"}}},"then":{"properties":{"arguments":{"properties":{"request":{"$ref":"#/$defs/claimRequest"}}}}}},
@@ -115,7 +115,7 @@
         {"if":{"properties":{"operation":{"const":"oauth.measured-capture-retirement.finish"}}},"then":{"properties":{"arguments":{"properties":{"request":{"$ref":"#/$defs/finishRequest"}}}}}}
       ]
     },
-    "httpResponse": {"type":"object","additionalProperties":false,"required":["apiVersion","requestOriginal","responseOriginal","currentnessBarriers"],"properties":{"apiVersion":{"const":"serverware.nativeOAuthCaptureRetirementResponse/v1"},"requestOriginal":{"$ref":"#/$defs/encoded","maxLength":4194304},"responseOriginal":{"$ref":"#/$defs/encoded","maxLength":8388608},"currentnessBarriers":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/barriers"}]}}},
+    "httpResponse": {"type":"object","additionalProperties":false,"required":["apiVersion","requestOriginal","responseOriginal","currentnessBarriers"],"properties":{"apiVersion":{"const":"catchplate.nativeOAuthCaptureRetirementResponse/v1"},"requestOriginal":{"$ref":"#/$defs/encoded","maxLength":4194304},"responseOriginal":{"$ref":"#/$defs/encoded","maxLength":8388608},"currentnessBarriers":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/barriers"}]}}},
     "affectedOriginal": {"type":"object","additionalProperties":false,"required":["credentialOriginal","generationOriginal"],"properties":{"credentialOriginal":{"$ref":"#/$defs/original","maxLength":524288},"generationOriginal":{"$ref":"#/$defs/original","maxLength":8192}}},
     "observation": {
       "type":"object","additionalProperties":false,
@@ -124,6 +124,6 @@
     },
     "mutationResult": {"type":"object","additionalProperties":false,"required":["journalOriginal","attemptOriginal","custodyOriginal"],"properties":{"journalOriginal":{"$ref":"#/$defs/original"},"attemptOriginal":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/original","maxLength":524288}]},"custodyOriginal":{"$ref":"#/$defs/original"}}},
     "result": {"type":"object","additionalProperties":false,"required":["ok","operation","requestDigest","auditEventDigest","idempotentReplay","payload"],"properties":{"ok":{"const":true},"operation":{"$ref":"#/$defs/operation"},"requestDigest":{"$ref":"#/$defs/digest"},"auditEventDigest":{"$ref":"#/$defs/digest"},"idempotentReplay":{"const":false},"payload":{"oneOf":[{"$ref":"#/$defs/observation"},{"$ref":"#/$defs/mutationResult"}]}}},
-    "transport": {"type":"object","additionalProperties":false,"required":["schema","requestSha256","status","receivedAtEpochNs","rawResponseSha256","rawResponseEnvelope"],"properties":{"schema":{"const":"serverware.nativeOAuthCaptureRetirementTransport/v1"},"requestSha256":{"$ref":"#/$defs/digest"},"status":{"oneOf":[{"type":"null"},{"type":"integer","minimum":200,"maximum":599}]},"receivedAtEpochNs":{"$ref":"#/$defs/epoch"},"rawResponseSha256":{"$ref":"#/$defs/digest"},"rawResponseEnvelope":{"$ref":"oauth-exchange-authority.v1.schema.json#/$defs/envelope"}}}
+    "transport": {"type":"object","additionalProperties":false,"required":["schema","requestSha256","status","receivedAtEpochNs","rawResponseSha256","rawResponseEnvelope"],"properties":{"schema":{"const":"catchplate.nativeOAuthCaptureRetirementTransport/v1"},"requestSha256":{"$ref":"#/$defs/digest"},"status":{"oneOf":[{"type":"null"},{"type":"integer","minimum":200,"maximum":599}]},"receivedAtEpochNs":{"$ref":"#/$defs/epoch"},"rawResponseSha256":{"$ref":"#/$defs/digest"},"rawResponseEnvelope":{"$ref":"oauth-exchange-authority.v1.schema.json#/$defs/envelope"}}}
   }
 }

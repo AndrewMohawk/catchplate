@@ -24,10 +24,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_planner_configuration as mapper
-from serverware import authority_revocation_planning as planning
-from serverware import authority_revocation_verifier as verifier
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_planner_configuration as mapper
+from catchplate import authority_revocation_planning as planning
+from catchplate import authority_revocation_verifier as verifier
 import test_authority_revocation_capability_producer as key_oracle
 import test_authority_revocation_configuration as configuration_oracle
 import test_authority_revocation_observed as observed_oracle

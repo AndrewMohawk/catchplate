@@ -26,8 +26,8 @@ _spec.loader.exec_module(common)
 load_configuration = common.load_configuration
 PINS = {"slack-sdk": "3.45.0", "notion-client": "3.1.0", "stripe": "16.0.0",
     "cloudflare": "5.9.0", "aiohttp": "3.14.5", "httpx": "0.28.1"}
-FAILURE = "SDK request failed. Inspect the Serverware audit log. No automatic retry was sent; a sent write may have an unknown outcome."
-SDK_LOGGER = logging.getLogger("serverware.services.sdk")
+FAILURE = "SDK request failed. Inspect the Catchplate audit log. No automatic retry was sent; a sent write may have an unknown outcome."
+SDK_LOGGER = logging.getLogger("catchplate.services.sdk")
 SDK_LOGGER.disabled = True
 OPERATIONS = {
     ("slack", "post_message"): ("https://slack.com/api/chat.postMessage", "channel", ()),
@@ -137,7 +137,7 @@ def response_result(provider, status, raw):
             valid = False
         if not valid:
             raise ValueError("Invalid approval response")
-        result.update(approval_path=path, instruction="Open this path on the Serverware console. After approval, explicitly rerun the identical command and unchanged body. Nothing is retried automatically.")
+        result.update(approval_path=path, instruction="Open this path on the Catchplate console. After approval, explicitly rerun the identical command and unchanged body. Nothing is retried automatically.")
     return result
 
 
@@ -167,7 +167,7 @@ def http_client(config, expected_url, *, transport=None):
                     or len(dict(pairs)) != len(pairs)
                     or sorted(pairs) != sorted(parse_qsl(expected.query, keep_blank_values=True))
                     or not set(request.headers) <= READ_HEADERS | PROVIDER_HEADERS[provider]
-                    or request.headers.get("authorization") != "Bearer serverware-" + provider + "-placeholder-v1"):
+                    or request.headers.get("authorization") != "Bearer catchplate-" + provider + "-placeholder-v1"):
                 raise ValueError("SDK request differs from the selected operation")
             request.url = httpx.URL(expected_url)
             self.attempted = True
@@ -200,7 +200,7 @@ def http_client(config, expected_url, *, transport=None):
 def invoke_sdk(config, operation, params, client):
     """Ordinary SDK methods; do not iterate returned pagination objects."""
     provider = config["app_preset"]
-    token = "serverware-" + provider + "-placeholder-v1"
+    token = "catchplate-" + provider + "-placeholder-v1"
     if provider == "notion":
         from notion_client import Client
         # A Notion context manager would replace the supplied HTTPX client.
@@ -291,7 +291,7 @@ async def slack_call(config, arguments, *, session_factory=None):
     async with factory(trust_env=False, trace_configs=[trace], response_class=BoundedJSONResponse,
             cookie_jar=aiohttp.DummyCookieJar(), auto_decompress=False,
             timeout=aiohttp.ClientTimeout(total=30, connect=5), headers={"Accept-Encoding": "identity"}) as session:
-        sdk = AsyncWebClient(token="serverware-slack-placeholder-v1", session=session,
+        sdk = AsyncWebClient(token="catchplate-slack-placeholder-v1", session=session,
             ssl=tls, proxy=config["_proxy_url"], timeout=30, retry_handlers=[], trust_env_in_session=False,
             logger=SDK_LOGGER)
         try:

@@ -22,13 +22,13 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_counted_root_transition as transition
-from serverware import authority_index_contract as counted
-from serverware import authority_indexed_mutation as indexed
-from serverware import authority_index_projection as projection
-from serverware import authority_primary_contract as primary_contract
-from serverware import authority_radix_mutation as primary
-from serverware import authority_radix_proof as radix
+from catchplate import authority_counted_root_transition as transition
+from catchplate import authority_index_contract as counted
+from catchplate import authority_indexed_mutation as indexed
+from catchplate import authority_index_projection as projection
+from catchplate import authority_primary_contract as primary_contract
+from catchplate import authority_radix_mutation as primary
+from catchplate import authority_radix_proof as radix
 import test_authority_indexed_mutation as mutation_oracle
 import test_authority_index_join as profile_oracle
 import test_authority_radix_mutation as primary_oracle
@@ -37,9 +37,9 @@ import test_authority_radix_mutation as primary_oracle
 COUNTER = "webauthn.counter.cas"
 REVOKE = "webauthn.credential.revoke"
 STAGE = "webauthn.trust.stage"
-SCHEMA = "serverware.policyAuthorityCountedRootTransition/v1"
-PROFILE = "serverware.policyAuthorityCountedRootTransitionProfile/v1"
-COUNTED_PROFILE = "serverware.policyAuthorityCountedIndex/v1"
+SCHEMA = "catchplate.policyAuthorityCountedRootTransition/v1"
+PROFILE = "catchplate.policyAuthorityCountedRootTransitionProfile/v1"
+COUNTED_PROFILE = "catchplate.policyAuthorityCountedIndex/v1"
 # Shared independent literal descriptors, not the source projector's manifest.
 INDEX_IDS = profile_oracle.INDEX_IDS
 
@@ -71,7 +71,7 @@ def root_document(root):
 
 
 def projection_manifest():
-    return framed("serverware.policyAuthorityIndexProjectionManifest/v1",
+    return framed("catchplate.policyAuthorityIndexProjectionManifest/v1",
                   profile_oracle.utf8_json([profile_oracle.descriptor(name) for name in INDEX_IDS]))
 
 
@@ -129,8 +129,8 @@ class OperationFixture:
                  "proof_child_slots": "proofChildSlots", "recomputed_ancestors": "recomputedAncestors",
                  "hash_work": "hashWork", "input_bytes": "inputBytes", "json_nodes": "jsonNodes"}
         arguments = self.arguments()
-        return {"schema": "serverware.policyAuthorityPrimaryRootTransition/v1",
-            "profile": "serverware.policyAuthorityPrimaryRootTransitionProfile/v2",
+        return {"schema": "catchplate.policyAuthorityPrimaryRootTransition/v1",
+            "profile": "catchplate.policyAuthorityPrimaryRootTransitionProfile/v2",
             "businessBeforeRoots": arguments["business_before_roots"],
             "authorizationBeforeRoots": arguments["authorization_before_roots"],
             "businessAfterRoots": [root_document(self.model.after_trees[item.table].root)

@@ -11,15 +11,15 @@ PY
 )"
 observation_container_suffix="$$-$(openssl rand -hex 6)"
 TMP_DIR="$tmp_root/response-proof-capture-$observation_container_suffix"
-gate_proxy_url="${SERVERWARE_RESPONSE_PROOF_PROXY_URL:-http://localhost:9090}"
+gate_proxy_url="${CATCHPLATE_RESPONSE_PROOF_PROXY_URL:-http://localhost:9090}"
 mkdir -p "$TMP_DIR"
-verified_ca_source="${SERVERWARE_CA_FILE:-$tmp_root/serverware-ca.pem}"
+verified_ca_source="${CATCHPLATE_CA_FILE:-$tmp_root/catchplate-ca.pem}"
 if [[ ! -f "$verified_ca_source" ]]; then
-  echo "verified Serverware CA is missing at $verified_ca_source" >&2
+  echo "verified Catchplate CA is missing at $verified_ca_source" >&2
   exit 1
 fi
-cp "$verified_ca_source" "$TMP_DIR/serverware-ca.pem"
-chmod 0600 "$TMP_DIR/serverware-ca.pem"
+cp "$verified_ca_source" "$TMP_DIR/catchplate-ca.pem"
+chmod 0600 "$TMP_DIR/catchplate-ca.pem"
 collector_key="$TMP_DIR/dev-proof-collector-key.pem"
 collector_public_der="$TMP_DIR/dev-proof-collector-public.der"
 control_plane_response_key="$TMP_DIR/control-plane-response-signing.pub.pem"
@@ -62,11 +62,11 @@ rm -f \
   "$collector_key" \
   "$collector_public_der" \
   "$control_plane_response_key"
-observation_outage_gate="serverware-observation-outage-$observation_container_suffix"
-observation_custody="serverware-observation-custody-$observation_container_suffix"
-observation_custody_gate="serverware-observation-custody-gate-$observation_container_suffix"
-observation_custody_socket_volume="serverware-observation-socket-$observation_container_suffix"
-observation_custody_state_volume="serverware-observation-state-$observation_container_suffix"
+observation_outage_gate="catchplate-observation-outage-$observation_container_suffix"
+observation_custody="catchplate-observation-custody-$observation_container_suffix"
+observation_custody_gate="catchplate-observation-custody-gate-$observation_container_suffix"
+observation_custody_socket_volume="catchplate-observation-socket-$observation_container_suffix"
+observation_custody_state_volume="catchplate-observation-state-$observation_container_suffix"
 observation_containers=()
 observation_volumes=()
 
@@ -87,7 +87,7 @@ wait_for_observation_gate() {
   local container_name="$1"
   for _ in $(seq 1 100); do
     if docker inspect --format '{{.State.Running}}' "$container_name" 2>/dev/null | grep -qx true \
-      && docker compose exec -T serverware python - "$container_name" <<'PY' >/dev/null 2>&1
+      && docker compose exec -T catchplate python - "$container_name" <<'PY' >/dev/null 2>&1
 import socket
 import sys
 
@@ -129,7 +129,7 @@ PY
 }
 
 new_observation_nonce() {
-  docker compose exec -T serverware python - <<'PY'
+  docker compose exec -T catchplate python - <<'PY'
 import base64
 import os
 import struct
@@ -143,7 +143,7 @@ PY
 openssl genpkey -algorithm ED25519 -out "$collector_key" >/dev/null 2>&1
 chmod 0600 "$collector_key"
 openssl pkey -in "$collector_key" -pubout -outform DER -out "$collector_public_der"
-docker compose exec -T serverware python - <<'PY' > "$control_plane_response_key"
+docker compose exec -T catchplate python - <<'PY' > "$control_plane_response_key"
 import json
 import urllib.request
 
@@ -159,17 +159,17 @@ chmod 0600 "$control_plane_response_key"
 docker compose run --rm --no-deps \
   --user "$(id -u):$(id -g)" \
   -v "$TMP_DIR:/proof" \
-  --entrypoint /usr/local/bin/serverware-proof-client \
+  --entrypoint /usr/local/bin/catchplate-proof-client \
   decision-gate-rs \
   --proxy decision-gate-rs:9090 \
   --url https://demo-upstream:8443/echo \
-  --ca /proof/serverware-ca.pem \
+  --ca /proof/catchplate-ca.pem \
   --out /proof/dev-proxy-response-proof.json \
   --collector-key /proof/dev-proof-collector-key.pem \
   --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
-  --proxy-header "X-Serverware-Agent: demo-agent" \
-  --header "X-Serverware-Agent: demo-agent" \
+  --proxy-header "X-Catchplate-Agent: demo-agent" \
+  --header "X-Catchplate-Agent: demo-agent" \
   > "$TMP_DIR/dev-proxy-response-proof-summary.json"
 
 python3 - \
@@ -202,11 +202,11 @@ with open(collector_public_der_path, "rb") as handle:
 assert summary["ok"] is True, summary
 assert summary["response_status"] == 200, summary
 assert summary["proof_sha256"] == "sha256:" + hashlib.sha256(proof_bytes).hexdigest(), summary
-assert proof["apiVersion"] == "serverware.proxyResponseProof/v3", proof
-assert proof["kind"] == "ServerwareProxyResponseProof", proof
+assert proof["apiVersion"] == "catchplate.proxyResponseProof/v3", proof
+assert proof["kind"] == "CatchplateProxyResponseProof", proof
 capture = proof["external_capture"]
 statement = proof["server_statement"]
-assert capture["apiVersion"] == "serverware.proxyResponseCapture/v2", capture
+assert capture["apiVersion"] == "catchplate.proxyResponseCapture/v2", capture
 assert capture["environment"] == "development", capture
 assert capture["collection_mode"] == "external-client-capture", capture
 for field in (
@@ -223,7 +223,7 @@ for field in (
     "tls_channel_binding",
 ):
     assert capture[field] == statement[field], (field, capture[field], statement[field])
-assert statement["apiVersion"] == "serverware.proxyResponseStatement/v2", statement
+assert statement["apiVersion"] == "catchplate.proxyResponseStatement/v2", statement
 release_authority = capture["release_authority"]
 assert set(release_authority) == {
     "authority_mode",
@@ -266,7 +266,7 @@ assert set(receipt) == {
     "request",
     "response",
 }, receipt
-assert receipt["apiVersion"] == "serverware.controlPlaneAuthorizationReceipt/v1", receipt
+assert receipt["apiVersion"] == "catchplate.controlPlaneAuthorizationReceipt/v1", receipt
 assert receipt["kind"] == "ControlPlaneAuthorizationReceipt", receipt
 assert receipt["principal_id"] == capture["principal_id"], receipt
 assert receipt["route_id"] == capture["route_id"], receipt
@@ -284,7 +284,7 @@ assert receipt_request_body == json.dumps(
 ).encode(), receipt_request
 dispatch_request = json.loads(receipt_request_body)
 assert dispatch_request == {
-    "apiVersion": "serverware.releaseAuthorizationDispatch/v1",
+    "apiVersion": "catchplate.releaseAuthorizationDispatch/v1",
     "attemptId": release_authority["attempt_id"],
     "bindingDigest": release_authority["consumption_identity_digest"],
 }, dispatch_request
@@ -303,7 +303,7 @@ assert receipt_response["status"] == 200, receipt_response
 receipt_response_body = decode_base64url(receipt_response["body_b64"])
 assert receipt_response["body_sha256"] == "sha256:" + hashlib.sha256(receipt_response_body).hexdigest(), receipt_response
 dispatch_response = json.loads(receipt_response_body)
-assert dispatch_response["apiVersion"] == "serverware.releaseAuthorization/v1", dispatch_response
+assert dispatch_response["apiVersion"] == "catchplate.releaseAuthorization/v1", dispatch_response
 assert dispatch_response["ok"] is True and dispatch_response["authorized"] is True, dispatch_response
 assert dispatch_response["state"] == dispatch_response["reason"] == "dispatching", dispatch_response
 assert dispatch_response["attemptId"] == release_authority["attempt_id"], dispatch_response
@@ -320,7 +320,7 @@ assert receipt_statement_bytes == json.dumps(
     json.loads(receipt_statement_bytes), sort_keys=True, separators=(",", ":"), ensure_ascii=True
 ).encode(), receipt_response
 receipt_statement = json.loads(receipt_statement_bytes)
-assert receipt_statement["version"] == "serverware.responseSignature/v3", receipt_statement
+assert receipt_statement["version"] == "catchplate.responseSignature/v3", receipt_statement
 assert receipt_statement["request"] == {
     "method": receipt_request["method"],
     "path": receipt_request["path"],
@@ -339,7 +339,7 @@ assert receipt_statement["response_headers_sha256"] == (
 assert receipt_statement["response_header_count"] == len(receipt_response_headers), receipt_statement
 assert all(
     item["name"] == item["name"].lower()
-    and not item["name"].startswith("x-serverware-response-")
+    and not item["name"].startswith("x-catchplate-response-")
     for item in receipt_response_headers
 ), receipt_response_headers
 assert receipt_statement["response_signing_key_id"] == receipt_response["response_signing_key_id"], receipt_statement
@@ -384,7 +384,7 @@ assert upstream_response["canonical_digest"] == "sha256:" + hashlib.sha256(
 assert "client_request" not in capture, capture
 canonical_client_request = json.dumps(
     {
-        "apiVersion": "serverware.clientProofRequest/v1",
+        "apiVersion": "catchplate.clientProofRequest/v1",
         "method": "GET",
         "scheme": "https",
         "authority": "demo-upstream:8443",
@@ -436,18 +436,18 @@ assert tls_peer["leaf_certificate_sha256"] == summary["tls_peer_leaf_certificate
 selected_headers = capture["response"]["selected_headers"]
 required_headers = {
     "content-length",
-    "x-serverware-client-request-digest",
-    "x-serverware-policy-hash",
-    "x-serverware-request-digest",
-    "x-serverware-operation-digest",
-    "x-serverware-response-body-sha256",
+    "x-catchplate-client-request-digest",
+    "x-catchplate-policy-hash",
+    "x-catchplate-request-digest",
+    "x-catchplate-operation-digest",
+    "x-catchplate-response-body-sha256",
 }
 assert required_headers <= set(selected_headers), selected_headers
 assert set(selected_headers) <= required_headers | {"content-type"}, selected_headers
-assert selected_headers["x-serverware-client-request-digest"] == capture["client_request_digest"], selected_headers
-assert selected_headers["x-serverware-request-digest"] == capture["request_digest"], selected_headers
-assert selected_headers["x-serverware-operation-digest"] == capture["operation_digest"], selected_headers
-assert selected_headers["x-serverware-response-body-sha256"] == capture["response"]["body_digest"], selected_headers
+assert selected_headers["x-catchplate-client-request-digest"] == capture["client_request_digest"], selected_headers
+assert selected_headers["x-catchplate-request-digest"] == capture["request_digest"], selected_headers
+assert selected_headers["x-catchplate-operation-digest"] == capture["operation_digest"], selected_headers
+assert selected_headers["x-catchplate-response-body-sha256"] == capture["response"]["body_digest"], selected_headers
 claims = proof["vendor_tee"]["trusted_verifier"]["statement"]["attested_claims"]
 expected_claims = {
     "server_statement_sha256": capture["server_statement_sha256"],
@@ -490,19 +490,19 @@ PY
 docker compose run --rm --no-deps \
   --user "$(id -u):$(id -g)" \
   -v "$TMP_DIR:/proof" \
-  --entrypoint /usr/local/bin/serverware-proof-client \
+  --entrypoint /usr/local/bin/catchplate-proof-client \
   decision-gate-rs \
   --stream \
   --proxy decision-gate-rs:9090 \
   --url 'https://demo-upstream:8443/stream-bytes?chunks=2&chunkSize=16' \
-  --ca /proof/serverware-ca.pem \
+  --ca /proof/catchplate-ca.pem \
   --out /proof/stream-proof/dev-streaming-proxy-response-proof.json \
   --body-out /proof/stream-proof/dev-streaming-body.bin \
   --collector-key /proof/dev-proof-collector-key.pem \
   --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
-  --proxy-header "X-Serverware-Agent: demo-agent" \
-  --header "X-Serverware-Agent: demo-agent" \
+  --proxy-header "X-Catchplate-Agent: demo-agent" \
+  --header "X-Catchplate-Agent: demo-agent" \
   --max-stream-bytes 1048576 \
   > "$stream_summary"
 
@@ -511,7 +511,7 @@ docker compose run --rm --no-deps -T \
   -v "$TMP_DIR:/proof:ro" \
   -v "$PWD/schemas:/proof-schemas:ro" \
   --entrypoint python \
-  serverware - \
+  catchplate - \
   /proof/stream-proof/dev-streaming-proxy-response-proof.json \
   /proof-schemas/streaming-response-proof.v1.schema.json <<'PY'
 import json
@@ -545,12 +545,12 @@ assert summary["ok"] is True and summary["stream_verified"] is True, summary
 assert summary["proof_sha256"] == "sha256:" + hashlib.sha256(proof_bytes).hexdigest(), summary
 assert summary["body_bytes"] == len(body) == 32, summary
 assert summary["body_sha256"] == "sha256:" + hashlib.sha256(body).hexdigest(), summary
-assert proof["apiVersion"] == "serverware.streamingProxyResponseProof/v1", proof
-assert proof["kind"] == "ServerwareStreamingProxyResponseProof", proof
+assert proof["apiVersion"] == "catchplate.streamingProxyResponseProof/v1", proof
+assert proof["kind"] == "CatchplateStreamingProxyResponseProof", proof
 capture = proof["external_capture"]
 statement = proof["streaming_response_statement"]
-assert capture["apiVersion"] == "serverware.streamingProxyResponseCapture/v1", capture
-assert statement["apiVersion"] == "serverware.streamingResponseStatement/v1", statement
+assert capture["apiVersion"] == "catchplate.streamingProxyResponseCapture/v1", capture
+assert statement["apiVersion"] == "catchplate.streamingResponseStatement/v1", statement
 assert "client_request" not in capture, capture
 assert "authorization_binding" not in capture, capture
 binding_commitment = capture["authorization_binding_commitment"]
@@ -559,7 +559,7 @@ assert "operation_context" not in binding_commitment, binding_commitment
 assert binding_commitment["operation_context_digest"].startswith("sha256:"), binding_commitment
 canonical_client_request = json.dumps(
     {
-        "apiVersion": "serverware.streamingClientProofRequest/v1",
+        "apiVersion": "catchplate.streamingClientProofRequest/v1",
         "method": "GET",
         "scheme": "https",
         "authority": "demo-upstream:8443",
@@ -599,19 +599,19 @@ assert released["framing"] == "http1.1-chunked-trailers", released
 assert released["body_bytes"] == len(body), released
 assert released["body_digest"] == summary["body_sha256"], released
 assert released["trailer_names"] == [
-    "X-Serverware-Stream-Proof-B64",
-    "X-Serverware-Stream-Proof-SHA256",
+    "X-Catchplate-Stream-Proof-B64",
+    "X-Catchplate-Stream-Proof-SHA256",
 ], released
 assert released["selected_wire_headers"] == {
     "connection": "close",
     "content-type": "application/octet-stream",
-    "trailer": "X-Serverware-Stream-Proof-B64, X-Serverware-Stream-Proof-SHA256",
+    "trailer": "X-Catchplate-Stream-Proof-B64, X-Catchplate-Stream-Proof-SHA256",
     "transfer-encoding": "chunked",
 }, released
 upstream = capture["upstream_response"]
 assert upstream["body_bytes"] == len(body), upstream
 assert upstream["body_digest"] == summary["body_sha256"], upstream
-assert capture["tls_channel_binding"]["exporter_label"] == "EXPORTER-Serverware-Proxy-Stream-v1", capture
+assert capture["tls_channel_binding"]["exporter_label"] == "EXPORTER-Catchplate-Proxy-Stream-v1", capture
 assert statement["server_instance"]["id"] == summary["server_instance_id"], statement
 assert proof["vendor_tee"]["platform"] == "none-dev", proof
 assert proof["vendor_tee"]["provider"] == "development-fixture", proof
@@ -626,19 +626,19 @@ for stream_mode in "${structured_stream_modes[@]}"; do
   docker compose run --rm --no-deps \
     --user "$(id -u):$(id -g)" \
     -v "$TMP_DIR:/proof" \
-    --entrypoint /usr/local/bin/serverware-proof-client \
+    --entrypoint /usr/local/bin/catchplate-proof-client \
     decision-gate-rs \
     --stream \
     --proxy decision-gate-rs:9090 \
     --url "https://demo-upstream:8443/proof-stream/$stream_mode" \
-    --ca /proof/serverware-ca.pem \
+    --ca /proof/catchplate-ca.pem \
     --out "/proof/structured-stream-proofs/$stream_mode/proof.json" \
     --body-out "/proof/structured-stream-proofs/$stream_mode/body.bin" \
     --collector-key /proof/dev-proof-collector-key.pem \
     --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
     --expected-principal-id agent:demo \
-    --proxy-header "X-Serverware-Agent: demo-agent" \
-    --header "X-Serverware-Agent: demo-agent" \
+    --proxy-header "X-Catchplate-Agent: demo-agent" \
+    --header "X-Catchplate-Agent: demo-agent" \
     --max-stream-bytes 1048576 \
     > "$mode_dir/summary.json"
 done
@@ -648,7 +648,7 @@ docker compose run --rm --no-deps -T \
   -v "$structured_stream_dir:/proof:ro" \
   -v "$PWD/schemas:/proof-schemas:ro" \
   --entrypoint python \
-  serverware - \
+  catchplate - \
   /proof \
   /proof-schemas/streaming-response-proof.v1.schema.json <<'PY'
 import json
@@ -751,8 +751,8 @@ for mode, (route_id, content_type) in expected.items():
     assert summary["proof_sha256"] == "sha256:" + hashlib.sha256(proof_bytes).hexdigest(), summary
     assert summary["body_sha256"] == "sha256:" + hashlib.sha256(body).hexdigest(), summary
     assert summary["body_bytes"] == len(body) > 0, summary
-    assert proof["apiVersion"] == "serverware.streamingProxyResponseProof/v1", proof
-    assert proof["kind"] == "ServerwareStreamingProxyResponseProof", proof
+    assert proof["apiVersion"] == "catchplate.streamingProxyResponseProof/v1", proof
+    assert proof["kind"] == "CatchplateStreamingProxyResponseProof", proof
     assert proof["vendor_tee"]["platform"] == "none-dev", proof
     assert proof["vendor_tee"]["provider"] == "development-fixture", proof
     assert capture["principal_id"] == statement["principal_id"] == "agent:demo", (mode, capture)
@@ -769,14 +769,14 @@ for mode, (route_id, content_type) in expected.items():
     assert released["body_bytes"] == len(body), (mode, released)
     assert released["body_digest"] == summary["body_sha256"], (mode, released)
     assert released["trailer_names"] == [
-        "X-Serverware-Stream-Proof-B64",
-        "X-Serverware-Stream-Proof-SHA256",
+        "X-Catchplate-Stream-Proof-B64",
+        "X-Catchplate-Stream-Proof-SHA256",
     ], (mode, released)
     released_content_type = released["selected_wire_headers"]["content-type"]
     assert released_content_type.split(";", 1)[0].strip().lower() == content_type, (mode, released)
     assert capture["release_authority"]["credential_ref"] is None, (mode, capture)
     assert capture["release_authority"]["credential_version"] == 0, (mode, capture)
-    assert capture["tls_channel_binding"]["exporter_label"] == "EXPORTER-Serverware-Proxy-Stream-v1", capture
+    assert capture["tls_channel_binding"]["exporter_label"] == "EXPORTER-Catchplate-Proxy-Stream-v1", capture
     assert b"hidden" not in body, (mode, body)
 
     if mode == "jsonl":
@@ -817,27 +817,27 @@ for mode, (route_id, content_type) in expected.items():
     assert_no_forbidden_keys(value)
 PY
 
-printf '%s' '{"audit_marker":"serverware-observation-post"}' > "$observation_post_dir/request.bin"
+printf '%s' '{"audit_marker":"catchplate-observation-post"}' > "$observation_post_dir/request.bin"
 chmod 0600 "$observation_post_dir/request.bin"
 
 docker compose run --rm --no-deps \
   --user "$(id -u):$(id -g)" \
   -v "$TMP_DIR:/proof" \
-  --entrypoint /usr/local/bin/serverware-proof-client \
+  --entrypoint /usr/local/bin/catchplate-proof-client \
   decision-gate-rs \
   --observation \
   --method POST \
   --proxy decision-gate-rs:9090 \
   --url https://demo-upstream:8443/echo \
-  --ca /proof/serverware-ca.pem \
+  --ca /proof/catchplate-ca.pem \
   --out /proof/response-observation-proofs/post-success/proof.json \
   --body-out /proof/response-observation-proofs/post-success/body.bin \
   --request-body /proof/response-observation-proofs/post-success/request.bin \
   --collector-key /proof/dev-proof-collector-key.pem \
   --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
-  --proxy-header "X-Serverware-Agent: demo-agent" \
-  --header "X-Serverware-Agent: demo-agent" \
+  --proxy-header "X-Catchplate-Agent: demo-agent" \
+  --header "X-Catchplate-Agent: demo-agent" \
   --header "Content-Type: application/json" \
   > "$observation_post_dir/summary.json"
 
@@ -846,77 +846,77 @@ denied_count_before="$(demo_request_count DELETE /echo "$denied_run_id")"
 docker compose run --rm --no-deps \
   --user "$(id -u):$(id -g)" \
   -v "$TMP_DIR:/proof" \
-  --entrypoint /usr/local/bin/serverware-proof-client \
+  --entrypoint /usr/local/bin/catchplate-proof-client \
   decision-gate-rs \
   --observation \
   --method DELETE \
   --proxy decision-gate-rs:9090 \
   --url https://demo-upstream:8443/echo \
-  --ca /proof/serverware-ca.pem \
+  --ca /proof/catchplate-ca.pem \
   --out /proof/response-observation-proofs/local-denial/proof.json \
   --body-out /proof/response-observation-proofs/local-denial/body.bin \
   --collector-key /proof/dev-proof-collector-key.pem \
   --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
-  --proxy-header "X-Serverware-Agent: demo-agent" \
-  --header "X-Serverware-Agent: demo-agent" \
-  --header "User-Agent: serverware-test-run/$denied_run_id" \
+  --proxy-header "X-Catchplate-Agent: demo-agent" \
+  --header "X-Catchplate-Agent: demo-agent" \
+  --header "User-Agent: catchplate-test-run/$denied_run_id" \
   > "$observation_deny_dir/summary.json"
 denied_count_after="$(demo_request_count DELETE /echo "$denied_run_id")"
 
 docker compose run --rm --no-deps \
   --user "$(id -u):$(id -g)" \
   -v "$TMP_DIR:/proof" \
-  --entrypoint /usr/local/bin/serverware-proof-client \
+  --entrypoint /usr/local/bin/catchplate-proof-client \
   decision-gate-rs \
   --observation \
   --proxy decision-gate-rs:9090 \
   --url 'https://demo-upstream:8443/echo?reflectCredential=1' \
-  --ca /proof/serverware-ca.pem \
+  --ca /proof/catchplate-ca.pem \
   --out /proof/response-observation-proofs/validation-block/proof.json \
   --body-out /proof/response-observation-proofs/validation-block/body.bin \
   --collector-key /proof/dev-proof-collector-key.pem \
   --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
-  --proxy-header "X-Serverware-Agent: demo-agent" \
-  --header "X-Serverware-Agent: demo-agent" \
+  --proxy-header "X-Catchplate-Agent: demo-agent" \
+  --header "X-Catchplate-Agent: demo-agent" \
   > "$observation_validation_dir/summary.json"
 
 docker compose run --rm --no-deps \
   --user "$(id -u):$(id -g)" \
   -v "$TMP_DIR:/proof" \
-  --entrypoint /usr/local/bin/serverware-proof-client \
+  --entrypoint /usr/local/bin/catchplate-proof-client \
   decision-gate-rs \
   --observation \
   --proxy decision-gate-rs:9090 \
   --url https://demo-upstream:8443/2/tweets/search/recent \
-  --ca /proof/serverware-ca.pem \
+  --ca /proof/catchplate-ca.pem \
   --out /proof/response-observation-proofs/upstream-error/proof.json \
   --body-out /proof/response-observation-proofs/upstream-error/body.bin \
   --collector-key /proof/dev-proof-collector-key.pem \
   --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
-  --proxy-header "X-Serverware-Agent: demo-agent" \
-  --header "X-Serverware-Agent: demo-agent" \
+  --proxy-header "X-Catchplate-Agent: demo-agent" \
+  --header "X-Catchplate-Agent: demo-agent" \
   > "$observation_upstream_error_dir/summary.json"
 
 if docker compose run --rm --no-deps \
   --user "$(id -u):$(id -g)" \
   -v "$TMP_DIR:/proof" \
-  --entrypoint /usr/local/bin/serverware-proof-client \
+  --entrypoint /usr/local/bin/catchplate-proof-client \
   decision-gate-rs \
   --observation \
   --proxy decision-gate-rs:9090 \
   --url https://demo-upstream:8443/echo \
-  --ca /proof/serverware-ca.pem \
+  --ca /proof/catchplate-ca.pem \
   --out /proof/response-observation-proofs/body-limit-retry/proof.json \
   --body-out /proof/response-observation-proofs/body-limit-retry/body.bin \
   --max-observation-body-bytes 1 \
   --collector-key /proof/dev-proof-collector-key.pem \
   --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
-  --proxy-header "X-Serverware-Agent: demo-agent" \
-  --header "X-Serverware-Agent: demo-agent" \
+  --proxy-header "X-Catchplate-Agent: demo-agent" \
+  --header "X-Catchplate-Agent: demo-agent" \
   > "$observation_limit_dir/failed.stdout.json" \
   2> "$observation_limit_dir/failed.stderr.json"; then
   echo "observation collector unexpectedly accepted a body above its configured limit" >&2
@@ -949,20 +949,20 @@ PY
 docker compose run --rm --no-deps \
   --user "$(id -u):$(id -g)" \
   -v "$TMP_DIR:/proof" \
-  --entrypoint /usr/local/bin/serverware-proof-client \
+  --entrypoint /usr/local/bin/catchplate-proof-client \
   decision-gate-rs \
   --observation \
   --proxy decision-gate-rs:9090 \
   --url https://demo-upstream:8443/echo \
-  --ca /proof/serverware-ca.pem \
+  --ca /proof/catchplate-ca.pem \
   --out /proof/response-observation-proofs/body-limit-retry/proof.json \
   --body-out /proof/response-observation-proofs/body-limit-retry/body.bin \
   --max-observation-body-bytes 16777216 \
   --collector-key /proof/dev-proof-collector-key.pem \
   --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
-  --proxy-header "X-Serverware-Agent: demo-agent" \
-  --header "X-Serverware-Agent: demo-agent" \
+  --proxy-header "X-Catchplate-Agent: demo-agent" \
+  --header "X-Catchplate-Agent: demo-agent" \
   > "$observation_limit_dir/summary.json"
 
 docker compose run --rm --no-deps -T \
@@ -970,7 +970,7 @@ docker compose run --rm --no-deps -T \
   -v "$observation_dir:/proof:ro" \
   -v "$PWD/schemas:/proof-schemas:ro" \
   --entrypoint python \
-  serverware - \
+  catchplate - \
   /proof \
   /proof-schemas/response-observation-proof.v1.schema.json <<'PY'
 import json
@@ -1015,10 +1015,10 @@ def load_case(path_text):
     assert summary["proof_sha256"] == "sha256:" + hashlib.sha256(proof_bytes).hexdigest(), summary
     assert summary["body_sha256"] == "sha256:" + hashlib.sha256(body).hexdigest(), summary
     assert summary["body_bytes"] == len(body), summary
-    assert proof["apiVersion"] == "serverware.responseObservationProof/v1", proof
-    assert proof["kind"] == "ServerwareResponseObservationProof", proof
-    assert proof["runtime_proof"]["apiVersion"] == "serverware.responseObservationRuntimeProof/v1", proof
-    assert proof["runtime_proof"]["kind"] == "ServerwareResponseObservationRuntimeProof", proof
+    assert proof["apiVersion"] == "catchplate.responseObservationProof/v1", proof
+    assert proof["kind"] == "CatchplateResponseObservationProof", proof
+    assert proof["runtime_proof"]["apiVersion"] == "catchplate.responseObservationRuntimeProof/v1", proof
+    assert proof["runtime_proof"]["kind"] == "CatchplateResponseObservationRuntimeProof", proof
     assert proof["runtime_proof"]["vendor_tee"]["provider"] == "development-fixture", proof
     assert statement["request"]["body_observation"] == "complete-buffered", statement
     assert statement["request"]["aggregate_digest"] == summary["request_aggregate_digest"], summary
@@ -1103,10 +1103,10 @@ generic_nonce="$(new_observation_nonce)"
 curl -sS --http1.1 --raw --noproxy '' \
   --max-time 10 \
   --proxy "$gate_proxy_url" \
-  --proxy-header "X-Serverware-Agent: demo-agent" \
-  --cacert "$TMP_DIR/serverware-ca.pem" \
-  -H "X-Serverware-Agent: demo-agent" \
-  -H "X-Serverware-Observation-Nonce: $generic_nonce" \
+  --proxy-header "X-Catchplate-Agent: demo-agent" \
+  --cacert "$TMP_DIR/catchplate-ca.pem" \
+  -H "X-Catchplate-Agent: demo-agent" \
+  -H "X-Catchplate-Observation-Nonce: $generic_nonce" \
   -D "$observation_generic_dir/headers.txt" \
   -o "$observation_generic_dir/wire.bin" \
   https://demo-upstream:8443/not-allowed-generic-observation
@@ -1126,13 +1126,13 @@ assert b"transfer-encoding: chunked\r\n" in headers, headers
 assert b"connection: close\r\n" in headers, headers
 assert b"content-length:" not in headers, headers
 assert (
-    b"trailer: x-serverware-observation-proof-b64, x-serverware-observation-proof-sha256\r\n"
+    b"trailer: x-catchplate-observation-proof-b64, x-catchplate-observation-proof-sha256\r\n"
     in headers
 ), headers
 match = re.fullmatch(
     rb"([0-9a-f]+)\r\n(.*)\r\n0\r\n"
-    rb"x-serverware-observation-proof-b64: ([A-Za-z0-9_-]+)\r\n"
-    rb"x-serverware-observation-proof-sha256: (sha256:[0-9a-f]{64})\r\n\r\n",
+    rb"x-catchplate-observation-proof-b64: ([A-Za-z0-9_-]+)\r\n"
+    rb"x-catchplate-observation-proof-sha256: (sha256:[0-9a-f]{64})\r\n\r\n",
     wire,
     re.DOTALL | re.IGNORECASE,
 )
@@ -1143,8 +1143,8 @@ assert match.group(4).decode("ascii").lower() == (
     "sha256:" + hashlib.sha256(runtime_proof_bytes).hexdigest()
 ), match.group(4)
 runtime_proof = json.loads(runtime_proof_bytes)
-assert runtime_proof["apiVersion"] == "serverware.responseObservationRuntimeProof/v1", runtime_proof
-assert runtime_proof["kind"] == "ServerwareResponseObservationRuntimeProof", runtime_proof
+assert runtime_proof["apiVersion"] == "catchplate.responseObservationRuntimeProof/v1", runtime_proof
+assert runtime_proof["kind"] == "CatchplateResponseObservationRuntimeProof", runtime_proof
 assert "collector" not in runtime_proof, runtime_proof
 assert not (directory / "proof.json").exists(), list(directory.iterdir())
 assert not (directory / "body.bin").exists(), list(directory.iterdir())
@@ -1153,26 +1153,26 @@ PY
 
 outage_container_id="$(docker compose run -d --no-deps \
   --name "$observation_outage_gate" \
-  -e SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND=/bin/false \
+  -e CATCHPLATE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND=/bin/false \
   decision-gate-rs)"
 observation_containers+=("$outage_container_id")
 wait_for_observation_gate "$observation_outage_gate"
 if docker compose run --rm --no-deps \
   --user "$(id -u):$(id -g)" \
   -v "$TMP_DIR:/proof" \
-  --entrypoint /usr/local/bin/serverware-proof-client \
+  --entrypoint /usr/local/bin/catchplate-proof-client \
   decision-gate-rs \
   --observation \
   --proxy "$observation_outage_gate:9090" \
   --url https://demo-upstream:8443/not-allowed-attestation-outage \
-  --ca /proof/serverware-ca.pem \
+  --ca /proof/catchplate-ca.pem \
   --out /proof/response-observation-proofs/attestation-outage/proof.json \
   --body-out /proof/response-observation-proofs/attestation-outage/body.bin \
   --collector-key /proof/dev-proof-collector-key.pem \
   --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
-  --proxy-header "X-Serverware-Agent: demo-agent" \
-  --header "X-Serverware-Agent: demo-agent" \
+  --proxy-header "X-Catchplate-Agent: demo-agent" \
+  --header "X-Catchplate-Agent: demo-agent" \
   > "$observation_outage_dir/stdout.json" \
   2> "$observation_outage_dir/stderr.json"; then
   echo "observation collector unexpectedly accepted an attestation outage" >&2
@@ -1212,20 +1212,20 @@ observation_volumes+=("$observation_custody_state_volume")
 docker volume create "$observation_custody_state_volume" >/dev/null
 custody_container_id="$("${custody_compose[@]}" run -d --no-deps \
   --name "$observation_custody" \
-  -v "$observation_custody_socket_volume:/run/serverware-custody" \
-  -v "$observation_custody_state_volume:/var/lib/serverware-custody" \
+  -v "$observation_custody_socket_volume:/run/catchplate-custody" \
+  -v "$observation_custody_state_volume:/var/lib/catchplate-custody" \
   custody-runtime)"
 observation_containers+=("$custody_container_id")
 for _ in $(seq 1 100); do
-  if docker exec "$custody_container_id" test -S /run/serverware-custody/custody.sock 2>/dev/null; then
+  if docker exec "$custody_container_id" test -S /run/catchplate-custody/custody.sock 2>/dev/null; then
     break
   fi
   sleep 0.1
 done
-docker exec "$custody_container_id" test -S /run/serverware-custody/custody.sock
+docker exec "$custody_container_id" test -S /run/catchplate-custody/custody.sock
 custody_gate_container_id="$("${custody_compose[@]}" run -d --no-deps \
   --name "$observation_custody_gate" \
-  -v "$observation_custody_socket_volume:/run/serverware-custody:ro" \
+  -v "$observation_custody_socket_volume:/run/catchplate-custody:ro" \
   decision-gate-rs)"
 observation_containers+=("$custody_gate_container_id")
 custody_image_id="$(docker inspect --format '{{.Image}}' "$custody_container_id")"
@@ -1242,54 +1242,54 @@ replay_count_before="$(demo_request_count GET /echo "$replay_run_id")"
 docker compose run --rm --no-deps \
   --user "$(id -u):$(id -g)" \
   -v "$TMP_DIR:/proof" \
-  --entrypoint /usr/local/bin/serverware-proof-client \
+  --entrypoint /usr/local/bin/catchplate-proof-client \
   decision-gate-rs \
   --observation \
   --nonce "$replay_nonce" \
   --proxy "$observation_custody_gate:9090" \
   --url https://demo-upstream:8443/echo \
-  --ca /proof/serverware-ca.pem \
+  --ca /proof/catchplate-ca.pem \
   --out /proof/response-observation-proofs/replay-first/proof.json \
   --body-out /proof/response-observation-proofs/replay-first/body.bin \
   --collector-key /proof/dev-proof-collector-key.pem \
   --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
-  --proxy-header "X-Serverware-Agent: demo-agent" \
-  --header "X-Serverware-Agent: demo-agent" \
-  --header "User-Agent: serverware-test-run/$replay_run_id" \
+  --proxy-header "X-Catchplate-Agent: demo-agent" \
+  --header "X-Catchplate-Agent: demo-agent" \
+  --header "User-Agent: catchplate-test-run/$replay_run_id" \
   > "$observation_replay_first_dir/summary.json"
 
 replay_count_after_first="$(demo_request_count GET /echo "$replay_run_id")"
 docker stop "$observation_custody_gate" >/dev/null
 docker restart "$custody_container_id" >/dev/null
 for _ in $(seq 1 100); do
-  if docker exec "$custody_container_id" test -S /run/serverware-custody/custody.sock 2>/dev/null; then
+  if docker exec "$custody_container_id" test -S /run/catchplate-custody/custody.sock 2>/dev/null; then
     break
   fi
   sleep 0.1
 done
-docker exec "$custody_container_id" test -S /run/serverware-custody/custody.sock
+docker exec "$custody_container_id" test -S /run/catchplate-custody/custody.sock
 docker start "$observation_custody_gate" >/dev/null
 wait_for_observation_gate "$observation_custody_gate"
 
 if docker compose run --rm --no-deps \
   --user "$(id -u):$(id -g)" \
   -v "$TMP_DIR:/proof" \
-  --entrypoint /usr/local/bin/serverware-proof-client \
+  --entrypoint /usr/local/bin/catchplate-proof-client \
   decision-gate-rs \
   --observation \
   --nonce "$replay_nonce" \
   --proxy "$observation_custody_gate:9090" \
   --url https://demo-upstream:8443/echo \
-  --ca /proof/serverware-ca.pem \
+  --ca /proof/catchplate-ca.pem \
   --out /proof/response-observation-proofs/replay-second/proof.json \
   --body-out /proof/response-observation-proofs/replay-second/body.bin \
   --collector-key /proof/dev-proof-collector-key.pem \
   --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
   --expected-principal-id agent:demo \
-  --proxy-header "X-Serverware-Agent: demo-agent" \
-  --header "X-Serverware-Agent: demo-agent" \
-  --header "User-Agent: serverware-test-run/$replay_run_id" \
+  --proxy-header "X-Catchplate-Agent: demo-agent" \
+  --header "X-Catchplate-Agent: demo-agent" \
+  --header "User-Agent: catchplate-test-run/$replay_run_id" \
   > "$observation_replay_second_dir/stdout.json" \
   2> "$observation_replay_second_dir/stderr.json"; then
   echo "custody-backed observation replay unexpectedly produced a verified artifact" >&2
@@ -1353,7 +1353,7 @@ docker compose run --rm --no-deps -T \
   -v "$observation_replay_first_dir:/proof:ro" \
   -v "$PWD/schemas:/proof-schemas:ro" \
   --entrypoint python \
-  serverware - \
+  catchplate - \
   /proof/proof.json \
   /proof-schemas/response-observation-proof.v1.schema.json <<'PY'
 import json
@@ -1372,10 +1372,10 @@ nonce="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 status="$(curl -sS -o "$TMP_DIR/response-proof-unsafe.json" -w '%{http_code}' \
   --max-time 10 \
   --proxy "$gate_proxy_url" \
-  --proxy-header "X-Serverware-Agent: demo-agent" \
-  --cacert "$TMP_DIR/serverware-ca.pem" \
-  -H "X-Serverware-Agent: demo-agent" \
-  -H "X-Serverware-Proof-Nonce: $nonce" \
+  --proxy-header "X-Catchplate-Agent: demo-agent" \
+  --cacert "$TMP_DIR/catchplate-ca.pem" \
+  -H "X-Catchplate-Agent: demo-agent" \
+  -H "X-Catchplate-Proof-Nonce: $nonce" \
   -X POST \
   https://demo-upstream:8443/echo)"
 python3 - "$status" "$TMP_DIR/response-proof-unsafe.json" <<'PY'

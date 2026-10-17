@@ -19,7 +19,7 @@ pub(super) struct Fixture {
 impl Fixture {
     pub(super) fn load() -> Self {
         let value: Value = serde_json::from_str(FIXTURE).unwrap();
-        assert_eq!(value["schema"], "serverware.nativeReleaseJitPreparationFixture/v1");
+        assert_eq!(value["schema"], "catchplate.nativeReleaseJitPreparationFixture/v1");
         let row = &value["route"];
         let request = value["request"].clone();
         let durable = ReleaseAuthorizationDurablePolicyBinding {
@@ -91,7 +91,7 @@ fn python_asgi_originals_match_actual_payload_and_pure_claims_only() {
     assert_eq!(url, "https://synthetic.invalid/resource?label=caf%C3%A9&token=redacted");
     assert!(!url.contains("synthetic-private-query"));
     // Result<(), String> can only correlate bytes, never return Prepared/Owner.
-    let correlated: Result<(), String> = serverware_decision_gate::native_secret_broker_v1::
+    let correlated: Result<(), String> = catchplate_decision_gate::native_secret_broker_v1::
         validate_release_jit_review_originals(wire.runtime_input.as_bytes(),
             wire.parent_request.as_bytes(), wire.child_request.as_bytes());
     assert!(correlated.is_ok());
@@ -137,7 +137,7 @@ fn closed_canonical_wire_rejects_aliases_duplicates_nesting_and_oversize() {
     assert!(decode_wire(&serde_json::to_vec_pretty(&decode_wire(&f.body).unwrap()).unwrap()).is_err());
     assert!(decode_wire(&vec![b' '; MAX_RESPONSE_BYTES as usize + 1]).is_err());
     assert!(decode_wire(b"\xff").is_err());
-    for version in ["serverware.nativeReleasePreparation/v1", "serverware.nativeReleaseJitPreparation/v2"] {
+    for version in ["catchplate.nativeReleasePreparation/v1", "catchplate.nativeReleaseJitPreparation/v2"] {
         let mut wire = decode_wire(&f.body).unwrap(); wire.api_version = version.into();
         assert!(validate_claims(&wire, &f.claims()).is_err());
     }

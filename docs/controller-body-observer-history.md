@@ -39,13 +39,13 @@ updates the view of every task sharing it.
 The [record codec](../data-plane/decision-gate-rs/src/body_observer_history_contract_v14.rs)
 defines two separate typed-canonical JSON originals:
 
-- `serverware.controllerBodyMappingSnapshot/v14`: exact scope, reported task and
+- `catchplate.controllerBodyMappingSnapshot/v14`: exact scope, reported task and
   address-space identity, observation interval, original maps-byte digest and
   every mapping row. Permissions and raw display pathname bytes survive; names
   use canonical padded standard Base64 without pathname decoding or lookup.
   Only executable rows with a nonzero inode have full-file measurements.
   Kernel-special and other unmeasured rows remain explicit.
-- `serverware.controllerBodyHistoryEvent/v14`: exact scope, contiguous sequence,
+- `catchplate.controllerBodyHistoryEvent/v14`: exact scope, contiguous sequence,
   previous event digest, observation time and one closed lifecycle event.
   Events requiring a new snapshot bind that snapshot's domain-separated digest.
 

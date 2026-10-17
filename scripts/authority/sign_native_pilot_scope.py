@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import native_pilot_authority_io as io
-from serverware import native_pilot_scope_authority as authority
+from catchplate import native_pilot_scope_authority as authority
 
 
 class _Parser(argparse.ArgumentParser):

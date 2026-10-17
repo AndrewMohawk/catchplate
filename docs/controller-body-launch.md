@@ -16,15 +16,15 @@ read-only snapshot prerequisite, not continuous observation or a ready sender.
 
 The signed `ContainerCommand` stays unchanged. The controller creates one private
 launch directory per lane and binds it read-only at
-`/serverware-controller-launch-v12`. Once the full admitted body is available,
+`/catchplate-controller-launch-v12`. Once the full admitted body is available,
 it exclusively publishes `launch.json`, binding the plan ID, lane, complete
 runner identity and body, and original absolute boottime deadline.
 
 The container invocation is fixed:
 
 ```text
-/usr/libexec/serverware-coder-body-supervisor-v12
-    /serverware-controller-launch-v12/launch.json
+/usr/libexec/catchplate-coder-body-supervisor-v12
+    /catchplate-controller-launch-v12/launch.json
 ```
 
 No caller-selected context path, shell, environment, Docker socket or generic
@@ -102,7 +102,7 @@ Before release, the fixed observer exchange receives the original launch
 context and source/artifact scope plus nine retained descriptors, in the fixed
 order: pidfd, proc directory, executable, user/mount/PID/network/cgroup namespaces,
 and cgroup directory. The fixed socket is
-`/run/serverware/coder/v12/runtime-observer/control.sock`; the client admits the
+`/run/catchplate/coder/v12/runtime-observer/control.sock`; the client admits the
 root peer and its actual executable against the independently held observer pin.
 The bounded ready response must echo the original context, custody and target
 identities and deadline. Only that successful acknowledgement permits root to
@@ -149,7 +149,7 @@ Root additionally compares the actual exit, captured streams, manifest, optional
 native digest, measured supervisor and retained target identities. Only then
 does the one-use output owner publish the exact admitted original, bounded to
 4 MiB and the remaining signed output capacity, under root-only control custody.
-The fixed destination is `.serverware-controller-output-v12/terminal.json`
+The fixed destination is `.catchplate-controller-output-v12/terminal.json`
 inside the retained tmpfs. See the
 [output publication contract](controller-body-output.md#manifest-and-original-result-joins)
 and [observer exchange boundary](controller-body-evidence.md#fixed-observer-exchange-and-controller-publication).
@@ -213,7 +213,7 @@ digests nor silently accepts a smaller observation scope.
 The local upgrade readiness probe previously passed forbidden connection headers
 to the generic close-only HTTP builder. It now has a separate fixed recipe:
 `POST` to the independently pinned target, `Host: docker`, `Connection: Upgrade`,
-`Upgrade: serverware-readiness`, and `Content-Length: 0`. Its generated exact
+`Upgrade: catchplate-readiness`, and `Content-Length: 0`. Its generated exact
 header must still match the independently signed fixture pin. Generic Docker
 HTTP header restrictions are unchanged.
 

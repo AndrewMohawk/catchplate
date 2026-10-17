@@ -54,11 +54,11 @@ from verify_nitro_tee import (
     sha256,
 )
 
-EVIDENCE_VERSION = "serverware.nativeResponseProofKeyEvidence/v1"
-EXPECTATIONS_VERSION = "serverware.nativeResponseProofKeyExpectations/v1"
-TRUST_ROOTS_VERSION = "serverware.nativeResponseProofKeyTrustRoots/v1"
-RESULT_VERSION = "serverware.nativeResponseProofKeyVerification/v1"
-BOOT_BINDING_DOMAIN = b"serverware/native-proof-custody-boot/v1\0"
+EVIDENCE_VERSION = "catchplate.nativeResponseProofKeyEvidence/v1"
+EXPECTATIONS_VERSION = "catchplate.nativeResponseProofKeyExpectations/v1"
+TRUST_ROOTS_VERSION = "catchplate.nativeResponseProofKeyTrustRoots/v1"
+RESULT_VERSION = "catchplate.nativeResponseProofKeyVerification/v1"
+BOOT_BINDING_DOMAIN = b"catchplate/native-proof-custody-boot/v1\0"
 MAX_INPUT_BYTES = 32 * 1024
 MAX_RESULT_BYTES = 4 * 1024
 BOOT_EXPECTATION_FIELDS = frozenset({

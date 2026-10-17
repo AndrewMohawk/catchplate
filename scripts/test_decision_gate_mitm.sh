@@ -3,13 +3,13 @@ set -euo pipefail
 
 GATE_HOST="${DECISION_GATE_HOST:-localhost}"
 GATE_PORT="${DECISION_GATE_PORT:-9090}"
-CA_FILE="${SERVERWARE_CA_OUT:-.tmp/serverware-ca.pem}"
+CA_FILE="${CATCHPLATE_CA_OUT:-.tmp/catchplate-ca.pem}"
 TMP_DIR="${TMP_DIR:-.tmp}"
 
 mkdir -p "$TMP_DIR"
 
 release_lifecycle_store() {
-  docker compose exec -T grant-store psql -U serverware -d serverware -Atq -c \
+  docker compose exec -T grant-store psql -U catchplate -d catchplate -Atq -c \
     "SELECT json_build_object('attempts', COUNT(*), 'forwarded', COUNT(*) FILTER (WHERE state = 'committed' AND completion_outcome = 'forwarded'), 'terminal', COUNT(*) FILTER (WHERE state NOT IN ('reserved', 'dispatching')), 'correlated', COUNT(*) FILTER (WHERE attempt_id = flow_id)) FROM release_authorization_attempts"
 }
 RELEASE_LIFECYCLE_BEFORE="$(release_lifecycle_store)"
@@ -17,9 +17,9 @@ RELEASE_LIFECYCLE_BEFORE="$(release_lifecycle_store)"
 curl -fsS \
   --max-time 10 \
   --proxy "http://$GATE_HOST:$GATE_PORT" \
-  --proxy-header "X-Serverware-Agent: demo-agent" \
+  --proxy-header "X-Catchplate-Agent: demo-agent" \
   --cacert "$CA_FILE" \
-  -H "X-Serverware-Agent: demo-agent" \
+  -H "X-Catchplate-Agent: demo-agent" \
   https://demo-upstream:8443/echo > "$TMP_DIR/decision-gate-mitm-echo.json"
 
 python3 - "$TMP_DIR/decision-gate-mitm-echo.json" <<'PY'
@@ -35,14 +35,14 @@ assert payload["credential_marker"] == "initial", payload
 assert "authorization_sha256" not in payload, payload
 assert "authorization" not in payload, payload
 assert "proxy_authorization" not in payload, payload
-assert "serverware_agent" not in payload, payload
+assert "catchplate_agent" not in payload, payload
 assert payload["path"] == "/echo", payload
 PY
 
 curl -fsS \
   --max-time 10 \
   --proxy "http://$GATE_HOST:$GATE_PORT" \
-  --proxy-header "X-Serverware-Agent: demo-token-agent" \
+  --proxy-header "X-Catchplate-Agent: demo-token-agent" \
   --proxy-header "Proxy-Authorization: Bearer demo-agent-proxy-token" \
   --cacert "$CA_FILE" \
   https://demo-upstream:8443/echo > "$TMP_DIR/decision-gate-mitm-proxy-auth-echo.json"
@@ -60,7 +60,7 @@ assert payload["credential_marker"] == "initial", payload
 assert "authorization_sha256" not in payload, payload
 assert "authorization" not in payload, payload
 assert "proxy_authorization" not in payload, payload
-assert "serverware_agent" not in payload, payload
+assert "catchplate_agent" not in payload, payload
 assert payload["path"] == "/echo", payload
 PY
 
@@ -106,7 +106,7 @@ with socket.create_connection((host, port), timeout=10) as raw:
     raw.sendall(
         b"CONNECT demo-upstream:8443 HTTP/1.1\r\n"
         b"Host: demo-upstream:8443\r\n"
-        b"X-Serverware-Agent: demo-agent\r\n"
+        b"X-Catchplate-Agent: demo-agent\r\n"
         b"\r\n"
     )
     status, _, _ = read_http(raw)
@@ -129,7 +129,7 @@ with socket.create_connection((host, port), timeout=10) as raw:
         assert payload["credential_marker"] == "initial", payload
         assert "authorization_sha256" not in payload, payload
         assert "authorization" not in payload, payload
-        assert "serverware_agent" not in payload, payload
+        assert "catchplate_agent" not in payload, payload
         assert payload["method"] == "GET", payload
 
         tls.sendall(
@@ -148,7 +148,7 @@ with socket.create_connection((host, port), timeout=10) as raw:
         assert payload["credential_marker"] == "initial", payload
         assert "authorization_sha256" not in payload, payload
         assert "authorization" not in payload, payload
-        assert "serverware_agent" not in payload, payload
+        assert "catchplate_agent" not in payload, payload
         assert payload["method"] == "POST", payload
 PY
 
@@ -156,9 +156,9 @@ status="$(
   curl -sS \
     --max-time 10 \
     --proxy "http://$GATE_HOST:$GATE_PORT" \
-    --proxy-header "X-Serverware-Agent: demo-agent" \
+    --proxy-header "X-Catchplate-Agent: demo-agent" \
     --cacert "$CA_FILE" \
-    -H "X-Serverware-Agent: demo-agent" \
+    -H "X-Catchplate-Agent: demo-agent" \
     -o "$TMP_DIR/decision-gate-mitm-deny.json" \
     -w "%{http_code}" \
     https://demo-upstream:8443/not-allowed

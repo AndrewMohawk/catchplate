@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cryptography.exceptions import InvalidSignature
 from scripts.authority import local_runtime_trust as cli
 from scripts.test_authority_local_configuration import fixture as configuration_fixture, sealed, SEED
-from serverware import authority_local_runtime_trust as local
+from catchplate import authority_local_runtime_trust as local
 
 PIN = "sha256:" + "1" * 64
 ERRORS = (ValueError, RuntimeError, KeyError, InvalidSignature)
@@ -56,7 +56,7 @@ def fixture():
     receipt = dict(schema=local.service.TRUSTED_HOST_LOCAL_ATTESTATION_SCHEMA, role="verifier",
         processMode=local.launcher.PROCESS_MODES["verifier"], configurationDigest=digest,
         sourceRevision=local.service.SOURCE_REVISION, launchManifestDigest=PIN,
-        runtimeClosureDigest=local.service._domain_digest("serverware.policyAuthorityRuntimeClosure/v2",
+        runtimeClosureDigest=local.service._domain_digest("catchplate.policyAuthorityRuntimeClosure/v2",
             PIN.encode("ascii"), local.canonical(source["packageVersions"])),
         operationManifestDigest=local.service.authority_contract.OPERATION_MANIFEST_DIGEST,
         generationDigest="sha256:"+"2"*64, stageZeroRequestDigest="sha256:"+"3"*64,
@@ -70,7 +70,7 @@ def fixture():
         verifierSocketPath=local.launcher.ROLE_SOCKET_PATHS["verifier"], verifierServiceUid=65520, verifierServiceGid=65520,
         controlPlaneUid=65532, controlPlaneGid=65532, verifierSigningPublicKeyBase64Url=response,
         maximumDeadlineNs=1_000_000_000, attestationReceiptDigest=PIN, attestationEvidence={},
-        attestationVerificationPolicy=dict(schema="serverware.trustedHostLocalPublicAttestationPolicy/v1",
+        attestationVerificationPolicy=dict(schema="catchplate.trustedHostLocalPublicAttestationPolicy/v1",
             rootPublicKeyBase64Url=original["configurationRootPublicKeyBase64Url"],
             verifierSigningPublicKeyBase64Url=response, maximumReceiptAgeNs=300_000_000_000, **claims),
         trustMode="trusted-host-local", controlPlaneInheritedFileDescriptors=[32, 33],
@@ -98,7 +98,7 @@ class LocalRuntimeTrustControls(unittest.TestCase):
         code = '''
 import sys
 sys.path.insert(0, sys.argv[1])
-from serverware import authority_local_runtime_trust as local
+from catchplate import authority_local_runtime_trust as local
 service = local.service
 assert service._launch_role is None and service._local_offline_import
 for action in (
@@ -120,12 +120,12 @@ except RuntimeError:
 else:
     raise AssertionError("offline import activated the measured guard")
 '''
-        env = dict(os.environ, SERVERWARE_PROCESS_MODE="metadata-bootstrap",
-            SERVERWARE_RELEASE_CHANNEL="dev", SERVERWARE_PRODUCTION_IMAGE="0")
+        env = dict(os.environ, CATCHPLATE_PROCESS_MODE="metadata-bootstrap",
+            CATCHPLATE_RELEASE_CHANNEL="dev", CATCHPLATE_PRODUCTION_IMAGE="0")
         command = [sys.executable, "-I", "-B", "-c", code, str(Path(__file__).resolve().parents[1])]
         result = subprocess.run(command, env=env, capture_output=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
-        for values in ({"SERVERWARE_PRODUCTION_IMAGE": "1"}, {"SERVERWARE_RELEASE_CHANNEL": "production"}):
+        for values in ({"CATCHPLATE_PRODUCTION_IMAGE": "1"}, {"CATCHPLATE_RELEASE_CHANNEL": "production"}):
             result = subprocess.run(command, env=dict(env, **values), capture_output=True, timeout=15)
             self.assertNotEqual(result.returncode, 0)
 

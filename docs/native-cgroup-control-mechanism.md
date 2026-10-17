@@ -1,6 +1,6 @@
 # Retained cgroup-v2 control preparation and observation
 
-`serverware_decision_gate::cgroup_control_v1` extracts the static custody
+`catchplate_decision_gate::cgroup_control_v1` extracts the static custody
 launcher's actual cgroup directory/control checks and populated reader. This
 is source-only integration: no cgroup was opened, created, populated or killed;
 no build, test or runtime command ran.
@@ -54,7 +54,7 @@ relative timeout, renewed deadline or additional cleanup allowance is added.
 Blocking kernel calls and repeated signal interruption still require the
 caller's existing independent watchdog; this extraction is not preemption.
 
-The static cgroup identity remains `serverware.policyCustody.cgroup/v1` with
+The static cgroup identity remains `catchplate.policyCustody.cgroup/v1` with
 the same ordered, length-framed domain/device/inode/mount-id/mode/uid/gid bytes.
 `finish_graceful_cleanup` retains its exact identity check, actual leader-pidfd
 reap, populated-zero wait under the original absolute CLOCK_BOOTTIME cleanup

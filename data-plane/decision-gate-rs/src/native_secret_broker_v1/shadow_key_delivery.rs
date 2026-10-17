@@ -8,11 +8,11 @@ use serde_json::{json,Value};
 use sha2::{Digest,Sha256};
 use std::{collections::BTreeMap,io::{Read,Write}};
 #[path="shadow_key_process.rs"] mod process;
-pub const IMAGE_PATH:&str="/opt/serverware/native-shadow-key-delivery-runtime.squashfs";
-pub(super) const HELPER_PATH:&str="/opt/serverware/serverware/native_shadow_key_helper.py";
-const CHANNEL:&str="serverware.nativeShadowKeyDeliveryChannel/v1";
-pub const OUTPUT_DOMAIN:&[u8]=b"serverware/native-shadow-role-recipient-ciphertext/v1\0";
-pub(crate) const QUOTE_DOMAIN:&[u8]=b"serverware/native-shadow-kms-recipient/v1\0";
+pub const IMAGE_PATH:&str="/opt/catchplate/native-shadow-key-delivery-runtime.squashfs";
+pub(super) const HELPER_PATH:&str="/opt/catchplate/catchplate/native_shadow_key_helper.py";
+const CHANNEL:&str="catchplate.nativeShadowKeyDeliveryChannel/v1";
+pub const OUTPUT_DOMAIN:&[u8]=b"catchplate/native-shadow-role-recipient-ciphertext/v1\0";
+pub(crate) const QUOTE_DOMAIN:&[u8]=b"catchplate/native-shadow-kms-recipient/v1\0";
 #[derive(Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct Configuration {
@@ -22,7 +22,7 @@ pub struct Configuration {
 }
 impl Configuration {
     pub fn validate(&self)->Result<(),String> {
-        ensure(matches!(self.api_version.as_str(),"serverware.nativeShadowKeyKmsTransport/v1"|"serverware.nativeShadowKeyKmsTransport/v2") && self.kms_parent_port>1023
+        ensure(matches!(self.api_version.as_str(),"catchplate.nativeShadowKeyKmsTransport/v1"|"catchplate.nativeShadowKeyKmsTransport/v2") && self.kms_parent_port>1023
             && self.kms_parent_port!=u32::MAX && !self.kms_key_id.is_empty() && self.kms_key_id.len()<=2048
             && !self.kms_key_id.chars().any(char::is_control),"shadow KMS fixed transport differs")?;
         for pin in [&self.ciphertext_blob_sha256,&self.kek_sha256,&self.encrypted_inventory_sha256,
@@ -30,7 +30,7 @@ impl Configuration {
         ensure(self.helper_image.profile=="sealed-memfd-squashfs-v1"&&self.helper_image.image_path==IMAGE_PATH,
             "shadow KMS helper purpose differs")?;
         ensure((1..=32).contains(&self.encryption_context.len())&&canonical_ascii_bytes(&self.encryption_context)?.len()<=8192
-            && self.encryption_context.get("serverwarePurpose").map(String::as_str)==Some(if self.api_version=="serverware.nativeShadowKeyKmsTransport/v2" {
+            && self.encryption_context.get("catchplatePurpose").map(String::as_str)==Some(if self.api_version=="catchplate.nativeShadowKeyKmsTransport/v2" {
                 "native-shadow-local-role-keys-and-request-commitment/v2"} else {"native-shadow-local-role-keys/v1"})
             && self.encryption_context.iter().all(|(k,v)|!k.is_empty()&&k.len()<=1024&&!v.is_empty()&&v.len()<=1024
                 && !k.chars().chain(v.chars()).any(char::is_control)),"shadow KMS admitted encryption context differs")
@@ -44,9 +44,9 @@ pub struct Binding {
     pub worker_executable_sha256:String,pub structurally_verified_seccomp_policy_sha256:String,
 }
 impl Binding {
-    fn extended(&self)->bool {self.api_version=="serverware.nativeShadowKeyDeliveryBinding/v2"}
+    fn extended(&self)->bool {self.api_version=="catchplate.nativeShadowKeyDeliveryBinding/v2"}
     fn validate(&self,uid:u32,gid:u32,deadline:u64)->Result<[u8;32],String> {
-        ensure(self.api_version=="serverware.nativeShadowKeyDeliveryBinding/v1"||self.extended(),"shadow delivery binding purpose differs")?;
+        ensure(self.api_version=="catchplate.nativeShadowKeyDeliveryBinding/v1"||self.extended(),"shadow delivery binding purpose differs")?;
         for p in [&self.key_authorization_sha256,&self.delivery_authorization_sha256,&self.execution_closure_manifest_sha256,
             &self.worker_executable_sha256,&self.structurally_verified_seccomp_policy_sha256]{digest(p)?;}
         fields(&self.guest,&["configurationSha256","deliverySha256","runtimeConfigurationSha256","serviceRole","uid","gid",
@@ -62,12 +62,12 @@ impl Binding {
             digest(descriptor["secretSha256"].as_str().ok_or("commitment pin absent")?)?;
             ensure(descriptor["keyEpoch"].as_u64().is_some_and(|v|v>0&&v<=i64::MAX as u64),"commitment epoch invalid")?;
         } else {fields(&self.inventory,&["apiVersion","fullKeySetRootSha256","localKeySetRootSha256","localKeys"])?;}
-        ensure(self.inventory["apiVersion"]==(if self.extended(){"serverware.nativeShadowLocalKeyInventory/v2"}else{"serverware.nativeShadowLocalKeyInventory/v1"})
+        ensure(self.inventory["apiVersion"]==(if self.extended(){"catchplate.nativeShadowLocalKeyInventory/v2"}else{"catchplate.nativeShadowLocalKeyInventory/v1"})
             && self.inventory["localKeys"].as_array().is_some_and(|v|(1..=16).contains(&v.len())),"shadow local inventory differs")?;
         for name in ["fullKeySetRootSha256","localKeySetRootSha256"] {digest(self.inventory[name].as_str().ok_or("shadow key root absent")?)?;}
         let challenge=decoded(&Value::String(self.challenge_base64url.clone()),32,Some(32))?;
         ensure(challenge.iter().any(|b|*b!=0),"shadow original nonce absent")?;
-        let mut preimage=if self.extended(){b"serverware/native-shadow-kms-nonce/v2\0".to_vec()}else{b"serverware/native-shadow-kms-nonce/v1\0".to_vec()};preimage.extend_from_slice(&challenge);
+        let mut preimage=if self.extended(){b"catchplate/native-shadow-kms-nonce/v2\0".to_vec()}else{b"catchplate/native-shadow-kms-nonce/v1\0".to_vec()};preimage.extend_from_slice(&challenge);
         Ok(Sha256::digest(&preimage).into())
     }
 }
@@ -82,11 +82,11 @@ impl PreparedShadowKeyHelper {
         self.process.final_identity()?;self.process.check()?;
         let nonce=binding.validate(self.uid,self.gid,self.deadline)?;
         let extended=binding.extended();
-        ensure(extended==(self.configuration.api_version=="serverware.nativeShadowKeyKmsTransport/v2"),"shadow transport inventory profile differs")?;
+        ensure(extended==(self.configuration.api_version=="catchplate.nativeShadowKeyKmsTransport/v2"),"shadow transport inventory profile differs")?;
         ensure(sha(&ciphertext_original)==self.configuration.encrypted_inventory_sha256,"shadow ciphertext original changed")?;
         let encrypted=document(&ciphertext_original,32768)?;
         fields(&encrypted,&["apiVersion","inventorySha256","nonce","ciphertext"])?;
-        ensure(encrypted["apiVersion"]==(if extended{"serverware.nativeShadowEncryptedLocalKeys/v2"}else{"serverware.nativeShadowEncryptedLocalKeys/v1"})
+        ensure(encrypted["apiVersion"]==(if extended{"catchplate.nativeShadowEncryptedLocalKeys/v2"}else{"catchplate.nativeShadowEncryptedLocalKeys/v1"})
             && encrypted["inventorySha256"]==sha(&canonical_ascii_bytes(&binding.inventory)?),"shadow ciphertext inventory differs")?;
         decoded(&encrypted["nonce"],12,Some(12))?;
         ensure(decoded(&encrypted["ciphertext"],16384,None)?.len()>16,"shadow ciphertext authentication absent")?;
@@ -98,7 +98,7 @@ impl PreparedShadowKeyHelper {
         let rsa=decoded(&hello["recipientPublicKey"],1024,None)?;
         ensure(hello["apiVersion"]==CHANNEL&&hello["phase"]=="recipient"&&hello["recipientPublicKeySha256"]==sha(&rsa),
             "shadow real helper RSA original differs")?;
-        let request=json!({"apiVersion":if extended{"serverware.nativeShadowKeyKmsRecipientRequest/v2"}else{"serverware.nativeShadowKeyKmsRecipientRequest/v1"},
+        let request=json!({"apiVersion":if extended{"catchplate.nativeShadowKeyKmsRecipientRequest/v2"}else{"catchplate.nativeShadowKeyKmsRecipientRequest/v1"},
             "material":if extended{"shadow-local-key-and-commitment-kek"}else{"shadow-local-key-kek"},
             "binding":binding,"transport":self.configuration,"recipientPublicKeySha256":sha(&rsa),
             "roleRecipientPublicKey":encoded(&role_public),"nonce":encoded(&nonce),"deadlineBoottimeNs":self.deadline.to_string()});
@@ -138,7 +138,7 @@ impl ShadowKeyRecipient {
         let response=document(&raw,96*1024)?;
         fields(&response,&["apiVersion","requestSha256","ciphertextForRecipient","ciphertextSha256"])?;
         let cms=decoded(&response["ciphertextForRecipient"],65536,None)?;
-        ensure(response["apiVersion"]=="serverware.nativeShadowKeyKmsRecipientCiphertext/v1"
+        ensure(response["apiVersion"]=="catchplate.nativeShadowKeyKmsRecipientCiphertext/v1"
             && response["requestSha256"]==self.request_sha&&response["ciphertextSha256"]==sha(&cms),"shadow KMS CMS original differs")?;
         self.process.check()?;
         let frame=canonical_ascii_bytes(&json!({"apiVersion":CHANNEL,"phase":"provision","request":self.request,
@@ -146,7 +146,7 @@ impl ShadowKeyRecipient {
             "encryptedInventory":self.encrypted}))?;
         let output=document(&self.process.exchange(&frame)?,32768)?;
         fields(&output,&["apiVersion","requestSha256","recipientPublicKey","serverEphemeralPublicKey","aeadNonce","ciphertext"])?;
-        ensure(output["apiVersion"]=="serverware.nativeShadowRoleRecipientCiphertext/v1"
+        ensure(output["apiVersion"]=="catchplate.nativeShadowRoleRecipientCiphertext/v1"
             && output["requestSha256"]==self.request_sha&&output["recipientPublicKey"]==self.request["roleRecipientPublicKey"],
             "shadow role output original differs")?;
         decoded(&output["serverEphemeralPublicKey"],32,Some(32))?;decoded(&output["aeadNonce"],12,Some(12))?;

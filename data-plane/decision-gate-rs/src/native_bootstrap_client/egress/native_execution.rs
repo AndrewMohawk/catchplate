@@ -55,13 +55,13 @@ impl<'child> PreparedNetwork<'child> {
         ensure((nsdev, nsino) != (grant.network_owner.namespace_device, grant.network_owner.namespace_inode),
             "executable child namespace must differ from the signed launcher namespace")?;
         let mut slot = Sha256::new();
-        slot.update(b"serverware/native-egress-installation-slot/v1\0");
+        slot.update(b"catchplate/native-egress-installation-slot/v1\0");
         for scalar in [grant.journal.namespace.as_bytes(), grant.capability.capability_id.as_bytes()] {
             slot.update((scalar.len() as u64).to_be_bytes()); slot.update(scalar);
         }
         let token_sha256 = signed_digest(&grant.capability.capability_token_sha256)?;
         let mut operation = Sha256::new();
-        operation.update(b"serverware/native-executable-network-operation/v1\0");
+        operation.update(b"catchplate/native-executable-network-operation/v1\0");
         for value in [child.operation_sha256(), child.parents().operation_sha256(), grant.original_sha256] {
             operation.update(value);
         }
@@ -144,7 +144,7 @@ impl<'child> PreparedNetwork<'child> {
         let pending = self.child.parents().attachment_pending();
         pending.require_egress(self.authority(), self.child.parents().original_clock())?;
         let mut scope = Sha256::new();
-        scope.update(b"serverware/native-executable-attachment-operation/v1\0");
+        scope.update(b"catchplate/native-executable-attachment-operation/v1\0");
         for value in [pending.authorization().original_sha256, self.child.operation_sha256(),
             self.association_sha256, installed.semantic_sha256(), installed.evidence_sha256()] { scope.update(value); }
         let guard = Arc::new(ExecutableAttachmentGuard { egress, pending,
@@ -153,7 +153,7 @@ impl<'child> PreparedNetwork<'child> {
         let owner = AttachmentOwner::Executable(Arc::clone(&guard));
         let a = guard.authority();
         let mut slot = Sha256::new();
-        slot.update(b"serverware/native-network-attachment-slot/v1\0");
+        slot.update(b"catchplate/native-network-attachment-slot/v1\0");
         for value in [a.journal.namespace.as_bytes(), a.capability.capability_id.as_bytes()] {
             slot.update((value.len() as u32).to_be_bytes()); slot.update(value);
         }

@@ -86,7 +86,7 @@ def initialization(before, after, phase, prior_count, current_count, require):
         and marker["encrypted_canonical_event_json"] is None
         and type(marker["storage_format_version"]) is int and marker["storage_format_version"] == 2,
         "x_quota_initialization_audit")
-    body = {"schema": "serverware.operatorXPostingQuotaStore/v1",
+    body = {"schema": "catchplate.operatorXPostingQuotaStore/v1",
         "initialized_at_epoch_ms": state["initialized_at_epoch_ms"]}
     require(marker["event_json"] == canonical(body)
         and type(marker["event_hash"]) is str and _SHA.fullmatch(marker["event_hash"])

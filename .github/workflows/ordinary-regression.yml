@@ -143,8 +143,8 @@ jobs:
             --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/app,readonly" \
             --mount "type=bind,src=$RUNNER_TEMP/ordinary-deps,dst=/deps,readonly" \
             --mount "type=bind,src=$fixture_dir/nonroot.fixture,dst=/nonroot.fixture,readonly" \
-            --workdir /app --env SERVERWARE_TEST_NONROOT_KEY_FIXTURE=/nonroot.fixture \
-            --env "SERVERWARE_TEST_NONROOT_KEY_FIXTURE_UID=$(id -u)" \
+            --workdir /app --env CATCHPLATE_TEST_NONROOT_KEY_FIXTURE=/nonroot.fixture \
+            --env "CATCHPLATE_TEST_NONROOT_KEY_FIXTURE_UID=$(id -u)" \
             --entrypoint /usr/local/bin/python "$TEST_IMAGE" \
             -I -B scripts/run_native_jit_review_signers.py --dependency-root /deps \
             > "$RUNNER_TEMP/ordinary-results/native-review-signers.json"

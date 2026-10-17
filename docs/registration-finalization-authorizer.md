@@ -15,15 +15,15 @@ been rendered or installed and no production acceptance is claimed.
 | Request peer | Actual Unix peer `65532:65532`, before reading bodies |
 | Root/bootstrap FDs | Sealed originals `198` / `199` |
 | Listener/key FDs | Activated listener `200` / sealed grant-authorizer key `201` |
-| Socket | `/run/serverware/registration-finalization-authorizer.sock` |
-| Root/bootstrap paths | `/run/serverware/registration-finalization-trust/root-public-key.pem` and `bootstrap.json` |
-| Private key source | `/run/secrets/serverware-registration-finalization-authorizer-key` |
+| Socket | `/run/catchplate/registration-finalization-authorizer.sock` |
+| Root/bootstrap paths | `/run/catchplate/registration-finalization-trust/root-public-key.pem` and `bootstrap.json` |
+| Private key source | `/run/secrets/catchplate-registration-finalization-authorizer-key` |
 | Runtime launcher | `/runtime/authority-bootstrap/registration_finalization_authorizer_launcher.py` |
 
 The independently root-signed bootstrap uses
-`serverware.signedRegistrationFinalizationAuthorizerBootstrap/v1`, payload
-`serverware.registrationFinalizationAuthorizerBootstrap/v1`, and launch
-`serverware.registrationFinalizationAuthorizerLaunch/v1`. The closed payload
+`catchplate.signedRegistrationFinalizationAuthorizerBootstrap/v1`, payload
+`catchplate.registrationFinalizationAuthorizerBootstrap/v1`, and launch
+`catchplate.registrationFinalizationAuthorizerLaunch/v1`. The closed payload
 holds original signed configuration/generation/runtime scope, current-root,
 grant and **finalization caller** enrollment originals, their exact byte/domain
 identities, database/generation, dedicated authorizer SPKI/measurement and
@@ -40,7 +40,7 @@ or establish a live witness themselves.
 
 ## Admission before key access
 
-The [bootstrap verifier](../serverware/registration_finalization_authorizer_bootstrap.py)
+The [bootstrap verifier](../catchplate/registration_finalization_authorizer_bootstrap.py)
 authenticates the actual root signature and canonical original, then uses the
 real finalization transition configuration mapper and original enrollment
 admissions. The planner and operation evidence key come from the configured
@@ -50,7 +50,7 @@ configured role keys, enrollment issuer and enabled evidence/transition keys.
 The dedicated service UID/GID cannot alias configured roles. Independent
 provisioning must also prevent key reuse across separately provisioned services.
 
-Root [delivery](../serverware/registration_finalization_authorizer_entrypoint.py)
+Root [delivery](../catchplate/registration_finalization_authorizer_entrypoint.py)
 opens only fixed no-follow paths through protected root-owned ancestors,
 authenticates bootstrap and listener identities **before** accessing the key,
 seals original files, reserves the exact inherited inventory and permanently
@@ -59,7 +59,7 @@ Ed25519 PKCS8 PEM; it is never a caller-provided path or request body.
 The root-activated socket's kernel server peer remains `0:0`, although its
 pathname is `65511:65532` mode `0660`; these are different identities.
 
-The [cold startup owner](../serverware/registration_finalization_authorizer_startup.py)
+The [cold startup owner](../catchplate/registration_finalization_authorizer_startup.py)
 repeats genuine bootstrap admission before loading the sealed key, checks its
 actual pair with the enrolled grant authorizer, and owns a private duplicated
 listener. PID, exact eight-entry delivered environment, empty supplementary
@@ -69,7 +69,7 @@ identity drift, rollback or expiry is terminal, not a singleton restart.
 
 ## One original exchange per connection
 
-The [transport](../serverware/authority_registration_finalization_transport.py)
+The [transport](../catchplate/authority_registration_finalization_transport.py)
 uses `SWRFGQ01` / `SWRFGR01`: request raw9 is original caller authorization,
 custody raw7 and complete before-vector; the response is one original grant.
 All individual limits, the complete length vector, 64 MiB aggregate and exact
@@ -88,8 +88,8 @@ grant and its original live bounds. No copied verdict, evidence raw3 or posted
 expectations can choose successful claims.
 
 `initialize_from_environment`, `require_started`, `close` and owner `serve_once`
-are the cold lifecycle APIs. The fixed [launcher](../serverware/registration_finalization_authorizer_launcher.py)
-supports only `--root-delivery` / `--run`; the [runner](../serverware/registration_finalization_authorizer_runner.py)
+are the cold lifecycle APIs. The fixed [launcher](../catchplate/registration_finalization_authorizer_launcher.py)
+supports only `--root-delivery` / `--run`; the [runner](../catchplate/registration_finalization_authorizer_runner.py)
 serves serially until stop or original lifetime failure. Request denial does not
 renew the launch. There is no request replay database, durable grant journal,
 one-use guarantee, automatic resend or successful-outcome wrapper. Cooperative
@@ -97,8 +97,8 @@ signals and service timeouts are not hard kernel watchdogs.
 
 ## Packaging and remaining boundaries
 
-The uninstalled [socket unit](../ops/systemd/serverware-registration-finalization-authorizer.socket)
-and [service template](../ops/systemd/serverware-registration-finalization-authorizer.service.in)
+The uninstalled [socket unit](../ops/systemd/catchplate-registration-finalization-authorizer.socket)
+and [service template](../ops/systemd/catchplate-registration-finalization-authorizer.service.in)
 are review inputs only. The template requires separately admitted
 `@AUTHORIZER_RELEASE_ROOT@`, `@AUTHORIZER_TRUST_DIR@` and
 `@AUTHORIZER_KEY_FILE@`, preserves only fixed read-only mounts, grants no writable

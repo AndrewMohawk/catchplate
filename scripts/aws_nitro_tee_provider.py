@@ -26,7 +26,7 @@ from cryptography.x509.oid import NameOID
 PROVIDER = "aws-nitro-enclaves"
 TEE_PLATFORM = "aws-nitro"
 COSE_ALG_ES384 = -35
-USER_DATA_PREFIX = b"serverware:nitro-claims:v1:"
+USER_DATA_PREFIX = b"catchplate:nitro-claims:v1:"
 AUTHORIZED_MATERIALS = {"broker-kek", "decision-gate-ca"}
 DEFAULT_FIXTURE_PCRS = {
     0: "11" * 48,
@@ -56,7 +56,7 @@ def sha256_prefixed(value: bytes) -> str:
 
 
 def run_json_command(command: str, payload: dict[str, Any], label: str) -> dict[str, Any]:
-    timeout = float(os.getenv("SERVERWARE_NITRO_KMS_TIMEOUT_SECONDS", "10"))
+    timeout = float(os.getenv("CATCHPLATE_NITRO_KMS_TIMEOUT_SECONDS", "10"))
     result = subprocess.run(
         shlex.split(command),
         input=(canonical_json(payload) + "\n").encode("utf-8"),
@@ -99,7 +99,7 @@ def claims_user_data(claims: dict[str, Any]) -> bytes:
 def nitro_attestation_request_payload(claims: dict[str, Any]) -> dict[str, Any]:
     user_data = claims_user_data(claims)
     request = {
-        "apiVersion": "serverware.nitroAttestationRequest/v1",
+        "apiVersion": "catchplate.nitroAttestationRequest/v1",
         "kind": "NitroAttestationDocument",
         "provider": PROVIDER,
         "tee_platform": TEE_PLATFORM,
@@ -216,8 +216,8 @@ def cert_builder(subject: x509.Name, issuer: x509.Name, public_key: Any, *, ca: 
 
 
 def fixture_paths() -> dict[str, Path]:
-    default_dir = Path(os.getenv("SERVERWARE_DATA_DIR", "/data")) / "nitro-fixture"
-    base = Path(os.getenv("SERVERWARE_NITRO_FIXTURE_DIR", str(default_dir)))
+    default_dir = Path(os.getenv("CATCHPLATE_DATA_DIR", "/data")) / "nitro-fixture"
+    base = Path(os.getenv("CATCHPLATE_NITRO_FIXTURE_DIR", str(default_dir)))
     return {
         "dir": base,
         "root_key": base / "root.key.pem",
@@ -246,23 +246,23 @@ def ensure_fixture_chain() -> tuple[Any, x509.Certificate, x509.Certificate, x50
     leaf_key = ec.generate_private_key(ec.SECP384R1())
     root_name = x509.Name(
         [
-            x509.NameAttribute(NameOID.COMMON_NAME, "serverware.fixture.nitro-enclaves"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Serverware Fixture"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "catchplate.fixture.nitro-enclaves"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Catchplate Fixture"),
             x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, "TEE Test Root"),
             x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
         ]
     )
     intermediate_name = x509.Name(
         [
-            x509.NameAttribute(NameOID.COMMON_NAME, "serverware.fixture.nitro-intermediate"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Serverware Fixture"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "catchplate.fixture.nitro-intermediate"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Catchplate Fixture"),
             x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
         ]
     )
     leaf_name = x509.Name(
         [
-            x509.NameAttribute(NameOID.COMMON_NAME, "serverware.fixture.nitro-attestation"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Serverware Fixture"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "catchplate.fixture.nitro-attestation"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Catchplate Fixture"),
             x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
         ]
     )
@@ -316,14 +316,14 @@ def parse_pcr_json(raw: str) -> dict[int, bytes]:
 
 
 def expected_pcrs() -> dict[int, bytes]:
-    return parse_pcr_json(os.getenv("SERVERWARE_NITRO_EXPECTED_PCRS", ""))
+    return parse_pcr_json(os.getenv("CATCHPLATE_NITRO_EXPECTED_PCRS", ""))
 
 
 def fixture_pcrs() -> dict[int, bytes]:
-    raw = os.getenv("SERVERWARE_NITRO_FIXTURE_PCRS")
+    raw = os.getenv("CATCHPLATE_NITRO_FIXTURE_PCRS")
     if raw:
         return parse_pcr_json(raw)
-    if env_bool("SERVERWARE_NITRO_FIXTURE_DEBUG"):
+    if env_bool("CATCHPLATE_NITRO_FIXTURE_DEBUG"):
         return {index: b"\x00" * 48 for index in DEFAULT_FIXTURE_PCRS}
     return {index: bytes.fromhex(value) for index, value in DEFAULT_FIXTURE_PCRS.items()}
 
@@ -345,7 +345,7 @@ def make_fixture_attestation_document(claims: dict[str, Any]) -> bytes:
     leaf_key, leaf_cert, intermediate_cert, root_cert = ensure_fixture_chain()
     recipient_key = ensure_fixture_recipient_key()
     payload = {
-        "module_id": "serverware-nitro-fixture-module",
+        "module_id": "catchplate-nitro-fixture-module",
         "timestamp": int(time.time() * 1000),
         "digest": "SHA384",
         "pcrs": fixture_pcrs(),
@@ -370,13 +370,13 @@ def make_fixture_attestation_document(claims: dict[str, Any]) -> bytes:
 
 
 def load_attestation_document_bytes(claims: dict[str, Any]) -> bytes | None:
-    attestation_command = os.getenv("SERVERWARE_NITRO_ATTESTATION_COMMAND", "").strip()
+    attestation_command = os.getenv("CATCHPLATE_NITRO_ATTESTATION_COMMAND", "").strip()
     if attestation_command:
         return attestation_document_from_command(attestation_command, claims)
-    if os.getenv("SERVERWARE_NITRO_ATTESTATION_DOCUMENT_B64"):
-        return b64d(os.environ["SERVERWARE_NITRO_ATTESTATION_DOCUMENT_B64"])
-    if os.getenv("SERVERWARE_NITRO_ATTESTATION_DOCUMENT"):
-        return Path(os.environ["SERVERWARE_NITRO_ATTESTATION_DOCUMENT"]).read_bytes()
+    if os.getenv("CATCHPLATE_NITRO_ATTESTATION_DOCUMENT_B64"):
+        return b64d(os.environ["CATCHPLATE_NITRO_ATTESTATION_DOCUMENT_B64"])
+    if os.getenv("CATCHPLATE_NITRO_ATTESTATION_DOCUMENT"):
+        return Path(os.environ["CATCHPLATE_NITRO_ATTESTATION_DOCUMENT"]).read_bytes()
     return None
 
 
@@ -403,16 +403,16 @@ def parse_cose_sign1(raw: bytes) -> tuple[bytes, dict[str, Any], bytes, bytes]:
 
 
 def load_trusted_root() -> x509.Certificate:
-    root_pem = os.getenv("SERVERWARE_NITRO_ROOT_CERT_PEM")
+    root_pem = os.getenv("CATCHPLATE_NITRO_ROOT_CERT_PEM")
     if root_pem:
         return x509.load_pem_x509_certificate(root_pem.encode("ascii"))
-    root_path = os.getenv("SERVERWARE_NITRO_ROOT_CERT")
+    root_path = os.getenv("CATCHPLATE_NITRO_ROOT_CERT")
     if not root_path:
         fixture_root = fixture_paths()["root_cert"]
-        if env_bool("SERVERWARE_NITRO_FIXTURE") and fixture_root.exists():
+        if env_bool("CATCHPLATE_NITRO_FIXTURE") and fixture_root.exists():
             root_path = str(fixture_root)
     if not root_path:
-        raise ValueError("SERVERWARE_NITRO_ROOT_CERT or SERVERWARE_NITRO_ROOT_CERT_PEM is required")
+        raise ValueError("CATCHPLATE_NITRO_ROOT_CERT or CATCHPLATE_NITRO_ROOT_CERT_PEM is required")
     return load_cert_pem(Path(root_path))
 
 
@@ -441,7 +441,7 @@ def verify_certificate_chain(payload: dict[str, Any]) -> x509.Certificate:
     root = cabundle[0]
     if root.public_bytes(serialization.Encoding.DER) != trusted_root.public_bytes(serialization.Encoding.DER):
         raise ValueError("Nitro attestation root certificate is not the configured trust root")
-    expected_root_hash = os.getenv("SERVERWARE_NITRO_ROOT_SHA256", "").strip()
+    expected_root_hash = os.getenv("CATCHPLATE_NITRO_ROOT_SHA256", "").strip()
     if expected_root_hash and certificate_sha256(root) != expected_root_hash:
         raise ValueError("Nitro attestation root certificate fingerprint mismatch")
     now = datetime.now(timezone.utc)
@@ -482,17 +482,17 @@ def verify_payload_semantics(payload: dict[str, Any], claims: dict[str, Any]) ->
     if not isinstance(timestamp, int):
         raise ValueError("Nitro attestation timestamp must be an integer")
     now_ms = int(time.time() * 1000)
-    max_age_ms = int(float(os.getenv("SERVERWARE_NITRO_MAX_AGE_SECONDS", "300")) * 1000)
-    skew_ms = int(float(os.getenv("SERVERWARE_NITRO_CLOCK_SKEW_SECONDS", "60")) * 1000)
+    max_age_ms = int(float(os.getenv("CATCHPLATE_NITRO_MAX_AGE_SECONDS", "300")) * 1000)
+    skew_ms = int(float(os.getenv("CATCHPLATE_NITRO_CLOCK_SKEW_SECONDS", "60")) * 1000)
     if timestamp < now_ms - max_age_ms:
         raise ValueError("Nitro attestation is stale")
     if timestamp > now_ms + skew_ms:
         raise ValueError("Nitro attestation timestamp is in the future")
     if payload.get("user_data") != claims_user_data(claims):
-        raise ValueError("Nitro attestation user_data does not bind Serverware claims")
+        raise ValueError("Nitro attestation user_data does not bind Catchplate claims")
     pcrs = pcrs_from_payload(payload)
     debug = pcrs_are_debug(pcrs)
-    if debug and not env_bool("SERVERWARE_NITRO_ALLOW_DEBUG"):
+    if debug and not env_bool("CATCHPLATE_NITRO_ALLOW_DEBUG"):
         raise ValueError("Nitro debug PCRs are not accepted")
     for index, expected in expected_pcrs().items():
         if pcrs.get(index) != expected:
@@ -553,9 +553,9 @@ def raw_quote_for_claims(claims: dict[str, Any]) -> bytes:
     raw = load_attestation_document_bytes(claims)
     if raw is not None:
         return raw
-    if not env_bool("SERVERWARE_NITRO_FIXTURE"):
+    if not env_bool("CATCHPLATE_NITRO_FIXTURE"):
         raise SystemExit(
-            "Nitro quote mode requires SERVERWARE_NITRO_ATTESTATION_DOCUMENT[_B64] or SERVERWARE_NITRO_FIXTURE=1"
+            "Nitro quote mode requires CATCHPLATE_NITRO_ATTESTATION_DOCUMENT[_B64] or CATCHPLATE_NITRO_FIXTURE=1"
         )
     return make_fixture_attestation_document(claims)
 
@@ -628,7 +628,7 @@ def kms_request_payload(
     release_handle: str,
 ) -> dict[str, Any]:
     request = {
-        "apiVersion": "serverware.nitroKmsReleaseRequest/v1",
+        "apiVersion": "catchplate.nitroKmsReleaseRequest/v1",
         "kind": "NitroKmsMaterialRelease",
         "provider": PROVIDER,
         "tee_platform": TEE_PLATFORM,
@@ -715,12 +715,12 @@ def release() -> None:
     tee = claims.get("tee") or {}
     if not isinstance(tee, dict) or tee.get("provider") != PROVIDER or tee.get("verified") is not True:
         raise SystemExit("Nitro key release requires a verified aws-nitro-enclaves quote")
-    if tee.get("debug") is True and not env_bool("SERVERWARE_NITRO_ALLOW_DEBUG_RELEASE"):
+    if tee.get("debug") is True and not env_bool("CATCHPLATE_NITRO_ALLOW_DEBUG_RELEASE"):
         raise SystemExit("Nitro debug quote is not accepted for material release")
     material = str(payload.get("material") or "")
     allowed = {
         item.strip()
-        for item in os.getenv("SERVERWARE_NITRO_ALLOWED_MATERIALS", "broker-kek,decision-gate-ca").split(",")
+        for item in os.getenv("CATCHPLATE_NITRO_ALLOWED_MATERIALS", "broker-kek,decision-gate-ca").split(",")
         if item.strip()
     }
     if allowed != AUTHORIZED_MATERIALS:
@@ -741,10 +741,10 @@ def release() -> None:
         if (tee.get("pcrs") or {}).get(str(index)) != expected_pcr.hex():
             raise SystemExit(f"PCR{index} missing from verified Nitro claims")
 
-    kms_command = os.getenv("SERVERWARE_NITRO_KMS_RELEASE_COMMAND", "").strip()
-    kms_required = env_bool("SERVERWARE_NITRO_REQUIRE_KMS_COMMAND")
+    kms_command = os.getenv("CATCHPLATE_NITRO_KMS_RELEASE_COMMAND", "").strip()
+    kms_required = env_bool("CATCHPLATE_NITRO_REQUIRE_KMS_COMMAND")
     if kms_required and not kms_command:
-        raise SystemExit("SERVERWARE_NITRO_KMS_RELEASE_COMMAND is required by release policy")
+        raise SystemExit("CATCHPLATE_NITRO_KMS_RELEASE_COMMAND is required by release policy")
     release_handle = sha256_prefixed(canonical_json({"material": material, "claims": claims, "tee": tee}).encode("utf-8"))
     kms_request = None
     kms_release = None

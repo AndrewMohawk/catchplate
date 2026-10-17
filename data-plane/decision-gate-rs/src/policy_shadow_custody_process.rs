@@ -116,7 +116,7 @@ use std::thread;
 use std::time::Duration;
 
 const PRODUCTION_PROCESS_CONFIG_VERSION: &str =
-    "serverware.policyCustodyProcess/v4";
+    "catchplate.policyCustodyProcess/v4";
 const MAX_PRODUCTION_PROCESS_CONFIG_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -985,7 +985,7 @@ impl RpcProductionPolicyShadowCustodyProcess {
         install_context: &ProductionGenerationInstallContextWireV4,
     ) -> Result<Sha256Digest, ShadowError> {
         Ok(hash_domain_frames(
-            b"serverware.policyCustodyProductionGenerationIntent/v4",
+            b"catchplate.policyCustodyProductionGenerationIntent/v4",
             &[&canonical_json_bytes(&(
                 previous.map(|value| {
                     value.production_configuration_binding_sha256()
@@ -1010,7 +1010,7 @@ impl RpcProductionPolicyShadowCustodyProcess {
         preparation_receipt_sha256: Option<&Sha256Digest>,
     ) -> Result<Sha256Digest, ShadowError> {
         Ok(hash_domain_frames(
-            b"serverware.policyCustodyProductionGenerationReplay/v4",
+            b"catchplate.policyCustodyProductionGenerationReplay/v4",
             &[&canonical_json_bytes(&(
                 transition,
                 transition_id_sha256,
@@ -1691,7 +1691,7 @@ impl RpcProductionPolicyShadowCustodyProcess {
                     if !configuration.retains_native_closure_owner(){return Err(ShadowError::CustodyUnavailable);}
                     let original=Self::decode_artifact::<super::super::NativeSpoolReservationOutcomeWire>(
                         artifact,ProductionArtifactKindV4::SpoolAppendReservationOutcome)?;
-                    if original.api_version!="serverware.nativeSpoolReservationOutcome/v1" {
+                    if original.api_version!="catchplate.nativeSpoolReservationOutcome/v1" {
                         return Err(ShadowError::CustodyUnavailable);
                     }
                     match original.result {
@@ -1914,7 +1914,7 @@ impl RpcProductionPolicyShadowCustodyProcess {
             .operation_deadline()
             .cleanup_deadline_boottime_nanos();
         let replay_id_sha256 = hash_domain_frames(
-            b"serverware.policyCustodyProductionSettlementReplay/v4",
+            b"catchplate.policyCustodyProductionSettlementReplay/v4",
             &[&canonical_json_bytes(&(
                 permit.operation_id_sha256(),
                 permit.termination_fence_sha256(),
@@ -1960,7 +1960,7 @@ impl RpcProductionPolicyShadowCustodyProcess {
         )?;
         let termination = wire.process_termination;
         if wire.api_version
-                != "serverware.policyCustodyProductionTerminalCleanupResult/v4"
+                != "catchplate.policyCustodyProductionTerminalCleanupResult/v4"
             || termination.operation_id_sha256
                 != *permit.operation_id_sha256()
             || termination.termination_fence_sha256
@@ -2700,11 +2700,11 @@ impl PolicyShadowCustodyProcessClient {
     ) -> Result<Self, CustodyProcessError> {
         let startup_deadline = startup_deadline_from_environment()?;
         let credential_name = env::var(
-            serverware_decision_gate::
+            catchplate_decision_gate::
                 POLICY_SHADOW_CUSTODY_ENDPOINT_CONFIG_CREDENTIAL_ENV,
         )
         .unwrap_or_else(|_| {
-            serverware_decision_gate::
+            catchplate_decision_gate::
                 POLICY_SHADOW_CUSTODY_DEFAULT_ENDPOINT_CONFIG_CREDENTIAL
                 .to_owned()
         });
@@ -3074,7 +3074,7 @@ pub(crate) fn run_policy_shadow_custody_server_from_env(
 fn startup_deadline_from_environment(
 ) -> Result<BoottimeDeadline, CustodyProcessError> {
     let raw = env::var(
-        serverware_decision_gate::
+        catchplate_decision_gate::
             POLICY_SHADOW_CUSTODY_STARTUP_DEADLINE_BOOTTIME_NANOS_ENV,
     )
     .map_err(|_| {

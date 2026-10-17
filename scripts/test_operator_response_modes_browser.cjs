@@ -25,7 +25,7 @@ async function usableCommand(page) {
   await view(page, 'proxy');
   await page.waitForFunction(() => !document.querySelector('#copy-command').disabled);
   const command = await page.locator('#client-command').innerText();
-  assert(command.includes('$SERVERWARE_PROXY_TOKEN') && command.includes('--cacert') && command.includes('/v1/status'));
+  assert(command.includes('$CATCHPLATE_PROXY_TOKEN') && command.includes('--cacert') && command.includes('/v1/status'));
   assert(!command.includes('--insecure') && !command.includes('--proxy-insecure'));
 }
 

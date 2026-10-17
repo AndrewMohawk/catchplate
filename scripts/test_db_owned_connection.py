@@ -73,10 +73,10 @@ class DbOwnedConnectionTests(unittest.TestCase):
         self.addCleanup(self.stack.close)
         for target in ("socket.socket", "socket.create_connection", "socket.getaddrinfo"):
             self.stack.enter_context(patch(target, side_effect=AssertionError("SQLite unit attempted network I/O")))
-        from serverware import config, crypto, db, operator_demo, operator_demo_store
+        from catchplate import config, crypto, db, operator_demo, operator_demo_store
         self.db, self.store, self.config = db, operator_demo_store, config
         self.operator_demo = operator_demo
-        directory = self.stack.enter_context(tempfile.TemporaryDirectory(prefix="serverware-owned-db-unit-"))
+        directory = self.stack.enter_context(tempfile.TemporaryDirectory(prefix="catchplate-owned-db-unit-"))
         self.path = Path(directory) / "synthetic.sqlite3"
         with closing(sqlite3.connect(self.path)) as conn, conn:
             conn.executescript(SCHEMA)

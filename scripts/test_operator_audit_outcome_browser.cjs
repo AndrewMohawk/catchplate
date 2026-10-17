@@ -18,10 +18,10 @@ const DENIED = 'data_plane.request.denied', APPROVAL = 'operator.host_approval.r
 let artifacts; let activeGroup = null;
 const item = (index, body, type = TYPE) => record(body, type, 'synthetic-audit-' + index);
 async function hashes() {
-  const assets = (await readdir(join(ROOT, 'serverware/operator_demo_web'))).filter(name => /\.(js|css|html)$/.test(name)).sort();
+  const assets = (await readdir(join(ROOT, 'catchplate/operator_demo_web'))).filter(name => /\.(js|css|html)$/.test(name)).sort();
   const paths = ['scripts/test_operator_audit_outcome_browser.cjs', 'scripts/test_operator_audit_outcome_ui.cjs',
-    'scripts/test_operator_catalog_browser.cjs', 'serverware/operator_demo_portal.py',
-    ...assets.map(name => 'serverware/operator_demo_web/' + name)];
+    'scripts/test_operator_catalog_browser.cjs', 'catchplate/operator_demo_portal.py',
+    ...assets.map(name => 'catchplate/operator_demo_web/' + name)];
   return Object.fromEntries(await Promise.all(paths.map(async name => [name,
     createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')])));
 }
@@ -169,7 +169,7 @@ const tests = [
 async function main() {
   assert.equal(process.argv.length, 2, 'synthetic fixture accepts no live targets');
   const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
-  artifacts = await mkdtemp(join(tmpdir(), 'serverware-audit-outcome-browser-'));
+  artifacts = await mkdtemp(join(tmpdir(), 'catchplate-audit-outcome-browser-'));
   console.log(JSON.stringify({artifactDirectory: artifacts}));
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
   const browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-background-networking',

@@ -45,7 +45,7 @@ when execution or terminal publication fails.
 
 The signed journal remains the retained root-owned protected ancestor chain and
 root:root mode-0700 directory, with its original exclusive nonblocking flock.
-The stable slot remains SHA-256 of `serverware.nativeWorkloadStartSlot/v1`, NUL,
+The stable slot remains SHA-256 of `catchplate.nativeWorkloadStartSlot/v1`, NUL,
 then big-endian-u32 length-framed signed journal namespace and capability ID.
 Neither an attempt nonce, fresh proof nor a changed operation creates a new
 attempt under the same slot. Exact names are `<64 lowercase hex>.claim`,
@@ -75,7 +75,7 @@ The existing `SWNESTR1` claim remains exactly 73 bytes. New outcome framing is:
 | Section 5 | Canonical selected initialized fields from the actual pidfd leader reap, at most 1024 bytes; not raw siginfo padding |
 | `.complete` | Exactly 192 bytes: `SWNEOCM1`; slot32, operation32, claim hash32, outcome hash32, raw-evidence hash32, outcome length BE64, recorded BOOTTIME BE64, original cleanup deadline BE64 |
 
-The raw-evidence hash uses `serverware.nativeTerminalOriginals/v1`, NUL, then
+The raw-evidence hash uses `catchplate.nativeTerminalOriginals/v1`, NUL, then
 BE32-length-framed sections 2–5. Section lengths are checked before allocation.
 The record parser joins all operation/claim/hash associations, exact closed
 observation fields, guardian flags/time, populated-zero original, actual reap
@@ -94,7 +94,7 @@ does not turn historical raw originals into current kernel state or permission.
 The same binary has one separate read-only entry point:
 
 ```text
-serverware-native-bootstrap-client --inspect-native-outcome \
+catchplate-native-bootstrap-client --inspect-native-outcome \
   --configuration /protected/native-outcome-lookup.json \
   --configuration-sha256 sha256:<independently pinned configuration hash>
 ```
@@ -104,7 +104,7 @@ running workload. Its independently pinned, root-owned owner-only single-link
 configuration is canonical ASCII JSON without LF, at most 8192 bytes:
 
 ```json
-{"apiVersion":"serverware.nativeExecutionOutcomeLookup/v1","capabilityId":"<signed start capability ID>","expectedOperationSha256":"sha256:<expected operation>","journal":{"device":1,"inode":1,"namespace":"<signed journal namespace>","path":"/protected/start-journal"}}
+{"apiVersion":"catchplate.nativeExecutionOutcomeLookup/v1","capabilityId":"<signed start capability ID>","expectedOperationSha256":"sha256:<expected operation>","journal":{"device":1,"inode":1,"namespace":"<signed journal namespace>","path":"/protected/start-journal"}}
 ```
 
 The identities and digest in that illustration are placeholders, not permission

@@ -1,8 +1,8 @@
 # Local workload identity preparation and admission
 
 N04 is **in progress**, not source-landed or production-verified. The local
-[provisioning module](../serverware_agent_trust/workload_identity_provisioning.py)
-and [enrollment CLI](../serverware_agent_trust/enrollment.py) prepare a
+[provisioning module](../catchplate_agent_trust/workload_identity_provisioning.py)
+and [enrollment CLI](../catchplate_agent_trust/enrollment.py) prepare a
 packet-bound key/CSR/request and admit an independently issued certificate.
 They do not contact an issuer, create a CA, install system trust or authenticate
 a proxy channel. No execution or deployed identity is claimed here.
@@ -32,7 +32,7 @@ expected_principal=..., expected_nonce=..., selected_sans={"dnsNames": [...],
 The existing output directory must be owned by the current user and mode 0700.
 Preparation publishes a sticky `preparation.claim` before generating the key,
 then `private-key.pem`, standard `request.pem` CSR and signed `request.json`.
-The request uses `serverware.signedWorkloadIdentityRequest/v1`; its same-key,
+The request uses `catchplate.signedWorkloadIdentityRequest/v1`; its same-key,
 domain-separated signature binds the original packet, issuer, principal/nonce,
 selected SANs, CSR and public key. It proves possession, not issuance authority.
 There is no custom CSR OID carrying a replacement authorization.
@@ -63,7 +63,7 @@ still need an external watchdog; these source bounds are not an RSS guarantee.
 
 ## Explicit CLI modes
 
-The existing `serverware-enrollment` entry point adds two mutually exclusive
+The existing `catchplate-enrollment` entry point adds two mutually exclusive
 local modes; neither falls through into ordinary enrollment networking:
 
 - `--prepare-workload-identity`, with repeatable `--workload-san-dns` and

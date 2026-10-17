@@ -6,12 +6,12 @@ import hashlib
 from pathlib import Path
 import unittest
 
-from serverware import authority_contract as authority
-from serverware import authority_jit_assertion_receipt as receipt
+from catchplate import authority_contract as authority
+from catchplate import authority_jit_assertion_receipt as receipt
 
 
 OPERATION = "jit.assertion.issue"
-HANDLER = "serverware_policy_authority_jit_assertion_issue"
+HANDLER = "catchplate_policy_authority_jit_assertion_issue"
 
 
 class JitHandlerClassificationControls(unittest.TestCase):

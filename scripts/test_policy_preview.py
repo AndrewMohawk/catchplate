@@ -24,15 +24,15 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-os.environ["SERVERWARE_RELEASE_CHANNEL"] = "test"
-os.environ["SERVERWARE_DATA_DIR"] = "/tmp/unused-policy-preview"
+os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "test"
+os.environ["CATCHPLATE_DATA_DIR"] = "/tmp/unused-policy-preview"
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from serverware import policy_bundle as policy
+from catchplate import policy_bundle as policy
 
-SOURCE = (ROOT / "serverware/app.py").read_text()
+SOURCE = (ROOT / "catchplate/app.py").read_text()
 TREE = ast.parse(SOURCE)
 NODES = {node.name: node for node in TREE.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))}
 UI = next(ast.literal_eval(node.value) for node in TREE.body if isinstance(node, ast.Assign)
@@ -105,7 +105,7 @@ class PolicyPreviewControls(unittest.TestCase):
         before = copy.deepcopy(self.bundle)
         report = self.report()
         self.assertEqual(self.bundle, before)
-        self.assertEqual(report["apiVersion"], "serverware.policyPreview/v1")
+        self.assertEqual(report["apiVersion"], "catchplate.policyPreview/v1")
         self.assertTrue(report["previewOnly"] and report["dryRun"]["passed"])
         for name in ("signatureVerified", "activated", "publicationReady"):
             self.assertIs(report[name], False)
@@ -170,7 +170,7 @@ const nodes=new Map();
 function $(id){if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',disabled:false,focus(){}});return nodes.get(id);}
 let state, csrfToken=null, oidcSessionStatusUnknown=false, policyPreviewGeneration=0;
 let calls=[], csrfHook=null, requestId=0;
-const pkg={apiVersion:'serverware.policyAuthorityPortalPackage/v1',handoff:Object.fromEntries(
+const pkg={apiVersion:'catchplate.policyAuthorityPortalPackage/v1',handoff:Object.fromEntries(
  ['candidateId','artifactEnvelopeDigest','canaryId','assignmentEnvelopeDigest','loadReceiptEnvelopeDigest',
   'instanceId','bootId','runtimeAttestationHandoffDigest','predecessorPolicyHash'].map(name=>[name,'synthetic-'+name]))};
 function reset(){nodes.clear();calls=[];csrfToken=null;csrfHook=null;oidcSessionStatusUnknown=false;

@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-aware-release-authorization-preparation.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/policy-aware-release-authorization-preparation.v1.schema.json",
   "title": "Policy-aware ordinary release authorization preparation v1",
   "description": "Read-only preparation body authenticated by the unchanged responseSignature/v3 contract. An independently selected ordinary PolicyAware profile verifies the actual response, original request scope and deadline; this schema is not authority and does not imply native custody. approverPolicySha256 hashes compact sorted ensure_ascii=True JSON of approverPolicy, including null and escaped DEL. Null is permitted only for the actual non-JIT route. No new time allowance.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "principalId", "routeId", "policyHash", "requestDigest", "operationDigest", "approverPolicy", "approverPolicySha256"],
   "properties": {
-    "apiVersion": {"const": "serverware.policyAwareReleaseAuthorizationPreparation/v1"},
+    "apiVersion": {"const": "catchplate.policyAwareReleaseAuthorizationPreparation/v1"},
     "principalId": {"$ref": "#/$defs/identity"},
     "routeId": {"$ref": "#/$defs/identity"},
     "policyHash": {"$ref": "#/$defs/sha256"},

@@ -46,7 +46,7 @@ def isolated_transparency_env() -> dict[str, str]:
         name: value
         for name, value in os.environ.items()
         if not name.startswith(
-            ("SERVERWARE_TRANSPARENCY_", "SERVERWARE_EXTERNAL_TRANSPARENCY_")
+            ("CATCHPLATE_TRANSPARENCY_", "CATCHPLATE_EXTERNAL_TRANSPARENCY_")
         )
     }
 
@@ -66,13 +66,13 @@ def public_key_info() -> dict[str, str]:
 
 def checkpoint_payload() -> dict[str, Any]:
     signed_tree_head = {
-        "version": "serverware.signedTreeHead/v1",
+        "version": "catchplate.signedTreeHead/v1",
         "tree_size": 3,
         "tree_head_hash": "sha256:" + "a" * 64,
         "signature": "ed25519:test",
     }
     return {
-        "version": "serverware.transparencyCheckpoint/v1",
+        "version": "catchplate.transparencyCheckpoint/v1",
         "mode": "signed-merkle-transparency-log",
         "sequence": 3,
         "record_digest": "sha256:" + "b" * 64,
@@ -86,9 +86,9 @@ def checkpoint_payload() -> dict[str, Any]:
 
 def publication_request(payload: dict[str, Any]) -> dict[str, Any]:
     body = {
-        "apiVersion": "serverware.externalTransparencyCheckpointRequest/v1",
-        "kind": "serverware-signed-tree-head-checkpoint",
-        "canonicalization": "serverware.canonical-json.v1",
+        "apiVersion": "catchplate.externalTransparencyCheckpointRequest/v1",
+        "kind": "catchplate-signed-tree-head-checkpoint",
+        "canonicalization": "catchplate.canonical-json.v1",
         "checkpoint_digest": sha256_prefixed_json(payload),
         "checkpoint": payload,
         "receipt_requirements": {
@@ -143,7 +143,7 @@ def sign_receipt(payload: dict[str, Any]) -> str:
 
 
 class ManagedLogHandler(BaseHTTPRequestHandler):
-    server_version = "ServerwareManagedLogFixture/1"
+    server_version = "CatchplateManagedLogFixture/1"
 
     def log_message(self, format: str, *args: Any) -> None:
         return
@@ -184,7 +184,7 @@ class ManagedLogHandler(BaseHTTPRequestHandler):
             "log_id": info["log_id"],
         }
         receipt_payload = {
-            "version": "serverware.externalTransparencyReceipt/v1",
+            "version": "catchplate.externalTransparencyReceipt/v1",
             "provider": response["provider"],
             "log_id": response["log_id"],
             "external_sequence": response["external_sequence"],
@@ -261,10 +261,10 @@ def main() -> None:
         fixture_env = isolated_transparency_env()
         fixture_env.update(
             {
-                "SERVERWARE_TRANSPARENCY_CHECKPOINT_MODE": "fixture",
-                "SERVERWARE_EXTERNAL_TRANSPARENCY_LOG_PATH": str(Path(tmp) / "managed-log.jsonl"),
-                "SERVERWARE_EXTERNAL_TRANSPARENCY_LOG_KEY": str(Path(tmp) / "managed-log-key.pem"),
-                "SERVERWARE_EXTERNAL_TRANSPARENCY_PROVIDER": "managed-fixture-test",
+                "CATCHPLATE_TRANSPARENCY_CHECKPOINT_MODE": "fixture",
+                "CATCHPLATE_EXTERNAL_TRANSPARENCY_LOG_PATH": str(Path(tmp) / "managed-log.jsonl"),
+                "CATCHPLATE_EXTERNAL_TRANSPARENCY_LOG_KEY": str(Path(tmp) / "managed-log-key.pem"),
+                "CATCHPLATE_EXTERNAL_TRANSPARENCY_PROVIDER": "managed-fixture-test",
             }
         )
         fixture = run_adapter(payload, fixture_env)
@@ -286,7 +286,7 @@ def main() -> None:
         sequences = sorted(int(item["external_sequence"]) for item in concurrent)
         if sequences != list(range(3, 15)):
             raise AssertionError(f"fixture concurrent sequences were not atomic: {sequences}")
-        fixture_log = Path(fixture_env["SERVERWARE_EXTERNAL_TRANSPARENCY_LOG_PATH"])
+        fixture_log = Path(fixture_env["CATCHPLATE_EXTERNAL_TRANSPARENCY_LOG_PATH"])
         fixture_log_contents = fixture_log.read_bytes()
         fixture_lines = fixture_log_contents.splitlines(keepends=True)
         if len(fixture_lines) != 14:
@@ -325,18 +325,18 @@ def main() -> None:
         http_env = isolated_transparency_env()
         http_env.update(
             {
-                "SERVERWARE_TRANSPARENCY_CHECKPOINT_MODE": "http",
-                "SERVERWARE_TRANSPARENCY_LOG_URL": f"{base}/publish",
-                "SERVERWARE_TRANSPARENCY_ALLOW_INSECURE_HTTP": "1",
-                "SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER": "managed-http-fixture",
-                "SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID": public_key_info()["log_id"],
+                "CATCHPLATE_TRANSPARENCY_CHECKPOINT_MODE": "http",
+                "CATCHPLATE_TRANSPARENCY_LOG_URL": f"{base}/publish",
+                "CATCHPLATE_TRANSPARENCY_ALLOW_INSECURE_HTTP": "1",
+                "CATCHPLATE_TRANSPARENCY_EXPECTED_PROVIDER": "managed-http-fixture",
+                "CATCHPLATE_TRANSPARENCY_EXPECTED_LOG_ID": public_key_info()["log_id"],
             }
         )
         http_response = run_adapter(payload, http_env)
         if http_response.get("external_sequence") != 42:
             raise AssertionError(f"HTTP managed log sequence mismatch: {http_response}")
         alias_env = dict(http_env)
-        alias_env["SERVERWARE_TRANSPARENCY_LOG_URL"] = f"{base}/sequence-alias"
+        alias_env["CATCHPLATE_TRANSPARENCY_LOG_URL"] = f"{base}/sequence-alias"
         aliased = run_adapter(payload, alias_env)
         if aliased.get("external_sequence") != 42 or "checkpoint_id" in aliased:
             raise AssertionError("transport sequence alias was not normalized to the signed integer")
@@ -348,7 +348,7 @@ def main() -> None:
             ("sequence-stale-signature", "receipt signature did not verify"),
         ):
             sequence_env = dict(http_env)
-            sequence_env["SERVERWARE_TRANSPARENCY_LOG_URL"] = f"{base}/{endpoint}"
+            sequence_env["CATCHPLATE_TRANSPARENCY_LOG_URL"] = f"{base}/{endpoint}"
             expect_failure(payload, sequence_env, expected)
         verify_input = {"checkpoint": payload, "response": http_response}
         verify_result = subprocess.run(
@@ -364,27 +364,27 @@ def main() -> None:
             raise AssertionError(f"verify command failed: {verify_result.stderr.decode('utf-8', errors='replace')}")
 
         tls_env = dict(http_env)
-        tls_env.pop("SERVERWARE_TRANSPARENCY_ALLOW_INSECURE_HTTP", None)
+        tls_env.pop("CATCHPLATE_TRANSPARENCY_ALLOW_INSECURE_HTTP", None)
         expect_failure(payload, tls_env, "must use https")
 
         mismatch_env = dict(http_env)
-        mismatch_env["SERVERWARE_TRANSPARENCY_LOG_URL"] = f"{base}/mismatch"
+        mismatch_env["CATCHPLATE_TRANSPARENCY_LOG_URL"] = f"{base}/mismatch"
         expect_failure(payload, mismatch_env, "digest does not match")
 
         missing_receipt_env = dict(http_env)
-        missing_receipt_env["SERVERWARE_TRANSPARENCY_LOG_URL"] = f"{base}/missing-receipt"
+        missing_receipt_env["CATCHPLATE_TRANSPARENCY_LOG_URL"] = f"{base}/missing-receipt"
         expect_failure(payload, missing_receipt_env, "missing receipt")
 
         oversized_content_length_env = dict(http_env)
-        oversized_content_length_env["SERVERWARE_TRANSPARENCY_LOG_URL"] = f"{base}/oversized-content-length"
+        oversized_content_length_env["CATCHPLATE_TRANSPARENCY_LOG_URL"] = f"{base}/oversized-content-length"
         expect_failure(payload, oversized_content_length_env, "response exceeds 1 MiB")
 
         oversized_stream_env = dict(http_env)
-        oversized_stream_env["SERVERWARE_TRANSPARENCY_LOG_URL"] = f"{base}/oversized-stream"
+        oversized_stream_env["CATCHPLATE_TRANSPARENCY_LOG_URL"] = f"{base}/oversized-stream"
         expect_failure(payload, oversized_stream_env, "response exceeds 1 MiB")
 
         deny_env = dict(http_env)
-        deny_env["SERVERWARE_TRANSPARENCY_LOG_URL"] = f"{base}/deny"
+        deny_env["CATCHPLATE_TRANSPARENCY_LOG_URL"] = f"{base}/deny"
         expect_failure(payload, deny_env, "HTTP 403")
     finally:
         server.shutdown()

@@ -1,5 +1,5 @@
 {
-  "schema": "serverware.orderedFormQueryVectors/v1",
+  "schema": "catchplate.orderedFormQueryVectors/v1",
   "mode": "orderedFormV1",
   "adapter": "gmail.read.v1",
   "limits": {"raw_bytes": 8192, "segments": 64, "pairs": 64, "repeated_values": 32},

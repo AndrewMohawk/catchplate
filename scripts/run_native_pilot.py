@@ -16,7 +16,7 @@ def _result(status, phase, interactive_result=None):
     # Bounded nonblocking best-effort status; diagnostics must never prevent
     # cleanup or dump original contents, paths, keys or exception tracebacks.
     import json
-    value = {"apiVersion": "serverware.nativePilotOperatorResult/v1",
+    value = {"apiVersion": "catchplate.nativePilotOperatorResult/v1",
         "status": status, "phase": phase, "pilotAcceptanceVerified": False,
         "productionReleaseEligible": False}
     if status == "stopped-cleanup-complete" and interactive_result is not None:
@@ -38,8 +38,8 @@ def main():
     # Use only the sibling installed/checked-out package, never a path supplied
     # over the operator pipe. The installation must be protected by its operator.
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
-    from serverware.native_pilot_adopted_intake import AdoptedIntake, IntakeError, invocation
-    from serverware.native_pilot_genesis_parent_control_io import owning
+    from catchplate.native_pilot_adopted_intake import AdoptedIntake, IntakeError, invocation
+    from catchplate.native_pilot_genesis_parent_control_io import owning
     try:
         selected = invocation(sys.argv[1:])
     except (ValueError, TypeError):
@@ -53,7 +53,7 @@ def main():
         # Install both handlers before unblocking, and claim no live resources
         # until pending termination has had a chance to run the normal cleanup.
         signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM, signal.SIGINT})
-        from serverware.native_pilot_operator import Operator
+        from catchplate.native_pilot_operator import Operator
         core = None
         if selected is not None:
             with owning():

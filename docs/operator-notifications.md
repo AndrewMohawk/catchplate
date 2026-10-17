@@ -33,12 +33,12 @@ destination settings, notification-only encrypted custody, a persistent outbox,
 safe audit projections, Slack/generic HTTPS transport, administrator API routes
 and a Notifications panel. A separately admitted, read-only native observation
 bridge is implemented in source. The feature remains default-off for new
-deployments; the running Serverware instance enables it with all destinations unconfigured.
+deployments; the running Catchplate instance enables it with all destinations unconfigured.
 The October 10 paired app/gate rollout verified the deployed read-only UI and
 preserved retained data and empty app-only custody. Outbound DNS/TLS was verified
 at the earlier notification-enabled rollout checkpoint, without sending HTTP.
 No real receiver or native hardware source is configured.
-See the [live checkpoint and verification limits](../docker/serverware-operator-demo/README.md#current-npm-capable-managed-deployment).
+See the [live checkpoint and verification limits](../docker/catchplate-operator-demo/README.md#current-npm-capable-managed-deployment).
 
 The mental model is simple: **action alerts mean "someone needs to do something";
 audit alerts mean "this happened."** Configure either, both or neither. An action
@@ -46,7 +46,7 @@ alert can ask the operator to prepare, use a YubiKey/security key, or confirm a
 native pilot action. It cannot perform, approve, start or extend that action.
 An audit copy remains historical information even after the action has changed.
 
-This feature sends Serverware's own notifications. It is separate from an
+This feature sends Catchplate's own notifications. It is separate from an
 application calling Slack or another webhook through the credential proxy.
 
 ## Two channels, four independent destinations
@@ -88,7 +88,7 @@ admission, not a public webhook relay.
 
 ## What messages mean
 
-Audit notifications use `schema: "serverware.operatorNotification/v1"` and
+Audit notifications use `schema: "catchplate.operatorNotification/v1"` and
 contain a source event ID/hash/type/time, a fixed summary, an approved `details`
 projection, and a review locator. Arbitrary event objects, request/response
 bodies, credentials, destination URLs and challenge material are never copied
@@ -238,28 +238,28 @@ they are not settings that a message or browser request can override:
 
 ```dotenv
 # Documentation example only; leave disabled until separately reviewed rollout.
-SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED=0
-SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR=/var/lib/serverware-notification-custody
-SERVERWARE_OPERATOR_NOTIFICATIONS_PRIVATE_DESTINATIONS_JSON='{"bindings":[]}'
+CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED=0
+CATCHPLATE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR=/var/lib/catchplate-notification-custody
+CATCHPLATE_OPERATOR_NOTIFICATIONS_PRIVATE_DESTINATIONS_JSON='{"bindings":[]}'
 # Optional native source remains unset until separate owner/socket admission:
-# SERVERWARE_OPERATOR_NOTIFICATIONS_PILOT_SOURCE_JSON=...
+# CATCHPLATE_OPERATOR_NOTIFICATIONS_PILOT_SOURCE_JSON=...
 ```
 
 The custody directory must already exist, be owned by the application's effective
 UID with mode 0700, and be outside—not an ancestor or descendant of—the ordinary
-Serverware data directory. A deployment must mount it **only into the application**,
+Catchplate data directory. A deployment must mount it **only into the application**,
 not the decision gate or other data-plane containers. Path admission is not proof
 of container isolation; actual mount inspection is required before rollout.
 No Compose configuration or running deployment is enabled by this document.
 
-Optional `SERVERWARE_OPERATOR_NOTIFICATIONS_PILOT_SOURCE_JSON` is also cold
+Optional `CATCHPLATE_OPERATOR_NOTIFICATIONS_PILOT_SOURCE_JSON` is also cold
 configuration, limited to 4096 bytes. Its exact fields are `schema`
-(`serverware.operatorPilotNotificationSource/v1`), `socketPath`, `relayUid`
+(`catchplate.operatorPilotNotificationSource/v1`), `socketPath`, `relayUid`
 (1000), `selectionSha256`, `attemptSha256` and `nativeOrigin`
-(`https://serverware.example.com`). The digests must identify a separately
+(`https://catchplate.example.com`). The digests must identify a separately
 admitted real selection; they are not generated from browser input. The host
 relay's fixed socket is
-`/run/user/1000/serverware-notification-observer/observation.sock`. A future
+`/run/user/1000/catchplate-notification-observer/observation.sock`. A future
 deployment must expose only its dedicated directory read-only to the app, with
 parent UID 1000:GID 10001 mode 0750 and socket mode 0660. It must not expose the
 ordinary backend socket, ceremony state or the rest of the host runtime
@@ -357,7 +357,7 @@ path delivered four explicit slot tests and two audit copies to an isolated,
 verified TLS receiver.
 
 Evidence is retained in
-`serverware-operator-workspace-evidence/notification-separation.F2CQhOed`,
+`catchplate-operator-workspace-evidence/notification-separation.F2CQhOed`,
 including the exact Python source manifest, command, test log and successful
 container termination. The container had no external network. This focused
 repeat does not re-establish browser acceptance or prove a live YubiKey event,
@@ -385,7 +385,7 @@ configuration checkpoint is documented in
 [operator-owned provider configuration](operator-provider-configuration.md).
 
 Evidence is retained under
-`serverware-operator-workspace-evidence/notification-setup-events.HhSqenQS`,
+`catchplate-operator-workspace-evidence/notification-setup-events.HhSqenQS`,
 including the exact source archive/manifest, bounded network-none command, test
 log, successful termination and removal receipt. That isolated correction run
 changed no real receiver, live destination setting, native source or deployment.
@@ -418,7 +418,7 @@ or native action. It does not establish external SSO, proxy traffic or receiver
 delivery.
 
 The private-copy preservation receipt is
-`serverware-operator-workspace-evidence/managed-rollout.wB0mAsgW/first-live-preservation.json`.
+`catchplate-operator-workspace-evidence/managed-rollout.wB0mAsgW/first-live-preservation.json`.
 It confirms equal complete schemas (**1,335 objects**, including SQLite internal
 objects), **210 unchanged non-audit tables**, eight retained credentials,
 applications and rules, **108 nonces**, and the unchanged **204-row audit prefix**.
@@ -435,7 +435,7 @@ The superseded destination-setup rollout used app source
 `2bfe5e384d7e9c655de70704c25350c16336c55a2584fc59f363f12164f297d6`.
 Its **13-GET**, five-screenshot receipt remains at
 `/tmp/serverware-destinations-runtime-arih/receipt.json`, with preservation
-evidence under `serverware-operator-workspace-evidence/destinations-rollout.ArihVAhH/`.
+evidence under `catchplate-operator-workspace-evidence/destinations-rollout.ArihVAhH/`.
 That earlier rollout and the isolated fixture results below remain distinct
 historical checkpoints, not tests repeated by the latest browser run.
 
@@ -446,7 +446,7 @@ The retained native-aware source-event checkpoint completed **21/21** checks in
 **95.952 seconds**, as verified by the root runner.
 
 Native fixture evidence is retained under
-`serverware-operator-workspace-evidence/notification-native.vDixx1QB/`:
+`catchplate-operator-workspace-evidence/notification-native.vDixx1QB/`:
 
 - `pilot-source-client-tests.log`: **17/17** in **0.899 seconds**.
 - `native-crossuid-final-tests.log`: **2/2** in **16.838 seconds**. A synthetic
@@ -455,7 +455,7 @@ Native fixture evidence is retained under
   delivery and post-TLS phase-change suppression are checked independently.
 - `rendered-notifications.log`: **15/15** intercepted browser groups against
   that checkpoint's UI; screenshots are in
-  `serverware-operator-artifacts/notifications-browser-synthetic-wDkWee/`.
+  `catchplate-operator-artifacts/notifications-browser-synthetic-wDkWee/`.
 - `assets-tests.log`: **10/10** in **0.080 seconds**. The separate native UI
   checks also pass **11/11**.
 
@@ -490,14 +490,14 @@ fixture also needed container-only KILL capability to reap its child relay.
 The earlier results below remain distinct historical checkpoints.
 
 The earlier connected store suite completed **10/10** checks in **71.273 seconds**:
-`serverware-operator-workspace-evidence/notification-store.TJK3m8ly/final-tests.log`.
+`catchplate-operator-workspace-evidence/notification-store.TJK3m8ly/final-tests.log`.
 The verified store SHA-256 is
 `74a68c46dac401d738758fd40bc3e364fd18a5aebcdf6f016f69d8c5412d0931`;
 custody SHA-256 is
 `e205d27f127429192fbd1d2274ad7ea0d4adfc924882857d0d975372c318b9b5`.
 
 The earlier integration suite completed **5/5** groups in **42.736 seconds**:
-`serverware-operator-workspace-evidence/notification-integration-final.eFVUpZEx/tests.log`.
+`catchplate-operator-workspace-evidence/notification-integration-final.eFVUpZEx/tests.log`.
 At the native-aware checkpoint, the worker also passed those **5/5** groups in
 **43.665 seconds**; see `notification-native.vDixx1QB/api-integration-tests.log`
 under the same external evidence root. Its network-none container exited 0
@@ -513,7 +513,7 @@ failures were retained; their harness corrections did not change production code
 Rendered-browser regression passed **15 Notifications**, **21 Catalog** and
 **29 Connect** groups, with **10 asset checks**. These browser requests were
 intercepted synthetic fixtures, separate from the connected API/TLS test above.
-Screenshots are retained under `serverware-operator-artifacts/` in
+Screenshots are retained under `catchplate-operator-artifacts/` in
 `notifications-browser-synthetic-bVjTVO`, `catalog-browser-synthetic-w1eXlP` and
 `connect-browser-synthetic-WmsxIj`. They prove rendered controls, recovery and
 presentation behavior—not a browser connected to the running service.
@@ -530,7 +530,7 @@ physical-key/native acceptance.
 The transport checkpoint ran in a root-owned, network-isolated container and
 exited 0 without OOM in 1.098 seconds. Retained logs, container inspection and
 source receipts are under the external evidence directory
-`serverware-operator-workspace-evidence/notification-transport-final.U4WPDbfn`.
+`catchplate-operator-workspace-evidence/notification-transport-final.U4WPDbfn`.
 Its frozen production SHA-256 is
 `716dd563d32b254eaadd7820da4a5556c35c2da9e446dbb2ab69aa3cd22a2a49`;
 the transport-test SHA-256 is

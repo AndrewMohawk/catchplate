@@ -1,5 +1,5 @@
 {
-  "apiVersion": "serverware.discardHeadersParity/v2",
+  "apiVersion": "catchplate.discardHeadersParity/v2",
   "legacyV1": {
     "canonicalRequest": {
       "v": 1,
@@ -64,7 +64,7 @@
     "canonicalJson": "{\"client_ip\":\"192.0.2.44\",\"credential_ref\":\"credential:npm-parity\",\"credential_version\":\"7\",\"operation\":{\"operation\":\"npm.publish\",\"packageName\":\"package\",\"packageVersion\":\"1.2.3\"},\"policy_hash\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"principal\":\"agent:parity\",\"request\":{\"authority\":\"registry.npmjs.org\",\"body_sha256\":\"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"discard_headers\":[\"npm-session\"],\"headers\":{\"content-length\":\"0\",\"content-type\":\"application/json\",\"host\":\"registry.npmjs.org\",\"npm-command\":\"publish\",\"user-agent\":\"npm/10.8.2 node/v22.5.1\"},\"method\":\"PUT\",\"path\":\"/package\",\"query\":[],\"scheme\":\"https\"},\"route_id\":\"route:npm-parity\",\"v\":2}",
     "operationJson": "{\"credential_ref\":\"credential:npm-parity\",\"credential_version\":\"7\",\"operation\":{\"operation\":\"npm.publish\",\"packageName\":\"package\",\"packageVersion\":\"1.2.3\"},\"policy_hash\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"principal\":\"agent:parity\",\"request\":{\"authority\":\"registry.npmjs.org\",\"body_sha256\":\"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"discard_headers\":[\"npm-session\"],\"headers\":{\"content-length\":\"0\",\"content-type\":\"application/json\",\"host\":\"registry.npmjs.org\",\"npm-command\":\"publish\",\"user-agent\":\"npm/10.8.2 node/v22.5.1\"},\"method\":\"PUT\",\"path\":\"/package\",\"query\":[],\"scheme\":\"https\"},\"route_id\":\"route:npm-parity\"}",
     "discardedEvidence": {
-      "schema": "serverware.discardedRequestHeaders/v1",
+      "schema": "catchplate.discardedRequestHeaders/v1",
       "declared_names": [
         "npm-session"
       ],

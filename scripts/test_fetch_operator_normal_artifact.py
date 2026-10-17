@@ -24,14 +24,14 @@ class ArtifactControls(unittest.TestCase):
             "head_repository":{"full_name":fetch.REPOSITORY}}
 
     def artifact(self):
-        return {"id":456, "name":"serverware-normal-proxy-"+"b"*64, "expired":False,
+        return {"id":456, "name":"catchplate-normal-proxy-"+"b"*64, "expired":False,
             "size_in_bytes":100, "digest":"sha256:"+"c"*64,
             "workflow_run":{"id":123, "head_sha":"a"*40, "head_branch":"main"}}
 
     def archive(self, names=None, *, symlink=False):
         stream = io.BytesIO()
         with zipfile.ZipFile(stream, "w") as archive:
-            for name in names or ("normal.json", "serverware-decision-gate"):
+            for name in names or ("normal.json", "catchplate-decision-gate"):
                 row = zipfile.ZipInfo(name)
                 row.external_attr = ((stat.S_IFLNK if symlink else stat.S_IFREG) | 0o555) << 16
                 archive.writestr(row, b"payload")
@@ -45,7 +45,7 @@ class ArtifactControls(unittest.TestCase):
             "source":fetch.LOCAL_SOURCE, "run_id":"123"}
 
     def local_output(self):
-        return fetch.LOCAL_OUTPUT_ROOT / "serverware-normal-artifact.Abc12345" / "serverware-normal-proxy"
+        return fetch.LOCAL_OUTPUT_ROOT / "catchplate-normal-artifact.Abc12345" / "catchplate-normal-proxy"
 
     def test_explicit_local_flag_never_changes_hosted_default(self):
         arguments = ["--run-id", "123", "--output", str(self.local_output())]
@@ -59,24 +59,24 @@ class ArtifactControls(unittest.TestCase):
 
     def test_local_mode_refuses_hosted_spoof_other_checkout_and_privilege(self):
         for changes in ({"environment":{"GITHUB_ACTIONS":"true", "GITHUB_REPOSITORY":fetch.REPOSITORY}},
-                {"environment":{"GITHUB_ACTIONS":"false"}}, {"source":Path("/other/serverware")},
+                {"environment":{"GITHUB_ACTIONS":"false"}}, {"source":Path("/other/catchplate")},
                 {"platform":"darwin"}, {"uid":0, "euid":0}, {"euid":0},
                 {"run_id":"0123"}, {"run_id":"123/attempts/2"}, {"local_operator":"true"}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 fetch.validate_invocation(**{**self.invocation(local_operator=True), **changes})
-        for environment in ({}, {"GITHUB_ACTIONS":"true", "GITHUB_REPOSITORY":"fork/serverware"},
+        for environment in ({}, {"GITHUB_ACTIONS":"true", "GITHUB_REPOSITORY":"fork/catchplate"},
                 {"GITHUB_ACTIONS":"false", "GITHUB_REPOSITORY":fetch.REPOSITORY}):
             with self.subTest(environment=environment), self.assertRaises(ValueError):
                 fetch.validate_invocation(**{**self.invocation(), "environment":environment})
 
     def test_local_output_has_one_fixed_private_job_shape(self):
         fetch.validate_local_output_shape(self.local_output())
-        for output in (Path("serverware-normal-proxy"), fetch.LOCAL_OUTPUT_ROOT / "serverware-normal-proxy",
+        for output in (Path("catchplate-normal-proxy"), fetch.LOCAL_OUTPUT_ROOT / "catchplate-normal-proxy",
                 self.local_output().with_name("arbitrary"),
-                Path("/tmp/serverware-normal-artifact.Abc12345/serverware-normal-proxy"),
-                fetch.LOCAL_OUTPUT_ROOT / "other.Abc12345" / "serverware-normal-proxy",
-                fetch.LOCAL_OUTPUT_ROOT / "serverware-normal-artifact.short" / "serverware-normal-proxy",
-                fetch.LOCAL_OUTPUT_ROOT / ("serverware-normal-artifact." + "a" * 33) / "serverware-normal-proxy"):
+                Path("/tmp/catchplate-normal-artifact.Abc12345/catchplate-normal-proxy"),
+                fetch.LOCAL_OUTPUT_ROOT / "other.Abc12345" / "catchplate-normal-proxy",
+                fetch.LOCAL_OUTPUT_ROOT / "catchplate-normal-artifact.short" / "catchplate-normal-proxy",
+                fetch.LOCAL_OUTPUT_ROOT / ("catchplate-normal-artifact." + "a" * 33) / "catchplate-normal-proxy"):
             with self.subTest(output=output), self.assertRaises(ValueError):
                 fetch.validate_local_output_shape(output)
 
@@ -114,11 +114,11 @@ class ArtifactControls(unittest.TestCase):
 
     def test_local_checkout_is_committed_clean_main_and_exact_origin(self):
         values = ("a" * 40, b"refs/heads/main\n",
-            b"https://github.com/AndrewMohawk/serverware.git\n", b"")
+            b"https://github.com/AndrewMohawk/catchplate.git\n", b"")
         fetch.validate_local_checkout(*values)
         for index, value in ((0,"not-a-commit"), (1,b"HEAD\n"), (1,b"refs/heads/other\n"),
-                (2,b"https://github.com/fork/serverware.git\n"),
-                (2,b"https://github.com/AndrewMohawk/serverware.git/\n"),
+                (2,b"https://github.com/fork/catchplate.git\n"),
+                (2,b"https://github.com/AndrewMohawk/catchplate.git/\n"),
                 (3,b" M scripts/fetch_operator_normal_artifact.py\n"), (3,b"?? new-file\n")):
             changed = list(values); changed[index] = value
             with self.subTest(index=index, value=value), self.assertRaises(ValueError):
@@ -191,7 +191,7 @@ class ArtifactControls(unittest.TestCase):
         for key, value in (("id",124), ("event","pull_request"), ("status","in_progress"),
                 ("conclusion","failure"), ("path","other.yml"), ("head_branch","other"),
                 ("head_sha","unknown"), ("run_attempt",False),
-                ("head_repository",{"full_name":"fork/serverware"})):
+                ("head_repository",{"full_name":"fork/catchplate"})):
             record = self.run_record(); record[key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
                 fetch.validate_run(record, 123, ".github/workflows/native-review-rust.yml")
@@ -215,14 +215,14 @@ class ArtifactControls(unittest.TestCase):
     def test_archive_is_exactly_two_regular_files(self):
         raw, artifact = self.archive()
         self.assertEqual(fetch.archive_files(raw,artifact),
-            {"normal.json":b"payload", "serverware-decision-gate":b"payload"})
+            {"normal.json":b"payload", "catchplate-decision-gate":b"payload"})
 
     def test_archive_digest_names_and_symlinks_refused(self):
         raw, artifact = self.archive()
         with self.assertRaises(ValueError):
             fetch.archive_files(raw+b"changed",artifact)
-        for names in (("../normal.json","serverware-decision-gate"),
-                ("normal.json","serverware-decision-gate","secret.log"), ("normal.json",)):
+        for names in (("../normal.json","catchplate-decision-gate"),
+                ("normal.json","catchplate-decision-gate","secret.log"), ("normal.json",)):
             raw, artifact = self.archive(names)
             with self.subTest(names=names), self.assertRaises(ValueError):
                 fetch.archive_files(raw,artifact)
@@ -266,7 +266,7 @@ class ArtifactControls(unittest.TestCase):
         self.assertEqual(calls[0].get_header("Authorization"), "Bearer test-token")
         self.assertIsNone(calls[1].get_header("Authorization"))
         self.assertEqual([call.get_header("User-agent") for call in calls],
-            ["Serverware-local-normal-artifact/1"] * 2)
+            ["Catchplate-local-normal-artifact/1"] * 2)
 
     def test_untrusted_redirect_refused_before_second_request(self):
         for target in ("http://production.blob.core.windows.net/a", "https://evil.example/a",

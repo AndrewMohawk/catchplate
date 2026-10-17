@@ -19,19 +19,19 @@ impl Role {
         Self::Final => "setup-native-final-authority.json",
     } }
     pub(super) fn configuration_path(self) -> &'static str { match self {
-        Self::Hardware => "/etc/serverware/setup-native-hardware-verifier.json",
-        Self::Proxy => "/etc/serverware/setup-native-proxy-verifier.json",
-        Self::Final => "/etc/serverware/setup-native-final-authority.json",
+        Self::Hardware => "/etc/catchplate/setup-native-hardware-verifier.json",
+        Self::Proxy => "/etc/catchplate/setup-native-proxy-verifier.json",
+        Self::Final => "/etc/catchplate/setup-native-final-authority.json",
     } }
     pub(crate) fn image_path(self) -> &'static str { match self {
-        Self::Hardware => "/opt/serverware/setup-native-hardware-verifier-runtime.squashfs",
-        Self::Proxy => "/opt/serverware/setup-native-proxy-verifier-runtime.squashfs",
-        Self::Final => "/opt/serverware/setup-native-final-authority-runtime.squashfs",
+        Self::Hardware => "/opt/catchplate/setup-native-hardware-verifier-runtime.squashfs",
+        Self::Proxy => "/opt/catchplate/setup-native-proxy-verifier-runtime.squashfs",
+        Self::Final => "/opt/catchplate/setup-native-final-authority-runtime.squashfs",
     } }
     pub(super) fn entrypoint(self) -> &'static str { match self {
-        Self::Hardware => "/opt/serverware/scripts/verify_native_setup_hardware.py",
-        Self::Proxy => "/opt/serverware/scripts/verify_native_setup_proxy.py",
-        Self::Final => "/opt/serverware/scripts/issue_native_setup_final.py",
+        Self::Hardware => "/opt/catchplate/scripts/verify_native_setup_hardware.py",
+        Self::Proxy => "/opt/catchplate/scripts/verify_native_setup_proxy.py",
+        Self::Final => "/opt/catchplate/scripts/issue_native_setup_final.py",
     } }
     pub(super) fn image_purpose(self) -> Purpose { match self {
         Self::Hardware => Purpose::ExternalSetupHardware,
@@ -69,7 +69,7 @@ pub(super) fn open(role: Role) -> Result<RuntimeAdmission, String> {
     let launch = Original::open(role.launch_name(), 16384)?;
     let selected: SetupLaunch = serde_json::from_value(document(&launch.bytes, 16384)?)
         .map_err(|_| "Setup launch shape differs")?;
-    ensure(selected.api_version == "serverware.setupNativeIndependentIssuerLaunch/v1"
+    ensure(selected.api_version == "catchplate.setupNativeIndependentIssuerLaunch/v1"
         && selected.role == role.name() && selected.runtime_image.profile == "sealed-memfd-squashfs-v1"
         && selected.runtime_image.image_path == role.image_path(), "Setup launch purpose differs")?;
     for pin in [&selected.issuer_configuration_sha256, &selected.runtime_image.image_sha256,
@@ -81,7 +81,7 @@ pub(super) fn open(role: Role) -> Result<RuntimeAdmission, String> {
     let expected = ["apiVersion", "role", "uid", "gid", "operation", "authorityRootPublicKeyPem",
         "authorityConfigurationOriginal", "authorityConfigurationSha256", "controlPlaneConfigurationDigest"];
     ensure(fields.len() == expected.len() && expected.iter().all(|key| fields.contains_key(*key))
-        && value["apiVersion"] == "serverware.setupNativeIndependentVerifierConfiguration/v1"
+        && value["apiVersion"] == "catchplate.setupNativeIndependentVerifierConfiguration/v1"
         && value["role"] == role.name(), "Setup configuration purpose/shape differs")?;
     let uid = value["uid"].as_u64().and_then(|v| u32::try_from(v).ok()).ok_or("Setup UID invalid")?;
     let gid = value["gid"].as_u64().and_then(|v| u32::try_from(v).ok()).ok_or("Setup GID invalid")?;

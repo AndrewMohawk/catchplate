@@ -121,7 +121,7 @@ class VerificationTrust:
     def __init__(self, value: dict[str, Any]) -> None:
         if set(value) != {"apiVersion", "keys"} or value.get(
             "apiVersion"
-        ) != "serverware.policyAuthorityAssemblerVerificationTrust/v1":
+        ) != "catchplate.policyAuthorityAssemblerVerificationTrust/v1":
             raise AssemblyError("verification trust artifact is not closed")
         keys = value.get("keys")
         if not isinstance(keys, list) or not 1 <= len(keys) <= 64:
@@ -183,7 +183,7 @@ class VerificationTrust:
             not isinstance(envelope, dict)
             or set(envelope) != fields
             or envelope.get("canonicalProfile")
-                != "serverware.canonicalJson/ascii-integer-v1"
+                != "catchplate.canonicalJson/ascii-integer-v1"
             or envelope.get("signatureAlgorithm") != "Ed25519"
             or not isinstance(envelope.get("payload"), dict)
             or envelope.get("apiVersion") != envelope.get("signatureDomain")
@@ -213,9 +213,9 @@ class VerificationTrust:
             raise AssemblyError(f"{label} signature encoding is not canonical")
         message = b"\0".join(
             (
-                b"serverware.signedEnvelope/v1",
+                b"catchplate.signedEnvelope/v1",
                 domain.encode("ascii"),
-                b"serverware.canonicalJson/ascii-integer-v1",
+                b"catchplate.canonicalJson/ascii-integer-v1",
                 payload_bytes,
             )
         )
@@ -446,7 +446,7 @@ def _runtime_handoff(
         not isinstance(handoff, dict)
         or set(handoff) != RUNTIME_HANDOFF_FIELDS
         or handoff.get("apiVersion")
-        != "serverware.policyShadowRuntimeAttestationHandoff/v2"
+        != "catchplate.policyShadowRuntimeAttestationHandoff/v2"
     ):
         raise AssemblyError("runtime attestation handoff is not closed")
     if _canonical_bytes(handoff).decode("ascii") != raw:
@@ -461,7 +461,7 @@ def _runtime_handoff(
         not isinstance(evidence, dict)
         or set(evidence) != RUNTIME_EVIDENCE_FIELDS
         or evidence.get("apiVersion")
-        != "serverware.policyShadowRuntimeAttestationEvidence/v1"
+        != "catchplate.policyShadowRuntimeAttestationEvidence/v1"
         or evidence.get("evidenceType") not in HARDWARE_ATTESTATION_TYPES
     ):
         raise AssemblyError(
@@ -652,7 +652,7 @@ def assemble(
     if any(actual != expected for actual, expected in exact):
         raise AssemblyError("signed records do not form one exact handoff chain")
     package = {
-        "apiVersion": "serverware.policyAuthorityPortalPackage/v1",
+        "apiVersion": "catchplate.policyAuthorityPortalPackage/v1",
         "handoff": {
             "candidateId": candidate_id,
             "artifactEnvelopeDigest": artifact_digest,
@@ -685,7 +685,7 @@ def _match_draft_request(request: dict[str, Any], carrier: dict[str, Any]) -> No
     fields = {"apiVersion", "unsignedPolicyBundle", "predecessorPolicyHash",
         "previewDraftHash", "selection", "dryRun", "approved", "signed"}
     if (not isinstance(request, dict) or set(request) != fields
-        or request["apiVersion"] != "serverware.policyAuthorityDraftRequest/v1"
+        or request["apiVersion"] != "catchplate.policyAuthorityDraftRequest/v1"
         or request["approved"] is not False or request["signed"] is not False):
         raise AssemblyError("draft request is not the closed unsigned v1 request")
     _reject_private_material(request, "draft request")
@@ -694,7 +694,7 @@ def _match_draft_request(request: dict[str, Any], carrier: dict[str, Any]) -> No
     draft = request["unsignedPolicyBundle"]
     if (not isinstance(draft, dict)
         or not isinstance(draft.get("apiVersion"), str)
-        or draft.get("apiVersion") not in {"serverware.policy/v1", "serverware.policy/v2"}
+        or draft.get("apiVersion") not in {"catchplate.policy/v1", "catchplate.policy/v2"}
         or not isinstance(draft.get("metadata"), dict)
         or {"signature", "signingKeyId"} & set(draft["metadata"])):
         raise AssemblyError("draft request must contain an unsigned PolicyBundle")
@@ -705,7 +705,7 @@ def _match_draft_request(request: dict[str, Any], carrier: dict[str, Any]) -> No
         raise AssemblyError("signed bundle differs from the requested unsigned draft")
     # Reuse the actual policy framing, including the explicit v2 profile.
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from serverware.policy_bundle import PolicyBundleError, policy_signature_bytes
+    from catchplate.policy_bundle import PolicyBundleError, policy_signature_bytes
     try:
         draft_hash = "sha256:" + hashlib.sha256(policy_signature_bytes(draft)).hexdigest()
     except (PolicyBundleError, TypeError, ValueError) as exc:
@@ -772,7 +772,7 @@ def _bundle_carrier(package, bundle, artifact, assignment, *, public_key_path, p
     if "sha256:" + hashlib.sha256(spki).hexdigest() != pin:
         raise AssemblyError("policy public key differs from its independent SPKI pin")
     metadata = bundle.get("metadata")
-    if (bundle.get("apiVersion") not in {"serverware.policy/v1", "serverware.policy/v2"}
+    if (bundle.get("apiVersion") not in {"catchplate.policy/v1", "catchplate.policy/v2"}
         or not isinstance(metadata, dict) or metadata.get("signingKeyId") != pin
         or not isinstance(metadata.get("signature"), str)
         or re.fullmatch(r"ed25519:[A-Za-z0-9_-]{86}", metadata["signature"]) is None):
@@ -783,7 +783,7 @@ def _bundle_carrier(package, bundle, artifact, assignment, *, public_key_path, p
         raise AssemblyError("candidate bundle signature encoding is not canonical")
     # Reuse the actual v1/v2 signature framing, not a second JSON codec.
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from serverware.policy_bundle import PolicyBundleError, policy_signature_bytes
+    from catchplate.policy_bundle import PolicyBundleError, policy_signature_bytes
     try:
         message = policy_signature_bytes(bundle)
         key.verify(signature, message)
@@ -799,11 +799,11 @@ def _bundle_carrier(package, bundle, artifact, assignment, *, public_key_path, p
     artifact_record = artifact_payload.get("record")
     assignment_payload = assignment_envelope["payload"]
     identity = assignment_payload.get("policyIdentity")
-    if (artifact_envelope["signatureDomain"] != "serverware.policyCandidateArtifact/v2"
+    if (artifact_envelope["signatureDomain"] != "catchplate.policyCandidateArtifact/v2"
         or artifact_envelope["kind"] != "PolicyCandidateArtifact"
         or set(artifact_payload) != {"issuedAtEpochNs", "expiresAtEpochNs", "record"}
         or not isinstance(artifact_record, dict)
-        or assignment_envelope["signatureDomain"] != "serverware.policyShadowAssignment/v1"
+        or assignment_envelope["signatureDomain"] != "catchplate.policyShadowAssignment/v1"
         or assignment_envelope["kind"] != "PolicyShadowAssignment"
         or not isinstance(identity, dict)
         or artifact_record.get("policy_bundle_digest") != bundle_digest
@@ -818,7 +818,7 @@ def _bundle_carrier(package, bundle, artifact, assignment, *, public_key_path, p
         or assignment_payload.get("canaryId") != package["handoff"]["canaryId"]
         or identity.get("predecessorPolicySha256") != package["handoff"]["predecessorPolicyHash"]):
         raise AssemblyError("signed bundle differs from authenticated artifact or assignment")
-    carrier = {"apiVersion": "serverware.policyAuthorityPortalCarrier/v1",
+    carrier = {"apiVersion": "catchplate.policyAuthorityPortalCarrier/v1",
         "signedPolicyBundle": bundle, "portalPackage": package}
     if len(_canonical_bytes(carrier)) + 1 > MAX_INPUT_BYTES:
         raise AssemblyError("portal carrier exceeds the fixed import bound")

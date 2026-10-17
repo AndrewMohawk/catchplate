@@ -1,15 +1,15 @@
-x-serverware-policy-custody-host-contract:
+x-catchplate-policy-custody-host-contract:
   assuranceClass: trusted-host-no-tee
   socketActivation: systemd-inherited-seqpacket
-  socketTarget: serverware-policy-custody-sockets.target
-  target: serverware-policy-custody.target
-  driverGroupGid: "${SERVERWARE_POLICY_CUSTODY_DRIVER_GID:?set host swpc-driver group ID}"
+  socketTarget: catchplate-policy-custody-sockets.target
+  target: catchplate-policy-custody.target
+  driverGroupGid: "${CATCHPLATE_POLICY_CUSTODY_DRIVER_GID:?set host swpc-driver group ID}"
   services:
-    durable-recovery-store: {user: swpc-store, socket: /run/serverware/policy-custody/durable-recovery-store.sock}
-    cleanup-authorization-consumer: {user: swpc-consume, socket: /run/serverware/policy-custody/cleanup-authorization-consumer.sock}
-    recovery-target-provider: {user: swpc-target, socket: /run/serverware/policy-custody/recovery-target-provider.sock}
-    current-signature-authority: {user: swpc-signature, socket: /run/serverware/policy-custody/current-signature-authority.sock}
-    bounded-cleanup-helper: {user: swpc-cleanup, socket: /run/serverware/policy-custody/bounded-cleanup-helper.sock}
+    durable-recovery-store: {user: swpc-store, socket: /run/catchplate/policy-custody/durable-recovery-store.sock}
+    cleanup-authorization-consumer: {user: swpc-consume, socket: /run/catchplate/policy-custody/cleanup-authorization-consumer.sock}
+    recovery-target-provider: {user: swpc-target, socket: /run/catchplate/policy-custody/recovery-target-provider.sock}
+    current-signature-authority: {user: swpc-signature, socket: /run/catchplate/policy-custody/current-signature-authority.sock}
+    bounded-cleanup-helper: {user: swpc-cleanup, socket: /run/catchplate/policy-custody/bounded-cleanup-helper.sock}
 
 services:
   # Keep authority inputs mandatory only when this custody override is selected.
@@ -17,20 +17,20 @@ services:
   # their runtime validation still rejects an unprovisioned generation.
   response-v2-generation-bootstrap:
     environment:
-      SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256: ${SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256:?set verified provider-generation digest}
+      CATCHPLATE_RESPONSE_V2_PROVIDER_GENERATION_SHA256: ${CATCHPLATE_RESPONSE_V2_PROVIDER_GENERATION_SHA256:?set verified provider-generation digest}
     volumes:
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_BOOTSTRAP_KEY_DIR:?set one-shot generation bootstrap credential directory}:/run/credentials/serverware-response-v2-generation-bootstrap:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_BOOTSTRAP_KEY_DIR:?set one-shot generation bootstrap credential directory}:/run/credentials/catchplate-response-v2-generation-bootstrap:ro
 
   response-v2-state-authority:
     environment:
-      SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256: ${SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256:?set verified provider-generation digest}
+      CATCHPLATE_RESPONSE_V2_PROVIDER_GENERATION_SHA256: ${CATCHPLATE_RESPONSE_V2_PROVIDER_GENERATION_SHA256:?set verified provider-generation digest}
     volumes:
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_GENERATION_PUBLIC_CREDENTIAL_DIR:?set public generation and trust-anchor credential directory}:/run/credentials/serverware-response-v2-generation-public:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_GENERATION_PUBLIC_CREDENTIAL_DIR:?set public generation and trust-anchor credential directory}:/run/credentials/catchplate-response-v2-generation-public:ro
 
   response-v2-generation-activation:
     profiles: ["custody"]
     platform: linux/amd64
-    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    image: ${CATCHPLATE_DECISION_GATE_DEV_IMAGE:-catchplate-decision-gate:dev}
     pull_policy: never
     user: "65521:65519"
     init: true
@@ -39,37 +39,37 @@ services:
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
-      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/serverware-deny-dangerous.json}
+      - seccomp=${CATCHPLATE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/catchplate-deny-dangerous.json}
     pids_limit: 32
     mem_limit: 192m
     ulimits:
       core: {soft: 0, hard: 0}
-    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
-    command: ["--activate-generation", "--config", "/run/serverware-response-v2/config/custody.json"]
+    entrypoint: ["/usr/local/bin/catchplate-response-observation-v2-custody"]
+    command: ["--activate-generation", "--config", "/run/catchplate-response-v2/config/custody.json"]
     environment:
-      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-generation-bootstrap
-      SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256: ${SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256:?set verified provider-generation digest}
-      SERVERWARE_RESPONSE_V2_CGROUP_ROOT: /sys/fs/cgroup/serverware-response-v2
-      SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS: ${SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS:-300000}
+      CREDENTIALS_DIRECTORY: /run/credentials/catchplate-response-v2-generation-bootstrap
+      CATCHPLATE_RESPONSE_V2_PROVIDER_GENERATION_SHA256: ${CATCHPLATE_RESPONSE_V2_PROVIDER_GENERATION_SHA256:?set verified provider-generation digest}
+      CATCHPLATE_RESPONSE_V2_CGROUP_ROOT: /sys/fs/cgroup/catchplate-response-v2
+      CATCHPLATE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS: ${CATCHPLATE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS:-300000}
     volumes:
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-serverware-response-v2-state-socket}:/run/serverware-response-v2/state
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CREDENTIAL_SOCKET_DIR:-serverware-response-v2-credential-socket}:/run/serverware-response-v2/credential-transport:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POLICY_SOCKET_DIR:-serverware-response-v2-policy-socket}:/run/serverware-response-v2/policy-proof-verifier:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_SOCKET_DIR:-serverware-response-v2-ledger-socket}:/run/serverware-response-v2/immutable-artifact-ledger:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_SOCKET_DIR:-serverware-response-v2-release-socket}:/run/serverware-response-v2/release-attestor-publisher:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_WATCHDOG_SOCKET_DIR:-serverware-response-v2-watchdog-socket}:/run/serverware-response-v2/cleanup-watchdog:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_ROUTER_SOCKET_DIR:-serverware-response-v2-router-socket}:/run/serverware-response-v2/router:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_DATA_DIR:-serverware-response-v2-state-data}:/var/lib/serverware-response-v2/state-authority
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CREDENTIAL_DATA_DIR:-serverware-response-v2-credential-data}:/var/lib/serverware-response-v2/credential-transport:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POLICY_DATA_DIR:-serverware-response-v2-policy-data}:/var/lib/serverware-response-v2/policy-proof-verifier:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_DATA_DIR:-serverware-response-v2-ledger-data}:/var/lib/serverware-response-v2/immutable-artifact-ledger:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_DATA_DIR:-serverware-response-v2-release-data}:/var/lib/serverware-response-v2/release-attestor-publisher:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_WATCHDOG_DATA_DIR:-serverware-response-v2-watchdog-data}:/var/lib/serverware-response-v2/cleanup-watchdog:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_ROUTER_DATA_DIR:-serverware-response-v2-router-data}:/var/lib/serverware-response-v2/custody-router:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_BOOTSTRAP_KEY_DIR:?set one-shot generation bootstrap credential directory}:/run/credentials/serverware-response-v2-generation-bootstrap:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POSTGRES_SOCKET_DIR:-/dev/null}:/run/postgresql:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CGROUP_ROOT:-/dev/null}:/sys/fs/cgroup/serverware-response-v2:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-catchplate-response-v2-state-socket}:/run/catchplate-response-v2/state
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_CREDENTIAL_SOCKET_DIR:-catchplate-response-v2-credential-socket}:/run/catchplate-response-v2/credential-transport:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_POLICY_SOCKET_DIR:-catchplate-response-v2-policy-socket}:/run/catchplate-response-v2/policy-proof-verifier:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_LEDGER_SOCKET_DIR:-catchplate-response-v2-ledger-socket}:/run/catchplate-response-v2/immutable-artifact-ledger:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_RELEASE_SOCKET_DIR:-catchplate-response-v2-release-socket}:/run/catchplate-response-v2/release-attestor-publisher:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_WATCHDOG_SOCKET_DIR:-catchplate-response-v2-watchdog-socket}:/run/catchplate-response-v2/cleanup-watchdog:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_ROUTER_SOCKET_DIR:-catchplate-response-v2-router-socket}:/run/catchplate-response-v2/router:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_STATE_DATA_DIR:-catchplate-response-v2-state-data}:/var/lib/catchplate-response-v2/state-authority
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_CREDENTIAL_DATA_DIR:-catchplate-response-v2-credential-data}:/var/lib/catchplate-response-v2/credential-transport:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_POLICY_DATA_DIR:-catchplate-response-v2-policy-data}:/var/lib/catchplate-response-v2/policy-proof-verifier:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_LEDGER_DATA_DIR:-catchplate-response-v2-ledger-data}:/var/lib/catchplate-response-v2/immutable-artifact-ledger:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_RELEASE_DATA_DIR:-catchplate-response-v2-release-data}:/var/lib/catchplate-response-v2/release-attestor-publisher:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_WATCHDOG_DATA_DIR:-catchplate-response-v2-watchdog-data}:/var/lib/catchplate-response-v2/cleanup-watchdog:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_ROUTER_DATA_DIR:-catchplate-response-v2-router-data}:/var/lib/catchplate-response-v2/custody-router:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/catchplate-response-v2/config:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_BOOTSTRAP_KEY_DIR:?set one-shot generation bootstrap credential directory}:/run/credentials/catchplate-response-v2-generation-bootstrap:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_POSTGRES_SOCKET_DIR:-/dev/null}:/run/postgresql:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_CGROUP_ROOT:-/dev/null}:/sys/fs/cgroup/catchplate-response-v2:ro
     cgroup: host
     depends_on:
       response-v2-custody-router:
@@ -82,42 +82,42 @@ services:
     group_add:
       - "10003"
       - "65519"
-      - "${SERVERWARE_POLICY_CUSTODY_DRIVER_GID:?set host swpc-driver group ID}"
+      - "${CATCHPLATE_POLICY_CUSTODY_DRIVER_GID:?set host swpc-driver group ID}"
     labels:
-      dev.serverware.policy-shadow-runtime-attestation-class: trusted-host-no-tee
-      dev.serverware.policy-custody-assurance-class: trusted-host-no-tee
+      dev.catchplate.policy-shadow-runtime-attestation-class: trusted-host-no-tee
+      dev.catchplate.policy-custody-assurance-class: trusted-host-no-tee
     environment:
-      SERVERWARE_RESPONSE_PROOF_CUSTODY_SOCKET: /run/serverware-custody/custody.sock
-      SERVERWARE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID: "10002"
-      SERVERWARE_RESPONSE_OBSERVATION_V2_SOCKET: /run/serverware-response-v2/router/custody.sock
-      SERVERWARE_RESPONSE_OBSERVATION_V2_EXPECTED_UID: "65520"
-      SERVERWARE_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS: "30000"
-      SERVERWARE_RESPONSE_OBSERVATION_V2_ATTESTATION_MODE: trusted-host-no-tee
-      SERVERWARE_RESPONSE_OBSERVATION_V2_GENERATION_ID: ${SERVERWARE_RESPONSE_OBSERVATION_V2_GENERATION_ID:?set signed response-v2 generation ID}
-      SERVERWARE_RESPONSE_OBSERVATION_V2_SOURCE_COMMIT_SHA256: ${SERVERWARE_RESPONSE_OBSERVATION_V2_SOURCE_COMMIT_SHA256:?set release-record source commit SHA-256}
-      SERVERWARE_RESPONSE_OBSERVATION_V2_SOURCE_TREE_SHA256: ${SERVERWARE_RESPONSE_OBSERVATION_V2_SOURCE_TREE_SHA256:?set release-record source tree SHA-256}
-      SERVERWARE_RESPONSE_OBSERVATION_V2_ROLE_KEYS_JSON: ${SERVERWARE_RESPONSE_OBSERVATION_V2_ROLE_KEYS_JSON:?set canonical public role-key manifest JSON}
-      SERVERWARE_RESPONSE_OBSERVATION_V2_SIGNER_KEY_SHA256: ${SERVERWARE_RESPONSE_OBSERVATION_V2_SIGNER_KEY_SHA256:?set pinned trusted-host v2 response signer raw-key SHA-256}
-      SERVERWARE_RESPONSE_OBSERVATION_V2_ROLE_IDENTITY_ROOT_SHA256: ${SERVERWARE_RESPONSE_OBSERVATION_V2_ROLE_IDENTITY_ROOT_SHA256:?set pinned v2 role-identity root SHA-256}
-      SERVERWARE_RESPONSE_OBSERVATION_V2_PROOF_PINS_ROOT_SHA256: ${SERVERWARE_RESPONSE_OBSERVATION_V2_PROOF_PINS_ROOT_SHA256:?set pinned v2 proof-policy root SHA-256}
-      SERVERWARE_POLICY_SHADOW_TRUST_MANIFEST: /run/serverware/policy-shadow/generation/trust-manifest.json
-      SERVERWARE_POLICY_SHADOW_TRUST_MANIFEST_SHA256: ${SERVERWARE_POLICY_SHADOW_TRUST_MANIFEST_SHA256:?set trusted-host policy-shadow trust-manifest SHA-256}
-      SERVERWARE_POLICY_SHADOW_RUNTIME_ATTESTATION_VERIFY_COMMAND: /opt/serverware/bin/policy-shadow-runtime-attestation-verify
-      SERVERWARE_POLICY_SHADOW_RUNTIME_ATTESTATION_VERIFIER_SHA256: ${SERVERWARE_POLICY_SHADOW_RUNTIME_ATTESTATION_VERIFIER_SHA256:?set trusted-host runtime-attestation verifier executable SHA-256}
-      SERVERWARE_POLICY_SHADOW_PUBLICATION_HANDOFF_COMMAND: /opt/serverware/bin/policy-shadow-publication-handoff
-      SERVERWARE_POLICY_SHADOW_PUBLICATION_HANDOFF_SHA256: ${SERVERWARE_POLICY_SHADOW_PUBLICATION_HANDOFF_SHA256:?set trusted-host publication-handoff executable SHA-256}
-      SERVERWARE_POLICY_SHADOW_CUSTODY_CONFIG: /run/serverware/policy-shadow/generation/custody-config.json
-      SERVERWARE_POLICY_SHADOW_STARTUP_GENERATION: ${SERVERWARE_POLICY_SHADOW_STARTUP_GENERATION:-}
-      SERVERWARE_POLICY_SHADOW_STARTUP_GENERATION_SHA256: ${SERVERWARE_POLICY_SHADOW_STARTUP_GENERATION_SHA256:-}
+      CATCHPLATE_RESPONSE_PROOF_CUSTODY_SOCKET: /run/catchplate-custody/custody.sock
+      CATCHPLATE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID: "10002"
+      CATCHPLATE_RESPONSE_OBSERVATION_V2_SOCKET: /run/catchplate-response-v2/router/custody.sock
+      CATCHPLATE_RESPONSE_OBSERVATION_V2_EXPECTED_UID: "65520"
+      CATCHPLATE_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS: "30000"
+      CATCHPLATE_RESPONSE_OBSERVATION_V2_ATTESTATION_MODE: trusted-host-no-tee
+      CATCHPLATE_RESPONSE_OBSERVATION_V2_GENERATION_ID: ${CATCHPLATE_RESPONSE_OBSERVATION_V2_GENERATION_ID:?set signed response-v2 generation ID}
+      CATCHPLATE_RESPONSE_OBSERVATION_V2_SOURCE_COMMIT_SHA256: ${CATCHPLATE_RESPONSE_OBSERVATION_V2_SOURCE_COMMIT_SHA256:?set release-record source commit SHA-256}
+      CATCHPLATE_RESPONSE_OBSERVATION_V2_SOURCE_TREE_SHA256: ${CATCHPLATE_RESPONSE_OBSERVATION_V2_SOURCE_TREE_SHA256:?set release-record source tree SHA-256}
+      CATCHPLATE_RESPONSE_OBSERVATION_V2_ROLE_KEYS_JSON: ${CATCHPLATE_RESPONSE_OBSERVATION_V2_ROLE_KEYS_JSON:?set canonical public role-key manifest JSON}
+      CATCHPLATE_RESPONSE_OBSERVATION_V2_SIGNER_KEY_SHA256: ${CATCHPLATE_RESPONSE_OBSERVATION_V2_SIGNER_KEY_SHA256:?set pinned trusted-host v2 response signer raw-key SHA-256}
+      CATCHPLATE_RESPONSE_OBSERVATION_V2_ROLE_IDENTITY_ROOT_SHA256: ${CATCHPLATE_RESPONSE_OBSERVATION_V2_ROLE_IDENTITY_ROOT_SHA256:?set pinned v2 role-identity root SHA-256}
+      CATCHPLATE_RESPONSE_OBSERVATION_V2_PROOF_PINS_ROOT_SHA256: ${CATCHPLATE_RESPONSE_OBSERVATION_V2_PROOF_PINS_ROOT_SHA256:?set pinned v2 proof-policy root SHA-256}
+      CATCHPLATE_POLICY_SHADOW_TRUST_MANIFEST: /run/catchplate/policy-shadow/generation/trust-manifest.json
+      CATCHPLATE_POLICY_SHADOW_TRUST_MANIFEST_SHA256: ${CATCHPLATE_POLICY_SHADOW_TRUST_MANIFEST_SHA256:?set trusted-host policy-shadow trust-manifest SHA-256}
+      CATCHPLATE_POLICY_SHADOW_RUNTIME_ATTESTATION_VERIFY_COMMAND: /opt/catchplate/bin/policy-shadow-runtime-attestation-verify
+      CATCHPLATE_POLICY_SHADOW_RUNTIME_ATTESTATION_VERIFIER_SHA256: ${CATCHPLATE_POLICY_SHADOW_RUNTIME_ATTESTATION_VERIFIER_SHA256:?set trusted-host runtime-attestation verifier executable SHA-256}
+      CATCHPLATE_POLICY_SHADOW_PUBLICATION_HANDOFF_COMMAND: /opt/catchplate/bin/policy-shadow-publication-handoff
+      CATCHPLATE_POLICY_SHADOW_PUBLICATION_HANDOFF_SHA256: ${CATCHPLATE_POLICY_SHADOW_PUBLICATION_HANDOFF_SHA256:?set trusted-host publication-handoff executable SHA-256}
+      CATCHPLATE_POLICY_SHADOW_CUSTODY_CONFIG: /run/catchplate/policy-shadow/generation/custody-config.json
+      CATCHPLATE_POLICY_SHADOW_STARTUP_GENERATION: ${CATCHPLATE_POLICY_SHADOW_STARTUP_GENERATION:-}
+      CATCHPLATE_POLICY_SHADOW_STARTUP_GENERATION_SHA256: ${CATCHPLATE_POLICY_SHADOW_STARTUP_GENERATION_SHA256:-}
     volumes:
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_ROUTER_SOCKET_DIR:-serverware-response-v2-router-socket}:/run/serverware-response-v2/router:ro
-      - ${SERVERWARE_POLICY_SHADOW_TRUST_MANIFEST_FILE:?set root-owned immutable trusted-host policy-shadow trust manifest}:/run/serverware/policy-shadow/generation/trust-manifest.json:ro
-      - ${SERVERWARE_POLICY_SHADOW_CUSTODY_CONFIG_FILE:?set root-owned immutable trusted-host policy-shadow custody config}:/run/serverware/policy-shadow/generation/custody-config.json:ro
-      - ${SERVERWARE_POLICY_SHADOW_STARTUP_GENERATION_FILE:-/dev/null}:/run/serverware/policy-shadow/generation/startup-generation.json:ro
-      - ${SERVERWARE_POLICY_SHADOW_TRUSTED_HOST_HELPER_DIR:?set trusted-host policy-shadow verifier and handoff helper directory}:/opt/serverware/bin:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_ROUTER_SOCKET_DIR:-catchplate-response-v2-router-socket}:/run/catchplate-response-v2/router:ro
+      - ${CATCHPLATE_POLICY_SHADOW_TRUST_MANIFEST_FILE:?set root-owned immutable trusted-host policy-shadow trust manifest}:/run/catchplate/policy-shadow/generation/trust-manifest.json:ro
+      - ${CATCHPLATE_POLICY_SHADOW_CUSTODY_CONFIG_FILE:?set root-owned immutable trusted-host policy-shadow custody config}:/run/catchplate/policy-shadow/generation/custody-config.json:ro
+      - ${CATCHPLATE_POLICY_SHADOW_STARTUP_GENERATION_FILE:-/dev/null}:/run/catchplate/policy-shadow/generation/startup-generation.json:ro
+      - ${CATCHPLATE_POLICY_SHADOW_TRUSTED_HOST_HELPER_DIR:?set trusted-host policy-shadow verifier and handoff helper directory}:/opt/catchplate/bin:ro
       # The five TrustedHostNoTee workers remain host systemd services because
       # their protocol admits only inherited listener/state/credential FDs.
-      - ${SERVERWARE_POLICY_CUSTODY_SOCKET_DIR:?set policy-custody SOCK_SEQPACKET directory}:/run/serverware/policy-custody:ro
+      - ${CATCHPLATE_POLICY_CUSTODY_SOCKET_DIR:?set policy-custody SOCK_SEQPACKET directory}:/run/catchplate/policy-custody:ro
     depends_on:
       custody-runtime:
         condition: service_started

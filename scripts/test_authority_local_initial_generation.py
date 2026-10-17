@@ -8,11 +8,11 @@ import unittest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import authority_revocation_configuration as configuration
-from serverware import authority_webauthn_transition_custody_wire as custody_wire
-from serverware import authority_webauthn_transition_request as request_wire
-from serverware import authority_webauthn_transition_response as response_wire
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_revocation_configuration as configuration
+from catchplate import authority_webauthn_transition_custody_wire as custody_wire
+from catchplate import authority_webauthn_transition_request as request_wire
+from catchplate import authority_webauthn_transition_response as response_wire
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
 PIN = "sha256:" + "1" * 64
 
@@ -22,7 +22,7 @@ def fixture():
         for role in configuration._ROLE_NAMES}
     pins = {role: PIN for role in roles}
     payload = dict(credentialReleaseTrust=dict(
-        schema="serverware.trustedHostLocalCredentialReleaseTrust/v1",
+        schema="catchplate.trustedHostLocalCredentialReleaseTrust/v1",
         trustMode="trusted-host-local", maximumReceiptAgeNs=1_000_000_000),
         generationSequence=0, generationPredecessorDigest=None,
         generationMinimumRollbackSequence=0, generationBindingDigest=PIN,

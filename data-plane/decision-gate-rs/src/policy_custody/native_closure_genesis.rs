@@ -5,7 +5,7 @@
 use super::*;
 
 const COORDINATOR:&str="publicationGenesisCoordinator";
-const BOOTSTRAP_API:&str="serverware.nativePublicationGenesisBootstrapRuntime/v1";
+const BOOTSTRAP_API:&str="catchplate.nativePublicationGenesisBootstrapRuntime/v1";
 const BOOTSTRAP_PURPOSE:&str="measure-publication-genesis-before-runtime-admission";
 const MAX_BOOTSTRAP:u64=4096;
 
@@ -24,7 +24,7 @@ impl Configuration {
     /// The launch version, never the supplied role string, selects this API.
     /// The old cold coordinator remains exactly Closure/v4 + static Manifest/v1.
     pub(in crate::policy_shadow) fn require_genesis_selection(&self,late:bool)->Result<(),ShadowError>{
-        require(self.api_version==(if late{"serverware.nativeCustodyClosure/v6"}else{"serverware.nativeCustodyClosure/v4"}))?;
+        require(self.api_version==(if late{"catchplate.nativeCustodyClosure/v6"}else{"catchplate.nativeCustodyClosure/v4"}))?;
         self.require_selected_profile(Some(COORDINATOR),false,late)?;
         Ok(())
     }
@@ -92,7 +92,7 @@ mod tests {
     }
     #[test]
     fn measured_bootstrap_requires_exact_api_and_purpose(){
-        for (api,purpose) in [("serverware.nativePublicationGenesisCoordinatorRuntime/v2",BOOTSTRAP_PURPOSE),(BOOTSTRAP_API,"measure-bridge")] {
+        for (api,purpose) in [("catchplate.nativePublicationGenesisCoordinatorRuntime/v2",BOOTSTRAP_PURPOSE),(BOOTSTRAP_API,"measure-bridge")] {
             let raw=canonical_json_bytes(&Bootstrap{api_version:api.into(),purpose:purpose.into()}).unwrap();
             assert!(require_bootstrap(&raw,&Sha256Digest::compute(&raw),&Sha256Digest::compute(b"runtime")).is_err());
         }

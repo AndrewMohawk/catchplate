@@ -23,8 +23,8 @@ sys.addaudithook(_no_network)
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import ecr_image_artifact as artifact
-from serverware import ecr_image_custody as custody
+from catchplate import ecr_image_artifact as artifact
+from catchplate import ecr_image_custody as custody
 
 
 def digest(value):

@@ -23,12 +23,12 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_complete_query as complete
-from serverware import authority_index_contract as contract
-from serverware import authority_index_frontier as frontier
-from serverware import authority_index_range as ranges
-from serverware import authority_index_reader as reader
-from serverware import authority_query_read_work as measured
+from catchplate import authority_complete_query as complete
+from catchplate import authority_index_contract as contract
+from catchplate import authority_index_frontier as frontier
+from catchplate import authority_index_range as ranges
+from catchplate import authority_index_reader as reader
+from catchplate import authority_query_read_work as measured
 import test_authority_index_join as join_oracle
 import test_authority_index_range as tree_oracle
 
@@ -135,7 +135,7 @@ def scalar_bytes(kind, row):
 def business_key(table, primary_id):
     material = json.dumps({"id": primary_id}, ensure_ascii=True, allow_nan=False,
                           sort_keys=True, separators=(",", ":")).encode("ascii")
-    digest = hashlib.sha256(b"serverware.policyAuthorityBusinessKey/v1\0")
+    digest = hashlib.sha256(b"catchplate.policyAuthorityBusinessKey/v1\0")
     for frame in (table.encode("ascii"), material):
         digest.update(len(frame).to_bytes(8, "big"))
         digest.update(frame)
@@ -200,7 +200,7 @@ def reader_work_oracle(store):
     partition = {name: selector[name] for name in descriptor["partitionFields"]}
     work.json(partition)
     work.json(partition, ascii=False)
-    for value in ("serverware.policyAuthorityIndexPartition/v1", contract.PROFILE,
+    for value in ("catchplate.policyAuthorityIndexPartition/v1", contract.PROFILE,
                   profile.index_id, profile.table, profile.projection_digest):
         work.utf8(value)
     work.bytes += 8 * 6
@@ -267,7 +267,7 @@ class StoredIndexCursor:
         self.calls.append((statement, copy.deepcopy(parameters)))
         if type(parameters) is not tuple or "LIMIT %s" not in statement:
             raise AssertionError("fixture SQL lost fixed tuple parameters or sentinel limit")
-        if f'FROM "serverware_metadata"."{LEAVES}" AS leaf ' in statement:
+        if f'FROM "catchplate_metadata"."{LEAVES}" AS leaf ' in statement:
             self.kind = "leaf"
             if len(parameters) not in (3, 4):
                 raise AssertionError("fixture leaf range parameters changed")
@@ -276,7 +276,7 @@ class StoredIndexCursor:
             self.limit = parameters[-1]
             if not 2 <= self.limit <= 33:
                 raise AssertionError("fixture source leaf bound changed")
-            expected_tail = (f' FROM "serverware_metadata"."{LEAVES}" AS leaf '
+            expected_tail = (f' FROM "catchplate_metadata"."{LEAVES}" AS leaf '
                 'WHERE leaf.index_id COLLATE "C" = %s AND leaf.index_key COLLATE "C" >= %s'
                 + ('' if upper is None else ' AND leaf.index_key COLLATE "C" < %s')
                 + ' ORDER BY leaf.index_key COLLATE "C" LIMIT %s')
@@ -284,7 +284,7 @@ class StoredIndexCursor:
                 raise AssertionError("fixture leaf SQL hides or changes matching rows")
             rows = [copy.deepcopy(row) for path, row in sorted(self.store.leaves.items())
                     if row["index_id"] == index_id and lower <= path and (upper is None or path < upper)]
-        elif f'FROM "serverware_metadata"."{NODES}" AS node ' in statement:
+        elif f'FROM "catchplate_metadata"."{NODES}" AS node ' in statement:
             self.kind = "node"
             if (len(parameters) - 2) % 2:
                 raise AssertionError("fixture node parameters are not exact depth/prefix pairs")
@@ -296,7 +296,7 @@ class StoredIndexCursor:
             if statement.count("(%s::pg_catalog.int4,%s::pg_catalog.text)") != len(identities):
                 raise AssertionError("fixture node VALUES do not name every requested identity")
             requested_sql = ", ".join("(%s::pg_catalog.int4,%s::pg_catalog.text)" for _ in identities)
-            expected_tail = (f' FROM "serverware_metadata"."{NODES}" AS node '
+            expected_tail = (f' FROM "catchplate_metadata"."{NODES}" AS node '
                 f'JOIN (VALUES {requested_sql}) AS requested(depth, path_prefix) '
                 'ON node.depth = requested.depth AND node.path_prefix COLLATE "C" = '
                 'requested.path_prefix COLLATE "C" WHERE node.index_id COLLATE "C" = %s LIMIT %s')
@@ -465,7 +465,7 @@ class IndexReaderTests(unittest.TestCase):
             "transport_bytes": expected_bytes, "context_hashes": 4,
             "business_key_hashes": len(result.primary_ids), "range_metrics": result.metrics.range_metrics})
         self.assertEqual(result.metrics.hashes, 4 + len(result.primary_ids) + expected_range["hashes"])
-        context = {"profile": "serverware.policyAuthorityCountedIndexRead/v1",
+        context = {"profile": "catchplate.policyAuthorityCountedIndexRead/v1",
             "queryId": store.query.query_id, "indexId": store.tree.profile.index_id,
             "projectionDigest": store.tree.profile.projection_digest, "indexRevision": store.revision,
             "rootDigest": store.tree.root.digest, "rootCount": store.tree.root.count}

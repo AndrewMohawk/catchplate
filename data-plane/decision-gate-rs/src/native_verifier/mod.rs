@@ -43,7 +43,7 @@ pub(crate) use principal_session::PrincipalSession;
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use serverware_decision_gate::{canonical_json_bytes, decode_canonical_json};
+use catchplate_decision_gate::{canonical_json_bytes, decode_canonical_json};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) fn run() -> Result<(), String> { cli::run() }

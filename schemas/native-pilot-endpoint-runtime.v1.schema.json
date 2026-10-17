@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-pilot-endpoint-runtime.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-pilot-endpoint-runtime.v1.schema.json",
   "description": "Canonical nonsecret runtime identity marker for a source-selected native endpoint. Signed C9 delivery and the individual closure manifest bind these exact bytes. This is not a production bridge RPC configuration or an operational service grant.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "role"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativePilotEndpointRuntime/v1"},
+    "apiVersion": {"const": "catchplate.nativePilotEndpointRuntime/v1"},
     "role": {
       "enum": ["retrieval", "persistence", "trustedTime", "generationInstall", "commitRequest", "ingressAdmission", "terminalAppend", "dispatchBarrier", "activeEffectBarrier", "activeEffectCommit"]
     }

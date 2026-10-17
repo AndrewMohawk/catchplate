@@ -15,7 +15,7 @@ import resource
 import stat
 import sys
 
-from serverware import response_v2_guest_delivery as wire
+from catchplate import response_v2_guest_delivery as wire
 
 
 def original(fd, maximum):

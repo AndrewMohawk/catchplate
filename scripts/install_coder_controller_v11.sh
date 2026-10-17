@@ -27,15 +27,15 @@ plan_bundle_dir=$static_asset_root/plans
 release_bin_dir=$static_asset_root/bin
 runner_bundle_dir=$static_asset_root/runner
 network_bundle_dir=$static_asset_root/network
-runner_archive=$runner_bundle_dir/serverware-coder-runner-v11.tar
-runner_image_file=$runner_bundle_dir/serverware-coder-runner-v11.image
+runner_archive=$runner_bundle_dir/catchplate-coder-runner-v11.tar
+runner_image_file=$runner_bundle_dir/catchplate-coder-runner-v11.image
 pre_seal_rules=$network_bundle_dir/pre-seal.nft
 post_seal_rules=$network_bundle_dir/post-seal.nft
-dockerd_path=${SERVERWARE_CONTROLLER_DOCKERD_PATH:-/usr/bin/dockerd}
-docker_path=${SERVERWARE_CONTROLLER_DOCKER_PATH:-/usr/bin/docker}
-nft_path=${SERVERWARE_CONTROLLER_NFT_PATH:-/usr/sbin/nft}
+dockerd_path=${CATCHPLATE_CONTROLLER_DOCKERD_PATH:-/usr/bin/dockerd}
+docker_path=${CATCHPLATE_CONTROLLER_DOCKER_PATH:-/usr/bin/docker}
+nft_path=${CATCHPLATE_CONTROLLER_NFT_PATH:-/usr/sbin/nft}
 
-config_dir=/etc/serverware/coder-controller-v11
+config_dir=/etc/catchplate/coder-controller-v11
 controller_config=$config_dir/controller.conf
 proxy_config=$config_dir/docker-proxy.conf
 manifest_file=$config_dir/trusted-plan-manifest-v11.bin
@@ -48,12 +48,12 @@ request_template_target=$config_dir/request-templates
 pinned_input_manifest_target=$config_dir/pinned-inputs.sha256
 pinned_input_manifest_digest_target=$config_dir/pinned-inputs.sha256.digest
 network_target=$config_dir/network
-plan_target=/opt/serverware/controller-plans
-runner_target=/opt/serverware/controller-runner-v11
-state_dir=/var/lib/serverware/coder-controller-v11
-proxy_state_dir=/var/lib/serverware/coder-docker-proxy-v11
-controller_service=/etc/systemd/system/serverware-coder-controller-v11.service
-proxy_service=/etc/systemd/system/serverware-coder-docker-proxy-v11.service
+plan_target=/opt/catchplate/controller-plans
+runner_target=/opt/catchplate/controller-runner-v11
+state_dir=/var/lib/catchplate/coder-controller-v11
+proxy_state_dir=/var/lib/catchplate/coder-docker-proxy-v11
+controller_service=/etc/systemd/system/catchplate-coder-controller-v11.service
+proxy_service=/etc/systemd/system/catchplate-coder-docker-proxy-v11.service
 
 safe_config_value() {
     case "$1" in
@@ -130,11 +130,11 @@ runner_digest=${runner_image##*@sha256:}
 case "$runner_digest" in *[!0-9a-f]*) exit 2 ;; esac
 
 for binary in \
-    serverware-coder-controller \
-    serverware-coder-controller-client \
-    serverware-coder-docker-proxy \
-    serverware-coder-controller-launcher \
-    serverware-coder-plan
+    catchplate-coder-controller \
+    catchplate-coder-controller-client \
+    catchplate-coder-docker-proxy \
+    catchplate-coder-controller-launcher \
+    catchplate-coder-plan
 do
     test -f "$release_bin_dir/$binary" && test ! -L "$release_bin_dir/$binary" || {
         echo "missing prebuilt static release binary: $release_bin_dir/$binary" >&2
@@ -143,7 +143,7 @@ do
     require_pinned_input "$release_bin_dir/$binary"
 done
 
-plan_immutable_paths=$(mktemp /var/tmp/serverware-plan-paths.XXXXXX)
+plan_immutable_paths=$(mktemp /var/tmp/catchplate-plan-paths.XXXXXX)
 trap 'rm -f "$plan_immutable_paths"' EXIT HUP INT TERM
 while IFS='=' read -r key target
 do
@@ -156,8 +156,8 @@ do
         *) continue ;;
     esac
     case "$target" in
-        /opt/serverware/controller-plans/*)
-            relative=${target#/opt/serverware/controller-plans/}
+        /opt/catchplate/controller-plans/*)
+            relative=${target#/opt/catchplate/controller-plans/}
             case "/$relative/" in
                 *"/../"*|*"/./"*|*"//"*) exit 2 ;;
             esac
@@ -177,11 +177,11 @@ test "$(sort -u "$plan_immutable_paths" | wc -l)" -eq 5 || {
 }
 
 for plan_label in \
-    serverware-build-v1 \
-    serverware-unit-no-build-v1 \
-    serverware-integration-no-build-v1 \
-    serverware-e2e-no-build-v1 \
-    serverware-attestation-no-build-v1
+    catchplate-build-v1 \
+    catchplate-unit-no-build-v1 \
+    catchplate-integration-no-build-v1 \
+    catchplate-e2e-no-build-v1 \
+    catchplate-attestation-no-build-v1
 do
     template_source=$request_template_dir/$plan_label.request.json
     digest_source=$request_template_dir/$plan_label.plan-configuration.sha256
@@ -202,8 +202,8 @@ for input in \
     "$plan_fragment" "$runner_archive" "$runner_image_file" \
     "$pre_seal_rules" "$post_seal_rules" \
     "$dockerd_path" "$docker_path" "$nft_path" \
-    "$repo_root/ops/systemd/serverware-coder-controller-v11.service" \
-    "$repo_root/ops/systemd/serverware-coder-docker-proxy-v11.service" \
+    "$repo_root/ops/systemd/catchplate-coder-controller-v11.service" \
+    "$repo_root/ops/systemd/catchplate-coder-docker-proxy-v11.service" \
     "$repo_root/ops/coder-controller-v11/controller-v11.conf.in" \
     "$repo_root/ops/coder-controller-v11/docker-proxy-v11.conf.in" \
     "$repo_root/ops/coder-controller-v11/five-plan-v11.conf" \
@@ -212,22 +212,22 @@ do
     require_pinned_input "$input"
 done
 
-test -e /run/netns/serverware-coder-controller-v11 || {
-    echo "missing controller network namespace: /run/netns/serverware-coder-controller-v11" >&2
+test -e /run/netns/catchplate-coder-controller-v11 || {
+    echo "missing controller network namespace: /run/netns/catchplate-coder-controller-v11" >&2
     exit 2
 }
-test -S /run/serverware/controller-receipt-authority-v11.sock || {
+test -S /run/catchplate/controller-receipt-authority-v11.sock || {
     echo "missing root receipt authority socket" >&2
     exit 2
 }
-test -f /etc/systemd/system/serverware-coder-receipt-authority-v11.service \
-    || test -f /usr/lib/systemd/system/serverware-coder-receipt-authority-v11.service \
+test -f /etc/systemd/system/catchplate-coder-receipt-authority-v11.service \
+    || test -f /usr/lib/systemd/system/catchplate-coder-receipt-authority-v11.service \
     || {
         echo "missing receipt authority systemd service" >&2
         exit 2
     }
 
-transaction_root=$(mktemp -d /var/lib/serverware/.coder-controller-v11-install.XXXXXX)
+transaction_root=$(mktemp -d /var/lib/catchplate/.coder-controller-v11-install.XXXXXX)
 stage=$transaction_root/stage
 backup=$transaction_root/backup
 mkdir -p \
@@ -272,11 +272,11 @@ printf '%s\n' "$pinned_input_manifest_sha256" \
 chmod 0400 "$stage/config/pinned-inputs.sha256.digest"
 
 for plan_label in \
-    serverware-build-v1 \
-    serverware-unit-no-build-v1 \
-    serverware-integration-no-build-v1 \
-    serverware-e2e-no-build-v1 \
-    serverware-attestation-no-build-v1
+    catchplate-build-v1 \
+    catchplate-unit-no-build-v1 \
+    catchplate-integration-no-build-v1 \
+    catchplate-e2e-no-build-v1 \
+    catchplate-attestation-no-build-v1
 do
     install -o root -g root -m 0444 \
         "$request_template_dir/$plan_label.request.json" \
@@ -284,11 +284,11 @@ do
 done
 
 for binary in \
-    serverware-coder-controller \
-    serverware-coder-controller-client \
-    serverware-coder-docker-proxy \
-    serverware-coder-controller-launcher \
-    serverware-coder-plan
+    catchplate-coder-controller \
+    catchplate-coder-controller-client \
+    catchplate-coder-docker-proxy \
+    catchplate-coder-controller-launcher \
+    catchplate-coder-plan
 do
     install -o root -g root -m 0555 \
         "$release_bin_dir/$binary" "$stage/bin/$binary"
@@ -297,15 +297,15 @@ done
 sort -u "$plan_immutable_paths" |
 while IFS= read -r target
 do
-    relative=${target#/opt/serverware/controller-plans/}
+    relative=${target#/opt/catchplate/controller-plans/}
     install -d -o root -g root -m 0555 "$stage/plans/$(dirname -- "$relative")"
     install -o root -g root -m 0555 \
         "$plan_bundle_dir/$relative" "$stage/plans/$relative"
 done
 install -o root -g root -m 0444 "$runner_archive" \
-    "$stage/runner/serverware-coder-runner-v11.tar"
+    "$stage/runner/catchplate-coder-runner-v11.tar"
 install -o root -g root -m 0444 "$runner_image_file" \
-    "$stage/runner/serverware-coder-runner-v11.image"
+    "$stage/runner/catchplate-coder-runner-v11.image"
 install -o root -g root -m 0444 "$pre_seal_rules" \
     "$stage/config/network/pre-seal.nft"
 install -o root -g root -m 0444 "$post_seal_rules" \
@@ -314,7 +314,7 @@ install -o root -g root -m 0444 "$post_seal_rules" \
 {
     printf '%s\n' \
         'mode=trusted-host-v11' \
-        'socket_path=/run/serverware/coder-controller-v11.sock' \
+        'socket_path=/run/catchplate/coder-controller-v11.sock' \
         'socket_uid=0' \
         "socket_gid=$client_gid" \
         'socket_mode=0o660' \
@@ -322,20 +322,20 @@ install -o root -g root -m 0444 "$post_seal_rules" \
         'first_frame_timeout_ms=5000' \
         "allow_uid=$client_uid" \
         "allow_gid=$client_gid" \
-        'state_dir=/var/lib/serverware/coder-controller-v11' \
+        'state_dir=/var/lib/catchplate/coder-controller-v11' \
         "source_root=$source_root" \
-        'signing_key_path=/etc/serverware/coder-controller-v11/receipt-signing-key.ed25519' \
-        'public_key_path=/etc/serverware/coder-controller-v11/receipt-public-key.ed25519' \
-        'requester_public_key_path=/etc/serverware/coder-controller-v11/requester-public-key.ed25519' \
-        'final_verdict_public_key_path=/etc/serverware/coder-controller-v11/final-verdict-public-key.ed25519' \
-        'cgroup_root=/sys/fs/cgroup/serverware-coder-controller-v11' \
+        'signing_key_path=/etc/catchplate/coder-controller-v11/receipt-signing-key.ed25519' \
+        'public_key_path=/etc/catchplate/coder-controller-v11/receipt-public-key.ed25519' \
+        'requester_public_key_path=/etc/catchplate/coder-controller-v11/requester-public-key.ed25519' \
+        'final_verdict_public_key_path=/etc/catchplate/coder-controller-v11/final-verdict-public-key.ed25519' \
+        'cgroup_root=/sys/fs/cgroup/catchplate-coder-controller-v11' \
         'trust_epoch=1' \
         'revocation_epoch=1' \
-        'deadline.serverware-build-v1.ms=7200000' \
-        'deadline.serverware-unit-no-build-v1.ms=900000' \
-        'deadline.serverware-integration-no-build-v1.ms=1800000' \
-        'deadline.serverware-e2e-no-build-v1.ms=2700000' \
-        'deadline.serverware-attestation-no-build-v1.ms=900000' \
+        'deadline.catchplate-build-v1.ms=7200000' \
+        'deadline.catchplate-unit-no-build-v1.ms=900000' \
+        'deadline.catchplate-integration-no-build-v1.ms=1800000' \
+        'deadline.catchplate-e2e-no-build-v1.ms=2700000' \
+        'deadline.catchplate-attestation-no-build-v1.ms=900000' \
         "artifact_path=$artifact_root" \
         'denied_socket_path=/run/docker.sock' \
         'denied_socket_path=/var/run/docker.sock' \
@@ -369,10 +369,10 @@ runner_archive_sha256=$(sha256sum "$runner_archive" | awk '{print $1}')
 {
     printf '%s\n' \
         'version=11' \
-        'executor_socket=/run/serverware/controller-plan-executor-v11.sock' \
-        'proxy_socket=/run/serverware/controller-docker-proxy.sock' \
-        'private_socket=/run/serverware/private-docker-v11.sock' \
-        'state_root=/var/lib/serverware/coder-docker-proxy-v11' \
+        'executor_socket=/run/catchplate/controller-plan-executor-v11.sock' \
+        'proxy_socket=/run/catchplate/controller-docker-proxy.sock' \
+        'private_socket=/run/catchplate/private-docker-v11.sock' \
+        'state_root=/var/lib/catchplate/coder-docker-proxy-v11' \
         "source_root=$source_root" \
         "artifact_root=$artifact_root" \
         "client_uid=$client_uid" \
@@ -383,22 +383,22 @@ runner_archive_sha256=$(sha256sum "$runner_archive" | awk '{print $1}')
         "docker_sha256=$docker_sha256" \
         "nft_path=$nft_path" \
         "nft_sha256=$nft_sha256" \
-        'pre_seal_rules=/etc/serverware/coder-controller-v11/network/pre-seal.nft' \
+        'pre_seal_rules=/etc/catchplate/coder-controller-v11/network/pre-seal.nft' \
         "pre_seal_rules_sha256=$pre_seal_rules_sha256" \
-        'post_seal_rules=/etc/serverware/coder-controller-v11/network/post-seal.nft' \
+        'post_seal_rules=/etc/catchplate/coder-controller-v11/network/post-seal.nft' \
         "post_seal_rules_sha256=$post_seal_rules_sha256" \
-        'runner_archive=/opt/serverware/controller-runner-v11/serverware-coder-runner-v11.tar' \
+        'runner_archive=/opt/catchplate/controller-runner-v11/catchplate-coder-runner-v11.tar' \
         "runner_archive_sha256=$runner_archive_sha256" \
         "runner_image=$runner_image"
 } > "$stage/config/docker-proxy.conf"
 chmod 0400 "$stage/config/docker-proxy.conf"
 
 install -o root -g root -m 0644 \
-    "$repo_root/ops/systemd/serverware-coder-controller-v11.service" \
-    "$stage/systemd/serverware-coder-controller-v11.service"
+    "$repo_root/ops/systemd/catchplate-coder-controller-v11.service" \
+    "$stage/systemd/catchplate-coder-controller-v11.service"
 install -o root -g root -m 0644 \
-    "$repo_root/ops/systemd/serverware-coder-docker-proxy-v11.service" \
-    "$stage/systemd/serverware-coder-docker-proxy-v11.service"
+    "$repo_root/ops/systemd/catchplate-coder-docker-proxy-v11.service" \
+    "$stage/systemd/catchplate-coder-docker-proxy-v11.service"
 
 install -d -o "$client_uid" -g "$client_gid" -m 0700 "$artifact_root"
 install -d -o root -g root -m 0700 "$state_dir" "$proxy_state_dir"
@@ -409,12 +409,12 @@ install -d -o root -g root -m 0700 \
 
 controller_was_active=0
 proxy_was_active=0
-systemctl is-active --quiet serverware-coder-controller-v11.service \
+systemctl is-active --quiet catchplate-coder-controller-v11.service \
     && controller_was_active=1 || true
-systemctl is-active --quiet serverware-coder-docker-proxy-v11.service \
+systemctl is-active --quiet catchplate-coder-docker-proxy-v11.service \
     && proxy_was_active=1 || true
-systemctl stop serverware-coder-controller-v11.service \
-    serverware-coder-docker-proxy-v11.service || true
+systemctl stop catchplate-coder-controller-v11.service \
+    catchplate-coder-docker-proxy-v11.service || true
 
 backup_target() {
     target=$1
@@ -429,11 +429,11 @@ backup_target "$runner_target" runner
 backup_target "$controller_service" controller.service
 backup_target "$proxy_service" proxy.service
 for binary in \
-    serverware-coder-controller \
-    serverware-coder-controller-client \
-    serverware-coder-docker-proxy \
-    serverware-coder-controller-launcher \
-    serverware-coder-plan
+    catchplate-coder-controller \
+    catchplate-coder-controller-client \
+    catchplate-coder-docker-proxy \
+    catchplate-coder-controller-launcher \
+    catchplate-coder-plan
 do
     backup_target "/usr/local/libexec/$binary" "bin.$binary"
 done
@@ -442,18 +442,18 @@ rollback_required=1
 rollback() {
     status=$?
     test "$rollback_required" -eq 1 || exit "$status"
-    systemctl stop serverware-coder-controller-v11.service \
-        serverware-coder-docker-proxy-v11.service >/dev/null 2>&1 || true
+    systemctl stop catchplate-coder-controller-v11.service \
+        catchplate-coder-docker-proxy-v11.service >/dev/null 2>&1 || true
     for target in "$config_dir" "$plan_target" "$runner_target"; do
         test ! -e "$target" && test ! -L "$target" || chattr -Ri "$target" >/dev/null 2>&1 || true
         rm -rf -- "$target"
     done
     for binary in \
-        serverware-coder-controller \
-        serverware-coder-controller-client \
-        serverware-coder-docker-proxy \
-        serverware-coder-controller-launcher \
-        serverware-coder-plan
+        catchplate-coder-controller \
+        catchplate-coder-controller-client \
+        catchplate-coder-docker-proxy \
+        catchplate-coder-controller-launcher \
+        catchplate-coder-plan
     do
         chattr -i "/usr/local/libexec/$binary" >/dev/null 2>&1 || true
         rm -f -- "/usr/local/libexec/$binary"
@@ -466,8 +466,8 @@ rollback() {
     test ! -e "$backup/plans" || cp -a -- "$backup/plans" "$plan_target"
     test ! -e "$backup/runner" || cp -a -- "$backup/runner" "$runner_target"
     systemctl daemon-reload >/dev/null 2>&1 || true
-    test "$proxy_was_active" -eq 0 || systemctl start serverware-coder-docker-proxy-v11.service >/dev/null 2>&1 || true
-    test "$controller_was_active" -eq 0 || systemctl start serverware-coder-controller-v11.service >/dev/null 2>&1 || true
+    test "$proxy_was_active" -eq 0 || systemctl start catchplate-coder-docker-proxy-v11.service >/dev/null 2>&1 || true
+    test "$controller_was_active" -eq 0 || systemctl start catchplate-coder-controller-v11.service >/dev/null 2>&1 || true
     cleanup_staging
     exit "$status"
 }
@@ -496,11 +496,11 @@ do
 done
 
 for binary in \
-    serverware-coder-controller \
-    serverware-coder-controller-client \
-    serverware-coder-docker-proxy \
-    serverware-coder-controller-launcher \
-    serverware-coder-plan
+    catchplate-coder-controller \
+    catchplate-coder-controller-client \
+    catchplate-coder-docker-proxy \
+    catchplate-coder-controller-launcher \
+    catchplate-coder-plan
 do
     chattr -i "/usr/local/libexec/$binary" >/dev/null 2>&1 || true
     install -o root -g root -m 0555 \
@@ -508,7 +508,7 @@ do
 done
 
 rm -f -- "$receipt_public" "$requester_public" "$manifest_file"
-/usr/local/libexec/serverware-coder-controller \
+/usr/local/libexec/catchplate-coder-controller \
     --provision-trusted-host "$controller_config"
 test "$(wc -c < "$receipt_public")" -eq 32
 test "$(wc -c < "$requester_public")" -eq 32
@@ -527,11 +527,11 @@ for immutable in \
     "$network_target"/*.nft \
     "$plan_target"/* \
     "$runner_target"/* \
-    /usr/local/libexec/serverware-coder-controller \
-    /usr/local/libexec/serverware-coder-controller-client \
-    /usr/local/libexec/serverware-coder-docker-proxy \
-    /usr/local/libexec/serverware-coder-controller-launcher \
-    /usr/local/libexec/serverware-coder-plan
+    /usr/local/libexec/catchplate-coder-controller \
+    /usr/local/libexec/catchplate-coder-controller-client \
+    /usr/local/libexec/catchplate-coder-docker-proxy \
+    /usr/local/libexec/catchplate-coder-controller-launcher \
+    /usr/local/libexec/catchplate-coder-plan
 do
     chattr +i "$immutable"
 done
@@ -541,16 +541,16 @@ sync -f "$runner_target"
 sync -f /usr/local/libexec
 
 install -o root -g root -m 0644 \
-    "$stage/systemd/serverware-coder-controller-v11.service" \
+    "$stage/systemd/catchplate-coder-controller-v11.service" \
     "$controller_service"
 install -o root -g root -m 0644 \
-    "$stage/systemd/serverware-coder-docker-proxy-v11.service" \
+    "$stage/systemd/catchplate-coder-docker-proxy-v11.service" \
     "$proxy_service"
 systemctl daemon-reload
-systemctl enable serverware-coder-docker-proxy-v11.service \
-    serverware-coder-controller-v11.service
-systemctl start serverware-coder-docker-proxy-v11.service
-systemctl start serverware-coder-controller-v11.service
+systemctl enable catchplate-coder-docker-proxy-v11.service \
+    catchplate-coder-controller-v11.service
+systemctl start catchplate-coder-docker-proxy-v11.service
+systemctl start catchplate-coder-controller-v11.service
 
 rollback_required=0
 trap cleanup_staging EXIT HUP INT TERM

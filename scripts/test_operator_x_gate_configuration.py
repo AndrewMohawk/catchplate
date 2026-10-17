@@ -25,8 +25,8 @@ def canonical(value):
 
 
 def project(config, db):
-    from serverware import operator_x_gate_configuration as public, operator_publication as publication
-    from serverware import operator_provider_key as keys, operator_x_provider_custody as custody
+    from catchplate import operator_x_gate_configuration as public, operator_publication as publication
+    from catchplate import operator_provider_key as keys, operator_x_provider_custody as custody
     before = fixture.snapshot(config), fixture.key_snapshot()
     with publication.exclusive(), closing(db.connect()) as conn, ExitStack() as stack:
         conn.execute("PRAGMA query_only=ON")
@@ -82,20 +82,20 @@ def lifecycle():
     store.materialize()
     assert exported(config, configured).stat().st_ino == identity
     assert "https://api.x.com" not in configured["effective_settings"]["allowed_upstreams"]
-    from serverware import operator_x_readiness as readiness
+    from catchplate import operator_x_readiness as readiness
     local = readiness._snapshot()
     assert not local["destination_allowed"]
     health = {"ok": True, "policy_hash": local["policy_hash"],
         "data_plane_binary_digest": local["expected_binary_digest"],
         "policy_shadow": {"managed_x": local["managed_x"]},
-        "operator_x_post": {"schema": "serverware.operatorXPostGate/v1", "adapter": "x.post.v1", "operation": "tweets.write"}}
+        "operator_x_post": {"schema": "catchplate.operatorXPostGate/v1", "adapter": "x.post.v1", "operation": "tweets.write"}}
     assert readiness.observe_health(health)["ready"] is False
     return {"configured_publication": True, "origin_added": False, "secret_reads": 0}
 
 
 def publication_failure():
     config, db, store, _, service = fixture.fixture()
-    from serverware import operator_gate_publication as writer
+    from catchplate import operator_gate_publication as writer
     initial = project(config, db)
     target = exported(config, initial)
     actual = writer._replace_publication
@@ -121,7 +121,7 @@ def publication_failure():
 
 def admission():
     config, db, _, _, _ = fixture.fixture()
-    from serverware import operator_x_gate_configuration as public, operator_publication as publication
+    from catchplate import operator_x_gate_configuration as public, operator_publication as publication
     with closing(db.connect()) as conn:
         conn.execute("BEGIN")
         fixture.refused(lambda: public.record(conn), public.GateConfigurationUnavailable)
@@ -130,8 +130,8 @@ def admission():
         fixture.refused(lambda: public.record(conn), public.GateConfigurationUnavailable)
     # Inspecting main must not manufacture temp; an existing shadow is still
     # refused, not ignored by the side-effect-free namespace check.
-    from serverware import operator_x_configuration as configuration, operator_x_provider_custody as custody
-    from serverware import operator_x_admission as x_admission
+    from catchplate import operator_x_configuration as configuration, operator_x_provider_custody as custody
+    from catchplate import operator_x_admission as x_admission
     with publication.exclusive(), closing(db.connect()) as conn:
         conn.execute("BEGIN")
         before = [tuple(row) for row in conn.execute("PRAGMA database_list")]
@@ -160,7 +160,7 @@ class GateConfigurationTests(unittest.TestCase):
     def setUp(self):
         fixture.XConfigurationTests.setUp(self)
         # Explicit synthetic local binary identity; no compiled-gate claim.
-        self.environment["SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST"] = "sha256:" + "f" * 64
+        self.environment["CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST"] = "sha256:" + "f" * 64
 
     def worker(self, name):
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", name],

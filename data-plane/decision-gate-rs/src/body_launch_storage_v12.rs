@@ -310,7 +310,7 @@ pub(super) fn create(generation_root: &Path, plan_id: Digest, lane: LogicalLane,
     let command_digest = sha256(&canonical_bytes(command)
         .map_err(|error| ControllerError::InvalidOwned(error.to_string()))?);
     let custody_sha256 = sha256(&canonical_json_bytes_v12(&json!({
-        "schema": "serverware.controllerBodyLaunchStorage/v12",
+        "schema": "catchplate.controllerBodyLaunchStorage/v12",
         "planId": plan_id, "lane": lane, "runnerIdentitySha256": runner_digest,
         "completeCommandSha256": command_digest, "bodySha256": body_sha256,
         "generationDevice": generation_identity.device, "generationInode": generation_identity.inode,

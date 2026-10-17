@@ -5,7 +5,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
-pub(crate) const PATH: &str = "/_serverware/native-enrollment/bootstrap";
+pub(crate) const PATH: &str = "/_catchplate/native-enrollment/bootstrap";
 pub(crate) const MAX_REQUEST_BYTES: usize = 192 * 1024;
 
 #[derive(Deserialize)]
@@ -66,7 +66,7 @@ pub(crate) fn decode_original(raw: &[u8]) -> Result<BootstrapRequestOriginalsV1,
     }
     require(!quoted && depth == 0 && strings == 8)?;
     let value: Request = serde_json::from_slice(body).map_err(|_| invalid())?;
-    require(value.api_version == "serverware.nativeEnrollmentBootstrapRequest/v1")?;
+    require(value.api_version == "catchplate.nativeEnrollmentBootstrapRequest/v1")?;
     let fields: BTreeMap<&str, &str> = [
         ("apiVersion", value.api_version.as_str()),
         ("delegationBase64url", value.delegation_base64url.as_str()),

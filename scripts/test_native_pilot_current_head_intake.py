@@ -23,15 +23,15 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
 
-from serverware import custody_generation_grants as grants
-from serverware import native_pilot_current_head_profile as head
-from serverware import native_pilot_phase_execution as execution
-from serverware import native_pilot_service_authority as services
-from serverware import native_pilot_service_handshakes as handshakes
-from serverware import native_pilot_supervisor as supervisor
-from serverware import native_pilot_supervisor_current_head_profile as profile
-from serverware import native_pilot_supervisor_current_heads as intake
-from serverware import native_pilot_supervisor_policy as policy
+from catchplate import custody_generation_grants as grants
+from catchplate import native_pilot_current_head_profile as head
+from catchplate import native_pilot_phase_execution as execution
+from catchplate import native_pilot_service_authority as services
+from catchplate import native_pilot_service_handshakes as handshakes
+from catchplate import native_pilot_supervisor as supervisor
+from catchplate import native_pilot_supervisor_current_head_profile as profile
+from catchplate import native_pilot_supervisor_current_heads as intake
+from catchplate import native_pilot_supervisor_policy as policy
 from test_native_pilot_bridge_preparation import fixture as bridge_fixture
 from test_native_pilot_current_head import refresh_decision, refresh_request, signed_result
 from test_native_pilot_helper_initial import HELPER, HELPER_ROLES, fixture as helper_fixture, head_input
@@ -41,7 +41,7 @@ from test_native_pilot_ordinary_keys import ROLES, canonical, encoded, labelled,
 
 
 def selection():
-    return {"apiVersion": "serverware.nativePilotSupervisorCurrentHeadPolicy/v1",
+    return {"apiVersion": "catchplate.nativePilotSupervisorCurrentHeadPolicy/v1",
         "targets": [job.name for job in execution.CURRENT_HEAD_JOBS]}
 
 
@@ -65,12 +65,12 @@ def _fixture(lifetime_boottime_ns=9_000_000):
                 "original": {"path": item["path"], "sha256": sha(item["raw"])},
                 "length": len(item["raw"]), "signing": None})
         delivery["signatureBase64url"] = encoded(f["delivery_keys"][role].sign(
-            b"serverware.policyCustodyGuestDelivery.signature/v1\0" + canonical(payload)))
+            b"catchplate.policyCustodyGuestDelivery.signature/v1\0" + canonical(payload)))
         delivery_raw = canonical(delivery)
         _, guest = grants._admit_delivery(signed_raw=delivery_raw, cold_raw=cold_raw,
             cold_sha=sha(cold_raw), role=role, activation=payload["activation"], boot=kw["boot"],
             startup=5000, lifetime=lifetime_boottime_ns, now=1300, **services._flags(role))
-        grant = {"apiVersion": "serverware.custodyServiceGenerationGrant/v1",
+        grant = {"apiVersion": "catchplate.custodyServiceGenerationGrant/v1",
             "purpose": "cold-service-generation-admission", "serviceRole": role, "guest": guest,
             "runtimeConfigurationSha256": sha(f["runtimes"][role]),
             "authorityHistoryManifestSha256": json.loads(f["histories"][role])["history"]["manifestSha256"],
@@ -114,7 +114,7 @@ def _fixture(lifetime_boottime_ns=9_000_000):
         wrapper = json.loads(f["helper_histories"][endpoint_role] if endpoint_role is not None else f["histories"][role])
         checkpoint = wrapper["initialCheckpoint"]
         cp = checkpoint["payload"]
-        statement = {"apiVersion": "serverware.policyCustodyProtocol/v3", "endpointRole": row["endpointRole"],
+        statement = {"apiVersion": "catchplate.policyCustodyProtocol/v3", "endpointRole": row["endpointRole"],
             "requestNonceSha256": pending["requestNonceSha256"], "requestSha256": row["requestSha256"],
             "checkpointSequence": cp["checkpointSequence"], "checkpointSha256": checkpoint["checkpointSha256"],
             "endpointGeneration": cp["exactEndpointGeneration"],
@@ -171,7 +171,7 @@ class CurrentHeadIntakeControls(unittest.TestCase):
             else: bad[change] = True
             with self.subTest(change=change), self.assertRaises(ValueError): profile.validate_policy(bad)
         self.assertEqual(set(policy.CURRENT_HEAD_FIELDS) - set(policy.HELPER_INITIAL_FIELDS), {"currentHeadIntakeOriginal"})
-        self.assertEqual(policy.CURRENT_HEAD_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v15")
+        self.assertEqual(policy.CURRENT_HEAD_POLICY_API, "catchplate.nativePilotSupervisorCommissioningPolicy/v15")
 
     def test_observed_eight_requests_export_evidence_not_decision_or_authority_input(self):
         f = fixture()

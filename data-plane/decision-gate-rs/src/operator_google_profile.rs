@@ -67,7 +67,7 @@ impl Profile {
             return Err(refused());
         }
         let binding_digest = digest_json_ensure_ascii(&json!({
-            "schema":"serverware.operatorGoogleProfile/v1",
+            "schema":"catchplate.operatorGoogleProfile/v1",
             "profile":CAPABILITY,"provider_id":"google","client_id":client_id,
             "redirect_uri":redirect_uri,"permission_preset":"gmail_readonly",
             "scopes":SCOPES,"api_origins":[ORIGIN],
@@ -84,14 +84,14 @@ impl Profile {
 
     pub(super) fn from_environment(operator: bool) -> Result<Option<Self>, String> {
         Self::parse(
-            env::var("SERVERWARE_OPERATOR_GOOGLE_PROFILE")
+            env::var("CATCHPLATE_OPERATOR_GOOGLE_PROFILE")
                 .ok()
                 .as_deref(),
             operator,
-            env::var("SERVERWARE_GOOGLE_OAUTH_CLIENT_ID")
+            env::var("CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID")
                 .ok()
                 .as_deref(),
-            env::var("SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI")
+            env::var("CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI")
                 .ok()
                 .as_deref(),
         )

@@ -6,7 +6,7 @@
 //! Stdout locking and OS writes can block, so the owner still needs a watchdog.
 
 use super::*;
-use serverware_decision_gate::enclave_public_identity_v1::
+use catchplate_decision_gate::enclave_public_identity_v1::
     encode_native_ingress_public_evidence_v1;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -43,7 +43,7 @@ fn encode_startup_response_proof_identity(proof: &ResponseProofSigningMaterial,
         return Err("startup role-4 public CA exceeds its bound".to_owned());
     }
     let record = json!({
-        "apiVersion": "serverware.nativeResponseProofPublicIdentity/v1",
+        "apiVersion": "catchplate.nativeResponseProofPublicIdentity/v1",
         "purpose": "postboot-static-assignment-inputs",
         "evidenceScope": "unverified-startup-role4-public-material",
         "okForAction": false,
@@ -57,7 +57,7 @@ fn encode_startup_response_proof_identity(proof: &ResponseProofSigningMaterial,
         "quoteNonceBase64url": evidence["quoteNonceBase64url"],
         "quoteUserDataBase64url": evidence["quoteUserDataBase64url"],
     });
-    let mut bytes = serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&record)?;
+    let mut bytes = catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&record)?;
     if bytes.is_empty() || bytes.len() >= 64 * 1024 || bytes.contains(&b'\n') {
         return Err("startup role-4 public output exceeds its framing bound".to_owned());
     }

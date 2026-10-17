@@ -309,8 +309,8 @@ fn operator_static_release_exclusions_and_malformed_decisions_do_no_io() {
             "native" => state.native_policy_bytes = Some(vec![0_u8].into()),
             "atomic" => state.atomic_release_authorization_enabled = true,
             "currentness" => state.credential_currentness = credential_currentness::LocalHolder::new(Some(
-                serverware_decision_gate::native_currentness_v1::Configuration {
-                    profile: serverware_decision_gate::native_currentness_v1::PROFILE.into(),
+                catchplate_decision_gate::native_currentness_v1::Configuration {
+                    profile: catchplate_decision_gate::native_currentness_v1::PROFILE.into(),
                     deployment_id: "synthetic-release".into(),
                 })),
             _ => {}

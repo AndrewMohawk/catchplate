@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-pilot-closure-set-preparation.v3.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-pilot-closure-set-preparation.v3.schema.json",
   "description": "Explicit cold bootstrap set/v2 only. Complete supplied manifests remain under their original bounds; no authority, late runtime, process, provenance or signature is generated. Earlier preparation versions remain closed.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "setApiVersion", "members"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativePilotClosureSetPreparation/v3"},
-    "setApiVersion": {"const": "serverware.nativePublicationGenesisClosureSet/v2"},
+    "apiVersion": {"const": "catchplate.nativePilotClosureSetPreparation/v3"},
+    "setApiVersion": {"const": "catchplate.nativePublicationGenesisClosureSet/v2"},
     "members": {"$ref": "native-publication-genesis-closure-set.v2.schema.json#/properties/members"}
   }
 }

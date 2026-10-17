@@ -3,11 +3,11 @@
 # The signed bootstrap uses the existing authority-trust mount. No host path,
 # key, socket or service is created by this overlay.
 services:
-  serverware:
+  catchplate:
     volumes:
       - type: bind
-        source: ${SERVERWARE_OIDC_SESSION_ACTIVATION_RELEASE_PROOF_SOCKET:?set preprovisioned committed-release proof socket}
-        target: /run/serverware/oidc-session-activation-token-release/proof.sock
+        source: ${CATCHPLATE_OIDC_SESSION_ACTIVATION_RELEASE_PROOF_SOCKET:?set preprovisioned committed-release proof socket}
+        target: /run/catchplate/oidc-session-activation-token-release/proof.sock
         read_only: true
         bind:
           create_host_path: false

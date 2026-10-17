@@ -58,7 +58,7 @@ flowchart LR
 ## Public options and one bounded recovery action
 
 `POST /api/auth/session/activation/recovery/options` accepts only the closed
-[recovery request contract](../serverware/oidc_session_activation_recovery_http_contract.py):
+[recovery request contract](../catchplate/oidc_session_activation_recovery_http_contract.py):
 the fixed schema and purpose plus `localDigest`, within 64 KiB. Options reject
 MFA fields; `POST /api/auth/session/activation/recovery` may carry a fresh
 assertion and approval identifier. Neither carrier accepts a user, session, credential,
@@ -222,8 +222,8 @@ socket exchange nor a signed response establishes actor permission, a stored
 outcome, release-worker readiness or token delivery. There is no automatic
 retry or replacement processing allowance.
 
-The [service template](../ops/systemd/serverware-oidc-session-activation-release-recovery-issuer.service.in)
-and [socket unit](../ops/systemd/serverware-oidc-session-activation-release-recovery-issuer.socket)
+The [service template](../ops/systemd/catchplate-oidc-session-activation-release-recovery-issuer.service.in)
+and [socket unit](../ops/systemd/catchplate-oidc-session-activation-release-recovery-issuer.socket)
 are unrendered/uninstalled source. They require an independently supplied
 immutable runtime root, exact public trust files, private signer and signed
 resource identities. The image recipe includes the isolated launcher and these

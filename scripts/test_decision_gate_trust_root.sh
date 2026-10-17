@@ -6,7 +6,7 @@ TMP_DIR="${TMP_DIR:-.tmp}"
 WORK_DIR="$TMP_DIR/decision-gate-trust-root"
 mkdir -p "$WORK_DIR"
 
-wrong_digest_control_plane="serverware-wrong-binary-attestation"
+wrong_digest_control_plane="catchplate-wrong-binary-attestation"
 cleanup() {
   docker rm -f "$wrong_digest_control_plane" >/dev/null 2>&1 || true
 }
@@ -45,15 +45,15 @@ inspect = json.loads(
     subprocess.check_output(["docker", "inspect", container_id], text=True)
 )[0]
 env = inspect["Config"]["Env"]
-assert any(item.startswith("SERVERWARE_POLICY_TRUST_ROOT_ATTESTATION_URL=") for item in env), env
-assert not any(item.startswith("SERVERWARE_POLICY_SIGNING_PUBLIC_KEY=") for item in env), env
+assert any(item.startswith("CATCHPLATE_POLICY_TRUST_ROOT_ATTESTATION_URL=") for item in env), env
+assert not any(item.startswith("CATCHPLATE_POLICY_SIGNING_PUBLIC_KEY=") for item in env), env
 
 print(json.dumps({"ok": True, "policy_trust_root": "attested-control-plane"}, sort_keys=True))
 PY
 
 bad_key="sha256:0000000000000000000000000000000000000000000000000000000000000000"
 if docker compose run --rm --no-deps \
-  -e SERVERWARE_EXPECTED_CONTROL_PLANE_QUOTE_KEY_ID="$bad_key" \
+  -e CATCHPLATE_EXPECTED_CONTROL_PLANE_QUOTE_KEY_ID="$bad_key" \
   decision-gate-rs > "$WORK_DIR/wrong-quote-key.out" 2> "$WORK_DIR/wrong-quote-key.err"; then
   echo "expected wrong control-plane quote key to fail Rust gate startup" >&2
   cat "$WORK_DIR/wrong-quote-key.out" >&2
@@ -71,8 +71,8 @@ echo '{"ok":true,"wrong_quote_key_rejected":true}'
 
 bad_digest="sha256:0000000000000000000000000000000000000000000000000000000000000000"
 docker compose run -d --no-deps --name "$wrong_digest_control_plane" \
-  -e SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST="$bad_digest" \
-  serverware > "$WORK_DIR/wrong-binary-control-plane.id"
+  -e CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST="$bad_digest" \
+  catchplate > "$WORK_DIR/wrong-binary-control-plane.id"
 
 for _ in $(seq 1 30); do
   if docker exec "$wrong_digest_control_plane" \
@@ -89,7 +89,7 @@ if ! docker exec "$wrong_digest_control_plane" \
 fi
 
 if docker compose run --rm --no-deps \
-  -e SERVERWARE_POLICY_TRUST_ROOT_ATTESTATION_URL="http://$wrong_digest_control_plane:3000/attestation" \
+  -e CATCHPLATE_POLICY_TRUST_ROOT_ATTESTATION_URL="http://$wrong_digest_control_plane:3000/attestation" \
   decision-gate-rs > "$WORK_DIR/wrong-binary.out" 2> "$WORK_DIR/wrong-binary.err"; then
   echo "expected attested executable mismatch to fail Rust gate startup" >&2
   cat "$WORK_DIR/wrong-binary.out" >&2

@@ -64,11 +64,11 @@ class ConfigurationTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory(prefix="alchemy-config-offline-")
         self.addCleanup(directory.cleanup)
-        self.path = Path(directory.name) / "serverware-client.private.json"
+        self.path = Path(directory.name) / "catchplate-client.private.json"
         self.value = {"application_id": APP, "access_rule_id": "00000000-0000-4000-8000-000000000002",
             "proxy_authentication": "basic_and_bearer_v1", "proxy_username": APP, "proxy_password": TOKEN,
             "proxy_url": "https://proxy.example.test:8443", "token_expires_at_epoch_ms": 2**53 - 1,
-            "ca_file": "./serverware-ca.pem", "proxy_ca_file": None,
+            "ca_file": "./catchplate-ca.pem", "proxy_ca_file": None,
             "operation_bundle": "alchemy_chain_status_read_v1", "chain": "eth-mainnet",
             "upstream_url": "https://eth-mainnet.g.alchemy.com/v2", "methods": ["POST"],
             "rpc_methods": ["eth_chainId", "eth_blockNumber"], "credential_input": "replace_exact",
@@ -85,14 +85,14 @@ class ConfigurationTests(unittest.TestCase):
             selected = example.configuration_environment(self.write())
         run.assert_not_called()
         self.assertEqual(set(selected), set(example.REQUIRED_ENV))
-        self.assertEqual(selected["SERVERWARE_CA_FILE"], str(self.path.parent / "serverware-ca.pem"))
-        self.assertEqual(selected["SERVERWARE_PROXY_TOKEN"], TOKEN)
+        self.assertEqual(selected["CATCHPLATE_CA_FILE"], str(self.path.parent / "catchplate-ca.pem"))
+        self.assertEqual(selected["CATCHPLATE_PROXY_TOKEN"], TOKEN)
         self.assertEqual(example.settings(selected)[:2], ("eth-mainnet", self.value["upstream_url"]))
         self.value.update(chain="eth-sepolia", upstream_url="https://eth-sepolia.g.alchemy.com/v2",
             proxy_ca_file="./proxy's $literal.pem")
         selected = example.configuration_environment(self.write())
-        self.assertEqual(selected["SERVERWARE_ALCHEMY_CHAIN"], "eth-sepolia")
-        self.assertEqual(selected["SERVERWARE_PROXY_CA_FILE"], str(self.path.parent / "proxy's $literal.pem"))
+        self.assertEqual(selected["CATCHPLATE_ALCHEMY_CHAIN"], "eth-sepolia")
+        self.assertEqual(selected["CATCHPLATE_PROXY_CA_FILE"], str(self.path.parent / "proxy's $literal.pem"))
 
     def test_scope_identity_expiry_and_connection_mismatches_refuse(self):
         cases = (("application_id", "bad"), ("access_rule_id", "bad"), ("proxy_username", "wrong"),
@@ -122,20 +122,20 @@ class ConfigurationTests(unittest.TestCase):
         with self.assertRaises(OSError): example.configuration_environment(link)
         raw = json.dumps(self.value).encode()
         self.path.write_bytes(raw + b" " * (example.MAX_CONFIG_BYTES - len(raw)))
-        self.assertEqual(example.configuration_environment(self.path)["SERVERWARE_APP_ID"], APP)
+        self.assertEqual(example.configuration_environment(self.path)["CATCHPLATE_APP_ID"], APP)
 
     def test_cli_preserves_env_mode_and_uses_config_without_token_arguments(self):
         with patch.object(example, "launch", return_value=EXPECTED) as launch, patch("sys.stdout", io.StringIO()):
             self.assertEqual(example.main([]), 0)
             self.assertIs(launch.call_args.args[0], os.environ)
-        with patch.dict(os.environ, {"SERVERWARE_PROXY_TOKEN": "wrong", "HTTPS_PROXY": "wrong"}, clear=True), \
+        with patch.dict(os.environ, {"CATCHPLATE_PROXY_TOKEN": "wrong", "HTTPS_PROXY": "wrong"}, clear=True), \
                 patch.object(example, "check_versions"), patch.object(example.subprocess, "run",
                     return_value=SimpleNamespace(returncode=0, stdout=json.dumps(EXPECTED).encode())) as run, \
                 patch("sys.stdout", io.StringIO()):
             self.assertEqual(example.main(["--config", str(self.write())]), 0)
         self.assertNotIn(TOKEN, " ".join(run.call_args.args[0]))
         self.assertNotIn("--config", run.call_args.args[0])
-        self.assertEqual(run.call_args.kwargs["env"]["SERVERWARE_PROXY_TOKEN"], TOKEN)
+        self.assertEqual(run.call_args.kwargs["env"]["CATCHPLATE_PROXY_TOKEN"], TOKEN)
         self.assertEqual(set(run.call_args.kwargs["env"]), set(example.REQUIRED_ENV))
 
     def test_bad_json_and_child_config_fail_before_launch_with_redacted_output(self):
@@ -158,9 +158,9 @@ class ExampleTests(unittest.TestCase):
             Path(certifi.where()).read_bytes(), re.S).group()
         self.ca = Path(self.temp.name) / "public.pem"
         self.ca.write_bytes(self.pem)
-        self.env = {"SERVERWARE_PROXY_URL": "https://proxy.example.test:8443",
-            "SERVERWARE_APP_ID": APP, "SERVERWARE_PROXY_TOKEN": TOKEN,
-            "SERVERWARE_CA_FILE": str(self.ca), "SERVERWARE_ALCHEMY_CHAIN": "eth-mainnet"}
+        self.env = {"CATCHPLATE_PROXY_URL": "https://proxy.example.test:8443",
+            "CATCHPLATE_APP_ID": APP, "CATCHPLATE_PROXY_TOKEN": TOKEN,
+            "CATCHPLATE_CA_FILE": str(self.ca), "CATCHPLATE_ALCHEMY_CHAIN": "eth-mainnet"}
 
     def test_installed_pins(self):
         example.check_versions()
@@ -181,14 +181,14 @@ class ExampleTests(unittest.TestCase):
                 "Basic " + base64.b64encode((APP + ":" + TOKEN).encode()).decode()})
         finally: adapter.close()
         self.assertNotIn(TOKEN, proxy)
-        for key, value in (("SERVERWARE_ALCHEMY_CHAIN", "mainnet"), ("SERVERWARE_ALCHEMY_CHAIN", "eth-mainnet/key"),
-                ("SERVERWARE_PROXY_URL", "http://proxy.test"), ("SERVERWARE_PROXY_URL", "https://u:p@proxy.test"),
-                ("SERVERWARE_PROXY_URL", "https://proxy.test/path"), ("SERVERWARE_PROXY_URL", "https://proxy.test?"),
-                ("SERVERWARE_PROXY_URL", "https://proxy.test#"), ("SERVERWARE_PROXY_URL", "https://proxy.test:0"),
-                ("SERVERWARE_PROXY_URL", "https://proxy.test:99999"), ("SERVERWARE_PROXY_URL", "https://proxy.test\n"),
-                ("SERVERWARE_APP_ID", "wrong"), ("SERVERWARE_PROXY_TOKEN", "bad\nsecret"),
-                ("SERVERWARE_PROXY_TOKEN", "x" * 8193), ("SERVERWARE_CA_FILE", "relative.pem"),
-                ("SERVERWARE_PROXY_CA_FILE", "")):
+        for key, value in (("CATCHPLATE_ALCHEMY_CHAIN", "mainnet"), ("CATCHPLATE_ALCHEMY_CHAIN", "eth-mainnet/key"),
+                ("CATCHPLATE_PROXY_URL", "http://proxy.test"), ("CATCHPLATE_PROXY_URL", "https://u:p@proxy.test"),
+                ("CATCHPLATE_PROXY_URL", "https://proxy.test/path"), ("CATCHPLATE_PROXY_URL", "https://proxy.test?"),
+                ("CATCHPLATE_PROXY_URL", "https://proxy.test#"), ("CATCHPLATE_PROXY_URL", "https://proxy.test:0"),
+                ("CATCHPLATE_PROXY_URL", "https://proxy.test:99999"), ("CATCHPLATE_PROXY_URL", "https://proxy.test\n"),
+                ("CATCHPLATE_APP_ID", "wrong"), ("CATCHPLATE_PROXY_TOKEN", "bad\nsecret"),
+                ("CATCHPLATE_PROXY_TOKEN", "x" * 8193), ("CATCHPLATE_CA_FILE", "relative.pem"),
+                ("CATCHPLATE_PROXY_CA_FILE", "")):
             with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                 example.child_environment({**self.env, key: value})
 
@@ -232,7 +232,7 @@ class ExampleTests(unittest.TestCase):
                 rpc = json.loads(request.body)
                 return response(request, value={"jsonrpc": "2.0", "id": rpc["id"],
                     "result": hex(chain_id) if rpc["method"] == "eth_chainId" else "0x0"})
-            env = {**self.env, "SERVERWARE_ALCHEMY_CHAIN": "eth-sepolia"}
+            env = {**self.env, "CATCHPLATE_ALCHEMY_CHAIN": "eth-sepolia"}
             with patch.object(HTTPAdapter, "send", send):
                 if chain_id == 1:
                     with self.assertRaises(ValueError): example.read_chain_status(env)
@@ -285,7 +285,7 @@ class ExampleTests(unittest.TestCase):
             self.assertEqual(example.read_chain_status(self.env), EXPECTED)
 
     def test_actual_provider_and_separate_verified_proxy_tls_policies(self):
-        with example.configured_client({**self.env, "SERVERWARE_PROXY_CA_FILE": str(self.ca)}) as client:
+        with example.configured_client({**self.env, "CATCHPLATE_PROXY_CA_FILE": str(self.ca)}) as client:
             self.assertIs(type(client), Web3)
             self.assertIs(type(client.provider), HTTPProvider)
             self.assertIsNone(client.provider.exception_retry_configuration)

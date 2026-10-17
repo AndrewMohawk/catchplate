@@ -19,11 +19,11 @@ import operator_rollout_snapshot as observer
 import operator_rollout_x_quota as quota
 import test_operator_rollout_snapshot as previous
 
-SOURCE = Path(__file__).resolve().parents[1] / 'serverware/operator_x_quota.py'
+SOURCE = Path(__file__).resolve().parents[1] / 'catchplate/operator_x_quota.py'
 NOW = 1_800_000_000_000
 MARKER = '22222222-2222-4222-8222-222222222222'
 PRIOR = '11111111-1111-4111-8111-111111111111'
-SCHEMA = 'serverware.operatorXPostingQuotaStore/v1'
+SCHEMA = 'catchplate.operatorXPostingQuotaStore/v1'
 
 
 def compact(value):
@@ -212,12 +212,12 @@ class DatabaseTests(unittest.TestCase):
 
     def test_existing_migration_stamp_exception_is_not_expanded(self):
         pair = self.pair()
-        pair[1].execute("UPDATE serverware_store_migrations SET applied_at='2026-01-02T00:00:00+00:00'")
+        pair[1].execute("UPDATE catchplate_store_migrations SET applied_at='2026-01-02T00:00:00+00:00'")
         pair[1].commit()
         result = observer.compare_databases(*pair, x_quota_transition='first')
         self.assertTrue(result['migration_timestamps']['timestamp_only_change'])
         pair = self.pair()
-        pair[1].execute('UPDATE serverware_store_migrations SET version=2')
+        pair[1].execute('UPDATE catchplate_store_migrations SET version=2')
         self.refused(pair, code='migration_authority_changed')
 
 
@@ -249,7 +249,7 @@ class CopyTests(unittest.TestCase):
         with sqlite3.connect(self.database) as conn:
             install_fixture(conn)
         result = self.compare(before, copies, x_quota_transition='first')
-        self.assertEqual(result['schema'], 'serverware.operatorRolloutComparison/v4')
+        self.assertEqual(result['schema'], 'catchplate.operatorRolloutComparison/v4')
         self.assertEqual(result['derived_gate_files_added'], [])
         self.assertTrue(result['non_sqlite_files_and_custody_preserved'])
         self.assertFalse(result['live_sqlite_opened'] or result['services_stopped_verified'])

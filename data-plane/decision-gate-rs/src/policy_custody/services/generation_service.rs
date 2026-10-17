@@ -11,13 +11,13 @@ use std::os::unix::fs::FileExt;
 use super::generation_certification::{Certify,Certified};
 use super::super::production_dispatch::SignedProductionGenerationServiceTransitionV4 as Certificate;
 
-pub(super) const RUNTIME: &str = "serverware.policyCustodyServiceRuntimeConfig/v5";
-pub(super) const API: &str = "serverware.custodyServiceGenerationCommand/v1";
+pub(super) const RUNTIME: &str = "catchplate.policyCustodyServiceRuntimeConfig/v5";
+pub(super) const API: &str = "catchplate.custodyServiceGenerationCommand/v1";
 pub(super) const DIRECTORY: &str = "generation-journal";
 pub(super) const GRANT_FD: &str = "generation-grant";
-const GRANT_DOMAIN: &[u8] = b"serverware.custodyServiceGenerationGrant.signature/v1";
-const EFFECT_DOMAIN: &[u8] = b"serverware.custodyServiceGenerationEffect.signature/v1";
-const OBSERVATION_DOMAIN: &[u8] = b"serverware.custodyServiceGenerationObservation.signature/v1";
+const GRANT_DOMAIN: &[u8] = b"catchplate.custodyServiceGenerationGrant.signature/v1";
+const EFFECT_DOMAIN: &[u8] = b"catchplate.custodyServiceGenerationEffect.signature/v1";
+const OBSERVATION_DOMAIN: &[u8] = b"catchplate.custodyServiceGenerationObservation.signature/v1";
 const MAX_RECORDS: usize = 8;
 const MAX_BYTES: usize = 1024 * 1024;
 
@@ -223,14 +223,14 @@ pub(super) fn sign_transition(epoch:AuthorityEpochRefV3,request:&Request,head:Sh
     Certificate::sign(role,epoch,request,head,result,now,key).map_err(|_|invalid())
 }
 pub(super) fn sign_observation(payload:ObservationPayload,key:&SigningKey)->Result<Observation,ServiceError> {
-    ensure(payload.api_version=="serverware.custodyServiceGenerationObservation/v1"
+    ensure(payload.api_version=="catchplate.custodyServiceGenerationObservation/v1"
         && payload.purpose=="cold-service-generation-observation")?;
     let raw=encode_canonical_frame(&payload)?;
     let preimage=super::super::protocol::domain_separated_signature_preimage(OBSERVATION_DOMAIN,&raw)?;
     Ok(Observation{payload,signature_base64url:URL_SAFE_NO_PAD.encode(key.sign(&preimage).to_bytes())})
 }
 pub(super) fn sign(effect:Effect,key:&SigningKey)->Result<Receipt,ServiceError> {
-    ensure(effect.api_version=="serverware.custodyServiceGenerationEffect/v1"
+    ensure(effect.api_version=="catchplate.custodyServiceGenerationEffect/v1"
         && effect.purpose=="cold-service-generation-admission")?;
     let raw=encode_canonical_frame(&effect)?;
     let preimage=super::super::protocol::domain_separated_signature_preimage(EFFECT_DOMAIN,&raw)?;
@@ -271,7 +271,7 @@ impl Gate {
         let p=&grant.payload;
         let sig=URL_SAFE_NO_PAD.decode(&grant.signature_base64url).map_err(|_|invalid())?;
         ensure(sig.len()==64 && URL_SAFE_NO_PAD.encode(&sig)==grant.signature_base64url
-            && p.api_version=="serverware.custodyServiceGenerationGrant/v1"
+            && p.api_version=="catchplate.custodyServiceGenerationGrant/v1"
             && p.purpose=="cold-service-generation-admission" && p.service_role==role
             && p.guest==association.binding() && p.runtime_configuration_sha256==loaded.exact_sha256
             && p.authority_history_manifest_sha256==runtime.authority_history_manifest_sha256
@@ -346,7 +346,7 @@ impl Gate {
         let proposal=command.verify(&scope.envelope_authority_key_id,&scope.envelope_authority_key_spki_sha256)?;
         let (local,receipt)=command.local(self.grant.payload.service_role)?;
         ensure(self.records.iter().any(|(a,b)|a==local && b==receipt)
-            && certified.api_version=="serverware.custodyServiceGenerationCertified/v1"
+            && certified.api_version=="catchplate.custodyServiceGenerationCertified/v1"
             && certified.certification_command_sha256==sha(command)? && certified.local_effect_sha256==sha(receipt)?
             && certified.transition.authority_epoch==self.history.current_epoch().map_err(|_|invalid())?.epoch_reference())?;
         certified.transition.validate_service(&proposal.request,&proposal.request.request_sha256().map_err(|_|invalid())?,
@@ -368,7 +368,7 @@ impl Gate {
             && owner.generation_state(deadline)?==receipt.payload.owner_state_sha256)?;
         let transition=owner.sign_generation_transition(self.history.current_epoch().map_err(|_|invalid())?.epoch_reference(),
             &proposal.request,self.head.clone().ok_or_else(invalid)?,proposal.result_binding()?,boottime_now_nanos().map_err(|_|invalid())?)?;
-        let certified=Certified{api_version:"serverware.custodyServiceGenerationCertified/v1".into(),
+        let certified=Certified{api_version:"catchplate.custodyServiceGenerationCertified/v1".into(),
             certification_command_sha256:sha(&command)?,local_effect_sha256:sha(receipt)?,transition};
         self.verify_certification(&command,&certified)?;let bytes=encode_canonical_frame(&certified)?;
         self.poisoned=true;
@@ -384,7 +384,7 @@ impl Gate {
             self.grant.payload.scope.matches(&command.request)?;
             ensure(command.prepared_effect_sha256.is_none())?;
         }
-        ensure(command.api_version==API && p.api_version=="serverware.custodyServiceGenerationEffect/v1"
+        ensure(command.api_version==API && p.api_version=="catchplate.custodyServiceGenerationEffect/v1"
             && p.purpose=="cold-service-generation-admission" && p.service_role==self.grant.payload.service_role
             && p.authority_epoch==self.history.current_epoch().map_err(|_|invalid())?.epoch_reference()
             && p.grant_sha256==Sha256Digest::compute(&self.grant_raw) && p.command_sha256==sha(command)?
@@ -425,7 +425,7 @@ impl Gate {
                     && deadline<=prepared.request.deadline_boottime_nanos())?;
             }
             self.validate_history()?;
-            let payload=ObservationPayload{api_version:"serverware.custodyServiceGenerationObservation/v1".into(),
+            let payload=ObservationPayload{api_version:"catchplate.custodyServiceGenerationObservation/v1".into(),
                 purpose:"cold-service-generation-observation".into(),service_role:self.grant.payload.service_role,
                 authority_epoch:self.history.current_epoch().map_err(|_|invalid())?.epoch_reference(),
                 grant_sha256:Sha256Digest::compute(&self.grant_raw),command_sha256:sha(&command)?,
@@ -460,7 +460,7 @@ impl Gate {
         };
         let owner_state_sha256=owner.generation_state(deadline)?;
         if let Some((_,prior))=self.records.first() {ensure(prior.payload.owner_state_sha256==owner_state_sha256)?;}
-        let effect=Effect{api_version:"serverware.custodyServiceGenerationEffect/v1".into(),purpose:"cold-service-generation-admission".into(),
+        let effect=Effect{api_version:"catchplate.custodyServiceGenerationEffect/v1".into(),purpose:"cold-service-generation-admission".into(),
             service_role:self.grant.payload.service_role,authority_epoch:self.history.current_epoch().map_err(|_|invalid())?.epoch_reference(),
             grant_sha256:Sha256Digest::compute(&self.grant_raw),command_sha256:sha(&command)?,
             transition_id_sha256:command.request.transition_id_sha256().clone(),request_sha256:command.request.request_sha256().map_err(|_|invalid())?,
@@ -495,7 +495,7 @@ impl RemoteGrant {
         coordinator:&guest::GuestClosureBinding)->Result<Self,ServiceError>{
         ensure(!raw.is_empty() && raw.len()<=65536)?;
         let grant:Grant=decode_canonical_frame(raw)?;let p=&grant.payload;
-        ensure(p.api_version=="serverware.custodyServiceGenerationGrant/v1" && p.purpose=="cold-service-generation-admission"
+        ensure(p.api_version=="catchplate.custodyServiceGenerationGrant/v1" && p.purpose=="cold-service-generation-admission"
             && p.service_role==role && history.authority_role()==super::super::authority_history::HistoricalAuthorityRoleV3::IsolatedService(historical_service_role(role))
             && p.guest.service_role==match role {
                 TrustedHostServiceRoleV3::DurableRecoveryStore=>"durable-recovery-store",
@@ -544,7 +544,7 @@ impl RemoteGrant {
         match &exchange.response {
             Response::Effect(receipt)=>{
                 let effect=&receipt.payload;
-                ensure(effect.api_version=="serverware.custodyServiceGenerationEffect/v1" && effect.purpose=="cold-service-generation-admission"
+                ensure(effect.api_version=="catchplate.custodyServiceGenerationEffect/v1" && effect.purpose=="cold-service-generation-admission"
                     && effect.service_role==p.service_role && effect.authority_epoch==self.history.current_epoch().map_err(|_|invalid())?.epoch_reference()
                     && effect.grant_sha256==self.sha256 && effect.command_sha256==sha(&exchange.command)?
                     && effect.request_sha256==request.request_sha256().map_err(|_|invalid())?
@@ -569,7 +569,7 @@ impl RemoteGrant {
             Response::Observation(observation)=>{
                 self.scope(request)?;let o=&observation.payload;
                 ensure(request.transition()==Transition::Recover && exchange.command.prepared_effect_sha256.is_none()
-                    && o.api_version=="serverware.custodyServiceGenerationObservation/v1" && o.purpose=="cold-service-generation-observation"
+                    && o.api_version=="catchplate.custodyServiceGenerationObservation/v1" && o.purpose=="cold-service-generation-observation"
                     && o.service_role==p.service_role && o.authority_epoch==self.history.current_epoch().map_err(|_|invalid())?.epoch_reference()
                     && o.grant_sha256==self.sha256 && o.command_sha256==sha(&exchange.command)?
                     && o.observed_at_boottime_nanos>=p.issued_at_boottime_nanos && o.observed_at_boottime_nanos<deadline

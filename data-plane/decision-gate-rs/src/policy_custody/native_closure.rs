@@ -2,7 +2,7 @@
 //! settlement is manufactured here. Legacy IMA/fs-verity profiles stay distinct.
 use super::*;
 use policy_custody::{GuestClosureAssociation,GuestClosureBinding};
-use serverware_decision_gate::native_secret_broker_v1::shadow_image::ShadowImage;
+use catchplate_decision_gate::native_secret_broker_v1::shadow_image::ShadowImage;
 use std::fs::File;
 use std::os::fd::{AsRawFd,BorrowedFd};
 use std::os::unix::fs::{FileExt,MetadataExt};
@@ -17,8 +17,8 @@ const GENESIS_BOOTSTRAP_SET_PROFILE:&str="native-publication-genesis-closure-set
 #[path="native_closure_remote.rs"] mod remote;
 #[path="native_closure_set.rs"] pub(in crate::policy_shadow) mod closure_set;
 pub(in crate::policy_shadow) use remote::RemoteNativeCustodyClosure;
-const DOMAIN:&str="serverware.nativeCustodyClosureAssignment.signature/v1";
-const MANIFEST_DOMAIN:&[u8]=b"serverware.nativeCustodyExecutionClosure/v1";
+const DOMAIN:&str="catchplate.nativeCustodyClosureAssignment.signature/v1";
+const MANIFEST_DOMAIN:&[u8]=b"catchplate.nativeCustodyExecutionClosure/v1";
 const ALL_SEALS:i32=libc::F_SEAL_WRITE|libc::F_SEAL_GROW|libc::F_SEAL_SHRINK|libc::F_SEAL_SEAL;
 fn unavailable<T>(_:T)->ShadowError {ShadowError::CustodyUnavailable}
 fn require(value:bool)->Result<(),ShadowError> {if value {Ok(())} else {Err(ShadowError::BindingDrift)}}
@@ -33,8 +33,8 @@ pub(in crate::policy_shadow) struct Manifest {
 impl Manifest {
     fn validate(&self)->Result<(),ShadowError> {
         let domain=match (self.api_version.as_str(),self.profile.as_str()) {
-            ("serverware.nativeCustodyExecutionClosure/v1",PROFILE)=>MANIFEST_DOMAIN,
-            ("serverware.nativeCustodyExecutionClosure/v2",BOOTSTRAP_PROFILE)=>b"serverware.nativeCustodyExecutionClosure/v2".as_slice(),
+            ("catchplate.nativeCustodyExecutionClosure/v1",PROFILE)=>MANIFEST_DOMAIN,
+            ("catchplate.nativeCustodyExecutionClosure/v2",BOOTSTRAP_PROFILE)=>b"catchplate.nativeCustodyExecutionClosure/v2".as_slice(),
             _=>return Err(ShadowError::BindingDrift),
         };
         require(cfg!(target_arch="x86_64")
@@ -115,17 +115,17 @@ impl Configuration {
         ->Result<Option<Membership>,ShadowError>{
         self.manifest.validate()?;
         let measured=late||genesis_bootstrap;
-        require(self.manifest.api_version==(if measured{"serverware.nativeCustodyExecutionClosure/v2"}
-            else{"serverware.nativeCustodyExecutionClosure/v1"})
+        require(self.manifest.api_version==(if measured{"catchplate.nativeCustodyExecutionClosure/v2"}
+            else{"catchplate.nativeCustodyExecutionClosure/v1"})
             && self.manifest.profile==(if measured{BOOTSTRAP_PROFILE}else{PROFILE}))?;
-        let genesis_successor=self.api_version=="serverware.nativeCustodyClosure/v6";
-        let genesis=self.api_version=="serverware.nativeCustodyClosure/v4"||genesis_successor;
+        let genesis_successor=self.api_version=="catchplate.nativeCustodyClosure/v6";
+        let genesis=self.api_version=="catchplate.nativeCustodyClosure/v4"||genesis_successor;
         require(genesis_bootstrap==(genesis_successor && role==Some("publicationGenesisCoordinator"))
             && (!genesis_bootstrap || !late))?;
-        let publication=self.api_version=="serverware.nativeCustodyClosure/v5";
-        if self.api_version!="serverware.nativeCustodyClosure/v3" && !genesis && !publication {
+        let publication=self.api_version=="catchplate.nativeCustodyClosure/v5";
+        if self.api_version!="catchplate.nativeCustodyClosure/v3" && !genesis && !publication {
             require(!role.is_some_and(|v|closure_set::GENESIS_ROLES.contains(&v) || v=="publicationReconciliation"))?;
-            require(self.api_version==(if late{"serverware.nativeCustodyClosure/v2"}else{"serverware.nativeCustodyClosure/v1"})
+            require(self.api_version==(if late{"catchplate.nativeCustodyClosure/v2"}else{"catchplate.nativeCustodyClosure/v1"})
                 && self.closure_set.is_none() && self.authorization.payload.legacy_fields())?;
             return Ok(None);
         }
@@ -136,7 +136,7 @@ impl Configuration {
         require((role=="bridge")==late && genesis==closure_set::GENESIS_ROLES.contains(&role) && (!genesis || !late)
             && (role!="publicationReconciliation" || publication))?;
         let p=&self.authorization.payload;
-        require(p.api_version==(if genesis_successor{"serverware.nativeCustodyClosureAssignment/v6"}else if genesis{"serverware.nativeCustodyClosureAssignment/v4"}else if publication{"serverware.nativeCustodyClosureAssignment/v5"}else{"serverware.nativeCustodyClosureAssignment/v3"})
+        require(p.api_version==(if genesis_successor{"catchplate.nativeCustodyClosureAssignment/v6"}else if genesis{"catchplate.nativeCustodyClosureAssignment/v4"}else if publication{"catchplate.nativeCustodyClosureAssignment/v5"}else{"catchplate.nativeCustodyClosureAssignment/v3"})
             && p.purpose=="shadow-custody-closure-set-member"
             && p.profile==(if genesis_successor{GENESIS_BOOTSTRAP_SET_PROFILE}else if genesis{"native-publication-genesis-closure-set-v1"}else if publication{PUBLICATION_SET_PROFILE}else{SET_PROFILE})
             && p.guest_role.as_deref()==Some(role))?;
@@ -185,7 +185,7 @@ fn verify_assignment(wire:&Assignment,manifest:&Manifest,guest:&GuestClosureBind
         let genesis=member.set.genesis();
         let genesis_bootstrap=member.set.genesis_bootstrap();
         let publication=member.set.publication();
-        require(p.api_version==(if genesis_bootstrap{"serverware.nativeCustodyClosureAssignment/v6"}else if genesis{"serverware.nativeCustodyClosureAssignment/v4"}else if publication{"serverware.nativeCustodyClosureAssignment/v5"}else{"serverware.nativeCustodyClosureAssignment/v3"})
+        require(p.api_version==(if genesis_bootstrap{"catchplate.nativeCustodyClosureAssignment/v6"}else if genesis{"catchplate.nativeCustodyClosureAssignment/v4"}else if publication{"catchplate.nativeCustodyClosureAssignment/v5"}else{"catchplate.nativeCustodyClosureAssignment/v3"})
             && p.purpose=="shadow-custody-closure-set-member"
             && p.profile==(if genesis_bootstrap{GENESIS_BOOTSTRAP_SET_PROFILE}else if genesis{"native-publication-genesis-closure-set-v1"}else if publication{PUBLICATION_SET_PROFILE}else{SET_PROFILE})
             && p.guest_role.as_deref()==Some(member.role)
@@ -197,13 +197,13 @@ fn verify_assignment(wire:&Assignment,manifest:&Manifest,guest:&GuestClosureBind
             && &original.custody_authority.structurally_verified_seccomp_policy_sha256==bridge.seccomp_policy_sha256()
             && (member.role=="bridge" || (genesis_bootstrap && member.role=="publicationGenesisCoordinator")
                 || guest.runtime_configuration_sha256==manifest.runtime_configuration_sha256))?;
-        if genesis_bootstrap{"serverware.nativeCustodyClosureAssignment.signature/v6"}else if genesis{"serverware.nativeCustodyClosureAssignment.signature/v4"}else if publication{"serverware.nativeCustodyClosureAssignment.signature/v5"}else{"serverware.nativeCustodyClosureAssignment.signature/v3"}
+        if genesis_bootstrap{"catchplate.nativeCustodyClosureAssignment.signature/v6"}else if genesis{"catchplate.nativeCustodyClosureAssignment.signature/v4"}else if publication{"catchplate.nativeCustodyClosureAssignment.signature/v5"}else{"catchplate.nativeCustodyClosureAssignment.signature/v3"}
     } else if manifest.profile==BOOTSTRAP_PROFILE {
-        require(p.api_version=="serverware.nativeCustodyClosureAssignment/v2"
+        require(p.api_version=="catchplate.nativeCustodyClosureAssignment/v2"
             && p.purpose=="shadow-custody-bootstrap-late-runtime" && p.profile==BOOTSTRAP_PROFILE)?;
-        "serverware.nativeCustodyClosureAssignment.signature/v2"
+        "catchplate.nativeCustodyClosureAssignment.signature/v2"
     } else {
-        require(p.api_version=="serverware.nativeCustodyClosureAssignment/v1"
+        require(p.api_version=="catchplate.nativeCustodyClosureAssignment/v1"
             && p.purpose=="shadow-custody-execution-closure" && p.profile==PROFILE
             && guest.runtime_configuration_sha256==manifest.runtime_configuration_sha256)?;
         DOMAIN
@@ -308,7 +308,7 @@ impl PrekeyExecutable {
         let identity=executable_identity(&executable)?;
         let bytes=read(&executable,128*1024*1024)?;
         require(Sha256Digest::compute(&bytes)==configuration.manifest.worker_executable_sha256)?;
-        serverware_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&bytes).map_err(unavailable)?;
+        catchplate_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&bytes).map_err(unavailable)?;
         let owner=Self{executable,identity,association,membership};owner.check()?;Ok(owner)
     }
     pub(in crate::policy_shadow) fn check(&self)->Result<(),ShadowError> {
@@ -369,7 +369,7 @@ impl PreparedNativeCustodyClosure {
         let executable_identity=executable_identity(&executable)?;
         let bytes=read(&executable,128*1024*1024)?;
         require(Sha256Digest::compute(&bytes)==m.worker_executable_sha256)?;
-        serverware_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&bytes).map_err(unavailable)?;
+        catchplate_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&bytes).map_err(unavailable)?;
         // Same full bytes, not merely a matching path or mutable executable.
         require(read(image.executable(),128*1024*1024)?==bytes)?;
         check_current_executable(&executable_identity)?;association.check_preparation().map_err(unavailable)?;

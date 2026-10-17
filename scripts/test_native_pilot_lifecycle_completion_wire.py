@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
 from scripts.test_native_pilot_adopted_completion import fixture as adopted_fixture
 from scripts.test_native_pilot_genesis_rendezvous import fixture as rendezvous_fixture
-from serverware import native_pilot_lifecycle_approval_wire as wire
+from catchplate import native_pilot_lifecycle_approval_wire as wire
 
 p = wire.p
 FAILURES = (ValueError, KeyError, TypeError)
@@ -83,7 +83,7 @@ def adopted_case(*, run=False):
         expiresAtUnixNanos=request["expiresAtUnixNanos"])
     request["conductorRequestSha256"] = p.sha(p.canonical(request["conductorRequest"]))
     request_raw = p.canonical(request)
-    observation_raw = p.canonical(dict(apiVersion="serverware.nativePilotAdoptedSupervisorObservation/v1",
+    observation_raw = p.canonical(dict(apiVersion="catchplate.nativePilotAdoptedSupervisorObservation/v1",
         policySha256=context["bootstrapPins"]["policy"], catalogueSha256=p.sha(wire.policy.catalogue_original()),
         intakeConfigurationSha256=context["bootstrapPins"]["intake_configuration"],
         conductorRequestOriginal=p.canonical(request["conductorRequest"]).decode("ascii"),
@@ -178,7 +178,7 @@ class LifecycleCompletionWireControls(unittest.TestCase):
 
     def test_terminal_profiles_flags_and_inner_clock_types_stay_closed(self):
         for make in (cold_case, adopted_case):
-            for update in (dict(apiVersion="serverware.nativePilotAuthorityCoordinatorResult/v1"),
+            for update in (dict(apiVersion="catchplate.nativePilotAuthorityCoordinatorResult/v1"),
                     dict(status="approved"), dict(pilotAcceptanceVerified=True),
                     dict(productionReleaseEligible=0), dict(extra=True), dict(deadlineBoottimeNs=123)):
                 case = make(); case["value"].update(update)

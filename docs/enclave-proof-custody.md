@@ -57,7 +57,7 @@ and an absolute deadline. It opens the ledger, generates the actual boot ID and
 proof key, and quotes this fixed binding:
 
 ```text
-SHA256("serverware/native-proof-custody-boot/v1\0"
+SHA256("catchplate/native-proof-custody-boot/v1\0"
        || actual_boot_id_32
        || SHA256(actual_proof_key_SPKI_DER)
        || SHA256(actual_pinned_control_plane_key_SPKI_DER))
@@ -123,7 +123,7 @@ original deadline.
 
 [verify_native_response_proof_key.py](../scripts/verify_native_response_proof_key.py)
 accepts exactly `apiVersion`, `attestationDocumentB64` and
-`responseProofPublicKey` under `serverware.nativeResponseProofKeyEvidence/v1`.
+`responseProofPublicKey` under `catchplate.nativeResponseProofKeyEvidence/v1`.
 The original quote and raw 32-byte Ed25519 key use canonical unpadded URL-safe
 base64; evidence cannot supply trusted boot, policy, challenge or verdict claims.
 Stdin is capped at 32 KiB and the original quote at 12 KiB.
@@ -134,10 +134,10 @@ claims or create a successful verifier result.
 
 Four required arguments, `--expectations`, `--expectations-sha256`,
 `--trust-roots` and `--trust-roots-sha256`, pin exact file originals before
-strict parsing. Expectations use `serverware.nativeResponseProofKeyExpectations/v1`
+strict parsing. Expectations use `catchplate.nativeResponseProofKeyExpectations/v1`
 and add independently expected boot ID, proof SPKI key ID, control-plane SPKI
 key ID and nonce to the existing pinned release/policy/configuration/CA/PCR/EIF/
-module/age scope. Trust uses `serverware.nativeResponseProofKeyTrustRoots/v1`
+module/age scope. Trust uses `catchplate.nativeResponseProofKeyTrustRoots/v1`
 and the fixed native PKI profile with an empty CRL inventory. Expectation and
 trust originals are capped at 16 KiB and 1 MiB respectively.
 
@@ -149,7 +149,7 @@ field in this quote; independent release/PCR admission must establish its
 meaning. Native PKI does not supply vendor-CRL revocation proof.
 
 Successful output is bounded to 4 KiB and explicitly labels
-`serverware.nativeResponseProofKeyVerification/v1`, `resultScope=local-verifier-only`
+`catchplate.nativeResponseProofKeyVerification/v1`, `resultScope=local-verifier-only`
 and `okForAction=false`. It is not a transferable admission, response proof,
 live witness or key-possession proof. The caller still owns expectation
 provenance/currentness, fresh one-use challenge reservation, trusted time and
@@ -175,7 +175,7 @@ It neither signs again nor reclaims an attempt or observation reservation. The
 fresh NSM challenge is:
 
 ```text
-SHA256("serverware/native-response-attestation-challenge/v1\0"
+SHA256("catchplate/native-response-attestation-challenge/v1\0"
        || u8(length(raw_client_nonce)) || raw_client_nonce
        || SHA256(canonical_statement) || raw_Ed25519_signature_64)
 ```
@@ -188,8 +188,8 @@ quote, regenerate a key, renew either owner's lifetime, extend statement age or
 renew authorization. Checks discard late originals, but a deadline alone cannot
 interrupt a blocked NSM ioctl or mutex wait.
 
-The distinct envelope is `serverware.nativeResponseRuntimeProof/v1`, kind
-`ServerwareNativeResponseRuntimeProof`, with exactly `apiVersion`, `kind`,
+The distinct envelope is `catchplate.nativeResponseRuntimeProof/v1`, kind
+`CatchplateNativeResponseRuntimeProof`, with exactly `apiVersion`, `kind`,
 `server_statement`, `server_statement_sha256`, `server_signature` and
 `native_attestation`. All three families use these outer names while preserving
 their original signed statement versions and canonical bytes. `server_signature`
@@ -217,17 +217,17 @@ from release/PCR expectations to that binary; the quote adds no separate binary
 measurement field.
 
 Its four required pinned-file arguments are the same names as the key verifier.
-The expectation version is `serverware.nativeResponseAttestationExpectations/v1`;
+The expectation version is `catchplate.nativeResponseAttestationExpectations/v1`;
 its `nonce` is the independently held **original client nonce**, not a challenge
 copied from the quote. The remaining boot/key/control-plane-key and release/
 policy/configuration/CA/PCR/EIF/module/age expectations remain independent of
-evidence. Trust uses `serverware.nativeResponseAttestationTrustRoots/v1` and the
+evidence. Trust uses `catchplate.nativeResponseAttestationTrustRoots/v1` and the
 same fixed native PKI profile with empty CRLs. Exact expectation/trust originals
 remain capped at 16 KiB/1 MiB. Input is bounded to 512 KiB, the canonical statement
 to 256 KiB, JSON depth to 64 and nodes to 100,000; producer bounds remain narrower.
 
 Output is at most 4 KiB, version
-`serverware.nativeResponseAttestationVerification/v1`, with
+`catchplate.nativeResponseAttestationVerification/v1`, with
 `resultScope=local-signature-and-native-quote-only` and `okForAction=false`.
 This is unsigned local output, not full nested statement-schema validation,
 control-plane receipt/authorization verification, independent HTTP response or
@@ -236,8 +236,8 @@ fresh quote does not prove that the attested key's signed network claims happene
 Nonce freshness/reservation, expectation provenance/currentness, trusted time
 and watchdogs remain caller responsibilities.
 
-The legacy `serverware-proof-client` production path requires its separately
-signed `serverware.vendorTeeVerification/v1` envelope, exact verified claims and
+The legacy `catchplate-proof-client` production path requires its separately
+signed `catchplate.vendorTeeVerification/v1` envelope, exact verified claims and
 the existing HTTP/TLS/request/body joins before capture publication. It does
 not accept this distinct native proof through that profile. In particular, the
 local result is not a substitute for that verifier signature, and the native PKI profile cannot

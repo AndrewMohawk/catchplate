@@ -21,7 +21,7 @@ cannot supply it. The returned raw4 contains no packet ID, so receiving
 verification makes no independent packet-identity claim. The actual historical
 authorization identity must match `completionAuthorizationDigest`.
 
-The [subject inspector](../serverware/control_plane_registration_finalization_completion_subject.py)
+The [subject inspector](../catchplate/control_plane_registration_finalization_completion_subject.py)
 exposes `inspect_retained_finalization_completion_subject(local_digest)`.
 Its result is ordinary owned data with exactly eight fields: `localDigest`,
 `userId`, `challengeId`, `sessionId`, `mode`, `requestDigest`, `operationId` and
@@ -77,7 +77,7 @@ actual validation work. This source change is not execution evidence.
 
 ## Private initial request and explicit recovery
 
-The [completion facade](../serverware/control_plane_registration_finalization_completion.py) provides two distinct calls:
+The [completion facade](../catchplate/control_plane_registration_finalization_completion.py) provides two distinct calls:
 
 - `request_retained_registration_finalization_completion(local_digest, *, expected_user_id, expected_session_id)`
 - `recover_retained_registration_finalization_completion(local_digest, *, expected_user_id, expected_session_id)`
@@ -102,7 +102,7 @@ those steps, and the completion path never calls a protected SQL executor.
 
 ## Immutable outcomes and reconciliation
 
-The [journal](../serverware/control_plane_custody_journal.py)/[client](../serverware/control_plane_custody_client.py) expose `append_registration_finalization_completion_outcome`
+The [journal](../catchplate/control_plane_custody_journal.py)/[client](../catchplate/control_plane_custody_client.py) expose `append_registration_finalization_completion_outcome`
 and `append_registration_finalization_completion_reconciliation`, each taking
 `(finalization_digest, originals)` and returning only a local content digest.
 `load_registration_finalization_outcomes` returns opaque associated originals.

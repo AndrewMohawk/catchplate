@@ -16,13 +16,13 @@ from unittest.mock import patch
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from serverware import authority_primary_contract as primary
-from serverware import authority_rbac_currentness as subject
-from serverware import authority_fd_entrypoint as entry
-from serverware import authority_launcher as launcher
-from serverware import authority_rbac_witness as witness
-from serverware import control_plane_rbac_currentness as currentness
-from serverware.oauth_application_owner import _Original, OAuthApplicationError
+from catchplate import authority_primary_contract as primary
+from catchplate import authority_rbac_currentness as subject
+from catchplate import authority_fd_entrypoint as entry
+from catchplate import authority_launcher as launcher
+from catchplate import authority_rbac_witness as witness
+from catchplate import control_plane_rbac_currentness as currentness
+from catchplate.oauth_application_owner import _Original, OAuthApplicationError
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -34,11 +34,11 @@ def fixture():
         for name in subject.TABLES]
     state = dict(generation=0, roots=roots, stateDigest=subject.state_digest(
         subject.state_material(0, roots[1], primary.source_query_manifest_digest())))
-    identity = lambda role: dict(role="serverware_rbac_witness_" + role,
+    identity = lambda role: dict(role="catchplate_rbac_witness_" + role,
         clientDn="/CN=test-" + role, clientSerial="1", issuerDn="/CN=test-ca",
         certificateSha256=pin(role))
     payload = dict(schema=subject.LOCAL_ENROLLMENT_SCHEMA, sourceRevision="synthetic-source",
-        enrollmentId="test-only", databaseId=subject.sha256(b"serverware/rbac-metadata-identity/v1\0" +
+        enrollmentId="test-only", databaseId=subject.sha256(b"catchplate/rbac-metadata-identity/v1\0" +
             subject.canonical(dict(clusterId="1", database="metadata"))), deploymentId="test-only",
         configurationDigests=[pin("configuration")], metadataClusterId="1", witnessClusterId="2",
         metadataDatabase="metadata", metadataFaultDomain="test-metadata-volume",
@@ -128,7 +128,7 @@ class LocalRbacWitnessTests(unittest.TestCase):
                     "sslmode": "verify-full", "ssl_min_protocol_version": "TLSv1.3",
                     "ssl_max_protocol_version": "TLSv1.3", "passfile": "/dev/null",
                     "password": "", "gssencmode": "disable",
-                    "application_name": "serverware-rbac-witness-v1",
+                    "application_name": "catchplate-rbac-witness-v1",
                 }.items():
                     self.assertEqual(parsed[name], expected)
                 descriptors = [int(parameters[name].rsplit("/", 1)[1])
@@ -373,7 +373,7 @@ class LocalRbacWitnessTests(unittest.TestCase):
         caught.exception.owner.close()
 
     def test_fixed_delivery_selected_only_after_local_setup_before_credentials(self):
-        tree = source("serverware/authority_fd_entrypoint.py")
+        tree = source("catchplate/authority_fd_entrypoint.py")
         main = ast.unparse(function(tree, "_normal_main"))
         self.assertIn("local_admission is not None and role in {'verifier', 'planner', 'executor'}", main)
         self.assertLess(main.index("_local_admission_sources(role, local_admission)"), main.index("_LocalRbacSlots.open("))
@@ -432,7 +432,7 @@ class LocalRbacWitnessTests(unittest.TestCase):
             with self.assertRaises(ValueError): subject.sign_enrollment(changed, key)
 
     def test_local_admission_requires_real_owner_and_production_refusal(self):
-        tree = source("serverware/control_plane_rbac_currentness.py")
+        tree = source("catchplate/control_plane_rbac_currentness.py")
         gate = ast.unparse(function(tree, "_require_local_owner"))
         for exact in ("profile.require_local_development()", "client._snapshot(owner.custody) is owner.binding",
                 "startup.require_started() is owner.custody", "client._receipt_now(owner.binding)",
@@ -441,15 +441,15 @@ class LocalRbacWitnessTests(unittest.TestCase):
             self.assertIn(exact, gate)
         self.assertIn("_require_local_owner(value)", ast.unparse(function(tree, "_initialize")))
         self.assertIn("_require_local_owner(self)", ast.unparse(function(tree, "check")))
-        production = ast.unparse(function(source("serverware/authority_rbac_currentness.py"), "require_local_development"))
+        production = ast.unparse(function(source("catchplate/authority_rbac_currentness.py"), "require_local_development"))
         self.assertIn("not config.PRODUCTION_IMAGE", production)
         self.assertIn("config.RELEASE_CHANNEL", production)
-        self.assertIn("SERVERWARE_PRODUCTION_IMAGE", production)
+        self.assertIn("CATCHPLATE_PRODUCTION_IMAGE", production)
 
     def test_authority_expiry_uses_receipt_payload_and_original_bounds(self):
         # Execute only the genuine calculation nodes on synthetic contract
         # data. This neither fabricates an admitted owner nor contacts a DB.
-        initialize = function(source("serverware/control_plane_rbac_currentness.py"), "_initialize")
+        initialize = function(source("catchplate/control_plane_rbac_currentness.py"), "_initialize")
         branch = next(node for node in ast.walk(initialize)
             if isinstance(node, ast.If) and ast.unparse(node.test) == "process is None")
         selected = [node for node in branch.orelse if isinstance(node, ast.Assign)
@@ -459,7 +459,7 @@ class LocalRbacWitnessTests(unittest.TestCase):
         self.assertEqual(len(selected), 6)
         code = compile(ast.Module(body=selected, type_ignores=[]), "<actual-rbac-expiry-calculation>", "exec")
         receipt_schema = ast.literal_eval(next(node.value
-            for node in source("serverware/authority_service.py").body
+            for node in source("catchplate/authority_service.py").body
             if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name)
                 and target.id == "TRUSTED_HOST_LOCAL_ATTESTATION_SCHEMA" for target in node.targets)))
 
@@ -488,12 +488,12 @@ class LocalRbacWitnessTests(unittest.TestCase):
             with self.assertRaises(KeyError): calculate(changed, 1000, 1200)
 
     def test_provision_and_delivery_keep_local_schema_explicit(self):
-        provision = ast.unparse(function(source("serverware/authority_rbac_witness.py"), "provision"))
+        provision = ast.unparse(function(source("catchplate/authority_rbac_witness.py"), "provision"))
         self.assertIn("policy['schema'] == wire.LOCAL_ENROLLMENT_SCHEMA", provision)
         self.assertLess(provision.index("wire.require_local_development()"), provision.index("with connection.transaction()"))
-        delivered = ast.unparse(function(source("serverware/authority_fd_entrypoint.py"), "_open_rbac_witness_material"))
+        delivered = ast.unparse(function(source("catchplate/authority_fd_entrypoint.py"), "_open_rbac_witness_material"))
         self.assertIn("profile.LOCAL_STARTUP_SCHEMA", delivered)
-        admitted = ast.unparse(function(source("serverware/control_plane_rbac_currentness.py"), "_initialize"))
+        admitted = ast.unparse(function(source("catchplate/control_plane_rbac_currentness.py"), "_initialize"))
         self.assertIn("profile.LOCAL_ENROLLMENT_SCHEMA if value.local", admitted)
         self.assertIn("root.public_bytes", admitted)
         self.assertIn("independent_root.public_bytes", admitted)

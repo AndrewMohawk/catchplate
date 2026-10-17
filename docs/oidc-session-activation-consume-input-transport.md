@@ -7,7 +7,7 @@ an issuer service. The caller must independently retain and admit returned
 originals; a socket peer or bounded frame is not planning permission.
 
 The sole endpoint is
-`/run/serverware/oidc-session-activation-consume-inputs/grants.sock`.
+`/run/catchplate/oidc-session-activation-consume-inputs/grants.sock`.
 The service admits caller peer `65532:65532` before request bytes; the caller
 checks the root-created listener peer `0:0` before sending. The exact endpoint
 tuple contains that path, an integer timeout from 1 through 30 seconds, and both

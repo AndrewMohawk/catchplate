@@ -4,8 +4,8 @@ use super::*;
 use std::cell::RefCell;
 use std::os::fd::AsRawFd;
 
-const STOP:&str="serverware.custodyGenesisOrdinaryStop/v1";
-const TERMINAL:&str="serverware.custodyGenesisOrdinaryTerminal/v1";
+const STOP:&str="catchplate.custodyGenesisOrdinaryStop/v1";
+const TERMINAL:&str="catchplate.custodyGenesisOrdinaryTerminal/v1";
 
 thread_local! {
     static SERVING:RefCell<Option<Arc<Delivery>>>=const {RefCell::new(None)};

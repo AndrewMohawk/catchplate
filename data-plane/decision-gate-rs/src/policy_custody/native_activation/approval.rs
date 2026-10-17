@@ -37,7 +37,7 @@ pub(super) fn verify(plan:&Value,args:&Value,result:&Value,prepared:&Value,verif
     require(change["operation"]=="UPDATE" && change["expectedRow"]==prior && change["row"]==consumed)?;
     let provenance=stored(&consumed,"approval_authn",16384)?;let old_provenance=stored(&prior,"approval_authn",16384)?;
     exact(&provenance,&["schema","requestDigest","requestEvidenceDigest","credentialPolicy","decisionDigest","decisionEvidenceDigest","consumptionDigest","consumptionEvidenceDigest"])?;
-    require(provenance["schema"]=="serverware.nativePolicyActivationApprovalProvenance/v1"
+    require(provenance["schema"]=="catchplate.nativePolicyActivationApprovalProvenance/v1"
         && provenance["credentialPolicy"]==args["credential_policy"] && provenance["consumptionDigest"]==result["requestDigest"]
         && old_provenance["consumptionDigest"].is_null() && old_provenance["consumptionEvidenceDigest"].is_null())?;
     for field in ["requestDigest","requestEvidenceDigest","decisionDigest","decisionEvidenceDigest"]{digest(&provenance,field)?;}
@@ -50,7 +50,7 @@ pub(super) fn verify(plan:&Value,args:&Value,result:&Value,prepared:&Value,verif
     let ready=stored(prepared,"readyOriginal",16384)?;
     exact(&ready,&["apiVersion","canaryId","assignmentSha256","previousRevision","previousStateSha256","revision","readinessCoreSha256","readinessResultSha256","expiresAtUnixNanos"])?;
     let readiness=stored(prepared,"readinessOriginal",MAX_PREPARED)?;let core=&readiness["core"];
-    require(ready==json!({"apiVersion":"serverware.nativePolicyReadyState/v1","canaryId":core["canaryId"],"assignmentSha256":core["assignmentSha256"],
+    require(ready==json!({"apiVersion":"catchplate.nativePolicyReadyState/v1","canaryId":core["canaryId"],"assignmentSha256":core["assignmentSha256"],
         "previousRevision":core["predecessorCanaryRevision"],"previousStateSha256":core["predecessorCanaryStateSha256"],"revision":core["designatedReadyRevision"],
         "readinessCoreSha256":prepared["readinessCoreSha256"],"readinessResultSha256":prepared["readinessResultSha256"],"expiresAtUnixNanos":core["expiresAtUnixNanos"]})
         && sha(&ready)?==prepared["readyStateSha256"] && core["trustCheckpoint"]==prepared["trustCheckpoint"])?;
@@ -107,13 +107,13 @@ fn assertion(plan:&Value,args:&Value,provenance:&Value,verifier:&Value,receipt:&
         "verifierSessionIdentityDigest","verifierMeasurementDigest","verifierAttestationReceiptDigest","verifiedAssertionReceiptDigest","verifierSignatureBase64url",
         "verifierSignatureDigest","verifiedAtEpochNs","expiresAtEpochNs"])?;
     for field in ["operation","operationId","requestDigest","capabilityId"]{require(e[field]==m[field])?;}
-    require(digest(e,"verifierSessionIdentityDigest")?==framed("serverware.policyAuthorityVerifierSession/v2",&[
+    require(digest(e,"verifierSessionIdentityDigest")?==framed("catchplate.policyAuthorityVerifierSession/v2",&[
         text(args,"control_plane_configuration_digest")?.as_bytes(),text(verifier,"measurementDigest")?.as_bytes(),text(verifier,"attestationReceiptDigest")?.as_bytes()]))?;
     for(a,b)in [("verifierMeasurementDigest","measurementDigest"),("verifierAttestationReceiptDigest","attestationReceiptDigest")]{
         require(e[a]==verifier[b])?;}
     let mut unsigned=e.clone();let object=unsigned.as_object_mut().ok_or(ShadowError::BindingDrift)?;
     for name in ["verifiedAssertionReceiptDigest","verifierSignatureBase64url","verifierSignatureDigest"]{object.remove(name);}
-    let receipt_digest=framed("serverware.policyAuthorityVerifiedWebAuthnAssertionReceipt/v1",&[&canonical_json_bytes(&unsigned)?]);
+    let receipt_digest=framed("catchplate.policyAuthorityVerifiedWebAuthnAssertionReceipt/v1",&[&canonical_json_bytes(&unsigned)?]);
     let signature=decode(text(e,"verifierSignatureBase64url")?,64)?;
     require(digest(e,"verifiedAssertionReceiptDigest")?==receipt_digest && digest(e,"verifierSignatureDigest")?==Sha256Digest::compute(&signature)
         && e["verifiedAssertionReceiptDigest"]==provenance["consumptionEvidenceDigest"])?;

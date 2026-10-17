@@ -10,8 +10,8 @@ import time
 from . import process, state
 from .config import InstallError, check_path, parse_json, read_file
 
-SERVICES = ("serverware", "decision-gate-rs", "edge")
-LABEL = "io.serverware.installation"
+SERVICES = ("catchplate", "decision-gate-rs", "edge")
+LABEL = "io.catchplate.installation"
 
 
 def _identifiers(raw: bytes) -> list[str]:
@@ -81,7 +81,7 @@ def _tls_recovery_pending(state_dir: Path) -> bool:
 def _pending_activation(state_dir: Path) -> None:
     if _tls_recovery_pending(state_dir):
         raise InstallError("A TLS replacement needs recovery; ordinary startup is blocked and retained state is preserved.")
-    database = state_dir / "app-data/serverware.sqlite3"
+    database = state_dir / "app-data/catchplate.sqlite3"
     check_path(database, missing_leaf=True)
     if not database.exists():
         if next((state_dir / "app-data").iterdir(), None) is not None:
@@ -127,7 +127,7 @@ def _wait_healthy(manifest, service, deadline) -> None:
     while time.monotonic() < deadline:
         status = _service_status(manifest, service)
         if status == {"state": "running", "health": "healthy"}:
-            if service != "serverware" or _publication_ready(manifest):
+            if service != "catchplate" or _publication_ready(manifest):
                 return
         if status["state"] in {"exited", "dead", "removing", "restarting"}:
             raise _service_failed(service, status["state"])
@@ -136,7 +136,7 @@ def _wait_healthy(manifest, service, deadline) -> None:
 
 
 def _pair_status(manifest) -> dict:
-    value = parse_json(_compose(manifest, "exec", "-T", "serverware", "python", "-B", "-m",
+    value = parse_json(_compose(manifest, "exec", "-T", "catchplate", "python", "-B", "-m",
         "scripts.operator_install.runtime", "pair-status", timeout=10))
     if (type(value) is not dict or set(value) != {"ready", "policy_hash", "loaded_policy_hash"}
             or type(value["ready"]) is not bool
@@ -182,7 +182,7 @@ def stop(state_dir: Path) -> dict:
         # TLS recovery must not prevent a safe stop; Compose itself is still pinned.
         manifest = state.load_manifest(state_dir, verify_files=False)
         resources(manifest["config"]["project_name"], manifest["instance_id"])
-        _compose(manifest, "stop", "--timeout", "30", "edge", "decision-gate-rs", "serverware", timeout=100)
+        _compose(manifest, "stop", "--timeout", "30", "edge", "decision-gate-rs", "catchplate", timeout=100)
         services = {name: _service_status(manifest, name) for name in SERVICES}
         if any(value["state"] not in {"absent", "created", "exited", "dead"} for value in services.values()):
             raise InstallError("Not every service is confirmed stopped; inspect status before backing up retained state.")

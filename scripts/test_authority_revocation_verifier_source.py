@@ -61,9 +61,9 @@ def keywords(node):
 class RevocationVerifierSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.service_source, cls.service = read("serverware/authority_service.py", 2 * 1024 * 1024)
+        cls.service_source, cls.service = read("catchplate/authority_service.py", 2 * 1024 * 1024)
         cls.process = definition(cls.service, "AuthorityProcess")
-        cls.source, cls.module = read("serverware/authority_revocation_verifier.py", 64 * 1024)
+        cls.source, cls.module = read("catchplate/authority_revocation_verifier.py", 64 * 1024)
         cls.owner = definition(cls.module, "RevocationPlanVerifier")
 
     def shape(self, actual, expected):
@@ -131,7 +131,7 @@ class RevocationVerifierSourceTests(unittest.TestCase):
             "maximumPlanAgeNs", "maximumClockSkewNs"})''')
         self.shape(assigned(self.module, "_CALL_CONTEXT_FIELDS"), '''
             handoff.retention.production._CONTEXT_FIELDS - _CONFIGURED_CONTEXT_FIELDS - {"expectedBefore"}''')
-        _source, production = read("serverware/authority_revocation_plan_production.py")
+        _source, production = read("catchplate/authority_revocation_plan_production.py")
         complete = ast.literal_eval(assigned(production, "_CONTEXT_FIELDS").args[0])
         configured = ast.literal_eval(assigned(self.module, "_CONFIGURED_CONTEXT_FIELDS").args[0])
         self.assertEqual(complete - configured - {"expectedBefore"}, {
@@ -232,7 +232,7 @@ class RevocationVerifierSourceTests(unittest.TestCase):
         order = (prefix, role_loop[0], manifest[0], *integers, *keys,
                  assigned(factory, "verifier_session"), owner)
         self.assertEqual([node.lineno for node in order], sorted(node.lineno for node in order))
-        _source, authority = read("serverware/authority_contract.py")
+        _source, authority = read("catchplate/authority_contract.py")
         self.shape(assigned(authority, "VERIFIER_RESPONSE_MAX_AGE_NS"), "30 * 1_000_000_000")
         self.shape(assigned(authority, "VERIFIER_MAX_CLOCK_SKEW_NS"), "5 * 1_000_000_000")
         # These are the existing real service policy sources, not caller pins.
@@ -295,8 +295,8 @@ class RevocationVerifierSourceTests(unittest.TestCase):
             if isinstance(node, ast.ImportFrom) for item in node.names}
         self.assertEqual(imports, {("__future__", "annotations"), ("dataclasses", "dataclass"),
             ("cryptography.hazmat.primitives.asymmetric.ed25519", "Ed25519PublicKey"),
-            ("serverware", "authority_contract"), ("serverware", "authority_revocation_configuration"),
-            ("serverware", "authority_revocation_handoff")})
+            ("catchplate", "authority_contract"), ("catchplate", "authority_revocation_configuration"),
+            ("catchplate", "authority_revocation_handoff")})
         self.assertFalse(any(isinstance(node, ast.Import) for node in self.module.body))
         for forbidden in ("_ValidationWork", "QueryReadValidationLimits", "psycopg.connect",
                 "time.time_ns", "time.monotonic_ns", "datetime.now", "eval", "exec", "json.loads"):
@@ -304,14 +304,14 @@ class RevocationVerifierSourceTests(unittest.TestCase):
         for forbidden in ("authority_service", "authority_transition_registry", "authority_revocation_coordinator",
                 "Ed25519PrivateKey", "_issuer_from_configuration_on_work", "_read_dsn_descriptor"):
             self.assertNotIn(forbidden, self.source)
-        _source, configured = read("serverware/authority_revocation_configuration.py")
+        _source, configured = read("catchplate/authority_revocation_configuration.py")
         key = definition(configured, "_key")
         guarded = calls(key, "production._callback")
         self.assertEqual(len(guarded), 2)
         self.shape(guarded[0], "production._callback(work, lambda: Ed25519PublicKey.from_public_bytes(raw))")
         self.shape(guarded[1], '''production._callback(work,
             lambda: key.public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo))''')
-        _source, handoff = read("serverware/authority_revocation_handoff.py")
+        _source, handoff = read("catchplate/authority_revocation_handoff.py")
         worker = definition(handoff, "_verify_observed_plan_handoff_on_work")
         signature = call(worker, "capability._signature")
         cutoff = call(worker, "_authenticated_cutoff")
@@ -323,7 +323,7 @@ class RevocationVerifierSourceTests(unittest.TestCase):
         replay_options = {item.arg: item.value for item in replay.keywords if item.arg is not None}
         for name in ("envelope_bytes", "evaluation_context_bytes", "work"):
             self.shape(replay_options[name], name)
-        _source, retained = read("serverware/authority_revocation_retention.py")
+        _source, retained = read("catchplate/authority_revocation_retention.py")
         genuine = call(definition(retained, "_verify_record_on_work"), "plan._verify_signed_revocation_plan_on_work")
         options = {item.arg: item.value for item in genuine.keywords if item.arg is not None}
         self.shape(options["original_envelope_bytes"], "envelope_bytes")
@@ -341,10 +341,10 @@ class RevocationVerifierSourceTests(unittest.TestCase):
         descriptors = calls(loader, "_read_bounded_descriptor")
         self.assertEqual(len(descriptors), 2)
         self.shape(descriptors[0], '''_read_bounded_descriptor(
-            "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY", maximum=64 * 1024,
+            "CATCHPLATE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY", maximum=64 * 1024,
             require_root_owned=True, require_descriptor=True)''')
         self.shape(descriptors[1], '''_read_bounded_descriptor(
-            "SERVERWARE_POLICY_AUTHORITY_CONFIG", maximum=MAX_CONFIG_BYTES,
+            "CATCHPLATE_POLICY_AUTHORITY_CONFIG", maximum=MAX_CONFIG_BYTES,
             require_root_owned=True, require_descriptor=True)''')
         verified = call(loader, "root_key.verify")
         self.shape(verified, '''root_key.verify(_b64url_decode(envelope["signature"], size=64),
@@ -378,11 +378,11 @@ class RevocationVerifierSourceTests(unittest.TestCase):
                 self.assertNotIn(name, ast.unparse(dispatcher))
         credentials = definition(self.process, "_reject_wrong_credentials")
         self.shape(assigned(credentials, "allowed"), '''{
-            "verifier": {"SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN_FD"},
-            "planner": {"SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN_FD"},
-            "planner-writer": {"SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN_FD"},
-            "issuer": {"SERVERWARE_POLICY_AUTHORITY_CAPABILITY_ISSUER_POSTGRES_DSN_FD"},
-            "executor": {"SERVERWARE_POLICY_AUTHORITY_EXECUTOR_POSTGRES_DSN_FD"}}[self.role_name]''')
+            "verifier": {"CATCHPLATE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN_FD"},
+            "planner": {"CATCHPLATE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN_FD"},
+            "planner-writer": {"CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN_FD"},
+            "issuer": {"CATCHPLATE_POLICY_AUTHORITY_CAPABILITY_ISSUER_POSTGRES_DSN_FD"},
+            "executor": {"CATCHPLATE_POLICY_AUTHORITY_EXECUTOR_POSTGRES_DSN_FD"}}[self.role_name]''')
         conditions = [node.test for node in credentials.body if isinstance(node, ast.If)]
         self.assertEqual(len(conditions), 3)
         self.shape(conditions[1], '''(self.role_name == "verifier" and (not signing_descriptor or signing_path))
@@ -392,7 +392,7 @@ class RevocationVerifierSourceTests(unittest.TestCase):
         for forbidden in ("authority_revocation_handoff", "RevocationPlanningCoordinator",
                 "produce_observed_and_persist_with_cutoff"):
             self.assertNotIn(forbidden, self.service_source)
-        registry, _tree = read("serverware/authority_transition_registry.py")
+        registry, _tree = read("catchplate/authority_transition_registry.py")
         self.assertNotIn("authority_revocation_verifier", registry)
         self.assertNotIn("issue-revocation-capability", registry)
 

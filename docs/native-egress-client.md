@@ -1,6 +1,6 @@
 # Fixed native bootstrap client: egress observation v3
 
-`serverware-native-bootstrap-client` has an explicit v3 profile for one local,
+`catchplate-native-bootstrap-client` has an explicit v3 profile for one local,
 authorized egress observation around a never-executed child. It admits the actual
 same-TLS bootstrap proof, durably claims creation before cloning the child, and
 uses the separate guarded kernel transaction/readback pipeline. It is not a
@@ -12,11 +12,11 @@ installer. Source connectivity is not an executed or production-accepted result.
 The pinned CLI is unchanged:
 
 ```text
-serverware-native-bootstrap-client --configuration /absolute/client.json --configuration-sha256 sha256:<independent-64-lowercase-hex-pin>
+catchplate-native-bootstrap-client --configuration /absolute/client.json --configuration-sha256 sha256:<independent-64-lowercase-hex-pin>
 ```
 
 The [closed configuration](../schemas/native-bootstrap-client.v3.schema.json)
-is `serverware.nativeBootstrapClient/v3`, at most 16 KiB. It requires the same
+is `catchplate.nativeBootstrapClient/v3`, at most 16 KiB. It requires the same
 18 base fields described by the [fixed bootstrap client](native-bootstrap-client.md#explicit-inputs)
 and one nonnull `egress` object with exactly these four artifact pins:
 
@@ -25,7 +25,7 @@ and one nonnull `egress` object with exactly these four artifact pins:
 | `authority` | Independently signed egress authorization **v2**, at most 32 KiB, including the separate signed creation journal |
 | `authorityRoot` | Independently pinned canonical nonweak Ed25519 SPKI PEM, at most 16 KiB; actual owner admission enforces separate key roles |
 | `capabilityToken` | Protected owner-only, single-link regular file containing exact 32–256 URL-safe ASCII bytes, without LF; its actual hash must match the dedicated egress capability |
-| `launchManifest` | Protected canonical `serverware.nativeEgressLaunchManifest/v1` original, at most 4 KiB without LF, binding the selected protected executable original, at most 16 MiB |
+| `launchManifest` | Protected canonical `catchplate.nativeEgressLaunchManifest/v1` original, at most 4 KiB without LF, binding the selected protected executable original, at most 16 MiB |
 
 Each artifact pin is exactly `{ "path": "/absolute/original", "sha256":
 "sha256:<64-lowercase-hex>" }`. Root, scope, identity and original pins must be
@@ -80,7 +80,7 @@ automatically retried, repaired or rolled back.
 
 The [capture v3 schema](../schemas/native-bootstrap-client-capture.v3.schema.json)
 contains the nine base capture fields plus required `egress`. Its API is
-`serverware.nativeBootstrapClientCapture/v3`, scope
+`catchplate.nativeBootstrapClientCapture/v3`, scope
 `local-fixed-endpoint-bootstrap-and-egress-observation`, with `okForAction: false`.
 One complete UTF-8 JSON line, including its final LF, is at most 1.5 MiB.
 
@@ -89,7 +89,7 @@ is at most 8191 compact UTF-8 bytes and has exactly ten fields: `apiVersion`,
 `resultScope`, `okForAction`, `status`, `authorizationSha256`,
 `creationSlotSha256`, `creationRecordSha256`, `kernelSemanticSha256`,
 `kernelEvidenceSha256` and `workload`. Its API is
-`serverware.nativeEgressObservation/v1`, scope
+`catchplate.nativeEgressObservation/v1`, scope
 `local-authorized-egress-observed-before-owner-teardown`, again with
 `okForAction: false`. Status is selected only from the actual retained
 `Installed.created` value: `observed-created` or `observed-complete`. Neither

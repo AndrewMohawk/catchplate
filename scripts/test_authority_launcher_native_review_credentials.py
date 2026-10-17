@@ -18,14 +18,14 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import authority_launcher as subject
-from serverware import authority_stage_zero_contract as stage_zero
-from serverware import authority_fd_entrypoint as local_entrypoint
+from catchplate import authority_launcher as subject
+from catchplate import authority_stage_zero_contract as stage_zero
+from catchplate import authority_fd_entrypoint as local_entrypoint
 
-AUTHOR = "SERVERWARE_NATIVE_JIT_REVIEW_AUTHORIZER_KEY_FD"
-COMMIT = "SERVERWARE_NATIVE_JIT_REVIEW_COMMIT_KEY_FD"
+AUTHOR = "CATCHPLATE_NATIVE_JIT_REVIEW_AUTHORIZER_KEY_FD"
+COMMIT = "CATCHPLATE_NATIVE_JIT_REVIEW_COMMIT_KEY_FD"
 FIELD = "nativeJitReviewOpeningPolicy"
-ENROLLMENT = "SERVERWARE_NATIVE_JIT_REVIEW_CURRENT_ROOT_ENROLLMENT_FD"
+ENROLLMENT = "CATCHPLATE_NATIVE_JIT_REVIEW_CURRENT_ROOT_ENROLLMENT_FD"
 AUTHORITY_FIELD = "nativeJitReviewAuthorityPolicy"
 MANIFEST = "sha256:" + "a" * 64
 
@@ -36,10 +36,10 @@ def fixture(*, policy=True, authority_policy=False):
         "generationMinimumRollbackSequence": 1,
         "generationBindingDigest": "sha256:" + "c" * 64}
     if policy:
-        payload[FIELD] = {"schema": "serverware.nativeJitReviewOpeningPolicy/v1",
+        payload[FIELD] = {"schema": "catchplate.nativeJitReviewOpeningPolicy/v1",
             "sourceContractDigest": MANIFEST}
     if authority_policy:
-        payload[AUTHORITY_FIELD] = {"schema": "serverware.nativeJitReviewAuthorityPolicy/v1",
+        payload[AUTHORITY_FIELD] = {"schema": "catchplate.nativeJitReviewAuthorityPolicy/v1",
             "sourceContractDigest": MANIFEST, "authenticationPolicy": {},
             "trustPolicy": {}, "stateEndpoint": {}}
     return bound(payload)
@@ -75,7 +75,7 @@ class NativeReviewCredentialTests(unittest.TestCase):
             native_stage_zero=native)
 
     def test_old_role_rosters_are_exact_and_never_gain_optional_keys(self):
-        prefix = "SERVERWARE_POLICY_AUTHORITY_"
+        prefix = "CATCHPLATE_POLICY_AUTHORITY_"
         roles = {
             "runtime": "LAUNCH_ROOT_PUBLIC_KEY RUNTIME_ROOT_PUBLIC_KEY RUNTIME_TRUST",
             "verifier": "LAUNCH_ROOT_PUBLIC_KEY ROOT_PUBLIC_KEY CONFIG VERIFIER_SIGNING_KEY VERIFIER_READ_POSTGRES_DSN",
@@ -87,21 +87,21 @@ class NativeReviewCredentialTests(unittest.TestCase):
         expected = {role: frozenset(prefix + item + "_FD" for item in names.split())
             for role, names in roles.items()}
         for role in ("verifier", "planner", "executor"):
-            expected[role] |= frozenset("SERVERWARE_RBAC_WITNESS_" + name + "_FD"
+            expected[role] |= frozenset("CATCHPLATE_RBAC_WITNESS_" + name + "_FD"
                 for name in ("CONFIG", "ROOT", "TLS_ROOT", "CLIENT_CERTIFICATE", "CLIENT_KEY"))
         self.assertEqual(subject.ROLE_CREDENTIAL_DESCRIPTOR_NAMES, expected)
 
     def test_literal_names_join_signer_stage_zero_and_config_contracts(self):
-        slots = literal("serverware/authority_native_jit_review_open_signers.py", "_SLOTS")
+        slots = literal("catchplate/authority_native_jit_review_open_signers.py", "_SLOTS")
         self.assertEqual(subject.NATIVE_REVIEW_CREDENTIAL_NAMES,
             {role: item[1] + "_FD" for role, item in slots.items()})
         self.assertEqual(stage_zero.NATIVE_REVIEW_CREDENTIAL_ROLES,
             {AUTHOR: "planner", COMMIT: "executor"})
         self.assertEqual(subject.NATIVE_REVIEW_POLICY_FIELD,
-            literal("serverware/authority_native_jit_review_open_custody.py", "FIELD"))
+            literal("catchplate/authority_native_jit_review_open_custody.py", "FIELD"))
         for name, target in (("CONFIG_SCHEMA", "AUTHORITY_CONFIG_SCHEMA"),
                 ("SIGNED_CONFIG_SCHEMA", "SIGNED_AUTHORITY_CONFIG_SCHEMA")):
-            self.assertEqual(literal("serverware/authority_service.py", name), getattr(subject, target))
+            self.assertEqual(literal("catchplate/authority_service.py", name), getattr(subject, target))
 
     def test_provisional_candidate_is_exact_role_native_only(self):
         for role, name in (("planner", AUTHOR), ("executor", COMMIT)):
@@ -215,7 +215,7 @@ class NativeReviewCredentialTests(unittest.TestCase):
         self.assertEqual(subject.NATIVE_REVIEW_DESCRIPTOR_NAMES, {AUTHOR, COMMIT, ENROLLMENT})
         self.assertEqual(subject.NATIVE_REVIEW_AUTHORITY_POLICY_FIELD, AUTHORITY_FIELD)
         self.assertEqual(subject.NATIVE_REVIEW_AUTHORITY_POLICY_SCHEMA,
-            "serverware.nativeJitReviewAuthorityPolicy/v1")
+            "catchplate.nativeJitReviewAuthorityPolicy/v1")
         for role in subject.ROLE_CREDENTIAL_DESCRIPTOR_NAMES:
             self.assertNotIn(ENROLLMENT, subject.ROLE_CREDENTIAL_DESCRIPTOR_NAMES[role])
 
@@ -321,14 +321,14 @@ class NativeReviewCredentialTests(unittest.TestCase):
     def test_local_entrypoint_refuses_enrollment_before_credential_access(self):
         for name in (ENROLLMENT, ENROLLMENT.removesuffix("_FD") + "_PATH"):
             for role in ("verifier", "planner", "control-plane"):
-                with patch.dict(os.environ, {name: "", "SERVERWARE_AUTHORITY_TRUST_MODE": "trusted-host-local"}, clear=True):
+                with patch.dict(os.environ, {name: "", "CATCHPLATE_AUTHORITY_TRUST_MODE": "trusted-host-local"}, clear=True):
                     with patch.object(local_entrypoint, "_open_systemd_credential") as read:
                         with self.assertRaisesRegex(RuntimeError, "actual native stage zero"):
                             local_entrypoint._normal_main(role)
                         read.assert_not_called()
 
     def test_actual_call_order_authenticates_before_selection_read_and_drop(self):
-        tree = ast.parse((ROOT / "serverware/authority_launcher.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/authority_launcher.py").read_text())
         enter = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_enter")
         calls = {node.func.id: node.lineno for node in ast.walk(enter)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
@@ -336,12 +336,12 @@ class NativeReviewCredentialTests(unittest.TestCase):
             "_load_canonical_stage_zero_handoff", "_native_review_credentials",
             "_native_review_current_root_credentials", "_retain_native_review_credential", "_drop_role_identity")]
         self.assertEqual(order, sorted(order))
-        stage = (ROOT / "serverware/authority_stage_zero_contract.py").read_text()
+        stage = (ROOT / "catchplate/authority_stage_zero_contract.py").read_text()
         self.assertIn('if local and entry["name"] in NATIVE_REVIEW_CREDENTIAL_ROLES:', stage)
         self.assertIn('if local and entry["name"] == NATIVE_REVIEW_CURRENT_ROOT_ENROLLMENT_NAME:', stage)
         self.assertIn('if selected_native_review != native_review_credentials:',
-            (ROOT / "serverware/authority_launcher.py").read_text())
-        local = (ROOT / "serverware/authority_fd_entrypoint.py").read_text()
+            (ROOT / "catchplate/authority_launcher.py").read_text())
+        local = (ROOT / "catchplate/authority_fd_entrypoint.py").read_text()
         self.assertNotIn(AUTHOR, local)
         self.assertNotIn(COMMIT, local)
 

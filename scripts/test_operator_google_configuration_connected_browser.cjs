@@ -13,7 +13,7 @@ const BACKEND = 'test_operator_google_configuration_connected_backend.py';
 const ORIGIN = 'https://console.example.com';
 const PREFIX = '/api/operator-demo/oauth/google/configuration/v2';
 const CATALOG = '/api/operator-demo/catalog';
-const STORAGE = 'serverware.operator.google.configuration.operation.v2';
+const STORAGE = 'catchplate.operator.google.configuration.operation.v2';
 const CLIENT = '123-connected-configuration.apps.googleusercontent.com';
 const SECRET = 'synthetic-connected-Google-application-secret-NEVER-RETAIN';
 const ADMIN = 'synthetic-connected-Google-configuration-administrator';
@@ -65,7 +65,7 @@ function inspectContainer(options) {
   assert(!Object.keys(host.PortBindings || {}).length);
   assert(host.Memory > 0 && host.Memory <= 1073741824 && host.MemorySwap === host.Memory);
   assert(host.NanoCpus > 0 && host.NanoCpus <= 1000000000 && host.PidsLimit > 0 && host.PidsLimit <= 128);
-  assert(['serverware', '10001', '10001:10001'].includes(value.Config.User));
+  assert(['catchplate', '10001', '10001:10001'].includes(value.Config.User));
   assert.equal(value.Config.Healthcheck?.Test?.[0], 'NONE');
   const binds = value.Mounts.filter(item => item.Type === 'bind');
   assert.equal(binds.length, 1); assert.equal(binds[0].Destination, '/app');
@@ -175,7 +175,7 @@ async function story(context, bridge, directory, evidence, progress) {
         || method === 'POST' && [PREFIX, PREFIX + '/cancel'].includes(path));
       const body = request.postDataBuffer() || Buffer.alloc(0); assert(body.length <= (method === 'POST' ? 8192 : 0));
       const allHeaders = await request.allHeaders();
-      assert(!allHeaders.cookie && !allHeaders.authorization && !allHeaders['x-serverware-admin-token']);
+      assert(!allHeaders.cookie && !allHeaders.authorization && !allHeaders['x-catchplate-admin-token']);
       const headers = Object.entries(allHeaders).filter(([key]) => ['origin', 'content-type', 'content-length', 'accept', 'referer'].includes(key));
       if (method === 'POST') {
         assert.equal(allHeaders.origin, ORIGIN); assert.equal(allHeaders['content-type'], 'application/json');
@@ -209,7 +209,7 @@ async function story(context, bridge, directory, evidence, progress) {
         assert(lookup['content-type'].includes('application/json')); assert.equal(lookup['cache-control'], 'no-store');
         const value = JSON.parse(raw.toString('utf8'));
         if (path === PREFIX && method === 'GET') {
-          assert.equal(value.schema, 'serverware.operatorGoogleConfiguration/v2'); assert.equal(value.readiness.consent_ready, false);
+          assert.equal(value.schema, 'catchplate.operatorGoogleConfiguration/v2'); assert.equal(value.readiness.consent_ready, false);
           observed.discovery = value;
         } else if (path.startsWith(PREFIX)) observed.operation = value;
       }
@@ -240,7 +240,7 @@ async function story(context, bridge, directory, evidence, progress) {
   progress.stage = 'initial_document';
   await page.goto(ORIGIN + '/#proxy', {waitUntil: 'networkidle'});
   await page.waitForFunction(() => !document.querySelector('#credential-fields').disabled);
-  assert.equal(new URL(page.url()).origin, ORIGIN); assert.match(await page.title(), /Serverware operator workspace/);
+  assert.equal(new URL(page.url()).origin, ORIGIN); assert.match(await page.title(), /Catchplate operator workspace/);
   assert.equal(observed.posts.length, 0); assert.equal(await noMaterial(page), null);
   progress.stage = 'explicit_review';
   await act('review', 'GET', PREFIX); await node(page, 'form').waitFor({state: 'visible'});
@@ -305,7 +305,7 @@ async function runWithPage(page, suppliedOptions) {
   assert.equal(await realpath(ROOT), ROOT); assert((await stat(options.artifactRoot)).isDirectory());
   assert.equal(sourceDigest(), options.source); const container = inspectContainer(options);
   const directory = await mkdtemp(join(options.artifactRoot, 'google-configuration-connected-'));
-  const evidence = {schema: 'serverware.googleConfigurationConnectedBrowserAcceptance/v1', container, source_sha256: options.source,
+  const evidence = {schema: 'catchplate.googleConfigurationConnectedBrowserAcceptance/v1', container, source_sha256: options.source,
     boundary: 'Host Chromium via byte-preserving stdin to real full ASGI and isolated encrypted SQLite. No TCP ingress, deployed configuration, restart, Google contact or consent proof.'};
   let bridge, context;
   try {

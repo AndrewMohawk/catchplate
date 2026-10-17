@@ -1,4 +1,4 @@
-"""Typed operations over private Serverware downloads, independent of MCP transport.
+"""Typed operations over private Catchplate downloads, independent of MCP transport.
 
 Only fixed, checked-in adapters may derive wire requests. Discovery and preparation
 do no network I/O. Provider results remain untrusted data, not instructions.
@@ -26,14 +26,14 @@ def _module(name, path):
 
 
 _ROOT = Path(__file__).resolve().parents[2]
-_http = _module("serverware_mcp_request", _ROOT / "examples/common-apps/request.py")
+_http = _module("catchplate_mcp_request", _ROOT / "examples/common-apps/request.py")
 _PRESETS = {
     app["id"]: app
     for name in ("operator_common_apps_ai", "operator_common_apps_services")
-    for app in _module("serverware_mcp_" + name, _ROOT / "serverware" / (name + ".py")).PRESETS
+    for app in _module("catchplate_mcp_" + name, _ROOT / "catchplate" / (name + ".py")).PRESETS
 }
 _ALIAS = re.compile(r"[a-z][a-z0-9_-]{0,47}")
-_INVALID = "Invalid, unsupported, or expired Serverware operation configuration or arguments."
+_INVALID = "Invalid, unsupported, or expired Catchplate operation configuration or arguments."
 _INTENT = "This action requires operator opt-in and explicit confirmation; proxy approval still applies."
 
 
@@ -42,7 +42,7 @@ class OperationError(ValueError):
 
 
 def _legacy():
-    return _module("serverware_mcp_legacy", Path(__file__).with_name("legacy.py"))
+    return _module("catchplate_mcp_legacy", Path(__file__).with_name("legacy.py"))
 
 
 def _canonical(value):

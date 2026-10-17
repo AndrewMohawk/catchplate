@@ -11,7 +11,7 @@ const {execFile} = require('node:child_process');
 const {promisify} = require('node:util');
 const {join, resolve} = require('node:path');
 const {randomBytes, randomUUID, X509Certificate, createHash} = require('node:crypto');
-const {buildCurlCommand} = require('../serverware/operator_demo_web/app.js');
+const {buildCurlCommand} = require('../catchplate/operator_demo_web/app.js');
 
 const READ_PATHS = new Set(['/', '/ca.pem', '/api/operator-demo/status', '/api/audit/search', '/api/audit/verify']);
 const WRITE_PATH = '/api/operator-demo/connections';
@@ -47,7 +47,7 @@ async function startRelay({appUrl, adminToken, publicOrigin, failures}) {
           incoming.headers.host === new URL(origin).host) { outgoing.writeHead(204); outgoing.end(); return; }
       const isWrite = incoming.method === 'POST' && routeName === WRITE_PATH && !url.search;
       requireCondition(url.origin === origin && incoming.headers.host === new URL(origin).host &&
-        !incoming.headers['x-serverware-admin-token'] &&
+        !incoming.headers['x-catchplate-admin-token'] &&
         (incoming.method === 'GET' && READ_PATHS.has(routeName) || isWrite) &&
         (!incoming.headers.origin || incoming.headers.origin === origin) &&
         (!isWrite || incoming.headers.origin === origin), 'relay request boundary refused');
@@ -56,7 +56,7 @@ async function startRelay({appUrl, adminToken, publicOrigin, failures}) {
       requireCondition(isWrite || size === 0, 'relay GET body refused');
       const payload = Buffer.concat(body);
       const result = await new Promise((resolve, reject) => {
-        const headers = {'X-Serverware-Admin-Token': adminToken, Origin: admittedOrigin, Connection: 'close'};
+        const headers = {'X-Catchplate-Admin-Token': adminToken, Origin: admittedOrigin, Connection: 'close'};
         if (isWrite) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = payload.length; }
         const request = httpRequest(backend + url.pathname + url.search, {method: incoming.method, headers, timeout: 55000}, response => {
           let count = 0; const chunks = [];
@@ -115,14 +115,14 @@ async function validateClientProxy(proxyUrl, expectedProxyUrl) {
 async function executeCopiedClient({command, proxyUrl, expectedProxyUrl, fixtureOrigin, caBytes, clientToken, providerSecret}) {
   await validateClientProxy(proxyUrl, expectedProxyUrl);
   requireCondition(fixtureOrigin === 'https://demo-upstream:8443' && command === buildCurlCommand({
-    proxyUrl, upstreamUrl: fixtureOrigin + '/echo', method: 'GET', caPath: './serverware-ca.pem',
+    proxyUrl, upstreamUrl: fixtureOrigin + '/echo', method: 'GET', caPath: './catchplate-ca.pem',
     allowedHeaders: ['accept', 'user-agent'],
   }), 'copied command does not match the exact approved fixture request');
   const scratch = resolve(process.env.TMPDIR || '/srv/catchplate-fast/tmp');
   requireCondition(scratch !== '/tmp' && !scratch.startsWith('/tmp/'), 'client scratch must use the approved non-root filesystem');
   const directory = await mkdtemp(join(scratch, 'operator-demo-client-'));
   try {
-    await writeFile(join(directory, 'serverware-ca.pem'), caBytes, {mode: 0o600, flag: 'wx'});
+    await writeFile(join(directory, 'catchplate-ca.pem'), caBytes, {mode: 0o600, flag: 'wx'});
     // The copied command is unchanged. Private curl configuration only bounds
     // execution/output and appends the HTTP status; trust and routing stay intact.
     await writeFile(join(directory, '.curlrc'), 'connect-timeout = 5\nmax-time = 20\nmax-filesize = 65536\nsilent\nwrite-out = "\\n%{http_code}"\n',
@@ -130,7 +130,7 @@ async function executeCopiedClient({command, proxyUrl, expectedProxyUrl, fixture
     let result;
     try {
       result = await promisify(execFile)('/bin/sh', ['-c', command], {cwd: directory,
-        env: {PATH: '/usr/bin:/bin', LC_ALL: 'C', CURL_HOME: directory, SERVERWARE_PROXY_TOKEN: clientToken},
+        env: {PATH: '/usr/bin:/bin', LC_ALL: 'C', CURL_HOME: directory, CATCHPLATE_PROXY_TOKEN: clientToken},
         timeout: 25000, killSignal: 'SIGKILL', maxBuffer: 65536, encoding: 'utf8'});
     } catch (_) { throw new VerificationFailure('generated client request failed; private diagnostics suppressed'); }
     requireCondition(![clientToken, providerSecret].some(secret => result.stdout.includes(secret) || result.stderr.includes(secret)),
@@ -172,7 +172,7 @@ async function runLiveBrowser(browser, {baseUrl, fixtureOrigin = 'https://demo-u
     'isolated operator-development profile not established');
     if (executeClient) await validateClientProxy(initial.proxy_url, expectedProxyUrl);
     await page.waitForFunction(() => !document.querySelector('#connection-fields').disabled);
-    requireCondition((await page.title()).includes('Serverware operator demo'), 'wrong browser document');
+    requireCondition((await page.title()).includes('Catchplate operator demo'), 'wrong browser document');
     requireCondition(await page.locator('#overview-title').isVisible(), 'overview is blank');
     checks.push('real_operator_profile_and_page');
 
@@ -215,7 +215,7 @@ async function runLiveBrowser(browser, {baseUrl, fixtureOrigin = 'https://demo-u
     stage = 'actual public CA attachment';
     const pendingCa = page.waitForEvent('download'); await page.locator('#ca-download').click();
     const caDownload = await pendingCa; downloads.push(caDownload);
-    requireCondition(caDownload.suggestedFilename() === 'serverware-ca.pem', 'unexpected CA download name');
+    requireCondition(caDownload.suggestedFilename() === 'catchplate-ca.pem', 'unexpected CA download name');
     const caBytes = await downloadedBytes(caDownload, 65536); const pem = caBytes.toString();
     requireCondition(!pem.includes('PRIVATE KEY') && !pem.includes(providerSecret) && !pem.includes(clientToken), 'CA download contains private material');
     const certificate = new X509Certificate(caBytes);
@@ -225,7 +225,7 @@ async function runLiveBrowser(browser, {baseUrl, fixtureOrigin = 'https://demo-u
 
     stage = 'private client configuration';
     const command = await page.locator('#client-command').innerText();
-    requireCondition(command.includes('--proxy ') && command.includes('--cacert ') && command.includes('$SERVERWARE_PROXY_TOKEN') &&
+    requireCondition(command.includes('--proxy ') && command.includes('--cacert ') && command.includes('$CATCHPLATE_PROXY_TOKEN') &&
       command.includes(fixtureOrigin + '/echo') && !command.includes('--insecure') && !command.includes('--proxy-insecure') &&
       !command.includes(providerSecret) && !command.includes(clientToken), 'rendered client configuration unsafe');
     commandDigest = createHash('sha256').update(command).digest('hex');
@@ -235,7 +235,7 @@ async function runLiveBrowser(browser, {baseUrl, fixtureOrigin = 'https://demo-u
     requireCondition(copiedCommand === command, 'real clipboard does not match example');
     const pendingConfig = page.waitForEvent('download'); await page.locator('#download-config').click();
     const configDownload = await pendingConfig; downloads.push(configDownload);
-    requireCondition(configDownload.suggestedFilename() === 'serverware-client.private.json', 'unexpected private config filename');
+    requireCondition(configDownload.suggestedFilename() === 'catchplate-client.private.json', 'unexpected private config filename');
     const configBytes = await downloadedBytes(configDownload, 65536); const config = JSON.parse(configBytes.toString());
     requireCondition(config.proxy_authorization === 'Bearer ' + clientToken && config.upstream_url === fixtureOrigin + '/echo' &&
       !configBytes.includes(Buffer.from(providerSecret)), 'private configuration has wrong credential boundary');
@@ -272,7 +272,7 @@ async function runLiveBrowser(browser, {baseUrl, fixtureOrigin = 'https://demo-u
       await navigate(page, view);
       requireCondition(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'mobile horizontal overflow');
     }
-    await page.screenshot({path: '/tmp/serverware-operator-demo-live-mobile.png', fullPage: true});
+    await page.screenshot({path: '/tmp/catchplate-operator-demo-live-mobile.png', fullPage: true});
     checks.push('all_views_desktop_mobile');
 
     stage = 'reload preserves metadata but clears token';
@@ -282,14 +282,14 @@ async function runLiveBrowser(browser, {baseUrl, fixtureOrigin = 'https://demo-u
     requireCondition(await page.evaluate(() => localStorage.length + sessionStorage.length) === 0, 'secret storage appeared after reload');
     await navigate(page, 'credentials'); requireCondition((await page.locator('#connections-list').innerText()).includes(name), 'connection disappeared after reload');
     await page.setViewportSize({width: 1280, height: 960});
-    await page.screenshot({path: '/tmp/serverware-operator-demo-live-desktop.png', fullPage: true});
+    await page.screenshot({path: '/tmp/catchplate-operator-demo-live-desktop.png', fullPage: true});
     checks.push('reload_persistence_without_token_retention');
     requireCondition(errorCount === 0 && consoleErrorCount === 0 && unexpectedRequests === 0, 'browser reported errors or external requests');
     return {ok: true, scope: 'Real isolated operator-demo UI/API and gate activation; synthetic fixture only',
       checks, connection_id: connectionId, policy_hash: policyHash, ca_sha256: caFingerprint, client_command_sha256: commandDigest,
       page_errors: errorCount, console_errors: consoleErrorCount, unexpected_requests: unexpectedRequests,
       public_ingress_verified: false, human_sso_verified: false, generated_client_executed: generatedClientExecuted,
-      screenshots: ['/tmp/serverware-operator-demo-live-mobile.png', '/tmp/serverware-operator-demo-live-desktop.png']};
+      screenshots: ['/tmp/catchplate-operator-demo-live-mobile.png', '/tmp/catchplate-operator-demo-live-desktop.png']};
   } catch (error) { return {ok: false, stage, reason: error instanceof VerificationFailure ? error.message : 'browser action failed; private diagnostics suppressed', completed_checks: checks, page_errors: errorCount,
     console_errors: consoleErrorCount, unexpected_requests: unexpectedRequests, connection_id: connectionId || null}; }
   finally {

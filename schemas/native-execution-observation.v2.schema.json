@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-execution-observation.v2.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-execution-observation.v2.schema.json",
   "title": "Nonactionable native single-attempt execution, cleanup and owned-resource retirement observation",
   "description": "At most 24576 compact UTF-8 bytes. Positive first EXEC, exact leader exit/reap, independent guardian reap/empty observation, launcher leaf-empty observation and complete bounded output accounting are separate facts. Raw stdout/stderr are not returned. This local record neither authorizes action/retry nor proves application health, provider semantics, credential protection or production acceptance. Runtime compares exit/reap values and enforces original absolute clocks. Retirement must retain this execution operation digest and its original cleanup deadline; actual host absence and exact owned-leaf removal are separate runtime observations. The schema alone cannot prove them.",
   "type": "object", "additionalProperties": false,
   "required": ["schema", "resultScope", "execution", "output", "cleanup", "retirement", "workloadSucceeded", "actionAuthorization", "okForAction"],
   "properties": {
-    "schema": {"const": "serverware.nativeExecutionObservation/v2"},
+    "schema": {"const": "catchplate.nativeExecutionObservation/v2"},
     "resultScope": {"const": "local-single-attempt-execution-and-cleanup-observation"},
     "execution": {
       "type": "object", "additionalProperties": false,

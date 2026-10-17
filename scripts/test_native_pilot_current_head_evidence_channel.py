@@ -28,8 +28,8 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 from scripts.test_native_pilot_adopted_current_head import fixture as head_fixture
 from scripts.test_native_pilot_approval_current_head_channel import fixture as pending_fixture, respond
 from scripts.test_native_pilot_supervisor_approval_channel import copies, public_originals
-from serverware import native_pilot_approval_current_heads as decisions
-from serverware import native_pilot_supervisor_approval_channel as channel
+from catchplate import native_pilot_approval_current_heads as decisions
+from catchplate import native_pilot_supervisor_approval_channel as channel
 
 p, heads = channel.p, channel.heads
 

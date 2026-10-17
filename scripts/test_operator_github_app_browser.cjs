@@ -19,17 +19,17 @@ const CREATE = '/api/operator-demo/credentials/github-app';
 const PAT_CREATE = '/api/operator-demo/credentials/github-token';
 const GRANT = '/api/operator-demo/access-rules/github';
 const REPLACE = '/api/operator-demo/credentials/github-app/replace-key';
-const REPLACEMENT = {schema: 'serverware.operatorGithubAppKeyReplacement/v1', path: REPLACE};
+const REPLACEMENT = {schema: 'catchplate.operatorGithubAppKeyReplacement/v1', path: REPLACE};
 const READ = 'github_issues_read_v1';
 const WRITE = 'github_issues_write_v1';
 const REPOSITORY = {owner: 'Example-Owner', name: 'Example.Repo'};
 const PAT = 'synthetic_github_PAT_NEVER_RETAIN';
 const PRIVATE_ERROR = 'synthetic-GitHub-private-provider-error-NEVER-RENDER';
-const AUTH = {schema: 'serverware.operatorProxyAuthentication/v1', modes: ['bearer', 'basic_and_bearer_v1'],
+const AUTH = {schema: 'catchplate.operatorProxyAuthentication/v1', modes: ['bearer', 'basic_and_bearer_v1'],
   path: '/api/operator-demo/applications/proxy-authentication'};
 const PLAYWRIGHT = '/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright';
 const clone = value => JSON.parse(JSON.stringify(value));
-const appCapability = () => ({...patCapability(), schema: 'serverware.operatorGithubApp/v1',
+const appCapability = () => ({...patCapability(), schema: 'catchplate.operatorGithubApp/v1',
   connection_type: 'github_app_v1', create_credential_path: CREATE});
 const binding = (permission = 'read') => ({app_id: '123456', installation_id: '234567', account_id: '345678',
   repository_id: '456789', repository: clone(REPOSITORY), issues_permission: permission, token_refresh: 'automatic'});
@@ -212,10 +212,10 @@ async function copyRecipe(page) {
   activeStep = 'copy-sdk'; await page.waitForFunction(() => !document.querySelector('#copy-command').disabled);
   await page.locator('#github-proxy-ca-path').fill('./outer-proxy.pem');
   const text = await page.locator('#client-command').innerText();
-  for (const literal of ['@octokit/rest@22.0.1', 'undici@8.11.2', 'process.env.SERVERWARE_PROXY_TOKEN',
-    'auth: "serverware-github-placeholder-v1"', "token: 'Basic ' + Buffer.from",
+  for (const literal of ['@octokit/rest@22.0.1', 'undici@8.11.2', 'process.env.CATCHPLATE_PROXY_TOKEN',
+    'auth: "catchplate-github-placeholder-v1"', "token: 'Basic ' + Buffer.from",
     'proxyTls: { ca: readFileSync("./outer-proxy.pem"), rejectUnauthorized: true }',
-    'requestTls: { ca: readFileSync("./serverware-ca.pem"), rejectUnauthorized: true }', REPOSITORY.owner, REPOSITORY.name])
+    'requestTls: { ca: readFileSync("./catchplate-ca.pem"), rejectUnauthorized: true }', REPOSITORY.owner, REPOSITORY.name])
     assert(text.includes(literal), 'copied SDK recipe preserves the named public setting');
   assert(!/rejectUnauthorized:\s*false|NODE_TLS_REJECT_UNAUTHORIZED/.test(text));
   assert(![pemCanary, PAT, PRIVATE_ERROR].some(value => text.includes(value)));
@@ -389,7 +389,7 @@ const tests = [
       assert.equal(observed.replacements.length, 1); assert.equal(state.credentials[0].credential_generation, 1);
       assert(await page.locator('#github-app-replace-panel').isHidden()); await noMaterial(page);
       await page.clock.runFor(1000); assert.equal(observed.replacements.length, 1);
-      controls.release(); await page.waitForFunction(() => document.querySelector('#github-app-replace-status').textContent.includes('replacement saved in Serverware'));
+      controls.release(); await page.waitForFunction(() => document.querySelector('#github-app-replace-status').textContent.includes('replacement saved in Catchplate'));
       assert.equal(state.credentials[0].credential_generation, 2);
       assert.deepEqual({rules: state.rules, active: state.active, sequence: state.sequence, binding: state.credentials[0].github_app}, original);
       assert(await page.locator('#mutation-review').isHidden());
@@ -455,10 +455,10 @@ const tests = [
 ];
 
 async function hashes() {
-  const assets = await readdir(join(ROOT, 'serverware/operator_demo_web'));
+  const assets = await readdir(join(ROOT, 'catchplate/operator_demo_web'));
   const names = ['scripts/test_operator_github_app_browser.cjs', 'scripts/test_operator_github_browser.cjs',
-    'scripts/test_operator_catalog_browser.cjs', 'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
-    ...assets.filter(name => /\.(?:js|css|html)$/.test(name)).sort().map(name => 'serverware/operator_demo_web/' + name)];
+    'scripts/test_operator_catalog_browser.cjs', 'scripts/test_operator_ordinary_modes_browser.cjs', 'catchplate/operator_demo_portal.py',
+    ...assets.filter(name => /\.(?:js|css|html)$/.test(name)).sort().map(name => 'catchplate/operator_demo_web/' + name)];
   return Object.fromEntries(await Promise.all(names.map(async name =>
     [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')])));
 }
@@ -475,7 +475,7 @@ async function runSuite(browser, groups = selectedGroups([])) {
     publicKeyEncoding: {type: 'spki', format: 'pem'}}).privateKey;
   pemCanary = pem.split('\n')[1];
   const selected = tests.map(([name, test], index) => ({group: index + 1, name, test})).filter(item => groups.includes(item.group));
-  const before = await hashes(); const directory = await mkdtemp('/tmp/serverware-github-app-browser-');
+  const before = await hashes(); const directory = await mkdtemp('/tmp/catchplate-github-app-browser-');
   console.log(JSON.stringify({phase: 'source-before', hashes: before, artifactDirectory: directory,
     groups: selected.map(({group, name}) => ({group, name})), scope: 'actual rendered assets; intercepted synthetic API only'}));
   const contexts = new Set(); let finished = false; let timeout; let passed = 0;

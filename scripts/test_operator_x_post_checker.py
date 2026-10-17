@@ -40,13 +40,13 @@ DISCONNECT = "55555555-5555-4555-8555-555555555555"
 SCOPE = ("operator." + APP, "operator." + RULE, "sha256:" + "a" * 64)
 BINARY = "sha256:" + "b" * 64
 ANCHOR = 2_000_000_000_000
-TEXT = "Serverware local check: caf\u00e9 & <verified>\n"
+TEXT = "Catchplate local check: caf\u00e9 & <verified>\n"
 BODIES = {
-    "node": b'{"text":"Serverware local check: caf\xc3\xa9 & <verified>\\n"}',
-    "python": b'{"text": "Serverware local check: caf\\u00e9 & <verified>\\n"}',
-    "go": b'{"text":"Serverware local check: caf\xc3\xa9 \\u0026 \\u003cverified\\u003e\\n"}',
+    "node": b'{"text":"Catchplate local check: caf\xc3\xa9 & <verified>\\n"}',
+    "python": b'{"text": "Catchplate local check: caf\\u00e9 & <verified>\\n"}',
+    "go": b'{"text":"Catchplate local check: caf\xc3\xa9 \\u0026 \\u003cverified\\u003e\\n"}',
 }
-REFLECTION = b'{"text":"Serverware local check: reflect response"}'
+REFLECTION = b'{"text":"Catchplate local check: reflect response"}'
 
 
 def canonical(value):
@@ -81,7 +81,7 @@ def provider(*, disconnected=True):
     counts = {"authorize": 1, "code": 1, "refresh": 1, "identity": 2, "revoke": 4 if disconnected else 0,
         "posts": 7, "rejected": 0}
     counts["total"] = sum(counts.values())
-    return {"schema": "serverware.privateXPostObservations/v1", "syntheticOnly": True, "terminal": "running",
+    return {"schema": "catchplate.privateXPostObservations/v1", "syntheticOnly": True, "terminal": "running",
         "counts": counts, "initialAccessIssuedAtEpochMs": ANCHOR + 100,
         "initialAccessExpiresAtEpochMs": ANCHOR + 120100, "initialAccessExpired": True,
         "refreshAfterInitialExpiry": True, "tokenLifetimes": {"initial": 120, "refreshed": 600},
@@ -177,7 +177,7 @@ def receipt():
             kind = check.CONNECT if phase == "wrong_inner_ca" else None if phase == "wrong_outer_ca" else check.CONNECT_DENIED
             negatives.append({"phase": client + ":" + phase, "providerPostsAdded": 0, "kind": kind,
                 "auditIds": [] if kind is None else [sha((client + phase).encode())]})
-    return {"schema": "serverware.privateXPostCheck/v1", "ok": True, "syntheticOnly": True, "realXVerified": False,
+    return {"schema": "catchplate.privateXPostCheck/v1", "ok": True, "syntheticOnly": True, "realXVerified": False,
         "productionReady": False, "publicDnsVerified": False, "actualExampleEntrypoints": True,
         "actualManagedLifecycle": True, "auditChainVerified": True, "separateOuterInnerTrust": True,
         "dataPlaneBinaryDigest": "sha256:" + "b" * 64, "goExampleSha256": "c" * 64,
@@ -279,13 +279,13 @@ checker.main()
         self.assertEqual(len(check.profiles.PHASES), 19)
         for phase in check.profiles.PHASES:
             value = check.client_environment(phase, APP, "t" * 43)
-            self.assertEqual(set(value), {"LANG", "SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID", "SERVERWARE_PROXY_TOKEN",
-                "SERVERWARE_CA_FILE", "SERVERWARE_PROXY_CA_FILE", "SERVERWARE_X_POST_TEXT", "SERVERWARE_X_POST_CONFIRM"})
-            self.assertEqual(value["SERVERWARE_PROXY_URL"], "https://proxy.operator-basic.example.test:8443")
-            self.assertEqual(value["SERVERWARE_X_POST_CONFIRM"], "post-once")
-            self.assertEqual(value["SERVERWARE_X_POST_TEXT"], "Serverware local check: reflect response" if phase == "node:reflected" else TEXT)
-            self.assertEqual(value["SERVERWARE_CA_FILE"], "/client-trust/outer-ca.pem" if phase.endswith(":wrong_inner_ca") else "/client-trust/inner-ca.pem")
-            self.assertEqual(value["SERVERWARE_PROXY_CA_FILE"], "/client-trust/inner-ca.pem" if phase.endswith(":wrong_outer_ca") else "/client-trust/outer-ca.pem")
+            self.assertEqual(set(value), {"LANG", "CATCHPLATE_PROXY_URL", "CATCHPLATE_APP_ID", "CATCHPLATE_PROXY_TOKEN",
+                "CATCHPLATE_CA_FILE", "CATCHPLATE_PROXY_CA_FILE", "CATCHPLATE_X_POST_TEXT", "CATCHPLATE_X_POST_CONFIRM"})
+            self.assertEqual(value["CATCHPLATE_PROXY_URL"], "https://proxy.operator-basic.example.test:8443")
+            self.assertEqual(value["CATCHPLATE_X_POST_CONFIRM"], "post-once")
+            self.assertEqual(value["CATCHPLATE_X_POST_TEXT"], "Catchplate local check: reflect response" if phase == "node:reflected" else TEXT)
+            self.assertEqual(value["CATCHPLATE_CA_FILE"], "/client-trust/outer-ca.pem" if phase.endswith(":wrong_inner_ca") else "/client-trust/inner-ca.pem")
+            self.assertEqual(value["CATCHPLATE_PROXY_CA_FILE"], "/client-trust/inner-ca.pem" if phase.endswith(":wrong_outer_ca") else "/client-trust/outer-ca.pem")
         for app, token in (("wrong", "t" * 43), (APP, "short")):
             with self.assertRaises(check.CheckFailure):
                 check.client_environment("node:first", app, token)
@@ -399,7 +399,7 @@ checker.main()
         query = {"response_type": "code", "client_id": "fixture-client", "redirect_uri": check.CONTROL + check.CALLBACK,
             "scope": "offline.access tweet.read tweet.write users.read", "state": "s" * 43,
             "code_challenge": "c" * 43, "code_challenge_method": "S256"}
-        value = {"schema": "serverware.operatorXConsent/v1", "operation_id": CONSENT, "status": "consent_pending",
+        value = {"schema": "catchplate.operatorXConsent/v1", "operation_id": CONSENT, "status": "consent_pending",
             "authorization_url": "https://x.com/i/oauth2/authorize?" + urlencode(query), "state": "s" * 43,
             "expires_at_epoch_ms": ANCHOR + 600000, "profile_binding_digest": "sha256:" + "f" * 64}
         with patch.object(check.time, "time_ns", return_value=ANCHOR * 1_000_000):
@@ -409,7 +409,7 @@ checker.main()
                     {**value, "expires_at_epoch_ms": ANCHOR}):
                 with self.assertRaises(check.CheckFailure):
                     check.consent_target(altered, "fixture-client")
-        name = "__Host-serverware-x-oauth-" + "s" * 43
+        name = "__Host-catchplate-x-oauth-" + "s" * 43
         cookie = name + "=" + "n" * 43 + "; Secure; HttpOnly; Path=/; SameSite=Lax"
         self.assertEqual(check.consent_cookie([("Set-Cookie", cookie)], "s" * 43), (name + "=" + "n" * 43, "n" * 43))
         with self.assertRaises(check.CheckFailure):
@@ -441,7 +441,7 @@ checker.main()
         self.assertIn(b"\r\nHost: api.x.com:443\r\n", original.sent)
 
         instance = object.__new__(check.XPostCheck)
-        instance.control = SimpleNamespace(host="serverware-x.example.com", port=443, scheme="https")
+        instance.control = SimpleNamespace(host="catchplate-x.example.com", port=443, scheme="https")
         instance.accounts = SimpleNamespace(host="x.com", port=443, scheme="https")
         instance.upstream = SimpleNamespace(host="api.x.com", port=443, scheme="https")
         instance.control_ca, instance.upstream_ca = object(), object()
@@ -460,8 +460,8 @@ checker.main()
                 instance.control_ca if endpoint is instance.control else instance.upstream_ca)
         recorded = RecordingSocket(); instance.control.connect = Mock(return_value=recorded)
         instance.exchange(instance.control, check.CONFIGURATION, method="POST", payload={"public": True}, authenticated=True)
-        self.assertIn(b"\r\nOrigin: https://serverware-x.example.com\r\n", recorded.sent)
-        self.assertIn(b"\r\nX-Serverware-Admin-Token: synthetic-private-admin\r\n", recorded.sent)
+        self.assertIn(b"\r\nOrigin: https://catchplate-x.example.com\r\n", recorded.sent)
+        self.assertIn(b"\r\nX-Catchplate-Admin-Token: synthetic-private-admin\r\n", recorded.sent)
         self.assertTrue(instance.clean.called)
         for options in ({"authenticated": True}, {"cookie": "synthetic-private-cookie"}):
             instance.upstream.connect.reset_mock()
@@ -676,11 +676,11 @@ checker.main()
         current["credentials"][0]["status"] = current["access_rules"][0]["status"] = "revoked"
         current["applications"][0].update(active_rule_count=0, access_status="unassigned")
         current["policy"] = {"policy_hash": "sha256:" + "f" * 64, "sequence": 3}
-        review = {"schema": "serverware.operatorXDisconnectReview/v1", "credential_id": CREDENTIAL,
+        review = {"schema": "catchplate.operatorXDisconnectReview/v1", "credential_id": CREDENTIAL,
             "expected_credential_generation": 2, "expected_revision": before["revision"],
             "expected_policy_hash": SCOPE[2], "review_digest": "sha256:" + "d" * 64,
             "affected_credential_ids": [CREDENTIAL], "affected_rule_ids": [RULE]}
-        result = {"schema": "serverware.operatorXAccountOperation/v1", "operation_id": DISCONNECT,
+        result = {"schema": "catchplate.operatorXAccountOperation/v1", "operation_id": DISCONNECT,
             "kind": "disconnect", "status": "disconnected", "credential_id": CREDENTIAL, "reason": None,
             "created_at": "synthetic", "expires_at_epoch_ms": ANCHOR + 300000}
         changes = {"revision": lambda v: v.update(revision=v["revision"] + 1),

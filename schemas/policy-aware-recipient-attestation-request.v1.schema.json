@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-aware-recipient-attestation-request.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/policy-aware-recipient-attestation-request.v1.schema.json",
   "title": "Policy-aware ordinary recipient attestation command input v1",
   "description": "Closed command input from the independently selected ordinary PolicyAware key owner; not native custody or quote authority. The configured command must produce a genuine original role-2 nativeCredentialRecipientEvidence/v1 for this exact generated public key, nonce and full request hash. Bound by the invoking original operation clock; no new allowance or development fallback.",
   "type": "object", "additionalProperties": false,
   "required": ["apiVersion", "leaseRequestApiVersion", "purpose", "requestBindingSha256", "requestAuthoritySha256", "recipientPublicKey", "recipientKeyId", "recipientNonce", "policyHash", "dataPlaneBinaryDigest", "principalId", "routeId", "credentialId"],
   "properties": {
-    "apiVersion": {"const": "serverware.policyAwareRecipientAttestationRequest/v1"},
-    "leaseRequestApiVersion": {"const": "serverware.policyAwareCredentialLeaseRequest/v1"},
+    "apiVersion": {"const": "catchplate.policyAwareRecipientAttestationRequest/v1"},
+    "leaseRequestApiVersion": {"const": "catchplate.policyAwareCredentialLeaseRequest/v1"},
     "purpose": {"enum": ["generationMetadata", "dispatchSecret"]},
     "requestBindingSha256": {"$ref": "policy-aware-credential-lease.common.schema.json#/$defs/digest"},
     "requestAuthoritySha256": {"type": "null"},

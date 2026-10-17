@@ -1,0 +1,19 @@
+[Unit]
+Description=Catchplate Coder v12 root-owned final-verdict RPC
+PartOf=catchplate-coder-v12.target
+After=catchplate-coder-runtime-v12.service
+Requires=catchplate-coder-runtime-v12.service
+Before=catchplate-coder-final-verdict-authority-v12.service
+
+[Socket]
+ListenStream=/run/catchplate/coder/v12/final-verdict-authority/control.sock
+SocketUser=root
+SocketGroup=catchplate-coder-verdict-api
+SocketMode=0660
+DirectoryMode=0750
+RemoveOnStop=yes
+Accept=no
+Service=catchplate-coder-final-verdict-authority-v12.service
+
+[Install]
+WantedBy=catchplate-coder-v12.target

@@ -22,13 +22,13 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_primary_contract as primary
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_roots as roots
-from serverware import authority_revocation_root_reader as configured
-from serverware import authority_index_heads as heads
-from serverware import authority_index_reader as reader
-from serverware.authority_store import verifier_read_sql as privileges
+from catchplate import authority_primary_contract as primary
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_roots as roots
+from catchplate import authority_revocation_root_reader as configured
+from catchplate import authority_index_heads as heads
+from catchplate import authority_index_reader as reader
+from catchplate.authority_store import verifier_read_sql as privileges
 import test_authority_index_heads as head_oracle
 from test_authority_radix_mutation import IndependentTree
 from test_authority_radix_proof import sql_digest, sql_json
@@ -60,7 +60,7 @@ ROLE_TABLES = frozenset({PRIMARY_TABLE, HEAD_TABLE, "webauthn_challenges", "weba
 def manifest_digest():
     # Source manifest construction is separately covered by the primary-source
     # fixture. Hash it with the independently authored persisted SQL framing.
-    return sql_digest("serverware.policyAuthorityQueryManifest/v1",
+    return sql_digest("catchplate.policyAuthorityQueryManifest/v1",
         sql_json(primary.source_query_manifest()))
 
 
@@ -100,8 +100,8 @@ def counters(meter):
 
 def independent_work(primary_values, head_values):
     """Real cold65 reservation plus literal frames/copies and counted oracle."""
-    leaf_domain = "serverware.policyAuthorityAuthenticatedEmptyLeaf/v1"
-    node_domain = "serverware.policyAuthorityAuthenticatedNode/v1"
+    leaf_domain = "catchplate.policyAuthorityAuthenticatedEmptyLeaf/v1"
+    node_domain = "catchplate.policyAuthorityAuthenticatedNode/v1"
     # SQL-tree normalize+encode prepares three walks. Sixteen canonical digest
     # strings always have this length and 17 graph nodes, irrespective of hash.
     child_bytes, child_nodes = 2 + 15 + 16 * (2 + 71), 17
@@ -156,9 +156,9 @@ class InventoryCursor:
             self.callback(name)
 
     def execute(self, statement, parameters):
-        if f"FROM serverware_metadata.{PRIMARY_TABLE} " in statement:
+        if f"FROM catchplate_metadata.{PRIMARY_TABLE} " in statement:
             kind, expected, fields = "primary", (*TABLES, 10), PRIMARY_FIELDS
-        elif f"FROM serverware_metadata.{HEAD_TABLE} " in statement:
+        elif f"FROM catchplate_metadata.{HEAD_TABLE} " in statement:
             kind, expected, fields = "head", (*HEAD_IDS, 10), head_oracle.FIELDS
             # Delegate to the pre-existing independent exact head SQL checker;
             # this is not a substitute for the genuine production head worker.
@@ -276,7 +276,7 @@ class OwnerCursor(InventoryCursor):
                     raise AssertionError("identity SQL omitted " + field)
             self.selected = "identity"
         elif statement == privileges.VERIFIER_READ_PRIVILEGE_SQL:
-            if parameters != (CONFIGURATION[2], "serverware_metadata", sorted(ROLE_TABLES)):
+            if parameters != (CONFIGURATION[2], "catchplate_metadata", sorted(ROLE_TABLES)):
                 raise AssertionError("catalog query parameters differ from six-table source closure")
             if len(self.metadata_calls) != 2:
                 raise AssertionError("effective ACL check did not follow identity")
@@ -482,7 +482,7 @@ class RevocationRootInventoryTests(unittest.TestCase):
         expected_parameters = sum(8 + len(name) for name in (*TABLES, *HEAD_IDS)) + 20
         expected_primary = sum(72 + 12 + len(name) + 142 + 57 + 4 for name in TABLES)
         expected_heads = sum(72 + 4 + len(row["index_id"]) + len(row["table_name"])
-            + len("serverware.policyAuthorityCountedIndex/v1") + 213 + 38 for row in head_oracle.source_rows())
+            + len("catchplate.policyAuthorityCountedIndex/v1") + 213 + 38 for row in head_oracle.source_rows())
         self.assertEqual((roots._ROOT_LIMITS.max_sql_reads, roots._ROOT_LIMITS.max_parameter_bytes,
             roots._ROOT_LIMITS.max_transport_bytes), (2, expected_parameters, expected_primary + expected_heads))
         for field in ("sql_reads", "returned_rows", "parameter_bytes", "transport_bytes"):
@@ -606,7 +606,7 @@ class RevocationRootOwnerTests(unittest.TestCase):
             "connection.commit", "connection.close"])
         self.assertEqual((connection.commits, connection.rollbacks, connection.closes, raw.exits), (1, 0, 1, 1))
         self.assertEqual(raw.metadata_calls[0], ("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY DEFERRABLE", None))
-        self.assertEqual(raw.metadata_calls[2], actual_privileges(role=CONFIGURATION[2], namespace="serverware_metadata"))
+        self.assertEqual(raw.metadata_calls[2], actual_privileges(role=CONFIGURATION[2], namespace="catchplate_metadata"))
         self.assertIs(connection.closed, True)
 
     def test_configuration_exact_scalar_bounds_timeout_and_invalid_work_precede_opener(self):

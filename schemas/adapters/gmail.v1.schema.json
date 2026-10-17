@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.local/schemas/adapters/gmail.v1.schema.json",
-  "title": "Serverware Gmail v1 adapter config",
+  "$id": "https://catchplate.local/schemas/adapters/gmail.v1.schema.json",
+  "title": "Catchplate Gmail v1 adapter config",
   "type": "object",
   "$defs": {
     "allowedFields": {
@@ -40,7 +40,7 @@
       "maxItems": 16,
       "uniqueItems": true,
       "items": {
-        "$ref": "https://serverware.local/schemas/policy-bundle.v1.schema.json#/$defs/requestValueRule"
+        "$ref": "https://catchplate.local/schemas/policy-bundle.v1.schema.json#/$defs/requestValueRule"
       }
     },
     "credentialBinding": {
@@ -101,7 +101,7 @@
           "maxItems": 64,
           "uniqueItems": true,
           "items": {
-            "$ref": "https://serverware.local/schemas/policy-bundle.v1.schema.json#/$defs/adapterRequestHeaderName"
+            "$ref": "https://catchplate.local/schemas/policy-bundle.v1.schema.json#/$defs/adapterRequestHeaderName"
           }
         },
         "discardHeaders": {
@@ -180,7 +180,7 @@
         "metadataFetch": {
           "type": "object",
           "additionalProperties": false,
-          "x-serverware-less-than-or-equal": {
+          "x-catchplate-less-than-or-equal": {
             "left": "perRequestTimeoutMs",
             "right": "totalTimeoutMs"
           },

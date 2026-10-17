@@ -1,7 +1,7 @@
 # Fixed release-grant issuance transport
 
 Source only, unbuilt and unexecuted. This framing module supplies one bounded
-exchange at `/run/serverware/oidc-session-activation-token-release/grants.sock`.
+exchange at `/run/catchplate/oidc-session-activation-token-release/grants.sock`.
 The service checks caller peer `65532:65532`; the caller checks the root-created
 listener peer `0:0`. It selects no service UID, starts no worker and provisions
 neither a listener nor issuance authority. Peer and shape checks are not grants.

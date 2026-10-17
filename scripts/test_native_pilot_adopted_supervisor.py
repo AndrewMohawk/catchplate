@@ -20,13 +20,13 @@ from cryptography.exceptions import InvalidSignature
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import native_pilot_adopted_phase_profile as jobs
-from serverware import native_pilot_adopted_ordinary_install as install
-from serverware import native_pilot_adopted_supervisor as supervisor
-from serverware import native_pilot_adopted_supervisor_policy as policy
-from serverware import native_pilot_approval_install as approvals
-from serverware import native_pilot_phase_execution as legacy
-from serverware import native_pilot_supervisor_approval_channel as channel
+from catchplate import native_pilot_adopted_phase_profile as jobs
+from catchplate import native_pilot_adopted_ordinary_install as install
+from catchplate import native_pilot_adopted_supervisor as supervisor
+from catchplate import native_pilot_adopted_supervisor_policy as policy
+from catchplate import native_pilot_approval_install as approvals
+from catchplate import native_pilot_phase_execution as legacy
+from catchplate import native_pilot_supervisor_approval_channel as channel
 from test_native_pilot_adopted_current_head import fixture as signed_fixture
 from test_native_pilot_supervisor_approval_channel import peer_arguments, public_originals, start
 
@@ -38,7 +38,7 @@ def ticket(index=0, *, deadline=5000, expiry=9000):
     order = [(phase, row) for phase, rows in jobs.JOBS.items() for row in rows]
     phase, job = order[index]
     position = jobs.job_index(phase, job.name)
-    conductor = {"apiVersion": "serverware.nativePilotOperatorRequest/v2",
+    conductor = {"apiVersion": "catchplate.nativePilotOperatorRequest/v2",
         "sequence": tuple(jobs.JOBS).index(phase) + 1, "phase": phase, "payload": {},
         "deadlineBoottimeNs": str(deadline), "expiresAtUnixNanos": str(expiry)}
     request = {"apiVersion": jobs.API, "sequence": index + 1, "conductorSequence": conductor["sequence"],
@@ -52,7 +52,7 @@ def ticket(index=0, *, deadline=5000, expiry=9000):
 
 def pending(index=0, *, deadline=5000, expiry=9000):
     request, conductor = ticket(index, deadline=deadline, expiry=expiry)
-    observation = {"apiVersion": "serverware.nativePilotAdoptedSupervisorObservation/v1",
+    observation = {"apiVersion": "catchplate.nativePilotAdoptedSupervisorObservation/v1",
         "policySha256": p.sha(b"synthetic-policy"), "catalogueSha256": p.sha(policy.catalogue_original()),
         "intakeConfigurationSha256": p.sha(b"synthetic-intake"),
         "conductorRequestOriginal": p.canonical(conductor).decode("ascii"),
@@ -107,7 +107,7 @@ class AdoptedSupervisorControls(unittest.TestCase):
 
     def test_approval_not_synthesized_or_cross_version(self):
         request, _ = ticket(); raw = b'{}'
-        for field, changed in (("apiVersion", "serverware.nativePilotAuthorityJobApproval/v1"),
+        for field, changed in (("apiVersion", "catchplate.nativePilotAuthorityJobApproval/v1"),
                 ("job", "cohort-precreation"), ("expiresAtUnixNanos", "9001"), ("inputSha256", p.sha(b"other"))):
             signed = approval(request, raw); signed[field] = changed
             with self.subTest(field=field), self.assertRaises(FAILURES):
@@ -132,7 +132,7 @@ class AdoptedSupervisorControls(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(FAILURES): channel._pending_adopted(value, 0)
 
     def test_policy_legacy_or_unbound_catalogue_refused(self):
-        for value in ({"apiVersion": "serverware.nativePilotSupervisorPolicy/v20"},
+        for value in ({"apiVersion": "catchplate.nativePilotSupervisorPolicy/v20"},
                 {field: None for field in policy.FIELDS}):
             with self.assertRaises(FAILURES): policy.shape(p.canonical(value))
 
@@ -149,9 +149,9 @@ class AdoptedSupervisorControls(unittest.TestCase):
     def test_installation_cross_profile_and_changed_preparation_refused(self):
         for mutation in ("api", "launch", "resource"):
             value, clocks = installation_input()
-            if mutation == "api": value["apiVersion"] = "serverware.nativePilotAdoptedOrdinaryInstallationInput/v2"
+            if mutation == "api": value["apiVersion"] = "catchplate.nativePilotAdoptedOrdinaryInstallationInput/v2"
             elif mutation == "launch":
-                launch = json.loads(value["launchOriginal"]); launch["apiVersion"] = "serverware.custodyFiveServiceLaunch/v6"
+                launch = json.loads(value["launchOriginal"]); launch["apiVersion"] = "catchplate.custodyFiveServiceLaunch/v6"
                 value["launchOriginal"] = p.canonical(launch).decode("ascii")
             else:
                 resources = json.loads(value["resourcesOriginal"])

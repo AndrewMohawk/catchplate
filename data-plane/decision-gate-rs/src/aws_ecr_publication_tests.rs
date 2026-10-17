@@ -55,7 +55,7 @@ fn request(action: &str, body: Value) -> DecisionRequest {
         .collect();
     req.headers.insert(
         "user-agent".into(),
-        format!("Boto3/1.34.46 ServerwarePublication/{PUBLICATION}"),
+        format!("Boto3/1.34.46 CatchplatePublication/{PUBLICATION}"),
     );
     req.headers
         .insert("amz-sdk-request".into(), "attempt=1".into());
@@ -85,7 +85,7 @@ fn ecr_closed_policy_and_schema() {
     }
     validate_route(&route()).unwrap();
     validate_route_response_release_mode(&route()).unwrap();
-    policy["apiVersion"] = json!("serverware.policy/v1");
+    policy["apiVersion"] = json!("catchplate.policy/v1");
     policy["kind"] = json!("PolicyBundle");
     policy["metadata"] = json!({"id":"ecr-startup","sequence":1,"rollbackEpoch":1});
     validate_policy_schema(&policy).unwrap();
@@ -127,14 +127,14 @@ fn ecr_dummy_signing_explicit_publication_and_closed_bodies() {
     let mut bad = req.clone();
     bad.headers.insert(
         "User-Agent".into(),
-        format!("ServerwarePublication/{PUBLICATION}"),
+        format!("CatchplatePublication/{PUBLICATION}"),
     );
     assert!(validate_request(&bad, &url, &route).is_err());
     let mut bad = req.clone();
     bad.headers
         .get_mut("user-agent")
         .unwrap()
-        .push_str(&format!(" ServerwarePublication/{PUBLICATION}"));
+        .push_str(&format!(" CatchplatePublication/{PUBLICATION}"));
     assert!(validate_request(&bad, &url, &route).is_err());
     let mut bad = req;
     bad.body.push(' ');

@@ -5,7 +5,7 @@
 ## Implemented checkpoint
 
 The retention change below is included in the current `6bf463c5` / normal
-`09087323` [deployment](../docker/serverware-operator-demo/README.md).
+`09087323` [deployment](../docker/catchplate-operator-demo/README.md).
 The build/test results here remain evidence for their original checkpoint, not
 native admission or protected approval acceptance. The newer explicit private
 release ingress is source work only and is not deployed.

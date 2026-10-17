@@ -73,7 +73,7 @@ fn seed(
 fn fixture() -> (GateState, Arc<Snapshot>, CredentialLeaseScope, SigningKey) {
     let key = SigningKey::from_bytes(&[119; 32]);
     let mut snapshot = (*test_snapshot_with_control_plane_response_key(1, &key)).clone();
-    snapshot.policy_id = "serverware-operator-demo".to_owned();
+    snapshot.policy_id = "catchplate-operator-demo".to_owned();
     snapshot.principals[0].proxy_authorization = Some(ProxyAuthorizationPolicy::BearerToken {
         token_sha256: sha256_prefixed(TOKEN.as_bytes()),
         source_cidrs: vec![],
@@ -147,7 +147,7 @@ fn material_response_with_metadata(
 ) -> Vec<u8> {
     let request: CredentialLeaseRequest = strict_json_from_slice(&incoming.body).unwrap();
     let now = now_epoch_ms() as u64;
-    let aad = json!({"apiVersion":"serverware.credentialLeaseEnvelope/v2","algorithm":"X25519-HKDF-SHA256-AES-256-GCM",
+    let aad = json!({"apiVersion":"catchplate.credentialLeaseEnvelope/v2","algorithm":"X25519-HKDF-SHA256-AES-256-GCM",
         "recipientKeyId":request.recipient_key_id,"recipientNonce":request.recipient_nonce,"policyHash":request.policy_hash,
         "dataPlaneBinaryDigest":request.data_plane_binary_digest,"principalId":request.principal_id,
         "routeId":request.route_id,"credentialId":request.credential_id,"issuedAtEpochMs":now,"expiresAtEpochMs":now+ttl_ms});
@@ -156,7 +156,7 @@ fn material_response_with_metadata(
     if request.purpose == CredentialLeasePurpose::DispatchSecret {
         credential["secret"] = json!(SECRET);
     }
-    let plaintext = json!({"apiVersion":"serverware.credentialLeaseSet/v3","purpose":request.purpose,
+    let plaintext = json!({"apiVersion":"catchplate.credentialLeaseSet/v3","purpose":request.purpose,
         "requestBindingSha256":credential_lease_request_binding_sha256(&request),"releaseAuthorization":null,
         "recipientKeyId":request.recipient_key_id,"recipientNonce":request.recipient_nonce,"policyHash":request.policy_hash,
         "dataPlaneBinaryDigest":request.data_plane_binary_digest,"principalId":request.principal_id,
@@ -173,7 +173,7 @@ fn material_response_with_metadata(
     let secret = X25519StaticSecret::from([109u8; 32]);
     let shared = secret.diffie_hellman(&X25519PublicKey::from(recipient));
     let aad_bytes = canonical_json(&aad).into_bytes();
-    let mut info = b"serverware:credential-lease-envelope:v2\0".to_vec();
+    let mut info = b"catchplate:credential-lease-envelope:v2\0".to_vec();
     info.extend_from_slice(&Sha256::digest(&aad_bytes));
     let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, &nonce).extract(shared.as_bytes());
     let mut key_bytes = [0u8; 32];
@@ -634,7 +634,7 @@ fn operator_static_excluded_owners_and_requests_keep_old_path() {
                 .credentials
                 .get_mut(&scope.credential_id)
                 .unwrap()
-                .injection["__serverwareCredentialType"] = json!("oauth2");
+                .injection["__catchplateCredentialType"] = json!("oauth2");
         } else {
             excluded.routes[0].jit["required"] = json!(true);
         }

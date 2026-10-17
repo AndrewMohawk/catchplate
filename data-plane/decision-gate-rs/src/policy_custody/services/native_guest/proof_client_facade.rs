@@ -4,8 +4,8 @@ use super::*;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path,PathBuf};
 
-pub(super) const API:&str="serverware.nativeShadowFacadeInspection/v1";
-const OUTGOING_API:&str="serverware.nativeShadowBridgeOutgoingInspection/v1";
+pub(super) const API:&str="catchplate.nativeShadowFacadeInspection/v1";
+const OUTGOING_API:&str="catchplate.nativeShadowBridgeOutgoingInspection/v1";
 const SESSIONS:usize=4;
 pub(super) fn is_api(value:&str)->bool {value==API || value==OUTGOING_API}
 pub(in crate::policy_shadow::policy_custody::services) fn outgoing_directory_name(ordinal:usize)->String {

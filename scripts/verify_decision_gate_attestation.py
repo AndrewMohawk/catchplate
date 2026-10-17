@@ -14,7 +14,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from serverware.http_client import request_bytes
+from catchplate.http_client import request_bytes
 
 
 def canonical_json(value: Any) -> str:
@@ -114,7 +114,7 @@ def verify_policy_high_water(
     }:
         raise ValueError("decision gate policy high-water record is invalid")
     expected_gate_high_water = {
-        "api_version": "serverware.policyHighWater/v1",
+        "api_version": "catchplate.policyHighWater/v1",
         "policy_id": policy_id,
         "sequence": sequence,
         "rollback_epoch": rollback_epoch,
@@ -141,7 +141,7 @@ def verify_policy_high_water(
 def request_json(url: str, admin_token: str | None = None) -> dict[str, Any]:
     headers = {}
     if admin_token:
-        headers["X-Serverware-Admin-Token"] = admin_token
+        headers["X-Catchplate-Admin-Token"] = admin_token
     request = urllib.request.Request(url, headers=headers)
     return json.loads(request_bytes(request, timeout=10, max_bytes=8 * 1024 * 1024).body)
 
@@ -149,21 +149,21 @@ def request_json(url: str, admin_token: str | None = None) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify the Rust decision-gate dev attestation.")
     parser.add_argument("--gate", default="http://localhost:9090")
-    parser.add_argument("--serverware", default="http://localhost:3000")
+    parser.add_argument("--catchplate", default="http://localhost:3000")
     parser.add_argument("--admin-token", default="dev-admin-token")
     parser.add_argument("--expected-binary-digest")
     parser.add_argument("--require-persisted-high-water", action="store_true")
     args = parser.parse_args()
 
     gate = args.gate.rstrip("/")
-    serverware = args.serverware.rstrip("/")
+    catchplate = args.catchplate.rstrip("/")
     deadline = time.monotonic() + 15
     while True:
         nonce = secrets.token_urlsafe(24)
         attestation = request_json(f"{gate}/attestation?nonce={nonce}")
         health = request_json(f"{gate}/healthz")
-        policy = request_json(f"{serverware}/api/policy", args.admin_token)
-        control_attestation = request_json(f"{serverware}/attestation?nonce={nonce}-control")
+        policy = request_json(f"{catchplate}/api/policy", args.admin_token)
+        control_attestation = request_json(f"{catchplate}/attestation?nonce={nonce}-control")
         policy_hash = policy.get("policy_hash")
         manifest = attestation.get("runtime_manifest")
         observed_hashes = {

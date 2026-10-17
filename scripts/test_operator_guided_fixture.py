@@ -24,7 +24,7 @@ from scripts import prepare_operator_guided_fixture as recipe
 from scripts import run_operator_guided_fixture as runner
 from scripts import operator_guided_fixture_network as network
 
-ROOT = Path("/srv/catchplate-fast/tmp/serverware-guided-private.abcdef12")
+ROOT = Path("/srv/catchplate-fast/tmp/catchplate-guided-private.abcdef12")
 ARGS = (Path("/synthetic/source"), Path("/synthetic/gate"), Path("/synthetic/initializer.py"), ROOT)
 PIN = "a" * 64
 NOW = datetime.datetime(2026, 10, 12, 12, tzinfo=datetime.timezone.utc)
@@ -44,7 +44,7 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(set(self.config), {"name", "services"})
         services = self.config["services"]
         self.assertEqual(set(services), {"initialize", "network-files", "basic-pki", "network", "provider",
-            "serverware", "decision-gate-rs", "edge", "check"})
+            "catchplate", "decision-gate-rs", "edge", "check"})
         self.assertEqual((runner.WORK_SECONDS, runner.CLEANUP_SECONDS, recipe.KEEPER_SECONDS, recipe.EDGE_SECONDS,
             recipe.CHECKER_SECONDS, recipe.CHECKER_OUTER_SECONDS, recipe.PRECHECK_SECONDS), (300, 60, 300, 240, 180, 190, 75))
         for name, service in services.items():
@@ -60,18 +60,18 @@ class FixtureTests(unittest.TestCase):
             self.assertEqual(len(service["volumes"]), len({row["target"] for row in service["volumes"]}))
         self.assertEqual(services["initialize"]["command"], ["python", "-B", "/initialize.py"])
         self.assertEqual(services["provider"]["command"], ["python", "-B", "scripts/demo_upstream.py"])
-        self.assertEqual(services["serverware"]["depends_on"], {"provider": {"condition": "service_healthy"}})
+        self.assertEqual(services["catchplate"]["depends_on"], {"provider": {"condition": "service_healthy"}})
         self.assertFalse(any("seed" in str(value).lower() for service in services.values() for value in service.get("command", [])))
 
     def test_curated_gate_only_has_publication_and_exact_original_leaf_overlays(self):
         services = self.config["services"]
-        app, gate = services["serverware"], services["decision-gate-rs"]
-        self.assertEqual(app["environment"]["SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED"], "1")
+        app, gate = services["catchplate"], services["decision-gate-rs"]
+        self.assertEqual(app["environment"]["CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED"], "1")
         for service in (app, gate):
-            self.assertEqual(service["environment"]["SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS"], '["127.0.0.2/32"]')
-            self.assertEqual(service["environment"]["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"], '["https://demo-upstream:8443"]')
-            self.assertEqual(service["environment"]["SERVERWARE_OPERATOR_DEMO_PROXY_URL"], "https://serverware-gmail-proxy.example.com")
-            self.assertNotIn("SERVERWARE_OPERATOR_MANAGED_X_ENABLED", service["environment"])
+            self.assertEqual(service["environment"]["CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS"], '["127.0.0.2/32"]')
+            self.assertEqual(service["environment"]["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"], '["https://demo-upstream:8443"]')
+            self.assertEqual(service["environment"]["CATCHPLATE_OPERATOR_DEMO_PROXY_URL"], "https://catchplate-gmail-proxy.example.com")
+            self.assertNotIn("CATCHPLATE_OPERATOR_MANAGED_X_ENABLED", service["environment"])
         mounts = {row["target"]: row for row in gate["volumes"] if row["target"].startswith("/data")}
         self.assertEqual(set(mounts), {"/data", *("/data/" + name for name in recipe.LEAVES)})
         self.assertEqual(mounts["/data"]["source"], str(ROOT / "runtime/app-data/gate-runtime"))
@@ -89,8 +89,8 @@ class FixtureTests(unittest.TestCase):
         args = dict(zip(check["command"][1::2], check["command"][2::2]))
         self.assertEqual(args["--control-base"], "http://127.0.0.1:3000")
         self.assertEqual(args["--management-base"], "http://127.0.0.1:9091")
-        self.assertEqual(args["--operator-origin"], "https://serverware-guided.example.com")
-        self.assertEqual(args["--proxy-url"], "https://serverware-gmail-proxy.example.com")
+        self.assertEqual(args["--operator-origin"], "https://catchplate-guided.example.com")
+        self.assertEqual(args["--proxy-url"], "https://catchplate-gmail-proxy.example.com")
         self.assertEqual(args["--expected-binary-sha256"], "sha256:" + PIN)
         self.assertEqual(args["--curl-binary"], "/usr/bin/curl")
         self.assertEqual(args["--expected-curl-sha256"], "0ca2b923679ab186f6512c7512e131a1c5c1b43d4cb5d55933998405b39e85bf")
@@ -112,7 +112,7 @@ class FixtureTests(unittest.TestCase):
             lambda c: c["services"]["check"]["logging"].update(options={"max-size": "2m"}),
             lambda c: c["services"]["network"].update(network_mode="host"),
             lambda c: c["services"]["edge"]["command"].append("--lifetime-seconds=999"),
-            lambda c: c["services"]["serverware"]["environment"].update(SERVERWARE_PUBLIC_URL="https://different.example.com"),
+            lambda c: c["services"]["catchplate"]["environment"].update(CATCHPLATE_PUBLIC_URL="https://different.example.com"),
             lambda c: c["services"]["decision-gate-rs"]["volumes"][-1].update(read_only=False),
             lambda c: c["services"].pop("network-files")]
         for mutate in mutations:
@@ -121,7 +121,7 @@ class FixtureTests(unittest.TestCase):
         with self.assertRaises(ValueError): recipe.build(*ARGS[:3], Path("/tmp") / ROOT.name, expected_binary_sha256=PIN)
 
     def test_network_contract_contains_only_fixed_loopback_hosts_and_one_shot_files(self):
-        self.assertEqual(network.HOSTS, b"127.0.0.1 localhost serverware decision-gate-rs serverware-guided.example.com serverware-gmail-proxy.example.com\n127.0.0.2 demo-upstream\n")
+        self.assertEqual(network.HOSTS, b"127.0.0.1 localhost catchplate decision-gate-rs catchplate-guided.example.com catchplate-gmail-proxy.example.com\n127.0.0.2 demo-upstream\n")
         self.assertEqual(network.RESOLV, b"nameserver 127.0.0.1\noptions attempts:1 timeout:1\n")
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "hosts"
@@ -217,7 +217,7 @@ class RunnerTests(unittest.TestCase):
                 value.inputs("leaf-symlink")
 
     def test_browser_preflight_creates_private_pinned_temporary_directory_without_starting(self):
-        value = self.instance(); value.project = "serverware-guided-private-" + "a" * 12
+        value = self.instance(); value.project = "catchplate-guided-private-" + "a" * 12
         value.browser_units = Mock(return_value=False)
         value.command = Mock(return_value=b"default.target static -\n")
         with patch.object(runner.recipe.base, "digest", return_value="b" * 64):

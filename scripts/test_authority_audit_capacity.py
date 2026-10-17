@@ -22,12 +22,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_contract
-from serverware import authority_transition_core as core
-from serverware import authority_transition_policy as policy
-from serverware import authority_transition_quota as quota
-from serverware.audit_outbox_contract import MAX_PENDING
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_contract
+from catchplate import authority_transition_core as core
+from catchplate import authority_transition_policy as policy
+from catchplate import authority_transition_quota as quota
+from catchplate.audit_outbox_contract import MAX_PENDING
 
 TABLE = "policy_authority_bounded_aggregate_states"
 OUTBOX = "metadata_audit_outbox"
@@ -52,19 +52,19 @@ def framed(domain, *frames):
 
 
 REQUEST = "sha256:" + hashlib.sha256(b"audit-freshness-local-component").hexdigest()
-EXPIRY = framed("serverware.policyAuthorityAggregateExpiryIndex/v1", b"[]")
+EXPIRY = framed("catchplate.policyAuthorityAggregateExpiryIndex/v1", b"[]")
 GLOBAL_KIND = "metadata-audit-outbox-global-capacity-v1"
-GLOBAL_PARTITION = framed("serverware.metadataAuditOutboxCapacityPartition/v1", b"global")
+GLOBAL_PARTITION = framed("catchplate.metadataAuditOutboxCapacityPartition/v1", b"global")
 GLOBAL_ID = GLOBAL_KIND + ":" + GLOBAL_PARTITION
 
 
 def operation_id(operation):
-    return framed("serverware.policyAuthorityOperation/v2", operation.encode("ascii"), REQUEST.encode("ascii"))
+    return framed("catchplate.policyAuthorityOperation/v2", operation.encode("ascii"), REQUEST.encode("ascii"))
 
 
 def selection(table, key, *, present=False, row=None):
     return {"table": table, "key": copy.deepcopy(key),
-        "keyDigest": framed("serverware.policyAuthorityBusinessKey/v1", table.encode("ascii"), canonical(key)),
+        "keyDigest": framed("catchplate.policyAuthorityBusinessKey/v1", table.encode("ascii"), canonical(key)),
         "present": present, "row": copy.deepcopy(row), "contractSelector": None}
 
 
@@ -79,7 +79,7 @@ def audit_rows(operation="policy.genesis.prepare"):
         event = canonical({"componentOperation": operation, "ordinal": ordinal})
         rows.append({"id": "policy-authority:" + hashlib.sha256(event).hexdigest(),
             "event_type": "policy.authority.component", "actor_type": "admin", "actor_id": "component-actor",
-            "event_json": event.decode("ascii"), "event_digest": framed("serverware.metadataAuditOutboxEvent/v1", event),
+            "event_json": event.decode("ascii"), "event_digest": framed("catchplate.metadataAuditOutboxEvent/v1", event),
             "storage_format_version": 2, "status": "pending", "claim_id": None, "claimed_at": None,
             "attempts": 0, "audited_at": None, "audit_event_hash": None, "last_error": None, "created_at": NOW.isoformat()})
     return tuple(rows)
@@ -106,12 +106,12 @@ def aggregate_row(*, limit=100_000, live=0, kind=GLOBAL_KIND, partition=GLOBAL_P
         "reserved_units_json": "{}", "committed_units_json": "{}", "next_sequence": 11,
         "minimum_expiry_epoch_ns": None, "expiry_index_root_digest": EXPIRY, "work_page_id": None,
         "updated_at_epoch_ns": 1_000_000_000, "source_revision": authority_contract.SOURCE_REVISION}
-    state = {"schema": "serverware.policyAuthorityAggregateState/v1", "aggregateId": row["aggregate_id"],
+    state = {"schema": "catchplate.policyAuthorityAggregateState/v1", "aggregateId": row["aggregate_id"],
         "aggregateKind": kind, "partitionDigest": partition, "revision": 7, "liveCount": live,
         "activeCount": live, "capacityLimit": limit, "reservedUnits": {}, "committedUnits": {},
         "nextSequence": 11, "minimumExpiryEpochNs": None, "expiryIndexRootDigest": EXPIRY, "workPageId": None}
     row["state_json"] = canonical(state).decode("ascii")
-    row["state_digest"] = framed("serverware.policyAuthorityAggregateState/v1", canonical(state))
+    row["state_digest"] = framed("catchplate.policyAuthorityAggregateState/v1", canonical(state))
     return row
 
 
@@ -228,7 +228,7 @@ class AuditBusinessMutationTests(unittest.TestCase):
             pass
         for identity in (None, True, "", "caller-selected", StringSubclass(operation_id(ctx.operation)),
                 operation_id("policy.activation.prepare"),
-                framed("serverware.policyAuthorityOperation/v2", ctx.operation.encode(), b"sha256:" + b"f" * 64)):
+                framed("catchplate.policyAuthorityOperation/v2", ctx.operation.encode(), b"sha256:" + b"f" * 64)):
             with self.assertRaisesRegex(core.TransitionKernelError, "audit event identity differs from the source operation"):
                 audit_mutations(ctx, rows, identity=identity)
         with self.assertRaisesRegex(core.TransitionKernelError, "audit records differ from the source operation"):
@@ -238,7 +238,7 @@ class AuditBusinessMutationTests(unittest.TestCase):
 
     def test_quota_eight_operations_emit_one_fresh_event_without_counter(self):
         event = {"purpose": "local-component", "nested": {"v": 1}}
-        expected = framed("serverware.metadataAuditOutboxEvent/v1", canonical(event))
+        expected = framed("catchplate.metadataAuditOutboxEvent/v1", canonical(event))
         for operation in QUOTA_OPERATIONS:
             identity = quota._audit_query(operation, REQUEST).absent_key["id"]
             mutations, digest, replay = quota_event(context(operation, (audit_selection(identity),)))
@@ -315,13 +315,13 @@ class AuditBusinessMutationTests(unittest.TestCase):
             queries = kernel.queries(arguments=arguments, database_now=NOW, request_digest=REQUEST)
             aggregates = [query for query in queries if query.table == TABLE]
             self.assertEqual(len(aggregates), 1)
-            partition = framed("serverware.policyAuthorityAggregatePartition/v1", kind.encode(), b"global")
+            partition = framed("catchplate.policyAuthorityAggregatePartition/v1", kind.encode(), b"global")
             self.assertEqual(aggregates[0].absent_key, {"aggregate_id": kind + ":" + partition})
             self.assertEqual(sum(query.table == OUTBOX for query in queries), 1)
 
     def test_generic_aggregate_updates_keep_their_own_business_capacity(self):
         kind = "control-plane-approvals"
-        partition = framed("serverware.policyAuthorityAggregatePartition/v1", kind.encode(), b"global")
+        partition = framed("catchplate.policyAuthorityAggregatePartition/v1", kind.encode(), b"global")
         for limit in (3, 100_001):
             row = aggregate_row(limit=limit, live=limit-1, kind=kind, partition=partition)
             ctx = context("control-approval.request", (selection(TABLE, {"aggregate_id": row["aggregate_id"]},
@@ -335,7 +335,7 @@ class AuditBusinessMutationTests(unittest.TestCase):
 
     def test_source_links_remove_only_old_audit_selectors_and_counter_helper(self):
         # Source coverage, NOT execution of all twelve operation kernels.
-        trees = [ast.parse((ROOT / "serverware" / filename).read_text())
+        trees = [ast.parse((ROOT / "catchplate" / filename).read_text())
                  for filename in ("authority_transition_policy.py", "authority_transition_quota.py")]
         names = {node.name for node in trees[0].body if isinstance(node, ast.FunctionDef)}
         self.assertNotIn("_aggregate_mutation", names)
@@ -358,7 +358,7 @@ class AuditBusinessMutationTests(unittest.TestCase):
         # Explicitly SOURCE-ONLY: no successful signed replay is manufactured.
         kernel = policy._PolicyActivationPrepareKernel()
         self.assertIs(kernel.permits_empty_mutation, True)
-        tree = ast.parse((ROOT / "serverware/authority_transition_policy.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/authority_transition_policy.py").read_text())
         cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == type(kernel).__name__)
         transition = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "transition")
         branches = [node for node in transition.body if isinstance(node, ast.If)

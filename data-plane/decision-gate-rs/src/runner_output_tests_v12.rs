@@ -39,7 +39,7 @@ impl SmallTaskDirectory {
         for _ in 0..32 {
             let sequence = DIRECTORY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
             let path = parent.join(format!(
-                "serverware-runner-output-{}-{stamp}-{sequence}",
+                "catchplate-runner-output-{}-{stamp}-{sequence}",
                 std::process::id(),
             ));
             match fs::DirBuilder::new().mode(0o700).create(&path) {

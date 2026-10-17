@@ -330,8 +330,8 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
     with patch.dict(
         os.environ,
         {
-            "SERVERWARE_RELEASE_CHANNEL": "prod",
-            "SERVERWARE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL": (
+            "CATCHPLATE_RELEASE_CHANNEL": "prod",
+            "CATCHPLATE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL": (
                 "http://control-plane.test/api/data-plane/release-authorizations"
             ),
         },
@@ -398,7 +398,7 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
     with (
         patch.dict(
             os.environ,
-            {"SERVERWARE_RELEASE_CHANNEL": "prod"},
+            {"CATCHPLATE_RELEASE_CHANNEL": "prod"},
             clear=False,
         ),
         patch.object(runtime, "atomic_release_authorization_enabled", return_value=True),
@@ -452,7 +452,7 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
 
     with patch.dict(
         os.environ,
-        {"SERVERWARE_RELEASE_CHANNEL": "development"},
+        {"CATCHPLATE_RELEASE_CHANNEL": "development"},
         clear=False,
     ):
         runtime._require_development_release_authorization_fallback()
@@ -504,7 +504,7 @@ def exercise_python_atomic_reserve_contract(runtime, canonical_json) -> None:
     reserve_guard = runtime.ReleaseAuthorizationGuard(expected_reserve)
     approval_expires_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
     response = {
-        "apiVersion": "serverware.releaseAuthorization/v1",
+        "apiVersion": "catchplate.releaseAuthorization/v1",
         "ok": True,
         "authorized": False,
         "state": "denied",
@@ -836,22 +836,22 @@ def exercise_pending_approval_restart_migration(db, snapshot) -> None:
 
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        os.environ["SERVERWARE_DATA_DIR"] = tmp
-        os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
-        os.environ["SERVERWARE_PUBLIC_URL"] = "http://localhost:3000"
-        os.environ["SERVERWARE_DEV_AUTHENTICATOR"] = "1"
-        os.environ.pop("SERVERWARE_METADATA_STORE_POSTGRES_DSN", None)
-        os.environ.pop("SERVERWARE_AUDIT_STORE_POSTGRES_DSN", None)
-        os.environ.pop("SERVERWARE_GRANT_STORE_POSTGRES_DSN", None)
+        os.environ["CATCHPLATE_DATA_DIR"] = tmp
+        os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
+        os.environ["CATCHPLATE_PUBLIC_URL"] = "http://localhost:3000"
+        os.environ["CATCHPLATE_DEV_AUTHENTICATOR"] = "1"
+        os.environ.pop("CATCHPLATE_METADATA_STORE_POSTGRES_DSN", None)
+        os.environ.pop("CATCHPLATE_AUDIT_STORE_POSTGRES_DSN", None)
+        os.environ.pop("CATCHPLATE_GRANT_STORE_POSTGRES_DSN", None)
 
-        from serverware import app as app_module
-        from serverware import db, policy_bundle, runtime, webauthn
+        from catchplate import app as app_module
+        from catchplate import db, policy_bundle, runtime, webauthn
 
         exercise_grant_publish_acknowledgement_binding(runtime)
-        from serverware.auth import AdminIdentity
+        from catchplate.auth import AdminIdentity
 
         exercise_python_release_lifecycle_contracts(
             runtime,
@@ -1111,11 +1111,11 @@ def main() -> None:
             ),
             AdminIdentity("user:demo", frozenset({"approver"}), "admin-token-header"),
         )
-        challenge_payload = options["serverware"]["payload"]
+        challenge_payload = options["catchplate"]["payload"]
         if (
             challenge_payload.get("review_receipt_id") != receipt["id"]
             or challenge_payload.get("review_digest") != review["review_digest"]
-            or challenge_payload.get("type") != "serverware.approval.reviewed"
+            or challenge_payload.get("type") != "catchplate.approval.reviewed"
         ):
             raise AssertionError(
                 f"WebAuthn challenge did not bind the review receipt: {challenge_payload}"

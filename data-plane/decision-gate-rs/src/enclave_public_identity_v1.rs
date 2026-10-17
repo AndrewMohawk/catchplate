@@ -30,9 +30,9 @@ const MAX_CLIENT_TRUST_BYTES: usize = 1024 * 1024;
 // per-root string framing at the fixed maximum count. No JSON escaping is
 // needed for the variable base64url values measured separately below.
 const V2_ENCODING_OVERHEAD_BYTES: usize = 2048;
-const CLIENT_TRUST_DOMAIN: &[u8] = b"serverware/mutual-tls-client-trust/v1\0";
-const KEY_BINDING_DOMAIN: &[u8] = b"serverware/enclave-runtime-key-binding/v1\0";
-const INGRESS_BINDING_DOMAIN: &[u8] = b"serverware/native-tls13-mandatory-client-auth/v1\0";
+const CLIENT_TRUST_DOMAIN: &[u8] = b"catchplate/mutual-tls-client-trust/v1\0";
+const KEY_BINDING_DOMAIN: &[u8] = b"catchplate/enclave-runtime-key-binding/v1\0";
+const INGRESS_BINDING_DOMAIN: &[u8] = b"catchplate/native-tls13-mandatory-client-auth/v1\0";
 const INGRESS_ROLE: u8 = 3;
 
 enum EvidenceKind { Startup, Session, SessionClientTrustV2 }
@@ -233,8 +233,8 @@ fn encode(identity: &mut EnclaveRuntimeIdentityV1, ingress: &QuotedMutualTlsIngr
     // These are copies of the original request inputs. They are not decoded
     // from, or claimed verified against, the opaque signed NSM document.
     let evidence = PublicEvidence {
-        api_version: if client_trust_v2 { "serverware.nativeIngressPublicEvidence/v2" }
-            else { "serverware.nativeIngressPublicEvidence/v1" },
+        api_version: if client_trust_v2 { "catchplate.nativeIngressPublicEvidence/v2" }
+            else { "catchplate.nativeIngressPublicEvidence/v1" },
         evidence_scope,
         ok_for_action: false,
         ingress: PublicIngress {

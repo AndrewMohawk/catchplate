@@ -24,7 +24,7 @@ pub(super) fn verify_computation(value:&serde_json::Value,request:&Request,respo
     let original:Original=serde_json::from_slice(&raw).map_err(|_|ShadowError::BindingDrift)?;
     let binding=request.binding();
     if canonical_json_bytes(&original)?!=raw || !matches!(request,Request::CommitRequest{..})
-        || original.api_version!="serverware.nativeShadowCommitRequestComputation/v1"
+        || original.api_version!="catchplate.nativeShadowCommitRequestComputation/v1"
         || original.native_grant_sha256==Sha256Digest::compute(&[])
         || original.request!=*request || original.result!=response.result
         || original.result_sha256!=response.result_sha256
@@ -47,7 +47,7 @@ pub(super) fn verify_computation(value:&serde_json::Value,request:&Request,respo
     let payload=canonical_json_bytes(&(&original.api_version,&original.native_grant_sha256,
         &original.request,&original.result,&original.result_sha256,original.computed_at_boottime_nanos))?;
     let preimage=super::protocol::domain_separated_signature_preimage(
-        b"serverware.nativeShadowCommitRequestComputation.signature/v1",&payload)
+        b"catchplate.nativeShadowCommitRequestComputation.signature/v1",&payload)
         .map_err(|_|ShadowError::BindingDrift)?;
     use base64::Engine as _;
     let signature=base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&original.signature_base64url)

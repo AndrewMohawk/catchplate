@@ -19,7 +19,7 @@ fn forbidden(name: &str) -> bool {
     // Classification only. Never rewrite the actual or policy-listed name.
     let classified = name.to_ascii_lowercase().replace('_', "-");
     matches!(classified.as_str(), "authorization" | "proxy-authorization" | "cookie" | "set-cookie")
-        || classified.starts_with("x-serverware-")
+        || classified.starts_with("x-catchplate-")
         || (classified != name && TRANSPORT.contains(&classified.as_str()))
 }
 

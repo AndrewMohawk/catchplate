@@ -34,12 +34,12 @@ from psycopg.rows import dict_row
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.native_postgres_results import run_native_fixture
+from catchplate.native_postgres_results import run_native_fixture
 
-from serverware import authority_audit_initialization_postgres as adapter
-from serverware import authority_audit_initialization as initialization
-from serverware import authority_audit_initialization_admission as admission
-from serverware import authority_radix_proof as radix
+from catchplate import authority_audit_initialization_postgres as adapter
+from catchplate import authority_audit_initialization as initialization
+from catchplate import authority_audit_initialization_admission as admission
+from catchplate import authority_radix_proof as radix
 import test_authority_primary_tree_postgres as tree_fixture
 import test_authority_audit_initialization as initialization_fixture
 import test_authority_audit_initialization_admission as admission_fixture
@@ -72,7 +72,7 @@ def other_aggregate(identity):
     state.update(aggregateId=row["aggregate_id"], aggregateKind=row["aggregate_kind"],
                  partitionDigest=row["partition_digest"])
     row["state_json"] = wire_json(state).decode("ascii")
-    row["state_digest"] = wire_digest("serverware.policyAuthorityAggregateState/v1", wire_json(state))
+    row["state_digest"] = wire_digest("catchplate.policyAuthorityAggregateState/v1", wire_json(state))
     return row
 
 
@@ -149,7 +149,7 @@ class AuditInitializationPostgresTests(unittest.TestCase):
     def expected_evidence(self, signed):
         prepared = self.expected()
         return {
-            "schema": "serverware.metadataAuditInitializationEvidence/v1",
+            "schema": "catchplate.metadataAuditInitializationEvidence/v1",
             "checkpoint": json.loads(signed.checkpoint),
             "checkpointEnvelopeDigest": admission_fixture.signed_digest(
                 admission_fixture.ROLES["checkpoint"]["envelope"], signed.checkpoint),
@@ -248,7 +248,7 @@ class AuditInitializationPostgresTests(unittest.TestCase):
     def test_missing_stored_leaf_rejects_present_base_row(self):
         row = outbox_row("missing-leaf")
         self.seed([row])
-        key_digest = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1", OUTBOX.encode(), sql_json({"id": row["id"]}))
+        key_digest = sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1", OUTBOX.encode(), sql_json({"id": row["id"]}))
         self.assertEqual(self.connection.execute(sql.SQL("DELETE FROM {} WHERE table_name=%s AND key_digest=%s")
             .format(self.store.object(tree_fixture.LEAVES)), (OUTBOX, key_digest)).rowcount, 1)
         self.reject()
@@ -676,7 +676,7 @@ class AuditInitializationPostgresTests(unittest.TestCase):
 class AuditInitializationPostgresSourceTests(unittest.TestCase):
     def test_actual_adapter_owns_no_transaction_or_dml_and_closes_stream(self):
         """Supplemental source inspection, not SQL/concurrency execution."""
-        path = ROOT / "serverware/authority_audit_initialization_postgres.py"
+        path = ROOT / "catchplate/authority_audit_initialization_postgres.py"
         self.assertLessEqual(path.stat().st_size, 64 * 1024)
         parsed = ast.parse(path.read_text(encoding="utf-8"))
         methods = {node.name: node for node in parsed.body if isinstance(node, ast.FunctionDef)}

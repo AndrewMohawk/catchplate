@@ -6,7 +6,7 @@ use ed25519_dalek::Signature;
 use ipnet::IpNet;
 use serde::Serialize;
 use serde_json::{Map, Value};
-use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
+use catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
 use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 use std::net::{IpAddr, SocketAddr};
@@ -14,16 +14,16 @@ use url::{Host, Url};
 
 const MAX_BYTES: usize = 32 * 1024;
 const MAX_KEY_BYTES: usize = 16 * 1024;
-const SCHEMA: &str = "serverware.nativeEgressInstallationAuthorization/v1";
-const ENVELOPE: &str = "serverware.signedNativeEgressInstallationAuthorization/v1";
-const CREATION_SCHEMA: &str = "serverware.nativeEgressInstallationAuthorization/v2";
-const CREATION_ENVELOPE: &str = "serverware.signedNativeEgressInstallationAuthorization/v2";
-const NETWORK_SCHEMA: &str = "serverware.nativeEgressInstallationAuthorization/v3";
-const NETWORK_ENVELOPE: &str = "serverware.signedNativeEgressInstallationAuthorization/v3";
-const EXECUTION_SCHEMA: &str = "serverware.nativeEgressInstallationAuthorization/v4";
-const EXECUTION_ENVELOPE: &str = "serverware.signedNativeEgressInstallationAuthorization/v4";
-const APPLICATION_SCHEMA: &str = "serverware.nativeEgressInstallationAuthorization/v5";
-const APPLICATION_ENVELOPE: &str = "serverware.signedNativeEgressInstallationAuthorization/v5";
+const SCHEMA: &str = "catchplate.nativeEgressInstallationAuthorization/v1";
+const ENVELOPE: &str = "catchplate.signedNativeEgressInstallationAuthorization/v1";
+const CREATION_SCHEMA: &str = "catchplate.nativeEgressInstallationAuthorization/v2";
+const CREATION_ENVELOPE: &str = "catchplate.signedNativeEgressInstallationAuthorization/v2";
+const NETWORK_SCHEMA: &str = "catchplate.nativeEgressInstallationAuthorization/v3";
+const NETWORK_ENVELOPE: &str = "catchplate.signedNativeEgressInstallationAuthorization/v3";
+const EXECUTION_SCHEMA: &str = "catchplate.nativeEgressInstallationAuthorization/v4";
+const EXECUTION_ENVELOPE: &str = "catchplate.signedNativeEgressInstallationAuthorization/v4";
+const APPLICATION_SCHEMA: &str = "catchplate.nativeEgressInstallationAuthorization/v5";
+const APPLICATION_ENVELOPE: &str = "catchplate.signedNativeEgressInstallationAuthorization/v5";
 const MAX_EPOCH_MS: u64 = 9_223_372_036_854;
 
 #[derive(Serialize)]

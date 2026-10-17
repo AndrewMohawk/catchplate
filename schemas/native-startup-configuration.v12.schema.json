@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v12.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-startup-configuration.v12.schema.json",
   "title": "Explicit native guest role-key provisioning startup",
   "$comment": "Exact v11 retained owners plus required guestRoleKeyProvisioner. This data-only selection does not provide independent keys, KMS policy, generation authority or runtime acceptance. Actual retained seven-role delivery admission and the same original privileged preparation precede purpose-fixed provisioning and cohort launch. Earlier profiles do not infer this selection from missing files.",
   "type": "object",
@@ -28,7 +28,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.nativeStartupConfiguration/v12"
+      "const": "catchplate.nativeStartupConfiguration/v12"
     },
     "gate": {
       "$ref": "native-startup-configuration.v11.schema.json#/properties/gate"

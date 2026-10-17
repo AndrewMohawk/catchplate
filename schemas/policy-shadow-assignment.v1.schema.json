@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-shadow-assignment.v1.schema.json",
-  "title": "Serverware Policy Shadow Assignment v1",
-  "$comment": "Wire data is unverified. Native verification canonicalizes payload with serverware.canonicalJson/ascii-integer-v1, recomputes payloadSha256, and verifies Ed25519 over SERVERWARE-SIGNED-ENVELOPE-V1 framing: serverware.signedEnvelope/v1 NUL signatureDomain NUL canonicalProfile NUL canonicalPayload. Canonical JSON permits only null, booleans, signed 64-bit integers, ASCII strings, arrays, and ASCII-keyed objects; keys sort by raw ASCII bytes; strings use shortest JSON escapes; floats and whitespace are forbidden.",
+  "$id": "https://catchplate.invalid/schemas/policy-shadow-assignment.v1.schema.json",
+  "title": "Catchplate Policy Shadow Assignment v1",
+  "$comment": "Wire data is unverified. Native verification canonicalizes payload with catchplate.canonicalJson/ascii-integer-v1, recomputes payloadSha256, and verifies Ed25519 over CATCHPLATE-SIGNED-ENVELOPE-V1 framing: catchplate.signedEnvelope/v1 NUL signatureDomain NUL canonicalProfile NUL canonicalPayload. Canonical JSON permits only null, booleans, signed 64-bit integers, ASCII strings, arrays, and ASCII-keyed objects; keys sort by raw ASCII bytes; strings use shortest JSON escapes; floats and whitespace are forbidden.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -18,10 +18,10 @@
     "signature"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.policyShadowAssignment/v1"},
+    "apiVersion": {"const": "catchplate.policyShadowAssignment/v1"},
     "kind": {"const": "PolicyShadowAssignment"},
-    "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
-    "signatureDomain": {"const": "serverware.policyShadowAssignment/v1"},
+    "canonicalProfile": {"const": "catchplate.canonicalJson/ascii-integer-v1"},
+    "signatureDomain": {"const": "catchplate.policyShadowAssignment/v1"},
     "payload": {"$ref": "#/$defs/payload"},
     "payloadSha256": {"$ref": "#/$defs/sha256"},
     "signatureAlgorithm": {"const": "Ed25519"},
@@ -310,7 +310,7 @@
         "keySpkiSha256": {"$ref": "#/$defs/sha256"},
         "keyMaterialSha256": {
           "$ref": "#/$defs/sha256",
-          "$comment": "SHA-256 over serverware.policyAuthorityPublicKeyMaterial/v1 length-framed keyAlgorithm and the exact resolved DER SubjectPublicKeyInfo bytes. The role and scope are deliberately excluded so reuse of one public key in two roles produces the same material digest and is rejected."
+          "$comment": "SHA-256 over catchplate.policyAuthorityPublicKeyMaterial/v1 length-framed keyAlgorithm and the exact resolved DER SubjectPublicKeyInfo bytes. The role and scope are deliberately excluded so reuse of one public key in two roles produces the same material digest and is rejected."
         }
       }
     },

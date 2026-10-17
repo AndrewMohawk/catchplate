@@ -15,8 +15,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_transition_core as core
-from serverware import authority_webauthn_assertion as admission
+from catchplate import authority_transition_core as core
+from catchplate import authority_webauthn_assertion as admission
 
 
 def digest(value: bytes) -> str:
@@ -38,7 +38,7 @@ class RevokeAssertionAuthorizationTests(unittest.TestCase):
         self.now = 1_900_000_000_000_000_000
         self.request_digest = digest(b"fixture revoke request")
         self.operation_id = core.framed_digest(
-            "serverware.policyAuthorityOperation/v2",
+            "catchplate.policyAuthorityOperation/v2",
             admission.OPERATION.encode("ascii"),
             self.request_digest.encode("ascii"),
         )
@@ -182,10 +182,10 @@ class RevokeAssertionAuthorizationTests(unittest.TestCase):
     def test_source_wiring_keeps_verification_before_db_and_replay(self) -> None:
         # Transparent source-order check while the separate registry startup
         # blocker prevents importing/running the whole authority service.
-        planner = (ROOT / "serverware/authority_planner.py").read_text()
+        planner = (ROOT / "catchplate/authority_planner.py").read_text()
         derive = planner.split("    def derive(self, request:", 1)[1].split("class PlannerPersistence:", 1)[0]
         self.assertLess(derive.index("self.verify_assertion_evidence(request)"), derive.index("psycopg.connect("))
-        service = (ROOT / "serverware/authority_service.py").read_text()
+        service = (ROOT / "catchplate/authority_service.py").read_text()
         handle = service.split("    def _handle_plan(", 1)[1].split("    def ", 1)[0]
         self.assertLess(handle.index("planner.verify_assertion_evidence(planner_request)"), handle.index('"read-persisted-plan"'))
         self.assertIn('verifier_config["signingPublicKeyBase64Url"]', handle)

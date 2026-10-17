@@ -7,10 +7,10 @@
 
 use sha2::{Digest as _, Sha256};
 
-pub const EXPORTER_LABEL: &[u8] = b"EXPORTER-Serverware-Native-Ingress-v1";
-pub const CHALLENGE_HEADER: &str = "x-serverware-ingress-challenge";
+pub const EXPORTER_LABEL: &[u8] = b"EXPORTER-Catchplate-Native-Ingress-v1";
+pub const CHALLENGE_HEADER: &str = "x-catchplate-ingress-challenge";
 
-const NONCE_DOMAIN: &[u8] = b"serverware/native-ingress-session-challenge/v1\0";
+const NONCE_DOMAIN: &[u8] = b"catchplate/native-ingress-session-challenge/v1\0";
 
 /// SHA256(fixed domain || caller challenge[32] || actual TLS exporter[32]).
 /// Fixed array lengths make this preimage unambiguous without length prefixes.

@@ -34,11 +34,11 @@ def b64e(value: bytes) -> str:
 
 
 def log_path() -> Path:
-    return Path(os.getenv("SERVERWARE_EXTERNAL_TRANSPARENCY_LOG_PATH", str(ROOT / ".tmp" / "managed-transparency-log.jsonl")))
+    return Path(os.getenv("CATCHPLATE_EXTERNAL_TRANSPARENCY_LOG_PATH", str(ROOT / ".tmp" / "managed-transparency-log.jsonl")))
 
 
 def key_path() -> Path:
-    return Path(os.getenv("SERVERWARE_EXTERNAL_TRANSPARENCY_LOG_KEY", str(log_path().with_suffix(".ed25519.pem"))))
+    return Path(os.getenv("CATCHPLATE_EXTERNAL_TRANSPARENCY_LOG_KEY", str(log_path().with_suffix(".ed25519.pem"))))
 
 
 def load_key() -> Ed25519PrivateKey:
@@ -88,8 +88,8 @@ def append_checkpoint(payload: dict[str, Any]) -> dict[str, Any]:
     key = load_key()
     info = key_info(key)
     record = {
-        "version": "serverware.externalTransparencyCheckpoint/v1",
-        "provider": os.getenv("SERVERWARE_EXTERNAL_TRANSPARENCY_PROVIDER", "managed-transparency-log-fixture"),
+        "version": "catchplate.externalTransparencyCheckpoint/v1",
+        "provider": os.getenv("CATCHPLATE_EXTERNAL_TRANSPARENCY_PROVIDER", "managed-transparency-log-fixture"),
         "external_sequence": external_sequence,
         "received_at": datetime.now(timezone.utc).isoformat(),
         "checkpoint_digest": sha256_prefixed_json(payload),

@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/ecr-verified-image.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/ecr-verified-image.v1.schema.json",
   "title": "ECR image content commitment, not publication authority",
   "description": "Produced after reading the original manifest and every referenced blob. A valid serialized document alone does not prove byte observation, durable staging, approval, credential authority or an AWS effect. Implementations also enforce media-family consistency, exact unique sorted blob roster, descriptor equality and aggregate accounting.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "manifest", "config", "layers", "blobs", "total_blob_bytes"],
   "properties": {
-    "schema": {"const": "serverware.ecrVerifiedImage/v1"},
+    "schema": {"const": "catchplate.ecrVerifiedImage/v1"},
     "manifest": {
       "type": "object",
       "additionalProperties": false,

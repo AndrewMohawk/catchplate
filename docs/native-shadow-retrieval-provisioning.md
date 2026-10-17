@@ -1,7 +1,7 @@
 # Native retrieval artifacts and object installation
 
-The operator-side [artifact API](../serverware/native_shadow_retrieval_artifacts.py)
-and [installer](../serverware/native_shadow_retrieval_store.py) prepare the first
+The operator-side [artifact API](../catchplate/native_shadow_retrieval_artifacts.py)
+and [installer](../catchplate/native_shadow_retrieval_store.py) prepare the first
 [native immutable-retrieval service](native-shadow-retrieval-service.md). They are not a custody driver, an admission
 verdict, a running service, or a production readiness result. Current source is
 unbuilt and unexecuted.

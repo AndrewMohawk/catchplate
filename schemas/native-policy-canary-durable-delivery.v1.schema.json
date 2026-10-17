@@ -1,6 +1,6 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://serverware.invalid/schemas/native-policy-canary-durable-delivery.v1.schema.json",
+  "$id":"https://catchplate.invalid/schemas/native-policy-canary-durable-delivery.v1.schema.json",
   "title":"Native canary durable sender cold configuration and existing exact wire",
   "$ref":"#/$defs/configuration",
   "$defs":{
@@ -32,7 +32,7 @@
       "required":["apiVersion","intakeUrl","deploymentId","instanceId","authorityRootPublicKeyBase64Url","authorityRootSpkiSha256",
         "authorityConfigurationOriginalBase64Url","authorityConfigurationSha256","canaries","recoveryTargets"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeCanaryDurableDelivery/v1"},
+        "apiVersion":{"const":"catchplate.nativeCanaryDurableDelivery/v1"},
         "intakeUrl":{"type":"string","pattern":"^https://[^/?#@]+/api/data-plane/policy-canary/controlled-evidence$"},
         "deploymentId":{"$ref":"#/$defs/component"},"instanceId":{"$ref":"#/$defs/component"},
         "authorityRootPublicKeyBase64Url":{"type":"string","pattern":"^[A-Za-z0-9_-]{43}$"},

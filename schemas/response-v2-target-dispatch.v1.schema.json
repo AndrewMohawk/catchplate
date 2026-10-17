@@ -1,6 +1,6 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://serverware.invalid/schemas/response-v2-target-dispatch.v1.schema.json",
+  "$id":"https://catchplate.invalid/schemas/response-v2-target-dispatch.v1.schema.json",
   "title":"Independently assigned native gate execution and retained capture",
   "oneOf":[{"$ref":"#/$defs/configuration"},{"$ref":"#/$defs/begin"},{"$ref":"#/$defs/permit"},{"$ref":"#/$defs/capturePersist"},{"$ref":"#/$defs/completed"}],
   "$defs":{
@@ -11,7 +11,7 @@
     "publicKey":{"type":"string","pattern":"^[A-Za-z0-9+/]{43}=$"},
     "configuration":{"type":"object","additionalProperties":false,
       "required":["apiVersion","generationId","generation","assignment","trustRoots","validFromEpochMs","validUntilEpochMs"],"properties":{
-        "apiVersion":{"const":"serverware.responseV2.targetDispatchAssignment/v1"},
+        "apiVersion":{"const":"catchplate.responseV2.targetDispatchAssignment/v1"},
         "generationId":{"$ref":"#/$defs/identifier"},"generation":{"type":"integer","minimum":1,"maximum":9223372036854775807},
         "assignment":{"$ref":"#/$defs/assignment"},"trustRoots":{"$ref":"#/$defs/roots"},
         "validFromEpochMs":{"$ref":"#/$defs/positive"},"validUntilEpochMs":{"type":"integer","minimum":1,"maximum":9223372036854}
@@ -32,7 +32,7 @@
     },
     "roots":{"type":"object","additionalProperties":false,
       "required":["apiVersion","awsNitroRootCertificatesPem","awsNitroCrlsDerBase64url","nitroCertificateProfile"],"properties":{
-        "apiVersion":{"const":"serverware.nativeResponseAttestationTrustRoots/v1"},
+        "apiVersion":{"const":"catchplate.nativeResponseAttestationTrustRoots/v1"},
         "awsNitroRootCertificatesPem":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":65536}},
         "awsNitroCrlsDerBase64url":{"type":"array","maxItems":0},
         "nitroCertificateProfile":{"type":"object","additionalProperties":false,"required":["profileId","allowedLeafExtendedKeyUsageOids"],"properties":{
@@ -52,13 +52,13 @@
         "requestId":{"$ref":"#/$defs/identifier"},"custodyBootId":{"$ref":"#/$defs/identifier"},"clientIdentitySha256":{"$ref":"#/$defs/sha256"},"transaction":{"$ref":"#/$defs/transaction"},
         "attemptId":{"$ref":"#/$defs/identifier"},"predecessorLifecycleState":{"const":"STAGED"},"predecessorStateSha256":{"$ref":"#/$defs/sha256"},"attemptRevision":{"$ref":"#/$defs/positive"},"fencingToken":{"$ref":"#/$defs/positive"},
         "monotonicDeadline":{"type":"object","additionalProperties":false,"required":["apiVersion","custodyBootId","clockId","absoluteBoottimeNs"],"properties":{
-          "apiVersion":{"const":"serverware.responseObservationMonotonicDeadline/v1"},"custodyBootId":{"$ref":"#/$defs/identifier"},"clockId":{"const":"CLOCK_BOOTTIME"},"absoluteBoottimeNs":{"type":"string","pattern":"^[1-9][0-9]{0,19}$"}
+          "apiVersion":{"const":"catchplate.responseObservationMonotonicDeadline/v1"},"custodyBootId":{"$ref":"#/$defs/identifier"},"clockId":{"const":"CLOCK_BOOTTIME"},"absoluteBoottimeNs":{"type":"string","pattern":"^[1-9][0-9]{0,19}$"}
         }},"deadlineAtEpochMs":{"$ref":"#/$defs/positive"}
       }
     },
     "original":{"type":"object","additionalProperties":false,
       "required":["apiVersion","generationId","generation","stableResumeId","binding","sessionSha256","gateKeyId","stagedRequest","target","requestSha256"],"properties":{
-        "apiVersion":{"const":"serverware.responseV2.targetDispatchOriginal/v1"},"generationId":{"$ref":"#/$defs/identifier"},"generation":{"$ref":"#/$defs/positive"},"stableResumeId":{"$ref":"#/$defs/sha256"},
+        "apiVersion":{"const":"catchplate.responseV2.targetDispatchOriginal/v1"},"generationId":{"$ref":"#/$defs/identifier"},"generation":{"$ref":"#/$defs/positive"},"stableResumeId":{"$ref":"#/$defs/sha256"},
         "binding":{"$ref":"#/$defs/binding"},"sessionSha256":{"$ref":"#/$defs/sha256"},"gateKeyId":{"$ref":"#/$defs/sha256"},
         "stagedRequest":{"allOf":[{"$ref":"response-v2-state-authority-rpc.v1.schema.json#/$defs/rawObjectReference"},{"properties":{"objectKind":{"const":"staged-request"},"mediaType":{"const":"http11-request"}}}]},
         "target":{"type":"object","additionalProperties":false,"required":["scheme","host","port","address"],"properties":{
@@ -76,7 +76,7 @@
     }},
     "statement":{"type":"object","additionalProperties":false,
       "required":["apiVersion","phase","original","permitSha256","rawResponse","tls","bootId","keyId","controlPlaneResponseSigningKeyId","issuedAtEpochNs","expiresAtEpochNs"],"properties":{
-        "apiVersion":{"const":"serverware.nativeTargetDispatchStatement/v1"},"phase":{"enum":["prepare","capture"]},"original":{"$ref":"#/$defs/original"},
+        "apiVersion":{"const":"catchplate.nativeTargetDispatchStatement/v1"},"phase":{"enum":["prepare","capture"]},"original":{"$ref":"#/$defs/original"},
         "permitSha256":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/sha256"}]},"rawResponse":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/descriptor"}]},"tls":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/tls"}]},
         "bootId":{"type":"string","pattern":"^[A-Za-z0-9_-]{43}$"},"keyId":{"$ref":"#/$defs/sha256"},"controlPlaneResponseSigningKeyId":{"$ref":"#/$defs/sha256"},"issuedAtEpochNs":{"$ref":"#/$defs/positive"},"expiresAtEpochNs":{"$ref":"#/$defs/positive"}
       },"allOf":[{"if":{"properties":{"phase":{"const":"prepare"}}},"then":{"properties":{"permitSha256":{"type":"null"},"rawResponse":{"type":"null"},"tls":{"type":"null"}}},"else":{"properties":{"permitSha256":{"$ref":"#/$defs/sha256"},"rawResponse":{"$ref":"#/$defs/descriptor"},"tls":{"$ref":"#/$defs/tls"}}}}]
@@ -84,46 +84,46 @@
     "envelope":{"type":"object","additionalProperties":false,"required":["statement","signature","nativeKeyEvidence"],"properties":{
       "statement":{"$ref":"#/$defs/statement"},"signature":{"type":"string","pattern":"^ed25519:[A-Za-z0-9_-]{86}$"},
       "nativeKeyEvidence":{"type":"object","additionalProperties":false,"required":["apiVersion","attestationDocumentB64","responseProofPublicKey"],"properties":{
-        "apiVersion":{"const":"serverware.nativeResponseProofKeyEvidence/v1"},"attestationDocumentB64":{"type":"string","minLength":1,"maxLength":16384,"pattern":"^[A-Za-z0-9_-]+$"},"responseProofPublicKey":{"type":"string","pattern":"^[A-Za-z0-9_-]{43}$"}
+        "apiVersion":{"const":"catchplate.nativeResponseProofKeyEvidence/v1"},"attestationDocumentB64":{"type":"string","minLength":1,"maxLength":16384,"pattern":"^[A-Za-z0-9_-]+$"},"responseProofPublicKey":{"type":"string","pattern":"^[A-Za-z0-9_-]{43}$"}
       }}
     }},
     "authorityScope":{"type":"object","additionalProperties":false,
       "required":["apiVersion","generationId","generation","serviceRole","serviceId","logicalRole","roleIdentityRootSha256","keyId","keyMaterialSha256","operation","operationId","attemptId","attemptRevision","fencingToken","executableSha256","configurationSha256","allowedOperations","operationBindingSha256"],"properties":{
-        "apiVersion":{"const":"serverware.responseObservationV2ProviderAuthorityScope/v2"},"generationId":{"$ref":"#/$defs/identifier"},"generation":{"$ref":"#/$defs/positive"},"serviceRole":{"const":"state-authority"},"serviceId":{"$ref":"#/$defs/identifier"},"logicalRole":{"const":"linearizable-store"},
+        "apiVersion":{"const":"catchplate.responseObservationV2ProviderAuthorityScope/v2"},"generationId":{"$ref":"#/$defs/identifier"},"generation":{"$ref":"#/$defs/positive"},"serviceRole":{"const":"state-authority"},"serviceId":{"$ref":"#/$defs/identifier"},"logicalRole":{"const":"linearizable-store"},
         "roleIdentityRootSha256":{"$ref":"#/$defs/sha256"},"keyId":{"$ref":"#/$defs/sha256"},"keyMaterialSha256":{"$ref":"#/$defs/sha256"},"operation":{"const":"STATE_CAS"},"operationId":{"$ref":"#/$defs/identifier"},"attemptId":{"$ref":"#/$defs/identifier"},"attemptRevision":{"$ref":"#/$defs/positive"},"fencingToken":{"$ref":"#/$defs/positive"},
         "executableSha256":{"$ref":"#/$defs/sha256"},"configurationSha256":{"$ref":"#/$defs/sha256"},"allowedOperations":{"type":"array","minItems":1,"maxItems":32,"uniqueItems":true,"items":{"type":"string"}},"operationBindingSha256":{"$ref":"#/$defs/sha256"}
       }
     },
     "stateReceipt":{"type":"object","additionalProperties":false,
       "required":["apiVersion","generationId","generation","operation","requestId","operationId","attemptId","stableResumeId","authorityScope","exactRequestSha256","exactResultSha256","disposition","authoritativeRevision","authoritativeState","fencingToken","signerLogicalRole","signerKeyId","signature"],"properties":{
-        "apiVersion":{"const":"serverware.responseObservationV2StateMutationReceipt/v1"},"generationId":{"$ref":"#/$defs/identifier"},"generation":{"$ref":"#/$defs/positive"},"operation":{"const":"STATE_CAS"},"requestId":{"$ref":"#/$defs/identifier"},"operationId":{"$ref":"#/$defs/identifier"},"attemptId":{"$ref":"#/$defs/identifier"},"stableResumeId":{"$ref":"#/$defs/sha256"},
+        "apiVersion":{"const":"catchplate.responseObservationV2StateMutationReceipt/v1"},"generationId":{"$ref":"#/$defs/identifier"},"generation":{"$ref":"#/$defs/positive"},"operation":{"const":"STATE_CAS"},"requestId":{"$ref":"#/$defs/identifier"},"operationId":{"$ref":"#/$defs/identifier"},"attemptId":{"$ref":"#/$defs/identifier"},"stableResumeId":{"$ref":"#/$defs/sha256"},
         "authorityScope":{"$ref":"#/$defs/authorityScope"},"exactRequestSha256":{"$ref":"#/$defs/sha256"},"exactResultSha256":{"$ref":"#/$defs/sha256"},"disposition":{"const":"APPLIED"},"authoritativeRevision":{"$ref":"#/$defs/positive"},"authoritativeState":{"enum":["DISPATCHING","OBSERVED"]},"fencingToken":{"$ref":"#/$defs/positive"},"signerLogicalRole":{"const":"linearizable-store"},"signerKeyId":{"$ref":"#/$defs/sha256"},"signature":{"$ref":"#/$defs/signature"}
       }
     },
     "postState":{"type":"object","additionalProperties":false,
       "required":["apiVersion","generationId","generation","operation","requestId","operationId","attemptId","attemptRevision","authoritativeState","authoritativeStateSha256","stableResumeId","fencingToken","ownerProcessId","ownerPid","ownerStartTimeTicks","ownerCgroupId","deadlineBootId","deadlineBootMillis","proofMaterial","observationSha256","authorityScope","signerLogicalRole","signerKeyId","signature"],"properties":{
-        "apiVersion":{"const":"serverware.responseObservationV2AttemptStateObservation/v1"},"generationId":{"$ref":"#/$defs/identifier"},"generation":{"$ref":"#/$defs/positive"},"operation":{"const":"STATE_CAS"},"requestId":{"$ref":"#/$defs/identifier"},"operationId":{"$ref":"#/$defs/identifier"},"attemptId":{"$ref":"#/$defs/identifier"},"attemptRevision":{"$ref":"#/$defs/positive"},
+        "apiVersion":{"const":"catchplate.responseObservationV2AttemptStateObservation/v1"},"generationId":{"$ref":"#/$defs/identifier"},"generation":{"$ref":"#/$defs/positive"},"operation":{"const":"STATE_CAS"},"requestId":{"$ref":"#/$defs/identifier"},"operationId":{"$ref":"#/$defs/identifier"},"attemptId":{"$ref":"#/$defs/identifier"},"attemptRevision":{"$ref":"#/$defs/positive"},
         "authoritativeState":{"enum":["DISPATCHING","OBSERVED"]},"authoritativeStateSha256":{"$ref":"#/$defs/sha256"},"stableResumeId":{"$ref":"#/$defs/sha256"},"fencingToken":{"$ref":"#/$defs/positive"},"ownerProcessId":{"$ref":"#/$defs/identifier"},"ownerPid":{"type":"integer","minimum":1,"maximum":4294967295},"ownerStartTimeTicks":{"$ref":"#/$defs/positive"},"ownerCgroupId":{"$ref":"#/$defs/identifier"},"deadlineBootId":{"$ref":"#/$defs/identifier"},"deadlineBootMillis":{"$ref":"#/$defs/positive"},
         "proofMaterial":{"type":"null"},"observationSha256":{"$ref":"#/$defs/sha256"},"authorityScope":{"$ref":"#/$defs/authorityScope"},"signerLogicalRole":{"const":"linearizable-store"},"signerKeyId":{"$ref":"#/$defs/sha256"},"signature":{"$ref":"#/$defs/signature"}
       }
     },
     "permit":{"type":"object","additionalProperties":false,
       "required":["apiVersion","original","credentialUse","dispatchRequest","dispatchReceipt","postState","publicKeyBase64","signature"],"properties":{
-        "apiVersion":{"const":"serverware.responseV2.targetDispatchPermit/v1"},"original":{"$ref":"#/$defs/original"},"credentialUse":{"$ref":"response-v2-nested-authority-artifact.v1.schema.json#/$defs/credentialUseArtifact"},
+        "apiVersion":{"const":"catchplate.responseV2.targetDispatchPermit/v1"},"original":{"$ref":"#/$defs/original"},"credentialUse":{"$ref":"response-v2-nested-authority-artifact.v1.schema.json#/$defs/credentialUseArtifact"},
         "dispatchRequest":{"$ref":"response-v2-state-authority-rpc.v1.schema.json#/$defs/requestFrame"},"dispatchReceipt":{"$ref":"#/$defs/stateReceipt"},"postState":{"$ref":"#/$defs/postState"},"publicKeyBase64":{"$ref":"#/$defs/publicKey"},"signature":{"$ref":"#/$defs/signature"}
       }
     },
     "begin":{"type":"object","additionalProperties":false,"required":["apiVersion","original","gateEvidence"],"properties":{
-      "apiVersion":{"const":"serverware.responseV2.targetDispatchBegin/v1"},"original":{"$ref":"#/$defs/original"},"gateEvidence":{"$ref":"#/$defs/envelope"}
+      "apiVersion":{"const":"catchplate.responseV2.targetDispatchBegin/v1"},"original":{"$ref":"#/$defs/original"},"gateEvidence":{"$ref":"#/$defs/envelope"}
     }},
     "capturePersist":{"type":"object","additionalProperties":false,
       "required":["apiVersion","requestId","operationId","stableResumeId","permit","capture","rawResponse"],"properties":{
-        "apiVersion":{"const":"serverware.responseV2.capturePersist/v1"},"requestId":{"type":"string","pattern":"^capture:[0-9a-f]{64}$"},"operationId":{"type":"string","pattern":"^persist:[0-9a-f]{64}$"},"stableResumeId":{"$ref":"#/$defs/sha256"},"permit":{"$ref":"#/$defs/permit"},"capture":{"$ref":"#/$defs/envelope"},"rawResponse":{"$ref":"#/$defs/descriptor"}
+        "apiVersion":{"const":"catchplate.responseV2.capturePersist/v1"},"requestId":{"type":"string","pattern":"^capture:[0-9a-f]{64}$"},"operationId":{"type":"string","pattern":"^persist:[0-9a-f]{64}$"},"stableResumeId":{"$ref":"#/$defs/sha256"},"permit":{"$ref":"#/$defs/permit"},"capture":{"$ref":"#/$defs/envelope"},"rawResponse":{"$ref":"#/$defs/descriptor"}
       }
     },
     "completed":{"type":"object","additionalProperties":false,
       "required":["apiVersion","captureSha256","object","outcomeRequest","outcomeReceipt","postState","targetEffect"],"properties":{
-        "apiVersion":{"const":"serverware.responseV2.targetCaptureCommitted/v1"},"captureSha256":{"$ref":"#/$defs/sha256"},"object":{"$ref":"response-v2-ledger-raw-persistence.v1.schema.json#/$defs/object"},
+        "apiVersion":{"const":"catchplate.responseV2.targetCaptureCommitted/v1"},"captureSha256":{"$ref":"#/$defs/sha256"},"object":{"$ref":"response-v2-ledger-raw-persistence.v1.schema.json#/$defs/object"},
         "outcomeRequest":{"$ref":"response-v2-state-authority-rpc.v1.schema.json#/$defs/requestFrame"},"outcomeReceipt":{"$ref":"#/$defs/stateReceipt"},"postState":{"$ref":"#/$defs/postState"},"targetEffect":{"$ref":"response-v2-nested-authority-artifact.v1.schema.json#/$defs/targetEffectArtifact"}
       }
     }

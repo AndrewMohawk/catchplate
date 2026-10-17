@@ -36,7 +36,7 @@ other methods, query strings and alternate target forms cannot use this path.
 No Traefik, nginx or SSO exception is part of this feature.
 
 The closed request and signing domain are defined in
-`serverware/operator_workload_renewal.py`. Its audience is the configured
+`catchplate/operator_workload_renewal.py`. Its audience is the configured
 `proxy_url` with trailing slashes removed plus the fixed public path. The proof
 binds client, unique enrollment, expected token generation, operation UUID,
 verifier, absolute token expiry and a request validity interval of at most one
@@ -88,7 +88,7 @@ Requested expiry must equal the lesser of request issuance plus the enrolled
 token lifetime and the enrollment deadline. The previous token is accepted only
 until the earlier of its original expiry and commit time plus five minutes.
 The signed principal has an optional `managedRenewal` object containing
-`schema: serverware.proxyTokenRenewal/v1`, `enrollmentId`,
+`schema: catchplate.proxyTokenRenewal/v1`, `enrollmentId`,
 `enrollmentExpiresAtEpochMs`, `rotatedAtEpochMs`, and optional
 `previousToken: {tokenSha256, originalExpiresAtEpochMs, expiresAtEpochMs}`.
 The previous cutoff cannot exceed either original expiry or rotation plus five

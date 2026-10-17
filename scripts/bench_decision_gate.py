@@ -15,8 +15,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 
-MANAGEMENT_TOKEN = os.getenv("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN", "").strip() or "dev-rust-management-token"
-MANAGEMENT_HEADERS = {"X-Serverware-Data-Plane-Token": MANAGEMENT_TOKEN}
+MANAGEMENT_TOKEN = os.getenv("CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN", "").strip() or "dev-rust-management-token"
+MANAGEMENT_HEADERS = {"X-Catchplate-Data-Plane-Token": MANAGEMENT_TOKEN}
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
@@ -82,7 +82,7 @@ def request_head_only(
 
 
 def bootstrap(base: str, admin_token: str) -> tuple[int, dict[str, Any]]:
-    data = request_json(f"{base.rstrip('/')}/api/bootstrap", headers={"X-Serverware-Admin-Token": admin_token})
+    data = request_json(f"{base.rstrip('/')}/api/bootstrap", headers={"X-Catchplate-Admin-Token": admin_token})
     credential = next(item for item in data["credentials"] if item["id"] == "cred-demo-bearer")
     metadata = dict(credential.get("metadata") or {})
     return int(credential["credential_version"]), metadata
@@ -92,7 +92,7 @@ def update_demo_credential(base: str, admin_token: str, secret: str, metadata: d
     data = request_json(
         f"{base.rstrip('/')}/api/credentials/cred-demo-bearer",
         payload={"secret": secret, "metadata": metadata},
-        headers={"X-Serverware-Admin-Token": admin_token},
+        headers={"X-Catchplate-Admin-Token": admin_token},
         method="PUT",
     )
     return int(data["credential_version"])
@@ -179,19 +179,19 @@ def assert_decision(name: str, decision: dict[str, Any], action: str, error: str
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Benchmark the Rust Serverware data-plane decision gate.")
+    parser = argparse.ArgumentParser(description="Benchmark the Rust Catchplate data-plane decision gate.")
     parser.add_argument("--gate", default=os.getenv("DECISION_GATE_BASE", "http://localhost:9091"))
     parser.add_argument("--proxy", default=os.getenv("PROXY", "http://localhost:8080"))
-    parser.add_argument("--serverware", default=os.getenv("BASE", "http://localhost:3000"))
-    parser.add_argument("--admin-token", default=os.getenv("SERVERWARE_ADMIN_TOKEN", "dev-admin-token"))
+    parser.add_argument("--catchplate", default=os.getenv("BASE", "http://localhost:3000"))
+    parser.add_argument("--admin-token", default=os.getenv("CATCHPLATE_ADMIN_TOKEN", "dev-admin-token"))
     parser.add_argument("--requests", type=int, default=1000)
     parser.add_argument("--warmup", type=int, default=100)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
-    credential_version, metadata = bootstrap(args.serverware, args.admin_token)
+    credential_version, metadata = bootstrap(args.catchplate, args.admin_token)
     credential_restore_secret = (
-        os.getenv("SERVERWARE_BENCH_CREDENTIAL_RESTORE_SECRET", "").strip()
+        os.getenv("CATCHPLATE_BENCH_CREDENTIAL_RESTORE_SECRET", "").strip()
         or "demo-token-from-vault"
     )
     wait_for_generation_ready(args.gate)
@@ -200,7 +200,7 @@ def main() -> None:
         "clientIp": "127.0.0.1",
         "method": "GET",
         "url": "https://demo-upstream:8443/echo",
-        "headers": {"X-Serverware-Agent": "demo-agent"},
+        "headers": {"X-Catchplate-Agent": "demo-agent"},
         "credentialMetadata": {"cred-demo-bearer": {"x_app_id": "caller-spoofed-app"}},
     }
 
@@ -213,7 +213,7 @@ def main() -> None:
             status, denial = request_head_only(
                 args.gate,
                 path,
-                {"X-Serverware-Data-Plane-Token": "incorrect-management-token"},
+                {"X-Catchplate-Data-Plane-Token": "incorrect-management-token"},
             )
             if status != 401 or denial.get("error") != "management_auth_required":
                 raise AssertionError(f"unexpected wrong-token management denial for {path}: {status} {denial}")
@@ -247,14 +247,14 @@ def main() -> None:
         proxy_auth_payload = {
             **base_payload,
             "headers": {
-                "X-Serverware-Agent": "demo-token-agent",
+                "X-Catchplate-Agent": "demo-token-agent",
                 "Proxy-Authorization": "Bearer demo-agent-proxy-token",
             },
         }
         assert_decision("proxy auth principal allow", decide(args.gate, proxy_auth_payload), "allow")
         assert_decision(
             "proxy auth missing token denies",
-            decide(args.gate, {**proxy_auth_payload, "headers": {"X-Serverware-Agent": "demo-token-agent"}}),
+            decide(args.gate, {**proxy_auth_payload, "headers": {"X-Catchplate-Agent": "demo-token-agent"}}),
             "deny",
             "client_principal_denied",
         )
@@ -265,7 +265,7 @@ def main() -> None:
                 {
                     **proxy_auth_payload,
                     "headers": {
-                        "X-Serverware-Agent": "demo-token-agent",
+                        "X-Catchplate-Agent": "demo-token-agent",
                         "Proxy-Authorization": "Bearer wrong-token",
                     },
                 },
@@ -280,7 +280,7 @@ def main() -> None:
                 {
                     **base_payload,
                     "headers": {
-                        "X-Serverware-Agent": "demo-bound-agent",
+                        "X-Catchplate-Agent": "demo-bound-agent",
                         "Proxy-Authorization": "Bearer demo-bound-proxy-token",
                     },
                 },
@@ -295,7 +295,7 @@ def main() -> None:
                     **base_payload,
                     "clientIp": "198.51.100.42",
                     "headers": {
-                        "X-Serverware-Agent": "demo-bound-agent",
+                        "X-Catchplate-Agent": "demo-bound-agent",
                         "Proxy-Authorization": "Bearer demo-bound-proxy-token",
                     },
                 },
@@ -344,7 +344,7 @@ def main() -> None:
                     **base_payload,
                     "method": "PUT",
                     "url": "https://demo-upstream:8443/npm/demo-package",
-                    "headers": {"X-Serverware-Agent": "demo-agent", "Content-Type": "application/json"},
+                    "headers": {"X-Catchplate-Agent": "demo-agent", "Content-Type": "application/json"},
                     "body": json.dumps(
                         {
                             "name": "demo-package",
@@ -364,7 +364,7 @@ def main() -> None:
             **base_payload,
             "method": "PUT",
             "url": "https://demo-upstream:8443/npm/demo-package",
-            "headers": {"X-Serverware-Agent": "demo-agent", "Content-Type": "application/json"},
+            "headers": {"X-Catchplate-Agent": "demo-agent", "Content-Type": "application/json"},
             "body": json.dumps(
                 {
                     "name": "demo-package",
@@ -423,7 +423,7 @@ def main() -> None:
         if stale_grant.get("ok") is not True:
             raise AssertionError(f"stale grant setup failed: {stale_grant}")
         rotated_version = update_demo_credential(
-            args.serverware,
+            args.catchplate,
             args.admin_token,
             f"rotated-for-rust-gate-{int(time.time())}",
             metadata,
@@ -468,7 +468,7 @@ def main() -> None:
             )
         finally:
             restored_version = update_demo_credential(
-                args.serverware,
+                args.catchplate,
                 args.admin_token,
                 credential_restore_secret,
                 metadata,

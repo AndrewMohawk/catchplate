@@ -4,7 +4,7 @@ This source slice adds a real time-response signer and consumer. It has not
 been built, started, provisioned, exercised on a kernel, or accepted as a
 working production bridge.
 
-The fixed guest selects `serverware.nativeShadowTrustedTimeGuestLaunch/v1`
+The fixed guest selects `catchplate.nativeShadowTrustedTimeGuestLaunch/v1`
 explicitly. The closed launch contains `keyAdmission` and a separately pinned
 `trustedTime` service assignment. Existing key-only, retrieval and retrieval
 bridge selectors retain their previous behavior. The assignment is outside
@@ -19,7 +19,7 @@ time exchange, independently signed interval anchor, encrypted role-key
 delivery and external native key-admission result. The service does not turn
 that key admission into operational permission. Its separate grant is signed
 by the assignment's current independent `CustodySupervisorCapability` key
-under `serverware.nativeShadowTrustedTimeServiceAssignment.signature/v1`,
+under `catchplate.nativeShadowTrustedTimeServiceAssignment.signature/v1`,
 using the existing complete signed-envelope canonical-ASCII framing.
 
 The grant pins the full original server Guest13, assignment, key authorization,
@@ -29,7 +29,7 @@ and the full trusted interval. The response key is the actual admitted local
 `CustodyTrustedTimeResponse` role; no key is generated or exported here.
 
 The service consumes the actual signed `trusted-time-listener` FD6, bound but
-not listening at `/run/serverware-shadow-trusted-time/listener.sock`. The
+not listening at `/run/catchplate-shadow-trusted-time/listener.sock`. The
 root-owned directory is 0711; the named socket is server-UID:client-GID 0660.
 The final nonroot service starts listening only through its retained private
 inspector, after permanent drop and actual key admission. Both endpoints stay
@@ -66,7 +66,7 @@ midpoint, caller epoch or expiry extension is used. The independent issuer's
 timestamp-error and clock-rate assumptions remain assumptions, not an NSM
 accuracy guarantee.
 
-The separate `serverware.nativeProofBridgeLaunch/v1` fixes all four proof
+The separate `catchplate.nativeProofBridgeLaunch/v1` fixes all four proof
 kinds—Retrieval, Persistence, TrustedTime and GenerationInstallEnvelope—using
 their source-fixed directories and signed runtime peers. Four directory FDs
 are retained alongside the original sockets. One actual inherited private

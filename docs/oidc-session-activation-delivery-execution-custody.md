@@ -1,6 +1,6 @@
 # Purpose-bound consume receiving custody
 
-[`OidcSessionActivationDeliveryExecutionCustody`](../serverware/authority_oidc_session_activation_delivery_execution_custody.py)
+[`OidcSessionActivationDeliveryExecutionCustody`](../catchplate/authority_oidc_session_activation_delivery_execution_custody.py)
 owns the separate execution-bundle key and an actual purpose-bound historical
 custodian. It is source-only: no process, key, account, service or descriptor
 delivery has been provisioned or run. It does not issue grants, reserve state,

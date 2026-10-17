@@ -2,7 +2,7 @@
 use super::*;
 use std::{sync::Mutex, time::{SystemTime, UNIX_EPOCH}};
 
-const PAYLOAD: &str = "serverware.nativeJitReviewAssignment/v1";
+const PAYLOAD: &str = "catchplate.nativeJitReviewAssignment/v1";
 const MAX_INTERVAL: u64 = 86_400_000_000_000;
 const DYNAMIC: &[&str] = &["holderId", "bootId", "keyId", "configurationSha256",
     "caCertificateSha256", "caPublicKeySpkiSha256", "expectedModuleId"];
@@ -13,7 +13,7 @@ const ASSIGNMENT: &[&str] = &["holderId", "bootId", "keyId", "controlPlaneRespon
 
 pub(super) fn trust(value: &Value) -> Result<(), String> {
     fields(value, &["apiVersion", "awsNitroRootCertificatesPem", "awsNitroCrlsDerBase64url", "nitroCertificateProfile"])?;
-    require(value["apiVersion"] == "serverware.nativeJitReviewNativeTrustRoots/v1"
+    require(value["apiVersion"] == "catchplate.nativeJitReviewNativeTrustRoots/v1"
         && value["awsNitroCrlsDerBase64url"] == json!([]) && canonical_ascii_bytes(value)?.len() <= 128 * 1024)?;
     let roots = value["awsNitroRootCertificatesPem"].as_array().filter(|v| !v.is_empty() && v.len() <= 16).ok_or("JIT trust roots")?;
     let mut pins = BTreeSet::new();

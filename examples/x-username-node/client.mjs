@@ -3,7 +3,7 @@ import { closeSync, constants, fstatSync, openSync, readFileSync, readSync } fro
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const PUBLIC_X_DUMMY = 'serverware-x-placeholder-v1';
+export const PUBLIC_X_DUMMY = 'catchplate-x-placeholder-v1';
 export const X_ORIGIN = 'https://api.x.com';
 const DEADLINE_MS = 30_000;
 const MAX_CONFIG_BYTES = 64 * 1024;
@@ -25,19 +25,19 @@ export function configuration(env) {
   // Do not run with ambient preload/transport overrides. HTTP[S]_PROXY/NO_PROXY
   // are not consulted by this explicitly installed ProxyAgent.
   requireValue(env.NODE_OPTIONS === undefined || env.NODE_OPTIONS === '');
-  const proxyUrl = required(env, 'SERVERWARE_PROXY_URL');
+  const proxyUrl = required(env, 'CATCHPLATE_PROXY_URL');
   const proxy = new URL(proxyUrl);
   requireValue(proxy.protocol === 'https:' && proxy.hostname && !proxy.username && !proxy.password
     && proxy.pathname === '/' && !proxy.search && !proxy.hash);
-  const applicationId = required(env, 'SERVERWARE_APP_ID', 36);
+  const applicationId = required(env, 'CATCHPLATE_APP_ID', 36);
   requireValue(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(applicationId));
-  const token = required(env, 'SERVERWARE_PROXY_TOKEN');
+  const token = required(env, 'CATCHPLATE_PROXY_TOKEN');
   requireValue(/^[A-Za-z0-9_-]+$/.test(token));
-  const username = required(env, 'SERVERWARE_X_USERNAME', 15);
+  const username = required(env, 'CATCHPLATE_X_USERNAME', 15);
   requireValue(/^[a-z0-9_]{1,15}$/.test(username));
   return { proxyUrl, applicationId, token, username,
-    caFile: required(env, 'SERVERWARE_CA_FILE'),
-    proxyCaFile: env.SERVERWARE_PROXY_CA_FILE ? required(env, 'SERVERWARE_PROXY_CA_FILE') : null };
+    caFile: required(env, 'CATCHPLATE_CA_FILE'),
+    proxyCaFile: env.CATCHPLATE_PROXY_CA_FILE ? required(env, 'CATCHPLATE_PROXY_CA_FILE') : null };
 }
 
 function readConfigurationFile(path) {
@@ -78,13 +78,13 @@ export function loadClientConfig(path, env, now = Date.now()) {
     // Only connection and exact saved username are imported. Commands, headers,
     // request bodies and arbitrary environment values in this JSON are inert.
     return configuration({ ...env,
-      SERVERWARE_PROXY_URL: value.proxy_url,
-      SERVERWARE_APP_ID: value.application_id,
-      SERVERWARE_PROXY_TOKEN: value.proxy_password,
-      SERVERWARE_CA_FILE: caPath(value.ca_file),
-      SERVERWARE_PROXY_CA_FILE: value.proxy_ca_file === undefined || value.proxy_ca_file === null
+      CATCHPLATE_PROXY_URL: value.proxy_url,
+      CATCHPLATE_APP_ID: value.application_id,
+      CATCHPLATE_PROXY_TOKEN: value.proxy_password,
+      CATCHPLATE_CA_FILE: caPath(value.ca_file),
+      CATCHPLATE_PROXY_CA_FILE: value.proxy_ca_file === undefined || value.proxy_ca_file === null
         ? undefined : caPath(value.proxy_ca_file),
-      SERVERWARE_X_USERNAME: value.username,
+      CATCHPLATE_X_USERNAME: value.username,
     });
   } catch { throw new Error('X example configuration or request refused'); }
 }

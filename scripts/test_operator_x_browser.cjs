@@ -42,7 +42,7 @@ async function recipe(page) {
   assert(await page.locator('#connect-setup-slot').isVisible());
   const text = await page.locator('#client-command').innerText();
   assert(text.includes(DUMMY)); assert(text.includes(USERNAME));
-  assert(text.includes('SERVERWARE_PROXY_TOKEN'));
+  assert(text.includes('CATCHPLATE_PROXY_TOKEN'));
   assert(text.includes("--request 'GET'")); assert(text.includes(API + '/2/users/by/username/' + USERNAME));
   assert(!/--data|--json|--form/.test(text), 'username lookup has no request body');
   assert(/NODE_EXTRA_CA_CERTS|--cacert|ca_bundle|CA_CERT/.test(text), 'verified CA trust must be explicit');
@@ -51,7 +51,7 @@ async function recipe(page) {
   assert.match(await page.locator('#connect-activation').innerText(), /no upstream request has been tested here/);
   assert.match(await page.locator('#client-guidance').innerText(), /No X lookup was tested here/);
   assert.match(await page.locator('#client-guidance').innerText(), /No posting.*user OAuth/);
-  const source = 'https://github.com/AndrewMohawk/serverware/';
+  const source = 'https://github.com/AndrewMohawk/catchplate/';
   const branch = 'main/';
   const expectedLinks = [
     ['Node.js', source + 'tree/' + branch + 'examples/x-username-node'],
@@ -250,14 +250,14 @@ const tests = [
 async function hashes() {
   const names = ['scripts/test_operator_x_browser.cjs', 'scripts/operator_x_browser_fixture.cjs',
     'scripts/test_operator_catalog_browser.cjs', 'scripts/test_operator_ordinary_modes_browser.cjs',
-    'serverware/operator_demo_portal.py', ...(await readdir(join(ROOT, 'serverware/operator_demo_web')))
-      .filter(name => /\.(?:html|css|js)$/.test(name)).sort().map(name => 'serverware/operator_demo_web/' + name)];
+    'catchplate/operator_demo_portal.py', ...(await readdir(join(ROOT, 'catchplate/operator_demo_web')))
+      .filter(name => /\.(?:html|css|js)$/.test(name)).sort().map(name => 'catchplate/operator_demo_web/' + name)];
   return Object.fromEntries(await Promise.all(names.map(async name =>
     [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')])));
 }
 async function runSuite(browser) {
   assert(browser && typeof browser.newContext === 'function');
-  const before = await hashes(); const directory = await mkdtemp('/tmp/serverware-x-browser-');
+  const before = await hashes(); const directory = await mkdtemp('/tmp/catchplate-x-browser-');
   console.log(JSON.stringify({phase: 'source-before', hashes: before, artifactDirectory: directory}));
   const contexts = new Set(); let timer; let finished = false; let passed = 0;
   const bounded = {async newContext(...args) {

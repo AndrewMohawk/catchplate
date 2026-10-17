@@ -16,9 +16,9 @@ caller-owned. No key is created or repurposed. Runtime files must be retained,
 root-owned, and either mode-nonwritable or on an actual read-only filesystem.
 
 Supply the genuine nonblocking activated Unix stream listener at the existing
-/run/serverware/registration-evidence/signer.sock (UID65517:GID65532,0660), and
+/run/catchplate/registration-evidence/signer.sock (UID65517:GID65532,0660), and
 the actual empty UID65517:GID65517,0700 replay directory at
-/var/lib/serverware/registration-evidence-replay. Their actual descriptor/path
+/var/lib/catchplate/registration-evidence-replay. Their actual descriptor/path
 identities are pinned. No listener/directory or installed package is invented.
 The existing signer entrypoint/runner independently checks actual later launch.
 
@@ -60,7 +60,7 @@ def main(argv=None):
     def cancelled(_number, _frame): raise KeyboardInterrupt()
     for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP): signal.signal(number, cancelled)
     try:
-        from serverware.authority_local_enrollment_attestation import LocalEnrollmentSignerAttestationIssuer
+        from catchplate.authority_local_enrollment_attestation import LocalEnrollmentSignerAttestationIssuer
         owner = LocalEnrollmentSignerAttestationIssuer(**arguments(argv))
         owner.publish()
         return 0

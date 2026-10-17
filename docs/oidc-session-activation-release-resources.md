@@ -17,7 +17,7 @@ global journal path.
 
 The listener is only validated and preserved. It must be a nonblocking,
 listening Unix stream at
-`/run/serverware/oidc-session-activation-token-release/release.sock`, with
+`/run/catchplate/oidc-session-activation-token-release/release.sock`, with
 root-pinned socket/path identities and a `65502:65532`, mode `0660` pathname
 under protected root-owned ancestors. Intake performs no accept, peer/body
 processing, transport exchange or token opening.

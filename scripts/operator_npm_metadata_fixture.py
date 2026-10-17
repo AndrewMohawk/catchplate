@@ -24,10 +24,10 @@ import time
 from scripts.operator_npm_metadata_fixture_network import FIXTURE_IP, assert_isolated_network, prepare_network_files
 
 ORIGIN = "https://registry.npmjs.org"
-PACKAGES = ("serverware-fixture-metadata", "@serverware-fixture/metadata")
+PACKAGES = ("catchplate-fixture-metadata", "@catchplate-fixture/metadata")
 TOKEN = "npm_" + "0123456789abcdefghijklmnopqrstuvwxyz"
-PLACEHOLDER = "serverware-npm-placeholder-v1"
-SCHEMA = "serverware.privateNpmMetadataObservations/v1"
+PLACEHOLDER = "catchplate-npm-placeholder-v1"
+SCHEMA = "catchplate.privateNpmMetadataObservations/v1"
 FULL = "application/json"
 CORGI = "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*"
 MAX_ATTEMPTS = 12
@@ -51,8 +51,8 @@ def metadata(package):
         content = (package + "@" + version + ": synthetic bytes, no tarball served").encode()
         versions[version] = {"name": package, "version": version,
             "description": "Complete synthetic metadata \u2603", "main": "index.js", "license": "MIT",
-            "dependencies": {"serverware-fixture-dependency": "^1.0.0"},
-            "optionalDependencies": {"serverware-fixture-optional": "2.0.0"},
+            "dependencies": {"catchplate-fixture-dependency": "^1.0.0"},
+            "optionalDependencies": {"catchplate-fixture-optional": "2.0.0"},
             "engines": {"node": ">=20"}, "fixtureExtra": {"preserved": [True, None, 7]},
             "dist": {"tarball": ORIGIN + "/" + package + "/-/metadata-" + version + ".tgz",
                 "integrity": "sha512-" + base64.b64encode(hashlib.sha512(content).digest()).decode(),
@@ -128,7 +128,7 @@ def setup(root, marker):
     require(root == Path("/upstream-data/npm") and not root.exists() and not root.is_symlink()
         and root.parent.is_dir() and root.parent.stat().st_uid == os.geteuid() == 10001)
     assert_isolated_network(attached=False)
-    require(json.loads(marker.read_bytes()) == {"schema": "serverware.privateOperatorAuditFixture/v1", "syntheticOnly": True})
+    require(json.loads(marker.read_bytes()) == {"schema": "catchplate.privateOperatorAuditFixture/v1", "syntheticOnly": True})
     now = datetime.now(timezone.utc)
     key, leaf_key = ec.generate_private_key(ec.SECP256R1()), ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Private synthetic npm metadata CA")])

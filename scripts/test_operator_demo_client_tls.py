@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Execute the UI's generated curl command through two isolated TLS layers.
 
-This is a local client-transport fixture, not Serverware runtime/provider proof.
+This is a local client-transport fixture, not Catchplate runtime/provider proof.
 Requires curl with HTTPS-proxy support, Node, and OpenSSL. All listeners bind
 127.0.0.1; only throwaway credentials and CAs are used. No system trust changes.
 """
@@ -26,7 +26,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-GENERATOR = ROOT / "serverware/operator_demo_web/app.js"
+GENERATOR = ROOT / "catchplate/operator_demo_web/app.js"
 PROXY_HOST = "proxy.operator-client.example.test"
 INNER_HOST = "api.operator-client.example.test"
 BODY = b'{"id":"local-client-tls-fixture","status":"ok"}\n'
@@ -234,7 +234,7 @@ class ClientTLSTests(unittest.TestCase):
             str(GENERATOR)], input=json.dumps(metadata), capture_output=True, text=True, timeout=5)
         self.assert_clean(result.stdout + result.stderr)
         self.assertEqual(result.returncode, 0, "The UI command generator failed")
-        self.assertIn('$SERVERWARE_PROXY_TOKEN', result.stdout)
+        self.assertIn('$CATCHPLATE_PROXY_TOKEN', result.stdout)
         for forbidden in ("--insecure", "--proxy-insecure", " -k "):
             self.assertNotIn(forbidden, result.stdout)
         return result.stdout
@@ -252,7 +252,7 @@ class ClientTLSTests(unittest.TestCase):
             # Private outer CA is harness-only; public deployments use system trust.
             harness += ["--proxy-cacert", str(outer_ca or self.outer_ca[1])]
         env = {"PATH": os.environ["PATH"], "LC_ALL": "C", "CURL_HOME": str(self.directory),
-               "SERVERWARE_PROXY_TOKEN": self.token if token is None else token,
+               "CATCHPLATE_PROXY_TOKEN": self.token if token is None else token,
                "NO_PROXY": "*", "no_proxy": "*"}
         result = subprocess.run(["sh", "-c", command + " " + shlex.join(harness)],
                                 env=env, capture_output=True, text=True, timeout=10)
@@ -326,5 +326,5 @@ class ClientTLSTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    print("Scope: local generated-client TLS fixture; no Serverware runtime/provider acceptance.")
+    print("Scope: local generated-client TLS fixture; no Catchplate runtime/provider acceptance.")
     unittest.main(verbosity=2)

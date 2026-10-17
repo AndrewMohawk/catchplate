@@ -104,9 +104,9 @@ ordinary forwarding errors. Durable IDs remain discoverable through the
 existing journal inventory/recovery path; cancellation does not clear an
 attempt or prove that a remote write did not occur.
 
-Implementation: [HTTP routes](../serverware/app.py),
-[metadata recovery owner](../serverware/control_plane_custody_recovery.py), and
-[caller client](../serverware/control_plane_custody_client.py). This document
+Implementation: [HTTP routes](../catchplate/app.py),
+[metadata recovery owner](../catchplate/control_plane_custody_recovery.py), and
+[caller client](../catchplate/control_plane_custody_client.py). This document
 describes source behavior only, not tested or deployed recovery proof.
 
 Consolidated verification still needs to cover real cold-started ownership,

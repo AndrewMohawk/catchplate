@@ -22,14 +22,14 @@ from starlette.requests import Request
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-INSTANCE_ID = "spiffe://test.serverware/decision-gate/internal-auth"
+INSTANCE_ID = "spiffe://test.catchplate/decision-gate/internal-auth"
 TOKENS = {
-    "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN": "credential-lease-test-token",
-    "SERVERWARE_DATA_PLANE_AUDIT_TOKEN": "audit-ingest-test-token",
-    "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN": "grant-consume-test-token",
-    "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN": "rate-limit-consume-test-token",
-    "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN": "release-authorization-test-token",
-    "SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN": "rust-management-test-token",
+    "CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN": "credential-lease-test-token",
+    "CATCHPLATE_DATA_PLANE_AUDIT_TOKEN": "audit-ingest-test-token",
+    "CATCHPLATE_DATA_PLANE_GRANT_CONSUME_TOKEN": "grant-consume-test-token",
+    "CATCHPLATE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN": "rate-limit-consume-test-token",
+    "CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN": "release-authorization-test-token",
+    "CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN": "rust-management-test-token",
 }
 
 
@@ -79,7 +79,7 @@ async def bounded_lease_payload(payload: dict, token: str):
             "type": "http",
             "method": "POST",
             "path": "/api/data-plane/credential-leases",
-            "headers": [(b"x-serverware-data-plane-token", token.encode("ascii"))],
+            "headers": [(b"x-catchplate-data-plane-token", token.encode("ascii"))],
         },
         receive,
     )
@@ -133,9 +133,9 @@ async def asgi_json_post(
                 (b"host", b"testserver"),
                 (b"content-type", b"application/json"),
                 (b"content-length", str(len(body)).encode("ascii")),
-                (b"x-serverware-data-plane-token", token.encode("ascii")),
+                (b"x-catchplate-data-plane-token", token.encode("ascii")),
                 (
-                    b"x-serverware-response-nonce",
+                    b"x-catchplate-response-nonce",
                     b"alias-closure-wire-response",
                 ),
             ],
@@ -212,7 +212,7 @@ def production_validation(environment: dict[str, str]) -> subprocess.CompletedPr
         [
             sys.executable,
             "-c",
-            "from serverware.config import validate_internal_service_auth; validate_internal_service_auth()",
+            "from catchplate.config import validate_internal_service_auth; validate_internal_service_auth()",
         ],
         cwd=ROOT,
         env=environment,
@@ -229,23 +229,23 @@ def assert_production_validation() -> None:
     }
     base = os.environ.copy()
     base.update(production_tokens)
-    base["SERVERWARE_RELEASE_CHANNEL"] = "prod"
-    base["SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED"] = "1"
-    base["SERVERWARE_DATA_PLANE_INSTANCE_ID"] = "spiffe://prod.serverware/decision-gate/instance-01"
+    base["CATCHPLATE_RELEASE_CHANNEL"] = "prod"
+    base["CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED"] = "1"
+    base["CATCHPLATE_DATA_PLANE_INSTANCE_ID"] = "spiffe://prod.catchplate/decision-gate/instance-01"
     passed = production_validation(base)
     if passed.returncode != 0:
         raise AssertionError(passed.stderr.decode("utf-8", errors="replace"))
 
     cases = []
     missing = dict(base)
-    missing.pop("SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN")
-    cases.append((missing, "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN", None))
+    missing.pop("CATCHPLATE_DATA_PLANE_GRANT_CONSUME_TOKEN")
+    cases.append((missing, "CATCHPLATE_DATA_PLANE_GRANT_CONSUME_TOKEN", None))
     weak = dict(base)
-    weak["SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN"] = "x" * 32
+    weak["CATCHPLATE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN"] = "x" * 32
     cases.append((weak, "high-entropy", "x" * 32))
     equal = dict(base)
-    duplicate = equal["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"]
-    equal["SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN"] = duplicate
+    duplicate = equal["CATCHPLATE_DATA_PLANE_AUDIT_TOKEN"]
+    equal["CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN"] = duplicate
     cases.append((equal, "distinct internal service credentials", duplicate))
 
     for environment, expected, secret in cases:
@@ -259,7 +259,7 @@ def assert_production_validation() -> None:
 
 def audit_retry_regressions() -> None:
     """Exercise the legacy HTTP receiver and real SQLite transactions, not a mock store."""
-    token = TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"]
+    token = TOKENS["CATCHPLATE_DATA_PLANE_AUDIT_TOKEN"]
 
     def request_body(events: list[dict]) -> bytes:
         return json.dumps({"events": events}, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -293,7 +293,7 @@ def audit_retry_regressions() -> None:
     def expected_ack(body: bytes, count: int) -> dict:
         # These are route-body assertions; middleware signature verification is separate.
         return {
-            "apiVersion": "serverware.dataPlaneAuditAck/v1",
+            "apiVersion": "catchplate.dataPlaneAuditAck/v1",
             "ok": True,
             "accepted": count,
             "batchDigest": "sha256:" + hashlib.sha256(body).hexdigest(),
@@ -308,7 +308,7 @@ def audit_retry_regressions() -> None:
     initial = snapshot()
     expect_http_error(lambda: ingest(b"not-json"), 422)
     expect_http_error(
-        lambda: ingest(original_body, TOKENS["SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN"]),
+        lambda: ingest(original_body, TOKENS["CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN"]),
         401,
     )
     assert snapshot() == initial, "invalid body or wrong-scope token appended audit history"
@@ -375,7 +375,7 @@ def initialize_audit_retry_fixture() -> None:
                 encrypted_canonical_event_json TEXT, storage_format_version INTEGER,
                 prev_event_hash TEXT, event_hash TEXT NOT NULL, created_at TEXT NOT NULL
             );
-            CREATE TABLE serverware_store_migrations (
+            CREATE TABLE catchplate_store_migrations (
                 migration TEXT PRIMARY KEY, version INTEGER NOT NULL
             );
             """
@@ -451,7 +451,7 @@ def main() -> None:
         "operation": {"operation": "test.write"},
     }
     release_payload = {
-        "apiVersion": "serverware.releaseAuthorizationReserve/v1",
+        "apiVersion": "catchplate.releaseAuthorizationReserve/v1",
         "attemptId": "attempt:test",
         "flowId": "attempt:test",
         "principalId": "agent:test",
@@ -499,7 +499,7 @@ def main() -> None:
     durable_claims = [durable_claim]
     release_v2_payload = {
         **json.loads(json.dumps(release_payload)),
-        "apiVersion": "serverware.releaseAuthorizationReserve/v2",
+        "apiVersion": "catchplate.releaseAuthorizationReserve/v2",
         "attemptId": "sha256:" + "8" * 64,
         "flowId": "sha256:" + "8" * 64,
         "durablePolicy": {
@@ -510,7 +510,7 @@ def main() -> None:
     }
     DataPlaneReleaseAuthorizationReserve.model_validate(release_v2_payload)
     for invalid_v2 in (
-        {**release_v2_payload, "apiVersion": "serverware.releaseAuthorizationReserve/v1"},
+        {**release_v2_payload, "apiVersion": "catchplate.releaseAuthorizationReserve/v1"},
         {**release_payload, "durablePolicy": None},
         {
             key: value
@@ -584,7 +584,7 @@ def main() -> None:
         "reservationId": "sha256:" + "2" * 64,
     }
     dispatch_v2_payload = {
-        "apiVersion": "serverware.releaseAuthorizationDispatch/v2",
+        "apiVersion": "catchplate.releaseAuthorizationDispatch/v2",
         "attemptId": release_v2_payload["attemptId"],
         "bindingDigest": "sha256:" + "3" * 64,
         "durablePolicy": {
@@ -606,7 +606,7 @@ def main() -> None:
         }
     ]
     complete_v2_payload = {
-        "apiVersion": "serverware.releaseAuthorizationComplete/v2",
+        "apiVersion": "catchplate.releaseAuthorizationComplete/v2",
         "attemptId": release_v2_payload["attemptId"],
         "bindingDigest": dispatch_v2_payload["bindingDigest"],
         "outcome": "forwarded",
@@ -623,7 +623,7 @@ def main() -> None:
     DataPlaneReleaseAuthorizationComplete.model_validate(complete_v2_payload)
     DataPlaneReleaseAuthorizationComplete.model_validate(
         {
-            "apiVersion": "serverware.releaseAuthorizationComplete/v2",
+            "apiVersion": "catchplate.releaseAuthorizationComplete/v2",
             "attemptId": release_v2_payload["attemptId"],
             "bindingDigest": dispatch_v2_payload["bindingDigest"],
             "outcome": "not_forwarded",
@@ -641,7 +641,7 @@ def main() -> None:
         }
     ]
     unknown_v2_payload = {
-        "apiVersion": "serverware.releaseAuthorizationComplete/v2",
+        "apiVersion": "catchplate.releaseAuthorizationComplete/v2",
         "attemptId": release_v2_payload["attemptId"],
         "bindingDigest": dispatch_v2_payload["bindingDigest"],
         "outcome": "unknown",
@@ -680,7 +680,7 @@ def main() -> None:
         credential_request_binding_digest,
     )
     credential_request_authority = {
-        "apiVersion": "serverware.credentialLeaseRequestAuthority/v1",
+        "apiVersion": "catchplate.credentialLeaseRequestAuthority/v1",
         "attemptId": credential_request_attempt_id,
         "reservationId": credential_request_reservation_id,
         "bindingDigest": credential_request_binding_digest,
@@ -701,7 +701,7 @@ def main() -> None:
     }
     credential_release_authorization = {
         "apiVersion": (
-            "serverware.credentialLeaseReleaseAuthorization/v2"
+            "catchplate.credentialLeaseReleaseAuthorization/v2"
         ),
         "kind": "atomicReservation",
         "state": "reserved",
@@ -724,7 +724,7 @@ def main() -> None:
         "reservationExpiresAtEpochMs": 4_102_444_800_000,
     }
     credential_request_v4 = {
-        "apiVersion": "serverware.credentialLeaseRequest/v4",
+        "apiVersion": "catchplate.credentialLeaseRequest/v4",
         "purpose": "dispatchSecret",
         "principalId": "agent:test",
         "routeId": "route:test",
@@ -898,7 +898,7 @@ def main() -> None:
                     bounded_lease_payload(
                         invalid_wire,
                         TOKENS[
-                            "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN"
+                            "CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN"
                         ],
                     )
                 )
@@ -920,7 +920,7 @@ def main() -> None:
             {
                 **release_v2_payload,
                 "api_version": (
-                    "serverware.releaseAuthorizationReserve/v1"
+                    "catchplate.releaseAuthorizationReserve/v1"
                 ),
             },
             "release reserve root alias conflict",
@@ -1054,7 +1054,7 @@ def main() -> None:
                     path,
                     invalid_wire,
                     TOKENS[
-                        "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"
+                        "CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"
                     ],
                 )
             )
@@ -1098,13 +1098,13 @@ def main() -> None:
             DataPlaneReleaseAuthorizationDispatch,
             {
                 **dispatch_v2_payload,
-                "apiVersion": "serverware.releaseAuthorizationDispatch/v1",
+                "apiVersion": "catchplate.releaseAuthorizationDispatch/v1",
             },
         ),
         (
             DataPlaneReleaseAuthorizationDispatch,
             {
-                "apiVersion": "serverware.releaseAuthorizationDispatch/v1",
+                "apiVersion": "catchplate.releaseAuthorizationDispatch/v1",
                 "attemptId": "attempt:test",
                 "bindingDigest": "sha256:" + "3" * 64,
                 "durablePolicy": None,
@@ -1124,13 +1124,13 @@ def main() -> None:
             DataPlaneReleaseAuthorizationComplete,
             {
                 **complete_v2_payload,
-                "apiVersion": "serverware.releaseAuthorizationComplete/v1",
+                "apiVersion": "catchplate.releaseAuthorizationComplete/v1",
             },
         ),
         (
             DataPlaneReleaseAuthorizationComplete,
             {
-                "apiVersion": "serverware.releaseAuthorizationComplete/v1",
+                "apiVersion": "catchplate.releaseAuthorizationComplete/v1",
                 "attemptId": "attempt:test",
                 "bindingDigest": "sha256:" + "3" * 64,
                 "outcome": "unknown",
@@ -1254,7 +1254,7 @@ def main() -> None:
 
     batch = DataPlaneAuditBatch(events=[DataPlaneAuditEvent.model_validate(audit_payload)])
     expect_http_error(
-        lambda: data_plane_audit(batch, TOKENS["SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN"]),
+        lambda: data_plane_audit(batch, TOKENS["CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN"]),
         401,
     )
     expect_http_error(
@@ -1271,21 +1271,21 @@ def main() -> None:
                     "flowId": "flow:test",
                 }
             ),
-            TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"],
+            TOKENS["CATCHPLATE_DATA_PLANE_AUDIT_TOKEN"],
         ),
         401,
     )
     expect_http_error(
         lambda: data_plane_rate_limit_consume(
             DataPlaneRateLimitConsume.model_validate(rate_payload),
-            TOKENS["SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN"],
+            TOKENS["CATCHPLATE_DATA_PLANE_GRANT_CONSUME_TOKEN"],
         ),
         401,
     )
     expect_http_error(
         lambda: data_plane_release_authorization_reserve(
             DataPlaneReleaseAuthorizationReserve.model_validate(release_payload),
-            TOKENS["SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN"],
+            TOKENS["CATCHPLATE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN"],
         ),
         401,
     )
@@ -1294,12 +1294,12 @@ def main() -> None:
         lambda: data_plane_release_authorization_dispatch(
             DataPlaneReleaseAuthorizationDispatch.model_validate(
                 {
-                    "apiVersion": "serverware.releaseAuthorizationDispatch/v1",
+                    "apiVersion": "catchplate.releaseAuthorizationDispatch/v1",
                     "attemptId": "attempt:test",
                     "bindingDigest": transition_digest,
                 }
             ),
-            TOKENS["SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN"],
+            TOKENS["CATCHPLATE_DATA_PLANE_GRANT_CONSUME_TOKEN"],
         ),
         401,
     )
@@ -1307,25 +1307,25 @@ def main() -> None:
         lambda: data_plane_release_authorization_complete(
             DataPlaneReleaseAuthorizationComplete.model_validate(
                 {
-                    "apiVersion": "serverware.releaseAuthorizationComplete/v1",
+                    "apiVersion": "catchplate.releaseAuthorizationComplete/v1",
                     "attemptId": "attempt:test",
                     "bindingDigest": transition_digest,
                     "outcome": "unknown",
                 }
             ),
-            TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"],
+            TOKENS["CATCHPLATE_DATA_PLANE_AUDIT_TOKEN"],
         ),
         401,
     )
     try:
-        asyncio.run(bounded_lease_with_token(TOKENS["SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN"]))
+        asyncio.run(bounded_lease_with_token(TOKENS["CATCHPLATE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN"]))
     except HTTPException as exc:
         if exc.status_code != 401 or any(token in str(exc.detail) for token in TOKENS.values()):
             raise AssertionError(f"credential-lease wrong-scope rejection was unsafe: {exc.detail}") from exc
     else:
         raise AssertionError("credential-lease endpoint accepted a wrong-scope token")
 
-    accepted = data_plane_audit(batch, TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"])
+    accepted = data_plane_audit(batch, TOKENS["CATCHPLATE_DATA_PLANE_AUDIT_TOKEN"])
     if accepted != {"ok": True, "accepted": 1}:
         raise AssertionError(f"audit ingestion failed: {accepted}")
     exact_body = json.dumps(
@@ -1355,12 +1355,12 @@ def main() -> None:
     signed_ack = asyncio.run(
         app_module.data_plane_audit(
             audit_request,
-            TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"],
+            TOKENS["CATCHPLATE_DATA_PLANE_AUDIT_TOKEN"],
         )
     )
     expected_digest = "sha256:" + hashlib.sha256(exact_body).hexdigest()
     if signed_ack != {
-        "apiVersion": "serverware.dataPlaneAuditAck/v1",
+        "apiVersion": "catchplate.dataPlaneAuditAck/v1",
         "ok": True,
         "accepted": 1,
         "batchDigest": expected_digest,
@@ -1368,7 +1368,7 @@ def main() -> None:
     }:
         raise AssertionError(f"audit acknowledgement did not bind request bytes: {signed_ack}")
     replayed = data_plane_audit(
-        batch, TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"]
+        batch, TOKENS["CATCHPLATE_DATA_PLANE_AUDIT_TOKEN"]
     )
     if replayed != {"ok": True, "accepted": 1}:
         raise AssertionError(f"lost-ACK audit replay failed: {replayed}")
@@ -1402,7 +1402,7 @@ def main() -> None:
     )
     expect_http_error(
         lambda: data_plane_audit(
-            duplicate_id_batch, TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"]
+            duplicate_id_batch, TOKENS["CATCHPLATE_DATA_PLANE_AUDIT_TOKEN"]
         ),
         400,
     )
@@ -1415,7 +1415,7 @@ def main() -> None:
             ]
         }
     )
-    data_plane_audit(replay_seed, TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"])
+    data_plane_audit(replay_seed, TOKENS["CATCHPLATE_DATA_PLANE_AUDIT_TOKEN"])
     partial_replay = DataPlaneAuditBatch.model_validate(
         {
             "events": [
@@ -1426,7 +1426,7 @@ def main() -> None:
     )
     expect_http_error(
         lambda: data_plane_audit(
-            partial_replay, TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"]
+            partial_replay, TOKENS["CATCHPLATE_DATA_PLANE_AUDIT_TOKEN"]
         ),
         409,
     )
@@ -1449,7 +1449,7 @@ def main() -> None:
     )
     expect_http_error(
         lambda: data_plane_audit(
-            mismatched_replay, TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"]
+            mismatched_replay, TOKENS["CATCHPLATE_DATA_PLANE_AUDIT_TOKEN"]
         ),
         409,
     )
@@ -1470,7 +1470,7 @@ def main() -> None:
     )
     secret_error = expect_http_error(
         lambda: data_plane_audit(
-            secret_batch, TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"]
+            secret_batch, TOKENS["CATCHPLATE_DATA_PLANE_AUDIT_TOKEN"]
         ),
         400,
     )
@@ -1479,7 +1479,7 @@ def main() -> None:
     with patch.object(app_module, "RELEASE_CHANNEL", "production"):
         expect_http_error(
             lambda: data_plane_audit(
-                batch, TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"]
+                batch, TOKENS["CATCHPLATE_DATA_PLANE_AUDIT_TOKEN"]
             ),
             400,
         )
@@ -1490,7 +1490,7 @@ def main() -> None:
                         "eventId": audit_event_id(21),
                         "eventType": "data_plane.policy.reloaded",
                         "event": {
-                            "component": "serverware-decision-gate-rs",
+                            "component": "catchplate-decision-gate-rs",
                             "policy_hash": "sha256:" + "f" * 64,
                         },
                     }
@@ -1498,7 +1498,7 @@ def main() -> None:
             }
         )
         production_accepted = data_plane_audit(
-            production_batch, TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"]
+            production_batch, TOKENS["CATCHPLATE_DATA_PLANE_AUDIT_TOKEN"]
         )
     if production_accepted != {"ok": True, "accepted": 1}:
         raise AssertionError(
@@ -1627,7 +1627,7 @@ def main() -> None:
                     forged_actor_payload
                 ),
                 TOKENS[
-                    "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"
+                    "CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"
                 ],
             ),
             403,
@@ -1638,7 +1638,7 @@ def main() -> None:
                     release_payload
                 ),
                 TOKENS[
-                    "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"
+                    "CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"
                 ],
             ),
             409,
@@ -1748,13 +1748,13 @@ def main() -> None:
                     legitimate_v2_payload
                 ),
                 TOKENS[
-                    "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"
+                    "CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"
                 ],
             )
         )
     if (
         legitimate_response["apiVersion"]
-        != "serverware.releaseAuthorization/v2"
+        != "catchplate.releaseAuthorization/v2"
         or legitimate_response["durablePolicy"]["actorId"]
         != INSTANCE_ID
         or captured_v2.get("actor_id") != INSTANCE_ID
@@ -1795,7 +1795,7 @@ def main() -> None:
                     forged_dispatch
                 ),
                 TOKENS[
-                    "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"
+                    "CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"
                 ],
             ),
             403,
@@ -1806,7 +1806,7 @@ def main() -> None:
                     forged_completion
                 ),
                 TOKENS[
-                    "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"
+                    "CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"
                 ],
             ),
             403,
@@ -1918,7 +1918,7 @@ def main() -> None:
                 dispatch_v2_payload
             ),
             TOKENS[
-                "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"
+                "CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"
             ],
         )
         uncertain_response = data_plane_release_authorization_complete(
@@ -1926,7 +1926,7 @@ def main() -> None:
                 dispatch_uncertain_payload
             ),
             TOKENS[
-                "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"
+                "CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"
             ],
         )
     if (
@@ -2011,7 +2011,7 @@ def main() -> None:
     ):
         release_response = data_plane_release_authorization_reserve(
             DataPlaneReleaseAuthorizationReserve.model_validate(release_payload),
-            TOKENS["SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"],
+            TOKENS["CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"],
         )
     derived_quotas = captured.get("shared_quotas")
     if not isinstance(derived_quotas, list) or {
@@ -2032,7 +2032,7 @@ def main() -> None:
     if not all(str(item.get("counter_key", "")).startswith("sha256:") for item in derived_quotas):
         raise AssertionError(f"reserve endpoint did not derive counter keys: {derived_quotas}")
     if release_response != {
-        "apiVersion": "serverware.releaseAuthorization/v1",
+        "apiVersion": "catchplate.releaseAuthorization/v1",
         "ok": True,
         "authorized": True,
         "state": "reserved",
@@ -2129,7 +2129,7 @@ def main() -> None:
             expect_http_error(
                 lambda payload=invalid_release_payload: data_plane_release_authorization_reserve(
                     DataPlaneReleaseAuthorizationReserve.model_validate(payload),
-                    TOKENS["SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"],
+                    TOKENS["CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"],
                 ),
                 409,
             )
@@ -2209,7 +2209,7 @@ def main() -> None:
     ):
         data_plane_release_authorization_reserve(
             DataPlaneReleaseAuthorizationReserve.model_validate(valid_v2_payload),
-            TOKENS["SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"],
+            TOKENS["CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"],
         )
 
     with (
@@ -2230,7 +2230,7 @@ def main() -> None:
                 DataPlaneReleaseAuthorizationReserve.model_validate(
                     release_payload
                 ),
-                TOKENS["SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"],
+                TOKENS["CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"],
             ),
             409,
         )
@@ -2272,7 +2272,7 @@ def main() -> None:
             expect_http_error(
                 lambda payload=alias_payload: data_plane_release_authorization_reserve(
                     DataPlaneReleaseAuthorizationReserve.model_validate(payload),
-                    TOKENS["SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"],
+                    TOKENS["CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"],
                 ),
                 409,
             )
@@ -2331,7 +2331,7 @@ def main() -> None:
                 DataPlaneReleaseAuthorizationReserve.model_validate(
                     corrupt_policy_payload
                 ),
-                TOKENS["SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"],
+                TOKENS["CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"],
             ),
             409,
         )
@@ -2353,14 +2353,14 @@ def main() -> None:
                         "flowId": "flow:test",
                     }
                 ),
-                TOKENS["SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN"],
+                TOKENS["CATCHPLATE_DATA_PLANE_GRANT_CONSUME_TOKEN"],
             ),
             409,
         )
         expect_http_error(
             lambda: data_plane_rate_limit_consume(
                 DataPlaneRateLimitConsume.model_validate(rate_payload),
-                TOKENS["SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN"],
+                TOKENS["CATCHPLATE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN"],
             ),
             409,
         )
@@ -2373,17 +2373,17 @@ if __name__ == "__main__":
     if sys.argv[1:] not in ([], ["--audit-retry-only"]):
         raise SystemExit("usage: test_internal_service_auth.py [--audit-retry-only]")
     with tempfile.TemporaryDirectory() as tmp:
-        os.environ["SERVERWARE_DATA_DIR"] = tmp
-        os.environ["SERVERWARE_RELEASE_CHANNEL"] = "test"
-        os.environ["SERVERWARE_PROCESS_MODE"] = "serverware-control-plane"
-        os.environ["SERVERWARE_DATA_PLANE_INSTANCE_ID"] = INSTANCE_ID
+        os.environ["CATCHPLATE_DATA_DIR"] = tmp
+        os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "test"
+        os.environ["CATCHPLATE_PROCESS_MODE"] = "catchplate-control-plane"
+        os.environ["CATCHPLATE_DATA_PLANE_INSTANCE_ID"] = INSTANCE_ID
         os.environ.update(TOKENS)
-        os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
-        from serverware import db
-        from serverware import app as app_module
-        from serverware.app import (
+        os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
+        from catchplate import db
+        from catchplate import app as app_module
+        from catchplate.app import (
             DataPlaneAuditBatch,
             DataPlaneAuditEvent,
             DataPlaneGrantConsume,

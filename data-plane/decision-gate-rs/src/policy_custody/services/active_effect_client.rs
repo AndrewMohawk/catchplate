@@ -11,7 +11,7 @@ impl Client {
             && self.used.insert(b.operation_id_sha256.clone()))?;self.poisoned=true;
         let signer=if matches!(request,Dispatch::AppendActiveEffectBarrier{..}){Signer::ActiveEffectBarrier}else{Signer::ActiveEffectCommit};
         let endpoint=Endpoint::ParentSigner(signer);
-        let command=Command{api_version:"serverware.nativeSpoolHeadCommand/v2".into(),action:Action::EffectClaim(request.clone())};
+        let command=Command{api_version:"catchplate.nativeSpoolHeadCommand/v2".into(),action:Action::EffectClaim(request.clone())};
         let raw=self.exchange(sessions,TrustedHostServiceRoleV3::DurableRecoveryStore,&encode_canonical_frame(&command)?,deadline)?;
         let Reply::EffectAllocated(allocation)=decode_canonical_frame(&raw)? else{return Err(invalid());};
         allocation.verify(request,&self.head.payload.scope,&Sha256Digest::compute(self.selection.head_grant_original.as_bytes()),
@@ -34,13 +34,13 @@ impl Client {
         let raw=self.exchange(sessions,TrustedHostServiceRoleV3::CleanupAuthorizationConsumer,&encode_canonical_frame(&command)?,deadline)?;
         let cleanup:values::Cleanup=decode_canonical_frame(&raw)?;cleanup.verify(&completion,&self.head)?;
         self.transition(TrustedHostServiceRoleV3::CleanupAuthorizationConsumer,&cleanup.transition,request,&cleanup.result)?;
-        let command=Command{api_version:"serverware.nativeSpoolHeadCommand/v2".into(),action:Action::EffectCommit{completion:completion.clone(),cleanup:cleanup.clone()}};
+        let command=Command{api_version:"catchplate.nativeSpoolHeadCommand/v2".into(),action:Action::EffectCommit{completion:completion.clone(),cleanup:cleanup.clone()}};
         let raw=self.exchange(sessions,TrustedHostServiceRoleV3::DurableRecoveryStore,&encode_canonical_frame(&command)?,deadline)?;
         let durable:Reply=decode_canonical_frame(&raw)?;let Reply::EffectCommitted{result,transition}=&durable else{return Err(invalid());};
         require(result==&cleanup.result)?;
         self.transition(TrustedHostServiceRoleV3::DurableRecoveryStore,transition,request,result)?;
         self.journal_sequence=self.journal_sequence.checked_add(1).ok_or_else(invalid)?;
-        let command=spool_current::Command::Effect(spool_current::EffectCommand{api_version:"serverware.nativeSpoolCurrentCommand/v2".into(),
+        let command=spool_current::Command::Effect(spool_current::EffectCommand{api_version:"catchplate.nativeSpoolCurrentCommand/v2".into(),
             completion:completion.clone(),cleanup:cleanup.clone(),durable:durable.clone()});
         let raw=self.exchange(sessions,TrustedHostServiceRoleV3::CurrentSignatureAuthority,&encode_canonical_frame(&command)?,deadline)?;
         let current:Transition=decode_canonical_frame(&raw)?;self.transition(TrustedHostServiceRoleV3::CurrentSignatureAuthority,&current,request,result)?;

@@ -6,7 +6,7 @@ permission to activate a session or a successful-verification token. No build,
 test, runtime, key delivery, filesystem provisioning or production verification
 is claimed.
 
-[`oidc_session_activation_execution_custody_bootstrap.py`](../serverware/oidc_session_activation_execution_custody_bootstrap.py)
+[`oidc_session_activation_execution_custody_bootstrap.py`](../catchplate/oidc_session_activation_execution_custody_bootstrap.py)
 admits two genuine signed originals: the new outer receiving statement and its
 exact embedded [planner-bootstrap v3](oidc-session-activation-planner-bootstrap.md).
 Neither API accepts a previously returned planner material as authority.
@@ -28,9 +28,9 @@ processes, descriptors, environment selectors or state-service permissions.
 ## Original wire and scope
 
 The exact envelope fields are `schema`, `payload`, `signatureBase64Url`.
-`serverware.signedOidcSessionActivationExecutionCustody/v1` is both its schema
+`catchplate.signedOidcSessionActivationExecutionCustody/v1` is both its schema
 and the distinct root-signature domain. The payload schema is
-`serverware.oidcSessionActivationExecutionCustody/v1`.
+`catchplate.oidcSessionActivationExecutionCustody/v1`.
 
 The payload is closed over:
 

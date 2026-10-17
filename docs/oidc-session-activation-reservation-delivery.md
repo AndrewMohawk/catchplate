@@ -7,9 +7,9 @@ acceptance is claimed. It does not perform SQL, completion or token release.
 
 ## Fixed records
 
-[The codec](../serverware/authority_oidc_session_activation_reservation_records.py)
-fixes `serverware.oidcSessionActivationReservationRecord/v1` and the separate
-`serverware.oidcSessionActivationReservationRecordIdentity/v1` local identity
+[The codec](../catchplate/authority_oidc_session_activation_reservation_records.py)
+fixes `catchplate.oidcSessionActivationReservationRecord/v1` and the separate
+`catchplate.oidcSessionActivationReservationRecordIdentity/v1` local identity
 domain. Shared mechanics select only three source-fixed profiles; existing
 evidence and finalization schemas, formats, domains and public constructors
 remain unchanged. No operation or codec can be supplied by a caller.
@@ -32,7 +32,7 @@ replay under separately admitted private custody.
 
 ## Actual owner and supplied lifetime
 
-[The delivery class](../serverware/authority_oidc_session_activation_reservation_delivery.py)
+[The delivery class](../catchplate/authority_oidc_session_activation_reservation_delivery.py)
 is `OidcSessionActivationReservationDelivery`. Its keyword-only constructor
 requires `journal`, `enrollment_bytes`, `root_public_key`,
 `expected_local_sequence`, `expected_local_head_digest`, `live_window`, `work`

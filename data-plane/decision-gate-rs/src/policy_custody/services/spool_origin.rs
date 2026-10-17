@@ -3,7 +3,7 @@
 use super::*;
 use super::ledger_spool_values::{invalid,Scope};
 use crate::policy_shadow::{ShadowGenerationIdentity,RuntimeIdentity,CanonicalEd25519Signature,signature_preimage};
-use serverware_decision_gate::native_generation_origin_v1 as wire;
+use catchplate_decision_gate::native_generation_origin_v1 as wire;
 fn require(v:bool)->Result<(),ServiceError>{if v{Ok(())}else{Err(invalid())}}
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -54,7 +54,7 @@ impl Verified {
 pub(super) fn verify(raw:&str,scope:&Scope,key:&Key,earliest:i64,latest:i64)->Result<Verified,ServiceError>{
     require(raw.is_ascii() && !raw.is_empty() && raw.len()<=2*1024*1024 && earliest>0 && earliest<=latest)?;
     let value:Envelope=decode_canonical_frame(raw.as_bytes())?;let p=&value.payload;
-    require(p.api_version=="serverware.nativeGenerationOrigin/v1" && p.purpose=="native-installed-generation-origin"
+    require(p.api_version=="catchplate.nativeGenerationOrigin/v1" && p.purpose=="native-installed-generation-origin"
         && p.signing_key_id==key.key_id && p.signing_key_spki_sha256==key.key_spki_sha256
         && p.issued_at_unix_nanos<=earliest && latest<p.expires_at_unix_nanos
         && p.issued_at_unix_nanos>=key.not_before_unix_nanos && p.expires_at_unix_nanos<=key.not_after_unix_nanos
@@ -63,7 +63,7 @@ pub(super) fn verify(raw:&str,scope:&Scope,key:&Key,earliest:i64,latest:i64)->Re
         && p.request.assignment_payload_sha256==scope.assignment_payload_sha256.as_str()
         && p.request.generation_id==scope.generation_id.as_str())?;
     p.request.validate(latest as u64).map_err(|_|invalid())?;
-    key.material()?.verify_strict(&signature_preimage("serverware.nativeGenerationOrigin.signature/v1",&encode_canonical_frame(p)?),
+    key.material()?.verify_strict(&signature_preimage("catchplate.nativeGenerationOrigin.signature/v1",&encode_canonical_frame(p)?),
         &Signature::from_bytes(&value.signature.decode().map_err(|_|invalid())?)).map_err(|_|invalid())?;
     require(p.evidence_original.is_ascii() && p.evidence_original.len()<=wire::MAX_EVIDENCE)?;
     let evidence:Evidence=decode_canonical_frame(p.evidence_original.as_bytes())?;
@@ -71,7 +71,7 @@ pub(super) fn verify(raw:&str,scope:&Scope,key:&Key,earliest:i64,latest:i64)->Re
     require(encode_canonical_frame(&p.request)?==encode_canonical_frame(&evidence.statement.request)?)?;
     let originals:Originals=decode_canonical_frame(evidence.statement.originals.as_bytes())?;
     let b=&originals.ledger_baseline;let g=&originals.generation;
-    require(originals.api_version=="serverware.nativeInstalledGenerationOriginals/v1"
+    require(originals.api_version=="catchplate.nativeInstalledGenerationOriginals/v1"
         && originals.production_configuration_binding_sha256==scope.production_configuration_binding_sha256
         && g.generation_id()==&scope.generation_id && g.assignment_payload_sha256()==&scope.assignment_payload_sha256
         && g.assignment_revision()==scope.assignment_revision

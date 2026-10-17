@@ -1,6 +1,6 @@
 # Private consume execution-original replay
 
-[`authority_oidc_session_activation_delivery_execution_replay.py`](../serverware/authority_oidc_session_activation_delivery_execution_replay.py)
+[`authority_oidc_session_activation_delivery_execution_replay.py`](../catchplate/authority_oidc_session_activation_delivery_execution_replay.py)
 genuinely replays the original `oidc.session.activation-delivery.consume` plan
 and encrypted private document. It returns ordinary same-call token-free facts,
 not a grant, reservation, SQL permission, successful-proof input or token release.

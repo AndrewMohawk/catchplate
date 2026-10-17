@@ -42,11 +42,11 @@ SCRIPT = "scripts/test_operator_ecr_gate_connected.py"
 HOST = "api.ecr.us-east-1.amazonaws.com"
 ORIGINS = ["https://" + HOST]
 SCOPE = {"registry_id": "123456789012", "region": "us-east-1",
-    "repository_name": "serverware-fixture/image", "image_tag": "reviewed-1"}
+    "repository_name": "catchplate-fixture/image", "image_tag": "reviewed-1"}
 ACCESS, SECRET = "AKIA" + "F" * 16, "G" * 40
 CONFIG = b'{"architecture":"amd64","os":"linux"}'
 LAYER = b"ecr-gate-connected-exact-image-canary"
-SDK_RECEIPT_SCHEMA = "serverware.ecrSdkPackages/v1"
+SDK_RECEIPT_SCHEMA = "catchplate.ecrSdkPackages/v1"
 SDK_REQUIREMENTS = "examples/ecr-publish-python/requirements.txt"
 
 
@@ -81,7 +81,7 @@ def digest(raw):
 
 
 def image_bytes():
-    from serverware import ecr_image_artifact as artifact
+    from catchplate import ecr_image_artifact as artifact
     def descriptor(media, raw):
         return {"mediaType": media, "digest": digest(raw), "size": len(raw)}
     manifest = encoded({"schemaVersion": 2, "mediaType": artifact.OCI_MANIFEST,
@@ -94,7 +94,7 @@ def configure_network():
     # Reuse the exact existing namespace, PKI and relay implementation, changing
     # only the finite fixture hostname set within this dedicated process.
     network.PROVIDERS = (HOST,)
-    network.HOSTS = ("127.0.0.1 localhost serverware decision-gate-rs "
+    network.HOSTS = ("127.0.0.1 localhost catchplate decision-gate-rs "
         + network.guided.CONTROL_HOST + " " + network.guided.PROXY_HOST + "\n127.0.0.2 demo-upstream\n"
         + network.isolated.FIXTURE_IP + " api.github.com " + HOST + "\n").encode("ascii")
     network.configure_network()
@@ -231,7 +231,7 @@ class EcrCheck(OperatorCatalogCheck):
 
     def catalog(self):
         value = self.control_json(PREFIX + "/catalog", authenticated=True)
-        require(value.get("schema") == "serverware.operatorCatalog/v1" and value.get("mode") == "operator-development"
+        require(value.get("schema") == "catchplate.operatorCatalog/v1" and value.get("mode") == "operator-development"
             and value.get("allowed_upstreams") == ORIGINS and all(isinstance(value.get(key), list) for key in COLLECTIONS)
             and SHA256.fullmatch(value.get("policy", {}).get("policy_hash", "")), "fixture catalog differs")
         self.snapshot = value
@@ -243,7 +243,7 @@ class EcrCheck(OperatorCatalogCheck):
         return value
 
     def run(self):
-        from serverware import ecr_image_custody as custody
+        from catchplate import ecr_image_custody as custody
         sdk_receipt(Path("/sdk-packages"), Path("/sdk-receipt.json"),
             self.args.expected_sdk_receipt_sha256, Path("/app"))
         spec = importlib.util.spec_from_file_location("ecr_client_example",
@@ -321,7 +321,7 @@ class EcrCheck(OperatorCatalogCheck):
         proxy = [row for row in rows if row["event_type"] in {START, RELEASE, ecr_ack}]
         require(Counter(row["event_type"] for row in proxy) == Counter({ecr_ack: 8, RELEASE: 8}),
             "dedicated signing and response release audit count differs")
-        return {"schema": "serverware.ecrGateConnectedCheck/v1", "ok": True, "syntheticOnly": True,
+        return {"schema": "catchplate.ecrGateConnectedCheck/v1", "ok": True, "syntheticOnly": True,
             "realAwsVerified": False, "stockBoto3Verified": True, "dataPlaneBinaryDigest": self.args.expected_binary_sha256,
             "policyHash": self.policy_hash, "publicationId": identifier, "status": final["status"],
             "actions": dict(actions), "provider": observed, "ownerAcknowledgments": len(acks),
@@ -364,16 +364,16 @@ def build(args):
         "o=urllib.request.build_opener(urllib.request.ProxyHandler({}),urllib.request.HTTPSHandler(context=c)); "
         "r=o.open('https://" + HOST + "/_fixture/observations',timeout=2); raise SystemExit(0 if r.status==200 else 1)")
     services["edge"]["command"] = ["-m", "scripts.test_operator_ecr_gate_connected", "edge"]
-    for name in ("serverware", "decision-gate-rs"):
-        services[name]["environment"]["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(ORIGINS)
+    for name in ("catchplate", "decision-gate-rs"):
+        services[name]["environment"]["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(ORIGINS)
         # Match docker-compose.host-approvals.yml; ECR requires this explicit
         # ordinary host-trusted profile, never native/TEE approval authority.
-        services[name]["environment"]["SERVERWARE_HOST_TRUSTED_APPROVALS_ENABLED"] = "1"
-        services[name]["environment"].pop("SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS", None)
+        services[name]["environment"]["CATCHPLATE_HOST_TRUSTED_APPROVALS_ENABLED"] = "1"
+        services[name]["environment"].pop("CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS", None)
     # Ordinary activation requires /data to start empty and writes its own
     # identity marker. Provision artifact custody in a separate private mount.
-    services["serverware"]["environment"]["SERVERWARE_ECR_ARTIFACT_ROOT"] = "/ecr-artifacts"
-    services["serverware"]["volumes"].append(recipe.base.bind(
+    services["catchplate"]["environment"]["CATCHPLATE_ECR_ARTIFACT_ROOT"] = "/ecr-artifacts"
+    services["catchplate"]["volumes"].append(recipe.base.bind(
         args.job_root / "runtime/upstream-data/ecr-artifacts", "/ecr-artifacts", False))
     check = services["check"]
     check.update(image=recipe.base.APP_IMAGE, entrypoint=["python", "-B"])
@@ -448,7 +448,7 @@ def run(args):
                 rows = runner.container_rows("cleanup-before")
                 for row in rows:
                     name = row["Config"]["Labels"]["com.docker.compose.service"]
-                    if name in {"provider", "serverware", "decision-gate-rs"}:
+                    if name in {"provider", "catchplate", "decision-gate-rs"}:
                         runner.command("retained-" + name + "-logs", ["docker", "logs", "--tail", "60", row["Id"]], 3)
                 ids = [row["Id"] for row in rows]
                 if ids:

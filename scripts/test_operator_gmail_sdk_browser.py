@@ -28,7 +28,7 @@ RULE_VALUE = {"id": RULE, "application_id": APP, "credential_id": CREDENTIAL}
 APP_TOKEN = "a" * 43  # Synthetic application token; never sent to the browser.
 PAYLOAD = bridge.expected_payload(BEFORE, APP, CREDENTIAL)
 RAW = json.dumps(PAYLOAD, indent=1).encode()
-INTENT_VALUE = {"apiVersion": "serverware.operatorGoogleConsent/v1", "productionReady": False,
+INTENT_VALUE = {"apiVersion": "catchplate.operatorGoogleConsent/v1", "productionReady": False,
     "protectedActivationSupported": False, "limits": {"active": 32, "retained": 1024},
     "intents": [{"id": oracle.uid(12), "name": "fixture-account", "provider_id": "google",
         "permission_preset": "gmail_readonly", "scopes": ["email", "https://www.googleapis.com/auth/gmail.readonly", "openid"],
@@ -40,21 +40,21 @@ def copied_recipe(*, inner="/client-trust/inner-ca.pem", outer="/client-trust/ou
     """Independent literal recipe oracle, not the production JS builder/parser."""
     quote = lambda value: "'" + value.replace("'", "'\\''") + "'"
     child = "\n".join([
-        "set -eu", "IFS= read -r SERVERWARE_PROXY_TOKEN", "exec </dev/null", "unset PWD OLDPWD SHLVL _",
-        "export SERVERWARE_PROXY_TOKEN",
-        "export SERVERWARE_PROXY_URL='https://serverware-gmail-proxy.example.com'",
-        "export SERVERWARE_APP_ID='" + APP + "'", "export SERVERWARE_CA_FILE=" + quote(inner),
-        *(["export SERVERWARE_PROXY_CA_FILE=" + quote(outer)] if outer else []), "exec ./gmail-example"])
+        "set -eu", "IFS= read -r CATCHPLATE_PROXY_TOKEN", "exec </dev/null", "unset PWD OLDPWD SHLVL _",
+        "export CATCHPLATE_PROXY_TOKEN",
+        "export CATCHPLATE_PROXY_URL='https://catchplate-gmail-proxy.example.com'",
+        "export CATCHPLATE_APP_ID='" + APP + "'", "export CATCHPLATE_CA_FILE=" + quote(inner),
+        *(["export CATCHPLATE_PROXY_CA_FILE=" + quote(outer)] if outer else []), "exec ./gmail-example"])
     return ("# Gmail SDK job (Bash): run from examples/google-gmail-go with the reviewed ./gmail-example already built.\n"
         "# Prepare dependencies/build before supplying the app token. This recipe does not download or build anything.\n"
-        "# Set SERVERWARE_PROXY_TOKEN privately first. Never use a Google token. Both TLS checks remain enabled.\n"
-        "# serverware.gmailSdkClient/v1\n"
+        "# Set CATCHPLATE_PROXY_TOKEN privately first. Never use a Google token. Both TLS checks remain enabled.\n"
+        "# catchplate.gmailSdkClient/v1\n"
         f"# access_rule_id: {RULE}\n# token_expires_at_epoch_ms: {APP_EXPIRY}\n"
-        "(\n  set +x\n  set -eu\n  case \"${SERVERWARE_PROXY_TOKEN-}\" in\n"
-        "    ''|*[!A-Za-z0-9_-]*) printf '%s\\n' 'Set the issued Serverware application token privately' >&2; exit 1 ;;\n"
+        "(\n  set +x\n  set -eu\n  case \"${CATCHPLATE_PROXY_TOKEN-}\" in\n"
+        "    ''|*[!A-Za-z0-9_-]*) printf '%s\\n' 'Set the issued Catchplate application token privately' >&2; exit 1 ;;\n"
         "  esac\n"
-        '  [ "${#SERVERWARE_PROXY_TOKEN}" -eq 43 ] || { printf \'%s\\n\' \'Set the issued Serverware application token privately\' >&2; exit 1; }\n'
-        '  printf \'%s\\n\' "$SERVERWARE_PROXY_TOKEN" |\n'
+        '  [ "${#CATCHPLATE_PROXY_TOKEN}" -eq 43 ] || { printf \'%s\\n\' \'Set the issued Catchplate application token privately\' >&2; exit 1; }\n'
+        '  printf \'%s\\n\' "$CATCHPLATE_PROXY_TOKEN" |\n'
         "    /usr/bin/env -i LANG=C.UTF-8 /bin/sh -c " + quote(child) + "\n)").encode()
 
 
@@ -175,7 +175,7 @@ class BrowserBridgeTests(unittest.TestCase):
             self.assertEqual((proof["grantPosts"], proof["catalogGets"], proof["intentGets"], proof["requestSha256"]), (1, 3, 1, bridge.sha(RAW)))
             self.assertEqual((proof["copiedRecipeSha256"], proof["copiedRecipeBytes"]),
                 (bridge.sha(copied_recipe()), len(copied_recipe())))
-            self.assertEqual(check.browser_client_environment["SERVERWARE_PROXY_TOKEN"], APP_TOKEN)
+            self.assertEqual(check.browser_client_environment["CATCHPLATE_PROXY_TOKEN"], APP_TOKEN)
             self.assertNotIn(APP_TOKEN, repr(emit.call_args_list))
             self.assertTrue(os.get_blocking(read))
         finally:
@@ -192,7 +192,7 @@ class BrowserBridgeTests(unittest.TestCase):
         with patch.object(bridge.http.client, "HTTPConnection", return_value=connection):
             self.assertEqual(bridge.exchange(check, frame(), RAW)[2], response.read.return_value)
         self.assertIs(connection.request.call_args.kwargs["body"], RAW)
-        self.assertEqual(connection.request.call_args.kwargs["headers"]["X-Serverware-Admin-Token"], check.admin_token)
+        self.assertEqual(connection.request.call_args.kwargs["headers"]["X-Catchplate-Admin-Token"], check.admin_token)
         self.assertEqual(connection.request.call_args.kwargs["headers"]["origin"], bridge.ORIGIN)
         self.assertNotIn(check.admin_token, str(response.getheaders.return_value))
         connection.close.assert_called_once()
@@ -204,12 +204,12 @@ class BrowserBridgeTests(unittest.TestCase):
         expected["services"]["check"]["stdin_open"] = True
         expected["services"]["check"]["command"].append("--browser-permission")
         command = expected["services"]["check"]["command"]
-        command[command.index("--proxy-url") + 1] = "https://serverware-gmail-proxy.example.com"
+        command[command.index("--proxy-url") + 1] = "https://catchplate-gmail-proxy.example.com"
         expected["services"]["initialize"]["command"][-1] = "browser-initialize"
         expected["services"]["edge"]["command"][-1] = "browser-edge"
-        expected["services"]["basic-pki"]["command"] += ["--proxy-hostname", "serverware-gmail-proxy.example.com"]
-        for service in ("serverware", "decision-gate-rs"):
-            expected["services"][service]["environment"]["SERVERWARE_OPERATOR_DEMO_PROXY_URL"] = "https://serverware-gmail-proxy.example.com"
+        expected["services"]["basic-pki"]["command"] += ["--proxy-hostname", "catchplate-gmail-proxy.example.com"]
+        for service in ("catchplate", "decision-gate-rs"):
+            expected["services"][service]["environment"]["CATCHPLATE_OPERATOR_DEMO_PROXY_URL"] = "https://catchplate-gmail-proxy.example.com"
         self.assertEqual(enabled, expected)
         self.assertEqual(recipe.build(*topology.ARGS, **topology.PINS, browser_permission=False), original)
         for value in (1, "yes", None):
@@ -219,7 +219,7 @@ class BrowserBridgeTests(unittest.TestCase):
         run = runner.GmailSdkRun(SimpleNamespace())
         with patch.object(run, "command", side_effect=AssertionError("default touched systemd")):
             self.assertTrue(run.browser_cleanup())
-        run.browser_unit = "serverware-gmail-sdk-private-123456abcdef-browser.service"
+        run.browser_unit = "catchplate-gmail-sdk-private-123456abcdef-browser.service"
         run.browser_unit_armed = True
         with patch.object(run, "browser_units", side_effect=[True, False]), \
              patch.object(run, "command", return_value=b"") as command, patch.object(run, "save") as save:
@@ -232,7 +232,7 @@ class BrowserBridgeTests(unittest.TestCase):
 
     def test_absent_unit_preflight_requires_exact_sentinel_and_successful_command(self):
         run = runner.GmailSdkRun(SimpleNamespace(source=Path("/synthetic/source")))
-        run.project = "serverware-gmail-sdk-private-11ea48cffa22"
+        run.project = "catchplate-gmail-sdk-private-11ea48cffa22"
         candidate = run.project + "-browser.service"
         pins = {runner.NODE: runner.NODE_SHA256, runner.CHROME: runner.CHROME_SHA256}
         with patch.object(Path, "is_file", return_value=True), patch.object(Path, "is_symlink", return_value=False), \
@@ -291,19 +291,19 @@ class BrowserBridgeTests(unittest.TestCase):
     def test_closed_copied_recipe_extracts_actual_assignments_and_no_secret(self):
         parsed = bridge.parse_copied_recipe(copied_recipe())
         self.assertEqual(parsed, {"access_rule_id": RULE, "token_expires_at_epoch_ms": APP_EXPIRY,
-            "environment": {"LANG": "C.UTF-8", "SERVERWARE_PROXY_URL": "https://serverware-gmail-proxy.example.com",
-                "SERVERWARE_APP_ID": APP, "SERVERWARE_CA_FILE": "/client-trust/inner-ca.pem",
-                "SERVERWARE_PROXY_CA_FILE": "/client-trust/outer-ca.pem"}})
+            "environment": {"LANG": "C.UTF-8", "CATCHPLATE_PROXY_URL": "https://catchplate-gmail-proxy.example.com",
+                "CATCHPLATE_APP_ID": APP, "CATCHPLATE_CA_FILE": "/client-trust/inner-ca.pem",
+                "CATCHPLATE_PROXY_CA_FILE": "/client-trust/outer-ca.pem"}})
         environment = bridge.copied_client_environment(copied_recipe(), application=APP_VALUE, rule=RULE_VALUE, token=APP_TOKEN)
-        self.assertEqual(environment, {**parsed["environment"], "SERVERWARE_PROXY_TOKEN": APP_TOKEN})
+        self.assertEqual(environment, {**parsed["environment"], "CATCHPLATE_PROXY_TOKEN": APP_TOKEN})
         self.assertNotIn(APP_TOKEN.encode(), copied_recipe())
         # Shell-looking path characters remain literal data; the joined fixture
         # then refuses paths other than its two pinned CA mounts.
         unusual = "/tmp/CA's $(no_command); $HOME.pem"
-        self.assertEqual(bridge.parse_copied_recipe(copied_recipe(inner=unusual))["environment"]["SERVERWARE_CA_FILE"], unusual)
+        self.assertEqual(bridge.parse_copied_recipe(copied_recipe(inner=unusual))["environment"]["CATCHPLATE_CA_FILE"], unusual)
         with self.assertRaises(CheckFailure):
             bridge.copied_client_environment(copied_recipe(inner=unusual), application=APP_VALUE, rule=RULE_VALUE, token=APP_TOKEN)
-        self.assertNotIn("SERVERWARE_PROXY_CA_FILE", bridge.parse_copied_recipe(copied_recipe(outer=""))["environment"])
+        self.assertNotIn("CATCHPLATE_PROXY_CA_FILE", bridge.parse_copied_recipe(copied_recipe(outer=""))["environment"])
 
     def test_copied_recipe_refuses_changed_commands_fields_and_saved_identity(self):
         original = copied_recipe()
@@ -311,15 +311,15 @@ class BrowserBridgeTests(unittest.TestCase):
                 original.replace(b"set +x", b"set -x"), original.replace(b"env -i", b"env"),
                 original.replace(b"exec ./gmail-example", b"exec ./other-client"),
                 original.replace(b"exec </dev/null", b"exec <&0"), original.replace(b"unset PWD OLDPWD SHLVL _", b"# skipped"),
-                original.replace(b"export SERVERWARE_CA_FILE=", b"export HOME="),
-                original.replace(b"export SERVERWARE_APP_ID=", b"export SERVERWARE_APP_ID=evil;"),
-                original.replace(b"export SERVERWARE_PROXY_TOKEN", b"export SERVERWARE_PROXY_TOKEN=wrong"),
+                original.replace(b"export CATCHPLATE_CA_FILE=", b"export HOME="),
+                original.replace(b"export CATCHPLATE_APP_ID=", b"export CATCHPLATE_APP_ID=evil;"),
+                original.replace(b"export CATCHPLATE_PROXY_TOKEN", b"export CATCHPLATE_PROXY_TOKEN=wrong"),
                 original.replace(str(APP_EXPIRY).encode(), b"9007199254740992")):
             with self.subTest(raw_hash=bridge.sha(raw)), self.assertRaises((CheckFailure, UnicodeError)):
                 bridge.parse_copied_recipe(raw)
         for raw, app, rule, token in ((copied_recipe(outer=""), APP_VALUE, RULE_VALUE, APP_TOKEN),
-                (original.replace(b"https://serverware-gmail-proxy.example.com", b"https://serverware-proxy.example.com"), APP_VALUE, RULE_VALUE, APP_TOKEN),
-                (original.replace(b"https://serverware-gmail-proxy.example.com", b"https://proxy.operator-basic.example.test:8443"), APP_VALUE, RULE_VALUE, APP_TOKEN),
+                (original.replace(b"https://catchplate-gmail-proxy.example.com", b"https://catchplate-proxy.example.com"), APP_VALUE, RULE_VALUE, APP_TOKEN),
+                (original.replace(b"https://catchplate-gmail-proxy.example.com", b"https://proxy.operator-basic.example.test:8443"), APP_VALUE, RULE_VALUE, APP_TOKEN),
                 (original.replace(APP.encode(), oracle.uid(22).encode()), APP_VALUE, RULE_VALUE, APP_TOKEN),
                 (original.replace(RULE.encode(), oracle.uid(23).encode()), APP_VALUE, RULE_VALUE, APP_TOKEN),
                 (original, {**APP_VALUE, "token_expires_at_epoch_ms": APP_EXPIRY + 1}, RULE_VALUE, APP_TOKEN),
@@ -348,18 +348,18 @@ class BrowserBridgeTests(unittest.TestCase):
                 passed, budget = run.call_args.args
                 expected = dict(environment)
                 if phase == "wrong_outer_ca":
-                    expected["SERVERWARE_CA_FILE"], expected["SERVERWARE_PROXY_CA_FILE"] = (
-                        environment["SERVERWARE_PROXY_CA_FILE"], environment["SERVERWARE_CA_FILE"])
+                    expected["CATCHPLATE_CA_FILE"], expected["CATCHPLATE_PROXY_CA_FILE"] = (
+                        environment["CATCHPLATE_PROXY_CA_FILE"], environment["CATCHPLATE_CA_FILE"])
                 elif phase == "wrong_inner_ca":
-                    expected["SERVERWARE_CA_FILE"] = environment["SERVERWARE_PROXY_CA_FILE"]
-                    expected["SERVERWARE_PROXY_CA_FILE"] = "/client-trust/combined-ca.pem"
-                elif phase == "wrong_app": expected.update(SERVERWARE_APP_ID=application, SERVERWARE_PROXY_TOKEN=token)
+                    expected["CATCHPLATE_CA_FILE"] = environment["CATCHPLATE_PROXY_CA_FILE"]
+                    expected["CATCHPLATE_PROXY_CA_FILE"] = "/client-trust/combined-ca.pem"
+                elif phase == "wrong_app": expected.update(CATCHPLATE_APP_ID=application, CATCHPLATE_PROXY_TOKEN=token)
                 self.assertEqual(passed, expected)
                 self.assertIsNot(passed, environment)
                 self.assertTrue(0 < budget <= 29)
             self.assertEqual(run.call_count, 6)
-        self.assertEqual(environment["SERVERWARE_APP_ID"], APP)
-        self.assertEqual(environment["SERVERWARE_CA_FILE"], "/client-trust/inner-ca.pem")
+        self.assertEqual(environment["CATCHPLATE_APP_ID"], APP)
+        self.assertEqual(environment["CATCHPLATE_CA_FILE"], "/client-trust/inner-ca.pem")
         self.assertEqual([row["phase"] for row in instance.completed], list(checker.PHASES))
 
     def test_missing_or_mismatched_handoff_never_falls_back_or_launches(self):

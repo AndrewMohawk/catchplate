@@ -24,7 +24,7 @@ fn verify_at(grant:&wire::ConstructedAdmission,assignment:&VerifiedAssignment,ch
     let p=&grant.payload;let a=assignment.payload();
     revalidate_verified_at_checkpoint(assignment,&checkpoint,trust,MAX_ENVELOPE_AGE_NANOS)?;
     verify_assignment_authority_key_material_at_checkpoint(assignment,&checkpoint,trust)?;
-    ensure(p.api_version=="serverware.nativeShadowConstructedDriverAdmission/v1" && p.purpose=="constructed-native-driver-admission"
+    ensure(p.api_version=="catchplate.nativeShadowConstructedDriverAdmission/v1" && p.purpose=="constructed-native-driver-admission"
         && p.assignment_id==a.assignment_id && &p.assignment_payload_sha256==assignment.payload_sha256()
         && p.assignment_revision==a.assignment_revision && p.trust_checkpoint_id==checkpoint.checkpoint_id
         && p.revocation_generation==checkpoint.revocation_generation && p.revocation_root_sha256==checkpoint.revocation_root_sha256)?;
@@ -40,7 +40,7 @@ fn verify_at(grant:&wire::ConstructedAdmission,assignment:&VerifiedAssignment,ch
     let early:wire::BootstrapAdmission=exact(grant.bootstrap_admission_original.as_bytes()).map_err(error)?;let e=&early.payload;
     key.verify_strict(&signature_preimage(wire::BOOTSTRAP_ADMISSION_DOMAIN,&canonical_json_bytes(e)?),
         &ed25519_dalek::Signature::from_bytes(&early.signature.decode()?)).map_err(|_|ShadowError::SignatureInvalid)?;
-    ensure(e.api_version=="serverware.nativeShadowBootstrapDriverAdmission/v1" && e.purpose=="native-driver-bootstrap-admission"
+    ensure(e.api_version=="catchplate.nativeShadowBootstrapDriverAdmission/v1" && e.purpose=="native-driver-bootstrap-admission"
         && e.signing_key_id==binding.key_id && e.signing_key_spki_sha256==binding.key_spki_sha256
         && e.configuration_sha256==p.configuration_sha256 && e.window_sha256==p.window_sha256
         && Sha256Digest::compute(e.bootstrap_observation_original.as_bytes())==p.bootstrap_observation_sha256
@@ -57,7 +57,7 @@ impl Owner {
         let public=self.public_admission_original(source).map_err(error)?;
         let (original,census,prepared,startup,lifetime,configuration,window,bootstrap)={
             let mut channel=self.channel.try_lock().map_err(error)?;
-            ensure(channel.configuration.api_version=="serverware.nativeShadowCustodyLifecycleReceiver/v3")?;
+            ensure(channel.configuration.api_version=="catchplate.nativeShadowCustodyLifecycleReceiver/v3")?;
             let startup=channel.startup;
             let census=channel.exchange("constructed-census",startup).map_err(error)?;
             let original=channel.exchange("constructed-admission",startup).map_err(error)?;
@@ -79,8 +79,8 @@ impl Owner {
             serde_json::from_value(value.get(name).ok_or(ShadowError::BindingDrift)?.clone()).map_err(error)};
         let p=&grant.payload;
         let early:wire::BootstrapAdmission=exact(grant.bootstrap_admission_original.as_bytes()).map_err(error)?;
-        ensure(admission.api_version=="serverware.nativeShadowDriverPublicAdmission/v1"
-            && observation.api_version=="serverware.nativeShadowDriverLifecycleObservation/v1"
+        ensure(admission.api_version=="catchplate.nativeShadowDriverPublicAdmission/v1"
+            && observation.api_version=="catchplate.nativeShadowDriverLifecycleObservation/v1"
             && observation.phase=="constructed-driver-subtree" && observation.parent==prepared.parent
             && observation.parent_executable_sha256==prepared.parent_executable_sha256
             && observation.pid_namespace_sha256==prepared.pid_namespace_sha256
@@ -110,7 +110,7 @@ impl Owner {
             && now().map_err(error)?<startup)?;
         let context=statement.get("nativeContext").ok_or(ShadowError::BindingDrift)?;
         let root=bootstrap_original.get("root").ok_or(ShadowError::BindingDrift)?;
-        ensure(context.get("apiVersion").and_then(serde_json::Value::as_str)==Some("serverware.nativeShadowKeyAdmissionContext/v1")
+        ensure(context.get("apiVersion").and_then(serde_json::Value::as_str)==Some("catchplate.nativeShadowKeyAdmissionContext/v1")
             && context.get("profile").and_then(serde_json::Value::as_str)==Some("same-process-native-originals-v1")
             && digest(context,"guestSha256")?==Sha256Digest::compute(&canonical_json_bytes(statement.get("guest").ok_or(ShadowError::BindingDrift)?)?)
             && digest(context,"executionClosureManifestSha256")?==digest(statement,"executionClosureManifestSha256")?
@@ -145,7 +145,7 @@ impl ConstructedDriver {
         self.owner.check(&self.source).map_err(error)?;
         let mut channel=self.owner.channel.try_lock().map_err(error)?;let deadline=channel.lifetime;
         let raw=channel.exchange("constructed-live",deadline).map_err(error)?;channel.failed=true;
-        ensure(raw==canonical_json_bytes(&serde_json::json!({"apiVersion":"serverware.nativeShadowConstructedDriverLive/v1",
+        ensure(raw==canonical_json_bytes(&serde_json::json!({"apiVersion":"catchplate.nativeShadowConstructedDriverLive/v1",
             "admissionSha256":Sha256Digest::compute(&self.original),"censusSha256":Sha256Digest::compute(&self.census)}))?)?;
         channel.failed=false;channel.live(deadline).map_err(error)
     }

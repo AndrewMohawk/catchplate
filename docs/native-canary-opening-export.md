@@ -24,7 +24,7 @@ endpoint, key provisioning path or outer startup version.
 ## Exact consumer join
 
 `custody` has an additional closed record marker
-`serverware.nativeCustodyOpening/v1` (ten fields). It occupies one indivisible
+`catchplate.nativeCustodyOpening/v1` (ten fields). It occupies one indivisible
 batch. The writer rechecks existing protected assignment, load, observing member
 and committed generation publication, the original dedicated custody signature,
 the full assignment key-independence commitments and exact publication custody

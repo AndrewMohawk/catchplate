@@ -13,7 +13,7 @@ const ROOT = resolve(__dirname, '..');
 const SECRET = 'synthetic_quick_add_key_NEVER_RENDER';
 const OTHER_SECRET = 'synthetic_abandoned_key_NEVER_RENDER';
 const CAPABILITIES = JSON.parse(execFileSync('python3', ['-B', '-c',
-  'import json; from serverware import operator_common_apps as a, operator_catalog_github as g, operator_github_app as ga, operator_catalog_npm as n, operator_demo as d; origins=sorted({op["origin"] for p in a.presets() for op in p["operations"]}|{g.ORIGIN,n.ORIGIN}); d.settings=lambda:{"allowed_upstreams":origins}; print(json.dumps({"origins":origins,"common_apps":a.capability(),"github":g.capability(),"github_app":ga.capability(),"npm":n.capability()}))'],
+  'import json; from catchplate import operator_common_apps as a, operator_catalog_github as g, operator_github_app as ga, operator_catalog_npm as n, operator_demo as d; origins=sorted({op["origin"] for p in a.presets() for op in p["operations"]}|{g.ORIGIN,n.ORIGIN}); d.settings=lambda:{"allowed_upstreams":origins}; print(json.dumps({"origins":origins,"common_apps":a.capability(),"github":g.capability(),"github_app":ga.capability(),"npm":n.capability()}))'],
 {cwd: ROOT, encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024}));
 const SELECTORS = {
   openai: '[data-credential-app="openai"]', anthropic: '[data-credential-app="anthropic"]',
@@ -58,7 +58,7 @@ async function synthetic(browser, options, exercise) {
     await page.clock.resume(); // Exercise real focus/layout scheduling, not the base fixture's frozen rAF.
     await page.locator('#credential-provider-picker').waitFor({state: 'visible'});
     assert.equal(new URL(page.url()).origin, 'https://operator-catalog.example.test');
-    assert.match(await page.title(), /Credentials.*Serverware/i);
+    assert.match(await page.title(), /Credentials.*Catchplate/i);
     await exercise(page, state, controls);
     assert.equal(state.applications.length, 0); assert.equal(state.rules.length, 0);
     assert(state.posts.every(item => item.name.startsWith('credentials')), 'no client or permission writes');
@@ -180,7 +180,7 @@ function cases(artifacts) {
 }
 
 async function run(browser) {
-  const artifacts = await mkdtemp('/tmp/serverware-credential-quick-add-');
+  const artifacts = await mkdtemp('/tmp/catchplate-credential-quick-add-');
   const completed = [];
   for (const [name, test] of cases(artifacts)) { await test(browser); completed.push(name); }
   return {ok: true, groups: completed.length, completed, artifacts,

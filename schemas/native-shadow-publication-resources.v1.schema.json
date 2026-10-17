@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-publication-resources.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-publication-resources.v1.schema.json",
   "title": "Explicit trusted-host-local publication resources",
   "$ref": "#/$defs/configuration",
   "$defs": {
@@ -11,7 +11,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","profile","descriptorFd","descriptorSha256","checkpointFd","checkpointSha256","signingKeyFd","journalFd"],
       "properties": {
-        "apiVersion":{"const":"serverware.nativeShadowPublicationResources/v1"},
+        "apiVersion":{"const":"catchplate.nativeShadowPublicationResources/v1"},
         "profile":{"const":"trusted-host-local"},
         "descriptorFd":{"$ref":"#/$defs/fd"},
         "descriptorSha256":{"$ref":"#/$defs/sha256"},
@@ -26,12 +26,12 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","profile","namespaceSha256","publicationSigningKeyId","publicationSigningKeySpkiSha256","journalFormat","journalLimitBytes"],
       "properties": {
-        "apiVersion":{"const":"serverware.privateGenerationPublicationStore/v1"},
+        "apiVersion":{"const":"catchplate.privateGenerationPublicationStore/v1"},
         "profile":{"const":"trusted-host-local"},
         "namespaceSha256":{"$ref":"#/$defs/sha256"},
         "publicationSigningKeyId":{"$ref":"#/$defs/sha256"},
         "publicationSigningKeySpkiSha256":{"$ref":"#/$defs/sha256"},
-        "journalFormat":{"const":"serverware.privateGenerationPublicationJournal/v1"},
+        "journalFormat":{"const":"catchplate.privateGenerationPublicationJournal/v1"},
         "journalLimitBytes":{"type":"integer","minimum":1,"maximum":67108864}
       },
       "$comment":"Exact canonical original digest equals the independently admitted publicationReplayStoreSha256. It identifies this local profile, not the changing journal contents or a self-authorizing checkpoint."
@@ -40,7 +40,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","descriptorSha256","device","inode","sequence","headSha256","byteCount"],
       "properties": {
-        "apiVersion":{"const":"serverware.privateGenerationPublicationCheckpoint/v1"},
+        "apiVersion":{"const":"catchplate.privateGenerationPublicationCheckpoint/v1"},
         "descriptorSha256":{"$ref":"#/$defs/sha256"},
         "device":{"$ref":"#/$defs/uint64"},
         "inode":{"type":"integer","minimum":1,"maximum":18446744073709551615},

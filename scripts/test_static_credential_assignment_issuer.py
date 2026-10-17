@@ -20,9 +20,9 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519, utils
 from cryptography.x509.oid import NameOID
-from serverware import authority_static_credential_assignment_issuer as issuer
-from serverware import authority_static_credential_assignment as assignment
-from serverware import authority_static_credential_provenance as provenance
+from catchplate import authority_static_credential_assignment_issuer as issuer
+from catchplate import authority_static_credential_assignment as assignment
+from catchplate import authority_static_credential_provenance as provenance
 from test_static_credential_portal_selector import fixture as selection_fixture, originals
 
 C, H = issuer.canonical, issuer.sha256
@@ -73,9 +73,9 @@ def fixture(purpose="creation"):
     scope = {"releaseRecordSha256": target["releaseRecordSha256"], "policyHash": target["policyHash"],
         "configurationSha256": H(b"synthetic full N original"), "caCertificateSha256": H(ca_raw),
         "caPublicKeySpkiSha256": H(issuer._spki(ca.public_key()))}
-    binding = hashlib.sha256(b"serverware/native-proof-custody-boot/v1\0" + boot
+    binding = hashlib.sha256(b"catchplate/native-proof-custody-boot/v1\0" + boot
         + bytes.fromhex(key_id[7:]) + bytes.fromhex(target["controlPlaneResponseSigningKeyId"][7:])).digest()
-    user_data = b"serverware/enclave-runtime-key-binding/v1\0\x04" + b"".join(
+    user_data = b"catchplate/enclave-runtime-key-binding/v1\0\x04" + b"".join(
         bytes.fromhex(scope[name][7:]) for name in issuer.SCOPE_FIELDS) + hashlib.sha256(raw_key).digest() + binding
     protected = cbor2.dumps({1: -35}, canonical=True)
     payload = cbor2.dumps({"module_id": "synthetic-module", "timestamp": now//1_000_000, "digest": "SHA384",
@@ -91,10 +91,10 @@ def fixture(purpose="creation"):
         "bootId": B(boot), "keyId": key_id,
         "publicKeyPem": native_key.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode(),
         "controlPlaneResponseSigningKeyId": target["controlPlaneResponseSigningKeyId"], "scope": scope,
-        "caCertificateDerBase64url": B(ca_raw), "nativeKeyEvidence": {"apiVersion": "serverware.nativeResponseProofKeyEvidence/v1",
+        "caCertificateDerBase64url": B(ca_raw), "nativeKeyEvidence": {"apiVersion": "catchplate.nativeResponseProofKeyEvidence/v1",
             "responseProofPublicKey": B(raw_key), "attestationDocumentB64": B(quote)},
         "quoteNonceBase64url": B(nonce), "quoteUserDataBase64url": B(user_data)}
-    launch = {"apiVersion": "serverware.nativeStartupLaunch/v1", "releaseRecordSha256": scope["releaseRecordSha256"],
+    launch = {"apiVersion": "catchplate.nativeStartupLaunch/v1", "releaseRecordSha256": scope["releaseRecordSha256"],
         "configurationSha256": scope["configurationSha256"], "deadlineBoottimeNs": 1,
         "caNotBeforeUnixSeconds": issuer._epoch_ns(issuer.nitro.certificate_time(ca,"not_valid_before"))//10**9,
         "caNotAfterUnixSeconds": issuer._epoch_ns(issuer.nitro.certificate_time(ca,"not_valid_after"))//10**9,

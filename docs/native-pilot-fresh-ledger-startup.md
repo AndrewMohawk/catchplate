@@ -7,11 +7,11 @@ both public inputs and the independently signed native service grant.
 
 ## Public manifest and directory
 
-`serverware.nativeShadowRetrievalStoreManifest/v2` has exactly four fields:
+`catchplate.nativeShadowRetrievalStoreManifest/v2` has exactly four fields:
 
 | Field | Required value |
 | --- | --- |
-| `apiVersion` | `serverware.nativeShadowRetrievalStoreManifest/v2` |
+| `apiVersion` | `catchplate.nativeShadowRetrievalStoreManifest/v2` |
 | `proofScopeOriginalBase64url` | Canonical unpadded base64url of the exact production proof scope/v2 original |
 | `initialization` | `fresh-ledger` |
 | `objectOriginalsBase64url` | Exactly `[]` |
@@ -31,7 +31,7 @@ measurements. It does not create a ledger genesis or start a service. Failure
 preserves partial state; no repair, adoption or automatic retry is provided.
 An external watchdog is still required for filesystem stalls.
 
-Its `serverware.nativeShadowRetrievalStoreInstalled/v2` observation contains the
+Its `catchplate.nativeShadowRetrievalStoreInstalled/v2` observation contains the
 same fields as Installed/v1 plus `initialization: "fresh-ledger"`; `objects` is
 exactly empty, `releaseAuthority` and `serviceReady` remain false. Directory
 device, inode and mode describe the actual retained directory, not a hypothetical
@@ -41,9 +41,9 @@ covers both closed v2 forms.
 
 ## Native service admission and first real receipt
 
-`serverware.nativeLedgerSpoolRetrievalGrant/v4` retains the existing v3 payload
+`catchplate.nativeLedgerSpoolRetrievalGrant/v4` retains the existing v3 payload
 fields and adds only `initialization: "fresh-ledger"`, using signature domain
-`serverware.nativeLedgerSpoolRetrievalGrant.signature/v4`. It requires strict
+`catchplate.nativeLedgerSpoolRetrievalGrant.signature/v4`. It requires strict
 production proof scope/v2 and actual ledger admission at sequence zero with
 `headSha256 == genesisSha256`. The native owner reads the genuine genesis and
 checks its guest, scope and hash; an empty manifest is not a substitute for it.
@@ -63,7 +63,7 @@ fails: there is no immutable-object fallback, successful absence response, or
 conversion of genesis into an operational receipt.
 
 The explicit retrieval producer input
-`serverware.nativePilotNativeServiceAuthorityInput/v2` requires
+`catchplate.nativePilotNativeServiceAuthorityInput/v2` requires
 `retrievalManifestOriginal`, joining this exact manifest and scope to the fresh
 grant request. This is a complete independently approved input, not permission
 inferred from an empty directory or a new observation.

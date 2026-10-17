@@ -121,7 +121,7 @@ pub(crate) fn verify(configuration: &Configuration, evidence: &NativeCaptureEnve
         && statement.control_plane_response_signing_key_id == assignment.control_plane_response_signing_key_id
         && statement.original.binding.transaction.policy_sha256 == assignment.policy_hash,
         "native dispatch signer is outside its independent assignment")?;
-    ensure(evidence.native_key_evidence.api_version == "serverware.nativeResponseProofKeyEvidence/v1",
+    ensure(evidence.native_key_evidence.api_version == "catchplate.nativeResponseProofKeyEvidence/v1",
         "native dispatch key-evidence family differs")?;
     let key: [u8; 32] = fixed(&evidence.native_key_evidence.response_proof_public_key)?;
     ensure(key != [0; 32], "native dispatch key is zero")?;
@@ -134,11 +134,11 @@ pub(crate) fn verify(configuration: &Configuration, evidence: &NativeCaptureEnve
         .verify(&preimage(statement)?, &Signature::from_bytes(&signature))
         .map_err(|_| "native dispatch signature failed")?;
     let mut boot = Sha256::new();
-    boot.update(b"serverware/native-proof-custody-boot/v1\0");
+    boot.update(b"catchplate/native-proof-custody-boot/v1\0");
     boot.update(fixed::<32>(&assignment.boot_id)?);
     boot.update(digest_bytes(&assignment.key_id)?);
     boot.update(digest_bytes(&assignment.control_plane_response_signing_key_id)?);
-    let mut user_data = b"serverware/enclave-runtime-key-binding/v1\0\x04".to_vec();
+    let mut user_data = b"catchplate/enclave-runtime-key-binding/v1\0\x04".to_vec();
     for value in [&assignment.release_record_sha256, &assignment.policy_hash, &assignment.configuration_sha256,
         &assignment.ca_certificate_sha256, &assignment.ca_public_key_spki_sha256, &assignment.expected_binary_digest] {
         user_data.extend(digest_bytes(value)?);

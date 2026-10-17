@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/control-plane-custody-startup.v3.schema.json",
+  "$id": "https://catchplate.dev/schemas/control-plane-custody-startup.v3.schema.json",
   "title": "Root-authorized finalized-genesis maintenance startup",
   "description": "Original canonical ASCII JSON <=16KiB in the existing root-owned sealed custody configuration FD. A distinct signature domain covers all fields except signature. Only the actual admitted runtime-root key/configuration may verify it. This allows the restricted maintenance entrypoint, never publication, activation, effect retry or normal runtime. The original maintenance validity is <=15 minutes, further narrowed by the original custody receipt; actual effects retain fresh independent <=30-second owners and purpose-bound approval.",
   "type": "object", "additionalProperties": false,
   "required": ["schema", "sourceRevision", "configurationDigest", "directoryFd", "device", "inode", "uid", "gid", "quotaBytes", "maximumRecords", "policyFileGenesisMaintenance", "signature"],
   "properties": {
-    "schema": {"const": "serverware.controlPlaneCustodyStartup/v3"},
+    "schema": {"const": "catchplate.controlPlaneCustodyStartup/v3"},
     "sourceRevision": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$"},
     "configurationDigest": {"$ref": "#/$defs/digest"},
     "directoryFd": {"type": "integer", "minimum": 32, "maximum": 1023},

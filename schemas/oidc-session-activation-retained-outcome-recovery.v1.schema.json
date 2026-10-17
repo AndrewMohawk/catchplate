@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/oidc-session-activation-retained-outcome-recovery.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/oidc-session-activation-retained-outcome-recovery.v1.schema.json",
   "title": "Current-authority recovery of an unchanged retained RI outcome",
   "description": "Three closed signed profiles and one explicit cold acquisition object. Data shape is not signature, current authority, custody, checkpoint-one storage, token possession or recovery permission. The paired owners require canonical no-LF originals, exact source revision, independently selected roots and scopes, original-byte equality, aggregate work bounds and nonrenewing lifetime checks. Legacy current-only profiles are not admitted by this bundle. No signed outcome or outcome-root field is invented.",
   "oneOf": [
@@ -50,7 +50,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "purpose", "trustMode", "proofEnrollmentDigest", "intentEnrollmentDigest", "proofScope", "callerId", "expectedRelease", "expectedEvidence", "expectedOutcomeDigest", "clientId", "clientIdentity", "endpoint", "releaseLaunch", "issuedAtEpochNs", "expiresAtEpochNs", "currentReleaseCustodyDigest"],
       "properties": {
-        "schema": {"const": "serverware.oidcSessionActivationReleaseRecoveryIssuerPolicy/v2"},
+        "schema": {"const": "catchplate.oidcSessionActivationReleaseRecoveryIssuerPolicy/v2"},
         "sourceRevision": {"$ref": "#/$defs/sourceRevision"},
         "purpose": {"const": "issue-oidc-session-activation-release-recovery-grants"},
         "trustMode": {"const": "trusted-host-local"},
@@ -92,7 +92,7 @@
         "releaseCustodyDigest": {"$ref": "#/$defs/digest"}, "deliveryKeyDigest": {"$ref": "#/$defs/digest"},
         "deliveryId": {"$ref": "#/$defs/deliveryId"}, "outcomeDigest": {"$ref": "#/$defs/digest"},
         "directory": {"$ref": "#/$defs/directory"}, "currentReleaseCustodyDigest": {"$ref": "#/$defs/digest"},
-        "schema": {"const": "serverware.oidcSessionActivationReleaseRecoveryAuthorization/v2"},
+        "schema": {"const": "catchplate.oidcSessionActivationReleaseRecoveryAuthorization/v2"},
         "sourceRevision": {"$ref": "#/$defs/sourceRevision"},
         "purpose": {"const": "recover-oidc-session-activation-release"},
         "serviceUid": {"const": 65502}, "serviceGid": {"const": 65502},
@@ -122,7 +122,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "purpose", "role", "profile", "configurationDigest", "databaseId", "generationDigest", "runtimeClosureDigest", "receiverIdentity", "callerId", "producerId", "producerIdentity", "stateReceiptDigest", "expectedRelease", "releaseCustodyDigest", "evidenceCustodyDigest", "deliveryKeyDigest", "storageScope", "recoveryScope", "releaseCustody", "storageAuthorization", "recoveryAuthorization", "issuedAtEpochNs", "expiresAtEpochNs", "trustMode", "launch", "hardwareBacked", "nativeStageZero", "hsmBackedKeys", "teeVerified", "externalWitnessVerified"],
       "properties": {
-        "schema": {"const": "serverware.oidcSessionActivationReleaseBootstrap/v3"}, "sourceRevision": {"$ref": "#/$defs/sourceRevision"},
+        "schema": {"const": "catchplate.oidcSessionActivationReleaseBootstrap/v3"}, "sourceRevision": {"$ref": "#/$defs/sourceRevision"},
         "purpose": {"const": "launch-oidc-session-activation-token-release"}, "role": {"const": "oidc-session-activation-token-release"},
         "profile": {"const": "recovery"}, "configurationDigest": {"$ref": "#/$defs/digest"},
         "databaseId": {"$ref": "#/$defs/token"}, "generationDigest": {"$ref": "#/$defs/digest"}, "runtimeClosureDigest": {"$ref": "#/$defs/digest"},
@@ -159,11 +159,11 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "endpoint", "issuerPolicy", "releaseCustody", "proofEnrollment", "intentEnrollment"],
       "properties": {
-        "schema": {"const": "serverware.controlPlaneOidcSessionActivationReleaseRecoveryGrantAcquisition/v2"},
+        "schema": {"const": "catchplate.controlPlaneOidcSessionActivationReleaseRecoveryGrantAcquisition/v2"},
         "endpoint": {
           "type": "object", "additionalProperties": false, "required": ["path", "timeoutSeconds", "peerUid", "peerGid"],
           "properties": {
-            "path": {"const": "/run/serverware/oidc-session-activation-token-release/recovery-grants.sock"},
+            "path": {"const": "/run/catchplate/oidc-session-activation-token-release/recovery-grants.sock"},
             "timeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 30},
             "peerUid": {"const": 0}, "peerGid": {"const": 0}
           }
@@ -178,21 +178,21 @@
     "recoveryIssuerPolicyEnvelopeV2": {
       "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
       "properties": {
-        "schema": {"const": "serverware.signedOidcSessionActivationReleaseRecoveryIssuerPolicy/v2"},
+        "schema": {"const": "catchplate.signedOidcSessionActivationReleaseRecoveryIssuerPolicy/v2"},
         "payload": {"$ref": "#/$defs/recoveryIssuerPolicyV2"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}
       }
     },
     "recoveryAuthorizationEnvelopeV2": {
       "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
       "properties": {
-        "schema": {"const": "serverware.signedOidcSessionActivationReleaseRecoveryAuthorization/v2"},
+        "schema": {"const": "catchplate.signedOidcSessionActivationReleaseRecoveryAuthorization/v2"},
         "payload": {"$ref": "#/$defs/recoveryAuthorizationV2"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}
       }
     },
     "recoveryReleaseEnvelopeV3": {
       "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
       "properties": {
-        "schema": {"const": "serverware.signedOidcSessionActivationReleaseBootstrap/v3"},
+        "schema": {"const": "catchplate.signedOidcSessionActivationReleaseBootstrap/v3"},
         "payload": {"$ref": "#/$defs/recoveryReleaseV3"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}
       }
     }

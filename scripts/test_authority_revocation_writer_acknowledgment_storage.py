@@ -18,10 +18,10 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_writer_acknowledgment as acknowledgment
-from serverware.authority_store import planner_connection as admission
-from serverware.authority_store import revocation_writer_acknowledgment as ack_store
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_writer_acknowledgment as acknowledgment
+from catchplate.authority_store import planner_connection as admission
+from catchplate.authority_store import revocation_writer_acknowledgment as ack_store
 import test_authority_revocation_plan as oracle
 import test_authority_revocation_persistence as persistence_oracle
 import test_authority_revocation_reservation as reservation_oracle
@@ -30,9 +30,9 @@ import test_authority_revocation_writer_composition as composition_oracle
 import test_authority_revocation_writer_request as request_oracle
 
 
-SCHEMA = "serverware.policyAuthorityRevocationWriterAcknowledgment/v1"
-ID_DOMAIN = "serverware.policyAuthorityRevocationWriterAcknowledgmentIdentity/v1"
-TABLE = "serverware_metadata.policy_authority_revocation_writer_acknowledgments"
+SCHEMA = "catchplate.policyAuthorityRevocationWriterAcknowledgment/v1"
+ID_DOMAIN = "catchplate.policyAuthorityRevocationWriterAcknowledgmentIdentity/v1"
+TABLE = "catchplate_metadata.policy_authority_revocation_writer_acknowledgments"
 FIELDS = ("ack_envelope_id", "intent_envelope_id", "configuration_digest", "generation_sequence",
     "generation_digest", "writer_response_spki_digest", "exact_ack_base64url",
     "exact_ack_bytes_digest", "exact_ack_byte_count", "source_revision")

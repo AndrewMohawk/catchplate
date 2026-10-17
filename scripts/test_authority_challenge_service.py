@@ -14,8 +14,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_service as source
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_challenge_service as source
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 from test_authority_challenge_manifest import context
 from test_authority_challenge_plan_request import fixture
 
@@ -120,7 +120,7 @@ class ChallengeServiceControls(unittest.TestCase):
 
     def test_real_service_methods_forward_only_exact_original_inputs(self):
         root = Path(__file__).resolve().parents[1]
-        tree = ast.parse((root / "serverware/authority_service.py").read_text())
+        tree = ast.parse((root / "catchplate/authority_service.py").read_text())
         owner = next(node for node in tree.body if isinstance(node, ast.ClassDef)
             and node.name == "AuthorityProcess")
         expected = {"_produce_challenge_maintenance": "challenges._produce_on_work",

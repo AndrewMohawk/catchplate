@@ -1,0 +1,159 @@
+worker_processes 1;
+pid /tmp/nginx.pid;
+error_log /dev/null;
+events { worker_connections 128; }
+
+# Traefik keeps the existing outer TLS endpoint. This is an opaque TCP relay:
+# no HTTP parsing, admin-header injection, TLS termination or PROXY protocol.
+# Only the actual Traefik socket peer may reach the fixed internal gate.
+stream {
+    access_log off;
+    error_log /dev/null;
+    server {
+        listen 9090;
+        allow ${TRAEFIK_IPV4}/32;
+        deny all;
+        proxy_pass 172.16.249.20:9090;
+        proxy_connect_timeout 3s;
+        # Keep nginx's default idle ceiling; the gate enforces its own request
+        # budgets (120s body/write by default, configurable up to 600s).
+        proxy_timeout 10m;
+        proxy_half_close on;
+        proxy_next_upstream off;
+        proxy_protocol off;
+        proxy_ssl off;
+    }
+}
+
+http {
+    access_log off;
+    server_tokens off;
+    client_max_body_size 2m;
+    client_body_timeout 15s;
+    client_body_temp_path /tmp/client-body;
+    proxy_temp_path /tmp/proxy;
+    fastcgi_temp_path /tmp/fastcgi;
+    uwsgi_temp_path /tmp/uwsgi;
+    scgi_temp_path /tmp/scgi;
+    send_timeout 30s;
+    keepalive_timeout 10s;
+    resolver 127.0.0.11 ipv6=off valid=10s;
+
+    # Actual socket peer only. Forwarded headers cannot establish identity.
+    geo $traefik_peer {
+        default 0;
+        ${TRAEFIK_IPV4}/32 1;
+    }
+    map $http_remote_user $sandbox_operator {
+        default 0;
+        ~^operator$ 1;
+    }
+    # Injected admin-header auth bypasses the app's cookie CSRF check. Preserve
+    # the browser boundary here: unsafe requests require the exact Origin.
+    map $http_origin $foreign_origin {
+        default 1;
+        "" 0;
+        "https://catchplate.example.com" 0;
+    }
+    map "$request_method:$http_origin" $unsafe_origin {
+        default 1;
+        ~^(GET|HEAD|OPTIONS): 0;
+        ~^[A-Z]+:https://catchplate\.example\.com$ 0;
+    }
+
+    proxy_http_version 1.1;
+    proxy_set_header Host catchplate.example.com;
+    proxy_set_header Connection "";
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Host catchplate.example.com;
+    proxy_set_header X-Forwarded-Port 443;
+    proxy_set_header Forwarded "";
+    proxy_set_header Authorization "";
+    proxy_set_header X-Catchplate-Admin-Token "";
+    proxy_set_header X-Catchplate-Bootstrap-Token "";
+    proxy_pass_request_headers on;
+    proxy_request_buffering on;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_next_upstream off;
+    proxy_connect_timeout 3s;
+    proxy_send_timeout 30s;
+    proxy_read_timeout 60s;
+
+    server {
+        listen 8080 default_server;
+        server_name _;
+        return 403;
+    }
+
+    server {
+        listen 8080;
+        server_name catchplate.example.com;
+        if ($traefik_peer = 0) { return 403; }
+        if ($sandbox_operator = 0) { return 403; }
+        if ($foreign_origin = 1) { return 403; }
+        if ($unsafe_origin = 1) { return 403; }
+        set $sandbox_backend http://catchplate:3000;
+        location / {
+            # nginx proxy_set_header inheritance is all-or-nothing. Repeat the
+            # scrubbed forwarding headers alongside the private token include.
+            proxy_set_header Host catchplate.example.com;
+            proxy_set_header Connection "";
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-For $remote_addr;
+            proxy_set_header X-Forwarded-Host catchplate.example.com;
+            proxy_set_header X-Forwarded-Port 443;
+            proxy_set_header Forwarded "";
+            proxy_set_header Authorization "";
+            proxy_set_header X-Catchplate-Bootstrap-Token "";
+            include /run/secrets/catchplate-edge/admin-header.conf;
+            proxy_pass $sandbox_backend;
+        }
+    }
+
+    server {
+        listen 8080;
+        server_name catchplate.lab.example.com catchplate-demo.lab.example.com;
+        if ($traefik_peer = 0) { return 403; }
+        set $sandbox_backend http://catchplate:3000;
+        location = /healthz {
+            limit_except GET { deny all; }
+            # Native development-backend health, no injected admin credential.
+            proxy_pass $sandbox_backend;
+        }
+        location / {
+            # Lab navigation never carries callback/query material across origins.
+            if ($request_method !~ ^(GET|HEAD)$) { return 405; }
+            if ($args != "") { return 400; }
+            return 302 https://catchplate.example.com/;
+        }
+    }
+
+    # Old public hostname is navigation compatibility, never an API alias.
+    # The same Traefik/Authelia/peer/user boundary applies before any redirect.
+    server {
+        listen 8080;
+        server_name catchplate-demo.example.com;
+        if ($traefik_peer = 0) { return 403; }
+        if ($sandbox_operator = 0) { return 403; }
+        if ($foreign_origin = 1) { return 403; }
+        if ($request_method !~ ^(GET|HEAD)$) { return 405; }
+        if ($args != "") { return 400; }
+        add_header Cache-Control no-store always;
+        add_header Referrer-Policy no-referrer always;
+        location ^~ /api/ { return 410; }
+        location / { return 302 https://catchplate.example.com/; }
+    }
+
+    # Container liveness, deliberately not backend/native-pilot readiness.
+    server {
+        listen 127.0.0.1:8081;
+        server_name localhost;
+        location = /edge-healthz {
+            default_type text/plain;
+            return 200 "sandbox edge alive; application readiness not asserted\n";
+        }
+        location / { return 404; }
+    }
+}

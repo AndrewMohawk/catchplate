@@ -54,7 +54,7 @@ def signed_document(
 
 
 def main() -> None:
-    configured_data_dir = os.environ.get("SERVERWARE_DATA_DIR")
+    configured_data_dir = os.environ.get("CATCHPLATE_DATA_DIR")
     temp_parent = (
         configured_data_dir
         if configured_data_dir
@@ -62,33 +62,33 @@ def main() -> None:
         and os.access(configured_data_dir, os.W_OK)
         else None
     )
-    with tempfile.TemporaryDirectory(prefix="serverware-agent-enrollment-", dir=temp_parent) as tmp:
+    with tempfile.TemporaryDirectory(prefix="catchplate-agent-enrollment-", dir=temp_parent) as tmp:
         for name in tuple(os.environ):
-            if name.startswith("SERVERWARE_"):
+            if name.startswith("CATCHPLATE_"):
                 os.environ.pop(name)
-        os.environ["SERVERWARE_DATA_DIR"] = tmp
-        os.environ["SERVERWARE_POLICY_BUNDLE"] = str(Path(tmp) / "policy-bundle.json")
-        os.environ["SERVERWARE_POLICY_SIGNING_KEY"] = str(Path(tmp) / "policy-signing-ed25519.pem")
-        os.environ["SERVERWARE_POLICY_SIGNING_PUBLIC_KEY"] = str(Path(tmp) / "policy-signing-ed25519.pub.pem")
-        os.environ["SERVERWARE_TEE_QUOTE_PROVIDER"] = "dev-signed-quote"
+        os.environ["CATCHPLATE_DATA_DIR"] = tmp
+        os.environ["CATCHPLATE_POLICY_BUNDLE"] = str(Path(tmp) / "policy-bundle.json")
+        os.environ["CATCHPLATE_POLICY_SIGNING_KEY"] = str(Path(tmp) / "policy-signing-ed25519.pem")
+        os.environ["CATCHPLATE_POLICY_SIGNING_PUBLIC_KEY"] = str(Path(tmp) / "policy-signing-ed25519.pub.pem")
+        os.environ["CATCHPLATE_TEE_QUOTE_PROVIDER"] = "dev-signed-quote"
 
-        from serverware.attestation import sign_quote
-        from serverware.enrollment import (
+        from catchplate.attestation import sign_quote
+        from catchplate.enrollment import (
             AgentEnrollmentError,
             build_agent_enrollment,
             canonical_control_plane_url,
             render_agent_handoff_instructions,
             _safe_allow_canaries,
         )
-        from serverware.policy_bundle import compile_policy_bundle, demo_policy_bundle, sign_policy_bundle
-        from serverware.response_identity import response_public_key_info, sign_statement
-        from serverware_agent_trust import (
+        from catchplate.policy_bundle import compile_policy_bundle, demo_policy_bundle, sign_policy_bundle
+        from catchplate.response_identity import response_public_key_info, sign_statement
+        from catchplate_agent_trust import (
             DISTRIBUTION_NAME,
             ENROLLMENT_CLI_COMMAND,
             ENROLLMENT_TOOLING_API_VERSION,
             __version__ as ENROLLMENT_CLI_VERSION,
         )
-        from serverware_agent_trust.receipts import (
+        from catchplate_agent_trust.receipts import (
             EGRESS_EVIDENCE_API_VERSION,
             Ed25519TrustRoot,
             EnrollmentReceiptExpected,
@@ -99,8 +99,8 @@ def main() -> None:
             verify_agent_egress_evidence,
             verify_enrollment_verifier_receipt,
         )
-        from serverware_agent_trust.attestation import enrollment_install_session, verify_quote
-        from serverware_agent_trust.http import (
+        from catchplate_agent_trust.attestation import enrollment_install_session, verify_quote
+        from catchplate_agent_trust.http import (
             HttpClientError,
             request_bytes as clean_room_request_bytes,
         )
@@ -116,7 +116,7 @@ def main() -> None:
 
         signed = sign_policy_bundle(demo_policy_bundle("cred-demo-bearer"))
         snapshot = compile_policy_bundle(signed, verify_signature=True, validate_schema=False)
-        runtime_manifest = {"binary": "serverware-test", "mode": "agent-enrollment"}
+        runtime_manifest = {"binary": "catchplate-test", "mode": "agent-enrollment"}
         runtime_manifest_digest = "sha256:" + hashlib.sha256(
             repr(sorted(runtime_manifest.items())).encode("utf-8")
         ).hexdigest()
@@ -139,14 +139,14 @@ def main() -> None:
             principal_id="agent:demo-proxy-token",
             attestation=attestation,
             proxy_url="http://10.42.0.10:8080",
-            control_plane_url="https://serverware.example",
+            control_plane_url="https://catchplate.example",
             proxy_egress_cidrs=["10.42.0.10/32"],
             namespace="agents",
             pod_selector={"app": "release-bot"},
             nonce=NONCE,
         )
 
-        assert packet["apiVersion"] == "serverware.agentEnrollment/v1", packet
+        assert packet["apiVersion"] == "catchplate.agentEnrollment/v1", packet
         assert packet["tooling"] == {
             "apiVersion": ENROLLMENT_TOOLING_API_VERSION,
             "command": ENROLLMENT_CLI_COMMAND,
@@ -161,7 +161,7 @@ def main() -> None:
         assert packet["pinning"]["policyHash"] == snapshot.hash, packet
         assert packet["pinning"]["runtimeManifestDigest"] == attestation["runtime_manifest_digest"], packet
         assert packet["pinning"]["responseSigningKeyId"] == attestation["response_signing_key_id"], packet
-        assert packet["identity"]["requiredHeaders"] == {"X-Serverware-Agent": "demo-token-agent"}, packet
+        assert packet["identity"]["requiredHeaders"] == {"X-Catchplate-Agent": "demo-token-agent"}, packet
         proxy_auth = packet["identity"]["proxyAuthorization"]
         assert proxy_auth["tokenId"] == "demo-sidecar-token", proxy_auth
         serialized = canonical_json(packet)
@@ -170,7 +170,7 @@ def main() -> None:
         assert "cred-demo-bearer" in serialized, packet
         assert packet["environment"]["HTTPS_PROXY"] == "http://10.42.0.10:8080", packet
         assert packet["ca"]["installMethod"] == "verifier-mediated-attestation", packet
-        assert packet["serverware"]["proxyHostMappings"] == [], packet
+        assert packet["catchplate"]["proxyHostMappings"] == [], packet
         route_by_id = {route.id: route for route in snapshot.routes}
         assert packet["allowedRoutes"], packet
         for allowed_route in packet["allowedRoutes"]:
@@ -181,8 +181,8 @@ def main() -> None:
             assert all(url.startswith(f"{compiled_route.scheme}://{compiled_route.host}:") for url in allowed_route["urls"]), allowed_route
             assert all(url.endswith(path) for url, path in zip(allowed_route["urls"], allowed_route["paths"], strict=True)), allowed_route
         handoff = packet["agentHandoff"]
-        assert handoff["caInstall"]["destinationPath"] == "/etc/serverware/serverware-ca.pem", handoff
-        assert handoff["caInstall"]["command"].endswith("/etc/serverware/serverware-ca.pem"), handoff
+        assert handoff["caInstall"]["destinationPath"] == "/etc/catchplate/catchplate-ca.pem", handoff
+        assert handoff["caInstall"]["command"].endswith("/etc/catchplate/catchplate-ca.pem"), handoff
         assert handoff["requiredProxyHeaders"] == packet["identity"]["requiredHeaders"], handoff
         assert handoff["requiredProviderHeaders"] == packet["identity"]["requiredHeaders"], handoff
         assert handoff["proxyAuthorization"] == {
@@ -229,7 +229,7 @@ def main() -> None:
         assert "nft --check --file" in firewall_script, firewall_script
         assert "nft --file" in firewall_script, firewall_script
         assert "nft --json list table" in firewall_script, firewall_script
-        assert "SERVERWARE_AGENT_NETNS_ID" in firewall_script, firewall_script
+        assert "CATCHPLATE_AGENT_NETNS_ID" in firewall_script, firewall_script
         assert "iptables" not in firewall_script and "flush ruleset" not in firewall_script, firewall_script
         assert "delete table" not in firewall_script and "-P OUTPUT" not in firewall_script, firewall_script
         syntax_result = subprocess.run(
@@ -271,31 +271,31 @@ def main() -> None:
         }, binding
         assert binding["pinVerification"].startswith("compare-every-signed-pinning-field"), binding
         assert binding["installedCliInvocation"] == [
-            "serverware-enrollment",
+            "catchplate-enrollment",
             "--base",
-            "https://serverware.example",
+            "https://catchplate.example",
             "--verify-packet",
-            "${SERVERWARE_PACKET_PATH}",
+            "${CATCHPLATE_PACKET_PATH}",
             "--expected-packet-sha256",
-            "${SERVERWARE_PACKET_SHA256}",
+            "${CATCHPLATE_PACKET_SHA256}",
             "--expected-principal",
             "agent:demo-proxy-token",
             "--expected-nonce",
             NONCE,
             "--emit-verified-instructions",
         ], binding
-        assert 'exec serverware-enrollment \\' in bootstrap, bootstrap
+        assert 'exec catchplate-enrollment \\' in bootstrap, bootstrap
         assert (
-            f'test "$(serverware-enrollment --version)" = '
+            f'test "$(catchplate-enrollment --version)" = '
             f"'{ENROLLMENT_CLI_COMMAND} {ENROLLMENT_CLI_VERSION}'"
         ) in bootstrap, bootstrap
-        assert '--verify-packet "$SERVERWARE_PACKET_PATH"' in bootstrap, bootstrap
-        assert '--expected-packet-sha256 "$SERVERWARE_PACKET_SHA256"' in bootstrap, bootstrap
+        assert '--verify-packet "$CATCHPLATE_PACKET_PATH"' in bootstrap, bootstrap
+        assert '--expected-packet-sha256 "$CATCHPLATE_PACKET_SHA256"' in bootstrap, bootstrap
         assert "--expected-principal agent:demo-proxy-token" in bootstrap, bootstrap
         assert f"--expected-nonce {NONCE}" in bootstrap, bootstrap
         assert "--emit-verified-instructions" in bootstrap, bootstrap
         assert canonical_json(packet["pinning"]) in bootstrap, bootstrap
-        assert "Never calculate SERVERWARE_PACKET_SHA256" in bootstrap, bootstrap
+        assert "Never calculate CATCHPLATE_PACKET_SHA256" in bootstrap, bootstrap
         bootstrap_syntax = subprocess.run(
             ["/bin/sh", "-n"],
             input=bootstrap,
@@ -406,7 +406,7 @@ for forbidden in (
     "HTTPS_PROXY",
     "NO_PROXY",
     "PYTHONPATH",
-    "SERVERWARE_VERIFIER_SECRET",
+    "CATCHPLATE_VERIFIER_SECRET",
     "all_proxy",
     "http_proxy",
     "https_proxy",
@@ -439,7 +439,7 @@ print(json.dumps({
             "HTTPS_PROXY": "http://proxy.invalid:9000",
             "NO_PROXY": "",
             "PYTHONPATH": str(Path(tmp) / "hostile-pythonpath"),
-            "SERVERWARE_VERIFIER_SECRET": "must-not-cross-process-boundary",
+            "CATCHPLATE_VERIFIER_SECRET": "must-not-cross-process-boundary",
             "all_proxy": "http://proxy.invalid:9000",
             "http_proxy": "http://proxy.invalid:9000",
             "https_proxy": "http://proxy.invalid:9000",
@@ -482,7 +482,7 @@ print(json.dumps({
             return real_subprocess_run(*args, **kwargs)
 
         with mock.patch(
-            "serverware_agent_trust.attestation.subprocess.run",
+            "catchplate_agent_trust.attestation.subprocess.run",
             side_effect=replace_path_at_launch,
         ):
             race_verification = verify_quote(
@@ -568,7 +568,7 @@ print(json.dumps({
         try:
             verify_packet(wrong_tooling_version_packet, verification_attestation, NONCE)
         except ValueError as exc:
-            assert "requires serverware-enrollment version" in str(exc), exc
+            assert "requires catchplate-enrollment version" in str(exc), exc
             assert ENROLLMENT_CLI_VERSION in str(exc), exc
         else:
             raise AssertionError("enrollment verifier accepted a wrong required tooling version")
@@ -701,7 +701,7 @@ print(json.dumps({
             "id": setup_enrollment_session_id,
             "nonce": NONCE,
             "token": "setup-install-token-0123456789abcdef0123456789",
-            "tokenHeader": "X-Serverware-CA-Install-Token",
+            "tokenHeader": "X-Catchplate-CA-Install-Token",
             "policyUrl": f"/api/ca/install-sessions/{setup_enrollment_session_id}/policy",
             "downloadUrl": f"/api/ca/install-sessions/{setup_enrollment_session_id}/ca.pem",
             "expiresAt": "2099-01-01T00:00:00+00:00",
@@ -711,7 +711,7 @@ print(json.dumps({
             principal_id="agent:demo-proxy-token",
             attestation=attestation,
             proxy_url="http://10.42.0.10:8080",
-            control_plane_url="https://serverware.example",
+            control_plane_url="https://catchplate.example",
             proxy_egress_cidrs=["10.42.0.10/32"],
             namespace="agents",
             pod_selector={"app": "release-bot"},
@@ -970,7 +970,7 @@ print(json.dumps({
 
                 loopback_token_request = urllib.request.Request(
                     f"{base}/attestation?nonce={NONCE}",
-                    headers={"X-Serverware-Admin-Token": "loopback-development-token"},
+                    headers={"X-Catchplate-Admin-Token": "loopback-development-token"},
                 )
                 try:
                     clean_room_request_bytes(
@@ -1035,10 +1035,10 @@ print(json.dumps({
             package_source.mkdir()
             shutil.copy2(ROOT / "pyproject.toml", package_source / "pyproject.toml")
             shutil.copy2(
-                ROOT / "serverware_agent_trust" / "requirements.lock",
+                ROOT / "catchplate_agent_trust" / "requirements.lock",
                 package_source / "requirements.lock",
             )
-            shutil.copytree(ROOT / "serverware_agent_trust", package_source / "serverware_agent_trust")
+            shutil.copytree(ROOT / "catchplate_agent_trust", package_source / "catchplate_agent_trust")
             (package_source / "scripts").mkdir()
             shutil.copy2(
                 ROOT / "scripts" / "verify_onboarding_evidence.py",
@@ -1068,9 +1068,9 @@ print(json.dumps({
             if wheel_result.returncode != 0:
                 raise AssertionError(f"clean-room wheel build failed: {wheel_result.stderr}")
             expected_wheel_name = (
-                f"serverware_enrollment-{ENROLLMENT_CLI_VERSION}-py3-none-any.whl"
+                f"catchplate_enrollment-{ENROLLMENT_CLI_VERSION}-py3-none-any.whl"
             )
-            wheels = list(wheel_dir.glob("serverware_enrollment-*.whl"))
+            wheels = list(wheel_dir.glob("catchplate_enrollment-*.whl"))
             assert [wheel.name for wheel in wheels] == [expected_wheel_name], (
                 wheels,
                 wheel_result.stdout,
@@ -1099,7 +1099,7 @@ print(json.dumps({
                 raise AssertionError(
                     f"second deterministic wheel build failed: {second_wheel_result.stderr}"
                 )
-            second_wheels = list(second_wheel_dir.glob("serverware_enrollment-*.whl"))
+            second_wheels = list(second_wheel_dir.glob("catchplate_enrollment-*.whl"))
             assert [wheel.name for wheel in second_wheels] == [expected_wheel_name], second_wheels
             assert wheels[0].name == second_wheels[0].name
             assert wheels[0].read_bytes() == second_wheels[0].read_bytes(), (
@@ -1193,7 +1193,7 @@ print(json.dumps({
                 [
                     str(clean_python),
                     "-c",
-                    "import serverware_agent_trust.enrollment as m; print(m.__file__)",
+                    "import catchplate_agent_trust.enrollment as m; print(m.__file__)",
                 ],
                 cwd=Path(tmp),
                 env=clean_env,
@@ -1205,14 +1205,14 @@ print(json.dumps({
             assert str(ROOT) not in module_result.stdout, module_result.stdout
 
             enrollment_executable = clean_bin / (
-                "serverware-enrollment.exe" if os.name == "nt" else "serverware-enrollment"
+                "catchplate-enrollment.exe" if os.name == "nt" else "catchplate-enrollment"
             )
             metadata_result = subprocess.run(
                 [
                     str(clean_python),
                     "-c",
                     (
-                        "import importlib.metadata as m,json,serverware_agent_trust as p;"
+                        "import importlib.metadata as m,json,catchplate_agent_trust as p;"
                         f"d=m.distribution({DISTRIBUTION_NAME!r});"
                         "print(json.dumps({'distributionVersion':d.version,"
                         "'packageVersion':p.__version__,'entryPoints':"
@@ -1233,7 +1233,7 @@ print(json.dumps({
             assert installed_metadata["packageVersion"] == ENROLLMENT_CLI_VERSION
             assert {
                 "name": ENROLLMENT_CLI_COMMAND,
-                "value": "serverware_agent_trust.enrollment:console_main",
+                "value": "catchplate_agent_trust.enrollment:console_main",
             } in installed_metadata["entryPoints"], installed_metadata
             version_result = subprocess.run(
                 [str(enrollment_executable), "--version"],
@@ -1306,7 +1306,7 @@ print(json.dumps({
             )
 
             attestation_executable = clean_bin / (
-                "serverware-attestation.exe" if os.name == "nt" else "serverware-attestation"
+                "catchplate-attestation.exe" if os.name == "nt" else "catchplate-attestation"
             )
             attestation_help = subprocess.run(
                 [str(attestation_executable), "--help"],
@@ -1415,7 +1415,7 @@ print(json.dumps({
             assert verified_setup_receipt.egress_evidence == verified_egress.as_receipt_binding()
 
             production_egress_signing_key = Ed25519PrivateKey.generate()
-            production_egress_provider = "serverware-launcher-v1"
+            production_egress_provider = "catchplate-launcher-v1"
             production_egress_trust = Ed25519TrustRoot(
                 production_egress_provider,
                 production_egress_signing_key.public_key().public_bytes(
@@ -1750,9 +1750,9 @@ print(json.dumps({
 
             install_base, verified_install_session = enrollment_install_session(
                 verified_setup_packet,
-                base="https://serverware.example",
+                base="https://catchplate.example",
             )
-            assert install_base == "https://serverware.example", install_base
+            assert install_base == "https://catchplate.example", install_base
             assert verified_install_session == setup_install_session, verified_install_session
 
             def resign_verified_enrollment_packet(
@@ -1786,13 +1786,13 @@ print(json.dumps({
                 try:
                     enrollment_install_session(
                         packet_value,
-                        base="https://serverware.example",
+                        base="https://catchplate.example",
                     )
                 except ValueError as exc:
                     assert expected_error in str(exc), exc
                 else:
                     raise AssertionError(
-                        "serverware-attestation accepted a hostile enrollment packet"
+                        "catchplate-attestation accepted a hostile enrollment packet"
                     )
 
             missing_tooling_install_packet = json.loads(
@@ -1810,7 +1810,7 @@ print(json.dumps({
             wrong_tooling_install_packet["tooling"]["version"] = "999.0.0"
             expect_attestation_install_rejection(
                 resign_verified_enrollment_packet(wrong_tooling_install_packet),
-                "requires serverware-enrollment version",
+                "requires catchplate-enrollment version",
             )
 
             open_tooling_install_packet = json.loads(json.dumps(verified_setup_packet))
@@ -2074,7 +2074,7 @@ print(json.dumps({
                 principal_id="agent:demo-proxy-token",
                 attestation=incomplete_attestation,
                 proxy_url="http://10.42.0.10:8080",
-                control_plane_url="https://serverware.example",
+                control_plane_url="https://catchplate.example",
                 proxy_egress_cidrs=["10.42.0.10/32"],
                 nonce=NONCE,
             )
@@ -2103,7 +2103,7 @@ print(json.dumps({
             principal_id="agent:demo-proxy-token",
             attestation=write_only_attestation,
             proxy_url="http://10.42.0.10:8080",
-            control_plane_url="https://serverware.example",
+            control_plane_url="https://catchplate.example",
             proxy_egress_cidrs=["10.42.0.10/32"],
             nonce=NONCE,
         )
@@ -2125,7 +2125,7 @@ print(json.dumps({
             principal_id="agent:demo-proxy-token",
             attestation=attestation,
             proxy_url="http://10.42.0.10:8080",
-            control_plane_url="https://serverware.example",
+            control_plane_url="https://catchplate.example",
             proxy_egress_cidrs=["10.42.0.10/32", "2001:db8::10/128"],
             nonce=NONCE,
         )
@@ -2138,23 +2138,23 @@ print(json.dumps({
             snapshot=snapshot,
             principal_id="agent:demo-proxy-token",
             attestation=attestation,
-            proxy_url="http://serverware-proxy.internal:8080",
-            control_plane_url="https://serverware.example",
+            proxy_url="http://catchplate-proxy.internal:8080",
+            control_plane_url="https://catchplate.example",
             proxy_egress_cidrs=["10.42.0.10/32"],
             namespace="agents",
             pod_selector={"app": "release-bot"},
             nonce=NONCE,
         )
-        expected_mapping = [{"ip": "10.42.0.10", "hostnames": ["serverware-proxy.internal"]}]
-        assert hostname_packet["serverware"]["proxyHostMappings"] == expected_mapping, hostname_packet
+        expected_mapping = [{"ip": "10.42.0.10", "hostnames": ["catchplate-proxy.internal"]}]
+        assert hostname_packet["catchplate"]["proxyHostMappings"] == expected_mapping, hostname_packet
         assert hostname_packet["egress"]["hostAliases"] == expected_mapping, hostname_packet
-        assert hostname_packet["egress"]["etcHosts"] == ["10.42.0.10 serverware-proxy.internal"], hostname_packet
+        assert hostname_packet["egress"]["etcHosts"] == ["10.42.0.10 catchplate-proxy.internal"], hostname_packet
 
         install_session = {
             "id": "install-session-0123456789abcdef",
             "nonce": NONCE,
             "token": "install-token-0123456789abcdef0123456789",
-            "tokenHeader": "X-Serverware-CA-Install-Token",
+            "tokenHeader": "X-Catchplate-CA-Install-Token",
             "policyUrl": "/api/ca/install-sessions/install-session-0123456789abcdef/policy",
             "downloadUrl": "/api/ca/install-sessions/install-session-0123456789abcdef/ca.pem",
             "expiresAt": "2026-07-14T12:00:00+00:00",
@@ -2164,27 +2164,27 @@ print(json.dumps({
             principal_id="agent:demo-proxy-token",
             attestation=attestation,
             proxy_url="http://10.42.0.10:8080",
-            control_plane_url="https://SERVERWARE.EXAMPLE:443/",
+            control_plane_url="https://CATCHPLATE.EXAMPLE:443/",
             proxy_egress_cidrs=["10.42.0.10/32"],
             nonce=NONCE,
             ca_install_session=install_session,
         )
-        assert capability_packet["serverware"]["controlPlaneUrl"] == "https://serverware.example"
+        assert capability_packet["catchplate"]["controlPlaneUrl"] == "https://catchplate.example"
         assert capability_packet["ca"]["installSession"] == install_session
         assert capability_packet["identity"]["requiredHeaders"] == {
-            "X-Serverware-Agent": "demo-token-agent"
+            "X-Catchplate-Agent": "demo-token-agent"
         }
         assert capability_packet["agentHandoff"]["requiredProxyHeaders"] == {
-            "X-Serverware-Agent": "demo-token-agent",
-            "X-Serverware-Enrollment-Session": install_session["id"],
+            "X-Catchplate-Agent": "demo-token-agent",
+            "X-Catchplate-Enrollment-Session": install_session["id"],
         }
         assert capability_packet["agentHandoff"]["requiredProviderHeaders"] == {
-            "X-Serverware-Agent": "demo-token-agent"
+            "X-Catchplate-Agent": "demo-token-agent"
         }
 
         for origin, expected in (
-            ("https://SERVERWARE.EXAMPLE:443/", "https://serverware.example"),
-            ("https://serverware.example:8443", "https://serverware.example:8443"),
+            ("https://CATCHPLATE.EXAMPLE:443/", "https://catchplate.example"),
+            ("https://catchplate.example:8443", "https://catchplate.example:8443"),
             ("https://[2001:0DB8:0:0:0:0:0:1]:443/", "https://[2001:db8::1]"),
             ("https://[2001:db8::1]:8443", "https://[2001:db8::1]:8443"),
             ("http://LOCALHOST:80/", "http://localhost"),
@@ -2195,21 +2195,21 @@ print(json.dumps({
 
         for invalid_origin in (
             "https://[::1",
-            "https://serverware.example:not-a-port",
+            "https://catchplate.example:not-a-port",
             "https://server ware.example",
-            " https://serverware.example",
-            "https://serverware.\u200bexample",
-            "https://serverware.example:0",
+            " https://catchplate.example",
+            "https://catchplate.\u200bexample",
+            "https://catchplate.example:0",
             "https://bad_label.example",
             "https://-bad.example",
             "https://bad-.example",
             "https://bad..example",
             "https://\ud800.example",
-            "http://serverware.example",
-            "https://user@serverware.example",
-            "https://serverware.example/api",
-            "https://serverware.example?mode=enroll",
-            "https://serverware.example#enroll",
+            "http://catchplate.example",
+            "https://user@catchplate.example",
+            "https://catchplate.example/api",
+            "https://catchplate.example?mode=enroll",
+            "https://catchplate.example#enroll",
         ):
             try:
                 canonical_control_plane_url(invalid_origin)
@@ -2225,7 +2225,7 @@ print(json.dumps({
                 principal_id="agent:demo-proxy-token",
                 attestation=attestation,
                 proxy_url="http://10.42.0.10:8080",
-                control_plane_url="https://serverware.example",
+                control_plane_url="https://catchplate.example",
                 proxy_egress_cidrs=["10.42.0.10/32"],
                 nonce=NONCE,
                 ca_install_session=malformed_session,
@@ -2275,7 +2275,7 @@ print(json.dumps({
                 {
                     "principal_id": "agent:demo",
                     "proxy_egress_cidrs": ["10.42.0.10/32"],
-                    "ca_mount_path": "../serverware-ca.pem",
+                    "ca_mount_path": "../catchplate-ca.pem",
                 },
                 "canonical absolute file path",
             ),
@@ -2285,7 +2285,7 @@ print(json.dumps({
                     snapshot=snapshot,
                     attestation=attestation,
                     proxy_url="http://10.42.0.10:8080",
-                    control_plane_url="https://serverware.example",
+                    control_plane_url="https://catchplate.example",
                     namespace="agents",
                     pod_selector={"app": "release-bot"},
                     nonce=NONCE,
@@ -2301,8 +2301,8 @@ print(json.dumps({
                 snapshot=snapshot,
                 principal_id="agent:demo",
                 attestation=attestation,
-                proxy_url="http://serverware-proxy.internal:8080",
-                control_plane_url="https://serverware.example",
+                proxy_url="http://catchplate-proxy.internal:8080",
+                control_plane_url="https://catchplate.example",
                 proxy_egress_cidrs=["10.42.0.0/24"],
                 nonce=NONCE,
             )
@@ -2317,7 +2317,7 @@ print(json.dumps({
                 principal_id="agent:demo",
                 attestation=attestation,
                 proxy_url="http://10.42.0.10:8080",
-                control_plane_url="https://serverware.example",
+                control_plane_url="https://catchplate.example",
                 proxy_egress_cidrs=["10.42.0.10/32"],
                 nonce="short",
             )

@@ -11,7 +11,7 @@ The signed-delivery-bound custody configuration selects:
 
 ```json
 "guestPublicArtifacts": {
-  "apiVersion": "serverware.responseV2.guestPublicArtifacts/v1"
+  "apiVersion": "catchplate.responseV2.guestPublicArtifacts/v1"
 }
 ```
 
@@ -21,7 +21,7 @@ paths; explicit null is rejected. The fixed native cohort requires this profile,
 the explicit guest listener, signed guest delivery and TEE generation admission.
 
 ```text
-/run/serverware-response-v2-public/     root:65519, 0711
+/run/catchplate-response-v2-public/     root:65519, 0711
   <each of the seven closed role names>/ signed role UID:65519, 0750
     generation-role-readiness-artifact.json       0440
   state-authority/

@@ -1,13 +1,13 @@
 # Finalization SQL original transport
 
-The source [transport](../serverware/authority_registration_finalization_sql_transport.py)
+The source [transport](../catchplate/authority_registration_finalization_sql_transport.py)
 defines one dedicated raw13/raw4 exchange for the [cold finalization SQL
 worker](registration-finalization-sql-service.md). It is unbuilt and unexecuted.
 Framing alone neither installs that worker nor grants SQL permission. The
 separate [public execute action](public-registration-finalization-sql.md) now
 uses the genuine retained caller and its fresh-purpose admission.
 
-The fixed endpoint is `/run/serverware/registration-finalization/sql.sock`, with
+The fixed endpoint is `/run/catchplate/registration-finalization/sql.sock`, with
 root socket-activation listener UID/GID `0:0`, a bounded 1–30 second duration,
 request magic `SWRFSQL1` and response magic `SWRFSLR1`. These are distinct from
 the evidence SQL path. Listener peer checks identify the local socket owner,

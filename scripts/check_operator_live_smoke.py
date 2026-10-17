@@ -45,10 +45,10 @@ except ModuleNotFoundError:
 
 # operator_demo.origin canonicalizes default HTTPS port 443 out of catalog URLs.
 # Endpoint still requires/connects port 443 and verifies this exact TLS hostname.
-PROXY = "https://serverware-proxy.example.com"
+PROXY = "https://catchplate-proxy.example.com"
 RESPONSE_MODE = V2_RESPONSE_MODE
 RESPONSE_VALIDATION_MODE = RESPONSE_MODES[RESPONSE_MODE]
-DUMMY = "Bearer SERVERWARE_LIVE_SMOKE_DUMMY"
+DUMMY = "Bearer CATCHPLATE_LIVE_SMOKE_DUMMY"
 BODY = b'{"live_smoke":true,"nested":{"kept":"synthetic"}}'
 CASES = (("missing", None), ("wrong", DUMMY + "_WRONG"), ("positive", DUMMY))
 WITHHELD_TARGET = "/echo?reflectCredential=1"
@@ -168,7 +168,7 @@ def catalog_state(snapshot):
     activity = snapshot.get("observed_activity")
     require(isinstance(activity, dict) and set(activity) == {
         "schema", "status", "observed_at_epoch_ms", "chain_verification", "window", "accounts"}
-        and activity["schema"] == "serverware.operatorAccountActivity/v1"
+        and activity["schema"] == "catchplate.operatorAccountActivity/v1"
         and activity["status"] in {"available", "unavailable"}
         and activity["chain_verification"] == "not_checked",
         "live catalog activity projection differs")
@@ -247,10 +247,10 @@ def response_evidence(case, status, headers, body, policy_hash):
         key = name.lower()
         require(key not in values, "live response has duplicate headers")
         values[key] = value
-    require(values.get("x-serverware-policy-hash") == policy_hash
-            and values.get("x-serverware-response-body-sha256") == sha(body), "live response policy/body commitment differs")
-    commitments = {"requestDigest": values.get("x-serverware-request-digest"),
-                   "operationDigest": values.get("x-serverware-operation-digest")}
+    require(values.get("x-catchplate-policy-hash") == policy_hash
+            and values.get("x-catchplate-response-body-sha256") == sha(body), "live response policy/body commitment differs")
+    commitments = {"requestDigest": values.get("x-catchplate-request-digest"),
+                   "operationDigest": values.get("x-catchplate-operation-digest")}
     require(all(isinstance(value, str) and SHA256.fullmatch(value) for value in commitments.values()),
             "live response request commitment missing")
     return {"case": case, "status": status, "responseMode": RESPONSE_MODE, "responseBodySha256": sha(body),
@@ -346,7 +346,7 @@ def scoped_audit(events, scope, positive, withheld=None):
 class LiveSmoke(OperatorCatalogCheck):
     @staticmethod
     def _optional_ca(path, endpoint):
-        if endpoint.host == "serverware-proxy.example.com":
+        if endpoint.host == "catchplate-proxy.example.com":
             require(path is None and endpoint.scheme == "https" and endpoint.port == 443, "live proxy TLS selection differs")
             return ssl.create_default_context()  # System trust, never the interception CA.
         return OperatorCatalogCheck._optional_ca(path, endpoint)
@@ -356,7 +356,7 @@ class LiveSmoke(OperatorCatalogCheck):
         require(type(self.check_withheld_response) is bool, "withheld-response selection must be explicit boolean")
         self.expected_upstreams = parse_expected_upstreams(getattr(args, "expected_upstreams", None))
         super().__init__(args)
-        self.run_id = "serverware-live-smoke-" + uuid.uuid4().hex
+        self.run_id = "catchplate-live-smoke-" + uuid.uuid4().hex
         self.plans = [{"route": route, "collection": collection, "name": self.run_id + "-" + kind,
                        "state": "not_submitted"} for route, collection, kind in CREATIONS]
         self.additions = {key: [] for key in COLLECTIONS}
@@ -367,7 +367,7 @@ class LiveSmoke(OperatorCatalogCheck):
         # Keep the shared isolated-fixture checker synthetic-only. This live
         # checker changes only its exact, independently selected origin roster.
         snapshot = self.control_json(PREFIX + "/catalog", authenticated=True)
-        require(isinstance(snapshot, dict) and snapshot.get("schema") == "serverware.operatorCatalog/v1"
+        require(isinstance(snapshot, dict) and snapshot.get("schema") == "catchplate.operatorCatalog/v1"
                 and snapshot.get("mode") == "operator-development"
                 and snapshot.get("productionReady") is False and snapshot.get("hardwareVerified") is False
                 and snapshot.get("allowed_upstreams") == self.expected_upstreams
@@ -412,7 +412,7 @@ class LiveSmoke(OperatorCatalogCheck):
         try:
             with TunnelTLS(raw, self.ca, self.timeout) as tls:
                 headers = [f"POST {target} HTTP/1.1", f"Host: {AUTHORITY}", "Connection: close",
-                    f"User-Agent: serverware-test-run/{self.run_id}", "Accept: application/json",
+                    f"User-Agent: catchplate-test-run/{self.run_id}", "Accept: application/json",
                     "Content-Type: application/json", f"Content-Length: {len(BODY)}"]
                 if placeholder is not None:
                     require(placeholder in {DUMMY, DUMMY + "_WRONG"}, "unexpected synthetic dummy header")
@@ -543,7 +543,7 @@ class LiveSmoke(OperatorCatalogCheck):
             "responsesReleased": 1, "responsesBlocked": int(self.check_withheld_response)}
 
     def receipt(self, ok):
-        result = {"ok": ok, "schema": "serverware.operatorLiveSmoke/v1", "runId": self.run_id,
+        result = {"ok": ok, "schema": "catchplate.operatorLiveSmoke/v1", "runId": self.run_id,
             "checks": self.results, "resourceCreations": self.plans, "existingResourceCounts": getattr(self, "baseline_counts", {}),
             "requestObservations": self.feature_observations, "clientTokenRetainedPrivately": self.token_retained,
             "resourcesAutomaticallyCleaned": False, "rawBodyPreservationVerified": False, "empty204Verified": False,
@@ -568,7 +568,7 @@ def run_checks(args):
         parse_expected_upstreams(getattr(args, "expected_upstreams", None))
         require(args.run_claim_file.name == ".operator-live-smoke.claim", "live smoke claim filename differs")
         args.control_base, args.management_base = "http://172.16.249.19:3000", "http://172.16.249.20:9091"
-        args.proxy_url, args.operator_origin, args.upstream_address = PROXY, "https://serverware-demo.example.com", "172.16.249.18"
+        args.proxy_url, args.operator_origin, args.upstream_address = PROXY, "https://catchplate-demo.example.com", "172.16.249.18"
         args.proxy_ca_file = args.control_ca_file = args.management_ca_file = None
         check = LiveSmoke(args)
         private_output(args.run_claim_file, json.dumps({"runId": check.run_id, "plannedResources": check.plans,
@@ -577,7 +577,7 @@ def run_checks(args):
         require(not token_output.exists() and not token_output.is_symlink(), "private client-token output already exists")
         return check.run()
     except Exception as error:
-        result = check.receipt(False) if check is not None else {"ok": False, "schema": "serverware.operatorLiveSmoke/v1"}
+        result = check.receipt(False) if check is not None else {"ok": False, "schema": "catchplate.operatorLiveSmoke/v1"}
         result["error"] = str(error) if isinstance(error, CheckFailure) else type(error).__name__
         return result
 

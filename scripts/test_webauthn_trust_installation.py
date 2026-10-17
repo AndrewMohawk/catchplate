@@ -27,9 +27,9 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import serverware
-from serverware import webauthn_trust as trust
-from serverware import webauthn_trust_core as core
+import catchplate
+from catchplate import webauthn_trust as trust
+from catchplate import webauthn_trust_core as core
 
 
 NOW = datetime(2025, 1, 1, tzinfo=timezone.utc)
@@ -48,7 +48,7 @@ class JournalRecorder(types.ModuleType):
     """Only a local ordering oracle; every unlisted DB operation fails."""
 
     def __init__(self, publication, before_completion, before_pending):
-        super().__init__("serverware.db")
+        super().__init__("catchplate.db")
         self.publication = copy.deepcopy(publication)
         self.before_completion = before_completion
         self.before_pending = before_pending
@@ -131,7 +131,7 @@ class WebAuthnTrustInstallationTests(unittest.TestCase):
 
     def bundle(self, sequence=1, **metadata):
         result = {
-            "apiVersion": "serverware.webauthnTrust/v1",
+            "apiVersion": "catchplate.webauthnTrust/v1",
             "kind": "WebAuthnTrustBundle",
             "metadata": {
                 "id": "local-\u00e9-\U0001f511", "sequence": sequence, "rollbackEpoch": 1,
@@ -181,7 +181,7 @@ class WebAuthnTrustInstallationTests(unittest.TestCase):
         recorder = JournalRecorder(publication,
             before_completion or (lambda: self.assert_installed(publication["bundle"])),
             lambda: self.assertEqual(self.lock_depth, 1, "journal lookup must be inside the installation lock"))
-        with mock.patch.dict(sys.modules, {"serverware.db": recorder}), mock.patch.object(serverware, "db", recorder, create=True):
+        with mock.patch.dict(sys.modules, {"catchplate.db": recorder}), mock.patch.object(catchplate, "db", recorder, create=True):
             yield recorder
 
     def assert_not_completed(self, recorder):
@@ -200,7 +200,7 @@ class WebAuthnTrustInstallationTests(unittest.TestCase):
             "bundlePath", "statePath", "verifiedAt",
         })
         self.assertEqual(observation, {
-            "schema": "serverware.webauthnLocalInstallationObservation/v1",
+            "schema": "catchplate.webauthnLocalInstallationObservation/v1",
             "bundleDigest": verified.bundle_digest,
             "bundleFileDigest": sha256(self.bundle_path.read_bytes()),
             "stateFileDigest": sha256(self.state_path.read_bytes()),

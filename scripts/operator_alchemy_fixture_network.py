@@ -20,7 +20,7 @@ from scripts import operator_github_fixture_network as inherited
 FIXTURE_IP, LOOPBACK, PROXY_HOST = inherited.FIXTURE_IP, inherited.LOOPBACK, inherited.PROXY_HOST
 KEEPER_SECONDS, EDGE_SECONDS = inherited.KEEPER_SECONDS, inherited.EDGE_SECONDS
 PROVIDER_HOSTS = ("eth-mainnet.g.alchemy.com", "eth-sepolia.g.alchemy.com")
-HOSTS = ("127.0.0.1 localhost serverware decision-gate-rs " + PROXY_HOST + "\n"
+HOSTS = ("127.0.0.1 localhost catchplate decision-gate-rs " + PROXY_HOST + "\n"
     + FIXTURE_IP + " " + " ".join(PROVIDER_HOSTS) + "\n").encode("ascii")
 RESOLV = inherited.RESOLV
 NETWORK_ROOT = Path("/fixture-network")
@@ -39,7 +39,7 @@ def assert_isolated_network(*, attached=True):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             probe.bind((FIXTURE_IP, 0))
         for hostname, expected in (*((host, FIXTURE_IP) for host in PROVIDER_HOSTS),
-                (PROXY_HOST, LOOPBACK), ("serverware", LOOPBACK), ("decision-gate-rs", LOOPBACK)):
+                (PROXY_HOST, LOOPBACK), ("catchplate", LOOPBACK), ("decision-gate-rs", LOOPBACK)):
             require({item[4][0] for item in socket.getaddrinfo(
                 hostname, 443, socket.AF_INET, socket.SOCK_STREAM)} == {expected})
 
@@ -85,7 +85,7 @@ def keep_namespace():
     assert_isolated_network()
     descriptor = os.open(NETWORK_ROOT / "ready", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
     with os.fdopen(descriptor, "w", encoding="ascii") as output:
-        json.dump({"schema": "serverware.alchemyFixtureNetwork/v1", "network": "none",
+        json.dump({"schema": "catchplate.alchemyFixtureNetwork/v1", "network": "none",
             "interfaces": ["lo"], "address": FIXTURE_IP, "effectiveCapabilities": 0}, output)
         output.flush()
         os.fsync(output.fileno())

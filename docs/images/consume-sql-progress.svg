@@ -45,12 +45,12 @@
       <text x="24" y="446">13.3 · Cold SQL service / response</text>
     </g>
     <g font-size="13">
-      <a href="https://github.com/AndrewMohawk/serverware/commit/4d4091c72543477823ff4031bfac60e03d79b925"><text x="610" y="216" fill="#6ee7b7">✓ LANDED · 4d4091c</text></a>
-      <a href="https://github.com/AndrewMohawk/serverware/commit/dd460bae26946d2dd81af346abd7dee76d094ad5"><text x="610" y="262" fill="#6ee7b7">✓ LANDED · dd460ba</text></a>
-      <a href="https://github.com/AndrewMohawk/serverware/commit/bdaee247b937d5781c5ad0c75587eee861c9c3b0"><text x="610" y="308" fill="#6ee7b7">✓ LANDED · bdaee24</text></a>
-      <a href="https://github.com/AndrewMohawk/serverware/commit/bdaee247b937d5781c5ad0c75587eee861c9c3b0"><text x="610" y="354" fill="#6ee7b7">✓ LANDED · bdaee24</text></a>
-      <a href="https://github.com/AndrewMohawk/serverware/commit/bdaee247b937d5781c5ad0c75587eee861c9c3b0"><text x="610" y="400" fill="#6ee7b7">✓ LANDED · bdaee24</text></a>
-      <a href="https://github.com/AndrewMohawk/serverware/commit/bdaee247b937d5781c5ad0c75587eee861c9c3b0"><text x="610" y="446" fill="#6ee7b7">✓ LANDED · bdaee24</text></a>
+      <a href="https://github.com/AndrewMohawk/catchplate/commit/4d4091c72543477823ff4031bfac60e03d79b925"><text x="610" y="216" fill="#6ee7b7">✓ LANDED · 4d4091c</text></a>
+      <a href="https://github.com/AndrewMohawk/catchplate/commit/dd460bae26946d2dd81af346abd7dee76d094ad5"><text x="610" y="262" fill="#6ee7b7">✓ LANDED · dd460ba</text></a>
+      <a href="https://github.com/AndrewMohawk/catchplate/commit/bdaee247b937d5781c5ad0c75587eee861c9c3b0"><text x="610" y="308" fill="#6ee7b7">✓ LANDED · bdaee24</text></a>
+      <a href="https://github.com/AndrewMohawk/catchplate/commit/bdaee247b937d5781c5ad0c75587eee861c9c3b0"><text x="610" y="354" fill="#6ee7b7">✓ LANDED · bdaee24</text></a>
+      <a href="https://github.com/AndrewMohawk/catchplate/commit/bdaee247b937d5781c5ad0c75587eee861c9c3b0"><text x="610" y="400" fill="#6ee7b7">✓ LANDED · bdaee24</text></a>
+      <a href="https://github.com/AndrewMohawk/catchplate/commit/bdaee247b937d5781c5ad0c75587eee861c9c3b0"><text x="610" y="446" fill="#6ee7b7">✓ LANDED · bdaee24</text></a>
       <a href="../production-status.md#consume-reservation-and-sql-detail" fill="#93c5fd" text-decoration="underline">
         <text x="866" y="216">Criterion ↗</text><text x="866" y="262">Criterion ↗</text>
         <text x="866" y="308">Criterion ↗</text><text x="866" y="354">Criterion ↗</text>

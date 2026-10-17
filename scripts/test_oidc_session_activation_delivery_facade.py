@@ -31,20 +31,20 @@ ARGUMENTS = {
 class DeliveryFacadeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        temporary = tempfile.TemporaryDirectory(prefix="serverware-delivery-facade-")
+        temporary = tempfile.TemporaryDirectory(prefix="catchplate-delivery-facade-")
         cls.addClassCleanup(temporary.cleanup)
         environment = patch.dict(os.environ, {
-            "SERVERWARE_DATA_DIR": temporary.name,
-            "SERVERWARE_METADATA_STORE_BACKEND": "sqlite",
-            "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite",
-            "SERVERWARE_GRANT_STORE_BACKEND": "sqlite",
-            "SERVERWARE_RELEASE_CHANNEL": "dev",
-            "SERVERWARE_PROCESS_MODE": "",
+            "CATCHPLATE_DATA_DIR": temporary.name,
+            "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite",
+            "CATCHPLATE_AUDIT_STORE_BACKEND": "sqlite",
+            "CATCHPLATE_GRANT_STORE_BACKEND": "sqlite",
+            "CATCHPLATE_RELEASE_CHANNEL": "dev",
+            "CATCHPLATE_PROCESS_MODE": "",
         })
         environment.start()
         cls.addClassCleanup(environment.stop)
-        from serverware import db
-        from serverware import authority_transition_registry as registry
+        from catchplate import db
+        from catchplate import authority_transition_registry as registry
         cls.db = db
         cls.registry = registry
 
@@ -67,7 +67,7 @@ class DeliveryFacadeTests(unittest.TestCase):
             result = getattr(self.db, HANDLER).__wrapped__(**ARGUMENTS)
         self.assertIs(result, sentinel.transport_result)
         dispatch.assert_called_once_with(OPERATION, {
-            "schema": "serverware.policyAuthorityControlledWriterInput/v1",
+            "schema": "catchplate.policyAuthorityControlledWriterInput/v1",
             "handler": HANDLER,
             "operationManifestDigest": self.db.authority_contract.OPERATION_MANIFEST_DIGEST,
             "arguments": ARGUMENTS,
@@ -92,7 +92,7 @@ class DeliveryFacadeTests(unittest.TestCase):
         with self.assertRaisesRegex(self.db.MetadataStoreError, "no exact typed transition program"):
             handler(**ARGUMENTS)
         with patch.dict(os.environ, {
-            "SERVERWARE_PROCESS_MODE": self.db._POLICY_AUTHORITY_EXECUTOR_PROCESS_MODE,
+            "CATCHPLATE_PROCESS_MODE": self.db._POLICY_AUTHORITY_EXECUTOR_PROCESS_MODE,
         }), self.assertRaisesRegex(self.db.MetadataStoreError, "cannot run in a privileged process"):
             handler.__wrapped__(**ARGUMENTS)
 

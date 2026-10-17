@@ -2,7 +2,7 @@
 use super::super::guardian_process;
 use super::super::super::{ensure, json};
 use serde_json::Value;
-use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
+use catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
 use sha2::{Digest, Sha256};
 
 pub(super) const MAX_RECORD: usize = 1152 * 1024;
@@ -46,7 +46,7 @@ fn observation(raw: &[u8], operation: [u8; 32], deadline: u64) -> Result<(Value,
     shape(&value, &["schema", "resultScope", "execution", "output", "cleanup", "retirement",
         "workloadSucceeded", "actionAuthorization", "okForAction"])?;
     inert(&value)?;
-    ensure(value["schema"] == "serverware.nativeExecutionObservation/v2"
+    ensure(value["schema"] == "catchplate.nativeExecutionObservation/v2"
         && value["resultScope"] == "local-single-attempt-execution-and-cleanup-observation",
         "native outcome execution profile differs")?;
     let execution = &value["execution"];
@@ -79,7 +79,7 @@ fn observation(raw: &[u8], operation: [u8; 32], deadline: u64) -> Result<(Value,
     shape(retirement, &["schema", "resultScope", "operationSha256", "cleanupBeforeBoottimeNs",
         "hostVethAbsence", "cgroupRemoval", "actionAuthorization", "okForAction"])?;
     inert(retirement)?;
-    ensure(retirement["schema"] == "serverware.nativeExecutionRetirementObservation/v1"
+    ensure(retirement["schema"] == "catchplate.nativeExecutionRetirementObservation/v1"
         && retirement["resultScope"] == "local-owned-network-and-cgroup-retirement-observation"
         && retirement["operationSha256"] == digest(&operation)
         && positive(&retirement["cleanupBeforeBoottimeNs"])? == deadline,
@@ -186,13 +186,13 @@ pub(super) fn decode(raw: &[u8], claim: &[u8; 73]) -> Result<Decoded, String> {
     let leader = json::parse(parts[4], LIMITS[4])?;
     ensure(canonical_ascii_bytes(&leader)? == parts[4], "native outcome reap original is not canonical")?;
     shape(&leader, &["apiVersion", "operationSha256", "leaderPid", "pidfdDevice", "pidfdInode", "code", "status"])?;
-    ensure(leader["apiVersion"] == "serverware.nativeLeaderReapOriginal/v1"
+    ensure(leader["apiVersion"] == "catchplate.nativeLeaderReapOriginal/v1"
         && leader["operationSha256"] == digest(&operation)
         && positive(&leader["leaderPid"])? <= i32::MAX as u64
         && positive(&leader["pidfdDevice"])? > 0 && positive(&leader["pidfdInode"])? > 0
         && leader["code"] == value["execution"]["code"] && leader["status"] == value["execution"]["status"],
         "native outcome actual reap differs from execution")?;
-    let mut evidence = Sha256::new(); evidence.update(b"serverware.nativeTerminalOriginals/v1\0");
+    let mut evidence = Sha256::new(); evidence.update(b"catchplate.nativeTerminalOriginals/v1\0");
     for part in &parts[1..] { evidence.update((part.len() as u32).to_be_bytes()); evidence.update(part); }
     Ok(Decoded { observation: value, latest, deadline, evidence: evidence.finalize().into() })
 }

@@ -66,7 +66,7 @@ pub(crate) fn execute(config:&Config,scoped:&ScopedCustodyServiceConfig,request:
     current(config,deadline)?;
     match request {
         Request::TargetDispatchBegin {request_id,params,..} if files.is_empty()=>{
-            if params.api_version!="serverware.responseV2.targetDispatchBegin/v1" || params.gate_evidence.statement.phase!="prepare"
+            if params.api_version!="catchplate.responseV2.targetDispatchBegin/v1" || params.gate_evidence.statement.phase!="prepare"
                 || request_id!=&params.original.binding.request_id || !same(&params.original,&params.gate_evidence.statement.original)? {
                 return Err(fail("prepare does not bind actual original request"));
             }
@@ -170,7 +170,7 @@ pub(crate) fn execute(config:&Config,scoped:&ScopedCustodyServiceConfig,request:
             if post.attempt_revision!=next || post.authoritative_state!=lifecycle::AttemptState::Observed
                 || post.fencing_token!=capture.fencing_token() {return Err(fail("actual observed successor differs"));}
             capture.check()?;
-            Ok(ResultValue::CapturePersist(wire::CompletedCapture {api_version:"serverware.responseV2.targetCaptureCommitted/v1".into(),
+            Ok(ResultValue::CapturePersist(wire::CompletedCapture {api_version:"catchplate.responseV2.targetCaptureCommitted/v1".into(),
                 capture_sha256:capture.capture_sha256().to_owned(),object:persisted.object,outcome_request:frame,
                 outcome_receipt:execution.receipt,post_state:post,target_effect:target}))
         },

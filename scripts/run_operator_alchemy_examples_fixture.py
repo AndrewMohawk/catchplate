@@ -25,8 +25,8 @@ class AlchemyRun(Run):
     PROVIDER_PKI_SERVICE = "alchemy-pki"
     NODE_EXAMPLE_DIRECTORY = "examples/alchemy-chain-status-node"
     GO_MOUNT_TARGET = "/example-go/alchemy-chain-status"
-    CLAIM_SCHEMA = "serverware.privateAlchemyExamplesRunClaim/v1"
-    TERMINAL_SCHEMA = "serverware.privateAlchemyExamplesRun/v1"
+    CLAIM_SCHEMA = "catchplate.privateAlchemyExamplesRunClaim/v1"
+    TERMINAL_SCHEMA = "catchplate.privateAlchemyExamplesRun/v1"
     REAL_PROVIDER_VERIFIED = "realAlchemyVerified"
 
 

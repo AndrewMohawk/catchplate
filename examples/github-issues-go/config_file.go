@@ -104,10 +104,10 @@ func downloadedEnvironment(path string, now time.Time) (func(string) string, err
 		return filepath.Join(filepath.Dir(absolute), value)
 	}
 	values := map[string]string{
-		"SERVERWARE_PROXY_URL": saved.ProxyURL, "SERVERWARE_APP_ID": saved.ApplicationID,
-		"SERVERWARE_PROXY_TOKEN": saved.ProxyPassword, "SERVERWARE_CA_FILE": resolveCA(saved.CAFile),
-		"SERVERWARE_PROXY_CA_FILE": resolveCA(saved.ClientRecipe.ProxyCAFile),
-		"SERVERWARE_GITHUB_OWNER":  saved.Repository.Owner, "SERVERWARE_GITHUB_REPO": saved.Repository.Name,
+		"CATCHPLATE_PROXY_URL": saved.ProxyURL, "CATCHPLATE_APP_ID": saved.ApplicationID,
+		"CATCHPLATE_PROXY_TOKEN": saved.ProxyPassword, "CATCHPLATE_CA_FILE": resolveCA(saved.CAFile),
+		"CATCHPLATE_PROXY_CA_FILE": resolveCA(saved.ClientRecipe.ProxyCAFile),
+		"CATCHPLATE_GITHUB_OWNER":  saved.Repository.Owner, "CATCHPLATE_GITHUB_REPO": saved.Repository.Name,
 	}
 	// Do not fall back to ambient values, including an absent optional proxy CA.
 	selected := func(key string) string { return values[key] }

@@ -1,20 +1,24 @@
 > Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
 
-# Use Serverware from an MCP client
+# Use Catchplate from an MCP client
 
-This local **stdio MCP server** lets an agent use selected Serverware permissions
+This local **stdio MCP server** lets an agent use selected Catchplate permissions
 without receiving provider credentials. It uses the same HTTPS proxy, client
 identity, policies, approval workflow and audit trail as an ordinary application.
-It does not administer Serverware, create permissions, export keys or expose a
+It does not administer Catchplate, create permissions, export keys or expose a
 hosted MCP URL.
 
 ## Set up
 
-1. In Serverware, save a credential and create a client permission for one of
+Existing private downloads and MCP launch settings from before the rename need
+the [explicit local migration](../client-config-migration.md). Tokens are not
+automatically changed or renewed.
+
+1. In Catchplate, save a credential and create a client permission for one of
    the supported operations below. Use a dedicated client for the agent.
 2. Download its private client configuration and public CA. Keep them together;
    relative CA paths resolve beside the configuration. The configuration contains
-   an expiring **Serverware client token**, not a provider key. Keep it out of Git,
+   an expiring **Catchplate client token**, not a provider key. Keep it out of Git,
    prompts and logs. Restrict its file permissions, for example with `chmod 600`.
 3. From the repository root, install the pinned local runtime once:
 
@@ -29,11 +33,11 @@ hosted MCP URL.
    ```sh
    examples/mcp/.venv/bin/python -I examples/mcp/server.py \
      --config 'issues=./private files/github-client.json' \
-     --console-origin https://serverware.example.com \
+     --console-origin https://catchplate.example.com \
      --print-client-config
    ```
 
-5. Copy the printed `mcpServers.serverware` entry into your MCP client's settings.
+5. Copy the printed `mcpServers.catchplate` entry into your MCP client's settings.
    Clients that accept an `mcpServers` object can use the whole output. Other
    clients need its `command` and `args` fields in their server configuration.
    Interpreter, script and configuration paths are made absolute for you; spaces
@@ -95,7 +99,7 @@ Then an explicit
 ```
 
 `confirmed` must be the literal JSON boolean `true`. This local intent flag is
-**not human approval** and does not bypass Serverware policy. Configure
+**not human approval** and does not bypass Catchplate policy. Configure
 **Require human approval** on the permission when a human must authorize each
 request. Repeated allowed AI requests can incur repeated charges; the configured
 output-token ceiling is not a spending budget.
@@ -138,7 +142,7 @@ so only attach configurations the MCP client's user is authorized to use.
 
 - `ok`: the supported request returned successfully. Inspect its provider data.
 - `approval_required`: the request stopped with HTTP 428. Open the validated
-  `approval_path` in Serverware, or `approval_url` when `--console-origin` is set.
+  `approval_path` in Catchplate, or `approval_url` when `--console-origin` is set.
   After a human approves, explicitly call the same tool with identical arguments
   before expiry. The server never approves or retries automatically.
 - `refused` or `busy`: this call was not sent. Fix its configuration/arguments

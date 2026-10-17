@@ -7,8 +7,8 @@ unbuilt and unexecuted; no production acceptance gate is closed.
 
 ## Original scope and APIs
 
-The actual [custody journal](../serverware/control_plane_custody_journal.py) and
-[custody client](../serverware/control_plane_custody_client.py) expose:
+The actual [custody journal](../catchplate/control_plane_custody_journal.py) and
+[custody client](../catchplate/control_plane_custody_client.py) expose:
 
 | Method | Local effect/result |
 | --- | --- |
@@ -40,9 +40,9 @@ signature, committed state, current head, completion or credential finalization.
 
 ## Fixed records and durability
 
-The [record codec](../serverware/control_plane_registration_outcome_records.py)
+The [record codec](../catchplate/control_plane_registration_outcome_records.py)
 uses distinct magic `SWCPO001` and content-identity domain
-`serverware.controlPlaneRegistrationOutcomeRecord/v1`. Frames contain a fixed
+`catchplate.controlPlaneRegistrationOutcomeRecord/v1`. Frames contain a fixed
 kind byte, bounded source token, raw preparation digest, fixed-count lengths and
 exact original bodies with no trailing bytes. It reuses the actual reservation,
 SQL and completion transport carrier/length checks; it performs no JSON or

@@ -68,7 +68,7 @@ and credential-history presence/absence are rechecked before requesting the
 grant. This branch check is not an atomic reservation or a guarantee that the
 complete credential history stayed unchanged.
 
-[`request_binding(originals)`](../serverware/control_plane_registration_execution_intent.py)
+[`request_binding(originals)`](../catchplate/control_plane_registration_execution_intent.py)
 binds the fixed purpose/action, actual user and challenge, label, RP/origin,
 credential ID and transports, plus domain-separated byte digests and lengths
 of the original client data, attestation object and enrollment-authorization
@@ -81,7 +81,7 @@ no-store headers and this fixed response shape:
 
 | Field | Value |
 | --- | --- |
-| `schema` | `serverware.webAuthnRegistrationExecutionPreparation/v1` |
+| `schema` | `catchplate.webAuthnRegistrationExecutionPreparation/v1` |
 | `status` | `retained-execution-grant` |
 | `purpose` | `authorize-registration-evidence-execution` |
 | `localDigest` | Existing grant record's canonical local `sha256:` content identity |
@@ -101,15 +101,15 @@ have been consumed or completed. A 503 does not establish absence or safe retry.
 
 The [cold enrollment bootstrap](control-plane-enrollment-startup.md) keeps its
 closed v2 contract and producer unchanged. Explicit v3 uses envelope
-`serverware.signedControlPlaneEnrollmentBootstrap/v3` and payload
-`serverware.controlPlaneEnrollmentBootstrap/v3`. It adds exactly one required
+`catchplate.signedControlPlaneEnrollmentBootstrap/v3` and payload
+`catchplate.controlPlaneEnrollmentBootstrap/v3`. It adds exactly one required
 field, `registrationExecution`, to the existing eight payload fields. Null
 disables execution without new key or endpoint access. The unchanged nested-v1
 grant-authorizer profile is the following closed object:
 
 | Field | Contract |
 | --- | --- |
-| `schema` | `serverware.controlPlaneRegistrationExecution/v1` |
+| `schema` | `catchplate.controlPlaneRegistrationExecution/v1` |
 | `executionCallerPrivateKeyFd` | Exactly `203`, distinct from the existing enrollment-key/bootstrap slots |
 | `currentRootEnrollment` | Exact original `{base64Url, byteCount}`, at most 128 KiB |
 | `grantEnrollment` | Exact original `{base64Url, byteCount}`, at most 16 KiB |
@@ -118,13 +118,13 @@ grant-authorizer profile is the following closed object:
 
 The endpoint has exactly `socketPath`, `requestTimeoutSeconds`, `listenerUid`
 and `listenerGid`. The path is
-`/run/serverware/registration-execution/authorizer.sock`; timeout is an integer
+`/run/catchplate/registration-execution/authorizer.sock`; timeout is an integer
 1–30 seconds; listener UID/GID are `0:0`. These are the activated listener's
 system-manager peer credentials, not the accepting authorizer child's
 `65513:65513` identity. Neither is a substitute for authenticating the grant.
 No browser input or environment override selects the destination.
 
-An explicit nested `serverware.controlPlaneRegistrationExecution/v2` adds
+An explicit nested `catchplate.controlPlaneRegistrationExecution/v2` adds
 `reserverEndpoint` and independent `statePredecessor` to those six fields.
 It opts into the separate [reservation handoff and explicit reserve actions](control-plane-registration-reservation.md),
 without changing parent v3, FD203 or these public grant-preparation handlers.
@@ -136,16 +136,16 @@ adds independently pinned SQL/completion scope for the separate
 preparation routes remain grant-only; neither older profile is promoted.
 
 The complete bootstrap remains bounded to 4 MiB. The separate
-[`_produce_v3_on_work`](../serverware/control_plane_enrollment_bootstrap.py)
+[`_produce_v3_on_work`](../catchplate/control_plane_enrollment_bootstrap.py)
 producer signs this explicit version; parent v2 is not silently promoted. Actual
-[execution bootstrap admission](../serverware/control_plane_registration_execution_bootstrap.py)
+[execution bootstrap admission](../catchplate/control_plane_registration_execution_bootstrap.py)
 verifies all three original enrollments and joins configuration, generation,
 audience and the actual configured planner/evidence keys.
 
 Existing custody startup must first admit the runtime root and inherited FD
 inventory. Enrollment startup then loads the separately provisioned unencrypted
 Ed25519 PKCS8 caller key, delivered from the fixed source
-`/run/secrets/serverware-registration-execution-caller-key` into FD `203`.
+`/run/secrets/catchplate-registration-execution-caller-key` into FD `203`.
 Collisions fail rather than overwrite an existing descriptor. Startup pairs it to the enrolled public
 key and rejects reuse of the enrollment or actual HTTP-response signing key.
 The owner retains the original descriptor identity and checks its live custody.
@@ -154,7 +154,7 @@ and protected host delivery are not hardware custody or release admission.
 
 ## Private original-preserving composition
 
-[`prepare_registration_execution_grant(originals)`](../serverware/control_plane_registration_preparation.py)
+[`prepare_registration_execution_grant(originals)`](../catchplate/control_plane_registration_preparation.py)
 is an internal authenticated-application continuation, not an HTTP handler.
 An original-input container is not evidence that the caller passed the required
 operator/OIDC/session or new-purpose authorization gate. The new explicit
@@ -175,21 +175,21 @@ actual registration source/evidence exchange originals (raw8 + raw2)
 The caller-key steps are exposed only through the retained enrollment owner's
 private `_authorize_registration_execution(...)` and
 `_request_registration_execution_grant(...)` methods. Their
-[composition](../serverware/control_plane_registration_execution.py) uses the
+[composition](../catchplate/control_plane_registration_execution.py) uses the
 same cold v3 scope, actual key and independently admitted endpoint. A socket
 return is unverified until the genuine
-[receiving verifier](../serverware/authority_registration_execution_response.py)
+[receiving verifier](../catchplate/authority_registration_execution_response.py)
 authenticates it against the exact caller authorization, full signed planning
 exchange, root-enrolled keys and complete before-vector. It needs no private
 key and returns only the unchanged grant original.
 
 `ControlPlaneCustodyClient.prepare_registration_execution_plan(...)` obtains
 the preparation originals through the
-[private control-plane → runtime → verifier transport](../serverware/authority_webauthn_registration_execution_caller.py).
+[private control-plane → runtime → verifier transport](../catchplate/authority_webauthn_registration_execution_caller.py).
 It carries original raw10 evidence-exchange input and returns raw8 planning/
 vector output, with fixed framing, exact EOF and no retry; framing itself
 authenticates none of those originals. The
-[verifier-side preparation](../serverware/authority_webauthn_registration_execution_preparation.py)
+[verifier-side preparation](../catchplate/authority_webauthn_registration_execution_preparation.py)
 uses genuine raw8/raw2 replay and an actual `CurrentRootReader` under the same
 configured verifier privileges. A posted expectation graph or claimed root
 vector cannot replace that acquisition. The observed vector is not itself a
@@ -216,7 +216,7 @@ retain and genuinely admit the original bytes under their own required gates.
 ## Explicit local retention
 
 The separate private
-[`prepare_and_retain_registration_execution_grant(originals)`](../serverware/control_plane_registration_preparation.py)
+[`prepare_and_retain_registration_execution_grant(originals)`](../catchplate/control_plane_registration_preparation.py)
 performs the same genuine preparation while preserving the exact signer
 request8/response2 that produced it. Through the actual cold custody client it
 publishes the signer record, grant raw10 record and a final small association
@@ -237,7 +237,7 @@ action is added.
 `ControlPlaneCustodyClient.append_registration_execution_grant(originals)`
 uses the [journal's separate retention-only format](control-plane-custody-journal.md#registration-execution-grant-retention).
 Its `SWCPG001` frame and
-`serverware.controlPlaneRegistrationExecutionGrantRecord/v1` digest domain
+`catchplate.controlPlaneRegistrationExecutionGrantRecord/v1` digest domain
 keep this raw10 inventory distinct from the five existing evidence/transition
 profiles. The lower-level append only stores opaque bytes; it does not perform
 the genuine authorization and grant replay done by the preparation composition.
@@ -263,18 +263,18 @@ resistance to rollback.
 
 ### Standalone signer-exchange retention
 
-A separate [signer-exchange codec](../serverware/control_plane_registration_signer_records.py)
+A separate [signer-exchange codec](../catchplate/control_plane_registration_signer_records.py)
 preserves the exact signer request8 and response2 originals. Its `SWCPS001`
-frame, `serverware.controlPlaneRegistrationSignerExchangeRecord/v1` digest
+frame, `catchplate.controlPlaneRegistrationSignerExchangeRecord/v1` digest
 domain and fixed `registration-signer` family keep these bytes distinct from
 the grant bundle and all older record formats. Existing signer field/group
 bounds apply, with a combined 64 MiB body limit and at most 346 header bytes.
 The local digest identifies retained bytes; it does not authenticate the signer,
 associate them with a grant or authorize finalization.
 
-[`CustodyJournal.append_registration_signer_exchange(originals)`](../serverware/control_plane_custody_journal.py)
+[`CustodyJournal.append_registration_signer_exchange(originals)`](../catchplate/control_plane_custody_journal.py)
 uses the existing durable publication and recovery path without attempt or
-observation markers. The [cold custody client](../serverware/control_plane_custody_client.py)
+observation markers. The [cold custody client](../catchplate/control_plane_custody_client.py)
 exposes the same append method, returning only a local digest, and
 `load_registration_signer_exchange(localdigest)`, returning an opaque
 `PreparedRecord` with the exact originals, original source revision, digest,

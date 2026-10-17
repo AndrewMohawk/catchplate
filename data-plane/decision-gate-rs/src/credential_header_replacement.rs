@@ -2,7 +2,7 @@
 //! This never rewrites bodies, substrings, authentication selectors, or the original
 //! client-proof request. The retained late injection path still binds the signed plan.
 use crate::{
-    credential_injection_target, discard_header_alias, is_serverware_internal_header,
+    credential_injection_target, discard_header_alias, is_catchplate_internal_header,
     is_standard_hop_by_hop_header, Credential, CredentialInjectionTarget, Principal, Route,
     Snapshot,
 };
@@ -28,7 +28,7 @@ fn validate_contract(
     };
     let alias = discard_header_alias(name);
     if is_standard_hop_by_hop_header(&alias)
-        || is_serverware_internal_header(&alias)
+        || is_catchplate_internal_header(&alias)
         || matches!(
             alias.as_str(),
             "cookie" | "host" | "content-type" | "content-length" | "content-encoding"

@@ -6,17 +6,17 @@
 # The signed bootstrap remains in the existing authority-trust directory mount.
 # This mount neither generates credentials nor establishes production readiness.
 services:
-  serverware:
+  catchplate:
     volumes:
       - type: bind
-        source: ${SERVERWARE_CONTROL_PLANE_ENROLLMENT_SIGNING_KEY_FILE:?set preprovisioned root-owned mode 0400 enrollment signing key file}
-        target: /run/secrets/serverware-control-plane-enrollment-signing-key
+        source: ${CATCHPLATE_CONTROL_PLANE_ENROLLMENT_SIGNING_KEY_FILE:?set preprovisioned root-owned mode 0400 enrollment signing key file}
+        target: /run/secrets/catchplate-control-plane-enrollment-signing-key
         read_only: true
         bind:
           create_host_path: false
       - type: bind
-        source: ${SERVERWARE_REGISTRATION_EVIDENCE_SOCKET_DIR:?set preprovisioned registration evidence signer socket directory}
-        target: /run/serverware/registration-evidence
+        source: ${CATCHPLATE_REGISTRATION_EVIDENCE_SOCKET_DIR:?set preprovisioned registration evidence signer socket directory}
+        target: /run/catchplate/registration-evidence
         read_only: true
         bind:
           create_host_path: false

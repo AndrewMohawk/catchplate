@@ -18,8 +18,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_jit_primary_chunk_reader as source
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_jit_primary_chunk_reader as source
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 from test_authority_jit_primary_chunks import frames, native, query, row
 
 
@@ -77,7 +77,7 @@ def acquire(parts, *, work=None):
 
 def real_trace_read():
     """Compile the complete actual method, not a rewritten gate or stub."""
-    path = Path(__file__).resolve().parents[1] / "serverware/authority_planner_read.py"
+    path = Path(__file__).resolve().parents[1] / "catchplate/authority_planner_read.py"
     parsed = ast.parse(path.read_text())
     cls = next(node for node in parsed.body if isinstance(node, ast.ClassDef) and node.name == "PlannerTrace")
     method = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "read")
@@ -114,7 +114,7 @@ class JitPrimaryChunkReaderControls(unittest.TestCase):
         self.assertEqual([entry[1]["ordinal"] for entry in trace.entries], list(range(count)))
         for ordinal, (sql, parameters) in enumerate(cursor.calls):
             self.assertEqual(parameters, ("publication-one",))
-            self.assertIn("FROM serverware_metadata.webauthn_trust_publications AS target", sql)
+            self.assertIn("FROM catchplate_metadata.webauthn_trust_publications AS target", sql)
             self.assertIn("LIMIT 2", sql)
             self.assertEqual(trace.entries[ordinal][1]["offset"], ordinal * source.codec.CHUNK_BYTES)
 

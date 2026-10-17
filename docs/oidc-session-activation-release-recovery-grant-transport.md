@@ -5,7 +5,7 @@ only a fixed private framing profile. It accepts no configurable codec, resource
 path, issuer policy or root authority in request data. LIVE grant framing is
 unchanged.
 
-The endpoint is `/run/serverware/oidc-session-activation-token-release/recovery-grants.sock`,
+The endpoint is `/run/catchplate/oidc-session-activation-token-release/recovery-grants.sock`,
 timeout 1–30 seconds, with root listener peer UID/GID 0:0. The service admits only
 caller UID/GID 65532:65532 before reading request bytes. Request/response magics
 are `SWORGQ01` / `SWORGR01`.

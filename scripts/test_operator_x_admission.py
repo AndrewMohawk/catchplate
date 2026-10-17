@@ -21,15 +21,15 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-import serverware
-from serverware import oauth_application_owner, operator_demo
-from serverware import operator_provider_custody as custody
-from serverware import operator_provider_key as keys
-from serverware import operator_x_admission as admission
+import catchplate
+from catchplate import oauth_application_owner, operator_demo
+from catchplate import operator_provider_custody as custody
+from catchplate import operator_provider_key as keys
+from catchplate import operator_x_admission as admission
 
-FLAG = "SERVERWARE_OPERATOR_MANAGED_X_ENABLED"
-X_DIRECTORY = "SERVERWARE_OPERATOR_X_CUSTODY_DIR"
-GOOGLE_DIRECTORY = "SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR"
+FLAG = "CATCHPLATE_OPERATOR_MANAGED_X_ENABLED"
+X_DIRECTORY = "CATCHPLATE_OPERATOR_X_CUSTODY_DIR"
+GOOGLE_DIRECTORY = "CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR"
 ORIGIN = "https://operator.example.com"
 OWNER = "12345678-1234-4234-8234-123456789abc"
 
@@ -43,16 +43,16 @@ class XAdmissionTests(unittest.TestCase):
         for directory in (self.data, self.x, self.google):
             directory.mkdir(mode=0o700)
         self.raw = {FLAG: "1", X_DIRECTORY: str(self.x), GOOGLE_DIRECTORY: str(self.google),
-            "SERVERWARE_OPERATOR_DEMO": "1", "SERVERWARE_RELEASE_CHANNEL": "dev",
-            "SERVERWARE_PROCESS_MODE": "serverware-control-plane", "SERVERWARE_DATA_DIR": str(self.data),
-            "SERVERWARE_METADATA_STORE_BACKEND": "sqlite", "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite",
-            "SERVERWARE_GRANT_STORE_BACKEND": "sqlite", "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
-            "SERVERWARE_KEY_RELEASE_REQUIRED": "0", "SERVERWARE_DEV_AUTHENTICATOR": "0",
-            "SERVERWARE_DEV_DEMO_SEED": "0", "SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED": "1",
-            "SERVERWARE_PRODUCTION_IMAGE": "0", "SERVERWARE_DEVELOPMENT_SANDBOX": "0",
-            "SERVERWARE_TEE_PLATFORM": "none-dev", "SERVERWARE_TEE_QUOTE_PROVIDER": "dev-signed-quote",
-            "SERVERWARE_PUBLIC_URL": ORIGIN}
-        self.config = ModuleType("serverware.config")
+            "CATCHPLATE_OPERATOR_DEMO": "1", "CATCHPLATE_RELEASE_CHANNEL": "dev",
+            "CATCHPLATE_PROCESS_MODE": "catchplate-control-plane", "CATCHPLATE_DATA_DIR": str(self.data),
+            "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite", "CATCHPLATE_AUDIT_STORE_BACKEND": "sqlite",
+            "CATCHPLATE_GRANT_STORE_BACKEND": "sqlite", "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
+            "CATCHPLATE_KEY_RELEASE_REQUIRED": "0", "CATCHPLATE_DEV_AUTHENTICATOR": "0",
+            "CATCHPLATE_DEV_DEMO_SEED": "0", "CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED": "1",
+            "CATCHPLATE_PRODUCTION_IMAGE": "0", "CATCHPLATE_DEVELOPMENT_SANDBOX": "0",
+            "CATCHPLATE_TEE_PLATFORM": "none-dev", "CATCHPLATE_TEE_QUOTE_PROVIDER": "dev-signed-quote",
+            "CATCHPLATE_PUBLIC_URL": ORIGIN}
+        self.config = ModuleType("catchplate.config")
         values = {"DATA_DIR": self.data, "RELEASE_CHANNEL": "dev", "PRODUCTION_IMAGE": False,
             "METADATA_STORE_BACKEND": "sqlite", "AUDIT_STORE_BACKEND": "sqlite", "GRANT_STORE_BACKEND": "sqlite",
             "ATOMIC_RELEASE_AUTHORIZATION_ENABLED": False, "KEY_RELEASE_REQUIRED": False,
@@ -65,13 +65,13 @@ class XAdmissionTests(unittest.TestCase):
         stack = ExitStack()
         self.addCleanup(stack.close)
         stack.enter_context(patch.dict(os.environ, self.raw, clear=True))
-        stack.enter_context(patch.dict(sys.modules, {"serverware.config": self.config}))
-        stack.enter_context(patch.object(serverware, "config", self.config, create=True))
+        stack.enter_context(patch.dict(sys.modules, {"catchplate.config": self.config}))
+        stack.enter_context(patch.object(catchplate, "config", self.config, create=True))
         self.active = stack.enter_context(patch.object(operator_demo, "active", return_value=True))
         self.enrolled = stack.enter_context(patch.object(oauth_application_owner, "require_started", return_value=None))
 
     def connection(self, path=None):
-        conn = sqlite3.connect(self.data / "serverware.sqlite3" if path is None else path)
+        conn = sqlite3.connect(self.data / "catchplate.sqlite3" if path is None else path)
         self.addCleanup(conn.close)
         conn.execute("BEGIN IMMEDIATE")
         return conn
@@ -113,30 +113,30 @@ class XAdmissionTests(unittest.TestCase):
         self.assertEqual(list(self.google.iterdir()), [])
 
     def test_raw_explicit_development_modes_are_not_inferred(self):
-        changes = {"SERVERWARE_OPERATOR_DEMO": "0", "SERVERWARE_RELEASE_CHANNEL": "production",
-            "SERVERWARE_PROCESS_MODE": "proxy", "SERVERWARE_METADATA_STORE_BACKEND": "postgres",
-            "SERVERWARE_AUDIT_STORE_BACKEND": "postgres", "SERVERWARE_GRANT_STORE_BACKEND": "postgres",
-            "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "1", "SERVERWARE_KEY_RELEASE_REQUIRED": "1",
-            "SERVERWARE_DEV_AUTHENTICATOR": "1", "SERVERWARE_DEV_DEMO_SEED": "1",
-            "SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED": "0", "SERVERWARE_PRODUCTION_IMAGE": "1",
-            "SERVERWARE_DEVELOPMENT_SANDBOX": "1", "SERVERWARE_TEE_PLATFORM": "nitro",
-            "SERVERWARE_TEE_QUOTE_PROVIDER": "native"}
+        changes = {"CATCHPLATE_OPERATOR_DEMO": "0", "CATCHPLATE_RELEASE_CHANNEL": "production",
+            "CATCHPLATE_PROCESS_MODE": "proxy", "CATCHPLATE_METADATA_STORE_BACKEND": "postgres",
+            "CATCHPLATE_AUDIT_STORE_BACKEND": "postgres", "CATCHPLATE_GRANT_STORE_BACKEND": "postgres",
+            "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "1", "CATCHPLATE_KEY_RELEASE_REQUIRED": "1",
+            "CATCHPLATE_DEV_AUTHENTICATOR": "1", "CATCHPLATE_DEV_DEMO_SEED": "1",
+            "CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED": "0", "CATCHPLATE_PRODUCTION_IMAGE": "1",
+            "CATCHPLATE_DEVELOPMENT_SANDBOX": "1", "CATCHPLATE_TEE_PLATFORM": "nitro",
+            "CATCHPLATE_TEE_QUOTE_PROVIDER": "native"}
         for name, value in changes.items():
             with self.subTest(name=name), patch.dict(os.environ, {name: value}):
                 self.refused(admission.require_runtime)
-        for name in ("SERVERWARE_PROCESS_MODE", "SERVERWARE_METADATA_STORE_BACKEND", "SERVERWARE_DEV_AUTHENTICATOR"):
+        for name in ("CATCHPLATE_PROCESS_MODE", "CATCHPLATE_METADATA_STORE_BACKEND", "CATCHPLATE_DEV_AUTHENTICATOR"):
             with patch.dict(os.environ):
                 del os.environ[name]
                 self.refused(admission.require_runtime)
         admission.require_runtime()
 
     def test_native_enrolled_and_global_x_or_twitter_selections_refuse(self):
-        for name in ("SERVERWARE_NATIVE_CONFIG_FD", "SERVERWARE_OAUTH_APPLICATION_CONFIG_FD",
-                "SERVERWARE_CONTROL_PLANE_CUSTODY_FD", "SERVERWARE_AUTHORITY_TOKEN",
-                "SERVERWARE_METADATA_STORE_DSN"):
+        for name in ("CATCHPLATE_NATIVE_CONFIG_FD", "CATCHPLATE_OAUTH_APPLICATION_CONFIG_FD",
+                "CATCHPLATE_CONTROL_PLANE_CUSTODY_FD", "CATCHPLATE_AUTHORITY_TOKEN",
+                "CATCHPLATE_METADATA_STORE_DSN"):
             with self.subTest(name=name), patch.dict(os.environ, {name: "synthetic"}):
                 self.refused(admission.require_runtime)
-        for prefix in ("SERVERWARE_X_OAUTH_", "SERVERWARE_TWITTER_OAUTH_"):
+        for prefix in ("CATCHPLATE_X_OAUTH_", "CATCHPLATE_TWITTER_OAUTH_"):
             for value in ("", "synthetic"):
                 with patch.dict(os.environ, {prefix + "CLIENT_SECRET": value}):
                     self.refused(admission.require_runtime)
@@ -173,10 +173,10 @@ class XAdmissionTests(unittest.TestCase):
         for value in ("http://operator.example.com", ORIGIN + "/", ORIGIN + ":443",
                 "https://operator.example.com/path", "https://operator.example.com?x=1",
                 "https://demo-upstream:8443", "https://127.0.0.1", "https://user@operator.example.com"):
-            with self.subTest(value=value), patch.dict(os.environ, {"SERVERWARE_PUBLIC_URL": value}), \
+            with self.subTest(value=value), patch.dict(os.environ, {"CATCHPLATE_PUBLIC_URL": value}), \
                     patch.object(self.config, "PUBLIC_URL", value):
                 self.refused(admission.public_origin)
-        with patch.dict(os.environ, {"SERVERWARE_PUBLIC_URL": "https://other.example.com"}):
+        with patch.dict(os.environ, {"CATCHPLATE_PUBLIC_URL": "https://other.example.com"}):
             self.refused(admission.public_origin)
 
     def test_x_directory_is_private_existing_and_not_data_or_google(self):
@@ -204,7 +204,7 @@ class XAdmissionTests(unittest.TestCase):
 
     def test_connection_refuses_other_database_attached_temp_and_uncommitted_modes(self):
         pinned = admission.require_runtime()
-        for path in (":memory:", self.data / "other.sqlite3", self.root / "serverware.sqlite3"):
+        for path in (":memory:", self.data / "other.sqlite3", self.root / "catchplate.sqlite3"):
             conn = self.connection(path)
             self.refused(admission.check_connection, conn, pinned)
             conn.close()
@@ -228,7 +228,7 @@ class XAdmissionTests(unittest.TestCase):
 
     def test_connection_rechecks_environment_process_and_directory_pins(self):
         pinned, conn = admission.require_runtime(), self.connection()
-        with patch.dict(os.environ, {"SERVERWARE_SYNTHETIC_CONFIGURATION_DRIFT": "1"}):
+        with patch.dict(os.environ, {"CATCHPLATE_SYNTHETIC_CONFIGURATION_DRIFT": "1"}):
             self.refused(admission.check_connection, conn, pinned)
         self.refused(admission.check_connection, conn, replace(pinned,
             process=(os.getpid() + 1, os.geteuid(), os.getegid())))
@@ -255,7 +255,7 @@ class XAdmissionTests(unittest.TestCase):
     def test_real_first_x_key_initializer_then_same_connection_recheck(self):
         pinned, conn = admission.require_runtime(), self.connection()
         admission.check_connection(conn, pinned)
-        with patch("serverware.operator_publication.assert_held") as held:
+        with patch("catchplate.operator_publication.assert_held") as held:
             key = keys.initialize_first_x(pinned, conn, no_retained_provider_state=True)
         self.addCleanup(keys.close_pin, key)
         held.assert_called_once_with()  # Synthetic EX boundary, not publication acceptance.

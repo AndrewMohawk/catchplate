@@ -114,23 +114,23 @@ pub(crate) const ACTIVATION_CONTENT_TYPE: &str = "application/json";
 pub(crate) const MAX_ACTIVATION_BODY_BYTES: u64 = 16 * 1024 * 1024;
 
 const TRUST_MANIFEST_API_VERSION: &str =
-    "serverware.policyShadowGenerationTrust/v1";
+    "catchplate.policyShadowGenerationTrust/v1";
 const INSTALL_REQUEST_API_VERSION: &str =
-    "serverware.policyShadowGenerationInstall/v2";
+    "catchplate.policyShadowGenerationInstall/v2";
 const ACTIVATION_REQUEST_API_VERSION: &str =
-    "serverware.policyShadowGenerationActivationRequest/v1";
+    "catchplate.policyShadowGenerationActivationRequest/v1";
 const ACTIVATION_RESPONSE_API_VERSION: &str =
-    "serverware.policyShadowGenerationActivationResponse/v1";
+    "catchplate.policyShadowGenerationActivationResponse/v1";
 const RUNTIME_VERIFIER_REQUEST_API_VERSION: &str =
-    "serverware.policyShadowRuntimeAttestationVerificationRequest/v1";
+    "catchplate.policyShadowRuntimeAttestationVerificationRequest/v1";
 const WEBAUTHN_VERIFIER_REQUEST_API_VERSION: &str =
-    "serverware.policyActivationWebAuthnVerificationRequest/v1";
+    "catchplate.policyActivationWebAuthnVerificationRequest/v1";
 const WEBAUTHN_VERIFIER_RESPONSE_API_VERSION: &str =
-    "serverware.policyActivationWebAuthnVerification/v1";
+    "catchplate.policyActivationWebAuthnVerification/v1";
 const WEBAUTHN_VERIFIER_RESPONSE_KIND: &str =
     "PolicyActivationWebAuthnVerification";
 const WEBAUTHN_VERIFIER_SIGNATURE_DOMAIN: &str =
-    "serverware.policyActivationWebAuthnVerification/v1";
+    "catchplate.policyActivationWebAuthnVerification/v1";
 const MAX_TRUST_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_CUSTODY_CONFIG_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_STARTUP_ACTIVE_AUTHORIZATION_BYTES: u64 = 64 * 1024;
@@ -139,33 +139,33 @@ const MAX_SIGNATURE_DOMAINS_PER_KEY: usize = 64;
 const MAX_TRUST_LIFETIME_NANOS: i64 = 24 * 60 * 60 * 1_000_000_000;
 
 const TRUST_MANIFEST_PATH_ENV: &str =
-    "SERVERWARE_POLICY_SHADOW_TRUST_MANIFEST";
+    "CATCHPLATE_POLICY_SHADOW_TRUST_MANIFEST";
 const TRUST_MANIFEST_SHA256_ENV: &str =
-    "SERVERWARE_POLICY_SHADOW_TRUST_MANIFEST_SHA256";
+    "CATCHPLATE_POLICY_SHADOW_TRUST_MANIFEST_SHA256";
 const RUNTIME_VERIFIER_COMMAND_ENV: &str =
-    "SERVERWARE_POLICY_SHADOW_RUNTIME_ATTESTATION_VERIFY_COMMAND";
+    "CATCHPLATE_POLICY_SHADOW_RUNTIME_ATTESTATION_VERIFY_COMMAND";
 const RUNTIME_VERIFIER_SHA256_ENV: &str =
-    "SERVERWARE_POLICY_SHADOW_RUNTIME_ATTESTATION_VERIFIER_SHA256";
+    "CATCHPLATE_POLICY_SHADOW_RUNTIME_ATTESTATION_VERIFIER_SHA256";
 const WEBAUTHN_VERIFIER_COMMAND_ENV: &str =
-    "SERVERWARE_POLICY_SHADOW_WEBAUTHN_VERIFY_COMMAND";
+    "CATCHPLATE_POLICY_SHADOW_WEBAUTHN_VERIFY_COMMAND";
 const WEBAUTHN_VERIFIER_SHA256_ENV: &str =
-    "SERVERWARE_POLICY_SHADOW_WEBAUTHN_VERIFIER_SHA256";
+    "CATCHPLATE_POLICY_SHADOW_WEBAUTHN_VERIFIER_SHA256";
 const PUBLICATION_HANDOFF_COMMAND_ENV: &str =
-    "SERVERWARE_POLICY_SHADOW_PUBLICATION_HANDOFF_COMMAND";
+    "CATCHPLATE_POLICY_SHADOW_PUBLICATION_HANDOFF_COMMAND";
 const PUBLICATION_HANDOFF_SHA256_ENV: &str =
-    "SERVERWARE_POLICY_SHADOW_PUBLICATION_HANDOFF_SHA256";
+    "CATCHPLATE_POLICY_SHADOW_PUBLICATION_HANDOFF_SHA256";
 const CUSTODY_CONFIG_PATH_ENV: &str =
-    "SERVERWARE_POLICY_SHADOW_CUSTODY_CONFIG";
+    "CATCHPLATE_POLICY_SHADOW_CUSTODY_CONFIG";
 const STARTUP_GENERATION_PATH_ENV: &str =
-    "SERVERWARE_POLICY_SHADOW_STARTUP_GENERATION";
+    "CATCHPLATE_POLICY_SHADOW_STARTUP_GENERATION";
 const STARTUP_GENERATION_SHA256_ENV: &str =
-    "SERVERWARE_POLICY_SHADOW_STARTUP_GENERATION_SHA256";
+    "CATCHPLATE_POLICY_SHADOW_STARTUP_GENERATION_SHA256";
 const STARTUP_ACTIVE_AUTHORIZATION_PATH_ENV: &str =
-    "SERVERWARE_POLICY_SHADOW_STARTUP_ACTIVE_AUTHORIZATION";
+    "CATCHPLATE_POLICY_SHADOW_STARTUP_ACTIVE_AUTHORIZATION";
 const STARTUP_ACTIVE_AUTHORIZATION_SHA256_ENV: &str =
-    "SERVERWARE_POLICY_SHADOW_STARTUP_ACTIVE_AUTHORIZATION_SHA256";
+    "CATCHPLATE_POLICY_SHADOW_STARTUP_ACTIVE_AUTHORIZATION_SHA256";
 const STARTUP_ACTIVE_AUTHORIZATION_API_VERSION: &str =
-    "serverware.policyShadowStartupActiveAuthorization/v1";
+    "catchplate.policyShadowStartupActiveAuthorization/v1";
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -280,58 +280,58 @@ fn required_trust_role(signature_domain: &str) -> Option<&'static str> {
         | PUBLICATION_PREPARATION_SIGNATURE_DOMAIN => {
             Some("fleet-shadow-runtime")
         }
-        "serverware.policyShadowIngressAdmission/v1" => {
+        "catchplate.policyShadowIngressAdmission/v1" => {
             Some("custody-ingress-admission")
         }
-        "serverware.policyShadowUnavailableIngress/v1" => {
+        "catchplate.policyShadowUnavailableIngress/v1" => {
             Some("custody-unavailable-ingress")
         }
-        "serverware.policyShadowDispatchBarrier/v1" => {
+        "catchplate.policyShadowDispatchBarrier/v1" => {
             Some("custody-dispatch-barrier")
         }
-        "serverware.policyShadowActiveEffectBarrier/v1" => {
+        "catchplate.policyShadowActiveEffectBarrier/v1" => {
             Some("custody-active-effect-barrier")
         }
-        "serverware.policyShadowActiveEffectCommit/v1" => {
+        "catchplate.policyShadowActiveEffectCommit/v1" => {
             Some("custody-active-effect-commit")
         }
-        "serverware.policyShadowTerminalAppend/v1" => {
+        "catchplate.policyShadowTerminalAppend/v1" => {
             Some("custody-terminal-append")
         }
-        "serverware.policyShadowLedgerAppend/v1" => {
+        "catchplate.policyShadowLedgerAppend/v1" => {
             Some("custody-ledger-append")
         }
-        "serverware.policyShadowSpoolCompaction/v1" => {
+        "catchplate.policyShadowSpoolCompaction/v1" => {
             Some("custody-spool-compaction")
         }
-        "serverware.policyShadowPublicationReconciliation/v1" => {
+        "catchplate.policyShadowPublicationReconciliation/v1" => {
             Some("custody-publication-reconciliation")
         }
-        "serverware.policyActivationPublication/v1" => {
+        "catchplate.policyActivationPublication/v1" => {
             Some("custody-activation-publication")
         }
-        "serverware.policyShadowCustodyResultEnvelope/v1" => {
+        "catchplate.policyShadowCustodyResultEnvelope/v1" => {
             Some("custody-result-envelope")
         }
-        "serverware.policyShadowCustodyStoreResponse/v1" => {
+        "catchplate.policyShadowCustodyStoreResponse/v1" => {
             Some("custody-store-response")
         }
-        "serverware.policyShadowCustodySignerResponse/v1" => {
+        "catchplate.policyShadowCustodySignerResponse/v1" => {
             Some("custody-signer-response")
         }
-        "serverware.policyShadowCustodyRetrievalResponse/v1" => {
+        "catchplate.policyShadowCustodyRetrievalResponse/v1" => {
             Some("custody-retrieval-response")
         }
-        "serverware.policyShadowCustodyTrustedTimeResponse/v1" => {
+        "catchplate.policyShadowCustodyTrustedTimeResponse/v1" => {
             Some("custody-trusted-time-response")
         }
-        "serverware.policyShadowCustodyProviderResponse/v1" => {
+        "catchplate.policyShadowCustodyProviderResponse/v1" => {
             Some("custody-provider-response")
         }
-        "serverware.policyShadowCustodyAttestationVerifier/v1" => {
+        "catchplate.policyShadowCustodyAttestationVerifier/v1" => {
             Some("custody-attestation-verifier")
         }
-        "serverware.policyShadowCustodySupervisorCapability/v1" => {
+        "catchplate.policyShadowCustodySupervisorCapability/v1" => {
             Some("custody-supervisor-capability")
         }
         _ => None,
@@ -1204,7 +1204,7 @@ struct WebAuthnVerifierResponse {
 
 struct ExternalWebAuthnVerifier<'a> {
     command: &'a PinnedVerifierCommand,
-    native_workers: Option<&'a Arc<serverware_decision_gate::native_shadow_workers::Owner>>,
+    native_workers: Option<&'a Arc<catchplate_decision_gate::native_shadow_workers::Owner>>,
     key_trust: &'a PinnedEnvelopeKeyTrust,
     trusted_time: &'a dyn TrustedTime,
 }
@@ -1230,7 +1230,7 @@ impl WebAuthnVerification for ExternalWebAuthnVerifier<'_> {
         });
         let value = native::run_command(
             self.native_workers,
-            serverware_decision_gate::native_shadow_workers::Purpose::Webauthn,
+            catchplate_decision_gate::native_shadow_workers::Purpose::Webauthn,
             self.command,
             &request,
             "policy activation WebAuthn verifier",
@@ -1637,7 +1637,7 @@ impl RuntimeAttestationVerification for FleetRuntimeAttestation {
 /// Paths and pins are admitted by `from_config` through the same retained-file
 /// and executable checks used by the environment-backed development entry.
 pub(crate) struct PolicyShadowGenerationConfig {
-    pub(crate) native_workers: Option<serverware_decision_gate::native_shadow_workers::Configuration>,
+    pub(crate) native_workers: Option<catchplate_decision_gate::native_shadow_workers::Configuration>,
     pub(crate) native_activation:Option<activation::Configuration>,
     pub(crate) trust_manifest_path: PathBuf,
     pub(crate) trust_manifest_sha256: Sha256Digest,
@@ -1653,7 +1653,7 @@ pub(crate) struct PolicyShadowGenerationConfig {
 }
 
 pub(crate) struct PolicyShadowGenerationControl {
-    native_workers: Option<Arc<serverware_decision_gate::native_shadow_workers::Owner>>,
+    native_workers: Option<Arc<catchplate_decision_gate::native_shadow_workers::Owner>>,
     #[cfg(target_os="linux")]
     native_custody_lifecycle:Option<Arc<super::policy_shadow::NativeCustodyLifecycleOwner>>,
     native_activation:Mutex<Option<activation::Owner>>,
@@ -1963,7 +1963,7 @@ impl PolicyShadowGenerationControl {
         let active_policy_sha256 =
             Sha256Digest::parse(snapshot.hash.clone()).map_err(shadow_error)?;
         let active_snapshot_identity_sha256 = domain_digest(
-            b"serverware.policyShadowStartupActiveSnapshotIdentity/v1",
+            b"catchplate.policyShadowStartupActiveSnapshotIdentity/v1",
             &(
                 snapshot.hash.as_str(),
                 snapshot.policy_id.as_str(),
@@ -2459,7 +2459,7 @@ impl PolicyShadowGenerationControl {
             || baseline.head_sha256()!=baseline.baseline_head_sha256() {
             return Err("origin requires the actual unused installed baseline".into());
         }
-        let value=serde_json::json!({"apiVersion":"serverware.nativeInstalledGenerationOriginals/v1",
+        let value=serde_json::json!({"apiVersion":"catchplate.nativeInstalledGenerationOriginals/v1",
             "installRequestSha256":retained.install_request_sha256,"generation":retained.generation_identity,
             "assignment":retained.assignment.wire(),"loadReceipt":retained.load_receipt.wire(),
             "runtimeAttestation":retained.startup_attestation,"runtimeAttestationVerification":retained.runtime_attestation_verification,
@@ -2469,7 +2469,7 @@ impl PolicyShadowGenerationControl {
                 "originalCount":baseline.original_count(),"lastIngress":baseline.last_ingress(),
                 "observedAtUnixNanos":baseline.observed_at_unix_nanos()}});
         let raw=super::native_response_profile::canonical_ascii_bytes(&value)?;
-        if raw.is_empty() || raw.len()>serverware_decision_gate::native_generation_origin_v1::MAX_ORIGINALS{return Err("complete generation originals exceed bound".into());}
+        if raw.is_empty() || raw.len()>catchplate_decision_gate::native_generation_origin_v1::MAX_ORIGINALS{return Err("complete generation originals exceed bound".into());}
         // Both actual owner guards remain held through the purpose-specific
         // signature and fresh quote. This is provenance, not an initialization.
         let result=consume(String::from_utf8(raw).map_err(|_|"origin original not ASCII")?,now as u64)?;
@@ -2697,7 +2697,7 @@ impl PolicyShadowGenerationControl {
         }
         let request: PublicationLookupRequest = strict_json_from_slice(body)
             .map_err(|_| GenerationInstallError::invalid("publication lookup is not strict JSON"))?;
-        if request.api_version != "serverware.policyShadowGenerationLookup/v1"
+        if request.api_version != "catchplate.policyShadowGenerationLookup/v1"
             || !bounded_ascii_token(&request.request_id, MAX_REPLAY_IDENTIFIER_BYTES)
             || !bounded_ascii_token(&request.replay_id, MAX_REPLAY_IDENTIFIER_BYTES)
             || !bounded_ascii_token(&request.management_handoff_id, MAX_REPLAY_IDENTIFIER_BYTES)
@@ -2999,7 +2999,7 @@ impl PolicyShadowGenerationControl {
             ));
         }
         let management_handoff_sha256 = domain_digest(
-            b"serverware.policyShadowGenerationManagementHandoff/v1",
+            b"catchplate.policyShadowGenerationManagementHandoff/v1",
             &(
                 request.request_id.as_str(),
                 request.replay_id.as_str(),
@@ -3039,7 +3039,7 @@ impl PolicyShadowGenerationControl {
         });
         let verifier_value = native::run_command(
             self.native_workers.as_ref(),
-            serverware_decision_gate::native_shadow_workers::Purpose::Runtime,
+            catchplate_decision_gate::native_shadow_workers::Purpose::Runtime,
             &self.runtime_verifier,
             &verifier_request,
             "policy-shadow runtime attestation verifier",
@@ -3786,7 +3786,7 @@ impl PolicyShadowGenerationControl {
         let value =
             native::run_command(
                 self.native_workers.as_ref(),
-                serverware_decision_gate::native_shadow_workers::Purpose::Publication,
+                catchplate_decision_gate::native_shadow_workers::Purpose::Publication,
                 &self.publication_handoff,
                 &request,
                 "policy-shadow publication handoff",
@@ -4264,7 +4264,7 @@ impl PolicyShadowGenerationControl {
                 GenerationInstallError::invalid(error.to_string())
             })?;
         let measurement = domain_digest(
-            b"serverware.policyShadowDecisionGateRuntimeMeasurement/v1",
+            b"catchplate.policyShadowDecisionGateRuntimeMeasurement/v1",
             &(
                 &decision_gate_executable_sha256,
                 &release_provenance_sha256,
@@ -4456,7 +4456,7 @@ fn policy_pair_bundle_sha256(
     compiler: &CompilerTrustManifest,
 ) -> Result<Sha256Digest, String> {
     domain_digest(
-        b"serverware.policyShadowPolicyPairBundle/v1",
+        b"catchplate.policyShadowPolicyPairBundle/v1",
         &(
             active_policy_sha256,
             active_policy_sequence,
@@ -4485,7 +4485,7 @@ fn compiled_snapshot_sha256(
     compiler: &CompilerTrustManifest,
 ) -> Result<Sha256Digest, String> {
     domain_digest(
-        b"serverware.policyShadowCompiledSnapshot/v1",
+        b"catchplate.policyShadowCompiledSnapshot/v1",
         &(
             lane,
             policy_sha256,
@@ -4543,7 +4543,7 @@ fn verify_startup_attestation_bindings(
             )
         })?;
     let member_id = domain_digest(
-        b"serverware.policyShadowFleetMember/v1",
+        b"catchplate.policyShadowFleetMember/v1",
         assigned_member.1,
     )
     .map_err(GenerationInstallError::invalid)?;
@@ -4863,7 +4863,7 @@ fn required_runtime_release_digest(
 
 
 fn bounded_ascii_domain(value: &str) -> bool {
-    value.starts_with("serverware.")
+    value.starts_with("catchplate.")
         && value.len() <= 256
         && value.bytes().all(|byte| {
             byte.is_ascii_alphanumeric()

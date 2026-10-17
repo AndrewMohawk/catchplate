@@ -26,7 +26,7 @@ from scripts import operator_github_examples_fixture as examples
 from scripts import operator_github_fixture as base
 from scripts.operator_github_fixture_network import FIXTURE_IP, assert_isolated_network
 
-SCHEMA = "serverware.privateGithubAppExampleObservations/v2"
+SCHEMA = "catchplate.privateGithubAppExampleObservations/v2"
 APP_ID, INSTALLATION_ID, ACCOUNT_ID, REPOSITORY_ID = 123, 456, 700, 900
 TOKEN_SECONDS = 120
 TOKENS = ("ghs_123_synthetic.initial-token_v1", "ghs_123_synthetic.renewed-token_v2",
@@ -74,7 +74,7 @@ def provisioning_headers(fields, *, post, length):
     require(set(headers) == expected | ({"content-type", "content-length"} if post else set())
         and headers["host"] == "api.github.com" and headers["accept"] == "application/vnd.github+json"
         and headers["accept-encoding"] == "identity" and headers["connection"] == "close"
-        and headers["user-agent"] == "serverware-github-app/1" and headers["x-github-api-version"] == "2022-11-28")
+        and headers["user-agent"] == "catchplate-github-app/1" and headers["x-github-api-version"] == "2022-11-28")
     if post:
         require(headers["content-type"] == "application/json" and headers["content-length"] == str(length))
     else:

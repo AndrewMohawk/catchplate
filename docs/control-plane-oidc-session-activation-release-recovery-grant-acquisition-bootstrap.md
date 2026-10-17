@@ -9,7 +9,7 @@ existing configuration. Oversized configurations are refused, not externalized
 to a caller-selected path or admitted under a larger limit.
 
 The nested schema is
-`serverware.controlPlaneOidcSessionActivationReleaseRecoveryGrantAcquisition/v1`,
+`catchplate.controlPlaneOidcSessionActivationReleaseRecoveryGrantAcquisition/v1`,
 with exactly these six fields:
 
 | Field | Exact input |
@@ -23,7 +23,7 @@ with exactly these six fields:
 
 Each original uses only `{base64Url, byteCount}` with canonical unpadded
 base64url and an exact 2-byte minimum. The endpoint path is
-`/run/serverware/oidc-session-activation-token-release/recovery-grants.sock`;
+`/run/catchplate/oidc-session-activation-token-release/recovery-grants.sock`;
 its closed fields are `path`, `timeoutSeconds`, `peerUid`, and `peerGid`.
 This is the recovery issuer, not a LIVE issuer or staging socket.
 

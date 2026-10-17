@@ -8,7 +8,7 @@ const REFUSED: &str = "npm_install_connect_encoding_denied";
 fn ordinary_runtime(state: &GateState, snapshot: &Arc<Snapshot>) -> bool {
     state.policy_shadow.is_operator_demo()
         && !state.is_production
-        && snapshot.policy_id == "serverware-operator-demo"
+        && snapshot.policy_id == "catchplate-operator-demo"
         && state.response_proof_signer.release_profile() == ReleaseProfile::Legacy
         && state.proxy_ingress_attestation.mode == operator_demo::INGRESS_MODE
         && state.native_serving_privileges.is_none()

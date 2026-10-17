@@ -47,7 +47,7 @@ impl PreparedChild {
         good &= unsafe{libc::read(self.gate.as_raw_fd(),(&mut byte as *mut u8).cast(),1)}==1 && byte==0xa5;
         good &= unsafe{libc::getppid()}==self.parent;
         if good {
-            let argv=[c"serverware-policy-shadow-custody-guest".as_ptr(),
+            let argv=[c"catchplate-policy-shadow-custody-guest".as_ptr(),
                 if self.driver_bootstrap {c"--driver-bootstrap".as_ptr()} else {std::ptr::null()},std::ptr::null()];
             let env:[*const libc::c_char;1]=[std::ptr::null()];
             unsafe{libc::syscall(libc::SYS_execveat,self.executable.as_raw_fd(),c"".as_ptr(),

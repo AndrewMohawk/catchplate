@@ -62,15 +62,15 @@ def validate_gmail_response(status, fields, body, policy_hash):
     headers = {name.lower(): value for name, value in fields}
     require(status == 200 and body == fixture.GMAIL_RESPONSE_BODY
             and len(headers) == len(fields) <= 64 and len(str(fields)) <= 16384
-            and headers.get("x-serverware-policy-hash") == policy_hash
-            and headers.get("x-serverware-response-body-sha256") == "sha256:" + hashlib.sha256(body).hexdigest(),
+            and headers.get("x-catchplate-policy-hash") == policy_hash
+            and headers.get("x-catchplate-response-body-sha256") == "sha256:" + hashlib.sha256(body).hexdigest(),
             "normal Rust Gmail response or byte commitment differs")
     # The unchanged synthetic provider's shared HTTP serializer emits these
     # fields. V2 may admit that bounded metadata, but selects none for output.
     require(not {"server", "date", "cache-control"}.intersection(headers),
             "unselected provider response metadata was forwarded")
     commitments = tuple(headers.get(name) for name in
-                        ("x-serverware-request-digest", "x-serverware-operation-digest"))
+                        ("x-catchplate-request-digest", "x-catchplate-operation-digest"))
     require(all(isinstance(value, str) and SHA256.fullmatch(value) for value in commitments),
             "normal Rust Gmail request commitments unavailable")
     return commitments
@@ -126,7 +126,7 @@ def browser_cookie(headers, state):
     require(len(values) == 1 and len(values[0]) <= 2048, "OAuth browser-binding cookie missing or duplicated")
     cookies = SimpleCookie()
     cookies.load(values[0])
-    name = "__Host-serverware-oauth-" + state
+    name = "__Host-catchplate-oauth-" + state
     require(set(cookies) == {name}, "OAuth browser-binding cookie name differs")
     value = cookies[name]
     require(STATE.fullmatch(value.value) and value["secure"] and value["httponly"]
@@ -150,7 +150,7 @@ def callback_target(headers, state):
 
 def validate_observations(document, stage):
     require(stage in STAGES and isinstance(document, dict)
-            and document.get("schema") == "serverware.privateGoogleObservations/v1",
+            and document.get("schema") == "catchplate.privateGoogleObservations/v1",
             "isolated provider observations unavailable")
     consent, refresh, resources = STAGES[stage]
     counts = document.get("counts", {})
@@ -295,7 +295,7 @@ class GoogleRefreshCheck(OperatorCatalogCheck):
 
     def catalog(self):
         value = self.control_json(PREFIX + "/catalog", authenticated=True)
-        require(isinstance(value, dict) and value.get("schema") == "serverware.operatorCatalog/v1"
+        require(isinstance(value, dict) and value.get("schema") == "catchplate.operatorCatalog/v1"
                 and value.get("mode") == "operator-development" and value.get("productionReady") is False
                 and value.get("hardwareVerified") is False and value.get("allowed_upstreams") == [GMAIL_ORIGIN]
                 and type(value.get("revision")) is int and value["revision"] >= 1
@@ -311,7 +311,7 @@ class GoogleRefreshCheck(OperatorCatalogCheck):
                 and "\r" not in target and "\n" not in target, "HTTP target differs")
         headers = {"Connection": "close"}
         if authenticated:
-            headers["X-Serverware-Admin-Token"] = self.admin_token
+            headers["X-Catchplate-Admin-Token"] = self.admin_token
         if cookie is not None:
             require(endpoint is self.control, "browser cookie must stay at the control origin")
             headers["Cookie"] = cookie
@@ -408,7 +408,7 @@ class GoogleRefreshCheck(OperatorCatalogCheck):
         try:
             with GmailTLS(raw, self.ca, self.timeout) as tls:
                 tls.sendall((f"{method} {fixture.GMAIL_PATH} HTTP/1.1\r\nHost: gmail.googleapis.com\r\n"
-                    f"Connection: close\r\nAccept: application/json\r\nUser-Agent: serverware-test-run/{self.run_id}\r\n\r\n").encode("ascii"))
+                    f"Connection: close\r\nAccept: application/json\r\nUser-Agent: catchplate-test-run/{self.run_id}\r\n\r\n").encode("ascii"))
                 response = http.client.HTTPResponse(tls)
                 try:
                     response.begin()
@@ -499,7 +499,7 @@ class GoogleRefreshCheck(OperatorCatalogCheck):
         self.observe("refreshed")
         self.results.append("actual_expiry_automatic_refresh_new_generation_and_second_normal_rust_dispatch")
         self.results.append("both_gmail_responses_preserve_body_without_forwarding_unselected_provider_metadata")
-        result = {"ok": True, "schema": "serverware.operatorGoogleRefreshCheck/v1",
+        result = {"ok": True, "schema": "catchplate.operatorGoogleRefreshCheck/v1",
             "syntheticOnly": True, "realGoogleVerified": False, "browserUiVerified": False,
             "productionReady": False, "hardwareVerified": False, "checks": self.results,
             "dataPlaneBinaryDigest": self.args.expected_binary_sha256, "credentialId": credential["id"],
@@ -528,7 +528,7 @@ def run_checks(args):
         check = GoogleRefreshCheck(args)
         return check.run()
     except Exception as error:
-        return {"ok": False, "schema": "serverware.operatorGoogleRefreshCheck/v1", "syntheticOnly": True,
+        return {"ok": False, "schema": "catchplate.operatorGoogleRefreshCheck/v1", "syntheticOnly": True,
             "productionReady": False, "checks": list(check.results) if check else [],
             "providerObservations": check.provider_observations if check else [],
             "error": str(error) if isinstance(error, CheckFailure) else type(error).__name__}

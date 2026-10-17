@@ -23,7 +23,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import authority_local_artifact_measure as measure
+from catchplate import authority_local_artifact_measure as measure
 
 
 def entry(path):

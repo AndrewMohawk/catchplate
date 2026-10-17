@@ -5,7 +5,7 @@
 The `.431` assembly verified a practical storage route without host-root access
 or changing either shared homelab filesystem: an isolated, user-owned KVM guest
 with a new **1 GiB ext4 image with fs-verity enabled**. It is a storage asset,
-not a running Serverware authority or accepted pilot.
+not a running Catchplate authority or accepted pilot.
 
 ## Observed results
 
@@ -45,7 +45,7 @@ than those reference pages alone, establish the observations above.
 The private durable directory is:
 
 ```text
-/home/catchplate/codex-offload/serverware/development-pilots/17ab194b/authority-vm/6.8.0-138-431/
+/home/catchplate/codex-offload/catchplate/development-pilots/17ab194b/authority-vm/6.8.0-138-431/
 ```
 
 It retains `authority.ext4`, both initramfs images, kernel/QEMU packages and

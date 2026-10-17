@@ -9,8 +9,8 @@ global application uniqueness, or physical custody.
 ## Two different authorities
 
 `authority_oauth_revocation.sign_authorization` produces the exact closed
-`serverware.signedOAuthRevocationAuthorization/v1` envelope. Its twenty-field
-payload is `serverware.oauthRevocationAuthorization/v1`, purpose
+`catchplate.signedOAuthRevocationAuthorization/v1` envelope. Its twenty-field
+payload is `catchplate.oauthRevocationAuthorization/v1`, purpose
 `retained-oauth-revocation`. Ed25519 signs the payload schema, one NUL byte, and
 the exact sorted `ensure_ascii=True` JSON payload, without a trailing LF.
 SHA-256 commitments use those same canonical bytes, including escaped DEL.
@@ -50,19 +50,19 @@ authority. Runner cleanup closes revocation selection before custody teardown,
 including partial-startup errors. Closing poisons further operations without
 closing borrowed custody descriptors, renewing a grant, settling uncertain work
 or claiming erasure of immutable Python secret bytes. The
-fixed descriptor entrypoint delivers `SERVERWARE_OAUTH_REVOCATION_CONFIG_FD`
-from `/run/serverware/authority-trust/oauth-revocations.json`. Its exact six
+fixed descriptor entrypoint delivers `CATCHPLATE_OAUTH_REVOCATION_CONFIG_FD`
+from `/run/catchplate/authority-trust/oauth-revocations.json`. Its exact six
 fields are `schema`, `sourceRevision`, `configurationDigest`, `authorityRootFd`,
 `authorityRootSha256`, and `authorizations`; schema is
-`serverware.oauthRevocationStartup/v1`. At most sixteen entries each contain
+`catchplate.oauthRevocationStartup/v1`. At most sixteen entries each contain
 only `authorization`, `clientMaterialFd`, and `historicalEnrollmentRootFd`.
 
 Files are selected by source-fixed paths, not paths supplied in a grant:
 
-- Current root: `/run/serverware/authority-trust/oauth-revocation-root-public-key`.
-- Client material: `/run/secrets/serverware-oauth-revocation-<authorizationId>-client`,
+- Current root: `/run/catchplate/authority-trust/oauth-revocation-root-public-key`.
+- Client material: `/run/secrets/catchplate-oauth-revocation-<authorizationId>-client`,
   where the suffix is the signed canonical UUID.
-- Historical root: `/run/serverware/authority-trust/oauth-enrollment-history/<SPKI-hex>-public-key`.
+- Historical root: `/run/catchplate/authority-trust/oauth-enrollment-history/<SPKI-hex>-public-key`.
 
 The entrypoint opens bounded root-owned originals and delivers sealed memfds.
 Private client originals require mode `0400`; no private grant-signing key is

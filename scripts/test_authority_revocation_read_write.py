@@ -23,14 +23,14 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_complete_query_batch as query_batch
-from serverware import authority_complete_read_write as read_write
-from serverware import authority_query_read_work as accounting
-from serverware import authority_query_reads as reads
-from serverware import authority_radix_mutation as primary
-from serverware import authority_revocation_read_write as admission
-from serverware import authority_transition_core as core
-from serverware import authority_transition_webauthn as candidate
+from catchplate import authority_complete_query_batch as query_batch
+from catchplate import authority_complete_read_write as read_write
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_query_reads as reads
+from catchplate import authority_radix_mutation as primary
+from catchplate import authority_revocation_read_write as admission
+from catchplate import authority_transition_core as core
+from catchplate import authority_transition_webauthn as candidate
 import authority_revocation_observation_fixture as fixture_oracle
 import test_authority_query_reads_measured as observation_oracle
 import test_authority_revocation_query_program as recipe_oracle
@@ -100,7 +100,7 @@ def independent_observation_work(fixture):
 
     for query in queries:
         document = documents[query.query_id]
-        if document["schema"] == "serverware.policyAuthorityCompleteIndexQuery/v1":
+        if document["schema"] == "catchplate.policyAuthorityCompleteIndexQuery/v1":
             for _ in range(8):
                 expected.profile(query)
         else:
@@ -127,7 +127,7 @@ def independent_observation_work(fixture):
     for query, resolved, record, ordered in zip(queries, fixture.resolved_program, records, fixture.ordered_rows):
         document = documents[query.query_id]
         resolved_document = resolved_documents[query.query_id]
-        ordinary = document["schema"] == "serverware.policyAuthorityQueryProgram/v1"
+        ordinary = document["schema"] == "catchplate.policyAuthorityQueryProgram/v1"
         if ordinary:
             for before, after in zip(values(query), values(resolved)):
                 if type(before) is core.SelectedRowFieldReference:
@@ -183,7 +183,7 @@ def independent_metrics(fixture):
     complete = unit_metrics()
     for ordinal, (source, resolved, ordered) in enumerate(zip(
             fixture.documents, fixture.resolved_documents, fixture.ordered_rows)):
-        if source["schema"] == "serverware.policyAuthorityQueryProgram/v1":
+        if source["schema"] == "catchplate.policyAuthorityQueryProgram/v1":
             key = source["absentKey"]
             if key is None:
                 # The only admitted non-PK query is the actual publication

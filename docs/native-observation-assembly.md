@@ -42,7 +42,7 @@ silently excluded. The original verifier's admitted data is reused internally,
 not accepted as a caller-supplied verification flag.
 
 Each result is explicitly bound under
-`serverware.nativePolicyObservationResult/v1`, with actual receipt and source
+`catchplate.nativePolicyObservationResult/v1`, with actual receipt and source
 original hashes, compiler-analysis identity and full semantic result. This is
 derived evidence, not a newly invented Fleet signature. Current compiler roots,
 complete policy classes, approved pilot membership, expansion cells, response

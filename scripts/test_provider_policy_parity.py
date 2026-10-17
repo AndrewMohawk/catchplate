@@ -17,7 +17,7 @@ from urllib.parse import parse_qsl
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.policy_bundle import (
+from catchplate.policy_bundle import (
     PolicyBundleError,
     adapter_operation_query_fields,
     compile_policy_bundle,
@@ -42,35 +42,35 @@ def unavailable_dependency(name: str) -> ModuleType:
 
 # The real authority registry remains independently blocked. Only pure adapter
 # methods are loaded here; any DB/runtime access fails instead of faking success.
-SPEC = importlib.util.spec_from_file_location("provider_policy_parity_adapters_unit", ROOT / "serverware/adapters.py")
+SPEC = importlib.util.spec_from_file_location("provider_policy_parity_adapters_unit", ROOT / "catchplate/adapters.py")
 assert SPEC is not None and SPEC.loader is not None
 adapters = importlib.util.module_from_spec(SPEC)
 with mock.patch.dict(sys.modules, {
-    "serverware.db": unavailable_dependency("serverware.db"),
-    "serverware.runtime": unavailable_dependency("serverware.runtime"),
+    "catchplate.db": unavailable_dependency("catchplate.db"),
+    "catchplate.runtime": unavailable_dependency("catchplate.runtime"),
 }):
     SPEC.loader.exec_module(adapters)
 
 CONSTRAINT_SPEC = importlib.util.spec_from_file_location(
-    "provider_policy_parity_constraints_unit", ROOT / "serverware/constraints.py")
+    "provider_policy_parity_constraints_unit", ROOT / "catchplate/constraints.py")
 assert CONSTRAINT_SPEC is not None and CONSTRAINT_SPEC.loader is not None
 constraints = importlib.util.module_from_spec(CONSTRAINT_SPEC)
 with mock.patch.dict(sys.modules, {
     CONSTRAINT_SPEC.name: constraints,
-    "serverware.db": unavailable_dependency("serverware.db"),
+    "catchplate.db": unavailable_dependency("catchplate.db"),
 }):
     CONSTRAINT_SPEC.loader.exec_module(constraints)
 
 ENGINE_SPEC = importlib.util.spec_from_file_location(
-    "provider_policy_parity_policy_engine_unit", ROOT / "serverware/policy_engine.py")
+    "provider_policy_parity_policy_engine_unit", ROOT / "catchplate/policy_engine.py")
 assert ENGINE_SPEC is not None and ENGINE_SPEC.loader is not None
 policy_engine = importlib.util.module_from_spec(ENGINE_SPEC)
 with mock.patch.dict(sys.modules, {
     ENGINE_SPEC.name: policy_engine,
-    "serverware.adapters": adapters,
-    "serverware.constraints": constraints,
-    "serverware.db": unavailable_dependency("serverware.db"),
-    "serverware.runtime": unavailable_dependency("serverware.runtime"),
+    "catchplate.adapters": adapters,
+    "catchplate.constraints": constraints,
+    "catchplate.db": unavailable_dependency("catchplate.db"),
+    "catchplate.runtime": unavailable_dependency("catchplate.runtime"),
 }):
     ENGINE_SPEC.loader.exec_module(policy_engine)
 

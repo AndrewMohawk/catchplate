@@ -16,7 +16,7 @@ pub const PARENT_PORT: u32 = 9102;
 pub struct Configuration { api_version: String, parent_cid: u32, parent_port: u32 }
 impl Configuration {
     fn validate(&self) -> Result<(), String> {
-        require(self.api_version == "serverware.nativePolicyActivationParentChannel/v1"
+        require(self.api_version == "catchplate.nativePolicyActivationParentChannel/v1"
             && self.parent_cid == PARENT_CID && self.parent_port == PARENT_PORT)
     }
 }
@@ -59,7 +59,7 @@ impl Owner {
     pub fn publish(&mut self, raw: &[u8], deadline: u64, check: impl Fn() -> Result<(), String>) -> Result<Vec<u8>, String> {
         self.live(deadline, &check)?; require(!self.attempted)?;
         let value: serde_json::Value = parse(raw, MAXIMUM)?;
-        require(value["apiVersion"] == "serverware.nativePolicyActivationRequest/v1")?;
+        require(value["apiVersion"] == "catchplate.nativePolicyActivationRequest/v1")?;
         self.attempted = true;
         let result = self.exchange(raw, deadline, &check);
         if result.is_err() { let _ = self.stream.shutdown(); }

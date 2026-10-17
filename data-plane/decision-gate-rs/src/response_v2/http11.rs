@@ -338,7 +338,7 @@ fn response_observation_v2_finish_http11(
     let parsed_response =
         V2ParsedHttp11ResponseCommitmentV1 {
             api_version:
-                "serverware.responseObservationV2ParsedHttp11Response/v1"
+                "catchplate.responseObservationV2ParsedHttp11Response/v1"
                     .to_owned(),
             raw_response_sha256: http11_sha256_prefixed(response),
             raw_response_byte_length: physical_message_length,

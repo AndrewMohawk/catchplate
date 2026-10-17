@@ -27,8 +27,8 @@ pub(crate) mod ordinary_histories;
 pub(crate) mod spool_signer;
 #[path="spool_endpoint.rs"]
 pub(crate) mod spool_endpoint;
-const DOMAIN:&str="serverware.nativeShadowKeyAdmissionAssignment.signature/v1";
-const POSSESSION:&str="serverware.nativeShadowKeyAdmissionPossession.signature/v1";
+const DOMAIN:&str="catchplate.nativeShadowKeyAdmissionAssignment.signature/v1";
+const POSSESSION:&str="catchplate.nativeShadowKeyAdmissionPossession.signature/v1";
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Payload {
@@ -53,20 +53,20 @@ impl Authorization {
         let full=full_bindings(assignment)?;
         let local:BTreeMap<_,_>=k.local_roles.iter().map(|role|(*role,full[role].clone())).collect();
         let domain=match production {
-            None=>{require(p.api_version=="serverware.nativeShadowKeyAdmissionAssignment/v1"
+            None=>{require(p.api_version=="catchplate.nativeShadowKeyAdmissionAssignment/v1"
                 && p.purpose=="native-shadow-key-admission" && p.production_configuration_binding_sha256.is_none())?;DOMAIN},
             Some(owner)=>{
-                require(p.api_version=="serverware.nativeShadowBridgeAdmissionAssignment/v1"
+                require(p.api_version=="catchplate.nativeShadowBridgeAdmissionAssignment/v1"
                     && p.purpose=="native-shadow-context-and-production-admission"
                     && p.production_configuration_binding_sha256.as_ref()==Some(owner.production_configuration_binding_sha256())
                     && owner.assignment_payload_sha256()==assignment.payload_sha256()
                     && owner.native_execution_closure().is_some())?;
                 owner.native_execution_closure().ok_or(ShadowError::BindingDrift)?.require_origin(association)?;
                 owner.revalidate_retained_assignment_at_checkpoint(&checkpoint,trust)?;
-                "serverware.nativeShadowBridgeAdmissionAssignment.signature/v1"
+                "catchplate.nativeShadowBridgeAdmissionAssignment.signature/v1"
             },
         };
-        require(configuration.api_version=="serverware.nativeShadowRoleKeys/v2"
+        require(configuration.api_version=="catchplate.nativeShadowRoleKeys/v2"
             && p.assignment_payload_sha256==*assignment.payload_sha256() && p.assignment_revision==k.assignment_revision
             && p.key_authorization_sha256==Sha256Digest::compute(&canonical_json_bytes(&configuration.authorization)?)
             && p.guest==association.binding() && p.execution_closure_manifest_sha256==k.execution_closure_manifest_sha256
@@ -185,7 +185,7 @@ impl AdmittedKeys {
         let context=self.context.value()?;
         let local=self.keys.iter().map(|(role,k)|(*role,k.binding.clone())).collect();
         let bridge=self.production.is_some();
-        let statement=Statement{api_version:if bridge{"serverware.nativeShadowBridgeAdmissionStatement/v1"}else{"serverware.nativeShadowKeyAdmissionStatement/v1"},
+        let statement=Statement{api_version:if bridge{"catchplate.nativeShadowBridgeAdmissionStatement/v1"}else{"catchplate.nativeShadowKeyAdmissionStatement/v1"},
             purpose:if bridge{"native-shadow-context-and-production-admission"}else{"native-shadow-key-admission"},
             assignment_id:p.assignment_id.clone(),assignment_payload_sha256:p.assignment_payload_sha256.clone(),assignment_revision:p.assignment_revision,
             key_authorization_sha256:Sha256Digest::compute(&canonical_json_bytes(&self.configuration.authorization)?),
@@ -202,7 +202,7 @@ impl AdmittedKeys {
         let mut proofs=Vec::new();
         for (role,k) in &self.keys {
             self.check(trust,time)?;
-            let domain=if bridge{"serverware.nativeShadowBridgeAdmissionPossession.signature/v1"}else{POSSESSION};
+            let domain=if bridge{"catchplate.nativeShadowBridgeAdmissionPossession.signature/v1"}else{POSSESSION};
             let signature=k.key.sign(&signature_preimage(domain,&canonical_json_bytes(&(*role,k.binding.key_id(),&statement_sha))?));
             proofs.push(Possession{role:*role,key_id:k.binding.key_id.clone(),signature:CanonicalEd25519Signature(URL_SAFE_NO_PAD.encode(signature.to_bytes()))});
         }
@@ -213,7 +213,7 @@ impl AdmittedKeys {
             statement.local_key_set_root_sha256.raw_bytes()?,Sha256Digest::compute(&canonical_json_bytes(&proofs)?).raw_bytes()?,
             challenge(&statement.challenge_base64url)?,self.association.startup())}.map_err(fail)?;
         self.check(trust,time)?;self.association.check_startup().map_err(fail)?;
-        self.evidence=Some(Evidence{api_version:if bridge{"serverware.nativeShadowBridgeAdmissionEvidence/v1"}else{"serverware.nativeShadowKeyAdmissionEvidence/v1"},statement,possession:proofs,
+        self.evidence=Some(Evidence{api_version:if bridge{"catchplate.nativeShadowBridgeAdmissionEvidence/v1"}else{"catchplate.nativeShadowKeyAdmissionEvidence/v1"},statement,possession:proofs,
             attestation_document_base64url:URL_SAFE_NO_PAD.encode(quote.document()),user_data_base64url:URL_SAFE_NO_PAD.encode(quote.user_data()),
             public_key_base64url:URL_SAFE_NO_PAD.encode(quote.public_key()),nonce_base64url:URL_SAFE_NO_PAD.encode(quote.nonce())});
         Ok(())

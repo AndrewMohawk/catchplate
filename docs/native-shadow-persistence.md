@@ -27,7 +27,7 @@ The ten receipt signing roles remain distinct. Verification-only results, prepar
 
 ## Durable boundary and uncertainty
 
-The role receives only the admitted `persistence-listener` and `persistence-journal` FDs. A root inspector retains actual socket/PIDFD/peer measurement and current original files; fixed `/run/serverware-shadow-persistence/listener.sock` is not caller-selected. Inspection occurs at connection, dispatch and reply. No header, caller PID or UID-only assertion substitutes for it.
+The role receives only the admitted `persistence-listener` and `persistence-journal` FDs. A root inspector retains actual socket/PIDFD/peer measurement and current original files; fixed `/run/catchplate-shadow-persistence/listener.sock` is not caller-selected. Inspection occurs at connection, dispatch and reply. No header, caller PID or UID-only assertion substitutes for it.
 
 The final role opens the held mode-0700 directory on an explicit durable filesystem (ext4, XFS or Btrfs), an existing mode-0600 exclusive lock, and an independently pinned mode-0400 genesis/current head. Record names are source-derived sequence numbers. It creates the exact ordered request/reply original pair with `O_EXCL`, syncs and reads it back, signs the purpose-fixed commit, syncs/read-backs that original and the linked immutable head, and syncs the directory before acknowledgement. Held FDs, names, identities and exact bytes remain checked. Existing exact commits may be observed; their signed originals are never reconstructed or re-signed. Reusing an effect replay ID with different request or reply bytes refuses, even when a receipt lookup reference happens to match.
 

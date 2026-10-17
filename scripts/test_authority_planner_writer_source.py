@@ -24,7 +24,7 @@ from types import MappingProxyType
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.authority_store import planner_writer_sql as writer
+from catchplate.authority_store import planner_writer_sql as writer
 
 
 TABLE_PRIVILEGES = {
@@ -49,11 +49,11 @@ TABLE_PRIVILEGES = {
     "policy_authority_writer_capabilities": frozenset({"SELECT", "UPDATE"}),
 }
 FUNCTION_SIGNATURES = (
-    ("serverware_policy_authority_assert_audit_capacity", ("text", "jsonb", "jsonb", "bigint")),
-    ("serverware_policy_authority_domain_digest", ("text", "text[]")),
-    ("serverware_policy_authority_wire_json", ("jsonb",)),
-    ("serverware_policy_authority_wire_string", ("text", "boolean", "bigint")),
-    ("serverware_policy_authority_wire_walk", ("jsonb", "integer", "bigint", "bigint", "boolean")),
+    ("catchplate_policy_authority_assert_audit_capacity", ("text", "jsonb", "jsonb", "bigint")),
+    ("catchplate_policy_authority_domain_digest", ("text", "text[]")),
+    ("catchplate_policy_authority_wire_json", ("jsonb",)),
+    ("catchplate_policy_authority_wire_string", ("text", "boolean", "bigint")),
+    ("catchplate_policy_authority_wire_walk", ("jsonb", "integer", "bigint", "bigint", "boolean")),
 )
 
 
@@ -116,9 +116,9 @@ def raising_guard(tree, message):
 class AuthorityPlannerWriterSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.module_source, cls.module = source("serverware/authority_store/planner_writer_sql.py", 128 * 1024)
-        cls.db_source, cls.db = source("serverware/db.py", 16 * 1024 * 1024)
-        cls.schema_source, cls.schema = source("serverware/authority_store/schema.py")
+        cls.module_source, cls.module = source("catchplate/authority_store/planner_writer_sql.py", 128 * 1024)
+        cls.db_source, cls.db = source("catchplate/db.py", 16 * 1024 * 1024)
+        cls.schema_source, cls.schema = source("catchplate/authority_store/schema.py")
         cls.seal = function(cls.db, "_seal_postgres_schema_acl")
 
     def assert_shape(self, node, expression):
@@ -128,13 +128,13 @@ class AuthorityPlannerWriterSourceTests(unittest.TestCase):
     def test_completion_cas_snapshots_update_count_before_cursor_reuse_and_close(self):
         from collections.abc import Mapping
         from typing import Any
-        from serverware import authority_transition_registry
-        from serverware.authority_store.audit_capacity_sql import AUDIT_CAPACITY_FUNCTION_NAME
+        from catchplate import authority_transition_registry
+        from catchplate.authority_store.audit_capacity_sql import AUDIT_CAPACITY_FUNCTION_NAME
 
         # Execute the actual persistence suffix only, not fabricated admission.
         # The SQL boundary double follows psycopg: execute returns self, SELECT
         # replaces rowcount, and cursor close resets it to -1.
-        _, module = source("serverware/authority_store/executor_v9.py")
+        _, module = source("catchplate/authority_store/executor_v9.py")
         completion = function(module, "complete_authority_planner_transaction")
         start = next(i for i, node in enumerate(completion.body)
                      if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name)
@@ -213,16 +213,16 @@ class AuthorityPlannerWriterSourceTests(unittest.TestCase):
             def execute(self, statement, parameters):
                 self.steps += 1
                 if self.steps in (1, 4):
-                    expected = "SELECT * FROM serverware_metadata.policy_authority_planner_transactions "
+                    expected = "SELECT * FROM catchplate_metadata.policy_authority_planner_transactions "
                     if not statement.startswith(expected) or parameters != (arguments["planner_transaction_id"],):
                         raise AssertionError("unexpected synthetic planner-row read")
                     self.rowcount = 1
                 elif self.steps == 2:
-                    if not statement.startswith("SELECT serverware_metadata." + AUDIT_CAPACITY_FUNCTION_NAME + "("):
+                    if not statement.startswith("SELECT catchplate_metadata." + AUDIT_CAPACITY_FUNCTION_NAME + "("):
                         raise AssertionError("unexpected synthetic capacity call")
                     self.rowcount = 1
                 elif self.steps == 3:
-                    if not statement.startswith("UPDATE serverware_metadata.policy_authority_planner_transactions "):
+                    if not statement.startswith("UPDATE catchplate_metadata.policy_authority_planner_transactions "):
                         raise AssertionError("unexpected synthetic completion update")
                     self.rowcount = self.update_count
                 else:
@@ -251,9 +251,9 @@ class AuthorityPlannerWriterSourceTests(unittest.TestCase):
     def test_failure_cas_retains_each_update_count_before_reuse_and_close(self):
         from collections.abc import Mapping
         from typing import Any
-        from serverware import authority_transition_registry
+        from catchplate import authority_transition_registry
 
-        _, module = source("serverware/authority_store/executor_v9.py")
+        _, module = source("catchplate/authority_store/executor_v9.py")
         failure = function(module, "fail_authority_v9_transaction")
         start = next(i for i, node in enumerate(failure.body) if isinstance(node, ast.With))
         self.assertEqual(ast.unparse(failure.body[start - 1]),
@@ -317,10 +317,10 @@ class AuthorityPlannerWriterSourceTests(unittest.TestCase):
                 tables = ("policy_authority_fence_heads", "policy_authority_writer_capabilities",
                           "policy_authority_execution_envelopes", "policy_authority_planner_transactions")
                 if self.steps <= 4:
-                    expected = "SELECT * FROM serverware_metadata." + tables[self.steps - 1] + " "
+                    expected = "SELECT * FROM catchplate_metadata." + tables[self.steps - 1] + " "
                     self.rowcount = 1
                 elif self.steps <= 7:
-                    expected = "UPDATE serverware_metadata." + tables[self.steps - 4] + " "
+                    expected = "UPDATE catchplate_metadata." + tables[self.steps - 4] + " "
                     self.rowcount = self.counts[self.steps - 5]
                 else:
                     raise AssertionError("unexpected synthetic SQL step")
@@ -438,9 +438,9 @@ class AuthorityPlannerWriterSourceTests(unittest.TestCase):
                 contract["securityDefiner"] = True
         with self.assertRaises(TypeError):
             writer.PLANNER_WRITER_FUNCTION_CONTRACTS["extra"] = {}
-        _, audit = source("serverware/authority_store/audit_capacity_sql.py")
+        _, audit = source("catchplate/authority_store/audit_capacity_sql.py")
         aliases = [alias for node in audit.body if isinstance(node, ast.ImportFrom)
-                   and node.module == "serverware.authority_store.planner_writer_sql" for alias in node.names]
+                   and node.module == "catchplate.authority_store.planner_writer_sql" for alias in node.names]
         self.assertEqual([(item.name, item.asname) for item in aliases], [
             ("AUDIT_CAPACITY_FUNCTION_NAME", None),
             ("PLANNER_WRITER_FUNCTION_SIGNATURES", None),
@@ -482,7 +482,7 @@ class AuthorityPlannerWriterSourceTests(unittest.TestCase):
         self.assertIn("%s::pg_catalog.text AS role_name", sql)
         self.assertIn("%s::pg_catalog.text AS namespace_name", sql)
         self.assertEqual(sql.count("%s"), 2)
-        for forbidden in ("current_user", "session_user", "serverware_metadata"):
+        for forbidden in ("current_user", "session_user", "catchplate_metadata"):
             self.assertNotIn(forbidden, sql)
         # Privilege names such as 'UPDATE WITH GRANT OPTION' are data in
         # the read query, not executable DML or GRANT statements.
@@ -551,8 +551,8 @@ class AuthorityPlannerWriterSourceTests(unittest.TestCase):
     def test_acl_expansion_preserves_real_grants_and_strict_null_inputs(self):
         # Exact source-query controls only. PostgreSQL strict-NULL behavior and
         # rejection of zero-dimensional ACL arrays require separate SQL proof.
-        _, verifier_tree = source("serverware/authority_store/verifier_read_sql.py")
-        _, initialization_tree = source("serverware/authority_store/initialization_store_access.py")
+        _, verifier_tree = source("catchplate/authority_store/verifier_read_sql.py")
+        _, initialization_tree = source("catchplate/authority_store/initialization_store_access.py")
         planner_sql, _ = writer.planner_writer_privilege_check(role="planner", namespace="metadata")
         verifier_sql = ast.literal_eval(assigned(verifier_tree, "VERIFIER_READ_PRIVILEGE_SQL"))
         initialization_sql = ast.literal_eval(assigned(initialization_tree, "_RAW_ACL_SQL"))
@@ -631,7 +631,7 @@ class AuthorityPlannerWriterSourceTests(unittest.TestCase):
         self.assert_shape(assigned(self.db, "_POLICY_AUTHORITY_PLANNER_WRITER_TABLE_PRIVILEGES"),
                           "_authority_planner_writer_sql.PLANNER_WRITER_TABLE_PRIVILEGES")
         aliases = [alias for node in self.db.body if isinstance(node, ast.ImportFrom)
-                   and node.module == "serverware.authority_store" for alias in node.names
+                   and node.module == "catchplate.authority_store" for alias in node.names
                    if alias.name == "planner_writer_sql"]
         self.assertEqual([(item.name, item.asname) for item in aliases],
                          [("planner_writer_sql", "_authority_planner_writer_sql")])
@@ -696,11 +696,11 @@ class AuthorityPlannerWriterSourceTests(unittest.TestCase):
         self.assert_shape(source_fields["authorityPlannerWriterFunctionSignatures"],
             "{name: list(argument_types) for name, argument_types in AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES}")
         digest_imports = [alias for node in self.schema.body if isinstance(node, ast.ImportFrom)
-                         and node.module == "serverware.authority_store.planner_writer_sql" for alias in node.names]
+                         and node.module == "catchplate.authority_store.planner_writer_sql" for alias in node.names]
         self.assertEqual([(item.name, item.asname) for item in digest_imports],
                          [("PLANNER_WRITER_PRIVILEGE_SQL_DIGEST", None)])
         self.assert_shape(source_contract.body[-1].value,
-            "_policy_candidate_authority_framed_digest('serverware.policyCandidateAuthoritySourceContract/v1', material)")
+            "_policy_candidate_authority_framed_digest('catchplate.policyCandidateAuthoritySourceContract/v1', material)")
 
         profile = function(self.db, "_policy_authority_owner_verification_profile_digest")
         profile_fields = entries(assigned(profile, "planner_writer_privilege_contract"))
@@ -718,7 +718,7 @@ class AuthorityPlannerWriterSourceTests(unittest.TestCase):
         self.assert_shape(entries(serialized.args[0])["plannerWriterPrivilegeContract"],
                           "planner_writer_privilege_contract")
         self.assert_shape(profile.body[-1].value,
-            "_policy_candidate_authority_framed_digest('serverware.policyAuthorityOwnerVerificationProfile/v1', "
+            "_policy_candidate_authority_framed_digest('catchplate.policyAuthorityOwnerVerificationProfile/v1', "
             "material.encode('ascii'))")
 
 

@@ -21,9 +21,9 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract as contract
-from serverware import authority_request_commitment as commitment
-from serverware import authority_query_read_work as accounting
+from catchplate import authority_contract as contract
+from catchplate import authority_request_commitment as commitment
+from catchplate import authority_query_read_work as accounting
 import test_authority_revocation_query_program as recipe
 
 
@@ -51,14 +51,14 @@ def framed(domain, *frames):
 
 
 def authorization(request):
-    return {"schema": "serverware.policyAuthorityV9Authorization/v1",
+    return {"schema": "catchplate.policyAuthorityV9Authorization/v1",
         "operation": request["operation"], "handler": request["handler"],
         "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST,
         "arguments": {key: value for key, value in request["arguments"].items() if key not in EXCLUDED}}
 
 
 def expected_digest(request):
-    return framed("serverware.policyAuthorityV9Request/v1", wire(authorization(request)))
+    return framed("catchplate.policyAuthorityV9Request/v1", wire(authorization(request)))
 
 
 def request_fixture(*, operation=OPERATION, values=None):
@@ -66,15 +66,15 @@ def request_fixture(*, operation=OPERATION, values=None):
     excluded = EXCLUDED - ({"challenge_id"} if operation in {
         "webauthn.challenge.create", "webauthn.challenge.consume"} else set())
     spec = contract.operation_spec(operation)
-    intent = {"schema": "serverware.policyAuthorityBusinessIntent/v2", "operation": operation,
+    intent = {"schema": "catchplate.policyAuthorityBusinessIntent/v2", "operation": operation,
         "planningAdapterId": spec["planningAdapterId"],
         "arguments": {key: copy.deepcopy(value) for key, value in values.items() if key not in excluded}}
-    result = {"schema": "serverware.policyAuthorityV9Request/v1", "operation": operation,
+    result = {"schema": "catchplate.policyAuthorityV9Request/v1", "operation": operation,
         "operationId": "sha256:" + "0" * 64, "requestDigest": "sha256:" + "0" * 64,
         "handler": spec["handler"], "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST,
         "arguments": {**values, "businessIntent": intent}}
     result["requestDigest"] = expected_digest(result)
-    result["operationId"] = framed("serverware.policyAuthorityOperation/v2",
+    result["operationId"] = framed("catchplate.policyAuthorityOperation/v2",
         operation.encode("utf-8"), result["requestDigest"].encode("utf-8"))
     return result
 
@@ -146,8 +146,8 @@ class TypedRequestWorkTests(unittest.TestCase):
                 # TypedRequestPlannerIntegrationTests, behind real startup.
 
     def test_public_legacy_gate_is_not_removed_by_private_successor_commitment(self):
-        from serverware import authority_planner as planner
-        from serverware import authority_transition_registry as registry
+        from catchplate import authority_planner as planner
+        from catchplate import authority_transition_registry as registry
 
         request = request_fixture()
         before = wire(request)

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v15.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-startup-configuration.v15.schema.json",
   "title": "Explicit native measured Setup startup",
   "$comment": "Exact v14 owners with measuredSetup replacing measuredIssuance. There is one cold-selected actual browser/helper purpose; no second listener, callback inference or signed-authority conversion. All earlier profiles remain unchanged. Source configuration does not supply independent enrollment, assignments, KMS custody or runtime acceptance.",
   "type": "object",
@@ -13,7 +13,7 @@
     "guestRoleKeyProvisioner", "measuredPendingRetirement", "gateCgroup"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeStartupConfiguration/v15"},
+    "apiVersion": {"const": "catchplate.nativeStartupConfiguration/v15"},
     "gate": {"$ref": "native-startup-configuration.v14.schema.json#/properties/gate"},
     "native": {"$ref": "native-startup-configuration.v14.schema.json#/properties/native"},
     "shadow": {"oneOf": [
@@ -48,7 +48,7 @@
       "additionalProperties": false,
       "required": ["apiVersion", "trustManifest", "runtimeVerifier", "publicationHandoff", "custodyConfig", "startupActiveAuthorization", "workers", "nativeActivation"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeShadowConfiguration/v6"},
+        "apiVersion": {"const": "catchplate.nativeShadowConfiguration/v6"},
         "trustManifest": {"$ref": "native-shadow-workers.v1.schema.json#/$defs/artifact"},
         "runtimeVerifier": {"$ref": "native-shadow-workers.v1.schema.json#/$defs/command"},
         "publicationHandoff": {"$ref": "native-shadow-workers.v1.schema.json#/$defs/command"},

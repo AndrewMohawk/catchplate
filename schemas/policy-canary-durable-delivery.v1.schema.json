@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "serverware.policyCanaryDurableDelivery/v1",
+  "$id": "catchplate.policyCanaryDurableDelivery/v1",
   "title": "Purpose-fixed durable canary delivery originals",
   "$ref": "#/$defs/httpRequest",
   "$defs": {
@@ -16,7 +16,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "awsNitroRootCertificatesPem", "awsNitroCrlsDerBase64url", "nitroCertificateProfile"],
       "properties": {
-        "apiVersion": {"const": "serverware.policyCanaryDeliveryTrustRoots/v1"},
+        "apiVersion": {"const": "catchplate.policyCanaryDeliveryTrustRoots/v1"},
         "awsNitroRootCertificatesPem": {"$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/trustRoots/properties/awsNitroRootCertificatesPem"},
         "awsNitroCrlsDerBase64url": {"const": []},
         "nitroCertificateProfile": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/certificateProfile"}
@@ -61,7 +61,7 @@
       "required": ["schema", "deploymentId", "issuedAtEpochNs", "expiresAtEpochNs", "operationMaxSeconds", "limits", "trustRoots",
         "assignments", "historicalTrustRoots", "historicalAssignments", "recoveryAssociations"],
       "properties": {
-        "schema": {"const": "serverware.policyCanaryDeliveryAuthorityPolicy/v1"}, "deploymentId": {"$ref": "#/$defs/component"},
+        "schema": {"const": "catchplate.policyCanaryDeliveryAuthorityPolicy/v1"}, "deploymentId": {"$ref": "#/$defs/component"},
         "issuedAtEpochNs": {"$ref": "#/$defs/epoch"}, "expiresAtEpochNs": {"$ref": "#/$defs/epoch"},
         "operationMaxSeconds": {"type": "integer", "minimum": 1, "maximum": 30}, "limits": {"$ref": "#/$defs/limits"},
         "trustRoots": {"$ref": "#/$defs/trustRoots"}, "historicalTrustRoots": {"$ref": "#/$defs/trustRoots"},
@@ -78,7 +78,7 @@
         "canaryAssignmentSha256", "canaryBootId", "workloadUri", "clientCertificateSha256", "clientSpkiSha256", "nonce",
         "issuedAtEpochNs", "expiresAtEpochNs", "slotId", "requestSha256", "httpSha256", "originalExpiresAtEpochNs"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeCanaryDeliveryStatement/v1"}, "operation": {"$ref": "#/$defs/operation"},
+        "apiVersion": {"const": "catchplate.nativeCanaryDeliveryStatement/v1"}, "operation": {"$ref": "#/$defs/operation"},
         "requestId": {"$ref": "#/$defs/uuid"}, "slotId": {"$ref": "#/$defs/uuid"}, "deploymentId": {"$ref": "#/$defs/component"},
         "instanceId": {"$ref": "#/$defs/component"}, "holderId": {"$ref": "#/$defs/digest"}, "bootId": {"$ref": "#/$defs/bytes32"},
         "keyId": {"$ref": "#/$defs/digest"}, "controlPlaneResponseSigningKeyId": {"$ref": "#/$defs/digest"},
@@ -135,7 +135,7 @@
     "httpRequest": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "operation", "request", "nativeEvidence"],
       "properties": {
-        "apiVersion": {"const": "serverware.policyCanaryDeliveryRequest/v1"}, "operation": {"$ref": "#/$defs/operation"},
+        "apiVersion": {"const": "catchplate.policyCanaryDeliveryRequest/v1"}, "operation": {"$ref": "#/$defs/operation"},
         "request": {"oneOf": [{"$ref": "#/$defs/prepareRequest"}, {"$ref": "#/$defs/claimRequest"}, {"$ref": "#/$defs/recoverRequest"}]},
         "nativeEvidence": {"$ref": "#/$defs/nativeEvidence"}
       },
@@ -178,7 +178,7 @@
     "completion": {
       "type": "object", "additionalProperties": false, "required": ["schema", "requestOriginal", "responseOriginal"],
       "properties": {
-        "schema": {"const": "serverware.policyCanaryDeliveryCompletionOriginal/v1"},
+        "schema": {"const": "catchplate.policyCanaryDeliveryCompletionOriginal/v1"},
         "requestOriginal": {"type": "string", "minLength": 2, "maxLength": 3145728},
         "responseOriginal": {"type": "string", "minLength": 2, "maxLength": 6291456}
       },
@@ -246,7 +246,7 @@
         "fence", "result", "resultDigest", "commitReceiptDigest", "witnessCommitDigest", "attestationReceiptDigest",
         "attestationConsumptionReceipt", "attestationConsumptionReceiptDigest", "signature", "authorityConfigurationOriginal", "deliveryOriginals"],
       "properties": {
-        "schema": {"const": "serverware.policyAuthorityCanaryDeliveryRuntimeResponse/v1"}, "requestId": {"$ref": "#/$defs/digest"},
+        "schema": {"const": "catchplate.policyAuthorityCanaryDeliveryRuntimeResponse/v1"}, "requestId": {"$ref": "#/$defs/digest"},
         "operation": {"$ref": "#/$defs/operation"}, "configurationDigest": {"$ref": "#/$defs/digest"}, "requestDigest": {"$ref": "#/$defs/digest"},
         "issuedAtEpochNs": {"$ref": "#/$defs/epoch"}, "deadlineMonotonicNs": {"$ref": "#/$defs/epoch"}, "fence": {"$ref": "#/$defs/epoch"},
         "result": {"$ref": "#/$defs/result"}, "resultDigest": {"$ref": "#/$defs/digest"}, "commitReceiptDigest": {"$ref": "#/$defs/digest"},
@@ -262,7 +262,7 @@
     "httpResponse": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "requestOriginal", "responseOriginal"],
       "properties": {
-        "apiVersion": {"const": "serverware.policyCanaryDeliveryResponse/v1"},
+        "apiVersion": {"const": "catchplate.policyCanaryDeliveryResponse/v1"},
         "requestOriginal": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$", "maxLength": 4194304},
         "responseOriginal": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$", "maxLength": 6291456}
       },

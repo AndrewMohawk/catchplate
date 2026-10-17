@@ -17,8 +17,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import test_native_pilot_closure_set as fixtures
-from serverware import native_pilot_assignment as assignment
-from serverware import native_pilot_closure_set as closure
+from catchplate import native_pilot_assignment as assignment
+from catchplate import native_pilot_closure_set as closure
 
 
 def selected(api):
@@ -30,11 +30,11 @@ def selected(api):
 
 
 def input_value(api=None):
-    value = {"apiVersion": "serverware.nativePilotAssignmentAuthorityInput/v1",
+    value = {"apiVersion": "catchplate.nativePilotAssignmentAuthorityInput/v1",
         "trustOriginal": "{}", "trustSha256": fixtures.synthetic("trust"),
         "payloadOriginal": "{}", "closureSetOriginal": "{}"}
     if api is not None:
-        value.update(apiVersion="serverware.nativePilotAssignmentAuthorityInput/v2", setApiVersion=api)
+        value.update(apiVersion="catchplate.nativePilotAssignmentAuthorityInput/v2", setApiVersion=api)
     return value
 
 
@@ -51,7 +51,7 @@ class AssignmentProfileTests(unittest.TestCase):
             with self.subTest(api=api):
                 value = input_value(api)
                 self.assertEqual(assignment.input_document(fixtures.canonical(value)), (value, api))
-        for api in (closure.API, "serverware.nativeCustodyExecutionClosureSet/v3", None, 2):
+        for api in (closure.API, "catchplate.nativeCustodyExecutionClosureSet/v3", None, 2):
             value = input_value(closure.GENESIS_API)
             value["setApiVersion"] = api
             with self.subTest(api=api), self.assertRaises(ValueError):

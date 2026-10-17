@@ -1,6 +1,6 @@
 # One-bridge native pilot composition
 
-`serverware.native_pilot_launch.NativePilotLaunch` connects the actual retained
+`catchplate.native_pilot_launch.NativePilotLaunch` connects the actual retained
 launch owners. It is a privileged, same-process operator API, not a JSON
 configuration loader, a credential source or a readiness command. This source
 connection still requires the consolidated build and connected pilot acceptance.

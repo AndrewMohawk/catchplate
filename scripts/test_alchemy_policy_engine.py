@@ -19,8 +19,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import test_alchemy_rpc_read as fixture
-from serverware import adapters, alchemy_rpc_read as rpc, policy_bundle as pb
-from serverware import policy_engine as engine, policy_route_authority as authority
+from catchplate import adapters, alchemy_rpc_read as rpc, policy_bundle as pb
+from catchplate import policy_engine as engine, policy_route_authority as authority
 
 
 class AlchemyPolicyEngineTests(unittest.TestCase):
@@ -41,9 +41,9 @@ class AlchemyPolicyEngineTests(unittest.TestCase):
         value.response = SimpleNamespace(status_code=status, raw_content=body,
             content=body, trailers=None, headers=fixture.parsed.ParsedHeaders(
                 ([(b"Content-Type", media)] if media is not None else []) + list(headers)))
-        value.metadata.update(serverware_route=self.route, serverware_route_id=self.route.id,
-            serverware_policy_hash=self.snapshot.hash,
-            serverware_operation={**fixture.VECTORS["operation"], "requestId": request_id})
+        value.metadata.update(catchplate_route=self.route, catchplate_route_id=self.route.id,
+            catchplate_policy_hash=self.snapshot.hash,
+            catchplate_operation={**fixture.VECTORS["operation"], "requestId": request_id})
         if guard:
             secret_guard = engine._ResponseCredentialGuard()
             secret_guard.add_text_encodings(fixture.SECRET)
@@ -62,7 +62,7 @@ class AlchemyPolicyEngineTests(unittest.TestCase):
     def test_exact_read_classifier_is_not_a_post_or_operation_name_heuristic(self):
         for chain in rpc.CHAINS:
             raw = fixture.document()
-            raw["apiVersion"] = "serverware.policy/v2"
+            raw["apiVersion"] = "catchplate.policy/v2"
             raw["routes"][0]["adapter"]["config"]["chain"] = chain
             raw["routes"][0]["match"]["host"] = rpc.host(chain)
             selected = authority.prepare_unsigned(raw, [])
@@ -96,7 +96,7 @@ class AlchemyPolicyEngineTests(unittest.TestCase):
         self.assertEqual(value.response.raw_content, body)
         self.assertEqual((value.request.pretty_url, value.request.raw_content, value.request.headers.fields), request_before)
         self.assertEqual(set(value.response.headers), {"content-type", "content-length"})
-        self.assertEqual(value.metadata["serverware_response_validation_body_sha256"],
+        self.assertEqual(value.metadata["catchplate_response_validation_body_sha256"],
             "sha256:" + hashlib.sha256(body).hexdigest())
         self.assertEqual([row[0][3] for row in self.audit],
             ["response_validated", "response_release_authorized"])
@@ -118,10 +118,10 @@ class AlchemyPolicyEngineTests(unittest.TestCase):
                 if row["allowed"]:
                     self.assertEqual(value.response.raw_content, body)
                 else:
-                    self.assertNotIn("serverware_response_release_audit_logged", value.metadata)
+                    self.assertNotIn("catchplate_response_release_audit_logged", value.metadata)
         # Caller metadata cannot replace the original request's typed ID.
         value = self.response(b'{"jsonrpc":"2.0","id":"1","result":true}')
-        value.metadata["serverware_operation"]["requestId"] = "1"
+        value.metadata["catchplate_operation"]["requestId"] = "1"
         self.assertFalse(self.release(value).allowed)
 
     def test_engine_enforces_64k_for_success_and_error_before_release(self):
@@ -132,7 +132,7 @@ class AlchemyPolicyEngineTests(unittest.TestCase):
             decision = engine.prepare_response(value)
             self.assertFalse(decision.allowed)
             self.assertEqual(decision.payload["error"], "alchemy_rpc_read_response_invalid")
-            self.assertNotIn("serverware_response_validation_body_sha256", value.metadata)
+            self.assertNotIn("catchplate_response_validation_body_sha256", value.metadata)
 
     def test_raw_decoded_and_discarded_header_reflection_fail_before_normalization(self):
         escaped = ('{"jsonrpc":"2.0","id":1,"result":"' +
@@ -144,7 +144,7 @@ class AlchemyPolicyEngineTests(unittest.TestCase):
             before = value.response.headers.fields
             self.assertFalse(engine.prepare_response(value).allowed)
             self.assertEqual(value.response.headers.fields, before)
-            self.assertNotIn("serverware_response_validation_body_sha256", value.metadata)
+            self.assertNotIn("catchplate_response_validation_body_sha256", value.metadata)
         value = self.response(guard=False)
         inspection = engine._typed_json_response_inspection(value, self.route)
         self.assertFalse(inspection.allowed)
@@ -158,12 +158,12 @@ class AlchemyPolicyEngineTests(unittest.TestCase):
         for media in (None, b"text/html", b"application/problem+json", b'application/json;charset="utf-8"'):
             self.assertFalse(self.release(self.response(media=media)).allowed)
         for headers in ([(b"Content-Type", b"application/json")], [(b"Content-Encoding", b"gzip")],
-                [(b"Set-Cookie", b"x=y")], [(b"X-Serverware-Internal", b"synthetic")],
+                [(b"Set-Cookie", b"x=y")], [(b"X-Catchplate-Internal", b"synthetic")],
                 [(b"Content-Length", b"1"), (b"content-length", b"1")]):
             self.assertFalse(self.release(self.response(headers=headers)).allowed)
         for adapter in ("generic.rest", "x.app_read.v1", "npm.metadata.v1", "npm.publish.v1"):
             value = self.response()
-            value.metadata["serverware_route"] = replace(self.route, adapter_type=adapter)
+            value.metadata["catchplate_route"] = replace(self.route, adapter_type=adapter)
             self.assertFalse(engine.prepare_response(value).allowed)
         raw = fixture.document()
         raw["routes"][0]["adapter"]["config"]["response"]["mode"] = "xAppReadJsonV1"

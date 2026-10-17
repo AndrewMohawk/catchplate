@@ -30,15 +30,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 pub(super) const POLICY_CUSTODY_SERVICES_WIRE_VERSION: &str =
-    "serverware.policyCustodyServices/v3";
+    "catchplate.policyCustodyServices/v3";
 pub(super) const POLICY_CUSTODY_RECOVERY_STORE_WIRE_VERSION: &str =
-    "serverware.policyCustodyDurableRecoveryStore/v3";
+    "catchplate.policyCustodyDurableRecoveryStore/v3";
 pub(super) const POLICY_CUSTODY_RECOVERY_TARGET_WIRE_VERSION: &str =
-    "serverware.policyCustodyRecoveryTargetProvider/v3";
+    "catchplate.policyCustodyRecoveryTargetProvider/v3";
 pub(super) const POLICY_CUSTODY_CURRENT_SIGNATURE_WIRE_VERSION: &str =
-    "serverware.policyCustodyCurrentSignatureAuthority/v3";
+    "catchplate.policyCustodyCurrentSignatureAuthority/v3";
 pub(super) const POLICY_CUSTODY_CLEANUP_HELPER_WIRE_VERSION: &str =
-    "serverware.policyCustodyBoundedCleanupHelper/v3";
+    "catchplate.policyCustodyBoundedCleanupHelper/v3";
 
 pub(super) const MAX_RECOVERY_SCAN_RECORDS: usize = 1_024;
 pub(super) const MAX_RECOVERY_MATERIAL_ACTIONS: usize = 16;
@@ -49,35 +49,35 @@ pub(super) const MAX_SIGNATURE_DOMAIN_BYTES: usize = 256;
 pub(super) const MAX_SIGNATURE_BYTES: usize = 16 * 1024;
 
 pub(super) const SERVICE_RESPONSE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyServiceResponse/v3";
+    b"catchplate.policyCustodyServiceResponse/v3";
 pub(super) const OWNERSHIP_RECORD_DOMAIN: &[u8] =
-    b"serverware.policyCustodyDurableOwnershipRecord/v3";
+    b"catchplate.policyCustodyDurableOwnershipRecord/v3";
 pub(super) const RECOVERY_MATERIAL_DOMAIN: &[u8] =
-    b"serverware.policyCustodyRecoveryMaterial/v3";
+    b"catchplate.policyCustodyRecoveryMaterial/v3";
 const RECOVERY_TARGET_DOMAIN: &[u8] =
-    b"serverware.policyCustodyRecoveryTarget/v3";
+    b"catchplate.policyCustodyRecoveryTarget/v3";
 const RECOVERY_TARGET_BOOTSTRAP_MANIFEST_DOMAIN: &[u8] =
-    b"serverware.policyCustodyRecoveryTargetBootstrapManifest/v3";
+    b"catchplate.policyCustodyRecoveryTargetBootstrapManifest/v3";
 const RECOVERY_TARGET_READINESS_SEAL_DOMAIN: &[u8] =
-    b"serverware.policyCustodyRecoveryTargetReadinessSeal/v3";
+    b"catchplate.policyCustodyRecoveryTargetReadinessSeal/v3";
 const DESCRIPTOR_REGISTRATION_DOMAIN: &[u8] =
-    b"serverware.policyCustodyDescriptorRegistration/v3";
+    b"catchplate.policyCustodyDescriptorRegistration/v3";
 const CURRENT_TRUST_HEAD_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCurrentTrustHead/v3";
+    b"catchplate.policyCustodyCurrentTrustHead/v3";
 pub(super) const CLEANUP_EFFECT_INTENT_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupEffectIntent/v3";
+    b"catchplate.policyCustodyCleanupEffectIntent/v3";
 pub(super) const CLEANUP_EFFECT_INTENT_RECEIPT_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupEffectIntentReceipt/v3";
+    b"catchplate.policyCustodyCleanupEffectIntentReceipt/v3";
 pub(super) const CLEANUP_EFFECT_RESULT_RECORD_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupEffectResultRecord/v3";
+    b"catchplate.policyCustodyCleanupEffectResultRecord/v3";
 pub(in crate::policy_shadow::policy_custody) const CLEANUP_EFFECT_EXECUTION_RECORD_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupEffectExecutionRecord/v3";
+    b"catchplate.policyCustodyCleanupEffectExecutionRecord/v3";
 const CLEANUP_HELPER_BOOTSTRAP_MANIFEST_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupHelperBootstrapManifest/v3";
+    b"catchplate.policyCustodyCleanupHelperBootstrapManifest/v3";
 const CLEANUP_HELPER_READINESS_SEAL_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupHelperReadinessSeal/v3";
+    b"catchplate.policyCustodyCleanupHelperReadinessSeal/v3";
 pub(super) const CLEANUP_WORKER_PARENT_PROOF_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupWorkerParentProof/v3";
+    b"catchplate.policyCustodyCleanupWorkerParentProof/v3";
 
 fn invalid(
     code: &'static str,
@@ -1467,7 +1467,7 @@ impl RetainedDescriptorIdentitySetV3 {
             )
         })?;
         let expected = hash_domain_frames(
-            b"serverware.policyCustodyWatchdogFdManifest/v3",
+            b"catchplate.policyCustodyWatchdogFdManifest/v3",
             &[canonical.as_slice()],
         );
         if self.fd_manifest_sha256 != expected {

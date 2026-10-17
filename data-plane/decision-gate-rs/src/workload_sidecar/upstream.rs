@@ -156,7 +156,7 @@ impl UpstreamOwner {
             "sidecar ingress configuration must have exactly the service fields")?;
         let ingress: IngressConfiguration = serde_json::from_value(value)
             .map_err(|_| "sidecar ingress configuration has an invalid closed schema")?;
-        ensure(ingress.api_version == "serverware.nativeProxyIngress/v4"
+        ensure(ingress.api_version == "catchplate.nativeProxyIngress/v4"
             && ingress.expected_principal == configuration.principal_id
             && is_sha256_digest(&ingress.expected_identity_policy_sha256),
             "sidecar requires explicit service ingress v4 and its exact principal/policy pins")?;

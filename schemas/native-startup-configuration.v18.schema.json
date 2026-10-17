@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v18.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-startup-configuration.v18.schema.json",
   "title": "Explicit native retired-scope succession startup",
   "$comment": "Retains the v17 owners, replacing only measuredReconnect with the distinct measuredSuccession purpose and secretBroker with explicit v2 historical-key custody. Independent scope grants, protected full fences, claimed material and accepted retirement closure remain mandatory. Old profiles and keys are never relabelled.",
   "type": "object",
@@ -13,7 +13,7 @@
     "guestRoleKeyProvisioner", "measuredPendingRetirement", "gateCgroup", "measuredCaptureRetirement"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeStartupConfiguration/v18"},
+    "apiVersion": {"const": "catchplate.nativeStartupConfiguration/v18"},
     "gate": {"$ref": "native-startup-configuration.v17.schema.json#/properties/gate"},
     "native": {"$ref": "native-startup-configuration.v17.schema.json#/properties/native"},
     "shadow": {"$ref": "native-startup-configuration.v17.schema.json#/properties/shadow"},

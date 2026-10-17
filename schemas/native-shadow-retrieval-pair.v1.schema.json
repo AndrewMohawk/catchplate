@@ -1,6 +1,6 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://serverware.invalid/schemas/native-shadow-retrieval-pair.v1.schema.json",
+  "$id":"https://catchplate.invalid/schemas/native-shadow-retrieval-pair.v1.schema.json",
   "$ref":"#/$defs/configuration",
   "$defs":{
     "sha":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/sha256"},
@@ -13,7 +13,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","authority","executableSha256","serverConfiguration","bridgeConfiguration"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeShadowRetrievalPairConfiguration/v1"},
+        "apiVersion":{"const":"catchplate.nativeShadowRetrievalPairConfiguration/v1"},
         "authority":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/authority"},
         "executableSha256":{"$ref":"#/$defs/sha"},
         "serverConfiguration":{"$ref":"#/$defs/pin"},
@@ -36,10 +36,10 @@
     "precreation":{
       "type":"object","additionalProperties":false,"required":["apiVersion","payload","signatureBase64url"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeShadowRetrievalPairPrecreation/v1"},
+        "apiVersion":{"const":"catchplate.nativeShadowRetrievalPairPrecreation/v1"},
         "payload":{"$ref":"#/$defs/window"},"signatureBase64url":{"$ref":"#/$defs/signature"}
       },
-      "description":"Ed25519 over ASCII serverware.nativeShadowRetrievalPairPrecreation.signature/v1, NUL, full canonical payload. Independent existing C9 delivery key; not TEE/driver/service authority."
+      "description":"Ed25519 over ASCII catchplate.nativeShadowRetrievalPairPrecreation.signature/v1, NUL, full canonical payload. Independent existing C9 delivery key; not TEE/driver/service authority."
     },
     "executable":{
       "type":"object","additionalProperties":false,"required":["device","inode","length","sha256"],
@@ -56,7 +56,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","configurationSha256","precreationSha256","invocationId","server","bridge"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeShadowRetrievalPairOriginals/v1"},
+        "apiVersion":{"const":"catchplate.nativeShadowRetrievalPairOriginals/v1"},
         "configurationSha256":{"$ref":"#/$defs/sha"},"precreationSha256":{"$ref":"#/$defs/sha"},
         "invocationId":{"$ref":"#/$defs/invocation"},"server":{"$ref":"#/$defs/childOriginal"},
         "bridge":{"$ref":"#/$defs/childOriginal"}
@@ -71,7 +71,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","configurationSha256","precreationSha256","observationSha256","invocationId","server","bridge","signingKeyId"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeShadowRetrievalPairRelease/v1"},
+        "apiVersion":{"const":"catchplate.nativeShadowRetrievalPairRelease/v1"},
         "configurationSha256":{"$ref":"#/$defs/sha"},"precreationSha256":{"$ref":"#/$defs/sha"},
         "observationSha256":{"$ref":"#/$defs/sha"},"invocationId":{"$ref":"#/$defs/invocation"},
         "server":{"$ref":"#/$defs/roleRelease"},"bridge":{"$ref":"#/$defs/roleRelease"},
@@ -81,7 +81,7 @@
     "release":{
       "type":"object","additionalProperties":false,"required":["payload","signatureBase64url"],
       "properties":{"payload":{"$ref":"#/$defs/releasePayload"},"signatureBase64url":{"$ref":"#/$defs/signature"}},
-      "description":"Ed25519 over ASCII serverware.nativeShadowRetrievalPairRelease.signature/v1, NUL, canonical payload. One packet <=32768 bytes with original root-sender credentials/PIDFD and both actual C9 activation inventories as SCM_RIGHTS, server then bridge in signed6..69 order."
+      "description":"Ed25519 over ASCII catchplate.nativeShadowRetrievalPairRelease.signature/v1, NUL, canonical payload. One packet <=32768 bytes with original root-sender credentials/PIDFD and both actual C9 activation inventories as SCM_RIGHTS, server then bridge in signed6..69 order."
     }
   }
 }

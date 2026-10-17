@@ -9,7 +9,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import native_pilot_genesis_rendezvous_profile as profile
+from catchplate import native_pilot_genesis_rendezvous_profile as profile
 
 p = profile.p
 
@@ -67,7 +67,7 @@ class RendezvousFramingControls(unittest.TestCase):
         value = fixture()
         with self.assertRaises(ValueError): profile.verify_request(value["sender_raw"])
         configuration = p.document(value["configuration_raw"], 4096)
-        configuration["apiVersion"] = "serverware.nativePilotGenesisListenerConfiguration/v1"
+        configuration["apiVersion"] = "catchplate.nativePilotGenesisListenerConfiguration/v1"
         with self.assertRaises(ValueError): profile.request(value["sender_raw"], value["receiver_raw"], p.canonical(configuration))
 
     def test_hashed_receiver_cannot_be_substituted_or_aliased(self):

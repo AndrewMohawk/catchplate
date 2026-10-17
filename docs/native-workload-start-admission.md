@@ -14,8 +14,8 @@ The [closed schema](../schemas/native-workload-start-authorization.v1.schema.jso
 pairs with
 [`execution/start_authority.rs`](../data-plane/decision-gate-rs/src/native_bootstrap_client/execution/start_authority.rs).
 The envelope is exactly `schema`, `payload`, `signature`, with envelope schema
-`serverware.signedNativeWorkloadStartAuthorization/v1` and payload schema
-`serverware.nativeWorkloadStartAuthorization/v1`.
+`catchplate.signedNativeWorkloadStartAuthorization/v1` and payload schema
+`catchplate.nativeWorkloadStartAuthorization/v1`.
 
 The original is sorted compact canonical ASCII JSON without LF, at most 32 KiB
 and nesting depth six. The signature is `ed25519:` followed by canonical unpadded
@@ -25,7 +25,7 @@ Python historical-delivery signing recipe, nor a signature over a JSON verdict.
 The whole original must also equal its canonical encoding.
 
 The paired original-only
-[`native_workload_start_authorization.py`](../serverware/native_workload_start_authorization.py)
+[`native_workload_start_authorization.py`](../catchplate/native_workload_start_authorization.py)
 producer and verifier take an existing work ledger, live window and absolute
 transport deadline, independently pinned public-key original, and (for signing)
 an explicitly supplied canonical Ed25519 PKCS8 private-key original. They do not

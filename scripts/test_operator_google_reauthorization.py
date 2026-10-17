@@ -42,8 +42,8 @@ LATER_ACCESS = "synthetic-google-reauthorization-refreshed-access-token"
 class Fixture(cleanup_tests.Fixture):
     def __init__(self):
         super().__init__()
-        from serverware import operator_google_reauthorization as lifecycle
-        from serverware import operator_google_reauthorization_store as durable
+        from catchplate import operator_google_reauthorization as lifecycle
+        from catchplate import operator_google_reauthorization_store as durable
         self.lifecycle, self.durable = lifecycle, durable
         self.phase = "initial"
         self.before_token = None
@@ -105,7 +105,7 @@ class Fixture(cleanup_tests.Fixture):
         status, raw, _ = self.request("GET", PATH + "/" + core["id"] + "/review")
         assert status == 200, (status, raw)
         result = json.loads(raw)
-        assert result["schema"] == "serverware.operatorGoogleReauthorizationReview/v1"
+        assert result["schema"] == "catchplate.operatorGoogleReauthorizationReview/v1"
         assert result["credential_id"] == core["id"] and result["eligible"] is eligible
         assert result["expected_credential_generation"] == core["credential_version"]
         return result
@@ -121,7 +121,7 @@ class Fixture(cleanup_tests.Fixture):
         assert status == 200, (status, raw)
         assert [value for name, value in headers if name.lower() == b"cache-control"] == [b"no-store"]
         value = json.loads(raw)
-        assert value["schema"] == "serverware.operatorGoogleReauthorization/v1"
+        assert value["schema"] == "catchplate.operatorGoogleReauthorization/v1"
         return value
 
     def begin_reauthorization(self, core, rules):
@@ -263,7 +263,7 @@ class Fixture(cleanup_tests.Fixture):
                 assert new["last_version"] == old["last_version"] + 1
             else:
                 assert new == old
-        assert receipt["schema"] == "serverware.operatorGoogleReauthorizationReceipt/v1"
+        assert receipt["schema"] == "catchplate.operatorGoogleReauthorizationReceipt/v1"
         assert receipt["operation_id"] == self.start_payload["operation_id"] and receipt["credential_id"] == core["id"]
         assert receipt["previous_credential_generation"] == core["credential_version"]
         assert receipt["credential_generation"] == current["credential_version"]
@@ -430,7 +430,7 @@ def expired_state():
 
 def lost_start():
     f = Fixture()
-    from serverware import operator_catalog_api
+    from catchplate import operator_catalog_api
     with patch.object(f.oauth, "request_bytes", side_effect=f.provider):
         core, rules = f.setup_account()
         payload = f.payload(core, rules)
@@ -645,10 +645,10 @@ def retained_upgrade():
     # Reproduce an older bootstrap that predates ONLY this new owner schema;
     # no existing schema is dropped and no validation guard is patched after
     # initialization. The real reviewed upgrade is the only successful writer.
-    from serverware import operator_demo
+    from catchplate import operator_demo
     operator_demo.activate()
-    from serverware import operator_google_reauthorization_store as durable
-    from serverware import operator_catalog_capabilities
+    from catchplate import operator_google_reauthorization_store as durable
+    from catchplate import operator_catalog_capabilities
     with patch.object(durable, "initialize", return_value=None):
         f = Fixture()
     with patch.object(f.oauth, "request_bytes", side_effect=f.provider):
@@ -663,7 +663,7 @@ def retained_upgrade():
         status, raw, _ = f.request("GET", STORAGE_PATH)
         assert status == 200
         setup = json.loads(raw)
-        assert setup["schema"] == "serverware.operatorGoogleReauthorizationStorage/v1"
+        assert setup["schema"] == "catchplate.operatorGoogleReauthorizationStorage/v1"
         assert setup["available"] is False and setup["admission"] is None
         pins = setup["review"]
         assert pins == {**f.review(), "profile_binding_digest": f.profile.binding_digest}
@@ -749,7 +749,7 @@ def retained_upgrade():
 
 def disabled_profile():
     config, db, store, bundles, schema, inputs, mutations = workspace.workspace()
-    from serverware import app, oauth
+    from catchplate import app, oauth
     f = consent_tests.Fixture.__new__(consent_tests.Fixture)
     f.config, f.app, f.cookie = config, app, None
 
@@ -782,10 +782,10 @@ class OperatorGoogleReauthorizationTests(unittest.TestCase):
     def worker(self, operation, *, fresh=None):
         environment = dict(self.environment)
         if fresh is not None:
-            environment["SERVERWARE_DATA_DIR"] = str(self.directory.parent / fresh)
+            environment["CATCHPLATE_DATA_DIR"] = str(self.directory.parent / fresh)
         if operation == "disabled":
             for key in tuple(environment):
-                if key == "SERVERWARE_OPERATOR_GOOGLE_PROFILE" or key.startswith("SERVERWARE_GOOGLE_"):
+                if key == "CATCHPLATE_OPERATOR_GOOGLE_PROFILE" or key.startswith("CATCHPLATE_GOOGLE_"):
                     del environment[key]
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation],
             cwd=ROOT, env=environment, capture_output=True, text=True, timeout=60)

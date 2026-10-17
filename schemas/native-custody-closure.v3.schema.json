@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-custody-closure.v3.schema.json",
-  "description": "Complete live original remains <=1MiB including the entire set. Dedicated signature domain serverware.nativeCustodyClosureAssignment.signature/v3. GuestRole is checked against the source-selected native endpoint, never selected from this JSON. Both roots must match authenticated Assignment/v2, legacy anchors must equal the bridge leaf, and manifest must be the selected member. Static-set12MiB limit does not increase any live channel bound.",
+  "$id": "https://catchplate.invalid/schemas/native-custody-closure.v3.schema.json",
+  "description": "Complete live original remains <=1MiB including the entire set. Dedicated signature domain catchplate.nativeCustodyClosureAssignment.signature/v3. GuestRole is checked against the source-selected native endpoint, never selected from this JSON. Both roots must match authenticated Assignment/v2, legacy anchors must equal the bridge leaf, and manifest must be the selected member. Static-set12MiB limit does not increase any live channel bound.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,7 +12,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.nativeCustodyClosure/v3"
+      "const": "catchplate.nativeCustodyClosure/v3"
     },
     "manifest": {
       "oneOf": [
@@ -58,7 +58,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.nativeCustodyClosureAssignment/v3"
+              "const": "catchplate.nativeCustodyClosureAssignment/v3"
             },
             "purpose": {
               "const": "shadow-custody-closure-set-member"

@@ -16,13 +16,13 @@ sys.path.insert(0, str(ROOT))
 
 class OperatorDemoProfileTests(unittest.TestCase):
     def environment(self, directory):
-        environment = {k: v for k, v in os.environ.items() if not k.startswith("SERVERWARE_")}
-        environment.update(SERVERWARE_OPERATOR_DEMO="1", SERVERWARE_RELEASE_CHANNEL="dev",
-            SERVERWARE_PROCESS_MODE="serverware-control-plane", SERVERWARE_METADATA_STORE_BACKEND="sqlite",
-            SERVERWARE_AUDIT_STORE_BACKEND="sqlite", SERVERWARE_GRANT_STORE_BACKEND="sqlite",
-            SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED="0", SERVERWARE_KEY_RELEASE_REQUIRED="0",
-            SERVERWARE_DATA_DIR=directory, SERVERWARE_OPERATOR_DEMO_UPSTREAMS='["https://api.example.com"]',
-            SERVERWARE_OPERATOR_DEMO_PROXY_URL="https://proxy.example.com")
+        environment = {k: v for k, v in os.environ.items() if not k.startswith("CATCHPLATE_")}
+        environment.update(CATCHPLATE_OPERATOR_DEMO="1", CATCHPLATE_RELEASE_CHANNEL="dev",
+            CATCHPLATE_PROCESS_MODE="catchplate-control-plane", CATCHPLATE_METADATA_STORE_BACKEND="sqlite",
+            CATCHPLATE_AUDIT_STORE_BACKEND="sqlite", CATCHPLATE_GRANT_STORE_BACKEND="sqlite",
+            CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED="0", CATCHPLATE_KEY_RELEASE_REQUIRED="0",
+            CATCHPLATE_DATA_DIR=directory, CATCHPLATE_OPERATOR_DEMO_UPSTREAMS='["https://api.example.com"]',
+            CATCHPLATE_OPERATOR_DEMO_PROXY_URL="https://proxy.example.com")
         return environment
 
     def run_profile(self, directory, changes=None, operation="active"):
@@ -32,7 +32,7 @@ class OperatorDemoProfileTests(unittest.TestCase):
             cwd=ROOT, env=environment, capture_output=True, text=True, timeout=15)
 
     def test_origin_and_literal_path_contract(self):
-        from serverware.operator_demo import origin
+        from catchplate.operator_demo import origin
         for spelling in ("https://api.example.com", "https://api.example.com/", "https://api.example.com:443/"):
             self.assertEqual(origin(spelling)[0], "https://api.example.com")
         self.assertEqual(origin("https://api.example.com/v1/data", target=True)[1], "/v1/data")
@@ -48,7 +48,7 @@ class OperatorDemoProfileTests(unittest.TestCase):
 
     def test_methods_reject_head_and_preserve_options(self):
         from pydantic import ValidationError
-        from serverware.operator_demo_store import ConnectionInput
+        from catchplate.operator_demo_store import ConnectionInput
         payload = {"name": "Method fixture", "upstream_url": "https://api.example.com/v1/data",
             "auth_type": "bearer", "secret": "synthetic-method-fixture", "response_fields": ["status"]}
         supported = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
@@ -61,10 +61,10 @@ class OperatorDemoProfileTests(unittest.TestCase):
                 ConnectionInput(**payload, methods=methods)
 
     def test_production_native_provider_and_mixed_profiles_refused(self):
-        for change in ({"SERVERWARE_RELEASE_CHANNEL": "production"}, {"SERVERWARE_PRODUCTION_IMAGE": "1"},
-                       {"SERVERWARE_DEVELOPMENT_SANDBOX": "1"}, {"SERVERWARE_CONTROL_PLANE_CUSTODY_CONFIG_FD": "4"},
-                       {"SERVERWARE_GOOGLE_CLIENT_SECRET": "synthetic-forbidden"},
-                       {"SERVERWARE_POLICY_AUTHORITY_SOCKET_PATH": "/not-used"}):
+        for change in ({"CATCHPLATE_RELEASE_CHANNEL": "production"}, {"CATCHPLATE_PRODUCTION_IMAGE": "1"},
+                       {"CATCHPLATE_DEVELOPMENT_SANDBOX": "1"}, {"CATCHPLATE_CONTROL_PLANE_CUSTODY_CONFIG_FD": "4"},
+                       {"CATCHPLATE_GOOGLE_CLIENT_SECRET": "synthetic-forbidden"},
+                       {"CATCHPLATE_POLICY_AUTHORITY_SOCKET_PATH": "/not-used"}):
             with self.subTest(selection=next(iter(change))), tempfile.TemporaryDirectory() as directory:
                 target = str(Path(directory) / "data")
                 result = self.run_profile(target, change)
@@ -77,8 +77,8 @@ class OperatorDemoProfileTests(unittest.TestCase):
             for operation in ("active", "active", "changed", "stale-pid"):
                 result = self.run_profile(target, operation=operation)
                 self.assertEqual(result.returncode, 0, result.stderr)
-            marker = Path(target) / ".serverware-operator-demo.json"
-            self.assertEqual(marker.read_bytes(), b'{"schema": "serverware.operatorDemo/v1", "syntheticOnly": false}\n')
+            marker = Path(target) / ".catchplate-operator-demo.json"
+            self.assertEqual(marker.read_bytes(), b'{"schema": "catchplate.operatorDemo/v1", "syntheticOnly": false}\n')
             self.assertEqual(marker.stat().st_mode & 0o777, 0o600)
 
     def test_unmarked_data_and_broad_fixture_ranges_refused(self):
@@ -90,8 +90,8 @@ class OperatorDemoProfileTests(unittest.TestCase):
         for cidr in ("172.16.0.0/16", "169.254.1.1/32", "100.64.0.1/32", "240.0.0.1/32", "8.8.8.8/32"):
             with self.subTest(cidr=cidr), tempfile.TemporaryDirectory() as directory:
                 result = self.run_profile(str(Path(directory) / "data"), {
-                    "SERVERWARE_OPERATOR_DEMO_UPSTREAMS": '["https://demo-upstream:8443"]',
-                    "SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS": json.dumps([cidr])})
+                    "CATCHPLATE_OPERATOR_DEMO_UPSTREAMS": '["https://demo-upstream:8443"]',
+                    "CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS": json.dumps([cidr])})
                 self.assertEqual(result.returncode, 2)
 
     def test_unusable_health_dependency_is_pending_not_exception(self):
@@ -101,7 +101,7 @@ class OperatorDemoProfileTests(unittest.TestCase):
 
 
 def worker(operation):
-    from serverware import operator_demo
+    from catchplate import operator_demo
     assert not operator_demo.active(), "environment alone activated operator profile"
     try:
         operator_demo.activate()
@@ -109,7 +109,7 @@ def worker(operation):
         raise SystemExit(2) from None
     assert operator_demo.active()
     if operation == "health":
-        from serverware import config, operator_demo_store as store
+        from catchplate import config, operator_demo_store as store
         with patch.object(config, "DECISION_GATE_BASE", "http://127.0.0.1:invalid"):
             assert store.loaded_policy_hash() is None
         class Reply:
@@ -132,9 +132,9 @@ def worker(operation):
             assert store.loaded_policy_hash() is None
         return
     if operation == "changed":
-        os.environ["SERVERWARE_OPERATOR_DEMO_PROXY_URL"] = "https://other.example.com"
+        os.environ["CATCHPLATE_OPERATOR_DEMO_PROXY_URL"] = "https://other.example.com"
     elif operation == "stale-pid":
-        os.environ["SERVERWARE_CONTROL_PLANE_STARTUP_VALIDATED_PID"] = "0"
+        os.environ["CATCHPLATE_CONTROL_PLANE_STARTUP_VALIDATED_PID"] = "0"
     if operation != "active":
         try:
             operator_demo.active()

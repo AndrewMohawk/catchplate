@@ -5,7 +5,7 @@
 //! borrows role-4 authority. Assignments arrive later: embedding their hashes in
 //! the self-hashed static configuration would create a commitment cycle.
 
-use serverware_decision_gate::{canonical_json_bytes, decode_canonical_json};
+use catchplate_decision_gate::{canonical_json_bytes, decode_canonical_json};
 // The same original-only validators also compile privately in the library and
 // standalone receiving binaries. Keep their imports local to each real owner.
 use crate::native_workload_bootstrap_request_v1;

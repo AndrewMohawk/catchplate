@@ -7,7 +7,7 @@ tests, imports, builds or runtime verification ran in this batch.
 
 ## Independent delegation
 
-[`authority_registration_finalization_authorization`](../serverware/authority_registration_finalization_authorization.py)
+[`authority_registration_finalization_authorization`](../catchplate/authority_registration_finalization_authorization.py)
 provides these private source entrypoints:
 
 - `_produce_enrollment_on_work(...)` signs the finalization caller enrollment
@@ -40,7 +40,7 @@ and descriptor inventory. No key is provisioned here.
 
 ## Actual signer-original issuance
 
-[`authority_registration_finalization_issuance._produce_on_configuration`](../serverware/authority_registration_finalization_issuance.py)
+[`authority_registration_finalization_issuance._produce_on_configuration`](../catchplate/authority_registration_finalization_issuance.py)
 has this keyword-only contract:
 
 ```text
@@ -55,7 +55,7 @@ live_window, work, transport_deadline_ns=None
 The caller must authenticate the present actor and exact finalization purpose
 before invoking it. Request raw8 and response raw2 undergo the actual source,
 enrollment, ceremony, attestation, trust and evidence-signature replay in
-[`authority_webauthn_registration_signer_response`](../serverware/authority_webauthn_registration_signer_response.py).
+[`authority_webauthn_registration_signer_response`](../catchplate/authority_webauthn_registration_signer_response.py).
 Its separate fixed finalization-issuance branch derives the complete typed
 finalization request; it does not accept a caller-supplied digest or credential.
 The existing finalization `(request, inputs)` API is unchanged.
@@ -112,7 +112,7 @@ Source implementation does not close a production acceptance gate.
 
 ## Bounded finalization grant transport
 
-[`authority_registration_finalization_transport`](../serverware/authority_registration_finalization_transport.py)
+[`authority_registration_finalization_transport`](../catchplate/authority_registration_finalization_transport.py)
 defines the distinct `SWRFGQ01` request and `SWRFGR01` response. The request is
 exact raw9: original authorization, original custody raw7, then the complete
 before-vector. Each body has its existing original limit (custody limits are
@@ -125,7 +125,7 @@ The private `_originals(values, limits)` accepts only the exported fixed
 `REQUEST_LIMITS` or `RESPONSE_LIMITS` profile. `_socket_request(endpoint, *,
 originals, deadline_ns)` requires the caller's existing absolute monotonic
 deadline and only narrows it by the configured integer 1–30 second timeout.
-The endpoint must be `/run/serverware/registration-finalization-authorizer.sock`
+The endpoint must be `/run/catchplate/registration-finalization-authorizer.sock`
 with the independently configured root `0:0` listener peer; peer credentials
 are checked before sending or reading a response prefix. The request is
 half-closed, and response success requires exact EOF. There is no retry,

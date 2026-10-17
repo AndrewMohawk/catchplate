@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def fixture():
     from scripts.test_authority_genesis_successor import fixture as genesis_fixture
-    from serverware import authority_local_audit_inclusion as local
+    from catchplate import authority_local_audit_inclusion as local
     f = genesis_fixture()
     db, g = f["db"], f["g"]
     changes = {item["table"]: item["row"] for item in f["prepared"].mutations}
@@ -75,7 +75,7 @@ def scenario(name):
         assert value["audit_event_hash"] == observed["audit_rows"][-1]["event_hash"]
         assert value["audit_sequence"] == 1 and value["previous_audit_event_hash"] is None
         from dataclasses import replace
-        from serverware import authority_radix_proof as radix
+        from catchplate import authority_radix_proof as radix
         context = f["final_context"]
         rows = list({**entry,"row":observed["outbox"]} if entry["table"] == "metadata_audit_outbox" else entry
             for entry in context.selected_rows)
@@ -140,12 +140,12 @@ def scenario(name):
         assert cli.arguments(args)["signing_key_fd"] == 6
         for wrong in (args+["--dsn","credential"], [args[0],"03",*args[2:]], []): refuses(lambda: cli.arguments(wrong))
     elif name == "reader":
-        from serverware.authority_store import verifier_read_sql
-        from serverware import authority_contract
+        from catchplate.authority_store import verifier_read_sql
+        from catchplate import authority_contract
         from scripts.authority import provision_local_audit_reader as cli
         query, params = local.reader.privilege_check()
         assert query == verifier_read_sql.VERIFIER_READ_PRIVILEGE_SQL
-        assert params == (local.reader.ROLE, "serverware_metadata", sorted(local.reader.TABLES))
+        assert params == (local.reader.ROLE, "catchplate_metadata", sorted(local.reader.TABLES))
         assert local.reader.TABLES != authority_contract.VERIFIER_READ_TABLES
         assert set(local.TABLES) <= local.reader.TABLES
         assert cli.arguments(["--plan"]) is None
@@ -160,9 +160,9 @@ def scenario(name):
 
 class LocalAuditInclusionTests(unittest.TestCase):
     def check(self, name):
-        environment = {key:value for key,value in os.environ.items() if not key.startswith("SERVERWARE_")}
-        with tempfile.TemporaryDirectory(prefix="serverware-first-inclusion-") as directory:
-            environment.update(SERVERWARE_DATA_DIR=directory, SERVERWARE_RELEASE_CHANNEL="dev", SERVERWARE_PROCESS_MODE="serverware-control-plane")
+        environment = {key:value for key,value in os.environ.items() if not key.startswith("CATCHPLATE_")}
+        with tempfile.TemporaryDirectory(prefix="catchplate-first-inclusion-") as directory:
+            environment.update(CATCHPLATE_DATA_DIR=directory, CATCHPLATE_RELEASE_CHANNEL="dev", CATCHPLATE_PROCESS_MODE="catchplate-control-plane")
             command = "import sys; sys.path.insert(0,sys.argv[1]); from scripts.test_authority_local_audit_inclusion import scenario; scenario(sys.argv[2])"
             result = subprocess.run([sys.executable,"-I","-B","-c",command,str(ROOT),name], cwd=ROOT,
                 env=environment, capture_output=True, text=True, timeout=90)

@@ -24,20 +24,20 @@ pub(in crate::policy_shadow) const MEMBER_ROLES: [&str; 11] = [
     "bridge",
 ];
 
-const SET_API: &str = "serverware.nativeCustodyExecutionClosureSet/v1";
-const PUBLICATION_API: &str = "serverware.nativeCustodyExecutionClosureSet/v2";
+const SET_API: &str = "catchplate.nativeCustodyExecutionClosureSet/v1";
+const PUBLICATION_API: &str = "catchplate.nativeCustodyExecutionClosureSet/v2";
 pub(in crate::policy_shadow) const PUBLICATION_ROLES: [&str; 12] = [
     "retrieval", "persistence", "trustedTime", "generationInstall", "commitRequest",
     "ingressAdmission", "terminalAppend", "dispatchBarrier", "activeEffectBarrier",
     "activeEffectCommit", "publicationReconciliation", "bridge",
 ];
-const GENESIS_API: &str = "serverware.nativePublicationGenesisClosureSet/v1";
-const GENESIS_BOOTSTRAP_API: &str = "serverware.nativePublicationGenesisClosureSet/v2";
+const GENESIS_API: &str = "catchplate.nativePublicationGenesisClosureSet/v1";
+const GENESIS_BOOTSTRAP_API: &str = "catchplate.nativePublicationGenesisClosureSet/v2";
 pub(in crate::policy_shadow) const GENESIS_ROLES: [&str;3] = [
     "publicationGenesisRetrieval", "publicationGenesis", "publicationGenesisCoordinator"];
-const LEAF_DOMAIN: &[u8] = b"serverware.nativeCustodyExecutionClosureSetLeaf/v1";
-const ROOT_DOMAIN: &[u8] = b"serverware.nativeCustodyExecutionClosureSetRoot/v1";
-const SECCOMP_ROOT_DOMAIN: &[u8] = b"serverware.nativeCustodySeccompSetRoot/v1";
+const LEAF_DOMAIN: &[u8] = b"catchplate.nativeCustodyExecutionClosureSetLeaf/v1";
+const ROOT_DOMAIN: &[u8] = b"catchplate.nativeCustodyExecutionClosureSetRoot/v1";
+const SECCOMP_ROOT_DOMAIN: &[u8] = b"catchplate.nativeCustodySeccompSetRoot/v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SetProfile { Legacy, Genesis, GenesisBootstrap, Publication }
@@ -51,25 +51,25 @@ impl SetProfile {
         Self::Publication => PUBLICATION_API,
     } }
     fn leaf_domain(self) -> &'static [u8] { match self {
-        Self::Legacy => LEAF_DOMAIN, Self::Genesis => b"serverware.nativePublicationGenesisClosureSetLeaf/v1",
-        Self::GenesisBootstrap => b"serverware.nativePublicationGenesisClosureSetLeaf/v2",
-        Self::Publication => b"serverware.nativeCustodyExecutionClosureSetLeaf/v2",
+        Self::Legacy => LEAF_DOMAIN, Self::Genesis => b"catchplate.nativePublicationGenesisClosureSetLeaf/v1",
+        Self::GenesisBootstrap => b"catchplate.nativePublicationGenesisClosureSetLeaf/v2",
+        Self::Publication => b"catchplate.nativeCustodyExecutionClosureSetLeaf/v2",
     } }
     fn root_domain(self) -> &'static [u8] { match self {
-        Self::Legacy => ROOT_DOMAIN, Self::Genesis => b"serverware.nativePublicationGenesisClosureSetRoot/v1",
-        Self::GenesisBootstrap => b"serverware.nativePublicationGenesisClosureSetRoot/v2",
-        Self::Publication => b"serverware.nativeCustodyExecutionClosureSetRoot/v2",
+        Self::Legacy => ROOT_DOMAIN, Self::Genesis => b"catchplate.nativePublicationGenesisClosureSetRoot/v1",
+        Self::GenesisBootstrap => b"catchplate.nativePublicationGenesisClosureSetRoot/v2",
+        Self::Publication => b"catchplate.nativeCustodyExecutionClosureSetRoot/v2",
     } }
     fn seccomp_domain(self) -> &'static [u8] { match self {
-        Self::Legacy => SECCOMP_ROOT_DOMAIN, Self::Genesis => b"serverware.nativePublicationGenesisSeccompSetRoot/v1",
-        Self::GenesisBootstrap => b"serverware.nativePublicationGenesisSeccompSetRoot/v2",
-        Self::Publication => b"serverware.nativeCustodySeccompSetRoot/v2",
+        Self::Legacy => SECCOMP_ROOT_DOMAIN, Self::Genesis => b"catchplate.nativePublicationGenesisSeccompSetRoot/v1",
+        Self::GenesisBootstrap => b"catchplate.nativePublicationGenesisSeccompSetRoot/v2",
+        Self::Publication => b"catchplate.nativeCustodySeccompSetRoot/v2",
     } }
     fn manifest_profile(self, role: &str) -> (&'static str, &'static str) {
         if role == "bridge" || (self == Self::GenesisBootstrap && role == "publicationGenesisCoordinator") {
-            ("serverware.nativeCustodyExecutionClosure/v2", BOOTSTRAP_PROFILE)
+            ("catchplate.nativeCustodyExecutionClosure/v2", BOOTSTRAP_PROFILE)
         } else {
-            ("serverware.nativeCustodyExecutionClosure/v1", PROFILE)
+            ("catchplate.nativeCustodyExecutionClosure/v1", PROFILE)
         }
     }
 }
@@ -262,8 +262,8 @@ mod tests {
     }
     #[test]
     fn only_successor_coordinator_uses_measured_bootstrap(){
-        let immutable=("serverware.nativeCustodyExecutionClosure/v1",PROFILE);
-        let measured=("serverware.nativeCustodyExecutionClosure/v2",BOOTSTRAP_PROFILE);
+        let immutable=("catchplate.nativeCustodyExecutionClosure/v1",PROFILE);
+        let measured=("catchplate.nativeCustodyExecutionClosure/v2",BOOTSTRAP_PROFILE);
         for role in GENESIS_ROLES {
             assert_eq!(SetProfile::Genesis.manifest_profile(role),immutable);
             assert_eq!(SetProfile::GenesisBootstrap.manifest_profile(role),

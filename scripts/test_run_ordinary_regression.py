@@ -350,11 +350,11 @@ class RunnerTests(unittest.TestCase):
             runner.require_offline_network()
 
     def test_environment_drops_ambient_credentials_and_uses_fresh_fixture_paths(self):
-        with patch.dict(os.environ, {"SERVERWARE_ADMIN_TOKEN": "canary", "HTTPS_PROXY": "canary",
+        with patch.dict(os.environ, {"CATCHPLATE_ADMIN_TOKEN": "canary", "HTTPS_PROXY": "canary",
                 "NODE_OPTIONS": "canary", "AWS_SECRET_ACCESS_KEY": "canary", "PYTHONSTARTUP": "canary"}):
             value = runner.environment(Path("/source"), Path("/scratch"), "/bin/python", "/tools/node", Path("/deps"))
         self.assertNotIn("canary", json.dumps(value))
-        self.assertEqual(value["SERVERWARE_DATA_DIR"], "/scratch/data")
+        self.assertEqual(value["CATCHPLATE_DATA_DIR"], "/scratch/data")
         self.assertEqual(value["PYTHONPATH"], "/source:/source/scripts:/deps")
         self.assertEqual(value["HOME"], value["TMPDIR"])
 
@@ -514,7 +514,7 @@ class RunnerTests(unittest.TestCase):
                 "nativeReviewAcceptance": False,
                 "scope": "pending-actions UI with inert DOM and synthetic API replies",
                 "sourceSha256": hashlib.sha256((runner.ROOT /
-                    "serverware/operator_demo_web/workspace_pending_actions.js").read_bytes()).hexdigest()}, "PASS fixture\n"),
+                    "catchplate/operator_demo_web/workspace_pending_actions.js").read_bytes()).hexdigest()}, "PASS fixture\n"),
             "test_operator_common_apps_ui.cjs": ({"ok": True, "providers": 12, "operations": 15,
                 "scope": "pure catalog, derived authority, public request examples and download contract; no provider or browser traffic"}, ""),
             "test_native_jit_review_portal.cjs": ({"ok": True, "synthetic": True,

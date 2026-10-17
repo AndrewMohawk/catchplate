@@ -36,7 +36,7 @@ def calls(tree, name):
 class JitOriginalIngressSourceControls(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.module = read("serverware/authority_service.py")
+        cls.module = read("catchplate/authority_service.py")
         cls.method = definition(definition(cls.module, "AuthorityServer"), "_serve_connection")
         cls.scope = next(node for node in cls.method.body if isinstance(node, ast.Try))
         cls.route = next(node for node in cls.scope.body if isinstance(node, ast.If)
@@ -44,11 +44,11 @@ class JitOriginalIngressSourceControls(unittest.TestCase):
 
     def test_literal_transport_magic_and_import_are_distinct_from_shared_pages(self):
         imports = [alias for node in self.module.body if isinstance(node, ast.ImportFrom)
-            and node.module == "serverware" for alias in node.names
+            and node.module == "catchplate" for alias in node.names
             if alias.name == "authority_jit_original_transport"]
         self.assertEqual(len(imports), 1)
         self.assertEqual(imports[0].asname, "jit_original_transport")
-        actual = read("serverware/authority_jit_original_transport.py")
+        actual = read("catchplate/authority_jit_original_transport.py")
         constants = {target.id: ast.literal_eval(node.value) for node in actual.body
             if isinstance(node, ast.Assign) for target in node.targets
             if isinstance(target, ast.Name) and target.id in {"REQUEST_MAGIC", "RESPONSE_MAGIC"}}
@@ -89,7 +89,7 @@ class JitOriginalIngressSourceControls(unittest.TestCase):
         self.assertEqual(len(delegated), 1)
         self.assertEqual(ast.unparse(delegated[0]),
             "authority_jit_original_service.serve_process(self.process, connection, deadline_ns=deadline_ns, prefix=prefix)")
-        self.assertEqual(ast.unparse(self.route.body[0]), "from serverware import authority_jit_original_service")
+        self.assertEqual(ast.unparse(self.route.body[0]), "from catchplate import authority_jit_original_service")
         self.assertIsInstance(self.route.body[-1], ast.Return)
         self.assertIsNone(self.route.body[-1].value)
         self.assertEqual(len(self.route.body), 3)

@@ -11,19 +11,19 @@ staging exchange after issuance; the original launch v1 has no such channel.
 
 The role/process mode is `oidc-session-activation-consume-input-issuer`, with
 UID/GID 65495 and caller UID/GID 65532. The root-created listener is
-`/run/serverware/oidc-session-activation-consume-inputs/grants.sock`, with exact
-activation name `serverware-oidc-session-activation-consume-input-issuer` and
+`/run/catchplate/oidc-session-activation-consume-inputs/grants.sock`, with exact
+activation name `catchplate-oidc-session-activation-consume-input-issuer` and
 pathname ownership 65495:65532, mode 0660. The signed launch independently pins
 both kernel-socket and pathname device/inode values. Its fixed peer remains the
 actual control-plane caller; a pathname owner is not the kernel listener peer.
 
 The signed/payload schemas are
-`serverware.signedOidcSessionActivationConsumeInputIssuerBootstrap/v1` and
-`serverware.oidcSessionActivationConsumeInputIssuerBootstrap/v1`; the launch
-schema is `serverware.oidcSessionActivationConsumeInputIssuerLaunch/v1`. Purpose
+`catchplate.signedOidcSessionActivationConsumeInputIssuerBootstrap/v1` and
+`catchplate.oidcSessionActivationConsumeInputIssuerBootstrap/v1`; the launch
+schema is `catchplate.oidcSessionActivationConsumeInputIssuerLaunch/v1`. Purpose
 is `launch-oidc-session-activation-consume-input-issuer`, bound to the actual
 source revision and `trusted-host-local` trust mode. Explicit launch v2 is
-`serverware.oidcSessionActivationConsumeInputIssuerLaunch/v2`; it adds exactly
+`catchplate.oidcSessionActivationConsumeInputIssuerLaunch/v2`; it adds exactly
 `deliveryEndpoint` to the otherwise unchanged launch fields. Both envelope and
 payload schemas remain v1. No request-selected profile or v2-to-v1 fallback exists.
 
@@ -38,7 +38,7 @@ most 6 MiB, subject to the stricter combined representation reservation below.
 Both versions use the same six descriptors and unchanged original-only APIs.
 
 The v2 endpoint has exactly `path`, `timeoutSeconds`, `peerUid`, `peerGid`:
-`/run/serverware/oidc-session-activation/consume-bootstrap.sock`, an integer
+`/run/catchplate/oidc-session-activation/consume-bootstrap.sock`, an integer
 timeout 1..30 no greater than the signed request timeout, and root peer 0:0.
 It narrows the same opening allowance and adds no inherited descriptor. The
 actual owner creates, tracks and closes one staging socket under its fixed
@@ -72,7 +72,7 @@ These are same-call outputs, not transferable verification proof.
 ## Exact files and descriptor delivery
 
 Public trust files live only under
-`/run/serverware/oidc-session-activation-consume-input-issuer-trust`:
+`/run/catchplate/oidc-session-activation-consume-input-issuer-trust`:
 
 | FD | Original/resource | Bound |
 | --- | --- | --- |
@@ -84,7 +84,7 @@ Public trust files live only under
 | 203 | Runtime root signer | 16 KiB |
 
 The private file is exactly
-`/run/secrets/serverware-oidc-session-activation-consume-input-issuer-root-signing-key`.
+`/run/secrets/catchplate-oidc-session-activation-consume-input-issuer-root-signing-key`.
 Public files must be root-owned mode 0444, private mode 0400, all regular with
 link count one. Protected root-owned ancestors and leaves are opened without
 following symlinks. Actual byte counts are charged before reads/sealing;

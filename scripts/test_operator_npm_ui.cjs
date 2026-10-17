@@ -11,8 +11,8 @@ const {pathToFileURL} = require('node:url');
 const vm = require('node:vm');
 const {credential, application, rule, IDS, NOW} = require('./test_operator_catalog_browser.cjs');
 const {publicCatalog, digest} = require('./test_operator_ordinary_modes_browser.cjs');
-const {clientCredentialInput, credentialHeaderTarget} = require('../serverware/operator_demo_web/app.js');
-const ASSETS = resolve(__dirname, '../serverware/operator_demo_web');
+const {clientCredentialInput, credentialHeaderTarget} = require('../catchplate/operator_demo_web/app.js');
+const ASSETS = resolve(__dirname, '../catchplate/operator_demo_web');
 const FILES = ['workspace_core.js', 'workspace_github.js', 'workspace_npm.js', 'workspace_npm_publish.js',
   'workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js', 'workspace_ecr.js', 'workspace_resources.js', 'workspace_connect.js'];
 const SOURCE = FILES.map(name => readFileSync(resolve(ASSETS, name), 'utf8')).join('\n');
@@ -21,12 +21,12 @@ const NPM_EXAMPLE = resolve(__dirname, '../examples/npm-registry');
 const NPM_PACKAGE = JSON.parse(readFileSync(resolve(NPM_EXAMPLE, 'package.json'), 'utf8'));
 const ORIGIN = 'https://registry.npmjs.org';
 const BUNDLE = 'npm_metadata_read_v1';
-const DUMMY = 'serverware-npm-placeholder-v1';
+const DUMMY = 'catchplate-npm-placeholder-v1';
 const PRIVATE = 'synthetic-npm-token-NEVER-RENDER';
 const PACKAGES = ['@example/fixture', 'example-package'];
 const HEADERS = ['accept', 'npm-auth-type', 'npm-command', 'npm-in-ci', 'npm-scope', 'pacote-pkg-id', 'pacote-req-type', 'pacote-version', 'user-agent'];
 const clone = value => JSON.parse(JSON.stringify(value));
-const cap = (allowed = true) => ({schema: 'serverware.operatorNpmMetadata/v1', connection_type: 'npm_token_v1',
+const cap = (allowed = true) => ({schema: 'catchplate.operatorNpmMetadata/v1', connection_type: 'npm_token_v1',
   create_credential_path: '/api/operator-demo/credentials/npm-token', create_rule_path: '/api/operator-demo/access-rules/npm-metadata',
   registry_origin: ORIGIN, destination_allowed: allowed, operation_bundles: [BUNDLE], sdk_auth_token: DUMMY,
   placeholder: 'Bearer ' + DUMMY, response_mode: 'npm_metadata_json_v1', source_pair_required: true,
@@ -41,7 +41,7 @@ function rawCatalog({credentials = [npmCredential()], rules = [npmRule()], capab
     applications: [application({proxy_authentication: 'basic_and_bearer_v1'})], rules, allowedUpstreams: allowed,
     responseModes: ['projected_json', 'unfiltered_json_or_empty_v2'], requestBodyModes: ['preserve_json_v1'], credentialInputModes: ['insert', 'replace_exact']});
   value.capabilities.npm = capability;
-  value.capabilities.application_proxy_authentication = {schema: 'serverware.operatorProxyAuthentication/v1',
+  value.capabilities.application_proxy_authentication = {schema: 'catchplate.operatorProxyAuthentication/v1',
     modes: ['bearer', 'basic_and_bearer_v1'], path: '/api/operator-demo/applications/proxy-authentication'};
   return value;
 }
@@ -194,11 +194,11 @@ async function credentialSaveFixture(method, options = {}) {
   const priorId = '77777777-7777-4777-8777-777777777777';
   const raw = rawCatalog({credentials: [credential({id: priorId, name: 'Previously saved credential'})], rules: []});
   const originalApplications = clone(raw.applications);
-  raw.capabilities.github = {schema: 'serverware.operatorGithub/v1', connection_type: 'github_token_v1',
+  raw.capabilities.github = {schema: 'catchplate.operatorGithub/v1', connection_type: 'github_token_v1',
     create_credential_path: '/api/operator-demo/credentials/github-token', create_rule_path: '/api/operator-demo/access-rules/github',
     api_origin: 'https://api.github.com', destination_allowed: true,
-    operation_bundles: ['github_issues_read_v1', 'github_issues_write_v1'], sdk_auth_token: 'serverware-github-placeholder-v1',
-    placeholder: 'token serverware-github-placeholder-v1', query_mode: 'githubRestV1',
+    operation_bundles: ['github_issues_read_v1', 'github_issues_write_v1'], sdk_auth_token: 'catchplate-github-placeholder-v1',
+    placeholder: 'token catchplate-github-placeholder-v1', query_mode: 'githubRestV1',
     response_mode: 'unfiltered_json_or_empty_v2', source_pair_required: true};
   raw.allowed_upstreams.push('https://api.github.com');
   const name = 'Reviewed ' + method + ' credential';
@@ -363,8 +363,8 @@ const tests = [
   ['recipe uses stock npm, fixed dummy, environment-only app token and verified TLS', () => {
     const input = {proxyUrl: 'https://proxy.example.test', applicationId: IDS.application, proxyAuthentication: 'basic_and_bearer_v1', packages: PACKAGES, packageName: PACKAGES[0]};
     const text = pure.run('buildNpmClientRecipe(input)', input);
-    for (const expected of ['npm ' + NPM_PACKAGE.dependencies.npm, 'strict-ssl=true', 'NODE_EXTRA_CA_CERTS=', 'https-proxy=https://' + IDS.application + ':${SERVERWARE_PROXY_TOKEN}@proxy.example.test',
-      '//registry.npmjs.org/:_authToken=' + DUMMY, "view '@example/fixture' --json", 'fetch-retries=0', 'cache=${SERVERWARE_NPM_CACHE}', '--globalconfig /dev/null']) assert(text.includes(expected), expected);
+    for (const expected of ['npm ' + NPM_PACKAGE.dependencies.npm, 'strict-ssl=true', 'NODE_EXTRA_CA_CERTS=', 'https-proxy=https://' + IDS.application + ':${CATCHPLATE_PROXY_TOKEN}@proxy.example.test',
+      '//registry.npmjs.org/:_authToken=' + DUMMY, "view '@example/fixture' --json", 'fetch-retries=0', 'cache=${CATCHPLATE_NPM_CACHE}', '--globalconfig /dev/null']) assert(text.includes(expected), expected);
     assert(!text.includes(PRIVATE)); assert(!text.includes('strict-ssl=false'));
     for (const change of [{proxyAuthentication: 'bearer'}, {packageName: 'outside-grant'}, {proxyUrl: 'http://proxy.example.test'},
       {proxyUrl: 'https://user:secret@proxy.example.test'}, {caPath: 'bad\npath'}, {applicationId: 'not-uuid'}])
@@ -399,7 +399,7 @@ const tests = [
       assert.equal(f.node('download-config').disabled, false);
       f.node('download-config').events.click();
       assert.equal(f.blobs.length, 1); assert.equal(f.blobs[0].type, 'application/json');
-      assert.deepEqual(f.downloads, [{href: 'blob:inert-npm/1', filename: 'serverware-client.private.json'}]);
+      assert.deepEqual(f.downloads, [{href: 'blob:inert-npm/1', filename: 'catchplate-client.private.json'}]);
       assert.deepEqual(f.revoked, ['blob:inert-npm/1']);
       const text = await f.blobs[0].text(); const config = JSON.parse(text);
       assert.equal(config.client_recipe.npm_version, NPM_PACKAGE.dependencies.npm);
@@ -412,17 +412,17 @@ const tests = [
       assert(!text.includes(PRIVATE)); assert(!/11\.8\.0|21\.0\.4/.test(text));
       assert.equal(f.node('client-copy-status').textContent, 'Downloaded private client configuration. Keep it out of source control.');
       assert.equal(f.node('provider-config-handoff').hidden, false);
-      assert.equal(f.node('provider-config-command').textContent, 'node client.mjs --config ./serverware-client.private.json');
-      const directory = await mkdtemp(resolve(tmpdir(), 'serverware-npm-download-'));
+      assert.equal(f.node('provider-config-command').textContent, 'node client.mjs --config ./catchplate-client.private.json');
+      const directory = await mkdtemp(resolve(tmpdir(), 'catchplate-npm-download-'));
       try {
-        const path = resolve(directory, 'serverware-client.private.json');
+        const path = resolve(directory, 'catchplate-client.private.json');
         await writeFile(path, text, {mode: 0o600});
         const {loadClientConfig} = await import(pathToFileURL(resolve(NPM_EXAMPLE, 'client.mjs')).href);
-        const loaded = loadClientConfig(path, {SERVERWARE_PROXY_TOKEN: 'wrong-ambient'}, 'view', NOW);
+        const loaded = loadClientConfig(path, {CATCHPLATE_PROXY_TOKEN: 'wrong-ambient'}, 'view', NOW);
         assert.equal(loaded.operation, 'view'); assert.equal(loaded.token, f.token);
         assert.equal(loaded.applicationId, IDS.application);
         assert.equal(loaded.packageName, config.package || config.client_recipe.package);
-        assert.equal(loaded.caFile, resolve(directory, 'serverware-ca.pem'));
+        assert.equal(loaded.caFile, resolve(directory, 'catchplate-ca.pem'));
         assert.throws(() => loadClientConfig(path, {}, 'publish', NOW), 'no implicit publication confirmation');
       } finally { await rm(directory, {recursive: true, force: true}); }
     }
@@ -439,17 +439,17 @@ const tests = [
     const text = await f.blobs[0].text();
     assert(!text.includes(PRIVATE));
     assert(f.node('client-guidance').textContent.includes('--config'));
-    const directory = await mkdtemp(resolve(tmpdir(), 'serverware-github-config-'));
+    const directory = await mkdtemp(resolve(tmpdir(), 'catchplate-github-config-'));
     try {
-      const path = resolve(directory, 'serverware-client.private.json');
+      const path = resolve(directory, 'catchplate-client.private.json');
       await writeFile(path, text, {mode: 0o600});
       const {loadClientConfig} = await import(pathToFileURL(resolve(__dirname, '../examples/github-issues-node/client.mjs')).href);
-      const loaded = loadClientConfig(path, {SERVERWARE_PROXY_TOKEN: 'wrong-ambient-token',
-        SERVERWARE_GITHUB_OWNER: 'wrong-owner', SERVERWARE_PROXY_CA_FILE: '/wrong/ambient.pem'}, 'list', NOW);
+      const loaded = loadClientConfig(path, {CATCHPLATE_PROXY_TOKEN: 'wrong-ambient-token',
+        CATCHPLATE_GITHUB_OWNER: 'wrong-owner', CATCHPLATE_PROXY_CA_FILE: '/wrong/ambient.pem'}, 'list', NOW);
       assert.equal(loaded.operation, 'list'); assert.equal(loaded.token, f.token);
       assert.equal(loaded.applicationId, IDS.application); assert.equal(loaded.proxyUrl, raw.proxy_url);
       assert.equal(loaded.owner, raw.access_rules[0].repository.owner); assert.equal(loaded.repo, raw.access_rules[0].repository.name);
-      assert.equal(loaded.caFile, resolve(directory, 'serverware-ca.pem')); assert.equal(loaded.proxyCaFile, null);
+      assert.equal(loaded.caFile, resolve(directory, 'catchplate-ca.pem')); assert.equal(loaded.proxyCaFile, null);
       assert.throws(() => loadClientConfig(path, {}, 'create-issue', NOW));
     } finally { await rm(directory, {recursive: true, force: true}); }
   }],

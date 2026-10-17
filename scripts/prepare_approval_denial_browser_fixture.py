@@ -11,7 +11,7 @@ OAuth unavailable, no development seed or sandbox decoration.
 Prepare only; the separate browser helper never starts a browser or a server.
 Example (use a fresh owned output directory):
   python3 -B scripts/prepare_approval_denial_browser_fixture.py \
-    --source /path/to/serverware --expect-app-sha256 <reviewed sha256> \
+    --source /path/to/catchplate --expect-app-sha256 <reviewed sha256> \
     --output /tmp/fresh-owned-directory/fixture.json
 """
 
@@ -55,7 +55,7 @@ def export_fixture(source: Path, expected_app_hash: str) -> dict:
 
     def read(relative: str) -> bytes:
         nonlocal total
-        if not re.fullmatch(r"(?:serverware/[a-z_]+\.py|policies/credential-limits\.examples\.json)", relative):
+        if not re.fullmatch(r"(?:catchplate/[a-z_]+\.py|policies/credential-limits\.examples\.json)", relative):
             raise ValueError("source path is outside the bounded portal roster")
         descriptor = os.open(source / relative, os.O_RDONLY | os.O_NOFOLLOW)
         try:
@@ -97,7 +97,7 @@ def export_fixture(source: Path, expected_app_hash: str) -> dict:
             raise ValueError("expected one portal fragment assignment")
         imported = {alias.asname or alias.name: (node.module, alias.name)
                     for node in module.body if isinstance(node, ast.ImportFrom)
-                    and node.module and node.module.startswith("serverware.portal_")
+                    and node.module and node.module.startswith("catchplate.portal_")
                     for alias in node.names}
 
         def string(node: ast.AST, depth: int = 0) -> str:
@@ -126,8 +126,8 @@ def export_fixture(source: Path, expected_app_hash: str) -> dict:
         composed[identity] = string(assignments[0])
         return composed[identity]
 
-    app = tree("serverware/app.py")
-    if pins["serverware/app.py"] != expected_app_hash:
+    app = tree("catchplate/app.py")
+    if pins["catchplate/app.py"] != expected_app_hash:
         raise ValueError("app.py differs from the reviewed source")
     html = literal(app, "UI_HTML")
 
@@ -155,7 +155,7 @@ def export_fixture(source: Path, expected_app_hash: str) -> dict:
 
     imports = {alias.asname or alias.name: (node.module, alias.name)
                for node in app.body if isinstance(node, ast.ImportFrom)
-               and node.module and node.module.startswith("serverware.portal_")
+               and node.module and node.module.startswith("catchplate.portal_")
                for alias in node.names}
     fragment_loops = [node for node in app.body if isinstance(node, ast.For)
                       and isinstance(node.target, ast.Tuple)
@@ -177,17 +177,17 @@ def export_fixture(source: Path, expected_app_hash: str) -> dict:
                and any(isinstance(target, ast.Name) and target.id == "secret_field" for target in node.targets)]
     if len(secrets) != 1 or not isinstance(secrets[0], ast.IfExp):
         raise ValueError("protected static field is no longer a literal branch")
-    replace_once("__SERVERWARE_STATIC_SECRET_FIELD__", ast.literal_eval(secrets[0].body))
-    replace_once("__SERVERWARE_ENROLLED_OAUTH_PROFILE__", json.dumps("unavailable"))
-    replace_once("__SERVERWARE_DEMO_SEED_BUTTON__", "")
-    replace_once("__SERVERWARE_STATIC_PROTECTED__", "true")
-    replace_once("__SERVERWARE_STATIC_ROTATION_SELECTED__", "false")
-    if re.search(r"__SERVERWARE_[A-Z_]+__", html):
+    replace_once("__CATCHPLATE_STATIC_SECRET_FIELD__", ast.literal_eval(secrets[0].body))
+    replace_once("__CATCHPLATE_ENROLLED_OAUTH_PROFILE__", json.dumps("unavailable"))
+    replace_once("__CATCHPLATE_DEMO_SEED_BUTTON__", "")
+    replace_once("__CATCHPLATE_STATIC_PROTECTED__", "true")
+    replace_once("__CATCHPLATE_STATIC_ROTATION_SELECTED__", "false")
+    if re.search(r"__CATCHPLATE_[A-Z_]+__", html):
         raise ValueError("unresolved portal placeholder")
     encoded = html.encode("utf-8")
     if len(encoded) > MAX_TOTAL:
         raise ValueError("rendered portal exceeds fixture bound")
-    return {"schema": "serverware.approvalDenialBrowserFixture/v1", "syntheticOnly": True,
+    return {"schema": "catchplate.approvalDenialBrowserFixture/v1", "syntheticOnly": True,
             "html": html, "htmlSha256": hashlib.sha256(encoded).hexdigest(),
             "sourceSha256": dict(sorted(pins.items())),
             "profile": {"protectedStaticCredentials": True, "protectedStaticRotation": False,

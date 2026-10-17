@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-commitment-keys.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-commitment-keys.v1.schema.json",
   "$ref": "#/$defs/configuration",
   "$defs": {
     "sha": {
@@ -47,7 +47,7 @@
           "$ref": "#/$defs/sha"
         }
       },
-      "description": "secretSha256 is SHA256(b'serverware/native-shadow-request-commitment-secret/v1\\0' + independently provisioned 32-byte HMAC secret). Key ID/epoch must match the independently signed assignment observationWindow, distinct from all 18 Ed25519 roles."
+      "description": "secretSha256 is SHA256(b'catchplate/native-shadow-request-commitment-secret/v1\\0' + independently provisioned 32-byte HMAC secret). Key ID/epoch must match the independently signed assignment observationWindow, distinct from all 18 Ed25519 roles."
     },
     "assignment": {
       "type": "object",
@@ -69,7 +69,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowRequestCommitmentAssignment/v1"
+          "const": "catchplate.nativeShadowRequestCommitmentAssignment/v1"
         },
         "purpose": {
           "const": "native-shadow-request-commitment-hmac"
@@ -140,7 +140,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowKeyKmsTransport/v2"
+          "const": "catchplate.nativeShadowKeyKmsTransport/v2"
         },
         "kmsParentPort": {
           "$ref": "native-shadow-encrypted-keys.v1.schema.json#/$defs/port"
@@ -158,10 +158,10 @@
           "minProperties": 1,
           "maxProperties": 32,
           "required": [
-            "serverwarePurpose"
+            "catchplatePurpose"
           ],
           "properties": {
-            "serverwarePurpose": {
+            "catchplatePurpose": {
               "const": "native-shadow-local-role-keys-and-request-commitment/v2"
             }
           },
@@ -212,7 +212,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowEncryptedKeyDeliveryAssignment/v2"
+          "const": "catchplate.nativeShadowEncryptedKeyDeliveryAssignment/v2"
         },
         "purpose": {
           "const": "kms-recipient-shadow-local-keys-and-request-commitment"
@@ -293,7 +293,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowEncryptedKeyDelivery/v2"
+          "const": "catchplate.nativeShadowEncryptedKeyDelivery/v2"
         },
         "authorization": {
           "$ref": "#/$defs/deliveryAuthorization"
@@ -315,7 +315,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowLocalKeyInventory/v2"
+          "const": "catchplate.nativeShadowLocalKeyInventory/v2"
         },
         "fullKeySetRootSha256": {
           "$ref": "#/$defs/sha"
@@ -347,7 +347,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowLocalKeySeeds/v2"
+          "const": "catchplate.nativeShadowLocalKeySeeds/v2"
         },
         "inventorySha256": {
           "$ref": "#/$defs/sha"
@@ -411,7 +411,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowEncryptedLocalKeys/v2"
+          "const": "catchplate.nativeShadowEncryptedLocalKeys/v2"
         },
         "inventorySha256": {
           "$ref": "#/$defs/sha"
@@ -444,7 +444,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowKeyDeliveryBinding/v2"
+          "const": "catchplate.nativeShadowKeyDeliveryBinding/v2"
         },
         "guest": {
           "$ref": "#/$defs/guest"
@@ -487,7 +487,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowKeyKmsRecipientRequest/v2"
+          "const": "catchplate.nativeShadowKeyKmsRecipientRequest/v2"
         },
         "material": {
           "const": "shadow-local-key-and-commitment-kek"
@@ -525,7 +525,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowKeyKmsParent/v2"
+          "const": "catchplate.nativeShadowKeyKmsParent/v2"
         },
         "enclaveCid": {
           "type": "integer",

@@ -2,17 +2,17 @@
   "broker-kek": {
     "encryption_context": {
       "material": "broker-kek",
-      "service": "serverware"
+      "service": "catchplate"
     },
     "key_id": "arn:aws:kms:us-east-1:111122223333:key/broker-kek",
-    "plaintext_path": "/secure/serverware/broker-kek.bin"
+    "plaintext_path": "/secure/catchplate/broker-kek.bin"
   },
   "decision-gate-ca": {
     "encryption_context": {
       "material": "decision-gate-ca",
-      "service": "serverware"
+      "service": "catchplate"
     },
     "key_id": "arn:aws:kms:us-east-1:111122223333:key/decision-gate-ca",
-    "plaintext_path": "/secure/serverware/decision-gate-ca-key.pem"
+    "plaintext_path": "/secure/catchplate/decision-gate-ca-key.pem"
   }
 }

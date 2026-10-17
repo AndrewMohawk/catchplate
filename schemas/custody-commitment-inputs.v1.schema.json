@@ -1,6 +1,6 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://serverware.invalid/schemas/custody-commitment-inputs.v1.schema.json",
+  "$id":"https://catchplate.invalid/schemas/custody-commitment-inputs.v1.schema.json",
   "$ref":"#/$defs/configuration",
   "$defs":{
     "sha":{"$ref":"native-shadow-role-keys.v1.schema.json#/$defs/sha256"},
@@ -27,7 +27,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","bootIdBase64url","timeNamespaceDevice","timeNamespaceInode","startupDeadlineBoottimeNs","lifetimeDeadlineBoottimeNs","invocationId","services"],
       "properties":{
-        "apiVersion":{"enum":["serverware.custodyFiveServiceLaunch/v3","serverware.custodyFiveServiceLaunch/v4"]},
+        "apiVersion":{"enum":["catchplate.custodyFiveServiceLaunch/v3","catchplate.custodyFiveServiceLaunch/v4"]},
         "bootIdBase64url":{"$ref":"native-shadow-role-keys.v1.schema.json#/$defs/bytes32"},
         "timeNamespaceDevice":{"$ref":"#/$defs/u64"},
         "timeNamespaceInode":{"$ref":"#/$defs/u64"},
@@ -36,18 +36,18 @@
         "invocationId":{"type":"string","pattern":"^[0-9a-f]{32}$","not":{"const":"00000000000000000000000000000000"}},
         "services":{"$ref":"#/$defs/services"}
       },
-      "description":"Fixed root-protected /etc/serverware/custody-commitment-five.json. Only start_commitment reads it; v4 selects retained privileged inspection. Direct v3 is not a distinct-UID nondumpable-peer fallback. Actual boot/time namespace and original startup/lifetime are checked by the owner."
+      "description":"Fixed root-protected /etc/catchplate/custody-commitment-five.json. Only start_commitment reads it; v4 selects retained privileged inspection. Direct v3 is not a distinct-UID nondumpable-peer fallback. Actual boot/time namespace and original startup/lifetime are checked by the owner."
     },
     "business":{
       "type":"object","additionalProperties":false,
       "required":["apiVersion","launchConfigurationSha256","invocationId","clientConfiguration"],
       "properties":{
-        "apiVersion":{"const":"serverware.custodyFiveServiceBusinessInputs/v2"},
+        "apiVersion":{"const":"catchplate.custodyFiveServiceBusinessInputs/v2"},
         "launchConfigurationSha256":{"$ref":"#/$defs/sha"},
         "invocationId":{"type":"string","pattern":"^[0-9a-f]{32}$","not":{"const":"00000000000000000000000000000000"}},
         "clientConfiguration":{"$ref":"#/$defs/pin"}
       },
-      "description":"Fixed root-protected /etc/serverware/custody-commitment-business.json. Both actual existing source-fixed resource roots are exclusively retained. No caller path or generic resource list."
+      "description":"Fixed root-protected /etc/catchplate/custody-commitment-business.json. Both actual existing source-fixed resource roots are exclusively retained. No caller path or generic resource list."
     },
     "dispatchGrant":{"$ref":"native-shadow-commit-request.v1.schema.json#/$defs/serviceGrant"},
     "nativeGrant":{"$ref":"native-shadow-commit-request.v1.schema.json#/$defs/configuration"},

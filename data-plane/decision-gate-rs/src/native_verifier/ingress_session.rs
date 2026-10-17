@@ -10,7 +10,7 @@ use super::{b64, config::TrustRoots, decode_b64, digest, digest_text, ensure, ex
     fixed_b64, ingress::{self, EvidenceProfile}, ingress_config::{Expectations, SessionScope}, json, text};
 use rustls::{ClientConnection, HandshakeKind, ProtocolVersion};
 use serde_json::{json, Value};
-use serverware_decision_gate::native_ingress_challenge_v1::{derive_nonce, EXPORTER_LABEL};
+use catchplate_decision_gate::native_ingress_challenge_v1::{derive_nonce, EXPORTER_LABEL};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_INPUT: usize = 96 * 1024;
@@ -209,8 +209,8 @@ fn verify_session_original(raw: &[u8], expected: &SessionScope, roots: &TrustRoo
     exact(&evidence, &["apiVersion", "evidenceScope", "okForAction",
         "clientChallengeBase64url", "tlsExporterBase64url", "publicIdentityBase64url"])?;
     let evidence_version = if workload.is_some() {
-        "serverware.nativeIngressSessionEvidence/v2"
-    } else { "serverware.nativeIngressSessionEvidence/v1" };
+        "catchplate.nativeIngressSessionEvidence/v2"
+    } else { "catchplate.nativeIngressSessionEvidence/v1" };
     ensure(text(&evidence, "apiVersion")? == evidence_version
         && text(&evidence, "evidenceScope")? == "unverified-session-public-material"
         && evidence.get("okForAction").and_then(Value::as_bool) == Some(false),
@@ -249,11 +249,11 @@ fn verify_checked(raw: &[u8], profile: SessionExpectations<'_>, trust_roots_raw:
 
     let (version, quote_verification) = match profile {
         SessionExpectations::PinnedNonce { expected, original } => (
-            "serverware.nativeIngressSessionVerification/v1",
+            "catchplate.nativeIngressSessionVerification/v1",
             checked.summary(&public_identity, original, trust_roots_raw, expected),
         ),
         SessionExpectations::ClientChallenge { scope, original, .. } => (
-            "serverware.nativeIngressSessionVerification/v2",
+            "catchplate.nativeIngressSessionVerification/v2",
             checked.summary_for_session_scope(&public_identity, original, trust_roots_raw, scope),
         ),
     };
@@ -268,7 +268,7 @@ fn verify_checked(raw: &[u8], profile: SessionExpectations<'_>, trust_roots_raw:
     });
     if let Some(verified) = workload_verification {
         let verified = verified.summary();
-        result["apiVersion"] = json!("serverware.nativeIngressSessionVerification/v3");
+        result["apiVersion"] = json!("catchplate.nativeIngressSessionVerification/v3");
         for field in ["clientIssuerCertificateSha256", "clientIssuerSpkiSha256",
             "clientLeafCertificateSha256"] {
             result[field] = verified[field].clone();

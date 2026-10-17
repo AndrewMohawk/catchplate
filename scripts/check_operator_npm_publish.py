@@ -68,7 +68,7 @@ def client_failure_observation(value, phase):
         "stdoutShape", "stdoutCodeKind", "stdoutContext"}
     if not isinstance(phase, str) or phase not in PHASES or not isinstance(value, dict) or set(value) != keys:
         return None
-    if (value.get("schema") != "serverware.privateNpmPublishClient/v1" or value.get("ok") is not False
+    if (value.get("schema") != "catchplate.privateNpmPublishClient/v1" or value.get("ok") is not False
             or not isinstance(value.get("phase"), str) or value["phase"] not in {phase, "unknown"}
             or value.get("error") != "stock npm publish operation failed"
             or not isinstance(value.get("stage"), str) or value["stage"] not in CLIENT_STAGES
@@ -107,7 +107,7 @@ def failure_audit_observation(check):
     deadline starts slightly later and must not extend it. A drained sample is
     only a queue observation, not proof that timed-out requests have finished.
     """
-    result = {"schema": "serverware.privateNpmPublishFailureAudit/v1", "healthReads": 0,
+    result = {"schema": "catchplate.privateNpmPublishFailureAudit/v1", "healthReads": 0,
         "queueState": "not_observed", "counters": None, "auditRead": "not_attempted",
         "durableEventCount": None}
 
@@ -462,7 +462,7 @@ class NpmPublishCheck(metadata.NpmMetadataCheck):
     def client(self, spec, app, token):
         raw = run_client(spec, app["id"], token, self.run_id, min(25, self.deadline - time.monotonic()))
         self.clean(raw); result = json.loads(raw)
-        require(result.get("schema") == "serverware.privateNpmPublishClient/v1" and result.get("ok") is True
+        require(result.get("schema") == "catchplate.privateNpmPublishClient/v1" and result.get("ok") is True
             and result.get("phase") == spec["case"] and result.get("npmVersion") == "11.8.0"
             and result.get("pacoteVersion") == "21.0.4" and result.get("registryFetchVersion") == "19.1.1"
             and all(result.get(key) is True for key in ("strictSSL", "extraCaPreservesDefaultRoots", "isolatedCache"))
@@ -483,7 +483,7 @@ class NpmPublishCheck(metadata.NpmMetadataCheck):
         require(initial["revision"] == 1 and all(not initial[key] and initial["limits"][key]["retained"] == 0 for key in COLLECTIONS)
             and self.observe()["total"] == 0, "fresh unused npm publish catalog required")
         capability = initial.get("capabilities", {}).get("npm_publish", {})
-        require(capability.get("schema") == "serverware.operatorNpmPublish/v1"
+        require(capability.get("schema") == "catchplate.operatorNpmPublish/v1"
             and capability.get("destination_allowed") is True and capability.get("read_metadata_included") is True
             and capability.get("operation_bundles") == ["npm_publish_v1"] and capability.get("registry_origin") == fixture.ORIGIN,
             "paired npm publish capability unavailable")
@@ -558,7 +558,7 @@ class NpmPublishCheck(metadata.NpmMetadataCheck):
                     self.failure_audit = failure_audit_observation(self)
                 except Exception:
                     # Observation must never replace the original child failure.
-                    self.failure_audit = {"schema": "serverware.privateNpmPublishFailureAudit/v1",
+                    self.failure_audit = {"schema": "catchplate.privateNpmPublishFailureAudit/v1",
                         "healthReads": 0, "queueState": "unavailable", "counters": None,
                         "auditRead": "not_attempted", "durableEventCount": None}
                 raise
@@ -572,7 +572,7 @@ class NpmPublishCheck(metadata.NpmMetadataCheck):
         verified = self.control_json("/api/audit/verify?limit=1000", authenticated=True)
         require(verified.get("ok") is True and verified.get("complete") is True and verified.get("backend") == "sqlite",
             "npm publish durable audit chain incomplete")
-        return {"ok": True, "schema": "serverware.privateNpmPublishCheck/v1", "syntheticOnly": True,
+        return {"ok": True, "schema": "catchplate.privateNpmPublishCheck/v1", "syntheticOnly": True,
             "productionReady": False, "realNpmVerified": False, "npmInstallVerified": False,
             "npmVersion": "11.8.0", "pacoteVersion": "21.0.4", "registryFetchVersion": "19.1.1",
             "dataPlaneBinaryDigest": self.args.expected_binary_sha256, "stockClientTransports": True,

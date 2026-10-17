@@ -6,7 +6,7 @@ evidence-admission locator. Source is unbuilt, unexecuted and unprovisioned;
 these routes and the portal action have not been browser-verified or admitted
 for production.
 
-The [routes](../serverware/control_plane_registration_finalization_reservation_routes.py)
+The [routes](../catchplate/control_plane_registration_finalization_reservation_routes.py)
 are:
 
 - `POST /api/webauthn/register/reserve-finalization`
@@ -22,7 +22,7 @@ objects are not inputs. The distinct action is
 
 ## Genuine ownership before present permission
 
-The [facade](../serverware/control_plane_registration_finalization_reservation.py)
+The [facade](../catchplate/control_plane_registration_finalization_reservation.py)
 loads the actual finalization association and its existing evidence/signer
 association from the cold custody owner. It authenticates the original
 finalization authorization, custody raw7, complete before-vector and grant,
@@ -75,12 +75,12 @@ append; no raw original is exposed over HTTP. Late failure may follow remote
 or local durable effects, and does not remove retained bytes or grant retry
 permission.
 
-The [closed response](../serverware/control_plane_registration_finalization_reservation_http.py)
+The [closed response](../catchplate/control_plane_registration_finalization_reservation_http.py)
 is HTTP `202` with exactly ten fields:
 
 | Field | Value |
 | --- | --- |
-| `schema` | `serverware.webAuthnRegistrationFinalizationReservation/v1` |
+| `schema` | `catchplate.webAuthnRegistrationFinalizationReservation/v1` |
 | `status` | `reservation-recorded` |
 | `purpose` | `reserve-registration-finalization` |
 | `localDigest` | Original finalization-grant local ID |

@@ -29,7 +29,7 @@ fn fixture(custom: bool) -> Arc<Snapshot> {
     snapshot.routes[0].credential_header = Some(descriptor(if custom {
         "CLIENT_DUMMY"
     } else {
-        "Bearer SERVERWARE_PLACEHOLDER"
+        "Bearer CATCHPLATE_PLACEHOLDER"
     }));
     snapshot.routes[0].adapter_config["credentialMode"] = json!("required");
     snapshot.routes[0]
@@ -50,7 +50,7 @@ fn valid_headers(custom: bool) -> BTreeMap<String, String> {
         if custom {
             "CLIENT_DUMMY"
         } else {
-            "Bearer SERVERWARE_PLACEHOLDER"
+            "Bearer CATCHPLATE_PLACEHOLDER"
         }
         .into(),
     )])
@@ -145,8 +145,8 @@ fn credential_header_replacement_rejects_unsupported_and_reserved_targets() {
         "trailer",
         "transfer-encoding",
         "upgrade",
-        "x-serverware-proof",
-        "X_Serverware_Workload",
+        "x-catchplate-proof",
+        "X_Catchplate_Workload",
     ] {
         let credential = Credential {
             provider: "generic".into(),
@@ -203,7 +203,7 @@ fn credential_header_replacement_removes_only_the_exact_target() {
     for custom in [false, true] {
         let snapshot = fixture(custom);
         let mut headers = valid_headers(custom);
-        headers.insert("x-unrelated".into(), "Bearer SERVERWARE_PLACEHOLDER".into());
+        headers.insert("x-unrelated".into(), "Bearer CATCHPLATE_PLACEHOLDER".into());
         headers.insert("proxy-authorization".into(), "Bearer workload-auth".into());
         let original = headers.clone();
         remove_for_route(
@@ -231,14 +231,14 @@ fn credential_header_replacement_denials_preserve_input_and_never_trim() {
         (
             BTreeMap::from([(
                 "Authorization".into(),
-                " Bearer SERVERWARE_PLACEHOLDER".into(),
+                " Bearer CATCHPLATE_PLACEHOLDER".into(),
             )]),
             "credential_existing_header_mismatch",
         ),
         (
             BTreeMap::from([(
                 "Authorization".into(),
-                "Bearer SERVERWARE_PLACEHOLDER ".into(),
+                "Bearer CATCHPLATE_PLACEHOLDER ".into(),
             )]),
             "credential_existing_header_mismatch",
         ),
@@ -250,11 +250,11 @@ fn credential_header_replacement_denials_preserve_input_and_never_trim() {
             BTreeMap::from([
                 (
                     "Authorization".into(),
-                    "Bearer SERVERWARE_PLACEHOLDER".into(),
+                    "Bearer CATCHPLATE_PLACEHOLDER".into(),
                 ),
                 (
                     "authorization".into(),
-                    "Bearer SERVERWARE_PLACEHOLDER".into(),
+                    "Bearer CATCHPLATE_PLACEHOLDER".into(),
                 ),
             ]),
             "credential_existing_header_ambiguous",
@@ -343,11 +343,11 @@ fn credential_header_replacement_physical_and_json_duplicate_headers_are_rejecte
     // HTTP field OWS is normalized by the existing parser, not by replacement.
     // Direct policy maps with leading/trailing whitespace remain mismatches above.
     let snapshot = fixture(false);
-    let mut ows_wire = Cursor::new(b"GET https://example.test/resource HTTP/1.1\r\nHost: example.test\r\nAuthorization:\t Bearer SERVERWARE_PLACEHOLDER \t\r\n\r\n");
+    let mut ows_wire = Cursor::new(b"GET https://example.test/resource HTTP/1.1\r\nHost: example.test\r\nAuthorization:\t Bearer CATCHPLATE_PLACEHOLDER \t\r\n\r\n");
     let mut parsed = read_request_head_from(&mut ows_wire, None).unwrap();
     assert_eq!(
         parsed.headers["authorization"],
-        "Bearer SERVERWARE_PLACEHOLDER"
+        "Bearer CATCHPLATE_PLACEHOLDER"
     );
     remove_for_route(
         &snapshot,
@@ -358,7 +358,7 @@ fn credential_header_replacement_physical_and_json_duplicate_headers_are_rejecte
     .unwrap();
     assert!(!parsed.headers.contains_key("authorization"));
     assert_eq!(parsed.headers["host"], "example.test");
-    let mut spaced_wire = Cursor::new(b"GET https://example.test/resource HTTP/1.1\r\nHost: example.test\r\nAuthorization: Bearer  SERVERWARE_PLACEHOLDER\r\n\r\n");
+    let mut spaced_wire = Cursor::new(b"GET https://example.test/resource HTTP/1.1\r\nHost: example.test\r\nAuthorization: Bearer  CATCHPLATE_PLACEHOLDER\r\n\r\n");
     let mut spaced = read_request_head_from(&mut spaced_wire, None).unwrap();
     assert_eq!(
         remove_for_route(
@@ -371,7 +371,7 @@ fn credential_header_replacement_physical_and_json_duplicate_headers_are_rejecte
     );
     assert_eq!(
         spaced.headers["authorization"],
-        "Bearer  SERVERWARE_PLACEHOLDER"
+        "Bearer  CATCHPLATE_PLACEHOLDER"
     );
 }
 
@@ -459,7 +459,7 @@ fn credential_header_replacement_preparation_denies_before_resolver() {
         );
     }
     assert_eq!(resolver.0.load(Ordering::SeqCst), 0);
-    let wire = b"GET https://example.test/resource HTTP/1.1\r\nHost: example.test\r\nAuthorization: Bearer SERVERWARE_PLACEHOLDER\r\n\r\n";
+    let wire = b"GET https://example.test/resource HTTP/1.1\r\nHost: example.test\r\nAuthorization: Bearer CATCHPLATE_PLACEHOLDER\r\n\r\n";
     let head = read_request_head_from(&mut Cursor::new(wire), None).unwrap();
     assert!(
         prepare_upstream_for_forward(&state, &snapshot, &head, &url, Some("agent:test")).is_err()

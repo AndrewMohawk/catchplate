@@ -1,6 +1,6 @@
 # Explicit-context registration attestation core
 
-`serverware/webauthn_attestation_core.py` separates the existing attestation
+`catchplate/webauthn_attestation_core.py` separates the existing attestation
 computation from live database, configuration, file, cache and clock access.
 The registration path and compatibility helpers in `webauthn.py` use it; this
 is not a replacement enrollment API. The source is unverified until its frozen

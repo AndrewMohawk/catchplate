@@ -21,12 +21,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract as authority
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_configuration as configuration
-from serverware import authority_revocation_persistence as persistence
-from serverware import authority_revocation_writer_action as action
-from serverware import authority_revocation_writer_configuration as mapper
+from catchplate import authority_contract as authority
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_configuration as configuration
+from catchplate import authority_revocation_persistence as persistence
+from catchplate import authority_revocation_writer_action as action
+from catchplate import authority_revocation_writer_configuration as mapper
 import test_authority_revocation_capability_producer as key_oracle
 import test_authority_revocation_plan as oracle
 import test_authority_revocation_retention as record_oracle

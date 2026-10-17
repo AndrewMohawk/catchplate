@@ -16,8 +16,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import test_npm_metadata as parsed
-from serverware import adapters, alchemy_rpc_read as rpc, policy_bundle as pb
-from serverware import policy_engine as engine, policy_route_authority as authority
+from catchplate import adapters, alchemy_rpc_read as rpc, policy_bundle as pb
+from catchplate import policy_engine as engine, policy_route_authority as authority
 
 VECTORS = json.loads((ROOT / "scripts/fixtures/alchemy_rpc_read_v1.json").read_text())
 SECRET = "synthetic-alchemy-private-token-NEVER-RELEASE"
@@ -26,12 +26,12 @@ RESPONSE = b'{"jsonrpc":"2.0","id":1,"result":"0x1"}'
 
 
 def document():
-    return {"apiVersion": "serverware.policy/v1", "kind": "PolicyBundle",
+    return {"apiVersion": "catchplate.policy/v1", "kind": "PolicyBundle",
         "metadata": {"id": "alchemy-rpc-read-test", "sequence": 1, "rollbackEpoch": 1},
         "defaults": {"action": "deny", "failMode": "closed", "unknownHosts": "block",
             "unknownPaths": "block", "validationFailure": "block"},
         "principals": [{"id": "agent:fixture", "sourceCidrs": ["127.0.0.1/32"],
-            "requiredHeaders": {"X-Serverware-Agent": "fixture"}}],
+            "requiredHeaders": {"X-Catchplate-Agent": "fixture"}}],
         "credentials": [{"id": "credential:fixture", "credentialType": "static",
             "provider": "operator-demo", "providerSubject": "synthetic-alchemy-subject",
             "injection": {"type": "bearer", "header": "Authorization"}}],
@@ -65,8 +65,8 @@ class AlchemyRpcReadTests(unittest.TestCase):
         value = flow(body=request_body)
         value.response = SimpleNamespace(status_code=status, raw_content=body, content=body, trailers=None,
             headers=parsed.ParsedHeaders(([(b"Content-Type", media)] if media is not None else []) + list(headers)))
-        value.metadata.update(serverware_route=self.route,
-            serverware_operation={**VECTORS["operation"], "requestId": request_id})
+        value.metadata.update(catchplate_route=self.route,
+            catchplate_operation={**VECTORS["operation"], "requestId": request_id})
         if guard:
             checker = engine._ResponseCredentialGuard()
             checker.add_text_encodings(SECRET)
@@ -98,7 +98,7 @@ class AlchemyRpcReadTests(unittest.TestCase):
             compiled = pb.compile_policy_bundle(before, validate_schema=validate_schema)
             rpc.validate_route(compiled.routes[0])
             v2 = document()
-            v2["apiVersion"] = "serverware.policy/v2"
+            v2["apiVersion"] = "catchplate.policy/v2"
             pb.compile_policy_bundle(authority.prepare_unsigned(v2, []), validate_schema=validate_schema)
         self.assertEqual(before, document())
         self.assertEqual(authority._builtin("alchemy.rpc_read.v1", "alchemy.rpc.read"), "read")
@@ -192,7 +192,7 @@ class AlchemyRpcReadTests(unittest.TestCase):
         for request_id in (1, "1"):
             body = json.dumps({"jsonrpc": "2.0", "id": request_id, "method": "eth_chainId", "params": []}).encode()
             value = flow(body=body, headers=[(b"Content-Type", b"application/json"),
-                (b"Accept-Encoding", b"gzip, deflate"), (b"X-Serverware-Agent", b"fixture")])
+                (b"Accept-Encoding", b"gzip, deflate"), (b"X-Catchplate-Agent", b"fixture")])
             principal = self.snapshot.principals["agent:fixture"]
             credential = self.snapshot.credentials[self.route.credential_ref]
             self.assertTrue(adapters.preflight_request_admission(value, self.route, engine._normalized_request_headers(value)).allowed)
@@ -223,7 +223,7 @@ class AlchemyRpcReadTests(unittest.TestCase):
                     self.assertEqual(value.response.headers["content-type"], "application/json")
         # Metadata is not the binding source: the admitted original request is.
         value = self.response(b'{"jsonrpc":"2.0","id":2,"result":true}')
-        value.metadata["serverware_operation"]["requestId"] = 2
+        value.metadata["catchplate_operation"]["requestId"] = 2
         self.assertFalse(self.admit_response(value).allowed)
 
     def test_http_statuses_response_bounds_depth_and_encoding(self):
@@ -254,7 +254,7 @@ class AlchemyRpcReadTests(unittest.TestCase):
         for media in (None, b"text/html", b"application/problem+json", b'application/json;charset="utf-8"'):
             self.assertFalse(self.admit_response(self.response(media=media)).allowed)
         for headers in ([(b"Content-Type", b"application/json")], [(b"Content-Encoding", b"gzip")],
-                [(b"Set-Cookie", b"x=y")], [(b"X-Serverware-Internal", b"synthetic")],
+                [(b"Set-Cookie", b"x=y")], [(b"X-Catchplate-Internal", b"synthetic")],
                 [(b"Content-Length", b"1"), (b"content-length", b"1")], [(b"X-Large", b"x" * 8193)]):
             self.assertFalse(self.admit_response(self.response(headers=headers)).allowed)
         for adapter in ("generic.rest", "x.v2", "x.app_read.v1", "npm.metadata.v1"):

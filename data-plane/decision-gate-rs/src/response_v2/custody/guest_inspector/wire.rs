@@ -44,7 +44,7 @@ pub(super) struct Bootstrap {
 }
 impl Bootstrap {
     pub fn validate(&self) -> io::Result<()> {
-        require(self.api_version == "serverware.responseV2.guestInspectorBootstrap/v1"
+        require(self.api_version == "catchplate.responseV2.guestInspectorBootstrap/v1"
             && path(&self.configuration_path) && path(&self.delivery_path)
             && self.configuration_path != self.delivery_path
             && hash(&self.configuration_sha256) && hash(&self.delivery_sha256)
@@ -79,7 +79,7 @@ pub(super) struct Request {
 impl Request {
     pub fn validate(&self, nonce: &str, next: u64, lifetime: u64, now: u64) -> io::Result<u64> {
         let deadline = ns(&self.deadline_boottime_ns)?;
-        require(self.api_version == "serverware.responseV2.guestInspectorRequest/v1"
+        require(self.api_version == "catchplate.responseV2.guestInspectorRequest/v1"
             && self.channel_nonce == nonce && next > 0 && self.request_sequence == next
             && now < deadline && deadline <= lifetime, "inspection context/deadline mismatch")?;
         match self.phase {

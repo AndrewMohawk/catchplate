@@ -19,10 +19,10 @@ from urllib.parse import urlencode
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import operator_common_apps as common
-from serverware import operator_catalog_inputs as inputs
-from serverware import operator_catalog_policy as policy
-from serverware import operator_catalog_schema as schema
+from catchplate import operator_common_apps as common
+from catchplate import operator_catalog_inputs as inputs
+from catchplate import operator_catalog_policy as policy
+from catchplate import operator_catalog_schema as schema
 
 APP_ID = "00000000-0000-4000-8000-000000000001"
 CREDENTIAL_ID = "00000000-0000-4000-8000-000000000002"
@@ -60,20 +60,33 @@ def flow_for(body, url, headers=None):
 
 class RegistryTests(unittest.TestCase):
     def test_cloudflare_retained_profiles_render_identically(self):
-        # Captured from the existing profiles before adding the SDK versions.
+        # Keep the pre-rebrand fingerprints as an independent semantic oracle.
+        # Only these three named public branding fields may differ from them.
         expected = {"zones": "1f2f8340d034d412768d91ecbbcbc3439deac0332629a9bb9b6733a8631f58f8",
             "dns_records": "c177d3c145d5feb5f501c8f00f74486516cd62894d662d61c80aea0f711f89d2"}
+        branded = {"zones": "b863b6a52af4bcc148da7254acd2d60a2bdd50f34cfb418a30182935324edc6d",
+            "dns_records": "00d3aa94f172df8748c152bf8b62b532cab38eb970c3928fe5d9f6fc34afb303"}
         app = common.preset("cloudflare")
         for identifier, digest in expected.items():
             _, spec = common.operation("cloudflare", identifier)
             rule, credential, bundle = fixture(app, spec)
             common.validate_rule(rule, credential)
             encoded = json.dumps(bundle, sort_keys=True, separators=(",", ":")).encode()
-            self.assertEqual(hashlib.sha256(encoded).hexdigest(), digest)
+            self.assertEqual(hashlib.sha256(encoded).hexdigest(), branded[identifier])
+            legacy = deepcopy(bundle)
+            self.assertEqual(legacy["apiVersion"], "catchplate.policy/v1")
+            self.assertEqual(legacy["metadata"]["id"], "catchplate-operator-demo")
+            self.assertEqual(legacy["routes"][0]["credentialHeader"]["expectedValue"],
+                "Bearer catchplate-cloudflare-placeholder-v1")
+            legacy["apiVersion"] = "serverware.policy/v1"
+            legacy["metadata"]["id"] = "serverware-operator-demo"
+            legacy["routes"][0]["credentialHeader"]["expectedValue"] = "Bearer serverware-cloudflare-placeholder-v1"
+            self.assertEqual(hashlib.sha256(json.dumps(legacy, sort_keys=True,
+                separators=(",", ":")).encode()).hexdigest(), digest)
             self.assertIs(spec["available_for_creation"], False)
 
     def test_cloudflare_sdk_profiles_admit_only_known_headers_on_exact_bodyless_reads(self):
-        from serverware import adapters, policy_bundle
+        from catchplate import adapters, policy_bundle
         headers = {"accept": "application/json", "user-agent": "Cloudflare/Python 5.9.0",
             "api-version": "2026-10-15", "x-stainless-lang": "python",
             "x-stainless-package-version": "5.9.0", "x-stainless-os": "Linux",
@@ -89,7 +102,7 @@ class RegistryTests(unittest.TestCase):
             self.assertEqual((request["bodyMode"], request["maxBodyBytes"], request["allowedMediaTypes"]),
                 ("none", 0, []))
             self.assertEqual(bundle["routes"][0]["credentialHeader"],
-                {"mode": "replaceExact", "expectedValue": "Bearer serverware-cloudflare-placeholder-v1"})
+                {"mode": "replaceExact", "expectedValue": "Bearer catchplate-cloudflare-placeholder-v1"})
             adapter = adapters.get_adapter("generic.rest")
 
             def admit(*, body=b"", extra=None, query=""):
@@ -121,7 +134,7 @@ class RegistryTests(unittest.TestCase):
             self.assertFalse(adapter.validate_request(old_flow, old_route, {}).allowed)
 
     def test_cloudflare_capability_keeps_legacy_descriptors_out_of_new_choices(self):
-        from serverware import operator_demo
+        from catchplate import operator_demo
         with patch.object(operator_demo, "settings", return_value={"allowed_upstreams": ["https://api.cloudflare.com"]}):
             capability = common.capability()
         app = next(item for item in capability["presets"] if item["id"] == "cloudflare")
@@ -133,8 +146,8 @@ class RegistryTests(unittest.TestCase):
             for item in app["operations"]), 15)
 
     def test_common_app_post_has_exact_profile_and_body_route_admission(self):
-        from serverware import operator_demo
-        from serverware.operator_catalog_api import MUTATION_PATHS, router
+        from catchplate import operator_demo
+        from catchplate.operator_catalog_api import MUTATION_PATHS, router
         path = "/api/operator-demo/access-rules/common-app"
         with patch.object(operator_demo, "active", return_value=True):
             self.assertTrue(operator_demo.active())
@@ -146,7 +159,7 @@ class RegistryTests(unittest.TestCase):
         self.assertIn(path, MUTATION_PATHS)
         self.assertEqual([route.methods for route in router.routes if route.path == path], [{"POST"}])
         # Exercise the actual middleware classifier without booting a server.
-        tree = ast.parse((ROOT / "serverware/app.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/app.py").read_text())
         selected = [node for node in tree.body if isinstance(node, ast.Assign)
             and any(isinstance(target, ast.Name) and target.id == "_OPERATOR_CATALOG_BODY_POST_PATHS"
                 for target in node.targets) or isinstance(node, ast.FunctionDef)
@@ -161,7 +174,7 @@ class RegistryTests(unittest.TestCase):
         self.assertFalse(owns("POST", path + "/other", operator_active=True))
 
     def test_every_preset_compiles_and_examples_pass_actual_constraints(self):
-        from serverware import constraints, policy_bundle
+        from catchplate import constraints, policy_bundle
         identifiers = [app["id"] for app in common.presets()]
         self.assertEqual(len(identifiers), 12)
         self.assertEqual(len(set(identifiers)), 12)
@@ -195,7 +208,7 @@ class RegistryTests(unittest.TestCase):
         self.assertGreaterEqual(count, 15)
 
     def test_scope_body_and_marker_tampering_are_refused(self):
-        from serverware import constraints
+        from catchplate import constraints
         for identifier in ("openai", "anthropic", "gemini", "openrouter", "slack", "discord", "resend"):
             app = common.preset(identifier)
             spec = app["operations"][0]
@@ -263,7 +276,7 @@ class RegistryTests(unittest.TestCase):
                     {"type": "bearer", "header": "Authorization", "prefix": "Bot "})
 
     def test_capabilities_do_not_approve_destinations_or_mutate_registry(self):
-        from serverware import operator_demo
+        from catchplate import operator_demo
         before = deepcopy(common.presets())
         with patch.object(operator_demo, "settings", return_value={"allowed_upstreams": ["https://api.openai.com"]}):
             value = common.capability()
@@ -276,7 +289,7 @@ class RegistryTests(unittest.TestCase):
 
 def lifecycle_worker():
     import test_operator_catalog_github as fixture_module
-    from serverware import operator_demo
+    from catchplate import operator_demo
     f = fixture_module.Fixture()
     app = f.application()
     for identifier in ("openai", "anthropic", "discord"):
@@ -343,7 +356,7 @@ class LifecycleTests(unittest.TestCase):
     def setUp(self):
         import test_operator_catalog_github as fixture_module
         fixture_module.OperatorCatalogGithubTests.setUp(self)
-        self.environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(
+        self.environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(
             ["https://api.example.com", "https://api.openai.com", "https://api.anthropic.com", "https://discord.com"])
 
     def test_actual_encrypted_catalog_rotation_revoke_signatures_and_audit(self):

@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
-from serverware import native_pilot_adopted_constructed_inputs as inputs
+from catchplate import native_pilot_adopted_constructed_inputs as inputs
 from test_native_pilot_adopted_bridge_keys import fixture as bridge_fixture, closure_input, closure_result
 from test_native_pilot_bridge_authorizations import pair, clocks
 from test_native_pilot_continuation_profile import policy_fixture, bootstrap_fixture
@@ -74,7 +74,7 @@ class AdoptedConstructedCandidateControls(unittest.TestCase):
         raw, pair_context = self.verifier()
         value = json.loads(raw)
         self.assertEqual(pair_context, self.case["originals"])
-        self.assertEqual(value["apiVersion"], "serverware.nativeShadowNitroVerifierConfiguration/v3")
+        self.assertEqual(value["apiVersion"], "catchplate.nativeShadowNitroVerifierConfiguration/v3")
         self.assertEqual(value["expectedScope"]["guest"], self.case["guest"])
         self.assertEqual(value["operation"]["deadlineBoottimeNs"], self.case["guest"]["startupDeadlineBoottimeNs"])
         self.assertEqual(value["authorityKeys"][-1]["role"], "custody-supervisor-capability")
@@ -126,14 +126,14 @@ class AdoptedConstructedCandidateControls(unittest.TestCase):
     def test_exported_literal_association_is_exact_not_evidence_admission(self):
         f = self.case
         closure = closure_result(closure_input(f["value"], f["guest"], f["manifest"]))["original"]
-        components = {"closure": closure, "keys": canonical({"apiVersion": "serverware.nativeShadowRoleKeys/v2",
+        components = {"closure": closure, "keys": canonical({"apiVersion": "catchplate.nativeShadowRoleKeys/v2",
             "authorization": json.loads(f["originals"]["roleKeyOriginal"])}).decode("ascii"),
             "admission": f["originals"]["admissionOriginal"]}
         scope_raw = b'{"synthetic":"scope-not-native-admission"}'
         scope_input = {"publicBundleOriginal": '{"synthetic":"phase-bundle"}',
             "observationOriginal": json.loads(f["value"]["deliveryInputOriginal"])["observationOriginal"]}
         bootstrap_raw = f["prior"]["driver-bootstrap"]["result"]["original"].encode("ascii")
-        exported = {"apiVersion": "serverware.nativeShadowDriverPublicAdmission/v1",
+        exported = {"apiVersion": "catchplate.nativeShadowDriverPublicAdmission/v1",
             "bootstrapObservationOriginal": scope_input["observationOriginal"], "phaseScopeOriginal": scope_raw.decode("ascii"),
             "phaseBundleOriginal": scope_input["publicBundleOriginal"], "assignmentOriginal": f["value"]["recipeOriginals"]["assignmentOriginal"],
             "closureOriginal": components["closure"], "keyConfigurationOriginal": components["keys"],

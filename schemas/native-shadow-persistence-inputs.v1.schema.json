@@ -1,12 +1,12 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://serverware.invalid/schemas/native-shadow-persistence-inputs.v1.schema.json",
+  "$id":"https://catchplate.invalid/schemas/native-shadow-persistence-inputs.v1.schema.json",
   "$ref":"#/$defs/launch",
   "$defs":{
     "launch":{
       "type":"object","additionalProperties":false,"required":["apiVersion","keyAdmission","persistence"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeShadowPersistenceGuestLaunch/v2"},
+        "apiVersion":{"const":"catchplate.nativeShadowPersistenceGuestLaunch/v2"},
         "keyAdmission":{"$ref":"native-shadow-guest-admission.v1.schema.json#/$defs/launch"},
         "persistence":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/pin"}
       },
@@ -19,7 +19,7 @@
         {"allOf":[{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/activation"},{"properties":{"name":{"const":"persistence-journal"},"fd":{"const":7}}}]},
         {"allOf":[{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/activation"},{"properties":{"name":{"const":"persistence-lock"},"fd":{"const":8}}}]}
       ],
-      "description":"Actual retained FD metadata signed in C9. Fixed /run/serverware-shadow-persistence/listener.sock, fresh /var/lib/serverware/native-shadow-persistence/journal and named persistence.lock. Descriptor numbers and metadata alone are not runtime ownership; the native launcher rechecks transferred FDs and service validates actual named locked inode."
+      "description":"Actual retained FD metadata signed in C9. Fixed /run/catchplate-shadow-persistence/listener.sock, fresh /var/lib/catchplate/native-shadow-persistence/journal and named persistence.lock. Descriptor numbers and metadata alone are not runtime ownership; the native launcher rechecks transferred FDs and service validates actual named locked inode."
     },
     "genesis":{"$ref":"native-shadow-persistence-service.v1.schema.json#/$defs/genesis",
       "description":"Exact independently supplied canonical original, <=16 KiB, after real C9 delivery exists. proofScopeSha256 is the typed protected scope binding_sha256, not a fabricated digest. Guest equals the full actual signed delivery association. Producer does not generate this original."},

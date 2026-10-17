@@ -4,11 +4,11 @@ use crate::native_canary_evidence_v1::{now_epoch,now_boot};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD,Engine as _};
 use serde_json::Value;
 use sha2::{Digest,Sha256};
-pub const SCHEMA:&str="serverware.nativePolicyShadowHeartbeatStatement/v1";
-pub const RECORD:&str="serverware.nativePolicyShadowHeartbeat/v1";
-pub const POLICY:&str="serverware.policyCanaryHeartbeatAuthorityPolicy/v1";
+pub const SCHEMA:&str="catchplate.nativePolicyShadowHeartbeatStatement/v1";
+pub const RECORD:&str="catchplate.nativePolicyShadowHeartbeat/v1";
+pub const POLICY:&str="catchplate.policyCanaryHeartbeatAuthorityPolicy/v1";
 pub const PURPOSE:&str="native-policy-shadow-heartbeat";
-pub const QUOTE_DOMAIN:&[u8]=b"serverware/native-policy-shadow-heartbeat-attestation/v1\0";
+pub const QUOTE_DOMAIN:&[u8]=b"catchplate/native-policy-shadow-heartbeat-attestation/v1\0";
 pub const MAX_RECORD:usize=64*1024;
 pub const MAX_HEARTBEATS:usize=32;
 pub const FIELDS:&[&str]=&["apiVersion","purpose","deploymentId","instanceId","holderId","bootId","keyId",
@@ -29,7 +29,7 @@ pub fn validate_policy(value:&Value,deployment:&str,now:u64)->Result<(),String>{
         && expires.checked_sub(issued).is_some_and(|v|v<=86_400_000_000_000)
         && (1..=30).contains(&number(value,"operationMaxSeconds")?)
         && (1_000_000_000..=60_000_000_000).contains(&number(value,"maximumGapNanos")?)
-        && value["trustRoots"]["apiVersion"]=="serverware.policyCanaryHeartbeatTrustRoots/v1"
+        && value["trustRoots"]["apiVersion"]=="catchplate.policyCanaryHeartbeatTrustRoots/v1"
         && value["assignments"].as_array().is_some_and(|v|(1..=32).contains(&v.len())),"heartbeat independent current policy")?;
     exact(&value["trustRoots"],&["apiVersion","awsNitroRootCertificatesPem","awsNitroCrlsDerBase64url","nitroCertificateProfile"])?;
     require(ascii(value)?.len()<=2*1024*1024,"heartbeat policy original bound")?;
@@ -97,7 +97,7 @@ impl Prepared {
     pub(crate) fn signed(&self,signature:&[u8;64],key:&[u8],quote:&[u8])->Result<Value,String>{
         self.check(self.deadline)?;
         let value=serde_json::json!({"statement":self.statement,"signature":format!("ed25519:{}",URL_SAFE_NO_PAD.encode(signature)),
-            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1","responseProofPublicKey":URL_SAFE_NO_PAD.encode(key),
+            "nativeKeyEvidence":{"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1","responseProofPublicKey":URL_SAFE_NO_PAD.encode(key),
                 "attestationDocumentB64":URL_SAFE_NO_PAD.encode(quote)}});
         require(ascii(&value)?.len()<=MAX_RECORD,"heartbeat evidence bound")?;Ok(value)
     }

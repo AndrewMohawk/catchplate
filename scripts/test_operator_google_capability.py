@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def expected(profile):
     return {
-        "schema": "serverware.operatorGoogleCapability/v1",
+        "schema": "catchplate.operatorGoogleCapability/v1",
         "profile": "operator-google-v1", "provider_id": "google",
         "permission_preset": "gmail_readonly",
         "scopes": ["email", "https://www.googleapis.com/auth/gmail.readonly", "openid"],
@@ -65,7 +65,7 @@ def enabled_labels():
     assert not any("health" in key or key.startswith("refresh_") for key in caps["google_oauth"])
     encoded = json.dumps(result, sort_keys=True)
     for private in (google.ACCESS_TOKEN, google.REFRESH_TOKEN, google.CLIENT_SECRET,
-            str(os.environ["SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE"])):
+            str(os.environ["CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE"])):
         assert private not in encoded
     for field in ("oauth_intent_id", "oauth_profile_binding_digest", "secret", "access_token", "refresh_token"):
         assert field not in record
@@ -78,7 +78,7 @@ def enabled_labels():
 
 def retained_binding():
     f = google.Fixture()
-    from serverware import operator_catalog_capabilities as caps
+    from catchplate import operator_catalog_capabilities as caps
     before = f.snapshot()
     with closing(f.db.connect()) as conn:
         google.refused(lambda: caps.google_oauth(conn), f.schema.CatalogIntegrityError)
@@ -109,12 +109,12 @@ def guarded_http():
         code, _, _ = f.request("GET", "/api/operator-demo/catalog", auth=False)
         assert code == 401
         changes = {
-            "SERVERWARE_OPERATOR_GOOGLE_PROFILE": "",
-            "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID": "456-other.apps.googleusercontent.com",
-            "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI": "https://control.example.com/other",
-            "SERVERWARE_NATIVE_ENABLED": "1",
+            "CATCHPLATE_OPERATOR_GOOGLE_PROFILE": "",
+            "CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID": "456-other.apps.googleusercontent.com",
+            "CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI": "https://control.example.com/other",
+            "CATCHPLATE_NATIVE_ENABLED": "1",
         }
-        # Every SERVERWARE_* environment drift invalidates the admitted process
+        # Every CATCHPLATE_* environment drift invalidates the admitted process
         # in outer middleware, before the catalog's fixed 503 boundary. The
         # direct ASGI fixture propagates that exact guard error; these are not
         # HTTP 503 observations. Retained-binding refusals are tested separately.
@@ -146,7 +146,7 @@ class OperatorGoogleCapabilityTests(unittest.TestCase):
         environment = dict(self.environment)
         if operation == "disabled":
             for key in tuple(environment):
-                if key == "SERVERWARE_OPERATOR_GOOGLE_PROFILE" or key.startswith("SERVERWARE_GOOGLE_"):
+                if key == "CATCHPLATE_OPERATOR_GOOGLE_PROFILE" or key.startswith("CATCHPLATE_GOOGLE_"):
                     del environment[key]
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation],
             cwd=ROOT, env=environment, capture_output=True, text=True, timeout=90)

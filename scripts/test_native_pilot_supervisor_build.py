@@ -14,7 +14,7 @@ import build_production_images as build
 import native_pilot_runtime_artifacts as artifact
 import build_native_pilot_artifacts as pilot_artifacts
 from test_build_production_images import build_metadata_fixture
-from serverware import native_pilot_coordinator_process as coordinator
+from catchplate import native_pilot_coordinator_process as coordinator
 
 
 class SupervisorBuildControls(unittest.TestCase):
@@ -67,7 +67,7 @@ class SupervisorBuildControls(unittest.TestCase):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 coordinator._Runtime().admit(b"{}", **changed)
         # A source assertion, not an installed-runtime or privileged launch test.
-        tree = ast.parse((SCRIPTS.parent / "serverware/native_pilot_coordinator_process.py").read_text())
+        tree = ast.parse((SCRIPTS.parent / "catchplate/native_pilot_coordinator_process.py").read_text())
         literals = {node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)}
         self.assertIn("supervisor", literals)
         self.assertIn("supervisor/app/scripts", literals)
@@ -75,14 +75,14 @@ class SupervisorBuildControls(unittest.TestCase):
     def test_publication_native_tools_have_build_export_and_inventory_consumers(self):
         # Source registration only, not an ELF build or executable test.
         source = (SCRIPTS.parent / "data-plane/decision-gate-rs/Dockerfile.production").read_text()
-        for name in ("serverware-native-publication-genesis-controller",
-                     "serverware-native-publication-adoption-validator"):
+        for name in ("catchplate-native-publication-genesis-controller",
+                     "catchplate-native-publication-adoption-validator"):
             with self.subTest(name=name):
                 self.assertIn("--bin " + name, source)
                 self.assertIn("readelf -l /src/target/release/" + name, source)
                 self.assertIn("readelf -d /src/target/release/" + name, source)
-                self.assertIn("/native-install/opt/serverware/" + name, source)
-                self.assertEqual(pilot_artifacts.NATIVE_FILES["opt/serverware/" + name], (0o555, 64 * 1024 * 1024))
+                self.assertIn("/native-install/opt/catchplate/" + name, source)
+                self.assertEqual(pilot_artifacts.NATIVE_FILES["opt/catchplate/" + name], (0o555, 64 * 1024 * 1024))
 
 
 if __name__ == "__main__":

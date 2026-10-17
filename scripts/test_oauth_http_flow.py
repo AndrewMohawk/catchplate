@@ -240,36 +240,36 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def configure_environment(data_dir: Path, simulator: OAuthProviderSimulator) -> None:
     values = {
-        "SERVERWARE_DATA_DIR": str(data_dir),
-        "SERVERWARE_RELEASE_CHANNEL": "dev",
-        "SERVERWARE_PUBLIC_URL": "https://serverware.test",
-        "SERVERWARE_KEY_RELEASE_REQUIRED": "0",
-        "SERVERWARE_METADATA_STORE_BACKEND": "sqlite",
-        "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite",
-        "SERVERWARE_GRANT_STORE_BACKEND": "sqlite",
-        "SERVERWARE_CONTROL_PLANE_TWO_PERSON_REQUIRED": "1",
-        "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS": "credential.oauth.activate,credential.delete",
-        "SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED": "0",
-        "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID": simulator.GOOGLE_CLIENT_ID,
-        "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET": simulator.GOOGLE_CLIENT_SECRET,
-        "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI": "https://serverware.test/api/oauth/callback/google",
-        "SERVERWARE_X_OAUTH_CLIENT_ID": simulator.X_CLIENT_ID,
-        "SERVERWARE_X_OAUTH_CLIENT_SECRET": simulator.X_CLIENT_SECRET,
-        "SERVERWARE_X_OAUTH_REDIRECT_URI": "https://serverware.test/api/oauth/callback/x",
-        "SERVERWARE_DATA_PLANE_INSTANCE_ID": "spiffe://test.serverware/decision-gate/oauth-http-flow",
-        "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN": DATA_PLANE_TOKEN,
-        "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST": DATA_PLANE_DIGEST,
-        "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED": "0",
-        "SERVERWARE_AUDIT_ANCHOR_URL": "",
-        "SERVERWARE_DECISION_GATE_BASE": "",
+        "CATCHPLATE_DATA_DIR": str(data_dir),
+        "CATCHPLATE_RELEASE_CHANNEL": "dev",
+        "CATCHPLATE_PUBLIC_URL": "https://catchplate.test",
+        "CATCHPLATE_KEY_RELEASE_REQUIRED": "0",
+        "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite",
+        "CATCHPLATE_AUDIT_STORE_BACKEND": "sqlite",
+        "CATCHPLATE_GRANT_STORE_BACKEND": "sqlite",
+        "CATCHPLATE_CONTROL_PLANE_TWO_PERSON_REQUIRED": "1",
+        "CATCHPLATE_CONTROL_PLANE_TWO_PERSON_ACTIONS": "credential.oauth.activate,credential.delete",
+        "CATCHPLATE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED": "0",
+        "CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID": simulator.GOOGLE_CLIENT_ID,
+        "CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET": simulator.GOOGLE_CLIENT_SECRET,
+        "CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI": "https://catchplate.test/api/oauth/callback/google",
+        "CATCHPLATE_X_OAUTH_CLIENT_ID": simulator.X_CLIENT_ID,
+        "CATCHPLATE_X_OAUTH_CLIENT_SECRET": simulator.X_CLIENT_SECRET,
+        "CATCHPLATE_X_OAUTH_REDIRECT_URI": "https://catchplate.test/api/oauth/callback/x",
+        "CATCHPLATE_DATA_PLANE_INSTANCE_ID": "spiffe://test.catchplate/decision-gate/oauth-http-flow",
+        "CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN": DATA_PLANE_TOKEN,
+        "CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST": DATA_PLANE_DIGEST,
+        "CATCHPLATE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED": "0",
+        "CATCHPLATE_AUDIT_ANCHOR_URL": "",
+        "CATCHPLATE_DECISION_GATE_BASE": "",
         "SSL_CERT_FILE": str(simulator.ca_cert_path),
     }
     for name in (
-        "SERVERWARE_METADATA_STORE_POSTGRES_DSN",
-        "SERVERWARE_AUDIT_STORE_POSTGRES_DSN",
-        "SERVERWARE_GRANT_STORE_POSTGRES_DSN",
-        "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
-        "SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE",
+        "CATCHPLATE_METADATA_STORE_POSTGRES_DSN",
+        "CATCHPLATE_AUDIT_STORE_POSTGRES_DSN",
+        "CATCHPLATE_GRANT_STORE_POSTGRES_DSN",
+        "CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
+        "CATCHPLATE_X_OAUTH_CLIENT_SECRET_FILE",
     ):
         os.environ.pop(name, None)
     os.environ.update(values)
@@ -312,7 +312,7 @@ def provider_redirect(simulator: OAuthProviderSimulator, authorization_url: str)
     parsed = urllib.parse.urlsplit(location)
     if (
         parsed.scheme != "https"
-        or parsed.netloc != "serverware.test"
+        or parsed.netloc != "catchplate.test"
         or len(location) > 8192
     ):
         raise AssertionError(
@@ -358,7 +358,7 @@ def provider_access_token(
             else simulator.X_CLIENT_ID
         ),
         "redirect_uri": (
-            f"https://serverware.test/api/oauth/callback/{provider}"
+            f"https://catchplate.test/api/oauth/callback/{provider}"
         ),
         "scope": " ".join(scopes),
         "state": state,
@@ -511,7 +511,7 @@ def exercise_provider_resource_contract(work_dir: Path) -> None:
         search_status, search = resource_request(
             "GET",
             (
-                "/2/tweets/search/recent?query=serverware"
+                "/2/tweets/search/recent?query=catchplate"
                 "&tweet.fields=created_at&max_results=10"
             ),
             token=x_token,
@@ -540,7 +540,7 @@ def exercise_provider_resource_contract(work_dir: Path) -> None:
 
         wrong_provider_status, _ = resource_request(
             "GET",
-            "/2/tweets/search/recent?query=serverware",
+            "/2/tweets/search/recent?query=catchplate",
             token=google_token,
         )
         if wrong_provider_status != 401:
@@ -584,7 +584,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Exercise the bounded OAuth provider resources and the complete "
-            "Serverware OAuth HTTP lifecycle."
+            "Catchplate OAuth HTTP lifecycle."
         )
     )
     parser.add_argument(
@@ -600,14 +600,14 @@ def main() -> None:
             print("OAuth provider resource contract passed")
             return
         with OAuthProviderSimulator(tmp / "provider") as simulator:
-            configure_environment(tmp / "serverware", simulator)
+            configure_environment(tmp / "catchplate", simulator)
 
             from fastapi import HTTPException, Request
 
-            from serverware import app as app_module
-            from serverware import db, oauth
-            from serverware.auth import AdminIdentity, require_admin
-            from serverware.policy_bundle import (
+            from catchplate import app as app_module
+            from catchplate import db, oauth
+            from catchplate.auth import AdminIdentity, require_admin
+            from catchplate.policy_bundle import (
                 CredentialPolicy,
                 PolicySnapshot,
                 RoutePolicy,
@@ -907,7 +907,7 @@ def main() -> None:
                     )
 
             with ASGIHTTPClient(
-                app_module.app, base_url="https://serverware.test"
+                app_module.app, base_url="https://catchplate.test"
             ) as client:
                 unauthenticated = request(client, "GET", "/api/oauth/providers")
                 expect_status(unauthenticated, 401, "missing test actor")
@@ -974,7 +974,7 @@ def main() -> None:
                     {
                         "grant_type": "authorization_code",
                         "code": code,
-                        "redirect_uri": "https://serverware.test/api/oauth/callback/google",
+                        "redirect_uri": "https://catchplate.test/api/oauth/callback/google",
                         "client_id": simulator.GOOGLE_CLIENT_ID,
                         "client_secret": simulator.GOOGLE_CLIENT_SECRET,
                         "code_verifier": verifier,
@@ -1329,7 +1329,7 @@ def main() -> None:
                         "POST",
                         "/api/data-plane/credential-leases",
                         json_body={
-                            "apiVersion": "serverware.credentialLeaseRequest/v3",
+                            "apiVersion": "catchplate.credentialLeaseRequest/v3",
                             "purpose": purpose,
                             "principalId": "agent:oauth-http-flow",
                             "routeId": route.id,
@@ -1346,7 +1346,7 @@ def main() -> None:
                             "maxTtlSeconds": 1,
                         },
                         extra_headers={
-                            "X-Serverware-Data-Plane-Token": DATA_PLANE_TOKEN
+                            "X-Catchplate-Data-Plane-Token": DATA_PLANE_TOKEN
                         },
                     )
 

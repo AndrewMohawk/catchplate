@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-aware-response-artifacts.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/policy-aware-response-artifacts.v1.schema.json",
   "title": "Policy-aware ordinary response proof and capture artifacts v1",
   "description": "Strict data-only shapes for five client artifact labels. These are not Native capture wrappers and confer no authorization. Runtime envelopes deliberately retain their ordinary versions; their exact nested statements and vendor attested claims must use the independently selected PolicyAware APIs. Original signatures, quote/verifier trust, time, TLS, receipt, digest and capture associations require genuine runtime verification. No self-approved vendor or collector result is authority.",
   "oneOf": [{"$ref": "#/$defs/bufferedProof"}, {"$ref": "#/$defs/streamingProof"}, {"$ref": "#/$defs/observationProof"}, {"$ref": "#/$defs/bufferedCapture"}, {"$ref": "#/$defs/streamingCapture"}],
@@ -32,8 +32,8 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "kind", "external_capture", "collector_signature", "server_statement", "server_signature", "vendor_tee"],
       "properties": {
-        "apiVersion": {"const": "serverware.policyAwareProxyResponseProof/v1"},
-        "kind": {"const": "ServerwarePolicyAwareProxyResponseProof"},
+        "apiVersion": {"const": "catchplate.policyAwareProxyResponseProof/v1"},
+        "kind": {"const": "CatchplatePolicyAwareProxyResponseProof"},
         "external_capture": {"$ref": "#/$defs/bufferedCapture"},
         "collector_signature": {"$ref": "#/$defs/signature"},
         "server_statement": {"$ref": "policy-aware-response-statements.v1.schema.json#/$defs/buffered"},
@@ -44,8 +44,8 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "kind", "external_capture", "collector_signature", "streaming_response_statement", "server_signature", "vendor_tee"],
       "properties": {
-        "apiVersion": {"const": "serverware.policyAwareStreamingProxyResponseProof/v1"},
-        "kind": {"const": "ServerwarePolicyAwareStreamingProxyResponseProof"},
+        "apiVersion": {"const": "catchplate.policyAwareStreamingProxyResponseProof/v1"},
+        "kind": {"const": "CatchplatePolicyAwareStreamingProxyResponseProof"},
         "external_capture": {"$ref": "#/$defs/streamingCapture"},
         "collector_signature": {"$ref": "#/$defs/signature"},
         "streaming_response_statement": {"$ref": "policy-aware-response-statements.v1.schema.json#/$defs/streaming"},
@@ -56,8 +56,8 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "kind", "captured_at_unix", "request", "response", "runtime_proof", "collector"],
       "properties": {
-        "apiVersion": {"const": "serverware.policyAwareResponseObservationProof/v1"},
-        "kind": {"const": "ServerwarePolicyAwareResponseObservationProof"},
+        "apiVersion": {"const": "catchplate.policyAwareResponseObservationProof/v1"},
+        "kind": {"const": "CatchplatePolicyAwareResponseObservationProof"},
         "captured_at_unix": {"$ref": "#/$defs/positiveUint64"},
         "request": {"$ref": "response-observation-proof.v1.schema.json#/$defs/collectorRequest"},
         "response": {"$ref": "response-observation-proof.v1.schema.json#/$defs/observedResponse"},
@@ -69,7 +69,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "environment", "collection_mode", "captured_at_unix", "client_nonce", "client_request_digest", "principal_id", "route_id", "request_digest", "operation_digest", "release_authority", "control_plane_authorization_receipt", "upstream_response", "response", "tls_channel_binding", "tls_peer", "server_statement_sha256"],
       "properties": {
-        "apiVersion": {"const": "serverware.policyAwareProxyResponseCapture/v1"},
+        "apiVersion": {"const": "catchplate.policyAwareProxyResponseCapture/v1"},
         "environment": {"enum": ["development", "production"]}, "collection_mode": {"const": "external-client-capture"},
         "captured_at_unix": {"$ref": "#/$defs/positiveUint64"},
         "client_nonce": {"$ref": "native-response-runtime-proof.v1.schema.json#/$defs/bufferedNonce"},
@@ -89,7 +89,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "environment", "collection_mode", "classification", "captured_at_unix", "client_nonce", "client_request_digest", "principal_id", "route_id", "request_digest", "operation_digest", "release_authority", "authorization_binding_commitment", "control_plane_authorization_receipt", "control_plane_authorization_receipt_sha256", "upstream_response", "released_response", "tls_channel_binding", "tls_peer", "streaming_response_statement_sha256", "runtime_proof_sha256"],
       "properties": {
-        "apiVersion": {"const": "serverware.policyAwareStreamingProxyResponseCapture/v1"},
+        "apiVersion": {"const": "catchplate.policyAwareStreamingProxyResponseCapture/v1"},
         "environment": {"enum": ["development", "production"]},
         "collection_mode": {"const": "strict-incremental-stream-capture"}, "classification": {"const": "runtime-verified-complete-stream"},
         "captured_at_unix": {"$ref": "#/$defs/positiveUint64"},
@@ -112,7 +112,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "kind", "server_statement", "server_statement_sha256", "server_signature", "vendor_tee"],
       "properties": {
-        "apiVersion": {"const": "serverware.proxyResponseRuntimeProof/v2"}, "kind": {"const": "ServerwareProxyResponseRuntimeProof"},
+        "apiVersion": {"const": "catchplate.proxyResponseRuntimeProof/v2"}, "kind": {"const": "CatchplateProxyResponseRuntimeProof"},
         "server_statement": {"$ref": "policy-aware-response-statements.v1.schema.json#/$defs/buffered"},
         "server_statement_sha256": {"$ref": "#/$defs/sha256"}, "server_signature": {"$ref": "#/$defs/signature"},
         "vendor_tee": {"$ref": "#/$defs/bufferedVendor"}
@@ -122,7 +122,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "kind", "streaming_response_statement", "streaming_response_statement_sha256", "server_signature", "vendor_tee"],
       "properties": {
-        "apiVersion": {"const": "serverware.streamingResponseRuntimeProof/v1"}, "kind": {"const": "ServerwareStreamingResponseRuntimeProof"},
+        "apiVersion": {"const": "catchplate.streamingResponseRuntimeProof/v1"}, "kind": {"const": "CatchplateStreamingResponseRuntimeProof"},
         "streaming_response_statement": {"$ref": "policy-aware-response-statements.v1.schema.json#/$defs/streaming"},
         "streaming_response_statement_sha256": {"$ref": "#/$defs/sha256"}, "server_signature": {"$ref": "#/$defs/signature"},
         "vendor_tee": {"$ref": "#/$defs/streamingVendor"}
@@ -132,7 +132,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "kind", "server_statement", "server_statement_sha256", "server_signature", "vendor_tee"],
       "properties": {
-        "apiVersion": {"const": "serverware.responseObservationRuntimeProof/v1"}, "kind": {"const": "ServerwareResponseObservationRuntimeProof"},
+        "apiVersion": {"const": "catchplate.responseObservationRuntimeProof/v1"}, "kind": {"const": "CatchplateResponseObservationRuntimeProof"},
         "server_statement": {"$ref": "policy-aware-response-statements.v1.schema.json#/$defs/observation"},
         "server_statement_sha256": {"$ref": "#/$defs/sha256"}, "server_signature": {"$ref": "#/$defs/signature"},
         "vendor_tee": {"$ref": "#/$defs/observationVendor"}
@@ -142,7 +142,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["server_statement_sha256", "server_statement_api_version", "issued_at_unix", "client_nonce_sha256", "client_request_digest", "principal_id", "route_id", "request_digest", "operation_digest", "release_authority", "control_plane_authorization_receipt_sha256", "upstream_response", "response_status", "selected_response_headers_digest", "response_body_digest", "policy_digest", "runtime_manifest_digest", "data_plane_binary_digest", "release_digest", "server_instance_id", "server_instance_identity_digest", "tls_channel_binding_type", "tls_channel_binding_sha256", "response_signing_key_id"],
       "properties": {
-        "server_statement_sha256": {"$ref": "#/$defs/sha256"}, "server_statement_api_version": {"const": "serverware.policyAwareProxyResponseStatement/v1"},
+        "server_statement_sha256": {"$ref": "#/$defs/sha256"}, "server_statement_api_version": {"const": "catchplate.policyAwareProxyResponseStatement/v1"},
         "issued_at_unix": {"$ref": "#/$defs/positiveUint64"}, "client_nonce_sha256": {"$ref": "#/$defs/sha256"},
         "client_request_digest": {"$ref": "#/$defs/sha256"},
         "principal_id": {"$ref": "#/$defs/bufferedIdentity"}, "route_id": {"$ref": "#/$defs/bufferedIdentity"},
@@ -163,7 +163,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["streaming_response_statement_api_version", "streaming_response_statement_sha256", "issued_at_unix", "client_nonce_sha256", "client_request_digest", "principal_id", "route_id", "request_digest", "operation_digest", "release_authority", "authorization_binding_digest", "control_plane_authorization_receipt_sha256", "upstream_status", "upstream_selected_raw_policy_headers_digest", "upstream_body_digest", "upstream_body_bytes", "upstream_canonical_digest", "released_response_status", "released_response_content_type", "selected_response_wire_headers_digest", "released_response_body_digest", "released_response_body_bytes", "response_framing", "response_completion", "response_trailer_names", "policy_digest", "runtime_manifest_digest", "data_plane_binary_digest", "release_digest", "server_instance_id", "server_instance_identity_digest", "tls_channel_binding_type", "tls_exporter_label", "tls_channel_binding_sha256", "response_signing_key_id"],
       "properties": {
-        "streaming_response_statement_api_version": {"const": "serverware.policyAwareStreamingResponseStatement/v1"},
+        "streaming_response_statement_api_version": {"const": "catchplate.policyAwareStreamingResponseStatement/v1"},
         "streaming_response_statement_sha256": {"$ref": "#/$defs/sha256"}, "issued_at_unix": {"$ref": "#/$defs/positiveUint64"},
         "client_nonce_sha256": {"$ref": "#/$defs/sha256"}, "client_request_digest": {"$ref": "#/$defs/sha256"},
         "principal_id": {"$ref": "#/$defs/identifier"}, "route_id": {"$ref": "#/$defs/identifier"},
@@ -182,7 +182,7 @@
         "data_plane_binary_digest": {"$ref": "#/$defs/sha256"}, "release_digest": {"$ref": "#/$defs/sha256"},
         "server_instance_id": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/attestedClaims/properties/server_instance_id"},
         "server_instance_identity_digest": {"$ref": "#/$defs/sha256"}, "tls_channel_binding_type": {"const": "tls-exporter"},
-        "tls_exporter_label": {"const": "EXPORTER-Serverware-Proxy-Stream-v1"}, "tls_channel_binding_sha256": {"$ref": "#/$defs/sha256"},
+        "tls_exporter_label": {"const": "EXPORTER-Catchplate-Proxy-Stream-v1"}, "tls_channel_binding_sha256": {"$ref": "#/$defs/sha256"},
         "response_signing_key_id": {"$ref": "#/$defs/sha256"}
       }
     },
@@ -190,7 +190,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["server_statement_sha256", "server_statement_api_version", "issued_at_unix", "observation_id", "client_nonce_sha256", "request_aggregate_digest", "response_path", "upstream_attempt", "upstream_observation_digest", "emitted_response_digest", "policy_digest", "runtime_manifest_digest", "data_plane_binary_digest", "release_digest", "server_instance_id", "server_instance_identity_digest", "tls_exporter_label", "tls_channel_binding_sha256", "response_signing_key_id", "observation_source"],
       "properties": {
-        "server_statement_sha256": {"$ref": "#/$defs/sha256"}, "server_statement_api_version": {"const": "serverware.policyAwareResponseObservationStatement/v1"},
+        "server_statement_sha256": {"$ref": "#/$defs/sha256"}, "server_statement_api_version": {"const": "catchplate.policyAwareResponseObservationStatement/v1"},
         "issued_at_unix": {"$ref": "#/$defs/positiveUint64"}, "observation_id": {"$ref": "#/$defs/sha256"},
         "client_nonce_sha256": {"$ref": "#/$defs/sha256"}, "request_aggregate_digest": {"$ref": "#/$defs/sha256"},
         "response_path": {"$ref": "response-observation-proof.v1.schema.json#/$defs/attestedClaims/properties/response_path"},
@@ -201,7 +201,7 @@
         "release_digest": {"$ref": "#/$defs/sha256"},
         "server_instance_id": {"$ref": "response-observation-proof.v1.schema.json#/$defs/attestedClaims/properties/server_instance_id"},
         "server_instance_identity_digest": {"$ref": "#/$defs/sha256"},
-        "tls_exporter_label": {"const": "EXPORTER-Serverware-Response-Observation-v1"},
+        "tls_exporter_label": {"const": "EXPORTER-Catchplate-Response-Observation-v1"},
         "tls_channel_binding_sha256": {"$ref": "#/$defs/sha256"}, "response_signing_key_id": {"$ref": "#/$defs/sha256"},
         "observation_source": {"const": "gate-authored"}
       }
@@ -228,7 +228,7 @@
     "trustedVerifier": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "kind", "statement", "signature"],
       "properties": {
-        "apiVersion": {"const": "serverware.vendorTeeVerification/v1"}, "kind": {"const": "ServerwareVendorTeeVerification"},
+        "apiVersion": {"const": "catchplate.vendorTeeVerification/v1"}, "kind": {"const": "CatchplateVendorTeeVerification"},
         "statement": {"$ref": "#/$defs/verifierStatement"}, "signature": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/signatureText"}]}
       },
       "if": {"properties": {"statement": {"properties": {"environment": {"const": "development"}}}}},

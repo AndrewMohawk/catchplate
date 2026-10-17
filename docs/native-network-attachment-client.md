@@ -1,7 +1,7 @@
 # Native network attachment client v4
 
 The fixed native bootstrap client has an explicit, independently pinned
-[`serverware.nativeBootstrapClient/v4`](../schemas/native-bootstrap-client.v4.schema.json)
+[`catchplate.nativeBootstrapClient/v4`](../schemas/native-bootstrap-client.v4.schema.json)
 configuration. It adds a separately authorized typed network attachment to the
 [v3 creation/firewall flow](native-egress-client.md). This is source integration,
 not an executed pilot, application-start path or production acceptance gate.

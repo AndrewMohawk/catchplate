@@ -35,7 +35,7 @@ CONNECT_DENIED = "data_plane.connect.denied"
 NEGATIVES = ("wrong_app", "wrong_package_denied", "wrong_dummy")
 PHASES = frozenset((*NEGATIVES, *(row["case"] for row in fixture.SPECS)))
 BLOCK_ERRORS = {"wrong_package": "npm_metadata_response_package_mismatch", "reflection": "response_credential_reflection"}
-DENIAL_PATHS = {"npm_metadata_package_denied": "/serverware-fixture-denied",
+DENIAL_PATHS = {"npm_metadata_package_denied": "/catchplate-fixture-denied",
     "credential_existing_header_mismatch": fixture.path(fixture.PACKAGES[0])}
 CLIENT_STAGES = frozenset(("input", "identity", "trust", "workspace", "npm_config", "npm_spawn", "npm_process",
     "npm_json", "npm_denial", "npm_metadata", "pacote_request", "pacote_metadata"))
@@ -52,7 +52,7 @@ def client_failure_observation(document, expected_phase):
         "stage", "errorCode", "processExitCode", "stdoutBytes", "stderrBytes"}
     if (not isinstance(expected_phase, str) or expected_phase not in PHASES
             or not isinstance(document, dict) or set(document) != keys
-            or document.get("schema") != "serverware.privateNpmMetadataClient/v1" or document.get("ok") is not False
+            or document.get("schema") != "catchplate.privateNpmMetadataClient/v1" or document.get("ok") is not False
             or not isinstance(document.get("phase"), str) or document["phase"] not in {expected_phase, "unknown"}
             or not isinstance(document.get("client"), str) or document["client"] not in {"npm", "pacote", "unknown"}
             or document.get("npmVersion") != "11.8.0" or document.get("pacoteVersion") != "21.0.4"
@@ -198,7 +198,7 @@ def joined_attempts(rows, wire, scope, credential_id):
 class NpmMetadataCheck(OrdinaryClientCheck):
     def __init__(self, args):
         isolated.assert_isolated_network()
-        require(args.control_base == "http://serverware:3000" and args.management_base == "http://127.0.0.1:9091"
+        require(args.control_base == "http://catchplate:3000" and args.management_base == "http://127.0.0.1:9091"
             and args.proxy_url == PROXY and args.upstream_address is None, "fixed isolated npm endpoints required")
         super().__init__(argparse.Namespace(**{**vars(args), "upstream_address": isolated.LOOPBACK}))
         self.credential = fixture.TOKEN
@@ -212,7 +212,7 @@ class NpmMetadataCheck(OrdinaryClientCheck):
 
     def catalog(self):
         value = self.control_json(PREFIX + "/catalog", authenticated=True)
-        require(value.get("schema") == "serverware.operatorCatalog/v1" and value.get("mode") == "operator-development"
+        require(value.get("schema") == "catchplate.operatorCatalog/v1" and value.get("mode") == "operator-development"
             and value.get("productionReady") is False and value.get("hardwareVerified") is False
             and value.get("allowed_upstreams") == [fixture.ORIGIN] and type(value.get("revision")) is int
             and all(isinstance(value.get(key), list) for key in COLLECTIONS), "synthetic npm catalog contract differs")
@@ -238,7 +238,7 @@ class NpmMetadataCheck(OrdinaryClientCheck):
     def client(self, phase, app, token):
         raw = run_client(phase, app["id"], token, self.run_id, min(25, self.deadline - time.monotonic()))
         self.clean(raw); value = json.loads(raw)
-        require(value.get("schema") == "serverware.privateNpmMetadataClient/v1" and value.get("ok") is True
+        require(value.get("schema") == "catchplate.privateNpmMetadataClient/v1" and value.get("ok") is True
             and value.get("phase") == phase and value.get("npmVersion") == "11.8.0"
             and value.get("pacoteVersion") == "21.0.4" and value.get("registryFetchVersion") == "19.1.1"
             and value.get("client") == ("pacote" if phase.startswith("pacote_") else "npm")
@@ -378,7 +378,7 @@ class NpmMetadataCheck(OrdinaryClientCheck):
         evidence = self.verify_audits(baseline, scope, credential["id"])
         self.unchanged(pins)
         require(self.count() == 7, "late npm provider request detected")
-        return {"ok": True, "schema": "serverware.privateNpmMetadataCheck/v1", "syntheticOnly": True,
+        return {"ok": True, "schema": "catchplate.privateNpmMetadataCheck/v1", "syntheticOnly": True,
             "productionReady": False, "realNpmVerified": False, "npmInstallVerified": False,
             "npmVersion": "11.8.0", "pacoteVersion": "21.0.4", "registryFetchVersion": "19.1.1",
             "dataPlaneBinaryDigest": self.args.expected_binary_sha256, "providerAttempts": 7,

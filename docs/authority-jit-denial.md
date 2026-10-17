@@ -16,7 +16,7 @@ evidence, transition kernel and writer history is repaired in source. The path
 still requires an already-issued, genuine review receipt and the existing
 authority owners; it does not create an alternate review or approval authority.
 
-In [`app.py`](../serverware/app.py), both denial routes require the authenticated
+In [`app.py`](../catchplate/app.py), both denial routes require the authenticated
 `approver` dependency, a pending and unexpired request, current policy, an
 eligible actor and that actor's active review receipt for the same request:
 
@@ -32,14 +32,14 @@ The shared note validator admits at most 500 UTF-8 bytes, without silently
 trimming or normalizing text; leading/trailing whitespace, C0/DEL controls and
 invalid Unicode are rejected. `null` and an empty note remain supported. This
 removes the former 2,000-character API versus 500-byte kernel mismatch.
-[`webauthn.py`](../serverware/webauthn.py) shares the options producer with
+[`webauthn.py`](../catchplate/webauthn.py) shares the options producer with
 approval, but keeps `jit.decide` and `jit.deny` as distinct challenge targets.
 An unavailable denial outcome is not permission to resubmit: the API requires
 checking approval status before another decision and performs no automatic retry.
 
 ## Kernel and independent writer checks
 
-[`authority_transition_jit_denial.py`](../serverware/authority_transition_jit_denial.py)
+[`authority_transition_jit_denial.py`](../catchplate/authority_transition_jit_denial.py)
 requires independently verified v9 assertion evidence and the exact raw
 assertion bytes. It rechecks the actor, current roles/policy, credential/trust,
 challenge, request and review bindings. One eligible actor can deny even when
@@ -50,7 +50,7 @@ refuses an existing grant. Exact kernel replay is read-only and remains subject
 to its original evidence/currentness checks; the HTTP route does not accept a
 new decision against an already-terminal request.
 
-[`jit_denial_sql.py`](../serverware/authority_store/jit_denial_sql.py), called
+[`jit_denial_sql.py`](../catchplate/authority_store/jit_denial_sql.py), called
 inside the existing v9 executor, independently rejects a mismatched selected
 row, mutation, actor/policy, review, capability, deadline or raw-receipt binding.
 It requires the exact denial update and refuses grant/vote mutations. The
@@ -58,7 +58,7 @@ existing assertion, trust, challenge/counter and business-row CAS checks are
 not replaced by this denial-specific check.
 
 The executor also retains the admitted raw WebAuthn receipt through
-[`webauthn_receipt_history.py`](../serverware/authority_store/webauthn_receipt_history.py)
+[`webauthn_receipt_history.py`](../catchplate/authority_store/webauthn_receipt_history.py)
 in the same transaction, before the decision's history dependency. Later CAS
 or commit failure rolls it back with the decision. A committed executor replay
 only checks exact original history; it cannot backfill a missing receipt or
@@ -91,7 +91,7 @@ The existing approval PostgreSQL regression then failed on its second-vote
 path: shared-core floating-point epoch conversion rounded an equal timestamp
 by 64 nanoseconds, making it appear to be in the future. The source now uses
 exact integer epoch-nanosecond conversion in
-[`authority_transition_core.py`](../serverware/authority_transition_core.py),
+[`authority_transition_core.py`](../catchplate/authority_transition_core.py),
 with no tolerance or deadline extension. Deterministic precision controls in
 [`test_authority_jit_approval.py`](../scripts/test_authority_jit_approval.py)
 cover equal instants and rejection of genuinely future nanosecond/microsecond

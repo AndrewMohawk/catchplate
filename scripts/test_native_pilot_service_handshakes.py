@@ -14,8 +14,8 @@ from cryptography.exceptions import InvalidSignature
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from test_native_pilot_current_head import fixture, signed_result, canonical, labelled
-from serverware import native_pilot_service_handshakes as profile
-from serverware import native_pilot_helper_bootstrap_profile as helper
+from catchplate import native_pilot_service_handshakes as profile
+from catchplate import native_pilot_helper_bootstrap_profile as helper
 
 p = profile.p
 
@@ -41,9 +41,9 @@ class ServiceHandshakeControls(unittest.TestCase):
             "clientProcessIdentitySha256", "clientConfigurationGenerationSha256", "deadline",
             "expectedCurrentHead", "requestRightsCount", "replyRightsCount")
         array = canonical([request[name] for name in fields])
-        expected = "sha256:" + hashlib.sha256(b"serverware.policyCustodyTrustedHostServiceHandshakeRequest/v3\0"
+        expected = "sha256:" + hashlib.sha256(b"catchplate.policyCustodyTrustedHostServiceHandshakeRequest/v3\0"
             + len(array).to_bytes(8, "big") + array).hexdigest()
-        self.assertEqual(request["apiVersion"], "serverware.policyCustodyTrustedHostService/v4")
+        self.assertEqual(request["apiVersion"], "catchplate.policyCustodyTrustedHostService/v4")
         self.assertEqual(request["requestSha256"], expected)
         self.assertNotEqual(request["requestSha256"], value["currentness"]["requestSha256"])
         self.assertNotEqual(request["requestIdSha256"], request["handshakeNonceSha256"])
@@ -103,7 +103,7 @@ class ServiceHandshakeControls(unittest.TestCase):
     def test_closed_wire_and_no_version_or_digest_substitution(self):
         value, result, clocks, pins = prepared()
         request = json.loads(profile.build(canonical(value), result, **clocks, **pins))
-        for name, replacement in (("apiVersion", "serverware.policyCustodyTrustedHostService/v3"),
+        for name, replacement in (("apiVersion", "catchplate.policyCustodyTrustedHostService/v3"),
                 ("requestSha256", labelled("wrong frame")), ("requestIdSha256", "sha256:" + "0" * 64),
                 ("extraApproval", True)):
             changed = copy.deepcopy(request); changed[name] = replacement

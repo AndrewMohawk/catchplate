@@ -19,7 +19,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import operator_catalog_timing as timing
+from catchplate import operator_catalog_timing as timing
 
 CANARY = "synthetic-secret-canary https://private.invalid/?token=secret"
 TOKEN = "synthetic-catalog-timing-admin-token"
@@ -28,13 +28,13 @@ ORIGIN = "https://synthetic.invalid"
 PATH = "/api/operator-demo/credentials"
 REVOKE_PATH = "/api/operator-demo/applications/revoke"
 REVOKE_ID = "11111111-2222-4333-8444-555555555555"
-SCOPE_KEY = "serverware.operator_catalog_timing"
+SCOPE_KEY = "catchplate.operator_catalog_timing"
 BODY = json.dumps({"expected_revision": 1, "expected_policy_hash": "sha256:" + "1" * 64,
     "name": CANARY, "auth_type": "bearer", "secret": CANARY}).encode()
 REVOKE_BODY = json.dumps({"expected_revision": 1, "expected_policy_hash": "sha256:" + "1" * 64,
     "id": REVOKE_ID}).encode()
-TERMINAL_SCHEMA = "serverware.operatorCatalogTiming/v1"
-PROGRESS_SCHEMA = "serverware.operatorCatalogProgress/v1"
+TERMINAL_SCHEMA = "catchplate.operatorCatalogTiming/v1"
+PROGRESS_SCHEMA = "catchplate.operatorCatalogProgress/v1"
 OPERATIONS = frozenset({
     "create_credential", "revoke_credential", "create_github_credential",
     "replace_credential_key", "replace_github_app_key", "create_npm_credential", "create_application",
@@ -518,7 +518,7 @@ class CatalogProgressTests(unittest.TestCase):
 
 class CatalogTimingWorkerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        from serverware import app
+        from catchplate import app
         self.app = app
         self.stack = observations(self)
 
@@ -633,9 +633,9 @@ class CatalogTimingWorkerTests(unittest.IsolatedAsyncioTestCase):
 
 class CatalogTimingASGITests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        from serverware import app, auth, development_sandbox, operator_demo
-        from serverware import operator_catalog_api as api, operator_catalog_inputs as inputs
-        from serverware import operator_catalog_mutations as mutations
+        from catchplate import app, auth, development_sandbox, operator_demo
+        from catchplate import operator_catalog_api as api, operator_catalog_inputs as inputs
+        from catchplate import operator_catalog_mutations as mutations
         self.app, self.auth, self.owner, self.api, self.mutations = app, auth, operator_demo, api, mutations
         self.stack = observations(self)
         self.stored, self.drains, self.trackers = [], [], []
@@ -683,7 +683,7 @@ class CatalogTimingASGITests(unittest.IsolatedAsyncioTestCase):
             "root_path": "", "query_string": query, "server": ("synthetic.invalid", 443),
             "client": ("127.0.0.1", 30001), "headers": [(b"host", b"synthetic.invalid"),
                 (b"content-type", content_type.encode()), (b"content-length", str(len(body)).encode()),
-                (b"x-serverware-admin-token", token.encode()), (b"origin", origin.encode())]}
+                (b"x-catchplate-admin-token", token.encode()), (b"origin", origin.encode())]}
         received, complete = False, asyncio.Event()
         async def receive():
             nonlocal received

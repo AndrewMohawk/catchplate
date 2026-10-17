@@ -19,10 +19,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 import test_native_pilot_genesis_core as cores
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_adopted_delivery as adopted
-from serverware import native_pilot_delivery_authority as authority
-from serverware import native_shadow_guest_delivery as delivery
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_adopted_delivery as adopted
+from catchplate import native_pilot_delivery_authority as authority
+from catchplate import native_shadow_guest_delivery as delivery
 
 p = g.p
 
@@ -31,7 +31,7 @@ def fixture():
     bundle, _, observation = cores.fixture()
     key = Ed25519PrivateKey.from_private_bytes(bytes([19]) * 32)
     public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    cold = dict(apiVersion="serverware.policyCustodyGuestConfiguration/v1", serviceRole="production-bridge", uid=2345, gid=2346,
+    cold = dict(apiVersion="catchplate.policyCustodyGuestConfiguration/v1", serviceRole="production-bridge", uid=2345, gid=2346,
         authority=dict(keyId=p.sha(public), publicKeyBase64url=p.encoded(public)))
     cold_raw = g.canonical(cold)
     activation = [dict(name=name, fd=slot, device=1, inode=slot * 10, mode=mode, uid=uid, gid=gid)
@@ -46,8 +46,8 @@ def fixture():
     payload = dict(configurationSha256=p.sha(cold_raw), authorityKeyId=cold["authority"]["keyId"], serviceRole="production-bridge",
         uid=2345, gid=2346, bootIdBase64url=boot[0], timeNamespaceDevice=boot[1], timeNamespaceInode=boot[2],
         issuedAtBoottimeNs="11", startupDeadlineBoottimeNs="80", lifetimeDeadlineBoottimeNs="90",
-        invocationId="1234567890abcdef1234567890abcdef", runtimeConfig={"path": "/etc/serverware/runtime.json", "sha256": cores.digest("runtime")},
-        credentials=[dict(name="fixture-public", original={"path": "/etc/serverware/fixture-public.json", "sha256": cores.digest("credential")},
+        invocationId="1234567890abcdef1234567890abcdef", runtimeConfig={"path": "/etc/catchplate/runtime.json", "sha256": cores.digest("runtime")},
+        credentials=[dict(name="fixture-public", original={"path": "/etc/catchplate/fixture-public.json", "sha256": cores.digest("credential")},
             length=1, signing=None)], activation=activation)
     kwargs = dict(configuration_raw=cold_raw, configuration_sha256=p.sha(cold_raw), activation=activation, boot=boot,
         startup_deadline=80, now=50, core_observation_raw=g.canonical(observation), core_bundle_raw=g.canonical(bundle))
@@ -55,7 +55,7 @@ def fixture():
 
 
 def signed(key, payload):
-    return g.canonical(dict(apiVersion="serverware.policyCustodyGuestDelivery/v1", payload=payload,
+    return g.canonical(dict(apiVersion="catchplate.policyCustodyGuestDelivery/v1", payload=payload,
         signatureBase64url=p.encoded(key.sign(delivery.DOMAIN + g.canonical(payload)))))
 
 
@@ -121,7 +121,7 @@ class AdoptedDeliveryControls(unittest.TestCase):
         self.assertEqual(len(authority.ENDPOINTS["retrieval"]), 4)
         self.assertNotIn("publicationReconciliation", authority.ENDPOINTS)
         with self.assertRaises(ValueError):
-            adopted.prepare_input(g.canonical(dict(apiVersion="serverware.nativePilotDeliverySigningInput/v1", role="retrieval")),
+            adopted.prepare_input(g.canonical(dict(apiVersion="catchplate.nativePilotDeliverySigningInput/v1", role="retrieval")),
                 boot=self.kwargs["boot"], now_boottime_ns=50, now_unix_ns=1200)
 
 

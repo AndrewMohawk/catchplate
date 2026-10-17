@@ -27,7 +27,7 @@ MARKERS = {"upstreamDispatch": "response_received", "providerOutcome": "unknown"
 
 
 def catalog():
-    value = {"proxy_url": "https://serverware-proxy.example.com", "capabilities": {"credential_types": ["bearer"],
+    value = {"proxy_url": "https://catchplate-proxy.example.com", "capabilities": {"credential_types": ["bearer"],
         "request_body_modes": ["preserve_json_v1"], "response_modes": ["unfiltered_json_or_empty_v2"],
         "credential_input_modes": ["replace_exact"]}, "limits": {}}
     for key in smoke.COLLECTIONS:
@@ -40,7 +40,7 @@ def observed_catalog():
     value = catalog()
     value.update(revision=16, policy={"policy_hash": POLICY, "sequence": 7,
         "loaded_policy_hash": POLICY, "activation": "active"})
-    value["observed_activity"] = {"schema": "serverware.operatorAccountActivity/v1",
+    value["observed_activity"] = {"schema": "catchplate.operatorAccountActivity/v1",
         "status": "available", "observed_at_epoch_ms": 1000, "chain_verification": "not_checked",
         "window": {"row_limit": 256, "event_byte_limit": 16384, "byte_limit": 2097152,
             "rows_scanned": 12, "bytes_read": 0, "has_older_rows": False,
@@ -56,8 +56,8 @@ def response():
         "authorization_scheme": "Bearer", "authorization_matches_expected": True,
         "proxy_authorization_seen": False, "query": {"_data_plane_token_seen": False, "_cookie_seen": False}}
     body = smoke.json.dumps(document).encode()
-    headers = [("X-Serverware-Policy-Hash", POLICY), ("X-Serverware-Response-Body-SHA256", smoke.sha(body)),
-               ("X-Serverware-Request-Digest", REQUEST), ("X-Serverware-Operation-Digest", OPERATION)]
+    headers = [("X-Catchplate-Policy-Hash", POLICY), ("X-Catchplate-Response-Body-SHA256", smoke.sha(body)),
+               ("X-Catchplate-Request-Digest", REQUEST), ("X-Catchplate-Operation-Digest", OPERATION)]
     return document, headers, body
 
 
@@ -281,7 +281,7 @@ class LiveSmokeTests(unittest.TestCase):
                 smoke.require_catalog_unchanged(observed_catalog(), after, "changed")
 
     def test_proxy_uses_system_trust_not_interception_ca(self):
-        endpoint = SimpleNamespace(host="serverware-proxy.example.com", scheme="https", port=443)
+        endpoint = SimpleNamespace(host="catchplate-proxy.example.com", scheme="https", port=443)
         with patch.object(smoke.ssl, "create_default_context", return_value="system-context") as create:
             self.assertEqual(smoke.LiveSmoke._optional_ca(None, endpoint), "system-context")
             create.assert_called_once_with()

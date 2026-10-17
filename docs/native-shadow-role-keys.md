@@ -12,10 +12,10 @@ It does not change the legacy v1 inputs or establish deployed provisioning.
 
 ## Authority and keys
 
-The closed `serverware.nativeShadowRoleKeys/v1` configuration has exactly two
+The closed `catchplate.nativeShadowRoleKeys/v1` configuration has exactly two
 fields: `apiVersion` and `authorization`. Its authorization has `payload` and
 `signature`; the payload is the exact 18-field
-`serverware.nativeShadowRoleKeyAssignment/v1` object in
+`catchplate.nativeShadowRoleKeyAssignment/v1` object in
 [`native-shadow-role-keys.v1.schema.json`](../schemas/native-shadow-role-keys.v1.schema.json).
 It fixes profile `preassigned-final-role-originals-v1`, purpose
 `shadow-role-key-possession`, the verified policy assignment, native closure,
@@ -29,12 +29,12 @@ key, SPKI, public material, revocation checkpoint and assignment scope must matc
 The signature input is the existing policy-shadow `signature_preimage`:
 
 ```
-serverware.signedEnvelope/v1 || NUL || purpose-domain || NUL ||
-serverware.canonicalJson/ascii-integer-v1 || NUL || canonical-payload
+catchplate.signedEnvelope/v1 || NUL || purpose-domain || NUL ||
+catchplate.canonicalJson/ascii-integer-v1 || NUL || canonical-payload
 ```
 
 The authorization purpose-domain is
-`serverware.nativeShadowRoleKeyAssignment.signature/v1`. Canonical payload bytes
+`catchplate.nativeShadowRoleKeyAssignment.signature/v1`. Canonical payload bytes
 use the existing ASCII/integer canonicalizer: sorted ASCII object keys, no floats,
 signed-64-bit integer bound, existing string escaping, and no trailing newline.
 Signatures are canonical unpadded base64url of the raw 64 Ed25519 bytes, without a
@@ -63,7 +63,7 @@ exported, cloned through this API, or passed to a raw signing RPC.
 
 Both full and local roots use the existing `production_custody_key_set_root`:
 source-ordered bindings `(role,keyId,keySpkiSha256,keyMaterialSha256)`, the existing
-`serverware.policyShadowCustodyAssertedKey/v1` framed leaf hash, then the existing
+`catchplate.policyShadowCustodyAssertedKey/v1` framed leaf hash, then the existing
 sequence-indexed policy-shadow Merkle recipe. A local root is a subset commitment,
 not an assertion that this process possesses all 18 private keys.
 
@@ -115,13 +115,13 @@ The evidence is exact seven fields; its statement is exact 15 fields and repeats
 the new purpose, assignment, full/local roots, actual local public keys, closure,
 configuration, guest binding and independently assigned challenge. Each local key
 signs only the canonical tuple `[role,keyId,statementSha256]` under
-`serverware.nativeShadowRoleKeyPossession.signature/v1`, using the same signature
+`catchplate.nativeShadowRoleKeyPossession.signature/v1`, using the same signature
 preimage wrapper above. The evidence retains the original ordered signatures.
 
 NSM receives exactly:
 
 ```
-user_data = b"serverware/native-shadow-role-key-evidence/v1\0"
+user_data = b"catchplate/native-shadow-role-key-evidence/v1\0"
             || raw32(statementSHA256) || raw32(full18KeySetRoot)
             || raw32(localKeySetRoot) || raw32(possessionArraySHA256)
 public_key = raw32(localKeySetRoot)

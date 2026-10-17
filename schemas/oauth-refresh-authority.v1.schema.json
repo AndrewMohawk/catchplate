@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/oauth-refresh-authority.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/oauth-refresh-authority.v1.schema.json",
   "title": "Explicit due-only OAuth refresh authority and original-bound transitions",
   "description": "Closed data projections, not effect authority. The actual signed measured configuration, independent enrollment verification, original SQL roots, held owner, byte bounds and original deadlines are enforced by code. No provider-authorship or cached-send invalidation proof is encoded here.",
   "$ref": "#/$defs/policy",
@@ -20,7 +20,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "enrollmentRootPublicKeyBase64Url", "enrollmentRootSpkiSha256", "controlPlaneConfigurationDigest", "deploymentId", "dueWithinSeconds", "operationMaxSeconds", "revocationCapacity"],
       "properties": {
-        "schema": {"const": "serverware.oauthRefreshAuthorityPolicy/v1"},
+        "schema": {"const": "catchplate.oauthRefreshAuthorityPolicy/v1"},
         "enrollmentRootPublicKeyBase64Url": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
         "enrollmentRootSpkiSha256": {"$ref": "#/$defs/digest"},
         "controlPlaneConfigurationDigest": {"$ref": "#/$defs/digest"},

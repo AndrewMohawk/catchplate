@@ -19,9 +19,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.exceptions import InvalidSignature
 from scripts.authority import local_registration_context as cli
-from serverware import authority_local_registration_context as context
-from serverware import control_plane_registration_execution_bootstrap as execution
-from serverware import control_plane_registration_finalization_bootstrap as finalization
+from catchplate import authority_local_registration_context as context
+from catchplate import control_plane_registration_execution_bootstrap as execution
+from catchplate import control_plane_registration_finalization_bootstrap as finalization
 
 PIN = "sha256:" + "1" * 64
 OTHER = "sha256:" + "2" * 64
@@ -129,7 +129,7 @@ class LocalRegistrationContextTests(unittest.TestCase):
             module._shape(legacy)
 
     def test_narrowing_preserves_original_opening_and_never_reissues_lifetime(self):
-        from serverware import authority_webauthn_evidence_plan_clock as clock
+        from catchplate import authority_webauthn_evidence_plan_clock as clock
         value, _ = fixture()
         window = clock._open_on_work(deadline_epoch_ns=time.time_ns() + 25_000_000_000,
             maximum_lifetime_ns=30_000_000_000, maximum_clock_skew_ns=0, work=work())
@@ -183,11 +183,11 @@ class LocalRegistrationContextTests(unittest.TestCase):
         self.assertNotIn('scope=', request_source)
         self.assertIn('scope=approval["scope"]', inspect.getsource(context.prepare))
 
-    @unittest.skipUnless(os.environ.get("SERVERWARE_TEST_LOCAL_REGISTRATION_CONTEXT_SANDBOX") == "1"
+    @unittest.skipUnless(os.environ.get("CATCHPLATE_TEST_LOCAL_REGISTRATION_CONTEXT_SANDBOX") == "1"
         and os.getresuid() == os.getresgid() == (0, 0, 0) and sys.flags.isolated and sys.flags.dont_write_bytecode,
         "actual fixed-directory control requires isolated root -I -B, disposable /run, CAP_CHOWN")
     def test_real_fixed_directory_protected_file_identity_and_no_adoption(self):
-        parent = Path("/run/serverware")
+        parent = Path("/run/catchplate")
         created_parent = not parent.exists()
         if created_parent: parent.mkdir(mode=0o755)
         self.assertFalse(Path(context.DIRECTORY).exists())

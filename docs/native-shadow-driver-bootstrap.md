@@ -15,9 +15,9 @@ verification remain required.
 
 ## Actual caller and owner
 
-`serverware.native_shadow_driver_bootstrap.DriverBootstrap.start()` opens fixed
+`catchplate.native_shadow_driver_bootstrap.DriverBootstrap.start()` opens fixed
 protected control/configuration/window originals and executes the pinned sealed
-`serverware-native-shadow-guest-supervisor --driver-bootstrap`, empty environment,
+`catchplate-native-shadow-guest-supervisor --driver-bootstrap`, empty environment,
 with only its actual authenticated parent seqpacket channel. The fixed Rust
 parent uses the existing `parent_process::Child` clone/PIDFD/exit/reap owner to
 execute the existing fixed guest with the same explicit selector. This is not a
@@ -57,10 +57,10 @@ root, not a read-only sandbox, hardware signer, NSM service or TEE claim.
 
 ## Cold contracts and one contact
 
-Fixed originals are `/etc/serverware/native-shadow-driver-bootstrap-control.json`,
+Fixed originals are `/etc/catchplate/native-shadow-driver-bootstrap-control.json`,
 `native-shadow-driver-bootstrap.json` and `native-shadow-driver-bootstrap-window.json`.
 The separately provisioned executable is
-`/opt/serverware/serverware-native-shadow-guest-supervisor`.
+`/opt/catchplate/catchplate-native-shadow-guest-supervisor`.
 Configuration/window wire shapes are closed in
 `schemas/native-shadow-driver-bootstrap.v1.schema.json`.
 

@@ -2,10 +2,10 @@ use super::{configuration::{Authority,signed,verify},radix,wire::*};
 use serde_json::{Value,json};
 use std::collections::BTreeMap;
 
-const RUNTIME_REQUEST:&str="serverware.policyAuthorityRuntimeRequest/v2";
-const PLAN_SCHEMA:&str="serverware.signedPolicyAuthorityMeasuredPlan/v3";
-const RESULT_SCHEMA:&str="serverware.policyAuthorityControlledWriterResult/v2";
-const COMPLETION_SCHEMA:&str="serverware.policyCanaryDeliveryCompletionOriginal/v1";
+const RUNTIME_REQUEST:&str="catchplate.policyAuthorityRuntimeRequest/v2";
+const PLAN_SCHEMA:&str="catchplate.signedPolicyAuthorityMeasuredPlan/v3";
+const RESULT_SCHEMA:&str="catchplate.policyAuthorityControlledWriterResult/v2";
+const COMPLETION_SCHEMA:&str="catchplate.policyCanaryDeliveryCompletionOriginal/v1";
 const SLOT:&str="policy_canary_delivery_slots";
 const HEAD:&str="policy_canary_delivery_heads";
 const PART:&str="policy_canary_delivery_parts";
@@ -30,7 +30,7 @@ impl Completion {
     pub fn verify(authority:&Authority,command:&Signed,raw:&[u8])->Result<Self,String>{
         authority.check()?;command.check()?;
         let http=document(raw,MAX_RESPONSE)?;exact(&http,&["apiVersion","requestOriginal","responseOriginal"])?;
-        require(http["apiVersion"]=="serverware.policyCanaryDeliveryResponse/v1","delivery HTTP response profile")?;
+        require(http["apiVersion"]=="catchplate.policyCanaryDeliveryResponse/v1","delivery HTTP response profile")?;
         let request_raw=decode(text(&http,"requestOriginal")?,MAX_ARGUMENT)?;
         let response_raw=decode(text(&http,"responseOriginal")?,MAX_RESPONSE)?;
         let request=document(&request_raw,MAX_ARGUMENT)?;let response=document(&response_raw,MAX_RESPONSE)?;
@@ -38,7 +38,7 @@ impl Completion {
         exact(&request,&["schema","requestId","operation","input","configurationDigest","operationManifestDigest","startedMonotonicNs","deadlineMonotonicNs"])?;
         exact(&response,&["schema","requestId","operation","configurationDigest","requestDigest","issuedAtEpochNs","deadlineMonotonicNs","fence","result","resultDigest",
             "commitReceiptDigest","witnessCommitDigest","attestationReceiptDigest","attestationConsumptionReceipt","attestationConsumptionReceiptDigest","signature","authorityConfigurationOriginal","deliveryOriginals"])?;
-        let operation=command.operation();let handler=format!("serverware_policy_authority_policy_canary_delivery_{}",operation.phase());
+        let operation=command.operation();let handler=format!("catchplate_policy_authority_policy_canary_delivery_{}",operation.phase());
         let payload=&authority.payload;let manifest=&payload["operationManifestDigest"];
         require(request["schema"]==RUNTIME_REQUEST && request["operation"]==operation.label() && response["operation"]==request["operation"]
             && response["schema"]==RESPONSE && request["configurationDigest"]==authority.digest && response["configurationDigest"]==authority.digest
@@ -53,7 +53,7 @@ impl Completion {
         exact(&request["input"],&["schema","handler","operationManifestDigest","arguments"])?;
         let args=&request["input"]["arguments"];
         exact(args,&["control_plane_configuration_digest","request","native_evidence"])?;
-        require(request["input"]["schema"]=="serverware.policyAuthorityControlledWriterInput/v1" && request["input"]["handler"]==handler
+        require(request["input"]["schema"]=="catchplate.policyAuthorityControlledWriterInput/v1" && request["input"]["handler"]==handler
             && request["input"]["operationManifestDigest"]==*manifest && args["control_plane_configuration_digest"]==authority.digest
             && args["request"]==sent["request"] && args["native_evidence"]==sent["nativeEvidence"],"delivery completion substituted exact native command")?;
         let statement=args["native_evidence"]["statement"].clone();authority.require_sender(&statement,true)?;
@@ -69,7 +69,7 @@ impl Completion {
         let plan=&signed_plan["payload"];
         exact(plan,&["schema","measuredPlan","typedRequest","selectedBusinessRows","mutationPlan","queryMultiproofs","queryMultiproofsDigest","plannerTrace","plannerTraceDigest",
             "authorizationProjection","webauthnEvidence","expectedResult","expectedResultDigest","plannerIdentity","rootTransition"])?;
-        require(plan["schema"]=="serverware.policyAuthorityPlannerResponse/v3" && plan["webauthnEvidence"].is_null()
+        require(plan["schema"]=="catchplate.policyAuthorityPlannerResponse/v3" && plan["webauthnEvidence"].is_null()
             && plan["plannerIdentity"]==json!({"sessionIdentityDigest":planner["plannerSessionIdentityDigest"],"measurementDigest":planner["measurementDigest"],
                 "attestationReceiptDigest":planner["attestationReceiptDigest"]}),"delivery actual planner admission")?;
         let measured=&plan["measuredPlan"];let typed=&plan["typedRequest"];
@@ -77,14 +77,14 @@ impl Completion {
             "operationManifestDigest","handlerContractDigest","queryManifestDigest","selectedBusinessRowsDigest","mutationPlanDigest","workUnits","authorityRootSetBeforeDigest",
             "authorizationProjectionDigest","authoritySnapshotDigest","rootTransitionDigest","deadlineMonotonicNs","deadlineEpochNs","fence"])?;
         exact(typed,&["schema","operation","operationId","requestDigest","handler","operationManifestDigest","arguments"])?;
-        let mut typed_args=args.clone();typed_args.as_object_mut().ok_or("delivery arguments")?.insert("businessIntent".into(),json!({"schema":"serverware.policyAuthorityBusinessIntent/v2",
-            "operation":operation.label(),"planningAdapterId":format!("serverware.policyAuthorityPlanningAdapter/{handler}/v1"),"arguments":args}));
-        let request_digest=framed("serverware.policyAuthorityV9Request/v1",&[&ascii(&json!({"schema":"serverware.policyAuthorityV9Authorization/v1","operation":operation.label(),
+        let mut typed_args=args.clone();typed_args.as_object_mut().ok_or("delivery arguments")?.insert("businessIntent".into(),json!({"schema":"catchplate.policyAuthorityBusinessIntent/v2",
+            "operation":operation.label(),"planningAdapterId":format!("catchplate.policyAuthorityPlanningAdapter/{handler}/v1"),"arguments":args}));
+        let request_digest=framed("catchplate.policyAuthorityV9Request/v1",&[&ascii(&json!({"schema":"catchplate.policyAuthorityV9Authorization/v1","operation":operation.label(),
             "handler":handler,"operationManifestDigest":manifest,"arguments":typed_args}))?]);
-        let operation_id=framed("serverware.policyAuthorityOperation/v2",&[operation.label().as_bytes(),request_digest.as_bytes()]);
-        require(typed["schema"]=="serverware.policyAuthorityV9Request/v1" && typed["handler"]==handler && typed["arguments"]==typed_args
+        let operation_id=framed("catchplate.policyAuthorityOperation/v2",&[operation.label().as_bytes(),request_digest.as_bytes()]);
+        require(typed["schema"]=="catchplate.policyAuthorityV9Request/v1" && typed["handler"]==handler && typed["arguments"]==typed_args
             && typed["operation"]==operation.label() && typed["operationManifestDigest"]==*manifest && typed["requestDigest"]==request_digest && typed["operationId"]==operation_id
-            && measured["schema"]=="serverware.policyAuthorityMeasuredPlan/v3" && measured["authoritySchemaVersion"]==9
+            && measured["schema"]=="catchplate.policyAuthorityMeasuredPlan/v3" && measured["authoritySchemaVersion"]==9
             && (1..=8194).contains(&number(measured,"workUnits")?) && measured["operation"]==operation.label() && measured["operationId"]==operation_id
             && measured["requestDigest"]==request_digest && measured["sourceRevision"]==payload["sourceRevision"] && measured["operationManifestDigest"]==*manifest
             && measured["operationContractDigest"]==*manifest && measured["queryManifestDigest"]==payload["queryManifestDigest"]
@@ -92,22 +92,22 @@ impl Completion {
         require(measured["handlerContractDigest"]==radix::handler_commitment(operation,text(payload,"sourceRevision")?)?,"delivery exact source handler contract")?;
         radix::verify(operation,plan)?;
         let transition=&plan["rootTransition"];
-        for(field,domain,value)in [("rootTransitionDigest","serverware.policyAuthorityPrimaryRootTransition/v1",transition),
-            ("selectedBusinessRowsDigest","serverware.policyAuthoritySelectedBusinessRows/v1",&plan["selectedBusinessRows"]),
-            ("mutationPlanDigest","serverware.policyAuthorityMutationPlan/v3",&plan["mutationPlan"]),
-            ("authorityRootSetBeforeDigest","serverware.policyAuthorityRootSet/v1",&transition["businessBeforeRoots"]) ] {
+        for(field,domain,value)in [("rootTransitionDigest","catchplate.policyAuthorityPrimaryRootTransition/v1",transition),
+            ("selectedBusinessRowsDigest","catchplate.policyAuthoritySelectedBusinessRows/v1",&plan["selectedBusinessRows"]),
+            ("mutationPlanDigest","catchplate.policyAuthorityMutationPlan/v3",&plan["mutationPlan"]),
+            ("authorityRootSetBeforeDigest","catchplate.policyAuthorityRootSet/v1",&transition["businessBeforeRoots"]) ] {
             require(measured[field]==framed(domain,&[&ascii(value)?]),"delivery measured original digest")?;
         }
-        require(plan["queryMultiproofsDigest"]==framed("serverware.policyAuthorityRadixMultiproofSet/v3",&[&ascii(&plan["queryMultiproofs"])?])
-            && plan["plannerTraceDigest"]==framed("serverware.policyAuthorityPlannerTrace/v1",&[&ascii(&plan["plannerTrace"])?]),"delivery retained proof/trace digest")?;
+        require(plan["queryMultiproofsDigest"]==framed("catchplate.policyAuthorityRadixMultiproofSet/v3",&[&ascii(&plan["queryMultiproofs"])?])
+            && plan["plannerTraceDigest"]==framed("catchplate.policyAuthorityPlannerTrace/v1",&[&ascii(&plan["plannerTrace"])?]),"delivery retained proof/trace digest")?;
         let projection=&plan["authorizationProjection"];
         require(projection["sourceRows"]==json!([]) && projection["authorizationReads"]==json!([])
-            && projection["sourceHighWaterDigest"]==framed("serverware.policyAuthorityAuthorizationRootSet/v1",&[b"[]"])
-            && measured["authorizationProjectionDigest"]==framed("serverware.policyAuthorityAuthorizationProjection/v1",&[&ascii(projection)?]),"delivery authorization projection")?;
-        require(measured["plannerTransactionId"]==framed("serverware.policyAuthorityPlannerTransaction/v1",&[operation_id.as_bytes(),request_digest.as_bytes(),text(measured,"capabilityId")?.as_bytes()]),"delivery planner transaction identity")?;
+            && projection["sourceHighWaterDigest"]==framed("catchplate.policyAuthorityAuthorizationRootSet/v1",&[b"[]"])
+            && measured["authorizationProjectionDigest"]==framed("catchplate.policyAuthorityAuthorizationProjection/v1",&[&ascii(projection)?]),"delivery authorization projection")?;
+        require(measured["plannerTransactionId"]==framed("catchplate.policyAuthorityPlannerTransaction/v1",&[operation_id.as_bytes(),request_digest.as_bytes(),text(measured,"capabilityId")?.as_bytes()]),"delivery planner transaction identity")?;
         let fields=["operation","operationId","requestDigest","queryManifestDigest","authorityRootSetBeforeDigest","authorizationProjectionDigest","selectedBusinessRowsDigest","mutationPlanDigest","rootTransitionDigest"];
         let frames=fields.iter().map(|name|text(measured,name).map(str::as_bytes)).collect::<Result<Vec<_>,_>>()?;
-        require(measured["authoritySnapshotDigest"]==framed("serverware.policyAuthoritySnapshot/v3",&frames),"delivery complete snapshot digest")?;
+        require(measured["authoritySnapshotDigest"]==framed("catchplate.policyAuthoritySnapshot/v3",&frames),"delivery complete snapshot digest")?;
         let result=&response["result"];
         exact(result,&["ok","operation","requestDigest","auditEventDigest","idempotentReplay","status","observation"])?;
         let result_digest=framed(RESULT_SCHEMA,&[&ascii(result)?]);
@@ -118,10 +118,10 @@ impl Completion {
         exact(receipt,&["schema","capabilityId","envelopeId","plannerTransactionId","authorizationProjectionDigest","operation","handlerName","requestDigest","resultDigest",
             "authorityRootSetBeforeDigest","authorityRootSetAfterDigest","authoritySnapshotDigest","operationManifestDigest","queryManifestDigest","witnessReservationDigest","witnessSequence",
             "deadlineMonotonicNs","fence","committedAtEpochNs","sourceRevision"])?;
-        require(receipt["schema"]=="serverware.policyAuthorityWriterCommitReceipt/v2" && executed["result"]==*result && executed["resultDigest"]==result_digest
+        require(receipt["schema"]=="catchplate.policyAuthorityWriterCommitReceipt/v2" && executed["result"]==*result && executed["resultDigest"]==result_digest
             && executed["receiptDigest"]==response["commitReceiptDigest"] && response["commitReceiptDigest"]==framed(text(receipt,"schema")?,&[&ascii(receipt)?])
             && receipt["handlerName"]==handler && receipt["resultDigest"]==result_digest
-            && receipt["authorityRootSetAfterDigest"]==framed("serverware.policyAuthorityRootSet/v1",&[&ascii(&transition["businessAfterRoots"])?]),"delivery actual executor commit original")?;
+            && receipt["authorityRootSetAfterDigest"]==framed("catchplate.policyAuthorityRootSet/v1",&[&ascii(&transition["businessAfterRoots"])?]),"delivery actual executor commit original")?;
         for field in ["operation","requestDigest","capabilityId","plannerTransactionId","authorizationProjectionDigest","authoritySnapshotDigest","authorityRootSetBeforeDigest",
             "operationManifestDigest","queryManifestDigest","deadlineMonotonicNs","fence","sourceRevision"]{require(receipt[field]==measured[field],"delivery executor/planner binding")?;}
         require(ascii(receipt)?.len()<=8192 && number(&statement,"issuedAtEpochNs")?<=number(receipt,"committedAtEpochNs")?
@@ -172,19 +172,19 @@ fn verify_witness(authority:&Authority,originals:&Value,response:&Value,receipt:
     exact(&witness,&["schema","envelopeId","parentEnvelopeId","phase","operation","requestDigest","capabilityId","resultDigest","witnessIdentityDigest","sequence","fence","headDigest",
         "predecessorHeadDigest","predecessorReceiptDigest","logPredecessorHeadDigest","deadlineMonotonicNs","issuedAtEpochNs","generationSequence","generationDigest","canonicalRequestDigest","signature"])?;
     let payload=&authority.payload;
-    signed(&request,text(&payload["roles"]["verifier"],"signingPublicKeyBase64Url")?,"serverware.policyAuthorityReplayWitnessRequest/v2")?;
-    signed(&witness,text(&payload["replayWitness"],"signingPublicKeyBase64Url")?,"serverware.policyAuthorityReplayWitnessReceipt/v2")?;
+    signed(&request,text(&payload["roles"]["verifier"],"signingPublicKeyBase64Url")?,"catchplate.policyAuthorityReplayWitnessRequest/v2")?;
+    signed(&witness,text(&payload["replayWitness"],"signingPublicKeyBase64Url")?,"catchplate.policyAuthorityReplayWitnessReceipt/v2")?;
     require(request["phase"]=="commit" && witness["phase"]=="commit" && request["configurationDigest"]==authority.digest
         && request["operationManifestDigest"]==payload["operationManifestDigest"] && witness["witnessIdentityDigest"]==payload["replayWitness"]["identityDigest"]
-        && response["witnessCommitDigest"]==framed("serverware.policyAuthorityReplayWitnessReceipt/v2",&[&ascii(&witness)?])
-        && witness["canonicalRequestDigest"]==framed("serverware.policyAuthorityReplayWitnessRequest/v2",&[request_raw])
+        && response["witnessCommitDigest"]==framed("catchplate.policyAuthorityReplayWitnessReceipt/v2",&[&ascii(&witness)?])
+        && witness["canonicalRequestDigest"]==framed("catchplate.policyAuthorityReplayWitnessRequest/v2",&[request_raw])
         && request["predecessorReceiptDigest"]==receipt["witnessReservationDigest"] && witness["predecessorReceiptDigest"]==request["predecessorReceiptDigest"]
         && witness["fence"]==receipt["fence"] && number(&witness,"sequence")?>number(receipt,"witnessSequence")?,"delivery independent witness terminal original")?;
     for field in ["operation","requestDigest","capabilityId","resultDigest","deadlineMonotonicNs"]{require(witness[field]==request[field] && request[field]==receipt[field],"delivery witness/executor original")?;}
     for field in ["envelopeId","parentEnvelopeId","generationSequence","generationDigest"]{require(witness[field]==request[field],"delivery witness generation identity")?;}
     require(witness["generationSequence"]==payload["generationSequence"] && witness["generationDigest"]==payload["generationBindingDigest"],"delivery current enrolled generation")?;
     let mut head=witness.clone();head.as_object_mut().ok_or("delivery witness object")?.remove("signature");head["headDigest"]=Value::Null;
-    require(witness["headDigest"]==framed("serverware.policyAuthorityReplayWitnessHead/v2",&[&ascii(&head)?]),"delivery exact external witness head")
+    require(witness["headDigest"]==framed("catchplate.policyAuthorityReplayWitnessHead/v2",&[&ascii(&head)?]),"delivery exact external witness head")
 }
 
 fn observe(operation:Operation,plan:&Value,result:&Value,statement:&Value)->Result<Observation,String>{
@@ -199,7 +199,7 @@ fn observe(operation:Operation,plan:&Value,result:&Value,statement:&Value)->Resu
         require(operation!=Operation::Recover || ![SLOT,HEAD,PART,BATCH].contains(&table),"delivery recovery cannot change authority")?;
         rows.insert((table.to_owned(),ascii(&mutation["key"])?),mutation["row"].clone());
     }
-    let expected_head=crate::sha256_prefixed(&[b"serverware/canary-delivery-head/v1\0".as_slice(),&ascii(&json!([statement["deploymentId"],statement["canaryId"],statement["instanceId"]]))?].concat());
+    let expected_head=crate::sha256_prefixed(&[b"catchplate/canary-delivery-head/v1\0".as_slice(),&ascii(&json!([statement["deploymentId"],statement["canaryId"],statement["instanceId"]]))?].concat());
     let slot=rows.get(&(SLOT.into(),ascii(&json!({"id":statement["slotId"]}))?)).ok_or("delivery slot proof absent")?.clone();
     let head=rows.get(&(HEAD.into(),ascii(&json!({"id":expected_head}))?)).ok_or("delivery head proof absent")?.clone();
     for(field,value)in [("slotOriginal",&slot),("headOriginal",&head)] {

@@ -202,7 +202,7 @@ class OperatorDemoCheck:
         headers = {"Connection": "close"}
         if authenticated:
             require(self.admin_token is not None, "admin token is not loaded")
-            headers["X-Serverware-Admin-Token"] = self.admin_token
+            headers["X-Catchplate-Admin-Token"] = self.admin_token
         body = None
         if payload is not None:
             body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("ascii")
@@ -241,7 +241,7 @@ class OperatorDemoCheck:
 
     def profile(self):
         profile = self.control_json("/api/operator-demo/status", authenticated=True)
-        expected = {"schema": "serverware.operatorDemo/v1", "mode": "operator-development",
+        expected = {"schema": "catchplate.operatorDemo/v1", "mode": "operator-development",
                     "syntheticOnly": False, "productionReady": False, "hardwareVerified": False,
                     "allowed_upstreams": ["https://" + AUTHORITY]}
         require(isinstance(profile, dict) and all(type(profile.get(key)) is type(value)
@@ -286,7 +286,7 @@ class OperatorDemoCheck:
         try:
             with TunnelTLS(raw, self.ca, self.timeout) as tls:
                 headers = [f"{method} {path} HTTP/1.1", f"Host: {AUTHORITY}", "Connection: close",
-                           f"User-Agent: serverware-test-run/{self.run_id}", "Accept: application/json"]
+                           f"User-Agent: catchplate-test-run/{self.run_id}", "Accept: application/json"]
                 if body:
                     headers += ["Content-Type: application/json", f"Content-Length: {len(body)}"]
                 tls.sendall(("\r\n".join(headers) + "\r\n\r\n").encode("ascii") + body)
@@ -408,7 +408,7 @@ class OperatorDemoCheck:
         audit_ids = self.verify_audit(body_digest)
         require(self.upstream_count("GET") == 3 and self.upstream_count("POST") == 1
                 and self.upstream_count("DELETE") == 0, "final fixture dispatch counts differ")
-        return {"ok": True, "schema": "serverware.operatorDemoCheck/v1", "mode": "operator-development",
+        return {"ok": True, "schema": "catchplate.operatorDemoCheck/v1", "mode": "operator-development",
                 "productionReady": False, "hardwareVerified": False, "publicDnsVerified": False,
                 "proxyTransport": "verified-private-https-edge" if self.proxy.scheme == "https" else "private-http-connect-leg",
                 "originTlsVerified": True, "checks": self.results, "runId": self.run_id,

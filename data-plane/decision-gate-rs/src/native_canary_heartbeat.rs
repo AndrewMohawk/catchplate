@@ -1,7 +1,7 @@
 //! One actual generation/snapshot, one signed heartbeat, one durable delivery.
 use super::*;
-use serverware_decision_gate::native_canary_heartbeat_v1 as wire;
-use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes as ascii;
+use catchplate_decision_gate::native_canary_heartbeat_v1 as wire;
+use catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes as ascii;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD,Engine as _};
 use ring::rand::{SecureRandom,SystemRandom};
 
@@ -54,7 +54,7 @@ fn checkpoint_owned(state:&GateState,deadline:u64,snapshot:policy_core::NativeAc
         if nonce==[0;32]{return Err("heartbeat zero nonce".into());}
         let opening=snapshot.last_ingress();
         let statement=json!({"apiVersion":wire::SCHEMA,"purpose":wire::PURPOSE,"deploymentId":owner.authority.configuration().deployment_id,
-            "instanceId":scope["instance_id"],"holderId":serverware_decision_gate::native_currentness_v1::holder_id(&signer.boot_id,&signer.key_id)?,
+            "instanceId":scope["instance_id"],"holderId":catchplate_decision_gate::native_currentness_v1::holder_id(&signer.boot_id,&signer.key_id)?,
             "bootId":signer.boot_id,"keyId":signer.key_id,"controlPlaneResponseSigningKeyId":signer.control_plane_response_signing_key_id,
             "policyHash":current.hash,"dataPlaneBinarySha256":state.binary_digest,"purposeAssignmentSha256":purpose,
             "canaryId":canary,"canaryAssignmentSha256":scope["assignment_envelope_digest"],"canaryBootId":scope["boot_id"],
@@ -82,8 +82,8 @@ fn checkpoint_owned(state:&GateState,deadline:u64,snapshot:policy_core::NativeAc
         let original=String::from_utf8(raw).map_err(|_|"heartbeat ASCII")?;
         let mut id=[0u8;16];SystemRandom::new().fill(&mut id).map_err(|_|"heartbeat request entropy")?;id[6]=(id[6]&15)|64;id[8]=(id[8]&63)|128;
         let id=hex::encode(id);let request=format!("{}-{}-{}-{}-{}",&id[..8],&id[8..12],&id[12..16],&id[16..20],&id[20..]);
-        let batch=json!({"apiVersion":"serverware.policyCanaryEvidenceOriginal/v1","requestId":request,"canaryId":canary,"events":[{"kind":"custody","record":record}]});
-        Ok((original,serverware_decision_gate::native_canary_evidence_v1::BatchOriginal::parse(String::from_utf8(ascii(&batch)?).map_err(|_|"heartbeat batch ASCII")?)?,deadline,observed))
+        let batch=json!({"apiVersion":"catchplate.policyCanaryEvidenceOriginal/v1","requestId":request,"canaryId":canary,"events":[{"kind":"custody","record":record}]});
+        Ok((original,catchplate_decision_gate::native_canary_evidence_v1::BatchOriginal::parse(String::from_utf8(ascii(&batch)?).map_err(|_|"heartbeat batch ASCII")?)?,deadline,observed))
     })();
     let (original,batch,deadline,observed)=match result{Ok(value)=>value,Err(error)=>{owner.heartbeat.poisoned=true;return Err(error);}};
     drop(owner);

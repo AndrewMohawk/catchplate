@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-proof-cohort.v8.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-proof-cohort.v8.schema.json",
   "$ref": "#/$defs/configuration",
   "$defs": {
     "sha": {"$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"},
@@ -23,7 +23,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "authority", "executableSha256", "retrievalConfiguration", "persistenceConfiguration", "trustedTimeConfiguration", "generationInstallConfiguration", "commitRequestConfiguration", "ingressAdmissionConfiguration", "terminalAppendConfiguration", "dispatchBarrierConfiguration", "activeEffectBarrierConfiguration", "activeEffectCommitConfiguration", "publicationReconciliationConfiguration", "externalDriver", "cleanup"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeShadowProofCohortConfiguration/v8"},
+        "apiVersion": {"const": "catchplate.nativeShadowProofCohortConfiguration/v8"},
         "authority": {"$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/authority"},
         "executableSha256": {"$ref": "#/$defs/sha"},
         "retrievalConfiguration": {"$ref": "#/$defs/pin"},
@@ -46,7 +46,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "configurationSha256", "precreationSha256", "invocationId", "retrieval", "persistence", "trustedTime", "generationInstall", "commitRequest", "ingressAdmission", "terminalAppend", "dispatchBarrier", "activeEffectBarrier", "activeEffectCommit", "publicationReconciliation", "externalDriver"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeShadowProofCohortOriginals/v7"},
+        "apiVersion": {"const": "catchplate.nativeShadowProofCohortOriginals/v7"},
         "configurationSha256": {"$ref": "#/$defs/sha"},
         "precreationSha256": {"$ref": "#/$defs/sha"},
         "invocationId": {"$ref": "#/$defs/invocation"},
@@ -69,7 +69,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "configurationSha256", "precreationSha256", "observationSha256", "invocationId", "retrieval", "persistence", "trustedTime", "generationInstall", "commitRequest", "ingressAdmission", "terminalAppend", "dispatchBarrier", "activeEffectBarrier", "activeEffectCommit", "publicationReconciliation", "externalDriverSha256", "signingKeyId"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeShadowProofCohortRelease/v7"},
+        "apiVersion": {"const": "catchplate.nativeShadowProofCohortRelease/v7"},
         "configurationSha256": {"$ref": "#/$defs/sha"},
         "precreationSha256": {"$ref": "#/$defs/sha"},
         "observationSha256": {"$ref": "#/$defs/sha"},
@@ -93,13 +93,13 @@
       "type": "object", "additionalProperties": false,
       "required": ["payload", "signatureBase64url"],
       "properties": {"payload": {"$ref": "#/$defs/releasePayload"}, "signatureBase64url": {"$ref": "#/$defs/signature"}},
-      "description": "C9 authority signs ASCII serverware.nativeShadowProofCohortRelease.signature/v7, NUL, complete canonical payload. All eleven inventories, exact actual descriptors, parked peers and image/closure originals are checked before first release. Existing 32768-byte packet and 128-rights bounds remain. Driver continuation is a separate real operation."
+      "description": "C9 authority signs ASCII catchplate.nativeShadowProofCohortRelease.signature/v7, NUL, complete canonical payload. All eleven inventories, exact actual descriptors, parked peers and image/closure originals are checked before first release. Existing 32768-byte packet and 128-rights bounds remain. Driver continuation is a separate real operation."
     },
     "payload": {
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "purpose", "configurationSha256", "precreationSha256", "observationSha256", "releaseSha256", "invocationId", "operationIdSha256", "requestedAtBoottimeNs", "deadlineBoottimeNs", "signingKeyId", "externalDriverSha256"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeShadowProofCohortCleanup/v7"},
+        "apiVersion": {"const": "catchplate.nativeShadowProofCohortCleanup/v7"},
         "purpose": {"const": "terminate-owned-proof-cohort"},
         "configurationSha256": {"$ref": "#/$defs/sha"},
         "precreationSha256": {"$ref": "#/$defs/sha"},
@@ -117,13 +117,13 @@
       "type": "object", "additionalProperties": false,
       "required": ["payload", "signatureBase64url"],
       "properties": {"payload": {"$ref": "#/$defs/payload"}, "signatureBase64url": {"$ref": "#/$defs/signature"}},
-      "description": "Independent cleanup authority signs ASCII serverware.nativeShadowProofCohortCleanup.signature/v7, NUL, complete canonical payload. Original lifetime and cleanup bounds remain; only the eleven owned endpoints may be signaled and reaped."
+      "description": "Independent cleanup authority signs ASCII catchplate.nativeShadowProofCohortCleanup.signature/v7, NUL, complete canonical payload. Original lifetime and cleanup bounds remain; only the eleven owned endpoints may be signaled and reaped."
     },
     "terminal": {
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "authorizationSha256", "configurationSha256", "precreationSha256", "observationSha256", "releaseSha256", "invocationId", "completedAtBoottimeNs", "children", "externalDriverSha256"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeShadowProofCohortTerminal/v7"},
+        "apiVersion": {"const": "catchplate.nativeShadowProofCohortTerminal/v7"},
         "authorizationSha256": {"$ref": "#/$defs/sha"},
         "configurationSha256": {"$ref": "#/$defs/sha"},
         "precreationSha256": {"$ref": "#/$defs/sha"},
@@ -155,7 +155,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "authorizationSha256", "intentRecordSha256", "terminalOriginal", "terminalRecordSha256", "externalDriverSha256"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeShadowProofCohortCleanupResult/v7"},
+        "apiVersion": {"const": "catchplate.nativeShadowProofCohortCleanupResult/v7"},
         "authorizationSha256": {"$ref": "#/$defs/sha"},
         "intentRecordSha256": {"$ref": "#/$defs/sha"},
         "terminalRecordSha256": {"$ref": "#/$defs/sha"},

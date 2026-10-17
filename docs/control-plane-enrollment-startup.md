@@ -56,8 +56,8 @@ load an unrelated HTTP signing key. No public handler or session cookie is wired
 The optional source overlay
 [`docker-compose.oidc-session-activation-release.yml`](../docker-compose.oidc-session-activation-release.yml)
 adds only a read-only socket-directory bind at the fixed
-`/run/serverware/oidc-session-activation-token-release`. Its required host-source
-variable is `SERVERWARE_OIDC_SESSION_ACTIVATION_RELEASE_SOCKET_DIR`, with
+`/run/catchplate/oidc-session-activation-token-release`. Its required host-source
+variable is `CATCHPLATE_OIDC_SESSION_ACTIVATION_RELEASE_SOCKET_DIR`, with
 `create_host_path: false`; it is not a process endpoint override. The separately
 provisioned listener has mode 0660 and owner/group `65502:65532`, with searchable
 parent directories. A read-only directory bind permits connecting, not replacing
@@ -113,8 +113,8 @@ Returned originals are not reusable permission or evidence of SQL execution.
 The optional
 [`docker-compose.oidc-session-activation-planning.yml`](../docker-compose.oidc-session-activation-planning.yml)
 overlay adds only a read-only, `create_host_path: false` socket-directory bind
-at `/run/serverware/oidc-session-activation`. Its required source variable is
-`SERVERWARE_OIDC_SESSION_ACTIVATION_PLANNER_SOCKET_DIR`. Combine it with the
+at `/run/catchplate/oidc-session-activation`. Its required source variable is
+`CATCHPLATE_OIDC_SESSION_ACTIVATION_PLANNER_SOCKET_DIR`. Combine it with the
 separately enabled activation-execution custody overlay. The bootstrap stays
 in the existing authority-trust mount; no planner, key, socket or production
 infrastructure is provisioned. The enrollment-only offline preparer is unchanged.
@@ -172,7 +172,7 @@ another SQL/completion send. Recovery requires separate authority.
 
 No new completion overlay is needed: the existing
 [`docker-compose.oidc-session-activation-planning.yml`](../docker-compose.oidc-session-activation-planning.yml)
-mount already exposes the fixed `/run/serverware/oidc-session-activation`
+mount already exposes the fixed `/run/catchplate/oidc-session-activation`
 directory read-only, with `create_host_path: false`. Its preprovisioned host
 directory must contain the authorized `completion.sock` as well as the planner
 listener. The endpoint remains fixed; the environment variable is only the
@@ -256,11 +256,11 @@ noncommit, current session state, protected token release or retry permission.
 The optional
 [`docker-compose.oidc-session-activation-consume-execution.yml`](../docker-compose.oidc-session-activation-consume-execution.yml)
 source overlay adds a read-only key bind at
-`/run/secrets/serverware-oidc-session-activation-consume-caller-key` and a
+`/run/secrets/catchplate-oidc-session-activation-consume-caller-key` and a
 read-only socket-directory bind at
-`/run/serverware/oidc-session-activation-delivery-execution`. The required host
-inputs are `SERVERWARE_OIDC_SESSION_ACTIVATION_CONSUME_CALLER_KEY_FILE` and
-`SERVERWARE_OIDC_SESSION_ACTIVATION_CONSUME_EXECUTION_SOCKET_DIR`; both reject
+`/run/catchplate/oidc-session-activation-delivery-execution`. The required host
+inputs are `CATCHPLATE_OIDC_SESSION_ACTIVATION_CONSUME_CALLER_KEY_FILE` and
+`CATCHPLATE_OIDC_SESSION_ACTIVATION_CONSUME_EXECUTION_SOCKET_DIR`; both reject
 automatic host-path creation. They are packaging inputs, not runtime path
 overrides. No key, listener, account or infrastructure is created. The same
 directory bind covers the independently provisioned authorizer, reserver, SQL
@@ -323,7 +323,7 @@ release-hint response profile through immutable `release_hints=True`.
 Earlier versions retain false and their existing wire behavior.
 
 The actual stdlib delivery reads the fixed root-owned mode0400
-`/run/secrets/serverware-oidc-session-activation-release-intent-key` into the
+`/run/secrets/catchplate-oidc-session-activation-release-intent-key` into the
 separate sealed slot. Startup requires its signed runtime inventory entry,
 genuine enrolled Ed25519 pair, original PKCS8 bytes and separation from the
 actual HTTP and other retained signing purposes. It precharges the admitted
@@ -370,17 +370,17 @@ use legacy finalization; no grant is generated and discarded along that path.
 
 | Input | Fixed container location or requirement |
 | --- | --- |
-| Signed bootstrap | `/run/serverware/authority-trust/control-plane-enrollment.json` |
-| Enabled issuer private key | `/run/secrets/serverware-control-plane-enrollment-signing-key` |
+| Signed bootstrap | `/run/catchplate/authority-trust/control-plane-enrollment.json` |
+| Enabled issuer private key | `/run/secrets/catchplate-control-plane-enrollment-signing-key` |
 | Existing response key | Actual configured `response_identity.RESPONSE_SIGNING_KEY_PATH`, read-only admission |
 | Runtime trust inventory | Already includes the retained bootstrap FD and, when enabled, exact issuer-key FD |
 
 The bootstrap is mandatory for the root control-plane entrypoint, including an
 explicitly disabled policy. Its original canonical ASCII JSON is at most 4 MiB.
 The envelope has exactly `schema`, `payload`, `signatureBase64Url`; its schema is
-`serverware.signedControlPlaneEnrollmentBootstrap/v2`. The payload has exactly eight fields:
+`catchplate.signedControlPlaneEnrollmentBootstrap/v2`. The payload has exactly eight fields:
 
-- `schema`: `serverware.controlPlaneEnrollmentBootstrap/v2`.
+- `schema`: `catchplate.controlPlaneEnrollmentBootstrap/v2`.
 - `sourceRevision`: the current authority source revision.
 - `configurationDigest`: the configuration already admitted by runtime trust.
 - `configurationPayload`: the actual signed authority-service configuration.
@@ -391,7 +391,7 @@ The envelope has exactly `schema`, `payload`, `signatureBase64Url`; its schema i
 
 The enabled endpoint has exactly `socketPath`, `requestTimeoutSeconds`,
 `listenerUid`, and `listenerGid`. Its path is fixed to
-`/run/serverware/registration-evidence/signer.sock`, its finite timeout is
+`/run/catchplate/registration-evidence/signer.sock`, its finite timeout is
 0.05–30 seconds, and its observed listener UID/GID is exactly `0:0`. The runtime
 material exposes only the immutable `(path, timeout, uid, gid)` tuple; no browser
 parameter, environment endpoint or fallback can select another destination.
@@ -428,10 +428,10 @@ nor substitutes a different slot. Seal/shrink/grow/write seals are mandatory.
 For enabled enrollment, the optional source overlay
 [`docker-compose.enrollment.yml`](../docker-compose.enrollment.yml) adds exactly
 two read-only binds to the production service: the key at
-`/run/secrets/serverware-control-plane-enrollment-signing-key`, and the socket
-directory at `/run/serverware/registration-evidence`. Their required, nonempty
-host-source variables are `SERVERWARE_CONTROL_PLANE_ENROLLMENT_SIGNING_KEY_FILE`
-and `SERVERWARE_REGISTRATION_EVIDENCE_SOCKET_DIR`; both mounts set
+`/run/secrets/catchplate-control-plane-enrollment-signing-key`, and the socket
+directory at `/run/catchplate/registration-evidence`. Their required, nonempty
+host-source variables are `CATCHPLATE_CONTROL_PLANE_ENROLLMENT_SIGNING_KEY_FILE`
+and `CATCHPLATE_REGISTRATION_EVIDENCE_SOCKET_DIR`; both mounts set
 `create_host_path: false`. These are Compose host-source interpolation, not
 process key-path or endpoint overrides. The root-signed endpoint remains fixed.
 The existing Linux Unix socket can be connected through a read-only directory
@@ -449,8 +449,8 @@ preparing or mounting it alone is not release acceptance.
 
 ## Startup, issuance and shutdown
 
-The root entrypoint clears every incoming `SERVERWARE_CONTROL_PLANE_ENROLLMENT_*`
-setting and supplies only `SERVERWARE_CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_FD`.
+The root entrypoint clears every incoming `CATCHPLATE_CONTROL_PLANE_ENROLLMENT_*`
+setting and supplies only `CATCHPLATE_CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_FD`.
 The bootstrap FD is canonical decimal 3..1023. Both bootstrap and key must be in
 the original root-admitted inventory; delivery never edits that signed inventory.
 

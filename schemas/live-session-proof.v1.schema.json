@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/live-session-proof.v1.schema.json",
-  "title": "Serverware live session proof v1",
+  "$id": "https://catchplate.invalid/schemas/live-session-proof.v1.schema.json",
+  "title": "Catchplate live session proof v1",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -20,7 +20,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.liveSessionProof/v1"
+      "const": "catchplate.liveSessionProof/v1"
     },
     "callerNonceSha256": {"$ref": "#/$defs/sha256"},
     "evidenceBodySha256": {"$ref": "#/$defs/sha256"},
@@ -77,7 +77,7 @@
         "tlsStackMeasurementSha256"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.enclaveTlsScope/v2"},
+        "apiVersion": {"const": "catchplate.enclaveTlsScope/v2"},
         "bindingSha256": {"$ref": "#/$defs/sha256"},
         "connectionId": {"$ref": "#/$defs/identifier"},
         "connectionNonceSha256": {"$ref": "#/$defs/sha256"},
@@ -89,7 +89,7 @@
           "maximum": 18446744073709551615
         },
         "exporterLabel": {
-          "const": "EXPORTER-Serverware-Attestation-v1"
+          "const": "EXPORTER-Catchplate-Attestation-v1"
         },
         "exporterSha256": {"$ref": "#/$defs/sha256"},
         "issuedAtUnix": {

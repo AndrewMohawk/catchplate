@@ -12,7 +12,7 @@ and role-complete helper prerequisites still need explicit job slots.
 
 ## Initial requests from actual owners
 
-[InitialRequests](../serverware/native_pilot_initial_requests.py) accepts only
+[InitialRequests](../catchplate/native_pilot_initial_requests.py) accepts only
 the actual retained pilot, ordinary launcher, generation inputs and business
 resources. It checks all five admitted runtime/history/grant associations,
 preparation and empty-directory originals before sampling one issuance time
@@ -39,7 +39,7 @@ retained until the real pilot's terminal cleanup.
 
 The real ordinary launcher, native endpoint cohort and driver/gate expose
 `peer_preparation_original(profile="retain-observed-cgroup")`. Their
-[private resource owner](../serverware/native_pilot_peer_resources.py) retains
+[private resource owner](../catchplate/native_pilot_peer_resources.py) retains
 duplicate PIDFDs, exact target-executable descriptors and cgroup capabilities.
 Native parked targets are opened from the actual child's retained, sealed
 executable descriptor, not a metadata-only caller path. The gate's executable
@@ -55,9 +55,9 @@ PID/start, PIDFD identity, target device/inode/length/hash and actual cgroup
 path hash/mount/inode. The selected profile refuses cgroup migration. It does
 not claim that parked children have executed, are ready, or have final labels.
 
-The [composite preparation](../serverware/native_pilot_bridge_preparation.py)
+The [composite preparation](../catchplate/native_pilot_bridge_preparation.py)
 joins these observations to the initial requests and original driver observation.
-The actual [phase executor](../serverware/native_pilot_phase_execution.py) binds
+The actual [phase executor](../catchplate/native_pilot_phase_execution.py) binds
 runtime/v10's expected peers to those retained facts and prior admitted UID/GID,
 using the native v4 process-identity framing. Security-label and configuration-
 generation values remain independently approved final-state expectations;
@@ -65,7 +65,7 @@ native connection inspectors still verify actual peers after execution.
 The four external signer peers are not these children and cannot be substituted
 with their observations.
 
-The [operator](../serverware/native_pilot_operator.py) captures this preparation
+The [operator](../catchplate/native_pilot_operator.py) captures this preparation
 after real service admission, carries `bridgePreparationOriginal` in the
 bridge-runtime request, rechecks it around subsequent approval exchanges, and
 consumes it immediately before release. Cleanup follows the actual pilot's
@@ -73,8 +73,8 @@ terminal cleanup. Public DTOs and shape checks cannot construct live owners.
 
 ## Four bridge-only authorizations
 
-The [bridge key profile](../serverware/native_pilot_bridge_key_profile.py) and
-[authority](../serverware/native_pilot_bridge_authority.py) implement
+The [bridge key profile](../catchplate/native_pilot_bridge_key_profile.py) and
+[authority](../catchplate/native_pilot_bridge_authority.py) implement
 `role-keys`, `admission`, `encrypted-delivery` and `verifier-transport`.
 Inputs must be independently approved complete originals: original driver
 control/window, actual bridge C9, authenticated assignment/closure/trust,
@@ -145,7 +145,7 @@ The final commit did not rerun the 22 unchanged passing suites.
 
 Both exact source archives, harnesses, commands, logs, structured results and
 checksums are retained at
-`codex-offload/serverware/engineering-builds/4ddc77df-bridge-preparation-ASPOkl/`.
+`codex-offload/catchplate/engineering-builds/4ddc77df-bridge-preparation-ASPOkl/`.
 The final archive is **85,790,720 bytes**, SHA-256
 `0587bea3b78e2593a804db3eb3cbd751276dd71103567990af033ab0812ef1b4`.
 All 16 retained-file checksums passed, and the copied checksum manifest matches

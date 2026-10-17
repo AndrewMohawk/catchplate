@@ -25,7 +25,7 @@ flowchart LR
 | Surface | Existing profile | Opt-in profile |
 | --- | --- | --- |
 | Startup public evidence | `nativeIngressPublicEvidence/v1` | Unchanged |
-| Session request | No evidence selector | `x-serverware-ingress-evidence: client-trust-v2` |
+| Session request | No evidence selector | `x-catchplate-ingress-evidence: client-trust-v2` |
 | Session outer/nested evidence | `nativeIngressSessionEvidence/v1` / `nativeIngressPublicEvidence/v1` | Both `/v2`; mixed versions fail |
 | Standalone native client | `nativeIngressClient/v1` and `/v2` | [`nativeIngressClient/v3`](../schemas/native-ingress-client.v3.schema.json) |
 | Proof-client pre-CONNECT admission | `nativeProxyIngress/v1` | [`nativeProxyIngress/v2`](../schemas/native-proxy-ingress.v2.schema.json) |
@@ -68,7 +68,7 @@ The existing role-3 user data already commits to the root-set digest. Its recipe
 is unchanged, including order and framing:
 
 ```text
-SHA256("serverware/mutual-tls-client-trust/v1\0"
+SHA256("catchplate/mutual-tls-client-trust/v1\0"
        || root_count:u32BE
        || each (root_length:u64BE || original_root_DER))
 ```

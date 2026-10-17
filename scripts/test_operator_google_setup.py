@@ -48,16 +48,16 @@ def file_evidence(directory):
 
 
 def readonly_snapshot():
-    directory = Path(os.environ["SERVERWARE_DATA_DIR"])
-    with closing(sqlite3.connect((directory / "serverware.sqlite3").as_uri() + "?mode=ro", uri=True)) as conn:
+    directory = Path(os.environ["CATCHPLATE_DATA_DIR"])
+    with closing(sqlite3.connect((directory / "catchplate.sqlite3").as_uri() + "?mode=ro", uri=True)) as conn:
         return tuple(conn.iterdump()), file_evidence(directory)
 
 
 def cold_startup(contacts):
-    from serverware import operator_demo
+    from catchplate import operator_demo
     operator_demo.activate()
-    from serverware import oauth
-    from serverware.control_plane_startup import validate_control_plane_startup
+    from catchplate import oauth
+    from catchplate.control_plane_startup import validate_control_plane_startup
 
     def forbidden(request, **_options):
         contacts.append(request.full_url)
@@ -73,11 +73,11 @@ class Fixture(consent_tests.Fixture):
     def __init__(self):
         self.provider_calls = []
         cold_startup(self.provider_calls)
-        from serverware import config, db, operator_demo_store, policy_bundle
-        from serverware import operator_catalog_schema, operator_catalog_inputs, operator_catalog_mutations
+        from catchplate import config, db, operator_demo_store, policy_bundle
+        from catchplate import operator_catalog_schema, operator_catalog_inputs, operator_catalog_mutations
         self.config, self.db, self.store, self.bundles = config, db, operator_demo_store, policy_bundle
         self.schema, self.inputs, self.mutations = operator_catalog_schema, operator_catalog_inputs, operator_catalog_mutations
-        from serverware import app, auth, oauth, operator_demo, operator_google_setup, operator_catalog_oauth_profile
+        from catchplate import app, auth, oauth, operator_demo, operator_google_setup, operator_catalog_oauth_profile
         self.app, self.auth, self.oauth = app, auth, oauth
         self.demo, self.setup, self.profiles = operator_demo, operator_google_setup, operator_catalog_oauth_profile
         self.cookie = None
@@ -112,7 +112,7 @@ class Fixture(consent_tests.Fixture):
             second["application"]["id"], credential["id"])["access_rule"]
         self.mutations.revoke_application(self.inputs.TargetInput(**self.review(), id=second["application"]["id"]),
             workspace.common._ACTOR)
-        from serverware.ca_material import ensure_mitm_ca_material
+        from catchplate.ca_material import ensure_mitm_ca_material
         key, cert = ensure_mitm_ca_material()
         assert key.is_file() and cert.is_file()
         assert self.db.get_credential(credential["id"], include_secret=True)["secret"] == workspace.common._PROVIDER_SECRET
@@ -137,7 +137,7 @@ class Fixture(consent_tests.Fixture):
 
     def setup_review(self):
         result = self.call("GET")
-        assert result["schema"] == "serverware.operatorGoogleSetupReview/v1"
+        assert result["schema"] == "catchplate.operatorGoogleSetupReview/v1"
         return result
 
     def payload(self):
@@ -148,14 +148,14 @@ class Fixture(consent_tests.Fixture):
 
     def public(self, identifier):
         result = self.call("GET", PATH + "/" + identifier)
-        assert result["schema"] == "serverware.operatorGoogleSetup/v1"
+        assert result["schema"] == "catchplate.operatorGoogleSetup/v1"
         return result
 
     def disabled(self):
         assert self.profiles.selected() is False
         with closing(self.db.connect()) as conn:
             assert conn.execute("SELECT 1 FROM sqlite_master WHERE name='operator_catalog_oauth_profile'").fetchone() is None
-            from serverware import operator_catalog_capabilities
+            from catchplate import operator_catalog_capabilities
             conn.execute("BEGIN")
             assert operator_catalog_capabilities.google_oauth(conn) is None
         assert not self.provider_calls
@@ -204,7 +204,7 @@ def activate(identifier):
         assert f.demo.settings()["allowed_upstreams"] == TARGET_ORIGINS
         assert f.demo.settings()["fixture_cidrs"] == CIDRS
         with closing(f.db.connect()) as conn:
-            from serverware import operator_catalog_capabilities
+            from catchplate import operator_catalog_capabilities
             conn.execute("BEGIN")
             assert operator_catalog_capabilities.google_oauth(conn)["profile"] == "operator-google-v1"
         workspace.verify_signed(f.config, f.db, f.store, f.bundles)
@@ -235,7 +235,7 @@ def refused_restart():
 
 
 def activation_rollback():
-    from serverware import operator_demo
+    from catchplate import operator_demo
     original_bootstrap = operator_demo.bootstrap
     before, contacts = [], []
 
@@ -326,11 +326,11 @@ class OperatorGoogleSetupTests(unittest.TestCase):
         consent_tests.OperatorGoogleConsentTests.setUp(self)
         self.google_environment = dict(self.environment)
         self.environment = {key: value for key, value in self.environment.items()
-            if key != "SERVERWARE_OPERATOR_GOOGLE_PROFILE" and not key.startswith("SERVERWARE_GOOGLE_")}
-        self.environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(OLD_ORIGINS)
-        self.environment["SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS"] = json.dumps(CIDRS)
-        self.google_environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(TARGET_ORIGINS)
-        self.google_environment["SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS"] = json.dumps(CIDRS)
+            if key != "CATCHPLATE_OPERATOR_GOOGLE_PROFILE" and not key.startswith("CATCHPLATE_GOOGLE_")}
+        self.environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(OLD_ORIGINS)
+        self.environment["CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS"] = json.dumps(CIDRS)
+        self.google_environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(TARGET_ORIGINS)
+        self.google_environment["CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS"] = json.dumps(CIDRS)
 
     def worker(self, operation, *, google=False, changes=None, identifier=None):
         environment = dict(self.google_environment if google else self.environment)
@@ -363,22 +363,22 @@ class OperatorGoogleSetupTests(unittest.TestCase):
     def test_restart_binding_and_stale_revision_refusals(self):
         self.worker("prepare_rollback")
         for changes in (
-                {"SERVERWARE_GOOGLE_OAUTH_CLIENT_ID": "456-other.apps.googleusercontent.com"},
-                {"SERVERWARE_OPERATOR_DEMO_UPSTREAMS": json.dumps(TARGET_ORIGINS[1:])},
-                {"SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS": '["127.0.0.2/32"]'}):
+                {"CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID": "456-other.apps.googleusercontent.com"},
+                {"CATCHPLATE_OPERATOR_DEMO_UPSTREAMS": json.dumps(TARGET_ORIGINS[1:])},
+                {"CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS": '["127.0.0.2/32"]'}):
             self.worker("refused_restart", google=True, changes=changes)
         self.worker("activation_rollback", google=True)
         self.worker("advance_revision")
         self.worker("refused_restart", google=True)
 
     def test_retained_gmail_origin_requires_prepare_but_fresh_profile_works(self):
-        self.worker("retained_without_prepare", changes={"SERVERWARE_OPERATOR_DEMO_UPSTREAMS": json.dumps(TARGET_ORIGINS)})
+        self.worker("retained_without_prepare", changes={"CATCHPLATE_OPERATOR_DEMO_UPSTREAMS": json.dumps(TARGET_ORIGINS)})
         self.worker("refused_restart", google=True)
-        self.worker("fresh_google", google=True, changes={"SERVERWARE_DATA_DIR": str(Path(self.scratch.name) / "fresh-google")})
+        self.worker("fresh_google", google=True, changes={"CATCHPLATE_DATA_DIR": str(Path(self.scratch.name) / "fresh-google")})
         legacy_path = str(Path(self.scratch.name) / "legacy")
-        self.worker("legacy_seed", changes={"SERVERWARE_DATA_DIR": legacy_path,
-            "SERVERWARE_OPERATOR_DEMO_UPSTREAMS": json.dumps(TARGET_ORIGINS)})
-        self.worker("refused_restart", google=True, changes={"SERVERWARE_DATA_DIR": legacy_path})
+        self.worker("legacy_seed", changes={"CATCHPLATE_DATA_DIR": legacy_path,
+            "CATCHPLATE_OPERATOR_DEMO_UPSTREAMS": json.dumps(TARGET_ORIGINS)})
+        self.worker("refused_restart", google=True, changes={"CATCHPLATE_DATA_DIR": legacy_path})
 
     def test_cancel_and_new_preparation_preserve_one_shot_ids(self):
         self.worker("lifecycle_checks")

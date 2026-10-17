@@ -2,7 +2,7 @@
 
 [Home](Home.md) · [Credentials and providers](Credentials-and-providers.md) · [Proxy and CA](Proxy-and-CA.md)
 
-Use a manual credential when your API accepts a Bearer token or a key in one HTTP header and its requests fit Serverware's supported JSON profile. This example gives a status-checking script access to **one GET endpoint**, without giving the script the provider secret.
+Use a manual credential when your API accepts a Bearer token or a key in one HTTP header and its requests fit Catchplate's supported JSON profile. This example gives a status-checking script access to **one GET endpoint**, without giving the script the provider secret.
 
 `https://api.example.test/v1/status` is an illustrative address, not a running service. Substitute an API you control or are authorized to use, its actual status path, and its documented authentication. Do not add the example hostname to your running instance. Saving the configuration below is not evidence that a provider request succeeded.
 
@@ -10,11 +10,11 @@ Use a manual credential when your API accepts a Bearer token or a key in one HTT
 
 | Value | Where it belongs | What it does |
 | --- | --- | --- |
-| Provider token or API key | The write-only credential form in Serverware | Authenticates the permitted request to the upstream API. |
-| Serverware client proxy token | Your script's protected runtime configuration | Authenticates that client to the proxy; grants only its active permissions. |
-| Optional public dummy value | The permission and the client's provider-auth header | Gives an existing library something nonsecret to send; Serverware replaces it after authorization. |
+| Provider token or API key | The write-only credential form in Catchplate | Authenticates the permitted request to the upstream API. |
+| Catchplate client proxy token | Your script's protected runtime configuration | Authenticates that client to the proxy; grants only its active permissions. |
+| Optional public dummy value | The permission and the client's provider-auth header | Gives an existing library something nonsecret to send; Catchplate replaces it after authorization. |
 
-Never put the provider secret into the client, a URL, the dummy-value field, source control or chat. A dummy is not authentication to Serverware.
+Never put the provider secret into the client, a URL, the dummy-value field, source control or chat. A dummy is not authentication to Catchplate.
 
 ## 1. Check the destination and save the credential
 
@@ -32,7 +32,7 @@ Bearer authentication is the default. For a custom-header API, expand
 | Provider header name | Automatically `Authorization` | The documented name, for example `X-API-Key` |
 | Provider key or token | The token itself, without `Bearer ` | The header's secret value, without `X-API-Key:` |
 
-Choose **Save credential**. Serverware stores the secret encrypted; the ordinary instance uses local key custody, not hardware-verified custody. This save does not contact the API, verify the key, create a client or grant permission. Manual credentials are not automatically refreshed OAuth connections.
+Choose **Save credential**. Catchplate stores the secret encrypted; the ordinary instance uses local key custody, not hardware-verified custody. This save does not contact the API, verify the key, create a client or grant permission. Manual credentials are not automatically refreshed OAuth connections.
 
 Choose **Back to Credentials** if you only wanted to store it. To continue, use **Set up access for a client**, or the saved card's **Use with a client**. Both reuse that exact saved credential without revealing its secret.
 
@@ -68,35 +68,35 @@ If the API returns an object such as `{"status":"ok","version":"1","internal_not
 
 Open **Proxy setup**, select `Status checker` and `Read API status`, choose GET, download the public CA certificate, and set **Downloaded CA file** to its local path. Prefer **Copy connection template**: it uses the saved permission and that client's actual proxy-login mode.
 
-The following Bash example assumes **standard client login**: the client UUID is the username, and its Serverware proxy token is the password. New guided clients use this mode when supported. For an older Bearer-only client, either use its generated Bearer template or explicitly choose **Clients → Enable standard client login**; do not silently assume it supports Basic.
+The following Bash example assumes **standard client login**: the client UUID is the username, and its Catchplate proxy token is the password. New guided clients use this mode when supported. For an older Bearer-only client, either use its generated Bearer template or explicitly choose **Clients → Enable standard client login**; do not silently assume it supports Basic.
 
 Replace all public placeholders before running this on a trusted workstation:
 
 ```bash
 set +x
-export SERVERWARE_PROXY_URL='https://your-approved-proxy.example.test'
-export SERVERWARE_APP_ID='replace-with-the-saved-client-uuid'
-export SERVERWARE_CA_FILE='/absolute/path/serverware-ca.pem'
-read -r -s -p 'Serverware client proxy token: ' SERVERWARE_PROXY_TOKEN
+export CATCHPLATE_PROXY_URL='https://your-approved-proxy.example.test'
+export CATCHPLATE_APP_ID='replace-with-the-saved-client-uuid'
+export CATCHPLATE_CA_FILE='/absolute/path/catchplate-ca.pem'
+read -r -s -p 'Catchplate client proxy token: ' CATCHPLATE_PROXY_TOKEN
 printf '\n'
-export SERVERWARE_PROXY_TOKEN
+export CATCHPLATE_PROXY_TOKEN
 
 curl --fail-with-body --show-error --http1.1 \
   --connect-timeout 10 --max-time 30 \
   --noproxy '' \
-  --proxy "$SERVERWARE_PROXY_URL" \
+  --proxy "$CATCHPLATE_PROXY_URL" \
   --proxy-basic \
-  --proxy-user "${SERVERWARE_APP_ID}:${SERVERWARE_PROXY_TOKEN}" \
-  --cacert "$SERVERWARE_CA_FILE" \
+  --proxy-user "${CATCHPLATE_APP_ID}:${CATCHPLATE_PROXY_TOKEN}" \
+  --cacert "$CATCHPLATE_CA_FILE" \
   --request GET \
   --header 'Accept: application/json' \
   --header 'User-Agent:' \
   'https://api.example.test/v1/status'
 
-unset SERVERWARE_PROXY_TOKEN
+unset CATCHPLATE_PROXY_TOKEN
 ```
 
-There is deliberately **no `Authorization` or `X-API-Key` header** here. With automatic insertion, the target credential header must be absent; an existing one is refused rather than overwritten. Serverware adds the saved credential only after authorizing the request.
+There is deliberately **no `Authorization` or `X-API-Key` header** here. With automatic insertion, the target credential header must be absent; an existing one is refused rather than overwritten. Catchplate adds the saved credential only after authorizing the request.
 
 `--noproxy ''` keeps environment bypass settings from sending the request directly. `--cacert` trusts the intercepted API connection; the outer HTTPS proxy still needs its normal trusted certificate. Use the actual proxy endpoint, not the console URL. Do not disable either TLS check, add redirect following, or use automatic retries to work around a denial.
 
@@ -108,10 +108,10 @@ Use **Replace a dummy header value** instead of automatic insertion when creatin
 
 | Saved credential | Exact dummy header value in permission | Client header |
 | --- | --- | --- |
-| Bearer token | `Bearer SERVERWARE_STATUS_DUMMY` | `Authorization: Bearer SERVERWARE_STATUS_DUMMY` |
-| Custom header `X-API-Key` | `SERVERWARE_STATUS_DUMMY` | `X-API-Key: SERVERWARE_STATUS_DUMMY` |
+| Bearer token | `Bearer CATCHPLATE_STATUS_DUMMY` | `Authorization: Bearer CATCHPLATE_STATUS_DUMMY` |
+| Custom header `X-API-Key` | `CATCHPLATE_STATUS_DUMMY` | `X-API-Key: CATCHPLATE_STATUS_DUMMY` |
 
-For the Bearer variant, the curl request above would add `--header 'Authorization: Bearer SERVERWARE_STATUS_DUMMY'`; for the custom-header variant it would add `--header 'X-API-Key: SERVERWARE_STATUS_DUMMY'`. Use only the variant matching the saved credential and permission. Keep the separate proxy login unchanged.
+For the Bearer variant, the curl request above would add `--header 'Authorization: Bearer CATCHPLATE_STATUS_DUMMY'`; for the custom-header variant it would add `--header 'X-API-Key: CATCHPLATE_STATUS_DUMMY'`. Use only the variant matching the saved credential and permission. Keep the separate proxy login unchanged.
 
 Send exactly one matching header. A missing, different or duplicate value is refused. The dummy is case-sensitive, printable text with no leading/trailing spaces; it is never the provider secret or the client proxy token. This is exact replacement of one credential header, not general text replacement across URLs, bodies or responses. Use a distinct client if another workload needs a different permission; do not create conflicting rules for the same client/path/method.
 
@@ -123,4 +123,4 @@ An active permission proves policy activation, not provider-key validity. A deni
 
 **Verify audit log** checks the local stored chain, not an independent witness or hardware attestation. A withheld response can follow an attempted upstream request. If you later adapt this recipe to writes, an error or timeout is not proof that nothing happened; never automatically replay an uncertain write.
 
-Source contracts: [manual setup UI](https://github.com/AndrewMohawk/serverware/blob/main/serverware/operator_demo_web/workspace_connect.js), [curl template](https://github.com/AndrewMohawk/serverware/blob/main/serverware/operator_demo_web/app.js), [ordinary JSON compatibility](https://github.com/AndrewMohawk/serverware/blob/main/docs/ordinary-client-compatibility.md). This guide does not establish compatibility with every SDK, request-signing scheme or API.
+Source contracts: [manual setup UI](https://github.com/AndrewMohawk/catchplate/blob/main/catchplate/operator_demo_web/workspace_connect.js), [curl template](https://github.com/AndrewMohawk/catchplate/blob/main/catchplate/operator_demo_web/app.js), [ordinary JSON compatibility](https://github.com/AndrewMohawk/catchplate/blob/main/docs/ordinary-client-compatibility.md). This guide does not establish compatibility with every SDK, request-signing scheme or API.

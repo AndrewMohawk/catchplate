@@ -12,7 +12,7 @@ use super::super::production_dispatch::{ClosedProductionDispatchRequestV4 as Dis
     ClosedProductionDispatchResponseV4,ClosedProductionDispatchResultV4,SignedProductionServiceTransitionV4 as Transition};
 use crate::policy_shadow::PolicyShadowCustodySignerRole as Signer;
 
-pub(super) const RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v13";
+pub(super) const RUNTIME:&str="catchplate.policyCustodyProductionRpcRuntime/v13";
 pub(super) const ADOPTION_RUNTIME:&str=super::super::native_terminal::ADOPTION_RUNTIME;
 fn require(value:bool)->Result<(),ServiceError>{if value{Ok(())}else{Err(invalid())}}
 pub(super) fn selected(request:&Dispatch)->bool {
@@ -24,17 +24,17 @@ pub(super) fn selected(request:&Dispatch)->bool {
 pub(super) struct Selection {api_version:String,durable_grant_original:String,current_grant_original:String}
 impl Selection {
     pub(super) fn originals(&self)->(&str,&str){(&self.durable_grant_original,&self.current_grant_original)}
-    pub(super) fn adoption_selected(&self)->bool {self.api_version=="serverware.nativePublicationServices/v2"}
+    pub(super) fn adoption_selected(&self)->bool {self.api_version=="catchplate.nativePublicationServices/v2"}
     pub(super) fn validate(&self)->Result<(),ServiceError>{
         let adopted=self.adoption_selected();
-        require(adopted || self.api_version=="serverware.nativePublicationServices/v1")?;
+        require(adopted || self.api_version=="catchplate.nativePublicationServices/v1")?;
         for raw in [&self.durable_grant_original,&self.current_grant_original] {
             require(!raw.is_empty() && raw.is_ascii() && raw.len()<=if adopted {
                 super::publication_service::MAX_ADOPTION_GRANT}else{super::publication_service::MAX_GRANT})?;
             let grant:Grant=decode_canonical_frame(raw.as_bytes())?;
             require(adopted==grant.payload.admission.adoption.is_some()
-                && grant.payload.api_version==if adopted {"serverware.nativePublicationServiceGrant/v2"}
-                    else {"serverware.nativePublicationServiceGrant/v1"})?;
+                && grant.payload.api_version==if adopted {"catchplate.nativePublicationServiceGrant/v2"}
+                    else {"catchplate.nativePublicationServiceGrant/v1"})?;
         }
         Ok(())
     }

@@ -20,8 +20,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from serverware import authority_jit_compound_production as source
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_jit_compound_production as source
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
 
 EPOCH, MONO = 1_000_000_000_000, 1_000_000

@@ -9,19 +9,19 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ed25519_dalek::Signature;
 use serde::Deserialize;
 use serde_json::Value;
-use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
+use catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
 use sha2::{Digest, Sha256};
 
 pub(in super::super) const MAX_BYTES: usize = 32 * 1024;
-const SCHEMA: &str = "serverware.nativeWorkloadStartAuthorization/v1";
-const RETIREMENT_SCHEMA: &str = "serverware.nativeWorkloadStartAuthorization/v2";
-const RETIREMENT_ENVELOPE: &str = "serverware.signedNativeWorkloadStartAuthorization/v2";
-const OUTCOME_SCHEMA: &str = "serverware.nativeWorkloadStartAuthorization/v3";
-const OUTCOME_ENVELOPE: &str = "serverware.signedNativeWorkloadStartAuthorization/v3";
-const APPLICATION_SCHEMA: &str = "serverware.nativeWorkloadStartAuthorization/v4";
-const APPLICATION_ENVELOPE: &str = "serverware.signedNativeWorkloadStartAuthorization/v4";
+const SCHEMA: &str = "catchplate.nativeWorkloadStartAuthorization/v1";
+const RETIREMENT_SCHEMA: &str = "catchplate.nativeWorkloadStartAuthorization/v2";
+const RETIREMENT_ENVELOPE: &str = "catchplate.signedNativeWorkloadStartAuthorization/v2";
+const OUTCOME_SCHEMA: &str = "catchplate.nativeWorkloadStartAuthorization/v3";
+const OUTCOME_ENVELOPE: &str = "catchplate.signedNativeWorkloadStartAuthorization/v3";
+const APPLICATION_SCHEMA: &str = "catchplate.nativeWorkloadStartAuthorization/v4";
+const APPLICATION_ENVELOPE: &str = "catchplate.signedNativeWorkloadStartAuthorization/v4";
 pub(super) const OUTCOME_PROFILE: &str = "durable-terminal-retirement-v1";
-const ENVELOPE: &str = "serverware.signedNativeWorkloadStartAuthorization/v1";
+const ENVELOPE: &str = "catchplate.signedNativeWorkloadStartAuthorization/v1";
 const SECOND: u64 = 1_000_000_000;
 const MAX_EPOCH_MS: u64 = 9_223_372_036_854;
 

@@ -48,7 +48,7 @@ impl Owner {
             && m.len()>0 && m.len()<=64*1024*1024
             && unsafe{libc::fcntl(executable.as_raw_fd(),libc::F_GET_SEALS)}==driver_bootstrap::SEALS)?;
         let mut raw=vec![0;m.len() as usize];executable.read_exact_at(&mut raw,0).map_err(fail)?;
-        serverware_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&raw).map_err(fail)?;
+        catchplate_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&raw).map_err(fail)?;
         let executable_sha256=Sha256Digest::compute(&raw);
         let pid_namespace=File::open("/proc/self/ns/pid").map_err(fail)?;
         let pid_namespace_sha256=Sha256Digest::compute(&canonical_json_bytes(&inode(pid_namespace.as_fd())?)?);
@@ -121,7 +121,7 @@ impl Owner {
     pub(super) fn facade_listening(&mut self,notice:&wire::Listening,observation:&driver_identity::Observation,
         phase:&driver_bootstrap::PhaseTwo,inputs:&driver_continuation::ParentInputs)->Result<(),ShadowError>{
         self.check()?;require(!self.listening && now()?<self.startup
-            && notice.api_version=="serverware.nativeShadowDriverFacadeListening/v1"
+            && notice.api_version=="catchplate.nativeShadowDriverFacadeListening/v1"
             && notice.observation_sha256==Sha256Digest::compute(&canonical_json_bytes(observation)?)
             && notice.scope_sha256==Sha256Digest::compute(phase.scope()))?;
         inputs.require_facade_listening(notice.listener_device,notice.listener_inode)?;
@@ -195,7 +195,7 @@ impl Owner {
             require(packet.rights.is_empty())?;
             require(request.operation=="prepare" && request.sequence==1 && packet.credentials.uid==0 && packet.credentials.gid==0
                 && deadline<=self.startup)?;
-            let raw=canonical_json_bytes(&wire::PreparedOriginal{api_version:"serverware.nativeShadowDriverLifecyclePrepared/v1".into(),
+            let raw=canonical_json_bytes(&wire::PreparedOriginal{api_version:"catchplate.nativeShadowDriverLifecyclePrepared/v1".into(),
                 configuration_sha256:self.configuration_sha256.clone(),window_sha256:self.window_sha256.clone(),
                 parent:self.parent.original.clone(),parent_executable_sha256:self.executable_sha256.clone(),
                 pid_namespace_sha256:self.pid_namespace_sha256.clone(),lifetime_deadline_boottime_ns:self.lifetime.to_string()})?;
@@ -205,11 +205,11 @@ impl Owner {
             require(request.operation=="bind" && request.sequence==2 && packet.credentials.uid==gate.uid
                 && packet.credentials.gid==gate.gid && deadline<=self.startup)?;
             self.bound=true;
-            let binding=wire::BoundOriginal{api_version:"serverware.nativeShadowDriverLifecycleBound/v1".into(),
+            let binding=wire::BoundOriginal{api_version:"catchplate.nativeShadowDriverLifecycleBound/v1".into(),
                 prepared_sha256:self.prepared.clone().ok_or(ShadowError::BindingDrift)?,gate_process_id:*pid,gate_start_time_ticks:*start,
                 uid:packet.credentials.uid,gid:packet.credentials.gid,observed_at_boottime_ns:now()?.to_string()};
             self.gate_notice=Some(canonical_json_bytes(&serde_json::json!({
-                "apiVersion":"serverware.nativeShadowDriverGateBound/v1",
+                "apiVersion":"catchplate.nativeShadowDriverGateBound/v1",
                 "configurationSha256":self.configuration_sha256,"windowSha256":self.window_sha256,
                 "bootstrapObservationSha256":Sha256Digest::compute(&canonical_json_bytes(observation)?),
                 "gateExecutableSha256":self.configuration.gate.executable_sha256,"binding":binding}))?);
@@ -219,7 +219,7 @@ impl Owner {
                 && constructed && (request.operation=="constructed-live" || deadline<=self.startup))?;
             self.check_constructed()?;
             if request.operation=="constructed-live"{canonical_json_bytes(&serde_json::json!({
-                "apiVersion":"serverware.nativeShadowConstructedDriverLive/v1",
+                "apiVersion":"catchplate.nativeShadowConstructedDriverLive/v1",
                 "admissionSha256":Sha256Digest::compute(self.constructed_admission.as_ref().ok_or(ShadowError::BindingDrift)?),
                 "censusSha256":Sha256Digest::compute(self.constructed_census.as_ref().ok_or(ShadowError::BindingDrift)?)}))?}
             else if request.operation=="constructed-census"{self.constructed_census.clone().ok_or(ShadowError::BindingDrift)?}
@@ -253,7 +253,7 @@ impl Owner {
             let before:Vec<_>=descendants.iter().map(|v|v.original.clone()).collect();
             let after:Vec<_>=census::descendants(self.parent.original.process_id)?.into_iter().map(|v|v.original).collect();
             require(before==after)?;driver.check()?;descriptors.check()?;
-            canonical_json_bytes(&Observation{api_version:"serverware.nativeShadowDriverLifecycleObservation/v1".into(),
+            canonical_json_bytes(&Observation{api_version:"catchplate.nativeShadowDriverLifecycleObservation/v1".into(),
                 configuration_sha256:self.configuration_sha256.clone(),window_sha256:self.window_sha256.clone(),
                 bootstrap_observation_sha256:Sha256Digest::compute(&canonical_json_bytes(observation)?),
                 scope_sha256:Sha256Digest::compute(scope.ok_or(ShadowError::BindingDrift)?),phase:"constructed-driver-subtree".into(),
@@ -285,7 +285,7 @@ impl Owner {
         // Duplicated socket/capability FDs survive until the owned subtree is
         // genuinely reaped. They never count as a service-peer termination.
         self.descriptors.take();
-        canonical_json_bytes(&serde_json::json!({"apiVersion":"serverware.nativeShadowDriverSubtreeReaped/v1",
+        canonical_json_bytes(&serde_json::json!({"apiVersion":"catchplate.nativeShadowDriverSubtreeReaped/v1",
             "configurationSha256":self.configuration_sha256,"windowSha256":self.window_sha256,
             "parent":self.parent.original,"driver":driver,"adopted":adopted,
             "completedAtBoottimeNs":now()?.to_string(),"lifetimeDeadlineBoottimeNs":self.lifetime.to_string()}))

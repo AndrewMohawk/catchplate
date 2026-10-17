@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-bootstrap-client.v3.schema.json",
-  "title": "Serverware fixed native bootstrap client with scoped egress observation v3",
+  "$id": "https://catchplate.invalid/schemas/native-bootstrap-client.v3.schema.json",
+  "title": "Catchplate fixed native bootstrap client with scoped egress observation v3",
   "description": "Closed independently pinned configuration, at most 16384 bytes: the 18 v1 fields plus required nonnull egress. Installation is forbidden, including null; v1/v2 reject egress, including null. Runtime verifies startup before admitting protected cold egress inputs and before client private-key access/network. A separate signed egress authorization v2 and durable creation claim are required before one never-executed child is created; a separate kernel claim precedes the fixed firewall transaction. Output is observation while owners are held, not workload start, attachment, persistent deployment or CA installation. Schema validation is not permission.",
   "type": "object", "additionalProperties": false,
   "required": [
@@ -12,7 +12,7 @@
     "egress"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeBootstrapClient/v3"},
+    "apiVersion": {"const": "catchplate.nativeBootstrapClient/v3"},
     "endpoint": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/endpoint"},
     "timeoutMilliseconds": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/timeoutMilliseconds"},
     "startupEvidence": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/startupEvidence"},

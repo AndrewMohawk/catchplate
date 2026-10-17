@@ -1,12 +1,12 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://serverware.invalid/schemas/native-policy-activation-custody.v3.schema.json",
+  "$id":"https://catchplate.invalid/schemas/native-policy-activation-custody.v3.schema.json",
   "$ref":"#/$defs/client",
   "$defs":{
     "channel":{
       "type":"object","additionalProperties":false,"required":["apiVersion","parentCid","parentPort"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativePolicyActivationParentChannel/v1"},
+        "apiVersion":{"const":"catchplate.nativePolicyActivationParentChannel/v1"},
         "parentCid":{"const":3},
         "parentPort":{"const":9102}
       },
@@ -15,7 +15,7 @@
     "client":{
       "type":"object","additionalProperties":false,"required":["apiVersion","authority","channel"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativePolicyActivationClient/v3"},
+        "apiVersion":{"const":"catchplate.nativePolicyActivationClient/v3"},
         "authority":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/pin"},
         "channel":{"$ref":"#/$defs/channel"}
       },

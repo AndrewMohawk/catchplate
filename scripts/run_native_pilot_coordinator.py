@@ -24,7 +24,7 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _result(status, phase, interactive_result=None):
-    value = {"apiVersion": "serverware.nativePilotCoordinatorResult/v1",
+    value = {"apiVersion": "catchplate.nativePilotCoordinatorResult/v1",
         "status": status, "phase": phase, "pilotAcceptanceVerified": False,
         "productionReleaseEligible": False}
     if status == "stopped-cleanup-complete" and interactive_result is not None:
@@ -64,9 +64,9 @@ def main():
         # Fixed sibling code only. No module, path or command from the machine
         # channel becomes executable; the operator protects this installation.
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from serverware import native_shadow_nitro_profile as p
-        from serverware.native_pilot_coordinator_process import ConductorProcess, ProcessPreparationError
-        from serverware.native_pilot_operator_channel import Channel, STAGES
+        from catchplate import native_shadow_nitro_profile as p
+        from catchplate.native_pilot_coordinator_process import ConductorProcess, ProcessPreparationError
+        from catchplate.native_pilot_operator_channel import Channel, STAGES
 
         p.require((args.intake_configuration_fd is not None) is args.run_adopted_native_pilot
             and (args.intake_configuration_sha256 is not None) is args.run_adopted_native_pilot)
@@ -91,8 +91,8 @@ def main():
             payload = request.payload
             # Channel.exchange emits this exact envelope, so the supervisor's
             # reply hash binds the child's original, not a lossy projection.
-            value = {"apiVersion": ("serverware.nativePilotOperatorRequest/v2" if args.run_adopted_native_pilot else
-                "serverware.nativePilotOperatorRequest/v1"),
+            value = {"apiVersion": ("catchplate.nativePilotOperatorRequest/v2" if args.run_adopted_native_pilot else
+                "catchplate.nativePilotOperatorRequest/v1"),
                 "sequence": sequence, "phase": expected_phase, "payload": payload,
                 "deadlineBoottimeNs": str(request.deadline_boottime_ns)}
             bounds = {"deadline_boottime_ns": request.deadline_boottime_ns}

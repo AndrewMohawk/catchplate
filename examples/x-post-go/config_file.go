@@ -37,20 +37,20 @@ func configurationEnvironment(args []string, getenv func(string) string, now tim
 	}
 	// SystemCertPool reads process environment, not the selected config getter.
 	if getenv("SSL_CERT_FILE") != "" || getenv("SSL_CERT_DIR") != "" {
-		return nil, errors.New("unset SSL_CERT_FILE and SSL_CERT_DIR; use the explicit Serverware CA inputs")
+		return nil, errors.New("unset SSL_CERT_FILE and SSL_CERT_DIR; use the explicit Catchplate CA inputs")
 	}
 	selected, err := downloadedEnvironment(args[1], now)
 	if err != nil {
 		return nil, err
 	}
 	// Posting intent must come from the caller, never from the downloaded file.
-	localText, localConfirm := getenv("SERVERWARE_X_POST_TEXT"), getenv("SERVERWARE_X_POST_CONFIRM")
+	localText, localConfirm := getenv("CATCHPLATE_X_POST_TEXT"), getenv("CATCHPLATE_X_POST_CONFIRM")
 	connection := selected
 	selected = func(key string) string {
 		switch key {
-		case "SERVERWARE_X_POST_TEXT":
+		case "CATCHPLATE_X_POST_TEXT":
 			return localText
-		case "SERVERWARE_X_POST_CONFIRM":
+		case "CATCHPLATE_X_POST_CONFIRM":
 			return localConfirm
 		default:
 			return connection(key)
@@ -112,9 +112,9 @@ func downloadedEnvironment(path string, now time.Time) (func(string) string, err
 		return filepath.Join(filepath.Dir(absolute), value)
 	}
 	values := map[string]string{
-		"SERVERWARE_PROXY_URL": saved.ProxyURL, "SERVERWARE_APP_ID": saved.ApplicationID,
-		"SERVERWARE_PROXY_TOKEN": saved.ProxyPassword, "SERVERWARE_CA_FILE": resolveCA(saved.CAFile),
-		"SERVERWARE_PROXY_CA_FILE": resolveCA(saved.ProxyCAFile),
+		"CATCHPLATE_PROXY_URL": saved.ProxyURL, "CATCHPLATE_APP_ID": saved.ApplicationID,
+		"CATCHPLATE_PROXY_TOKEN": saved.ProxyPassword, "CATCHPLATE_CA_FILE": resolveCA(saved.CAFile),
+		"CATCHPLATE_PROXY_CA_FILE": resolveCA(saved.ProxyCAFile),
 	}
 	// No ambient connection fallback, even when the optional proxy CA is absent.
 	return func(key string) string { return values[key] }, nil

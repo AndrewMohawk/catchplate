@@ -8,11 +8,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_contract as authority
-from serverware import authority_current_root_vector as vector
-from serverware.authority_store import challenge_maintenance_effects_sql as effects
-from serverware.authority_store import current_root_execution_sql as execution
-from serverware.authority_store import mutation_sql
+from catchplate import authority_contract as authority
+from catchplate import authority_current_root_vector as vector
+from catchplate.authority_store import challenge_maintenance_effects_sql as effects
+from catchplate.authority_store import current_root_execution_sql as execution
+from catchplate.authority_store import mutation_sql
 
 
 NAMESPACE = '"fixture"'

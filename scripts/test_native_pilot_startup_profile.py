@@ -22,7 +22,7 @@ from scripts import run_native_pilot_lifecycle as lifecycle_cli
 from scripts import run_native_pilot_approval_provider as provider_cli
 from scripts import run_native_pilot_current_head_decisions as decision_cli
 from scripts import native_pilot_supervisor_runtime_entrypoint as entrypoint
-from serverware import native_pilot_startup_profile as profile
+from catchplate import native_pilot_startup_profile as profile
 
 p = profile.p
 ERRORS = (ValueError, KeyError, TypeError, InvalidSignature)
@@ -119,10 +119,10 @@ class StartupProfileControls(unittest.TestCase):
         names = profile.addresses(self.source["configuration"])
         self.assertEqual(set(names), {"control", "lifecycle", "heads"})
         self.assertEqual(len(set(names.values())), 3)
-        self.assertTrue(all(name.startswith(b"\0serverware.startup.") and len(name) <= 107 for name in names.values()))
+        self.assertTrue(all(name.startswith(b"\0catchplate.startup.") and len(name) <= 107 for name in names.values()))
         other = profile.addresses(self.source["configuration"] | {"invocationId": p.sha(b"other")})
         self.assertFalse(set(names.values()) & set(other.values()))
-        self.assertEqual(profile.DIRECTORY, "/etc/serverware/native-pilot-startup")
+        self.assertEqual(profile.DIRECTORY, "/etc/catchplate/native-pilot-startup")
         self.assertEqual(set(profile.SOURCE_FILENAMES.values()), {name + ".json" for name in profile.SOURCE_NAMES})
 
     def test_original_clocks_and_namespace_are_required(self):

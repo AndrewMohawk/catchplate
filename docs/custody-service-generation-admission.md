@@ -8,7 +8,7 @@ Those remain required implementation work. No runtime acceptance is claimed.
 ## Explicit selection and authority
 
 The old `policyCustodyServiceRuntimeConfig/v4` remains ungated. Its successor
-`serverware.policyCustodyServiceRuntimeConfig/v5` requires
+`catchplate.policyCustodyServiceRuntimeConfig/v5` requires
 `generationAdmission: {"grantFdName":"generation-grant"}`, one additional
 inherited `generation-journal` directory with its exact configured directory
 identity, and the fixed `generation-grant` sealed descriptor. Host/environment
@@ -48,9 +48,9 @@ camelCase struct fields. The schema preserves those actual wire spellings.
 Signature domains use the existing
 `policy_custody::protocol::domain_separated_signature_preimage` framing:
 
-- `serverware.custodyServiceGenerationGrant.signature/v1`
-- `serverware.custodyServiceGenerationEffect.signature/v1`
-- `serverware.custodyServiceGenerationObservation.signature/v1`
+- `catchplate.custodyServiceGenerationGrant.signature/v1`
+- `catchplate.custodyServiceGenerationEffect.signature/v1`
+- `catchplate.custodyServiceGenerationObservation.signature/v1`
 
 ## Actual local effects
 
@@ -89,8 +89,8 @@ Exact replay of an already durable command returns its original receipt only.
 
 ## Actual bridge caller and remaining coordinator
 
-The explicit `serverware.policyCustodyProductionRpcRuntime/v5` adds required
-`generationAdmission` with `apiVersion: serverware.custodyGenerationServices/v1`
+The explicit `catchplate.policyCustodyProductionRpcRuntime/v5` adds required
+`generationAdmission` with `apiVersion: catchplate.custodyGenerationServices/v1`
 and exactly five role-to-grant-digest pins. The original v4 runtime forbids this
 selection. Existing authenticated handshakes still match all five exact
 configuration hashes and authority histories; the new client uses those same

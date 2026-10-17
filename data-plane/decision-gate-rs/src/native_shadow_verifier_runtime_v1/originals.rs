@@ -78,7 +78,7 @@ impl Original {
         let root_identity = identity(root.as_raw_fd())?;
         let mut ancestors = Vec::new();
         let mut parent = root.as_raw_fd();
-        for component in ["etc", "serverware"] {
+        for component in ["etc", "catchplate"] {
             let name = CString::new(component).unwrap();
             let file = owned(unsafe { libc::openat(parent, name.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY
                 | libc::O_NOFOLLOW | libc::O_CLOEXEC) })?;

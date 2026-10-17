@@ -19,9 +19,9 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import authority_jit_assertion_receipt as receipt
-from serverware import authority_transition_core as core
-from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
+from catchplate import authority_jit_assertion_receipt as receipt
+from catchplate import authority_transition_core as core
+from catchplate.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
 
 
 def b64(value):
@@ -35,7 +35,7 @@ def fixture(*, cross_origin=False):
     cose = b64(cbor2.dumps({1: 2, 3: -7, -1: 1,
         -2: public.x.to_bytes(32, "big"), -3: public.y.to_bytes(32, "big")}))
     policy = {
-        "schema": "serverware.jitApproverPolicy/v1", "requiredRoles": [],
+        "schema": "catchplate.jitApproverPolicy/v1", "requiredRoles": [],
         "roleMatch": "any", "allowedApproverIds": ["synthetic-approver"],
         "allowAnyApproverId": False, "requireWebAuthn": True, "threshold": 1,
         "credentialPolicy": {
@@ -48,7 +48,7 @@ def fixture(*, cross_origin=False):
         },
     }
     policy_json = core.canonical_bytes(policy).decode("ascii")
-    policy_digest = core.framed_digest("serverware.jitApproverPolicy/v1", policy_json.encode("ascii"))
+    policy_digest = core.framed_digest("catchplate.jitApproverPolicy/v1", policy_json.encode("ascii"))
     approval = {
         "id": "synthetic-approval", "principal_id": "synthetic-principal",
         "route_id": "synthetic-route", "credential_id": "synthetic-service-credential",
@@ -59,7 +59,7 @@ def fixture(*, cross_origin=False):
     }
     challenge_id = "01234567-89ab-4def-8123-456789abcdef"
     payload = {
-        "schema": "serverware.jitApprovalWebAuthnChallenge/v1",
+        "schema": "catchplate.jitApprovalWebAuthnChallenge/v1",
         "approvalRequestId": approval["id"], "approverId": "synthetic-approver",
         "approverPolicyDigest": policy_digest, "decision": "approve",
         "principalId": approval["principal_id"], "routeId": approval["route_id"],

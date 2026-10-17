@@ -25,9 +25,9 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 _DATA = tempfile.TemporaryDirectory(prefix="native-jit-legacy-reader-")
-os.environ["SERVERWARE_PROCESS_MODE"] = "serverware-control-plane"
-os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
-os.environ["SERVERWARE_DATA_DIR"] = _DATA.name
+os.environ["CATCHPLATE_PROCESS_MODE"] = "catchplate-control-plane"
+os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
+os.environ["CATCHPLATE_DATA_DIR"] = _DATA.name
 
 
 def _no_external_io(event, _arguments):
@@ -38,7 +38,7 @@ def _no_external_io(event, _arguments):
 
 
 sys.addaudithook(_no_external_io)
-from serverware import db
+from catchplate import db
 
 
 REFUSAL = "approval review payload is unavailable"
@@ -199,7 +199,7 @@ class StoredReaderTests(unittest.TestCase):
         self.assertEqual(self.connection.total_changes, before)
 
     def test_actual_review_route_cannot_construct_document_or_issue_receipt(self):
-        source = ROOT / "serverware/app.py"
+        source = ROOT / "catchplate/app.py"
         tree = ast.parse(source.read_text())
         selected = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "approval_review"]
         self.assertEqual(len(selected), 1)

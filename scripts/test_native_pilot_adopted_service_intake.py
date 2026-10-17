@@ -18,10 +18,10 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import native_pilot_service_inputs as intake
-from serverware import native_pilot_service_material as material
-from serverware import native_pilot_publication as publication
-from serverware import native_pilot_publication_profiles as profiles
+from catchplate import native_pilot_service_inputs as intake
+from catchplate import native_pilot_service_material as material
+from catchplate import native_pilot_publication as publication
+from catchplate import native_pilot_publication_profiles as profiles
 
 ENDPOINTS = ("retrieval", "persistence", "trustedTime", "generationInstall", "commitRequest",
     "ingressAdmission", "terminalAppend", "dispatchBarrier", "activeEffectBarrier", "activeEffectCommit")
@@ -30,7 +30,7 @@ ORDINARY = ("durable-recovery-store", "cleanup-authorization-consumer", "recover
     "current-signature-authority", "bounded-cleanup-helper")
 PUBLICATIONS = (ORDINARY[0], ORDINARY[3])
 SPOOL_NATIVE = ("ingress", "ledger", "retrieval", "terminal", "dispatchBarrier", "activeEffectBarrier", "activeEffectCommit")
-POLICY = {"apiVersion": "serverware.nativePilotServiceMaterialPolicy/v2", "initialization": "adopted-persistence-and-generation"}
+POLICY = {"apiVersion": "catchplate.nativePilotServiceMaterialPolicy/v2", "initialization": "adopted-persistence-and-generation"}
 SLOT = "native-persistence-service-input"
 
 
@@ -39,7 +39,7 @@ def canonical(value):
 
 
 def pin(name):
-    return {"path": "/etc/serverware/native-pilot-inputs/" + name + ".json",
+    return {"path": "/etc/catchplate/native-pilot-inputs/" + name + ".json",
         "sha256": "sha256:" + hashlib.sha256(("SYNTHETIC/PIN/" + name).encode("ascii")).hexdigest()}
 
 
@@ -109,7 +109,7 @@ class AdoptedServiceIntakeControls(unittest.TestCase):
     def test_material_policy_two_requires_explicit_selected_initialization(self):
         self.assertEqual(material.validate_policy(POLICY, adopted=True), POLICY)
         with self.assertRaises(ValueError): material.validate_policy(POLICY)
-        legacy = {"apiVersion": "serverware.nativePilotServiceMaterialPolicy/v1", "initialization": "fresh-persistence-and-generation"}
+        legacy = {"apiVersion": "catchplate.nativePilotServiceMaterialPolicy/v1", "initialization": "fresh-persistence-and-generation"}
         self.assertEqual(material.validate_policy(legacy), legacy)
         with self.assertRaises(ValueError): material.validate_policy(legacy, adopted=True)
         for changed in (POLICY | {"initialization": legacy["initialization"]}, POLICY | {"approved": True}):
@@ -133,14 +133,14 @@ class AdoptedServiceIntakeControls(unittest.TestCase):
         self.assertNotIn(SLOT, material.SLOTS)
         self.assertEqual(material.ADOPTED_SLOTS, material.SLOTS | {SLOT: 32 * 1024 * 1024})
         self.assertEqual(profiles.PROFILES[SLOT], ("service-material", "persistence", 32 * 1024 * 1024))
-        self.assertEqual(publication.DESTINATIONS[SLOT], "/etc/serverware/native-pilot-inputs/" + SLOT + ".json")
+        self.assertEqual(publication.DESTINATIONS[SLOT], "/etc/catchplate/native-pilot-inputs/" + SLOT + ".json")
         # Only outer grammar is claimed. Null nested originals deliberately
         # cannot authenticate or initialize a real Persistence owner.
         fields = material.adopted_services.COMMON + material.adopted_services.EXTRA["persistence"]
         value = {name: None for name in fields}
         value.update(apiVersion=material.adopted_services.INPUT_API, operation="persistence")
         self.assertEqual(material.shape(SLOT, canonical(value)), value)
-        for change in ({"apiVersion": "serverware.nativePilotNativeServiceAuthorityInput/v1"},
+        for change in ({"apiVersion": "catchplate.nativePilotNativeServiceAuthorityInput/v1"},
                 {"operation": "retrieval"}, {"unsignedApproval": True}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 material.shape(SLOT, canonical(value | change))

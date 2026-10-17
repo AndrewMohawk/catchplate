@@ -23,10 +23,10 @@ const supplied = (changes = {}) => ({...capabilities, credentials: [credential()
 const savedRule = (changes = {}) => rule({credential_input: 'replace_exact', placeholder: DUMMY,
   response_mode: 'unfiltered_json', response_fields: [], ...changes});
 const SOURCE_FILES = ['scripts/test_operator_connect_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
-  'serverware/operator_demo_portal.py', ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js',
+  'catchplate/operator_demo_portal.py', ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js',
     'workspace_google.js', 'workspace_google_reauthorization.js', 'workspace_google_configuration.js', 'workspace_x_configuration.js',
     'workspace_upstreams.js', 'workspace_applications.js', 'workspace_resources.js', 'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_notifications.js']
-    .map(name => 'serverware/operator_demo_web/' + name)];
+    .map(name => 'catchplate/operator_demo_web/' + name)];
 let artifacts;
 
 async function hashes() {
@@ -135,7 +135,7 @@ async function chooseSavedRule(page, id = IDS.rule) {
 function changePolicy(state) { state.revision++; state.active = state.loaded = digest(++state.sequence); }
 
 const tests = [
-  ['one Serverware overview retains honest instance status and connects an app only by deliberate choice', browser => fixture(browser,
+  ['one Catchplate overview retains honest instance status and connects an app only by deliberate choice', browser => fixture(browser,
     supplied({rules: [savedRule()]}), async (page, state) => {
       await ready(page); await page.locator('#overview').waitFor({state: 'visible'});
       assert.equal(await page.locator('.page:visible').count(), 1);
@@ -145,7 +145,7 @@ const tests = [
       assert.equal(await page.locator('nav a[href="#access-rules"]').innerText(), 'Permissions');
       assert.match(await page.locator('#overview-policy').innerText(), /proxy.*loaded.*saved policy/i);
       assert.match(await page.locator('#overview').innerText(), /not proof.*upstream.*succeeded/i);
-      assert.equal(await page.locator('#overview-title').innerText(), 'Your Serverware instance');
+      assert.equal(await page.locator('#overview-title').innerText(), 'Your Catchplate instance');
       assert.equal(await page.locator('#instance-environment').innerText(), 'Development deployment');
       assert.match(await page.locator('#instance-security-status').innerText(), /Local encrypted keys.*not hardware-verified or production-ready/);
       assert.doesNotMatch(await page.locator('#overview').innerText(), /Explore synthetic demo|Connect a real service|local demo API/);
@@ -161,10 +161,10 @@ const tests = [
       }
       assert.equal(state.posts.length, 0);
       assert(!state.requests.some(item => item.path === '/echo' || item.path === '/ca.pem'));
-      await screenshot(page, 'serverware-instance-overview-desktop');
+      await screenshot(page, 'catchplate-instance-overview-desktop');
       await page.setViewportSize({width: 390, height: 844});
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
-      await screenshot(page, 'serverware-instance-overview-mobile');
+      await screenshot(page, 'catchplate-instance-overview-mobile');
       await page.setViewportSize({width: 1280, height: 960});
       await page.locator('#overview-connect-service').click(); await step(page, 'credential');
       assert.match(await page.locator('#connect-progress').innerText(), /credential/i);
@@ -298,7 +298,7 @@ const tests = [
       for (const number of [2, 3, 4]) assert(await page.locator('#credentials-list > [data-resource-id="' + fixtureId(number) + '"]').isVisible());
       await group.locator(':scope > summary').click();
       for (const number of [1, 5]) assert(await group.locator('[data-resource-id="' + fixtureId(number) + '"]').isVisible());
-      const source = await readFile(join(ROOT, 'serverware/operator_demo_web/workspace_resources.js'), 'utf8');
+      const source = await readFile(join(ROOT, 'catchplate/operator_demo_web/workspace_resources.js'), 'utf8');
       const predicate = runInNewContext(source + '\noperatorCredentialHasExpiredAppAccess;', {}, {timeout: 1000});
       const conservative = (() => {
         // These inputs cannot pass catalog admission; exercise the actual pure
@@ -406,7 +406,7 @@ const tests = [
         expected_revision: 3, expected_policy_hash: digest(1)}}
     ]);
     const command = await page.locator('#client-command').innerText();
-    assert(command.includes('Proxy-Authorization: Bearer $SERVERWARE_PROXY_TOKEN'));
+    assert(command.includes('Proxy-Authorization: Bearer $CATCHPLATE_PROXY_TOKEN'));
     assert(command.includes("Authorization: Bearer CONNECT-DUMMY-'\\''literal'\\''-$value"));
     assert(!command.includes(SECRET) && !command.includes(token(IDS.application)));
     assert(command.includes('--cacert') && !command.includes('--insecure'));
@@ -610,7 +610,7 @@ const tests = [
 async function main() {
   assert.equal(process.argv.length, 2, 'connect fixtures accept no live target or credentials');
   const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
-  const artifactRoot = '/srv/catchplate-fast/projects/serverware-operator-artifacts';
+  const artifactRoot = '/srv/catchplate-fast/projects/catchplate-operator-artifacts';
   assert((await stat(artifactRoot)).isDirectory()); artifacts = await mkdtemp(join(artifactRoot, 'connect-browser-synthetic-'));
   console.log(JSON.stringify({artifactDirectory: artifacts, scope: 'synthetic screenshots; no actual credentials'}));
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');

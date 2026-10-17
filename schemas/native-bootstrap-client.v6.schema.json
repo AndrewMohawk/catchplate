@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-bootstrap-client.v6.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-bootstrap-client.v6.schema.json",
   "title": "Explicit combined native CA installation and executable-workload bootstrap client v6",
   "description": "Closed independently pinned configuration, at most 16384 bytes: the original 18 fields plus required nonnull installation, egress, attachment and execution objects. Explicit v6 selects execution manifest v2 with immutable in-image application trust; v1-v5 remain unchanged. Actual same-session proof, independent installation/start/network grants, retained originals, one-use claims and terminal cleanup remain mandatory. Schema acceptance is neither installation nor execution permission.",
   "type": "object", "additionalProperties": false,
   "required": ["apiVersion", "endpoint", "timeoutMilliseconds", "startupEvidence", "startupExpectations", "sessionScope", "trustRoots", "clientCertificate", "clientPrivateKey", "callerIssuer", "delegationAuthorizer", "setupAuthorizer", "request", "clientChallengeBase64url", "expectedCallerPrincipal", "expectedTargetPrincipal", "expectedTargetNonce", "expectedTargetRequestSha256", "installation", "egress", "attachment", "execution"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeBootstrapClient/v6"},
+    "apiVersion": {"const": "catchplate.nativeBootstrapClient/v6"},
     "endpoint": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/endpoint"},
     "timeoutMilliseconds": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/timeoutMilliseconds"},
     "startupEvidence": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/startupEvidence"},

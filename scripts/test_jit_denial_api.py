@@ -30,8 +30,8 @@ from fastapi import Body, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 ROOT = Path(__file__).resolve().parents[1]
-APP_TREE = ast.parse((ROOT / "serverware/app.py").read_text())
-WEBAUTHN_TREE = ast.parse((ROOT / "serverware/webauthn.py").read_text())
+APP_TREE = ast.parse((ROOT / "catchplate/app.py").read_text())
+WEBAUTHN_TREE = ast.parse((ROOT / "catchplate/webauthn.py").read_text())
 ID = "11111111-2222-4333-8444-555555555555"
 REVIEW = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 ACTOR = "oidc:synthetic-reviewer"
@@ -116,15 +116,15 @@ class Fixture:
             "_approval_jit_policy": self.policy, "require_role": self.require_role,
             "runtime": SimpleNamespace(publish_decision_gate_grant=self.publish),
             "app": SimpleNamespace(post=self.post, get=self.post)})
-        select(WEBAUTHN_TREE, {"_authority_jit_decision_options", "authority_approval_options", "authority_denial_options"}, self.ns, "serverware/webauthn.py")
+        select(WEBAUTHN_TREE, {"_authority_jit_decision_options", "authority_approval_options", "authority_denial_options"}, self.ns, "catchplate/webauthn.py")
         select(APP_TREE, {"_approval_decision_note", "ApprovalApprove", "ApprovalWebAuthnOptionsRequest",
             "ApprovalDenyOptionsRequest", "ApprovalDeny", "_approval_authn_policy", "_approval_is_expired",
             "_jit_decision_authority_arguments", "_jit_approve_authority_arguments", "_jit_deny_authority_arguments",
             "_assert_approver_allowed", "_assert_legacy_approval_decision_allowed", "_denial_review_context",
-            "deny", "denial_webauthn_options"}, self.ns, "serverware/app.py")
+            "deny", "denial_webauthn_options"}, self.ns, "catchplate/app.py")
         if metadata_routes:
             select(APP_TREE, {"approve", "approval_webauthn_options", "approval_review",
-                "_assert_approval_reviewer_allowed"}, self.ns, "serverware/app.py")
+                "_assert_approval_reviewer_allowed"}, self.ns, "catchplate/app.py")
 
     def require_role(self, *roles):
         self.roles.append(roles)
@@ -213,7 +213,7 @@ class DenialApiTests(unittest.TestCase):
         result = fixture.challenge()
         self.assertEqual(result, {"publicKey": {"challenge": "opaque-challenge", "rpId": "console.example.test",
             "allowCredentials": [{"type": "public-key", "id": "synthetic-authenticator"}], "timeout": 120000,
-            "userVerification": "required"}, "serverware": {"authorityChallengeId": "authority-challenge", "operation": "jit.deny"}})
+            "userVerification": "required"}, "catchplate": {"authorityChallengeId": "authority-challenge", "operation": "jit.deny"}})
         fixture.db.issue_policy_authority_webauthn_challenge.assert_called_once_with(
             operation="jit.deny", input_value=ARGUMENTS, user_id=ACTOR, credential_id="synthetic-authenticator")
         fixture.db.deny_request.assert_not_called()
@@ -308,7 +308,7 @@ class DenialApiTests(unittest.TestCase):
             actor_id=ACTOR, ttl_seconds=17, review_receipt=fixture.receipt, note="Not approved")
         self.assertEqual(arguments, {**ARGUMENTS, "ttl_seconds": 17})
         result = fixture.ns["authority_approval_options"](user_id=ACTOR, authn_policy={"userVerification": "required"}, target_arguments=arguments)
-        self.assertEqual(result["serverware"], {"authorityChallengeId": "authority-challenge", "operation": "jit.decide"})
+        self.assertEqual(result["catchplate"], {"authorityChallengeId": "authority-challenge", "operation": "jit.decide"})
         fixture.db.issue_policy_authority_webauthn_challenge.assert_called_once_with(
             operation="jit.decide", input_value=arguments, user_id=ACTOR, credential_id="synthetic-authenticator")
         fixture.approval["approver_policy"]["allowAnyApproverId"] = True
@@ -334,7 +334,7 @@ class DenialApiTests(unittest.TestCase):
         fixture.db.issue_policy_authority_webauthn_challenge.assert_not_called()
 
     def test_facade_roster_and_legacy_authority_guards_remain_closed(self):
-        tree = ast.parse((ROOT / "serverware/db.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/db.py").read_text())
         matches = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "deny_request"]
         self.assertEqual(len(matches), 1)
         function = matches[0]

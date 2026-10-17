@@ -23,8 +23,8 @@ import test_operator_workspace_store as workspace
 
 ROOT = Path(__file__).resolve().parents[1]
 OTHER = "sha256:" + "9" * 64
-X = {"schema": "serverware.operatorXAppReadGate/v1", "adapter": "x.app_read.v1", "operation": "x.username.read"}
-ALCHEMY = {"schema": "serverware.operatorAlchemyRpcReadGate/v1", "adapter": "alchemy.rpc_read.v1", "operation": "alchemy.rpc.read"}
+X = {"schema": "catchplate.operatorXAppReadGate/v1", "adapter": "x.app_read.v1", "operation": "x.username.read"}
+ALCHEMY = {"schema": "catchplate.operatorAlchemyRpcReadGate/v1", "adapter": "alchemy.rpc_read.v1", "operation": "alchemy.rpc.read"}
 
 
 def check(value, message):
@@ -74,8 +74,8 @@ def without_time(value):
 
 
 def one_read(_request, *, managed=False):
-    from serverware import operator_catalog_x as x, operator_catalog_alchemy as alchemy
-    from serverware import operator_google_managed_readiness as readiness
+    from catchplate import operator_catalog_x as x, operator_catalog_alchemy as alchemy
+    from catchplate import operator_google_managed_readiness as readiness
     f, transport = fixture(managed)
     before = workspace.snapshot(f.db, catalog=True)
     original = readiness._snapshot
@@ -190,7 +190,7 @@ def local_fence(_request, *, managed=False):
 
 
 def fresh_mutations(_request):
-    from serverware import operator_catalog_x as x, operator_catalog_alchemy as alchemy
+    from catchplate import operator_catalog_x as x, operator_catalog_alchemy as alchemy
     f, transport = fixture()
     before = workspace.snapshot(f.db, catalog=True)
     with observed(f, transport):

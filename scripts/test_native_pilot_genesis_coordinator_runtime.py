@@ -18,9 +18,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
 import test_native_pilot_genesis_delivery as deliveries
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_genesis_coordinator_runtime as runtime
-from serverware import native_pilot_genesis_delivery_authority as delivery
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_genesis_coordinator_runtime as runtime
+from catchplate import native_pilot_genesis_delivery_authority as delivery
 
 p = g.p
 
@@ -36,7 +36,7 @@ def rehash_peer(value):
     parts += [bytes.fromhex(value["executableSha256"].removeprefix("sha256:")), value["cgroupPathSha256"].encode("ascii"),
         value["cgroupMountId"].to_bytes(8, "big"), value["cgroupInode"].to_bytes(8, "big"),
         value["securityLabelSha256"].encode("ascii"), value["configurationGenerationSha256"].encode("ascii")]
-    value["processIdentitySha256"] = p.framed(b"serverware.policyCustodyPeerProcessIdentity/v4", parts)
+    value["processIdentitySha256"] = p.framed(b"catchplate.policyCustodyPeerProcessIdentity/v4", parts)
     return value
 
 
@@ -75,8 +75,8 @@ class GenesisCoordinatorRuntimeTests(unittest.TestCase):
         self.assertNotIn("generationAdmission", checked["runtime"])
 
     def test_only_late_cold_runtime_profile_and_exact_lists_are_accepted(self):
-        for api in ("serverware.nativePublicationGenesisCoordinatorRuntime/v1",
-                "serverware.nativePublicationGenesisBootstrapRuntime/v1", "serverware.policyCustodyProductionRpcRuntime/v14"):
+        for api in ("catchplate.nativePublicationGenesisCoordinatorRuntime/v1",
+                "catchplate.nativePublicationGenesisBootstrapRuntime/v1", "catchplate.policyCustodyProductionRpcRuntime/v14"):
             value = self.value(); value["apiVersion"] = api; self.refused(value)
         for name in ("histories", "serviceSessions", "nativeEndpoints"):
             value = self.value(); value[name].append(copy.deepcopy(value[name][0])); self.refused(value)

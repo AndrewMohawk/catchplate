@@ -18,11 +18,11 @@ fn sql(v:&Value)->Result<Vec<u8>,ShadowError>{
     }
     let mut out=Vec::new();write(v,&mut out,0)?;Ok(out)
 }
-fn node(depth:usize,children:&Value)->Result<Sha256Digest,ShadowError>{Ok(tree("serverware.policyAuthorityAuthenticatedNode/v1",&[depth.to_string().as_bytes(),&sql(children)?]))}
+fn node(depth:usize,children:&Value)->Result<Sha256Digest,ShadowError>{Ok(tree("catchplate.policyAuthorityAuthenticatedNode/v1",&[depth.to_string().as_bytes(),&sql(children)?]))}
 fn leaf(table:&str,path:&str,key:&Value,row:&Value,empty:&Sha256Digest)->Result<(Value,Sha256Digest),ShadowError>{
     if row.is_null(){return Ok((Value::Null,empty.clone()));}
-    let row_digest=tree("serverware.policyAuthorityAuthenticatedRow/v1",&[table.as_bytes(),&sql(row)?]);
-    let leaf=tree("serverware.policyAuthorityAuthenticatedLeaf/v1",&[table.as_bytes(),format!("sha256:{path}").as_bytes(),&sql(key)?,row_digest.as_str().as_bytes()]);
+    let row_digest=tree("catchplate.policyAuthorityAuthenticatedRow/v1",&[table.as_bytes(),&sql(row)?]);
+    let leaf=tree("catchplate.policyAuthorityAuthenticatedLeaf/v1",&[table.as_bytes(),format!("sha256:{path}").as_bytes(),&sql(key)?,row_digest.as_str().as_bytes()]);
     Ok((serde_json::to_value(row_digest).map_err(fail)?,leaf))
 }
 fn roots(v:&Value,empty:&Sha256Digest,auth:bool)->Result<BTreeMap<String,Value>,ShadowError>{
@@ -45,10 +45,10 @@ fn nodes(v:&Value,depth:usize)->Result<u64,ShadowError>{
 pub(super) fn verify(plan:&Value)->Result<(),ShadowError>{
     let transition=&plan["rootTransition"];
     exact(transition,&["schema","profile","businessBeforeRoots","authorizationBeforeRoots","businessAfterRoots","authorizationAfterRoots","metrics"])?;
-    require(transition["schema"]=="serverware.policyAuthorityPrimaryRootTransition/v1"
-        && transition["profile"]=="serverware.policyAuthorityPrimaryRootTransitionProfile/v2"
+    require(transition["schema"]=="catchplate.policyAuthorityPrimaryRootTransition/v1"
+        && transition["profile"]=="catchplate.policyAuthorityPrimaryRootTransitionProfile/v2"
         && transition["authorizationAfterRoots"]==transition["authorizationBeforeRoots"])?;
-    let empty_leaf=tree("serverware.policyAuthorityAuthenticatedEmptyLeaf/v1",&[b"64"]);
+    let empty_leaf=tree("catchplate.policyAuthorityAuthenticatedEmptyLeaf/v1",&[b"64"]);
     let mut empty=empty_leaf.clone();for depth in (0..64).rev(){empty=node(depth,&json!(vec![empty;16]))?;}
     let business=roots(&transition["businessBeforeRoots"],&empty,false)?;
     let auth=roots(&transition["authorizationBeforeRoots"],&empty,true)?;
@@ -69,7 +69,7 @@ pub(super) fn verify(plan:&Value)->Result<(),ShadowError>{
         require(present && row["row"].is_object() || !present && row["row"].is_null())?;
         require(row["contractSelector"].is_null()||row["contractSelector"].is_string())?;
         if present{for k in key_columns(table)?{require(row["key"][*k]==row["row"][*k])?;}*counts.entry(table.into()).or_default()+=1;}
-        let key_digest=framed("serverware.policyAuthorityBusinessKey/v1",&[table.as_bytes(),&canonical_json_bytes(&row["key"])?]);
+        let key_digest=framed("catchplate.policyAuthorityBusinessKey/v1",&[table.as_bytes(),&canonical_json_bytes(&row["key"])?]);
         require(digest(row,"keyDigest")?==key_digest && rows.insert((table.to_owned(),key_digest),row).is_none())?;
     }
     for(table,count)in counts{require(count<=number(before.get(&table).ok_or(ShadowError::BindingDrift)?,"leafCount")?)?;}
@@ -78,11 +78,11 @@ pub(super) fn verify(plan:&Value)->Result<(),ShadowError>{
         exact(proof,&["schema","table","key","keyDigest","present","rowDigest","leafDigest","rootRevision","rootDigest","siblings","proofDigest"])?;
         let table=text(proof,"table")?;let address=(table.to_owned(),digest(proof,"keyDigest")?);
         let row=rows.get(&address).ok_or(ShadowError::BindingDrift)?;let root=before.get(table).ok_or(ShadowError::BindingDrift)?;
-        require(proof["schema"]=="serverware.policyAuthorityRadixMultiproof/v3" && proof["key"]==row["key"]
+        require(proof["schema"]=="catchplate.policyAuthorityRadixMultiproof/v3" && proof["key"]==row["key"]
             && proof["present"]==row["present"] && proof["rootRevision"]==root["rootRevision"] && proof["rootDigest"]==root["rootDigest"])?;
         let mut unsigned=proof.clone();unsigned.as_object_mut().ok_or(ShadowError::BindingDrift)?.remove("proofDigest");
-        require(proof["proofDigest"]==frame("serverware.policyAuthorityRadixMultiproof/v3",&unsigned)?)?;
-        let key=tree("serverware.policyAuthorityAuthenticatedKey/v1",&[table.as_bytes(),&sql(&row["key"])?]);let path=key.as_str()[7..].to_owned();
+        require(proof["proofDigest"]==frame("catchplate.policyAuthorityRadixMultiproof/v3",&unsigned)?)?;
+        let key=tree("catchplate.policyAuthorityAuthenticatedKey/v1",&[table.as_bytes(),&sql(&row["key"])?]);let path=key.as_str()[7..].to_owned();
         require(paths.insert(address,path.clone()).is_none() && unique.insert((table.to_owned(),path.clone())))?;
         let(row_digest,mut parent)=leaf(table,&path,&row["key"],&row["row"],&empty_leaf)?;
         require(proof["rowDigest"]==row_digest && digest(proof,"leafDigest")?==parent)?;
@@ -128,12 +128,12 @@ pub(super) fn verify(plan:&Value)->Result<(),ShadowError>{
     let mut sources=Vec::new();let mut coverage=BTreeSet::new();
     for row in selected{let table=text(row,"table")?;if AUTHORIZATION.contains(&table){
         coverage.insert(table);sources.push(json!({"table":table,"selector":row["key"],"present":row["present"],"row":row["row"],
-            "rowDigest":framed("serverware.policyAuthorityAuthorizationRow/v1",&[table.as_bytes(),&canonical_json_bytes(&row["key"])?,
+            "rowDigest":framed("catchplate.policyAuthorityAuthorizationRow/v1",&[table.as_bytes(),&canonical_json_bytes(&row["key"])?,
                 if row["present"]==true{b"present"}else{b"absent"},&canonical_json_bytes(&row["row"])?])}));}}
     require(coverage.iter().copied().eq(AUTHORIZATION.iter().copied()) && sources.len()<=64)?;
     let mut keyed=sources.into_iter().map(|v|Ok(((text(&v,"table")?.to_owned(),canonical_json_bytes(&v["selector"])?),v))).collect::<Result<Vec<_>,ShadowError>>()?;
     keyed.sort_by(|a,b|a.0.cmp(&b.0));let sources=keyed.into_iter().map(|(_,v)|v).collect::<Vec<_>>();
     let projection=&plan["authorizationProjection"];
     require(projection["authorizationReads"]==json!(AUTHORIZATION) && projection["sourceRows"]==json!(sources)
-        && projection["sourceHighWaterDigest"]==frame("serverware.policyAuthorityAuthorizationRootSet/v1",&transition["authorizationBeforeRoots"])?)
+        && projection["sourceHighWaterDigest"]==frame("catchplate.policyAuthorityAuthorizationRootSet/v1",&transition["authorizationBeforeRoots"])?)
 }

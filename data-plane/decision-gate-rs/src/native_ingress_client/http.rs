@@ -5,7 +5,7 @@
 //! remain the exact response original, including its evidence framing LF.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use serverware_decision_gate::native_ingress_challenge_v1::CHALLENGE_HEADER;
+use catchplate_decision_gate::native_ingress_challenge_v1::CHALLENGE_HEADER;
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 
@@ -50,7 +50,7 @@ pub(super) fn exchange_for_connect_client_trust<T: Read + Write>(connection: &mu
 pub(super) fn exchange_for_connect_principal<T: Read + Write>(connection: &mut T,
     authority: &str, challenge: [u8; 32], identity_headers: &[(String, String)])
     -> Result<(Vec<u8>, Vec<u8>), String> {
-    use serverware_decision_gate::native_principal_preflight_v1::{
+    use catchplate_decision_gate::native_principal_preflight_v1::{
         request_original, EVIDENCE_SELECTOR, MAX_REQUEST_BYTES,
     };
     validate_authority(authority)?;
@@ -60,8 +60,8 @@ pub(super) fn exchange_for_connect_principal<T: Read + Write>(connection: &mut T
     let mut headers = BTreeMap::from([
         ("host".to_owned(), authority.to_owned()),
         (CHALLENGE_HEADER.to_owned(), URL_SAFE_NO_PAD.encode(challenge)),
-        ("x-serverware-ingress-evidence".to_owned(), EVIDENCE_SELECTOR.to_owned()),
-        ("x-serverware-ingress-continuation".to_owned(), "connect-v1".to_owned()),
+        ("x-catchplate-ingress-evidence".to_owned(), EVIDENCE_SELECTOR.to_owned()),
+        ("x-catchplate-ingress-continuation".to_owned(), "connect-v1".to_owned()),
         ("connection".to_owned(), "keep-alive".to_owned()),
     ]);
     let mut total = 512usize;
@@ -77,7 +77,7 @@ pub(super) fn exchange_for_connect_principal<T: Read + Write>(connection: &mut T
         let name = name.to_ascii_lowercase();
         if matches!(name.as_str(), "host" | "connection" | "content-length" | "transfer-encoding"
             | "upgrade" | "te" | "trailer" | "expect" | "proxy-connection")
-            || name.starts_with("x-serverware-ingress-")
+            || name.starts_with("x-catchplate-ingress-")
             || headers.insert(name, value.clone()).is_some()
         {
             return Err("native principal HTTP identity headers override or repeat a reserved field".into());
@@ -112,9 +112,9 @@ fn exchange_fixed<T: Read + Write>(connection: &mut T, authority: &str,
     let ending = match completion {
         Completion::AuthenticatedClose => "Connection: close\r\n\r\n",
         Completion::ConnectContinuation =>
-            "x-serverware-ingress-continuation: connect-v1\r\nConnection: keep-alive\r\n\r\n",
+            "x-catchplate-ingress-continuation: connect-v1\r\nConnection: keep-alive\r\n\r\n",
     };
-    let profile = if client_trust { "x-serverware-ingress-evidence: client-trust-v2\r\n" } else { "" };
+    let profile = if client_trust { "x-catchplate-ingress-evidence: client-trust-v2\r\n" } else { "" };
     let request = format!(
         "GET /attestation HTTP/1.1\r\nHost: {authority}\r\n{CHALLENGE_HEADER}: {}\r\n{profile}{ending}",
         URL_SAFE_NO_PAD.encode(challenge));

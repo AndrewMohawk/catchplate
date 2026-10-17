@@ -103,7 +103,7 @@ protected FD intake. Native source/dependencies are unchanged and were not rebui
 
 Both exact archives, harnesses, commands, logs, result and verified thirteen-file
 checksum manifest are retained locally at
-`/home/catchplate/codex-offload/serverware/engineering-builds/9dbdb9f5-current-head-intake-9IeiSE/`.
+`/home/catchplate/codex-offload/catchplate/engineering-builds/9dbdb9f5-current-head-intake-9IeiSE/`.
 Archive SHA-256 values are recorded in that manifest and `RESULTS.md`.
 
 No protected supervisor/policy/intake owner, signing entrypoint, publisher,

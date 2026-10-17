@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-import serverware_source_tree
+import catchplate_source_tree
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -26,24 +26,24 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 
 ROOT = Path(__file__).resolve().parent.parent
-BUILD_API_VERSION = "serverware.productionImagesBuild/v2"
+BUILD_API_VERSION = "catchplate.productionImagesBuild/v2"
 BUILD_KIND = "ProductionImagesBuild"
-MANIFEST_API_VERSION = "serverware.reproducibleBuildManifest/v3"
+MANIFEST_API_VERSION = "catchplate.reproducibleBuildManifest/v3"
 MANIFEST_KIND = "ReproducibleBuildManifest"
-VERIFICATION_API_VERSION = "serverware.reproducibleBuildVerification/v3"
+VERIFICATION_API_VERSION = "catchplate.reproducibleBuildVerification/v3"
 VERIFICATION_KIND = "ReproducibleBuildVerification"
-BUILD_EXECUTION_API_VERSION = "serverware.buildExecutionStatement/v1"
+BUILD_EXECUTION_API_VERSION = "catchplate.buildExecutionStatement/v1"
 BUILD_EXECUTION_KIND = "BuildExecutionStatement"
-CONTENT_ALGORITHM = "serverware.normalizedRootfs/v1"
-RUST_BINARY_PATH = "usr/local/bin/serverware-decision-gate"
-LAUNCHER_BINARY_PATH = "usr/local/libexec/serverware-production-launcher"
+CONTENT_ALGORITHM = "catchplate.normalizedRootfs/v1"
+RUST_BINARY_PATH = "usr/local/bin/catchplate-decision-gate"
+LAUNCHER_BINARY_PATH = "usr/local/libexec/catchplate-production-launcher"
 LAUNCH_AUTHORITY_FIELDS = (
     "launch_authority_key_id",
     "launch_authority_root_sha256",
 )
 EXPECTED_SERVICES = {
-    "serverware-control": "Dockerfile.production",
-    "serverware-decision-gate": "data-plane/decision-gate-rs/Dockerfile.production",
+    "catchplate-control": "Dockerfile.production",
+    "catchplate-decision-gate": "data-plane/decision-gate-rs/Dockerfile.production",
 }
 RUNTIME_EXPORT_EXCLUSIONS = (
     ".dockerenv",
@@ -52,7 +52,7 @@ RUNTIME_EXPORT_EXCLUSIONS = (
     "etc/resolv.conf",
 )
 PUBLISH_REQUIREMENT = (
-    "push these images to a registry and set SERVERWARE_PRODUCTION_IMAGES to immutable "
+    "push these images to a registry and set CATCHPLATE_PRODUCTION_IMAGES to immutable "
     "@sha256 digest refs before live readiness"
 )
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -671,7 +671,7 @@ def validate_build_artifact(document: dict[str, Any]) -> dict[str, Any]:
             raise VerificationError(f"production build has duplicate service: {service}")
         seen_services.add(service)
         expected_fields = {"service", "tag", "dockerfile", "image_id"}
-        if service == "serverware-decision-gate":
+        if service == "catchplate-decision-gate":
             expected_fields |= {
                 "binary_digest",
                 "launcher_binary_digest",
@@ -691,7 +691,7 @@ def validate_build_artifact(document: dict[str, Any]) -> dict[str, Any]:
             "image_ref": tag,
             "image_id": image_id,
         }
-        if service == "serverware-decision-gate":
+        if service == "catchplate-decision-gate":
             normalized["declared_rust_binary_sha256"] = require_sha256(
                 raw_image["binary_digest"], f"{label}.binary_digest"
             )
@@ -924,7 +924,7 @@ def build_manifest_from_archives(
             },
             "content": content,
         }
-        if service == "serverware-decision-gate":
+        if service == "catchplate-decision-gate":
             rust_binary = rust_binary_from_content(content)
             if rust_binary["sha256"] != image["declared_rust_binary_sha256"]:
                 raise VerificationError(
@@ -1143,7 +1143,7 @@ def validate_manifest(document: dict[str, Any]) -> dict[str, Any]:
             raise VerificationError(f"{label}.service is unexpected or duplicated: {service}")
         seen_services.add(service)
         expected_fields = {"service", "dockerfile", "image_ref", "image_id", "capture", "content"}
-        if service == "serverware-decision-gate":
+        if service == "catchplate-decision-gate":
             expected_fields |= {
                 "declared_rust_binary_sha256",
                 "rust_binary",
@@ -1172,7 +1172,7 @@ def validate_manifest(document: dict[str, Any]) -> dict[str, Any]:
         if require_bool(capture["source_labels_verified"], f"{label}.capture.source_labels_verified") is not True:
             raise VerificationError(f"{label}.capture did not verify source metadata against the image config")
         content = validate_content(image["content"], f"{label}.content")
-        if service == "serverware-decision-gate":
+        if service == "catchplate-decision-gate":
             declared = require_sha256(
                 image["declared_rust_binary_sha256"], f"{label}.declared_rust_binary_sha256"
             )
@@ -1232,7 +1232,7 @@ def inspect_and_verify_source_labels(image: str, source: dict[str, Any]) -> None
         "org.opencontainers.image.source": source["repository"],
         "org.opencontainers.image.revision": source["revision"],
         "org.opencontainers.image.created": source["created"],
-        "dev.serverware.source_tree_digest": source["tree_sha256"],
+        "dev.catchplate.source_tree_digest": source["tree_sha256"],
     }
     mismatches = {
         key: {"expected": value, "actual": parsed.get(key)}
@@ -1254,7 +1254,7 @@ def export_docker_image(image: dict[str, Any], source: dict[str, Any], destinati
         raise VerificationError(f"Docker image ref {image_ref} does not resolve to declared image ID {image_id}")
     inspect_and_verify_source_labels(image_id, source)
     container_id = run_command(
-        ["docker", "create", "--entrypoint", "/__serverware_reproducibility_noop__", image_id]
+        ["docker", "create", "--entrypoint", "/__catchplate_reproducibility_noop__", image_id]
     ).decode("utf-8", errors="strict").strip()
     if not container_id:
         raise VerificationError(f"docker create returned an empty container ID for {image_id}")
@@ -1336,7 +1336,7 @@ def capture_build(
             "fresh production build revision does not match the clean checkout: "
             f"build={normalized['source']['revision']} current={revision_after}"
         )
-    with tempfile.TemporaryDirectory(prefix="serverware-reproducible-build-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="catchplate-reproducible-build-") as temp_dir:
         temp = Path(temp_dir)
         archives: dict[str, Path] = {}
         for image in normalized["images"]:
@@ -1366,7 +1366,7 @@ def capture_build(
 
 
 def current_source_tree_digest() -> str:
-    return serverware_source_tree.source_tree_digest(ROOT)
+    return catchplate_source_tree.source_tree_digest(ROOT)
 
 
 def enforce_current_source(manifest: dict[str, Any]) -> str:
@@ -1500,7 +1500,7 @@ def image_bindings(manifest: dict[str, Any]) -> list[dict[str, Any]]:
             "image_id": image["image_id"],
             "normalized_rootfs_sha256": image["content"]["entries_sha256"],
         }
-        if image["service"] == "serverware-decision-gate":
+        if image["service"] == "catchplate-decision-gate":
             binding["rust_binary_sha256"] = image["rust_binary"]["sha256"]
             binding["launcher_binary_sha256"] = image["launcher_binary_sha256"]
             for field in LAUNCH_AUTHORITY_FIELDS:
@@ -1670,7 +1670,7 @@ def local_build_environment_id() -> str:
         "Docker build environment server identity",
     )
     return sha256_json(
-        {"contract": "serverware.dockerBuildEnvironment/v1", "daemon_id": daemon_id, "server": server}
+        {"contract": "catchplate.dockerBuildEnvironment/v1", "daemon_id": daemon_id, "server": server}
     )
 
 

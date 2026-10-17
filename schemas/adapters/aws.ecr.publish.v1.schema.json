@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.local/schemas/adapters/aws.ecr.publish.v1.schema.json",
+  "$id": "https://catchplate.local/schemas/adapters/aws.ecr.publish.v1.schema.json",
   "$defs": {},
   "title": "Exact-image host-reviewed ECR publication",
   "type": "object", "additionalProperties": false,

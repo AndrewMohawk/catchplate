@@ -11,7 +11,7 @@ deployment, provider, browser or pilot acceptance evidence.
 
 `--measured-succession-v18` selects only
 `--native-measured-succession-startup-v18` and the closed
-`serverware.nativeStartupConfiguration/v18`. It retains v17's actual native
+`catchplate.nativeStartupConfiguration/v18`. It retains v17's actual native
 service-token, currentness, role-cohort, inspector, cgroup and retirement owners,
 but selects `measuredSuccession` instead of `measuredReconnect` and requires
 `secretBroker/v2`. Older profiles keep their existing selectors and broker/v1;
@@ -105,10 +105,10 @@ acknowledgement cannot produce closure, new PKCE or a continuation grant.
 
 Only exact accepted closure permits fresh same-account PKCE and one PREPARE.
 Its public redirect is exact3 `apiVersion,exchangeId,location` with
-`serverware.nativeOAuthSuccessionAuthorizationRedirect/v1`. The private exact7
+`catchplate.nativeOAuthSuccessionAuthorizationRedirect/v1`. The private exact7
 redirect additionally retains actual cookie fields and original expiry.
 Rejected/unknown historical FINISH returns exact3
-`serverware.nativeOAuthSuccessionTerminalObservation/v1` with status
+`catchplate.nativeOAuthSuccessionTerminalObservation/v1` with status
 `retirement-rejected` or `retirement-unknown`; the scope stays fenced.
 
 Callback claims once before the token POST, captures encrypted provider bytes
@@ -158,7 +158,7 @@ aggregate file/image bounds, not a second runtime or new authority profile.
 
 The history KMS parent remains outside the helper image. The actual top-level
 `Dockerfile.production` already copies the whole admitted `/source/scripts` and
-`/source/serverware` trees into `/runtime/app`; this includes the new parent
+`/source/catchplate` trees into `/runtime/app`; this includes the new parent
 script and its existing parent-side imports. The Make source inventories now
 include that script and the seven helper modules (the catalog was already
 registered with the control-plane prerequisite), plus all five new Rust files

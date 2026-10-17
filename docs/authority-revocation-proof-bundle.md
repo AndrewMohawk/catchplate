@@ -2,7 +2,7 @@
 
 ## Scope
 
-[`authority_revocation_proof_bundle.py`](../serverware/authority_revocation_proof_bundle.py)
+[`authority_revocation_proof_bundle.py`](../catchplate/authority_revocation_proof_bundle.py)
 retains the complete raw inputs to the [mixed revocation composer](authority-revocation-read-write.md)
 and produces a compact, versioned read/write transition. Replay accepts only
 the raw bundle and claimed transition, recomputes the genuine source program,
@@ -21,14 +21,14 @@ secret-bearing rows; see the [current-root integration contract](authority-curre
 
 ## Two closed documents
 
-The hash-free [shape contract](../serverware/authority_revocation_bundle_contract.py)
+The hash-free [shape contract](../catchplate/authority_revocation_bundle_contract.py)
 defines the following exact objects. Shape checks return no success token and
 do not replace genuine proof computation.
 
 | Document | Schema and profile | Contents |
 | --- | --- | --- |
-| Raw bundle | `serverware.policyAuthorityRevocationProofBundle/v1`; `serverware.policyAuthorityRevocationProofBundleProfile/v1` | Exactly `schema`, `profile`, `sourceRevision`, `inputs`. |
-| Compact transition | `serverware.policyAuthorityRevocationReadWriteTransition/v1`; `serverware.policyAuthorityRevocationReadWriteTransitionProfile/v1` | The 14 fields below, including the raw bundle digest and full read/write head union. |
+| Raw bundle | `catchplate.policyAuthorityRevocationProofBundle/v1`; `catchplate.policyAuthorityRevocationProofBundleProfile/v1` | Exactly `schema`, `profile`, `sourceRevision`, `inputs`. |
+| Compact transition | `catchplate.policyAuthorityRevocationReadWriteTransition/v1`; `catchplate.policyAuthorityRevocationReadWriteTransitionProfile/v1` | The 14 fields below, including the raw bundle digest and full read/write head union. |
 
 The raw `inputs` object has exactly 15 fields:
 

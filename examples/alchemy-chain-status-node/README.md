@@ -18,15 +18,15 @@ subscriptions, batches or automatic retries. A failed first call stops the job.
 
 ## Operator setup
 
-The operator stores the real Alchemy API/access key in Serverware. Create a
+The operator stores the real Alchemy API/access key in Catchplate. Create a
 separate application with **Basic proxy authentication**, and give it the named
 **Alchemy chain status** permission for exactly `eth-mainnet` or `eth-sepolia`.
 Use the typed `alchemy.rpc_read.v1` preset, not a generic arbitrary POST grant.
 The saved permission replaces exactly
-`Authorization: Bearer serverware-alchemy-placeholder-v1` with the operator's
+`Authorization: Bearer catchplate-alchemy-placeholder-v1` with the operator's
 key. The client never receives that provider key.
 
-This requires a Serverware deployment that actually supports and advertises the
+This requires a Catchplate deployment that actually supports and advertises the
 paired Alchemy preset. Source changes or this example alone do not establish
 that an older deployment supports it. See [provider preset boundaries](../../docs/operator-provider-presets.md).
 
@@ -49,33 +49,33 @@ In **Proxy setup**, select the app and Alchemy chain-status permission, then
 download its private client JSON and CA. Run the downloaded file directly:
 
 ```sh
-node client.mjs --config /private/path/serverware-client.private.json
+node client.mjs --config /private/path/catchplate-client.private.json
 ```
 
 Relative CA paths resolve beside the JSON file. Keep this file private: it
-contains the scoped Serverware app token. The loader checks the saved chain,
+contains the scoped Catchplate app token. The loader checks the saved chain,
 permission shape, Basic login and token expiry. It never executes recipe
 commands or imports headers, environment entries or request bodies; this job
 still performs only the two fixed reads. TLS verification remains enabled.
 
 Alternatively, keep using explicit environment configuration:
 
-Use the names in [.env.example](.env.example). Supply `SERVERWARE_PROXY_TOKEN`
+Use the names in [.env.example](.env.example). Supply `CATCHPLATE_PROXY_TOKEN`
 through a private environment/secret manager, not a pasted shell command or
 committed dotenv file. No Alchemy key environment variable is required or read.
 
 ```sh
-export SERVERWARE_PROXY_URL='https://your-proxy.example:443'
-export SERVERWARE_APP_ID='your-application-uuid'
-export SERVERWARE_CA_FILE='/absolute/path/serverware-ca.pem'
-export SERVERWARE_ALCHEMY_CHAIN='eth-mainnet'
-# SERVERWARE_PROXY_TOKEN is already supplied privately.
+export CATCHPLATE_PROXY_URL='https://your-proxy.example:443'
+export CATCHPLATE_APP_ID='your-application-uuid'
+export CATCHPLATE_CA_FILE='/absolute/path/catchplate-ca.pem'
+export CATCHPLATE_ALCHEMY_CHAIN='eth-mainnet'
+# CATCHPLATE_PROXY_TOKEN is already supplied privately.
 node client.mjs
 ```
 
 Success prints only `ok`, `operation`, `chain`, `chainId` and `blockNumber`.
 Failure prints a fixed message and exits nonzero; it does not print SDK errors,
-provider responses, request headers or tokens. Inspect Serverware's audit log to
+provider responses, request headers or tokens. Inspect Catchplate's audit log to
 diagnose a denial. Do not automatically rerun an uncertain result.
 
 ## Transport and limits
@@ -94,7 +94,7 @@ no direct-network fallback or environment-dependent proxy selection.
 
 The application login is a private in-memory Basic token in `ProxyAgent`, sent
 only to the proxy's CONNECT request. Neither URL contains it; the provider gets
-only the public dummy bearer before Serverware replaces that value. The app
+only the public dummy bearer before Catchplate replaces that value. The app
 token itself is necessarily in the private child environment: same-user process
 inspection, debuggers and memory dumps remain a risk. Do not enable SDK/Node
 debug logging. [Viem's pinned HTTP transport](https://github.com/wevm/viem/blob/viem%402.57.6/src/clients/transports/http.ts),
@@ -102,10 +102,10 @@ debug logging. [Viem's pinned HTTP transport](https://github.com/wevm/viem/blob/
 
 Both TLS legs verify hostnames and certificates:
 
-- Inner provider-name TLS uses only `SERVERWARE_CA_FILE` in `requestTls`, with
+- Inner provider-name TLS uses only `CATCHPLATE_CA_FILE` in `requestTls`, with
   the selected Alchemy hostname explicitly retained for verification.
 - Outer proxy TLS uses Node's built-in roots in `proxyTls`. If your edge uses a
-  private CA, `SERVERWARE_PROXY_CA_FILE` adds that root only to the outer set.
+  private CA, `CATCHPLATE_PROXY_CA_FILE` adds that root only to the outer set.
   The existing child-only `NODE_EXTRA_CA_CERTS` setting is retained, but both
   connector CA sets are explicit; the inner set never inherits the outer root.
 

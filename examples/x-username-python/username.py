@@ -19,13 +19,13 @@ from uuid import UUID
 
 from requests.adapters import HTTPAdapter
 
-PLACEHOLDER = "serverware-x-placeholder-v1"  # Public; never an X credential.
+PLACEHOLDER = "catchplate-x-placeholder-v1"  # Public; never an X credential.
 BASE_URL = "https://api.x.com"
 PINS = {"xdk": "0.10.6", "requests": "2.34.2", "urllib3": "2.8.0",
     "certifi": "2026.7.22", "pydantic": "2.13.4", "requests-oauthlib": "2.0.0"}
 FAILURE = "X lookup failed; check configuration, proxy health and the operator audit log."
-REQUIRED_ENV = ("SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID", "SERVERWARE_PROXY_TOKEN",
-    "SERVERWARE_CA_FILE", "SERVERWARE_X_USERNAME")
+REQUIRED_ENV = ("CATCHPLATE_PROXY_URL", "CATCHPLATE_APP_ID", "CATCHPLATE_PROXY_TOKEN",
+    "CATCHPLATE_CA_FILE", "CATCHPLATE_X_USERNAME")
 MAX_CONFIG_BYTES = 64 * 1024
 
 
@@ -72,13 +72,13 @@ def configuration_environment(config_file):
             or value.get("credential_input") != "replace_exact"
             or value.get("response_mode") != "x_app_read_json_v1"):
         raise ValueError("Invalid X lookup configuration scope")
-    selected = {"SERVERWARE_X_USERNAME": username}
-    for field, key in (("application_id", "SERVERWARE_APP_ID"), ("proxy_url", "SERVERWARE_PROXY_URL"),
-            ("proxy_password", "SERVERWARE_PROXY_TOKEN")):
+    selected = {"CATCHPLATE_X_USERNAME": username}
+    for field, key in (("application_id", "CATCHPLATE_APP_ID"), ("proxy_url", "CATCHPLATE_PROXY_URL"),
+            ("proxy_password", "CATCHPLATE_PROXY_TOKEN")):
         if type(value.get(field)) is not str:
             raise ValueError("Invalid connection value")
         selected[key] = value[field]
-    for field, key in (("ca_file", "SERVERWARE_CA_FILE"), ("proxy_ca_file", "SERVERWARE_PROXY_CA_FILE")):
+    for field, key in (("ca_file", "CATCHPLATE_CA_FILE"), ("proxy_ca_file", "CATCHPLATE_PROXY_CA_FILE")):
         item = value.get(field)
         if field == "proxy_ca_file" and item is None:
             continue
@@ -90,10 +90,10 @@ def configuration_environment(config_file):
 
 def settings(env):
     """Validate explicit configuration; do not discover a provider credential."""
-    username = env.get("SERVERWARE_X_USERNAME", "")
+    username = env.get("CATCHPLATE_X_USERNAME", "")
     if not re.fullmatch(r"[a-z0-9_]{1,15}", username):
         raise ValueError("An exact lowercase username is required")
-    endpoint = env.get("SERVERWARE_PROXY_URL", "")
+    endpoint = env.get("CATCHPLATE_PROXY_URL", "")
     parts = urlsplit(endpoint)
     if (not endpoint.isascii() or any(ord(c) < 33 or c == "\\" for c in endpoint)
             or parts.scheme != "https" or not parts.hostname or parts.username is not None
@@ -101,12 +101,12 @@ def settings(env):
             or "?" in endpoint or "#" in endpoint
             or parts.port is not None and not 1 <= parts.port <= 65535):
         raise ValueError("A credential-free HTTPS proxy origin is required")
-    app_id, token = env.get("SERVERWARE_APP_ID", ""), env.get("SERVERWARE_PROXY_TOKEN", "")
+    app_id, token = env.get("CATCHPLATE_APP_ID", ""), env.get("CATCHPLATE_PROXY_TOKEN", "")
     if (str(UUID(app_id)) != app_id or not 1 <= len(token) <= 8192
             or not all(33 <= ord(c) <= 126 for c in token)):
-        raise ValueError("A Serverware application login is required")
-    for key in ("SERVERWARE_CA_FILE", "SERVERWARE_PROXY_CA_FILE"):
-        if key == "SERVERWARE_CA_FILE" or key in env:
+        raise ValueError("A Catchplate application login is required")
+    for key in ("CATCHPLATE_CA_FILE", "CATCHPLATE_PROXY_CA_FILE"):
+        if key == "CATCHPLATE_CA_FILE" or key in env:
             value = env.get(key, "")
             if not value or not Path(value).is_absolute():
                 raise ValueError("CA inputs must be explicit absolute files")
@@ -118,8 +118,8 @@ def settings(env):
 def child_environment(env):
     settings(env)
     result = {key: env[key] for key in REQUIRED_ENV}
-    if "SERVERWARE_PROXY_CA_FILE" in env:
-        result["SERVERWARE_PROXY_CA_FILE"] = env["SERVERWARE_PROXY_CA_FILE"]
+    if "CATCHPLATE_PROXY_CA_FILE" in env:
+        result["CATCHPLATE_PROXY_CA_FILE"] = env["CATCHPLATE_PROXY_CA_FILE"]
     return result
 
 
@@ -155,7 +155,7 @@ def proxy_context(extra=None):
 def request_ca_bundle(path):
     import certifi
     extra = public_ca(path)
-    with tempfile.TemporaryDirectory(prefix="serverware-x-ca-") as directory:
+    with tempfile.TemporaryDirectory(prefix="catchplate-x-ca-") as directory:
         combined = Path(directory) / "ca.pem"
         with combined.open("xb") as stream:
             os.chmod(combined, 0o600)
@@ -184,8 +184,8 @@ class BoundedAdapter(HTTPAdapter):
 def configured_client(env):
     from xdk import Client
     _, proxy = settings(env)
-    outer = proxy_context(env.get("SERVERWARE_PROXY_CA_FILE"))
-    with request_ca_bundle(env["SERVERWARE_CA_FILE"]) as bundle:
+    outer = proxy_context(env.get("CATCHPLATE_PROXY_CA_FILE"))
+    with request_ca_bundle(env["CATCHPLATE_CA_FILE"]) as bundle:
         client = Client(base_url=BASE_URL, bearer_token=PLACEHOLDER)
         try:
             client.session.trust_env = False  # No netrc, environment proxy or CA fallback.
@@ -230,13 +230,13 @@ def launch(env):
         timeout=60, check=False)
     if result.returncode != 0 or len(result.stdout) > 4096:
         raise ValueError("Child failed")
-    return summary(json.loads(result.stdout), child["SERVERWARE_X_USERNAME"])
+    return summary(json.loads(result.stdout), child["CATCHPLATE_X_USERNAME"])
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Look up one permitted X username (read only).")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--config", metavar="PATH", help="Private client JSON downloaded from Serverware")
+    parser.add_argument("--config", metavar="PATH", help="Private client JSON downloaded from Catchplate")
     args = parser.parse_args(argv)
     logging.disable(logging.CRITICAL)
     try:

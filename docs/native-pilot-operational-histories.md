@@ -68,7 +68,7 @@ issuer remains explicitly fresh-only with no supplied historical records.
 
 The CommitRequest scope also needs a fleet runtime identity containing
 `teeEvidenceSha256`. Signed fleet membership alone does not contain this digest.
-The existing `serverware.policyRuntimeAttestation/v2` startup receipt supplies
+The existing `catchplate.policyRuntimeAttestation/v2` startup receipt supplies
 it under an independently pinned generation-trust issuer with the
 `runtime-attestation-authority` role. The selected instance must be explicitly
 approved and must match exactly one member of the authenticated assignment.
@@ -104,7 +104,7 @@ requirements remain open where no independent evidence exists.
 ### Focused verification
 
 Native source `03d4075d` passed the cached, offline Rust 1.88 check of
-`serverware-decision-gate` (exit **0**, compiler-reported **1m 01s**). Its
+`catchplate-decision-gate` (exit **0**, compiler-reported **1m 01s**). Its
 **312 library / 2,449 binary warnings** remain in the retained log.
 Python source `efccf551` passed **99 focused Python 3.11.15 controls**, seventeen
 Python grammar/both Make inventories, thirteen native/schema inventory entries,
@@ -125,4 +125,4 @@ ran. These results are not hardware, deployed-pilot or production acceptance.
 
 Exact source archives, commands, failed and successful logs, `result.json` and
 verified `SHA256SUMS` are retained outside disposable scratch at
-`codex-offload/serverware/engineering-builds/03d4075d-operational-histories-K1NmLz/`.
+`codex-offload/catchplate/engineering-builds/03d4075d-operational-histories-K1NmLz/`.

@@ -1,0 +1,169 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
+# Google configuration: managed deployment and legacy profile
+
+## Current managed deployment
+
+The retained demo now runs managed-capable source
+`9222b4c090d77aa983d3c01be34e0a2ba79f8e6c` with gate binary
+`333ff7a3db00ab2bf03644fc965aed9b691bdd6ddc4ec651273e6d0c36f053e0`.
+Google remains unconfigured: the matching pair is ready for the existing static
+policy, not for account consent. The rollout preserved retained authority and
+left provider custody empty; no Google configuration was prepared or activated.
+See the [current deployment receipt](README.md#current-managed-capable-deployment).
+
+The canonical layer order is `docker-compose.yml`,
+`docker-compose.managed-google-candidate.yml`,
+`docker-compose.curated-gate.yml`, then `docker-compose.notifications.yml`.
+The candidate filename is historical; this is the accepted managed selection.
+Use only one app/gate source-selection layer. **Do not add
+`docker-compose.google.yml` or raw Google profile/secret-file environment inputs
+to this managed deployment.** Managed and externally supplied profiles are
+mutually exclusive.
+
+For first managed configuration, use **Proxy setup → Review Google provider
+settings**. Review the fixed Gmail read-only preset, callback and destination
+change before supplying the client ID and write-only client secret. Explicit
+Prepare saves encrypted, inactive configuration using app-only provider custody;
+it does not restart either service, contact Google or start consent. Recover an
+uncertain result with **Check operation result**, not another Prepare. A pending
+configuration still needs a separately controlled cold restart and matching
+app/gate readiness before the separate account-connection step.
+
+The gate receives the curated publication directory and original lock, marker
+and interception CA leaves, not the application database, master/signing keys or
+provider/notification custody. The interception CA private key remains a required
+gate input. Action-required alerts and audit-log delivery remain independent
+settings under **Notifications**; neither configures Google or starts consent.
+
+See [operator-owned provider configuration](../../docs/operator-provider-configuration.md)
+for the managed API, custody, recovery and acceptance boundaries. The live UI
+and configuration checks were unconfigured and read-only; they do not establish
+real Google consent, refresh, provider access or a native hardware action. This guide does
+not initialize a new database, replace retained data, register a Google client,
+or authorize a deployment.
+
+## Legacy externally managed env/file profile (not the current deployment)
+
+The remainder documents the separate external-file flow and its historical
+rollout procedure. It is not a conversion or secret-rotation recipe for the
+current managed deployment. Do not use it to bypass managed custody or replace
+an existing retained provider binding.
+
+Use `docker-compose.yml`, exactly one reviewed immutable app/gate source
+override, then `docker-compose.google.yml`, in that order. The Google layer does
+not select application source or a binary. The historical Google-OFF
+preparatory deployment used setup-capable application `1deb896c` and the normal
+`e7529b44` gate; those are not the current accepted pins. Deploying setup-capable
+source does not prepare or activate a Google operation. The explicit reviewed
+transition, private client inputs and separate provider acceptance below remain
+required; do not enable this
+layer merely because the Google-OFF application update passed preservation.
+
+### Required operator inputs for the legacy profile
+
+Provide these through a separately protected deployment environment, retaining
+the original environment unchanged. Never put a client secret in YAML, Git,
+command arguments, logs or chat.
+
+| Variable | Required value |
+| --- | --- |
+| `CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID` | The reviewed Google OAuth web-client ID ending in `.apps.googleusercontent.com`. |
+| `OPERATOR_GOOGLE_CLIENT_SECRET_FILE` | An existing absolute host path to the private client-secret file; not the secret value. |
+| `CATCHPLATE_OPERATOR_GOOGLE_UPSTREAMS` | The exact JSON origin list reviewed by the first-enable preparation: retain every current origin and add `https://gmail.googleapis.com`. There is deliberately no default. |
+
+For the recorded fixture-only deployment, the intended origin set is the old
+`https://demo-upstream:8443` plus `https://gmail.googleapis.com`; the live stored
+settings and prepared transition are authoritative, including canonical order.
+Do not replace a larger retained list with this example. Preserve the existing
+fixture CIDR and `OPERATOR_DEMO_SDK_SOURCE`; the latter still selects the old
+synthetic fixture, not the new application.
+
+Register this exact redirect URI on the reviewed Google client:
+
+`https://catchplate-demo.example.com/api/oauth/callback/google`
+
+The secret file must be a single-link regular file, owned by UID `10001`, mode
+`0400` or `0600`, with no symlinks in its path. The profile accepts 1–4096 bytes
+and rejects malformed contents. Ancestors must be traversable by the app.
+Compose must not create a missing source path. Only the app receives this one
+read-only bind at `/run/secrets/catchplate-google/client.secret`; the gate,
+edge and fixture receive neither its mount nor the secret-file variable.
+Include an outside-data-root secret file in the separately protected recovery
+plan without printing its contents. Profile admission pins its identity and
+contents; replacing the file is not a supported silent rotation.
+
+### Legacy configuration boundaries and preflight
+
+- The app retains its existing sandbox address and gains only the existing
+  outbound network, using Docker's dynamic address allocation. No network is
+  recreated. This provides network egress, not a hostname-filtering firewall.
+  OAuth destinations remain fixed in the profile.
+- The app's inherited `dns: [127.0.0.1]` is removed with `dns: !reset []` so normal
+  container DNS can resolve Google's endpoints. This requires an installed
+  Compose implementation supporting `!reset`. A synthetic-variable render with
+  installed Compose v5.3.1 verified its removal, matching public profile/origin
+  values, app-only secret mount and no host ports. This is configuration-parser
+  evidence, not a deployment: the rollout owner must still render the exact
+  reviewed source pair and private deployment inputs successfully. Do not
+  replace the tag with a plain empty list and assume inherited DNS was cleared.
+- Inspect a nonsecret projection of that model: both services must have the
+  same reviewed origin list, client ID, profile and callback; app DNS must not
+  retain `127.0.0.1`; only the app gains the outbound attachment and secret bind.
+  Check the selected app source, expected gate digest and actual executable
+  together. No provider request is implied by a successful render.
+- Preserve every existing writable mount, service token, CA/key, database,
+  policy/high-water file and publication-lock inode. Keep cached image pins,
+  resource limits and read-only/capability settings. Do not add host ports,
+  Traefik labels, a public app route, or a new service.
+- Keep the edge's Authelia middleware, exact operator/peer checks, Origin checks,
+  admin-header injection and header scrubbing unchanged. The callback uses the
+  existing protected console host; no SSO bypass or public callback exception
+  is introduced. The proxy's TLS/workload authentication is unchanged.
+
+### Legacy retained-state enablement sequence
+
+If the running app lacks the setup API, first deploy the reviewed candidate
+implementation with Google still unselected and the old settings unchanged,
+under the existing retained-state maintenance checks. The Google layer is not
+part of that preparatory application update.
+
+1. On the reviewed candidate implementation, read
+   `GET /api/operator-demo/oauth/google/setup` and review its current-state-bound
+   transition. Stage it using `POST` to that same path with only `operation_id`
+   (canonical UUID), `client_id`, `expected_settings_digest`, `expected_revision`
+   and `expected_policy_hash` (maximum 4096-byte body). The existing admin and
+   exact-Origin mutation guards apply. Recover a lost response using
+   `GET /api/operator-demo/oauth/google/setup/{operation_id}`, not a blind retry.
+   A pending operation has a separate `POST .../setup/cancel` route with only
+   `operation_id`, `expected_revision` and `expected_policy_hash` (maximum
+   2048-byte body). Merely adding an origin to Compose is insufficient: the old
+   store rejects allowlist drift.
+   Preparation is not consent and must not replace old credentials, applications,
+   rules, token verifiers or signed policy. Use the returned review and operation
+   status; staging does not yet enable Google.
+2. Quiesce writers using the existing maintenance procedure: stop the same edge,
+   stop the gate while the app can acknowledge audit, then stop the app. Confirm
+   authoritative process termination and preserve a fresh, verified consistent
+   private backup, including SQLite sidecars, deployment inputs and secret-file
+   recovery coverage. Keep the fixture running. Do not run an initializer.
+3. Recheck the reviewed transition against retained state and the new pair plus
+   Google configuration before startup. Preserve the publication lock and use
+   only the explicit supported transition; no manual settings edit, data reset,
+   or automatic rollback to old source/state is permitted by this guide.
+4. Start the selected app and then gate using bounded, selective recreation with
+   `--no-deps --no-build --pull never`. Before restarting the same edge, verify
+   retained rows and files, the expected transition-only changes, actual binary
+   identity, matching profile binding and loaded policy, audit health, and
+   unchanged console/proxy authentication. Stop at the first failed boundary.
+5. Only after deployment verification and separate authorization, perform real
+   browser consent through the normal SSO session; verify the intended account,
+   approved Gmail read assignment and unattended refresh using bounded provider
+   requests. Synthetic fixture success, health and source checks are not this
+   acceptance. Application-token expiry remains separate from provider refresh.
+
+After activation, simply unsetting the Google flag, changing the client/callback,
+or restoring part of a backup is not a safe rollback: the profile and retained
+authority are pinned. Use an explicitly reviewed forward-repair or recovery
+procedure. Real Google, public-Internet reachability and native/production
+authority remain separate acceptance boundaries.

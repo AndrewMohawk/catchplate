@@ -21,9 +21,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 from scripts import test_native_pilot_initial_state_profile as source_fixture
 from scripts import test_native_pilot_adopted_ordinary_inputs as ordinary_fixture
-from serverware import native_pilot_adopted_ordinary_inputs as compiler
-from serverware import native_pilot_adopted_ordinary_install as installation
-from serverware import native_pilot_adopted_phase_profile as phase
+from catchplate import native_pilot_adopted_ordinary_inputs as compiler
+from catchplate import native_pilot_adopted_ordinary_install as installation
+from catchplate import native_pilot_adopted_phase_profile as phase
 
 p = installation.p
 ERRORS = (ValueError, KeyError, TypeError, InvalidSignature)
@@ -168,7 +168,7 @@ class InitialStateExecutionSourceControls(unittest.TestCase):
             and ast.unparse(item.func) == function), key=lambda item: item.lineno)
 
     def test_selected_actual_install_registry_worker_order_and_nonrecursive_guard(self):
-        path = "serverware/native_pilot_adopted_phase_execution.py"
+        path = "catchplate/native_pilot_adopted_phase_execution.py"
         perform = self.method(path, "_perform")
         install = self.calls(perform, "ordinary_install.install")[0]
         selected = self.calls(perform, "self._install_initial_state")[0]
@@ -195,7 +195,7 @@ class InitialStateExecutionSourceControls(unittest.TestCase):
             self.assertEqual(len(self.calls(guarded, check)), 1)
 
     def test_completion_rejection_still_closes_known_owners_in_safe_order(self):
-        path = "serverware/native_pilot_adopted_phase_execution.py"
+        path = "catchplate/native_pilot_adopted_phase_execution.py"
         final = self.method(path, "final_result")
         outer = final.body[1]  # Literal docstring, then the failure-latching try.
         self.assertIsInstance(outer, ast.Try)

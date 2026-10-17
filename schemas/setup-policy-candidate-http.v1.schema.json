@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/setup-policy-candidate-http.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/setup-policy-candidate-http.v1.schema.json",
   "title": "Protected Setup association, publication and separate control-plane/native observations",
   "description": "Exact originals remain strings, preserving nanosecond integers. Neither a draft nor a stored continuation is policy loading, Setup completion, retry permission or proxy readiness. Complete requests <=4227072 bytes and responses <=5242880 bytes; individual limits never enlarge those bounds.",
   "anyOf": [{"$ref": "#/$defs/draftRequest"}, {"$ref": "#/$defs/draftResponse"}, {"$ref": "#/$defs/optionsRequest"},
@@ -12,7 +12,7 @@
     "materializationRequest": {
       "description": "POST /materialize-draft, /installed or /native-installed; exact three fields and <=4096 raw bytes. Requires the actual Setup owner with credential_owner, its exact retained revision and continuation0. OAuth retains revision3; static uses its controlled binding. Draft additionally requires literal policy_publisher. Native observation does not perform enrollment, hot reload or a filesystem effect.",
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "sessionId", "expectedRevision"],
-      "properties": {"apiVersion": {"const": "serverware.setupPolicyMaterializationRequest/v1"},
+      "properties": {"apiVersion": {"const": "catchplate.setupPolicyMaterializationRequest/v1"},
         "sessionId": {"$ref": "#/$defs/uuid"}, "expectedRevision": {"$ref": "#/$defs/setupRevision"}}
     },
     "materializationDraft": {
@@ -20,7 +20,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "okForAction", "automaticRetryAllowed", "continuationOriginal", "requestOriginal", "bindingOriginal"],
       "properties": {
-        "apiVersion": {"const": "serverware.setupPolicyMaterializationDraft/v1"},
+        "apiVersion": {"const": "catchplate.setupPolicyMaterializationDraft/v1"},
         "okForAction": {"const": false}, "automaticRetryAllowed": {"const": false},
         "continuationOriginal": {"$ref": "#/$defs/continuationOriginal"},
         "requestOriginal": {"type": "string", "minLength": 2, "maxLength": 1400000,
@@ -51,7 +51,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "okForAction", "automaticRetryAllowed", "nativeGateVerified", "observationOriginal"],
       "properties": {
-        "apiVersion": {"const": "serverware.setupPolicyInstalledObservation/v1"},
+        "apiVersion": {"const": "catchplate.setupPolicyInstalledObservation/v1"},
         "okForAction": {"const": false}, "automaticRetryAllowed": {"const": false}, "nativeGateVerified": {"const": false},
         "observationOriginal": {"type": "string", "minLength": 2, "maxLength": 131072,
           "description": "Exact canonical ASCII setupLoadedPolicyObservation/v1 from LoadedPublication; scope control-plane-loaded-policy-only, all action/retry/native-gate flags false. Nested original preserves file identity, assignment, journal, approval, audit and exact epoch integers."}
@@ -62,7 +62,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "okForAction", "automaticRetryAllowed", "proxyReady", "setupSessionId", "observationOriginal"],
       "properties": {
-        "apiVersion": {"const": "serverware.setupNativePolicyObservation/v1"},
+        "apiVersion": {"const": "catchplate.setupNativePolicyObservation/v1"},
         "okForAction": {"const": false}, "automaticRetryAllowed": {"const": false}, "proxyReady": {"const": false},
         "setupSessionId": {"$ref": "#/$defs/uuid"},
         "observationOriginal": {"type": "string", "minLength": 2, "maxLength": 262144,
@@ -75,7 +75,7 @@
       "required": ["apiVersion", "scope", "okForAction", "automaticRetryAllowed", "nativeLoadedPolicyVerified", "proxyReady",
         "continuationSha256", "currentCredentialStateSha256", "requestOriginal", "evidenceOriginal"],
       "properties": {
-        "apiVersion": {"const": "serverware.setupNativeLoadedPolicyObservation/v1"},
+        "apiVersion": {"const": "catchplate.setupNativeLoadedPolicyObservation/v1"},
         "scope": {"const": "native-loaded-policy-only"}, "okForAction": {"const": false},
         "automaticRetryAllowed": {"const": false}, "nativeLoadedPolicyVerified": {"const": true}, "proxyReady": {"const": false},
         "continuationSha256": {"$ref": "#/$defs/digest"}, "currentCredentialStateSha256": {"$ref": "#/$defs/digest"},
@@ -89,7 +89,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "credentialPolicy", "operationMaxSeconds", "maximumArgumentBytes"],
       "properties": {
-        "schema": {"const": "serverware.setupPolicyContinuationAuthorityPolicy/v2"},
+        "schema": {"const": "catchplate.setupPolicyContinuationAuthorityPolicy/v2"},
         "credentialPolicy": {"$ref": "control-plane-publication-approval.v1.schema.json#/$defs/credentialPolicy"},
         "operationMaxSeconds": {"type": "integer", "minimum": 1, "maximum": 30},
         "maximumArgumentBytes": {"const": 2097152}
@@ -103,7 +103,7 @@
     "setupRevision": {"type": "integer", "minimum": 1, "maximum": 9223372036854775803},
     "draftRequest": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "sessionId", "expectedRevision", "generationRequestId"],
-      "properties": {"apiVersion": {"const": "serverware.setupPolicyCandidateRequest/v1"}, "sessionId": {"$ref": "#/$defs/uuid"},
+      "properties": {"apiVersion": {"const": "catchplate.setupPolicyCandidateRequest/v1"}, "sessionId": {"$ref": "#/$defs/uuid"},
         "expectedRevision": {"$ref": "#/$defs/setupRevision"}, "generationRequestId": {"$ref": "#/$defs/uuid"},
         "credentialBindingEventId": {"$ref": "#/$defs/uuid"},
         "credentialProvenanceOriginal": {"type": "string", "minLength": 2, "maxLength": 40960,
@@ -136,20 +136,20 @@
     },
     "draftResponse": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "okForAction", "argumentsOriginal", "review"],
-      "properties": {"apiVersion": {"const": "serverware.setupPolicyCandidateRequest/v1"}, "okForAction": {"const": false},
+      "properties": {"apiVersion": {"const": "catchplate.setupPolicyCandidateRequest/v1"}, "okForAction": {"const": false},
         "argumentsOriginal": {"$ref": "#/$defs/argumentsOriginal"}, "review": {"$ref": "#/$defs/review"}}
     },
     "optionsRequest": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "argumentsOriginal"],
-      "properties": {"apiVersion": {"const": "serverware.setupPolicyCandidateOptions/v1"}, "argumentsOriginal": {"$ref": "#/$defs/argumentsOriginal"}}
+      "properties": {"apiVersion": {"const": "catchplate.setupPolicyCandidateOptions/v1"}, "argumentsOriginal": {"$ref": "#/$defs/argumentsOriginal"}}
     },
     "optionsResponse": {
-      "type": "object", "additionalProperties": false, "required": ["publicKey", "serverware"],
+      "type": "object", "additionalProperties": false, "required": ["publicKey", "catchplate"],
       "properties": {
         "publicKey": {"$ref": "policy-candidate-generation-intake.v1.schema.json#/$defs/optionsResponse/properties/publicKey"},
-        "serverware": {
+        "catchplate": {
           "type": "object", "additionalProperties": false, "required": ["schema", "operation", "operationId", "challengeId", "credentialRecordId", "payloadDigest", "expiresAt"],
-          "properties": {"schema": {"const": "serverware.setupPolicyCandidateOptions/v1"}, "operation": {"const": "setup.policy.bind-candidate"},
+          "properties": {"schema": {"const": "catchplate.setupPolicyCandidateOptions/v1"}, "operation": {"const": "setup.policy.bind-candidate"},
             "operationId": {"$ref": "#/$defs/digest"}, "challengeId": {"$ref": "#/$defs/digest"}, "credentialRecordId": {"$ref": "#/$defs/id"},
             "payloadDigest": {"$ref": "#/$defs/digest"}, "expiresAt": {"type": "string", "minLength": 1, "maxLength": 128}}
         }
@@ -157,9 +157,9 @@
     },
     "bindRequest": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "argumentsOriginal", "mfa"],
-      "properties": {"apiVersion": {"const": "serverware.setupPolicyCandidateOptions/v1"}, "argumentsOriginal": {"$ref": "#/$defs/argumentsOriginal"},
+      "properties": {"apiVersion": {"const": "catchplate.setupPolicyCandidateOptions/v1"}, "argumentsOriginal": {"$ref": "#/$defs/argumentsOriginal"},
         "mfa": {"type": "object", "additionalProperties": false, "required": ["setupPolicyProfile", "assertion"],
-          "properties": {"setupPolicyProfile": {"const": "serverware.setupPolicyCandidateOptions/v1"},
+          "properties": {"setupPolicyProfile": {"const": "catchplate.setupPolicyCandidateOptions/v1"},
             "assertion": {"$ref": "control-plane-publication-approval.v1.schema.json#/$defs/assertion"}}}}
     },
     "bindResponse": {
@@ -171,11 +171,11 @@
     },
     "lookupRequest": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "sessionId"],
-      "properties": {"apiVersion": {"const": "serverware.setupPolicyCandidateRequest/v1"}, "sessionId": {"$ref": "#/$defs/uuid"}}
+      "properties": {"apiVersion": {"const": "catchplate.setupPolicyCandidateRequest/v1"}, "sessionId": {"$ref": "#/$defs/uuid"}}
     },
     "observation": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "okForAction", "automaticRetryAllowed", "continuationOriginal"],
-      "properties": {"apiVersion": {"const": "serverware.setupPolicyCandidateObservation/v1"}, "okForAction": {"const": false},
+      "properties": {"apiVersion": {"const": "catchplate.setupPolicyCandidateObservation/v1"}, "okForAction": {"const": false},
         "automaticRetryAllowed": {"const": false}, "continuationOriginal": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/continuationOriginal"}]}}
     }
   }

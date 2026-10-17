@@ -10,23 +10,23 @@ Synthetic verification does not establish a successful real-provider request.
 
 In **Credentials → Add credential**, choose **GitHub**, then select a personal
 access token or a GitHub App connection. This saves the credential only; it
-creates no Serverware client, proxy token or permission. The same editor is
+creates no Catchplate client, proxy token or permission. The same editor is
 available inline from the **Set up access** action, not a separate sidebar page.
 This consolidated flow is deployed in `6bf463c5`; see the
 [UI checkpoint](operator-demo.md#navigation-update--deployed-october-13).
 Its deployment does not establish real GitHub account or repository acceptance.
 
-| Connection | Inputs saved in Serverware | Credential lifecycle |
+| Connection | Inputs saved in Catchplate | Credential lifecycle |
 | --- | --- | --- |
-| Personal access token (PAT) | Connection name and the existing GitHub token. | Serverware does not renew the PAT; its provider permissions and expiry still apply. |
-| GitHub App | Connection name, numeric App ID, private-key PEM, exact repository owner/name, and Issues access (`read` or `write`). Installation ID is discovered automatically, or optionally supplied under Advanced to require an exact match. | Serverware holds the encrypted private key and obtains short-lived installation tokens server-side, renewing them when needed. |
+| Personal access token (PAT) | Connection name and the existing GitHub token. | Catchplate does not renew the PAT; its provider permissions and expiry still apply. |
+| GitHub App | Connection name, numeric App ID, private-key PEM, exact repository owner/name, and Issues access (`read` or `write`). Installation ID is discovered automatically, or optionally supplied under Advanced to require an exact match. | Catchplate holds the encrypted private key and obtains short-lived installation tokens server-side, renewing them when needed. |
 
 For a GitHub App, first register and install your App in GitHub with access to the
 selected repository and the required Issues permission. This is an existing App
 installation, not a GitHub OAuth user-login or consent flow. The GitHub App ID and
-installation ID are also **not** the Serverware application ID: the latter
+installation ID are also **not** the Catchplate application ID: the latter
 identifies an entry under **Clients**, the script or job allowed to use the proxy.
-A GitHub App is a provider credential, not a Serverware client.
+A GitHub App is a provider credential, not a Catchplate client.
 
 On initial setup, a blank installation ID uses the existing authenticated
 repository-installation lookup to discover and verify it; this adds no provider
@@ -52,16 +52,16 @@ The resulting App, installation, account and repository numeric identities are
 bound to the selected repository and Issues permission ceiling. A read-only
 App connection cannot authorize the create preset; a write-capable connection
 still requires a separate application grant. Broader permissions on the GitHub
-App do not become broader Serverware permissions. Existing generic Bearer keys
+App do not become broader Catchplate permissions. Existing generic Bearer keys
 and saved rules are not automatically converted to either connection type.
 
-Serverware stores the App private key encrypted, signs the App JWT server-side,
+Catchplate stores the App private key encrypted, signs the App JWT server-side,
 and requests an installation token limited to the saved repository and Issues
 access, plus GitHub's read-only metadata permission. This does not grant clients
 repository-metadata routes. Derived tokens are held in memory and renewed on demand near expiry
 (a 65-second safety margin: 60 seconds plus a five-second lease allowance), not
 handed to the SDK client. Renewal does
-not extend the Serverware application token, expand a grant, or change the
+not extend the Catchplate application token, expand a grant, or change the
 stored credential configuration's generation. Manual private-key replacement is
 a separate, generation-changing action described below. GitHub's [JWT documentation](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app)
 and [installation-token documentation](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation)
@@ -70,7 +70,7 @@ explain the provider-side authentication and repository/permission limits.
 A failed token-mint attempt is not retried in the same call. After a 60-second
 backoff, a later separately authorized lease may attempt fresh authentication.
 This is not a retry of an issue/comment request; repository writes are never
-automatically replayed. Revoking the Serverware connection stops future local
+automatically replayed. Revoking the Catchplate connection stops future local
 use but does not claim remote GitHub-token revocation or recall an in-flight
 request or an already-issued lease.
 
@@ -88,11 +88,11 @@ policy to be loaded by the accepted app/gate pair.
 When the instance advertises this capability, open **Credentials**, select
 **Replace GitHub App private key**, and review the repository and affected
 clients. Generate a new private key for the same App in GitHub, then submit
-that PEM. Do not create another Serverware connection or remove existing grants.
+that PEM. Do not create another Catchplate connection or remove existing grants.
 GitHub supports overlapping keys for rotation; deleting the old key is a
 separate [GitHub-side action](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/managing-private-keys-for-github-apps).
 
-Serverware verifies the candidate against the saved numeric App, installation,
+Catchplate verifies the candidate against the saved numeric App, installation,
 account and repository identities and Issues ceiling before committing it. A
 successful replacement advances the encrypted credential generation and catalog
 revision once, records the replacement timestamp and emits the separately
@@ -129,21 +129,21 @@ or deploy this capability to the running instance.
 ## Stock client recipe
 
 Client setup generates the recipe from
-[workspace_github.js](../serverware/operator_demo_web/workspace_github.js), using
+[workspace_github.js](../catchplate/operator_demo_web/workspace_github.js), using
 Node.js **22.19 or newer**, **`@octokit/rest@22.0.1`** and **`undici@8.11.2`**.
 It uses Octokit's normal request/pagination APIs and Undici `ProxyAgent` transport;
 it does not install retry/throttling plugins or rewrite SDK requests in the client.
 
 With either connection type, the application receives only the public GitHub dummy
-`serverware-github-placeholder-v1`. Octokit sends
-`Authorization: token serverware-github-placeholder-v1`; the proxy replaces that
+`catchplate-github-placeholder-v1`. Octokit sends
+`Authorization: token catchplate-github-placeholder-v1`; the proxy replaces that
 exact value with the PAT or server-derived installation token after authorization. A missing or
 different dummy is not permission to insert a credential.
 
 Proxy authentication is separate: the public application ID is the Basic
 username and the application's existing token is its password; retained
 Bearer-only applications use their advertised Bearer mode. The recipe reads the
-app token from `SERVERWARE_PROXY_TOKEN` and supplies it through the proxy-only
+app token from `CATCHPLATE_PROXY_TOKEN` and supplies it through the proxy-only
 `token` option, never a credential-bearing URL or upstream header. Neither the
 real GitHub token nor a literal application token appears in the displayed code.
 The GitHub App private key, JWT and installation token must not be added to client
@@ -151,7 +151,7 @@ environment variables, configuration downloads or a GitHub Actions job. No SDK
 App-authentication plugin or client-side token-renewal code is needed.
 
 `proxyTls` verifies the outer HTTPS proxy using default trust or an explicitly
-selected proxy CA. `requestTls` separately trusts the downloaded Serverware CA
+selected proxy CA. `requestTls` separately trusts the downloaded Catchplate CA
 for the intercepted destination. Do not disable certificate verification or
 install a global TLS bypass. Private configuration download remains explicit and
 requires the page to hold the matching one-time app token.
@@ -173,7 +173,7 @@ Selected `Link`, `Retry-After`, request-ID and rate-limit headers are retained
 under typed validation. Pagination links are checked and normalized onto the
 already-authorized named repository; numeric repository URLs do not become an
 additional client grant. Query values, status codes, headers and transport remain
-bounded by [the protocol contract](../serverware/github_issues.py).
+bounded by [the protocol contract](../catchplate/github_issues.py).
 
 The signed GitHub-only `githubJsonUtf8V1` media policy admits JSON with an
 optional single UTF-8 charset parameter. Other charsets, duplicate parameters,
@@ -222,13 +222,13 @@ redirect unauthenticated users to SSO. This does not establish external SSO
 completion, a saved real App or provider contact.
 
 Private rollout receipts and preserved state live under
-`serverware-operator-workspace-evidence/github-app-connection.Jenpesvt/`.
+`catchplate-operator-workspace-evidence/github-app-connection.Jenpesvt/`.
 Real GitHub authentication and a real repository operation remain unverified.
 A fresh [App-through-Rust SDK run](operator-github-app-verification.md) passed
 at main `fa49e872`: Node/Python/Go reads across genuine expiry/renewal, all nine
 scope/revocation denials, twelve distinct request/release audit pairs and clean
 shutdown. The later canonical-instance cutover deployed `fa49e872` with normal
-Rust `e94f2339`; see the [deployment record](../docker/serverware-operator-demo/README.md).
+Rust `e94f2339`; see the [deployment record](../docker/catchplate-operator-demo/README.md).
 Neither check establishes real-provider use or resolves the public proxy's
 outstanding DNS decision. Historical
 SDK checkpoints below used a static-token fixture and remain separate evidence.
@@ -269,7 +269,7 @@ and cleanup took 70.492 seconds **after compilation**; this is not a native
 pilot startup or cache-speed measurement.
 
 Evidence is retained under
-`serverware-operator-workspace-evidence/github-examples-acceptance.eZt0lZhl/`:
+`catchplate-operator-workspace-evidence/github-examples-acceptance.eZt0lZhl/`:
 `build-result.json`, `run-inputs.json`, `selected-revision.json`,
 `container-observations.json`, `checker-result.stdout.log`, and `terminal.json`.
 The checker is [check_operator_github_examples.py](../scripts/check_operator_github_examples.py).

@@ -20,8 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts.authority import atomic_provisioner_contract as contract
 from scripts.authority import local_install as cli
-from serverware import authority_artifact_spec as artifact
-from serverware import authority_local_install as install
+from catchplate import authority_artifact_spec as artifact
+from catchplate import authority_local_install as install
 
 PIN = "sha256:" + "1" * 64
 
@@ -109,7 +109,7 @@ class LocalInstallTests(unittest.TestCase):
 
     def test_local_generation_mode_is_versioned_and_native_mode_unchanged(self):
         self.assertEqual(contract.LOCAL_PROVISIONING_PLAN_SCHEMA,
-            "serverware.authorityTrustedHostLocalProvisioningPlan/v2")
+            "catchplate.authorityTrustedHostLocalProvisioningPlan/v2")
         self.assertEqual(contract.LOCAL_GENERATION_DIRECTORY_MODE, 0o755)
         def rehash(value):
             value.pop("planId")
@@ -123,7 +123,7 @@ class LocalInstallTests(unittest.TestCase):
             rehash(value)
             with self.assertRaises(contract.ProvisioningContractError): contract.validate_provisioning_plan(value)
         old = plan(local=True)
-        old["schema"] = "serverware.authorityTrustedHostLocalProvisioningPlan/v1"
+        old["schema"] = "catchplate.authorityTrustedHostLocalProvisioningPlan/v1"
         old["destination"]["directoryMode"] = 0o750
         rehash(old)
         with self.assertRaises(contract.ProvisioningContractError): contract.validate_provisioning_plan(old)

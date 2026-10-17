@@ -26,7 +26,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-FORBIDDEN = {"serverware.config", "serverware.db", "serverware.crypto"}
+FORBIDDEN = {"catchplate.config", "catchplate.db", "catchplate.crypto"}
 CLIENT = "123-connected-fixture.apps.googleusercontent.com"
 SECRET = "synthetic-connected-provider-secret-never-real"
 ORIGIN = "https://console.example.com"
@@ -82,10 +82,10 @@ def writer(mode):
     contacts = forbid_network()
     import test_operator_workspace_store as workspace
     config, db, store, bundles, schema, inputs, mutations = workspace.workspace()
-    from serverware import operator_google_setup as setup
-    from serverware import operator_provider_custody as custody
-    from serverware import operator_catalog_oauth_profile as profiles
-    from serverware import operator_publication as publication
+    from catchplate import operator_google_setup as setup
+    from catchplate import operator_provider_custody as custody
+    from catchplate import operator_catalog_oauth_profile as profiles
+    from catchplate import operator_publication as publication
 
     # Preserve real pre-existing credential/application/rule and signed policy.
     credential = workspace.create_credential(db, store, schema, inputs, mutations)["credential"]
@@ -165,7 +165,7 @@ def writer(mode):
             assert not setup._rows(conn)
         else:
             assert SECRET not in "\n".join(conn.iterdump())
-            assert operation["schema"] == "serverware.operatorGoogleManagedSetup/v1"
+            assert operation["schema"] == "catchplate.operatorGoogleManagedSetup/v1"
             assert operation["operation_id"] == operation_id and operation["client_id"] == CLIENT
             assert operation["profile_binding"] == profiles._record(CLIENT, ORIGIN + profiles.CALLBACK_PATH)
             assert operation["policy_hash"] == review["expected_policy_hash"]
@@ -196,9 +196,9 @@ def cold(mode, request):
     sys.meta_path.insert(0, ColdImportGuard())
     contacts = forbid_network()
     assert not FORBIDDEN.intersection(sys.modules)
-    from serverware import operator_google_setup as setup
-    from serverware import operator_provider_custody as custody
-    from serverware import operator_publication as publication
+    from catchplate import operator_google_setup as setup
+    from catchplate import operator_provider_custody as custody
+    from catchplate import operator_publication as publication
     directory = Path(request["directory"])
     admission = publication.admit_bootstrap_reader(directory, **ADMISSION)
     before_files = file_state(directory)
@@ -275,18 +275,18 @@ def cold(mode, request):
 class ProviderColdReadTests(unittest.TestCase):
     def setUp(self):
         import test_operator_demo_persistence as common
-        self.scratch = tempfile.TemporaryDirectory(prefix="serverware-provider-cold-read-",
+        self.scratch = tempfile.TemporaryDirectory(prefix="catchplate-provider-cold-read-",
             dir=os.getenv("TMPDIR", "/srv/catchplate-fast/tmp"))
         self.addCleanup(self.scratch.cleanup)
         self.directory = Path(self.scratch.name) / "data"
-        self.environment = {key: value for key, value in os.environ.items() if not key.startswith("SERVERWARE_")}
-        self.environment.update(common._ENVIRONMENT, SERVERWARE_DATA_DIR=str(self.directory),
-            SERVERWARE_PUBLIC_URL=ORIGIN)
+        self.environment = {key: value for key, value in os.environ.items() if not key.startswith("CATCHPLATE_")}
+        self.environment.update(common._ENVIRONMENT, CATCHPLATE_DATA_DIR=str(self.directory),
+            CATCHPLATE_PUBLIC_URL=ORIGIN)
 
     def child(self, mode, *, operation=None, reading=False):
         environment = dict(self.environment)
         if reading:
-            environment = {key: value for key, value in environment.items() if not key.startswith("SERVERWARE_")}
+            environment = {key: value for key, value in environment.items() if not key.startswith("CATCHPLATE_")}
         request = {"directory": str(self.directory), "operation": operation}
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()),
             "--cold" if reading else "--writer", mode], cwd=ROOT, env=environment,

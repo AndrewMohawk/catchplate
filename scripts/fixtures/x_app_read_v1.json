@@ -1,10 +1,10 @@
 {
-  "schema": "serverware.xAppReadVectors/v1",
+  "schema": "catchplate.xAppReadVectors/v1",
   "adapter": "x.app_read.v1",
   "username": "fixture_user",
   "url": "https://api.x.com/2/users/by/username/fixture_user",
   "operation": {"operation": "x.username.read", "username": "fixture_user"},
-  "replacement": {"mode": "replaceExact", "expectedValue": "Bearer serverware-x-placeholder-v1"},
+  "replacement": {"mode": "replaceExact", "expectedValue": "Bearer catchplate-x-placeholder-v1"},
   "credentialBinding": {"credentialType": "static", "provider": "operator-demo", "subjects": ["synthetic-x-subject"], "secretClass": "bearerToken"},
   "request": {"allowedHeaders": ["accept", "accept-language", "sec-fetch-mode", "user-agent"], "discardHeaders": ["accept-encoding"], "allowedQueryKeys": [], "allowedMediaTypes": ["application/json"], "maxBodyBytes": 0, "valueRules": []},
   "response": {"mode": "xAppReadJsonV1", "maxBodyBytes": 1048576, "contentTypes": ["application/json"], "allowedHeaders": [], "error": {"mode": "xAppReadJsonV1", "maxBodyBytes": 65536, "contentTypes": ["application/json"], "allowedHeaders": [], "onInvalid": "block"}},

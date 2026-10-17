@@ -16,10 +16,10 @@ for a later fresh execution authorization.** The current contracts require:
 authorization.issuedAtEpochNs <= plan.issuedAtEpochNs == grant.issuedAtEpochNs
 ```
 
-The [grant producer](../serverware/authority_successor_execution_grant_production.py)
+The [grant producer](../catchplate/authority_successor_execution_grant_production.py)
 takes its issue time from `replayed.original_interval` and rejects a plan issued
 before its bound request authorization. The
-[grant shape](../serverware/authority_successor_execution_grant.py) separately
+[grant shape](../catchplate/authority_successor_execution_grant.py) separately
 requires `issuedAtEpochNs == originalIssuedAtEpochNs`; full replay binds that
 original time to the actual signed plan. This finalization admission also
 rejects a grant issued before its caller authorization. An authorization newly
@@ -39,12 +39,12 @@ live preconditions have changed, the new path fails; it cannot relabel old raw7.
 
 ## Fixed original authority
 
-[`authority_registration_finalization_authorization._verify_on_work`](../serverware/authority_registration_finalization_authorization.py)
+[`authority_registration_finalization_authorization._verify_on_work`](../catchplate/authority_registration_finalization_authorization.py)
 accepts only the original signed request and root-signed caller enrollment for
 `authorize-registration-finalization` / `webauthn.registration.finalize`.
 Their closed schemas are
-`serverware.signedPolicyAuthorityRegistrationFinalizationAuthorization/v1` and
-`serverware.signedPolicyAuthorityRegistrationFinalizationAuthorizationEnrollment/v1`;
+`catchplate.signedPolicyAuthorityRegistrationFinalizationAuthorization/v1` and
+`catchplate.signedPolicyAuthorityRegistrationFinalizationAuthorizationEnrollment/v1`;
 each payload uses the corresponding schema without `signed` and with lowercase
 `policyAuthority`. Signature domains and original-identity domains are distinct
 from evidence-execution authorization.
@@ -68,7 +68,7 @@ evidence-admission cold owners are not widened or reused as purpose authority.
 
 ## Raw7 and full grant replay
 
-[`authority_registration_finalization_execution_admission._verify_on_configuration`](../serverware/authority_registration_finalization_execution_admission.py)
+[`authority_registration_finalization_execution_admission._verify_on_configuration`](../catchplate/authority_registration_finalization_execution_admission.py)
 has keyword-only inputs:
 
 ```text

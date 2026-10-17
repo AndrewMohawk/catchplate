@@ -8,7 +8,7 @@ public originals or replace the native adoption validator.
 
 ## Caller contract
 
-`serverware.native_pilot_adopted_inputs.compose` accepts:
+`catchplate.native_pilot_adopted_inputs.compose` accepts:
 
 - The pending request returned by the actual adopted supervisor.
 - Independently selected policy and Recipe3 originals and their expected hashes.

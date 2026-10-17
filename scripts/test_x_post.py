@@ -18,8 +18,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import test_npm_metadata as parsed
-from serverware import adapters, policy_bundle as pb, policy_engine as engine
-from serverware import policy_route_authority as authority, x_post as post
+from catchplate import adapters, policy_bundle as pb, policy_engine as engine
+from catchplate import policy_route_authority as authority, x_post as post
 
 VECTORS = json.loads((ROOT / "scripts/fixtures/x_post_v1.json").read_text())
 BODY = b'{ "text" : "synthetic private request text" }'
@@ -27,12 +27,12 @@ SECRET = "synthetic-private-X-token-NEVER-RELEASE"
 
 
 def document(quota=False):
-    return {"apiVersion": "serverware.policy/v1", "kind": "PolicyBundle",
+    return {"apiVersion": "catchplate.policy/v1", "kind": "PolicyBundle",
         "metadata": {"id": "x-post-test", "sequence": 1, "rollbackEpoch": 1},
         "defaults": {"action": "deny", "failMode": "closed", "unknownHosts": "block",
             "unknownPaths": "block", "validationFailure": "block"},
         "principals": [{"id": "agent:fixture", "sourceCidrs": ["127.0.0.1/32"],
-            "requiredHeaders": {"X-Serverware-Agent": "fixture"}}],
+            "requiredHeaders": {"X-Catchplate-Agent": "fixture"}}],
         "credentials": [{"id": "credential:fixture", "credentialType": "oauth2", "provider": "x",
             "providerSubject": "fixture-x-account", "oauthClientId": "fixture-x-client",
             "scopes": ["offline.access", "tweet.read", "tweet.write", "users.read"],
@@ -71,8 +71,8 @@ class XPostTests(unittest.TestCase):
         value = flow()
         value.response = SimpleNamespace(status_code=status, raw_content=body, content=body, trailers=None,
             headers=parsed.ParsedHeaders(([(b"Content-Type", media)] if media is not None else []) + list(headers)))
-        value.metadata.update(serverware_route=self.route, serverware_route_id=self.route.id,
-            serverware_policy_hash=self.snapshot.hash, serverware_operation={"operation": "tweets.write"})
+        value.metadata.update(catchplate_route=self.route, catchplate_route_id=self.route.id,
+            catchplate_policy_hash=self.snapshot.hash, catchplate_operation={"operation": "tweets.write"})
         if guarded:
             guard = engine._ResponseCredentialGuard()
             guard.add_text_encodings(SECRET)
@@ -101,7 +101,7 @@ class XPostTests(unittest.TestCase):
                 raw = document(quota)
                 compiled = pb.compile_policy_bundle(raw, validate_schema=validate_schema)
                 post.validate_route(compiled.routes[0])
-                raw["apiVersion"] = "serverware.policy/v2"
+                raw["apiVersion"] = "catchplate.policy/v2"
                 v2 = authority.prepare_unsigned(raw, [])
                 pb.compile_policy_bundle(v2, validate_schema=validate_schema)
                 self.assertEqual(authority.admit(v2)["mapping"]["profiles"][0]["profile"]["operations"],
@@ -192,7 +192,7 @@ class XPostTests(unittest.TestCase):
 
     def test_canonical_operation_excludes_private_text_but_commits_original_body(self):
         value = flow(headers=[(b"Content-Type", b"application/json"),
-            (b"Accept-Encoding", b"gzip"), (b"X-Serverware-Agent", b"fixture")])
+            (b"Accept-Encoding", b"gzip"), (b"X-Catchplate-Agent", b"fixture")])
         principal = self.snapshot.principals["agent:fixture"]
         credential = self.snapshot.credentials[self.route.credential_ref]
         discarded = engine._discard_declared_request_headers(value, self.route, principal, credential)
@@ -218,10 +218,10 @@ class XPostTests(unittest.TestCase):
                 if row["allowed"]:
                     self.assertEqual(value.response.raw_content, body)
                     self.assertEqual(set(value.response.headers), {"content-type", "content-length"})
-                    self.assertEqual(value.metadata["serverware_response_validation_body_sha256"],
+                    self.assertEqual(value.metadata["catchplate_response_validation_body_sha256"],
                         "sha256:" + hashlib.sha256(body).hexdigest())
                 else:
-                    self.assertNotIn("serverware_response_release_audit_logged", value.metadata)
+                    self.assertNotIn("catchplate_response_release_audit_logged", value.metadata)
 
     def test_response_limits_reflection_metadata_and_final_completion_guards(self):
         for status, maximum in ((201, 1048576), (422, 65536)):
@@ -235,7 +235,7 @@ class XPostTests(unittest.TestCase):
             before = value.response.headers.fields
             self.assertFalse(engine.prepare_response(value).allowed)
             self.assertEqual(value.response.headers.fields, before)
-            self.assertNotIn("serverware_response_validation_body_sha256", value.metadata)
+            self.assertNotIn("catchplate_response_validation_body_sha256", value.metadata)
         for headers in ([(b"Content-Type", b"application/json")], [(b"Content-Encoding", b"gzip")],
                 [(b"Set-Cookie", b"x=y")]):
             self.assertFalse(self.release(self.response(headers=headers)).allowed)
@@ -248,7 +248,7 @@ class XPostTests(unittest.TestCase):
     def test_quota_shape_and_same_account_cross_client_consistency(self):
         raw = document(True)
         raw["principals"].append({"id": "agent:other", "sourceCidrs": ["127.0.0.1/32"],
-            "requiredHeaders": {"X-Serverware-Agent": "other"}})
+            "requiredHeaders": {"X-Catchplate-Agent": "other"}})
         credential = deepcopy(raw["credentials"][0])
         credential.update(id="credential:other", oauthClientId="second-client")
         raw["credentials"].append(credential)

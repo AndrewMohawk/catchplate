@@ -1,6 +1,6 @@
 # Consume execution authorizer service
 
-[`oidc_session_activation_delivery_execution_authorizer_startup.py`](../serverware/oidc_session_activation_delivery_execution_authorizer_startup.py)
+[`oidc_session_activation_delivery_execution_authorizer_startup.py`](../catchplate/oidc_session_activation_delivery_execution_authorizer_startup.py)
 connects the dedicated cold consume-grant role to genuine
 [role admission](oidc-session-activation-delivery-execution-authorizer-bootstrap.md),
 [independent receiving custody](oidc-session-activation-delivery-execution-custody.md)
@@ -25,7 +25,7 @@ The fixed process mode is
 `oidc-session-activation-delivery-execution-authorizer`, UID/GID `65500`, with
 empty supplementary groups and the exact eight-variable environment after drop.
 The listener is
-`/run/serverware/oidc-session-activation-delivery-execution/authorizer.sock`.
+`/run/catchplate/oidc-session-activation-delivery-execution/authorizer.sock`.
 Requests require peer UID/GID `65532`; the client checks the root-created
 listener's kernel peer as `0:0`, not as proof of measured service identity.
 

@@ -26,7 +26,7 @@ exit; the retained evidence is the test log, container inspection and frozen
 harness, not a recovered JSON receipt.
 
 Evidence directory:
-`serverware-operator-workspace-evidence/retained-ui-upgrade.A2wXUDU2`.
+`catchplate-operator-workspace-evidence/retained-ui-upgrade.A2wXUDU2`.
 
 The expired application was created with a module-local synthetic clock. This
 does not establish natural token expiry or proxy enforcement at expiry.
@@ -64,7 +64,7 @@ run with the separately pinned corrected checker was required; its separate
 result is recorded below, not applied retrospectively to this failed run.
 
 Evidence directory:
-`serverware-operator-workspace-evidence/private-retained-pair.mw9wyo1O`.
+`catchplate-operator-workspace-evidence/private-retained-pair.mw9wyo1O`.
 It retains the failed checker output, actual isolation/container/network
 receipts, safe audit metadata and lease projections. An initial empty diagnostic
 projection used an incorrect event-type prefix; it is retained separately and
@@ -114,7 +114,7 @@ The before/after host verification receipts retain the same externally pinned
 plan and complete immutable application manifest.
 
 Evidence directory:
-`serverware-operator-workspace-evidence/private-retained-pair.yq8uNNu5`.
+`catchplate-operator-workspace-evidence/private-retained-pair.yq8uNNu5`.
 Key records are `checker-tests.log`, `checker-terminal-inspect.json`,
 `before-checker-verification.json`, `after-checker-verification.json`,
 `private-isolation.json`, `checker-running-inspect.json`,

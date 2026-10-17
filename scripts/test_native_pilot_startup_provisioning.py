@@ -17,8 +17,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 from scripts.test_native_pilot_current_head_state import _isolated, _pin, _read
-from serverware import native_pilot_current_head_state as storage
-from serverware import native_pilot_startup_profile as startup
+from catchplate import native_pilot_current_head_state as storage
+from catchplate import native_pilot_startup_profile as startup
 
 p = startup.p
 
@@ -118,7 +118,7 @@ class StartupAtomicPublicationControls(unittest.TestCase):
 class StartupProvisioningConnectionControls(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tree = ast.parse((ROOT / "serverware/native_pilot_startup_provisioning.py").read_text())
+        cls.tree = ast.parse((ROOT / "catchplate/native_pilot_startup_provisioning.py").read_text())
         owner = next(node for node in cls.tree.body if isinstance(node, ast.ClassDef) and node.name == "StartupProvisioner")
         cls.methods = {node.name: ast.unparse(node) for node in owner.body if isinstance(node, ast.FunctionDef)}
 
@@ -149,7 +149,7 @@ class StartupProvisioningConnectionControls(unittest.TestCase):
         self.assertNotIn("self._closing = False", close)
 
     def test_real_startup_observation_uses_same_atomic_owner_until_child_cleanup(self):
-        tree = ast.parse((ROOT / "serverware/native_pilot_startup.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/native_pilot_startup.py").read_text())
         owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "Startup")
         methods = {node.name: ast.unparse(node) for node in owner.body if isinstance(node, ast.FunctionDef)}
         published = methods["_publish"]

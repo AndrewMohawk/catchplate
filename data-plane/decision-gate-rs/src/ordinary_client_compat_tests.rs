@@ -332,7 +332,7 @@ fn ordinary_compat_204_runs_real_release_and_secret_checks_without_invented_meta
         let parsed = parse_buffered_response(&wire).unwrap(); assert_eq!(parsed.status, 204);
         assert!(parsed.body.is_empty()); assert!(!parsed.headers.contains_key("content-length"));
         assert_eq!(parsed.headers.get("content-type").map(|value| value.as_str()), expected);
-        assert!(parsed.headers.contains_key("x-serverware-policy-hash"));
+        assert!(parsed.headers.contains_key("x-catchplate-policy-hash"));
     }
     for headers in ["Content-Length: 0\r\n", "Content-Type: text/plain\r\n", "X-Unlisted: value\r\n", "Content-Encoding: gzip\r\n"] {
         let (snapshot, state, decision, url) = response_fixture();
@@ -372,7 +372,7 @@ fn ordinary_compat_204_runs_real_release_and_secret_checks_without_invented_meta
                 let payload: Value = serde_json::from_slice(&parsed.body).unwrap();
                 assert_eq!(payload["error"], "response_json_invalid");
                 assert_eq!(payload["constraint_id"], constraint["id"]);
-                assert!(!parsed.headers.contains_key("x-serverware-policy-hash"));
+                assert!(!parsed.headers.contains_key("x-catchplate-policy-hash"));
             } else {
                 assert_eq!(parsed.status, 204, "unselected operation remains unaffected");
                 assert!(parsed.body.is_empty());

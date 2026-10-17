@@ -1,6 +1,6 @@
 # Read-only EROFS rootfs association mechanism
 
-`serverware_decision_gate::erofs_loop_v1` extracts the existing static custody
+`catchplate_decision_gate::erofs_loop_v1` extracts the existing static custody
 launcher's EROFS/loop/fs-verity checks into a small, read-only mechanism. This is
 source integration only: no image was provisioned, mounted, measured or launched,
 and no build or test ran.
@@ -49,7 +49,7 @@ proof. [Linux v6.12 loop UAPI](https://raw.githubusercontent.com/torvalds/linux/
 `policy_custody::launcher::VerifiedRootfs` calls the shared mechanism in both its
 EROFS constructor and revalidation, while retaining the same three `OwnedFd`
 values itself. It still computes and compares the original
-`serverware.policyCustodyRootfs.erofs/v1` identity. Its ordered frames remain:
+`catchplate.policyCustodyRootfs.erofs/v1` identity. Its ordered frames remain:
 domain; root device, inode and mount ID; block rdev; image device, inode and
 length; measured fs-verity SHA-256; loop offset and size limit. Numeric bytes
 retain their original widths and big-endian encoding; each frame retains its

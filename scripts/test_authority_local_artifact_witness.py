@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from scripts.authority import local_artifact_witness as cli
-from serverware import authority_local_artifact_witness as local
+from catchplate import authority_local_artifact_witness as local
 
 DIGEST = "sha256:" + "1" * 64
 SEED = b"w" * 32
@@ -57,7 +57,7 @@ def signed_generation(core, trust, private):
     digest = local.spec.domain_digest(local.spec.GENERATION_CORE_DIGEST_DOMAIN, local.spec.canonical_json_bytes(core))
     leaf = local.spec.domain_digest(local.spec.WITNESS_LEAF_DIGEST_DOMAIN, digest.encode("ascii"))
     size = witness["currentTreeSize"] + 1
-    payload = dict(schema="serverware.authorityWitnessCheckpointPayload/v1", identity=witness["identity"],
+    payload = dict(schema="catchplate.authorityWitnessCheckpointPayload/v1", identity=witness["identity"],
         sequence=core["sequence"], previousCheckpointDigest=witness["currentCheckpointDigest"],
         previousRootDigest=witness["currentRootDigest"], previousTreeSize=witness["currentTreeSize"], treeSize=size,
         generationCoreDigest=digest, leafDigest=leaf,
@@ -66,7 +66,7 @@ def signed_generation(core, trust, private):
         issuedAt=_time(), coLocated=True, hardwareBacked=False)
     signature = private.sign(local.spec.domain_digest(local.spec.WITNESS_CHECKPOINT_SIGNATURE_DOMAIN,
         local.spec.canonical_json_bytes(payload)).encode("ascii"))
-    return dict(core, witnessCheckpoint=dict(schema="serverware.signedAuthorityWitnessCheckpoint/v1",
+    return dict(core, witnessCheckpoint=dict(schema="catchplate.signedAuthorityWitnessCheckpoint/v1",
         payload=payload, signerKeyId=witness["keyId"], algorithm="Ed25519",
         signatureBase64Url=local.spec.strict_base64url_encode(signature)))
 
@@ -94,7 +94,7 @@ def open_owner(directory, core, trust, *, action="initialize-and-append", expect
         signerKeyId=trust["witness"]["keyId"], bootIdDigest=local._boot(), issuedAtBoottimeNs=boot,
         deadlineBoottimeNs=boot+30_000_000_000, issuedAtUnixNanos=unix, expiresAtUnixNanos=unix+30_000_000_000)
     if v2:
-        from serverware.authority_local_trust import EMPTY_WITNESS_CONVENTION
+        from catchplate.authority_local_trust import EMPTY_WITNESS_CONVENTION
         approved.update(schema=local.APPROVAL_SCHEMA_V2, emptyWitnessConvention=EMPTY_WITNESS_CONVENTION)
     raw = local.spec.canonical_json_bytes(approved)
     return local.LocalArtifactWitness.open(approval_fd=_sealed(raw), approval_sha256=local.sha(raw),
@@ -121,7 +121,7 @@ def successor(directory, trust):
 
 class WitnessContractTests(unittest.TestCase):
     def test_v2_convention_is_explicit_and_initial_only(self):
-        from serverware.authority_local_trust import EMPTY_WITNESS_CONVENTION
+        from catchplate.authority_local_trust import EMPTY_WITNESS_CONVENTION
         boot, unix = time.clock_gettime_ns(time.CLOCK_BOOTTIME), time.time_ns()
         value = dict(schema=local.APPROVAL_SCHEMA_V2, action="initialize-and-append", directory=dict(device=1,inode=2),
             trustSha256=DIGEST, coreSha256=DIGEST, expectedHeadSha256=None, signerKeyId="synthetic-witness",
@@ -177,7 +177,7 @@ class WitnessContractTests(unittest.TestCase):
     and sys.flags.isolated and sys.flags.dont_write_bytecode, "real protected IO requires isolated root -I -B")
 class WitnessStorageTests(unittest.TestCase):
     def test_real_v2_empty_anchors_initialize_then_legacy_append(self):
-        from serverware.authority_local_trust import empty_witness_anchors
+        from catchplate.authority_local_trust import empty_witness_anchors
         core, trust, _ = fixture()
         with tempfile.TemporaryDirectory(prefix="artifact-witness-v2-") as directory:
             info = os.stat(directory)
@@ -196,7 +196,7 @@ class WitnessStorageTests(unittest.TestCase):
             self.assertEqual(last["payload"]["previousCheckpointDigest"], local.spec.witness_checkpoint_digest(first))
 
     def test_real_v2_mismatch_or_nonempty_refuses_before_lock_creation(self):
-        from serverware.authority_local_trust import empty_witness_anchors
+        from catchplate.authority_local_trust import empty_witness_anchors
         for nonempty in (False, True):
             with self.subTest(nonempty=nonempty), tempfile.TemporaryDirectory(prefix="artifact-witness-v2-") as directory:
                 core, trust, _ = fixture()

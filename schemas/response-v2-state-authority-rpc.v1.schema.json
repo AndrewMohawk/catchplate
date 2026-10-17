@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/response-v2-state-authority-rpc.v1.schema.json",
-  "title": "Serverware Response v2 State Authority RPC",
+  "$id": "https://catchplate.invalid/schemas/response-v2-state-authority-rpc.v1.schema.json",
+  "title": "Catchplate Response v2 State Authority RPC",
   "oneOf": [
     {
       "$ref": "#/$defs/requestFrame"
@@ -320,10 +320,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseV2.immutableRawObject/v1"
+          "const": "catchplate.responseV2.immutableRawObject/v1"
         },
         "kind": {
-          "const": "ServerwareResponseV2ImmutableRawObject"
+          "const": "CatchplateResponseV2ImmutableRawObject"
         },
         "schemaVersion": {
           "const": "1"
@@ -387,10 +387,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseV2.stateAuthority/v1"
+          "const": "catchplate.responseV2.stateAuthority/v1"
         },
         "kind": {
-          "const": "ServerwareResponseV2StateAuthorityRpc"
+          "const": "CatchplateResponseV2StateAuthorityRpc"
         },
         "schemaVersion": {
           "const": "1"
@@ -1763,7 +1763,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseV2.canonicalFinalEnvelope/v1"
+          "const": "catchplate.responseV2.canonicalFinalEnvelope/v1"
         },
         "kind": {
           "const": "ResponseV2InspectionSeed"
@@ -1889,7 +1889,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.responseV2.stateAuthority/v1"
+              "const": "catchplate.responseV2.stateAuthority/v1"
             },
             "kind": {
               "const": "ResponseV2ReleasePreparationMutationReceipt"
@@ -2936,10 +2936,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseV2.stateAuthority/v1"
+          "const": "catchplate.responseV2.stateAuthority/v1"
         },
         "kind": {
-          "const": "ServerwareResponseV2StateAuthorityGenerationRpc"
+          "const": "CatchplateResponseV2StateAuthorityGenerationRpc"
         },
         "schemaVersion": {
           "const": "1"
@@ -3168,10 +3168,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseV2.stateAuthority/v1"
+          "const": "catchplate.responseV2.stateAuthority/v1"
         },
         "kind": {
-          "const": "ServerwareResponseV2StateAuthorityGenerationResult"
+          "const": "CatchplateResponseV2StateAuthorityGenerationResult"
         },
         "schemaVersion": {
           "const": "1"
@@ -3595,10 +3595,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseV2.stateAuthority/v1"
+          "const": "catchplate.responseV2.stateAuthority/v1"
         },
         "kind": {
-          "const": "ServerwareResponseV2StateAuthorityResult"
+          "const": "CatchplateResponseV2StateAuthorityResult"
         },
         "schemaVersion": {
           "const": "1"

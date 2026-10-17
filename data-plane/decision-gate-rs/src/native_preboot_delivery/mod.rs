@@ -11,8 +11,8 @@ use base64::{engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}, Engine as _};
 use ed25519_dalek::{Signature, VerifyingKey, pkcs8::{DecodePublicKey, EncodePublicKey}};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
-use serverware_decision_gate::enclave_vsock_v1::{VsockListenerV1, VsockStreamV1};
-use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
+use catchplate_decision_gate::enclave_vsock_v1::{VsockListenerV1, VsockStreamV1};
+use catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -23,9 +23,9 @@ use std::os::unix::fs::MetadataExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const PORT: u32 = 9100;
-const TRUST_PATH: &str = "/usr/share/serverware/native-delivery-authority.pem";
-const SIGNED: &str = "serverware.signedNativeConfigurationDelivery/v1";
-const PAYLOAD: &str = "serverware.nativeConfigurationDelivery/v1";
+const TRUST_PATH: &str = "/usr/share/catchplate/native-delivery-authority.pem";
+const SIGNED: &str = "catchplate.signedNativeConfigurationDelivery/v1";
+const PAYLOAD: &str = "catchplate.nativeConfigurationDelivery/v1";
 const MAX_FRAME: usize = 64 * 1024 * 1024;
 const MAX_FILE: usize = 16 * 1024 * 1024;
 const MAX_TOTAL: usize = 32 * 1024 * 1024;
@@ -36,18 +36,18 @@ enum Profile { StaticV24, RotationV25 }
 const ROTATION_PROFILE: &str = "static-credential-rotation-v25";
 impl Profile {
     fn payload(self) -> &'static str {
-        match self { Self::StaticV24 => PAYLOAD, Self::RotationV25 => "serverware.nativeConfigurationDelivery/v2" }
+        match self { Self::StaticV24 => PAYLOAD, Self::RotationV25 => "catchplate.nativeConfigurationDelivery/v2" }
     }
     fn signed(self) -> &'static str {
-        match self { Self::StaticV24 => SIGNED, Self::RotationV25 => "serverware.signedNativeConfigurationDelivery/v2" }
+        match self { Self::StaticV24 => SIGNED, Self::RotationV25 => "catchplate.signedNativeConfigurationDelivery/v2" }
     }
     fn challenge(self) -> &'static str {
-        match self { Self::StaticV24 => "serverware.nativeConfigurationDeliveryChallenge/v1",
-            Self::RotationV25 => "serverware.nativeConfigurationDeliveryChallenge/v2" }
+        match self { Self::StaticV24 => "catchplate.nativeConfigurationDeliveryChallenge/v1",
+            Self::RotationV25 => "catchplate.nativeConfigurationDeliveryChallenge/v2" }
     }
     fn configuration(self) -> &'static str {
-        match self { Self::StaticV24 => "serverware.nativeStartupConfiguration/v24",
-            Self::RotationV25 => "serverware.nativeStartupConfiguration/v25" }
+        match self { Self::StaticV24 => "catchplate.nativeStartupConfiguration/v24",
+            Self::RotationV25 => "catchplate.nativeStartupConfiguration/v25" }
     }
 }
 
@@ -295,8 +295,8 @@ pub(super) struct Delivered {
 }
 impl Delivered {
     pub(super) fn arguments(&self) -> Vec<OsString> {
-        ["--configuration", "/run/serverware-preboot/configuration.json", "--configuration-sha256",
-            &self.configuration_pin, "--launch", "/run/serverware-preboot/launch.json", "--launch-sha256",
+        ["--configuration", "/run/catchplate-preboot/configuration.json", "--configuration-sha256",
+            &self.configuration_pin, "--launch", "/run/catchplate-preboot/launch.json", "--launch-sha256",
             &self.launch_pin, "--response-proof-identity-vsock"].into_iter().map(OsString::from).collect()
     }
     pub(super) fn recheck(&mut self) -> Result<(), String> {

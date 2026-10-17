@@ -21,8 +21,8 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 import test_native_pilot_genesis_delivery as deliveries
 import test_native_pilot_genesis_ordinary_runtime as ordinary_tests
 import test_native_pilot_genesis_coordinator_runtime as runtime_tests
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_genesis_coordinator_assembly as assembly
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_genesis_coordinator_assembly as assembly
 
 p = g.p
 

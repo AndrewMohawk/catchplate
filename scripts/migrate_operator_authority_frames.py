@@ -26,12 +26,12 @@ engine.PIN_FILE = Path(__file__).with_name("operator_authority_frames_migration_
 engine.PIN_SHA256 = "sha256:82db49f312c6d8da46efb37cf4cb11dc2b25abafb9b23a9f822e5d6c824613e5"
 engine.OLD_COMMIT = "d7459af70b60f8c52d5e6ce6acfa794986aa32e3"
 engine.TARGET_COMMIT = "ca91224ba2b4f1500b03b73641b90624ed0b1d49"
-engine.OLD_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.350"
-engine.TARGET_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.351"
+engine.OLD_REVISION = "catchplate.policyCandidateAuthoritySource/2026-07-30.350"
+engine.TARGET_REVISION = "catchplate.policyCandidateAuthoritySource/2026-07-30.351"
 engine.TRANSITION = "ordinary-source-350-to-351-v1"
-engine.PIN_SCHEMA = "serverware.operatorAuthorityFramesPins/v1"
-engine.SCHEMA = "serverware.operatorAuthorityFramesPlan/v1"
-engine.RECEIPT_SCHEMA = "serverware.operatorAuthorityFramesReceipt/v1"
+engine.PIN_SCHEMA = "catchplate.operatorAuthorityFramesPins/v1"
+engine.SCHEMA = "catchplate.operatorAuthorityFramesPlan/v1"
+engine.RECEIPT_SCHEMA = "catchplate.operatorAuthorityFramesReceipt/v1"
 engine.IMAGE = "sha256:ec14a558a42e483a834860521e399b461a2df880fcba495e7127b0d8d2a51e01"
 FRAME = "policy_authority_successor_execution_frames"
 CUSTODY = "policy_authority_successor_execution_custody"
@@ -77,7 +77,7 @@ def validate_pins(pinned):
     # artifact hash and the actual source-owned structural manifest.
     expected = {("table", FRAME), ("index", "sqlite_autoindex_" + FRAME + "_1"),
         ("index", "sqlite_autoindex_" + CUSTODY + "_6"),
-        ("trigger", "serverware_successor_frames_sqlite_insert_guard")}
+        ("trigger", "catchplate_successor_frames_sqlite_insert_guard")}
     require({(row[0], row[1]) for row in added} == expected
         and all(row[2] == (CUSTODY if row[1] == "sqlite_autoindex_" + CUSTODY + "_6" else FRAME)
             and ((row[3] is None) == (row[0] == "index")) for row in added))
@@ -86,18 +86,18 @@ def validate_pins(pinned):
 
 def source(pinned, directory):
     engine.require_pins(pinned)
-    expected = {**engine.shared.ENVIRONMENT, "SERVERWARE_DATA_DIR": str(directory)}
+    expected = {**engine.shared.ENVIRONMENT, "CATCHPLATE_DATA_DIR": str(directory)}
     require(all(name in expected and value == expected[name]
-        for name, value in os.environ.items() if name.startswith("SERVERWARE_")))
+        for name, value in os.environ.items() if name.startswith("CATCHPLATE_")))
     os.environ.update(expected)
     for relative, digest in pinned["target"]["sourceFiles"].items():
         path = engine.ROOT / relative
         require(not path.is_symlink() and path.is_file() and path.resolve().is_relative_to(engine.ROOT)
             and sha(path.read_bytes()) == digest)
-    require(not any(name == "serverware" or name.startswith("serverware.") for name in sys.modules))
+    require(not any(name == "catchplate" or name.startswith("catchplate.") for name in sys.modules))
     sys.path.insert(0, str(engine.ROOT))
-    from serverware import db, operator_catalog_schema
-    from serverware.authority_store.metadata_schema_source import metadata_schema_source
+    from catchplate import db, operator_catalog_schema
+    from catchplate.authority_store.metadata_schema_source import metadata_schema_source
     ddl = metadata_schema_source()
     require(db._policy_candidate_authority_source_contract_digest() == pinned["target"]["sourceContractDigest"]
         and sha(ddl.encode()) == pinned["target"]["emittedDdlSha256"]

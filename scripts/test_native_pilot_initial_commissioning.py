@@ -20,12 +20,12 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
 
-from serverware import native_pilot_phase_execution as execution
-from serverware import native_pilot_ordinary_initial_profile as initial_profile
-from serverware import native_pilot_publication_profiles as publication
-from serverware import native_pilot_supervisor as supervisor
-from serverware import native_pilot_supervisor_initial_history as composer
-from serverware import native_pilot_supervisor_policy as policy
+from catchplate import native_pilot_phase_execution as execution
+from catchplate import native_pilot_ordinary_initial_profile as initial_profile
+from catchplate import native_pilot_publication_profiles as publication
+from catchplate import native_pilot_supervisor as supervisor
+from catchplate import native_pilot_supervisor_initial_history as composer
+from catchplate import native_pilot_supervisor_policy as policy
 from test_native_pilot_ordinary_initial import (
     ANCHOR_FIELDS, SIGNATURE_FIELDS, checkpoint as signed_checkpoint, fixture, sign_anchor,
 )
@@ -42,7 +42,7 @@ def policy_fixture():
             "durableEpoch", "deploymentGenerationSha256")},
         "revocationGenerationHighWater": 1, "revocationRootSha256": labelled("approved-revocation"),
         "validity": "observed-initial-resources-through-original-lifetime"}
-    value = {"apiVersion": "serverware.nativePilotSupervisorOrdinaryInitialPolicy/v1",
+    value = {"apiVersion": "catchplate.nativePilotSupervisorOrdinaryInitialPolicy/v1",
         "services": {role: copy.deepcopy(row) for role in ROLES}}
     cold = {role: canonical(f["cold"][role]).decode("ascii") for role in ROLES}
     # Pure-validator context only, not a complete/approved driver configuration.
@@ -66,16 +66,16 @@ def stage_fixture(operation):
     anchor = history["firstRetainedEpoch"]
     records = {}
     for name, signature in zip(("root", "checkpoint", "service"), SIGNATURE_FIELDS, strict=True):
-        records[name] = {"apiVersion": "serverware.custodyOrdinaryInitialAnchorSignature/v1", "signer": name,
+        records[name] = {"apiVersion": "catchplate.custodyOrdinaryInitialAnchorSignature/v1", "signer": name,
             "anchorPayloadSha256": sha(canonical([anchor[field] for field in ANCHOR_FIELDS])),
             "keyId": f["public"][name]["keyId"], "keySpkiSha256": f["public"][name]["keySpkiSha256"],
             "signatureBase64": anchor[signature]}
     # The pure result verifier does not authenticate the driver window or live
     # process: real compose owns those joins. This placeholder is deliberately
     # not a valid signature for the synthetic window payload.
-    signed_window = {"apiVersion": "serverware.nativeShadowDriverBootstrapWindow/v1", "payload": f["window"],
+    signed_window = {"apiVersion": "catchplate.nativeShadowDriverBootstrapWindow/v1", "payload": f["window"],
         "signatureBase64url": encoded(b"S" * 64)}
-    value = {"apiVersion": "serverware.nativePilotOrdinaryInitialAuthorityInput/v1", "operation": operation,
+    value = {"apiVersion": "catchplate.nativePilotOrdinaryInitialAuthorityInput/v1", "operation": operation,
         "driverConfigurationOriginal": canonical({"syntheticUncheckedContext": True}).decode("ascii"),
         "driverWindowOriginal": canonical(signed_window).decode("ascii"),
         "launchOriginal": canonical(f["launch"]).decode("ascii"),
@@ -96,7 +96,7 @@ def stage_fixture(operation):
     raw = canonical(output)
     result = {"original": raw.decode("ascii"), "sha256": sha(raw)}
     if operation == "assemble":
-        result["pin"] = {"path": "/etc/serverware/native-pilot-inputs/ordinary-initial-history-" + ROLE + ".json",
+        result["pin"] = {"path": "/etc/catchplate/native-pilot-inputs/ordinary-initial-history-" + ROLE + ".json",
             "sha256": sha(raw)}
     return value, result, raw
 
@@ -135,7 +135,7 @@ class SyntheticInitialCommissioningControls(unittest.TestCase):
         self.assertEqual(len(initial_keys), 15)
         self.assertTrue(initial_keys.issubset(execution.KEY_PURPOSES))
         self.assertEqual(initial_profile.INITIAL_CREDENTIAL_PATHS,
-            {role: "/etc/serverware/custody-" + role + "-initial-history.json" for role in ROLES})
+            {role: "/etc/catchplate/custody-" + role + "-initial-history.json" for role in ROLES})
         for role in ROLES:
             self.assertNotEqual(initial_profile.INITIAL_CREDENTIAL_PATHS[role],
                 publication.DESTINATIONS["ordinary-initial-history-" + role])
@@ -209,7 +209,7 @@ class SyntheticInitialCommissioningControls(unittest.TestCase):
             for name in counters:
                 row[name] = maximum
         # Parser skeleton only: full retained policy admission is not claimed.
-        value = {"apiVersion": "serverware.nativePilotSupervisorCommissioningPolicy/v4",
+        value = {"apiVersion": "catchplate.nativePilotSupervisorCommissioningPolicy/v4",
             "ordinaryInitialHistories": fragment}
         before = copy.deepcopy(value)
         raw = canonical(value)
@@ -225,12 +225,12 @@ class SyntheticInitialCommissioningControls(unittest.TestCase):
                 changed["ordinaryInitialHistories"]["services"][ROLE][counters[0]] = {
                     "overflow": maximum + 1, "zero": 0, "bool": True}[mutation]
             elif mutation == "legacy":
-                changed["apiVersion"] = "serverware.nativePilotSupervisorCommissioningPolicy/v3"
+                changed["apiVersion"] = "catchplate.nativePilotSupervisorCommissioningPolicy/v3"
             else:
                 changed["notAnInitialCounter"] = maximum
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                 policy._policy_document(canonical(changed))
-        duplicate = raw[:-1] + b',"apiVersion":"serverware.nativePilotSupervisorCommissioningPolicy/v4"}'
+        duplicate = raw[:-1] + b',"apiVersion":"catchplate.nativePilotSupervisorCommissioningPolicy/v4"}'
         for changed in (raw + b"\n", duplicate):
             with self.subTest(noncanonical=changed[-100:]), self.assertRaises(ValueError):
                 policy._policy_document(changed)
@@ -244,7 +244,7 @@ class SyntheticInitialCommissioningControls(unittest.TestCase):
             elif mutation == "unknown":
                 value["permitFallback"] = True
             elif mutation == "version":
-                value["apiVersion"] = "serverware.nativePilotSupervisorOrdinaryInitialPolicy/v2"
+                value["apiVersion"] = "catchplate.nativePilotSupervisorOrdinaryInitialPolicy/v2"
             elif mutation == "missing":
                 del value["services"][ROLES[-1]]
             elif mutation == "shared-key":
@@ -330,14 +330,14 @@ class SyntheticInitialCommissioningControls(unittest.TestCase):
     def test_approval_serialization_preserves_request_deadline_and_input_binding(self):
         value, _, _ = stage_fixture("checkpoint")
         input_raw = canonical(value)
-        request = {"apiVersion": "serverware.nativePilotAuthorityJobRequest/v1", "sequence": 8,
+        request = {"apiVersion": "catchplate.nativePilotAuthorityJobRequest/v1", "sequence": 8,
             "conductorSequence": 5, "conductorRequestSha256": labelled("synthetic-conductor-request"),
             "phase": "service-originals", "jobIndex": 1, "job": "ordinary-initial-checkpoint-" + ROLE,
             "deadlineBoottimeNs": "5000", "conductorRequest": None,
             "previousResult": {"phase": "endpoint-deliveries", "job": "native-delivery-trustedTime", "result": {}}}
         # Pure serialization is intentionally not a live request/admission test.
         approval = json.loads(supervisor._approval(canonical(request), input_raw))
-        self.assertEqual(approval, {"apiVersion": "serverware.nativePilotAuthorityJobApproval/v1",
+        self.assertEqual(approval, {"apiVersion": "catchplate.nativePilotAuthorityJobApproval/v1",
             **{name: request[name] for name in ("conductorSequence", "conductorRequestSha256", "phase",
                 "jobIndex", "job", "deadlineBoottimeNs")}, "inputSha256": sha(input_raw)})
         changed = dict(value); changed["payloadOriginal"] = "{}"

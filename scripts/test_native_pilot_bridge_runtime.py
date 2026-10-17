@@ -13,13 +13,13 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import custody_generation_grants as generation
-from serverware import native_pilot_bridge_runtime as bridge
-from serverware import native_pilot_bridge_install as installer
-from serverware import native_pilot_delivery_authority as delivery
-from serverware import native_pilot_launch_publication as launch
-from serverware import native_pilot_publication_profiles as publication
-from serverware import native_shadow_driver_outgoing as outgoing
+from catchplate import custody_generation_grants as generation
+from catchplate import native_pilot_bridge_runtime as bridge
+from catchplate import native_pilot_bridge_install as installer
+from catchplate import native_pilot_delivery_authority as delivery
+from catchplate import native_pilot_launch_publication as launch
+from catchplate import native_pilot_publication_profiles as publication
+from catchplate import native_shadow_driver_outgoing as outgoing
 
 p = generation.p
 
@@ -30,7 +30,7 @@ def canonical(value):
 
 def helper_fixture():
     """Grammar-only fresh-helper manifest, not an admitted runtime or journal."""
-    value = {"apiVersion": "serverware.policyCustodyCleanupHelperInitialBootstrap/v1", "initialization": "fresh-helper",
+    value = {"apiVersion": "catchplate.policyCustodyCleanupHelperInitialBootstrap/v1", "initialization": "fresh-helper",
         "operationGeneration": 1, "sharedConfigurationSha256": p.sha(b"synthetic-shared"),
         "serviceConfigurationSha256": p.sha(b"synthetic-helper-runtime"),
         "initialEndpointHistorySha256": {role: p.sha(("synthetic-history/" + role).encode("ascii"))
@@ -39,7 +39,7 @@ def helper_fixture():
             "absoluteBoottimeNanos": 2000000000}}
     framed = canonical([value[name] for name in ("apiVersion", "initialization", "operationGeneration",
         "sharedConfigurationSha256", "serviceConfigurationSha256", "initialEndpointHistorySha256", "deadline")])
-    value["manifestSha256"] = p.sha(b"serverware.policyCustodyCleanupHelperInitialBootstrap/v1\0"
+    value["manifestSha256"] = p.sha(b"catchplate.policyCustodyCleanupHelperInitialBootstrap/v1\0"
         + len(framed).to_bytes(8, "big") + framed)
     return value
 
@@ -48,15 +48,15 @@ def fixture(version=10):
     # The unused header values deliberately make this only a shape fixture.
     value = {field: None for field in bridge.BASE_FIELDS}
     value.update(apiVersion=bridge.PREFIX + str(version), startupTimeoutMillis=30000,
-        listenerSocketPath="/run/serverware-native-pilot-bridge/listener.sock")
+        listenerSocketPath="/run/catchplate-native-pilot-bridge/listener.sock")
     if version >= 5:
-        value["generationAdmission"] = {"apiVersion": "serverware.custodyGenerationServices/v1",
+        value["generationAdmission"] = {"apiVersion": "catchplate.custodyGenerationServices/v1",
             "grants": {role: p.sha(role.encode("ascii")) for role in generation.ROLES}}
     if version >= 6:
-        value["commitRequest"] = {"apiVersion": "serverware.nativeCommitRequestServices/v1",
+        value["commitRequest"] = {"apiVersion": "catchplate.nativeCommitRequestServices/v1",
             "serviceGrantOriginals": {role: "{}" for role in (generation.ROLES[0], generation.ROLES[3])}}
     if version >= 7:
-        value["spool"] = {"apiVersion": "serverware.nativeSpoolServices/v" + str(min(version - 6, 3)),
+        value["spool"] = {"apiVersion": "catchplate.nativeSpoolServices/v" + str(min(version - 6, 3)),
             "headGrantOriginal": "{}", "currentGrantOriginal": "{}", "originFdName": "generation-origin"}
         if version >= 9:
             value["spool"]["cleanupGrantOriginal"] = "{}"
@@ -64,7 +64,7 @@ def fixture(version=10):
         rows = {}
         for role in generation.ROLES:
             payload = {name: None for name in generation.GRANT}
-            payload.update(apiVersion="serverware.custodyServiceGenerationGrant/v1", serviceRole=role)
+            payload.update(apiVersion="catchplate.custodyServiceGenerationGrant/v1", serviceRole=role)
             rows[role] = {"runtimeOriginal": '{"runtime":{}}', "generationGrantOriginal": canonical(
                 {"payload": payload, "signatureBase64url": p.encoded(bytes(64))}).decode("ascii")}
             if version == 12:
@@ -86,17 +86,17 @@ class BridgeRuntimeControls(unittest.TestCase):
             self.assertEqual(bridge.runtime_version(raw), version)
             self.assertEqual(bridge.maximum_for_version(version), 4 * 1024 * 1024 if version in (10, 11, 12) else 65536)
             if version >= 5:
-                api = "serverware.nativeProofBridgeLaunch/v" + str(version - 4)
+                api = "catchplate.nativeProofBridgeLaunch/v" + str(version - 4)
                 self.assertEqual(bridge.launch_for_runtime(raw), api)
                 self.assertEqual(bridge.maximum_for_launch(api), bridge.maximum_for_version(version))
         for version in (3, 13, True):
             with self.assertRaises(ValueError): bridge.maximum_for_version(version)
-        with self.assertRaises(ValueError): bridge.maximum_for_launch("serverware.nativeProofBridgeLaunch/v9")
+        with self.assertRaises(ValueError): bridge.maximum_for_launch("catchplate.nativeProofBridgeLaunch/v9")
 
     def test_terminal_history_original_is_required_only_for_v12_and_bounded(self):
         selected = fixture(12)
         self.assertEqual(bridge.shape(canonical(selected)), selected)
-        self.assertEqual(bridge.launch_for_runtime(canonical(selected)), "serverware.nativeProofBridgeLaunch/v8")
+        self.assertEqual(bridge.launch_for_runtime(canonical(selected)), "catchplate.nativeProofBridgeLaunch/v8")
         for changed in ("missing", "null", "oversized", "noncanonical", "unknown"):
             value = fixture(12); row = value["ordinaryInitialHistories"][generation.ROLES[0]]
             if changed == "missing": row.pop("historyOriginal")
@@ -188,11 +188,11 @@ class BridgeRuntimeControls(unittest.TestCase):
         self.assertEqual(publication.PROFILES["bridge-runtime"][2], bridge.MAX_RUNTIME)
         for role in delivery.ENDPOINTS:
             self.assertEqual(publication.PROFILES["native-runtime-" + role][2], 65536)
-        self.assertEqual(outgoing.bridge_runtime.LAUNCH_RUNTIME["serverware.nativeProofBridgeLaunch/v6"], 10)
-        self.assertEqual(outgoing.bridge_runtime.LAUNCH_RUNTIME["serverware.nativeProofBridgeLaunch/v7"], 11)
-        self.assertEqual(outgoing.bridge_runtime.LAUNCH_RUNTIME["serverware.nativeProofBridgeLaunch/v8"], 12)
+        self.assertEqual(outgoing.bridge_runtime.LAUNCH_RUNTIME["catchplate.nativeProofBridgeLaunch/v6"], 10)
+        self.assertEqual(outgoing.bridge_runtime.LAUNCH_RUNTIME["catchplate.nativeProofBridgeLaunch/v7"], 11)
+        self.assertEqual(outgoing.bridge_runtime.LAUNCH_RUNTIME["catchplate.nativeProofBridgeLaunch/v8"], 12)
         value = {name: "{}" for name in delivery.INPUT_FIELDS}
-        value.update(apiVersion="serverware.nativePilotDeliverySigningInput/v1", role="bridge",
+        value.update(apiVersion="catchplate.nativePilotDeliverySigningInput/v1", role="bridge",
             runtimeOriginal=canonical(fixture()).decode("ascii"), observationOriginal=padded(delivery.MAX_INPUT))
         delivery.input_document(canonical(value))  # Bounds/grammar only; no signer is called.
         value["runtimeOriginal"] = canonical(fixture(11)).decode("ascii")
@@ -207,15 +207,15 @@ class BridgeRuntimeControls(unittest.TestCase):
     def test_bridge_launch_shape_selects_only_explicit_v5_through_v8(self):
         pins = {name: {"path": launch.DESTINATIONS["native-bridge-" + suffix], "sha256": p.sha(name.encode("ascii"))}
             for name, (suffix, _) in launch.COMPONENTS.items()}
-        pins.update(apiVersion="serverware.nativeShadowGuestLaunch/v1",
-            deliveryConfiguration={"path": "/etc/serverware/bridge-cold.json", "sha256": p.sha(b"cold")},
+        pins.update(apiVersion="catchplate.nativeShadowGuestLaunch/v1",
+            deliveryConfiguration={"path": "/etc/catchplate/bridge-cold.json", "sha256": p.sha(b"cold")},
             delivery={"path": publication.DESTINATIONS["native-delivery-bridge"], "sha256": p.sha(b"delivery")})
-        value = {"apiVersion": "serverware.nativeProofBridgeLaunch/v6", "keyAdmission": pins,
+        value = {"apiVersion": "catchplate.nativeProofBridgeLaunch/v6", "keyAdmission": pins,
             "trustedTime": {"path": publication.DESTINATIONS["native-service-trustedTime"], "sha256": p.sha(b"grant")}}
         for version in (5, 6, 7, 8):
-            value["apiVersion"] = "serverware.nativeProofBridgeLaunch/v" + str(version)
+            value["apiVersion"] = "catchplate.nativeProofBridgeLaunch/v" + str(version)
             launch.shape("native-launch-bridge", canonical(value))
-        value["apiVersion"] = "serverware.nativeProofBridgeLaunch/v9"
+        value["apiVersion"] = "catchplate.nativeProofBridgeLaunch/v9"
         with self.assertRaises(ValueError): launch.shape("native-launch-bridge", canonical(value))
 
 

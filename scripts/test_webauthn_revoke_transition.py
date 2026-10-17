@@ -24,12 +24,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_complete_query as complete
-from serverware import authority_transition_core as core
-from serverware import authority_transition_policy as policy
-from serverware import authority_transition_webauthn as candidate
+from catchplate import authority_contract
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_complete_query as complete
+from catchplate import authority_transition_core as core
+from catchplate import authority_transition_policy as policy
+from catchplate import authority_transition_webauthn as candidate
 import authority_revocation_trust_fixture as trust_oracle
 
 
@@ -77,7 +77,7 @@ def challenge_with_retention(row: dict) -> dict:
 
 COUNTER_TABLE = "policy_authority_bounded_aggregate_states"
 COUNTER_KIND = "metadata-audit-outbox-global-capacity-v1"
-COUNTER_PARTITION = framed("serverware.metadataAuditOutboxCapacityPartition/v1", b"global")
+COUNTER_PARTITION = framed("catchplate.metadataAuditOutboxCapacityPartition/v1", b"global")
 COUNTER_ID = COUNTER_KIND + ":" + COUNTER_PARTITION
 
 
@@ -89,12 +89,12 @@ def counter_row(**changes) -> dict:
         "live_count": 0, "active_count": 0, "capacity_limit": 100_000,
         "reserved_units_json": "{}", "committed_units_json": "{}", "next_sequence": 19,
         "minimum_expiry_epoch_ns": None,
-        "expiry_index_root_digest": framed("serverware.policyAuthorityAggregateExpiryIndex/v1", b"[]"),
+        "expiry_index_root_digest": framed("catchplate.policyAuthorityAggregateExpiryIndex/v1", b"[]"),
         "work_page_id": None, "updated_at_epoch_ns": 1_000_000_000,
         "source_revision": authority_contract.SOURCE_REVISION, **changes,
     }
     state = {
-        "schema": "serverware.policyAuthorityAggregateState/v1",
+        "schema": "catchplate.policyAuthorityAggregateState/v1",
         "aggregateId": row["aggregate_id"], "aggregateKind": row["aggregate_kind"],
         "partitionDigest": row["partition_digest"], "revision": row["revision"],
         "liveCount": row["live_count"], "activeCount": row["active_count"],
@@ -105,7 +105,7 @@ def counter_row(**changes) -> dict:
         "expiryIndexRootDigest": row["expiry_index_root_digest"], "workPageId": row["work_page_id"],
     }
     row["state_json"] = canonical(state).decode("ascii")
-    row["state_digest"] = framed("serverware.policyAuthorityAggregateState/v1", canonical(state))
+    row["state_digest"] = framed("catchplate.policyAuthorityAggregateState/v1", canonical(state))
     return row
 
 
@@ -113,7 +113,7 @@ def counter_selected(row: dict | None) -> dict:
     key = {"aggregate_id": COUNTER_ID}
     return {
         "table": COUNTER_TABLE, "key": key,
-        "keyDigest": framed("serverware.policyAuthorityBusinessKey/v1", COUNTER_TABLE.encode("ascii"), canonical(key)),
+        "keyDigest": framed("catchplate.policyAuthorityBusinessKey/v1", COUNTER_TABLE.encode("ascii"), canonical(key)),
         "present": row is not None, "row": copy.deepcopy(row), "contractSelector": None,
     }
 
@@ -125,7 +125,7 @@ def selected(table: str, item_id: str, row: dict | None) -> dict:
         "table": table,
         "key": key,
         "keyDigest": core.framed_digest(
-            "serverware.policyAuthorityBusinessKey/v1",
+            "catchplate.policyAuthorityBusinessKey/v1",
             table.encode("utf-8"), core.canonical_bytes(key),
         ),
         "present": row is not None,
@@ -140,7 +140,7 @@ class RevokeTransitionTests(unittest.TestCase):
         self.now = datetime(2030, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
         self.request_digest = digest(b"pure candidate revoke fixture")
         self.operation_id = core.framed_digest(
-            "serverware.policyAuthorityOperation/v2",
+            "catchplate.policyAuthorityOperation/v2",
             candidate.OPERATION.encode("ascii"), self.request_digest.encode("ascii"),
         )
         self.values = {
@@ -190,7 +190,7 @@ class RevokeTransitionTests(unittest.TestCase):
             **json.loads(challenge["payload_json"]),
             "challengeId": challenge["id"], "challenge": challenge["challenge"],
             "challengeRowDigest": framed(
-                "serverware.policyAuthorityWebAuthnChallengeRow/v1", canonical(challenge_binding(challenge)),
+                "catchplate.policyAuthorityWebAuthnChallengeRow/v1", canonical(challenge_binding(challenge)),
             ),
         }
         # Deliberately a trusted projection, NOT an independently signed receipt.
@@ -204,10 +204,10 @@ class RevokeTransitionTests(unittest.TestCase):
             "priorCounter": 2, "counter": 3,
         }
         high_water = trust_oracle.trust_rows()["webauthn_trust_publication_high_water"][0]
-        evidence.update(trustHighWaterDigest=framed("serverware.webauthnTrustHighWater/v1",
+        evidence.update(trustHighWaterDigest=framed("catchplate.webauthnTrustHighWater/v1",
                 canonical(trust_oracle.trust_high_water_document(high_water))),
             metadataPublicationSequence=high_water["publication_sequence"],
-            credentialPolicyDigest=framed("serverware.policyAuthorityCredentialPolicy/v1",
+            credentialPolicyDigest=framed("catchplate.policyAuthorityCredentialPolicy/v1",
                 canonical(trust_oracle.credential_policy_document(signer, high_water))))
         target = self.credential(self.values["record_id"])
         rows = [selected("webauthn_credentials", target["id"], target)]
@@ -320,8 +320,8 @@ class RevokeTransitionTests(unittest.TestCase):
         original = copy.deepcopy(challenge)
         binding = challenge_binding(challenge)
         self.assertEqual(len(binding), 10)
-        self.assertNotEqual(framed("serverware.policyAuthorityWebAuthnChallengeRow/v1", canonical(binding)),
-                            framed("serverware.policyAuthorityWebAuthnChallengeRow/v1", canonical(challenge)))
+        self.assertNotEqual(framed("catchplate.policyAuthorityWebAuthnChallengeRow/v1", canonical(binding)),
+                            framed("catchplate.policyAuthorityWebAuthnChallengeRow/v1", canonical(challenge)))
         transition = self.kernel.transition(context)
         changed = self.mutation_rows(transition)[("webauthn_challenges", "assertion-challenge")]
         self.assertEqual(changed["expectedRow"], original)
@@ -330,7 +330,7 @@ class RevokeTransitionTests(unittest.TestCase):
         # A receipt over the old full-row hash is not the real reader's receipt.
         wrong_public = {**json.loads(challenge["payload_json"]),
             "challengeId": challenge["id"], "challenge": challenge["challenge"],
-            "challengeRowDigest": framed("serverware.policyAuthorityWebAuthnChallengeRow/v1",
+            "challengeRowDigest": framed("catchplate.policyAuthorityWebAuthnChallengeRow/v1",
                                           canonical(challenge))}
         wrong = {**context.verified_webauthn_evidence,
                  "challengeDigest": digest(canonical(wrong_public))}
@@ -361,7 +361,7 @@ class RevokeTransitionTests(unittest.TestCase):
         self.assertEqual(len(audits), 2)
         for audit in audits:
             event_bytes = audit["event_json"].encode("utf-8")
-            expected = digest(b"serverware.metadataAuditOutboxEvent/v1\0" + len(event_bytes).to_bytes(8, "big") + event_bytes)
+            expected = digest(b"catchplate.metadataAuditOutboxEvent/v1\0" + len(event_bytes).to_bytes(8, "big") + event_bytes)
             self.assertEqual(audit["event_digest"], expected)
             self.assertEqual((audit["status"], audit["storage_format_version"], audit["attempts"]), ("pending", 2, 0))
         approval = next(row for row in audits if row["event_type"] == "control_plane.approval.invalidated")
@@ -423,7 +423,7 @@ class RevokeTransitionTests(unittest.TestCase):
                 self.assertEqual(tuple(item.column for item in query.predicates),
                     ("scope", "status", "bundle_digest", "payload_digest", "rollback_epoch", "sequence"))
                 self.assertTrue(all(type(item.value) is core.SelectedRowFieldReference for item in query.predicates[2:]))
-            self.assertEqual(query.contract_value()["schema"], "serverware.policyAuthorityQueryProgram/v1")
+            self.assertEqual(query.contract_value()["schema"], "catchplate.policyAuthorityQueryProgram/v1")
         audit_queries = [query for query in queries if query.table == "metadata_audit_outbox"]
         self.assertEqual(len(audit_queries), 2)
         self.assertTrue(all(query.absent_key is not None and query.maximum_rows == 1 for query in audit_queries))
@@ -660,8 +660,8 @@ class RevokeTransitionTests(unittest.TestCase):
             self.kernel.transition(replace(boundary, selected_rows=(*boundary.selected_rows, extra)))
 
     def test_candidate_is_not_registered_or_presented_as_startup_closure(self) -> None:
-        registry_source = (ROOT / "serverware/authority_transition_registry.py").read_text()
-        policy_source = (ROOT / "serverware/authority_transition_policy.py").read_text()
+        registry_source = (ROOT / "catchplate/authority_transition_registry.py").read_text()
+        policy_source = (ROOT / "catchplate/authority_transition_policy.py").read_text()
         self.assertNotIn("authority_transition_webauthn", registry_source)
         self.assertNotIn("WebAuthnCredentialRevokeKernel", registry_source)
         self.assertNotIn("WebAuthnCredentialRevokeKernel", policy_source)

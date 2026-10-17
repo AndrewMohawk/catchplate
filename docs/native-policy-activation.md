@@ -34,7 +34,7 @@ argument originals for `phase=request` from `readinessRequestId` and the exact
 `generationPublicationEnvelopeSha256`. Other drafts select an actual
 `approvalId`; `record-inclusion` additionally retains the real `nativeRequest`
 and returned `publicationOriginal`. Every body has the fixed
-`serverware.nativePolicyActivationHttp/v1` label. Drafts are not permission.
+`catchplate.nativePolicyActivationHttp/v1` label. Drafts are not permission.
 
 The actual OIDC actor must have literal `policy_publisher`, with normal CSRF and
 a current trusted hardware WebAuthn credential. `/options` binds its challenge

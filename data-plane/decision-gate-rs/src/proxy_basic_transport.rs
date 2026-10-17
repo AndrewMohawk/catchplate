@@ -65,9 +65,9 @@ pub(super) fn validate_raw_policy(raw: &Value) -> Result<(), String> {
     for principal in raw.get("principals").and_then(Value::as_array).into_iter().flatten() {
         let Some(config) = principal.get("proxyAuthorization").and_then(Value::as_object) else { continue; };
         if !config.contains_key("basicTransport") { continue; }
-        if raw.get("apiVersion").and_then(Value::as_str) != Some("serverware.policy/v1")
+        if raw.get("apiVersion").and_then(Value::as_str) != Some("catchplate.policy/v1")
             || raw.get("metadata").and_then(|value| value.get("id")).and_then(Value::as_str)
-                != Some("serverware-operator-demo")
+                != Some("catchplate-operator-demo")
         { return Err("Basic transport requires the signed operator v1 policy".to_owned()); }
         BasicTransport::from_policy(config)?;
     }
@@ -80,7 +80,7 @@ pub(super) fn selected(snapshot: &Snapshot) -> bool {
 }
 
 pub(super) fn require_scope(snapshot: &Snapshot, admitted_operator: bool) -> Result<(), &'static str> {
-    if selected(snapshot) && (!admitted_operator || snapshot.policy_id != "serverware-operator-demo") {
+    if selected(snapshot) && (!admitted_operator || snapshot.policy_id != "catchplate-operator-demo") {
         Err(REFUSED)
     } else { Ok(()) }
 }

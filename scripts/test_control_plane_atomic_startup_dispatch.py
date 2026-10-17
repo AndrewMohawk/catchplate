@@ -24,17 +24,17 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 _DATA = tempfile.TemporaryDirectory(prefix="atomic-startup-component-")
-os.environ["SERVERWARE_PROCESS_MODE"] = "serverware-control-plane"
-os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
-os.environ["SERVERWARE_DATA_DIR"] = _DATA.name
+os.environ["CATCHPLATE_PROCESS_MODE"] = "catchplate-control-plane"
+os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
+os.environ["CATCHPLATE_DATA_DIR"] = _DATA.name
 
-from serverware import authority_contract as contract
-from serverware import authority_service
-from serverware import authority_transition_core as core
-from serverware import authority_transition_release as release
-from serverware import control_plane_startup as startup
-from serverware import db, development_sandbox, grants, operator_demo
-from serverware import operator_google_setup_preflight, operator_upstream_setup_preflight
+from catchplate import authority_contract as contract
+from catchplate import authority_service
+from catchplate import authority_transition_core as core
+from catchplate import authority_transition_release as release
+from catchplate import control_plane_startup as startup
+from catchplate import db, development_sandbox, grants, operator_demo
+from catchplate import operator_google_setup_preflight, operator_upstream_setup_preflight
 
 
 DSN = "host=/synthetic-unopened-socket dbname=synthetic user=synthetic"
@@ -73,8 +73,8 @@ class AtomicStartupDispatchTests(unittest.TestCase):
         self.addCleanup(self._finish_audit)
         self.assertIsNone(db._policy_authority_writer_context.get())
         self.stack.enter_context(patch.dict(os.environ, {
-            "SERVERWARE_PROCESS_MODE": "serverware-control-plane",
-            "SERVERWARE_RELEASE_CHANNEL": "dev",
+            "CATCHPLATE_PROCESS_MODE": "catchplate-control-plane",
+            "CATCHPLATE_RELEASE_CHANNEL": "dev",
         }))
         self.connections = []
         for module, name in (
@@ -96,7 +96,7 @@ class AtomicStartupDispatchTests(unittest.TestCase):
     def expected_input(self, operation):
         reconcile = operation == OPERATIONS[0]
         return {
-            "schema": "serverware.policyAuthorityControlledWriterInput/v1",
+            "schema": "catchplate.policyAuthorityControlledWriterInput/v1",
             "handler": "reconcile_release_authorizations" if reconcile else
                 "drain_release_authorization_audit_outbox",
             "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST,

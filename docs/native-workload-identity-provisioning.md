@@ -1,13 +1,13 @@
 # Native request-first retained-key certificate admission
 
-`serverware_agent_trust.native_workload_identity_provisioning.admit_certificate`
+`catchplate_agent_trust.native_workload_identity_provisioning.admit_certificate`
 locally verifies an actual direct-issued leaf against the original request-first
 CSR/PoP, independently pinned issuer and exact retained target P-256 private key.
 It publishes a leaf-plus-issuer chain without replacing an existing identity.
 It performs no network operation, issuance, system trust installation or native
 runtime admission. This source has not been built, executed or provisioned.
 
-The explicit local CLI is `serverware-enrollment --admit-native-workload-certificate`.
+The explicit local CLI is `catchplate-enrollment --admit-native-workload-certificate`.
 It exposes this verifier with all five independently pinned files, expected
 principal/nonce and explicit unique SANs; see the
 [browser-to-local handoff](native-workload-identity-submission.md#browser-issuance-and-local-certificate-admission).
@@ -25,7 +25,7 @@ The standalone function requires:
 - `timeout_ms` in 100–30000, default 30000;
 - optional `expected_leaf=(serial_number, not_before_epoch_seconds, not_after_epoch_seconds)`.
 
-The packet is the exact canonical `serverware.nativeEnrollmentPacket/v2`
+The packet is the exact canonical `catchplate.nativeEnrollmentPacket/v2`
 original, not a capture verdict. Its bounded decoder extracts original bytes
 only. The contained target request must be byte-equal to the independently
 pinned request, and its issuer DER must equal the genuine issuer parsed from
@@ -34,7 +34,7 @@ diagnostics do not supply local issuance permission. This module neither
 verifies those native authorizations nor fabricates a legacy packet signature
 or `runtimeManifestDigest` binding.
 
-The actual request is `serverware.signedWorkloadIdentityBootstrapRequest/v1`.
+The actual request is `catchplate.signedWorkloadIdentityBootstrapRequest/v1`.
 Original verification checks canonical request framing, P-256 CSR signature,
 domain-separated low-S proof of possession, exact principal/nonce/SANs and
 issuer DER/SPKI. The issuer is one canonical PEM certificate under the existing

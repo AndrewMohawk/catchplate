@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-enrollment-bootstrap-evidence.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-enrollment-bootstrap-evidence.v1.schema.json",
   "title": "Native caller-to-target bootstrap enrollment public evidence v1",
   "description": "Unverified public originals. The complete original is canonical compact sorted ASCII JSON plus exactly one LF, at most 1048576 bytes. Runtime verification separately authenticates independent delegation/setup keys and pins, the actual bootstrap caller TLS session, role3/role5 Nitro originals, the independently expected target request and genuine CSR/PoP. Schema validity is not permission, certificate issuance, installation, policy admission, or a durable claim. Same-target nativeEnrollmentEvidence/v1 is a separate unchanged profile.",
   "type": "object",
@@ -11,7 +11,7 @@
     "enrollmentPublicKeyBase64url", "enrollmentQuoteBase64url"
   ],
   "properties": {
-    "apiVersion": { "const": "serverware.nativeEnrollmentBootstrapEvidence/v1" },
+    "apiVersion": { "const": "catchplate.nativeEnrollmentBootstrapEvidence/v1" },
     "evidenceScope": { "const": "unverified-bootstrap-enrollment-public-material" },
     "okForAction": { "const": false },
     "packetBase64url": {
@@ -29,7 +29,7 @@
       "minLength": 86,
       "maxLength": 86,
       "pattern": "^[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])",
-      "description": "Raw Ed25519 signature64 encoded canonical unpadded base64url. Preimage: NUL-terminated serverware/native-enrollment-bootstrap-packet-signature/v1 domain, exact delegation SHA256 raw32, exact setup SHA256 raw32, packet length u64BE, exact packet bytes including LF. No old assignment-v1 or role4 substitution."
+      "description": "Raw Ed25519 signature64 encoded canonical unpadded base64url. Preimage: NUL-terminated catchplate/native-enrollment-bootstrap-packet-signature/v1 domain, exact delegation SHA256 raw32, exact setup SHA256 raw32, packet length u64BE, exact packet bytes including LF. No old assignment-v1 or role4 substitution."
     },
     "enrollmentPublicKeyBase64url": {
       "type": "string",

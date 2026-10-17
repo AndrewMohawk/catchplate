@@ -9,7 +9,7 @@ grant approval, launch and end-to-end execution remain unperformed.
 
 `services/active_effect_cleanup.rs::Gate` is retained beside the real cleanup
 service and its existing generation gate. The source-selected ordinary runtime
-is `serverware.policyCustodyServiceRuntimeConfig/v8`, with `spoolCleanup` equal
+is `catchplate.policyCustodyServiceRuntimeConfig/v8`, with `spoolCleanup` equal
 to the closed object `{"grantFdName":"active-effect-cleanup-grant"}`. The
 ordinary service's authenticated session and generation admission must run
 before `Gate::handle`; there is no direct HTTP or arbitrary signing route.
@@ -23,7 +23,7 @@ does not rename the ordinary host service into an enclave key owner or grant it
 any native role key. Native barrier/commit, retrieval, cleanup and durable
 allocation keys remain distinct.
 
-The bridge sends canonical `serverware.nativeActiveEffectCleanupCommand/v1`,
+The bridge sends canonical `catchplate.nativeActiveEffectCleanupCommand/v1`,
 exactly `{apiVersion, completion}`. `completion` is the actual typed
 `active_effect_values::Completion`, not a supplied success boolean. The reply
 is exactly the typed `{result, transition}` `Cleanup` value. Frame handling,
@@ -37,7 +37,7 @@ zero-link `active-effect-cleanup-grant` memfd (at most 128 KiB) and an exact
 retained `active-effect-cleanup-journal` directory. The grant is the existing
 canonical envelope `{payload, signatureBase64url}`. Its payload has exactly:
 
-- `apiVersion`: `serverware.nativeActiveEffectCleanupGrant/v1`;
+- `apiVersion`: `catchplate.nativeActiveEffectCleanupGrant/v1`;
 - `purpose`: `native-active-effect-cleanup`;
 - `guest`: the actual Cleanup C9 `GuestClosureBinding`;
 - `runtimeConfigurationSha256` and `authorityHistoryManifestSha256`;
@@ -46,7 +46,7 @@ canonical envelope `{payload, signatureBase64url}`. Its payload has exactly:
 - `initialTransitionHeadSha256`.
 
 The independently provisioned cleanup root signs the payload with the existing
-protocol framing and domain `serverware.nativeActiveEffectCleanupGrant.signature/v1`.
+protocol framing and domain `catchplate.nativeActiveEffectCleanupGrant.signature/v1`.
 This explicitly authorizes the whole head original and DRS allocation key;
 the code does **not** claim that the cleanup history verifies the DRS history
 or the head grant's separate signature. The real DRS itself admits that head

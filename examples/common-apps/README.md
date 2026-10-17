@@ -1,4 +1,4 @@
-# Common API clients through Serverware
+# Common API clients through Catchplate
 
 Use one application login and a downloaded configuration, not real provider keys
 in your script. The same Requests example covers Slack, Discord, Notion, Stripe,
@@ -11,14 +11,18 @@ Stripe and Cloudflare through their normal Python client methods.
 These are deliberately scoped operations, not blanket access to each provider.
 The proxy enforces the selected destination, method, resource and body policy.
 The application has only a public placeholder in the provider-authentication
-header. Serverware replaces it with its stored credential.
+header. Catchplate replaces it with its stored credential.
 
 ## Get the configuration
 
-1. In Serverware, add the service credential using its named preset.
+Already have a private download from before the Catchplate rename? Follow the
+[local configuration migration](../client-config-migration.md); do not globally
+replace text in a token or permission.
+
+1. In Catchplate, add the service credential using its named preset.
 2. Create a permission for your application, select a supported operation and
    enter its scope (for example a Slack channel or GitLab project).
-3. Download the private client configuration and the public Serverware CA from
+3. Download the private client configuration and the public Catchplate CA from
    the application setup. Save them together, with the CA filename matching
    `ca_file` in the configuration. Relative CA paths resolve beside the JSON
    file, not the current directory.
@@ -31,8 +35,8 @@ From this example directory:
 ```sh
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-chmod 600 ./serverware-client.private.json
-.venv/bin/python request.py --config ./serverware-client.private.json
+chmod 600 ./catchplate-client.private.json
+.venv/bin/python request.py --config ./catchplate-client.private.json
 ```
 
 A GET permission makes exactly one read. POST permissions send nothing unless
@@ -41,9 +45,9 @@ you explicitly supply both a body file and `--execute-write`.
 To prepare and review a write:
 
 ```sh
-.venv/bin/python request.py --config ./serverware-client.private.json --print-example-body > request.json
+.venv/bin/python request.py --config ./catchplate-client.private.json --print-example-body > request.json
 # Edit request.json and check its destination and contents before the next command.
-.venv/bin/python request.py --config ./serverware-client.private.json --body ./request.json --execute-write
+.venv/bin/python request.py --config ./catchplate-client.private.json --body ./request.json --execute-write
 ```
 
 The first command only prints the scope-resolved example; it performs no network
@@ -68,7 +72,7 @@ No automatic pagination: each invocation makes one request. Add permitted query
 parameters explicitly, such as:
 
 ```sh
-.venv/bin/python request.py --config ./serverware-client.private.json --query per_page=5 --query state=opened
+.venv/bin/python request.py --config ./catchplate-client.private.json --query per_page=5 --query state=opened
 ```
 
 That example is for GitLab. Query keys vary by operation; unknown keys, duplicate
@@ -85,14 +89,14 @@ pinned Python 3.12 dependencies once:
 ```sh
 python3.12 -m venv .venv-services
 .venv-services/bin/pip install -r requirements-services.txt
-.venv-services/bin/python services_python.py --config ./serverware-client.private.json
+.venv-services/bin/python services_python.py --config ./catchplate-client.private.json
 ```
 
 That command performs one read for Notion, Stripe or Cloudflare. For Slack,
 prepare the body using `request.py --print-example-body`, review it, then run:
 
 ```sh
-.venv-services/bin/python services_python.py --config ./serverware-client.private.json \
+.venv-services/bin/python services_python.py --config ./catchplate-client.private.json \
   --body ./request.json --execute-write
 ```
 
@@ -111,7 +115,7 @@ expanded to admit the SDK's extra metadata headers. The new selector keeps the
 same readable operation names.
 
 Slack's supported asynchronous transport uses one verified trust store for
-both proxy TLS and intercepted-provider TLS: public roots plus the Serverware
+both proxy TLS and intercepted-provider TLS: public roots plus the Catchplate
 CA (and a private proxy CA when configured). Both hostnames are checked. The
 other three SDK transports use separate outer-proxy and provider trust stores.
 Never disable certificate verification to make a client work.
@@ -130,7 +134,7 @@ by the pinned AI dependency set:
 ```sh
 python3.12 -m venv .venv-ai
 .venv-ai/bin/pip install -r requirements-ai.txt
-.venv-ai/bin/python ai_python.py --config ./serverware-client.private.json --prompt 'Say hello in one sentence.' --send
+.venv-ai/bin/python ai_python.py --config ./catchplate-client.private.json --prompt 'Say hello in one sentence.' --send
 ```
 
 `--send` is explicit confirmation of a potentially billable request. The operator
@@ -145,7 +149,7 @@ does not load unrelated local profiles and also works without a Unix home entry.
 ## Approval, failure and TLS behavior
 
 - HTTP 428 means review is required. Open the review URL in the returned JSON,
-  approve in Serverware, then explicitly rerun the identical command/body before
+  approve in Catchplate, then explicitly rerun the identical command/body before
   approval expires. The original connection is not held open.
 - None of these examples retries automatically. A timeout, lost response or non-success
   after a write can mean the provider acted. Inspect the provider and audit log
@@ -161,7 +165,7 @@ does not load unrelated local profiles and also works without a Unix home entry.
   client. `basic_and_bearer_v1` indicates supported proxy login formats; these
   examples choose Basic, not an extra upstream bearer credential.
 - TLS verifies both the outer proxy and the intercepted provider connection.
-  `ca_file` trusts Serverware's provider certificates. The outer proxy normally
+  `ca_file` trusts Catchplate's provider certificates. The outer proxy normally
   uses public roots; optional `proxy_ca_file` supplies an additional private proxy
   CA. Do not disable certificate verification or alter global trust.
 - Environment proxies, `.netrc` and environment CA overrides are not used. Errors
@@ -185,14 +189,14 @@ providers or establish live provider acceptance. AI SDK checks live at
 
 [`github-actions.yml`](github-actions.yml) is an inactive sample, not a workflow
 installed by this example. Keep this directory in your trusted repository and
-copy the reviewed file to `.github/workflows/serverware-read.yml`. Dispatch it
+copy the reviewed file to `.github/workflows/catchplate-read.yml`. Dispatch it
 manually on the default branch. It uses the Ubuntu 24.04 runner's Python 3.12,
 the pinned checkout action already used by the other examples, and these secrets:
 
-- `SERVERWARE_CLIENT_CONFIG_JSON`: the complete private client JSON downloaded
+- `CATCHPLATE_CLIENT_CONFIG_JSON`: the complete private client JSON downloaded
   for a **GET-only** common-app permission, with an unexpired application login.
-- `SERVERWARE_CA_PEM`: the public Serverware CA certificate contents.
-- `SERVERWARE_PROXY_CA_PEM`: optional public CA for a privately signed HTTPS
+- `CATCHPLATE_CA_PEM`: the public Catchplate CA certificate contents.
+- `CATCHPLATE_PROXY_CA_PEM`: optional public CA for a privately signed HTTPS
   proxy; leave this secret unset for an ordinarily trusted proxy endpoint.
 
 No provider API key is placed in CI. Dependency installation happens before

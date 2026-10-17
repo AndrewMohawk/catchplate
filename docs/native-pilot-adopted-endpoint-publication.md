@@ -7,7 +7,7 @@ existing independent Approval2 and complete input validation.
 
 ## What is published
 
-All destinations are fixed beneath `/etc/serverware/native-pilot-inputs/`:
+All destinations are fixed beneath `/etc/catchplate/native-pilot-inputs/`:
 
 | Original | Source and checks |
 | --- | --- |
@@ -51,7 +51,7 @@ No fresh-directory report is treated as custody, service readiness or approval.
 
 The existing `scripts/prepare_native_pilot_resource_roots.py` helper provides
 an opt-in `--profile adopted-operational` inventory. It extends `adopted-cold`
-with `/var/lib/serverware/native-pilot-retrieval-objects`, an empty root:root0700
+with `/var/lib/catchplate/native-pilot-retrieval-objects`, an empty root:root0700
 auxiliary directory. Without `--create`, it only inspects. With `--create`, it
 creates missing fixed entries exclusively; it never repairs existing entries.
 

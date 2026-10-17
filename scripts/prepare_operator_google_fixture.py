@@ -30,7 +30,7 @@ GMAIL_JOB_CHECKER_SECONDS = 180
 GMAIL_JOB_OUTER_CHECKER_SECONDS = 210
 GMAIL_JOB_LIFETIME_SECONDS = 300
 GMAIL_JOB_KEEPER_MARGIN_SECONDS = 15
-GMAIL_CLIENT_DEPENDENCIES = Path("/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/requests-dependencies.6BgfNK0L")
+GMAIL_CLIENT_DEPENDENCIES = Path("/srv/catchplate-fast/projects/catchplate-operator-workspace-evidence/requests-dependencies.6BgfNK0L")
 GMAIL_CLIENT_MANIFEST_SHA256 = "d932320e6f32eeca7f496abea639c1a80cf5afd0ba3642011e2a41cee3a70059"
 
 
@@ -81,7 +81,7 @@ def verify_client_dependencies(directory):
         ((directory / "manifest.json").stat().st_size, GMAIL_CLIENT_MANIFEST_SHA256),
         "Gmail dependency manifest differs")
     manifest = json.loads((directory / "manifest.json").read_text())
-    base.require(manifest.get("schema") == "serverware.syntheticRequestsDependencies/v1"
+    base.require(manifest.get("schema") == "catchplate.syntheticRequestsDependencies/v1"
         and manifest.get("moduleSubdirectory") == "site-packages", "Gmail dependency schema differs")
     rows = manifest.get("files")
     base.require(isinstance(rows, list) and len(rows) == 143, "Gmail dependency inventory differs")
@@ -97,8 +97,8 @@ def build(source, binary, initializer, root, *, profile=REFRESH_PROFILE, expecte
     binary_sha256 = selected_binary_sha256(profile, expected_binary_sha256)
     dependencies = selected_client_dependencies(profile, client_dependencies, client_dependencies_manifest_sha256)
     base.require(root.parent == base.SCRATCH and re.fullmatch(
-        r"serverware-google-private\.[A-Za-z0-9]{6,32}", root.name), "fresh Google NVMe root required")
-    template_root = root.with_name("serverware-catalog-private." + root.name.split(".", 1)[1])
+        r"catchplate-google-private\.[A-Za-z0-9]{6,32}", root.name), "fresh Google NVMe root required")
+    template_root = root.with_name("catchplate-catalog-private." + root.name.split(".", 1)[1])
     config = base.build(source, binary, initializer, template_root, "172.16.249.48/28",
                         expected_binary_sha256=binary_sha256)
     runtime = root / "runtime"
@@ -107,22 +107,22 @@ def build(source, binary, initializer, root, *, profile=REFRESH_PROFILE, expecte
             path = Path(mount["source"])
             if path.is_relative_to(template_root):
                 mount["source"] = str(root / path.relative_to(template_root))
-    config["name"] = "serverware-google-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
+    config["name"] = "catchplate-google-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
     config.pop("networks")
     services = config["services"]
     services.pop("demo-upstream")
-    app, gate = services["serverware"], services["decision-gate-rs"]
+    app, gate = services["catchplate"], services["decision-gate-rs"]
     common = deepcopy(app)
-    for name, service in (("serverware", app), ("decision-gate-rs", gate)):
+    for name, service in (("catchplate", app), ("decision-gate-rs", gate)):
         service.pop("networks")
         service.pop("dns")
         service["network_mode"] = "service:network"
         environment = service["environment"]
-        environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = '["https://gmail.googleapis.com"]'
-        environment.pop("SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS")
-        environment.update(SERVERWARE_OPERATOR_GOOGLE_PROFILE="operator-google-v1",
-            SERVERWARE_GOOGLE_OAUTH_CLIENT_ID=CLIENT_ID,
-            SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI=CONTROL_ORIGIN + "/api/oauth/callback/google")
+        environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = '["https://gmail.googleapis.com"]'
+        environment.pop("CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS")
+        environment.update(CATCHPLATE_OPERATOR_GOOGLE_PROFILE="operator-google-v1",
+            CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID=CLIENT_ID,
+            CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI=CONTROL_ORIGIN + "/api/oauth/callback/google")
         service["volumes"] = [mount for mount in service["volumes"]
                               if mount["target"] != "/demo-upstream"]
         service["volumes"] += [base.bind(runtime / "google-data/ca.pem", "/fixture-google/ca.pem"),
@@ -131,9 +131,9 @@ def build(source, binary, initializer, root, *, profile=REFRESH_PROFILE, expecte
     app["cpus"] = 1
     app["depends_on"] = {"provider": {"condition": "service_healthy"}}
     app["environment"].update(SSL_CERT_FILE="/fixture-google/ca.pem",
-        SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE="/run/secrets/serverware/google-client.secret")
-    gate["environment"].update(SERVERWARE_UPSTREAM_CA_BUNDLE="/fixture-google/ca.pem",
-        SERVERWARE_DECISION_GATE_MANAGEMENT_HOST="127.0.0.1")
+        CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE="/run/secrets/catchplate/google-client.secret")
+    gate["environment"].update(CATCHPLATE_UPSTREAM_CA_BUNDLE="/fixture-google/ca.pem",
+        CATCHPLATE_DECISION_GATE_MANAGEMENT_HOST="127.0.0.1")
     gate["healthcheck"] = base.health("http://127.0.0.1:9091/healthz", start=20)
 
     # New fixture services inherit the same caps/no-new-privileges/read-only /
@@ -183,12 +183,12 @@ def build(source, binary, initializer, root, *, profile=REFRESH_PROFILE, expecte
             "--expected-binary-sha256", "sha256:" + binary_sha256,
             "--ca-file", "/data/mitmproxy/mitmproxy-ca-cert.pem",
             "--upstream-ca-file", "/fixture-google/ca.pem", "--control-ca-file", "/fixture-google/ca.pem",
-            "--admin-token-file", "/run/secrets/serverware/admin.token",
+            "--admin-token-file", "/run/secrets/catchplate/admin.token",
             "--fixture-marker-file", "/private-audit-fixture.json",
             "--google-fixture-marker-file", "/private-google-fixture.json",
             "--run-claim-file", "/data/.operator-catalog-acceptance.claim", "--timeout-seconds", "180"],
         "volumes": [base.bind(source, "/app"), base.bind(runtime / "app-data", "/data", False),
-            base.bind(runtime / "service-secrets/admin.token", "/run/secrets/serverware/admin.token"),
+            base.bind(runtime / "service-secrets/admin.token", "/run/secrets/catchplate/admin.token"),
             base.bind(runtime / "google-data/ca.pem", "/fixture-google/ca.pem"),
             base.bind(runtime / ".private-fixture.json", "/private-audit-fixture.json"),
             base.bind(runtime / ".private-google-fixture.json", "/private-google-fixture.json"), *hosts]}
@@ -234,10 +234,10 @@ def prepare(args):
     space = os.statvfs(base.SCRATCH)
     base.require(space.f_bavail * space.f_frsize >= 2 * 1024**3, "at least2GiB scratch capacity required")
     names = base.command(["git", "-C", str(args.source), "ls-files", "-co", "--exclude-standard", "--",
-        "serverware", "scripts", "schemas"]).splitlines()
+        "catchplate", "scripts", "schemas"]).splitlines()
     base.require(0 < len(names) <= 4096, "source manifest exceeds bound")
     hashes = {name: base.digest(args.source / name) for name in sorted(set(names)) if (args.source / name).is_file()}
-    manifest = {"schema": "serverware.privateOperatorGooglePreparation/v1", "project": config["name"],
+    manifest = {"schema": "catchplate.privateOperatorGooglePreparation/v1", "project": config["name"],
         "source": str(args.source), "sourceHead": base.command(["git", "-C", str(args.source), "rev-parse", "HEAD"]).strip(),
         "sourceSha256": hashes, "jobRoot": str(args.job_root), "binary": str(args.binary),
         "binarySha256": binary_sha256, "initializer": str(args.initializer),

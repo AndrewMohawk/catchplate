@@ -24,8 +24,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 
-ROOT = Path("/opt/serverware/src")
-RESULT_PREFIX = "SERVERWARE_OCI_LANE_RESULT="
+ROOT = Path("/opt/catchplate/src")
+RESULT_PREFIX = "CATCHPLATE_OCI_LANE_RESULT="
 MAX_WATCHDOG_RESPONSE_BYTES = 4 * 1024 * 1024
 SHA256_PREFIX = "sha256:"
 FIXED_SCRIPTS = {
@@ -165,7 +165,7 @@ def _chromium_probe() -> dict[str, Any]:
     profile = Path("/work/chromium-profile")
     profile.mkdir(mode=0o700)
     command = [
-        "/opt/serverware/chromium/chrome",
+        "/opt/catchplate/chromium/chrome",
         "--headless=new",
         "--disable-background-networking",
         "--disable-component-update",
@@ -178,7 +178,7 @@ def _chromium_probe() -> dict[str, Any]:
         "--no-sandbox",
         "--remote-debugging-pipe",
         f"--user-data-dir={profile}",
-        "data:text/html,<title>serverware-compatibility</title>",
+        "data:text/html,<title>catchplate-compatibility</title>",
     ]
     completed = subprocess.run(
         command,
@@ -189,7 +189,7 @@ def _chromium_probe() -> dict[str, Any]:
             "LC_ALL": "C",
             "TMPDIR": "/work/tmp",
             "TZ": "UTC",
-            "XDG_RUNTIME_DIR": "/run/serverware-runtime",
+            "XDG_RUNTIME_DIR": "/run/catchplate-runtime",
         },
         input=(
             b'{"id":1,"method":"Browser.getVersion"}\x00'
@@ -231,16 +231,16 @@ def _watchdog_npm_response(frame: dict[str, Any]) -> dict[str, Any]:
     from cryptography import x509
     from cryptography.hazmat.primitives import serialization
 
-    endpoint = os.environ.get("SERVERWARE_WATCHDOG_ENDPOINT")
+    endpoint = os.environ.get("CATCHPLATE_WATCHDOG_ENDPOINT")
     if not endpoint:
         raise RuntimeError("watchdog endpoint is missing")
     expected_spki = _required_dynamic(
-        "SERVERWARE_WATCHDOG_TLS_SPKI_SHA256"
+        "CATCHPLATE_WATCHDOG_TLS_SPKI_SHA256"
     )
     parsed = urlsplit(endpoint)
     if (
         parsed.scheme != "https"
-        or parsed.hostname != "watchdog.serverware.internal"
+        or parsed.hostname != "watchdog.catchplate.internal"
         or parsed.port not in {None, 443}
         or parsed.path != "/v1/npm-publish-one-use"
         or parsed.query
@@ -302,7 +302,7 @@ def _watchdog_npm_response(frame: dict[str, Any]) -> dict[str, Any]:
             "responseSha256",
         }
         or value.get("apiVersion")
-        != "serverware.npmOneUsePortalResponse/v1"
+        != "catchplate.npmOneUsePortalResponse/v1"
         or value.get("attempt") != frame["attempt"]
         or value.get("requestSha256") != _sha256(body)
         or value.get("reported428") is not (frame["attempt"] == 1)
@@ -335,7 +335,7 @@ def _watchdog_npm_response(frame: dict[str, Any]) -> dict[str, Any]:
             "stdoutBytes",
             "stdoutSha256",
         }
-        or companion.get("apiVersion") != "serverware.npmOneUseResult/v2"
+        or companion.get("apiVersion") != "catchplate.npmOneUseResult/v2"
         or companion.get("attempt") != frame["attempt"]
         or companion.get("leaseId") != frame["leaseId"]
         or companion.get("manifestSha256") != frame["manifestSha256"]
@@ -356,20 +356,20 @@ class _PortalNpmCompanionClient:
         self._responses: list[dict[str, Any]] = []
         self._contract = {
             "nodeBinarySha256": _required_dynamic(
-                "SERVERWARE_NPM_NODE_SHA256"
+                "CATCHPLATE_NPM_NODE_SHA256"
             ),
-            "nodeExecutable": Path("/opt/serverware/node/bin/node"),
-            "npmEntrypoint": Path("/opt/serverware/npm/bin/npm-cli.js"),
+            "nodeExecutable": Path("/opt/catchplate/node/bin/node"),
+            "npmEntrypoint": Path("/opt/catchplate/npm/bin/npm-cli.js"),
             "npmEntrypointSha256": _required_dynamic(
-                "SERVERWARE_NPM_ENTRYPOINT_SHA256"
+                "CATCHPLATE_NPM_ENTRYPOINT_SHA256"
             ),
-            "npmExecutable": Path("/opt/serverware/npm/bin/npm-cli.js"),
+            "npmExecutable": Path("/opt/catchplate/npm/bin/npm-cli.js"),
             "npmExecutableSha256": _required_dynamic(
-                "SERVERWARE_NPM_ENTRYPOINT_SHA256"
+                "CATCHPLATE_NPM_ENTRYPOINT_SHA256"
             ),
-            "npmPackageManifest": Path("/opt/serverware/npm/package.json"),
+            "npmPackageManifest": Path("/opt/catchplate/npm/package.json"),
             "npmPackageSha256": _required_dynamic(
-                "SERVERWARE_NPM_PACKAGE_SHA256"
+                "CATCHPLATE_NPM_PACKAGE_SHA256"
             ),
             "npmVersion": "11.8.0",
         }
@@ -424,7 +424,7 @@ class _PortalNpmCompanionClient:
                 "LANG": "C",
                 "LC_ALL": "C",
                 "NO_PROXY": "",
-                "PATH": "/opt/serverware/node/bin:/usr/bin:/bin",
+                "PATH": "/opt/catchplate/node/bin:/usr/bin:/bin",
                 "TMPDIR": str(cwd / "tmp"),
                 "no_proxy": "",
                 "npm_config_audit": "false",
@@ -460,7 +460,7 @@ class _PortalNpmCompanionClient:
             encoding="ascii"
         )
         operation = {
-            "apiVersion": "serverware.npmOperationInput/v1",
+            "apiVersion": "catchplate.npmOperationInput/v1",
             "caPem": ca_pem,
             "operation": "npm.publish.fixture",
             "packageTarballBase64": base64.b64encode(tarball).decode("ascii"),
@@ -469,24 +469,24 @@ class _PortalNpmCompanionClient:
             "registryPort": registry_port,
         }
         frame = {
-            "apiVersion": "serverware.npmOneUseRequest/v2",
+            "apiVersion": "catchplate.npmOneUseRequest/v2",
             "attempt": self._attempt,
             "caPem": ca_pem,
             "lane": "portal-browser-oauth",
             "laneOneUseNonce": _required_dynamic(
-                "SERVERWARE_ONE_USE_NONCE", token=True
+                "CATCHPLATE_ONE_USE_NONCE", token=True
             ),
             "laneSequence": 10,
-            "leaseId": _required_dynamic("SERVERWARE_LEASE_ID", token=True),
+            "leaseId": _required_dynamic("CATCHPLATE_LEASE_ID", token=True),
             "manifestSha256": _required_dynamic(
-                "SERVERWARE_MANIFEST_SHA256"
+                "CATCHPLATE_MANIFEST_SHA256"
             ),
             "operation": "npm.publish.fixture",
             "operationInputSha256": _sha256(_canonical_json(operation)),
             "packageTarballBase64": operation["packageTarballBase64"],
             "packageTarballSha256": operation["packageTarballSha256"],
             "promotionReceiptSha256": _required_dynamic(
-                "SERVERWARE_PROMOTION_RECEIPT_SHA256"
+                "CATCHPLATE_PROMOTION_RECEIPT_SHA256"
             ),
             "proxyPort": proxy_port,
             "registryPort": registry_port,
@@ -499,7 +499,7 @@ class _PortalNpmCompanionClient:
             {
                 "attempt": self._attempt,
                 "companionImageId": _required_dynamic(
-                    "SERVERWARE_NPM_COMPANION_IMAGE_ID"
+                    "CATCHPLATE_NPM_COMPANION_IMAGE_ID"
                 ),
                 "companionResultSha256": companion["resultSha256"],
                 "portalResponseSha256": response["responseSha256"],
@@ -523,9 +523,9 @@ class _PortalNpmCompanionClient:
         if self._attempt != 2 or len(self._responses) != 2:
             raise RuntimeError("portal did not use exactly two npm companions")
         payload = {
-            "apiVersion": "serverware.portalNpmCompanionEvidence/v1",
+            "apiVersion": "catchplate.portalNpmCompanionEvidence/v1",
             "companionImageId": _required_dynamic(
-                "SERVERWARE_NPM_COMPANION_IMAGE_ID"
+                "CATCHPLATE_NPM_COMPANION_IMAGE_ID"
             ),
             "invocationCount": 2,
             "responses": self._responses,
@@ -543,8 +543,8 @@ def _run_fixed_script(role: str) -> None:
         client = _PortalNpmCompanionClient()
         namespace = runpy.run_path(
             str(script),
-            init_globals={"_SERVERWARE_NPM_COMPANION_CLIENT": client},
-            run_name="_serverware_portal_browser_lane",
+            init_globals={"_CATCHPLATE_NPM_COMPANION_CLIENT": client},
+            run_name="_catchplate_portal_browser_lane",
         )
         sys.argv = [str(script), *arguments]
         namespace["main"]()
@@ -570,7 +570,7 @@ def main() -> None:
     _prepare_work_directories()
     if args.role in PYTHON_PROBE_ROLES:
         payload = {
-            "apiVersion": "serverware.ociCapabilityProbeResult/v1",
+            "apiVersion": "catchplate.ociCapabilityProbeResult/v1",
             "probes": _python_probes(),
             "role": args.role,
         }
@@ -579,7 +579,7 @@ def main() -> None:
         return
     if args.role == "chromium-compatibility":
         payload = {
-            "apiVersion": "serverware.ociCapabilityProbeResult/v1",
+            "apiVersion": "catchplate.ociCapabilityProbeResult/v1",
             "probes": _chromium_probe(),
             "role": args.role,
         }

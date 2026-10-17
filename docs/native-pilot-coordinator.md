@@ -63,7 +63,7 @@ python3 -I -B scripts/run_native_pilot_coordinator.py --run-native-pilot --runti
 ```
 
 The placeholder is deliberately invalid. FD 3 supplies an existing protected
-`serverware.nativePilotConductorRuntime/v1` inventory, at most 16 MiB, whose
+`catchplate.nativePilotConductorRuntime/v1` inventory, at most 16 MiB, whose
 literal bytes match the independently approved SHA. It is not a path selector,
 an embedded archive, or an assertion that JSON owns a process. The package stores
 this object as `package.json`'s `inventory`; use that object's canonical no-LF
@@ -84,8 +84,8 @@ The only conductor argv is:
 
 The installed Python 3.11 bootstrap requires that exact interpreter and argv and
 adds only `/vendor` and `/app` before running `/app/scripts/run_native_pilot.py`.
-The complete `/app/serverware` package and the two fixed scripts are bound to
-`/usr/share/serverware/source-manifest.json`. No caller-supplied executable,
+The complete `/app/catchplate` package and the two fixed scripts are bound to
+`/usr/share/catchplate/source-manifest.json`. No caller-supplied executable,
 module, environment import path or shell fragment is accepted. No authority-key
 FD passes to the child. The existing driver control/configuration/window and
 all separate native pilot artifacts, service resources and provisioning remain
@@ -94,7 +94,7 @@ required; this command installs none of them.
 ## One process, eleven exact phases
 
 The concrete owner is
-`serverware.native_pilot_coordinator_process.ConductorProcess`:
+`catchplate.native_pilot_coordinator_process.ConductorProcess`:
 
 ```text
 prepare(runtime_inventory_fd=..., runtime_inventory_sha256=...) -> owner
@@ -172,8 +172,8 @@ two-script package. Native artifacts, private service
 credentials, protected directories and the independently operated supervisor
 still must be provisioned; this command generates none of them.
 
-The separate job channel uses `serverware.nativePilotAuthorityJobRequest/v1`
-and `serverware.nativePilotAuthorityJobReply/v1`. Each request binds its global
+The separate job channel uses `catchplate.nativePilotAuthorityJobRequest/v1`
+and `catchplate.nativePilotAuthorityJobReply/v1`. Each request binds its global
 exchange `sequence`, `conductorSequence`, `conductorRequestSha256`, `phase`,
 `jobIndex`, fixed `job`, and original `deadlineBoottimeNs`. The first job of a
 phase includes the actual `conductorRequest`; subsequent jobs use that retained
@@ -184,8 +184,8 @@ For each job the independent supervisor must approve the complete next input
 and install these two new files before replying:
 
 ```text
-/etc/serverware/native-pilot-authority/<phase>/<job>.approval.json
-/etc/serverware/native-pilot-authority/<phase>/<job>.input.json
+/etc/catchplate/native-pilot-authority/<phase>/<job>.approval.json
+/etc/catchplate/native-pilot-authority/<phase>/<job>.input.json
 ```
 
 Names come only from the fixed source job table. Both files must be protected
@@ -194,7 +194,7 @@ protected root-owned ancestors. No path is accepted in the reply. The approval
 original is canonical ASCII JSON without LF, at most 8 KiB, with exactly:
 
 ```text
-apiVersion = serverware.nativePilotAuthorityJobApproval/v1
+apiVersion = catchplate.nativePilotAuthorityJobApproval/v1
 conductorSequence, conductorRequestSha256, phase, jobIndex, job,
 deadlineBoottimeNs, inputSha256
 ```
@@ -202,7 +202,7 @@ deadlineBoottimeNs, inputSha256
 The job reply has exactly these ten fields:
 
 ```text
-apiVersion = serverware.nativePilotAuthorityJobReply/v1
+apiVersion = catchplate.nativePilotAuthorityJobReply/v1
 sequence, conductorSequence, conductorRequestSha256, phase, jobIndex, job,
 requestSha256, approvalSha256, inputSha256
 ```
@@ -257,12 +257,12 @@ The owner retains the actual child, PIDFD and pipes. After normal completion or
 failure, the coordinator makes one cleanup attempt. A spawned child's clean
 result requires its genuine stderr terminal original, terminal PIDFD, actual
 reap and a matching exit status. The child result is
-`serverware.nativePilotOperatorResult/v1`; the coordinator emits its own
-`serverware.nativePilotCoordinatorResult/v1` summary (or
-`serverware.nativePilotAuthorityCoordinatorResult/v1` for the authority caller).
+`catchplate.nativePilotOperatorResult/v1`; the coordinator emits its own
+`catchplate.nativePilotCoordinatorResult/v1` summary (or
+`catchplate.nativePilotAuthorityCoordinatorResult/v1` for the authority caller).
 Neither substitutes for
 the other's process evidence. Closing before start returns the distinct
-`serverware.nativePilotCoordinatorNotStarted/v1`, never workload-cleanup proof.
+`catchplate.nativePilotCoordinatorNotStarted/v1`, never workload-cleanup proof.
 
 Cleanup may signal that retained PIDFD once with SIGTERM and wait only within
 the original cleanup reserve/lifetime. Unknown cleanup raises while retaining

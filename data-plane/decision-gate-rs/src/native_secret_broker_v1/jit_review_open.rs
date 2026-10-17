@@ -4,8 +4,8 @@ use super::*;
 use crate::native_oauth_exchange_v1::BrowserTls;
 use crate::native_jit_review_open_v1::NATIVE_FIELDS;
 use std::collections::BTreeSet;
-const CHANNEL: &str = "serverware.nativeJitReviewOpenChannel/v1";
-const DOMAIN: &[u8] = b"serverware/native-jit-review-open-ciphertext/v1\0";
+const CHANNEL: &str = "catchplate.nativeJitReviewOpenChannel/v1";
+const DOMAIN: &[u8] = b"catchplate/native-jit-review-open-ciphertext/v1\0";
 pub(super) struct Configured {
     ingress: Arc<BrowserTls>, marker: Arc<()>, identity: Value, owner_scope: String,
     capacity: usize, spent: BTreeSet<String>,
@@ -25,7 +25,7 @@ impl Owner {
                 && self.historical_configuration_sha256.is_none() && identity.deadline() == self.deadline,
                 "review requires cold combined JIT owner")?;
             fields(&configuration, &["apiVersion","sourceContractDigest","controlPlaneConfigurationDigest","policy","assignmentOriginal"])?;
-            ensure(configuration["apiVersion"] == "serverware.nativeJitReviewOpenConfiguration/v1", "review broker profile")?;
+            ensure(configuration["apiVersion"] == "catchplate.nativeJitReviewOpenConfiguration/v1", "review broker profile")?;
             let assignment = document(configuration["assignmentOriginal"].as_str().ok_or("review assignment")?.as_bytes(),64*1024)?;
             let selected = &assignment["payload"]["assignment"];
             let sealing = self.jit_review_cold_scope()?;
@@ -94,7 +94,7 @@ impl Owner {
             let expected=sha(&raw);
             let reply=document(&self.process.exchange(&raw,deadline)?,512*1024)?;
             fields(&reply,&["apiVersion","requestSha256","recipientPublicKey","serverEphemeralPublicKey","aeadNonce","ciphertext"])?;
-            ensure(reply["apiVersion"]=="serverware.nativeJitReviewOpenCiphertext/v1" && reply["requestSha256"]==expected
+            ensure(reply["apiVersion"]=="catchplate.nativeJitReviewOpenCiphertext/v1" && reply["requestSha256"]==expected
                 && reply["recipientPublicKey"]==encoded(&public),"review recipient ciphertext differs")?;
             let peer:[u8;32]=decoded(&reply["serverEphemeralPublicKey"],32,Some(32))?.try_into().map_err(|_|"review peer width")?;
             let nonce:[u8;12]=decoded(&reply["aeadNonce"],12,Some(12))?.try_into().map_err(|_|"review nonce width")?;

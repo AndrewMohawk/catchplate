@@ -8,7 +8,7 @@ pub(crate) const CLIENT: &str = "synthetic-X-client_123";
 pub(crate) const SUBJECT: &str = "123456789";
 
 pub(crate) fn manifest(configured: bool) -> Value {
-    let binding = json!({"schema":"serverware.operatorXOAuthProfile/v1","profile":CAPABILITY,
+    let binding = json!({"schema":"catchplate.operatorXOAuthProfile/v1","profile":CAPABILITY,
         "provider_id":"x","client_id":CLIENT,"redirect_uri":"https://console.example.com/api/oauth/callback/x",
         "client_auth_method":"client_secret_basic","permission_preset":"x_text_post_v1",
         "scopes":x_post::SCOPES,"api_origins":["https://api.x.com"],
@@ -35,7 +35,7 @@ fn operator_x_profile_closed_flag_manifest_and_fixed_public_profile() {
     let base = manifest(true);
     let configured = parsed(&base).unwrap();
     assert_eq!(configured.state.profile.unwrap().binding_digest(),base["profile_binding_digest"].as_str().unwrap());
-    assert_eq!(gate_capability(),json!({"schema":"serverware.operatorXPostGate/v1",
+    assert_eq!(gate_capability(),json!({"schema":"catchplate.operatorXPostGate/v1",
         "adapter":"x.post.v1","operation":"tweets.write"}));
     for pointer in ["/profile_binding/provider_id","/profile_binding/token_url","/profile_binding/client_auth_method",
         "/profile_binding/redirect_uri","/profile_binding/permission_preset"] {
@@ -81,11 +81,11 @@ fn operator_x_profile_exact_signed_identity_and_no_ordinary_shared_quota() {
     let profile=parsed(&manifest(true)).unwrap().state.profile.unwrap();
     let credential=Credential {provider:"x".into(),provider_subject:Some(SUBJECT.into()),
         injection:json!({"type":"bearer","header":"Authorization","field":"access_token",
-            "__serverwareCredentialType":"oauth2","__serverwareOAuthClientId":CLIENT,
-            "__serverwareGrantedScopes":x_post::SCOPES})};
+            "__catchplateCredentialType":"oauth2","__catchplateOAuthClientId":CLIENT,
+            "__catchplateGrantedScopes":x_post::SCOPES})};
     assert!(profile.x_credential(&credential).unwrap());
-    for (key,value) in [("__serverwareOAuthClientId",json!("other")),
-        ("__serverwareGrantedScopes",json!(["tweet.read"])),("field",json!("refresh_token")),
+    for (key,value) in [("__catchplateOAuthClientId",json!("other")),
+        ("__catchplateGrantedScopes",json!(["tweet.read"])),("field",json!("refresh_token")),
         ("unknown",json!(true))] {
         let mut changed=credential.clone(); changed.injection[key]=value;
         assert!(profile.x_credential(&changed).is_err());
@@ -114,7 +114,7 @@ fn operator_x_profile_exact_signed_identity_and_no_ordinary_shared_quota() {
 
 #[test]
 fn operator_x_profile_real_shared_permit_file_modes_and_expiry() {
-    let path=env::temp_dir().join(format!("serverware-x-public-{}-{}",std::process::id(),now_epoch_ms()));
+    let path=env::temp_dir().join(format!("catchplate-x-public-{}-{}",std::process::id(),now_epoch_ms()));
     fs::create_dir(&path).unwrap(); fs::set_permissions(&path,fs::Permissions::from_mode(0o700)).unwrap();
     struct Cleanup(PathBuf); impl Drop for Cleanup {fn drop(&mut self){fs::remove_dir_all(&self.0).unwrap();}}
     let _cleanup=Cleanup(path.clone());

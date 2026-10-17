@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-activation-receiver.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-activation-receiver.v1.schema.json",
   "title": "Service-enclave activation connection acquisition",
   "$ref": "#/$defs/configuration",
   "$comment": "Acquisition only, not authorization. A receiver running inside the service enclave retains one actual parent-CID-3 connection on port 9102 and its journal directory. Its public BE32-framed observation precedes independent signing of existing C9/service originals. One canonical BE32-framed completion followed by EOF selects those exact originals. Existing signatures, NSM, keys, journal and signed time windows remain authoritative. No cross-kernel descriptor transfer or host-as-enclave claim.",
@@ -16,7 +16,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "deliveryConfiguration"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeShadowActivationReceiverConfiguration/v1" },
+        "apiVersion": { "const": "catchplate.nativeShadowActivationReceiverConfiguration/v1" },
         "deliveryConfiguration": { "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/pin" }
       }
     },
@@ -24,7 +24,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "deliveryConfiguration", "installationAuthority"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeShadowActivationReceiverConfiguration/v2" },
+        "apiVersion": { "const": "catchplate.nativeShadowActivationReceiverConfiguration/v2" },
         "deliveryConfiguration": { "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/pin" },
         "installationAuthority": { "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/authority" }
       },
@@ -34,18 +34,18 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "sourceManifestSha256", "receiverConfigurationSha256", "deliveryConfigurationSha256"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeActivationReceiverImageInputs/v1" },
+        "apiVersion": { "const": "catchplate.nativeActivationReceiverImageInputs/v1" },
         "sourceManifestSha256": { "$ref": "#/$defs/sha256" },
         "receiverConfigurationSha256": { "$ref": "#/$defs/sha256" },
         "deliveryConfigurationSha256": { "$ref": "#/$defs/sha256" }
       },
-      "$comment": "Explicit artifact-only build input. The input directory contains exactly inputs.json (this canonical document, no trailing LF), receiver.json and delivery-configuration.json. The receiver delivery pin must target /etc/serverware/native-activation-delivery.json and match the literal delivery configuration bytes. Zero digests are refused. No signed delivery, service assignment, launch, keys or journal state is packaged; the external enclave launcher must provide real inherited resources and late originals."
+      "$comment": "Explicit artifact-only build input. The input directory contains exactly inputs.json (this canonical document, no trailing LF), receiver.json and delivery-configuration.json. The receiver delivery pin must target /etc/catchplate/native-activation-delivery.json and match the literal delivery configuration bytes. Zero digests are refused. No signed delivery, service assignment, launch, keys or journal state is packaged; the external enclave launcher must provide real inherited resources and late originals."
     },
     "completion": {
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "observationSha256", "launchSha256"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeShadowActivationReceiverCompletion/v1" },
+        "apiVersion": { "const": "catchplate.nativeShadowActivationReceiverCompletion/v1" },
         "observationSha256": { "$ref": "#/$defs/sha256" },
         "launchSha256": { "$ref": "#/$defs/sha256" }
       },
@@ -55,7 +55,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "installation"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeShadowActivationReceiverCompletion/v2" },
+        "apiVersion": { "const": "catchplate.nativeShadowActivationReceiverCompletion/v2" },
         "installation": {
           "type": "object", "additionalProperties": false,
           "required": ["payload", "signature"],
@@ -71,7 +71,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "purpose", "configurationSha256", "deliveryConfigurationSha256", "observationSha256", "launchSha256", "issuedAtBoottimeNs", "startupDeadlineBoottimeNs", "files"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeShadowActivationReceiverInstallation/v1" },
+        "apiVersion": { "const": "catchplate.nativeShadowActivationReceiverInstallation/v1" },
         "purpose": { "const": "install-activation-public-originals" },
         "configurationSha256": { "$ref": "#/$defs/sha256" },
         "deliveryConfigurationSha256": { "$ref": "#/$defs/sha256" },
@@ -81,20 +81,20 @@
         "startupDeadlineBoottimeNs": { "$ref": "#/$defs/ns" },
         "files": { "type": "array", "minItems": 13, "maxItems": 13, "items": { "$ref": "#/$defs/installationFile" } }
       },
-      "$comment": "Signature domain serverware.nativeShadowActivationReceiverInstallation.signature/v1. Exactly the fixed unique 13-file roster; decoded originals total at most 720 KiB, each intersected with its downstream parser limit and at most 512 KiB. Issuance equals the retained observation timestamp; startup is at most 30 seconds later and must still be future on the actual enclave clock. Both must equal the genuine C9 interval. The installer never writes cold inputs, credential originals, binaries, helpers, images or journal state."
+      "$comment": "Signature domain catchplate.nativeShadowActivationReceiverInstallation.signature/v1. Exactly the fixed unique 13-file roster; decoded originals total at most 720 KiB, each intersected with its downstream parser limit and at most 512 KiB. Issuance equals the retained observation timestamp; startup is at most 30 seconds later and must still be future on the actual enclave clock. Both must equal the genuine C9 interval. The installer never writes cold inputs, credential originals, binaries, helpers, images or journal state."
     },
     "installationFile": {
       "type": "object", "additionalProperties": false,
       "required": ["path", "sha256", "originalBase64url"],
       "properties": {
         "path": { "enum": [
-          "/etc/serverware/native-shadow-guest-launch.json", "/etc/serverware/native-shadow-public-exchange.json",
-          "/etc/serverware/native-activation-inputs/delivery.json", "/etc/serverware/native-activation-inputs/runtime.json",
-          "/etc/serverware/native-activation-inputs/trust.json", "/etc/serverware/native-activation-inputs/time-bootstrap.json",
-          "/etc/serverware/native-activation-inputs/assignment.json", "/etc/serverware/native-activation-inputs/closure.json",
-          "/etc/serverware/native-activation-inputs/keys.json", "/etc/serverware/native-activation-inputs/encrypted-keys.json",
-          "/etc/serverware/native-activation-inputs/admission.json", "/etc/serverware/native-activation-inputs/activation.json",
-          "/etc/serverware/native-activation-inputs/activation-authority.json"
+          "/etc/catchplate/native-shadow-guest-launch.json", "/etc/catchplate/native-shadow-public-exchange.json",
+          "/etc/catchplate/native-activation-inputs/delivery.json", "/etc/catchplate/native-activation-inputs/runtime.json",
+          "/etc/catchplate/native-activation-inputs/trust.json", "/etc/catchplate/native-activation-inputs/time-bootstrap.json",
+          "/etc/catchplate/native-activation-inputs/assignment.json", "/etc/catchplate/native-activation-inputs/closure.json",
+          "/etc/catchplate/native-activation-inputs/keys.json", "/etc/catchplate/native-activation-inputs/encrypted-keys.json",
+          "/etc/catchplate/native-activation-inputs/admission.json", "/etc/catchplate/native-activation-inputs/activation.json",
+          "/etc/catchplate/native-activation-inputs/activation-authority.json"
         ] },
         "sha256": { "$ref": "#/$defs/sha256" },
         "originalBase64url": { "type": "string", "minLength": 2, "maxLength": 699051, "pattern": "^[A-Za-z0-9_-]+$" }
@@ -104,7 +104,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "okForAction", "configurationSha256", "deliveryConfigurationSha256", "processId", "processStartTicks", "processPidfdInode", "bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode", "observedAtBoottimeNs", "localCid", "localPort", "peerCid", "peerPort", "activation"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeShadowActivationReceiverObservation/v1" },
+        "apiVersion": { "const": "catchplate.nativeShadowActivationReceiverObservation/v1" },
         "okForAction": { "const": false },
         "configurationSha256": { "$ref": "#/$defs/sha256" },
         "deliveryConfigurationSha256": { "$ref": "#/$defs/sha256" },

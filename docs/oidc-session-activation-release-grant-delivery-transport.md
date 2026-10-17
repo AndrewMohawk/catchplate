@@ -6,7 +6,7 @@ write files, deliver keys, start the release worker or prove token readiness.
 It adds no configurable generic transport profile.
 
 The fixed endpoint is
-`/run/serverware/oidc-session-activation-token-release/bootstrap.sock`.
+`/run/catchplate/oidc-session-activation-token-release/bootstrap.sock`.
 Root delivery checks issuer request peer `65496:65496` before request bytes;
 the issuer checks the root-created listener peer `0:0` before sending bytes.
 The independently configured endpoint tuple is `(path, timeout, uid, gid)`;
@@ -23,7 +23,7 @@ Request magic `SWOGDQ01` carries exact raw2:
 
 Response magic `SWOGDR01` carries only `(b"staged", bootstrap_identity_bytes)`.
 The identity is exactly 71 ASCII bytes under the existing
-`serverware.oidcSessionActivationReleaseClientServerBootstrapIdentity/v1`
+`catchplate.oidcSessionActivationReleaseClientServerBootstrapIdentity/v1`
 domain. The helper calls the actual client authorization module's
 `_server_bootstrap_digest_on_work`, hashing the original itself, not its decoded
 payload, an echo or a caller-supplied digest. The issuer independently computes

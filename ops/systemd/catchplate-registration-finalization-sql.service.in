@@ -1,0 +1,70 @@
+# Unrendered, uninstalled deployment input. Independent admission/provisioning
+# must supply accounts, exact release, root bootstrap, TLS identities, catalog,
+# journal/checkpoint, database permissions and current pending authority.
+# Public TLS files: root-owned 0444; private TLS keys: root:65509 mode 0440.
+# Restrict PostgreSQL egress independently to the exact admitted endpoint.
+[Unit]
+Description=Catchplate dedicated finalization SQL owner (trusted-host-local)
+BindsTo=catchplate-registration-finalization-sql.socket
+After=local-fs.target catchplate-registration-finalization-sql.socket
+RequiresMountsFor=@FINALIZATION_SQL_RELEASE_ROOT@ @FINALIZATION_SQL_TRUST_DIR@ @FINALIZATION_SQL_TLS_DIR@ @FINALIZATION_SQL_JOURNAL_DIR@
+AssertPathIsDirectory=@FINALIZATION_SQL_RELEASE_ROOT@
+AssertPathIsDirectory=@FINALIZATION_SQL_TRUST_DIR@
+AssertPathIsDirectory=@FINALIZATION_SQL_TLS_DIR@
+AssertPathIsDirectory=@FINALIZATION_SQL_JOURNAL_DIR@
+StartLimitIntervalSec=infinity
+StartLimitBurst=1
+
+[Service]
+Type=exec
+# Root delivery permanently drops to 65509:65509, with no supplementary groups.
+# Four inherited FDs 198..201; no signing key. One accepted connection per cold
+# launch, including rejection. Type=exec is not cryptographic readiness proof.
+User=root
+Group=root
+RootDirectory=@FINALIZATION_SQL_RELEASE_ROOT@
+MountAPIVFS=yes
+WorkingDirectory=/app
+BindReadOnlyPaths=@FINALIZATION_SQL_TRUST_DIR@:/run/catchplate/registration-finalization-sql-trust
+BindReadOnlyPaths=@FINALIZATION_SQL_TLS_DIR@:/run/catchplate/registration-finalization-sql-tls
+BindReadOnlyPaths=/run/catchplate/registration-finalization:/run/catchplate/registration-finalization
+BindPaths=@FINALIZATION_SQL_JOURNAL_DIR@:/var/lib/catchplate/registration-finalization-sql-attempts
+ReadWritePaths=/var/lib/catchplate/registration-finalization-sql-attempts
+Sockets=catchplate-registration-finalization-sql.socket
+NonBlocking=yes
+Environment=LD_LIBRARY_PATH=/runtime/python/lib
+ExecStart=/runtime/python/bin/python3 -I /runtime/authority-bootstrap/registration_finalization_sql_launcher.py --root-delivery
+Restart=no
+RuntimeMaxSec=300s
+TimeoutStartSec=35s
+# TERM plus cgroup escalation is not a hard kernel syscall watchdog.
+TimeoutStopSec=35s
+KillSignal=SIGTERM
+KillMode=control-group
+SendSIGKILL=yes
+OOMPolicy=stop
+UMask=0077
+LimitCORE=0
+LimitNOFILE=1024
+TasksMax=32
+MemoryMax=512M
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SETGID CAP_SETUID
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+KeyringMode=private
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native

@@ -20,8 +20,8 @@ mod tests;
 #[path = "jit_review_release_tests.rs"]
 mod release_tests;
 
-const CHANNEL: &str = "serverware.nativeJitReviewChannel/v1";
-const CONFIG: &str = "serverware.nativeJitReviewConfiguration/v1";
+const CHANNEL: &str = "catchplate.nativeJitReviewChannel/v1";
+const CONFIG: &str = "catchplate.nativeJitReviewConfiguration/v1";
 const MAX_COMMAND: usize = 512 * 1024;
 const MAX_PLAINTEXT: usize = 256 * 1024;
 const IDENTITY: &[&str] = &["holderId", "bootId", "keyId", "controlPlaneResponseSigningKeyId",
@@ -135,7 +135,7 @@ fn framed(domain: &str, frames: &[&[u8]]) -> String {
     format!("sha256:{}", hex::encode(hash.finalize()))
 }
 fn opaque_id(request: &str, purpose: &str) -> Result<String, String> {
-    let hash = Sha256::digest(canonical_ascii_bytes(&json!({"schema":"serverware.policyAuthorityDeterministicIdentity/v1",
+    let hash = Sha256::digest(canonical_ascii_bytes(&json!({"schema":"catchplate.policyAuthorityDeterministicIdentity/v1",
         "operation":"jit.request", "requestDigest":request, "purpose":purpose}))?);
     let mut bytes = [0u8; 16]; bytes.copy_from_slice(&hash[..16]);
     bytes[6] = (bytes[6] & 15) | 0x50; bytes[8] = (bytes[8] & 63) | 0x80;
@@ -183,10 +183,10 @@ fn validate_correlations(config: &Value, original: &originals::Originals, contro
     request_scope(config, &original.request)?;
     let (phase, response_phase, operation, pair_schema, scope_schema) = if parent.is_some() {
         ("seal-release-pair", "prepared-release-pair", "release.reserve",
-            "serverware.nativeJitReviewPair/v2", "serverware.nativeJitReviewScope/v2")
+            "catchplate.nativeJitReviewPair/v2", "catchplate.nativeJitReviewScope/v2")
     } else {
         ("seal-pair", "prepared", "jit.request",
-            "serverware.nativeJitReviewPair/v1", "serverware.nativeJitReviewScope/v1")
+            "catchplate.nativeJitReviewPair/v1", "catchplate.nativeJitReviewScope/v1")
     };
     ensure(control["apiVersion"] == CHANNEL && control["phase"] == phase, "JIT command purpose differs")?;
     crate::native_currentness_v1::bytes32(text(&control["challenge"])?)?;

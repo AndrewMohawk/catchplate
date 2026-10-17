@@ -30,10 +30,10 @@ from psycopg import sql
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.native_postgres_results import run_native_fixture
+from catchplate.native_postgres_results import run_native_fixture
 
-from serverware import authority_contract
-from serverware.authority_store.verifier_read_sql import verifier_read_privilege_check
+from catchplate import authority_contract
+from catchplate.authority_store.verifier_read_sql import verifier_read_privilege_check
 from test_webauthn_trust_projection_postgres import local_connection_parameters
 
 

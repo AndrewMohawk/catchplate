@@ -28,7 +28,7 @@ FIELDS = {"ready", "policy_hash", "loaded_policy_hash", "managed_google"}
 
 
 def health(f):
-    from serverware import operator_google_gate_configuration as producer
+    from catchplate import operator_google_gate_configuration as producer
     with f.store.operator_publication.exclusive(), closing(f.db.connect()) as conn:
         conn.execute("PRAGMA query_only=ON")
         conn.execute("BEGIN")
@@ -88,7 +88,7 @@ class HealthTransport:
 
 def fixture():
     f = managed_tests.Fixture()
-    from serverware import operator_google_managed_readiness as readiness
+    from catchplate import operator_google_managed_readiness as readiness
     assert f.config.EXPECTED_DATA_PLANE_BINARY_DIGEST == BINARY
     assert f.profiles.require_profile().client_id == managed_tests.CLIENT
     assert f.config.GOOGLE_OAUTH_CLIENT_SECRET == managed_tests.SECRET
@@ -181,8 +181,8 @@ def changed_during_observation(_request):
 class ConnectedManagedReadinessTests(unittest.TestCase):
     def setUp(self):
         managed_tests.ManagedGoogleConfigurationTests.setUp(self)
-        self.environment.update({"SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST": BINARY,
-            "SERVERWARE_DECISION_GATE_BASE": "http://127.0.0.1:9091"})
+        self.environment.update({"CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST": BINARY,
+            "CATCHPLATE_DECISION_GATE_BASE": "http://127.0.0.1:9091"})
         prepared = self.worker("prepare")
         self.worker("activate", prepared)
 

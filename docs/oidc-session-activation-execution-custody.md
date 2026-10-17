@@ -1,7 +1,7 @@
 # Private activation receiving custody
 
 The source now has an actual process-bound receiving owner,
-[`OidcSessionActivationExecutionCustody`](../serverware/authority_oidc_session_activation_execution_custody.py),
+[`OidcSessionActivationExecutionCustody`](../catchplate/authority_oidc_session_activation_execution_custody.py),
 and a connected activation branch in the generic original-plan replay path.
 This is not a deployed receiver, a provisioned key loader, a complete execution
 service or production verification. No build, test or runtime result is claimed.
@@ -20,7 +20,7 @@ previously returned material object cannot substitute for receiving authority.
 
 The exact owner class checks its PID, unchanged private configuration, real,
 effective and saved UID/GID, empty supplementary groups and fixed
-`SERVERWARE_PROCESS_MODE`. Replay holds its nonblocking lock. Close removes the
+`CATCHPLATE_PROCESS_MODE`. Replay holds its nonblocking lock. Close removes the
 held configuration; another process, changed configuration or concurrent replay
 does not gain access. These checks do not create accounts or services, supply
 private keys, attest executable bytes or widen existing registration roles.
@@ -94,7 +94,7 @@ remain; no new allowance is allocated.
 
 ## Narrowing without renewal
 
-[`authority_successor_execution_window._narrow`](../serverware/authority_successor_execution_window.py)
+[`authority_successor_execution_window._narrow`](../catchplate/authority_successor_execution_window.py)
 has the signature:
 
 ```text

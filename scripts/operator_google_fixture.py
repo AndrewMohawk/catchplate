@@ -27,14 +27,14 @@ from scripts.oauth_provider_simulator import OAuthProviderSimulator
 GOOGLE_IP = "93.184.216.34"
 GOOGLE_HOSTS = ("accounts.google.com", "oauth2.googleapis.com",
                 "openidconnect.googleapis.com", "gmail.googleapis.com")
-CONTROL_HOST = "serverware-demo.example.com"
+CONTROL_HOST = "catchplate-demo.example.com"
 CONTROL_ORIGIN = "https://" + CONTROL_HOST
 AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 IDENTITY_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 GMAIL_PATH = "/gmail/v1/users/me/messages"
 OBSERVATIONS_PATH = "/__test__/observations"
-CLIENT_ID = "serverware-fixture.apps.googleusercontent.com"
+CLIENT_ID = "catchplate-fixture.apps.googleusercontent.com"
 CLIENT_SECRET = "synthetic-google-client-secret-fixture-only"
 INITIAL_TTL_SECONDS = 90
 REFRESH_TTL_SECONDS = 300
@@ -43,7 +43,7 @@ GMAIL_RESPONSE_BODY = json.dumps({"messages": [
     {"id": "gmail-recent-1", "threadId": "gmail-thread-1"},
     {"id": "gmail-recent-2", "threadId": "gmail-thread-2"}],
     "resultSizeEstimate": 2}, sort_keys=True, separators=(",", ":")).encode("ascii")
-MARKER = {"schema": "serverware.privateOperatorGoogleFixture/v1",
+MARKER = {"schema": "catchplate.privateOperatorGoogleFixture/v1",
           "syntheticOnly": True, "networkMode": "none", "googleAddress": GOOGLE_IP}
 PKI = Path("/fixture-google")
 
@@ -186,7 +186,7 @@ class GoogleFixture(OAuthProviderSimulator):
         self._expire()
         with self._lock:
             result = super().observations()
-            result.update(schema="serverware.privateGoogleObservations/v1",
+            result.update(schema="catchplate.privateGoogleObservations/v1",
                 initialAccessExpiresAtEpochMs=self._initial_expiry_epoch_ms,
                 initialAccessExpired=(self._initial_expiry_monotonic is not None
                     and time.monotonic() >= self._initial_expiry_monotonic))

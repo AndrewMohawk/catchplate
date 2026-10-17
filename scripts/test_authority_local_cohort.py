@@ -11,8 +11,8 @@ from unittest.mock import patch
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from serverware import authority_local_cohort as subject
-from serverware import authority_local_limits as limits
+from catchplate import authority_local_cohort as subject
+from catchplate import authority_local_limits as limits
 from scripts.authority import local_cohort as cli
 
 
@@ -32,7 +32,7 @@ def fixture():
             for role in subject.cohort.ROLES},
         roleBindingDigests={role: digest(role + "-binding") for role in subject.cohort.ROLES},
         packageVersions={"synthetic-test": "1"},
-        credentialReleaseTrust=dict(schema="serverware.trustedHostLocalCredentialReleaseTrust/v1",
+        credentialReleaseTrust=dict(schema="catchplate.trustedHostLocalCredentialReleaseTrust/v1",
             trustMode="trusted-host-local", maximumReceiptAgeNs=200),
         issuerCredentialIssuanceDigest=digest("issuer-issuance"), executorCredentialIssuanceDigest=digest("executor-issuance"),
         verifierCredentialIssuanceDigest=digest("verifier-issuance"))
@@ -369,7 +369,7 @@ class LocalCohortTests(unittest.TestCase):
         for mutate in (lambda v: v["roles"].pop("verifier"),
                        lambda v: v["roles"].update(runtime=deepcopy(v["roles"]["issuer"])),
                        lambda v: v.update(rootDelegation="*"),
-                       lambda v: v.update(schema="serverware.authorityTrustedHostLocalCohortApproval/v1"),
+                       lambda v: v.update(schema="catchplate.authorityTrustedHostLocalCohortApproval/v1"),
                        lambda v: v.pop("historicalArchiveSelection"),
                        lambda v: v.update(historicalArchiveSelection="discard-prior-history"),
                        lambda v: v["roles"]["verifier"].update(exchangeDirectory=v["roles"]["issuer"]["exchangeDirectory"])):
@@ -438,7 +438,7 @@ class LocalCohortTests(unittest.TestCase):
         raw, verifier, delivery_raw = subject._signed_runtime_evidence(context, key, now_unix_ns=150)
         delivery = subject.document(delivery_raw, subject.pair.LATE_LIMITS["evidence.json"])
         self.assertEqual(set(delivery), {"schema", "currentCohort", "historicalArchive"})
-        self.assertEqual(delivery["schema"], "serverware.authorityRuntimeEvidence/v1")
+        self.assertEqual(delivery["schema"], "catchplate.authorityRuntimeEvidence/v1")
         self.assertEqual(subject.canonical(delivery["currentCohort"]), raw)
         self.assertEqual(verifier, next(row[1] for row in verify(raw, context, key)[0].receipts if row[0] == "verifier"))
         archive = delivery["historicalArchive"]
@@ -467,8 +467,8 @@ class LocalCohortTests(unittest.TestCase):
         # first live guard. This is not a mocked successful process admission.
         # Import through the existing non-authority control-plane mode; do not
         # pretend a measured role has an active launch guard.
-        with patch.dict("os.environ", {"SERVERWARE_PROCESS_MODE": "serverware-control-plane"}):
-            from serverware.authority_service import MeasuredConfiguration, AuthorityServiceError
+        with patch.dict("os.environ", {"CATCHPLATE_PROCESS_MODE": "catchplate-control-plane"}):
+            from catchplate.authority_service import MeasuredConfiguration, AuthorityServiceError
         key, _, context = fixture()
         cohort_raw, _, delivery_raw = subject._signed_runtime_evidence(context, key, now_unix_ns=150)
         with patch.object(subject.cohort.guard, "require_active", side_effect=ValueError("deliberate guard refusal")) as guard:

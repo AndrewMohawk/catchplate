@@ -15,7 +15,7 @@ pub mod parent;
 const FD:i32=70;
 const MAXIMUM:usize=8*1024*1024;
 const MAX_PUBLICATION:usize=32768;
-const API:&str="serverware.nativePolicyActivationChannelRequest/v1";
+const API:&str="catchplate.nativePolicyActivationChannelRequest/v1";
 const SEALS:i32=libc::F_SEAL_SEAL|libc::F_SEAL_SHRINK|libc::F_SEAL_GROW|libc::F_SEAL_WRITE;
 fn require(value:bool)->Result<(),String>{if value{Ok(())}else{Err("native activation public channel unavailable".into())}}
 fn now()->Result<u64,String>{crate::native_canary_evidence_v1::now_boot()}
@@ -58,8 +58,8 @@ impl ChannelVersion{
 }
 impl Configuration{
     pub fn version(&self)->Result<ChannelVersion,String>{match self.api_version.as_str(){
-        "serverware.nativePolicyActivationChannel/v1"=>Ok(ChannelVersion::UnixV1),
-        "serverware.nativePolicyActivationChannel/v2"=>Ok(ChannelVersion::VsockV2),
+        "catchplate.nativePolicyActivationChannel/v1"=>Ok(ChannelVersion::UnixV1),
+        "catchplate.nativePolicyActivationChannel/v2"=>Ok(ChannelVersion::VsockV2),
         _=>Err("native activation channel profile not selected".into()),
     }}
 }
@@ -99,7 +99,7 @@ impl Owner{
     pub fn publish(&mut self,raw:&[u8],deadline:u64,check:impl Fn()->Result<(),String>)->Result<Vec<u8>,String>{
         self.check()?;check()?;require(!self.attempted && now()?<deadline && deadline<=self.serving.deadline())?;
         let value:serde_json::Value=parse(raw,MAXIMUM)?;
-        require(value["apiVersion"]=="serverware.nativePolicyActivationRequest/v1")?;
+        require(value["apiVersion"]=="catchplate.nativePolicyActivationRequest/v1")?;
         self.attempted=true;
         if self.binding.is_stream(){return self.publish_stream(raw,deadline,&check);}
         let file=sealed(raw)?;
@@ -197,7 +197,7 @@ impl ServiceChannel{
         let Some(raw)=result else{return Ok(None)};
         self.received=true;
         let value:serde_json::Value=parse(&raw,MAXIMUM)?;
-        require(value["apiVersion"]=="serverware.nativePolicyActivationRequest/v1")?;
+        require(value["apiVersion"]=="catchplate.nativePolicyActivationRequest/v1")?;
         // Retain immutable received bytes locally; this is not an imported FD
         // or a replacement for genuine request/authority verification.
         let file=sealed(&raw)?;
@@ -207,7 +207,7 @@ impl ServiceChannel{
     pub fn send(&mut self,request:&Incoming,bytes:&[u8])->Result<bool,String>{
         self.check()?;request.check()?;require(self.received && !bytes.is_empty() && bytes.len()<=MAX_PUBLICATION)?;
         let value:serde_json::Value=parse(bytes,MAX_PUBLICATION)?;
-        require(value["payload"]["apiVersion"]=="serverware.nativePolicyActivationPublication/v1"
+        require(value["payload"]["apiVersion"]=="catchplate.nativePolicyActivationPublication/v1"
             && value["payload"]["requestSha256"]==crate::sha256_prefixed(request.original()))?;
         if self.binding.is_stream(){
             require(!self.failed && !self.sent)?;

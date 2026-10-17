@@ -12,9 +12,9 @@ Signed parent enrollment v14 adds nullable
 `oidcSessionActivationReleaseProofAcquisition`. Older v2–v13 envelopes retain
 their exact closed shapes. The new value has exactly:
 
-- `schema`: `serverware.controlPlaneOidcSessionActivationReleaseProofAcquisition/v1`.
+- `schema`: `catchplate.controlPlaneOidcSessionActivationReleaseProofAcquisition/v1`.
 - `endpoint`: `{path, timeoutSeconds, peerUid, peerGid}`. The source-fixed path
-  is `/run/serverware/oidc-session-activation-release-proof-inputs/grants.sock`,
+  is `/run/catchplate/oidc-session-activation-release-proof-inputs/grants.sock`,
   timeout is an integer from 1 through 30 seconds, and the server peer is 0:0.
 - `issuerPolicy`: `{base64Url, byteCount}`, the exact independent root-signed
   policy original, bounded to 64 KiB.

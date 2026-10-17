@@ -14,12 +14,12 @@ except ModuleNotFoundError:
 
 
 SOURCE = Path("/fixture/source")
-BINARY = Path("/fixture/serverware-decision-gate")
+BINARY = Path("/fixture/catchplate-decision-gate")
 INITIALIZER = Path("/fixture/initialize.py")
-ROOT = fixture.SCRATCH / "serverware-catalog-private.PinCheck01"
+ROOT = fixture.SCRATCH / "catchplate-catalog-private.PinCheck01"
 SUBNET = "172.16.249.48/28"
 SELECTED = "9be25b5dbca69befbbbdfab7b1fab9a852f3c6212a73078ea0c05a32375ef3a4"
-ENV_KEY = "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST"
+ENV_KEY = "CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST"
 INVALID = (None, True, 1, b"a" * 64, "", "a" * 63, "a" * 65,
            "A" * 64, "g" * 64, "sha256:" + "a" * 64, " " + "a" * 64,
            "a" * 64 + "\n", "a" * 32 + " " + "a" * 31)
@@ -35,7 +35,7 @@ class BinaryPinTests(unittest.TestCase):
 
     def test_historical_default_unchanged(self):
         self.assertEqual(self.build(), self.build(expected_binary_sha256=fixture.BINARY_SHA256))
-        self.assertEqual(self.build()["services"]["serverware"]["environment"][ENV_KEY],
+        self.assertEqual(self.build()["services"]["catchplate"]["environment"][ENV_KEY],
                          "sha256:" + fixture.BINARY_SHA256)
         fixture.validate(self.build(), SOURCE, BINARY, INITIALIZER, ROOT)
 
@@ -43,7 +43,7 @@ class BinaryPinTests(unittest.TestCase):
         historical = self.build()
         selected = self.build(expected_binary_sha256=SELECTED)
         expected = deepcopy(historical)
-        expected["services"]["serverware"]["environment"][ENV_KEY] = "sha256:" + SELECTED
+        expected["services"]["catchplate"]["environment"][ENV_KEY] = "sha256:" + SELECTED
         self.assertEqual(selected, expected)
         fixture.validate(selected, SOURCE, BINARY, INITIALIZER, ROOT, expected_binary_sha256=SELECTED)
 
@@ -65,7 +65,7 @@ class BinaryPinTests(unittest.TestCase):
         for value in (None, SELECTED, "sha256:" + fixture.BINARY_SHA256,
                       "sha256:" + SELECTED.upper(), "sha256:sha256:" + SELECTED):
             config = self.build(expected_binary_sha256=SELECTED)
-            environment = config["services"]["serverware"]["environment"]
+            environment = config["services"]["catchplate"]["environment"]
             if value is None:
                 del environment[ENV_KEY]
             else:
@@ -81,7 +81,7 @@ class BinaryPinTests(unittest.TestCase):
     def mocked_prepare(self, args, *, actual_binary=SELECTED, actual_initializer=fixture.INITIALIZER_SHA256):
         def digest(path):
             return {BINARY: actual_binary, INITIALIZER: actual_initializer,
-                    SOURCE / "serverware/app.py": "f" * 64}[path]
+                    SOURCE / "catchplate/app.py": "f" * 64}[path]
 
         def command(argv):
             if argv[:3] == ["docker", "image", "inspect"]:
@@ -91,7 +91,7 @@ class BinaryPinTests(unittest.TestCase):
             if argv[0] == "findmnt":
                 return '{"filesystems":[{"target":"/fixture","fstype":"ext4"}]}'
             if argv[:3] == ["git", "-C", str(SOURCE)]:
-                return {"ls-files": "serverware/app.py\n", "rev-parse": "a" * 40 + "\n",
+                return {"ls-files": "catchplate/app.py\n", "rev-parse": "a" * 40 + "\n",
                         "status": ""}[argv[3]]
             self.fail("unexpected external command in mocked preparation")
 
@@ -109,7 +109,7 @@ class BinaryPinTests(unittest.TestCase):
     def test_preparation_receipt_and_environment_share_verified_pin(self):
         result, commands = self.mocked_prepare(self.args(expected_binary_sha256=SELECTED))
         self.assertEqual(result["preparation"]["binarySha256"], SELECTED)
-        self.assertEqual(result["compose"]["services"]["serverware"]["environment"][ENV_KEY], "sha256:" + SELECTED)
+        self.assertEqual(result["compose"]["services"]["catchplate"]["environment"][ENV_KEY], "sha256:" + SELECTED)
         self.assertEqual(result["preparation"]["initializerSha256"], fixture.INITIALIZER_SHA256)
         self.assertFalse(result["preparation"]["launched"])
         self.assertTrue(commands.called)
@@ -117,7 +117,7 @@ class BinaryPinTests(unittest.TestCase):
     def test_preparation_legacy_args_keep_historical_pin(self):
         result, _ = self.mocked_prepare(self.args(), actual_binary=fixture.BINARY_SHA256)
         self.assertEqual(result["preparation"]["binarySha256"], fixture.BINARY_SHA256)
-        self.assertEqual(result["compose"]["services"]["serverware"]["environment"][ENV_KEY],
+        self.assertEqual(result["compose"]["services"]["catchplate"]["environment"][ENV_KEY],
                          "sha256:" + fixture.BINARY_SHA256)
 
     def test_file_digest_mismatch_fails_before_external_checks(self):

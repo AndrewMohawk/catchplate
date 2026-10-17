@@ -22,7 +22,7 @@ MAX_HEADER_BYTES = 16384
 MAX_HEADER_COUNT = 64
 MAX_QUERY_BYTES = 512
 BODY_READ_TIMEOUT_SECONDS = 5.0
-DUMMY_AUTHORIZATION = "Bearer SERVERWARE_DUMMY"
+DUMMY_AUTHORIZATION = "Bearer CATCHPLATE_DUMMY"
 QUERY_KEYS = ("case", "expectedAuthorizationSha256", "expectedBodySha256")
 REQUEST_BODY = (
     b'\n{\n  "z": [1e+02, 18446744073709551617],\n'
@@ -37,7 +37,7 @@ EMPTY_RESPONSE_CONTENT_TYPE = "application/json; charset=utf-8"
 PROXY_BASIC_CASE = "json_proxy_basic_v1"
 FIXTURE_CASES = ("json", "empty", "json_v2", "empty_v2", PROXY_BASIC_CASE)
 V2_RESPONSE_METADATA = (
-    ("server", "serverware-synthetic-upstream"),
+    ("server", "catchplate-synthetic-upstream"),
     ("date", "Thu, 01 Jan 1970 00:00:00 GMT"),
     ("cache-control", "no-store"),
 )
@@ -58,7 +58,7 @@ _PROXY_BASIC_OPTIONAL_HEADERS = frozenset({b"connection", b"accept-encoding"})
 _PROXY_BASIC_ACCEPT = frozenset({
     b"application/json", b"application/json;q=0.9", b"application/json;q=0.8", b"application/json;q=0.7",
 })
-_PROXY_BASIC_USER_AGENT = re.compile(rb"serverware-test-run/operator-check-[0-9a-f]{32}\Z")
+_PROXY_BASIC_USER_AGENT = re.compile(rb"catchplate-test-run/operator-check-[0-9a-f]{32}\Z")
 
 
 class FixtureRejected(ValueError):

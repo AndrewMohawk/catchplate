@@ -103,13 +103,13 @@ class ReadonlyPairTests(unittest.TestCase):
 
     def catalog_fixture(self):
         origins = ["https://demo-upstream:8443"] + [f"https://provider-{index}.example.com" for index in range(15)]
-        snapshot = {"schema": "serverware.operatorCatalog/v1", "mode": "operator-development",
+        snapshot = {"schema": "catchplate.operatorCatalog/v1", "mode": "operator-development",
             "productionReady": False, "hardwareVerified": False, "allowed_upstreams": origins,
             "revision": 17, "policy": {"policy_hash": "sha256:" + "a" * 64, "sequence": 12},
             "capabilities": {"oauth": False, "google_oauth": None},
             **{key: [] for key in checker.COLLECTIONS}}
-        env = patch.dict(os.environ, {"SERVERWARE_OPERATOR_DEMO_UPSTREAMS": json.dumps(origins),
-            "SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS": '["172.16.249.18/32"]'})
+        env = patch.dict(os.environ, {"CATCHPLATE_OPERATOR_DEMO_UPSTREAMS": json.dumps(origins),
+            "CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS": '["172.16.249.18/32"]'})
         env.start()
         self.addCleanup(env.stop)
         return snapshot
@@ -159,7 +159,7 @@ class ReadonlyPairTests(unittest.TestCase):
 
     def test_catalog_invalid_configured_origin_is_refused_before_transport(self):
         snapshot = self.catalog_fixture()
-        with patch.dict(os.environ, {"SERVERWARE_OPERATOR_DEMO_UPSTREAMS": '["http://provider.example.com"]'}), \
+        with patch.dict(os.environ, {"CATCHPLATE_OPERATOR_DEMO_UPSTREAMS": '["http://provider.example.com"]'}), \
                 patch.object(self.check, "control_json", return_value=snapshot) as transport:
             with self.assertRaises(ValueError):
                 self.check.catalog()

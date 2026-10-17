@@ -22,13 +22,13 @@ ORIGINALS = ["intent_bytes", "relay_bytes", "envelope_bytes", "evaluation_contex
 class RevocationWriterCompositionSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.text, cls.tree = source("serverware/authority_revocation_writer_composition.py", 64 * 1024)
+        cls.text, cls.tree = source("catchplate/authority_revocation_writer_composition.py", 64 * 1024)
         cls.worker = definition(cls.tree, "_persist_commitments_on_configuration")
-        _, cls.service = source("serverware/authority_service.py", 2 * 1024 * 1024)
+        _, cls.service = source("catchplate/authority_service.py", 2 * 1024 * 1024)
         cls.process = definition(cls.service, "AuthorityProcess")
         cls.adapter = definition(cls.process, "_persist_and_reserve_revocation_commitments")
         cls.continuation = definition(cls.service, "_revocation_writer_from_owned_configuration")
-        _, cls.persistence = source("serverware/authority_revocation_persistence.py", 64 * 1024)
+        _, cls.persistence = source("catchplate/authority_revocation_persistence.py", 64 * 1024)
 
     def shape(self, actual, expected):
         self.assertEqual(ast.dump(actual), ast.dump(ast.parse("(" + expected.strip() + ")", mode="eval").body))
@@ -47,7 +47,7 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
         # This inert composition neither imports an active role nor accepts a
         # successful receiver DTO, operation, opener, clock or new limit. Only
         # its fixed service caller supplies the two held cryptographic handles.
-        for forbidden in ("authority_service", "authority_transition_registry", "from serverware import db",
+        for forbidden in ("authority_service", "authority_transition_registry", "from catchplate import db",
                 "import psycopg", "Ed25519PrivateKey", "_ValidationWork(", "_PackagingLedger(",
                 "_ProducedIntent", "_ProducedRelay", "_AuthenticatedCommitments("):
             self.assertNotIn(forbidden, self.text)
@@ -151,7 +151,7 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
         for actual, expected in zip(callbacks, (
                 'authority_revocation_configuration.production._callback(work, lambda: authority_launch_guard.require_active("planner-writer"))',
                 '''authority_revocation_configuration.production._callback(work,
-                    lambda: _read_dsn_descriptor("SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN"))''',
+                    lambda: _read_dsn_descriptor("CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN"))''',
                 'authority_revocation_configuration.production._callback(work, lambda: dict(authority_launch_guard.generation()))')):
             self.shape(actual, expected)
         mapper = call(continuation, "authority_revocation_writer_configuration._persistence_from_configuration_on_work")
@@ -170,7 +170,7 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
                          sorted(node.lineno for node in (callbacks[2], held, sequence_check, digest_check, mapper)))
         self.assertEqual([node.lineno for node in (*callbacks, mapper)],
                          sorted(node.lineno for node in (*callbacks, mapper)))
-        _, mapper_tree = source("serverware/authority_revocation_writer_configuration.py", 64 * 1024)
+        _, mapper_tree = source("catchplate/authority_revocation_writer_configuration.py", 64 * 1024)
         factory = definition(mapper_tree, "_persistence_from_configuration_on_work")
         capture = call(factory, "configuration._capture_configuration_on_work")
         self.shape(capture, '''configuration._capture_configuration_on_work(payload=payload,
@@ -185,7 +185,7 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
         self.shape(fields["writer_database_identity"], "database_identity")
         self.assertEqual([node.lineno for node in (capture, *keys, actual_owner)],
                          sorted(node.lineno for node in (capture, *keys, actual_owner)))
-        _, config_tree = source("serverware/authority_revocation_configuration.py", 64 * 1024)
+        _, config_tree = source("catchplate/authority_revocation_configuration.py", 64 * 1024)
         shared = definition(config_tree, "_capture_configuration_on_work")
         self.shape(call(shared, "_generation_binding"), "_generation_binding(owned, launch, configuration_digest, work)")
         binding = definition(config_tree, "_generation_binding")
@@ -202,7 +202,7 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
             tuple(launch_pins[role] for role in _ROLE_NAMES), work,
             "issuer role bindings differ from the active launch generation")''')
         for function in (continuation, self.adapter):
-            for forbidden in ("SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN", "self.role_config",
+            for forbidden in ("CATCHPLATE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN", "self.role_config",
                     "self.signing_key", "_produce_revocation_observed_plan"):
                 self.assertNotIn(forbidden, ast.unparse(function))
 
@@ -253,7 +253,7 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
             "commitment._raw(relay_bytes, commitment.MAX_CONTROL_BYTES)"])
         self.shape(call(bounds, "commitment._body_bounds"),
                    "commitment._body_bounds(envelope_bytes, evaluation_context_bytes, historical_expectations_bytes)")
-        _, commitment_tree = source("serverware/authority_revocation_writer_commitment.py", 128 * 1024)
+        _, commitment_tree = source("catchplate/authority_revocation_writer_commitment.py", 128 * 1024)
         self.shape(definition(commitment_tree, "_raw").body[0].test,
                    "type(raw) is not bytes or not 2 <= len(raw) <= maximum")
         actual_bounds = definition(commitment_tree, "_body_bounds")
@@ -302,14 +302,14 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
             for node in ast.walk(worker)))
         self.assertFalse(any(isinstance(node, ast.Attribute) and node.attr in {
             "_snapshot_configuration", "metrics", "sign", "commit", "rollback"} for node in ast.walk(worker)))
-        _, commitment_tree = source("serverware/authority_revocation_writer_commitment.py", 128 * 1024)
+        _, commitment_tree = source("catchplate/authority_revocation_writer_commitment.py", 128 * 1024)
         actual_receiver = definition(commitment_tree, "_verify_commitments_on_work")
         signatures = calls(actual_receiver, "capability._signature")
         self.assertEqual([ast.unparse(node) for node in signatures], [
             "capability._signature(planner_public_key, relay_signature, ENVELOPE_SCHEMA, relay_unsigned, ledger)",
             "capability._signature(verifier_public_key, intent_signature, ENVELOPE_SCHEMA, intent_unsigned, ledger)"])
         self.assertLess(signatures[1].lineno, call(actual_receiver, "_bind_intent").lineno)
-        _, policy_tree = source("serverware/authority_revocation_writer_action.py", 64 * 1024)
+        _, policy_tree = source("catchplate/authority_revocation_writer_action.py", 64 * 1024)
         actual_policy = definition(policy_tree, "_assert_policy_on_work")
         self.shape(assigned(actual_policy, "assertion_age"), 'payload["webauthn"]["maximumChallengeAgeNs"]')
         self.shape(assigned(actual_policy, "verifier_age"), 'payload["roles"]["verifier"]["maximumInternalAgeNs"]')
@@ -340,7 +340,7 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
         runner = definition(self.persistence, "_run_on_configuration")
         inputs = call(runner, "_inputs_from_configuration")
         db_import, = [node for node in runner.body if isinstance(node, ast.ImportFrom)
-                      and node.module == "serverware" and [item.name for item in node.names] == ["db"]]
+                      and node.module == "catchplate" and [item.name for item in node.names] == ["db"]]
         opened = call(runner, "_connect")
         actual_connection = call(runner, "writer_connection._run_on_connection")
         self.assertEqual([node.lineno for node in (inputs, db_import, opened, actual_connection)],
@@ -370,7 +370,7 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
         self.assertLess(call(common, "_retain_and_reserve_in_common").lineno, request.lineno)
         self.assertLess(request.lineno, ack.lineno)
         self.assertLess(common.end_lineno, operation.body[-1].lineno)
-        _, store = source("serverware/authority_store/revocation_retention.py", 64 * 1024)
+        _, store = source("catchplate/authority_store/revocation_retention.py", 64 * 1024)
         stored_replay = definition(store, "_read_revocation_record_on_work")
         self.shape(call(definition(store, "persist_revocation_planner_record"), "retention._verify_record_on_work"),
             '''retention._verify_record_on_work(envelope_bytes=envelope_bytes,
@@ -378,7 +378,7 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
         self.shape(call(stored_replay, "retention._verify_record_on_work"),
             '''retention._verify_record_on_work(envelope_bytes=envelope,
                 evaluation_context_bytes=context, work=work, **expectations)''')
-        _, execution = source("serverware/authority_store/revocation_execution.py", 64 * 1024)
+        _, execution = source("catchplate/authority_store/revocation_execution.py", 64 * 1024)
         actual_reserve = definition(execution, "reserve_revocation_execution_envelope")
         self.shape(call(actual_reserve, "store._read_revocation_record_on_work"),
             '''store._read_revocation_record_on_work(planner_transaction_id=planner_transaction_id,
@@ -397,7 +397,7 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
         self.shape(call(definition(store, "_fresh"), "_require_fresh_deadline"),
             '''_require_fresh_deadline(deadline_monotonic_ns=reservation["deadline_monotonic_ns"],
                 deadline_epoch_ns=reservation["deadline_epoch_ns"], reserved_at_epoch_ns=reservation["reserved_at_epoch_ns"])''')
-        _, connection = source("serverware/authority_store/planner_connection.py", 64 * 1024)
+        _, connection = source("catchplate/authority_store/planner_connection.py", 64 * 1024)
         deadline = definition(connection, "_require_fresh_deadline")
         self.shape(assigned(deadline, "now_monotonic_ns"), "time.monotonic_ns()")
         self.shape(assigned(deadline, "now_epoch_ns"), "time.time_ns()")
@@ -414,16 +414,16 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
         self.shape(call(loader, "root_key.verify"),
             '''root_key.verify(_b64url_decode(envelope["signature"], size=64),
                 _domain_digest(SIGNED_CONFIG_SCHEMA, payload_bytes).encode("ascii"))''')
-        _, launcher = source("serverware/authority_launcher.py", 256 * 1024)
+        _, launcher = source("catchplate/authority_launcher.py", 256 * 1024)
         inventory = assigned(launcher, "ROLE_CREDENTIAL_DESCRIPTOR_NAMES")
         writer_descriptors, = [value for key, value in zip(inventory.keys, inventory.values)
                                if key.value == "planner-writer"]
         self.shape(writer_descriptors, '''frozenset({
-            "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
-            "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
-            "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
-            "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD",
-            "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN_FD"})''')
+            "CATCHPLATE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
+            "CATCHPLATE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
+            "CATCHPLATE_POLICY_AUTHORITY_CONFIG_FD",
+            "CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD",
+            "CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN_FD"})''')
         handle = definition(self.process, "handle")
         served = definition(definition(self.service, "AuthorityServer"), "_serve_connection")
         writer, = [node for node in ast.walk(handle) if isinstance(node, ast.If)
@@ -444,7 +444,7 @@ class RevocationWriterCompositionSourceTests(unittest.TestCase):
         topology = ast.unparse(definition(measured, "_verify_role_topology"))
         self.assertIn("(int(planner_writer.get('peerUid', -1)), int(planner_writer.get('peerGid', -1))) != "
                       "(int(planner['serviceUid']), int(planner['serviceGid']))", topology)
-        _, registry = source("serverware/authority_transition_registry.py")
+        _, registry = source("catchplate/authority_transition_registry.py")
         self.shape(assigned(registry, "_CLOSURE_ERRORS"), "_registry_closure_errors()")
         closed, = [node for node in registry.body if isinstance(node, ast.If)]
         self.shape(closed.test, "_CLOSURE_ERRORS")

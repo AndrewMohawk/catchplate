@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-receiving-factory.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-receiving-factory.v1.schema.json",
   "$ref": "#/$defs/receiver",
   "description": "Explicit native receiving factory. Complete signed originals and retained same-parent/four-session ownership are mandatory; no host promotion, generation-success shortcut or reaper settlement.",
   "$defs": {
@@ -46,7 +46,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowDriverLifecyclePolicy/v3"
+          "const": "catchplate.nativeShadowDriverLifecyclePolicy/v3"
         },
         "gate": {
           "$ref": "native-shadow-driver-lifecycle.v1.schema.json#/$defs/gate"
@@ -120,7 +120,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowCustodyLifecycleReceiver/v3"
+          "const": "catchplate.nativeShadowCustodyLifecycleReceiver/v3"
         },
         "parentPeer": {
           "$ref": "native-shadow-driver-lifecycle.v1.schema.json#/$defs/receiver/properties/parentPeer"
@@ -168,7 +168,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowBootstrapDriverAdmission/v1"
+          "const": "catchplate.nativeShadowBootstrapDriverAdmission/v1"
         },
         "purpose": {
           "const": "native-driver-bootstrap-admission"
@@ -233,7 +233,7 @@
           "pattern": "^[A-Za-z0-9_-]{86}$"
         }
       },
-      "description": "Canonical ASCII <=8192 bytes. Signature domain serverware.nativeShadowBootstrapDriverAdmission.signature/v1 using existing signedEnvelope preimage. Actual phase-one driver and same live parent only; not installed generation. Epoch validity <=30 seconds and original BOOTTIME window unchanged."
+      "description": "Canonical ASCII <=8192 bytes. Signature domain catchplate.nativeShadowBootstrapDriverAdmission.signature/v1 using existing signedEnvelope preimage. Actual phase-one driver and same live parent only; not installed generation. Epoch validity <=30 seconds and original BOOTTIME window unchanged."
     },
     "constructedPayload": {
       "type": "object",
@@ -265,7 +265,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowConstructedDriverAdmission/v1"
+          "const": "catchplate.nativeShadowConstructedDriverAdmission/v1"
         },
         "purpose": {
           "const": "constructed-native-driver-admission"
@@ -365,7 +365,7 @@
           "pattern": "^[A-Za-z0-9_-]{86}$"
         }
       },
-      "description": "Canonical ASCII <=16384 bytes. Signature domain serverware.nativeShadowConstructedDriverAdmission.signature/v1. Full early-original hash plus actual complete constructed census and public-admission hash; expiry cannot exceed the early original or actual key authorization. Never a physical settlement or READY receipt."
+      "description": "Canonical ASCII <=16384 bytes. Signature domain catchplate.nativeShadowConstructedDriverAdmission.signature/v1. Full early-original hash plus actual complete constructed census and public-admission hash; expiry cannot exceed the early original or actual key authorization. Never a physical settlement or READY receipt."
     },
     "control": {
       "type": "object",
@@ -377,7 +377,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowConstructedDriverControl/v1"
+          "const": "catchplate.nativeShadowConstructedDriverControl/v1"
         },
         "operation": {
           "enum": [
@@ -404,7 +404,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowConstructedDriverExport/v1"
+          "const": "catchplate.nativeShadowConstructedDriverExport/v1"
         },
         "censusOriginal": {
           "type": "string",
@@ -429,7 +429,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowConstructedDriverRetained/v1"
+          "const": "catchplate.nativeShadowConstructedDriverRetained/v1"
         },
         "admissionSha256": {
           "$ref": "#/$defs/sha"
@@ -449,7 +449,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowConstructedDriverLive/v1"
+          "const": "catchplate.nativeShadowConstructedDriverLive/v1"
         },
         "admissionSha256": {
           "$ref": "#/$defs/sha"

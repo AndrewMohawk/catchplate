@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/control-plane-workload-identity-bootstrap.v3.schema.json",
+  "$id": "https://catchplate.invalid/schemas/control-plane-workload-identity-bootstrap.v3.schema.json",
   "title": "Root-signed caller for the bounded sequential native workload issuer v3",
   "description": "Closed canonical public original, at most 262144 bytes. Ed25519 signs the exact v3 payload-schema ASCII bytes, NUL and canonical payload. The independent runtime root admits only an exact nested issuer v3 original; every request still separately verifies its grant, native packet, CSR/PoP and resulting certificate under its own nonrenewing context. No automatic retry, service restart or issuance permission follows from this profile. Existing v1/v2 caller contracts remain unchanged.",
   "type": "object", "additionalProperties": false,
   "required": ["schema", "payload", "signature"],
   "properties": {
-    "schema": {"const": "serverware.signedControlPlaneWorkloadIdentityBootstrap/v3"},
+    "schema": {"const": "catchplate.signedControlPlaneWorkloadIdentityBootstrap/v3"},
     "payload": {"$ref": "#/$defs/payload"},
     "signature": {"$ref": "control-plane-workload-identity-bootstrap.v2.schema.json#/properties/signature"}
   },
@@ -26,11 +26,11 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "purpose", "trustMode", "processMode", "callerUid", "callerGid", "configurationDigest", "issuedAtEpochNs", "expiresAtEpochNs", "issuer"],
       "properties": {
-        "schema": {"const": "serverware.controlPlaneWorkloadIdentityBootstrap/v3"},
+        "schema": {"const": "catchplate.controlPlaneWorkloadIdentityBootstrap/v3"},
         "sourceRevision": {"$ref": "control-plane-workload-identity-bootstrap.v2.schema.json#/$defs/payload/properties/sourceRevision"},
         "purpose": {"const": "native-workload-identity-caller"},
         "trustMode": {"const": "trusted-host-local"},
-        "processMode": {"const": "serverware-control-plane"},
+        "processMode": {"const": "catchplate-control-plane"},
         "callerUid": {"type": "integer", "minimum": 0, "maximum": 4294967294},
         "callerGid": {"type": "integer", "minimum": 0, "maximum": 4294967294},
         "configurationDigest": {"$ref": "control-plane-workload-identity-bootstrap.v2.schema.json#/$defs/digest"},

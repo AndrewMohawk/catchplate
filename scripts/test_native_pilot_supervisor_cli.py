@@ -10,7 +10,7 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
 import run_native_pilot_supervisor as cli
-from serverware.native_pilot_phase_execution import KEY_PURPOSES
+from catchplate.native_pilot_phase_execution import KEY_PURPOSES
 
 
 def arguments():

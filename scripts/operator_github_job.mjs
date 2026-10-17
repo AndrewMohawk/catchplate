@@ -53,8 +53,8 @@ function responseObservation(responseStage, status, hasLink, body) {
   return { stage: responseStage, status, bodyBytes: bounded ? body.length : null, errorCategory, hasLink };
 }
 const sdk = new Octokit({
-  auth: input.phase === 'wrong_dummy' ? 'serverware-wrong-placeholder-v1' : 'serverware-github-placeholder-v1',
-  userAgent: 'serverware-test-run/' + input.runId,
+  auth: input.phase === 'wrong_dummy' ? 'catchplate-wrong-placeholder-v1' : 'catchplate-github-placeholder-v1',
+  userAgent: 'catchplate-test-run/' + input.runId,
   log: { debug() {}, info() {}, warn() {}, error() {} },
   request: { fetch: async (url, options) => {
     require(typeof url === 'string' && url.length <= 4096 && url.startsWith('https://api.github.com/'));
@@ -88,7 +88,7 @@ const sdk = new Octokit({
     return response;
   } },
 });
-const scope = { owner: 'serverware-fixture', repo: 'operator-demo' };
+const scope = { owner: 'catchplate-fixture', repo: 'operator-demo' };
 const fullIssue = (number) => ({ id: 1700 + number, number, title: `Fixture issue ${number}`,
   body: 'Complete synthetic body ☃', labels: [{ name: 'fixture' }], user: { login: 'fixture-user' },
   extra: { preserved: [true, null, 7] } });
@@ -155,7 +155,7 @@ try {
   await proxy.destroy();
   clearTimeout(deadline);
 }
-process.stdout.write(JSON.stringify({ schema: 'serverware.privateGithubSdk/v1',
+process.stdout.write(JSON.stringify({ schema: 'catchplate.privateGithubSdk/v1',
   package: '@octokit/rest', version: '22.0.1', undiciVersion: '8.11.2',
   retryPlugin: false, throttlePlugin: false, requestRewrite: false, ...result }) + '\n');
 process.exitCode = result.ok ? 0 : 1;

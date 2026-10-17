@@ -10,11 +10,11 @@ use super::*;
 use crate::enclave_runtime_identity_v1::GeneratedBootstrapEnrollmentV1;
 use std::sync::MutexGuard;
 
-pub(super) const API_VERSION: &str = "serverware.custodyNativeBootstrapAttempt/v1";
+pub(super) const API_VERSION: &str = "catchplate.custodyNativeBootstrapAttempt/v1";
 pub(super) const MAX_RECORD_BYTES: usize = 24 * 1024;
 pub(super) const MAX_ATTEMPTS: usize = 64;
 const MAX_QUOTE_BYTES: usize = 12 * 1024;
-const ATTEMPT_DOMAIN: &[u8] = b"serverware/native-enrollment-bootstrap-attempt/v1\0";
+const ATTEMPT_DOMAIN: &[u8] = b"catchplate/native-enrollment-bootstrap-attempt/v1\0";
 const MAX_PROCESSING_NS: u64 = 30_000_000_000;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

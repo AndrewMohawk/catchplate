@@ -9,7 +9,7 @@ certificate issuance, trust installation or production acceptance. The existing 
 ## Originals and independent inputs
 
 The [closed eight-field evidence schema](../schemas/native-enrollment-bootstrap-evidence.v1.schema.json)
-uses `serverware.nativeEnrollmentBootstrapEvidence/v1`,
+uses `catchplate.nativeEnrollmentBootstrapEvidence/v1`,
 `evidenceScope: "unverified-bootstrap-enrollment-public-material"` and
 `okForAction: false`. It carries exact packet, paired-v2 ingress-session, raw
 Ed25519 signature/key and original role5 Nitro quote bytes in canonical unpadded
@@ -74,7 +74,7 @@ canaries, installation commands, or target authentication.
 The bootstrap signature preimage is:
 
 ```text
-"serverware/native-enrollment-bootstrap-packet-signature/v1\0"
+"catchplate/native-enrollment-bootstrap-packet-signature/v1\0"
     || SHA256(exact delegation original)[32]
     || SHA256(exact setup original)[32]
     || packet_length:u64BE || exact_packet_bytes
@@ -83,7 +83,7 @@ The bootstrap signature preimage is:
 The role5 request commitment is:
 
 ```text
-SHA256("serverware/native-enrollment-bootstrap-key-binding/v1\0"
+SHA256("catchplate/native-enrollment-bootstrap-key-binding/v1\0"
     || delegation_sha256[32] || setup_sha256[32] || packet_sha256[32]
     || actual_ingress_leaf_sha256[32] || native_client_root_set_sha256[32])
 ```

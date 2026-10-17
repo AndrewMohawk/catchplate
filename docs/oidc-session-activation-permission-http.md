@@ -28,10 +28,10 @@ credential, and rechecks current session, credential and owner continuity.
 Historical completion supplies target provenance only, never new permission.
 
 The action is `webauthn.oidc-session.activation.authorize`. Its distinct
-`serverware.oidcSessionActivationPermissionIntent/v1` binding includes the
+`catchplate.oidcSessionActivationPermissionIntent/v1` binding includes the
 retained locator, user, pending session, challenge, request, operation, mode and
 credential. Only the actual fresh challenge/options for that exact credential
-are returned under `serverware.oidcSessionActivationPermissionOptions/v1`.
+are returned under `catchplate.oidcSessionActivationPermissionOptions/v1`.
 The response is no-store and grants no automatic retry or activation success.
 
 The shared carrier parser also recognizes private permission input with an

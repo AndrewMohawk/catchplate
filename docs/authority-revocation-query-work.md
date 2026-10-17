@@ -3,7 +3,7 @@
 ## Source boundary
 
 The private `_revocation_query_program` in
-[`authority_transition_webauthn.py`](../serverware/authority_transition_webauthn.py)
+[`authority_transition_webauthn.py`](../catchplate/authority_transition_webauthn.py)
 runs the genuine cutoff-native business recipe and the genuine framework
 `add_capacity_query` under one supplied internal work object. Its output is a
 tuple of source declarations, not an admitted operation or successful proof.

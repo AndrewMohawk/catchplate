@@ -256,7 +256,7 @@ impl ShadowTimeNsmV1 {
         if [statement_sha256,ephemeral_public,nonce].contains(&[0;32]) {
             return Err("shadow time binding is absent".into());
         }
-        let mut user_data=b"serverware/native-shadow-guest-time-evidence/v1\0".to_vec();
+        let mut user_data=b"catchplate/native-shadow-guest-time-evidence/v1\0".to_vec();
         user_data.extend_from_slice(&statement_sha256);
         let request=attestation_request(&ephemeral_public,&nonce,&user_data)?;
         let mut response=[0u8;MAX_RESPONSE_BYTES];
@@ -342,21 +342,21 @@ impl ShadowNsmV1 {
     pub fn quote_role_keys(&mut self,statement_sha256:[u8;32],full_key_set:[u8;32],local_key_set:[u8;32],
         possession_sha256:[u8;32],nonce:[u8;32],deadline:u64)->Result<ShadowRoleKeyQuoteV1,String> {
         self.quote_keys_fixed(statement_sha256,full_key_set,local_key_set,possession_sha256,nonce,deadline,
-            b"serverware/native-shadow-role-key-evidence/v1\0")
+            b"catchplate/native-shadow-role-key-evidence/v1\0")
     }
     /// Mutually exclusive admission-only purpose. It shares the same one-shot
     /// latch and cannot reset or convert admission into settlement evidence.
     pub fn quote_key_admission(&mut self,statement_sha256:[u8;32],full_key_set:[u8;32],local_key_set:[u8;32],
         possession_sha256:[u8;32],nonce:[u8;32],deadline:u64)->Result<ShadowRoleKeyQuoteV1,String> {
         self.quote_keys_fixed(statement_sha256,full_key_set,local_key_set,possession_sha256,nonce,deadline,
-            b"serverware/native-shadow-key-admission-evidence/v1\0")
+            b"catchplate/native-shadow-key-admission-evidence/v1\0")
     }
     /// Independently admitted combined purpose. The SAME key-quote latch is
     /// consumed, including on failure; it cannot follow either older purpose.
     pub fn quote_bridge_admission(&mut self,statement_sha256:[u8;32],full_key_set:[u8;32],local_key_set:[u8;32],
         possession_sha256:[u8;32],nonce:[u8;32],deadline:u64)->Result<ShadowRoleKeyQuoteV1,String> {
         self.quote_keys_fixed(statement_sha256,full_key_set,local_key_set,possession_sha256,nonce,deadline,
-            b"serverware/native-shadow-bridge-admission-evidence/v1\0")
+            b"catchplate/native-shadow-bridge-admission-evidence/v1\0")
     }
     fn quote_keys_fixed(&mut self,statement_sha256:[u8;32],full_key_set:[u8;32],local_key_set:[u8;32],
         possession_sha256:[u8;32],nonce:[u8;32],deadline:u64,prefix:&'static[u8])->Result<ShadowRoleKeyQuoteV1,String> {

@@ -7,9 +7,9 @@ ingress originals. A native opening receipt is never called that envelope.
 
 ## Cold selection and independent permission
 
-Only explicit outer `serverware.nativeStartupConfiguration/v20`, selected by
+Only explicit outer `catchplate.nativeStartupConfiguration/v20`, selected by
 `--canary-heartbeat-v20` / `--native-canary-heartbeat-startup-v20`, admits
-required `measuredCanaryDelivery.apiVersion=serverware.nativeCanaryDurableDelivery/v2`.
+required `measuredCanaryDelivery.apiVersion=catchplate.nativeCanaryDurableDelivery/v2`.
 The rest of the closed v19/v18 owners are retained. V19 explicitly requires
 delivery/v1; all older profiles remain unselected. There is no HTTP/env/default
 upgrade, new native lifetime or policy hot reload.
@@ -17,7 +17,7 @@ upgrade, new native lifetime or policy hot reload.
 Delivery/v2 retains the same ten cold fields and exact independently root-signed
 authority configuration original. In addition to separate intake and durable
 delivery permissions it requires `policyCanaryHeartbeatPolicy`:
-`serverware.policyCanaryHeartbeatAuthorityPolicy/v1`. The optional authority/v6
+`catchplate.policyCanaryHeartbeatAuthorityPolicy/v1`. The optional authority/v6
 field is validated by the real artifact producer and authority service. Its own
 Nitro roots, complete role-4 assignment, actual boot/key/CP key, measured binary,
 canary assignment/boot, deployment and instance are mandatory. Assignment

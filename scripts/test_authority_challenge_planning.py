@@ -18,8 +18,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_planning as source
-from serverware import authority_query_read_work as measured
+from catchplate import authority_challenge_planning as source
+from catchplate import authority_query_read_work as measured
 
 
 def digest(value):

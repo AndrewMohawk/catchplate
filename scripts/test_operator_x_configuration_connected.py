@@ -112,13 +112,13 @@ def globals_unconfigured(fixture):
     require(config.X_OAUTH_CLIENT_ID == "" and config.X_OAUTH_CLIENT_SECRET == ""
         and config.X_OAUTH_CLIENT_SECRET_FILE is None
         and config.X_OAUTH_REDIRECT_URI == ORIGIN + "/api/oauth/callback/x"
-        and not any(key.startswith(("SERVERWARE_X_OAUTH_", "SERVERWARE_TWITTER_OAUTH_"))
+        and not any(key.startswith(("CATCHPLATE_X_OAUTH_", "CATCHPLATE_TWITTER_OAUTH_"))
             for key in os.environ), "legacy X configuration was hot-adopted")
 
 
 def inspect_commit(fixture, before_catalog, before_audit, authority, settings, operation):
-    from serverware import operator_x_configuration as service, operator_x_admission as admission
-    from serverware import operator_x_provider_custody as custody, operator_provider_key as keys
+    from catchplate import operator_x_configuration as service, operator_x_admission as admission
+    from catchplate import operator_x_provider_custody as custody, operator_provider_key as keys
 
     require(fixture.authority() == authority and fixture.rows("operator_demo_settings") == settings,
         "X configuration changed existing authority or settings")
@@ -184,7 +184,7 @@ async def story(mode):
     fixture = fixtures.Fixture()  # Actual bootstrap/admission after the X environment was selected.
     fixture.seed()  # Preserve nonempty real credentials, applications, rules, nonce, policy and CA.
     require(stat.S_IMODE(fixture.config.DB_PATH.lstat().st_mode) == 0o600, "private retained database mode")
-    from serverware import operator_x_configuration as service
+    from catchplate import operator_x_configuration as service
 
     transport = LoseFirstSaveResponse(fixture.app.app, mode == "lost")
     app = FullASGI(transport, ADMIN)
@@ -199,8 +199,8 @@ async def story(mode):
         unchanged = fixture.snapshot()
         lock_path = fixture.config.DATA_DIR / fixture.store.operator_publication.LOCK_NAME
         lock_before = lock_path.stat()
-        x_directory = Path(os.environ["SERVERWARE_OPERATOR_X_CUSTODY_DIR"])
-        google_directory = Path(os.environ["SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR"])
+        x_directory = Path(os.environ["CATCHPLATE_OPERATOR_X_CUSTODY_DIR"])
+        google_directory = Path(os.environ["CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR"])
         require(not list(x_directory.iterdir()) and not list(google_directory.iterdir()), "initial empty custody")
         globals_unconfigured(fixture)
         denied = await request(app, "GET", authenticate=False, status=401)
@@ -301,10 +301,10 @@ class OperatorXConfigurationConnectedTests(unittest.TestCase):
         fixtures.ManagedGoogleConfigurationTests.setUp(self)
         self.x_directory = Path(self.scratch.name) / "x-provider-custody"
         self.x_directory.mkdir(mode=0o700)
-        self.environment.update(SERVERWARE_OPERATOR_MANAGED_X_ENABLED="1",
-            SERVERWARE_OPERATOR_X_CUSTODY_DIR=str(self.x_directory), SERVERWARE_PUBLIC_URL=ORIGIN,
-            SERVERWARE_ADMIN_TOKEN=ADMIN, SERVERWARE_ADMIN_USER=fixtures.ACTOR,
-            SERVERWARE_ADMIN_ROLES="admin")
+        self.environment.update(CATCHPLATE_OPERATOR_MANAGED_X_ENABLED="1",
+            CATCHPLATE_OPERATOR_X_CUSTODY_DIR=str(self.x_directory), CATCHPLATE_PUBLIC_URL=ORIGIN,
+            CATCHPLATE_ADMIN_TOKEN=ADMIN, CATCHPLATE_ADMIN_USER=fixtures.ACTOR,
+            CATCHPLATE_ADMIN_ROLES="admin")
         for key in tuple(self.environment):
             if key.lower() in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}:
                 self.environment.pop(key)

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Any, Mapping, Sequence
 
-from serverware.authority_artifact_spec import (
+from catchplate.authority_artifact_spec import (
     ArtifactContractError,
     LOCAL_STAGE_ZERO_INTERFACE_SCHEMA,
     VerifiedArtifactPackage,
@@ -27,52 +27,52 @@ from serverware.authority_artifact_spec import (
 
 
 VERIFICATION_RECEIPT_SCHEMA = (
-    "serverware.authorityArtifactVerificationReceipt/v1"
+    "catchplate.authorityArtifactVerificationReceipt/v1"
 )
-PROVISIONING_PLAN_SCHEMA = "serverware.authorityAtomicProvisioningPlan/v1"
+PROVISIONING_PLAN_SCHEMA = "catchplate.authorityAtomicProvisioningPlan/v1"
 # V2 publishes traversable runtime directories for unprivileged consumers.
 # V1's root-group-only directories are not interchangeable with this plan.
-LOCAL_PROVISIONING_PLAN_SCHEMA = "serverware.authorityTrustedHostLocalProvisioningPlan/v2"
+LOCAL_PROVISIONING_PLAN_SCHEMA = "catchplate.authorityTrustedHostLocalProvisioningPlan/v2"
 LOCAL_GENERATION_DIRECTORY_MODE = 0o755
-LOCAL_PROVISIONING_RECEIPT_SCHEMA = "serverware.authorityTrustedHostLocalProvisioningReceipt/v1"
-LOCAL_PROVISIONING_RECEIPT_SIGNATURE_DOMAIN = "serverware.authorityTrustedHostLocalProvisioningReceiptSignature/v1"
-LOCAL_PROVISIONING_RECEIPT_DIGEST_DOMAIN = "serverware.authorityTrustedHostLocalProvisioningReceiptDigest/v1"
-LOCAL_PREPARED_PROVISIONING_PLAN_SCHEMA = "serverware.authorityTrustedHostLocalProvisioningPlan/v3"
-LOCAL_PREPARED_PROVISIONING_RECEIPT_SCHEMA = "serverware.authorityTrustedHostLocalProvisioningReceipt/v2"
-LOCAL_PREPARED_PROVISIONING_RECEIPT_SIGNATURE_DOMAIN = "serverware.authorityTrustedHostLocalProvisioningReceiptSignature/v2"
-LOCAL_PREPARED_PROVISIONING_RECEIPT_DIGEST_DOMAIN = "serverware.authorityTrustedHostLocalProvisioningReceiptDigest/v2"
+LOCAL_PROVISIONING_RECEIPT_SCHEMA = "catchplate.authorityTrustedHostLocalProvisioningReceipt/v1"
+LOCAL_PROVISIONING_RECEIPT_SIGNATURE_DOMAIN = "catchplate.authorityTrustedHostLocalProvisioningReceiptSignature/v1"
+LOCAL_PROVISIONING_RECEIPT_DIGEST_DOMAIN = "catchplate.authorityTrustedHostLocalProvisioningReceiptDigest/v1"
+LOCAL_PREPARED_PROVISIONING_PLAN_SCHEMA = "catchplate.authorityTrustedHostLocalProvisioningPlan/v3"
+LOCAL_PREPARED_PROVISIONING_RECEIPT_SCHEMA = "catchplate.authorityTrustedHostLocalProvisioningReceipt/v2"
+LOCAL_PREPARED_PROVISIONING_RECEIPT_SIGNATURE_DOMAIN = "catchplate.authorityTrustedHostLocalProvisioningReceiptSignature/v2"
+LOCAL_PREPARED_PROVISIONING_RECEIPT_DIGEST_DOMAIN = "catchplate.authorityTrustedHostLocalProvisioningReceiptDigest/v2"
 PROVISIONING_RECEIPT_SCHEMA = (
-    "serverware.authorityAtomicProvisioningReceipt/v2"
+    "catchplate.authorityAtomicProvisioningReceipt/v2"
 )
-PROVISIONING_STATE_SCHEMA = "serverware.authorityProvisioningState/v1"
+PROVISIONING_STATE_SCHEMA = "catchplate.authorityProvisioningState/v1"
 RECONCILIATION_RECEIPT_SCHEMA = (
-    "serverware.authorityProvisioningReconciliationReceipt/v1"
+    "catchplate.authorityProvisioningReconciliationReceipt/v1"
 )
-CLEANUP_RECEIPT_SCHEMA = "serverware.authorityProvisioningCleanupReceipt/v1"
-PACKAGE_DIGEST_DOMAIN = "serverware.authoritySignedArtifactPackageDigest/v1"
+CLEANUP_RECEIPT_SCHEMA = "catchplate.authorityProvisioningCleanupReceipt/v1"
+PACKAGE_DIGEST_DOMAIN = "catchplate.authoritySignedArtifactPackageDigest/v1"
 VERIFICATION_RECEIPT_DIGEST_DOMAIN = (
-    "serverware.authorityArtifactVerificationReceiptDigest/v1"
+    "catchplate.authorityArtifactVerificationReceiptDigest/v1"
 )
 PROVISIONING_PLAN_DIGEST_DOMAIN = (
-    "serverware.authorityAtomicProvisioningPlanDigest/v1"
+    "catchplate.authorityAtomicProvisioningPlanDigest/v1"
 )
 PROVISIONING_RECEIPT_SIGNATURE_DOMAIN = (
-    "serverware.authorityAtomicProvisioningReceiptSignature/v2"
+    "catchplate.authorityAtomicProvisioningReceiptSignature/v2"
 )
 PROVISIONING_RECEIPT_DIGEST_DOMAIN = (
-    "serverware.authorityAtomicProvisioningReceiptDigest/v2"
+    "catchplate.authorityAtomicProvisioningReceiptDigest/v2"
 )
 RECONCILIATION_RECEIPT_SIGNATURE_DOMAIN = (
-    "serverware.authorityProvisioningReconciliationReceiptSignature/v1"
+    "catchplate.authorityProvisioningReconciliationReceiptSignature/v1"
 )
 CLEANUP_RECEIPT_SIGNATURE_DOMAIN = (
-    "serverware.authorityProvisioningCleanupReceiptSignature/v1"
+    "catchplate.authorityProvisioningCleanupReceiptSignature/v1"
 )
 PROVISIONING_STATE_DIGEST_DOMAIN = (
-    "serverware.authorityProvisioningStateDigest/v1"
+    "catchplate.authorityProvisioningStateDigest/v1"
 )
 PROVISIONING_STEP_CONTRACT_DOMAIN = (
-    "serverware.authorityAtomicProvisioningSteps/v1"
+    "catchplate.authorityAtomicProvisioningSteps/v1"
 )
 MAX_DOCUMENT_BYTES = 32 * 1024 * 1024
 MAX_FILES = 32768
@@ -348,7 +348,7 @@ def _validate_verified_signature(
             entry["purpose"], package["bundle"], package["generation"]
         )
         expected_digest = domain_digest(
-            "serverware.authoritySignatureMessageDigest/v1",
+            "catchplate.authoritySignatureMessageDigest/v1",
             expected_message,
         )
         if entry["messageDigest"] != expected_digest:
@@ -372,7 +372,7 @@ def _validate_verified_signature(
             decoded_size=64,
         )
         expected_signature_digest = domain_digest(
-            "serverware.authoritySignatureBytesDigest/v1",
+            "catchplate.authoritySignatureBytesDigest/v1",
             signature_bytes,
         )
         if entry["signatureDigest"] != expected_signature_digest:
@@ -514,7 +514,7 @@ def validate_verification_receipt(
             maximum=MAX_FILES,
         )
     if local_roster:
-        from serverware.authority_artifact_spec import LOCAL_CLOSURE_ASSURANCE
+        from catchplate.authority_artifact_spec import LOCAL_CLOSURE_ASSURANCE
         if not local_bootstrap or value["trustMode"] != "trusted-host-local" or closure["complete"] is not False or closure["assurance"] != LOCAL_CLOSURE_ASSURANCE:
             raise ProvisioningContractError("measured roster verification cannot claim complete/native closure")
     elif closure["complete"] is not True:
@@ -606,7 +606,7 @@ def validate_verification_receipt(
         validate_signed_artifact_package(package)
         bundle = package["bundle"]
         generation = package["generation"]
-        from serverware.authority_artifact_spec import LOCAL_CLOSURE_RECEIPT_SCHEMA
+        from catchplate.authority_artifact_spec import LOCAL_CLOSURE_RECEIPT_SCHEMA
         if local_roster != (bundle["closureReceipt"]["schema"] == LOCAL_CLOSURE_RECEIPT_SCHEMA):
             raise ProvisioningContractError("verification assurance differs from the exact signed closure receipt")
         if local_bootstrap and (bundle["stageZero"]["interfaceSchema"] != LOCAL_STAGE_ZERO_INTERFACE_SCHEMA
@@ -1394,7 +1394,7 @@ def verification_receipt_signature_message(
         )
     value.pop("receiptSignatureBase64Url")
     return domain_digest(
-        "serverware.authorityArtifactVerificationReceiptSignature/v1",
+        "catchplate.authorityArtifactVerificationReceiptSignature/v1",
         canonical_json_bytes(value),
     ).encode("ascii")
 
@@ -1641,7 +1641,7 @@ def validate_provisioning_state(state: Mapping[str, Any]) -> None:
         except ArtifactContractError as exc:
             raise ProvisioningContractError(str(exc)) from exc
         if value["terminalReceiptDigest"] != domain_digest(
-            "serverware.authorityExactTerminalReceiptBytes/v1",
+            "catchplate.authorityExactTerminalReceiptBytes/v1",
             decoded,
         ):
             raise ProvisioningContractError(

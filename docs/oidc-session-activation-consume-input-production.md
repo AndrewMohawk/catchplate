@@ -9,7 +9,7 @@ The implementation is source-only: unbuilt, unexecuted and unprovisioned.
 ## Independent authority and original request
 
 The issuer receives its own root key pair, a signed
-[consume-input issuer policy](../serverware/oidc_session_activation_consume_input_issuer_policy.py),
+[consume-input issuer policy](../catchplate/oidc_session_activation_consume_input_issuer_policy.py),
 and the exact historical activation planner bootstrap pinned by that policy.
 The policy fixes the dedicated consume planner, history receiver and key
 digests, database/read/TLS/state resources, launch pins, and independent

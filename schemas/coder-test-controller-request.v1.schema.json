@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/coder-test-controller-request.v1.schema.json",
-  "title": "Serverware Controller Request Contract v11",
+  "$id": "https://catchplate.invalid/schemas/coder-test-controller-request.v1.schema.json",
+  "title": "Catchplate Controller Request Contract v11",
   "description": "Closed request contract for the root-owned controller client. Repository Make and shell are untrusted submission surfaces and never receive request bytes, authorization material, keys, capabilities, request or worker file descriptors, or trusted execution. The controller never invokes or trusts any Make target.",
   "type": "object",
   "additionalProperties": false,
@@ -84,7 +84,7 @@
           "const": "11"
         },
         "magic": {
-          "const": "SERVERWARE-CONTROLLER"
+          "const": "CATCHPLATE-CONTROLLER"
         },
         "transport": {
           "const": "ROOT_OWNED_PEERCRED_SEQPACKET"
@@ -172,48 +172,48 @@
     },
     "signatureDomain": {
       "enum": [
-        "serverware/pipeline-plan/v11",
-        "serverware/plan-config/v11",
-        "serverware/plan-root-checkpoint/v11",
-        "serverware/authority-snapshot/v11",
-        "serverware/request-build/v11",
-        "serverware/request-unit/v11",
-        "serverware/request-integration/v11",
-        "serverware/request-e2e/v11",
-        "serverware/request-attestation/v11",
-        "serverware/predecessor-reference/v11",
-        "serverware/build-closure/v11",
-        "serverware/state-cas-quorum/v11",
-        "serverware/state-quorum-membership-checkpoint/v11",
-        "serverware/state-quorum-epoch-floor/v11",
-        "serverware/immutable-store-availability/v11",
-        "serverware/state-witness-anti-equivocation/v11",
-        "serverware/state-witness-admin-statement/v11",
-        "serverware/state-witness-global-admin-log-checkpoint/v11",
-        "serverware/reservation-commit/v11",
-        "serverware/lane-finalization/v11",
-        "serverware/host-attestation/v11",
-        "serverware/source-observation/v11",
-        "serverware/coverage-observation/v11",
-        "serverware/stage-record/v11",
-        "serverware/artifact-manifest/v11",
-        "serverware/resource-journal/v11",
-        "serverware/lifecycle-journal/v11",
-        "serverware/no-build-monitor/v11",
-        "serverware/no-build-start/v11",
-        "serverware/no-build-end/v11",
-        "serverware/attestation-freshness/v11",
-        "serverware/post-quote-attestation-verdict/v11",
-        "serverware/cleanup-inventory/v11",
-        "serverware/destroy-monitor/v11",
-        "serverware/post-destroy-monitor/v11",
-        "serverware/containment/v11",
-        "serverware/credential-revocation/v11",
-        "serverware/terminal-seal/v11",
-        "serverware/final-trust-observation/v11",
-        "serverware/receipt-authentication/v11",
-        "serverware/final-verdict/v11",
-        "serverware/execution-manifest/v11"
+        "catchplate/pipeline-plan/v11",
+        "catchplate/plan-config/v11",
+        "catchplate/plan-root-checkpoint/v11",
+        "catchplate/authority-snapshot/v11",
+        "catchplate/request-build/v11",
+        "catchplate/request-unit/v11",
+        "catchplate/request-integration/v11",
+        "catchplate/request-e2e/v11",
+        "catchplate/request-attestation/v11",
+        "catchplate/predecessor-reference/v11",
+        "catchplate/build-closure/v11",
+        "catchplate/state-cas-quorum/v11",
+        "catchplate/state-quorum-membership-checkpoint/v11",
+        "catchplate/state-quorum-epoch-floor/v11",
+        "catchplate/immutable-store-availability/v11",
+        "catchplate/state-witness-anti-equivocation/v11",
+        "catchplate/state-witness-admin-statement/v11",
+        "catchplate/state-witness-global-admin-log-checkpoint/v11",
+        "catchplate/reservation-commit/v11",
+        "catchplate/lane-finalization/v11",
+        "catchplate/host-attestation/v11",
+        "catchplate/source-observation/v11",
+        "catchplate/coverage-observation/v11",
+        "catchplate/stage-record/v11",
+        "catchplate/artifact-manifest/v11",
+        "catchplate/resource-journal/v11",
+        "catchplate/lifecycle-journal/v11",
+        "catchplate/no-build-monitor/v11",
+        "catchplate/no-build-start/v11",
+        "catchplate/no-build-end/v11",
+        "catchplate/attestation-freshness/v11",
+        "catchplate/post-quote-attestation-verdict/v11",
+        "catchplate/cleanup-inventory/v11",
+        "catchplate/destroy-monitor/v11",
+        "catchplate/post-destroy-monitor/v11",
+        "catchplate/containment/v11",
+        "catchplate/credential-revocation/v11",
+        "catchplate/terminal-seal/v11",
+        "catchplate/final-trust-observation/v11",
+        "catchplate/receipt-authentication/v11",
+        "catchplate/final-verdict/v11",
+        "catchplate/execution-manifest/v11"
       ]
     },
     "keyLeaf": {
@@ -523,7 +523,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/immutable-store-availability/v11"
+          "const": "catchplate/immutable-store-availability/v11"
         },
         "payload": {
           "$ref": "#/$defs/immutableAvailabilityCommitmentPayload"
@@ -540,7 +540,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/immutable-store-availability/v11"
+                  "const": "catchplate/immutable-store-availability/v11"
                 },
                 "signerRole": {
                   "const": "immutableStore"
@@ -727,7 +727,7 @@
               "const": "build"
             },
             "planStageLabel": {
-              "const": "serverware-build-v1"
+              "const": "catchplate-build-v1"
             }
           }
         },
@@ -751,7 +751,7 @@
               "const": "unit"
             },
             "planStageLabel": {
-              "const": "serverware-unit-no-build-v1"
+              "const": "catchplate-unit-no-build-v1"
             }
           }
         },
@@ -775,7 +775,7 @@
               "const": "integration"
             },
             "planStageLabel": {
-              "const": "serverware-integration-no-build-v1"
+              "const": "catchplate-integration-no-build-v1"
             }
           }
         },
@@ -799,7 +799,7 @@
               "const": "e2e"
             },
             "planStageLabel": {
-              "const": "serverware-e2e-no-build-v1"
+              "const": "catchplate-e2e-no-build-v1"
             }
           }
         },
@@ -823,7 +823,7 @@
               "const": "attestation"
             },
             "planStageLabel": {
-              "const": "serverware-attestation-no-build-v1"
+              "const": "catchplate-attestation-no-build-v1"
             }
           }
         }
@@ -963,7 +963,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/pipeline-plan/v11"
+          "const": "catchplate/pipeline-plan/v11"
         },
         "payload": {
           "$ref": "#/$defs/pipelinePlanPayload"
@@ -980,7 +980,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/pipeline-plan/v11"
+                  "const": "catchplate/pipeline-plan/v11"
                 },
                 "signerRole": {
                   "const": "planConfig"
@@ -1078,7 +1078,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/plan-config/v11"
+          "const": "catchplate/plan-config/v11"
         },
         "payload": {
           "$ref": "#/$defs/planConfigurationPayload"
@@ -1095,7 +1095,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/plan-config/v11"
+                  "const": "catchplate/plan-config/v11"
                 },
                 "signerRole": {
                   "const": "planConfig"
@@ -1165,7 +1165,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/plan-root-checkpoint/v11"
+          "const": "catchplate/plan-root-checkpoint/v11"
         },
         "payload": {
           "$ref": "#/$defs/planRootCheckpointPayload"
@@ -1182,7 +1182,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/plan-root-checkpoint/v11"
+                  "const": "catchplate/plan-root-checkpoint/v11"
                 },
                 "signerRole": {
                   "const": "planRootCheckpoint"
@@ -1418,7 +1418,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/authority-snapshot/v11"
+          "const": "catchplate/authority-snapshot/v11"
         },
         "payload": {
           "$ref": "#/$defs/authoritySnapshotPayload"
@@ -1435,7 +1435,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/authority-snapshot/v11"
+                  "const": "catchplate/authority-snapshot/v11"
                 },
                 "signerRole": {
                   "const": "authoritySnapshotCheckpoint"
@@ -1555,7 +1555,7 @@
         },
         "objectDomain": {
           "type": "string",
-          "pattern": "^serverware/[a-z0-9-]+/v11$",
+          "pattern": "^catchplate/[a-z0-9-]+/v11$",
           "maxLength": 96
         },
         "exactByteLength": {
@@ -1738,7 +1738,7 @@
               "header": {
                 "properties": {
                   "objectDomain": {
-                    "const": "serverware/build-closure/v11"
+                    "const": "catchplate/build-closure/v11"
                   }
                 }
               },
@@ -1766,7 +1766,7 @@
               "header": {
                 "properties": {
                   "objectDomain": {
-                    "const": "serverware/predecessor-reference/v11"
+                    "const": "catchplate/predecessor-reference/v11"
                   }
                 }
               },
@@ -2097,7 +2097,7 @@
                       "const": "runNoBuild"
                     },
                     "planStageLabel": {
-                      "const": "serverware-unit-no-build-v1"
+                      "const": "catchplate-unit-no-build-v1"
                     }
                   }
                 }
@@ -2135,7 +2135,7 @@
                       "const": "runNoBuild"
                     },
                     "planStageLabel": {
-                      "const": "serverware-integration-no-build-v1"
+                      "const": "catchplate-integration-no-build-v1"
                     }
                   }
                 }
@@ -2174,7 +2174,7 @@
                       "const": "runNoBuild"
                     },
                     "planStageLabel": {
-                      "const": "serverware-e2e-no-build-v1"
+                      "const": "catchplate-e2e-no-build-v1"
                     }
                   }
                 }
@@ -2216,7 +2216,7 @@
                       "const": "runNoBuild"
                     },
                     "planStageLabel": {
-                      "const": "serverware-attestation-no-build-v1"
+                      "const": "catchplate-attestation-no-build-v1"
                     }
                   }
                 }
@@ -2242,7 +2242,7 @@
       "$ref": "#/$defs/requestEnvelopeTemplate",
       "properties": {
         "domain": {
-          "const": "serverware/request-build/v11"
+          "const": "catchplate/request-build/v11"
         },
         "payload": {
           "$ref": "#/$defs/buildRequestBody"
@@ -2256,7 +2256,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/request-build/v11"
+                  "const": "catchplate/request-build/v11"
                 },
                 "signerRole": {
                   "const": "requester"
@@ -2271,7 +2271,7 @@
       "$ref": "#/$defs/requestEnvelopeTemplate",
       "properties": {
         "domain": {
-          "const": "serverware/request-unit/v11"
+          "const": "catchplate/request-unit/v11"
         },
         "payload": {
           "$ref": "#/$defs/unitRequestBody"
@@ -2285,7 +2285,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/request-unit/v11"
+                  "const": "catchplate/request-unit/v11"
                 },
                 "signerRole": {
                   "const": "requester"
@@ -2300,7 +2300,7 @@
       "$ref": "#/$defs/requestEnvelopeTemplate",
       "properties": {
         "domain": {
-          "const": "serverware/request-integration/v11"
+          "const": "catchplate/request-integration/v11"
         },
         "payload": {
           "$ref": "#/$defs/integrationRequestBody"
@@ -2314,7 +2314,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/request-integration/v11"
+                  "const": "catchplate/request-integration/v11"
                 },
                 "signerRole": {
                   "const": "requester"
@@ -2329,7 +2329,7 @@
       "$ref": "#/$defs/requestEnvelopeTemplate",
       "properties": {
         "domain": {
-          "const": "serverware/request-e2e/v11"
+          "const": "catchplate/request-e2e/v11"
         },
         "payload": {
           "$ref": "#/$defs/e2eRequestBody"
@@ -2343,7 +2343,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/request-e2e/v11"
+                  "const": "catchplate/request-e2e/v11"
                 },
                 "signerRole": {
                   "const": "requester"
@@ -2358,7 +2358,7 @@
       "$ref": "#/$defs/requestEnvelopeTemplate",
       "properties": {
         "domain": {
-          "const": "serverware/request-attestation/v11"
+          "const": "catchplate/request-attestation/v11"
         },
         "payload": {
           "$ref": "#/$defs/attestationRequestBody"
@@ -2372,7 +2372,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/request-attestation/v11"
+                  "const": "catchplate/request-attestation/v11"
                 },
                 "signerRole": {
                   "const": "requester"
@@ -2429,7 +2429,7 @@
   },
   "x-canonical-v11": {
     "versioning": "This schema defines contractVersion 11 only. Every key leaf, signature, envelope, request, typed object, reference, Merkle domain, and length projection uses the v11 primitives and v11 domains below. A verifier rejects every other version value or domain; there is no compatibility mode.",
-    "primitive": "JCS means RFC 8785 canonical JSON encoded as UTF-8. LEN_BYTES(P) is the exact unsigned count of octets in byte string P before JSON or base64url representation; it is range-checked as a schema u64. LEN64BE(part) is the exactly 8-byte unsigned big-endian length of part and is used only to frame arbitrary LF11 parts. D20(value) is the exactly 20 ASCII bytes of a schema u64 after canonical validation and is the sole encoding of LEN_BYTES(P), an exact canonical byte length, or any other schema u64 inside a digest preimage. LF11(tag,parts...) = UTF8('serverware/controller/v11/') || LEN64BE(UTF8(tag)) || UTF8(tag) ||, for each part in order, LEN64BE(part) || part. H11(tag,parts...) is lowercase hexadecimal SHA-256(LF11(tag,parts...)). HEX consumes exactly 64 lowercase hexadecimal characters as 32 bytes. No implicit coercion is permitted.",
+    "primitive": "JCS means RFC 8785 canonical JSON encoded as UTF-8. LEN_BYTES(P) is the exact unsigned count of octets in byte string P before JSON or base64url representation; it is range-checked as a schema u64. LEN64BE(part) is the exactly 8-byte unsigned big-endian length of part and is used only to frame arbitrary LF11 parts. D20(value) is the exactly 20 ASCII bytes of a schema u64 after canonical validation and is the sole encoding of LEN_BYTES(P), an exact canonical byte length, or any other schema u64 inside a digest preimage. LF11(tag,parts...) = UTF8('catchplate/controller/v11/') || LEN64BE(UTF8(tag)) || UTF8(tag) ||, for each part in order, LEN64BE(part) || part. H11(tag,parts...) is lowercase hexadecimal SHA-256(LF11(tag,parts...)). HEX consumes exactly 64 lowercase hexadecimal characters as 32 bytes. No implicit coercion is permitted.",
     "u64": "All u64 fields are 20 ASCII digits, zero padded. Parse without floating point and reject values lexicographically greater than 18446744073709551615.",
     "keyLeaf": "keyLeafSha256 = H11('key-leaf',UTF8('11'),UTF8(role),UTF8(principalId),UTF8(keyId),UTF8(algorithm),HEX(spkiDerSha256),HEX(physicalPrivateKeyIdentitySha256),HEX(trustRootSha256),D20(trustRevision),UTF8(validFrom),UTF8(validUntil)). This v11 leaf is the sole key identity for both signature verification and role authorization. physicalPrivateKeyIdentitySha256 is resolved from independently verified hardware, HSM, enclave, or equivalent key-origin attestation and cannot be asserted by the signer.",
     "merkle": "For tree domain D, the empty root is H11('merkle-empty',UTF8(D)); Merkle leaf = H11('merkle-leaf',UTF8(D),HEX(leafSha256)); internal node = H11('merkle-node',UTF8(D),HEX(left),HEX(right)). Starting with the leaf, LEFT computes node(sibling,current) and RIGHT computes node(current,sibling). The final value equals rootSha256. leafOrdinal, treeSize, path length, and directions describe the same complete binary promotion algorithm; no duplicate-last convention is permitted.",
@@ -2437,16 +2437,16 @@
     "typedEnvelope": "E11(typeDomain,payloadSha256,signature) = H11('typed-envelope',UTF8(typeDomain),HEX(payloadSha256),JCS(signature)). For every signed envelope, payloadSha256 and signature.payloadSha256 equal H11('payload',UTF8(typeDomain),JCS(payload)); envelope.domain, signature.domain, and typeDomain are byte-for-byte equal. requestEnvelopeSha256 equals E11. This is the only signed-envelope projection in the request schema; other named content, plan, typed-object, and immutable-store digests retain only their separately named formulas and are never also E11. No envelope digest appears in its payload.",
     "requestCycle": "The unsigned request body is exactly requestEnvelope.payload and contains no root request digest, root canonical length, envelope signature, or self-length. requestEnvelopeSha256 = E11(requestEnvelope.domain,requestEnvelope.payloadSha256,requestEnvelope.signature). It is a root sibling outside its own preimage and has no special root-envelope projection.",
     "requestLength": "requestCanonicalBytes = LEN_BYTES(JCS(the complete root request after replacing only root requestEnvelopeSha256 with 64 ASCII zeroes and root requestCanonicalBytes with 20 ASCII zeroes)). Both replacements preserve final field widths, so this equals the actual canonical root byte length without a fixed point. preAllocationFrame.declaredCanonicalRequestBytes equals requestCanonicalBytes and preAllocationFrame.requestEnvelopeSha256 equals the root requestEnvelopeSha256.",
-    "pipelinePlan": "pipelinePlanSha256 = H11('pipeline-plan',JCS(pipelinePlanEnvelope)). The exact ordered tuples are (0,build,build,serverware-build-v1), (1,runNoBuild,unit,serverware-unit-no-build-v1), (2,runNoBuild,integration,serverware-integration-no-build-v1), (3,runNoBuild,e2e,serverware-e2e-no-build-v1), and (4,runNoBuild,attestation,serverware-attestation-no-build-v1). selectedStage equals the item at its ordinal byte-for-byte.",
+    "pipelinePlan": "pipelinePlanSha256 = H11('pipeline-plan',JCS(pipelinePlanEnvelope)). The exact ordered tuples are (0,build,build,catchplate-build-v1), (1,runNoBuild,unit,catchplate-unit-no-build-v1), (2,runNoBuild,integration,catchplate-integration-no-build-v1), (3,runNoBuild,e2e,catchplate-e2e-no-build-v1), and (4,runNoBuild,attestation,catchplate-attestation-no-build-v1). selectedStage equals the item at its ordinal byte-for-byte.",
     "replay": "requestIdReplayKeySha256 = H11('replay/request-id',HEX(requesterKeyLeafSha256),UTF8(requestId)); nonceReplayKeySha256 = H11('replay/nonce',HEX(requesterKeyLeafSha256),BASE64URL_DECODE(nonce)). Acceptance permanently consumes both keys; requestId uniqueness is independent of nonce.",
     "source": "sourceIdentitySha256 = H11('source-identity',JCS(source)). Commit, tree, archive, open descriptor, mount, and manifest identities are observed from the same accepted immutable descriptors.",
     "attestationPolicy": "Let B be the exact prepublished attestation-policy byte string resolved from the independently pinned policy catalog before request acceptance. pipelinePlanEnvelope.payload.attestationPolicySha256 and planConfigurationEnvelope.payload.attestationPolicySha256 both equal H11('attestation/prepublished-policy-bytes',D20(LEN_BYTES(B)),B). LEN_BYTES(B) is the exact unsigned byte count, not a character count or encoded length. No request field contains an immutable-store object reference, retrieval proof, quote, or post-quote object.",
     "attestationChallenge": "Let N be the exact 32 bytes decoded from attestationChallenge.challengeNonceBase64url. challengeNonceSha256 = H11('attestation/challenge-nonce',N). preExecutionChallengeSubjectSha256 = H11('attestation/pre-execution-subject',UTF8(pipelineId),UTF8(goalId),JCS(selectedStage),HEX(source.commitSha256),HEX(source.treeSha256),HEX(source.archiveSha256),HEX(executionTarget.runtimeImageSha256),HEX(planConfigurationSha256),HEX(pipelinePlanEnvelope.payload.attestationPolicySha256)). challengeConsumptionKeySha256 = H11('attestation/challenge-consumption-key',HEX(requesterKeyLeafSha256),UTF8(pipelineId),UTF8(goalId),JCS(selectedStage),UTF8(challengeId),HEX(challengeNonceSha256),HEX(preExecutionChallengeSubjectSha256),UTF8(notBefore),UTF8(expiresAt)). The challenge and policy commitments exclude post-launch runtime, quote, collateral, immutable-store, retrieval, and post-quote verdict references.",
     "reference": "For exact canonical resolved predecessor bytes B and header h, h.contentSha256 = SHA-256(B), h.contentAddress = 'sha256:' || h.contentSha256, and h.objectSha256 = H11('typed-object',UTF8(h.objectType),UTF8(h.objectVersion),UTF8(h.objectDomain),D20(h.exactByteLength),B). The immutable-store leaf is exactly H11('immutable-store-leaf',UTF8(h.objectType),UTF8(h.contentAddress),D20(h.exactByteLength),HEX(h.contentSha256),UTF8(reference.storeIdentity)). reference.storeLeafSha256 and reference.storeInclusionProof.leafSha256 equal that leaf; proof treeDomain is IMMUTABLE_EVIDENCE_STORE_V11 and its root equals the pinned current store. availability.commitmentSha256 = H11('immutable-store/availability',JCS(availability payload with commitmentSha256 replaced by 64 ASCII zeroes)); its E11 envelope exactly reproduces the reference. Let S = H11('immutable-retrieval/scope',HEX(root requestEnvelopeSha256),HEX(root preAllocationFrame.frameNonceSha256)). Every request and later receipt retrieval proof has retrievalScopeSha256=S and one retrievalLedgerId. For chunk c at array position i, c.chunkOrdinal=D20(i), chunkLeaf[i]=H11('immutable-retrieval/chunk',D20(i),D20(c.exactByteLength),HEX(c.bytesSha256)); chunkDigestRootSha256=M11('IMMUTABLE_RETRIEVAL_CHUNKS_V11',ordered chunkLeaf). Chunk lengths sum without overflow to returnedExactByteLength; every non-final chunk is exactly streamChunkBytes and the final chunk is 1..streamChunkBytes. The verifier hashes the exact returned chunk bytes, concatenates them in ordinal order, and requires their SHA-256 to equal returnedBytesSha256 and the referenced content digest. retrievalTranscriptSha256 = H11('immutable-retrieval/transcript',HEX(S),UTF8(retrievalLedgerId),D20(globalRetrievalOrdinal),HEX(predecessorRetrievalTranscriptSha256),UTF8(storeIdentity),HEX(storeRootSha256),D20(storeRevision),UTF8(requestedContentAddress),D20(declaredObjectBytes),D20(maximumObjectBytes),D20(streamChunkBytes),D20(streamChunkCount),D20(maximumStreamChunkCount),HEX(chunkDigestRootSha256),D20(globalCumulativeBytesBefore),D20(globalCumulativeBytesAfter),D20(maximumAggregateBytes),D20(returnedExactByteLength),HEX(returnedBytesSha256),HEX(availabilityCommitmentSha256),UTF8(requestedAt),UTF8(firstChunkAt),UTF8(lastChunkAt),UTF8(retrievedAt),UTF8(retrievalDeadline)); transportTranscriptSha256 equals retrievalTranscriptSha256. At ordinal zero predecessor = H11('immutable-retrieval/genesis',HEX(S),UTF8(retrievalLedgerId)) and cumulative before is zero. Thereafter ordinal increments exactly once, predecessor equals the prior transcript, cumulative before equals the prior cumulative after, and cumulative after = before + returned length. All proofs across the resolved request and receipt form this one chain, maximumAggregateBytes equals preAllocationFrame.maximumAggregateRetrievedBytes, and cumulative after never exceeds it. Availability signature acceptance and all retrieval instants are ordered through retrievalDeadline <= availabilityUntil and frameDeadline. Missing bytes, chunks, ordinals, predecessors, objects, or cumulative continuity rejects.",
-    "preAllocationFrame": "declaredEnvelopeBytes = LEN_BYTES(JCS(requestEnvelope)). frameSha256 = H11('pre-allocation-frame',UTF8(frameVersion),UTF8(magic),UTF8(transport),D20(fixedHeaderBytes),D20(declaredCanonicalRequestBytes),D20(maximumCanonicalRequestBytes),D20(declaredEnvelopeBytes),D20(maximumEnvelopeBytes),D20(streamChunkBytes),D20(maximumStreamChunkCount),D20(maximumAggregateRetrievedBytes),UTF8(frameDeadline),HEX(requestEnvelopeSha256),HEX(frameNonceSha256)). The exact 256-byte network-order frame is: bytes 0..23 ASCII SERVERWARE-CONTROLLER plus three zero bytes; 24..25 uint16be version 11; 26..27 uint16be transport id 1; 28..31 uint32be header length 256; 32..39 declared canonical bytes; 40..47 maximum canonical bytes; 48..55 declared envelope bytes; 56..63 maximum envelope bytes; 64..71 stream chunk bytes; 72..79 maximum chunk count; 80..87 maximum aggregate bytes; 88..119 request-envelope digest; 120..151 nonce digest; 152..183 frame digest; 184..215 canonical frameDeadline UTF-8 plus zero padding; and 216..255 zero. The JSON object is the exact projection. Trusted frameReceivedAt <= frameDeadline <= requestEnvelope.payload.deadline, and frameDeadline-frameReceivedAt <= 30 seconds. Peer credentials, every fixed byte, deadline, digest, and limit are checked from this first packet before reading or allocating any body byte. Expired, excess, truncated, trailing, nonzero-padding, mismatched, reordered, or overflowing input rejects pre-allocation."
+    "preAllocationFrame": "declaredEnvelopeBytes = LEN_BYTES(JCS(requestEnvelope)). frameSha256 = H11('pre-allocation-frame',UTF8(frameVersion),UTF8(magic),UTF8(transport),D20(fixedHeaderBytes),D20(declaredCanonicalRequestBytes),D20(maximumCanonicalRequestBytes),D20(declaredEnvelopeBytes),D20(maximumEnvelopeBytes),D20(streamChunkBytes),D20(maximumStreamChunkCount),D20(maximumAggregateRetrievedBytes),UTF8(frameDeadline),HEX(requestEnvelopeSha256),HEX(frameNonceSha256)). The exact 256-byte network-order frame is: bytes 0..23 ASCII CATCHPLATE-CONTROLLER plus three zero bytes; 24..25 uint16be version 11; 26..27 uint16be transport id 1; 28..31 uint32be header length 256; 32..39 declared canonical bytes; 40..47 maximum canonical bytes; 48..55 declared envelope bytes; 56..63 maximum envelope bytes; 64..71 stream chunk bytes; 72..79 maximum chunk count; 80..87 maximum aggregate bytes; 88..119 request-envelope digest; 120..151 nonce digest; 152..183 frame digest; 184..215 canonical frameDeadline UTF-8 plus zero padding; and 216..255 zero. The JSON object is the exact projection. Trusted frameReceivedAt <= frameDeadline <= requestEnvelope.payload.deadline, and frameDeadline-frameReceivedAt <= 30 seconds. Peer credentials, every fixed byte, deadline, digest, and limit are checked from this first packet before reading or allocating any body byte. Expired, excess, truncated, trailing, nonzero-padding, mismatched, reordered, or overflowing input rejects pre-allocation."
   },
   "x-mandatory-external-trust-inputs-v11": {
-    "controllerClient": "The only untrusted entry is the fixed absolute /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=<operation> --plan=<plan> call with those three arguments in that order and no others. The unique mappings are build + serverware-build-v1 -> (0,build,build,serverware-build-v1); runNoBuild + serverware-unit-no-build-v1 -> (1,runNoBuild,unit,serverware-unit-no-build-v1); runNoBuild + serverware-integration-no-build-v1 -> (2,runNoBuild,integration,serverware-integration-no-build-v1); runNoBuild + serverware-e2e-no-build-v1 -> (3,runNoBuild,e2e,serverware-e2e-no-build-v1); and runNoBuild + serverware-attestation-no-build-v1 -> (4,runNoBuild,attestation,serverware-attestation-no-build-v1). Operation alone never selects a no-build stage. No alias, alternate path, omitted suffix, environment override, or additional argument is accepted. The root-owned client authenticates with its protected requester key over a root-owned SOCK_SEQPACKET socket after peer-credential checks, creates and signs the bounded request, and receives no authority/request descriptor. Repository Make and shell remain untrusted and the controller never invokes or trusts Make.",
+    "controllerClient": "The only untrusted entry is the fixed absolute /usr/local/libexec/catchplate-coder-controller-client submit-fixed-v11 --operation=<operation> --plan=<plan> call with those three arguments in that order and no others. The unique mappings are build + catchplate-build-v1 -> (0,build,build,catchplate-build-v1); runNoBuild + catchplate-unit-no-build-v1 -> (1,runNoBuild,unit,catchplate-unit-no-build-v1); runNoBuild + catchplate-integration-no-build-v1 -> (2,runNoBuild,integration,catchplate-integration-no-build-v1); runNoBuild + catchplate-e2e-no-build-v1 -> (3,runNoBuild,e2e,catchplate-e2e-no-build-v1); and runNoBuild + catchplate-attestation-no-build-v1 -> (4,runNoBuild,attestation,catchplate-attestation-no-build-v1). Operation alone never selects a no-build stage. No alias, alternate path, omitted suffix, environment override, or additional argument is accepted. The root-owned client authenticates with its protected requester key over a root-owned SOCK_SEQPACKET socket after peer-credential checks, creates and signs the bounded request, and receives no authority/request descriptor. Repository Make and shell remain untrusted and the controller never invokes or trusts Make.",
     "planRootCheckpointPin": "Root-owned immutable configuration independently pins the plan-root checkpoint trust root, revision, signer principal, signer key leaf, signer SPKI digest, non-revocation root/revision, and validity. The authority snapshot/checkpoint cannot select or modify this pin.",
     "authoritySnapshotCheckpointPin": "Root-owned immutable configuration independently pins the authority-snapshot checkpoint trust root, revision, signer principal, signer key leaf, signer SPKI digest, non-revocation root/revision, and validity. Resolve this pin before reading delegated authorityRoots. The request, plan, repository, environment, and snapshot cannot select or modify it.",
     "finalCheckpointPin": "Root-owned immutable configuration independently pins the final-verdict checkpoint trust root, revision, signer principal, signer key leaf, signer SPKI digest, non-revocation root/revision, and validity. Any finalVerdictCheckpoint entry in authorityRoots is only an equality commitment to this external pin and cannot select it.",
@@ -2457,7 +2457,7 @@
     "immutableAvailabilityAuthorityPin": "Root-owned immutable configuration pins the immutableStore availability-signing authority principal, keyId, key leaf, SPKI, physical private-key identity, trust root/revision, non-revocation root/revision, validity, retention policy, minimum replica count, and maximum streamed object/aggregate limits."
   },
   "x-native-verification-v11": [
-    "Accept only /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=<operation> --plan=<plan> with those three arguments in that order. The five unique pairs are build/serverware-build-v1 -> ordinal 0 BUILD; runNoBuild/serverware-unit-no-build-v1 -> ordinal 1 UNIT; runNoBuild/serverware-integration-no-build-v1 -> ordinal 2 INTEGRATION; runNoBuild/serverware-e2e-no-build-v1 -> ordinal 3 E2E; and runNoBuild/serverware-attestation-no-build-v1 -> ordinal 4 ATTESTATION. Operation alone is insufficient for runNoBuild. Reject aliases, alternate paths, missing -no-build suffixes, reordered stages, extra arguments, and Make-provided request bytes, descriptors, keys, capabilities, or authority material.",
+    "Accept only /usr/local/libexec/catchplate-coder-controller-client submit-fixed-v11 --operation=<operation> --plan=<plan> with those three arguments in that order. The five unique pairs are build/catchplate-build-v1 -> ordinal 0 BUILD; runNoBuild/catchplate-unit-no-build-v1 -> ordinal 1 UNIT; runNoBuild/catchplate-integration-no-build-v1 -> ordinal 2 INTEGRATION; runNoBuild/catchplate-e2e-no-build-v1 -> ordinal 3 E2E; and runNoBuild/catchplate-attestation-no-build-v1 -> ordinal 4 ATTESTATION. Operation alone is insufficient for runNoBuild. Reject aliases, alternate paths, missing -no-build suffixes, reordered stages, extra arguments, and Make-provided request bytes, descriptors, keys, capabilities, or authority material.",
     "Each selected pipeline stage and its PlanConfigurationEnvelope MUST identify the same executionManifestPolicySha256. The controller creates or resolves exactly one launch authorization under the independently pinned launchAuthorizer role; request or repository content cannot supply or select that authority.",
     "Before any state CAS, verify the externally pinned stateQuorumMembership checkpoint signer and stateEpochFloor signer as mechanically distinct current authorities. Recompute the checkpoint payload/envelope, append-only checkpoint-log inclusion and exact predecessor link, intersection model, floor transition, and rollback-resistant persisted epoch. The checkpoint and floor must equal current external pins; no authority snapshot may select or self-root them. Every member weight comes only from one directionally proven current leaf under that checkpoint; asserted weights, aliases, duplicate SPKIs, and duplicate resolved physical private-key identities never authorize.",
     "Reject non-UTF-8, non-JCS, duplicate JSON member names at any depth, unknown fields, noncanonical base64url, noncanonical u64, values above uint64 max, and timestamps that fail strict semantic UTC calendar validation.",

@@ -17,12 +17,12 @@ from test_authority_revocation_planning_source import assigned, call, calls, def
 class RevocationWriterConfigurationSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.text, cls.tree = source("serverware/authority_revocation_writer_configuration.py", 64 * 1024)
-        cls.service_text, cls.service = source("serverware/authority_service.py", 2 * 1024 * 1024)
+        cls.text, cls.tree = source("catchplate/authority_revocation_writer_configuration.py", 64 * 1024)
+        cls.service_text, cls.service = source("catchplate/authority_service.py", 2 * 1024 * 1024)
         cls.process = definition(cls.service, "AuthorityProcess")
         cls.adapter = definition(cls.process, "_revocation_planner_persistence")
         cls.continuation = definition(cls.service, "_revocation_writer_from_owned_configuration")
-        _, cls.persistence = source("serverware/authority_revocation_persistence.py", 64 * 1024)
+        _, cls.persistence = source("catchplate/authority_revocation_persistence.py", 64 * 1024)
 
     def shape(self, actual, expected):
         self.assertEqual(ast.dump(actual), ast.dump(ast.parse("(" + expected.strip() + ")", mode="eval").body))
@@ -72,7 +72,7 @@ class RevocationWriterConfigurationSourceTests(unittest.TestCase):
         for actual, expected in zip(callbacks, (
                 'authority_revocation_configuration.production._callback(work, lambda: authority_launch_guard.require_active("planner-writer"))',
                 '''authority_revocation_configuration.production._callback(work,
-                    lambda: _read_dsn_descriptor("SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN"))''',
+                    lambda: _read_dsn_descriptor("CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN"))''',
                 'authority_revocation_configuration.production._callback(work, lambda: dict(authority_launch_guard.generation()))')):
             self.shape(actual, expected)
         self.assertIs(assigned(continuation, "persistence_dsn"), callbacks[1])
@@ -107,10 +107,10 @@ class RevocationWriterConfigurationSourceTests(unittest.TestCase):
         imports = [(node.module, tuple((item.name, item.asname) for item in node.names))
             for node in self.tree.body if isinstance(node, ast.ImportFrom)]
         self.assertEqual(imports, [("__future__", (("annotations", None),)),
-            ("serverware", (("authority_revocation_configuration", "configuration"),)),
-            ("serverware", (("authority_revocation_persistence", "persistence"),)),
-            ("serverware", (("authority_revocation_plan", "plan"),)),
-            ("serverware", (("authority_revocation_writer_connection", "writer"),))])
+            ("catchplate", (("authority_revocation_configuration", "configuration"),)),
+            ("catchplate", (("authority_revocation_persistence", "persistence"),)),
+            ("catchplate", (("authority_revocation_plan", "plan"),)),
+            ("catchplate", (("authority_revocation_writer_connection", "writer"),))])
         self.assertEqual([[item.name for item in node.names] for node in self.tree.body if isinstance(node, ast.Import)],
                          [["math"]])
         factory = definition(self.tree, "_persistence_from_configuration_on_work")
@@ -159,13 +159,13 @@ class RevocationWriterConfigurationSourceTests(unittest.TestCase):
         first_key = calls(factory, "configuration._key")[0]
         order = (capture, dsn, roles, timeouts[0], timeout_guard, timeouts[1], identity, validated, first_key)
         self.assertEqual([node.lineno for node in order], sorted(node.lineno for node in order))
-        _, shared = source("serverware/authority_revocation_configuration.py", 64 * 1024)
+        _, shared = source("catchplate/authority_revocation_configuration.py", 64 * 1024)
         prefix = definition(shared, "_capture_configuration_on_work")
         self.shape(call(prefix, "capability.plan._same"), '''capability.plan._same(
             computed, configuration_digest, work, "issuer configuration commitment changed")''')
         self.shape(call(prefix, "_generation_binding"), "_generation_binding(owned, launch, configuration_digest, work)")
-        _, connection = source("serverware/authority_revocation_writer_connection.py", 64 * 1024)
-        self.assertEqual(assigned(connection, "_ROLE").value, "serverware_policy_authority_planner_writer")
+        _, connection = source("catchplate/authority_revocation_writer_connection.py", 64 * 1024)
+        self.assertEqual(assigned(connection, "_ROLE").value, "catchplate_policy_authority_planner_writer")
         self.shape(definition(connection, "_validate_database_identity").body[-1].test, "identity[0] != _ROLE")
 
     def test_exact_planner_aliases_precede_two_real_keys_and_genuine_seven_setting_owner(self):
@@ -236,9 +236,9 @@ class RevocationWriterConfigurationSourceTests(unittest.TestCase):
         self.assertIsInstance(allowed, ast.Subscript)
         self.shape(allowed.slice, "self.role_name")
         role_values = {key.value: value for key, value in zip(allowed.value.keys, allowed.value.values)}
-        self.shape(role_values["planner-writer"], "{'SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN_FD'}")
-        self.shape(role_values["planner"], "{'SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN_FD'}")
-        self.shape(role_values["verifier"], "{'SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN_FD'}")
+        self.shape(role_values["planner-writer"], "{'CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN_FD'}")
+        self.shape(role_values["planner"], "{'CATCHPLATE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN_FD'}")
+        self.shape(role_values["verifier"], "{'CATCHPLATE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN_FD'}")
 
     def test_constructed_owner_still_captures_external_fifteen_before_genuine_connection_admission(self):
         owner = definition(self.persistence, "RevocationPlannerPersistence")
@@ -257,7 +257,7 @@ class RevocationWriterConfigurationSourceTests(unittest.TestCase):
         capture = call(runner, "_inputs_from_configuration")
         self.shape(capture, "_inputs_from_configuration(configuration, expectations, work)")
         db_import, = [node for node in runner.body if isinstance(node, ast.ImportFrom)
-            and node.module == "serverware" and [(item.name, item.asname) for item in node.names] == [("db", None)]]
+            and node.module == "catchplate" and [(item.name, item.asname) for item in node.names] == [("db", None)]]
         opening = call(runner, "_connect")
         admission = call(runner, "writer_connection._run_on_connection")
         self.shape(admission, '''writer_connection._run_on_connection(connection,
@@ -298,7 +298,7 @@ class RevocationWriterConfigurationSourceTests(unittest.TestCase):
                  and ast.unparse(node.test) == "uid != self.peer_uid or gid != self.peer_gid"]
         dispatch = call(served, "self.process.handle")
         self.assertLess(peer.lineno, dispatch.lineno)
-        _, legacy = source("serverware/authority_store/planner_connection.py", 64 * 1024)
+        _, legacy = source("catchplate/authority_store/planner_connection.py", 64 * 1024)
         gate = definition(legacy, "_require_planner_writer")
         self.shape(call(gate, "_require_postgres_connection"), "_require_postgres_connection(connection)")
         self.shape(call(gate, "_require_serializable"), "_require_serializable(raw)")

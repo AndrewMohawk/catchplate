@@ -40,10 +40,10 @@ from scripts.check_operator_ordinary_client import (
 from scripts.run_ordinary_regression import child_exit_status, stop_group
 from scripts.run_operator_x_examples_fixture import failure_site
 
-SCHEMA = "serverware.privateGuidedCheck/v1"
+SCHEMA = "catchplate.privateGuidedCheck/v1"
 CONNECT_DENIED = "data_plane.connect.denied"
 CURL_SHA256 = "0ca2b923679ab186f6512c7512e131a1c5c1b43d4cb5d55933998405b39e85bf"
-CURL_TRAILER = b"\nserverware-guided-connect:"
+CURL_TRAILER = b"\ncatchplate-guided-connect:"
 
 
 def sha(value):
@@ -120,7 +120,7 @@ def exchange(check, frame, raw):
     connection.connect = lambda: setattr(connection, "sock", check.control.connect(check.timeout(), check.control_ca))
     try:
         headers = {**frame["headers"], "Host": check.control.host, "Connection": "close",
-            "Accept-Encoding": "identity", "X-Serverware-Admin-Token": check.admin_token}
+            "Accept-Encoding": "identity", "X-Catchplate-Admin-Token": check.admin_token}
         connection.request(frame["method"], frame["path"], body=raw if frame["method"] == "POST" else None,
                            headers=headers)
         response = connection.getresponse()
@@ -320,13 +320,13 @@ class GuidedCheck(OperatorCatalogCheck):
             "--data-binary", "@" + str(self.body_file), "--header", "Authorization: " + config["request_headers"]["Authorization"],
             "--header", "Content-Type: application/json", "--header", "Accept: application/json",
             "--header", "Accept-Encoding: identity", "--header", "Connection: close",
-            "--header", "User-Agent: serverware-test-run/" + self.run_id,
-            "--write-out", "\nserverware-guided-connect:%{http_connect}\nserverware-guided-status:%{http_code}\n", target]
+            "--header", "User-Agent: catchplate-test-run/" + self.run_id,
+            "--write-out", "\ncatchplate-guided-connect:%{http_connect}\ncatchplate-guided-status:%{http_code}\n", target]
         private_input = ('proxy-user = "' + config["proxy_username"] + ":" + token + '"\n').encode()
         code, output, error = run_curl(arguments, private_input, min(12, self.deadline - time.monotonic()))
         self.clean(output); self.clean(error)
         content, separator, trailer = output.rpartition(CURL_TRAILER)
-        match = re.fullmatch(rb"([0-9]{3})\nserverware-guided-status:([0-9]{3})\n", trailer)
+        match = re.fullmatch(rb"([0-9]{3})\ncatchplate-guided-status:([0-9]{3})\n", trailer)
         require(separator and match, "guided curl status unavailable")
         connect, status = (int(value) for value in match.groups())
         if denied:

@@ -219,7 +219,7 @@ pub(in crate::policy_shadow) fn verify(value: wire::Wire, request_raw: &[u8], re
     let issued = payload.guest.issued_at_boottime_ns.parse::<u64>().map_err(|_| ShadowError::BindingDrift)?;
     let startup = payload.guest.startup_deadline_boottime_ns.parse::<u64>().map_err(|_| ShadowError::BindingDrift)?;
     let lifetime = payload.guest.lifetime_deadline_boottime_ns.parse::<u64>().map_err(|_| ShadowError::BindingDrift)?;
-    ensure(payload.api_version == "serverware.nativeShadowPersistenceCommit/v1"
+    ensure(payload.api_version == "catchplate.nativeShadowPersistenceCommit/v1"
         && payload.proof_scope_sha256 == *configuration.proof_scope().binding_sha256()
         && payload.signing_key_id == reply.authority_key_id && payload.signing_key_spki_sha256 == reply.authority_key_spki_sha256
         && payload.guest.service_role == "production-bridge"
@@ -237,7 +237,7 @@ pub(in crate::policy_shadow) fn verify(value: wire::Wire, request_raw: &[u8], re
         && payload.stored_at_boottime_nanos >= binding.opened_at_boottime_nanos
         && payload.stored_at_boottime_nanos < binding.operation_deadline_boottime_nanos
         && payload.stored_at_boottime_nanos <= reply.completed_at_boottime_nanos
-        && head.api_version == "serverware.nativeShadowPersistenceHead/v1"
+        && head.api_version == "catchplate.nativeShadowPersistenceHead/v1"
         && payload.sequence > 0 && head.sequence == payload.sequence && head.sequence <= proof.current_head_sequence
         && proof.current_head_sequence <= 128 && proof.current_head_sha256 != Sha256Digest::compute(&[])
         && head.previous_head_sha256 == payload.previous_head_sha256
@@ -294,7 +294,7 @@ fn verify_final_request(request: &ProductionAuthorityEndpointRequestV4, response
             ensure(matches!(computation.request, ClosedProductionDispatchRequestV4::CommitRequest { .. })
                 && request.endpoint == ProductionAuthorityEndpointIdentityV4::ParentSigner(PolicyShadowCustodySignerRole::LedgerAppend)
                 && response.result == computation.result && response.service_transitions == *service_transitions
-                && computation.api_version == "serverware.nativeShadowCommitRequestComputation/v1"
+                && computation.api_version == "catchplate.nativeShadowCommitRequestComputation/v1"
                 && computation.result_sha256 == response.result_sha256
                 && computation.computed_at_boottime_nanos >= computation.request.binding().opened_at_boottime_nanos
                 && computation.computed_at_boottime_nanos < request.deadline_boottime_nanos)?;

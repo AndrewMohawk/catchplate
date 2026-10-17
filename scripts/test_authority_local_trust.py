@@ -18,7 +18,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from serverware import authority_local_trust as local
+from catchplate import authority_local_trust as local
 from scripts.authority import local_trust as cli
 
 NOW = int(datetime(2026, 10, 1, tzinfo=timezone.utc).timestamp()) * 10**9
@@ -70,7 +70,7 @@ class InitialTrustTests(unittest.TestCase):
         material = local.document(raw, local.MAX_ORIGINAL)
         self.assertEqual(set(material), {"keyAuthorizations", "keyRevocations"})
         self.assertEqual(len(material["keyAuthorizations"]["payload"]["keys"]), 12)
-        self.assertEqual(material["keyRevocations"]["payload"], dict(schema="serverware.authorityKeyRevocationPayload/v1",
+        self.assertEqual(material["keyRevocations"]["payload"], dict(schema="catchplate.authorityKeyRevocationPayload/v1",
             generationSequence=0, predecessorGenerationDigest=None, revocationHighWater=0, revocations=[]))
         for name, schema, domain in (("keyAuthorizations", local.spec.KEY_AUTHORIZATION_SCHEMA, local.spec.KEY_AUTHORIZATION_SIGNATURE_DOMAIN),
                 ("keyRevocations", local.spec.KEY_REVOCATION_SCHEMA, local.spec.KEY_REVOCATION_SIGNATURE_DOMAIN)):

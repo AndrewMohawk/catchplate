@@ -73,13 +73,13 @@ const ABSOLUTE_MAX_RETRY_ATTEMPTS: u8 = 16;
 const ABSOLUTE_MAX_CLEANUP_ACTIONS: usize = 16;
 const MAX_SIGNED_EVIDENCE_BYTES: usize = 64 * 1024;
 const CLEANUP_RESULT_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyVerifiedCleanupResult/v1";
+    b"catchplate.policyCustodyVerifiedCleanupResult/v1";
 const CLEANUP_RESULT_RECEIPT_DOMAIN: &[u8] =
-    b"serverware.policyCustodyVerifiedCleanupResultReceipt/v1";
+    b"catchplate.policyCustodyVerifiedCleanupResultReceipt/v1";
 const CLEANUP_INTENT_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupEffectIntentReceipt/v3";
+    b"catchplate.policyCustodyCleanupEffectIntentReceipt/v3";
 const VERIFIED_CLEANUP_EVIDENCE_VERSION: &str =
-    "serverware.policyCustodyWatchdogVerifiedCleanupEvidence/v3";
+    "catchplate.policyCustodyWatchdogVerifiedCleanupEvidence/v3";
 
 pub(super) type RecoveryDigest = Sha256Digest;
 
@@ -3727,9 +3727,9 @@ impl HeartbeatEvent for LinuxHeartbeatEvent {
 }
 
 const RECOVERY_TRANSITION_NONCE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyRecoveryTransitionNonce/v3";
+    b"catchplate.policyCustodyRecoveryTransitionNonce/v3";
 const RECOVERY_ABORT_REASON_DOMAIN: &[u8] =
-    b"serverware.policyCustodyRecoveryAbortReason/v3";
+    b"catchplate.policyCustodyRecoveryAbortReason/v3";
 
 /// Mechanical v3 recovery protocol. Signed authorizations and stored evidence
 /// are supplied only after the watchdog authority and endpoint clients have

@@ -8,13 +8,13 @@ for the activation caller even when that lane is null; a disabled v6 lane
 rejects an occupied or inherited FD205. No earlier version implicitly enables
 this purpose or receives a new key.
 
-The nested `serverware.controlPlaneOidcSessionActivationExecution/v1` object
+The nested `catchplate.controlPlaneOidcSessionActivationExecution/v1` object
 has exactly `schema`, `activationCallerPrivateKeyFd`, `plannerKey`,
 `currentRootEnrollment`, `grantEnrollment`, `authorizationEnrollment`, and
 `authorizerEndpoint`. The planner record contains canonical raw32
 `publicKeyBase64Url` and `spkiDigest`; each enrollment carries original
 `base64Url` and `byteCount`. The endpoint is fixed to
-`/run/serverware/oidc-session-activation-execution/authorizer.sock`, root-created
+`/run/catchplate/oidc-session-activation-execution/authorizer.sock`, root-created
 listener peer 0:0, and an integer timeout of 1–30 seconds. It is not permission
 to dispatch an action or change that endpoint from a request.
 
@@ -39,7 +39,7 @@ it does not create a measured control-plane role or hardware assurance.
 
 ## Explicit downstream profile
 
-Source `.183` adds nested `serverware.controlPlaneOidcSessionActivationExecution/v2`
+Source `.183` adds nested `catchplate.controlPlaneOidcSessionActivationExecution/v2`
 under the existing parent v6/v7 envelopes. The original nested v1 remains strict.
 V2 adds exactly `reserverEndpoint`, `sqlEndpoint`, and `statePredecessor`; it
 adds no key, descriptor or top-level bootstrap version. The endpoints retain
@@ -68,7 +68,7 @@ delivery or a completed public session. Source remains unbuilt and unexecuted.
 ## Explicit completion endpoint profile
 
 Source `.184` adds nested
-`serverware.controlPlaneOidcSessionActivationExecution/v3`: exactly the v2
+`catchplate.controlPlaneOidcSessionActivationExecution/v3`: exactly the v2
 fields plus `completionEndpoint`. V1 and v2 stay closed and cannot carry this
 field. V3 retains the genuine v2 original-enrollment and independent predecessor
 admission, including database/generation, genesis and reserve/completion
@@ -76,7 +76,7 @@ capacity joins. It adds no key, FD, top-level version or new processing window.
 
 The endpoint has the same exact `socketPath`, `requestTimeoutSeconds`,
 `listenerUid` and `listenerGid` fields. Its only path is
-`/run/serverware/oidc-session-activation/completion.sock`; timeout is an exact
+`/run/catchplate/oidc-session-activation/completion.sock`; timeout is an exact
 integer from 1 through 30 and the independently expected listener peer is 0:0.
 `_ActivationExecutionMaterial` appends `completion_endpoint=None`; v3 and v4
 populates it. The stdlib-only FD205 selector recognizes the identical v3 shape
@@ -96,10 +96,10 @@ does not prove completion, release a token, update a cookie or admit recovery.
 ## Explicit consume-planner endpoint profile
 
 Source `.185` adds nested
-`serverware.controlPlaneOidcSessionActivationExecution/v4`: exactly the v3
+`catchplate.controlPlaneOidcSessionActivationExecution/v4`: exactly the v3
 fields plus `consumePlannerEndpoint` and `consumePlannerKey`. Earlier versions
 stay closed. The endpoint uses the same timeout/peer fields, root listener 0:0,
-and the fixed `/run/serverware/oidc-session-activation/delivery-planner.sock`.
+and the fixed `/run/catchplate/oidc-session-activation/delivery-planner.sock`.
 The public key object has exactly `publicKeyBase64Url`, `spkiDigest`, and
 `measurementDigest`. Admission separates its key from the actual runtime root,
 activation planner/caller, state/computation/completion, and other configured
@@ -125,7 +125,7 @@ planning socket-directory mount covers the endpoint but does not create it.
 The stdlib-only cold selector explicitly recognizes v6 without importing
 repository crypto. Its actual entrypoint calls the fixed activation-key
 delivery helper, which reads only the already-provisioned root-owned mode0400
-`/run/secrets/serverware-oidc-session-activation-execution-caller-key`, subject
+`/run/secrets/catchplate-oidc-session-activation-execution-caller-key`, subject
 to the existing no-follow ancestry, bounded sealed read and non-overwriting
 FD reservation checks. It supplies only FD205, adds no environment key or
 arbitrary path, and preserves the old four-field slot projection API.

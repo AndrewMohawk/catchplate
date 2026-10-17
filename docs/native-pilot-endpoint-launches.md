@@ -10,7 +10,7 @@ percentage or evidence of a running pilot.
 
 Explicit supervisor policy/v12 adds only `endpointLaunchesOriginal` to v11's
 nineteen fields. The 108 signing selectors and outer 4 MiB bound are unchanged.
-The 16 KiB fragment `serverware.nativePilotEndpointLaunchPolicy/v1` has exactly
+The 16 KiB fragment `catchplate.nativePilotEndpointLaunchPolicy/v1` has exactly
 `apiVersion` and `endpoints`, with ten role rows containing `parentPort`,
 `maximumBracketNanos`, `timestampErrorNanos` and `maximumClockRateErrorPpm`.
 These independently approved settings do not establish trusted time.
@@ -106,7 +106,7 @@ The final 85,452,800-byte source archive has SHA256
 `86a29484c3ba509bd1a63af38ca5f615f241a3a0a5a9dc1f6a665a578994edc7`.
 Both source archives, revisions, exact harnesses/commands and logs, plus the
 structured result and verified checksums, are retained at
-`codex-offload/serverware/engineering-builds/6618d220-endpoint-launches-4k10ga/`.
+`codex-offload/catchplate/engineering-builds/6618d220-endpoint-launches-4k10ga/`.
 Native source, schemas and dependency lock are unchanged from `03d4075d`;
 no native/artifact rebuild was repeated. The reused runtime is an unpublished
 engineering candidate. No cloud or paid action ran.

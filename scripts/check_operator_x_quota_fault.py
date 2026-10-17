@@ -29,9 +29,9 @@ from scripts import check_operator_x_quota as quota
 from scripts.check_operator_demo import CheckFailure, SHA256, require, token_file
 from scripts.check_operator_key_replacement import authority_projection
 
-SCHEMA = "serverware.privateXQuotaFaultCheck/v1"
+SCHEMA = "catchplate.privateXQuotaFaultCheck/v1"
 MODES = ("drop-ack", "revoke-before-release")
-STATUS_SCHEMA = "serverware.privateXQuotaFaultStatus/v1"
+STATUS_SCHEMA = "catchplate.privateXQuotaFaultStatus/v1"
 STATUS_HASHES = {"arm_sha256", "lease_request_sha256", "lease_response_sha256",
     "claim_request_sha256", "claim_response_sha256", "claim_sha256"}
 STATUS_FIELDS = {"schema", "status", "mode", "http_status"} | STATUS_HASHES
@@ -65,7 +65,7 @@ def validate_status(value, mode, *, arm_hash=None, terminal=False):
 
 def validate_provider(value, *, connected, cleaned, anchor):
     require(type(value) is dict and set(value) == base.OBSERVATION_KEYS
-        and value["schema"] == "serverware.privateXQuotaFaultProvider/v1"
+        and value["schema"] == "catchplate.privateXQuotaFaultProvider/v1"
         and value["syntheticOnly"] is True and value["terminal"] == "running" and value["overflowed"] is False,
         "quota fault provider envelope differs")
     counts = {"authorize": int(connected), "code": int(connected), "refresh": 0,
@@ -135,8 +135,8 @@ def selected_claim(events, status, scope, credential_id, subject):
     claim = next(r["event"] for r in selected if r["event_type"] == quota.CLAIMED)
     require(type(reserve) is dict and set(reserve) == quota.RECEIPT_FIELDS | {"binding"}
         and type(claim) is dict and set(claim) == quota.RECEIPT_FIELDS | {"binding", "claimed_at_epoch_ms"}
-        and reserve["schema"] == "serverware.operatorXPostingQuotaReservation/v1"
-        and claim["schema"] == "serverware.operatorXPostingQuotaClaim/v1", "quota fault durable claim shape differs")
+        and reserve["schema"] == "catchplate.operatorXPostingQuotaReservation/v1"
+        and claim["schema"] == "catchplate.operatorXPostingQuotaClaim/v1", "quota fault durable claim shape differs")
     exact({k: v for k, v in claim.items() if k not in {"schema", "claimed_at_epoch_ms"}},
         {k: v for k, v in reserve.items() if k != "schema"}, "quota fault claim rebound")
     binding = claim["binding"]
@@ -278,7 +278,7 @@ class FaultCheck(base.XPostCheck):
         self.current_phase = self.mode
         before = self.observe(0)
         require(self.relay("/__fault/status")["status"] == "idle", "quota relay was previously armed")
-        arm = {"schema": "serverware.privateXQuotaFaultArm/v1", "mode": "drop_ack" if self.mode == "drop-ack" else "hold_ack",
+        arm = {"schema": "catchplate.privateXQuotaFaultArm/v1", "mode": "drop_ack" if self.mode == "drop-ack" else "hold_ack",
             "principal_id": self.scope[0], "route_id": self.scope[1], "body_sha256": digest(base.profiles.post_body("node"))}
         armed = self.relay("/__fault/arm", arm)
         self.arm_hash = digest(arm)
@@ -300,7 +300,7 @@ class FaultCheck(base.XPostCheck):
                 loaded_wall = time.time_ns() // 1_000_000
                 require(loaded_wall < expiry and health["policy_hash"] == catalog["policy"]["loaded_policy_hash"]
                     == self.policy_hash != self.scope[2], "quota revoked policy not loaded before original expiry")
-                release = {"schema": "serverware.privateXQuotaFaultRelease/v1", "arm_sha256": self.arm_hash,
+                release = {"schema": "catchplate.privateXQuotaFaultRelease/v1", "arm_sha256": self.arm_hash,
                     "claim_sha256": observed["claim_sha256"], "revoked_rule_id": self.rule["id"],
                     "policy_hash": self.policy_hash, "loaded_policy_hash": health["policy_hash"]}
                 released_wall = time.time_ns() // 1_000_000

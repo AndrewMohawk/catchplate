@@ -97,7 +97,7 @@ class ProxyBearerAdapter(HTTPAdapter):
                 and kwargs.get("verify") == self._ca_file and kwargs.get("stream") is True,
                 "Requests fixed proxy, target, or verification boundary differs")
         require(not {name.lower() for name in request.headers}.intersection({"proxy-authorization",
-            "authorization", "cookie", "x-serverware-admin-token"}), "origin request contains identity material")
+            "authorization", "cookie", "x-catchplate-admin-token"}), "origin request contains identity material")
         return super().send(request, **kwargs)
 
 
@@ -157,9 +157,9 @@ def response_commitment(status, fields, body, *, case, policy_hash, expected):
             "Gmail job response headers ambiguous or unbounded")
     headers = dict((name.lower(), value) for name, value in fields)
     body_hash = "sha256:" + hashlib.sha256(body).hexdigest()
-    require(headers.get("x-serverware-policy-hash") == policy_hash
-            and headers.get("x-serverware-response-body-sha256") == body_hash
-            and (headers.get("x-serverware-request-digest"), headers.get("x-serverware-operation-digest")) == expected
+    require(headers.get("x-catchplate-policy-hash") == policy_hash
+            and headers.get("x-catchplate-response-body-sha256") == body_hash
+            and (headers.get("x-catchplate-request-digest"), headers.get("x-catchplate-operation-digest")) == expected
             and not set(headers).intersection({"server", "date", "cache-control", "content-encoding"}),
             "Gmail canonical-v3 commitment or discarded response metadata differs")
     return {"case": case, "requestDigest": expected[0], "operationDigest": expected[1],
@@ -169,7 +169,7 @@ def response_commitment(status, fields, body, *, case, policy_hash, expected):
 def observations(document, stage):
     """Closed job/provider evidence, including every attempted Gmail dispatch."""
     require(stage in STAGES and isinstance(document, dict)
-            and document.get("schema") == "serverware.privateGoogleObservations/v1", "Gmail observations unavailable")
+            and document.get("schema") == "catchplate.privateGoogleObservations/v1", "Gmail observations unavailable")
     consent, refresh, resources = STAGES[stage]
     counts = document.get("counts", {})
     require(isinstance(counts, dict) and set(counts) == {"google", "x"} and counts["x"] == {}
@@ -400,7 +400,7 @@ class GmailJobCheck(base.GoogleRefreshCheck):
         self.observe("refreshed")
         self.results.append("same_account_and_app_continue_after_actual_expiry_with_one_automatic_refresh")
         self.results.append("eight_wire_bodies_canonical_v3_and_durable_attempts_join_without_provider_secret_disclosure")
-        result = {"ok": True, "schema": "serverware.operatorGmailJobCheck/v1", "syntheticOnly": True,
+        result = {"ok": True, "schema": "catchplate.operatorGmailJobCheck/v1", "syntheticOnly": True,
             "realGoogleVerified": False, "browserUiVerified": False, "productionReady": False, "hardwareVerified": False,
             "checks": self.results, "dataPlaneBinaryDigest": self.args.expected_binary_sha256,
             "requestsVersion": requests.__version__, "credentialId": credential["id"],
@@ -429,7 +429,7 @@ def run_checks(args):
         check = GmailJobCheck(args)
         return check.run()
     except Exception as error:
-        return {"ok": False, "schema": "serverware.operatorGmailJobCheck/v1", "syntheticOnly": True,
+        return {"ok": False, "schema": "catchplate.operatorGmailJobCheck/v1", "syntheticOnly": True,
             "realGoogleVerified": False, "productionReady": False, "checks": list(check.results) if check else [],
             "providerObservations": check.provider_observations if check else [],
             "error": str(error) if isinstance(error, CheckFailure) else type(error).__name__}

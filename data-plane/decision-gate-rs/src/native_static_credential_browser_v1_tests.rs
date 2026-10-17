@@ -45,8 +45,8 @@ fn creation_rotation_pages_and_cookies_keep_distinct_domains() {
         + 60_000_000_000) as u64;
     let creation = cookie(id, &nonce, expiry).unwrap();
     let rotation = crate::native_static_credential_rotation_browser_v1::cookie(id, &nonce, expiry).unwrap();
-    assert!(creation.starts_with("__Host-serverware-native-static-12345678123441238123123456789abc="));
-    assert!(rotation.starts_with("__Host-serverware-native-static-rotate-12345678123441238123123456789abc="));
+    assert!(creation.starts_with("__Host-catchplate-native-static-12345678123441238123123456789abc="));
+    assert!(rotation.starts_with("__Host-catchplate-native-static-rotate-12345678123441238123123456789abc="));
     for value in [creation, rotation] {
         assert!(value.contains("; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age="));
     }

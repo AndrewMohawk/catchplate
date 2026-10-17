@@ -53,7 +53,7 @@ else:
     sys.path[:0] = [str(_SCRIPT.parent.parent), str(_SCRIPT)]
 
 import native_pilot_authority_io as io
-from serverware import native_activation_receiver_issuer as issuer
+from catchplate import native_activation_receiver_issuer as issuer
 
 
 class _Parser(argparse.ArgumentParser):

@@ -2,8 +2,8 @@
 //! No credential/client plaintext crosses this module; immutable ciphertext
 //! preparations and independently signed exact writer originals reach helper.
 use super::*;
-use serverware_decision_gate::native_oauth_capture_retirement_v1::{self as wire, Configuration, Reply};
-use serverware_decision_gate::native_secret_broker_v1 as broker;
+use catchplate_decision_gate::native_oauth_capture_retirement_v1::{self as wire, Configuration, Reply};
+use catchplate_decision_gate::native_secret_broker_v1 as broker;
 use std::collections::BTreeSet;
 
 pub(super) struct Owner { config: Configuration, endpoint: String, poisoned: bool }
@@ -69,15 +69,15 @@ fn execute(state: &GateState, owner: &mut Owner, pending: &str, recovery: bool, 
                     // No identity/broker/currentness lock spans the controlled
                     // writer or all-holder barrier wait. Its drain worker can
                     // acknowledge this same gate's active sends concurrently.
-                    let body = serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&prepared.wire(evidence)?)?;
+                    let body = catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&prepared.wire(evidence)?)?;
                     let remaining = custody_deadline_remaining(deadline, "measured capture retirement request")?;
                     let mut response = state.credential_lease_client.post(&owner.endpoint)
-                        .header("X-Serverware-Data-Plane-Token", state.credential_lease_token.as_deref().ok_or("capture retirement service token absent")?)
+                        .header("X-Catchplate-Data-Plane-Token", state.credential_lease_token.as_deref().ok_or("capture retirement service token absent")?)
                         .header("Content-Type", "application/json").body(body)
                         .timeout(remaining).send().map_err(|_|"capture retirement writer response uncertain; no resubmission")?;
                     if !response.status().is_success() { return Err("capture retirement writer refused; no fallback or resubmission".to_owned()); }
                     let raw = read_bounded_control_plane_response_body(&mut response, 8 * 1024 * 1024, "measured capture retirement")?;
-                    let mut original: Value = serverware_decision_gate::native_oauth_refresh_v1::response_document(&raw)?;
+                    let mut original: Value = catchplate_decision_gate::native_oauth_refresh_v1::response_document(&raw)?;
                     if original["apiVersion"] != wire::HTTP_RESPONSE || original.as_object().is_none_or(|v| v.len() != 4
                         || !["apiVersion","requestOriginal","responseOriginal","currentnessBarriers"].iter().all(|name|v.contains_key(*name))) {
                         return Err("capture retirement response originals are not closed".to_owned());

@@ -7,7 +7,7 @@ use std::os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd,OwnedFd};
 use std::os::unix::fs::MetadataExt;
 use std::mem::{size_of,zeroed};
 use std::sync::Mutex;
-const API:&str="serverware.nativeShadowRetrievalClientInspection/v1";
+const API:&str="catchplate.nativeShadowRetrievalClientInspection/v1";
 const MAX_IPC:usize=4096;
 #[derive(PartialEq,Eq)]
 struct Identity {dev:u64,ino:u64,mode:u32,uid:u32,gid:u32}
@@ -43,7 +43,7 @@ impl Directory {
     }
     fn path_originals(&self)->Result<Vec<Identity>,ShadowError> {
         self.check()?;
-        let values=["/","/run","/run/serverware-shadow-retrieval"].into_iter()
+        let values=["/","/run","/run/catchplate-shadow-retrieval"].into_iter()
             .map(pathname).collect::<Result<Vec<_>,_>>()?;
         require(values.iter().all(|v|v.mode&libc::S_IFMT==libc::S_IFDIR
             && v.uid==0 && v.gid==0 && v.mode&0o022==0)

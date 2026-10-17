@@ -10,7 +10,7 @@ Neither a supplied successful verdict nor a digest by itself grants creation.
 The v2 grant's creation journal must differ from the kernel journal by path,
 directory device/inode and namespace. The directory is preprovisioned
 root:root `0700`; no provisioning occurs here. The creation slot is SHA-256 over
-the dedicated `serverware.nativeEgressCreationSlot/v1` plus NUL domain followed
+the dedicated `catchplate.nativeEgressCreationSlot/v1` plus NUL domain followed
 by each signed namespace and capability ID as a four-byte big-endian byte length
 and exact bytes. Fresh proof hashes, child PIDs and namespace identities never
 select a new slot. They cannot make a consumed capability reusable.

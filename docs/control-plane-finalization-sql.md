@@ -17,7 +17,7 @@ SQL dispatch. The configured key/custody/lifetime remains held throughout.
 Before this private method, the actual application must separately admit the
 present finalization-execution purpose and retained subject ownership. The
 existing reservation permission does not authorize SQL. The
-[retained facade](../serverware/control_plane_registration_finalization_handoff.py)
+[retained facade](../catchplate/control_plane_registration_finalization_handoff.py)
 repeats actual finalization/signer/evidence-completion replay and user/session
 ownership under the cold owner lock. The private method also requires the
 actual finalization grant `local_digest` and rejoins raw13 to that complete
@@ -25,7 +25,7 @@ retained association; it is not an alternate public bypass.
 
 ## One original-bound request
 
-The [caller implementation](../serverware/control_plane_registration_finalization_sql.py)
+The [caller implementation](../catchplate/control_plane_registration_finalization_sql.py)
 holds raw13: finalization grant raw10 followed by original reserve/snapshot/
 acknowledgment raw3. Genuine [original admission](registration-finalization-sql-admission.md)
 checks caller, plan, grant, full vectors, snapshot and state receipt against the

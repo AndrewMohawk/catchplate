@@ -9,7 +9,7 @@ use std::os::unix::fs::{FileExt,MetadataExt};
 
 struct Running {
     // Drop order is material: genuine same-child exit/reap before originals.
-    child:Child,executable:File,image:serverware_decision_gate::native_secret_broker_v1::shadow_image::ShadowImage,
+    child:Child,executable:File,image:catchplate_decision_gate::native_secret_broker_v1::shadow_image::ShadowImage,
     cold:Cold,control:OwnedFd,caller_pidfd:OwnedFd,caller:i32,
     startup:Option<process::Timer>,lifetime:process::Timer,phase_two:Option<PhaseTwo>,
     operational:Option<driver_continuation::ParentInputs>,held_rights:Vec<OwnedFd>,
@@ -30,7 +30,7 @@ impl Running {
         process::isolate_mounts()?;let image=cold.image()?;
         let bytes=driver_bootstrap::read_file(image.executable(),64*1024*1024)?;
         require(Sha256Digest::compute(&bytes)==*cold.executable_sha256())?;
-        serverware_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&bytes).map_err(fail)?;
+        catchplate_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&bytes).map_err(fail)?;
         let raw=unsafe{libc::syscall(libc::SYS_memfd_create,c"native-shadow-driver-bootstrap-executable".as_ptr(),
             libc::MFD_ALLOW_SEALING|libc::MFD_CLOEXEC)};
         require(raw>=0)?;let mut executable=unsafe{File::from_raw_fd(raw as i32)};
@@ -73,7 +73,7 @@ impl Running {
             if let Some(packet)=received {
                 let selected:serde_json::Value=serde_json::from_slice(&packet.bytes).map_err(fail)?;
                 if public && selected.get("apiVersion").and_then(serde_json::Value::as_str)
-                    ==Some("serverware.nativeShadowDriverPublicAdmissionNotice/v1") {
+                    ==Some("catchplate.nativeShadowDriverPublicAdmissionNotice/v1") {
                     self.lifecycle.as_mut().ok_or(ShadowError::BindingDrift)?.public_admission(packet,
                         self.observation.as_ref().ok_or(ShadowError::BindingDrift)?,
                         self.phase_two.as_ref().ok_or(ShadowError::BindingDrift)?)?;
@@ -81,7 +81,7 @@ impl Running {
                 }
                 require(packet.rights.is_empty())?;
                 if self.lifecycle.is_some() && selected.get("apiVersion").and_then(serde_json::Value::as_str)
-                    ==Some("serverware.nativeShadowDriverFacadeListening/v1") {
+                    ==Some("catchplate.nativeShadowDriverFacadeListening/v1") {
                     let notice:driver_lifecycle::wire::Listening=exact(&packet.bytes)?;
                     let observation=self.observation.as_ref().ok_or(ShadowError::BindingDrift)?;
                     observation.require_child(&packet,&self.executable)?;
@@ -140,14 +140,14 @@ impl Running {
         #[serde(rename_all="camelCase",deny_unknown_fields)]
         struct Notice{api_version:String,observation_sha256:Sha256Digest,scope_sha256:Sha256Digest}
         let notice:Notice=exact(&retained.bytes)?;
-        require(notice.api_version=="serverware.nativeShadowDriverPhaseTwoRetained/v1"
+        require(notice.api_version=="catchplate.nativeShadowDriverPhaseTwoRetained/v1"
             && notice.observation_sha256==Sha256Digest::compute(&packet.bytes)
             && notice.scope_sha256==Sha256Digest::compute(self.phase_two.as_ref().ok_or(ShadowError::BindingDrift)?.scope()))?;
         observation.require_child(&retained,&self.executable)?;
         require(retrieval_peer::send(self.control.as_fd(),&retained.bytes,&[])?)?;
         if self.operational.is_some(){
             let completed=self.receive_child()?;let notice:Notice=exact(&completed.bytes)?;
-            require(notice.api_version=="serverware.nativeShadowDriverBridgeConstructed/v1"
+            require(notice.api_version=="catchplate.nativeShadowDriverBridgeConstructed/v1"
                 && notice.observation_sha256==Sha256Digest::compute(&packet.bytes)
                 && notice.scope_sha256==Sha256Digest::compute(self.phase_two.as_ref().ok_or(ShadowError::BindingDrift)?.scope()))?;
             // The actual child has completed its real inspected bridge

@@ -17,14 +17,14 @@ from cryptography.exceptions import InvalidSignature
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_closure_set as sets
-from serverware import native_pilot_genesis_closure_authority as authority
-from serverware import native_pilot_genesis_key_profile as keys
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_closure_set as sets
+from catchplate import native_pilot_genesis_closure_authority as authority
+from catchplate import native_pilot_genesis_key_profile as keys
 import test_native_pilot_genesis_key_authority as fixtures
 
 p = g.p
-DOMAIN = "serverware.nativeCustodyClosureAssignment.signature/v6"
+DOMAIN = "catchplate.nativeCustodyClosureAssignment.signature/v6"
 
 
 def input_for(fixture, role):
@@ -62,8 +62,8 @@ class GenesisClosureAuthorityTests(unittest.TestCase):
                 self.assertEqual(self.check(value, raw), raw)
                 result = g.document(raw, authority.MAX_OUTPUT)
                 payload = result["authorization"]["payload"]
-                self.assertEqual(result["apiVersion"], "serverware.nativeCustodyClosure/v6")
-                self.assertEqual(payload["apiVersion"], "serverware.nativeCustodyClosureAssignment/v6")
+                self.assertEqual(result["apiVersion"], "catchplate.nativeCustodyClosure/v6")
+                self.assertEqual(payload["apiVersion"], "catchplate.nativeCustodyClosureAssignment/v6")
                 self.assertEqual(payload["profile"], "native-publication-genesis-closure-set-v2")
                 self.assertEqual(payload["guestRole"], role)
                 self.assertEqual(payload["manifestSha256"], result["manifest"]["manifestSha256"])
@@ -80,23 +80,23 @@ class GenesisClosureAuthorityTests(unittest.TestCase):
             self.assertEqual(manifest["workerExecutableSha256"], self.f["deliveries"][role]["executable_sha256"])
             self.assertEqual(guest["runtimeConfigurationSha256"], p.sha(self.f["deliveries"][role]["runtime_raw"]))
             if role == authority.ROLES[-1]:
-                self.assertEqual(manifest["apiVersion"], "serverware.nativeCustodyExecutionClosure/v2")
+                self.assertEqual(manifest["apiVersion"], "catchplate.nativeCustodyExecutionClosure/v2")
                 self.assertEqual(manifest["profile"], "measured-bootstrap-late-runtime-static-amd64-v1")
                 self.assertEqual(manifest["runtimeConfigurationSha256"], p.sha(g.canonical(keys.BOOTSTRAP)))
                 self.assertNotEqual(manifest["runtimeConfigurationSha256"], guest["runtimeConfigurationSha256"])
             else:
-                self.assertEqual(manifest["apiVersion"], "serverware.nativeCustodyExecutionClosure/v1")
+                self.assertEqual(manifest["apiVersion"], "catchplate.nativeCustodyExecutionClosure/v1")
                 self.assertEqual(manifest["profile"], "sealed-memfd-squashfs-static-amd64-v1")
                 self.assertEqual(manifest["runtimeConfigurationSha256"], guest["runtimeConfigurationSha256"])
 
     def test_old_outer_assignment_profile_and_signature_domain_refuse(self):
         value = input_for(self.f, authority.ROLES[-1]); prepared = self.prepare(value)
         raw = independently_signed(prepared, self.f["supervisor_key"],
-            domain="serverware.nativeCustodyClosureAssignment.signature/v4")
+            domain="catchplate.nativeCustodyClosureAssignment.signature/v4")
         with self.assertRaises(InvalidSignature):
             self.check(value, raw)
-        for target, field, replacement in (("outer", "apiVersion", "serverware.nativeCustodyClosure/v4"),
-                ("payload", "apiVersion", "serverware.nativeCustodyClosureAssignment/v4"),
+        for target, field, replacement in (("outer", "apiVersion", "catchplate.nativeCustodyClosure/v4"),
+                ("payload", "apiVersion", "catchplate.nativeCustodyClosureAssignment/v4"),
                 ("payload", "profile", "native-publication-genesis-closure-set-v1")):
             changed = copy.deepcopy(prepared)
             row = changed["result"] if target == "outer" else changed["result"]["authorization"]["payload"]
@@ -133,7 +133,7 @@ class GenesisClosureAuthorityTests(unittest.TestCase):
 
     def test_closed_source_selector_no_hot_fallback_or_future_authority_fields(self):
         value = input_for(self.f, authority.ROLES[0])
-        for changes in ({"apiVersion": "serverware.nativePilotClosureAuthorityInput/v2"}, {"role": "bridge"},
+        for changes in ({"apiVersion": "catchplate.nativePilotClosureAuthorityInput/v2"}, {"role": "bridge"},
                 {"futureGrantSha256": fixtures.labelled("future grant")},
                 {"deliveryOriginal": self.f["deliveries"][authority.ROLES[1]]["raw"].decode("ascii")}):
             with self.assertRaises((ValueError, InvalidSignature)):

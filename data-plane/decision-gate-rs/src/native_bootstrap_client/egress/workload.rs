@@ -8,7 +8,7 @@
 
 use super::{authority::Authorization, creation_reservation::CreationPermit, PrecreationOwner};
 use super::super::{json, originals::{ArtifactV1, HeldOriginal}, OriginalClock};
-use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
+use catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -22,9 +22,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const PROFILE: &str = "native-egress-create-new-workload-v1";
-const MANIFEST_SCHEMA: &str = "serverware.nativeEgressLaunchManifest/v1";
+const MANIFEST_SCHEMA: &str = "catchplate.nativeEgressLaunchManifest/v1";
 const EXECUTION_PROFILE: &str = "native-egress-new-execution-v1";
-const EXECUTION_MANIFEST_SCHEMA: &str = "serverware.nativeEgressLaunchManifest/v2";
+const EXECUTION_MANIFEST_SCHEMA: &str = "catchplate.nativeEgressLaunchManifest/v2";
 const MAX_MANIFEST: usize = 4096;
 const MAX_EXECUTABLE: usize = 16 * 1024 * 1024;
 const DIRECTORY: i32 = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW

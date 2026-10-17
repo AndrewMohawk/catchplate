@@ -2,7 +2,7 @@
 
 ## Source boundary
 
-[`verify_revocation_read_write_inputs`](../serverware/authority_revocation_read_write.py)
+[`verify_revocation_read_write_inputs`](../catchplate/authority_revocation_read_write.py)
 composes the actual `webauthn.credential.revoke` query recipe, retained query
 observations and genuine [complete-read/indexed-write proof computation](authority-complete-read-write.md).
 It is an unbuilt, unexecuted source component, not an activated planner path or

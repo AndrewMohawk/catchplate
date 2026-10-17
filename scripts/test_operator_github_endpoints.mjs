@@ -25,11 +25,11 @@ try {
   // This is the same pure serializer used by the installed @octokit/request
   // fetch wrapper, without invoking that wrapper or any fetch implementation.
   const {JSONStringify} = await import(pathToFileURL(join(root, 'node_modules/json-with-bigint/json-with-bigint.js')));
-  const sdk = new Octokit({auth: 'serverware-github-placeholder-v1',
+  const sdk = new Octokit({auth: 'catchplate-github-placeholder-v1',
     log: {debug() {}, info() {}, warn() {}, error() {}}, request: {fetch: denyFetch}});
-  const scope = {owner: 'serverware-fixture', repo: 'operator-demo'};
+  const scope = {owner: 'catchplate-fixture', repo: 'operator-demo'};
   const origin = 'https://api.github.com';
-  const base = '/repos/serverware-fixture/operator-demo/issues';
+  const base = '/repos/catchplate-fixture/operator-demo/issues';
   const query1 = 'per_page=1&state=open&labels=fixture%2Ctriaged&page=1';
   const query2 = 'per_page=1&state=open&labels=fixture%2Ctriaged&page=2';
   let initialPage;

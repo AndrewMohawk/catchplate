@@ -1,0 +1,209 @@
+"""Exact successor to proved credential binding; never a proxy-ready receipt."""
+from collections.abc import Mapping
+
+from catchplate import authority_oauth_setup as setup
+from catchplate import authority_policy_candidate as candidate
+from catchplate import authority_publication_approval as assertions
+
+canonical, require, digest, sha256 = setup.canonical, setup.require, setup.digest, setup.sha256
+OP_BIND = "setup.policy.bind-candidate"
+OPERATIONS = ASSERTION_OPERATIONS = frozenset({OP_BIND})
+TABLE = "setup_policy_continuations"
+HTTP_SCHEMA = "catchplate.setupPolicyCandidateRequest/v1"
+OPTIONS_SCHEMA = "catchplate.setupPolicyCandidateOptions/v1"
+MAX_ARGUMENT_BYTES = 2 * 1024 * 1024
+MAX_ROW_BYTES = MAX_ARGUMENT_BYTES + setup.MAX_ROW_BYTES + 8192
+FIELDS = frozenset({"actor_id", "control_plane_configuration_digest", "credential_policy", "request"})
+REQUEST_FIELDS = frozenset({"setupBinding", "credentialId", "credentialVersion", "generationClaimOriginal",
+    "routePolicyDigest", "assignmentDigest", "issuedAtEpochNs", "expiresAtEpochNs"})
+# The existing eight-field OAuth original is unchanged. This additional exact
+# spelling carries only a locator; the kernel must prove its actual provenance.
+STATIC_REQUEST_FIELDS = REQUEST_FIELDS | {"credentialBindingEventId"}
+# N+1 is a distinct original, never an interpretation of the old static-v1
+# spelling. Historical native evidence is not a fresh Nitro/currentness grant.
+ROTATED_STATIC_REQUEST_FIELDS = STATIC_REQUEST_FIELDS | {"credentialProvenanceOriginal"}
+ROW_FIELDS = frozenset({"session_id", "revision", "phase", "owner_id", "setup_original", "setup_sha256",
+    "credential_id", "credential_version", "generation_request_id", "generation_claim_sha256",
+    "generation_publication_digest", "candidate_id", "canary_id", "artifact_envelope_digest",
+    "assignment_envelope_digest", "policy_hash", "route_policy_digest", "assignment_digest",
+    "request_original", "request_digest", "configuration_digest", "created_at", "expires_at"})
+
+
+def claim_original(text):
+    require(type(text) is str)
+    raw = text.encode("ascii")
+    row = setup.document(raw, candidate.MAX_ORIGINAL_BYTES * 2)
+    require(candidate.row_original(row) == raw and row["publication_envelope_digest"] is not None)
+    return row
+
+
+def arguments(operation, value, *, typed=False):
+    require(operation in OPERATIONS and isinstance(value, Mapping))
+    allowed = FIELDS | ({"businessIntent", "authn_evidence"} if typed else set())
+    require(FIELDS <= set(value) <= allowed and (not typed or "businessIntent" in value))
+    setup.text(value["actor_id"], 1024)
+    require(value["actor_id"].startswith("oidc:"))
+    digest(value["control_plane_configuration_digest"])
+    assertions.policy(value["credential_policy"])
+    request = value["request"]
+    require(type(request) is dict and set(request) in (REQUEST_FIELDS, STATIC_REQUEST_FIELDS, ROTATED_STATIC_REQUEST_FIELDS))
+    bound = setup.binding(request["setupBinding"])
+    if is_static_request(request):
+        setup.identifier(request["credentialBindingEventId"])
+        require(bound["revision"] >= 1)
+    else:
+        require(bound["revision"] == 3)
+    require(bound["ownerId"] == value["actor_id"]
+        and bound["currentAssigneeId"] in {None, value["actor_id"]})
+    setup.identifier(request["credentialId"])
+    if set(request) == ROTATED_STATIC_REQUEST_FIELDS:
+        rotated_provenance(request)
+    else:
+        require(type(request["credentialVersion"]) is int and request["credentialVersion"] == 1)
+    claim_original(request["generationClaimOriginal"])
+    digest(request["routePolicyDigest"]); digest(request["assignmentDigest"])
+    issued, expires = candidate.epoch(request["issuedAtEpochNs"]), candidate.epoch(request["expiresAtEpochNs"])
+    require(issued % 1000 == 0 and expires % 1000 == 0 and 0 < expires - issued <= 30_000_000_000
+        and expires <= bound["expiresAtEpochNs"])
+    original = {name: value[name] for name in FIELDS}
+    require(len(canonical(original)) <= MAX_ARGUMENT_BYTES)
+    return original
+
+
+def is_static_request(request):
+    return type(request) is dict and set(request) in (STATIC_REQUEST_FIELDS, ROTATED_STATIC_REQUEST_FIELDS)
+
+
+def rotated_provenance(request):
+    from catchplate import authority_static_credential_provenance as provenance
+
+    require(type(request) is dict and set(request) == ROTATED_STATIC_REQUEST_FIELDS
+        and type(request["credentialVersion"]) is int and 2 <= request["credentialVersion"] <= 2**63 - 1)
+    original = request["credentialProvenanceOriginal"]
+    parsed = provenance.generation_original(original)
+    require(parsed["apiVersion"] == provenance.ROTATION_SCHEMA and canonical(parsed).decode("ascii") == original)
+    statement = provenance.generation_evidence(original)["statement"]
+    require(statement["operation"] == "credential.static.rotate"
+        and statement["credentialId"] == request["credentialId"]
+        and statement["credentialVersion"] == request["credentialVersion"])
+    return original
+
+
+def rotated_selection(configuration_payload, root_key):
+    """Projection of the actual independently authenticated full configuration."""
+    from catchplate import authority_static_credential_rotate as rotation
+    from catchplate import authority_static_credential_custody as custody
+    from catchplate.authority_policy_canary_policy import full_configuration_digest
+
+    selected = rotation.validate_policy(configuration_payload.get(rotation.FIELD),
+        payload=configuration_payload, root_key=root_key)
+    native = custody.validate_policy(configuration_payload.get(custody.FIELD),
+        payload=configuration_payload, root_key=root_key)
+    require(selected is not None and native is not None,
+        "Rotated Setup requires the separately selected rotation and native custody policies")
+    return {"configurationDigest": full_configuration_digest(configuration_payload),
+        "rotationPolicy": selected, "custodyPolicy": native}
+
+
+def verify_rotated_rows(original, *, selection, credential, generation, root, outbox,
+        configuration_digest, now_epoch_ns):
+    from catchplate import authority_static_credential_rotate as rotation
+    from catchplate import authority_static_credential_assignment as assignment
+    from catchplate import authority_static_credential_provenance as provenance
+
+    parsed = provenance.generation_original(original)
+    require(parsed["apiVersion"] == provenance.ROTATION_SCHEMA and canonical(parsed).decode("ascii") == original)
+    require(type(selection) is dict and set(selection) == {"configurationDigest", "rotationPolicy", "custodyPolicy"}
+        and selection["configurationDigest"] == configuration_digest)
+    selected = rotation.validate_policy(selection["rotationPolicy"])
+    native = selection["custodyPolicy"]
+    target = assignment.target(native["target"])
+    deployment = provenance.verify_generation_rows(original, credential=credential, generation=generation,
+        root=root, outbox=outbox, configuration_digest=configuration_digest, now_epoch_ns=now_epoch_ns)
+    statement = provenance.generation_evidence(original)["statement"]
+    require(deployment == native["deploymentId"] and credential["secret_kek_id"] == selected["nativeSecretKekId"]
+        == target["secretKekId"] and root["status"] == "open" and root["barrier_id"] is None
+        and all(statement[name] == target[name] for name in ("controlPlaneResponseSigningKeyId", "instanceId",
+            "secretKekId", "intakeOrigin", "portalOrigin", "policyHash"))
+        and statement["dataPlaneBinarySha256"] == target["expectedBinaryDigest"])
+
+
+def require_static_session(session, *, rotated=False):
+    """Structural restriction only; this is not binding-event admission."""
+    require(type(rotated) is bool and type(session["credential_version"]) is int
+        and (2 <= session["credential_version"] <= 2**63 - 1 if rotated else session["credential_version"] == 1))
+    require(type(session["revision"]) is int and session["revision"] >= 1
+        and session["phase"] == "credential_activated" and session["status"] == "active"
+        and session["terminal_at"] is None
+        and all(session[name] is None for name in ("oauth_provider", "oauth_state_digest",
+            "oauth_pending_credential_id", "policy_hash", "assignment_digest", "canary_id", "enrollment_session_id")))
+
+
+def reviewed_assignment(session, management):
+    """Use the exact bundle already admitted by controlled native publication.
+
+    This computes only the reviewed association. It does not replace policy
+    compilation, signature admission, policy activation or runtime permission.
+    """
+    bundle = management["candidatePolicyBundle"]
+    require(type(bundle) is dict and type(bundle.get("routes")) is list
+        and type(bundle.get("principals")) is list)
+    routes = [row for row in bundle["routes"] if type(row) is dict and row.get("id") == session["route_id"]]
+    principals = [row for row in bundle["principals"] if type(row) is dict and row.get("id") == session["principal_id"]]
+    require(len(routes) == len(principals) == 1)
+    route = routes[0]
+    require(type(route.get("principals")) is list and (session["principal_id"] in route["principals"] or "*" in route["principals"])
+        and route.get("credentialRef") == session["credential_id"])
+    from catchplate.policy_bundle import policy_hash
+    assignment = {"principalId": session["principal_id"], "routeId": session["route_id"],
+        "credentialId": session["credential_id"], "credentialVersion": session["credential_version"],
+        "policyHash": policy_hash(bundle), "routePolicyDigest": sha256(canonical(route))}
+    return assignment, sha256(canonical(assignment))
+
+
+def row_original(value):
+    require(type(value) is dict and set(value) == ROW_FIELDS and type(value["revision"]) is int
+        and value["revision"] == 0 and value["phase"] == "candidate_bound")
+    args_raw = value["request_original"].encode("ascii")
+    args = arguments(OP_BIND, setup.document(args_raw, MAX_ARGUMENT_BYTES))
+    require(canonical(args) == args_raw)
+    session_raw = value["setup_original"].encode("ascii")
+    session = setup.document(session_raw, setup.MAX_ROW_BYTES)
+    require(setup.row_original(session) == session_raw and setup.row_binding(session) == args["request"]["setupBinding"]
+        and session["phase"] == "credential_activated"
+        and session["status"] == "active" and session["terminal_at"] is None)
+    if is_static_request(args["request"]):
+        require_static_session(session, rotated=set(args["request"]) == ROTATED_STATIC_REQUEST_FIELDS)
+    else:
+        require(session["revision"] == 3)
+    claim = claim_original(args["request"]["generationClaimOriginal"])
+    bound = candidate.context(setup.document(claim["context_json"].encode("ascii"), 8192))
+    assignment, assignment_digest = reviewed_assignment(session, candidate.management_original(claim["management_request_json"]))
+    expected = {"session_id": session["id"], "owner_id": args["actor_id"], "setup_sha256": sha256(session_raw),
+        "credential_id": session["credential_id"], "credential_version": session["credential_version"],
+        "generation_request_id": claim["request_id"], "generation_claim_sha256": sha256(args["request"]["generationClaimOriginal"].encode("ascii")),
+        "generation_publication_digest": claim["publication_envelope_digest"], "candidate_id": bound["candidateId"],
+        "canary_id": bound["canaryId"], "artifact_envelope_digest": bound["artifactEnvelopeDigest"],
+        "assignment_envelope_digest": bound["assignmentEnvelopeDigest"], "policy_hash": assignment["policyHash"],
+        "route_policy_digest": assignment["routePolicyDigest"], "assignment_digest": assignment_digest,
+        "configuration_digest": args["control_plane_configuration_digest"], "expires_at": session["expires_at"]}
+    require(all(value[name] == expected_value for name, expected_value in expected.items())
+        and args["request"]["credentialId"] == session["credential_id"]
+        and args["request"]["credentialVersion"] == session["credential_version"]
+        and args["request"]["routePolicyDigest"] == assignment["routePolicyDigest"]
+        and args["request"]["assignmentDigest"] == assignment_digest)
+    digest(value["request_digest"]); setup.epoch(value["created_at"])
+    raw = canonical(value)
+    require(len(raw) <= MAX_ROW_BYTES)
+    return raw
+
+
+def request_digest(operation, value):
+    from catchplate import authority_contract as contract
+    from catchplate import authority_request_commitment as commitment
+    values = arguments(operation, value, typed="businessIntent" in value)
+    typed = {**values, "businessIntent": contract.synthesize_business_intent(operation, values)}
+    return commitment.framed_digest("catchplate.policyAuthorityV9Request/v1", canonical({
+        "schema": "catchplate.policyAuthorityV9Authorization/v1", "operation": operation,
+        "handler": contract.operation_spec(operation)["handler"], "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST,
+        "arguments": commitment._authorization_arguments(typed)}))

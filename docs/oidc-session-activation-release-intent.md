@@ -8,10 +8,10 @@ It adds no generic operation, public route, cold service or hardware assurance.
 
 The fixed purpose is `authorize-oidc-session-activation-token-release`. The
 envelope schema and signature domain are
-`serverware.signedOidcSessionActivationReleaseIntent/v1`; the payload schema is
-`serverware.oidcSessionActivationReleaseIntent/v1`. The exact canonical original
+`catchplate.signedOidcSessionActivationReleaseIntent/v1`; the payload schema is
+`catchplate.oidcSessionActivationReleaseIntent/v1`. The exact canonical original
 has its own framed identity domain,
-`serverware.oidcSessionActivationReleaseIntentIdentity/v1`.
+`catchplate.oidcSessionActivationReleaseIntentIdentity/v1`.
 
 The envelope is exactly `schema`, `payload`, `signatureBase64Url`. Its closed
 payload contains:

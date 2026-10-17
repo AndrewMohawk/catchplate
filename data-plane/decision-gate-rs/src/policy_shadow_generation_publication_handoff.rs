@@ -21,14 +21,14 @@ use ed25519_dalek::{pkcs8::EncodePublicKey, Signature, Signer, SigningKey};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use std::{fs::File, os::fd::AsRawFd, os::unix::fs::{FileExt, MetadataExt}};
-use serverware_decision_gate::native_shadow_workers::runtime_resources::PublicationVerificationAuthority;
+use catchplate_decision_gate::native_shadow_workers::runtime_resources::PublicationVerificationAuthority;
 #[path="policy_shadow_generation_publication_runtime.rs"]
 mod runtime;
 
 // Same input ceiling as the existing native shadow worker, not a new transport.
 const MAX_INPUT: usize = 32 * 1024 * 1024;
 const MAX_FRAME: usize = 2 * MAX_INPUT + 4 * MAX_PUBLICATION_HANDOFF_OUTPUT_BYTES + 4096;
-const JOURNAL_SCHEMA: &str = "serverware.privateGenerationPublicationJournal/v1";
+const JOURNAL_SCHEMA: &str = "catchplate.privateGenerationPublicationJournal/v1";
 
 pub(crate) struct Authority<'a> {
     pub(crate) key: &'a SigningKey,

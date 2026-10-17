@@ -22,10 +22,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_capability as capability
-from serverware import authority_revocation_capability_production as production
-from serverware import authority_revocation_retention as retention
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_capability as capability
+from catchplate import authority_revocation_capability_production as production
+from catchplate import authority_revocation_retention as retention
 import test_authority_revocation_capability as capability_oracle
 import test_authority_revocation_plan as oracle
 import test_authority_revocation_retention as record_oracle
@@ -80,7 +80,7 @@ def independent_work(fixture):
     evidence = fixture.plan.payload["webauthnEvidence"]
     phases["bindings"] = add(same(fixture.execution_request), (1, len(fixture.execution_bytes), 0),
         graph(fixture.plan.payload["mutationPlan"], 4, 4), graph(evidence["challengeId"]), graph(evidence["credentialRecordId"]),
-        oracle.json_digest_cost("serverware.policyAuthorityWebAuthnChallengeRow/v1", challenge),
+        oracle.json_digest_cost("catchplate.policyAuthorityWebAuthnChallengeRow/v1", challenge),
         graph(credential), oracle.utf8_cost(capability_oracle.CREDENTIAL_DOMAIN), (1, 16 + len(oracle.wire(credential)), 0),
         oracle.json_digest_cost(capability_oracle.WEBAUTHN_SCHEMA, capability_oracle.webauthn_receipt(fixture)),
         oracle.json_digest_cost(capability_oracle.CAPABILITY_SCHEMA, fixture.payload))
@@ -303,7 +303,7 @@ class RevocationCapabilityProducerTests(unittest.TestCase):
                 bundle = fixture.plan.payload["revocationProofBundle"]
                 bundle["inputs"]["beforeProofs"][0]["rootDigest"] = oracle.sha(b"false retained primary proof")
                 fixture.plan.payload["rootTransition"]["proofBundleDigest"] = oracle.framed(
-                    "serverware.policyAuthorityRevocationProofBundle/v1", oracle.wire(bundle))
+                    "catchplate.policyAuthorityRevocationProofBundle/v1", oracle.wire(bundle))
             else:
                 fixture.plan.payload["expectedResult"] = {"false": "genuinely signed outer documents"}
             fixture.plan.rehash()

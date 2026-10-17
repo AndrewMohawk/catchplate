@@ -1,0 +1,22 @@
+# Uninstalled input. Independently admitted account, exact release and signed
+# launch required. Recreating this listener invalidates its signed inode pins.
+[Unit]
+Description=Catchplate dedicated activation completion ingress
+Before=catchplate-oidc-session-activation-completion.service
+After=systemd-tmpfiles-setup.service
+
+[Socket]
+ListenStream=/run/catchplate/oidc-session-activation/completion.sock
+FileDescriptorName=catchplate-oidc-session-activation-completion
+SocketUser=65503
+SocketGroup=65532
+SocketMode=0660
+DirectoryMode=0755
+Backlog=1
+Accept=no
+FlushPending=yes
+RemoveOnStop=yes
+Service=catchplate-oidc-session-activation-completion.service
+
+[Install]
+WantedBy=sockets.target

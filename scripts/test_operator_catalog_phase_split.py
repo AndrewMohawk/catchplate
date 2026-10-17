@@ -51,7 +51,7 @@ class Harness(checker.OperatorCatalogCheck):
             if app["status"] == "active":
                 app["access_status"] = "active" if any(rule["application_id"] == app["id"]
                     and rule["status"] == "active" for rule in rows["access_rules"]) else "unassigned"
-        return {"schema": "serverware.operatorCatalog/v1", "mode": "operator-development",
+        return {"schema": "catchplate.operatorCatalog/v1", "mode": "operator-development",
             "productionReady": False, "hardwareVerified": False,
             "allowed_upstreams": ["https://" + checker.AUTHORITY], "revision": self.revision,
             "policy": self.policy(), "limits": {name: {"retained": len(values)} for name, values in rows.items()}, **rows}

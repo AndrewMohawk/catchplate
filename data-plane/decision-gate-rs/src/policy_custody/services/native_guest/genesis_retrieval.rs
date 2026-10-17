@@ -4,7 +4,7 @@ use super::*;
 use services::publication_genesis as fixed;
 use services::guest::native_keys::admission::publication::genesis as authority;
 use crate::policy_shadow::policy_custody::authority_history::HistoricalServiceRoleV3;
-const DOMAIN:&str="serverware.nativePublicationGenesisRetrievalGrant.signature/v1";
+const DOMAIN:&str="catchplate.nativePublicationGenesisRetrievalGrant.signature/v1";
 const MAX_CONFIGURATION:usize=65536;
 
 #[derive(Serialize,Deserialize)]
@@ -30,7 +30,7 @@ impl Configuration {
     pub(in crate::policy_shadow::policy_custody::services) fn guest_uid(&self)->u32{self.payload.authorization.guest.uid}
     pub(in crate::policy_shadow::policy_custody::services) fn validate_shape(&self)->Result<(),ShadowError>{
         let p=&self.payload;p.scope.guest(&p.authorization.guest).map_err(fail)?;
-        require(p.api_version=="serverware.nativePublicationGenesisRetrievalGrant/v1" && p.purpose=="native-policy-publication-genesis-retrieval"
+        require(p.api_version=="catchplate.nativePublicationGenesisRetrievalGrant/v1" && p.purpose=="native-policy-publication-genesis-retrieval"
             && p.authorization.guest.service_role=="production-bridge" && p.expected_peer.uid>0 && p.expected_peer.gid>0
             && p.expected_peer.uid!=p.authorization.guest.uid && p.store.sequence==0 && p.store.head_sha256==p.store.genesis_sha256
             && p.native.role==AuthorityRole::CustodyPublicationReconciliation && p.native.grant_sha256!=Sha256Digest::compute(&[])
@@ -146,13 +146,13 @@ impl Service {
             self.channel.inspect(peer::Phase::BeforeDispatch,Some(&packet.bytes),Some(&packet),self.configuration.payload.scope.expires_at_boottime_nanos,check)?;
             let result=self.handle(&request,keys,trust,time,check)?;
             let local=keys.keys.get(&AuthorityRole::CustodyRetrievalResponse).ok_or(ShadowError::SignerBindingMismatch)?;
-            let result_sha256=hash_domain_frames(b"serverware.policyCustodyProductionAuthorityEndpointResponse/v4",&[&canonical_json_bytes(&result)?]);
+            let result_sha256=hash_domain_frames(b"catchplate.policyCustodyProductionAuthorityEndpointResponse/v4",&[&canonical_json_bytes(&result)?]);
             let mut reply=Reply{api_version:PRODUCTION_AUTHORITY_ENDPOINT_PROTOCOL_VERSION.into(),endpoint:request.endpoint,
                 request_sha256:request.request_sha256,replay_id_sha256:request.replay_id_sha256,completed_at_boottime_nanos:guest::now()?,
                 authority_key_id:local.binding.key_id.clone(),authority_key_spki_sha256:local.binding.key_spki_sha256.clone(),result,result_sha256,signature_base64:String::new()};
             require(reply.completed_at_boottime_nanos<request.deadline_boottime_nanos)?;self.check(keys,trust,time)?;check()?;
             reply.signature_base64=URL_SAFE_NO_PAD.encode(local.key.sign(&domain_separated_signature_preimage(
-                b"serverware.policyCustodyProductionAuthorityEndpointSignature/v4",&reply.signature_payload().map_err(fail)?).map_err(fail)?).to_bytes());
+                b"catchplate.policyCustodyProductionAuthorityEndpointSignature/v4",&reply.signature_payload().map_err(fail)?).map_err(fail)?).to_bytes());
             let raw=services::common::encode_canonical_frame(&reply).map_err(fail)?;
             loop {
                 check()?;self.check(keys,trust,time)?;

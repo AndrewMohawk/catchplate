@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/coder-docker-network-membership.v12.schema.json",
-  "title": "Serverware Docker NetworkMembership V12",
+  "$id": "https://catchplate.dev/schemas/coder-docker-network-membership.v12.schema.json",
+  "title": "Catchplate Docker NetworkMembership V12",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -89,7 +89,7 @@
         {
           "properties": {
             "domain": {
-              "const": "serverware/docker-network-membership/v12"
+              "const": "catchplate/docker-network-membership/v12"
             }
           }
         }

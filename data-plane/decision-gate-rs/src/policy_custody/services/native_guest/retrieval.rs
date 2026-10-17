@@ -13,7 +13,7 @@ use guest::retrieval_peer as peer;
 use std::os::fd::OwnedFd;
 #[path="retrieval_scope.rs"] mod scope;
 #[path="retrieval_store.rs"] mod store;
-const DOMAIN:&str="serverware.nativeShadowRetrievalServiceAssignment.signature/v1";
+const DOMAIN:&str="catchplate.nativeShadowRetrievalServiceAssignment.signature/v1";
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Payload {
@@ -29,7 +29,7 @@ pub(crate) struct Configuration {payload:Payload,signature:CanonicalEd25519Signa
 impl Configuration {
     pub(in crate::policy_shadow::policy_custody::services) fn validate_shape(&self)->Result<(),ShadowError> {
         let p=&self.payload;
-        require(p.api_version=="serverware.nativeShadowRetrievalServiceAssignment/v1"
+        require(p.api_version=="catchplate.nativeShadowRetrievalServiceAssignment/v1"
             && p.purpose=="native-shadow-immutable-retrieval" && p.guest.service_role=="production-bridge"
             && p.expected_peer.uid!=0 && p.expected_peer.uid!=p.guest.uid && p.expected_peer.gid!=0
             && p.proof_scope_original_base64url.len()<=21846)?;
@@ -142,7 +142,7 @@ impl Service {
                 retrieval_proof_sha256,canonical_receipt_payload,signed_authority_payload)?;
             let local=keys.keys.get(&AuthorityRole::CustodyRetrievalResponse).ok_or(ShadowError::SignerBindingMismatch)?;
             let result=ResultBody::Verified;
-            let result_sha256=hash_domain_frames(b"serverware.policyCustodyProductionAuthorityEndpointResponse/v4",
+            let result_sha256=hash_domain_frames(b"catchplate.policyCustodyProductionAuthorityEndpointResponse/v4",
                 &[&canonical_json_bytes(&result)?]);
             let mut reply=Reply{api_version:PRODUCTION_AUTHORITY_ENDPOINT_PROTOCOL_VERSION.into(),endpoint:request.endpoint,
                 request_sha256:request.request_sha256.clone(),replay_id_sha256:request.replay_id_sha256.clone(),
@@ -152,7 +152,7 @@ impl Service {
             read.check()?;self.check(keys,trust,time)?;check()?;
             // Fixed reply type/domain only. No sign(bytes), seed export, dispatch
             // transition, persistence claim, or successful absence response.
-            let preimage=domain_separated_signature_preimage(b"serverware.policyCustodyProductionAuthorityEndpointSignature/v4",
+            let preimage=domain_separated_signature_preimage(b"catchplate.policyCustodyProductionAuthorityEndpointSignature/v4",
                 &reply.signature_payload().map_err(fail)?).map_err(fail)?;
             reply.signature_base64=URL_SAFE_NO_PAD.encode(local.key.sign(&preimage).to_bytes());
             let raw=services::common::encode_canonical_frame(&reply).map_err(fail)?;

@@ -29,8 +29,8 @@ from psycopg import sql
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.authority_store import counted_store_sql as store
-from serverware.native_postgres_results import run_native_fixture
+from catchplate.authority_store import counted_store_sql as store
+from catchplate.native_postgres_results import run_native_fixture
 import test_authority_index_join as profile_oracle
 import test_authority_index_range as tree_oracle
 from test_webauthn_trust_projection_postgres import local_connection_parameters
@@ -64,10 +64,10 @@ I64 = 2**63 - 1
 
 def head(source_index="webauthn_credential_id", **changes):
     profile = profile_oracle.expected_profile(source_index)
-    manifest = profile_oracle.framed("serverware.policyAuthorityIndexProjectionManifest/v1",
+    manifest = profile_oracle.framed("catchplate.policyAuthorityIndexProjectionManifest/v1",
         profile_oracle.utf8_json([profile_oracle.descriptor(name) for name in INDEX_IDS]))
     return {"index_id": source_index, "table_name": profile.table,
-            "counted_profile": "serverware.policyAuthorityCountedIndex/v1",
+            "counted_profile": "catchplate.policyAuthorityCountedIndex/v1",
             "projection_digest": profile.projection_digest, "projection_manifest_digest": manifest,
             "index_revision": 0, "root_digest": tree_oracle.empty(profile, "")[0], "leaf_count": 0, **changes}
 
@@ -213,7 +213,7 @@ class AuthorityCountedStorePostgresTests(unittest.TestCase):
         # Fresh DDL must not silently become an idempotent installer.
         with self.assertRaises(psycopg.errors.DuplicateTable), self.variant():
             self.connection.execute(store.counted_store_ddl(self.namespace)[0])
-        for namespace in (None, "serverware_metadata", '"Upper"', '"bad-name"', '"a"; SELECT 1', '"' + "a" * 64 + '"'):
+        for namespace in (None, "catchplate_metadata", '"Upper"', '"bad-name"', '"a"; SELECT 1', '"' + "a" * 64 + '"'):
             with self.subTest(namespace=namespace), self.assertRaises(ValueError):
                 store.counted_store_ddl(namespace)
 
@@ -233,7 +233,7 @@ class AuthorityCountedStorePostgresTests(unittest.TestCase):
     def test_head_source_identity_empty_equivalence_and_signed_bounds_are_closed(self):
         changed = tree_oracle.digest("different")
         cases = ({"index_id": "not_a_source_index"}, {"table_name": "webauthn_challenges"},
-                 {"projection_digest": changed}, {"counted_profile": "serverware.policyAuthorityCountedIndex/v2"},
+                 {"projection_digest": changed}, {"counted_profile": "catchplate.policyAuthorityCountedIndex/v2"},
                  {"projection_manifest_digest": changed}, {"index_revision": -1}, {"leaf_count": -1},
                  {"index_revision": 0, "leaf_count": 1, "root_digest": changed},
                  {"root_digest": changed}, {"index_revision": 1, "leaf_count": 1},

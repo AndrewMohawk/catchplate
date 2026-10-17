@@ -13,8 +13,8 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import authority_native_jit_review_transport as transport
-from serverware import authority_native_jit_review_current_read as reads
+from catchplate import authority_native_jit_review_transport as transport
+from catchplate import authority_native_jit_review_current_read as reads
 
 
 DIGEST = "sha256:" + "a" * 64

@@ -44,7 +44,7 @@ The existing descriptor launcher adds only these exact selections:
 
 Old selections do not open this input or preserve injected observation FD/path
 environment variables. The source-fixed public input is
-`/run/serverware/authority-trust/setup-native-observation.json`, canonical
+`/run/catchplate/authority-trust/setup-native-observation.json`, canonical
 ASCII JSON at most 16 KiB with exact ten fields:
 
 `schema`, `sourceRevision`, `controlPlaneConfigurationDigest`,
@@ -52,7 +52,7 @@ ASCII JSON at most 16 KiB with exact ten fields:
 `authorityConfigurationFd`, `authorityConfigurationSha256`,
 `authorityConfigurationDigest`, `holderId`.
 
-The schema label is `serverware.setupNativePolicyObservationConfiguration/v1`.
+The schema label is `catchplate.setupNativePolicyObservationConfiguration/v1`.
 Digests/holder use nonzero `sha256:<64 lowercase hex>`, sourceRevision is the
 actual source cohort, and the two distinct public material descriptors are
 integers 32..1023. Their only paths are
@@ -61,7 +61,7 @@ integers 32..1023. Their only paths are
 authority-trust directory. The launcher refuses occupied descriptors and uses
 its existing protected-file-to-sealed-memfd copier; it generates no key,
 signature, policy, root or authorization. The config descriptor is delivered
-as `SERVERWARE_SETUP_NATIVE_OBSERVATION_CONFIG_FD`.
+as `CATCHPLATE_SETUP_NATIVE_OBSERVATION_CONFIG_FD`.
 
 All three descriptors must be included in the real independently admitted
 control-plane runtime/custody descriptor inventory. The request reader borrows
@@ -90,7 +90,7 @@ originals is required deployment work, not accomplished by this source code.
 ## Closed evidence and result
 
 The native request is exact nine fields: `apiVersion` =
-`serverware.nativeLoadedPolicyRequest/v1`, `challenge` (fresh nonzero canonical
+`catchplate.nativeLoadedPolicyRequest/v1`, `challenge` (fresh nonzero canonical
 32-byte base64url), `contextSha256`, `policyHash`, `principalId`, `routeId`,
 `credentialId`, `issuedAtEpochNs`, `expiresAtEpochNs`. It is canonical ASCII
 without LF, at most 4096 bytes, and expires within the original 30-second read
@@ -98,12 +98,12 @@ window. Context commits the retained continuation digest, actual current
 credential/generation/root digest, and reviewed assignment (including version).
 
 Statement exact nine fields: `apiVersion` =
-`serverware.nativeLoadedPolicyStatement/v1`, `request`,
+`catchplate.nativeLoadedPolicyStatement/v1`, `request`,
 `policyOriginalSha256`, `routePolicyDigest`, `bootId`, `keyId`,
 `controlPlaneResponseSigningKeyId`, `dataPlaneBinarySha256`,
 `observedAtEpochNs`. Ed25519 signs schema ASCII + NUL + canonical statement.
 Fresh quote nonce is SHA256 of
-`serverware/native-loaded-policy-attestation/v1` + NUL + challenge bytes +
+`catchplate/native-loaded-policy-attestation/v1` + NUL + challenge bytes +
 SHA256(canonical statement) + raw 64-byte signature.
 
 Evidence exact three: `statement`, `signature` (`ed25519:` + canonical
@@ -114,10 +114,10 @@ and route digest against its retained actual claim—not supplied success flags.
 
 Public request remains the existing materialization exact request3 with
 sessionId and expectedRevision 3. The result wrapper exact6 uses
-`serverware.setupNativePolicyObservation/v1`, `okForAction:false`,
+`catchplate.setupNativePolicyObservation/v1`, `okForAction:false`,
 `automaticRetryAllowed:false`, `proxyReady:false`, `setupSessionId` and
 `observationOriginal`. The latter is canonical ASCII exact10:
-`apiVersion:serverware.setupNativeLoadedPolicyObservation/v1`,
+`apiVersion:catchplate.setupNativeLoadedPolicyObservation/v1`,
 `scope:native-loaded-policy-only`, the same three false flags,
 `nativeLoadedPolicyVerified:true`, `continuationSha256`,
 `currentCredentialStateSha256`, `requestOriginal`, `evidenceOriginal`.

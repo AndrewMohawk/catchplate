@@ -6,11 +6,11 @@ use super::super::production_dispatch::{ClosedProductionDispatchRequestV4 as Dis
 use crate::policy_shadow::{ShadowSpoolEvent,ShadowSpoolPhase,ShadowSpoolDisposition,
     PolicyShadowCustodySignerRole,SignedShadowSpillReceipt,SpoolAppendReservationReceiptWire,
     CanonicalEd25519Signature,canonical_json_bytes,hash_domain_frames};
-pub(super) const CORE_API:&str="serverware.nativeLedgerSpoolCore/v1";
-pub(super) const COMPLETION_CORE_API:&str="serverware.nativeLedgerSpoolCore/v2";
-pub(super) const DISPATCH_CORE_API:&str="serverware.nativeLedgerSpoolCore/v3";
-pub(super) const PREPARED_DOMAIN:&str="serverware.nativeLedgerSpoolPreparation.signature/v1";
-pub(super) const STORED_DOMAIN:&str="serverware.nativeLedgerSpoolStorage.signature/v1";
+pub(super) const CORE_API:&str="catchplate.nativeLedgerSpoolCore/v1";
+pub(super) const COMPLETION_CORE_API:&str="catchplate.nativeLedgerSpoolCore/v2";
+pub(super) const DISPATCH_CORE_API:&str="catchplate.nativeLedgerSpoolCore/v3";
+pub(super) const PREPARED_DOMAIN:&str="catchplate.nativeLedgerSpoolPreparation.signature/v1";
+pub(super) const STORED_DOMAIN:&str="catchplate.nativeLedgerSpoolStorage.signature/v1";
 pub(super) const MAX_CORE:usize=512*1024;
 pub(super) fn invalid()->ServiceError {ServiceError::Invalid("native spool original differs")}
 fn require(v:bool)->Result<(),ServiceError>{if v{Ok(())}else{Err(invalid())}}
@@ -149,11 +149,11 @@ impl Core {
         self.validate()?;Ok(hash_domain_frames(self.api_version.as_bytes(),&[&encode_canonical_frame(self)?]))
     }
     pub(super) fn retrieval_id(&self,namespace:&Sha256Digest)->Result<Sha256Digest,ServiceError>{
-        Ok(hash_domain_frames(b"serverware.nativeLedgerSpoolRetrievalId/v1",&[namespace.as_str().as_bytes(),&encode_canonical_frame(self)?]))
+        Ok(hash_domain_frames(b"catchplate.nativeLedgerSpoolRetrievalId/v1",&[namespace.as_str().as_bytes(),&encode_canonical_frame(self)?]))
     }
     pub(super) fn retrieval_proof(&self,scope:&[u8],id:&Sha256Digest)->Result<Sha256Digest,ServiceError>{
         require(Sha256Digest::compute(scope)==self.proof_scope_sha256)?;
-        Ok(hash_domain_frames(b"serverware.nativeLedgerSpoolRetrievalProof/v1",&[scope,id.as_str().as_bytes(),&encode_canonical_frame(self)?]))
+        Ok(hash_domain_frames(b"catchplate.nativeLedgerSpoolRetrievalProof/v1",&[scope,id.as_str().as_bytes(),&encode_canonical_frame(self)?]))
     }
 }
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
@@ -184,13 +184,13 @@ pub(super) struct StoredPayload {
 pub(super) struct Stored {pub(super) payload:StoredPayload,pub(super) signature:CanonicalEd25519Signature}
 impl Stored {
     pub(super) fn preimage(&self)->Result<Vec<u8>,ServiceError>{
-        let domain=match self.payload.api_version.as_str(){"serverware.nativeLedgerSpoolStorage/v1"=>STORED_DOMAIN,
-            "serverware.nativeActiveEffectStorage/v1"=>"serverware.nativeActiveEffectStorage.signature/v1",_=>return Err(invalid())};
+        let domain=match self.payload.api_version.as_str(){"catchplate.nativeLedgerSpoolStorage/v1"=>STORED_DOMAIN,
+            "catchplate.nativeActiveEffectStorage/v1"=>"catchplate.nativeActiveEffectStorage.signature/v1",_=>return Err(invalid())};
         Ok(crate::policy_shadow::signature_preimage(domain,&encode_canonical_frame(&self.payload)?))
     }
     pub(super) fn verify(&self,prepared:&Prepared,scope:&[u8],namespace:&Sha256Digest,key:&VerifyingKey)->Result<(),ServiceError>{
         let core=&prepared.core;core.validate()?;let p=&self.payload;
-        require(p.api_version=="serverware.nativeLedgerSpoolStorage/v1" && p.core_sha256==core.identity()?
+        require(p.api_version=="catchplate.nativeLedgerSpoolStorage/v1" && p.core_sha256==core.identity()?
             && p.object_sha256==sha(core)? && p.retrieval_id_sha256==core.retrieval_id(namespace)?
             && p.retrieval_proof_sha256==core.retrieval_proof(scope,&p.retrieval_id_sha256)?
             && p.sequence>0 && p.fsverity_sha256!=Sha256Digest::compute(&[])
@@ -215,25 +215,25 @@ pub(super) fn final_artifact(core:&Core,stored:&Stored,sign:impl FnOnce(&[u8])->
                 core.observed_at_unix_nanos,&core.trusted_time_checkpoint_sha256,&persistence,id,proof,role,
                 &core.signing_key_id,&core.signing_key_spki_sha256)).map_err(|_|invalid())?;
             let signature=sign(&payload)?;
-            let digest=hash_domain_frames(b"serverware.policyShadowSpoolAppendReservationReceipt/v1",&[&payload,signature.as_bytes()]);
+            let digest=hash_domain_frames(b"catchplate.policyShadowSpoolAppendReservationReceipt/v1",&[&payload,signature.as_bytes()]);
             let wire=SpoolAppendReservationReceiptWire::from_custody(core.event.generation_id.clone(),core.event.ingress_sequence,
                 core.lane,core.event_ordinal,core.predecessor_event_ordinal,core.predecessor_head_sha256.clone(),core.event.event_sha256.clone(),
                 core.observed_at_unix_nanos,core.trusted_time_checkpoint_sha256.clone(),persistence,id.clone(),proof.clone(),
                 core.signing_key_id.clone(),core.signing_key_spki_sha256.clone(),signature,digest).map_err(|_|invalid())?;
             if core.completion_selected() {
                 Artifact::from_serializable(Kind::SpoolAppendReservationOutcome,&crate::policy_shadow::NativeSpoolReservationOutcomeWire{
-                    api_version:"serverware.nativeSpoolReservationOutcome/v1".into(),
+                    api_version:"catchplate.nativeSpoolReservationOutcome/v1".into(),
                     result:crate::policy_shadow::NativeSpoolReservationResultWire::Reserved(wire)}).map_err(|_|invalid())
             }else{Artifact::from_serializable(Kind::SpoolAppendReservationOutcome,&wire).map_err(|_|invalid())}
         }
         Phase::Append|Phase::Ingress|Phase::Terminal|Phase::Unavailable=>{
             let event=core.event()?;let disposition=core.disposition();
-            let record=hash_domain_frames(b"serverware.policyShadowSpoolRecord/v1",&[&canonical_json_bytes(&(
+            let record=hash_domain_frames(b"catchplate.policyShadowSpoolRecord/v1",&[&canonical_json_bytes(&(
                 &core.event.generation_id,core.event.ingress_sequence,&core.event.request_binding_sha256,&core.event.request_commitment_sha256,
                 core.event.phase,disposition,&core.event.event_sha256,&core.event.canonical_event_bytes,core.event_ordinal,
                 core.predecessor_event_ordinal,&core.predecessor_head_sha256,core.observed_at_unix_nanos,
                 &core.trusted_time_checkpoint_sha256,&persistence,id,proof)).map_err(|_|invalid())?]);
-            let head=hash_domain_frames(b"serverware.policyShadowSpoolHead/v1",&[&canonical_json_bytes(&(
+            let head=hash_domain_frames(b"catchplate.policyShadowSpoolHead/v1",&[&canonical_json_bytes(&(
                 core.predecessor_event_ordinal,&core.predecessor_head_sha256,core.event_ordinal,&record)).map_err(|_|invalid())?]);
             let payload=canonical_json_bytes(&serde_json::json!([&core.event.generation_id,core.event.ingress_sequence,
                 &core.event.request_binding_sha256,&core.event.request_commitment_sha256,core.event_ordinal,core.event.phase,
@@ -241,7 +241,7 @@ pub(super) fn final_artifact(core:&Core,stored:&Stored,sign:impl FnOnce(&[u8])->
                 &core.predecessor_head_sha256,&head,core.observed_at_unix_nanos,&core.trusted_time_checkpoint_sha256,
                 &persistence,id,proof,role,&core.signing_key_id,&core.signing_key_spki_sha256])).map_err(|_|invalid())?;
             let signature=sign(&payload)?;
-            let digest=hash_domain_frames(b"serverware.policyShadowSpillReceipt/v1",&[&canonical_json_bytes(&(
+            let digest=hash_domain_frames(b"catchplate.policyShadowSpillReceipt/v1",&[&canonical_json_bytes(&(
                 &record,&head,&core.signing_key_id,&core.signing_key_spki_sha256,CanonicalEd25519Signature(signature.clone()))).map_err(|_|invalid())?]);
             let wire=SignedShadowSpillReceipt::from_custody(&event,core.event_ordinal,disposition,core.predecessor_event_ordinal,
                 core.predecessor_head_sha256.clone(),head,core.observed_at_unix_nanos,core.trusted_time_checkpoint_sha256.clone(),
@@ -249,13 +249,13 @@ pub(super) fn final_artifact(core:&Core,stored:&Stored,sign:impl FnOnce(&[u8])->
             if core.phase==Phase::Ingress {
                 let (_,sampling)=crate::policy_shadow::native_ingress::decode_event(&core.event.canonical_event_bytes).map_err(|_|invalid())?;
                 let ingress=crate::policy_shadow::IngressCustodyAdmissionWire::NativeAssigned(crate::policy_shadow::native_ingress::Wire{
-                    api_version:"serverware.nativeIngressCustodyAdmission/v1".into(),sampling_commitment:sampling,opening_spill_receipt:wire});
+                    api_version:"catchplate.nativeIngressCustodyAdmission/v1".into(),sampling_commitment:sampling,opening_spill_receipt:wire});
                 Artifact::from_serializable(Kind::IngressCustodyAdmission,&ingress).map_err(|_|invalid())
             }else if core.phase==Phase::Terminal {
                 Artifact::from_serializable(Kind::TerminalSlotAppendOutcome,&crate::policy_shadow::TerminalSlotAppendOutcomeWire::Committed(wire)).map_err(|_|invalid())
             }else if core.phase==Phase::Unavailable {
                 Artifact::from_serializable(Kind::SpoolAppendReservationOutcome,&crate::policy_shadow::NativeSpoolReservationOutcomeWire{
-                    api_version:"serverware.nativeSpoolReservationOutcome/v1".into(),
+                    api_version:"catchplate.nativeSpoolReservationOutcome/v1".into(),
                     result:crate::policy_shadow::NativeSpoolReservationResultWire::Unavailable(wire)}).map_err(|_|invalid())
             }else{Artifact::from_serializable(Kind::ShadowSpillReceipt,&wire).map_err(|_|invalid())}
         }
@@ -271,12 +271,12 @@ pub(super) fn require_final_payload(core:&Core,stored:&Stored,payload:&[u8])->Re
             core.observed_at_unix_nanos,&core.trusted_time_checkpoint_sha256,&persistence,&p.retrieval_id_sha256,
             &p.retrieval_proof_sha256,PolicyShadowCustodySignerRole::LedgerAppend,&core.signing_key_id,&core.signing_key_spki_sha256)),
         Phase::Append|Phase::Ingress|Phase::Terminal|Phase::Unavailable=>{
-            let record=hash_domain_frames(b"serverware.policyShadowSpoolRecord/v1",&[&canonical_json_bytes(&(
+            let record=hash_domain_frames(b"catchplate.policyShadowSpoolRecord/v1",&[&canonical_json_bytes(&(
                 &core.event.generation_id,core.event.ingress_sequence,&core.event.request_binding_sha256,&core.event.request_commitment_sha256,
                 core.event.phase,core.disposition(),&core.event.event_sha256,&core.event.canonical_event_bytes,
                 core.event_ordinal,core.predecessor_event_ordinal,&core.predecessor_head_sha256,core.observed_at_unix_nanos,
                 &core.trusted_time_checkpoint_sha256,&persistence,&p.retrieval_id_sha256,&p.retrieval_proof_sha256)).map_err(|_|invalid())?]);
-            let head=hash_domain_frames(b"serverware.policyShadowSpoolHead/v1",&[&canonical_json_bytes(&(
+            let head=hash_domain_frames(b"catchplate.policyShadowSpoolHead/v1",&[&canonical_json_bytes(&(
                 core.predecessor_event_ordinal,&core.predecessor_head_sha256,core.event_ordinal,&record)).map_err(|_|invalid())?]);
             canonical_json_bytes(&serde_json::json!([&core.event.generation_id,core.event.ingress_sequence,
                 &core.event.request_binding_sha256,&core.event.request_commitment_sha256,core.event_ordinal,core.event.phase,

@@ -38,7 +38,7 @@ unsafe fn child(parent:i32,source:&[OwnedFd;6],webauthn:Option<&OwnedFd>,publica
         }
     }
     if good {
-        let argv=[c"serverware-native-shadow-worker".as_ptr(),std::ptr::null()];
+        let argv=[c"catchplate-native-shadow-worker".as_ptr(),std::ptr::null()];
         let env:[*const libc::c_char;1]=[std::ptr::null()];
         unsafe {libc::syscall(libc::SYS_execveat,source[4].as_raw_fd(),c"".as_ptr(),argv.as_ptr(),env.as_ptr(),libc::AT_EMPTY_PATH);}
     }

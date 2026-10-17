@@ -1,8 +1,8 @@
 //! Explicit combined JIT v27. Sealing and opening retain separate policies and
 //! postboot assignments on one broker; static and OAuth purposes remain absent.
 use super::*;
-use serverware_decision_gate::native_jit_review_v1::Configuration as JitConfiguration;
-use serverware_decision_gate::native_jit_review_open_v1::Configuration as OpeningConfiguration;
+use catchplate_decision_gate::native_jit_review_v1::Configuration as JitConfiguration;
+use catchplate_decision_gate::native_jit_review_open_v1::Configuration as OpeningConfiguration;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -11,16 +11,16 @@ struct ConfigurationV27 {
     shadow: shadow::ShadowConfigV15, response_observation_v2: NativeResponseObservationV2ConfigV1,
     policy: ArtifactV1, enrollment_authorizer: EnrollmentAuthorizerV1,
     enrollment_setup_authorizer: EnrollmentAuthorizerV1, enrollment_proxy_endpoint: String,
-    credential_currentness: serverware_decision_gate::native_currentness_v1::Configuration,
-    secret_broker: serverware_decision_gate::native_secret_broker_v1::Configuration,
+    credential_currentness: catchplate_decision_gate::native_currentness_v1::Configuration,
+    secret_broker: catchplate_decision_gate::native_secret_broker_v1::Configuration,
     measured_audit: super::super::native_audit_transport::Configuration,
-    encrypted_service_tokens: serverware_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
+    encrypted_service_tokens: catchplate_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
     measured_jit_review: JitConfiguration,
     measured_jit_review_open: OpeningConfiguration,
-    guest_inspector: serverware_decision_gate::GuestInspectorConfiguration,
-    guest_cohort: serverware_decision_gate::GuestCohortConfiguration,
-    guest_role_key_provisioner: serverware_decision_gate::GuestRoleKeyProvisionerConfiguration,
-    gate_cgroup: serverware_decision_gate::native_gate_cgroup::Configuration,
+    guest_inspector: catchplate_decision_gate::GuestInspectorConfiguration,
+    guest_cohort: catchplate_decision_gate::GuestCohortConfiguration,
+    guest_role_key_provisioner: catchplate_decision_gate::GuestRoleKeyProvisionerConfiguration,
+    gate_cgroup: catchplate_decision_gate::native_gate_cgroup::Configuration,
     postboot_audit_vsock_port: u32, postboot_jit_review_vsock_port: u32,
     postboot_jit_review_open_vsock_port: u32,
 }
@@ -42,9 +42,9 @@ pub(super) fn configuration(raw: &[u8])
     }
     let original: ConfigurationV27 = serde_json::from_value(value)
         .map_err(|_| "JIT opening startup violates its closed contract")?;
-    ensure(original.api_version == "serverware.nativeStartupConfiguration/v27"
-        && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
-        && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+    ensure(original.api_version == "catchplate.nativeStartupConfiguration/v27"
+        && original.enrollment_authorizer.api_version == "catchplate.nativeEnrollmentAuthorizer/v1"
+        && original.enrollment_setup_authorizer.api_version == "catchplate.nativeEnrollmentSetupAuthorizer/v1",
         "JIT opening startup authorizer version differs")?;
     original.credential_currentness.validate()?; original.secret_broker.validate()?;
     original.measured_jit_review.validate()?; original.measured_jit_review_open.validate()?;

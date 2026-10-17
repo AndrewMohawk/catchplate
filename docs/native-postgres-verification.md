@@ -27,8 +27,8 @@ supply independent approval, installed controller identity or cleanup proof.
 
 ## Closed source inventory
 
-[native_postgres_inventory.py](../serverware/native_postgres_inventory.py)
-defines `serverware.nativePostgresInventory/v1`, fifteen ordered frozen
+[native_postgres_inventory.py](../catchplate/native_postgres_inventory.py)
+defines `catchplate.nativePostgresInventory/v1`, fifteen ordered frozen
 `NativePostgresSuite` records and `TOTAL_TESTS = 311`. Each record contains an
 exact script path, an explicit sorted tuple of `Class.test_method` IDs, its
 disposable-cluster CLI acknowledgement requirement and its timeout in seconds.
@@ -160,7 +160,7 @@ independent roots, live credentials or deployment. All 252 previous method IDs,
 fourteen suites, sixteen children and deadlines remain; none has been run.
 
 The six appended counted-reader methods execute the unchanged production-qualified
-SQL against an independently seeded `serverware_metadata` schema. They reject
+SQL against an independently seeded `catchplate_metadata` schema. They reject
 any pre-existing canonical namespace, even empty, before a plain CREATE inside
 the fixture-owned SERIALIZABLE transaction. All new objects and rows disappear
 by rollback; no namespace adoption, SQL rewriting or DROP is permitted. The
@@ -232,15 +232,15 @@ behavior, currentness or production writer admission. These cases remain unrun.
 
 ## Fixed future invocation profile
 
-[native_postgres_batch.py](../serverware/native_postgres_batch.py) constructs
+[native_postgres_batch.py](../catchplate/native_postgres_batch.py) constructs
 only the fifteen source-fixed command tuples. `prepared_fixture_argv(index)` rejects
 non-integer, boolean and out-of-range indices; it accepts no caller-selected
 script, selector, DSN or executable. Its fixed profile is:
 
 - Python: `/usr/local/bin/python3.11`.
-- Read-only source: `/opt/serverware/src`.
-- DSN: `host=/run/serverware-native-postgres port=5432 dbname=postgres user=serverware_fixture_admin`.
-- Reports: `/opt/serverware/output/native-postgres/reports/00.json` through
+- Read-only source: `/opt/catchplate/src`.
+- DSN: `host=/run/catchplate-native-postgres port=5432 dbname=postgres user=catchplate_fixture_admin`.
+- Reports: `/opt/catchplate/output/native-postgres/reports/00.json` through
   `14.json`, supplied with `--prepared-result`.
 - The three inventory-marked scripts receive `--disposable-cluster`; every script
   receives `-v`.
@@ -255,13 +255,13 @@ bypass or replacement database facade.
 
 ## Required result and preparation closure
 
-[native_postgres_results.py](../serverware/native_postgres_results.py) provides
+[native_postgres_results.py](../catchplate/native_postgres_results.py) provides
 `run_native_fixture(script, *, argv, result_path)`. Without a result path it
 retains ordinary standalone `unittest` behavior. Prepared mode admits only the
 source-owned script, its actual `__main__` file/classes, exact loaded method
 inventory and the remaining `-v` argument. It records method and subtest
 callbacks, bounded fixture/protocol errors and normal runner completion in a
-canonical ASCII `serverware.nativePostgresFixtureResult/v1` document, bounded
+canonical ASCII `catchplate.nativePostgresFixtureResult/v1` document, bounded
 to 256 KiB. The actual fifteen fixture CLIs expose `--prepared-result`; the helper
 does not create a database or grant fixture permission to access one.
 
@@ -300,7 +300,7 @@ independent tree/partition oracles, package-import dependencies, and `db.py` rea
 as source by the existing native digest helper. These are frozen-file presence
 and nonsymlink checks, not a separate per-dependency digest protocol. The whole
 approved frozen archive still binds their bytes;
-`serverware.nativePostgresPreparedSources/v1` remains the unchanged script-digest
+`catchplate.nativePostgresPreparedSources/v1` remains the unchanged script-digest
 object below.
 
 The retained-record additions reuse that existing closure: the real v9 schema
@@ -313,14 +313,14 @@ timeout is introduced.
 
 [run_native_postgres.py](../scripts/run_native_postgres.py) is a no-argument,
 no-build component entrypoint. It invokes
-[native_postgres_runner.py](../serverware/native_postgres_runner.py), not a
+[native_postgres_runner.py](../catchplate/native_postgres_runner.py), not a
 generic shell or database service. It accepts no caller-selected DSN, script,
 SQL, executable, output directory, environment or timeout. Its source profile
 requires Linux/amd64, Python 3.11, UID/GID `10001:10001`, read-only root-owned
 source/artifacts/executables, and no ambient `PG*` configuration. These local
 checks complement rather than authenticate the external signed plan.
 
-The new required toolchain prefix is `/opt/serverware/postgresql-16/bin` with
+The new required toolchain prefix is `/opt/catchplate/postgresql-16/bin` with
 `initdb` and `postgres` at those exact paths. This is a source contract, **not an
 already prepared or pinned toolchain**. The future image must provide the
 same-ABI PostgreSQL server, shared data, executable/library closure, Python and
@@ -330,8 +330,8 @@ existing engineering image also inherits ports rejected by the closed runner
 inspection profile; it is not implicitly compatible.
 
 The entrypoint reads the fixed read-only artifact
-`/opt/serverware/artifacts/native-postgres-sources-v1.json`. Its exact canonical
-ASCII JSON object has only `schema: serverware.nativePostgresPreparedSources/v1`
+`/opt/catchplate/artifacts/native-postgres-sources-v1.json`. Its exact canonical
+ASCII JSON object has only `schema: catchplate.nativePostgresPreparedSources/v1`
 and `scripts`, with fifteen ordered objects containing only `path` and `sha256`.
 Paths follow the inventory above and hashes are canonical `sha256:` strings.
 The independently admitted artifact CAS must bind these prepared expectations
@@ -341,8 +341,8 @@ remeasured against the supplied expectations before and after execution.
 
 The lifecycle:
 
-1. Exclusively creates `/var/lib/serverware-runner/native-postgres/pgdata`,
-   `/run/serverware-native-postgres`, and fresh `native-postgres/reports` and
+1. Exclusively creates `/var/lib/catchplate-runner/native-postgres/pgdata`,
+   `/run/catchplate-native-postgres`, and fresh `native-postgres/reports` and
    `native-postgres/logs` children of the private lane output. Existing paths
    are rejected, never adopted, repaired or removed.
 2. Runs fixed `initdb` as nonroot with UTF8, libc `C` locale, page checksums,
@@ -372,7 +372,7 @@ The lifecycle:
    setup fallback targets the exact still-unreaped `Popen` child if pidfd
    acquisition fails immediately after spawn.
 
-[native_postgres_process.py](../serverware/native_postgres_process.py) retains
+[native_postgres_process.py](../catchplate/native_postgres_process.py) retains
 at most seventeen direct children and 8 MiB of combined log bytes per child
 (136 MiB aggregate in-memory prefixes). An overflow prefix is preserved but
 cannot qualify as a complete log. Missing pipe EOF has a finite drain window;
@@ -381,7 +381,7 @@ not use Docker's rotating log as complete fixture evidence.
 
 The runner exclusively publishes a bounded canonical
 `native-postgres/runtime-result.json` using
-`serverware.nativePostgresRuntimeResult/v1`. It contains exact fixture process
+`catchplate.nativePostgresRuntimeResult/v1`. It contains exact fixture process
 states, cooperative test accounting, source expectations/readback, cluster
 observation, per-process log hashes/sizes/completeness and local cleanup
 observations. Exit zero requires `runtimeStatus: COMPLETE`; every other outcome
@@ -420,7 +420,7 @@ It does not choose or run a native-PG profile by itself. The actual Docker creat
 and fresh per-lane output ownership are described in
 [the runner-bounds contract](coder-runner-bounds-v12.md).
 
-The fixed private workload-data mount is `/var/lib/serverware-runner`; the
+The fixed private workload-data mount is `/var/lib/catchplate-runner`; the
 cluster manager places its fresh `PGDATA` child and WAL there. The native
 example assigns it a 2 GiB tmpfs within a 4 GiB no-swap memory limit, alongside
 64 MiB shared memory, 64 MiB `/run`, 256 MiB `/tmp` and a separate 256 MiB,

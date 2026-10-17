@@ -10,7 +10,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
 const MARKER: &[u8] =
-    b"{\"schema\": \"serverware.developmentSandbox/v1\", \"syntheticOnly\": true}\n";
+    b"{\"schema\": \"catchplate.developmentSandbox/v1\", \"syntheticOnly\": true}\n";
 const O_NOFOLLOW: i32 = 0x20000;
 
 unsafe extern "C" {
@@ -75,22 +75,22 @@ fn select(
 }
 
 pub(crate) fn from_environment() -> Result<Option<Selection>, String> {
-    let flag = env::var("SERVERWARE_DEVELOPMENT_SANDBOX").ok();
-    let channel = env::var("SERVERWARE_RELEASE_CHANNEL").ok();
-    let production = env::var("SERVERWARE_PRODUCTION_IMAGE").ok();
+    let flag = env::var("CATCHPLATE_DEVELOPMENT_SANDBOX").ok();
+    let channel = env::var("CATCHPLATE_RELEASE_CHANNEL").ok();
+    let production = env::var("CATCHPLATE_PRODUCTION_IMAGE").ok();
     let forbidden = env::vars_os().any(|(name, value)| {
         let name = name.to_string_lossy();
         !value.is_empty()
-            && name.starts_with("SERVERWARE_")
+            && name.starts_with("CATCHPLATE_")
             && ([
-                "SERVERWARE_NATIVE_",
-                "SERVERWARE_NITRO_",
-                "SERVERWARE_AUTHORITY_",
-                "SERVERWARE_AWS_KMS_",
-                "SERVERWARE_POLICY_SHADOW_",
-                "SERVERWARE_MASTER_KEY_UNSEAL_COMMAND",
-                "SERVERWARE_WORKLOAD_IDENTITY_",
-                "SERVERWARE_CONTROL_PLANE_CUSTODY_",
+                "CATCHPLATE_NATIVE_",
+                "CATCHPLATE_NITRO_",
+                "CATCHPLATE_AUTHORITY_",
+                "CATCHPLATE_AWS_KMS_",
+                "CATCHPLATE_POLICY_SHADOW_",
+                "CATCHPLATE_MASTER_KEY_UNSEAL_COMMAND",
+                "CATCHPLATE_WORKLOAD_IDENTITY_",
+                "CATCHPLATE_CONTROL_PLANE_CUSTODY_",
             ]
             .iter()
             .any(|prefix| name.starts_with(prefix))
@@ -115,7 +115,7 @@ fn validate_marker(directory: &Path) -> Result<(), String> {
     let mut file = OpenOptions::new()
         .read(true)
         .custom_flags(O_NOFOLLOW)
-        .open(directory.join(".serverware-development-sandbox.json"))
+        .open(directory.join(".catchplate-development-sandbox.json"))
         .map_err(|_| refused())?;
     let before = file.metadata().map_err(|_| refused())?;
     if !before.is_file()
@@ -155,7 +155,7 @@ impl Selection {
             || config.atomic
             || config.ingress_mode != "development-raw"
             || config.policy_path != "/data/policy-bundle.json"
-            || config.policy_id != "serverware-demo"
+            || config.policy_id != "catchplate-demo"
             || digest.len() != 64
             || !digest
                 .bytes()
@@ -165,9 +165,9 @@ impl Selection {
                 .routes
                 .iter()
                 .any(|route| *route != ("https", "demo-upstream", 8443))
-            || config.lease_url != Some("http://serverware:3000/api/data-plane/credential-leases")
-            || config.audit_url != Some("http://serverware:3000/api/data-plane/audit")
-            || config.instance_id != Some("spiffe://development.serverware/decision-gate/local")
+            || config.lease_url != Some("http://catchplate:3000/api/data-plane/credential-leases")
+            || config.audit_url != Some("http://catchplate:3000/api/data-plane/audit")
+            || config.instance_id != Some("spiffe://development.catchplate/decision-gate/local")
             || !config.audit_enabled
         {
             return Err(refused());
@@ -279,12 +279,12 @@ mod tests {
             atomic: false,
             ingress_mode: "development-raw",
             policy_path: "/data/policy-bundle.json",
-            policy_id: "serverware-demo",
+            policy_id: "catchplate-demo",
             policy_hash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             routes: vec![("https", "demo-upstream", 8443)],
-            lease_url: Some("http://serverware:3000/api/data-plane/credential-leases"),
-            audit_url: Some("http://serverware:3000/api/data-plane/audit"),
-            instance_id: Some("spiffe://development.serverware/decision-gate/local"),
+            lease_url: Some("http://catchplate:3000/api/data-plane/credential-leases"),
+            audit_url: Some("http://catchplate:3000/api/data-plane/audit"),
+            instance_id: Some("spiffe://development.catchplate/decision-gate/local"),
             audit_enabled: true,
         }
     }
@@ -437,11 +437,11 @@ mod tests {
     #[test]
     fn marker_requires_existing_private_owned_synthetic_data() {
         let base =
-            env::var_os("SERVERWARE_SANDBOX_TEST_TMPDIR").expect("explicit test scratch root");
+            env::var_os("CATCHPLATE_SANDBOX_TEST_TMPDIR").expect("explicit test scratch root");
         let directory = Path::new(&base).join(format!("marker-{}", std::process::id()));
         fs::create_dir(&directory).unwrap();
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
-        let path = directory.join(".serverware-development-sandbox.json");
+        let path = directory.join(".catchplate-development-sandbox.json");
         assert!(validate_marker(&directory).is_err());
         fs::write(&path, MARKER).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();

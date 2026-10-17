@@ -25,12 +25,12 @@ PIN_FILE = Path(__file__).with_name("operator_authority_source_revision_migratio
 PIN_SHA256 = "sha256:72ce5ebdb7f422e881987749310493451f6d19fa397bb39157313bb85b7472e4"
 OLD_COMMIT = "c11e75982ceeec516887c3db65a9d88eabf819a9"
 TARGET_COMMIT = "1052d0e8ae565956ca8d39df0859f2017f8c107b"
-OLD_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.349"
-TARGET_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.350"
+OLD_REVISION = "catchplate.policyCandidateAuthoritySource/2026-07-30.349"
+TARGET_REVISION = "catchplate.policyCandidateAuthoritySource/2026-07-30.350"
 TRANSITION = "ordinary-source-349-to-350-v1"
-PIN_SCHEMA = "serverware.operatorAuthoritySourceRevisionPins/v1"
-SCHEMA = "serverware.operatorAuthoritySourceRevisionPlan/v1"
-RECEIPT_SCHEMA = "serverware.operatorAuthoritySourceRevisionReceipt/v1"
+PIN_SCHEMA = "catchplate.operatorAuthoritySourceRevisionPins/v1"
+SCHEMA = "catchplate.operatorAuthoritySourceRevisionPlan/v1"
+RECEIPT_SCHEMA = "catchplate.operatorAuthoritySourceRevisionReceipt/v1"
 IMAGE = "python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea"
 CHANGED_TABLES = (
     "policy_activation_export_authorizations",
@@ -128,18 +128,18 @@ def require_pins(pinned):
 
 def source(pinned, directory):
     require_pins(pinned)
-    expected = {**shared.ENVIRONMENT, "SERVERWARE_DATA_DIR": str(directory)}
+    expected = {**shared.ENVIRONMENT, "CATCHPLATE_DATA_DIR": str(directory)}
     require(all(name in expected and value == expected[name]
-        for name, value in os.environ.items() if name.startswith("SERVERWARE_")))
+        for name, value in os.environ.items() if name.startswith("CATCHPLATE_")))
     os.environ.update(expected)
     for relative, digest in pinned["target"]["sourceFiles"].items():
         path = ROOT / relative
         require(not path.is_symlink() and path.is_file() and path.resolve().is_relative_to(ROOT)
             and sha(path.read_bytes()) == digest)
-    require(not any(name == "serverware" or name.startswith("serverware.") for name in sys.modules))
+    require(not any(name == "catchplate" or name.startswith("catchplate.") for name in sys.modules))
     sys.path.insert(0, str(ROOT))
-    from serverware import db, operator_catalog_schema
-    from serverware.authority_store.metadata_schema_source import metadata_schema_source
+    from catchplate import db, operator_catalog_schema
+    from catchplate.authority_store.metadata_schema_source import metadata_schema_source
     ddl = metadata_schema_source()
     require(db._policy_candidate_authority_source_contract_digest() == pinned["target"]["sourceContractDigest"]
         and sha(ddl.encode()) == pinned["target"]["emittedDdlSha256"]
@@ -160,7 +160,7 @@ def ordered_audit(conn):
 
 def inspect(conn, pinned, helpers, *, target=False):
     db, catalog, ddl = helpers
-    from serverware.authority_store.metadata_schema import configure_sqlite_metadata_connection
+    from catchplate.authority_store.metadata_schema import configure_sqlite_metadata_connection
     configure_sqlite_metadata_connection(conn)
     selected = pinned["target" if target else "old"]
     schema = objects(conn)
@@ -178,7 +178,7 @@ def inspect(conn, pinned, helpers, *, target=False):
         "source_contract_digest", "structural_manifest_json", "structural_manifest_digest",
         "offline_migration_receipt_digest", "installed_at"})
     require(contract["schema_version"] == 9 and contract["source_revision"] == selected["sourceRevision"]
-        and contract["contract_id"] == "serverware.policyCandidateAuthoritySchema/v9"
+        and contract["contract_id"] == "catchplate.policyCandidateAuthoritySchema/v9"
         and contract["source_contract_digest"] == selected["sourceContractDigest"]
         and sha(contract["structural_manifest_json"].encode()) == selected["structuralManifestJsonSha256"]
         and contract["structural_manifest_digest"] == selected["structuralManifestDigest"]
@@ -187,7 +187,7 @@ def inspect(conn, pinned, helpers, *, target=False):
         manifest, digest = db._validate_policy_candidate_authority_structure(conn,
             require_recorded_contract=True, source_schema_program=ddl)
         require(contract["structural_manifest_json"] == manifest and contract["structural_manifest_digest"] == digest)
-    versions = conn.execute("SELECT version FROM serverware_store_migrations "
+    versions = conn.execute("SELECT version FROM catchplate_store_migrations "
         "WHERE migration='policy_candidate_authority'").fetchall()
     require(len(versions) == 1 and versions[0][0] == 9)
     # This includes all retained roots/trees/leaves/history, not just the 33
@@ -198,7 +198,7 @@ def inspect(conn, pinned, helpers, *, target=False):
     require(catalog.active(conn))
     catalog.read_catalog(conn)
     if optional:
-        from serverware import operator_upstream_setup
+        from catchplate import operator_upstream_setup
         operator_upstream_setup._rows(conn)
     return {"contract": contract, "contractRowid": rowid, "rows": row_commitments(conn, tables),
         "orderedAudit": ordered_audit(conn), "sqliteObjectsSha256": sha(canonical(schema)),

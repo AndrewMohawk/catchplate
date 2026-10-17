@@ -22,7 +22,7 @@ import unittest
 import test_authority_executor_optional_evidence as source
 
 
-SCHEMA = "serverware_mutation_guard_component"
+SCHEMA = "catchplate_mutation_guard_component"
 NAMESPACE = '"' + SCHEMA + '"'
 LABEL = "executor_state"
 TABLE = "policy_authority_operation_mutation_templates"
@@ -40,14 +40,14 @@ def _canonical(value):
 
 
 def _source_revision():
-    tree = source._read("serverware/authority_contract.py")
+    tree = source._read("catchplate/authority_contract.py")
     return source._one([ast.literal_eval(node.value) for node in tree.body
         if type(node) is ast.Assign and len(node.targets) == 1
         and type(node.targets[0]) is ast.Name and node.targets[0].id == "SOURCE_REVISION"])
 
 
 def _closed_record():
-    tree = source._read("serverware/authority_store/mutation_sql.py")
+    tree = source._read("catchplate/authority_store/mutation_sql.py")
     roster = source._one([ast.literal_eval(node.value) for node in tree.body
         if type(node) is ast.Assign and len(node.targets) == 1
         and type(node.targets[0]) is ast.Name and node.targets[0].id == "_RECORD_FIELDS"])
@@ -59,14 +59,14 @@ def _closed_record():
 
 
 def _guard_parts():
-    tree = source._read("serverware/authority_store/executor_v9.py")
+    tree = source._read("catchplate/authority_store/executor_v9.py")
     function = source._one([node for node in tree.body if type(node) is ast.FunctionDef
         and node.name == "install_authority_v9_executor"])
     template = source._one([source._template(node) for node in ast.walk(function)
         if type(node) is ast.JoinedStr and any(type(part) is ast.Constant
-            and type(part.value) is str and "AS $serverware_execute_v9$" in part.value
+            and type(part.value) is str and "AS $catchplate_execute_v9$" in part.value
             for part in node.values)])
-    if len(re.findall(r"AS \$serverware_execute_v9\$\s+<<" + LABEL + r">>\s+DECLARE", template)) != 1:
+    if len(re.findall(r"AS \$catchplate_execute_v9\$\s+<<" + LABEL + r">>\s+DECLARE", template)) != 1:
         raise ValueError("actual executor outer block label changed")
     start = template.index("IF NOT {closed_record_sql(", template.index("FOR mutation IN"))
     end = template.index("END IF;", start) + len("END IF;")
@@ -101,13 +101,13 @@ def postgres_sql():
     fixed, old = _guard_parts()
     wire, digest = source._actual_helpers()
     wire, digest = wire.replace(source.NAMESPACE, NAMESPACE), digest.replace(source.NAMESPACE, NAMESPACE)
-    template_ddl = _table("serverware/authority_store/v9_schema_source.py", TABLE)
-    dependency_ddl = _table("serverware/authority_store/metadata_schema_source.py", DEPENDENCY)
+    template_ddl = _table("catchplate/authority_store/v9_schema_source.py", TABLE)
+    dependency_ddl = _table("catchplate/authority_store/metadata_schema_source.py", DEPENDENCY)
     revision = _source_revision()
     operation, table, template_id = "webauthn.challenge.create", "webauthn_challenges", "synthetic-template"
     manifest = "sha256:" + "a" * 64
     key = {"id": "synthetic-challenge"}
-    framed = (b"serverware.policyAuthorityBusinessKey/v1\0"
+    framed = (b"catchplate.policyAuthorityBusinessKey/v1\0"
         + len(table.encode()).to_bytes(8, "big") + table.encode()
         + len(_canonical(key).encode()).to_bytes(8, "big") + _canonical(key).encode())
     mutation = dict(expectedRow=None, key=key, keyDigest="sha256:" + hashlib.sha256(framed).hexdigest(),
@@ -232,11 +232,11 @@ class MutationGuardSourceControls(unittest.TestCase):
         self.assertIn("template.source_revision =", fixed)
 
     def test_actual_relation_column_is_the_conflict_and_shared_helpers_are_real(self):
-        declaration = _table("serverware/authority_store/v9_schema_source.py", TABLE)
+        declaration = _table("catchplate/authority_store/v9_schema_source.py", TABLE)
         self.assertIn("mutation TEXT NOT NULL", declaration)
         self.assertIn("CHECK (cardinality = 1)", declaration)
         self.assertIn("jsonb_object_keys(mutation)", _closed_record())
-        self.assertNotIn("serverware.authority_transition_registry", sys.modules)
+        self.assertNotIn("catchplate.authority_transition_registry", sys.modules)
 
     def test_native_program_retains_full_old_and_fixed_guard_and_rolls_back(self):
         program = postgres_sql()

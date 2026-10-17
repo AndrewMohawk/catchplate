@@ -3,10 +3,10 @@ set -euo pipefail
 
 GATE_HOST="${DECISION_GATE_HOST:-localhost}"
 GATE_PORT="${DECISION_GATE_PORT:-9090}"
-CA_FILE="${SERVERWARE_CA_OUT:-.tmp/serverware-ca.pem}"
+CA_FILE="${CATCHPLATE_CA_OUT:-.tmp/catchplate-ca.pem}"
 
 release_lifecycle_store() {
-  docker compose exec -T grant-store psql -U serverware -d serverware -Atq -c \
+  docker compose exec -T grant-store psql -U catchplate -d catchplate -Atq -c \
     "SELECT json_build_object('attempts', COUNT(*), 'forwarded', COUNT(*) FILTER (WHERE state = 'committed' AND completion_outcome = 'forwarded'), 'terminal', COUNT(*) FILTER (WHERE state NOT IN ('reserved', 'dispatching')), 'correlated', COUNT(*) FILTER (WHERE attempt_id = flow_id)) FROM release_authorization_attempts"
 }
 RELEASE_LIFECYCLE_BEFORE="$(release_lifecycle_store)"
@@ -147,7 +147,7 @@ def request_absolute(payload: bytes):
             (
                 "POST https://demo-upstream:8443/json-sse-redact HTTP/1.1\r\n"
                 "Host: demo-upstream:8443\r\n"
-                "X-Serverware-Agent: demo-agent\r\n"
+                "X-Catchplate-Agent: demo-agent\r\n"
                 "Content-Type: text/event-stream\r\n"
                 f"Content-Length: {len(payload)}\r\n"
                 "Connection: close\r\n"
@@ -164,7 +164,7 @@ def request_connect(payload: bytes):
         raw.sendall(
             b"CONNECT demo-upstream:8443 HTTP/1.1\r\n"
             b"Host: demo-upstream:8443\r\n"
-            b"X-Serverware-Agent: demo-agent\r\n"
+            b"X-Catchplate-Agent: demo-agent\r\n"
             b"\r\n"
         )
         status, _, body = read_http(raw)

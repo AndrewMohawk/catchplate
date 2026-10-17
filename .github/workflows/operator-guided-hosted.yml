@@ -45,7 +45,7 @@ jobs:
           guided_user="$(id -un)"
           test "$guided_uid" -ne 0
           test -f /sys/fs/cgroup/cgroup.controllers
-          mkdir -m 700 "$RUNNER_TEMP/serverware-hosted-prerequisites" "$RUNNER_TEMP/serverware-guided-public"
+          mkdir -m 700 "$RUNNER_TEMP/catchplate-hosted-prerequisites" "$RUNNER_TEMP/catchplate-guided-public"
           timeout --kill-after=2s 15s sudo loginctl enable-linger "$guided_user"
           timeout --kill-after=2s 15s sudo systemctl start "user@${guided_uid}.service"
           export XDG_RUNTIME_DIR="/run/user/$guided_uid"
@@ -54,21 +54,21 @@ jobs:
           timeout --kill-after=5s 180s /usr/bin/docker --host unix:///var/run/docker.sock pull \
             python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
           timeout --kill-after=5s 90s python3 -I -S -B scripts/check_operator_hosted_prerequisites.py \
-            --output "$RUNNER_TEMP/serverware-hosted-prerequisites/result.json"
+            --output "$RUNNER_TEMP/catchplate-hosted-prerequisites/result.json"
       - name: Reuse the verified normal ELF without rebuilding unrelated changes
         env:
           GH_TOKEN: ${{ github.token }}
           NORMAL_BUILD_RUN_ID: ${{ inputs.normal_build_run_id }}
         run: >-
           timeout --kill-after=5s 300s python3 -I -S -B scripts/fetch_operator_normal_artifact.py
-          --run-id "$NORMAL_BUILD_RUN_ID" --output "$RUNNER_TEMP/serverware-normal-proxy"
+          --run-id "$NORMAL_BUILD_RUN_ID" --output "$RUNNER_TEMP/catchplate-normal-proxy"
       - name: Provision the locked browser outside the journey clock
         shell: bash
         run: |
           set -euo pipefail
           browser_node_root=/home/catchplate/.nvm/versions/node/v25.5.0
           browser_cache=/home/catchplate/.cache/ms-playwright
-          browser_npm_copy="$RUNNER_TEMP/serverware-hosted-npm"
+          browser_npm_copy="$RUNNER_TEMP/catchplate-hosted-npm"
           test ! -e "$browser_node_root"
           test ! -e "$browser_cache"
           test ! -e "$browser_npm_copy"
@@ -76,10 +76,10 @@ jobs:
             "$browser_node_root" "$browser_cache" /srv/catchplate-fast/tmp
           curl --fail --silent --show-error --max-time 120 --max-filesize 83886080 \
             https://nodejs.org/dist/v25.5.0/node-v25.5.0-linux-x64.tar.xz \
-            --output "$RUNNER_TEMP/serverware-node.tar.xz"
+            --output "$RUNNER_TEMP/catchplate-node.tar.xz"
           printf '%s  %s\n' 8223dca08b48b927acafaae7595dc670c86f7aa1855a20019bd43f8ea890851c \
-            "$RUNNER_TEMP/serverware-node.tar.xz" | sha256sum --check --strict
-          tar -xJf "$RUNNER_TEMP/serverware-node.tar.xz" --strip-components=1 -C "$browser_node_root"
+            "$RUNNER_TEMP/catchplate-node.tar.xz" | sha256sum --check --strict
+          tar -xJf "$RUNNER_TEMP/catchplate-node.tar.xz" --strip-components=1 -C "$browser_node_root"
           printf '%s  %s\n' 3dc3f85ca5539ca81b7d106992ebcd82d09bce27326016873653a661ad6b2a7d \
             "$browser_node_root/bin/node" | sha256sum --check --strict
           cp -a "$browser_node_root/lib/node_modules/npm" "$browser_npm_copy"
@@ -89,7 +89,7 @@ jobs:
             timeout --kill-after=5s 180s "$browser_node_root/bin/node" "$browser_npm_copy/bin/npm-cli.js" ci \
             --prefix "$browser_node_root/lib" --ignore-scripts --omit=optional --engine-strict \
             --no-audit --no-fund --registry https://registry.npmjs.org/ \
-            --cache "$RUNNER_TEMP/serverware-hosted-npm-cache"
+            --cache "$RUNNER_TEMP/catchplate-hosted-npm-cache"
           PLAYWRIGHT_BROWSERS_PATH="$browser_cache" timeout --kill-after=10s 300s \
             "$browser_node_root/bin/node" "$browser_node_root/lib/node_modules/playwright/cli.js" \
             install --with-deps --only-shell chromium
@@ -100,26 +100,26 @@ jobs:
       - name: Provision fixed public application and stock-client images
         run: >-
           timeout --kill-after=10s 900s python3 -I -S -B scripts/provision_operator_guided_hosted.py
-          --source "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/serverware-guided-public/provision.json"
+          --source "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/catchplate-guided-public/provision.json"
       - name: Run the real UI to proxy to audit and revocation journey
         shell: bash
         run: |
           set -euo pipefail
           export XDG_RUNTIME_DIR="/run/user/$(id -u)"
           export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
-          guided_job="$(mktemp -d /srv/catchplate-fast/tmp/serverware-guided-private.XXXXXXXX)"
-          guided_evidence="$(mktemp -d /srv/catchplate-fast/tmp/serverware-guided-evidence.XXXXXXXX)"
+          guided_job="$(mktemp -d /srv/catchplate-fast/tmp/catchplate-guided-private.XXXXXXXX)"
+          guided_evidence="$(mktemp -d /srv/catchplate-fast/tmp/catchplate-guided-evidence.XXXXXXXX)"
           printf 'GUIDED_EVIDENCE=%s\n' "$guided_evidence" >> "$GITHUB_ENV"
           guided_binary_sha="$(python3 -I -S -B -c 'import json,sys; print(json.load(open(sys.argv[1]))["binarySha256"])' \
-            "$RUNNER_TEMP/serverware-normal-proxy/selection.json")"
+            "$RUNNER_TEMP/catchplate-normal-proxy/selection.json")"
           # The existing runner owns its original 300s work and 60s cleanup
           # windows. An outer timeout never authorizes another attempt.
           timeout --kill-after=10s 390s python3 -I -B scripts/run_operator_guided_fixture.py \
             --source "$GITHUB_WORKSPACE" --commit "$GITHUB_SHA" --job-root "$guided_job" --evidence "$guided_evidence" \
-            --binary "$RUNNER_TEMP/serverware-normal-proxy/serverware-decision-gate" \
+            --binary "$RUNNER_TEMP/catchplate-normal-proxy/catchplate-decision-gate" \
             --expected-binary-sha256 "$guided_binary_sha" \
             --initializer "$GITHUB_WORKSPACE/scripts/private_operator_audit/initialize.py" \
-            --profile github-hosted-v1 --hosted-provision "$RUNNER_TEMP/serverware-guided-public/provision.json"
+            --profile github-hosted-v1 --hosted-provision "$RUNNER_TEMP/catchplate-guided-public/provision.json"
       - name: Select only source-owned public terminal, joined and diagnostic receipts
         if: always()
         shell: bash
@@ -131,7 +131,7 @@ jobs:
           if value is not None:
               root = Path(value)
               assert root.parent == Path('/srv/catchplate-fast/tmp')
-              assert re.fullmatch(r'serverware-guided-evidence\.[A-Za-z0-9]{8}', root.name)
+              assert re.fullmatch(r'catchplate-guided-evidence\.[A-Za-z0-9]{8}', root.name)
               assert root.resolve() == root and root.stat().st_uid == os.getuid()
               for name in ('terminal.json', 'joined-result.json'):
                   path = root / name
@@ -141,7 +141,7 @@ jobs:
                   assert stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_size <= 65536
                   raw = path.read_bytes()
                   assert isinstance(json.loads(raw), dict)
-                  target = Path(os.environ['RUNNER_TEMP']) / 'serverware-guided-public' / name
+                  target = Path(os.environ['RUNNER_TEMP']) / 'catchplate-guided-public' / name
                   with target.open('xb') as stream:
                       stream.write(raw)
           PY
@@ -157,11 +157,11 @@ jobs:
         with:
           name: hosted-operator-guided-${{ github.sha }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/serverware-hosted-prerequisites/result.json
-            ${{ runner.temp }}/serverware-normal-proxy/selection.json
-            ${{ runner.temp }}/serverware-guided-public/provision.json
-            ${{ runner.temp }}/serverware-guided-public/terminal.json
-            ${{ runner.temp }}/serverware-guided-public/joined-result.json
-            ${{ runner.temp }}/serverware-guided-public/browser-failure.json
+            ${{ runner.temp }}/catchplate-hosted-prerequisites/result.json
+            ${{ runner.temp }}/catchplate-normal-proxy/selection.json
+            ${{ runner.temp }}/catchplate-guided-public/provision.json
+            ${{ runner.temp }}/catchplate-guided-public/terminal.json
+            ${{ runner.temp }}/catchplate-guided-public/joined-result.json
+            ${{ runner.temp }}/catchplate-guided-public/browser-failure.json
           if-no-files-found: warn
           retention-days: 7

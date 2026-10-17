@@ -36,7 +36,7 @@ def fixture():
         for entry in context.selected_rows]
     # The newly signed receipt has different exact query identities from the
     # older fixture. Use the actual source declarations for their absent rows.
-    from serverware import authority_radix_proof as radix
+    from catchplate import authority_radix_proof as radix
     for query in g.queries(g.FINALIZE, arguments=arguments, database_now=f["now"], request_digest=context.request_digest):
         if query.absent_key is None:
             continue
@@ -71,7 +71,7 @@ def scenario(name):
         refuses(lambda: local.approval(db.dumps(wrong).encode("ascii")))
         assert g.selected(g.FINALIZE,context.arguments)
         assert g.selected(g.FINALIZE,f["final_arguments"])
-        assert not g.selected(g.FINALIZE,{"schema":"serverware.policyAuthorityGenesisFinalize/v4"})
+        assert not g.selected(g.FINALIZE,{"schema":"catchplate.policyAuthorityGenesisFinalize/v4"})
     elif name == "atomic":
         result=g.transition(context)
         changes={entry["table"]:entry for entry in result.mutations}
@@ -111,7 +111,7 @@ def scenario(name):
         refuses(lambda:g.transition(replace(context,arguments=wrong)))
         refuses(lambda:local.original_binding(selected,**dict(observed,now_unix_ns=selected["expiresAtUnixNanos"])))
     elif name == "capacity":
-        from serverware import authority_audit_capacity as capacity
+        from catchplate import authority_audit_capacity as capacity
         from scripts.test_authority_audit_capacity import aggregate_row,selection
         # Construct real source-format selected records for the pure finalizer;
         # these are row fixtures, not authenticated-root acquisition.
@@ -128,17 +128,17 @@ def scenario(name):
         broken=tuple(item for item in completed if item["table"]!=capacity.AGGREGATE_TABLE)
         refuses(lambda:capacity.validate_capacity_transition(operation=g.FINALIZE,selected_rows=rows,mutations=broken))
     elif name == "foreground":
-        from serverware import development_policy_commissioning as caller
+        from catchplate import development_policy_commissioning as caller
         value={"input":{key:value for key,value in context.arguments.items() if key!="businessIntent"},
             "webauthnAuthorization":{"challengeId":"synthetic-only","credentialRecordId":"synthetic-only","assertion":{"fixture":True}}}
         assert caller.finalize_input(caller._canonical(value),f["prepared"].result,prepare_schema=g.PREPARE_SCHEMA)==value
         spec=f["contract"].operation_spec(g.FINALIZE)
         assert spec["assertionRequired"] and spec["globalAuditCapacity"]
         assert {item["mutation"] for item in spec["mutationTemplates"] if item["table"]=="metadata_audit_outbox"}=={"UPDATE"}
-        from serverware.authority_store import audit_capacity_sql
+        from catchplate.authority_store import audit_capacity_sql
         assert g.FINALIZE in audit_capacity_sql._source_contract()
     elif name == "final-deadline":
-        from serverware import development_policy_commissioning as caller
+        from catchplate import development_policy_commissioning as caller
         request={"input":dict(context.arguments)}
         original=copy.deepcopy(request)
         now=f["ns"];deadline=50_000_000_000;expiry=now+40_000_000_000
@@ -175,7 +175,7 @@ def scenario(name):
         append=functions["_append_postgres_audit_event_on_connection"]
         text=ast.get_source_segment(Path(db.__file__).read_text(),append)
         assert '_lock_postgres_audit(conn, "chain")' in text and "audit idempotency key was reused" in text
-        assert text.count("INSERT INTO serverware_audit_events")==1 and "metadata_audit_outbox" not in text
+        assert text.count("INSERT INTO catchplate_audit_events")==1 and "metadata_audit_outbox" not in text
         assert "retain_connection=self.connections.append" in Path(local.__file__).read_text()
     else:
         raise AssertionError(name)
@@ -183,10 +183,10 @@ def scenario(name):
 
 class GenesisAuditDeliveryControls(unittest.TestCase):
     def check(self,name):
-        environment={key:value for key,value in os.environ.items() if not key.startswith("SERVERWARE_")}
-        with tempfile.TemporaryDirectory(prefix="serverware-genesis-delivery-") as directory:
-            environment.update(SERVERWARE_DATA_DIR=directory,SERVERWARE_RELEASE_CHANNEL="dev",SERVERWARE_PROCESS_MODE="serverware-control-plane",
-                SERVERWARE_AUDIT_STORE_RUNTIME_ROLE="synthetic_audit_runtime")
+        environment={key:value for key,value in os.environ.items() if not key.startswith("CATCHPLATE_")}
+        with tempfile.TemporaryDirectory(prefix="catchplate-genesis-delivery-") as directory:
+            environment.update(CATCHPLATE_DATA_DIR=directory,CATCHPLATE_RELEASE_CHANNEL="dev",CATCHPLATE_PROCESS_MODE="catchplate-control-plane",
+                CATCHPLATE_AUDIT_STORE_RUNTIME_ROLE="synthetic_audit_runtime")
             command="import sys;sys.path.insert(0,sys.argv[1]);from scripts.test_authority_genesis_audit_delivery import scenario;scenario(sys.argv[2])"
             result=subprocess.run([sys.executable,"-I","-B","-c",command,str(ROOT),name],cwd=ROOT,
                 env=environment,capture_output=True,text=True,timeout=90)

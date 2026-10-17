@@ -22,7 +22,7 @@ finishes:
 
 | FD | Actual original |
 | --- | --- |
-| 3 | Read-only root:root `0400`, singly linked regular file, at most 512 KiB, matching the protected named `/etc/serverware/native-shadow-nitro-verifier.json` through retained root-owned non-writable ancestor directories. A sealed caller copy or another path is not accepted. |
+| 3 | Read-only root:root `0400`, singly linked regular file, at most 512 KiB, matching the protected named `/etc/catchplate/native-shadow-nitro-verifier.json` through retained root-owned non-writable ancestor directories. A sealed caller copy or another path is not accepted. |
 | 4 | Final verifier UID:GID `0600`, zero-link memfd, exactly 32 bytes, all four immutable seals; independently provisioned **CustodyAttestationVerifier** Ed25519 seed. |
 | 5 | Separate final-verifier-UID:GID-owned `0600`, zero-link fully sealed memfd, at most 128 KiB; exact canonical original `nativeShadowRoleKeyEvidence/v1` (seven fields). |
 
@@ -80,12 +80,12 @@ be the existing `hash_domain_frames`: SHA256 of `domain || NUL`, followed by eac
 part's unsigned big-endian 64-bit byte length and exact bytes. The new explicit
 native shadow profile computes:
 
-- `measurementSha256 = F("serverware.nativeShadowNitroMeasurement/v1", [C([verified module_id, verified PCR map, independently expected EIF, expected worker executable SHA, native closure SHA, structurally verified seccomp SHA])])`.
-- `endorsementEvidenceSha256 = F("serverware.nativeShadowNitroEndorsementEvidence/v1", [C([base64url(original leaf DER), ordered base64url(original verified cabundle DER)])])`.
+- `measurementSha256 = F("catchplate.nativeShadowNitroMeasurement/v1", [C([verified module_id, verified PCR map, independently expected EIF, expected worker executable SHA, native closure SHA, structurally verified seccomp SHA])])`.
+- `endorsementEvidenceSha256 = F("catchplate.nativeShadowNitroEndorsementEvidence/v1", [C([base64url(original leaf DER), ordered base64url(original verified cabundle DER)])])`.
 - `endorsementRootSha256 = SHA256(actual trusted-root DER)`.
-- `collateralPolicySha256 = F("serverware.nativeShadowNitroCollateralPolicy/v1", [C(exact configured nitro object)])`.
+- `collateralPolicySha256 = F("catchplate.nativeShadowNitroCollateralPolicy/v1", [C(exact configured nitro object)])`.
 - `revocationSourceSha256 = SHA256(C(exact current application-revocation object))`.
-- `collateralRevocationRootSha256 = F("serverware.nativeShadowNitroApplicationRevocationRoot/v1", [C([actual snapshot generation, sorted denied-certificate SHA list])])`.
+- `collateralRevocationRootSha256 = F("catchplate.nativeShadowNitroApplicationRevocationRoot/v1", [C([actual snapshot generation, sorted denied-certificate SHA list])])`.
 
 The existing assignment's expected measurement/root/collateral/revocation pins
 must independently select these **new** profile bytes. The adapter compares them
@@ -105,11 +105,11 @@ application snapshot and trust checkpoint must be at most 300 seconds old.
 ## Exact result and genuine guest consumer
 
 The output is canonical ASCII without a trailing newline, at most 32 KiB:
-`{apiVersion:"serverware.nativeShadowNitroVerifierResult/v1", result:<exact22>}`.
+`{apiVersion:"catchplate.nativeShadowNitroVerifierResult/v1", result:<exact22>}`.
 The 22 result fields match `CustodyTeeAttestationVerifierResultWire`. Its signature
 retains **exactly** the existing canonical tuple
-`["serverware.policyShadowCustodyTeeAttestationResult/v1", tuple9, tuple12]` and
-`serverware.policyShadowCustodyAttestationVerifier/v1` signature domain/preimage.
+`["catchplate.policyShadowCustodyTeeAttestationResult/v1", tuple9, tuple12]` and
+`catchplate.policyShadowCustodyAttestationVerifier/v1` signature domain/preimage.
 The new outer label is only closed transport framing, not a new success authority.
 
 The result expires no later than the original authorization, app-revocation,

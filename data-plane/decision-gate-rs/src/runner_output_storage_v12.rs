@@ -28,7 +28,7 @@ const MAX_MOUNTINFO_LINES: usize = 65_536;
 const MAX_MOUNTINFO_LINE_BYTES: usize = 16 * 1024;
 const MAX_RECORD_BYTES: u64 = 4096;
 const TMPFS_MAGIC: libc::c_long = 0x0102_1994;
-const RECORD_VERSION: &str = "serverware/runner-output-storage/v12";
+const RECORD_VERSION: &str = "catchplate/runner-output-storage/v12";
 const LANES: [LogicalLane; 5] = [LogicalLane::Build, LogicalLane::Unit,
     LogicalLane::Integration, LogicalLane::E2e, LogicalLane::Attestation];
 
@@ -231,7 +231,7 @@ fn record_bytes(record: &Custody) -> Result<Vec<u8>> {
 }
 
 fn source(record: &Custody) -> Result<CString> {
-    CString::new(format!("serverware-runner-output-v12-{}", digest_hex(&sha256(&record_bytes(record)?))))
+    CString::new(format!("catchplate-runner-output-v12-{}", digest_hex(&sha256(&record_bytes(record)?))))
         .map_err(|_| rejected("runner output mount source contains NUL"))
 }
 

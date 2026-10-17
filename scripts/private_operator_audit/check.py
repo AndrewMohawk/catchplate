@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from check_operator_demo import OperatorDemoCheck, CheckFailure, require
 from check_development_sandbox import token_file
 
-INSTANCE = 'spiffe://operator-demo.serverware/decision-gate/local'
+INSTANCE = 'spiffe://operator-demo.catchplate/decision-gate/local'
 RUN_CLAIM = Path('/data/.private-operator-audit-run.claim')
 
 
@@ -40,7 +40,7 @@ def claim_run(digest, *, path=RUN_CLAIM):
         except FileExistsError:
             raise CheckFailure('private fixture run already claimed; prepare a new fixture') from None
         with os.fdopen(fd, 'w', encoding='ascii') as out:
-            json.dump({'schema': 'serverware.privateOperatorAuditRunClaim/v1',
+            json.dump({'schema': 'catchplate.privateOperatorAuditRunClaim/v1',
                 'binarySha256': digest, 'replayAllowed': False}, out, sort_keys=True)
             out.write('\n')
             out.flush()
@@ -51,17 +51,17 @@ def claim_run(digest, *, path=RUN_CLAIM):
 
 
 def row_id(event_id):
-    value = {'eventId': event_id, 'instanceId': INSTANCE, 'version': 'serverware.dataPlaneAuditRow/v1'}
+    value = {'eventId': event_id, 'instanceId': INSTANCE, 'version': 'catchplate.dataPlaneAuditRow/v1'}
     return 'sha256:' + hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
 class RetryCheck:
     def __init__(self, check):
         self.check = check
-        self.token = token_file(Path('/run/secrets/serverware/fixture-control.token'))
+        self.token = token_file(Path('/run/secrets/catchplate/fixture-control.token'))
 
     def relay(self, action, method='GET'):
-        connection = http.client.HTTPConnection('serverware', 3000, timeout=self.check.timeout())
+        connection = http.client.HTTPConnection('catchplate', 3000, timeout=self.check.timeout())
         try:
             connection.request(method, '/__fixture/' + action,
                 headers={'X-Private-Fixture-Token': self.token, 'Connection': 'close'})
@@ -101,7 +101,7 @@ class RetryCheck:
     def rows(self, ids):
         expected = [row_id(event_id) for event_id in ids]
         require(0 < len(expected) <= 200 and len(expected) == len(set(expected)), 'bounded unique audit rows required')
-        with sqlite3.connect('file:/data/serverware.sqlite3?mode=ro', uri=True) as connection:
+        with sqlite3.connect('file:/data/catchplate.sqlite3?mode=ro', uri=True) as connection:
             connection.execute('PRAGMA query_only=ON')
             rows = list(connection.execute('SELECT * FROM audit_events WHERE id IN (' + ','.join('?' for _ in expected) + ') ORDER BY id', expected))
         require(len(rows) == len(expected), 'committed audit IDs missing or duplicated')
@@ -174,7 +174,7 @@ class RetryCheck:
         require(after['dropped'] == before['dropped'] and after['required_failed'] == before['required_failed']
             and after['send_failed'] > before['send_failed'] and after['sent'] > before['sent'],
             'retry counters show dropped events, failed reservations or no recovered delivery')
-        return {'ok': True, 'schema': 'serverware.privateOperatorAuditRetry/v1',
+        return {'ok': True, 'schema': 'catchplate.privateOperatorAuditRetry/v1',
             'original': original, 'originalRetainedRowsSha256': retained_hash,
             'attempts': attempts, 'requiredAttempts': final['requiredAttempts'],
             'before': before, 'whilePending': pending_health,
@@ -186,19 +186,19 @@ class RetryCheck:
 def run(digest):
     require(os.getenv('PRIVATE_OPERATOR_AUDIT_FIXTURE') == '1', 'dedicated private fixture required')
     marker = json.loads(Path('/private-audit-fixture.json').read_text())
-    require(marker == {'schema': 'serverware.privateOperatorAuditFixture/v1', 'syntheticOnly': True},
+    require(marker == {'schema': 'catchplate.privateOperatorAuditFixture/v1', 'syntheticOnly': True},
         'fresh private fixture marker required')
     require(re.fullmatch(r'sha256:[0-9a-f]{64}', digest) is not None, 'exact binary digest required')
     claim_run(digest)
     args = argparse.Namespace(control_base='http://control-plane:3000', management_base='http://decision-gate-rs:9091',
-        proxy_url='http://decision-gate-rs:9090', operator_origin='https://serverware-demo.example.com',
+        proxy_url='http://decision-gate-rs:9090', operator_origin='https://catchplate-demo.example.com',
         expected_binary_sha256=digest, ca_file=Path('/data/mitmproxy/mitmproxy-ca-cert.pem'),
-        upstream_ca_file=Path('/demo-upstream/ca.pem'), admin_token_file=Path('/run/secrets/serverware/admin.token'),
+        upstream_ca_file=Path('/demo-upstream/ca.pem'), admin_token_file=Path('/run/secrets/catchplate/admin.token'),
         proxy_ca_file=None, control_ca_file=None, management_ca_file=None, upstream_address=None, timeout_seconds=180)
     check = OperatorDemoCheck(args)
     acceptance = check.run()
     retry = RetryCheck(check).run()
-    result = {'ok': True, 'schema': 'serverware.privateOperatorAuditIntegration/v1',
+    result = {'ok': True, 'schema': 'catchplate.privateOperatorAuditIntegration/v1',
         'acceptance': acceptance, 'retry': retry, 'productionReady': False, 'publicDnsVerified': False}
     check.clean(json.dumps(result).encode())
     return result

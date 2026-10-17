@@ -7,7 +7,7 @@ use std::os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd,OwnedFd};
 use std::os::unix::fs::MetadataExt;
 use std::mem::{size_of,zeroed};
 use std::sync::Mutex;
-const API:&str="serverware.nativeShadowProofClientInspection/v1";
+const API:&str="catchplate.nativeShadowProofClientInspection/v1";
 const MAX_IPC:usize=4096;
 #[path="proof_client_facade.rs"]
 pub(in crate::policy_shadow::policy_custody::services) mod facade;

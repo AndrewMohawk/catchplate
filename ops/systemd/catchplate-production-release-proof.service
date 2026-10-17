@@ -1,0 +1,57 @@
+[Unit]
+Description=Catchplate legacy Docker NSM production-readiness proof
+Documentation=https://github.com/example/private-deployment
+After=network-online.target docker.service catchplate-launch-authority-relay.socket
+Wants=network-online.target catchplate-launch-authority-relay.socket
+Requires=docker.service catchplate-launch-authority-relay.socket
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Group=root
+UMask=0077
+ExecStart=/opt/catchplate/launchers/sha256-<launcher-sha256>/catchplate-production-launcher --manifest /etc/catchplate/production-release-launch.json
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+
+# The launcher discards the service manager environment and constructs its
+# closed child environment. Keep this service free of environment imports,
+# preparatory commands, shells, skip-capable Condition directives, and
+# additional launcher arguments. Missing prerequisites must fail ExecStart.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=yes
+
+# This legacy readiness pipeline exposes NSM to a host Docker workload. It is
+# intentionally incompatible with Manifest v6 final-completion evidence.
+DevicePolicy=closed
+DeviceAllow=/dev/nsm rw
+BindReadOnlyPaths=-/dev/nsm
+
+# The immutable release, /etc trust material, and relay socket directory stay
+# read-only. Proof state, launch receipts, and Docker socket access are the only
+# writable paths. The relay socket unit alone owns /run/catchplate lifecycle.
+ReadOnlyPaths=/run/catchplate
+ReadWritePaths=/var/lib/catchplate/production-proof /run/docker.sock
+
+[Install]
+WantedBy=multi-user.target

@@ -33,7 +33,7 @@ def sha256(path):
 
 def fresh_root(path):
     if (path.parent != SCRATCH or path.resolve() != path or path.is_symlink()
-            or not re.fullmatch(r'serverware-audit-private\.[A-Za-z0-9]{6,32}', path.name)):
+            or not re.fullmatch(r'catchplate-audit-private\.[A-Za-z0-9]{6,32}', path.name)):
         raise ValueError('job root must be an exact new private-audit NVMe scratch child')
     info = path.stat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700 or any(path.iterdir()):
@@ -58,7 +58,7 @@ def prepare(args):
     for path in (source, binary):
         if not path.is_absolute() or path.resolve() != path:
             raise ValueError('source and binary require exact non-symlink absolute paths')
-    if not (source / 'serverware/operator_demo_runner.py').is_file() or not (source / 'scripts/private_operator_audit/check.py').is_file():
+    if not (source / 'catchplate/operator_demo_runner.py').is_file() or not (source / 'scripts/private_operator_audit/check.py').is_file():
         raise ValueError('integrated source with fixture harness required')
     info = binary.stat()
     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or not info.st_mode & stat.S_IXUSR:
@@ -74,7 +74,7 @@ def prepare(args):
     if command(['docker', 'ps', '-a', '-q', '--filter', 'label=com.docker.compose.project=' + project]).strip():
         raise ValueError('new fixture project already has containers')
     config = build(source, binary, root / 'runtime', args.sha256, project, args.subnet)
-    manifest = {'schema': 'serverware.privateOperatorAuditPreparation/v1', 'project': project,
+    manifest = {'schema': 'catchplate.privateOperatorAuditPreparation/v1', 'project': project,
         'jobRoot': str(root), 'source': str(source), 'sourceHead': command(['git', '-C', str(source), 'rev-parse', 'HEAD']).strip(),
         'sourceStatus': command(['git', '-C', str(source), 'status', '--short']).splitlines(),
         'binary': str(binary), 'binarySha256': args.sha256, 'networkPreflight': network,

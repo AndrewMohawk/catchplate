@@ -20,12 +20,12 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_jit_assertion_transition as semantics
-from serverware import authority_jit_indexed_phases as indexed
-from serverware import authority_jit_original_frames as raw
-from serverware import authority_jit_primary_rows as primary
-from serverware import authority_jit_receipt_absence as absence
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_jit_assertion_transition as semantics
+from catchplate import authority_jit_indexed_phases as indexed
+from catchplate import authority_jit_original_frames as raw
+from catchplate import authority_jit_primary_rows as primary
+from catchplate import authority_jit_receipt_absence as absence
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 from test_authority_index_range import IndependentIndex
 from test_authority_jit_assertion_planning import configuration, originals
 from test_authority_jit_primary_chunks import frames, native, row as flat_row
@@ -46,7 +46,7 @@ def projected_tree(identity, tree):
     leaves = []
     for row in tree.rows.values():
         selected = tree.selected(tree.key(row))
-        digest = sql_digest("serverware.policyAuthorityAuthenticatedRow/v1",
+        digest = sql_digest("catchplate.policyAuthorityAuthenticatedRow/v1",
             profile.table.encode("ascii"), sql_json(row))
         leaf = indexed.projection.project_row(identity, row,
             primary_key_digest=selected["keyDigest"], primary_row_digest=digest)
@@ -195,7 +195,7 @@ class JitConnectedOriginalControls(unittest.TestCase):
         challenge = mutations["webauthn_challenges"]
         expected_challenge = {**challenge["expectedRow"], "used_at": receipt._receipt["verified_at"],
             "retention_reference_mask": 2, "retention_jit_receipt_digest": first_digest,
-            "retention_jit_row_digest": sql_digest("serverware.policyAuthorityAuthenticatedRow/v1",
+            "retention_jit_row_digest": sql_digest("catchplate.policyAuthorityAuthenticatedRow/v1",
                 semantics.source.RECEIPT_TABLE.encode("ascii"), sql_json(receipt._receipt))}
         self.assertEqual(challenge["row"], expected_challenge)
         credential = mutations["webauthn_credentials"]

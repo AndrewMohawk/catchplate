@@ -15,7 +15,7 @@ No private Google token or Google client credentials belong in this program.
 
 ## Operator prerequisites
 
-In the ordinary Serverware workspace:
+In the ordinary Catchplate workspace:
 
 1. Configure Google and connect the intended account with the Gmail read-only
    preset. Real account consent is a separate operator action.
@@ -24,12 +24,12 @@ In the ordinary Serverware workspace:
    **Clients → Enable standard client login** to enable HTTP Basic on CONNECT.
 3. Grant that client **Read Gmail → Official Gmail SDK** for the connected
    account. The grant must be `gmail_read_v1`, `orderedFormV1`, with exact dummy
-   replacement `serverware-gmail-placeholder-v1`, and its policy must be loaded.
+   replacement `catchplate-gmail-placeholder-v1`, and its policy must be loaded.
    Existing curl/insertion-only permissions are not automatically upgraded.
 4. In current-source **Proxy setup**, choose **Python** under **Gmail SDK language**
    for this project's Bash recipe and private configuration. Prepare the virtual
    environment below before supplying the application token; the recipe does not
-   install dependencies. See the [deployment record](../../docker/serverware-operator-demo/README.md)
+   install dependencies. See the [deployment record](../../docker/catchplate-operator-demo/README.md)
    for the live release.
 5. Copy the application ID, proxy URL and downloaded interception CA from the workspace.
    Your client must be able to reach the HTTPS proxy; this example does not
@@ -56,13 +56,13 @@ Download **Private client configuration** from Proxy setup, then run the saved
 file directly:
 
 ```sh
-chmod 600 /private/path/serverware-client.private.json
-.venv/bin/python gmail.py --config /private/path/serverware-client.private.json
+chmod 600 /private/path/catchplate-client.private.json
+.venv/bin/python gmail.py --config /private/path/catchplate-client.private.json
 ```
 
-Keep this file private and out of source control: it contains the Serverware
+Keep this file private and out of source control: it contains the Catchplate
 application token, not a Google token. Put the downloaded CA beside the JSON
-when using its default `./serverware-ca.pem` path. Both interception and optional
+when using its default `./catchplate-ca.pem` path. Both interception and optional
 outer-proxy CA paths resolve relative to the JSON file, not the current directory.
 The loader requires a current integer token expiry and matching application,
 access-rule, proxy, token and CA values in the download and its nested recipe.
@@ -74,14 +74,14 @@ download, and `--config` is not accepted in the internal `--child` mode.
 Alternatively, the existing environment-only invocation remains available:
 
 ```sh
-export SERVERWARE_PROXY_URL='https://your-proxy.example:443'
-export SERVERWARE_APP_ID='your-saved-application-uuid'
-export SERVERWARE_CA_FILE='/absolute/path/to/serverware-ca.pem'
-read -r -s -p 'Application proxy token: ' SERVERWARE_PROXY_TOKEN
+export CATCHPLATE_PROXY_URL='https://your-proxy.example:443'
+export CATCHPLATE_APP_ID='your-saved-application-uuid'
+export CATCHPLATE_CA_FILE='/absolute/path/to/catchplate-ca.pem'
+read -r -s -p 'Application proxy token: ' CATCHPLATE_PROXY_TOKEN
 echo
-export SERVERWARE_PROXY_TOKEN
+export CATCHPLATE_PROXY_TOKEN
 .venv/bin/python gmail.py
-unset SERVERWARE_PROXY_TOKEN
+unset CATCHPLATE_PROXY_TOKEN
 ```
 
 The `read` command above is for Bash. Use your shell's private-input mechanism;
@@ -105,13 +105,13 @@ can deny an entire response with old or missing evidence. The query is a
 convenience, not enforcement or a claim that this bounded inbox sample is complete.
 
 The copied Bash recipe and environment-only invocation support
-`SERVERWARE_GMAIL_MAX_AGE_DAYS='7'` for the same hint. A full `--config` download
+`CATCHPLATE_GMAIL_MAX_AGE_DAYS='7'` for the same hint. A full `--config` download
 derives it only from the top-level policy and ignores ambient/nested recipe
 overrides. Neither setting changes the application's saved authority.
 
-`SERVERWARE_CA_FILE` trusts only the intercepted Gmail TLS connection. For an
+`CATCHPLATE_CA_FILE` trusts only the intercepted Gmail TLS connection. For an
 outer proxy certificate signed by a private CA, additionally set
-`SERVERWARE_PROXY_CA_FILE` to that separate absolute public CA file. Otherwise
+`CATCHPLATE_PROXY_CA_FILE` to that separate absolute public CA file. Otherwise
 the outer connection uses the pinned certifi public roots. Do not combine or
 swap these roles, disable TLS verification or supply private keys as CA files.
 

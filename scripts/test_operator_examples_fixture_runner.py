@@ -24,11 +24,11 @@ class ExamplesRunnerTests(unittest.TestCase):
         self.assertEqual(runner.Run.PROVIDER_PKI_SERVICE, "x-pki")
         self.assertEqual(runner.Run.NODE_EXAMPLE_DIRECTORY, "examples/x-username-node")
         self.assertEqual(runner.Run.GO_MOUNT_TARGET, "/example-go/x-username")
-        self.assertEqual(runner.Run.CLAIM_SCHEMA, "serverware.privateXExamplesRunClaim/v1")
-        self.assertEqual(runner.Run.TERMINAL_SCHEMA, "serverware.privateXExamplesRun/v1")
+        self.assertEqual(runner.Run.CLAIM_SCHEMA, "catchplate.privateXExamplesRunClaim/v1")
+        self.assertEqual(runner.Run.TERMINAL_SCHEMA, "catchplate.privateXExamplesRun/v1")
         self.assertEqual(runner.Run.REAL_PROVIDER_VERIFIED, "realXVerified")
         self.assertEqual(runner.RUNTIME_SERVICES,
-            {"network", "x", "serverware", "decision-gate-rs", "edge", "check"})
+            {"network", "x", "catchplate", "decision-gate-rs", "edge", "check"})
 
     def test_alchemy_changes_only_fixed_profile_constants(self):
         overrides = {
@@ -49,8 +49,8 @@ class ExamplesRunnerTests(unittest.TestCase):
         self.assertEqual(AlchemyRun.PROVIDER_PKI_SERVICE, "alchemy-pki")
         self.assertEqual(AlchemyRun.NODE_EXAMPLE_DIRECTORY, "examples/alchemy-chain-status-node")
         self.assertEqual(AlchemyRun.GO_MOUNT_TARGET, "/example-go/alchemy-chain-status")
-        self.assertEqual(AlchemyRun.CLAIM_SCHEMA, "serverware.privateAlchemyExamplesRunClaim/v1")
-        self.assertEqual(AlchemyRun.TERMINAL_SCHEMA, "serverware.privateAlchemyExamplesRun/v1")
+        self.assertEqual(AlchemyRun.CLAIM_SCHEMA, "catchplate.privateAlchemyExamplesRunClaim/v1")
+        self.assertEqual(AlchemyRun.TERMINAL_SCHEMA, "catchplate.privateAlchemyExamplesRun/v1")
         self.assertEqual(AlchemyRun.REAL_PROVIDER_VERIFIED, "realAlchemyVerified")
 
     def test_cli_retains_input_validation_without_profile_selection(self):

@@ -53,7 +53,7 @@ validate_ruleset() {
 validate_ledger() {
     ledger=$1
     case "$ledger" in
-        /var/lib/serverware/coder-controller-v12/lifecycle-privileged/*) ;;
+        /var/lib/catchplate/coder-controller-v12/lifecycle-privileged/*) ;;
         *) fail "ownership ledger is outside the privileged lifecycle state root" ;;
     esac
     test ! -L "$ledger" || fail "ownership ledger must not be a symlink"
@@ -108,7 +108,7 @@ allocate_lane_names() {
             continue
         fi
         token=$(printf '%05x' "$subnet_index")
-        namespace=serverware-coder-v12-$token
+        namespace=catchplate-coder-v12-$token
         host_veth=swv12h$token
         peer_veth=swv12p$token
         ! namespace_exists "$namespace" \

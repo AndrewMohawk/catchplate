@@ -3,7 +3,7 @@
 ## Source boundary
 
 Source `.63` adds a private, pure
-[writer commitment contract](../serverware/authority_revocation_writer_commitment.py).
+[writer commitment contract](../catchplate/authority_revocation_writer_commitment.py).
 It authenticates verifier intent and a planner relay over original detached
 plan, evaluation-context and historical-expectation bytes. It is **unbuilt and
 unexecuted**. No serving purpose, transport, database table, privilege, response
@@ -63,8 +63,8 @@ the exact original bytes in its ordinary observation.
 | Verifier intent | `authorize-revocation-writer-custody` | `schema`, `sourceRevision`, `generationSequence`, `generationDigest`, `capabilityId`, `plannerTransactionId`, `executionEnvelopeId`, `plannedAtEpochNs`, `databaseCutoffUs`, `planEnvelopeDigest`, `planEnvelopeByteCount`, `evaluationContextDigest`, `evaluationContextByteCount`, `historicalExpectationsDigest`, `historicalExpectationsByteCount` |
 | Planner relay | `relay-revocation-writer-custody` | `schema`, `sourceRevision`, `generationSequence`, `generationDigest`, `verifierIntentDigest`, `verifierIntentByteCount` |
 
-Payload schemas are `serverware.policyAuthorityRevocationWriterIntent/v1` and
-`serverware.policyAuthorityRevocationWriterRelay/v1`. Configuration, generation,
+Payload schemas are `catchplate.policyAuthorityRevocationWriterIntent/v1` and
+`catchplate.policyAuthorityRevocationWriterRelay/v1`. Configuration, generation,
 source, purpose, parent, ID, deadline and fence must agree with their independent
 pins or authenticated bindings. Intent business IDs join the signed history;
 the proposed planned timestamp must fall within its reservation interval.
@@ -102,10 +102,10 @@ size limit; these additional operations are charged, not granted new allowance.
 ## Stable IDs and independent clocks
 
 The intent ID uses the framed domain
-`serverware.policyAuthorityRevocationWriterIntentEnvelope/v1` with the execution
+`catchplate.policyAuthorityRevocationWriterIntentEnvelope/v1` with the execution
 envelope ID and planner transaction ID. Its parent is the planner transaction
 ID. The relay ID uses
-`serverware.policyAuthorityRevocationWriterRelayEnvelope/v1` with the intent ID;
+`catchplate.policyAuthorityRevocationWriterRelayEnvelope/v1` with the intent ID;
 its parent is that intent ID.
 
 IDs deliberately exclude timestamps and body hashes. A byte-changed request,

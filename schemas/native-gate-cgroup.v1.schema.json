@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-gate-cgroup.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-gate-cgroup.v1.schema.json",
   "title": "Explicit source-fixed native gate cgroup preparation",
-  "$comment": "Selection only, not process evidence or Reserve authority. The source-owned producer creates one fresh root-owned /sys/fs/cgroup/serverware-native-gate leaf on a genuinely verified cgroup2 hierarchy and attaches only the gate after child creation under the original Prepared/deadline. No path, PID, UID, supplied hash, descriptor, fallback, reuse, delegation or lifetime extension is accepted. Actual expected /proc cgroup bytes are 0::/serverware-native-gate followed by LF; independent client assignments must pin the hash of those exact bytes. Kernel/mount support is not established by this schema.",
+  "$comment": "Selection only, not process evidence or Reserve authority. The source-owned producer creates one fresh root-owned /sys/fs/cgroup/catchplate-native-gate leaf on a genuinely verified cgroup2 hierarchy and attaches only the gate after child creation under the original Prepared/deadline. No path, PID, UID, supplied hash, descriptor, fallback, reuse, delegation or lifetime extension is accepted. Actual expected /proc cgroup bytes are 0::/catchplate-native-gate followed by LF; independent client assignments must pin the hash of those exact bytes. Kernel/mount support is not established by this schema.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeGateCgroup/v1"}
+    "apiVersion": {"const": "catchplate.nativeGateCgroup/v1"}
   }
 }

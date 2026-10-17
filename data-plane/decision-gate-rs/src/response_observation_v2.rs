@@ -5,7 +5,7 @@
 //! credential, dispatch, activation, or publication capability.
 //!
 //! Canonicalization is UTF-8 RFC 8785 JSON Canonicalization Scheme (JCS).
-//! Serverware additionally rejects duplicate object members before typed
+//! Catchplate additionally rejects duplicate object members before typed
 //! decoding, rejects floating-point numbers, and limits every integer to the
 //! interoperable range 0..=2^53-1. `canonical_jcs_bytes` implements that
 //! profile for typed values; `serde_json::to_vec` is not canonicalization.
@@ -33,22 +33,22 @@ pub mod custody;
 #[path = "response_v2/state_authority/mod.rs"]
 pub mod state_authority;
 
-pub const PROOF_API_VERSION: &str = "serverware.responseObservationProof/v2";
-pub const PROOF_KIND: &str = "ServerwareResponseObservationProof";
-pub const ENVELOPE_API_VERSION: &str = "serverware.responseObservationEnvelope/v2";
-pub const ENVELOPE_KIND: &str = "ServerwareResponseObservationEnvelope";
-pub const EVIDENCE_API_VERSION: &str = "serverware.responseObservationEvidence/v2";
+pub const PROOF_API_VERSION: &str = "catchplate.responseObservationProof/v2";
+pub const PROOF_KIND: &str = "CatchplateResponseObservationProof";
+pub const ENVELOPE_API_VERSION: &str = "catchplate.responseObservationEnvelope/v2";
+pub const ENVELOPE_KIND: &str = "CatchplateResponseObservationEnvelope";
+pub const EVIDENCE_API_VERSION: &str = "catchplate.responseObservationEvidence/v2";
 pub const LOCAL_RECONCILIATION_API_VERSION: &str =
-    "serverware.localCredentialReconciliation/v2";
+    "catchplate.localCredentialReconciliation/v2";
 pub const LOCAL_RECONCILIATION_KIND: &str =
-    "ServerwareLocalCredentialReconciliation";
+    "CatchplateLocalCredentialReconciliation";
 pub const LOCAL_RECONCILIATION_LEDGER_WITNESS_API_VERSION: &str =
-    "serverware.localReconciliationLedgerWitness/v2";
+    "catchplate.localReconciliationLedgerWitness/v2";
 pub const LOCAL_RECONCILIATION_LEDGER_WITNESS_KIND: &str =
-    "ServerwareLocalReconciliationLedgerWitness";
-pub const JCS_PROFILE: &str = "RFC8785-JCS/serverware-integers-and-unique-keys/v1";
+    "CatchplateLocalReconciliationLedgerWitness";
+pub const JCS_PROFILE: &str = "RFC8785-JCS/catchplate-integers-and-unique-keys/v1";
 
-const PREIMAGE_MAGIC: &[u8] = b"SERVERWARE\0RESPONSE-OBSERVATION-V2\0SHA-256\0";
+const PREIMAGE_MAGIC: &[u8] = b"CATCHPLATE\0RESPONSE-OBSERVATION-V2\0SHA-256\0";
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const MAX_EVIDENCE_TTL_MS: u64 = 10 * 60 * 1000;
 const MAX_RUNTIME_ATTESTATION_TTL_MS: u64 = 10 * 60 * 1000;
@@ -90,119 +90,119 @@ const MAX_DIGEST_AGGREGATE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_EXPORTED_PREIMAGE_BYTES: usize = 64 * 1024;
 const MAX_CREDENTIAL_AUTHORITY_OPERATIONS: usize = 8;
 
-const NONCE_DIGEST_DOMAIN: &str = "serverware.response-observation-v2/nonce";
-const ATTEMPT_ID_DOMAIN: &str = "serverware.response-observation-v2/attempt-id";
+const NONCE_DIGEST_DOMAIN: &str = "catchplate.response-observation-v2/nonce";
+const ATTEMPT_ID_DOMAIN: &str = "catchplate.response-observation-v2/attempt-id";
 const ROUTE_SEMANTIC_PROFILE_DOMAIN: &str =
-    "serverware.response-observation-v2/route-semantic-profile";
+    "catchplate.response-observation-v2/route-semantic-profile";
 const AUTHORIZATION_BINDING_DOMAIN: &str =
-    "serverware.response-observation-v2/authorization-binding";
+    "catchplate.response-observation-v2/authorization-binding";
 const CREDENTIAL_AUTHORITY_EFFECT_DOMAIN: &str =
-    "serverware.response-observation-v2/credential-authority-effect";
+    "catchplate.response-observation-v2/credential-authority-effect";
 const CREDENTIAL_AUTHORITY_RECORD_DOMAIN: &str =
-    "serverware.response-observation-v2/credential-authority-record";
+    "catchplate.response-observation-v2/credential-authority-record";
 const CREDENTIAL_AUTHORITY_PLAN_LEAF_DOMAIN: &str =
-    "serverware.response-observation-v2/credential-authority-plan-leaf";
+    "catchplate.response-observation-v2/credential-authority-plan-leaf";
 const CREDENTIAL_AUTHORITY_PLAN_ROOT_DOMAIN: &str =
-    "serverware.response-observation-v2/credential-authority-plan-root";
+    "catchplate.response-observation-v2/credential-authority-plan-root";
 const CREDENTIAL_AUTHORITY_EVIDENCE_LEAF_DOMAIN: &str =
-    "serverware.response-observation-v2/credential-authority-evidence-leaf";
+    "catchplate.response-observation-v2/credential-authority-evidence-leaf";
 const CREDENTIAL_AUTHORITY_EVIDENCE_ROOT_DOMAIN: &str =
-    "serverware.response-observation-v2/credential-authority-evidence-root";
+    "catchplate.response-observation-v2/credential-authority-evidence-root";
 const CREDENTIAL_AUTHORITY_TRANSITION_ID_DOMAIN: &str =
-    "serverware.response-observation-v2/credential-authority-transition-id";
+    "catchplate.response-observation-v2/credential-authority-transition-id";
 const CREDENTIAL_AUTHORITY_RECOVERY_BINDING_DOMAIN: &str =
-    "serverware.response-observation-v2/credential-authority-recovery-binding";
+    "catchplate.response-observation-v2/credential-authority-recovery-binding";
 const LOCAL_CREDENTIAL_RECOVERY_BINDING_DOMAIN: &str =
-    "serverware.response-observation-v2/local-credential-recovery-binding";
+    "catchplate.response-observation-v2/local-credential-recovery-binding";
 const LOCAL_RECONCILIATION_RECORD_DOMAIN: &str =
-    "serverware.response-observation-v2/local-reconciliation-record";
+    "catchplate.response-observation-v2/local-reconciliation-record";
 const LOCAL_RECONCILIATION_RECORD_ID_DOMAIN: &str =
-    "serverware.response-observation-v2/local-reconciliation-record-id";
+    "catchplate.response-observation-v2/local-reconciliation-record-id";
 const LOCAL_RECONCILIATION_RETRIEVAL_ID_DOMAIN: &str =
-    "serverware.response-observation-v2/local-reconciliation-retrieval-id";
+    "catchplate.response-observation-v2/local-reconciliation-retrieval-id";
 const LOCAL_RECONCILIATION_CONTINUITY_RETRIEVAL_ID_DOMAIN: &str =
-    "serverware.response-observation-v2/local-reconciliation-continuity-retrieval-id";
+    "catchplate.response-observation-v2/local-reconciliation-continuity-retrieval-id";
 const LOCAL_RECONCILIATION_LEDGER_WITNESS_DOMAIN: &str =
-    "serverware.response-observation-v2/local-reconciliation-ledger-witness";
+    "catchplate.response-observation-v2/local-reconciliation-ledger-witness";
 const LOCAL_RECONCILIATION_LEDGER_WITNESS_RETRIEVAL_ID_DOMAIN: &str =
-    "serverware.response-observation-v2/local-reconciliation-ledger-witness-retrieval-id";
+    "catchplate.response-observation-v2/local-reconciliation-ledger-witness-retrieval-id";
 const LOCAL_RECONCILIATION_PREDECESSOR_EVIDENCE_RETRIEVAL_ID_DOMAIN: &str =
-    "serverware.response-observation-v2/local-reconciliation-predecessor-evidence-retrieval-id";
+    "catchplate.response-observation-v2/local-reconciliation-predecessor-evidence-retrieval-id";
 const LOCAL_RECONCILIATION_GENESIS_EVIDENCE_RETRIEVAL_ID_DOMAIN: &str =
-    "serverware.response-observation-v2/local-reconciliation-genesis-evidence-retrieval-id";
+    "catchplate.response-observation-v2/local-reconciliation-genesis-evidence-retrieval-id";
 const LOCAL_RECONCILIATION_STORE_STATE_DOMAIN: &str =
-    "serverware.response-observation-v2/local-reconciliation-store-state";
+    "catchplate.response-observation-v2/local-reconciliation-store-state";
 const LOCAL_RECONCILIATION_PINNED_GENESIS_STATE_DOMAIN: &str =
-    "serverware.response-observation-v2/local-reconciliation-pinned-genesis-state";
+    "catchplate.response-observation-v2/local-reconciliation-pinned-genesis-state";
 const LOCAL_RECONCILIATION_STORE_TRANSITION_DOMAIN: &str =
-    "serverware.response-observation-v2/local-reconciliation-store-transition";
+    "catchplate.response-observation-v2/local-reconciliation-store-transition";
 const LOCAL_RECONCILIATION_QUORUM_MEMBER_SIGNATURE_DOMAIN: &str =
-    "serverware.response-observation-v2/local-reconciliation-quorum-member-signature";
+    "catchplate.response-observation-v2/local-reconciliation-quorum-member-signature";
 const LOCAL_RECONCILIATION_QUORUM_CERTIFICATE_DOMAIN: &str =
-    "serverware.response-observation-v2/local-reconciliation-quorum-certificate";
+    "catchplate.response-observation-v2/local-reconciliation-quorum-certificate";
 const LOCAL_RECONCILIATION_TRANSPARENCY_LEAF_DOMAIN: &str =
-    "serverware.response-observation-v2/local-reconciliation-transparency-leaf";
+    "catchplate.response-observation-v2/local-reconciliation-transparency-leaf";
 const LOCAL_RECONCILIATION_PREDECESSOR_SUCCESSOR_KEY_DOMAIN: &str =
-    "serverware.response-observation-v2/local-reconciliation-predecessor-successor-key";
+    "catchplate.response-observation-v2/local-reconciliation-predecessor-successor-key";
 const LOCAL_RECONCILIATION_GENESIS_MARKER: &str = "GENESIS";
 const LOCAL_RECONCILIATION_TRANSPARENCY_PROOF_DOMAIN: &str =
-    "serverware.response-observation-v2/local-reconciliation-transparency-proof";
+    "catchplate.response-observation-v2/local-reconciliation-transparency-proof";
 const LOCAL_RECONCILIATION_TRANSPARENCY_CHECKPOINT_DOMAIN: &str =
-    "serverware.response-observation-v2/local-reconciliation-transparency-checkpoint";
+    "catchplate.response-observation-v2/local-reconciliation-transparency-checkpoint";
 const OAUTH_EFFECTIVE_STATE_DOMAIN: &str =
-    "serverware.response-observation-v2/oauth-effective-state";
+    "catchplate.response-observation-v2/oauth-effective-state";
 const CREDENTIAL_AUTHORITY_INITIAL_STATE_DOMAIN: &str =
-    "serverware.response-observation-v2/credential-authority-initial-state";
+    "catchplate.response-observation-v2/credential-authority-initial-state";
 const CREDENTIAL_AUTHORITY_EXECUTION_STATE_DOMAIN: &str =
-    "serverware.response-observation-v2/credential-authority-execution-state";
+    "catchplate.response-observation-v2/credential-authority-execution-state";
 const CREDENTIAL_AUTHORITY_STATE_MACHINE_DOMAIN: &str =
-    "serverware.response-observation-v2/credential-authority-state-machine";
+    "catchplate.response-observation-v2/credential-authority-state-machine";
 const CREDENTIAL_AUTHORITY_UNRESOLVED_RESERVATION_DOMAIN: &str =
-    "serverware.response-observation-v2/credential-authority-unresolved-reservation";
+    "catchplate.response-observation-v2/credential-authority-unresolved-reservation";
 const CREDENTIAL_AUTHORITY_PLAN_STEP_DOMAIN: &str =
-    "serverware.response-observation-v2/credential-authority-plan-step";
+    "catchplate.response-observation-v2/credential-authority-plan-step";
 const CREDENTIAL_AUTHORITY_SELECTED_PATH_DOMAIN: &str =
-    "serverware.response-observation-v2/credential-authority-selected-path";
+    "catchplate.response-observation-v2/credential-authority-selected-path";
 const CREDENTIAL_AUTHORITY_EXTERNAL_FAILURE_DOMAIN: &str =
-    "serverware.response-observation-v2/credential-authority-external-failure";
+    "catchplate.response-observation-v2/credential-authority-external-failure";
 const CANONICAL_TARGET_DOMAIN: &str =
-    "serverware.response-observation-v2/canonical-upstream-target";
+    "catchplate.response-observation-v2/canonical-upstream-target";
 const STAGED_REQUEST_DOMAIN: &str =
-    "serverware.response-observation-v2/staged-target-request";
+    "catchplate.response-observation-v2/staged-target-request";
 const STAGED_REQUEST_RETRIEVAL_DOMAIN: &str =
-    "serverware.response-observation-v2/staged-request-retrieval";
+    "catchplate.response-observation-v2/staged-request-retrieval";
 const REQUEST_OPERATION_SEMANTICS_DOMAIN: &str =
-    "serverware.response-observation-v2/request-operation-semantics";
+    "catchplate.response-observation-v2/request-operation-semantics";
 const REQUEST_FRAMING_DOMAIN: &str =
-    "serverware.response-observation-v2/request-framing";
+    "catchplate.response-observation-v2/request-framing";
 const CREDENTIAL_INJECTION_RESULT_DOMAIN: &str =
-    "serverware.response-observation-v2/credential-injection-result";
+    "catchplate.response-observation-v2/credential-injection-result";
 const POLICY_CREDENTIAL_BINDING_DOMAIN: &str =
-    "serverware.response-observation-v2/policy-credential-binding";
+    "catchplate.response-observation-v2/policy-credential-binding";
 const DISPATCH_AUTHORIZATION_BINDING_DOMAIN: &str =
-    "serverware.response-observation-v2/dispatch-authorization-binding";
+    "catchplate.response-observation-v2/dispatch-authorization-binding";
 const PROVIDER_IDEMPOTENCY_PROFILE_DOMAIN: &str =
-    "serverware.response-observation-v2/provider-idempotency-profile";
+    "catchplate.response-observation-v2/provider-idempotency-profile";
 const IDEMPOTENCY_BINDING_DOMAIN: &str =
-    "serverware.response-observation-v2/provider-idempotency-binding";
+    "catchplate.response-observation-v2/provider-idempotency-binding";
 const RECOVERY_KEY_DOMAIN: &str =
-    "serverware.response-observation-v2/ambiguous-outcome-recovery-key";
+    "catchplate.response-observation-v2/ambiguous-outcome-recovery-key";
 const READ_RETRY_BINDING_DOMAIN: &str =
-    "serverware.response-observation-v2/read-retry-binding";
+    "catchplate.response-observation-v2/read-retry-binding";
 const UPSTREAM_OBSERVATION_DOMAIN: &str =
-    "serverware.response-observation-v2/upstream-observation";
+    "catchplate.response-observation-v2/upstream-observation";
 const UPSTREAM_RESPONSE_RETRIEVAL_DOMAIN: &str =
-    "serverware.response-observation-v2/upstream-response-retrieval";
+    "catchplate.response-observation-v2/upstream-response-retrieval";
 const RESPONSE_POLICY_PROFILE_DOMAIN: &str =
-    "serverware.response-observation-v2/response-policy-profile";
+    "catchplate.response-observation-v2/response-policy-profile";
 const RESPONSE_POLICY_VALIDATION_DOMAIN: &str =
-    "serverware.response-observation-v2/response-policy-validation";
+    "catchplate.response-observation-v2/response-policy-validation";
 const FINAL_ENVELOPE_DOMAIN: &str =
-    "serverware.response-observation-v2/finalized-envelope";
+    "catchplate.response-observation-v2/finalized-envelope";
 const RETRIEVAL_ID_DOMAIN: &str =
-    "serverware.response-observation-v2/retrieval-identity";
+    "catchplate.response-observation-v2/retrieval-identity";
 const EVIDENCE_ENVELOPE_DOMAIN: &str =
-    "serverware.response-observation-v2/evidence-envelope";
+    "catchplate.response-observation-v2/evidence-envelope";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContractError {
@@ -2707,8 +2707,8 @@ pub struct FinalizedEnvelopeIdentity {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 pub enum CanonicalizationProfile {
-    #[serde(rename = "RFC8785-JCS/serverware-integers-and-unique-keys/v1")]
-    Rfc8785ServerwareV1,
+    #[serde(rename = "RFC8785-JCS/catchplate-integers-and-unique-keys/v1")]
+    Rfc8785CatchplateV1,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -4756,8 +4756,8 @@ evidence_payload!(
     RouteSemanticProfileEvidencePayload,
     EvidenceType::RouteSemanticProfile,
     EvidenceRole::RouteSemanticProfile,
-    "serverware.response-observation-v2/route-semantic-profile-evidence-payload",
-    "serverware.response-observation-v2/route-semantic-profile-evidence-signature",
+    "catchplate.response-observation-v2/route-semantic-profile-evidence-payload",
+    "catchplate.response-observation-v2/route-semantic-profile-evidence-signature",
     attempt_id,
     |value: &RouteSemanticProfileEvidencePayload| value.signed_at_epoch_ms,
     validate_route_semantic_profile_payload
@@ -4767,8 +4767,8 @@ evidence_payload!(
     ReserveEvidencePayload,
     EvidenceType::Reserve,
     EvidenceRole::Reserve,
-    "serverware.response-observation-v2/reserve-payload",
-    "serverware.response-observation-v2/reserve-signature",
+    "catchplate.response-observation-v2/reserve-payload",
+    "catchplate.response-observation-v2/reserve-signature",
     attempt_id,
     |value: &ReserveEvidencePayload| value.reserved_at_epoch_ms,
     validate_reserve_payload
@@ -4784,11 +4784,11 @@ impl EvidencePayload for CredentialAuthorityEvidencePayload {
     }
 
     fn payload_domain(&self) -> &'static str {
-        "serverware.response-observation-v2/credential-authority-payload"
+        "catchplate.response-observation-v2/credential-authority-payload"
     }
 
     fn signature_domain(&self) -> &'static str {
-        "serverware.response-observation-v2/credential-authority-signature"
+        "catchplate.response-observation-v2/credential-authority-signature"
     }
 
     fn attempt_id(&self) -> &str {
@@ -4814,8 +4814,8 @@ evidence_payload!(
     DurableRecoverySealPayload,
     EvidenceType::DurableRecoverySeal,
     EvidenceRole::DurableRecoverySeal,
-    "serverware.response-observation-v2/durable-recovery-seal-payload",
-    "serverware.response-observation-v2/durable-recovery-seal-signature",
+    "catchplate.response-observation-v2/durable-recovery-seal-payload",
+    "catchplate.response-observation-v2/durable-recovery-seal-signature",
     attempt_id,
     |value: &DurableRecoverySealPayload| value.armed_at_epoch_ms,
     validate_durable_recovery_seal_payload
@@ -4825,8 +4825,8 @@ evidence_payload!(
     DispatchEvidencePayload,
     EvidenceType::Dispatch,
     EvidenceRole::Dispatch,
-    "serverware.response-observation-v2/dispatch-payload",
-    "serverware.response-observation-v2/dispatch-signature",
+    "catchplate.response-observation-v2/dispatch-payload",
+    "catchplate.response-observation-v2/dispatch-signature",
     attempt_id,
     |value: &DispatchEvidencePayload| value.authorized_at_epoch_ms,
     validate_dispatch_payload
@@ -4856,22 +4856,22 @@ impl EvidencePayload for TerminalEvidencePayload {
     fn payload_domain(&self) -> &'static str {
         match self {
             Self::Cancelled { .. } => {
-                "serverware.response-observation-v2/cancellation-payload"
+                "catchplate.response-observation-v2/cancellation-payload"
             }
             Self::Completed { .. } => {
-                "serverware.response-observation-v2/completion-payload"
+                "catchplate.response-observation-v2/completion-payload"
             }
             Self::ResponseRejected { .. } => {
-                "serverware.response-observation-v2/response-rejection-payload"
+                "catchplate.response-observation-v2/response-rejection-payload"
             }
             Self::ExactResponseUnsupported { .. } => {
-                "serverware.response-observation-v2/exact-response-unsupported-payload"
+                "catchplate.response-observation-v2/exact-response-unsupported-payload"
             }
             Self::WriteTransitionUnknown { .. } => {
-                "serverware.response-observation-v2/write-transition-unknown-payload"
+                "catchplate.response-observation-v2/write-transition-unknown-payload"
             }
             Self::ReadTransitionUnknown { .. } => {
-                "serverware.response-observation-v2/read-transition-unknown-payload"
+                "catchplate.response-observation-v2/read-transition-unknown-payload"
             }
         }
     }
@@ -4879,22 +4879,22 @@ impl EvidencePayload for TerminalEvidencePayload {
     fn signature_domain(&self) -> &'static str {
         match self {
             Self::Cancelled { .. } => {
-                "serverware.response-observation-v2/cancellation-signature"
+                "catchplate.response-observation-v2/cancellation-signature"
             }
             Self::Completed { .. } => {
-                "serverware.response-observation-v2/completion-signature"
+                "catchplate.response-observation-v2/completion-signature"
             }
             Self::ResponseRejected { .. } => {
-                "serverware.response-observation-v2/response-rejection-signature"
+                "catchplate.response-observation-v2/response-rejection-signature"
             }
             Self::ExactResponseUnsupported { .. } => {
-                "serverware.response-observation-v2/exact-response-unsupported-signature"
+                "catchplate.response-observation-v2/exact-response-unsupported-signature"
             }
             Self::WriteTransitionUnknown { .. } => {
-                "serverware.response-observation-v2/write-transition-unknown-signature"
+                "catchplate.response-observation-v2/write-transition-unknown-signature"
             }
             Self::ReadTransitionUnknown { .. } => {
-                "serverware.response-observation-v2/read-transition-unknown-signature"
+                "catchplate.response-observation-v2/read-transition-unknown-signature"
             }
         }
     }
@@ -4941,8 +4941,8 @@ evidence_payload!(
     CustodyAuthorityEvidencePayload,
     EvidenceType::CustodyAuthority,
     EvidenceRole::CustodyAuthority,
-    "serverware.response-observation-v2/custody-authority-payload",
-    "serverware.response-observation-v2/custody-authority-signature",
+    "catchplate.response-observation-v2/custody-authority-payload",
+    "catchplate.response-observation-v2/custody-authority-signature",
     attempt_id,
     |value: &CustodyAuthorityEvidencePayload| value.measured_at_epoch_ms,
     validate_custody_authority_payload
@@ -4952,8 +4952,8 @@ evidence_payload!(
     LocalReconciliationContinuityEvidencePayload,
     EvidenceType::LocalReconciliationContinuity,
     EvidenceRole::LocalReconciliationContinuity,
-    "serverware.response-observation-v2/local-reconciliation-continuity-payload",
-    "serverware.response-observation-v2/local-reconciliation-continuity-signature",
+    "catchplate.response-observation-v2/local-reconciliation-continuity-payload",
+    "catchplate.response-observation-v2/local-reconciliation-continuity-signature",
     attempt_id,
     |value: &LocalReconciliationContinuityEvidencePayload| value.signed_at_epoch_ms,
     validate_local_reconciliation_continuity_payload
@@ -4963,8 +4963,8 @@ evidence_payload!(
     LocalReconciliationLedgerWitness,
     EvidenceType::LocalReconciliationLedgerWitness,
     EvidenceRole::LocalReconciliationLedgerWitness,
-    "serverware.response-observation-v2/local-reconciliation-ledger-witness-payload",
-    "serverware.response-observation-v2/local-reconciliation-ledger-witness-signature",
+    "catchplate.response-observation-v2/local-reconciliation-ledger-witness-payload",
+    "catchplate.response-observation-v2/local-reconciliation-ledger-witness-signature",
     attempt_id,
     |value: &LocalReconciliationLedgerWitness| value.witnessed_at_epoch_ms,
     validate_local_reconciliation_ledger_witness
@@ -4974,8 +4974,8 @@ evidence_payload!(
     LocalReconciliationGenesisAbsenceEvidencePayload,
     EvidenceType::LocalReconciliationGenesisAbsence,
     EvidenceRole::LocalReconciliationGenesisAbsence,
-    "serverware.response-observation-v2/local-reconciliation-genesis-absence-payload",
-    "serverware.response-observation-v2/local-reconciliation-genesis-absence-signature",
+    "catchplate.response-observation-v2/local-reconciliation-genesis-absence-payload",
+    "catchplate.response-observation-v2/local-reconciliation-genesis-absence-signature",
     attempt_id,
     |value: &LocalReconciliationGenesisAbsenceEvidencePayload| value.signed_at_epoch_ms,
     validate_local_reconciliation_genesis_absence_payload
@@ -4985,8 +4985,8 @@ evidence_payload!(
     LocalReconciliationRecoveryEvidencePayload,
     EvidenceType::LocalReconciliationRecovery,
     EvidenceRole::LocalReconciliationRecovery,
-    "serverware.response-observation-v2/local-reconciliation-recovery-payload",
-    "serverware.response-observation-v2/local-reconciliation-recovery-signature",
+    "catchplate.response-observation-v2/local-reconciliation-recovery-payload",
+    "catchplate.response-observation-v2/local-reconciliation-recovery-signature",
     attempt_id,
     |value: &LocalReconciliationRecoveryEvidencePayload| value.signed_at_epoch_ms,
     validate_local_reconciliation_recovery_payload
@@ -4996,8 +4996,8 @@ evidence_payload!(
     PersistenceEvidencePayload,
     EvidenceType::Persistence,
     EvidenceRole::Persistence,
-    "serverware.response-observation-v2/persistence-payload",
-    "serverware.response-observation-v2/persistence-signature",
+    "catchplate.response-observation-v2/persistence-payload",
+    "catchplate.response-observation-v2/persistence-signature",
     attempt_id,
     |value: &PersistenceEvidencePayload| value.persisted_at_epoch_ms,
     validate_persistence_payload
@@ -5007,8 +5007,8 @@ evidence_payload!(
     FinalizationCheckpointEvidencePayload,
     EvidenceType::FinalizationCheckpoint,
     EvidenceRole::FinalizationCheckpoint,
-    "serverware.response-observation-v2/finalization-checkpoint-payload",
-    "serverware.response-observation-v2/finalization-checkpoint-signature",
+    "catchplate.response-observation-v2/finalization-checkpoint-payload",
+    "catchplate.response-observation-v2/finalization-checkpoint-signature",
     attempt_id,
     |value: &FinalizationCheckpointEvidencePayload| value.finalized_at_epoch_ms,
     validate_finalization_checkpoint_payload
@@ -5018,8 +5018,8 @@ evidence_payload!(
     ArtifactTimeCheckpointEvidencePayload,
     EvidenceType::ArtifactTimeCheckpoint,
     EvidenceRole::ArtifactTimeCheckpoint,
-    "serverware.response-observation-v2/artifact-time-checkpoint-payload",
-    "serverware.response-observation-v2/artifact-time-checkpoint-signature",
+    "catchplate.response-observation-v2/artifact-time-checkpoint-payload",
+    "catchplate.response-observation-v2/artifact-time-checkpoint-signature",
     attempt_id,
     |value: &ArtifactTimeCheckpointEvidencePayload| value.signed_at_epoch_ms,
     validate_artifact_time_checkpoint_payload
@@ -9610,7 +9610,7 @@ fn validate_finalized_identity(finalized: &FinalizedEnvelopeV2) -> ContractResul
         || !identity.bytes_immutable
         || !identity.replacement_prohibited
         || identity.canonicalization
-            != CanonicalizationProfile::Rfc8785ServerwareV1
+            != CanonicalizationProfile::Rfc8785CatchplateV1
         || identity.retrieval_contract
             != RetrievalContract::ExactCanonicalEnvelopeBytes
     {
@@ -10201,7 +10201,7 @@ fn verify_artifact_time_checkpoint_evidence<
     if wire.api_version != EVIDENCE_API_VERSION
         || wire.evidence_type != EvidenceType::ArtifactTimeCheckpoint
         || wire.signature_domain
-            != "serverware.response-observation-v2/artifact-time-checkpoint-signature"
+            != "catchplate.response-observation-v2/artifact-time-checkpoint-signature"
         || wire.signature_algorithm != SignatureAlgorithm::Ed25519
     {
         return Err(ContractError::new(
@@ -10279,7 +10279,7 @@ fn verify_artifact_time_checkpoint_evidence<
     }
     let payload_jcs = canonical_jcs_bytes(payload)?;
     let expected_payload = domain_sha256(
-        "serverware.response-observation-v2/artifact-time-checkpoint-payload",
+        "catchplate.response-observation-v2/artifact-time-checkpoint-payload",
         &[payload_jcs.as_slice()],
     )?;
     if wire.payload_sha256 != expected_payload {
@@ -10305,7 +10305,7 @@ fn verify_artifact_time_checkpoint_evidence<
     };
     let commitment_jcs = canonical_jcs_bytes(&commitment)?;
     let signing_message = domain_sha256_bytes(
-        "serverware.response-observation-v2/artifact-time-checkpoint-signature",
+        "catchplate.response-observation-v2/artifact-time-checkpoint-signature",
         &[commitment_jcs.as_slice()],
     )?;
     let purpose = EvidenceVerificationPurpose {
@@ -10313,9 +10313,9 @@ fn verify_artifact_time_checkpoint_evidence<
         evidence_type: EvidenceType::ArtifactTimeCheckpoint,
         evidence_role: EvidenceRole::ArtifactTimeCheckpoint,
         signature_domain:
-            "serverware.response-observation-v2/artifact-time-checkpoint-signature",
+            "catchplate.response-observation-v2/artifact-time-checkpoint-signature",
         payload_domain:
-            "serverware.response-observation-v2/artifact-time-checkpoint-payload",
+            "catchplate.response-observation-v2/artifact-time-checkpoint-payload",
         algorithm: SignatureAlgorithm::Ed25519,
         expected_runtime: runtime,
         runtime_attestation_evidence_sha256:
@@ -21498,7 +21498,7 @@ pub fn domain_sha256(domain: &str, frames: &[&[u8]]) -> ContractResult<String> {
     Ok(format!("sha256:{}", hex::encode(digest)))
 }
 
-/// Canonicalize a typed value using the Serverware RFC 8785 profile.
+/// Canonicalize a typed value using the Catchplate RFC 8785 profile.
 ///
 /// Raw input must first be decoded with duplicate-member rejection. This
 /// function intentionally rejects all floating-point values and integers above
@@ -21553,7 +21553,7 @@ pub fn decode_canonical_proof(
         return Err(ContractError::new(
             "noncanonical_jcs",
             "$",
-            "proof bytes are not the exact Serverware RFC 8785 JCS encoding",
+            "proof bytes are not the exact Catchplate RFC 8785 JCS encoding",
         ));
     }
     Ok(CanonicalResponseObservationProofV2 {
@@ -22052,7 +22052,7 @@ fn validate_safe_integer(value: u64, path: &'static str) -> ContractResult<()> {
         Err(ContractError::new(
             "integer_out_of_range",
             path,
-            "integer exceeds the Serverware JCS interoperable bound",
+            "integer exceeds the Catchplate JCS interoperable bound",
         ))
     }
 }

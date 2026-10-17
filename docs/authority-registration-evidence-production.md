@@ -6,7 +6,7 @@ independently admitted originals and rows, runs real attestation cryptography,
 signs the evidence, and assembles the existing evidence-admission request.
 It does not provision an independent signer, process, socket or browser route.
 Public registration still uses the actual legacy finalizer in
-[`webauthn.verify_registration`](../serverware/webauthn.py).
+[`webauthn.verify_registration`](../catchplate/webauthn.py).
 
 The later [original-evidence signing integration](authority-original-evidence-signing.md)
 adds raw source-proof replay and an actual private source-read owner before this
@@ -16,7 +16,7 @@ page records the row-input production boundary introduced in `.122`.
 ## Required upstream authority
 
 The owning signer must independently admit all of the following before using
-the new [`_produce_on_configuration`](../serverware/authority_webauthn_registration_signing.py):
+the new [`_produce_on_configuration`](../catchplate/authority_webauthn_registration_signing.py):
 
 - Exact browser `clientDataJSON` and attestation-object bytes, credential ID and
   transports; authenticated user and label; the unused registration challenge
@@ -54,25 +54,25 @@ maximum age. The wrapper compares the independently supplied signer identity
 and checks the actual private/public pair. Neither the generic verifier key nor
 the planner key substitutes for the dedicated purpose signer.
 
-[`registration_ceremony._derive_on_work`](../serverware/authority_webauthn_registration_ceremony.py)
+[`registration_ceremony._derive_on_work`](../catchplate/authority_webauthn_registration_ceremony.py)
 joins the exact challenge row, authenticated user/label and complete canonical
 authorization, and parses the original client data against configured origin.
 The configured RP ID remains an input to actual downstream registration parsing.
 It returns selected immutable originals and a genuine core `CeremonyScope`,
 not a successful-verification token. No caller scope is accepted.
 
-[`registration_trust._context_on_work`](../serverware/authority_webauthn_registration_trust.py)
+[`registration_trust._context_on_work`](../catchplate/authority_webauthn_registration_trust.py)
 rejoins stored canonical bundle/stage commitments, high-water counters/digests
 and original evaluation interval. It extracts every stored root certificate
 through the real trust core into the actual attestation context. This relies on
 the previously admitted stage signature and committed state: extraction does
 not freshly verify the publication signer or admit root/state provenance.
 
-[`registration_production._produce_from_rows_on_work`](../serverware/authority_webauthn_registration_production.py)
+[`registration_production._produce_from_rows_on_work`](../catchplate/authority_webauthn_registration_production.py)
 passes those derived values to the unchanged original `_produce_on_work`.
 Actual registration parsing, attestation verification, row/authorization joins,
 bounded evidence lifetime and real evidence signing still execute. The
-[`invocation assembler`](../serverware/authority_webauthn_evidence_invocation.py)
+[`invocation assembler`](../catchplate/authority_webauthn_evidence_invocation.py)
 then derives request commitments from this invocation's signed original, not a
 caller-supplied successful result. All phases retain the original verification
 instant and share the supplied work; no new clock or replacement allowance is
@@ -94,7 +94,7 @@ credentials or an already executed finalization.
 
 An independently admitted verifier continuation can pass the returned request
 and inputs to the existing
-[`AuthorityProcess._prepare_webauthn_evidence_custody`](../serverware/authority_service.py)
+[`AuthorityProcess._prepare_webauthn_evidence_custody`](../catchplate/authority_service.py)
 with `purpose="registration"`, its admitted original deadline and the same work.
 That [private preparation path](authority-webauthn-preparation.md) produces raw
 six: intent, relay, plan envelope, inputs, evaluation context and admitted

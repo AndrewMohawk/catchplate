@@ -338,7 +338,7 @@ fn npm_install_json_response_inspects_decoded_secret_reflection_and_limits() {
 
 #[test]
 fn npm_install_capability_and_media_do_not_relabel_old_grants() {
-    assert_eq!(gate_capability(), json!({"schema":"serverware.operatorNpmInstallGate/v1",
+    assert_eq!(gate_capability(), json!({"schema":"catchplate.operatorNpmInstallGate/v1",
         "adapter":ADAPTER,"modes":["metadata","tarball","audit"]}));
     for mode in ["metadata", "tarball", "audit"] {
         assert!(crate::npm_metadata::validate_config(&config(mode), &[envelope(mode, "e").unwrap()]).is_err());

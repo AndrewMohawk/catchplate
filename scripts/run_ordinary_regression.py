@@ -39,7 +39,7 @@ PARTITIONS = ("all", "python-1", "python-2", "python-3", "native-review", "node"
 PYTHON_PARTITION_BOUNDARIES = ("test_operator_workload_renewal.py", "test_native_jit_prepare.py")
 NATIVE_REVIEW_SUITE = "test_authority_native_jit_review_plan_replay.py"
 MAX_OUTPUT_BYTES = 100 * 1024
-SCHEMA = "serverware.ordinaryRegression/v1"
+SCHEMA = "catchplate.ordinaryRegression/v1"
 EXCLUDED = ("rendered_browser", "stock_sdk", "rust_data_plane", "live_deployment", "native_admission")
 
 
@@ -260,8 +260,8 @@ def environment(root, scratch, python, node, dependencies=None):
                 "/usr/local/bin", "/usr/bin", "/bin"))), "LANG": "C.UTF-8",
         "HOME": str(scratch), "TMPDIR": str(scratch), "PYTHONPATH": os.pathsep.join(paths),
         "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1",
-        "SERVERWARE_TEST_PYTHON": python, "SERVERWARE_PROCESS_MODE": "serverware-control-plane",
-        "SERVERWARE_RELEASE_CHANNEL": "dev", "SERVERWARE_DATA_DIR": str(scratch / "data")}
+        "CATCHPLATE_TEST_PYTHON": python, "CATCHPLATE_PROCESS_MODE": "catchplate-control-plane",
+        "CATCHPLATE_RELEASE_CHANNEL": "dev", "CATCHPLATE_DATA_DIR": str(scratch / "data")}
 
 
 def unique_json_object(pairs):
@@ -402,7 +402,7 @@ def node_completion(script, raw):
             expected = shapes[script]
             if script == "test_operator_pending_actions_ui.cjs":
                 expected = {**expected, "sourceSha256": hashlib.sha256(
-                    (ROOT / "serverware/operator_demo_web/workspace_pending_actions.js").read_bytes()).hexdigest()}
+                    (ROOT / "catchplate/operator_demo_web/workspace_pending_actions.js").read_bytes()).hexdigest()}
             result = json.loads(lines[-1], object_pairs_hook=unique_json_object)
             if type(result) is not dict or set(result) != set(expected) | {"groups"} \
                     or any(type(result[key]) is not type(value) or result[key] != value for key, value in expected.items()):

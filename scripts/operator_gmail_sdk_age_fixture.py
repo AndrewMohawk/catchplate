@@ -13,7 +13,7 @@ import time
 
 from scripts import operator_gmail_sdk_fixture as sdk
 
-SCHEMA = "serverware.privateGmailAgeObservations/v1"
+SCHEMA = "catchplate.privateGmailAgeObservations/v1"
 DAYS = 1
 DAY_MS = 86400000
 PROBE_QUERY = "fields=id%2CinternalDate&format=metadata"

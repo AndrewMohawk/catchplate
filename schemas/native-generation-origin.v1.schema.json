@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-generation-origin.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-generation-origin.v1.schema.json",
   "$ref": "#/$defs/configuration",
   "description": "Independent cold-authorized provenance only, not effect permission. Request <=4096, retained originals <=768 KiB, complete evidence <=1 MiB and complete issuer frame <=2 MiB, canonical ASCII without LF. Original operation <=30s; authorization <=300s. Tags SWNGOC1/NUL, SWNGOE1/NUL, SWNGOR1/NUL then u32be length; one challenge/evidence/origin and response EOF. Native source statement uses own role-4 domain and NSM quote; issuer signatures use existing signedEnvelope/ascii-integer framing under distinct domains. No new epoch correlation, fabricated generation/head or Fleet load envelope.",
   "$defs": {
@@ -34,7 +34,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeGenerationOriginRequest/v1"
+          "const": "catchplate.nativeGenerationOriginRequest/v1"
         },
         "challenge": {
           "$ref": "#/$defs/bytes32"
@@ -75,7 +75,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeGenerationOriginStatement/v1"
+          "const": "catchplate.nativeGenerationOriginStatement/v1"
         },
         "request": {
           "$ref": "#/$defs/request"
@@ -132,7 +132,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.nativeResponseProofKeyEvidence/v1"
+              "const": "catchplate.nativeResponseProofKeyEvidence/v1"
             },
             "attestationDocumentB64": {
               "type": "string",
@@ -236,7 +236,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeGenerationOriginIssuerAuthorization/v1"
+          "const": "catchplate.nativeGenerationOriginIssuerAuthorization/v1"
         },
         "purpose": {
           "const": "native-generation-origin-verification"
@@ -289,7 +289,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeGenerationOriginIssuerConfiguration/v1"
+          "const": "catchplate.nativeGenerationOriginIssuerConfiguration/v1"
         },
         "uid": {
           "$ref": "native-shadow-nitro-verifier.v1.schema.json#/$defs/uid"
@@ -334,7 +334,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeGenerationOriginChallenge/v1"
+          "const": "catchplate.nativeGenerationOriginChallenge/v1"
         },
         "request": {
           "$ref": "#/$defs/request"
@@ -378,7 +378,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeGenerationOrigin/v1"
+          "const": "catchplate.nativeGenerationOrigin/v1"
         },
         "purpose": {
           "const": "native-installed-generation-origin"
@@ -434,7 +434,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeGenerationOriginRelay/v1"
+          "const": "catchplate.nativeGenerationOriginRelay/v1"
         },
         "issuerIp": {
           "type": "string",
@@ -473,7 +473,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeGenerationOriginHandoff/v1"
+          "const": "catchplate.nativeGenerationOriginHandoff/v1"
         },
         "okForAction": {
           "const": false

@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from scripts.authority import local_provenance as cli
-from serverware import authority_local_provenance as local
+from catchplate import authority_local_provenance as local
 
 DIGEST = "sha256:" + "1" * 64
 NOW = 1_759_276_800_000_000_000
@@ -41,7 +41,7 @@ def fixture():
         "committer Fixture <fixture@example.invalid> 1700000000 +0000\n\nsynthetic test only\n").encode()
     commit_frame = b"commit " + str(len(commit_raw)).encode() + b"\0" + commit_raw
     commit = hashlib.sha1(commit_frame).hexdigest()
-    source_tree = dict(version="serverware.sourceTree/v3", identityMode="production-commit",
+    source_tree = dict(version="catchplate.sourceTree/v3", identityMode="production-commit",
         productionReleaseEligible=True, commit=commit, commitTimestamp="1700000000", gitTree=tree, files=rows)
     tree_digest = local.sha(local.spec.canonical_json_bytes(source_tree))
     stem = "source-" + tree_digest[7:]
@@ -51,7 +51,7 @@ def fixture():
         ("fileHashes", ".files.sha256", "".join(row["sha256"][7:] + "  " + row["path"] + "\n" for row in rows)),
         ("fileModes", ".files.mode", "".join("644  " + row["path"] + "\n" for row in rows))):
         raw = text.encode(); verification[name] = dict(name=stem + suffix, bytes=len(raw), sha256=local.sha(raw))
-    source = dict(apiVersion="serverware.sourceArchive/v1", identityMode="production-commit",
+    source = dict(apiVersion="catchplate.sourceArchive/v1", identityMode="production-commit",
         productionReleaseEligible=True, repository="https://github.com/example/private-deployment",
         commit=commit, commitTimestamp="1700000000", gitTree=tree, sourceTreeDigest=tree_digest,
         sourceTreeManifest=source_tree, archive=dict(format="tar-ustar-deterministic-v1",
@@ -68,16 +68,16 @@ def fixture():
     layer_raw = b"synthetic OCI blob; not claimed to be an executable image"
     config = dict(os="linux", architecture="amd64", rootfs=dict(type="layers", diff_ids=[local.sha(layer_raw)]),
         config=dict(Labels={"org.opencontainers.image.revision": commit,
-            "dev.serverware.source_tree_digest": tree_digest, "dev.serverware.source_archive_digest": local.sha(archive_raw),
-            "dev.serverware.source_manifest_digest": local.sha(source_raw), "dev.serverware.source_identity_mode": "production-commit",
-            "dev.serverware.production_release_eligible": "true"}))
+            "dev.catchplate.source_tree_digest": tree_digest, "dev.catchplate.source_archive_digest": local.sha(archive_raw),
+            "dev.catchplate.source_manifest_digest": local.sha(source_raw), "dev.catchplate.source_identity_mode": "production-commit",
+            "dev.catchplate.production_release_eligible": "true"}))
     config_raw = local.spec.canonical_json_bytes(config)
     manifest = dict(schemaVersion=2, mediaType=local.OCI_MANIFEST,
         config=dict(mediaType=local.OCI_CONFIG, digest=local.sha(config_raw), size=len(config_raw)),
         layers=[dict(mediaType="application/vnd.oci.image.layer.v1.tar", digest=local.sha(layer_raw), size=len(layer_raw))])
-    report = dict(apiVersion="serverware.productionImagesBuild/v2", kind="ProductionImagesBuild", ok=True,
+    report = dict(apiVersion="catchplate.productionImagesBuild/v2", kind="ProductionImagesBuild", ok=True,
         identity_mode="production-commit", production_release_eligible=True, generated_at_unix=NOW // 1_000_000_000 - 1,
-        metadata=metadata, images=[dict(service="serverware-control", dockerfile="Dockerfile.production",
+        metadata=metadata, images=[dict(service="catchplate-control", dockerfile="Dockerfile.production",
             tag="synthetic:test", image_id=local.sha(config_raw))], no_shell={}, publish_requirement="synthetic fixture, not observed execution")
     originals = dict(report=(json.dumps(report, indent=2, sort_keys=True) + "\n").encode(), sourceManifest=source_raw,
         gitCommit=commit_raw, ociConfig=config_raw, ociManifest=local.spec.canonical_json_bytes(manifest))
@@ -91,7 +91,7 @@ def fixture():
     selected = dict(schema=local.APPROVAL_SCHEMA, purpose=local.PURPOSE, trustSha256=DIGEST,
         signerKeyId="local-provenance-test", sourceRoot=dict(runtimePath="/synthetic/frozen", device=1, inode=2),
         treeDigest=measured["treeDigest"], files=[{key: row[key] for key in local.measure.FIELDS} for row in files],
-        objects=objects, imageService="serverware-control", bootIdDigest=DIGEST,
+        objects=objects, imageService="catchplate-control", bootIdDigest=DIGEST,
         issuedAtBoottimeNs=100, deadlineBoottimeNs=200, issuedAtUnixNanos=NOW, expiresAtUnixNanos=NOW + 1_000_000_000)
     return selected, measured, originals, archive_raw
 
@@ -156,7 +156,7 @@ class LocalProvenanceTests(unittest.TestCase):
                 local.source_manifest(local.spec.canonical_json_bytes(source) + b"\n", originals["gitCommit"])
 
     def test_raw_export_dirty_report_and_wrong_image_refuse_even_when_repinned(self):
-        for field, value in (("apiVersion", "serverware.engineeringRuntimeExport/v1"),
+        for field, value in (("apiVersion", "catchplate.engineeringRuntimeExport/v1"),
                              ("identity_mode", "development-dirty-tree"), ("production_release_eligible", False),
                              ("image", DIGEST), ("revision", "development-uncommitted")):
             selected, measured, originals, _ = fixture()
@@ -176,7 +176,7 @@ class LocalProvenanceTests(unittest.TestCase):
         with self.assertRaises(ValueError): local.association(selected, measured, originals)
         selected, measured, originals, _ = fixture()
         config = local.document(originals["ociConfig"])
-        config["config"]["Labels"]["dev.serverware.source_manifest_digest"] = DIGEST
+        config["config"]["Labels"]["dev.catchplate.source_manifest_digest"] = DIGEST
         config_raw = local.spec.canonical_json_bytes(config)
         repin(selected, measured, originals, "ociConfig", config_raw)
         manifest = local.document(originals["ociManifest"])

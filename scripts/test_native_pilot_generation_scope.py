@@ -25,14 +25,14 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import native_pilot_closure_set as closure_set
-from serverware import native_pilot_ordinary_generation_profile as profile
+from catchplate import native_pilot_closure_set as closure_set
+from catchplate import native_pilot_ordinary_generation_profile as profile
 from test_native_pilot_closure_set import (EXPECTED_SCOPE_ROOTS, EXPECTED_SCOPE_VALUES, KEY_ROLES,
     assignment_fixture, canonical, frame, members_fixture, merkle_fixture, scope_fixture, sha, synthetic)
 
 NOW = 1_000_000_000_000
-ASSIGNMENT_DOMAIN = "serverware.policyShadowAssignment/v2"
-BOOTSTRAP_DOMAIN = "serverware.nativeShadowBootstrapDriverAdmission.signature/v1"
+ASSIGNMENT_DOMAIN = "catchplate.policyShadowAssignment/v2"
+BOOTSTRAP_DOMAIN = "catchplate.nativeShadowBootstrapDriverAdmission.signature/v1"
 OPERATIONS = ("recover-current-state", "verify-checkpoint-successor", "verify-current-checkpoint-head",
     "verify-observation-evidence", "prepare-generation-publication", "commit-generation-publication",
     "abort-generation-publication", "begin-ingress", "reserve-spool-append", "append-spool-event", "compact-spool",
@@ -45,8 +45,8 @@ def encoded(raw):
 
 
 def signed_message(domain, payload):
-    return (b"serverware.signedEnvelope/v1\0" + domain.encode("ascii")
-        + b"\0serverware.canonicalJson/ascii-integer-v1\0" + canonical(payload))
+    return (b"catchplate.signedEnvelope/v1\0" + domain.encode("ascii")
+        + b"\0catchplate.canonicalJson/ascii-integer-v1\0" + canonical(payload))
 
 
 def key_fixture(label):
@@ -54,7 +54,7 @@ def key_fixture(label):
         ("SYNTHETIC GENERATION SCOPE TEST ONLY / " + label).encode("ascii")).digest())
     raw = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     spki = key.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
-    material = sha(b"serverware.policyAuthorityPublicKeyMaterial/v1\0"
+    material = sha(b"catchplate.policyAuthorityPublicKeyMaterial/v1\0"
         + (7).to_bytes(8, "big") + b"ed25519" + len(spki).to_bytes(8, "big") + spki)
     return key, {"keyId": sha(spki), "keySpkiSha256": sha(spki), "keyMaterialSha256": material,
         "publicKeyBase64url": encoded(raw)}
@@ -85,7 +85,7 @@ def fixture():
     for name, root in (("keyId", "keyIdSetRootSha256"), ("keySpkiSha256", "spkiSetRootSha256"),
             ("keyMaterialSha256", "keyMaterialSetRootSha256")):
         independence[root] = merkle_fixture(sorted(row[name] for row in rows))
-    independence["independenceRootSha256"] = frame("serverware.policyAuthorityKeyIndependence/v1",
+    independence["independenceRootSha256"] = frame("catchplate.policyAuthorityKeyIndependence/v1",
         [rows, independence["keyIdSetRootSha256"], independence["spkiSetRootSha256"], independence["keyMaterialSetRootSha256"]])
     assignment.update(issuedAtUnixNanos=NOW - 10_000_000_000, expiresAtUnixNanos=NOW + 60_000_000_000,
         observationWindow={"maximumEvidenceAgeNanos": 60_000_000_000})
@@ -93,7 +93,7 @@ def fixture():
     envelope.update(payloadSha256=sha(canonical(assignment)), signingKeyId=signing_public["keyId"],
         signingKeySpkiSha256=signing_public["keySpkiSha256"],
         signature=encoded(signing.sign(signed_message(ASSIGNMENT_DOMAIN, assignment))))
-    trust = {"apiVersion": "serverware.nativeShadowGuestTrust/v1", "checkpoint": {
+    trust = {"apiVersion": "catchplate.nativeShadowGuestTrust/v1", "checkpoint": {
         "checkpointId": synthetic("trust-checkpoint"), "asOfUnixNanos": NOW - 10_000_000_000,
         "revocationGeneration": 1, "revocationRootSha256": synthetic("trust-revocation")},
         "assignmentKey": trust_key(signing_public), "timeKey": trust_key(key_fixture("time")[1]),
@@ -108,19 +108,19 @@ def fixture():
         "bootstrapRuntimeSha256", "dependencyLockSha256", "buildRecipeSha256", "provenanceSha256")}
     image.update(imageSha256=bridge["imageSha256"], executableSha256=bridge["workerExecutableSha256"],
         seccompPolicy=copy.deepcopy(bridge["seccompPolicy"]))
-    transport = {"apiVersion": "serverware.nativeShadowKeyKmsTransport/v1", "kmsParentPort": 10443,
+    transport = {"apiVersion": "catchplate.nativeShadowKeyKmsTransport/v1", "kmsParentPort": 10443,
         "kmsKeyId": "synthetic-test-kms-key-not-provisioned", "ciphertextBlobSha256": synthetic("ciphertext"),
-        "encryptionContext": {"serverwarePurpose": "native-shadow-local-role-keys/v1"},
+        "encryptionContext": {"catchplatePurpose": "native-shadow-local-role-keys/v1"},
         "kekSha256": synthetic("kek"), "encryptedInventorySha256": synthetic("inventory"),
         "helperImage": {"profile": "sealed-memfd-squashfs-v1",
-            "imagePath": "/opt/serverware/native-shadow-key-delivery-runtime.squashfs",
+            "imagePath": "/opt/catchplate/native-shadow-key-delivery-runtime.squashfs",
             **{name: synthetic("helper/" + name) for name in ("imageSha256", "interpreterSha256", "helperSha256")}}}
-    configuration = {"apiVersion": "serverware.nativeShadowDriverBootstrapConfiguration/v4",
+    configuration = {"apiVersion": "catchplate.nativeShadowDriverBootstrapConfiguration/v4",
         "bootstrapAuthority": cold_key(boot_key), "phaseTwoAuthority": cold_key(phase_key),
-        "deliveryConfiguration": {"path": "/etc/serverware/synthetic-bridge-cold.json", "sha256": synthetic("cold")},
+        "deliveryConfiguration": {"path": "/etc/catchplate/synthetic-bridge-cold.json", "sha256": synthetic("cold")},
         "uid": 61000, "gid": 61000, "image": image,
-        "continuation": {"apiVersion": "serverware.nativeShadowDriverContinuationPreparation/v3", "keyTransport": transport},
-        "lifecycle": {"apiVersion": "serverware.nativeShadowDriverLifecyclePolicy/v3", "cleanupReserveNanos": 1000000,
+        "continuation": {"apiVersion": "catchplate.nativeShadowDriverContinuationPreparation/v3", "keyTransport": transport},
+        "lifecycle": {"apiVersion": "catchplate.nativeShadowDriverLifecyclePolicy/v3", "cleanupReserveNanos": 1000000,
             "gate": {"uid": 65534, "gid": 65534, "executableSha256": synthetic("gate")},
             "constructedAdmissionAuthority": keys["custody-supervisor-capability"][1]}}
     configuration_raw = canonical(configuration)
@@ -133,13 +133,13 @@ def fixture():
         "processStartTimeTicks": 100, "pidfdInode": descriptors[0]["inode"], "cgroupId": 3,
         "cgroupMountId": 2, "cgroupInode": descriptors[2]["inode"],
         "retainedDescriptorManifestSha256": sha(canonical(descriptors)), "verifiedAtBoottimeNanos": 1000}
-    driver["identitySha256"] = frame("serverware.policyShadowCustodyKernelDriverIdentity/v1", list(driver.values()))
-    observation = {"apiVersion": "serverware.nativeShadowDriverObservation/v1", "configurationSha256": sha(configuration_raw),
+    driver["identitySha256"] = frame("catchplate.policyShadowCustodyKernelDriverIdentity/v1", list(driver.values()))
+    observation = {"apiVersion": "catchplate.nativeShadowDriverObservation/v1", "configurationSha256": sha(configuration_raw),
         "windowSha256": synthetic("original-window"), "invocationId": invocation, "processId": 43,
         "uid": 61000, "gid": 61000, "cgroupOriginalSha256": synthetic("cgroup-original"),
         "root": descriptors[-1], "seccompFilterCount": 1, "descriptors": descriptors, "driver": driver}
     parent = {"processId": 42, "startTimeTicks": 99, "parentId": 2, "pidfdDevice": 0, "pidfdInode": 77}
-    early = {"apiVersion": "serverware.nativeShadowBootstrapDriverAdmission/v1", "purpose": "native-driver-bootstrap-admission",
+    early = {"apiVersion": "catchplate.nativeShadowBootstrapDriverAdmission/v1", "purpose": "native-driver-bootstrap-admission",
         "configurationSha256": sha(configuration_raw), "windowSha256": observation["windowSha256"],
         "bootstrapObservationOriginal": canonical(observation).decode("ascii"), "parent": parent,
         "parentExecutableSha256": synthetic("parent-executable"), "pidNamespaceSha256": synthetic("pid-namespace"),
@@ -155,7 +155,7 @@ def fixture():
         maximumInFlightCalls=1, maximumAsyncDurabilityNanos=1_000_000)
     scope = scope_fixture(envelope)
     authority = assignment["custodyAuthority"]
-    coverage = frame("serverware.policyShadowCustodyOperationCoverage/v1", OPERATIONS)
+    coverage = frame("catchplate.policyShadowCustodyOperationCoverage/v1", OPERATIONS)
     instance = sha(invocation.encode("ascii"))
     binding = {"assignmentId": assignment["assignmentId"], "assignmentPayloadSha256": envelope["payloadSha256"],
         "assignmentRevision": assignment["assignmentRevision"],
@@ -168,19 +168,19 @@ def fixture():
         "operationCoverageRootSha256": coverage, "kernelRetainedDriverIdentitySha256": driver["identitySha256"],
         "assertedCustodyKeySetRootSha256": scope["asserted_custody_key_set_root_sha256"],
         "nativeClosureSet": copy.deepcopy(assignment["nativeClosureSet"])}
-    binding_sha = frame("serverware.policyShadowProductionCustodyConfiguration/v2", binding)
+    binding_sha = frame("catchplate.policyShadowProductionCustodyConfiguration/v2", binding)
     scope["production_configuration_binding_sha256"] = binding_sha
-    scope["binding_sha256"] = frame("serverware.policyShadowProductionCustodyProofScope/v2",
+    scope["binding_sha256"] = frame("catchplate.policyShadowProductionCustodyProofScope/v2",
         [scope[name] for name in EXPECTED_SCOPE_VALUES + EXPECTED_SCOPE_ROOTS])
-    reaper = {"reaperInstanceSha256": frame("serverware.nativeShadowStableParentInstance/v1", [parent, instance]),
+    reaper = {"reaperInstanceSha256": frame("catchplate.nativeShadowStableParentInstance/v1", [parent, instance]),
         "reaperExecutableSha256": early["parentExecutableSha256"], "supervisorInstanceSha256": instance,
         "supervisorBootIdSha256": boot_sha, "kernelDriverIdentitySha256": driver["identitySha256"],
         "subreaperProcessStartTimeTicks": 99, "pidfdNamespaceSha256": early["pidNamespaceSha256"],
         "retainedDescriptorSetSha256": driver["retainedDescriptorManifestSha256"], "ownershipEpoch": 99,
         "independentRestartForbidden": True}
-    reaper["identitySha256"] = frame("serverware.policyShadowCustodyStableReaper/v1", list(reaper.values()))
+    reaper["identitySha256"] = frame("catchplate.policyShadowCustodyStableReaper/v1", list(reaper.values()))
     result_key = keys["custody-result-envelope"][1]
-    dispatch = frame("serverware.policyShadowCustodyDispatchManifest/v1", ["serverware.policyShadowCustodyDispatch/v2",
+    dispatch = frame("catchplate.policyShadowCustodyDispatchManifest/v1", ["catchplate.policyShadowCustodyDispatch/v2",
         coverage, production["dispatcherProtocolSetSha256"], driver["identitySha256"], reaper["identitySha256"],
         driver["driverExecutableSha256"], production["signerBackendSha256"], production["persistenceBackendSha256"],
         production["retrievalBackendSha256"], 8 * 1024 * 1024, 8 * 1024 * 1024,
@@ -188,9 +188,9 @@ def fixture():
     recipe = {"dispatchManifestSha256": dispatch, "driverGenerationReceiptSha256": sha(bootstrap),
         "kernelDriverIdentitySha256": driver["identitySha256"], "retainedDescriptorSetSha256": driver["retainedDescriptorManifestSha256"],
         "operationCoverageRootSha256": coverage, "stableReaperIdentity": reaper}
-    fragment = {"apiVersion": "serverware.nativePilotOrdinaryGenerationPolicy/v1",
+    fragment = {"apiVersion": "catchplate.nativePilotOrdinaryGenerationPolicy/v1",
         "installationIssuedAtUnixNanos": NOW - 1_000_000_000, "installationExpiresAtUnixNanos": NOW + 1_000_000_000}
-    arguments = {"measured": {"apiVersion": "serverware.nativePilotMeasuredConfiguration/v2", "recipeSha256": synthetic("recipe"),
+    arguments = {"measured": {"apiVersion": "catchplate.nativePilotMeasuredConfiguration/v2", "recipeSha256": synthetic("recipe"),
         "configurationBindingOriginal": canonical(binding).decode("ascii"), "configurationBindingSha256": binding_sha,
         "proofScopeOriginal": canonical(scope).decode("ascii"),
         "production": {**production, "expectedConfigurationBindingSha256": binding_sha}},

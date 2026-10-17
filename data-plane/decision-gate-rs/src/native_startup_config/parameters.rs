@@ -3,8 +3,8 @@
 use super::{bounded_absolute_path, ensure};
 use super::super::*;
 use super::super::native_startup::NativeStartupParametersV1;
-use serverware_decision_gate::enclave_runtime_identity_v1::RuntimeScopeCommitmentsV1;
-use serverware_decision_gate::native_upstream_relays_v1::NativeRelayAssignmentV1;
+use catchplate_decision_gate::enclave_runtime_identity_v1::RuntimeScopeCommitmentsV1;
+use catchplate_decision_gate::native_upstream_relays_v1::NativeRelayAssignmentV1;
 use base64::Engine as _;
 
 #[derive(Deserialize)]
@@ -24,7 +24,7 @@ pub(super) struct LaunchV1 {
 
 impl LaunchV1 {
     pub(super) fn validate(&self, configuration_pin: &str) -> Result<(), String> {
-        ensure(self.api_version == "serverware.nativeStartupLaunch/v1"
+        ensure(self.api_version == "catchplate.nativeStartupLaunch/v1"
             && self.configuration_sha256 == configuration_pin
             && is_sha256_digest(&self.release_record_sha256),
             "native launch version, configuration join or release reference differs")?;
@@ -109,7 +109,7 @@ impl NativeSettingsV1 {
         let enrollment_authorizer = match enrollment {
             None => None,
             Some(super::EnrollmentParts { authorizer: original, endpoint, setup_authorizer }) => {
-                ensure(original.api_version == "serverware.nativeEnrollmentAuthorizer/v1",
+                ensure(original.api_version == "catchplate.nativeEnrollmentAuthorizer/v1",
                     "native enrollment authorizer version differs")?;
                 let authorizer = native_enrollment_authorizer::NativeEnrollmentAuthorizer::from_original(
                     original.public_key_pem.as_bytes(), &original.public_key_pem_sha256, &endpoint,
@@ -118,7 +118,7 @@ impl NativeSettingsV1 {
                 Some(match setup_authorizer {
                     None => authorizer,
                     Some(setup) => {
-                        ensure(setup.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+                        ensure(setup.api_version == "catchplate.nativeEnrollmentSetupAuthorizer/v1",
                             "native enrollment setup authorizer version differs")?;
                         authorizer.with_setup_original(setup.public_key_pem.as_bytes(),
                             &setup.public_key_pem_sha256)?

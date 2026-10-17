@@ -25,16 +25,16 @@ import test_nitro_kms_evidence as nitro_evidence_test  # noqa: E402
 import launch_authorization  # noqa: E402
 import run_production_readiness  # noqa: E402
 
-FINAL_FIXTURE_IDENTITY_API_VERSION = "serverware.finalCompletionIdentity/v3"
+FINAL_FIXTURE_IDENTITY_API_VERSION = "catchplate.finalCompletionIdentity/v3"
 FINAL_FIXTURE_PIPELINE = "manifest-v6-promoted-oci-nitro-eif"
 FINAL_FIXTURE_BRIDGE_API_VERSION = (
-    "serverware.productionReleaseCompletionBridge/v1"
+    "catchplate.productionReleaseCompletionBridge/v1"
 )
 FINAL_FIXTURE_ARTIFACT_BINDINGS_API_VERSION = (
-    "serverware.manifestV6CompletionArtifactBindings/v1"
+    "catchplate.manifestV6CompletionArtifactBindings/v1"
 )
 FINAL_FIXTURE_CANONICAL_PROFILE = (
-    "serverware.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
+    "catchplate.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
 )
 
 
@@ -163,8 +163,8 @@ def verify_readiness_observation_body_revalidation(
                 "verified": False,
             }
             proof = {
-                "apiVersion": "serverware.completionProof/v6",
-                "kind": "ServerwarePreEnclaveReadiness",
+                "apiVersion": "catchplate.completionProof/v6",
+                "kind": "CatchplatePreEnclaveReadiness",
                 "verificationOk": True,
                 "finalCompletionVerified": False,
                 "actionAuthorization": None,
@@ -209,20 +209,20 @@ def verify_readiness_observation_body_revalidation(
                     "ok_for_action": False,
                     "authority_boundary": {
                         "apiVersion": (
-                            "serverware.productionHostReadinessBoundary/v1"
+                            "catchplate.productionHostReadinessBoundary/v1"
                         ),
                         "verificationMode": "readiness",
                         "launchManifestApiVersion": (
-                            "serverware.productionReadinessLaunch/v3"
+                            "catchplate.productionReadinessLaunch/v3"
                         ),
                         "launchAuthorizationRequestApiVersion": (
-                            "serverware.launchAuthorizationRequest/v2"
+                            "catchplate.launchAuthorizationRequest/v2"
                         ),
                         "launchAuthorizationApiVersion": (
-                            "serverware.launchAuthorization/v2"
+                            "catchplate.launchAuthorization/v2"
                         ),
                         "bootstrapReceiptApiVersion": (
-                            "serverware.bootstrapReceipt/v3"
+                            "catchplate.bootstrapReceipt/v3"
                         ),
                         "authorizationScope": "trusted-host-readiness",
                         "freshnessAuthority": "trusted-host-wall-clock",
@@ -247,7 +247,7 @@ def verify_readiness_observation_body_revalidation(
                 "nonce_rollback_assurance": {
                     **manual_nonce_assurance,
                     "launchManifest": {
-                        "apiVersion": "serverware.productionReadinessLaunch/v3",
+                        "apiVersion": "catchplate.productionReadinessLaunch/v3",
                         "purpose": "readiness-only",
                         "verified": False,
                     },
@@ -281,7 +281,7 @@ def verify_readiness_observation_body_revalidation(
                 },
                 "proof_path": str(proof_path),
                 "integrity_metadata": {
-                    "apiVersion": "serverware.readinessChecksum/v1",
+                    "apiVersion": "catchplate.readinessChecksum/v1",
                     "publicationToken": generation,
                     "detached_sha256_path": str(digest_path),
                     "scope": "checksum-only",
@@ -576,7 +576,7 @@ def _obsolete_release_completion_result_v1_fixture() -> dict[str, object]:
         role: _fixture_digest(f"trust-role-{role}") for role in trust_roles
     }
     promotion_canonical_payload = {
-        "apiVersion": "serverware.verificationPromotionAcceptance/v2",
+        "apiVersion": "catchplate.verificationPromotionAcceptance/v2",
         "candidatePromotionContractSha256": _fixture_digest(
             "candidate-promotion-contract"
         ),
@@ -741,7 +741,7 @@ def _obsolete_release_completion_result_v1_fixture() -> dict[str, object]:
         }
     )
     next_state_payload: dict[str, object] = {
-        "apiVersion": "serverware.monotonicReleaseWitnessState/v2",
+        "apiVersion": "catchplate.monotonicReleaseWitnessState/v2",
         "challengeConsumptionSha256": _fixture_json_digest(
             challenge_consumption
         ),
@@ -769,7 +769,7 @@ def _obsolete_release_completion_result_v1_fixture() -> dict[str, object]:
     }
     state_commit_receipt_identity = {
         "apiVersion": (
-            "serverware.publicNitroStateCommitReceiptIdentity/v1"
+            "catchplate.publicNitroStateCommitReceiptIdentity/v1"
         ),
         "commitId": "fixture-commit",
         "receiptFileSha256": _fixture_digest("state-commit-file"),
@@ -779,7 +779,7 @@ def _obsolete_release_completion_result_v1_fixture() -> dict[str, object]:
     }
     pre_authorization_core = {
         "apiVersion": (
-            "serverware.publicNitroPreAuthorizationResultCore/v1"
+            "catchplate.publicNitroPreAuthorizationResultCore/v1"
         ),
         "canonicalProfile": (
             FINAL_FIXTURE_CANONICAL_PROFILE
@@ -801,7 +801,7 @@ def _obsolete_release_completion_result_v1_fixture() -> dict[str, object]:
         "transitionSha256": state_transition["transitionSha256"],
     }
     current_head = {
-        "apiVersion": "serverware.publicNitroStateStoreHead/v2",
+        "apiVersion": "catchplate.publicNitroStateStoreHead/v2",
         "challengeConsumptionSha256": next_client_state[
             "challengeConsumptionSha256"
         ],
@@ -817,7 +817,7 @@ def _obsolete_release_completion_result_v1_fixture() -> dict[str, object]:
     current_head_sha256 = _fixture_json_digest(current_head)
     reservation_identity = {
         "apiVersion": (
-            "serverware.publicNitroCurrentHeadReservationIdentity/v1"
+            "catchplate.publicNitroCurrentHeadReservationIdentity/v1"
         ),
         "authorizationId": "fixture-authorization",
         "challengeConsumptionSha256": next_client_state[
@@ -848,7 +848,7 @@ def _obsolete_release_completion_result_v1_fixture() -> dict[str, object]:
     )
     authorization_identity = {
         "apiVersion": (
-            "serverware.publicNitroCurrentHeadAuthorizationIdentity/v1"
+            "catchplate.publicNitroCurrentHeadAuthorizationIdentity/v1"
         ),
         "authorizationFileSha256": _fixture_digest("authorization-file"),
         "authorizationId": "fixture-authorization",
@@ -861,7 +861,7 @@ def _obsolete_release_completion_result_v1_fixture() -> dict[str, object]:
         "storeId": "fixture-store",
     }
     current_final_head = {
-        "apiVersion": "serverware.publicNitroStateStoreFinalHead/v1",
+        "apiVersion": "catchplate.publicNitroStateStoreFinalHead/v1",
         "authorizationId": "fixture-authorization",
         "challengeConsumptionSha256": next_client_state[
             "challengeConsumptionSha256"
@@ -887,7 +887,7 @@ def _obsolete_release_completion_result_v1_fixture() -> dict[str, object]:
     current_final_head_sha256 = _fixture_json_digest(current_final_head)
     redemption_identity = {
         "apiVersion": (
-            "serverware.publicNitroCurrentHeadRedemptionReceiptIdentity/v1"
+            "catchplate.publicNitroCurrentHeadRedemptionReceiptIdentity/v1"
         ),
         "oneUseSequence": 2,
         "redemptionFileSha256": _fixture_digest("redemption-file"),
@@ -897,7 +897,7 @@ def _obsolete_release_completion_result_v1_fixture() -> dict[str, object]:
         "storeId": "fixture-store",
     }
     release_identity = {
-        "apiVersion": "serverware.releaseIdentity/v1",
+        "apiVersion": "catchplate.releaseIdentity/v1",
         "build": {
             "builderCoreSha256s": sorted(
                 [
@@ -1009,7 +1009,7 @@ def _obsolete_release_completion_result_v1_fixture() -> dict[str, object]:
         "rootHash": next_client_state["rootHash"],
     }
     witness_core = {
-        "apiVersion": "serverware.completionWitnessCore/v1",
+        "apiVersion": "catchplate.completionWitnessCore/v1",
         "pipeline": FINAL_FIXTURE_PIPELINE,
         "payload": witness_core_payload,
     }
@@ -1054,7 +1054,7 @@ def _obsolete_release_completion_result_v1_fixture() -> dict[str, object]:
     public_result = {
         "okForAction": False,
         "status": "redemption-verified-non-actionable",
-        "apiVersion": "serverware.publicNitroVerificationResult/v2",
+        "apiVersion": "catchplate.publicNitroVerificationResult/v2",
         "pipeline": FINAL_FIXTURE_PIPELINE,
         "productionIdentitySha256": _fixture_digest(
             "production-identity-file"
@@ -1163,7 +1163,7 @@ def _obsolete_release_completion_result_v1_fixture() -> dict[str, object]:
         "currentHeadOneUseSequence": 2,
     }
     state_commit = {
-        "apiVersion": "serverware.publicNitroStateCommit/v1",
+        "apiVersion": "catchplate.publicNitroStateCommit/v1",
         "status": "redemption-verified-non-actionable",
         "actionable": False,
         "redemptionVerified": True,
@@ -1227,7 +1227,7 @@ def _obsolete_release_completion_result_v1_fixture() -> dict[str, object]:
         "rollbackEpoch": 3,
     }
     protected_state_payload = {
-        "apiVersion": "serverware.protectedNitroClientStateIdentity/v1",
+        "apiVersion": "catchplate.protectedNitroClientStateIdentity/v1",
         "canonicalProfile": (
             FINAL_FIXTURE_CANONICAL_PROFILE
         ),
@@ -1265,15 +1265,15 @@ def _obsolete_release_completion_result_v1_fixture() -> dict[str, object]:
         "identitySha256": _fixture_json_digest(protected_state_payload),
     }
     host_bootstrap_boundary_payload: dict[str, object] = {
-        "apiVersion": "serverware.hostBootstrapBoundary/v1",
-        "launchManifestApiVersion": "serverware.productionReadinessLaunch/v3",
+        "apiVersion": "catchplate.hostBootstrapBoundary/v1",
+        "launchManifestApiVersion": "catchplate.productionReadinessLaunch/v3",
         "launchAuthorizationRequestApiVersion": (
-            "serverware.launchAuthorizationRequest/v2"
+            "catchplate.launchAuthorizationRequest/v2"
         ),
-        "launchAuthorizationApiVersion": "serverware.launchAuthorization/v2",
-        "bootstrapReceiptApiVersion": "serverware.bootstrapReceipt/v3",
+        "launchAuthorizationApiVersion": "catchplate.launchAuthorization/v2",
+        "bootstrapReceiptApiVersion": "catchplate.bootstrapReceipt/v3",
         "nonceRollbackAssuranceBindingApiVersion": (
-            "serverware.productionNonceRollbackAssuranceBinding/v1"
+            "catchplate.productionNonceRollbackAssuranceBinding/v1"
         ),
         "authorizationScope": "trusted-host-readiness",
         "freshnessAuthority": "trusted-host-wall-clock",
@@ -1444,11 +1444,11 @@ def _obsolete_release_completion_result_v1_fixture() -> dict[str, object]:
                 "http-response-envelope"
             ),
             "runtimeCustodyApiVersion": (
-                "serverware.enclaveKeyCustody/v3"
+                "catchplate.enclaveKeyCustody/v3"
             ),
-            "tlsScopeApiVersion": "serverware.enclaveTlsScope/v2",
+            "tlsScopeApiVersion": "catchplate.enclaveTlsScope/v2",
             "responseStatementApiVersion": (
-                "serverware.attestationResponse/v2"
+                "catchplate.attestationResponse/v2"
             ),
             "protectedPriorClientStateEnvelopeSha256": _fixture_digest(
                 "protected-state-envelope"
@@ -1555,7 +1555,7 @@ def _fixture_ed25519_material(
     label: str,
 ) -> tuple[Ed25519PrivateKey, str, str]:
     private_key = Ed25519PrivateKey.from_private_bytes(
-        hashlib.sha256(f"serverware-fixture:{label}".encode("ascii")).digest()
+        hashlib.sha256(f"catchplate-fixture:{label}".encode("ascii")).digest()
     )
     public_pem = private_key.public_key().public_bytes(
         serialization.Encoding.PEM,
@@ -1653,7 +1653,7 @@ def release_completion_result_v1_fixture() -> dict[str, object]:
     }
     public_role_registry_sha256 = _fixture_json_digest(
         {
-            "apiVersion": "serverware.publicNitroRoleRegistry/v1",
+            "apiVersion": "catchplate.publicNitroRoleRegistry/v1",
             "roles": public_roles,
         }
     )
@@ -1679,7 +1679,7 @@ def release_completion_result_v1_fixture() -> dict[str, object]:
         ),
     }
     next_state_core: dict[str, object] = {
-        "apiVersion": "serverware.monotonicReleaseWitnessState/v2",
+        "apiVersion": "catchplate.monotonicReleaseWitnessState/v2",
         "challengeConsumptionSha256": challenge_consumption_sha256,
         "checkpointSha256": witness["checkpointSha256"],
         "logId": _fixture_digest("witness-log"),
@@ -1704,7 +1704,7 @@ def release_completion_result_v1_fixture() -> dict[str, object]:
         "transitionSha256": _fixture_json_digest(transition_core),
     }
     state_commit = {
-        "apiVersion": "serverware.publicNitroStateCommit/v1",
+        "apiVersion": "catchplate.publicNitroStateCommit/v1",
         "status": "redemption-verified-non-actionable",
         "actionable": False,
         "redemptionVerified": True,
@@ -1760,7 +1760,7 @@ def release_completion_result_v1_fixture() -> dict[str, object]:
         "PCR2": _fixture_sha384("pcr2"),
     }
     public_result: dict[str, object] = {
-        "apiVersion": "serverware.publicNitroVerificationResult/v2",
+        "apiVersion": "catchplate.publicNitroVerificationResult/v2",
         "verificationOk": True,
         "finalCompletionVerified": True,
         "actionAuthorization": None,
@@ -1924,9 +1924,9 @@ def release_completion_result_v1_fixture() -> dict[str, object]:
         "final-role:launchAuthority"
     )
     host_context = {
-        "apiVersion": "serverware.hostReadinessContext/v1",
+        "apiVersion": "catchplate.hostReadinessContext/v1",
         "provided": True,
-        "completionProofApiVersion": "serverware.completionProof/v6",
+        "completionProofApiVersion": "catchplate.completionProof/v6",
         "completionProofFileSha256": _fixture_digest(
             "host-readiness-completion-proof-file"
         ),
@@ -1938,15 +1938,15 @@ def release_completion_result_v1_fixture() -> dict[str, object]:
         "authoritativeForFinalCompletion": False,
     }
     host_boundary_core: dict[str, object] = {
-        "apiVersion": "serverware.hostBootstrapBoundary/v1",
-        "launchManifestApiVersion": "serverware.productionReadinessLaunch/v3",
+        "apiVersion": "catchplate.hostBootstrapBoundary/v1",
+        "launchManifestApiVersion": "catchplate.productionReadinessLaunch/v3",
         "launchAuthorizationRequestApiVersion": (
-            "serverware.launchAuthorizationRequest/v2"
+            "catchplate.launchAuthorizationRequest/v2"
         ),
-        "launchAuthorizationApiVersion": "serverware.launchAuthorization/v2",
-        "bootstrapReceiptApiVersion": "serverware.bootstrapReceipt/v3",
+        "launchAuthorizationApiVersion": "catchplate.launchAuthorization/v2",
+        "bootstrapReceiptApiVersion": "catchplate.bootstrapReceipt/v3",
         "nonceRollbackAssuranceBindingApiVersion": (
-            "serverware.productionNonceRollbackAssuranceBinding/v1"
+            "catchplate.productionNonceRollbackAssuranceBinding/v1"
         ),
         "authorizationScope": "trusted-host-readiness",
         "freshnessAuthority": "trusted-host-wall-clock",
@@ -1980,7 +1980,7 @@ def release_completion_result_v1_fixture() -> dict[str, object]:
         role: final_roles[role] for role in sorted(final_roles)
     }
     global_role_registry_core = {
-        "apiVersion": "serverware.finalRoleRegistry/v1",
+        "apiVersion": "catchplate.finalRoleRegistry/v1",
         "roles": final_roles,
     }
     global_role_registry = {
@@ -2017,7 +2017,7 @@ def release_completion_result_v1_fixture() -> dict[str, object]:
         "resultSha256": result_sha256,
         "authenticity": {
             "apiVersion": (
-                "serverware.releaseCompletionResultSignature/v1"
+                "catchplate.releaseCompletionResultSignature/v1"
             ),
             "provider": "fixture-release-completion-signer",
             "signingKeyId": result_key_id,
@@ -2026,7 +2026,7 @@ def release_completion_result_v1_fixture() -> dict[str, object]:
             "signature": _fixture_ed25519_signature(
                 result_private,
                 (
-                    b"serverware.releaseCompletionResultSignature/v1"
+                    b"catchplate.releaseCompletionResultSignature/v1"
                     b"\x00Ed25519\x00"
                 ),
                 final_core,
@@ -2112,7 +2112,7 @@ def proof_policy_bundle(
     paths: list[str] | None = None,
 ) -> dict[str, object]:
     return {
-        "apiVersion": "serverware.policy/v1",
+        "apiVersion": "catchplate.policy/v1",
         "kind": "PolicyBundle",
         "metadata": {
             "id": "production-proof-policy",
@@ -2133,7 +2133,7 @@ def proof_policy_bundle(
                 # fixture admits only a local proof client; it is not a live
                 # deployment identity or evidence that any client connected.
                 "sourceCidrs": ["127.0.0.1/32"],
-                "requiredHeaders": {"X-Serverware-Agent": agent_id},
+                "requiredHeaders": {"X-Catchplate-Agent": agent_id},
             }
         ],
         "credentials": [],
@@ -2308,7 +2308,7 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
         )
     )
     assurance = {
-        "apiVersion": "serverware.nonceAuthorityAssurance/v1",
+        "apiVersion": "catchplate.nonceAuthorityAssurance/v1",
         "administrativeDomainSha256": "sha256:" + "a" * 64,
         "assuranceEvidenceSha256": "sha256:" + "b" * 64,
         "assuranceEvidenceType": "linearizableCasOperatorAttestation",
@@ -2380,19 +2380,19 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
     ).hexdigest()
 
     launcher_digest = "sha256:" + "3" * 64
-    release_root = "/opt/serverware/releases/fixture"
+    release_root = "/opt/catchplate/releases/fixture"
     receipt = {
         "apiVersion": run_production_readiness.BOOTSTRAP_RECEIPT_API_VERSION,
         "kind": run_production_readiness.BOOTSTRAP_RECEIPT_KIND,
         "launchId": "1" * 64,
         "bootIdSha256": "sha256:" + "2" * 64,
         "launcher": file_record(
-            "/opt/serverware/launchers/sha256-"
+            "/opt/catchplate/launchers/sha256-"
             + launcher_digest.removeprefix("sha256:")
-            + "/serverware-production-launcher",
+            + "/catchplate-production-launcher",
             "3",
         ),
-        "manifest": file_record("/etc/serverware/production-release-launch.json", "4"),
+        "manifest": file_record("/etc/catchplate/production-release-launch.json", "4"),
         "sourceTreeDigest": "sha256:" + "5" * 64,
         "nonceRollbackAssurance": {
             "apiVersion": (
@@ -2401,7 +2401,7 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
             "contractSha256": pins_contract_sha256,
             "pinsFile": {
                 **file_record(
-                    "/etc/serverware/nonce-rollback-assurance-pins.json",
+                    "/etc/catchplate/nonce-rollback-assurance-pins.json",
                     "0",
                 ),
                 "sha256": pins_file_sha256,
@@ -2426,7 +2426,7 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
                 "storeIdentitySha256": "sha256:" + "e" * 64,
             },
         },
-        "productionEnv": file_record("/etc/serverware/production-readiness.env", "9"),
+        "productionEnv": file_record("/etc/catchplate/production-readiness.env", "9"),
         "python": {
             **file_record(f"{release_root}/runtime/python/bin/python3", "a"),
             "importRoots": [
@@ -2454,17 +2454,17 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
         },
         "scripts": {
             "preflight": file_record(
-                "/opt/serverware/releases/fixture/scripts/production_host_preflight.py", "c"
+                "/opt/catchplate/releases/fixture/scripts/production_host_preflight.py", "c"
             ),
             "runner": file_record(
-                "/opt/serverware/releases/fixture/scripts/run_production_readiness.py", "d"
+                "/opt/catchplate/releases/fixture/scripts/run_production_readiness.py", "d"
             ),
         },
         "composeFile": file_record(
-            "/opt/serverware/releases/fixture/docker-compose.production.yml", "e"
+            "/opt/catchplate/releases/fixture/docker-compose.production.yml", "e"
         ),
         "inputs": {
-            name: file_record(f"/opt/serverware/releases/fixture/evidence/{name}.json", "f")
+            name: file_record(f"/opt/catchplate/releases/fixture/evidence/{name}.json", "f")
             for name in sorted(run_production_readiness.BOOTSTRAP_RECEIPT_INPUT_NAMES)
         },
         "argv": {"preflightSha256": "sha256:" + "6" * 64, "readinessSha256": "sha256:" + "7" * 64},
@@ -2859,7 +2859,7 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
         ),
         "launch attempt journal domain mismatch": (
             "request launchAttemptJournalDomain must equal "
-            "'serverware.launchAuthorizationAttemptJournal/v1'"
+            "'catchplate.launchAuthorizationAttemptJournal/v1'"
         ),
         "launch attempt recovery identity mismatch": (
             "request launch attempt recovery identity binding mismatch"
@@ -2890,7 +2890,7 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
     collision["policyIdentity"] = collision["launchAuthority"]
     mutate("launch attempt journal domain mismatch")["launchAuthorization"]["request"][
         "launchAttemptJournalDomain"
-    ] = "serverware.unrelatedJournal/v1"
+    ] = "catchplate.unrelatedJournal/v1"
     mutate("launch attempt recovery identity mismatch")["launchAuthorization"]["request"][
         "launchAttemptRecoveryIdentitySha256"
     ] = "sha256:" + "1" * 64
@@ -2965,7 +2965,7 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
         return
 
     def open_receipt(data: bytes, *, seal: bool) -> int:
-        descriptor = os.memfd_create("serverware-bootstrap-receipt-test", os.MFD_ALLOW_SEALING)
+        descriptor = os.memfd_create("catchplate-bootstrap-receipt-test", os.MFD_ALLOW_SEALING)
         os.write(descriptor, data)
         if seal:
             fcntl.fcntl(
@@ -3255,13 +3255,13 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
 
     mutations = []
     wrong_launcher_path = json.loads(json.dumps(receipt))
-    wrong_launcher_path["launcher"]["path"] = "/opt/serverware/launchers/unbound/serverware-production-launcher"
+    wrong_launcher_path["launcher"]["path"] = "/opt/catchplate/launchers/unbound/catchplate-production-launcher"
     mutations.append(("non-content-addressed launcher", wrong_launcher_path))
     missing_input = json.loads(json.dumps(receipt))
     missing_input["inputs"].pop("bench")
     mutations.append(("open input set", missing_input))
     v2_downgrade = json.loads(json.dumps(receipt))
-    v2_downgrade["apiVersion"] = "serverware.bootstrapReceipt/v2"
+    v2_downgrade["apiVersion"] = "catchplate.bootstrapReceipt/v2"
     mutations.append(("v2 receipt downgrade", v2_downgrade))
     open_metadata = json.loads(json.dumps(receipt))
     open_metadata["manifest"]["metadata"]["unexpected"] = 1
@@ -3600,7 +3600,7 @@ def verify_exact_p99_policy_contract() -> None:
             try:
                 run_production_readiness.select_p99_limit(env_value, cli_value, launcher_enforced=enforced)
             except ValueError as exc:
-                if "must match SERVERWARE_COMPLETION_P99_LIMIT_MS exactly in nanoseconds" not in str(exc):
+                if "must match CATCHPLATE_COMPLETION_P99_LIMIT_MS exactly in nanoseconds" not in str(exc):
                     raise
             else:
                 raise AssertionError("p99 selection rounded conflicting CLI/env policy together")
@@ -3735,38 +3735,38 @@ def main() -> None:
         security_args = (*artifact_args, *trust_args)
         minimal_env = tmp / "minimal.env"
         minimal_values = {
-                "SERVERWARE_RELEASE_CHANNEL": "prod",
-                "SERVERWARE_ADMIN_TOKEN": "prod-admin-token-32-bytes-minimum-value",
-                "SERVERWARE_OIDC_JWKS_JSON": canonical_json({"keys": [{"kid": "prod key"}]}),
-                "SERVERWARE_PROXY_RESPONSE_PROOF_FILE": str(tmp / "proxy-response-proof.json"),
-                "SERVERWARE_PROXY_PROOF_CONTRACT": "buffered-v3",
-                "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND": "/opt/serverware/bin/serverware-proof-client",
-                "SERVERWARE_PROXY_PROOF_ADDRESS": "proxy.prod.internal:9090",
-                "SERVERWARE_PROXY_PROOF_URL": "https://proof-target.prod.internal/health",
-                "SERVERWARE_PROXY_PROOF_CA_BUNDLE": str(tmp / "proxy-ca.pem"),
-                "SERVERWARE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY": str(tmp / "collector-key.pem"),
-                "SERVERWARE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY": str(tmp / "collector-key.pub.pem"),
-                "SERVERWARE_PROXY_PROOF_VERIFIER_PUBLIC_KEY": str(tmp / "proxy-verifier.pub.pem"),
-                "SERVERWARE_DATA_PLANE_INSTANCE_ID": "spiffe://prod.serverware.internal/decision-gate/instance-01",
-                "SERVERWARE_PROXY_PROOF_AGENT_ID": "production-proof-agent",
-                "SERVERWARE_PROXY_PROOF_PRINCIPAL_ID": "agent:production-proof",
-                "SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS": "240",
-                "SERVERWARE_COMPLETION_P99_LIMIT_MS": "20.0",
-                "SERVERWARE_PROXY_EXPECTED_CLIENT_REQUEST_DIGEST": expected_client_request_digest,
-                "SERVERWARE_PROXY_EXPECTED_REQUEST_DIGEST": expected_request_digest,
-                "SERVERWARE_PROXY_EXPECTED_OPERATION_DIGEST": expected_operation_digest,
+                "CATCHPLATE_RELEASE_CHANNEL": "prod",
+                "CATCHPLATE_ADMIN_TOKEN": "prod-admin-token-32-bytes-minimum-value",
+                "CATCHPLATE_OIDC_JWKS_JSON": canonical_json({"keys": [{"kid": "prod key"}]}),
+                "CATCHPLATE_PROXY_RESPONSE_PROOF_FILE": str(tmp / "proxy-response-proof.json"),
+                "CATCHPLATE_PROXY_PROOF_CONTRACT": "buffered-v3",
+                "CATCHPLATE_PROXY_PROOF_COLLECTOR_COMMAND": "/opt/catchplate/bin/catchplate-proof-client",
+                "CATCHPLATE_PROXY_PROOF_ADDRESS": "proxy.prod.internal:9090",
+                "CATCHPLATE_PROXY_PROOF_URL": "https://proof-target.prod.internal/health",
+                "CATCHPLATE_PROXY_PROOF_CA_BUNDLE": str(tmp / "proxy-ca.pem"),
+                "CATCHPLATE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY": str(tmp / "collector-key.pem"),
+                "CATCHPLATE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY": str(tmp / "collector-key.pub.pem"),
+                "CATCHPLATE_PROXY_PROOF_VERIFIER_PUBLIC_KEY": str(tmp / "proxy-verifier.pub.pem"),
+                "CATCHPLATE_DATA_PLANE_INSTANCE_ID": "spiffe://prod.catchplate.internal/decision-gate/instance-01",
+                "CATCHPLATE_PROXY_PROOF_AGENT_ID": "production-proof-agent",
+                "CATCHPLATE_PROXY_PROOF_PRINCIPAL_ID": "agent:production-proof",
+                "CATCHPLATE_PROXY_PROOF_MAX_AGE_SECONDS": "240",
+                "CATCHPLATE_COMPLETION_P99_LIMIT_MS": "20.0",
+                "CATCHPLATE_PROXY_EXPECTED_CLIENT_REQUEST_DIGEST": expected_client_request_digest,
+                "CATCHPLATE_PROXY_EXPECTED_REQUEST_DIGEST": expected_request_digest,
+                "CATCHPLATE_PROXY_EXPECTED_OPERATION_DIGEST": expected_operation_digest,
                 }
         for setting in (
-            "SERVERWARE_PROXY_PROOF_CA_BUNDLE",
-            "SERVERWARE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY",
-            "SERVERWARE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY",
-            "SERVERWARE_PROXY_PROOF_VERIFIER_PUBLIC_KEY",
+            "CATCHPLATE_PROXY_PROOF_CA_BUNDLE",
+            "CATCHPLATE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY",
+            "CATCHPLATE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY",
+            "CATCHPLATE_PROXY_PROOF_VERIFIER_PUBLIC_KEY",
         ):
             path = Path(minimal_values[setting])
             path.write_bytes(f"{setting}\n".encode("ascii"))
             path.chmod(
                 0o600
-                if setting == "SERVERWARE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY"
+                if setting == "CATCHPLATE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY"
                 else 0o644
             )
         write_env(minimal_env, minimal_values)
@@ -3860,7 +3860,7 @@ def main() -> None:
             ]
             != str(trust_paths["control_plane_response_signing_public_key"])
             or collector_argv[collector_argv.index("--expected-server-instance-id") + 1]
-            != "spiffe://prod.serverware.internal/decision-gate/instance-01"
+            != "spiffe://prod.catchplate.internal/decision-gate/instance-01"
             or collector_argv[collector_argv.index("--expected-principal-id") + 1]
             != "agent:production-proof"
             or collector_argv[collector_argv.index("--max-age-seconds") + 1] != "240"
@@ -3887,7 +3887,7 @@ def main() -> None:
             or "--policy-activation-signature" not in completion_argv
             or "--reproducible-build-verification" not in completion_argv
             or "--reproducible-build-signature" not in completion_argv
-            or "/etc/serverware/kms-materials.json" not in completion_argv
+            or "/etc/catchplate/kms-materials.json" not in completion_argv
             or "--proxy-response-proof" not in completion_argv
             or completion_argv[completion_argv.index("--proxy-proof-contract") + 1]
             != "buffered-v3"
@@ -3931,7 +3931,7 @@ def main() -> None:
             != "$COLLECTOR_SUMMARY.tls_channel_binding"
         ):
             raise AssertionError(f"runner completion command does not bind current env files: {completion_argv}")
-        if "SERVERWARE_PROXY_CLIENT_NONCE" in plan["env_keys"]:
+        if "CATCHPLATE_PROXY_CLIENT_NONCE" in plan["env_keys"]:
             raise AssertionError(f"runner still accepts a static response-proof nonce: {plan['env_keys']}")
         if "prod-admin-token-32-bytes-minimum-value" in dry_run.stdout.decode("utf-8"):
             raise AssertionError(f"runner dry-run leaked environment values: {plan}")
@@ -3948,7 +3948,7 @@ def main() -> None:
             (
                 "one-nanosecond-conflict",
                 "9223372036854.775806", "9223372036854.775807", None,
-                "--p99-limit-ms must match SERVERWARE_COMPLETION_P99_LIMIT_MS exactly in nanoseconds",
+                "--p99-limit-ms must match CATCHPLATE_COMPLETION_P99_LIMIT_MS exactly in nanoseconds",
             ),
             (
                 "invalid-cli", "20.0", "2e1", None,
@@ -3956,13 +3956,13 @@ def main() -> None:
             ),
             (
                 "invalid-env", "20.0000000", "20.0", None,
-                "SERVERWARE_COMPLETION_P99_LIMIT_MS must be canonical decimal milliseconds",
+                "CATCHPLATE_COMPLETION_P99_LIMIT_MS must be canonical decimal milliseconds",
             ),
         ):
             p99_env_path = tmp / f"p99-{label}.env"
             write_env(
                 p99_env_path,
-                {**minimal_values, "SERVERWARE_COMPLETION_P99_LIMIT_MS": env_text},
+                {**minimal_values, "CATCHPLATE_COMPLETION_P99_LIMIT_MS": env_text},
             )
             p99_result = run_runner(
                 "--env-file", str(p99_env_path),
@@ -3993,10 +3993,10 @@ def main() -> None:
             streaming_env,
             {
                 **minimal_values,
-                "SERVERWARE_PROXY_PROOF_CONTRACT": "streaming-v1",
-                "SERVERWARE_PROXY_STREAM_BODY_FILE": str(streaming_body_path),
-                "SERVERWARE_PROXY_PROOF_MAX_STREAM_BYTES": "4096",
-                "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
+                "CATCHPLATE_PROXY_PROOF_CONTRACT": "streaming-v1",
+                "CATCHPLATE_PROXY_STREAM_BODY_FILE": str(streaming_body_path),
+                "CATCHPLATE_PROXY_PROOF_MAX_STREAM_BYTES": "4096",
+                "CATCHPLATE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
             },
         )
         streaming_dry_run = run_runner(
@@ -4045,17 +4045,17 @@ def main() -> None:
                 f"collector={streaming_collector_argv} completion={streaming_completion_argv}"
             )
         for missing_setting in (
-            "SERVERWARE_PROXY_STREAM_BODY_FILE",
-            "SERVERWARE_PROXY_PROOF_MAX_STREAM_BYTES",
-            "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST",
+            "CATCHPLATE_PROXY_STREAM_BODY_FILE",
+            "CATCHPLATE_PROXY_PROOF_MAX_STREAM_BYTES",
+            "CATCHPLATE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST",
         ):
             incomplete_streaming_env = tmp / f"missing-{missing_setting.lower()}.env"
             incomplete_values = {
                 **minimal_values,
-                "SERVERWARE_PROXY_PROOF_CONTRACT": "streaming-v1",
-                "SERVERWARE_PROXY_STREAM_BODY_FILE": str(streaming_body_path),
-                "SERVERWARE_PROXY_PROOF_MAX_STREAM_BYTES": "4096",
-                "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
+                "CATCHPLATE_PROXY_PROOF_CONTRACT": "streaming-v1",
+                "CATCHPLATE_PROXY_STREAM_BODY_FILE": str(streaming_body_path),
+                "CATCHPLATE_PROXY_PROOF_MAX_STREAM_BYTES": "4096",
+                "CATCHPLATE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
             }
             incomplete_values.pop(missing_setting)
             write_env(incomplete_streaming_env, incomplete_values)
@@ -4083,10 +4083,10 @@ def main() -> None:
                 boundary_env,
                 {
                     **minimal_values,
-                    "SERVERWARE_PROXY_PROOF_CONTRACT": "streaming-v1",
-                    "SERVERWARE_PROXY_STREAM_BODY_FILE": str(streaming_body_path),
-                    "SERVERWARE_PROXY_PROOF_MAX_STREAM_BYTES": str(stream_limit),
-                    "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
+                    "CATCHPLATE_PROXY_PROOF_CONTRACT": "streaming-v1",
+                    "CATCHPLATE_PROXY_STREAM_BODY_FILE": str(streaming_body_path),
+                    "CATCHPLATE_PROXY_PROOF_MAX_STREAM_BYTES": str(stream_limit),
+                    "CATCHPLATE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
                 },
             )
             boundary_result = run_runner(
@@ -4112,7 +4112,7 @@ def main() -> None:
             observation_env,
             {
                 **minimal_values,
-                "SERVERWARE_PROXY_PROOF_CONTRACT": "observation-v1",
+                "CATCHPLATE_PROXY_PROOF_CONTRACT": "observation-v1",
                 run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: str(
                     observation_body_path
                 ),
@@ -4210,7 +4210,7 @@ def main() -> None:
             )
             incomplete_values = {
                 **minimal_values,
-                "SERVERWARE_PROXY_PROOF_CONTRACT": "observation-v1",
+                "CATCHPLATE_PROXY_PROOF_CONTRACT": "observation-v1",
                 run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: str(
                     observation_body_path
                 ),
@@ -4243,7 +4243,7 @@ def main() -> None:
                 boundary_env,
                 {
                     **minimal_values,
-                    "SERVERWARE_PROXY_PROOF_CONTRACT": "observation-v1",
+                    "CATCHPLATE_PROXY_PROOF_CONTRACT": "observation-v1",
                     run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: str(
                         observation_body_path
                     ),
@@ -4277,7 +4277,7 @@ def main() -> None:
             ),
             (
                 "colliding-body",
-                minimal_values["SERVERWARE_PROXY_RESPONSE_PROOF_FILE"],
+                minimal_values["CATCHPLATE_PROXY_RESPONSE_PROOF_FILE"],
                 "4096",
                 "must use different filesystem locations",
             ),
@@ -4293,7 +4293,7 @@ def main() -> None:
                 invalid_observation_env,
                 {
                     **minimal_values,
-                    "SERVERWARE_PROXY_PROOF_CONTRACT": "observation-v1",
+                    "CATCHPLATE_PROXY_PROOF_CONTRACT": "observation-v1",
                     run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: body_path,
                     run_production_readiness.PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV: limit,
                 },
@@ -4317,7 +4317,7 @@ def main() -> None:
             dotdot_alias_env,
             {
                 **minimal_values,
-                "SERVERWARE_PROXY_PROOF_CONTRACT": "observation-v1",
+                "CATCHPLATE_PROXY_PROOF_CONTRACT": "observation-v1",
                 run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: str(
                     tmp / "body-alias" / ".." / "proxy-response-proof.json"
                 ),
@@ -4349,10 +4349,10 @@ def main() -> None:
             symlink_parent_alias_env,
             {
                 **minimal_values,
-                "SERVERWARE_PROXY_RESPONSE_PROOF_FILE": str(
+                "CATCHPLATE_PROXY_RESPONSE_PROOF_FILE": str(
                     alias_parent / "shared-output"
                 ),
-                "SERVERWARE_PROXY_PROOF_CONTRACT": "observation-v1",
+                "CATCHPLATE_PROXY_PROOF_CONTRACT": "observation-v1",
                 run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: str(
                     alias_parent_link / "shared-output"
                 ),
@@ -4384,8 +4384,8 @@ def main() -> None:
             hardlink_alias_env,
             {
                 **minimal_values,
-                "SERVERWARE_PROXY_RESPONSE_PROOF_FILE": str(hardlink_proof),
-                "SERVERWARE_PROXY_PROOF_CONTRACT": "observation-v1",
+                "CATCHPLATE_PROXY_RESPONSE_PROOF_FILE": str(hardlink_proof),
+                "CATCHPLATE_PROXY_PROOF_CONTRACT": "observation-v1",
                 run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: str(
                     hardlink_body
                 ),
@@ -4412,12 +4412,12 @@ def main() -> None:
             observation_with_stream_setting,
             {
                 **minimal_values,
-                "SERVERWARE_PROXY_PROOF_CONTRACT": "observation-v1",
+                "CATCHPLATE_PROXY_PROOF_CONTRACT": "observation-v1",
                 run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: str(
                     observation_body_path
                 ),
                 run_production_readiness.PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV: "4096",
-                "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
+                "CATCHPLATE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
             },
         )
         rejected_observation_stream_setting = run_runner(
@@ -4442,10 +4442,10 @@ def main() -> None:
             streaming_with_observation_setting,
             {
                 **minimal_values,
-                "SERVERWARE_PROXY_PROOF_CONTRACT": "streaming-v1",
-                "SERVERWARE_PROXY_STREAM_BODY_FILE": str(streaming_body_path),
-                "SERVERWARE_PROXY_PROOF_MAX_STREAM_BYTES": "4096",
-                "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
+                "CATCHPLATE_PROXY_PROOF_CONTRACT": "streaming-v1",
+                "CATCHPLATE_PROXY_STREAM_BODY_FILE": str(streaming_body_path),
+                "CATCHPLATE_PROXY_PROOF_MAX_STREAM_BYTES": "4096",
+                "CATCHPLATE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
                 run_production_readiness.PROXY_OBSERVATION_BODY_FILE_ENV: str(
                     observation_body_path
                 ),
@@ -4472,7 +4472,7 @@ def main() -> None:
             buffered_with_stream_setting,
             {
                 **minimal_values,
-                "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
+                "CATCHPLATE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
             },
         )
         rejected_buffered_stream_setting = run_runner(
@@ -4538,7 +4538,7 @@ def main() -> None:
         invalid_contract_env = tmp / "invalid-proof-contract.env"
         write_env(
             invalid_contract_env,
-            {**minimal_values, "SERVERWARE_PROXY_PROOF_CONTRACT": "auto"},
+            {**minimal_values, "CATCHPLATE_PROXY_PROOF_CONTRACT": "auto"},
         )
         invalid_contract = run_runner(
             "--env-file", str(invalid_contract_env), "--dry-run", *security_args
@@ -4712,13 +4712,13 @@ def main() -> None:
             "server_instance": {"id": "spiffe://prod/instance"},
             "tls_channel_binding": {
                 "type": "tls-exporter",
-                "label": "EXPORTER-Serverware-Response-Observation-v1",
+                "label": "EXPORTER-Catchplate-Response-Observation-v1",
                 "value": "t" * 43,
             },
         }
         observation_artifact = {
-            "apiVersion": "serverware.responseObservationProof/v1",
-            "kind": "ServerwareResponseObservationProof",
+            "apiVersion": "catchplate.responseObservationProof/v1",
+            "kind": "CatchplateResponseObservationProof",
             "captured_at_unix": int(time.time()),
             "request": {"aggregate_digest": expected_client_request_digest},
             "response": observation_response,
@@ -4966,7 +4966,7 @@ def main() -> None:
             )
 
         missing_digest_pin_values = dict(minimal_values)
-        missing_digest_pin_values.pop("SERVERWARE_PROXY_EXPECTED_OPERATION_DIGEST")
+        missing_digest_pin_values.pop("CATCHPLATE_PROXY_EXPECTED_OPERATION_DIGEST")
         missing_digest_pin_env = tmp / "missing-digest-pin.env"
         write_env(missing_digest_pin_env, missing_digest_pin_values)
         missing_digest_pin = run_runner(
@@ -4977,7 +4977,7 @@ def main() -> None:
         )
         if (
             missing_digest_pin.returncode == 0
-            or "SERVERWARE_PROXY_EXPECTED_OPERATION_DIGEST" not in detail(missing_digest_pin)
+            or "CATCHPLATE_PROXY_EXPECTED_OPERATION_DIGEST" not in detail(missing_digest_pin)
         ):
             raise AssertionError(
                 "runner accepted a collection plan without an independent operation digest pin: "
@@ -4989,7 +4989,7 @@ def main() -> None:
             uppercase_digest_pin_env,
             {
                 **minimal_values,
-                "SERVERWARE_PROXY_EXPECTED_REQUEST_DIGEST": "sha256:" + "A" * 64,
+                "CATCHPLATE_PROXY_EXPECTED_REQUEST_DIGEST": "sha256:" + "A" * 64,
             },
         )
         uppercase_digest_pin = run_runner(
@@ -5012,7 +5012,7 @@ def main() -> None:
             mismatched_identity_env,
             {
                 **minimal_values,
-                "SERVERWARE_PROXY_PROOF_PRINCIPAL_ID": "agent:different-proof-principal",
+                "CATCHPLATE_PROXY_PROOF_PRINCIPAL_ID": "agent:different-proof-principal",
             },
         )
         mismatched_identity = run_runner(
@@ -5042,7 +5042,7 @@ def main() -> None:
                 unauthorized_env,
                 {
                     **minimal_values,
-                    "SERVERWARE_PROXY_PROOF_URL": proof_url,
+                    "CATCHPLATE_PROXY_PROOF_URL": proof_url,
                 },
             )
             unauthorized = run_runner(
@@ -5086,19 +5086,19 @@ def main() -> None:
         env_trust_file = tmp / "env-trust.env"
         env_trust_values = {
             **minimal_values,
-            "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY": str(
+            "CATCHPLATE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY": str(
                 trust_paths["release_provenance_trusted_public_key"]
             ),
-            "SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY": str(trust_paths["sigstore_trusted_public_key"]),
-            "SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY": str(trust_paths["rekor_trusted_public_key"]),
-            "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER": "managed-prod-log",
-            "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY": str(
+            "CATCHPLATE_SIGSTORE_TRUSTED_PUBLIC_KEY": str(trust_paths["sigstore_trusted_public_key"]),
+            "CATCHPLATE_REKOR_TRUSTED_PUBLIC_KEY": str(trust_paths["rekor_trusted_public_key"]),
+            "CATCHPLATE_EXTERNAL_CHECKPOINT_PROVIDER": "managed-prod-log",
+            "CATCHPLATE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY": str(
                 trust_paths["external_checkpoint_trusted_public_key"]
             ),
-            "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY": str(
+            "CATCHPLATE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY": str(
                 trust_paths["control_plane_response_signing_public_key"]
             ),
-            "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID": (
+            "CATCHPLATE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID": (
                 production_readiness_test.trusted_public_key_id(
                     "response-online-signing.pub.pem"
                 )
@@ -5166,7 +5166,7 @@ def main() -> None:
             final_env_selection,
             {
                 **env_trust_values,
-                "SERVERWARE_COMPLETION_VERIFICATION_MODE": "final",
+                "CATCHPLATE_COMPLETION_VERIFICATION_MODE": "final",
             },
         )
         rejected_final_env = run_runner(
@@ -5187,9 +5187,9 @@ def main() -> None:
             )
 
         missing_proof_env = tmp / "missing-proof.env"
-        write_env(missing_proof_env, {"SERVERWARE_RELEASE_CHANNEL": "prod"})
+        write_env(missing_proof_env, {"CATCHPLATE_RELEASE_CHANNEL": "prod"})
         rejected_missing_proof = run_runner("--env-file", str(missing_proof_env), "--dry-run", *security_args)
-        if rejected_missing_proof.returncode == 0 or "SERVERWARE_PROXY_PROOF_CONTRACT must be pinned" not in detail(
+        if rejected_missing_proof.returncode == 0 or "CATCHPLATE_PROXY_PROOF_CONTRACT must be pinned" not in detail(
             rejected_missing_proof
         ):
             raise AssertionError(f"runner accepted missing proxy proof settings: {detail(rejected_missing_proof)}")
@@ -5198,18 +5198,18 @@ def main() -> None:
         invalid_proof_age = {
             key: value
             for key, value in {
-                "SERVERWARE_RELEASE_CHANNEL": "prod",
-                "SERVERWARE_PROXY_PROOF_CONTRACT": "buffered-v3",
-                "SERVERWARE_PROXY_RESPONSE_PROOF_FILE": str(tmp / "proxy-response-proof.json"),
-                "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND": "/opt/serverware/bin/serverware-proof-client",
-                "SERVERWARE_PROXY_PROOF_ADDRESS": "proxy.prod.internal:9090",
-                "SERVERWARE_PROXY_PROOF_URL": "https://proof-target.prod.internal/health",
-                "SERVERWARE_PROXY_PROOF_CA_BUNDLE": str(tmp / "proxy-ca.pem"),
-                "SERVERWARE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY": str(tmp / "collector-key.pem"),
-                "SERVERWARE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY": str(tmp / "collector-key.pub.pem"),
-                "SERVERWARE_PROXY_PROOF_VERIFIER_PUBLIC_KEY": str(tmp / "proxy-verifier.pub.pem"),
-                "SERVERWARE_DATA_PLANE_INSTANCE_ID": "spiffe://prod.serverware.internal/decision-gate/instance-01",
-                "SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS": "901",
+                "CATCHPLATE_RELEASE_CHANNEL": "prod",
+                "CATCHPLATE_PROXY_PROOF_CONTRACT": "buffered-v3",
+                "CATCHPLATE_PROXY_RESPONSE_PROOF_FILE": str(tmp / "proxy-response-proof.json"),
+                "CATCHPLATE_PROXY_PROOF_COLLECTOR_COMMAND": "/opt/catchplate/bin/catchplate-proof-client",
+                "CATCHPLATE_PROXY_PROOF_ADDRESS": "proxy.prod.internal:9090",
+                "CATCHPLATE_PROXY_PROOF_URL": "https://proof-target.prod.internal/health",
+                "CATCHPLATE_PROXY_PROOF_CA_BUNDLE": str(tmp / "proxy-ca.pem"),
+                "CATCHPLATE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY": str(tmp / "collector-key.pem"),
+                "CATCHPLATE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY": str(tmp / "collector-key.pub.pem"),
+                "CATCHPLATE_PROXY_PROOF_VERIFIER_PUBLIC_KEY": str(tmp / "proxy-verifier.pub.pem"),
+                "CATCHPLATE_DATA_PLANE_INSTANCE_ID": "spiffe://prod.catchplate.internal/decision-gate/instance-01",
+                "CATCHPLATE_PROXY_PROOF_MAX_AGE_SECONDS": "901",
             }.items()
         }
         write_env(invalid_proof_age_env, invalid_proof_age)
@@ -5218,13 +5218,13 @@ def main() -> None:
             raise AssertionError(f"runner accepted an invalid proxy proof max age: {detail(rejected_proof_age)}")
 
         placeholder_env = tmp / "placeholder.env"
-        placeholder_env.write_text("SERVERWARE_ADMIN_TOKEN=CHANGE_ME\n", encoding="utf-8")
+        placeholder_env.write_text("CATCHPLATE_ADMIN_TOKEN=CHANGE_ME\n", encoding="utf-8")
         rejected = run_runner("--env-file", str(placeholder_env), "--dry-run", *security_args)
         if rejected.returncode == 0 or "placeholder" not in detail(rejected):
             raise AssertionError(f"runner accepted a placeholder env file: {detail(rejected)}")
 
         example_domain_env = tmp / "example-domain.env"
-        example_domain_env.write_text("SERVERWARE_PUBLIC_URL=https://serverware.example\n", encoding="utf-8")
+        example_domain_env.write_text("CATCHPLATE_PUBLIC_URL=https://catchplate.example\n", encoding="utf-8")
         rejected_example = run_runner("--env-file", str(example_domain_env), "--dry-run", *security_args)
         if rejected_example.returncode == 0 or "example placeholder domain" not in detail(rejected_example):
             raise AssertionError(f"runner accepted an example-domain env file: {detail(rejected_example)}")
@@ -5233,7 +5233,7 @@ def main() -> None:
         production_env = {
             key: value
             for key, value in production_readiness_test.good_env().items()
-            if key.startswith("SERVERWARE_")
+            if key.startswith("CATCHPLATE_")
         }
         write_env(config_env, production_env)
         config_out = tmp / "production-readiness-config.json"

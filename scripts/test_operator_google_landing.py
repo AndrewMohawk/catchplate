@@ -25,7 +25,7 @@ for directory in (ROOT, Path(__file__).resolve().parent):
     if str(directory) not in sys.path:
         sys.path.insert(0, str(directory))
 
-from serverware import operator_google_landing as landing
+from catchplate import operator_google_landing as landing
 
 IDENTIFIER = "01234567-89ab-4cde-8fab-0123456789ab"
 OTHER_IDENTIFIER = "00000000-0000-4000-8000-000000000000"

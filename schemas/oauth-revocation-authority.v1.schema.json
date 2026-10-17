@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/oauth-revocation-authority.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/oauth-revocation-authority.v1.schema.json",
   "title": "Current OAuth cleanup authority and retained local transport observations",
   "description": "Data-only closed projections. Runtime verifies signatures, canonical ASCII byte originals, digest joins, root separation, inherited descriptors, original deadlines and genuine controlled-writer ownership. HTTP acceptance is not provider revocation or O02 proof.",
   "oneOf": [
@@ -37,7 +37,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "purpose", "authorizationId", "configurationDigest", "deploymentId", "exchangeId", "exchangeRowSha256", "workRowSha256", "enrollmentSha256", "historicalEnrollmentRootSpkiSha256", "tokenEnvelopeSha256", "tokenSecretSha256", "providerId", "clientId", "clientMaterialSha256", "providerConfiguration", "tokenPurposes", "issuedAtEpochNs", "expiresAtEpochNs"],
       "properties": {
-        "schema": {"const": "serverware.oauthRevocationAuthorization/v1"},
+        "schema": {"const": "catchplate.oauthRevocationAuthorization/v1"},
         "sourceRevision": {"$ref": "#/$defs/text", "maxLength": 128},
         "purpose": {"const": "retained-oauth-revocation"},
         "authorizationId": {"$ref": "#/$defs/uuid"},
@@ -64,7 +64,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "payload", "signatureBase64Url"],
       "properties": {
-        "schema": {"const": "serverware.signedOAuthRevocationAuthorization/v1"},
+        "schema": {"const": "catchplate.signedOAuthRevocationAuthorization/v1"},
         "payload": {"$ref": "#/$defs/authorizationPayload"},
         "signatureBase64Url": {"$ref": "#/$defs/original", "minLength": 86, "maxLength": 86}
       }
@@ -73,7 +73,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "grantRootPublicKeyBase64Url", "grantRootSpkiSha256", "controlPlaneConfigurationDigest", "deploymentId"],
       "properties": {
-        "schema": {"const": "serverware.oauthRevocationAuthorityPolicy/v1"},
+        "schema": {"const": "catchplate.oauthRevocationAuthorityPolicy/v1"},
         "grantRootPublicKeyBase64Url": {"$ref": "#/$defs/original", "minLength": 43, "maxLength": 43},
         "grantRootSpkiSha256": {"$ref": "#/$defs/digest"},
         "controlPlaneConfigurationDigest": {"$ref": "#/$defs/digest"},
@@ -84,7 +84,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "configurationDigest", "authorityRootFd", "authorityRootSha256", "authorizations"],
       "properties": {
-        "schema": {"const": "serverware.oauthRevocationStartup/v1"},
+        "schema": {"const": "catchplate.oauthRevocationStartup/v1"},
         "sourceRevision": {"$ref": "#/$defs/text", "maxLength": 128},
         "configurationDigest": {"$ref": "#/$defs/digest"},
         "authorityRootFd": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/fd"}]},
@@ -103,7 +103,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "contactRequestSha256", "status", "rawHeaders", "bodyBase64url", "errorCode"],
       "properties": {
-        "schema": {"const": "serverware.oauthRevocationTransport/v1"},
+        "schema": {"const": "catchplate.oauthRevocationTransport/v1"},
         "contactRequestSha256": {"$ref": "#/$defs/digest"},
         "status": {"type": ["integer", "null"], "minimum": 200, "maximum": 599},
         "rawHeaders": {"type": ["array", "null"], "maxItems": 128, "items": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "string"}}},

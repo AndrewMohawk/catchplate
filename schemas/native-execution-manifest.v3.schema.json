@@ -1,12 +1,12 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://serverware.invalid/schemas/native-execution-manifest.v3.schema.json",
+  "$id":"https://catchplate.invalid/schemas/native-execution-manifest.v3.schema.json",
   "title":"Immutable ELF application with fixed native CONNECT adapter",
   "description":"Closed canonical ASCII JSON, no LF, <=32768 bytes. Ten fields; applicationProxy canonical original hash is independently signed by start/v4 and egress/v5. Genuine owner joins required: no manifest-as-permission. Same static/dynamic ELF, immutable whole-image closure and actual in-image CA admission remain. Explicit SSL_CERT_FILE/HTTPS_PROXY are supported application conventions, not proof arbitrary code honors them.",
   "type":"object","additionalProperties":false,
   "required":["apiVersion","profile","rootfs","entry","argv","environment","cwd","loaderPolicy","applicationTrust","applicationProxy"],
   "properties":{
-    "apiVersion":{"const":"serverware.nativeExecutionManifest/v3"},
+    "apiVersion":{"const":"catchplate.nativeExecutionManifest/v3"},
     "profile":{"const":"native-elf-erofs-v1"},
     "rootfs":{"$ref":"native-execution-manifest.v2.schema.json#/properties/rootfs"},
     "entry":{"$ref":"native-execution-manifest.v2.schema.json#/properties/entry"},

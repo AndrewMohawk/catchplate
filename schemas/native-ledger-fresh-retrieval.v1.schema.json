@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-ledger-fresh-retrieval.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-ledger-fresh-retrieval.v1.schema.json",
   "title": "Explicit native fresh-ledger retrieval grant",
-  "description": "Closed nativeLedgerSpoolRetrievalGrant/v4 signed envelope. Unchanged v3 fields retain their existing schemas; fresh-ledger adds explicit initialization and sequence-zero admission. Canonical bytes, signature verification under serverware.nativeLedgerSpoolRetrievalGrant.signature/v4, decoded strict production proof scope/v2, scope/assignment/key/currentness joins, headSha256 == genesisSha256, actual genesis and empty-directory checks remain runtime obligations. This schema establishes neither authority, a receipt, successful absence nor service readiness; legacy grant schemas are unchanged.",
+  "description": "Closed nativeLedgerSpoolRetrievalGrant/v4 signed envelope. Unchanged v3 fields retain their existing schemas; fresh-ledger adds explicit initialization and sequence-zero admission. Canonical bytes, signature verification under catchplate.nativeLedgerSpoolRetrievalGrant.signature/v4, decoded strict production proof scope/v2, scope/assignment/key/currentness joins, headSha256 == genesisSha256, actual genesis and empty-directory checks remain runtime obligations. This schema establishes neither authority, a receipt, successful absence nor service readiness; legacy grant schemas are unchanged.",
   "type": "object",
   "additionalProperties": false,
   "required": ["payload", "signature"],
@@ -32,7 +32,7 @@
         "expectedPeer", "spoolScope", "ingress", "ledger", "terminal", "store", "effects", "initialization"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeLedgerSpoolRetrievalGrant/v4"},
+        "apiVersion": {"const": "catchplate.nativeLedgerSpoolRetrievalGrant/v4"},
         "purpose": {"$ref": "native-active-effects.v1.schema.json#/$defs/retrievalPayload/properties/purpose"},
         "guest": {"$ref": "native-active-effects.v1.schema.json#/$defs/retrievalPayload/properties/guest"},
         "assignmentPayloadSha256": {"$ref": "native-active-effects.v1.schema.json#/$defs/retrievalPayload/properties/assignmentPayloadSha256"},

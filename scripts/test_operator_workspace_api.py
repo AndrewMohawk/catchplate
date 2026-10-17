@@ -32,7 +32,7 @@ class OperatorWorkspaceApiTests(unittest.TestCase):
     def request(self, method, path, *, body=None, auth=True, origin=None, headers=None):
         values = [("Connection", "close")]
         if auth:
-            values.append(("X-Serverware-Admin-Token", self.admin))
+            values.append(("X-Catchplate-Admin-Token", self.admin))
         if origin is not None:
             values.append(("Origin", origin))
         if body is not None:
@@ -59,7 +59,7 @@ class OperatorWorkspaceApiTests(unittest.TestCase):
             client.close()
 
     def database(self):
-        return sqlite3.connect((self.directory / "data" / "serverware.sqlite3").as_uri() + "?mode=rw", uri=True)
+        return sqlite3.connect((self.directory / "data" / "catchplate.sqlite3").as_uri() + "?mode=rw", uri=True)
 
     def snapshot(self):
         with closing(self.database()) as connection:
@@ -103,7 +103,7 @@ class OperatorWorkspaceApiTests(unittest.TestCase):
             before = self.snapshot()
             cases = [
                 ({"auth": False}, payload, 401),
-                ({"headers": [("X-Serverware-Admin-Token", "synthetic-wrong")]}, payload, 401),
+                ({"headers": [("X-Catchplate-Admin-Token", "synthetic-wrong")]}, payload, 401),
                 ({"origin": None}, payload, 403),
                 ({"origin": "https://foreign.example.com"}, payload, 403),
                 ({"origin": self.origin + "/"}, payload, 403),
@@ -162,7 +162,7 @@ class OperatorWorkspaceApiTests(unittest.TestCase):
             self.mutation("applications/revoke", {**self.review(), "id": first_id}, expected=200)
             current = self.status()
             activity = current["observed_activity"]
-            self.assertEqual(activity["schema"], "serverware.operatorAccountActivity/v1")
+            self.assertEqual(activity["schema"], "catchplate.operatorAccountActivity/v1")
             self.assertEqual(activity["status"], "available")
             self.assertEqual(activity["chain_verification"], "not_checked")
             self.assertIs(type(activity["observed_at_epoch_ms"]), int)
@@ -208,7 +208,7 @@ class OperatorWorkspaceApiTests(unittest.TestCase):
             for headers in ([], [("Content-Length", "0")]):
                 code, raw, response_headers = self.request("GET", CATALOG, headers=headers)
                 self.assertEqual(code, 200)
-                self.assertEqual(json.loads(raw)["schema"], "serverware.operatorCatalog/v1")
+                self.assertEqual(json.loads(raw)["schema"], "catchplate.operatorCatalog/v1")
                 self.assertEqual(response_headers.get("cache-control"), "no-store")
             for body, headers in ((b"x", []), (None, [("Content-Encoding", "gzip")])):
                 code, raw, response_headers = self.request("GET", CATALOG, body=body, headers=headers)

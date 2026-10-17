@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 from scripts import test_native_pilot_lifecycle_inputs as fixture_source
 from scripts.test_native_pilot_generation_scope import key_fixture
 from scripts.test_native_pilot_adopted_cohort_authority import fixture as cohort_fixture, release_fixture
-from serverware import native_pilot_adopted_inputs as compiler
+from catchplate import native_pilot_adopted_inputs as compiler
 
 p, profile, context = compiler.p, compiler.profile, compiler.context
 ERRORS = (ValueError, InvalidSignature)
@@ -37,7 +37,7 @@ def fixture(parent):
     observed = json.loads(bridge["deliveryInputOriginal"])["observationOriginal"]
     authority = config["lifecycle"]["constructedAdmissionAuthority"]
     now = source["clocks"]["now_unix_ns"]
-    payload = {"apiVersion": "serverware.nativeShadowBootstrapDriverAdmission/v1",
+    payload = {"apiVersion": "catchplate.nativeShadowBootstrapDriverAdmission/v1",
         "purpose": "native-driver-bootstrap-admission", "configurationSha256": control["configurationSha256"],
         "windowSha256": control["windowSha256"], "bootstrapObservationOriginal": observed,
         "parent": {"processId": 42, "startTimeTicks": 99, "parentId": 2, "pidfdDevice": 0, "pidfdInode": 77},
@@ -49,7 +49,7 @@ def fixture(parent):
     parameters.update({name + "_sha256": lifecycle["pins"][name] for name in ("policy", "recipe")})
     parameters.update(prior={}, observations={}, cold_prior={}, **source["clocks"])
     selected_policy = compiler.policy.shape(parameters["policy_original"])
-    conductor = {"apiVersion": "serverware.nativePilotOperatorRequest/v2", "sequence": 1,
+    conductor = {"apiVersion": "catchplate.nativePilotOperatorRequest/v2", "sequence": 1,
         "phase": "bootstrap-admission", "payload": {"bootstrapObservationOriginal": observed,
             "admissionPayloadOriginal": p.canonical(payload).decode("ascii")},
         "deadlineBoottimeNs": str(lifecycle["deadline"]), "expiresAtUnixNanos": str(lifecycle["epochLimit"])}
@@ -58,7 +58,7 @@ def fixture(parent):
 
 def pending(f, *, ticket_changes=None, observation_changes=None):
     conductor_raw = p.canonical(f["conductor"])
-    observed = {"apiVersion": "serverware.nativePilotAdoptedSupervisorObservation/v1",
+    observed = {"apiVersion": "catchplate.nativePilotAdoptedSupervisorObservation/v1",
         "policySha256": f["parameters"]["policy_sha256"], "catalogueSha256": f["policy"]["catalogueSha256"],
         "intakeConfigurationSha256": f["policy"]["intakeConfigurationSha256"],
         "conductorRequestOriginal": conductor_raw.decode("ascii"), "measuredConfiguration": None, "recipeOriginals": None}

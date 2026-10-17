@@ -1,6 +1,6 @@
 # Authorized finalization plan admission
 
-[`authority_registration_finalization_plan_admission.py`](../serverware/authority_registration_finalization_plan_admission.py)
+[`authority_registration_finalization_plan_admission.py`](../catchplate/authority_registration_finalization_plan_admission.py)
 connects the distinct original finalization authorization to a genuinely verified
 **new** finalization custody raw7. This is source-only, unbuilt and unexecuted;
 it is not credential execution or production admission.

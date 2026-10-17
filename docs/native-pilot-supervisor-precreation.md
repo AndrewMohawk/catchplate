@@ -11,7 +11,7 @@ The policy's mandatory `precreation` fragment has exactly eight fields:
 
 | Field | Independently selected input |
 | --- | --- |
-| `apiVersion` | `serverware.nativePilotSupervisorPrecreationPolicy/v1` |
+| `apiVersion` | `catchplate.nativePilotSupervisorPrecreationPolicy/v1` |
 | `authority` | Existing C9 authority; same authority as the retained bridge cold configuration |
 | `endpointExecutableSha256` | Exact endpoint worker executable pin |
 | `cohortExecutableSha256` | Exact cohort parent executable pin |

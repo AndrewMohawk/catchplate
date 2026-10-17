@@ -10,7 +10,7 @@ an original-frame grammar or receiving-custody implementation. Equating it with
 the smaller implemented replay inventory made the disjoint-family check reject
 every operation after consume planning was registered.
 
-[`authority_current_root_plan_replay.OPERATIONS`](../serverware/authority_current_root_plan_replay.py)
+[`authority_current_root_plan_replay.OPERATIONS`](../catchplate/authority_current_root_plan_replay.py)
 now derives only from its four actual disjoint replay families. `_frame_maxima`
 checks that this union remains a subset of both the delta inventory and actual
 source-program registry, rejects unsupported operations, and still invokes the

@@ -12,8 +12,8 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from serverware import authority_local_retained_rbac as subject
-from serverware import authority_primary_contract as primary
+from catchplate import authority_local_retained_rbac as subject
+from catchplate import authority_primary_contract as primary
 
 
 def pin(label):
@@ -127,14 +127,14 @@ class RetainedRbacReaderControls(unittest.TestCase):
             for name in subject.wire.TABLES]
         state = dict(generation=0, roots=roots, stateDigest=subject.wire.state_digest(
             subject.wire.state_material(0, roots[1], primary.source_query_manifest_digest())))
-        identity = lambda role: dict(role="serverware_rbac_witness_" + role,
+        identity = lambda role: dict(role="catchplate_rbac_witness_" + role,
             clientDn="/CN=synthetic-" + role, clientSerial="1", issuerDn="/CN=synthetic-ca",
             certificateSha256=pin(role))
         policy = dict(schema=subject.wire.LOCAL_ENROLLMENT_SCHEMA,
             sourceRevision=subject.local.cohort.authority.SOURCE_REVISION,
             enrollmentId="synthetic", deploymentId="synthetic", metadataClusterId="1", witnessClusterId="2",
             metadataDatabase="metadata", databaseId=subject.wire.sha256(
-                b"serverware/rbac-metadata-identity/v1\0" + subject.wire.canonical(dict(clusterId="1", database="metadata"))),
+                b"catchplate/rbac-metadata-identity/v1\0" + subject.wire.canonical(dict(clusterId="1", database="metadata"))),
             metadataFaultDomain="synthetic-metadata", witnessFaultDomain="synthetic-witness",
             configurationDigests=[context["configurationDigest"]], reader=identity("reader"), writer=identity("writer"),
             initialState=state, issuedAtEpochNs=100, expiresAtEpochNs=300, maximumRecords=2,

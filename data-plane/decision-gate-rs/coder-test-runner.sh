@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-readonly_root=/opt/serverware-rust-tests
+readonly_root=/opt/catchplate-rust-tests
 manifest=$readonly_root/SHA256SUMS
 harness_root=$readonly_root/harnesses
 

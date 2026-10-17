@@ -3,7 +3,7 @@
 ## Source boundary
 
 Source `.61` adds
-[`RevocationPlannerPersistence.persist_and_reserve_execution`](../serverware/authority_revocation_persistence.py).
+[`RevocationPlannerPersistence.persist_and_reserve_execution`](../catchplate/authority_revocation_persistence.py).
 It composes the existing genuine retention and reservation operations under
 one configured writer transaction. It is **unbuilt and unexecuted**: no real
 PostgreSQL durability, serving integration or production admission is proved.

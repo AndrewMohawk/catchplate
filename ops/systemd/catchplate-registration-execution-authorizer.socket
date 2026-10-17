@@ -1,0 +1,23 @@
+# Uninstalled deployment input. Account/group access, release and signed launch
+# material require independent admission. Recreating the listener invalidates
+# the separately signed socket-FD and pathname identities.
+[Unit]
+Description=Catchplate dedicated registration execution authorizer ingress
+Before=catchplate-registration-execution-authorizer.service
+After=systemd-tmpfiles-setup.service
+
+[Socket]
+ListenStream=/run/catchplate/registration-execution/authorizer.sock
+FileDescriptorName=catchplate-registration-execution-authorizer
+SocketUser=65513
+SocketGroup=65532
+SocketMode=0660
+DirectoryMode=0755
+Backlog=16
+Accept=no
+FlushPending=yes
+RemoveOnStop=yes
+Service=catchplate-registration-execution-authorizer.service
+
+[Install]
+WantedBy=sockets.target

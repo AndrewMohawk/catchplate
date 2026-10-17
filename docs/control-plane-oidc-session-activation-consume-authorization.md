@@ -1,6 +1,6 @@
 # Same-call consume authorization
 
-[`control_plane_oidc_session_activation_consume_authorization.py`](../serverware/control_plane_oidc_session_activation_consume_authorization.py)
+[`control_plane_oidc_session_activation_consume_authorization.py`](../catchplate/control_plane_oidc_session_activation_consume_authorization.py)
 connects the actual retained consume prepare/export continuation to a distinct
 root-enrolled caller signer. This is source-only, unbuilt, unexecuted and
 unprovisioned. It adds no consume grant request, reservation, SQL execution,

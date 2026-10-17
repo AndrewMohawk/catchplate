@@ -33,7 +33,7 @@ proof completion, worker readiness, token delivery or current-session evidence.
 
 `authority_oidc_session_activation_release_grant_input_delivery_transport.py`
 fixes the listener to
-`/run/serverware/oidc-session-activation-token-release/grant-issuer-bootstrap.sock`.
+`/run/catchplate/oidc-session-activation-token-release/grant-issuer-bootstrap.sock`.
 Its path owner is root:65494, mode `0660`; the accepted issuer peer is
 65494:65494 and the connect-side expected root peer is 0:0.
 
@@ -42,7 +42,7 @@ purpose `stage-oidc-session-activation-release-grant-inputs` and the exact signe
 proof bootstrap. The response magic is `SWOGIR01`, followed by exactly
 `(staged, bootstrapIdentityASCII71)`. Both headers are 24 bytes. The identity
 frames the original with
-`serverware.oidcSessionActivationReleaseGrantInputDeliveryBootstrapIdentity/v1`;
+`catchplate.oidcSessionActivationReleaseGrantInputDeliveryBootstrapIdentity/v1`;
 it is not the proof worker's differently domain-separated staging identity.
 
 The bootstrap ceiling is 48 MiB and the whole exchange ceiling is 64 MiB.
@@ -70,7 +70,7 @@ drop to UID/GID 65496. Existing static policy and launch checks are not relaxed.
 
 The opt-in `release-grant-issuer-bootstrap.socket`, alternate
 `release-grant-issuer-dynamic.socket` and `release-grant-issuer-dynamic.service.in`
-templates use the `serverware-oidc-session-activation-` prefix. The latter two
+templates use the `catchplate-oidc-session-activation-` prefix. The latter two
 replace, not accompany, the static grant issuer. The service binds only the
 dynamic public trust directory and its separately protected runtime signer;
 it receives no TLS, AES/history keys, SQL writer or completion signer.

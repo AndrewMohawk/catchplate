@@ -7,10 +7,10 @@ release checkpoint or disclose a token.
 
 ## Closed versions
 
-`serverware.controlPlaneOidcSessionActivationHistory/v3` retains the exact
+`catchplate.controlPlaneOidcSessionActivationHistory/v3` retains the exact
 `schema`/`activations` object. Each entry retains every v2 field and adds the
 required nullable `releaseProof` field. A non-null value has the existing closed
-`serverware.controlPlaneOidcSessionActivationReleaseProof/v1` shape: original
+`catchplate.controlPlaneOidcSessionActivationReleaseProof/v1` shape: original
 `proofEnrollment`, independent `expectedScope` and the fixed proof endpoint.
 Null explicitly disables archived proof authority for that entry.
 

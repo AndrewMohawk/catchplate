@@ -32,7 +32,7 @@ import send_native_configuration as transport
 
 PORT = 9101
 MAX_ORIGINAL = 64 * 1024
-API = "serverware.nativeResponseProofPublicIdentity/v1"
+API = "catchplate.nativeResponseProofPublicIdentity/v1"
 FIELDS = {"apiVersion", "purpose", "evidenceScope", "okForAction", "bootId",
           "keyId", "publicKeyPem", "controlPlaneResponseSigningKeyId", "scope",
           "caCertificateDerBase64url", "nativeKeyEvidence", "quoteNonceBase64url",
@@ -69,7 +69,7 @@ def public_original(raw):
     evidence = value["nativeKeyEvidence"]
     require(type(evidence) is dict and set(evidence) == {
         "apiVersion", "responseProofPublicKey", "attestationDocumentB64"}
-        and evidence["apiVersion"] == "serverware.nativeResponseProofKeyEvidence/v1")
+        and evidence["apiVersion"] == "catchplate.nativeResponseProofKeyEvidence/v1")
     transport.encoded(evidence["responseProofPublicKey"], 32, exact=32)
     transport.encoded(evidence["attestationDocumentB64"], 12 * 1024)
     transport.encoded(value["quoteNonceBase64url"], 32, exact=32)

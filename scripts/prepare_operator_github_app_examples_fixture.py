@@ -19,7 +19,7 @@ from scripts.run_operator_x_examples_fixture import PYTHON_IMAGE, LIBATOMIC
 base, basic = github.base, github.basic
 NODE_SHA256 = github.NODE_SHA256
 LIBATOMIC_SHA256 = "9d8a34468e614a71a6427dbabb0ac24eb8cb1e324dc6aa3bf95eb6f59201f000"
-RUNTIME_SERVICES = {"network", "github", "serverware", "decision-gate-rs", "edge", "check"}
+RUNTIME_SERVICES = {"network", "github", "catchplate", "decision-gate-rs", "edge", "check"}
 KEEPER_SECONDS, EDGE_SECONDS = github.KEEPER_SECONDS, github.EDGE_SECONDS
 CHECKER_SECONDS, CHECKER_OUTER_SECONDS, PRECHECK_SECONDS = 180, 190, 75
 NODE_EXAMPLE = "examples/github-issues-node"
@@ -27,11 +27,11 @@ NODE_EXAMPLE = "examples/github-issues-node"
 
 def build(source, binary, initializer, root, node, node_modules, python_runtime, python_packages, go,
           *, expected_binary_sha256, expected_go_sha256):
-    require(root.parent == base.SCRATCH and re.fullmatch(r"serverware-github-app-private\.[A-Za-z0-9]{6,32}", root.name),
+    require(root.parent == base.SCRATCH and re.fullmatch(r"catchplate-github-app-private\.[A-Za-z0-9]{6,32}", root.name),
         "fresh private GitHub App root required")
     require(node_modules == source / NODE_EXAMPLE / "node_modules", "adjacent complete Node dependencies required")
     base.validated_binary_sha256(expected_go_sha256)
-    template = root.with_name("serverware-github-private." + root.name.split(".", 1)[1])
+    template = root.with_name("catchplate-github-private." + root.name.split(".", 1)[1])
     config = github.build(source, binary, initializer, template, node, source / NODE_EXAMPLE,
         expected_binary_sha256=expected_binary_sha256)
     for service in config["services"].values():
@@ -39,7 +39,7 @@ def build(source, binary, initializer, root, node, node_modules, python_runtime,
             path = Path(mount["source"])
             if path.is_relative_to(template):
                 mount["source"] = str(root / path.relative_to(template))
-    config["name"] = "serverware-github-app-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
+    config["name"] = "catchplate-github-app-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
     services, runtime = config["services"], root / "runtime"
     for name in ("github-pki", "github"):
         services[name]["command"] = ["python", "-B", "-m", "scripts.operator_github_app_examples_fixture"]
@@ -48,8 +48,8 @@ def build(source, binary, initializer, root, node, node_modules, python_runtime,
     services["github"]["volumes"].append(bind(runtime / "upstream-data/github/app-replacement-public.pem", "/github/app-replacement-public.pem"))
     # Production urllib still performs normal HTTPS verification. Only this
     # network-none app process trusts the newly generated synthetic provider CA.
-    services["serverware"]["environment"]["SSL_CERT_FILE"] = "/github-public/ca.pem"
-    services["serverware"]["volumes"].append(bind(runtime / "upstream-data/github/ca.pem", "/github-public/ca.pem"))
+    services["catchplate"]["environment"]["SSL_CERT_FILE"] = "/github-public/ca.pem"
+    services["catchplate"]["volumes"].append(bind(runtime / "upstream-data/github/ca.pem", "/github-public/ca.pem"))
     check = services["check"]
     check["image"], check["entrypoint"] = PYTHON_IMAGE, ["/example-python/bin/python", "-B"]
     check["command"][0] = "/app/scripts/check_operator_github_app_examples.py"
@@ -98,7 +98,7 @@ def dependencies(node_modules, python_runtime, python_packages):
         path = python_runtime / "bin" / name
         require(path.is_symlink() and path.readlink().as_posix() == target, "Python interpreter linkage differs")
         links[name] = target
-    return {"schema": "serverware.privateGithubAppDependencies/v1", "node": node, "python": python,
+    return {"schema": "catchplate.privateGithubAppDependencies/v1", "node": node, "python": python,
         "pythonRuntime": {"pyvenvSha256": base.digest(config), "links": links}}
 
 

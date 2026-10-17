@@ -6,7 +6,7 @@ admits signatures, reads keys/resources, creates a worker or transfers the
 ephemeral old-token request.
 
 The fixed root listener is
-`/run/serverware/oidc-session-activation/consume-bootstrap.sock`. The server
+`/run/catchplate/oidc-session-activation/consume-bootstrap.sock`. The server
 checks issuer UID/GID `65495:65495` before request bytes. The issuer checks the
 root-created listener peer `0:0`; its independently signed endpoint supplies
 an exact integer timeout of 1–30 seconds, which only tightens the original
@@ -44,8 +44,8 @@ The identity helper frames each exact original through the existing metered
 framing primitive in two new, distinct domains:
 
 ```text
-serverware.oidcSessionActivationConsumeInputDeliveryPlannerBootstrapIdentity/v1
-serverware.oidcSessionActivationConsumeInputDeliveryHistoryCustodyIdentity/v1
+catchplate.oidcSessionActivationConsumeInputDeliveryPlannerBootstrapIdentity/v1
+catchplate.oidcSessionActivationConsumeInputDeliveryHistoryCustodyIdentity/v1
 ```
 
 These are not raw SHA-256 wrapper digests or interchangeable identities. The

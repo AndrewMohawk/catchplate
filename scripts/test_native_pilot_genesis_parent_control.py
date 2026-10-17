@@ -6,9 +6,9 @@ import sys
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from serverware import custody_generation_grants as codec
-from serverware import native_pilot_genesis_parent_control as control
-from serverware import native_pilot_genesis_parent_control_io as io
+from catchplate import custody_generation_grants as codec
+from catchplate import native_pilot_genesis_parent_control as control
+from catchplate import native_pilot_genesis_parent_control_io as io
 
 
 def elf(kinds=(1,)):
@@ -31,7 +31,7 @@ def frame():
     # guard is tested; finish also requires the real fixed native execution.
     scope = {"issuedAtBoottimeNanos": 10, "expiresAtBoottimeNanos": 20,
              "timeNamespaceInode": (1 << 64) - 1}
-    value = {"completion": {"apiVersion": "serverware.nativePublicationGenesisCompletion/v1",
+    value = {"completion": {"apiVersion": "catchplate.nativePublicationGenesisCompletion/v1",
         "prepared": {"core": {"genesis": {"scope": scope}}}, "stored": {},
         "receiptOriginal": "{}", "completedAtBoottimeNanos": 11, "signature": "unverified"},
         "durable": {"completedAtBoottimeNanos": 12}, "current": {"completedAtBoottimeNanos": 13}}

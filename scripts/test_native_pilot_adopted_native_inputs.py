@@ -20,9 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
 from cryptography.exceptions import InvalidSignature
-from serverware import native_pilot_adopted_native_inputs as inputs
-from serverware import native_pilot_adopted_phase_profile as phase
-from serverware import native_pilot_service_material as material
+from catchplate import native_pilot_adopted_native_inputs as inputs
+from catchplate import native_pilot_adopted_phase_profile as phase
+from catchplate import native_pilot_service_material as material
 from test_native_pilot_adopted_closure import fixture as signed_fixture, input_for as closure_input
 from test_native_pilot_key_authorizations import build, clocks, expected_payload, signed_result
 from test_native_pilot_launch_authorizations import transport, set_credentials, signed as signed_authorization
@@ -45,9 +45,9 @@ def fixture():
     f["recipe_originals"]["assignmentOriginal"] = canonical(envelope).decode("ascii")
     binding = json.loads(f["measured"]["configurationBindingOriginal"])
     binding["assignmentPayloadSha256"] = envelope["payloadSha256"]
-    binding_sha = frame("serverware.policyShadowProductionCustodyConfiguration/v2", binding)
+    binding_sha = frame("catchplate.policyShadowProductionCustodyConfiguration/v2", binding)
     proof = scope_fixture(envelope); proof["production_configuration_binding_sha256"] = binding_sha
-    proof["binding_sha256"] = frame("serverware.policyShadowProductionCustodyProofScope/v2",
+    proof["binding_sha256"] = frame("catchplate.policyShadowProductionCustodyProofScope/v2",
         [proof[name] for name in EXPECTED_SCOPE_VALUES + EXPECTED_SCOPE_ROOTS])
     f["measured"].update(configurationBindingOriginal=canonical(binding).decode("ascii"),
         configurationBindingSha256=binding_sha, proofScopeOriginal=canonical(proof).decode("ascii"))
@@ -57,7 +57,7 @@ def fixture():
     for role in f["adopted_roles"]:
         credentials = copy.deepcopy(json.loads(f["deliveries"][role])["payload"]["credentials"])
         credentials.append({"name": "shadow-encrypted-role-inventory", "original": {
-            "path": "/etc/serverware/synthetic-ciphertext-" + role + ".json",
+            "path": "/etc/catchplate/synthetic-ciphertext-" + role + ".json",
             "sha256": transport(role)["encryptedInventorySha256"]}, "length": 256, "signing": None})
         set_credentials(f, role, credentials)
         f["fragment"][role]["credentials"] = credentials

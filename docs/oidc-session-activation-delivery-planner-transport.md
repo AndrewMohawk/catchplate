@@ -49,7 +49,7 @@ decoder for exactly the retained-verification or retained-export raw4 branches.
 No request-selected policy, subject, roots, keys or execution operation
 is present; those come from root-authenticated cold configuration.
 
-The fixed endpoint is `/run/serverware/oidc-session-activation/delivery-planner.sock`,
+The fixed endpoint is `/run/catchplate/oidc-session-activation/delivery-planner.sock`,
 timeout 1–30 seconds. Service identity is UID/GID 65501 and `_recv_request`
 checks caller UID/GID 65532 before reading even the prefix. Client peer 0:0
 means the root-created socket-activation listener; it does **not** attest that

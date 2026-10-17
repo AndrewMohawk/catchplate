@@ -6,16 +6,16 @@
 
 ## Configure a client, not the console URL
 
-Open **Proxy setup**, select the client and permission, and copy the displayed proxy endpoint/login settings. The browser console at `https://serverware.example.com/` and the forward proxy are different services. Do not invent a port or use a private management address as the proxy.
+Open **Proxy setup**, select the client and permission, and copy the displayed proxy endpoint/login settings. The retained browser console at `https://serverware.example.com/` and the forward proxy are different services. The Catchplate hostname cutover is pending; follow [rename status](../catchplate-rename.md) and do not rewrite an existing private configuration. Do not invent a port or use a private management address as the proxy.
 
-For **standard client login**, the username is the Serverware client ID and the password is its expiring proxy token. Retained Bearer-only clients must use their advertised mode or be explicitly changed in **Clients**; a recipe does not silently migrate them. The token authenticates to Serverware, not to GitHub, Google or npm.
+For **standard client login**, the username is the Catchplate client ID and the password is its expiring proxy token. Retained Bearer-only clients must use their advertised mode or be explicitly changed in **Clients**; a recipe does not silently migrate them. The token authenticates to Catchplate, not to GitHub, Google or npm.
 
 Use the [provided client recipes](Clients-and-recipes.md), which separate proxy authentication from the provider's public dummy header. Avoid hand-assembling credential-bearing URLs or echoing private configuration in logs. Some stock-client compatibility wrappers necessarily build such URLs internally; their documented isolation and redaction rules still apply.
 
 ## Download and scope the public CA
 
 1. Sign in to the console and choose **Proxy setup → Download CA certificate**.
-2. Save `serverware-ca.pem` with the client configuration.
+2. Save `catchplate-ca.pem` with the client configuration.
 3. Set the recipe's interception-CA path to that file.
 4. Keep TLS verification enabled. Do not use `curl -k`, disable SDK verification or install this development CA system-wide.
 
@@ -24,9 +24,9 @@ There are two TLS checks:
 | Connection | Trust required |
 | --- | --- |
 | Client → HTTPS proxy | Normally system/default trust for the proxy hostname; a separate private proxy CA only when the selected recipe supports it |
-| Client → provider inside the proxy tunnel | The downloaded Serverware public interception CA |
+| Client → provider inside the proxy tunnel | The downloaded Catchplate public interception CA |
 
-The download contains no private CA signing key. Correct trust does not make an unreachable proxy reachable, and downloading a CA does not grant access. Follow each project's trust implementation: GitHub Python and npm use combined/additive trust rather than independent per-hop root sets. [UI and client setup](https://github.com/AndrewMohawk/serverware/blob/main/serverware/operator_demo_web/index.html), [GitHub Python](https://github.com/AndrewMohawk/serverware/blob/main/examples/github-issues-python/README.md), [npm client](https://github.com/AndrewMohawk/serverware/blob/main/examples/npm-registry/README.md).
+The download contains no private CA signing key. Correct trust does not make an unreachable proxy reachable, and downloading a CA does not grant access. Follow each project's trust implementation: GitHub Python and npm use combined/additive trust rather than independent per-hop root sets. [UI and client setup](https://github.com/AndrewMohawk/catchplate/blob/main/catchplate/operator_demo_web/index.html), [GitHub Python](https://github.com/AndrewMohawk/catchplate/blob/main/examples/github-issues-python/README.md), [npm client](https://github.com/AndrewMohawk/catchplate/blob/main/examples/npm-registry/README.md).
 
 ## Let the proxy reach a new provider
 
@@ -38,7 +38,7 @@ The operator owns the approved destination list. A client permission cannot add 
 4. Have the deployment owner perform the controlled paired restart using the exact prepared settings and retained-state procedure.
 5. Confirm the effective settings and matching loaded policy, then create the intended client permission and test the provider job.
 
-Origins referenced by active rules cannot simply be removed. Revoke the affected permissions first. A stale review must be reviewed again; do not reset the catalog or assume an environment-variable edit will replace its retained destination list. See the [destination procedure](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-proxy-destinations.md).
+Origins referenced by active rules cannot simply be removed. Revoke the affected permissions first. A stale review must be reviewed again; do not reset the catalog or assume an environment-variable edit will replace its retained destination list. See the [destination procedure](https://github.com/AndrewMohawk/catchplate/blob/main/docs/operator-proxy-destinations.md).
 
 ## Configure the proxy's Google OAuth application
 
@@ -50,14 +50,14 @@ This is operator configuration, not an individual user's account connection:
 4. Preparation stores inactive encrypted configuration. The deployment owner must perform its separate controlled cold restart and confirm the matching app/proxy readiness.
 5. Once available, use **Credentials** to connect a person's Google account. Assign a client and permission separately.
 
-The page does not create a Google project, restart services or start consent on your behalf. This first-configuration workflow is not provider-secret rotation. A lost response is recovered with **Check operation result**, not a second Prepare. [Managed Google configuration](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-provider-configuration.md#operator-configuration-workflow).
+The page does not create a Google project, restart services or start consent on your behalf. This first-configuration workflow is not provider-secret rotation. A lost response is recovered with **Check operation result**, not a second Prepare. [Managed Google configuration](https://github.com/AndrewMohawk/catchplate/blob/main/docs/operator-provider-configuration.md#operator-configuration-workflow).
 
 ## Configure the proxy's X OAuth application
 
 When the feature is offered, open **Proxy setup → X (Twitter) application → Review X application settings**. Register the exact displayed callback in X and enter the OAuth **Client ID and Client secret**, not an app-only bearer token. Review the fixed permissions, then save.
 
-Unlike Google preparation, this settings save is immediate and does not require a restart. It still does not contact X, connect an account, approve a destination or grant posting permission. Replacing a saved X application is not currently offered. Continue only when the instance reports the matching provider/policy readiness. [Current configuration UI](https://github.com/AndrewMohawk/serverware/blob/main/serverware/operator_demo_web/index.html), [X readiness checks](https://github.com/AndrewMohawk/serverware/blob/main/serverware/operator_x_readiness.py).
+Unlike Google preparation, this settings save is immediate and does not require a restart. It still does not contact X, connect an account, approve a destination or grant posting permission. Replacing a saved X application is not currently offered. Continue only when the instance reports the matching provider/policy readiness. [Current configuration UI](https://github.com/AndrewMohawk/catchplate/blob/main/catchplate/operator_demo_web/index.html), [X readiness checks](https://github.com/AndrewMohawk/catchplate/blob/main/catchplate/operator_x_readiness.py).
 
 ## What remains deployment-managed
 
-Listener bindings, public DNS/TLS, routing, retained storage and coordinated application/proxy updates are deployment tasks, not editable client-template settings. The [public proxy checkpoint](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-public-proxy-verification.md) records a successful authenticated synthetic-route request and revocation check; it does not verify every real provider or SDK job. Use the [deployment runbook](https://github.com/AndrewMohawk/serverware/blob/main/docker/serverware-operator-demo/README.md) for changes to the running services.
+Listener bindings, public DNS/TLS, routing, retained storage and coordinated application/proxy updates are deployment tasks, not editable client-template settings. The [public proxy checkpoint](https://github.com/AndrewMohawk/catchplate/blob/main/docs/operator-public-proxy-verification.md) records a successful authenticated synthetic-route request and revocation check; it does not verify every real provider or SDK job. Use the [deployment runbook](https://github.com/AndrewMohawk/catchplate/blob/main/docker/catchplate-operator-demo/README.md) for changes to the running services.

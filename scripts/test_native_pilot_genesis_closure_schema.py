@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import test_native_pilot_closure_set as fixtures
 import test_native_pilot_genesis_bootstrap_profiles as bootstrap
-from serverware import native_pilot_closure_set as closure
+from catchplate import native_pilot_closure_set as closure
 
 SCHEMAS = ("native-custody-closure.v6.schema.json", "native-publication-genesis-closure-set.v2.schema.json",
     "native-custody-closure.v1.schema.json", "native-custody-closure.v2.schema.json",
@@ -47,7 +47,7 @@ def fixture(role):
         "bootIdBase64url": "AQEBAQEBAQEBAQEBAQEBAQ", "timeNamespaceDevice": 1, "timeNamespaceInode": 2,
         "issuedAtBoottimeNs": "100", "startupDeadlineBoottimeNs": "200", "lifetimeDeadlineBoottimeNs": "300",
         "invocationId": "1" * 32}
-    payload = {"apiVersion": "serverware.nativeCustodyClosureAssignment/v6",
+    payload = {"apiVersion": "catchplate.nativeCustodyClosureAssignment/v6",
         "purpose": "shadow-custody-closure-set-member", "profile": "native-publication-genesis-closure-set-v2",
         "assignmentId": fixtures.synthetic("cold-assignment"), "assignmentPayloadSha256": fixtures.synthetic("cold-payload"),
         "assignmentRevision": 1, "manifestSha256": manifest["manifestSha256"], "guest": guest,
@@ -56,7 +56,7 @@ def fixture(role):
         "signingKeyId": fixtures.synthetic("supervisor-id"), "signingKeySpkiSha256": fixtures.synthetic("supervisor-spki"),
         "guestRole": role, "setRootSha256": selected["setRootSha256"], "seccompSetRootSha256": selected["seccompSetRootSha256"],
         "leafSha256": fixtures.frame(bootstrap.LEAF, [role, manifest])}
-    return {"apiVersion": "serverware.nativeCustodyClosure/v6", "manifest": manifest, "closureSet": selected,
+    return {"apiVersion": "catchplate.nativeCustodyClosure/v6", "manifest": manifest, "closureSet": selected,
         "authorization": {"payload": payload, "signature": fixtures.INVALID_SIGNATURE_SENTINEL}}
 
 
@@ -65,7 +65,7 @@ class GenesisClosureSchemaTests(unittest.TestCase):
     def setUpClass(cls):
         cls.schemas = {name: json.loads((ROOT / "schemas" / name).read_text()) for name in SCHEMAS}
         for name, value in cls.schemas.items():
-            if value["$id"] != "https://serverware.invalid/schemas/" + name:
+            if value["$id"] != "https://catchplate.invalid/schemas/" + name:
                 raise AssertionError("Unexpected local schema identifier")
             Draft202012Validator.check_schema(value)
         registry = Registry(retrieve=reject_external).with_resources(
@@ -81,16 +81,16 @@ class GenesisClosureSchemaTests(unittest.TestCase):
                 value = fixture(role)
                 self.validator.validate(value)
                 self.assertEqual(value["authorization"]["signature"], fixtures.INVALID_SIGNATURE_SENTINEL)
-                self.assertEqual(value["manifest"]["apiVersion"], "serverware.nativeCustodyExecutionClosure/v"
+                self.assertEqual(value["manifest"]["apiVersion"], "catchplate.nativeCustodyExecutionClosure/v"
                     + ("2" if role == bootstrap.ROLES[-1] else "1"))
 
     def test_old_closure_assignment_and_set_versions_refuse(self):
         for version in (1, 2, 3, 4, 5):
-            value = fixture(bootstrap.ROLES[-1]); value["apiVersion"] = "serverware.nativeCustodyClosure/v" + str(version)
+            value = fixture(bootstrap.ROLES[-1]); value["apiVersion"] = "catchplate.nativeCustodyClosure/v" + str(version)
             self.refuse(value)
-            value = fixture(bootstrap.ROLES[-1]); value["authorization"]["payload"]["apiVersion"] = "serverware.nativeCustodyClosureAssignment/v" + str(version)
+            value = fixture(bootstrap.ROLES[-1]); value["authorization"]["payload"]["apiVersion"] = "catchplate.nativeCustodyClosureAssignment/v" + str(version)
             self.refuse(value)
-        value = fixture(bootstrap.ROLES[-1]); value["closureSet"]["apiVersion"] = "serverware.nativePublicationGenesisClosureSet/v1"
+        value = fixture(bootstrap.ROLES[-1]); value["closureSet"]["apiVersion"] = "catchplate.nativePublicationGenesisClosureSet/v1"
         self.refuse(value)
 
     def test_cross_manifest_versions_and_member_order_refuse(self):

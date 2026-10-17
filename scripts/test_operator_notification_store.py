@@ -29,10 +29,10 @@ class Fixture:
     """Environment must be frozen before construction; see configure_environment."""
     def __init__(self):
         self.config, self.db, self.demo, self.bundles, self.catalog, self.inputs, self.mutations = workspace.workspace()
-        from serverware import operator_notification_store as store, operator_notification_custody as custody
-        from serverware import operator_notification_transport as transport
+        from catchplate import operator_notification_store as store, operator_notification_custody as custody
+        from catchplate import operator_notification_transport as transport
         self.store, self.custody, self.transport = store, custody, transport
-        self.directory = Path(os.environ["SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR"])
+        self.directory = Path(os.environ["CATCHPLATE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR"])
         self.key_path = self.directory / custody.FILENAME
 
     def payload(self, slot="audit_log.webhook", **changes):
@@ -66,9 +66,9 @@ def configure_environment(test):
     workspace.common.OperatorDemoPersistenceTests.setUp(test)
     directory = Path(test.scratch.name) / "notification-custody"
     directory.mkdir(mode=0o700)
-    test.environment.update(SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED="1",
-        SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR=str(directory),
-        SERVERWARE_PUBLIC_URL="https://console.example.com")
+    test.environment.update(CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED="1",
+        CATCHPLATE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR=str(directory),
+        CATCHPLATE_PUBLIC_URL="https://console.example.com")
 
 
 def settings():
@@ -323,7 +323,7 @@ def action_source_gate():
     # The source capability must stop even a previously retained queued action
     # before decrypting its URL or reaching the transport worker.
     now = f.store._now()
-    notice = {"schema": "serverware.operatorNotification/v1", "channel": "action_required",
+    notice = {"schema": "catchplate.operatorNotification/v1", "channel": "action_required",
         "source": {"event_id": str(uuid.uuid4()), "event_hash": "sha256:" + "a" * 64,
             "event_type": "approval.requested", "created_at": f.store._iso(now)},
         "summary": "Approval requested", "review_path": "/#audit", "details": {}}
@@ -342,7 +342,7 @@ def action_source_gate():
 
 def native_notice(f, phase="prepare_available", *, expires_nanos=None):
     from test_operator_notification_events import native_record
-    from serverware.operator_notification_pilot_source import NativePilotNotice
+    from catchplate.operator_notification_pilot_source import NativePilotNotice
     record = native_record(phase, expires_nanos=expires_nanos if expires_nanos is not None else
         f.store._now() * 1_000_000 + 60_000_000_000)
     return NativePilotNotice(record["selection_sha256"], f.store._canonical(record["observation"]))
@@ -387,7 +387,7 @@ def native_ingestion():
 
 
 def native_rollback_and_collision():
-    from serverware.operator_notification_pilot_source import notice_record
+    from catchplate.operator_notification_pilot_source import notice_record
     f = Fixture()
     f.save(event_types=["native_pilot.prepare_available"])
     notice = native_notice(f)
@@ -446,7 +446,7 @@ def native_expiry_and_final_recheck():
 
 def host_approval_notifications():
     """Real audit/outbox/SQLite, synthetic gate readiness; no network dispatch."""
-    from serverware import operator_host_approvals as host, operator_notifications as worker, operator_publication
+    from catchplate import operator_host_approvals as host, operator_notifications as worker, operator_publication
     f = Fixture()
     assert host.enabled() and f.store.ACTION_SOURCE_AVAILABLE is False
     f.save("action_required.webhook", event_types=[f.store.events.HOST_REQUESTED])
@@ -600,7 +600,7 @@ class NotificationStoreTests(unittest.TestCase):
         self.assertTrue(self.run_worker("native-expiry")["original_nanoseconds_rechecked_after_snapshot"])
 
     def test_host_approval_exact_pending_source_and_independent_audit(self):
-        self.environment["SERVERWARE_HOST_TRUSTED_APPROVALS_ENABLED"] = "1"
+        self.environment["CATCHPLATE_HOST_TRUSTED_APPROVALS_ENABLED"] = "1"
         self.assertTrue(self.run_worker("host-approval")["typed_host_action_and_independent_audit"])
 
 

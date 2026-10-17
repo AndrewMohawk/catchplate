@@ -11,14 +11,14 @@ pub(super) fn accept(raw:&[u8],owner:&mut AdmittedKeys,trust:&dyn EnvelopeKeyTru
     require(!raw.is_empty() && raw.len()<=32768 && owner.result.is_none() && owner.combined_original.is_none())?;
     owner.check(trust,time)?;owner.association.check_startup().map_err(fail)?;
     let original:Original=serde_json::from_slice(raw).map_err(fail)?;
-    require(original.api_version=="serverware.nativeShadowBridgeAdmissionVerifierResult/v1"
+    require(original.api_version=="catchplate.nativeShadowBridgeAdmissionVerifierResult/v1"
         && canonical_json_bytes(&original)?==raw && original.context_result_original.is_ascii()
         && original.production_result_original.is_ascii())?;
     let context=result::verify(original.context_result_original.as_bytes(),owner,trust,time)?;
     let wire=super::super::verifier_result::decode(original.production_result_original.as_bytes())?;
     context.require_production(&wire)?;
     let evidence=owner.evidence.as_ref().ok_or(ShadowError::CustodyUnavailable)?;
-    require(evidence.api_version=="serverware.nativeShadowBridgeAdmissionEvidence/v1"
+    require(evidence.api_version=="catchplate.nativeShadowBridgeAdmissionEvidence/v1"
         && wire.quote_sha256==Sha256Digest::compute(&URL_SAFE_NO_PAD.decode(&evidence.attestation_document_base64url).map_err(fail)?)
         && Some(&wire.production_configuration_binding_sha256)==evidence.statement.production_configuration_binding_sha256.as_ref())?;
     let configuration=owner.production.as_ref().ok_or(ShadowError::BindingDrift)?;

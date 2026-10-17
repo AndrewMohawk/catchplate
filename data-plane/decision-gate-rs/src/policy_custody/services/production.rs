@@ -72,17 +72,17 @@ const MAX_PRODUCTION_RPC_REPLAY_RECORDS: usize = 65_536;
 const MAX_PRODUCTION_RPC_REPLAY_BYTES: usize = 256 * 1024 * 1024;
 const PRODUCTION_RPC_POLL_SLICE_MILLIS: i32 = 250;
 const PRODUCTION_RPC_RUNTIME_CONFIG_VERSION: &str =
-    "serverware.policyCustodyProductionRpcRuntime/v4";
+    "catchplate.policyCustodyProductionRpcRuntime/v4";
 const PRODUCTION_RPC_CONFIG_CREDENTIAL: &str =
-    "serverware-policy-custody-production-rpc.json";
+    "catchplate-policy-custody-production-rpc.json";
 const PRODUCTION_RPC_LISTENER_FD_NAME: &str = "production-listener";
 const PRODUCTION_RPC_JOURNAL_FD_NAME: &str = "production-journal";
 const PRODUCTION_AUTHORITY_ENDPOINT_REQUEST_DOMAIN: &[u8] =
-    b"serverware.policyCustodyProductionAuthorityEndpointRequest/v4";
+    b"catchplate.policyCustodyProductionAuthorityEndpointRequest/v4";
 const PRODUCTION_AUTHORITY_ENDPOINT_RESPONSE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyProductionAuthorityEndpointResponse/v4";
+    b"catchplate.policyCustodyProductionAuthorityEndpointResponse/v4";
 const PRODUCTION_AUTHORITY_ENDPOINT_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyProductionAuthorityEndpointSignature/v4";
+    b"catchplate.policyCustodyProductionAuthorityEndpointSignature/v4";
 const MAX_PRODUCTION_ENDPOINT_SIGNATURE_BASE64_BYTES: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1574,7 +1574,7 @@ impl ExistingFiveServiceProductionAuthoritiesV4
         ->Result<Option<native_guest::trusted_time_sample::VerifiedSample>,ProductionPrimitiveRejectionV4> {
         let Some(owner)=&self.native_proof_owner else {return Ok(None);};
         owner.check().map_err(|_|native_time_refused())?;
-        let replay=super::super::super::hash_domain_frames(b"serverware.nativeShadowTrustedTimeOperation/v1",
+        let replay=super::super::super::hash_domain_frames(b"catchplate.nativeShadowTrustedTimeOperation/v1",
             &[request.replay_id_sha256.as_str().as_bytes(),request.request_sha256.as_str().as_bytes()]);
         let query=ProductionAuthorityEndpointRequestV4::new(
             ProductionAuthorityEndpointIdentityV4::Proof(ProductionProofEndpointKindV4::TrustedTime),replay,

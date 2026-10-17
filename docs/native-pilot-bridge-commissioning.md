@@ -90,7 +90,7 @@ successes were not rerun. No production guard was weakened.
 
 Exact archives, commands, harnesses, logs, results and checksum manifest are
 retained locally at
-`/home/catchplate/codex-offload/serverware/engineering-builds/74e94c48-bridge-commissioning-i6kI0B/`.
+`/home/catchplate/codex-offload/catchplate/engineering-builds/74e94c48-bridge-commissioning-i6kI0B/`.
 Runs used one CPU, a cleared environment and a private network namespace.
 No protected owner, production signing entrypoint, provisioner, publisher,
 service, native rebuild, cloud or paid operation ran. The projection and live

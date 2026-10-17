@@ -7,13 +7,13 @@ startup still refuses and production acceptance remains **0/6**.
 
 ## Independent policy and fixed sequence
 
-Explicit `serverware.nativePilotSupervisorCommissioningPolicy/v10` adds only
+Explicit `catchplate.nativePilotSupervisorCommissioningPolicy/v10` adds only
 the literal canonical `ordinaryTransitionsOriginal` to v9's seventeen fields.
 The outer 4 MiB policy bound and 77 capability selectors remain unchanged.
 Earlier versions retain their original authority and closed field sets.
 
 The fragment has exactly four fields: `apiVersion`
-(`serverware.nativePilotOrdinaryTransitionPolicy/v1`), `dispatch`, `spool` and
+(`catchplate.nativePilotOrdinaryTransitionPolicy/v1`), `dispatch`, `spool` and
 `regularAppendCapacity`. It independently selects a nonempty `initialHeadSha256`
 for each dispatch role; an `initialTransitionHeadSha256` for DurableRecoveryStore,
 Cleanup and CurrentSignatureAuthority; and append capacity from 1 through 32.
@@ -94,7 +94,7 @@ The 85,278,720-byte source archive has SHA256
 `543a98d7f469c5267da9b37e3af7fbcb2301a1e3468700e600ccea8925a41af4`.
 Archive, source revision, exact harness/command, log, structured result and
 verified checksums are retained outside disposable scratch at
-`codex-offload/serverware/engineering-builds/b0c98be1-ordinary-transitions-wrwhMX/`.
+`codex-offload/catchplate/engineering-builds/b0c98be1-ordinary-transitions-wrwhMX/`.
 Native source, schemas and dependency lock are unchanged from the previously
 compiled `03d4075d`; no native/artifact rebuild was repeated. The reused runtime
 is still an unpublished engineering candidate. No cloud or paid action ran.

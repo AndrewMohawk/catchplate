@@ -74,7 +74,7 @@ impl CustodyRuntime {
             owner.verify_live(deadline).map_err(native_proof_error)?;
             let proof = serde_json::json!({"statement": statement,
                 "signature": format!("ed25519:{}", general_purpose::URL_SAFE_NO_PAD.encode(signature)),
-                "nativeKeyEvidence": {"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+                "nativeKeyEvidence": {"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1",
                     "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key()),
                     "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document())},
                 "assignmentOriginal":admitted.assignment_original()});

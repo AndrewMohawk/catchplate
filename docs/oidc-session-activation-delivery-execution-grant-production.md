@@ -1,6 +1,6 @@
 # Consume-only grant production
 
-[`authority_oidc_session_activation_delivery_execution_grant_production._produce_on_work`](../serverware/authority_oidc_session_activation_delivery_execution_grant_production.py)
+[`authority_oidc_session_activation_delivery_execution_grant_production._produce_on_work`](../catchplate/authority_oidc_session_activation_delivery_execution_grant_production.py)
 produces original signed grant bytes only after genuine root/caller admission
 and one full replay of the private consume originals. It accepts no arbitrary
 payload, successful-verification carrier or signing callback.

@@ -13,7 +13,7 @@ import tarfile
 
 
 HERE = Path(__file__).resolve().parent
-CANDIDATE_ID = "serverware-production-dependencies-linux-amd64-v3-candidate-cba01916"
+CANDIDATE_ID = "catchplate-production-dependencies-linux-amd64-v3-candidate-cba01916"
 REPORT_SHA256 = "38b4ea78b2ab07faa68e3193087d33072998bddb9dd404e9b5fd9e6fe6f37a00"
 GPL_SHA256 = "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
 # Exact official Debian source originals. Acquisition is a separate operation;
@@ -188,12 +188,12 @@ def prepare(*, candidate: Path, source_directory: Path, output: Path) -> dict:
                          "binaryBytes": len(deb), "sourcePackage": package["source"], "version": package["version"],
                          "license": "GPL-2.0-or-later", "copyright": notice_path,
                          "licenseText": "licenses/GPL-2.0.txt", "sources": source_rows})
-    outputs["source-map.json"] = canonical({"schema": "serverware.nativeDependencySourceCompanion/v1",
+    outputs["source-map.json"] = canonical({"schema": "catchplate.nativeDependencySourceCompanion/v1",
         "candidateId": CANDIDATE_ID, "candidateReportSha256": REPORT_SHA256, "packages": mappings,
         "distribution": "Publish these sources and notices beside the exact referenced binaries with equivalent access.",
         "writtenOffer": False, "licensingReviewApproved": False, "published": False,
         "productionReleaseAuthority": False, "dscSignaturesVerified": False})
-    result = {"schema": "serverware.nativeDependencySourceCompanionPreparation/v1", "ok": True,
+    result = {"schema": "catchplate.nativeDependencySourceCompanionPreparation/v1", "ok": True,
         "scope": "two-retained-debian-binaries-only", "candidateId": CANDIDATE_ID,
         "candidateReportSha256": REPORT_SHA256, "published": False, "licensingReviewApproved": False,
         "productionReleaseAuthority": False, "candidateModified": False,

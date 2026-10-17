@@ -85,7 +85,7 @@ substitute for that input.
 
 ### CLI inputs
 
-Use the existing `serverware-enrollment` command with exactly one of
+Use the existing `catchplate-enrollment` command with exactly one of
 `--request-workload-issuance-options` or `--submit-workload-issuance`.
 Neither can be mixed with local prepare/admit or ordinary enrollment networking.
 
@@ -110,8 +110,8 @@ and origin remain explicitly joined; independently choosing an address does not
 disable normal certificate-name verification.
 
 The cookie file holds only the ASCII Cookie header value: either
-`serverware_admin=<value>; serverware_csrf=<value>` or
-`serverware_oidc_session=<value>; serverware_csrf=<value>` (either ordering).
+`catchplate_admin=<value>; catchplate_csrf=<value>` or
+`catchplate_oidc_session=<value>; catchplate_csrf=<value>` (either ordering).
 The CSRF file holds the exact matching CSRF value. Neither file has a header
 prefix or trailing newline. Use protected local files; do not paste session
 tokens, assertions or private keys into chat, shell arguments or logs. There is

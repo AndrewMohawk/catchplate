@@ -1,18 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-enrollment-bootstrap-delegation.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-enrollment-bootstrap-delegation.v1.schema.json",
   "title": "Independently signed native enrollment bootstrap delegation v1",
   "description": "Canonical compact sorted JSON with Python ensure_ascii=True escaping, plus exactly one LF; envelope at most 32768 bytes and depth at most 4. Signature verification uses an independently pinned dedicated Ed25519 authorizer. Actual target request and independent issuer originals must be reverified; signed runtime/caller pins do not prove live policy or TLS admission. Schema shape is not signature verification, caller authentication, packet semantics, one-use state, issuer permission or enrollment completion. Existing exact-packet assignment semantics remain unchanged.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "delegation", "signatureBase64url"],
   "properties": {
-    "apiVersion": {"const": "serverware.signedNativeEnrollmentBootstrapDelegation/v1"},
+    "apiVersion": {"const": "catchplate.signedNativeEnrollmentBootstrapDelegation/v1"},
     "delegation": {"$ref": "#/$defs/delegation"},
     "signatureBase64url": {
       "type": "string", "minLength": 86, "maxLength": 86,
       "pattern": "^[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])",
-      "description": "Canonical unpadded URL-safe base64 of the raw64 Ed25519 signature over ASCII(serverware/native-enrollment-bootstrap-delegation/v1) || NUL || canonical delegation JSON, without LF."
+      "description": "Canonical unpadded URL-safe base64 of the raw64 Ed25519 signature over ASCII(catchplate/native-enrollment-bootstrap-delegation/v1) || NUL || canonical delegation JSON, without LF."
     }
   },
   "$defs": {
@@ -31,7 +31,7 @@
         "targetExpiresAtEpochMs", "notBeforeUnixSeconds", "expiresAtUnixSeconds"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeEnrollmentBootstrapDelegation/v1"},
+        "apiVersion": {"const": "catchplate.nativeEnrollmentBootstrapDelegation/v1"},
         "purpose": {"const": "native-enrollment-bootstrap"},
         "authorizerKeyId": {
           "$ref": "#/$defs/sha256",

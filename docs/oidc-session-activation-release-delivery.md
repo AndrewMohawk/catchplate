@@ -23,9 +23,9 @@ and response. There is no post-drop exec, serialized clock carrier or new budget
 | 202 | Nonblocking fixed Unix listener |
 
 Every descriptor retains close-on-exec. Protected public originals are read from
-`/run/serverware/oidc-session-activation-token-release-trust/{root-public-key.pem,bootstrap.json}`;
+`/run/catchplate/oidc-session-activation-token-release-trust/{root-public-key.pem,bootstrap.json}`;
 the single private file is root-owned mode 0400 at
-`/run/secrets/serverware-oidc-session-activation-token-release-delivery-key`.
+`/run/secrets/catchplate-oidc-session-activation-token-release-delivery-key`.
 Source file types, links, ownership, sizes and before/after identities are checked;
 actual admitted byte lengths are charged before reading/sealing. The original
 current guard runs immediately before and after each raw read and sealing call;
@@ -37,7 +37,7 @@ history, SQL, TLS or state-client key/resource is delivered.
 ## One independently pinned slot
 
 The pre-provisioned root:root 0700 base is fixed inside the worker at
-`/var/lib/serverware/oidc-session-activation-release-outcomes`. After genuine root
+`/var/lib/catchplate/oidc-session-activation-release-outcomes`. After genuine root
 admission, the launcher derives `slot-<hex64>` using the existing outcome slot
 domain over the admitted database, generation and delivery IDs. It does not use
 the raw delivery ID as a pathname. No request, environment or command-line path
@@ -54,7 +54,7 @@ authorization; a directory's contents cannot select the profile or checkpoint.
 ## Finite worker boundary
 
 The listener is fixed at
-`/run/serverware/oidc-session-activation-token-release/release.sock`, owner 65502,
+`/run/catchplate/oidc-session-activation-token-release/release.sock`, owner 65502,
 group/peer 65532, mode 0660. Its socket/path identities match signed launch pins
 before the private read. Delivery passes the exact actual resource owner to
 `runner._run_with_resources`; that continuation performs one actual startup and

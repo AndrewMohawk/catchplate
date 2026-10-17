@@ -86,7 +86,7 @@ impl ShadowRequestHandle {
                 return Err("native credential terminal lacks the original committed outer effect".into());
             }
             return Ok(Some((ActiveEffectTerminalState::Completed, canonical_digest(&json!({
-                "domain":"serverware.policyShadowNativeCredentialTerminal/v1",
+                "domain":"catchplate.policyShadowNativeCredentialTerminal/v1",
                 "requirement":requirement,"parent":parent,"outerSlot":slot,
             }))?)));
         }
@@ -97,7 +97,7 @@ impl ShadowRequestHandle {
             return Err("native credential injection outcome is not committed".into());
         }
         Ok(Some((ActiveEffectTerminalState::Completed, canonical_digest(&json!({
-            "domain":"serverware.policyShadowNativeCredentialInjectionTerminal/v1",
+            "domain":"catchplate.policyShadowNativeCredentialInjectionTerminal/v1",
             "generationId":self.inner.generation.generation_id(),
             "ingressSequence":self.inner.ingress_sequence,
             "requestBindingSha256":self.inner.request_binding_sha256,

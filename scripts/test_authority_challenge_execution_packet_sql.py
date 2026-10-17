@@ -14,7 +14,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware.authority_store import challenge_execution_packet_sql as source
+from catchplate.authority_store import challenge_execution_packet_sql as source
 
 
 NAMESPACE = '"fixture"'
@@ -95,7 +95,7 @@ class ChallengeExecutionPacketSQLControls(unittest.TestCase):
                 "cxe_snapshot->>'retainedRecordDigest'", "cxe_grant->'requestAuthorizationDigest'"):
             self.assertIn("(" + expression + ") IS DISTINCT FROM (", sql)
         self.assertIn("cxe_plan_json, cxe_request_json, cxe_manifest_json", sql)
-        self.assertIn("'serverware.policyAuthorityOperation/v2'", sql)
+        self.assertIn("'catchplate.policyAuthorityOperation/v2'", sql)
 
     def test_original_intervals_are_equal_and_processing_deadline_only_narrows(self):
         sql = source.packet_body_sql(NAMESPACE)

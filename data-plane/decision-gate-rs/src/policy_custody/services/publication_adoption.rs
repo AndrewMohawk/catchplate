@@ -15,10 +15,10 @@ use crate::policy_shadow::{AtomicTrustCheckpoint, AuthorityRole, CanonicalEd2551
     ed25519_public_key_material_sha256, signature_preimage};
 
 pub(in crate::policy_shadow) const MAX_AUTHORIZATION: usize = 2 * 1024 * 1024;
-const DOMAIN: &str = "serverware.nativePublicationAdoptionAuthorization.signature/v1";
-const BOOTSTRAP_DOMAIN: &str = "serverware.nativePublicationAdoptionAuthorization.signature/v2";
-const API: &str = "serverware.nativePublicationAdoptionAuthorization/v1";
-const BOOTSTRAP_API: &str = "serverware.nativePublicationAdoptionAuthorization/v2";
+const DOMAIN: &str = "catchplate.nativePublicationAdoptionAuthorization.signature/v1";
+const BOOTSTRAP_DOMAIN: &str = "catchplate.nativePublicationAdoptionAuthorization.signature/v2";
+const API: &str = "catchplate.nativePublicationAdoptionAuthorization/v1";
+const BOOTSTRAP_API: &str = "catchplate.nativePublicationAdoptionAuthorization/v2";
 fn profile(api: &str) -> Result<(bool, &'static str), ServiceError> {
     match api {
         API => Ok((false, DOMAIN)),
@@ -37,7 +37,7 @@ mod profile_tests {
         assert_eq!(profile(API).unwrap(), (false, DOMAIN));
         assert_eq!(profile(BOOTSTRAP_API).unwrap(), (true, BOOTSTRAP_DOMAIN));
         assert_ne!(DOMAIN, BOOTSTRAP_DOMAIN);
-        for api in ["", "serverware.nativePublicationAdoptionAuthorization/v3", DOMAIN] {
+        for api in ["", "catchplate.nativePublicationAdoptionAuthorization/v3", DOMAIN] {
             assert!(profile(api).is_err());
         }
         let key = SigningKey::from_bytes(&[71; 32]);
@@ -145,7 +145,7 @@ impl Payload {
         // Explicit signed successor, never silently reinterpret v1 evidence.
         configuration.validate_selected(bootstrap).map_err(|_| invalid())?;
         let handoff = Handoff {
-            api_version: "serverware.nativePublicationGenesisHandoff/v1".into(),
+            api_version: "catchplate.nativePublicationGenesisHandoff/v1".into(),
             commissioning_id_sha256: configuration.scope.commissioning_id_sha256.clone(),
             scope_sha256: sha(&configuration.scope)?, bundle_original: p.cold_bundle_original.clone(),
             bundle_sha256: Sha256Digest::compute(p.cold_bundle_original.as_bytes()),

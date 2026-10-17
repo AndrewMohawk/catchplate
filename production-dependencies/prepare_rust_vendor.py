@@ -207,14 +207,14 @@ def docker_environment(config: Path) -> dict[str, str]:
 
 
 def download(work: Path, candidate: Path, image_id: str, deadline: float) -> None:
-    name = "serverware-rust-candidate-" + os.urandom(12).hex()
+    name = "catchplate-rust-candidate-" + os.urandom(12).hex()
     env = docker_environment(work / "docker-config")
     source_directory = ROOT / "data-plane/decision-gate-rs/src"
     require(source_directory.is_dir() and source_directory.resolve() == source_directory, "actual Cargo src mount is not a real directory")
     # No host output bind mount. Both Cargo expansion locations have hard
     # tmpfs ceilings; only this capped public-data tar crosses to the host.
     command = ["docker", "--host=unix:///var/run/docker.sock", "run", "--rm", "--pull=never", "--name", name,
-        "--label", "serverware.dependency-candidate=" + name, "--platform=linux/amd64", "--network=bridge",
+        "--label", "catchplate.dependency-candidate=" + name, "--platform=linux/amd64", "--network=bridge",
         "--user", f"{os.geteuid()}:{os.getegid()}", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
         "--cpus=1", "--memory=5g", "--memory-swap=5g", "--pids-limit=64", "--ulimit=nofile=512:512",
         "--ulimit=fsize=134217728:134217728", "--log-driver=none",
@@ -264,7 +264,7 @@ def download(work: Path, candidate: Path, image_id: str, deadline: float) -> Non
         # Resolve only this exact random name AND task label to its actual ID;
         # a colliding unrelated container is never a cleanup target.
         select = ["docker", "--host=unix:///var/run/docker.sock", "container", "ls", "--all", "--no-trunc",
-            "--filter", "name=^/" + name + "$", "--filter", "label=serverware.dependency-candidate=" + name,
+            "--filter", "name=^/" + name + "$", "--filter", "label=catchplate.dependency-candidate=" + name,
             "--format={{.ID}}"]
         selected = subprocess.run(select, env=env, check=True, timeout=30, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode("ascii").splitlines()
         require(len(selected) <= 1 and all(SHA.fullmatch(value) is not None for value in selected), "task Rust container identity ambiguous")

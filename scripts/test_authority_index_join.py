@@ -25,18 +25,18 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_index_contract as contract
-from serverware import authority_index_join as joined
-from serverware import authority_index_projection as projection
-from serverware import authority_index_range as ranges
-from serverware import authority_radix_mutation as primary
+from catchplate import authority_index_contract as contract
+from catchplate import authority_index_join as joined
+from catchplate import authority_index_projection as projection
+from catchplate import authority_index_range as ranges
+from catchplate import authority_radix_mutation as primary
 import test_authority_index_range as index_fixture
 import test_authority_radix_mutation as primary_fixture
 
 
-COUNTED_PROFILE = "serverware.policyAuthorityCountedIndex/v1"
-DESCRIPTOR_DOMAIN = "serverware.policyAuthorityIndexProjectionDescriptor/v1"
-PARTITION_DOMAIN = "serverware.policyAuthorityIndexPartition/v1"
+COUNTED_PROFILE = "catchplate.policyAuthorityCountedIndex/v1"
+DESCRIPTOR_DOMAIN = "catchplate.policyAuthorityIndexProjectionDescriptor/v1"
+PARTITION_DOMAIN = "catchplate.policyAuthorityIndexPartition/v1"
 CREDENTIAL = "webauthn_credential_id"
 REGISTRATION = "webauthn_registration_unused_global"
 I64 = 2**63 - 1
@@ -204,11 +204,11 @@ def descriptor(index_id):
                 "zero8/generated-challenge-id-text-order", "whole-equality-partition"),
         }[index_id]
     result = {
-        "schema": "serverware.policyAuthorityIndexProjection/v1",
+        "schema": "catchplate.policyAuthorityIndexProjection/v1",
         "countedProfile": COUNTED_PROFILE, "indexId": index_id, "table": table,
         "primaryKeyColumn": "id",
-        "primaryKeyCommitment": "serverware.policyAuthorityBusinessKey/v1",
-        "primaryRowCommitment": "serverware.policyAuthorityAuthenticatedRow/v1",
+        "primaryKeyCommitment": "catchplate.policyAuthorityBusinessKey/v1",
+        "primaryRowCommitment": "catchplate.policyAuthorityAuthenticatedRow/v1",
         "keyBytes": [32, 16, 32], "rowFields": row_fields,
         "selectorFields": selector_fields, "membership": membership,
         "partitionFields": partition_fields, "partitionDomain": PARTITION_DOMAIN,
@@ -377,7 +377,7 @@ def primary_metrics(tree, selected_rows, before_proofs):
 
 def context_document(fixture):
     return {
-        "schema": "serverware.policyAuthorityIndexPrimaryContext/v1",
+        "schema": "catchplate.policyAuthorityIndexPrimaryContext/v1",
         "profile": {"indexId": fixture.profile.index_id, "table": fixture.profile.table,
                     "projectionDigest": fixture.profile.projection_digest},
         "indexRevision": fixture.anchor.index_revision,
@@ -452,7 +452,7 @@ class AuthorityIndexJoinTests(unittest.TestCase):
         self.assertEqual(result.leaves, fixture.index.matches(fixture.interval))
         context_wire = primary_fixture.wire_json(context_document(fixture))
         self.assertEqual(result.context_digest, primary_fixture.wire_digest(
-            "serverware.policyAuthorityIndexPrimaryContext/v1", context_wire))
+            "catchplate.policyAuthorityIndexPrimaryContext/v1", context_wire))
         expected_primary = primary_metrics(fixture.primary, fixture.selected, fixture.proofs)
         expected_index = index_fixture.metric_oracle(fixture.profile, fixture.index.root,
                                                      fixture.interval, fixture.frontier)
@@ -482,7 +482,7 @@ class AuthorityIndexJoinTests(unittest.TestCase):
         # Outside-partition subtrees remain authenticated, not returned rows.
         self.assertTrue(any(type(node) is contract.OpaqueSubtree for node in self.fixture.frontier))
         selected = self.fixture.selected[0]
-        sql_path = primary_fixture.sql_digest("serverware.policyAuthorityAuthenticatedKey/v1",
+        sql_path = primary_fixture.sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1",
                                                self.fixture.primary.table.encode(),
                                                primary_fixture.sql_json(selected["key"]))
         self.assertNotEqual(selected["keyDigest"], sql_path)

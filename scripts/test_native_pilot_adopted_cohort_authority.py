@@ -11,7 +11,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from serverware import native_pilot_adopted_cohort_authority as issuer
+from catchplate import native_pilot_adopted_cohort_authority as issuer
 
 p, cohort = issuer.p, issuer.cohort
 
@@ -23,7 +23,7 @@ def fixture():
         raw = value.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         return dict(publicKeyBase64url=p.encoded(raw), keyId=p.sha(raw))
     auth = authority(key)
-    cold = {role: p.canonical(dict(apiVersion="serverware.policyCustodyGuestConfiguration/v1", authority=auth,
+    cold = {role: p.canonical(dict(apiVersion="catchplate.policyCustodyGuestConfiguration/v1", authority=auth,
         serviceRole="production-bridge", uid=2000 + i, gid=3000 + i)).decode("ascii")
         for i, role in enumerate(issuer.ROLES)}
     config = dict(apiVersion=cohort.ADOPTED_CONFIGURATION_API, authority=auth, executableSha256=p.sha(b"exe"),
@@ -31,7 +31,7 @@ def fixture():
             journal=dict(device=1, inode=2, mode=stat.S_IFDIR | 0o700, uid=0, gid=0)),
         externalDriver={name: p.sha(name.encode()) for name in
             ("configurationSha256", "windowSha256", "observationSha256", "supervisorExecutableSha256")})
-    config.update({role + "Configuration": dict(path="/etc/serverware/" + role + ".json", sha256=p.sha(raw.encode()))
+    config.update({role + "Configuration": dict(path="/etc/catchplate/" + role + ".json", sha256=p.sha(raw.encode()))
         for role, raw in cold.items()})
     config_raw = p.canonical(config)
     boot = p.encoded(bytes(range(16))), 1, 2
@@ -56,7 +56,7 @@ def release_fixture():
     observed.update({role: dict(processId=100 + i, startTimeTicks=10 + i,
         executable=dict(device=1, inode=1000 + i, length=8192, sha256=config["executableSha256"]))
         for i, role in enumerate(issuer.ROLES)})
-    observed["externalDriver"] = dict(apiVersion="serverware.nativeShadowEndpointDriverOriginal/v1",
+    observed["externalDriver"] = dict(apiVersion="catchplate.nativeShadowEndpointDriverOriginal/v1",
         bindingSha256=p.sha(b"binding"), **{name: config["externalDriver"][name] for name in
             ("configurationSha256", "windowSha256", "observationSha256")},
         supervisor=dict(processId=10, startTimeTicks=2, pidfdDevice=0, pidfdInode=4),
@@ -66,7 +66,7 @@ def release_fixture():
     payload = dict(apiVersion=cohort.release_api(config), configurationSha256=value["configurationSha256"],
         precreationSha256=p.sha(signed), observationSha256=p.sha(observed_raw), invocationId=window["invocationId"],
         signingKeyId=config["authority"]["keyId"], externalDriverSha256=cohort.external_driver_sha256(config, observed))
-    payload.update({role: {kind: dict(path="/etc/serverware/" + role + "-" + kind + ".json", sha256=p.sha((role + kind).encode()))
+    payload.update({role: {kind: dict(path="/etc/catchplate/" + role + "-" + kind + ".json", sha256=p.sha((role + kind).encode()))
         for kind in ("launch", "image")} for role in issuer.ROLES})
     value.update(operation="release", payloadOriginal=p.canonical(payload).decode(), precreationOriginal=signed.decode(),
         observationsOriginal=observed_raw.decode())
@@ -87,15 +87,15 @@ class AdoptedCohortAuthorityControls(unittest.TestCase):
         context = issuer.prepare_input("release", p.canonical(value), **clocks)
         raw = cohort.sign_release(**context["kwargs"], signing_key=key, boot=clocks["boot"], now=clocks["now_boottime_ns"])
         result = p.document(raw, cohort.MAX_BYTES)
-        self.assertEqual(result["payload"]["apiVersion"], "serverware.nativeShadowProofCohortRelease/v7")
+        self.assertEqual(result["payload"]["apiVersion"], "catchplate.nativeShadowProofCohortRelease/v7")
         key.public_key().verify(p.decoded(result["signatureBase64url"], size=64),
-            b"serverware.nativeShadowProofCohortRelease.signature/v7\0" + p.canonical(result["payload"]))
+            b"catchplate.nativeShadowProofCohortRelease.signature/v7\0" + p.canonical(result["payload"]))
 
     def test_old_input_and_missing_or_extra_roles_refused(self):
         _, original, clocks = fixture()
         for variant in ("old", "missing", "extra"):
             value = copy.deepcopy(original)
-            if variant == "old": value["apiVersion"] = "serverware.nativePilotCohortAuthorityInput/v1"
+            if variant == "old": value["apiVersion"] = "catchplate.nativePilotCohortAuthorityInput/v1"
             elif variant == "missing": value["coldOriginals"].pop("publicationReconciliation")
             else: value["coldOriginals"]["bridge"] = value["coldOriginals"]["retrieval"]
             with self.subTest(variant=variant), self.assertRaises(ValueError):

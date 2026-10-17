@@ -1,6 +1,6 @@
 name: Hosted guided prerequisites
 
-# Manual, setup-only probe. This does not deploy Serverware or run the guided
+# Manual, setup-only probe. This does not deploy Catchplate or run the guided
 # journey. It uses fresh GitHub VM resources, never homelab data or secrets.
 on:
   workflow_dispatch:
@@ -32,7 +32,7 @@ jobs:
           probe_user="$(id -un)"
           test "$probe_uid" -ne 0
           test -f /sys/fs/cgroup/cgroup.controllers
-          mkdir -m 700 "$RUNNER_TEMP/serverware-hosted-prerequisites"
+          mkdir -m 700 "$RUNNER_TEMP/catchplate-hosted-prerequisites"
           timeout --kill-after=2s 10s /usr/bin/docker --host unix:///var/run/docker.sock version --format '{{.Server.Version}}'
           timeout --kill-after=2s 10s /usr/bin/docker --host unix:///var/run/docker.sock compose version --short
           # This configures only this ephemeral GitHub VM's existing job user.
@@ -53,12 +53,12 @@ jobs:
           # 60 seconds of probe work plus 20 seconds of cleanup, with an outer
           # observation ceiling. A timeout never licenses a new create attempt.
           timeout --kill-after=5s 90s python3 -I -S -B scripts/check_operator_hosted_prerequisites.py \
-            --output "$RUNNER_TEMP/serverware-hosted-prerequisites/result.json"
+            --output "$RUNNER_TEMP/catchplate-hosted-prerequisites/result.json"
       - name: Retain only the bounded public prerequisite receipt
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: hosted-guided-prerequisites
-          path: ${{ runner.temp }}/serverware-hosted-prerequisites/result.json
+          path: ${{ runner.temp }}/catchplate-hosted-prerequisites/result.json
           if-no-files-found: warn
           retention-days: 7

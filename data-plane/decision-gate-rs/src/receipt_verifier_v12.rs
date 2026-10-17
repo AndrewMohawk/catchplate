@@ -978,8 +978,8 @@ pub fn verify_genesis_final_settlement_anchor_v12(
     )?;
     let payload = &checkpoint.payload;
     if payload.outcome != FinalSettlementOutcomeV12::Genesis
-        || payload.receipt_id != "serverware:genesis"
-        || payload.requester_principal_id != "serverware:genesis"
+        || payload.receipt_id != "catchplate:genesis"
+        || payload.requester_principal_id != "catchplate:genesis"
         || payload.receipt_sequence.get()? != 0
         || payload.replay_key_sha256 != DigestHex::zero()
         || payload.request_v11_sha256 != DigestHex::zero()

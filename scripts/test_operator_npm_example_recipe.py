@@ -27,10 +27,10 @@ from scripts import run_operator_x_examples_fixture as common
 SOURCE, BINARY, INITIALIZER = (Path("/synthetic/" + name) for name in ("source", "gate", "initialize.py"))
 NODE = Path("/home/catchplate/.nvm/versions/node/v25.5.0/bin/node")
 MODULES = SOURCE / "examples/npm-registry/node_modules"
-JOB = Path("/srv/catchplate-fast/tmp/serverware-npm-example-private.abcdef12")
+JOB = Path("/srv/catchplate-fast/tmp/catchplate-npm-example-private.abcdef12")
 ARGS = (SOURCE, BINARY, INITIALIZER, JOB, NODE, MODULES)
 PINS = {"expected_binary_sha256": "a" * 64, "expected_node_modules_sha256": "b" * 64}
-RUNTIME = {"network", "npm-registry", "serverware", "decision-gate-rs", "edge", "check"}
+RUNTIME = {"network", "npm-registry", "catchplate", "decision-gate-rs", "edge", "check"}
 NOW = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
 
 
@@ -115,7 +115,7 @@ class NpmExampleRecipeTests(InertTests):
                 "/usr/lib/x86_64-linux-gnu/libatomic.so.1", "/client-trust/inner-ca.pem", "/client-trust/outer-ca.pem"):
             self.assertTrue(mounts[target]["read_only"])
         for target in mounts:
-            self.assertNotIn(target, {"/npm", "/etc/passwd", "/etc/group", "/home", "/home/serverware"})
+            self.assertNotIn(target, {"/npm", "/etc/passwd", "/etc/group", "/home", "/home/catchplate"})
         self.assertEqual(check["command"][0], "/app/scripts/check_operator_npm_example.py")
         self.assertNotIn("operator_npm_publish_job.mjs", json.dumps(check))
         self.assertTrue(any(value.startswith("/tmp:") and "uid=10001" in value and "mode=0700" in value
@@ -159,7 +159,7 @@ class NpmExampleRecipeTests(InertTests):
                 changed = dict(PINS); changed[key] = invalid
                 with self.subTest(key=key, invalid=invalid), self.assertRaises(ValueError):
                     recipe.build(*ARGS, **changed)
-        for root in (Path("/tmp") / JOB.name, JOB.with_name("serverware-npm-publish-private.abcdef12")):
+        for root in (Path("/tmp") / JOB.name, JOB.with_name("catchplate-npm-publish-private.abcdef12")):
             with self.assertRaises(ValueError): recipe.build(*ARGS[:3], root, *ARGS[4:], **PINS)
         for node, modules in ((Path("/different/node"), MODULES), (NODE, Path("/detached/node_modules"))):
             with self.assertRaises(ValueError):

@@ -1,9 +1,9 @@
 # Independent late-runtime closure authority
 
 `scripts/authority/sign_native_pilot_closure.py` issues only the existing
-`serverware.nativeCustodyClosureAssignment/v2`, for
+`catchplate.nativeCustodyClosureAssignment/v2`, for
 `measured-bootstrap-late-runtime-static-amd64-v1`. It returns the complete
-`serverware.nativeCustodyClosure/v2` original for the existing bridge launch
+`catchplate.nativeCustodyClosure/v2` original for the existing bridge launch
 installer. Endpoint closure assignment v1 is not implemented by this command.
 
 This issuer runs **after the retained driver observation and signed operational
@@ -28,7 +28,7 @@ FD 3 contains an independently approved canonical ASCII/no-LF object, at most
 
 | Field | Required existing original |
 | --- | --- |
-| `apiVersion` | `serverware.nativePilotClosureAuthorityInput/v1` |
+| `apiVersion` | `catchplate.nativePilotClosureAuthorityInput/v1` |
 | `controlOriginal` | Driver bootstrap control v1, pinning configuration/window and supervisor executable |
 | `configurationOriginal` | Driver bootstrap configuration v4, including approved immutable image pins |
 | `windowOriginal` | Signed bootstrap window v1, with original boot, time namespace and deadlines |
@@ -70,7 +70,7 @@ recomputed. Recipe, transparency-log entry and reproducible-build assertions are
 independently supplied evidence, not evidence generated or established here.
 
 The existing signature transcript is
-`serverware.nativeCustodyClosureAssignment.signature/v2` within the existing
+`catchplate.nativeCustodyClosureAssignment.signature/v2` within the existing
 signed-envelope canonical-JSON framing. Output is at most 1 MiB, canonical
 ASCII/no-LF, and can be supplied as the bridge installer's `closure` original;
 that installer publishes the fixed `native-bridge-closure` slot. The Python API

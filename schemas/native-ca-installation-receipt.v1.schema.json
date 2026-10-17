@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-ca-installation-receipt.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-ca-installation-receipt.v1.schema.json",
   "title": "Local native CA installation receipt v1",
   "description": "Closed local diagnostic with compact UTF-8 JSON representation at most 8191 bytes. Neither a signature nor independent evidence that an installation remains present. Capture extraction checks only this representation, never the authorization, token, journal, host, namespace, actual CA or destination. No private token or key is included. Preserve the producer exit status separately.",
   "type": "object", "additionalProperties": false,
   "required": ["apiVersion", "resultScope", "okForAction", "status", "authorizationSha256", "operationSha256", "reservationSha256", "setupSha256", "capabilityId", "runtimeCaCertificateSha256", "destinationPath"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeCaInstallationReceipt/v1"},
+    "apiVersion": {"const": "catchplate.nativeCaInstallationReceipt/v1"},
     "resultScope": {"const": "local-authorized-native-ca-installation-only"},
     "okForAction": {"const": false},
     "status": {"enum": ["installed", "already-complete"]},

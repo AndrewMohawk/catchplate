@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-authority-portal-package.v1.schema.json",
-  "title": "Serverware Policy Authority Portal Package v1",
+  "$id": "https://catchplate.invalid/schemas/policy-authority-portal-package.v1.schema.json",
+  "title": "Catchplate Policy Authority Portal Package v1",
   "$comment": "This package contains only references to already durable signed candidate evidence and closed authority-operation arguments. It contains no signing keys and confers no authority until the server revalidates the current durable chain.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "handoff", "activation"],
   "properties": {
-    "apiVersion": {"const": "serverware.policyAuthorityPortalPackage/v1"},
+    "apiVersion": {"const": "catchplate.policyAuthorityPortalPackage/v1"},
     "handoff": {"$ref": "#/$defs/handoff"},
     "activation": {"$ref": "#/$defs/activation"}
   },

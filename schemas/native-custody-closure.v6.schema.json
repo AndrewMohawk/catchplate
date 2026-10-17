@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-custody-closure.v6.schema.json",
-  "description": "Explicit cold-three measured-bootstrap successor. Signature domain serverware.nativeCustodyClosureAssignment.signature/v6. Only publicationGenesisCoordinator uses Manifest/v2; its image contains exact nativePublicationGenesisBootstrapRuntime/v1 while the complete later runtime remains bound by the genuine C9 guest and closure signature. Both endpoints retain static Manifest/v1. Native admission additionally checks exact membership, all digest joins, assignment/trust signatures, runtime separation, original windows and actual retained image/process ownership. This schema proves none of those facts. Complete canonical live original remains at most 1MiB, including the entire set; static set limits do not widen that bound.",
+  "$id": "https://catchplate.invalid/schemas/native-custody-closure.v6.schema.json",
+  "description": "Explicit cold-three measured-bootstrap successor. Signature domain catchplate.nativeCustodyClosureAssignment.signature/v6. Only publicationGenesisCoordinator uses Manifest/v2; its image contains exact nativePublicationGenesisBootstrapRuntime/v1 while the complete later runtime remains bound by the genuine C9 guest and closure signature. Both endpoints retain static Manifest/v1. Native admission additionally checks exact membership, all digest joins, assignment/trust signatures, runtime separation, original windows and actual retained image/process ownership. This schema proves none of those facts. Complete canonical live original remains at most 1MiB, including the entire set; static set limits do not widen that bound.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "manifest", "authorization", "closureSet"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeCustodyClosure/v6"},
+    "apiVersion": {"const": "catchplate.nativeCustodyClosure/v6"},
     "manifest": {
       "oneOf": [
         {"$ref": "native-custody-closure.v1.schema.json#/$defs/manifest"},
@@ -56,7 +56,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "purpose", "profile", "assignmentId", "assignmentPayloadSha256", "assignmentRevision", "manifestSha256", "guest", "trustCheckpointId", "revocationGeneration", "revocationRootSha256", "issuedAtUnixNanos", "expiresAtUnixNanos", "signingKeyId", "signingKeySpkiSha256", "guestRole", "setRootSha256", "seccompSetRootSha256", "leafSha256"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeCustodyClosureAssignment/v6"},
+        "apiVersion": {"const": "catchplate.nativeCustodyClosureAssignment/v6"},
         "purpose": {"const": "shadow-custody-closure-set-member"},
         "profile": {"const": "native-publication-genesis-closure-set-v2"},
         "assignmentId": {"$ref": "#/$defs/digest"},

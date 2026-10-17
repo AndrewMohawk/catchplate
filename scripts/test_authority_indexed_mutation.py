@@ -19,11 +19,11 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_index_contract as contract
-from serverware import authority_index_mutation as sparse
-from serverware import authority_indexed_mutation as indexed
-from serverware import authority_radix_mutation as primary
-from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
+from catchplate import authority_index_contract as contract
+from catchplate import authority_index_mutation as sparse
+from catchplate import authority_indexed_mutation as indexed
+from catchplate import authority_radix_mutation as primary
+from catchplate.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
 import test_authority_radix_mutation as primary_oracle
 import test_authority_index_join as join_oracle
 import test_authority_index_range as counted_oracle
@@ -73,9 +73,9 @@ def forged(value, **changes):
 def image_leaf(profile, row, expiry_us=None):
     if row is None:
         return None
-    key_digest = primary_oracle.wire_digest("serverware.policyAuthorityBusinessKey/v1",
+    key_digest = primary_oracle.wire_digest("catchplate.policyAuthorityBusinessKey/v1",
         profile.table.encode("ascii"), primary_oracle.wire_json({"id": row["id"]}))
-    row_digest = primary_oracle.sql_digest("serverware.policyAuthorityAuthenticatedRow/v1",
+    row_digest = primary_oracle.sql_digest("catchplate.policyAuthorityAuthenticatedRow/v1",
         profile.table.encode("ascii"), primary_oracle.sql_json(row))
     return join_oracle.expected_leaf(profile, row, {"keyDigest": key_digest},
                                     {"rowDigest": row_digest}, expiry_us=expiry_us)
@@ -118,8 +118,8 @@ def index_metrics(info):
             hashes += 1 if populated == 0 else 17 - populated
         work.append(hashes)
     profile, root = info["profile"], info["before"].root
-    scalars = ["serverware.policyAuthorityIndexMutationInput/v1",
-        "serverware.policyAuthorityCountedIndex/v1", profile.index_id, profile.table,
+    scalars = ["catchplate.policyAuthorityIndexMutationInput/v1",
+        "catchplate.policyAuthorityCountedIndex/v1", profile.index_id, profile.table,
         profile.projection_digest, "160", root.digest, str(root.count),
         str(len(targets)), str(len(info["frontier"]))]
     for path, images in sorted(targets.items()):
@@ -156,7 +156,7 @@ def primary_metrics(arguments):
     }
     ancestors = set()
     for mutation in arguments["mutations"]:
-        path = primary_oracle.sql_digest("serverware.policyAuthorityAuthenticatedKey/v1",
+        path = primary_oracle.sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1",
             mutation["table"].encode("ascii"), primary_oracle.sql_json(mutation["key"]))[7:]
         ancestors.update((mutation["table"], path[:depth]) for depth in range(64))
     count = len(arguments["selected_rows"])
@@ -169,7 +169,7 @@ def primary_metrics(arguments):
 
 
 def context_bytes(index_inputs):
-    scalars = ["serverware.policyAuthorityIndexedMutationInput/v1", str(len(index_inputs))]
+    scalars = ["catchplate.policyAuthorityIndexedMutationInput/v1", str(len(index_inputs))]
     for item in index_inputs:
         scalars.extend((item.index_id, str(item.index_revision), item.index_root.digest,
                         str(item.index_root.count), str(len(item.frontier))))

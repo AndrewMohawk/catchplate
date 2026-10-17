@@ -18,8 +18,8 @@ use serde_json::Value;
 use std::sync::Arc;
 use zeroize::Zeroizing;
 
-const DOMAIN: &[u8] = b"serverware.nativeSetupCaInstallObservation/v1\0";
-const POSSESSION: &[u8] = b"serverware.nativeSetupCaInstallPossession/v1\0";
+const DOMAIN: &[u8] = b"catchplate.nativeSetupCaInstallObservation/v1\0";
+const POSSESSION: &[u8] = b"catchplate.nativeSetupCaInstallPossession/v1\0";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -60,9 +60,9 @@ fn enrollment_intent(intent: &Value, raw: &[u8]) -> Result<(), String> {
     ensure(encoding::encode_canonical(intent, 1200000)? == raw, "host observation intent canonical original differs")?;
     let version = integer(intent, "credentialVersion")?;
     match text(intent, "apiVersion")? {
-        "serverware.setupNativeEnrollmentIntent/v1" =>
+        "catchplate.setupNativeEnrollmentIntent/v1" =>
             ensure(closed(intent, &fields) && version == 1, "host observation v1 intent differs"),
-        "serverware.setupNativeEnrollmentIntent/v2" => {
+        "catchplate.setupNativeEnrollmentIntent/v2" => {
             let mut extended = fields.to_vec(); extended.push("continuationOriginal");
             ensure(closed(intent, &extended) && (2..=i64::MAX as u64).contains(&version),
                 "host observation rotated intent differs")?;
@@ -168,7 +168,7 @@ impl Prepared {
         ensure(encoding::encode_canonical(&prepared, 8192)? == prepared_raw
             && prepared.as_object().map(|x| x.len()) == Some(12)
             && fields.iter().all(|field| prepared.get(*field).is_some())
-            && text(&prepared, "apiVersion")? == "serverware.setupNativeCaInstallationPrepared/v1", "host observation prepared profile differs")?;
+            && text(&prepared, "apiVersion")? == "catchplate.setupNativeCaInstallationPrepared/v1", "host observation prepared profile differs")?;
         let row = json::parse(&enrollment_raw, 1500000)?;
         ensure(row.as_object().map(|x| x.len()) == Some(17) && integer(&row, "revision")? == 1
             && text(&row, "phase")? == "certificate_issued" && text(&row, "session_id")? == text(&prepared, "sessionId")?,
@@ -274,7 +274,7 @@ impl Prepared {
         let identity = destination.observation_identity()?;
         self.check()?; guard.check()?; reservation.require_completed()?;
         let after = super::super::sample()?.0;
-        let payload = json!({"apiVersion":"serverware.nativeSetupCaInstallObservation/v1", "purpose":"setup-ca-installation-readback",
+        let payload = json!({"apiVersion":"catchplate.nativeSetupCaInstallObservation/v1", "purpose":"setup-ca-installation-readback",
             "trustMode":"trusted-host-local", "preparedSha256":self.prepared_sha, "enrollmentSha256":self.enrollment_sha,
             "certificateSha256":self.certificate_sha, "associationSha256":self.association_sha,
             "installationAuthorizationSha256":digest_text(&grant.original_sha256), "nativeSetupSha256":digest_text(&grant.setup_sha256),

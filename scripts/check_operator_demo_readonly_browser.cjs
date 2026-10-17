@@ -12,13 +12,13 @@ const {createHash, X509Certificate, randomUUID, randomBytes, timingSafeEqual} = 
 
 const ROOT = resolve(__dirname, '..');
 const APP = 'http://172.16.249.19:3000';
-const PUBLIC = 'https://serverware-demo.example.com';
-const CONTAINER = 'serverware-operator-demo-serverware-1';
-const ARTIFACT_ROOT = '/srv/catchplate-fast/projects/serverware-operator-artifacts';
+const PUBLIC = 'https://catchplate-demo.example.com';
+const CONTAINER = 'catchplate-operator-demo-catchplate-1';
+const ARTIFACT_ROOT = '/srv/catchplate-fast/projects/catchplate-operator-artifacts';
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 const PATHS = new Set(['/', '/ca.pem', '/api/operator-demo/status', '/api/audit/search']);
-const ASSETS = ['serverware/operator_demo_portal.py', 'serverware/operator_demo_web/index.html',
-  'serverware/operator_demo_web/style.css', 'serverware/operator_demo_web/app.js'];
+const ASSETS = ['catchplate/operator_demo_portal.py', 'catchplate/operator_demo_web/index.html',
+  'catchplate/operator_demo_web/style.css', 'catchplate/operator_demo_web/app.js'];
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 class CheckFailure extends Error {}
 function requireCondition(value, label) { if (!value) throw new CheckFailure(label); }
@@ -34,16 +34,16 @@ function equalCapability(supplied, expected) {
     Buffer.byteLength(supplied) === Buffer.byteLength(expected) && timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
 }
 function caCookie(value) {
-  return {name: 'serverware_readonly_ca', value, domain: '127.0.0.1', path: '/ca.pem', httpOnly: true, sameSite: 'Strict', secure: false};
+  return {name: 'catchplate_readonly_ca', value, domain: '127.0.0.1', path: '/ca.pem', httpOnly: true, sameSite: 'Strict', secure: false};
 }
 function admittedRequest({method, target, headers}, origin, capability, downloadCapability) {
-  const supplied = headers['x-serverware-readonly-check'];
+  const supplied = headers['x-catchplate-readonly-check'];
   const primary = equalCapability(supplied, capability);
   // Chromium's native anchor[download] omits extraHTTPHeaders and bypasses HTTP
   // routing. A separate HttpOnly, Strict, CA-path-only capability preserves the
   // real download interaction without granting it status/audit/page access.
   const certificateCookie = target === '/ca.pem' && typeof downloadCapability === 'string' && downloadCapability.length >= 32 &&
-    equalCapability(headers.cookie, 'serverware_readonly_ca=' + downloadCapability);
+    equalCapability(headers.cookie, 'catchplate_readonly_ca=' + downloadCapability);
   if (supplied !== undefined && !primary) return null;
   if (!primary && !(method === 'GET' && certificateCookie && headers.referer === origin + '/' &&
       headers['sec-fetch-site'] === 'same-origin')) return null;
@@ -52,7 +52,7 @@ function admittedRequest({method, target, headers}, origin, capability, download
   let url;
   try { url = new URL(target, origin); } catch { return null; }
   if (url.origin !== origin || url.pathname + url.search !== target || headers.host !== new URL(origin).host ||
-      headers.authorization || headers['proxy-authorization'] || headers['x-serverware-admin-token'] ||
+      headers.authorization || headers['proxy-authorization'] || headers['x-catchplate-admin-token'] ||
       headers.cookie && !certificateCookie || headers['transfer-encoding'] ||
       headers['content-length'] !== undefined && headers['content-length'] !== '0' ||
       headers.origin && headers.origin !== origin || headers['sec-fetch-site'] === 'cross-site') return null;
@@ -74,7 +74,7 @@ async function startRelay({adminToken, expectedHtml}) {
   requireCondition(typeof adminToken === 'string' && /^[\x21-\x7e]{32,8192}$/.test(adminToken), 'invalid_stdin_token');
   let capability = randomBytes(32).toString('base64url');
   let downloadCapability = randomBytes(32).toString('base64url');
-  const browserHeaders = {'X-Serverware-Readonly-Check': capability};
+  const browserHeaders = {'X-Catchplate-Readonly-Check': capability};
   const browserCaCookie = caCookie(downloadCapability);
   const stats = {forwarded: [], refused: 0, failures: 0, response_bytes: 0};
   let origin; let requestCount = 0;
@@ -88,7 +88,7 @@ async function startRelay({adminToken, expectedHtml}) {
       if (route.local) { outgoing.writeHead(204); outgoing.end(); return; }
       const result = await new Promise((resolveResult, reject) => {
         const request = httpRequest(APP + route.path + (route.search || ''), {method: 'GET', timeout: 12000,
-          headers: {'X-Serverware-Admin-Token': adminToken, Origin: PUBLIC, Connection: 'close'}}, response => {
+          headers: {'X-Catchplate-Admin-Token': adminToken, Origin: PUBLIC, Connection: 'close'}}, response => {
           let size = 0; const chunks = [];
           response.on('data', chunk => {
             size += chunk.length;
@@ -128,7 +128,7 @@ async function startRelay({adminToken, expectedHtml}) {
   origin = 'http://127.0.0.1:' + server.address().port;
   return {origin, stats, browserHeaders, browserCaCookie, close: async () => {
     adminToken = ''; capability = ''; downloadCapability = '';
-    browserHeaders['X-Serverware-Readonly-Check'] = ''; browserCaCookie.value = '';
+    browserHeaders['X-Catchplate-Readonly-Check'] = ''; browserCaCookie.value = '';
     server.closeAllConnections(); await new Promise(resolveClose => server.close(resolveClose));
   }};
 }
@@ -137,14 +137,14 @@ function inspectRuntimeAndSource() {
   const [container] = JSON.parse(command('docker', ['inspect', CONTAINER]));
   const labels = container.Config.Labels;
   requireCondition(container.State.Running && container.State.Health.Status === 'healthy' &&
-    labels['com.docker.compose.project'] === 'serverware-operator-demo' && labels['com.docker.compose.service'] === 'serverware', 'unexpected_app_container');
-  requireCondition(container.NetworkSettings.Networks['serverware-operator-demo_sandbox'].IPAddress === new URL(APP).hostname,
+    labels['com.docker.compose.project'] === 'catchplate-operator-demo' && labels['com.docker.compose.service'] === 'catchplate', 'unexpected_app_container');
+  requireCondition(container.NetworkSettings.Networks['catchplate-operator-demo_sandbox'].IPAddress === new URL(APP).hostname,
     'app_ip_changed_reinspect_before_running');
   const env = Object.fromEntries(container.Config.Env.map(item => { const index = item.indexOf('='); return [item.slice(0, index), item.slice(index + 1)]; }));
-  requireCondition(env.SERVERWARE_ADMIN_TOKEN_FILE === '/run/secrets/serverware/admin.token' &&
-    env.SERVERWARE_PUBLIC_URL === PUBLIC && env.SERVERWARE_OPERATOR_DEMO === '1', 'unexpected_app_profile_or_token_file');
+  requireCondition(env.CATCHPLATE_ADMIN_TOKEN_FILE === '/run/secrets/catchplate/admin.token' &&
+    env.CATCHPLATE_PUBLIC_URL === PUBLIC && env.CATCHPLATE_OPERATOR_DEMO === '1', 'unexpected_app_profile_or_token_file');
   const source = container.Mounts.find(mount => mount.Destination === '/app');
-  requireCondition(source && source.RW === false && source.Source === '/srv/catchplate-fast/projects/serverware-operator-polish', 'unexpected_source_mount');
+  requireCondition(source && source.RW === false && source.Source === '/srv/catchplate-fast/projects/catchplate-operator-polish', 'unexpected_source_mount');
   const sourceCommit = command('git', ['rev-parse', 'HEAD'], source.Source).trim();
   const assets = {};
   for (const file of ASSETS) {
@@ -154,7 +154,7 @@ function inspectRuntimeAndSource() {
     assets[file] = sha256(local);
   }
   const expectedHtml = Buffer.from(command('python3', ['-B', '-c',
-    'import sys; from serverware.operator_demo_portal import render; sys.stdout.write(render())']));
+    'import sys; from catchplate.operator_demo_portal import render; sys.stdout.write(render())']));
   return {expectedHtml, evidence: {container_id: container.Id, app_origin: APP, source_commit: sourceCommit,
     renderer_sha256: sha256(expectedHtml), assets, harness_sha256: sha256(readFileSync(__filename))}};
 }
@@ -193,7 +193,7 @@ async function runBrowser(browser, relay, directory) {
     const request = route.request(); const url = new URL(request.url());
     const admitted = url.origin === relay.origin && admittedRequest({method: request.method(),
       target: url.pathname + url.search, headers: {...await request.allHeaders(), host: url.host}}, relay.origin,
-      relay.browserHeaders['X-Serverware-Readonly-Check'], relay.browserCaCookie.value);
+      relay.browserHeaders['X-Catchplate-Readonly-Check'], relay.browserCaCookie.value);
     if (!admitted || request.postDataBuffer()?.length) { blockedRequests++; await route.abort(); return; }
     await route.continue();
   });
@@ -211,7 +211,7 @@ async function runBrowser(browser, relay, directory) {
       status.syntheticOnly === false && Array.isArray(status.connections), 'incorrect_runtime_profile');
     await page.waitForFunction(() => !document.querySelector('#connection-fields').disabled);
     requireCondition(await page.locator('#load-error').isHidden(), 'status_error_visible');
-    requireCondition((await page.title()).includes('Serverware operator demo'), 'wrong_document_title');
+    requireCondition((await page.title()).includes('Catchplate operator demo'), 'wrong_document_title');
     checks.push('live_html_matches_committed_renderer_and_real_status');
 
     stage = 'methods_and_lifecycle'; await navigate(page, 'credentials');
@@ -237,10 +237,10 @@ async function runBrowser(browser, relay, directory) {
     requireCondition(ready, 'no_unexpired_connection_for_placeholder_copy');
     await page.locator('#client-connection').selectOption(ready.id);
     const proxy = new URL(status.proxy_url).href.replace(/\/$/, '');
-    const expectedCommand = require('../serverware/operator_demo_web/app.js').buildCurlCommand({proxyUrl: proxy,
-      upstreamUrl: ready.upstream_url, method: ready.methods[0], caPath: './serverware-ca.pem', allowedHeaders: ready.allowed_headers});
+    const expectedCommand = require('../catchplate/operator_demo_web/app.js').buildCurlCommand({proxyUrl: proxy,
+      upstreamUrl: ready.upstream_url, method: ready.methods[0], caPath: './catchplate-ca.pem', allowedHeaders: ready.allowed_headers});
     requireCondition(await page.locator('#client-command').innerText() === expectedCommand &&
-      expectedCommand.includes('$SERVERWARE_PROXY_TOKEN') && !expectedCommand.includes('--insecure') &&
+      expectedCommand.includes('$CATCHPLATE_PROXY_TOKEN') && !expectedCommand.includes('--insecure') &&
       await page.locator('#download-config').isDisabled(), 'client_example_not_placeholder_only');
     await page.locator('#copy-command').click();
     await page.waitForFunction(() => document.querySelector('#client-copy-status').textContent.includes('Copied.'));
@@ -251,7 +251,7 @@ async function runBrowser(browser, relay, directory) {
     stage = 'public_ca'; const downloading = page.waitForEvent('download');
     await page.locator('#ca-download').click(); caDownload = await downloading;
     const ca = await downloadBytes(caDownload); const pem = ca.toString('ascii');
-    requireCondition(caDownload.suggestedFilename() === 'serverware-ca.pem' &&
+    requireCondition(caDownload.suggestedFilename() === 'catchplate-ca.pem' &&
       /^-----BEGIN CERTIFICATE-----\r?\n[A-Za-z0-9+/=\r\n]+-----END CERTIFICATE-----\s*$/.test(pem) &&
       !pem.includes('PRIVATE KEY'), 'ca_not_one_public_certificate');
     const certificate = new X509Certificate(ca);
@@ -309,7 +309,7 @@ async function runBrowser(browser, relay, directory) {
 function selfTest() {
   const origin = 'http://127.0.0.1:9999'; const capability = 'self-test-capability-is-not-a-live-token';
   const downloadCapability = 'independent-ca-capability-is-not-a-live-token';
-  const headers = {host: '127.0.0.1:9999', 'x-serverware-readonly-check': capability};
+  const headers = {host: '127.0.0.1:9999', 'x-catchplate-readonly-check': capability};
   const admitted = (target, changes = {}) => admittedRequest({method: 'GET', target, headers, ...changes}, origin, capability, downloadCapability);
   let accepted = 0; let rejected = 0;
   const accept = (target, changes) => { assert(admitted(target, changes)); accepted++; };
@@ -323,19 +323,19 @@ function selfTest() {
     '/api/audit/search?limit=20&scanLimit=5000&eventType=other', '/api/audit/search?limit=20&scanLimit=5000&q=' + 'x'.repeat(129)]) reject(target);
   for (const method of ['HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'CONNECT', 'TRACE']) reject('/', {method});
   for (const pair of [['host', 'elsewhere'], ['authorization', 'value'], ['proxy-authorization', 'value'],
-    ['x-serverware-admin-token', 'value'], ['cookie', 'value'], ['transfer-encoding', 'chunked'],
+    ['x-catchplate-admin-token', 'value'], ['cookie', 'value'], ['transfer-encoding', 'chunked'],
     ['content-length', '1'], ['origin', 'http://elsewhere'], ['sec-fetch-site', 'cross-site']])
     reject('/', {headers: {...headers, [pair[0]]: pair[1]}});
   reject('/', {headers: {host: headers.host}});
-  reject('/', {headers: {...headers, 'x-serverware-readonly-check': 'x'.repeat(capability.length)}});
-  const downloadHeaders = {host: headers.host, cookie: 'serverware_readonly_ca=' + downloadCapability,
+  reject('/', {headers: {...headers, 'x-catchplate-readonly-check': 'x'.repeat(capability.length)}});
+  const downloadHeaders = {host: headers.host, cookie: 'catchplate_readonly_ca=' + downloadCapability,
     referer: origin + '/', 'sec-fetch-site': 'same-origin'};
   accept('/ca.pem', {headers: downloadHeaders});
   for (const target of ['/', '/api/operator-demo/status', '/api/audit/search?limit=20&scanLimit=5000', '/ca.pem?extra=1'])
     reject(target, {headers: downloadHeaders});
-  for (const pair of [['cookie', undefined], ['cookie', 'serverware_readonly_ca=' + capability],
+  for (const pair of [['cookie', undefined], ['cookie', 'catchplate_readonly_ca=' + capability],
     ['cookie', downloadHeaders.cookie + '; extra=value'], ['referer', undefined], ['referer', 'http://elsewhere/'],
-    ['sec-fetch-site', 'cross-site'], ['x-serverware-readonly-check', downloadCapability]])
+    ['sec-fetch-site', 'cross-site'], ['x-catchplate-readonly-check', downloadCapability]])
     reject('/ca.pem', {headers: {...downloadHeaders, [pair[0]]: pair[1]}});
   console.log(JSON.stringify({ok: true, scope: 'pure read-only relay admission tests', accepted_cases: accepted, rejected_cases: rejected}));
 }
@@ -347,14 +347,14 @@ async function downloadSelfTest() {
   const server = createServer((request, response) => {
     const admitted = admittedRequest({method: request.method, target: request.url, headers: request.headers}, origin, capability, downloadCapability);
     seen.push({path: request.url === '/' ? '/' : request.url === '/ca.pem' ? '/ca.pem' : 'unexpected', admitted: Boolean(admitted),
-      primary_capability: equalCapability(request.headers['x-serverware-readonly-check'], capability), cookie_present: Boolean(request.headers.cookie)});
+      primary_capability: equalCapability(request.headers['x-catchplate-readonly-check'], capability), cookie_present: Boolean(request.headers.cookie)});
     if (!admitted) { response.writeHead(403); response.end(); return; }
     if (request.url === '/') {
       response.writeHead(200, {'Content-Type': 'text/html'});
-      response.end('<a id="ca" href="/ca.pem" download="serverware-ca.pem">Download CA</a>'); return;
+      response.end('<a id="ca" href="/ca.pem" download="catchplate-ca.pem">Download CA</a>'); return;
     }
     if (request.url === '/ca.pem') {
-      response.writeHead(200, {'Content-Type': 'application/x-pem-file', 'Content-Disposition': 'attachment; filename="serverware-ca.pem"'});
+      response.writeHead(200, {'Content-Type': 'application/x-pem-file', 'Content-Disposition': 'attachment; filename="catchplate-ca.pem"'});
       response.end(publicBytes); return;
     }
     response.writeHead(404); response.end();
@@ -365,7 +365,7 @@ async function downloadSelfTest() {
     const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
     browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-background-networking']});
     const context = await browser.newContext({serviceWorkers: 'block', acceptDownloads: true,
-      extraHTTPHeaders: {'X-Serverware-Readonly-Check': capability}});
+      extraHTTPHeaders: {'X-Catchplate-Readonly-Check': capability}});
     await context.addCookies([caCookie(downloadCapability)]);
     await context.route('**/*', async route => {
       const request = route.request(); const url = new URL(request.url());

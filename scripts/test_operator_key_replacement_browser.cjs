@@ -16,7 +16,7 @@ const ORIGIN = 'https://operator-catalog.example.test';
 const CATALOG = ORIGIN + '/api/operator-demo/catalog';
 const PATH = '/api/operator-demo/credentials/replace-key';
 const ENDPOINT = ORIGIN + PATH;
-const CAPABILITY = {schema: 'serverware.operatorStaticKeyReplacement/v1', path: PATH, credential_types: ['bearer', 'header']};
+const CAPABILITY = {schema: 'catchplate.operatorStaticKeyReplacement/v1', path: PATH, credential_types: ['bearer', 'header']};
 const KEY = 'synthetic-replacement-key-NEVER-PERSIST-$literal-123';
 const OTHER_DRAFT = 'synthetic-other-key-draft-NEVER-PERSIST';
 const ERROR = 'synthetic-provider-error-private-NEVER-DISPLAY';
@@ -49,9 +49,9 @@ const replaceAction = (page, id = IDS.credential) => card(page, id).locator('[da
 const panel = page => page.locator('#credential-replace-panel');
 const secret = page => page.locator('#credential-replace-secret');
 const INPUTS = ['scripts/test_operator_key_replacement_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
-  'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
+  'scripts/test_operator_ordinary_modes_browser.cjs', 'catchplate/operator_demo_portal.py',
   ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js', 'workspace_resources.js', 'workspace_applications.js',
-    'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_google.js'].map(name => 'serverware/operator_demo_web/' + name)];
+    'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_google.js'].map(name => 'catchplate/operator_demo_web/' + name)];
 let artifacts;
 async function hashes() { return Object.fromEntries(await Promise.all(INPUTS.map(async name =>
   [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')]))); }
@@ -173,8 +173,8 @@ async function uncertain(page, freshRequired = false) {
 
 function projectionChecks() {
   const source = ['workspace_core.js', 'workspace_github.js']
-    .map(name => readFileSync(join(ROOT, 'serverware/operator_demo_web', name), 'utf8')).join('\n');
-  const {clientCredentialInput, credentialHeaderTarget} = require('../serverware/operator_demo_web/app.js');
+    .map(name => readFileSync(join(ROOT, 'catchplate/operator_demo_web', name), 'utf8')).join('\n');
+  const {clientCredentialInput, credentialHeaderTarget} = require('../catchplate/operator_demo_web/app.js');
   const projected = (capability, target = staticKey()) => {
     const state = {...supplied({credentials: [target], applications: [], rules: []}), revision: 1,
       sequence: 1, active: digest(1), loaded: digest(1), responseModes: ['projected_json'], replacementCapability: capability};
@@ -237,7 +237,7 @@ function assertReplacementLayout(measured, width) {
   for (const item of measured.text) assert(item.unclipped && item.fits, item.selector + ' must show every wrapped text line at ' + width);
 }
 const layoutTest = ['long live-style names wrap without clipping and keep replacement controls usable on mobile', browser => {
-  const prefix = 'serverware-live-smoke-aebf2cf3eea3401d9accc224004dfd85';
+  const prefix = 'catchplate-live-smoke-aebf2cf3eea3401d9accc224004dfd85';
   const credentialName = prefix + '-credential'; const applicationName = prefix + '-application';
   return fixture(browser, {credentials: [staticKey({name: credentialName})],
     applications: [application({name: applicationName})], rules: [rule()]}, async (page, state) => {
@@ -297,7 +297,7 @@ const tests = [
       }
       await submit(page); await controls.arrival; assert(!await panel(page).isVisible()); await noSecret(page);
       assert(await page.locator('#credential-add').isDisabled()); controls.release();
-      await page.waitForFunction(() => document.querySelector('#credential-action-status').textContent.startsWith('Replacement saved in Serverware.'));
+      await page.waitForFunction(() => document.querySelector('#credential-action-status').textContent.startsWith('Replacement saved in Catchplate.'));
       assert.deepEqual(state.replacements, [{id: IDS.credential, expected_revision: 1, expected_policy_hash: digest(1), expected_credential_generation: 7, secretMatched: true}]);
       assert.deepEqual(state.applications, before.applications); assert.deepEqual(state.rules, before.rules); assert.deepEqual(catalog(state).policy, before.policy);
       assert.deepEqual(state.credentials.map(item => item.id), before.credentials.map(item => item.id)); assert.equal(state.credentials[0].credential_generation, 8);
@@ -351,7 +351,7 @@ const tests = [
     for (const replacementFault of ['malformed-receipt', 'stale-catalog', 'catalog-failure']) await fixture(browser, {replacementFault}, async (page, state) => {
       await open(page); await submit(page); await uncertain(page, replacementFault !== 'malformed-receipt');
       assert.equal(state.credentials[0].credential_generation, 8); assert.equal(state.replacements.length, 1);
-      assert(!/^Replacement saved in Serverware\./.test(await page.locator('#credential-action-status').innerText()));
+      assert(!/^Replacement saved in Catchplate\./.test(await page.locator('#credential-action-status').innerText()));
       assert.match(await page.locator('#mutation-review-text').innerText(), /do not assume rollback/i);
       if (replacementFault === 'catalog-failure') assert(await page.locator('#load-error').isVisible());
       await page.clock.runFor(6000); assert.equal(state.replacements.length, 1);
@@ -412,14 +412,14 @@ const tests = [
       await page.locator('#application-token-ttl').selectOption('3600'); await page.locator('#application-create').click();
       await page.locator('#one-time-access').waitFor({state: 'visible'}); const held = await page.locator('#client-token').inputValue();
       assert(held.startsWith('synthetic_application_')); await view(page, 'credentials'); await open(page); await submit(page);
-      await page.waitForFunction(() => document.querySelector('#credential-action-status').textContent.startsWith('Replacement saved in Serverware.'));
+      await page.waitForFunction(() => document.querySelector('#credential-action-status').textContent.startsWith('Replacement saved in Catchplate.'));
       assert.equal(await page.locator('#client-token').inputValue(), held); assert.equal(state.applications.length, 1); assert.equal(state.rules.length, 0);
       assert.deepEqual(state.posts.map(item => item.name), ['applications']); assert.equal(state.replacements.length, 1); await noSecret(page);
     })],
   ['local cache uncertainty remains explicit after confirmed storage and does not imply provider revocation or immediate use', browser => fixture(browser,
     {replacementFault: 'cache-unconfirmed'}, async (page, state) => {
       await open(page); await submit(page);
-      await page.waitForFunction(() => document.querySelector('#credential-action-status').textContent.startsWith('Replacement saved in Serverware.'));
+      await page.waitForFunction(() => document.querySelector('#credential-action-status').textContent.startsWith('Replacement saved in Catchplate.'));
       const text = await page.locator('#credential-action-status').innerText();
       assert.match(text, /local cache invalidation was not confirmed/i); assert.match(text, /leases.*in flight.*old key/is);
       assert.match(text, /does not revoke it at the provider/i); assert(!/all (new )?requests use|provider (valid|healthy)|revoked at provider/i.test(text));
@@ -437,7 +437,7 @@ async function main() {
   console.log(JSON.stringify({phase: 'selection', groups: selected.length, totalGroups: tests.length,
     layoutOnly, projectionGroups: layoutOnly ? 0 : 1, names: selected.map(([name]) => name)}));
   if (!layoutOnly) console.log(JSON.stringify(projectionChecks()));
-  const artifactRoot = '/srv/catchplate-fast/projects/serverware-operator-artifacts';
+  const artifactRoot = '/srv/catchplate-fast/projects/catchplate-operator-artifacts';
   assert((await stat(artifactRoot)).isDirectory()); artifacts = await mkdtemp(join(artifactRoot, 'key-replacement-browser-synthetic-'));
   console.log(JSON.stringify({artifactDirectory: artifacts, scope: 'synthetic replacement review screenshots only; password fields masked'}));
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');

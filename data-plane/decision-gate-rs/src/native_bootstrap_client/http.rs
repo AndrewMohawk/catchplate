@@ -2,7 +2,7 @@
 
 use super::{ensure, exchange};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use serverware_decision_gate::native_ingress_challenge_v1::CHALLENGE_HEADER;
+use catchplate_decision_gate::native_ingress_challenge_v1::CHALLENGE_HEADER;
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 

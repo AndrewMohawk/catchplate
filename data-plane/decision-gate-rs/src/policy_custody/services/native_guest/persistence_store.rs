@@ -88,7 +88,7 @@ impl Store {
         let genesis=store.retain("genesis.json".into())?;
         require(Sha256Digest::compute(&genesis)==admission.genesis_sha256)?;
         let g:Genesis=guest::exact(&genesis)?;
-        require(g.api_version=="serverware.nativeShadowPersistenceGenesis/v1" && g.proof_scope_sha256==*scope.binding() && g.guest==*guest)?;
+        require(g.api_version=="catchplate.nativeShadowPersistenceGenesis/v1" && g.proof_scope_sha256==*scope.binding() && g.guest==*guest)?;
         for sequence in 1..=admission.head_sequence {
             let originals=store.retain(format!("originals-{sequence:020}.json"))?;
             let raw=store.retain(format!("commit-{sequence:020}.json"))?;
@@ -97,7 +97,7 @@ impl Store {
                 && originals==canonical_json_bytes(&(&commit.payload.request_original_base64url,&commit.payload.reply_original_base64url))?)?;
             let raw_head=store.retain(format!("head-{sequence:020}.json"))?;
             let head:Head=guest::exact(&raw_head)?;
-            require(head.api_version=="serverware.nativeShadowPersistenceHead/v1" && head.sequence==sequence
+            require(head.api_version=="catchplate.nativeShadowPersistenceHead/v1" && head.sequence==sequence
                 && head.previous_head_sha256==store.head && head.commit_original_sha256==Sha256Digest::compute(&raw))?;
             store.invocations.record(invocation_identity(&commit.payload.request_original_base64url,
                 &commit.payload.reply_original_base64url)?).map_err(fail)?;
@@ -156,7 +156,7 @@ impl Store {
         let head=retained(format!("head-{sequence:020}.json"))?;
         let value:Head=guest::exact(&head)?;
         let original=self.originals.get((sequence-1) as usize).ok_or(ShadowError::CustodyUnavailable)?;
-        require(value.api_version=="serverware.nativeShadowPersistenceHead/v1" && value.sequence==sequence
+        require(value.api_version=="catchplate.nativeShadowPersistenceHead/v1" && value.sequence==sequence
             && value.previous_head_sha256==original.payload.previous_head_sha256
             && value.commit_original_sha256==Sha256Digest::compute(&commit)
             && commit==canonical_json_bytes(original)?
@@ -200,7 +200,7 @@ impl Store {
         let raw=canonical_json_bytes(&commit)?;
         let digest=Sha256Digest::compute(&raw);
         self.create(format!("commit-{sequence:020}.json"),raw)?;check()?;
-        let head=canonical_json_bytes(&Head{api_version:"serverware.nativeShadowPersistenceHead/v1".into(),sequence,
+        let head=canonical_json_bytes(&Head{api_version:"catchplate.nativeShadowPersistenceHead/v1".into(),sequence,
             previous_head_sha256:self.head.clone(),commit_original_sha256:digest.clone()})?;
         let head_sha256=Sha256Digest::compute(&head);
         self.create(format!("head-{sequence:020}.json"),head)?;check()?;

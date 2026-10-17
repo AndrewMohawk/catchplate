@@ -21,28 +21,28 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
 pub const OWNER_LABEL_V11: &str =
-    "com.serverware.controller.owner-namespace";
-pub const LANE_LABEL_V11: &str = "com.serverware.controller.lane-id";
+    "com.catchplate.controller.owner-namespace";
+pub const LANE_LABEL_V11: &str = "com.catchplate.controller.lane-id";
 pub const GENERATION_LABEL_V11: &str =
-    "com.serverware.controller.daemon-generation";
+    "com.catchplate.controller.daemon-generation";
 pub const LOGICAL_ID_LABEL_V11: &str =
-    "com.serverware.controller.logical-id";
+    "com.catchplate.controller.logical-id";
 pub const SOURCE_SEAL_LABEL_V11: &str =
-    "com.serverware.controller.source-seal-sha256";
+    "com.catchplate.controller.source-seal-sha256";
 pub const ARTIFACT_SEAL_LABEL_V11: &str =
-    "com.serverware.controller.artifact-seal-sha256";
-pub const OWNER_LABEL_V12: &str = "com.serverware.coder.v12.owner";
-pub const LANE_LABEL_V12: &str = "com.serverware.coder.v12.lane";
+    "com.catchplate.controller.artifact-seal-sha256";
+pub const OWNER_LABEL_V12: &str = "com.catchplate.coder.v12.owner";
+pub const LANE_LABEL_V12: &str = "com.catchplate.coder.v12.lane";
 pub const GENERATION_LABEL_V12: &str =
-    "com.serverware.coder.v12.generation";
+    "com.catchplate.coder.v12.generation";
 pub const RESOURCE_LABEL_V12: &str =
-    "com.serverware.coder.v12.resource";
+    "com.catchplate.coder.v12.resource";
 pub const SOURCE_SEAL_LABEL_V12: &str =
-    "com.serverware.coder.v12.source-seal-sha256";
+    "com.catchplate.coder.v12.source-seal-sha256";
 pub const ARTIFACT_SEAL_LABEL_V12: &str =
-    "com.serverware.coder.v12.artifact-seal-sha256";
+    "com.catchplate.coder.v12.artifact-seal-sha256";
 pub const SERVICE_ID_LABEL_V12: &str =
-    "com.serverware.coder.v12.service-id";
+    "com.catchplate.coder.v12.service-id";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DockerLaneEffectV12 {
@@ -1132,7 +1132,7 @@ fn validate_fixed_headers(
     if content_type != expected_content_type
         || headers.get("accept").copied() != Some(expected_accept)
         || headers.get("user-agent").copied()
-            != Some("serverware-controller-v12")
+            != Some("catchplate-controller-v12")
         || headers.len()
             != if expected_content_type.is_some() { 3 } else { 2 }
     {
@@ -1755,7 +1755,7 @@ fn validate_exact_mounts(
             &["Consistency", "ReadOnly", "Source", "Target", "Type"],
         )?;
         let source = format!(
-            "/run/serverware/coder/v12/lane-inputs/{}",
+            "/run/catchplate/coder/v12/lane-inputs/{}",
             expected.mount_id
         );
         if string(mount, "Type")? != "bind"

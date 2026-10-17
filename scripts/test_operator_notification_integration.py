@@ -135,7 +135,7 @@ def local_transport(fixture, receiver):
 
 
 def receiver_attempt(fixture):
-    from serverware import operator_notifications as notifications, operator_publication
+    from catchplate import operator_notifications as notifications, operator_publication
 
     # A separate SQLite writer and the actual publication assertion prove that
     # the network phase is outside the store's mutation ownership.
@@ -171,7 +171,7 @@ def receiver_attempt(fixture):
 async def api_tls_flow():
     fixture = fixtures.Fixture()
     from fastapi import FastAPI
-    from serverware import operator_notification_api as routes, operator_notifications
+    from catchplate import operator_notification_api as routes, operator_notifications
 
     application = FastAPI()
     application.include_router(routes.router)
@@ -181,7 +181,7 @@ async def api_tls_flow():
         async def request(method, path, body=None, *, authenticated=True, origin=ORIGIN):
             headers = {}
             if authenticated:
-                headers["X-Serverware-Admin-Token"] = ADMIN
+                headers["X-Catchplate-Admin-Token"] = ADMIN
             if origin is not None:
                 headers["Origin"] = origin
             kwargs = {"payload": body} if body is not None else {}
@@ -286,9 +286,9 @@ def setup_audit_tls():
     any configuration activation, provider consent, approval or native action.
     """
     fixture = fixtures.Fixture()
-    from serverware import operator_google_setup as google, operator_upstream_setup as upstream
-    from serverware import operator_notification_events as events, operator_notifications as notifications
-    from serverware import operator_publication as publication
+    from catchplate import operator_google_setup as google, operator_upstream_setup as upstream
+    from catchplate import operator_notification_events as events, operator_notifications as notifications
+    from catchplate import operator_publication as publication
 
     actions = ("prepared", "cancelled", "activated")
     event_types = sorted("operator_catalog." + family + "." + action
@@ -393,15 +393,15 @@ def setup_audit_tls():
 
 def disabled():
     fixture = fixtures.Fixture()
-    from serverware import operator_notifications
+    from catchplate import operator_notifications
 
     async def inspect_api():
         from fastapi import FastAPI
-        from serverware import operator_notification_api
+        from catchplate import operator_notification_api
         application = FastAPI()
         application.include_router(operator_notification_api.router)
         async with ApiClient(application) as client:
-            response = await client.get(PREFIX, headers={"X-Serverware-Admin-Token": ADMIN})
+            response = await client.get(PREFIX, headers={"X-Catchplate-Admin-Token": ADMIN})
             assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
             assert response.json()["available"] is False
             assert response.json()["disabled_reason"] == "deployment_disabled"
@@ -422,7 +422,7 @@ def disabled():
 
 def lifecycle():
     fixture = fixtures.Fixture()
-    from serverware import operator_notifications as notifications
+    from catchplate import operator_notifications as notifications
     with patch.object(notifications, "run_once", return_value=False):
         assert notifications.start_worker()
         first = notifications._THREAD
@@ -440,7 +440,7 @@ def lifecycle():
 
 def backpressure():
     fixture = fixtures.Fixture()
-    from serverware import operator_notifications as notifications
+    from catchplate import operator_notifications as notifications
     fixture.save()
     operation = fixture.test()
     sent = []
@@ -462,7 +462,7 @@ def backpressure():
 
 def unknown_and_predispatch():
     fixture = fixtures.Fixture()
-    from serverware import operator_notifications as notifications
+    from catchplate import operator_notifications as notifications
     fixture.save(max_attempts=3)
     uncertain = fixture.test()
     with patch.object(fixture.transport, "deliver", side_effect=RuntimeError(fixtures.SECRET_URL)) as transport:
@@ -488,12 +488,12 @@ def unknown_and_predispatch():
 class NotificationIntegrationTests(unittest.TestCase):
     def setUp(self):
         fixtures.configure_environment(self)
-        self.environment["SERVERWARE_ADMIN_TOKEN"] = ADMIN
+        self.environment["CATCHPLATE_ADMIN_TOKEN"] = ADMIN
 
     def run_worker(self, name):
         environment = dict(self.environment)
         if name == "disabled":
-            environment.pop("SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED")
+            environment.pop("CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED")
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", name],
             cwd=ROOT, env=environment, capture_output=True, text=True, timeout=75)
         self.assertEqual(result.returncode, 0, "\n".join(result.stderr.splitlines()[-60:]))

@@ -14,11 +14,11 @@ from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from serverware import authority_contract
-from serverware import db
-from serverware.authority_store import executor_v9
-from serverware.authority_store import metadata_schema_source
-from serverware.authority_store.schema import (
+from catchplate import authority_contract
+from catchplate import db
+from catchplate.authority_store import executor_v9
+from catchplate.authority_store import metadata_schema_source
+from catchplate.authority_store.schema import (
     record_policy_candidate_authority_v8_to_v9_receipt,
     repair_policy_candidate_authority_completed_v9_receipt,
 )
@@ -123,7 +123,7 @@ _COUNT_MUTATION_TABLES = frozenset(
     }
 )
 _OLD_SOURCE_REVISION = (
-    "serverware.policyCandidateAuthoritySource/2026-07-29.18"
+    "catchplate.policyCandidateAuthoritySource/2026-07-29.18"
 )
 _NEW_SOURCE_REVISION = authority_contract.SOURCE_REVISION
 _LEGACY_COMPLETED_V9_RECEIPT_COLUMNS = (
@@ -293,7 +293,7 @@ def _table_primary_key(cursor: Any, table: str) -> tuple[str, ...]:
         "JOIN pg_catalog.pg_attribute AS attribute "
         "ON attribute.attrelid = relation.oid "
         "AND attribute.attnum = key_column.attnum "
-        "WHERE namespace.nspname = 'serverware_metadata' "
+        "WHERE namespace.nspname = 'catchplate_metadata' "
         "AND relation.relname = %s "
         "AND index_record.indisprimary "
         "ORDER BY key_column.ordinal",
@@ -315,7 +315,7 @@ def _schema_manifest(cursor: Any, tables: Iterable[str]) -> dict[str, Any]:
             "ON namespace.oid = relation.relnamespace "
             "JOIN pg_catalog.pg_roles AS owner_role "
             "ON owner_role.oid = relation.relowner "
-            "WHERE namespace.nspname = 'serverware_metadata' "
+            "WHERE namespace.nspname = 'catchplate_metadata' "
             "AND relation.relname = %s",
             (table,),
         ).fetchall()
@@ -338,7 +338,7 @@ def _schema_manifest(cursor: Any, tables: Iterable[str]) -> dict[str, Any]:
             "LEFT JOIN pg_catalog.pg_attrdef AS default_record "
             "ON default_record.adrelid = relation.oid "
             "AND default_record.adnum = attribute.attnum "
-            "WHERE namespace.nspname = 'serverware_metadata' "
+            "WHERE namespace.nspname = 'catchplate_metadata' "
             "AND relation.relname = %s "
             "AND attribute.attnum > 0 AND NOT attribute.attisdropped "
             "ORDER BY attribute.attnum",
@@ -355,7 +355,7 @@ def _schema_manifest(cursor: Any, tables: Iterable[str]) -> dict[str, Any]:
             "ON relation.oid = constraint_record.conrelid "
             "JOIN pg_catalog.pg_namespace AS namespace "
             "ON namespace.oid = relation.relnamespace "
-            "WHERE namespace.nspname = 'serverware_metadata' "
+            "WHERE namespace.nspname = 'catchplate_metadata' "
             "AND relation.relname = %s "
             "ORDER BY constraint_record.conname COLLATE \"C\"",
             (table,),
@@ -371,7 +371,7 @@ def _schema_manifest(cursor: Any, tables: Iterable[str]) -> dict[str, Any]:
             "ON namespace.oid = relation.relnamespace "
             "JOIN pg_catalog.pg_class AS index_relation "
             "ON index_relation.oid = index_record.indexrelid "
-            "WHERE namespace.nspname = 'serverware_metadata' "
+            "WHERE namespace.nspname = 'catchplate_metadata' "
             "AND relation.relname = %s "
             "ORDER BY index_relation.relname COLLATE \"C\"",
             (table,),
@@ -389,8 +389,8 @@ def _schema_manifest(cursor: Any, tables: Iterable[str]) -> dict[str, Any]:
         )
     manifest = {
         "schema":
-            "serverware.policyCandidateAuthorityMigrationManifest/v1",
-        "namespace": "serverware_metadata",
+            "catchplate.policyCandidateAuthorityMigrationManifest/v1",
+        "namespace": "catchplate_metadata",
         "tables": manifest_tables,
     }
     if len(_canonical(manifest)) > _MAX_MANIFEST_BYTES:
@@ -416,19 +416,19 @@ def _row_manifest(
         table_sql = '"' + table.replace('"', '""') + '"'
         hasher = hashlib.sha256()
         domain = (
-            "serverware.policyCandidateAuthorityMigrationRows/v1:"
+            "catchplate.policyCandidateAuthorityMigrationRows/v1:"
             + table
         ).encode("ascii")
         hasher.update(len(domain).to_bytes(8, "big"))
         hasher.update(domain)
         count = 0
         with connection.cursor(
-            name=f"serverware_v9_migration_{ordinal}"
+            name=f"catchplate_v9_migration_{ordinal}"
         ) as stream:
             stream.itersize = 256
             stream.execute(
                 "SELECT pg_catalog.to_jsonb(row_value)::text AS row_json "
-                "FROM serverware_metadata."
+                "FROM catchplate_metadata."
                 + table_sql
                 + " AS row_value ORDER BY "
                 + order_sql
@@ -457,7 +457,7 @@ def _completed_retry(
 ) -> dict[str, Any] | None:
     present = cursor.execute(
         "SELECT pg_catalog.to_regclass("
-        "'serverware_metadata."
+        "'catchplate_metadata."
         "policy_authority_v9_offline_migration_receipts') "
         "IS NOT NULL AS present"
     ).fetchone()
@@ -474,7 +474,7 @@ def _completed_retry(
         "signer_identity_digest, signer_public_key_base64url, "
         "signature_algorithm, "
         "detached_signature, detached_signature_digest, status, completed_at "
-        "FROM serverware_metadata."
+        "FROM catchplate_metadata."
         "policy_authority_v9_offline_migration_receipts "
         "WHERE contract_id = %s LIMIT 2",
         (_CONTRACT_ID,),
@@ -631,18 +631,18 @@ def _drop_immutability_triggers(cursor: Any, tables: Iterable[str]) -> None:
             "ON relation.oid = trigger_record.tgrelid "
             "JOIN pg_catalog.pg_namespace AS namespace "
             "ON namespace.oid = relation.relnamespace "
-            "WHERE namespace.nspname = 'serverware_metadata' "
+            "WHERE namespace.nspname = 'catchplate_metadata' "
             "AND relation.relname = %s "
             "AND NOT trigger_record.tgisinternal "
             "AND trigger_record.tgname LIKE "
-            "'serverware_%_immutable_%'",
+            "'catchplate_%_immutable_%'",
             (table,),
         ).fetchall()
         for trigger in triggers:
             cursor.execute(
                 "DROP TRIGGER "
                 + '"' + str(trigger["trigger_name"]).replace('"', '""') + '"'
-                + " ON serverware_metadata."
+                + " ON catchplate_metadata."
                 + '"' + table.replace('"', '""') + '"'
             )
 
@@ -651,16 +651,16 @@ def _replace_v8_constraints(cursor: Any) -> None:
     replacements = (
         (_OLD_SOURCE_REVISION, _NEW_SOURCE_REVISION),
         (
-            "serverware.policyCandidateAuthoritySchema/v8",
-            "serverware.policyCandidateAuthoritySchema/v9",
+            "catchplate.policyCandidateAuthoritySchema/v8",
+            "catchplate.policyCandidateAuthoritySchema/v9",
         ),
         (
-            "serverware.policyAuthorityOwnerContract/v1",
-            "serverware.policyAuthorityOwnerContract/v2",
+            "catchplate.policyAuthorityOwnerContract/v1",
+            "catchplate.policyAuthorityOwnerContract/v2",
         ),
         (
-            "serverware_policy_authority_apply_verified",
-            "serverware_policy_authority_execute_v9",
+            "catchplate_policy_authority_apply_verified",
+            "catchplate_policy_authority_execute_v9",
         ),
         ("schema_version = 8", "schema_version = 9"),
         ("schema_version = (8)", "schema_version = (9)"),
@@ -684,7 +684,7 @@ def _replace_v8_constraints(cursor: Any) -> None:
             "ON relation.oid = constraint_record.conrelid "
             "JOIN pg_catalog.pg_namespace AS namespace "
             "ON namespace.oid = relation.relnamespace "
-            "WHERE namespace.nspname = 'serverware_metadata' "
+            "WHERE namespace.nspname = 'catchplate_metadata' "
             "AND relation.relname = %s "
             "AND constraint_record.contype = 'c' "
             "ORDER BY constraint_record.conname COLLATE \"C\"",
@@ -700,13 +700,13 @@ def _replace_v8_constraints(cursor: Any) -> None:
             constraint_sql = '"' + str(row["name"]).replace('"', '""') + '"'
             table_sql = '"' + table.replace('"', '""') + '"'
             cursor.execute(
-                "ALTER TABLE serverware_metadata."
+                "ALTER TABLE catchplate_metadata."
                 + table_sql
                 + " DROP CONSTRAINT "
                 + constraint_sql
             )
             cursor.execute(
-                "ALTER TABLE serverware_metadata."
+                "ALTER TABLE catchplate_metadata."
                 + table_sql
                 + " ADD CONSTRAINT "
                 + constraint_sql
@@ -718,7 +718,7 @@ def _replace_v8_constraints(cursor: Any) -> None:
 
 def _upgrade_writer_capability_binding(cursor: Any) -> None:
     live = cursor.execute(
-        "SELECT 1 FROM serverware_metadata."
+        "SELECT 1 FROM catchplate_metadata."
         "policy_authority_writer_capabilities "
         "WHERE status IN ('issued', 'reserved') LIMIT 1"
     ).fetchone()
@@ -743,7 +743,7 @@ def _upgrade_writer_capability_binding(cursor: Any) -> None:
             "ON relation.oid = attribute.attrelid "
             "JOIN pg_catalog.pg_namespace AS namespace "
             "ON namespace.oid = relation.relnamespace "
-            "WHERE namespace.nspname = 'serverware_metadata' "
+            "WHERE namespace.nspname = 'catchplate_metadata' "
             "AND relation.relname = "
             "'policy_authority_writer_capabilities' "
             "AND attribute.attnum > 0 AND NOT attribute.attisdropped"
@@ -755,56 +755,56 @@ def _upgrade_writer_capability_binding(cursor: Any) -> None:
                 "writer capability has a partial v9 column set"
             )
         cursor.execute(
-            "ALTER TABLE serverware_metadata."
+            "ALTER TABLE catchplate_metadata."
             "policy_authority_writer_capabilities ADD COLUMN "
             + '"' + column + '" '
             + column_type
         )
     cursor.execute(
-        "UPDATE serverware_metadata."
+        "UPDATE catchplate_metadata."
         "policy_authority_writer_capabilities SET "
         "expected_result_digest = COALESCE(result_digest, "
         "'sha256:' || pg_catalog.encode(pg_catalog.sha256("
-        "pg_catalog.convert_to('serverware.v8MigrationResult/' || "
+        "pg_catalog.convert_to('catchplate.v8MigrationResult/' || "
         "capability_id, 'UTF8')), 'hex')), "
         "planner_transaction_id = 'sha256:' || pg_catalog.encode("
         "pg_catalog.sha256(pg_catalog.convert_to("
-        "'serverware.v8MigrationPlanner/' || capability_id, 'UTF8')), "
+        "'catchplate.v8MigrationPlanner/' || capability_id, 'UTF8')), "
         "'hex'), "
         "authorization_projection_digest = 'sha256:' || "
         "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to("
-        "'serverware.v8MigrationAuthorization/' || capability_id, "
+        "'catchplate.v8MigrationAuthorization/' || capability_id, "
         "'UTF8')), 'hex'), "
         "selected_business_rows_digest = 'sha256:' || "
         "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to("
-        "'serverware.v8MigrationSelection/' || capability_id, "
+        "'catchplate.v8MigrationSelection/' || capability_id, "
         "'UTF8')), 'hex'), "
         "mutation_plan_digest = 'sha256:' || pg_catalog.encode("
         "pg_catalog.sha256(pg_catalog.convert_to("
-        "'serverware.v8MigrationMutation/' || capability_id, 'UTF8')), "
+        "'catchplate.v8MigrationMutation/' || capability_id, 'UTF8')), "
         "'hex'), "
         "deadline_epoch_ns = expires_at_epoch_ns"
     )
     for column, _ in additions:
         cursor.execute(
-            "ALTER TABLE serverware_metadata."
+            "ALTER TABLE catchplate_metadata."
             "policy_authority_writer_capabilities ALTER COLUMN "
             + '"' + column + '" SET NOT NULL'
         )
     cursor.execute(
-        "ALTER TABLE serverware_metadata."
+        "ALTER TABLE catchplate_metadata."
         "policy_authority_writer_capabilities ADD CONSTRAINT "
         "policy_authority_writer_capabilities_planner_transaction_id_key "
         "UNIQUE (planner_transaction_id)"
     )
     cursor.execute(
-        "ALTER TABLE serverware_metadata."
+        "ALTER TABLE catchplate_metadata."
         "policy_authority_writer_capabilities ADD CONSTRAINT "
         "policy_authority_writer_capability_deadline_epoch "
         "CHECK (deadline_epoch_ns > issued_at_epoch_ns)"
     )
     cursor.execute(
-        "ALTER TABLE serverware_metadata."
+        "ALTER TABLE catchplate_metadata."
         "policy_authority_writer_capabilities ADD CONSTRAINT "
         "policy_authority_writer_capability_v9_digests CHECK ("
         "expected_result_digest ~ '^sha256:[0-9a-f]{64}$' "
@@ -824,7 +824,7 @@ def _validate_replaced_constraints(cursor: Any) -> None:
         "ON relation.oid = constraint_record.conrelid "
         "JOIN pg_catalog.pg_namespace AS namespace "
         "ON namespace.oid = relation.relnamespace "
-        "WHERE namespace.nspname = 'serverware_metadata' "
+        "WHERE namespace.nspname = 'catchplate_metadata' "
         "AND relation.relname = ANY(%s) "
         "AND pg_catalog.pg_get_constraintdef("
         "constraint_record.oid, true) LIKE %s",
@@ -850,7 +850,7 @@ def _validate_replaced_constraints(cursor: Any) -> None:
             "ON relation.oid = constraint_record.conrelid "
             "JOIN pg_catalog.pg_namespace AS namespace "
             "ON namespace.oid = relation.relnamespace "
-            "WHERE namespace.nspname = 'serverware_metadata' "
+            "WHERE namespace.nspname = 'catchplate_metadata' "
             "AND relation.relname = %s "
             "AND constraint_record.contype = 'c' "
             "AND NOT constraint_record.convalidated",
@@ -858,7 +858,7 @@ def _validate_replaced_constraints(cursor: Any) -> None:
         ).fetchall()
         for row in constraints:
             cursor.execute(
-                "ALTER TABLE serverware_metadata."
+                "ALTER TABLE catchplate_metadata."
                 + table_sql
                 + " VALIDATE CONSTRAINT "
                 + '"' + str(row["name"]).replace('"', '""') + '"'
@@ -953,7 +953,7 @@ def _completed_v9_receipt_column_shape(
 ) -> tuple[tuple[str, str, bool], ...] | None:
     present = cursor.execute(
         "SELECT pg_catalog.to_regclass("
-        "'serverware_metadata."
+        "'catchplate_metadata."
         "policy_authority_v9_offline_migration_receipts') "
         "IS NOT NULL AS present"
     ).fetchone()
@@ -978,7 +978,7 @@ def _completed_v9_receipt_column_shape(
         "LEFT JOIN pg_catalog.pg_attrdef AS default_record "
         "ON default_record.adrelid = relation.oid "
         "AND default_record.adnum = attribute.attnum "
-        "WHERE namespace.nspname = 'serverware_metadata' "
+        "WHERE namespace.nspname = 'catchplate_metadata' "
         "AND relation.relname = "
         "'policy_authority_v9_offline_migration_receipts' "
         "AND relation.relkind = 'r' "
@@ -1013,8 +1013,8 @@ def _completed_v9_repair_receipt(
     signer_identity_digest: str,
 ) -> dict[str, Any] | None:
     version_rows = cursor.execute(
-        "SELECT version FROM serverware_metadata."
-        "serverware_store_migrations "
+        "SELECT version FROM catchplate_metadata."
+        "catchplate_store_migrations "
         "WHERE migration = 'policy_candidate_authority' LIMIT 2"
     ).fetchall()
     column_shape = _completed_v9_receipt_column_shape(cursor)
@@ -1035,7 +1035,7 @@ def _completed_v9_repair_receipt(
     # recorded-contract validation in migrate(), without reinstalling tables.
     retained = cursor.execute(
         "SELECT pg_catalog.to_regclass(%s) IS NOT NULL AS present",
-        ("serverware_metadata." + authority_contract.REVOCATION_RETAINED_TABLE,),
+        ("catchplate_metadata." + authority_contract.REVOCATION_RETAINED_TABLE,),
     ).fetchone()
     if retained is None or retained["present"] is not False:
         raise MigrationError(
@@ -1049,7 +1049,7 @@ def _completed_v9_repair_receipt(
     rows = cursor.execute(
         "SELECT "
         + ", ".join(legacy_columns)
-        + " FROM serverware_metadata."
+        + " FROM catchplate_metadata."
         "policy_authority_v9_offline_migration_receipts "
         "WHERE contract_id = %s LIMIT 2",
         (_CONTRACT_ID,),
@@ -1268,7 +1268,7 @@ def migrate(
                 )
                 cursor.execute(
                     "SET LOCAL search_path TO "
-                    "serverware_metadata, pg_catalog, pg_temp"
+                    "catchplate_metadata, pg_catalog, pg_temp"
                 )
                 cursor.execute("SET LOCAL lock_timeout = '5s'")
                 cursor.execute("SET LOCAL statement_timeout = '0'")
@@ -1353,7 +1353,7 @@ def migrate(
                 )
                 cursor.execute(
                     "SET LOCAL search_path TO "
-                    "serverware_metadata, pg_catalog, pg_temp"
+                    "catchplate_metadata, pg_catalog, pg_temp"
                 )
                 cursor.execute("SET LOCAL lock_timeout = '5s'")
                 cursor.execute("SET LOCAL statement_timeout = '0'")
@@ -1368,8 +1368,8 @@ def migrate(
                     expected_signer_digest=expected_signer_digest,
                 )
                 version_row = cursor.execute(
-                    "SELECT version FROM serverware_metadata."
-                    "serverware_store_migrations "
+                    "SELECT version FROM catchplate_metadata."
+                    "catchplate_store_migrations "
                     "WHERE migration = 'policy_candidate_authority' "
                     "FOR UPDATE"
                 ).fetchone()
@@ -1387,7 +1387,7 @@ def migrate(
                     )
                     contract_receipts = cursor.execute(
                         "SELECT offline_migration_receipt_digest "
-                        "FROM serverware_metadata."
+                        "FROM catchplate_metadata."
                         "policy_authority_schema_contracts "
                         "WHERE schema_version = 9 LIMIT 2"
                     ).fetchall()
@@ -1408,14 +1408,14 @@ def migrate(
                     )
                 contract = cursor.execute(
                     "SELECT contract_id, source_revision "
-                    "FROM serverware_metadata."
+                    "FROM catchplate_metadata."
                     "policy_authority_schema_contracts "
                     "WHERE schema_version = 8 FOR UPDATE"
                 ).fetchall()
                 if (
                     len(contract) != 1
                     or contract[0]["contract_id"]
-                    != "serverware.policyCandidateAuthoritySchema/v8"
+                    != "catchplate.policyCandidateAuthoritySchema/v8"
                     or contract[0]["source_revision"]
                     != _OLD_SOURCE_REVISION
                 ):
@@ -1426,7 +1426,7 @@ def migrate(
                     if cursor.execute(
                         "SELECT pg_catalog.to_regclass(%s) IS NOT NULL "
                         "AS present",
-                        ("serverware_metadata." + table,),
+                        ("catchplate_metadata." + table,),
                     ).fetchone()["present"]
                 )
                 if existing_tables != _MIGRATION_TABLES:
@@ -1441,7 +1441,7 @@ def migrate(
                     if cursor.execute(
                         "SELECT pg_catalog.to_regclass(%s) IS NOT NULL "
                         "AS present",
-                        ("serverware_metadata." + table,),
+                        ("catchplate_metadata." + table,),
                     ).fetchone()["present"]
                 ]
                 if premature_v9_tables:
@@ -1451,7 +1451,7 @@ def migrate(
                     )
                 for table in sorted(existing_tables):
                     cursor.execute(
-                        "LOCK TABLE serverware_metadata."
+                        "LOCK TABLE catchplate_metadata."
                         + '"' + table.replace('"', '""') + '"'
                         + " IN ACCESS EXCLUSIVE MODE"
                     )
@@ -1475,22 +1475,22 @@ def migrate(
                 _replace_v8_constraints(cursor)
                 _upgrade_writer_capability_binding(cursor)
                 cursor.execute(
-                    "DELETE FROM serverware_metadata."
+                    "DELETE FROM catchplate_metadata."
                     "policy_authority_owner_contracts"
                 )
                 cursor.execute(
-                    "DELETE FROM serverware_metadata."
+                    "DELETE FROM catchplate_metadata."
                     "policy_authority_schema_contracts"
                 )
                 cursor.execute(
-                    "DELETE FROM serverware_metadata."
+                    "DELETE FROM catchplate_metadata."
                     "policy_authority_query_dependency_manifests"
                 )
                 for table in _SOURCE_REVISION_TABLES:
                     if table == "policy_authority_query_dependency_manifests":
                         continue
                     cursor.execute(
-                        "UPDATE serverware_metadata."
+                        "UPDATE catchplate_metadata."
                         + '"' + table.replace('"', '""') + '"'
                         + " SET source_revision = %s "
                         "WHERE source_revision = %s",
@@ -1498,8 +1498,8 @@ def migrate(
                     )
                 _validate_replaced_constraints(cursor)
                 cursor.execute(
-                    "UPDATE serverware_metadata."
-                    "serverware_store_migrations "
+                    "UPDATE catchplate_metadata."
+                    "catchplate_store_migrations "
                     "SET version = 9, applied_at = "
                     "pg_catalog.clock_timestamp()::text "
                     "WHERE migration = 'policy_candidate_authority' "
@@ -1712,7 +1712,7 @@ def migrate(
                         "v9 migration store did not persist the exact receipt"
                     )
                 cursor.execute(
-                    "INSERT INTO serverware_metadata."
+                    "INSERT INTO catchplate_metadata."
                     "policy_authority_schema_contracts ("
                     "schema_version, contract_id, source_revision, "
                     "source_contract_digest, structural_manifest_json, "
@@ -1720,7 +1720,7 @@ def migrate(
                     "offline_migration_receipt_digest, installed_at"
                     ") VALUES (9, %s, %s, %s, %s, %s, %s, %s)",
                     (
-                        "serverware.policyCandidateAuthoritySchema/v9",
+                        "catchplate.policyCandidateAuthoritySchema/v9",
                         _NEW_SOURCE_REVISION,
                         db._policy_candidate_authority_source_contract_digest(),
                         structural_manifest_json,
@@ -1738,7 +1738,7 @@ def migrate(
                     )
                 )
                 cursor.execute(
-                    "INSERT INTO serverware_metadata."
+                    "INSERT INTO catchplate_metadata."
                     "policy_authority_owner_contracts ("
                     "contract_id, schema_version, source_revision, "
                     "function_name, function_definition_digest, "
@@ -1763,8 +1763,8 @@ def migrate(
                     ),
                 )
                 final_version = cursor.execute(
-                    "SELECT version FROM serverware_metadata."
-                    "serverware_store_migrations "
+                    "SELECT version FROM catchplate_metadata."
+                    "catchplate_store_migrations "
                     "WHERE migration = 'policy_candidate_authority'"
                 ).fetchone()
                 if final_version is None or int(final_version["version"]) != 9:
@@ -1795,7 +1795,7 @@ def migrate(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Offline, atomic Serverware authority v8-to-v9 migration"
+        description="Offline, atomic Catchplate authority v8-to-v9 migration"
     )
     parser.add_argument(
         "--dsn-fd",

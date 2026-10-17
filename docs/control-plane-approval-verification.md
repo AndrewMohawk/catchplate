@@ -31,7 +31,7 @@ sequenceDiagram
     R->>V: Discard on every exit
 ```
 
-`serverware/control_plane_approval_verification.py` owns receipt construction,
+`catchplate/control_plane_approval_verification.py` owns receipt construction,
 registration, consumption and invalidation. It invokes the genuine verifier
 itself. No public receipt constructor, posted success dictionary, serialized
 receipt or caller-provided verification callback can select the verified path.
@@ -59,7 +59,7 @@ the recorded evidence.
 
 The active `POST /api/control-plane/tokens/admin/rotate` handler now delegates
 to the fixed-purpose owner in
-`serverware/control_plane_admin_token_publication.py`. It is not a generic
+`catchplate/control_plane_admin_token_publication.py`. It is not a generic
 provider/effect callback and does not implement policy-file recovery (O05).
 Externally supplied administrator tokens remain non-rotatable.
 
@@ -99,7 +99,7 @@ The effect sequence is fixed:
    local outcome, commit the completion audit/outbox event, and then persist a
    separate settled record before returning the new token once.
 
-The journal is `.serverware-admin-token-publications` beside the generated token:
+The journal is `.catchplate-admin-token-publications` beside the generated token:
 service-owned mode `0700`, with no-follow, single-link, mode `0600` originals.
 It is bounded to 64 attempts and ten fixed file kinds per attempt (the original
 seven plus three separately authorized resolution records), 16 KiB per record

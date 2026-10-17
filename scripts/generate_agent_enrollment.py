@@ -5,8 +5,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from serverware_agent_trust.enrollment import *  # noqa: F403
-from serverware_agent_trust.enrollment import console_main
+from catchplate_agent_trust.enrollment import *  # noqa: F403
+from catchplate_agent_trust.enrollment import console_main
 
 
 if __name__ == "__main__":

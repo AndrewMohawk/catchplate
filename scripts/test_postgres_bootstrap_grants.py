@@ -11,11 +11,11 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from serverware.postgres_options import bounded_connection_options
+from catchplate.postgres_options import bounded_connection_options
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACT = "serverware.metadataStoreBootstrap/v1"
+CONTRACT = "catchplate.metadataStoreBootstrap/v1"
 
 
 class BootstrapError(RuntimeError):
@@ -25,7 +25,7 @@ class BootstrapError(RuntimeError):
 def route(*, metadata="postgres", audit="postgres", grant="postgres",
           metadata_dsn="fixed-runtime-dsn", grant_dsn="fixed-runtime-dsn",
           mode="metadata-bootstrap", contract=CONTRACT, borrowed=None):
-    tree = ast.parse((ROOT / "serverware/db.py").read_text())
+    tree = ast.parse((ROOT / "catchplate/db.py").read_text())
     function = next(node for node in tree.body
                     if isinstance(node, ast.FunctionDef) and node.name == "init_db")
     # Execute only the genuine source prefix through grant/audit routing.
@@ -46,7 +46,7 @@ def route(*, metadata="postgres", audit="postgres", grant="postgres",
         "metadata_uses_postgres": lambda: metadata == "postgres",
         "audit_uses_postgres": lambda: audit == "postgres",
         "_policy_candidate_offline_connection": SimpleNamespace(get=lambda: borrowed),
-        "os": SimpleNamespace(environ={"SERVERWARE_PROCESS_MODE": mode}),
+        "os": SimpleNamespace(environ={"CATCHPLATE_PROCESS_MODE": mode}),
         "ensure_data_dirs": lambda: calls.append("directories"),
         "_reject_runtime_metadata_admin_dsn": lambda: calls.append("runtime-admin-guard"),
         "_assert_postgres_metadata_runtime_ready": lambda: calls.append("runtime-readiness"),
@@ -63,7 +63,7 @@ def route(*, metadata="postgres", audit="postgres", grant="postgres",
 
 
 def initialization_locks(timeout_ms):
-    tree = ast.parse((ROOT / "serverware/db.py").read_text())
+    tree = ast.parse((ROOT / "catchplate/db.py").read_text())
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                     and node.name == "_lock_postgres_metadata_initialization_authorities")
     calls = []
@@ -88,7 +88,7 @@ def initialization_locks(timeout_ms):
 @lru_cache(maxsize=1)
 def connector_source():
     # Test-local immutable source snapshot for this one focused process only.
-    return ast.parse((ROOT / "serverware/db.py").read_text())
+    return ast.parse((ROOT / "catchplate/db.py").read_text())
 
 
 def connector_options(connector, options, *, contract=CONTRACT,
@@ -113,7 +113,7 @@ def connector_options(connector, options, *, contract=CONTRACT,
 
     psycopg = SimpleNamespace(connect=connect)
     namespace = {
-        "re": re, "os": SimpleNamespace(environ={"SERVERWARE_PROCESS_MODE": mode}),
+        "re": re, "os": SimpleNamespace(environ={"CATCHPLATE_PROCESS_MODE": mode}),
         "bounded_connection_options": bounded_connection_options,
         "MetadataStoreError": BootstrapError, "AuditStoreError": BootstrapError,
         "RecoveryWitnessError": BootstrapError,
@@ -151,9 +151,9 @@ def connector_options(connector, options, *, contract=CONTRACT,
 
 AUTHORITY_CONNECTORS = (
     ("_policy_authority_executor_pg_connect_raw", "policy-authority-executor",
-     "SERVERWARE_POLICY_AUTHORITY_EXECUTOR_POSTGRES_DSN"),
+     "CATCHPLATE_POLICY_AUTHORITY_EXECUTOR_POSTGRES_DSN"),
     ("_policy_authority_capability_issuer_pg_connect_raw", "policy-authority-issuer",
-     "SERVERWARE_POLICY_AUTHORITY_CAPABILITY_ISSUER_POSTGRES_DSN"),
+     "CATCHPLATE_POLICY_AUTHORITY_CAPABILITY_ISSUER_POSTGRES_DSN"),
 )
 
 
@@ -181,7 +181,7 @@ def authority_connector_options(connector, options, *, mode, observed):
         raise ConnectObserved()  # Never return a simulated admitted connection.
 
     namespace = {
-        "re": re, "os": SimpleNamespace(environ={"SERVERWARE_PROCESS_MODE": mode}),
+        "re": re, "os": SimpleNamespace(environ={"CATCHPLATE_PROCESS_MODE": mode}),
         "bounded_connection_options": bounded_connection_options,
         "MetadataStoreError": BootstrapError,
         "_POLICY_AUTHORITY_EXECUTOR_PROCESS_MODE": "policy-authority-executor",
@@ -218,7 +218,7 @@ SERVICE_READERS = (
 
 @lru_cache(maxsize=1)
 def service_connection_source():
-    tree = ast.parse((ROOT / "serverware/authority_service.py").read_text())
+    tree = ast.parse((ROOT / "catchplate/authority_service.py").read_text())
     return next(node for node in tree.body
                 if isinstance(node, ast.ClassDef) and node.name == "AuthorityProcess")
 
@@ -244,9 +244,9 @@ def service_reader_options(method, options, *, observed):
     call = opening.items[0].context_expr
     assert function.body.index(selected) < function.body.index(opening)
     assert len(call.args) == 1 and ast.unparse(call.args[0]) == "dsn"
-    expected_descriptor = ("SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN"
+    expected_descriptor = ("CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN"
         if method == "_handle_read_persisted_plan"
-        else "SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN")
+        else "CATCHPLATE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN")
 
     class ConnectObserved(BaseException):
         pass
@@ -282,8 +282,8 @@ def service_reader_options(method, options, *, observed):
 class PostgresBootstrapGrantTests(unittest.TestCase):
     def test_local_reader_profile_refuses_without_original_development_authorization(self):
         # Actual validators and init_db prefix only; no DB import or connection.
-        from serverware import authority_local_audit_reader as reader
-        from serverware import authority_local_rbac_bootstrap as rbac
+        from catchplate import authority_local_audit_reader as reader
+        from catchplate import authority_local_rbac_bootstrap as rbac
         function = deepcopy(next(node for node in connector_source().body
             if isinstance(node, ast.FunctionDef) and node.name == "init_db"))
         end = next(index for index, node in enumerate(function.body) if isinstance(node, ast.If)
@@ -303,8 +303,8 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
             with self.subTest(profile=profile, production=production), \
                     mock.patch.object(rbac.config, "PRODUCTION_IMAGE", production), \
                     mock.patch.object(rbac.config, "_production_release", return_value=production), \
-                    mock.patch.dict(rbac.os.environ, {"SERVERWARE_PRODUCTION_IMAGE": "0",
-                        "SERVERWARE_RELEASE_CHANNEL": "dev", "SERVERWARE_PROCESS_MODE": "metadata-bootstrap"}), \
+                    mock.patch.dict(rbac.os.environ, {"CATCHPLATE_PRODUCTION_IMAGE": "0",
+                        "CATCHPLATE_RELEASE_CHANNEL": "dev", "CATCHPLATE_PROCESS_MODE": "metadata-bootstrap"}), \
                     mock.patch.object(rbac.time, "time_ns", return_value=150_000_000_000):
                 with self.assertRaises((ValueError, BootstrapError)):
                     namespace["init_db"](bootstrap_contract_id=CONTRACT,
@@ -330,7 +330,7 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
         recorded = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
             and node.name == "_record_policy_candidate_authority_migration")
         self.assertIn("local_audit_reader_profile is not None and prior_contract", ast.unparse(recorded))
-        schema = ast.parse((ROOT / "serverware/authority_store/schema.py").read_text())
+        schema = ast.parse((ROOT / "catchplate/authority_store/schema.py").read_text())
         expected = next(node for node in schema.body if isinstance(node, ast.FunctionDef)
             and node.name == "_policy_candidate_authority_expected_structure_manifest")
         reference_calls = {name: [node for node in ast.walk(expected) if isinstance(node, ast.Call)
@@ -380,7 +380,7 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
             for selected, expected in selections:
                 with self.subTest(connector=connector, selected=selected):
                     actual, guards = connector_options(connector, selected,
-                        contract=None, mode="serverware-control-plane")
+                        contract=None, mode="catchplate-control-plane")
                     tokens = actual.split()
                     self.assertEqual(tokens[::2], ["-c"] * (len(expected) + 1))
                     self.assertEqual(dict(token.split("=", 1) for token in tokens[1::2]),
@@ -394,7 +394,7 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
             for selected in (None, ""):
                 with self.subTest(connector=connector, runtime=selected):
                     actual, guards = connector_options(connector, selected,
-                                                       contract=None, mode="serverware-control-plane")
+                                                       contract=None, mode="catchplate-control-plane")
                     self.assertEqual(actual, "-c search_path=pg_catalog")
                     self.assertEqual(guards, ["runtime-admin"]
                                      if connector == "_metadata_pg_connect_with_dsn" else [])
@@ -415,7 +415,7 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
             for selected in rejected:
                 with self.subTest(connector=connector, selected=selected), self.assertRaises(BootstrapError):
                     connector_options(connector, selected,
-                        contract=None, mode="serverware-control-plane")
+                        contract=None, mode="catchplate-control-plane")
 
     def test_bootstrap_connectors_refuse_unsafe_options_and_wrong_authority(self):
         rejected = ("-c statement_timeout=0", "-c lock_timeout=0",
@@ -428,7 +428,7 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
             for selected in rejected:
                 with self.subTest(connector=connector, selected=selected), self.assertRaises(BootstrapError):
                     connector_options(connector, selected)
-            for authority in ({"contract": "wrong"}, {"mode": "serverware-control-plane"}):
+            for authority in ({"contract": "wrong"}, {"mode": "catchplate-control-plane"}):
                 with self.subTest(connector=connector, authority=authority), self.assertRaises(BootstrapError):
                     connector_options(connector, "-c statement_timeout=30000", **authority)
 
@@ -472,7 +472,7 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
                     self.assertEqual(observed["connects"], [])
 
     def test_authority_connectors_refuse_wrong_mode_before_descriptor_access(self):
-        modes = ("", "serverware-control-plane", "policy-authority-executor", "policy-authority-issuer")
+        modes = ("", "catchplate-control-plane", "policy-authority-executor", "policy-authority-issuer")
         for connector, expected_mode, _ in AUTHORITY_CONNECTORS:
             for mode in modes:
                 if mode == expected_mode:
@@ -529,7 +529,7 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
                     "SELECT pg_catalog.set_config('statement_timeout', ?, true)",
                     (str(timeout_ms) + "ms",),
                 )])
-        tree = ast.parse((ROOT / "serverware/db.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/db.py").read_text())
         initialize = next(node for node in tree.body
                           if isinstance(node, ast.FunctionDef) and node.name == "init_db")
         calls = [node.func.id for node in ast.walk(initialize)
@@ -555,12 +555,12 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
                 self.assertIn("standalone-grants", route(metadata_dsn=metadata, grant_dsn=grant))
 
     def test_other_mode_or_grant_backend_preserves_legacy_routing(self):
-        for options in ({"mode": ""}, {"mode": "serverware"}, {"grant": "sqlite"}):
+        for options in ({"mode": ""}, {"mode": "catchplate"}, {"grant": "sqlite"}):
             with self.subTest(options=options):
                 self.assertIn("standalone-grants", route(**options))
 
     def test_ordinary_postgres_runtime_never_initializes_either_store(self):
-        self.assertEqual(route(contract=None, mode="serverware"),
+        self.assertEqual(route(contract=None, mode="catchplate"),
                          ["runtime-admin-guard", "directories", "runtime-readiness"])
 
     def test_sqlite_and_borrowed_owner_behavior_are_unchanged(self):
@@ -575,7 +575,7 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
                 route(**options)
 
     def test_source_owned_metadata_schema_contains_authority_grant_fields(self):
-        tree = ast.parse((ROOT / "serverware/authority_store/metadata_schema_source.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/authority_store/metadata_schema_source.py").read_text())
         function = next(node for node in tree.body
                         if isinstance(node, ast.FunctionDef) and node.name == "metadata_base_schema_source")
         ddl = ast.literal_eval(function.body[0].value)
@@ -586,7 +586,7 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
 
     def test_runtime_identity_queries_compare_regrole_to_regrole(self):
         # Source-only SQL/type regression, not database execution or readiness.
-        tree = ast.parse((ROOT / "serverware/db.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/db.py").read_text())
         for name, parameter in (("_pinned_auxiliary_pg_connect", "runtime_role"),
                                 ("_metadata_pg_connect_with_dsn", "_METADATA_STORE_RUNTIME_ROLE")):
             with self.subTest(builder=name):
@@ -606,18 +606,18 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
 
     def test_index_names_are_unqualified_and_bootstrap_tables_stay_qualified(self):
         # Source shape only; actual PostgreSQL parsing is a separate control.
-        tree = ast.parse((ROOT / "serverware/db.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/db.py").read_text())
         identifier = r"[a-z_][a-z_0-9]*(?:\s*\.\s*[a-z_][a-z_0-9]*)*"
         index = re.compile(r"\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+"
             r"(?:IF\s+NOT\s+EXISTS\s+)?(" + identifier + r")\s+ON\s+("
             + identifier + r")\s*\(([^)]+)\)", re.IGNORECASE)
         expected = {
-            "serverware_audit_events_created_at_desc": (
-                "serverware_audit.serverware_audit_events", "created_at DESC, sequence DESC"),
-            "serverware_audit_events_type_created_at": (
-                "serverware_audit.serverware_audit_events", "event_type, created_at DESC"),
-            "serverware_recovery_claims_user_sequence": (
-                "serverware_recovery_witness.serverware_recovery_authorization_claims",
+            "catchplate_audit_events_created_at_desc": (
+                "catchplate_audit.catchplate_audit_events", "created_at DESC, sequence DESC"),
+            "catchplate_audit_events_type_created_at": (
+                "catchplate_audit.catchplate_audit_events", "event_type, created_at DESC"),
+            "catchplate_recovery_claims_user_sequence": (
+                "catchplate_recovery_witness.catchplate_recovery_authorization_claims",
                 "root_key_id, user_id, root_sequence"),
         }
         actual = {}
@@ -633,7 +633,7 @@ class PostgresBootstrapGrantTests(unittest.TestCase):
 
     def test_acl_owner_query_uses_nonreserved_role_table_alias(self):
         # Source-only regression; actual PostgreSQL parsing is a separate control.
-        tree = ast.parse((ROOT / "serverware/db.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/db.py").read_text())
         function = next(node for node in tree.body
                         if isinstance(node, ast.FunctionDef)
                         and node.name == "_seal_postgres_schema_acl")

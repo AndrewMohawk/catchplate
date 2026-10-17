@@ -21,13 +21,13 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import operator_publication as publication
-from serverware.operator_demo import MARKER, MARKER_BYTES
+from catchplate import operator_publication as publication
+from catchplate.operator_demo import MARKER, MARKER_BYTES
 
 
 class BootstrapReaderTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="serverware-publication-bootstrap-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="catchplate-publication-bootstrap-")
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
         self.directory.chmod(0o700)
@@ -36,7 +36,7 @@ class BootstrapReaderTests(unittest.TestCase):
         self.marker.chmod(0o600)
         self.lock = self.directory / publication.LOCK_NAME
         self.lock.touch(mode=0o600)
-        self.database = self.directory / "serverware.sqlite3"
+        self.database = self.directory / "catchplate.sqlite3"
         with sqlite3.connect(self.database) as conn:
             conn.execute("CREATE TABLE retained(value TEXT NOT NULL)")
             conn.execute("INSERT INTO retained VALUES('initial')")
@@ -83,7 +83,7 @@ class BootstrapReaderTests(unittest.TestCase):
         writer.execute("PRAGMA wal_autocheckpoint=0")
         writer.execute("INSERT INTO retained VALUES('wal-before')")
         writer.commit()
-        self.assertGreater((self.directory / "serverware.sqlite3-wal").stat().st_size, 32)
+        self.assertGreater((self.directory / "catchplate.sqlite3-wal").stat().st_size, 32)
         with publication.bootstrap_read(self.admit()) as reader:
             self.assertEqual(tuple(row[0] for row in reader.execute("SELECT value FROM retained")),
                 ("initial", "wal-before"))
@@ -101,8 +101,8 @@ class BootstrapReaderTests(unittest.TestCase):
         writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         writer.close()
         self.assertEqual(self.database.read_bytes()[18:20], b"\x02\x02")
-        self.assertFalse((self.directory / "serverware.sqlite3-wal").exists())
-        self.assertFalse((self.directory / "serverware.sqlite3-shm").exists())
+        self.assertFalse((self.directory / "catchplate.sqlite3-wal").exists())
+        self.assertFalse((self.directory / "catchplate.sqlite3-shm").exists())
         before = self.database.read_bytes()
         self.assertEqual(self.read(), ("initial", "checkpointed"))
         self.assertEqual(self.database.read_bytes(), before)
@@ -199,7 +199,7 @@ class BootstrapReaderTests(unittest.TestCase):
         original_connect = sqlite3.connect
         marker = self.marker
         retained = self.directory / "retained-marker"
-        sidecar = self.directory / "serverware.sqlite3-shm"
+        sidecar = self.directory / "catchplate.sqlite3-shm"
         database = self.database
         fired = []
         entered = []
@@ -258,7 +258,7 @@ class BootstrapReaderTests(unittest.TestCase):
 
     def test_bad_existing_sidecars_refused_before_sqlite_open(self):
         for suffix in ("-wal", "-shm", "-journal"):
-            path = self.directory / ("serverware.sqlite3" + suffix)
+            path = self.directory / ("catchplate.sqlite3" + suffix)
             for kind in ("symlink", "fifo", "mode", "hardlink"):
                 with self.subTest(suffix=suffix, kind=kind):
                     if kind == "symlink":
@@ -335,17 +335,17 @@ class BootstrapReaderTests(unittest.TestCase):
 import importlib.abc, sys
 class Forbidden(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname in {"serverware.config", "serverware.db", "serverware.crypto", "serverware.operator_provider_custody"}:
+        if fullname in {"catchplate.config", "catchplate.db", "catchplate.crypto", "catchplate.operator_provider_custody"}:
             raise AssertionError("forbidden bootstrap import")
 sys.meta_path.insert(0, Forbidden())
 sys.path.insert(0, sys.argv[1])
-from serverware import operator_publication as p
+from catchplate import operator_publication as p
 a = p.admit_bootstrap_reader(sys.argv[2], operator_development=True,
     release_channel="dev", production_image=False, native_or_enrolled=False)
 with p.bootstrap_read(a) as conn:
     assert conn.execute("SELECT value FROM retained").fetchone()[0] == "initial"
 assert p._pinned is None
-assert not {"serverware.config", "serverware.db", "serverware.crypto", "serverware.operator_provider_custody"}.intersection(sys.modules)
+assert not {"catchplate.config", "catchplate.db", "catchplate.crypto", "catchplate.operator_provider_custody"}.intersection(sys.modules)
 '''
         before = self.files()
         result = subprocess.run([sys.executable, "-B", "-c", program, str(ROOT), str(self.directory)],

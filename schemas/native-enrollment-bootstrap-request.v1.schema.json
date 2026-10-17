@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/native-enrollment-bootstrap-request.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/native-enrollment-bootstrap-request.v1.schema.json",
   "title": "Native bootstrap public-original exchange request v1",
   "description": "Exactly one canonical sorted ASCII JSON object plus LF, at most 192 KiB including LF. Decoding grants no authority; the native receiver independently authenticates each original and the actual caller. JSON Schema does not establish canonical wire spelling, aggregate length or cryptographic validity.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "delegationBase64url", "setupAuthorizationBase64url", "targetRequestBase64url"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeEnrollmentBootstrapRequest/v1"},
+    "apiVersion": {"const": "catchplate.nativeEnrollmentBootstrapRequest/v1"},
     "delegationBase64url": {
       "type": "string", "minLength": 1, "maxLength": 43691,
       "pattern": "^[A-Za-z0-9_-]+$",

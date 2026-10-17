@@ -14,7 +14,7 @@ the recipient profile. The broker accepts only closed versioned request shapes
 and requires genuine recipient verification for native requests even in development.
 Controlled routes cannot fall back to uncontrolled or legacy dispatch.
 
-All names below have the `serverware.` prefix. Envelopes and sets have no `kind`
+All names below have the `catchplate.` prefix. Envelopes and sets have no `kind`
 field. Native request v1 is metadata or policy-permitted uncontrolled dispatch;
 v2 is controlled dispatch, not a new way to bypass reservation or JIT authority.
 
@@ -45,7 +45,7 @@ requires independently supplied exact-file SHA256 pins for its expectations and
 trust-root originals before JSON parsing. New
 [`nativeCredentialRecipientExpectations/v2`](../schemas/native-credential-recipient-expectations.v2.schema.json)
 has the old twelve fields plus the fixed
-`leaseRequestProfile: "serverware.nativeCredentialLeaseRequest"`.
+`leaseRequestProfile: "catchplate.nativeCredentialLeaseRequest"`.
 This pinned configuration, not stdin, selects native request handling. Old
 expectations v1 rejects the new marker; v2 requires it. The shared `_expectations`
 override used by other verifier scripts retains its prior API and behavior.

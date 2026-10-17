@@ -45,9 +45,9 @@ def deadline(*_): raise TimeoutError("bounded")
 signal.signal(signal.SIGALRM, deadline); signal.alarm(15)
 mode, expected_binary = sys.argv[1:]
 need(mode in {"app", "gate"} and os.geteuid() == os.getegid() == 10001)
-leaves = (".operator-publication.lock", ".serverware-operator-demo.json", "mitmproxy/mitmproxy-ca-cert.pem", "mitmproxy/mitmproxy-ca.pem")
-private = ("serverware.sqlite3", "master.key",
-    "policy-signing-ed25519.pem", "serverware.sqlite3-wal", "serverware.sqlite3-shm",
+leaves = (".operator-publication.lock", ".catchplate-operator-demo.json", "mitmproxy/mitmproxy-ca-cert.pem", "mitmproxy/mitmproxy-ca.pem")
+private = ("catchplate.sqlite3", "master.key",
+    "policy-signing-ed25519.pem", "catchplate.sqlite3-wal", "catchplate.sqlite3-shm",
     "response-signing-ed25519.pem", "dev-tee-quote-ed25519.pem", "webauthn-trust-signing-ed25519.pem")
 def identity(path):
     info = os.lstat(path)
@@ -68,7 +68,7 @@ def policy(path):
     with open(path, "rb") as stream: raw = stream.read(4194305)
     need(len(raw) == prior["size"] and identity(path) == prior)
     document = json.loads(raw)
-    need(document.get("apiVersion") == "serverware.policy/v1" and isinstance(document.get("metadata"), dict))
+    need(document.get("apiVersion") == "catchplate.policy/v1" and isinstance(document.get("metadata"), dict))
     sequence = document["metadata"]["sequence"]
     need(type(sequence) is int and sequence >= 1 and "signature" in document["metadata"])
     document["metadata"].pop("signature")
@@ -94,7 +94,7 @@ try:
         need(set(os.listdir(root / "mitmproxy")) == {"mitmproxy-ca-cert.pem", "mitmproxy-ca.pem"})
         current = policy(root / "policy-bundle.json")
         if mode == "app":
-            need(os.environ.get("SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED") == "1")
+            need(os.environ.get("CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED") == "1")
             need(policy("/data/policy-bundle.json") == current)
             for name in leaves:
                 item = identity(root / name); need(item["mode"] == 0 and item["size"] == 0)
@@ -126,8 +126,8 @@ try:
                 if not pid.isdecimal(): continue
                 try: target = os.readlink("/proc/" + pid + "/exe")
                 except OSError: continue
-                if target == "/usr/local/bin/serverware-decision-gate": executable.append((int(pid), digest("/proc/" + pid + "/exe")))
-            need(len(executable) == 1 and executable[0][1] == digest("/usr/local/bin/serverware-decision-gate") == expected_binary)
+                if target == "/usr/local/bin/catchplate-decision-gate": executable.append((int(pid), digest("/proc/" + pid + "/exe")))
+            need(len(executable) == 1 and executable[0][1] == digest("/usr/local/bin/catchplate-decision-gate") == expected_binary)
         else: executable = None
         need({name: identity("/data/" + name) for name in leaves} == leaf_state)
         result = {"ok": True, "uid": os.geteuid(), "leaves": leaf_state, "policy": current, "export_directory": export_directory,
@@ -184,12 +184,12 @@ def inspect(identifier, name, config):
 def verify_transition(before, after, client):
     base.require("master.key" in after["app_private_files_present"],
         "real client credential custody was not observed after the check")
-    base.require(before.get("schema") == "serverware.privateCuratedGateObservation/v1" and before.get("ok") is True and
+    base.require(before.get("schema") == "catchplate.privateCuratedGateObservation/v1" and before.get("ok") is True and
         before.get("phase") == "before" and before["preparation_sha256"] == after["preparation_sha256"] and
         before["containers"] == after["containers"] and before["shared_leaves"] == after["shared_leaves"] and
         before["gate_executable"] == after["gate_executable"] and before["export_directory"] == after["export_directory"],
         "original observed fixture identity changed")
-    base.require(client.get("schema") == "serverware.operatorProxyBasicCheck/v1" and client.get("ok") is True and
+    base.require(client.get("schema") == "catchplate.operatorProxyBasicCheck/v1" and client.get("ok") is True and
         client.get("syntheticOnly") is True and client.get("dataPlaneBinaryDigest") == "sha256:" + after["binary_sha256"] and
         client.get("upstreamDispatches") == 4 and client.get("authenticationDenials") == 8 and client.get("functionalRetries") == 0,
         "actual unchanged Basic checker did not pass")
@@ -211,9 +211,9 @@ def run(args):
     root = args.job_root
     base.require(bool(args.before_receipt) == bool(args.client_receipt), "after mode needs both original receipts")
     base.require(root.resolve() == root and root.parent == base.SCRATCH and re.fullmatch(
-        r"serverware-curated-gate-private\.[A-Za-z0-9]{6,32}", root.name), "exact private fixture root required")
+        r"catchplate-curated-gate-private\.[A-Za-z0-9]{6,32}", root.name), "exact private fixture root required")
     prep = basic.pinned_json(root / "preparation.json", args.expected_preparation_sha256)
-    base.require(prep.get("schema") == "serverware.privateCuratedGatePreparation/v1" and prep["jobRoot"] == str(root), "preparation differs")
+    base.require(prep.get("schema") == "catchplate.privateCuratedGatePreparation/v1" and prep["jobRoot"] == str(root), "preparation differs")
     source, binary, initializer = (Path(prep[name]) for name in ("source", "binary", "initializer"))
     sources = basic.source_inventory(source, Path(prep["sourceManifest"]), prep["sourceManifestSha256"], prep["sourceCommit"])
     base.require(base.digest(binary) == prep["binarySha256"] and base.digest(initializer) == base.INITIALIZER_SHA256 and
@@ -221,7 +221,7 @@ def run(args):
     config = document(root / "compose.json")
     fixture.validate(config, source, binary, initializer, root, prep["subnet"], expected_binary_sha256=prep["binarySha256"])
     identities, observations = {}, {}
-    for mode, identifier, service in (("app", args.app_container_id, "serverware"), ("gate", args.gate_container_id, "decision-gate-rs")):
+    for mode, identifier, service in (("app", args.app_container_id, "catchplate"), ("gate", args.gate_container_id, "decision-gate-rs")):
         identities[mode] = inspect(identifier, service, config)
         observations[mode] = command(["/usr/bin/docker", "exec", "-i", "--user", "10001:10001", identifier,
             "python", "-I", "-B", "-", mode, prep["binarySha256"]], PROBE)
@@ -229,9 +229,9 @@ def run(args):
     app, gate = observations["app"], observations["gate"]
     base.require(app["leaves"] == gate["leaves"] and app["policy"] == gate["policy"] and
         app["export_directory"] == gate["export_directory"], "original leaf/directory identity or policy differs")
-    for mode, identifier, service in (("app", args.app_container_id, "serverware"), ("gate", args.gate_container_id, "decision-gate-rs")):
+    for mode, identifier, service in (("app", args.app_container_id, "catchplate"), ("gate", args.gate_container_id, "decision-gate-rs")):
         base.require(inspect(identifier, service, config) == identities[mode], "runtime changed while observed")
-    result = {"ok": True, "schema": "serverware.privateCuratedGateObservation/v1", "phase": "after" if args.before_receipt else "before",
+    result = {"ok": True, "schema": "catchplate.privateCuratedGateObservation/v1", "phase": "after" if args.before_receipt else "before",
         "preparation_sha256": args.expected_preparation_sha256, "binary_sha256": prep["binarySha256"], "containers": identities,
         "shared_leaves": gate["leaves"], "policy": gate["policy"], "gate_executable": gate["actual_executable"], "export_directory": gate["export_directory"],
         "gate_mountinfo": gate["mountinfo"], "app_private_files_present": sorted(app["private_files"]),

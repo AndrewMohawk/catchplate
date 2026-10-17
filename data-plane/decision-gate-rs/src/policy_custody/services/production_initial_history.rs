@@ -241,7 +241,7 @@ mod flat_runtime_tests {
             "startTimeTicks":4,"executableDevice":5,"executableInode":6,"executableLength":7,
             "executableSha256":pin,"cgroupPathSha256":pin,"cgroupMountId":8,"cgroupInode":9,
             "securityLabelSha256":pin,"configurationGenerationSha256":pin});
-        let header = serde_json::json!({"apiVersion":"serverware.policyCustodyServiceRuntimeConfig/v5",
+        let header = serde_json::json!({"apiVersion":"catchplate.policyCustodyServiceRuntimeConfig/v5",
             "startupTimeoutMillis":10,"operationGeneration":1,"serviceRestartEpoch":1,"readinessEpoch":1,
             "durabilityWorkerQueueDepth":8,"maximumDurabilityWorkerNanos":100,
             "authorityHistoryManifestSha256":pin,"authorityHistoryManifestCredential":"synthetic-history",

@@ -9,8 +9,8 @@
 use super::*;
 use super::policy_shadow_generation::PolicyShadowGenerationConfig;
 use super::native_public_identity::ResponseProofIdentityExport;
-use serverware_decision_gate::enclave_runtime_identity_v1::RuntimeScopeCommitmentsV1;
-use serverware_decision_gate::native_upstream_relays_v1::NativeRelayAssignmentV1;
+use catchplate_decision_gate::enclave_runtime_identity_v1::RuntimeScopeCommitmentsV1;
+use catchplate_decision_gate::native_upstream_relays_v1::NativeRelayAssignmentV1;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Component;
 
@@ -142,10 +142,10 @@ pub(super) fn run(
     parameters: NativeStartupParametersV1,
     shadow_config: PolicyShadowGenerationConfig,
     v2_config: ResponseObservationV2ClientConfig,
-    guest_inspector: Option<serverware_decision_gate::GuestInspectorConfiguration>,
-    guest_cohort: Option<serverware_decision_gate::GuestCohortConfiguration>,
-    guest_role_key_provisioner: Option<serverware_decision_gate::GuestRoleKeyProvisionerConfiguration>,
-    gate_cgroup: Option<serverware_decision_gate::native_gate_cgroup::Configuration>,
+    guest_inspector: Option<catchplate_decision_gate::GuestInspectorConfiguration>,
+    guest_cohort: Option<catchplate_decision_gate::GuestCohortConfiguration>,
+    guest_role_key_provisioner: Option<catchplate_decision_gate::GuestRoleKeyProvisionerConfiguration>,
+    gate_cgroup: Option<catchplate_decision_gate::native_gate_cgroup::Configuration>,
     public_identity_stdout: bool,
     response_proof_identity_export: ResponseProofIdentityExport,
 ) -> Result<(), String> {
@@ -167,10 +167,10 @@ fn run_owned(
     mut parameters: NativeStartupParametersV1,
     shadow_config: PolicyShadowGenerationConfig,
     v2_config: ResponseObservationV2ClientConfig,
-    guest_inspector: Option<serverware_decision_gate::GuestInspectorConfiguration>,
-    guest_cohort: Option<serverware_decision_gate::GuestCohortConfiguration>,
-    guest_role_key_provisioner: Option<serverware_decision_gate::GuestRoleKeyProvisionerConfiguration>,
-    gate_cgroup: Option<serverware_decision_gate::native_gate_cgroup::Configuration>,
+    guest_inspector: Option<catchplate_decision_gate::GuestInspectorConfiguration>,
+    guest_cohort: Option<catchplate_decision_gate::GuestCohortConfiguration>,
+    guest_role_key_provisioner: Option<catchplate_decision_gate::GuestRoleKeyProvisionerConfiguration>,
+    gate_cgroup: Option<catchplate_decision_gate::native_gate_cgroup::Configuration>,
     public_identity_stdout: bool,
     response_proof_identity_export: ResponseProofIdentityExport,
 ) -> Result<(), String> {
@@ -296,7 +296,7 @@ fn run_owned(
     let mut prepared_shadow = None;
     let mut native_shadow = None;
     let prepared_device = if let Some(config) = inputs.secret_broker.take() {
-        use serverware_decision_gate::{native_serving_privileges,
+        use catchplate_decision_gate::{native_serving_privileges,
             native_secret_broker_v1::PreparedBroker,
             enclave_runtime_identity_v1::PreparedNativeDeviceV1};
         let privileged = native_serving_privileges::Prepared::open(parameters.deadline_boottime_ns)?;
@@ -304,16 +304,16 @@ fn run_owned(
         // startup, so prepare the actual hierarchy first. Do not move the gate
         // yet: every fixed role/helper child must remain outside its leaf.
         let gate_cgroup = gate_cgroup.map(|configuration|
-            serverware_decision_gate::native_gate_cgroup::Prepared::open(configuration, &privileged)).transpose()?;
+            catchplate_decision_gate::native_gate_cgroup::Prepared::open(configuration, &privileged)).transpose()?;
         if let Some(configuration) = guest_inspector {
-            let inspector = serverware_decision_gate::PreparedGuestInspector::launch(configuration, &privileged)?;
+            let inspector = catchplate_decision_gate::PreparedGuestInspector::launch(configuration, &privileged)?;
             NativeRuntimeLifetimeV1::bind_guest_inspector(startup, Arc::clone(&inspector))?;
             inspector.require_response_client(&v2_config.generation_id, v2_config.expected_uid)?;
             if let Some(configuration) = guest_cohort {
                 let cohort = match guest_role_key_provisioner {
-                    Some(provisioner) => serverware_decision_gate::StartedGuestCohort::launch_with_role_keys(
+                    Some(provisioner) => catchplate_decision_gate::StartedGuestCohort::launch_with_role_keys(
                         configuration, provisioner, &privileged, inspector)?,
-                    None => serverware_decision_gate::StartedGuestCohort::launch(
+                    None => catchplate_decision_gate::StartedGuestCohort::launch(
                         configuration, &privileged, inspector)?,
                 };
                 NativeRuntimeLifetimeV1::bind_guest_cohort(startup, Arc::clone(&cohort))?;

@@ -48,7 +48,7 @@ or authorization to release the child.
 The coordinator image contains only the canonical two-field document:
 
 ```json
-{"apiVersion":"serverware.nativePublicationGenesisBootstrapRuntime/v1","purpose":"measure-publication-genesis-before-runtime-admission"}
+{"apiVersion":"catchplate.nativePublicationGenesisBootstrapRuntime/v1","purpose":"measure-publication-genesis-before-runtime-admission"}
 ```
 
 It contains no assignment, current runtime, future process or grant hashes.
@@ -66,15 +66,15 @@ accepts old cold runtime/v1; new adoption/v2 only accepts runtime/v2.
 ## Retained process, not a predicted PID
 
 The explicit invocation is
-`serverware-native-publication-genesis-controller --parked-genesis` with an empty
+`catchplate-native-publication-genesis-controller --parked-genesis` with an empty
 environment, one root thread, descriptors 0–3 only at entry, an anonymous
 nonblocking write-only stdout pipe and the real root operator's authenticated
 Unix seqpacket control channel on FD3. The old no-argument mode keeps its old
 launch contract and refuses coordinator Launch/v2.
 
 The protected configuration files are
-`/etc/serverware/native-publication-genesis-parent.json` and
-`/etc/serverware/native-publication-genesis-precreation.json`. Parent/v1 pins
+`/etc/catchplate/native-publication-genesis-parent.json` and
+`/etc/catchplate/native-publication-genesis-precreation.json`. Parent/v1 pins
 the delivery configuration and actual executable, and selects distinct
 precreation and release authorities. Precreation/v1 binds that configuration,
 the actual boot/time namespace, invocation and original BOOTTIME bounds.
@@ -141,7 +141,7 @@ executed. No release artifact, live ceremony, signer, cloud resource or paid tes
 was used. Passing Python controls were not repeated for the one-line Rust fix.
 
 Evidence, archives, commands and checksums are retained at
-`codex-offload/serverware/engineering-builds/7be9b3b7-genesis-bootstrap-F30bpC/`.
+`codex-offload/catchplate/engineering-builds/7be9b3b7-genesis-bootstrap-F30bpC/`.
 Static and compiler checks cannot establish that the privileged
 park/release/receipt ceremony actually runs.
 

@@ -1,13 +1,13 @@
 # Dedicated cold release-intent caller
 
 Parent enrollment bootstrap `/v9` adds nullable `oidcSessionActivationReleaseIntent`
-under distinct `serverware.signedControlPlaneEnrollmentBootstrap/v9` and
-`serverware.controlPlaneEnrollmentBootstrap/v9` schemas. Versions v2–v8 keep
+under distinct `catchplate.signedControlPlaneEnrollmentBootstrap/v9` and
+`catchplate.controlPlaneEnrollmentBootstrap/v9` schemas. Versions v2–v8 keep
 their closed parent shapes. The whole parent remains capped at 4 MiB. V9
 reserves FD207 even when the new lane is null; issuer/bootstrap collisions,
 inherited disabled slots and undeclared open slots fail closed.
 
-The nested `serverware.controlPlaneOidcSessionActivationReleaseIntent/v1` has
+The nested `catchplate.controlPlaneOidcSessionActivationReleaseIntent/v1` has
 exactly four fields:
 
 - `schema`;
@@ -45,7 +45,7 @@ enrollment must still enforce its own intent-key exclusion.
 The stdlib entrypoint recognizes only this closed data shape and imports no
 repository cryptography. Its new fixed helper reads only already-provisioned
 root-owned mode0400
-`/run/secrets/serverware-oidc-session-activation-release-intent-key`, then uses
+`/run/secrets/catchplate-oidc-session-activation-release-intent-key`, then uses
 the existing sealed, no-follow, non-overwriting purpose delivery at FD207.
 The independently signed runtime inventory must include the enabled slot.
 No key, user, directory, socket or permission is created.

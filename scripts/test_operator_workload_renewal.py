@@ -40,8 +40,8 @@ ROOT = Path(__file__).resolve().parents[1]
 MACHINE = "/api/operator-demo/workloads/renew"
 ENROLL = "/api/operator-demo/applications/renewal/enroll"
 CANCEL = "/api/operator-demo/applications/renewal/cancel"
-DOMAIN = b"serverware.workload-token-renewal/v1\x00POST /v1/workload/renew\x00"
-DESCRIPTOR = {"schema": "serverware.proxyTokenRenewal/v1", "path": "/v1/workload/renew",
+DOMAIN = b"catchplate.workload-token-renewal/v1\x00POST /v1/workload/renew\x00"
+DESCRIPTOR = {"schema": "catchplate.proxyTokenRenewal/v1", "path": "/v1/workload/renew",
     "overlap_seconds": 300, "max_request_bytes": 4096, "max_response_bytes": 8192}
 RECEIPT_KEYS = {"operation_id", "request_sha256", "application_id", "enrollment_id",
     "previous_generation", "token_generation", "token_sha256", "issued_at_epoch_ms",
@@ -126,7 +126,7 @@ class OperatorWorkloadRenewalTests(unittest.TestCase):
                     self.send_error(503)
                     return
                 try:
-                    path = owner.directory / "data" / "serverware.sqlite3"
+                    path = owner.directory / "data" / "catchplate.sqlite3"
                     with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=1)) as conn:
                         policy_hash = conn.execute("SELECT policy_hash FROM operator_demo_policy WHERE singleton=1").fetchone()[0]
                     descriptor = deepcopy(DESCRIPTOR)
@@ -167,7 +167,7 @@ class OperatorWorkloadRenewalTests(unittest.TestCase):
 
         self.health_thread = threading.Thread(target=serve, daemon=True)
         self.health_thread.start()
-        self.environment["SERVERWARE_DECISION_GATE_BASE"] = "http://127.0.0.1:" + str(self.health.server_port)
+        self.environment["CATCHPLATE_DECISION_GATE_BASE"] = "http://127.0.0.1:" + str(self.health.server_port)
         self.addCleanup(self.close_health)
 
     def close_health(self):
@@ -214,7 +214,7 @@ class OperatorWorkloadRenewalTests(unittest.TestCase):
         now = time.time_ns() // 1_000_000
         candidate = secrets.token_urlsafe(32)
         self.sensitive.append(candidate)
-        fields = {"schema": "serverware.workloadTokenRenewal/v1",
+        fields = {"schema": "catchplate.workloadTokenRenewal/v1",
             # Use the saved public setup, like a real client. Deployment input
             # may contain :443, while the admitted proxy origin omits it.
             "audience": advertised["audience"],
@@ -338,7 +338,7 @@ class OperatorWorkloadRenewalTests(unittest.TestCase):
             self.enroll(identifier)
             now = time.time_ns() // 1_000_000
             cases = [({"audience": "https://other.example.com/v1/workload/renew"}, 401),
-                ({"audience": self.environment["SERVERWARE_OPERATOR_DEMO_PROXY_URL"] + "/v1/workload/renew"}, 401),
+                ({"audience": self.environment["CATCHPLATE_OPERATOR_DEMO_PROXY_URL"] + "/v1/workload/renew"}, 401),
                 ({"enrollment_id": str(uuid.uuid4())}, 409),
                 ({"application_id": str(uuid.uuid4())}, 404),
                 ({"expected_token_generation": 2}, 409),
@@ -382,7 +382,7 @@ class OperatorWorkloadRenewalTests(unittest.TestCase):
             payload, _ = self.signed_request(identifier)
             before = self.state()
             for header in ("Authorization", "Proxy-Authorization", "Cookie", "Origin",
-                    "X-Serverware-Admin-Token", "X-Serverware-Bootstrap-Token", "X-Serverware-Data-Plane-Token",
+                    "X-Catchplate-Admin-Token", "X-Catchplate-Bootstrap-Token", "X-Catchplate-Data-Plane-Token",
                     "Remote-User", "Remote-Groups", "Remote-Email", "Remote-Name"):
                 self.machine(payload, 401, headers=[(header, "synthetic-forbidden")])
                 self.unchanged(before)

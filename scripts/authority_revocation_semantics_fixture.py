@@ -11,10 +11,10 @@ import base64
 import copy
 from datetime import datetime, timezone
 
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_contract
-from serverware import authority_transition_core as core
-from serverware import authority_transition_webauthn as candidate
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_contract
+from catchplate import authority_transition_core as core
+from catchplate import authority_transition_webauthn as candidate
 import authority_revocation_observation_fixture as observation
 import test_authority_audit_capacity_work as capacity_oracle
 import test_authority_complete_read_write as tree_oracle
@@ -79,14 +79,14 @@ class SemanticFixture:
         # The registration range is genuinely global, not an actor-only filter.
         next(row for row in self.rows["webauthn_challenges"] if row["id"] == "future")["user_id"] = "other-user"
 
-        authorization = {"schema": "serverware.policyAuthorityV9Authorization/v1",
+        authorization = {"schema": "catchplate.policyAuthorityV9Authorization/v1",
             "operation": OPERATION, "handler": "revoke_webauthn_credential",
             "operationManifestDigest": authority_contract.OPERATION_MANIFEST_DIGEST,
             "arguments": copy.deepcopy(self.arguments)}
-        self.request_digest = framed("serverware.policyAuthorityV9Request/v1", wire(authorization))
-        self.operation_id = framed("serverware.policyAuthorityOperation/v2",
+        self.request_digest = framed("catchplate.policyAuthorityV9Request/v1", wire(authorization))
+        self.operation_id = framed("catchplate.policyAuthorityOperation/v2",
             OPERATION.encode("ascii"), self.request_digest.encode("ascii"))
-        self.request = {"schema": "serverware.policyAuthorityV9Request/v1", "operation": OPERATION,
+        self.request = {"schema": "catchplate.policyAuthorityV9Request/v1", "operation": OPERATION,
             "operationId": self.operation_id, "requestDigest": self.request_digest,
             "handler": "revoke_webauthn_credential",
             "operationManifestDigest": authority_contract.OPERATION_MANIFEST_DIGEST,
@@ -103,15 +103,15 @@ class SemanticFixture:
             "rpId": self.receipt.rp_id, "origin": self.receipt.origin}
         challenge["payload_json"] = wire(payload).decode("ascii")
         public = {**payload, "challengeId": challenge["id"], "challenge": challenge["challenge"],
-            "challengeRowDigest": framed("serverware.policyAuthorityWebAuthnChallengeRow/v1", wire(challenge))}
+            "challengeRowDigest": framed("catchplate.policyAuthorityWebAuthnChallengeRow/v1", wire(challenge))}
         self.receipt.evidence = self.receipt.sign({**self.receipt.evidence,
             "operationId": self.operation_id, "requestDigest": self.request_digest,
             "credentialRecordId": self.signer_id, "credentialId": signer["credential_id"],
             "challengeId": "used", "challengeDigest": kernel_oracle.digest(wire(public)),
-            "trustHighWaterDigest": framed("serverware.webauthnTrustHighWater/v1", wire(
+            "trustHighWaterDigest": framed("catchplate.webauthnTrustHighWater/v1", wire(
                 observation.trust_high_water_document(self.rows["webauthn_trust_publication_high_water"][0]))),
             "metadataPublicationSequence": self.rows["webauthn_trust_publication_high_water"][0]["publication_sequence"],
-            "credentialPolicyDigest": framed("serverware.policyAuthorityCredentialPolicy/v1", wire(
+            "credentialPolicyDigest": framed("catchplate.policyAuthorityCredentialPolicy/v1", wire(
                 observation.credential_policy_document(signer, self.rows["webauthn_trust_publication_high_water"][0])))})
         self.documents = tuple(recipe_oracle.expected_program(self.values,
             cutoff_us=self.cutoff_us, request_digest=self.request_digest, signer=self.signer_id,

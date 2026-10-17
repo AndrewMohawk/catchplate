@@ -22,12 +22,12 @@ pub(crate) fn selection(config:&Config,role:Role,envelope:&ServiceRpcEnvelopeV1)
         let params=public(config,&request)?;
         return Ok(Some(params.request.evidence.statement.original.request.exact_object_descriptors().len()));
     }
-    if label==Some("serverware.responseV2.nativeStagingPolicy/v1"){
+    if label==Some("catchplate.responseV2.nativeStagingPolicy/v1"){
         if role!=Role::PolicyProofVerifier||envelope.operation!=ServiceOperationV1::TransitionAuthorize{return Err(fail("native policy routed to wrong role"));}
         let request:wire::PolicyRequest=serde_json::from_value(envelope.payload.clone()).map_err(|_|fail("native policy closed request"))?;
         let value=admit(config,request.request.clone())?;verification::reserve_pair(config,&value,&request)?;return Ok(Some(5));
     }
-    if label==Some("serverware.responseV2.nativeStagedPut/v1"){
+    if label==Some("catchplate.responseV2.nativeStagedPut/v1"){
         if role!=Role::ImmutableArtifactLedger||envelope.operation!=ServiceOperationV1::ImmutablePut{return Err(fail("native staged publication routed to wrong role"));}
         let request:wire::StagedPutRequest=serde_json::from_value(envelope.payload.clone()).map_err(|_|fail("native staged put closed request"))?;
         let value=admit(config,request.request.clone())?;verification::claim(config,&value,&request.claim,&request.authority_result)?;return Ok(Some(1));
@@ -39,12 +39,12 @@ pub(crate) fn preserve(operation:ServiceOperationV1,request:&serde_json::Value,r
     ->Result<bool,V2RuntimeError>{
     let label=request.get("apiVersion").and_then(serde_json::Value::as_str);
     match (operation,label){
-        (ServiceOperationV1::TransitionAuthorize,Some("serverware.responseV2.nativeStagingPolicy/v1"))=>{
+        (ServiceOperationV1::TransitionAuthorize,Some("catchplate.responseV2.nativeStagingPolicy/v1"))=>{
             let _:wire::PolicyRequest=serde_json::from_value(request.clone()).map_err(|_|fail("policy request shape"))?;
             let _:super::super::super::state_authority::rpc::SignedAuthorityArtifact=serde_json::from_value(result.clone())
                 .map_err(|_|fail("actual policy artifact shape"))?;Ok(true)
         },
-        (ServiceOperationV1::ImmutablePut,Some("serverware.responseV2.nativeStagedPut/v1"))=>{
+        (ServiceOperationV1::ImmutablePut,Some("catchplate.responseV2.nativeStagedPut/v1"))=>{
             let _:wire::StagedPutRequest=serde_json::from_value(request.clone()).map_err(|_|fail("staged request shape"))?;
             ledger::preserve(result.clone())?;Ok(true)
         },_=>Ok(false),

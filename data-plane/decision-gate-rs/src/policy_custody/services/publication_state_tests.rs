@@ -30,13 +30,13 @@ fn receipt(revision: u64) -> String {
     // authority signature. State deliberately makes no authentication claim.
     receipt.signature = CanonicalEd25519Signature(URL_SAFE_NO_PAD.encode(key.sign(&signature_preimage(
         PolicyShadowCustodySignerRole::PublicationReconciliation.signature_domain(), &payload)).to_bytes()));
-    receipt.signed_receipt_sha256 = hash_domain_frames(b"serverware.policyShadowPublicationReconciliationReceipt/v1",
+    receipt.signed_receipt_sha256 = hash_domain_frames(b"catchplate.policyShadowPublicationReconciliationReceipt/v1",
         &[&payload, receipt.signature.0.as_bytes()]);
     receipt.validate_deserialized_invariants().unwrap();
     String::from_utf8(encode_canonical_frame(&receipt).unwrap()).unwrap()
 }
 fn epoch(key: &SigningKey) -> AuthorityEpochRefV3 {
-    AuthorityEpochRefV3 { api_version: "serverware.policyCustodyAuthorityHistory/v3".into(),
+    AuthorityEpochRefV3 { api_version: "catchplate.policyCustodyAuthorityHistory/v3".into(),
         authority_role: HistoricalAuthorityRoleV3::IsolatedService(HistoricalServiceRoleV3::DurableRecoveryStore),
         authority_epoch_sequence: 1, authority_epoch_sha256: digest("epoch"), checkpoint_sequence: 1,
         checkpoint_sha256: digest("checkpoint"), checkpoint_authority_key_id: digest("checkpoint-key"),

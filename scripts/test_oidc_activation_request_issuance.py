@@ -24,11 +24,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_oidc_session_activation_request_issuance as source
-from serverware import authority_oidc_session_activation_request_staging_transport as staging
-from serverware import authority_oidc_session_activation_planner_transport as planner_io
-from serverware import oidc_session_activation_request_dynamic_entrypoint as dynamic
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_oidc_session_activation_request_issuance as source
+from catchplate import authority_oidc_session_activation_request_staging_transport as staging
+from catchplate import authority_oidc_session_activation_planner_transport as planner_io
+from catchplate import oidc_session_activation_request_dynamic_entrypoint as dynamic
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
 
 EPOCH, MONOTONIC = 1_800_000_000_000_000_000, 1_000_000_000
@@ -48,7 +48,7 @@ def clocks(state):
 
 
 def body(name, function):
-    raw = (ROOT / "serverware" / name).read_text()
+    raw = (ROOT / "catchplate" / name).read_text()
     parsed = ast.parse(raw)
     selected = [node for node in ast.walk(parsed)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function]

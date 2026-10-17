@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 class InputTests(unittest.TestCase):
     def test_omission_preserves_serialized_permission_and_null_is_refused(self):
-        from serverware.operator_catalog_inputs import RuleInput
+        from catchplate.operator_catalog_inputs import RuleInput
         values = dict(name="Exact request", expected_revision=1, expected_policy_hash="sha256:" + "0" * 64,
             application_id="00000000-0000-4000-8000-000000000001",
             credential_id="00000000-0000-4000-8000-000000000002",
@@ -30,15 +30,15 @@ class InputTests(unittest.TestCase):
                 RuleInput(**values, approval_mode=value)
 
     def test_all_preset_inputs_inherit_the_same_opt_in(self):
-        from serverware import operator_catalog_inputs as inputs
+        from catchplate import operator_catalog_inputs as inputs
         for name in ("RuleInput", "GithubRuleInput", "GmailReadRuleInput", "NpmMetadataRuleInput",
                 "NpmInstallRuleInput", "NpmPublishRuleInput", "XUsernameRuleInput", "XPostRuleInput",
                 "AlchemyChainStatusRuleInput"):
             self.assertTrue(issubclass(getattr(inputs, name), inputs.ApprovalRuleInput), name)
 
     def test_marker_is_additive_and_conflicting_quota_is_refused(self):
-        from serverware import operator_catalog_approvals as approval
-        from serverware.operator_catalog_schema import CatalogIntegrityError
+        from catchplate import operator_catalog_approvals as approval
+        from catchplate.operator_catalog_schema import CatalogIntegrityError
         route = {"constraints": [{"type": "responseEnvelope", "statusCodes": [200]}]}
         before = deepcopy(route)
         approval.apply({}, route)
@@ -53,7 +53,7 @@ class InputTests(unittest.TestCase):
 
 def catalog_worker():
     import test_operator_catalog_github as fixture
-    from serverware import operator_catalog_approvals as approval
+    from catchplate import operator_catalog_approvals as approval
     f = fixture.Fixture()
     credential, application = f.credential()["credential"], f.application()
     result = f.rule(application, credential)

@@ -11,7 +11,7 @@ and its existing route behavior are not promoted into production authority.
 ## Authority and originals
 
 The independently signed measured configuration must enable the exact operations
-and contain `oauthExchangePolicy` (`serverware.oauthExchangeAuthorityPolicy/v1`):
+and contain `oauthExchangePolicy` (`catchplate.oauthExchangeAuthorityPolicy/v1`):
 the enrollment Ed25519 public key and SPKI pin, control-plane configuration digest,
 deployment ID, and explicit pending/revocation capacities. The root is independent
 of configuration/runtime/authority-role keys. Where activation is also configured,
@@ -20,7 +20,7 @@ Both verifier and planner reverify the exact signed enrollment under their own
 admitted configuration, not a root or success object supplied by HTTP.
 
 `oauth.exchange.prepare` uses the new purpose
-`credential.oauth.exchange` / `serverware.oauthExchangeConsentOptions/v1`.
+`credential.oauth.exchange` / `catchplate.oauthExchangeConsentOptions/v1`.
 It requires the actual current OIDC requester with literal `credential_owner`
 membership, a fresh raw WebAuthn assertion, hardware attestation/current trust,
 UP and UV. An admin override or an `actor_id` string is insufficient. Assertion

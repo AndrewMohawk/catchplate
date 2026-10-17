@@ -40,7 +40,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 
-SANDBOX_VERSION = "serverware.publicAttestationExecutionSandbox/v2"
+SANDBOX_VERSION = "catchplate.publicAttestationExecutionSandbox/v2"
 MAX_DESCRIPTOR_BYTES = 64 * 1024
 MAX_CONFIG_BYTES = 1024 * 1024
 MAX_NAMED_FILE_BYTES = 256 * 1024 * 1024
@@ -91,13 +91,13 @@ PRODUCTION_READY = b"READY\n"
 FIXTURE_READY = b"NON_PRODUCTION_FIXTURE_READY\n"
 CHILD_PREPARED = b"SANDBOXED\n"
 CHILD_GO = b"G"
-PRODUCER_COMMAND_VERSION = "serverware.publicAttestationProducerCommand/v1"
-CONFIG_VERSION = "serverware.publicAttestationConfig/v2"
+PRODUCER_COMMAND_VERSION = "catchplate.publicAttestationProducerCommand/v1"
+CONFIG_VERSION = "catchplate.publicAttestationConfig/v2"
 SERVICE_CHALLENGE_VERSION = (
-    "serverware.publicAttestationServiceChannelChallenge/v1"
+    "catchplate.publicAttestationServiceChannelChallenge/v1"
 )
 SERVICE_CHALLENGE_RESPONSE_VERSION = (
-    "serverware.publicAttestationServiceChannelChallengeResponse/v1"
+    "catchplate.publicAttestationServiceChannelChallengeResponse/v1"
 )
 PRODUCER_FD_ROLE_FIELDS = (
     "nonceRequest",
@@ -129,7 +129,7 @@ AUDIT_ARCHITECTURES = {
 KERNEL_ABI_CONTRACTS = {
     "x86_64": {
         "audit_architecture": 0xC000003E,
-        "syscall_table_id": "linux-uapi-x86_64-serverware-v1",
+        "syscall_table_id": "linux-uapi-x86_64-catchplate-v1",
         "syscall_table_sha256":
             "sha256:2e3b41282fd357204e77d43bf1b9cd9fcf7bfc271c32513bb813052d099e8e0b",
         "syscalls": {
@@ -153,7 +153,7 @@ KERNEL_ABI_CONTRACTS = {
     },
     "aarch64": {
         "audit_architecture": 0xC00000B7,
-        "syscall_table_id": "linux-uapi-aarch64-serverware-v1",
+        "syscall_table_id": "linux-uapi-aarch64-catchplate-v1",
         "syscall_table_sha256":
             "sha256:2111fcbddd04d564b6d478b442b7cd543bf1075b13ce4eef7f9d42677070f21f",
         "syscalls": {
@@ -900,7 +900,7 @@ def _validate_descriptor(
     )
     _const(
         seccomp["contract"],
-        "serverware.closedSeccompProfile/v1",
+        "catchplate.closedSeccompProfile/v1",
         label="seccomp contract",
     )
     _const(
@@ -963,7 +963,7 @@ def _validate_descriptor(
     )
     _const(
         bootstrap_profile["profileId"],
-        f"serverware-producer-bootstrap-{architecture}-v1",
+        f"catchplate-producer-bootstrap-{architecture}-v1",
         label="bootstrap seccomp profile ID",
     )
     _const(
@@ -1007,7 +1007,7 @@ def _validate_descriptor(
     )
     _const(
         runtime_profile["profileId"],
-        f"serverware-producer-runtime-{architecture}-v1",
+        f"catchplate-producer-runtime-{architecture}-v1",
         label="runtime seccomp profile ID",
     )
     _const(
@@ -1430,7 +1430,7 @@ def _validate_descriptor(
         named_fd_rules=named_fd_rules,
     )
     executable_environment = {
-        "SERVERWARE_PUBLIC_ATTESTATION_CONFIG_FD": str(config_target_fd),
+        "CATCHPLATE_PUBLIC_ATTESTATION_CONFIG_FD": str(config_target_fd),
     }
     target_fds = {0, 1, config_target_fd}
     for rule in named_fd_rules:
@@ -2113,19 +2113,19 @@ def _reconstruct_producer_argv(
 
     service_contracts = {
         "nonceRequest": (
-            "serverware.attestationNonceService/v2",
+            "catchplate.attestationNonceService/v2",
             "producer-to-service",
         ),
         "nonceResponse": (
-            "serverware.attestationNonceService/v2",
+            "catchplate.attestationNonceService/v2",
             "service-to-producer",
         ),
         "witnessRequest": (
-            "serverware.attestationWitnessService/v2",
+            "catchplate.attestationWitnessService/v2",
             "producer-to-service",
         ),
         "witnessResponse": (
-            "serverware.attestationWitnessService/v2",
+            "catchplate.attestationWitnessService/v2",
             "service-to-producer",
         ),
     }
@@ -2164,7 +2164,7 @@ def _reconstruct_producer_argv(
         for field in PRODUCER_FD_ROLE_FIELDS
     }
     return (
-        "serverware-public-attestation-producer",
+        "catchplate-public-attestation-producer",
         "produce-bundle",
         "--request-fd",
         "0",
@@ -4673,7 +4673,7 @@ def _validate_reviewed_seccomp_program(
     architecture: str,
     profile_id: str,
 ) -> None:
-    expected_profile_id = f"serverware-producer-bootstrap-{architecture}-v1"
+    expected_profile_id = f"catchplate-producer-bootstrap-{architecture}-v1"
     if profile_id != expected_profile_id:
         raise LauncherError("seccomp profile ID is not approved for this kernel ABI")
     expected = _closed_seccomp_profile_bytes(
@@ -4844,7 +4844,7 @@ def _unshare_required_namespaces() -> dict[str, str]:
     after = _namespace_links()
     if any(after[name] == before[name] for name in EXPECTED_NAMESPACES):
         raise LauncherError("one or more required namespaces were not replaced")
-    hostname = b"serverware-attestation"
+    hostname = b"catchplate-attestation"
     if LIBC.sethostname(hostname, len(hostname)) != 0:
         error = ctypes.get_errno()
         raise LauncherError("sandbox UTS identity could not be set") from OSError(

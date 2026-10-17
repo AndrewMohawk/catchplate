@@ -48,7 +48,7 @@ def main(argv=None):
         return 0
     try:
         selected = arguments(argv)
-        from serverware.authority_local_provenance import LocalProvenanceIssuer
+        from catchplate.authority_local_provenance import LocalProvenanceIssuer
         LocalProvenanceIssuer(**selected).publish()
         return 0
     except BaseException:

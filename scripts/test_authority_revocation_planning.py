@@ -23,8 +23,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_planning as planning
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_planning as planning
 import test_authority_revocation_capability_producer as key_oracle
 import test_authority_revocation_observed as observed_oracle
 import test_authority_revocation_plan as oracle

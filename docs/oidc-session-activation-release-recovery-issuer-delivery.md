@@ -4,8 +4,8 @@ The dedicated recovery issuer has its own root-signed bootstrap and process
 role, `oidc-session-activation-release-recovery-issuer`. It does not widen the
 LIVE issuer or reuse its staging admission. The fixed service UID/GID is
 65493; the sole request peer is 65532:65532. Root supplies the listening socket
-at `/run/serverware/oidc-session-activation-token-release/recovery-grants.sock`,
-named `serverware-oidc-session-activation-release-recovery-issuer`. Its pathname
+at `/run/catchplate/oidc-session-activation-token-release/recovery-grants.sock`,
+named `catchplate-oidc-session-activation-release-recovery-issuer`. Its pathname
 is 65493:65532 mode 0660. No socket or directory is created by delivery.
 
 The exact eight inherited descriptors are:
@@ -41,13 +41,13 @@ admits independent originals before signing and authenticates its readback.
 Neither API accepts an incoming successful material carrier.
 
 Root delivery reads only these fixed public files beneath
-`/run/serverware/oidc-session-activation-release-recovery-issuer-trust`:
+`/run/catchplate/oidc-session-activation-release-recovery-issuer-trust`:
 `root-public-key.pem`, `bootstrap.json`, `issuer-policy.json`,
 `release-custody.json`, `proof-enrollment.json`, `intent-enrollment.json`.
 Each is a single-link root-owned regular file, mode 0444, reached through
 root-owned non-group/world-writable ancestors with no symlink traversal. The
 private path is
-`/run/secrets/serverware-oidc-session-activation-release-recovery-issuer-root-signing-key`,
+`/run/secrets/catchplate-oidc-session-activation-release-recovery-issuer-root-signing-key`,
 mode 0400. It is not opened until genuine bootstrap and independent policy,
 custody and enrollment admission succeeds. Its exact bytes and Ed25519 pair
 must then match the signed pin and actual runtime root.

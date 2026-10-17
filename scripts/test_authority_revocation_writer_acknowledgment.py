@@ -25,16 +25,16 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract as authority
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_writer_acknowledgment as acknowledgment
+from catchplate import authority_contract as authority
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_writer_acknowledgment as acknowledgment
 import test_authority_revocation_plan as oracle
 import test_authority_revocation_capability as signature_oracle
 import test_authority_revocation_wire as wire_oracle
 
 
-ACK_SCHEMA = "serverware.policyAuthorityRevocationWriterAcknowledgment/v1"
-ACK_ID_DOMAIN = "serverware.policyAuthorityRevocationWriterAcknowledgmentIdentity/v1"
+ACK_SCHEMA = "catchplate.policyAuthorityRevocationWriterAcknowledgment/v1"
+ACK_ID_DOMAIN = "catchplate.policyAuthorityRevocationWriterAcknowledgmentIdentity/v1"
 PURPOSE = "acknowledge-revocation-writer-custody"
 STATE = "retained-and-reserved"
 REQUEST_FIELDS = frozenset({

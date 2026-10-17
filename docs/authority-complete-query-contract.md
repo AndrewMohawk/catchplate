@@ -17,9 +17,9 @@ The earlier database-clock read still occurs; it is not trusted time authority.
 ## Distinct query kind
 
 `authority_complete_query.CompleteIndexQuery` is not a `BoundedQuery`. Its
-`serverware.policyAuthorityCompleteIndexQuery/v1` projection uses the distinct
+`catchplate.policyAuthorityCompleteIndexQuery/v1` projection uses the distinct
 `authenticated-complete-index-range` primitive. The legacy
-`serverware.policyAuthorityQueryProgram/v1` projection is unchanged, and its
+`catchplate.policyAuthorityQueryProgram/v1` projection is unchanged, and its
 constructor and query-program closure reject the new primitive on an old query
 object, including a constructor-bypassed object.
 
@@ -103,7 +103,7 @@ admission; real proof reconstruction and source rebinding are separate duties.
 ## Shared cutoff-native source recipe
 
 The actual candidate in
-[`authority_transition_webauthn.py`](../serverware/authority_transition_webauthn.py)
+[`authority_transition_webauthn.py`](../catchplate/authority_transition_webauthn.py)
 now exposes `cascade_queries_at_cutoff` and
 `WebAuthnCredentialRevokeKernel.queries_with_evidence_at_cutoff`. The existing
 datetime entry points delegate through the same source recipe after exact

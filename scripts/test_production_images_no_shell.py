@@ -42,7 +42,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         clean = Path(tmp) / "clean.tar"
         dirty = Path(tmp) / "dirty.tar"
-        make_tar(clean, {"usr/bin/python3": b"python", "app/serverware/app.py": b"print('ok')"})
+        make_tar(clean, {"usr/bin/python3": b"python", "app/catchplate/app.py": b"print('ok')"})
         make_tar(dirty, {"bin/sh": b"shell", "usr/bin/python3": b"python"})
 
         code, parsed = run(["--rootfs-tar", str(clean)])
@@ -52,14 +52,14 @@ def main() -> None:
         assert code != 0 and parsed["ok"] is False, parsed
         assert "/bin/sh" in json.dumps(parsed), parsed
 
-        good_image = "registry.prod.serverware.dev/serverware/control@sha256:" + "a" * 64
+        good_image = "registry.prod.catchplate.dev/catchplate/control@sha256:" + "a" * 64
         code, parsed = run(["--validate-refs-only", "--image", good_image])
         assert code == 0 and parsed["ok"] is True, parsed
 
         code, parsed = run(["--local-image-id", "sha256:" + "b" * 64])
         assert code != 0 and "image is not available locally" in json.dumps(parsed), parsed
 
-        mutable = "registry.prod.serverware.dev/serverware/control:latest"
+        mutable = "registry.prod.catchplate.dev/catchplate/control:latest"
         code, parsed = run(["--validate-refs-only", "--image", mutable])
         assert code != 0 and "immutable" in json.dumps(parsed), parsed
 

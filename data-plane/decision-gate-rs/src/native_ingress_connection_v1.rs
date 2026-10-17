@@ -15,7 +15,7 @@ use std::sync::Arc;
 ///
 /// Immutable observations are available without constructing a native owner:
 /// ```
-/// use serverware_decision_gate::enclave_runtime_identity_v1::{
+/// use catchplate_decision_gate::enclave_runtime_identity_v1::{
 ///     NativeIngressConnectionV1, QuotedMutualTlsIngressV1};
 /// use std::sync::Arc;
 /// fn observe(owner: &NativeIngressConnectionV1) {
@@ -26,7 +26,7 @@ use std::sync::Arc;
 ///
 /// An arbitrary connection cannot be imported:
 /// ```compile_fail
-/// use serverware_decision_gate::enclave_runtime_identity_v1::{
+/// use catchplate_decision_gate::enclave_runtime_identity_v1::{
 ///     NativeIngressConnectionV1, QuotedMutualTlsIngressV1};
 /// use std::sync::Arc;
 /// fn forge(connection: rustls::ServerConnection, ingress: Arc<QuotedMutualTlsIngressV1>) {
@@ -35,7 +35,7 @@ use std::sync::Arc;
 /// ```
 /// The connection cannot be replaced through the public observation API:
 /// ```compile_fail
-/// use serverware_decision_gate::enclave_runtime_identity_v1::NativeIngressConnectionV1;
+/// use catchplate_decision_gate::enclave_runtime_identity_v1::NativeIngressConnectionV1;
 /// fn replace(owner: &mut NativeIngressConnectionV1, replacement: rustls::ServerConnection) {
 ///     *owner.connection() = replacement;
 /// }

@@ -9,7 +9,7 @@ const {readFile, mkdtemp, stat} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
 const vm = require('node:vm');
 const {fixture: legacyFixture, ready, view, openRestrictions, credential, application, rule, IDS, NOW, UPSTREAM} = require('./test_operator_catalog_browser.cjs');
-const {clientCredentialInput, credentialHeaderTarget} = require('../serverware/operator_demo_web/app.js');
+const {clientCredentialInput, credentialHeaderTarget} = require('../catchplate/operator_demo_web/app.js');
 
 const ROOT = resolve(__dirname, '..');
 const ORIGIN = 'https://operator-catalog.example.test';
@@ -32,9 +32,9 @@ const google = (changes = {}) => credential({auth_type: 'google_oauth', header_n
 const digest = number => 'sha256:' + number.toString(16).padStart(64, '0');
 const clone = value => JSON.parse(JSON.stringify(value));
 const SOURCE_FILES = ['scripts/test_operator_ordinary_modes_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
-  'serverware/operator_demo_portal.py', ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js',
+  'catchplate/operator_demo_portal.py', ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js',
     'workspace_applications.js', 'workspace_resources.js', 'workspace_proxy_audit.js', 'workspace_connect.js']
-    .map(name => 'serverware/operator_demo_web/' + name)];
+    .map(name => 'catchplate/operator_demo_web/' + name)];
 let artifacts;
 
 function policy(state) {
@@ -44,7 +44,7 @@ function policy(state) {
 function publicCatalog(state) {
   const activeRules = state.rules.filter(item => item.status === 'active');
   const loaded = policy(state).activation === 'active' && state.active === state.loaded;
-  const value = {schema: 'serverware.operatorCatalog/v1', mode: 'operator-development', productionReady: false,
+  const value = {schema: 'catchplate.operatorCatalog/v1', mode: 'operator-development', productionReady: false,
     hardwareVerified: false, revision: state.revision, policy: policy(state), proxy_url: 'https://proxy.example.test',
     allowed_upstreams: state.allowedUpstreams || [UPSTREAM], credentials: state.credentials.map(item => ({...item,
       active_rule_count: activeRules.filter(saved => saved.credential_id === item.id).length})),
@@ -179,7 +179,7 @@ async function refresh(page, id = 'connect-status-refresh') {
 async function command(page) {
   await page.waitForFunction(() => !document.querySelector('#copy-command').disabled);
   const text = await page.locator('#client-command').innerText();
-  assert(text.includes('Proxy-Authorization: Bearer $SERVERWARE_PROXY_TOKEN') && text.includes('--cacert'));
+  assert(text.includes('Proxy-Authorization: Bearer $CATCHPLATE_PROXY_TOKEN') && text.includes('--cacert'));
   assert(!/--insecure|--proxy-insecure|--data|--json/.test(text), 'example stays a connection template, never sends fabricated endpoint data');
   for (const value of PRIVATE) assert(!text.includes(value));
   return text;
@@ -206,7 +206,7 @@ async function downloadedConfig(page) {
 
 function projectionChecks() {
   const source = ['workspace_core.js', 'workspace_github.js']
-    .map(name => readFileSync(join(ROOT, 'serverware/operator_demo_web', name), 'utf8')).join('\n');
+    .map(name => readFileSync(join(ROOT, 'catchplate/operator_demo_web', name), 'utf8')).join('\n');
   const state = {credentials: [credential({secret: PRIVATE[0], refresh_token: PRIVATE[1]})], applications: [application()],
     rules: [rule(), preservedRule({id: '55555555-5555-4555-8555-555555555555'})], requestBodyModes: [REQUEST_MODE],
     responseModes: RESPONSES, credentialInputModes: ['insert', 'replace_exact'], revision: 1, sequence: 1, active: digest(1), loaded: digest(1)};
@@ -414,7 +414,7 @@ async function main() {
   assert.equal(process.argv.length, 2, 'ordinary-mode fixtures accept no live target, credentials or runtime options');
   const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
   console.log(JSON.stringify(projectionChecks()));
-  const artifactRoot = '/srv/catchplate-fast/projects/serverware-operator-artifacts';
+  const artifactRoot = '/srv/catchplate-fast/projects/catchplate-operator-artifacts';
   assert((await stat(artifactRoot)).isDirectory()); artifacts = await mkdtemp(join(artifactRoot, 'ordinary-modes-browser-synthetic-'));
   console.log(JSON.stringify({artifactDirectory: artifacts, scope: 'synthetic screenshots only'}));
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');

@@ -48,7 +48,7 @@ class ReceiptParsers(unittest.TestCase):
             runner.check_api(b'unexpected', b'', None, 'pass.rs', None)
 
     def cargo(self, fresh=False):
-        return {'reason': 'compiler-artifact', 'target': {'name': 'serverware_decision_gate', 'kind': ['lib'],
+        return {'reason': 'compiler-artifact', 'target': {'name': 'catchplate_decision_gate', 'kind': ['lib'],
             'src_path': '/repository/' + runner.CRATE + 'src/custody_protocol.rs'}, 'profile': {'test': False}, 'fresh': fresh}
 
     def test_fresh_cargo_artifact_and_completed_build(self):
@@ -90,14 +90,14 @@ class NormalArtifactParsers(unittest.TestCase):
         self.repo = Path(self.temporary.name).resolve()
         self.files = {}
         for name, body in {
-            runner.CRATE + 'Cargo.toml': b'[package]\nname="serverware-decision-gate"\nversion="0.1.0"\n',
+            runner.CRATE + 'Cargo.toml': b'[package]\nname="catchplate-decision-gate"\nversion="0.1.0"\n',
             runner.CRATE + 'Cargo.lock': b'version = 4\n',
             runner.CRATE + 'src/main.rs': b'fn main() {}\n',
             runner.CRATE + 'src/custody_protocol.rs': b'pub fn fixture() {}\n',
             'schemas/fixture.json': b'{}\n',
             **{name: b'{}\n' for name in runner.NORMAL_FILES},
             'docs/fixture.md': b'not a compiler input\n',
-            'serverware/operator_demo_web/fixture.js': b'// not a compiler input\n',
+            'catchplate/operator_demo_web/fixture.js': b'// not a compiler input\n',
         }.items():
             self.put(name, body)
 
@@ -115,22 +115,22 @@ class NormalArtifactParsers(unittest.TestCase):
     def receipt(self):
         identity = self.identity(); compiler = {}
         for kind, source in (('binary', 'main.rs'), ('library', 'custody_protocol.rs')):
-            stem = '/target/release/deps/serverware_decision_gate-' + ('1' if kind == 'binary' else '2') * 16
+            stem = '/target/release/deps/catchplate_decision_gate-' + ('1' if kind == 'binary' else '2') * 16
             name = runner.CRATE + 'src/' + source
-            compiler[kind] = {'artifactPath': '/target/release/serverware-decision-gate' if kind == 'binary' else
-                stem.replace('/serverware_', '/libserverware_') + '.rlib', 'depInfoPath': stem + '.d',
+            compiler[kind] = {'artifactPath': '/target/release/catchplate-decision-gate' if kind == 'binary' else
+                stem.replace('/catchplate_', '/libcatchplate_') + '.rlib', 'depInfoPath': stem + '.d',
                 'artifactSha256': hashlib.sha256(self.elf()).hexdigest() if kind == 'binary' else 'c' * 64,
                 'depInfoSha256': 'a' * 64, 'files': {name: identity['files'][name]},
                 'environment': {'CARGO_PKG_VERSION': '0.1.0'} if kind == 'binary' else {}}
-        return {'schema': 'serverware.hostedNormalRust/v1', 'ok': True, 'sourceRevision': 'a' * 40,
+        return {'schema': 'catchplate.hostedNormalRust/v1', 'ok': True, 'sourceRevision': 'a' * 40,
             'buildInputIdentity': runner.identity_digest(identity), 'buildInputs': identity,
             'cargoLockSha256': identity['files'][runner.CRATE + 'Cargo.lock']['sha256'],
-            'github': {'repository': 'example/serverware', 'runId': 123, 'runAttempt': 1,
+            'github': {'repository': 'example/catchplate', 'runId': 123, 'runAttempt': 1,
                 'workflowPath': '.github/workflows/native-review-rust.yml', 'job': 'normal-proxy'},
             'runnerSourceSha256': 'b' * 64,
             'toolchain': {'rustcVersionVerbose': 'rustc 1.88.0 (fixture)\nhost: x86_64-unknown-linux-gnu\n',
                           'cargoVersion': 'cargo 1.88.0 (fixture)\n'},
-            'binary': {'name': 'serverware-decision-gate', 'sha256': hashlib.sha256(self.elf()).hexdigest(),
+            'binary': {'name': 'catchplate-decision-gate', 'sha256': hashlib.sha256(self.elf()).hexdigest(),
                        'bytes': 64, 'mode': '0555'}, 'compilerInputs': compiler,
             'cleanup': {'allOwnedContainersRemoved': True, 'phases': ['provision', 'normal']},
             'normalBinary': True, 'tested': False, 'deployed': False, 'nativeAdmission': False,
@@ -139,7 +139,7 @@ class NormalArtifactParsers(unittest.TestCase):
     def test_identity_ignores_app_js_and_docs_but_keeps_original_build_commit(self):
         before = self.identity(); receipt = self.receipt()
         self.put('docs/fixture.md', b'changed documentation\n')
-        self.put('serverware/operator_demo_web/fixture.js', b'// changed app\n')
+        self.put('catchplate/operator_demo_web/fixture.js', b'// changed app\n')
         self.assertEqual(self.identity(), before)
         runner.verify_normal_receipt(receipt, self.elf(), self.identity())
         self.assertEqual(receipt['sourceRevision'], 'a' * 40)
@@ -179,26 +179,26 @@ class NormalArtifactParsers(unittest.TestCase):
 
     def cargo(self):
         rows = []
-        for kind, name, source in (('binary', 'serverware-decision-gate', 'main.rs'),
-                                   ('library', 'serverware_decision_gate', 'custody_protocol.rs')):
+        for kind, name, source in (('binary', 'catchplate-decision-gate', 'main.rs'),
+                                   ('library', 'catchplate_decision_gate', 'custody_protocol.rs')):
             rows.append({'reason': 'compiler-artifact', 'target': {'name': name, 'kind': ['bin'] if kind == 'binary' else ['lib'],
                 'src_path': '/repository/' + runner.CRATE + 'src/' + source}, 'profile': {'test': False, 'opt_level': '3'},
-                'features': [], 'fresh': False, 'executable': '/target/release/serverware-decision-gate' if kind == 'binary' else None,
-                'filenames': ['/target/release/serverware-decision-gate'] if kind == 'binary' else []})
+                'features': [], 'fresh': False, 'executable': '/target/release/catchplate-decision-gate' if kind == 'binary' else None,
+                'filenames': ['/target/release/catchplate-decision-gate'] if kind == 'binary' else []})
         return rows + [{'reason': 'build-finished', 'success': True}]
 
     def test_normal_cargo_requires_actual_normal_and_linked_library(self):
         def parse(rows): return runner.normal_cargo_rows('\n'.join(json.dumps(row) for row in rows))
         self.assertEqual(set(parse(self.cargo())), {'binary', 'library'})
         for change in (lambda rows: rows[0]['profile'].update(test=True), lambda rows: rows[1].update(fresh=True),
-                       lambda rows: rows[0].update(executable='/target/release/deps/serverware_decision_gate-' + 'a' * 16),
+                       lambda rows: rows[0].update(executable='/target/release/deps/catchplate_decision_gate-' + 'a' * 16),
                        lambda rows: rows[0].update(features=['other']), lambda rows: rows.pop(1),
                        lambda rows: rows.append(deepcopy(rows[0])), lambda rows: rows[-1].update(success=False)):
             rows = self.cargo(); change(rows)
             with self.assertRaises(ValueError): parse(rows)
 
     def test_complete_unit_dep_info_and_package_environment_are_bound(self):
-        stem = '/target/release/deps/serverware_decision_gate-' + '1' * 16
+        stem = '/target/release/deps/catchplate_decision_gate-' + '1' * 16
         raw = (stem + '.d: src/main.rs src/../../../schemas/fixture.json\n\n' + stem + ': src/main.rs src/../../../schemas/fixture.json\n'
                '\nsrc/main.rs:\nsrc/../../../schemas/fixture.json:\n\n# env-dep:CARGO_PKG_VERSION=0.1.0\n').encode()
         files, environment = runner.normal_dep_info(raw, {stem, stem + '.d'}, '0.1.0')
@@ -219,7 +219,7 @@ class NormalArtifactParsers(unittest.TestCase):
             lambda v: v['binary'].update(mode='0755'), lambda v: v['binary'].update(sha256='0' * 64),
             lambda v: v['compilerInputs'].pop('library'),
             lambda v: v['compilerInputs']['binary'].update(artifactSha256='0' * 64),
-            lambda v: v['compilerInputs']['library'].update(artifactPath='/target/release/deps/libserverware_decision_gate-' + '9' * 16 + '.rlib'),
+            lambda v: v['compilerInputs']['library'].update(artifactPath='/target/release/deps/libcatchplate_decision_gate-' + '9' * 16 + '.rlib'),
             lambda v: v['compilerInputs']['binary']['environment'].update(CARGO_PKG_VERSION='wrong'),
             lambda v: v['compilerInputs']['library']['files'].clear(),
             lambda v: v['toolchain'].update(cargoVersion='cargo 1.89.0 (wrong)'))
@@ -242,7 +242,7 @@ class NormalArtifactParsers(unittest.TestCase):
         self.assertNotIn('if: always()', normal)
         upload = normal.split('name: Upload only the normal executable and public provenance', 1)[1]
         paths = [line.strip() for line in upload.splitlines() if '/artifact/' in line]
-        self.assertEqual(paths, ['${{ runner.temp }}/normal-proxy-rust/artifact/serverware-decision-gate',
+        self.assertEqual(paths, ['${{ runner.temp }}/normal-proxy-rust/artifact/catchplate-decision-gate',
                                  '${{ runner.temp }}/normal-proxy-rust/artifact/normal.json'])
         self.assertNotIn('/results/', upload)
         failure = normal.split('name: Retain only closed normal failure metadata', 1)[1]
@@ -254,7 +254,7 @@ class NormalArtifactParsers(unittest.TestCase):
         # This tests the real producer wiring, not a genuine compilation. Only
         # synthetic fixture files exist and all Git/Docker calls are replaced.
         self.put(runner.NORMAL_RUNNER, b'# synthetic producer source\n')
-        self.put(runner.CRATE + 'Cargo.lock', b'[[package]]\nname="serverware-decision-gate"\nversion="0.1.0"\n')
+        self.put(runner.CRATE + 'Cargo.lock', b'[[package]]\nname="catchplate-decision-gate"\nversion="0.1.0"\n')
         output = self.repo / ('job-root' if library_root else 'job'); output.mkdir()
         run = runner.HostedRun(self.repo, output, 'a' * 40)
         tree = b''.join(mode.encode() + b' blob ' + oid.encode() + b'\t' + name.encode() + b'\0'
@@ -276,16 +276,16 @@ class NormalArtifactParsers(unittest.TestCase):
             self.assertEqual(seconds, 1800)
             self.assertTrue(argv[-1].endswith('exec ' + runner.shlex.join(runner.NORMAL_COMMAND)))
             deps = output / 'target/release/deps'; deps.mkdir(parents=True)
-            executable = output / 'target/release/serverware-decision-gate'
+            executable = output / 'target/release/catchplate-decision-gate'
             executable.write_bytes(self.elf()); executable.chmod(0o555)
-            unit = deps / ('serverware_decision_gate-' + '1' * 16); os.link(executable, unit)
-            library = deps / ('libserverware_decision_gate-' + '2' * 16 + '.rlib')
+            unit = deps / ('catchplate_decision_gate-' + '1' * 16); os.link(executable, unit)
+            library = deps / ('libcatchplate_decision_gate-' + '2' * 16 + '.rlib')
             library.write_bytes(b'!<arch>\nsynthetic-only')
             if library_root:
-                library = output / 'target/release/libserverware_decision_gate.rlib'
+                library = output / 'target/release/libcatchplate_decision_gate.rlib'
                 library.write_bytes(b'!<arch>\nsynthetic-only')
             for kind, stem, source in (('binary', unit, 'main.rs'),
-                ('library', deps / ('serverware_decision_gate-' + '2' * 16), 'custody_protocol.rs')):
+                ('library', deps / ('catchplate_decision_gate-' + '2' * 16), 'custody_protocol.rs')):
                 target = '/' + stem.relative_to(output).as_posix()
                 (Path(str(stem) + '.d')).write_text(target + '.d: src/' + source + '\n\nsrc/' + source + ':\n'
                     + ('\n# env-dep:CARGO_PKG_VERSION=0.1.0\n' if kind == 'binary' else ''))
@@ -295,9 +295,9 @@ class NormalArtifactParsers(unittest.TestCase):
                                 ('normal-cargo.txt', 'cargo 1.88.0 (fixture)\n')):
                 (run.results / name).write_text(value)
         run.command, run.container = command, container
-        environment = {'GITHUB_SHA': 'a' * 40, 'GITHUB_JOB': 'normal-proxy', 'GITHUB_REPOSITORY': 'example/serverware',
+        environment = {'GITHUB_SHA': 'a' * 40, 'GITHUB_JOB': 'normal-proxy', 'GITHUB_REPOSITORY': 'example/catchplate',
             'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1',
-            'GITHUB_WORKFLOW_REF': 'example/serverware/' + runner.NORMAL_WORKFLOW + '@refs/heads/main'}
+            'GITHUB_WORKFLOW_REF': 'example/catchplate/' + runner.NORMAL_WORKFLOW + '@refs/heads/main'}
         with patch.dict(os.environ, environment), patch.object(runner.os, 'statvfs', return_value=SimpleNamespace(
                 f_bavail=10 * 1024**3, f_frsize=1)):
             if terminal:
@@ -311,12 +311,12 @@ class NormalArtifactParsers(unittest.TestCase):
             with self.subTest(library_root=library_root):
                 run, calls = self.orchestrate(library_root=library_root)
                 export = run.root / 'artifact'
-                self.assertEqual({path.name for path in export.iterdir()}, {'serverware-decision-gate', 'normal.json'})
+                self.assertEqual({path.name for path in export.iterdir()}, {'catchplate-decision-gate', 'normal.json'})
                 receipt = json.loads((export / 'normal.json').read_bytes())
-                runner.verify_normal_receipt(receipt, (export / 'serverware-decision-gate').read_bytes(), self.identity())
+                runner.verify_normal_receipt(receipt, (export / 'catchplate-decision-gate').read_bytes(), self.identity())
                 self.assertEqual(receipt['compilerInputs']['library']['artifactPath'],
-                                 '/target/release/deps/libserverware_decision_gate-' + '2' * 16 + '.rlib')
-                self.assertEqual((export / 'serverware-decision-gate').stat().st_mode & 0o777, 0o555)
+                                 '/target/release/deps/libcatchplate_decision_gate-' + '2' * 16 + '.rlib')
+                self.assertEqual((export / 'catchplate-decision-gate').stat().st_mode & 0o777, 0o555)
                 self.assertEqual([label for label, _ in calls][-3:], ['provision-remaining', 'normal-remaining', 'source-after'])
                 self.assertEqual(receipt['sourceRevision'], 'a' * 40)
                 self.assertFalse(receipt['tested'])

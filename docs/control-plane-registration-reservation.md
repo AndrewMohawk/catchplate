@@ -23,9 +23,9 @@ nullable, not both required. No browser-supplied roots, expected hashes, raw
 grant or reservation acknowledgment is accepted.
 
 The public action is `webauthn.registration.execution.reserve`. Its
-[intent binding](../serverware/control_plane_registration_reservation_intent.py)
-uses `serverware.webAuthnRegistrationReservationIntent/v1` and the separate
-`serverware.webAuthnRegistrationReservationIntentOriginal/v1` original-digest
+[intent binding](../catchplate/control_plane_registration_reservation_intent.py)
+uses `catchplate.webAuthnRegistrationReservationIntent/v1` and the separate
+`catchplate.webAuthnRegistrationReservationIntentOriginal/v1` original-digest
 domain. It binds actual captured registration originals, not browser assertions
 of their identity. Current caller/session admission and the actual nested-v2
 `reservation_enabled` owner are checked before spending permission.
@@ -52,7 +52,7 @@ exchange and live verification of the returned originals, success is **202**:
 
 | Field | Value |
 | --- | --- |
-| `schema` | `serverware.webAuthnRegistrationReservation/v1` |
+| `schema` | `catchplate.webAuthnRegistrationReservation/v1` |
 | `status` | `reservation-acknowledged` |
 | `purpose` | `reserve-registration-evidence-execution` |
 | `localDigest` | Actual retained grant's canonical local content ID |
@@ -79,30 +79,30 @@ redacted, including failures during fresh operator authentication.
 ## Explicit cold opt-in
 
 The parent signed
-`serverware.signedControlPlaneEnrollmentBootstrap/v3` and
-`serverware.controlPlaneEnrollmentBootstrap/v3` profiles are unchanged.
+`catchplate.signedControlPlaneEnrollmentBootstrap/v3` and
+`catchplate.controlPlaneEnrollmentBootstrap/v3` profiles are unchanged.
 Within `registrationExecution`, the closed six-field
-`serverware.controlPlaneRegistrationExecution/v1` remains grant-authorizer-only.
+`catchplate.controlPlaneRegistrationExecution/v1` remains grant-authorizer-only.
 Null still disables this scope. Neither is silently promoted.
 
-The new closed `serverware.controlPlaneRegistrationExecution/v2` has the same
+The new closed `catchplate.controlPlaneRegistrationExecution/v2` has the same
 six fields, with its own discriminator, plus exactly:
 
 | Field | Independently provisioned contract |
 | --- | --- |
-| `reserverEndpoint` | `{socketPath, requestTimeoutSeconds, listenerUid, listenerGid}`; fixed `/run/serverware/registration-execution/reserver.sock`, integer 1–30 seconds, listener `0:0` |
+| `reserverEndpoint` | `{socketPath, requestTimeoutSeconds, listenerUid, listenerGid}`; fixed `/run/catchplate/registration-execution/reserver.sock`, integer 1–30 seconds, listener `0:0` |
 | `statePredecessor` | `{sequence, headDigest, nextFence}` for the intended reserve; not copied from the response or local journal |
 
-The [nested bootstrap verifier](../serverware/control_plane_registration_execution_bootstrap.py)
+The [nested bootstrap verifier](../catchplate/control_plane_registration_execution_bootstrap.py)
 authenticates the three original enrollments and their configuration/generation
 joins, checks enrolled capacity, and binds a genesis predecessor to the genuine
 enrollment identity and fence one. The complete parent original remains signed
 and bounded to 4 MiB. The same dedicated caller key remains at **FD203**; no new
 key, environment slot, computation key or state-signing key is delivered to the
-control plane. The [early FD projection](../serverware/authority_fd_entrypoint.py)
+control plane. The [early FD projection](../catchplate/authority_fd_entrypoint.py)
 checks both closed shapes without substituting for child cryptographic admission.
 
-`reservation_enabled` on the actual [cold enrollment owner](../serverware/control_plane_enrollment_startup.py)
+`reservation_enabled` on the actual [cold enrollment owner](../catchplate/control_plane_enrollment_startup.py)
 requires both admitted v2 endpoint and predecessor, in addition to its actual
 caller key and live custody. A successful response does not update these pins.
 The caller's independently admitted scope must match the reserver's fixed
@@ -111,7 +111,7 @@ predecessor/fence; a signed acknowledgment cannot appoint a later checkpoint.
 ## One original preparation window
 
 The private application API is
-[`prepare_and_reserve_registration_execution(originals)`](../serverware/control_plane_registration_preparation.py).
+[`prepare_and_reserve_registration_execution(originals)`](../catchplate/control_plane_registration_preparation.py).
 It returns `(existing_local_grant_id, (reserve_request_bytes, snapshot_bytes,
 state_acknowledgment_bytes))` only after the complete original response is
 genuinely verified. The public handlers project that private result into the
@@ -141,7 +141,7 @@ expires, but that does not permit the next send or create another window.
 
 The owner method `_request_registration_reservation(originals=...,
 deadline_epoch_ns=..., deadline_ns=..., work=...)` delegates to
-[`_reserve_on_owner`](../serverware/control_plane_registration_execution.py).
+[`_reserve_on_owner`](../catchplate/control_plane_registration_execution.py).
 It verifies the original permission/grant before contacting the fixed reserver,
 then uses the original request and independent cold scope to verify the returned
 raw3. The original-only transport keeps its existing raw10 request and raw3
@@ -150,7 +150,7 @@ no retry or alternate destination.
 
 ## What the returned originals establish
 
-The [response verifier](../serverware/authority_registration_reservation_response.py)
+The [response verifier](../catchplate/authority_registration_reservation_response.py)
 performs genuine planning and purpose verification, full grant/plan/vector
 replay, live computation-signature verification, exact snapshot reconstruction,
 and state-acknowledgment signature and scope joins. Expected predecessor/head/
@@ -179,7 +179,7 @@ partial originals; failures after sending may follow actual state acceptance.
 No stage automatically retries preparation, signs again or reserves again.
 
 The fixed caller key source
-`/run/secrets/serverware-registration-execution-caller-key`, signed bootstrap,
+`/run/secrets/catchplate-registration-execution-caller-key`, signed bootstrap,
 original enrollments and journal must be independently provisioned. Socket
 directories must actually be visible in the control-plane runtime; the current
 production Compose configuration does not supply the caller-key source or the

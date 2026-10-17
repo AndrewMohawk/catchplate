@@ -4,9 +4,9 @@ This `.157` adapter is **source-only, unbuilt and unexecuted**. It derives
 protected write commitments; it is not the SQL executor, a committed-consumption
 receipt, a browser token response or the complete token-release milestone.
 
-[`authority_oidc_session_activation_delivery_writes.py`](../serverware/authority_oidc_session_activation_delivery_writes.py)
+[`authority_oidc_session_activation_delivery_writes.py`](../catchplate/authority_oidc_session_activation_delivery_writes.py)
 handles only `oidc.session.activation-delivery.consume`. Its closed original
-format is `serverware.oidcSessionActivationDeliveryWriteProof/v1`, with the exact
+format is `catchplate.oidcSessionActivationDeliveryWriteProof/v1`, with the exact
 current source revision, operation, request digest, seven counted before-heads
 and five write frontiers. Canonical encoding is ordinary bounded data, not proof
 that any transition or database mutation happened.

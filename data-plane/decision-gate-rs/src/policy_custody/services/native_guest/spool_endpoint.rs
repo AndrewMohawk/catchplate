@@ -57,14 +57,14 @@ impl Service {
             self.channel.inspect(peer::Phase::BeforeDispatch,Some(&packet.bytes),Some(&packet),wire.deadline_boottime_nanos,check)?;
             let result=self.work.handle(&wire,keys,trust,time)?;
             let local=keys.keys.get(&kind.role()).ok_or(ShadowError::SignerBindingMismatch)?;
-            let result_sha256=hash_domain_frames(b"serverware.policyCustodyProductionAuthorityEndpointResponse/v4",&[&canonical_json_bytes(&result)?]);
+            let result_sha256=hash_domain_frames(b"catchplate.policyCustodyProductionAuthorityEndpointResponse/v4",&[&canonical_json_bytes(&result)?]);
             let mut reply=Reply{api_version:PRODUCTION_AUTHORITY_ENDPOINT_PROTOCOL_VERSION.into(),endpoint:wire.endpoint,
                 request_sha256:wire.request_sha256,replay_id_sha256:wire.replay_id_sha256,completed_at_boottime_nanos:guest::now()?,
                 authority_key_id:local.binding.key_id.clone(),authority_key_spki_sha256:local.binding.key_spki_sha256.clone(),
                 result,result_sha256,signature_base64:String::new()};
             require(reply.completed_at_boottime_nanos<wire.deadline_boottime_nanos)?;check()?;self.work.check(keys,trust,time)?;
             reply.signature_base64=URL_SAFE_NO_PAD.encode(local.key.sign(&domain_separated_signature_preimage(
-                b"serverware.policyCustodyProductionAuthorityEndpointSignature/v4",&reply.signature_payload().map_err(fail)?).map_err(fail)?).to_bytes());
+                b"catchplate.policyCustodyProductionAuthorityEndpointSignature/v4",&reply.signature_payload().map_err(fail)?).map_err(fail)?).to_bytes());
             let raw=services::common::encode_canonical_frame(&reply).map_err(fail)?;
             require(raw.len()<=services::common::MAX_SERVICE_FRAME_BYTES)?;
             loop {

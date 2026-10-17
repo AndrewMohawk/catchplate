@@ -22,10 +22,10 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
-from serverware import native_pilot_current_head_state as storage
-from serverware import native_pilot_initial_state_installation as installation
-from serverware import native_pilot_initial_state_profile as profile
-from serverware import native_shadow_nitro_originals as originals
+from catchplate import native_pilot_current_head_state as storage
+from catchplate import native_pilot_initial_state_installation as installation
+from catchplate import native_pilot_initial_state_profile as profile
+from catchplate import native_shadow_nitro_originals as originals
 from scripts.test_native_pilot_initial_state_profile import fixture, prepared, runtime_fixture
 from scripts.test_native_pilot_current_head_state import _isolated, _pin, _read
 
@@ -66,7 +66,7 @@ class InitialStateCommitControls(unittest.TestCase):
         codecs.lookup("ascii")
         # StateStore lazily imports its fixed directory profile. Standalone
         # reruns must not depend on another suite having already loaded it.
-        importlib.import_module("serverware.native_pilot_startup_profile")
+        importlib.import_module("catchplate.native_pilot_startup_profile")
         directory = tempfile.TemporaryDirectory(prefix="initial-state-commit-fixture-", dir=os.environ.get("TMPDIR"))
         cls.addClassCleanup(directory.cleanup)
         cls.addClassCleanup(runtime_fixture.thaw, Path(directory.name))
@@ -161,7 +161,7 @@ class InitialStateCommitControls(unittest.TestCase):
         _isolated(self.source, action)
 
     def test_factory_source_binds_actual_fifteen_file_result_and_retained_checks_have_no_clock_callback(self):
-        tree = ast.parse((ROOT / "serverware/native_pilot_initial_state_installation.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/native_pilot_initial_state_installation.py").read_text())
         selected = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "InitialStateInstallation")
         methods = {node.name: ast.unparse(node) for node in selected.body if isinstance(node, ast.FunctionDef)}
         source = methods["install"]

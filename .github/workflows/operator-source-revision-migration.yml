@@ -75,7 +75,7 @@ jobs:
           stage=not_started
           finish() {
             local code="$?"
-            printf '{"schema":"serverware.operatorSourceRevisionPhase/v1","phase":"%s","stage":"%s","exitCode":%d,"runAttempt":%d}\n' "$PHASE" "$stage" "$code" "$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/migration-results/phase-status.json"
+            printf '{"schema":"catchplate.operatorSourceRevisionPhase/v1","phase":"%s","stage":"%s","exitCode":%d,"runAttempt":%d}\n' "$PHASE" "$stage" "$code" "$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/migration-results/phase-status.json"
             timeout 20s docker rm -f "$name" >/dev/null 2>&1 || true
             exit "$code"
           }

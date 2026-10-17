@@ -36,7 +36,7 @@ def no_network(event, _args):
 
 
 def prove(fixture, expected):
-    from serverware import operator_notification_events as events
+    from catchplate import operator_notification_events as events
     observed, cursor = [], events.EventCursor()
     with closing(fixture.db.connect()) as conn:
         conn.execute("PRAGMA query_only=ON")
@@ -145,8 +145,8 @@ def refresh_rejected():
 
 def all_filters():
     f = cleanup.Fixture()
-    from serverware import operator_notification_store as store, operator_notification_events as events
-    from serverware import operator_notification_transport as transport, operator_notifications as notifications
+    from catchplate import operator_notification_store as store, operator_notification_events as events
+    from catchplate import operator_notification_transport as transport, operator_notifications as notifications
     added_events = {"operator_catalog.access_rule.npm_install_created",
         "operator_catalog.credential.github_app_created", "operator_catalog.credential.github_app_key_replaced",
         "operator_catalog.x_oauth.configuration_saved", "operator_catalog.application.renewal_enrolled",
@@ -197,8 +197,8 @@ class GoogleNotificationIntegrationTests(unittest.TestCase):
         consent.OperatorGoogleConsentTests.setUp(self)
         directory = Path(self.scratch.name) / "notification-custody"
         directory.mkdir(mode=0o700)
-        self.environment.update(SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED="1",
-            SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR=str(directory))
+        self.environment.update(CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED="1",
+            CATCHPLATE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR=str(directory))
 
     def worker(self, name):
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", name],

@@ -17,7 +17,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import native_pilot_adopted_intake as intake
+from catchplate import native_pilot_adopted_intake as intake
 
 
 def canonical(value):
@@ -26,7 +26,7 @@ def canonical(value):
 
 def fixture():
     boot = (base64.urlsafe_b64encode(bytes(range(16))).rstrip(b"=").decode("ascii"), 11, 12)
-    value = {"apiVersion": "serverware.nativePilotAdoptedIntakeConfiguration/v1",
+    value = {"apiVersion": "catchplate.nativePilotAdoptedIntakeConfiguration/v1",
         "purpose": "receive-cold-core-for-adopted-native-pilot", "sender": {"pid": 1234, "uid": 0, "gid": 0, "startTimeTicks": 456},
         "bootIdBase64url": boot[0], "timeNamespaceDevice": boot[1], "timeNamespaceInode": boot[2],
         "issuedAtBoottimeNs": "100", "startupDeadlineBoottimeNs": "200", "lifetimeDeadlineBoottimeNs": "300",
@@ -38,8 +38,8 @@ class AdoptedIntakeControls(unittest.TestCase):
     def test_exact_original_configuration_and_fixed_endpoint(self):
         value, clocks = fixture()
         self.assertEqual(intake.validate_configuration(canonical(value), **clocks), value)
-        self.assertEqual(intake.ENDPOINT, "/run/serverware/native-pilot-core-handoff/core.sock")
-        self.assertEqual(intake.DIRECTORY, "/run/serverware/native-pilot-core-handoff")
+        self.assertEqual(intake.ENDPOINT, "/run/catchplate/native-pilot-core-handoff/core.sock")
+        self.assertEqual(intake.DIRECTORY, "/run/catchplate/native-pilot-core-handoff")
         result = intake.validate_configuration(canonical(value), **clocks)
         result["sender"]["pid"] = 999
         self.assertEqual(value["sender"]["pid"], 1234)
@@ -91,7 +91,7 @@ class AdoptedIntakeControls(unittest.TestCase):
 
     def test_closed_grammar_canonical_bytes_and_size(self):
         value, clocks = fixture()
-        for fields in ({"apiVersion": "serverware.nativePilotAdoptedIntakeConfiguration/v2"},
+        for fields in ({"apiVersion": "catchplate.nativePilotAdoptedIntakeConfiguration/v2"},
                 {"purpose": "approve-adoption"}, {"endpoint": "/tmp/caller.sock"}, {"receivedCore": {"fd": 17}},
                 {"expiresAtUnixNanos": 1 << 63}):
             with self.subTest(fields=fields), self.assertRaises(ValueError):

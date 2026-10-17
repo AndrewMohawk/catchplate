@@ -28,7 +28,7 @@ shorten its deadline. There is no reset, timeout unlock, reprepare or automatic
 retry. Unknown contact and failed local output remain fenced.
 
 An operator supplies those exact originals to the existing fixed
-`serverware-native-bootstrap-client --configuration ... --configuration-sha256 ...`
+`catchplate-native-bootstrap-client --configuration ... --configuration-sha256 ...`
 with the explicit closed `nativeBootstrapClient/v10` profile. In addition to
 the old actual v2 installation inputs, `setupInstallationObservation` pins:
 

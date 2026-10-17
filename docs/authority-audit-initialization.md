@@ -14,10 +14,10 @@ offline initializer or an installed permission proof.
 
 ## Complete-population component
 
-`serverware/authority_audit_inventory.py` implements
+`catchplate/authority_audit_inventory.py` implements
 `verify_audit_inventory(root=..., records=...)`. It consumes a stream of exact
 `selectedRow` / `proof` pairs and returns an immutable
-`serverware.metadataAuditOutboxInventoryObservation/v2` with the supplied root
+`catchplate.metadataAuditOutboxInventoryObservation/v2` with the supplied root
 descriptor, source revision, three status counts and derived outstanding count.
 The observation has a domain-separated digest, not a signature or authority bit.
 Direct construction of its dataclass checks consistency only, not proof validity.
@@ -108,7 +108,7 @@ declaration. The six unrelated backfill declarations remain unchanged.
 `authority_audit_initialization.prepare_audit_capacity_initialization` now
 composes the real v2 inventory verifier, exact global-key nonmembership and the
 real primary-radix mutation evaluator. It returns immutable canonical ASCII
-bytes under `serverware.metadataAuditCapacityInitializationPreparation/v1`.
+bytes under `catchplate.metadataAuditCapacityInitializationPreparation/v1`.
 This is a calculation relative to supplied roots, not a signed checkpoint,
 installation receipt, admitted runtime plan or database initializer.
 

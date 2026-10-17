@@ -67,7 +67,7 @@ pub(super) fn native_response_runtime_proof(state: &GateState, statement: &Value
     signer.transport.verify_live()?;
     let proof = SensitiveJsonValue::new(json!({
         "apiVersion":NATIVE_RESPONSE_PROOF_VERSION,
-        "kind":"ServerwareNativeResponseRuntimeProof",
+        "kind":"CatchplateNativeResponseRuntimeProof",
         "server_statement":statement,
         "server_statement_sha256":statement_digest,
         "server_signature":{

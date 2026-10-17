@@ -29,8 +29,8 @@ ARM, STATUS, RELEASE = "/__fault/arm", "/__fault/status", "/__fault/release"
 MAX_HEAD, MAX_REQUEST, MAX_RESPONSE = 16 * 1024, 32 * 1024, 256 * 1024
 MAX_AUDIT_REQUEST, MAX_AUDIT_RESPONSE, MAX_ATTESTATION_RESPONSE = 1536 * 1024, 32 * 1024, 64 * 1024
 REQUEST_HEADERS = {"host", "content-length", "content-type", "accept", "accept-encoding",
-    "connection", "user-agent", "x-serverware-data-plane-token", "x-serverware-response-nonce"}
-QUOTA_VERSION = "serverware.operatorXQuotaCredentialLeaseRequest/v1"
+    "connection", "user-agent", "x-catchplate-data-plane-token", "x-catchplate-response-nonce"}
+QUOTA_VERSION = "catchplate.operatorXQuotaCredentialLeaseRequest/v1"
 
 
 def require(condition):
@@ -120,7 +120,7 @@ def request_limit(first, fields, listener):
     require(len(parts) == 3 and parts[2] == b"HTTP/1.1")
     method, path = parts[0], parts[1].decode("ascii")
     if listener == DATA:
-        require(fields.get("host") == "serverware:3000")
+        require(fields.get("host") == "catchplate:3000")
         empty = method == b"GET" and ATTESTATION.fullmatch(path) is not None
         require(empty or method == b"POST" and path in {LEASE, CLAIM, AUDIT})
     else:
@@ -133,10 +133,10 @@ def request_limit(first, fields, listener):
         require(fields.get("content-type") == "application/json"
             and re.fullmatch(r"0|[1-9][0-9]{0,6}", fields.get("content-length", "")) is not None)
     if listener == DATA and not empty:
-        require(0 < len(fields.get("x-serverware-data-plane-token", "")) <= 512
-            and re.fullmatch(r"[A-Za-z0-9_-]{43}", fields.get("x-serverware-response-nonce", "")) is not None)
+        require(0 < len(fields.get("x-catchplate-data-plane-token", "")) <= 512
+            and re.fullmatch(r"[A-Za-z0-9_-]{43}", fields.get("x-catchplate-response-nonce", "")) is not None)
     else:
-        require("x-serverware-data-plane-token" not in fields and "x-serverware-response-nonce" not in fields)
+        require("x-catchplate-data-plane-token" not in fields and "x-catchplate-response-nonce" not in fields)
     return 0 if empty else (MAX_AUDIT_REQUEST if path == AUDIT else MAX_REQUEST)
 
 
@@ -154,11 +154,11 @@ def response_limit(path):
 
 def signed_ack(fields, body):
     # No signing key or credential is read. Preserve the actual proof for gate verification.
-    require(fields.get("x-serverware-response-body-sha256") == digest(body)
-        and sha(fields.get("x-serverware-response-key-id"))
-        and sha(fields.get("x-serverware-response-statement-sha256"))
-        and re.fullmatch(r"[A-Za-z0-9_-]{1,12000}", fields.get("x-serverware-response-statement-b64", ""))
-        and re.fullmatch(r"ed25519:[A-Za-z0-9_-]{86}", fields.get("x-serverware-response-signature", "")))
+    require(fields.get("x-catchplate-response-body-sha256") == digest(body)
+        and sha(fields.get("x-catchplate-response-key-id"))
+        and sha(fields.get("x-catchplate-response-statement-sha256"))
+        and re.fullmatch(r"[A-Za-z0-9_-]{1,12000}", fields.get("x-catchplate-response-statement-b64", ""))
+        and re.fullmatch(r"ed25519:[A-Za-z0-9_-]{86}", fields.get("x-catchplate-response-signature", "")))
 
 
 class State:
@@ -167,7 +167,7 @@ class State:
         self.condition = threading.Condition()
         self.arm_value = self.wire = self.reservation = None
         self.deadline = None
-        self.public = {"schema": "serverware.privateXQuotaFaultStatus/v1", "status": "idle", "mode": None,
+        self.public = {"schema": "catchplate.privateXQuotaFaultStatus/v1", "status": "idle", "mode": None,
             **{key: None for key in ("arm_sha256", "lease_request_sha256", "lease_response_sha256",
                 "claim_request_sha256", "claim_response_sha256", "claim_sha256", "http_status")}}
 
@@ -184,7 +184,7 @@ class State:
         with self.condition:
             require(self.public["status"] == "idle" and type(value) is dict
                 and set(value) == {"schema", "mode", "principal_id", "route_id", "body_sha256"}
-                and value["schema"] == "serverware.privateXQuotaFaultArm/v1"
+                and value["schema"] == "catchplate.privateXQuotaFaultArm/v1"
                 and value["mode"] in {"drop_ack", "hold_ack"}
                 and type(value["principal_id"]) is str and value["principal_id"].startswith("agent:operator-demo:")
                 and identifier(value["principal_id"].removeprefix("agent:operator-demo:"))
@@ -219,7 +219,7 @@ class State:
                 self.update("lease_inflight", lease_request_sha256=digest(raw))
             else:
                 require(self.public["status"] == "bound" and set(value) == {"apiVersion", "leaseRequest", "reservationId"}
-                    and value["apiVersion"] == "serverware.operatorXQuotaClaimRequest/v1"
+                    and value["apiVersion"] == "catchplate.operatorXQuotaClaimRequest/v1"
                     and wire == self.wire and value["reservationId"] == self.reservation["reservation_id"])
                 require(self.monotonic() < self.deadline and self.wall() * 1000 < quota["expiresAtEpochMs"])
                 self.update("claim_inflight", claim_request_sha256=digest(raw))
@@ -236,11 +236,11 @@ class State:
             require(reply.get("requestBindingSha256") == digest(encoded(self.wire)))
             if path == LEASE:
                 require(set(reply) == {"apiVersion", "requestBindingSha256", "reservation", "credentialLease"}
-                    and reply["apiVersion"] == "serverware.operatorXQuotaCredentialLeaseResponse/v1")
+                    and reply["apiVersion"] == "catchplate.operatorXQuotaCredentialLeaseResponse/v1")
                 reservation = reply["reservation"]
                 require(type(reservation) is dict and set(reservation) == {"schema", "reservation_id", "bucket_key",
                     "utc_day", "expires_at_epoch_ms", "binding_digest"}
-                    and reservation["schema"] == "serverware.operatorXPostingQuotaReservation/v1"
+                    and reservation["schema"] == "catchplate.operatorXPostingQuotaReservation/v1"
                     and identifier(reservation["reservation_id"]) and sha(reservation["binding_digest"])
                     and reservation["expires_at_epoch_ms"] == self.wire["operatorXQuota"]["expiresAtEpochMs"])
                 self.reservation = dict(reservation)
@@ -249,10 +249,10 @@ class State:
                 self.update("bound", lease_response_sha256=digest(raw), claim_sha256=digest(encoded(binding)), http_status=200)
                 return raw
             require(set(reply) == {"apiVersion", "requestBindingSha256", "claim"}
-                and reply["apiVersion"] == "serverware.operatorXQuotaClaimResponse/v1")
+                and reply["apiVersion"] == "catchplate.operatorXQuotaClaimResponse/v1")
             claim = reply["claim"]
             require(type(claim) is dict and set(claim) == set(self.reservation) | {"claimed_at_epoch_ms"}
-                and claim["schema"] == "serverware.operatorXPostingQuotaClaim/v1"
+                and claim["schema"] == "catchplate.operatorXPostingQuotaClaim/v1"
                 and all(claim[key] == value for key, value in self.reservation.items() if key != "schema")
                 and type(claim["claimed_at_epoch_ms"]) is int
                 and 0 < claim["claimed_at_epoch_ms"] < claim["expires_at_epoch_ms"])
@@ -278,7 +278,7 @@ class State:
         with self.condition:
             require(type(value) is dict and set(value) == {"schema", "arm_sha256", "claim_sha256",
                 "revoked_rule_id", "policy_hash", "loaded_policy_hash"}
-                and value["schema"] == "serverware.privateXQuotaFaultRelease/v1"
+                and value["schema"] == "catchplate.privateXQuotaFaultRelease/v1"
                 and self.public["status"] == "held" and self.monotonic() < self.deadline
                 and self.wall() * 1000 < self.wire["operatorXQuota"]["expiresAtEpochMs"]
                 and value["arm_sha256"] == self.public["arm_sha256"] and value["claim_sha256"] == self.public["claim_sha256"]
@@ -381,7 +381,7 @@ def main():
     require(30 <= args.lifetime_seconds <= 300 and os.geteuid() == os.getegid() == 10001)
     assert_isolated_network()
     require(json_body(Path("/private-audit-fixture.json").read_bytes()) == {
-        "schema": "serverware.privateOperatorAuditFixture/v1", "syntheticOnly": True})
+        "schema": "catchplate.privateOperatorAuditFixture/v1", "syntheticOnly": True})
     stopped = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stopped.set())

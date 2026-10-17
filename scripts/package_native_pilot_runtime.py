@@ -247,7 +247,7 @@ def _package(root: Path, inventory: dict, output: Path, *, authority: bool, supe
                     and observe(root, inventory["source"]) == inventory,
                     "runtime export changed before package completion")
             report = {
-                "apiVersion": "serverware.nativePilotConductorPackage/v1",
+                "apiVersion": "catchplate.nativePilotConductorPackage/v1",
                 "source": inventory["source"],
                 "inventorySha256": "sha256:" + hashlib.sha256(inventory_original).hexdigest(),
                 "inventory": inventory,
@@ -259,10 +259,10 @@ def _package(root: Path, inventory: dict, output: Path, *, authority: bool, supe
                 "boundary": "Unsigned transferable rootfs bytes only. Independently authenticate the exact package hash before any later privileged installation. No installer, mounted execution root, native services, protected configurations, credentials, independent authority coordinator or acceptance evidence is supplied by this package.",
             }
             if authority:
-                report.update(apiVersion="serverware.nativePilotAuthorityPackage/v1",
+                report.update(apiVersion="catchplate.nativePilotAuthorityPackage/v1",
                     boundary="Unsigned transferable authority-coordinator rootfs bytes only. Independent package approval, protected installation, the separate approved conductor inventory, all purpose-key capabilities and per-job approvals remain required. No provisioning, signing, execution or pilot acceptance occurred.")
             if supervisor:
-                report.update(apiVersion="serverware.nativePilotSupervisorPackage/v1",
+                report.update(apiVersion="catchplate.nativePilotSupervisorPackage/v1",
                     boundary="Unsigned transferable supervisor rootfs bytes only. Independent package approval, protected installation, separate approved conductor/authority inventories, policy/recipe originals, purpose-key capabilities and independent late decisions remain required. No provisioning, approval, signing, execution or pilot acceptance occurred.")
             raw = canonical(report)
             require(len(raw) <= MAX_METADATA_BYTES, "runtime package metadata exceeds its bound")

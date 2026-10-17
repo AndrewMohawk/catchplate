@@ -21,12 +21,12 @@ from unittest.mock import patch
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import ecr_image_artifact as artifact
-from serverware import ecr_image_custody as custody
-from serverware import ecr_publication_plan as planner
-from serverware import operator_ecr_publications as owner
-from serverware import operator_ecr_artifacts as artifacts
-from serverware import operator_publication
+from catchplate import ecr_image_artifact as artifact
+from catchplate import ecr_image_custody as custody
+from catchplate import ecr_publication_plan as planner
+from catchplate import operator_ecr_publications as owner
+from catchplate import operator_ecr_artifacts as artifacts
+from catchplate import operator_publication
 
 
 def prohibit_network(event, args):
@@ -47,7 +47,7 @@ def digest(raw):
 
 class OwnerTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="serverware-ecr-owner-")
+        self.temp = tempfile.TemporaryDirectory(prefix="catchplate-ecr-owner-")
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / "owner.sqlite3"
         self.clock = planner.Clock(1_800_000_000, 1_000_000_000)
@@ -59,7 +59,7 @@ class OwnerTests(unittest.TestCase):
             "token_expires_at_epoch_ms": (self.clock.unix_seconds + 3600) * 1000,
             "rule_sha256": "sha256:" + "3" * 64,
             "scope": {"registry_id": "123456789012", "region": "us-east-1",
-                "repository_name": "serverware-fixture", "image_tag": "reviewed"}}
+                "repository_name": "catchplate-fixture", "image_tag": "reviewed"}}
         self.wire = {key: self.binding[key] for key in
             ("principal_id", "route_id", "credential_id", "credential_generation", "policy_hash")}
         self.wire["request_binding_sha256"] = "sha256:" + "4" * 64
@@ -592,7 +592,7 @@ class OwnerTests(unittest.TestCase):
         self.assertIsNone(projection())
 
     def test_readonly_aws_public_binding_checks_generation_and_never_reads_secrets(self):
-        from serverware import operator_catalog_aws as aws
+        from catchplate import operator_catalog_aws as aws
         identifier, subject = self.binding["credential_id"], str(uuid.uuid4())
         metadata = {"provider_id": "operator-demo", "provider_subject": subject, "secret_class": aws.SECRET_CLASS,
             "connection_type": aws.CONNECTION, "credential_kind": "long_term", "expires_at": None}

@@ -78,8 +78,8 @@ class ProjectionTests(unittest.TestCase):
     def owner(self, dto):
         fake = SimpleNamespace(notification_pending=lambda *args, **kwargs: deepcopy(dto))
         # Import lazily inside ecr.action, without importing configured owners.
-        import serverware
-        return patch.object(serverware, "operator_ecr_publications", fake, create=True)
+        import catchplate
+        return patch.object(catchplate, "operator_ecr_publications", fake, create=True)
 
     def test_all_fifteen_audit_types_are_closed_and_only_staged_is_actionable(self):
         event = publication()
@@ -154,9 +154,9 @@ class ProjectionTests(unittest.TestCase):
 
 def outbox():
     import test_operator_notification_store as store_tests
-    from serverware import operator_ecr_publications as owner
+    from catchplate import operator_ecr_publications as owner
     f = store_tests.Fixture()
-    from serverware import operator_notifications as worker
+    from catchplate import operator_notifications as worker
     now = f.store._now()
     event = publication()
     dto = pending(event, now, f.config.ADMIN_USER_ID)

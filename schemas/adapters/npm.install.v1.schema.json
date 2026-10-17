@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.local/schemas/adapters/npm.install.v1.schema.json",
-  "title": "Serverware closed npm install reads v1",
+  "$id": "https://catchplate.local/schemas/adapters/npm.install.v1.schema.json",
+  "title": "Catchplate closed npm install reads v1",
   "$comment": "Each signed mode has an exact request and response profile. Compiler additionally binds sorted packages, fixed registry authority, replacement, paths and envelopes. Gzip inspection never grants extraction or archive safety.",
   "type": "object", "additionalProperties": false,
   "required": ["credentialBinding", "packages", "mode", "request", "response"],

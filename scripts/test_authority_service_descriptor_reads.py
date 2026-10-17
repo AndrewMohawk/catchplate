@@ -19,9 +19,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import authority_launcher as launcher
+from catchplate import authority_launcher as launcher
 
-SOURCE = ROOT / "serverware/authority_service.py"
+SOURCE = ROOT / "catchplate/authority_service.py"
 NAME = "SYNTHETIC_AUTHORITY_ORIGINAL"
 
 

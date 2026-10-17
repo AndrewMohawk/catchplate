@@ -12,7 +12,7 @@ fn expected_fixture(f: &Fixture) -> Expected {
     expected(&f.claims(), &wire.approver_policy, &wire.child_request, DOCUMENT).unwrap()
 }
 fn response(f: &Fixture, expected: &Expected) -> Value {
-    json!({"apiVersion":"serverware.nativeReleaseAuthorizationResponse/v2", "ok":true,
+    json!({"apiVersion":"catchplate.nativeReleaseAuthorizationResponse/v2", "ok":true,
         "authorized":false,"state":"denied","reason":"jit_grant_unavailable",
         "attemptId":f.request["attemptId"],"bindingDigest":expected.binding,"idempotentReplay":false,
         "grantId":null,"approvalRequestId":expected.approval_id,"approvalStatus":"pending",
@@ -92,7 +92,7 @@ fn response_is_closed_duplicate_free_typed_and_store_bound() {
         assert!(check(&f, &e, &bad).is_err());
     }
     for (name, changed) in [("ok", json!(1)), ("authorized", Value::Null), ("approvalCreated", json!(1)),
-        ("retryAfterSeconds", json!(true)), ("apiVersion", json!("serverware.releaseAuthorizationResponse/v2"))] {
+        ("retryAfterSeconds", json!(true)), ("apiVersion", json!("catchplate.releaseAuthorizationResponse/v2"))] {
         let mut bad = valid.clone(); bad[name] = changed; assert!(check(&f, &e, &bad).is_err());
     }
     let mut bad = valid.clone(); bad["store"]["backend"] = json!("sqlite"); assert!(check(&f, &e, &bad).is_err());

@@ -7,10 +7,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const {spawn} = require('node:child_process');
-const ORIGIN = 'https://serverware-guided.example.com';
+const ORIGIN = 'https://catchplate-guided.example.com';
 const PREFIX = '/api/operator-demo';
 const CATALOG = PREFIX + '/catalog';
-const SCHEMA = 'serverware.privateGuidedBrowser/v1';
+const SCHEMA = 'catchplate.privateGuidedBrowser/v1';
 const PLAYWRIGHT = '/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright';
 const CHROME = '/home/catchplate/.cache/ms-playwright/chromium_headless_shell-1208/chrome-headless-shell-linux64/chrome-headless-shell';
 const CHROME_SHA = '27e55cc30e487493b89b663085d6deeb0707be201a568657c922fac9076c317c';
@@ -85,8 +85,8 @@ function readyFrame(value) {
   need(exact(value, ['kind', 'schema', 'origin', 'proxyUrl', 'upstreamUrl', 'names', 'providerSecret',
     'tokenTtlSeconds', 'placeholder', 'caPath', 'initialRevision', 'initialPolicyHash', 'timeoutSeconds']));
   need(value.kind === 'ready' && value.schema === SCHEMA && value.origin === ORIGIN &&
-    value.proxyUrl === 'https://serverware-gmail-proxy.example.com' && value.upstreamUrl === 'https://demo-upstream:8443/ordinary-client' &&
-    value.tokenTtlSeconds === 3600 && value.placeholder === 'Bearer SERVERWARE_DUMMY' &&
+    value.proxyUrl === 'https://catchplate-gmail-proxy.example.com' && value.upstreamUrl === 'https://demo-upstream:8443/ordinary-client' &&
+    value.tokenTtlSeconds === 3600 && value.placeholder === 'Bearer CATCHPLATE_DUMMY' &&
     value.caPath === '/client-trust/inner-ca.pem' && value.initialRevision === 1 && DIGEST.test(value.initialPolicyHash) && value.timeoutSeconds === 180);
   need(exact(value.names, ['credential', 'application', 'rule']));
   const match = /^operator-check-([0-9a-f]{32})-key$/.exec(value.names.credential);
@@ -97,7 +97,7 @@ function requestFrame(request, id, expectedPost) {
   need(integer(id, 1, 100)); const url = new URL(request.url());
   need(url.origin === ORIGIN && !url.username && !url.password && !url.search && !url.hash);
   const method = request.method(), raw = request.postDataBuffer() || Buffer.alloc(0), all = request.headers();
-  need(!Object.keys(all).some(key => /^(authorization|proxy-authorization|cookie|x-serverware-|transfer-encoding|content-encoding)/i.test(key)));
+  need(!Object.keys(all).some(key => /^(authorization|proxy-authorization|cookie|x-catchplate-|transfer-encoding|content-encoding)/i.test(key)));
   const headers = Object.fromEntries(Object.entries(all).filter(([key]) => ['accept', 'content-type', 'origin'].includes(key)));
   need(Object.values(headers).every(value => typeof value === 'string' && /^[\x20-\x7e]{0,512}$/.test(value)));
   need(method === 'GET' && ['/', CATALOG].includes(url.pathname) && !raw.length && !headers.origin && !headers['content-type'] ||
@@ -128,7 +128,7 @@ function checkerFailureFrame(frame) {
   need(exact(frame, ['kind', 'result']) && frame.kind === 'result');
   const value = frame.result;
   need(exact(value, ['schema', 'ok', 'error', 'stage', 'exceptionType', 'failureSite']) &&
-    value.schema === 'serverware.privateGuidedCheck/v1' && value.ok === false && value.error === 'guided_check_failed' &&
+    value.schema === 'catchplate.privateGuidedCheck/v1' && value.ok === false && value.error === 'guided_check_failed' &&
     CHECKER_STAGES.includes(value.stage) && CHECKER_ERRORS.includes(value.exceptionType) && failureSiteValid(value.failureSite));
   return {stage: value.stage, exceptionType: value.exceptionType,
     failureSite: value.failureSite === null ? null : {module: value.failureSite.module, line: value.failureSite.line}};
@@ -152,7 +152,7 @@ function failureReceipt(stage, observations, checkerFailure = null, stderr = nul
   const diagnostic = exact(stderr, ['capturedBytes', 'sha256', 'truncated']) && integer(stderr.capturedBytes, 0, 65536) &&
     typeof stderr.sha256 === 'string' && DIGEST.test(stderr.sha256) && typeof stderr.truncated === 'boolean' ?
     {capturedBytes: stderr.capturedBytes, sha256: stderr.sha256, truncated: stderr.truncated} : null;
-  return {schema: 'serverware.privateGuidedBrowserFailure/v1', ok: false,
+  return {schema: 'catchplate.privateGuidedBrowserFailure/v1', ok: false,
     stage: STAGES.includes(stage) ? stage : 'inputs', error: 'guided_browser_refused',
     checkerFailure: checker, checkerStderr: diagnostic,
     ...Object.fromEntries(['postCount', 'getCount', 'documentCount', 'pageErrors', 'consoleErrors', 'refusedRequests', 'downloadCount'].map(key =>
@@ -174,13 +174,13 @@ function publicFailureReceipt(raw) {
   need(same(value, checked));
   // Export neither private bytes nor their fingerprint. These counters describe
   // observations/attempts, not successful mutations or acceptance.
-  return {...checked, schema: 'serverware.guidedBrowserFailure/v1', checkerStderr: checked.checkerStderr === null ? null : {
+  return {...checked, schema: 'catchplate.guidedBrowserFailure/v1', checkerStderr: checked.checkerStderr === null ? null : {
     capturedBytes: checked.checkerStderr.capturedBytes, truncated: checked.checkerStderr.truncated}};
 }
 async function downloadedBytes(download) {
   let stream; const chunks = []; let size = 0;
   try {
-    need(download.suggestedFilename() === 'serverware-client.private.json');
+    need(download.suggestedFilename() === 'catchplate-client.private.json');
     stream = await download.createReadStream(); need(stream);
     for await (const chunk of stream) { need(Buffer.isBuffer(chunk) && (size += chunk.length) <= 16384); chunks.push(chunk); }
     need(size > 0); return Buffer.concat(chunks);
@@ -192,7 +192,7 @@ function validateChecker(value, browser, ids) {
   need(exact(value, ['schema', 'ok', 'syntheticOnly', 'realProviderVerified', 'publicDnsVerified', 'externalSsoVerified',
     'productionReady', 'hardwareVerified', 'runId', 'dataPlaneBinaryDigest', 'resourceIds', 'initialRevision', 'finalRevision',
     'initialPolicyHash', 'policyHash', 'providerArrivals', 'proxyAttempts', 'mutations', 'positive', 'negative', 'audit', 'browser']));
-  need(value.schema === 'serverware.privateGuidedCheck/v1' && value.ok === true && value.syntheticOnly === true &&
+  need(value.schema === 'catchplate.privateGuidedCheck/v1' && value.ok === true && value.syntheticOnly === true &&
     ['realProviderVerified', 'publicDnsVerified', 'externalSsoVerified', 'productionReady', 'hardwareVerified'].every(key => value[key] === false) &&
     /^operator-check-[0-9a-f]{32}$/.test(value.runId) && ['dataPlaneBinaryDigest', 'initialPolicyHash', 'policyHash'].every(key => DIGEST.test(value[key])) &&
     value.initialRevision === 1 && value.finalRevision === 7 && value.providerArrivals === 1 && value.proxyAttempts === 2 &&
@@ -264,7 +264,7 @@ async function main() {
           else { need(++out.getCount <= 80); if (frame.path === '/') need(++out.documentCount <= 2); }
           if (frame.path === ROUTES[0] && frame.method === 'POST') {
             need(out.postCount === 1 && await page.evaluate(() => localStorage.length === 0 && sessionStorage.length === 1 &&
-              sessionStorage.getItem('serverware.operator.mutation.review.v1') === 'required'));
+              sessionStorage.getItem('catchplate.operator.mutation.review.v1') === 'required'));
             out.credentialRecovery.markerBeforeDispatch = true;
           }
           const response = await send(frame);
@@ -341,7 +341,7 @@ async function main() {
     const privateClean = async () => need(await page.evaluate(() => localStorage.length === 0 && sessionStorage.length === 0 &&
       document.querySelector('#connect-credential-secret').value === ''));
     stage = 'open'; await page.goto(ORIGIN + '/#connect', {waitUntil: 'networkidle'}); await step('credential');
-    need(page.url() === ORIGIN + '/#connect' && /Serverware/.test(await page.title()) && lastCatalog.revision === setup.initialRevision &&
+    need(page.url() === ORIGIN + '/#connect' && /Catchplate/.test(await page.title()) && lastCatalog.revision === setup.initialRevision &&
       lastCatalog.policy.policy_hash === setup.initialPolicyHash && loaded());
     stage = 'credential'; await page.locator('#connect-use-key').click();
     await page.locator('#connect-credential-name').fill(setup.names.credential); await page.locator('#connect-credential-auth-type').selectOption('bearer');
@@ -358,7 +358,7 @@ async function main() {
       const value = await page.evaluate(() => ({
         warning: !document.querySelector('#mutation-review').hidden,
         marker: localStorage.length === 0 && sessionStorage.length === 1 &&
-          sessionStorage.getItem('serverware.operator.mutation.review.v1') === 'required',
+          sessionStorage.getItem('catchplate.operator.mutation.review.v1') === 'required',
         privateInputsEmpty: [...document.querySelectorAll('input[type="password"], #connect-github-private-key')].every(input => input.value === ''),
         writesDisabled: ['connect-use-key', 'connect-use-saved', 'connect-credential-next', 'credential-add', 'application-create']
           .every(id => document.getElementById(id).matches(':disabled'))}));
@@ -431,7 +431,7 @@ async function main() {
     need(exact(terminal, ['kind', 'result']) && terminal.kind === 'result'); const result = validateChecker(terminal.result, out, ids);
     const exit = await exited; need(!failed && exit.code === 0 && exit.signal === null && stderrBytes === 0 && input.length === 0);
     stage = 'close'; await browser.close(); browser = null;
-    return {schema: 'serverware.privateGuidedBrowserJoined/v1', ok: true, browserClosed: true, browser: out, checker: result};
+    return {schema: 'catchplate.privateGuidedBrowserJoined/v1', ok: true, browserClosed: true, browser: out, checker: result};
   } catch (_) {
     fs.writeFileSync(path.join(evidence, 'guided-browser-failure.json'), JSON.stringify(failureReceipt(stage, out, checkerFailure, stderr.snapshot())) + '\n', {flag: 'wx', mode: 0o600});
     throw new Error('Guided browser check failed');

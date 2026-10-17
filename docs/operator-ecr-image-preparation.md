@@ -18,7 +18,7 @@ See the AWS contracts for
 and [PutImage](https://docs.aws.amazon.com/AmazonECR/latest/APIReference/API_PutImage.html).
 
 The selected design prepares the complete artifact locally before requesting
-approval. Serverware must then bind a genuine approval to the image, application,
+approval. Catchplate must then bind a genuine approval to the image, application,
 account, region, repository, tag, policy, credential generation and original
 expiry. One approval opens one bounded publication, not several independent
 request grants. The normal SDK sends the corresponding bytes only after that
@@ -111,7 +111,7 @@ integration test. The temporary test container was removed after successful
 exit.
 
 Private execution receipts are retained outside Git under
-`serverware-operator-workspace-evidence/ecr-image-preparation.Jx1DS25o`.
+`catchplate-operator-workspace-evidence/ecr-image-preparation.Jx1DS25o`.
 These checks made no AWS requests, issued no approval and changed no live app
 configuration. The incomplete publication and real-provider acceptance gates
 above remain open.

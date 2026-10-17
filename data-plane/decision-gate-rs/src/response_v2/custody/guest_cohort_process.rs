@@ -50,7 +50,7 @@ unsafe fn child(parent: libc::pid_t, inherited: &[RawFd; 7], router: bool, execu
     for fd in 0..3 { unsafe { libc::close(fd); } }
     good &= unsafe { libc::syscall(libc::SYS_close_range, 11u32, u32::MAX, 4u32) } == 0;
     if good {
-        let argv = [b"serverware-response-v2-guest-role\0".as_ptr().cast::<libc::c_char>(), std::ptr::null()];
+        let argv = [b"catchplate-response-v2-guest-role\0".as_ptr().cast::<libc::c_char>(), std::ptr::null()];
         let env: [*const libc::c_char; 1] = [std::ptr::null()];
         unsafe { libc::syscall(libc::SYS_execveat, executable, b"\0".as_ptr(), argv.as_ptr(),
             env.as_ptr(), libc::AT_EMPTY_PATH); }
@@ -155,7 +155,7 @@ impl RoleProcess {
             .map_err(|_| "guest role progress PIDFD differs from owned child")?;
         let progress: Progress = crate::decode_canonical_json(&raw).map_err(|_| "guest role progress contract differs")?;
         let (before, after) = match progress.phase { Phase::Listening => (0, 1), Phase::Started => (1, 2) };
-        if progress.api_version != "serverware.responseV2.guestRoleStartup/v1"
+        if progress.api_version != "catchplate.responseV2.guestRoleStartup/v1"
             || progress.channel_nonce != self.nonce || progress.bootstrap_sha256 != self.bootstrap_sha256
             || progress.service_role != self.role || self.phase.load(Ordering::Acquire) != before {
             return Err("guest role progress is not the next phase of its original bootstrap".into());

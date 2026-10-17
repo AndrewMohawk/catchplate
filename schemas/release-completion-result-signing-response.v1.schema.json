@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/release-completion-result-signing-response.v1.schema.json",
-  "title": "Serverware Release Completion Result Signing Response v1",
+  "$id": "https://catchplate.invalid/schemas/release-completion-result-signing-response.v1.schema.json",
+  "title": "Catchplate Release Completion Result Signing Response v1",
   "$comment": "Closed, language-neutral external-signer response for final-v1. Structural validation does not verify the Ed25519 signature, bind the response to the exact deterministic request, establish caller-pinned provider/key/SPKI/role-registry trust, or authorize an action. The native verifier must perform those checks before producing the non-actionable final result.",
   "type": "object",
   "additionalProperties": false,
@@ -22,7 +22,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.releaseCompletionResultSigningResponse/v1"
+      "const": "catchplate.releaseCompletionResultSigningResponse/v1"
     },
     "kind": {
       "const": "ReleaseCompletionResultSigningResponse"

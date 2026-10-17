@@ -266,7 +266,7 @@ impl DindLifecycleV11 {
                 ));
             }
             let reason =
-                sha256(b"serverware/dind-startup-reconciliation/v11");
+                sha256(b"catchplate/dind-startup-reconciliation/v11");
             self.ledger.begin_destroying_generation(
                 &owner,
                 &generation,
@@ -533,7 +533,7 @@ impl DindLifecycleV11 {
         self.ledger.begin_destroying_generation(
             &capability.owner_namespace,
             &capability.daemon_generation,
-            sha256(b"serverware/dind-build-sealed/v11"),
+            sha256(b"catchplate/dind-build-sealed/v11"),
         )?;
         self.destroy_handle(handle, deadline_boottime_ns)?;
         let owner = handle.owner_namespace.clone();
@@ -932,7 +932,7 @@ impl DindLifecycleV11 {
         owner_namespace: &str,
         daemon_generation: &str,
     ) -> Result<()> {
-        let reason = sha256(b"serverware/dind-terminal-cleanup/v11");
+        let reason = sha256(b"catchplate/dind-terminal-cleanup/v11");
         self.fail_lane(owner_namespace, daemon_generation, reason)
     }
 
@@ -1074,11 +1074,11 @@ impl DindLifecycleV11 {
             .arg("--log-driver=local")
             .arg("--label")
             .arg(format!(
-                "com.serverware.controller.owner-namespace={owner_namespace}"
+                "com.catchplate.controller.owner-namespace={owner_namespace}"
             ))
             .arg("--label")
             .arg(format!(
-                "com.serverware.controller.daemon-generation={generation}"
+                "com.catchplate.controller.daemon-generation={generation}"
             ))
             .env_clear()
             .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
@@ -1181,12 +1181,12 @@ impl DindLifecycleV11 {
                 "--digests",
                 "--filter",
                 &format!(
-                    "label=com.serverware.controller.owner-namespace={}",
+                    "label=com.catchplate.controller.owner-namespace={}",
                     handle.owner_namespace
                 ),
                 "--filter",
                 &format!(
-                    "label=com.serverware.controller.daemon-generation={}",
+                    "label=com.catchplate.controller.daemon-generation={}",
                     handle.generation
                 ),
                 "--format",
@@ -1699,13 +1699,13 @@ const PRIVATE_DIND_MAX_TAR_ENTRIES_V12: usize = 1_000_000;
 const PRIVATE_DIND_MAX_JSON_MESSAGES_V12: u64 = 1_000_000;
 const PRIVATE_DIND_MAX_JSON_MESSAGE_BYTES_V12: u64 = 4 * 1024 * 1024;
 const PRIVATE_DIND_ARTIFACT_METADATA_V12: &str =
-    ".serverware-artifact-cas-v12.json";
+    ".catchplate-artifact-cas-v12.json";
 const PRIVATE_DIND_DOCKER_ARCHIVE_FORMAT_V12: &str =
-    "serverware/docker-image-archive-set/v12";
+    "catchplate/docker-image-archive-set/v12";
 const PRIVATE_DIND_SOURCE_METADATA_V12: &str =
-    ".serverware-source-cas-v12.json";
+    ".catchplate-source-cas-v12.json";
 const PRIVATE_DIND_BODY_RESULT_V12: &str =
-    ".serverware-controller-plan-executor-result-v12.json";
+    ".catchplate-controller-plan-executor-result-v12.json";
 
 #[derive(Clone)]
 pub struct PrivateDindConfigV12 {
@@ -2153,7 +2153,7 @@ impl PrivateDindLifecycleV12 {
             &canonical_plan_bytes(&json!({
                 "planId": plan_id,
                 "receipts": aggregate,
-                "version": "serverware/private-dind-scoped-terminal/v12",
+                "version": "catchplate/private-dind-scoped-terminal/v12",
             }))
             .map_err(|error| {
                 ControllerError::InvalidOwned(error.to_string())
@@ -2365,7 +2365,7 @@ impl PrivateDindLifecycleV12 {
             Err(error) => {
                 let uncertainty = sha256(
                     &[
-                        b"serverware/private-dind-operation-uncertain/v12\0"
+                        b"catchplate/private-dind-operation-uncertain/v12\0"
                             .as_slice(),
                         operation.request.request_sha256.as_slice(),
                         error.to_string().as_bytes(),
@@ -2744,7 +2744,7 @@ impl PrivateDindLifecycleV12 {
             })?,
         );
         let mut response = ReadinessResponseV12 {
-            protocol: "serverware/controller-readiness/v12"
+            protocol: "catchplate/controller-readiness/v12"
                 .to_owned(),
             request_id: request.request_id,
             request_sha256: request.request_sha256,
@@ -2993,7 +2993,7 @@ impl PrivateDindLifecycleV12 {
             ControllerError::InvalidOwned(error.to_string())
         })? != exact
             || contract.version
-                != "serverware/readiness-teardown-contract/v12"
+                != "catchplate/readiness-teardown-contract/v12"
             || contract.docker_top_level_object_count_scope
                 != DOCKER_TOP_LEVEL_OBJECT_COUNT_SCOPE_V12
             || contract.docker_internal_storage_absence_proof
@@ -3042,15 +3042,15 @@ impl PrivateDindLifecycleV12 {
             ControllerError::InvalidOwned(error.to_string())
         })? != contract_bytes
             || contract.version
-                != "serverware/readiness-container-probe/v12"
+                != "catchplate/readiness-container-probe/v12"
             || contract.command.is_empty()
             || contract.command.len() > 128
             || contract
                 .command
                 .iter()
                 .any(|part| part.is_empty() || part.len() > 4096)
-            || contract.fixture_mount != "/serverware-fixtures"
-            || contract.output_mount != "/serverware-output"
+            || contract.fixture_mount != "/catchplate-fixtures"
+            || contract.output_mount != "/catchplate-output"
             || contract.network_mode != "none"
             || !valid_nonroot_container_user_v12(&contract.user)
         {
@@ -3445,7 +3445,7 @@ impl PrivateDindLifecycleV12 {
             "profile": operation.profile,
             "socket": self.socket_path_v12(operation),
             "subnetIndex": network.subnet_index,
-            "version": "serverware/private-dind-ownership/v12",
+            "version": "catchplate/private-dind-ownership/v12",
         });
         publish_exact_private_file(
             &generation_root,
@@ -4747,7 +4747,7 @@ impl PrivateDindLifecycleV12 {
         })?;
         let observed = sha256(
             &[
-                b"serverware/private-dind-export-observed/v12\0"
+                b"catchplate/private-dind-export-observed/v12\0"
                     .as_slice(),
                 closure_sha256.as_slice(),
                 manifest_projection_sha256.as_slice(),
@@ -5518,7 +5518,7 @@ impl PrivateDindLifecycleV12 {
             }).collect::<Result<Vec<Value>>>()?,
             "socketDevice": socket_metadata.dev(),
             "socketInode": socket_metadata.ino(),
-            "version": "serverware/private-dind-observation/v12",
+            "version": "catchplate/private-dind-observation/v12",
         });
         Ok(sha256(
             &canonical_plan_bytes(&observation).map_err(|error| {
@@ -5694,7 +5694,7 @@ impl PrivateDindLifecycleV12 {
                 "terminalImages": resource_drain.terminal.images,
                 "terminalNetworks": resource_drain.terminal.networks,
                 "terminalVolumes": resource_drain.terminal.volumes,
-                "version": "serverware/private-dind-resource-drain/v12",
+                "version": "catchplate/private-dind-resource-drain/v12",
             }))
             .map_err(|error| {
                 ControllerError::InvalidOwned(error.to_string())
@@ -5703,7 +5703,7 @@ impl PrivateDindLifecycleV12 {
             sha256(&resource_observation);
         let observed_state_sha256 = sha256(
             &[
-                b"serverware/private-dind-terminal-state/v12\0"
+                b"catchplate/private-dind-terminal-state/v12\0"
                     .as_slice(),
                 observation.sha256.as_slice(),
                 resource_observation_sha256.as_slice(),
@@ -5713,7 +5713,7 @@ impl PrivateDindLifecycleV12 {
         let mut durable_observation =
             DockerGenerationDestructionObservationV12 {
                 version:
-                    "serverware/private-dind-destruction-observation/v12"
+                    "catchplate/private-dind-destruction-observation/v12"
                         .to_owned(),
                 boot_id_sha256: generation.boot_id_sha256,
                 plan_id: generation.plan_id,
@@ -5832,7 +5832,7 @@ impl PrivateDindLifecycleV12 {
                 "terminalVolumes":
                     durable_observation.terminal_volumes,
                 "version":
-                    "serverware/private-dind-resource-drain/v12",
+                    "catchplate/private-dind-resource-drain/v12",
             }))
             .map_err(|error| {
                 ControllerError::InvalidOwned(error.to_string())
@@ -5841,7 +5841,7 @@ impl PrivateDindLifecycleV12 {
             sha256(&resource_observation);
         let observed_state_sha256 = sha256(
             &[
-                b"serverware/private-dind-terminal-state/v12\0"
+                b"catchplate/private-dind-terminal-state/v12\0"
                     .as_slice(),
                 current_absence.sha256.as_slice(),
                 resource_observation_sha256.as_slice(),
@@ -5865,7 +5865,7 @@ impl PrivateDindLifecycleV12 {
         }
         let mut receipt = RootTerminalDestructionReceiptV12 {
             version:
-                "serverware/private-dind-terminal-destruction/v12"
+                "catchplate/private-dind-terminal-destruction/v12"
                     .to_owned(),
             trust_profile:
                 "trusted-host-userspace-digest-no-ima".to_owned(),
@@ -5938,7 +5938,7 @@ impl PrivateDindLifecycleV12 {
             .signing_key
             .sign(
                 &[
-                    b"serverware/private-dind-terminal-receipt/v12\0"
+                    b"catchplate/private-dind-terminal-receipt/v12\0"
                         .as_slice(),
                     unsigned.as_slice(),
                 ]
@@ -6047,7 +6047,7 @@ impl PrivateDindLifecycleV12 {
         exact_receipt: &[u8],
     ) -> Result<()> {
         if receipt.version
-                != "serverware/private-dind-terminal-destruction/v12"
+                != "catchplate/private-dind-terminal-destruction/v12"
             || receipt.trust_profile
                 != "trusted-host-userspace-digest-no-ima"
             || receipt.plan_id == [0; 32]
@@ -6128,7 +6128,7 @@ impl PrivateDindLifecycleV12 {
             .verifying_key()
             .verify(
                 &[
-                    b"serverware/private-dind-terminal-receipt/v12\0"
+                    b"catchplate/private-dind-terminal-receipt/v12\0"
                         .as_slice(),
                     unsigned.as_slice(),
                 ]
@@ -6274,7 +6274,7 @@ impl PrivateDindLifecycleV12 {
         operation: &DockerLaneOperationV12,
     ) -> PathBuf {
         self.config.cgroup_root.join(format!(
-            "serverware-coder-v12-{}",
+            "catchplate-coder-v12-{}",
             operation.daemon_generation,
         ))
     }
@@ -6421,7 +6421,7 @@ fn applied_result_v12(
 ) -> Result<Vec<u8>> {
     let transition_sha256 = sha256(
         &[
-            b"serverware/private-dind-applied-transition/v12\0"
+            b"catchplate/private-dind-applied-transition/v12\0"
                 .as_slice(),
             operation.request.request_sha256.as_slice(),
             observed_state_sha256.as_slice(),
@@ -7135,7 +7135,7 @@ fn directory_fd_identity_sha256_v12(fd: RawFd) -> Result<Digest> {
     }
     Ok(sha256(
         &[
-            b"serverware/private-dind-directory-fd/v12\0".as_slice(),
+            b"catchplate/private-dind-directory-fd/v12\0".as_slice(),
             stat.st_dev.to_be_bytes().as_slice(),
             stat.st_ino.to_be_bytes().as_slice(),
             stat.st_mode.to_be_bytes().as_slice(),
@@ -7240,7 +7240,7 @@ fn write_private_dind_pid_record_v12(
     netns_name: &str,
 ) -> Result<()> {
     let record = PrivateDindPidRecordV12 {
-        version: "serverware/private-dind-process/v12".to_owned(),
+        version: "catchplate/private-dind-process/v12".to_owned(),
         boot_id: current_boot_id()?,
         pid,
         start_time_ticks,
@@ -7273,7 +7273,7 @@ fn read_private_dind_pid_record_v12(
     if canonical_plan_bytes(&record).map_err(|error| {
         ControllerError::InvalidOwned(error.to_string())
     })? != bytes
-        || record.version != "serverware/private-dind-process/v12"
+        || record.version != "catchplate/private-dind-process/v12"
     {
         return Err(ControllerError::Rejected(
             "private DinD process record is noncanonical",
@@ -7349,7 +7349,7 @@ fn cleanup_private_dind_root_v12(
     // output filesystem. A busy or substituted output mount is an error, not
     // permission to detach it lazily or recurse through its contents.
     let cgroup = config.cgroup_root.join(format!(
-        "serverware-coder-v12-{}",
+        "catchplate-coder-v12-{}",
         generation.daemon_generation,
     ));
     generation_cgroup_v12::remove_generation(&cgroup, deadline)?;
@@ -7553,7 +7553,7 @@ fn observe_terminal_absence_v12(
         generation.daemon_generation,
     ));
     let cgroup = config.cgroup_root.join(format!(
-        "serverware-coder-v12-{}",
+        "catchplate-coder-v12-{}",
         generation.daemon_generation,
     ));
     let netns_absent = allocated_netns
@@ -7600,7 +7600,7 @@ fn observe_terminal_absence_v12(
         "retainedProcessIdentity": retained_process,
         "socketAbsent": socket_absent,
         "stateRootAbsent": state_root_absent,
-        "version": "serverware/private-dind-terminal-observation/v12",
+        "version": "catchplate/private-dind-terminal-observation/v12",
     });
     let digest = sha256(
         &canonical_plan_bytes(&value).map_err(|error| {
@@ -7664,7 +7664,7 @@ fn validate_private_dind_config_v12(
     ] {
         require_absolute_normalized(path)?;
     }
-    if config.netns_prefix != "serverware-coder-v12-"
+    if config.netns_prefix != "catchplate-coder-v12-"
         || config.inherited_proxy_executable_sha256 == [0; 32]
         || config.runtime_observer_policy.expected_observer_executable_sha256 == [0; 32]
         || config.runtime_observer_policy.authorized_observer_keys.is_empty()
@@ -8391,7 +8391,7 @@ fn image_inventory_sha256_parts(
     tuple: &DockerBuildTupleV11,
 ) -> Result<Digest> {
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"serverware/dind-oci-inventory/v11\0");
+    bytes.extend_from_slice(b"catchplate/dind-oci-inventory/v11\0");
     bytes.extend_from_slice(&source_seal_sha256);
     bytes.extend_from_slice(&tuple.context_cas_sha256);
     bytes.extend_from_slice(&tuple.dockerfile_cas_sha256);
@@ -8726,7 +8726,7 @@ fn local_transfer_tag(
         ControllerError::Invalid("OCI transfer image ID is malformed"),
     )?;
     Ok(format!(
-        "serverware-{phase}/{}:{}",
+        "catchplate-{phase}/{}:{}",
         handle.owner_namespace,
         &digest[..24],
     ))

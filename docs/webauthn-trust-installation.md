@@ -89,7 +89,7 @@ checkpoint, retry durably replaces those exact checkpoint bytes again. This
 preserves content/timestamp while retrying the state file and its own directory
 sync, including when state and bundle have different parent directories.
 
-Successful writes return `serverware.webauthnLocalInstallationObservation/v1`
+Successful writes return `catchplate.webauthnLocalInstallationObservation/v1`
 inside `local_installation`: exact bundle/state file digests, configured paths,
 bundle digest and the verification instant. This is unsigned local readback,
 not durable authority evidence, an immutable target identity or a completion

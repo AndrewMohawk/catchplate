@@ -23,10 +23,10 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_configuration as source
-from serverware import authority_challenge_planning as planning
-from serverware import authority_challenge_service as service
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_challenge_configuration as source
+from catchplate import authority_challenge_planning as planning
+from catchplate import authority_challenge_service as service
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 from test_authority_challenge_manifest import context
 
 
@@ -64,7 +64,7 @@ class Fixture:
                 responseSigningSpkiDigest=spki, attestationReceiptDigest=attestation)
         roles["planner"].update(plannerSessionIdentityDigest=digest(b"planner session"),
             maximumInternalAgeNs=12_000_000_000, enabledOperations=sorted(source._OPERATIONS),
-            databaseConnectTimeoutSeconds=2.75, databaseRole="serverware_policy_authority_planner",
+            databaseConnectTimeoutSeconds=2.75, databaseRole="catchplate_policy_authority_planner",
             tlsClientDn="CN=synthetic-planner", tlsClientSerial="17", tlsIssuerDn="CN=synthetic-ca")
         selected = {"schema": source.policy.SCHEMA,
             **{name: bounds[0] for name, bounds in source.policy._BOUNDS.items()}}
@@ -217,7 +217,7 @@ class ChallengeConfigurationControls(unittest.TestCase):
                         factory(object(), operation=operation, work=work())
         tree = ast.parse(inspect.getsource(service))
         for name, role, signing, descriptor in (("_producer_on_work", "planner", True,
-                "SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN"),
+                "CATCHPLATE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN"),
                 ("_verifier_on_work", "verifier", False, None)):
             node = next(item for item in tree.body if isinstance(item, ast.FunctionDef) and item.name == name)
             call = next(item for item in ast.walk(node) if isinstance(item, ast.Call)

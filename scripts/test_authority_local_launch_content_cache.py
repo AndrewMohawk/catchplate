@@ -22,8 +22,8 @@ from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import authority_local_artifact_measure as measure
-from serverware import authority_local_launch_authorization as subject
+from catchplate import authority_local_artifact_measure as measure
+from catchplate import authority_local_launch_authorization as subject
 
 
 class LaunchContentCacheTests(unittest.TestCase):

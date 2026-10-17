@@ -9,9 +9,9 @@ and LedgerAppend's other operations are not manufactured by this service.
 
 The explicit `nativeProofBridgeLaunch/v2` owner retains the four existing
 proof endpoints plus an independently inspected LedgerAppend connection. Its
-production runtime is `serverware.policyCustodyProductionRpcRuntime/v6`:
+production runtime is `catchplate.policyCustodyProductionRpcRuntime/v6`:
 existing generation admission remains required and `commitRequest` selects
-`serverware.nativeCommitRequestServices/v1` with exactly two raw, canonical
+`catchplate.nativeCommitRequestServices/v1` with exactly two raw, canonical
 ASCII `serviceGrantOriginals`, keyed by `durable-recovery-store` and
 `current-signature-authority`. It is not an incoming per-request enable flag.
 The old proof bridge/v1 and production runtime/v4-v5 retain their old meaning.
@@ -42,20 +42,20 @@ The old proof bridge/v1 and production runtime/v4-v5 retain their old meaning.
 The computation is exact seven fields: `apiVersion`, `nativeGrantSha256`,
 `request`, `result`, `resultSha256`, `computedAtBoottimeNanos`, and
 `signatureBase64url`. Its signature uses the existing protocol signature
-framing and domain `serverware.nativeShadowCommitRequestComputation.signature/v1`
+framing and domain `catchplate.nativeShadowCommitRequestComputation.signature/v1`
 over the ordered canonical tuple of the first six fields. The service command
-is exact `{apiVersion:"serverware.custodyCommitRequestTransition/v1",computation}`.
+is exact `{apiVersion:"catchplate.custodyCommitRequestTransition/v1",computation}`.
 Existing typed request/result decoders, not arbitrary JSON, govern those fields.
 The original request commitment context deliberately retains its existing
 snake_case serialization. No old domain or signature recipe changes.
 
 The native fixed service launch is exact
-`{apiVersion:"serverware.nativeShadowCommitRequestGuestLaunch/v1",keyAdmission,commitRequest}`.
+`{apiVersion:"catchplate.nativeShadowCommitRequestGuestLaunch/v1",keyAdmission,commitRequest}`.
 Its single activation is `commit-request-listener`; the existing retained
 privileged inspector is FD4. Its fixed socket is
-`/run/serverware-shadow-commit-request/listener.sock`, fixed directory
-`/run/serverware-shadow-commit-request`, and inspection domain
-`serverware.nativeShadowCommitRequestInspection/v1`. It uses the real native
+`/run/catchplate-shadow-commit-request/listener.sock`, fixed directory
+`/run/catchplate-shadow-commit-request`, and inspection domain
+`catchplate.nativeShadowCommitRequestInspection/v1`. It uses the real native
 key/closure/time/parent owner and original startup/lifetime, not a reconstructed
 production driver. The local Ed25519 inventory is exactly LedgerAppend.
 
@@ -65,18 +65,18 @@ The HMAC is independently provisioned 32-byte nonzero secret material. It is
 not derived from, equal to, exported with, or treated as an Ed25519 signing
 seed. The actual assignment's observation-window key ID and epoch are
 independently authorized by
-`serverware.nativeShadowRequestCommitmentAssignment.signature/v1`; that key ID
+`catchplate.nativeShadowRequestCommitmentAssignment.signature/v1`; that key ID
 must differ from all eighteen custody Ed25519 roles.
 
 The public commitment is SHA256 of
-`b"serverware/native-shadow-request-commitment-secret/v1\0" + secret32`.
+`b"catchplate/native-shadow-request-commitment-secret/v1\0" + secret32`.
 The additive encrypted-delivery/v2 profile extends the fixed local inventory
 and private bundle with `requestCommitment`. KMS context purpose is exactly
 `native-shadow-local-role-keys-and-request-commitment/v2`; assignment purpose is
 `kms-recipient-shadow-local-keys-and-request-commitment`. The admitted helper's
 real RSA recipient quote binds the complete inventory, real final-role
 recipient and same original deadline. The v2 NSM nonce is SHA256 of
-`b"serverware/native-shadow-kms-nonce/v2\0" + originalChallenge32`.
+`b"catchplate/native-shadow-kms-nonce/v2\0" + originalChallenge32`.
 
 The existing isolated offline encryption entry consumes sealed FD3 public
 inventory, FD4 independently provisioned private bundle and FD5 KEK. It emits
@@ -91,7 +91,7 @@ Ed25519 subset; this does not invent a nineteenth role or HMAC TEE result.
 ## Ordinary-service inputs and fixed entry
 
 Only DurableRecoveryStore and CurrentSignatureAuthority select ordinary
-runtime `serverware.policyCustodyServiceRuntimeConfig/v6`. It requires both
+runtime `catchplate.policyCustodyServiceRuntimeConfig/v6`. It requires both
 `generationAdmission:{grantFdName:"generation-grant"}` and
 `dispatchAdmission:{grantFdName:"dispatch-grant"}`. The two-role activation
 inventory is the existing role-specific business inventory followed by

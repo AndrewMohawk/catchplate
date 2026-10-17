@@ -87,7 +87,7 @@ def main(argv=None):
     def cancelled(signo, frame): raise KeyboardInterrupt()
     for signo in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP): signal.signal(signo, cancelled)
     try:
-        from serverware.authority_local_keys import LocalKeyProvisioner
+        from catchplate.authority_local_keys import LocalKeyProvisioner
         from scripts.authority import native_pilot_authority_io as io
         owner = LocalKeyProvisioner(**arguments(argv))
         raw = owner.run()

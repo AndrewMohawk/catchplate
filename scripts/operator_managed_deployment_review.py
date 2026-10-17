@@ -27,15 +27,15 @@ OLD_SOURCE, OLD_SHA, OLD_BINARY = legacy.NEW_SOURCE, legacy.NEW_SHA, legacy.NEW_
 NEW_COMMIT = "9222b4c090d77aa983d3c01be34e0a2ba79f8e6c"
 NEW_SOURCE = legacy.ARTIFACTS + "source-" + NEW_COMMIT
 NEW_SHA = "333ff7a3db00ab2bf03644fc965aed9b691bdd6ddc4ec651273e6d0c36f053e0"
-NEW_BINARY = legacy.ARTIFACTS + "sha256-" + NEW_SHA + "/serverware-decision-gate"
+NEW_BINARY = legacy.ARTIFACTS + "sha256-" + NEW_SHA + "/catchplate-decision-gate"
 SOURCE_MANIFEST_SHA = "b724e252161476dbd5106aadbb71c4229afb36e47c1528e4678e166333f7a3da"
-EVIDENCE = Path(legacy.ARTIFACTS).parent / "serverware-operator-workspace-evidence/managed-retained.qBkamJ3p"
+EVIDENCE = Path(legacy.ARTIFACTS).parent / "catchplate-operator-workspace-evidence/managed-retained.qBkamJ3p"
 JOIN = EVIDENCE / "compiled-source-join.json"
 JOIN_SHA = "1f03a59d9cb4a7f39891d7bb0c2eb7719dc608bb90177db7eb5466c5d1adef4c"
-DATA_ROOT = Path("/srv/catchplate-fast/homelab_data/serverware-operator-demo")
+DATA_ROOT = Path("/srv/catchplate-fast/homelab_data/catchplate-operator-demo")
 APP_DATA = DATA_ROOT / "app-data"
-PROVIDER_CUSTODY = Path("/srv/catchplate-fast/homelab_data/serverware-operator-demo-google-provider")
-LEAVES = (".operator-publication.lock", ".serverware-operator-demo.json",
+PROVIDER_CUSTODY = Path("/srv/catchplate-fast/homelab_data/catchplate-operator-demo-google-provider")
+LEAVES = (".operator-publication.lock", ".catchplate-operator-demo.json",
     "mitmproxy/mitmproxy-ca-cert.pem", "mitmproxy/mitmproxy-ca.pem")
 MANAGED = legacy.STACK / "docker-compose.managed-google-candidate.yml"
 CURATED = legacy.STACK / "docker-compose.curated-gate.yml"
@@ -44,17 +44,17 @@ PINS = {**legacy.PINS,
     MANAGED: "946691442ff1a78f43c8a919fb8e97fcedcb80bfca93c20ae5751c6dd1ca522b",
     CURATED: "e5335f471f60a2cb918d7e2e201c469012655efcba38fed86ceb6608cf71d6b5"}
 APP_MANAGED_ENV = {
-    "SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED": "1",
-    "SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR": "/provider-custody",
-    "SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED": "1",
-    "SERVERWARE_PROCESS_MODE": "serverware-control-plane", "SERVERWARE_METADATA_STORE_BACKEND": "sqlite",
-    "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite", "SERVERWARE_GRANT_STORE_BACKEND": "sqlite",
-    "SERVERWARE_RELEASE_CHANNEL": "dev", "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
-    "SERVERWARE_KEY_RELEASE_REQUIRED": "0", "SERVERWARE_DEV_AUTHENTICATOR": "0", "SERVERWARE_DEV_DEMO_SEED": "0"}
-FRESH_FLAGS = frozenset(("SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED",
-    "SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR", "SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED"))
-APP_ENV_DELTA = "serverware explicit managed development ownership"
-APP_CUSTODY_DELTA = "serverware app-only provider custody bind"
+    "CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED": "1",
+    "CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR": "/provider-custody",
+    "CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED": "1",
+    "CATCHPLATE_PROCESS_MODE": "catchplate-control-plane", "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_AUDIT_STORE_BACKEND": "sqlite", "CATCHPLATE_GRANT_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_RELEASE_CHANNEL": "dev", "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
+    "CATCHPLATE_KEY_RELEASE_REQUIRED": "0", "CATCHPLATE_DEV_AUTHENTICATOR": "0", "CATCHPLATE_DEV_DEMO_SEED": "0"}
+FRESH_FLAGS = frozenset(("CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED",
+    "CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR", "CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED"))
+APP_ENV_DELTA = "catchplate explicit managed development ownership"
+APP_CUSTODY_DELTA = "catchplate app-only provider custody bind"
 GATE_ENV_DELTA = "decision-gate-rs managed public configuration"
 GATE_DATA_DELTA = "decision-gate-rs curated data and four original read-only leaves"
 APPROVED_DELTAS = legacy.APPROVED_DELTAS | {APP_ENV_DELTA, APP_CUSTODY_DELTA, GATE_ENV_DELTA, GATE_DATA_DELTA}
@@ -71,7 +71,7 @@ RETAINED_LAYER = legacy.STACK / "docker-compose.npm-publish-candidate.yml"
 RETAINED_CANDIDATE = {
     "binary_sha256": "82a99cf00a7763dd1187f86607ffe2415487e98734f4b7d585f44909150e7b85",
     "layer_sha256": "d2ef222b896243a7e582ea9f84a44a6b160ebf8cca058bd7a45196393451d383",
-    "join_path": Path("/srv/catchplate-fast/tmp/serverware-catalog-timing-validation.qg5M5tPT/compiled-source-join.json"),
+    "join_path": Path("/srv/catchplate-fast/tmp/catchplate-catalog-timing-validation.qg5M5tPT/compiled-source-join.json"),
     "join_sha256": "3b39eadb5829cb20c07f27f185829775ec9bf34798dca2ff08ee4e1c62f749ef",
     "compiler_input_files": 499,
 }
@@ -103,7 +103,7 @@ def selection(transition_mode):
     require(isinstance(pins["join_path"], Path) and pins["join_path"].is_absolute()
         and ".." not in pins["join_path"].parts and type(pins["compiler_input_files"]) is int
         and 1 <= pins["compiler_input_files"] <= 4096, "retained compiler receipt pins")
-    binary = legacy.ARTIFACTS + "sha256-" + pins["binary_sha256"] + "/serverware-decision-gate"
+    binary = legacy.ARTIFACTS + "sha256-" + pins["binary_sha256"] + "/catchplate-decision-gate"
     selected.update(commit=RETAINED_COMMIT, source=RETAINED_SOURCE, binary_sha256=pins["binary_sha256"],
         binary=binary, source_manifest_sha256=RETAINED_MANIFEST_SHA, source_files=RETAINED_SOURCE_FILES,
         join_path=pins["join_path"], join_sha256=pins["join_sha256"], compiler_source_commit=RETAINED_COMPILER_COMMIT,
@@ -150,20 +150,20 @@ def candidate_service(name, proposed, provider_custody):
     """Admit new fields independently, before comparison to retained settings."""
     provider_path(provider_custody)
     environment = proposed.get("environment", {})
-    require(not any(key.startswith("SERVERWARE_GOOGLE_") or key == "SERVERWARE_OPERATOR_GOOGLE_PROFILE"
+    require(not any(key.startswith("CATCHPLATE_GOOGLE_") or key == "CATCHPLATE_OPERATOR_GOOGLE_PROFILE"
         for key in environment), "external Google profile refused")
     mounts = volumes(proposed["volumes"])
-    if name == "serverware":
+    if name == "catchplate":
         require(all(environment.get(key) == value for key, value in APP_MANAGED_ENV.items()), "managed app environment")
         admitted_bind(mounts.get("/provider-custody"), provider_custody, "/provider-custody", False)
         require(mounts.get("/data", {}).get("source") == str(APP_DATA), "fixed app data source")
     elif name == "decision-gate-rs":
-        require(environment.get("SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED") == "1"
-            and "SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR" not in environment, "managed gate environment")
+        require(environment.get("CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED") == "1"
+            and "CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR" not in environment, "managed gate environment")
         admitted_bind(mounts.get("/data"), APP_DATA / "gate-runtime", "/data", True)
         for leaf in LEAVES:
             admitted_bind(mounts.get("/data/" + leaf), APP_DATA / leaf, "/data/" + leaf, True)
-    require(all(row["source"] != str(provider_custody) or name == "serverware" and row["target"] == "/provider-custody"
+    require(all(row["source"] != str(provider_custody) or name == "catchplate" and row["target"] == "/provider-custody"
         for row in mounts.values()), "provider custody exposure")
 
 
@@ -178,10 +178,10 @@ def compare_service(name, proposed, live, image, networks, *, provider_custody=P
         return legacy.compare_service(name, proposed, live, image, networks, digest_file=digest_file,
             transition=selected["transition"])
     retained = legacy.envmap(live["Config"].get("Env"))
-    require(not any(key in FRESH_FLAGS or key.startswith("SERVERWARE_GOOGLE_")
-        or key == "SERVERWARE_OPERATOR_GOOGLE_PROFILE" for key in retained), "baseline managed profile already present")
+    require(not any(key in FRESH_FLAGS or key.startswith("CATCHPLATE_GOOGLE_")
+        or key == "CATCHPLATE_OPERATOR_GOOGLE_PROFILE" for key in retained), "baseline managed profile already present")
     normalized, changes = deepcopy(proposed), set()
-    if name == "serverware":
+    if name == "catchplate":
         for key, value in APP_MANAGED_ENV.items():
             require(key not in retained or retained[key] == value, "retained ownership flag differs")
             if key not in retained:
@@ -189,7 +189,7 @@ def compare_service(name, proposed, live, image, networks, *, provider_custody=P
         normalized["volumes"] = [row for row in normalized["volumes"] if row["target"] != "/provider-custody"]
         changes.update((APP_ENV_DELTA, APP_CUSTODY_DELTA))
     elif name == "decision-gate-rs":
-        del normalized["environment"]["SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED"]
+        del normalized["environment"]["CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED"]
         normalized["volumes"] = [row for row in normalized["volumes"] if row["target"] not in {"/data/" + leaf for leaf in LEAVES}]
         volumes(normalized["volumes"])["/data"]["source"] = str(APP_DATA)
         changes.update((GATE_ENV_DELTA, GATE_DATA_DELTA))
@@ -206,7 +206,7 @@ def compare_candidate_runtime(name, proposed, live, image, networks, *, provider
     changes = legacy.compare_service(name, proposed, live, image, networks, digest_file=digest_file,
         transition=(selected["source"], selected["source"], selected["binary_sha256"], selected["binary_sha256"],
             selected["binary"], selected["binary"]))
-    expected = {"serverware": {legacy.APP_DELTA, legacy.DIGEST_DELTA},
+    expected = {"catchplate": {legacy.APP_DELTA, legacy.DIGEST_DELTA},
         "decision-gate-rs": {legacy.BINARY_DELTA}}.get(name, set())
     require(changes == expected, "candidate exact configuration")
     return set()
@@ -225,7 +225,7 @@ def compare_model(model, observed, images, *, provider_custody=PROVIDER_CUSTODY,
         changes.update(compare(name, proposed, observed[name], images[proposed["image"]], model["networks"],
             provider_custody=provider_custody, digest_file=digest_file, transition_mode=transition_mode))
     require(changes == (selected["approved_deltas"] if phase == "proposed" else set()), "closed managed transition")
-    result = {"ok": True, "schema": "serverware.operatorManagedDeploymentReview/v1", "phase": phase,
+    result = {"ok": True, "schema": "catchplate.operatorManagedDeploymentReview/v1", "phase": phase,
         "sourceCommit": selected["commit"], "candidateBinarySha256": selected["binary_sha256"], "approvedDifferences": sorted(changes),
         "notificationsRetained": True, "retainedServicesMustNotBeRecreated": ["demo-upstream", "edge"],
         "providerCustodyMetadataVerified": False, "curatedFilesystemVerified": False,
@@ -265,7 +265,7 @@ def custody_metadata(provider_custody):
     require((final.st_dev, final.st_ino, final.st_uid, final.st_gid, final.st_mode, final.st_mtime_ns, final.st_ctime_ns)
         == (info.st_dev, info.st_ino, info.st_uid, info.st_gid, info.st_mode, info.st_mtime_ns, info.st_ctime_ns)
         and not list(provider.iterdir()), "provider metadata changed")
-    return {"ok": True, "schema": "serverware.operatorManagedProviderDirectoryReview/v1", "empty": True,
+    return {"ok": True, "schema": "catchplate.operatorManagedProviderDirectoryReview/v1", "empty": True,
         "uid": info.st_uid, "gid": info.st_gid, "mode": stat.S_IMODE(info.st_mode),
         "device": info.st_dev, "inode": info.st_ino, "retainedDirectoryAliasesAbsent": True,
         "privateFileContentsRead": False, "runtimeMutationsPerformed": False, "rolloutVerified": False}
@@ -274,7 +274,7 @@ def custody_metadata(provider_custody):
 def _retained_compiler_join(selected):
     """Exact original receipt contract, not a newly generated compatibility receipt."""
     return {
-        "schema": "serverware.pythonSnapshotCompilerEquality/v1",
+        "schema": "catchplate.pythonSnapshotCompilerEquality/v1",
         "sourceCommit": selected["commit"],
         "sourceTree": "23e2f96a8c0e9b9fbfbc25b272b1e42ccffe2f1e",
         "sourceManifestSha256": selected["source_manifest_sha256"],
@@ -298,9 +298,9 @@ def _retained_compiler_join(selected):
             "docs/operator-npm-publish.md", "scripts/check_operator_npm_publish.py",
             "scripts/test_operator_catalog_header_replacement.py",
             "scripts/test_operator_catalog_mutation_receipts.py", "scripts/test_operator_catalog_timing.py",
-            "scripts/test_operator_npm_publish_breadcrumbs.py", "serverware/app.py",
-            "serverware/operator_catalog_api.py", "serverware/operator_catalog_mutations.py",
-            "serverware/operator_catalog_timing.py",
+            "scripts/test_operator_npm_publish_breadcrumbs.py", "catchplate/app.py",
+            "catchplate/operator_catalog_api.py", "catchplate/operator_catalog_mutations.py",
+            "catchplate/operator_catalog_timing.py",
         ],
         "externalCompilerInputs": [
             "schemas/adapters/generic.rest.schema.json", "schemas/adapters/gmail.read.v1.schema.json",

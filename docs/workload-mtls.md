@@ -10,17 +10,17 @@ enrollment still require the
 ## Keep the two TLS layers separate
 
 ```text
-application -- outer TLS + workload client certificate --> Serverware
-            -- CONNECT, then inner provider-name TLS ----> Serverware
+application -- outer TLS + workload client certificate --> Catchplate
+            -- CONNECT, then inner provider-name TLS ----> Catchplate
                                                          -- upstream TLS --> provider
 ```
 
 | Material | Purpose | Where it belongs |
 | --- | --- | --- |
-| Workload certificate and private key | Authenticate the workload to Serverware. | Outer HTTPS-proxy client identity only. |
-| Independently verified proxy CA | Authenticate Serverware's outer TLS name and certificate. | HTTPS-proxy trust configuration. |
+| Workload certificate and private key | Authenticate the workload to Catchplate. | Outer HTTPS-proxy client identity only. |
+| Independently verified proxy CA | Authenticate Catchplate's outer TLS name and certificate. | HTTPS-proxy trust configuration. |
 | Verifier-installed interception CA | Verify the provider-name leaf inside CONNECT. | That workload's inner HTTPS trust configuration. |
-| Provider API key or OAuth token | Authorize the permitted upstream operation. | Serverware's credential-use boundary, never the workload. |
+| Provider API key or OAuth token | Authorize the permitted upstream operation. | Catchplate's credential-use boundary, never the workload. |
 
 The two CA roles may use the same admitted certificate in a particular deployment,
 but neither role follows merely from possessing a PEM file. Do not put the
@@ -74,7 +74,7 @@ not silently change the Python client's existing identity or retry behavior.
 
 ## Explicit Python workload client
 
-The source [WorkloadProxyClient](../serverware_agent_trust/workload_client.py)
+The source [WorkloadProxyClient](../catchplate_agent_trust/workload_client.py)
 supports synchronous, buffered HTTP(S) calls on Linux with Python 3.11 or newer.
 It uses Python's standard TLS implementation and the package's existing pinned
 `cryptography==50.0.0`; no additional dependency is introduced. Use an independently
@@ -87,7 +87,7 @@ the untrusted file being checked. Provision the workload identity and admit both
 CA roles before constructing the client; `PinnedFile` is not an admission result.
 
 ```python
-from serverware_agent_trust.workload_client import (
+from catchplate_agent_trust.workload_client import (
     PinnedFile, WorkloadClientError, WorkloadProxyClient,
 )
 
@@ -105,7 +105,7 @@ try:
         interception_ca=PinnedFile(
             "/run/workload/interception-ca.pem", "sha256:<INTERCEPTION_CA_64_HEX>"),
         proxy_headers={
-            "X-Serverware-Enrollment-Session": "SESSION_FROM_VERIFIED_PACKET",
+            "X-Catchplate-Enrollment-Session": "SESSION_FROM_VERIFIED_PACKET",
         },
         timeout_ms=30_000,
         max_response_bytes=1024 * 1024,
@@ -120,13 +120,13 @@ try:
             raise RuntimeError(f"Request returned HTTP {response.status}; no automatic retry")
         application_bytes = response.body
 except WorkloadClientError:
-    raise RuntimeError("Serverware transport failed; dispatch outcome may be unknown") from None
+    raise RuntimeError("Catchplate transport failed; dispatch outcome may be unknown") from None
 ```
 
 Use the signed handoff's actual required proxy headers; omit `proxy_headers` if
 none are required. For HTTPS, they appear on CONNECT only, while `request(headers=...)`
 appears inside the provider-name TLS session. Provider headers cannot contain
-`proxy-*` or `X-Serverware-Enrollment-Session`. Plain HTTP uses absolute-form HTTP
+`proxy-*` or `X-Catchplate-Enrollment-Session`. Plain HTTP uses absolute-form HTTP
 inside outer mTLS; proxy and provider header names must not overlap, even with
 equal values in the explicit constructor. Signed-handoff mode below handles
 the packet's equal duplicated identity headers separately. No provider API key
@@ -249,14 +249,14 @@ curl --disable --fail-with-body --noproxy '' --proto '=https' \
   --proxy-cert /workload/client-chain.pem \
   --proxy-key /workload/private/client-key.pem \
   --cacert /workload/verified-interception-ca.pem \
-  --proxy-header 'X-Serverware-Enrollment-Session: SESSION_FROM_VERIFIED_PACKET' \
+  --proxy-header 'X-Catchplate-Enrollment-Session: SESSION_FROM_VERIFIED_PACKET' \
   https://api.example.invalid/approved-read
 ```
 
 Use the signed packet's actual proxy, permitted read URL, enrollment header and
 any additional identity headers. Preserve its egress restrictions and canaries.
 No provider credential, insecure verification switch, redirect or retry is added.
-The Serverware ingress requires TLS 1.3; the chosen curl/TLS build must support
+The Catchplate ingress requires TLS 1.3; the chosen curl/TLS build must support
 that negotiation. Curl's `--proxy-tlsv1` means TLS 1.0 or newer, not a TLS 1.3
 requirement; it is intentionally absent. See its
 [documented semantics](https://curl.se/docs/manpage.html#--proxy-tlsv1).

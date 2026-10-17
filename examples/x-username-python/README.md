@@ -25,14 +25,14 @@ Use only a deployment that advertises the complete `x_username_read_v1` preset:
 2. Save the real X app-only bearer token using **X app bearer** (`x_app_bearer_v1`).
    Saving it makes no provider request and grants no application access.
 3. Create an application with Basic proxy authentication enabled. Save its ID and
-   one-time Serverware application token.
+   one-time Catchplate application token.
 4. Grant **X username: read** for exactly the lowercase username used below, and
    confirm that the proxy has loaded the saved policy.
 5. Download the interception CA through the authenticated operator interface.
    Obtain any separate private CA for the outer proxy from a trusted operator.
 
 The program never receives the real X token. XDK uses the public bearer dummy
-`serverware-x-placeholder-v1`; Serverware replaces it after admission. An OAuth
+`catchplate-x-placeholder-v1`; Catchplate replaces it after admission. An OAuth
 credential, generic bearer grant or existing `x.v2` rule is not this preset.
 
 ## Run when the paired preset is available
@@ -43,12 +43,12 @@ After installing the requirements, download **Private client configuration**
 and the interception CA from **Proxy setup**. The shortest invocation is:
 
 ```sh
-.venv/bin/python -B username.py --config /private/path/serverware-client.private.json
+.venv/bin/python -B username.py --config /private/path/catchplate-client.private.json
 ```
 
 The complete download selects the exact permitted lowercase username. Relative
 CA paths resolve beside the JSON file. Keep it private: it contains the scoped
-Serverware application token. Expired tokens and mismatched permissions are
+Catchplate application token. Expired tokens and mismatched permissions are
 refused; commands, headers and bodies in the file are inert. No X token is needed
 on the client. The environment-only invocation remains available:
 
@@ -56,17 +56,17 @@ on the client. The environment-only invocation remains available:
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 
-export SERVERWARE_PROXY_URL='https://your-proxy-host:443'
-export SERVERWARE_APP_ID='your-application-uuid'
-export SERVERWARE_CA_FILE='/absolute/path/serverware-ca.pem'
-export SERVERWARE_X_USERNAME='example'
+export CATCHPLATE_PROXY_URL='https://your-proxy-host:443'
+export CATCHPLATE_APP_ID='your-application-uuid'
+export CATCHPLATE_CA_FILE='/absolute/path/catchplate-ca.pem'
+export CATCHPLATE_X_USERNAME='example'
 # Optional, only for a private outer proxy certificate:
-# export SERVERWARE_PROXY_CA_FILE='/absolute/path/proxy-ca.pem'
-read -rsp 'Serverware application token: ' SERVERWARE_PROXY_TOKEN; echo
-export SERVERWARE_PROXY_TOKEN
+# export CATCHPLATE_PROXY_CA_FILE='/absolute/path/proxy-ca.pem'
+read -rsp 'Catchplate application token: ' CATCHPLATE_PROXY_TOKEN; echo
+export CATCHPLATE_PROXY_TOKEN
 
 .venv/bin/python -B username.py
-unset SERVERWARE_PROXY_TOKEN
+unset CATCHPLATE_PROXY_TOKEN
 ```
 
 Use the actual saved username: `[a-z0-9_]{1,15}`, without `@`. Input is not silently
@@ -97,16 +97,16 @@ requests or invent a timeout option. Redirects are refused before another reques
 
 Those timeouts are not wall-clock limits. The launcher starts one isolated Python
 child with a 60-second deadline and does not retry. Its environment contains only
-the explicit Serverware inputs. Requests `trust_env=False` additionally prevents
+the explicit Catchplate inputs. Requests `trust_env=False` additionally prevents
 ambient proxies, bypass lists, CA overrides and `.netrc` authentication. No HOME,
 Python path or TLS-key-log setting is inherited or reassigned.
 
 Both TLS connections verify certificates and hostnames:
 
 - Inner destination TLS: a temporary client-only bundle combines certifi public
-  roots and `SERVERWARE_CA_FILE`; it is removed after the SDK session closes.
+  roots and `CATCHPLATE_CA_FILE`; it is removed after the SDK session closes.
 - Outer proxy TLS: a separate verified context uses certifi roots and, only when
-  supplied, `SERVERWARE_PROXY_CA_FILE`. The interception CA is not automatically
+  supplied, `CATCHPLATE_PROXY_CA_FILE`. The interception CA is not automatically
   trusted for this connection. This uses urllib3's documented
   [proxy TLS context](https://urllib3.readthedocs.io/en/stable/advanced-usage.html#http-and-https-proxies),
   whose [pinned implementation](https://github.com/urllib3/urllib3/blob/2.8.0/src/urllib3/connection.py)

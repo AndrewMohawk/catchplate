@@ -19,13 +19,13 @@ fn config() -> (Value, SigningKey) {
             "PCR2":format!("sha384:{}", "3".repeat(96))},"expectedEif":format!("sha384:{}", "1".repeat(96)),
         "maxAgeSeconds":60,"futureSkewSeconds":2,"instanceId":"spiffe://synthetic.test/gate",
         "secretKekId":format!("attested-memory-kek:{}", "4".repeat(24))});
-    (json!({"apiVersion":"serverware.nativeJitReviewConfiguration/v2","controlPlaneConfigurationDigest":pin('e'),
+    (json!({"apiVersion":"catchplate.nativeJitReviewConfiguration/v2","controlPlaneConfigurationDigest":pin('e'),
         "instanceId":target["instanceId"],"secretKekId":target["secretKekId"],"nativeJitReviewCustodyPolicy":{
-            "schema":"serverware.nativeJitReviewCustodyAuthorityPolicy/v1","sourceContractDigest":pin('f'),
+            "schema":"catchplate.nativeJitReviewCustodyAuthorityPolicy/v1","sourceContractDigest":pin('f'),
             "reservationTtlSeconds":15,"operationMaxSeconds":10,"attemptCapacity":4,"deploymentId":"synthetic-jit",
             "assignmentAuthorizer":{"publicKeyPem":pem,"publicKeyPemSha256":sha(pem.as_bytes()),
                 "publicKeySpkiSha256":sha(der.as_bytes())},"target":target,"trustRoots":{
-                "apiVersion":"serverware.nativeJitReviewNativeTrustRoots/v1","awsNitroRootCertificatesPem":[ca],
+                "apiVersion":"catchplate.nativeJitReviewNativeTrustRoots/v1","awsNitroRootCertificatesPem":[ca],
                 "awsNitroCrlsDerBase64url":[],"nitroCertificateProfile":{
                     "profileId":"aws-nitro-attestation-pki-native-v1","allowedLeafExtendedKeyUsageOids":[]}}}}), signing)
 }
@@ -37,15 +37,15 @@ fn signed(config: &Value, key: &SigningKey) -> Value {
     item["holderId"] = json!(current::holder_id(&boot, &key_id).unwrap());
     for field in ["configurationSha256", "caCertificateSha256", "caPublicKeySpkiSha256"] { item[field] = json!(pin('8')); }
     item["expectedModuleId"] = json!("synthetic-module");
-    let payload = json!({"schema":"serverware.nativeJitReviewAssignment/v1","sourceContractDigest":p["sourceContractDigest"],
+    let payload = json!({"schema":"catchplate.nativeJitReviewAssignment/v1","sourceContractDigest":p["sourceContractDigest"],
         "controlPlaneConfigurationDigest":config["controlPlaneConfigurationDigest"],"deploymentId":p["deploymentId"],
         "assignment":item,"issuedAtEpochNs":100,"expiresAtEpochNs":1_000_000_100u64});
-    let mut result = json!({"schema":"serverware.signedNativeJitReviewAssignment/v1","payload":payload,"signature":""});
+    let mut result = json!({"schema":"catchplate.signedNativeJitReviewAssignment/v1","payload":payload,"signature":""});
     resign(&mut result, key); result
 }
 fn resign(value: &mut Value, key: &SigningKey) {
     let raw = canonical_ascii_bytes(&value["payload"]).unwrap();
-    let mut hash = Sha256::new(); hash.update(b"serverware.signedNativeJitReviewAssignment/v1\0");
+    let mut hash = Sha256::new(); hash.update(b"catchplate.signedNativeJitReviewAssignment/v1\0");
     hash.update((raw.len() as u64).to_be_bytes()); hash.update(&raw);
     let signature = key.sign(format!("sha256:{}", hex::encode(hash.finalize())).as_bytes());
     value["signature"] = json!(URL_SAFE_NO_PAD.encode(signature.to_bytes()));
@@ -59,7 +59,7 @@ fn cold_configuration_is_closed_distinct_and_not_admission() {
     let (c, _) = config(); parsed(&c).validate().unwrap();
     let mut extra = c.clone(); extra["admitted"] = json!(true);
     assert!(serde_json::from_value::<Configuration>(extra).is_err());
-    for version in ["serverware.nativeJitReviewConfiguration/v1", "serverware.nativeStaticCredentialConfiguration/v1"] {
+    for version in ["catchplate.nativeJitReviewConfiguration/v1", "catchplate.nativeStaticCredentialConfiguration/v1"] {
         let mut bad = c.clone(); bad["apiVersion"] = json!(version); assert!(parsed(&bad).validate().is_err());
     }
     let broker = serde_json::to_value(parsed(&c).broker().unwrap()).unwrap();
@@ -81,7 +81,7 @@ fn cold_policy_bounds_keys_target_and_trust_do_not_alias() {
     assert!(parsed(&bad).validate().is_err());
     let mut bad = c.clone(); bad["nativeJitReviewCustodyPolicy"]["assignmentAuthorizer"]["publicKeyPemSha256"] = json!(pin('1'));
     assert!(parsed(&bad).validate().is_err());
-    let mut bad = c.clone(); bad["nativeJitReviewCustodyPolicy"]["trustRoots"]["apiVersion"] = json!("serverware.staticCredentialNativeTrustRoots/v1");
+    let mut bad = c.clone(); bad["nativeJitReviewCustodyPolicy"]["trustRoots"]["apiVersion"] = json!("catchplate.staticCredentialNativeTrustRoots/v1");
     assert!(parsed(&bad).validate().is_err());
 }
 
@@ -112,7 +112,7 @@ fn assignment_source_config_target_interval_and_envelope_are_exact() {
     let mut bad = s.clone(); bad["payload"]["expiresAtEpochNs"] = json!(86_400_000_000_101u64);
     resign(&mut bad, &key); assert!(!verify(&c, &bad, 101));
     assert!(!verify(&c, &s, 99)); assert!(!verify(&c, &s, 1_000_000_100));
-    let mut bad = s.clone(); bad["schema"] = json!("serverware.signedStaticCredentialAssignment/v1"); assert!(!verify(&c, &bad, 101));
+    let mut bad = s.clone(); bad["schema"] = json!("catchplate.signedStaticCredentialAssignment/v1"); assert!(!verify(&c, &bad, 101));
     let mut bad = s.clone(); bad["signatureBase64Url"] = bad["signature"].clone(); assert!(!verify(&c, &bad, 101));
     let mut raw = canonical_ascii_bytes(&s).unwrap(); raw.push(b' ');
     assert!(assignment::signed_original(&parsed(&c), &raw, 101).is_err());

@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-bootstrap-client-capture.v2.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-bootstrap-client-capture.v2.schema.json",
   "title": "Local native bootstrap client original capture with installation v2",
   "description": "Public local capture, not an authenticated receipt or issuance/installation authority. The producing client emits one UTF-8 JSON line including exactly one final LF, at most 1572864 bytes. Exact bootstrap evidence is retained alongside the local installation diagnostic for later packet extraction without a second bootstrap attempt. Keep actual producer exit status separately; a valid shape cannot prove successful acquisition or installation. Explicit v2 only; v1 remains closed to the installation member.",
   "type": "object", "additionalProperties": false,
   "required": ["apiVersion", "resultScope", "okForAction", "configurationSha256", "requestSha256", "endpoint", "challengeSource", "evidenceBase64url", "verification", "installation"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeBootstrapClientCapture/v2"},
+    "apiVersion": {"const": "catchplate.nativeBootstrapClientCapture/v2"},
     "resultScope": {"const": "local-fixed-endpoint-bootstrap-and-host-installation"},
     "okForAction": {"const": false},
     "configurationSha256": {"$ref": "#/$defs/digest"},

@@ -30,7 +30,7 @@ These implementations are **unbuilt and
 unexecuted**, not a public endpoint, registered kernel, observed SQL commit or
 deployed release.
 
-[`TypedTransitionPlanningProgram._produce_revocation_plan`](../serverware/authority_planner.py)
+[`TypedTransitionPlanningProgram._produce_revocation_plan`](../catchplate/authority_planner.py)
 accepts a raw typed request, manifest and assertion, fifteen explicit evaluation
 context fields, a caller-owned read-only MVCC cursor, actual signing and pinned
 verification keys, and the existing invocation work object. There is no
@@ -48,7 +48,7 @@ it is not promoted into independently trusted current time.
 
 ## Configured read-to-persist owner
 
-[`RevocationPlanningCoordinator`](../serverware/authority_revocation_coordinator.py)
+[`RevocationPlanningCoordinator`](../catchplate/authority_revocation_coordinator.py)
 is configured with a read DSN, actual `PlannerIdentity`, connection timeout,
 planner private key and exact `RevocationPlannerPersistence`. Its
 `produce_and_persist` method accepts raw request/evidence, the thirteen context
@@ -163,7 +163,7 @@ of six-role read indexes and genuinely written indexes. The observed vector is
 compared canonically with the independent expected vector before packaging.
 Unused potential heads cannot be smuggled into the closed proof document.
 
-The [proof packager](../serverware/authority_revocation_proof_bundle.py) receives
+The [proof packager](../catchplate/authority_revocation_proof_bundle.py) receives
 the original roots, merged primary proofs, QueryReads, range frontiers, actual
 mutations and acquired write frontiers. Its private `_derive_on_work` attaches
 the existing work object and runs the genuine mixed proof engine. This is
@@ -180,7 +180,7 @@ schema, source revision and `databaseCutoffUs` to form canonical eighteen-field
 bytes. It does not resample the clock, parse a replacement context or infer
 authority from matching values.
 
-The [production helper](../serverware/authority_revocation_plan_production.py)
+The [production helper](../catchplate/authority_revocation_plan_production.py)
 uses the existing authorization, framing and commitment bodies to assemble the
 exact sixteen-field payload and twenty-two-field measured plan. It preserves
 Snapshot/v4 and the v4 signature domain. The actual Ed25519 signature is checked

@@ -98,7 +98,7 @@ impl Original {
     }
     fn fixed_native(leaf:&str, maximum:u64) -> Result<Self, Error> {
         let mut file = File::open("/")?;
-        for name in ["etc", "serverware", leaf] {
+        for name in ["etc", "catchplate", leaf] {
             let parent = file.metadata()?;
             if !parent.is_dir() || parent.uid() != 0 || parent.mode() & 0o022 != 0 {
                 return Err(fail("native guest launch ancestor is not protected"));

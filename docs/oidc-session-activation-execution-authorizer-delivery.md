@@ -6,9 +6,9 @@ socket and service templates are unrendered/uninstalled; no account, key,
 listener, enrollment, root pin or filesystem authority is provisioned here.
 
 The fixed source path is the isolated
-[`launcher`](../serverware/oidc_session_activation_execution_authorizer_launcher.py)
-→ root [`entrypoint`](../serverware/oidc_session_activation_execution_authorizer_entrypoint.py)
-→ permanently unprivileged [`runner`](../serverware/oidc_session_activation_execution_authorizer_runner.py).
+[`launcher`](../catchplate/oidc_session_activation_execution_authorizer_launcher.py)
+→ root [`entrypoint`](../catchplate/oidc_session_activation_execution_authorizer_entrypoint.py)
+→ permanently unprivileged [`runner`](../catchplate/oidc_session_activation_execution_authorizer_runner.py).
 The launcher is copied into the production image's fixed bootstrap directory,
 and both source units are copied into its uninstalled systemd template inventory.
 The image remains unbuilt; packaging is not evidence that this path has run.
@@ -21,7 +21,7 @@ directories. The launcher requires isolated Python and a fixed entry mode; it
 does not import a caller-selected module or execute a checkout path.
 
 The root trust directory is
-`/run/serverware/oidc-session-activation-execution-authorizer-trust`, containing
+`/run/catchplate/oidc-session-activation-execution-authorizer-trust`, containing
 the fixed required original names `root-public-key.pem`, `bootstrap.json`
 and `custody.json`. The role and receiving originals remain separate files,
 bounded at 4 MiB and 8 MiB respectively; the root public key is at most 16 KiB.
@@ -38,9 +38,9 @@ bounded at 4 MiB and 8 MiB respectively; the root public key is at most 16 KiB.
 
 Private source files are root-owned mode0400, single-link regular files under
 protected ancestors, opened without following symlinks. Their fixed destinations
-are `/run/secrets/serverware-oidc-session-activation-bundle-key`,
-`/run/secrets/serverware-oidc-session-activation-delivery-key` and
-`/run/secrets/serverware-oidc-session-activation-execution-authorizer-key`.
+are `/run/secrets/catchplate-oidc-session-activation-bundle-key`,
+`/run/secrets/catchplate-oidc-session-activation-delivery-key` and
+`/run/secrets/catchplate-oidc-session-activation-execution-authorizer-key`.
 
 Only the purpose-specific bundle and delivery encryption keys are shared with
 the admitted planner custody path. They are distinct raw32 keys whose actual
@@ -77,12 +77,12 @@ custody or independent anti-rollback evidence.
 
 ## Uninstalled systemd inputs
 
-The [socket](../ops/systemd/serverware-oidc-session-activation-execution-authorizer.socket)
-is fixed to `/run/serverware/oidc-session-activation-execution/authorizer.sock`,
+The [socket](../ops/systemd/catchplate-oidc-session-activation-execution-authorizer.socket)
+is fixed to `/run/catchplate/oidc-session-activation-execution/authorizer.sock`,
 UID65506/GID65532, mode0660, backlog1 and `Accept=no`. The activated FD is
 nonblocking. Recreating the socket changes independently signed resource pins.
 
-The [service template](../ops/systemd/serverware-oidc-session-activation-execution-authorizer.service.in)
+The [service template](../ops/systemd/catchplate-oidc-session-activation-execution-authorizer.service.in)
 uses only these independent provisioning placeholders:
 
 - `ACTIVATION_AUTHORIZER_RELEASE_ROOT` — the admitted complete release;

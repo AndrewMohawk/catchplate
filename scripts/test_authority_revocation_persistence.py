@@ -23,21 +23,21 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_retention as retention
-from serverware.authority_store import planner_connection as admission
-from serverware.authority_store import revocation_retention as store
-from serverware.authority_store import authorization_records
+from catchplate import authority_contract
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_retention as retention
+from catchplate.authority_store import planner_connection as admission
+from catchplate.authority_store import revocation_retention as store
+from catchplate.authority_store import authorization_records
 import test_authority_revocation_plan as oracle
 import test_authority_revocation_retention as record_oracle
 import test_authority_revocation_wire as wire_oracle
 
 
-PARENT = "serverware_metadata.policy_authority_planner_transactions"
-SIDECAR = "serverware_metadata.policy_authority_revocation_retained_plans"
-ASSERTION = "serverware_metadata.policy_authority_webauthn_assertion_evidence"
-PROJECTION = "serverware_metadata.policy_authority_authorization_projections"
+PARENT = "catchplate_metadata.policy_authority_planner_transactions"
+SIDECAR = "catchplate_metadata.policy_authority_revocation_retained_plans"
+ASSERTION = "catchplate_metadata.policy_authority_webauthn_assertion_evidence"
+PROJECTION = "catchplate_metadata.policy_authority_authorization_projections"
 RESERVED_FIELDS = (
     "planner_transaction_id", "operation", "operation_id", "request_digest", "capability_id",
     "operation_contract_digest", "query_manifest_digest", "selected_business_rows_json",
@@ -79,7 +79,7 @@ def expected_authorization_rows(fixture):
     """Literal legacy SQL projection; no materializer output supplies expected values."""
     evidence, projection = fixture.payload["webauthnEvidence"], fixture.payload["authorizationProjection"]
     assertion = {"assertion_evidence_digest": oracle.framed(
-        "serverware.policyAuthorityWebAuthnAssertionEvidence/v1", oracle.wire(evidence)),
+        "catchplate.policyAuthorityWebAuthnAssertionEvidence/v1", oracle.wire(evidence)),
         **{column: evidence[field] for column, field in ASSERTION_SCALARS},
         "user_present": 1, "user_verified": 1, "prior_counter": evidence["priorCounter"],
         "counter": evidence["counter"], "trust_high_water_digest": evidence["trustHighWaterDigest"],
@@ -91,16 +91,16 @@ def expected_authorization_rows(fixture):
         "evidence_json": oracle.wire(evidence).decode("ascii"), "verified_at_epoch_ns": evidence["verifiedAtEpochNs"],
         "expires_at_epoch_ns": evidence["expiresAtEpochNs"], "source_revision": authority_contract.SOURCE_REVISION}
     authorization = {
-        "authorization_projection_digest": oracle.framed("serverware.policyAuthorityAuthorizationProjection/v1",
+        "authorization_projection_digest": oracle.framed("catchplate.policyAuthorityAuthorizationProjection/v1",
             oracle.wire(projection)),
         "planner_transaction_id": projection["plannerTransactionId"], "operation": projection["operation"],
         "operation_id": projection["operationId"], "request_digest": projection["requestDigest"],
         "capability_id": projection["capabilityId"], "operation_contract_digest": authority_contract.OPERATION_MANIFEST_DIGEST,
         "authorization_reads_json": oracle.wire(projection["authorizationReads"]).decode("ascii"),
-        "authorization_reads_digest": oracle.framed("serverware.policyAuthorityAuthorizationReads/v1",
+        "authorization_reads_digest": oracle.framed("catchplate.policyAuthorityAuthorizationReads/v1",
             oracle.wire(projection["authorizationReads"])),
         "source_rows_json": oracle.wire(projection["sourceRows"]).decode("ascii"),
-        "source_rows_digest": oracle.framed("serverware.policyAuthorityAuthorizationRows/v1",
+        "source_rows_digest": oracle.framed("catchplate.policyAuthorityAuthorizationRows/v1",
             oracle.wire(projection["sourceRows"])),
         "source_high_water_digest": projection["sourceHighWaterDigest"],
         "approver_policy_digest": projection["approverPolicyDigest"],
@@ -121,7 +121,7 @@ def expected_rows(fixture, planned_at):
     context_raw = oracle.wire(record_oracle.record_context(fixture))
     payload_raw = oracle.wire(payload)
     header = record_oracle.record_header(fixture, raw, context_raw)
-    record_digest = oracle.framed("serverware.policyAuthorityRevocationRetainedPlan/v1", oracle.wire(header))
+    record_digest = oracle.framed("catchplate.policyAuthorityRevocationRetainedPlan/v1", oracle.wire(header))
     parent = {
         "planner_transaction_id": fixture.planner_transaction_id, "operation": measured["operation"],
         "operation_id": measured["operationId"], "request_digest": measured["requestDigest"],
@@ -177,10 +177,10 @@ def independent_authorization_work(fixture, *, insert=False):
     assertion_row, projection_row = expected_authorization_rows(fixture)
     materialized = oracle.add(*(oracle.add(oracle.graph_cost(value, byte_passes, node_passes),
         oracle.frame_cost(domain, (oracle.wire(value),))) for value, domain, byte_passes, node_passes in (
-        (evidence, "serverware.policyAuthorityWebAuthnAssertionEvidence/v1", 6, 4),
-        (projection, "serverware.policyAuthorityAuthorizationProjection/v1", 6, 4),
-        (projection["authorizationReads"], "serverware.policyAuthorityAuthorizationReads/v1", 5, 4),
-        (projection["sourceRows"], "serverware.policyAuthorityAuthorizationRows/v1", 3, 2))))
+        (evidence, "catchplate.policyAuthorityWebAuthnAssertionEvidence/v1", 6, 4),
+        (projection, "catchplate.policyAuthorityAuthorizationProjection/v1", 6, 4),
+        (projection["authorizationReads"], "catchplate.policyAuthorityAuthorizationReads/v1", 5, 4),
+        (projection["sourceRows"], "catchplate.policyAuthorityAuthorizationRows/v1", 3, 2))))
     joined = oracle.add(*(oracle.graph_cost(value, 4, 4) for value in (
         assertion_row["assertion_evidence_digest"], projection_row["authorization_projection_digest"],
         assertion_row["assertion_evidence_digest"], projection_row["planner_transaction_id"])))
@@ -191,7 +191,7 @@ def independent_authorization_work(fixture, *, insert=False):
         unsigned = {name: value for name, value in evidence.items() if name not in {
             "verifierSignatureBase64url", "verifierSignatureDigest", "verifiedAssertionReceiptDigest"}}
         live = oracle.add((0, 1096, 0), oracle.graph_cost(evidence), oracle.graph_cost(unsigned, 3, 2),
-            oracle.frame_cost("serverware.policyAuthorityVerifiedWebAuthnAssertionReceipt/v1", (oracle.wire(unsigned),)),
+            oracle.frame_cost("catchplate.policyAuthorityVerifiedWebAuthnAssertionReceipt/v1", (oracle.wire(unsigned),)),
             (1, 64, 0), oracle.graph_cost(evidence["verifiedAssertionReceiptDigest"], 4, 4),
             oracle.graph_cost(evidence["verifierSignatureDigest"], 4, 4),
             oracle.utf8_cost(evidence["verifiedAssertionReceiptDigest"]))

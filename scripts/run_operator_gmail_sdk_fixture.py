@@ -53,7 +53,7 @@ class GmailSdkRun(Run):
         for file, pin in ((NODE, NODE_SHA256), (CHROME, CHROME_SHA256)):
             require(file.is_file() and not file.is_symlink() and recipe.base.digest(file) == pin)
         self.browser_unit = self.project + "-browser.service"
-        require(re.fullmatch(r"serverware-gmail-sdk-private-[0-9a-f]{12}-browser\.service", self.browser_unit))
+        require(re.fullmatch(r"catchplate-gmail-sdk-private-[0-9a-f]{12}-browser\.service", self.browser_unit))
         require(not self.browser_units("browser-unit-before"), "browser unit already exists")
         # systemd 255 returns 1 for an empty exact-name unit-file match. Keep
         # command errors fatal: include one known static sentinel and require
@@ -178,7 +178,7 @@ class GmailSdkRun(Run):
             require(actual == {(mount["source"], mount["target"], mount["read_only"])
                 for mount in service["volumes"]})
             require(row["State"]["Status"] == ("created" if name == "check" else "running"))
-            if name in {"network", "provider", "serverware", "decision-gate-rs"}:
+            if name in {"network", "provider", "catchplate", "decision-gate-rs"}:
                 require(row["State"].get("Health", {}).get("Status") == "healthy")
             if name in {"network", "provider", "edge"}:
                 started = datetime.datetime.fromisoformat(row["State"]["StartedAt"].replace("Z", "+00:00"))
@@ -204,7 +204,7 @@ class GmailSdkRun(Run):
             info = directory.stat()
             require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700)
         require(not list(args.job_root.iterdir()) and not list(args.evidence.iterdir()))
-        self.save("run.claim.json", {"schema": "serverware.privateGmailSdkRunClaim/v1",
+        self.save("run.claim.json", {"schema": "catchplate.privateGmailSdkRunClaim/v1",
             "sourceCommit": args.commit, "jobRoot": str(args.job_root),
             **({"ageProfile": True} if getattr(args, "age_profile", False) else {})})
         phase, success, armed, clean = "inputs", False, False, False
@@ -266,7 +266,7 @@ class GmailSdkRun(Run):
                 "--wait-timeout", "15", "network"], 20)
             phase = "baseline"
             self.command(phase, compose + ["up", "-d", "--no-build", "--pull", "never", "--wait",
-                "--wait-timeout", "45", "provider", "serverware", "decision-gate-rs"], 50)
+                "--wait-timeout", "45", "provider", "catchplate", "decision-gate-rs"], 50)
             phase = "basic-pki"
             self.command(phase, compose + ["--profile", "basic-pki", "run", "--rm", "--no-deps", "--pull", "never", "basic-pki"], 25)
             phase = "edge"
@@ -277,7 +277,7 @@ class GmailSdkRun(Run):
             checker = self.inspect_runtime(config, image_ids, recipe, keeper_anchor=keeper_anchor)
             phase = "running-binary"
             actual = self.command(phase, compose + ["exec", "-T", "decision-gate-rs", "python", "-B", "-c",
-                "import hashlib; print(hashlib.sha256(open('/usr/local/bin/serverware-decision-gate','rb').read()).hexdigest())"], 10).decode().strip()
+                "import hashlib; print(hashlib.sha256(open('/usr/local/bin/catchplate-decision-gate','rb').read()).hexdigest())"], 10).decode().strip()
             require(actual == args.expected_binary_sha256)
             require(time.monotonic() - keeper_anchor < recipe.PRECHECK_SECONDS)
             # This is the original keeper cutoff, not a new lifetime allocation.
@@ -305,7 +305,7 @@ class GmailSdkRun(Run):
                     importlib.import_module("scripts.check_operator_gmail_sdk_age").validate_result(result)
                 else:
                     importlib.import_module("scripts.check_operator_gmail_sdk").validate_success_result(result)
-                    require(result["schema"] == (recipe.profiles.CHECK_SCHEMA if paired else "serverware.privateGmailSdkCheck/v1"))
+                    require(result["schema"] == (recipe.profiles.CHECK_SCHEMA if paired else "catchplate.privateGmailSdkCheck/v1"))
                 if paired:
                     require(result["sdkDependenciesSha256"] == args.expected_dependencies_sha256
                         and (age_profile or result["nodeExampleSha256"] == recipe.profiles.NODE_SHA256))
@@ -322,7 +322,7 @@ class GmailSdkRun(Run):
         finally:
             if armed:
                 clean, errors = self.cleanup()
-            self.save("terminal.json", {"schema": "serverware.privateGmailSdkRun/v1", "phase": phase,
+            self.save("terminal.json", {"schema": "catchplate.privateGmailSdkRun/v1", "phase": phase,
                 "success": success, "cleanup": clean, "cleanupErrors": errors,
                 "elapsedSeconds": round(time.monotonic() - begun, 3), "syntheticOnly": True,
                 "productionReady": False, "realGoogleVerified": False,

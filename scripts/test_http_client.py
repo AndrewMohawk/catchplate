@@ -14,14 +14,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from serverware.http_client import (
+from catchplate.http_client import (
     HttpClientError,
     HttpDeadline,
     http_error_body,
     request_bytes,
     request_json_bytes,
 )
-from serverware import response_identity, runtime
+from catchplate import response_identity, runtime
 
 
 class ParsedHeaders:
@@ -180,11 +180,11 @@ class Handler(BaseHTTPRequestHandler):
             body = b'{"error":"retry_later"}'
             body_digest = "sha256:" + hashlib.sha256(body).hexdigest()
             proof_headers = (
-                ("X-Serverware-Response-Key-Id", "sha256:" + "1" * 64),
-                ("X-Serverware-Response-Body-SHA256", body_digest),
-                ("X-Serverware-Response-Statement-B64", "c2lnbmVkLXN0YXRlbWVudA"),
-                ("X-Serverware-Response-Statement-SHA256", "sha256:" + "2" * 64),
-                ("X-Serverware-Response-Signature", "ed25519:c2lnbmF0dXJl"),
+                ("X-Catchplate-Response-Key-Id", "sha256:" + "1" * 64),
+                ("X-Catchplate-Response-Body-SHA256", body_digest),
+                ("X-Catchplate-Response-Statement-B64", "c2lnbmVkLXN0YXRlbWVudA"),
+                ("X-Catchplate-Response-Statement-SHA256", "sha256:" + "2" * 64),
+                ("X-Catchplate-Response-Signature", "ed25519:c2lnbmF0dXJl"),
             )
             self.send_response_only(429)
             self.send_header("Content-Type", "application/json")
@@ -380,7 +380,7 @@ class Handler(BaseHTTPRequestHandler):
             type(self).cleanup_payloads.append(payload)
             body = json.dumps(
                 {
-                    "apiVersion": "serverware.releaseAuthorization/v1",
+                    "apiVersion": "catchplate.releaseAuthorization/v1",
                     "ok": True,
                     "authorized": False,
                     "state": "absent",
@@ -535,7 +535,7 @@ def main() -> None:
             urllib.request.Request(
                 f"{base}/signed-error",
                 headers={
-                    "X-Serverware-Response-Nonce": valid_response_nonce,
+                    "X-Catchplate-Response-Nonce": valid_response_nonce,
                 },
             ),
             timeout=2,
@@ -546,21 +546,21 @@ def main() -> None:
         expected_signed_error_raw_headers = (
             ("Content-Type", "application/json"),
             ("X-Fixture-Order", "first"),
-            ("X-Serverware-Response-Key-Id", "sha256:" + "1" * 64),
+            ("X-Catchplate-Response-Key-Id", "sha256:" + "1" * 64),
             (
-                "X-Serverware-Response-Body-SHA256",
+                "X-Catchplate-Response-Body-SHA256",
                 "sha256:"
                 + hashlib.sha256(b'{"error":"retry_later"}').hexdigest(),
             ),
             (
-                "X-Serverware-Response-Statement-B64",
+                "X-Catchplate-Response-Statement-B64",
                 "c2lnbmVkLXN0YXRlbWVudA",
             ),
             (
-                "X-Serverware-Response-Statement-SHA256",
+                "X-Catchplate-Response-Statement-SHA256",
                 "sha256:" + "2" * 64,
             ),
-            ("X-Serverware-Response-Signature", "ed25519:c2lnbmF0dXJl"),
+            ("X-Catchplate-Response-Signature", "ed25519:c2lnbmF0dXJl"),
             ("X-Fixture-Order", "second"),
             ("Content-Length", str(len(b'{"error":"retry_later"}'))),
         )
@@ -923,7 +923,7 @@ def main() -> None:
                 or Handler.cleanup_payloads[-1]
                 != {
                     "apiVersion": (
-                        "serverware.releaseAuthorizationComplete/v1"
+                        "catchplate.releaseAuthorizationComplete/v1"
                     ),
                     "attemptId": expected.attempt_id,
                     "bindingDigest": expected.binding_digest,

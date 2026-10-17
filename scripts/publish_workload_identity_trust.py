@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 import sys
 
-from serverware.workload_identity_trust_publication import (
+from catchplate.workload_identity_trust_publication import (
     PinnedFile,
     WorkloadIdentityTrustPublicationError,
     publish_trust,

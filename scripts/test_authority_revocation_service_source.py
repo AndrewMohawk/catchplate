@@ -46,8 +46,8 @@ def assigned(tree, name):
 class RevocationServiceSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.raw_source, cls.raw = read("serverware/authority_transport.py", 64 * 1024)
-        cls.service_source, cls.service = read("serverware/authority_service.py", 2 * 1024 * 1024)
+        cls.raw_source, cls.raw = read("catchplate/authority_transport.py", 64 * 1024)
+        cls.service_source, cls.service = read("catchplate/authority_service.py", 2 * 1024 * 1024)
         cls.process = definition(cls.service, "AuthorityProcess")
 
     def shape(self, actual, expected):
@@ -77,12 +77,12 @@ class RevocationServiceSourceTests(unittest.TestCase):
         limits = definition(self.raw, "_maximum_bytes")
         self.shape(limits.body[0].test,
             "type(maximum_bytes) is not int or not 2 <= maximum_bytes <= authority_contract.MAX_RESULT_BYTES")
-        _source, authority = read("serverware/authority_contract.py")
+        _source, authority = read("catchplate/authority_contract.py")
         self.shape(assigned(authority, "MAX_REQUEST_BYTES"), "4 * 1024 * 1024")
         self.shape(assigned(authority, "MAX_RESULT_BYTES"), "64 * 1024 * 1024")
         imports = [node for node in self.raw.body if isinstance(node, (ast.Import, ast.ImportFrom))]
         self.assertEqual([ast.unparse(node) for node in imports], ["from __future__ import annotations",
-            "import socket", "import struct", "from serverware import authority_contract"])
+            "import socket", "import struct", "from catchplate import authority_contract"])
         for parser in ("json.loads", "_canonical", "bytes", "_verify_invocation_on_work"):
             self.assertFalse(calls(self.raw, parser))
 
@@ -182,7 +182,7 @@ class RevocationServiceSourceTests(unittest.TestCase):
         self.assertFalse(calls(definition(self.process, "__init__"), "self._revocation_capability_issuer"))
 
     def test_factory_owns_original_config_and_launch_pins_with_configuration_only_float_support(self):
-        _source, module = read("serverware/authority_revocation_configuration.py")
+        _source, module = read("catchplate/authority_revocation_configuration.py")
         factory = definition(module, "_issuer_from_configuration_on_work")
         prefix = definition(module, "_capture_configuration_on_work")
         self.assertEqual([argument.arg for argument in factory.args.kwonlyargs],
@@ -254,10 +254,10 @@ class RevocationServiceSourceTests(unittest.TestCase):
         self.assertIn("digest == configuration_digest", ast.unparse(generation))
         self.shape(assigned(factory, "maximum_age_ns"), "min(issuer['maximumInternalAgeNs'], authority.VERIFIER_RESPONSE_MAX_AGE_NS)")
         self.shape(assigned(factory, "maximum_clock_skew_ns"), "authority.VERIFIER_MAX_CLOCK_SKEW_NS")
-        _source, authority = read("serverware/authority_contract.py")
+        _source, authority = read("catchplate/authority_contract.py")
         self.shape(assigned(authority, "VERIFIER_RESPONSE_MAX_AGE_NS"), "30 * 1_000_000_000")
         self.shape(assigned(authority, "VERIFIER_MAX_CLOCK_SKEW_NS"), "5 * 1_000_000_000")
-        _source, database = read("serverware/db.py", 4 * 1024 * 1024)
+        _source, database = read("catchplate/db.py", 4 * 1024 * 1024)
         self.shape(assigned(database, "_POLICY_AUTHORITY_VERIFIER_RESPONSE_MAX_AGE_NS"), "authority_contract.VERIFIER_RESPONSE_MAX_AGE_NS")
         self.shape(assigned(database, "_POLICY_AUTHORITY_VERIFIER_MAX_CLOCK_SKEW_NS"), "authority_contract.VERIFIER_MAX_CLOCK_SKEW_NS")
         capture = definition(module, "_ConfigurationCapture")
@@ -280,7 +280,7 @@ class RevocationServiceSourceTests(unittest.TestCase):
         options = {keyword.arg: keyword.value for keyword in service_dump.keywords}
         for name, value in (("ensure_ascii", "True"), ("sort_keys", "True"), ("allow_nan", "False"), ("separators", '(",", ":")')):
             self.shape(options[name], value)
-        _source, proof = read("serverware/authority_complete_query_batch.py")
+        _source, proof = read("catchplate/authority_complete_query_batch.py")
         proof_visit = definition(definition(proof, "_JSONCapture"), "visit")
         self.assertIn("kind not in (dict, list)", ast.unparse(proof_visit))
         self.assertFalse(any(isinstance(node, ast.Name) and node.id == "float" for node in ast.walk(proof_visit)))
@@ -308,7 +308,7 @@ class RevocationServiceSourceTests(unittest.TestCase):
             for name in ("issue-revocation-capability", "_issue_revocation_invocation_bytes", "_revocation_capability_issuer",
                     "_recv_revocation_invocation_bytes", "issue_authenticated"):
                 self.assertNotIn(name, ast.unparse(dispatcher))
-        registry, _tree = read("serverware/authority_transition_registry.py")
+        registry, _tree = read("catchplate/authority_transition_registry.py")
         self.assertNotIn("issue-revocation-capability", registry)
         self.assertNotIn("authority_revocation_configuration", registry)
 

@@ -57,12 +57,12 @@ pub(super) fn tree(domain:&str,frames:&[&[u8]])->Sha256Digest{
 }
 pub(super) fn template(table:&str,kind:&str)->Result<Value,ShadowError>{
     require(kinds(table).contains(&kind))?;
-    let mut v=json!({"schema":"serverware.policyAuthorityMutationTemplate/v1","operation":OPERATION,"table":table,"mutation":kind,
+    let mut v=json!({"schema":"catchplate.policyAuthorityMutationTemplate/v1","operation":OPERATION,"table":table,"mutation":kind,
         "before":if kind=="INSERT"{"absent"}else{"present"},"after":"present","predicate":"exact-primary-key-and-full-row-cas-v1","cardinality":1});
-    v["templateId"]=serde_json::to_value(tree("serverware.policyAuthorityMutationTemplate/v1",&[&canonical_json_bytes(&v)?])).map_err(fail)?;Ok(v)
+    v["templateId"]=serde_json::to_value(tree("catchplate.policyAuthorityMutationTemplate/v1",&[&canonical_json_bytes(&v)?])).map_err(fail)?;Ok(v)
 }
 pub(in crate::policy_shadow::native_activation) fn guard_commitment()->Result<Sha256Digest,ShadowError>{Ok(Sha256Digest::compute(&canonical_json_bytes(&json!({
-    "apiVersion":"serverware.nativePolicyActivationEffectGuard/v1","scope":"native-policy-publication",
+    "apiVersion":"catchplate.nativePolicyActivationEffectGuard/v1","scope":"native-policy-publication",
     "authority":"all-source-admitted-controlled-business-and-authorization-mutations",
     "serialization":"exclusive-held-table-lock-before-any-business-mutation",
     "exemptTables":["metadata_audit_outbox","policy_authority_bounded_aggregate_states","policy_authority_transition_audits"],
@@ -81,13 +81,13 @@ pub(in crate::policy_shadow::native_activation) fn handler_commitment(source:&st
     let mut all_reads=tables.clone();all_reads.extend(pre);all_reads.extend(fw);all_reads.sort();all_reads.dedup();
     let mut all_writes=writes.clone();all_writes.extend(fw);all_writes.sort();all_writes.dedup();
     let mut templates=Vec::new();for table in &writes{for kind in kinds(table){templates.push(template(table,kind)?);}}
-    let transition=tree("serverware.policyAuthorityTransitionProgram/v1",&[&canonical_json_bytes(&json!({"operation":OPERATION,"handler":HANDLER}))?]);
+    let transition=tree("catchplate.policyAuthorityTransitionProgram/v1",&[&canonical_json_bytes(&json!({"operation":OPERATION,"handler":HANDLER}))?]);
     let stem=OPERATION.replace(['.','-'],"_");let suffix=hex::encode(Sha256::digest(OPERATION.as_bytes()));
-    let prefix="serverware_policy_authority_execute_";let tail=format!("_{}_v9",&suffix[..12]);
+    let prefix="catchplate_policy_authority_execute_";let tail=format!("_{}_v9",&suffix[..12]);
     let executor=format!("{prefix}{}{tail}",&stem[..stem.len().min(63-prefix.len()-tail.len())]);
-    Ok(tree("serverware.policyAuthorityHandlerContract/v1",&[&canonical_json_bytes(&json!({
+    Ok(tree("catchplate.policyAuthorityHandlerContract/v1",&[&canonical_json_bytes(&json!({
         "sourceRevision":source,"operation":OPERATION,"handler":HANDLER,
-        "transitionProgramId":format!("serverware.policyAuthorityTransition/{}/{}/v1",OPERATION,&transition.as_str()[7..23]),
+        "transitionProgramId":format!("catchplate.policyAuthorityTransition/{}/{}/v1",OPERATION,&transition.as_str()[7..23]),
         "planningMode":"typed-pure-transition","businessReads":reads,"businessWrites":writes,"businessReadBeforeWrite":writes,
         "authorizationReads":AUTHORIZATION,"frameworkPreconditions":pre,"frameworkWrites":fw,"frameworkReadBeforeWrite":rbw,
         "mutationTemplates":templates,"executorFunction":executor,"executorIdentityArguments":["text","text","text","text","text"],

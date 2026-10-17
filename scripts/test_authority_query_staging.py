@@ -20,17 +20,17 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_audit_trace as audit_trace
-from serverware import authority_contract
-from serverware import authority_primary_contract as primary
-from serverware import authority_query_reads as reads
-from serverware import authority_query_staging as staging
-from serverware import authority_query_read_work as accounting
-from serverware import authority_radix_mutation as mutation
-from serverware import authority_radix_proof as radix
-from serverware import authority_root_transition as transition
-from serverware import authority_transition_core as core
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_audit_trace as audit_trace
+from catchplate import authority_contract
+from catchplate import authority_primary_contract as primary
+from catchplate import authority_query_reads as reads
+from catchplate import authority_query_staging as staging
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_radix_mutation as mutation
+from catchplate import authority_radix_proof as radix
+from catchplate import authority_root_transition as transition
+from catchplate import authority_transition_core as core
 import test_authority_global_audit_capacity as capacity_oracle
 import test_authority_radix_batch as batch_oracle
 import test_authority_radix_proof as wire_oracle
@@ -46,7 +46,7 @@ CHALLENGES = "webauthn_challenges"
 
 def definition(name, *, table=CREDENTIALS, predicates=(), maximum_rows=1, absent_key=None, operation=OPERATION):
     return core.BoundedQuery(
-        query_id=f"serverware.policyAuthorityQuery/{operation}/{name}/{table}/v1",
+        query_id=f"catchplate.policyAuthorityQuery/{operation}/{name}/{table}/v1",
         table=table, predicates=predicates, order_by=(), maximum_rows=maximum_rows,
         absent_key=absent_key)
 

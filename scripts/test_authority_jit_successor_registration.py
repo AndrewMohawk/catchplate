@@ -18,9 +18,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import authority_contract as contract
-from serverware import authority_successor_programs as source
-from serverware import authority_jit_compound_production as production
+from catchplate import authority_contract as contract
+from catchplate import authority_successor_programs as source
+from catchplate import authority_jit_compound_production as production
 from test_authority_jit_compound_production import producer
 
 
@@ -66,7 +66,7 @@ class JitSuccessorRegistrationControls(unittest.TestCase):
         expected = {name for name in contract.OPERATION_REGISTRY
             if contract.operation_spec(name)["planningMode"] == "typed-successor-planning"}
         self.assertEqual(expected, set(source.PROGRAMS))
-        loaded = runpy.run_path(str(ROOT / "serverware" / "authority_transition_registry.py"))
+        loaded = runpy.run_path(str(ROOT / "catchplate" / "authority_transition_registry.py"))
         self.assertEqual(loaded["_CLOSURE_ERRORS"], ())
         self.assertEqual(loaded["_registry_closure_errors"](), ())
         self.assertIs(loaded["SUCCESSOR_PROGRAMS"], source.PROGRAMS)
@@ -79,7 +79,7 @@ class JitSuccessorRegistrationControls(unittest.TestCase):
                 self.assertNotIn(operation, loaded["KERNELS"])
                 self.assertNotIn(operation, source.PROGRAMS)
                 self.assertEqual(dict(loaded["INTENTIONALLY_DISABLED_MANIFEST"][operation]), {
-                    "schema": "serverware.policyAuthorityDisabledOperation/v1",
+                    "schema": "catchplate.policyAuthorityDisabledOperation/v1",
                     "operation": operation, "status": "intentionally-disabled",
                     "admissionDisposition": "deny", "kernelRegistered": False,
                     "code": "recovery-not-implemented", "externalAuthorityRequired": False,
@@ -94,7 +94,7 @@ class JitSuccessorRegistrationControls(unittest.TestCase):
         programs = dict(source.PROGRAMS)
         programs.pop(OPERATION)
         with patch.object(source, "PROGRAMS", programs), self.assertRaises(RuntimeError) as caught:
-            runpy.run_path(str(ROOT / "serverware" / "authority_transition_registry.py"))
+            runpy.run_path(str(ROOT / "catchplate" / "authority_transition_registry.py"))
         self.assertIn("missing successor programs=[jit.assertion.issue]", str(caught.exception))
         self.assertIn("uncovered operation contracts=[jit.assertion.issue]", str(caught.exception))
 
@@ -106,7 +106,7 @@ class JitSuccessorRegistrationControls(unittest.TestCase):
                 result_kind="read-acquisition")
             with self.subTest(operation=operation), patch.object(source, "PROGRAMS",
                     {**source.PROGRAMS, operation: candidate}), self.assertRaises(RuntimeError) as caught:
-                runpy.run_path(str(ROOT / "serverware" / "authority_transition_registry.py"))
+                runpy.run_path(str(ROOT / "catchplate" / "authority_transition_registry.py"))
             diagnostic = str(caught.exception)
             self.assertIn("unexpected successor programs=[" + operation + "]", diagnostic)
             self.assertIn("disabled operations are plannable=[" + operation + "]", diagnostic)

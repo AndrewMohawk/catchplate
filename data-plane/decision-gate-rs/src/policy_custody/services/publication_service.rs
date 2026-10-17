@@ -15,16 +15,16 @@ use super::super::production_dispatch::{ClosedProductionDispatchRequestV4 as Dis
 use std::os::unix::fs::{FileExt, MetadataExt};
 use crate::policy_shadow::AuthorityRole;
 
-pub(super) const RUNTIME: &str = "serverware.policyCustodyServiceRuntimeConfig/v10";
-pub(super) const ADOPTION_RUNTIME: &str = "serverware.policyCustodyServiceRuntimeConfig/v12";
-pub(super) const API: &str = "serverware.nativePublicationServiceCommand/v1";
+pub(super) const RUNTIME: &str = "catchplate.policyCustodyServiceRuntimeConfig/v10";
+pub(super) const ADOPTION_RUNTIME: &str = "catchplate.policyCustodyServiceRuntimeConfig/v12";
+pub(super) const API: &str = "catchplate.nativePublicationServiceCommand/v1";
 pub(super) const GRANT_FD: &str = "publication-grant";
 pub(super) const DIRECTORY: &str = "publication-journal";
 pub(super) const MAX_GRANT: usize = 256 * 1024;
 pub(super) const MAX_ADOPTION_GRANT: usize = 3 * 1024 * 1024;
-const DOMAIN: &[u8] = b"serverware.nativePublicationServiceGrant.signature/v1";
-const ADOPTION_DOMAIN: &[u8] = b"serverware.nativePublicationServiceGrant.signature/v2";
-const ADOPTION_RECORD_API: &str = "serverware.nativePublicationAdoptionRecord/v1";
+const DOMAIN: &[u8] = b"catchplate.nativePublicationServiceGrant.signature/v1";
+const ADOPTION_DOMAIN: &[u8] = b"catchplate.nativePublicationServiceGrant.signature/v2";
+const ADOPTION_RECORD_API: &str = "catchplate.nativePublicationAdoptionRecord/v1";
 const MAX_RECORDS: usize = 128;
 const MAX_RECORD: usize = 4 * 1024 * 1024;
 const MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -58,8 +58,8 @@ pub(super) struct Grant { pub(super) payload: Payload, pub(super) signature_base
 impl Grant {
     pub(super) fn verify(&self, history: &RuntimeAuthorityHistory) -> Result<VerifyingKey, ServiceError> {
         let p = &self.payload;
-        let adopted = p.api_version == "serverware.nativePublicationServiceGrant/v2";
-        require((adopted || p.api_version == "serverware.nativePublicationServiceGrant/v1")
+        let adopted = p.api_version == "catchplate.nativePublicationServiceGrant/v2";
+        require((adopted || p.api_version == "catchplate.nativePublicationServiceGrant/v1")
             && adopted == p.admission.adoption.is_some()
             && encode_canonical_frame(self)?.len() <= (if adopted { MAX_ADOPTION_GRANT } else { MAX_GRANT })
             && p.purpose == "native-policy-publication-state"
@@ -208,11 +208,11 @@ struct AdoptionRecord {
 struct AdoptionAcknowledgment { api_version: String, record_sha256: Sha256Digest }
 impl AdoptionRecord {
     fn key(&self) -> Result<Sha256Digest, ServiceError> {
-        Ok(crate::policy_shadow::hash_domain_frames(b"serverware.nativePublicationAdoptionJournalKey/v1",
+        Ok(crate::policy_shadow::hash_domain_frames(b"catchplate.nativePublicationAdoptionJournalKey/v1",
             &[&encode_canonical_frame(&(self.service_role, &self.adoption_sha256))?]))
     }
     fn response(&self) -> Result<Vec<u8>, ServiceError> {
-        encode_canonical_frame(&AdoptionAcknowledgment { api_version: "serverware.nativePublicationAdoptionPersisted/v1".into(),
+        encode_canonical_frame(&AdoptionAcknowledgment { api_version: "catchplate.nativePublicationAdoptionPersisted/v1".into(),
             record_sha256: sha(self)? })
     }
 }
@@ -236,7 +236,7 @@ impl Gate {
         let maximum = if runtime.api_version == ADOPTION_RUNTIME { MAX_ADOPTION_GRANT } else { MAX_GRANT };
         let grant_raw = read_grant(&grant_file, maximum)?;
         let grant: Grant = decode_canonical_frame(&grant_raw)?;
-        require((runtime.api_version == ADOPTION_RUNTIME) == (grant.payload.api_version == "serverware.nativePublicationServiceGrant/v2"))?;
+        require((runtime.api_version == ADOPTION_RUNTIME) == (grant.payload.api_version == "catchplate.nativePublicationServiceGrant/v2"))?;
         let durable_key = grant.verify(&history)?;
         if runtime.api_version == ADOPTION_RUNTIME {
             super::initial_history::require_adoption_guest_window(

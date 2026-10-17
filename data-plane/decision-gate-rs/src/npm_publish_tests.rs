@@ -33,7 +33,7 @@ fn snapshot(package: &str) -> Arc<Snapshot> {
     snapshot.routes = vec![route(package)];
     snapshot.credentials.insert(CREDENTIAL.into(), Credential { provider:"operator-demo".into(),
         provider_subject:Some("synthetic-npm".into()),
-        injection:json!({"type":"bearer","header":"Authorization","__serverwareCredentialType":"static"}) });
+        injection:json!({"type":"bearer","header":"Authorization","__catchplateCredentialType":"static"}) });
     Arc::new(snapshot)
 }
 
@@ -88,12 +88,12 @@ fn npm_publish_closed_contract_and_actual_startup_schema_compile() {
     assert!(jsonschema::validator_for(&schema).unwrap().is_valid(&config("fixture")));
     let embedded=closed_embedded_policy_schema().unwrap();
     assert!(embedded["$defs"].get("adapter_npm_publish_v1__root").is_some());
-    for version in ["serverware.policy/v1",policy_route_authority::BUNDLE] {
+    for version in ["catchplate.policy/v1",policy_route_authority::BUNDLE] {
         let mut raw=policy(); raw["apiVersion"]=json!(version); raw["kind"]=json!("PolicyBundle");
         raw["metadata"]=json!({"id":"npm-publish-startup","sequence":1,"rollbackEpoch":1});
         if version==policy_route_authority::BUNDLE {
             let pin=format!("sha256:{}","0".repeat(64));
-            raw["routeAuthority"]=json!({"apiVersion":"serverware.compiledRouteAuthority/v1","genericOperations":[],
+            raw["routeAuthority"]=json!({"apiVersion":"catchplate.compiledRouteAuthority/v1","genericOperations":[],
                 "mappingSha256":pin,"routeAuthorityRootSha256":pin,"operationAuthorityRootSha256":pin});
         }
         validate_policy_schema(&raw).expect("actual startup embedded validator must compile");
@@ -122,7 +122,7 @@ fn npm_publish_signed_v2_authority_is_publish_with_write_request_authority() {
     let pin=|value:&Value| sha256_prefixed(policy_route_authority::canonical(value).unwrap().as_bytes());
     let mut raw=policy(); raw["apiVersion"]=json!(policy_route_authority::BUNDLE);
     let operations=json!([{"operationName":"npm.publish","operation":"publish","requestAuthorityClass":"write"}]);
-    let profile=json!({"apiVersion":"serverware.compiledRouteAuthority/v1",
+    let profile=json!({"apiVersion":"catchplate.compiledRouteAuthority/v1",
         "routeSha256":sha256_prefixed(b"route:test"),"signedRouteSha256":pin(&raw["routes"][0]),
         "adapterType":ADAPTER,"operations":operations,"signedPrincipalsSha256":pin(&raw["principals"]),
         "signedCredentialsSha256":pin(&raw["credentials"]),"signedDefaultsSha256":pin(&raw["defaults"]),
@@ -131,10 +131,10 @@ fn npm_publish_signed_v2_authority_is_publish_with_write_request_authority() {
     let profiles=json!([{"routeId":"route:test","compiledSemanticProfileSha256":profile_pin,"profile":profile}]);
     let entries=json!([{"routeSha256":profile["routeSha256"],"compiledSemanticProfileSha256":profile_pin,
         "operationName":"npm.publish","operation":"publish","requestAuthorityClass":"write"}]);
-    raw["routeAuthority"]=json!({"apiVersion":"serverware.compiledRouteAuthority/v1","genericOperations":[],
-        "mappingSha256":pin(&json!({"apiVersion":"serverware.compiledRouteAuthority/v1","profiles":profiles})),
-        "routeAuthorityRootSha256":pin(&json!({"apiVersion":"serverware.compiledRouteAuthorityRoutes/v1","profiles":profiles})),
-        "operationAuthorityRootSha256":pin(&json!({"apiVersion":"serverware.compiledRouteAuthorityOperations/v1","operations":entries}))});
+    raw["routeAuthority"]=json!({"apiVersion":"catchplate.compiledRouteAuthority/v1","genericOperations":[],
+        "mappingSha256":pin(&json!({"apiVersion":"catchplate.compiledRouteAuthority/v1","profiles":profiles})),
+        "routeAuthorityRootSha256":pin(&json!({"apiVersion":"catchplate.compiledRouteAuthorityRoutes/v1","profiles":profiles})),
+        "operationAuthorityRootSha256":pin(&json!({"apiVersion":"catchplate.compiledRouteAuthorityOperations/v1","operations":entries}))});
     let snapshot=snapshot("fixture");
     let compiled=policy_route_authority::admit(&raw,&snapshot.routes).unwrap().unwrap();
     let operation=admitted(request("fixture"),&snapshot).2;
@@ -338,7 +338,7 @@ fn npm_publish_response_preserves_strict_object_bytes_and_scans_reflection() {
 #[test]
 fn npm_publish_dispatch_barrier_cannot_rearm_expired_window_or_contact_target() {
     let mut held=(*snapshot("fixture")).clone();
-    held.policy_id="serverware-operator-demo".into();
+    held.policy_id="catchplate-operator-demo".into();
     held.principals[0].proxy_authorization=Some(ProxyAuthorizationPolicy::BearerToken {
         token_sha256:sha256_prefixed(b"synthetic-publish-deadline-client"),source_cidrs:vec![],
         expires_at_ms:Some(now_epoch_ms()+60_000),basic_transport:None, managed_renewal: None });

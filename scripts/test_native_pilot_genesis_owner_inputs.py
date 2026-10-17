@@ -19,9 +19,9 @@ from cryptography.exceptions import InvalidSignature
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import native_pilot_genesis_owner_inputs as compiler
-from serverware import native_pilot_genesis_jobs as jobs
-from serverware import native_pilot_genesis_execution_protocol as wire
+from catchplate import native_pilot_genesis_owner_inputs as compiler
+from catchplate import native_pilot_genesis_jobs as jobs
+from catchplate import native_pilot_genesis_execution_protocol as wire
 import test_native_pilot_genesis_jobs as job_tests
 import test_native_pilot_genesis_native_inputs as native_tests
 import test_native_pilot_genesis_ordinary_inputs as ordinary_inputs

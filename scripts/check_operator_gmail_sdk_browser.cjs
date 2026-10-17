@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const {spawn} = require('node:child_process');
-const ORIGIN = 'https://serverware-demo.example.com';
+const ORIGIN = 'https://catchplate-demo.example.com';
 const CATALOG = '/api/operator-demo/catalog';
 const GRANT = '/api/operator-demo/access-rules/gmail-read';
 const INTENTS = '/api/operator-demo/oauth/google/intents';
@@ -21,7 +21,7 @@ const FAILURES = ['workflow', 'deadline', 'signal', 'request_refused', 'page_err
   'websocket', 'popup', 'download', 'checker_io', 'checker_frame', 'checker_exit'];
 function failureReceipt(stage, code, observations) {
   const count = name => Number.isSafeInteger(observations[name]) && observations[name] >= 0 && observations[name] <= 32 ? observations[name] : null;
-  return {schema: 'serverware.privateGmailBrowserFailure/v1', stage: STAGES.includes(stage) ? stage : 'inputs',
+  return {schema: 'catchplate.privateGmailBrowserFailure/v1', stage: STAGES.includes(stage) ? stage : 'inputs',
     code: FAILURES.includes(code) ? code : 'workflow', postCount: count('postCount'), getCount: count('getCount'),
     pageErrors: count('pageErrors'), consoleErrors: count('consoleErrors'), refusedRequests: count('refusedRequests')};
 }
@@ -33,7 +33,7 @@ function requestFrame(request, id) {
     method === 'POST' && url.pathname === GRANT && raw.length > 0 && raw.length <= 4096);
   const headers = Object.fromEntries(Object.entries(request.headers()).filter(([key]) =>
     ['accept', 'content-type', 'origin', 'referer'].includes(key)));
-  requireValue(!Object.keys(request.headers()).some(key => /^(authorization|proxy-authorization|cookie|x-serverware-)/.test(key)));
+  requireValue(!Object.keys(request.headers()).some(key => /^(authorization|proxy-authorization|cookie|x-catchplate-)/.test(key)));
   return {type: 'request', id, method, path: url.pathname, headers, body: raw.toString('base64')};
 }
 function copiedRecipeFrame(copied, displayed, id) {
@@ -134,7 +134,7 @@ async function main() {
           const end = buffer.indexOf(10), line = buffer.subarray(0, end); buffer = buffer.subarray(end + 1);
           const frame = JSON.parse(line);
           if (frame.type === 'ready') {
-            requireValue(!observations.selectedApplicationId && frame.schema === 'serverware.privateGmailBrowserPermission/v1'
+            requireValue(!observations.selectedApplicationId && frame.schema === 'catchplate.privateGmailBrowserPermission/v1'
               && /^[0-9a-f-]{36}$/.test(frame.applicationId) && /^[0-9a-f-]{36}$/.test(frame.credentialId));
             observations.selectedApplicationId = frame.applicationId; observations.selectedCredentialId = frame.credentialId;
             readyResolve(frame);
@@ -180,7 +180,7 @@ async function main() {
     await page.locator('#connect-setup-step').waitFor({state: 'visible'});
     requireValue(saved?.access_rule?.application_id === identity.applicationId
       && saved.access_rule.credential_id === identity.credentialId && saved.access_rule.credential_input === 'replace_exact'
-      && saved.access_rule.placeholder === 'Bearer serverware-gmail-placeholder-v1');
+      && saved.access_rule.placeholder === 'Bearer catchplate-gmail-placeholder-v1');
     const retained = lastCatalog.access_rules.find(rule => rule.id === saved.access_rule.id);
     requireValue(retained && ['id', 'version', 'application_id', 'credential_id', 'operation_bundle', 'credential_input', 'placeholder']
       .every(key => retained[key] === saved.access_rule[key]) && lastCatalog.revision === saved.revision
@@ -213,7 +213,7 @@ async function main() {
     stage = 'await_sdk';
     const sdk = await result, terminal = await exited;
     requireValue(!failed && terminal.code === 0 && terminal.signal === null && buffer.length === 0 && stderrBytes === 0);
-    return {schema: 'serverware.privateGmailBrowserSdk/v1', ok: true, browserPermissionVerified: true,
+    return {schema: 'catchplate.privateGmailBrowserSdk/v1', ok: true, browserPermissionVerified: true,
       browserClientHandoffVerified: true,
       syntheticOAuthProgrammatic: true, externalSsoVerified: false, browser: observations, permission, sdk};
   } catch (error) {

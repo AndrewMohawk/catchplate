@@ -141,7 +141,7 @@ fn observe_with(state: &GateState, boundary: Boundary, response: &[u8], written:
     let Some(observation) = inspect_response(response) else { return; };
     let Ok(previous) = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed,
         |value| if value < LIMIT { Some(value + 1) } else { None }) else { return; };
-    let record = json!({"schema":"serverware.operatorBuffered503Observation/v1",
+    let record = json!({"schema":"catchplate.operatorBuffered503Observation/v1",
         "ordinal":previous + 1,"boundary":boundary.label(),"reason":observation.reason,
         "response_shape":observation.response_shape,"write_completed":written});
     if let Ok(mut line) = serde_json::to_vec(&record) {

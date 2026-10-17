@@ -1,4 +1,4 @@
-# Go: look up one X username through Serverware
+# Go: look up one X username through Catchplate
 
 **Isolated SDK-through-proxy acceptance passed.** This example uses the real, pinned community
 [`g8rswimmer/go-twitter/v2` v2.1.5](https://github.com/g8rswimmer/go-twitter/tree/v2.1.5/v2)
@@ -38,7 +38,7 @@ For an existing permission, download its private client JSON and verified CA
 from **Proxy setup**, then run from this directory:
 
 ```sh
-./x-username-example --config /private/path/serverware-client.private.json
+./x-username-example --config /private/path/catchplate-client.private.json
 ```
 
 The file supplies only the saved Basic application login and exact username
@@ -50,26 +50,26 @@ and refuses `SSL_CERT_FILE`/`SSL_CERT_DIR`; use its explicit CA fields instead.
 The environment-only invocation below remains supported.
 
 When the deployment supports `x_app_bearer_v1` and `x_username_read_v1`, save the
-real app-only X bearer token in Serverware, create an application, and grant
+real app-only X bearer token in Catchplate, create an application, and grant
 **X username: read** for one exact lowercase username (`[a-z0-9_]{1,15}`). Select
 the application's **Basic and Bearer** proxy authentication mode
 (`basic_and_bearer_v1`); this recipe uses Basic authentication only for CONNECT.
-Keep the real X token in Serverware, not in the application's environment.
+Keep the real X token in Catchplate, not in the application's environment.
 The operator must separately approve `https://api.x.com` (HTTPS port 443); choosing
 a provider or saving a rule does not approve that destination. Confirm the saved permission
 and the currently loaded policy before making a lookup.
 
-Download and verify the Serverware interception CA through the authenticated
+Download and verify the Catchplate interception CA through the authenticated
 operator setup flow. Use the HTTPS proxy URL, not the admin UI URL. Supply:
 
 | Variable | Value |
 | --- | --- |
-| `SERVERWARE_PROXY_URL` | HTTPS proxy origin, optionally with a port; no credentials or path |
-| `SERVERWARE_APP_ID` | Saved application UUID |
-| `SERVERWARE_PROXY_TOKEN` | That application's issued proxy token, **not** an X token |
-| `SERVERWARE_CA_FILE` | Local PEM file containing the Serverware interception CA |
-| `SERVERWARE_PROXY_CA_FILE` | Optional additional outer HTTPS-proxy CA; omit for a publicly trusted certificate |
-| `SERVERWARE_X_USERNAME` | The exact lowercase username selected in the permission, without `@` |
+| `CATCHPLATE_PROXY_URL` | HTTPS proxy origin, optionally with a port; no credentials or path |
+| `CATCHPLATE_APP_ID` | Saved application UUID |
+| `CATCHPLATE_PROXY_TOKEN` | That application's issued proxy token, **not** an X token |
+| `CATCHPLATE_CA_FILE` | Local PEM file containing the Catchplate interception CA |
+| `CATCHPLATE_PROXY_CA_FILE` | Optional additional outer HTTPS-proxy CA; omit for a publicly trusted certificate |
+| `CATCHPLATE_X_USERNAME` | The exact lowercase username selected in the permission, without `@` |
 
 Use an environment/CI secret store for the application token; do not place it in
 command arguments, URLs or tracked files. After the one-time preparation above:
@@ -99,8 +99,8 @@ uses fixed `Host: "https://api.x.com"`, one username, and empty `UserLookupOpts`
 It sends `GET /2/users/by/username/<username>`, an empty query/body, and
 `Accept: application/json`, without `Content-Type`. The documented
 [`Authorizer` hook](https://github.com/g8rswimmer/go-twitter/blob/v2.1.5/v2/auth.go)
-supplies `Authorization: Bearer serverware-x-placeholder-v1`. That is a public
-dummy, replaced by Serverware; it is never a real X secret. No SDK HTTP methods
+supplies `Authorization: Bearer catchplate-x-placeholder-v1`. That is a public
+dummy, replaced by Catchplate; it is never a real X secret. No SDK HTTP methods
 or request headers are rewritten. Standard Go HTTP/1.1 transport additionally
 sends its default `User-Agent` and `Connection: close`.
 
@@ -113,7 +113,7 @@ discovery. No direct-network fallback is configured.
 Go shares one TLS configuration between outer proxy TLS and inner intercepted
 X TLS. Normal verification remains enabled. A standard `VerifyConnection`
 callback additionally re-verifies each chain using only the roots for that exact
-hostname: system roots plus the optional proxy CA for the proxy; the Serverware
+hostname: system roots plus the optional proxy CA for the proxy; the Catchplate
 interception CA for `api.x.com`. Do not put the interception CA in the proxy CA
 file. No `InsecureSkipVerify`, custom dialer, or disabled certificate check is
 used. Tests cover crossed-CA refusal in addition to valid chains.

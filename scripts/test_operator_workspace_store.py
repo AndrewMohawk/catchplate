@@ -52,7 +52,7 @@ def catalog(db, schema):
 
 
 def legacy_fixture(*, with_revocation=True):
-    from serverware import operator_catalog_schema as schema
+    from catchplate import operator_catalog_schema as schema
     with patch.object(schema, "initialize", return_value=None):
         config, db, store, bundles = common.backend()
         first, first_token, digest = common.create_connection(store)
@@ -186,9 +186,9 @@ def legacy_writers_refused():
 
 def workspace():
     config, db, store, bundles = common.backend()
-    from serverware import operator_catalog_schema as schema
-    from serverware import operator_catalog_inputs as inputs
-    from serverware import operator_catalog_mutations as mutations
+    from catchplate import operator_catalog_schema as schema
+    from catchplate import operator_catalog_inputs as inputs
+    from catchplate import operator_catalog_mutations as mutations
     return config, db, store, bundles, schema, inputs, mutations
 
 
@@ -384,8 +384,8 @@ def transaction_failure(stage):
 
 def publication_recovery():
     config, db, store, bundles, schema, _ = legacy_fixture(with_revocation=False)
-    from serverware import operator_catalog_inputs as inputs
-    from serverware import operator_catalog_mutations as mutations
+    from catchplate import operator_catalog_inputs as inputs
+    from catchplate import operator_catalog_mutations as mutations
     migrate(db, schema)
     first = catalog(db, schema)["applications"][0]
     old_policy = config.POLICY_BUNDLE_PATH.read_bytes()

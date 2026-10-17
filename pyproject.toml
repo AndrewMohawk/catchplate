@@ -1,19 +1,19 @@
 [build-system]
 requires = []
-build-backend = "serverware_agent_trust.build_backend"
+build-backend = "catchplate_agent_trust.build_backend"
 backend-path = ["."]
 
 [project]
-name = "serverware-enrollment"
+name = "catchplate-enrollment"
 version = "0.2.0"
-description = "Clean-room Serverware enrollment and attestation verification commands"
+description = "Clean-room Catchplate enrollment and attestation verification commands"
 requires-python = ">=3.11"
 dependencies = ["cryptography==50.0.0"]
 
 [project.scripts]
-serverware-enrollment = "serverware_agent_trust.enrollment:console_main"
-serverware-attestation = "serverware_agent_trust.attestation:console_main"
+catchplate-enrollment = "catchplate_agent_trust.enrollment:console_main"
+catchplate-attestation = "catchplate_agent_trust.attestation:console_main"
 
-[tool.serverware-agent-trust]
-runtime-lock = "serverware_agent_trust/requirements.lock"
+[tool.catchplate-agent-trust]
+runtime-lock = "catchplate_agent_trust/requirements.lock"
 runtime-dependencies = ["cryptography==50.0.0"]

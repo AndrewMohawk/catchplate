@@ -119,7 +119,7 @@ impl Outputs {
 // Ciphertext is a public original. Seed targets deliberately have no such
 // reader. This fixed path is distinct from every signed role seed path.
 pub(super) fn ciphertext(path:&Path,pin:&str,deadline:u64)->Result<Vec<u8>,String>{
-    ensure(path==Path::new("/run/serverware-role-key-provisioning/inventory.enc.json"),"role inventory fixed path differs")?;
+    ensure(path==Path::new("/run/catchplate-role-key-provisioning/inventory.enc.json"),"role inventory fixed path differs")?;
     let mut directory=File::open("/").map_err(|_|"role inventory root unavailable")?;
     let components:Vec<_>=path.components().skip(1).collect();
     for (index,part) in components.iter().enumerate() {

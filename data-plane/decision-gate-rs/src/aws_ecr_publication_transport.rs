@@ -120,10 +120,10 @@ fn call(
     let mut response = client
         .post(url.as_str())
         .header(
-            "X-Serverware-Data-Plane-Token",
+            "X-Catchplate-Data-Plane-Token",
             state.credential_lease_token.as_deref().ok_or(ERROR)?,
         )
-        .header("X-Serverware-Response-Nonce", response_nonce)
+        .header("X-Catchplate-Response-Nonce", response_nonce)
         .header("content-type", "application/json")
         .body(wire.to_vec())
         .timeout(Duration::from_secs(10))
@@ -203,7 +203,7 @@ pub(super) fn decision(
             credential_id,
             &snapshot.hash,
         );
-        context["apiVersion"] = json!("serverware.ecrContextRequest/v1");
+        context["apiVersion"] = json!("catchplate.ecrContextRequest/v1");
         let (_, proof_nonce) = nonce().map_err(|_| json!({"error":ERROR}))?;
         let (status, response) = call(state, snapshot, "context", &context, &proof_nonce)
             .map_err(|_| json!({"error":ERROR,"status_code":503}))?;
@@ -233,7 +233,7 @@ pub(super) fn decision(
                 "credentialVersion",
                 "expiresAtEpochMs",
             ],
-        ) || response["apiVersion"] != "serverware.ecrContextResponse/v1"
+        ) || response["apiVersion"] != "catchplate.ecrContextResponse/v1"
             || echoed.iter().any(|k| response[*k] != context[*k])
             || version.is_none()
             || expiry.is_none()
@@ -439,7 +439,7 @@ fn reserve(
         decision["credential_ref"].as_str().ok_or(ERROR)?,
         &snapshot.hash,
     );
-    request["apiVersion"] = json!("serverware.ecrSigningRequest/v1");
+    request["apiVersion"] = json!("catchplate.ecrSigningRequest/v1");
     request["childId"] = json!(child_id()?);
     request["expectedCredentialVersion"] = decision["credential_version"].clone();
     request["dataPlaneBinaryDigest"] = json!(state.binary_digest);
@@ -466,7 +466,7 @@ fn reserve(
         aad[*name] = envelope[*name].clone();
     }
     require(
-        aad["apiVersion"] == "serverware.ecrSigningEnvelope/v1"
+        aad["apiVersion"] == "catchplate.ecrSigningEnvelope/v1"
             && aad["requestBindingSha256"] == request_binding
             && [
                 "publicationId",
@@ -509,7 +509,7 @@ fn reserve(
             && envelope["ciphertextSha256"] == sha256_prefixed(&ciphertext),
     )?;
     let aad_bytes = Zeroizing::new(native_response_profile::canonical_ascii_bytes(&aad)?);
-    let mut info = Zeroizing::new(b"serverware:credential-lease-envelope:v2\0".to_vec());
+    let mut info = Zeroizing::new(b"catchplate:credential-lease-envelope:v2\0".to_vec());
     info.extend_from_slice(&Sha256::digest(&aad_bytes));
     let salt = hkdf::Salt::new(hkdf::HKDF_SHA256, &nonce_bytes);
     let prk = salt.extract(shared.as_bytes());
@@ -545,7 +545,7 @@ fn reserve(
                 "bodyLength",
                 "headers",
             ],
-        ) && signed["apiVersion"] == "serverware.ecrSignedRequest/v1"
+        ) && signed["apiVersion"] == "catchplate.ecrSignedRequest/v1"
             && signed["method"] == "POST"
             && signed["scheme"] == "https"
             && signed["path"] == "/"
@@ -665,7 +665,7 @@ fn finish(
         lease.binding["credentialId"].as_str().ok_or(ERROR)?,
         &snapshot.hash,
     );
-    request["apiVersion"] = json!("serverware.ecrFinishRequest/v1");
+    request["apiVersion"] = json!("catchplate.ecrFinishRequest/v1");
     request["childId"] = lease.binding["childId"].clone();
     request["requestBindingSha256"] = json!(lease.request_binding);
     request["expectedCredentialVersion"] = lease.binding["expectedCredentialVersion"].clone();
@@ -703,7 +703,7 @@ fn finish(
                     "responseReleaseAllowed",
                 ],
             )
-            && receipt["apiVersion"] == "serverware.ecrFinishResponse/v1"
+            && receipt["apiVersion"] == "catchplate.ecrFinishResponse/v1"
             && [
                 "publicationId",
                 "childId",

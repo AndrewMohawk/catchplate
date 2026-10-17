@@ -15,7 +15,7 @@ const row = id => ({id, status: 'pending', route_id: 'synthetic.reporting.read',
   assurance: 'host-trusted', reviewer_id: 'user:operator', approved_until: null, consumed_at: null});
 async function main() {
   assert.equal(process.argv.length, 2, 'synthetic smoke accepts no target');
-  const directory = mkdtempSync('/tmp/serverware-host-approval-smoke-'), requests = [], errors = [];
+  const directory = mkdtempSync('/tmp/catchplate-host-approval-smoke-'), requests = [], errors = [];
   const browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-background-networking']});
   try {
     const savedClient = application({name: 'Release automation', principal_id: row(ID).principal_id});
@@ -27,7 +27,7 @@ async function main() {
       const reply = (route, value) => route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(value)});
       page.on('pageerror', error => errors.push(error.message));
       await page.route('**/api/approvals/capabilities', route => reply(route, {
-        schema: 'serverware.approvalCapabilities/v2', mode: 'host_trusted_v1', can_list: true, can_review: true, can_decide: true, reason: null}));
+        schema: 'catchplate.approvalCapabilities/v2', mode: 'host_trusted_v1', can_list: true, can_review: true, can_decide: true, reason: null}));
       await page.route('**/api/operator-demo/approvals**', async route => {
         const request = route.request(), url = new URL(request.url()), path = url.pathname;
         assert.equal(url.origin, ORIGIN); assert.equal(url.search, ''); assert(requests.length < 12);
@@ -50,7 +50,7 @@ async function main() {
       });
       await page.locator('nav a[href="#pending-actions"]').click();
       await page.locator('[data-pending-select="' + ID + '"]').waitFor();
-      assert.equal(await page.title(), 'Pending actions - Serverware operator workspace');
+      assert.equal(await page.title(), 'Pending actions - Catchplate operator workspace');
       await page.locator('[data-pending-select="' + ID + '"]').click();
       await page.getByRole('button', {name: 'Review request', exact: true}).click();
       await page.getByRole('button', {name: 'Approve once', exact: true}).waitFor();

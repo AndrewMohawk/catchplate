@@ -34,11 +34,11 @@ if str(_SCRIPT_DIRECTORY) not in sys.path:
 import launch_authorization as protocol  # noqa: E402
 
 
-REGISTRY_API_VERSION = "serverware.launchAuthorityReleaseRegistry/v2"
+REGISTRY_API_VERSION = "catchplate.launchAuthorityReleaseRegistry/v2"
 REGISTRY_KIND = "ProductionLaunchAuthorityReleaseRegistry"
 AUTHORIZATION_PATH = "/v1/launch-authorizations"
-REQUEST_CONTENT_TYPE = "application/serverware.launch-authorization-request+json"
-RESPONSE_CONTENT_TYPE = "application/serverware.launch-authorization+json"
+REQUEST_CONTENT_TYPE = "application/catchplate.launch-authorization-request+json"
+RESPONSE_CONTENT_TYPE = "application/catchplate.launch-authorization+json"
 MAX_REQUEST_BYTES = 16 * 1024
 MAX_REGISTRY_BYTES = 8 * 1024 * 1024
 MAX_REGISTRY_ENTRIES = 4096
@@ -49,16 +49,16 @@ MAX_WITNESS_RESPONSE_HEADER_BYTES = 16 * 1024
 MAX_WITNESS_RESPONSE_HEADER_COUNT = 32
 MAX_WITNESS_RESPONSE_LINE_BYTES = 4096
 WITNESS_REQUEST_CONTENT_TYPE = (
-    "application/serverware.launch-authority-witness-transition-request+json"
+    "application/catchplate.launch-authority-witness-transition-request+json"
 )
 WITNESS_RESPONSE_CONTENT_TYPE = (
-    "application/serverware.launch-authority-witness-transition+json"
+    "application/catchplate.launch-authority-witness-transition+json"
 )
 REGISTRY_OBSERVATION_REQUEST_CONTENT_TYPE = (
-    "application/serverware.launch-authority-registry-observation-request+json"
+    "application/catchplate.launch-authority-registry-observation-request+json"
 )
 REGISTRY_OBSERVATION_RESPONSE_CONTENT_TYPE = (
-    "application/serverware.launch-authority-registry-observation+json"
+    "application/catchplate.launch-authority-registry-observation+json"
 )
 DEFAULT_VALIDITY_SECONDS = 30
 DEFAULT_CONNECTION_DEADLINE_SECONDS = 5.0
@@ -491,7 +491,7 @@ def _content_tuple(binding: Mapping[str, Any]) -> dict[str, Any]:
 
 def _authorization_id(request_sha256: str, witness_challenge: str) -> str:
     return hashlib.sha256(
-        b"serverware.launchAuthorityAuthorizationId/v2\0"
+        b"catchplate.launchAuthorityAuthorizationId/v2\0"
         + request_sha256.encode("ascii")
         + b"\0"
         + witness_challenge.encode("ascii")
@@ -508,7 +508,7 @@ def _witness_operation_sha256(
     authority_key_id: str,
 ) -> str:
     return _sha256_domain(
-        b"serverware.launchAuthorityWitnessOperation/v2\0",
+        b"catchplate.launchAuthorityWitnessOperation/v2\0",
         {
             "authorizationId": authorization_id,
             "authorizationScope": request["authorizationScope"],
@@ -617,10 +617,10 @@ class ReleaseEntry:
             enabled=entry["enabled"],
             revoked=entry["revoked"],
             binding_sha256=_sha256_domain(
-                b"serverware.launchAuthorityRegistryBinding/v2\0", binding
+                b"catchplate.launchAuthorityRegistryBinding/v2\0", binding
             ),
             content_tuple_sha256=_sha256_domain(
-                b"serverware.launchAuthorityReleaseTuple/v2\0",
+                b"catchplate.launchAuthorityReleaseTuple/v2\0",
                 _content_tuple(binding),
             ),
             relay_client_certificate_sha256=relay_client_certificate_sha256,
@@ -694,7 +694,7 @@ class ReleaseRegistry:
     ) -> ReleaseEntry:
         binding = _request_binding(request)
         binding_sha256 = _sha256_domain(
-            b"serverware.launchAuthorityRegistryBinding/v2\0", binding
+            b"catchplate.launchAuthorityRegistryBinding/v2\0", binding
         )
         entry = self.entries.get(binding_sha256)
         if entry is None:
@@ -2149,7 +2149,7 @@ def _authority_state_sha256(connection: sqlite3.Connection) -> str:
         return [dict(row) for row in connection.execute(query).fetchall()]
 
     state = {
-        "apiVersion": "serverware.launchAuthorityState/v1",
+        "apiVersion": "catchplate.launchAuthorityState/v1",
         "ledgerSchemaVersion": LEDGER_SCHEMA_VERSION,
         "registryState": rows(
             """
@@ -2190,7 +2190,7 @@ def _authority_state_sha256(connection: sqlite3.Connection) -> str:
             """
         ),
     }
-    return _sha256_domain(b"serverware.launchAuthorityState/v1\0", state)
+    return _sha256_domain(b"catchplate.launchAuthorityState/v1\0", state)
 
 
 class LaunchAuthority:
@@ -4208,7 +4208,7 @@ class LaunchAuthorityHTTPServer(HTTPServer):
 
 class LaunchAuthorityRequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "ServerwareLaunchAuthority/1"
+    server_version = "CatchplateLaunchAuthority/1"
     sys_version = ""
     rbufsize = 0
 
@@ -4468,7 +4468,7 @@ def create_https_server(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Serverware off-host launch authority",
+        description="Catchplate off-host launch authority",
         epilog=(EXTERNAL_ANTI_ROLLBACK_REQUIREMENT + " " + NETWORK_ADMISSION_BOUNDARY),
     )
     parser.add_argument(

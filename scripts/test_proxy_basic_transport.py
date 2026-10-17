@@ -19,8 +19,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import policy_bundle as pb
-from serverware.policy_route_authority import prepare_unsigned
+from catchplate import policy_bundle as pb
+from catchplate.policy_route_authority import prepare_unsigned
 from scripts.test_credential_header_replacement import bundle as route_fixture
 
 USERNAME = "12345678-1234-4234-9234-123456789abc"
@@ -48,7 +48,7 @@ def authorization(*, enabled=True):
 
 def document(*, enabled=True):
     value = route_fixture(replacement=False)
-    value["metadata"]["id"] = "serverware-operator-demo"
+    value["metadata"]["id"] = "catchplate-operator-demo"
     value["principals"] = [{"id": "agent:fixture", "proxyAuthorization": authorization(enabled=enabled)}]
     return value
 
@@ -230,18 +230,18 @@ class ProxyBasicTransportTests(unittest.TestCase):
 
     def test_only_operator_v1_policy_can_declare_transport(self):
         for option in ({"username": USERNAME}, None):
-            for version, name in (("serverware.policy/v1", "another-policy"),
-                    ("serverware.policy/v2", "serverware-operator-demo")):
+            for version, name in (("catchplate.policy/v1", "another-policy"),
+                    ("catchplate.policy/v2", "catchplate-operator-demo")):
                 value = document()
                 value["apiVersion"] = version
                 value["metadata"]["id"] = name
                 value["principals"][0]["proxyAuthorization"]["basicTransport"] = option
-                if version == "serverware.policy/v2":
+                if version == "catchplate.policy/v2":
                     value = prepare_unsigned(value, [{"routeId": "route.header-fixture",
                         "operationName": "fixture.read", "operation": "read"}])
                 with self.subTest(version=version, name=name, null=option is None):
                     for check_schema in (False, True):
-                        if version == "serverware.policy/v2" and option is not None:
+                        if version == "catchplate.policy/v2" and option is not None:
                             with self.assertRaisesRegex(pb.PolicyBundleError,
                                     "Basic transport requires the operator v1 policy profile"):
                                 pb.compile_policy_bundle(value, validate_schema=check_schema)
@@ -251,7 +251,7 @@ class ProxyBasicTransportTests(unittest.TestCase):
         legacy = document(enabled=False)
         legacy["metadata"]["id"] = "another-policy"
         self.assertIsNotNone(pb.compile_policy_bundle(legacy, validate_schema=True))
-        legacy["apiVersion"] = "serverware.policy/v2"
+        legacy["apiVersion"] = "catchplate.policy/v2"
         legacy = prepare_unsigned(legacy, [{"routeId": "route.header-fixture",
             "operationName": "fixture.read", "operation": "read"}])
         self.assertIsNotNone(pb.compile_policy_bundle(legacy, validate_schema=True))

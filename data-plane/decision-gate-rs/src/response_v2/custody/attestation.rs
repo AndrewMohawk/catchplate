@@ -45,46 +45,46 @@ use super::protocol::{
 use super::V2RuntimeError;
 
 const SERVICE_HANDSHAKE_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/service-handshake/v1\0";
+    b"catchplate.response-v2/service-handshake/v1\0";
 pub(crate) const TRANSITION_AUTHORIZATION_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/transition-authorization/v1\0";
+    b"catchplate.response-v2/transition-authorization/v1\0";
 pub(crate) const FINAL_ENVELOPE_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/final-envelope-verification/v1\0";
+    b"catchplate.response-v2/final-envelope-verification/v1\0";
 pub(crate) const SERVICE_RESULT_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/service-result/v1\0";
+    b"catchplate.response-v2/service-result/v1\0";
 pub(crate) const STATE_AUTHORITY_RESULT_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/state-authority-result/v1\0";
+    b"catchplate.response-v2/state-authority-result/v1\0";
 pub(crate) const STAGED_ORIGINAL_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/staged-request-original/v1\0";
+    b"catchplate.response-v2/staged-request-original/v1\0";
 pub(crate) const REPLAY_SOURCE_OBSERVATION_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/replay-source-observation/v1\0";
+    b"catchplate.response-v2/replay-source-observation/v1\0";
 pub(crate) const SETTLEMENT_EVIDENCE_CONTEXT_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/settlement-evidence-context/v1\0";
+    b"catchplate.response-v2/settlement-evidence-context/v1\0";
 pub(crate) const STATE_MUTATION_RECEIPT_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/state-mutation-receipt/v1\0";
+    b"catchplate.response-v2/state-mutation-receipt/v1\0";
 pub(crate) const RELEASE_METADATA_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/release-metadata/v1\0";
+    b"catchplate.response-v2/release-metadata/v1\0";
 pub(crate) const IMMUTABLE_RAW_INSPECTION_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/immutable-raw-inspection/v1\0";
+    b"catchplate.response-v2/immutable-raw-inspection/v1\0";
 pub(crate) const RELEASE_AUTHORIZATION_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/release-authorization/v2\0";
+    b"catchplate.response-v2/release-authorization/v2\0";
 pub(crate) const RELEASE_CONSUMPTION_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/release-consumption/v2\0";
+    b"catchplate.response-v2/release-consumption/v2\0";
 pub(crate) const RELEASE_CONSUMPTION_PREAUTHORIZATION_SIGNATURE_DOMAIN:
     &[u8] =
-    b"serverware.response-v2/release-consumption-preauthorization/v1\0";
+    b"catchplate.response-v2/release-consumption-preauthorization/v1\0";
 pub(crate) const RELEASE_PREPARATION_RECEIPT_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/release-preparation-receipt/v1\0";
+    b"catchplate.response-v2/release-preparation-receipt/v1\0";
 pub(crate) const CUSTODY_ATTESTATION_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/custody-attestation/v1\0";
+    b"catchplate.response-v2/custody-attestation/v1\0";
 pub(crate) const CUSTODY_RECOVERY_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/custody-recovery/v1\0";
+    b"catchplate.response-v2/custody-recovery/v1\0";
 pub(crate) const CUSTODY_ERROR_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/custody-error/v1\0";
+    b"catchplate.response-v2/custody-error/v1\0";
 pub(crate) const PUBLICATION_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/publication/v1\0";
+    b"catchplate.response-v2/publication/v1\0";
 pub(crate) const SETTLEMENT_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/settlement/v1\0";
+    b"catchplate.response-v2/settlement/v1\0";
 
 pub(crate) struct RoleSigningKey {
     logical_role: String,

@@ -57,16 +57,16 @@ def calls(tree, name):
 class RevocationRootsSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.worker_source, cls.worker = read("serverware/authority_revocation_roots.py", 64 * 1024)
-        cls.owner_source, cls.owner = read("serverware/authority_revocation_root_reader.py", 64 * 1024)
-        cls.service_source, cls.service = read("serverware/authority_service.py", 2 * 1024 * 1024)
+        cls.worker_source, cls.worker = read("catchplate/authority_revocation_roots.py", 64 * 1024)
+        cls.owner_source, cls.owner = read("catchplate/authority_revocation_root_reader.py", 64 * 1024)
+        cls.service_source, cls.service = read("catchplate/authority_service.py", 2 * 1024 * 1024)
         cls.run = definition(cls.worker, "_read_revocation_root_inventory_on_work")
 
     def shape(self, actual, expected):
         self.assertEqual(ast.dump(actual), ast.dump(ast.parse("(" + expected.strip() + ")", mode="eval").body))
 
     def test_inventory_comes_from_exact_revoke_seven_plus_two_roots_and_nine_potential_heads(self):
-        _source, contract = read("serverware/authority_contract.py")
+        _source, contract = read("catchplate/authority_contract.py")
         operations = assigned(contract, "_OPERATIONS")
         revoke = [value for key, value in zip(operations.keys, operations.values)
             if ast.literal_eval(key) == "webauthn.credential.revoke"]
@@ -90,23 +90,23 @@ class RevocationRootsSourceTests(unittest.TestCase):
         self.shape(assigned(self.worker, "_CONTRACTS"), "primary.primary_table_contracts(OPERATION)")
         self.shape(assigned(self.worker, "_BUSINESS_TABLES"), 'tuple(item.table for item in _CONTRACTS if item.root_class == "business")')
         self.shape(assigned(self.worker, "_AUTHORIZATION_TABLES"), 'tuple(item.table for item in _CONTRACTS if item.root_class == "authorization")')
-        _source, primary = read("serverware/authority_primary_contract.py")
+        _source, primary = read("catchplate/authority_primary_contract.py")
         tables = definition(primary, "primary_table_contracts")
         self.shape(assigned(tables, "business"), 'set(spec["businessReads"]) | set(spec["businessWrites"])')
         self.shape(assigned(tables, "authorization"), 'set(spec["authorizationReads"])')
-        _source, complete = read("serverware/authority_complete_query.py")
+        _source, complete = read("catchplate/authority_complete_query.py")
         self.shape(assigned(self.worker, "OPERATION"), "complete.OPERATION")
         self.assertEqual(ast.literal_eval(assigned(complete, "OPERATION")), "webauthn.credential.revoke")
         roles = assigned(complete, "_ROLES").elts
         self.assertEqual(len(roles), 6)
         read_ids = {ast.literal_eval(role.args[2]) for role in roles}
         self.assertEqual(len(read_ids), 5)
-        _source, projection = read("serverware/authority_index_projection.py")
+        _source, projection = read("catchplate/authority_index_projection.py")
         profiles = [(ast.literal_eval(item.args[0]), ast.literal_eval(item.args[1]))
             for item in assigned(projection, "_DEFINITIONS").elts]
         self.assertEqual(tuple(sorted(read_ids | {name for name, table in profiles if table in BUSINESS})), HEADS)
         self.shape(assigned(self.worker, "_HEAD_IDS"), "heads.required_index_ids(OPERATION)")
-        _source, heads = read("serverware/authority_index_heads.py")
+        _source, heads = read("catchplate/authority_index_heads.py")
         required = definition(heads, "required_index_ids")
         self.shape(assigned(required, "identities"), "{role.index_id for role in roles}")
         self.shape(calls(required, "identities.update")[0], "identities.update(projection.index_ids_for_table(table))")
@@ -128,7 +128,7 @@ class RevocationRootsSourceTests(unittest.TestCase):
             authority.TREE_DEPTH if name == "tree_depth" else authority.TREE_RADIX if name == "tree_radix" else counted.I64_MAX)''')
         sql = assigned(self.worker, "_PRIMARY_SQL")
         literals = "".join(node.value for node in ast.walk(sql) if isinstance(node, ast.Constant) and type(node.value) is str)
-        for text in ("serverware_metadata.", "WHERE root.table_name IN (", 'COLLATE "C" LIMIT %s'):
+        for text in ("catchplate_metadata.", "WHERE root.table_name IN (", 'COLLATE "C" LIMIT %s'):
             self.assertIn(text, literals)
         self.assertIn("_PRIMARY_TABLES", ast.unparse(sql))
         physical = calls(self.run, "acquisition.read")
@@ -171,7 +171,7 @@ class RevocationRootsSourceTests(unittest.TestCase):
         self.shape(charges[1], "work.charge(hashes=1, input_bytes=24 + len(_EMPTY_NODE_DOMAIN) + len(text) + size)")
         self.shape(assigned(preparation, "result"), "_callback(work, radix.empty_digest, 0)")
         self.assertLess(loops[1].end_lineno, assigned(preparation, "result").lineno)
-        _source, authority = read("serverware/authority_contract.py")
+        _source, authority = read("catchplate/authority_contract.py")
         self.assertEqual(ast.literal_eval(assigned(authority, "TREE_DEPTH")), 64)
         self.assertEqual(ast.literal_eval(assigned(authority, "TREE_RADIX")), 16)
         row = definition(self.worker, "_owned_primary_row")
@@ -231,7 +231,7 @@ class RevocationRootsSourceTests(unittest.TestCase):
         self.assertLess(admitted.lineno, privilege.lineno)
         self.assertLess(privilege.lineno, ledger.lineno)
         self.assertLess(ledger.lineno, acquired.lineno)
-        self.shape(privilege, 'verifier_read_privilege_check(role=configuration[2], namespace="serverware_metadata")')
+        self.shape(privilege, 'verifier_read_privilege_check(role=configuration[2], namespace="catchplate_metadata")')
         self.shape(ledger, "roots.reader._ReadAcquisitionBudget(guarded, trace, work=work, limits=roots._ROOT_LIMITS)")
         self.shape(acquired, "roots._read_revocation_root_inventory_on_work(guarded, expected_query_manifest_digest=configuration[6], work=work, acquisition=acquisition)")
         identity = definition(self.owner, "_admit_identity")
@@ -272,7 +272,7 @@ class RevocationRootsSourceTests(unittest.TestCase):
         self.assertEqual(len(callbacks), 2)
         self.shape(callbacks[0], 'authority_revocation_root_reader.roots._callback(work, authority_launch_guard.require_active, "verifier")')
         self.shape(callbacks[1], '''authority_revocation_root_reader.roots._callback(work, _read_dsn_descriptor,
-            "SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN")''')
+            "CATCHPLATE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN")''')
         self.assertLess(assigned(method, "pins").lineno, callbacks[0].lineno)
         self.assertLess(callbacks[0].lineno, callbacks[1].lineno)
         self.shape(method.body[-1].value, "reader.read(work=work)")
@@ -286,7 +286,7 @@ class RevocationRootsSourceTests(unittest.TestCase):
         for tree in (self.worker, self.owner):
             imports = [ast.unparse(node) for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))]
             self.assertFalse(any("authority_planner" in item or "authority_transition_registry" in item or "import db" in item or "import time" in item for item in imports))
-        registry, _tree = read("serverware/authority_transition_registry.py")
+        registry, _tree = read("catchplate/authority_transition_registry.py")
         self.assertNotIn("authority_revocation_roots", registry)
         self.assertNotIn("_read_revocation_root_observations", registry)
 

@@ -14,7 +14,7 @@ import stat
 import time
 import cbor2
 from scripts.aws_kms_recipient_release import attested_recipient_public_key, reject_secret_fields, run_aws_kms_decrypt
-from serverware import native_shadow_key_contract as c
+from catchplate import native_shadow_key_contract as c
 p = c.p
 
 
@@ -39,11 +39,11 @@ def configuration(path):
     finally:
         os.close(fd)
     p.fields(value, ("apiVersion", "enclaveCid", "transport", "bindingSha256", "ciphertextBlob", "region"))
-    p.require(value["apiVersion"] in ("serverware.nativeShadowKeyKmsParent/v1", "serverware.nativeShadowKeyKmsParent/v2"))
+    p.require(value["apiVersion"] in ("catchplate.nativeShadowKeyKmsParent/v1", "catchplate.nativeShadowKeyKmsParent/v2"))
     p.integer(value["enclaveCid"], 4, (1 << 32)-2)
     c.transport(value["transport"]); p.digest(value["bindingSha256"])
-    p.require(value["transport"]["apiVersion"] == ("serverware.nativeShadowKeyKmsTransport/v2"
-        if value["apiVersion"] == "serverware.nativeShadowKeyKmsParent/v2" else "serverware.nativeShadowKeyKmsTransport/v1"))
+    p.require(value["transport"]["apiVersion"] == ("catchplate.nativeShadowKeyKmsTransport/v2"
+        if value["apiVersion"] == "catchplate.nativeShadowKeyKmsParent/v2" else "catchplate.nativeShadowKeyKmsTransport/v1"))
     blob = p.decoded(value["ciphertextBlob"], maximum=6144)
     p.require(p.sha(blob) == value["transport"]["ciphertextBlobSha256"])
     if value["region"] is not None:

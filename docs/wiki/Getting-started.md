@@ -4,7 +4,7 @@
 
 Use a small, read-only job first: for example, a script that reads issues from one GitHub repository. You need console access, a provider credential with the required provider-side rights, and a client environment that can reach the advertised proxy.
 
-Do not enter secrets in chat, issue comments or checked-in example files. The provider secret goes into the authenticated **Credentials** form. The workload receives only its own Serverware proxy token.
+Do not enter secrets in chat, issue comments or checked-in example files. The provider secret goes into the authenticated **Credentials** form. The workload receives only its own Catchplate proxy token.
 
 Need to create the provider integration first? Use the [GitHub App walkthrough](GitHub-App-setup.md) or [Google/X OAuth setup](OAuth-provider-setup.md). For your own JSON API, use the [custom Bearer/header example](Custom-API-credentials.md).
 
@@ -40,8 +40,8 @@ For supported JSON jobs, you do not need request/response field lists unless you
 2. Copy the advertised proxy endpoint; the console address is not the forward proxy.
 3. Choose **Download CA certificate**. Trust this public CA only in the intended client, with TLS verification still enabled.
 4. Select the matching recipe or connection template. For the supplied SDK examples, prepare dependencies using that project's README before supplying the client token.
-5. For the supplied GitHub, Gmail, npm, Alchemy and X examples, choose **Download private client config** while the page still holds the token. Save it beside the CA and run the prepared example with `--config /path/serverware-client.private.json`. The example imports its proxy login and saved scope, so those values need not be retyped.
-6. Alternatively, supply the client token privately as `SERVERWARE_PROXY_TOKEN` and follow the environment-based recipe. Never substitute the real provider secret. Posting and publishing always require their separate explicit local inputs and confirmation.
+5. For the supplied GitHub, Gmail, npm, Alchemy and X examples, choose **Download private client config** while the page still holds the token. Save it beside the CA and run the prepared example with `--config /path/catchplate-client.private.json`. The example imports its proxy login and saved scope, so those values need not be retyped.
+6. Alternatively, supply the client token privately as `CATCHPLATE_PROXY_TOKEN` and follow the environment-based recipe. Never substitute the real provider secret. Posting and publishing always require their separate explicit local inputs and confirmation.
 
 **Download private client config** is available only while the page holds the matching one-time token. The download contains that token: keep it private and out of Git. A copied recipe or downloaded config does not execute a request.
 
@@ -57,6 +57,6 @@ If a save or provider write times out, use [uncertain-result recovery](Troublesh
 
 Resources used only for the local connection check appear in collapsed **Connection-check resources** sections on the Credentials, Clients and Permissions pages. They do not count toward ordinary setup progress. To reuse one deliberately, expand its section and choose **Use with a client**, or enable **Include saved connection-check resources** in setup. Revoked records remain in a separate history section; nothing is deleted or disabled by this grouping.
 
-**Overview → Diagnostics → Inspect synthetic connection check** shows explicitly selected saved fixture permissions. It does not create resources, renew tokens or send a request. Only use made-up provider keys for this fixture; it is not Google, GitHub or npm acceptance. Follow the existing [diagnostic walkthrough](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-demo.md#optional-diagnostic-connection-check) if you want this separate test.
+**Overview → Diagnostics → Inspect synthetic connection check** shows explicitly selected saved fixture permissions. It does not create resources, renew tokens or send a request. Only use made-up provider keys for this fixture; it is not Google, GitHub or npm acceptance. Follow the existing [diagnostic walkthrough](https://github.com/AndrewMohawk/catchplate/blob/main/docs/operator-demo.md#optional-diagnostic-connection-check) if you want this separate test.
 
-Sources: [operator walkthrough](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-demo.md), [GitHub contract](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-github-client-compatibility.md), [client lifecycle implementation](https://github.com/AndrewMohawk/serverware/blob/main/serverware/operator_demo_web/workspace_applications.js).
+Sources: [operator walkthrough](https://github.com/AndrewMohawk/catchplate/blob/main/docs/operator-demo.md), [GitHub contract](https://github.com/AndrewMohawk/catchplate/blob/main/docs/operator-github-client-compatibility.md), [client lifecycle implementation](https://github.com/AndrewMohawk/catchplate/blob/main/catchplate/operator_demo_web/workspace_applications.js).

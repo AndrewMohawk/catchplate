@@ -4,11 +4,11 @@ use super::*;
 use serde::de::DeserializeOwned;
 use zeroize::Zeroize;
 
-const BINDING: &str = "serverware.nativeServiceTokensBinding/v1";
-const ENVELOPE: &str = "serverware.nativeServiceTokensEnvelope/v1";
-const PLAINTEXT: &str = "serverware.nativeServiceTokens/v1";
-const OUTPUT: &str = "serverware.nativeServiceTokensGateCiphertext/v1";
-const DOMAIN: &[u8] = b"serverware/native-service-tokens-gate-ciphertext/v1\0";
+const BINDING: &str = "catchplate.nativeServiceTokensBinding/v1";
+const ENVELOPE: &str = "catchplate.nativeServiceTokensEnvelope/v1";
+const PLAINTEXT: &str = "catchplate.nativeServiceTokens/v1";
+const OUTPUT: &str = "catchplate.nativeServiceTokensGateCiphertext/v1";
+const DOMAIN: &[u8] = b"catchplate/native-service-tokens-gate-ciphertext/v1\0";
 const MAX_PLAINTEXT: usize = 24576;
 
 fn required_option<'de, D: serde::Deserializer<'de>, T: DeserializeOwned>(d: D)
@@ -159,7 +159,7 @@ impl Owner {
             let mut nonce = [0u8; 32]; let mut operation = [0u8; 32];
             SystemRandom::new().fill(&mut nonce).map_err(|_| "native service-token entropy unavailable")?;
             SystemRandom::new().fill(&mut operation).map_err(|_| "native service-token entropy unavailable")?;
-            let request = canonical_ascii_bytes(&json!({"apiVersion":"serverware.nativeBrokerOpenServiceTokens/v1",
+            let request = canonical_ascii_bytes(&json!({"apiVersion":"catchplate.nativeBrokerOpenServiceTokens/v1",
                 "operationId":hex::encode(operation),"gateRecipientPublicKey":encoded(&public),
                 "gateRecipientNonce":encoded(&nonce),"deadlineBoottimeNs":deadline,
                 "expectedBinding":expected,"envelope":envelope}))?;

@@ -8,13 +8,13 @@ available deployment or evidence that application requests succeed.
 
 ## Selection and sequence
 
-Outer `serverware.nativePilotSupervisorCommissioningPolicy/v20` selects
-`serverware.nativePilotSupervisorContinuationPolicy/v2`. The latter adds one
+Outer `catchplate.nativePilotSupervisorCommissioningPolicy/v20` selects
+`catchplate.nativePilotSupervisorContinuationPolicy/v2`. The latter adds one
 `interactive` field containing this exact static policy:
 
 ```json
 {
-  "apiVersion": "serverware.nativePilotInteractivePolicy/v1",
+  "apiVersion": "catchplate.nativePilotInteractivePolicy/v1",
   "stopAtBoottimeNanos": 123456789000,
   "expiresAtUnixNanos": 1800000000000000000
 }
@@ -52,7 +52,7 @@ declaring success or retrying the attempt.
 ## Adopted lifecycle selection (.416)
 
 The cold-to-adopted lifecycle now supports the same action through explicit
-`serverware.nativePilotAdoptedSupervisorPolicy/v2`. Its purpose is
+`catchplate.nativePilotAdoptedSupervisorPolicy/v2`. Its purpose is
 `independently-approved-adopted-native-commissioning-through-bounded-interactive-shutdown`;
 its required `interactive` field uses the existing policy shown above. V1
 cannot authorize an interval. Either version may still authorize immediate
@@ -105,7 +105,7 @@ changed Python files passed grammar checks and exact membership in both Make
 inventories. This was one frozen run; no failed or repeated test batch.
 
 Archive, harness, log, changed-file inventory and hashes are retained in
-`codex-offload/serverware/engineering-builds/6e53feae-interactive-l3QQso/`
+`codex-offload/catchplate/engineering-builds/6e53feae-interactive-l3QQso/`
 outside the repository. No cloud or paid action, running pilot, signal fault
 injection, native/artifact rebuild or full owner transcript has been performed
 for this source slice. Pure public policy/action/result controls do not

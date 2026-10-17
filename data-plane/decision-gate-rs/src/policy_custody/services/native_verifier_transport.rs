@@ -1,12 +1,12 @@
 //! Public bytes only. The untrusted relay cannot supply verifier authority.
 use super::*;
 use super::super::super::guest_original::Original;
-use serverware_decision_gate::enclave_vsock_v1::VsockStreamV1;
+use catchplate_decision_gate::enclave_vsock_v1::VsockStreamV1;
 use std::io::{Read, Write};
 use std::path::Path;
 
-const CONFIGURATION_PATH: &str = "/etc/serverware/native-shadow-public-exchange.json";
-const DOMAIN: &str = "serverware.nativeShadowVerifierTransport.signature/v1";
+const CONFIGURATION_PATH: &str = "/etc/catchplate/native-shadow-public-exchange.json";
+const DOMAIN: &str = "catchplate.nativeShadowVerifierTransport.signature/v1";
 const REQUEST_MAGIC: &[u8; 8] = b"SWNSVQ1\0";
 const RESULT_MAGIC: &[u8; 8] = b"SWNSVR1\0";
 const MAX_EVIDENCE: usize = 128 * 1024;
@@ -30,21 +30,21 @@ pub(crate) enum NativeVerifierTransportRole {
 impl NativeVerifierTransportRole {
     fn path(self)->&'static str {
         match self {
-            Self::Retrieval=>"/etc/serverware/native-pilot-inputs/native-retrieval-verifier.json",
-            Self::Persistence=>"/etc/serverware/native-pilot-inputs/native-persistence-verifier.json",
-            Self::TrustedTime=>"/etc/serverware/native-pilot-inputs/native-trustedTime-verifier.json",
-            Self::GenerationInstall=>"/etc/serverware/native-pilot-inputs/native-generationInstall-verifier.json",
-            Self::CommitRequest=>"/etc/serverware/native-pilot-inputs/native-commitRequest-verifier.json",
-            Self::IngressAdmission=>"/etc/serverware/native-pilot-inputs/native-ingressAdmission-verifier.json",
-            Self::TerminalAppend=>"/etc/serverware/native-pilot-inputs/native-terminalAppend-verifier.json",
-            Self::DispatchBarrier=>"/etc/serverware/native-pilot-inputs/native-dispatchBarrier-verifier.json",
-            Self::ActiveEffectBarrier=>"/etc/serverware/native-pilot-inputs/native-activeEffectBarrier-verifier.json",
-            Self::ActiveEffectCommit=>"/etc/serverware/native-pilot-inputs/native-activeEffectCommit-verifier.json",
-            Self::Bridge=>"/etc/serverware/native-pilot-inputs/native-bridge-verifier.json",
-            Self::PublicationReconciliation=>"/etc/serverware/native-pilot-inputs/native-publicationReconciliation-verifier.json",
-            Self::PublicationGenesisRetrieval=>"/etc/serverware/native-pilot-inputs/native-publicationGenesisRetrieval-verifier.json",
-            Self::PublicationGenesis=>"/etc/serverware/native-pilot-inputs/native-publicationGenesis-verifier.json",
-            Self::PublicationGenesisCoordinator=>"/etc/serverware/native-pilot-inputs/native-publicationGenesisCoordinator-verifier.json",
+            Self::Retrieval=>"/etc/catchplate/native-pilot-inputs/native-retrieval-verifier.json",
+            Self::Persistence=>"/etc/catchplate/native-pilot-inputs/native-persistence-verifier.json",
+            Self::TrustedTime=>"/etc/catchplate/native-pilot-inputs/native-trustedTime-verifier.json",
+            Self::GenerationInstall=>"/etc/catchplate/native-pilot-inputs/native-generationInstall-verifier.json",
+            Self::CommitRequest=>"/etc/catchplate/native-pilot-inputs/native-commitRequest-verifier.json",
+            Self::IngressAdmission=>"/etc/catchplate/native-pilot-inputs/native-ingressAdmission-verifier.json",
+            Self::TerminalAppend=>"/etc/catchplate/native-pilot-inputs/native-terminalAppend-verifier.json",
+            Self::DispatchBarrier=>"/etc/catchplate/native-pilot-inputs/native-dispatchBarrier-verifier.json",
+            Self::ActiveEffectBarrier=>"/etc/catchplate/native-pilot-inputs/native-activeEffectBarrier-verifier.json",
+            Self::ActiveEffectCommit=>"/etc/catchplate/native-pilot-inputs/native-activeEffectCommit-verifier.json",
+            Self::Bridge=>"/etc/catchplate/native-pilot-inputs/native-bridge-verifier.json",
+            Self::PublicationReconciliation=>"/etc/catchplate/native-pilot-inputs/native-publicationReconciliation-verifier.json",
+            Self::PublicationGenesisRetrieval=>"/etc/catchplate/native-pilot-inputs/native-publicationGenesisRetrieval-verifier.json",
+            Self::PublicationGenesis=>"/etc/catchplate/native-pilot-inputs/native-publicationGenesis-verifier.json",
+            Self::PublicationGenesisCoordinator=>"/etc/catchplate/native-pilot-inputs/native-publicationGenesisCoordinator-verifier.json",
         }
     }
 }
@@ -91,8 +91,8 @@ impl Configuration {
         let p = &self.authorization.payload;
         let a = assignment.payload();
         let k = &key_configuration.authorization.payload;
-        require(self.api_version == "serverware.nativeShadowVerifierTransport/v1"
-            && p.api_version == "serverware.nativeShadowVerifierTransportAssignment/v1"
+        require(self.api_version == "catchplate.nativeShadowVerifierTransport/v1"
+            && p.api_version == "catchplate.nativeShadowVerifierTransportAssignment/v1"
             && p.purpose == "public-shadow-nitro-verification"
             && p.assignment_id == a.assignment_id
             && p.assignment_payload_sha256 == *assignment.payload_sha256()

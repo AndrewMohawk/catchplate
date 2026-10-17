@@ -22,10 +22,10 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_current_root_decisions as decisions
-from serverware import authority_current_root_service as service
-from serverware import authority_native_jit_review_current_read as source
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_current_root_decisions as decisions
+from catchplate import authority_current_root_service as service
+from catchplate import authority_native_jit_review_current_read as source
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 from test_authority_native_jit_review_current_chunks import frames, native, row as template_row
 from test_authority_radix_mutation import IndependentTree, refresh_proof_digest
 
@@ -292,7 +292,7 @@ class NativeJitReviewReadControls(unittest.TestCase):
 
     def test_native_peers_match_both_existing_authority_launchers(self):
         for name in ("authority_launcher.py", "authority_fd_entrypoint.py"):
-            tree = ast.parse((Path(__file__).resolve().parents[1] / "serverware" / name).read_text())
+            tree = ast.parse((Path(__file__).resolve().parents[1] / "catchplate" / name).read_text())
             assignments = [node.value for node in tree.body if isinstance(node, ast.Assign)
                 and any(isinstance(target, ast.Name) and target.id == "ROLE_IDENTITIES"
                     for target in node.targets)]

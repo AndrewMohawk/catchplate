@@ -61,7 +61,7 @@ async function main() {
     requireValue(process.argv.length === 3 && process.version === 'v25.5.0');
     const config = configuration(process.env, operation);
     observe({ workerStage: 'runtime' });
-    const root = process.env.SERVERWARE_NPM_WORK;
+    const root = process.env.CATCHPLATE_NPM_WORK;
     requireValue(typeof root === 'string' && resolve(root) === root && root === process.cwd()
       && process.env.NODE_EXTRA_CA_CERTS === join(root, 'trust.pem'));
     const directory = dirname(fileURLToPath(import.meta.url));

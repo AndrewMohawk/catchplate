@@ -19,10 +19,10 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import operator_x_oauth_profile as profiles
-from serverware import operator_x_oauth_protocol as protocol
-from serverware import operator_x_transport as transport
-from serverware.http_client import HttpDeadline
+from catchplate import operator_x_oauth_profile as profiles
+from catchplate import operator_x_oauth_protocol as protocol
+from catchplate import operator_x_transport as transport
+from catchplate.http_client import HttpDeadline
 
 
 def no_external_effects(event, args):

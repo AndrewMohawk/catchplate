@@ -1,14 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-pilot-assignment-authority-input.v3.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-pilot-assignment-authority-input.v3.schema.json",
   "title": "Explicit cold bootstrap assignment producer input",
   "description": "Independently approved public canonical originals selecting only nativePublicationGenesisClosureSet/v2. Signed output stays policyShadowAssignment/v2; new domain-separated roots bind the profile and coordinator anchor. No late runtime or live owner is constructed. Whole input <=8MiB; original limits unchanged.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "setApiVersion", "trustOriginal", "trustSha256", "payloadOriginal", "closureSetOriginal"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativePilotAssignmentAuthorityInput/v3"},
-    "setApiVersion": {"const": "serverware.nativePublicationGenesisClosureSet/v2"},
+    "apiVersion": {"const": "catchplate.nativePilotAssignmentAuthorityInput/v3"},
+    "setApiVersion": {"const": "catchplate.nativePublicationGenesisClosureSet/v2"},
     "trustOriginal": {"type": "string", "minLength": 1, "maxLength": 1048576, "pattern": "^[\\x00-\\x7f]+$"},
     "trustSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "payloadOriginal": {"type": "string", "minLength": 1, "maxLength": 4194304, "pattern": "^[\\x00-\\x7f]+$"},

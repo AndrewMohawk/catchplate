@@ -1,0 +1,75 @@
+# Unrendered, uninstalled deployment input; no accounts, keys, roles, journal,
+# current-state authority or network permission are provisioned here.
+# Five root-owned TLS files: ca.pem/custody.crt/commit.crt mode 0444;
+# custody.key/commit.key mode 0440 group 65515, matching signed originals.
+# UID 65515 needs independently provisioned state-socket DAC access despite
+# having no supplementary groups. Read-only bind mounts do not grant access.
+# Review literal-safe substitutions and restrict PostgreSQL egress independently.
+[Unit]
+Description=Catchplate dedicated registration completion owner (trusted-host-local)
+BindsTo=catchplate-registration-execution-completion.socket
+After=local-fs.target catchplate-registration-execution-completion.socket
+RequiresMountsFor=@COMPLETION_RELEASE_ROOT@ @COMPLETION_TRUST_DIR@ @COMPLETION_KEY_FILE@ @COMPLETION_TLS_DIR@ @COMPLETION_JOURNAL_DIR@
+AssertPathIsDirectory=@COMPLETION_RELEASE_ROOT@
+AssertPathIsDirectory=@COMPLETION_TRUST_DIR@
+AssertPathIsDirectory=@COMPLETION_TLS_DIR@
+AssertPathIsDirectory=@COMPLETION_JOURNAL_DIR@
+StartLimitIntervalSec=infinity
+StartLimitBurst=1
+
+[Service]
+Type=exec
+# Root delivery drops permanently to 65515:65515, no supplementary groups.
+# Exactly five inherited descriptors 198..202. At most one accepted connection
+# per cold launch, including rejection, then exit. No automatic restart.
+# Type=exec establishes neither readiness nor successful authority admission.
+User=root
+Group=root
+RootDirectory=@COMPLETION_RELEASE_ROOT@
+MountAPIVFS=yes
+WorkingDirectory=/app
+BindReadOnlyPaths=@COMPLETION_TRUST_DIR@:/run/catchplate/registration-completion-trust
+BindReadOnlyPaths=@COMPLETION_KEY_FILE@:/run/catchplate/registration-completion-keys/completion-ed25519.pem
+BindReadOnlyPaths=@COMPLETION_TLS_DIR@:/run/catchplate/registration-completion-tls
+BindReadOnlyPaths=/run/catchplate/registration-execution:/run/catchplate/registration-execution
+BindReadOnlyPaths=/run/catchplate/current-root:/run/catchplate/current-root
+BindPaths=@COMPLETION_JOURNAL_DIR@:/var/lib/catchplate/registration-completion-delivery
+ReadWritePaths=/var/lib/catchplate/registration-completion-delivery
+Sockets=catchplate-registration-execution-completion.socket
+NonBlocking=yes
+Environment=LD_LIBRARY_PATH=/runtime/python/lib
+ExecStart=/runtime/python/bin/python3 -I /runtime/authority-bootstrap/registration_execution_completion_launcher.py --root-delivery
+Restart=no
+RuntimeMaxSec=300s
+TimeoutStartSec=35s
+# TERM and cgroup escalation are not a hard kernel/driver watchdog.
+TimeoutStopSec=35s
+KillSignal=SIGTERM
+KillMode=control-group
+SendSIGKILL=yes
+OOMPolicy=stop
+UMask=0077
+LimitCORE=0
+LimitNOFILE=1024
+TasksMax=32
+MemoryMax=512M
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SETGID CAP_SETUID
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+KeyringMode=private
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native

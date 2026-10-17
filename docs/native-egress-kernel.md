@@ -96,7 +96,7 @@ fields match the kernel's dumps; unsupported expressions fail closed.
 [Bitwise dump](https://github.com/torvalds/linux/blob/v6.12/net/netfilter/nft_bitwise.c#L221-L246),
 [extension-header dump](https://github.com/torvalds/linux/blob/v6.12/net/netfilter/nft_exthdr.c#L616-L642).
 
-The digest domain is `serverware/native-egress-observed-semantics/v1` followed by
+The digest domain is `catchplate/native-egress-observed-semantics/v1` followed by
 NUL. It commits the canonical signed ruleset and the fully matched normalized
 ordered expression tree, with lengths and typed fields. Generation, kernel
 handles, use counts and packet counters are excluded from this stable semantic

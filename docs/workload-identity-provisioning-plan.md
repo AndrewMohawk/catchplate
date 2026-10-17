@@ -11,7 +11,7 @@ Source is unbuilt/unexecuted; this contract grants no issuance authority.
 
 ## Client ownership
 
-The client module is `serverware_agent_trust/workload_identity_provisioning.py`,
+The client module is `catchplate_agent_trust/workload_identity_provisioning.py`,
 called through two explicit local modes of the existing enrollment CLI:
 `--prepare-workload-identity` and `--admit-workload-certificate`.
 
@@ -23,8 +23,8 @@ system trust store, packet contents or a network response.
 
 Preparation locally creates a P-256 private key and standard PKCS#10 CSR with
 the permitted SANs. The retained key also signs a domain-separated canonical
-`serverware.signedWorkloadIdentityRequest/v1` envelope with a
-`serverware.workloadIdentityRequest/v1` payload binding:
+`catchplate.signedWorkloadIdentityRequest/v1` envelope with a
+`catchplate.workloadIdentityRequest/v1` payload binding:
 
 - Exact packet and packet-signing-key digests, principal and nonce.
 - Selected identity/SAN constraints, public SPKI and original interval.

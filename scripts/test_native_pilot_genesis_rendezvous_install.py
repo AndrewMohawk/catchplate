@@ -15,11 +15,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts import install_native_pilot_genesis_rendezvous as command
 from scripts import native_pilot_authority_runtime_entrypoint as entry
 from scripts.test_native_pilot_genesis_rendezvous import fixture
-from serverware import native_pilot_genesis_authority as authority
-from serverware import native_pilot_genesis_handoff_listener as legacy
-from serverware import native_pilot_genesis_jobs as jobs
-from serverware import native_pilot_genesis_rendezvous_install as installation
-from serverware import native_pilot_genesis_rendezvous_profile as profile
+from catchplate import native_pilot_genesis_authority as authority
+from catchplate import native_pilot_genesis_handoff_listener as legacy
+from catchplate import native_pilot_genesis_jobs as jobs
+from catchplate import native_pilot_genesis_rendezvous_install as installation
+from catchplate import native_pilot_genesis_rendezvous_profile as profile
 
 p = profile.p
 

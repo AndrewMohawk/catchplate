@@ -31,7 +31,7 @@ def main():
         raise ValueError("isolated no-bytecode Python is required")
     # Fixed sibling installed/source package only; no supplied import selector.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from serverware.native_pilot_publication import DESTINATIONS, LIMITS, PublicPublisher, p
+    from catchplate.native_pilot_publication import DESTINATIONS, LIMITS, PublicPublisher, p
 
     parser = Parser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--purpose", choices=tuple(DESTINATIONS), required=True)

@@ -1,6 +1,6 @@
 # Historical registration exchange admission
 
-[`authority_registration_history_exchange._verify_on_configuration`](../serverware/authority_registration_history_exchange.py)
+[`authority_registration_history_exchange._verify_on_configuration`](../catchplate/authority_registration_history_exchange.py)
 authenticates the original planning, caller-authorization and execution-grant
 exchange without requiring a reservation or completion to exist. It is a private
 source-only verifier, not present-caller authentication, recovery permission or

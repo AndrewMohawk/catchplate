@@ -45,8 +45,8 @@ def main():
         raise SystemExit("fixed installer runtime refused")
     mode, inventory_fd, inventory_sha256, selected = arguments(sys.argv[1:])
     sys.path[:0] = list(IMPORT_ROOTS)
-    from serverware.native_pilot_genesis_authority import _SelfRuntime
-    from serverware import native_pilot_genesis_parent_control_io as io
+    from catchplate.native_pilot_genesis_authority import _SelfRuntime
+    from catchplate import native_pilot_genesis_parent_control_io as io
     from scripts.authority import native_pilot_authority_io as output
     runtime = _SelfRuntime()
     result = 1

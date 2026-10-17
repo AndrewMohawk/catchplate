@@ -43,16 +43,16 @@ def main(argv=None):
     connections = []
     try:
         selected = arguments(argv)
-        from serverware import authority_local_audit_reader as reader
+        from catchplate import authority_local_audit_reader as reader
         if selected is None:
             print(json.dumps(dict(role=reader.ROLE, schema=reader.SCHEMA, selectTables=sorted(reader.TABLES),
                 credentialsIssued=False, databaseContacted=False), sort_keys=True)); return 0
-        if os.environ.get("SERVERWARE_PROCESS_MODE") != "metadata-bootstrap":
+        if os.environ.get("CATCHPLATE_PROCESS_MODE") != "metadata-bootstrap":
             raise ValueError("explicit offline mode required")
         from scripts.authority import native_pilot_authority_io as io
         io._process()
-        from serverware import config
-        if config.PRODUCTION_IMAGE or os.environ.get("SERVERWARE_RELEASE_CHANNEL", "").strip() == "production":
+        from catchplate import config
+        if config.PRODUCTION_IMAGE or os.environ.get("CATCHPLATE_RELEASE_CHANNEL", "").strip() == "production":
             raise ValueError("local reader provisioning refuses production")
         io._input(selected["fd"], 16384, private=True)
         original = io.read_public(selected["fd"], 16384)

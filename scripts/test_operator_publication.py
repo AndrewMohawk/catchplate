@@ -225,7 +225,7 @@ def blocked_publishers():
     config, db, store, _, schema, _ = workspace.legacy_fixture(with_revocation=False)
     publication = store.operator_publication
     path = config.DATA_DIR / publication.LOCK_NAME
-    from serverware import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
+    from catchplate import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
     identifier = workspace.rows(db, "operator_demo_connections")[0]["id"]
     digest = store.get_policy_high_water()["policy_hash"]
     revoke = store.RevocationInput(connection_id=identifier, expected_policy_hash=digest)
@@ -311,7 +311,7 @@ def held_through_materialization():
 
 def transaction_assertion():
     config, db, store, _ = common.backend()
-    from serverware import operator_catalog_policy
+    from catchplate import operator_catalog_policy
     before = saved(config, db)
     with closing(db.connect()) as connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -322,12 +322,12 @@ def transaction_assertion():
 
 
 def inactive():
-    from serverware import operator_publication
+    from catchplate import operator_publication
     def enter():
         with operator_publication.exclusive(startup=True):
             raise AssertionError("inactive profile admitted")
     fail(enter, text="profile unavailable")
-    assert not Path(os.environ["SERVERWARE_DATA_DIR"]).exists()
+    assert not Path(os.environ["CATCHPLATE_DATA_DIR"]).exists()
     return {"inactive_unchanged": True}
 
 
@@ -358,7 +358,7 @@ class OperatorPublicationTests(unittest.TestCase):
         return json.loads(result.stdout) if expected == 0 else None
 
     def retained(self):
-        with closing(sqlite3.connect((self.directory / "serverware.sqlite3").as_uri() + "?mode=ro", uri=True)) as conn:
+        with closing(sqlite3.connect((self.directory / "catchplate.sqlite3").as_uri() + "?mode=ro", uri=True)) as conn:
             dump = "\n".join(conn.iterdump())
         return dump, (self.directory / "policy-bundle.json").read_bytes()
 
@@ -401,7 +401,7 @@ class OperatorPublicationTests(unittest.TestCase):
         self.run_worker("fixture")
         (self.directory / ".operator-publication.lock").unlink()
         before = self.retained()
-        command = [sys.executable, "-B", "-m", "serverware.operator_publication", "--provision-existing-stopped"]
+        command = [sys.executable, "-B", "-m", "catchplate.operator_publication", "--provision-existing-stopped"]
         for _ in range(2):
             result = subprocess.run(command, cwd=common.ROOT, env=self.environment,
                 capture_output=True, text=True, timeout=35)

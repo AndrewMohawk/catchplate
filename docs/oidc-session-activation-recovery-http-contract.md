@@ -11,7 +11,7 @@ limits. The required closed fields are:
 
 | Field | Exact value or grammar |
 | --- | --- |
-| `schema` | `serverware.oidcSessionActivationRecoveryRequest/v1` |
+| `schema` | `catchplate.oidcSessionActivationRecoveryRequest/v1` |
 | `purpose` | `recover-oidc-session-activation` |
 | `localDigest` | Original finalization locator: `sha256:` plus 64 lowercase hexadecimal characters |
 
@@ -27,19 +27,19 @@ identity or permission to repeat activation.
 projects the actual independently replayed eight-field finalization subject
 using the established exact OIDC first-enrollment and credential grammar. It
 adds the distinct action `webauthn.oidc-session.activation.recover`, intent schema
-`serverware.oidcSessionActivationRecoveryIntent/v1`, recovery purpose and exact
+`catchplate.oidcSessionActivationRecoveryIntent/v1`, recovery purpose and exact
 `activationAuthorizationDigest`/`oldTokenDigest`. These are ordinary binding
 fields, not a successful admission carrier. The association digest is only a
 retained-record locator; historical intent/possession admission must independently
 establish the old-token commitment and join the genuine target before options.
 
-The options schema is `serverware.oidcSessionActivationRecoveryOptions/v1`.
+The options schema is `catchplate.oidcSessionActivationRecoveryOptions/v1`.
 The existing `unavailable(local_digest=None)` remains unchanged for options:
 fixed status `recovery-unavailable`, unknown dispatch/session states and
 `automaticRetryAllowed:false`.
 
 Dispatch failure projections use the same
-`serverware.oidcSessionActivationRecoveryFailure/v1` schema and exact purpose,
+`catchplate.oidcSessionActivationRecoveryFailure/v1` schema and exact purpose,
 optional validated local digest, unknown session state and no-retry field:
 
 | Helper | Status | Dispatch state and required handler boundary |
@@ -53,7 +53,7 @@ sets, clears or replaces a cookie; no exception text or foreign headers enter
 the response. The [actual HTTP owner](control-plane-oidc-session-activation-recovery-http.md)
 preserves the existing cookie and forbids automatic retry.
 
-`SUCCESS_SCHEMA` names `serverware.oidcSessionActivationRecoveryResponse/v1`;
+`SUCCESS_SCHEMA` names `catchplate.oidcSessionActivationRecoveryResponse/v1`;
 it is not a success helper or permission. Only the genuine terminal delivery
 owner constructs the fixed nonsecret success fields: schema, purpose,
 `status:recovered`, `sessionState:active`, `automaticRetryAllowed:false`.

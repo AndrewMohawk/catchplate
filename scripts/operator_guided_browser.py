@@ -12,15 +12,15 @@ import re
 from scripts.check_operator_demo import CheckFailure, require
 from scripts import operator_ordinary_client_fixture as oracle
 
-SCHEMA = "serverware.privateGuidedBrowser/v1"
-JOINED_SCHEMA = "serverware.privateGuidedBrowserJoined/v1"
-ORIGIN = "https://serverware-guided.example.com"
-PROXY = "https://serverware-gmail-proxy.example.com"
+SCHEMA = "catchplate.privateGuidedBrowser/v1"
+JOINED_SCHEMA = "catchplate.privateGuidedBrowserJoined/v1"
+ORIGIN = "https://catchplate-guided.example.com"
+PROXY = "https://catchplate-gmail-proxy.example.com"
 UPSTREAM = "https://demo-upstream:8443" + oracle.FIXTURE_PATH
 PREFIX = "/api/operator-demo"
 CATALOG = PREFIX + "/catalog"
 CA_PATH = "/client-trust/inner-ca.pem"
-DUMMY = "Bearer SERVERWARE_DUMMY"
+DUMMY = "Bearer CATCHPLATE_DUMMY"
 BODY = oracle.REQUEST_BODY
 COLLECTIONS = ("credentials", "applications", "access_rules")
 KINDS = ("credential", "application", "access_rule")

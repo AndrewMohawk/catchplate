@@ -11,7 +11,8 @@ const {fixture, ready, view, credential, application, rule, IDS} = require('./te
 const {context: catalogContext, rawCatalog} = require('./test_operator_npm_ui.cjs');
 const {MUTATION_REVIEW_KEY: KEY, MUTATION_REVIEW_VALUE: VALUE, acknowledgeMutationReview,
   withoutMutationReview} = require('./operator_mutation_recovery_test_helpers.cjs');
-const CORE = readFileSync(resolve(__dirname, '../serverware/operator_demo_web/workspace_core.js'), 'utf8');
+const CORE = readFileSync(resolve(__dirname, '../catchplate/operator_demo_web/workspace_core.js'), 'utf8');
+const APPLICATIONS = readFileSync(resolve(__dirname, '../catchplate/operator_demo_web/workspace_applications.js'), 'utf8');
 const ORIGIN = 'https://operator-catalog.example.test';
 const CATALOG = '/api/operator-demo/catalog', CREATE = '/api/operator-demo/credentials';
 const SECRET = 'synthetic-recovery-secret-NEVER-PERSIST';
@@ -22,7 +23,7 @@ const response = (value, status = 200) => ({ok: status >= 200 && status < 300, s
 const catalog = () => ({revision: 1, policy: {policy_hash: hash, loaded_policy_hash: hash, sequence: 1, activation: 'active'},
   credentials: [credential()], applications: [application()], access_rules: []});
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return {promise, resolve}; }
-function inert({storage = new Map(), fault = null, realCatalog = false} = {}) {
+function inert({storage = new Map(), fault = null, realCatalog = false, migrate = false} = {}) {
   const nodes = new Map(), events = new Map(), calls = [], writes = [];
   const node = id => {
     if (!nodes.has(id)) nodes.set(id, {hidden: true, disabled: true, textContent: '', events: {},
@@ -33,7 +34,8 @@ function inert({storage = new Map(), fault = null, realCatalog = false} = {}) {
   Object.assign(ctx, {AbortSignal, URL, Set, Map, JSON, Number, Object, Array, Error,
     document: {getElementById: node},
     clearTimeout() {}, setTimeout: () => 1, window: {addEventListener(name, callback) { events.set(name, callback); }},
-    sessionStorage: {getItem(key) { if (fault === 'get') throw new Error('synthetic storage read refusal'); return storage.get(key) ?? null; },
+    sessionStorage: {get length() { return storage.size; }, key(index) { return [...storage.keys()][index] ?? null; },
+      getItem(key) { if (fault === 'get') throw new Error('synthetic storage read refusal'); return storage.get(key) ?? null; },
       setItem(key, value) { writes.push(['set', key, value]); if (fault === 'set') throw new Error('synthetic storage write refusal');
         if (fault !== 'silent-set') storage.set(key, value); },
       removeItem(key) { writes.push(['remove', key]); if (fault === 'remove') throw new Error('synthetic storage removal refusal');
@@ -41,11 +43,98 @@ function inert({storage = new Map(), fault = null, realCatalog = false} = {}) {
     fetch: async (path, options) => { calls.push({path, options}); return ctx.respond(path, options); }});
   if (!realCatalog) vm.runInContext(CORE + '\nprojectCatalog = value => value;', ctx, {timeout: 1000});
   ctx.respond = () => response(catalog());
-  const workspace = vm.runInContext('createOperatorWorkspace()', ctx);
+  const workspace = vm.runInContext(migrate ? 'createOperatorWorkspace(migrateLegacyOperatorBrowserState())' : 'createOperatorWorkspace()', ctx);
   return {workspace, ctx, node, events, storage, writes, calls, click: () => node('mutation-review-confirm').events.click()};
 }
 const pure = [];
 function test(name, run) { pure.push([name, run]); }
+test('rename transfers only the twelve recognized public recovery marker types, without requests', () => {
+  const id = IDS.application, ref = JSON.stringify({operation_id: id, kind: 'prepare'});
+  const entries = [['operator.mutation.review.v1', VALUE], ['operator.upstreams.operation.v1', ref],
+    ['operator.google.configuration.operation.v2', ref], ['operator.notifications.operation.v1', JSON.stringify({
+      operation_id: id, kind: 'save', slot: 'audit_log.webhook', expected_revision: 0})],
+    ['operator.x.configuration.operation.v1', id], ['operator.x.account.operation.v1', id], ['googleReauthorization.operation', id],
+    ...['hostApprovalDecisionUncertain.', 'nativeJitReviewUncertain.', 'approvalDecisionUncertain.',
+      'ecrPublicationDecisionUncertain.', 'ecrPublicationRetirementUncertain.'].map(prefix => [prefix + id, id])];
+  const storage = new Map(entries.map(([suffix, raw]) => ['serverware.' + suffix, raw]));
+  storage.set('unrelated', SECRET); storage.set('serverware.sandbox.client.v1', 'not-operator-recovery');
+  const f = inert({storage, migrate: true});
+  assert.equal(f.workspace.state.browserRecoveryBlocked, false); assert(f.workspace.state.uncertain);
+  for (const [suffix, raw] of entries) {
+    assert.equal(storage.get('catchplate.' + suffix), raw); assert(!storage.has('serverware.' + suffix));
+  }
+  assert.equal(storage.get('unrelated'), SECRET); assert.equal(storage.get('serverware.sandbox.client.v1'), 'not-operator-recovery');
+  assert.equal(f.calls.length, 0); assert(!JSON.stringify(f.writes).includes(SECRET));
+  assert.deepEqual(clone(f.ctx.migrateLegacyOperatorBrowserState()), {migrated: 0, blocked: false});
+});
+test('rename conflicts or malformed old markers preserve both sides and refuse new mutations', async () => {
+  const id = IDS.application;
+  for (const entries of [
+    [['serverware.operator.mutation.review.v1', VALUE], [KEY, 'conflicting']],
+    [['serverware.googleReauthorization.operation', SECRET]],
+    [['serverware.hostApprovalDecisionUncertain.' + id, 'invalid']],
+    [['serverware.hostApprovalDecisionUncertain.not-a-uuid', id]],
+    [['serverware.operator.notifications.operation.v1', JSON.stringify({operation_id: id, secret: SECRET})]]
+  ]) {
+    const f = inert({storage: new Map(entries), migrate: true});
+    assert(f.workspace.state.browserRecoveryBlocked); assert(f.workspace.state.uncertain);
+    await f.workspace.refresh(); f.click();
+    assert(f.node('mutation-review-confirm').disabled);
+    assert.equal(await f.workspace.mutate('credentials', {secret: SECRET}, 'status', () => assert.fail('no save')), false);
+    assert.deepEqual([...f.storage], entries); assert.equal(f.writes.length, 0);
+    assert(f.calls.every(item => !item.options.method)); assert(!f.node('mutation-review-text').textContent.includes(SECRET));
+  }
+});
+test('rename failures never remove the last verified legacy recovery copy', () => {
+  const old = 'serverware.operator.mutation.review.v1';
+  for (const fault of ['get', 'set', 'silent-set', 'remove', 'silent-remove']) {
+    const f = inert({storage: new Map([[old, VALUE]]), fault, migrate: true});
+    assert(f.workspace.state.browserRecoveryBlocked); assert(f.workspace.state.uncertain);
+    assert.equal(f.storage.get(old), VALUE); assert.equal(f.calls.length, 0);
+    if (fault === 'remove' || fault === 'silent-remove') assert.equal(f.storage.get(KEY), VALUE);
+    else assert(!f.storage.has(KEY));
+  }
+});
+test('same-origin renamed warning remains unresolved after reload and retires only after explicit review', async () => {
+  const old = 'serverware.operator.mutation.review.v1';
+  const f = inert({storage: new Map([[old, VALUE], [KEY, VALUE]]), migrate: true});
+  assert(!f.storage.has(old)); assert(f.workspace.state.uncertain);
+  const next = inert({storage: f.storage, migrate: true}); assert(next.workspace.state.uncertain);
+  await next.workspace.refresh(); next.click(); assert(!next.workspace.state.uncertain); assert.equal(next.storage.size, 0);
+  const last = inert({storage: next.storage, migrate: true}); assert(!last.workspace.state.uncertain); assert.equal(last.calls.length, 0);
+  const newOrigin = inert({migrate: true}); assert(!newOrigin.workspace.state.uncertain);
+  assert.equal(newOrigin.storage.size, 0); assert.equal(newOrigin.calls.length, 0);
+});
+test('old and new channels invalidate tokens with public IDs only, no forwarding, and close on lifecycle', () => {
+  const opened = [], received = [], sent = [];
+  class Channel {
+    constructor(name) { this.name = name; opened.push(this); }
+    addEventListener(name, callback) { assert.equal(name, 'message'); this.receive = callback; }
+    postMessage(value) { sent.push([this.name, clone(value)]); }
+    close() { this.closed = true; }
+  }
+  const ctx = vm.createContext({BroadcastChannel: Channel}); vm.runInContext(APPLICATIONS, ctx);
+  const notifier = ctx.createApplicationTokenInvalidations(id => received.push(id));
+  notifier.connect(); notifier.connect();
+  assert.deepEqual(opened.map(value => value.name), ['catchplate-operator-catalog-v1', 'serverware-operator-catalog-v1']);
+  notifier.send(IDS.application); assert.equal(sent.length, 2);
+  for (const [, value] of sent) assert.deepEqual(value, {kind: 'application-token-invalidated', application_id: IDS.application});
+  for (const channel of opened) channel.receive({data: {kind: 'application-token-invalidated', application_id: IDS.application}});
+  assert.deepEqual(received, [IDS.application, IDS.application]); assert.equal(sent.length, 2, 'received messages are never forwarded');
+  notifier.send(SECRET); opened[0].receive({data: {kind: 'application-token-invalidated', application_id: SECRET}});
+  assert.equal(sent.length, 2); assert.equal(received.length, 2);
+  notifier.close(); assert(opened.every(value => value.closed)); notifier.connect(); assert.equal(opened.length, 4);
+});
+test('a failed legacy notifier does not block the new notifier or retry a mutation', () => {
+  const sent = [];
+  class Channel {
+    constructor(name) { if (name === 'serverware-operator-catalog-v1') throw new Error('unavailable'); }
+    addEventListener() {} postMessage(value) { sent.push(clone(value)); } close() {}
+  }
+  const ctx = vm.createContext({BroadcastChannel: Channel}); vm.runInContext(APPLICATIONS, ctx);
+  const notifier = ctx.createApplicationTokenInvalidations(() => assert.fail('no received message'));
+  notifier.connect(); notifier.send(IDS.application); notifier.close(); assert.equal(sent.length, 1);
+});
 test('warning is fixed, retained before dispatch, and removed after confirmed response plus catalog', async () => {
   const f = inert(); await f.workspace.refresh();
   f.ctx.respond = (path, options) => {
@@ -98,7 +187,7 @@ test('action guidance stays in memory and refresh never acknowledges or resends 
 test('closed API error headers add safe guidance with status binding and generic fallback', async () => {
   const f = inert();
   const message = (status, code = null, fields = null) => f.ctx.operatorApiErrorMessage({status,
-    headers: {get: name => name === 'X-Serverware-Error-Code' ? code : fields}});
+    headers: {get: name => name === 'X-Catchplate-Error-Code' ? code : fields}});
   const expected = {invalid_input: [422, /form fields/], unsupported_policy: [422, /not supported/],
     catalog_changed: [409, /Saved state changed since/], credential_in_use: [409, /active permissions/],
     provider_disconnect_required: [409, /provider disconnect/], approval_required: [409, /human approval/],
@@ -116,7 +205,7 @@ test('closed API error headers add safe guidance with status binding and generic
   assert.equal(message(409, 'credential_in_use', 'secret'), message(409));
   await f.workspace.refresh();
   f.ctx.respond = (path, options) => options.method === 'POST' ? {ok: false, status: 422,
-    headers: {get: name => name === 'X-Serverware-Error-Code' ? 'invalid_input' : 'secret'},
+    headers: {get: name => name === 'X-Catchplate-Error-Code' ? 'invalid_input' : 'secret'},
     json: () => assert.fail('error body is not parsed or rendered')} : response(catalog());
   await f.workspace.mutate('credentials', {secret: SECRET}, 'status', () => assert.fail('no success'));
   assert(f.workspace.state.uncertain, 'recognized local validation still retains the existing review hold');
@@ -144,7 +233,7 @@ test('malformed or externally changed marker is not overwritten, interpreted or 
   assert(changed.workspace.state.uncertain); assert(changed.calls.every(item => !item.options.method)); assert.equal(changed.storage.get(KEY), 'changed');
 });
 test('provider reference and independent consent hold cannot be cleared by generic acknowledgement', async () => {
-  const provider = 'serverware.operator.google.configuration.operation.v2';
+  const provider = 'catchplate.operator.google.configuration.operation.v2';
   const f = inert({storage: new Map([[provider, 'public-provider-reference']])}); await f.workspace.refresh();
   f.workspace.setConsentHold(true, 'provider-owner'); f.workspace.requireReview('Provider result requires review');
   await f.workspace.refresh(); f.click();

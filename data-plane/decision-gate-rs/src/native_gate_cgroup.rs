@@ -7,16 +7,16 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
-pub const CGROUP_ID: &str = "serverware-native-gate";
-pub const PROC_CGROUP: &[u8] = b"0::/serverware-native-gate\n";
-pub const PATH: &str = "/sys/fs/cgroup/serverware-native-gate";
+pub const CGROUP_ID: &str = "catchplate-native-gate";
+pub const PROC_CGROUP: &[u8] = b"0::/catchplate-native-gate\n";
+pub const PATH: &str = "/sys/fs/cgroup/catchplate-native-gate";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Configuration { api_version: String }
 impl Configuration {
     pub fn validate(&self) -> Result<(), String> {
-        require(self.api_version == "serverware.nativeGateCgroup/v1", "gate cgroup profile differs")
+        require(self.api_version == "catchplate.nativeGateCgroup/v1", "gate cgroup profile differs")
     }
 }
 

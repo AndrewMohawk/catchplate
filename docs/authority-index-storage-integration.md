@@ -53,7 +53,7 @@ proof without the coordinated changes below.
 
 ## Source-owned storage shape
 
-The standalone reader fixes two transport relations in `serverware_metadata`;
+The standalone reader fixes two transport relations in `catchplate_metadata`;
 it accepts no caller namespace or table name:
 
 - `policy_authority_counted_index_leaves`: `index_id`, `projection_digest`,
@@ -78,7 +78,7 @@ These are implemented acquisition shapes, not installed catalog/ACL admission.
 The SQL comparisons explicitly use `C` collation; installed storage must still
 admit the matching column/index ordering and constraints below.
 
-The [fresh PostgreSQL storage component](../serverware/authority_store/counted_store_sql.py)
+The [fresh PostgreSQL storage component](../catchplate/authority_store/counted_store_sql.py)
 uses a dedicated
 `policy_authority_counted_index_heads` relation with `index_id`, `table_name`,
 `counted_profile`, `projection_digest`, `projection_manifest_digest`,
@@ -138,7 +138,7 @@ must additionally project overlimit or malformed fields to a rejecting sentinel
 before fetching them. A `WHERE` clause must not hide malformed matching records.
 Transport bounds do not prove backend allocation or query-plan cost bounds.
 
-The [native counted hash renderer](../serverware/authority_store/counted_hash_sql.py)
+The [native counted hash renderer](../catchplate/authority_store/counted_hash_sql.py)
 now implements the exact empty, leaf and branch shapes: eight, ten and forty
 payload frames, plus the length-framed domain. Its separate helper admits only
 those three domains/shapes. The primary helper remains limited to eight frames
@@ -146,7 +146,7 @@ and its primary-tree domains remain unchanged. Source-fixed profile lookup,
 prefix/key/digest validation, exact sixteen paired child slots, fixed-key
 capacity and signed64 overflow checks precede the relevant counted hashes.
 
-The [native row projection renderer](../serverware/authority_store/counted_projection_sql.py)
+The [native row projection renderer](../catchplate/authority_store/counted_projection_sql.py)
 derives all eleven fixed projections from supplied full rows, including the
 actual ASCII-wire BusinessKey/v1 and UTF-8 AuthenticatedRow/v1 commitments. It
 validates every referenced field before membership, measures bounded lossless
@@ -165,7 +165,7 @@ unexecuted. Their installation still requires the coordinated contract below.
 
 ## Bounded frontier production
 
-[`read_complete_frontier`](../serverware/authority_index_reader.py) now accepts
+[`read_complete_frontier`](../catchplate/authority_index_reader.py) now accepts
 an actual `CompleteIndexQuery`, supplied counted root/revision, cursor and trace.
 It returns immutable `AcquiredIndexFrontier` observation data: the revalidated
 query, root, interval, actual frontier, ordered primary lookup IDs and metrics.
@@ -207,7 +207,7 @@ depth-one slots; a whole-keyspace interval has no outside prefixes. An opaque
 root is always forbidden. Chunking at most 256 exact node identities per SQL
 statement gives at most 19 outside-node reads plus one leaf-range read. The
 reader implements this fixed bound and emits one trace entry per physical
-SELECT under `serverware.policyAuthorityCountedIndexRead/v1`. That profile is
+SELECT under `catchplate.policyAuthorityCountedIndexRead/v1`. That profile is
 not admitted by the production planner's trace contract.
 
 Each node query uses bound identities, exact index/depth/prefix joins, a bounded
@@ -423,41 +423,41 @@ maintenance. None of these activation changes is supplied by the fresh DDL.
 
 Current implementation anchors:
 
-- [`authority_index_reader.py`](../serverware/authority_index_reader.py) and
-  [`authority_index_frontier.py`](../serverware/authority_index_frontier.py):
+- [`authority_index_reader.py`](../catchplate/authority_index_reader.py) and
+  [`authority_index_frontier.py`](../catchplate/authority_index_frontier.py):
   fixed standalone SQL acquisition, bounded canonical outside identities and
   actual reconstruction relative to a supplied root; no storage installation
   or planner activation.
-- [`authority_index_contract.py`](../serverware/authority_index_contract.py),
-  [`authority_index_range.py`](../serverware/authority_index_range.py),
-  [`authority_index_projection.py`](../serverware/authority_index_projection.py)
-  and [`authority_index_join.py`](../serverware/authority_index_join.py): the
+- [`authority_index_contract.py`](../catchplate/authority_index_contract.py),
+  [`authority_index_range.py`](../catchplate/authority_index_range.py),
+  [`authority_index_projection.py`](../catchplate/authority_index_projection.py)
+  and [`authority_index_join.py`](../catchplate/authority_index_join.py): the
   genuine hash, projection, reconstruction and same-owned-row join semantics.
-- [`primary_tree_sql.py`](../serverware/authority_store/primary_tree_sql.py):
+- [`primary_tree_sql.py`](../catchplate/authority_store/primary_tree_sql.py):
   existing bounded framing and primary row-trigger mechanics.
-- [`counted_hash_sql.py`](../serverware/authority_store/counted_hash_sql.py) and
-  [`counted_projection_sql.py`](../serverware/authority_store/counted_projection_sql.py):
+- [`counted_hash_sql.py`](../catchplate/authority_store/counted_hash_sql.py) and
+  [`counted_projection_sql.py`](../catchplate/authority_store/counted_projection_sql.py):
   source-fixed native counted hashing and actual row projection definitions;
   no storage, trigger attachment, grants or installed-profile admission.
-- [`counted_store_sql.py`](../serverware/authority_store/counted_store_sql.py):
+- [`counted_store_sql.py`](../catchplate/authority_store/counted_store_sql.py):
   fresh-only dedicated heads/leaves/nodes DDL with fixed source profiles and
   local constraints; no seed, maintenance, runtime grants or installer changes.
-- [`counted_path_sql.py`](../serverware/authority_store/counted_path_sql.py) and
-  [`counted_maintenance_sql.py`](../serverware/authority_store/counted_maintenance_sql.py):
+- [`counted_path_sql.py`](../catchplate/authority_store/counted_path_sql.py) and
+  [`counted_maintenance_sql.py`](../catchplate/authority_store/counted_maintenance_sql.py):
   actual bounded before/after reconstruction, persistence and complete-profile
   event dispatch; no installed trigger provenance or current-root authority.
-- [`v9_schema_source.py`](../serverware/authority_store/v9_schema_source.py) and
-  [`metadata_schema_source.py`](../serverware/authority_store/metadata_schema_source.py):
+- [`v9_schema_source.py`](../catchplate/authority_store/v9_schema_source.py) and
+  [`metadata_schema_source.py`](../catchplate/authority_store/metadata_schema_source.py):
   existing secondary-head metadata and primary physical stores.
-- [`db.py`](../serverware/db.py): tracked-root bootstrap, trigger attachment,
-  runtime permissions and legacy writers; [`schema.py`](../serverware/authority_store/schema.py):
+- [`db.py`](../catchplate/db.py): tracked-root bootstrap, trigger attachment,
+  runtime permissions and legacy writers; [`schema.py`](../catchplate/authority_store/schema.py):
   exact schema/function/trigger ownership and source-contract admission.
-- [`authority_planner.py`](../serverware/authority_planner.py) and
-  [`authority_query_staging.py`](../serverware/authority_query_staging.py):
+- [`authority_planner.py`](../catchplate/authority_planner.py) and
+  [`authority_query_staging.py`](../catchplate/authority_query_staging.py):
   transaction-local query acquisition and authenticated deferred sources.
-- [`authority_root_transition.py`](../serverware/authority_root_transition.py),
-  [`executor_v9.py`](../serverware/authority_store/executor_v9.py) and
-  [`root_transition_sql.py`](../serverware/authority_store/root_transition_sql.py):
+- [`authority_root_transition.py`](../catchplate/authority_root_transition.py),
+  [`executor_v9.py`](../catchplate/authority_store/executor_v9.py) and
+  [`root_transition_sql.py`](../catchplate/authority_store/root_transition_sql.py):
   exact before roots, predicted mutation effects, locked DML and after-root CAS.
 
 The coordinated source revision must update contracts, complete-schema source,

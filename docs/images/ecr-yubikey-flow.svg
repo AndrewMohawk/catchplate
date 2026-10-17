@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="1435" viewBox="0 0 900 1435" role="img" aria-labelledby="title desc">
   <title id="title">Request first, YubiKey approval next, then resume the exact ECR publication</title>
-  <desc id="desc">Illustrative integration, not yet implemented. First CI requests an exact image publication using the illustrative workload credential username:password. Serverware authenticates the workload, consumes that credential, checks policy and holds the action without contacting ECR or injecting a provider credential. Only then does Serverware challenge the developer with the account, region, repository, image digest and publication action. The developer reviews the action and returns a YubiKey WebAuthn assertion. Serverware verifies fresh request-bound one-use approval, attaches its protected AWS/ECR credential and resumes only that held image action. It validates the provider response and returns only the result to CI. Denial, rejection, timeout or mismatch blocks publication. ECR publication is separate from Nitro EIF construction, deployment and attestation.</desc>
+  <desc id="desc">Illustrative integration, not yet implemented. First CI requests an exact image publication using the illustrative workload credential username:password. Catchplate authenticates the workload, consumes that credential, checks policy and holds the action without contacting ECR or injecting a provider credential. Only then does Catchplate challenge the developer with the account, region, repository, image digest and publication action. The developer reviews the action and returns a YubiKey WebAuthn assertion. Catchplate verifies fresh request-bound one-use approval, attaches its protected AWS/ECR credential and resumes only that held image action. It validates the provider response and returns only the result to CI. Denial, rejection, timeout or mismatch blocks publication. ECR publication is separate from Nitro EIF construction, deployment and attestation.</desc>
   <rect width="900" height="1435" rx="22" fill="#f8fafc"/>
   <g font-family="Arial, Helvetica, sans-serif" fill="#0f172a">
     <text x="450" y="44" text-anchor="middle" font-size="28" font-weight="700">Request first. Approve that action. Then publish.</text>
@@ -20,7 +20,7 @@
 
     <!-- Every use of the provider credential remains inside this boundary. -->
     <rect x="40" y="336" width="554" height="880" rx="20" fill="#eef2ff" stroke="#4338ca" stroke-width="3"/>
-    <text x="66" y="375" font-size="27" font-weight="700" fill="#312e81">Serverware</text>
+    <text x="66" y="375" font-size="27" font-weight="700" fill="#312e81">Catchplate</text>
     <text x="570" y="375" text-anchor="end" font-size="22" fill="#4338ca">Trust boundary</text>
 
     <path d="M317 297V395" fill="none" stroke="#2563eb" stroke-width="3"/>
@@ -67,7 +67,7 @@
 
     <rect x="85" y="955" width="464" height="88" rx="12" fill="#ecfdf5" stroke="#047857" stroke-width="2"/>
     <text x="317" y="990" text-anchor="middle" font-size="23" font-weight="700" fill="#065f46">Protected AWS/ECR credential store</text>
-    <text x="317" y="1022" text-anchor="middle" font-size="21" fill="#065f46">Stays inside Serverware</text>
+    <text x="317" y="1022" text-anchor="middle" font-size="21" fill="#065f46">Stays inside Catchplate</text>
     <path d="M317 955V941" fill="none" stroke="#047857" stroke-width="3"/>
     <path d="M309 942L317 928L325 942Z" fill="#047857"/>
 

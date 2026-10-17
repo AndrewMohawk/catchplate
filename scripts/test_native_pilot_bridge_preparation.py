@@ -17,8 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from test_native_pilot_initial_requests import fixture as request_fixture, export
 from test_native_pilot_peer_preparation import fixture as peer_fixture
 from test_native_pilot_bridge_runtime import fixture as runtime_fixture
-from serverware import native_pilot_bridge_preparation as profile
-from serverware import native_pilot_driver_authority as driver
+from catchplate import native_pilot_bridge_preparation as profile
+from catchplate import native_pilot_driver_authority as driver
 
 p = profile.p
 
@@ -35,7 +35,7 @@ def expected(observed, ids):
     parts += [bytes.fromhex(value["executableSha256"].split(":")[1]), value["cgroupPathSha256"].encode(),
         value["cgroupMountId"].to_bytes(8, "big"), value["cgroupInode"].to_bytes(8, "big"),
         value["securityLabelSha256"].encode(), value["configurationGenerationSha256"].encode()]
-    value["processIdentitySha256"] = p.framed(b"serverware.policyCustodyPeerProcessIdentity/v4", parts)
+    value["processIdentitySha256"] = p.framed(b"catchplate.policyCustodyPeerProcessIdentity/v4", parts)
     return value
 
 

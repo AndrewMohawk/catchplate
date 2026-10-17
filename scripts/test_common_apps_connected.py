@@ -157,7 +157,7 @@ class CommonAppsCheck(OperatorCatalogCheck):
 
     def catalog(self):
         value = self.control_json(PREFIX + "/catalog", authenticated=True)
-        require(value.get("schema") == "serverware.operatorCatalog/v1" and value.get("mode") == "operator-development"
+        require(value.get("schema") == "catchplate.operatorCatalog/v1" and value.get("mode") == "operator-development"
             and value.get("allowed_upstreams") == self.origins and all(isinstance(value.get(key), list) for key in COLLECTIONS)
             and SHA256.fullmatch(value.get("policy", {}).get("policy_hash", "")), "fixture catalog differs")
         self.snapshot = value
@@ -183,14 +183,14 @@ class CommonAppsCheck(OperatorCatalogCheck):
             "--raw", "--include", "--suppress-connect-headers", "--request", "POST", "--data-binary", "@" + str(payload_path),
             "--header", spec["header"] + ": " + spec["placeholder"], "--header", "Content-Type: application/json",
             "--header", "Accept: application/json", "--header", "Accept-Encoding: identity", "--header", "Connection: close",
-            "--header", "User-Agent: serverware-common-apps-fixture/1"]
+            "--header", "User-Agent: catchplate-common-apps-fixture/1"]
         if name == "anthropic":
             argv += ["--header", "anthropic-version: 2023-06-01"]
-        argv += ["--write-out", "\nserverware-common-apps:%{http_connect}:%{http_code}\n", target]
+        argv += ["--write-out", "\ncatchplate-common-apps:%{http_connect}:%{http_code}\n", target]
         private = ('proxy-user = "' + self.application["id"] + ":" + self.client_token + '"\n').encode()
         code, output, error = run_curl(argv, private, min(12, self.timeout()))
         self.clean(output); self.clean(error)
-        wire, separator, tail = output.rpartition(b"\nserverware-common-apps:")
+        wire, separator, tail = output.rpartition(b"\ncatchplate-common-apps:")
         match = re.fullmatch(rb"([0-9]{3}):([0-9]{3})\n", tail) if separator else None
         observed = self.provider_observations()
         self.last = {"case": case, "curlExit": code, "connectStatus": int(match[1]) if match else None,
@@ -415,7 +415,7 @@ class CommonAppsCheck(OperatorCatalogCheck):
         require(json.loads(output) == {"provider": "anthropic", "status": "end_turn", "text": "Hello"}
             and observed["total"] == 1 and observed["attempts"][0]["accepted"] is True,
             "Anthropic diagnostic response differs")
-        return {"schema": "serverware.anthropicSdkDiagnostic/v1", "ok": True, "syntheticOnly": True,
+        return {"schema": "catchplate.anthropicSdkDiagnostic/v1", "ok": True, "syntheticOnly": True,
             "realProviderVerified": False, "stockSdkVerified": False, "diagnostic": self.last, "provider": observed}
 
     def run(self):
@@ -497,7 +497,7 @@ class CommonAppsCheck(OperatorCatalogCheck):
                 "SDK CONNECT policy or application binding differs")
             require(self.catalog()["policy"]["policy_hash"] == self.policy_hash and self.health()["policy_hash"] == self.policy_hash,
                 "SDK final policy changed")
-        return {"schema": "serverware.commonAppsConnectedCheck/v1", "ok": True, "syntheticOnly": True,
+        return {"schema": "catchplate.commonAppsConnectedCheck/v1", "ok": True, "syntheticOnly": True,
             "realProviderVerified": False, "stockSdkVerified": self.args.sdk_smoke, "dataPlaneBinaryDigest": self.args.expected_binary_sha256,
             "policyHash": self.policy_hash, "catalogRevision": self.catalog()["revision"], "checks": checks,
             "provider": observed, "auditCounts": dict(Counter(row["event_type"] for row in attempts)),
@@ -553,9 +553,9 @@ def run(args):
             for name in ("network-files", "network", "provider", "edge"):
                 services[name]["command"].append("--sdk-smoke")
         origins = sorted("https://" + host for host in fixture.SDK_PROVIDERS) if sdk_smoke else ORIGINS
-        for name in ("serverware", "decision-gate-rs"):
-            services[name]["environment"]["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(origins)
-            services[name]["environment"].pop("SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS", None)
+        for name in ("catchplate", "decision-gate-rs"):
+            services[name]["environment"]["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(origins)
+            services[name]["environment"].pop("CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS", None)
         services["check"]["command"][0:1] = ["/app/" + SCRIPT, "check"]
         if args.mcp_sdk_packages is not None:
             packages = args.mcp_sdk_packages
@@ -625,7 +625,7 @@ def run(args):
                 rows = runner.container_rows("cleanup-before")
                 for row in rows:
                     name = row["Config"]["Labels"]["com.docker.compose.service"]
-                    if name in {"provider", "serverware", "decision-gate-rs"}:
+                    if name in {"provider", "catchplate", "decision-gate-rs"}:
                         runner.command("retained-" + name + "-logs", ["docker", "logs", "--tail", "60", row["Id"]], 3)
                 ids = [row["Id"] for row in rows]
                 if ids:

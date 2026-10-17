@@ -35,7 +35,7 @@ CONFLICT = {"detail": "operator catalog or policy changed; refresh before trying
 STORAGE = {"detail": "operator catalog storage unavailable; inspect saved status before retrying"}
 INVALID = {"detail": "invalid operator catalog input or unsupported policy"}
 CAPABILITY = {
-    "schema": "serverware.operatorAwsCredentials/v1", "connection_type": TYPE,
+    "schema": "catchplate.operatorAwsCredentials/v1", "connection_type": TYPE,
     "create_path": PREFIX + CREATE, "replace_path": PREFIX + REPLACE,
     "revoke_path": PREFIX + "credentials/revoke",
     "credential_kinds": ["long_term", "session"],
@@ -63,7 +63,7 @@ class OperatorCatalogAwsApiTests(unittest.TestCase):
             if key.startswith("AWS_") or key.upper() in {
                     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "BOTO_CONFIG"}:
                 self.environment.pop(key)
-        self.environment["SERVERWARE_DECISION_GATE_BASE"] = "http://127.0.0.1:1"
+        self.environment["CATCHPLATE_DECISION_GATE_BASE"] = "http://127.0.0.1:1"
         self.private_values = {ACCESS, SESSION_ACCESS, SECRET, TOKEN, self.provider_secret}
         self.expiry = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         self.log_checks = 0
@@ -87,7 +87,7 @@ class OperatorCatalogAwsApiTests(unittest.TestCase):
         # Same real entrypoint/startup/termination bounds as the shared harness;
         # retain and inspect its actual output rather than mocking its logger.
         with tempfile.TemporaryFile(dir=self.directory) as log:
-            process = subprocess.Popen([sys.executable, "-B", "-m", "serverware.operator_demo_runner"],
+            process = subprocess.Popen([sys.executable, "-B", "-m", "catchplate.operator_demo_runner"],
                 cwd=runtime.ROOT, env=self.environment, stdout=log, stderr=subprocess.STDOUT)
             failed = False
             try:
@@ -123,7 +123,7 @@ class OperatorCatalogAwsApiTests(unittest.TestCase):
                 self.log_checks += 1
                 if failed:
                     text = output[-16000:].decode(errors="replace")
-                    for value in sorted(self.private_values | {self.environment["SERVERWARE_" + name]
+                    for value in sorted(self.private_values | {self.environment["CATCHPLATE_" + name]
                             for name in runtime.TOKEN_NAMES}, key=len, reverse=True):
                         text = text.replace(value, "[synthetic private value]")
                     print("Bounded AWS catalog runner diagnostics:\n" + text, file=sys.stderr)
@@ -207,7 +207,7 @@ class OperatorCatalogAwsApiTests(unittest.TestCase):
         # Check actual private database files as well as live row projections.
         # A small overlap also catches a canary crossing a read boundary.
         overlap = 2 * max(len(value.encode()) for value in self.private_values) + 16
-        for name in ("serverware.sqlite3", "serverware.sqlite3-wal", "serverware.sqlite3-shm"):
+        for name in ("catchplate.sqlite3", "catchplate.sqlite3-wal", "catchplate.sqlite3-shm"):
             path = self.directory / "data" / name
             if not path.exists():
                 continue
@@ -229,7 +229,7 @@ class OperatorCatalogAwsApiTests(unittest.TestCase):
                              + b"," + json.dumps(body).encode()[1:])
                 cases = [
                     ({"auth": False}, body, 401),
-                    ({"headers": [("X-Serverware-Admin-Token", "synthetic-wrong")]}, body, 401),
+                    ({"headers": [("X-Catchplate-Admin-Token", "synthetic-wrong")]}, body, 401),
                     ({"origin": None}, body, 403),
                     ({"origin": "https://foreign.example.com"}, body, 403),
                     ({"origin": self.origin + "/"}, body, 403),

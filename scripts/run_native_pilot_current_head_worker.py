@@ -45,7 +45,7 @@ def _stop(_number, _frame):
 def _report(status, mode, owner, completed):
     # A failed update may have left durable state/audit files. Known descriptor
     # cleanup never claims that publication did not happen or authorizes retry.
-    value = dict(apiVersion="serverware.nativePilotCurrentHeadWorkerResult/v1",
+    value = dict(apiVersion="catchplate.nativePilotCurrentHeadWorkerResult/v1",
         mode=mode, status=status, stage="opening" if owner is None else owner.stage,
         decisionsPublished=0 if owner is None or mode != MODE else owner.decisions,
         stateUpdateOutcome=("completed" if completed else "not-established")
@@ -69,12 +69,12 @@ def main():
             and os.getresuid() == os.getresgid() == (0, 0, 0))
         mode, selected = _arguments(sys.argv[1:])
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from serverware import native_pilot_genesis_parent_control_io as ownership
+        from catchplate import native_pilot_genesis_parent_control_io as ownership
         if mode == MODE:
-            from serverware.native_pilot_current_head_worker import CurrentHeadWorker, CurrentHeadWorkerError
+            from catchplate.native_pilot_current_head_worker import CurrentHeadWorker, CurrentHeadWorkerError
             owner_type, owner_error = CurrentHeadWorker, CurrentHeadWorkerError
         else:
-            from serverware.native_pilot_current_head_state import CurrentHeadStatePublisher, CurrentHeadStatePublisherError
+            from catchplate.native_pilot_current_head_state import CurrentHeadStatePublisher, CurrentHeadStatePublisherError
             owner_type, owner_error = CurrentHeadStatePublisher, CurrentHeadStatePublisherError
         with ownership.owning():
             try: owner = owner_type.open(**selected)

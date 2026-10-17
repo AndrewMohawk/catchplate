@@ -31,7 +31,7 @@ _TOKEN_NAMES = ("ADMIN_TOKEN", "DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
 
 class DevelopmentSandboxRuntimeTests(unittest.TestCase):
     def setUp(self):
-        self.scratch = tempfile.TemporaryDirectory(prefix="serverware-sandbox-runtime-",
+        self.scratch = tempfile.TemporaryDirectory(prefix="catchplate-sandbox-runtime-",
             dir=os.getenv("TMPDIR", "/srv/catchplate-fast/tmp"))
         self.addCleanup(self.scratch.cleanup)
         self.root = Path(self.scratch.name)
@@ -39,27 +39,27 @@ class DevelopmentSandboxRuntimeTests(unittest.TestCase):
             listener.bind(("127.0.0.1", 0))
             self.port = listener.getsockname()[1]
         self.environment = {key: value for key, value in os.environ.items()
-                            if not key.startswith("SERVERWARE_")}
+                            if not key.startswith("CATCHPLATE_")}
         self.environment.update({
             "PYTHONDONTWRITEBYTECODE": "1",
-            "SERVERWARE_DEVELOPMENT_SANDBOX": "1",
-            "SERVERWARE_PROCESS_MODE": "serverware-control-plane",
-            "SERVERWARE_DATA_DIR": str(self.root / "data"),
-            "SERVERWARE_WEB_HOST": "127.0.0.1",
-            "SERVERWARE_WEB_PORT": str(self.port),
-            "SERVERWARE_PUBLIC_URL": f"http://localhost:{self.port}",
+            "CATCHPLATE_DEVELOPMENT_SANDBOX": "1",
+            "CATCHPLATE_PROCESS_MODE": "catchplate-control-plane",
+            "CATCHPLATE_DATA_DIR": str(self.root / "data"),
+            "CATCHPLATE_WEB_HOST": "127.0.0.1",
+            "CATCHPLATE_WEB_PORT": str(self.port),
+            "CATCHPLATE_PUBLIC_URL": f"http://localhost:{self.port}",
         })
         for name in _TOKEN_NAMES:
-            self.environment["SERVERWARE_" + name] = secrets.token_urlsafe(32)
-        self.token = self.environment["SERVERWARE_ADMIN_TOKEN"]
+            self.environment["CATCHPLATE_" + name] = secrets.token_urlsafe(32)
+        self.token = self.environment["CATCHPLATE_ADMIN_TOKEN"]
 
     def command(self):
-        return [sys.executable, "-B", "-m", "serverware.development_sandbox_runner"]
+        return [sys.executable, "-B", "-m", "catchplate.development_sandbox_runner"]
 
     def request(self, method, path, *, token=None, payload=None):
         headers = {}
         if token is not None:
-            headers["X-Serverware-Admin-Token"] = token
+            headers["X-Catchplate-Admin-Token"] = token
         if payload is not None:
             headers["Content-Type"] = "application/json"
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
@@ -100,7 +100,7 @@ class DevelopmentSandboxRuntimeTests(unittest.TestCase):
                 log.seek(max(0, log.tell() - 32768))
                 diagnostic = log.read().decode("utf-8", errors="replace")
                 for name in _TOKEN_NAMES:
-                    diagnostic = diagnostic.replace(self.environment["SERVERWARE_" + name], "[test token]")
+                    diagnostic = diagnostic.replace(self.environment["CATCHPLATE_" + name], "[test token]")
                 print("BOUNDED RUNNER DIAGNOSTICS\n" + diagnostic, file=sys.stderr)
                 raise
             finally:
@@ -114,7 +114,7 @@ class DevelopmentSandboxRuntimeTests(unittest.TestCase):
 
     def snapshot(self):
         data = self.root / "data"
-        with sqlite3.connect((data / "serverware.sqlite3").as_uri() + "?mode=ro", uri=True) as connection:
+        with sqlite3.connect((data / "catchplate.sqlite3").as_uri() + "?mode=ro", uri=True) as connection:
             credentials = connection.execute("SELECT id, credential_version FROM credentials ORDER BY id").fetchall()
             routes = connection.execute("SELECT id FROM routes ORDER BY id").fetchall()
             seeds = connection.execute("SELECT COUNT(*) FROM audit_events WHERE event_type=?", ("demo.seeded",)).fetchone()[0]
@@ -176,8 +176,8 @@ class DevelopmentSandboxRuntimeTests(unittest.TestCase):
         self.assertEqual(list(data.iterdir()), [sentinel])
 
     def test_production_channel_and_image_are_refused_before_data_creation(self):
-        for selection in ({"SERVERWARE_RELEASE_CHANNEL": "production"},
-                          {"SERVERWARE_PRODUCTION_IMAGE": "1"}):
+        for selection in ({"CATCHPLATE_RELEASE_CHANNEL": "production"},
+                          {"CATCHPLATE_PRODUCTION_IMAGE": "1"}):
             with self.subTest(selection=selection):
                 environment = dict(self.environment, **selection)
                 result = subprocess.run(self.command(), cwd=ROOT, env=environment,

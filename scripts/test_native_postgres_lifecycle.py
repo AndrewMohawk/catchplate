@@ -25,10 +25,10 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import native_postgres_runner as runtime
-from serverware.native_postgres_batch import prepared_fixture_argv
-from serverware.native_postgres_inventory import SUITES
-from serverware.native_postgres_results import NativePostgresRunner
+from catchplate import native_postgres_runner as runtime
+from catchplate.native_postgres_batch import prepared_fixture_argv
+from catchplate.native_postgres_inventory import SUITES
+from catchplate.native_postgres_results import NativePostgresRunner
 
 
 SOURCE = tuple("sha256:" + format(index + 1, "064x") for index in range(15))
@@ -48,7 +48,7 @@ def report(index):
     suite = SUITES[index]
     count = len(suite.test_ids)
     return {
-        "schema": "serverware.nativePostgresFixtureResult/v1", "script": suite.script,
+        "schema": "catchplate.nativePostgresFixtureResult/v1", "script": suite.script,
         "sourceSha256": SOURCE[index], "expectedTestIds": list(suite.test_ids),
         "tests": [{"id": identity, "started": True, "stopped": True, "status": "PASS",
                    "subtests": {"passed": 0, "failed": 0, "errored": 0, "skipped": 0}}
@@ -64,7 +64,7 @@ def report(index):
 
 
 def prepared_manifest():
-    return {"schema": "serverware.nativePostgresPreparedSources/v1", "scripts": [
+    return {"schema": "catchplate.nativePostgresPreparedSources/v1", "scripts": [
         {"path": suite.script, "sha256": SOURCE[index]} for index, suite in enumerate(SUITES)]}
 
 
@@ -216,10 +216,10 @@ class LifecycleHarness:
                 ("signal.signal", lambda number, handler: self.signal_calls.append((number, handler))),
                 ("os.umask", self.umask),
                 ("os.path.lexists", lambda path: bool(self.options.get("retained_socket")))):
-            self.stack.enter_context(mock.patch("serverware.native_postgres_runner." + name, value))
+            self.stack.enter_context(mock.patch("catchplate.native_postgres_runner." + name, value))
         # Unexpected expansion must not silently spawn or touch SQL/files.
         self.stack.enter_context(mock.patch("subprocess.Popen", side_effect=AssertionError("unexpected real spawn")))
-        self.stack.enter_context(mock.patch("serverware.native_postgres_runner.query_probe",
+        self.stack.enter_context(mock.patch("catchplate.native_postgres_runner.query_probe",
                                            side_effect=AssertionError("unexpected actual libpq probe")))
         return self
 
@@ -412,14 +412,14 @@ class NativePostgresPreparedInputTests(unittest.TestCase):
     def test_exact_prepared_manifest_reads_only_fixed_artifact_and_retains_order(self):
         with mock.patch.object(runtime, "_prepared_file", return_value=canonical(prepared_manifest())) as read:
             self.assertEqual(runtime.load_prepared_sources(), SOURCE)
-        read.assert_called_once_with("/opt/serverware/artifacts/native-postgres-sources-v1.json", 16384)
+        read.assert_called_once_with("/opt/catchplate/artifacts/native-postgres-sources-v1.json", 16384)
 
     def test_manifest_wrong_schema_shape_order_digest_and_representation_are_not_repaired(self):
         values = []
         for change in ("schema", "extra", "order", "missing", "row-extra", "digest", "duplicate"):
             value = prepared_manifest()
             if change == "schema":
-                value["schema"] = "serverware.nativePostgresPreparedSources/v0"
+                value["schema"] = "catchplate.nativePostgresPreparedSources/v0"
             elif change == "extra":
                 value["approval"] = True
             elif change == "order":
@@ -466,7 +466,7 @@ class NativePostgresPreparedInputTests(unittest.TestCase):
             self.assertEqual(runtime._prepared_file(runtime.PREPARED_SOURCES, 16384), b"prepared")
             read.assert_called_once_with(99, "native-postgres-sources-v1.json", 16384, private=False)
             closed.assert_called_once_with(99)
-            self.assertEqual(opened.call_args.args[0], Path("/opt/serverware/artifacts"))
+            self.assertEqual(opened.call_args.args[0], Path("/opt/catchplate/artifacts"))
             self.assertTrue(opened.call_args.args[1] & os.O_NOFOLLOW)
         with mock.patch.object(Path, "resolve", lambda path, strict=False: path), \
                 mock.patch.object(runtime.os, "statvfs", return_value=SimpleNamespace(f_flag=0)), \
@@ -507,13 +507,13 @@ class NativePostgresPreparedInputTests(unittest.TestCase):
             for target, value in (
                     ("sys.platform", "linux"), ("sys.version_info", (3, 11, 0)),
                     ("sys.executable", "/usr/local/bin/python3.11"),
-                    ("__file__", "/opt/serverware/src/serverware/native_postgres_runner.py"),
+                    ("__file__", "/opt/catchplate/src/catchplate/native_postgres_runner.py"),
                     ("os.uname", lambda: SimpleNamespace(machine="x86_64")),
                     ("os.getuid", lambda: 10001), ("os.geteuid", lambda: 10001),
                     ("os.getgid", lambda: 10001), ("os.getegid", lambda: 10001),
                     ("os.getgroups", lambda: [10001]),
                     ("os.statvfs", lambda path: SimpleNamespace(f_flag=os.ST_RDONLY))):
-                stack.enter_context(mock.patch("serverware.native_postgres_runner." + target, value))
+                stack.enter_context(mock.patch("catchplate.native_postgres_runner." + target, value))
             stack.enter_context(mock.patch.dict(os.environ, {}, clear=True))
             stack.enter_context(mock.patch.object(Path, "resolve", lambda path, strict=False: path))
             stack.enter_context(mock.patch.object(Path, "stat", return_value=SimpleNamespace(

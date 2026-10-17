@@ -1,4 +1,4 @@
-# One X username lookup through Serverware
+# One X username lookup through Catchplate
 
 **Isolated SDK-through-proxy acceptance passed.** On 2026-10-10, this actual
 entrypoint passed through the genuine Rust proxy to a network-isolated synthetic
@@ -13,7 +13,7 @@ tests using Undici MockAgent. Those offline results are not proxy/TLS proof.
 
 The actual official `@xdevplatform/xdk` **0.6.6** generates one
 `client.users.getByUsername(username, ...)` request. It uses the fixed public
-dummy `serverware-x-placeholder-v1`, not an X credential. Serverware replaces
+dummy `catchplate-x-placeholder-v1`, not an X credential. Catchplate replaces
 that dummy with the provider token held on the server. This is app-only,
 read-only lookup of **one saved lowercase username**; no search, pagination,
 posting, DMs, OAuth exchange or refresh is included.
@@ -45,35 +45,35 @@ In **Proxy setup**, select the app and username-read permission, then download
 its private client JSON and CA. No connection variables need to be copied:
 
 ```sh
-node client.mjs --config /private/path/serverware-client.private.json
+node client.mjs --config /private/path/catchplate-client.private.json
 ```
 
 Relative CA paths resolve beside the JSON file. Keep it private: it contains
-the scoped Serverware app token. The loader checks Basic login, token expiry
+the scoped Catchplate app token. The loader checks Basic login, token expiry
 and the exact saved username/read permission. Commands, headers, body and
 environment entries from the file are never executed or imported; it cannot
 select posting or another operation. TLS verification remains enabled.
 
 Alternatively, the existing environment invocation remains supported:
 
-Export the public configuration below and supply `SERVERWARE_PROXY_TOKEN`
+Export the public configuration below and supply `CATCHPLATE_PROXY_TOKEN`
 through your secret manager or protected CI environment. It is the scoped
-**Serverware application token**, never an X token. Do not put it in shell
+**Catchplate application token**, never an X token. Do not put it in shell
 arguments, a proxy URL, committed files or logs. `.env.example` is a template;
 the program does not load `.env` files automatically.
 
 ```sh
-export SERVERWARE_PROXY_URL='https://your-approved-proxy.example:443'
-export SERVERWARE_APP_ID='your-application-uuid'
-export SERVERWARE_CA_FILE='/absolute/path/serverware-ca.pem'
-export SERVERWARE_X_USERNAME='selected_name'
+export CATCHPLATE_PROXY_URL='https://your-approved-proxy.example:443'
+export CATCHPLATE_APP_ID='your-application-uuid'
+export CATCHPLATE_CA_FILE='/absolute/path/catchplate-ca.pem'
+export CATCHPLATE_X_USERNAME='selected_name'
 # Only if the outer HTTPS proxy uses a private CA:
-# export SERVERWARE_PROXY_CA_FILE='/absolute/path/outer-proxy-ca.pem'
+# export CATCHPLATE_PROXY_CA_FILE='/absolute/path/outer-proxy-ca.pem'
 node client.mjs
 ```
 
-`SERVERWARE_CA_FILE` trusts the intercepted `api.x.com` connection.
-`SERVERWARE_PROXY_CA_FILE`, when set, separately trusts the outer HTTPS proxy;
+`CATCHPLATE_CA_FILE` trusts the intercepted `api.x.com` connection.
+`CATCHPLATE_PROXY_CA_FILE`, when set, separately trusts the outer HTTPS proxy;
 otherwise that leg uses Node's default roots. Both verify certificates and
 hostnames. Obtain CA files through your trusted operator channel, not from an
 unauthenticated first-use connection. No TLS-disable setting is supported.
@@ -97,7 +97,7 @@ also configured with documented `retry: false`; `maxRetries: 0` is not used
 because this version replaces zero with its default. A 30-second request signal
 bounds the request and JSON-body consumption. There is no automatic retry.
 
-The pinned SDK emits `Authorization: Bearer serverware-x-placeholder-v1`,
+The pinned SDK emits `Authorization: Bearer catchplate-x-placeholder-v1`,
 `Accept: application/json`, `Content-Type: application/json` even on GET, and
 `User-Agent: xdk-typescript/0.6.6`. Native fetch adds transport headers such as
 `accept-language`, `sec-fetch-mode` and `accept-encoding`; the proxy's narrow
@@ -129,7 +129,7 @@ suites passed separately from the actual isolated proxy run above.
 `workflow.example.yml` is inactive. Review it and its dependency lock before
 copying it into `.github/workflows/`. It runs only by explicit manual dispatch
 on the default branch, in a protected environment. Only the final lookup step
-receives the Serverware token. CA values are public trust material but must have
+receives the Catchplate token. CA values are public trust material but must have
 authenticated provenance; no X credential belongs in the workflow. Enabling
 this sample does not grant a provider destination or application permission.
 

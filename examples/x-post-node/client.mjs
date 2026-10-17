@@ -3,7 +3,7 @@ import { closeSync, constants, fstatSync, openSync, readFileSync, readSync } fro
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const PUBLIC_X_DUMMY = 'serverware-x-post-placeholder-v1';
+export const PUBLIC_X_DUMMY = 'catchplate-x-post-placeholder-v1';
 export const X_ORIGIN = 'https://api.x.com';
 export const REQUEST_TIMEOUT_MS = 30_000;
 export const PROCESS_TIMEOUT_MS = 35_000;
@@ -29,24 +29,24 @@ export function postText(value) {
 }
 
 export function configuration(env) {
-  requireValue(env.SERVERWARE_X_POST_CONFIRM === 'post-once');
+  requireValue(env.CATCHPLATE_X_POST_CONFIRM === 'post-once');
   requireValue(env.NODE_TLS_REJECT_UNAUTHORIZED === undefined || env.NODE_TLS_REJECT_UNAUTHORIZED === '1');
   for (const name of ['NODE_OPTIONS', 'NODE_DEBUG', 'NODE_DEBUG_NATIVE', 'SSLKEYLOGFILE']) {
     requireValue(env[name] === undefined || env[name] === '');
   }
-  const proxyUrl = required(env, 'SERVERWARE_PROXY_URL');
+  const proxyUrl = required(env, 'CATCHPLATE_PROXY_URL');
   const proxy = new URL(proxyUrl);
   requireValue(proxy.protocol === 'https:' && proxy.hostname && !proxy.username && !proxy.password
     && proxy.pathname === '/' && !proxy.search && !proxy.hash);
-  const applicationId = required(env, 'SERVERWARE_APP_ID', 36);
+  const applicationId = required(env, 'CATCHPLATE_APP_ID', 36);
   requireValue(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(applicationId));
-  const token = required(env, 'SERVERWARE_PROXY_TOKEN');
+  const token = required(env, 'CATCHPLATE_PROXY_TOKEN');
   requireValue(/^[A-Za-z0-9_-]+$/.test(token));
-  const caFile = required(env, 'SERVERWARE_CA_FILE');
-  const proxyCaFile = env.SERVERWARE_PROXY_CA_FILE ? required(env, 'SERVERWARE_PROXY_CA_FILE') : null;
+  const caFile = required(env, 'CATCHPLATE_CA_FILE');
+  const proxyCaFile = env.CATCHPLATE_PROXY_CA_FILE ? required(env, 'CATCHPLATE_PROXY_CA_FILE') : null;
   requireValue(isAbsolute(caFile) && (proxyCaFile === null || isAbsolute(proxyCaFile)));
   return { proxyUrl, applicationId, token, caFile, proxyCaFile,
-    text: postText(env.SERVERWARE_X_POST_TEXT) };
+    text: postText(env.CATCHPLATE_X_POST_TEXT) };
 }
 
 function readConfigurationFile(path) {
@@ -85,11 +85,11 @@ export function loadClientConfig(path, env, now = Date.now()) {
     // Only connection fields are imported. Post text and post-once confirmation
     // MUST come from the caller's environment, never this file or its recipe.
     return configuration({ ...env,
-      SERVERWARE_PROXY_URL: value.proxy_url,
-      SERVERWARE_APP_ID: value.application_id,
-      SERVERWARE_PROXY_TOKEN: value.proxy_password,
-      SERVERWARE_CA_FILE: caPath(value.ca_file),
-      SERVERWARE_PROXY_CA_FILE: value.proxy_ca_file === undefined || value.proxy_ca_file === null
+      CATCHPLATE_PROXY_URL: value.proxy_url,
+      CATCHPLATE_APP_ID: value.application_id,
+      CATCHPLATE_PROXY_TOKEN: value.proxy_password,
+      CATCHPLATE_CA_FILE: caPath(value.ca_file),
+      CATCHPLATE_PROXY_CA_FILE: value.proxy_ca_file === undefined || value.proxy_ca_file === null
         ? undefined : caPath(value.proxy_ca_file),
     });
   } catch { throw new Error('X posting configuration or response refused'); }
@@ -157,7 +157,7 @@ export function installTransport(config, observation, {
 
 export function createSdk(Client) {
   // User-context selection is required by posts.create. This is still a PUBLIC
-  // dummy; the account's real access/refresh tokens belong only to Serverware.
+  // dummy; the account's real access/refresh tokens belong only to Catchplate.
   return new Client({ baseUrl: X_ORIGIN, accessToken: PUBLIC_X_DUMMY,
     retry: false, timeout: REQUEST_TIMEOUT_MS });
 }
@@ -180,13 +180,13 @@ export function failure(error, observation = {}) {
     mayHaveBeenPosted: attempted, automaticRetryAllowed: false,
     httpStatus: Number.isInteger(code) && code >= 100 && code <= 599 ? code : null,
     error: attempted
-      ? 'Posting was not confirmed. It may have completed, including when HTTP 409 withholds a response. Do not resubmit automatically; inspect Serverware audit and the account.'
+      ? 'Posting was not confirmed. It may have completed, including when HTTP 409 withholds a response. Do not resubmit automatically; inspect Catchplate audit and the account.'
       : 'Posting configuration was refused before the SDK call. No post was attempted.' };
 }
 
 async function main() {
   if (process.argv.length === 3 && process.argv[2] === '--help') {
-    console.log('node client.mjs [--config PATH]\nExplicit local text and SERVERWARE_X_POST_CONFIRM=post-once required; see README.md.');
+    console.log('node client.mjs [--config PATH]\nExplicit local text and CATCHPLATE_X_POST_CONFIRM=post-once required; see README.md.');
     return;
   }
   const observation = { invoked: false, httpStatus: null };

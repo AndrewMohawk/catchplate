@@ -84,8 +84,8 @@ def fixture_image_measurements(*, substituted: dict[str, object] | None = None):
     Measurements are fixed independently of the mutable build/publish artifacts.
     Unexpected commands fail closed instead of accessing Docker or the network.
     """
-    control = "registry.prod.serverware.dev/serverware/control@" + digest("a")
-    gate = "registry.prod.serverware.dev/serverware/decision-gate@" + digest("b")
+    control = "registry.prod.catchplate.dev/catchplate/control@" + digest("a")
+    gate = "registry.prod.catchplate.dev/catchplate/decision-gate@" + digest("b")
     image_ids = {control: digest("a"), gate: digest("b")}
     replacements = substituted or {}
 
@@ -150,7 +150,7 @@ def sign_fixture_reproducibility_report(paths: dict[str, Path]) -> None:
 
 LAUNCH_AUTHORITY_KEY_ID = digest("1")
 LAUNCH_AUTHORITY_ROOT_SHA256 = digest("2")
-DEPLOYMENT_AUDIENCE = "serverware.production.us-east-1"
+DEPLOYMENT_AUDIENCE = "catchplate.production.us-east-1"
 DEPLOYMENT_IDENTITY_SHA256 = digest("6")
 RELEASE_SEQUENCE = "42"
 ROLLBACK_EPOCH = "3"
@@ -174,23 +174,23 @@ VALID_LAUNCH_ARGUMENTS = (
 
 def fixture_release_trust_env(paths: dict[str, Path]) -> dict[str, str]:
     return {
-        "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY": str(
+        "CATCHPLATE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY": str(
             paths["release_trust_root"]
         ),
-        "SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY": str(paths["sigstore_trust_root"]),
-        "SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY": str(paths["rekor_trust_root"]),
-        "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY": str(
+        "CATCHPLATE_SIGSTORE_TRUSTED_PUBLIC_KEY": str(paths["sigstore_trust_root"]),
+        "CATCHPLATE_REKOR_TRUSTED_PUBLIC_KEY": str(paths["rekor_trust_root"]),
+        "CATCHPLATE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY": str(
             paths["external_trust_root"]
         ),
-        "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER": "managed-prod-log",
-        "SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER": "managed-prod-log",
-        "SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID": str(
+        "CATCHPLATE_EXTERNAL_CHECKPOINT_PROVIDER": "managed-prod-log",
+        "CATCHPLATE_TRANSPARENCY_EXPECTED_PROVIDER": "managed-prod-log",
+        "CATCHPLATE_TRANSPARENCY_EXPECTED_LOG_ID": str(
             test_release_completion.external_receipt_key_info()["key_id"]
         ),
-        "SERVERWARE_COSIGN_KEY_ID": str(
+        "CATCHPLATE_COSIGN_KEY_ID": str(
             test_release_completion.sigstore_signing_key_info()["key_id"]
         ),
-        "SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID": str(
+        "CATCHPLATE_COSIGN_EXPECTED_REKOR_LOG_ID": str(
             test_release_completion.rekor_key_info()["key_id"]
         ),
     }
@@ -216,8 +216,8 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
         development_dirty_tree=False
     )
     source_tree_digest = source_contract["digest"]
-    control_ref = "registry.prod.serverware.dev/serverware/control@" + digest("a")
-    gate_ref = "registry.prod.serverware.dev/serverware/decision-gate@" + digest("b")
+    control_ref = "registry.prod.catchplate.dev/catchplate/control@" + digest("a")
+    gate_ref = "registry.prod.catchplate.dev/catchplate/decision-gate@" + digest("b")
 
     reproducible_document = {
         "apiVersion": verify_reproducible_builds.VERIFICATION_API_VERSION,
@@ -250,9 +250,9 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
         "source_tree_digest": source_tree_digest,
         "comparison_sha256": digest("5"),
         "images": [
-            {"service": "serverware-control", "image_id": digest("a")},
+            {"service": "catchplate-control", "image_id": digest("a")},
             {
-                "service": "serverware-decision-gate",
+                "service": "catchplate-decision-gate",
                 "image_id": digest("b"),
                 "rust_binary_sha256": digest("9"),
                 "launcher_binary_sha256": digest("e"),
@@ -306,12 +306,12 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
             },
             "images": [
                 {
-                    "service": "serverware-control",
+                    "service": "catchplate-control",
                     "dockerfile": "Dockerfile.production",
                     "image_id": digest("a"),
                 },
                 {
-                    "service": "serverware-decision-gate",
+                    "service": "catchplate-decision-gate",
                     "dockerfile": "data-plane/decision-gate-rs/Dockerfile.production",
                     "image_id": digest("b"),
                     "binary_digest": digest("9"),
@@ -325,7 +325,7 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
     )
     provenance_payload = {
         "version": generate_release_provenance.PRODUCTION_PROVENANCE_VERSION,
-        "source": "serverware-digest-pinned-production-release",
+        "source": "catchplate-digest-pinned-production-release",
         "source_tree": {"digest": source_tree_digest},
         "compose_config_sha256": digest("c"),
         "compose": {
@@ -334,8 +334,8 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
         },
         "sbom": {"cyclonedx": {"sha256": digest("d"), "components": 204}},
         "images": {
-            "serverware-control": {"image_id": digest("a")},
-            "serverware-decision-gate": {
+            "catchplate-control": {"image_id": digest("a")},
+            "catchplate-decision-gate": {
                 "image_id": digest("b"),
                 "binary_digest": digest("9"),
                 "launcher_binary_digest": digest("e"),
@@ -408,10 +408,10 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
         },
     )
     image_signature_payload = {
-        "apiVersion": "serverware.imageSignatures/v1",
+        "apiVersion": "catchplate.imageSignatures/v1",
         "images": [
             {
-                "service": "serverware-control",
+                "service": "catchplate-control",
                 "image_id": digest("a"),
                 "statement": {
                     "predicate": {
@@ -426,7 +426,7 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
                 },
             },
             {
-                "service": "serverware-decision-gate",
+                "service": "catchplate-decision-gate",
                 "image_id": digest("b"),
                 "statement": {
                     "predicate": {
@@ -527,7 +527,7 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
         },
     )
     images_env.write_text(
-        "SERVERWARE_PRODUCTION_IMAGES=" + ",".join([control_ref, gate_ref]) + "\n",
+        "CATCHPLATE_PRODUCTION_IMAGES=" + ",".join([control_ref, gate_ref]) + "\n",
         encoding="utf-8",
     )
     write_json(
@@ -539,17 +539,17 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
             "source_build_file": str(build),
             "images": [
                 {
-                    "service": "serverware-control",
+                    "service": "catchplate-control",
                     "local_image_id": digest("a"),
-                    "tag": "registry.prod.serverware.dev/serverware/control:production-candidate",
+                    "tag": "registry.prod.catchplate.dev/catchplate/control:production-candidate",
                     "repo_digest": control_ref,
                     "config_id": digest("a"),
                     "remote_image_id": digest("a"),
                 },
                 {
-                    "service": "serverware-decision-gate",
+                    "service": "catchplate-decision-gate",
                     "local_image_id": digest("b"),
-                    "tag": "registry.prod.serverware.dev/serverware/decision-gate:production-candidate",
+                    "tag": "registry.prod.catchplate.dev/catchplate/decision-gate:production-candidate",
                     "repo_digest": gate_ref,
                     "config_id": digest("b"),
                     "remote_image_id": digest("b"),
@@ -560,7 +560,7 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
                 },
             ],
             "remote_no_shell": {"ok": True},
-            "env": {"SERVERWARE_PRODUCTION_IMAGES": ",".join([control_ref, gate_ref])},
+            "env": {"CATCHPLATE_PRODUCTION_IMAGES": ",".join([control_ref, gate_ref])},
         },
     )
     paths = {
@@ -573,11 +573,11 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
         env,
         {
             **fixture_release_trust_env(paths),
-            "SERVERWARE_ADMIN_TOKEN": "prod-admin-token-32-byte-secret-value",
-            "SERVERWARE_OIDC_JWKS_JSON": canonical_json({"keys": [{"kid": "prod"}]}),
+            "CATCHPLATE_ADMIN_TOKEN": "prod-admin-token-32-byte-secret-value",
+            "CATCHPLATE_OIDC_JWKS_JSON": canonical_json({"keys": [{"kid": "prod"}]}),
         },
     )
-    env_template.write_text("SERVERWARE_ADMIN_TOKEN=<secret>\n", encoding="utf-8")
+    env_template.write_text("CATCHPLATE_ADMIN_TOKEN=<secret>\n", encoding="utf-8")
     return {
         "build": build,
         "provenance_summary": provenance_summary,
@@ -601,7 +601,7 @@ def run_handoff(
     launch_arguments: tuple[str, ...] = VALID_LAUNCH_ARGUMENTS,
     launch_environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
-    registry_prefix = "registry.prod.serverware.dev/serverware"
+    registry_prefix = "registry.prod.catchplate.dev/catchplate"
     if extra and extra[0] == "--registry-prefix":
         registry_prefix = extra[1]
         extra = extra[2:]
@@ -683,7 +683,7 @@ def assert_release_input_bindings(paths: dict[str, Path]) -> None:
             )
 
     production_images = inventory()
-    gate = production_images["serverware-decision-gate"]
+    gate = production_images["catchplate-decision-gate"]
     for field, expected in (
         ("launch_authority_key_id", LAUNCH_AUTHORITY_KEY_ID),
         ("launch_authority_root_sha256", LAUNCH_AUTHORITY_ROOT_SHA256),
@@ -864,7 +864,7 @@ def assert_staged_commands(output: dict[str, object], paths: dict[str, Path]) ->
     }
     source_digest = output["local_evidence"]["production_images"]["source_tree_digest"]
     release_variables = {
-        f"PRODUCTION_RELEASE_ROOT=/opt/serverware/releases/{source_digest.replace(':', '-', 1)}",
+        f"PRODUCTION_RELEASE_ROOT=/opt/catchplate/releases/{source_digest.replace(':', '-', 1)}",
         f"PRODUCTION_SOURCE_TREE_DIGEST={source_digest}",
     }
     deployment = by_name["deploy"]["commands"][0]
@@ -922,7 +922,7 @@ def main() -> None:
         output = json.loads(result.stdout.decode("utf-8"))
         if (
             output.get("ok") is not True
-            or output.get("apiVersion") != "serverware.productionHandoff/v2"
+            or output.get("apiVersion") != "catchplate.productionHandoff/v2"
             or output.get("completion_state") != "pending-independent-production-verification"
         ):
             raise AssertionError(
@@ -973,7 +973,7 @@ def main() -> None:
                 f"handoff did not verify signatures against published image digest refs: {output}"
             )
         placeholder = run_handoff(
-            paths, "--registry-prefix", "registry.example/serverware"
+            paths, "--registry-prefix", "registry.example/catchplate"
         )
         if placeholder.returncode == 0 or "placeholder .example registry" not in detail(
             placeholder
@@ -1153,11 +1153,11 @@ def main() -> None:
         reused_final_key_paths = write_fixture_artifacts(tmp)
         reused_final_key_env = {
             **fixture_release_trust_env(reused_final_key_paths),
-            "SERVERWARE_ADMIN_TOKEN": "prod-admin-token-32-byte-secret-value",
-            "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY": str(
+            "CATCHPLATE_ADMIN_TOKEN": "prod-admin-token-32-byte-secret-value",
+            "CATCHPLATE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY": str(
                 reused_final_key_paths["release_trust_root"]
             ),
-            "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID": str(
+            "CATCHPLATE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID": str(
                 release_key_info()["key_id"]
             ),
         }

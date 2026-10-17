@@ -44,7 +44,7 @@ def calls(node, spelling):
 class RevocationCoordinatorSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.text, cls.tree = source("serverware/authority_revocation_persistence.py", 64 * 1024)
+        cls.text, cls.tree = source("catchplate/authority_revocation_persistence.py", 64 * 1024)
         cls.owner = definition(cls.tree, "RevocationPlannerPersistence")
 
     def method(self, name):
@@ -61,9 +61,9 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
             ("__future__", (("annotations", None),)),
             ("dataclasses", (("dataclass", None),)),
             ("cryptography.hazmat.primitives.asymmetric.ed25519", (("Ed25519PublicKey", None),)),
-            ("serverware", (("authority_revocation_retention", "retention"),)),
-            ("serverware", (("authority_revocation_writer_connection", "writer_connection"),)),
-            ("serverware.authority_store", (("revocation_retention", "store"),)),
+            ("catchplate", (("authority_revocation_retention", "retention"),)),
+            ("catchplate", (("authority_revocation_writer_connection", "writer_connection"),)),
+            ("catchplate.authority_store", (("revocation_retention", "store"),)),
         ])
         self.assertEqual([node for node in self.tree.body if isinstance(node, ast.Import)], [])
         self.assertEqual(len(self.owner.decorator_list), 1)
@@ -124,7 +124,7 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assert_shape(facade.body[0].value,
             "_inputs_from_configuration(self._snapshot_configuration(), expectations, work)")
         # Pin the actual decoder/verifier inventory, not just a subtraction.
-        _, plan_tree = source("serverware/authority_revocation_plan.py", 256 * 1024)
+        _, plan_tree = source("catchplate/authority_revocation_plan.py", 256 * 1024)
         inventory = next(node.value for node in plan_tree.body if isinstance(node, ast.Assign)
                          and any(isinstance(target, ast.Name) and target.id == "_VERIFICATION_INPUTS"
                                  for target in node.targets))
@@ -155,7 +155,7 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assert_shape(opening[0].args[1], 'lambda: psycopg.connect(dsn, row_factory=dict_row, '
             'connect_timeout=timeout, autocommit=False, options="-c search_path=pg_catalog")')
         imported_db, = [node for node in run.body if isinstance(node, ast.ImportFrom)
-            and node.module == "serverware" and [(item.name, item.asname) for item in node.names] == [("db", None)]]
+            and node.module == "catchplate" and [(item.name, item.asname) for item in node.names] == [("db", None)]]
         self.assertLess(owned[0].lineno, imported_db.lineno)
         self.assertLess(imported_db.lineno, opening[0].lineno)
         role_guard, = [node for node in run.body if isinstance(node, ast.If)]
@@ -171,7 +171,7 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assertLess(opening[0].lineno, delegated.lineno)
         self.assertFalse(calls(run, "operation"))
         self.assertFalse(calls(run, "store._context"))
-        _, writer = source("serverware/authority_revocation_writer_connection.py", 128 * 1024)
+        _, writer = source("catchplate/authority_revocation_writer_connection.py", 128 * 1024)
         mode = next(node.value for node in writer.body if isinstance(node, ast.Assign)
             and any(isinstance(target, ast.Name) and target.id == "_SET_TRANSACTION" for target in node.targets))
         self.assertEqual(mode.value, "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE NOT DEFERRABLE")
@@ -217,7 +217,7 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assertEqual(reserve.args.kwarg.arg, "expectations")
         imports = [(node.module, tuple(item.name for item in node.names))
                    for node in reserve.body if isinstance(node, ast.ImportFrom)]
-        self.assertEqual(imports, [("serverware.authority_store", ("revocation_execution",))])
+        self.assertEqual(imports, [("catchplate.authority_store", ("revocation_execution",))])
         guards = calls(reserve, "retention.plan.contract._digest")
         self.assertEqual([ast.unparse(call.args[0]) for call in guards],
                          ["envelope_id", "planner_transaction_id"])
@@ -293,8 +293,8 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assertFalse(calls(connect, "_ValidationWork"))
 
     def test_legacy_v3_and_service_routes_do_not_activate_the_new_coordinator(self):
-        service, _ = source("serverware/authority_service.py", 2 * 1024 * 1024)
-        planner, planner_tree = source("serverware/authority_planner.py", 2 * 1024 * 1024)
+        service, _ = source("catchplate/authority_service.py", 2 * 1024 * 1024)
+        planner, planner_tree = source("catchplate/authority_planner.py", 2 * 1024 * 1024)
         for text in (service, planner):
             self.assertNotIn("authority_revocation_persistence", text)
             self.assertNotIn("RevocationPlannerPersistence", text)
@@ -305,10 +305,10 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         schema = next(node.value for node in planner_tree.body if isinstance(node, ast.Assign)
                       and any(isinstance(target, ast.Name) and target.id == "SIGNED_MEASURED_PLAN_SCHEMA"
                               for target in node.targets))
-        self.assertEqual(schema.value, "serverware.signedPolicyAuthorityMeasuredPlan/v3")
+        self.assertEqual(schema.value, "catchplate.signedPolicyAuthorityMeasuredPlan/v3")
 
     def test_observed_entry_owns_twelve_context_fields_and_inventory_before_read_callbacks(self):
-        _, tree = source("serverware/authority_revocation_coordinator.py", 64 * 1024)
+        _, tree = source("catchplate/authority_revocation_coordinator.py", 64 * 1024)
         owner = definition(tree, "RevocationPlanningCoordinator")
         method = definition(owner, "produce_observed_and_persist_with_cutoff")
         self.assertEqual([argument.arg for argument in method.args.kwonlyargs],
@@ -320,7 +320,7 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assert_shape(assignments["_CALL_CONTEXT"],
             'retention.production._CONTEXT_FIELDS - {"expectedPlannerIdentity", "expectedVerifierIdentity"}')
         self.assert_shape(assignments["_OBSERVED_CALL_CONTEXT"], '_CALL_CONTEXT - {"expectedBefore"}')
-        _, production = source("serverware/authority_revocation_plan_production.py", 64 * 1024)
+        _, production = source("catchplate/authority_revocation_plan_production.py", 64 * 1024)
         fields = next(node.value for node in production.body if isinstance(node, ast.Assign)
             and any(isinstance(target, ast.Name) and target.id == "_CONTEXT_FIELDS" for target in node.targets))
         self.assertEqual({item.value for item in fields.args[0].elts}
@@ -356,7 +356,7 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assertIn("identity[4:] != configured[4]", ast.unparse(method))
 
     def test_shared_read_body_selects_real_producer_and_owns_projected_context_before_exit(self):
-        _, coordinator = source("serverware/authority_revocation_coordinator.py", 64 * 1024)
+        _, coordinator = source("catchplate/authority_revocation_coordinator.py", 64 * 1024)
         facade = definition(coordinator, "_produce_on_read_configuration")
         delegated, = calls(facade, "planning._produce_on_read_configuration")
         self.assert_shape(delegated, "planning._produce_on_read_configuration(read_configuration[:4], "
@@ -366,7 +366,7 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assert_shape(caught.type, "planning.reader.roots.RevocationRootReadError")
         self.assert_shape(caught.body[-1].exc, "persistence_module.store._error(str(exc))")
         self.assert_shape(caught.body[-1].cause, "exc")
-        _, tree = source("serverware/authority_revocation_planning.py", 64 * 1024)
+        _, tree = source("catchplate/authority_revocation_planning.py", 64 * 1024)
         helper = definition(tree, "_produce_on_read_configuration")
         legacy, = calls(helper, "program._produce_revocation_plan")
         observed, = calls(helper, "program._produce_observed_revocation_plan")
@@ -426,7 +426,7 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
             self.assertFalse(calls(helper, forbidden))
 
     def test_observed_writer_uses_detached_projected_expectations_and_returns_independent_history(self):
-        _, tree = source("serverware/authority_revocation_coordinator.py", 64 * 1024)
+        _, tree = source("catchplate/authority_revocation_coordinator.py", 64 * 1024)
         method = definition(tree, "produce_observed_and_persist_with_cutoff", "RevocationPlanningCoordinator")
         read, = calls(method, "_produce_on_read_configuration")
         copied = sorted(calls(method, "authority_query_reads._CopyBudget(work).copy"), key=lambda node: node.lineno)
@@ -458,11 +458,11 @@ class RevocationCoordinatorSourceTests(unittest.TestCase):
         self.assertEqual(len(calls(runner, "_inputs_from_configuration")), 1)
         self.assertEqual(len(calls(runner, "writer_connection._run_on_connection")), 1)
         self.assertFalse(calls(runner, "operation"))
-        service, _ = source("serverware/authority_service.py", 2 * 1024 * 1024)
+        service, _ = source("catchplate/authority_service.py", 2 * 1024 * 1024)
         self.assertNotIn("produce_observed_and_persist_with_cutoff", service)
 
     def test_shared_read_driver_getters_and_bindings_are_guarded_without_extra_allowance(self):
-        _, tree = source("serverware/authority_revocation_planning.py", 64 * 1024)
+        _, tree = source("catchplate/authority_revocation_planning.py", 64 * 1024)
         fetched = definition(tree, "_call", "_ReadResult")
         executed = definition(tree, "execute", "_ReadCursor")
         guarded_fetch, = calls(fetched, "cursor._call")

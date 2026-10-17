@@ -10,7 +10,7 @@ const { mkdtempSync, mkdirSync, chmodSync, unlinkSync, rmdirSync } = require('no
 const path = require('node:path');
 const { chromium, request } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 
-const ORIGIN = 'https://serverware-sandbox.example.com';
+const ORIGIN = 'https://catchplate-sandbox.example.com';
 const PAGES = ['overview', 'proxy', 'credentials', 'access', 'audit'];
 const DOCUMENTS = new Set(['/api/bootstrap', '/api/policy', '/api/sandbox/check']);
 const READ_PATHS = new Set(['/', '/ca.pem', '/api/auth/status', '/api/sandbox/status',
@@ -81,7 +81,7 @@ async function startRelay({ backend, address, token, documents, failures }) {
       const allowed = incoming.method === 'GET' ? READ_PATHS.has(path) :
         incoming.method === 'POST' && path === '/api/sandbox/check' && !url.search;
       if (!allowed || url.origin !== origin || incoming.headers.host !== new URL(origin).host ||
-          incoming.headers['x-serverware-admin-token'] ||
+          incoming.headers['x-catchplate-admin-token'] ||
           (incoming.headers.origin && incoming.headers.origin !== origin)) {
         outgoing.writeHead(403); outgoing.end(); return;
       }
@@ -124,17 +124,17 @@ function validateClientResponse(output, token) {
   requireCondition(result.authorization_present === true && result.authorization_scheme === 'Bearer' &&
     result.credential_marker === 'initial');
   requireCondition(!['authorization', 'authorization_sha256', 'proxy_authorization',
-    'serverware_agent', 'cookie', 'x_api_key'].some(key => Object.hasOwn(result, key)));
+    'catchplate_agent', 'cookie', 'x_api_key'].some(key => Object.hasOwn(result, key)));
   return { httpStatus: 200, credentialInjected: true, credentialNotReturned: true };
 }
 
 async function checkRenderedClients({ download, python, curl, token, setStage }) {
   // These artifacts are one public certificate, not source edits or a bulk
   // workspace. Its relative path matches both unchanged rendered snippets.
-  const directory = mkdtempSync('/tmp/serverware-browser-clients-');
+  const directory = mkdtempSync('/tmp/catchplate-browser-clients-');
   const clientDirectory = path.join(directory, 'test client');
-  const caFile = path.join(clientDirectory, 'serverware-ca.pem');
-  const clientName = `serverware-browser-client-${randomUUID()}`;
+  const caFile = path.join(clientDirectory, 'catchplate-ca.pem');
+  const clientName = `catchplate-browser-client-${randomUUID()}`;
   const bounded = { encoding: 'utf8', timeout: 20000, maxBuffer: 65536, stdio: ['pipe', 'pipe', 'pipe'] };
   let certificateSaved = false;
   let directoryCreated = false;
@@ -142,28 +142,28 @@ async function checkRenderedClients({ download, python, curl, token, setStage })
     mkdirSync(clientDirectory, { mode: 0o700 }); directoryCreated = true;
     await download.saveAs(caFile); certificateSaved = true;
     chmodSync(caFile, 0o644); // Public CA must be readable by the isolated UID.
-    const gate = JSON.parse(execFileSync('docker', ['inspect', 'serverware-sandbox-decision-gate-rs-1'], bounded))[0];
-    const gateAddress = gate.NetworkSettings.Networks['serverware-sandbox_sandbox'].IPAddress;
+    const gate = JSON.parse(execFileSync('docker', ['inspect', 'catchplate-sandbox-decision-gate-rs-1'], bounded))[0];
+    const gateAddress = gate.NetworkSettings.Networks['catchplate-sandbox_sandbox'].IPAddress;
     requireCondition(/^172\.16\.249\.[0-9]+$/.test(gateAddress));
-    const network = JSON.parse(execFileSync('docker', ['network', 'inspect', 'serverware-sandbox_sandbox'], bounded))[0];
+    const network = JSON.parse(execFileSync('docker', ['network', 'inspect', 'catchplate-sandbox_sandbox'], bounded))[0];
     requireCondition(network.Internal === true);
     const args = JSON.parse(execFileSync('python3', ['-B', '-c',
       'import json,shlex,sys; print(json.dumps(shlex.split(sys.stdin.read().replace(chr(92)+chr(10), ""), comments=True)))'],
     { ...bounded, input: curl }));
     requireCondition(JSON.stringify(args) === JSON.stringify(['curl', '--fail-with-body', '--max-time', '10',
-      '--noproxy', '', '--proxy', 'http://decision-gate-rs:9090', '--cacert', './test client/serverware-ca.pem',
-      '--proxy-header', 'X-Serverware-Agent: demo-agent', '--header', 'X-Serverware-Agent: demo-agent',
+      '--noproxy', '', '--proxy', 'http://decision-gate-rs:9090', '--cacert', './test client/catchplate-ca.pem',
+      '--proxy-header', 'X-Catchplate-Agent: demo-agent', '--header', 'X-Catchplate-Agent: demo-agent',
       'https://demo-upstream:8443/echo']));
-    requireCondition(python.includes('ssl.create_default_context(cafile="./test client/serverware-ca.pem")') &&
+    requireCondition(python.includes('ssl.create_default_context(cafile="./test client/catchplate-ca.pem")') &&
       python.includes('http.client.HTTPSConnection("decision-gate-rs", 9090') &&
       python.includes('connection.set_tunnel("demo-upstream", 8443') && !python.includes('CERT_NONE'));
 
     setStage('execute unchanged rendered Python client with downloaded CA');
     const pythonOutput = execFileSync('docker', ['run', '--rm', '-i', '--name', clientName,
-      '--pull', 'never', '--network', 'serverware-sandbox_sandbox', '--dns', '127.0.0.1',
+      '--pull', 'never', '--network', 'catchplate-sandbox_sandbox', '--dns', '127.0.0.1',
       '--user', '10001:10001', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true',
       '--cpus', '0.25', '--memory', '128m', '--pids-limit', '32', '--log-driver', 'none',
-      '--workdir', '/client', '--mount', `type=bind,src=${caFile},dst=/client/test client/serverware-ca.pem,readonly`,
+      '--workdir', '/client', '--mount', `type=bind,src=${caFile},dst=/client/test client/catchplate-ca.pem,readonly`,
       '--entrypoint', 'python', 'sha256:ec14a558a42e483a834860521e399b461a2df880fcba495e7127b0d8d2a51e01', '-B', '-'],
     { ...bounded, input: python });
     requireCondition(pythonOutput.startsWith('200 '));
@@ -199,17 +199,17 @@ async function main() {
   const screenshots = [];
   let firstLoadMs, reloadMs, proxyCheckPassed = false, clientExamples = null;
   try {
-    const container = 'serverware-sandbox-serverware-1';
+    const container = 'catchplate-sandbox-catchplate-1';
     const topology = JSON.parse(execFileSync('docker', ['inspect', container], { encoding: 'utf8' }))[0];
-    const address = topology.NetworkSettings.Networks['serverware-sandbox_sandbox'].IPAddress;
+    const address = topology.NetworkSettings.Networks['catchplate-sandbox_sandbox'].IPAddress;
     requireCondition(/^172\.16\.249\.[0-9]+$/.test(address));
     const token = execFileSync('docker', ['exec', container, 'python', '-c',
-      "from pathlib import Path; print(Path('/run/secrets/serverware/admin.token').read_text(),end='')"],
+      "from pathlib import Path; print(Path('/run/secrets/catchplate/admin.token').read_text(),end='')"],
     { encoding: 'utf8' }).trim();
     requireCondition(token.length >= 16 && !/[\r\n]/.test(token));
     backend = await request.newContext({ extraHTTPHeaders: {
-      'X-Serverware-Admin-Token': token,
-      Host: 'serverware-sandbox.example.com',
+      'X-Catchplate-Admin-Token': token,
+      Host: 'catchplate-sandbox.example.com',
       'X-Forwarded-Proto': 'https',
     } });
     relay = await startRelay({ backend, address, token, documents, failures });
@@ -233,7 +233,7 @@ async function main() {
     await page.goto(relay.origin, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await loaded(page);
     firstLoadMs = Math.round(performance.now() - start);
-    requireCondition(await page.title() === 'Overview - Serverware');
+    requireCondition(await page.title() === 'Overview - Catchplate');
     requireCondition(await page.locator('#overview').isVisible());
     requireCondition(await page.locator('nav[aria-label="Main navigation"] a').count() === 5);
     requireCondition(await page.locator('#admin-token').count() === 0);
@@ -259,7 +259,7 @@ async function main() {
     const download = await downloadPending;
     requireCondition((await download.failure()) === null);
     stage = 'CA download suggested filename';
-    requireCondition(download.suggestedFilename() === 'serverware-ca.pem');
+    requireCondition(download.suggestedFilename() === 'catchplate-ca.pem');
     stage = 'CA download stream';
     const stream = await download.createReadStream();
     requireCondition(stream !== null);
@@ -283,10 +283,10 @@ async function main() {
     checks.push('public_ca_download_certificate_and_fingerprint');
 
     stage = 'editable client configuration and real clipboard';
-    await page.locator('#ca-path').fill('./test client/serverware-ca.pem');
+    await page.locator('#ca-path').fill('./test client/catchplate-ca.pem');
     await page.locator('#client-type').selectOption('curl');
     const curl = await page.locator('#proxy-command').innerText();
-    requireCondition(curl.includes('test client/serverware-ca.pem') && curl.includes('--cacert'));
+    requireCondition(curl.includes('test client/catchplate-ca.pem') && curl.includes('--cacert'));
     requireCondition(curl.includes('http://decision-gate-rs:9090') && curl.includes('https://demo-upstream:8443/echo'));
     requireCondition(!curl.includes('--insecure') && !curl.includes(token));
     await page.locator('#copy-proxy-command').click();
@@ -294,7 +294,7 @@ async function main() {
     requireCondition(await page.evaluate(() => navigator.clipboard.readText()) === curl);
     await page.locator('#client-type').selectOption('python');
     const python = await page.locator('#proxy-command').innerText();
-    requireCondition(python !== curl && python.includes('test client/serverware-ca.pem'));
+    requireCondition(python !== curl && python.includes('test client/catchplate-ca.pem'));
     requireCondition(python.includes('ssl.create_default_context') && !python.includes('CERT_NONE'));
     await page.locator('#copy-proxy-command').click();
     await page.waitForFunction(() => document.getElementById('copy-status').textContent === 'Copied.');
@@ -302,8 +302,8 @@ async function main() {
     checks.push('curl_python_configuration_and_clipboard');
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.mouse.move(0, 0);
-    await page.screenshot({ path: '/tmp/serverware-sandbox-proxy.png', fullPage: true });
-    screenshots.push('/tmp/serverware-sandbox-proxy.png');
+    await page.screenshot({ path: '/tmp/catchplate-sandbox-proxy.png', fullPage: true });
+    screenshots.push('/tmp/catchplate-sandbox-proxy.png');
 
     stage = 'stored credentials and signed effective policy';
     await navigate(page, 'credentials');
@@ -394,7 +394,7 @@ async function main() {
     requireCondition(await page.locator('#audit-list .audit-card').evaluateAll(
       (cards, id) => cards.some(card => card.dataset.eventId === id), savedEventId));
     await navigate(page, 'proxy');
-    requireCondition(await page.locator('#ca-path').inputValue() === './test client/serverware-ca.pem');
+    requireCondition(await page.locator('#ca-path').inputValue() === './test client/catchplate-ca.pem');
     requireCondition(await page.locator('#client-type').inputValue() === 'python');
     requireCondition(await page.locator('#proxy-command').innerText() === python);
     checks.push('reload_data_policy_audit_and_client_preferences');
@@ -414,7 +414,7 @@ async function main() {
         requireCondition(button && button.x >= 0 && button.y >= 0 &&
           button.x + button.width <= 390 && button.y + button.height <= 844);
       }
-      const path = width === 390 ? '/tmp/serverware-sandbox-mobile.png' : '/tmp/serverware-sandbox-browser.png';
+      const path = width === 390 ? '/tmp/catchplate-sandbox-mobile.png' : '/tmp/catchplate-sandbox-browser.png';
       await page.screenshot({ path, fullPage: false });
       screenshots.push(path);
     }
@@ -426,7 +426,7 @@ async function main() {
       title: await page.title(), url: page.url(), firstLoadMs, reloadMs, proxyCheckPassed, clientExamples,
       auditChainVerified: true, checks, screenshots, errors, failures }));
   } catch (error) {
-    if (page) await page.screenshot({ path: '/tmp/serverware-sandbox-browser-failed.png', fullPage: false }).catch(() => {});
+    if (page) await page.screenshot({ path: '/tmp/catchplate-sandbox-browser-failed.png', fullPage: false }).catch(() => {});
     // Extract only this script's numeric line, never the exception text/trace.
     const sourceLine = error.stack?.match(/check_development_sandbox_browser\.cjs:(\d+):\d+/g)?.slice(-1)[0]?.match(/:(\d+):\d+$/)?.[1];
     console.log(JSON.stringify({ ok: false, stage, sourceLine, checks, errors, failures }));

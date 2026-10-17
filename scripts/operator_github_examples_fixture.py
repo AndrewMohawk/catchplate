@@ -20,7 +20,7 @@ import time
 from scripts import operator_github_fixture as base
 from scripts.operator_github_fixture_network import FIXTURE_IP, assert_isolated_network
 
-SCHEMA = "serverware.privateGithubExampleObservations/v1"
+SCHEMA = "catchplate.privateGithubExampleObservations/v1"
 CLIENTS = ("node", "python", "go")
 MAX_ATTEMPTS = 12
 OWNER, REPO, ORIGIN, BASE, TOKEN = base.OWNER, base.REPO, base.ORIGIN, base.BASE, base.TOKEN

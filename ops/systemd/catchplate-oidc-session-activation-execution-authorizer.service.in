@@ -1,0 +1,74 @@
+# Unrendered and uninstalled. Independent admission must supply an immutable
+# complete release, accounts, root/role/custody/enrollment originals and keys.
+# This unit has no DB, state-socket, TLS, journal or writable store mount.
+# A grant is not reserve/SQL/completion authority or permission to release a token.
+[Unit]
+Description=Catchplate dedicated OIDC activation grant authorizer (trusted-host-local)
+BindsTo=catchplate-oidc-session-activation-execution-authorizer.socket
+After=local-fs.target catchplate-oidc-session-activation-execution-authorizer.socket
+RequiresMountsFor=@ACTIVATION_AUTHORIZER_RELEASE_ROOT@ @ACTIVATION_AUTHORIZER_TRUST_DIR@ @ACTIVATION_AUTHORIZER_SIGNING_KEY@ @ACTIVATION_AUTHORIZER_BUNDLE_KEY@ @ACTIVATION_AUTHORIZER_DELIVERY_KEY@
+AssertPathIsDirectory=@ACTIVATION_AUTHORIZER_RELEASE_ROOT@
+AssertPathIsDirectory=@ACTIVATION_AUTHORIZER_TRUST_DIR@
+AssertPathExists=@ACTIVATION_AUTHORIZER_TRUST_DIR@/root-public-key.pem
+AssertPathExists=@ACTIVATION_AUTHORIZER_TRUST_DIR@/bootstrap.json
+AssertPathExists=@ACTIVATION_AUTHORIZER_TRUST_DIR@/custody.json
+AssertPathExists=@ACTIVATION_AUTHORIZER_SIGNING_KEY@
+AssertPathExists=@ACTIVATION_AUTHORIZER_BUNDLE_KEY@
+AssertPathExists=@ACTIVATION_AUTHORIZER_DELIVERY_KEY@
+StartLimitIntervalSec=infinity
+StartLimitBurst=1
+
+[Service]
+Type=exec
+# Root delivery permanently drops to 65506:65506 with no supplementary groups.
+# Exactly seven inherited descriptors 198..204; one accepted request per launch.
+# Type=exec is not cryptographic readiness or successful grant delivery.
+User=root
+Group=root
+RootDirectory=@ACTIVATION_AUTHORIZER_RELEASE_ROOT@
+MountAPIVFS=yes
+WorkingDirectory=/app
+BindReadOnlyPaths=@ACTIVATION_AUTHORIZER_TRUST_DIR@:/run/catchplate/oidc-session-activation-execution-authorizer-trust
+BindReadOnlyPaths=@ACTIVATION_AUTHORIZER_SIGNING_KEY@:/run/secrets/catchplate-oidc-session-activation-execution-authorizer-key
+BindReadOnlyPaths=@ACTIVATION_AUTHORIZER_BUNDLE_KEY@:/run/secrets/catchplate-oidc-session-activation-bundle-key
+BindReadOnlyPaths=@ACTIVATION_AUTHORIZER_DELIVERY_KEY@:/run/secrets/catchplate-oidc-session-activation-delivery-key
+BindReadOnlyPaths=/run/catchplate/oidc-session-activation-execution:/run/catchplate/oidc-session-activation-execution
+Sockets=catchplate-oidc-session-activation-execution-authorizer.socket
+NonBlocking=yes
+Environment=LD_LIBRARY_PATH=/runtime/python/lib
+ExecStart=/runtime/python/bin/python3 -I /runtime/authority-bootstrap/oidc_session_activation_execution_authorizer_launcher.py --root-delivery
+Restart=no
+RuntimeMaxSec=300s
+TimeoutStartSec=35s
+# Cooperative TERM/cgroup escalation is not a hard kernel syscall watchdog.
+TimeoutStopSec=35s
+KillSignal=SIGTERM
+KillMode=control-group
+SendSIGKILL=yes
+OOMPolicy=stop
+UMask=0077
+LimitCORE=0
+LimitNOFILE=1024
+TasksMax=32
+MemoryMax=512M
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SETGID CAP_SETUID
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+KeyringMode=private
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+SystemCallArchitectures=native

@@ -14,12 +14,12 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_primary_reader as capture
-from serverware import authority_challenge_retention as retention
-from serverware import authority_index_reader as reader
-from serverware import authority_index_trace as trace_shapes
-from serverware import authority_query_read_work as measured
-from serverware import authority_transition_core as core
+from catchplate import authority_challenge_primary_reader as capture
+from catchplate import authority_challenge_retention as retention
+from catchplate import authority_index_reader as reader
+from catchplate import authority_index_trace as trace_shapes
+from catchplate import authority_query_read_work as measured
+from catchplate import authority_transition_core as core
 from test_authority_radix_mutation import IndependentTree
 from test_authority_radix_proof import sql_json, sql_digest
 
@@ -59,7 +59,7 @@ class Cursor:
         for row in rows:
             selected = self.primary.selected({"id": row["id"]})
             proof = self.primary.proof(selected)
-            tree_key = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1",
+            tree_key = sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1",
                 capture.TABLE.encode(), sql_json(selected["key"]))
             self.leaves[tree_key] = dict(key_json=sql_json(selected["key"]).decode(),
                 row_digest=proof["rowDigest"], leaf_digest=proof["leafDigest"],
@@ -69,11 +69,11 @@ class Cursor:
 
     def execute(self, sql, parameters):
         self.calls.append((sql, parameters))
-        if "FROM serverware_metadata.webauthn_challenges AS target" in sql:
+        if "FROM catchplate_metadata.webauthn_challenges AS target" in sql:
             rows = [{"row_value": copy.deepcopy(self.rows[parameters[0]])}] if parameters[0] in self.rows else []
-        elif "FROM serverware_metadata.policy_authority_authenticated_leaves" in sql:
+        elif "FROM catchplate_metadata.policy_authority_authenticated_leaves" in sql:
             rows = [copy.deepcopy(self.leaves[parameters[1]])] if parameters[1] in self.leaves else []
-        elif "FROM serverware_metadata.policy_authority_authenticated_tree_nodes" in sql:
+        elif "FROM catchplate_metadata.policy_authority_authenticated_tree_nodes" in sql:
             depth = parameters[1]
             rows = [dict(path_prefix=path, node_digest=self.primary.nodes[(depth, path)],
                          root_revision=self.primary.root.root_revision)
@@ -123,7 +123,7 @@ class ChallengePrimaryReaderTests(unittest.TestCase):
         for table in ("webauthn_challenges AS target", "policy_authority_authenticated_leaves"):
             with self.subTest(table=table):
                 context = self.context()
-                context[0].transform = lambda sql, rows: [] if "FROM serverware_metadata." + table in sql else rows
+                context[0].transform = lambda sql, rows: [] if "FROM catchplate_metadata." + table in sql else rows
                 with self.assertRaises(reader.IndexReadError):
                     self.acquire(context)
                 self.assertTrue(context[3].failed)

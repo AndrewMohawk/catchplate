@@ -5,7 +5,7 @@ import sys
 def main():
     if len(sys.argv)!=1 or sys.flags.isolated!=1 or sys.flags.ignore_environment!=1 or sys.flags.dont_write_bytecode!=1:
         raise ValueError("fixed isolated hardware verifier invocation required")
-    from serverware.native_setup_independent_verifier import hardware
+    from catchplate.native_setup_independent_verifier import hardware
     hardware()
 
 if __name__=="__main__":

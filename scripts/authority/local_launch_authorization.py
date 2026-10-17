@@ -63,7 +63,7 @@ def main(argv=None):
         return 0
     owner = None
     try:
-        from serverware.authority_local_launch_authorization import LocalLaunchAuthorizationIssuer, LocalLaunchAuthorizationError
+        from catchplate.authority_local_launch_authorization import LocalLaunchAuthorizationIssuer, LocalLaunchAuthorizationError
         try:
             owner = LocalLaunchAuthorizationIssuer.open(**arguments(argv))
             owner.publish()

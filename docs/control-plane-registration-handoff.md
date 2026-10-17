@@ -9,7 +9,7 @@ grant. No credential is finalized and no session is activated here.
 
 ## Separate explicit actions
 
-[`control_plane_registration_handoff`](../serverware/control_plane_registration_handoff.py)
+[`control_plane_registration_handoff`](../catchplate/control_plane_registration_handoff.py)
 provides two private application entrypoints:
 
 | Action | Result and boundary |

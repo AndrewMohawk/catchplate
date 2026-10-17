@@ -39,7 +39,7 @@ use std::path::Path;
 use std::ptr;
 
 pub(super) const TRUSTED_HOST_SERVICE_API_VERSION: &str =
-    "serverware.policyCustodyTrustedHostService/v4";
+    "catchplate.policyCustodyTrustedHostService/v4";
 pub(super) const MAX_SERVICE_FRAME_BYTES: usize =
     MAX_ENDPOINT_FRAME_BYTES;
 pub(super) const MAX_SERVICE_RIGHTS: usize = 8;
@@ -50,25 +50,25 @@ const MAX_JOURNAL_RECOVERY_BYTES: usize = 256 * 1024 * 1024;
 const JOURNAL_HEAD_NAME: &str = "head.v3.json";
 const JOURNAL_LOCK_NAME: &str = "writer.v3.lock";
 const JOURNAL_RECORD_DOMAIN: &[u8] =
-    b"serverware.policyCustodyTrustedHostJournalRecord/v3";
+    b"catchplate.policyCustodyTrustedHostJournalRecord/v3";
 const JOURNAL_HEAD_DOMAIN: &[u8] =
-    b"serverware.policyCustodyTrustedHostJournalHead/v3";
+    b"catchplate.policyCustodyTrustedHostJournalHead/v3";
 const SERVICE_REQUEST_BINDING_DOMAIN: &[u8] =
-    b"serverware.policyCustodyTrustedHostServiceRequestBinding/v3";
+    b"catchplate.policyCustodyTrustedHostServiceRequestBinding/v3";
 const SERVICE_REQUEST_FRAME_DOMAIN: &[u8] =
-    b"serverware.policyCustodyTrustedHostServiceRequestFrame/v3";
+    b"catchplate.policyCustodyTrustedHostServiceRequestFrame/v3";
 const SERVICE_RESPONSE_FRAME_DOMAIN: &[u8] =
-    b"serverware.policyCustodyTrustedHostServiceResponseFrame/v3";
+    b"catchplate.policyCustodyTrustedHostServiceResponseFrame/v3";
 const SERVICE_HANDSHAKE_REQUEST_DOMAIN: &[u8] =
-    b"serverware.policyCustodyTrustedHostServiceHandshakeRequest/v3";
+    b"catchplate.policyCustodyTrustedHostServiceHandshakeRequest/v3";
 const SERVICE_HANDSHAKE_REPLY_DOMAIN: &[u8] =
-    b"serverware.policyCustodyTrustedHostServiceHandshakeReply/v3";
+    b"catchplate.policyCustodyTrustedHostServiceHandshakeReply/v3";
 const SO_PEERPIDFD_OPT: libc::c_int = 77;
 const MAX_PROC_STAT_BYTES: usize = 4096;
 const MAX_PEER_SECURITY_LABEL_BYTES: usize = 4096;
 const MAX_EXECUTABLE_BYTES: u64 = 256 * 1024 * 1024;
 const PEER_PROCESS_IDENTITY_DOMAIN: &[u8] =
-    b"serverware.policyCustodyPeerProcessIdentity/v4";
+    b"catchplate.policyCustodyPeerProcessIdentity/v4";
 
 #[derive(Debug)]
 pub(in crate::policy_shadow::policy_custody) enum ServiceError {

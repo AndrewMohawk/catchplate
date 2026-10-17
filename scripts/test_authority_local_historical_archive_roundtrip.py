@@ -16,10 +16,10 @@ from cryptography.hazmat.primitives import serialization
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.authority_history_roundtrip_fixture import build_package
-from serverware import authority_artifact_spec as artifact
-from serverware import authority_historical_archive as history
-from serverware import authority_local_cohort as local_cohort
-from serverware import authority_local_historical_archive as producer
+from catchplate import authority_artifact_spec as artifact
+from catchplate import authority_historical_archive as history
+from catchplate import authority_local_cohort as local_cohort
+from catchplate import authority_local_historical_archive as producer
 
 SECOND = 10**9
 canonical = artifact.canonical_json_bytes

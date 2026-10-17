@@ -33,22 +33,22 @@ impl ReleaseProfile {
     pub fn binding_version(self, durable: bool) -> Option<&'static str> {
         match (self, durable) {
             (Self::Legacy, false) => None,
-            (Self::Legacy, true) => Some("serverware.releaseAuthorizationBinding/v2"),
-            (Self::PolicyAware, false) => Some("serverware.policyAwareReleaseAuthorizationBinding/v1"),
-            (Self::PolicyAware, true) => Some("serverware.policyAwareReleaseAuthorizationBinding/v2"),
-            (Self::Native, false) => Some("serverware.nativeReleaseAuthorizationBinding/v1"),
-            (Self::Native, true) => Some("serverware.nativeReleaseAuthorizationBinding/v2"),
+            (Self::Legacy, true) => Some("catchplate.releaseAuthorizationBinding/v2"),
+            (Self::PolicyAware, false) => Some("catchplate.policyAwareReleaseAuthorizationBinding/v1"),
+            (Self::PolicyAware, true) => Some("catchplate.policyAwareReleaseAuthorizationBinding/v2"),
+            (Self::Native, false) => Some("catchplate.nativeReleaseAuthorizationBinding/v1"),
+            (Self::Native, true) => Some("catchplate.nativeReleaseAuthorizationBinding/v2"),
         }
     }
 
     pub fn response_version(self, durable: bool) -> &'static str {
         match (self, durable) {
-            (Self::Legacy, false) => "serverware.releaseAuthorization/v1",
-            (Self::Legacy, true) => "serverware.releaseAuthorization/v2",
-            (Self::PolicyAware, false) => "serverware.policyAwareReleaseAuthorizationResponse/v1",
-            (Self::PolicyAware, true) => "serverware.policyAwareReleaseAuthorizationResponse/v2",
-            (Self::Native, false) => "serverware.nativeReleaseAuthorizationResponse/v1",
-            (Self::Native, true) => "serverware.nativeReleaseAuthorizationResponse/v2",
+            (Self::Legacy, false) => "catchplate.releaseAuthorization/v1",
+            (Self::Legacy, true) => "catchplate.releaseAuthorization/v2",
+            (Self::PolicyAware, false) => "catchplate.policyAwareReleaseAuthorizationResponse/v1",
+            (Self::PolicyAware, true) => "catchplate.policyAwareReleaseAuthorizationResponse/v2",
+            (Self::Native, false) => "catchplate.nativeReleaseAuthorizationResponse/v1",
+            (Self::Native, true) => "catchplate.nativeReleaseAuthorizationResponse/v2",
         }
     }
 
@@ -56,28 +56,28 @@ impl ReleaseProfile {
         use ReleaseOperation::*;
         Ok(match (self, operation, durable) {
             (Self::Legacy, Prepare, _) => return Err("legacy release has no preparation contract".to_owned()),
-            (Self::Legacy, Reserve, false) => "serverware.releaseAuthorizationReserve/v1",
-            (Self::Legacy, Reserve, true) => "serverware.releaseAuthorizationReserve/v2",
-            (Self::Legacy, Dispatch, false) => "serverware.releaseAuthorizationDispatch/v1",
-            (Self::Legacy, Dispatch, true) => "serverware.releaseAuthorizationDispatch/v2",
-            (Self::Legacy, Complete, false) => "serverware.releaseAuthorizationComplete/v1",
-            (Self::Legacy, Complete, true) => "serverware.releaseAuthorizationComplete/v2",
-            (Self::PolicyAware, Prepare, false) => "serverware.policyAwareReleaseAuthorizationPrepare/v1",
-            (Self::PolicyAware, Prepare, true) => "serverware.policyAwareReleaseAuthorizationPrepare/v2",
-            (Self::PolicyAware, Reserve, false) => "serverware.policyAwareReleaseAuthorizationReserve/v1",
-            (Self::PolicyAware, Reserve, true) => "serverware.policyAwareReleaseAuthorizationReserve/v2",
-            (Self::PolicyAware, Dispatch, false) => "serverware.policyAwareReleaseAuthorizationDispatch/v1",
-            (Self::PolicyAware, Dispatch, true) => "serverware.policyAwareReleaseAuthorizationDispatch/v2",
-            (Self::PolicyAware, Complete, false) => "serverware.policyAwareReleaseAuthorizationComplete/v1",
-            (Self::PolicyAware, Complete, true) => "serverware.policyAwareReleaseAuthorizationComplete/v2",
-            (Self::Native, Prepare, false) => "serverware.nativeReleaseAuthorizationPrepare/v1",
-            (Self::Native, Prepare, true) => "serverware.nativeReleaseAuthorizationPrepare/v2",
-            (Self::Native, Reserve, false) => "serverware.nativeReleaseAuthorizationReserve/v1",
-            (Self::Native, Reserve, true) => "serverware.nativeReleaseAuthorizationReserve/v2",
-            (Self::Native, Dispatch, false) => "serverware.nativeReleaseAuthorizationDispatch/v1",
-            (Self::Native, Dispatch, true) => "serverware.nativeReleaseAuthorizationDispatch/v2",
-            (Self::Native, Complete, false) => "serverware.nativeReleaseAuthorizationComplete/v1",
-            (Self::Native, Complete, true) => "serverware.nativeReleaseAuthorizationComplete/v2",
+            (Self::Legacy, Reserve, false) => "catchplate.releaseAuthorizationReserve/v1",
+            (Self::Legacy, Reserve, true) => "catchplate.releaseAuthorizationReserve/v2",
+            (Self::Legacy, Dispatch, false) => "catchplate.releaseAuthorizationDispatch/v1",
+            (Self::Legacy, Dispatch, true) => "catchplate.releaseAuthorizationDispatch/v2",
+            (Self::Legacy, Complete, false) => "catchplate.releaseAuthorizationComplete/v1",
+            (Self::Legacy, Complete, true) => "catchplate.releaseAuthorizationComplete/v2",
+            (Self::PolicyAware, Prepare, false) => "catchplate.policyAwareReleaseAuthorizationPrepare/v1",
+            (Self::PolicyAware, Prepare, true) => "catchplate.policyAwareReleaseAuthorizationPrepare/v2",
+            (Self::PolicyAware, Reserve, false) => "catchplate.policyAwareReleaseAuthorizationReserve/v1",
+            (Self::PolicyAware, Reserve, true) => "catchplate.policyAwareReleaseAuthorizationReserve/v2",
+            (Self::PolicyAware, Dispatch, false) => "catchplate.policyAwareReleaseAuthorizationDispatch/v1",
+            (Self::PolicyAware, Dispatch, true) => "catchplate.policyAwareReleaseAuthorizationDispatch/v2",
+            (Self::PolicyAware, Complete, false) => "catchplate.policyAwareReleaseAuthorizationComplete/v1",
+            (Self::PolicyAware, Complete, true) => "catchplate.policyAwareReleaseAuthorizationComplete/v2",
+            (Self::Native, Prepare, false) => "catchplate.nativeReleaseAuthorizationPrepare/v1",
+            (Self::Native, Prepare, true) => "catchplate.nativeReleaseAuthorizationPrepare/v2",
+            (Self::Native, Reserve, false) => "catchplate.nativeReleaseAuthorizationReserve/v1",
+            (Self::Native, Reserve, true) => "catchplate.nativeReleaseAuthorizationReserve/v2",
+            (Self::Native, Dispatch, false) => "catchplate.nativeReleaseAuthorizationDispatch/v1",
+            (Self::Native, Dispatch, true) => "catchplate.nativeReleaseAuthorizationDispatch/v2",
+            (Self::Native, Complete, false) => "catchplate.nativeReleaseAuthorizationComplete/v1",
+            (Self::Native, Complete, true) => "catchplate.nativeReleaseAuthorizationComplete/v2",
         })
     }
 
@@ -88,23 +88,23 @@ impl ReleaseProfile {
     pub fn preparation_version(self) -> Option<&'static str> {
         match self {
             Self::Legacy => None,
-            Self::PolicyAware => Some("serverware.policyAwareReleaseAuthorizationPreparation/v1"),
-            Self::Native => Some("serverware.nativeReleaseAuthorizationPreparation/v1"),
+            Self::PolicyAware => Some("catchplate.policyAwareReleaseAuthorizationPreparation/v1"),
+            Self::Native => Some("catchplate.nativeReleaseAuthorizationPreparation/v1"),
         }
     }
 
     pub fn statement(self, kind: StatementKind) -> &'static str {
         use StatementKind::*;
         match (self, kind) {
-            (Self::Legacy, Buffered) => "serverware.proxyResponseStatement/v2",
-            (Self::Legacy, Streaming) => "serverware.streamingResponseStatement/v1",
-            (Self::Legacy, Observation) => "serverware.responseObservationStatement/v1",
-            (Self::PolicyAware, Buffered) => "serverware.policyAwareProxyResponseStatement/v1",
-            (Self::PolicyAware, Streaming) => "serverware.policyAwareStreamingResponseStatement/v1",
-            (Self::PolicyAware, Observation) => "serverware.policyAwareResponseObservationStatement/v1",
-            (Self::Native, Buffered) => "serverware.nativeProxyResponseStatement/v1",
-            (Self::Native, Streaming) => "serverware.nativeStreamingResponseStatement/v1",
-            (Self::Native, Observation) => "serverware.nativeResponseObservationStatement/v1",
+            (Self::Legacy, Buffered) => "catchplate.proxyResponseStatement/v2",
+            (Self::Legacy, Streaming) => "catchplate.streamingResponseStatement/v1",
+            (Self::Legacy, Observation) => "catchplate.responseObservationStatement/v1",
+            (Self::PolicyAware, Buffered) => "catchplate.policyAwareProxyResponseStatement/v1",
+            (Self::PolicyAware, Streaming) => "catchplate.policyAwareStreamingResponseStatement/v1",
+            (Self::PolicyAware, Observation) => "catchplate.policyAwareResponseObservationStatement/v1",
+            (Self::Native, Buffered) => "catchplate.nativeProxyResponseStatement/v1",
+            (Self::Native, Streaming) => "catchplate.nativeStreamingResponseStatement/v1",
+            (Self::Native, Observation) => "catchplate.nativeResponseObservationStatement/v1",
         }
     }
 
@@ -125,25 +125,25 @@ impl ReleaseProfile {
 
     pub fn receipt_version(self) -> &'static str {
         match self {
-            Self::Legacy => "serverware.controlPlaneAuthorizationReceipt/v1",
-            Self::PolicyAware => "serverware.policyAwareControlPlaneAuthorizationReceipt/v1",
-            Self::Native => "serverware.nativeControlPlaneAuthorizationReceipt/v1",
+            Self::Legacy => "catchplate.controlPlaneAuthorizationReceipt/v1",
+            Self::PolicyAware => "catchplate.policyAwareControlPlaneAuthorizationReceipt/v1",
+            Self::Native => "catchplate.nativeControlPlaneAuthorizationReceipt/v1",
         }
     }
 
     pub fn receipt_kind(self) -> &'static str {
         match self {
             Self::Legacy => "ControlPlaneAuthorizationReceipt",
-            Self::PolicyAware => "ServerwarePolicyAwareControlPlaneAuthorizationReceipt",
-            Self::Native => "ServerwareNativeControlPlaneAuthorizationReceipt",
+            Self::PolicyAware => "CatchplatePolicyAwareControlPlaneAuthorizationReceipt",
+            Self::Native => "CatchplateNativeControlPlaneAuthorizationReceipt",
         }
     }
 
     pub fn commitment_version(self) -> Option<&'static str> {
         match self {
             Self::Legacy => None,
-            Self::PolicyAware => Some("serverware.policyAwareResponseAuthorizationCommitment/v1"),
-            Self::Native => Some("serverware.nativeResponseAuthorizationCommitment/v1"),
+            Self::PolicyAware => Some("catchplate.policyAwareResponseAuthorizationCommitment/v1"),
+            Self::Native => Some("catchplate.nativeResponseAuthorizationCommitment/v1"),
         }
     }
 

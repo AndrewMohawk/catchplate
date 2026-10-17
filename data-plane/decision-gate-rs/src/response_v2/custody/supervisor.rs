@@ -339,7 +339,7 @@ pub fn dispatch_from_process_args(
             "--activate-generation" if !activate_generation => {
                 activate_generation = true;
             }
-            "--serverware-provider-rpc-v1"
+            "--catchplate-provider-rpc-v1"
                 if !provider_compatibility =>
             {
                 provider_compatibility = true;
@@ -646,7 +646,7 @@ mod linux_runtime {
             let deadline = config.whole_operation_timeout();
             workers.push(
                 thread::Builder::new()
-                    .name(format!("serverware-response-v2-{index}"))
+                    .name(format!("catchplate-response-v2-{index}"))
                     .spawn(move || {
                         worker_loop(
                             receiver,
@@ -661,7 +661,7 @@ mod linux_runtime {
         }
 
         eprintln!(
-            "serverware response-observation v2 custody listening socket={} transport=SOCK_SEQPACKET bulk=sealed-memfd+SCM_RIGHTS providersReady={} attestationMode={:?} bootId={} expectedClientUid={}",
+            "catchplate response-observation v2 custody listening socket={} transport=SOCK_SEQPACKET bulk=sealed-memfd+SCM_RIGHTS providersReady={} attestationMode={:?} bootId={} expectedClientUid={}",
             config.socket_path().display(),
             runtime.providers_ready(),
             config.attestation_mode(),
@@ -2105,7 +2105,7 @@ mod linux_runtime {
         peer_pidfd: &OwnedFd,
         expected_pid: libc::pid_t,
     ) -> io::Result<()> {
-        let name = b"serverware-response-v2-uapi-probe\0";
+        let name = b"catchplate-response-v2-uapi-probe\0";
         // SAFETY: name is NUL-terminated and memfd_create returns a new fd.
         let raw = unsafe {
             libc::syscall(
@@ -2346,7 +2346,7 @@ mod linux_runtime {
     }
 
     const SOCKET_OWNER_API_VERSION: &str =
-        "serverware.responseObservationV2SocketOwner/v1";
+        "catchplate.responseObservationV2SocketOwner/v1";
 
     #[derive(Clone, Deserialize, Serialize)]
     #[serde(rename_all = "camelCase", deny_unknown_fields)]

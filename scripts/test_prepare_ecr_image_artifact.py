@@ -17,7 +17,7 @@ VECTOR = ROOT / "scripts/fixtures/ecr_image_artifact_v1.json"
 
 class PrepareEcrImageArtifactTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="serverware-ecr-cli-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="catchplate-ecr-cli-")
         self.addCleanup(self.temporary.cleanup)
         self.parent = Path(self.temporary.name)
         self.source = self.parent / "source"
@@ -45,7 +45,7 @@ class PrepareEcrImageArtifactTests(unittest.TestCase):
         self.assertEqual(result.stderr, "")
         marker = json.loads(result.stdout)
         self.assertEqual(marker, {
-            "schema": "serverware.ecrArtifactStage/v1",
+            "schema": "catchplate.ecrArtifactStage/v1",
             "artifactSha256": self.vector["expected_commitment_sha256"],
             "manifestDigest": self.manifest_digest, "unsigned": True})
         self.assertEqual(json.loads((self.destination / "stage.json").read_bytes()), marker)

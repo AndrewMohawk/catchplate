@@ -70,9 +70,9 @@ The source-fixed `release` purpose is separate again. `DELIVERY_PATH` selects
 only `POST /api/auth/session/activation/consume/completion/recovery/release`
 and its `/options` action, with no query string and only the consume profile.
 `DELIVERY_SCHEMA` is
-`serverware.oidcSessionActivationCompletionRecoveryDeliveryIntent/v1`;
+`catchplate.oidcSessionActivationCompletionRecoveryDeliveryIntent/v1`;
 `DELIVERY_OPTIONS_SCHEMA` is
-`serverware.oidcSessionActivationCompletionRecoveryDeliveryOptions/v1`.
+`catchplate.oidcSessionActivationCompletionRecoveryDeliveryOptions/v1`.
 Its assertion/approval binding includes `recoveryPurpose: release`, so neither
 a completion assertion nor a `release-intent-proof` preparation assertion can
 substitute for the fresh release authorization. The exact purpose remains pinned
@@ -82,9 +82,9 @@ its closed actor is never reused.
 The separate source-fixed `retained-release` purpose selects only
 `POST /api/auth/session/activation/consume/completion/recovery/retained-release`
 and its `/options` action. `RETAINED_DELIVERY_SCHEMA` is
-`serverware.oidcSessionActivationCompletionRecoveryRetainedDeliveryIntent/v1`;
+`catchplate.oidcSessionActivationCompletionRecoveryRetainedDeliveryIntent/v1`;
 `RETAINED_DELIVERY_OPTIONS_SCHEMA` is
-`serverware.oidcSessionActivationCompletionRecoveryRetainedDeliveryOptions/v1`.
+`catchplate.oidcSessionActivationCompletionRecoveryRetainedDeliveryOptions/v1`.
 The signed assertion/approval binding includes `recoveryPurpose: retained-release`.
 Neither a LIVE `release` assertion nor preparation permission can select this
 action, and a failed LIVE request cannot switch to it automatically. Independently
@@ -104,9 +104,9 @@ The distinct source-fixed `consume` purpose instead requires the **activation**
 profile and exact path
 `/api/auth/session/activation/completion/recovery/consume` (or `/options` for
 the private challenge API). `CONSUME_SCHEMA` is
-`serverware.oidcSessionActivationCompletionRecoveryConsumeIntent/v1` and
+`catchplate.oidcSessionActivationCompletionRecoveryConsumeIntent/v1` and
 `CONSUME_OPTIONS_SCHEMA` is
-`serverware.oidcSessionActivationCompletionRecoveryConsumeOptions/v1`.
+`catchplate.oidcSessionActivationCompletionRecoveryConsumeOptions/v1`.
 The binding includes `recoveryPurpose: consume`; completion, preparation and
 release assertions cannot substitute. It authorizes only the future same-call
 consume continuation after genuinely acknowledged activation. It never permits

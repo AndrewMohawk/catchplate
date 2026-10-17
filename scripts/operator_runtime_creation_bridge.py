@@ -13,14 +13,14 @@ import signal
 import stat
 import sys
 
-PUBLIC = "https://serverware-demo.example.com"
+PUBLIC = "https://catchplate-demo.example.com"
 PREFIX = "/api/operator-demo/"
-TOKEN_FILE = "/run/secrets/serverware/admin.token"
+TOKEN_FILE = "/run/secrets/catchplate/admin.token"
 COLLECTIONS = ("credentials", "applications", "access_rules")
 KINDS = ("credential", "application", "rule")
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
-DUMMY = "Bearer SERVERWARE_BROWSER_SYNTHETIC_DUMMY"
+DUMMY = "Bearer CATCHPLATE_BROWSER_SYNTHETIC_DUMMY"
 PRIVATE = {"secret", "access_token", "refresh_token", "id_token", "admin_token", "encrypted_secret", "token_hash",
            "token_sha256", "secret_nonce", "encrypted_dek", "client_secret", "provider_secret", "password",
            "proxy_password", "proxy_authorization", "authorization", "cookie", "set_cookie", "private_key"}
@@ -45,7 +45,7 @@ def decode(raw):
 
 
 def name(run, index):
-    return "serverware-browser-" + run + "-" + KINDS[index]
+    return "catchplate-browser-" + run + "-" + KINDS[index]
 
 
 def rule_values(run, owned):
@@ -83,7 +83,7 @@ def admit(command):
         require(owned[COLLECTIONS[index]] is not None and content == {"id": owned[COLLECTIONS[index]]})
     elif index == 0:
         require(all(value is None for value in owned.values()) and content == {"name": name(run, 0), "auth_type": "bearer",
-                "header_name": "Authorization", "secret": "serverware-browser-synthetic-key-" + run})
+                "header_name": "Authorization", "secret": "catchplate-browser-synthetic-key-" + run})
     elif index == 1:
         require(owned["credentials"] is not None and owned["applications"] is None and owned["access_rules"] is None)
         expected = {"name": name(run, 1), "token_lifetime_seconds": 3600}
@@ -114,7 +114,7 @@ def public_json(body, token, *, application_created=False):
             pending.extend((child, depth + 1, False) for child in item)
         elif type(item) is str:
             require(len(item) <= 65536 and token not in item and "PRIVATE KEY-----" not in item
-                    and "serverware-browser-synthetic-key-" not in item)
+                    and "catchplate-browser-synthetic-key-" not in item)
     return value
 
 
@@ -122,7 +122,7 @@ def exchange(method, path, raw, token, *, application_created=False):
     connection = http.client.HTTPConnection("127.0.0.1", 3000, timeout=5)
     try:
         media = "text/html" if path == "/" else "application/json"
-        headers = {"Host": "serverware-demo.example.com", "Origin": PUBLIC, "X-Serverware-Admin-Token": token,
+        headers = {"Host": "catchplate-demo.example.com", "Origin": PUBLIC, "X-Catchplate-Admin-Token": token,
                    "Accept-Encoding": "identity", "Accept": media, "Connection": "close"}
         if method == "POST":
             headers["Content-Type"] = "application/json"
@@ -146,7 +146,7 @@ def exchange(method, path, raw, token, *, application_created=False):
 
 
 def bind_catalog(command, body, operation, catalog):
-    require(catalog.get("schema") == "serverware.operatorCatalog/v1" and catalog.get("mode") == "operator-development"
+    require(catalog.get("schema") == "catchplate.operatorCatalog/v1" and catalog.get("mode") == "operator-development"
             and catalog.get("productionReady") is False and catalog.get("hardwareVerified") is False
             and "https://demo-upstream:8443" in catalog.get("allowed_upstreams", []))
     require(body["expected_revision"] == catalog["revision"] and body["expected_policy_hash"] == catalog["policy"]["policy_hash"])
@@ -189,8 +189,8 @@ def main():
         require(len(wire) <= 32768)
         command = decode(wire)
         raw, body, operation = admit(command)
-        require(os.environ.get("SERVERWARE_OPERATOR_DEMO") == "1" and os.environ.get("SERVERWARE_PUBLIC_URL") == PUBLIC
-                and os.environ.get("SERVERWARE_ADMIN_TOKEN_FILE") == TOKEN_FILE and "SERVERWARE_ADMIN_TOKEN" not in os.environ)
+        require(os.environ.get("CATCHPLATE_OPERATOR_DEMO") == "1" and os.environ.get("CATCHPLATE_PUBLIC_URL") == PUBLIC
+                and os.environ.get("CATCHPLATE_ADMIN_TOKEN_FILE") == TOKEN_FILE and "CATCHPLATE_ADMIN_TOKEN" not in os.environ)
         descriptor = os.open(TOKEN_FILE, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
         try:
             info = os.fstat(descriptor)

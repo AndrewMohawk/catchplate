@@ -12,8 +12,8 @@ import json
 import subprocess
 import sys
 
-APP = "serverware-sandbox-serverware-1"
-GATE = "serverware-sandbox-decision-gate-rs-1"
+APP = "catchplate-sandbox-catchplate-1"
+GATE = "catchplate-sandbox-decision-gate-rs-1"
 IMAGE = "sha256:ec14a558a42e483a834860521e399b461a2df880fcba495e7127b0d8d2a51e01"
 
 CAPTURE = r'''
@@ -61,12 +61,12 @@ raise SystemExit(4)
 COMPARE = r'''
 import json, os, sqlite3, sys
 from pathlib import Path
-from serverware import db
-assert os.environ.get('SERVERWARE_DEVELOPMENT_SANDBOX')=='1'
-assert os.environ.get('SERVERWARE_RELEASE_CHANNEL')=='dev'
-assert json.loads(Path('/data/.serverware-development-sandbox.json').read_text())=={'schema':'serverware.developmentSandbox/v1','syntheticOnly':True}
-batch=json.load(sys.stdin); instance=os.environ['SERVERWARE_DATA_PLANE_INSTANCE_ID']
-connection=sqlite3.connect('file:/data/serverware.sqlite3?mode=ro',uri=True)
+from catchplate import db
+assert os.environ.get('CATCHPLATE_DEVELOPMENT_SANDBOX')=='1'
+assert os.environ.get('CATCHPLATE_RELEASE_CHANNEL')=='dev'
+assert json.loads(Path('/data/.catchplate-development-sandbox.json').read_text())=={'schema':'catchplate.developmentSandbox/v1','syntheticOnly':True}
+batch=json.load(sys.stdin); instance=os.environ['CATCHPLATE_DATA_PLANE_INSTANCE_ID']
+connection=sqlite3.connect('file:/data/catchplate.sqlite3?mode=ro',uri=True)
 connection.row_factory=sqlite3.Row
 present=0; different=0; missing=[]
 for index,item in enumerate(batch['events']):
@@ -84,13 +84,13 @@ import http.client,json,os,sys
 from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from scripts.test_credential_lease_delivery import AppResponse,b64e,canonical_json_bytes,sha256_prefixed,verify_response_signature
-from serverware.policy_bundle import policy_hash
-from serverware.demo_seed_policy import require_demo_semantics
+from catchplate.policy_bundle import policy_hash
+from catchplate.demo_seed_policy import require_demo_semantics
 payload=json.load(sys.stdin)
-assert os.environ.get('SERVERWARE_DEVELOPMENT_SANDBOX')=='1'
-assert os.environ.get('SERVERWARE_RELEASE_CHANNEL')=='dev'
+assert os.environ.get('CATCHPLATE_DEVELOPMENT_SANDBOX')=='1'
+assert os.environ.get('CATCHPLATE_RELEASE_CHANNEL')=='dev'
 assert len(payload['events'])==14
-assert json.loads(Path('/data/.serverware-development-sandbox.json').read_text())=={'schema':'serverware.developmentSandbox/v1','syntheticOnly':True}
+assert json.loads(Path('/data/.catchplate-development-sandbox.json').read_text())=={'schema':'catchplate.developmentSandbox/v1','syntheticOnly':True}
 policy=json.loads(Path('/data/policy-bundle.json').read_text()); require_demo_semantics(policy)
 digest=policy_hash(policy)
 def request(method,path,body=None,headers=None):
@@ -102,28 +102,28 @@ def request(method,path,body=None,headers=None):
   return AppResponse(r.status,{k.lower():v for k,v in h},tuple((k.lower().encode(),v.encode()) for k,v in h),raw)
  finally:c.close()
 nonce=b64e(os.urandom(32)); target='/attestation?nonce='+nonce
-response=request('GET',target,headers={'X-Serverware-Response-Nonce':nonce})
+response=request('GET',target,headers={'X-Catchplate-Response-Nonce':nonce})
 assert response.status_code==200
 attestation=response.json()
 key=serialization.load_pem_public_key(attestation['response_signing_public_key_pem'].encode())
 keyid=sha256_prefixed(key.public_bytes(serialization.Encoding.DER,serialization.PublicFormat.SubjectPublicKeyInfo))
 assert keyid==attestation['response_signing_key_id']
 verify_response_signature(response,public_key=key,key_id=keyid,method='GET',target=target,response_nonce=nonce,policy_hash=digest)
-token=Path('/run/secrets/serverware/audit.token').read_text().strip()
+token=Path('/run/secrets/catchplate/audit.token').read_text().strip()
 accepted=0
 for event in payload['events']:
  nonce=b64e(os.urandom(32)); body=canonical_json_bytes({'events':[event]})
- response=request('POST','/api/data-plane/audit',body,{'Content-Type':'application/json','X-Serverware-Data-Plane-Token':token,'X-Serverware-Response-Nonce':nonce})
+ response=request('POST','/api/data-plane/audit',body,{'Content-Type':'application/json','X-Catchplate-Data-Plane-Token':token,'X-Catchplate-Response-Nonce':nonce})
  verify_response_signature(response,public_key=key,key_id=keyid,method='POST',target='/api/data-plane/audit',response_nonce=nonce,policy_hash=digest)
  result=response.json()
  assert response.status_code==200 and result['ok'] is True and result['accepted']==1
- assert result['apiVersion']=='serverware.dataPlaneAuditAck/v1'
+ assert result['apiVersion']=='catchplate.dataPlaneAuditAck/v1'
  assert result['batchDigest']==sha256_prefixed(body)
- assert result['instanceId']==os.environ['SERVERWARE_DATA_PLANE_INSTANCE_ID']
+ assert result['instanceId']==os.environ['CATCHPLATE_DATA_PLANE_INSTANCE_ID']
  accepted+=1
  print(json.dumps({'singletonAccepted':accepted,'signedAckVerified':True}),flush=True)
-admin=Path('/run/secrets/serverware/admin.token').read_text().strip()
-response=request('GET','/api/audit/verify',headers={'X-Serverware-Admin-Token':admin})
+admin=Path('/run/secrets/catchplate/admin.token').read_text().strip()
+response=request('GET','/api/audit/verify',headers={'X-Catchplate-Admin-Token':admin})
 verification=response.json()
 assert response.status_code==200 and verification['ok'] is True and verification['complete'] is True
 print(json.dumps({'accepted':accepted,'auditChainOk':True,'auditChainComplete':True,'auditChainCount':verification['count']}),flush=True)

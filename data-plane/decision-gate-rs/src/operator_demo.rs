@@ -20,7 +20,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use url::{Host, Url};
 
-const MARKER: &[u8] = b"{\"schema\": \"serverware.operatorDemo/v1\", \"syntheticOnly\": false}\n";
+const MARKER: &[u8] = b"{\"schema\": \"catchplate.operatorDemo/v1\", \"syntheticOnly\": false}\n";
 const O_NOFOLLOW: i32 = 0x20000;
 pub(crate) const INGRESS_MODE: &str = "operator-demo-tls-edge";
 unsafe extern "C" {
@@ -234,16 +234,16 @@ pub(crate) fn from_environment() -> Result<Option<Selection>, String> {
     let forbidden = env::vars_os().any(|(name, value)| {
         let name = name.to_string_lossy();
         !value.is_empty()
-            && name.starts_with("SERVERWARE_")
+            && name.starts_with("CATCHPLATE_")
             && ([
-                "SERVERWARE_NATIVE_",
-                "SERVERWARE_NITRO_",
-                "SERVERWARE_AUTHORITY_",
-                "SERVERWARE_AWS_KMS_",
-                "SERVERWARE_POLICY_SHADOW_",
-                "SERVERWARE_MASTER_KEY_UNSEAL_COMMAND",
-                "SERVERWARE_WORKLOAD_IDENTITY_",
-                "SERVERWARE_CONTROL_PLANE_CUSTODY_",
+                "CATCHPLATE_NATIVE_",
+                "CATCHPLATE_NITRO_",
+                "CATCHPLATE_AUTHORITY_",
+                "CATCHPLATE_AWS_KMS_",
+                "CATCHPLATE_POLICY_SHADOW_",
+                "CATCHPLATE_MASTER_KEY_UNSEAL_COMMAND",
+                "CATCHPLATE_WORKLOAD_IDENTITY_",
+                "CATCHPLATE_CONTROL_PLANE_CUSTODY_",
             ]
             .iter()
             .any(|prefix| name.starts_with(prefix))
@@ -251,10 +251,10 @@ pub(crate) fn from_environment() -> Result<Option<Selection>, String> {
                 || name.contains("_FD_"))
     });
     let operator = selected(
-        env::var("SERVERWARE_OPERATOR_DEMO").ok().as_deref(),
-        env::var("SERVERWARE_RELEASE_CHANNEL").ok().as_deref(),
-        env::var("SERVERWARE_PRODUCTION_IMAGE").ok().as_deref(),
-        env::var("SERVERWARE_DEVELOPMENT_SANDBOX").ok().as_deref(),
+        env::var("CATCHPLATE_OPERATOR_DEMO").ok().as_deref(),
+        env::var("CATCHPLATE_RELEASE_CHANNEL").ok().as_deref(),
+        env::var("CATCHPLATE_PRODUCTION_IMAGE").ok().as_deref(),
+        env::var("CATCHPLATE_DEVELOPMENT_SANDBOX").ok().as_deref(),
         env::args_os().nth(1).is_some(),
         forbidden,
     )?;
@@ -270,8 +270,8 @@ pub(crate) fn from_environment() -> Result<Option<Selection>, String> {
             managed_x, x: None }));
     }
     let deployment = Deployment::parse(
-        &env::var("SERVERWARE_OPERATOR_DEMO_UPSTREAMS").map_err(|_| refused())?,
-        env::var("SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS")
+        &env::var("CATCHPLATE_OPERATOR_DEMO_UPSTREAMS").map_err(|_| refused())?,
+        env::var("CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS")
             .ok()
             .as_deref(),
     )?;
@@ -294,7 +294,7 @@ fn validate_marker(directory: &Path) -> Result<(), String> {
     let mut file = OpenOptions::new()
         .read(true)
         .custom_flags(O_NOFOLLOW)
-        .open(directory.join(".serverware-operator-demo.json"))
+        .open(directory.join(".catchplate-operator-demo.json"))
         .map_err(|_| refused())?;
     let before = file.metadata().map_err(|_| refused())?;
     if !before.is_file()
@@ -386,10 +386,10 @@ impl Selection {
             || state.proxy_ingress_attestation.mode != INGRESS_MODE
             || state.policy_path != "/data/policy-bundle.json"
             || state.credential_lease_url.as_deref()
-                != Some("http://serverware:3000/api/data-plane/credential-leases")
-            || state.audit_url.as_deref() != Some("http://serverware:3000/api/data-plane/audit")
+                != Some("http://catchplate:3000/api/data-plane/credential-leases")
+            || state.audit_url.as_deref() != Some("http://catchplate:3000/api/data-plane/audit")
             || state.server_instance_id.as_deref()
-                != Some("spiffe://operator-demo.serverware/decision-gate/local")
+                != Some("spiffe://operator-demo.catchplate/decision-gate/local")
             || !audit_enabled(state)
             || state.policy_high_water_path.is_none()
             || ((self.google.is_some() || self.x.is_some()) && (state.credential_currentness.enabled()
@@ -434,7 +434,7 @@ impl Profile {
                 && super::normalized_credential_provider(&credential.provider) == "google") {
             return Err(refused());
         }
-        if snapshot.policy_id != "serverware-operator-demo"
+        if snapshot.policy_id != "catchplate-operator-demo"
             || !is_sha256_digest(&snapshot.hash)
             || snapshot.policy_sequence == 0
             || snapshot.rollback_epoch == 0
@@ -558,7 +558,7 @@ impl Profile {
             .read()
             .ok()
             .map(|active| active.high_water.policy_hash.clone());
-        let mut value = serde_json::json!({"api_version":"serverware.policyShadowRuntimeStatus/v2",
+        let mut value = serde_json::json!({"api_version":"catchplate.policyShadowRuntimeStatus/v2",
             "mode":"operator-demo", "enabled":false, "readiness":false,
             "readiness_reason":"intentionally_uncommissioned_operator_demo",
             "production_custody_bound":false, "active_generation":null,

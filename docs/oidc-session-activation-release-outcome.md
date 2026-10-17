@@ -30,7 +30,7 @@ from the record identity. A checkpoint-one grant may pin the existing outcome;
 including that grant's digest would be circular and would change the retained
 outcome whenever fresh storage authority was supplied.
 
-The slot is the fixed `serverware.oidcSessionActivationReleaseOutcomeSlotIdentity/v1`
+The slot is the fixed `catchplate.oidcSessionActivationReleaseOutcomeSlotIdentity/v1`
 framing of database ID, generation digest and delivery ID, in that order. It is
 independent of caller, intent/proof identity, source revision and configuration:
 changing those inputs cannot manufacture a second slot for the same delivery.

@@ -27,7 +27,7 @@ retained children, PIDFDs and target executable descriptors under the original
 boot, namespace and startup window. The operator carries the exact original as
 `ordinaryPreparationOriginal` in its service-originals request.
 
-`serverware.custodyFiveServicePreparation/v1` explicitly says `parked-pre-exec`.
+`catchplate.custodyFiveServicePreparation/v1` explicitly says `parked-pre-exec`.
 It records actual PID/start and PIDFD stat identity, plus content SHA-256,
 `security.ima` and fs-verity measurements of each retained target executable.
 Missing mandatory measurements refuse; a content hash is not substituted for

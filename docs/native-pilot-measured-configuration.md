@@ -13,7 +13,7 @@ those same fields plus the required `closureSetOriginal`:
 
 | Field | Required input |
 | --- | --- |
-| `apiVersion` | `serverware.nativePilotMeasuredConfigurationRecipe/v1` or explicit `/v2` |
+| `apiVersion` | `catchplate.nativePilotMeasuredConfigurationRecipe/v1` or explicit `/v2` |
 | `source` | Existing exact five-field runtime source identity |
 | `conductorInventorySha256`, `authorityInventorySha256` | Independently approved installed-runtime inventory hashes |
 | `bootstrapOriginals` | Exact literal `control`, `configuration`, `window`, `deliveryConfiguration` originals |
@@ -66,7 +66,7 @@ startup still refuses before spawn while the remaining 57 composers are missing.
 ## Binding and result
 
 Legacy derivation preserves all 24 existing `ConfigurationBinding` fields and
-the `serverware.policyShadowProductionCustodyConfiguration/v1` framed hash.
+the `catchplate.policyShadowProductionCustodyConfiguration/v1` framed hash.
 Recipe/v2 adds `nativeClosureSet`, exactly `setRootSha256` and
 `seccompSetRootSha256`, as the 25th field and selects the `/v2` hash domain.
 The old manifest and seccomp fields remain the actual bridge leaf, never set
@@ -86,7 +86,7 @@ derived `expectedConfigurationBindingSha256`. The result's explicit version
 matches its recipe. Legacy proof scope preserves the exact fourteen fields,
 eleven-value framed digest and independent Store/Retrieval key bindings.
 Proof scope/v2 adds exactly `api_version` equal to
-`serverware.policyShadowProductionCustodyProofScope/v2`,
+`catchplate.policyShadowProductionCustodyProofScope/v2`,
 `execution_closure_set_root_sha256`, and
 `structurally_verified_seccomp_set_root_sha256`. Its `/v2` framed digest appends
 the two roots to the old eleven-value tuple. The corresponding authority receipt

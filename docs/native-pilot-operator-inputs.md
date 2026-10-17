@@ -51,13 +51,13 @@ Each frame is canonical ASCII JSON followed by exactly one LF (NDJSON).
 Requests have exactly these fields:
 
 ```json
-{"apiVersion":"serverware.nativePilotOperatorRequest/v1","deadlineBoottimeNs":"<original decimal deadline>","payload":{},"phase":"<fixed phase>","sequence":1}
+{"apiVersion":"catchplate.nativePilotOperatorRequest/v1","deadlineBoottimeNs":"<original decimal deadline>","payload":{},"phase":"<fixed phase>","sequence":1}
 ```
 
 Replies have exactly these fields:
 
 ```json
-{"apiVersion":"serverware.nativePilotOperatorReply/v1","inputs":{},"phase":"<same fixed phase>","requestSha256":"sha256:<64 lowercase hex digits>","sequence":1}
+{"apiVersion":"catchplate.nativePilotOperatorReply/v1","inputs":{},"phase":"<same fixed phase>","requestSha256":"sha256:<64 lowercase hex digits>","sequence":1}
 ```
 
 These are shape examples, not usable requests or authority originals. Replies
@@ -183,9 +183,9 @@ an invitation to restart the conductor or regenerate input authority.
 
 ## Protected public originals
 
-`serverware.native_pilot_public_inputs.PublicInputs` reads reply-selected pins
-only beneath `/etc/serverware/native-pilot-inputs/`. Each pin is exactly
-`{"path":"/etc/serverware/native-pilot-inputs/<public-original>","sha256":"sha256:<digest>"}`.
+`catchplate.native_pilot_public_inputs.PublicInputs` reads reply-selected pins
+only beneath `/etc/catchplate/native-pilot-inputs/`. Each pin is exactly
+`{"path":"/etc/catchplate/native-pilot-inputs/<public-original>","sha256":"sha256:<digest>"}`.
 The independent provisioner must create these public fixtures before the
 corresponding phase needs them. The reader creates or installs nothing.
 

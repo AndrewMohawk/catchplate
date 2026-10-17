@@ -26,7 +26,7 @@ The companion Python change at `7013967b` temporarily refuses raw nested JIT
 documents at five new-submission/retention boundaries. Its focused component
 tests passed as recorded below. Those changes are included in the subsequently
 deployed `35817cf5` / normal `09087323` pair; see the
-[live deployment checkpoint](../docker/serverware-operator-demo/README.md).
+[live deployment checkpoint](../docker/catchplate-operator-demo/README.md).
 The earlier `a3899a95` / `682d66d8` runtime is historical. Deployment of these
 guards and retained owners does not enable a native JIT workflow. The newer
 explicit private-release ingress work is separate and is not deployed.
@@ -119,7 +119,7 @@ metadata-only external API probes passed separately. No normal executable was
 compiled for this attempt.
 
 The original failure and continuation receipts, including both test ELFs, were
-copied from `serverware-native-ingress-rust.8XoRi61t` to the durable private
+copied from `catchplate-native-ingress-rust.8XoRi61t` to the durable private
 evidence directory `native-ingress-library-rust.gzjIOVOa/receipts`, with the copy
 verified against the originals. All 43 cleanup receipts for that attempt passed.
 The independently reviewed test-only correction at `cb1466be` preserves the
@@ -169,9 +169,9 @@ remains evidence for its preceding checkpoint only.
 
 ## Explicit private release ingress — source only, execution unavailable
 
-`serverware/authority_release_private_request.py` defines
-`serverware.policyAuthorityPrivateReleaseWriterInput/v1` and the public projection
-`serverware.releaseReserveCommitments/v1`. Only the installed `release.reserve`
+`catchplate/authority_release_private_request.py` defines
+`catchplate.policyAuthorityPrivateReleaseWriterInput/v1` and the public projection
+`catchplate.releaseReserveCommitments/v1`. Only the installed `release.reserve`
 facade selects this envelope, from an unsigned exact 27-field parent with an exact
 seven-field nested JIT request. The existing private-JIT-v2 producer receives a
 derived 19-field child: parent identity/approver fields cannot be independently
@@ -236,7 +236,7 @@ native custody, protected approval, provider or deployment acceptance follows.
 
 ## Python: temporary refusal at five boundaries
 
-`serverware/authority_release_private_input.py` rejects any non-`None`
+`catchplate/authority_release_private_input.py` rejects any non-`None`
 `jit_approval_request` on `release.reserve` or `release.v1.reserve`, even when
 `require_jit_grant` is false. Empty objects, false scalars and other non-null
 values are not a bypass. Missing or null input retains its existing meaning,

@@ -15,13 +15,13 @@ still require separate reconciliation; this tool cannot make them successful.
 ## Operator inputs
 
 Use the original host's fixed
-`/var/lib/serverware/native-policy-activation/journal` directory. No alternate
+`/var/lib/catchplate/native-policy-activation/journal` directory. No alternate
 journal path is accepted. Supply exact canonical ASCII selection JSON matching
 `native-policy-activation-recovery.v1.schema.json`, without a trailing newline:
 
 | Field | Required original source |
 | --- | --- |
-| `apiVersion` | Literal `serverware.nativePolicyActivationRecoverySelection/v1` |
+| `apiVersion` | Literal `catchplate.nativePolicyActivationRecoverySelection/v1` |
 | `activationId`, `preparedSha256` | Actual consumed preparation from authenticated approval lookup |
 | `initialStateSha256` | Independently signed original native activation service assignment |
 | `journal.device`, `journal.inode`, `journal.uid`, `journal.gid` | Original admitted C9 `activation-journal` FD identity and final role owner |

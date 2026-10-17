@@ -105,20 +105,20 @@ class FailPolicyCommitConnection:
 def run_postgres_policy_lock_timeout(base_dsn: str) -> None:
     import psycopg
 
-    schema = f"serverware_policy_lock_{uuid.uuid4().hex}"
+    schema = f"catchplate_policy_lock_{uuid.uuid4().hex}"
     with psycopg.connect(base_dsn, autocommit=True) as connection:
         connection.execute(f'CREATE SCHEMA "{schema}"')
     separator = "&" if "?" in base_dsn else "?"
     options = urllib.parse.quote(f"-csearch_path={schema}", safe="")
     isolated_dsn = f"{base_dsn}{separator}options={options}"
     with tempfile.TemporaryDirectory() as tmp:
-        os.environ["SERVERWARE_DATA_DIR"] = tmp
-        os.environ["SERVERWARE_POLICY_AUTHORITY_LOCK_WAIT_MS"] = "200"
+        os.environ["CATCHPLATE_DATA_DIR"] = tmp
+        os.environ["CATCHPLATE_POLICY_AUTHORITY_LOCK_WAIT_MS"] = "200"
         for store in ("METADATA", "AUDIT", "GRANT"):
-            os.environ[f"SERVERWARE_{store}_STORE_BACKEND"] = "postgres"
-            os.environ[f"SERVERWARE_{store}_STORE_POSTGRES_DSN"] = isolated_dsn
+            os.environ[f"CATCHPLATE_{store}_STORE_BACKEND"] = "postgres"
+            os.environ[f"CATCHPLATE_{store}_STORE_POSTGRES_DSN"] = isolated_dsn
         try:
-            from serverware import db
+            from catchplate import db
 
             db.init_db()
             holder = db.connect()
@@ -152,25 +152,25 @@ def run_postgres_policy_lock_timeout(base_dsn: str) -> None:
 
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        os.environ["SERVERWARE_DATA_DIR"] = tmp
-        os.environ["SERVERWARE_POLICY_BUNDLE"] = str(
+        os.environ["CATCHPLATE_DATA_DIR"] = tmp
+        os.environ["CATCHPLATE_POLICY_BUNDLE"] = str(
             Path(tmp) / "control-plane-policy-bundle.json"
         )
-        os.environ["SERVERWARE_CONTROL_PLANE_TWO_PERSON_REQUIRED"] = "1"
-        os.environ["SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED"] = "0"
-        os.environ["SERVERWARE_CONTROL_PLANE_TWO_PERSON_TTL_SECONDS"] = "300"
-        os.environ["SERVERWARE_PUBLIC_URL"] = "http://localhost:3000"
-        os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
-        os.environ.pop("SERVERWARE_METADATA_STORE_POSTGRES_DSN", None)
-        os.environ.pop("SERVERWARE_AUDIT_STORE_POSTGRES_DSN", None)
-        os.environ.pop("SERVERWARE_GRANT_STORE_POSTGRES_DSN", None)
+        os.environ["CATCHPLATE_CONTROL_PLANE_TWO_PERSON_REQUIRED"] = "1"
+        os.environ["CATCHPLATE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED"] = "0"
+        os.environ["CATCHPLATE_CONTROL_PLANE_TWO_PERSON_TTL_SECONDS"] = "300"
+        os.environ["CATCHPLATE_PUBLIC_URL"] = "http://localhost:3000"
+        os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
+        os.environ.pop("CATCHPLATE_METADATA_STORE_POSTGRES_DSN", None)
+        os.environ.pop("CATCHPLATE_AUDIT_STORE_POSTGRES_DSN", None)
+        os.environ.pop("CATCHPLATE_GRANT_STORE_POSTGRES_DSN", None)
 
-        from serverware import app as app_module
-        from serverware import db, policy_bundle
-        from serverware.auth import AdminIdentity
+        from catchplate import app as app_module
+        from catchplate import db, policy_bundle
+        from catchplate.auth import AdminIdentity
 
         db.init_db()
         requester = AdminIdentity(

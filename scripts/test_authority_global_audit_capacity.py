@@ -21,9 +21,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_contract
-from serverware import authority_transition_core as core
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_contract
+from catchplate import authority_transition_core as core
 
 
 OPERATION = "policy.genesis.prepare"
@@ -50,14 +50,14 @@ def framed(domain, *frames):
     return "sha256:" + digest.hexdigest()
 
 
-PARTITION = framed("serverware.metadataAuditOutboxCapacityPartition/v1", b"global")
+PARTITION = framed("catchplate.metadataAuditOutboxCapacityPartition/v1", b"global")
 IDENTITY = f"{KIND}:{PARTITION}"
-EMPTY = framed("serverware.policyAuthorityAggregateExpiryIndex/v1", b"[]")
+EMPTY = framed("catchplate.policyAuthorityAggregateExpiryIndex/v1", b"[]")
 
 
 def refresh_state(row):
     material = {
-        "schema": "serverware.policyAuthorityAggregateState/v1",
+        "schema": "catchplate.policyAuthorityAggregateState/v1",
         "aggregateId": row["aggregate_id"], "aggregateKind": row["aggregate_kind"],
         "partitionDigest": row["partition_digest"], "revision": row["revision"],
         "liveCount": row["live_count"], "activeCount": row["active_count"],
@@ -70,7 +70,7 @@ def refresh_state(row):
         "workPageId": row["work_page_id"],
     }
     row["state_json"] = canonical(material).decode("ascii")
-    row["state_digest"] = framed("serverware.policyAuthorityAggregateState/v1", canonical(material))
+    row["state_digest"] = framed("catchplate.policyAuthorityAggregateState/v1", canonical(material))
     return row
 
 
@@ -90,7 +90,7 @@ def outbox_row(item_id="audit-one", status="pending", **changes):
     return {
         "id": item_id, "event_type": "component.audit", "actor_type": "admin", "actor_id": "owner",
         "event_json": event.decode("ascii"),
-        "event_digest": framed("serverware.metadataAuditOutboxEvent/v1", event),
+        "event_digest": framed("catchplate.metadataAuditOutboxEvent/v1", event),
         "storage_format_version": 2, "status": status, "claim_id": None, "claimed_at": None,
         "attempts": 0, "audited_at": None, "audit_event_hash": None, "last_error": None,
         "created_at": NOW.isoformat(), **changes,
@@ -100,7 +100,7 @@ def outbox_row(item_id="audit-one", status="pending", **changes):
 def selected(table, key, row):
     return {
         "table": table, "key": copy.deepcopy(key),
-        "keyDigest": framed("serverware.policyAuthorityBusinessKey/v1", table.encode("ascii"), canonical(key)),
+        "keyDigest": framed("catchplate.policyAuthorityBusinessKey/v1", table.encode("ascii"), canonical(key)),
         "present": row is not None, "row": copy.deepcopy(row), "contractSelector": None,
     }
 

@@ -21,7 +21,7 @@ struct ResultFields {
 pub(super) fn decode(raw:&[u8])->Result<CustodyTeeAttestationVerifierResultWire,ShadowError> {
     if raw.is_empty() || raw.len()>32*1024 {return Err(ShadowError::CustodyUnavailable);}
     let original:Original=serde_json::from_slice(raw).map_err(|_|ShadowError::BindingDrift)?;
-    if original.api_version!="serverware.nativeShadowNitroVerifierResult/v1"
+    if original.api_version!="catchplate.nativeShadowNitroVerifierResult/v1"
         || canonical_json_bytes(&original)?!=raw || original.result.platform!=TeePlatform::AwsNitroEnclave {
         return Err(ShadowError::BindingDrift);
     }

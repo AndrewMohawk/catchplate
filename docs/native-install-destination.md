@@ -31,7 +31,7 @@ not confused with a later read-only completed replay.
 
 The destination's parent directory must already contain:
 
-- `.serverware-native-ca-install/`, root:root mode 0700, on the same filesystem.
+- `.catchplate-native-ca-install/`, root:root mode 0700, on the same filesystem.
 - Its fixed `destination.lock`, an empty single-link root:root mode-0600 regular
   file. The destination owner never creates a missing directory or lock.
 

@@ -14,13 +14,13 @@ import time
 import cbor2
 from scripts import native_broker_kms_parent as old
 from scripts.aws_kms_recipient_release import attested_recipient_public_key, reject_secret_fields, run_aws_kms_decrypt
-from serverware import native_secret_broker_history as history
+from catchplate import native_secret_broker_history as history
 
-CONFIGURATION = "serverware.nativeHistoricalBrokerKmsParent/v1"
-BINDING = b"serverware/enclave-runtime-key-binding/v1\0"
-PRIMARY_REQUEST = "serverware.nativeBrokerKmsRecipientRequest/v1"
-PRIMARY_RESPONSE = "serverware.nativeBrokerKmsRecipientCiphertext/v1"
-RESPONSE = "serverware.nativeHistoricalBrokerKmsRecipientCiphertext/v1"
+CONFIGURATION = "catchplate.nativeHistoricalBrokerKmsParent/v1"
+BINDING = b"catchplate/enclave-runtime-key-binding/v1\0"
+PRIMARY_REQUEST = "catchplate.nativeBrokerKmsRecipientRequest/v1"
+PRIMARY_RESPONSE = "catchplate.nativeBrokerKmsRecipientCiphertext/v1"
+RESPONSE = "catchplate.nativeHistoricalBrokerKmsRecipientCiphertext/v1"
 PRIMARY_FIELDS = frozenset({"apiVersion", "material", "configurationSha256", "kmsKeyId", "ciphertextBlobSha256",
     "encryptionContext", "recipientPublicKeySha256", "nonce", "deadlineBoottimeNs"})
 

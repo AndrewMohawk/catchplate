@@ -15,22 +15,22 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 _ENVIRONMENT = {
-    "SERVERWARE_DEVELOPMENT_SANDBOX": "1",
-    "SERVERWARE_RELEASE_CHANNEL": "dev",
-    "SERVERWARE_PROCESS_MODE": "serverware-control-plane",
-    "SERVERWARE_METADATA_STORE_BACKEND": "sqlite",
-    "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite",
-    "SERVERWARE_GRANT_STORE_BACKEND": "sqlite",
-    "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
-    "SERVERWARE_KEY_RELEASE_REQUIRED": "0",
-    "SERVERWARE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES": "10000",
+    "CATCHPLATE_DEVELOPMENT_SANDBOX": "1",
+    "CATCHPLATE_RELEASE_CHANNEL": "dev",
+    "CATCHPLATE_PROCESS_MODE": "catchplate-control-plane",
+    "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_AUDIT_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_GRANT_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
+    "CATCHPLATE_KEY_RELEASE_REQUIRED": "0",
+    "CATCHPLATE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES": "10000",
     "PYTHONDONTWRITEBYTECODE": "1",
 }
 
 
 def worker(operation: str) -> None:
-    from serverware import development_sandbox as profile
-    from serverware import development_sandbox_store as store
+    from catchplate import development_sandbox as profile
+    from catchplate import development_sandbox_store as store
     if operation == "inactive":
         if profile.active():
             raise AssertionError("ordinary import activated the sandbox")
@@ -43,7 +43,7 @@ def worker(operation: str) -> None:
                 pass
             else:
                 raise AssertionError("inactive sandbox store was usable")
-        from serverware import db
+        from catchplate import db
         try:
             db.get_policy_high_water()
         except db.PolicyCandidateAuthorityError:
@@ -53,7 +53,7 @@ def worker(operation: str) -> None:
         print("inactive")
         return
     profile.activate()
-    from serverware import db, policy_bundle as bundles
+    from catchplate import db, policy_bundle as bundles
     digest = lambda byte: "sha256:" + byte * 64
     if operation == "initialize":
         db.init_db()
@@ -119,13 +119,13 @@ def worker(operation: str) -> None:
 
 class DevelopmentSandboxStoreTests(unittest.TestCase):
     def setUp(self):
-        self.scratch = tempfile.TemporaryDirectory(prefix="serverware-sandbox-store-",
+        self.scratch = tempfile.TemporaryDirectory(prefix="catchplate-sandbox-store-",
             dir=os.getenv("TMPDIR", "/srv/catchplate-fast/tmp"))
         self.addCleanup(self.scratch.cleanup)
         self.directory = Path(self.scratch.name) / "data"
         self.environment = {key: value for key, value in os.environ.items()
-                            if not key.startswith("SERVERWARE_")}
-        self.environment.update(_ENVIRONMENT, SERVERWARE_DATA_DIR=str(self.directory))
+                            if not key.startswith("CATCHPLATE_")}
+        self.environment.update(_ENVIRONMENT, CATCHPLATE_DATA_DIR=str(self.directory))
 
     def command(self, operation):
         return [sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation]
@@ -141,7 +141,7 @@ class DevelopmentSandboxStoreTests(unittest.TestCase):
         self.assertFalse(self.directory.exists())
 
     def test_production_profile_cannot_create_store(self):
-        environment = dict(self.environment, SERVERWARE_PRODUCTION_IMAGE="1")
+        environment = dict(self.environment, CATCHPLATE_PRODUCTION_IMAGE="1")
         result = subprocess.run(self.command("commission"), cwd=ROOT, env=environment,
                                 text=True, capture_output=True, timeout=25)
         self.assertNotEqual(result.returncode, 0)
@@ -156,7 +156,7 @@ class DevelopmentSandboxStoreTests(unittest.TestCase):
         first = self.run_worker("commission")
         self.assertEqual(first, self.run_worker("commission"))
         self.assertTrue((self.directory / "development-sandbox.sqlite3").is_file())
-        self.assertFalse((self.directory / "serverware.sqlite3").exists())
+        self.assertFalse((self.directory / "catchplate.sqlite3").exists())
 
     def test_nonce_replay_capacity_expiry_survive_process_restart(self):
         self.run_worker("commission")
@@ -189,7 +189,7 @@ class DevelopmentSandboxStoreTests(unittest.TestCase):
         self.assertEqual(self.run_worker("invalid"), "invalid-rejected")
 
     def test_sqlite_regex_translation_preserves_constraints_and_literals(self):
-        from serverware.authority_store import metadata_schema as schema
+        from catchplate.authority_store import metadata_schema as schema
         connection = sqlite3.connect(":memory:")
         self.addCleanup(connection.close)
         source = """CREATE TABLE test (digest TEXT CHECK(digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'),

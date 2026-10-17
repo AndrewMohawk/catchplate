@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-proof-cohort.v5.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-proof-cohort.v5.schema.json",
   "$ref": "#/$defs/configuration",
   "$defs": {
     "sha": {
@@ -46,7 +46,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowProofCohortConfiguration/v5"
+          "const": "catchplate.nativeShadowProofCohortConfiguration/v5"
         },
         "authority": {
           "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/authority"
@@ -109,7 +109,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowProofCohortOriginals/v4"
+          "const": "catchplate.nativeShadowProofCohortOriginals/v4"
         },
         "configurationSha256": {
           "$ref": "#/$defs/sha"
@@ -168,7 +168,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowProofCohortRelease/v4"
+          "const": "catchplate.nativeShadowProofCohortRelease/v4"
         },
         "configurationSha256": {
           "$ref": "#/$defs/sha"
@@ -226,7 +226,7 @@
           "$ref": "#/$defs/signature"
         }
       },
-      "description": "Independent existing C9 key signs ASCII serverware.nativeShadowProofCohortRelease.signature/v4, NUL, full canonical payload. One original root-authenticated seqpacket <=32768 bytes and <=128 total SCM_RIGHTS. Eight fixed role inventories, each in original C9 FD6..69 order, joined before any child release. No automatic retry or readiness claim."
+      "description": "Independent existing C9 key signs ASCII catchplate.nativeShadowProofCohortRelease.signature/v4, NUL, full canonical payload. One original root-authenticated seqpacket <=32768 bytes and <=128 total SCM_RIGHTS. Eight fixed role inventories, each in original C9 FD6..69 order, joined before any child release. No automatic retry or readiness claim."
     },
     "payload": {
       "type": "object",
@@ -246,7 +246,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowProofCohortCleanup/v4"
+          "const": "catchplate.nativeShadowProofCohortCleanup/v4"
         },
         "purpose": {
           "const": "terminate-owned-proof-cohort"
@@ -295,7 +295,7 @@
           "$ref": "#/$defs/signature"
         }
       },
-      "description": "Distinct cleanup key signs ASCII serverware.nativeShadowProofCohortCleanup.signature/v4, NUL, full canonical payload. Actual original boot/lifetime, requested <= now < deadline <= lifetime-250ms and deadline-requested <=30s. Never borrows five/six/seven-child cleanup/v1, /v2 or /v3."
+      "description": "Distinct cleanup key signs ASCII catchplate.nativeShadowProofCohortCleanup.signature/v4, NUL, full canonical payload. Actual original boot/lifetime, requested <= now < deadline <= lifetime-250ms and deadline-requested <=30s. Never borrows five/six/seven-child cleanup/v1, /v2 or /v3."
     },
     "terminal": {
       "type": "object",
@@ -313,7 +313,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowProofCohortTerminal/v4"
+          "const": "catchplate.nativeShadowProofCohortTerminal/v4"
         },
         "authorizationSha256": {
           "$ref": "#/$defs/sha"
@@ -390,7 +390,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowProofCohortCleanupResult/v4"
+          "const": "catchplate.nativeShadowProofCohortCleanupResult/v4"
         },
         "authorizationSha256": {
           "$ref": "#/$defs/sha"

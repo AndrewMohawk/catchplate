@@ -137,7 +137,7 @@ class GmailSdkFixtureTests(unittest.TestCase):
                 self.assertEqual((row["case"], row["authorized"], row["tokenGeneration"], row["tokenState"]),
                                  (CASES[index], True, 1, "active"))
                 path, query = target.split("?", 1)
-                public = {"schema": "serverware.privateGmailSdkRequest/v1", "method": "GET",
+                public = {"schema": "catchplate.privateGmailSdkRequest/v1", "method": "GET",
                     "authority": "gmail.googleapis.com", "path": path, "rawQuery": query,
                     "headers": PUBLIC_HEADERS, "bodySha256": digest(b""), "bodyBytes": 0}
                 self.assertEqual(row["requestCommitment"], digest(encoded(public)))

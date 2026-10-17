@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-ingress-session-evidence.v3.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-ingress-session-evidence.v3.schema.json",
   "title": "Native ingress principal-v3 session evidence",
   "description": "Explicit principal-v3 only. Exact seven-field response, compact JSON plus one LF, at most 98304 bytes including LF. Existing v1/v2 profiles do not accept this evidence. Shape neither authenticates the quoted principal nor permits CONNECT or another operation. The separate request-exporter secret and original authentication headers are never included.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "evidenceScope", "okForAction", "clientChallengeBase64url", "tlsExporterBase64url", "publicIdentityBase64url", "principalPreflightBase64url"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeIngressSessionEvidence/v3"},
+    "apiVersion": {"const": "catchplate.nativeIngressSessionEvidence/v3"},
     "evidenceScope": {"const": "unverified-session-public-material"},
     "okForAction": {"const": false},
     "clientChallengeBase64url": {"$ref": "native-ingress-session-evidence.v2.schema.json#/$defs/nonzeroRaw32"},

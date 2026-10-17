@@ -17,7 +17,7 @@ admitted collector key before contact; `--native-capture-max-bytes` (1–524288)
 checks the full signed output bytes before publication. Both flags require
 explicit native verification and do not widen an old profile or grant a request.
 
-The [client source](../data-plane/decision-gate-rs/src/bin/serverware-proof-client.rs)
+The [client source](../data-plane/decision-gate-rs/src/bin/catchplate-proof-client.rs)
 requires these six options together:
 
 ```text
@@ -77,7 +77,7 @@ verification when native verification fails.
 
 The [native-principal response profile](native-response-principal-profiles.md)
 adds independently pinned expectations v2 with the fixed
-`statementProfile=serverware.nativeResponseStatements/v1`. It selects only the
+`statementProfile=catchplate.nativeResponseStatements/v1`. It selects only the
 new native statement families, runtime-proof v2, verifier verdict v2 and capture
 v2. Expectations v1 still requires the old statement families and cannot accept
 these new versions. Neither a server response nor a successful ingress preflight
@@ -141,7 +141,7 @@ are required together:
 ```
 
 The [closed configuration schema](../schemas/native-proxy-ingress.v1.schema.json)
-has exactly five fields: `apiVersion=serverware.nativeProxyIngress/v1`,
+has exactly five fields: `apiVersion=catchplate.nativeProxyIngress/v1`,
 `startupEvidence`, `startupExpectations`, `sessionScope`, and `trustRoots`.
 Each artifact is exactly `{path, sha256}`: an independently supplied canonical
 absolute path and nonzero lowercase SHA-256 pin, not a value learned from the
@@ -165,8 +165,8 @@ Ordinary WebPKI/name verification and mandatory client authentication remain.
 
 The client draws one fresh nonzero 32-byte CSPRNG challenge, distinct from the
 startup nonce, and retains it without regeneration. It sends `GET /attestation`
-with `x-serverware-ingress-challenge`, the explicit
-`x-serverware-ingress-continuation: connect-v1` header and
+with `x-catchplate-ingress-challenge`, the explicit
+`x-catchplate-ingress-continuation: connect-v1` header and
 `Connection: keep-alive`. The
 [retained ingress owner](../data-plane/decision-gate-rs/src/proof_client_native_ingress_v1.rs)
 consumes the exact evidence response, bounded to 96 KiB,
@@ -226,8 +226,8 @@ signed-verifier and revocation assertions; native capture invents neither.
 ## Distinct artifact and file custody
 
 The [artifact schema](../schemas/native-response-capture.v1.schema.json) is
-`serverware.nativeResponseCapture/v1`, kind
-`ServerwareNativeResponseCapture`. Its fixed labels are
+`catchplate.nativeResponseCapture/v1`, kind
+`CatchplateNativeResponseCapture`. Its fixed labels are
 `resultScope=local-capture-and-native-quote-only`, `okForAction=false` and
 `environment=native-unadmitted`. `captureMode` is `buffered`, `streaming` or
 `observation`; `external_capture`, the complete native `runtime_proof` object and
@@ -270,7 +270,7 @@ acceptance is not a production-readiness or runtime-success claim.
 ## Enrollment is a separate integration boundary
 
 The additive [native workload-trust profile](native-workload-trust.md) selects
-`serverware.nativeProxyIngress/v2` and a separately pinned `workloadIssuer`.
+`catchplate.nativeProxyIngress/v2` and a separately pinned `workloadIssuer`.
 It authenticates actual held runtime trust roots and verifies the client chain
 selected by the actual outer TLS handshake under only that issuer **before
 CONNECT on the same socket**. V1 remains unchanged; v2 cannot silently fall back.

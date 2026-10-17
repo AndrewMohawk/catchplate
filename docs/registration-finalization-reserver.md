@@ -19,17 +19,17 @@ credential finalization, completion delivery or OIDC browser-session activation.
 | Request peer | Actual Unix peer `65532:65532` before reading bodies |
 | Root/bootstrap/listener FDs | `198`, `199`, `200` |
 | Computation-key/journal FDs | `201`, `202` |
-| Listener | `/run/serverware/registration-finalization/reserver.sock` |
-| Root/bootstrap originals | `/run/serverware/registration-finalization-reserver-trust/root-public-key.pem` and `bootstrap.json` |
-| Computation key | `/run/secrets/serverware-registration-finalization-computation-key` |
-| Private journal | `/var/lib/serverware/registration-finalization-reservations` |
-| State endpoint | `/run/serverware/current-root/state.sock`, accepting service `65516:65516`, root-created listener peer `0:0` |
+| Listener | `/run/catchplate/registration-finalization/reserver.sock` |
+| Root/bootstrap originals | `/run/catchplate/registration-finalization-reserver-trust/root-public-key.pem` and `bootstrap.json` |
+| Computation key | `/run/secrets/catchplate-registration-finalization-computation-key` |
+| Private journal | `/var/lib/catchplate/registration-finalization-reservations` |
+| State endpoint | `/run/catchplate/current-root/state.sock`, accepting service `65516:65516`, root-created listener peer `0:0` |
 
-The [bootstrap](../serverware/registration_finalization_reserver_bootstrap.py)
+The [bootstrap](../catchplate/registration_finalization_reserver_bootstrap.py)
 uses the separate root-signed schema
-`serverware.signedRegistrationFinalizationReserverBootstrap/v1`, payload
-`serverware.registrationFinalizationReserverBootstrap/v1`, and launch
-`serverware.registrationFinalizationReserverLaunch/v1`. It authenticates the
+`catchplate.signedRegistrationFinalizationReserverBootstrap/v1`, payload
+`catchplate.registrationFinalizationReserverBootstrap/v1`, and launch
+`catchplate.registrationFinalizationReserverLaunch/v1`. It authenticates the
 complete configuration/generation/runtime scope and three original enrollments:
 current-root, successor grant and **finalization caller**. Each enrollment has
 exact `base64Url`, `byteCount`, `bytesDigest`, `identityDigest` fields. Genuine
@@ -60,7 +60,7 @@ live witness. Provisioners must establish those inputs and storage continuity.
 
 ## Real custody before serving
 
-The [root entrypoint](../serverware/registration_finalization_reserver_entrypoint.py)
+The [root entrypoint](../catchplate/registration_finalization_reserver_entrypoint.py)
 admits bootstrap and activated-listener identities before opening the fixed
 private key or journal. Fixed no-follow paths use protected root-owned
 ancestors. Original root/bootstrap/key files become sealed memfds; the key is
@@ -68,7 +68,7 @@ bounded root-owned mode `0400`, unencrypted Ed25519 PKCS8 PEM. The journal must
 already exist as `65510:65510` mode `0700`, matching its signed device/inode.
 Delivery creates no account, key, directory, checkpoint or permissive ACL.
 
-After permanent identity drop, the [startup owner](../serverware/registration_finalization_reserver_startup.py)
+After permanent identity drop, the [startup owner](../catchplate/registration_finalization_reserver_startup.py)
 authenticates the root/bootstrap again before loading the sealed computation
 key and verifying its actual pair against current-root enrollment. It constructs
 the real `CurrentRootJournal`, fixed-profile `FinalizationReservationDelivery`
@@ -78,16 +78,16 @@ journal identities, actual owner objects, descriptor inventory, sticky clocks
 and the original launch bound throughout its finite serial lifecycle.
 
 Source-fixed APIs are `initialize_from_environment`, `require_started`, `close`
-and owner `serve_once`. The [launcher](../serverware/registration_finalization_reserver_launcher.py)
+and owner `serve_once`. The [launcher](../catchplate/registration_finalization_reserver_launcher.py)
 accepts only `--root-delivery` and `--run` from the fixed isolated runtime;
-the [runner](../serverware/registration_finalization_reserver_runner.py) stops on
+the [runner](../catchplate/registration_finalization_reserver_runner.py) stops on
 lifecycle failure. Closing releases owned listener/journal handles and key
 references; borrowed inherited descriptors belong to the process lifecycle.
 Fork, poisoned storage or custody drift cannot reinitialize the singleton.
 
 ## Original request, durability and historical lookup
 
-The [transport](../serverware/authority_registration_finalization_reservation_transport.py)
+The [transport](../catchplate/authority_registration_finalization_reservation_transport.py)
 uses `SWRFRQ01` / `SWRFRR01`, complete bounded lengths, at most 64 MiB request
 originals and exact EOF. Request raw10 is authorization, raw7, before-vector,
 grant; response raw3 is original reserve request, signed snapshot, acknowledgment.
@@ -95,10 +95,10 @@ Peer credentials precede body reads. One request work/window opens before body
 intake and keeps the absolute pre-peer timeout clipped to the original launch;
 there is no post-intake or post-replay replacement window.
 
-For a new exact bundle, the [producer](../serverware/authority_registration_finalization_reservation.py)
+For a new exact bundle, the [producer](../catchplate/authority_registration_finalization_reservation.py)
 authenticates the dedicated caller/grant, genuinely replays finalization raw7
 and the full vector, and creates the actual computation with the independently
-admitted predecessor/head/fence. [Delivery](../serverware/authority_registration_finalization_reservation_delivery.py)
+admitted predecessor/head/fence. [Delivery](../catchplate/authority_registration_finalization_reservation_delivery.py)
 retains its originals before the real state exchange and retains the genuinely
 verified acknowledgment before response. Service readout compares the returned
 receipt to the exact retained original. Signed configuration and enrollments
@@ -116,8 +116,8 @@ durable effects and authorizes no retry or deletion.
 
 ## Deployment and remaining authority
 
-The uninstalled [socket](../ops/systemd/serverware-registration-finalization-reserver.socket)
-and [service template](../ops/systemd/serverware-registration-finalization-reserver.service.in)
+The uninstalled [socket](../ops/systemd/catchplate-registration-finalization-reserver.socket)
+and [service template](../ops/systemd/catchplate-registration-finalization-reserver.service.in)
 require separately admitted `@RESERVER_RELEASE_ROOT@`, `@RESERVER_TRUST_DIR@`,
 `@RESERVER_KEY_FILE@` and `@RESERVER_JOURNAL_DIR@`. They do not render themselves,
 install privileges or provision state. `Restart=no` preserves the finite cold

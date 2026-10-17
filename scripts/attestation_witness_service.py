@@ -60,52 +60,52 @@ MAX_SIGNER_RPC_TIMEOUT_MILLISECONDS = 30_000
 MAX_SERVICE_CHALLENGE_FRAME_BYTES = 16 * 1024
 MAX_SERVICE_EXECUTABLE_BYTES = 256 * 1024 * 1024
 
-DESCRIPTOR_VERSION = "serverware.attestationWitnessServiceDescriptor/v2"
-STORE_IDENTITY_VERSION = "serverware.attestationWitnessStoreIdentity/v2"
-ADVANCE_REQUEST_VERSION = "serverware.attestationWitnessAdvanceRequest/v1"
-CURRENT_REQUEST_VERSION = "serverware.attestationWitnessCurrentRequest/v2"
-ADVANCE_RESPONSE_VERSION = "serverware.attestationWitnessAdvanceResponse/v1"
-CURRENT_RESPONSE_VERSION = "serverware.attestationWitnessCurrentResponse/v2"
-ERROR_RESPONSE_VERSION = "serverware.attestationWitnessServiceError/v1"
+DESCRIPTOR_VERSION = "catchplate.attestationWitnessServiceDescriptor/v2"
+STORE_IDENTITY_VERSION = "catchplate.attestationWitnessStoreIdentity/v2"
+ADVANCE_REQUEST_VERSION = "catchplate.attestationWitnessAdvanceRequest/v1"
+CURRENT_REQUEST_VERSION = "catchplate.attestationWitnessCurrentRequest/v2"
+ADVANCE_RESPONSE_VERSION = "catchplate.attestationWitnessAdvanceResponse/v1"
+CURRENT_RESPONSE_VERSION = "catchplate.attestationWitnessCurrentResponse/v2"
+ERROR_RESPONSE_VERSION = "catchplate.attestationWitnessServiceError/v1"
 SERVICE_CHALLENGE_VERSION = (
-    "serverware.publicAttestationServiceChannelChallenge/v1"
+    "catchplate.publicAttestationServiceChannelChallenge/v1"
 )
 SERVICE_CHALLENGE_RESPONSE_VERSION = (
-    "serverware.publicAttestationServiceChannelChallengeResponse/v1"
+    "catchplate.publicAttestationServiceChannelChallengeResponse/v1"
 )
-SERVICE_PROTOCOL_VERSION = "serverware.attestationWitnessService/v2"
+SERVICE_PROTOCOL_VERSION = "catchplate.attestationWitnessService/v2"
 INVOCATION_BINDING_VERSION = (
-    "serverware.attestationWitnessInvocationBinding/v1"
+    "catchplate.attestationWitnessInvocationBinding/v1"
 )
-LIVE_WITNESS_HEAD_VERSION = "serverware.liveWitnessHead/v1"
-PROTECTED_STATE_VERSION = "serverware.protectedLiveWitnessState/v2"
-CAS_RECEIPT_VERSION = "serverware.liveWitnessCasReceipt/v1"
-SIGNER_REQUEST_VERSION = "serverware.attestationSignerRequest/v2"
-SIGNER_RESPONSE_VERSION = "serverware.attestationSignerResponse/v2"
-SIGNER_IDENTITY_VERSION = "serverware.attestationSignerServiceIdentity/v1"
+LIVE_WITNESS_HEAD_VERSION = "catchplate.liveWitnessHead/v1"
+PROTECTED_STATE_VERSION = "catchplate.protectedLiveWitnessState/v2"
+CAS_RECEIPT_VERSION = "catchplate.liveWitnessCasReceipt/v1"
+SIGNER_REQUEST_VERSION = "catchplate.attestationSignerRequest/v2"
+SIGNER_RESPONSE_VERSION = "catchplate.attestationSignerResponse/v2"
+SIGNER_IDENTITY_VERSION = "catchplate.attestationSignerServiceIdentity/v1"
 IMMUTABLE_TRUST_ENVELOPE_VERSION = (
-    "serverware.attestationWitnessImmutableTrustConfigEnvelope/v1"
+    "catchplate.attestationWitnessImmutableTrustConfigEnvelope/v1"
 )
 IMMUTABLE_TRUST_CONFIG_VERSION = (
-    "serverware.attestationWitnessImmutableTrustConfig/v1"
+    "catchplate.attestationWitnessImmutableTrustConfig/v1"
 )
 
 LIVE_WITNESS_DOMAIN = (
-    b"serverware.liveWitnessHead/v1\x00Ed25519\x00"
+    b"catchplate.liveWitnessHead/v1\x00Ed25519\x00"
 )
 PROTECTED_STATE_DOMAIN = (
-    b"serverware.protectedLiveWitnessState/v2\x00Ed25519\x00"
+    b"catchplate.protectedLiveWitnessState/v2\x00Ed25519\x00"
 )
 SIGNER_PROTOCOL_DOMAIN = (
-    b"serverware.attestationSignerRequest/v2\x00"
+    b"catchplate.attestationSignerRequest/v2\x00"
 )
 IMMUTABLE_TRUST_CONFIG_DOMAIN = (
-    b"serverware.attestationWitnessImmutableTrustConfigEnvelope/v1"
+    b"catchplate.attestationWitnessImmutableTrustConfigEnvelope/v1"
     b"\x00Ed25519\x00"
 )
-CHECKPOINT_DOMAIN = b"serverware:live-witness-checkpoint:v1:"
-HEAD_DOMAIN = b"serverware:live-witness-head-chain:v1:"
-CONTINUITY_DOMAIN = b"serverware:live-witness-continuity:v1:"
+CHECKPOINT_DOMAIN = b"catchplate:live-witness-checkpoint:v1:"
+HEAD_DOMAIN = b"catchplate:live-witness-head-chain:v1:"
+CONTINUITY_DOMAIN = b"catchplate:live-witness-continuity:v1:"
 
 SHA256_RE = re.compile(r"\Asha256:[0-9a-f]{64}\Z")
 IDENTIFIER_RE = re.compile(
@@ -1526,7 +1526,7 @@ class DurableWitnessStore:
         idempotency_key_base64url: str,
     ) -> dict[str, Any]:
         return {
-            "apiVersion": "serverware.liveWitnessCheckpoint/v1",
+            "apiVersion": "catchplate.liveWitnessCheckpoint/v1",
             "eventSha256": event_sha256,
             "generation": generation,
             "idempotencyKeySha256": sha256_bytes(
@@ -1559,7 +1559,7 @@ class DurableWitnessStore:
         tree_size: int,
     ) -> dict[str, Any]:
         return {
-            "apiVersion": "serverware.liveWitnessContinuity/v1",
+            "apiVersion": "catchplate.liveWitnessContinuity/v1",
             "checkpointSha256": checkpoint_sha256,
             "generation": generation,
             "headSha256": head_sha256,

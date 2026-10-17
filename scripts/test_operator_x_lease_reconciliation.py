@@ -17,16 +17,16 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import serverware
-from serverware import db, operator_demo, oauth_application_owner as owner
-from serverware import control_plane_credential_currentness as currentness
-from serverware import control_plane_custody_startup as custody
-from serverware import operator_x_admission as admission
-from serverware import operator_x_configuration as configuration
-from serverware import operator_x_oauth_profile as profiles
-from serverware import operator_catalog_x_oauth as catalog
-from serverware.operator_catalog_schema import CatalogIntegrityError
-from serverware import operator_x_lease_reconciliation as proof
+import catchplate
+from catchplate import db, operator_demo, oauth_application_owner as owner
+from catchplate import control_plane_credential_currentness as currentness
+from catchplate import control_plane_custody_startup as custody
+from catchplate import operator_x_admission as admission
+from catchplate import operator_x_configuration as configuration
+from catchplate import operator_x_oauth_profile as profiles
+from catchplate import operator_catalog_x_oauth as catalog
+from catchplate.operator_catalog_schema import CatalogIntegrityError
+from catchplate import operator_x_lease_reconciliation as proof
 
 
 def no_external_effects(event, _args):
@@ -65,7 +65,7 @@ class ReconciliationTests(unittest.TestCase):
             "provider_subject": "123", "provider_account": "@synthetic", "provider_identity_verified": True,
             "scopes": list(profiles.SCOPES), "refreshable": True, "injection_field": "access_token",
             "expires_at_epoch_ms": 1_900_000_000_000,
-            "operator_x_account": {"schema": "serverware.operatorXAccountBinding/v1", "owner_id": ID,
+            "operator_x_account": {"schema": "catchplate.operatorXAccountBinding/v1", "owner_id": ID,
                 "configuration_operation_id": OP, "config_version": 1,
                 "profile_binding_digest": self.profile.binding_digest, "intent_id": OP}}
         self.committed = {"id": ID, "kind": "oauth2", "credential_version": 2,
@@ -74,7 +74,7 @@ class ReconciliationTests(unittest.TestCase):
         nonce = b"N" * 32
         self.nonce = base64.urlsafe_b64encode(nonce).rstrip(b"=").decode()
         self.nonce_digest = "sha256:" + hashlib.sha256(nonce).hexdigest()
-        self.payload = SimpleNamespace(api_version="serverware.credentialLeaseRequest/v3",
+        self.payload = SimpleNamespace(api_version="catchplate.credentialLeaseRequest/v3",
             purpose="dispatchSecret", request_authority=None, release_authorization=None,
             model_fields_set=set(), data_plane_binary_digest=SHA, recipient_nonce=self.nonce,
             credential_id=ID, expected_credential_version=1, expected_metadata_sha256=SHA,
@@ -122,7 +122,7 @@ class ReconciliationTests(unittest.TestCase):
 
         self.patches = {}
         for name, replacement in {
-                "app": patch.object(serverware, "app", self.application, create=True),
+                "app": patch.object(catchplate, "app", self.application, create=True),
                 "active": patch.object(operator_demo, "active", return_value=True),
                 "enabled": patch.object(admission, "enabled", return_value=True),
                 "runtime": patch.object(admission, "require_runtime", return_value=object()),

@@ -14,8 +14,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_recovery_invalidation as proof
-from serverware import authority_query_read_work as measured
+from catchplate import authority_recovery_invalidation as proof
+from catchplate import authority_query_read_work as measured
 from test_authority_recovery_terminal import (
     NOW, REQUEST, arguments, ceremony, revocation, challenge, aggregate_row,
 )
@@ -64,7 +64,7 @@ def fixture(*, kind="replacement-registration", status="prepared", absent=False)
         leaves = []
         for row in challenge_rows:
             selected_challenge = trees[terminal.retention.CHALLENGE_TABLE].selected({"id": row["id"]})
-            row_digest = sql_digest("serverware.policyAuthorityAuthenticatedRow/v1",
+            row_digest = sql_digest("catchplate.policyAuthorityAuthenticatedRow/v1",
                 terminal.retention.CHALLENGE_TABLE.encode(), sql_json(row))
             leaf = proof.projection.project_row(identity, row,
                 primary_key_digest=selected_challenge["keyDigest"], primary_row_digest=row_digest)

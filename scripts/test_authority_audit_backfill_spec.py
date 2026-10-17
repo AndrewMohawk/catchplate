@@ -18,8 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scripts.authority import phase2_store_spec as spec
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_contract
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_contract
 
 
 KIND = "metadata-audit-outbox-global-capacity-v1"
@@ -33,8 +33,8 @@ def framed(domain: str, frame: bytes) -> str:
     return "sha256:" + digest.hexdigest()
 
 
-PARTITION = framed("serverware.metadataAuditOutboxCapacityPartition/v1", b"global")
-EMPTY_EXPIRY = framed("serverware.policyAuthorityAggregateExpiryIndex/v1", b"[]")
+PARTITION = framed("catchplate.metadataAuditOutboxCapacityPartition/v1", b"global")
+EMPTY_EXPIRY = framed("catchplate.policyAuthorityAggregateExpiryIndex/v1", b"[]")
 
 
 class AuthorityAuditBackfillSpecTests(unittest.TestCase):
@@ -43,11 +43,11 @@ class AuthorityAuditBackfillSpecTests(unittest.TestCase):
             "sourceTables": ("metadata_audit_outbox",),
             "liveStates": ("pending", "claimed"),
             "groupKey": (), "expiryColumn": None,
-            "capacitySource": "serverware.audit_outbox_contract.MAX_PENDING",
+            "capacitySource": "catchplate.audit_outbox_contract.MAX_PENDING",
             "capacityLimit": 100_000,
             "aggregateId": KIND + ":" + PARTITION,
             "partitionDigest": PARTITION,
-            "stateSchema": "serverware.policyAuthorityAggregateState/v1",
+            "stateSchema": "catchplate.policyAuthorityAggregateState/v1",
             "activeCountRule": "equal-live-count",
             "reservedUnits": {}, "committedUnits": {},
             "minimumExpiryEpochNs": None,
@@ -118,9 +118,9 @@ class AuthorityAuditBackfillSpecTests(unittest.TestCase):
     def test_outer_source_and_receipt_bindings_remain_declarations_not_receipts(self):
         outer = spec.PHASE2_STORE_SPEC
         self.assertIs(outer["aggregateBackfills"], spec.AGGREGATE_BACKFILLS)
-        self.assertEqual(outer["schema"], "serverware.policyAuthorityPhase2StoreSpec/v1")
+        self.assertEqual(outer["schema"], "catchplate.policyAuthorityPhase2StoreSpec/v1")
         self.assertEqual(outer["sourceRevision"], authority_contract.SOURCE_REVISION)
-        self.assertEqual(outer["receiptSchema"], "serverware.policyAuthorityPhase2BackfillReceipt/v1")
+        self.assertEqual(outer["receiptSchema"], "catchplate.policyAuthorityPhase2BackfillReceipt/v1")
         self.assertEqual(outer["backfillMode"], "offline-serializable-signed-exact")
         self.assertIs(outer["runtimeFullTableScansPermitted"], False)
         self.assertEqual(outer["requiredReceiptBindings"], (
@@ -139,10 +139,10 @@ class AuthorityAuditBackfillSpecTests(unittest.TestCase):
         self.assertFalse(any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
                              for node in tree.body))
         imports = {node.module for node in tree.body if isinstance(node, ast.ImportFrom)}
-        self.assertEqual(imports, {"__future__", "types", "typing", "serverware"})
+        self.assertEqual(imports, {"__future__", "types", "typing", "catchplate"})
         self.assertFalse(any(isinstance(node, ast.Import) for node in tree.body))
         aliases = [alias for node in tree.body if isinstance(node, ast.ImportFrom)
-                   and node.module == "serverware" for alias in node.names
+                   and node.module == "catchplate" for alias in node.names
                    if alias.name == "authority_audit_capacity"]
         self.assertEqual([(alias.name, alias.asname) for alias in aliases],
                          [("authority_audit_capacity", "audit_capacity")])

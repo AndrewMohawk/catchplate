@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import prepare_currentness_assignment as producer
 from test_static_credential_assignment_issuer import fixture, issuer
-from serverware import authority_credential_currentness_policy as native
+from catchplate import authority_credential_currentness_policy as native
 
 C, H = producer.profile.canonical, producer.profile.sha256
 B = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")

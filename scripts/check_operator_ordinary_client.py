@@ -37,7 +37,7 @@ except ModuleNotFoundError:
     )
 
 
-CASES = (("missing", None, 403), ("wrong", "Bearer SERVERWARE_WRONG", 403),
+CASES = (("missing", None, 403), ("wrong", "Bearer CATCHPLATE_WRONG", 403),
          ("json", DUMMY_AUTHORIZATION, 200), ("empty", DUMMY_AUTHORIZATION, 204))
 ERRORS = {"missing": "credential_existing_header_missing", "wrong": "credential_existing_header_mismatch"}
 MAX_WIRE = 16384 + 65536
@@ -106,15 +106,15 @@ def check_response(case, status, headers, body, wire, policy_hash, *, response_m
         if response_mode == V2_RESPONSE_MODE:
             require(not any(name in values for name, _ in V2_RESPONSE_METADATA),
                     "ordinary V2 response forwarded unselected fixture metadata")
-        require(values.get("x-serverware-policy-hash") == policy_hash,
+        require(values.get("x-catchplate-policy-hash") == policy_hash,
                 "ordinary response policy hash differs")
-        commitments = {"requestDigest": values.get("x-serverware-request-digest"),
-                       "operationDigest": values.get("x-serverware-operation-digest")}
+        commitments = {"requestDigest": values.get("x-catchplate-request-digest"),
+                       "operationDigest": values.get("x-catchplate-operation-digest")}
         require(all(isinstance(value, str) and SHA256.fullmatch(value) for value in commitments.values()),
                 "ordinary response request commitments missing")
         expected = JSON_RESPONSE_BODY if case == "json" else b""
         require(status == (200 if case == "json" else 204) and body == expected
-                and values.get("x-serverware-response-body-sha256") == digest(expected),
+                and values.get("x-catchplate-response-body-sha256") == digest(expected),
                 "ordinary response status, exact bytes or body commitment differs")
         if case == "empty":
             require("content-length" not in values and values.get("content-type") == EMPTY_RESPONSE_CONTENT_TYPE,
@@ -239,10 +239,10 @@ class OrdinaryClientCheck(OperatorCatalogCheck):
         try:
             with TunnelTLS(raw, self.ca, self.timeout) as tls:
                 headers = [f"POST {target} HTTP/1.1", f"Host: {AUTHORITY}", "Connection: close",
-                    f"User-Agent: serverware-test-run/{self.run_id}", "Accept: application/json",
+                    f"User-Agent: catchplate-test-run/{self.run_id}", "Accept: application/json",
                     "Content-Type: application/json", f"Content-Length: {len(REQUEST_BODY)}"]
                 if placeholder is not None:
-                    require(placeholder in {DUMMY_AUTHORIZATION, "Bearer SERVERWARE_WRONG"}, "unexpected dummy header")
+                    require(placeholder in {DUMMY_AUTHORIZATION, "Bearer CATCHPLATE_WRONG"}, "unexpected dummy header")
                     headers.append("Authorization: " + placeholder)
                 tls.sendall(("\r\n".join(headers) + "\r\n\r\n").encode("ascii") + REQUEST_BODY)
                 capture = CapturedTLS(tls)
@@ -414,7 +414,7 @@ class OrdinaryClientCheck(OperatorCatalogCheck):
             "two_post_release_pairs_and_complete_drained_verified_audit_chain"])
         if self.response_mode == V2_RESPONSE_MODE:
             self.results.append("v2_fixed_unselected_metadata_absent_from_json_and_empty204_responses")
-        result = {"ok": True, "schema": "serverware.operatorOrdinaryClientCheck/v1", "mode": "operator-development",
+        result = {"ok": True, "schema": "catchplate.operatorOrdinaryClientCheck/v1", "mode": "operator-development",
             "responseMode": self.response_mode, "auditResponseMode": RESPONSE_MODES[self.response_mode],
             "productionReady": False, "hardwareVerified": False, "publicDnsVerified": False,
             "proxyTransport": "private-http-connect-leg" if self.proxy.scheme == "http" else "verified-private-https-edge",

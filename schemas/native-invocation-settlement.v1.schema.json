@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-invocation-settlement.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-invocation-settlement.v1.schema.json",
   "$ref": "#/$defs/wire",
   "$defs": {
     "sha": {"$ref": "native-shadow-persistence-service.v1.schema.json#/$defs/sha"},
@@ -9,7 +9,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "persistenceRequestOriginal", "persistenceReplyOriginal", "dispatchRequestOriginalSha256", "dispatchResponseOriginalSha256"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeInvocationSettlement/v1"},
+        "apiVersion": {"const": "catchplate.nativeInvocationSettlement/v1"},
         "persistenceRequestOriginal": {"$ref": "#/$defs/original"},
         "persistenceReplyOriginal": {"$ref": "#/$defs/original"},
         "dispatchRequestOriginalSha256": {"$ref": "#/$defs/sha"},
@@ -21,7 +21,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "commitOriginal", "headOriginal", "currentHeadSequence", "currentHeadSha256"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeCompletedInvocationProof/v1"},
+        "apiVersion": {"const": "catchplate.nativeCompletedInvocationProof/v1"},
         "commitOriginal": {"$ref": "#/$defs/original"},
         "headOriginal": {"$ref": "#/$defs/original"},
         "currentHeadSequence": {"type": "integer", "minimum": 1, "maximum": 128},

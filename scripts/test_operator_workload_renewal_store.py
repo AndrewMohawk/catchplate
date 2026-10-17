@@ -47,8 +47,8 @@ class Fixture:
         self.config, self.db, self.demo, self.bundles, self.schema, self.inputs, self.mutations = workspace.workspace()
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         from cryptography.hazmat.primitives import serialization
-        from serverware import operator_workload_renewal as wire
-        from serverware import operator_workload_renewal_store as renewal
+        from catchplate import operator_workload_renewal as wire
+        from catchplate import operator_workload_renewal_store as renewal
         self.wire, self.renewal = wire, renewal
         # Test-only private material; never printed, stored in SQLite or returned.
         self.key = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
@@ -664,7 +664,7 @@ class OperatorWorkloadRenewalStoreTests(unittest.TestCase):
     setUp = workspace.common.OperatorDemoPersistenceTests.setUp
 
     def run_worker(self, operation):
-        environment = dict(self.environment, SERVERWARE_DECISION_GATE_BASE="")
+        environment = dict(self.environment, CATCHPLATE_DECISION_GATE_BASE="")
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation],
             cwd=ROOT, env=environment, capture_output=True, text=True, timeout=90)
         self.assertEqual(result.returncode, 0, "\n".join(result.stderr.splitlines()[-50:]))

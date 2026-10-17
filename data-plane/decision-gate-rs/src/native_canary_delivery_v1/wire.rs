@@ -6,9 +6,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 pub const PATH: &str = "/api/data-plane/policy-canary/delivery";
-pub const STATEMENT: &str = "serverware.nativeCanaryDeliveryStatement/v1";
-pub const HTTP: &str = "serverware.policyCanaryDeliveryRequest/v1";
-pub const RESPONSE: &str = "serverware.policyAuthorityCanaryDeliveryRuntimeResponse/v1";
+pub const STATEMENT: &str = "catchplate.nativeCanaryDeliveryStatement/v1";
+pub const HTTP: &str = "catchplate.policyCanaryDeliveryRequest/v1";
+pub const RESPONSE: &str = "catchplate.policyAuthorityCanaryDeliveryRuntimeResponse/v1";
 pub const MAX_ARGUMENT: usize = 3 * 1024 * 1024;
 pub const MAX_COMPLETION: usize = 768 * 1024;
 pub const MAX_RESPONSE: usize = 6 * 1024 * 1024;
@@ -139,14 +139,14 @@ impl Prepared {
         let mut raw = format!("{STATEMENT}/{}\0", self.operation.phase()).into_bytes(); raw.extend(ascii(&self.statement)?); Ok(raw)
     }
     pub(crate) fn attestation_nonce(&self, signature: &[u8;64]) -> Result<[u8;32], String> {
-        let mut hash = Sha256::new(); hash.update(format!("serverware/canary-delivery-{}-attestation/v1\0", self.operation.phase()).as_bytes());
+        let mut hash = Sha256::new(); hash.update(format!("catchplate/canary-delivery-{}-attestation/v1\0", self.operation.phase()).as_bytes());
         hash.update(crate::native_currentness_v1::bytes32(text(&self.statement,"nonce")?)?);
         hash.update(Sha256::digest(ascii(&self.statement)?)); hash.update(signature); Ok(hash.finalize().into())
     }
     pub(crate) fn signed(&self, signature: &[u8;64], key: &[u8], quote: &[u8], tls: &NativeCanaryTlsIdentity) -> Result<Signed,String> {
         self.check(tls,self.deadline)?;
         let evidence = serde_json::json!({"statement":self.statement,"signature":format!("ed25519:{}",URL_SAFE_NO_PAD.encode(signature)),
-            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1","responseProofPublicKey":URL_SAFE_NO_PAD.encode(key),
+            "nativeKeyEvidence":{"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1","responseProofPublicKey":URL_SAFE_NO_PAD.encode(key),
                 "attestationDocumentB64":URL_SAFE_NO_PAD.encode(quote)},"clientCertificateDerBase64Url":URL_SAFE_NO_PAD.encode(tls.certificate_der())});
         require(ascii(&evidence)?.len() <= intake::MAX_EVIDENCE, "delivery evidence bound")?;
         let body=ascii(&serde_json::json!({"apiVersion":HTTP,"operation":self.operation.label(),"request":self.request,"nativeEvidence":evidence}))?;

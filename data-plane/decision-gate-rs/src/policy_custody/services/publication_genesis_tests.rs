@@ -5,7 +5,7 @@ use super::super::ledger_spool_values::StoredPayload;
 
 fn digest(label: &str) -> Sha256Digest { Sha256Digest::compute(label.as_bytes()) }
 fn epoch(key: &SigningKey, role: HistoricalServiceRoleV3) -> AuthorityEpochRefV3 {
-    AuthorityEpochRefV3 { api_version: "serverware.policyCustodyAuthorityHistory/v3".into(),
+    AuthorityEpochRefV3 { api_version: "catchplate.policyCustodyAuthorityHistory/v3".into(),
         authority_role: HistoricalAuthorityRoleV3::IsolatedService(role), authority_epoch_sequence: 1,
         authority_epoch_sha256: digest("epoch"), checkpoint_sequence: 1, checkpoint_sha256: digest("checkpoint"),
         checkpoint_authority_key_id: digest("checkpoint-key"), checkpoint_authority_key_spki_sha256: digest("checkpoint-spki"),
@@ -27,7 +27,7 @@ fn scope() -> Scope {
         "execution_closure_manifest_sha256":digest("closure"),"structurally_verified_seccomp_policy_sha256":digest("seccomp"),
         "store_response_authority":keydata(AuthorityRole::CustodyStoreResponse),
         "retrieval_response_authority":keydata(AuthorityRole::CustodyRetrievalResponse),"binding_sha256":digest("binding")});
-    Scope { api_version: "serverware.nativePublicationGenesisScope/v1".into(), commissioning_id_sha256: digest("commissioning"),
+    Scope { api_version: "catchplate.nativePublicationGenesisScope/v1".into(), commissioning_id_sha256: digest("commissioning"),
         production_configuration_binding_sha256: digest("configuration"), assignment_payload_sha256: digest("assignment"), assignment_revision: 1,
         proof_scope_original: text(&proof).unwrap(), retrieval_namespace_sha256: digest("namespace"), initial_publication_revision: 1,
         boot_id_base64url: URL_SAFE_NO_PAD.encode([1u8;16]), time_namespace_device: 1, time_namespace_inode: 2,
@@ -65,7 +65,7 @@ fn fixture() -> Fixture {
         let authority = super::super::guest::native_keys::admission::publication::authority_payload(&scope.proof_scope_original, payload).unwrap();
         Ok(URL_SAFE_NO_PAD.encode(native_key.sign(&signature_preimage(Role::PublicationReconciliation.signature_domain(), &authority)).to_bytes()))
     }).unwrap();
-    let mut completion = Completion { api_version: "serverware.nativePublicationGenesisCompletion/v1".into(),
+    let mut completion = Completion { api_version: "catchplate.nativePublicationGenesisCompletion/v1".into(),
         prepared, stored, receipt_original, completed_at_boottime_nanos: 25, signature: CanonicalEd25519Signature(String::new()) };
     completion.signature = CanonicalEd25519Signature(URL_SAFE_NO_PAD.encode(native_key.sign(&signature_preimage(COMPLETION_DOMAIN,
         &completion.payload().unwrap())).to_bytes()));
@@ -143,7 +143,7 @@ fn independent_mirror_must_bind_exact_durable_finalization_and_order() {
 fn original_clock_window_and_legacy_domains_do_not_widen() {
     let f = fixture();
     for now in [0, 9, 100, 101] { assert!(f.scope.live(now).is_err()); }
-    let mut changed = f.bundle.completion.clone(); changed.api_version = "serverware.nativePublicationProposal/v1".into();
+    let mut changed = f.bundle.completion.clone(); changed.api_version = "catchplate.nativePublicationProposal/v1".into();
     assert!(changed.verify(&f.scope, &f.native, &f.retrieval, &epoch(&f.durable_key, HistoricalServiceRoleV3::DurableRecoveryStore),
         &f.durable_key.verifying_key()).is_err());
     let mut scope = f.scope.clone(); scope.initial_publication_revision = 0; assert!(scope.validate().is_err());

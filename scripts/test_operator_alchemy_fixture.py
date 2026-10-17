@@ -29,7 +29,7 @@ def fields(client, raw, case="success", chain="eth-mainnet"):
     result = [("Host", receiver.HOSTS[chain]), ("Authorization", "Bearer " + receiver.TOKEN),
         ("Content-Type", "application/json"), ("Content-Length", str(len(raw))), ("Connection", "close"),
         ("Accept", receiver.MEDIA[client])]
-    result += [("User-Agent", "serverware-alchemy-probe/" + case if client == "probe" else receiver.AGENTS[client])]
+    result += [("User-Agent", "catchplate-alchemy-probe/" + case if client == "probe" else receiver.AGENTS[client])]
     if client == "node":
         result += [("Accept-Language", "*"), ("Sec-Fetch-Mode", "cors")]
     return result
@@ -97,7 +97,7 @@ class ReceiverTests(unittest.TestCase):
                     ("X-Unknown", "private-canary")):
                 with self.subTest(client=client, field=name), self.assertRaises(ValueError):
                     receiver.validated_headers(client, fields(client, raw) + [(name, value)])
-            for selected, bad in (("Authorization", "Bearer serverware-alchemy-placeholder-v1"),
+            for selected, bad in (("Authorization", "Bearer catchplate-alchemy-placeholder-v1"),
                     ("Authorization", "Bearer private-canary"), ("Host", "outside.invalid"),
                     ("Host", receiver.HOSTS[receiver.CHAIN] + ":443"), ("Content-Type", "text/plain"),
                     ("Content-Length", "0"), ("Content-Length", "01"), ("Content-Length", "65537")):
@@ -255,7 +255,7 @@ class ReceiverTests(unittest.TestCase):
 class RecipeTests(unittest.TestCase):
     def build(self):
         self.args = (Path("/detached/source"), Path("/pinned/gate"), Path("/pinned/initialize.py"),
-            Path("/srv/catchplate-fast/tmp/serverware-alchemy-private.abcdef12"), Path("/pinned/node"), Path("/pinned/alchemy-node"))
+            Path("/srv/catchplate-fast/tmp/catchplate-alchemy-private.abcdef12"), Path("/pinned/node"), Path("/pinned/alchemy-node"))
         return recipe.build(*self.args, expected_binary_sha256="a" * 64)
 
     def test_exact_six_runtime_services_share_only_network_none_and_fixed_hosts(self):
@@ -263,7 +263,7 @@ class RecipeTests(unittest.TestCase):
         self.assertNotIn("networks", config)
         services = config["services"]
         runtime = {name for name, service in services.items() if not service.get("profiles") or name in {"edge", "check"}}
-        self.assertEqual(runtime, {"network", "alchemy", "serverware", "decision-gate-rs", "edge", "check"})
+        self.assertEqual(runtime, {"network", "alchemy", "catchplate", "decision-gate-rs", "edge", "check"})
         for name, service in services.items():
             self.assertTrue(service["read_only"])
             self.assertEqual(service["restart"], "no")
@@ -275,8 +275,8 @@ class RecipeTests(unittest.TestCase):
                 self.assertNotIn("github", mount["source"])
                 self.assertNotIn("x-username", mount["target"])
                 self.assertNotEqual(mount["target"], "/client-trust/requests-ca.pem")
-        for name in ("serverware", "decision-gate-rs"):
-            self.assertEqual(json.loads(services[name]["environment"]["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"]),
+        for name in ("catchplate", "decision-gate-rs"):
+            self.assertEqual(json.loads(services[name]["environment"]["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"]),
                 ["https://" + host for host in network.PROVIDER_HOSTS])
         self.assertEqual(services["check"]["command"][0], "/app/scripts/check_operator_alchemy_examples.py")
         self.assertEqual(sum(mount["target"] == "/app/examples/alchemy-chain-status-node/node_modules"
@@ -293,7 +293,7 @@ class RecipeTests(unittest.TestCase):
         changed["services"]["alchemy"]["ports"] = ["443:443"]
         with self.assertRaises(ValueError):
             recipe.validate(changed, *self.args, expected_binary_sha256="a" * 64)
-        changed_args = (*self.args[:3], Path("/srv/catchplate-fast/tmp/serverware-x-private.abcdef12"), *self.args[4:])
+        changed_args = (*self.args[:3], Path("/srv/catchplate-fast/tmp/catchplate-x-private.abcdef12"), *self.args[4:])
         with self.assertRaises(ValueError):
             recipe.build(*changed_args, expected_binary_sha256="a" * 64)
 
@@ -317,7 +317,7 @@ class RecipeTests(unittest.TestCase):
                 patch.object(network.socket, "getaddrinfo", side_effect=resolve):
             network.assert_isolated_network()
         baseline.assert_called_once_with(attached=False)
-        self.assertEqual(resolved, [*network.PROVIDER_HOSTS, network.PROXY_HOST, "serverware", "decision-gate-rs"])
+        self.assertEqual(resolved, [*network.PROVIDER_HOSTS, network.PROXY_HOST, "catchplate", "decision-gate-rs"])
 
 
 if __name__ == "__main__":

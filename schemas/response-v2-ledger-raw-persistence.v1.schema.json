@@ -1,6 +1,6 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://serverware.invalid/schemas/response-v2-ledger-raw-persistence.v1.schema.json",
+  "$id":"https://catchplate.invalid/schemas/response-v2-ledger-raw-persistence.v1.schema.json",
   "title":"Selected private ledger raw-response persistence",
   "oneOf":[{"$ref":"#/$defs/configuration"},{"$ref":"response-v2-target-dispatch.v1.schema.json#/$defs/capturePersist"},{"$ref":"#/$defs/result"}],
   "$defs":{
@@ -8,12 +8,12 @@
     "identifier":{"type":"string","minLength":1,"maxLength":128},
     "positive":{"type":"integer","minimum":1,"maximum":18446744073709551615},
     "configuration":{"type":"object","additionalProperties":false,"required":["apiVersion"],"properties":{
-      "apiVersion":{"const":"serverware.responseV2.ledgerRawPersistence/v1"}
+      "apiVersion":{"const":"catchplate.responseV2.ledgerRawPersistence/v1"}
     }},
     "receiptBody":{"type":"object","additionalProperties":false,
       "required":["apiVersion","generationId","generation","configurationSha256","ledgerServiceId","ledgerKeyId","objectId","objectKind","contentSha256","contentLength","mediaType"],
       "properties":{
-        "apiVersion":{"const":"serverware.responseV2.rawStorageReceipt/v1"},
+        "apiVersion":{"const":"catchplate.responseV2.rawStorageReceipt/v1"},
         "generationId":{"$ref":"#/$defs/identifier"},"generation":{"$ref":"#/$defs/positive"},
         "configurationSha256":{"$ref":"#/$defs/sha256"},"ledgerServiceId":{"$ref":"#/$defs/identifier"},
         "ledgerKeyId":{"$ref":"#/$defs/sha256"},"objectId":{"type":"string","pattern":"^obj:[0-9a-f]{64}$"},
@@ -39,7 +39,7 @@
     "stateRequest":{"type":"object","additionalProperties":false,
       "required":["apiVersion","requestId","operationId","attemptId","stableResumeId","attemptRevision","fencingToken","deadlineBoottimeNs","frame"],
       "properties":{
-        "apiVersion":{"const":"serverware.responseObservationV2StateAuthority/v1"},
+        "apiVersion":{"const":"catchplate.responseObservationV2StateAuthority/v1"},
         "requestId":{"type":"string","pattern":"^capture:[0-9a-f]{64}$"},
         "operationId":{"type":"string","pattern":"^persist:[0-9a-f]{64}$"},
         "attemptId":{"$ref":"#/$defs/identifier"},"stableResumeId":{"$ref":"#/$defs/sha256"},
@@ -57,7 +57,7 @@
     "result":{"type":"object","additionalProperties":false,
       "required":["apiVersion","captureSha256","object","storageReceipt","artifactCommit","stateRequest","stateResult","postState"],
       "properties":{
-        "apiVersion":{"const":"serverware.responseV2.rawPersistenceResult/v1"},
+        "apiVersion":{"const":"catchplate.responseV2.rawPersistenceResult/v1"},
         "captureSha256":{"$ref":"#/$defs/sha256"},"object":{"$ref":"#/$defs/object"},
         "storageReceipt":{"$ref":"#/$defs/storageReceipt"},
         "artifactCommit":{"$ref":"response-v2-nested-authority-artifact.v1.schema.json"},
@@ -66,5 +66,5 @@
       }
     }
   },
-  "$comment":"Cold ledgerRawPersistence is separate from independently assigned targetDispatch, requires genuine guest delivery plus ledgerExactRead, and rejects explicit null. Closed metadata originals are <=262144 canonical bytes. One sealed raw HTTP/1.1 descriptor, length1..34603008, must be admitted through actual native capture/permit/DispatchBegin verification; no JSON, locator, receipt or readiness grants permission. Receipt signature covers canonical body under serverware.responseV2.rawStorageReceipt/v1 followed by NUL. Its deterministic content scope includes the actual full cold configuration SHA; actual assigned persistence key and canonical padded base64 must match. Claim generation/attempt/fence precedes CAS writes; existing claim or partial/mismatching CAS refuses without repair. Blob and exact receipt become durable before attempt-scoped ArtifactCommit and protected ObjectCommitRaw. State result binds the SHA of the entire genuine signed frame, not just frame.request. Full expected frame content, receipt scope and successor revision are checked. Result is returned only after named-original readback and durable local result; no plaintext, new effect, retry, archival or release authority is conveyed."
+  "$comment":"Cold ledgerRawPersistence is separate from independently assigned targetDispatch, requires genuine guest delivery plus ledgerExactRead, and rejects explicit null. Closed metadata originals are <=262144 canonical bytes. One sealed raw HTTP/1.1 descriptor, length1..34603008, must be admitted through actual native capture/permit/DispatchBegin verification; no JSON, locator, receipt or readiness grants permission. Receipt signature covers canonical body under catchplate.responseV2.rawStorageReceipt/v1 followed by NUL. Its deterministic content scope includes the actual full cold configuration SHA; actual assigned persistence key and canonical padded base64 must match. Claim generation/attempt/fence precedes CAS writes; existing claim or partial/mismatching CAS refuses without repair. Blob and exact receipt become durable before attempt-scoped ArtifactCommit and protected ObjectCommitRaw. State result binds the SHA of the entire genuine signed frame, not just frame.request. Full expected frame content, receipt scope and successor revision are checked. Result is returned only after named-original readback and durable local result; no plaintext, new effect, retry, archival or release authority is conveyed."
 }

@@ -36,7 +36,7 @@ from scripts.check_operator_ordinary_client import OrdinaryClientCheck
 from scripts.run_operator_x_examples_fixture import failure_site
 from scripts.operator_fixture_pins import read_pin
 
-SCHEMA = "serverware.privateGmailSdkCheck/v1"
+SCHEMA = "catchplate.privateGmailSdkCheck/v1"
 PROXY = "https://proxy.operator-basic.example.test:8443"
 COMMAND = ("/example-go/google-gmail",)
 SOURCE_FILES = ("examples/google-gmail-go/main.go", "examples/google-gmail-go/go.mod", "examples/google-gmail-go/go.sum")
@@ -46,8 +46,8 @@ STAGES = {"fresh": (0, 0, 0), "connected": (1, 0, 0), "first": (1, 0, 4),
 CASES = ("list_page_1", "message_metadata_1", "list_page_2", "message_metadata_2")
 SUMMARY = {"pages": 2, "messages_read": 2, "more_pages": False}
 SUCCESS = b'{"pages":2,"messages_read":2,"more_pages":false}\n'
-DENIAL = b"Gmail list failed; inspect Serverware audit records and the saved permission (no automatic retry)\n"
-DUMMY = "Bearer serverware-gmail-placeholder-v1"
+DENIAL = b"Gmail list failed; inspect Catchplate audit records and the saved permission (no automatic retry)\n"
+DUMMY = "Bearer catchplate-gmail-placeholder-v1"
 START = "data_plane.credential.release_started"
 RELEASE = "data_plane.response.released"
 CONNECT = "data_plane.connect.established"
@@ -111,7 +111,7 @@ def validate_row(row, ordinal, generation, *, sdk_pair=False):
         "x-goog-api-client": "gl-go/1.26.9 gdcl/0.264.0"}
     if sdk_pair:
         provider_headers = profiles.provider_headers(case)
-    public = {"schema": "serverware.privateGmailSdkRequest/v1", "method": "GET", "authority": "gmail.googleapis.com",
+    public = {"schema": "catchplate.privateGmailSdkRequest/v1", "method": "GET", "authority": "gmail.googleapis.com",
         "path": spec["path"], "rawQuery": spec["raw_query"], "headers": provider_headers,
         "bodySha256": digest(b""), "bodyBytes": 0}
     require(type(row) is dict and set(row) == ROW_KEYS and row["case"] == case and row["method"] == "GET"
@@ -136,7 +136,7 @@ def observations(document, stage, *, sdk_pair=False):
     partial = stage in {"node_first", "node_refreshed"} and sdk_pair
     require((stage in stages or partial) and type(document) is dict and set(document) == {"schema", "counts", "events", "active", "bounds",
         "tokenLifetimes", "initialAccessExpiresAtEpochMs", "initialAccessExpired", "gmailSdk"}
-        and document["schema"] == "serverware.privateGoogleObservations/v1", "Gmail SDK observations unavailable")
+        and document["schema"] == "catchplate.privateGoogleObservations/v1", "Gmail SDK observations unavailable")
     consent, refresh, resources = (1, int(stage == "node_refreshed"), 12 if stage == "node_refreshed" else 4) if partial else stages[stage]
     counts = document["counts"]
     require(type(counts) is dict and set(counts) == {"google", "x"} and counts["x"] == {} and type(counts["google"]) is dict,
@@ -180,7 +180,7 @@ def observations(document, stage, *, sdk_pair=False):
         == (["authorization_code"] if consent else []) + (["refresh_token"] if refresh else []), "Gmail SDK issuance order differs")
     sdk = document["gmailSdk"]
     require(type(sdk) is dict and set(sdk) == {"schema", "maxAttempts", "attempts"}
-        and sdk["schema"] == (profiles.OBSERVATION_SCHEMA if sdk_pair else "serverware.privateGmailSdkObservations/v1") and type(sdk["maxAttempts"]) is int
+        and sdk["schema"] == (profiles.OBSERVATION_SCHEMA if sdk_pair else "catchplate.privateGmailSdkObservations/v1") and type(sdk["maxAttempts"]) is int
         and sdk["maxAttempts"] == 32 and type(sdk["attempts"]) is list and len(sdk["attempts"]) == resources,
         "Gmail SDK finite receiver differs")
     expiry = document["initialAccessExpiresAtEpochMs"]
@@ -271,7 +271,7 @@ def grant_publication_reload_failures(events, scope, credential_id, *, grant, sd
         and grant["previous_policy_hash"] != scope[2], "Gmail SDK reload failure lacks explicit grant")
     row = failures[0]
     require(type(row["id"]) is str and SHA256.fullmatch(row["id"])
-        and row["event"] == {"component": "serverware-decision-gate-rs", "active_policy_hash": grant["previous_policy_hash"],
+        and row["event"] == {"component": "catchplate-decision-gate-rs", "active_policy_hash": grant["previous_policy_hash"],
             "error": "policy_reload_failed",
             "error_sha256": digest(b"control-plane attestation missing policy_signing_key_id")},
         "Gmail SDK reload failure is not the exact unavailable dev-policy observation")
@@ -485,8 +485,8 @@ def client_environment(application, token, phase):
     elif phase == "wrong_inner_ca":
         inner, outer = TRUST_FILES["outer"], TRUST_FILES["combined"]
     # No ambient PATH/HOME/GOOGLE_*/GODEBUG/SSL_CERT_*/proxy or credential vars.
-    return {"LANG": "C.UTF-8", "SERVERWARE_PROXY_URL": PROXY, "SERVERWARE_APP_ID": application,
-        "SERVERWARE_PROXY_TOKEN": token, "SERVERWARE_CA_FILE": str(inner), "SERVERWARE_PROXY_CA_FILE": str(outer)}
+    return {"LANG": "C.UTF-8", "CATCHPLATE_PROXY_URL": PROXY, "CATCHPLATE_APP_ID": application,
+        "CATCHPLATE_PROXY_TOKEN": token, "CATCHPLATE_CA_FILE": str(inner), "CATCHPLATE_PROXY_CA_FILE": str(outer)}
 
 
 def run_example(environment, seconds, *, command=COMMAND, config_file=None):
@@ -496,8 +496,8 @@ def run_example(environment, seconds, *, command=COMMAND, config_file=None):
             (Path("/tmp/gmail-age-unrestricted.json"), Path("/tmp/gmail-age-recent.json")),
             "Gmail age configuration path differs")
         command = (*command, "--config", str(config_file))
-    require(0 < seconds <= 30 and set(environment) == {"LANG", "SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID",
-        "SERVERWARE_PROXY_TOKEN", "SERVERWARE_CA_FILE", "SERVERWARE_PROXY_CA_FILE"}, "Gmail SDK process boundary differs")
+    require(0 < seconds <= 30 and set(environment) == {"LANG", "CATCHPLATE_PROXY_URL", "CATCHPLATE_APP_ID",
+        "CATCHPLATE_PROXY_TOKEN", "CATCHPLATE_CA_FILE", "CATCHPLATE_PROXY_CA_FILE"}, "Gmail SDK process boundary differs")
     deadline = time.monotonic() + seconds
     process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         env=environment, close_fds=True, start_new_session=True)
@@ -703,7 +703,7 @@ class GmailSdkCheck(base.GoogleRefreshCheck):
             "Gmail SDK acceptance requires a fresh empty catalog")
         require_bundle(initial)
         require(initial.get("capabilities", {}).get("application_proxy_authentication") == {
-            "schema": "serverware.operatorProxyAuthentication/v1", "modes": ["bearer", "basic_and_bearer_v1"],
+            "schema": "catchplate.operatorProxyAuthentication/v1", "modes": ["bearer", "basic_and_bearer_v1"],
             "path": "/api/operator-demo/applications/proxy-authentication"}, "Gmail SDK Basic proxy capability unavailable")
         self.policy_hash = initial["policy"]["policy_hash"]; self.wait_catalog_loaded("gmail_sdk_fresh")
         baseline = features.audit_cutoff(self.settled_audit()); self.observe("fresh")

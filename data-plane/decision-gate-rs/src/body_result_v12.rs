@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::Write;
 
-pub const BODY_RESULT_VERSION_V12: &str = "serverware/controller-plan-executor-result/v12";
+pub const BODY_RESULT_VERSION_V12: &str = "catchplate/controller-plan-executor-result/v12";
 pub const MAX_BODY_RESULT_BYTES_V12: usize = MAX_FRAME_BYTES;
 const MAX_DEPTH: usize = 64;
 const MAX_NODES: usize = 1_000_000;

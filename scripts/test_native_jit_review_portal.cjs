@@ -7,12 +7,12 @@ const assert = require('node:assert/strict');
 const {readFileSync} = require('node:fs');
 const {resolve} = require('node:path');
 const vm = require('node:vm');
-const sourcePath = resolve(__dirname, '../serverware/portal_native_jit_review.py');
+const sourcePath = resolve(__dirname, '../catchplate/portal_native_jit_review.py');
 const source = readFileSync(sourcePath, 'utf8');
 const scripts = [...source.matchAll(/^NATIVE_JIT_REVIEW_SCRIPT = r"""\n([\s\S]*?)\n"""/gm)];
 assert.equal(scripts.length, 1, 'one actual literal script, not a copied controller');
 const actual = scripts[0][1];
-const wireSource = readFileSync(resolve(__dirname, '../serverware/authority_native_jit_review_open_contract.py'), 'utf8');
+const wireSource = readFileSync(resolve(__dirname, '../catchplate/authority_native_jit_review_open_contract.py'), 'utf8');
 function wireKiB(name) {
   const matches = [...wireSource.matchAll(new RegExp('^' + name + ' = (\\d+) \\* 1024$', 'gm'))];
   assert.equal(matches.length, 1, 'one exact shared wire size literal');
@@ -24,18 +24,18 @@ const ID = '11111111-1111-4111-8111-111111111111';
 const REVIEW = '33333333-3333-4333-8333-333333333333';
 const PORTAL = 'https://portal.example.test', NATIVE = 'https://native.example.test';
 const PATH = '/approvals/review/native', API = '/api/approvals/review/native/';
-const MARKER = 'serverware.nativeJitReviewUncertain.' + ID;
+const MARKER = 'catchplate.nativeJitReviewUncertain.' + ID;
 const NOW = Date.parse('2030-01-01T00:00:00Z');
 const PRIVATE = 'private-review-cookie-recipient-key-canary';
 const clone = value => JSON.parse(JSON.stringify(value));
-const type = phase => 'serverware.native-jit-review.' + phase;
+const type = phase => 'catchplate.native-jit-review.' + phase;
 function nativeOriginal(kind, value) {
-  return JSON.stringify({statement: {schema: 'serverware.nativeJitReviewOpening' + kind + '/v1', ...value},
+  return JSON.stringify({statement: {schema: 'catchplate.nativeJitReviewOpening' + kind + '/v1', ...value},
     signature: 'synthetic-unverified-signature', nativeKeyEvidence: {synthetic: true}, assignmentOriginal: '{}'});
 }
 function authorityOriginal(kind, value) {
-  return JSON.stringify({schema: 'serverware.signedNativeJitReviewOpening' + kind + '/v1',
-    payload: {schema: 'serverware.nativeJitReviewOpening' + kind + '/v1', ...value},
+  return JSON.stringify({schema: 'catchplate.signedNativeJitReviewOpening' + kind + '/v1',
+    payload: {schema: 'catchplate.nativeJitReviewOpening' + kind + '/v1', ...value},
     signatureBase64Url: 'synthetic-unverified-signature'});
 }
 function originals() {
@@ -99,9 +99,9 @@ function fixture(options = {}) {
         if (selected !== undefined) return selected;
       }
       if (url === '/api/auth/status') return response(control.identity || identity);
-      if (url === '/api/csrf') return response({ok: true, token: 'synthetic-csrf', cookie: 'serverware_csrf', header: 'X-Serverware-CSRF-Token'});
+      if (url === '/api/csrf') return response({ok: true, token: 'synthetic-csrf', cookie: 'catchplate_csrf', header: 'X-Catchplate-CSRF-Token'});
       assert.equal(init.method, 'POST'); assert.equal(init.headers['Content-Type'], 'application/json');
-      assert.equal(init.headers['X-Serverware-CSRF-Token'], 'synthetic-csrf');
+      assert.equal(init.headers['X-Catchplate-CSRF-Token'], 'synthetic-csrf');
       if (url === API + 'authorize') return response(values.grant);
       if (url === API + 'receipt') return response({acknowledgmentOriginal: values.acknowledgment});
       throw Error('unexpected route: ' + url);
@@ -140,10 +140,29 @@ group('initialization clears exact UUID fragment and performs no automatic openi
 
 group('invalid query/fragment and preexisting uncertainty never open or fetch', async () => {
   for (const options of [{query: '?native=1'}, {hash: '#approval=invalid'}, {hash: '#approval=' + ID + '&other=1'},
-    {storage: new Map([[MARKER, ID]])}, {storage: new Map([['serverware.approvalDecisionUncertain.' + ID, ID]])},
+    {storage: new Map([[MARKER, ID]])}, {storage: new Map([['catchplate.approvalDecisionUncertain.' + ID, ID]])},
     {storageReadFailure: true}]) {
     const f = fixture(options); await f.start(); assert.equal(f.requests.length, 0);
     assert.ok(f.button.disabled); assert.ok(!f.events.includes('popup-open'));
+  }
+});
+
+group('legacy uncertainty presence blocks direct review without clearing or retrying', async () => {
+  for (const prefix of ['serverware.nativeJitReviewUncertain.', 'serverware.approvalDecisionUncertain.']) {
+    for (const value of [ID, '', 'unrecognized historical marker']) {
+      const original = [[prefix + ID, value]];
+      const f = fixture({storage: new Map(original)});
+      await f.start(); await f.start();
+      assert.ok(f.button.disabled);
+      assert.equal(f.requests.length, 0); assert.equal(f.messages.length, 0);
+      assert.ok(!f.events.includes('popup-open'));
+      assert.deepEqual([...f.storage], original);
+    }
+    const original = [[prefix + REVIEW, ID]];
+    const f = fixture({storage: new Map(original)});
+    await f.start();
+    assert.ok(f.events.includes('popup-open'));
+    assert.deepEqual([...f.storage], original);
   }
 });
 

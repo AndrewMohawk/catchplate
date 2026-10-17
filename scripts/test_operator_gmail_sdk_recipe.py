@@ -26,7 +26,7 @@ from scripts import operator_gmail_sdk_fixture_network as glue
 
 SOURCE = Path("/synthetic/source")
 BINARY, INITIALIZER, GO = (Path("/synthetic/" + name) for name in ("gate", "initialize.py", "google-gmail"))
-JOB = Path("/srv/catchplate-fast/tmp/serverware-gmail-sdk-private.abcdef12")
+JOB = Path("/srv/catchplate-fast/tmp/catchplate-gmail-sdk-private.abcdef12")
 ARGS = (SOURCE, BINARY, INITIALIZER, JOB, GO)
 PINS = {"expected_binary_sha256": "a" * 64, "expected_go_sha256": "b" * 64}
 NOW = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
@@ -103,7 +103,7 @@ class GmailSdkRecipeTests(unittest.TestCase):
         self.assertEqual((recipe.KEEPER_SECONDS, recipe.EDGE_SECONDS, recipe.PRECHECK_SECONDS), (300, 240, 75))
         self.assertEqual(recipe.CHECKER_OUTER_SECONDS + recipe.PRECHECK_SECONDS + 15, recipe.KEEPER_SECONDS)
         self.assertEqual(glue.google.keep_namespace.__module__, "scripts.operator_google_fixture_setup")
-        template = JOB.with_name("serverware-google-private.abcdef12")
+        template = JOB.with_name("catchplate-google-private.abcdef12")
         inherited = google.build(SOURCE, BINARY, INITIALIZER, template, profile=google.GMAIL_JOB_PROFILE,
             expected_binary_sha256=PINS["expected_binary_sha256"], client_dependencies=google.GMAIL_CLIENT_DEPENDENCIES,
             client_dependencies_manifest_sha256=google.GMAIL_CLIENT_MANIFEST_SHA256)
@@ -118,7 +118,7 @@ class GmailSdkRecipeTests(unittest.TestCase):
     def test_browser_endpoint_config_hosts_and_checker_are_one_closed_choice(self):
         from scripts import check_operator_gmail_sdk as checker
         enabled = recipe.build(*ARGS, **PINS, browser_permission=True)
-        url = "https://serverware-gmail-proxy.example.com"
+        url = "https://catchplate-gmail-proxy.example.com"
         for mode, config, expected in ((False, self.config, "https://proxy.operator-basic.example.test:8443"),
                                       (True, enabled, url)):
             services = config["services"]
@@ -128,22 +128,22 @@ class GmailSdkRecipeTests(unittest.TestCase):
             self.assertEqual(services["initialize"]["command"][-1], "browser-initialize" if mode else "initialize")
             self.assertEqual(services["edge"]["command"][-1], "browser-edge" if mode else "edge")
             self.assertEqual("--proxy-hostname" in services["basic-pki"]["command"], mode)
-        for service in ("serverware", "decision-gate-rs"):
-            self.assertEqual(enabled["services"][service]["environment"]["SERVERWARE_OPERATOR_DEMO_PROXY_URL"], url)
-            self.assertEqual(self.config["services"][service]["environment"]["SERVERWARE_OPERATOR_DEMO_PROXY_URL"],
-                "https://serverware-proxy.example.com")
-        original = b"127.0.0.1 localhost serverware decision-gate-rs serverware-demo.example.com\n93.184.216.34 gmail.googleapis.com\n"
-        self.assertEqual(glue.hosts_bytes(original), original.replace(b"serverware-demo.example.com\n",
-            b"serverware-demo.example.com proxy.operator-basic.example.test\n"))
+        for service in ("catchplate", "decision-gate-rs"):
+            self.assertEqual(enabled["services"][service]["environment"]["CATCHPLATE_OPERATOR_DEMO_PROXY_URL"], url)
+            self.assertEqual(self.config["services"][service]["environment"]["CATCHPLATE_OPERATOR_DEMO_PROXY_URL"],
+                "https://catchplate-proxy.example.com")
+        original = b"127.0.0.1 localhost catchplate decision-gate-rs catchplate-demo.example.com\n93.184.216.34 gmail.googleapis.com\n"
+        self.assertEqual(glue.hosts_bytes(original), original.replace(b"catchplate-demo.example.com\n",
+            b"catchplate-demo.example.com proxy.operator-basic.example.test\n"))
         self.assertEqual(glue.hosts_bytes(original, browser_permission=True),
-            original + b"127.0.0.2 serverware-gmail-proxy.example.com\n")
+            original + b"127.0.0.2 catchplate-gmail-proxy.example.com\n")
         for value in (None, 0, 1, "true"):
             with self.subTest(value=value), self.assertRaises(checker.CheckFailure): checker.fixture_proxy(value)
             with self.subTest(value=value), self.assertRaises(ValueError): glue.hosts_bytes(original, browser_permission=value)
-        for service in ("serverware", "decision-gate-rs"):
-            for altered in ("https://serverware-proxy.example.com", "https://proxy.operator-basic.example.test:8443", url + ":443"):
+        for service in ("catchplate", "decision-gate-rs"):
+            for altered in ("https://catchplate-proxy.example.com", "https://proxy.operator-basic.example.test:8443", url + ":443"):
                 wrong = deepcopy(enabled)
-                wrong["services"][service]["environment"]["SERVERWARE_OPERATOR_DEMO_PROXY_URL"] = altered
+                wrong["services"][service]["environment"]["CATCHPLATE_OPERATOR_DEMO_PROXY_URL"] = altered
                 with self.subTest(service=service, altered=altered), self.assertRaises(ValueError):
                     recipe.validate(wrong, *ARGS, **PINS, browser_permission=True)
         for service in ("initialize", "edge", "basic-pki", "check"):
@@ -197,7 +197,7 @@ class GmailSdkRecipeTests(unittest.TestCase):
                 pins = dict(PINS); pins[key] = value
                 with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                     recipe.build(*ARGS, **pins)
-        for root in (JOB.with_name("serverware-google-private.abcdef12"), Path("/tmp") / JOB.name):
+        for root in (JOB.with_name("catchplate-google-private.abcdef12"), Path("/tmp") / JOB.name):
             with self.assertRaises(ValueError):
                 recipe.build(SOURCE, BINARY, INITIALIZER, root, GO, **PINS)
         for value in ("relative", "/synthetic/../source"):
@@ -248,7 +248,7 @@ class GmailSdkRunnerTests(unittest.TestCase):
         self.assertIs(runner.GmailSdkRun.no_project_networks, runner.Run.no_project_networks)
         self.assertIsNot(runner.GmailSdkRun.cleanup, runner.Run.cleanup)
         self.assertEqual(legacy.RUNTIME_SERVICES,
-            {"network", "x", "serverware", "decision-gate-rs", "edge", "check"})
+            {"network", "x", "catchplate", "decision-gate-rs", "edge", "check"})
 
     def test_inspector_rejects_real_containment_shapes_and_expired_original_budget(self):
         for case in ("missing", "foreign-service", "foreign-project", "network", "port", "writable", "mount", "cap",

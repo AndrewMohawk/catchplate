@@ -1,4 +1,4 @@
-"""Standalone Linux workload token manager. No Serverware server imports.
+"""Standalone Linux workload token manager. No Catchplate server imports.
 
 The private directory is a single-writer credential store, not a hardware vault.
 Only exact journaled operations may be retried after an uncertain outcome.
@@ -28,11 +28,11 @@ import uuid
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-SCHEMA = "serverware.workloadTokenRenewal/v1"
-SETUP_SCHEMA = "serverware.managedClientSetup/v1"
-STATE_SCHEMA = "serverware.managedClientState/v1"
+SCHEMA = "catchplate.workloadTokenRenewal/v1"
+SETUP_SCHEMA = "catchplate.managedClientSetup/v1"
+STATE_SCHEMA = "catchplate.managedClientState/v1"
 PUBLIC_PATH = "/v1/workload/renew"
-DOMAIN = b"serverware.workload-token-renewal/v1\x00POST /v1/workload/renew\x00"
+DOMAIN = b"catchplate.workload-token-renewal/v1\x00POST /v1/workload/renew\x00"
 MAX_INTEGER = 9_007_199_254_740_991
 MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, MAX_STATE_BYTES = 4096, 8192, 32768
 REQUEST_LIFETIME_MS, CLOCK_SKEW_MS, OVERLAP_MS = 60_000, 5000, 300_000

@@ -1,0 +1,72 @@
+[Unit]
+Description=Catchplate policy-custody %i TrustedHostNoTee authority
+PartOf=catchplate-policy-custody.target
+BindsTo=catchplate-policy-custody@%i.socket
+After=local-fs.target systemd-tmpfiles-setup.service catchplate-policy-custody@%i.socket
+RequiresMountsFor=@RELEASE_ROOT@ @RUNTIME_CONFIG_ROOT@
+AssertFileIsExecutable=@RELEASE_ROOT@/bin/catchplate-policy-custody-%i
+AssertPathIsDirectory=@RUNTIME_CONFIG_ROOT@
+StartLimitIntervalSec=60s
+StartLimitBurst=3
+
+[Service]
+Type=notify
+NotifyAccess=main
+# The main process must emit READY=1 only after descriptor validation, durable
+# recovery, authenticated peer binding, and its complete mutation path are
+# usable.
+# Every supported role overrides this deliberately nonexistent fail-closed
+# account in its checked-in drop-in.
+User=swpc-invalid
+Group=swpc-invalid
+UMask=0077
+Sockets=catchplate-policy-custody@%i.socket
+# The trusted launcher atomically switches this root-owned "current" generation
+# only after measuring the live driver PID/start-time/executable and activation
+# directories. A missing or incomplete generation is a hard startup failure.
+LoadCredential=catchplate-policy-custody-%i.json:@RUNTIME_CONFIG_ROOT@/catchplate-policy-custody-%i.json
+# The deterministic renderer installs role-specific credential directives in
+# catchplate-policy-custody@%i.service.d/credentials.conf.
+ExecStart=@RELEASE_ROOT@/bin/catchplate-policy-custody-%i
+Restart=on-failure
+RestartSec=1s
+TimeoutStartSec=35s
+TimeoutStopSec=15s
+TimeoutAbortSec=15s
+KillMode=control-group
+SendSIGKILL=yes
+FinalKillSignal=SIGKILL
+OOMPolicy=stop
+LimitCORE=0
+LimitNOFILE=4096
+LimitNPROC=128
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateMounts=yes
+PrivateNetwork=yes
+PrivateDevices=yes
+PrivateIPC=yes
+RemoveIPC=yes
+KeyringMode=private
+DevicePolicy=closed
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=catchplate-policy-custody.target

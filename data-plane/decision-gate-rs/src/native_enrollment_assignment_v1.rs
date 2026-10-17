@@ -18,9 +18,9 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::{SystemTime, UNIX_EPOCH};
 use url::Url;
 
-const ENVELOPE_VERSION: &str = "serverware.signedNativeEnrollmentAssignment/v1";
-const ASSIGNMENT_VERSION: &str = "serverware.nativeEnrollmentAssignment/v1";
-const DOMAIN: &[u8] = b"serverware/native-enrollment-assignment/v1\0";
+const ENVELOPE_VERSION: &str = "catchplate.signedNativeEnrollmentAssignment/v1";
+const ASSIGNMENT_VERSION: &str = "catchplate.nativeEnrollmentAssignment/v1";
+const DOMAIN: &[u8] = b"catchplate/native-enrollment-assignment/v1\0";
 const MAX_ORIGINAL_BYTES: usize = 16 * 1024;
 const MAX_PACKET_BYTES: usize = 512 * 1024;
 const MAX_SECONDS: u64 = 9_223_372_036;

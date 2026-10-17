@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.authority import assemble_local_package as cli
 from scripts.authority import generate_artifact_bundle as generator
 from scripts.test_authority_local_artifact_witness import fixture, signed_generation
-from serverware import authority_artifact_spec as spec
+from catchplate import authority_artifact_spec as spec
 
 PIN = "sha256:" + "1" * 64
 

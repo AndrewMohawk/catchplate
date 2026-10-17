@@ -33,7 +33,7 @@ def sha(value):
 
 
 def status(mode="drop-ack", state=None):
-    return {"schema": "serverware.privateXQuotaFaultStatus/v1",
+    return {"schema": "catchplate.privateXQuotaFaultStatus/v1",
         "status": state or ("dropped" if mode == "drop-ack" else "released"),
         "mode": "drop_ack" if mode == "drop-ack" else "hold_ack", "http_status": 200,
         **{key: sha(key.encode()) for key in ("arm_sha256", "lease_request_sha256", "lease_response_sha256",
@@ -41,7 +41,7 @@ def status(mode="drop-ack", state=None):
 
 
 def provider():
-    return {"schema": "serverware.privateXQuotaFaultProvider/v1", "syntheticOnly": True,
+    return {"schema": "catchplate.privateXQuotaFaultProvider/v1", "syntheticOnly": True,
         "terminal": "running", "counts": {"total": 5, "authorize": 1, "code": 1, "refresh": 0,
             "identity": 1, "revoke": 2, "posts": 0, "rejected": 0},
         "initialAccessIssuedAtEpochMs": NOW + 1000, "initialAccessExpiresAtEpochMs": NOW + 121000,
@@ -64,10 +64,10 @@ def claim_rows():
         "credential_version": 1, "credential_metadata_digest": sha(b"metadata"), "policy_hash": SCOPE[2],
         "request_digest": request, "operation_digest": operation, "attempt_nonce": sha(b"attempt"),
         "recipient_digest": sha(b"recipient"), "request_binding_digest": sha(b"wire"), "expires_at_epoch_ms": NOW + 4000}
-    receipt = {"schema": "serverware.operatorXPostingQuotaReservation/v1", "reservation_id": RESERVATION,
+    receipt = {"schema": "catchplate.operatorXPostingQuotaReservation/v1", "reservation_id": RESERVATION,
         "bucket_key": sha({"provider": "x", "subject": SUBJECT, "operation": "tweets.write", "utc_day": NOW // 86400000}),
         "utc_day": NOW // 86400000, "expires_at_epoch_ms": NOW + 4000, "binding_digest": sha(binding), "binding": binding}
-    claim = {**deepcopy(receipt), "schema": "serverware.operatorXPostingQuotaClaim/v1", "claimed_at_epoch_ms": NOW}
+    claim = {**deepcopy(receipt), "schema": "catchplate.operatorXPostingQuotaClaim/v1", "claimed_at_epoch_ms": NOW}
     rows = [{"id": APP, "event_type": check.quota.RESERVED, "event": receipt, "event_hash": sha(b"r"), "prev_event_hash": None},
         {"id": RULE, "event_type": check.quota.CLAIMED, "event": claim, "event_hash": sha(b"c"), "prev_event_hash": sha(b"r")}]
     relay = status()
@@ -78,7 +78,7 @@ def claim_rows():
 
 
 def result(mode):
-    return {"schema": "serverware.privateXQuotaFaultCheck/v1", "ok": True, "syntheticOnly": True,
+    return {"schema": "catchplate.privateXQuotaFaultCheck/v1", "ok": True, "syntheticOnly": True,
         "realXVerified": False, "productionReady": False, "publicDnsVerified": False, "exclusiveInternalCauseProven": False,
         "actualManagedLifecycle": True, "actualExampleEntrypoints": True, "auditChainVerified": True,
         "faultMode": mode, "limit": 1, "dataPlaneBinaryDigest": sha(b"binary"), "goExampleSha256": "a" * 64,

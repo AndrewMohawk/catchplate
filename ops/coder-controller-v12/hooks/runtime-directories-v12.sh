@@ -21,8 +21,8 @@ getent group "$client_group" >/dev/null || {
     exit 2
 }
 
-runtime_root=/run/serverware/coder/v12
-for path in /run/serverware /run/serverware/coder "$runtime_root"
+runtime_root=/run/catchplate/coder/v12
+for path in /run/catchplate /run/catchplate/coder "$runtime_root"
 do
     test ! -L "$path" || {
         echo "runtime parent is a symlink: $path" >&2
@@ -33,30 +33,30 @@ done
 case "$action" in
     setup)
         install -d -o root -g root -m 0711 \
-            /run/serverware /run/serverware/coder "$runtime_root"
+            /run/catchplate /run/catchplate/coder "$runtime_root"
         install -d -o root -g root -m 0755 /run/netns
-        install -d -o serverware-coder-controller -g "$client_group" -m 0750 \
+        install -d -o catchplate-coder-controller -g "$client_group" -m 0750 \
             "$runtime_root/controller"
-        install -d -o serverware-coder-executor -g serverware-coder-executor-api -m 0750 \
+        install -d -o catchplate-coder-executor -g catchplate-coder-executor-api -m 0750 \
             "$runtime_root/plan-executor"
-        install -d -o serverware-coder-docker -g serverware-coder-docker-api -m 0750 \
+        install -d -o catchplate-coder-docker -g catchplate-coder-docker-api -m 0750 \
             "$runtime_root/docker-proxy"
-        install -d -o serverware-coder-receipt -g serverware-coder-receipt-api -m 0750 \
+        install -d -o catchplate-coder-receipt -g catchplate-coder-receipt-api -m 0750 \
             "$runtime_root/receipt-authority"
-        install -d -o serverware-coder-verdict -g serverware-coder-verdict-api -m 0750 \
+        install -d -o catchplate-coder-verdict -g catchplate-coder-verdict-api -m 0750 \
             "$runtime_root/final-verdict-authority"
-        install -d -o serverware-coder-lifecycle -g serverware-coder-lifecycle-api -m 0750 \
+        install -d -o catchplate-coder-lifecycle -g catchplate-coder-lifecycle-api -m 0750 \
             "$runtime_root/lifecycle"
-        install -d -o root -g serverware-coder-lifecycle-privileged-api -m 0750 \
+        install -d -o root -g catchplate-coder-lifecycle-privileged-api -m 0750 \
             "$runtime_root/lifecycle-privileged"
         install -d -o root -g root -m 0700 "$runtime_root/dind"
-        install -d -o serverware-coder-trust -g serverware-coder-trust-api -m 0750 \
+        install -d -o catchplate-coder-trust -g catchplate-coder-trust-api -m 0750 \
             "$runtime_root/trust-generation"
-        install -d -o serverware-coder-witness -g serverware-coder-witness-api -m 0750 \
+        install -d -o catchplate-coder-witness -g catchplate-coder-witness-api -m 0750 \
             "$runtime_root/external-witness"
-        install -d -o serverware-coder-settlement -g serverware-coder-settlement-api -m 0750 \
+        install -d -o catchplate-coder-settlement -g catchplate-coder-settlement-api -m 0750 \
             "$runtime_root/final-settlement"
-        install -d -o serverware-coder-log -g serverware-coder-log-api -m 0750 \
+        install -d -o catchplate-coder-log -g catchplate-coder-log-api -m 0750 \
             "$runtime_root/log-custody"
         ;;
     cleanup)
@@ -85,6 +85,6 @@ case "$action" in
             "$runtime_root/final-settlement" \
             "$runtime_root/log-custody" \
             "$runtime_root/dind" >/dev/null 2>&1 || true
-        rmdir -- "$runtime_root" /run/serverware/coder /run/serverware >/dev/null 2>&1 || true
+        rmdir -- "$runtime_root" /run/catchplate/coder /run/catchplate >/dev/null 2>&1 || true
         ;;
 esac

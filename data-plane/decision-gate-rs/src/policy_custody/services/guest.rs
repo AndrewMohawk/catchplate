@@ -11,7 +11,7 @@ pub(crate) mod ordinary;
 #[path="guest_ordinary_inspection.rs"]
 pub(in crate::policy_shadow::policy_custody::services) mod ordinary_inspection;
 
-const SIGNATURE_DOMAIN: &[u8] = b"serverware.policyCustodyGuestDelivery.signature/v1\0";
+const SIGNATURE_DOMAIN: &[u8] = b"catchplate.policyCustodyGuestDelivery.signature/v1\0";
 const MAX_DELIVERY: usize = 64 * 1024;
 const MAX_CREDENTIALS: usize = 64;
 const MAX_TOTAL_CREDENTIAL_BYTES: u64 = 16 * 1024 * 1024;
@@ -178,7 +178,7 @@ fn admit_files(configuration_path:&Path,expected_configuration_sha256:Sha256Dige
     let process=Process::capture()?;
     let configuration=Original::open(configuration_path,0,0,MAX_DELIVERY,expected_configuration_sha256.clone())?;
     let cold:Configuration=exact(&configuration.read(MAX_DELIVERY)?)?;
-    if cold.api_version!="serverware.policyCustodyGuestConfiguration/v1" || cold.uid==0 || cold.gid==0
+    if cold.api_version!="catchplate.policyCustodyGuestConfiguration/v1" || cold.uid==0 || cold.gid==0
         || cold.uid==u32::MAX || cold.gid==u32::MAX
         || cold.uid==65534 || cold.gid==65534 || (64988..=64990).contains(&cold.uid)
         || (64988..=64990).contains(&cold.gid) {
@@ -199,7 +199,7 @@ fn admit_files(configuration_path:&Path,expected_configuration_sha256:Sha256Dige
     let issued=ns(&p.issued_at_boottime_ns)?;
     let startup=ns(&p.startup_deadline_boottime_ns)?;
     let lifetime=ns(&p.lifetime_deadline_boottime_ns)?;
-    if wire.api_version!="serverware.policyCustodyGuestDelivery/v1"
+    if wire.api_version!="catchplate.policyCustodyGuestDelivery/v1"
         || p.configuration_sha256!=expected_configuration_sha256 || p.authority_key_id!=cold.authority.key_id
         || p.service_role!=cold.service_role || p.uid!=cold.uid || p.gid!=cold.gid
         || decode::<16>(&p.boot_id_base64url)?!=domain.authority_boot_id()
@@ -477,7 +477,7 @@ impl Delivery {
         #[derive(Serialize)] #[serde(rename_all="camelCase")]
         struct Notice<'a> { api_version:&'static str,delivery_sha256:&'a Sha256Digest,service_role:Role,
             invocation_id:&'a str,phase:&'static str }
-        let bytes=canonical_json_bytes(&Notice { api_version:"serverware.policyCustodyGuestStartup/v1",
+        let bytes=canonical_json_bytes(&Notice { api_version:"catchplate.policyCustodyGuestStartup/v1",
             delivery_sha256:&self.delivery_sha256,service_role:self.payload.service_role,
             invocation_id:&self.payload.invocation_id,phase:"constructed" }).map_err(|_|fail("guest notice encoding failed"))?;
         self.parent.send(&bytes,self.startup)?;

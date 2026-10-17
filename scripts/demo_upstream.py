@@ -24,7 +24,7 @@ CA_CERT_PATH = CERT_DIR / "ca.pem"
 CERT_PATH = CERT_DIR / "cert.pem"
 KEY_PATH = CERT_DIR / "key.pem"
 
-app = FastAPI(title="Serverware demo upstream")
+app = FastAPI(title="Catchplate demo upstream")
 _REQUEST_COUNTS: dict[tuple[str, str], int] = {}
 _REQUEST_COUNTS_BY_RUN: dict[tuple[str, str, str], int] = {}
 _STRUCTURED_PROOF_STREAMS: dict[str, tuple[str, bytes]] = {
@@ -66,10 +66,10 @@ _STRUCTURED_PROOF_STREAMS: dict[str, tuple[str, bytes]] = {
 def _record_request(request: Request) -> None:
     key = (request.method.upper(), request.url.path)
     _REQUEST_COUNTS[key] = _REQUEST_COUNTS.get(key, 0) + 1
-    run_id = request.headers.get("x-serverware-test-run")
+    run_id = request.headers.get("x-catchplate-test-run")
     if run_id is None:
         user_agent = request.headers.get("user-agent", "")
-        prefix = "serverware-test-run/"
+        prefix = "catchplate-test-run/"
         if user_agent.startswith(prefix):
             run_id = user_agent[len(prefix) :]
     if run_id and len(run_id) <= 128 and run_id.isascii():
@@ -141,8 +141,8 @@ def ensure_cert() -> None:
     ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     ca_subject = x509.Name(
         [
-            x509.NameAttribute(NameOID.COMMON_NAME, "Serverware demo upstream CA"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Serverware demo"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "Catchplate demo upstream CA"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Catchplate demo"),
         ]
     )
     now = datetime.now(timezone.utc)
@@ -176,7 +176,7 @@ def ensure_cert() -> None:
     subject = x509.Name(
         [
             x509.NameAttribute(NameOID.COMMON_NAME, "demo-upstream"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Serverware demo"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Catchplate demo"),
         ]
     )
     cert = (
@@ -240,7 +240,7 @@ def request_view(request: Request) -> dict[str, Any]:
         }.get(authorization, "other" if authorization else None),
         "proxy_authorization": headers.get("proxy-authorization"),
         "x_api_key": headers.get("x-api-key"),
-        "serverware_agent": headers.get("x-serverware-agent"),
+        "catchplate_agent": headers.get("x-catchplate-agent"),
         "cookie": headers.get("cookie"),
     }
 
@@ -260,7 +260,7 @@ async def echo(request: Request) -> dict[str, Any]:
         actual = "sha256:" + hashlib.sha256((authorization or "").encode("utf-8")).hexdigest()
         view["authorization_matches_expected"] = hmac.compare_digest(expected.encode("utf-8"), actual.encode("ascii"))
         view["proxy_authorization_seen"] = "proxy-authorization" in request.headers
-    view["query"]["_data_plane_token_seen"] = "x-serverware-data-plane-token" in request.headers
+    view["query"]["_data_plane_token_seen"] = "x-catchplate-data-plane-token" in request.headers
     view["query"]["_cookie_seen"] = "cookie" in request.headers
     case = request.query_params.get("catalogProof")
     if case in {"full", "reflect_raw", "reflect_decoded"}:
@@ -320,8 +320,8 @@ async def stream_bytes(request: Request) -> Response:
         content=body,
         media_type="application/octet-stream",
         headers={
-            "X-Serverware-Stream-Bytes": str(len(body)),
-            "X-Serverware-Stream-Sha256": hashlib.sha256(body).hexdigest(),
+            "X-Catchplate-Stream-Bytes": str(len(body)),
+            "X-Catchplate-Stream-Sha256": hashlib.sha256(body).hexdigest(),
         },
     )
 
@@ -661,19 +661,19 @@ async def gmail_messages(request: Request) -> dict[str, Any]:
     _record_request(request)
     view = request_view(request)
     fixture_query = request.query_params.get("q") or ""
-    if "serverware-fixture-omit-internal-date" in fixture_query:
+    if "catchplate-fixture-omit-internal-date" in fixture_query:
         view["messages"] = [
             gmail_list_item("pending-message-1"),
             gmail_list_item("pending-message-2"),
         ]
-    elif "serverware-fixture-old-internal-date" in fixture_query:
+    elif "catchplate-fixture-old-internal-date" in fixture_query:
         view["messages"] = [gmail_list_item("old-list-message-1")]
-    elif "serverware-fixture-metadata-not-found" in fixture_query:
+    elif "catchplate-fixture-metadata-not-found" in fixture_query:
         view["messages"] = [
             gmail_list_item("recent-message-1"),
             gmail_list_item("missing-message-1"),
         ]
-    elif "serverware-fixture-duplicate-message-id" in fixture_query:
+    elif "catchplate-fixture-duplicate-message-id" in fixture_query:
         view["messages"] = [
             gmail_list_item("duplicate-message-1"),
             gmail_list_item("duplicate-message-1"),

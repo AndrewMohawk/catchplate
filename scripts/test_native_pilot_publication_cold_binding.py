@@ -18,9 +18,9 @@ from cryptography.exceptions import InvalidSignature
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import custody_generation_grants as codec
-from serverware import native_pilot_closure_set as closure
-from serverware import native_pilot_publication_cold_binding as cold
+from catchplate import custody_generation_grants as codec
+from catchplate import native_pilot_closure_set as closure
+from catchplate import native_pilot_publication_cold_binding as cold
 from test_native_pilot_closure_set import frame, sha, synthetic, members_fixture
 from test_native_pilot_generation_scope import fixture as generation_fixture, key_fixture, encoded, trust_key, NOW
 from test_native_pilot_genesis_bootstrap_profiles import members
@@ -29,8 +29,8 @@ from test_native_pilot_genesis_bootstrap_profiles import members
 def resign(value):
     envelope = json.loads(value["assignmentOriginal"])
     envelope["payloadSha256"] = sha(codec.canonical(envelope["payload"]))
-    preimage = (b"serverware.signedEnvelope/v1\0serverware.policyShadowAssignment/v2"
-        b"\0serverware.canonicalJson/ascii-integer-v1\0" + codec.canonical(envelope["payload"]))
+    preimage = (b"catchplate.signedEnvelope/v1\0catchplate.policyShadowAssignment/v2"
+        b"\0catchplate.canonicalJson/ascii-integer-v1\0" + codec.canonical(envelope["payload"]))
     envelope["signature"] = encoded(key_fixture("assignment")[0].sign(preimage))
     value["assignmentOriginal"] = codec.canonical(envelope).decode("ascii")
 
@@ -91,8 +91,8 @@ class ColdBindingTests(unittest.TestCase):
         genesis = json.loads(result["genesisScopeOriginal"])
         self.assertEqual(result["inputSha256"], sha(codec.canonical(self.value)))
         self.assertEqual(result["configurationBindingSha256"], frame(cold.BINDING_API, binding))
-        self.assertNotEqual(result["configurationBindingSha256"], frame("serverware.policyShadowProductionCustodyConfiguration/v2", binding))
-        self.assertEqual(proof["binding_sha256"], frame("serverware.policyShadowProductionCustodyProofScope/v2",
+        self.assertNotEqual(result["configurationBindingSha256"], frame("catchplate.policyShadowProductionCustodyConfiguration/v2", binding))
+        self.assertEqual(proof["binding_sha256"], frame("catchplate.policyShadowProductionCustodyProofScope/v2",
             [proof[name] for name in cold.retrieval.SCOPE_VALUES + cold.retrieval.SCOPE_SET_VALUES]))
         for field, role in (("store_response_authority", "custody-store-response"),
                             ("retrieval_response_authority", "custody-retrieval-response")):
@@ -110,7 +110,7 @@ class ColdBindingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             cold.prepare(raw, expected_input_sha256=synthetic("not-approved-input"),
                 boot=(self.value["window"]["bootIdBase64url"], 4, 5), now_boottime_ns=2000, now_unix_ns=NOW)
-        for changed in (dict(self.value, futureDriver={}), dict(self.value, apiVersion="serverware.nativePilotMeasuredConfigurationRecipe/v2")):
+        for changed in (dict(self.value, futureDriver={}), dict(self.value, apiVersion="catchplate.nativePilotMeasuredConfigurationRecipe/v2")):
             self.refused(changed)
         for bad in (raw + b"\n", b'{"apiVersion":"ignored",' + raw[1:], b" " * (cold.MAX_INPUT + 1)):
             with self.assertRaises(ValueError):
@@ -120,7 +120,7 @@ class ColdBindingTests(unittest.TestCase):
     def test_signed_assignment_tamper_wrong_key_domain_and_key_material_refuse(self):
         for mutate in (
             lambda e: e.update(signature=encoded(b"x" * 64)),
-            lambda e: e.update(signatureDomain="serverware.policyShadowAssignment/v1"),
+            lambda e: e.update(signatureDomain="catchplate.policyShadowAssignment/v1"),
             lambda e: e.update(signingKeyId=synthetic("unapproved-assignment-key")),
             lambda e: e["payload"].update(assignmentRevision=2),
         ):
@@ -214,7 +214,7 @@ class ColdBindingTests(unittest.TestCase):
         validator.validate(self.value)
         high = copy.deepcopy(self.value); high["window"]["timeNamespaceDevice"] = (1 << 64) - 1
         validator.validate(high)
-        for changed in (dict(self.value, apiVersion="serverware.nativePilotPublicationColdBindingInput/v2"),
+        for changed in (dict(self.value, apiVersion="catchplate.nativePilotPublicationColdBindingInput/v2"),
                 dict(self.value, driverIdentity={}), dict(self.value, initialPublicationRevision=True)):
             self.assertTrue(list(validator.iter_errors(changed)))
 

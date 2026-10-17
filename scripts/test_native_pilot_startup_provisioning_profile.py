@@ -19,7 +19,7 @@ from cryptography.exceptions import InvalidSignature
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 from scripts import test_native_pilot_startup_profile as startup_fixture
-from serverware import native_pilot_startup_provisioning_profile as profile
+from catchplate import native_pilot_startup_provisioning_profile as profile
 
 p, startup = profile.p, profile.startup
 ERRORS = (ValueError, KeyError, TypeError, InvalidSignature)

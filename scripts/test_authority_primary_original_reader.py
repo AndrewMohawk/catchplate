@@ -16,8 +16,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_primary_original_reader as source
-from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
+from catchplate import authority_primary_original_reader as source
+from catchplate.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
 from test_authority_radix_mutation import IndependentTree
 from test_authority_radix_proof import sql_json, sql_digest
 
@@ -40,7 +40,7 @@ class Cursor:
             for row in tree.rows.values():
                 selected = tree.selected(tree.key(row))
                 proof = tree.proof(selected)
-                key = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1",
+                key = sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1",
                     table.encode("ascii"), sql_json(selected["key"]))
                 self.leaves[(table, key)] = dict(key_json=sql_json(selected["key"]).decode("utf-8"),
                     row_digest=proof["rowDigest"], leaf_digest=proof["leafDigest"],
@@ -50,16 +50,16 @@ class Cursor:
         if self.pending is not None:
             raise AssertionError("synthetic result was not consumed")
         self.calls.append((sql, parameters))
-        match = re.search(r"FROM serverware_metadata\.([a-z_]+) AS target WHERE ", sql)
+        match = re.search(r"FROM catchplate_metadata\.([a-z_]+) AS target WHERE ", sql)
         if match:
             tree = self.trees[match.group(1)]
             key = dict(zip(sorted(tree.columns), parameters[:-1]))
             selected = tree.selected(key)
             rows = [{"row_value": selected["row"]}] if selected["present"] else []
-        elif "FROM serverware_metadata.policy_authority_authenticated_leaves " in sql:
+        elif "FROM catchplate_metadata.policy_authority_authenticated_leaves " in sql:
             item = self.leaves.get((parameters[0], parameters[1]))
             rows = [] if item is None else [copy.deepcopy(item)]
-        elif "FROM serverware_metadata.policy_authority_authenticated_tree_nodes " in sql:
+        elif "FROM catchplate_metadata.policy_authority_authenticated_tree_nodes " in sql:
             tree, depth = self.trees[parameters[0]], parameters[1]
             rows = [dict(path_prefix=path, node_digest=tree.nodes[(depth, path)],
                 root_revision=tree.root.root_revision) for path in parameters[2:-1] if (depth, path) in tree.nodes]

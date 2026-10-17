@@ -41,17 +41,17 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 import native_pilot_authority_io as io
-from serverware import authority_contract as contract
-from serverware import authority_credential_currentness as profile
-from serverware import authority_credential_currentness_assignment as assignment
-from serverware import authority_oauth_setup as codec
-from serverware import authority_policy_canary_policy as configuration
-from serverware import authority_request_commitment as commitment
-from serverware import control_plane_credential_currentness_assignment as cold
-from serverware import native_shadow_nitro_originals as clock
-from serverware import oauth_application_owner as originals
+from catchplate import authority_contract as contract
+from catchplate import authority_credential_currentness as profile
+from catchplate import authority_credential_currentness_assignment as assignment
+from catchplate import authority_oauth_setup as codec
+from catchplate import authority_policy_canary_policy as configuration
+from catchplate import authority_request_commitment as commitment
+from catchplate import control_plane_credential_currentness_assignment as cold
+from catchplate import native_shadow_nitro_originals as clock
+from catchplate import oauth_application_owner as originals
 
-INPUT_SCHEMA = "serverware.currentnessAssignmentSelectorInput/v1"
+INPUT_SCHEMA = "catchplate.currentnessAssignmentSelectorInput/v1"
 MAX_INPUT = MAX_OUTPUT = 16384
 SOURCE_BOUNDS = {"authorityRoot": 4096, "authorityConfiguration": contract.MAX_REQUEST_BYTES,
     "assignment": assignment.MAX_ORIGINAL_BYTES}

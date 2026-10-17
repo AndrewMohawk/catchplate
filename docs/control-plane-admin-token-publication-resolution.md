@@ -4,10 +4,10 @@ This source connects a separate, narrowly authorized terminal-observation path
 for an intact interrupted [generated-admin-token publication](control-plane-approval-verification.md#protected-generated-admin-token-publication).
 It does not replay token publication, recover token plaintext, or establish a
 tested deployment. The owner is
-[`control_plane_admin_token_resolution.py`](../serverware/control_plane_admin_token_resolution.py);
+[`control_plane_admin_token_resolution.py`](../catchplate/control_plane_admin_token_resolution.py);
 the actual HTTP route and strict request model are in
-[`app.py`](../serverware/app.py), and the predecessor-chain reader remains in
-[`control_plane_admin_token_publication.py`](../serverware/control_plane_admin_token_publication.py).
+[`app.py`](../catchplate/app.py), and the predecessor-chain reader remains in
+[`control_plane_admin_token_publication.py`](../catchplate/control_plane_admin_token_publication.py).
 
 ## Public contract and fresh authority
 
@@ -108,7 +108,7 @@ authorize archival/pruning.
 ## Result, inspection and operator boundary
 
 Success is the closed seven-field response:
-`schema: "serverware.adminTokenPublicationResolution/v1"`, `ok: true`,
+`schema: "catchplate.adminTokenPublicationResolution/v1"`, `ok: true`,
 `publicationId`, `intentSha256`, `outcome`, `resolutionCompletionSha256`, and
 `automaticRetryAllowed: false`. The route sets no-store/no-cache response
 headers. It never returns the old, new or current token. Non-authentication

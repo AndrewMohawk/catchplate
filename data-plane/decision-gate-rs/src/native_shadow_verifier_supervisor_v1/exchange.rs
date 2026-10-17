@@ -121,7 +121,7 @@ impl PendingExchange {
         let config: Configuration = serde_json::from_value(value)
             .map_err(|_| "verifier transport configuration is not closed")?;
         let pins = admission.public_transport_pins()?;
-        ensure(config.api_version == "serverware.nativeShadowVerifierPublicExchange/v1"
+        ensure(config.api_version == "catchplate.nativeShadowVerifierPublicExchange/v1"
             && config.verifier_launch_sha256 == pins.0 && config.verifier_configuration_sha256 == pins.1,
             "verifier transport does not pin the same independent launch/policy")?;
         let local: SocketAddr = config.local_address.parse().map_err(|_| "verifier transport local address invalid")?;

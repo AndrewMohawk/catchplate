@@ -1,9 +1,9 @@
 {
-  "schema": "serverware.xPostFixtures/v1",
+  "schema": "catchplate.xPostFixtures/v1",
   "adapter": "x.post.v1",
   "url": "https://api.x.com/2/tweets",
   "operation": {"operation": "tweets.write"},
-  "replacement": {"mode": "replaceExact", "expectedValue": "Bearer serverware-x-post-placeholder-v1"},
+  "replacement": {"mode": "replaceExact", "expectedValue": "Bearer catchplate-x-post-placeholder-v1"},
   "credentialBinding": {"credentialType": "oauth2", "provider": "x", "subjects": ["fixture-x-account"], "clientIds": ["fixture-x-client"], "requiredScopes": ["offline.access", "tweet.read", "tweet.write", "users.read"]},
   "request": {"allowedHeaders": ["accept", "accept-language", "content-type", "sec-fetch-mode", "user-agent"], "discardHeaders": ["accept-encoding"], "allowedQueryKeys": [], "allowedMediaTypes": ["application/json"], "maxBodyBytes": 32768, "valueRules": []},
   "response": {"mode": "xPostJsonV1", "maxBodyBytes": 1048576, "contentTypes": ["application/json"], "allowedHeaders": [], "error": {"mode": "xPostJsonV1", "maxBodyBytes": 65536, "contentTypes": ["application/json"], "allowedHeaders": [], "onInvalid": "block"}},

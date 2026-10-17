@@ -27,9 +27,9 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 _DATA = tempfile.TemporaryDirectory(prefix="jit-broker-channel-")
-os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
-os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
-os.environ["SERVERWARE_DATA_DIR"] = _DATA.name
+os.environ["CATCHPLATE_PROCESS_MODE"] = "metadata-bootstrap"
+os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
+os.environ["CATCHPLATE_DATA_DIR"] = _DATA.name
 
 
 def local_only(event, args):
@@ -48,13 +48,13 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from scripts import test_authority_jit_private_request as ingress
-from serverware import authority_contract as contract
-from serverware import native_jit_review_material as material
-from serverware import native_service_tokens as service_tokens
+from catchplate import authority_contract as contract
+from catchplate import native_jit_review_material as material
+from catchplate import native_service_tokens as service_tokens
 
 SECOND = 1_000_000_000
-CHANNEL = "serverware.nativeJitReviewChannel/v1"
-BROKER = "serverware.nativeSecretBrokerChannel/v1"
+CHANNEL = "catchplate.nativeJitReviewChannel/v1"
+BROKER = "catchplate.nativeSecretBrokerChannel/v1"
 KEY = bytes(range(32))  # Public synthetic KEK, never a KMS/native release.
 MAX_FRAME = 8 * 1024 * 1024
 IO_SECONDS = 5
@@ -78,7 +78,7 @@ def audit(event, args):
         raise RuntimeError("network unavailable")
 sys.addaudithook(audit)
 sys.path.insert(0, root)
-sys.argv = [root + "/serverware/native_secret_broker_helper.py"]
+sys.argv = [root + "/catchplate/native_secret_broker_helper.py"]
 runpy.run_path(sys.argv[0], run_name="__main__")
 '''
 
@@ -152,9 +152,9 @@ class Peer:
             "holderId", "bootId", "keyId", "controlPlaneResponseSigningKeyId", "releaseRecordSha256",
             "policyHash", "configurationSha256", "caCertificateSha256", "caPublicKeySpkiSha256", "expectedBinaryDigest")}
         identity.update(bootId=b64(b"b" * 32), policyHash=public["policy_hash"])
-        identity["holderId"] = sha(b"serverware/credential-currentness-holder/v1\0"
+        identity["holderId"] = sha(b"catchplate/credential-currentness-holder/v1\0"
             + b"b" * 32 + bytes.fromhex(identity["keyId"][7:]))
-        self.config = {"apiVersion": "serverware.nativeJitReviewConfiguration/v1",
+        self.config = {"apiVersion": "catchplate.nativeJitReviewConfiguration/v1",
             "sourceContractDigest": contract.OPERATION_MANIFEST_DIGEST,
             "controlPlaneConfigurationDigest": sha(b"synthetic configuration"),
             "deploymentId": "synthetic-offline", "instanceId": "spiffe://synthetic.invalid/native",
@@ -167,8 +167,8 @@ class Peer:
             self.process = subprocess.Popen([sys.executable, "-I", "-B", "-c", BOOTSTRAP,
                 str(child.fileno()), str(ROOT)], pass_fds=(child.fileno(),), close_fds=True,
                 stdin=subprocess.DEVNULL, stdout=self.stdout, stderr=self.stderr,
-                env={"LANG": "C.UTF-8", "SERVERWARE_PROCESS_MODE": "metadata-bootstrap",
-                    "SERVERWARE_RELEASE_CHANNEL": "dev", "SERVERWARE_DATA_DIR": _DATA.name})
+                env={"LANG": "C.UTF-8", "CATCHPLATE_PROCESS_MODE": "metadata-bootstrap",
+                    "CATCHPLATE_RELEASE_CHANNEL": "dev", "CATCHPLATE_DATA_DIR": _DATA.name})
         except BaseException:
             self.socket.close()
             self.stdout.close()
@@ -252,7 +252,7 @@ class Peer:
         self.test.assertEqual(self.receive(), {"apiVersion": BROKER, "phase": "provisioned", "requestSha256": request_digest})
 
     def service_request(self):
-        binding = {"apiVersion": "serverware.nativeServiceTokensBinding/v1",
+        binding = {"apiVersion": "catchplate.nativeServiceTokensBinding/v1",
             "instanceId": self.config["instanceId"], "dataPlaneBinaryDigest": self.config["identity"]["expectedBinaryDigest"],
             "policyHash": self.config["identity"]["policyHash"], "atomicReleaseAuthorizationEnabled": False,
             "credentialLeaseUrl": "https://synthetic.invalid/api/data-plane/credential-leases",
@@ -263,7 +263,7 @@ class Peer:
             ("credentialLeaseToken", "grantConsumeToken", "rateLimitConsumeToken", "managementToken")}
         tokens["releaseAuthorizationToken"] = None
         key = x25519.X25519PrivateKey.generate()
-        request = {"apiVersion": "serverware.nativeBrokerOpenServiceTokens/v1", "operationId": "a" * 64,
+        request = {"apiVersion": "catchplate.nativeBrokerOpenServiceTokens/v1", "operationId": "a" * 64,
             "gateRecipientPublicKey": b64(key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)),
             "gateRecipientNonce": b64(b"n" * 32), "deadlineBoottimeNs": self.deadline,
             "expectedBinding": binding, "envelope": service_tokens.seal(tokens, binding, KEY, sha(KEY))}
@@ -275,14 +275,14 @@ class Peer:
         result = self.receive()
         self.test.assertEqual(set(result), {"apiVersion", "requestSha256", "recipientPublicKey",
             "serverEphemeralPublicKey", "aeadNonce", "ciphertext"})
-        self.test.assertEqual(result["apiVersion"], "serverware.nativeServiceTokensGateCiphertext/v1")
+        self.test.assertEqual(result["apiVersion"], "catchplate.nativeServiceTokensGateCiphertext/v1")
         self.test.assertEqual(result["requestSha256"], sha(canonical(request)))
         self.test.assertEqual(result["recipientPublicKey"], request["gateRecipientPublicKey"])
-        aad = b"serverware/native-service-tokens-gate-ciphertext/v1\0" + bytes.fromhex(result["requestSha256"][7:])
+        aad = b"catchplate/native-service-tokens-gate-ciphertext/v1\0" + bytes.fromhex(result["requestSha256"][7:])
         shared = key.exchange(x25519.X25519PublicKey.from_public_bytes(unb64(result["serverEphemeralPublicKey"])))
         transport_key = HKDF(algorithm=hashes.SHA256(), length=32, salt=b"n" * 32, info=aad).derive(shared)
         plaintext = AESGCM(transport_key).decrypt(unb64(result["aeadNonce"]), unb64(result["ciphertext"]), aad)
-        self.test.assertTrue(plaintext == canonical({"apiVersion": "serverware.nativeServiceTokens/v1", "tokens": tokens}),
+        self.test.assertTrue(plaintext == canonical({"apiVersion": "catchplate.nativeServiceTokens/v1", "tokens": tokens}),
             "actual service-token reply did not decrypt to the original fixture")
         self.test.assertTrue(all(value is None or value.encode() not in canonical(result) for value in tokens.values()),
             "service token escaped outside encrypted transport")
@@ -396,7 +396,7 @@ class NativeJitBrokerChannelTests(unittest.TestCase):
                 elif change == "timestamp":
                     command["issuedAtEpochNs"] = float(command["issuedAtEpochNs"])
                 elif change == "other-purpose":
-                    command["apiVersion"] = "serverware.nativeOAuthRefreshChannel/v1"
+                    command["apiVersion"] = "catchplate.nativeOAuthRefreshChannel/v1"
                 peer.send(command)
                 peer.closed()
 

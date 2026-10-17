@@ -98,7 +98,7 @@ release compilation and actual gate startup/client acceptance were executed.
 This is **private synthetic metadata acceptance**, not real npm account access,
 public registry/DNS acceptance, installation, publication, or production release.
 No real provider was contacted. The implementation is now deployed in the
-[retained operator demo pair](../docker/serverware-operator-demo/README.md#current-notification-enabled-deployment):
+[retained operator demo pair](../docker/catchplate-operator-demo/README.md#current-notification-enabled-deployment):
 app `577badff` and actual executable `2bfe5e38`. That code-only rollout preserved
 the fixture-only allowlist and all saved resources; it did not create an npm
 connection or execute another proxy request. All retained application tokens

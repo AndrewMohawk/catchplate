@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-egress-installation-authorization.v4.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-egress-installation-authorization.v4.schema.json",
   "title": "Explicit new-execution native egress parent constraints v4",
   "description": "Closed canonical sorted compact ensure_ascii JSON including escaped DEL, no LF, at most 32768 bytes and depth 6. Ed25519 signs the exact v4 payload-schema ASCII, NUL, then canonical payload bytes. An independently supplied cold profile selects v4; incoming fields, old journal records and diagnostics cannot select or upgrade authority. Versions 1-3 remain unchanged and reject the new workload profile. These authenticated parent constraints are not child creation, start, attachment, guardian or runtime-success authority.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "payload", "signature"],
   "properties": {
-    "schema": {"const": "serverware.signedNativeEgressInstallationAuthorization/v4"},
+    "schema": {"const": "catchplate.signedNativeEgressInstallationAuthorization/v4"},
     "payload": {"$ref": "#/$defs/payload"},
     "signature": {"$ref": "native-egress-installation-authorization.v1.schema.json#/properties/signature"}
   },
@@ -35,7 +35,7 @@
       "additionalProperties": false,
       "required": ["schema", "sourceRevision", "purpose", "trustMode", "authorizationId", "setupSha256", "delegationSha256", "targetRequestSha256", "policyRequirementsSha256", "releaseRecordSha256", "policyHash", "configurationSha256", "runtimeCaCertificateSha256", "runtimeCaSpkiSha256", "ingressLeafCertificateSha256", "clientTrustBundleSha256", "clientChallengeSha256", "targetPrincipalId", "targetNonce", "targetSpkiSha256", "proxy", "networkOwner", "machineIdSha256", "workload", "ruleset", "capability", "journal", "creationJournal", "childNetworkPolicy", "issuedAtEpochNs", "expiresAtEpochNs"],
       "properties": {
-        "schema": {"const": "serverware.nativeEgressInstallationAuthorization/v4"},
+        "schema": {"const": "catchplate.nativeEgressInstallationAuthorization/v4"},
         "sourceRevision": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/payload/properties/sourceRevision"},
         "purpose": {"const": "native-egress-installation"},
         "trustMode": {"const": "trusted-host-local"},

@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/native-bootstrap-client.v10.schema.json",
+  "$id": "https://catchplate.dev/schemas/native-bootstrap-client.v10.schema.json",
   "title": "Fixed native bootstrap host installer with authenticated Setup readback",
   "type": "object", "additionalProperties": false,
   "required": ["apiVersion", "endpoint", "timeoutMilliseconds", "startupEvidence", "startupExpectations", "sessionScope", "trustRoots", "clientCertificate", "clientPrivateKey", "callerIssuer", "delegationAuthorizer", "setupAuthorizer", "request", "clientChallengeBase64url", "expectedCallerPrincipal", "expectedTargetPrincipal", "expectedTargetNonce", "expectedTargetRequestSha256", "installation", "setupInstallationObservation"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeBootstrapClient/v10"},
+    "apiVersion": {"const": "catchplate.nativeBootstrapClient/v10"},
     "endpoint": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/endpoint"},
     "timeoutMilliseconds": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/timeoutMilliseconds"},
     "startupEvidence": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/startupEvidence"},
@@ -35,7 +35,7 @@
   "$defs": {
     "capture": {"type": "object", "additionalProperties": false,
       "required": ["apiVersion", "resultScope", "okForAction", "configurationSha256", "requestSha256", "endpoint", "challengeSource", "evidenceBase64url", "verification", "installation", "setupInstallationObservationOriginal"],
-      "properties": {"apiVersion": {"const": "serverware.nativeBootstrapClientCapture/v10"}, "resultScope": {"const": "local-authenticated-setup-ca-readback"}, "okForAction": {"const": false},
+      "properties": {"apiVersion": {"const": "catchplate.nativeBootstrapClientCapture/v10"}, "resultScope": {"const": "local-authenticated-setup-ca-readback"}, "okForAction": {"const": false},
         "configurationSha256": {"$ref": "setup-native-ca-installation.v1.schema.json#/$defs/digest"}, "requestSha256": {"$ref": "setup-native-ca-installation.v1.schema.json#/$defs/digest"},
         "endpoint": {"type": "string"}, "challengeSource": {"const": "independently-pinned"}, "evidenceBase64url": {"type": "string"}, "verification": {"type": "object"},
         "installation": {"$ref": "native-ca-installation-receipt.v1.schema.json"}, "setupInstallationObservationOriginal": {"$ref": "setup-native-ca-installation.v1.schema.json#/$defs/observationOriginal"}}}

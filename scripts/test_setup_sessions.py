@@ -29,31 +29,31 @@ def digest_value(value: str) -> str:
 
 
 def configure_sqlite(data_dir: str) -> None:
-    os.environ["SERVERWARE_DATA_DIR"] = data_dir
-    os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
-    os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
-    os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-    os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
-    os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
+    os.environ["CATCHPLATE_DATA_DIR"] = data_dir
+    os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
+    os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
+    os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+    os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
+    os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
 
 
 def configure_postgres(base_dsn: str, data_dir: str) -> str:
     import psycopg
 
-    schema = f"serverware_setup_test_{uuid.uuid4().hex}"
+    schema = f"catchplate_setup_test_{uuid.uuid4().hex}"
     with psycopg.connect(base_dsn, autocommit=True) as conn:
         conn.execute(f'CREATE SCHEMA "{schema}"')
     separator = "&" if "?" in base_dsn else "?"
     dsn = f"{base_dsn}{separator}options={quote(f'-csearch_path={schema}', safe='')}"
-    os.environ["SERVERWARE_DATA_DIR"] = data_dir
-    os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
-    os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
-    os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "postgres"
-    os.environ["SERVERWARE_METADATA_STORE_POSTGRES_DSN"] = dsn
-    os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "postgres"
-    os.environ["SERVERWARE_GRANT_STORE_POSTGRES_DSN"] = dsn
-    os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "postgres"
-    os.environ["SERVERWARE_AUDIT_STORE_POSTGRES_DSN"] = dsn
+    os.environ["CATCHPLATE_DATA_DIR"] = data_dir
+    os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
+    os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
+    os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "postgres"
+    os.environ["CATCHPLATE_METADATA_STORE_POSTGRES_DSN"] = dsn
+    os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "postgres"
+    os.environ["CATCHPLATE_GRANT_STORE_POSTGRES_DSN"] = dsn
+    os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "postgres"
+    os.environ["CATCHPLATE_AUDIT_STORE_POSTGRES_DSN"] = dsn
     return schema
 
 
@@ -159,9 +159,9 @@ def setup_evidence(
     kind: str, suffix: str, *, verifier_key_id: str = "verifier:test"
 ) -> list[dict[str, Any]]:
     receipt_kinds = {
-        "enrollment_verification": "serverware.setupEnrollmentVerification/v1",
-        "hardware_assurance": "serverware.setupHardwareVerification/v1",
-        "final_challenge_receipt": "serverware.setupFinalChallengeReceipt/v1",
+        "enrollment_verification": "catchplate.setupEnrollmentVerification/v1",
+        "hardware_assurance": "catchplate.setupHardwareVerification/v1",
+        "final_challenge_receipt": "catchplate.setupFinalChallengeReceipt/v1",
     }
     document = {"receipt": suffix, "verified": True}
     if kind in receipt_kinds:
@@ -1321,7 +1321,7 @@ def exercise_authenticated_receipt_ledger(db: Any) -> None:
         == enrollment_receipt["evidence_digest"]
         and session["enrollment_verifier_key_id"] == "verifier:test"
         and enrollment_receipt["document"]["kind"]
-        == "serverware.setupEnrollmentVerification/v1"
+        == "catchplate.setupEnrollmentVerification/v1"
         and enrollment_receipt["document"]["signature"]["value"]
         == "signed:receipt-ledger:enrollment_verification"
     ):
@@ -1413,7 +1413,7 @@ def exercise_authenticated_receipt_ledger(db: Any) -> None:
         and hardware_loaded["hardware_assurance_digest"]
         != hardware_receipt["evidence_digest"]
         and hardware_receipt["document"]["kind"]
-        == "serverware.setupHardwareVerification/v1"
+        == "catchplate.setupHardwareVerification/v1"
         and hardware_receipt["document"]["signature"]["value"]
         == "signed:receipt-ledger:hardware"
     ):
@@ -1842,7 +1842,7 @@ def main() -> None:
         else:
             configure_sqlite(tmp)
         try:
-            from serverware import db
+            from catchplate import db
 
             exercise_idempotent_schema(db)
             exercise_capacity_race(db)

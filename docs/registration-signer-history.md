@@ -1,7 +1,7 @@
 # Historical registration signer subject
 
 The separate private
-[`authority_webauthn_registration_signer_history._verify_subject_on_configuration`](../serverware/authority_webauthn_registration_signer_history.py)
+[`authority_webauthn_registration_signer_history._verify_subject_on_configuration`](../catchplate/authority_webauthn_registration_signer_history.py)
 reconstructs a registration subject from the original signer request-eight and
 response-two, including when their original controls have expired. Existing
 live signer and subject verifiers retain their expiry checks unchanged. This

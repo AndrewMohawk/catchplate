@@ -64,9 +64,9 @@ def main(argv=None):
         selected = arguments(argv)
     except (ValueError, TypeError):
         print("local trust commit refused: use --help", file=sys.stderr); return 2
-    from serverware.authority_local_trust_commit import LocalArtifactTrustCommit
-    from serverware.authority_artifact_spec import canonical_json_bytes
-    from serverware.authority_local_install import _owning
+    from catchplate.authority_local_trust_commit import LocalArtifactTrustCommit
+    from catchplate.authority_artifact_spec import canonical_json_bytes
+    from catchplate.authority_local_install import _owning
     owner = None
     def cancelled(signo, frame):
         raise KeyboardInterrupt()

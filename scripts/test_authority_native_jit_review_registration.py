@@ -34,8 +34,8 @@ def no_external_effects(event, _arguments):
 
 
 if __name__ == "__main__":
-    os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
-    os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
+    os.environ["CATCHPLATE_PROCESS_MODE"] = "metadata-bootstrap"
+    os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
     sys.addaudithook(no_external_effects)
 
 from cryptography.hazmat.primitives import serialization
@@ -43,11 +43,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from scripts import test_authority_local_configuration as configuration_fixture
 from scripts import test_authority_native_jit_review_custody as custody_fixture
 from scripts.authority import generate_artifact_bundle as generator
-from serverware import authority_service as service
+from catchplate import authority_service as service
 
 FIELD = "nativeJitReviewCustodyPolicy"
-PAYLOAD_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v6"
-ENVELOPE_SCHEMA = "serverware.signedPolicyAuthorityServiceConfiguration/v6"
+PAYLOAD_SCHEMA = "catchplate.policyAuthorityServiceConfiguration/v6"
+ENVELOPE_SCHEMA = "catchplate.signedPolicyAuthorityServiceConfiguration/v6"
 
 
 def canonical(value):
@@ -75,8 +75,8 @@ class NativeJitReviewAuthorityPolicyTests(unittest.TestCase):
         from scripts import test_authority_native_jit_review_open as reviewer
         from scripts import test_native_jit_review_open_owner as native
         from scripts import test_oidc_activation_request_dispatch as roots
-        from serverware import authority_native_jit_review_service_policy as policy
-        from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+        from catchplate import authority_native_jit_review_service_policy as policy
+        from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
         cls.policy, cls.work_type, cls.limits = policy, _ValidationWork, QueryReadValidationLimits
         pki = custody_fixture.SyntheticNitro()
         opening = native.Fixture(pki, native.historical.Fixture(pki))
@@ -93,7 +93,7 @@ class NativeJitReviewAuthorityPolicyTests(unittest.TestCase):
         cls.original[policy.FIELD] = dict(schema=policy.SCHEMA,
             sourceContractDigest=policy.authority.OPERATION_MANIFEST_DIGEST,
             authenticationPolicy=selected.authn, trustPolicy=selected.trust,
-            stateEndpoint=dict(socketPath="/run/serverware/current-root/state.sock",
+            stateEndpoint=dict(socketPath="/run/catchplate/current-root/state.sock",
                 requestTimeoutSeconds=5, listenerUid=0, listenerGid=0))
 
     def setUp(self):
@@ -123,7 +123,7 @@ class NativeJitReviewAuthorityPolicyTests(unittest.TestCase):
         self.assertEqual(actual.authentication_policy, before[self.policy.FIELD]["authenticationPolicy"])
         self.assertEqual(actual.trust_policy, before[self.policy.FIELD]["trustPolicy"])
         self.assertIs(actual.enrollment_original, self.enrollment)
-        self.assertEqual(actual.state_configuration, ("/run/serverware/current-root/state.sock", 5, 0, 0))
+        self.assertEqual(actual.state_configuration, ("/run/catchplate/current-root/state.sock", 5, 0, 0))
         self.assertEqual(self.payload, before)
         actual.authentication_policy["allowedAuthenticatorClasses"].clear()
         actual.trust_policy["roots"][0]["aaguids"].clear()
@@ -246,7 +246,7 @@ class NativeJitRegistrationTests(unittest.TestCase):
         envelope = {"schema": ENVELOPE_SCHEMA, "payload": payload,
             "signature": custody_fixture.encoded(signature)}
         raw = canonical(envelope)
-        generation = {"schema": "serverware.authorityGenerationLaunchContext/v4",
+        generation = {"schema": "catchplate.authorityGenerationLaunchContext/v4",
             "digest": sha(b"synthetic registration launch input, not admission"),
             "sequence": payload["generationSequence"],
             "configurationBindingDigest": payload["generationBindingDigest"],
@@ -260,9 +260,9 @@ class NativeJitRegistrationTests(unittest.TestCase):
             "roleBindingDigests": copy.deepcopy(payload["roleBindingDigests"])}
         if generation_change is not None:
             generation_change(generation)
-        originals = {"SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY": self.root.public_key().public_bytes(
+        originals = {"CATCHPLATE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY": self.root.public_key().public_bytes(
             serialization.Encoding.Raw, serialization.PublicFormat.Raw),
-            "SERVERWARE_POLICY_AUTHORITY_CONFIG": raw}
+            "CATCHPLATE_POLICY_AUTHORITY_CONFIG": raw}
 
         def read_original(name, *, maximum, require_root_owned, require_descriptor=False):
             self.assertIs(require_root_owned, True)
@@ -332,13 +332,13 @@ class NativeJitRegistrationTests(unittest.TestCase):
                 self.assertEqual(self.boundary_payloads[-1], payload)
                 self.assertEqual(canonical(payload), original)
         self.assertEqual(len(self.boundary_payloads), 2)
-        self.assertEqual(self.descriptor_reads, ["SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY",
-            "SERVERWARE_POLICY_AUTHORITY_CONFIG"] * 2)
+        self.assertEqual(self.descriptor_reads, ["CATCHPLATE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY",
+            "CATCHPLATE_POLICY_AUTHORITY_CONFIG"] * 2)
 
     def test_full_generator_and_signed_loader_join_authority_and_opening_policies_before_runtime_refusal(self):
         from scripts import test_authority_native_jit_review_open as reviewer
         from scripts import test_native_jit_review_open_owner as native
-        from serverware import authority_native_jit_review_service_policy as authority_policy
+        from catchplate import authority_native_jit_review_service_policy as authority_policy
         pki = custody_fixture.SyntheticNitro()
         opening = native.Fixture(pki, native.historical.Fixture(pki))
         audience = self.payload["webauthn"]
@@ -349,7 +349,7 @@ class NativeJitRegistrationTests(unittest.TestCase):
         self.payload[authority_policy.FIELD] = dict(schema=authority_policy.SCHEMA,
             sourceContractDigest=authority_policy.authority.OPERATION_MANIFEST_DIGEST,
             authenticationPolicy=selected.authn, trustPolicy=selected.trust,
-            stateEndpoint=dict(socketPath="/run/serverware/current-root/state.sock",
+            stateEndpoint=dict(socketPath="/run/catchplate/current-root/state.sock",
                 requestTimeoutSeconds=5, listenerUid=0, listenerGid=0))
         original = canonical(self.payload)
         self.assertEqual(self.generate(self.payload),
@@ -360,8 +360,8 @@ class NativeJitRegistrationTests(unittest.TestCase):
         self.assertEqual(self.boundary_payloads, [self.payload])
         self.assertEqual(canonical(self.payload), original)
         self.assertNotIn("currentRootEnrollment", self.payload[authority_policy.FIELD])
-        self.assertEqual(self.descriptor_reads, ["SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY",
-            "SERVERWARE_POLICY_AUTHORITY_CONFIG"])
+        self.assertEqual(self.descriptor_reads, ["CATCHPLATE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY",
+            "CATCHPLATE_POLICY_AUTHORITY_CONFIG"])
 
     def test_real_signed_loader_rejects_null_malformed_or_misnamed_policy_before_admission(self):
         for index, policy in enumerate((None, {}, {**self.policy, "extra": True},
@@ -413,7 +413,7 @@ class NativeJitReviewServiceBoundaryTests(unittest.TestCase):
     """Disabled/invalid startup only; these do not fake a cold admitted owner."""
 
     def test_unstarted_owner_is_refused_before_receiving_a_session_token(self):
-        from serverware import authority_native_jit_review_service as opening
+        from catchplate import authority_native_jit_review_service as opening
         with patch.object(opening.transport, "recv_request") as receive:
             with self.assertRaises(opening.NativeReviewServiceError):
                 opening.serve_process(object(), None, deadline_ns=1,
@@ -421,7 +421,7 @@ class NativeJitReviewServiceBoundaryTests(unittest.TestCase):
             receive.assert_not_called()
 
     def test_absent_policy_does_not_load_an_enrollment_or_signer(self):
-        from serverware import authority_native_jit_review_service as opening
+        from catchplate import authority_native_jit_review_service as opening
         process = object.__new__(service.AuthorityProcess)
         process.role_name = "planner"
         process.configuration = service.MeasuredConfiguration(payload={}, digest="", root_key=None)
@@ -437,7 +437,7 @@ class NativeJitReviewServiceBoundaryTests(unittest.TestCase):
             opening._OWNERS.pop(process, None)
 
     def test_absent_policy_rejects_ambient_enrollment_instead_of_selecting_it(self):
-        from serverware import authority_native_jit_review_service as opening
+        from catchplate import authority_native_jit_review_service as opening
         process = object.__new__(service.AuthorityProcess)
         process.role_name = "planner"
         process.configuration = service.MeasuredConfiguration(payload={}, digest="", root_key=None)

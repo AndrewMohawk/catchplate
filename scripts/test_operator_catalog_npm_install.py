@@ -22,8 +22,8 @@ import test_operator_workspace_store as workspace
 ROOT = Path(__file__).resolve().parents[1]
 ACTOR = "operator-npm-install-catalog-test"
 BUNDLE = "npm_install_v1"
-PACKAGES = ["@serverware/fixture", "serverware-fixture"]
-GATE = {"schema": "serverware.operatorNpmInstallGate/v1", "adapter": "npm.install.v1",
+PACKAGES = ["@catchplate/fixture", "catchplate-fixture"]
+GATE = {"schema": "catchplate.operatorNpmInstallGate/v1", "adapter": "npm.install.v1",
     "modes": ["metadata", "tarball", "audit"]}
 CURRENT = object()
 
@@ -84,14 +84,14 @@ class Fixture(shared.Fixture):
             "application_id": application["id"], "credential_id": credential["id"]}
         if publish:
             payload = self.inputs.NpmPublishRuleInput(**fields, operation_bundle="npm_publish_v1",
-                package="serverware-fixture", tag="latest", publishing_window=None)
+                package="catchplate-fixture", tag="latest", publishing_window=None)
             return self.call(self.mutations.create_npm_publish_rule, payload, ACTOR)
         payload = self.inputs.NpmMetadataRuleInput(**fields, operation_bundle="npm_metadata_read_v1", packages=PACKAGES)
         return self.call(self.mutations.create_npm_rule, payload, ACTOR)
 
 
 def signed_lifecycle():
-    from serverware import npm_install
+    from catchplate import npm_install
     f = Fixture()
     initial_policy = f.signed()
     before = f.snapshot()[1:]
@@ -110,7 +110,7 @@ def signed_lifecycle():
         assert route["match"] == {"scheme": "https", "host": "registry.npmjs.org", "port": 443,
             "methods": ["POST" if mode == "audit" else "GET"], "paths": expected_paths[mode]}
         assert route["credentialRef"] == credential["id"] and route["principals"] == [app["principal_id"]]
-        assert route["credentialHeader"] == {"mode": "replaceExact", "expectedValue": "Bearer serverware-npm-placeholder-v1"}
+        assert route["credentialHeader"] == {"mode": "replaceExact", "expectedValue": "Bearer catchplate-npm-placeholder-v1"}
         cfg = route["adapter"]["config"]
         assert route["adapter"]["type"] == "npm.install.v1"
         assert set(cfg) == {"credentialBinding", "packages", "mode", "request", "response"}
@@ -124,7 +124,7 @@ def signed_lifecycle():
     assert status["capabilities"]["npm_install"]["dependencies_require_explicit_grant"] is True
     assert status["capabilities"]["npm"]["operation_bundles"] == ["npm_metadata_read_v1"]
     f.privacy(status)
-    from serverware import operator_notification_events as events
+    from catchplate import operator_notification_events as events
     with closing(f.db.connect()) as conn:
         conn.execute("PRAGMA query_only=ON")
         conn.execute("BEGIN")
@@ -243,7 +243,7 @@ class PureInstallTests(unittest.TestCase):
             "packages": list(PACKAGES)}
 
     def test_closed_input_and_explicit_dependency_names(self):
-        from serverware.operator_catalog_inputs import NpmInstallRuleInput
+        from catchplate.operator_catalog_inputs import NpmInstallRuleInput
         self.assertEqual(NpmInstallRuleInput(**self.fields()).packages, PACKAGES)
         for changes in ({"packages": []}, {"packages": ["*"]}, {"packages": ["pkg", "pkg"]},
                 {"packages": ["z", "a"]}, {"packages": sorted("pkg" + str(i) for i in range(65))},
@@ -254,16 +254,16 @@ class PureInstallTests(unittest.TestCase):
                 NpmInstallRuleInput(**{**self.fields(), **changes})
 
     def test_exact_gate_descriptor(self):
-        from serverware.operator_catalog_npm_install import gate_descriptor_matches
+        from catchplate.operator_catalog_npm_install import gate_descriptor_matches
         self.assertTrue(gate_descriptor_matches(deepcopy(GATE)))
         for value in (None, {}, {**GATE, "operation": "npm.install"}, {**GATE, "modes": ["audit", "metadata", "tarball"]},
                 {**GATE, "modes": ("metadata", "tarball", "audit")}, {**GATE, "modes": ["metadata", "tarball"]}):
             self.assertFalse(gate_descriptor_matches(value))
 
     def test_derived_shape_and_all_registry_overlap(self):
-        from serverware import operator_catalog_npm_install as install
-        from serverware.operator_catalog_inputs import NpmInstallRuleInput
-        from serverware.operator_catalog_schema import CatalogIntegrityError
+        from catchplate import operator_catalog_npm_install as install
+        from catchplate.operator_catalog_inputs import NpmInstallRuleInput
+        from catchplate.operator_catalog_schema import CatalogIntegrityError
         row = {**install.record_fields(NpmInstallRuleInput(**self.fields())), "status": "active"}
         for changes in ({"methods": ["GET"]}, {"query_mode": None}, {"request_body_mode": "preserve_json_v1"},
                 {"response_mode": "unfiltered_json"}, {"allowed_headers": ["content-encoding"]}, {"packages": ["*"]}):
@@ -280,12 +280,12 @@ class PureInstallTests(unittest.TestCase):
 class ConnectedInstallTests(unittest.TestCase):
     def setUp(self):
         workspace.common.OperatorDemoPersistenceTests.setUp(self)
-        self.environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.example.com","https://registry.npmjs.org"]'
+        self.environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.example.com","https://registry.npmjs.org"]'
 
     def run_worker(self, name):
         environment = dict(self.environment)
         if name == "destination":
-            environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.example.com"]'
+            environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.example.com"]'
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", name],
             cwd=ROOT, env=environment, capture_output=True, text=True, timeout=90)
         if result.returncode:

@@ -33,7 +33,7 @@ def digest(raw):
 
 
 def upstream_fixture():
-    from serverware import operator_upstream_setup as setup
+    from catchplate import operator_upstream_setup as setup
     actor = "operator-contract-migration-synthetic"
     review = setup.review(actor)
     operation = str(uuid.uuid4())
@@ -55,7 +55,7 @@ def seed(source, directory):
     sys.path[:0] = [str(source / "scripts"), str(source)]
     import test_operator_workspace_store as fixture
     os.environ.update(fixture.common._ENVIRONMENT)
-    os.environ["SERVERWARE_DATA_DIR"] = str(directory)
+    os.environ["CATCHPLATE_DATA_DIR"] = str(directory)
     config, db, store, bundles, schema, inputs, mutations = fixture.workspace()
     credential = fixture.create_credential(db, store, schema, inputs, mutations)["credential"]
     application = fixture.create_application(db, store, schema, inputs, mutations)["application"]
@@ -63,7 +63,7 @@ def seed(source, directory):
     fixture.verify_signed(config, db, store, bundles)
     upstream_fixture()
     require(all(Path(module.__file__).resolve().is_relative_to(source) for name, module in tuple(sys.modules.items())
-        if name == "serverware" or name.startswith("serverware.")))
+        if name == "catchplate" or name.startswith("catchplate.")))
     print('{"syntheticOldSourceInitialized":true,"resources":3}')
 
 
@@ -73,12 +73,12 @@ def cold_start(directory):
     if not directory.is_relative_to("/tmp") or not directory.is_dir():
         raise ValueError("synthetic cold-start path refused")
     for name in tuple(os.environ):
-        if name.startswith("SERVERWARE_"):
+        if name.startswith("CATCHPLATE_"):
             del os.environ[name]
     sys.path[:0] = ["/app/scripts", "/app"]
     import test_operator_workspace_store as fixture
     os.environ.update(fixture.common._ENVIRONMENT)
-    os.environ["SERVERWARE_DATA_DIR"] = str(directory)
+    os.environ["CATCHPLATE_DATA_DIR"] = str(directory)
     config, db, store, bundles, _schema, _inputs, _mutations = fixture.workspace()
     fixture.verify_signed(config, db, store, bundles)
     print('{"syntheticMainColdStart":true}')
@@ -87,19 +87,19 @@ def cold_start(directory):
 def derive(source):
     os.umask(0o077)
     for name in tuple(os.environ):
-        if name.startswith("SERVERWARE_"):
+        if name.startswith("CATCHPLATE_"):
             del os.environ[name]
     source = Path(source).resolve(strict=True)
-    if str(source) != "/app" or any(name == "serverware" or name.startswith("serverware.") for name in sys.modules):
+    if str(source) != "/app" or any(name == "catchplate" or name.startswith("catchplate.") for name in sys.modules):
         raise ValueError("isolated source selection refused")
     sys.path[:0] = [str(source / "scripts"), str(source)]
     import test_operator_demo_persistence as fixture
     with tempfile.TemporaryDirectory(prefix="operator-contract-fixture-") as temporary:
         os.environ.update(fixture._ENVIRONMENT)
-        os.environ["SERVERWARE_DATA_DIR"] = str(Path(temporary) / "data")
+        os.environ["CATCHPLATE_DATA_DIR"] = str(Path(temporary) / "data")
         config, db, store, _bundles = fixture.backend()
-        from serverware import authority_contract
-        from serverware.authority_store import metadata_schema_source
+        from catchplate import authority_contract
+        from catchplate.authority_store import metadata_schema_source
         with closing(sqlite3.connect(config.DB_PATH)) as conn:
             conn.row_factory = sqlite3.Row
             tables = sorted(row[0] for row in conn.execute("SELECT name FROM sqlite_schema WHERE type='table'"))
@@ -138,14 +138,14 @@ def derive(source):
                 raise ValueError("synthetic recovery witness is not empty")
         closure = {}
         for name, module in tuple(sys.modules.items()):
-            if name == "serverware" or name.startswith("serverware."):
+            if name == "catchplate" or name.startswith("catchplate."):
                 path = Path(module.__file__).resolve(strict=True)
                 relative = str(path.relative_to(source))
                 closure[relative] = digest(path.read_bytes())
         return {"sourceContractDigest": contract["source_contract_digest"],
             "operationManifestDigest": authority_contract.OPERATION_MANIFEST_DIGEST,
             "sourceRevision": authority_contract.SOURCE_REVISION, "schemaVersion": authority_contract.SCHEMA_VERSION,
-            "sourceDdlSha256": digest((source / "serverware/authority_store/metadata_schema_source.py").read_bytes()),
+            "sourceDdlSha256": digest((source / "catchplate/authority_store/metadata_schema_source.py").read_bytes()),
             "structuralManifestDigest": manifest_digest, "structuralManifestJsonSha256": digest(manifest.encode()),
             "sqliteObjectsSha256": digest(canonical(objects)), "tables": tables, "emptyTables": empty,
             "optionalSqliteObjectsSha256": digest(canonical(optional_objects)), "optionalTables": optional_tables,
@@ -157,13 +157,13 @@ class MigrationTests(unittest.TestCase):
     def setUpClass(cls):
         os.umask(0o077)
         for name in tuple(os.environ):
-            if name.startswith("SERVERWARE_"):
+            if name.startswith("CATCHPLATE_"):
                 del os.environ[name]
         cls.temporary = tempfile.TemporaryDirectory(prefix="operator-migration-tests-")
         cls.base = Path(cls.temporary.name)
         cls.seed_path = cls.base / "seed"
         result = subprocess.run([sys.executable, "-B", __file__, "--seed", "/previous-app", str(cls.seed_path)],
-            env={name: value for name, value in os.environ.items() if not name.startswith("SERVERWARE_")},
+            env={name: value for name, value in os.environ.items() if not name.startswith("CATCHPLATE_")},
             capture_output=True, timeout=50)
         if result.returncode != 0:
             raise AssertionError("old synthetic seed failed: " + result.stderr.decode()[-3000:])
@@ -179,7 +179,7 @@ class MigrationTests(unittest.TestCase):
         self.directory = self.base / self._testMethodName
         shutil.copytree(self.seed_path, self.directory)
         self.backup = self.base / (self._testMethodName + ".backup")
-        shutil.copyfile(self.directory / "serverware.sqlite3", self.backup)
+        shutil.copyfile(self.directory / "catchplate.sqlite3", self.backup)
         self.backup.chmod(0o600)
         self.m = self.migration
 
@@ -192,7 +192,7 @@ class MigrationTests(unittest.TestCase):
 
     @contextmanager
     def db(self):
-        with closing(sqlite3.connect(self.directory / "serverware.sqlite3")) as conn, conn:
+        with closing(sqlite3.connect(self.directory / "catchplate.sqlite3")) as conn, conn:
             yield conn
 
     def snapshot(self):
@@ -211,9 +211,9 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(receipt["beforeContract"]["source_contract_digest"], self.pinned["old"]["sourceContractDigest"])
         self.assertEqual(receipt["afterContract"]["source_contract_digest"], self.pinned["target"]["sourceContractDigest"])
         after = self.snapshot()
-        self.assertEqual({key: value for key, value in before.items() if key != "serverware.sqlite3"},
-            {key: value for key, value in after.items() if key != "serverware.sqlite3"})
-        self.assertEqual(self.backup.read_bytes(), before["serverware.sqlite3"])
+        self.assertEqual({key: value for key, value in before.items() if key != "catchplate.sqlite3"},
+            {key: value for key, value in after.items() if key != "catchplate.sqlite3"})
+        self.assertEqual(self.backup.read_bytes(), before["catchplate.sqlite3"])
         with self.db() as conn:
             conn.row_factory = sqlite3.Row
             actual = self.m.inspect(conn, self.pinned, self.helpers,
@@ -229,9 +229,9 @@ class MigrationTests(unittest.TestCase):
             with self.db() as conn:
                 conn.row_factory = sqlite3.Row
                 prior_migrations = {row["migration"]: dict(row) for row in conn.execute(
-                    "SELECT rowid,* FROM serverware_store_migrations ORDER BY migration")}
+                    "SELECT rowid,* FROM catchplate_store_migrations ORDER BY migration")}
             child = subprocess.run([sys.executable, "-B", __file__, "--cold-start", str(self.directory)],
-                env={name: value for name, value in os.environ.items() if not name.startswith("SERVERWARE_")},
+                env={name: value for name, value in os.environ.items() if not name.startswith("CATCHPLATE_")},
                 capture_output=True, timeout=40)
             self.assertEqual(child.returncode, 0, "fresh main-source synthetic initialization refused")
             self.assertEqual(child.stdout, b'{"syntheticMainColdStart":true}\n')
@@ -240,7 +240,7 @@ class MigrationTests(unittest.TestCase):
                 current = self.m.inspect(conn, self.pinned, self.helpers,
                     expected_digest=self.pinned["target"]["sourceContractDigest"])
                 current_migrations = {row["migration"]: dict(row) for row in conn.execute(
-                    "SELECT rowid,* FROM serverware_store_migrations ORDER BY migration")}
+                    "SELECT rowid,* FROM catchplate_store_migrations ORDER BY migration")}
                 name = "policy_candidate_authority"
                 prior_time = datetime.fromisoformat(prior_migrations[name]["applied_at"])
                 current_time = datetime.fromisoformat(current_migrations[name]["applied_at"])
@@ -250,7 +250,7 @@ class MigrationTests(unittest.TestCase):
                 current_migrations[name]["applied_at"] = prior_migrations[name]["applied_at"]
                 self.assertEqual(current_migrations, prior_migrations)
                 self.assertEqual([name for name in current["rows"] if current["rows"][name] != reviewed["rows"][name]],
-                    ["serverware_store_migrations"], "only the existing startup timestamp may refresh")
+                    ["catchplate_store_migrations"], "only the existing startup timestamp may refresh")
             self.assertEqual(self.m.tree(self.directory), reviewed["files"])
 
     def test_every_transaction_failure_restores_exact_guard_rows_and_file(self):
@@ -270,7 +270,7 @@ class MigrationTests(unittest.TestCase):
 
     def test_unknown_digest_and_changed_native_schema_refused(self):
         reviewed = self.plan()
-        trigger = self.helpers[0]._policy_candidate_authority_object_name("serverware", self.m.CONTRACT_TABLE,
+        trigger = self.helpers[0]._policy_candidate_authority_object_name("catchplate", self.m.CONTRACT_TABLE,
             "immutable", "update")
         with self.db() as conn:
             sql = conn.execute("SELECT sql FROM sqlite_schema WHERE name=?", (trigger,)).fetchone()[0]
@@ -281,7 +281,7 @@ class MigrationTests(unittest.TestCase):
         with self.assertRaises(self.m.Refused):
             self.plan()
         self.assertEqual(self.snapshot(), before)
-        shutil.copyfile(self.backup, self.directory / "serverware.sqlite3")
+        shutil.copyfile(self.backup, self.directory / "catchplate.sqlite3")
         with self.db() as conn:
             conn.execute("ALTER TABLE approval_requests ADD COLUMN unreviewed TEXT")
         with self.assertRaises(self.m.Refused):
@@ -297,7 +297,7 @@ class MigrationTests(unittest.TestCase):
         with self.assertRaises(self.m.Refused):
             self.plan()
         self.assertEqual(self.snapshot(), before)
-        shutil.copyfile(self.backup, self.directory / "serverware.sqlite3")
+        shutil.copyfile(self.backup, self.directory / "catchplate.sqlite3")
         reviewed = self.plan()
         self.assertTrue(all(reviewed["rows"][name]["count"] == 0 for name in self.pinned["target"]["emptyTables"]))
         witness = self.directory / "webauthn-recovery-witness.sqlite3"
@@ -313,7 +313,7 @@ class MigrationTests(unittest.TestCase):
             conn.execute("UPDATE operator_catalog_state SET revision=revision+1")
         with self.assertRaises(self.m.Refused):
             self.apply(reviewed)
-        shutil.copyfile(self.backup, self.directory / "serverware.sqlite3")
+        shutil.copyfile(self.backup, self.directory / "catchplate.sqlite3")
         with self.db() as conn:
             conn.execute("CREATE TABLE unreviewed_table(value TEXT)")
         with self.assertRaises(self.m.Refused):
@@ -384,7 +384,7 @@ class MigrationTests(unittest.TestCase):
             self.plan()
         marker.write_bytes(raw)
         marker.chmod(0o600)
-        sidecar = self.directory / "serverware.sqlite3-wal"
+        sidecar = self.directory / "catchplate.sqlite3-wal"
         sidecar.write_bytes(b"synthetic stale WAL")
         with self.assertRaises(self.m.Refused):
             self.plan()
@@ -394,7 +394,7 @@ class MigrationTests(unittest.TestCase):
             with self.assertRaises((OSError, self.m.Refused)):
                 self.plan()
         reviewed = self.plan()
-        conn = sqlite3.connect(self.directory / "serverware.sqlite3")
+        conn = sqlite3.connect(self.directory / "catchplate.sqlite3")
         try:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute("UPDATE operator_catalog_state SET revision=revision+1")

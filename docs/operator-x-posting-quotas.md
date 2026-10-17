@@ -84,7 +84,7 @@ The correction at `94b7f755` adds two real signed-metadata/lease regression
 groups. Its first test compilation stopped on a missed borrow of the now-owned
 injection plan in the existing Gmail fanout initializer; no tests executed.
 The failed build and successful owned-container cleanup remain in
-`serverware-x-quota-rust.Wg85qphg`. The follow-up restores that explicit borrow
+`catchplate-x-quota-rust.Wg85qphg`. The follow-up restores that explicit borrow
 without changing quota, Gmail or forwarding semantics; compilation and runtime
 acceptance were still required at that checkpoint.
 
@@ -95,7 +95,7 @@ The signed audit preflight correctly rejected the fixture after its real
 configuration reload lost a test-only quota selection. No audit guard was
 relaxed, no normal executable was published, and the live instance was not
 changed. The failed test output and successful container cleanup are retained
-in `serverware-x-quota-rust.btsZVUPw`; fixture repair and a fresh test run were
+in `catchplate-x-quota-rust.btsZVUPw`; fixture repair and a fresh test run were
 required before continuing.
 
 At `06ffbeb7`, the test-only selection survives the real profile reload without
@@ -148,10 +148,10 @@ retained-data rollout were then still required.
 
 The next fault attempt, `x-quota-fault-drop-healthfix.qxqHLbQD`, admitted the
 relay but the normal proxy refused startup: its fixed ordinary lease URL is
-`http://serverware:3000/api/data-plane/credential-leases`, while the fixture
+`http://catchplate:3000/api/data-plane/credential-leases`, while the fixture
 had substituted port 3001. No SDK ran; cleanup succeeded after 48.426 seconds.
 The proxy's admission guard is unchanged. The repaired fault-only fixture
-instead gives the gate a fixed loopback hosts mapping: `serverware` resolves
+instead gives the gate a fixed loopback hosts mapping: `catchplate` resolves
 to the raw relay at `127.0.0.2:3000`, which forwards to the app bound at
 `127.0.0.1:3000`. Control stays separate at `127.0.0.1:3001`. All required
 control-plane URLs and raw Host, request and response bytes stay unchanged.
@@ -277,7 +277,7 @@ no limit; explicit null and non-integer values are invalid. Valid limits are
 The limit covers the verified X account across applications, credential IDs,
 OAuth clients and token generations. All active grants for the same account
 must agree, including whether a limit exists. Replacing an app, refreshing a
-token, disconnecting/reconnecting the account or restarting Serverware does
+token, disconnecting/reconnecting the account or restarting Catchplate does
 not reset the counter. The period is a UTC calendar day. An explicit operator
 change to unrestricted access is a policy change; posts during that interval
 are not retrospectively counted.
@@ -286,14 +286,14 @@ This counts posting **attempts**, not successful tweets. An outstanding
 reservation temporarily occupies capacity. Immediately before sending, the
 proxy claims it durably and once. A claimed attempt remains charged if the
 provider fails, the outcome is unknown or the claim acknowledgement is lost.
-Serverware does not automatically repeat that claim or post. An unclaimed
+Catchplate does not automatically repeat that claim or post. An unclaimed
 reservation expires within its original five-second limit and before the
 UTC day ends. Neither claiming nor refreshing extends that deadline.
 
 ## Deployment boundary
 
 The optional `docker-compose.x-post-quota.yml` layer enables
-`SERVERWARE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED=1` in both the app and gate.
+`CATCHPLATE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED=1` in both the app and gate.
 It requires the existing ordinary managed-X runtime and curated gate, with
 matching app and Rust implementations. The flag defaults to `0`. It does not
 configure an OAuth application, approve an upstream or connect a real account.

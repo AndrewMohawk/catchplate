@@ -38,9 +38,9 @@ class Fixture(reauth_tests.Fixture):
         # constructor that initializes an externally configured Google profile.
         runtime = managed_tests.Fixture()
         self.__dict__.update(vars(runtime))
-        from serverware import operator_catalog_oauth, operator_google_reauthorization
-        from serverware import operator_google_reauthorization_store, operator_google_cleanup_store
-        from serverware import operator_google_managed_readiness
+        from catchplate import operator_catalog_oauth, operator_google_reauthorization
+        from catchplate import operator_google_reauthorization_store, operator_google_cleanup_store
+        from catchplate import operator_google_managed_readiness
         self.consent, self.lifecycle = operator_catalog_oauth, operator_google_reauthorization
         self.durable, self.cleanup_store = operator_google_reauthorization_store, operator_google_cleanup_store
         self.readiness = operator_google_managed_readiness
@@ -367,8 +367,8 @@ def legacy_off(_request):
 class ManagedConsentTests(unittest.TestCase):
     def setUp(self):
         managed_tests.ManagedGoogleConfigurationTests.setUp(self)
-        self.environment.update({"SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST": health_tests.BINARY,
-            "SERVERWARE_DECISION_GATE_BASE": "http://127.0.0.1:9091", "SERVERWARE_ADMIN_TOKEN": consent_tests.ADMIN})
+        self.environment.update({"CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST": health_tests.BINARY,
+            "CATCHPLATE_DECISION_GATE_BASE": "http://127.0.0.1:9091", "CATCHPLATE_ADMIN_TOKEN": consent_tests.ADMIN})
         prepared = self.worker("prepare")
         self.worker("activate", prepared)
 
@@ -399,7 +399,7 @@ class ManagedConsentTests(unittest.TestCase):
 class LegacyConsentTests(unittest.TestCase):
     def setUp(self):
         consent_tests.OperatorGoogleConsentTests.setUp(self)
-        self.environment.update({managed_tests.FLAG: "0", "SERVERWARE_DECISION_GATE_BASE": "http://127.0.0.1:9091"})
+        self.environment.update({managed_tests.FLAG: "0", "CATCHPLATE_DECISION_GATE_BASE": "http://127.0.0.1:9091"})
 
     worker = ManagedConsentTests.worker
 

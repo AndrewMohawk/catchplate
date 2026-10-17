@@ -84,7 +84,7 @@ the legacy process/v4 host factory remains separate and cannot be used as a
 successful native fallback.
 
 The bootstrap and constructed admission signatures use the existing
-`serverware.signedEnvelope/v1` ASCII/integer preimage with their distinct named
+`catchplate.signedEnvelope/v1` ASCII/integer preimage with their distinct named
 domains. Public acquisition/hashes are not signature verification. A parent's
 `retained` or `live` reply is only authenticated observation, not new authority.
 The gate uses its real `EnvelopeKeyTrust` and `TrustedTime`, never issuer wall

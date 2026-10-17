@@ -99,7 +99,7 @@ surviving terminal owner and complete lifecycle remain separate work; see the
 The [output owner](../data-plane/decision-gate-rs/src/body_output_v12.rs) exclusively
 creates this mode-0700 root-owned directory within the admitted output tmpfs:
 
-| Path below `.serverware-controller-output-v12/` | Meaning |
+| Path below `.catchplate-controller-output-v12/` | Meaning |
 | --- | --- |
 | `stdout.bin` | Actual captured stdout bytes, including a valid empty stream |
 | `stderr.bin` | Actual captured stderr bytes, including a valid empty stream |
@@ -116,7 +116,7 @@ snapshots and exact inventories are checked after exit/collection.
 Signed payload paths are literal printable ASCII, at most 4096 bytes and 32
 components, with components at most 255 bytes. Empty/dot/parent components,
 duplicate paths, file/ancestor collisions and a root component beginning
-`.serverware-controller-` are rejected rather than normalized. There are at most
+`.catchplate-controller-` are rejected rather than normalized. There are at most
 256 paths. The closed payload tree includes exactly those leaves and their
 directories plus the fixed controller directory. Legacy worker-root terminal
 aliases are rejected, including when listed as expected payload paths; there is
@@ -165,7 +165,7 @@ by file-size arithmetic or an assumption that publication will have space.
 
 The [manifest contract](../data-plane/decision-gate-rs/src/body_output_contract_v12.rs)
 is compact ASCII JSON with exactly `files` and `schema`, where schema is
-`serverware.controllerBodyOutputs/v12`. Files are sorted lexicographically by
+`catchplate.controllerBodyOutputs/v12`. Files are sorted lexicographically by
 path. Each record has exactly the sorted fields `bytes`, `path` and `sha256`;
 the digest is a lowercase `sha256:` string. There is no trailing newline.
 `outputManifestSha256` is SHA-256 of those exact bytes.

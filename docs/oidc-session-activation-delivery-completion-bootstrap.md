@@ -11,7 +11,7 @@ between the worker and its separately admitted private caller.
 
 The signed envelope, payload and launch use dedicated
 `signedOidcSessionActivationDeliveryCompletionBootstrap/v1`,
-`oidcSessionActivationDeliveryCompletionBootstrap/v1` serverware schemas.
+`oidcSessionActivationDeliveryCompletionBootstrap/v1` catchplate schemas.
 Nested `oidcSessionActivationDeliveryCompletionLaunch/v1` remains the private
 packet-selector profile. Distinct nested
 `oidcSessionActivationDeliveryCompletionLaunch/v2` has the same closed fields

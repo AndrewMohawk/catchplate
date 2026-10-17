@@ -1,6 +1,6 @@
 # Historical registration caller authorization
 
-The private [`_verify_historical_on_work`](../serverware/authority_registration_execution_authorization.py)
+The private [`_verify_historical_on_work`](../catchplate/authority_registration_execution_authorization.py)
 authenticates an original caller authorization for
 `webauthn.registration.evidence.admit`, including an expired original. It does
 **not** make that authorization executable again. The existing live

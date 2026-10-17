@@ -23,13 +23,13 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
 
-from serverware import native_pilot_bridge_runtime_policy as policy
-from serverware import native_pilot_bridge_runtime_profile as profile
-from serverware import native_pilot_peer_preparation as peers
-from serverware import native_pilot_bridge_preparation as preparation
-from serverware import native_pilot_service_authority as services
-from serverware import native_pilot_supervisor_current_head_profile as current_heads
-from serverware import native_shadow_driver_outgoing as outgoing
+from catchplate import native_pilot_bridge_runtime_policy as policy
+from catchplate import native_pilot_bridge_runtime_profile as profile
+from catchplate import native_pilot_peer_preparation as peers
+from catchplate import native_pilot_bridge_preparation as preparation
+from catchplate import native_pilot_service_authority as services
+from catchplate import native_pilot_supervisor_current_head_profile as current_heads
+from catchplate import native_shadow_driver_outgoing as outgoing
 from test_native_pilot_current_head import WINDOW_DOMAIN
 from test_native_pilot_current_head_intake import fixture as current_fixture
 from test_native_pilot_endpoint_commissioning import peer as bridge_peer
@@ -57,7 +57,7 @@ def fragment():
             if name != "processIdentitySha256"})
         external[role] = {"expectedSocketPath": "/run/synthetic-external-" + role + "/listener.sock",
             "expectedPeer": peer}
-    return {"apiVersion": "serverware.nativePilotSupervisorBridgeRuntimePolicy/v1", "startupTimeoutMillis": 30000,
+    return {"apiVersion": "catchplate.nativePilotSupervisorBridgeRuntimePolicy/v1", "startupTimeoutMillis": 30000,
         "peerExpectations": expectations, "historyCredentials": {role: "bridge-history-" + role for role in ROLES},
         "authorityBindings": bindings, "externalSignerEndpoints": external}
 
@@ -77,7 +77,7 @@ def _projection_fixture():
     peer = ordinary[ROLES[0]]["header"]["expectedPeer"]
     config = json.loads(args["driver_configuration_raw"])
     public = key_fixture("SYNTHETIC bridge C9 authority")[1]
-    cold = {"apiVersion": "serverware.policyCustodyGuestConfiguration/v1", "serviceRole": "production-bridge",
+    cold = {"apiVersion": "catchplate.policyCustodyGuestConfiguration/v1", "serviceRole": "production-bridge",
         "uid": peer["uid"], "gid": peer["gid"], "authority": {
             "publicKeyBase64url": public["publicKeyBase64url"],
             "keyId": sha(profile.p.decoded(public["publicKeyBase64url"], size=32))}}
@@ -104,9 +104,9 @@ def _projection_fixture():
         "processStartTimeTicks": peer["startTimeTicks"], "pidfdInode": 9001, "cgroupId": 9,
         "cgroupMountId": peer["cgroupMountId"], "cgroupInode": peer["cgroupInode"],
         "retainedDescriptorManifestSha256": labelled("SYNTHETIC retained descriptors"), "verifiedAtBoottimeNanos": 1200}
-    driver["identitySha256"] = profile.p.framed(b"serverware.policyShadowCustodyKernelDriverIdentity/v1",
+    driver["identitySha256"] = profile.p.framed(b"catchplate.policyShadowCustodyKernelDriverIdentity/v1",
         (canonical(list(driver.values())),))
-    observed = {"apiVersion": "serverware.nativeShadowDriverObservation/v1", "configurationSha256": sha(config_raw),
+    observed = {"apiVersion": "catchplate.nativeShadowDriverObservation/v1", "configurationSha256": sha(config_raw),
         "windowSha256": sha(window_raw), "invocationId": window["invocationId"], "processId": peer["pid"],
         "uid": peer["uid"], "gid": peer["gid"], "cgroupOriginalSha256": labelled("SYNTHETIC cgroup original"),
         "root": {"syntheticPrechecked": True}, "seccompFilterCount": 1, "descriptors": [], "driver": driver}
@@ -123,10 +123,10 @@ def _projection_fixture():
     groups["native-endpoints"]["sourceOriginalSha256"] = sha(cohort_raw)
     gate_peer = groups["gate"]["peers"]["gate"]
     gate_peer["targetExecutable"]["sha256"] = config["lifecycle"]["gate"]["executableSha256"]
-    gate = {"apiVersion": "serverware.nativeShadowDriverGateBound/v1", "configurationSha256": sha(config_raw),
+    gate = {"apiVersion": "catchplate.nativeShadowDriverGateBound/v1", "configurationSha256": sha(config_raw),
         "windowSha256": sha(window_raw), "bootstrapObservationSha256": sha(observed_raw),
         "gateExecutableSha256": gate_peer["targetExecutable"]["sha256"], "binding": {
-            "apiVersion": "serverware.nativeShadowDriverLifecycleBound/v1", "preparedSha256": labelled("SYNTHETIC gate preparation"),
+            "apiVersion": "catchplate.nativeShadowDriverLifecycleBound/v1", "preparedSha256": labelled("SYNTHETIC gate preparation"),
             "gateProcessId": gate_peer["processId"], "gateStartTimeTicks": gate_peer["startTimeTicks"],
             "uid": 65534, "gid": 65534, "observedAtBoottimeNs": "1200"}}
     for field, kind in preparation.PEER_FIELDS:
@@ -140,7 +140,7 @@ def _projection_fixture():
         public = key_fixture("SYNTHETIC bridge public authority/" + source_roles[role])[1]
         native[role] = {"guest": {"uid": 50000 + index, "gid": 50000 + index},
             "key": public | {"role": profile._KEY_ROLE[role]}, "expectedPeer": copy.deepcopy(peer)}
-    control = {"apiVersion": "serverware.nativeShadowDriverBootstrapControl/v1",
+    control = {"apiVersion": "catchplate.nativeShadowDriverBootstrapControl/v1",
         "supervisorExecutableSha256": labelled("SYNTHETIC supervisor executable"),
         "configurationSha256": sha(config_raw), "windowSha256": sha(window_raw)}
     return dict(fragment=selected, current_context=context, heads=heads, ordinary=ordinary, native=native,
@@ -177,7 +177,7 @@ class BridgeCompositionControls(unittest.TestCase):
             elif change == "extra-role": bad["externalSignerEndpoints"]["lineage-replay"] = copy.deepcopy(
                 bad["externalSignerEndpoints"]["unavailable-ingress"])
             elif change == "duplicate-name": bad["authorityBindings"]["retrieval"]["authorityBindingCredential"] = bad["historyCredentials"][ROLES[0]]
-            elif change == "legacy": bad["apiVersion"] = "serverware.nativePilotSupervisorBridgeRuntimePolicy/v0"
+            elif change == "legacy": bad["apiVersion"] = "catchplate.nativePilotSupervisorBridgeRuntimePolicy/v0"
             else: bad["startupTimeoutMillis"] = 30001
             with self.subTest(change=change), self.assertRaises(ValueError): policy.validate_policy(bad)
 
@@ -200,7 +200,7 @@ class BridgeCompositionControls(unittest.TestCase):
             selected["cgroupMountId"].to_bytes(8, "big"), selected["cgroupInode"].to_bytes(8, "big"),
             selected["securityLabelSha256"].encode("ascii"), selected["configurationGenerationSha256"].encode("ascii")))
         from test_native_pilot_ordinary_keys import framed
-        self.assertEqual(selected["processIdentitySha256"], framed(b"serverware.policyCustodyPeerProcessIdentity/v4", parts))
+        self.assertEqual(selected["processIdentitySha256"], framed(b"catchplate.policyCustodyPeerProcessIdentity/v4", parts))
         for bad in (expectations | {"pid": 123}, {"securityLabelSha256": expectations["securityLabelSha256"]}):
             with self.assertRaises(ValueError): policy.build_peer(observed, ids, bad)
         for bad in (observed | {"uid": ids["uid"]}, observed | {"ready": True}):
@@ -216,8 +216,8 @@ class BridgeCompositionControls(unittest.TestCase):
         self.assertEqual(set(bundle), {"apiVersion", "driverControlSha256", "driverObservationOriginal",
             "runtimeOriginal", "outgoingOriginal"})
         runtime_raw = bundle["runtimeOriginal"].encode("ascii")
-        runtime, other, native = outgoing._selection(runtime_raw, "serverware.nativeProofBridgeLaunch/v7", 1001)
-        self.assertEqual(runtime["apiVersion"], "serverware.policyCustodyProductionRpcRuntime/v11")
+        runtime, other, native = outgoing._selection(runtime_raw, "catchplate.nativeProofBridgeLaunch/v7", 1001)
+        self.assertEqual(runtime["apiVersion"], "catchplate.policyCustodyProductionRpcRuntime/v11")
         self.assertEqual((len(other), len(native)), (9, 10))
         self.assertEqual({name for name, _ in other}, set(profile.SERVICE_ACTIVATIONS.values())
             | {profile.SIGNER_ACTIVATIONS[role] for role in EXTERNAL})
@@ -230,7 +230,7 @@ class BridgeCompositionControls(unittest.TestCase):
         self.assertEqual(runtime["helperBootstrap"]["deadline"], helper["handshakes"][0]["request"]["deadline"])
         selected = json.loads(bundle["outgoingOriginal"])
         self.assertEqual(selected["runtime"], {"path": profile.install.RUNTIME_DESTINATION, "sha256": sha(runtime_raw)})
-        self.assertEqual(selected["bridgeLaunchVersion"], "serverware.nativeProofBridgeLaunch/v7")
+        self.assertEqual(selected["bridgeLaunchVersion"], "catchplate.nativeProofBridgeLaunch/v7")
         self.assertEqual(selected["driverObservationSha256"], sha(args["driver_observation_raw"]))
         self.assertEqual(bundle["driverControlSha256"], sha(args["bootstrap_originals"]["control"]))
         self.assertEqual(args, before)
@@ -266,21 +266,21 @@ class BridgeCompositionControls(unittest.TestCase):
         policy.validate_policy(args["fragment"])
         bundle = json.loads(profile._project(**args))
         raw = bundle["runtimeOriginal"].encode("ascii")
-        runtime, other, native = outgoing._selection(raw, "serverware.nativeProofBridgeLaunch/v8", 1001)
-        self.assertEqual(runtime["apiVersion"], "serverware.policyCustodyProductionRpcRuntime/v12")
+        runtime, other, native = outgoing._selection(raw, "catchplate.nativeProofBridgeLaunch/v8", 1001)
+        self.assertEqual(runtime["apiVersion"], "catchplate.policyCustodyProductionRpcRuntime/v12")
         self.assertEqual((len(other), len(native)), (9, 10))
         self.assertEqual(json.loads(bundle["outgoingOriginal"])["bridgeLaunchVersion"],
-            "serverware.nativeProofBridgeLaunch/v8")
+            "catchplate.nativeProofBridgeLaunch/v8")
         for role, item in args["ordinary"].items():
             self.assertEqual(runtime["ordinaryInitialHistories"][role], {
                 "runtimeOriginal": item["runtime_raw"].decode("ascii"),
                 "generationGrantOriginal": item["grant_raw"].decode("ascii"),
                 "historyOriginal": item["history_raw"].decode("ascii")})
         with self.assertRaises(ValueError):
-            outgoing._selection(raw, "serverware.nativeProofBridgeLaunch/v7", 1001)
-        runtime["apiVersion"] = "serverware.policyCustodyProductionRpcRuntime/v11"
+            outgoing._selection(raw, "catchplate.nativeProofBridgeLaunch/v7", 1001)
+        runtime["apiVersion"] = "catchplate.policyCustodyProductionRpcRuntime/v11"
         with self.assertRaises(ValueError):
-            outgoing._selection(canonical(runtime), "serverware.nativeProofBridgeLaunch/v7", 1001)
+            outgoing._selection(canonical(runtime), "catchplate.nativeProofBridgeLaunch/v7", 1001)
 
     def test_projection_refuses_substituted_authority_peer_journal_and_head(self):
         original = projection_fixture()

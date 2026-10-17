@@ -65,7 +65,7 @@ fn modified_original_binding_is_not_repaired_by_the_query() {
 #[test]
 fn query_version_and_closed_camel_case_fields_are_exact() {
     let original=query(begin(10,20,30));
-    let mut wrong=original.clone();wrong.api_version="serverware.nativeCompletedInvocationQuery/v2".into();
+    let mut wrong=original.clone();wrong.api_version="catchplate.nativeCompletedInvocationQuery/v2".into();
     assert!(wrong.validate().is_err());
     let mut value=serde_json::to_value(&original).unwrap();
     assert!(value.get("cleanupNotBeforeBoottimeNanos").is_some());
@@ -97,7 +97,7 @@ fn explicit_publication_query_is_required_for_recovery() {
     assert!(value.publication_selected());
     assert_eq!(value.proof_api(),PUBLICATION_PROOF_API);
     assert!(value.validate().is_ok());
-    value.api_version="serverware.nativeCompletedInvocationQuery/v3".into();
+    value.api_version="catchplate.nativeCompletedInvocationQuery/v3".into();
     assert!(value.validate().is_err());
 }
 

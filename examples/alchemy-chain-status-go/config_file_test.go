@@ -15,19 +15,19 @@ var configTestNow = time.UnixMilli(1800000000000)
 func downloadForTest() map[string]any {
 	env := environment()
 	return map[string]any{
-		"application_id": env["SERVERWARE_APP_ID"], "access_rule_id": "22222222-2222-4222-8222-222222222222",
-		"proxy_url": env["SERVERWARE_PROXY_URL"], "proxy_authentication": "basic_and_bearer_v1",
-		"proxy_username": env["SERVERWARE_APP_ID"], "proxy_password": env["SERVERWARE_PROXY_TOKEN"],
+		"application_id": env["CATCHPLATE_APP_ID"], "access_rule_id": "22222222-2222-4222-8222-222222222222",
+		"proxy_url": env["CATCHPLATE_PROXY_URL"], "proxy_authentication": "basic_and_bearer_v1",
+		"proxy_username": env["CATCHPLATE_APP_ID"], "proxy_password": env["CATCHPLATE_PROXY_TOKEN"],
 		"token_expires_at_epoch_ms": configTestNow.Add(time.Hour).UnixMilli(),
-		"ca_file":                   "./serverware-ca.pem", "proxy_ca_file": "certs/proxy.pem",
+		"ca_file":                   "./catchplate-ca.pem", "proxy_ca_file": "certs/proxy.pem",
 		"operation_bundle": "alchemy_chain_status_read_v1", "chain": "eth-mainnet",
 		"upstream_url": "https://eth-mainnet.g.alchemy.com/v2", "methods": []string{"POST"},
 		"rpc_methods":               []string{"eth_chainId", "eth_blockNumber"},
 		"request_headers":           map[string]string{"Authorization": "inert-provider-canary"},
 		"request_body":              map[string]string{"method": "eth_sendRawTransaction", "text": "inert-file-post"},
-		"SERVERWARE_X_POST_CONFIRM": "post-once", "SERVERWARE_X_POST_TEXT": "inert-file-post",
+		"CATCHPLATE_X_POST_CONFIRM": "post-once", "CATCHPLATE_X_POST_TEXT": "inert-file-post",
 		"client_recipe": map[string]any{"entrypoint": "do-not-execute", "sdk_auth_token": "inert-provider-canary",
-			"environment": map[string]string{"SERVERWARE_X_POST_TEXT": "inert-file-post", "SERVERWARE_X_POST_CONFIRM": "post-once"}},
+			"environment": map[string]string{"CATCHPLATE_X_POST_TEXT": "inert-file-post", "CATCHPLATE_X_POST_CONFIRM": "post-once"}},
 	}
 }
 
@@ -55,8 +55,8 @@ func TestDownloadedConfigurationUsesOnlyConnectionAndScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, err := readConfig(getenv)
-	if err != nil || c.appID != environment()["SERVERWARE_APP_ID"] || c.proxyToken != environment()["SERVERWARE_PROXY_TOKEN"] ||
-		c.caFile != filepath.Join(filepath.Dir(path), "serverware-ca.pem") ||
+	if err != nil || c.appID != environment()["CATCHPLATE_APP_ID"] || c.proxyToken != environment()["CATCHPLATE_PROXY_TOKEN"] ||
+		c.caFile != filepath.Join(filepath.Dir(path), "catchplate-ca.pem") ||
 		c.proxyCAFile != filepath.Join(filepath.Dir(path), "certs", "proxy.pem") {
 		t.Fatal("downloaded connection does not match")
 	}
@@ -69,12 +69,12 @@ func TestDownloadedConfigurationUsesOnlyConnectionAndScope(t *testing.T) {
 	value["ca_file"], value["proxy_ca_file"] = "/synthetic/absolute.pem", nil
 	path = writeConfiguration(t, value)
 	getenv, err = configurationEnvironment([]string{"--config", path}, func(key string) string {
-		if key == "SERVERWARE_PROXY_CA_FILE" || key == "SERVERWARE_PROXY_TOKEN" {
+		if key == "CATCHPLATE_PROXY_CA_FILE" || key == "CATCHPLATE_PROXY_TOKEN" {
 			return "ambient-canary"
 		}
 		return localEnvironment(key)
 	}, configTestNow)
-	if err != nil || getenv("SERVERWARE_CA_FILE") != "/synthetic/absolute.pem" || getenv("SERVERWARE_PROXY_CA_FILE") != "" {
+	if err != nil || getenv("CATCHPLATE_CA_FILE") != "/synthetic/absolute.pem" || getenv("CATCHPLATE_PROXY_CA_FILE") != "" {
 		t.Fatal("absolute CA or absent optional CA did not remain explicit")
 	}
 }
@@ -159,7 +159,7 @@ func TestDownloadedConfigurationFileAndCLI(t *testing.T) {
 	}
 	env := environment()
 	getenv, err := configurationEnvironment(nil, func(key string) string { return env[key] }, configTestNow)
-	if err != nil || getenv("SERVERWARE_PROXY_TOKEN") != env["SERVERWARE_PROXY_TOKEN"] {
+	if err != nil || getenv("CATCHPLATE_PROXY_TOKEN") != env["CATCHPLATE_PROXY_TOKEN"] {
 		t.Fatal("environment mode changed")
 	}
 	if _, err := readConfig(getenv); err != nil {

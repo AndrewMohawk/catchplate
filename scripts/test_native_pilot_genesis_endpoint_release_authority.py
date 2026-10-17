@@ -18,22 +18,22 @@ from cryptography.exceptions import InvalidSignature
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_genesis_closure_authority as closure
-from serverware import native_pilot_genesis_endpoint_control as control
-from serverware import native_pilot_genesis_endpoint_release_authority as authority
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_genesis_closure_authority as closure
+from catchplate import native_pilot_genesis_endpoint_control as control
+from catchplate import native_pilot_genesis_endpoint_release_authority as authority
 import test_native_pilot_genesis_closure_authority as closure_tests
 import test_native_pilot_genesis_key_authority as key_tests
 import test_native_pilot_genesis_parent_authority as parents
 
 p = g.p
-DOMAIN = "serverware.nativePublicationGenesisEndpointRelease.signature/v1"
+DOMAIN = "catchplate.nativePublicationGenesisEndpointRelease.signature/v1"
 
 
 def independent_signed(payload, key, *, domain=DOMAIN):
-    message = (b"serverware.signedEnvelope/v1\0" + domain.encode("ascii")
-        + b"\0serverware.canonicalJson/ascii-integer-v1\0" + g.canonical(payload))
-    return g.canonical({"apiVersion": "serverware.nativePublicationGenesisEndpointRelease/v1",
+    message = (b"catchplate.signedEnvelope/v1\0" + domain.encode("ascii")
+        + b"\0catchplate.canonicalJson/ascii-integer-v1\0" + g.canonical(payload))
+    return g.canonical({"apiVersion": "catchplate.nativePublicationGenesisEndpointRelease/v1",
         "payload": payload, "signatureBase64url": p.encoded(key.sign(message))})
 
 
@@ -50,14 +50,14 @@ def fixture():
         closure_input = closure_tests.input_for(keys, role)
         prepared = closure.prepare_input(role, p.canonical(closure_input), **clocks)
         closure_raw = closure_tests.independently_signed(prepared, keys["supervisor_key"])
-        inner = {"apiVersion": "serverware.nativeShadowGuestLaunch/v1",
+        inner = {"apiVersion": "catchplate.nativeShadowGuestLaunch/v1",
             **{name: parents.pin("unexecuted-" + role + "-" + name) for name in authority.parent.LAUNCH_PINS}}
         inner.update(deliveryConfiguration=configuration["services"][role]["deliveryConfiguration"],
             delivery=parents.pin(role + "-C9", p.sha(keys["deliveries"][role]["raw"])),
             closure=parents.pin(role + "-closure", p.sha(closure_raw)),
             trust=parents.pin("trust", p.sha(binding["trustOriginal"].encode("ascii"))),
             assignment=parents.pin("assignment", p.sha(binding["assignmentOriginal"].encode("ascii"))))
-        inner["verifierTransport"]["path"] = "/etc/serverware/native-pilot-inputs/native-" + role + "-verifier.json"
+        inner["verifierTransport"]["path"] = "/etc/catchplate/native-pilot-inputs/native-" + role + "-verifier.json"
         api, native_field = authority.LAUNCHES[role]
         launch = {"apiVersion": api, "keyAdmission": inner, native_field: parents.pin("unexecuted-" + role + "-native-grant")}
         launch_raw = g.canonical(launch)
@@ -115,7 +115,7 @@ class GenesisEndpointReleaseAuthorityTests(unittest.TestCase):
     def test_separate_release_authority_and_domain_cannot_be_replaced_by_supervisor(self):
         payload = self.prepare()["payload"]
         for raw in (independent_signed(payload, self.f["keys"]["supervisor_key"]),
-                independent_signed(payload, self.f["key"], domain="serverware.nativePublicationGenesisParentRelease.signature/v1")):
+                independent_signed(payload, self.f["key"], domain="catchplate.nativePublicationGenesisParentRelease.signature/v1")):
             with self.assertRaises(InvalidSignature):
                 self.check(raw)
 
@@ -134,7 +134,7 @@ class GenesisEndpointReleaseAuthorityTests(unittest.TestCase):
     def test_role_launch_pin_c9_closure_assignment_and_fixed_verifier_joins_refuse_drift(self):
         role = authority.ROLES[0]
         mutations = (
-            lambda launch: launch.update(apiVersion="serverware.nativeShadowRetrievalGuestLaunch/v1"),
+            lambda launch: launch.update(apiVersion="catchplate.nativeShadowRetrievalGuestLaunch/v1"),
             lambda launch: launch["keyAdmission"]["delivery"].update(sha256=key_tests.labelled("different C9")),
             lambda launch: launch["keyAdmission"]["closure"].update(sha256=key_tests.labelled("different closure")),
             lambda launch: launch["keyAdmission"]["assignment"].update(sha256=key_tests.labelled("different assignment")),
@@ -177,7 +177,7 @@ class GenesisEndpointReleaseAuthorityTests(unittest.TestCase):
         self.assertEqual(self.prepare(value)["epochLimit"], ceiling)
 
     def test_closed_exact_two_member_input_and_output_pin(self):
-        for mutate in (lambda value: value.update(apiVersion="serverware.nativePilotGenesisParentAuthorityInput/v1"),
+        for mutate in (lambda value: value.update(apiVersion="catchplate.nativePilotGenesisParentAuthorityInput/v1"),
                 lambda value: value.update(payloadOriginal="{}"),
                 lambda value: value["services"].pop(authority.ROLES[1]),
                 lambda value: value["services"].update(publicationGenesisCoordinator=value["services"][authority.ROLES[0]])):

@@ -28,7 +28,7 @@ import (
 
 const (
 	gmailHost  = "gmail.googleapis.com"
-	dummyToken = "serverware-gmail-placeholder-v1" // Public, not a Google credential.
+	dummyToken = "catchplate-gmail-placeholder-v1" // Public, not a Google credential.
 	pageSize   = 5
 	maxPages   = 2
 )
@@ -47,9 +47,9 @@ type config struct {
 }
 
 func readConfig(getenv func(string) string) (config, error) {
-	c := config{appID: getenv("SERVERWARE_APP_ID"), proxyToken: getenv("SERVERWARE_PROXY_TOKEN"),
-		caFile: getenv("SERVERWARE_CA_FILE"), proxyCAFile: getenv("SERVERWARE_PROXY_CA_FILE")}
-	if value := getenv("SERVERWARE_GMAIL_MAX_AGE_DAYS"); value != "" {
+	c := config{appID: getenv("CATCHPLATE_APP_ID"), proxyToken: getenv("CATCHPLATE_PROXY_TOKEN"),
+		caFile: getenv("CATCHPLATE_CA_FILE"), proxyCAFile: getenv("CATCHPLATE_PROXY_CA_FILE")}
+	if value := getenv("CATCHPLATE_GMAIL_MAX_AGE_DAYS"); value != "" {
 		days, err := strconv.Atoi(value)
 		if err != nil || days < 1 || days > 3650 || strconv.Itoa(days) != value {
 			return config{}, errors.New("invalid Gmail age hint")
@@ -61,11 +61,11 @@ func readConfig(getenv func(string) string) (config, error) {
 	if strings.EqualFold(getenv("GOOGLE_API_USE_CLIENT_CERTIFICATE"), "true") {
 		return config{}, errors.New("unset GOOGLE_API_USE_CLIENT_CERTIFICATE for this example")
 	}
-	p, err := url.Parse(getenv("SERVERWARE_PROXY_URL"))
+	p, err := url.Parse(getenv("CATCHPLATE_PROXY_URL"))
 	if err != nil || p.Scheme != "https" || p.Opaque != "" || p.User != nil ||
 		p.Host == "" || p.RawQuery != "" || p.ForceQuery || p.Fragment != "" ||
 		(p.Path != "" && p.Path != "/") || p.RawPath != "" {
-		return config{}, errors.New("SERVERWARE_PROXY_URL must be an HTTPS origin without credentials, query, or fragment")
+		return config{}, errors.New("CATCHPLATE_PROXY_URL must be an HTTPS origin without credentials, query, or fragment")
 	}
 	host := p.Hostname()
 	if host == gmailHost || net.ParseIP(host) != nil || len(host) > 253 || !strings.Contains(host, ".") {
@@ -87,7 +87,7 @@ func readConfig(getenv func(string) string) (config, error) {
 	decoded, err := base64.RawURLEncoding.DecodeString(c.proxyToken)
 	if !uuidPattern.MatchString(c.appID) || err != nil || len(decoded) != 32 ||
 		base64.RawURLEncoding.EncodeToString(decoded) != c.proxyToken || c.caFile == "" {
-		return config{}, errors.New("set the saved application UUID, issued SERVERWARE_PROXY_TOKEN, and SERVERWARE_CA_FILE")
+		return config{}, errors.New("set the saved application UUID, issued CATCHPLATE_PROXY_TOKEN, and CATCHPLATE_CA_FILE")
 	}
 	p.Path = ""
 	c.proxy = p
@@ -110,7 +110,7 @@ func readCAFile(path string) ([]byte, error) {
 func clientTLS(proxyHost string, proxyRoots *x509.CertPool, innerPEM []byte) (*tls.Config, error) {
 	innerRoots := x509.NewCertPool()
 	if proxyRoots == nil || !innerRoots.AppendCertsFromPEM(innerPEM) {
-		return nil, errors.New("configured Serverware CA file is not a PEM certificate bundle")
+		return nil, errors.New("configured Catchplate CA file is not a PEM certificate bundle")
 	}
 	outerRoots := proxyRoots.Clone()
 	combined := outerRoots.Clone()
@@ -237,7 +237,7 @@ func readMailboxQuery(ctx context.Context, client *gmail.Service, query string) 
 		}
 		listed, err := call.Do()
 		if err != nil || listed == nil || listed.HTTPStatusCode != http.StatusOK {
-			return summary{}, errors.New("Gmail list failed; inspect Serverware audit records and the saved permission (no automatic retry)")
+			return summary{}, errors.New("Gmail list failed; inspect Catchplate audit records and the saved permission (no automatic retry)")
 		}
 		if len(listed.Messages) > pageSize || !validPageToken(listed.NextPageToken) ||
 			(listed.NextPageToken != "" && seenPages[listed.NextPageToken]) {

@@ -22,7 +22,7 @@ from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import db
+from catchplate import db
 
 
 PROBE = ("SELECT 1 FROM metadata_audit_outbox "

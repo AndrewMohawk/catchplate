@@ -35,14 +35,14 @@ def trust_rows():
         "created_at": "1970-01-01T00:00:01+00:00", "published_at": "1970-01-01T00:00:01+00:00"}
     high_water = {"authority_scope": "webauthn-metadata", "rollback_epoch": 0,
         "publication_sequence": 1, "publication_digest": publication_digest, "metadata_blob_digest": metadata_digest,
-        "revocation_set_digest": framed("serverware.webauthnRevocationSet/v1", wire([])),
+        "revocation_set_digest": framed("catchplate.webauthnRevocationSet/v1", wire([])),
         "witness_receipt_digest": witness_digest, "witness_sequence": 1, "updated_at_epoch_ns": 1_000_000_000}
     return {"webauthn_trust_publications": [publication],
         "webauthn_trust_publication_high_water": [high_water]}
 
 
 def trust_high_water_document(high_water):
-    return {"schema": "serverware.webauthnTrustHighWater/v1", "rollbackEpoch": high_water["rollback_epoch"],
+    return {"schema": "catchplate.webauthnTrustHighWater/v1", "rollbackEpoch": high_water["rollback_epoch"],
         "sequence": high_water["publication_sequence"], "publicationDigest": high_water["publication_digest"],
         "metadataBlobDigest": high_water["metadata_blob_digest"], "revocationSetDigest": high_water["revocation_set_digest"],
         "witnessReceiptDigest": high_water["witness_receipt_digest"], "witnessSequence": high_water["witness_sequence"]}
@@ -57,7 +57,7 @@ def credential_fields():
 
 
 def credential_policy_document(row, high_water):
-    return {"schema": "serverware.policyAuthorityCredentialPolicy/v1",
+    return {"schema": "catchplate.policyAuthorityCredentialPolicy/v1",
         "credentialRecordId": row["id"], "credentialId": row["credential_id"], "userId": row["user_id"],
         "authenticatorClass": row["authenticator_class"], "aaguid": row["aaguid"],
         "attestationTrusted": bool(row["attestation_trusted"]),
@@ -66,7 +66,7 @@ def credential_policy_document(row, high_water):
         "attestationLeafDigest": row["attestation_leaf_sha256"],
         "attestationRootDigest": row["attestation_root_sha256"],
         "trustRollbackEpoch": high_water["rollback_epoch"],
-        "trustHighWaterDigest": framed("serverware.webauthnTrustHighWater/v1", wire(trust_high_water_document(high_water))),
+        "trustHighWaterDigest": framed("catchplate.webauthnTrustHighWater/v1", wire(trust_high_water_document(high_water))),
         "revocationSetDigest": high_water["revocation_set_digest"],
         "trustWitnessReceiptDigest": high_water["witness_receipt_digest"],
         "publicKeyDigest": digest(row["public_key_cose"].encode("utf-8"))}
@@ -79,6 +79,6 @@ def selected_rows():
         column = "authority_scope" if table.endswith("_high_water") else "id"
         key = {column: row[column]}
         result.append({"table": table, "key": key,
-            "keyDigest": framed("serverware.policyAuthorityBusinessKey/v1", table.encode("ascii"), wire(key)),
+            "keyDigest": framed("catchplate.policyAuthorityBusinessKey/v1", table.encode("ascii"), wire(key)),
             "present": True, "row": row, "contractSelector": None})
     return tuple(result)

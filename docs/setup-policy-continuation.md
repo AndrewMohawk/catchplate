@@ -53,7 +53,7 @@ The new entrypoint is explicitly `/api/policy/authority/candidates/controlled-ge
 - `/draft` accepts `policyCandidateIntakeRequest/v1` and the existing closed handoff **data**, reopens actual protected predecessors and compiles the independently signed candidate. Its canonical `argumentsOriginal` string preserves nanosecond integers. It creates no claim or native effect.
 - `/options` binds that exact original to a fresh real publisher WebAuthn challenge. `/publish` takes the same string and `policyCandidateProfile` assertion, then invokes the actual cold custody owner. Literal current `policy_publisher`, active OIDC/CSRF, hardware trust, UP and UV are mandatory; an administrator-only override is not accepted by this new caller.
 - `/lookup` reads the exact request ID and returns `okForAction: false` and `automaticRetryAllowed: false`. A retained claim without a publication is unresolved; even an absent claim is not permission to repeat an uncertain contact.
-- `/recover` is a separate explicit publisher action using the same exact `{apiVersion: "serverware.policyCandidateIntakeRequest/v1", requestId}` request. It may read an exact retained native publication and commit the existing controlled outcome, never publish again. It cannot extend the original claim's thirty-second window.
+- `/recover` is a separate explicit publisher action using the same exact `{apiVersion: "catchplate.policyCandidateIntakeRequest/v1", requestId}` request. It may read an exact retained native publication and commit the existing controlled outcome, never publish again. It cannot extend the original claim's thirty-second window.
 
 The source-selected controlled operations are exactly `policy.candidate.generation-claim` and `policy.candidate.generation-publish`. Claim atomically consumes the actual assertion, writes the fourteen-column `policy_shadow_generation_claims` original and stages audit. Only a definite signed controlled response plus exact SELECT readback allows the retained HTTP owner to make one call to the existing fixed native generation route. The original deadline is passed to its actual HTTP transport; neither a new HTTP request nor custody processing renews it. Native transport errors, lost responses and failed publication intake leave the claim consumed.
 
@@ -69,7 +69,7 @@ The dedicated portal section performs the same explicit draft/options/passkey/pu
 
 The source-fixed native management POST `/v1/policy-shadow/generations/lookup`
 accepts at most 4096 canonical ASCII bytes: `apiVersion:
-serverware.policyShadowGenerationLookup/v1`, `requestId`, `replayId`,
+catchplate.policyShadowGenerationLookup/v1`, `requestId`, `replayId`,
 `managementHandoffId` and `requestSha256`. These are selected from the protected
 claim's exact original management request, not caller-supplied success data.
 Existing management authentication is required. The native owner checks its

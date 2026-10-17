@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/rbac-witness.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/rbac-witness.v1.schema.json",
   "title": "Independent RBAC witness originals (data only)",
   "description": "Shape validation is not authority. Runtime validates canonical original bytes, independent signatures, actual TLS and cluster identity, the source-fixed root recipe, original deadlines, CAS predecessors and definite commits.",
   "oneOf": [
@@ -39,7 +39,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "enrollmentSha256", "sequence", "previousHeadSha256", "state"],
       "properties": {
-        "schema": {"const": "serverware.rbacWitnessHead/v1"}, "enrollmentSha256": {"$ref": "#/$defs/digest"},
+        "schema": {"const": "catchplate.rbacWitnessHead/v1"}, "enrollmentSha256": {"$ref": "#/$defs/digest"},
         "sequence": {"$ref": "#/$defs/integer"},
         "previousHeadSha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
         "state": {"$ref": "#/$defs/state"}
@@ -52,7 +52,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["role", "clientDn", "clientSerial", "issuerDn", "certificateSha256"],
       "properties": {
-        "role": {"enum": ["serverware_rbac_witness_reader", "serverware_rbac_witness_writer"]},
+        "role": {"enum": ["catchplate_rbac_witness_reader", "catchplate_rbac_witness_writer"]},
         "clientDn": {"type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^[^\u0000]+$"},
         "clientSerial": {"type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^[^\u0000]+$"},
         "issuerDn": {"type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^[^\u0000]+$"},
@@ -74,7 +74,7 @@
         "metadataClusterId", "metadataDatabase", "witnessClusterId", "metadataFaultDomain", "witnessFaultDomain",
         "reader", "writer", "initialState", "issuedAtEpochNs", "expiresAtEpochNs", "maximumRecords", "endpoint", "tlsRootSha256"],
       "properties": {
-        "schema": {"const": "serverware.rbacWitnessEnrollment/v1"}, "sourceRevision": {"$ref": "#/$defs/identity"},
+        "schema": {"const": "catchplate.rbacWitnessEnrollment/v1"}, "sourceRevision": {"$ref": "#/$defs/identity"},
         "enrollmentId": {"$ref": "#/$defs/identity"}, "databaseId": {"$ref": "#/$defs/digest"},
         "deploymentId": {"$ref": "#/$defs/identity"},
         "configurationDigests": {"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": {"$ref": "#/$defs/digest"}},
@@ -82,8 +82,8 @@
         "metadataDatabase": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$"},
         "witnessClusterId": {"type": "string", "pattern": "^[1-9][0-9]{0,19}$"},
         "metadataFaultDomain": {"$ref": "#/$defs/identity"}, "witnessFaultDomain": {"$ref": "#/$defs/identity"},
-        "reader": {"allOf": [{"$ref": "#/$defs/tlsIdentity"}, {"properties": {"role": {"const": "serverware_rbac_witness_reader"}}}]},
-        "writer": {"allOf": [{"$ref": "#/$defs/tlsIdentity"}, {"properties": {"role": {"const": "serverware_rbac_witness_writer"}}}]},
+        "reader": {"allOf": [{"$ref": "#/$defs/tlsIdentity"}, {"properties": {"role": {"const": "catchplate_rbac_witness_reader"}}}]},
+        "writer": {"allOf": [{"$ref": "#/$defs/tlsIdentity"}, {"properties": {"role": {"const": "catchplate_rbac_witness_writer"}}}]},
         "initialState": {"$ref": "#/$defs/state"}, "issuedAtEpochNs": {"$ref": "#/$defs/integer"},
         "expiresAtEpochNs": {"$ref": "#/$defs/positive"}, "maximumRecords": {"type": "integer", "minimum": 2, "maximum": 4096},
         "endpoint": {"$ref": "#/$defs/endpoint"}, "tlsRootSha256": {"$ref": "#/$defs/digest"}
@@ -92,7 +92,7 @@
     "signedEnrollment": {
       "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
       "properties": {
-        "schema": {"const": "serverware.signedRbacWitnessEnrollment/v1"}, "payload": {"$ref": "#/$defs/enrollment"},
+        "schema": {"const": "catchplate.signedRbacWitnessEnrollment/v1"}, "payload": {"$ref": "#/$defs/enrollment"},
         "signatureBase64Url": {"type": "string", "pattern": "^[A-Za-z0-9_-]{86}$"}
       }
     },
@@ -104,7 +104,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "configurationDigest", "root", "enrollment", "tlsRoot", "clientCertificate", "clientKey"],
       "properties": {
-        "schema": {"const": "serverware.rbacWitnessStartup/v1"}, "sourceRevision": {"$ref": "#/$defs/identity"},
+        "schema": {"const": "catchplate.rbacWitnessStartup/v1"}, "sourceRevision": {"$ref": "#/$defs/identity"},
         "configurationDigest": {"$ref": "#/$defs/digest"}, "root": {"$ref": "#/$defs/original"},
         "enrollment": {"$ref": "#/$defs/signedEnrollment"}, "tlsRoot": {"$ref": "#/$defs/original"},
         "clientCertificate": {"$ref": "#/$defs/original"}, "clientKey": {"$ref": "#/$defs/original"}
@@ -114,7 +114,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "enrollmentSha256", "requestSha256", "capabilityId", "beforeHeadSha256", "beforeHead", "afterHead", "expiresAtEpochNs", "planSha256"],
       "properties": {
-        "schema": {"const": "serverware.rbacWitnessIntent/v1"}, "enrollmentSha256": {"$ref": "#/$defs/digest"},
+        "schema": {"const": "catchplate.rbacWitnessIntent/v1"}, "enrollmentSha256": {"$ref": "#/$defs/digest"},
         "requestSha256": {"$ref": "#/$defs/digest"}, "capabilityId": {"$ref": "#/$defs/digest"},
         "beforeHeadSha256": {"$ref": "#/$defs/digest"}, "beforeHead": {"$ref": "#/$defs/head"},
         "afterHead": {"$ref": "#/$defs/head"}, "expiresAtEpochNs": {"$ref": "#/$defs/positive"}, "planSha256": {"$ref": "#/$defs/digest"}
@@ -124,7 +124,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "capabilityId", "envelopeId", "plannerTransactionId", "authorizationProjectionDigest", "operation", "handlerName", "requestDigest", "resultDigest", "authorityRootSetBeforeDigest", "authorityRootSetAfterDigest", "authoritySnapshotDigest", "operationManifestDigest", "queryManifestDigest", "witnessReservationDigest", "witnessSequence", "deadlineMonotonicNs", "fence", "committedAtEpochNs", "sourceRevision"],
       "properties": {
-        "schema": {"const": "serverware.policyAuthorityWriterCommitReceipt/v2"},
+        "schema": {"const": "catchplate.policyAuthorityWriterCommitReceipt/v2"},
         "capabilityId": {"$ref": "#/$defs/digest"}, "envelopeId": {"$ref": "#/$defs/digest"},
         "plannerTransactionId": {"$ref": "#/$defs/digest"}, "authorizationProjectionDigest": {"$ref": "#/$defs/digest"},
         "operation": {"const": "rbac.binding.mutate"}, "handlerName": {"$ref": "#/$defs/identity"},
@@ -140,7 +140,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "enrollmentSha256", "intentSha256", "requestSha256", "writerReceipt", "writerReceiptSha256", "resultBase64Url", "resultSha256"],
       "properties": {
-        "schema": {"const": "serverware.rbacWitnessCompletion/v1"}, "enrollmentSha256": {"$ref": "#/$defs/digest"},
+        "schema": {"const": "catchplate.rbacWitnessCompletion/v1"}, "enrollmentSha256": {"$ref": "#/$defs/digest"},
         "intentSha256": {"$ref": "#/$defs/digest"}, "requestSha256": {"$ref": "#/$defs/digest"},
         "writerReceipt": {"$ref": "#/$defs/writerReceipt"}, "writerReceiptSha256": {"$ref": "#/$defs/digest"},
         "resultBase64Url": {"type": "string", "minLength": 1, "maxLength": 8388608, "pattern": "^[A-Za-z0-9_-]+$"},

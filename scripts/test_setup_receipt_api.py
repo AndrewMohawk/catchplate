@@ -21,7 +21,7 @@ from starlette.requests import Request
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from serverware.setup_receipts import (  # noqa: E402
+from catchplate.setup_receipts import (  # noqa: E402
     ENROLLMENT_CHECKS,
     HARDWARE_CHECKS,
     Ed25519TrustRoot,
@@ -96,7 +96,7 @@ def json_request(raw: bytes) -> Request:
             "query_string": b"",
             "headers": [(b"content-type", b"application/json")],
             "client": ("127.0.0.1", 12345),
-            "server": ("serverware.test", 443),
+            "server": ("catchplate.test", 443),
         },
         receive,
     )
@@ -135,7 +135,7 @@ def evidence(kind: str, label: str) -> list[dict[str, Any]]:
         {
             "kind": kind,
             "document": {
-                "kind": "ServerwareSetupRuntimeEvidence",
+                "kind": "CatchplateSetupRuntimeEvidence",
                 "result": "verified",
                 "subject": label,
             },
@@ -230,7 +230,7 @@ def enrollment_receipt(
         "expires_at_unix": expires_at if expires_at is not None else now + 300,
     }
     return signed_document(
-        api_version="serverware.enrollmentVerifierReceipt/v2",
+        api_version="catchplate.enrollmentVerifierReceipt/v2",
         kind="EnrollmentVerifierReceipt",
         statement=statement,
         private_key=private_key,
@@ -251,14 +251,14 @@ def hardware_assurance(
     statement = {
         "verifier": {
             "name": "setup-api-independent-verifier",
-            "organization": "Serverware test assurance lab",
+            "organization": "Catchplate test assurance lab",
             "independent": True,
         },
         "issued_at_unix": now,
         "expires_at_unix": now + 300,
         "challenge_nonce": canonical_base64url(challenge),
         "current_host_identity": {
-            "scheme": "serverware.currentHostIdentity/v1",
+            "scheme": "catchplate.currentHostIdentity/v1",
             "machine_id_sha256": digest("machine-id"),
             "product_uuid_sha256": digest("product-uuid"),
             "boot_id_sha256": digest("boot-id"),
@@ -269,7 +269,7 @@ def hardware_assurance(
         "eif": {
             "image_sha384": "sha384:" + "1" * 96,
             "build_manifest": {
-                "apiVersion": "serverware.eifBuildManifest/v1",
+                "apiVersion": "catchplate.eifBuildManifest/v1",
                 "release_identity_sha256": release_identity_digest,
             },
             "build_manifest_sha256": digest("build-manifest"),
@@ -309,8 +309,8 @@ def hardware_assurance(
         },
     }
     return signed_document(
-        api_version="serverware.hardwareAssurance/v1",
-        kind="ServerwareHardwareAssurance",
+        api_version="catchplate.hardwareAssurance/v1",
+        kind="CatchplateHardwareAssurance",
         statement=statement,
         private_key=private_key,
         trust=trust,
@@ -358,7 +358,7 @@ def hardware_verification_receipt(
         "expires_at_unix": now + 300,
     }
     return signed_document(
-        api_version="serverware.setupHardwareVerification/v1",
+        api_version="catchplate.setupHardwareVerification/v1",
         kind="SetupHardwareVerification",
         statement=statement,
         private_key=private_key,
@@ -394,7 +394,7 @@ def final_receipt(
         "proxy_server_statement_sha256": proxy_statement_digest,
     }
     return signed_document(
-        api_version="serverware.finalChallengeReceipt/v1",
+        api_version="catchplate.finalChallengeReceipt/v1",
         kind="FinalChallengeConsumption",
         statement=statement,
         private_key=private_key,
@@ -403,28 +403,28 @@ def final_receipt(
 
 
 def main() -> None:
-    with tempfile.TemporaryDirectory(prefix="serverware-setup-receipt-api-") as tmp:
-        os.environ["SERVERWARE_DATA_DIR"] = tmp
-        os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
-        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
-        os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED"] = "0"
-        os.environ["SERVERWARE_CONTROL_PLANE_TWO_PERSON_REQUIRED"] = "0"
+    with tempfile.TemporaryDirectory(prefix="catchplate-setup-receipt-api-") as tmp:
+        os.environ["CATCHPLATE_DATA_DIR"] = tmp
+        os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
+        os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
+        os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED"] = "0"
+        os.environ["CATCHPLATE_CONTROL_PLANE_TWO_PERSON_REQUIRED"] = "0"
         for name in (
-            "SERVERWARE_METADATA_STORE_POSTGRES_DSN",
-            "SERVERWARE_GRANT_STORE_POSTGRES_DSN",
-            "SERVERWARE_AUDIT_STORE_POSTGRES_DSN",
+            "CATCHPLATE_METADATA_STORE_POSTGRES_DSN",
+            "CATCHPLATE_GRANT_STORE_POSTGRES_DSN",
+            "CATCHPLATE_AUDIT_STORE_POSTGRES_DSN",
         ):
             os.environ.pop(name, None)
 
         from fastapi import HTTPException
 
-        from serverware import app as app_module
-        from serverware import db
-        from serverware.auth import AdminIdentity
-        from serverware.setup_receipt_service import build_setup_receipt_trust_profile
+        from catchplate import app as app_module
+        from catchplate import db
+        from catchplate.auth import AdminIdentity
+        from catchplate.setup_receipt_service import build_setup_receipt_trust_profile
 
         enrollment_key, enrollment_trust = trust_fixture(
             11, "independent-enrollment-verifier"
@@ -475,7 +475,7 @@ def main() -> None:
             db.init_db()
             trust_response = app_module.setup_receipt_trust(_=operator)
             if trust_response != {
-                "apiVersion": "serverware.setupReceiptTrustProfile/v1",
+                "apiVersion": "catchplate.setupReceiptTrustProfile/v1",
                 "digest": profile.digest,
                 "enrollmentVerifier": {
                     "provider": enrollment_trust.provider,
@@ -745,7 +745,7 @@ def main() -> None:
             release_identity_digest = digest("release-identity")
             host_identity_digest = digest("current-host-identity")
             proxy_statement = canonical_json_bytes(
-                {"apiVersion": "serverware.testProxyResponseStatement/v1"}
+                {"apiVersion": "catchplate.testProxyResponseStatement/v1"}
             )
             proxy_statement_digest = sha256_digest(proxy_statement)
             wrong_assurance = hardware_assurance(

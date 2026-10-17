@@ -18,7 +18,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "serverware/authority_witness.py"
+SOURCE = ROOT / "catchplate/authority_witness.py"
 
 
 def named(parent, kind, name):
@@ -125,7 +125,7 @@ class WitnessPeerPhaseTests(unittest.TestCase):
         self.assertEqual(result.sent, [])
         self.assertEqual(len(result.errors), 1)
         self.assertEqual(result.errors[0], {
-            "schema": "serverware.policyAuthorityWitnessError/v1",
+            "schema": "catchplate.policyAuthorityWitnessError/v1",
             "code": "witness_denied",
             "detailDigest": "sha256:" + hashlib.sha256(message.encode("utf-8")).hexdigest(),
         })

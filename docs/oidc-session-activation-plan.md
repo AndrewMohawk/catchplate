@@ -8,10 +8,10 @@ activation. No build, cryptographic execution or runtime verification is claimed
 
 ## Public wire and original commitments
 
-[`authority_oidc_session_activation_plan_contract.py`](../serverware/authority_oidc_session_activation_plan_contract.py)
+[`authority_oidc_session_activation_plan_contract.py`](../catchplate/authority_oidc_session_activation_plan_contract.py)
 defines the closed payload
-`serverware.policyAuthorityOidcSessionActivationPlan/v2` and the three-field
-envelope `serverware.signedPolicyAuthorityOidcSessionActivationPlan/v2`:
+`catchplate.policyAuthorityOidcSessionActivationPlan/v2` and the three-field
+envelope `catchplate.signedPolicyAuthorityOidcSessionActivationPlan/v2`:
 `schema`, `payload`, `signatureBase64Url`.
 
 The exact 22 payload fields contain only fixed source metadata, bounded
@@ -45,10 +45,10 @@ caller-supplied successful commitment objects. This opaque helper does not
 parse or admit the detached bodies.
 
 The domain-separated body identities are
-`serverware.policyAuthorityOidcSessionActivationProof/v1`,
-`serverware.policyAuthorityOidcSessionActivationContext/v1`,
-`serverware.policyAuthorityOidcSessionActivationPrivateInputs/v2` and
-`serverware.policyAuthorityOidcSessionActivationTransition/v1`. The last commits
+`catchplate.policyAuthorityOidcSessionActivationProof/v1`,
+`catchplate.policyAuthorityOidcSessionActivationContext/v1`,
+`catchplate.policyAuthorityOidcSessionActivationPrivateInputs/v2` and
+`catchplate.policyAuthorityOidcSessionActivationTransition/v1`. The last commits
 the exact canonical indexed-transition original from the genuine
 [write replay](oidc-session-activation-writes.md): fixed source/request identity,
 write-proof digest, complete `mutations`, `result`, `workUnits`, business and
@@ -58,8 +58,8 @@ the real audit-capacity query/mutation work, not a separate duplicated allowance
 ## Signing, privacy and same-call replay boundary
 
 The distinct signing domain is
-`serverware.policyAuthorityOidcSessionActivationPlanSignature/v2`; the envelope
-identity domain is `serverware.policyAuthorityOidcSessionActivationPlanIdentity/v2`.
+`catchplate.policyAuthorityOidcSessionActivationPlanSignature/v2`; the envelope
+identity domain is `catchplate.policyAuthorityOidcSessionActivationPlanIdentity/v2`.
 The actual producer must bind the real independently enrolled planner public
 key/SPKI and private-key pair, perform genuine original replay, then use the
 existing metered Ed25519 sign-and-verify primitive over the domain-framed
@@ -96,7 +96,7 @@ plaintext-secret serialization.
 
 ## Actual producer and verifier
 
-[`authority_oidc_session_activation_plan.py`](../serverware/authority_oidc_session_activation_plan.py)
+[`authority_oidc_session_activation_plan.py`](../catchplate/authority_oidc_session_activation_plan.py)
 implements `_produce_on_work` and `_verify_on_work`. Both take the exact
 `KernelContext`, original typed request, independent scope, original assertion,
 old/new token bytes, ciphertext and private custody key, primary/range proofs
@@ -132,7 +132,7 @@ This captures independently supplied expectations; it does not enroll them.
 
 V2 requires the separate [nonce-bound head observation](authority-current-root-head.md),
 not a completion-recovery lookup or a root-signed launch snapshot alone.
-[`authority_oidc_session_activation_state.py`](../serverware/authority_oidc_session_activation_state.py)
+[`authority_oidc_session_activation_state.py`](../catchplate/authority_oidc_session_activation_state.py)
 binds the exact fifteen-field scope, assertion, old token and complete vector to
 the query's context digest. The actual cold caller generates a fresh 32-byte
 challenge; neither a supplied nonce nor a successful observation object can
@@ -215,7 +215,7 @@ historical admission.
 
 The actual [acquisition owner](oidc-session-activation-planning.md) supplies
 read and write originals from one read-only database snapshot. The source
-[`OidcSessionActivationPlanOwner`](../serverware/authority_oidc_session_activation_plan_owner.py)
+[`OidcSessionActivationPlanOwner`](../catchplate/authority_oidc_session_activation_plan_owner.py)
 now composes it with signing and [encrypted original retention](oidc-session-activation-journal.md),
 and the explicit successor planning factory constructs that real owner.
 `prepare` returns only token-free request/scope/envelope originals and local

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/launch-authorization-request.v2.schema.json",
-  "title": "Serverware Production Launch Authorization Request v2",
+  "$id": "https://catchplate.invalid/schemas/launch-authorization-request.v2.schema.json",
+  "title": "Catchplate Production Launch Authorization Request v2",
   "$comment": "This request authorizes trusted-host readiness only. Its wall-clock freshness claim is not secure TEE time, and its external witness pins must identify an independently administered monotonic store.",
   "type": "object",
   "additionalProperties": false,
@@ -36,7 +36,7 @@
     "launchAttemptRecoveryIdentitySha256"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.launchAuthorizationRequest/v2"},
+    "apiVersion": {"const": "catchplate.launchAuthorizationRequest/v2"},
     "kind": {"const": "ProductionLaunchAuthorizationRequest"},
     "launcherNonce": {"$ref": "#/$defs/hex64"},
     "bootIdSha256": {"$ref": "#/$defs/sha256"},
@@ -80,7 +80,7 @@
     "globalRoleRegistrySha256": {"$ref": "#/$defs/sha256"},
     "globalRoleRegistryPinsSha256": {"$ref": "#/$defs/sha256"},
     "launchAttemptJournalDomain": {
-      "const": "serverware.launchAuthorizationAttemptJournal/v1"
+      "const": "catchplate.launchAuthorizationAttemptJournal/v1"
     },
     "launchAttemptRecoveryIdentitySha256": {"$ref": "#/$defs/sha256"}
   },
@@ -96,7 +96,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.productionLaunchGlobalRoleRegistry/v1"
+          "const": "catchplate.productionLaunchGlobalRoleRegistry/v1"
         },
         "claimScope": {"const": "roles-present-in-native-launch-contract"},
         "roles": {

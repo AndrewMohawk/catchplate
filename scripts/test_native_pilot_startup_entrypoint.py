@@ -13,8 +13,8 @@ from scripts import native_pilot_runtime_artifacts as artifacts
 from scripts import native_pilot_supervisor_runtime_entrypoint as entrypoint
 from scripts import run_native_pilot_startup as cli
 from scripts import run_native_pilot_startup_child as child
-from serverware.native_pilot_genesis_jobs import KEY_PURPOSES as COLD
-from serverware.native_pilot_adopted_phase_profile import KEY_PURPOSES as ADOPTED
+from catchplate.native_pilot_genesis_jobs import KEY_PURPOSES as COLD
+from catchplate.native_pilot_adopted_phase_profile import KEY_PURPOSES as ADOPTED
 
 
 def inputs():

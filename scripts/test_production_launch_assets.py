@@ -35,7 +35,7 @@ RUST_LAUNCHER_PATH = (
     / "decision-gate-rs"
     / "src"
     / "bin"
-    / "serverware-production-launcher.rs"
+    / "catchplate-production-launcher.rs"
 )
 EXPECTED_INPUTS = {name for name, _argument in generator.INPUT_ARGUMENTS}
 EXPECTED_OUTPUTS = {name for name, _argument in generator.OUTPUT_ARGUMENTS}
@@ -93,9 +93,9 @@ FORBIDDEN_UNIT_AUTHORIZATION_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(r"\bauthority[-_.]?(?:key|public[-_.]?key|socket)\b", re.IGNORECASE),
-    re.compile(r"\b(?:SERVERWARE_)?(?:LAUNCH_)?AUTHORITY_(?:KEY|PUBLIC_KEY|SOCKET)\b"),
-    re.compile(r"/run/serverware/launch-authority\.sock"),
-    re.compile(r"serverware\.launchAuthorization/"),
+    re.compile(r"\b(?:CATCHPLATE_)?(?:LAUNCH_)?AUTHORITY_(?:KEY|PUBLIC_KEY|SOCKET)\b"),
+    re.compile(r"/run/catchplate/launch-authority\.sock"),
+    re.compile(r"catchplate\.launchAuthorization/"),
 )
 
 
@@ -210,7 +210,7 @@ class Fixture:
         self.base = base
         self.release = base / "release"
         self.state = base / "state"
-        self.etc = base / "etc" / "serverware"
+        self.etc = base / "etc" / "catchplate"
         self.release.mkdir()
         self.state.mkdir()
         self.etc.mkdir(parents=True)
@@ -225,7 +225,7 @@ class Fixture:
         self.files: dict[str, Path] = {}
         self.files["production_env"] = self.write(
             self.etc / "production-readiness.env",
-            b"SERVERWARE_COMPLETION_VERIFICATION_MODE=readiness\n",
+            b"CATCHPLATE_COMPLETION_VERIFICATION_MODE=readiness\n",
         )
         self.files["python"] = self.write(
             self.release / "runtime" / "python" / "bin" / "python3",
@@ -296,7 +296,7 @@ class Fixture:
             self.files[argument_name].write_bytes(public_spki_pem(keys[key_name]))
 
         nonce_assurance = {
-            "apiVersion": "serverware.nonceAuthorityAssurance/v1",
+            "apiVersion": "catchplate.nonceAuthorityAssurance/v1",
             "administrativeDomainSha256": "sha256:" + "1a" * 32,
             "assuranceEvidenceSha256": "sha256:" + "1b" * 32,
             "assuranceEvidenceType": "linearizableCasOperatorAttestation",
@@ -755,7 +755,7 @@ def assert_no_authorization_material(value: object, label: str) -> None:
     elif isinstance(value, list):
         for child in value:
             assert_no_authorization_material(child, label)
-    elif isinstance(value, str) and value == "/run/serverware/launch-authority.sock":
+    elif isinstance(value, str) and value == "/run/catchplate/launch-authority.sock":
         raise AssertionError(f"{label} configures the launcher-compiled authority socket")
 
 
@@ -996,15 +996,15 @@ def test_generator() -> None:
         try:
             expect_main_error_contains(
                 fixture.argv(base / "noncanonical-state.json"),
-                "state directory must be /var/lib/serverware/production-proof",
+                "state directory must be /var/lib/catchplate/production-proof",
                 "default production CLI accepted a noncanonical state directory",
             )
             generator.PRODUCTION_STATE_DIRECTORY = fixture.state
             first = base / "launch-one.json"
             second = base / "launch-two.json"
-            first_unit = base / "serverware-one.service"
-            second_unit = base / "serverware-two.service"
-            launcher_path = "/opt/serverware/launchers/sha256-" + "ab" * 32 + "/serverware-production-launcher"
+            first_unit = base / "catchplate-one.service"
+            second_unit = base / "catchplate-two.service"
+            launcher_path = "/opt/catchplate/launchers/sha256-" + "ab" * 32 + "/catchplate-production-launcher"
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
                 if generator.main(
@@ -1055,7 +1055,7 @@ def test_generator() -> None:
             assert_no_unit_authorization_overrides(unit_text, "generated systemd unit")
             for dependency in ("After", "Wants", "Requires"):
                 line = next((line for line in unit_text.splitlines() if line.startswith(f"{dependency}=")), "")
-                if "serverware-launch-authority-relay.socket" not in line:
+                if "catchplate-launch-authority-relay.socket" not in line:
                     raise AssertionError(f"generated systemd unit omits the authority relay {dependency} dependency")
             skip_directives = [
                 line
@@ -1069,7 +1069,7 @@ def test_generator() -> None:
                 )
             if f"ReadWritePaths={fixture.state} /run/docker.sock" not in unit_text:
                 raise AssertionError("generated systemd unit does not restrict writes to the selected state directory")
-            if "ReadOnlyPaths=/run/serverware" not in unit_text:
+            if "ReadOnlyPaths=/run/catchplate" not in unit_text:
                 raise AssertionError("generated systemd unit does not mount the relay directory read-only")
             if "RuntimeDirectory=" in unit_text:
                 raise AssertionError("generated proof unit claims relay runtime-directory lifecycle")
@@ -1108,8 +1108,8 @@ def test_generator() -> None:
                         f"generated manifest path is outside the ASCII contract: {location}"
                     )
                 for hostile_path in (
-                    "/opt/serverware/\N{LATIN SMALL LETTER E WITH ACUTE}",
-                    "/opt/serverware/trailing-newline\n",
+                    "/opt/catchplate/\N{LATIN SMALL LETTER E WITH ACUTE}",
+                    "/opt/catchplate/trailing-newline\n",
                 ):
                     hostile = json.loads(json.dumps(manifest))
                     target: object = hostile
@@ -1228,7 +1228,7 @@ def test_generator() -> None:
                 "incompatibleWith": [
                     generator.INCOMPATIBLE_FINAL_PIPELINE
                 ],
-                "kind": "ServerwareLaunchPipelineMetadata",
+                "kind": "CatchplateLaunchPipelineMetadata",
                 "manifestApiVersion": generator.API_VERSION,
                 "manifestKind": generator.KIND,
                 "manifestSha256": sha256_prefixed(first_bytes),
@@ -1409,11 +1409,11 @@ def test_generator() -> None:
                 "generator accepted a non-normalized traversal path",
             )
             for hostile_path in (
-                "/opt/serverware/release with space/input.json",
-                "/opt/serverware/release-\N{LATIN SMALL LETTER E WITH ACUTE}/input.json",
-                "/opt/serverware/release%2fescape/input.json",
-                "/opt/serverware/release\\escape/input.json",
-                "/opt/serverware/release\tcontrol/input.json",
+                "/opt/catchplate/release with space/input.json",
+                "/opt/catchplate/release-\N{LATIN SMALL LETTER E WITH ACUTE}/input.json",
+                "/opt/catchplate/release%2fescape/input.json",
+                "/opt/catchplate/release\\escape/input.json",
+                "/opt/catchplate/release\tcontrol/input.json",
                 "/" + "a" * generator.MAX_PRODUCTION_MANIFEST_PATH_BYTES,
             ):
                 expect_manifest_error(
@@ -1599,7 +1599,7 @@ def test_generator() -> None:
                     "--systemd-unit-out",
                     str(base / "whitespace.service"),
                     "--launcher-path",
-                    "/opt/serverware/launcher path",
+                    "/opt/catchplate/launcher path",
                 ],
                 "generator accepted whitespace in the launcher path",
             )
@@ -1609,7 +1609,7 @@ def test_generator() -> None:
                     "--systemd-unit-out",
                     str(base / "control.service"),
                     "--launcher-path",
-                    "/opt/serverware/launcher\npath",
+                    "/opt/catchplate/launcher\npath",
                 ],
                 "generator accepted a control character in the launcher path",
             )
@@ -1623,7 +1623,7 @@ def test_generator() -> None:
                     "--systemd-unit-out",
                     str(base / "unsafe-percent.service"),
                     "--launcher-path",
-                    "/opt/serverware/launcher%p",
+                    "/opt/catchplate/launcher%p",
                 ],
                 "generator accepted a systemd specifier in the launcher path",
             )
@@ -1946,8 +1946,8 @@ def test_example() -> None:
         raise AssertionError("example manifest identity is incorrect")
     assert_closed_authorization(example["authorization"], "example.authorization", example=True)
     assert_no_authorization_material(example, "example manifest")
-    release_root = "/opt/serverware/releases/<source-digest>"
-    state_directory = "/var/lib/serverware/production-proof"
+    release_root = "/opt/catchplate/releases/<source-digest>"
+    state_directory = "/var/lib/catchplate/production-proof"
     if example["releaseRoot"] != release_root or example["stateDirectory"] != state_directory:
         raise AssertionError("example does not use the documented immutable release and mutable state roots")
     assert_launch_attempt_journal(
@@ -1966,8 +1966,8 @@ def test_example() -> None:
         example=True,
     )
     assert_file_record(example["productionEnv"], "productionEnv")
-    if not example["productionEnv"]["path"].startswith("/etc/serverware/"):
-        raise AssertionError("example production env is not under /etc/serverware")
+    if not example["productionEnv"]["path"].startswith("/etc/catchplate/"):
+        raise AssertionError("example production env is not under /etc/catchplate")
     assert_file_record({key: example["python"][key] for key in ("path", "sha256")}, "python")
     if set(example["python"]) != {"path", "sha256", "importRoots"}:
         raise AssertionError("example python record is not closed")
@@ -2036,7 +2036,7 @@ def test_make_python_runtime_contract() -> None:
     for required in (
         "build-production-python-runtime:",
         "--target production-python-runtime-artifact",
-        "SERVERWARE_PRODUCTION_PYTHON_RUNTIME_ARTIFACT=",
+        "CATCHPLATE_PRODUCTION_PYTHON_RUNTIME_ARTIFACT=",
     ):
         if required not in makefile:
             raise AssertionError(f"Makefile omits production Python artifact wiring: {required}")
@@ -2065,7 +2065,7 @@ def test_make_readiness_invocation_contract() -> None:
         "claimsFile": "production-readiness-claims.json",
         "nitroEvidenceOut": "nitro-kms-evidence.json",
         "readinessOut": "production-readiness.json",
-        "completionProofOut": "serverware-completion-proof.json",
+        "completionProofOut": "catchplate-completion-proof.json",
         "proxyProofSummaryOut": "proxy-response-proof-summary.json",
         "productionHostPreflight": "production-host-preflight.json",
     }
@@ -2142,8 +2142,8 @@ def test_make_readiness_invocation_contract() -> None:
     required_fragments = (
         "test ! -e \"$$output\" && test ! -L \"$$output\"",
         "/usr/bin/rm -- \"$$output\"",
-        'test "$$unit" = "serverware-production-release-proof.service"',
-        "for directory in /var /var/lib /var/lib/serverware "
+        'test "$$unit" = "catchplate-production-release-proof.service"',
+        "for directory in /var /var/lib /var/lib/catchplate "
         '"$$state_directory"; do',
         "flock --exclusive --nonblock 9",
         '"/proc/$$$$/fd/9"',
@@ -2195,7 +2195,7 @@ def test_make_readiness_invocation_contract() -> None:
 
 
 def test_systemd_unit() -> None:
-    unit = (ROOT / "ops" / "systemd" / "serverware-production-release-proof.service").read_text(encoding="utf-8")
+    unit = (ROOT / "ops" / "systemd" / "catchplate-production-release-proof.service").read_text(encoding="utf-8")
     if unit != generator.SYSTEMD_UNIT_TEMPLATE:
         raise AssertionError("embedded concrete-unit template drifted from the checked-in audited systemd unit")
     active = [line.strip() for line in unit.splitlines() if line.strip() and not line.lstrip().startswith("#")]
@@ -2251,11 +2251,11 @@ def test_systemd_unit() -> None:
     command = shlex.split(exec_start[0])
     if command[1:] != [
         "--manifest",
-        "/etc/serverware/production-release-launch.json",
+        "/etc/catchplate/production-release-launch.json",
     ]:
         raise AssertionError(f"launcher receives arguments outside the closed manifest path: {command}")
     if not re.fullmatch(
-        r"/opt/serverware/launchers/sha256-<launcher-sha256>/serverware-production-launcher", command[0]
+        r"/opt/catchplate/launchers/sha256-<launcher-sha256>/catchplate-production-launcher", command[0]
     ):
         raise AssertionError("ExecStart does not select a content-addressed native launcher")
     if any(shell in exec_start[0] for shell in ("/bin/sh", "/bin/bash", "/usr/bin/env", " -c ")):
@@ -2265,9 +2265,9 @@ def test_systemd_unit() -> None:
     assert_no_unit_authorization_overrides(unit, "checked-in systemd unit")
 
     expected_dependencies = {
-        "After": {"network-online.target", "docker.service", "serverware-launch-authority-relay.socket"},
-        "Wants": {"network-online.target", "serverware-launch-authority-relay.socket"},
-        "Requires": {"docker.service", "serverware-launch-authority-relay.socket"},
+        "After": {"network-online.target", "docker.service", "catchplate-launch-authority-relay.socket"},
+        "Wants": {"network-online.target", "catchplate-launch-authority-relay.socket"},
+        "Requires": {"docker.service", "catchplate-launch-authority-relay.socket"},
     }
     for directive, expected in expected_dependencies.items():
         values = directives.get(directive, [])
@@ -2310,22 +2310,22 @@ def test_systemd_unit() -> None:
             "for its NSM device exception"
         )
     expected_writes = {
-        "/var/lib/serverware/production-proof",
+        "/var/lib/catchplate/production-proof",
         "/run/docker.sock",
     }
     write_paths = directives.get("ReadWritePaths", [])
     if len(write_paths) != 1 or set(shlex.split(write_paths[0])) != expected_writes:
         raise AssertionError(f"systemd service has an open or incomplete write set: {write_paths}")
-    if directives.get("ReadOnlyPaths") != ["/run/serverware"]:
+    if directives.get("ReadOnlyPaths") != ["/run/catchplate"]:
         raise AssertionError("proof service does not keep the relay socket directory read-only")
     if "RuntimeDirectory" in directives or "RuntimeDirectoryMode" in directives:
         raise AssertionError("proof service must not own or remove the relay runtime directory")
 
     relay_socket_unit = (
-        ROOT / "ops/systemd/serverware-launch-authority-relay.socket"
+        ROOT / "ops/systemd/catchplate-launch-authority-relay.socket"
     ).read_text(encoding="utf-8")
     for required in (
-        "ListenSequentialPacket=/run/serverware/launch-authority.sock",
+        "ListenSequentialPacket=/run/catchplate/launch-authority.sock",
         "SocketUser=root",
         "SocketGroup=root",
         "SocketMode=0600",

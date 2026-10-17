@@ -7,11 +7,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-pub const SCHEMA: &str = "serverware.nativeCredentialCurrentnessStatement/v1";
+pub const SCHEMA: &str = "catchplate.nativeCredentialCurrentnessStatement/v1";
 pub const PROFILE: &str = "measured-holder-barrier-v1";
 pub const SIGN_OPERATION: &str = "nativeCredentialCurrentness.sign/v1";
-pub const ATTESTATION_DOMAIN: &[u8] = b"serverware/credential-currentness-attestation/v1\0";
-pub const LEASE_DOMAIN: &[u8] = b"serverware.nativeCurrentCredentialLeaseBinding/v1\0";
+pub const ATTESTATION_DOMAIN: &[u8] = b"catchplate/credential-currentness-attestation/v1\0";
+pub const LEASE_DOMAIN: &[u8] = b"catchplate.nativeCurrentCredentialLeaseBinding/v1\0";
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -85,7 +85,7 @@ pub fn bytes32(value: &str) -> Result<[u8; 32], String> {
 pub fn holder_id(boot_id: &str, key_id: &str) -> Result<String, String> {
     if !digest(key_id) { return Err("currentness key ID is invalid".to_owned()); }
     let mut hash = Sha256::new();
-    hash.update(b"serverware/credential-currentness-holder/v1\0");
+    hash.update(b"catchplate/credential-currentness-holder/v1\0");
     hash.update(bytes32(boot_id)?);
     hash.update(hex::decode(&key_id[7..]).map_err(|_| "currentness key digest is invalid")?);
     Ok(format!("sha256:{}", hex::encode(hash.finalize())))
@@ -142,8 +142,8 @@ pub fn broker_lease_preimage(holder: &str, epoch: u64, registration: &str, reque
 fn lease_preimage_profile(holder: &str, epoch: u64, registration: &str, request: &Value, broker: bool)
     -> Result<Vec<u8>, String> {
     let version = request.get("apiVersion").and_then(Value::as_str);
-    let selected = if broker { matches!(version, Some("serverware.nativeBrokerCredentialLeaseRequest/v1" | "serverware.nativeBrokerCredentialLeaseRequest/v2")) }
-        else { matches!(version, Some("serverware.nativeCredentialLeaseRequest/v1" | "serverware.nativeCredentialLeaseRequest/v2")) };
+    let selected = if broker { matches!(version, Some("catchplate.nativeBrokerCredentialLeaseRequest/v1" | "catchplate.nativeBrokerCredentialLeaseRequest/v2")) }
+        else { matches!(version, Some("catchplate.nativeCredentialLeaseRequest/v1" | "catchplate.nativeCredentialLeaseRequest/v2")) };
     if !digest(holder) || !digest(registration) || epoch == 0 || epoch > i64::MAX as u64
         || request.get("purpose").and_then(Value::as_str) != Some("dispatchSecret")
         || request.get("expectedCredentialVersion").and_then(Value::as_u64) != Some(epoch)

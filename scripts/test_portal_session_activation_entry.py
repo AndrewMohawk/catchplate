@@ -13,8 +13,8 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-APP = (ROOT / "serverware/app.py").read_text()
-FRAGMENT = (ROOT / "serverware/portal_session_activation.py").read_text()
+APP = (ROOT / "catchplate/app.py").read_text()
+FRAGMENT = (ROOT / "catchplate/portal_session_activation.py").read_text()
 
 
 def literal(source, name):
@@ -48,9 +48,9 @@ class SessionEntryControl(unittest.TestCase):
         enrollment = SimpleNamespace(_EnrollmentOwner=Owner, EnrollmentStartupError=EnrollmentError,
                                      require_started=lambda: None)
         modules = {
-            "serverware": SimpleNamespace(control_plane_enrollment_startup=enrollment),
-            "serverware.control_plane_custody_startup": SimpleNamespace(CustodyStartupError=CustodyStartupError),
-            "serverware.control_plane_custody_client": SimpleNamespace(CustodyClientError=CustodyClientError),
+            "catchplate": SimpleNamespace(control_plane_enrollment_startup=enrollment),
+            "catchplate.control_plane_custody_startup": SimpleNamespace(CustodyStartupError=CustodyStartupError),
+            "catchplate.control_plane_custody_client": SimpleNamespace(CustodyClientError=CustodyClientError),
         }
         def fixture_import(name, *args, **kwargs):
             return modules[name]

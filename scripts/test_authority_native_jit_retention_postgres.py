@@ -23,8 +23,8 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
-os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
+os.environ["CATCHPLATE_PROCESS_MODE"] = "metadata-bootstrap"
+os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
 
 import psycopg
 from psycopg import sql
@@ -34,15 +34,15 @@ from psycopg.types.json import Jsonb
 from scripts import test_authority_native_jit_pending as fixture_source
 from scripts import test_authority_executor_optional_evidence as source_reader
 from scripts.test_webauthn_trust_projection_postgres import local_connection_parameters
-from serverware import authority_audit_capacity as audit_capacity
-from serverware import authority_contract as contract
-from serverware import authority_native_jit_retention_contract as storage
-from serverware import authority_transition_core as core
-from serverware.authority_primary_contract import PRIMARY_KEY_COLUMNS
-from serverware.authority_store.metadata_schema_source import metadata_schema_source
-from serverware.authority_store.mutation_sql import apply_mutation_sql, closed_record_sql
-from serverware.authority_store.root_transition_sql import _exact_payload_keys
-from serverware.authority_store.schema import _policy_candidate_authority_object_name
+from catchplate import authority_audit_capacity as audit_capacity
+from catchplate import authority_contract as contract
+from catchplate import authority_native_jit_retention_contract as storage
+from catchplate import authority_transition_core as core
+from catchplate.authority_primary_contract import PRIMARY_KEY_COLUMNS
+from catchplate.authority_store.metadata_schema_source import metadata_schema_source
+from catchplate.authority_store.mutation_sql import apply_mutation_sql, closed_record_sql
+from catchplate.authority_store.root_transition_sql import _exact_payload_keys
+from catchplate.authority_store.schema import _policy_candidate_authority_object_name
 
 PARAMETERS = None
 AGGREGATES = "policy_authority_bounded_aggregate_states"
@@ -61,7 +61,7 @@ PAYLOAD_FIELDS = ("schema", "measuredPlan", "typedRequest", "selectedBusinessRow
 
 def actual_application_select() -> str:
     """Retain the actual executor ordering, including its scoped route priority."""
-    tree = source_reader._read("serverware/authority_store/executor_v9.py")
+    tree = source_reader._read("catchplate/authority_store/executor_v9.py")
     owner = source_reader._one([node for node in tree.body
         if isinstance(node, ast.FunctionDef) and node.name == "install_authority_v9_executor"])
     template = source_reader._one([source_reader._template(node) for node in ast.walk(owner)
@@ -84,12 +84,12 @@ def install_actual_pair_guards(connection) -> None:
     """
     if storage.TABLE not in contract.POSTGRES_IMMUTABLE_CUSTODY_TABLES:
         raise ValueError("native pair lost its source immutable registration")
-    tree = source_reader._read("serverware/db.py")
+    tree = source_reader._read("catchplate/db.py")
     owner = source_reader._one([node for node in tree.body
         if isinstance(node, ast.FunctionDef) and node.name == "_install_policy_candidate_authority_guards"])
     postgres = source_reader._one([node for node in owner.body if isinstance(node, ast.If)
         and ast.unparse(node.test) == "isinstance(conn, PostgresMetadataConnection)"])
-    for function in ("serverware_reject_policy_authority_mutation", "serverware_validate_policy_authority_insert"):
+    for function in ("catchplate_reject_policy_authority_mutation", "catchplate_validate_policy_authority_insert"):
         statement = source_reader._one([node.args[0].value for node in ast.walk(postgres)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
             and node.func.attr == "execute" and node.args and isinstance(node.args[0], ast.Constant)
@@ -102,7 +102,7 @@ def install_actual_pair_guards(connection) -> None:
     for inventory in ("authority_tables", "immutable_tables"):
         loop = source_reader._one([node for node in ast.walk(postgres)
             if isinstance(node, ast.For) and isinstance(node.iter, ast.Name) and node.iter.id == inventory])
-        exec(compile(ast.Module(body=[loop], type_ignores=[]), str(ROOT / "serverware/db.py"), "exec"), namespace)
+        exec(compile(ast.Module(body=[loop], type_ignores=[]), str(ROOT / "catchplate/db.py"), "exec"), namespace)
 
 
 class NativeJitRetentionPostgresTests(unittest.TestCase):
@@ -227,7 +227,7 @@ class NativeJitRetentionPostgresTests(unittest.TestCase):
 
     def native_payload(self):
         return {**dict.fromkeys(PAYLOAD_FIELDS),
-            "schema": "serverware.policyAuthorityPlannerResponse/v3",
+            "schema": "catchplate.policyAuthorityPlannerResponse/v3",
             "measuredPlan": {"operation": "release.reserve"},
             "typedRequest": copy.deepcopy(self.fixture.parent),
             "nativeJitPending": copy.deepcopy(self.fixture.retained)}

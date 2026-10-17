@@ -47,13 +47,13 @@ MAX_DEPTH = 64
 MAX_SCALAR_BYTES = 256 * 1024
 MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 MAX_PROVENANCE_BYTES = 16 * 1024
-TARGET = "/run/secrets/serverware-control-plane-enrollment-signing-key"
-SOURCE = ("${SERVERWARE_CONTROL_PLANE_ENROLLMENT_SIGNING_KEY_FILE:"
+TARGET = "/run/secrets/catchplate-control-plane-enrollment-signing-key"
+SOURCE = ("${CATCHPLATE_CONTROL_PLANE_ENROLLMENT_SIGNING_KEY_FILE:"
     "?set preprovisioned root-owned mode 0400 enrollment signing key file}")
-SOCKET_TARGET = "/run/serverware/registration-evidence"
-SOCKET_SOURCE = ("${SERVERWARE_REGISTRATION_EVIDENCE_SOCKET_DIR:"
+SOCKET_TARGET = "/run/catchplate/registration-evidence"
+SOCKET_SOURCE = ("${CATCHPLATE_REGISTRATION_EVIDENCE_SOCKET_DIR:"
     "?set preprovisioned registration evidence signer socket directory}")
-PROVENANCE_SCHEMA = "serverware.enrollmentComposePreparation/v1"
+PROVENANCE_SCHEMA = "catchplate.enrollmentComposePreparation/v1"
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _INTEGER = re.compile(r"-?(?:0|[1-9][0-9]*)\Z")
 _FLOAT = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\Z")
@@ -218,15 +218,15 @@ def _volume_target(volume) -> str:
 
 def _server_volumes(base):
     services = base.get("services")
-    server = services.get("serverware") if type(services) is dict else None
+    server = services.get("catchplate") if type(services) is dict else None
     volumes = server.get("volumes") if type(server) is dict else None
     if type(volumes) is not list:
-        raise PreparationError("fixed production source has no serverware volume list")
+        raise PreparationError("fixed production source has no catchplate volume list")
     targets = set()
     for volume in volumes:
         target = _volume_target(volume)
         if target in targets:
-            raise PreparationError("base serverware volumes have duplicate targets")
+            raise PreparationError("base catchplate volumes have duplicate targets")
         targets.add(target)
         for fixed_target in (TARGET, SOCKET_TARGET):
             if (target == fixed_target or fixed_target.startswith(target.rstrip("/") + "/")
@@ -265,8 +265,8 @@ def prepare(*, bootstrap_file: Path, runtime_root_public_key_file: Path,
     # Fixed repository imports only; no application facade, SQL or ambient root.
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-    from serverware import control_plane_enrollment_bootstrap as bootstrap
-    from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+    from catchplate import control_plane_enrollment_bootstrap as bootstrap
+    from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
     root = serialization.load_pem_public_key(root_bytes)
     if not isinstance(root, Ed25519PublicKey):
@@ -286,7 +286,7 @@ def prepare(*, bootstrap_file: Path, runtime_root_public_key_file: Path,
     if enabled:
         overlay_bytes = _read_regular(OVERLAY, MAX_OVERLAY_BYTES)
         overlay = _load_yaml(overlay_bytes, yaml)
-        expected = {"services": {"serverware": {"volumes": [{"type": "bind",
+        expected = {"services": {"catchplate": {"volumes": [{"type": "bind",
             "source": SOURCE, "target": TARGET, "read_only": True,
             "bind": {"create_host_path": False}}, {"type": "bind",
             "source": SOCKET_SOURCE, "target": SOCKET_TARGET, "read_only": True,
@@ -294,7 +294,7 @@ def prepare(*, bootstrap_file: Path, runtime_root_public_key_file: Path,
         # Canonical comparison also distinguishes bools from integers.
         if _canonical(overlay, MAX_OVERLAY_BYTES) != _canonical(expected, MAX_OVERLAY_BYTES):
             raise PreparationError("enrollment overlay differs from its two fixed read-only binds")
-        volumes.extend(overlay["services"]["serverware"]["volumes"])
+        volumes.extend(overlay["services"]["catchplate"]["volumes"])
     compose_bytes = _canonical(base, MAX_OUTPUT_BYTES)
     provenance = {"schema": PROVENANCE_SCHEMA,
         "sourceRevision": bootstrap.authority.SOURCE_REVISION,

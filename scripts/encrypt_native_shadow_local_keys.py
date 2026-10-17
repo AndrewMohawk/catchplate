@@ -19,7 +19,7 @@ if libc.prctl(4, 0, 0, 0, 0) != 0 or libc.prctl(3, 0, 0, 0, 0) != 0:
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from serverware import native_shadow_key_contract as c
+from catchplate import native_shadow_key_contract as c
 p = c.p
 
 
@@ -48,8 +48,8 @@ def run():
         p.require(p.encoded(public) == expected["publicKeyBase64url"])
     nonce = os.urandom(12)
     ciphertext = AESGCM(kek).encrypt(nonce, seeds_raw, c.aad(inventory))
-    output = p.canonical({"apiVersion":("serverware.nativeShadowEncryptedLocalKeys/v2" if c.extended(inventory)
-                                      else "serverware.nativeShadowEncryptedLocalKeys/v1"), "inventorySha256":p.sha(raw),
+    output = p.canonical({"apiVersion":("catchplate.nativeShadowEncryptedLocalKeys/v2" if c.extended(inventory)
+                                      else "catchplate.nativeShadowEncryptedLocalKeys/v1"), "inventorySha256":p.sha(raw),
                           "nonce":p.encoded(nonce), "ciphertext":p.encoded(ciphertext)})
     # Actual process exit, not an assertion that Python/OpenSSL copies erased.
     sys.stdout.buffer.write(output); sys.stdout.buffer.flush()

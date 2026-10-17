@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class CurrentHeadWorkerConnectionControls(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tree = ast.parse((ROOT / "serverware/native_pilot_current_head_worker.py").read_text())
+        cls.tree = ast.parse((ROOT / "catchplate/native_pilot_current_head_worker.py").read_text())
         cls.owner = next(node for node in cls.tree.body
             if isinstance(node, ast.ClassDef) and node.name == "CurrentHeadWorker")
         cls.methods = {node.name: node for node in cls.owner.body if isinstance(node, ast.FunctionDef)}

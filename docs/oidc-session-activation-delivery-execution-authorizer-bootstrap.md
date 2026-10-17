@@ -5,7 +5,7 @@ grant authorizer. It provisions no keys or process, grants no present caller
 permission, and performs no reservation, SQL mutation or plaintext release.
 The implementation is source-only, unbuilt, unexecuted and unprovisioned.
 
-[`oidc_session_activation_delivery_execution_authorizer_bootstrap.py`](../serverware/oidc_session_activation_delivery_execution_authorizer_bootstrap.py)
+[`oidc_session_activation_delivery_execution_authorizer_bootstrap.py`](../catchplate/oidc_session_activation_delivery_execution_authorizer_bootstrap.py)
 authenticates its own original launch and all four detached originals through
 the actual [consume receiving bootstrap](oidc-session-activation-delivery-execution-custody-bootstrap.md).
 It then admits the original current-root enrollment, dedicated consume-grant
@@ -17,9 +17,9 @@ activation authorizer and generic seven-operation grant profiles are unchanged.
 
 The distinct signed-envelope, payload and launch schemas are respectively:
 
-- `serverware.signedOidcSessionActivationDeliveryExecutionAuthorizerBootstrap/v1`;
-- `serverware.oidcSessionActivationDeliveryExecutionAuthorizerBootstrap/v1`;
-- `serverware.oidcSessionActivationDeliveryExecutionAuthorizerLaunch/v1`.
+- `catchplate.signedOidcSessionActivationDeliveryExecutionAuthorizerBootstrap/v1`;
+- `catchplate.oidcSessionActivationDeliveryExecutionAuthorizerBootstrap/v1`;
+- `catchplate.oidcSessionActivationDeliveryExecutionAuthorizerLaunch/v1`.
 
 The envelope is exactly `{schema, payload, signatureBase64Url}`. Its schema is
 also the root-signature domain. The role original is capped at 4 MiB. Its exact
@@ -52,8 +52,8 @@ Role and process mode are
 `oidc-session-activation-delivery-execution-authorizer`; operation is fixed to
 `oidc.session.activation-delivery.consume`. UID/GID are 65500:65500 and the
 control-plane peer is 65532:65532. The fixed listener is
-`/run/serverware/oidc-session-activation-delivery-execution/authorizer.sock`,
-named `serverware-oidc-session-activation-delivery-execution-authorizer`.
+`/run/catchplate/oidc-session-activation-delivery-execution/authorizer.sock`,
+named `catchplate-oidc-session-activation-delivery-execution-authorizer`.
 
 | Launch field | Fixed FD | Original/resource |
 | --- | --- | --- |

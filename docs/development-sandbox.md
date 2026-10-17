@@ -9,19 +9,19 @@ for each browser test. Data and local test keys survive browser refresh and
 container restart. It is not production, hardware, enclave or real-provider
 acceptance.
 
-The deployment lives in the homelab repository's `docker/serverware-sandbox`.
-The browser address is `https://serverware-sandbox.example.com`, protected
+The deployment lives in the homelab repository's `docker/catchplate-sandbox`.
+The browser address is `https://catchplate-sandbox.example.com`, protected
 by the existing Authelia middleware and an exact operator/Traefik-peer check.
 No operator token needs to be copied into the browser. Select **Run synthetic
 proxy check** to exercise the actual internal TLS path and inspect the result.
 
 ## Scope
 
-- Dedicated runner: `python -m serverware.development_sandbox_runner`, with
-  explicit `SERVERWARE_DEVELOPMENT_SANDBOX=1`. The ordinary runner never
+- Dedicated runner: `python -m catchplate.development_sandbox_runner`, with
+  explicit `CATCHPLATE_DEVELOPMENT_SANDBOX=1`. The ordinary runner never
   activates this profile, and production selections are refused.
 - Fresh, private marked data directory. Existing unmarked data is never
-  adopted. Local test keys, a genuinely signed fixed `serverware-demo` policy,
+  adopted. Local test keys, a genuinely signed fixed `catchplate-demo` policy,
   encrypted synthetic credential and demo routes are created once.
 - Separate SQLite policy/nonce database. Nonce replay checks are transactional
   and persist across restarts. No PostgreSQL authority receipts are fabricated.
@@ -37,7 +37,7 @@ proxy check** to exercise the actual internal TLS path and inspect the result.
 - The proxy and app have only an internal Docker network; no host ports,
   external DNS forwarding or provider egress. The HTTP edge alone joins
   Traefik's network. Service tokens remain private runtime files.
-- The deployment sets `SERVERWARE_DATA_PLANE_AUDIT_BATCH_MAX=1` for this
+- The deployment sets `CATCHPLATE_DATA_PLANE_AUDIT_BATCH_MAX=1` for this
   synthetic legacy transport. Multi-event retries can otherwise combine an
   already-committed event with new events, which the immutable audit store
   correctly rejects. Singleton batching preserves signed acknowledgements and

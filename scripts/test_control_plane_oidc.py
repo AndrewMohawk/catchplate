@@ -55,7 +55,7 @@ class FakeRequest:
         if token:
             self.headers["Authorization"] = f"Bearer {token}"
         if csrf:
-            self.headers["X-Serverware-CSRF-Token"] = csrf
+            self.headers["X-Catchplate-CSRF-Token"] = csrf
         self.cookies = cookies or {}
         self.method = method
         self.url = FakeUrl(path)
@@ -82,7 +82,7 @@ def sign_jwt(
         "exp": now + 300,
         "iat": now,
         "nbf": now - 5,
-        "serverware_roles": roles,
+        "catchplate_roles": roles,
     }
     if nonce is not None:
         payload["nonce"] = nonce
@@ -187,8 +187,8 @@ def assertion_response(
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         issuer = "https://idp.example"
-        audience = "serverware-control-plane"
-        kid = "serverware-oidc-test"
+        audience = "catchplate-control-plane"
+        kid = "catchplate-oidc-test"
         private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         numbers = private_key.public_key().public_numbers()
         jwks = {
@@ -204,29 +204,29 @@ def main() -> None:
             ]
         }
 
-        os.environ["SERVERWARE_DATA_DIR"] = tmp
-        os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_OIDC_ENABLED"] = "1"
-        os.environ["SERVERWARE_OIDC_ISSUER"] = issuer
-        os.environ["SERVERWARE_OIDC_AUDIENCE"] = audience
-        os.environ["SERVERWARE_OIDC_JWKS_JSON"] = json.dumps(jwks, separators=(",", ":"), sort_keys=True)
-        os.environ["SERVERWARE_OIDC_ROLE_CLAIM"] = "serverware_roles"
-        os.environ["SERVERWARE_OIDC_BROWSER_LOGIN_ENABLED"] = "1"
-        os.environ["SERVERWARE_OIDC_AUTHORIZATION_ENDPOINT"] = f"{issuer}/authorize"
-        os.environ["SERVERWARE_OIDC_TOKEN_ENDPOINT"] = f"{issuer}/token"
-        os.environ["SERVERWARE_OIDC_CLIENT_ID"] = audience
-        os.environ["SERVERWARE_OIDC_CLIENT_SECRET"] = "test-browser-oidc-client-secret"
-        os.environ["SERVERWARE_OIDC_REDIRECT_URI"] = "https://serverware.test/api/auth/oidc/callback"
-        os.environ["SERVERWARE_ADMIN_TOKEN"] = "local-admin-token-for-csrf-test"
-        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
-        os.environ["SERVERWARE_DEV_AUTHENTICATOR"] = "1"
+        os.environ["CATCHPLATE_DATA_DIR"] = tmp
+        os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_OIDC_ENABLED"] = "1"
+        os.environ["CATCHPLATE_OIDC_ISSUER"] = issuer
+        os.environ["CATCHPLATE_OIDC_AUDIENCE"] = audience
+        os.environ["CATCHPLATE_OIDC_JWKS_JSON"] = json.dumps(jwks, separators=(",", ":"), sort_keys=True)
+        os.environ["CATCHPLATE_OIDC_ROLE_CLAIM"] = "catchplate_roles"
+        os.environ["CATCHPLATE_OIDC_BROWSER_LOGIN_ENABLED"] = "1"
+        os.environ["CATCHPLATE_OIDC_AUTHORIZATION_ENDPOINT"] = f"{issuer}/authorize"
+        os.environ["CATCHPLATE_OIDC_TOKEN_ENDPOINT"] = f"{issuer}/token"
+        os.environ["CATCHPLATE_OIDC_CLIENT_ID"] = audience
+        os.environ["CATCHPLATE_OIDC_CLIENT_SECRET"] = "test-browser-oidc-client-secret"
+        os.environ["CATCHPLATE_OIDC_REDIRECT_URI"] = "https://catchplate.test/api/auth/oidc/callback"
+        os.environ["CATCHPLATE_ADMIN_TOKEN"] = "local-admin-token-for-csrf-test"
+        os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
+        os.environ["CATCHPLATE_DEV_AUTHENTICATOR"] = "1"
 
         from fastapi import HTTPException, Response
 
-        from serverware import auth, db, operator_oidc, webauthn
-        from serverware import app as app_module
+        from catchplate import auth, db, operator_oidc, webauthn
+        from catchplate import app as app_module
 
         db.init_db()
 
@@ -250,7 +250,7 @@ def main() -> None:
             "approvals/id",
             " https://attacker.invalid/approvals/id",
             "https://attacker.invalid/approvals/id",
-            "http://serverware.test/approvals/id",
+            "http://catchplate.test/approvals/id",
             "//attacker.invalid/approvals/id",
             "/\\attacker.invalid/approvals/id",
             "\\\\attacker.invalid\\approvals\\id",
@@ -295,7 +295,7 @@ def main() -> None:
             )
 
         token = sign_jwt(private_key, kid=kid, issuer=issuer, audience=audience, roles=["auditor", "policy_author"])
-        identity = auth.require_admin(FakeRequest(token), x_serverware_admin_token=None)
+        identity = auth.require_admin(FakeRequest(token), x_catchplate_admin_token=None)
         if identity.user_id != "oidc:andrew" or identity.auth_method != "oidc-bearer":
             raise AssertionError(f"OIDC identity was not accepted: {identity}")
         if identity.roles != frozenset({"auditor", "policy_author"}):
@@ -306,13 +306,13 @@ def main() -> None:
             token,
             method="POST",
             path="/api/credentials",
-            cookies={"serverware_admin": auth.admin_token()},
+            cookies={"catchplate_admin": auth.admin_token()},
         )
         auth.validate_csrf_request(csrf_request)
 
         bad_audience = sign_jwt(private_key, kid=kid, issuer=issuer, audience="wrong-audience", roles=["auditor"])
         try:
-            auth.require_admin(FakeRequest(bad_audience), x_serverware_admin_token=None)
+            auth.require_admin(FakeRequest(bad_audience), x_catchplate_admin_token=None)
         except HTTPException as exc:
             if exc.status_code != 401 or "audience mismatch" not in str(exc.detail):
                 raise AssertionError(f"bad audience failed with wrong error: {exc.status_code} {exc.detail}") from exc
@@ -327,7 +327,7 @@ def main() -> None:
             roles=["auditor"],
         )
         try:
-            auth.require_admin(FakeRequest(multiple_audiences), x_serverware_admin_token=None)
+            auth.require_admin(FakeRequest(multiple_audiences), x_catchplate_admin_token=None)
         except HTTPException as exc:
             if exc.status_code != 401 or "authorized party" not in str(exc.detail):
                 raise AssertionError(f"missing azp failed with wrong error: {exc.status_code} {exc.detail}") from exc
@@ -343,7 +343,7 @@ def main() -> None:
             authorized_party=audience,
         )
         if auth.require_admin(
-            FakeRequest(authorized_multiple_audiences), x_serverware_admin_token=None
+            FakeRequest(authorized_multiple_audiences), x_catchplate_admin_token=None
         ).user_id != "oidc:andrew":
             raise AssertionError("multi-audience OIDC token with the expected azp was rejected")
 
@@ -353,7 +353,7 @@ def main() -> None:
         auth.OIDC_JWKS_JSON = json.dumps(encryption_jwks, separators=(",", ":"), sort_keys=True)
         auth._oidc_jwks.cache_clear()
         try:
-            auth.require_admin(FakeRequest(token), x_serverware_admin_token=None)
+            auth.require_admin(FakeRequest(token), x_catchplate_admin_token=None)
         except HTTPException as exc:
             if exc.status_code != 401 or "signatures" not in str(exc.detail):
                 raise AssertionError(f"encryption-only JWK failed with wrong error: {exc.status_code} {exc.detail}") from exc
@@ -365,16 +365,16 @@ def main() -> None:
 
         missing_roles = sign_jwt(private_key, kid=kid, issuer=issuer, audience=audience, roles=[])
         try:
-            auth.require_admin(FakeRequest(missing_roles), x_serverware_admin_token=None)
+            auth.require_admin(FakeRequest(missing_roles), x_catchplate_admin_token=None)
         except HTTPException as exc:
             if exc.status_code != 401 or "RBAC roles" not in str(exc.detail):
                 raise AssertionError(f"missing roles failed with wrong error: {exc.status_code} {exc.detail}") from exc
         else:
-            raise AssertionError("OIDC token without Serverware roles was accepted")
+            raise AssertionError("OIDC token without Catchplate roles was accepted")
 
         tampered = token.rsplit(".", 1)[0] + "." + b64u(b"bad-signature")
         try:
-            auth.require_admin(FakeRequest(tampered), x_serverware_admin_token=None)
+            auth.require_admin(FakeRequest(tampered), x_catchplate_admin_token=None)
         except HTTPException as exc:
             if exc.status_code != 401 or "signature" not in str(exc.detail):
                 raise AssertionError(f"tampered token failed with wrong error: {exc.status_code} {exc.detail}") from exc
@@ -500,7 +500,7 @@ def main() -> None:
             )
             flow_cookie = SimpleCookie()
             flow_cookie.load(start_response.headers["set-cookie"])
-            browser_nonce = flow_cookie["serverware_oidc_flow"].value
+            browser_nonce = flow_cookie["catchplate_oidc_flow"].value
             if expected_target != "/" and (
                 expected_target in authorization_url
                 or expected_target in json.dumps(start_payload, sort_keys=True)
@@ -554,7 +554,7 @@ def main() -> None:
                 redirect = app_module.operator_oidc_callback(
                     FakeRequest(
                         path="/api/auth/oidc/callback",
-                        cookies={"serverware_oidc_flow": browser_nonce},
+                        cookies={"catchplate_oidc_flow": browser_nonce},
                     ),
                     state=authorization_query["state"],
                     code=code,
@@ -582,7 +582,7 @@ def main() -> None:
             app_module.operator_oidc_callback(
                 FakeRequest(
                     path="/api/auth/oidc/callback",
-                    cookies={"serverware_oidc_flow": approval_browser_nonce},
+                    cookies={"catchplate_oidc_flow": approval_browser_nonce},
                 ),
                 state=approval_query["state"],
                 code="approval-return-replay-code",
@@ -643,8 +643,8 @@ def main() -> None:
                     FakeRequest(
                         path="/api/auth/oidc/callback",
                         cookies={
-                            "serverware_oidc_flow": expired_cookie[
-                                "serverware_oidc_flow"
+                            "catchplate_oidc_flow": expired_cookie[
+                                "catchplate_oidc_flow"
                             ].value
                         },
                     ),
@@ -661,7 +661,7 @@ def main() -> None:
 
         cookie_identity = auth.require_admin(
             FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: session_token}),
-            x_serverware_admin_token=None,
+            x_catchplate_admin_token=None,
         )
         if cookie_identity.auth_method != "oidc-session" or cookie_identity.user_id != "oidc:andrew":
             raise AssertionError(f"verified OIDC session cookie was not accepted: {cookie_identity}")
@@ -669,7 +669,7 @@ def main() -> None:
         try:
             auth.require_admin(
                 FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: session_token}),
-                x_serverware_admin_token=None,
+                x_catchplate_admin_token=None,
             )
         except HTTPException as exc:
             if exc.status_code != 401 or "not bound" not in str(exc.detail):
@@ -704,7 +704,7 @@ def main() -> None:
         try:
             auth.require_admin(
                 FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: browser_id_token}),
-                x_serverware_admin_token=None,
+                x_catchplate_admin_token=None,
             )
         except HTTPException as exc:
             if exc.status_code != 401:
@@ -755,7 +755,7 @@ def main() -> None:
         try:
             auth.require_admin(
                 FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: pending_token}),
-                x_serverware_admin_token=None,
+                x_catchplate_admin_token=None,
             )
         except HTTPException as exc:
             if exc.status_code != 401:
@@ -908,7 +908,7 @@ def main() -> None:
         try:
             auth.require_admin(
                 FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: pending_token}),
-                x_serverware_admin_token=None,
+                x_catchplate_admin_token=None,
             )
         except HTTPException as exc:
             if exc.status_code != 401:
@@ -917,7 +917,7 @@ def main() -> None:
             raise AssertionError("pending OIDC token remained valid after activation")
         if auth.require_admin(
             FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: active_token}),
-            x_serverware_admin_token=None,
+            x_catchplate_admin_token=None,
         ).user_id != "oidc:andrew":
             raise AssertionError("WebAuthn-bound OIDC session was not activated")
         with db.connect() as conn:
@@ -928,7 +928,7 @@ def main() -> None:
         try:
             auth.require_admin(
                 FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: active_token}),
-                x_serverware_admin_token=None,
+                x_catchplate_admin_token=None,
             )
         except HTTPException as exc:
             if exc.status_code != 401 or "trust generation changed" not in str(exc.detail):
@@ -950,7 +950,7 @@ def main() -> None:
         try:
             auth.require_admin(
                 FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: active_token}),
-                x_serverware_admin_token=None,
+                x_catchplate_admin_token=None,
             )
         except HTTPException as exc:
             if exc.status_code != 401:

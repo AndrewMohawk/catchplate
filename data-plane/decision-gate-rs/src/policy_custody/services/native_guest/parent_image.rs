@@ -1,7 +1,7 @@
 //! Actual cold image and sealed static executable, retained until child reap.
 use super::*;
 use super::FileAdmission;
-use serverware_decision_gate::native_secret_broker_v1::shadow_image::ShadowImage;
+use catchplate_decision_gate::native_secret_broker_v1::shadow_image::ShadowImage;
 use std::fs::File;
 use std::io::Write;
 use std::os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd};
@@ -69,7 +69,7 @@ impl Image {
             let count=source.read_at(&mut bytes[offset..],offset as u64).map_err(fail)?;
             require(count>0)?;offset+=count;
         }
-        serverware_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&bytes).map_err(fail)?;
+        catchplate_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&bytes).map_err(fail)?;
         let raw=unsafe{libc::syscall(libc::SYS_memfd_create,c"native-shadow-guest-executable".as_ptr(),
             libc::MFD_CLOEXEC|libc::MFD_ALLOW_SEALING)};
         require(raw>=0)?;let mut executable=unsafe{File::from_raw_fd(raw as i32)};

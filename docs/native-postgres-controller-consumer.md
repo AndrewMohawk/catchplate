@@ -24,7 +24,7 @@ the Python inventory. This includes representation/source component methods;
 it is not a claim of 311 executed SQL tests.
 
 The runner must have an artifact mount, Linux/amd64, UID/GID `10001:10001`, and
-the exact source/artifact/output destinations under `/opt/serverware`. Admission
+the exact source/artifact/output destinations under `/opt/catchplate`. Admission
 requires at least 4 GiB memory, 128 PIDs, 1024 open files, 64 MiB each shared
 memory and `/run`, 256 MiB `/tmp`, 2 GiB private data, and 256 MiB/4096 inodes
 for output. General no-swap, closed network/mount/inspection and checked total

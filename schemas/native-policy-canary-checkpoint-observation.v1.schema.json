@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-policy-canary-checkpoint-observation.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-policy-canary-checkpoint-observation.v1.schema.json",
   "title": "Actual native custody compaction interval",
   "$comment": "Closed record11, original compaction receipt19 and exact ordered range6/reference10. One atomic event. Complete canonical record <=32768 bytes. Actual assigned spool-compaction signature and protected current lineage required. Eight contiguous event commitments are not complete ingress, fleet, client delivery, sealed checkpoint or readiness evidence. No new signature permission, contact/retry or physical-storage authority.",
   "$ref": "#/$defs/event",
@@ -12,7 +12,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "canary_id", "instance_id", "boot_id", "assignment_envelope_digest", "assignment_payload_digest", "load_receipt_envelope_digest", "publication_envelope_digest", "receipt", "ordered_range", "signing_public_key_base64url"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeCustodyCheckpointObservation/v1"},
+        "apiVersion": {"const": "catchplate.nativeCustodyCheckpointObservation/v1"},
         "canary_id": {"$ref": "#/$defs/sha256"},
         "instance_id": {"type": "string", "minLength": 1, "maxLength": 256},
         "boot_id": {"$ref": "#/$defs/sha256"},
@@ -57,7 +57,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["domain", "generationId", "firstEventOrdinal", "lastEventOrdinal", "recordCount", "receipts"],
       "properties": {
-        "domain": {"const": "serverware.policyShadowSpoolCompactedOrderedRange/v1"},
+        "domain": {"const": "catchplate.policyShadowSpoolCompactedOrderedRange/v1"},
         "generationId": {"$ref": "#/$defs/sha256"},
         "firstEventOrdinal": {"$ref": "#/$defs/positive"},
         "lastEventOrdinal": {"$ref": "#/$defs/positive"},
@@ -89,7 +89,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "generationId", "firstEventOrdinal", "lastEventOrdinal", "orderedRangeRootSha256", "receiptSha256", "signatureMessageSha256", "recordSha256", "coverage"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeCustodyCheckpointObservation/v1"},
+        "apiVersion": {"const": "catchplate.nativeCustodyCheckpointObservation/v1"},
         "generationId": {"$ref": "#/$defs/sha256"},
         "firstEventOrdinal": {"$ref": "#/$defs/positive"},
         "lastEventOrdinal": {"$ref": "#/$defs/positive"},

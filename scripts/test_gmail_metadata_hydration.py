@@ -65,7 +65,7 @@ class GmailMetadataHydrationTests(unittest.TestCase):
 
     def test_python_legacy_denial_precedes_credential_work(self) -> None:
         policy_source = (
-            ROOT / "serverware/policy_engine.py"
+            ROOT / "catchplate/policy_engine.py"
         ).read_text(encoding="utf-8")
         request_start = policy_source.index(
             "def evaluate_request(flow: http.HTTPFlow)"
@@ -96,7 +96,7 @@ class GmailMetadataHydrationTests(unittest.TestCase):
 
     def test_addon_marks_legacy_transport_before_evaluation(self) -> None:
         addon_source = (
-            ROOT / "serverware/mitm_addon.py"
+            ROOT / "catchplate/mitm_addon.py"
         ).read_text(encoding="utf-8")
         request_start = addon_source.index(
             "def request(self, flow: http.HTTPFlow)"

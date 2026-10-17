@@ -16,13 +16,13 @@ files or environment.
 ## Authority and exact originals
 
 `GuestRoleKeyProvisionerConfiguration::validate` accepts the closed eight-field
-`serverware.nativeGuestRoleKeyProvisioner/v1` configuration: `apiVersion`,
+`catchplate.nativeGuestRoleKeyProvisioner/v1` configuration: `apiVersion`,
 `helperImage`, `kmsParentPort`, `kmsKeyId`, `ciphertextBlobSha256`,
 `encryptionContext`, `kekSha256`, and `encryptedInventory`. Its paired schema is
 [`configuration`](../schemas/native-guest-role-key-provisioner.v1.schema.json#/$defs/configuration).
 The helper image and encrypted-inventory path are source-fixed; all full hashes
 must be nonzero. The KMS encryption context requires the distinct
-`serverwarePurpose: guest-role-keys/v1` value. The new helper image is not the
+`catchplatePurpose: guest-role-keys/v1` value. The new helper image is not the
 serving broker's image, entrypoint, phase, or key assignment.
 
 Each `PreparedRoleDelivery` authenticates the existing configuration/delivery
@@ -56,7 +56,7 @@ handoff, not a readable seed descriptor.
 
 The helper is launched from a separately hashed, sealed-memfd, read-only
 SquashFS root and held interpreter FD. Its sole entrypoint is
-`/opt/serverware/serverware/native_role_key_provisioner.py`. The child gets
+`/opt/catchplate/catchplate/native_role_key_provisioner.py`. The child gets
 only its unnamed Unix channel and exact write-only output FDs, no inherited
 environment or general output-path API. It drops to UID/GID 64989, clears
 supplementary groups/capabilities, sets no-new-privileges and non-dumpability,

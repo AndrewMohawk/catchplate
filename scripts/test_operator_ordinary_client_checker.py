@@ -34,10 +34,10 @@ def response(case):
     status = 200 if case == "json" else 204
     body = checker.JSON_RESPONSE_BODY if case == "json" else b""
     headers = [("Content-Type", "application/json" if case == "json" else checker.EMPTY_RESPONSE_CONTENT_TYPE),
-               ("X-Serverware-Policy-Hash", POLICY),
-               ("X-Serverware-Response-Body-SHA256", checker.digest(body)),
-               ("X-Serverware-Request-Digest", sha(status)),
-               ("X-Serverware-Operation-Digest", sha(status + 1000))]
+               ("X-Catchplate-Policy-Hash", POLICY),
+               ("X-Catchplate-Response-Body-SHA256", checker.digest(body)),
+               ("X-Catchplate-Request-Digest", sha(status)),
+               ("X-Catchplate-Operation-Digest", sha(status + 1000))]
     if case == "json":
         headers.append(("Content-Length", str(len(body))))
     return status, headers, body
@@ -282,9 +282,9 @@ class OrdinaryCheckerTests(unittest.TestCase):
         for change in (changed, body + b" ", b""):
             with self.subTest(body_length=len(change)), self.assertRaises(checker.CheckFailure):
                 check("json", status, headers, change)
-        for key, replacement in (("X-Serverware-Policy-Hash", sha(99)),
-                                 ("X-Serverware-Response-Body-SHA256", sha(99)),
-                                 ("X-Serverware-Request-Digest", "missing")):
+        for key, replacement in (("X-Catchplate-Policy-Hash", sha(99)),
+                                 ("X-Catchplate-Response-Body-SHA256", sha(99)),
+                                 ("X-Catchplate-Request-Digest", "missing")):
             with self.subTest(header=key), self.assertRaises(checker.CheckFailure):
                 check("json", status, [(name, replacement if name == key else val) for name, val in headers], body)
 

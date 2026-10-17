@@ -17,7 +17,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import ecr_image_artifact as artifact
+from catchplate import ecr_image_artifact as artifact
 
 
 OCI = "application/vnd.oci.image.manifest.v1+json"
@@ -101,7 +101,7 @@ class EcrImageArtifactTests(unittest.TestCase):
     def test_shared_literal_vector_and_original_manifest_commitment(self):
         path = Path(__file__).parent / "fixtures/ecr_image_artifact_v1.json"
         vector = json.loads(path.read_bytes())
-        self.assertEqual(vector["schema"], "serverware.ecrImageArtifactVector/v1")
+        self.assertEqual(vector["schema"], "catchplate.ecrImageArtifactVector/v1")
         raw = vector["manifest"].encode()
         supplied = {row["digest"]: Reader(row["utf8"].encode()) for row in vector["blobs"]}
         for key, reader in supplied.items():
@@ -115,7 +115,7 @@ class EcrImageArtifactTests(unittest.TestCase):
         self.assertEqual(digest(canonical), vector["expected_commitment_sha256"])
         self.assertEqual(result.commitment(), expected)
         self.assertEqual(result.commitment_sha256,
-                         "sha256:a433807a418a8d5bb2674e45321ce12b8983f21e4198ed2f386bc540fe311973")
+                         "sha256:03cb97c1f655f85753754a8e4692d4c8e54402d38d42a6de6226ce6c2e22b26b")
         self.assertEqual(result.manifest_bytes, raw)
         self.assertEqual((result.manifest.size, result.total_blob_bytes), (735, 18))
         self.assertEqual([row.digest for row in result.layers],

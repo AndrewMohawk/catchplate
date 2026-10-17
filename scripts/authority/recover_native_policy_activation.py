@@ -8,8 +8,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from serverware import native_policy_activation_recovery as recovery
-from serverware import authority_policy_canary as profile
+from catchplate import native_policy_activation_recovery as recovery
+from catchplate import authority_policy_canary as profile
 
 
 def main():

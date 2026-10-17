@@ -51,9 +51,9 @@ def browser():
 def configuration():
     # Independent literal matching the actual public download producer.
     return {"application_id": IDS["application"], "access_rule_id": IDS["rule"],
-        "proxy_url": "https://serverware-gmail-proxy.example.com", "upstream_url": "https://demo-upstream:8443/ordinary-client",
+        "proxy_url": "https://catchplate-gmail-proxy.example.com", "upstream_url": "https://demo-upstream:8443/ordinary-client",
         "methods": ["POST"], "response_mode": "unfiltered_json_or_empty_v2", "credential_input": "replace_exact",
-        "request_headers": {"Authorization": "Bearer SERVERWARE_DUMMY"}, "ca_file": "/client-trust/inner-ca.pem",
+        "request_headers": {"Authorization": "Bearer CATCHPLATE_DUMMY"}, "ca_file": "/client-trust/inner-ca.pem",
         "token_expires_at_epoch_ms": 2000000000000,
         "note": "Private development client configuration. Never commit or share. Provider credential not included.",
         "proxy_authentication": "basic_and_bearer_v1", "proxy_username": IDS["application"], "proxy_password": TOKEN,
@@ -114,12 +114,12 @@ class GuidedProtocolTests(unittest.TestCase):
         self.assertEqual(ready["providerSecret"], SECRET)
         self.assertEqual(ready["timeoutSeconds"], 180)
         self.assertEqual(ready["tokenTtlSeconds"], 3600)
-        self.assertEqual(ready["origin"], "https://serverware-guided.example.com")
+        self.assertEqual(ready["origin"], "https://catchplate-guided.example.com")
         self.assertEqual(wire.rule_values("Rule", IDS["application"], IDS["credential"]), {
             "name": "Rule", "application_id": IDS["application"], "credential_id": IDS["credential"],
             "upstream_url": "https://demo-upstream:8443/ordinary-client", "methods": ["POST"], "request_fields": [],
             "response_fields": [], "request_body_mode": "preserve_json_v1", "response_mode": "unfiltered_json_or_empty_v2",
-            "credential_input": "replace_exact", "placeholder": "Bearer SERVERWARE_DUMMY",
+            "credential_input": "replace_exact", "placeholder": "Bearer CATCHPLATE_DUMMY",
             "query_keys": ["case", "expectedAuthorizationSha256", "expectedBodySha256"],
             "allowed_headers": ["accept", "accept-encoding", "user-agent"]})
         self.assertEqual(wire.BODY, EXPECTED_BODY)
@@ -146,19 +146,19 @@ class GuidedProtocolTests(unittest.TestCase):
         # observed counters. No constructor, file, socket or process is invoked.
         check = object.__new__(checker.GuidedCheck)
         check.config, check.credential, check.run_id = configuration(), SECRET, RUN
-        check.proxy = SimpleNamespace(host="serverware-gmail-proxy.example.com", address="127.0.0.1")
+        check.proxy = SimpleNamespace(host="catchplate-gmail-proxy.example.com", address="127.0.0.1")
         check.args = SimpleNamespace(curl_binary=Path("/usr/bin/curl"), proxy_ca_file=Path("/client-trust/outer-ca.pem"))
         check.body_file, check.policy_hash = Path("/unused-synthetic-body.json"), DIGESTS[2]
         check.deadline = checker.time.monotonic() + 30
         check.clean = lambda value: self.assertNotIn(SECRET.encode(), value)
         check.count = unittest.mock.Mock(side_effect=counts or ([1, 1] if denied else [0, 1]))
         headers = [("Content-Type", "application/json"), ("Content-Length", str(len(body))),
-            ("X-Serverware-Policy-Hash", DIGESTS[2]), ("X-Serverware-Request-Digest", DIGESTS[5]),
-            ("X-Serverware-Operation-Digest", DIGESTS[6]), ("X-Serverware-Response-Body-Sha256", checker.sha(body)),
+            ("X-Catchplate-Policy-Hash", DIGESTS[2]), ("X-Catchplate-Request-Digest", DIGESTS[5]),
+            ("X-Catchplate-Operation-Digest", DIGESTS[6]), ("X-Catchplate-Response-Body-Sha256", checker.sha(body)),
             *extra_headers]
         raw = b"HTTP/1.1 200 OK\r\n" + b"\r\n".join((key + ": " + value).encode() for key, value in headers) + b"\r\n\r\n" + body
-        response = (56, b"\nserverware-guided-connect:403\nserverware-guided-status:000\n", b"") if denied else (
-            0, raw + b"\nserverware-guided-connect:200\nserverware-guided-status:200\n", b"")
+        response = (56, b"\ncatchplate-guided-connect:403\ncatchplate-guided-status:000\n", b"") if denied else (
+            0, raw + b"\ncatchplate-guided-connect:200\ncatchplate-guided-status:200\n", b"")
         with patch.object(checker.socket, "getaddrinfo", return_value=[(None, None, None, None, ("127.0.0.1", 443))]), \
                 patch.object(checker, "run_curl", return_value=response) as curl:
             value = check.dispatch(denied=denied)
@@ -185,8 +185,8 @@ class GuidedProtocolTests(unittest.TestCase):
             with self.subTest(body=body), self.assertRaises(CheckFailure):
                 self.dispatch(body)
         for header in (("Content-Encoding", "identity"), ("Transfer-Encoding", "chunked"),
-                ("Trailer", "X-Synthetic"), ("Server", "serverware-synthetic-upstream"),
-                ("X-Serverware-Response-Body-Sha256", DIGESTS[0])):
+                ("Trailer", "X-Synthetic"), ("Server", "catchplate-synthetic-upstream"),
+                ("X-Catchplate-Response-Body-Sha256", DIGESTS[0])):
             with self.subTest(header=header), self.assertRaises(CheckFailure):
                 self.dispatch(extra_headers=(header,))
 
@@ -222,7 +222,7 @@ class GuidedProtocolTests(unittest.TestCase):
         target = oracle.build_target(oracle.PROXY_BASIC_CASE, digest)
         headers = [(b"host", b"demo-upstream:8443"), (b"authorization", ("Bearer " + SECRET).encode()),
             (b"content-type", b"application/json"), (b"content-length", str(len(EXPECTED_BODY)).encode()),
-            (b"accept", b"application/json"), (b"user-agent", ("serverware-test-run/" + RUN).encode())]
+            (b"accept", b"application/json"), (b"user-agent", ("catchplate-test-run/" + RUN).encode())]
         query = target.split("?", 1)[1].encode()
         admitted = oracle.admit_request("POST", b"/ordinary-client", query, headers)
         self.assertEqual(oracle.verify_body(admitted, EXPECTED_BODY).body, EXPECTED_BODY)
@@ -238,7 +238,7 @@ class GuidedProtocolTests(unittest.TestCase):
                 oracle.verify_body(admitted, wrong)
 
     def test_ready_preflight_uses_actual_catalog_validation_not_retired_status(self):
-        catalog = {**deepcopy(INITIAL), "schema": "serverware.operatorCatalog/v1",
+        catalog = {**deepcopy(INITIAL), "schema": "catchplate.operatorCatalog/v1",
             "mode": "operator-development", "productionReady": False, "hardwareVerified": False,
             "allowed_upstreams": ["https://demo-upstream:8443"], "proxy_url": wire.PROXY,
             **{key: [] for key in wire.COLLECTIONS}}
@@ -267,7 +267,7 @@ class GuidedProtocolTests(unittest.TestCase):
             return calls
         with self.assertRaises(ReadyReached):
             exercise(catalog)
-        for key, value in (("schema", "serverware.operatorDemo/v1"), ("mode", "native"),
+        for key, value in (("schema", "catchplate.operatorDemo/v1"), ("mode", "native"),
                            ("productionReady", True), ("hardwareVerified", True),
                            ("allowed_upstreams", ["https://outside.example.com"])):
             with self.subTest(key=key), self.assertRaises(CheckFailure):

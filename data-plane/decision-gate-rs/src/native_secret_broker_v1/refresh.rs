@@ -54,7 +54,7 @@ impl Owner {
             let mut response = document(&self.process.exchange(&canonical_ascii_bytes(&request)?, deadline)?, MAX_FRAME)?;
             let mut transport: Option<VsockStreamV1> = None;
             let mut sequence = 0u64; let mut total = 0usize;
-            while response["apiVersion"] == "serverware.nativeOAuthRefreshTls/v1" {
+            while response["apiVersion"] == "catchplate.nativeOAuthRefreshTls/v1" {
                 fields(&response, &["apiVersion","providerId","sequence","ciphertext","read"])?;
                 sequence += 1;
                 ensure(sequence <= 512 && response["sequence"].as_u64() == Some(sequence)
@@ -70,7 +70,7 @@ impl Owner {
                 input.truncate(size); total = total.checked_add(output.len() + input.len()).ok_or("refresh relay count overflow")?;
                 ensure(total <= 512 * 1024, "refresh TLS relay aggregate bound")?;
                 self.check(deadline)?;
-                let reply = json!({"apiVersion":"serverware.nativeOAuthRefreshTls/v1","sequence":sequence,
+                let reply = json!({"apiVersion":"catchplate.nativeOAuthRefreshTls/v1","sequence":sequence,
                     "ciphertext":if input.is_empty(){Value::Null}else{json!(encoded(&input))},"eof":read && size == 0});
                 response = document(&self.process.exchange(&canonical_ascii_bytes(&reply)?, deadline)?, MAX_FRAME)?;
             }

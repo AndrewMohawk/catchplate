@@ -14,7 +14,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.policy_bundle import compile_policy_bundle, demo_policy_bundle, validate_policy_schema
+from catchplate.policy_bundle import compile_policy_bundle, demo_policy_bundle, validate_policy_schema
 
 
 def unavailable_dependency(name: str) -> ModuleType:
@@ -29,12 +29,12 @@ def unavailable_dependency(name: str) -> ModuleType:
 
 # The real authority registry has a separately tracked startup blocker. Load
 # only the pure adapter boundary; any attempted DB/runtime use fails this test.
-SPEC = importlib.util.spec_from_file_location("generic_content_type_adapters_unit", ROOT / "serverware/adapters.py")
+SPEC = importlib.util.spec_from_file_location("generic_content_type_adapters_unit", ROOT / "catchplate/adapters.py")
 assert SPEC is not None and SPEC.loader is not None
 adapters = importlib.util.module_from_spec(SPEC)
 with mock.patch.dict(sys.modules, {
-    "serverware.db": unavailable_dependency("serverware.db"),
-    "serverware.runtime": unavailable_dependency("serverware.runtime"),
+    "catchplate.db": unavailable_dependency("catchplate.db"),
+    "catchplate.runtime": unavailable_dependency("catchplate.runtime"),
 }):
     SPEC.loader.exec_module(adapters)
 

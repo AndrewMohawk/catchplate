@@ -29,34 +29,34 @@ CHECKER = "scripts/check_operator_managed_retained_fixture.py"
 PREPARER = "scripts/prepare_operator_managed_retained_fixture.py"
 ADDRESSES = ("172.16.249.18", "172.16.249.19", "172.16.249.20")
 HOSTS = ("127.0.0.1 localhost\n172.16.249.18 demo-upstream\n"
-         "172.16.249.19 serverware\n172.16.249.20 decision-gate-rs\n").encode("ascii")
+         "172.16.249.19 catchplate\n172.16.249.20 decision-gate-rs\n").encode("ascii")
 RESOLV = b"nameserver 127.0.0.1\noptions attempts:1 timeout:1\n"
 KEEPER_SECONDS = 600
-LEAVES = (".operator-publication.lock", ".serverware-operator-demo.json",
+LEAVES = (".operator-publication.lock", ".catchplate-operator-demo.json",
           "mitmproxy/mitmproxy-ca-cert.pem", "mitmproxy/mitmproxy-ca.pem")
 SETTINGS = {"allowed_upstreams": ["https://demo-upstream:8443"], "fixture_cidrs": [ADDRESSES[0] + "/32"]}
 
 
 def manifest():
-    return {"schema": "serverware.operatorGoogleGateConfiguration/v1", "operation": None,
+    return {"schema": "catchplate.operatorGoogleGateConfiguration/v1", "operation": None,
         "profile_binding": None, "profile_binding_digest": None, "effective_settings": SETTINGS,
         "effective_settings_digest": "sha256:" + snapshots.digest(SETTINGS)}
 
 
 def job_path(root):
     base.require(root.is_absolute() and root.parent == base.SCRATCH and re.fullmatch(
-        r"serverware-managed-retained-private\.[A-Za-z0-9]{6,32}", root.name), "private rehearsal job required")
+        r"catchplate-managed-retained-private\.[A-Za-z0-9]{6,32}", root.name), "private rehearsal job required")
 
 
 def build(source, binary, root, *, expected_binary_sha256):
     job_path(root)
-    template = root.with_name("serverware-catalog-private." + root.name.split(".", 1)[1])
+    template = root.with_name("catchplate-catalog-private." + root.name.split(".", 1)[1])
     # The inherited initializer is discarded before the recipe is returned.
     # No initializer file, token creation or synthetic state is used here.
     config = base.build(source, binary, source / PREPARER, template, "172.16.249.16/28",
         expected_binary_sha256=expected_binary_sha256)
     config.pop("networks")
-    config["name"] = "serverware-managed-retained-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
+    config["name"] = "catchplate-managed-retained-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
     services = config["services"]
     services.pop("initialize")
     common = services.pop("demo-upstream")
@@ -71,27 +71,27 @@ def build(source, binary, root, *, expected_binary_sha256):
             if path.is_relative_to(template):
                 mount["source"] = str(root / path.relative_to(template))
         service["volumes"].extend(deepcopy(hosts))
-        service["environment"]["SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED"] = "1"
-        service["environment"]["SERVERWARE_OPERATOR_DEMO_PROXY_URL"] = "https://serverware-proxy.example.com:443"
-    app = services["serverware"]
+        service["environment"]["CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED"] = "1"
+        service["environment"]["CATCHPLATE_OPERATOR_DEMO_PROXY_URL"] = "https://catchplate-proxy.example.com:443"
+    app = services["catchplate"]
     app["depends_on"] = {"network": {"condition": "service_healthy"}}
     app["environment"].update({
-        "SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED": "1",
-        "SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR": "/provider-custody",
-        "SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED": "1",
-        "SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR": "/notification-custody",
-        "SERVERWARE_OPERATOR_NOTIFICATIONS_PRIVATE_DESTINATIONS_JSON": '{"bindings":[]}',
-        "SERVERWARE_PROCESS_MODE": "serverware-control-plane", "SERVERWARE_METADATA_STORE_BACKEND": "sqlite",
-        "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite", "SERVERWARE_GRANT_STORE_BACKEND": "sqlite",
-        "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0", "SERVERWARE_KEY_RELEASE_REQUIRED": "0",
-        "SERVERWARE_DEV_AUTHENTICATOR": "0", "SERVERWARE_DEV_DEMO_SEED": "0"})
+        "CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED": "1",
+        "CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR": "/provider-custody",
+        "CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED": "1",
+        "CATCHPLATE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR": "/notification-custody",
+        "CATCHPLATE_OPERATOR_NOTIFICATIONS_PRIVATE_DESTINATIONS_JSON": '{"bindings":[]}',
+        "CATCHPLATE_PROCESS_MODE": "catchplate-control-plane", "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite",
+        "CATCHPLATE_AUDIT_STORE_BACKEND": "sqlite", "CATCHPLATE_GRANT_STORE_BACKEND": "sqlite",
+        "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0", "CATCHPLATE_KEY_RELEASE_REQUIRED": "0",
+        "CATCHPLATE_DEV_AUTHENTICATOR": "0", "CATCHPLATE_DEV_DEMO_SEED": "0"})
     app["volumes"] = [row for row in app["volumes"] if row["target"] != "/private-audit-fixture.json"]
     app["volumes"].extend([base.bind(root / "provider-custody", "/provider-custody", False),
         base.bind(root / "notification-custody", "/notification-custody", False)])
     gate = services["decision-gate-rs"]
-    gate["environment"]["SERVERWARE_DATA_PLANE_AUDIT_BATCH_MAX"] = "1"
-    gate["environment"].pop("SERVERWARE_DATA_PLANE_AUDIT_QUEUE_MAX")
-    gate["environment"].pop("SERVERWARE_DATA_PLANE_AUDIT_FLUSH_MS")
+    gate["environment"]["CATCHPLATE_DATA_PLANE_AUDIT_BATCH_MAX"] = "1"
+    gate["environment"].pop("CATCHPLATE_DATA_PLANE_AUDIT_QUEUE_MAX")
+    gate["environment"].pop("CATCHPLATE_DATA_PLANE_AUDIT_FLUSH_MS")
     for mount in gate["volumes"]:
         if mount["target"] == "/data":
             mount["source"] = str(root / "runtime/app-data/gate-runtime")
@@ -149,7 +149,7 @@ def preflight(root, historical, *, managed_transition="first"):
             managed = snapshots.managed_database_identity(connection, observed)
             settings = connection.execute("SELECT settings_json FROM operator_demo_settings WHERE singleton=1").fetchone()
             base.require(settings is not None and json.loads(settings[0]) == SETTINGS, "retained origin settings differ")
-            result = {"ok": True, "schema": "serverware.managedRetainedPreflight/v1",
+            result = {"ok": True, "schema": "catchplate.managedRetainedPreflight/v1",
                 "schema_object_count": len(rows), "schema_sha256": snapshots.digest(rows),
                 "historical_content_bound": True, "notification_schema_absent": True,
                 "notification_custody_empty": True, "provider_custody_empty": True,
@@ -180,7 +180,7 @@ def prepare(args):
     historical = basic.pinned_json(args.retained_inventory, args.expected_retained_inventory_sha256)
     config = build(args.source, args.binary, args.job_root, expected_binary_sha256=args.expected_binary_sha256)
     raw = json.dumps(config, indent=2, sort_keys=True) + "\n"
-    receipt = {"schema": "serverware.managedRetainedPreparation/v1", "project": config["name"],
+    receipt = {"schema": "catchplate.managedRetainedPreparation/v1", "project": config["name"],
         "job_root": str(args.job_root), "source": str(args.source), "source_commit": args.expected_source_commit,
         "source_manifest_sha256": args.expected_source_manifest_sha256, "source_files": len(source_files),
         "binary_sha256": args.expected_binary_sha256, "compose_sha256": hashlib.sha256(raw.encode()).hexdigest(),

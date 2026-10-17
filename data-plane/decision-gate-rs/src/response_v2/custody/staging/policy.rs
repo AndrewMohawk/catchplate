@@ -39,7 +39,7 @@ pub(crate) fn execute(config:&Config,scoped:&ScopedCustodyServiceConfig,envelope
     let route=json(originals.bytes(0)?)?;let decision=json(originals.bytes(1)?)?;
     let runtime=json(originals.bytes(2)?)?;let plan=json(authority.bytes(0)?)?;let evidence=json(authority.bytes(1)?)?;
     let tx=&current.binding().transaction;
-    text(&route,"apiVersion","serverware.responseObservationV2RouteSemantics/v1")?;
+    text(&route,"apiVersion","catchplate.responseObservationV2RouteSemantics/v1")?;
     text(&route,"principalId",&tx.principal_id)?;text(&route,"routeId",&tx.route_id)?;
     text(&route,"policySha256",&tx.policy_sha256)?;text(&route,"clientRequestSha256",&tx.client_request_sha256)?;
     text(&route,"decisionRequestSha256",&tx.decision_request_sha256)?;
@@ -56,13 +56,13 @@ pub(crate) fn execute(config:&Config,scoped:&ScopedCustodyServiceConfig,envelope
         .ok_or_else(||fail("native staging requires the actual credentialed decision"))?;
     let version=decision.get("credential_version").and_then(Value::as_u64).filter(|v|*v>0)
         .ok_or_else(||fail("native staging credential generation missing"))?;
-    text(&runtime,"apiVersion","serverware.responseObservationV2GateRuntimeEvidence/v1")?;
+    text(&runtime,"apiVersion","catchplate.responseObservationV2GateRuntimeEvidence/v1")?;
     if runtime.get("transaction")!=Some(&serde_json::to_value(tx).map_err(|_|fail("transaction original encoding"))?)
         ||runtime.pointer("/helloAttestation/authenticatedSessionSha256").and_then(Value::as_str)
             !=Some(current.original().session_sha256.as_str()) {
         return Err(fail("policy evaluation is not from the retained authenticated gate session"));
     }
-    text(&plan,"apiVersion","serverware.responseObservationV2AuthorityPlan/v1")?;
+    text(&plan,"apiVersion","catchplate.responseObservationV2AuthorityPlan/v1")?;
     let required=plan.get("required").and_then(Value::as_bool).ok_or_else(||fail("authority requirement missing"))?;
     let jit=decision.pointer("/jit/required").and_then(Value::as_bool).ok_or_else(||fail("actual JIT policy missing"))?;
     if plan.get("jit")!=decision.get("jit")||jit&&!required {
@@ -82,7 +82,7 @@ pub(crate) fn execute(config:&Config,scoped:&ScopedCustodyServiceConfig,envelope
     } else if plan.get("reservation")!=Some(&Value::Null) {
         return Err(fail("nonrequired authority plan carries an unselected reservation"));
     }
-    text(&evidence,"apiVersion","serverware.responseObservationV2ReservedAuthorityEvidence/v1")?;
+    text(&evidence,"apiVersion","catchplate.responseObservationV2ReservedAuthorityEvidence/v1")?;
     text(&evidence,"requestSha256",&tx.client_request_sha256)?;text(&evidence,"policySha256",&tx.policy_sha256)?;
     text(&evidence,"authorityPlanSha256",&native::sha256(authority.bytes(0)?))?;
     text(&evidence,"gateRuntimeAttestationSha256",&native::sha256(originals.bytes(2)?))?;

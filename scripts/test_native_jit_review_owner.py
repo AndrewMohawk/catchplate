@@ -20,9 +20,9 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 _DATA = tempfile.TemporaryDirectory(prefix="jit-review-owner-component-")
-os.environ["SERVERWARE_PROCESS_MODE"] = "serverware-control-plane"
-os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
-os.environ["SERVERWARE_DATA_DIR"] = _DATA.name
+os.environ["CATCHPLATE_PROCESS_MODE"] = "catchplate-control-plane"
+os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
+os.environ["CATCHPLATE_DATA_DIR"] = _DATA.name
 
 
 def no_external_io(event, _arguments):
@@ -36,11 +36,11 @@ sys.addaudithook(no_external_io)
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from scripts import test_authority_jit_private_request as ingress
 from scripts import test_authority_release_private_request as release_fixture
-from serverware import authority_contract as contract
-from serverware import authority_jit_private_request as private
-from serverware import authority_release_private_request as release_private
-from serverware import native_jit_review_material as material
-from serverware import native_jit_review_owner as native
+from catchplate import authority_contract as contract
+from catchplate import authority_jit_private_request as private
+from catchplate import authority_release_private_request as release_private
+from catchplate import native_jit_review_material as material
+from catchplate import native_jit_review_owner as native
 
 
 SECOND = 1_000_000_000
@@ -117,7 +117,7 @@ class Fixture:
         boot = b"b" * 32
         identity.update(bootId=encoded(boot), policyHash=self.envelope["arguments"]["policy_hash"])
         identity["holderId"] = ingress.original.sha(
-            b"serverware/credential-currentness-holder/v1\0" + boot + bytes.fromhex(identity["keyId"][7:]))
+            b"catchplate/credential-currentness-holder/v1\0" + boot + bytes.fromhex(identity["keyId"][7:]))
         self.config = {"apiVersion": native.CONFIG,
             "sourceContractDigest": contract.OPERATION_MANIFEST_DIGEST,
             "controlPlaneConfigurationDigest": ingress.original.sha(b"synthetic configuration"),
@@ -186,7 +186,7 @@ class NativeJitReviewOwnerTests(unittest.TestCase):
         self.assertEqual((result["apiVersion"], result["phase"], result["operation"]),
             (native.CHANNEL, "prepared", "jit.request"))
         scope = result["pair"]["scope"]
-        self.assertEqual(scope, {"schema": "serverware.nativeJitReviewScope/v1", "publicRequest": f.request,
+        self.assertEqual(scope, {"schema": "catchplate.nativeJitReviewScope/v1", "publicRequest": f.request,
             "sourceContractDigest": contract.OPERATION_MANIFEST_DIGEST,
             "controlPlaneConfigurationDigest": original_config["controlPlaneConfigurationDigest"],
             "ownerScopeDigest": owner.owner_scope_digest,
@@ -221,7 +221,7 @@ class NativeJitReviewOwnerTests(unittest.TestCase):
             lambda f: f.envelope["arguments"].update(original_arguments_digest=ingress.PIN),
             lambda f: f.request.update(requestDigest=ingress.PIN),
             lambda f: f.request.update(operationId=ingress.PIN), unrelated_public,
-            lambda f: f.envelope.update(schema="serverware.policyAuthorityControlledWriterInput/v1"),
+            lambda f: f.envelope.update(schema="catchplate.policyAuthorityControlledWriterInput/v1"),
             lambda f: f.command.update(extra=True),
             lambda f: f.command.update(challenge=encoded(bytes(32))),
             lambda f: f.envelope["privateDocuments"].update(redacted_display=("tuple",)),
@@ -423,14 +423,14 @@ class NativeReleaseJitReviewOwnerTests(unittest.TestCase):
         self.assertEqual(set(result), {"apiVersion", "phase", "operation", "pair", "statementBindings"})
         self.assertEqual((result["apiVersion"], result["phase"], result["operation"]),
             (native.CHANNEL, "prepared-release-pair", "release.reserve"))
-        scope = {"schema": "serverware.nativeJitReviewScope/v2", "publicRequest": f.request,
+        scope = {"schema": "catchplate.nativeJitReviewScope/v2", "publicRequest": f.request,
             "parentRequestSha256": release_fixture.sha(release_fixture.canonical(f.parent)),
             "sourceContractDigest": contract.OPERATION_MANIFEST_DIGEST,
             "controlPlaneConfigurationDigest": f.config["controlPlaneConfigurationDigest"],
             "ownerScopeDigest": owner.owner_scope_digest,
             **{name: f.command[name] for name in ("issuedAtEpochNs", "sealExpiresAtEpochNs", "documentExpiresAtEpochNs")}}
         self.assertEqual(result["pair"]["scope"], scope)
-        self.assertEqual(result["pair"]["schema"], "serverware.nativeJitReviewPair/v2")
+        self.assertEqual(result["pair"]["schema"], "catchplate.nativeJitReviewPair/v2")
         self.assertEqual(material.open_release_pair(result["pair"], expected_scope=scope,
             key_id=f.broker.key_id, kek=f.broker.kek, now_epoch_ns=f.clock.wall), f.envelope["privateDocuments"])
         expected = {"sourceContractDigest": contract.OPERATION_MANIFEST_DIGEST,
@@ -581,7 +581,7 @@ class NativeReleaseJitReviewOwnerTests(unittest.TestCase):
             key_id=f.broker.key_id, kek=f.broker.kek, now_epoch_ns=f.clock.wall), before["runtimeInput"]["privateDocuments"])
 
     def test_real_decoder_and_owner_preserve_allowed_floats_and_large_integers(self):
-        from serverware import native_secret_broker_helper as helper
+        from catchplate import native_secret_broker_helper as helper
         raw = release_fixture.native_raw_arguments()
         values = {"finite": [1.25, -0.0, 1e100], "large": 2**100, "negative": -(2**100)}
         for field in ("operation_context", "durable_policy_binding"):
@@ -607,7 +607,7 @@ class NativeReleaseJitReviewOwnerTests(unittest.TestCase):
                 helper._document(malformed, allow_jit_seal=True)
 
     def test_control_floats_and_full_command_size_stay_closed(self):
-        from serverware import native_secret_broker_helper as helper
+        from catchplate import native_secret_broker_helper as helper
         paths = [(field,) for field in ("issuedAtEpochNs", "sealExpiresAtEpochNs", "documentExpiresAtEpochNs", "deadlineBoottimeNs")]
         paths += [("runtimeInput", "arguments", field) for field in ("credential_version", "reservation_ttl_seconds", "now_epoch_ms", "approval_threshold")]
         paths += [("parentRequest", "arguments", "native_profile"), ("publicRequest", "arguments", "credential_version"),

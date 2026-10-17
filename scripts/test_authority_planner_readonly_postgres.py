@@ -29,13 +29,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware.authority_store.planner_read_sql import ROLE, seal_planner_read_acl
+from catchplate.authority_store.planner_read_sql import ROLE, seal_planner_read_acl
 from test_webauthn_trust_projection_postgres import local_connection_parameters
 
 
 CONNECTION_PARAMETERS = None
 DISPOSABLE_CLUSTER_ACKNOWLEDGED = False
-SCHEMA = "serverware_metadata"
+SCHEMA = "catchplate_metadata"
 BUSINESS = "credentials"
 WRITER_TABLE = "policy_authority_planner_transactions"
 EXCLUDED = ("policy_authority_current_root_commit_markers",
@@ -47,7 +47,7 @@ TABLE_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFEREN
 
 def planner_mutation_query():
     """Extract only the unchanged production catalog query; never fake TLS."""
-    path = ROOT / "serverware/authority_planner_read.py"
+    path = ROOT / "catchplate/authority_planner_read.py"
     if path.stat().st_size > 2 * 1024 * 1024:
         raise AssertionError("planner source exceeds fixture bound")
     tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -59,7 +59,7 @@ def planner_mutation_query():
     query = assignment.value.func.value.args[0]
     statement = ast.literal_eval(query)
     if (type(statement) is not str or not statement.startswith("SELECT 1 FROM pg_catalog.pg_class")
-            or "namespace.nspname = 'serverware_metadata'" not in statement
+            or "namespace.nspname = 'catchplate_metadata'" not in statement
             or not statement.endswith("LIMIT 1")):
         raise AssertionError("planner mutation query shape changed")
     return statement
@@ -85,7 +85,7 @@ class PlannerReadOnlyPostgresTests(unittest.TestCase):
         self.assertTrue(160000 <= observed["version"] < 170000)
         self.assertIs(observed["direct"], True)
         self.assertIs(observed["superuser"], True)
-        self.assertEqual(ROLE, "serverware_policy_authority_planner")
+        self.assertEqual(ROLE, "catchplate_policy_authority_planner")
         absent = self.connection.execute(
             "SELECT pg_catalog.to_regnamespace(%s) AS namespace, "
             "pg_catalog.to_regrole(%s) AS role", (SCHEMA, ROLE)).fetchone()

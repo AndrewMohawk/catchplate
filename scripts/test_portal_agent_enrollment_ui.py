@@ -163,14 +163,14 @@ def main() -> None:
         help="run only the focused static specialized-provider template contract",
     )
     args = parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix="serverware-portal-enrollment-") as tmp:
-        os.environ["SERVERWARE_DATA_DIR"] = tmp
-        os.environ["SERVERWARE_POLICY_BUNDLE"] = str(Path(tmp) / "policy-bundle.json")
-        os.environ["SERVERWARE_POLICY_SIGNING_KEY"] = str(Path(tmp) / "policy-signing-ed25519.pem")
-        os.environ["SERVERWARE_POLICY_SIGNING_PUBLIC_KEY"] = str(Path(tmp) / "policy-signing-ed25519.pub.pem")
+    with tempfile.TemporaryDirectory(prefix="catchplate-portal-enrollment-") as tmp:
+        os.environ["CATCHPLATE_DATA_DIR"] = tmp
+        os.environ["CATCHPLATE_POLICY_BUNDLE"] = str(Path(tmp) / "policy-bundle.json")
+        os.environ["CATCHPLATE_POLICY_SIGNING_KEY"] = str(Path(tmp) / "policy-signing-ed25519.pem")
+        os.environ["CATCHPLATE_POLICY_SIGNING_PUBLIC_KEY"] = str(Path(tmp) / "policy-signing-ed25519.pub.pem")
 
-        from serverware.enrollment import policy_principal_summaries
-        from serverware.policy_bundle import (
+        from catchplate.enrollment import policy_principal_summaries
+        from catchplate.policy_bundle import (
             compile_policy_bundle,
             demo_policy_bundle,
             provider_request_profile,
@@ -186,10 +186,10 @@ def main() -> None:
             raise AssertionError(f"principal summary did not expose policy principals: {principals}")
         if demo.get("routeCount", 0) <= 0:
             raise AssertionError(f"principal route count is missing: {demo}")
-        if demo.get("requiredHeaders") != {"X-Serverware-Agent": "demo-token-agent"}:
+        if demo.get("requiredHeaders") != {"X-Catchplate-Agent": "demo-token-agent"}:
             raise AssertionError(f"principal identity summary is wrong: {demo}")
 
-        app_source = (ROOT / "serverware" / "app.py").read_text(encoding="utf-8")
+        app_source = (ROOT / "catchplate" / "app.py").read_text(encoding="utf-8")
         try:
             ui_html = app_source.split('UI_HTML = r"""', 1)[1].rsplit('"""', 1)[0]
         except IndexError as exc:
@@ -217,24 +217,24 @@ def main() -> None:
             "Generate an enrollment packet first so the verifier is bound to its pins",
             "async function currentEnrollmentBinding()",
             "async function downloadEnrollmentBinding()",
-            "X-Serverware-Enrollment-Packet-SHA256",
+            "X-Catchplate-Enrollment-Packet-SHA256",
             "Enrollment response bytes do not match the authenticated digest",
             "Enrollment packet bytes changed after the authenticated response",
             "crypto.subtle.digest('SHA-256'",
             "set -eu",
-            "SERVERWARE_PACKET_SHA256",
+            "CATCHPLATE_PACKET_SHA256",
             "tooling.expectedVersionOutput",
-            'serverware-enrollment --version',
+            'catchplate-enrollment --version',
             "--emit-verified-instructions",
-            "SERVERWARE_ENROLLMENT_PACKET:-$HOME/Downloads/",
-            'serverware-enrollment --verify-packet "$ENROLLMENT_PACKET"',
+            "CATCHPLATE_ENROLLMENT_PACKET:-$HOME/Downloads/",
+            'catchplate-enrollment --verify-packet "$ENROLLMENT_PACKET"',
             "--expected-packet-sha256",
             "--expected-principal",
             "--expected-nonce",
             '> "$VERIFIED_ENROLLMENT_PACKET"',
             "pinning.policySigningKeyId",
             "pinning.rollbackEpoch",
-            "serverware-attestation --base",
+            "catchplate-attestation --base",
             '--enrollment-packet "$VERIFIED_ENROLLMENT_PACKET"',
             "--expected-policy-key-hash",
             "--expected-rollback-epoch",
@@ -303,8 +303,8 @@ def main() -> None:
             )
         agent_instruction_order = (
             "await downloadEnrollmentBinding()",
-            "SERVERWARE_PACKET_SHA256",
-            "serverware-enrollment --version",
+            "CATCHPLATE_PACKET_SHA256",
+            "catchplate-enrollment --version",
             "--verify-packet",
             "--emit-verified-instructions",
             "navigator.clipboard.writeText(command.join('\\n'))",
@@ -316,18 +316,18 @@ def main() -> None:
             raise AssertionError("portal must not copy unauthenticated packet instruction text")
         ordered_enrollment_handoff = (
             "await downloadEnrollmentBinding()",
-            "serverware-enrollment --version",
-            "serverware-enrollment --verify-packet",
-            "serverware-attestation --base",
+            "catchplate-enrollment --version",
+            "catchplate-enrollment --verify-packet",
+            "catchplate-attestation --base",
             "install -D -m 0644",
         )
         handoff_positions = [enrollment_verifier_fn.index(marker) for marker in ordered_enrollment_handoff]
         if handoff_positions != sorted(handoff_positions):
             raise AssertionError("portal must download and verify the exact enrollment packet before CA install")
-        if "dev-admin-token" in enrollment_verifier_fn or "SERVERWARE_ADMIN_TOKEN" in enrollment_verifier_fn:
+        if "dev-admin-token" in enrollment_verifier_fn or "CATCHPLATE_ADMIN_TOKEN" in enrollment_verifier_fn:
             raise AssertionError("portal enrollment handoff must not require or embed an admin secret")
         if (
-            "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_SIGNING_KEY" in enrollment_verifier_fn
+            "CATCHPLATE_SETUP_ENROLLMENT_VERIFIER_SIGNING_KEY" in enrollment_verifier_fn
             or "--sign-setup-receipt" in enrollment_verifier_fn
             or "--setup-receipt-signing-key" in enrollment_verifier_fn
         ):
@@ -405,7 +405,7 @@ def main() -> None:
             raise AssertionError("portal must not persist operator or mutation state in localStorage")
         auth_markers = (
             "$('admin-token').value = '';",
-            "'X-Serverware-Admin-Token': token",
+            "'X-Catchplate-Admin-Token': token",
             "'Authorization': `Bearer ${token}`",
             'id="operator-sign-in"',
             'id="operator-session-verify"',
@@ -419,13 +419,13 @@ def main() -> None:
             "sessionApi('/api/auth/session/webauthn/verify'",
             "navigator.credentials.get({publicKey: prepareRequestOptions(options)})",
             "async function ensureCsrfToken()",
-            "'X-Serverware-CSRF-Token': csrf",
+            "'X-Catchplate-CSRF-Token': csrf",
             "credentials: 'same-origin'",
         )
         for marker in auth_markers:
             if marker not in ui_html:
                 raise AssertionError(f"portal dual admin/OIDC session auth marker missing: {marker}")
-        if "serverware.adminToken" in ui_html or "tokenKey" in ui_html:
+        if "catchplate.adminToken" in ui_html or "tokenKey" in ui_html:
             raise AssertionError("portal must keep manually entered operator tokens in memory only")
 
         preservation_markers = (
@@ -546,7 +546,7 @@ def main() -> None:
             raise AssertionError("portal passkey revoke command must require explicit operator confirmation")
 
         oauth_markers = (
-            "const oauthDraftKey = 'serverware.oauthDraft'",
+            "const oauthDraftKey = 'catchplate.oauthDraft'",
             "Connect Provider Credential",
             "Connect with OAuth",
             "function saveOAuthDraft()",
@@ -754,7 +754,7 @@ def main() -> None:
             'id="setup-route-id"',
             'id="setup-proxy-url"',
             'id="setup-proxy-egress-cidrs"',
-            "Use localhost only when the agent runs on this Serverware host.",
+            "Use localhost only when the agent runs on this Catchplate host.",
             'id="setup-configuration-status"',
             'id="setup-runtime-status"',
             'id="setup-hardware-status"',
@@ -804,8 +804,8 @@ def main() -> None:
             "data_plane.credential.release_started",
             "data_plane.jit.grant_consumed",
             "jit.grant.consumed",
-            '"apiVersion": "serverware.setupVerification/v1"',
-            '"serverware.setupSession/v1"',
+            '"apiVersion": "catchplate.setupVerification/v1"',
+            '"catchplate.setupSession/v1"',
             '"setup.verification.checked"',
         )
         for marker in setup_markers:
@@ -856,7 +856,7 @@ def main() -> None:
             "api(`/api/audit/search?${auditSearchParams()}`)",
             "api('/api/audit/verify')",
             "`/api/audit/export?${auditSearchParams({exportMode: true})}`",
-            "serverware-audit-export.jsonl",
+            "catchplate-audit-export.jsonl",
             "function redactAuditEvidence(value, key = '')",
             "complete scan",
             "partial scan",
@@ -883,7 +883,7 @@ def main() -> None:
         for marker in attestation_markers:
             if marker not in ui_html:
                 raise AssertionError(f"portal attestation UI marker missing: {marker}")
-        if '"hardware_proof": False' not in (ROOT / "serverware" / "attestation.py").read_text(encoding="utf-8"):
+        if '"hardware_proof": False' not in (ROOT / "catchplate" / "attestation.py").read_text(encoding="utf-8"):
             raise AssertionError("current attestation must expose its non-hardware assurance ceiling")
 
         confirmation_markers = (
@@ -1008,8 +1008,8 @@ for(const value of ['', 'release-manager', 'user:*', 'user:one,user:one']){
                     instruction_function
                     + r"""
 const packet={
-  apiVersion:'serverware.agentEnrollment/v1',principalId:'agent:test',
-  ca:{installPath:'/etc/serverware/ca.pem'},secret:'DO_NOT_COPY',
+  apiVersion:'catchplate.agentEnrollment/v1',principalId:'agent:test',
+  ca:{installPath:'/etc/catchplate/ca.pem'},secret:'DO_NOT_COPY',
   agentHandoff:{
     instructionsText:'SIGNED HANDOFF\nDENY-BY-DEFAULT EGRESS\nALLOW CANARY\nHTTP 428: retry only the identical request.\n'
   }
@@ -1021,7 +1021,7 @@ for(const expected of ['SIGNED HANDOFF','DENY-BY-DEFAULT EGRESS','ALLOW CANARY',
 if(output.includes('DO_NOT_COPY'))process.exit(21);
 let failed=false;try{agentInstructionText({apiVersion:'wrong'})}catch(_){failed=true}
 if(!failed)process.exit(22);
-failed=false;try{agentInstructionText({apiVersion:'serverware.agentEnrollment/v1',agentHandoff:{}})}catch(_){failed=true}
+failed=false;try{agentInstructionText({apiVersion:'catchplate.agentEnrollment/v1',agentHandoff:{}})}catch(_){failed=true}
 if(!failed)process.exit(23);
 """,
                 ],
@@ -1074,7 +1074,7 @@ let state={
     {id:'cred-google-inactive',name:'Inactive Google fixture',kind:'oauth2',lifecycle_status:'revocation_pending',metadata:{oauth:true,provider_identity_verified:true,provider_id:'google',provider_account:'inactive@example.com',provider_subject:'google-subject-inactive',oauth_client_id:'google-client-123.apps.googleusercontent.com',scopes:['gmail.readonly']}}
   ],
   policyPrincipals:[{id:'agent:mail-reader',routeCount:2}],
-  oauthProviders:[{id:'google',displayName:'Google',configured:true,defaultScopes:['openid','email'],redirectUri:'https://serverware.test/callback'}]
+  oauthProviders:[{id:'google',displayName:'Google',configured:true,defaultScopes:['openid','email'],redirectUri:'https://catchplate.test/callback'}]
 };
 """
                     + policy_builder_functions

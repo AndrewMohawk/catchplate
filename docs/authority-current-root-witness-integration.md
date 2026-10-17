@@ -23,7 +23,7 @@ storage/calculation prerequisites, not that authority.
 
 ## What the existing witness actually binds
 
-[`authority_witness.py`](../serverware/authority_witness.py), especially
+[`authority_witness.py`](../catchplate/authority_witness.py), especially
 `_validate_request`, `_accept_stored_receipt` and `transition_bytes`, implements
 the closed replay-witness request/receipt v2 protocol. Its signed receipts bind
 operation, request, capability, result, generation, fence and receipt-log
@@ -31,14 +31,14 @@ ancestry. `headDigest` is a witness-log commitment, not a database root vector.
 There is no database enrollment, complete primary/counted vector, writer receipt
 or authority snapshot in that protocol.
 
-[`authority_service.py`](../serverware/authority_service.py) checks the executor's
+[`authority_service.py`](../catchplate/authority_service.py) checks the executor's
 writer receipt before `_execute_v9_operation` calls `_witness_transition` with
 `commit` or `reconcile`. That terminal request carries `resultDigest`, not the
 checked writer receipt, snapshot or before/after roots. Persisting its response
 in `policy_authority_external_witness_receipts` does not add those bindings or
 independent rollback resistance.
 
-[`executor_v9.py`](../serverware/authority_store/executor_v9.py) constructs
+[`executor_v9.py`](../catchplate/authority_store/executor_v9.py) constructs
 `policyAuthorityWriterCommitReceipt/v2` inside SQL. It binds Snapshot/v3 and
 operation-scoped primary before/after roots, but is DB-computed unsigned JSON;
 its self-digest is not an independently authenticated completion statement.
@@ -90,8 +90,8 @@ raw contents remain inside the semantic boundary, not in a witness request.
 
 ## Implemented complete-vector computation (.132)
 
-[`authority_current_root_vector.py`](../serverware/authority_current_root_vector.py)
-defines canonical `serverware.policyAuthorityCompleteRootVector/v1`. Its exact
+[`authority_current_root_vector.py`](../catchplate/authority_current_root_vector.py)
+defines canonical `catchplate.policyAuthorityCompleteRootVector/v1`. Its exact
 ten fields are `schema`, `schemaVersion`, `sourceRevision`,
 `operationManifestDigest`, `queryManifestDigest`, `authorizationManifestDigest`,
 `primaryInventoryDigest`, `projectionManifestDigest`, `primaryRoots` and
@@ -124,7 +124,7 @@ currentness admission or successor SQL execution.
 
 ## Implemented delta compatibility (.133)
 
-[`authority_current_root_delta._validate_on_work`](../serverware/authority_current_root_delta.py)
+[`authority_current_root_delta._validate_on_work`](../catchplate/authority_current_root_delta.py)
 genuinely decodes both complete canonical vectors on the same work and selects
 writable tables/profiles from the actual six-successor registry and operation
 contract. All nonwritable descriptors must remain identical.
@@ -226,20 +226,20 @@ A primary-tracked marker containing the pending digest would be circular:
 
 The source already has a deliberate framework custody boundary:
 
-- [`authority_contract.py`](../serverware/authority_contract.py),
+- [`authority_contract.py`](../catchplate/authority_contract.py),
   `_FRAMEWORK_CUSTODY_TABLES`, includes `policy_authority_consumed_envelopes`,
   `policy_authority_writer_receipts`, `policy_authority_external_witness_receipts`,
   execution envelopes, capabilities and planner transactions. `_spec` rejects
   framework tables in declared business reads/writes before deriving the
   authorization classification.
-- [`authority_primary_contract.py`](../serverware/authority_primary_contract.py)
+- [`authority_primary_contract.py`](../catchplate/authority_primary_contract.py)
   derives query and authorization manifests solely from those source classes.
-  [`db.py`](../serverware/db.py) aliases operation write tables to business
+  [`db.py`](../catchplate/db.py) aliases operation write tables to business
   writes; `tracked_authenticated_tables` is the query/authorization/business-write
   union, and its actual trigger loop uses that union.
-- [`schema.py`](../serverware/authority_store/schema.py) commits
+- [`schema.py`](../catchplate/authority_store/schema.py) commits
   `frameworkCustodyExcludedFromBusinessRoots: true` in the source contract.
-  [`metadata_schema_source.py`](../serverware/authority_store/metadata_schema_source.py)
+  [`metadata_schema_source.py`](../catchplate/authority_store/metadata_schema_source.py)
   contains the existing consumed-envelope/writer/external-witness receipt DDL.
 
 Source `.134` adds the purpose-specific immutable
@@ -274,7 +274,7 @@ changes remain covered exactly once by the complete vectors and mutation proof.
 
 ## Reuse and implementation boundary
 
-[`WitnessJournalIO`](../serverware/authority_witness_journal.py) supplies real
+[`WitnessJournalIO`](../catchplate/authority_witness_journal.py) supplies real
 bounded immutable publication, no-replace rename, file/directory barriers,
 shared locking and poisoned-handle recovery. Its caller must provide the
 trusted directory/singleton, canonical protocol validation and quotas; it does

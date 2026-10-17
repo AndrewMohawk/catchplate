@@ -6,7 +6,7 @@ does not sign a plan, consume a delivery, mutate SQL, release plaintext or
 establish fresh user permission.
 
 `OidcSessionActivationDeliveryReadPlanner` in
-[`authority_oidc_session_activation_delivery_planning.py`](../serverware/authority_oidc_session_activation_delivery_planning.py)
+[`authority_oidc_session_activation_delivery_planning.py`](../catchplate/authority_oidc_session_activation_delivery_planning.py)
 holds the exact configured read DSN, connection timeout, database/TLS identity
 tuple and clock-skew policy. The actual shared reader opens one SERIALIZABLE
 READ ONLY DEFERRABLE transaction, checks the configured identity and source

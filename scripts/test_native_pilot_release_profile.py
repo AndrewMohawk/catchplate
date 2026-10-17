@@ -21,8 +21,8 @@ from cryptography.exceptions import InvalidSignature
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import native_pilot_release_profile as release
-from serverware import native_pilot_scope_authority as scope
+from catchplate import native_pilot_release_profile as release
+from catchplate import native_pilot_scope_authority as scope
 from test_native_pilot_bridge_launches import fixture as bridge_fixture
 from test_native_pilot_bridge_authorizations import clocks
 from test_native_pilot_closure_set import canonical, sha, synthetic
@@ -30,9 +30,9 @@ from test_native_pilot_generation_scope import fixture as generation_fixture, ke
 from test_native_pilot_native_deliveries import fixture as cohort_fixture
 from test_native_pilot_ordinary_generations import context as ordinary_fixture, build as ordinary_input, result as ordinary_result
 
-SCOPE_DOMAIN = b"serverware.nativeShadowDriverScope.signature/v4\0"
-RELEASE_DOMAIN = b"serverware.nativeShadowProofCohortRelease.signature/v6\0"
-BOOTSTRAP_DOMAIN = "serverware.nativeShadowBootstrapDriverAdmission.signature/v1"
+SCOPE_DOMAIN = b"catchplate.nativeShadowDriverScope.signature/v4\0"
+RELEASE_DOMAIN = b"catchplate.nativeShadowProofCohortRelease.signature/v6\0"
+BOOTSTRAP_DOMAIN = "catchplate.nativeShadowBootstrapDriverAdmission.signature/v1"
 
 
 @lru_cache(maxsize=1)
@@ -59,11 +59,11 @@ def _scope_fixture():
     signed_c9 = json.loads(first["deliveryOriginal"])
     signed_c9["payload"]["runtimeConfig"]["sha256"] = sha(runtime_raw)
     signed_c9["signatureBase64url"] = encoded(key_fixture("bridge-c9")[0].sign(
-        b"serverware.policyCustodyGuestDelivery.signature/v1\0" + canonical(signed_c9["payload"])))
+        b"catchplate.policyCustodyGuestDelivery.signature/v1\0" + canonical(signed_c9["payload"])))
     c9_raw = canonical(signed_c9)
     inner = copy.deepcopy(bundle["keyAdmission"])
     inner["delivery"]["sha256"] = sha(c9_raw)
-    launch_raw = canonical({"apiVersion": "serverware.nativeProofBridgeLaunch/v7",
+    launch_raw = canonical({"apiVersion": "catchplate.nativeProofBridgeLaunch/v7",
         "keyAdmission": inner, "trustedTime": bundle["serviceGrant"]})
     public_raw = canonical({"runtimeOriginal": runtime_raw.decode("ascii"),
         "deliveryOriginal": c9_raw.decode("ascii"), "generationOriginals": grants})
@@ -87,15 +87,15 @@ def _scope_fixture():
     for row in signed_c9["payload"]["activation"]:
         records.append({"name": "activation:" + row["name"], **{name: row[name]
             for name in ("device", "inode", "mode", "uid", "gid")}, "length": 0})
-    operation = {"apiVersion": "serverware.nativeShadowDriverOperation/v1", "launch": {
-        "path": "/etc/serverware/native-pilot-inputs/native-launch-bridge.json", "sha256": sha(launch_raw)},
+    operation = {"apiVersion": "catchplate.nativeShadowDriverOperation/v1", "launch": {
+        "path": "/etc/catchplate/native-pilot-inputs/native-launch-bridge.json", "sha256": sha(launch_raw)},
         "descriptors": sorted(records, key=lambda row: row["name"]), "production": first["measured"]["production"]}
-    value = {"apiVersion": "serverware.nativePilotScopeSigningInput/v1",
+    value = {"apiVersion": "catchplate.nativePilotScopeSigningInput/v1",
         "configurationOriginal": source["ownerConfigurationOriginal"], "windowOriginal": source["windowOriginal"],
         "observationOriginal": source["observationOriginal"], "operationOriginal": canonical(operation).decode("ascii"),
         "publicBundleOriginal": public_raw.decode("ascii"), "deliveryConfigurationOriginal": source["configurationOriginal"],
         "launchOriginal": launch_raw.decode("ascii"), "bootstrapAdmissionOriginal": early_raw.decode("ascii")}
-    expected = {"apiVersion": "serverware.nativeShadowDriverScope/v4",
+    expected = {"apiVersion": "catchplate.nativeShadowDriverScope/v4",
         "configurationSha256": sha(source["ownerConfigurationOriginal"].encode("ascii")),
         "windowSha256": sha(source["windowOriginal"].encode("ascii")),
         "observationSha256": sha(source["observationOriginal"].encode("ascii")),
@@ -115,14 +115,14 @@ def scope_fixture():
 
 def release_fixture():
     f = cohort_fixture()
-    payload = {"apiVersion": "serverware.nativeShadowProofCohortRelease/v6",
+    payload = {"apiVersion": "catchplate.nativeShadowProofCohortRelease/v6",
         "configurationSha256": sha(f["owner_configuration_raw"]), "precreationSha256": sha(f["window_raw"]),
         "observationSha256": sha(f["observation_raw"]), "invocationId": f["window"]["invocationId"],
         "signingKeyId": f["authority"]["keyId"], "externalDriverSha256": sha(canonical(f["observed"]["externalDriver"]))}
     for role in release.cohort.ENDPOINT_ROLES:
-        payload[role] = {name: {"path": "/etc/serverware/synthetic-" + role + "-" + name,
+        payload[role] = {name: {"path": "/etc/catchplate/synthetic-" + role + "-" + name,
             "sha256": synthetic(role + "/" + name)} for name in ("launch", "image")}
-    value = {"apiVersion": "serverware.nativePilotCohortAuthorityInput/v1", "operation": "release",
+    value = {"apiVersion": "catchplate.nativePilotCohortAuthorityInput/v1", "operation": "release",
         "configurationOriginal": f["owner_configuration_raw"].decode("ascii"),
         "configurationSha256": sha(f["owner_configuration_raw"]), "coldOriginals": f["cold"],
         "payloadOriginal": canonical(payload).decode("ascii"), "precreationOriginal": f["window_raw"].decode("ascii"),
@@ -174,7 +174,7 @@ class ReleaseProfileControls(unittest.TestCase):
                 runtime["startupTimeoutMillis"] += 1; public["runtimeOriginal"] = canonical(runtime).decode("ascii")
                 value["publicBundleOriginal"] = canonical(public).decode("ascii")
             elif change == "launch":
-                launch = json.loads(value["launchOriginal"]); launch["apiVersion"] = "serverware.nativeProofBridgeLaunch/v6"
+                launch = json.loads(value["launchOriginal"]); launch["apiVersion"] = "catchplate.nativeProofBridgeLaunch/v6"
                 value["launchOriginal"] = canonical(launch).decode("ascii")
             else: value["approved"] = True
             with self.subTest(change=change), self.assertRaises(ValueError): scope.prepare_input(canonical(value), **kw)

@@ -13,12 +13,12 @@ The pinned official [xdk 0.10.6 release](https://pypi.org/project/xdk/0.10.6/) u
 [posting method](https://github.com/xdevplatform/xdk-python/blob/1eb87aecea2d8b5ea340558fbe7426bc98e3a25b/xdk/posts/client.py#L1148)
 is `client.posts.create(body=CreateRequest(text=text))`: one POST to
 `https://api.x.com/2/tweets`. This example calls that method unchanged, with only
-the public dummy `serverware-x-post-placeholder-v1`. Never give this program a
-real X token. Serverware's explicit posting permission must admit the request and
+the public dummy `catchplate-x-post-placeholder-v1`. Never give this program a
+real X token. Catchplate's explicit posting permission must admit the request and
 replace the dummy with the separately stored, authorized user credential.
 
 There is no media, reply, quote, thread, delete, token exchange, refresh, lookup
-or automatic retry. Each invocation needs `SERVERWARE_X_POST_CONFIRM=post-once`.
+or automatic retry. Each invocation needs `CATCHPLATE_X_POST_CONFIRM=post-once`.
 This is an intent check, not durable deduplication: manually running it twice
 can create two posts when the posting permission is active.
 
@@ -37,14 +37,14 @@ TLS or fall back to a direct X request. `.env.example` is reference only.
 
 You can download **Private client configuration** and the interception CA from
 **Proxy setup** instead of entering connection variables. Keep this JSON private:
-it contains the Serverware application token. Relative CA paths resolve beside
+it contains the Catchplate application token. Relative CA paths resolve beside
 the JSON file. Posting text and confirmation must still be supplied locally:
 
 ```bash
-export SERVERWARE_X_POST_TEXT='An explicitly reviewed text-only post'
-export SERVERWARE_X_POST_CONFIRM=post-once
-.venv/bin/python -B post.py --config /private/path/serverware-client.private.json
-unset SERVERWARE_X_POST_CONFIRM SERVERWARE_X_POST_TEXT
+export CATCHPLATE_X_POST_TEXT='An explicitly reviewed text-only post'
+export CATCHPLATE_X_POST_CONFIRM=post-once
+.venv/bin/python -B post.py --config /private/path/catchplate-client.private.json
+unset CATCHPLATE_X_POST_CONFIRM CATCHPLATE_X_POST_TEXT
 ```
 
 The file cannot supply posting text or confirmation, execute commands, change
@@ -52,17 +52,17 @@ the fixed posting endpoint or enable retries. Expired tokens and mismatched
 permissions are refused before launch. The environment-only form is unchanged:
 
 ```bash
-export SERVERWARE_PROXY_URL='https://your-proxy-host:443'
-export SERVERWARE_APP_ID='your-application-uuid'
-export SERVERWARE_CA_FILE='/absolute/path/serverware-ca.pem'
+export CATCHPLATE_PROXY_URL='https://your-proxy-host:443'
+export CATCHPLATE_APP_ID='your-application-uuid'
+export CATCHPLATE_CA_FILE='/absolute/path/catchplate-ca.pem'
 # Optional private OUTER proxy CA:
-# export SERVERWARE_PROXY_CA_FILE='/absolute/path/proxy-ca.pem'
-read -rsp 'Serverware application token: ' SERVERWARE_PROXY_TOKEN; echo
-export SERVERWARE_PROXY_TOKEN
-export SERVERWARE_X_POST_TEXT='An explicitly reviewed text-only post'
-export SERVERWARE_X_POST_CONFIRM=post-once
+# export CATCHPLATE_PROXY_CA_FILE='/absolute/path/proxy-ca.pem'
+read -rsp 'Catchplate application token: ' CATCHPLATE_PROXY_TOKEN; echo
+export CATCHPLATE_PROXY_TOKEN
+export CATCHPLATE_X_POST_TEXT='An explicitly reviewed text-only post'
+export CATCHPLATE_X_POST_CONFIRM=post-once
 .venv/bin/python -B post.py
-unset SERVERWARE_PROXY_TOKEN SERVERWARE_X_POST_CONFIRM SERVERWARE_X_POST_TEXT
+unset CATCHPLATE_PROXY_TOKEN CATCHPLATE_X_POST_CONFIRM CATCHPLATE_X_POST_TEXT
 ```
 
 Text must be 1–16,384 UTF-8 bytes, without NUL or invalid Unicode. LF, tab and CR
@@ -103,10 +103,10 @@ Both certificate and hostname checks remain enabled. Inner TLS uses a temporary
 has a separate certifi-backed context plus only the optional outer CA; it does
 not automatically trust the interception CA. No system trust store is changed.
 
-Basic CONNECT authentication contains the Serverware application ID/token only;
+Basic CONNECT authentication contains the Catchplate application ID/token only;
 the inner Authorization header contains the public X dummy. The credentialed
 proxy URL exists only in memory, never command arguments or output. The launcher
-passes only explicit Serverware inputs to one isolated Python child. Requests
+passes only explicit Catchplate inputs to one isolated Python child. Requests
 `trust_env=False` disables ambient proxies, bypass lists, netrc and CA overrides.
 The application token and text remain visible to sufficiently privileged
 same-user process inspection; use a trusted workstation and scoped token.

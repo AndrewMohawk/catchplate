@@ -10,10 +10,10 @@ use super::super::authority_history::AuthorityEpochRefV3;
 use crate::policy_shadow::{ActiveEffectPreparation,ActiveEffectCommitState,ActiveEffectBarrierReceiptWire,
     ActiveEffectCommitReceiptWire,PolicyShadowCustodySignerRole as Signer,CanonicalEd25519Signature,
     signature_preimage,hash_domain_frames};
-pub(super) const CORE_API:&str="serverware.nativeActiveEffectCore/v1";
-pub(super) const ALLOCATION_DOMAIN:&[u8]=b"serverware.nativeActiveEffectAllocation.signature/v1";
-pub(super) const PREPARED_DOMAIN:&str="serverware.nativeActiveEffectPreparation.signature/v1";
-pub(super) const COMPLETED_DOMAIN:&str="serverware.nativeActiveEffectCompletion.signature/v1";
+pub(super) const CORE_API:&str="catchplate.nativeActiveEffectCore/v1";
+pub(super) const ALLOCATION_DOMAIN:&[u8]=b"catchplate.nativeActiveEffectAllocation.signature/v1";
+pub(super) const PREPARED_DOMAIN:&str="catchplate.nativeActiveEffectPreparation.signature/v1";
+pub(super) const COMPLETED_DOMAIN:&str="catchplate.nativeActiveEffectCompletion.signature/v1";
 pub(super) fn selected(request:&Dispatch)->bool{matches!(request,Dispatch::AppendActiveEffectBarrier{..}
     |Dispatch::CommitActiveEffect{..}|Dispatch::ReconcileActiveEffect{..})}
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
@@ -53,7 +53,7 @@ impl Allocation {
         use crate::policy_shadow::ActiveMutableEffectKind as Effect;
         require(matches!(p.preparation.effect_kind(),Effect::CredentialGeneration|Effect::CredentialLease|Effect::CredentialDecrypt
             |Effect::CredentialInjection|Effect::OauthRotation|Effect::ProviderSend))?;
-        require(selected(request) && p.api_version=="serverware.nativeActiveEffectAllocation/v1"
+        require(selected(request) && p.api_version=="catchplate.nativeActiveEffectAllocation/v1"
             && p.request_sha256==sha(request)? && generation==&scope.generation_id && ingress>0 && p.barrier_ordinal>0
             && b.opened_at_boottime_nanos<=p.allocated_at_boottime_nanos && p.allocated_at_boottime_nanos<b.operation_deadline_boottime_nanos
             && p.original_deadline_boottime_nanos==b.operation_deadline_boottime_nanos)?;
@@ -61,7 +61,7 @@ impl Allocation {
             Dispatch::AppendActiveEffectBarrier{preparation,..}=>{
                 require(preparation.kind==Kind::ActiveEffectPreparation && p.barrier.is_none())?;
                 let original:ActiveEffectPreparation=decode_canonical_frame(&preparation.exact_bytes().map_err(|_|invalid())?)?;
-                require(original==p.preparation && p.resulting_head_sha256==hash_domain_frames(b"serverware.nativeActiveEffectHead/v1",
+                require(original==p.preparation && p.resulting_head_sha256==hash_domain_frames(b"catchplate.nativeActiveEffectHead/v1",
                     &[&encode_canonical_frame(&(&p.origin_sha256,&p.preparation,p.barrier_ordinal,&p.predecessor_head_sha256))?]))?;
             },
             Dispatch::CommitActiveEffect{effect_permit,terminal_state,..}=>{
@@ -100,16 +100,16 @@ impl Core {
     pub(super) fn identity(&self)->Result<Sha256Digest,ServiceError>{self.validate()?;
         Ok(hash_domain_frames(CORE_API.as_bytes(),&[&encode_canonical_frame(self)?]))}
     pub(super) fn retrieval_id(&self,namespace:&Sha256Digest)->Result<Sha256Digest,ServiceError>{
-        Ok(hash_domain_frames(b"serverware.nativeActiveEffectRetrievalId/v1",&[namespace.as_str().as_bytes(),&encode_canonical_frame(self)?]))}
+        Ok(hash_domain_frames(b"catchplate.nativeActiveEffectRetrievalId/v1",&[namespace.as_str().as_bytes(),&encode_canonical_frame(self)?]))}
     pub(super) fn retrieval_proof(&self,scope:&[u8],id:&Sha256Digest)->Result<Sha256Digest,ServiceError>{
         require(Sha256Digest::compute(scope)==self.proof_scope_sha256)?;
-        Ok(hash_domain_frames(b"serverware.nativeActiveEffectRetrievalProof/v1",&[scope,id.as_str().as_bytes(),&encode_canonical_frame(self)?]))}
+        Ok(hash_domain_frames(b"catchplate.nativeActiveEffectRetrievalProof/v1",&[scope,id.as_str().as_bytes(),&encode_canonical_frame(self)?]))}
     pub(super) fn outcome(&self)->Result<(ActiveEffectCommitState,Sha256Digest),ServiceError>{match &self.request {
         Dispatch::CommitActiveEffect{terminal_state,result_sha256,..}=>Ok((decode_canonical_frame(&terminal_state.exact_bytes().map_err(|_|invalid())?)?,result_sha256.clone())),
         // This is a signed requirement to reconcile, never an inference that
         // the business effect did or did not occur.
         Dispatch::ReconcileActiveEffect{..}=>Ok((ActiveEffectCommitState::ReconcileRequired,
-            hash_domain_frames(b"serverware.nativeActiveEffectReconciliationRequired/v1",&[&encode_canonical_frame(&self.allocation)?,&encode_canonical_frame(&self.request)?]))),
+            hash_domain_frames(b"catchplate.nativeActiveEffectReconciliationRequired/v1",&[&encode_canonical_frame(&self.allocation)?,&encode_canonical_frame(&self.request)?]))),
         _=>Err(invalid()),
     }}
     pub(super) fn payload(&self,stored:&Stored)->Result<Vec<u8>,ServiceError>{
@@ -130,13 +130,13 @@ impl Core {
         let payload=self.payload(stored)?;let signature=sign(&payload)?;let p=&stored.payload;let a=&self.allocation.payload;
         let persistence=sha(stored)?;
         if self.role()==Signer::ActiveEffectBarrier {
-            let digest=hash_domain_frames(b"serverware.policyShadowActiveEffectBarrierReceipt/v1",&[&payload,signature.as_bytes()]);
+            let digest=hash_domain_frames(b"catchplate.policyShadowActiveEffectBarrierReceipt/v1",&[&payload,signature.as_bytes()]);
             let wire=ActiveEffectBarrierReceiptWire::from_custody(a.preparation.clone(),a.barrier_ordinal,a.predecessor_head_sha256.clone(),
                 a.resulting_head_sha256.clone(),self.observed_at_unix_nanos,self.trusted_time_checkpoint_sha256.clone(),persistence,
                 p.retrieval_id_sha256.clone(),p.retrieval_proof_sha256.clone(),self.signing_key_id.clone(),self.signing_key_spki_sha256.clone(),signature,digest).map_err(|_|invalid())?;
             Artifact::from_serializable(Kind::ActiveEffectPermit,&wire).map_err(|_|invalid())
         }else{
-            let (state,result)=self.outcome()?;let digest=hash_domain_frames(b"serverware.policyShadowActiveEffectCommitReceipt/v1",&[&payload,signature.as_bytes()]);
+            let (state,result)=self.outcome()?;let digest=hash_domain_frames(b"catchplate.policyShadowActiveEffectCommitReceipt/v1",&[&payload,signature.as_bytes()]);
             let wire=ActiveEffectCommitReceiptWire::from_custody(a.preparation.effect_id_sha256().clone(),a.barrier.as_ref().ok_or_else(invalid)?.wire()?.native_digest().clone(),
                 state,result,self.observed_at_unix_nanos,self.trusted_time_checkpoint_sha256.clone(),persistence,p.retrieval_id_sha256.clone(),
                 p.retrieval_proof_sha256.clone(),self.signing_key_id.clone(),self.signing_key_spki_sha256.clone(),signature,digest).map_err(|_|invalid())?;
@@ -160,7 +160,7 @@ impl Prepared {
 }
 pub(super) fn stored_verify(stored:&Stored,prepared:&Prepared,scope:&[u8],namespace:&Sha256Digest,key:&RoleKey)->Result<(),ServiceError>{
     let p=&stored.payload;let c=&prepared.core;c.validate()?;
-    require(p.api_version=="serverware.nativeActiveEffectStorage/v1" && p.grant_sha256==key.grant_sha256
+    require(p.api_version=="catchplate.nativeActiveEffectStorage/v1" && p.grant_sha256==key.grant_sha256
         && p.signing_key_id==key.key_id && p.signing_key_spki_sha256==key.key_spki_sha256
         && p.core_sha256==c.identity()? && p.object_sha256==sha(c)? && p.fsverity_sha256!=Sha256Digest::compute(&[])
         && p.retrieval_id_sha256==c.retrieval_id(namespace)? && p.retrieval_proof_sha256==c.retrieval_proof(scope,&p.retrieval_id_sha256)?

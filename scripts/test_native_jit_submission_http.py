@@ -32,7 +32,7 @@ class SubmissionHTTPTests(unittest.IsolatedAsyncioTestCase):
     def setUpClass(cls):
         preparation_fixture.PreparationASGITests.setUpClass.__func__(cls)
         from scripts import test_authority_native_jit_review_custody as cryptographic_fixture
-        from serverware import native_release_jit_submission
+        from catchplate import native_release_jit_submission
         cls.crypto = cryptographic_fixture
         cls.submission = native_release_jit_submission
         cls.pki = cryptographic_fixture.SyntheticNitro()
@@ -77,7 +77,7 @@ class SubmissionHTTPTests(unittest.IsolatedAsyncioTestCase):
                 parentRequestSha256=sha(canonical(fixture.parent)), parentRequestDigest=fixture.parent["requestDigest"],
                 parentOperationId=fixture.parent["operationId"], documentExpiresAtEpochNs=fixture.scope["documentExpiresAtEpochNs"])
             fixture.proof = fixture.sign_proof()
-        return {"schema": "serverware.nativeJitPendingSubmission/v1",
+        return {"schema": "catchplate.nativeJitPendingSubmission/v1",
             "runtimeOriginal": canonical(fixture.runtime).decode("ascii"),
             "parentOriginal": canonical(fixture.parent).decode("ascii"),
             "childOriginal": canonical(fixture.child).decode("ascii"),
@@ -86,7 +86,7 @@ class SubmissionHTTPTests(unittest.IsolatedAsyncioTestCase):
 
     def pending_result(self):
         raw = preparation_fixture.raw_parent(preparation_fixture.payload())
-        identity = {"schema": "serverware.policyAuthorityDeterministicIdentity/v1", "operation": "jit.request",
+        identity = {"schema": "catchplate.policyAuthorityDeterministicIdentity/v1", "operation": "jit.request",
             "requestDigest": self.fixture.child["requestDigest"], "purpose": "jit-approval-request"}
         digits = list(hashlib.sha256(canonical(identity)).hexdigest()[:32])
         digits[12] = "5"; digits[16] = format((int(digits[16], 16) & 3) | 8, "x")
@@ -94,12 +94,12 @@ class SubmissionHTTPTests(unittest.IsolatedAsyncioTestCase):
         approval_id = "-".join((compact[:8], compact[8:12], compact[12:16], compact[16:20], compact[20:]))
         binding = {name: raw[name] for name in ("attempt_id", "flow_id", "principal_id", "route_id", "credential_id",
             "credential_version", "policy_hash", "request_digest", "operation_digest", "operation_context", "require_jit_grant")}
-        binding.update(api_version="serverware.nativeReleaseAuthorizationBinding/v2",
+        binding.update(api_version="catchplate.nativeReleaseAuthorizationBinding/v2",
             durable_policy=raw["durable_policy_binding"], approver_policy=preparation_fixture.approver_policy(),
             shared_quotas=raw["shared_quotas"])
         return {"authorized": False, "state": "denied", "reason": "jit_grant_unavailable",
             "attempt_id": preparation_fixture.ATTEMPT, "binding_digest": sha(canonical(binding)),
-            "binding_api_version": "serverware.nativeReleaseAuthorizationBinding/v2", "idempotent_replay": False,
+            "binding_api_version": "catchplate.nativeReleaseAuthorizationBinding/v2", "idempotent_replay": False,
             "grant_id": None, "approval_request_id": approval_id, "approval_status": "pending", "approval_created": True,
             "approval_expires_at": (datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(
                 microseconds=self.fixture.scope["documentExpiresAtEpochNs"] // 1000)).isoformat(),
@@ -116,7 +116,7 @@ class SubmissionHTTPTests(unittest.IsolatedAsyncioTestCase):
         status, response, body = self.response(await self.request())
         self.assertEqual(status, 200)
         self.assertEqual((response["apiVersion"], response["authorized"], response["state"], response["reason"]),
-            ("serverware.nativeReleaseAuthorizationResponse/v2", False, "denied", "jit_grant_unavailable"))
+            ("catchplate.nativeReleaseAuthorizationResponse/v2", False, "denied", "jit_grant_unavailable"))
         self.assertEqual((response["approvalRequestId"], response["approvalStatus"], response["approvalCreated"]),
             (self.expected_result["approval_request_id"], "pending", True))
         self.assertEqual(response["approvalExpiresAt"], self.expected_result["approval_expires_at"])
@@ -145,7 +145,7 @@ class SubmissionHTTPTests(unittest.IsolatedAsyncioTestCase):
         for nonce in (None, b"invalid"):
             self.assertEqual(self.response(await self.request(nonce=nonce), signed=False)[0], 400)
             self.assertEqual(self.body_reads, 0)
-        self.assertEqual(self.response(await self.request(extra_headers=((b"x-serverware-response-nonce", preparation_fixture.NONCE),)), signed=False)[0], 400)
+        self.assertEqual(self.response(await self.request(extra_headers=((b"x-catchplate-response-nonce", preparation_fixture.NONCE),)), signed=False)[0], 400)
         self.assertEqual(self.response(await self.request(query=b"unexpected=1"), query=b"unexpected=1")[0], 400)
         self.assertEqual(self.body_reads, 0)
         self.assertEqual(self.response(await self.request(method="GET"), method="GET")[0], 405)
@@ -162,7 +162,7 @@ class SubmissionHTTPTests(unittest.IsolatedAsyncioTestCase):
                     patch.object(self.app.db, "METADATA_STORE_POSTGRES_DSN", left), \
                     patch.object(self.app.db.grants, "GRANT_STORE_POSTGRES_DSN", right):
                 manifest = self.attestation.runtime_manifest(read_only=True)
-                self.manifest_digest = sha(canonical({"apiVersion": "serverware.runtimeManifestDigest/v2", "manifest": manifest}))
+                self.manifest_digest = sha(canonical({"apiVersion": "catchplate.runtimeManifestDigest/v2", "manifest": manifest}))
                 self.assertEqual(self.response(await self.request())[0], 503)
                 self.assertEqual(self.body_reads, 0)
         self.lookup.assert_not_called(); self.generation.assert_not_called(); self.runtime.assert_not_called()

@@ -10,14 +10,14 @@ unbuilt, unexecuted and unprovisioned; no socket ACL or running service changed.
 ## Closed root-signed opt-in
 
 The v2 bootstrap envelope, payload and launch use matching schemas:
-`serverware.signedCurrentRootStateBootstrap/v2`,
-`serverware.currentRootStateBootstrap/v2` and
-`serverware.currentRootStateLaunch/v2`. The envelope signature uses the v2
-domain. V3 uses the corresponding `serverware.signedCurrentRootStateBootstrap/v3`,
-`serverware.currentRootStateBootstrap/v3` and `serverware.currentRootStateLaunch/v3`
+`catchplate.signedCurrentRootStateBootstrap/v2`,
+`catchplate.currentRootStateBootstrap/v2` and
+`catchplate.currentRootStateLaunch/v2`. The envelope signature uses the v2
+domain. V3 uses the corresponding `catchplate.signedCurrentRootStateBootstrap/v3`,
+`catchplate.currentRootStateBootstrap/v3` and `catchplate.currentRootStateLaunch/v3`
 schemas and its own signature domain. V4 uses the corresponding
-`serverware.signedCurrentRootStateBootstrap/v4`,
-`serverware.currentRootStateBootstrap/v4` and `serverware.currentRootStateLaunch/v4`
+`catchplate.signedCurrentRootStateBootstrap/v4`,
+`catchplate.currentRootStateBootstrap/v4` and `catchplate.currentRootStateLaunch/v4`
 schemas and its own signature domain. Mixing versions, adding fields to an
 older profile or changing fixed peer numbers fails.
 

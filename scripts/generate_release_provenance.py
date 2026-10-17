@@ -33,8 +33,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey,
 )
 
-import serverware_source_tree
-from serverware.http_client import request_bytes
+import catchplate_source_tree
+from catchplate.http_client import request_bytes
 import build_production_images
 import merge_production_images_env
 import publish_production_images
@@ -43,7 +43,7 @@ import verify_production_readiness
 import verify_reproducible_builds
 
 DEV_SERVICES = (
-    "serverware",
+    "catchplate",
     "audit-anchor",
     "grant-store",
     "demo-upstream",
@@ -69,7 +69,7 @@ CUSTODY_V2_SERVICES = (
 CUSTODY_GATE_IMAGE_SERVICES = ("custody-runtime", *CUSTODY_V2_SERVICES, "decision-gate-rs")
 CUSTODY_DEV_SERVICES = (*DEV_SERVICES[:-1], *CUSTODY_GATE_IMAGE_SERVICES)
 PRODUCTION_CONTROL_IMAGE_SERVICES = (
-    "serverware", "audit-anchor", "policy-authority-runtime",
+    "catchplate", "audit-anchor", "policy-authority-runtime",
     "policy-authority-verifier", "policy-authority-issuer",
     "policy-authority-executor", "policy-authority-external-witness-ready",
 )
@@ -83,7 +83,7 @@ PRODUCTION_CONTROL_HEALTHCHECK_SHA256 = (
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 PRODUCTION_PROVENANCE_VERSION = 2
 PRODUCTION_PROVENANCE_RECORD_TYPE = "release.provenance.v2"
-EXTERNAL_SIGNATURE_API_VERSION = "serverware.externalArtifactSignature/v1"
+EXTERNAL_SIGNATURE_API_VERSION = "catchplate.externalArtifactSignature/v1"
 EXTERNAL_SIGNATURE_KIND = "ExternalArtifactSignature"
 REPRODUCIBILITY_SIGNATURE_PURPOSE = "reproducible-build-verification"
 LOCK_REQUIREMENT_RE = re.compile(
@@ -487,14 +487,14 @@ def verify_external_report_signature(
 
 
 def source_tree(*, production: bool) -> dict[str, Any]:
-    summary = serverware_source_tree.source_tree_summary(
+    summary = catchplate_source_tree.source_tree_summary(
         ROOT,
         production=production,
     )
     if production:
         if (
             summary.get("identityMode")
-            != serverware_source_tree.PRODUCTION_IDENTITY_MODE
+            != catchplate_source_tree.PRODUCTION_IDENTITY_MODE
             or summary.get("productionReleaseEligible") is not True
             or not isinstance(summary.get("commit"), str)
             or not isinstance(summary.get("gitTree"), str)
@@ -713,16 +713,16 @@ def cyclonedx_sbom(
     components: list[dict[str, Any]] = []
     for item in python_items:
         purl = package_url("pypi", item["name"].lower(), item.get("version", ""))
-        properties = [{"name": "serverware:ecosystem", "value": "pypi"}]
+        properties = [{"name": "catchplate:ecosystem", "value": "pypi"}]
         if item.get("hashes_sha256"):
             properties.extend(
                 [
                     {
-                        "name": "serverware:pipArtifactHashCount",
+                        "name": "catchplate:pipArtifactHashCount",
                         "value": str(item["hash_count"]),
                     },
                     {
-                        "name": "serverware:pipArtifactHashesSha256",
+                        "name": "catchplate:pipArtifactHashesSha256",
                         "value": item["hashes_sha256"],
                     },
                 ]
@@ -745,7 +745,7 @@ def cyclonedx_sbom(
             "name": item["name"],
             "version": item.get("version", ""),
             "purl": purl,
-            "properties": [{"name": "serverware:ecosystem", "value": "cargo"}],
+            "properties": [{"name": "catchplate:ecosystem", "value": "cargo"}],
         }
         checksum = item.get("checksum")
         if checksum:
@@ -771,37 +771,37 @@ def cyclonedx_sbom(
                 "components": [
                     {
                         "type": "application",
-                        "name": "serverware-release-provenance",
+                        "name": "catchplate-release-provenance",
                         "version": "1",
                     }
                 ]
             },
             "component": {
                 "type": "application",
-                "bom-ref": "pkg:generic/serverware@0.1.0",
-                "name": "serverware",
+                "bom-ref": "pkg:generic/catchplate@0.1.0",
+                "name": "catchplate",
                 "version": "0.1.0",
             },
             "properties": [
-                {"name": "serverware:sourceTreeDigest", "value": source_digest},
+                {"name": "catchplate:sourceTreeDigest", "value": source_digest},
                 {
-                    "name": "serverware:pythonDependencyManifest",
+                    "name": "catchplate:pythonDependencyManifest",
                     "value": python_manifest["path"],
                 },
                 {
-                    "name": "serverware:pythonDependencyManifestFormat",
+                    "name": "catchplate:pythonDependencyManifestFormat",
                     "value": python_manifest["format"],
                 },
                 {
-                    "name": "serverware:pythonDependencyManifestMode",
+                    "name": "catchplate:pythonDependencyManifestMode",
                     "value": python_manifest["mode"],
                 },
                 {
-                    "name": "serverware:pythonDependencyManifestSha256",
+                    "name": "catchplate:pythonDependencyManifestSha256",
                     "value": python_manifest["sha256"],
                 },
                 {
-                    "name": "serverware:pythonDependencyManifestRequiresHashes",
+                    "name": "catchplate:pythonDependencyManifestRequiresHashes",
                     "value": str(bool(python_manifest["require_hashes"])).lower(),
                 },
             ],
@@ -982,12 +982,12 @@ def verify_development_v2_topology(services: dict[str, Any]) -> None:
     gate = services["decision-gate-rs"]
     gate_env = gate.get("environment") or {}
     if (
-        gate_env.get("SERVERWARE_RESPONSE_OBSERVATION_V2_SOCKET") != "/run/serverware-response-v2/router/custody.sock"
-        or gate_env.get("SERVERWARE_RESPONSE_OBSERVATION_V2_EXPECTED_UID") != "65520"
-        or gate_env.get("SERVERWARE_RESPONSE_OBSERVATION_V2_ATTESTATION_MODE") != "trusted-host-no-tee"
+        gate_env.get("CATCHPLATE_RESPONSE_OBSERVATION_V2_SOCKET") != "/run/catchplate-response-v2/router/custody.sock"
+        or gate_env.get("CATCHPLATE_RESPONSE_OBSERVATION_V2_EXPECTED_UID") != "65520"
+        or gate_env.get("CATCHPLATE_RESPONSE_OBSERVATION_V2_ATTESTATION_MODE") != "trusted-host-no-tee"
     ):
         raise ValueError("development gate must pin the trusted-host v2 router identity")
-    config_path = "/run/serverware-response-v2/config/custody.json"
+    config_path = "/run/catchplate-response-v2/config/custody.json"
     socket_sources: dict[str, str] = {}
     data_sources: dict[str, str] = {}
     key_sources: set[str] = set()
@@ -1015,27 +1015,27 @@ def verify_development_v2_topology(services: dict[str, Any]) -> None:
             or set(service.get("cap_drop") or []) != {"ALL"}
             or set(service.get("cap_add") or []) != ({"KILL"} if role == "cleanup-watchdog" else set())
             or "no-new-privileges:true" not in (service.get("security_opt") or [])
-            or service.get("entrypoint") != ["/usr/local/bin/serverware-response-observation-v2-custody"]
+            or service.get("entrypoint") != ["/usr/local/bin/catchplate-response-observation-v2-custody"]
             or service.get("command") != expected_command
             or not network_ok
             or (oneshot and service.get("restart") != "no")
         ):
             raise ValueError(f"development custody role has invalid identity, isolation, or command: {name}")
         public_config_sources.add(development_custody_mount(
-            service, "/run/serverware-response-v2/config", read_only=True
+            service, "/run/catchplate-response-v2/config", read_only=True
         ))
         if not oneshot:
             socket_sources[role] = development_custody_mount(
-                service, f"/run/serverware-response-v2/{CUSTODY_V2_ROLES[role][1]}", read_only=False
+                service, f"/run/catchplate-response-v2/{CUSTODY_V2_ROLES[role][1]}", read_only=False
             )
             data_sources[role] = development_custody_mount(
-                service, f"/var/lib/serverware-response-v2/{role}", read_only=False
+                service, f"/var/lib/catchplate-response-v2/{role}", read_only=False
             )
-            expected_health = ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", *expected_command, "--check-readiness"]
+            expected_health = ["CMD", "/usr/local/bin/catchplate-response-observation-v2-custody", *expected_command, "--check-readiness"]
             if (service.get("healthcheck") or {}).get("test") != expected_health:
                 raise ValueError(f"development custody role lacks exact readiness check: {name}")
             if role != "custody-router":
-                credential_path = f"/run/credentials/serverware-response-v2-{role}"
+                credential_path = f"/run/credentials/catchplate-response-v2-{role}"
                 if (service.get("environment") or {}).get("CREDENTIALS_DIRECTORY") != credential_path:
                     raise ValueError(f"development custody role has wrong credential directory: {name}")
                 key_source = development_custody_mount(service, credential_path, read_only=True)
@@ -1047,38 +1047,38 @@ def verify_development_v2_topology(services: dict[str, Any]) -> None:
     state = services["response-v2-state-authority"]
     state_environment = state.get("environment") or {}
     generation_pin = require_sha256(
-        state_environment.get("SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256"),
+        state_environment.get("CATCHPLATE_RESPONSE_V2_PROVIDER_GENERATION_SHA256"),
         "development custody provider generation",
     )
-    public_credentials = "/run/credentials/serverware-response-v2-generation-public"
-    if state_environment.get("SERVERWARE_RESPONSE_V2_GENERATION_PUBLIC_CREDENTIALS_DIRECTORY") != public_credentials:
+    public_credentials = "/run/credentials/catchplate-response-v2-generation-public"
+    if state_environment.get("CATCHPLATE_RESPONSE_V2_GENERATION_PUBLIC_CREDENTIALS_DIRECTORY") != public_credentials:
         raise ValueError("development custody state authority lacks generation trust credentials")
     public_source = development_custody_mount(state, public_credentials, read_only=True)
     bootstrap_sources = set()
     for name in CUSTODY_ONESHOT_SERVICES:
         service = services[name]
         environment = service.get("environment") or {}
-        credential_path = "/run/credentials/serverware-response-v2-generation-bootstrap"
-        if environment.get("SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256") != generation_pin or environment.get("CREDENTIALS_DIRECTORY") != credential_path:
+        credential_path = "/run/credentials/catchplate-response-v2-generation-bootstrap"
+        if environment.get("CATCHPLATE_RESPONSE_V2_PROVIDER_GENERATION_SHA256") != generation_pin or environment.get("CREDENTIALS_DIRECTORY") != credential_path:
             raise ValueError("development custody one-shots must share the state generation pin")
         bootstrap_sources.add(development_custody_mount(service, credential_path, read_only=True))
-        if development_custody_mount(service, "/var/lib/serverware-response-v2/state-authority", read_only=False) != data_sources["state-authority"]:
+        if development_custody_mount(service, "/var/lib/catchplate-response-v2/state-authority", read_only=False) != data_sources["state-authority"]:
             raise ValueError("development custody one-shot uses another state authority")
     if len(bootstrap_sources) != 1 or bootstrap_sources & (key_sources | {public_source}):
         raise ValueError("development custody bootstrap authority must be isolated from role/public credentials")
     activation = services["response-v2-generation-activation"]
     for role, (_, socket_name) in CUSTODY_V2_ROLES.items():
-        if development_custody_mount(activation, f"/run/serverware-response-v2/{socket_name}", read_only=role != "state-authority") != socket_sources[role]:
+        if development_custody_mount(activation, f"/run/catchplate-response-v2/{socket_name}", read_only=role != "state-authority") != socket_sources[role]:
             raise ValueError(f"development generation activation uses another role socket: {role}")
-        if development_custody_mount(activation, f"/var/lib/serverware-response-v2/{role}", read_only=role != "state-authority") != data_sources[role]:
+        if development_custody_mount(activation, f"/var/lib/catchplate-response-v2/{role}", read_only=role != "state-authority") != data_sources[role]:
             raise ValueError(f"development generation activation uses another role state: {role}")
-        if role != "state-authority" and development_custody_mount(services[f"response-v2-{role}"], "/run/serverware-response-v2/state", read_only=True) != socket_sources["state-authority"]:
+        if role != "state-authority" and development_custody_mount(services[f"response-v2-{role}"], "/run/catchplate-response-v2/state", read_only=True) != socket_sources["state-authority"]:
             raise ValueError(f"development custody role uses another state-authority socket: {role}")
     router = services["response-v2-custody-router"]
     for role, (_, socket_name) in CUSTODY_V2_ROLES.items():
-        if role != "custody-router" and development_custody_mount(router, f"/run/serverware-response-v2/{socket_name}", read_only=True) != socket_sources[role]:
+        if role != "custody-router" and development_custody_mount(router, f"/run/catchplate-response-v2/{socket_name}", read_only=True) != socket_sources[role]:
             raise ValueError(f"development custody router uses another role socket: {role}")
-    if development_custody_mount(gate, "/run/serverware-response-v2/router", read_only=True) != socket_sources["custody-router"]:
+    if development_custody_mount(gate, "/run/catchplate-response-v2/router", read_only=True) != socket_sources["custody-router"]:
         raise ValueError("development gate uses another custody router socket")
     dependencies = (
         ("response-v2-state-authority", "response-v2-generation-bootstrap", "service_completed_successfully"),
@@ -1119,7 +1119,7 @@ def development_compose_services(
     gate_env = gate.get("environment") or {}
     custody_image = custody.get("image")
     gate_image = gate.get("image")
-    host_contract = model.get("x-serverware-policy-custody-host-contract") or {}
+    host_contract = model.get("x-catchplate-policy-custody-host-contract") or {}
     driver_gid = str(host_contract.get("driverGroupGid", ""))
     if (
         not re.fullmatch(r"[1-9][0-9]{0,9}", driver_gid)
@@ -1139,10 +1139,10 @@ def development_compose_services(
         or custody.get("build") is not None
         or custody.get("pull_policy") != "never"
         or not isinstance(gate.get("build"), dict)
-        or custody_env.get("SERVERWARE_CUSTODY_EXPECTED_CLIENT_UID") != "10001"
-        or gate_env.get("SERVERWARE_RESPONSE_PROOF_CUSTODY_SOCKET")
-        != "/run/serverware-custody/custody.sock"
-        or gate_env.get("SERVERWARE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID") != "10002"
+        or custody_env.get("CATCHPLATE_CUSTODY_EXPECTED_CLIENT_UID") != "10001"
+        or gate_env.get("CATCHPLATE_RESPONSE_PROOF_CUSTODY_SOCKET")
+        != "/run/catchplate-custody/custody.sock"
+        or gate_env.get("CATCHPLATE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID") != "10002"
         or {str(value) for value in (gate.get("group_add") or [])} != {"10003", "65519", driver_gid}
         or ((gate.get("depends_on") or {}).get("custody-runtime") or {}).get(
             "condition"
@@ -1154,8 +1154,8 @@ def development_compose_services(
         )
     if not any(
         isinstance(item, dict)
-        and item.get("source") == "serverware-custody-socket"
-        and item.get("target") == "/run/serverware-custody"
+        and item.get("source") == "catchplate-custody-socket"
+        and item.get("target") == "/run/catchplate-custody"
         and bool(item.get("read_only", False))
         for item in (gate.get("volumes") or [])
     ):
@@ -1182,7 +1182,7 @@ def verify_development_image_identity(
 
 
 def closed_production_service_map(value: Any, label: str) -> dict[str, dict[str, Any]]:
-    expected = {"serverware-control", "serverware-decision-gate"}
+    expected = {"catchplate-control", "catchplate-decision-gate"}
     if not isinstance(value, list) or len(value) != len(expected):
         raise ValueError(f"{label} must contain exactly both production services")
     result: dict[str, dict[str, Any]] = {}
@@ -1241,7 +1241,7 @@ def production_image_inventory(
         "source_manifest_digest": (
             expected_source_contract.get("manifest") or {}
         ).get("sha256"),
-        "source_identity_mode": serverware_source_tree.PRODUCTION_IDENTITY_MODE,
+        "source_identity_mode": catchplate_source_tree.PRODUCTION_IDENTITY_MODE,
         "production_release_eligible": True,
     }
     for field, expected in expected_contract_fields.items():
@@ -1267,10 +1267,10 @@ def production_image_inventory(
     image_refs = merge_production_images_env.validate_production_images(image_value)
     assignments = merge_production_images_env.service_image_assignments(image_refs)
     expected_refs = {
-        "serverware-control": assignments[
+        "catchplate-control": assignments[
             merge_production_images_env.CONTROL_IMAGE_KEY
         ],
-        "serverware-decision-gate": assignments[
+        "catchplate-decision-gate": assignments[
             merge_production_images_env.DECISION_GATE_IMAGE_KEY
         ],
     }
@@ -1351,7 +1351,7 @@ def production_image_inventory(
             "independently_remeasured_remote_image_id": remeasured_remote_image_id,
             "dockerfile": built.get("dockerfile"),
         }
-        if service == "serverware-decision-gate":
+        if service == "catchplate-decision-gate":
             built_binary = require_sha256(
                 built.get("binary_digest"), "built decision-gate binary digest"
             )
@@ -1521,13 +1521,13 @@ def production_reproducibility_binding(
     by_service = closed_production_service_map(
         images, "reproducible build verification images"
     )
-    if set(expected_images) != {"serverware-control", "serverware-decision-gate"}:
+    if set(expected_images) != {"catchplate-control", "catchplate-decision-gate"}:
         raise ValueError(
             "release inventory must contain exactly both production images"
         )
 
     image_bindings: list[dict[str, str]] = []
-    for service in ("serverware-control", "serverware-decision-gate"):
+    for service in ("catchplate-control", "catchplate-decision-gate"):
         reproducible_image_id = require_sha256(
             by_service[service].get("image_id"),
             f"reproducible build verification {service} image_id",
@@ -1557,13 +1557,13 @@ def production_reproducibility_binding(
             )
         image_bindings.append({"service": service, "image_id": reproducible_image_id})
 
-    gate = by_service["serverware-decision-gate"]
+    gate = by_service["catchplate-decision-gate"]
     reproducible_rust_binary = require_sha256(
         gate.get("rust_binary_sha256"),
         "reproducible build verification decision-gate Rust binary digest",
     )
     expected_rust_binary = require_sha256(
-        expected_images["serverware-decision-gate"].get("binary_digest"),
+        expected_images["catchplate-decision-gate"].get("binary_digest"),
         "release inventory decision-gate Rust binary digest",
     )
     if reproducible_rust_binary != expected_rust_binary:
@@ -1575,7 +1575,7 @@ def production_reproducibility_binding(
         "reproducible build verification launcher binary digest",
     )
     expected_launcher = require_sha256(
-        expected_images["serverware-decision-gate"].get("launcher_binary_digest"),
+        expected_images["catchplate-decision-gate"].get("launcher_binary_digest"),
         "release inventory launcher binary digest",
     )
     if reproducible_launcher != expected_launcher:
@@ -1586,7 +1586,7 @@ def production_reproducibility_binding(
         gate, "reproducible build verification decision-gate launch authority"
     )
     expected_launch_authority = launch_authority_binding(
-        expected_images["serverware-decision-gate"],
+        expected_images["catchplate-decision-gate"],
         "release inventory decision-gate launch authority",
     )
     if reproducible_launch_authority != expected_launch_authority:
@@ -1625,7 +1625,7 @@ def validate_production_custody_topology(
     services = model.get("services") if isinstance(model, dict) else None
     if not isinstance(services, dict):
         raise ValueError("rendered production Compose model has no services")
-    serverware = services.get("serverware") or {}
+    catchplate = services.get("catchplate") or {}
     custody = services.get("custody-runtime") or {}
     gate = services.get("decision-gate-rs") or {}
 
@@ -1635,8 +1635,8 @@ def validate_production_custody_topology(
         raise ValueError("production custody must run as explicit UID 65531 and socket GID 65530")
     if gate.get("user") != "65532:65532":
         raise ValueError("production decision gate must run as explicit UID 65532")
-    host_contract = model.get("x-serverware-policy-custody-host-contract") or {}
-    driver_gid = loaded_env.get("SERVERWARE_POLICY_CUSTODY_DRIVER_GID", "")
+    host_contract = model.get("x-catchplate-policy-custody-host-contract") or {}
+    driver_gid = loaded_env.get("CATCHPLATE_POLICY_CUSTODY_DRIVER_GID", "")
     if (
         not re.fullmatch(r"[1-9][0-9]{0,9}", driver_gid)
         or int(driver_gid) > 4294967294
@@ -1650,14 +1650,14 @@ def validate_production_custody_topology(
     if len(groups) != 3 or set(groups) != {"65519", "65530", driver_gid}:
         raise ValueError("production decision gate must receive only the v2, custody, and declared host driver groups")
     if (
-        gate.get("network_mode") != "service:serverware"
+        gate.get("network_mode") != "service:catchplate"
         or gate.get("networks")
         or gate.get("ports")
-        or serverware.get("network_mode")
-        or set(serverware.get("networks") or {}) != {"default", "gate-control", "anchor-control"}
+        or catchplate.get("network_mode")
+        or set(catchplate.get("networks") or {}) != {"default", "gate-control", "anchor-control"}
     ):
         raise ValueError("production decision gate must share only the control-plane network namespace")
-    proxy_address = loaded_env.get("SERVERWARE_PROXY_BIND_ADDRESS", "")
+    proxy_address = loaded_env.get("CATCHPLATE_PROXY_BIND_ADDRESS", "")
     try:
         ipaddress.ip_address(proxy_address)
     except ValueError as exc:
@@ -1666,7 +1666,7 @@ def validate_production_custody_topology(
         ("127.0.0.1", "3000", 3000, "tcp"),
         (proxy_address, "8080", 9090, "tcp"),
     }
-    ports = serverware.get("ports") or []
+    ports = catchplate.get("ports") or []
     if (
         len(ports) != 2
         or any(not isinstance(port, dict) for port in ports)
@@ -1674,24 +1674,24 @@ def validate_production_custody_topology(
             (port.get("host_ip"), str(port.get("published")), port.get("target"), port.get("protocol"))
             for port in ports
         } != expected_ports
-        or any(service.get("ports") for name, service in services.items() if name != "serverware")
+        or any(service.get("ports") for name, service in services.items() if name != "catchplate")
     ):
-        raise ValueError("production ports must publish only loopback control and the env-bound proxy through serverware")
+        raise ValueError("production ports must publish only loopback control and the env-bound proxy through catchplate")
 
     custody_env = custody.get("environment") or {}
     gate_env = gate.get("environment") or {}
-    if custody_env.get("SERVERWARE_CUSTODY_EXPECTED_CLIENT_UID") != "65532":
+    if custody_env.get("CATCHPLATE_CUSTODY_EXPECTED_CLIENT_UID") != "65532":
         raise ValueError("production custody must authenticate decision-gate UID 65532")
     if (
-        custody_env.get("SERVERWARE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY")
-        != "/var/lib/serverware-custody"
+        custody_env.get("CATCHPLATE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY")
+        != "/var/lib/catchplate-custody"
     ):
         raise ValueError("production custody must use its private persistent attempt ledger")
     if (
-        gate_env.get("SERVERWARE_RESPONSE_PROOF_CUSTODY_SOCKET")
-        != "/run/serverware-custody/custody.sock"
-        or gate_env.get("SERVERWARE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID") != "65531"
-        or gate_env.get("SERVERWARE_RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS") != "30000"
+        gate_env.get("CATCHPLATE_RESPONSE_PROOF_CUSTODY_SOCKET")
+        != "/run/catchplate-custody/custody.sock"
+        or gate_env.get("CATCHPLATE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID") != "65531"
+        or gate_env.get("CATCHPLATE_RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS") != "30000"
     ):
         raise ValueError("production decision gate must pin custody UID 65531 with a 30-second startup deadline")
 
@@ -1724,33 +1724,33 @@ def validate_production_custody_topology(
             if any(item.get("source") == source for item in mounts(service))
         }
 
-    response_key_source = loaded_env.get("SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE", "")
+    response_key_source = loaded_env.get("CATCHPLATE_RESPONSE_SIGNING_PRIVATE_KEY_FILE", "")
     if not response_key_source:
         raise ValueError("production response-signing private key source is not configured")
     require_mount(
-        "serverware",
+        "catchplate",
         source=response_key_source,
-        target="/run/secrets/serverware-response-signing-key",
+        target="/run/secrets/catchplate-response-signing-key",
         read_only=True,
     )
-    if consumers(response_key_source) != {"serverware"}:
-        raise ValueError("production response-signing private key must be mounted only by serverware")
+    if consumers(response_key_source) != {"catchplate"}:
+        raise ValueError("production response-signing private key must be mounted only by catchplate")
 
-    control_plane_tls_source = loaded_env.get("SERVERWARE_CONTROL_PLANE_TLS_DIR", "")
+    control_plane_tls_source = loaded_env.get("CATCHPLATE_CONTROL_PLANE_TLS_DIR", "")
     if not control_plane_tls_source:
         raise ValueError("production control-plane TLS source is not configured")
     gate_ca_source = str(Path(control_plane_tls_source) / "ca.pem")
     require_mount(
         "decision-gate-rs",
         source=gate_ca_source,
-        target="/run/serverware/tls/ca.pem",
+        target="/run/catchplate/tls/ca.pem",
         read_only=True,
     )
     if any(
-        str(item.get("target", "")).startswith("/run/serverware/tls")
+        str(item.get("target", "")).startswith("/run/catchplate/tls")
         and not (
             item.get("source") == gate_ca_source
-            and item.get("target") == "/run/serverware/tls/ca.pem"
+            and item.get("target") == "/run/catchplate/tls/ca.pem"
             and bool(item.get("read_only", False))
         )
         for item in mounts(gate)
@@ -1781,55 +1781,55 @@ def validate_production_custody_topology(
                     "production response-signing private key must not alias or fall beneath a gate-visible bind mount"
                 )
 
-    trust_source = "serverware-custody-trust"
+    trust_source = "catchplate-custody-trust"
     require_mount(
-        "serverware",
+        "catchplate",
         source=trust_source,
-        target="/run/serverware/custody-trust",
+        target="/run/catchplate/custody-trust",
         read_only=False,
     )
     require_mount(
         "custody-runtime",
         source=trust_source,
-        target="/run/serverware/custody-trust",
+        target="/run/catchplate/custody-trust",
         read_only=True,
     )
-    if consumers(trust_source) != {"serverware", "custody-runtime"}:
+    if consumers(trust_source) != {"catchplate", "custody-runtime"}:
         raise ValueError("production custody trust volume has an unexpected consumer")
 
-    socket_source = "serverware-custody-socket"
+    socket_source = "catchplate-custody-socket"
     require_mount(
         "custody-runtime",
         source=socket_source,
-        target="/run/serverware-custody",
+        target="/run/catchplate-custody",
         read_only=False,
     )
     require_mount(
         "decision-gate-rs",
         source=socket_source,
-        target="/run/serverware-custody",
+        target="/run/catchplate-custody",
         read_only=True,
     )
     if consumers(socket_source) != {"custody-runtime", "decision-gate-rs"}:
         raise ValueError("production custody socket volume has an unexpected consumer")
 
-    state_source = "serverware-custody-state"
+    state_source = "catchplate-custody-state"
     require_mount(
         "custody-runtime",
         source=state_source,
-        target="/var/lib/serverware-custody",
+        target="/var/lib/catchplate-custody",
         read_only=False,
     )
     if consumers(state_source) != {"custody-runtime"}:
         raise ValueError("production custody state volume must be private to custody")
 
-    serverware_healthcheck = serverware.get("healthcheck") or {}
-    healthcheck_test = serverware_healthcheck.get("test") or []
+    catchplate_healthcheck = catchplate.get("healthcheck") or {}
+    healthcheck_test = catchplate_healthcheck.get("test") or []
     # The immutable control image/source contract binds the entrypoint and its
     # live HTTPS/private-key custody checks; no inline or caller-selected code.
-    if healthcheck_test != list(PRODUCTION_CONTROL_HEALTHCHECK_COMMAND) or serverware_healthcheck.get("disable"):
+    if healthcheck_test != list(PRODUCTION_CONTROL_HEALTHCHECK_COMMAND) or catchplate_healthcheck.get("disable"):
         raise ValueError("production control-plane readiness must use the exact isolated authority entrypoint")
-    if ((custody.get("depends_on") or {}).get("serverware") or {}).get("condition") != "service_healthy":
+    if ((custody.get("depends_on") or {}).get("catchplate") or {}).get("condition") != "service_healthy":
         raise ValueError("production custody must wait for control-plane trust publication readiness")
     if ((gate.get("depends_on") or {}).get("custody-runtime") or {}).get("condition") != "service_started":
         raise ValueError("production decision gate must start only after custody starts")
@@ -1862,8 +1862,8 @@ def production_compose_model(
     if not isinstance(services, dict):
         raise ValueError("rendered production Compose model has no services")
     expected_images = {
-        **{name: images["serverware-control"]["repo_digests"][0] for name in PRODUCTION_CONTROL_IMAGE_SERVICES},
-        **{name: images["serverware-decision-gate"]["repo_digests"][0] for name in CUSTODY_GATE_IMAGE_SERVICES},
+        **{name: images["catchplate-control"]["repo_digests"][0] for name in PRODUCTION_CONTROL_IMAGE_SERVICES},
+        **{name: images["catchplate-decision-gate"]["repo_digests"][0] for name in CUSTODY_GATE_IMAGE_SERVICES},
     }
     if set(services) != set(expected_images):
         raise ValueError(
@@ -1891,7 +1891,7 @@ def production_compose_model(
         raise ValueError(
             "production audit-anchor must only join the internal anchor-control network"
         )
-    for service in ("serverware", "decision-gate-rs"):
+    for service in ("catchplate", "decision-gate-rs"):
         devices = services[service].get("devices") or []
         if not any(
             isinstance(item, dict) and item.get("source") == "/dev/nsm"
@@ -1902,11 +1902,11 @@ def production_compose_model(
             )
         mounts = services[service].get("volumes") or []
         expected_artifacts = {
-            "/run/serverware/release/release-provenance.json": loaded_env.get(
-                "SERVERWARE_RELEASE_PROVENANCE_FILE"
+            "/run/catchplate/release/release-provenance.json": loaded_env.get(
+                "CATCHPLATE_RELEASE_PROVENANCE_FILE"
             ),
-            "/run/serverware/release/image-signatures.json": loaded_env.get(
-                "SERVERWARE_IMAGE_SIGNATURES_FILE"
+            "/run/catchplate/release/image-signatures.json": loaded_env.get(
+                "CATCHPLATE_IMAGE_SIGNATURES_FILE"
             ),
         }
         for target, source in expected_artifacts.items():
@@ -1921,47 +1921,47 @@ def production_compose_model(
                 raise ValueError(
                     f"production Compose service {service} must read-only mount {target}"
                 )
-    serverware_env = services["serverware"].get("environment") or {}
-    if serverware_env.get("SERVERWARE_DECISION_GATE_BASE"):
+    catchplate_env = services["catchplate"].get("environment") or {}
+    if catchplate_env.get("CATCHPLATE_DECISION_GATE_BASE"):
         raise ValueError(
             "production control plane must not use the gate's local management API"
         )
     if (
-        serverware_env.get("SERVERWARE_AUDIT_ANCHOR_URL")
+        catchplate_env.get("CATCHPLATE_AUDIT_ANCHOR_URL")
         != "https://audit-anchor:9100/anchors"
     ):
         raise ValueError(
             "production audit-anchor transport must use the internal HTTPS endpoint"
         )
     if (
-        serverware_env.get("SERVERWARE_AUDIT_ANCHOR_CA_BUNDLE")
-        != "/run/serverware/tls/ca.pem"
+        catchplate_env.get("CATCHPLATE_AUDIT_ANCHOR_CA_BUNDLE")
+        != "/run/catchplate/tls/ca.pem"
     ):
         raise ValueError(
             "production control plane must verify the audit-anchor TLS certificate"
         )
     gate_env = services["decision-gate-rs"].get("environment") or {}
-    if gate_env.get("SERVERWARE_DECISION_GATE_MANAGEMENT_HOST") != "127.0.0.1":
+    if gate_env.get("CATCHPLATE_DECISION_GATE_MANAGEMENT_HOST") != "127.0.0.1":
         raise ValueError(
             "production decision-gate management listener must bind container loopback"
         )
     anchor_env = services["audit-anchor"].get("environment") or {}
     if (
-        anchor_env.get("SERVERWARE_AUDIT_ANCHOR_TLS_CERT_FILE")
-        != "/run/serverware/anchor-tls/audit-anchor.crt"
+        anchor_env.get("CATCHPLATE_AUDIT_ANCHOR_TLS_CERT_FILE")
+        != "/run/catchplate/anchor-tls/audit-anchor.crt"
     ):
         raise ValueError("production audit-anchor TLS certificate path is not fixed")
     if (
-        anchor_env.get("SERVERWARE_AUDIT_ANCHOR_TLS_KEY_FILE")
-        != "/run/serverware/anchor-tls/audit-anchor.key"
+        anchor_env.get("CATCHPLATE_AUDIT_ANCHOR_TLS_KEY_FILE")
+        != "/run/catchplate/anchor-tls/audit-anchor.key"
     ):
         raise ValueError("production audit-anchor TLS key path is not fixed")
     anchor_mounts = services["audit-anchor"].get("volumes") or []
     if not any(
         isinstance(item, dict)
         and item.get("type") == "bind"
-        and item.get("source") == loaded_env.get("SERVERWARE_AUDIT_ANCHOR_TLS_DIR")
-        and item.get("target") == "/run/serverware/anchor-tls"
+        and item.get("source") == loaded_env.get("CATCHPLATE_AUDIT_ANCHOR_TLS_DIR")
+        and item.get("target") == "/run/catchplate/anchor-tls"
         and item.get("read_only") is True
         for item in anchor_mounts
     ):
@@ -2022,7 +2022,7 @@ def wait_for_gate_response_context(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate signed Serverware release provenance and anchor it."
+        description="Generate signed Catchplate release provenance and anchor it."
     )
     parser.add_argument(
         "--production",
@@ -2036,31 +2036,31 @@ def main() -> None:
     parser.add_argument(
         "--anchor",
         default=os.getenv(
-            "SERVERWARE_RELEASE_ANCHOR_BASE", os.getenv("AUDIT_ANCHOR_BASE", "")
+            "CATCHPLATE_RELEASE_ANCHOR_BASE", os.getenv("AUDIT_ANCHOR_BASE", "")
         ),
     )
     parser.add_argument(
         "--anchor-ca-bundle",
-        default=os.getenv("SERVERWARE_RELEASE_ANCHOR_CA_BUNDLE", ""),
+        default=os.getenv("CATCHPLATE_RELEASE_ANCHOR_CA_BUNDLE", ""),
     )
     parser.add_argument(
         "--admin-token",
-        default=os.getenv("SERVERWARE_ADMIN_TOKEN"),
+        default=os.getenv("CATCHPLATE_ADMIN_TOKEN"),
         help="development-only direct admin token",
     )
     parser.add_argument(
         "--admin-token-file",
-        default=os.getenv("SERVERWARE_ADMIN_TOKEN_FILE"),
+        default=os.getenv("CATCHPLATE_ADMIN_TOKEN_FILE"),
         help="production admin-token file",
     )
     parser.add_argument(
         "--anchor-token",
-        default=os.getenv("SERVERWARE_AUDIT_ANCHOR_TOKEN"),
+        default=os.getenv("CATCHPLATE_AUDIT_ANCHOR_TOKEN"),
         help="development-only direct audit-anchor token",
     )
     parser.add_argument(
         "--anchor-token-file",
-        default=os.getenv("SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE"),
+        default=os.getenv("CATCHPLATE_AUDIT_ANCHOR_TOKEN_FILE"),
         help="production audit-anchor-token file",
     )
     parser.add_argument("--env-file", default="ops/production-readiness.env")
@@ -2078,20 +2078,20 @@ def main() -> None:
     )
     parser.add_argument(
         "--reproducible-build-signature",
-        default=os.getenv("SERVERWARE_REPRODUCIBLE_BUILD_VERIFICATION_SIGNATURE", ""),
+        default=os.getenv("CATCHPLATE_REPRODUCIBLE_BUILD_VERIFICATION_SIGNATURE", ""),
     )
     parser.add_argument(
         "--reproducible-build-trusted-public-key",
-        default=os.getenv("SERVERWARE_REPRODUCIBLE_BUILD_TRUSTED_PUBLIC_KEY", ""),
+        default=os.getenv("CATCHPLATE_REPRODUCIBLE_BUILD_TRUSTED_PUBLIC_KEY", ""),
     )
     parser.add_argument("--out", default=".tmp/release-provenance.json")
     parser.add_argument("--sbom-out", default=".tmp/sbom.cdx.json")
     parser.add_argument(
-        "--key", default=os.getenv("SERVERWARE_RELEASE_PROVENANCE_SIGNING_KEY", "")
+        "--key", default=os.getenv("CATCHPLATE_RELEASE_PROVENANCE_SIGNING_KEY", "")
     )
     parser.add_argument(
         "--trusted-public-key",
-        default=os.getenv("SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY", ""),
+        default=os.getenv("CATCHPLATE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY", ""),
     )
     parser.add_argument("--container-out", default="/data/release-provenance.json")
     args = parser.parse_args()
@@ -2106,66 +2106,66 @@ def main() -> None:
         compose_file = path_from_arg(args.compose_file)
         loaded_env = run_production_readiness.load_env_file(env_file)
         args.anchor = args.anchor or loaded_env.get(
-            "SERVERWARE_RELEASE_ANCHOR_BASE", ""
+            "CATCHPLATE_RELEASE_ANCHOR_BASE", ""
         )
         admin_sources: dict[str, str] = {}
         anchor_sources: dict[str, str] = {}
         if args.admin_token is not None:
-            admin_sources["SERVERWARE_ADMIN_TOKEN"] = args.admin_token
-        elif "SERVERWARE_ADMIN_TOKEN" in loaded_env:
-            admin_sources["SERVERWARE_ADMIN_TOKEN"] = loaded_env[
-                "SERVERWARE_ADMIN_TOKEN"
+            admin_sources["CATCHPLATE_ADMIN_TOKEN"] = args.admin_token
+        elif "CATCHPLATE_ADMIN_TOKEN" in loaded_env:
+            admin_sources["CATCHPLATE_ADMIN_TOKEN"] = loaded_env[
+                "CATCHPLATE_ADMIN_TOKEN"
             ]
         if args.admin_token_file is not None:
-            admin_sources["SERVERWARE_ADMIN_TOKEN_FILE"] = args.admin_token_file
-        elif "SERVERWARE_ADMIN_TOKEN_FILE" in loaded_env:
-            admin_sources["SERVERWARE_ADMIN_TOKEN_FILE"] = loaded_env[
-                "SERVERWARE_ADMIN_TOKEN_FILE"
+            admin_sources["CATCHPLATE_ADMIN_TOKEN_FILE"] = args.admin_token_file
+        elif "CATCHPLATE_ADMIN_TOKEN_FILE" in loaded_env:
+            admin_sources["CATCHPLATE_ADMIN_TOKEN_FILE"] = loaded_env[
+                "CATCHPLATE_ADMIN_TOKEN_FILE"
             ]
         if args.anchor_token is not None:
-            anchor_sources["SERVERWARE_AUDIT_ANCHOR_TOKEN"] = args.anchor_token
-        elif "SERVERWARE_AUDIT_ANCHOR_TOKEN" in loaded_env:
-            anchor_sources["SERVERWARE_AUDIT_ANCHOR_TOKEN"] = loaded_env[
-                "SERVERWARE_AUDIT_ANCHOR_TOKEN"
+            anchor_sources["CATCHPLATE_AUDIT_ANCHOR_TOKEN"] = args.anchor_token
+        elif "CATCHPLATE_AUDIT_ANCHOR_TOKEN" in loaded_env:
+            anchor_sources["CATCHPLATE_AUDIT_ANCHOR_TOKEN"] = loaded_env[
+                "CATCHPLATE_AUDIT_ANCHOR_TOKEN"
             ]
         if args.anchor_token_file is not None:
-            anchor_sources["SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE"] = (
+            anchor_sources["CATCHPLATE_AUDIT_ANCHOR_TOKEN_FILE"] = (
                 args.anchor_token_file
             )
-        elif "SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE" in loaded_env:
-            anchor_sources["SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE"] = loaded_env[
-                "SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE"
+        elif "CATCHPLATE_AUDIT_ANCHOR_TOKEN_FILE" in loaded_env:
+            anchor_sources["CATCHPLATE_AUDIT_ANCHOR_TOKEN_FILE"] = loaded_env[
+                "CATCHPLATE_AUDIT_ANCHOR_TOKEN_FILE"
             ]
         args.admin_token = (
             verify_production_readiness.load_service_credential_for_tool(
                 admin_sources,
-                "SERVERWARE_ADMIN_TOKEN",
+                "CATCHPLATE_ADMIN_TOKEN",
                 require_file=True,
             )
         )
         args.anchor_token = (
             verify_production_readiness.load_service_credential_for_tool(
                 anchor_sources,
-                "SERVERWARE_AUDIT_ANCHOR_TOKEN",
+                "CATCHPLATE_AUDIT_ANCHOR_TOKEN",
                 require_file=True,
             )
         )
         args.anchor_ca_bundle = args.anchor_ca_bundle or loaded_env.get(
-            "SERVERWARE_RELEASE_ANCHOR_CA_BUNDLE", ""
+            "CATCHPLATE_RELEASE_ANCHOR_CA_BUNDLE", ""
         )
         args.key = args.key or loaded_env.get(
-            "SERVERWARE_RELEASE_PROVENANCE_SIGNING_KEY", ""
+            "CATCHPLATE_RELEASE_PROVENANCE_SIGNING_KEY", ""
         )
         args.trusted_public_key = args.trusted_public_key or loaded_env.get(
-            "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY", ""
+            "CATCHPLATE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY", ""
         )
         if not args.key:
             raise ValueError(
-                "production release provenance requires SERVERWARE_RELEASE_PROVENANCE_SIGNING_KEY or --key"
+                "production release provenance requires CATCHPLATE_RELEASE_PROVENANCE_SIGNING_KEY or --key"
             )
         if not args.trusted_public_key:
             raise ValueError(
-                "production release provenance requires SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY or --trusted-public-key"
+                "production release provenance requires CATCHPLATE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY or --trusted-public-key"
             )
         if not args.reproducible_build_signature:
             raise ValueError(
@@ -2193,7 +2193,7 @@ def main() -> None:
             expected_images=images,
         )
         production_launch_authority = launch_authority_binding(
-            images["serverware-decision-gate"],
+            images["catchplate-decision-gate"],
             "production decision-gate release inventory",
         )
         compose_config, compose_summary = production_compose_model(
@@ -2201,9 +2201,9 @@ def main() -> None:
             env_file=env_file,
             images=images,
         )
-        if loaded_env.get("SERVERWARE_PRODUCTION_IMAGES") != ",".join(
+        if loaded_env.get("CATCHPLATE_PRODUCTION_IMAGES") != ",".join(
             images[service]["repo_digests"][0]
-            for service in ("serverware-control", "serverware-decision-gate")
+            for service in ("catchplate-control", "catchplate-decision-gate")
         ):
             raise ValueError(
                 "production readiness env image list does not match the published image evidence"
@@ -2220,19 +2220,19 @@ def main() -> None:
         admin_sources = {}
         anchor_sources = {}
         if args.admin_token is not None:
-            admin_sources["SERVERWARE_ADMIN_TOKEN"] = args.admin_token
+            admin_sources["CATCHPLATE_ADMIN_TOKEN"] = args.admin_token
         if args.admin_token_file is not None:
-            admin_sources["SERVERWARE_ADMIN_TOKEN_FILE"] = args.admin_token_file
+            admin_sources["CATCHPLATE_ADMIN_TOKEN_FILE"] = args.admin_token_file
         if args.anchor_token is not None:
-            anchor_sources["SERVERWARE_AUDIT_ANCHOR_TOKEN"] = args.anchor_token
+            anchor_sources["CATCHPLATE_AUDIT_ANCHOR_TOKEN"] = args.anchor_token
         if args.anchor_token_file is not None:
-            anchor_sources["SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE"] = (
+            anchor_sources["CATCHPLATE_AUDIT_ANCHOR_TOKEN_FILE"] = (
                 args.anchor_token_file
             )
         args.admin_token = (
             verify_production_readiness.load_service_credential_for_tool(
                 admin_sources,
-                "SERVERWARE_ADMIN_TOKEN",
+                "CATCHPLATE_ADMIN_TOKEN",
                 require_file=False,
                 expected_control_plane_uid=local_uid,
                 expected_control_plane_gid=local_gid,
@@ -2245,7 +2245,7 @@ def main() -> None:
         args.anchor_token = (
             verify_production_readiness.load_service_credential_for_tool(
                 anchor_sources,
-                "SERVERWARE_AUDIT_ANCHOR_TOKEN",
+                "CATCHPLATE_AUDIT_ANCHOR_TOKEN",
                 require_file=False,
                 expected_control_plane_uid=local_uid,
                 expected_control_plane_gid=local_gid,
@@ -2301,8 +2301,8 @@ def main() -> None:
         raise ValueError(
             f"production release anchor CA bundle does not exist: {anchor_ca_bundle}"
         )
-    admin_headers = {"X-Serverware-Admin-Token": args.admin_token}
-    anchor_headers = {"X-Serverware-Audit-Anchor-Token": args.anchor_token}
+    admin_headers = {"X-Catchplate-Admin-Token": args.admin_token}
+    anchor_headers = {"X-Catchplate-Audit-Anchor-Token": args.anchor_token}
     if not args.production:
         control_attestation = request_json(
             f"{args.base.rstrip('/')}/attestation?nonce={nonce}-control"
@@ -2338,9 +2338,9 @@ def main() -> None:
     provenance = {
         "version": PRODUCTION_PROVENANCE_VERSION if args.production else 1,
         "created_at": created_at,
-        "source": "serverware-digest-pinned-production-release"
+        "source": "catchplate-digest-pinned-production-release"
         if args.production
-        else "serverware-docker-dev-release",
+        else "catchplate-docker-dev-release",
         "compose_config_sha256": sha256_prefixed_bytes(compose_config.encode("utf-8")),
         "compose": compose_summary,
         "source_tree": source,
@@ -2387,7 +2387,7 @@ def main() -> None:
         ),
         "containers": containers,
         "sbom": {
-            "format": "serverware.sbom/v1",
+            "format": "catchplate.sbom/v1",
             "python_manifest": python_manifest,
             "python": py_sbom,
             "rust": cargo_sbom,
@@ -2439,7 +2439,7 @@ def main() -> None:
     if not args.production:
         atomic_write_json(out_path, document)
         write_container_file(
-            "serverware",
+            "catchplate",
             args.container_out,
             out_path.read_bytes(),
             compose_command=development_compose_cli,
@@ -2484,12 +2484,12 @@ def main() -> None:
         "data_plane_binary_digest": (
             published_gate.get("data_plane_binary_digest")
             if published_gate
-            else (provenance["images"].get("serverware-decision-gate") or {}).get(
+            else (provenance["images"].get("catchplate-decision-gate") or {}).get(
                 "binary_digest"
             )
         ),
         "production_launcher_binary_digest": (
-            (provenance["images"].get("serverware-decision-gate") or {}).get(
+            (provenance["images"].get("catchplate-decision-gate") or {}).get(
                 "launcher_binary_digest"
             )
             if args.production
@@ -2572,7 +2572,7 @@ def main() -> None:
     atomic_write_json(out_path, document)
     if not args.production:
         write_container_file(
-            "serverware",
+            "catchplate",
             args.container_out,
             out_path.read_bytes(),
             compose_command=development_compose_cli,
@@ -2588,7 +2588,7 @@ def main() -> None:
                 "provenance_digest": provenance_digest,
                 "release_signing_key_id": key_info["spki_sha256"],
                 "production_launcher_binary_digest": (
-                    (provenance["images"].get("serverware-decision-gate") or {}).get(
+                    (provenance["images"].get("catchplate-decision-gate") or {}).get(
                         "launcher_binary_digest"
                     )
                     if args.production

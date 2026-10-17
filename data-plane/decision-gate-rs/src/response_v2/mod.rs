@@ -27,7 +27,7 @@ pub(super) use transparency_contract::*;
 use transaction::*;
 
 use crate::*;
-use serverware_decision_gate::{
+use catchplate_decision_gate::{
     V2CanonicalFinalEnvelopeV1, V2PinnedRoleKeyV1,
     V2_ATTEST_OPERATION, V2_AUTHORITY_OPERATION,
     V2_CANONICAL_FINAL_ENVELOPE_VERSION,
@@ -354,7 +354,7 @@ impl ResponseObservationV2AttemptCursor {
 #[derive(Clone)]
 pub(super) struct ResponseObservationV2Client {
     pub(super) socket_path: PathBuf,
-    pub(super) guest_listener: Option<serverware_decision_gate::GuestResponseV2ListenerProfile>,
+    pub(super) guest_listener: Option<catchplate_decision_gate::GuestResponseV2ListenerProfile>,
     pub(super) native_staging: bool,
     pub(super) expected_uid: libc::uid_t,
     pub(super) boot_id: String,
@@ -382,7 +382,7 @@ pub(super) struct ResponseObservationV2Client {
 
 pub(super) struct ResponseObservationV2ClientConfig {
     pub(super) socket_path: PathBuf,
-    pub(super) guest_listener: Option<serverware_decision_gate::GuestResponseV2ListenerProfile>,
+    pub(super) guest_listener: Option<catchplate_decision_gate::GuestResponseV2ListenerProfile>,
     pub(super) native_staging: bool,
     pub(super) expected_uid: libc::uid_t,
     pub(super) startup_timeout: Duration,
@@ -449,10 +449,10 @@ pub(super) struct ResponseObservationV2ResponseDataReply {
 /// Produced only by the actual retained-session target-dispatch exchange,
 /// after its normal reply attestation and exact request/original joins.
 pub(super) struct AuthenticatedTargetDispatchReply {
-    permit:serverware_decision_gate::native_response_gate::target_dispatch::SignedTargetDispatchPermit,
+    permit:catchplate_decision_gate::native_response_gate::target_dispatch::SignedTargetDispatchPermit,
 }
 impl AuthenticatedTargetDispatchReply {
-    pub(super) fn into_permit(self)->serverware_decision_gate::native_response_gate::target_dispatch::SignedTargetDispatchPermit {self.permit}
+    pub(super) fn into_permit(self)->catchplate_decision_gate::native_response_gate::target_dispatch::SignedTargetDispatchPermit {self.permit}
 }
 
 pub(super) struct ResponseObservationV2Session<'a> {

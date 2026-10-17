@@ -16,7 +16,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from scripts.authority import local_historical_archive as cli
-from serverware import authority_local_historical_archive as subject
+from catchplate import authority_local_historical_archive as subject
 
 
 def fixture():

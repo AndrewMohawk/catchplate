@@ -396,7 +396,7 @@ class TestPKI:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.ca_key = ec.generate_private_key(ec.SECP256R1())
-        self.ca_certificate = self._ca_certificate(self.ca_key, "Serverware Test CA")
+        self.ca_certificate = self._ca_certificate(self.ca_key, "Catchplate Test CA")
         self.server_key = ec.generate_private_key(ec.SECP256R1())
         self.server_certificate = self._leaf_certificate(
             self.server_key,
@@ -412,14 +412,14 @@ class TestPKI:
         self.client_key = ec.generate_private_key(ec.SECP256R1())
         self.client_certificate = self._leaf_certificate(
             self.client_key,
-            common_name="serverware-launch-relay",
+            common_name="catchplate-launch-relay",
             extended_usage=ExtendedKeyUsageOID.CLIENT_AUTH,
             san=None,
         )
         self.alternate_client_key = ec.generate_private_key(ec.SECP256R1())
         self.alternate_client_certificate = self._leaf_certificate(
             self.alternate_client_key,
-            common_name="serverware-other-launch-relay",
+            common_name="catchplate-other-launch-relay",
             extended_usage=ExtendedKeyUsageOID.CLIENT_AUTH,
             san=None,
         )
@@ -1725,7 +1725,7 @@ class LaunchAuthorityEngineTests(unittest.TestCase):
         valid = request_for(enrolled, nonce="0")
 
         v1 = deepcopy(valid)
-        v1["apiVersion"] = "serverware.launchAuthorizationRequest/v1"
+        v1["apiVersion"] = "catchplate.launchAuthorizationRequest/v1"
         self.assert_authority_error(
             "INVALID_REQUEST",
             protocol.canonical_json_bytes(v1),
@@ -2592,7 +2592,7 @@ class LaunchAuthorityEngineTests(unittest.TestCase):
             service.ReleaseRegistry.from_bytes(duplicate_key)
 
         v1_registry = deepcopy(self.fixture.registry_document)
-        v1_registry["apiVersion"] = "serverware.launchAuthorityReleaseRegistry/v1"
+        v1_registry["apiVersion"] = "catchplate.launchAuthorityReleaseRegistry/v1"
         with self.assertRaisesRegex(
             service.AuthorityConfigurationError, "apiVersion"
         ):
@@ -3853,13 +3853,13 @@ class HTTPSAndRelayTests(unittest.TestCase):
 
     def test_systemd_units_pin_root_seqpacket_and_harden_relay(self) -> None:
         socket_unit = (
-            ROOT / "ops/systemd/serverware-launch-authority-relay.socket"
+            ROOT / "ops/systemd/catchplate-launch-authority-relay.socket"
         ).read_text(encoding="utf-8")
         service_unit = (
-            ROOT / "ops/systemd/serverware-launch-authority-relay.service"
+            ROOT / "ops/systemd/catchplate-launch-authority-relay.service"
         ).read_text(encoding="utf-8")
         for expected in (
-            "ListenSequentialPacket=/run/serverware/launch-authority.sock",
+            "ListenSequentialPacket=/run/catchplate/launch-authority.sock",
             "SocketMode=0600",
             "SocketUser=root",
             "SocketGroup=root",
@@ -3867,10 +3867,10 @@ class HTTPSAndRelayTests(unittest.TestCase):
         ):
             self.assertIn(expected, socket_unit)
         for expected in (
-            "User=serverware-launch-authority-relay",
-            "Group=serverware-launch-authority-relay",
+            "User=catchplate-launch-authority-relay",
+            "Group=catchplate-launch-authority-relay",
             "UMask=0077",
-            "EnvironmentFile=/etc/serverware/launch-authority-relay.env",
+            "EnvironmentFile=/etc/catchplate/launch-authority-relay.env",
             "NoNewPrivileges=yes",
             "CapabilityBoundingSet=",
             "ProtectSystem=strict",

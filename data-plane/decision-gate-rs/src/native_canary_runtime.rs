@@ -39,10 +39,10 @@ impl CheckpointAttempt {
             let mut id=[0u8;16];SystemRandom::new().fill(&mut id).map_err(|_|"checkpoint entropy")?;
             id[6]=(id[6]&15)|64;id[8]=(id[8]&63)|128;let id=hex::encode(id);
             let request=format!("{}-{}-{}-{}-{}",&id[..8],&id[8..12],&id[12..16],&id[16..20],&id[20..]);
-            let raw=serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&json!({
-                "apiVersion":"serverware.policyCanaryEvidenceOriginal/v1","requestId":request,
+            let raw=catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&json!({
+                "apiVersion":"catchplate.policyCanaryEvidenceOriginal/v1","requestId":request,
                 "canaryId":event["record"]["canary_id"],"events":[event]}))?;
-            let batch=serverware_decision_gate::native_canary_evidence_v1::BatchOriginal::parse(
+            let batch=catchplate_decision_gate::native_canary_evidence_v1::BatchOriginal::parse(
                 String::from_utf8(raw).map_err(|_|"checkpoint ASCII")?)?;
             let complete=native_canary_delivery::submit(&self.state,batch,self.deadline)?;
             if complete.observation().status()!="consumed" {return Err("checkpoint not definitely consumed".into());}
@@ -62,10 +62,10 @@ impl CheckpointAttempt {
                 let mut id=[0u8;16];SystemRandom::new().fill(&mut id).map_err(|_|"cumulative entropy")?;
                 id[6]=(id[6]&15)|64;id[8]=(id[8]&63)|128;let id=hex::encode(id);
                 let request=format!("{}-{}-{}-{}-{}",&id[..8],&id[8..12],&id[12..16],&id[16..20],&id[20..]);
-                let raw=serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&json!({
-                    "apiVersion":"serverware.policyCanaryEvidenceOriginal/v1","requestId":request,
+                let raw=catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&json!({
+                    "apiVersion":"catchplate.policyCanaryEvidenceOriginal/v1","requestId":request,
                     "canaryId":event["record"]["canary_id"],"events":[event]}))?;
-                let batch=serverware_decision_gate::native_canary_evidence_v1::BatchOriginal::parse(
+                let batch=catchplate_decision_gate::native_canary_evidence_v1::BatchOriginal::parse(
                     String::from_utf8(raw).map_err(|_|"cumulative ASCII")?)?;
                 let complete=native_canary_delivery::submit(&self.state,batch,self.deadline)?;
                 self.state.policy_shadow.native_cumulative_complete(attempt,&digest,&complete)?;
@@ -89,7 +89,7 @@ impl Opening {
             }
             let commitment=state.policy_shadow_generation_control.as_ref().ok_or("facts generation owner absent")?
                 .commit_native_request_facts(&self.generation,self.ingress,observed,facts)?;
-            Ok(Some(json!({"apiVersion":"serverware.nativeProtectedRequestCommitment/v1",
+            Ok(Some(json!({"apiVersion":"catchplate.nativeProtectedRequestCommitment/v1",
                 "openingReceiptSha256":self.opening,"samplingCommitmentSha256":self.request_commitment,
                 "computationOriginal":commitment.native_computation_original().ok_or("actual computation absent")?})))
         })();
@@ -114,7 +114,7 @@ impl Opening {
             let owner=state.measured_canary_delivery.as_ref().ok_or("runtime delivery owner absent")?
                 .try_lock().map_err(|_|"runtime delivery owner busy")?;
             owner.check(&state)?;
-            owner.authority.configuration().api_version=="serverware.nativeCanaryDurableDelivery/v3"
+            owner.authority.configuration().api_version=="catchplate.nativeCanaryDurableDelivery/v3"
         };
         Ok(Self{gate,generation:admission.generation_id().clone(),ingress:admission.ingress_sequence(),
             request_binding:admission.request_binding_sha256().clone(),request_commitment:admission.request_commitment_sha256().clone(),
@@ -151,10 +151,10 @@ impl Opening {
             let mut id=[0u8;16];SystemRandom::new().fill(&mut id).map_err(|_|"runtime evidence entropy")?;
             id[6]=(id[6]&15)|64;id[8]=(id[8]&63)|128;let id=hex::encode(id);
             let request=format!("{}-{}-{}-{}-{}",&id[..8],&id[8..12],&id[12..16],&id[16..20],&id[20..]);
-            let value=json!({"apiVersion":"serverware.policyCanaryEvidenceOriginal/v1","requestId":request,
+            let value=json!({"apiVersion":"catchplate.policyCanaryEvidenceOriginal/v1","requestId":request,
                 "canaryId":event["record"]["canary_id"],"events":[event]});
-            let raw=serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&value)?;
-            let batch=serverware_decision_gate::native_canary_evidence_v1::BatchOriginal::parse(String::from_utf8(raw).map_err(|_|"runtime ASCII")?)?;
+            let raw=catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&value)?;
+            let batch=catchplate_decision_gate::native_canary_evidence_v1::BatchOriginal::parse(String::from_utf8(raw).map_err(|_|"runtime ASCII")?)?;
             let complete=native_canary_delivery::submit(&state,batch,deadline)?;
             if complete.observation().status()!="consumed" {return Err("runtime original not definitely consumed".into());}
             *phase=match (terminal,request_observation) {

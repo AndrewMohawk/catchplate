@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-ledger-completion.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-ledger-completion.v1.schema.json",
   "$ref": "#/$defs/bridgeSelection",
   "description": "Explicit native terminal and definite reservation-unavailable successor. Old profiles unchanged. Source verifies actual eight owners, independent grants/keys/currentness, full original signatures, shared DRS head/counters, storage/fsync/readback and unchanged original deadlines. Canonical complete endpoint framing remains <=8 MiB. Schema is data shape, never effect permission or successful installation.",
   "$defs": {
@@ -118,7 +118,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeSpoolServices/v2"
+          "const": "catchplate.nativeSpoolServices/v2"
         },
         "headGrantOriginal": {
           "type": "string",
@@ -162,8 +162,8 @@
       "properties": {
         "apiVersion": {
           "enum": [
-            "serverware.nativeShadowLedgerSpoolServiceAssignment/v2",
-            "serverware.nativeShadowTerminalSpoolServiceAssignment/v1"
+            "catchplate.nativeShadowLedgerSpoolServiceAssignment/v2",
+            "catchplate.nativeShadowTerminalSpoolServiceAssignment/v1"
           ]
         },
         "purpose": {
@@ -236,7 +236,7 @@
         {
           "properties": {
             "apiVersion": {
-              "const": "serverware.nativeShadowLedgerSpoolServiceAssignment/v2"
+              "const": "catchplate.nativeShadowLedgerSpoolServiceAssignment/v2"
             },
             "purpose": {
               "const": "native-ledger-spool-and-sampling-with-unavailability"
@@ -249,7 +249,7 @@
         {
           "properties": {
             "apiVersion": {
-              "const": "serverware.nativeShadowTerminalSpoolServiceAssignment/v1"
+              "const": "catchplate.nativeShadowTerminalSpoolServiceAssignment/v1"
             },
             "purpose": {
               "const": "native-terminal-slot-append"
@@ -297,7 +297,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeSpoolHeadGrant/v2"
+          "const": "catchplate.nativeSpoolHeadGrant/v2"
         },
         "purpose": {
           "const": "native-shared-spool-head"
@@ -372,7 +372,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeSpoolCurrentGrant/v2"
+          "const": "catchplate.nativeSpoolCurrentGrant/v2"
         },
         "purpose": {
           "const": "native-spool-current-signature"
@@ -445,7 +445,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeLedgerSpoolRetrievalGrant/v2"
+          "const": "catchplate.nativeLedgerSpoolRetrievalGrant/v2"
         },
         "purpose": {
           "const": "native-ledger-spool-retrieval"
@@ -536,7 +536,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowTerminalSpoolGuestLaunch/v1"
+          "const": "catchplate.nativeShadowTerminalSpoolGuestLaunch/v1"
         },
         "keyAdmission": {
           "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
@@ -556,7 +556,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowCommitRequestGuestLaunch/v3"
+          "const": "catchplate.nativeShadowCommitRequestGuestLaunch/v3"
         },
         "keyAdmission": {
           "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
@@ -576,7 +576,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowRetrievalGuestLaunch/v3"
+          "const": "catchplate.nativeShadowRetrievalGuestLaunch/v3"
         },
         "keyAdmission": {
           "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
@@ -596,7 +596,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeProofBridgeLaunch/v4"
+          "const": "catchplate.nativeProofBridgeLaunch/v4"
         },
         "keyAdmission": {
           "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
@@ -682,7 +682,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.policyCustodyProductionDispatch/v4"
+          "const": "catchplate.policyCustodyProductionDispatch/v4"
         },
         "operation": {
           "enum": [
@@ -746,7 +746,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.policyCustodyProductionDispatch/v4"
+          "const": "catchplate.policyCustodyProductionDispatch/v4"
         },
         "kind": {
           "enum": [
@@ -789,7 +789,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.policyCustodyProductionDispatch/v4"
+          "const": "catchplate.policyCustodyProductionDispatch/v4"
         },
         "kind": {
           "const": "spool-append-reservation-outcome"
@@ -963,7 +963,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeLedgerSpoolCore/v2"
+          "const": "catchplate.nativeLedgerSpoolCore/v2"
         },
         "phase": {
           "enum": [
@@ -1048,7 +1048,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeSpoolAllocation/v2"
+          "const": "catchplate.nativeSpoolAllocation/v2"
         },
         "authorityEpoch": {
           "$ref": "custody-service-generation-admission.v1.schema.json#/$defs/authorityEpoch"
@@ -1336,7 +1336,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeSpoolReservationOutcome/v1"
+          "const": "catchplate.nativeSpoolReservationOutcome/v1"
         },
         "result": {
           "oneOf": [

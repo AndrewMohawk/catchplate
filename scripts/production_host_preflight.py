@@ -22,7 +22,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 ROOT = Path(__file__).resolve().parent.parent
-EXECUTING_SCRIPT_FD_ENV = "SERVERWARE_EXECUTING_SCRIPT_FD"
+EXECUTING_SCRIPT_FD_ENV = "CATCHPLATE_EXECUTING_SCRIPT_FD"
 
 
 def _is_retained_import_root(value: object) -> bool:
@@ -160,25 +160,25 @@ if PROJECT_IMPORT_MODE == "launcher-retained-descriptor-roots":
         )
 
 REQUIRED_MATERIALS = {"broker-kek", "decision-gate-ca"}
-TEST_ONLY_BYPASS_ENV = "SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS"
+TEST_ONLY_BYPASS_ENV = "CATCHPLATE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS"
 CONTROL_PLANE_RUNTIME_UID = 65532
 MAX_OAUTH_SECRET_BYTES = 4096
 MAX_RESPONSE_SIGNING_KEY_BYTES = 64 * 1024
 ATTESTATION_EXECUTABLE_DIGEST_MANIFEST_ENV = (
-    "SERVERWARE_ATTESTATION_EXECUTABLE_SHA256_MANIFEST"
+    "CATCHPLATE_ATTESTATION_EXECUTABLE_SHA256_MANIFEST"
 )
 ATTESTATION_HELPER_COMMAND_SETTINGS = (
-    "SERVERWARE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE",
-    "SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE",
-    "SERVERWARE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND",
-    "SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND",
-    "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND",
-    "SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND",
-    "SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND",
+    "CATCHPLATE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE",
+    "CATCHPLATE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE",
+    "CATCHPLATE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND",
+    "CATCHPLATE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND",
+    "CATCHPLATE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND",
+    "CATCHPLATE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND",
+    "CATCHPLATE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND",
 )
-PROOF_COLLECTOR_COMMAND_SETTING = "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND"
-PRODUCTION_PYTHON_EXECUTABLE_SETTING = "SERVERWARE_PRODUCTION_PYTHON_EXECUTABLE"
-PRODUCTION_DOCKER_EXECUTABLE_SETTING = "SERVERWARE_DOCKER_EXECUTABLE"
+PROOF_COLLECTOR_COMMAND_SETTING = "CATCHPLATE_PROXY_PROOF_COLLECTOR_COMMAND"
+PRODUCTION_PYTHON_EXECUTABLE_SETTING = "CATCHPLATE_PRODUCTION_PYTHON_EXECUTABLE"
+PRODUCTION_DOCKER_EXECUTABLE_SETTING = "CATCHPLATE_DOCKER_EXECUTABLE"
 DOCKER_COMPOSE_PLUGIN_EXECUTABLE_SETTING = (
     run_production_readiness.DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV
 )
@@ -194,13 +194,13 @@ PINNED_EXECUTABLE_COMMAND_SETTINGS = frozenset(
 READINESS_MODE = "readiness"
 READINESS_AUTHORIZATION_SCOPE = "trusted-host-readiness"
 READINESS_FRESHNESS_AUTHORITY = "trusted-host-wall-clock"
-READINESS_LAUNCH_MANIFEST_API_VERSION = "serverware.productionReadinessLaunch/v3"
+READINESS_LAUNCH_MANIFEST_API_VERSION = "catchplate.productionReadinessLaunch/v3"
 READINESS_LAUNCH_AUTHORIZATION_REQUEST_API_VERSION = (
-    "serverware.launchAuthorizationRequest/v2"
+    "catchplate.launchAuthorizationRequest/v2"
 )
-READINESS_LAUNCH_AUTHORIZATION_API_VERSION = "serverware.launchAuthorization/v2"
-READINESS_BOOTSTRAP_RECEIPT_API_VERSION = "serverware.bootstrapReceipt/v3"
-READINESS_BOUNDARY_API_VERSION = "serverware.productionHostReadinessBoundary/v1"
+READINESS_LAUNCH_AUTHORIZATION_API_VERSION = "catchplate.launchAuthorization/v2"
+READINESS_BOOTSTRAP_RECEIPT_API_VERSION = "catchplate.bootstrapReceipt/v3"
+READINESS_BOUNDARY_API_VERSION = "catchplate.productionHostReadinessBoundary/v1"
 READINESS_CAPABILITY_SEMANTICS = (
     "time-bounded-idempotent-readiness-authorization"
 )
@@ -208,7 +208,7 @@ FINAL_AUTHORITY = (
     "independent-manifest-v6-public-nitro-verifier-and-protected-state"
 )
 GLOBAL_ROLE_REGISTRY_API_VERSION = (
-    "serverware.productionLaunchGlobalRoleRegistry/v1"
+    "catchplate.productionLaunchGlobalRoleRegistry/v1"
 )
 GLOBAL_ROLE_REGISTRY_CLAIM_SCOPE = (
     "roles-present-in-native-launch-contract"
@@ -240,11 +240,11 @@ GLOBAL_ROLES_OUTSIDE_CLAIM = (
     "verifierStateTlsServer",
 )
 LAUNCH_ATTEMPT_JOURNAL_API_VERSION = (
-    "serverware.launchAuthorizationAttemptJournal/v1"
+    "catchplate.launchAuthorizationAttemptJournal/v1"
 )
 LAUNCH_ATTEMPT_JOURNAL_DOMAIN = LAUNCH_ATTEMPT_JOURNAL_API_VERSION
 LAUNCH_ATTEMPT_RECOVERY_IDENTITY_DOMAIN = (
-    b"serverware.launchAuthorizationAttemptRecoveryIdentity/v1\0"
+    b"catchplate.launchAuthorizationAttemptRecoveryIdentity/v1\0"
 )
 
 
@@ -661,7 +661,7 @@ def secure_directory_failures(path: Path, label: str) -> list[str]:
 
 
 def snapshot_pinned_executables(env: dict[str, str]) -> tuple[list[dict[str, Any]], list[str]]:
-    helper_dir = Path(env.get("SERVERWARE_ATTESTATION_HELPER_DIR", ""))
+    helper_dir = Path(env.get("CATCHPLATE_ATTESTATION_HELPER_DIR", ""))
     failures = secure_directory_failures(helper_dir, "attestation helper directory")
     reports: list[dict[str, Any]] = []
     digest_manifest: dict[str, str] = {}
@@ -710,16 +710,16 @@ def snapshot_pinned_executables(env: dict[str, str]) -> tuple[list[dict[str, Any
         require_single_word = (
             direct_path
             or collector
-            or setting == "SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND"
+            or setting == "CATCHPLATE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND"
         )
         if (
             not words
             or (require_single_word and len(words) != 1)
             or not Path(words[0]).is_absolute()
-            or (not direct_path and Path(words[0]).parent != Path("/opt/serverware/bin"))
+            or (not direct_path and Path(words[0]).parent != Path("/opt/catchplate/bin"))
         ):
             qualifier = "one " if require_single_word else "an "
-            location = "" if direct_path else " under /opt/serverware/bin"
+            location = "" if direct_path else " under /opt/catchplate/bin"
             failures.append(f"{setting} must name {qualifier}absolute executable{location}")
             continue
         host_path = Path(words[0]) if direct_path else helper_dir / Path(words[0]).name
@@ -743,7 +743,7 @@ def snapshot_pinned_executables(env: dict[str, str]) -> tuple[list[dict[str, Any
         except (OSError, ValueError) as exc:
             failures.append(f"{label} is missing, unsafe, or not executable: {host_path}: {exc}")
             continue
-        if setting == "SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND":
+        if setting == "CATCHPLATE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND":
             try:
                 run_production_readiness.validate_static_amd64_elf(
                     executable_bytes,
@@ -811,7 +811,7 @@ def verify_current_preflight_script_binding(env: dict[str, str]) -> dict[str, An
         expected_digest
     ) is None:
         raise ValueError(f"{setting} must be sha256:<64 lowercase hex>")
-    raw_descriptor = os.environ.get("SERVERWARE_EXECUTING_SCRIPT_FD")
+    raw_descriptor = os.environ.get("CATCHPLATE_EXECUTING_SCRIPT_FD")
     if not isinstance(raw_descriptor, str) or not raw_descriptor.isdigit():
         raise ValueError(
             "launcher-bound production host readiness preflight was not "
@@ -883,11 +883,11 @@ def enforce_readiness_only_preflight_boundary(args: argparse.Namespace) -> None:
         expected_sha256=expected_digest,
     )
     loaded = run_production_readiness.load_env_bytes(env_bytes, env_path)
-    mode = loaded.get("SERVERWARE_COMPLETION_VERIFICATION_MODE")
+    mode = loaded.get("CATCHPLATE_COMPLETION_VERIFICATION_MODE")
     if mode != READINESS_MODE:
         raise ValueError(
             "native production_host_preflight.py requires "
-            "SERVERWARE_COMPLETION_VERIFICATION_MODE=readiness; final "
+            "CATCHPLATE_COMPLETION_VERIFICATION_MODE=readiness; final "
             "authority belongs only to the independent Manifest-v6 public "
             "Nitro verifier"
         )
@@ -1005,7 +1005,7 @@ def sign_readiness_preflight(
     payload = canonical_json(result).encode("utf-8")
     signature = "ed25519:" + base64.urlsafe_b64encode(private_key.sign(payload)).rstrip(b"=").decode("ascii")
     return {
-        "apiVersion": "serverware.productionHostPreflightSignature/v1",
+        "apiVersion": "catchplate.productionHostPreflightSignature/v1",
         "algorithm": "ed25519",
         "key_id": key_id,
         "payload_sha256": "sha256:" + hashlib.sha256(payload).hexdigest(),
@@ -1055,11 +1055,11 @@ def semantic_result_digest(path: Path) -> str:
 
 
 def set_readiness_env_metadata(env: dict[str, str], *, env_file: Path, production_images_env: Path) -> None:
-    env["SERVERWARE_PRODUCTION_READINESS_ENV_PATH"] = str(env_file)
-    env["SERVERWARE_PRODUCTION_READINESS_ENV_SHA256"] = handoff.file_summary(env_file, "production-readiness-env")["sha256"]
-    env["SERVERWARE_PRODUCTION_IMAGES_ENV_PATH"] = str(production_images_env)
+    env["CATCHPLATE_PRODUCTION_READINESS_ENV_PATH"] = str(env_file)
+    env["CATCHPLATE_PRODUCTION_READINESS_ENV_SHA256"] = handoff.file_summary(env_file, "production-readiness-env")["sha256"]
+    env["CATCHPLATE_PRODUCTION_IMAGES_ENV_PATH"] = str(production_images_env)
     if production_images_env.exists():
-        env["SERVERWARE_PRODUCTION_IMAGES_ENV_SHA256"] = handoff.file_summary(production_images_env, "production-images-env")["sha256"]
+        env["CATCHPLATE_PRODUCTION_IMAGES_ENV_SHA256"] = handoff.file_summary(production_images_env, "production-images-env")["sha256"]
 
 
 def enforce_test_only_bypass(args: argparse.Namespace) -> None:
@@ -1114,8 +1114,8 @@ def oauth_secret_mounts_check(
 
     failures: list[str] = []
     for setting in (
-        "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
-        "SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE",
+        "CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
+        "CATCHPLATE_X_OAUTH_CLIENT_SECRET_FILE",
     ):
         path = Path(env.get(setting, ""))
         item: dict[str, Any] = {"setting": setting, "path": str(path)}
@@ -1170,13 +1170,13 @@ def response_signing_key_custody_check(
         return status, []
 
     failures: list[str] = []
-    private_path = Path(env.get("SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE", ""))
-    public_path = Path(env.get("SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY", ""))
+    private_path = Path(env.get("CATCHPLATE_RESPONSE_SIGNING_PRIVATE_KEY_FILE", ""))
+    public_path = Path(env.get("CATCHPLATE_RESPONSE_SIGNING_PUBLIC_KEY", ""))
     control_public_path = Path(
-        env.get("SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY", "")
+        env.get("CATCHPLATE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY", "")
     )
     expected_key_id = env.get(
-        "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID", ""
+        "CATCHPLATE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID", ""
     )
     try:
         if private_path != private_path.resolve(strict=False):
@@ -1258,7 +1258,7 @@ def response_v2_release_transparency_inputs_check(
         "ok": False,
         "skipped": skip_host_check,
         "topology_profile": env.get(
-            "SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_TOPOLOGY_PROFILE"
+            "CATCHPLATE_RESPONSE_OBSERVATION_V2_TEE_TOPOLOGY_PROFILE"
         ),
         "private_keys_present": False,
         "files": [],
@@ -1275,27 +1275,27 @@ def response_v2_release_transparency_inputs_check(
                 "response-v2 TEE topology must explicitly be local-single-node-1-of-1"
             )
         public_config_dir = Path(
-            env.get("SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR", "")
+            env.get("CATCHPLATE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR", "")
         )
         if not public_config_dir.is_absolute():
             raise ValueError("response-v2 public config directory must be absolute")
 
         file_settings = (
             (
-                "SERVERWARE_RESPONSE_OBSERVATION_V2_CUSTODY_CONFIG_FILE",
-                "SERVERWARE_RESPONSE_OBSERVATION_V2_CUSTODY_CONFIG_SHA256",
+                "CATCHPLATE_RESPONSE_OBSERVATION_V2_CUSTODY_CONFIG_FILE",
+                "CATCHPLATE_RESPONSE_OBSERVATION_V2_CUSTODY_CONFIG_SHA256",
                 "custody.json",
                 4 * 1024 * 1024,
             ),
             (
-                "SERVERWARE_RESPONSE_OBSERVATION_V2_TRANSPARENCY_TRUST_PIN_FILE",
-                "SERVERWARE_RESPONSE_OBSERVATION_V2_TRANSPARENCY_TRUST_PIN_SHA256",
+                "CATCHPLATE_RESPONSE_OBSERVATION_V2_TRANSPARENCY_TRUST_PIN_FILE",
+                "CATCHPLATE_RESPONSE_OBSERVATION_V2_TRANSPARENCY_TRUST_PIN_SHA256",
                 "release-transparency-trust-pin.json",
                 1024 * 1024,
             ),
             (
-                "SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_TRANSPARENCY_ARTIFACT_FILE",
-                "SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_TRANSPARENCY_ARTIFACT_SHA256",
+                "CATCHPLATE_RESPONSE_OBSERVATION_V2_RELEASE_TRANSPARENCY_ARTIFACT_FILE",
+                "CATCHPLATE_RESPONSE_OBSERVATION_V2_RELEASE_TRANSPARENCY_ARTIFACT_SHA256",
                 "release-transparency-artifact.json",
                 4 * 1024 * 1024,
             ),
@@ -1342,13 +1342,13 @@ def response_v2_release_transparency_inputs_check(
 
         tee_input_settings = (
             (
-                "SERVERWARE_RESPONSE_V2_TEE_EXPECTATIONS_FILE",
-                "SERVERWARE_RESPONSE_V2_TEE_EXPECTATIONS_SHA256",
+                "CATCHPLATE_RESPONSE_V2_TEE_EXPECTATIONS_FILE",
+                "CATCHPLATE_RESPONSE_V2_TEE_EXPECTATIONS_SHA256",
                 4 * 1024 * 1024,
             ),
             (
-                "SERVERWARE_RESPONSE_V2_NITRO_TRUST_ROOTS_FILE",
-                "SERVERWARE_RESPONSE_V2_NITRO_TRUST_ROOTS_SHA256",
+                "CATCHPLATE_RESPONSE_V2_NITRO_TRUST_ROOTS_FILE",
+                "CATCHPLATE_RESPONSE_V2_NITRO_TRUST_ROOTS_SHA256",
                 8 * 1024 * 1024,
             ),
         )
@@ -1400,15 +1400,15 @@ def response_v2_release_transparency_inputs_check(
             return parsed
 
         custody = parse_public_json(
-            "SERVERWARE_RESPONSE_OBSERVATION_V2_CUSTODY_CONFIG_FILE",
+            "CATCHPLATE_RESPONSE_OBSERVATION_V2_CUSTODY_CONFIG_FILE",
             canonical=False,
         )
         trust_pin = parse_public_json(
-            "SERVERWARE_RESPONSE_OBSERVATION_V2_TRANSPARENCY_TRUST_PIN_FILE",
+            "CATCHPLATE_RESPONSE_OBSERVATION_V2_TRANSPARENCY_TRUST_PIN_FILE",
             canonical=True,
         )
         artifact = parse_public_json(
-            "SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_TRANSPARENCY_ARTIFACT_FILE",
+            "CATCHPLATE_RESPONSE_OBSERVATION_V2_RELEASE_TRANSPARENCY_ARTIFACT_FILE",
             canonical=True,
         )
         topology = custody.get("custodyTopology")
@@ -1425,23 +1425,23 @@ def response_v2_release_transparency_inputs_check(
                 "response-v2 topology must honestly declare one local TEE fault domain, LOCAL_1_OF_1, and zero external witnesses"
             )
         tee_expectations = json.loads(
-            tee_snapshots["SERVERWARE_RESPONSE_V2_TEE_EXPECTATIONS_FILE"].decode("utf-8")
+            tee_snapshots["CATCHPLATE_RESPONSE_V2_TEE_EXPECTATIONS_FILE"].decode("utf-8")
         )
         if (
             set(tee_expectations)
             != {"apiVersion", "nitro", "staticClaims", "trustRootsSha256"}
             or tee_expectations.get("apiVersion")
-            != "serverware.responseObservationV2NitroVerifierExpectations/v1"
+            != "catchplate.responseObservationV2NitroVerifierExpectations/v1"
             or not isinstance(tee_expectations.get("nitro"), dict)
             or not isinstance(tee_expectations.get("staticClaims"), dict)
             or tee_expectations.get("trustRootsSha256")
-            != env.get("SERVERWARE_RESPONSE_V2_NITRO_TRUST_ROOTS_SHA256")
+            != env.get("CATCHPLATE_RESPONSE_V2_NITRO_TRUST_ROOTS_SHA256")
         ):
             raise ValueError(
                 "response-v2 TEE expectations do not bind the exact Nitro trust-root input"
             )
         trust_pin_json = env.get(
-            "SERVERWARE_RESPONSE_OBSERVATION_V2_TRANSPARENCY_TRUST_PIN_JSON", ""
+            "CATCHPLATE_RESPONSE_OBSERVATION_V2_TRANSPARENCY_TRUST_PIN_JSON", ""
         )
         parsed_env_pin = json.loads(trust_pin_json)
         if (
@@ -1500,11 +1500,11 @@ def response_v2_release_transparency_inputs_check(
             )
         if (
             trust_pin.get("generationId")
-            != env.get("SERVERWARE_RESPONSE_OBSERVATION_V2_GENERATION_ID")
+            != env.get("CATCHPLATE_RESPONSE_OBSERVATION_V2_GENERATION_ID")
             or trust_pin.get("generationId") != topology.get("generationId")
             or trust_pin.get("providerGeneration") != topology.get("generation")
             or trust_pin.get("proofPinsRootSha256")
-            != env.get("SERVERWARE_RESPONSE_OBSERVATION_V2_PROOF_PINS_ROOT_SHA256")
+            != env.get("CATCHPLATE_RESPONSE_OBSERVATION_V2_PROOF_PINS_ROOT_SHA256")
             or trust_pin.get("trustCheckpointSha256")
             != pins.get("trustCheckpointSha256")
             or trust_pin.get("trustCheckpointSha256")
@@ -1544,9 +1544,9 @@ def response_v2_release_transparency_inputs_check(
             or release_auth.get("publicKeySha256")
             != pins.get("releaseRecordSignerPublicKeySha256")
             or release_payload.get("sourceCommitSha256")
-            != env.get("SERVERWARE_RESPONSE_OBSERVATION_V2_SOURCE_COMMIT_SHA256")
+            != env.get("CATCHPLATE_RESPONSE_OBSERVATION_V2_SOURCE_COMMIT_SHA256")
             or release_payload.get("sourceTreeSha256")
-            != env.get("SERVERWARE_RESPONSE_OBSERVATION_V2_SOURCE_TREE_SHA256")
+            != env.get("CATCHPLATE_RESPONSE_OBSERVATION_V2_SOURCE_TREE_SHA256")
         ):
             raise ValueError(
                 "response-v2 external log/checkpoint/SPKI/anchor/source/binary pins are not independently consistent"
@@ -1629,9 +1629,9 @@ def runtime_trust_materials_check(
     *,
     skip_host_check: bool,
 ) -> tuple[dict[str, Any], list[str]]:
-    tls_dir = Path(env.get("SERVERWARE_CONTROL_PLANE_TLS_DIR", ""))
-    anchor_tls_dir = Path(env.get("SERVERWARE_AUDIT_ANCHOR_TLS_DIR", ""))
-    helper_dir = Path(env.get("SERVERWARE_ATTESTATION_HELPER_DIR", ""))
+    tls_dir = Path(env.get("CATCHPLATE_CONTROL_PLANE_TLS_DIR", ""))
+    anchor_tls_dir = Path(env.get("CATCHPLATE_AUDIT_ANCHOR_TLS_DIR", ""))
+    helper_dir = Path(env.get("CATCHPLATE_ATTESTATION_HELPER_DIR", ""))
     status: dict[str, Any] = {
         "ok": False,
         "skipped": skip_host_check,
@@ -1668,8 +1668,8 @@ def runtime_trust_materials_check(
             status[f"{key}_mode"] = oct(stat.S_IMODE(metadata.st_mode))
 
     tls_files = {
-        "control_plane_certificate": tls_dir / "serverware.crt",
-        "control_plane_private_key": tls_dir / "serverware.key",
+        "control_plane_certificate": tls_dir / "catchplate.crt",
+        "control_plane_private_key": tls_dir / "catchplate.key",
         "control_plane_ca_bundle": tls_dir / "ca.pem",
     }
     for key, path in tls_files.items():
@@ -1700,8 +1700,8 @@ def runtime_trust_materials_check(
             except x509.ExtensionNotFound:
                 dns_names = []
             status["certificate_dns_names"] = sorted(dns_names)
-            if "serverware" not in dns_names:
-                failures.append("control-plane TLS certificate must include the internal DNS SAN serverware")
+            if "catchplate" not in dns_names:
+                failures.append("control-plane TLS certificate must include the internal DNS SAN catchplate")
             issuers = x509.load_pem_x509_certificates(snapshots["control_plane_ca_bundle"])
             if not issuers or not any(_directly_issued_by(certificate, issuer) for issuer in issuers):
                 failures.append("control-plane TLS certificate is not directly issued by the supplied CA bundle")
@@ -1774,10 +1774,10 @@ def runtime_trust_materials_check(
         failures.extend(docker_failures)
 
     proof_paths = {
-        "proof_ca_bundle": Path(env.get("SERVERWARE_PROXY_PROOF_CA_BUNDLE", "")),
-        "proof_collector_private_key": Path(env.get("SERVERWARE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY", "")),
-        "proof_collector_public_key": Path(env.get("SERVERWARE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY", "")),
-        "proof_verifier_public_key": Path(env.get("SERVERWARE_PROXY_PROOF_VERIFIER_PUBLIC_KEY", "")),
+        "proof_ca_bundle": Path(env.get("CATCHPLATE_PROXY_PROOF_CA_BUNDLE", "")),
+        "proof_collector_private_key": Path(env.get("CATCHPLATE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY", "")),
+        "proof_collector_public_key": Path(env.get("CATCHPLATE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY", "")),
+        "proof_verifier_public_key": Path(env.get("CATCHPLATE_PROXY_PROOF_VERIFIER_PUBLIC_KEY", "")),
     }
     for key, path in proof_paths.items():
         capture(key, path, key.replace("_", " "), private=key.endswith("private_key"))
@@ -1826,10 +1826,10 @@ def runtime_trust_materials_check(
             )
             collector_key_id = "sha256:" + hashlib.sha256(collector_public_der).hexdigest()
             verifier_key_id = "sha256:" + hashlib.sha256(verifier_public_der).hexdigest()
-            if collector_key_id != env.get("SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID"):
-                raise ValueError("collector public key does not match SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID")
-            if verifier_key_id != env.get("SERVERWARE_PROXY_PROOF_VERIFIER_KEY_ID"):
-                raise ValueError("vendor verifier public key does not match SERVERWARE_PROXY_PROOF_VERIFIER_KEY_ID")
+            if collector_key_id != env.get("CATCHPLATE_PROXY_PROOF_COLLECTOR_KEY_ID"):
+                raise ValueError("collector public key does not match CATCHPLATE_PROXY_PROOF_COLLECTOR_KEY_ID")
+            if verifier_key_id != env.get("CATCHPLATE_PROXY_PROOF_VERIFIER_KEY_ID"):
+                raise ValueError("vendor verifier public key does not match CATCHPLATE_PROXY_PROOF_VERIFIER_KEY_ID")
             status["proof_collector_key_id"] = collector_key_id
             status["proof_verifier_key_id"] = verifier_key_id
         except Exception as exc:
@@ -1914,10 +1914,10 @@ def env_check(
         loaded = run_production_readiness.load_env_bytes(env_bytes, path)
         if run_production_readiness.LAUNCHER_TRUST_INPUT_NAMES & set(loaded):
             raise ValueError("out-of-band launcher trust inputs must not be defined inside the production env")
-        if loaded.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") != READINESS_MODE:
+        if loaded.get("CATCHPLATE_COMPLETION_VERIFICATION_MODE") != READINESS_MODE:
             raise ValueError(
                 "production host preflight accepts only "
-                "SERVERWARE_COMPLETION_VERIFICATION_MODE=readiness; host "
+                "CATCHPLATE_COMPLETION_VERIFICATION_MODE=readiness; host "
                 "evidence cannot request or satisfy final Nitro verification"
             )
         launcher_enforced = launcher_bound_readiness(loaded)
@@ -2019,11 +2019,11 @@ def env_check(
     except ValueError as exc:
         status["error"] = str(exc)
         return status, loaded, [f"production readiness config gate child env is invalid: {exc}"]
-    env["SERVERWARE_PRODUCTION_READINESS_ENV_PATH"] = str(path)
-    env["SERVERWARE_PRODUCTION_READINESS_ENV_SHA256"] = status["file"]["sha256"]
-    env["SERVERWARE_PRODUCTION_IMAGES_ENV_PATH"] = str(production_images_env)
+    env["CATCHPLATE_PRODUCTION_READINESS_ENV_PATH"] = str(path)
+    env["CATCHPLATE_PRODUCTION_READINESS_ENV_SHA256"] = status["file"]["sha256"]
+    env["CATCHPLATE_PRODUCTION_IMAGES_ENV_PATH"] = str(production_images_env)
     if production_images_env.exists():
-        env["SERVERWARE_PRODUCTION_IMAGES_ENV_SHA256"] = handoff.file_summary(
+        env["CATCHPLATE_PRODUCTION_IMAGES_ENV_SHA256"] = handoff.file_summary(
             production_images_env, "production-images-env"
         )["sha256"]
     try:
@@ -2127,7 +2127,7 @@ def env_merge_check(loaded_env: dict[str, str], production_images_value: str) ->
     }
     if status["ok"]:
         return status, []
-    return status, ["production readiness env does not match .tmp/production-images.env SERVERWARE_PRODUCTION_IMAGES"]
+    return status, ["production readiness env does not match .tmp/production-images.env CATCHPLATE_PRODUCTION_IMAGES"]
 
 
 def published_images_check(
@@ -2178,7 +2178,7 @@ def published_images_check(
                     f"service={service} published={local_image_id} build={expected_build['image_id']}"
                 )
             handoff.require_sha256(item.get("remote_image_id"), f"{service} remote_image_id")
-            if service == "serverware-decision-gate":
+            if service == "catchplate-decision-gate":
                 published_binary = handoff.require_sha256(item.get("binary_digest"), "published decision-gate binary digest")
                 expected_binary = handoff.require_sha256(expected_build.get("binary_digest"), "built decision-gate binary digest")
                 if published_binary != expected_binary:
@@ -2262,24 +2262,24 @@ def artifact_check(
             (
                 item.get("binary_digest")
                 for item in production_images["images"]
-                if item.get("service") == "serverware-decision-gate"
+                if item.get("service") == "catchplate-decision-gate"
             ),
             None,
         )
         if production_gate_binary != bench["data_plane_binary_digest"]:
             raise ValueError("decision-gate benchmark binary digest does not match the production image binary")
         if not expected_binary_digest:
-            raise ValueError("production env is missing SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST")
+            raise ValueError("production env is missing CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST")
         if bench["data_plane_binary_digest"] != expected_binary_digest:
             raise ValueError(
                 "decision-gate benchmark binary digest does not match "
-                "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST"
+                "CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST"
             )
         production_launcher_binary = next(
             (
                 item.get("launcher_binary_digest")
                 for item in production_images["images"]
-                if item.get("service") == "serverware-decision-gate"
+                if item.get("service") == "catchplate-decision-gate"
             ),
             None,
         )
@@ -2463,11 +2463,11 @@ def release_security_evidence_check(
         if reproduced_images != expected_images:
             raise ValueError("reproducible-build image IDs do not match the production build")
         production_gate = next(
-            (item for item in production_images.get("images") or [] if item.get("service") == "serverware-decision-gate"),
+            (item for item in production_images.get("images") or [] if item.get("service") == "catchplate-decision-gate"),
             {},
         )
         reproduced_gate = next(
-            (item for item in reproducibility_report.get("images") or [] if item.get("service") == "serverware-decision-gate"),
+            (item for item in reproducibility_report.get("images") or [] if item.get("service") == "catchplate-decision-gate"),
             {},
         )
         if reproduced_gate.get("rust_binary_sha256") != production_gate.get("binary_digest"):
@@ -2507,11 +2507,11 @@ def release_artifact_mounts_check(
     failures: list[str] = []
     expected = {
         "release-provenance": (
-            Path(env.get("SERVERWARE_RELEASE_PROVENANCE_FILE", "")),
+            Path(env.get("CATCHPLATE_RELEASE_PROVENANCE_FILE", "")),
             release_provenance,
         ),
         "image-signatures": (
-            Path(env.get("SERVERWARE_IMAGE_SIGNATURES_FILE", "")),
+            Path(env.get("CATCHPLATE_IMAGE_SIGNATURES_FILE", "")),
             image_signatures,
         ),
     }
@@ -2610,8 +2610,8 @@ def production_compose_check(
             )
         refs = {item.get("name"): item.get("ref") for item in expected_images}
         images = {
-            "serverware-control": {"repo_digests": [refs["control"]]},
-            "serverware-decision-gate": {"repo_digests": [refs["decision-gate"]]},
+            "catchplate-control": {"repo_digests": [refs["control"]]},
+            "catchplate-decision-gate": {"repo_digests": [refs["decision-gate"]]},
         }
         original_run = generate_release_provenance.run
         original_load_env = generate_release_provenance.run_production_readiness.load_env_file
@@ -2823,7 +2823,7 @@ def main() -> None:
     parser.add_argument("--reproducible-build-signature", required=True)
     parser.add_argument("--reproducible-build-trusted-public-key", required=True)
     parser.add_argument("--reproducible-build-trusted-public-key-id", default=None)
-    parser.add_argument("--kms-materials", default="/etc/serverware/kms-materials.json")
+    parser.add_argument("--kms-materials", default="/etc/catchplate/kms-materials.json")
     parser.add_argument("--expected-control-plane-uid", type=int, default=CONTROL_PLANE_RUNTIME_UID)
     parser.add_argument("--expected-control-plane-gid", type=int, default=CONTROL_PLANE_RUNTIME_UID)
     parser.add_argument("--config-out", default=".tmp/production-host-preflight-config.json")
@@ -2900,7 +2900,7 @@ def main() -> None:
     artifacts, artifact_failures = artifact_check(
         args,
         [item for item in expected_images if isinstance(item, dict)],
-        loaded_env.get("SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST") if loaded_env else None,
+        loaded_env.get("CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST") if loaded_env else None,
         loaded_env,
     )
     failures.extend(artifact_failures)
@@ -2929,7 +2929,7 @@ def main() -> None:
     failures.extend(kms_failures)
 
     result = {
-        "apiVersion": "serverware.productionHostPreflight/v1",
+        "apiVersion": "catchplate.productionHostPreflight/v1",
         "kind": "ProductionHostPreflight",
         "ok": not failures,
         "verification_mode": READINESS_MODE,

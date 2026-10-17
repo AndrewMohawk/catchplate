@@ -22,7 +22,7 @@ def canonical_json(value: Any) -> str:
 
 
 def image_refs_from_env() -> list[str]:
-    raw = os.getenv("SERVERWARE_PRODUCTION_IMAGES", "")
+    raw = os.getenv("CATCHPLATE_PRODUCTION_IMAGES", "")
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
@@ -68,9 +68,9 @@ def scan_docker_image(image: str, *, pull: bool = False) -> dict[str, Any]:
         if pulled.returncode != 0:
             return {"image": image, "ok": False, "error": f"docker pull failed with exit {pulled.returncode}"}
     if not docker_image_exists(image):
-        return {"image": image, "ok": False, "error": "image is not available locally; pull it or enable SERVERWARE_PRODUCTION_IMAGE_PULL=1"}
+        return {"image": image, "ok": False, "error": "image is not available locally; pull it or enable CATCHPLATE_PRODUCTION_IMAGE_PULL=1"}
 
-    created = run(["docker", "create", "--entrypoint", "/__serverware_noop__", image])
+    created = run(["docker", "create", "--entrypoint", "/__catchplate_noop__", image])
     if created.returncode != 0:
         return {"image": image, "ok": False, "error": created.stderr.decode("utf-8", errors="replace").strip()}
     container_id = created.stdout.decode("utf-8").strip()
@@ -112,7 +112,7 @@ def main() -> None:
     args = parser.parse_args()
 
     images = args.image or image_refs_from_env()
-    pull = args.pull or os.getenv("SERVERWARE_PRODUCTION_IMAGE_PULL", "").lower() in {"1", "true", "yes", "on"}
+    pull = args.pull or os.getenv("CATCHPLATE_PRODUCTION_IMAGE_PULL", "").lower() in {"1", "true", "yes", "on"}
     failures: list[str] = []
     for image in images:
         error = validate_image_ref(image)

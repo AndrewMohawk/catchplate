@@ -6,7 +6,7 @@ use crate::policy_shadow::{canonical_json_bytes, EnvelopePayload, Sha256Digest, 
 use crate::policy_shadow_generation_publication_protocol::{PublicationAttestationChain,
     PublicationGenerationBinding, PublicationRuntimeBinding, PublicationTrustBinding,
     STARTUP_ATTESTATION_HANDOFF_API_VERSION, MAX_PUBLICATION_RECEIPT_LIFETIME_NANOS};
-use serverware_decision_gate::native_shadow_workers::runtime_resources::PublicationVerificationAuthority;
+use catchplate_decision_gate::native_shadow_workers::runtime_resources::PublicationVerificationAuthority;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use ed25519_dalek::{pkcs8::{DecodePublicKey, EncodePublicKey}, Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};

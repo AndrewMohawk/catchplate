@@ -14,7 +14,7 @@ use guest::retrieval_peer as peer;
 use std::os::fd::OwnedFd;
 #[path="retrieval_scope.rs"] mod scope;
 #[path="publication_genesis.rs"] pub(crate) mod genesis;
-const DOMAIN:&str="serverware.nativePublicationServiceAssignment.signature/v1";
+const DOMAIN:&str="catchplate.nativePublicationServiceAssignment.signature/v1";
 pub(in crate::policy_shadow::policy_custody::services) const MAX_CONFIGURATION:usize=4*1024*1024;
 const MAX_FINISHED:usize=128;
 const MAX_FLIGHT:usize=4*1024*1024;
@@ -40,13 +40,13 @@ struct Payload {
 pub(crate) struct Configuration {payload:Payload,signature:CanonicalEd25519Signature}
 impl Configuration {
     pub(in crate::policy_shadow::policy_custody::services) fn adoption_selected(&self)->bool{
-        self.payload.api_version=="serverware.nativePublicationServiceAssignment/v2"
+        self.payload.api_version=="catchplate.nativePublicationServiceAssignment/v2"
     }
     pub(in crate::policy_shadow::policy_custody::services) fn expected_peer(&self)->&services::ExpectedPeerCredentialV3{&self.payload.expected_peer}
     pub(in crate::policy_shadow::policy_custody::services) fn guest_uid(&self)->u32{self.payload.guest.uid}
     pub(in crate::policy_shadow::policy_custody::services) fn validate_shape(&self)->Result<(),ShadowError>{
         let p=&self.payload;let s=&p.admission.scope;
-        require((p.api_version=="serverware.nativePublicationServiceAssignment/v1" || self.adoption_selected())
+        require((p.api_version=="catchplate.nativePublicationServiceAssignment/v1" || self.adoption_selected())
             && self.adoption_selected()==p.admission.adoption.is_some()
             && p.purpose=="native-policy-publication-reconciliation"
             && p.guest.service_role=="production-bridge" && p.expected_peer.uid>0 && p.expected_peer.gid>0
@@ -84,7 +84,7 @@ impl Configuration {
         let key=trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(AuthorityRole::CustodySupervisorCapability),
             &selected.key_id,&selected.key_spki_sha256)?;
         require(ed25519_public_key_material_sha256(&key)==selected.key_material_sha256)?;
-        key.verify_strict(&signature_preimage(if self.adoption_selected(){"serverware.nativePublicationServiceAssignment.signature/v2"}else{DOMAIN},
+        key.verify_strict(&signature_preimage(if self.adoption_selected(){"catchplate.nativePublicationServiceAssignment.signature/v2"}else{DOMAIN},
             &canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
             .map_err(|_|ShadowError::SignatureInvalid)?;
         if let Some(adoption)=&p.admission.adoption {
@@ -206,7 +206,7 @@ impl OperationalService {
                     Ok(URL_SAFE_NO_PAD.encode(local.key.sign(&signature_preimage(
                         PolicyShadowCustodySignerRole::PublicationReconciliation.signature_domain(),&authority)).to_bytes()))
                 }).map_err(fail)?;
-                let mut proposal=fixed::Proposal{api_version:"serverware.nativePublicationProposal/v1".into(),prepared:prepared.clone(),
+                let mut proposal=fixed::Proposal{api_version:"catchplate.nativePublicationProposal/v1".into(),prepared:prepared.clone(),
                     stored:stored.clone(),artifact,completed_at_boottime_nanos:guest::now()?,signature:CanonicalEd25519Signature(String::new())};
                 proposal.signature=CanonicalEd25519Signature(URL_SAFE_NO_PAD.encode(local.key.sign(&signature_preimage(
                     fixed::PROPOSAL_DOMAIN,&proposal.payload().map_err(fail)?)).to_bytes()));
@@ -240,14 +240,14 @@ impl OperationalService {
             self.channel.inspect(peer::Phase::BeforeDispatch,Some(&packet.bytes),Some(&packet),wire.deadline_boottime_nanos,check)?;
             let result=self.handle(&wire,keys,trust,time)?;
             let local=keys.keys.get(&AuthorityRole::CustodyPublicationReconciliation).ok_or(ShadowError::SignerBindingMismatch)?;
-            let result_sha256=hash_domain_frames(b"serverware.policyCustodyProductionAuthorityEndpointResponse/v4",&[&canonical_json_bytes(&result)?]);
+            let result_sha256=hash_domain_frames(b"catchplate.policyCustodyProductionAuthorityEndpointResponse/v4",&[&canonical_json_bytes(&result)?]);
             let mut reply=Reply{api_version:PRODUCTION_AUTHORITY_ENDPOINT_PROTOCOL_VERSION.into(),endpoint:wire.endpoint,
                 request_sha256:wire.request_sha256,replay_id_sha256:wire.replay_id_sha256,completed_at_boottime_nanos:guest::now()?,
                 authority_key_id:local.binding.key_id.clone(),authority_key_spki_sha256:local.binding.key_spki_sha256.clone(),
                 result,result_sha256,signature_base64:String::new()};
             require(reply.completed_at_boottime_nanos<wire.deadline_boottime_nanos)?;check()?;self.check(keys,trust,time)?;
             reply.signature_base64=URL_SAFE_NO_PAD.encode(local.key.sign(&domain_separated_signature_preimage(
-                b"serverware.policyCustodyProductionAuthorityEndpointSignature/v4",&reply.signature_payload().map_err(fail)?).map_err(fail)?).to_bytes());
+                b"catchplate.policyCustodyProductionAuthorityEndpointSignature/v4",&reply.signature_payload().map_err(fail)?).map_err(fail)?).to_bytes());
             let raw=services::common::encode_canonical_frame(&reply).map_err(fail)?;
             require(raw.len()<=services::common::MAX_SERVICE_FRAME_BYTES)?;
             loop {

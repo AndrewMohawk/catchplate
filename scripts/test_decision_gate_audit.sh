@@ -4,7 +4,7 @@ set -euo pipefail
 BASE="${BASE:-http://localhost:3000}"
 GATE_HOST="${DECISION_GATE_HOST:-localhost}"
 GATE_PORT="${DECISION_GATE_PORT:-9090}"
-ADMIN_TOKEN="${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}"
+ADMIN_TOKEN="${CATCHPLATE_ADMIN_TOKEN:-dev-admin-token}"
 
 python3 - "$BASE" "$GATE_HOST" "$GATE_PORT" "$ADMIN_TOKEN" <<'PY'
 import hashlib
@@ -53,7 +53,7 @@ def connect_header_status(raw: bytes) -> int:
 known_connect = (
     b"CONNECT demo-upstream:8443 HTTP/1.1\r\n"
     b"Host: demo-upstream:8443\r\n"
-    b"X-Serverware-Agent: demo-agent\r\n\r\n"
+    b"X-Catchplate-Agent: demo-agent\r\n\r\n"
 )
 status = connect_header_status(known_connect)
 assert status == 200, status
@@ -62,7 +62,7 @@ unknown_authority = f"{marker}.invalid:8443"
 unknown_connect = (
     f"CONNECT {unknown_authority} HTTP/1.1\r\n"
     f"Host: {unknown_authority}\r\n"
-    "X-Serverware-Agent: demo-agent\r\n\r\n"
+    "X-Catchplate-Agent: demo-agent\r\n\r\n"
 ).encode("ascii")
 status, payload = gate_request(unknown_connect)
 assert status == 403, payload
@@ -72,7 +72,7 @@ body_sha = "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
 raw = (
     "POST https://demo-upstream:8443/echo HTTP/1.1\r\n"
     "Host: demo-upstream:8443\r\n"
-    "X-Serverware-Agent: demo-agent\r\n"
+    "X-Catchplate-Agent: demo-agent\r\n"
     "Content-Type: application/json\r\n"
     f"Content-Length: {len(body.encode('utf-8'))}\r\n"
     "Connection: close\r\n\r\n"
@@ -82,9 +82,9 @@ status, payload = gate_request(raw)
 assert status == 200, payload
 
 raw = (
-    "GET https://demo-upstream:8443/gmail/v1/users/me/messages?q=subject%3Aserverware-fixture-old-internal-date HTTP/1.1\r\n"
+    "GET https://demo-upstream:8443/gmail/v1/users/me/messages?q=subject%3Acatchplate-fixture-old-internal-date HTTP/1.1\r\n"
     "Host: demo-upstream:8443\r\n"
-    "X-Serverware-Agent: demo-agent\r\n"
+    "X-Catchplate-Agent: demo-agent\r\n"
     "Connection: close\r\n\r\n"
 ).encode("utf-8")
 status, payload = gate_request(raw)
@@ -94,7 +94,7 @@ assert status == 502, payload
 def audit_events() -> list[dict]:
     req = urllib.request.Request(
         f"{base}/api/audit?limit=500",
-        headers={"X-Serverware-Admin-Token": admin_token},
+        headers={"X-Catchplate-Admin-Token": admin_token},
     )
     with urllib.request.urlopen(req, timeout=10) as response:
         return json.loads(response.read())

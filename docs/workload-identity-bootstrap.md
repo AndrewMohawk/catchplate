@@ -31,8 +31,8 @@ request-verifier result nor a CA-install capability can replace those authoritie
 
 The [request schema](../schemas/workload-identity-bootstrap-request.v1.schema.json)
 is exactly `{schema, payload, signature}`. The envelope schema is
-`serverware.signedWorkloadIdentityBootstrapRequest/v1`; the payload schema is
-`serverware.workloadIdentityBootstrapRequest/v1`. Its ten fields bind the target
+`catchplate.signedWorkloadIdentityBootstrapRequest/v1`; the payload schema is
+`catchplate.workloadIdentityBootstrapRequest/v1`. Its ten fields bind the target
 principal and nonce, issuer certificate DER/SPKI, target SPKI, requested SANs,
 creation/expiry and exact CSR PEM plus digest. There is no packet digest, target
 certificate, caller identity, delegation or `runtimeManifestDigest` field.
@@ -47,7 +47,7 @@ spellings retain the existing strict validators; certificate order is DNS then U
 The same target key signs:
 
 ```text
-ASCII("serverware.workloadIdentityBootstrapRequest/v1") || NUL
+ASCII("catchplate.workloadIdentityBootstrapRequest/v1") || NUL
     || canonical payload JSON bytes
 ```
 
@@ -105,7 +105,7 @@ The CLI sorts each SAN list and rejects duplicates. Packet, administration,
 ordinary networking and certificate-admission options cannot be mixed into this
 mode; inherited enrollment environment defaults are not used as authority.
 There is no network contact, certificate issuance, trust installation or automatic
-submission. Public output uses `serverware.workloadIdentityLocalResult/v1`, profile
+submission. Public output uses `catchplate.workloadIdentityLocalResult/v1`, profile
 `request-first-p256-bootstrap-v1` and status `bootstrap-prepared-local-only`.
 It contains artifact pins, never private-key contents; `issuanceAuthorized`,
 `proxyAuthenticated` and `enrollmentComplete` stay false.

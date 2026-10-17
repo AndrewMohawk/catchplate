@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
 from scripts import run_native_pilot_startup_child as child_cli
-from serverware import native_pilot_startup as startup
+from catchplate import native_pilot_startup as startup
 
 p = startup.p
 
@@ -26,12 +26,12 @@ p = startup.p
 def result(role):
     common = dict(pilotAcceptanceVerified=False, productionReleaseEligible=False)
     if role == "lifecycle":
-        return dict(common, apiVersion="serverware.nativePilotLifecycleResult/v1", status="stopped-cleanup-complete",
+        return dict(common, apiVersion="catchplate.nativePilotLifecycleResult/v1", status="stopped-cleanup-complete",
             stage="adopted-finish", coldJobsCompleted=66, adoptedJobsCompleted=176, coldBundleSha256=p.sha(b"synthetic bundle"))
     if role == "provider":
-        return dict(common, apiVersion="serverware.nativePilotApprovalProviderResult/v1", status="complete-public-transcript",
+        return dict(common, apiVersion="catchplate.nativePilotApprovalProviderResult/v1", status="complete-public-transcript",
             stage="complete-public-transcript", approvalsDelivered=244, completionReceipts=2)
-    return dict(common, apiVersion="serverware.nativePilotCurrentHeadDecisionServiceResult/v1", status="complete-eight-decisions",
+    return dict(common, apiVersion="catchplate.nativePilotCurrentHeadDecisionServiceResult/v1", status="complete-eight-decisions",
         stage="eight-independent-pairs-delivered", decisionsDelivered=8)
 
 
@@ -69,7 +69,7 @@ class StartupTerminalControls(unittest.TestCase):
             with self.assertRaises(ValueError): checked(value, role)
             value["status"] = "cleanup-unknown-owner-retained"
             with self.assertRaises(ValueError): checked(value, role, exit_code=1)
-        value = dict(apiVersion="serverware.nativePilotStartupChildResult/v1", role="provider",
+        value = dict(apiVersion="catchplate.nativePilotStartupChildResult/v1", role="provider",
             status="failed-cleanup-complete", pilotAcceptanceVerified=False, productionReleaseEligible=False)
         self.assertEqual(checked(value, "provider", exit_code=1, admitted=False), value)
         self.assertEqual(checked(value, "provider", exit_code=1, admitted=True), value)

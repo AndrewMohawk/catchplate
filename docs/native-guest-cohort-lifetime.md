@@ -1,6 +1,6 @@
 # Native guest cohort lifetime and startup v10
 
-`serverware.nativeStartupConfiguration/v10` adds required `guestCohort` to
+`catchplate.nativeStartupConfiguration/v10` adds required `guestCohort` to
 the exact v9 measured-issuance configuration. It is selected only by
 `--native-guest-cohort-startup-v10`, or `--guest-cohort-v10` on the fixed native
 image entrypoint, with the existing independently pinned configuration and

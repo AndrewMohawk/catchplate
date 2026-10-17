@@ -23,10 +23,10 @@ def fixture():
     from datetime import datetime, timezone
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-    from serverware import db, authority_contract as contract, authority_transition_core as core
-    from serverware import authority_transition_policy_genesis as g
-    from serverware import authority_primary_contract as primary, authority_radix_proof as radix
-    from serverware import authority_policy_candidate_evidence as signatures
+    from catchplate import db, authority_contract as contract, authority_transition_core as core
+    from catchplate import authority_transition_policy_genesis as g
+    from catchplate import authority_primary_contract as primary, authority_radix_proof as radix
+    from catchplate import authority_policy_candidate_evidence as signatures
 
     now = datetime(2026, 10, 1, tzinfo=timezone.utc)
     ns = int(now.timestamp()) * 10**9
@@ -143,7 +143,7 @@ def fixture():
 def scenario(name):
     import copy
     from dataclasses import replace
-    from serverware import authority_transition_policy as legacy
+    from catchplate import authority_transition_policy as legacy
     f = fixture(); g, core = f["g"], f["core"]
     def refuses(call, message=None):
         try:
@@ -182,7 +182,7 @@ def scenario(name):
         material = dict(genesisPreparationDigest=f["record"]["genesis_preparation_digest"], highWaterDigest=f["record"]["high_water_digest"],
             inclusionReceiptEnvelopeDigest=f["receipt"]["inclusion_receipt_envelope_digest"], finalizedAtEpochNs=f["ns"])
         assert result.result["finalization_digest"] == f["db"]._policy_authority_domain_digest(
-            b"serverware.policyAuthorityGenesisFinalization/v1", f["db"].dumps(material).encode("ascii"))
+            b"catchplate.policyAuthorityGenesisFinalization/v1", f["db"].dumps(material).encode("ascii"))
     elif name == "actual-prestate":
         context = f["prepare_context"]
         for table, field, value, error in (("policy_authority_trusted_keys", "installed_at_epoch_ns", f["ns"], "prestate changed"),
@@ -217,14 +217,14 @@ def scenario(name):
         old["businessIntent"] = f["contract"].synthesize_business_intent(g.PREPARE, old)
         assert legacy._genesis_prepare_arguments(old)[0] == f["record"]
         assert not g.selected(g.PREPARE, old)
-        for changed in ({**args, "schema":"serverware.policyAuthorityGenesisPrepare/v3"}, {**args, "policySignatureEvidenceDigest":"sha256:"+"a"*64}):
+        for changed in ({**args, "schema":"catchplate.policyAuthorityGenesisPrepare/v3"}, {**args, "policySignatureEvidenceDigest":"sha256:"+"a"*64}):
             refuses(lambda: g.parse_arguments(g.PREPARE, changed))
         assert g.configuration(None) is None
         refuses(lambda: g.configuration({**f["policy"], "autoApprove":True}))
         spec = f["contract"].operation_spec(g.PREPARE)
         assert "bound-verified-assertion-receipt" in str(spec)
     elif name == "commissioning":
-        from serverware import development_policy_commissioning as m
+        from catchplate import development_policy_commissioning as m
         prepared = f["prepared"].result
         authorization = {"challengeId":"synthetic-shape-only", "credentialRecordId":"synthetic-shape-only", "assertion":{"not":"authority"}}
         value = {"input":{key:item for key,item in f["final_arguments"].items() if key != "businessIntent"},
@@ -240,9 +240,9 @@ def scenario(name):
 
 class GenesisSuccessorTests(unittest.TestCase):
     def check(self, name):
-        environment = {key:value for key,value in os.environ.items() if not key.startswith("SERVERWARE_")}
-        with tempfile.TemporaryDirectory(prefix="serverware-genesis-v2-") as directory:
-            environment.update(SERVERWARE_DATA_DIR=directory, SERVERWARE_RELEASE_CHANNEL="dev", SERVERWARE_PROCESS_MODE="serverware-control-plane")
+        environment = {key:value for key,value in os.environ.items() if not key.startswith("CATCHPLATE_")}
+        with tempfile.TemporaryDirectory(prefix="catchplate-genesis-v2-") as directory:
+            environment.update(CATCHPLATE_DATA_DIR=directory, CATCHPLATE_RELEASE_CHANNEL="dev", CATCHPLATE_PROCESS_MODE="catchplate-control-plane")
             command = "import sys; sys.path.insert(0,sys.argv[1]); from scripts.test_authority_genesis_successor import scenario; scenario(sys.argv[2])"
             result = subprocess.run([sys.executable, "-I", "-B", "-c", command, str(ROOT), name], cwd=ROOT,
                 env=environment, capture_output=True, text=True, timeout=90)

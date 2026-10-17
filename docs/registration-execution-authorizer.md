@@ -24,7 +24,7 @@ operation identities to the authorization before signing an original
 The output is not a reserve, SQL result, pending receipt or successful execution
 acknowledgement.
 
-[`authority_registration_execution_exchange._produce_on_configuration`](../serverware/authority_registration_execution_exchange.py)
+[`authority_registration_execution_exchange._produce_on_configuration`](../catchplate/authority_registration_execution_exchange.py)
 consumes the original three-frame planning request and four-frame signed
 response, before-vector and caller authorization, together with the three
 bootstrap-retained enrollment originals. Those 12 original inputs share the
@@ -32,7 +32,7 @@ existing 64 MiB source aggregate and cumulative work limits; individual frame
 limits still apply. The response is the existing signed grant original, at
 most 64 KiB, without a successful-execution or receipt wrapper.
 
-The private [wire exchange](../serverware/authority_registration_execution_transport.py)
+The private [wire exchange](../catchplate/authority_registration_execution_transport.py)
 sends nine bodies in fixed order: authorization, planning request3, planning
 response4 and before-vector. The three enrollment originals come only from the
 cold bootstrap, never the request. Lengths are bounded before allocation, one
@@ -41,7 +41,7 @@ deny. Transport returns unverified original grant bytes. The separate
 [opt-in control-plane v3 caller](control-plane-registration-execution.md) now
 performs genuine local signature, original authorization, planning and vector
 admission through
-[`authority_registration_execution_response`](../serverware/authority_registration_execution_response.py)
+[`authority_registration_execution_response`](../catchplate/authority_registration_execution_response.py)
 before returning those unchanged bytes. It does not retry or mint a success
 token; present operator/session permission must still precede the private call.
 The two explicit [public preparation handlers](control-plane-registration-execution.md#public-preparation-endpoints)
@@ -64,10 +64,10 @@ Matching those assertions is not fresh measurement, key-provenance proof or
 production admission.
 
 The dedicated
-[`registration_execution_authorizer_bootstrap`](../serverware/registration_execution_authorizer_bootstrap.py)
-uses envelope `serverware.signedRegistrationExecutionAuthorizerBootstrap/v1`,
-payload `serverware.registrationExecutionAuthorizerBootstrap/v1` and launch
-`serverware.registrationExecutionAuthorizerLaunch/v1`. The bounded original
+[`registration_execution_authorizer_bootstrap`](../catchplate/registration_execution_authorizer_bootstrap.py)
+uses envelope `catchplate.signedRegistrationExecutionAuthorizerBootstrap/v1`,
+payload `catchplate.registrationExecutionAuthorizerBootstrap/v1` and launch
+`catchplate.registrationExecutionAuthorizerLaunch/v1`. The bounded original
 bootstrap contains the configuration/generation/runtime bindings and original
 `currentRootEnrollment`, `grantEnrollment` and `authorizationEnrollment` records.
 Each record retains canonical base64url bytes, byte count, raw byte digest and
@@ -90,10 +90,10 @@ The final inherited inventory contains exactly four descriptors:
 
 | FD | Retained material | Fixed source or endpoint |
 | --- | --- | --- |
-| 198 | Sealed independent root public key, at most 16 KiB | `/run/serverware/registration-execution-trust/root-public-key.pem` |
-| 199 | Sealed original signed bootstrap, at most 4 MiB | `/run/serverware/registration-execution-trust/bootstrap.json` |
-| 200 | Nonblocking activated Unix stream listener | `/run/serverware/registration-execution/authorizer.sock` |
-| 201 | Sealed dedicated authorizer private key, at most 4096 bytes | `/run/secrets/serverware-registration-execution-authorizer-key` |
+| 198 | Sealed independent root public key, at most 16 KiB | `/run/catchplate/registration-execution-trust/root-public-key.pem` |
+| 199 | Sealed original signed bootstrap, at most 4 MiB | `/run/catchplate/registration-execution-trust/bootstrap.json` |
+| 200 | Nonblocking activated Unix stream listener | `/run/catchplate/registration-execution/authorizer.sock` |
+| 201 | Sealed dedicated authorizer private key, at most 4096 bytes | `/run/secrets/catchplate-registration-execution-authorizer-key` |
 
 There is no journal-directory FD, writable custody store, DSN or ambient
 key-path fallback. Protected root-owned no-follow originals are retained before
@@ -102,10 +102,10 @@ startup rather than overwriting or admitting them. The original private key
 must be independently provisioned, single-link and mode `0400`.
 
 The rebuilt environment supplies only the fixed root/bootstrap selectors
-`SERVERWARE_REGISTRATION_EXECUTION_ROOT_PUBLIC_KEY_FD=198` and
-`SERVERWARE_REGISTRATION_EXECUTION_BOOTSTRAP_FD=199`, the process mode and fixed
+`CATCHPLATE_REGISTRATION_EXECUTION_ROOT_PUBLIC_KEY_FD=198` and
+`CATCHPLATE_REGISTRATION_EXECUTION_BOOTSTRAP_FD=199`, the process mode and fixed
 interpreter settings. The
-[startup module](../serverware/registration_execution_authorizer_startup.py)
+[startup module](../catchplate/registration_execution_authorizer_startup.py)
 exposes `initialize_from_environment()`, `require_started()` and `close()`; its
 retained singleton owns the listener and `serve_once()` request handler directly.
 
@@ -125,8 +125,8 @@ expired bootstrap or old plan.
 
 ## Packaging and remaining deployment work
 
-The [socket](../ops/systemd/serverware-registration-execution-authorizer.socket)
-and [service template](../ops/systemd/serverware-registration-execution-authorizer.service.in)
+The [socket](../ops/systemd/catchplate-registration-execution-authorizer.socket)
+and [service template](../ops/systemd/catchplate-registration-execution-authorizer.service.in)
 use three explicit placeholders: `@AUTHORIZER_RELEASE_ROOT@`,
 `@AUTHORIZER_TRUST_DIR@` and `@AUTHORIZER_KEY_FILE@`. The release root must be an
 independently approved complete runtime export, not a source checkout. Trust,

@@ -101,7 +101,7 @@ and downloadable results without clearing attempt locks or unknown outcomes.
 
 After a matching certificate response, the portal displays its exact SHA-256
 and offers the public leaf for download. On the workload host, invoke
-`serverware-enrollment --admit-native-workload-certificate` with:
+`catchplate-enrollment --admit-native-workload-certificate` with:
 
 - `--workload-packet`, `--workload-issuer`, `--workload-request`,
   `--workload-private-key` and `--workload-certificate`, each with its matching
@@ -144,13 +144,13 @@ and `--workload-assertion`, each with its `-sha256` pin. Options-only mode refus
 these and approval inputs. Neither native mode accepts `--workload-packet-signing-key`,
 legacy enrollment/receipt options or a fabricated runtime-manifest identity.
 
-`serverware_agent_trust.native_workload_identity_submission` exports
+`catchplate_agent_trust.native_workload_identity_submission` exports
 `request_issuance_options(...)` and `submit_issuance(...)`. Both accept the existing
 `OperatorEndpoint`, pinned `packet`, `issuer`, `authorization` and `request`,
 `expected_principal`, `expected_nonce`, explicit `requested_sans`,
 `output_directory` and optional `timeout_ms`. Submission also accepts pinned
 `private_key`, `options`, `assertion` and optional exact 428 `approval` receipt.
-There is no `packet_signing_key` argument or `serverware` import.
+There is no `packet_signing_key` argument or `catchplate` import.
 
 ## Bounds, retained outcomes and authority boundary
 

@@ -9,7 +9,7 @@ remains diagnostic only. Production acceptance remains **0/6 verified**.
 
 ## Additive cold configuration, separate key role
 
-`serverware.nativeStartupConfiguration/v2` retains the existing startup fields
+`catchplate.nativeStartupConfiguration/v2` retains the existing startup fields
 and requires two additional top-level members:
 
 - `enrollmentAuthorizer`, the [closed three-field public object](../schemas/native-enrollment-authorizer.v1.schema.json).
@@ -22,7 +22,7 @@ object is exactly:
 
 | Field | Meaning |
 | --- | --- |
-| `apiVersion` | `serverware.nativeEnrollmentAuthorizer/v1` |
+| `apiVersion` | `catchplate.nativeEnrollmentAuthorizer/v1` |
 | `publicKeyPem` | Exact canonical public Ed25519 SPKI PEM original, at most 16 KiB |
 | `publicKeyPemSha256` | Independent canonical nonzero SHA-256 pin of those exact PEM bytes |
 
@@ -121,7 +121,7 @@ enrollment route's attestation helper refuses production; it is not a fallback.
 Complete N05 therefore requires explicit bootstrap-versus-target semantics:
 an independently authorized bootstrap caller/principal, an original target
 issuance grant and genuine target CSR/key-possession proof. The target must not
-already need its first Serverware certificate to obtain that certificate.
+already need its first Catchplate certificate to obtain that certificate.
 Existing v1 target-mTLS checks and the meaning of `runtimeManifestDigest` stay
 unchanged; no legacy downgrade or weaker selector fallback resolves this gap.
 This is remaining work inside N05, not a new parent or implementation credit.

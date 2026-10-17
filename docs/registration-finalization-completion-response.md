@@ -8,8 +8,8 @@ therefore remains open despite the new [cold service](registration-finalization-
 
 ## Fixed exchange
 
-The [transport](../serverware/authority_registration_finalization_completion_transport.py)
-uses `/run/serverware/registration-finalization/completion.sock`, root listener
+The [transport](../catchplate/authority_registration_finalization_completion_transport.py)
+uses `/run/catchplate/registration-finalization/completion.sock`, root listener
 peer `0:0`, request magic `SWRFCM01` and response magic `SWRFCR01`.
 
 - Raw2 request: `recover-registration-finalization-completion`, followed by a
@@ -27,7 +27,7 @@ completion. The response contains no packet ID.
 
 ## Original-derived completion verification
 
-The [receiver](../serverware/authority_registration_finalization_completion_response.py)
+The [receiver](../catchplate/authority_registration_finalization_completion_response.py)
 requires the original finalization raw4 plan, reserve request/snapshot/state
 receipt, current-root and grant enrollment originals, signed grant, independently
 admitted historical expectations/keys/caller-authorization digest, database,

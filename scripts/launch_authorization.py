@@ -17,15 +17,15 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 
 
-REQUEST_API_VERSION = "serverware.launchAuthorizationRequest/v2"
+REQUEST_API_VERSION = "catchplate.launchAuthorizationRequest/v2"
 REQUEST_KIND = "ProductionLaunchAuthorizationRequest"
-AUTHORIZATION_API_VERSION = "serverware.launchAuthorization/v2"
+AUTHORIZATION_API_VERSION = "catchplate.launchAuthorization/v2"
 AUTHORIZATION_KIND = "ProductionLaunchAuthorization"
 AUTHORIZATION_SCOPE = "trusted-host-readiness"
 FRESHNESS_AUTHORITY = "trusted-host-wall-clock"
 CAPABILITY_SEMANTICS = "time-bounded-idempotent-readiness-authorization"
 GLOBAL_ROLE_REGISTRY_API_VERSION = (
-    "serverware.productionLaunchGlobalRoleRegistry/v1"
+    "catchplate.productionLaunchGlobalRoleRegistry/v1"
 )
 GLOBAL_ROLE_REGISTRY_CLAIM_SCOPE = "roles-present-in-native-launch-contract"
 GLOBAL_ROLE_REGISTRY_REQUIRED_ROLES = frozenset(
@@ -55,19 +55,19 @@ GLOBAL_ROLE_REGISTRY_ROLES_OUTSIDE_CLAIM = (
     "verifierStateTlsServer",
 )
 LAUNCH_ATTEMPT_JOURNAL_DOMAIN = (
-    "serverware.launchAuthorizationAttemptJournal/v1"
+    "catchplate.launchAuthorizationAttemptJournal/v1"
 )
-WITNESS_REQUEST_API_VERSION = "serverware.launchAuthorityWitnessTransitionRequest/v1"
+WITNESS_REQUEST_API_VERSION = "catchplate.launchAuthorityWitnessTransitionRequest/v1"
 WITNESS_REQUEST_KIND = "LaunchAuthorityWitnessTransitionRequest"
-WITNESS_API_VERSION = "serverware.launchAuthorityWitnessTransition/v1"
+WITNESS_API_VERSION = "catchplate.launchAuthorityWitnessTransition/v1"
 WITNESS_KIND = "LaunchAuthorityWitnessTransition"
 WITNESS_OPERATION = "authorize-trusted-host-readiness"
 REGISTRY_OBSERVATION_REQUEST_API_VERSION = (
-    "serverware.launchAuthorityRegistryObservationRequest/v1"
+    "catchplate.launchAuthorityRegistryObservationRequest/v1"
 )
 REGISTRY_OBSERVATION_REQUEST_KIND = "LaunchAuthorityRegistryObservationRequest"
 REGISTRY_OBSERVATION_API_VERSION = (
-    "serverware.launchAuthorityRegistryObservation/v1"
+    "catchplate.launchAuthorityRegistryObservation/v1"
 )
 REGISTRY_OBSERVATION_KIND = "LaunchAuthorityRegistryObservation"
 REGISTRY_OBSERVATION_OPERATION = "observe-launch-authority-registry-head"
@@ -78,7 +78,7 @@ REGISTRY_OBSERVATION_DOMAIN = (
     REGISTRY_OBSERVATION_API_VERSION.encode("ascii") + b"\0"
 )
 LAUNCH_ATTEMPT_RECOVERY_IDENTITY_DOMAIN = (
-    b"serverware.launchAuthorizationAttemptRecoveryIdentity/v1\0"
+    b"catchplate.launchAuthorizationAttemptRecoveryIdentity/v1\0"
 )
 
 MAX_SAFE_INTEGER = (1 << 53) - 1

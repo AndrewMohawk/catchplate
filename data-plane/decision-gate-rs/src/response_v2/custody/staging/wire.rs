@@ -5,15 +5,15 @@ use crate::response_observation_v2_api::{V2OperationRequest, V2OperationResult};
 use super::super::protocol::ProviderAuthorityScopeV2;
 use super::super::super::state_authority::postgres::store::CommittedRequestOriginalV1;
 
-pub const ORIGINAL: &str = "serverware.responseV2.nativeStagingOriginal/v1";
-pub const STATEMENT: &str = "serverware.nativeStagingStatement/v1";
-pub const RESULT: &str = "serverware.responseV2.nativeStagingResult/v1";
-pub const REQUEST: &str = "serverware.responseV2.nativeStagingRequest/v1";
-pub const NATIVE_DOMAIN: &[u8] = b"serverware.nativeStagingStatement/v1\0";
-pub const QUOTE_DOMAIN: &[u8] = b"serverware/native-staging-attestation/v1\0";
-pub const RESULT_DOMAIN: &[u8] = b"serverware.response-v2/native-staging-result/v1\0";
-pub const CLAIM: &str = "serverware.responseV2.nativeStagingClaim/v1";
-pub const CLAIM_DOMAIN: &[u8] = b"serverware.response-v2/native-staging-claim/v1\0";
+pub const ORIGINAL: &str = "catchplate.responseV2.nativeStagingOriginal/v1";
+pub const STATEMENT: &str = "catchplate.nativeStagingStatement/v1";
+pub const RESULT: &str = "catchplate.responseV2.nativeStagingResult/v1";
+pub const REQUEST: &str = "catchplate.responseV2.nativeStagingRequest/v1";
+pub const NATIVE_DOMAIN: &[u8] = b"catchplate.nativeStagingStatement/v1\0";
+pub const QUOTE_DOMAIN: &[u8] = b"catchplate/native-staging-attestation/v1\0";
+pub const RESULT_DOMAIN: &[u8] = b"catchplate.response-v2/native-staging-result/v1\0";
+pub const CLAIM: &str = "catchplate.responseV2.nativeStagingClaim/v1";
+pub const CLAIM_DOMAIN: &[u8] = b"catchplate.response-v2/native-staging-claim/v1\0";
 pub const MAX_METADATA: usize = 192 * 1024;
 pub const MAX_INPUT: u64 = 16 * 1024 * 1024;
 

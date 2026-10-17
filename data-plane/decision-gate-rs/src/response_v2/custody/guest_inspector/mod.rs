@@ -253,7 +253,7 @@ impl Worker {
             security_label_sha256:measured.security_label_sha256().to_owned(),
             executable_sha256:measured.executable_sha256().to_owned(),
         };
-        let response = wire::ResultFrame { api_version:"serverware.responseV2.guestInspectorResult/v1", request:&request, measurement };
+        let response = wire::ResultFrame { api_version:"catchplate.responseV2.guestInspectorResult/v1", request:&request, measurement };
         let bytes = crate::canonical_json_bytes(&response).map_err(other)?;
         self.router.as_ref().unwrap().check(&packet)?;
         self.parent.require_gate(connection, sender)?;
@@ -318,7 +318,7 @@ fn run() -> io::Result<()> {
         next:1, router:None, cache:peer::ExecutableMeasurementCache::new(peer::EXECUTABLE_CACHE_ENTRIES_PER_WORKER) };
     worker.check(lifetime)?;
     let bootstrap_sha256 = wire::digest(&worker.bootstrap.original);
-    let initialized = wire::Initialized { api_version:"serverware.responseV2.guestInspectorInitialized/v1",
+    let initialized = wire::Initialized { api_version:"catchplate.responseV2.guestInspectorInitialized/v1",
         channel_nonce:&worker.bootstrap.value.channel_nonce, bootstrap_sha256:&bootstrap_sha256 };
     let bytes = crate::canonical_json_bytes(&initialized).map_err(other)?;
     // Parent must enable PASSCRED/PASSPIDFD and compare the kernel-generated

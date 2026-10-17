@@ -26,18 +26,18 @@ function required(env, name, maximum = 4096) {
 export function configuration(env) {
   requireValue(!env.NODE_OPTIONS && !env.NODE_DEBUG && !env.NODE_DEBUG_NATIVE
     && (!env.NODE_TLS_REJECT_UNAUTHORIZED || env.NODE_TLS_REJECT_UNAUTHORIZED === '1'));
-  const proxyUrl = required(env, 'SERVERWARE_PROXY_URL');
+  const proxyUrl = required(env, 'CATCHPLATE_PROXY_URL');
   const proxy = new URL(proxyUrl);
   requireValue(proxy.protocol === 'https:' && proxy.hostname && !proxy.username && !proxy.password
     && proxy.pathname === '/' && !proxy.search && !proxy.hash);
-  const applicationId = required(env, 'SERVERWARE_APP_ID', 36);
+  const applicationId = required(env, 'CATCHPLATE_APP_ID', 36);
   requireValue(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(applicationId));
-  const token = required(env, 'SERVERWARE_PROXY_TOKEN');
+  const token = required(env, 'CATCHPLATE_PROXY_TOKEN');
   requireValue(/^[A-Za-z0-9_-]+$/.test(token));
-  const chain = required(env, 'SERVERWARE_ALCHEMY_CHAIN', 11);
+  const chain = required(env, 'CATCHPLATE_ALCHEMY_CHAIN', 11);
   requireValue(Object.hasOwn(CHAINS, chain));
-  const caFile = required(env, 'SERVERWARE_CA_FILE');
-  const proxyCaFile = env.SERVERWARE_PROXY_CA_FILE ? required(env, 'SERVERWARE_PROXY_CA_FILE') : null;
+  const caFile = required(env, 'CATCHPLATE_CA_FILE');
+  const proxyCaFile = env.CATCHPLATE_PROXY_CA_FILE ? required(env, 'CATCHPLATE_PROXY_CA_FILE') : null;
   requireValue(isAbsolute(caFile) && (!proxyCaFile || isAbsolute(proxyCaFile)));
   return { proxyUrl, applicationId, token, chain, caFile, proxyCaFile };
 }
@@ -82,13 +82,13 @@ export function loadClientConfig(path, env, now = Date.now()) {
     // JSON selects only connection and saved chain. Commands, headers, request
     // bodies and environment entries are inert; the child still makes two fixed reads.
     return configuration({ ...env,
-      SERVERWARE_PROXY_URL: value.proxy_url,
-      SERVERWARE_APP_ID: value.application_id,
-      SERVERWARE_PROXY_TOKEN: value.proxy_password,
-      SERVERWARE_CA_FILE: caPath(value.ca_file),
-      SERVERWARE_PROXY_CA_FILE: value.proxy_ca_file === undefined || value.proxy_ca_file === null
+      CATCHPLATE_PROXY_URL: value.proxy_url,
+      CATCHPLATE_APP_ID: value.application_id,
+      CATCHPLATE_PROXY_TOKEN: value.proxy_password,
+      CATCHPLATE_CA_FILE: caPath(value.ca_file),
+      CATCHPLATE_PROXY_CA_FILE: value.proxy_ca_file === undefined || value.proxy_ca_file === null
         ? undefined : caPath(value.proxy_ca_file),
-      SERVERWARE_ALCHEMY_CHAIN: value.chain,
+      CATCHPLATE_ALCHEMY_CHAIN: value.chain,
     });
   } catch { throw new Error('Alchemy example configuration or response refused'); }
 }
@@ -117,13 +117,13 @@ export function childEnvironment(config) {
   // Explicit allowlist: no ambient Alchemy keys, HOME/netrc, proxy bypass,
   // NODE_OPTIONS/debugging/preloads, or inherited extra CA configuration.
   return {
-    SERVERWARE_PROXY_URL: config.proxyUrl,
-    SERVERWARE_APP_ID: config.applicationId,
-    SERVERWARE_PROXY_TOKEN: config.token,
-    SERVERWARE_ALCHEMY_CHAIN: config.chain,
-    SERVERWARE_CA_FILE: config.caFile,
+    CATCHPLATE_PROXY_URL: config.proxyUrl,
+    CATCHPLATE_APP_ID: config.applicationId,
+    CATCHPLATE_PROXY_TOKEN: config.token,
+    CATCHPLATE_ALCHEMY_CHAIN: config.chain,
+    CATCHPLATE_CA_FILE: config.caFile,
     ...(config.proxyCaFile ? {
-      SERVERWARE_PROXY_CA_FILE: config.proxyCaFile,
+      CATCHPLATE_PROXY_CA_FILE: config.proxyCaFile,
       NODE_EXTRA_CA_CERTS: config.proxyCaFile,
     } : {}),
   };
@@ -158,7 +158,7 @@ export function run(env, { spawn = spawnSync, readFile = readFileSync, configPat
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   if (process.argv.length === 3 && process.argv[2] === '--help') {
-    console.log('node client.mjs [--config PATH]\nTwo read-only Alchemy RPC calls through Serverware. Configuration: see README.md.');
+    console.log('node client.mjs [--config PATH]\nTwo read-only Alchemy RPC calls through Catchplate. Configuration: see README.md.');
   } else {
     try {
       const args = parseArguments(process.argv.slice(2));

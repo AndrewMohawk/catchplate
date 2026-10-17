@@ -20,7 +20,7 @@ from cryptography.exceptions import InvalidSignature
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_page_actions as actions
+from catchplate import authority_challenge_page_actions as actions
 from test_authority_challenge_page_configuration import Fixture
 from test_authority_challenge_page_authorization import WINDOW, EPOCH, MONOTONIC, DEADLINE, clocks, work
 from test_authority_challenge_manifest import context

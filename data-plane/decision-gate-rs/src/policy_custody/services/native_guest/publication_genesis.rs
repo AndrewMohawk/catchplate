@@ -4,7 +4,7 @@ use super::*;
 use services::publication_genesis as fixed;
 use crate::policy_shadow::policy_custody::authority_history::{AuthorityEpochRefV3,HistoricalAuthorityRoleV3};
 
-const DOMAIN:&str="serverware.nativePublicationGenesisAssignment.signature/v1";
+const DOMAIN:&str="catchplate.nativePublicationGenesisAssignment.signature/v1";
 
 /// Selected by the independent supervisor, never copied from the evidence.
 /// The actual ordinary owner additionally authenticates its complete history.
@@ -120,7 +120,7 @@ impl Configuration {
     pub(in crate::policy_shadow::policy_custody::services) fn guest_uid(&self)->u32{self.payload.authorization.guest.uid}
     pub(in crate::policy_shadow::policy_custody::services) fn validate_shape(&self)->Result<(),ShadowError>{
         let p=&self.payload;p.scope.guest(&p.authorization.guest).map_err(fail)?;p.scope.guest(&p.retrieval_guest).map_err(fail)?;
-        require(p.api_version=="serverware.nativePublicationGenesisAssignment/v1" && p.purpose=="native-policy-publication-genesis"
+        require(p.api_version=="catchplate.nativePublicationGenesisAssignment/v1" && p.purpose=="native-policy-publication-genesis"
             && p.authorization.guest.service_role=="production-bridge" && p.retrieval_guest.service_role=="production-bridge"
             && p.retrieval_guest.uid>0 && p.retrieval_guest.gid>0 && p.expected_peer.uid>0 && p.expected_peer.gid>0
             && p.expected_peer.uid!=p.authorization.guest.uid && p.retrieval_guest.uid!=p.authorization.guest.uid
@@ -204,7 +204,7 @@ impl Service {
                         let authority=super::authority_payload(&p.scope.proof_scope_original,payload).map_err(|_|fixed::invalid())?;
                         Ok(URL_SAFE_NO_PAD.encode(local.key.sign(&signature_preimage(PolicyShadowCustodySignerRole::PublicationReconciliation.signature_domain(),&authority)).to_bytes()))
                     }).map_err(fail)?;
-                    let mut value=fixed::Completion{api_version:"serverware.nativePublicationGenesisCompletion/v1".into(),prepared:prepared.clone(),
+                    let mut value=fixed::Completion{api_version:"catchplate.nativePublicationGenesisCompletion/v1".into(),prepared:prepared.clone(),
                         stored:stored.clone(),receipt_original,completed_at_boottime_nanos:guest::now()?,signature:CanonicalEd25519Signature(String::new())};
                     value.signature=CanonicalEd25519Signature(URL_SAFE_NO_PAD.encode(local.key.sign(&signature_preimage(fixed::COMPLETION_DOMAIN,&value.payload().map_err(fail)?)).to_bytes()));
                     value.verify_assigned(&p.scope,&native,&p.retrieval,&p.retrieval_guest,&p.durable_authority.epoch,&durable).map_err(fail)?;
@@ -228,13 +228,13 @@ impl Service {
             self.channel.inspect(peer::Phase::BeforeDispatch,Some(&packet.bytes),Some(&packet),self.configuration.payload.scope.expires_at_boottime_nanos,check)?;
             let result=self.handle(&request,keys,trust,time)?;
             let local=keys.keys.get(&AuthorityRole::CustodyPublicationReconciliation).ok_or(ShadowError::SignerBindingMismatch)?;
-            let result_sha256=hash_domain_frames(b"serverware.policyCustodyProductionAuthorityEndpointResponse/v4",&[&canonical_json_bytes(&result)?]);
+            let result_sha256=hash_domain_frames(b"catchplate.policyCustodyProductionAuthorityEndpointResponse/v4",&[&canonical_json_bytes(&result)?]);
             let mut reply=Reply{api_version:PRODUCTION_AUTHORITY_ENDPOINT_PROTOCOL_VERSION.into(),endpoint:request.endpoint,
                 request_sha256:request.request_sha256,replay_id_sha256:request.replay_id_sha256,completed_at_boottime_nanos:guest::now()?,
                 authority_key_id:local.binding.key_id.clone(),authority_key_spki_sha256:local.binding.key_spki_sha256.clone(),result,result_sha256,signature_base64:String::new()};
             require(reply.completed_at_boottime_nanos<request.deadline_boottime_nanos)?;self.check(keys,trust,time)?;check()?;
             reply.signature_base64=URL_SAFE_NO_PAD.encode(local.key.sign(&domain_separated_signature_preimage(
-                b"serverware.policyCustodyProductionAuthorityEndpointSignature/v4",&reply.signature_payload().map_err(fail)?).map_err(fail)?).to_bytes());
+                b"catchplate.policyCustodyProductionAuthorityEndpointSignature/v4",&reply.signature_payload().map_err(fail)?).map_err(fail)?).to_bytes());
             let raw=services::common::encode_canonical_frame(&reply).map_err(fail)?;
             loop {
                 check()?;self.check(keys,trust,time)?;

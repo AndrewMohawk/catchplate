@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-ingress-session-evidence.v2.schema.json",
-  "title": "Serverware native ingress session evidence v2",
-  "description": "Explicit client-trust-v2 session quotation only; requested with x-serverware-ingress-evidence: client-trust-v2. No version downgrade is allowed. The wire object is compact JSON plus one LF, at most 98304 bytes. Schema shape does not verify TLS exporter provenance, a Nitro signature, certificate or peer identity, freshness, enrollment, authorization, current witness state or readiness. The verifier must compare the echoed challenge/exporter with independently retained actual client-session values, never adopt these echoes as expectations.",
+  "$id": "https://catchplate.invalid/schemas/native-ingress-session-evidence.v2.schema.json",
+  "title": "Catchplate native ingress session evidence v2",
+  "description": "Explicit client-trust-v2 session quotation only; requested with x-catchplate-ingress-evidence: client-trust-v2. No version downgrade is allowed. The wire object is compact JSON plus one LF, at most 98304 bytes. Schema shape does not verify TLS exporter provenance, a Nitro signature, certificate or peer identity, freshness, enrollment, authorization, current witness state or readiness. The verifier must compare the echoed challenge/exporter with independently retained actual client-session values, never adopt these echoes as expectations.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -10,7 +10,7 @@
     "tlsExporterBase64url", "publicIdentityBase64url"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeIngressSessionEvidence/v2"},
+    "apiVersion": {"const": "catchplate.nativeIngressSessionEvidence/v2"},
     "evidenceScope": {"const": "unverified-session-public-material"},
     "okForAction": {"const": false},
     "clientChallengeBase64url": {
@@ -18,7 +18,7 @@
       "$ref": "#/$defs/nonzeroRaw32"
     },
     "tlsExporterBase64url": {
-      "description": "Echo of the actual 32-byte exporter for fixed label EXPORTER-Serverware-Native-Ingress-v1 and raw caller challenge context. A consumer must use its independently observed actual TLS exporter, not trust this echo.",
+      "description": "Echo of the actual 32-byte exporter for fixed label EXPORTER-Catchplate-Native-Ingress-v1 and raw caller challenge context. A consumer must use its independently observed actual TLS exporter, not trust this echo.",
       "$ref": "#/$defs/nonzeroRaw32"
     },
     "publicIdentityBase64url": {

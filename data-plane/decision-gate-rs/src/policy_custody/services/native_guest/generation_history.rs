@@ -65,7 +65,7 @@ impl Admission {
         let history=ProductionCustodyKeyHistoryState{current_key_epoch:self.current_key_epoch,
             oldest_retained_key_epoch:first.unwrap_or(self.current_key_epoch),current_key_set_root_sha256:current.clone(),
             predecessor_historical_key_chain_root_sha256:predecessor.clone(),
-            historical_key_chain_root_sha256:hash_domain_frames(b"serverware.nativeGenerationKeyHistory/v1",
+            historical_key_chain_root_sha256:hash_domain_frames(b"catchplate.nativeGenerationKeyHistory/v1",
                 &[&canonical_json_bytes(&(self.current_key_epoch,&current,&predecessor,&originals,grant_sha256))?]),
             rotation_continuity_receipt_sha256:grant_sha256.clone(),trust_checkpoint_sha256:checkpoint.checkpoint_id.clone(),
             revocation_generation:checkpoint.revocation_generation,revocation_root_sha256:checkpoint.revocation_root_sha256.clone()};

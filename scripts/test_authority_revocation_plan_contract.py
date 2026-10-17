@@ -21,18 +21,18 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract as source
-from serverware import authority_revocation_bundle_contract as retained
-from serverware import authority_revocation_plan_contract as contract
-from serverware import authority_webauthn_assertion as assertion
+from catchplate import authority_contract as source
+from catchplate import authority_revocation_bundle_contract as retained
+from catchplate import authority_revocation_plan_contract as contract
+from catchplate import authority_webauthn_assertion as assertion
 from authority_revocation_semantics_fixture import SemanticFixture
 
 
 OPERATION = "webauthn.credential.revoke"
-RESPONSE_SCHEMA = "serverware.policyAuthorityPlannerResponse/v4"
-PLAN_SCHEMA = "serverware.policyAuthorityMeasuredPlan/v4"
-SIGNED_SCHEMA = "serverware.signedPolicyAuthorityMeasuredPlan/v4"
-SNAPSHOT_DOMAIN = "serverware.policyAuthoritySnapshot/v4"
+RESPONSE_SCHEMA = "catchplate.policyAuthorityPlannerResponse/v4"
+PLAN_SCHEMA = "catchplate.policyAuthorityMeasuredPlan/v4"
+SIGNED_SCHEMA = "catchplate.signedPolicyAuthorityMeasuredPlan/v4"
+SNAPSHOT_DOMAIN = "catchplate.policyAuthoritySnapshot/v4"
 FRAME_NAMES = ("operation", "operationId", "requestDigest", "queryManifestDigest",
     "authorityRootSetBeforeDigest", "authorizationProjectionDigest",
     "selectedBusinessRowsDigest", "mutationPlanDigest", "rootTransitionDigest")
@@ -96,7 +96,7 @@ def payload_fixture(**variants):
         "mutationPlan": copy.deepcopy(inputs["mutations"]),
         "queryMultiproofs": copy.deepcopy(inputs["beforeProofs"]),
         "queryMultiproofsDigest": DIGEST,
-        "plannerTrace": {"schema": "serverware.policyAuthorityPlannerTrace/v1",
+        "plannerTrace": {"schema": "catchplate.policyAuthorityPlannerTrace/v1",
             "operation": OPERATION, "entries": trace_entries},
         "plannerTraceDigest": DIGEST, "authorizationProjection": projection,
         "webauthnEvidence": copy.deepcopy(fixture.receipt.evidence),
@@ -159,7 +159,7 @@ class RevocationPlanContractTests(unittest.TestCase):
     def test_top_level_closure_exact_types_and_v3_are_not_auto_upgraded(self):
         for changed in (None, [], MappingProxyType(self.payload), {**self.payload, "unknown": None},
                         {name: value for name, value in self.payload.items() if name != "revocationProofBundle"},
-                        {**self.payload, "schema": "serverware.policyAuthorityPlannerResponse/v3"}):
+                        {**self.payload, "schema": "catchplate.policyAuthorityPlannerResponse/v3"}):
             with self.subTest(value_type=type(changed)):
                 self.deny(changed)
         for name in ("schema", "operation", "sourceRevision"):
@@ -168,7 +168,7 @@ class RevocationPlanContractTests(unittest.TestCase):
             self.deny(changed)
 
     def test_measured_plan_closure_revoke_source_identity_and_digest_scalar_types(self):
-        for field, value in (("schema", "serverware.policyAuthorityMeasuredPlan/v3"),
+        for field, value in (("schema", "catchplate.policyAuthorityMeasuredPlan/v3"),
                 ("operation", "webauthn.counter.cas"), ("sourceRevision", "old-source"),
                 ("authoritySchemaVersion", True), ("authoritySchemaVersion", 10),
                 ("operationId", "sha256:" + "A" * 64), ("requestDigest", DIGEST.encode()),
@@ -266,7 +266,7 @@ class RevocationPlanContractTests(unittest.TestCase):
 
     def test_typed_request_preserves_real_arguments_and_rejects_alternate_operation_shape(self):
         for name, value in (("operation", "webauthn.registration.finalize"),
-                ("handler", "anything"), ("schema", "serverware.policyAuthorityV9Request/v2"),
+                ("handler", "anything"), ("schema", "catchplate.policyAuthorityV9Request/v2"),
                 ("arguments", MappingProxyType({})), ("arguments", {str(n): n for n in range(65)})):
             changed = copy.deepcopy(self.payload)
             changed["typedRequest"][name] = value
@@ -328,7 +328,7 @@ class RevocationPlanContractTests(unittest.TestCase):
         for last in "AQgw":
             self.assertIsNone(contract.validate_signed_envelope_shape({**envelope,
                 "signatureBase64Url": "A" * 85 + last}))
-        for changed in ({**envelope, "schema": "serverware.signedPolicyAuthorityMeasuredPlan/v3"},
+        for changed in ({**envelope, "schema": "catchplate.signedPolicyAuthorityMeasuredPlan/v3"},
                         {**envelope, "verified": True}, MappingProxyType(envelope)):
             with self.assertRaises(contract.RevocationPlanContractError):
                 contract.validate_signed_envelope_shape(changed)
@@ -351,12 +351,12 @@ class RevocationPlanContractTests(unittest.TestCase):
         for keyword in ("verified", "expected_identity", "expected_before", "now_epoch_ns", "limits"):
             with self.assertRaises(TypeError):
                 contract.validate_payload_shape(self.payload, **{keyword: None})
-        source_text = (ROOT / "serverware/authority_revocation_plan_contract.py").read_text()
+        source_text = (ROOT / "catchplate/authority_revocation_plan_contract.py").read_text()
         self.assertNotIn("import authority_planner", source_text)
         self.assertNotIn("import authority_transition_registry", source_text)
-        planner_text = (ROOT / "serverware/authority_planner.py").read_text()
-        self.assertIn('PLANNER_RESPONSE_SCHEMA = "serverware.policyAuthorityPlannerResponse/v3"', planner_text)
-        self.assertIn('MEASURED_PLAN_SCHEMA = "serverware.policyAuthorityMeasuredPlan/v3"', planner_text)
+        planner_text = (ROOT / "catchplate/authority_planner.py").read_text()
+        self.assertIn('PLANNER_RESPONSE_SCHEMA = "catchplate.policyAuthorityPlannerResponse/v3"', planner_text)
+        self.assertIn('MEASURED_PLAN_SCHEMA = "catchplate.policyAuthorityMeasuredPlan/v3"', planner_text)
         self.assertIn('"complete planning requires the successor retained-evidence protocol"', planner_text)
 
 

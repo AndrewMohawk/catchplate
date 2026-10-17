@@ -8,15 +8,15 @@ import os
 import subprocess
 from pathlib import Path
 
-raw_services = os.getenv("SERVERWARE_HARDENING_SERVICES")
+raw_services = os.getenv("CATCHPLATE_HARDENING_SERVICES")
 services = tuple(item.strip() for item in raw_services.split(",")) if raw_services else (
-    "serverware",
+    "catchplate",
     "audit-anchor",
     "grant-store",
     "demo-upstream",
     "decision-gate-rs",
 )
-seccomp_profile = Path("security/seccomp/serverware-deny-dangerous.json")
+seccomp_profile = Path("security/seccomp/catchplate-deny-dangerous.json")
 seccomp_json = json.loads(seccomp_profile.read_text(encoding="utf-8"))
 seccomp_digest = "sha256:" + hashlib.sha256(
     json.dumps(seccomp_json, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -33,7 +33,7 @@ def seccomp_profile_matches(security_opt: list[str]) -> bool:
         if not item.startswith("seccomp="):
             continue
         value = item.split("=", 1)[1]
-        if value.endswith("serverware-deny-dangerous.json"):
+        if value.endswith("catchplate-deny-dangerous.json"):
             return True
         if value.startswith("{"):
             try:
@@ -58,8 +58,8 @@ for service in services:
     elif service == "custody-runtime":
         if user != "10002:10003":
             raise AssertionError(f"{service}: expected the isolated custody identity, got {user!r}")
-    elif user not in {"serverware", "10001", "10001:10001"}:
-        raise AssertionError(f"{service}: expected non-root Serverware user, got {user!r}")
+    elif user not in {"catchplate", "10001", "10001:10001"}:
+        raise AssertionError(f"{service}: expected non-root Catchplate user, got {user!r}")
     if host.get("ReadonlyRootfs") is not True:
         raise AssertionError(f"{service}: root filesystem is not read-only")
     if "ALL" not in (host.get("CapDrop") or []):
@@ -68,7 +68,7 @@ for service in services:
         raise AssertionError(f"{service}: no-new-privileges is not enabled")
     security_opt = host.get("SecurityOpt") or []
     if not seccomp_profile_matches(security_opt):
-        raise AssertionError(f"{service}: custom Serverware seccomp profile is not configured: {security_opt!r}")
+        raise AssertionError(f"{service}: custom Catchplate seccomp profile is not configured: {security_opt!r}")
     seccomp_mode = command(["docker", "compose", "exec", "-T", service, "sh", "-c", "awk '/^Seccomp:/ {print $2}' /proc/self/status"])
     if seccomp_mode != "2":
         raise AssertionError(f"{service}: expected seccomp filter mode 2, got {seccomp_mode!r}")
@@ -118,7 +118,7 @@ err = ctypes.get_errno()
 if err != 77:
     raise SystemExit(f"expected custom seccomp errno 77 for bpf syscall, got ret={ret} errno={err}")
 '''
-subprocess.check_output(["docker", "compose", "exec", "-T", "serverware", "python", "-c", probe], text=True)
+subprocess.check_output(["docker", "compose", "exec", "-T", "catchplate", "python", "-c", probe], text=True)
 
 print(
     json.dumps(

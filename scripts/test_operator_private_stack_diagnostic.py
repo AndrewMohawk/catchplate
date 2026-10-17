@@ -26,18 +26,18 @@ from scripts import operator_private_stack_diagnostic as diagnostic
 def fixture_environment():
     # Deliberately literal fixture identity, not a copy of the allowlist tested.
     return {
-        "SERVERWARE_OPERATOR_DEMO": "1", "SERVERWARE_RELEASE_CHANNEL": "dev",
-        "SERVERWARE_DATA_DIR": "/data",
-        "SERVERWARE_PUBLIC_URL": "https://serverware-demo.example.com",
-        "SERVERWARE_OPERATOR_DEMO_UPSTREAMS": '["https://registry.npmjs.org"]',
-        "SERVERWARE_OPERATOR_DEMO_PROXY_URL": "https://serverware-proxy.example.com",
-        "SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED": "1",
-        "SERVERWARE_ADMIN_USER": "user:operator-demo-operator",
-        "SERVERWARE_DATA_PLANE_INSTANCE_ID": "spiffe://operator-demo.serverware/decision-gate/local",
-        "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED": "0",
-        "SERVERWARE_DECISION_GATE_BASE": "http://127.0.0.1:9091",
-        "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST": "sha256:" + "a" * 64,
-        **{"SERVERWARE_" + prefix + "_TOKEN_FILE": "/run/secrets/serverware/" + role + ".token"
+        "CATCHPLATE_OPERATOR_DEMO": "1", "CATCHPLATE_RELEASE_CHANNEL": "dev",
+        "CATCHPLATE_DATA_DIR": "/data",
+        "CATCHPLATE_PUBLIC_URL": "https://catchplate-demo.example.com",
+        "CATCHPLATE_OPERATOR_DEMO_UPSTREAMS": '["https://registry.npmjs.org"]',
+        "CATCHPLATE_OPERATOR_DEMO_PROXY_URL": "https://catchplate-proxy.example.com",
+        "CATCHPLATE_DIRECT_CA_DOWNLOAD_ENABLED": "1",
+        "CATCHPLATE_ADMIN_USER": "user:operator-demo-operator",
+        "CATCHPLATE_DATA_PLANE_INSTANCE_ID": "spiffe://operator-demo.catchplate/decision-gate/local",
+        "CATCHPLATE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED": "0",
+        "CATCHPLATE_DECISION_GATE_BASE": "http://127.0.0.1:9091",
+        "CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST": "sha256:" + "a" * 64,
+        **{"CATCHPLATE_" + prefix + "_TOKEN_FILE": "/run/secrets/catchplate/" + role + ".token"
            for role, prefix in (("admin", "ADMIN"), ("credential-lease", "DATA_PLANE_CREDENTIAL_LEASE"),
                ("audit", "DATA_PLANE_AUDIT"), ("grant-consume", "DATA_PLANE_GRANT_CONSUME"),
                ("rate-limit-consume", "DATA_PLANE_RATE_LIMIT_CONSUME"),
@@ -65,26 +65,26 @@ class PrivateStackDiagnosticTests(unittest.TestCase):
         argv = ["/diagnostic/operator_private_stack_diagnostic.py"]
         with patch.object(diagnostic.sys, "argv", argv), self.configuration(fixture_environment()):
             self.assertIsNone(diagnostic._admit_configuration())
-        optional = {"SERVERWARE_PROCESS_MODE": "serverware-control-plane",
-            "SERVERWARE_METADATA_STORE_BACKEND": "sqlite", "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite",
-            "SERVERWARE_GRANT_STORE_BACKEND": "sqlite", "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
-            "SERVERWARE_KEY_RELEASE_REQUIRED": "0", "SERVERWARE_DEV_AUTHENTICATOR": "0",
-            "SERVERWARE_DEV_DEMO_SEED": "0", "SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED": "0",
-            "SERVERWARE_DEVELOPMENT_SANDBOX": "0", "SERVERWARE_PRODUCTION_IMAGE": "0"}
+        optional = {"CATCHPLATE_PROCESS_MODE": "catchplate-control-plane",
+            "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite", "CATCHPLATE_AUDIT_STORE_BACKEND": "sqlite",
+            "CATCHPLATE_GRANT_STORE_BACKEND": "sqlite", "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
+            "CATCHPLATE_KEY_RELEASE_REQUIRED": "0", "CATCHPLATE_DEV_AUTHENTICATOR": "0",
+            "CATCHPLATE_DEV_DEMO_SEED": "0", "CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED": "0",
+            "CATCHPLATE_DEVELOPMENT_SANDBOX": "0", "CATCHPLATE_PRODUCTION_IMAGE": "0"}
         with patch.object(diagnostic.sys, "argv", argv), self.configuration({**fixture_environment(), **optional}):
             diagnostic._admit_configuration()
         mutations = [(key, None) for key in fixture_environment()]
         mutations += [(key, "unexpected") for key in fixture_environment()]
         mutations += [(key, "unexpected") for key in optional]
         mutations += [(key, value) for key, value in (
-            ("SERVERWARE_RELEASE_CHANNEL", "production"), ("SERVERWARE_PRODUCTION_IMAGE", "1"),
-            ("SERVERWARE_PROCESS_MODE", "native"), ("SERVERWARE_KEY_RELEASE_REQUIRED", "1"),
-            ("SERVERWARE_CONTROL_PLANE_CUSTODY_CONFIG_FD", ""),
-            ("SERVERWARE_CONTROL_PLANE_CUSTODY_CONFIG_FD", "12"),
-            ("SERVERWARE_CONTROL_PLANE_CUSTODY_CONFIG_PATH", "/synthetic/canary-secret"),
-            ("SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR", "/synthetic/canary-secret"),
-            ("SERVERWARE_UNKNOWN_SETTING", "canary-secret"),
-            ("SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST", "sha256:" + "A" * 64))]
+            ("CATCHPLATE_RELEASE_CHANNEL", "production"), ("CATCHPLATE_PRODUCTION_IMAGE", "1"),
+            ("CATCHPLATE_PROCESS_MODE", "native"), ("CATCHPLATE_KEY_RELEASE_REQUIRED", "1"),
+            ("CATCHPLATE_CONTROL_PLANE_CUSTODY_CONFIG_FD", ""),
+            ("CATCHPLATE_CONTROL_PLANE_CUSTODY_CONFIG_FD", "12"),
+            ("CATCHPLATE_CONTROL_PLANE_CUSTODY_CONFIG_PATH", "/synthetic/canary-secret"),
+            ("CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR", "/synthetic/canary-secret"),
+            ("CATCHPLATE_UNKNOWN_SETTING", "canary-secret"),
+            ("CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST", "sha256:" + "A" * 64))]
         for key, value in mutations:
             environment = fixture_environment()
             if value is None:
@@ -107,9 +107,9 @@ class PrivateStackDiagnosticTests(unittest.TestCase):
 
     def test_marker_and_isolation_admission_are_closed_before_output(self):
         from scripts import operator_npm_metadata_fixture_network as network
-        good = b'{"schema":"serverware.privateOperatorAuditFixture/v1","syntheticOnly":true}'
+        good = b'{"schema":"catchplate.privateOperatorAuditFixture/v1","syntheticOnly":true}'
         good_status = b"NoNewPrivs:\t1\nCapEff:\t0\nCapPrm:\t0\nCapInh:\t0\nCapAmb:\t0\nCapBnd:\t0\n"
-        with tempfile.TemporaryDirectory(prefix="serverware-stack-marker-") as directory:
+        with tempfile.TemporaryDirectory(prefix="catchplate-stack-marker-") as directory:
             marker = Path(directory) / "marker.json"
             marker.write_bytes(good)
             marker.chmod(0o400)
@@ -175,14 +175,14 @@ class PrivateStackDiagnosticTests(unittest.TestCase):
                         return result
                     return call
                 frames = SimpleNamespace(close=step("close"))
-                custody = ModuleType("serverware.control_plane_custody_startup")
+                custody = ModuleType("catchplate.control_plane_custody_startup")
                 custody.initialize_from_environment = step("custody", object() if failed_stage == "configured_custody" else None)
-                package = ModuleType("serverware")
+                package = ModuleType("catchplate")
                 package.control_plane_custody_startup = custody
                 result = object()
                 with ExitStack() as stack:
-                    stack.enter_context(patch.dict(sys.modules, {"serverware": package,
-                        "serverware.control_plane_custody_startup": custody}))
+                    stack.enter_context(patch.dict(sys.modules, {"catchplate": package,
+                        "catchplate.control_plane_custody_startup": custody}))
                     for name, stage, value in (("_admit_configuration", "configuration", None),
                             ("_admit_fixture", "fixture", None), ("_open_frames", "open", frames),
                             ("_run_runner", "runner", result)):
@@ -203,13 +203,13 @@ class PrivateStackDiagnosticTests(unittest.TestCase):
                 self.assertEqual(events, expected)
 
     def test_private_output_requires_fresh_exact_tmpfs_and_owns_only_created_fd(self):
-        mount = ("5 1 0:77 / /run/serverware-private-diagnostic rw,nosuid,nodev,noexec"
+        mount = ("5 1 0:77 / /run/catchplate-private-diagnostic rw,nosuid,nodev,noexec"
                  " - tmpfs tmpfs rw,size=2048k\n").encode()
         mutations = ({}, {"directory_mode": 0o755}, {"uid": 0}, {"gid": 0}, {"existing": ["old.txt"]},
             {"capacity": 1024 * 1024}, {"mount": b""}, {"mount": mount * 2},
             {"mount": mount.replace(b"tmpfs tmpfs", b"ext4 /dev/test")},
             {"mount": mount.replace(b",noexec", b"")}, {"mount": mount.replace(b"0:77", b"0:78")},
-            {"mount": mount + mount.replace(b" /run/serverware-private-diagnostic ", b" /run/serverware-private-diagnostic/sub ")},
+            {"mount": mount + mount.replace(b" /run/catchplate-private-diagnostic ", b" /run/catchplate-private-diagnostic/sub ")},
             {"file_mode": 0o644}, {"nlink": 2}, {"size": 1})
         for changes in mutations:
             with self.subTest(changes=changes):
@@ -258,9 +258,9 @@ class PrivateStackDiagnosticTests(unittest.TestCase):
             diagnostic._run_runner(frames)
         self.assertEqual(events, ["arm", "runner", "cancel"])
         self.assertEqual(diagnostic.DUMP_AFTER_SECONDS, 50)
-        self.assertEqual(diagnostic.ENTRYPOINT, "serverware.operator_demo_runner")
+        self.assertEqual(diagnostic.ENTRYPOINT, "catchplate.operator_demo_runner")
         arm.assert_called_once_with(50, repeat=False, file=frames, exit=False)
-        runner.assert_called_once_with("serverware.operator_demo_runner", run_name="__main__")
+        runner.assert_called_once_with("catchplate.operator_demo_runner", run_name="__main__")
         cancel.assert_called_once_with()
 
     def test_runner_exception_is_preserved_and_timer_cancelled_without_reentry(self):
@@ -273,7 +273,7 @@ class PrivateStackDiagnosticTests(unittest.TestCase):
                     diagnostic._run_runner(frames)
             self.assertIs(raised.exception, failure)
             arm.assert_called_once_with(50, repeat=False, file=frames, exit=False)
-            runner.assert_called_once_with("serverware.operator_demo_runner", run_name="__main__")
+            runner.assert_called_once_with("catchplate.operator_demo_runner", run_name="__main__")
             cancel.assert_called_once_with()
         with patch.object(diagnostic.faulthandler, "dump_traceback_later", side_effect=OSError("synthetic-secret")), \
                 patch.object(diagnostic.runpy, "run_module") as runner, \
@@ -298,7 +298,7 @@ signal.alarm(5)
 def forbidden(*args, **kwargs):
     raise AssertionError("synthetic child attempted network")
 def synthetic_waiting_entrypoint(module, *, run_name):
-    assert module == "serverware.operator_demo_runner" and run_name == "__main__"
+    assert module == "catchplate.operator_demo_runner" and run_name == "__main__"
     secret_local = "synthetic-local-must-not-appear-6f34"
     secret_mapping = {"token": "synthetic-mapping-must-not-appear-981a"}
     assert secret_local and secret_mapping
@@ -311,10 +311,10 @@ with os.fdopen(fd, "wb", buffering=0) as frames, \
         patch.object(socket, "create_connection", forbidden), \
         patch.object(socket, "getaddrinfo", forbidden):
     diagnostic._run_runner(frames)
-assert not any(name == "serverware" or name.startswith("serverware.") for name in sys.modules)
+assert not any(name == "catchplate" or name.startswith("catchplate.") for name in sys.modules)
 signal.alarm(0)
 '''
-        with tempfile.TemporaryDirectory(prefix="serverware-stack-child-") as directory:
+        with tempfile.TemporaryDirectory(prefix="catchplate-stack-child-") as directory:
             frames = Path(directory) / "frames.txt"
             result = subprocess.run([sys.executable, "-I", "-B", "-c", code, str(ROOT), str(frames)],
                 capture_output=True, timeout=8, check=False,

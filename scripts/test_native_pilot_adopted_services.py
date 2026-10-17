@@ -19,13 +19,13 @@ from cryptography.exceptions import InvalidSignature
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_adopted_launch_profile as bundle
-from serverware import native_pilot_adopted_ordinary as ordinary
-from serverware import native_pilot_adopted_service_authority as service
-from serverware import native_pilot_launch_publication as launch
-from serverware import native_pilot_native_service_authority as legacy
-from serverware import native_pilot_ordinary_initial_profile as initial
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_adopted_launch_profile as bundle
+from catchplate import native_pilot_adopted_ordinary as ordinary
+from catchplate import native_pilot_adopted_service_authority as service
+from catchplate import native_pilot_launch_publication as launch
+from catchplate import native_pilot_native_service_authority as legacy
+from catchplate import native_pilot_ordinary_initial_profile as initial
 from test_native_pilot_adopted_closure import fixture as closure_fixture, input_for, signed
 from test_native_pilot_ordinary_initial import fixture, checkpoint, sign_anchor, DOMAINS
 from test_native_pilot_ordinary_keys import canonical, encoded, framed, labelled
@@ -81,7 +81,7 @@ class AdoptedTargetHistoryControls(unittest.TestCase):
 
     def test_cross_version_and_tag_only_upgrade_refused(self):
         f = target_fixture()
-        for field, version in (("wrapper", initial.WRAPPER_API), ("state", initial.STATE_API), ("runtime", "serverware.policyCustodyServiceRuntimeConfig/v10")):
+        for field, version in (("wrapper", initial.WRAPPER_API), ("state", initial.STATE_API), ("runtime", "catchplate.policyCustodyServiceRuntimeConfig/v10")):
             changed = copy.deepcopy(f)
             target = changed["wrapper"] if field == "wrapper" else changed["wrapper"]["initialState"] if field == "state" else changed["header"]
             target["apiVersion"] = version
@@ -139,20 +139,20 @@ class AdoptedProfileIsolationControls(unittest.TestCase):
     def test_genuine_synthetic_closure_v5_has_separate_shape_entrypoint(self):
         raw, _ = signed(input_for(self.f))
         selected = launch.shape_adopted("native-publicationReconciliation-closure", raw)
-        self.assertEqual(selected["apiVersion"], "serverware.nativeCustodyClosure/v5")
+        self.assertEqual(selected["apiVersion"], "catchplate.nativeCustodyClosure/v5")
         for purpose in ("native-publicationReconciliation-closure", "native-retrieval-closure"):
             with self.subTest(purpose=purpose), self.assertRaises(FAILURES): launch.shape(purpose, raw)
         with self.assertRaises(FAILURES): launch.shape_adopted("native-persistence-closure", raw)
 
     def test_three_unsigned_launch_selectors_require_exact_fixed_paths(self):
         for role in bundle.ROLES:
-            inner = {"apiVersion": "serverware.nativeShadowGuestLaunch/v1"}
+            inner = {"apiVersion": "catchplate.nativeShadowGuestLaunch/v1"}
             for name, suffix in (("deliveryConfiguration", "cold"), ("delivery", "delivery")):
                 inner[name] = {"path": launch.ADOPTED_DESTINATIONS["native-" + suffix + "-" + role], "sha256": labelled(name)}
             for name, (suffix, _) in launch.COMPONENTS.items():
                 inner[name] = {"path": launch.ADOPTED_DESTINATIONS["native-" + role + "-" + suffix], "sha256": labelled(name)}
             api, field, operation = launch.ADOPTED_LAUNCHES[role]
-            value = {"apiVersion": "serverware." + api, "keyAdmission": inner,
+            value = {"apiVersion": "catchplate." + api, "keyAdmission": inner,
                 field: {"path": launch.ADOPTED_DESTINATIONS["native-service-" + operation], "sha256": labelled("grant")}}
             self.assertEqual(launch.shape_adopted("native-launch-" + role, canonical(value)), value)
             with self.assertRaises(FAILURES): launch.shape("native-launch-" + role, canonical(value))
@@ -171,7 +171,7 @@ class AdoptedProfileIsolationControls(unittest.TestCase):
             value = {name: None for name in service.COMMON + service.EXTRA[operation]}
             value.update(apiVersion=service.INPUT_API, operation=operation)
             self.assertEqual(service.input_document(operation, canonical(value)), value)
-            for changed in ({**value, "apiVersion": "serverware.nativePilotNativeServiceAuthorityInput/v5"},
+            for changed in ({**value, "apiVersion": "catchplate.nativePilotNativeServiceAuthorityInput/v5"},
                     {**value, "operation": "trustedTime"}, {**value, "extra": True}):
                 with self.subTest(operation=operation), self.assertRaises(FAILURES): service.input_document(operation, canonical(changed))
             # Framing success is not public authority admission. No key or
@@ -192,7 +192,7 @@ class AdoptedProfileIsolationControls(unittest.TestCase):
         value = {name: None for name in bundle.FIELDS}
         value.update(apiVersion=bundle.API, role="trustedTime")
         with self.assertRaises(FAILURES): bundle.input_document("trustedTime", canonical(value))
-        value.update(role="persistence", apiVersion="serverware.nativePilotLaunchBundle/v1")
+        value.update(role="persistence", apiVersion="catchplate.nativePilotLaunchBundle/v1")
         with self.assertRaises(FAILURES): bundle.input_document("persistence", canonical(value))
 
 

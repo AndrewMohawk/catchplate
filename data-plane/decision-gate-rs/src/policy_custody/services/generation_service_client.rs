@@ -5,9 +5,9 @@ use super::generation_service::{Command,Response,Receipt,Phase};
 use super::production::ProductionServiceHistoricalKeyringsV4;
 use super::super::production_dispatch::{ClosedProductionGenerationRequestV4 as Request,
     ClosedProductionGenerationResponseV4,ProductionGenerationTransitionV4 as Transition};
-const EFFECT_DOMAIN:&[u8]=b"serverware.custodyServiceGenerationEffect.signature/v1";
-const OBSERVATION_DOMAIN:&[u8]=b"serverware.custodyServiceGenerationObservation.signature/v1";
-pub(super) const RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v5";
+const EFFECT_DOMAIN:&[u8]=b"catchplate.custodyServiceGenerationEffect.signature/v1";
+const OBSERVATION_DOMAIN:&[u8]=b"catchplate.custodyServiceGenerationObservation.signature/v1";
+pub(super) const RUNTIME:&str="catchplate.policyCustodyProductionRpcRuntime/v5";
 fn invalid()->ServiceError {ServiceError::Invalid("five-service generation admission is unavailable")}
 fn ensure(ok:bool)->Result<(),ServiceError>{if ok{Ok(())}else{Err(invalid())}}
 fn sha<T:Serialize>(v:&T)->Result<Sha256Digest,ServiceError>{Ok(Sha256Digest::compute(&encode_canonical_frame(v)?))}
@@ -19,7 +19,7 @@ pub(super) fn roles()->BTreeSet<TrustedHostServiceRoleV3>{BTreeSet::from([
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(super) struct Selection {api_version:String,grants:BTreeMap<TrustedHostServiceRoleV3,Sha256Digest>}
 impl Selection {
-    pub(super) fn validate(&self)->Result<(),ServiceError>{ensure(self.api_version=="serverware.custodyGenerationServices/v1"
+    pub(super) fn validate(&self)->Result<(),ServiceError>{ensure(self.api_version=="catchplate.custodyGenerationServices/v1"
         && self.grants.keys().copied().collect::<BTreeSet<_>>()==roles()
         && self.grants.values().all(|v|v!=&Sha256Digest::compute(&[])))}
 }
@@ -56,7 +56,7 @@ impl Client {
     fn receipt(&self,role:TrustedHostServiceRoleV3,command:&Command,receipt:&Receipt)->Result<(),ServiceError>{
         let p=&receipt.payload;
         let histories=self.histories.borrowed();let history=histories.history(historical_service_role(role));
-        ensure(p.api_version=="serverware.custodyServiceGenerationEffect/v1"
+        ensure(p.api_version=="catchplate.custodyServiceGenerationEffect/v1"
             && p.purpose=="cold-service-generation-admission" && p.service_role==role
             && p.authority_epoch==history.current_epoch().map_err(|_|invalid())?.epoch_reference()
             && self.selection.grants.get(&role)==Some(&p.grant_sha256)
@@ -116,7 +116,7 @@ impl Client {
                     let p=&observation.payload;let histories=self.histories.borrowed();
                     let history=histories.history(historical_service_role(role));
                     ensure(request.transition()==Transition::Recover
-                        && p.api_version=="serverware.custodyServiceGenerationObservation/v1"
+                        && p.api_version=="catchplate.custodyServiceGenerationObservation/v1"
                         && p.purpose=="cold-service-generation-observation" && p.service_role==role
                         && p.authority_epoch==history.current_epoch().map_err(|_|invalid())?.epoch_reference()
                         && self.selection.grants.get(&role)==Some(&p.grant_sha256) && p.command_sha256==sha(&command)?
@@ -132,7 +132,7 @@ impl Client {
             ensure(boottime_now_nanos().map_err(|_|invalid())?<deadline)?;
             services.insert(role,Exchange{command,response});
         }
-        let replies=Replies{api_version:"serverware.custodyGenerationServicesResult/v1".into(),request_sha256,services};
+        let replies=Replies{api_version:"catchplate.custodyGenerationServicesResult/v1".into(),request_sha256,services};
         ensure(encode_canonical_frame(&replies)?.len()<=256*1024)?;
         if request.transition()==Transition::Prepare {
             for (role,value) in &replies.services {if let Response::Effect(receipt)=&value.response {
@@ -171,7 +171,7 @@ impl Client {
             ensure(packet.rights.is_empty())?;
             let Response::Certified(certificate)=decode_canonical_frame(&packet.frame)? else{return Err(invalid());};
             let (_,effect)=certification.local(role)?;
-            ensure(certificate.api_version=="serverware.custodyServiceGenerationCertified/v1"
+            ensure(certificate.api_version=="catchplate.custodyServiceGenerationCertified/v1"
                 && certificate.certification_command_sha256==command_sha256 && certificate.local_effect_sha256==sha(effect)?
                 && certificate.transition.service_role==historical_service_role(role))?;
             let histories=self.histories.borrowed();
@@ -181,7 +181,7 @@ impl Client {
             ensure(boottime_now_nanos().map_err(|_|invalid())?<deadline)?;
             certificates.insert(role,certificate);
         }
-        Ok(super::generation_certification::Conclude{api_version:"serverware.nativeGenerationCoordinatorConclusion/v1".into(),
+        Ok(super::generation_certification::Conclude{api_version:"catchplate.nativeGenerationCoordinatorConclusion/v1".into(),
             certification,certificates})
     }
     pub(super) fn completed(&mut self,request:&Request,response:&ClosedProductionGenerationResponseV4)->Result<(),ServiceError>{

@@ -34,13 +34,13 @@ Current signed lookup -> authenticate complete original history bytes
 ## Startup material
 
 The existing sealed runtime-evidence descriptor now carries canonical
-`serverware.authorityRuntimeEvidence/v1`, with exactly `schema`, `currentCohort`
+`catchplate.authorityRuntimeEvidence/v1`, with exactly `schema`, `currentCohort`
 and `historicalArchive`. Its aggregate limit remains 4 MiB. The current cohort
 keeps its independent signature and five original role receipts. There is no
 bare-cohort compatibility fallback or unsigned empty-archive exception.
 
 The archive envelope has exactly `schema`, `payload` and `signature`, using
-`serverware.signedAuthorityHistoricalArchive/v1`. Its payload has eight fields:
+`catchplate.signedAuthorityHistoricalArchive/v1`. Its payload has eight fields:
 
 | Field | Meaning |
 | --- | --- |

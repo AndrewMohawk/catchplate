@@ -15,7 +15,7 @@ from scripts import run_operator_github_app_examples_fixture as runner
 SOURCE, BINARY, INITIALIZER, NODE, MODULES, PYTHON, PACKAGES, GO = (
     Path("/synthetic/" + name) for name in ("source", "gate", "initialize.py", "node", "node_modules", "venv", "packages", "go"))
 MODULES = SOURCE / recipe.NODE_EXAMPLE / "node_modules"
-JOB = Path("/srv/catchplate-fast/tmp/serverware-github-app-private.abcdef12")
+JOB = Path("/srv/catchplate-fast/tmp/catchplate-github-app-private.abcdef12")
 ARGS = (SOURCE, BINARY, INITIALIZER, JOB, NODE, MODULES, PYTHON, PACKAGES, GO)
 PINS = {"expected_binary_sha256": "a" * 64, "expected_go_sha256": "b" * 64}
 
@@ -80,14 +80,14 @@ class RecipeTests(unittest.TestCase):
                 if leaf in private:
                     observed.add(leaf)
                     self.assertEqual((name, mount["target"], mount["read_only"]), ("check", private[leaf], True))
-                if name in {"serverware", "decision-gate-rs", "github"}:
+                if name in {"catchplate", "decision-gate-rs", "github"}:
                     self.assertNotIn(leaf, private)
         self.assertEqual(observed, set(private))
         provider_targets = {m["target"] for m in self.config["services"]["github"]["volumes"]}
         self.assertTrue({"/github/app-public.pem", "/github/app-replacement-public.pem"} <= provider_targets)
-        app = self.config["services"]["serverware"]
+        app = self.config["services"]["catchplate"]
         self.assertEqual(app["environment"]["SSL_CERT_FILE"], "/github-public/ca.pem")
-        self.assertEqual(app["command"], ["python", "-B", "-m", "serverware.operator_demo_runner"])
+        self.assertEqual(app["command"], ["python", "-B", "-m", "catchplate.operator_demo_runner"])
         self.assertEqual(self.config["services"]["github-pki"]["command"],
             ["python", "-B", "-m", "scripts.operator_github_app_examples_fixture", "--setup"])
         check = self.config["services"]["check"]
@@ -102,7 +102,7 @@ class RecipeTests(unittest.TestCase):
         recipe.validate(self.config, *ARGS, **PINS)
         for kind in ("ports", "network", "key", "ssl", "command", "memory"):
             value = deepcopy(self.config)
-            app = value["services"]["serverware"]
+            app = value["services"]["catchplate"]
             if kind == "ports": app["ports"] = ["3000:3000"]
             elif kind == "network": app["network_mode"] = "host"
             elif kind == "key": app["volumes"].append(recipe.bind(Path("/live/key.pem"), "/live-key"))
@@ -118,7 +118,7 @@ class RecipeTests(unittest.TestCase):
         run.save, run.wait_edge_ready = Mock(), Mock()
         for kind in ("none", "missing", "namespace", "tls", "bind", "cmd", "cpu", "cap", "restart", "age"):
             changed = deepcopy(rows)
-            row = next(r for r in changed if r["Config"]["Labels"]["com.docker.compose.service"] == "serverware")
+            row = next(r for r in changed if r["Config"]["Labels"]["com.docker.compose.service"] == "catchplate")
             if kind == "missing": changed.pop()
             elif kind == "namespace": row["HostConfig"]["NetworkMode"] = "host"
             elif kind == "tls": row["Config"]["Env"].append("PYTHONHTTPSVERIFY=0")

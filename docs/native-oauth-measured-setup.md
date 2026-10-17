@@ -36,7 +36,7 @@ checked again at actual signed writer receipts, not trusted from browser input.
 
 The native origin serves the fixed begin/draft/authorize/callback routes.
 It returns `#nativeOAuthSetupDraft=` to the portal with the distinct
-`serverware.nativeOAuthSetupDraft/v1` document. The portal obtains genuine
+`catchplate.nativeOAuthSetupDraft/v1` document. The portal obtains genuine
 hardware consent and returns exact writer originals to the native origin.
 Only verified consent permits helper-only client opening and provider redirect.
 The native page accepts only its Setup authorization-redirect schema.

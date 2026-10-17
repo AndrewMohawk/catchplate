@@ -19,25 +19,25 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
+from catchplate import authority_contract
 
 
 SIGNATURES = {
-    "serverware_policy_authority_issue_capability": ("text",) * 4,
-    "serverware_policy_authority_issue_writer_capability": ("text",) * 5,
-    "serverware_policy_authority_record_witness_receipt": ("text",) * 4,
+    "catchplate_policy_authority_issue_capability": ("text",) * 4,
+    "catchplate_policy_authority_issue_writer_capability": ("text",) * 5,
+    "catchplate_policy_authority_record_witness_receipt": ("text",) * 4,
 }
 ARGUMENTS = {
-    "serverware_policy_authority_issue_capability": ("capability_json", "supplied_capability_digest",
+    "catchplate_policy_authority_issue_capability": ("capability_json", "supplied_capability_digest",
         "supplied_issuer_measurement_digest", "supplied_issuer_attestation_receipt_digest"),
-    "serverware_policy_authority_issue_writer_capability": ("capability_json", "supplied_capability_digest",
+    "catchplate_policy_authority_issue_writer_capability": ("capability_json", "supplied_capability_digest",
         "supplied_issuer_measurement_digest", "supplied_issuer_attestation_receipt_digest",
         "supplied_issuer_credential_issuance_digest"),
-    "serverware_policy_authority_record_witness_receipt": ("witness_receipt_json", "supplied_witness_receipt_digest",
+    "catchplate_policy_authority_record_witness_receipt": ("witness_receipt_json", "supplied_witness_receipt_digest",
         "supplied_issuer_measurement_digest", "supplied_issuer_attestation_receipt_digest"),
 }
 TRANSACTION_SQL = "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE NOT DEFERRABLE"
-SEARCH_PATH_SQL = "SET search_path TO serverware_metadata, pg_catalog, pg_temp"
+SEARCH_PATH_SQL = "SET search_path TO catchplate_metadata, pg_catalog, pg_temp"
 
 
 def read_source(relative, maximum=2 * 1024 * 1024):
@@ -78,10 +78,10 @@ def constant_sql(node, variable):
 class AuthorityIssuerSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.db_source, cls.db = read_source("serverware/db.py", 16 * 1024 * 1024)
-        cls.schema_source, cls.schema = read_source("serverware/authority_store/schema.py")
-        cls.service_source, cls.service = read_source("serverware/authority_service.py")
-        cls.executor_source, cls.executor = read_source("serverware/authority_store/executor_v9.py")
+        cls.db_source, cls.db = read_source("catchplate/db.py", 16 * 1024 * 1024)
+        cls.schema_source, cls.schema = read_source("catchplate/authority_store/schema.py")
+        cls.service_source, cls.service = read_source("catchplate/authority_service.py")
+        cls.executor_source, cls.executor = read_source("catchplate/authority_store/executor_v9.py")
         cls.migration_source, cls.migration = read_source("scripts/authority/migrate_v8_to_v9.py")
         cls.seal = named(cls.db, ast.FunctionDef, "_seal_postgres_schema_acl")
         cls.connector = named(cls.db, ast.FunctionDef, "_policy_authority_capability_issuer_pg_connect_raw")
@@ -111,7 +111,7 @@ class AuthorityIssuerSourceTests(unittest.TestCase):
         installer = named(self.executor, ast.FunctionDef, "install_authority_v9_executor")
         for name in sorted(SIGNATURES):
             source = (ast.get_source_segment(self.db_source, guard)
-                if name == "serverware_policy_authority_issue_capability"
+                if name == "catchplate_policy_authority_issue_capability"
                 else ast.get_source_segment(self.executor_source, installer))
             matches = re.findall(r"CREATE\s+OR\s+REPLACE\s+FUNCTION\s+\{\w+\}\.\s*"
                 + re.escape(name) + r"\s*\((.*?)\)\s*RETURNS\s+text\s+LANGUAGE\s+plpgsql\s+SECURITY\s+DEFINER",
@@ -121,7 +121,7 @@ class AuthorityIssuerSourceTests(unittest.TestCase):
             self.assertEqual(actual, tuple(zip(ARGUMENTS[name], SIGNATURES[name])))
         source = ast.get_source_segment(self.executor_source, installer)
         self.assertRegex(source, r"DROP FUNCTION IF EXISTS \{namespace\}\.\s*"
-            r"serverware_policy_authority_issue_writer_capability\(\s*text, text, text, text\s*\)")
+            r"catchplate_policy_authority_issue_writer_capability\(\s*text, text, text, text\s*\)")
 
     def test_signature_tuple_and_all_four_authority_callers_derive_from_the_actual_contract(self):
         self.assert_shape(assignment(self.db,
@@ -180,7 +180,7 @@ class AuthorityIssuerSourceTests(unittest.TestCase):
                 or any(type(argument) is not str or argument != 'text' for argument in entry[1])
                 for entry in authority_capability_issuer_function_signatures)
             or ((authority_capability_issuer_function_signatures or schema in
-                {_POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME, 'serverware_candidate_authority_expected_v9'})
+                {_POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME, 'catchplate_candidate_authority_expected_v9'})
                 and authority_capability_issuer_function_signatures
                     != _POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTION_SIGNATURES)
         """)
@@ -433,9 +433,9 @@ class AuthorityIssuerSourceTests(unittest.TestCase):
 
     def test_both_real_service_callers_check_results_before_caller_owned_transaction_exit(self):
         cases = (("_handle_issue", "database capability issuance failed",
-                  "serverware_policy_authority_issue_writer_capability", 5),
+                  "catchplate_policy_authority_issue_writer_capability", 5),
                  ("_handle_record_witness_receipt", "database witness receipt persistence failed",
-                  "serverware_policy_authority_record_witness_receipt", 4))
+                  "catchplate_policy_authority_record_witness_receipt", 4))
         for name, message, function_name, count in cases:
             with self.subTest(handler=name):
                 method = named(self.process, ast.FunctionDef, name)

@@ -7,7 +7,7 @@ test, database, service or TLS verification has executed for this tree.
 
 `RevocationPlannerPersistence` now requires a seventh immutable configuration
 item: `(databaseRole, tlsClientDn, tlsClientSerial, tlsIssuerDn)`. The role is
-exactly `serverware_policy_authority_planner_writer`. Each TLS pin is an exact,
+exactly `catchplate_policy_authority_planner_writer`. Each TLS pin is an exact,
 nonempty, NUL-free string within 4,096 UTF-8 bytes. Neither a retained signed
 plan nor a successful connection supplies these expectations. Existing public
 keys remain at indices two/three and signing identities at four/five.

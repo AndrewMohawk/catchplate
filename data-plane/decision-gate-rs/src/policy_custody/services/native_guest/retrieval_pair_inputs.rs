@@ -5,9 +5,9 @@ use std::fs::File;
 use std::io::Write;
 use std::os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd};
 use std::os::unix::fs::{FileExt,MetadataExt};
-const PRECREATE_DOMAIN:&[u8]=b"serverware.nativeShadowRetrievalPairPrecreation.signature/v1\0";
-const RELEASE_DOMAIN:&[u8]=b"serverware.nativeShadowRetrievalPairRelease.signature/v1\0";
-const SOURCE:&str="/opt/serverware/native-shadow-custody-guest.elf";
+const PRECREATE_DOMAIN:&[u8]=b"catchplate.nativeShadowRetrievalPairPrecreation.signature/v1\0";
+const RELEASE_DOMAIN:&[u8]=b"catchplate.nativeShadowRetrievalPairRelease.signature/v1\0";
+const SOURCE:&str="/opt/catchplate/native-shadow-custody-guest.elf";
 const MAX_EXECUTABLE:usize=64*1024*1024;
 const SEALS:i32=libc::F_SEAL_WRITE|libc::F_SEAL_GROW|libc::F_SEAL_SHRINK|libc::F_SEAL_SEAL;
 
@@ -58,7 +58,7 @@ impl Admission {
         let configuration=Original::retrieval_pair_configuration().map_err(fail)?;
         let configuration_bytes=configuration.read(32768).map_err(fail)?.to_vec();
         let config:Configuration=exact(&configuration_bytes)?;
-        require(config.api_version=="serverware.nativeShadowRetrievalPairConfiguration/v1")?;
+        require(config.api_version=="catchplate.nativeShadowRetrievalPairConfiguration/v1")?;
         let raw=public(&config.authority.public_key_base64url)?;
         require(Sha256Digest::compute(&raw)==config.authority.key_id)?;
         let key=VerifyingKey::from_bytes(&raw).map_err(fail)?;
@@ -66,7 +66,7 @@ impl Admission {
         let mut identities=[(0,0);2];
         for (i,original) in cold.iter().enumerate() {
             let c:super::super::super::super::Configuration=exact(&original.read(65536).map_err(fail)?)?;
-            require(c.api_version=="serverware.policyCustodyGuestConfiguration/v1"
+            require(c.api_version=="catchplate.policyCustodyGuestConfiguration/v1"
                 && c.service_role==super::super::super::super::Role::ProductionBridge
                 && c.authority.key_id==config.authority.key_id && c.authority.public_key_base64url==config.authority.public_key_base64url
                 && c.uid>0 && c.gid>0 && c.uid!=u32::MAX && c.gid!=u32::MAX
@@ -78,7 +78,7 @@ impl Admission {
         let precreation=Original::retrieval_pair_precreation().map_err(fail)?;
         let precreation_bytes=precreation.read(32768).map_err(fail)?.to_vec();
         let signed:Precreation=exact(&precreation_bytes)?;
-        require(signed.api_version=="serverware.nativeShadowRetrievalPairPrecreation/v1")?;
+        require(signed.api_version=="catchplate.nativeShadowRetrievalPairPrecreation/v1")?;
         verify(&key,PRECREATE_DOMAIN,&signed.payload,&signed.signature_base64url)?;
         let w=&signed.payload;let domain=process.domain();
         let boot=URL_SAFE_NO_PAD.decode(&w.boot_id_base64url).map_err(fail)?;
@@ -117,7 +117,7 @@ impl Admission {
         self.check_startup()?;let release:Release=exact(bytes)?;
         verify(&self.key,RELEASE_DOMAIN,&release.payload,&release.signature_base64url)?;
         let p=release.payload;
-        require(p.api_version=="serverware.nativeShadowRetrievalPairRelease/v1"
+        require(p.api_version=="catchplate.nativeShadowRetrievalPairRelease/v1"
             && p.configuration_sha256==self.configuration_sha256() && p.precreation_sha256==self.precreation_sha256()
             && p.observation_sha256==Sha256Digest::compute(observed) && p.invocation_id==self.window.invocation_id
             && p.signing_key_id==self.config.authority.key_id)?;
@@ -145,7 +145,7 @@ impl Executable {
         admission.check_startup()?;
         let source=Original::open(std::path::Path::new(SOURCE),0,0,MAX_EXECUTABLE,admission.executable_sha256().clone()).map_err(fail)?;
         let bytes=source.read(MAX_EXECUTABLE).map_err(fail)?;
-        serverware_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&bytes).map_err(fail)?;
+        catchplate_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&bytes).map_err(fail)?;
         let raw=unsafe{libc::syscall(libc::SYS_memfd_create,c"native-shadow-pair-executable".as_ptr(),
             libc::MFD_CLOEXEC|libc::MFD_ALLOW_SEALING)};
         require(raw>=0)?;let mut file=unsafe{File::from_raw_fd(raw as i32)};

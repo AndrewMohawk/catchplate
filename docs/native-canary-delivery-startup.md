@@ -9,7 +9,7 @@ or turn canary observations into OAuth or release authority.
 
 The image selector `--measured-canary-delivery-v19` maps only to the fixed gate
 selector `--native-measured-canary-delivery-startup-v19`. The decoder accepts
-only `serverware.nativeStartupConfiguration/v19` for that mode, with exactly
+only `catchplate.nativeStartupConfiguration/v19` for that mode, with exactly
 the v18 fields plus required nonnull `measuredCanaryDelivery` (23 total).
 No version is inferred from an incoming request or an optional field. V1–v18
 retain their wire grammars and internal canary input `None`; old selectors refuse

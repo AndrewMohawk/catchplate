@@ -238,8 +238,8 @@ fn audit_retry_lost_ack_keeps_exact_batch_separate_from_fresh_events() {
         let (stream, replay) = receive(&listener);
         assert_eq!(original.body, replay.body);
         assert_ne!(
-            original.headers["x-serverware-response-nonce"],
-            replay.headers["x-serverware-response-nonce"]
+            original.headers["x-catchplate-response-nonce"],
+            replay.headers["x-catchplate-response-nonce"]
         );
         commit_or_replay(&replay, &mut stored);
         acknowledge(stream, &replay, &key, &snapshot, StatusCode::OK);

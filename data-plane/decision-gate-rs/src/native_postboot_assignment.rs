@@ -5,7 +5,7 @@
 //! independent audit owner must verify the original signature and all joins.
 
 use super::{strict_json_value_from_slice, NativeRuntimeLifetimeV1};
-use serverware_decision_gate::enclave_vsock_v1::{VsockListenerV1, VsockStreamV1};
+use catchplate_decision_gate::enclave_vsock_v1::{VsockListenerV1, VsockStreamV1};
 use std::io;
 use std::time::Duration;
 
@@ -14,7 +14,7 @@ const NITRO_PARENT_CID: u32 = 3;
 // policy payload has a separate 2 MiB bound, enforced by the audit verifier.
 const MAX_SIGNED_POLICY_BYTES: usize = 3 * 1024 * 1024;
 const WAIT_SLICE: Duration = Duration::from_millis(20);
-const SCHEMA: &str = "serverware.signedMeasuredAuditAuthorityPolicy/v1";
+const SCHEMA: &str = "catchplate.signedMeasuredAuditAuthorityPolicy/v1";
 
 enum Purpose { Audit, JitReview, JitReviewOpen }
 
@@ -55,10 +55,10 @@ impl<'a> Receiver<'a> {
         let Self { listener, lifetime, port, purpose } = self;
         let (maximum, schema, signature_field) = match purpose {
             Purpose::Audit => (MAX_SIGNED_POLICY_BYTES, SCHEMA, "signatureBase64Url"),
-            Purpose::JitReview => (serverware_decision_gate::native_jit_review_v1::MAX_ASSIGNMENT,
-                serverware_decision_gate::native_jit_review_v1::SIGNED_ASSIGNMENT, "signature"),
-            Purpose::JitReviewOpen => (serverware_decision_gate::native_jit_review_open_v1::MAX_ASSIGNMENT,
-                serverware_decision_gate::native_jit_review_open_v1::SIGNED_ASSIGNMENT, "signature"),
+            Purpose::JitReview => (catchplate_decision_gate::native_jit_review_v1::MAX_ASSIGNMENT,
+                catchplate_decision_gate::native_jit_review_v1::SIGNED_ASSIGNMENT, "signature"),
+            Purpose::JitReviewOpen => (catchplate_decision_gate::native_jit_review_open_v1::MAX_ASSIGNMENT,
+                catchplate_decision_gate::native_jit_review_open_v1::SIGNED_ASSIGNMENT, "signature"),
         };
         lifetime.check()?;
         let accepted = listener.accept_cancellable(lifetime.deadline(), lifetime.stopped_flag());

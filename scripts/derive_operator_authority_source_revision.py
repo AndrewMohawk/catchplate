@@ -25,7 +25,7 @@ import migrate_operator_authority_source_revision as migration
 
 COMMITS = {"old": migration.OLD_COMMIT, "target": migration.TARGET_COMMIT}
 IMAGE = migration.IMAGE
-SCHEMA = "serverware.operatorAuthoritySourceRevisionDerivation/v1"
+SCHEMA = "catchplate.operatorAuthoritySourceRevisionDerivation/v1"
 PIN_SCHEMA = migration.PIN_SCHEMA
 MAX_OUTPUT = 32 * 1024 * 1024
 
@@ -52,11 +52,11 @@ def objects(conn):
 def derive(side, *, expected_counts=(217, 218, 186)):
     source = Path("/app")
     require(source.is_dir() and not source.is_symlink()
-        and not any(name == "serverware" or name.startswith("serverware.")
-            or name == "serverware_agent_trust" or name.startswith("serverware_agent_trust.")
+        and not any(name == "catchplate" or name.startswith("catchplate.")
+            or name == "catchplate_agent_trust" or name.startswith("catchplate_agent_trust.")
             for name in sys.modules))
     for name in tuple(os.environ):
-        if name.startswith("SERVERWARE_"):
+        if name.startswith("CATCHPLATE_"):
             del os.environ[name]
     os.umask(0o077)
     os.environ["TMPDIR"] = "/tmp"
@@ -77,7 +77,7 @@ def derive(side, *, expected_counts=(217, 218, 186)):
                 raise RuntimeError("derivation network/process access refused")
             if event == "sqlite3.connect":
                 raw = args[0]
-                require(raw == ":memory:" or raw == (base / "data/serverware.sqlite3").as_uri() + "?mode=ro"
+                require(raw == ":memory:" or raw == (base / "data/catchplate.sqlite3").as_uri() + "?mode=ro"
                     or (isinstance(raw, (str, os.PathLike))
                     and Path(raw).is_absolute() and Path(raw).resolve().is_relative_to(base)))
             if event == "compile" and isinstance(args[1], str) and args[1].startswith("/app/"):
@@ -100,17 +100,17 @@ def derive(side, *, expected_counts=(217, 218, 186)):
         directory.mkdir(mode=0o700)
         provider_custody = base / "provider-custody"
         provider_custody.mkdir(mode=0o700)
-        os.environ.update(SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED="1",
-            SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR=str(provider_custody),
-            SERVERWARE_DECISION_GATE_BASE="")
-        from serverware import operator_google_managed_config
+        os.environ.update(CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED="1",
+            CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR=str(provider_custody),
+            CATCHPLATE_DECISION_GATE_BASE="")
+        from catchplate import operator_google_managed_config
         operator_google_managed_config.bootstrap()
         config, db, _store, _bundles, _catalog, _inputs, _mutations = ordinary.backend()
-        require(os.environ.get("SERVERWARE_CONTROL_PLANE_STARTUP_VALIDATED_PID") == str(os.getpid()))
+        require(os.environ.get("CATCHPLATE_CONTROL_PLANE_STARTUP_VALIDATED_PID") == str(os.getpid()))
         require(not operator_google_managed_config.selected())
-        from serverware import authority_contract
-        from serverware.authority_store import metadata_schema_source
-        from serverware.authority_store.metadata_schema import configure_sqlite_metadata_connection
+        from catchplate import authority_contract
+        from catchplate.authority_store import metadata_schema_source
+        from catchplate.authority_store.metadata_schema import configure_sqlite_metadata_connection
         ddl = metadata_schema_source.metadata_schema_source()
         with closing(sqlite3.connect(config.DB_PATH)) as conn:
             configure_sqlite_metadata_connection(conn)
@@ -152,19 +152,19 @@ def derive(side, *, expected_counts=(217, 218, 186)):
                 and not any(conn.execute('SELECT 1 FROM "' + name + '" LIMIT 1').fetchone() for name in witness_tables))
         operation_document = authority_contract.operation_contract_document()
         for name, module in tuple(sys.modules.items()):
-            if name == "serverware" or name.startswith("serverware.") or name == "serverware_agent_trust" or name.startswith("serverware_agent_trust."):
+            if name == "catchplate" or name.startswith("catchplate.") or name == "catchplate_agent_trust" or name.startswith("catchplate_agent_trust."):
                 path = Path(module.__file__).resolve(strict=True)
                 require(path.is_relative_to(source) and path.suffix == ".py")
                 relative = str(path.relative_to(source))
                 require(relative in compiled and compiled[relative] == sha(path.read_bytes()))
-        require(compiled and any(name.startswith("serverware_agent_trust/") for name in compiled))
+        require(compiled and any(name.startswith("catchplate_agent_trust/") for name in compiled))
         require(all(sha((source / name).read_bytes()) == digest for name, digest in compiled.items()))
         require(not list(provider_custody.iterdir()) and not list(x_custody.iterdir()))
         require((len(tables), len(optional_tables), len(empty)) == expected_counts)
         pins = {"sourceContractDigest": contract["source_contract_digest"],
             "operationManifestDigest": authority_contract.OPERATION_MANIFEST_DIGEST,
             "sourceRevision": authority_contract.SOURCE_REVISION, "schemaVersion": authority_contract.SCHEMA_VERSION,
-            "sourceDdlSha256": sha((source / "serverware/authority_store/metadata_schema_source.py").read_bytes()),
+            "sourceDdlSha256": sha((source / "catchplate/authority_store/metadata_schema_source.py").read_bytes()),
             "emittedDdlSha256": sha(ddl.encode()), "structuralManifestDigest": manifest_digest,
             "structuralManifestJsonSha256": sha(manifest.encode()), "sqliteObjectsSha256": sha(canonical(base_objects)),
             "tables": tables, "emptyTables": empty, "optionalSqliteObjectsSha256": sha(canonical(optional_objects)),

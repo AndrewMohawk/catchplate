@@ -9,12 +9,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const CHANNEL: &str = "serverware.nativeOAuthPendingRetirementChannel/v1";
-pub const TLS: &str = "serverware.nativeOAuthPendingRetirementTls/v1";
-pub const SCHEMA: &str = "serverware.nativeOAuthPendingRetirementStatement/v1";
-pub const ATTESTATION_DOMAIN: &[u8] = b"serverware/native-oauth-pending-retirement-attestation/v1\0";
-pub const HTTP_REQUEST: &str = "serverware.nativeOAuthPendingRetirementRequest/v1";
-pub const HTTP_RESPONSE: &str = "serverware.nativeOAuthPendingRetirementResponse/v1";
+pub const CHANNEL: &str = "catchplate.nativeOAuthPendingRetirementChannel/v1";
+pub const TLS: &str = "catchplate.nativeOAuthPendingRetirementTls/v1";
+pub const SCHEMA: &str = "catchplate.nativeOAuthPendingRetirementStatement/v1";
+pub const ATTESTATION_DOMAIN: &[u8] = b"catchplate/native-oauth-pending-retirement-attestation/v1\0";
+pub const HTTP_REQUEST: &str = "catchplate.nativeOAuthPendingRetirementRequest/v1";
+pub const HTTP_RESPONSE: &str = "catchplate.nativeOAuthPendingRetirementResponse/v1";
 pub const HTTP_PATH: &str = "/api/data-plane/oauth-pending-retirement";
 
 fn fields(value: &Value, names: &[&str]) -> Result<(), String> {
@@ -42,7 +42,7 @@ impl Target {
         let value = crate::native_oauth_refresh_v1::response_document(&raw)?;
         fields(&value, &["schema","payload","signatureBase64Url"])?;
         ensure(canonical_ascii_bytes(&value)? == raw
-            && value["schema"] == "serverware.signedOAuthMeasuredPendingRetirementAuthorization/v1",
+            && value["schema"] == "catchplate.signedOAuthMeasuredPendingRetirementAuthorization/v1",
             "pending retirement signed grant family differs")?;
         let grant = &value["payload"];
         fields(grant, &["schema","sourceRevision","purpose","authorizationId","configurationDigest","deploymentId",
@@ -51,7 +51,7 @@ impl Target {
             "tokenEnvelopeSha256","tokenSecretSha256","providerId","clientId","clientMaterialSha256","providerConfiguration",
             "tokenPurposes","familyScope","affectedLineages","applicationMaterialSha256","providerTlsRootSha256",
             "holderId","reason","issuedAtEpochNs","expiresAtEpochNs"])?;
-        ensure(grant["schema"] == "serverware.oauthMeasuredPendingRetirementAuthorization/v1"
+        ensure(grant["schema"] == "catchplate.oauthMeasuredPendingRetirementAuthorization/v1"
             && grant["purpose"] == "measured-oauth-staged-pending-family-retirement"
             && matches!(grant["reason"].as_str(), Some("cancelled" | "expired" | "rejected")),
             "pending retirement purpose differs")?;
@@ -90,7 +90,7 @@ pub struct Configuration {
 }
 impl Configuration {
     pub fn validate(&self) -> Result<(), String> {
-        ensure(self.api_version == "serverware.nativeOAuthPendingRetirementConfiguration/v1"
+        ensure(self.api_version == "catchplate.nativeOAuthPendingRetirementConfiguration/v1"
             && !self.source_revision.is_empty() && self.source_revision.len() <= 128
             && current::digest(&self.authority_root_spki_sha256) && current::digest(&self.control_plane_configuration_digest)
             && current::identifier(&self.deployment_id) && self.deployment_id.len() <= 128

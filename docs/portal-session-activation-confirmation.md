@@ -47,7 +47,7 @@ The new `portal_session_activation_confirmation_routes.py` exports `router`,
 cookie-only CSRF check before generic authentication/body handling.
 
 The request is closed to `schema`, `purpose` and `localDigest`: schema
-`serverware.oidcSessionActivationConfirmationRequest/v1`, purpose
+`catchplate.oidcSessionActivationConfirmationRequest/v1`, purpose
 `confirm-current-oidc-session`. It is capped at 1 KiB, requires one exact
 Content-Length and JSON content type, and rejects queries, encodings and extra
 fields. The locator supplies no subject, session, token, checkpoint or authority.
@@ -70,7 +70,7 @@ endpoint through its thread pool; the owner-lock acquisition refuses immediately
 when busy, without claiming nonblocking filesystem, proof or database work.
 
 The six-field response is schema
-`serverware.oidcSessionActivationConfirmationResponse/v1`, the same purpose and
+`catchplate.oidcSessionActivationConfirmationResponse/v1`, the same purpose and
 locator, `status: current-target-active`, `sessionState: active` and
 `automaticRetryAllowed: false`. Failure uses unknown session/status and never
 echoes private errors. It exposes no user/session/credential IDs or token.

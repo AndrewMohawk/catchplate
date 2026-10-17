@@ -23,19 +23,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
-from serverware.authority_audit_inventory import (
+from catchplate import authority_contract
+from catchplate.authority_audit_inventory import (
     AuditInventoryError,
     AuditInventoryObservation,
     _InventoryRootFrontier,
     verify_audit_inventory,
 )
-from serverware.authority_radix_mutation import PrimaryRadixMutationError, PrimaryRoot
+from catchplate.authority_radix_mutation import PrimaryRadixMutationError, PrimaryRoot
 
 
 TABLE = "metadata_audit_outbox"
-SCHEMA = "serverware.metadataAuditOutboxInventoryObservation/v2"
-PROOF_SCHEMA = "serverware.policyAuthorityRadixMultiproof/v3"
+SCHEMA = "catchplate.metadataAuditOutboxInventoryObservation/v2"
+PROOF_SCHEMA = "catchplate.policyAuthorityRadixMultiproof/v3"
 MAX_INTEGER = 2**63 - 1
 MIN_INTEGER = -(2**63)
 
@@ -68,7 +68,7 @@ def wire_digest(domain, *frames):
 
 
 def tree_key(identifier):
-    return sql_digest("serverware.policyAuthorityAuthenticatedKey/v1",
+    return sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1",
         TABLE.encode("ascii"), sql_json({"id": identifier}))
 
 
@@ -99,16 +99,16 @@ class InventoryTree:
         self.rows = {sql_json({"id": row["id"]}): copy.deepcopy(row) for row in rows}
         if len(self.rows) != len(rows):
             raise AssertionError("duplicate fixture row")
-        self.empty = {64: sql_digest("serverware.policyAuthorityAuthenticatedEmptyLeaf/v1", b"64")}
+        self.empty = {64: sql_digest("catchplate.policyAuthorityAuthenticatedEmptyLeaf/v1", b"64")}
         for depth in range(63, -1, -1):
-            self.empty[depth] = sql_digest("serverware.policyAuthorityAuthenticatedNode/v1",
+            self.empty[depth] = sql_digest("catchplate.policyAuthorityAuthenticatedNode/v1",
                 str(depth).encode("ascii"), sql_json([self.empty[depth + 1]] * 16))
         self.nodes, self.leaves = {}, {}
         for key_bytes, row in self.rows.items():
             address = tree_key(row["id"])
-            row_digest = sql_digest("serverware.policyAuthorityAuthenticatedRow/v1",
+            row_digest = sql_digest("catchplate.policyAuthorityAuthenticatedRow/v1",
                 TABLE.encode("ascii"), sql_json(row))
-            leaf = sql_digest("serverware.policyAuthorityAuthenticatedLeaf/v1",
+            leaf = sql_digest("catchplate.policyAuthorityAuthenticatedLeaf/v1",
                 TABLE.encode("ascii"), address.encode("ascii"), key_bytes, row_digest.encode("ascii"))
             self.leaves[address] = (row_digest, leaf)
             self.nodes[(64, address[7:])] = leaf
@@ -117,7 +117,7 @@ class InventoryTree:
             for prefix in prefixes:
                 children = [self.nodes.get((depth + 1, prefix + format(index, "x")), self.empty[depth + 1])
                     for index in range(16)]
-                self.nodes[(depth, prefix)] = sql_digest("serverware.policyAuthorityAuthenticatedNode/v1",
+                self.nodes[(depth, prefix)] = sql_digest("catchplate.policyAuthorityAuthenticatedNode/v1",
                     str(depth).encode("ascii"), sql_json(children))
         self.root = PrimaryRoot(TABLE, len(rows) if revision is None else revision,
             self.nodes.get((0, ""), self.empty[0]), len(rows))
@@ -126,7 +126,7 @@ class InventoryTree:
         key = {"id": identifier}
         row = self.rows.get(sql_json(key))
         selected = {"table": TABLE, "key": key,
-            "keyDigest": wire_digest("serverware.policyAuthorityBusinessKey/v1",
+            "keyDigest": wire_digest("catchplate.policyAuthorityBusinessKey/v1",
                 TABLE.encode("ascii"), wire_json(key)),
             "present": row is not None, "row": copy.deepcopy(row), "contractSelector": None}
         address, path = tree_key(identifier), tree_key(identifier)[7:]
@@ -154,7 +154,7 @@ def independent_sparse_root(leaf_by_path):
         for prefix in prefixes:
             children = [nodes.get((depth + 1, prefix + format(index, "x")), empty[depth + 1])
                         for index in range(16)]
-            nodes[(depth, prefix)] = sql_digest("serverware.policyAuthorityAuthenticatedNode/v1",
+            nodes[(depth, prefix)] = sql_digest("catchplate.policyAuthorityAuthenticatedNode/v1",
                 str(depth).encode("ascii"), sql_json(children))
     return nodes.get((0, ""), empty[0])
 
@@ -183,7 +183,7 @@ class AuditInventoryTests(unittest.TestCase):
         self.assertEqual(result.json_projection(), expected)
         self.assertEqual(result.digest, wire_digest(SCHEMA, wire_json(expected)))
         self.assertNotEqual(result.digest, sql_digest(SCHEMA, wire_json(expected)))
-        previous = {**expected, "schema": "serverware.metadataAuditOutboxInventoryObservation/v1"}
+        previous = {**expected, "schema": "catchplate.metadataAuditOutboxInventoryObservation/v1"}
         self.assertNotEqual(result.digest, wire_digest(previous["schema"], wire_json(previous)))
 
     def test_historical_text_ids_nullable_columns_and_signed_bigints_remain_valid(self):
@@ -307,7 +307,7 @@ class AuditInventoryTests(unittest.TestCase):
                 ("rowDigest", "sha256:" + "b" * 64, True),
                 ("leafDigest", "sha256:" + "b" * 64, True),
                 ("keyDigest", "sha256:" + "b" * 64, True), ("present", False, True),
-                ("schema", "serverware.policyAuthorityRadixMultiproof/v2", True)):
+                ("schema", "catchplate.policyAuthorityRadixMultiproof/v2", True)):
             records = copy.deepcopy(self.records)
             records[0]["proof"][field] = value
             if refresh:

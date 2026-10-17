@@ -15,7 +15,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts import native_pilot_genesis_install_runtime_entrypoint as entry
 from scripts import native_pilot_runtime_artifacts as artifact
-from serverware import native_pilot_genesis_installer_process as process
+from catchplate import native_pilot_genesis_installer_process as process
 
 p = process.p
 

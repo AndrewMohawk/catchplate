@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.local/schemas/policy-bundle.v1.schema.json",
-  "title": "Serverware PolicyBundle v1",
+  "$id": "https://catchplate.local/schemas/policy-bundle.v1.schema.json",
+  "title": "Catchplate PolicyBundle v1",
   "$comment": "Structural validation is necessary but not sufficient. Fail-closed admission must also enforce unique IDs and references; exact credential-to-adapter provider, subject, client-ID, scope, injection, and app binding; canonical CIDR round trips; safe bounded pattern compilation; requestValue-to-adapter field membership; response-header rule membership; minimum/maximum ordering; atomic shared-budget semantics; and cursor lineage/replay invariants. Any unavailable or unknown semantic check denies the bundle.",
   "type": "object",
   "required": ["apiVersion", "kind", "metadata", "defaults", "principals", "credentials", "routes"],
@@ -24,8 +24,8 @@
     },
     "then": {
       "properties": {
-        "apiVersion": {"const": "serverware.policy/v1"},
-        "metadata": {"properties": {"id": {"const": "serverware-operator-demo"}}}
+        "apiVersion": {"const": "catchplate.policy/v1"},
+        "metadata": {"properties": {"id": {"const": "catchplate-operator-demo"}}}
       }
     }
   }],
@@ -34,7 +34,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "enrollmentId", "enrollmentExpiresAtEpochMs", "rotatedAtEpochMs"],
       "properties": {
-        "schema": {"const": "serverware.proxyTokenRenewal/v1"},
+        "schema": {"const": "catchplate.proxyTokenRenewal/v1"},
         "enrollmentId": {"type": "string", "minLength": 36, "maxLength": 36, "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
         "enrollmentExpiresAtEpochMs": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
         "rotatedAtEpochMs": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
@@ -312,7 +312,7 @@
                   "upgrade"
                 ]
               },
-              {"pattern": "^x-serverware-"}
+              {"pattern": "^x-catchplate-"}
             ]
           }
         }
@@ -644,7 +644,7 @@
       "additionalProperties": false,
       "properties": {
         "type": {"const": "hostTrustedApproval"},
-        "schema": {"const": "serverware.hostTrustedApprovalPolicy/v1"},
+        "schema": {"const": "catchplate.hostTrustedApprovalPolicy/v1"},
         "pendingTtlSeconds": {"type": "integer", "minimum": 30, "maximum": 3600},
         "approvalTtlSeconds": {"type": "integer", "minimum": 1, "maximum": 300}
       }
@@ -1107,7 +1107,7 @@
     }
   },
   "properties": {
-    "apiVersion": {"const": "serverware.policy/v1"},
+    "apiVersion": {"const": "catchplate.policy/v1"},
     "kind": {"const": "PolicyBundle"},
     "metadata": {
       "type": "object",
@@ -1501,7 +1501,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "type": {"const": "gmail.v1"},
-                  "config": {"$ref": "https://serverware.local/schemas/adapters/gmail.v1.schema.json"}
+                  "config": {"$ref": "https://catchplate.local/schemas/adapters/gmail.v1.schema.json"}
                 }
               },
               {
@@ -1510,7 +1510,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "type": {"const": "gmail.read.v1"},
-                  "config": {"$ref": "https://serverware.local/schemas/adapters/gmail.read.v1.schema.json"}
+                  "config": {"$ref": "https://catchplate.local/schemas/adapters/gmail.read.v1.schema.json"}
                 }
               },
               {
@@ -1519,7 +1519,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "type": {"const": "x.v2"},
-                  "config": {"$ref": "https://serverware.local/schemas/adapters/x.v2.schema.json"}
+                  "config": {"$ref": "https://catchplate.local/schemas/adapters/x.v2.schema.json"}
                 }
               },
               {
@@ -1528,56 +1528,56 @@
                 "additionalProperties": false,
                 "properties": {
                   "type": {"const": "npm.registry"},
-                  "config": {"$ref": "https://serverware.local/schemas/adapters/npm.registry.schema.json"}
+                  "config": {"$ref": "https://catchplate.local/schemas/adapters/npm.registry.schema.json"}
                 }
               },
               {
                 "type": "object", "required": ["type", "config"], "additionalProperties": false,
                 "properties": {
                   "type": {"const": "npm.metadata.v1"},
-                  "config": {"$ref": "https://serverware.local/schemas/adapters/npm.metadata.v1.schema.json"}
+                  "config": {"$ref": "https://catchplate.local/schemas/adapters/npm.metadata.v1.schema.json"}
                 }
               },
               {
                 "type": "object", "additionalProperties": false, "required": ["type", "config"],
                 "properties": {
                   "type": {"const": "npm.install.v1"},
-                  "config": {"$ref": "https://serverware.local/schemas/adapters/npm.install.v1.schema.json"}
+                  "config": {"$ref": "https://catchplate.local/schemas/adapters/npm.install.v1.schema.json"}
                 }
               },
               {
                 "type": "object", "required": ["type", "config"], "additionalProperties": false,
                 "properties": {
                   "type": {"const": "x.app_read.v1"},
-                  "config": {"$ref": "https://serverware.local/schemas/adapters/x.app_read.v1.schema.json"}
+                  "config": {"$ref": "https://catchplate.local/schemas/adapters/x.app_read.v1.schema.json"}
                 }
               },
               {
                 "type": "object", "required": ["type", "config"], "additionalProperties": false,
                 "properties": {
                   "type": {"const": "x.post.v1"},
-                  "config": {"$ref": "https://serverware.local/schemas/adapters/x.post.v1.schema.json"}
+                  "config": {"$ref": "https://catchplate.local/schemas/adapters/x.post.v1.schema.json"}
                 }
               },
               {
                 "type": "object", "required": ["type", "config"], "additionalProperties": false,
                 "properties": {
                   "type": {"const": "alchemy.rpc_read.v1"},
-                  "config": {"$ref": "https://serverware.local/schemas/adapters/alchemy.rpc_read.v1.schema.json"}
+                  "config": {"$ref": "https://catchplate.local/schemas/adapters/alchemy.rpc_read.v1.schema.json"}
                 }
               },
               {
                 "type": "object", "required": ["type", "config"], "additionalProperties": false,
                 "properties": {
                   "type": {"const": "aws.ecr.publish.v1"},
-                  "config": {"$ref": "https://serverware.local/schemas/adapters/aws.ecr.publish.v1.schema.json"}
+                  "config": {"$ref": "https://catchplate.local/schemas/adapters/aws.ecr.publish.v1.schema.json"}
                 }
               },
               {
                 "type": "object", "required": ["type", "config"], "additionalProperties": false,
                 "properties": {
                   "type": {"const": "npm.publish.v1"},
-                  "config": {"$ref": "https://serverware.local/schemas/adapters/npm.publish.v1.schema.json"}
+                  "config": {"$ref": "https://catchplate.local/schemas/adapters/npm.publish.v1.schema.json"}
                 }
               },
               {
@@ -1586,7 +1586,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "type": {"const": "generic.rest"},
-                  "config": {"$ref": "https://serverware.local/schemas/adapters/generic.rest.schema.json"}
+                  "config": {"$ref": "https://catchplate.local/schemas/adapters/generic.rest.schema.json"}
                 }
               }
             ]

@@ -15,7 +15,7 @@ const commandArgs = command => JSON.parse(execFileSync('python3', ['-B', '-c',
 {input: command.replace(/\\\r?\n/g, ''), encoding: 'utf8', timeout: 5000, maxBuffer: 65536}));
 const flagValues = (args, flag) => args.flatMap((value, index) => value === flag ? [args[index + 1]] : []);
 function separateProxy(args) {
-  assert.deepEqual(flagValues(args, '--proxy-header'), ['Proxy-Authorization: Bearer $SERVERWARE_PROXY_TOKEN']);
+  assert.deepEqual(flagValues(args, '--proxy-header'), ['Proxy-Authorization: Bearer $CATCHPLATE_PROXY_TOKEN']);
   assert(!flagValues(args, '--header').some(value => /^proxy-authorization:/i.test(value)));
   assert(!args.includes('--insecure') && !args.includes('--proxy-insecure'));
 }
@@ -37,8 +37,8 @@ async function clientArgs(page) {
 }
 
 function generatorChecks() {
-  const {buildCurlCommand} = require('../serverware/operator_demo_web/app.js');
-  const base = {proxyUrl: 'https://proxy.example.test', upstreamUrl: UPSTREAM + '/v1/status', method: 'GET', caPath: './serverware-ca.pem'};
+  const {buildCurlCommand} = require('../catchplate/operator_demo_web/app.js');
+  const base = {proxyUrl: 'https://proxy.example.test', upstreamUrl: UPSTREAM + '/v1/status', method: 'GET', caPath: './catchplate-ca.pem'};
   const generate = overrides => buildCurlCommand({...base, ...overrides});
   for (const args of [commandArgs(generate({})), commandArgs(generate({credentialInput: 'insert', credential: credential()}))]) {
     separateProxy(args); assert(!flagValues(args, '--header').some(value => /^authorization:/i.test(value)));
@@ -56,7 +56,7 @@ function generatorChecks() {
   for (const value of [null, '', 'DUMMY']) assert.throws(() => generate({credentialInput: 'insert', placeholder: value, credential: credential()}));
   for (const value of [null, '', 'replace', 'unknown']) assert.throws(() => generate({credentialInput: value, credential: credential()}));
   for (const item of [null, {auth_type: 'cookie', header_name: 'Cookie'}, ...['Authorization', 'Proxy-Authorization', 'Proxy_Authorization',
-    'Host', 'Content-Type', 'Content-Length', 'Cookie', 'X_Serverware_Admin', 'X-Key\nInjected'].map(header_name => ({auth_type: 'header', header_name}))])
+    'Host', 'Content-Type', 'Content-Length', 'Cookie', 'X_Catchplate_Admin', 'X-Key\nInjected'].map(header_name => ({auth_type: 'header', header_name}))])
     assert.throws(() => generate({credentialInput: 'replace_exact', placeholder: 'DUMMY', credential: item}));
   return {ok: true, groups: 6, scope: 'pure client generator; parsed command arguments only, no shell execution'};
 }

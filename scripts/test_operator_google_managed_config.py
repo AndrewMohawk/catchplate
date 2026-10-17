@@ -26,12 +26,12 @@ import test_operator_publication as coordination
 import test_operator_workspace_store as workspace
 
 ROOT = Path(__file__).resolve().parents[1]
-FLAG = "SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED"
-KEY_DIRECTORY = "SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR"
+FLAG = "CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED"
+KEY_DIRECTORY = "CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR"
 CLIENT = "123-managed-configuration.apps.googleusercontent.com"
 SECRET = "synthetic-managed-configuration-secret-not-public"
 ACTOR = workspace.common._ACTOR
-FORBIDDEN = {"serverware.config", "serverware.db", "serverware.crypto"}
+FORBIDDEN = {"catchplate.config", "catchplate.db", "catchplate.crypto"}
 NETWORK_ATTEMPTS = []
 
 
@@ -68,18 +68,18 @@ def raw_snapshot():
 
 class Fixture(legacy.Fixture):
     def __init__(self):
-        from serverware import operator_google_managed_config as managed
+        from catchplate import operator_google_managed_config as managed
         # Mirror the real runner: bootstrap before activate/config, then the
         # existing fixture invokes the actual control-plane startup sequence.
         managed.bootstrap()
         super().__init__()
-        from serverware import operator_google_managed_selection, operator_provider_custody, operator_provider_key
+        from catchplate import operator_google_managed_selection, operator_provider_custody, operator_provider_key
         self.managed, self.selection = managed, operator_google_managed_selection
         self.custody, self.keys = operator_provider_custody, operator_provider_key
 
     def payload(self, **changes):
         value = self.setup.review_configuration(ACTOR)
-        assert value["schema"] == "serverware.operatorGoogleManagedSetupReview/v2" and value["eligible"]
+        assert value["schema"] == "catchplate.operatorGoogleManagedSetupReview/v2" and value["eligible"]
         return {key: value[key] for key in (
             "expected_revision", "expected_policy_hash", "expected_settings_digest")} | {
                 "operation_id": str(uuid.uuid4()), "client_id": CLIENT, "client_secret": SECRET} | changes
@@ -113,8 +113,8 @@ class Fixture(legacy.Fixture):
             result = self.setup.prepare_configuration(payload, ACTOR)
         assert observed == [(result["custody_ref"]["owner_id"], result["custody_ref"]["config_version"])]
         assert self.authority() == before
-        assert result["schema"] == "serverware.operatorGoogleManagedSetup/v2"
-        assert result["setup_contract"] == "serverware.operatorGoogleManagedSetupBinding/v2"
+        assert result["schema"] == "catchplate.operatorGoogleManagedSetup/v2"
+        assert result["setup_contract"] == "catchplate.operatorGoogleManagedSetupBinding/v2"
         assert result["custody_ref"]["key_source"] == "operator-provider-key-v1"
         assert result["status"] == "pending" and result["activation_receipt"] is None
         assert result["staged_revision"] == result["revision"] == payload["expected_revision"] + 1
@@ -151,9 +151,9 @@ def cold_selection(request):
     assert not FORBIDDEN.intersection(sys.modules)
     guard = ImportGuard()
     sys.meta_path.insert(0, guard)
-    from serverware import operator_google_managed_selection as selection
-    from serverware import operator_provider_custody as custody, operator_provider_key as keys, operator_publication
-    admission = operator_publication.admit_bootstrap_reader(Path(os.environ["SERVERWARE_DATA_DIR"]),
+    from catchplate import operator_google_managed_selection as selection
+    from catchplate import operator_provider_custody as custody, operator_provider_key as keys, operator_publication
+    admission = operator_publication.admit_bootstrap_reader(Path(os.environ["CATCHPLATE_DATA_DIR"]),
         operator_development=True, release_channel="dev", production_image=False, native_or_enrolled=False)
     forbidden = AssertionError("structural selection accessed provider key or secret")
     with patch.object(keys, "read_existing_pinned", side_effect=forbidden), \
@@ -182,7 +182,7 @@ def activate(request):
             except sqlite3.OperationalError:
                 activation = False
             if activation and not phases and request.get("observe_commit", True):
-                from serverware import operator_catalog_oauth_profile as profiles, operator_publication
+                from catchplate import operator_catalog_oauth_profile as profiles, operator_publication
                 operator_publication.assert_held()
                 # The exact startup transaction may validate the provisional
                 # profile; another thread must not acquire that capability.
@@ -220,7 +220,7 @@ def activate(request):
     actual = f.setup.status(expected["operation_id"], ACTOR)
     assert actual["status"] == "activated" and f.selected() == actual
     assert actual["revision"] == expected["staged_revision"] + 1
-    assert actual["activation_receipt"] == {"schema": "serverware.operatorGoogleSetupActivation/v1",
+    assert actual["activation_receipt"] == {"schema": "catchplate.operatorGoogleSetupActivation/v1",
         "operation_id": expected["operation_id"], "activated_revision": actual["revision"],
         "policy_hash": expected["policy_hash"], "profile_binding_digest": expected["profile_binding_digest"],
         "settings_digest": f.setup._digest(expected["target_settings"]), "activated_at": actual["completed_at"]}
@@ -230,7 +230,7 @@ def activate(request):
     assert f.config.GOOGLE_OAUTH_CLIENT_SECRET == SECRET + request.get("secret_suffix", "")
     assert f.config.GOOGLE_OAUTH_CLIENT_SECRET_FILE is None
     assert f.demo.settings()["allowed_upstreams"] == expected["target_settings"]["allowed_upstreams"]
-    assert json.loads(os.environ["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"]) == expected["old_settings"]["allowed_upstreams"]
+    assert json.loads(os.environ["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"]) == expected["old_settings"]["allowed_upstreams"]
     assert not f.provider_calls
     workspace.verify_signed(f.config, f.db, f.store, f.bundles)
     return {"operation": actual, "retained": f.retained(), "audit": f.rows("audit_events")}
@@ -321,7 +321,7 @@ def refused_bootstrap(_request):
     assert not FORBIDDEN.intersection(sys.modules)
     guard = ImportGuard()
     sys.meta_path.insert(0, guard)
-    from serverware import operator_google_managed_config as managed
+    from catchplate import operator_google_managed_config as managed
     try:
         managed.bootstrap()
     except managed.profiles.OperatorGoogleProfileError as error:
@@ -333,9 +333,9 @@ def refused_bootstrap(_request):
 
 
 def activation_rollback(_request):
-    from serverware import operator_google_managed_config as managed
+    from catchplate import operator_google_managed_config as managed
     managed.bootstrap()
-    from serverware import operator_demo
+    from catchplate import operator_demo
     original, boundary, contacts = operator_demo.bootstrap, [], []
 
     def observed():
@@ -350,7 +350,7 @@ def activation_rollback(_request):
         else:
             raise AssertionError("managed startup ignored activation audit failure")
     assert len(boundary) == 1 and not contacts and raw_snapshot() == boundary[0]
-    from serverware import operator_catalog_oauth_profile as profiles
+    from catchplate import operator_catalog_oauth_profile as profiles
     try:
         profiles.require_profile()
     except profiles.OperatorGoogleProfileError:
@@ -372,7 +372,7 @@ def legacy_off(request):
             "expected_revision", "expected_policy_hash", "expected_settings_digest")} | {
                 "operation_id": str(uuid.uuid4()), "client_id": CLIENT, "client_secret": SECRET}
         result = f.setup.prepare_managed(payload, ACTOR)
-    assert result["schema"] == "serverware.operatorGoogleManagedSetup/v1" and result["status"] == "pending"
+    assert result["schema"] == "catchplate.operatorGoogleManagedSetup/v1" and result["status"] == "pending"
     assert not f.profiles.selected() and key_evidence() == {}
     return {"operation": result, "authority": f.authority()}
 
@@ -384,7 +384,7 @@ class ManagedGoogleConfigurationTests(unittest.TestCase):
         self.provider = Path(self.scratch.name) / "provider-custody"
         self.provider.mkdir(mode=0o700)
         self.environment.update({FLAG: "1", KEY_DIRECTORY: str(self.provider),
-            "SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED": "1", "SERVERWARE_DECISION_GATE_BASE": ""})
+            "CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED": "1", "CATCHPLATE_DECISION_GATE_BASE": ""})
 
     def worker(self, name, request=None, *, changes=None):
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", name],
@@ -430,12 +430,12 @@ class ManagedGoogleConfigurationTests(unittest.TestCase):
             data, provider = Path(self.scratch.name) / ("refusal-data-" + str(index)), Path(self.scratch.name) / ("refusal-provider-" + str(index))
             data.mkdir(mode=0o700)
             provider.mkdir(mode=0o700)
-            changes = {"SERVERWARE_DATA_DIR": str(data), KEY_DIRECTORY: str(provider)}
+            changes = {"CATCHPLATE_DATA_DIR": str(data), KEY_DIRECTORY: str(provider)}
             self.worker("prepare", changes=changes)
             if kind == "key":
                 (provider / "provider-key.json").rename(Path(self.scratch.name) / "retained-missing-provider-key")
             else:
-                with closing(sqlite3.connect(data / "serverware.sqlite3")) as conn, conn:
+                with closing(sqlite3.connect(data / "catchplate.sqlite3")) as conn, conn:
                     if kind == "selection-schema":
                         conn.execute("DROP TRIGGER operator_google_managed_selection_immutable")
                     elif kind == "selection-pointer":
@@ -448,14 +448,14 @@ class ManagedGoogleConfigurationTests(unittest.TestCase):
 
     def test_environment_drift_and_stale_review_refuse_before_config_import(self):
         self.worker("prepare")
-        for changes in ({"SERVERWARE_PUBLIC_URL": "https://different.example.com"},
-                {"SERVERWARE_OPERATOR_DEMO_UPSTREAMS": '["https://different.example.com"]'},
-                {"SERVERWARE_GOOGLE_OAUTH_CLIENT_ID": "456-unapproved.apps.googleusercontent.com"}):
+        for changes in ({"CATCHPLATE_PUBLIC_URL": "https://different.example.com"},
+                {"CATCHPLATE_OPERATOR_DEMO_UPSTREAMS": '["https://different.example.com"]'},
+                {"CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID": "456-unapproved.apps.googleusercontent.com"}):
             self.worker("refused_bootstrap", changes=changes)
         data, provider = Path(self.scratch.name) / "stale-data", Path(self.scratch.name) / "stale-provider"
         data.mkdir(mode=0o700)
         provider.mkdir(mode=0o700)
-        changes = {"SERVERWARE_DATA_DIR": str(data), KEY_DIRECTORY: str(provider)}
+        changes = {"CATCHPLATE_DATA_DIR": str(data), KEY_DIRECTORY: str(provider)}
         self.worker("prepare", {"stale": True}, changes=changes)
         self.worker("refused_bootstrap", changes=changes)
 

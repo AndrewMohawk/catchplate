@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/public-attestation-config.v2.schema.json",
-  "title": "Serverware public attestation immutable config v2",
+  "$id": "https://catchplate.invalid/schemas/public-attestation-config.v2.schema.json",
+  "title": "Catchplate public attestation immutable config v2",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -40,7 +40,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.publicAttestationConfig/v2"
+      "const": "catchplate.publicAttestationConfig/v2"
     },
     "minimumRollbackContinuityCommitmentSha256": {
       "$ref": "#/$defs/sha256"
@@ -317,7 +317,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nonceAuthorityAssurance/v1"
+          "const": "catchplate.nonceAuthorityAssurance/v1"
         },
         "administrativeDomainSha256": {
           "$ref": "#/$defs/sha256"
@@ -668,7 +668,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.signedNonceAuthorityAssuranceEvidence/v1"
+          "const": "catchplate.signedNonceAuthorityAssuranceEvidence/v1"
         },
         "payload": {
           "type": "object",
@@ -693,7 +693,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.nonceAuthorityAssuranceEvidence/v1"
+              "const": "catchplate.nonceAuthorityAssuranceEvidence/v1"
             },
             "administrativeDomainSha256": {"$ref": "#/$defs/sha256"},
             "assuranceEvidenceType": {
@@ -765,7 +765,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.signedVerifierStateStoreAssuranceEvidence/v1"
+          "const": "catchplate.signedVerifierStateStoreAssuranceEvidence/v1"
         },
         "payload": {
           "type": "object",
@@ -790,7 +790,7 @@
             "storeIdentitySha256"
           ],
           "properties": {
-            "apiVersion": {"const": "serverware.verifierStateStoreAssuranceEvidence/v1"},
+            "apiVersion": {"const": "catchplate.verifierStateStoreAssuranceEvidence/v1"},
             "commitIndexSemantics": {"const": "equalToVerifierStateGeneration"},
             "evidenceExpiresAtUnix": {"$ref": "#/$defs/positiveU64"},
             "evidenceIssuedAtUnix": {"$ref": "#/$defs/positiveU64"},
@@ -839,7 +839,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.signedVerifierStateRoleSeparationEvidence/v1"
+          "const": "catchplate.signedVerifierStateRoleSeparationEvidence/v1"
         },
         "payload": {
           "type": "object",
@@ -864,7 +864,7 @@
             "verifierStateStoreServerTls"
           ],
           "properties": {
-            "apiVersion": {"const": "serverware.verifierStateRoleSeparationEvidence/v1"},
+            "apiVersion": {"const": "catchplate.verifierStateRoleSeparationEvidence/v1"},
             "assuranceSha256": {"$ref": "#/$defs/sha256"},
             "evidenceExpiresAtUnix": {"$ref": "#/$defs/positiveU64"},
             "evidenceIssuedAtUnix": {"$ref": "#/$defs/positiveU64"},
@@ -918,7 +918,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateClient/v2"
+          "const": "catchplate.attestationVerifierStateClient/v2"
         },
         "abortPath": {"const": "/v1/state/abort"},
         "attachNonceStatusPath": {

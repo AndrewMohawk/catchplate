@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/native-execution-manifest.v2.schema.json",
+  "$id": "https://catchplate.dev/schemas/native-execution-manifest.v2.schema.json",
   "title": "Native immutable-image ELF execution manifest with pinned application trust",
   "description": "Data only, not execution permission. Exact canonical ASCII JSON with no LF, at most 32768 bytes. The eight v1 fields plus required nonnull applicationTrust; the explicit combined client v6 selects v2, while client v5 retains v1. The actual owner verifies the immutable in-image file and genuine native CA association; a schema, readonly mount or environment string alone cannot establish that an application uses this trust.",
   "type": "object", "additionalProperties": false,
   "required": ["apiVersion", "profile", "rootfs", "entry", "argv", "environment", "cwd", "loaderPolicy", "applicationTrust"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeExecutionManifest/v2"},
+    "apiVersion": {"const": "catchplate.nativeExecutionManifest/v2"},
     "profile": {"const": "native-elf-erofs-v1"},
     "rootfs": {"$ref": "native-execution-manifest.v1.schema.json#/properties/rootfs"},
     "entry": {"$ref": "native-execution-manifest.v1.schema.json#/properties/entry"},

@@ -34,7 +34,7 @@ resources. A nonzero serving exit can coexist with known cleanup; it cannot be
 reported as operation success.
 
 The wire is `custodyGenesisOrdinaryStop/v1` followed by
-`custodyGenesisOrdinaryTerminal/v1`, each prefixed with `serverware.`. Sender
+`custodyGenesisOrdinaryTerminal/v1`, each prefixed with `catchplate.`. Sender
 authentication uses kernel `SCM_CREDENTIALS` together with the retained channel,
 PIDFD, start time and direct-parent relationship, including an unreaped zombie
 whose final packet is still queued. This is not per-packet `SCM_PIDFD` evidence.
@@ -78,7 +78,7 @@ outer timeout; each test child retained its own two-second absolute kill timer.
 No full runtime-artifact build, cloud operation or paid test was performed.
 
 The frozen archive, test executable, commands and logs are retained at
-`codex-offload/serverware/engineering-builds/84207f6c-genesis-retirement-QAvxG3/`.
+`codex-offload/catchplate/engineering-builds/84207f6c-genesis-retirement-QAvxG3/`.
 These checks execute the real reap primitive, not the privileged inspection
 helper or complete C9 stop/terminal ceremony. Actual protected provisioning,
 service construction, event-woken shutdown under live traffic and end-to-end

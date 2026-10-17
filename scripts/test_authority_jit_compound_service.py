@@ -14,7 +14,7 @@ import inspect
 import unittest
 from unittest import mock
 
-from serverware import authority_jit_compound_service as service
+from catchplate import authority_jit_compound_service as service
 from test_authority_jit_connected_originals import connected_fixture
 from test_authority_jit_original_configuration import work
 from test_authority_jit_original_authorization import WINDOW, DEADLINE, MONOTONIC, clocks
@@ -89,7 +89,7 @@ class JitCompoundServiceControls(unittest.TestCase):
         self.assertIn("private is None", source)
         self.assertIn("mapping._producer_from_configuration_on_work", source)
         self.assertIn("read_dsn=dsn, page_caller=caller, work=work", source)
-        self.assertEqual(service._READ_DSN, "SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN")
+        self.assertEqual(service._READ_DSN, "CATCHPLATE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN")
         self.assertNotIn("WRITER_POSTGRES_DSN", inspect.getsource(service))
         self.assertNotIn("os.environ", source)
         self.assertNotIn("planner_private_key=", source)

@@ -9,10 +9,10 @@ BASE="${BASE:-http://localhost:3000}"
 PROXY="${PROXY:-http://localhost:8080}"
 DECISION_GATE_BASE="${DECISION_GATE_BASE:-http://localhost:9091}"
 TMP_DIR="${TMP_DIR:-.tmp}"
-CA_FILE="$TMP_DIR/serverware-ca.pem"
-AGENT_HEADER=(-H "X-Serverware-Agent: demo-agent")
-AGENT_PROXY_HEADER=(--proxy-header "X-Serverware-Agent: demo-agent")
-ADMIN_HEADER=(-H "X-Serverware-Admin-Token: ${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}")
+CA_FILE="$TMP_DIR/catchplate-ca.pem"
+AGENT_HEADER=(-H "X-Catchplate-Agent: demo-agent")
+AGENT_PROXY_HEADER=(--proxy-header "X-Catchplate-Agent: demo-agent")
+ADMIN_HEADER=(-H "X-Catchplate-Admin-Token: ${CATCHPLATE_ADMIN_TOKEN:-dev-admin-token}")
 
 mkdir -p "$TMP_DIR"
 
@@ -106,7 +106,7 @@ sys.stdout.buffer.write(body)
 PY
 }
 
-serverware_healthy=0
+catchplate_healthy=0
 for _ in $(seq 1 60); do
   if bounded_curl require-success \
     --connect-timeout 1 \
@@ -114,13 +114,13 @@ for _ in $(seq 1 60); do
     --max-filesize 65536 \
     --speed-time 2 \
     "$BASE/healthz" >/dev/null 2>&1; then
-    serverware_healthy=1
+    catchplate_healthy=1
     break
   fi
   sleep 1
 done
-if [[ "$serverware_healthy" != "1" ]]; then
-  echo "serverware health check did not succeed within 60 attempts" >&2
+if [[ "$catchplate_healthy" != "1" ]]; then
+  echo "catchplate health check did not succeed within 60 attempts" >&2
   exit 1
 fi
 
@@ -169,8 +169,8 @@ assert "BEGIN PUBLIC KEY" in data["policy_signing_public_key_pem"], data
 assert data["nonce"] == "e2e", data
 PY
 
-SERVERWARE_CA_OUT="$CA_FILE" \
-SERVERWARE_VERIFY_OUT="$TMP_DIR/attestation-verify.json" \
+CATCHPLATE_CA_OUT="$CA_FILE" \
+CATCHPLATE_VERIFY_OUT="$TMP_DIR/attestation-verify.json" \
   ./scripts/install_verified_ca.sh >/dev/null
 python3 - "$TMP_DIR/attestation-verify.json" "$CA_FILE" <<'PY'
 import json, sys
@@ -182,7 +182,7 @@ assert data["ca_intermediate_spki_sha256"].startswith("sha256:"), data
 assert data["data_plane_binary_digest"].startswith("sha256:"), data
 assert data["ca_install_session_id"], data
 assert data["ca_install_method"] == "verifier-mediated-attestation", data
-assert data["ca_out"] == "/tmp/serverware-verified-ca.pem", data
+assert data["ca_out"] == "/tmp/catchplate-verified-ca.pem", data
 assert data["host_ca_out"] == sys.argv[2], data
 PY
 
@@ -191,7 +191,7 @@ if [[ ! -s "$CA_FILE" ]]; then
   exit 1
 fi
 
-if [[ "${SERVERWARE_START_DECISION_GATE:-1}" == "1" ]]; then
+if [[ "${CATCHPLATE_START_DECISION_GATE:-1}" == "1" ]]; then
   docker compose up -d --force-recreate decision-gate-rs
   ./scripts/wait_for_decision_gate.sh
 fi
@@ -234,11 +234,11 @@ assert data["authorization_present"] is True, data
 assert data["authorization_scheme"] == "Bearer", data
 assert data["credential_marker"] == "initial", data
 assert "authorization_sha256" not in data, data
-for key in ("authorization", "serverware_agent", "proxy_authorization", "cookie", "x_api_key"):
+for key in ("authorization", "catchplate_agent", "proxy_authorization", "cookie", "x_api_key"):
     assert key not in data, data
 PY
 
-docker compose stop serverware >/dev/null
+docker compose stop catchplate >/dev/null
 sleep 6
 set +e
 expired_lease_code="$(bounded_curl inspect-status -o "$TMP_DIR/expired-credential-lease.json" -w "%{http_code}" \
@@ -246,8 +246,8 @@ expired_lease_code="$(bounded_curl inspect-status -o "$TMP_DIR/expired-credentia
   "https://demo-upstream:8443/echo")"
 expired_lease_curl_status=$?
 set -e
-docker compose start serverware >/dev/null
-./scripts/wait_for_serverware.sh
+docker compose start catchplate >/dev/null
+./scripts/wait_for_catchplate.sh
 
 if [[ "$expired_lease_curl_status" != "0" || "$expired_lease_code" != "503" ]]; then
   echo "expected expired credential lease to fail closed with 503, got curl=$expired_lease_curl_status code=$expired_lease_code" >&2
@@ -304,13 +304,13 @@ data = json.load(open(sys.argv[1]))
 assert set(data) == {"messages"}, data
 cutoff_ms = int((datetime.now(timezone.utc) - timedelta(days=30)).timestamp() * 1000)
 for item in data["messages"]:
-    assert item["serverwareAgeProof"] == "validated", item
+    assert item["catchplateAgeProof"] == "validated", item
     assert int(item["internalDate"]) >= cutoff_ms, item
     assert item["threadId"].startswith("thread-"), item
     if "payload" in item:
         assert item["payload"]["headers"][0]["name"] == "From", item
         assert "body" not in item["payload"], item
-    for key in ("authorization", "proxy_authorization", "serverware_agent", "cookie", "query", "raw", "secretDebug", "serverDebugSecret"):
+    for key in ("authorization", "proxy_authorization", "catchplate_agent", "cookie", "query", "raw", "secretDebug", "serverDebugSecret"):
         assert key not in item, item
 PY
 
@@ -321,7 +321,7 @@ python3 - "$TMP_DIR/gmail-weak-query.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
 assert set(data) == {"messages"}, data
-assert all(item["serverwareAgeProof"] == "validated" for item in data["messages"]), data
+assert all(item["catchplateAgeProof"] == "validated" for item in data["messages"]), data
 assert all(
     "raw" not in item and ("payload" not in item or "body" not in item["payload"])
     for item in data["messages"]
@@ -330,7 +330,7 @@ PY
 
 gmail_missing_date_code="$(bounded_curl inspect-status -o "$TMP_DIR/gmail-pending-list.json" -w "%{http_code}" \
   --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
-  "https://demo-upstream:8443/gmail/v1/users/me/messages?q=subject%3Aserverware-fixture-omit-internal-date")"
+  "https://demo-upstream:8443/gmail/v1/users/me/messages?q=subject%3Acatchplate-fixture-omit-internal-date")"
 if [[ "$gmail_missing_date_code" != "200" ]]; then
   echo "expected Gmail list metadata hydration to succeed, got $gmail_missing_date_code" >&2
   cat "$TMP_DIR/gmail-pending-list.json" >&2
@@ -340,7 +340,7 @@ python3 - "$TMP_DIR/gmail-pending-list.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
 assert [item["id"] for item in data["messages"]] == ["pending-message-1", "pending-message-2"], data
-assert all(item["serverwareAgeProof"] == "validated" for item in data["messages"]), data
+assert all(item["catchplateAgeProof"] == "validated" for item in data["messages"]), data
 assert all(str(item["internalDate"]).isdigit() for item in data["messages"]), data
 PY
 
@@ -360,7 +360,7 @@ assert "body" not in data["payload"], data
 PY
 
 bounded_curl require-success --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
-  "https://demo-upstream:8443/gmail/v1/users/me/messages?q=subject%3Aserverware-fixture-metadata-not-found" \
+  "https://demo-upstream:8443/gmail/v1/users/me/messages?q=subject%3Acatchplate-fixture-metadata-not-found" \
   > "$TMP_DIR/gmail-missing-metadata-list.json"
 python3 - "$TMP_DIR/gmail-missing-metadata-list.json" <<'PY'
 import json, sys
@@ -385,7 +385,7 @@ assert data["id"] == "recent-message-1", data
 assert data["threadId"] == "thread-recent-message-1", data
 assert data["payload"]["headers"][0]["name"] == "From", data
 assert "body" not in data["payload"], data
-for key in ("authorization", "proxy_authorization", "serverware_agent", "cookie", "query", "path", "method", "raw", "secretDebug", "serverDebugSecret"):
+for key in ("authorization", "proxy_authorization", "catchplate_agent", "cookie", "query", "path", "method", "raw", "secretDebug", "serverDebugSecret"):
     assert key not in data, data
 PY
 
@@ -498,7 +498,7 @@ bounded_curl require-success "${ADMIN_HEADER[@]}" -H "Content-Type: application/
 challenge="$(python3 - "$TMP_DIR/approval-webauthn-options.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
-payload = data["serverware"]["payload"]
+payload = data["catchplate"]["payload"]
 assert isinstance(payload["credential_version"], int) and payload["credential_version"] >= 1, data
 assert payload["approval_expires_at"], data
 assert payload["grant_ttl_seconds"] == 30, data
@@ -674,4 +674,4 @@ assert any(
 assert empty_container_denials, decision_events[:10]
 PY
 
-echo "serverware e2e passed"
+echo "catchplate e2e passed"

@@ -11,7 +11,7 @@ use super::*;
 use super::native_enrollment_authorizer::{NativeEnrollmentAuthorizer,
     VerifiedNativeEnrollmentAssignmentV1};
 use rustls::pki_types::UnixTime;
-use serverware_decision_gate::native_ingress_challenge_v1::{derive_nonce,
+use catchplate_decision_gate::native_ingress_challenge_v1::{derive_nonce,
     CHALLENGE_HEADER, EXPORTER_LABEL};
 
 const MAX_ASSIGNMENT_BYTES: usize = 16 * 1024;

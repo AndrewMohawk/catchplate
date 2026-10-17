@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.local/schemas/adapters/x.post.v1.schema.json",
-  "title": "Serverware closed X OAuth text posting v1",
+  "$id": "https://catchplate.local/schemas/adapters/x.post.v1.schema.json",
+  "title": "Catchplate closed X OAuth text posting v1",
   "type": "object", "additionalProperties": false,
   "required": ["credentialBinding", "request", "response"],
   "$defs": {

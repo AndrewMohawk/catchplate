@@ -203,7 +203,7 @@ def assertion_response(
 
 
 def expect_recovery_error(callback, marker: str) -> None:
-    from serverware.webauthn import WebAuthnError
+    from catchplate.webauthn import WebAuthnError
 
     try:
         callback()
@@ -235,41 +235,41 @@ def main() -> None:
         )
         os.environ.update(
             {
-                "SERVERWARE_DATA_DIR": str(data),
-                "SERVERWARE_METADATA_STORE_BACKEND": "sqlite",
-                "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite",
-                "SERVERWARE_GRANT_STORE_BACKEND": "sqlite",
-                "SERVERWARE_KEY_RELEASE_REQUIRED": "0",
-                "SERVERWARE_RELEASE_CHANNEL": "test",
-                "SERVERWARE_PUBLIC_URL": "http://localhost:3000",
-                "SERVERWARE_WEBAUTHN_ORIGIN": "http://localhost:3000",
-                "SERVERWARE_WEBAUTHN_TRUST_BUNDLE": str(
+                "CATCHPLATE_DATA_DIR": str(data),
+                "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite",
+                "CATCHPLATE_AUDIT_STORE_BACKEND": "sqlite",
+                "CATCHPLATE_GRANT_STORE_BACKEND": "sqlite",
+                "CATCHPLATE_KEY_RELEASE_REQUIRED": "0",
+                "CATCHPLATE_RELEASE_CHANNEL": "test",
+                "CATCHPLATE_PUBLIC_URL": "http://localhost:3000",
+                "CATCHPLATE_WEBAUTHN_ORIGIN": "http://localhost:3000",
+                "CATCHPLATE_WEBAUTHN_TRUST_BUNDLE": str(
                     data / "webauthn-trust-bundle.json"
                 ),
-                "SERVERWARE_WEBAUTHN_TRUST_BUNDLE_STATE": str(
+                "CATCHPLATE_WEBAUTHN_TRUST_BUNDLE_STATE": str(
                     data / "webauthn-trust-bundle-state.json"
                 ),
-                "SERVERWARE_WEBAUTHN_TRUST_SIGNING_KEY": str(
+                "CATCHPLATE_WEBAUTHN_TRUST_SIGNING_KEY": str(
                     data / "webauthn-trust-signing.pem"
                 ),
-                "SERVERWARE_WEBAUTHN_TRUST_SIGNING_PUBLIC_KEY": str(
+                "CATCHPLATE_WEBAUTHN_TRUST_SIGNING_PUBLIC_KEY": str(
                     data / "webauthn-trust-signing.pub.pem"
                 ),
-                "SERVERWARE_WEBAUTHN_RECOVERY_ENABLED": "1",
-                "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY": str(
+                "CATCHPLATE_WEBAUTHN_RECOVERY_ENABLED": "1",
+                "CATCHPLATE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY": str(
                     recovery_public_path
                 ),
-                "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_KEY_ID": recovery_key_id,
-                "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PROVIDER": "offline-test-root",
-                "SERVERWARE_WEBAUTHN_RECOVERY_AUDIENCE": "urn:serverware:test",
-                "SERVERWARE_WEBAUTHN_RECOVERY_TTL_SECONDS": "180",
-                "SERVERWARE_WEBAUTHN_RECOVERY_MAX_LIVE": "100",
-                "SERVERWARE_OIDC_SESSION_WEBAUTHN_PENDING_TTL_SECONDS": "300",
-                "SERVERWARE_CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES": "yubikey,hardware",
+                "CATCHPLATE_WEBAUTHN_RECOVERY_ROOT_KEY_ID": recovery_key_id,
+                "CATCHPLATE_WEBAUTHN_RECOVERY_ROOT_PROVIDER": "offline-test-root",
+                "CATCHPLATE_WEBAUTHN_RECOVERY_AUDIENCE": "urn:catchplate:test",
+                "CATCHPLATE_WEBAUTHN_RECOVERY_TTL_SECONDS": "180",
+                "CATCHPLATE_WEBAUTHN_RECOVERY_MAX_LIVE": "100",
+                "CATCHPLATE_OIDC_SESSION_WEBAUTHN_PENDING_TTL_SECONDS": "300",
+                "CATCHPLATE_CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES": "yubikey,hardware",
             }
         )
 
-        from serverware import auth, crypto, db, webauthn, webauthn_trust
+        from catchplate import auth, crypto, db, webauthn, webauthn_trust
 
         db.init_db()
         ca_key, ca_cert = make_ca("recovery root CA")
@@ -278,7 +278,7 @@ def main() -> None:
         )
         leaf_key, leaf_cert = make_leaf(intermediate_cert, intermediate_key)
         raw_bundle = {
-            "apiVersion": "serverware.webauthnTrust/v1",
+            "apiVersion": "catchplate.webauthnTrust/v1",
             "kind": "WebAuthnTrustBundle",
             "metadata": {
                 "id": "recovery-test-roots",

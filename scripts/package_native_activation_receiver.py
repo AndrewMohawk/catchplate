@@ -18,11 +18,11 @@ import sys
 
 INPUTS = Path("/activation-receiver-inputs")
 OUTPUT = Path("/activation-receiver-root")
-RECEIVER = "/etc/serverware/native-shadow-activation-receiver.json"
-DELIVERY = "/etc/serverware/native-activation-delivery.json"
-SUPERVISOR = "/opt/serverware/serverware-native-shadow-guest-supervisor"
-BOOTSTRAP = "/usr/local/libexec/serverware-native-enclave-entrypoint"
-MANIFEST = "/usr/share/serverware/native-activation-receiver.json"
+RECEIVER = "/etc/catchplate/native-shadow-activation-receiver.json"
+DELIVERY = "/etc/catchplate/native-activation-delivery.json"
+SUPERVISOR = "/opt/catchplate/catchplate-native-shadow-guest-supervisor"
+BOOTSTRAP = "/usr/local/libexec/catchplate-native-enclave-entrypoint"
+MANIFEST = "/usr/share/catchplate/native-activation-receiver.json"
 FIELDS = {"apiVersion", "sourceManifestSha256", "receiverConfigurationSha256", "deliveryConfigurationSha256"}
 FILES = {"inputs.json": 16384, "receiver.json": 32768, "delivery-configuration.json": 65536}
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -65,7 +65,7 @@ def validate(manifest_raw, receiver_raw, delivery_raw, *, expected_sha256, sourc
     """Pure source/format joins; not independent approval or C9 admission."""
     require(sha(manifest_raw) == digest(expected_sha256))
     manifest = document(manifest_raw, FIELDS, FILES["inputs.json"])
-    require(manifest["apiVersion"] == "serverware.nativeActivationReceiverImageInputs/v1"
+    require(manifest["apiVersion"] == "catchplate.nativeActivationReceiverImageInputs/v1"
             and manifest["sourceManifestSha256"] == digest(source_sha256))
     require(sha(receiver_raw) == digest(manifest["receiverConfigurationSha256"])
             and sha(delivery_raw) == digest(manifest["deliveryConfigurationSha256"]))
@@ -73,14 +73,14 @@ def validate(manifest_raw, receiver_raw, delivery_raw, *, expected_sha256, sourc
     receiver_selector = json.loads(receiver_raw.decode("ascii"), object_pairs_hook=_pairs)
     require(type(receiver_selector) is dict)
     receiver_api = receiver_selector.get("apiVersion")
-    installation = receiver_api == "serverware.nativeShadowActivationReceiverConfiguration/v2"
+    installation = receiver_api == "catchplate.nativeShadowActivationReceiverConfiguration/v2"
     receiver = document(receiver_raw, {"apiVersion", "deliveryConfiguration"}
                         | ({"installationAuthority"} if installation else set()), FILES["receiver.json"])
-    require(receiver_api in {"serverware.nativeShadowActivationReceiverConfiguration/v1",
-                             "serverware.nativeShadowActivationReceiverConfiguration/v2"}
+    require(receiver_api in {"catchplate.nativeShadowActivationReceiverConfiguration/v1",
+                             "catchplate.nativeShadowActivationReceiverConfiguration/v2"}
             and receiver["deliveryConfiguration"] == {"path": DELIVERY, "sha256": sha(delivery_raw)})
     delivery = document(delivery_raw, {"apiVersion", "authority", "serviceRole", "uid", "gid"}, FILES["delivery-configuration.json"])
-    require(delivery["apiVersion"] == "serverware.policyCustodyGuestConfiguration/v1"
+    require(delivery["apiVersion"] == "catchplate.policyCustodyGuestConfiguration/v1"
             and delivery["serviceRole"] == "production-bridge")
     for field in ("uid", "gid"):
         value = delivery[field]
@@ -96,14 +96,14 @@ def validate(manifest_raw, receiver_raw, delivery_raw, *, expected_sha256, sourc
         require(receiver["installationAuthority"] == authority,
                 "receiver installation requires explicit delegation of its pinned C9 authority")
     return {
-        "apiVersion": "serverware.nativeActivationReceiverImage/v2" if installation else "serverware.nativeActivationReceiverImage/v1",
+        "apiVersion": "catchplate.nativeActivationReceiverImage/v2" if installation else "catchplate.nativeActivationReceiverImage/v1",
         "artifactOnly": True, "releaseAuthority": False, "liveReady": False, "lateInputsInstalled": False,
         "sourceManifestSha256": source_sha256, "inputManifestSha256": expected_sha256,
         **({"publicInstallationSignatureRequired": True} if installation else {}),
         "command": [SUPERVISOR, "--activation-receiver"], "environment": {},
         **({"enclaveBootstrap": {
             "command": [BOOTSTRAP, "--activation-receiver-v1"],
-            "journalPath": "/var/lib/serverware/native-activation",
+            "journalPath": "/var/lib/catchplate/native-activation",
             "journalProvisionedByImage": False,
             "controlConnection": {"family": "AF_VSOCK", "peerCid": 3, "peerPort": 9103},
             "controlTransportAuthority": False,

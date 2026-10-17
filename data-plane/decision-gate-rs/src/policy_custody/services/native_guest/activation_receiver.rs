@@ -84,13 +84,13 @@ impl Cold {
         let original_bytes = original.read(32768).map_err(fail)?.to_vec();
         let configuration: Configuration = exact(&original_bytes)?;
         require(match configuration.api_version.as_str() {
-            "serverware.nativeShadowActivationReceiverConfiguration/v1" => configuration.installation_authority.is_none(),
-            "serverware.nativeShadowActivationReceiverConfiguration/v2" => configuration.installation_authority.is_some(),
+            "catchplate.nativeShadowActivationReceiverConfiguration/v1" => configuration.installation_authority.is_none(),
+            "catchplate.nativeShadowActivationReceiverConfiguration/v2" => configuration.installation_authority.is_some(),
             _ => false,
         })?;
         let delivery_original = configuration.delivery_configuration.open(65536)?;
         let delivery: guest::Configuration = exact(&delivery_original.read(65536).map_err(fail)?)?;
-        require(delivery.api_version == "serverware.policyCustodyGuestConfiguration/v1"
+        require(delivery.api_version == "catchplate.policyCustodyGuestConfiguration/v1"
             && delivery.service_role == guest::Role::ProductionBridge
             && delivery.uid > 0 && delivery.gid > 0)?;
         if let Some(authority) = &configuration.installation_authority {
@@ -127,7 +127,7 @@ impl Cold {
     pub(super) fn installation_key(&self) -> Result<VerifyingKey, ShadowError> {
         self.check()?;
         let authority = self.configuration.installation_authority.as_ref().ok_or(ShadowError::BindingDrift)?;
-        require(self.configuration.api_version == "serverware.nativeShadowActivationReceiverConfiguration/v2")?;
+        require(self.configuration.api_version == "catchplate.nativeShadowActivationReceiverConfiguration/v2")?;
         let raw = URL_SAFE_NO_PAD.decode(&authority.public_key_base64url).map_err(fail)?;
         require(raw.len() == 32 && raw.iter().any(|byte| *byte != 0)
             && URL_SAFE_NO_PAD.encode(&raw) == authority.public_key_base64url
@@ -189,7 +189,7 @@ impl Cold {
         let domain = self.process.domain();
         let (pid, start, pidfd_inode) = self.process.native_binding().map_err(fail)?;
         canonical_json_bytes(&serde_json::json!({
-            "apiVersion":"serverware.nativeShadowActivationReceiverObservation/v1", "okForAction":false,
+            "apiVersion":"catchplate.nativeShadowActivationReceiverObservation/v1", "okForAction":false,
             "configurationSha256":Sha256Digest::compute(&self.original_bytes),
             "deliveryConfigurationSha256":self.configuration.delivery_configuration.sha256,
             "processId":pid,"processStartTicks":start,"processPidfdInode":pidfd_inode,

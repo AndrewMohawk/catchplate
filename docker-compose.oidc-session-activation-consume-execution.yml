@@ -7,17 +7,17 @@
 # release-hints response on that endpoint. This mount neither selects a profile
 # nor admits a listener or grants dispatch authority.
 services:
-  serverware:
+  catchplate:
     volumes:
       - type: bind
-        source: ${SERVERWARE_OIDC_SESSION_ACTIVATION_CONSUME_CALLER_KEY_FILE:?set root-owned mode 0400 consume caller key file}
-        target: /run/secrets/serverware-oidc-session-activation-consume-caller-key
+        source: ${CATCHPLATE_OIDC_SESSION_ACTIVATION_CONSUME_CALLER_KEY_FILE:?set root-owned mode 0400 consume caller key file}
+        target: /run/secrets/catchplate-oidc-session-activation-consume-caller-key
         read_only: true
         bind:
           create_host_path: false
       - type: bind
-        source: ${SERVERWARE_OIDC_SESSION_ACTIVATION_CONSUME_EXECUTION_SOCKET_DIR:?set preprovisioned consume execution socket directory}
-        target: /run/serverware/oidc-session-activation-delivery-execution
+        source: ${CATCHPLATE_OIDC_SESSION_ACTIVATION_CONSUME_EXECUTION_SOCKET_DIR:?set preprovisioned consume execution socket directory}
+        target: /run/catchplate/oidc-session-activation-delivery-execution
         read_only: true
         bind:
           create_host_path: false

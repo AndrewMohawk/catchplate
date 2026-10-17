@@ -24,10 +24,10 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
-import serverware_source_tree
+import catchplate_source_tree
 import verify_production_readiness
 import sigstore_json
-from serverware.http_client import request_bytes
+from catchplate.http_client import request_bytes
 
 FIXTURE_COMMAND_MARKERS = ("fixture", "cosign_fixture.py", "sigstore_fixture.py")
 
@@ -172,7 +172,7 @@ def verify_release_provenance(
     provenance = document.get("provenance")
     if not isinstance(provenance, dict):
         raise ValueError("release provenance document is missing provenance")
-    production_source = "serverware-digest-pinned-production-release"
+    production_source = "catchplate-digest-pinned-production-release"
     if provenance.get("source") == production_source and provenance.get("version") != 2:
         raise ValueError("production release provenance payload must use version 2")
     if require_transparency and (
@@ -238,7 +238,7 @@ def verify_current_source_tree(provenance: dict[str, Any], *, root: Path = ROOT)
     if not isinstance(source_tree, dict):
         raise ValueError("release provenance is missing source tree identity")
     recorded = source_tree.get("digest")
-    current = serverware_source_tree.source_tree_digest(root)
+    current = catchplate_source_tree.source_tree_digest(root)
     if recorded != current:
         raise ValueError(
             f"release provenance source tree is stale: recorded={recorded} current={current}"
@@ -314,18 +314,18 @@ def validate_production_sigstore_configuration(
     if not production_refs:
         return
     if signature_provider != "sigstore-command":
-        raise ValueError("production image refs must be signed with SERVERWARE_IMAGE_SIGNATURE_PROVIDER=sigstore-command")
+        raise ValueError("production image refs must be signed with CATCHPLATE_IMAGE_SIGNATURE_PROVIDER=sigstore-command")
     if not image_sign_command.strip():
-        raise ValueError("production image refs require SERVERWARE_IMAGE_SIGN_COMMAND")
+        raise ValueError("production image refs require CATCHPLATE_IMAGE_SIGN_COMMAND")
     if not image_verify_command.strip():
-        raise ValueError("production image refs require SERVERWARE_IMAGE_VERIFY_COMMAND")
+        raise ValueError("production image refs require CATCHPLATE_IMAGE_VERIFY_COMMAND")
     if not require_transparency:
-        raise ValueError("production image refs require SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY=1")
+        raise ValueError("production image refs require CATCHPLATE_REQUIRE_SIGSTORE_TRANSPARENCY=1")
     if command_mentions(image_sign_command, *FIXTURE_COMMAND_MARKERS):
         raise ValueError("production image signing command must not use fixture helpers")
     if command_mentions(image_verify_command, *FIXTURE_COMMAND_MARKERS):
         raise ValueError("production image verification command must not use fixture helpers")
-    selected_cosign = cosign_binary if cosign_binary is not None else os.getenv("SERVERWARE_COSIGN_BINARY", "cosign")
+    selected_cosign = cosign_binary if cosign_binary is not None else os.getenv("CATCHPLATE_COSIGN_BINARY", "cosign")
     if command_mentions(selected_cosign, *FIXTURE_COMMAND_MARKERS):
         raise ValueError("production image signing must not use fixture cosign helpers")
 
@@ -398,7 +398,7 @@ def external_sign_statement(
         sigstore_json.statement_json(statement, kind=kind).encode("utf-8")
     )
     payload = {
-        "apiVersion": "serverware.sigstoreSignRequest/v1",
+        "apiVersion": "catchplate.sigstoreSignRequest/v1",
         "kind": kind,
         "service": service,
         "image_id": image_id,
@@ -411,7 +411,7 @@ def external_sign_statement(
         verify = run_json_command(
             verify_command,
             {
-                "apiVersion": "serverware.sigstoreVerifyRequest/v1",
+                "apiVersion": "catchplate.sigstoreVerifyRequest/v1",
                 "kind": kind,
                 "service": service,
                 "image_id": image_id,
@@ -440,7 +440,7 @@ def statement_for_image(
     sbom = provenance["sbom"]["cyclonedx"]
     return {
         "_type": "https://in-toto.io/Statement/v1",
-        "predicateType": "https://serverware.local/attestations/oci-image/v1",
+        "predicateType": "https://catchplate.local/attestations/oci-image/v1",
         "subject": [
             {
                 "name": service,
@@ -465,7 +465,7 @@ def statement_for_image(
 
 
 def image_refs_from_env() -> list[str]:
-    return [item.strip() for item in os.getenv("SERVERWARE_PRODUCTION_IMAGES", "").split(",") if item.strip()]
+    return [item.strip() for item in os.getenv("CATCHPLATE_PRODUCTION_IMAGES", "").split(",") if item.strip()]
 
 
 def image_refs_from_env_file(path: Path) -> list[str]:
@@ -520,52 +520,52 @@ def main() -> None:
     parser.add_argument("--container-out", default="/data/image-signatures.json")
     parser.add_argument("--base", default=os.getenv("BASE", "http://localhost:3000"))
     parser.add_argument("--gate", default=os.getenv("DECISION_GATE_BASE", "http://localhost:9090"))
-    parser.add_argument("--anchor", default=os.getenv("SERVERWARE_RELEASE_ANCHOR_BASE", os.getenv("AUDIT_ANCHOR_BASE", "http://localhost:9100")))
-    parser.add_argument("--anchor-ca-bundle", default=os.getenv("SERVERWARE_RELEASE_ANCHOR_CA_BUNDLE", ""))
+    parser.add_argument("--anchor", default=os.getenv("CATCHPLATE_RELEASE_ANCHOR_BASE", os.getenv("AUDIT_ANCHOR_BASE", "http://localhost:9100")))
+    parser.add_argument("--anchor-ca-bundle", default=os.getenv("CATCHPLATE_RELEASE_ANCHOR_CA_BUNDLE", ""))
     parser.add_argument(
         "--anchor-token",
-        default=os.getenv("SERVERWARE_AUDIT_ANCHOR_TOKEN"),
+        default=os.getenv("CATCHPLATE_AUDIT_ANCHOR_TOKEN"),
         help="development-only direct audit-anchor token",
     )
     parser.add_argument(
         "--anchor-token-file",
-        default=os.getenv("SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE"),
+        default=os.getenv("CATCHPLATE_AUDIT_ANCHOR_TOKEN_FILE"),
         help="production audit-anchor-token file",
     )
-    parser.add_argument("--signature-provider", default=os.getenv("SERVERWARE_IMAGE_SIGNATURE_PROVIDER", "dev-ed25519"))
-    parser.add_argument("--image-sign-command", default=os.getenv("SERVERWARE_IMAGE_SIGN_COMMAND", ""))
-    parser.add_argument("--image-verify-command", default=os.getenv("SERVERWARE_IMAGE_VERIFY_COMMAND", ""))
+    parser.add_argument("--signature-provider", default=os.getenv("CATCHPLATE_IMAGE_SIGNATURE_PROVIDER", "dev-ed25519"))
+    parser.add_argument("--image-sign-command", default=os.getenv("CATCHPLATE_IMAGE_SIGN_COMMAND", ""))
+    parser.add_argument("--image-verify-command", default=os.getenv("CATCHPLATE_IMAGE_VERIFY_COMMAND", ""))
     parser.add_argument(
         "--release-signing-trusted-key",
-        default=os.getenv("SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY", ""),
+        default=os.getenv("CATCHPLATE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY", ""),
         help="Independent Ed25519 public trust root required before production image signing.",
     )
     parser.add_argument(
         "--external-checkpoint-trusted-key",
-        default=os.getenv("SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY", ""),
+        default=os.getenv("CATCHPLATE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY", ""),
         help="Independent Ed25519 trust root for production transparency checkpoints.",
     )
     parser.add_argument(
         "--external-checkpoint-provider",
-        default=os.getenv("SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER", ""),
+        default=os.getenv("CATCHPLATE_TRANSPARENCY_EXPECTED_PROVIDER", ""),
     )
     parser.add_argument(
         "--external-checkpoint-log-id",
-        default=os.getenv("SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID", ""),
+        default=os.getenv("CATCHPLATE_TRANSPARENCY_EXPECTED_LOG_ID", ""),
     )
     parser.add_argument("--production-image", action="append", default=[], help="Digest-pinned production image ref to sign instead of Compose image inventory.")
-    parser.add_argument("--production-images-env", default="", help="Strict env fragment containing SERVERWARE_PRODUCTION_IMAGES refs to sign.")
+    parser.add_argument("--production-images-env", default="", help="Strict env fragment containing CATCHPLATE_PRODUCTION_IMAGES refs to sign.")
     parser.add_argument(
         "--require-sigstore-transparency",
         action="store_true",
-        default=os.getenv("SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY", "0").lower() in {"1", "true", "yes"},
+        default=os.getenv("CATCHPLATE_REQUIRE_SIGSTORE_TRANSPARENCY", "0").lower() in {"1", "true", "yes"},
     )
     args = parser.parse_args()
 
     env_production_refs = image_refs_from_env()
     if args.production_images_env:
         if args.production_image or env_production_refs:
-            raise ValueError("--production-images-env cannot be combined with --production-image or SERVERWARE_PRODUCTION_IMAGES")
+            raise ValueError("--production-images-env cannot be combined with --production-image or CATCHPLATE_PRODUCTION_IMAGES")
         production_refs = image_refs_from_env_file(ROOT / args.production_images_env)
     else:
         production_refs = args.production_image or env_production_refs
@@ -579,19 +579,19 @@ def main() -> None:
         external_checkpoint_trusted_key = ROOT / external_checkpoint_trusted_key
     if production_refs and trusted_release_key is None:
         raise ValueError(
-            "production image signing requires SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY "
+            "production image signing requires CATCHPLATE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY "
             "or --release-signing-trusted-key"
         )
     anchor_sources: dict[str, str] = {}
     if args.anchor_token is not None:
-        anchor_sources["SERVERWARE_AUDIT_ANCHOR_TOKEN"] = args.anchor_token
+        anchor_sources["CATCHPLATE_AUDIT_ANCHOR_TOKEN"] = args.anchor_token
     if args.anchor_token_file is not None:
-        anchor_sources["SERVERWARE_AUDIT_ANCHOR_TOKEN_FILE"] = args.anchor_token_file
+        anchor_sources["CATCHPLATE_AUDIT_ANCHOR_TOKEN_FILE"] = args.anchor_token_file
     if production_refs:
         args.anchor_token = (
             verify_production_readiness.load_service_credential_for_tool(
                 anchor_sources,
-                "SERVERWARE_AUDIT_ANCHOR_TOKEN",
+                "CATCHPLATE_AUDIT_ANCHOR_TOKEN",
                 require_file=True,
             )
         )
@@ -601,7 +601,7 @@ def main() -> None:
         args.anchor_token = (
             verify_production_readiness.load_service_credential_for_tool(
                 anchor_sources,
-                "SERVERWARE_AUDIT_ANCHOR_TOKEN",
+                "CATCHPLATE_AUDIT_ANCHOR_TOKEN",
                 require_file=False,
                 expected_control_plane_uid=local_uid,
                 expected_control_plane_gid=local_gid,
@@ -637,7 +637,7 @@ def main() -> None:
     if signature_provider not in {"dev-ed25519", "sigstore-command"}:
         raise ValueError(f"unsupported image signature provider: {signature_provider}")
     if signature_provider == "sigstore-command" and not args.image_sign_command.strip():
-        raise ValueError("sigstore-command image signing requires SERVERWARE_IMAGE_SIGN_COMMAND or --image-sign-command")
+        raise ValueError("sigstore-command image signing requires CATCHPLATE_IMAGE_SIGN_COMMAND or --image-sign-command")
     validate_production_sigstore_configuration(
         production_refs=bool(production_refs),
         signature_provider=signature_provider,
@@ -698,7 +698,7 @@ def main() -> None:
         image_signing_key_id = key_info["spki_sha256"]
 
     bundle: dict[str, Any] = {
-        "apiVersion": "serverware.imageSignatures/v1",
+        "apiVersion": "catchplate.imageSignatures/v1",
         "kind": "ImageSignatureBundle",
         "metadata": {
             "createdAt": created_at,
@@ -709,7 +709,7 @@ def main() -> None:
             "sourceTreeDigest": provenance["source_tree"]["digest"],
             "composeConfigSha256": provenance["compose_config_sha256"],
             "sbomCyclonedxSha256": provenance["sbom"]["cyclonedx"]["sha256"],
-            "mode": "sigstore-command-image-signing" if signature_provider == "sigstore-command" else "serverware-dev-ed25519-image-signing",
+            "mode": "sigstore-command-image-signing" if signature_provider == "sigstore-command" else "catchplate-dev-ed25519-image-signing",
             "signatureProvider": signature_provider,
             "sigstoreTransparencyRequired": bool(args.require_sigstore_transparency),
             "cosignCompatibleStatement": cosign_compatible_statement_metadata(production=bool(production_refs)),
@@ -750,7 +750,7 @@ def main() -> None:
         "images": {item["service"]: item["image_id"] for item in image_entries},
         "signature": bundle["metadata"]["signature"],
     }
-    anchor_headers = {"X-Serverware-Audit-Anchor-Token": args.anchor_token}
+    anchor_headers = {"X-Catchplate-Audit-Anchor-Token": args.anchor_token}
     anchor_response = request_json(
         f"{args.anchor.rstrip('/')}/anchors",
         method="POST",
@@ -782,7 +782,7 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(bundle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if not production_refs:
-        write_container_file("serverware", args.container_out, out_path.read_bytes())
+        write_container_file("catchplate", args.container_out, out_path.read_bytes())
         deadline = time.time() + 10
         control = gate = gate_health = {}
         while time.time() < deadline:

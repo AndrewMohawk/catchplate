@@ -10,7 +10,7 @@ import time
 import unittest
 from unittest import mock
 
-from serverware import authority_jit_compound_transport as source
+from catchplate import authority_jit_compound_transport as source
 from test_authority_jit_original_transport import SocketDouble
 
 

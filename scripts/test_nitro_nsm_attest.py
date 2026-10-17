@@ -13,7 +13,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent.parent
 PROVIDER = "aws-nitro-enclaves"
 TEE_PLATFORM = "aws-nitro"
-USER_DATA_PREFIX = b"serverware:nitro-claims:v1:"
+USER_DATA_PREFIX = b"catchplate:nitro-claims:v1:"
 
 
 def canonical_json(value: Any) -> str:
@@ -61,7 +61,7 @@ def request() -> dict[str, Any]:
     }
     user_data = claims_user_data(claims)
     payload = {
-        "apiVersion": "serverware.nitroAttestationRequest/v1",
+        "apiVersion": "catchplate.nitroAttestationRequest/v1",
         "kind": "NitroAttestationDocument",
         "provider": PROVIDER,
         "tee_platform": TEE_PLATFORM,
@@ -81,7 +81,7 @@ import json
 import pathlib
 import sys
 user_data = pathlib.Path(sys.argv[sys.argv.index("--user-data") + 1]).read_bytes()
-if not user_data.startswith(b"serverware:nitro-claims:v1:"):
+if not user_data.startswith(b"catchplate:nitro-claims:v1:"):
     raise SystemExit("bad user data")
 print(json.dumps({"attestation_document_b64": base64.urlsafe_b64encode(b"raw-json-attestation").decode().rstrip("=")}))
 """
@@ -91,7 +91,7 @@ import pathlib
 import sys
 user_data = pathlib.Path(sys.argv[sys.argv.index("--user-data") + 1]).read_bytes()
 out = pathlib.Path(sys.argv[sys.argv.index("--out") + 1])
-if not user_data.startswith(b"serverware:nitro-claims:v1:"):
+if not user_data.startswith(b"catchplate:nitro-claims:v1:"):
     raise SystemExit("bad user data")
 out.write_bytes(b"raw-file-attestation")
 """
@@ -107,7 +107,7 @@ def run_adapter(payload: dict[str, Any], command_template: str | None = None, *e
     env = {
         name: value
         for name, value in os.environ.items()
-        if not name.startswith("SERVERWARE_NITRO_NSM_")
+        if not name.startswith("CATCHPLATE_NITRO_NSM_")
     }
     return subprocess.run(
         command,

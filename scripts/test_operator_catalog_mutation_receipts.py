@@ -289,7 +289,7 @@ class OperatorCatalogMutationReceiptTests(unittest.TestCase):
     setUp = workspace.common.OperatorDemoPersistenceTests.setUp
 
     def run_worker(self, operation):
-        environment = {**self.environment, "SERVERWARE_DECISION_GATE_BASE": "http://127.0.0.1:9091"}
+        environment = {**self.environment, "CATCHPLATE_DECISION_GATE_BASE": "http://127.0.0.1:9091"}
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation],
             cwd=ROOT, env=environment, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, "\n".join(result.stderr.splitlines()[-40:]))

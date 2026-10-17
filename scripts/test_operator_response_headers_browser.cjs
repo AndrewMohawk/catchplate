@@ -10,7 +10,7 @@ const vm = require('node:vm');
 const {ready, view, openRestrictions, credential, application, rule, IDS} = require('./test_operator_catalog_browser.cjs');
 const {fixture, publicCatalog, supplied, google, digest, direct, draft, pair, method, review, grant,
   refresh, command, disabledClient, downloadedConfig, step, privateAbsent, PRIVATE, DUMMY} = require('./test_operator_ordinary_modes_browser.cjs');
-const {clientCredentialInput, credentialHeaderTarget} = require('../serverware/operator_demo_web/app.js');
+const {clientCredentialInput, credentialHeaderTarget} = require('../catchplate/operator_demo_web/app.js');
 const ROOT = resolve(__dirname, '..');
 const V2 = 'unfiltered_json_or_empty_v2';
 const OLD = ['projected_json', 'unfiltered_json', 'unfiltered_json_or_empty_v1'];
@@ -20,9 +20,9 @@ const saved = changes => rule({credential_input: 'insert', response_mode: V2, re
 const GOOGLE_ORIGIN = 'https://gmail.googleapis.com';
 const GOOGLE_PATH = '/gmail/v1/users/me/messages';
 const SOURCE_FILES = ['scripts/test_operator_response_headers_browser.cjs', 'scripts/test_operator_ordinary_modes_browser.cjs',
-  'scripts/test_operator_catalog_browser.cjs', 'serverware/operator_demo_portal.py',
+  'scripts/test_operator_catalog_browser.cjs', 'catchplate/operator_demo_portal.py',
   ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js', 'workspace_applications.js', 'workspace_resources.js',
-    'workspace_proxy_audit.js', 'workspace_connect.js'].map(name => 'serverware/operator_demo_web/' + name)];
+    'workspace_proxy_audit.js', 'workspace_connect.js'].map(name => 'catchplate/operator_demo_web/' + name)];
 let artifacts;
 async function hashes() { return Object.fromEntries(await Promise.all(SOURCE_FILES.map(async name =>
   [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')]))); }
@@ -53,7 +53,7 @@ async function maybeClick(page, selector) { if (!await page.locator(selector).is
 
 function projectionChecks() {
   const source = ['workspace_core.js', 'workspace_github.js']
-    .map(name => readFileSync(join(ROOT, 'serverware/operator_demo_web', name), 'utf8')).join('\n');
+    .map(name => readFileSync(join(ROOT, 'catchplate/operator_demo_web', name), 'utf8')).join('\n');
   const state = {credentials: [credential({secret: PRIVATE[0]})], applications: [application()],
     rules: [saved({secret: PRIVATE[1]})], requestBodyModes: ['preserve_json_v1'], responseModes: MODES,
     credentialInputModes: ['insert', 'replace_exact'], revision: 1, sequence: 1, active: digest(1), loaded: digest(1)};
@@ -195,7 +195,7 @@ async function main() {
   assert.equal(process.argv.length, 2, 'synthetic test accepts no target, credentials or network options');
   const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
   console.log(JSON.stringify(projectionChecks()));
-  const root = '/srv/catchplate-fast/projects/serverware-operator-artifacts'; assert((await stat(root)).isDirectory());
+  const root = '/srv/catchplate-fast/projects/catchplate-operator-artifacts'; assert((await stat(root)).isDirectory());
   artifacts = await mkdtemp(join(root, 'response-headers-browser-synthetic-')); console.log(JSON.stringify({artifactDirectory: artifacts}));
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
   const browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-background-networking']}); let deadline;

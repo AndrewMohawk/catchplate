@@ -1,6 +1,6 @@
 # Configured private activation dispatch
 
-[`control_plane_oidc_session_activation_dispatch.py`](../serverware/control_plane_oidc_session_activation_dispatch.py)
+[`control_plane_oidc_session_activation_dispatch.py`](../catchplate/control_plane_oidc_session_activation_dispatch.py)
 connects actual present permission, post-permission planning and caller signing
 to the isolated activation authorizer, reserver and SQL roles. Its existing
 `dispatch(...)` method remains SQL-only; the separate

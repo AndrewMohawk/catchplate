@@ -21,9 +21,9 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_database_configuration as configuration
-from serverware import db
-from serverware.authority_store import schema
+from catchplate import authority_database_configuration as configuration
+from catchplate import db
+from catchplate.authority_store import schema
 from test_authority_executor_database_configuration import captured
 
 
@@ -40,7 +40,7 @@ class ContractCursor:
         if len(self.calls) != 1:
             raise NextCatalogQuery()
         if statement != ("SELECT source_revision, source_contract_digest, structural_manifest_digest "
-                "FROM serverware_metadata.policy_authority_schema_contracts "
+                "FROM catchplate_metadata.policy_authority_schema_contracts "
                 "WHERE schema_version = %s LIMIT 2"):
             raise AssertionError("first physical query is not the original bounded source-contract read")
         return self
@@ -94,7 +94,7 @@ class SourceContractDatabaseConfigurationControls(unittest.TestCase):
         # All source inventory/SQL/manifest material remains inside the actual
         # framed digest, not an isolated two-role substitute or supplied hash.
         self.assertEqual(measured, schema._policy_candidate_authority_framed_digest(
-            "serverware.policyCandidateAuthoritySourceContract/v1", schema.dumps(actual).encode("utf-8")))
+            "catchplate.policyCandidateAuthoritySourceContract/v1", schema.dumps(actual).encode("utf-8")))
         self.assertIn("sqlGrantManifest", actual)
         self.assertIn("metadataSchemaProgramDigest", actual)
 
@@ -145,7 +145,7 @@ class SourceContractDatabaseConfigurationControls(unittest.TestCase):
                 self.assertEqual(cursor.calls, [])
 
     def test_both_actual_validator_digest_uses_hold_the_same_explicit_context(self):
-        path = ROOT / "serverware/db.py"
+        path = ROOT / "catchplate/db.py"
         self.assertLess(path.stat().st_size, 16 * 1024 * 1024)
         tree = ast.parse(path.read_text(encoding="utf-8"))
         function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)

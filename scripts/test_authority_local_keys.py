@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from scripts.authority import local_keys as cli
-from serverware import authority_local_keys as local
+from catchplate import authority_local_keys as local
 
 DIGEST = "sha256:" + "1" * 64
 
@@ -227,7 +227,7 @@ class KeyContractTests(unittest.TestCase):
             privatePath="private/genesis/audit-inclusion.seed"),))
         self.assertEqual(local.MAX_APPROVAL, 8192)
         self.assertEqual(len(local.roster()), 20)
-        self.assertEqual(local.INVENTORY_SCHEMA, "serverware.authorityTrustedHostLocalKeyInventory/v1")
+        self.assertEqual(local.INVENTORY_SCHEMA, "catchplate.authorityTrustedHostLocalKeyInventory/v1")
         for changed in (dict(value, schema=local.APPROVAL_SCHEMA), dict(value, purpose=local.PURPOSE),
                 dict(value, directory=dict(device=1, inode=2)), dict(value, keyCount=2),
                 {name: item for name, item in value.items() if name != "pilotKeyInventoryOriginal"}):

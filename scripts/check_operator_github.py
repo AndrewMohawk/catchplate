@@ -74,7 +74,7 @@ def sdk_failure_observation(document, expected_phase):
             "requestRewrite", "ok", "phase", "stage", "error", "observedResponses", "lastObservation"}
     if (not isinstance(expected_phase, str) or expected_phase not in SDK_PHASES
             or not isinstance(document, dict) or set(document) != keys
-            or document.get("schema") != "serverware.privateGithubSdk/v1"
+            or document.get("schema") != "catchplate.privateGithubSdk/v1"
             or document.get("package") != "@octokit/rest" or document.get("version") != "22.0.1"
             or document.get("undiciVersion") != "8.11.2" or document.get("ok") is not False
             or any(document.get(key) is not False for key in ("retryPlugin", "throttlePlugin", "requestRewrite"))
@@ -172,7 +172,7 @@ class GithubCheck(OrdinaryClientCheck):
         # This guard precedes inherited endpoint resolution and every HTTP/SDK
         # operation. The public-looking provider address is local to this netns.
         isolated.assert_isolated_network()
-        require(args.control_base == "http://serverware:3000" and args.management_base == "http://127.0.0.1:9091"
+        require(args.control_base == "http://catchplate:3000" and args.management_base == "http://127.0.0.1:9091"
             and args.proxy_url == PROXY and args.upstream_address is None,
             "fixed isolated GitHub endpoints required")
         # The inherited unused demo endpoint is only constructed, never called.
@@ -191,7 +191,7 @@ class GithubCheck(OrdinaryClientCheck):
 
     def catalog(self):
         value = self.control_json(PREFIX + "/catalog", authenticated=True)
-        require(value.get("schema") == "serverware.operatorCatalog/v1" and value.get("mode") == "operator-development"
+        require(value.get("schema") == "catchplate.operatorCatalog/v1" and value.get("mode") == "operator-development"
             and value.get("productionReady") is False and value.get("hardwareVerified") is False
             and value.get("allowed_upstreams") == [fixture.ORIGIN]
             and type(value.get("revision")) is int and all(isinstance(value.get(key), list) for key in COLLECTIONS),
@@ -219,7 +219,7 @@ class GithubCheck(OrdinaryClientCheck):
         raw = run_sdk(phase, app["id"], token, self.run_id, min(70, self.deadline - time.monotonic()))
         self.clean(raw)
         value = json.loads(raw)
-        require(value.get("ok") is True and value.get("schema") == "serverware.privateGithubSdk/v1"
+        require(value.get("ok") is True and value.get("schema") == "catchplate.privateGithubSdk/v1"
             and value.get("phase") == phase and value.get("package") == "@octokit/rest"
             and value.get("version") == "22.0.1" and value.get("undiciVersion") == "8.11.2"
             and value.get("retryPlugin") is False and value.get("requestRewrite") is False,
@@ -265,10 +265,10 @@ class GithubCheck(OrdinaryClientCheck):
                     "hostile pagination link was not blocked before SDK follow")
             else:
                 require(row["status"] == spec["status"] and body == spec["body"]
-                    and headers.get("x-serverware-policy-hash") == self.policy_hash
-                    and headers.get("x-serverware-response-body-sha256") == digest(body)
-                    and headers.get("x-serverware-request-digest") == request_digest
-                    and headers.get("x-serverware-operation-digest") == operation_digest,
+                    and headers.get("x-catchplate-policy-hash") == self.policy_hash
+                    and headers.get("x-catchplate-response-body-sha256") == digest(body)
+                    and headers.get("x-catchplate-request-digest") == request_digest
+                    and headers.get("x-catchplate-operation-digest") == operation_digest,
                     "SDK response bytes/status/canonical-v3 commitments differ")
                 require(headers.get("x-github-request-id") == "fixture:" + case
                     and headers.get("x-ratelimit-limit") == "5000" and headers.get("x-ratelimit-resource") == "core"
@@ -413,7 +413,7 @@ class GithubCheck(OrdinaryClientCheck):
             "provider wire oracle found a retry, follow, mutation, header leak or changed target")
         evidence = self.verify_audits(baseline, scope, credential["id"])
         self.unchanged(pins)
-        return {"ok": True, "schema": "serverware.privateGithubCheck/v1", "syntheticOnly": True, "productionReady": False,
+        return {"ok": True, "schema": "catchplate.privateGithubCheck/v1", "syntheticOnly": True, "productionReady": False,
             "realGithubVerified": False, "package": "@octokit/rest", "version": "22.0.1", "undiciVersion": "8.11.2",
             "dataPlaneBinaryDigest": self.args.expected_binary_sha256, "providerAttempts": 11, "releases": 9, "responseBlocks": 2,
             "deniedBeforeLease": 4, "canonicalRequestVersion": 3, "rawQueryAndBodyVerified": True,

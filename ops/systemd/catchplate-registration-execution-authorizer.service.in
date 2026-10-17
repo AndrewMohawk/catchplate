@@ -1,0 +1,66 @@
+# Unrendered, uninstalled deployment input. The release root is an independently
+# approved complete runtime export, not a checkout. No account, key, signed
+# bootstrap, trust root or deployment authority is provisioned by this template.
+# This service has no writable journal/store and makes no one-use claim.
+[Unit]
+Description=Catchplate dedicated registration execution authorizer (trusted-host-local)
+BindsTo=catchplate-registration-execution-authorizer.socket
+After=local-fs.target catchplate-registration-execution-authorizer.socket
+RequiresMountsFor=@AUTHORIZER_RELEASE_ROOT@ @AUTHORIZER_TRUST_DIR@ @AUTHORIZER_KEY_FILE@
+AssertPathIsDirectory=@AUTHORIZER_RELEASE_ROOT@
+AssertPathIsDirectory=@AUTHORIZER_TRUST_DIR@
+StartLimitIntervalSec=infinity
+StartLimitBurst=1
+
+[Service]
+Type=exec
+# Root delivery drops supplementary groups and root IDs/capabilities to
+# 65513:65513. Cold admission checks exactly four inherited FDs (198..201).
+# Type=exec establishes neither readiness nor successful cryptographic admission.
+User=root
+Group=root
+RootDirectory=@AUTHORIZER_RELEASE_ROOT@
+MountAPIVFS=yes
+WorkingDirectory=/app
+BindReadOnlyPaths=@AUTHORIZER_TRUST_DIR@:/run/catchplate/registration-execution-trust
+BindReadOnlyPaths=@AUTHORIZER_KEY_FILE@:/run/secrets/catchplate-registration-execution-authorizer-key
+BindReadOnlyPaths=/run/catchplate/registration-execution:/run/catchplate/registration-execution
+Sockets=catchplate-registration-execution-authorizer.socket
+NonBlocking=yes
+Environment=LD_LIBRARY_PATH=/runtime/python/lib
+ExecStart=/runtime/python/bin/python3 -I /runtime/authority-bootstrap/registration_execution_authorizer_launcher.py --root-delivery
+Restart=no
+RuntimeMaxSec=300s
+TimeoutStartSec=35s
+# Cooperative TERM followed by cgroup escalation is not a hard kernel watchdog.
+TimeoutStopSec=35s
+KillSignal=SIGTERM
+KillMode=control-group
+SendSIGKILL=yes
+OOMPolicy=stop
+UMask=0077
+LimitCORE=0
+LimitNOFILE=1024
+TasksMax=32
+MemoryMax=512M
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SETGID CAP_SETUID
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+KeyringMode=private
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+SystemCallArchitectures=native

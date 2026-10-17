@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def build_metadata_fixture() -> dict[str, object]:
     digest = "sha256:" + "0" * 64
     return {
-        "source": "https://example.invalid/serverware",
+        "source": "https://example.invalid/catchplate",
         "revision": "0" * 40,
         "created": "2026-01-01T00:00:00Z",
         "source_date_epoch": "0",
@@ -131,7 +131,7 @@ def assert_preflight_descriptor_contract(preflight_source: str, readiness_source
 def main() -> None:
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     body = target_body(makefile, "production-release-proof")
-    if "AWS_KMS_MATERIALS_OUT ?= /etc/serverware/kms-materials.json" not in makefile:
+    if "AWS_KMS_MATERIALS_OUT ?= /etc/catchplate/kms-materials.json" not in makefile:
         raise AssertionError("production release proof does not default KMS materials to the production /etc path")
     release_targets = recursive_make_targets(body)
     if release_targets != ["finalize-production-final-v1"]:
@@ -167,7 +167,7 @@ def main() -> None:
         raise AssertionError("release source capture must require the clean Git source contract")
     if "PRODUCTION_READINESS_PREFLIGHT=0" in body:
         raise AssertionError("production-release-proof disables final preflight")
-    if "SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS" in body:
+    if "CATCHPLATE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS" in body:
         raise AssertionError("production-release-proof enables the test-only preflight bypass")
     if "production-host-preflight" in release_targets or "run-production-readiness" in release_targets:
         raise AssertionError("production-release-proof bypasses the closed native launcher path")
@@ -357,7 +357,7 @@ def main() -> None:
             raise AssertionError(f"production launcher build omits {required}")
 
     launcher_install_body = target_body(makefile, "install-production-launcher")
-    for required in ("id -u", "sha256sum", "/opt/serverware/launchers/sha256-", "-m 0500"):
+    for required in ("id -u", "sha256sum", "/opt/catchplate/launchers/sha256-", "-m 0500"):
         if required not in launcher_install_body:
             raise AssertionError(f"production launcher installation omits {required}")
     if "launcher_binary_digest" not in launcher_install_body or "independently reproducible production image" not in launcher_install_body:
@@ -395,7 +395,7 @@ def main() -> None:
         / "decision-gate-rs"
         / "src"
         / "bin"
-        / "serverware-production-launcher.rs"
+        / "catchplate-production-launcher.rs"
     ).read_text(encoding="utf-8")
     readiness_source = (
         ROOT / "scripts" / "run_production_readiness.py"
@@ -415,7 +415,7 @@ def main() -> None:
             "manifest generator",
             generator_source,
             (
-                'API_VERSION = "serverware.productionReadinessLaunch/v3"',
+                'API_VERSION = "catchplate.productionReadinessLaunch/v3"',
                 '"nonceRollbackAssurance"',
                 '"native-launcher-measured"',
                 '"purpose": "readiness-only"',
@@ -427,7 +427,7 @@ def main() -> None:
             "native launcher",
             launcher_source,
             (
-                'serverware.bootstrapReceipt/v3',
+                'catchplate.bootstrapReceipt/v3',
                 'nonce_rollback_assurance_contract_sha256: String',
                 'nonce_rollback_assurance_pins_sha256: String',
                 '--launcher-nonce-rollback-assurance-pins',
@@ -474,9 +474,9 @@ def main() -> None:
             "adversarial launcher test",
             adversarial_launcher_source,
             (
-                'CODER_IMAGE_REF = "serverware-production-launcher-adversarial:coder-v3"',
-                'IMAGE_REF_ENV = "SERVERWARE_ADVERSARIAL_LAUNCHER_IMAGE"',
-                'IMAGE_ID_ENV = "SERVERWARE_ADVERSARIAL_LAUNCHER_IMAGE_ID"',
+                'CODER_IMAGE_REF = "catchplate-production-launcher-adversarial:coder-v3"',
+                'IMAGE_REF_ENV = "CATCHPLATE_ADVERSARIAL_LAUNCHER_IMAGE"',
+                'IMAGE_ID_ENV = "CATCHPLATE_ADVERSARIAL_LAUNCHER_IMAGE_ID"',
                 '"--prepare-image"',
                 '"--test-prebuilt-image"',
                 '"--expected-image-id"',
@@ -520,7 +520,7 @@ def main() -> None:
     try:
         build_production_images.build_command(
             "Dockerfile.production",
-            "serverware/control:test",
+            "catchplate/control:test",
             platform="linux/arm64",
             metadata=build_metadata_fixture(),
             context=ROOT,
@@ -537,7 +537,7 @@ def main() -> None:
         raise AssertionError("production image build does not verify its offline dependency cache")
     dry_run_command = build_production_images.build_command(
         "Dockerfile.production",
-        "serverware/control:test",
+        "catchplate/control:test",
         platform="linux/amd64",
         metadata=build_metadata_fixture(),
         context=ROOT,
@@ -601,13 +601,13 @@ def main() -> None:
     ):
         if required not in locked_preparation:
             raise AssertionError(f"frozen batch preparation omits {required}")
-    with tempfile.TemporaryDirectory(prefix="serverware-release-contract-") as temporary_directory:
+    with tempfile.TemporaryDirectory(prefix="catchplate-release-contract-") as temporary_directory:
         wheelhouse = Path(temporary_directory)
         package_wheel_name = subprocess.check_output(
             [
                 sys.executable,
                 "-c",
-                "from serverware_agent_trust.build_backend import WHEEL_NAME; print(WHEEL_NAME)",
+                "from catchplate_agent_trust.build_backend import WHEEL_NAME; print(WHEEL_NAME)",
             ],
             cwd=ROOT,
             text=True,
@@ -633,7 +633,7 @@ def main() -> None:
             "--root",
             str(wheelhouse),
             "--label",
-            "serverware-enrollment-cpython311-linux-amd64",
+            "catchplate-enrollment-cpython311-linux-amd64",
             "--python-tag",
             "cp311",
             "--platform-tag",
@@ -821,7 +821,7 @@ def main() -> None:
         raise AssertionError("sign-production-images does not load production signing settings from the readiness env")
     if "cosign_fixture.py" in sign_body:
         raise AssertionError("sign-production-images must not default published image signing to the fixture cosign helper")
-    if "SERVERWARE_IMAGE_SIGN_COMMAND=" in sign_body or "SERVERWARE_COSIGN_BINARY=" in sign_body:
+    if "CATCHPLATE_IMAGE_SIGN_COMMAND=" in sign_body or "CATCHPLATE_COSIGN_BINARY=" in sign_body:
         raise AssertionError("sign-production-images must let the strict env file or explicit environment select the signer")
 
     preflight_body = target_body(makefile, "production-host-preflight")
@@ -854,7 +854,7 @@ def main() -> None:
     ):
         if required not in run_body:
             raise AssertionError(f"run-production-readiness omits release binding {required}")
-    if "SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS" in run_body:
+    if "CATCHPLATE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS" in run_body:
         raise AssertionError("run-production-readiness enables the test-only preflight bypass")
     if "--skip-current-host-check" in run_body:
         raise AssertionError("run-production-readiness disables the final current-host check")

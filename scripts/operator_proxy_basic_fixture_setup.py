@@ -26,7 +26,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 RUNTIME_ROOT = Path("/fixture-runtime")
 INNER_CA_FILE = Path("/inner-ca.pem")
 PROXY_HOST = "proxy.operator-basic.example.test"
-PROXY_HOSTNAMES = (PROXY_HOST, "serverware-gmail-proxy.example.com")
+PROXY_HOSTNAMES = (PROXY_HOST, "catchplate-gmail-proxy.example.com")
 _DIRECTORIES = frozenset({"app-data", "gate-data", "upstream-data", "service-secrets"})
 _RUNTIME_PROFILES = {"baseline": _DIRECTORIES,
     "managed-x-post": _DIRECTORIES | {"x-custody"}}
@@ -107,7 +107,7 @@ def prepare(runtime_root=RUNTIME_ROOT, inner_ca_file=INNER_CA_FILE, *, proxy_hos
                 and (info.st_uid, info.st_gid) == _OWNER)
         marker = json.loads(_read_public_file(_MARKER, 1024, dir_fd=root_fd, mode=0o400))
         require(isinstance(marker, dict) and set(marker) == {"schema", "syntheticOnly"}
-            and marker["schema"] == "serverware.privateOperatorAuditFixture/v1" and marker["syntheticOnly"] is True)
+            and marker["schema"] == "catchplate.privateOperatorAuditFixture/v1" and marker["syntheticOnly"] is True)
         inner, inner_pem = _inner_root()
 
         # These exclusive mkdir operations are the durable one-shot claim.
@@ -161,7 +161,7 @@ def prepare(runtime_root=RUNTIME_ROOT, inner_ca_file=INNER_CA_FILE, *, proxy_hos
             os.fchown(descriptor, *_OWNER)
             os.fsync(descriptor)
         os.fsync(root_fd)
-        print(json.dumps({"schema": "serverware.proxyBasicFixturePki/v1", "syntheticOnly": True,
+        print(json.dumps({"schema": "catchplate.proxyBasicFixturePki/v1", "syntheticOnly": True,
             "proxyHostname": proxy_hostname, "innerCaSha256": "sha256:" + inner_fingerprint.hex(),
             "outerCaSha256": "sha256:" + outer_fingerprint.hex(),
             "outerLeafSha256": "sha256:" + leaf.fingerprint(hashes.SHA256()).hex(),

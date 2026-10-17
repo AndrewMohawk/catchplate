@@ -22,14 +22,14 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_request_commitment as commitment
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_proof_bundle as retained
-from serverware import authority_revocation_read_write as mixed
-from serverware import authority_revocation_semantics as semantics
-from serverware import authority_transition_webauthn as candidate
-from serverware import authority_webauthn_assertion as assertion
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_request_commitment as commitment
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_proof_bundle as retained
+from catchplate import authority_revocation_read_write as mixed
+from catchplate import authority_revocation_semantics as semantics
+from catchplate import authority_transition_webauthn as candidate
+from catchplate import authority_webauthn_assertion as assertion
 from authority_revocation_semantics_fixture import SemanticFixture, OPERATION, wire, framed
 import test_authority_audit_capacity_work as capacity_oracle
 import test_authority_revocation_proof_bundle as retained_oracle

@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.authority_store.metadata_schema_source import (
+from catchplate.authority_store.metadata_schema_source import (
     metadata_initialization_index_source,
     metadata_schema_source,
 )
@@ -169,7 +169,7 @@ def table_columns(statement):
 
 class MetadataInitializationDeclarationTests(unittest.TestCase):
     def test_compatibility_columns_and_indexes_are_declared_without_early_indexes(self):
-        path = ROOT / "serverware/db.py"
+        path = ROOT / "catchplate/db.py"
         self.assertLess(path.stat().st_size, 4 * 1024 * 1024)
         tree = ast.parse(path.read_text(encoding="utf-8"))
         init = next(node for node in tree.body

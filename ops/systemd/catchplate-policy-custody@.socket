@@ -1,0 +1,27 @@
+[Unit]
+Description=Catchplate policy-custody %i authenticated ingress
+PartOf=catchplate-policy-custody-sockets.target catchplate-policy-custody.target
+Before=catchplate-policy-custody@%i.service
+After=systemd-tmpfiles-setup.service
+AssertPathIsDirectory=/run/catchplate/policy-custody
+StartLimitIntervalSec=60s
+StartLimitBurst=3
+
+[Socket]
+ListenSequentialPacket=/run/catchplate/policy-custody/%i.sock
+FileDescriptorName=listener
+SocketUser=root
+SocketGroup=swpc-driver
+SocketMode=0660
+DirectoryMode=0750
+Backlog=1
+PassCredentials=yes
+FlushPending=yes
+RemoveOnStop=yes
+Accept=no
+Service=catchplate-policy-custody@%i.service
+TriggerLimitIntervalSec=60s
+TriggerLimitBurst=3
+
+[Install]
+WantedBy=catchplate-policy-custody-sockets.target

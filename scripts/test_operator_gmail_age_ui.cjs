@@ -10,14 +10,14 @@ const vm = require('node:vm');
 const ROOT = resolve(__dirname, '..');
 const fixture = JSON.parse(execFileSync('python3', ['-B', '-c', [
   'import json', 'from types import SimpleNamespace', 'from unittest.mock import patch',
-  'from serverware import operator_catalog_gmail as gmail', 'from serverware.operator_demo_portal import SCRIPT_FILES',
+  'from catchplate import operator_catalog_gmail as gmail', 'from catchplate.operator_demo_portal import SCRIPT_FILES',
   'profile=SimpleNamespace(permission_preset="gmail_readonly", api_origins=[gmail.ORIGIN], scopes=[gmail.READ_SCOPE])',
-  'with patch("serverware.operator_catalog_google.validate_profile_binding", return_value=profile):',
+  'with patch("catchplate.operator_catalog_google.validate_profile_binding", return_value=profile):',
   ' print(json.dumps({"descriptor":gmail.capabilities(SimpleNamespace(in_transaction=True))[0],"scripts":SCRIPT_FILES}))',
 ].join('\n')], {cwd: ROOT, encoding: 'utf8', timeout: 5000}));
 const copy = value => JSON.parse(JSON.stringify(value));
 const context = vm.createContext({URL, URLSearchParams, module: {exports: {}}, location: {origin: 'https://operator.example.test'}});
-for (const file of fixture.scripts) vm.runInContext(readFileSync(resolve(ROOT, 'serverware/operator_demo_web', file), 'utf8'), context, {timeout: 1000});
+for (const file of fixture.scripts) vm.runInContext(readFileSync(resolve(ROOT, 'catchplate/operator_demo_web', file), 'utf8'), context, {timeout: 1000});
 const recent = days => ({mode: 'recent_internal_date_v1', max_age_days: days});
 const unrestricted = {mode: 'unrestricted'};
 const old = copy(fixture.descriptor); delete old.age_policy_options;
@@ -50,9 +50,9 @@ const app = {id: '22222222-2222-4222-8222-222222222222', status: 'active', proxy
 const catalog = {revision: 1, policy: {policy_hash: 'synthetic-policy'}, credentials: [credential], applications: [app],
   allowed_upstreams: ['https://gmail.googleapis.com'], capabilities: {google_oauth: {}, operation_bundles: [fixture.descriptor],
     credential_input_modes: ['insert', 'replace_exact'], application_proxy_authentication: {
-      schema: 'serverware.operatorProxyAuthentication/v1', modes: ['bearer', 'basic_and_bearer_v1'], path: '/api/operator-demo/applications/proxy-authentication'}}};
+      schema: 'catchplate.operatorProxyAuthentication/v1', modes: ['bearer', 'basic_and_bearer_v1'], path: '/api/operator-demo/applications/proxy-authentication'}}};
 const makeRule = policy => ({...context.gmailRuleFields(policy), name: 'Read Gmail', application_id: app.id, credential_id: credential.id,
-  credential_input: 'replace_exact', placeholder: 'Bearer serverware-gmail-placeholder-v1'});
+  credential_input: 'replace_exact', placeholder: 'Bearer catchplate-gmail-placeholder-v1'});
 test(() => {
   for (const policy of [unrestricted, recent(1), recent(3650)]) {
     const rule = makeRule(policy);
@@ -77,7 +77,7 @@ test(() => {
   assert.match(summary, /whole page/); assert(!summary.includes('Unrestricted'));
   assert.match(context.gmailAgePolicySummary(unrestricted), /Unrestricted/);
 });
-const connect = readFileSync(resolve(ROOT, 'serverware/operator_demo_web/workspace_connect.js'), 'utf8');
+const connect = readFileSync(resolve(ROOT, 'catchplate/operator_demo_web/workspace_connect.js'), 'utf8');
 function functionSource(name, endMarker) {
   const start = connect.indexOf('  function ' + name + '('), end = connect.indexOf(endMarker, start);
   assert(start > 0 && end > start); return connect.slice(start, end).trim();
@@ -114,7 +114,7 @@ test(() => {
   assert(context.reviewCurrent()); assert.deepEqual(copy(context.review.rule.age_policy), unrestricted);
   assert(connect.includes("[['connect-gmail-age-policy', 'change'], ['connect-gmail-age-days', 'input']]"));
 });
-const handoff = readFileSync(resolve(ROOT, 'serverware/operator_demo_web/workspace_proxy_audit.js'), 'utf8');
+const handoff = readFileSync(resolve(ROOT, 'catchplate/operator_demo_web/workspace_proxy_audit.js'), 'utf8');
 const start = handoff.indexOf('    if (isGmailRule(rule)) {', handoff.indexOf("element('download-config').addEventListener"));
 const end = handoff.indexOf('    if (isGithubRule(rule)) {', start); assert(start > 0 && end > start);
 test(() => {
@@ -134,7 +134,7 @@ test(() => {
   assert(handoff.includes("? '?maxResults=32' : ''"), 'restricted custom HTTP list example includes explicit bounded size');
 });
 test(() => {
-  const html = readFileSync(resolve(ROOT, 'serverware/operator_demo_web/index.html'), 'utf8');
+  const html = readFileSync(resolve(ROOT, 'catchplate/operator_demo_web/index.html'), 'utf8');
   assert.match(html, /id="connect-gmail-age-policy" required disabled><option value="unrestricted" selected>All mail/);
   assert.match(html, /id="connect-gmail-age-days" type="number" min="1" max="3650" step="1"/);
   assert(connect.includes("gmail && (gmailRecentAvailable(catalog()) || recentAge)"));

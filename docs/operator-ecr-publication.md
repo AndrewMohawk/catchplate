@@ -22,7 +22,7 @@ test. Six read-only internal-app browser GETs confirmed the empty ECR list,
 overflow. These checks performed no publication, notification delivery, provider
 call or human SSO login. See the [project tracker](project-completion.md).
 
-This ordinary, host-trusted workflow keeps AWS credentials in Serverware and
+This ordinary, host-trusted workflow keeps AWS credentials in Catchplate and
 uses the [stock Boto3 example](../examples/ecr-publish-python/README.md). It is
 not `docker push`, registry login, an image build, generic AWS SDK access or a
 TEE/YubiKey approval. An administrator with full host control can bypass it.
@@ -30,7 +30,7 @@ TEE/YubiKey approval. An administrator with full host control can bypass it.
 ## Operator setup
 
 For a new container deployment, enable the optional
-[`docker-compose.ecr.yml`](../docker/serverware-operator-demo/docker-compose.ecr.yml)
+[`docker-compose.ecr.yml`](../docker/catchplate-operator-demo/docker-compose.ecr.yml)
 overlay while retaining every existing Compose layer. Precreate the empty
 `/data/ecr-artifacts` directory in the persistent app volume, owned by the app
 UID/GID `10001:10001` with mode `0700`. The overlay sets the app's memory ceiling
@@ -52,7 +52,7 @@ reservation; do not change CPU, other services or persisted resources.
    proxy and policy capability. China/GovCloud, FIPS, alternate endpoints and
    arbitrary AWS services are outside this profile.
 4. Download the private client JSON and interception CA. The JSON contains the
-   Serverware client login and exact scope, **not AWS keys or session tokens**.
+   Catchplate client login and exact scope, **not AWS keys or session tokens**.
    Keep it owner-only and out of Git/logs. Relative CA paths resolve beside the
    JSON; the optional outer-proxy CA is separate from interception trust.
 
@@ -67,7 +67,7 @@ supported.
 
 Run the example's `stage --config … --stage …` command. It re-verifies and seals
 the local bytes, creates a publication, uploads the original manifest and unique
-blobs to Serverware, and requests review. **Staging makes no ECR request.** Save
+blobs to Catchplate, and requests review. **Staging makes no ECR request.** Save
 the exact publication UUID printed first, even if a later staging call fails.
 Use `status --config … --publication <uuid>` to inspect that record, not to
 automatically retry or create a replacement.
@@ -82,7 +82,7 @@ The client must then deliberately run:
 
 ```sh
 python -I -B examples/ecr-publish-python/publish.py publish \
-  --config /private/serverware-client.private.json \
+  --config /private/catchplate-client.private.json \
   --stage /absolute/private-parent/image-stage \
   --publication <exact-publication-uuid> --execute-write
 ```
@@ -101,7 +101,7 @@ machine control API uses the client login at the proxy's
 | `CompleteLayerUpload` | The fully uploaded blob's exact digest. |
 | `PutImage` | Original manifest bytes, media type, image digest and selected tag, after every blob is ready. |
 
-The SDK's publication UUID marker is a selector, not authorization. Serverware
+The SDK's publication UUID marker is a selector, not authorization. Catchplate
 checks current permission/policy and credential generation before signing each
 exact request. The custody-side signer returns an **encrypted exact-request
 headers lease** to the proxy, not the AWS credential tuple. Possible-send state
@@ -144,7 +144,7 @@ Retirement durably records intent before deleting only that publication's local
 staging files. It frees a slot without changing the AWS image, publication
 outcome, artifact commitment, acknowledged checkpoint or audit history. It does
 not delete or reset the parent record. Keep your original local image/backup if
-you need the bytes later; retirement removes Serverware's stored copy.
+you need the bytes later; retirement removes Catchplate's stored copy.
 
 If the response is lost, use **Check retirement status (read only)**. Only a
 server-reported pending cleanup permits **Retry retiring staged files**, followed
@@ -190,10 +190,10 @@ and `/tmp/serverware-ecr-notifications-readonly.GzHa2v/ui15.jAQjkc/receipt.json`
 The connected acceptance used the normal proxy and stock Boto3 with a synthetic provider, not real
 AWS. The separate offline tests intercept SDK sends and are component evidence,
 not additional connected acceptance. Core source:
-[permission](../serverware/operator_catalog_ecr.py),
-[artifact storage](../serverware/operator_ecr_artifacts.py),
-[publication owner](../serverware/operator_ecr_publications.py), and
-[signing lease](../serverware/operator_ecr_signing_api.py).
+[permission](../catchplate/operator_catalog_ecr.py),
+[artifact storage](../catchplate/operator_ecr_artifacts.py),
+[publication owner](../catchplate/operator_ecr_publications.py), and
+[signing lease](../catchplate/operator_ecr_signing_api.py).
 The [historical native planning work](operator-ecr-publication-plan.md) remains
 a separate future-assurance target, not a prerequisite silently satisfied by
 ordinary host-trusted approval.

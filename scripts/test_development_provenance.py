@@ -95,7 +95,7 @@ class DevelopmentProvenanceTests(unittest.TestCase):
     def test_activation_requires_the_same_generation_and_successful_dependency(self) -> None:
         candidate = copy.deepcopy(self.custody_model)
         candidate["services"]["response-v2-generation-activation"]["environment"][
-            "SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256"
+            "CATCHPLATE_RESPONSE_V2_PROVIDER_GENERATION_SHA256"
         ] = "sha256:" + "2" * 64
         with self.assertRaises(ValueError):
             self.classify(candidate)
@@ -107,7 +107,7 @@ class DevelopmentProvenanceTests(unittest.TestCase):
             self.classify(candidate)
 
     def test_activation_rejects_missing_replaced_or_writable_peer_mount(self) -> None:
-        target = "/run/serverware-response-v2/credential-transport"
+        target = "/run/catchplate-response-v2/credential-transport"
         for mutation in ("missing", "replacement", "writable"):
             candidate = copy.deepcopy(self.custody_model)
             activation = candidate["services"]["response-v2-generation-activation"]
@@ -162,12 +162,12 @@ class DevelopmentContainerInventoryTests(unittest.TestCase):
             self.assertIsNone(provenance.development_container_execution(service, candidate))
 
     def test_exited_long_running_service_is_not_success(self) -> None:
-        inspected = container_fixture("serverware")
+        inspected = container_fixture("catchplate")
         inspected["State"].update(Status="exited", Running=False, ExitCode=0)
-        self.assertIsNone(provenance.development_container_execution("serverware", inspected))
+        self.assertIsNone(provenance.development_container_execution("catchplate", inspected))
 
     def inventory_run(self, *, duplicate: bool = False, drift: bool = False):
-        services = ("serverware", "response-v2-generation-bootstrap", "response-v2-generation-activation")
+        services = ("catchplate", "response-v2-generation-bootstrap", "response-v2-generation-activation")
         fixtures = {name: container_fixture(name) for name in services}
         inspections: dict[str, int] = {}
 
@@ -191,7 +191,7 @@ class DevelopmentContainerInventoryTests(unittest.TestCase):
 
     def test_inventory_records_running_and_completed_services(self) -> None:
         result = self.inventory_run()
-        self.assertEqual(result["serverware"]["execution"]["lifecycle"], "running")
+        self.assertEqual(result["catchplate"]["execution"]["lifecycle"], "running")
         for service in provenance.CUSTODY_ONESHOT_SERVICES:
             self.assertEqual(result[service]["execution"]["lifecycle"], "completed-successfully")
 

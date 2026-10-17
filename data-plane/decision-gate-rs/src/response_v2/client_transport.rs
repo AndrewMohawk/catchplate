@@ -1,31 +1,31 @@
 use super::*;
 
 const RESPONSE_OBSERVATION_V2_ROLE_KEYS_ENV: &str =
-    "SERVERWARE_RESPONSE_OBSERVATION_V2_ROLE_KEYS_JSON";
+    "CATCHPLATE_RESPONSE_OBSERVATION_V2_ROLE_KEYS_JSON";
 const RESPONSE_OBSERVATION_V2_GENERATION_ID_ENV: &str =
-    "SERVERWARE_RESPONSE_OBSERVATION_V2_GENERATION_ID";
+    "CATCHPLATE_RESPONSE_OBSERVATION_V2_GENERATION_ID";
 const RESPONSE_OBSERVATION_V2_SOURCE_COMMIT_SHA256_ENV: &str =
-    "SERVERWARE_RESPONSE_OBSERVATION_V2_SOURCE_COMMIT_SHA256";
+    "CATCHPLATE_RESPONSE_OBSERVATION_V2_SOURCE_COMMIT_SHA256";
 const RESPONSE_OBSERVATION_V2_SOURCE_TREE_SHA256_ENV: &str =
-    "SERVERWARE_RESPONSE_OBSERVATION_V2_SOURCE_TREE_SHA256";
+    "CATCHPLATE_RESPONSE_OBSERVATION_V2_SOURCE_TREE_SHA256";
 const RESPONSE_OBSERVATION_V2_TRANSPARENCY_TRUST_PIN_ENV: &str =
-    "SERVERWARE_RESPONSE_OBSERVATION_V2_TRANSPARENCY_TRUST_PIN_JSON";
+    "CATCHPLATE_RESPONSE_OBSERVATION_V2_TRANSPARENCY_TRUST_PIN_JSON";
 const RESPONSE_OBSERVATION_V2_TEE_TOPOLOGY_PROFILE_ENV: &str =
-    "SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_TOPOLOGY_PROFILE";
+    "CATCHPLATE_RESPONSE_OBSERVATION_V2_TEE_TOPOLOGY_PROFILE";
 const RESPONSE_OBSERVATION_V2_TEE_VERIFIER_API_VERSION: &str =
-    "serverware.responseObservationV2PinnedTeeVerifier/v1";
+    "catchplate.responseObservationV2PinnedTeeVerifier/v1";
 const RESPONSE_OBSERVATION_V2_TEE_VERIFIER_MODULE_FILE_ENV: &str =
-    "SERVERWARE_RESPONSE_V2_TEE_VERIFIER_MODULE_FILE";
+    "CATCHPLATE_RESPONSE_V2_TEE_VERIFIER_MODULE_FILE";
 const RESPONSE_OBSERVATION_V2_TEE_VERIFIER_MODULE_SHA256_ENV: &str =
-    "SERVERWARE_RESPONSE_V2_TEE_VERIFIER_MODULE_SHA256";
+    "CATCHPLATE_RESPONSE_V2_TEE_VERIFIER_MODULE_SHA256";
 const RESPONSE_OBSERVATION_V2_TEE_EXPECTATIONS_FILE_ENV: &str =
-    "SERVERWARE_RESPONSE_V2_TEE_EXPECTATIONS_FILE";
+    "CATCHPLATE_RESPONSE_V2_TEE_EXPECTATIONS_FILE";
 const RESPONSE_OBSERVATION_V2_TEE_EXPECTATIONS_SHA256_ENV: &str =
-    "SERVERWARE_RESPONSE_V2_TEE_EXPECTATIONS_SHA256";
+    "CATCHPLATE_RESPONSE_V2_TEE_EXPECTATIONS_SHA256";
 const RESPONSE_OBSERVATION_V2_NITRO_TRUST_ROOTS_FILE_ENV: &str =
-    "SERVERWARE_RESPONSE_V2_NITRO_TRUST_ROOTS_FILE";
+    "CATCHPLATE_RESPONSE_V2_NITRO_TRUST_ROOTS_FILE";
 const RESPONSE_OBSERVATION_V2_NITRO_TRUST_ROOTS_SHA256_ENV: &str =
-    "SERVERWARE_RESPONSE_V2_NITRO_TRUST_ROOTS_SHA256";
+    "CATCHPLATE_RESPONSE_V2_NITRO_TRUST_ROOTS_SHA256";
 
 fn response_observation_v2_measured_verifier_input(
     path: Option<OsString>,
@@ -286,7 +286,7 @@ fn validate_response_observation_v2_role_keys(
     let mut identity_root = Sha256::new();
     response_observation_v2_hash_frame(
         &mut identity_root,
-        b"serverware.response-v2/role-identities/v2",
+        b"catchplate.response-v2/role-identities/v2",
     );
     for pin in result.values() {
         response_observation_v2_hash_frame(
@@ -786,7 +786,7 @@ pub(super) fn validate_response_observation_v2_client_config_for_native_serving(
     config: &ResponseObservationV2ClientConfig,
 ) -> Result<(), String> {
     validate_response_observation_v2_client_config_as_uid(config, true,
-        serverware_decision_gate::native_serving_privileges::UID)
+        catchplate_decision_gate::native_serving_privileges::UID)
 }
 
 fn validate_response_observation_v2_client_config_as_uid(
@@ -794,7 +794,7 @@ fn validate_response_observation_v2_client_config_as_uid(
 ) -> Result<(), String> {
     if let Some(profile) = &config.guest_listener {
         profile.validate_client(&config.socket_path, config.expected_uid)?;
-        if !require_production || caller_uid != serverware_decision_gate::native_serving_privileges::UID {
+        if !require_production || caller_uid != catchplate_decision_gate::native_serving_privileges::UID {
             return Err("guest response-v2 is only the explicit final-identity native client profile".to_owned());
         }
     }
@@ -1232,7 +1232,7 @@ pub(super) fn response_observation_v2_hello_once(
 pub(super) fn response_observation_v2_empty_manifest_sha256() -> String {
     let mut hasher = Sha256::new();
     let domain =
-        b"serverware.response-v2/exact-object-manifest/v1";
+        b"catchplate.response-v2/exact-object-manifest/v1";
     hasher.update((domain.len() as u64).to_be_bytes());
     hasher.update(domain);
     format!("sha256:{:x}", hasher.finalize())
@@ -1782,9 +1782,9 @@ pub(super) fn response_observation_v2_validate_recovery_result(
         || signed.provider_generation
             != client.provider_generation
         || signed.signer_role
-            != serverware_decision_gate::V2RecoveryOutcomeAuthorityRole::RecoveryOutcome
+            != catchplate_decision_gate::V2RecoveryOutcomeAuthorityRole::RecoveryOutcome
         || record.signer_role
-            != serverware_decision_gate::V2DurableReplayAuthorityRole::DurableReplayStore
+            != catchplate_decision_gate::V2DurableReplayAuthorityRole::DurableReplayStore
         || !is_sha256_digest(
             &signed.provider_operation_binding_sha256,
         )
@@ -2504,7 +2504,7 @@ pub(super) fn response_observation_v2_exchange(
             operation,
             ..
         } => {
-            use serverware_decision_gate::V2PublicErrorCode;
+            use catchplate_decision_gate::V2PublicErrorCode;
             let terminal = match error.code {
                 V2PublicErrorCode::AuthorizationDenied
                 | V2PublicErrorCode::UnauthorizedClient => {
@@ -2554,7 +2554,7 @@ pub(super) fn response_observation_v2_exchange(
                 std::mem::take(&mut unsigned_result.signature);
             if !stable_matches
                 || result.signer_role
-                    != serverware_decision_gate::V2OutcomeAuthorityRole::Reconciliation
+                    != catchplate_decision_gate::V2OutcomeAuthorityRole::Reconciliation
                 || result.trust_checkpoint_sha256
                     != client.trust_checkpoint_sha256
                 || result.revocation_epoch < client.revocation_epoch
@@ -2890,7 +2890,7 @@ pub(super) fn response_observation_v2_exact_input(
             ResponseObservationV2TransactionError::InvalidResponse,
         );
     }
-    let name = CString::new("serverware-response-v2-object")
+    let name = CString::new("catchplate-response-v2-object")
         .map_err(|_| {
             ResponseObservationV2TransactionError::Unavailable
         })?;
@@ -3429,7 +3429,7 @@ pub(super) fn response_observation_v2_descriptor_manifest_sha256(
     let mut hasher = Sha256::new();
     response_observation_v2_hash_frame(
         &mut hasher,
-        b"serverware.response-v2/exact-object-manifest/v1",
+        b"catchplate.response-v2/exact-object-manifest/v1",
     );
     for descriptor in ordered {
         response_observation_v2_hash_frame(
@@ -3531,7 +3531,7 @@ pub(super) fn connect_response_observation_v2_socket(
     path: &Path,
     expected_uid: libc::uid_t,
     deadline: ResponseObservationV2Deadline,
-    guest: Option<&serverware_decision_gate::GuestResponseV2ListenerProfile>,
+    guest: Option<&catchplate_decision_gate::GuestResponseV2ListenerProfile>,
 ) -> Result<OwnedFd, String> {
     if deadline.expired() {
         return Err(

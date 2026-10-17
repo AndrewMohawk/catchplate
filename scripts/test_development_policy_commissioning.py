@@ -27,7 +27,7 @@ from pathlib import Path
 import sys
 import time
 sys.path.insert(0, sys.argv[1])
-from serverware import development_policy_commissioning as m
+from catchplate import development_policy_commissioning as m
 
 scenario = sys.argv[2]
 def refuses(call):
@@ -94,19 +94,19 @@ elif scenario == 'missing-runtime':
         os.close(reader)
 elif scenario == 'modes':
     m.require_development()
-    os.environ['SERVERWARE_PROCESS_MODE'] = 'metadata-bootstrap'
+    os.environ['CATCHPLATE_PROCESS_MODE'] = 'metadata-bootstrap'
     refuses(m.require_development)
-    os.environ['SERVERWARE_PROCESS_MODE'] = 'serverware-control-plane'
-    os.environ['SERVERWARE_PRODUCTION_IMAGE'] = '1'
+    os.environ['CATCHPLATE_PROCESS_MODE'] = 'catchplate-control-plane'
+    os.environ['CATCHPLATE_PRODUCTION_IMAGE'] = '1'
     refuses(m.require_development)
-    os.environ['SERVERWARE_PRODUCTION_IMAGE'] = '0'
-    os.environ['SERVERWARE_METADATA_STORE_ADMIN_POSTGRES_DSN'] = 'not-a-real-dsn'
+    os.environ['CATCHPLATE_PRODUCTION_IMAGE'] = '0'
+    os.environ['CATCHPLATE_METADATA_STORE_ADMIN_POSTGRES_DSN'] = 'not-a-real-dsn'
     refuses(m.require_development)
-    assert 'serverware.authority_service' not in sys.modules
+    assert 'catchplate.authority_service' not in sys.modules
 else:
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-    from serverware import policy_bundle as bundles
+    from catchplate import policy_bundle as bundles
     # The demo policy signature is genuine, from an explicitly synthetic key.
     # Other request/evidence fields are only local shape fixtures, NOT authority.
     key = Ed25519PrivateKey.from_private_bytes(b'q' * 32)
@@ -119,7 +119,7 @@ else:
     policy['metadata'].pop('signature', None)
     policy['metadata']['signature'] = 'ed25519:' + bundles._b64e(key.sign(bundles.policy_signature_bytes(policy)))
     policy_raw = bundles.canonical_json(policy).encode('utf-8')
-    from serverware.development_policy_genesis import signed_demo
+    from catchplate.development_policy_genesis import signed_demo
     _, bound = signed_demo(policy_raw)
     now = time.time_ns()
     record = dict(genesis_preparation_digest='sha256:'+'1'*64,
@@ -181,10 +181,10 @@ else:
 
 class DevelopmentPolicyCommissioningTests(unittest.TestCase):
     def scenario(self, name):
-        environment = {key: value for key, value in os.environ.items() if not key.startswith("SERVERWARE_")}
-        with tempfile.TemporaryDirectory(prefix="serverware-commissioning-") as directory:
-            environment.update(SERVERWARE_DATA_DIR=directory, SERVERWARE_RELEASE_CHANNEL="dev",
-                SERVERWARE_PROCESS_MODE="serverware-control-plane")
+        environment = {key: value for key, value in os.environ.items() if not key.startswith("CATCHPLATE_")}
+        with tempfile.TemporaryDirectory(prefix="catchplate-commissioning-") as directory:
+            environment.update(CATCHPLATE_DATA_DIR=directory, CATCHPLATE_RELEASE_CHANNEL="dev",
+                CATCHPLATE_PROCESS_MODE="catchplate-control-plane")
             result = subprocess.run([sys.executable, "-I", "-B", "-c", CHILD, str(ROOT), name],
                 cwd=ROOT, env=environment, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -220,7 +220,7 @@ class DevelopmentPolicyCommissioningTests(unittest.TestCase):
         self.scenario("finalize")
 
     def test_actual_owner_source_connects_two_fixed_calls_without_restore_or_sql(self):
-        tree = ast.parse((ROOT / "serverware/development_policy_commissioning.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/development_policy_commissioning.py").read_text())
         owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "DevelopmentPolicyCommissioning")
         methods = {node.name: node for node in owner.body if isinstance(node, ast.FunctionDef)}
         calls = [node for node in ast.walk(methods["run"]) if isinstance(node, ast.Call)

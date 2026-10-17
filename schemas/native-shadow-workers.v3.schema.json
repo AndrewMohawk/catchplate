@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-workers.v3.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-workers.v3.schema.json",
   "title": "Native shadow worker with independent runtime verifier resources",
   "$ref": "#/$defs/configuration",
   "$defs": {
@@ -8,7 +8,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","executable","runtimeResources"],
       "properties": {
-        "apiVersion":{"const":"serverware.nativeShadowWorkers/v3"},
+        "apiVersion":{"const":"catchplate.nativeShadowWorkers/v3"},
         "executable":{"$ref":"native-shadow-workers.v2.schema.json#/$defs/configuration/properties/executable"},
         "runtimeResources":{"$ref":"native-shadow-runtime-resources.v1.schema.json#/$defs/configuration"},
         "publicationResources":{"oneOf":[
@@ -22,7 +22,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","trustManifest","runtimeVerifier","webauthnVerifier","publicationHandoff","custodyConfig","startupActiveAuthorization","workers"],
       "properties": {
-        "apiVersion":{"const":"serverware.nativeShadowConfiguration/v5"},
+        "apiVersion":{"const":"catchplate.nativeShadowConfiguration/v5"},
         "trustManifest":{"$ref":"native-shadow-workers.v1.schema.json#/$defs/artifact"},
         "runtimeVerifier":{"$ref":"native-shadow-workers.v1.schema.json#/$defs/command"},
         "webauthnVerifier":{"$ref":"native-shadow-workers.v1.schema.json#/$defs/command"},

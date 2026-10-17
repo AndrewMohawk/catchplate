@@ -21,7 +21,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_execution_packet as packet
+from catchplate import authority_challenge_execution_packet as packet
 from test_authority_challenge_computation import Fixture as ComputationFixture, digest, frame, key, work
 
 

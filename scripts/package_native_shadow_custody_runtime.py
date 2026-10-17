@@ -23,8 +23,8 @@ from package_native_broker_runtime import ENV, MAX_TOTAL, canonical, original, r
 ROOT = Path("/shadow-custody-runtime")
 OUTPUT = Path("/shadow-custody-output")
 INPUTS = Path("/shadow-custody-inputs")
-PREFIX = "/opt/serverware/native-shadow-custody/"
-EXECUTABLE = "/usr/local/bin/serverware-policy-shadow-custody-guest"
+PREFIX = "/opt/catchplate/native-shadow-custody/"
+EXECUTABLE = "/usr/local/bin/catchplate-policy-shadow-custody-guest"
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 FIELDS = {"apiVersion", "sourceManifestSha256", "seccompSha256", "runtimeConfigurationSha256",
           "buildRecipeSha256", "provenanceStatementSha256"}
@@ -92,7 +92,7 @@ def main() -> None:
     require(sha(raw) == pin, "public image input manifest pin differs")
     inputs = json.loads(raw, object_pairs_hook=no_duplicates)
     require(type(inputs) is dict and set(inputs) == FIELDS and canonical(inputs) == raw
-            and inputs["apiVersion"] == "serverware.nativeShadowCustodyImageInputs/v1",
+            and inputs["apiVersion"] == "catchplate.nativeShadowCustodyImageInputs/v1",
             "public image inputs require the closed canonical profile")
     for field in FIELDS - {"apiVersion"}:
         require(type(inputs[field]) is str and DIGEST.fullmatch(inputs[field]) is not None
@@ -102,7 +102,7 @@ def main() -> None:
     require(set(path.name for path in INPUTS.iterdir())
             == {"inputs.json", "seccomp.bpf", "runtime.json", "build-recipe.json", "provenance.json"},
             "unexpected fixed public image input")
-    executable = held(Path("/shadow-static/serverware-policy-shadow-custody-guest"), 64 * 1024 * 1024)
+    executable = held(Path("/shadow-static/catchplate-policy-shadow-custody-guest"), 64 * 1024 * 1024)
     static_amd64(executable)
     files = [(EXECUTABLE, executable, "0555")]
     for name, field, maximum in (
@@ -146,9 +146,9 @@ def main() -> None:
     require(0 < image.stat().st_size <= MAX_TOTAL, "static image exceeds admitted image bound")
     with image.open("rb") as stream:
         image_sha = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
-    manifest = {"apiVersion": "serverware.nativeShadowCustodyRuntimeBuild/v1",
+    manifest = {"apiVersion": "catchplate.nativeShadowCustodyRuntimeBuild/v1",
         "purpose": "native-shadow-static-key-admission-v1", "releaseAuthority": False,
-        "imagePath": "/opt/serverware/native-shadow-custody-runtime.squashfs", "imageSha256": image_sha,
+        "imagePath": "/opt/catchplate/native-shadow-custody-runtime.squashfs", "imageSha256": image_sha,
         "workerExecutableSha256": sha(executable), "imageBytes": image.stat().st_size,
         "sourceManifestSha256": source_pin, "inputManifestSha256": pin, "sourceDateEpoch": epoch,
         "files": inventory, "mountTargets": [{"path": "/proc", "type": "directory", "mode": "0555"}]}

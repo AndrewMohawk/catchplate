@@ -39,7 +39,7 @@ const REASONS: &[&str] = &[
 
 fn fixture() -> (GateState, Arc<Snapshot>) {
     let mut held = (*test_snapshot(1)).clone();
-    held.policy_id = "serverware-operator-demo".into();
+    held.policy_id = "catchplate-operator-demo".into();
     held.principals[0].proxy_authorization = Some(ProxyAuthorizationPolicy::BearerToken {
         token_sha256: sha256_prefixed(b"synthetic-response-observation-client"),
         source_cidrs: vec![], expires_at_ms: Some(now_epoch_ms() + 60_000), basic_transport: None, managed_renewal: None,
@@ -77,7 +77,7 @@ fn record(line: &str) -> Value {
     assert_eq!(fields, BTreeSet::from([
         "schema", "ordinal", "boundary", "reason", "response_shape", "write_completed",
     ]));
-    assert_eq!(value["schema"], "serverware.operatorBuffered503Observation/v1");
+    assert_eq!(value["schema"], "catchplate.operatorBuffered503Observation/v1");
     assert!((1..=64).contains(&value["ordinal"].as_u64().unwrap()));
     assert!(["upstream_preparation", "buffered_terminal"].contains(&value["boundary"].as_str().unwrap()));
     assert!(["error", "decision", "unclassified"].contains(&value["response_shape"].as_str().unwrap()));

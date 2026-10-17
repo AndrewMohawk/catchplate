@@ -1,22 +1,22 @@
 # INACTIVE SAMPLE: review and copy deliberately into .github/workflows/.
 # Keep this example and its reviewed package-lock.json in the checkout.
-# Set SERVERWARE_CLIENT_CONFIG_JSON to the downloaded private READ permission,
-# SERVERWARE_CA_PEM to its public CA, and optional SERVERWARE_PROXY_CA_PEM only
+# Set CATCHPLATE_CLIENT_CONFIG_JSON to the downloaded private READ permission,
+# CATCHPLATE_CA_PEM to its public CA, and optional CATCHPLATE_PROXY_CA_PEM only
 # for a private outer proxy CA. No provider key or separate scope selectors.
-# Use a protected serverware-demo environment. No workflow run is claimed here.
-name: Read Alchemy chain status through Serverware
+# Use a protected catchplate-demo environment. No workflow run is claimed here.
+name: Read Alchemy chain status through Catchplate
 on:
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: serverware-alchemy-read-example
+  group: catchplate-alchemy-read-example
   cancel-in-progress: false
 jobs:
   read:
     if: github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-24.04
-    environment: serverware-demo
+    environment: catchplate-demo
     timeout-minutes: 5
     defaults:
       run:
@@ -39,18 +39,18 @@ jobs:
       - name: Read using the downloaded permission
         timeout-minutes: 3
         env:
-          SERVERWARE_CLIENT_CONFIG_JSON: ${{ secrets.SERVERWARE_CLIENT_CONFIG_JSON }}
-          SERVERWARE_CA_PEM: ${{ secrets.SERVERWARE_CA_PEM }}
-          SERVERWARE_PROXY_CA_PEM: ${{ secrets.SERVERWARE_PROXY_CA_PEM }}
+          CATCHPLATE_CLIENT_CONFIG_JSON: ${{ secrets.CATCHPLATE_CLIENT_CONFIG_JSON }}
+          CATCHPLATE_CA_PEM: ${{ secrets.CATCHPLATE_CA_PEM }}
+          CATCHPLATE_PROXY_CA_PEM: ${{ secrets.CATCHPLATE_PROXY_CA_PEM }}
         run: |
           set -euo pipefail
           umask 077
           test "$(node --version)" = v25.5.0
-          private_dir=$(mktemp -d -- "$RUNNER_TEMP/serverware-alchemy-read.XXXXXXXX")
-          export SERVERWARE_CI_PRIVATE_DIR="$private_dir"
-          printf 'SERVERWARE_CI_PRIVATE_DIR=%s\n' "$private_dir" >> "$GITHUB_ENV"
+          private_dir=$(mktemp -d -- "$RUNNER_TEMP/catchplate-alchemy-read.XXXXXXXX")
+          export CATCHPLATE_CI_PRIVATE_DIR="$private_dir"
+          printf 'CATCHPLATE_CI_PRIVATE_DIR=%s\n' "$private_dir" >> "$GITHUB_ENV"
           cleanup() {
-            rm -f -- "$private_dir/client.private.json" "$private_dir/serverware-ca.pem" \
+            rm -f -- "$private_dir/client.private.json" "$private_dir/catchplate-ca.pem" \
               "$private_dir/proxy-ca.pem" "$private_dir/response.private.json"
             rmdir -- "$private_dir"
           }
@@ -61,9 +61,9 @@ jobs:
           import { X509Certificate } from 'node:crypto';
           import { loadClientConfig } from './client.mjs';
           try {
-            const directory = process.env.SERVERWARE_CI_PRIVATE_DIR;
+            const directory = process.env.CATCHPLATE_CI_PRIVATE_DIR;
             const filename = join(directory, 'client.private.json');
-            const raw = process.env.SERVERWARE_CLIENT_CONFIG_JSON ?? '';
+            const raw = process.env.CATCHPLATE_CLIENT_CONFIG_JSON ?? '';
             if (!raw || Buffer.byteLength(raw) > 65536) throw new Error();
             const config = JSON.parse(raw);
             if (!config || typeof config !== 'object' || Array.isArray(config)
@@ -80,11 +80,11 @@ jobs:
               for (const block of blocks) new X509Certificate(block);
               writeFileSync(join(directory, name), pem, { mode: 0o600, flag: 'wx' });
             };
-            publicCa('serverware-ca.pem', process.env.SERVERWARE_CA_PEM);
-            const extra = process.env.SERVERWARE_PROXY_CA_PEM ?? '';
+            publicCa('catchplate-ca.pem', process.env.CATCHPLATE_CA_PEM);
+            const extra = process.env.CATCHPLATE_PROXY_CA_PEM ?? '';
             if (extra) publicCa('proxy-ca.pem', extra);
             // Only local CA filenames change; login and saved scope are retained.
-            config.ca_file = 'serverware-ca.pem';
+            config.ca_file = 'catchplate-ca.pem';
             config.proxy_ca_file = extra ? 'proxy-ca.pem' : null;
             writeFileSync(filename, JSON.stringify(config), { mode: 0o600, flag: 'w' });
             loadClientConfig(filename, {});
@@ -93,7 +93,7 @@ jobs:
             process.exitCode = 1;
           }
           NODE
-          unset SERVERWARE_CLIENT_CONFIG_JSON SERVERWARE_CA_PEM SERVERWARE_PROXY_CA_PEM
+          unset CATCHPLATE_CLIENT_CONFIG_JSON CATCHPLATE_CA_PEM CATCHPLATE_PROXY_CA_PEM
           timeout --signal=TERM --kill-after=5s 40s \
             node client.mjs --config "$private_dir/client.private.json" > "$private_dir/response.private.json"
           # Never log provider data or upload private files as workflow artifacts.
@@ -102,12 +102,12 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          private_dir="${SERVERWARE_CI_PRIVATE_DIR:-}"
+          private_dir="${CATCHPLATE_CI_PRIVATE_DIR:-}"
           if [[ -z "$private_dir" || ! -d "$private_dir" ]]; then exit 0; fi
           case "$private_dir" in
-            "$RUNNER_TEMP"/serverware-alchemy-read.????????) ;;
+            "$RUNNER_TEMP"/catchplate-alchemy-read.????????) ;;
             *) printf '%s\n' 'Refusing cleanup of an unexpected directory.' >&2; exit 1 ;;
           esac
-          rm -f -- "$private_dir/client.private.json" "$private_dir/serverware-ca.pem" \
+          rm -f -- "$private_dir/client.private.json" "$private_dir/catchplate-ca.pem" \
             "$private_dir/proxy-ca.pem" "$private_dir/response.private.json"
           rmdir -- "$private_dir"

@@ -107,7 +107,7 @@ pub(in super::super) fn bind_for_start(pending: ExecutionPending,
             delegation.target_spki_sha256].iter().all(|key| key != &a.root_key_id),
         "native execution attachment reuses a parent key or CA capability")?;
     let mut operation = Sha256::new();
-    operation.update(b"serverware/native-egress-execution-parents/v1\0");
+    operation.update(b"catchplate/native-egress-execution-parents/v1\0");
     for commitment in bound.commitments { operation.update(commitment); }
     operation.update(a.original_sha256);
     for scalar in [pending.launch.manifest_sha256(), pending.launch.execution_manifest_sha256(),

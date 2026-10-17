@@ -10,7 +10,7 @@ pub(crate) const ADAPTER: &str = "alchemy.rpc_read.v1";
 pub(crate) const OPERATION: &str = "alchemy.rpc.read";
 pub(crate) const MODE: &str = "alchemyRpcReadJsonV1";
 pub(crate) const CONTENT_TYPE_POLICY: &str = "alchemyRpcReadJsonUtf8V1";
-pub(crate) const PLACEHOLDER: &str = "Bearer serverware-alchemy-placeholder-v1";
+pub(crate) const PLACEHOLDER: &str = "Bearer catchplate-alchemy-placeholder-v1";
 pub(crate) const PATH: &str = "/v2";
 pub(crate) const HEADERS: &[&str] = &["accept", "accept-language", "alchemy-ethers-sdk-method",
     "alchemy-ethers-sdk-version", "sec-fetch-mode", "user-agent"];
@@ -33,7 +33,7 @@ pub(crate) fn host(chain: &str) -> Option<&'static str> {
 }
 
 pub(crate) fn gate_capability() -> Value {
-    json!({"schema":"serverware.operatorAlchemyRpcReadGate/v1","adapter":ADAPTER,"operation":OPERATION})
+    json!({"schema":"catchplate.operatorAlchemyRpcReadGate/v1","adapter":ADAPTER,"operation":OPERATION})
 }
 
 pub(crate) fn request_profile() -> ProviderRequestProfile {

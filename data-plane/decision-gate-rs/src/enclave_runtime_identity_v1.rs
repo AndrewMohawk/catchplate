@@ -45,7 +45,7 @@ use time::{Duration, OffsetDateTime};
 use x509_parser::{certificate::X509Certificate, prelude::FromDer};
 use zeroize::Zeroizing;
 
-const BINDING_DOMAIN: &[u8] = b"serverware/enclave-runtime-key-binding/v1\0";
+const BINDING_DOMAIN: &[u8] = b"catchplate/enclave-runtime-key-binding/v1\0";
 const TLS_ROOT: u8 = 1;
 const LEASE_RECIPIENT: u8 = 2;
 const MUTUAL_TLS_INGRESS: u8 = 3;
@@ -53,7 +53,7 @@ const RESPONSE_PROOF: u8 = 4;
 const ENROLLMENT: u8 = 5;
 const BROKER_KMS_RECIPIENT: u8 = 6;
 const HISTORICAL_BROKER_KMS_RECIPIENT: u8 = 7;
-const INGRESS_BINDING_DOMAIN: &[u8] = b"serverware/native-tls13-mandatory-client-auth/v1\0";
+const INGRESS_BINDING_DOMAIN: &[u8] = b"catchplate/native-tls13-mandatory-client-auth/v1\0";
 const MAX_INGRESS_CERTIFICATE_BYTES: usize = 16 * 1024;
 const MAX_INGRESS_SPKI_BYTES: usize = 1024;
 
@@ -70,7 +70,7 @@ pub(crate) fn quote_guest_role_key_recipient(
 ) -> Result<Vec<u8>, String> {
     prepared.check()?;
     let deadline = deadline.min(prepared.deadline());
-    let mut binding = b"serverware/native-role-key-recipient/v1\0".to_vec();
+    let mut binding = b"catchplate/native-role-key-recipient/v1\0".to_vec();
     binding.extend_from_slice(&request_sha256);
     let mut nsm = NsmDeviceV1::open(deadline)?;
     let quote = nsm.attest(public_key, nonce, &binding, deadline)?;
@@ -425,7 +425,7 @@ impl EnclaveRuntimeIdentityV1 {
         }
         let mut root_bytes = 0usize;
         let mut root_hash = Sha256::new();
-        root_hash.update(b"serverware/mutual-tls-client-trust/v1\0");
+        root_hash.update(b"catchplate/mutual-tls-client-trust/v1\0");
         root_hash.update((roots.len() as u32).to_be_bytes());
         for root in roots {
             live(deadline)?;

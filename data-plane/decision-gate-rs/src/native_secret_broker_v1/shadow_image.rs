@@ -5,13 +5,13 @@ use super::{image::{Image, Purpose}, ImageConfiguration};
 use std::fs::File;
 use std::os::fd::{AsFd, BorrowedFd};
 
-pub const IMAGE_PATH: &str = "/opt/serverware/native-shadow-custody-runtime.squashfs";
-pub const EXECUTABLE_PATH: &str = "/usr/local/bin/serverware-policy-shadow-custody-guest";
-pub const SECCOMP_PATH: &str = "/opt/serverware/native-shadow-custody/seccomp.bpf";
-pub const CONFIGURATION_PATH: &str = "/opt/serverware/native-shadow-custody/runtime.json";
-pub const LOCK_PATH: &str = "/opt/serverware/native-shadow-custody/Cargo.lock";
-pub const RECIPE_PATH: &str = "/opt/serverware/native-shadow-custody/build-recipe.json";
-pub const PROVENANCE_PATH: &str = "/opt/serverware/native-shadow-custody/provenance.json";
+pub const IMAGE_PATH: &str = "/opt/catchplate/native-shadow-custody-runtime.squashfs";
+pub const EXECUTABLE_PATH: &str = "/usr/local/bin/catchplate-policy-shadow-custody-guest";
+pub const SECCOMP_PATH: &str = "/opt/catchplate/native-shadow-custody/seccomp.bpf";
+pub const CONFIGURATION_PATH: &str = "/opt/catchplate/native-shadow-custody/runtime.json";
+pub const LOCK_PATH: &str = "/opt/catchplate/native-shadow-custody/Cargo.lock";
+pub const RECIPE_PATH: &str = "/opt/catchplate/native-shadow-custody/build-recipe.json";
+pub const PROVENANCE_PATH: &str = "/opt/catchplate/native-shadow-custody/provenance.json";
 
 /// Retains actual sealed image, readonly loop/mount and closed image originals.
 /// This mechanism's scalar deadline never substitutes for a caller's owner.

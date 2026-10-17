@@ -13,7 +13,7 @@ to another role, root or current configuration.
 | SQL | v5 | v10 | Fresh interval contained in the original consume policy |
 | Completion | v6 | v11 | Fresh outer interval; separately pinned original consume-policy interval |
 
-These are versions of `serverware.signedOidcSessionActivationHistoryCustody`.
+These are versions of `catchplate.signedOidcSessionActivationHistoryCustody`.
 The bridge profiles retain their role's existing process identity and UID/GID.
 The version locator only chooses within that source-fixed role pair; genuine
 signature and closed-payload admission must follow before authority is used.

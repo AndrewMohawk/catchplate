@@ -50,7 +50,7 @@ def bounded(path,limit):
     with os.fdopen(fd,'rb') as f: raw=f.read(limit+1)
     assert len(raw)==before[5] and identity(path)==before
     return raw
-leaves=('.operator-publication.lock','.serverware-operator-demo.json','mitmproxy/mitmproxy-ca-cert.pem','mitmproxy/mitmproxy-ca.pem')
+leaves=('.operator-publication.lock','.catchplate-operator-demo.json','mitmproxy/mitmproxy-ca-cert.pem','mitmproxy/mitmproxy-ca.pem')
 fd=os.open('/data/.operator-publication.lock',os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
 try:
     until=time.monotonic()+2
@@ -69,7 +69,7 @@ try:
     policy=bounded(root/'policy-bundle.json',4194304)
     configuration=bounded(root/'operator-x-configuration.json',32768)
     document=json.loads(configuration)
-    assert document['schema']=='serverware.operatorXGateConfiguration/v1'
+    assert document['schema']=='catchplate.operatorXGateConfiguration/v1'
     if initial=='1': assert document['operation'] is None and document['profile_binding_digest'] is None
     if mode=='app':
         assert bounded(Path('/data/policy-bundle.json'),4194304)==policy
@@ -112,7 +112,7 @@ for host, address in %r:
 ''' % (network.FAULT_GATE_HOSTS, network.RESOLV, (network.FIXTURE_IP, network.FAULT_GATE_IP),
     [(host, network.FIXTURE_IP) for host in network.PROVIDER_HOSTS]
     + [(host, network.LOOPBACK) for host in (network.CONTROL_HOST, network.PROXY_HOST, "decision-gate-rs")]
-    + [("serverware", network.FAULT_GATE_IP)])
+    + [("catchplate", network.FAULT_GATE_IP)])
 
 
 class XPostRun(NpmExampleRun):
@@ -225,7 +225,7 @@ class XPostRun(NpmExampleRun):
             require(len(mounts) == len(service["volumes"]) and mounts == {
                 (mount["source"], mount["target"], mount["read_only"]) for mount in service["volumes"]})
             require(row["State"]["Status"] == ("created" if name == "check" else "running"))
-            if name in {"network", "provider", "serverware", "decision-gate-rs", "quota-relay"}:
+            if name in {"network", "provider", "catchplate", "decision-gate-rs", "quota-relay"}:
                 require(row["State"].get("Health", {}).get("Status") == "healthy")
             if name in {"network", "provider", "edge", "quota-relay"}:
                 started = datetime.datetime.fromisoformat(row["State"]["StartedAt"].replace("Z", "+00:00"))
@@ -258,11 +258,11 @@ class XPostRun(NpmExampleRun):
 
     def start_app_then_gate(self, compose):
         self.command("app-start", compose + ["up", "-d", "--no-build", "--pull", "never", "--wait",
-            "--wait-timeout", "30", "provider", "serverware"], 35)
+            "--wait-timeout", "30", "provider", "catchplate"], 35)
         rows = self.container_rows("app-ready")
         names = {row["Config"]["Labels"]["com.docker.compose.service"]: row for row in rows}
-        require(set(names) == {"network", "provider", "serverware"}, "gate must not exist before app publication")
-        self.initial_view = self.public_view(names["serverware"]["Id"], "app", "before-gate", initial=True)
+        require(set(names) == {"network", "provider", "catchplate"}, "gate must not exist before app publication")
+        self.initial_view = self.public_view(names["catchplate"]["Id"], "app", "before-gate", initial=True)
         if getattr(self.args, "quota_fault", None) is not None:
             # One cold health probe can consume its 3s timeout. The next probe
             # starts after the 3s interval; the old 6s wait expired before it.
@@ -313,7 +313,7 @@ class XPostRun(NpmExampleRun):
             "assert r.status==200 and len(raw)<=131072; print(raw.decode('ascii'))")
         value = json.loads(self.command("quota-provider-" + suffix,
             ["docker", "exec", container, "python", "-B", "-c", code], 4))
-        require(value["schema"] == "serverware.privateXQuotaProvider/v1" and value["terminal"] == "running"
+        require(value["schema"] == "catchplate.privateXQuotaProvider/v1" and value["terminal"] == "running"
             and value["issuedTokenFamilies"] == [{"alias": 1, "generation": 1}]
             and value["counts"] == {"total": 6, "authorize": 1, "code": 1, "identity": 1,
                 "refresh": 0, "revoke": 0, "posts": 3, "rejected": 0}
@@ -336,7 +336,7 @@ class XPostRun(NpmExampleRun):
         require(provider["initialAccessExpiresAtEpochMs"] == request["initial_access_expires_at_epoch_ms"])
         # Stop the gate first. No new dispatch/claim may race the preservation
         # snapshot or the app restart; provider, edge and keeper stay untouched.
-        gate, app, checker = (identities[name] for name in ("decision-gate-rs", "serverware", "check"))
+        gate, app, checker = (identities[name] for name in ("decision-gate-rs", "catchplate", "check"))
         self.command("quota-stop-gate", ["docker", "stop", "--time", "5", gate], 10)
         stopped = json.loads(self.command("quota-stopped-gate", ["docker", "inspect", "--format", "{{json .State}}", gate], 3))
         require(stopped["Status"] == "exited" and stopped["Pid"] == 0 and not stopped["OOMKilled"])
@@ -365,7 +365,7 @@ class XPostRun(NpmExampleRun):
             old = before[name]
             require(all(row[key] == old[key] for key in ("Image", "Config", "HostConfig", "Mounts", "RestartCount"))
                 and row["State"]["Status"] == "running" and not row["State"]["OOMKilled"])
-            if name in {"serverware", "decision-gate-rs"}:
+            if name in {"catchplate", "decision-gate-rs"}:
                 require(row["State"]["StartedAt"] != old["State"]["StartedAt"]
                     and row["State"].get("Health", {}).get("Status") == "healthy")
             else:
@@ -376,13 +376,13 @@ class XPostRun(NpmExampleRun):
             "quota provider changed across restart")
         request_hash = "sha256:" + recipe.hashlib.sha256(network.quota_json(request)).hexdigest()
         acknowledgement = self.quota_helper(checker, "quota-ack", "once", "--request-sha256", request_hash)
-        require(acknowledgement == {"schema": "serverware.privateXQuotaRestartAck/v1",
+        require(acknowledgement == {"schema": "catchplate.privateXQuotaRestartAck/v1",
             "request_sha256": request_hash, "status": "retained_restarted"})
-        self.quota_restart = {"schema": "serverware.privateXQuotaRestart/v1", "request": request,
+        self.quota_restart = {"schema": "catchplate.privateXQuotaRestart/v1", "request": request,
             "requestSha256": request_hash, "retainedSnapshot": retained, "publicView": app_view,
             "restarted": {name: {"id": identities[name], "beforeStartedAt": before[name]["State"]["StartedAt"],
                 "afterStartedAt": after[name]["State"]["StartedAt"], "manualRestarts": 1,
-                "automaticRestarts": after[name]["RestartCount"]} for name in ("serverware", "decision-gate-rs")},
+                "automaticRestarts": after[name]["RestartCount"]} for name in ("catchplate", "decision-gate-rs")},
             "originalProviderEdgeKeeperUnchanged": True, "originalDeadlineUnchanged": True}
         self.save("quota-restart.json", self.quota_restart)
 
@@ -419,7 +419,7 @@ class XPostRun(NpmExampleRun):
         for directory in (args.job_root, args.evidence):
             require(directory.stat().st_uid == os.getuid() and stat.S_IMODE(directory.stat().st_mode) == 0o700
                 and not list(directory.iterdir()))
-        self.save("run.claim.json", {"schema": "serverware.privateXPostRunClaim/v1",
+        self.save("run.claim.json", {"schema": "catchplate.privateXPostRunClaim/v1",
             "sourceCommit": args.commit, "jobRoot": str(args.job_root)})
         phase, success, armed, clean = "inputs", False, False, False
         errors, failure, begun = [], None, time.monotonic()
@@ -443,7 +443,7 @@ class XPostRun(NpmExampleRun):
                     and re.fullmatch(r"sha256:[0-9a-f]{64}", value["id"])
                     and (not image.startswith("sha256:") or value["id"] == image))
                 image_ids[image], self.image_environments[image] = value["id"], environment(value["environment"])
-            self.admit_bytecode_image(image_ids[self.services["serverware"]["image"]])
+            self.admit_bytecode_image(image_ids[self.services["catchplate"]["image"]])
             require(not self.container_rows("preexisting") and self.no_project_networks("preexisting-networks"))
             armed = True
             (args.job_root / "runtime").mkdir(mode=0o700)
@@ -479,8 +479,8 @@ class XPostRun(NpmExampleRun):
             self.command("basic-pki", compose + ["--profile", "basic-pki", "run", "--rm", "--no-deps", "--pull", "never", "basic-pki"], 25)
             self.command("edge", compose + ["--profile", "edge", "up", "-d", "--no-build", "--pull", "never", "--no-deps", "edge"], 10)
             phase = "revision"
-            code = "import http.client,json; from pathlib import Path; c=http.client.HTTPConnection('127.0.0.1',3000,timeout=3); c.request('GET','/api/operator-demo/catalog',headers={'Connection':'close','X-Serverware-Admin-Token':Path('/run/secrets/serverware/admin.token').read_text().strip()}); r=c.getresponse(); raw=r.read(1048577); assert r.status==200 and len(raw)<=1048576; d=json.loads(raw); assert d['schema']=='serverware.operatorCatalog/v1' and all(d[k]==[] for k in ('credentials','applications','access_rules')); v=d['revision']; assert type(v) is int and 1<=v<=3; print(v); c.close()"
-            revision = int(self.command(phase, compose + ["exec", "-T", "serverware", "python", "-B", "-c", code], 5))
+            code = "import http.client,json; from pathlib import Path; c=http.client.HTTPConnection('127.0.0.1',3000,timeout=3); c.request('GET','/api/operator-demo/catalog',headers={'Connection':'close','X-Catchplate-Admin-Token':Path('/run/secrets/catchplate/admin.token').read_text().strip()}); r=c.getresponse(); raw=r.read(1048577); assert r.status==200 and len(raw)<=1048576; d=json.loads(raw); assert d['schema']=='catchplate.operatorCatalog/v1' and all(d[k]==[] for k in ('credentials','applications','access_rules')); v=d['revision']; assert type(v) is int and 1<=v<=3; print(v); c.close()"
+            revision = int(self.command(phase, compose + ["exec", "-T", "catchplate", "python", "-B", "-c", code], 5))
             check = self.services["check"]
             check["command"][check["command"].index("--expected-initial-revision") + 1] = str(revision)
             with compose_path.open("w", encoding="utf-8") as stream:
@@ -491,11 +491,11 @@ class XPostRun(NpmExampleRun):
                 "--pull", "never", "--no-deps", "check"], 10)
             phase = "runtime-inspection"
             identities = self.inspect_runtime(config, image_ids, keeper_anchor=keeper_anchor)
-            app_view = self.public_view(identities["serverware"], "app", "before", initial=True)
+            app_view = self.public_view(identities["catchplate"], "app", "before", initial=True)
             gate_view = self.public_view(identities["decision-gate-rs"], "gate", "before", initial=True)
             require(app_view == gate_view == self.initial_view, "original curated publication identity differs")
             actual = self.command("running-binary", ["docker", "exec", identities["decision-gate-rs"], "python", "-B", "-c",
-                "import hashlib; print(hashlib.sha256(open('/usr/local/bin/serverware-decision-gate','rb').read()).hexdigest())"], 5).decode().strip()
+                "import hashlib; print(hashlib.sha256(open('/usr/local/bin/catchplate-decision-gate','rb').read()).hexdigest())"], 5).decode().strip()
             require(actual == args.expected_binary_sha256)
             self.command("network-proof", ["docker", "exec", identities["provider"], "python", "-B", "-c",
                 "from scripts.operator_x_post_fixture_network import assert_isolated_network; assert_isolated_network()"], 5)
@@ -526,7 +526,7 @@ class XPostRun(NpmExampleRun):
             if fault_mode is not None:
                 require(result["faultMode"] == fault_mode, "fault result lane differs")
             phase = "immutable-inputs"
-            final_app = self.public_view(identities["serverware"], "app", "after", initial=False)
+            final_app = self.public_view(identities["catchplate"], "app", "after", initial=False)
             final_gate = self.public_view(identities["decision-gate-rs"], "gate", "after", initial=False)
             require(final_app == final_gate and all(final_app[key] == app_view[key] for key in ("directory", "leaves")))
             require(self.inputs("after") == before and recipe.base.digest(dependency_path) == args.expected_dependencies_sha256)
@@ -539,7 +539,7 @@ class XPostRun(NpmExampleRun):
         finally:
             if armed:
                 clean, errors = self.cleanup()
-            self.save("terminal.json", {"schema": "serverware.privateXPostRun/v1", "phase": phase,
+            self.save("terminal.json", {"schema": "catchplate.privateXPostRun/v1", "phase": phase,
                 "success": success, "cleanup": clean, "cleanupErrors": errors,
                 "elapsedSeconds": round(time.monotonic() - begun, 3), "syntheticOnly": True,
                 "realXVerified": False, "productionReady": False,

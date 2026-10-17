@@ -15,7 +15,7 @@ predicted values. No signing, build, test or live commissioning established
 these findings; they follow from the current consumer/producer joins below.
 
 The local engineering draft is retained under the user's
-`codex-offload/serverware/engineering-drafts/endpoint-commissioning-d235e576/`
+`codex-offload/catchplate/engineering-drafts/endpoint-commissioning-d235e576/`
 directory: the proposed tracked-file patch, three new Python modules and two
 guides. The active checkout keeps the original v1 policy and native contracts;
 the draft is not installed, admitted or an immutable release artifact.
@@ -27,7 +27,7 @@ The proposed endpoint policy requires a complete `production` original,
 coordinator is started. Its validator equates the proof scope's production
 binding with the independently supplied `expectedConfigurationBindingSha256`.
 That proposed v2 admission is preserved in the draft, not enabled in the active
-[`SupervisorPolicy`](../serverware/native_pilot_supervisor_policy.py).
+[`SupervisorPolicy`](../catchplate/native_pilot_supervisor_policy.py).
 
 The real Rust `ConfigurationBinding` includes
 `kernelRetainedDriverIdentitySha256`, alongside the assignment, instance/boot,
@@ -44,8 +44,8 @@ This is not solved by approving a placeholder or choosing an invocation ID in
 advance. The process-specific inputs do not exist before the new attempt.
 Retrieval artifacts also bind the exact scope into object contents, locators
 and proof hashes, and require a nonempty manifest; see
-[object construction](../serverware/native_shadow_retrieval_artifacts.py#L59)
-and [manifest construction](../serverware/native_shadow_retrieval_artifacts.py#L86).
+[object construction](../catchplate/native_shadow_retrieval_artifacts.py#L59)
+and [manifest construction](../catchplate/native_shadow_retrieval_artifacts.py#L86).
 An old object directory cannot simply be relabelled with a newly derived scope.
 
 The bounded next design is an explicit independently authorized derivation
@@ -86,7 +86,7 @@ domain with its approved bootstrap runtime, whereas endpoint manifests use v1.
 The bridge v2 manifest itself can be approved from static image, bootstrap
 runtime, seccomp and provenance inputs; future process IDs are not its problem.
 See [the two native manifest domains](../data-plane/decision-gate-rs/src/policy_custody/native_closure.rs#L30)
-and [the bridge producer's static associations](../serverware/native_pilot_closure_authority.py#L137).
+and [the bridge producer's static associations](../catchplate/native_pilot_closure_authority.py#L137).
 
 The bounded next design requires an independently authorized closure-set root
 with exact per-role/per-guest manifest membership. A versioned assignment and

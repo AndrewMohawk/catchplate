@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/control-plane-workload-identity-bootstrap.v2.schema.json",
+  "$id": "https://catchplate.invalid/schemas/control-plane-workload-identity-bootstrap.v2.schema.json",
   "title": "Root-signed native workload identity public caller bootstrap v2",
   "description": "Closed canonical sorted compact ASCII JSON without a trailing newline, at most 262144 bytes. Ed25519 signs the payload-schema ASCII bytes, NUL and canonical payload. Actual signature, current source revision, custody/configuration, original clocks, nested worker and socket checks remain mandatory; schema validation is not authority. The outer runtime root is independently supplied by the existing cold custody owner, never selected by this record.",
   "type": "object", "additionalProperties": false,
   "required": ["schema", "payload", "signature"],
   "properties": {
-    "schema": {"const": "serverware.signedControlPlaneWorkloadIdentityBootstrap/v2"},
+    "schema": {"const": "catchplate.signedControlPlaneWorkloadIdentityBootstrap/v2"},
     "payload": {"$ref": "#/$defs/payload"},
     "signature": {"type": "string", "minLength": 94, "maxLength": 94, "pattern": "^ed25519:[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])"}
   },
@@ -33,7 +33,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["path", "device", "inode", "uid", "gid", "mode", "serverUid", "serverGid"],
       "properties": {
-        "path": {"const": "/run/serverware/workload-identity-issuer/issuer.sock"},
+        "path": {"const": "/run/catchplate/workload-identity-issuer/issuer.sock"},
         "device": {"$ref": "#/$defs/positive"}, "inode": {"$ref": "#/$defs/positive"},
         "uid": {"const": 65492}, "gid": {"const": 65532}, "mode": {"const": 432},
         "serverUid": {"const": 0}, "serverGid": {"const": 0}
@@ -56,11 +56,11 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "purpose", "trustMode", "processMode", "callerUid", "callerGid", "configurationDigest", "issuedAtEpochNs", "expiresAtEpochNs", "issuer"],
       "properties": {
-        "schema": {"const": "serverware.controlPlaneWorkloadIdentityBootstrap/v2"},
+        "schema": {"const": "catchplate.controlPlaneWorkloadIdentityBootstrap/v2"},
         "sourceRevision": {"type": "string", "description": "Must exactly equal the current shared authority source revision; no independent version literal in this schema."},
         "purpose": {"const": "native-workload-identity-caller"},
         "trustMode": {"const": "trusted-host-local"},
-        "processMode": {"const": "serverware-control-plane"},
+        "processMode": {"const": "catchplate-control-plane"},
         "callerUid": {"type": "integer", "minimum": 0, "maximum": 4294967294},
         "callerGid": {"type": "integer", "minimum": 0, "maximum": 4294967294},
         "configurationDigest": {"$ref": "#/$defs/digest"},

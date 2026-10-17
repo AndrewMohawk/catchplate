@@ -35,47 +35,47 @@ impl EntryProfile {
     fn launch(&self,raw:&[u8])->Result<(Pin,Pin),ServiceRunnerError> {match self {
         Self::Generation=>{
             let value:Launch=exact(raw)?;
-            require(value.api_version=="serverware.custodyOrdinaryServiceGuestLaunch/v1")?;
+            require(value.api_version=="catchplate.custodyOrdinaryServiceGuestLaunch/v1")?;
             Ok((value.delivery_configuration,value.delivery))
         },
         Self::InspectedGeneration=>{
             let value:InspectedLaunch=exact(raw)?;
-            require(value.api_version=="serverware.custodyOrdinaryServiceGuestLaunch/v2"
+            require(value.api_version=="catchplate.custodyOrdinaryServiceGuestLaunch/v2"
                 && value.peer_inspection_credential==super::ordinary_inspection::CREDENTIAL)?;
             Ok((value.delivery_configuration,value.delivery))
         },
         Self::CommitRequest=>{
             let value:Launch=exact(raw)?;
-            require(value.api_version=="serverware.custodyOrdinaryServiceGuestLaunch/v3")?;
+            require(value.api_version=="catchplate.custodyOrdinaryServiceGuestLaunch/v3")?;
             Ok((value.delivery_configuration,value.delivery))
         },
         Self::InspectedCommitRequest=>{
             let value:InspectedLaunch=exact(raw)?;
-            require(value.api_version=="serverware.custodyOrdinaryServiceGuestLaunch/v4"
+            require(value.api_version=="catchplate.custodyOrdinaryServiceGuestLaunch/v4"
                 && value.peer_inspection_credential==super::ordinary_inspection::CREDENTIAL)?;
             Ok((value.delivery_configuration,value.delivery))
         },
         Self::InspectedSpool=>{
             let value:InspectedLaunch=exact(raw)?;
-            require(value.api_version=="serverware.custodyOrdinaryServiceGuestLaunch/v5"
+            require(value.api_version=="catchplate.custodyOrdinaryServiceGuestLaunch/v5"
                 && value.peer_inspection_credential==super::ordinary_inspection::CREDENTIAL)?;
             Ok((value.delivery_configuration,value.delivery))
         },
         Self::InspectedEffects=>{
             let value:InspectedLaunch=exact(raw)?;
-            require(value.api_version=="serverware.custodyOrdinaryServiceGuestLaunch/v6"
+            require(value.api_version=="catchplate.custodyOrdinaryServiceGuestLaunch/v6"
                 && value.peer_inspection_credential==super::ordinary_inspection::CREDENTIAL)?;
             Ok((value.delivery_configuration,value.delivery))
         },
         Self::InspectedGenesis=>{
             let value:InspectedLaunch=exact(raw)?;
-            require(value.api_version=="serverware.custodyOrdinaryServiceGuestLaunch/v7"
+            require(value.api_version=="catchplate.custodyOrdinaryServiceGuestLaunch/v7"
                 && value.peer_inspection_credential==super::ordinary_inspection::CREDENTIAL)?;
             Ok((value.delivery_configuration,value.delivery))
         },
         Self::InspectedAdoption=>{
             let value:InspectedLaunch=exact(raw)?;
-            require(value.api_version=="serverware.custodyOrdinaryServiceGuestLaunch/v8"
+            require(value.api_version=="catchplate.custodyOrdinaryServiceGuestLaunch/v8"
                 && value.peer_inspection_credential==super::ordinary_inspection::CREDENTIAL)?;
             Ok((value.delivery_configuration,value.delivery))
         },
@@ -249,14 +249,14 @@ mod profile_tests {
     }
     #[test]
     fn legacy_runtime_selection_does_not_upgrade() {
-        assert_eq!(EntryProfile::InspectedEffects.runtime(&Role::DurableRecoveryStore).unwrap(),"serverware.policyCustodyServiceRuntimeConfig/v8");
-        assert_eq!(EntryProfile::InspectedGenesis.runtime(&Role::DurableRecoveryStore).unwrap(),"serverware.policyCustodyServiceRuntimeConfig/v11");
+        assert_eq!(EntryProfile::InspectedEffects.runtime(&Role::DurableRecoveryStore).unwrap(),"catchplate.policyCustodyServiceRuntimeConfig/v8");
+        assert_eq!(EntryProfile::InspectedGenesis.runtime(&Role::DurableRecoveryStore).unwrap(),"catchplate.policyCustodyServiceRuntimeConfig/v11");
     }
     #[test]
     fn adopted_launch_is_not_selected_by_legacy_shape() {
-        let pin=serde_json::json!({"path":"/etc/serverware/test.json","sha256":format!("sha256:{}","11".repeat(32))});
+        let pin=serde_json::json!({"path":"/etc/catchplate/test.json","sha256":format!("sha256:{}","11".repeat(32))});
         for version in [6,7,8] {
-            let value=serde_json::json!({"apiVersion":format!("serverware.custodyOrdinaryServiceGuestLaunch/v{version}"),
+            let value=serde_json::json!({"apiVersion":format!("catchplate.custodyOrdinaryServiceGuestLaunch/v{version}"),
                 "deliveryConfiguration":pin,"delivery":pin,"peerInspectionCredential":"peer-inspection-policy"});
             let raw=encode_canonical_frame(&value).unwrap();
             assert_eq!(EntryProfile::InspectedAdoption.launch(&raw).is_ok(),version==8);

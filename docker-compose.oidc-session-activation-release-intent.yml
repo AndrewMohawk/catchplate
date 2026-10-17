@@ -3,11 +3,11 @@
 # This mounts only the separate signing key; it creates no key or service.
 # No historical AES key, root signer or proof signer belongs in this process.
 services:
-  serverware:
+  catchplate:
     volumes:
       - type: bind
-        source: ${SERVERWARE_OIDC_SESSION_ACTIVATION_RELEASE_INTENT_KEY_FILE:?set root-owned mode 0400 release intent key file}
-        target: /run/secrets/serverware-oidc-session-activation-release-intent-key
+        source: ${CATCHPLATE_OIDC_SESSION_ACTIVATION_RELEASE_INTENT_KEY_FILE:?set root-owned mode 0400 release intent key file}
+        target: /run/secrets/catchplate-oidc-session-activation-release-intent-key
         read_only: true
         bind:
           create_host_path: false

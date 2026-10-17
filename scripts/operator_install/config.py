@@ -9,7 +9,7 @@ import re
 import stat
 from urllib.parse import urlsplit
 
-SCHEMA = "serverware.standaloneInstall/v1"
+SCHEMA = "catchplate.standaloneInstall/v1"
 EDGE_IMAGE = "nginx@sha256:1ed1b0e1d7652937d6cbdaf4018c7b6fc009a7dd6c3047351e2eddda745de43f"
 
 
@@ -109,16 +109,16 @@ def origin(value) -> str:
 def validate(value: dict) -> dict:
     required = {"schema", "project_name", "state_dir", "console_origin", "proxy_origin",
         "allowed_upstreams", "tls_certificate", "tls_private_key"}
-    defaults = {"admin_username": "admin", "paired_image": "serverware-standalone:local",
+    defaults = {"admin_username": "admin", "paired_image": "catchplate-standalone:local",
         "edge_image": EDGE_IMAGE, "publish_address": None, "network_subnets": None}
     if type(value) is not dict or not required <= set(value) or set(value) - required - set(defaults):
         raise InstallError("Configuration contains missing or unsupported fields.")
     result = {**defaults, **value}
     if result["schema"] != SCHEMA:
         raise InstallError("Unsupported standalone configuration schema.")
-    if not isinstance(result["project_name"], str) or not re.fullmatch(r"serverware-[a-z0-9][a-z0-9_-]{0,47}", result["project_name"]):
-        raise InstallError("Project name must start with serverware- and use lowercase letters, digits, hyphens or underscores.")
-    if result["project_name"] == "serverware-operator-demo":
+    if not isinstance(result["project_name"], str) or not re.fullmatch(r"catchplate-[a-z0-9][a-z0-9_-]{0,47}", result["project_name"]):
+        raise InstallError("Project name must start with catchplate- and use lowercase letters, digits, hyphens or underscores.")
+    if result["project_name"] == "catchplate-operator-demo":
         raise InstallError("The retained operator deployment project is not a fresh standalone installation.")
     if type(result["admin_username"]) is not str or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", result["admin_username"]):
         raise InstallError("Console username must use letters, digits, dots, hyphens or underscores.")

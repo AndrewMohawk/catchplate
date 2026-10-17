@@ -12,17 +12,17 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import authority_local_database_credentials as local
+from catchplate import authority_local_database_credentials as local
 from scripts.authority import local_database_credentials as cli
 
 
 def selection(*, include_reader=False, now_unix_ns=None):
     now = (int(datetime(2026, 10, 1, tzinfo=timezone.utc).timestamp()) * 10**9
            if now_unix_ns is None else now_unix_ns)
-    selected = dict(schema=local.APPROVAL_SCHEMA, database="serverware", databaseRoles=dict(
+    selected = dict(schema=local.APPROVAL_SCHEMA, database="catchplate", databaseRoles=dict(
         metadata="pilot_metadata_runtime", audit="pilot_audit_runtime",
         verifier="pilot_authority_verifier", executor="pilot_authority_executor"),
-        includeAuditReader=include_reader, host="database.serverware.local", port=5432,
+        includeAuditReader=include_reader, host="database.catchplate.local", port=5432,
         clientNetwork="192.0.2.0/24", intendedOwners={}, outputDirectory=dict(device=1, inode=2),
         bootIdDigest="sha256:" + "a"*64, issuedAtBoottimeNs=100,
         deadlineBoottimeNs=60_000_000_100, issuedAtUnixNanos=now,
@@ -51,7 +51,7 @@ def filesystem_scenario():
     import time
     from cryptography.hazmat.primitives import serialization
     from cryptography import x509
-    from serverware.authority_witness_journal import JournalConflict
+    from catchplate.authority_witness_journal import JournalConflict
     selected, _ = selection()
     with tempfile.TemporaryDirectory(prefix="local-database-issuer-") as path:
         os.chmod(path, 0o700)
@@ -104,17 +104,17 @@ class LocalDatabaseCredentialControls(unittest.TestCase):
     def test_closed_roster_matches_foundation_and_optional_reader_is_separate(self):
         selected, _ = selection()
         self.assertEqual(len(local.role_roster(selected)), 13)
-        self.assertEqual(local.role_roster(selected)["planner"], "serverware_policy_authority_planner")
+        self.assertEqual(local.role_roster(selected)["planner"], "catchplate_policy_authority_planner")
         self.assertEqual(local.role_roster(selected)["metadata-runtime"], "pilot_metadata_runtime")
-        self.assertNotIn("serverware_policy_authority_owner", local.role_roster(selected).values())
-        from serverware import authority_contract
+        self.assertNotIn("catchplate_policy_authority_owner", local.role_roster(selected).values())
+        from catchplate import authority_contract
         self.assertEqual(local.FIXED_ROLES["successor-issuer"], authority_contract.SUCCESSOR_ISSUER_ROLE)
         self.assertEqual(local.FIXED_ROLES["completion-reader"], authority_contract.COMPLETION_READER_ROLE)
         selected["includeAuditReader"] = True
         self.assertEqual(len(local.role_roster(selected)), 14)
-        from serverware import authority_local_audit_reader
+        from catchplate import authority_local_audit_reader
         self.assertEqual(local.role_roster(selected)["audit-inclusion-reader"], authority_local_audit_reader.ROLE)
-        selected["databaseRoles"]["metadata"] = "serverware_policy_authority_owner"
+        selected["databaseRoles"]["metadata"] = "catchplate_policy_authority_owner"
         with self.assertRaises(ValueError): local.role_roster(selected)
 
     def test_exact_approval_time_network_and_owner_bounds(self):
@@ -211,13 +211,13 @@ class LocalDatabaseCredentialControls(unittest.TestCase):
         hba = f["material"]["pg_hba.fragment"].decode("ascii")
         self.assertEqual(hba.count(" cert clientname=CN\n"), 13)
         self.assertNotIn(" trust", hba)
-        self.assertNotIn("serverware_policy_authority_owner", hba)
+        self.assertNotIn("catchplate_policy_authority_owner", hba)
         self.assertFalse(local.CLAIMS["databaseSessionObserved"])
 
     def test_actual_private_staging_readback_and_no_replace(self):
-        env = {key:value for key,value in os.environ.items() if not key.startswith("SERVERWARE_")}
+        env = {key:value for key,value in os.environ.items() if not key.startswith("CATCHPLATE_")}
         with tempfile.TemporaryDirectory(prefix="local-db-test-data-") as path:
-            env.update(SERVERWARE_DATA_DIR=path, SERVERWARE_RELEASE_CHANNEL="dev", SERVERWARE_PROCESS_MODE="metadata-bootstrap")
+            env.update(CATCHPLATE_DATA_DIR=path, CATCHPLATE_RELEASE_CHANNEL="dev", CATCHPLATE_PROCESS_MODE="metadata-bootstrap")
             program = "import sys; sys.path.insert(0,sys.argv[1]); from scripts.test_authority_local_database_credentials import filesystem_scenario; filesystem_scenario()"
             result = subprocess.run([sys.executable,"-I","-B","-c",program,str(ROOT)], env=env,
                 cwd=ROOT, capture_output=True, text=True, timeout=30)

@@ -33,18 +33,18 @@ def no_external_effects(event, _arguments):
 
 
 if __name__ == "__main__":
-    os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
-    os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
+    os.environ["CATCHPLATE_PROCESS_MODE"] = "metadata-bootstrap"
+    os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
     sys.addaudithook(no_external_effects)
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from scripts import test_authority_native_jit_review_custody as synthetic
 from scripts import test_authority_release_private_input as legacy
-from serverware import authority_native_jit_submission as submission
-from serverware import authority_release_private_input as privacy
-from serverware import native_jit_review_material as material
-from serverware.authority_store import executor_v9 as executor
-from serverware.authority_store import native_jit_retention as retention
+from catchplate import authority_native_jit_submission as submission
+from catchplate import authority_release_private_input as privacy
+from catchplate import native_jit_review_material as material
+from catchplate.authority_store import executor_v9 as executor
+from catchplate.authority_store import native_jit_retention as retention
 
 NOW, MONO, SECOND = synthetic.NOW, synthetic.MONO, synthetic.SECOND
 PIN = "sha256:" + "a" * 64
@@ -66,7 +66,7 @@ def originals(fixture):
 def partial_payload(fixture, retained=ABSENT):
     # Deliberately incomplete: these tests must not manufacture a valid signed
     # plan, SQL mutation, native startup or successful writer admission.
-    return {"schema": "serverware.policyAuthorityPlannerResponse/v3",
+    return {"schema": "catchplate.policyAuthorityPlannerResponse/v3",
         "typedRequest": copy.deepcopy(fixture.parent),
         "measuredPlan": {"operation": "release.reserve", "deadlineEpochNs": NOW + 20 * SECOND},
         **({} if retained is ABSENT else {"nativeJitPending": copy.deepcopy(retained)})}
@@ -98,10 +98,10 @@ class LockedPlannerCursor:
         return False
 
     def execute(self, statement, _values):
-        if statement.startswith("INSERT INTO serverware_metadata.policy_authority_execution_envelopes"):
+        if statement.startswith("INSERT INTO catchplate_metadata.policy_authority_execution_envelopes"):
             raise InsertReached()
         self.statements.append(statement)
-        if statement != ("SELECT * FROM serverware_metadata.policy_authority_planner_transactions "
+        if statement != ("SELECT * FROM catchplate_metadata.policy_authority_planner_transactions "
                 "WHERE planner_transaction_id = %s FOR UPDATE"):
             raise AssertionError("unexpected statement in inert cursor")
         return self
@@ -304,7 +304,7 @@ class NativeJitExecutorRetentionTests(unittest.TestCase):
     def test_actual_sql_route_priority_is_closed_to_native_pending_insert_and_keeps_existing_tiebreakers(self):
         # This is a source-contract assertion, not a PostgreSQL execution.
         # The isolated PG companion exercises this exact extracted ORDER BY.
-        tree = ast.parse((ROOT / "serverware/authority_store/executor_v9.py").read_bytes())
+        tree = ast.parse((ROOT / "catchplate/authority_store/executor_v9.py").read_bytes())
         functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
             and node.name == "install_authority_v9_executor"]
         self.assertEqual(len(functions), 1)

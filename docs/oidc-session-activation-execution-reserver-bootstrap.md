@@ -1,6 +1,6 @@
 # Activation execution reserver bootstrap
 
-[The fixed bootstrap](../serverware/oidc_session_activation_execution_reserver_bootstrap.py)
+[The fixed bootstrap](../catchplate/oidc_session_activation_execution_reserver_bootstrap.py)
 authenticates the original cold scope for the dedicated activation reserver.
 It does not provision keys/directories, reserve state, authenticate a current
 pending head, execute SQL or release a token. This is source-only implementation;
@@ -9,10 +9,10 @@ no build, runtime or production acceptance is claimed.
 ## Independent original authority
 
 The closed root-signed envelope uses
-`serverware.signedOidcSessionActivationExecutionReserverBootstrap/v1`; its
+`catchplate.signedOidcSessionActivationExecutionReserverBootstrap/v1`; its
 payload and launch schemas are
-`serverware.oidcSessionActivationExecutionReserverBootstrap/v1` and
-`serverware.oidcSessionActivationExecutionReserverLaunch/v1`. The signed schema
+`catchplate.oidcSessionActivationExecutionReserverBootstrap/v1` and
+`catchplate.oidcSessionActivationExecutionReserverLaunch/v1`. The signed schema
 is also the signature domain. The role original is bounded to 4 MiB.
 
 Admission verifies the independent role signature, the separate
@@ -35,8 +35,8 @@ actual dedicated planner key and root operation key; no registration fallback.
 
 Role/process mode is `oidc-session-activation-execution-reserver`, operation
 `oidc.session.activate`, UID/GID `65505:65505`, request peer `65532:65532`.
-The listener is `/run/serverware/oidc-session-activation-execution/reserver.sock`,
-with activation name `serverware-oidc-session-activation-execution-reserver`.
+The listener is `/run/catchplate/oidc-session-activation-execution/reserver.sock`,
+with activation name `catchplate-oidc-session-activation-execution-reserver`.
 
 | Launch field | FD | Original/resource |
 | --- | --- | --- |
@@ -52,7 +52,7 @@ with activation name `serverware-oidc-session-activation-execution-reserver`.
 The inherited inventory is exactly 198–205 in order. Launch pins also bind the
 listener socket/path device and inode, integer request timeout 1–30 seconds,
 journal device/inode and `journalMaximumRecords`. The journal path is fixed to
-`/var/lib/serverware/oidc-session-activation-execution-reservations`.
+`/var/lib/catchplate/oidc-session-activation-execution-reservations`.
 These are authenticated pins; actual descriptor/path ownership, sealing,
 private-key pairing and close/drop lifecycle remain cold-delivery obligations.
 
@@ -82,7 +82,7 @@ the genuine current-root enrollment digest; genesis predecessor fence is one.
 requires exact local recovery and space for request/ack; producer admission also
 requires state capacity for reservation and completion.
 
-The state endpoint is fixed to `/run/serverware/current-root/state.sock`,
+The state endpoint is fixed to `/run/catchplate/current-root/state.sock`,
 integer timeout 1–30, state-service UID/GID `65516:65516` and original
 root-created listener peer `0:0`. Material retains all six fields separately;
 the worker identity is not substituted for the listener's kernel peer identity.

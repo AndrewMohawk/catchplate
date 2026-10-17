@@ -31,16 +31,16 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import authority_service as service
-from serverware import authority_webauthn_assertion as admission
-from serverware.authority_store import authorization_records
-from serverware.authority_store.webauthn_receipt_binding import receipt_evidence_binding_sql
+from catchplate import authority_service as service
+from catchplate import authority_webauthn_assertion as admission
+from catchplate.authority_store import authorization_records
+from catchplate.authority_store.webauthn_receipt_binding import receipt_evidence_binding_sql
 from scripts import test_authority_executor_optional_evidence as source
 
 NOW = 1_790_000_000_000_000_000
-RECEIPT_DOMAIN = "serverware.policyAuthorityWebAuthnReceipt/v1"
-VERIFIED_DOMAIN = "serverware.policyAuthorityVerifiedWebAuthnAssertionReceipt/v1"
-EVIDENCE_DOMAIN = "serverware.policyAuthorityWebAuthnAssertionEvidence/v1"
+RECEIPT_DOMAIN = "catchplate.policyAuthorityWebAuthnReceipt/v1"
+VERIFIED_DOMAIN = "catchplate.policyAuthorityVerifiedWebAuthnAssertionReceipt/v1"
+EVIDENCE_DOMAIN = "catchplate.policyAuthorityWebAuthnAssertionEvidence/v1"
 OPERATION = "webauthn.credential.revoke"
 CONNECTION_PARAMETERS = None
 
@@ -73,7 +73,7 @@ class SignedFixture:
         self.verifier_key = Ed25519PrivateKey.generate()
         public = self.raw_key.public_key().public_numbers()
         request = sha(b"synthetic exact request")
-        operation_id = framed("serverware.policyAuthorityOperation/v2",
+        operation_id = framed("catchplate.policyAuthorityOperation/v2",
             OPERATION.encode("ascii"), request.encode("ascii"))
         self.challenge = {"operationId": operation_id,
             "challengeId": "synthetic-challenge", "challenge": b64(bytes(range(32))),
@@ -286,7 +286,7 @@ class ReceiptDomainPostgresTests(unittest.TestCase):
                     "webauthn_receipt_digest": framed(RECEIPT_DOMAIN, raw)})
         for duplicate in (False, True):
             raw = canonical(fixture.receipt)
-            raw = b'{"schema":"serverware.policyAuthorityWebAuthnReceipt/v1",' + raw[1:] if duplicate else b" " + raw
+            raw = b'{"schema":"catchplate.policyAuthorityWebAuthnReceipt/v1",' + raw[1:] if duplicate else b" " + raw
             with self.subTest(duplicate=duplicate):
                 self.reject(capability={**fixture.capability, "webauthn_receipt_json": raw.decode(),
                     "webauthn_receipt_digest": framed(RECEIPT_DOMAIN, raw)})

@@ -17,8 +17,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_jit_original_frames as source
-from serverware import authority_primary_original_reader as primary_reader
+from catchplate import authority_jit_original_frames as source
+from catchplate import authority_primary_original_reader as primary_reader
 from test_authority_jit_primary_chunks import frames, meter, native, query, row
 from test_authority_radix_mutation import IndependentTree
 
@@ -186,7 +186,7 @@ class JitOriginalFrameControls(unittest.TestCase):
 
     def test_no_new_meter_clock_sql_hash_admission_or_source_state_consumption(self):
         parsed = ast.parse((Path(__file__).resolve().parents[1]
-            / "serverware/authority_jit_original_frames.py").read_text())
+            / "catchplate/authority_jit_original_frames.py").read_text())
         forbidden = {"_ValidationWork", "QueryReadValidationLimits", "_ReadAcquisitionBudget",
             "connect", "execute", "commit", "accept", "finish", "_membership", "_verify_primary",
             "_evaluate_one_index", "evaluate_index_mutations", "sha256", "monotonic_ns", "time_ns"}

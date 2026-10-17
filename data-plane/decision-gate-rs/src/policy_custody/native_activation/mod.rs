@@ -5,14 +5,14 @@ use serde_json::{Value,json};
 mod proof;
 pub(crate) mod store;
 
-pub(crate) const REQUEST:&str="serverware.nativePolicyActivationRequest/v1";
-pub(crate) const PUBLICATION:&str="serverware.nativePolicyActivationPublication/v1";
-pub(crate) const PUBLICATION_DOMAIN:&str="serverware.nativePolicyActivationPublication.signature/v1";
+pub(crate) const REQUEST:&str="catchplate.nativePolicyActivationRequest/v1";
+pub(crate) const PUBLICATION:&str="catchplate.nativePolicyActivationPublication/v1";
+pub(crate) const PUBLICATION_DOMAIN:&str="catchplate.nativePolicyActivationPublication.signature/v1";
 pub(crate) const MAX_REQUEST:usize=8*1024*1024;
 pub(crate) const MAX_PREPARED:usize=1024*1024;
 pub(crate) const MAX_PUBLICATION:usize=32768;
 pub(crate) fn canonical_json_bytes<T:Serialize>(value:&T)->Result<Vec<u8>,ShadowError>{
-    serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(value).map_err(fail)
+    catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(value).map_err(fail)
 }
 pub(crate) fn require(value:bool)->Result<(),ShadowError>{if value{Ok(())}else{Err(ShadowError::ActivationConsumptionBindingMismatch)}}
 pub(crate) fn fail<T>(_:T)->ShadowError{ShadowError::CustodyUnavailable}

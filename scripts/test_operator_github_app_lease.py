@@ -39,7 +39,7 @@ class Fixture(catalog.Fixture):
         super().__init__()
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric import rsa
-        from serverware import github_app, operator_github_app, http_client
+        from catchplate import github_app, operator_github_app, http_client
         self.service, self.protocol = operator_github_app, github_app
         self.http_calls, self.mints = [], 0
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -89,7 +89,7 @@ class Fixture(catalog.Fixture):
             self.application_record = self.application()
             self.rule_record = self.rule(self.application_record, self.credential_record, catalog.WRITE)["access_rule"]
             self.signed()
-            from serverware import app
+            from catchplate import app
             import test_credential_lease_delivery as lease
             self.app, self.lease = app, lease
             self.core = self.db.get_credential(self.credential_record["id"], include_secret=False)
@@ -111,7 +111,7 @@ class Fixture(catalog.Fixture):
         public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         nonce = os.urandom(32)
         metadata = self.app._credential_lease_public_metadata(self.core)
-        payload = {"apiVersion": "serverware.credentialLeaseRequest/v3", "purpose": purpose,
+        payload = {"apiVersion": "catchplate.credentialLeaseRequest/v3", "purpose": purpose,
             "principalId": self.application_record["principal_id"], "routeId": self.route.id,
             "credentialId": self.core["id"], "expectedCredentialVersion": None,
             "expectedMetadataSha256": None, "recipientPublicKey": self.lease.b64e(public),
@@ -123,7 +123,7 @@ class Fixture(catalog.Fixture):
                 expectedMetadataSha256=self.app._credential_lease_metadata_sha256(metadata))
         payload.update(changes)
         response = self.lease.app_request(self.app.app, "POST", self.lease.LEASE_PATH,
-            payload=payload, headers={"X-Serverware-Data-Plane-Token": DATA_PLANE_TOKEN})
+            payload=payload, headers={"X-Catchplate-Data-Plane-Token": DATA_PLANE_TOKEN})
         return response, payload, key, nonce
 
     def plaintext(self, result):
@@ -135,7 +135,7 @@ class Fixture(catalog.Fixture):
 
 
 def success(f):
-    from serverware import runtime
+    from catchplate import runtime
     f.service.forget(f.core["id"])
     calls = f.mints
     actual_get, actual_snapshot = f.db.get_credential, f.db.credential_generation_snapshot
@@ -221,7 +221,7 @@ def final_fence(f, fault):
 
 def boundaries(f):
     from fastapi import HTTPException
-    from serverware import runtime, control_plane_credential_currentness as currentness
+    from catchplate import runtime, control_plane_credential_currentness as currentness
     calls = f.mints
     with patch.object(runtime, "get_control_plane_credential", side_effect=AssertionError("generic fallback")):
         catalog.refused(lambda: f.app._credential_for_lease(f.core["id"]), HTTPException)
@@ -234,8 +234,8 @@ def boundaries(f):
         catalog.refused(lambda: f.app._assert_route_credential_binding(bad, f.core, f.policy), HTTPException)
     bad = replace(f.route, credential_header={"mode": "insert"})
     catalog.refused(lambda: f.app._assert_route_credential_binding(bad, f.core, f.policy), HTTPException)
-    for version in ("serverware.nativeCredentialLeaseRequest/v1", "serverware.policyAwareCredentialLeaseRequest/v1",
-            "serverware.nativeBrokerCredentialLeaseRequest/v1"):
+    for version in ("catchplate.nativeCredentialLeaseRequest/v1", "catchplate.policyAwareCredentialLeaseRequest/v1",
+            "catchplate.nativeBrokerCredentialLeaseRequest/v1"):
         response, *_ = f.request(apiVersion=version, recipientAttestation={"synthetic": True})
         assert response.status_code in (403, 503), "nonordinary profile unexpectedly admitted"
     with patch.object(currentness, "selected", return_value=True):
@@ -265,11 +265,11 @@ class GithubAppLeaseTests(unittest.TestCase):
         if not __debug__ or os.getenv("PYTHONOPTIMIZE") not in (None, "", "0"):
             self.fail("assertions must be enabled")
         catalog.OperatorCatalogGithubTests.setUp(self)
-        self.environment.update(SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN=DATA_PLANE_TOKEN,
-            SERVERWARE_DATA_PLANE_INSTANCE_ID="spiffe://test.serverware/github-app-lease",
-            SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST=BINARY,
-            SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED="0",
-            SERVERWARE_SECRET_LEASE_TTL_SECONDS="5")
+        self.environment.update(CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN=DATA_PLANE_TOKEN,
+            CATCHPLATE_DATA_PLANE_INSTANCE_ID="spiffe://test.catchplate/github-app-lease",
+            CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST=BINARY,
+            CATCHPLATE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED="0",
+            CATCHPLATE_SECRET_LEASE_TTL_SECONDS="5")
 
     def run_worker(self, name):
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", name],

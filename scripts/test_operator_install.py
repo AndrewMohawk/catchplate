@@ -32,7 +32,7 @@ from operator_install import bootstrap, compose, config, lifecycle, process, run
 PASSWORD = b"synthetic-install-password-not-for-use"
 IMAGE = "sha256:" + "1" * 64
 EDGE_IMAGE = "sha256:" + "2" * 64
-ARTIFACT = {"schema": "serverware.standaloneArtifact/v1", "sourceRevision": "3" * 40,
+ARTIFACT = {"schema": "catchplate.standaloneArtifact/v1", "sourceRevision": "3" * 40,
     "sourceTreeDigest": "sha256:" + "4" * 64, "compilerInputsDigest": "sha256:" + "5" * 64,
     "dataPlaneBinaryDigest": "sha256:" + "6" * 64}
 REAL_RUN = process.run
@@ -64,7 +64,7 @@ class InstallerTests(unittest.TestCase):
         self.state = self.root / "instance"
         self.path = self.root / "config.json"
         self.values = {
-            "schema": "serverware.standaloneInstall/v1", "project_name": "serverware-install-test",
+            "schema": "catchplate.standaloneInstall/v1", "project_name": "catchplate-install-test",
             "state_dir": str(self.state), "console_origin": "https://console.example.com",
             "proxy_origin": "https://proxy.example.com", "allowed_upstreams": ["https://api.github.com"],
             "tls_certificate": str(self.root / "tls.crt"), "tls_private_key": str(self.root / "tls.key"),
@@ -93,13 +93,13 @@ class InstallerTests(unittest.TestCase):
         value = config.load_config(self.path)
         self.assertEqual(value["publish_address"], None)
         self.assertEqual(value["admin_username"], "admin")
-        self.assertEqual(value["paired_image"], "serverware-standalone:local")
+        self.assertEqual(value["paired_image"], "catchplate-standalone:local")
         self.assertEqual(value["allowed_upstreams"], ["https://api.github.com"])
         self.assertEqual(value["state_dir"], str(self.state))
         self.assertFalse(self.state.exists(), "configuration validation must not initialize state")
 
     def test_documented_configuration_loads_without_repair(self):
-        example = Path(__file__).resolve().parents[1] / "docker/serverware-standalone/config.example.json"
+        example = Path(__file__).resolve().parents[1] / "docker/catchplate-standalone/config.example.json"
         value = config.load_config(example)
         self.assertNotEqual(value["console_origin"], value["proxy_origin"])
         self.assertEqual(value["publish_address"], "0.0.0.0:443")
@@ -116,7 +116,7 @@ class InstallerTests(unittest.TestCase):
             {"allowed_upstreams": ["https://api.github.com/path"]},
             {"allowed_upstreams": ["https://provider" + str(i) + ".example.com" for i in range(33)]},
             {"allowed_upstreams": ["https://demo-upstream:8443"]},
-            {"project_name": "serverware-operator-demo"},
+            {"project_name": "catchplate-operator-demo"},
             {"network_subnets": {"control": "172.30.0.0/24", "outbound": "172.30.0.0/25"}},
             {"network_subnets": {"control": "8.8.8.0/24", "outbound": "172.30.1.0/24"}},
             {"network_subnets": {"control": "172.30.0.1/24", "outbound": "172.30.1.0/24"}},
@@ -136,7 +136,7 @@ class InstallerTests(unittest.TestCase):
         alias.symlink_to(self.path)
         with self.assertRaises(config.InstallError):
             config.load_config(alias)
-        self.path.write_text('{"schema":"serverware.standaloneInstall/v1","schema":"other"}', encoding="utf-8")
+        self.path.write_text('{"schema":"catchplate.standaloneInstall/v1","schema":"other"}', encoding="utf-8")
         with self.assertRaises(config.InstallError):
             config.load_config(self.path)
 
@@ -207,7 +207,7 @@ class InstallerTests(unittest.TestCase):
                 self.assertEqual((info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)), (10001, 10001, 0o700))
             for name in ("app-data", "gate-data", "provider-custody", "x-custody", "notification-custody", "ecr-artifacts"):
                 self.assertEqual(list((self.state / name).iterdir()), [])
-            from serverware.config import _read_service_credential_file
+            from catchplate.config import _read_service_credential_file
             tokens = []
             for name in installed.TOKEN_FILES:
                 path = self.state / "service-secrets" / name
@@ -280,11 +280,11 @@ class InstallerTests(unittest.TestCase):
 
     def model(self, **changes):
         value = {**config.load_config(self.path), "paired_image": IMAGE, "edge_image": EDGE_IMAGE, **changes}
-        return compose.render(value, ARTIFACT, "spiffe://serverware/standalone/test")
+        return compose.render(value, ARTIFACT, "spiffe://catchplate/standalone/test")
 
     def test_compose_default_has_only_three_services_and_no_fixture_or_published_ports(self):
         model = self.model()
-        self.assertEqual(set(model["services"]), {"serverware", "decision-gate-rs", "edge"})
+        self.assertEqual(set(model["services"]), {"catchplate", "decision-gate-rs", "edge"})
         self.assertTrue(model["networks"]["control"]["internal"])
         self.assertEqual(model["services"]["edge"]["networks"], ["control", "outbound"])
         for service in model["services"].values():
@@ -299,21 +299,21 @@ class InstallerTests(unittest.TestCase):
                 self.assertTrue(Path(mount["source"]).is_relative_to(self.state))
                 self.assertNotEqual(mount["target"], "/app", "image owns source; no checkout overlay")
                 self.assertNotIn("docker.sock", mount["target"])
-        for name in ("serverware", "decision-gate-rs"):
+        for name in ("catchplate", "decision-gate-rs"):
             environment = model["services"][name]["environment"]
-            self.assertEqual(environment["SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS"], "[]")
-            self.assertEqual(json.loads(environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"]), ["https://api.github.com"])
-        self.assertEqual(model["services"]["serverware"]["environment"]["SERVERWARE_DEV_DEMO_SEED"], "0")
-        self.assertEqual(model["services"]["serverware"]["image"], model["services"]["decision-gate-rs"]["image"])
+            self.assertEqual(environment["CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS"], "[]")
+            self.assertEqual(json.loads(environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"]), ["https://api.github.com"])
+        self.assertEqual(model["services"]["catchplate"]["environment"]["CATCHPLATE_DEV_DEMO_SEED"], "0")
+        self.assertEqual(model["services"]["catchplate"]["image"], model["services"]["decision-gate-rs"]["image"])
 
     def test_gate_gets_only_publication_ca_and_its_three_service_tokens(self):
         model = self.model()
         gate = model["services"]["decision-gate-rs"]
         mounts = {mount["target"]: mount for mount in gate["volumes"]}
         self.assertEqual(set(mounts), {"/data", "/gate-data", "/data/.operator-publication.lock",
-            "/data/.serverware-operator-demo.json", "/data/mitmproxy/mitmproxy-ca-cert.pem",
-            "/data/mitmproxy/mitmproxy-ca.pem", "/run/secrets/serverware/credential-lease.token",
-            "/run/secrets/serverware/audit.token", "/run/secrets/serverware/management.token"})
+            "/data/.catchplate-operator-demo.json", "/data/mitmproxy/mitmproxy-ca-cert.pem",
+            "/data/mitmproxy/mitmproxy-ca.pem", "/run/secrets/catchplate/credential-lease.token",
+            "/run/secrets/catchplate/audit.token", "/run/secrets/catchplate/management.token"})
         self.assertEqual(mounts["/data"]["source"], str(self.state / "app-data/gate-runtime"))
         self.assertTrue(all(mount["read_only"] for target, mount in mounts.items() if target != "/gate-data"))
         self.assertFalse(mounts["/gate-data"]["read_only"])
@@ -326,7 +326,7 @@ class InstallerTests(unittest.TestCase):
             with self.subTest(address=address):
                 services = self.model(publish_address=address)["services"]
                 self.assertEqual(services["edge"]["ports"], [address + ":8443"])
-                self.assertFalse(services["serverware"].get("ports"))
+                self.assertFalse(services["catchplate"].get("ports"))
                 self.assertFalse(services["decision-gate-rs"].get("ports"))
 
     def test_optional_network_ranges_are_exact_and_do_not_change_existing_networks(self):
@@ -341,12 +341,12 @@ class InstallerTests(unittest.TestCase):
 
     def test_compiled_profile_identity_is_separate_from_installation_ownership(self):
         identifier = "11111111-2222-4333-8444-555555555555"
-        expected = "spiffe://operator-demo.serverware/decision-gate/local"
+        expected = "spiffe://operator-demo.catchplate/decision-gate/local"
         value = {**config.load_config(self.path), "paired_image": IMAGE, "edge_image": EDGE_IMAGE}
         model = compose.render(value, ARTIFACT, identifier)
-        for name in ("serverware", "decision-gate-rs"):
+        for name in ("catchplate", "decision-gate-rs"):
             service = model["services"][name]
-            self.assertEqual(service["environment"]["SERVERWARE_DATA_PLANE_INSTANCE_ID"], expected)
+            self.assertEqual(service["environment"]["CATCHPLATE_DATA_PLANE_INSTANCE_ID"], expected)
             self.assertEqual(service["labels"][lifecycle.LABEL], identifier)
         self.assertEqual(model["services"]["edge"]["labels"][lifecycle.LABEL], identifier)
         for network in model["networks"].values():
@@ -357,7 +357,7 @@ class InstallerTests(unittest.TestCase):
     def test_baked_runtime_start_reads_only_small_artifact_and_executes_no_build(self):
         artifact_path = self.root / "artifact.json"
         artifact_path.write_text(json.dumps(ARTIFACT), encoding="utf-8")
-        for role, binary in (("app", sys.executable), ("gate", "/usr/local/bin/serverware-decision-gate")):
+        for role, binary in (("app", sys.executable), ("gate", "/usr/local/bin/catchplate-decision-gate")):
             with self.subTest(role=role), patch.object(runtime, "ARTIFACT", artifact_path), \
                     patch.object(sys, "argv", ["runtime.py", role]), \
                     patch.object(os, "execv") as execute, \
@@ -398,7 +398,7 @@ class InstallerTests(unittest.TestCase):
                 os.chown(destination.parent, 10001, 10001)
             if not destination.exists():
                 installed.write_file(destination, b"synthetic-publication-only", owner=10001)
-        database = root / "serverware.sqlite3"
+        database = root / "catchplate.sqlite3"
         if not database.exists():
             with sqlite3.connect(database) as connection:
                 connection.execute("CREATE TABLE unit_state (id INTEGER PRIMARY KEY)")
@@ -422,11 +422,11 @@ class InstallerTests(unittest.TestCase):
         if args[:3] in (["docker", "network", "ls"], ["docker", "volume", "ls"]):
             return b''
         if args[:3] == ["docker", "image", "inspect"]:
-            paired = args[-1] in ("serverware-standalone:local", IMAGE)
+            paired = args[-1] in ("catchplate-standalone:local", IMAGE)
             return json.dumps({"Id": IMAGE if paired else EDGE_IMAGE, "Os": "linux", "Architecture": "amd64",
                 "RepoDigests": [], "Config": {"Labels": {
-                    "io.serverware.artifact.schema": ARTIFACT["schema"],
-                    "io.serverware.artifact.path": "/opt/serverware/artifact.json",
+                    "io.catchplate.artifact.schema": ARTIFACT["schema"],
+                    "io.catchplate.artifact.path": "/opt/catchplate/artifact.json",
                     "org.opencontainers.image.revision": ARTIFACT["sourceRevision"]} if paired else {}}}).encode()
         if args[:2] == ["docker", "run"]:
             self.assertEqual(args[args.index("--network") + 1], "none")
@@ -470,15 +470,15 @@ class InstallerTests(unittest.TestCase):
                 return self.ids[operation[-1]].encode() if operation[-1] in self.running else b''
             if len(operation) == 7 and operation[:6] == ["up", "--detach", "--no-deps", "--no-build", "--pull", "never"] and operation[-1] in lifecycle.SERVICES:
                 self.running[operation[-1]] = "running"
-                if operation[-1] == "serverware" and self.publish:
+                if operation[-1] == "catchplate" and self.publish:
                     self.publish_files()
                 return b''
-            if operation == ["exec", "-T", "serverware", "python", "-B", "-m", "scripts.operator_install.runtime", "pair-status"]:
+            if operation == ["exec", "-T", "catchplate", "python", "-B", "-m", "scripts.operator_install.runtime", "pair-status"]:
                 self.assertTrue(lifecycle._publication_ready(self.manifest))
                 self.assertEqual(self.running.get("decision-gate-rs"), "running")
                 return json.dumps({"ready": True, "policy_hash": "sha256:" + "7" * 64,
                     "loaded_policy_hash": "sha256:" + "7" * 64}).encode()
-            if operation == ["stop", "--timeout", "30", "edge", "decision-gate-rs", "serverware"]:
+            if operation == ["stop", "--timeout", "30", "edge", "decision-gate-rs", "catchplate"]:
                 if not self.ignore_stop:
                     self.running = {name: "exited" for name in self.running}
                 return b''
@@ -517,7 +517,7 @@ class InstallerTests(unittest.TestCase):
                 patch.object(lifecycle.time, "sleep"):
             with self.assertRaises(config.InstallError):
                 lifecycle.start(self.state, timeout=5)
-        self.assertEqual([command[-1] for command in self.commands if "up" in command], ["serverware"])
+        self.assertEqual([command[-1] for command in self.commands if "up" in command], ["catchplate"])
 
     def test_changed_installed_compose_is_refused_without_lifecycle_writes(self):
         self.retained_installation()
@@ -547,18 +547,18 @@ class InstallerTests(unittest.TestCase):
 
     def test_crash_loop_fails_promptly_without_sleep_or_starting_later_services(self):
         self.retained_installation()
-        self.running = {"serverware": "restarting"}
+        self.running = {"catchplate": "restarting"}
         with patch.object(process, "run", side_effect=self.docker), \
                 patch.object(lifecycle.time, "sleep", side_effect=AssertionError("known crash loop was polled")):
             with self.assertRaises(config.InstallError):
                 lifecycle.start(self.state)
             with self.assertRaises(config.InstallError):
-                lifecycle._wait_healthy(self.manifest, "serverware", float("inf"))
+                lifecycle._wait_healthy(self.manifest, "catchplate", float("inf"))
         self.assertFalse(any("up" in command for command in self.commands))
 
     def test_running_image_or_resource_role_mismatch_refuses_adoption(self):
         self.retained_installation()
-        self.running = {"serverware": "running"}
+        self.running = {"catchplate": "running"}
         for mismatch in ("image", "role"):
             def response(args, **kwargs):
                 value = self.docker(args, **kwargs)

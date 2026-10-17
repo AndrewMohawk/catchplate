@@ -4,7 +4,7 @@ use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const API: &str = "serverware.responseV2.nativeStagingAssignment/v1";
+pub const API: &str = "catchplate.responseV2.nativeStagingAssignment/v1";
 pub const PURPOSE: &str = "native-gate-reserve-authorize-stage-v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,7 +122,7 @@ impl Configuration {
 
     fn roots(&self) -> Result<TrustRoots, String> {
         let value = &self.trust_roots;
-        ensure(value.api_version == "serverware.nativeResponseAttestationTrustRoots/v1"
+        ensure(value.api_version == "catchplate.nativeResponseAttestationTrustRoots/v1"
             && (1..=16).contains(&value.aws_nitro_root_certificates_pem.len())
             && value.aws_nitro_crls_der_base64url.is_empty()
             && value.nitro_certificate_profile.profile_id == "aws-nitro-attestation-pki-native-v1",

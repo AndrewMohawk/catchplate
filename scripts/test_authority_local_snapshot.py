@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from scripts.authority import local_snapshot as cli
 from scripts.authority.generate_artifact_bundle import GeneratorError
-from serverware import authority_local_snapshot as local
+from catchplate import authority_local_snapshot as local
 
 NOW = int(datetime(2026, 10, 1, tzinfo=timezone.utc).timestamp()) * 1_000_000_000
 DIGEST = "sha256:" + "1" * 64

@@ -15,16 +15,16 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import serverware
-from serverware import db, oauth, operator_publication as publication
-from serverware import operator_provider_key as keys
-from serverware import operator_x_admission as admission
-from serverware import operator_x_configuration as configuration
-from serverware import operator_x_oauth_profile as profiles
-from serverware import operator_x_oauth_protocol as protocol
-from serverware import operator_x_refresh as refresh
-from serverware import operator_x_transport as transport
-from serverware import operator_catalog_x_oauth as catalog
+import catchplate
+from catchplate import db, oauth, operator_publication as publication
+from catchplate import operator_provider_key as keys
+from catchplate import operator_x_admission as admission
+from catchplate import operator_x_configuration as configuration
+from catchplate import operator_x_oauth_profile as profiles
+from catchplate import operator_x_oauth_protocol as protocol
+from catchplate import operator_x_refresh as refresh
+from catchplate import operator_x_transport as transport
+from catchplate import operator_catalog_x_oauth as catalog
 
 
 def no_external_effects(event, _args):
@@ -69,7 +69,7 @@ class RefreshTests(unittest.TestCase):
             "provider_subject": "123", "provider_account": "@synthetic", "provider_identity_verified": True,
             "scopes": list(profiles.SCOPES), "refreshable": True, "injection_field": "access_token",
             "expires_at_epoch_ms": WALL_MS - 1,
-            "operator_x_account": {"schema": "serverware.operatorXAccountBinding/v1",
+            "operator_x_account": {"schema": "catchplate.operatorXAccountBinding/v1",
                 "owner_id": OWNER, "configuration_operation_id": CONFIGURATION,
                 "config_version": 1, "profile_binding_digest": self.profile.binding_digest, "intent_id": INTENT}}
         self.credential = {"id": ID, "kind": "oauth2", "credential_version": 1,
@@ -195,7 +195,7 @@ class RefreshTests(unittest.TestCase):
             if not self.catalog_allowed:
                 raise ValueError("synthetic revoked application or rule")
 
-        for replacement in (patch.object(serverware, "operator_x_account_store", self.store, create=True),
+        for replacement in (patch.object(catchplate, "operator_x_account_store", self.store, create=True),
                 patch.object(db, "metadata_connection", connection),
                 patch.object(publication, "exclusive", exclusive),
                 patch.object(publication, "assert_not_held", lambda: self.assertFalse(self.locked)),

@@ -7,11 +7,11 @@ use super::super::production_dispatch::{ClosedProductionDispatchRequestV4 as Dis
     CanonicalProductionArtifactV4 as Artifact,ClosedProductionDispatchResultV4 as ResultBody,
     SignedProductionServiceTransitionV4 as Transition};
 use crate::policy_shadow::{CanonicalEd25519Signature,signature_preimage,AuthorityRole as Role};
-pub(super) const API:&str="serverware.nativeSpoolHeadCommand/v1";
-pub(super) const ALLOCATION_DOMAIN:&[u8]=b"serverware.nativeSpoolAllocation.signature/v1";
-pub(super) const INGRESS_DOMAIN:&str="serverware.nativeIngressOriginAdmission.signature/v1";
-pub(super) const COMPLETE_DOMAIN:&str="serverware.nativeSpoolCompletion.signature/v1";
-pub(super) const SAMPLE_DOMAIN:&str="serverware.nativeIngressSamplingResult.signature/v1";
+pub(super) const API:&str="catchplate.nativeSpoolHeadCommand/v1";
+pub(super) const ALLOCATION_DOMAIN:&[u8]=b"catchplate.nativeSpoolAllocation.signature/v1";
+pub(super) const INGRESS_DOMAIN:&str="catchplate.nativeIngressOriginAdmission.signature/v1";
+pub(super) const COMPLETE_DOMAIN:&str="catchplate.nativeSpoolCompletion.signature/v1";
+pub(super) const SAMPLE_DOMAIN:&str="catchplate.nativeIngressSamplingResult.signature/v1";
 pub(super) fn require(v:bool)->Result<(),ServiceError>{if v{Ok(())}else{Err(invalid())}}
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -42,7 +42,7 @@ impl Ingress {
     pub(super) fn verify(&self,scope:&Scope,key:&RoleKey,origin:&super::spool_origin::Key)->Result<Option<super::spool_origin::Verified>,ServiceError>{
         let p=&self.payload;scope.binding(&p.request)?;
         require(matches!(p.request,Dispatch::BeginIngress{..}) && key.role==Role::CustodyIngressAdmission
-            && p.api_version=="serverware.nativeIngressOriginAdmission/v1" && p.native_grant_sha256==key.grant_sha256
+            && p.api_version=="catchplate.nativeIngressOriginAdmission/v1" && p.native_grant_sha256==key.grant_sha256
             && p.signing_key_id==key.key_id && p.signing_key_spki_sha256==key.key_spki_sha256
             && p.observed_at_boottime_nanos>=p.request.binding().opened_at_boottime_nanos
             && p.observed_at_boottime_nanos<p.request.binding().operation_deadline_boottime_nanos)?;
@@ -74,7 +74,7 @@ impl Sampling {
         let p=&self.payload;let ingress=claim.ingress.as_ref().ok_or_else(invalid)?;let a=&allocation.payload;
         let Dispatch::BeginIngress{request_binding_sha256,..}=&claim.request else{return Err(invalid());};
         p.sampling.context.validate(generation).map_err(|_|invalid())?;
-        require(p.api_version=="serverware.nativeIngressSamplingResult/v1" && p.claim_sha256==sha(claim)?
+        require(p.api_version=="catchplate.nativeIngressSamplingResult/v1" && p.claim_sha256==sha(claim)?
             && p.allocation_sha256==sha(allocation)? && key.role==Role::CustodyLedgerAppend && p.native_grant_sha256==key.grant_sha256
             && &p.sampling.context.request_binding_sha256==request_binding_sha256
             && p.sampling.context.ingress_sequence==a.ingress_sequence
@@ -129,8 +129,8 @@ pub(super) struct Allocation {pub(super) payload:AllocationPayload,pub(super) si
 impl Allocation {
     pub(super) fn verify(&self,claim:&Claim,scope:&Scope,grant:&Sha256Digest,history:&RuntimeAuthorityHistory)->Result<(),ServiceError>{
         claim.validate(scope)?;let p=&self.payload;let b=claim.request.binding();
-        let completion=p.api_version=="serverware.nativeSpoolAllocation/v2";
-        require((completion || p.api_version=="serverware.nativeSpoolAllocation/v1") && completion==p.completion.is_some()
+        let completion=p.api_version=="catchplate.nativeSpoolAllocation/v2";
+        require((completion || p.api_version=="catchplate.nativeSpoolAllocation/v1") && completion==p.completion.is_some()
             && (completion || !matches!(claim.request,Dispatch::AppendTerminal{..})) && &p.service_grant_sha256==grant
             && p.authority_epoch==history.current_epoch().map_err(|_|invalid())?.epoch_reference()
             && p.claim_sha256==sha(claim)? && p.generation_id==scope.generation_id
@@ -156,7 +156,7 @@ pub(super) struct Completion {pub(super) payload:CompletionPayload,pub(super) si
 impl Completion {
     pub(super) fn verify_signature(&self,key:&RoleKey)->Result<(),ServiceError>{
         let p=&self.payload;let c=&p.prepared.core;let a=&p.allocation.payload;let b=p.claim.request.binding();
-        require(p.api_version=="serverware.nativeSpoolCompletion/v1" && c.request==p.claim.request
+        require(p.api_version=="catchplate.nativeSpoolCompletion/v1" && c.request==p.claim.request
             && c.native_grant_sha256==key.grant_sha256 && c.signing_key_id==key.key_id && c.signing_key_spki_sha256==key.key_spki_sha256
             && c.allocation_sha256==sha(&p.allocation)?
             && c.event_ordinal==a.event_ordinal && c.predecessor_event_ordinal==a.predecessor_event_ordinal
@@ -181,7 +181,7 @@ impl Command {
     pub(super) fn request(&self)->&Dispatch{match &self.action{Action::Claim(v)=>&v.request,Action::Commit(v)=>&v.payload.claim.request,
         Action::EffectClaim(v)=>v,Action::EffectCommit{completion,..}=>&completion.prepared.core.request}}
     pub(super) fn deadline(&self)->Result<u64,ServiceError>{
-        require(if matches!(self.action,Action::EffectClaim(_)|Action::EffectCommit{..}){self.api_version=="serverware.nativeSpoolHeadCommand/v2"}else{self.api_version==API})?;
+        require(if matches!(self.action,Action::EffectClaim(_)|Action::EffectCommit{..}){self.api_version=="catchplate.nativeSpoolHeadCommand/v2"}else{self.api_version==API})?;
         self.request().validate().map_err(|_|invalid())?;Ok(self.request().binding().operation_deadline_boottime_nanos)}
 }
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
@@ -193,4 +193,4 @@ pub(super) enum Reply {
     EffectCommitted{result:ResultBody,transition:Transition},
 }
 pub(super) fn is_command(raw:&[u8])->Result<bool,ServiceError>{let v:serde_json::Value=decode_canonical_frame(raw)?;
-    Ok(matches!(v.get("apiVersion").and_then(|v|v.as_str()),Some(API|"serverware.nativeSpoolHeadCommand/v2")))}
+    Ok(matches!(v.get("apiVersion").and_then(|v|v.as_str()),Some(API|"catchplate.nativeSpoolHeadCommand/v2")))}

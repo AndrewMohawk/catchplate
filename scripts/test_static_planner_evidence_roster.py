@@ -16,13 +16,13 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_contract as contract
-from serverware import authority_credential_currentness as currentness
-from serverware import authority_static_credential_assignment as assignment
-from serverware import authority_static_credential_custody as creation
-from serverware import authority_static_credential_rotation_custody as rotation
-from serverware.authority_store import executor_v9 as store
-from serverware.authority_store import root_transition_sql as sql
+from catchplate import authority_contract as contract
+from catchplate import authority_credential_currentness as currentness
+from catchplate import authority_static_credential_assignment as assignment
+from catchplate import authority_static_credential_custody as creation
+from catchplate import authority_static_credential_rotation_custody as rotation
+from catchplate.authority_store import executor_v9 as store
+from catchplate.authority_store import root_transition_sql as sql
 
 
 DIGEST = "sha256:" + "1" * 64
@@ -60,7 +60,7 @@ def native_evidence(codec):
     if codec is rotation:
         statement["previousCredentialVersion"] = 1
     return {"statement": statement, "signature": "ed25519:" + encoded(bytes([4]) * 64),
-        "nativeKeyEvidence": {"apiVersion": "serverware.nativeResponseProofKeyEvidence/v1",
+        "nativeKeyEvidence": {"apiVersion": "catchplate.nativeResponseProofKeyEvidence/v1",
             "responseProofPublicKey": encoded(bytes([5]) * 32),
             "attestationDocumentB64": encoded(b"synthetic-not-a-quote")},
         "assignmentOriginal": assignment.canonical(selected).decode("ascii")}
@@ -68,14 +68,14 @@ def native_evidence(codec):
 
 def payload(operation):
     plan = {name: DIGEST for name in sql._PLAN_FIELDS}
-    plan.update(schema="serverware.policyAuthorityMeasuredPlan/v3", operation=operation,
+    plan.update(schema="catchplate.policyAuthorityMeasuredPlan/v3", operation=operation,
         sourceRevision=contract.SOURCE_REVISION, authoritySchemaVersion=contract.SCHEMA_VERSION,
         operationContractDigest=contract.OPERATION_MANIFEST_DIGEST,
         operationManifestDigest=contract.OPERATION_MANIFEST_DIGEST,
         handlerContractDigest=contract.handler_contract_digest(operation), workUnits=1,
         deadlineMonotonicNs=2000, deadlineEpochNs=2000, fence=1)
     result = {name: None for name in sql._PAYLOAD_FIELDS}
-    result.update(schema="serverware.policyAuthorityPlannerResponse/v3", measuredPlan=plan,
+    result.update(schema="catchplate.policyAuthorityPlannerResponse/v3", measuredPlan=plan,
         queryMultiproofsDigest=DIGEST, plannerTraceDigest=DIGEST, expectedResultDigest=DIGEST,
         plannerIdentity={name: DIGEST for name in (
             "sessionIdentityDigest", "measurementDigest", "attestationReceiptDigest")})
@@ -136,7 +136,7 @@ def main():
     oversized["staticCredentialCustodyEvidence"]["nativeKeyEvidence"]["attestationDocumentB64"] = encoded(bytes(12 * 1024 + 1))
     assert not admitted(oversized)
     controls += 3
-    rendered = sql.load_root_transition_sql('"serverware_metadata"')
+    rendered = sql.load_root_transition_sql('"catchplate_metadata"')
     closed = sql._exact_payload_keys("rt_payload_json")
     assert " ".join(closed.split()) in " ".join(rendered.split())
     for operation, field in ((creation.profile.OPERATION, "staticCredentialCustodyEvidence"),

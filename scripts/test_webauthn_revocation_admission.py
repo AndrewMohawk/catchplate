@@ -11,10 +11,10 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
-from serverware import authority_transition_core as core
-from serverware import webauthn_revocation_admission as admission
-from serverware.authority_transition_webauthn import prepare_revocation_input
+from catchplate import authority_contract
+from catchplate import authority_transition_core as core
+from catchplate import webauthn_revocation_admission as admission
+from catchplate.authority_transition_webauthn import prepare_revocation_input
 
 
 class RecordedOnly(RuntimeError):

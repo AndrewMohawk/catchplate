@@ -24,11 +24,11 @@ import (
 
 func environment() map[string]string {
 	return map[string]string{
-		"SERVERWARE_PROXY_URL":   "https://proxy.example.test:8443",
-		"SERVERWARE_APP_ID":      "11111111-1111-4111-8111-111111111111",
-		"SERVERWARE_PROXY_TOKEN": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)),
-		"SERVERWARE_CA_FILE":     "/synthetic/inner.pem", "SERVERWARE_PROXY_CA_FILE": "/synthetic/outer.pem",
-		"SERVERWARE_X_POST_TEXT": "Synthetic post\nsecond line\ttext\r", "SERVERWARE_X_POST_CONFIRM": "post-once",
+		"CATCHPLATE_PROXY_URL":   "https://proxy.example.test:8443",
+		"CATCHPLATE_APP_ID":      "11111111-1111-4111-8111-111111111111",
+		"CATCHPLATE_PROXY_TOKEN": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)),
+		"CATCHPLATE_CA_FILE":     "/synthetic/inner.pem", "CATCHPLATE_PROXY_CA_FILE": "/synthetic/outer.pem",
+		"CATCHPLATE_X_POST_TEXT": "Synthetic post\nsecond line\ttext\r", "CATCHPLATE_X_POST_CONFIRM": "post-once",
 		"X_BEARER_TOKEN": "provider-canary", "TWITTER_BEARER_TOKEN": "provider-canary",
 		"HTTPS_PROXY": "http://ambient-canary.invalid", "NO_PROXY": "*",
 	}
@@ -46,25 +46,25 @@ func configForTest(t *testing.T) config {
 
 func TestConfigIsExplicitAndRejectsAmbientRoots(t *testing.T) {
 	c := configForTest(t)
-	if c.proxy.User != nil || c.text != environment()["SERVERWARE_X_POST_TEXT"] {
+	if c.proxy.User != nil || c.text != environment()["CATCHPLATE_X_POST_TEXT"] {
 		t.Fatal("configuration changed")
 	}
 	for _, tc := range []struct{ key, value string }{
-		{"SERVERWARE_PROXY_URL", "http://proxy.example.test"},
-		{"SERVERWARE_PROXY_URL", "https://user:secret@proxy.example.test"},
-		{"SERVERWARE_PROXY_URL", "https://proxy.example.test/path"},
-		{"SERVERWARE_PROXY_URL", "https://proxy.example.test?"},
-		{"SERVERWARE_PROXY_URL", "https://proxy.example.test#fragment"},
-		{"SERVERWARE_PROXY_URL", "https://proxy.example.test:0"},
-		{"SERVERWARE_PROXY_URL", "https://proxy.example.test:65536"},
-		{"SERVERWARE_PROXY_URL", "https://proxy.example.test:"},
-		{"SERVERWARE_PROXY_URL", "https://api.x.com"},
-		{"SERVERWARE_PROXY_URL", "https://127.0.0.1"},
-		{"SERVERWARE_PROXY_URL", "https://[::1]"},
-		{"SERVERWARE_PROXY_URL", "https://Proxy.example.test"},
-		{"SERVERWARE_APP_ID", "not-an-app"}, {"SERVERWARE_PROXY_TOKEN", "provider-canary"},
-		{"SERVERWARE_CA_FILE", ""}, {"SERVERWARE_X_POST_TEXT", ""},
-		{"SERVERWARE_X_POST_CONFIRM", ""}, {"SERVERWARE_X_POST_CONFIRM", "yes"},
+		{"CATCHPLATE_PROXY_URL", "http://proxy.example.test"},
+		{"CATCHPLATE_PROXY_URL", "https://user:secret@proxy.example.test"},
+		{"CATCHPLATE_PROXY_URL", "https://proxy.example.test/path"},
+		{"CATCHPLATE_PROXY_URL", "https://proxy.example.test?"},
+		{"CATCHPLATE_PROXY_URL", "https://proxy.example.test#fragment"},
+		{"CATCHPLATE_PROXY_URL", "https://proxy.example.test:0"},
+		{"CATCHPLATE_PROXY_URL", "https://proxy.example.test:65536"},
+		{"CATCHPLATE_PROXY_URL", "https://proxy.example.test:"},
+		{"CATCHPLATE_PROXY_URL", "https://api.x.com"},
+		{"CATCHPLATE_PROXY_URL", "https://127.0.0.1"},
+		{"CATCHPLATE_PROXY_URL", "https://[::1]"},
+		{"CATCHPLATE_PROXY_URL", "https://Proxy.example.test"},
+		{"CATCHPLATE_APP_ID", "not-an-app"}, {"CATCHPLATE_PROXY_TOKEN", "provider-canary"},
+		{"CATCHPLATE_CA_FILE", ""}, {"CATCHPLATE_X_POST_TEXT", ""},
+		{"CATCHPLATE_X_POST_CONFIRM", ""}, {"CATCHPLATE_X_POST_CONFIRM", "yes"},
 		{"SSL_CERT_FILE", "/ambient/canary"}, {"SSL_CERT_DIR", "/ambient/canary"},
 	} {
 		t.Run(tc.key+"/"+tc.value, func(t *testing.T) {
@@ -111,7 +111,7 @@ func TestActualSDKPostsExactTextOnce(t *testing.T) {
 		if r.Method != "POST" || r.URL.String() != "https://api.x.com/2/tweets" {
 			t.Fatal("wrong SDK operation")
 		}
-		if r.Header.Get("Authorization") != "Bearer serverware-x-post-placeholder-v1" ||
+		if r.Header.Get("Authorization") != "Bearer catchplate-x-post-placeholder-v1" ||
 			r.Header.Get("Accept") != "application/json" || r.Header.Get("Content-Type") != "application/json" || len(r.Header) != 3 {
 			t.Fatal("SDK headers changed or private credentials leaked")
 		}

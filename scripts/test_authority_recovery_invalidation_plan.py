@@ -19,8 +19,8 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from serverware import authority_recovery_invalidation_plan as plan
-from serverware import authority_recovery_invalidation_plan_owner as source
+from catchplate import authority_recovery_invalidation_plan as plan
+from catchplate import authority_recovery_invalidation_plan_owner as source
 from test_authority_recovery_invalidation import fixture, meter
 from test_authority_recovery_invalidation_acquisition import request_for
 

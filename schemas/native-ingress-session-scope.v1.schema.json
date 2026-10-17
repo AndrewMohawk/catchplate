@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-ingress-session-scope.v1.schema.json",
-  "title": "Serverware native ingress session scope v1",
+  "$id": "https://catchplate.invalid/schemas/native-ingress-session-scope.v1.schema.json",
+  "title": "Catchplate native ingress session scope v1",
   "description": "Closed independently supplied nonce-free session scope for the native ingress client's generated-challenge mode. These are the ingress attestation expectations except for the intentionally absent nonceBase64url field. Schema conformance establishes shape only, not pin provenance, current release or policy authority, challenge generation or one-use custody, Nitro or TLS verification, CA installation permission or service readiness. The runtime retains a separately pinned original of at most 16384 bytes and performs canonicalization, cross-field and cryptographic checks.",
   "type": "object",
   "additionalProperties": false,
@@ -11,7 +11,7 @@
     "maxAgeSeconds", "futureSkewSeconds", "ingressHost", "serverInstanceId"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeIngressSessionScope/v1"},
+    "apiVersion": {"const": "catchplate.nativeIngressSessionScope/v1"},
     "releaseRecordSha256": {"$ref": "#/$defs/nonzeroSha256"},
     "policyHash": {"$ref": "#/$defs/nonzeroSha256"},
     "configurationSha256": {"$ref": "#/$defs/nonzeroSha256"},

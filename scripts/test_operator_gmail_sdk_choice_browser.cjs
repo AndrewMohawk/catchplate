@@ -12,19 +12,19 @@ const {join, resolve} = require('node:path');
 const {fixture, options, bundleRule} = require('./test_operator_gmail_bundle_browser.cjs');
 const {ready, view, openRestrictions, credential, application, rule, IDS, NOW} = require('./test_operator_catalog_browser.cjs');
 const {pair, step, review, grant, refresh, google, digest, downloadedConfig, publicCatalog} = require('./test_operator_ordinary_modes_browser.cjs');
-const {buildCurlCommand} = require('../serverware/operator_demo_web/app.js');
+const {buildCurlCommand} = require('../catchplate/operator_demo_web/app.js');
 
 const ROOT = resolve(__dirname, '..');
 const BUNDLE = 'gmail_read_v1';
-const DUMMY = 'Bearer serverware-gmail-placeholder-v1';
+const DUMMY = 'Bearer catchplate-gmail-placeholder-v1';
 const CUSTOM = "Bearer synthetic-custom-'literal'-$value";
 const BASIC = 'basic_and_bearer_v1';
 const GMAIL = 'https://gmail.googleapis.com';
-const AUTH = {schema: 'serverware.operatorProxyAuthentication/v1', modes: ['bearer', BASIC],
+const AUTH = {schema: 'catchplate.operatorProxyAuthentication/v1', modes: ['bearer', BASIC],
   path: '/api/operator-demo/applications/proxy-authentication'};
 const PROJECTS = ['go', 'node', 'python'].map(language =>
-  'https://github.com/AndrewMohawk/serverware/tree/main/examples/google-gmail-' + language);
-const GUIDE = 'https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-gmail-job-verification.md';
+  'https://github.com/AndrewMohawk/catchplate/tree/main/examples/google-gmail-' + language);
+const GUIDE = 'https://github.com/AndrewMohawk/catchplate/blob/main/docs/operator-gmail-job-verification.md';
 const PRIVATE = ['synthetic-gmail-provider-private-never-render', 'synthetic-gmail-refresh-private-never-render'];
 const CLIENT_TOKEN = Buffer.alloc(32, 85).toString('base64url');
 const executeFile = promisify(execFile);
@@ -123,7 +123,7 @@ async function publicSecretsAbsent(page, command, token = '') {
   }
 }
 async function sdkHelpers() {
-  const source = await readFile(join(ROOT, 'serverware/operator_demo_web/workspace_gmail_sdk.js'), 'utf8');
+  const source = await readFile(join(ROOT, 'catchplate/operator_demo_web/workspace_gmail_sdk.js'), 'utf8');
   return vm.runInNewContext(source + '\n({buildGmailSdkClientRecipe, gmailSdkClientConfiguration});', {}, {timeout: 1000});
 }
 async function stubDirectory(evidence) {
@@ -135,7 +135,7 @@ async function stubDirectory(evidence) {
     'const deadline = setTimeout(() => process.exit(97), 2000);',
     "fs.readFile(0, 'utf8', (error, input) => {",
     'if (error || input.length > 1024) process.exit(98); clearTimeout(deadline);',
-    "const token = process.env.SERVERWARE_PROXY_TOKEN || '';",
+    "const token = process.env.CATCHPLATE_PROXY_TOKEN || '';",
     "const parent = fs.readFileSync('/proc/' + process.ppid + '/cmdline', 'utf8');",
     'process.stdout.write(JSON.stringify({environment: process.env, args: process.argv.slice(2), input,',
     '  tokenInArgv: process.argv.some(value => value.includes(token)), tokenInParentArgv: parent.includes(token)}));',
@@ -145,13 +145,13 @@ async function stubDirectory(evidence) {
   return directory;
 }
 async function runCopiedRecipe(command, directory, token) {
-  const ambient = {PATH: '/usr/bin:/bin', HOME: '/synthetic-home-not-used', SERVERWARE_PROXY_TOKEN: token,
+  const ambient = {PATH: '/usr/bin:/bin', HOME: '/synthetic-home-not-used', CATCHPLATE_PROXY_TOKEN: token,
     GOOGLE_APPLICATION_CREDENTIALS: '/synthetic-no-google-credentials', GOOGLE_API_USE_CLIENT_CERTIFICATE: 'true',
     GOOGLE_API_USE_MTLS_ENDPOINT: 'always', GODEBUG: 'synthetic-must-not-reach-client',
     SSL_CERT_FILE: '/synthetic-wrong-roots', SSL_CERT_DIR: '/synthetic-wrong-directory',
     HTTPS_PROXY: 'http://ambient.invalid', HTTP_PROXY: 'http://ambient.invalid', ALL_PROXY: 'http://ambient.invalid',
     NO_PROXY: '*', https_proxy: 'http://ambient.invalid', http_proxy: 'http://ambient.invalid', no_proxy: '*',
-    SERVERWARE_PROXY_CA_FILE: '/synthetic-stale-outer-root', SERVERWARE_CA_FILE: '/synthetic-stale-inner-root'};
+    CATCHPLATE_PROXY_CA_FILE: '/synthetic-stale-outer-root', CATCHPLATE_CA_FILE: '/synthetic-stale-inner-root'};
   return executeFile('/bin/bash', ['--noprofile', '--norc', '-c', command], {
     cwd: directory, env: ambient, timeout: 5000, maxBuffer: 32768, encoding: 'utf8', killSignal: 'SIGKILL'});
 }
@@ -161,7 +161,7 @@ const tests = [
     fixture(browser, sdkOptions(), async (page, state, observed) => {
       await sdkDraft(page); noWrites(state, observed);
       assert.equal(await page.locator('#connect-gmail-client option:checked').innerText(), 'Official Gmail SDK');
-      assert.match(await page.locator('#connect-gmail-sdk-summary').innerText(), /Authorization: Bearer serverware-gmail-placeholder-v1/);
+      assert.match(await page.locator('#connect-gmail-sdk-summary').innerText(), /Authorization: Bearer catchplate-gmail-placeholder-v1/);
       assert.match(await page.locator('#connect-gmail-sdk-summary').innerText(), /Go, Node\.js or Python/);
       assert(await page.locator('#connect-review').isEnabled());
       await shot(page, evidence, 'sdk-permission'); await review(page); noWrites(state, observed);
@@ -345,7 +345,7 @@ const handoffTests = [
         ['node', 'Node.js', 'node', ['client.mjs']], ['python', 'Python', '.venv/bin/python', ['-I', '-B', 'gmail.py']]]) {
         await page.locator('#gmail-sdk-language').selectOption(language);
         assert.equal(await page.locator('#gmail-sdk-file-command').innerText(),
-          [entrypoint, ...args, '--config', './serverware-client.private.json'].join(' '));
+          [entrypoint, ...args, '--config', './catchplate-client.private.json'].join(' '));
         assert.match(await page.locator('#client-template-title').innerText(), new RegExp('Official ' + label.replace('.', '\\.') + ' SDK'));
         assert((await page.locator('#gmail-sdk-guidance').innerText()).includes('selected ' + label + ' Gmail SDK'));
         const command = await copiedCommand(page); await publicSecretsAbsent(page, command, held);
@@ -359,11 +359,11 @@ const handoffTests = [
         assert.equal(loaded.applicationId, IDS.application);
         assert.equal(loaded.token, held);
         assert.equal(loaded.caFile, resolve(evidence, config.ca_file));
-        assert.equal(config.client_recipe.schema, 'serverware.gmailSdkClient/' + (language === 'go' ? 'v1' : 'v2'));
+        assert.equal(config.client_recipe.schema, 'catchplate.gmailSdkClient/' + (language === 'go' ? 'v1' : 'v2'));
         assert.equal(config.client_recipe.entrypoint, entrypoint);
         assert.equal(config.client_recipe.example_directory, 'examples/google-gmail-' + language);
-        assert.equal(config.client_recipe.environment.SERVERWARE_PROXY_TOKEN, held);
-        assert.equal(config.client_recipe.environment.SERVERWARE_APP_ID, IDS.application);
+        assert.equal(config.client_recipe.environment.CATCHPLATE_PROXY_TOKEN, held);
+        assert.equal(config.client_recipe.environment.CATCHPLATE_APP_ID, IDS.application);
         assert.equal(config.client_recipe.access_rule_id, IDS.rule);
         if (language === 'go') assert(!Object.hasOwn(config.client_recipe, 'language'));
         else {
@@ -395,14 +395,14 @@ const handoffTests = [
   ['SDK handoff pure helpers keep public and private inputs separate and refuse malformed configuration', async () => {
     const helpers = await sdkHelpers();
     const input = {proxyUrl: 'https://proxy.example.test', applicationId: IDS.application, accessRuleId: IDS.rule,
-      tokenExpiresAtEpochMs: NOW + 86400000, nowEpochMs: NOW, caPath: './serverware-ca.pem', proxyCaPath: ''};
+      tokenExpiresAtEpochMs: NOW + 86400000, nowEpochMs: NOW, caPath: './catchplate-ca.pem', proxyCaPath: ''};
     const publicRecipe = helpers.buildGmailSdkClientRecipe({...input, token: CLIENT_TOKEN, providerSecret: PRIVATE[0]});
     assert(!publicRecipe.includes(CLIENT_TOKEN)); assert(!publicRecipe.includes(PRIVATE[0]));
     const config = clone(helpers.gmailSdkClientConfiguration(input, CLIENT_TOKEN));
-    assert.deepEqual(config, {schema: 'serverware.gmailSdkClient/v1', example_directory: 'examples/google-gmail-go',
+    assert.deepEqual(config, {schema: 'catchplate.gmailSdkClient/v1', example_directory: 'examples/google-gmail-go',
       entrypoint: './gmail-example', clear_environment: true, environment: {LANG: 'C.UTF-8',
-        SERVERWARE_PROXY_URL: input.proxyUrl, SERVERWARE_APP_ID: IDS.application,
-        SERVERWARE_CA_FILE: input.caPath, SERVERWARE_PROXY_TOKEN: CLIENT_TOKEN},
+        CATCHPLATE_PROXY_URL: input.proxyUrl, CATCHPLATE_APP_ID: IDS.application,
+        CATCHPLATE_CA_FILE: input.caPath, CATCHPLATE_PROXY_TOKEN: CLIENT_TOKEN},
       token_expires_at_epoch_ms: input.tokenExpiresAtEpochMs, access_rule_id: IDS.rule});
     for (const [key, values] of [
       ['proxyUrl', ['http://proxy.example.test', 'https://user:password@proxy.example.test',
@@ -421,8 +421,8 @@ const handoffTests = [
     for (const value of ['', CLIENT_TOKEN + 'A', CLIENT_TOKEN.slice(0, -1) + 'B', 'bad\nvalue', PRIVATE[0], null])
       assert.throws(() => helpers.gmailSdkClientConfiguration(input, value));
     const distinct = helpers.gmailSdkClientConfiguration(input, CLIENT_TOKEN);
-    distinct.environment.SERVERWARE_APP_ID = IDS.other;
-    assert.equal(helpers.gmailSdkClientConfiguration(input, CLIENT_TOKEN).environment.SERVERWARE_APP_ID, IDS.application);
+    distinct.environment.CATCHPLATE_APP_ID = IDS.other;
+    assert.equal(helpers.gmailSdkClientConfiguration(input, CLIENT_TOKEN).environment.CATCHPLATE_APP_ID, IDS.application);
   }],
   ['SDK handoff actual Copy executes only the local stub with quoted roots, clean env and private stdin token', async (browser, evidence) => {
     const directory = await stubDirectory(evidence); const marker = join(directory, 'must-not-exist');
@@ -444,22 +444,22 @@ const handoffTests = [
       await publicSecretsAbsent(page, command, CLIENT_TOKEN);
       const {stdout, stderr} = await runCopiedRecipe(command, directory, CLIENT_TOKEN);
       assert.equal(stderr, '');
-      assert.deepEqual(JSON.parse(stdout), {environment: {LANG: 'C.UTF-8', SERVERWARE_PROXY_URL: 'https://proxy.example.test',
-        SERVERWARE_APP_ID: IDS.application, SERVERWARE_CA_FILE: inner, SERVERWARE_PROXY_CA_FILE: outer,
-        SERVERWARE_PROXY_TOKEN: CLIENT_TOKEN}, args: [], input: '', tokenInArgv: false, tokenInParentArgv: false});
+      assert.deepEqual(JSON.parse(stdout), {environment: {LANG: 'C.UTF-8', CATCHPLATE_PROXY_URL: 'https://proxy.example.test',
+        CATCHPLATE_APP_ID: IDS.application, CATCHPLATE_CA_FILE: inner, CATCHPLATE_PROXY_CA_FILE: outer,
+        CATCHPLATE_PROXY_TOKEN: CLIENT_TOKEN}, args: [], input: '', tokenInArgv: false, tokenInParentArgv: false});
       await assert.rejects(stat(marker), {code: 'ENOENT'});
       // Clearing the optional outer root means system roots, never inheritance
-      // from the poisoned ambient SERVERWARE_PROXY_CA_FILE or SSL settings.
+      // from the poisoned ambient CATCHPLATE_PROXY_CA_FILE or SSL settings.
       await page.locator('#gmail-proxy-ca-path').fill('');
       const defaultRoots = await runCopiedRecipe(await copiedCommand(page), directory, CLIENT_TOKEN);
       assert.equal(defaultRoots.stderr, '');
-      const expected = {LANG: 'C.UTF-8', SERVERWARE_PROXY_URL: 'https://proxy.example.test',
-        SERVERWARE_APP_ID: IDS.application, SERVERWARE_CA_FILE: inner, SERVERWARE_PROXY_TOKEN: CLIENT_TOKEN};
+      const expected = {LANG: 'C.UTF-8', CATCHPLATE_PROXY_URL: 'https://proxy.example.test',
+        CATCHPLATE_APP_ID: IDS.application, CATCHPLATE_CA_FILE: inner, CATCHPLATE_PROXY_TOKEN: CLIENT_TOKEN};
       assert.deepEqual(JSON.parse(defaultRoots.stdout).environment, expected);
       for (const token of ['', 'bad-token', CLIENT_TOKEN + '\n']) {
         await assert.rejects(runCopiedRecipe(command, directory, token), error => {
           assert.equal(error.code, 1); assert.equal(error.stdout, '');
-          assert.equal(error.stderr, 'Set the issued Serverware application token privately\n'); return true;
+          assert.equal(error.stderr, 'Set the issued Catchplate application token privately\n'); return true;
         });
       }
       await page.setViewportSize({width: 390, height: 844});
@@ -477,14 +477,14 @@ const handoffTests = [
       const command = await copiedCommand(page); await publicSecretsAbsent(page, command, held);
       const downloadEvent = page.waitForEvent('download');
       const config = await downloadedConfig(page);
-      assert.equal((await downloadEvent).suggestedFilename(), 'serverware-client.private.json');
+      assert.equal((await downloadEvent).suggestedFilename(), 'catchplate-client.private.json');
       assert.equal(config.proxy_authentication, BASIC); assert.equal(config.proxy_username, IDS.application);
       assert.equal(config.proxy_password, held); assert.equal(config.ca_file, inner); assert.equal(config.proxy_ca_file, outer);
       assert.deepEqual(config.request_headers, {Authorization: DUMMY});
-      assert.deepEqual(config.client_recipe, {schema: 'serverware.gmailSdkClient/v1',
+      assert.deepEqual(config.client_recipe, {schema: 'catchplate.gmailSdkClient/v1',
         example_directory: 'examples/google-gmail-go', entrypoint: './gmail-example', clear_environment: true,
-        environment: {LANG: 'C.UTF-8', SERVERWARE_PROXY_URL: 'https://proxy.example.test', SERVERWARE_APP_ID: IDS.application,
-          SERVERWARE_CA_FILE: inner, SERVERWARE_PROXY_CA_FILE: outer, SERVERWARE_PROXY_TOKEN: held},
+        environment: {LANG: 'C.UTF-8', CATCHPLATE_PROXY_URL: 'https://proxy.example.test', CATCHPLATE_APP_ID: IDS.application,
+          CATCHPLATE_CA_FILE: inner, CATCHPLATE_PROXY_CA_FILE: outer, CATCHPLATE_PROXY_TOKEN: held},
         token_expires_at_epoch_ms: state.applications[0].token_expires_at_epoch_ms, access_rule_id: IDS.rule});
       for (const secret of PRIVATE) assert(!JSON.stringify(config).includes(secret));
       await view(page, 'applications'); await page.locator('#dismiss-token').click(); await view(page, 'proxy');
@@ -518,7 +518,7 @@ const handoffTests = [
         assert(await page.locator('#gmail-client-controls').isVisible());
         assert(await page.locator('#proxy-method').isVisible());
         const inputs = {proxyUrl: 'https://proxy.example.test', upstreamUrl: saved.upstream_url,
-          method: 'GET', caPath: './serverware-ca.pem', allowedHeaders: saved.allowed_headers,
+          method: 'GET', caPath: './catchplate-ca.pem', allowedHeaders: saved.allowed_headers,
           credentialInput: saved.credential_input, placeholder: saved.placeholder, credential: google(),
           proxyAuthentication: app.proxy_authentication || 'bearer', applicationId: IDS.application};
         assert.equal(await copiedCommand(page), buildCurlCommand(inputs));
@@ -568,9 +568,9 @@ const handoffTests = [
 tests.push(...handoffTests);
 
 async function hashes() {
-  const web = 'serverware/operator_demo_web/';
+  const web = 'catchplate/operator_demo_web/';
   const files = ['scripts/test_operator_gmail_sdk_choice_browser.cjs', 'scripts/test_operator_gmail_bundle_browser.cjs',
-    'scripts/test_operator_catalog_browser.cjs', 'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
+    'scripts/test_operator_catalog_browser.cjs', 'scripts/test_operator_ordinary_modes_browser.cjs', 'catchplate/operator_demo_portal.py',
     ...(await readdir(join(ROOT, web))).filter(name => /\.(?:js|css|html)$/.test(name)).map(name => web + name)];
   return Object.fromEntries(await Promise.all(files.sort().map(async file =>
     [file, createHash('sha256').update(await readFile(join(ROOT, file))).digest('hex')])));
@@ -596,7 +596,7 @@ async function run(browser, directory, selected = tests) {
 }
 async function main() {
   assert.equal(process.argv.length, 2, 'no target or credential arguments accepted');
-  const directory = await mkdtemp('/tmp/serverware-gmail-sdk-choice-');
+  const directory = await mkdtemp('/tmp/catchplate-gmail-sdk-choice-');
   console.log(JSON.stringify({artifactDirectory: directory}));
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
   const browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-background-networking']});

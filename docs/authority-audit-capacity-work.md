@@ -3,7 +3,7 @@
 ## Scope
 
 The private measured workers in
-[`authority_audit_capacity.py`](../serverware/authority_audit_capacity.py)
+[`authority_audit_capacity.py`](../catchplate/authority_audit_capacity.py)
 charge the actual [global capacity contract](authority-global-audit-capacity-design.md)
 under an enclosing computation's remaining work allowance. They do not replace
 the finalizer, reproduce its arithmetic in a parallel implementation or accept

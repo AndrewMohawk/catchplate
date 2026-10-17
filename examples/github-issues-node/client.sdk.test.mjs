@@ -13,12 +13,12 @@ const BASE = 'https://api.github.com/repos/fixture-owner/fixture.repo/issues';
 const FIRST = BASE + '?per_page=100';
 const SECOND = BASE + '?per_page=100&page=2';
 const ENV = Object.freeze({
-  SERVERWARE_PROXY_URL: 'https://proxy.example.test:443',
-  SERVERWARE_APP_ID: '11111111-2222-4333-8444-555555555555',
-  SERVERWARE_PROXY_TOKEN: 'synthetic_proxy_identity_canary',
-  SERVERWARE_CA_FILE: '/synthetic/inner.pem',
-  SERVERWARE_GITHUB_OWNER: 'fixture-owner',
-  SERVERWARE_GITHUB_REPO: 'fixture.repo',
+  CATCHPLATE_PROXY_URL: 'https://proxy.example.test:443',
+  CATCHPLATE_APP_ID: '11111111-2222-4333-8444-555555555555',
+  CATCHPLATE_PROXY_TOKEN: 'synthetic_proxy_identity_canary',
+  CATCHPLATE_CA_FILE: '/synthetic/inner.pem',
+  CATCHPLATE_GITHUB_OWNER: 'fixture-owner',
+  CATCHPLATE_GITHUB_REPO: 'fixture.repo',
 });
 const PEM = Buffer.from('-----BEGIN CERTIFICATE-----\nSYNTHETIC-NOT-A-REAL-CA\n-----END CERTIFICATE-----');
 const TIMEOUT = { timeout: 5000 };
@@ -38,7 +38,7 @@ function fixture(t, operation, overrides, responder) {
   const client = createClient(config, {
     Octokit,
     ProxyAgent: InertProxyAgent,
-    readFile(path) { assert.equal(path, ENV.SERVERWARE_CA_FILE); return PEM; },
+    readFile(path) { assert.equal(path, ENV.CATCHPLATE_CA_FILE); return PEM; },
     async fetch(url, options) {
       assert.ok(calls.length < 20, 'finite intercepted request budget');
       const call = { url, options };
@@ -49,8 +49,8 @@ function fixture(t, operation, overrides, responder) {
   t.after(async () => { await client.proxy.destroy(); assert.equal(client.proxy.closed, true); });
   assert.ok(client.sdk instanceof Octokit);
   assert.deepEqual(client.proxy.options, {
-    uri: ENV.SERVERWARE_PROXY_URL,
-    token: 'Basic ' + Buffer.from(ENV.SERVERWARE_APP_ID + ':' + ENV.SERVERWARE_PROXY_TOKEN).toString('base64'),
+    uri: ENV.CATCHPLATE_PROXY_URL,
+    token: 'Basic ' + Buffer.from(ENV.CATCHPLATE_APP_ID + ':' + ENV.CATCHPLATE_PROXY_TOKEN).toString('base64'),
     proxyTls: { rejectUnauthorized: true },
     requestTls: { ca: PEM, rejectUnauthorized: true },
     connections: 1,
@@ -81,8 +81,8 @@ function assertRequest(call, client, { method = 'GET', url = FIRST, body } = {})
   assert.match(headers['user-agent'], /^octokit-rest\.js\/22\.0\.1 octokit-core\.js\/[0-9.]+ Node\.js\//);
   if (method === 'POST') assert.equal(headers['content-type'], 'application/json; charset=utf-8');
   const inner = JSON.stringify({ url: call.url, headers, body: call.options.body });
-  for (const privateValue of [ENV.SERVERWARE_APP_ID, ENV.SERVERWARE_PROXY_TOKEN,
-    client.proxy.options.token, 'proxy-authorization', 'x-serverware-agent']) {
+  for (const privateValue of [ENV.CATCHPLATE_APP_ID, ENV.CATCHPLATE_PROXY_TOKEN,
+    client.proxy.options.token, 'proxy-authorization', 'x-catchplate-agent']) {
     assert.equal(inner.includes(privateValue), false, 'proxy identity must stay outside inner request');
   }
 }
@@ -114,8 +114,8 @@ test('real SDK serializes each explicit issue/comment exactly once at intercepte
       const title = 'Synthetic "issue"';
       const body = 'Synthetic snowman ☃\nSecond line';
       const client = fixture(sub, operation, {
-        SERVERWARE_ISSUE_TITLE: title, SERVERWARE_ISSUE_BODY: body,
-        SERVERWARE_ISSUE_NUMBER: '11', SERVERWARE_COMMENT_BODY: body,
+        CATCHPLATE_ISSUE_TITLE: title, CATCHPLATE_ISSUE_BODY: body,
+        CATCHPLATE_ISSUE_NUMBER: '11', CATCHPLATE_COMMENT_BODY: body,
       }, () => response(operation === 'create-issue' ? { number: 11 } : { id: 101 }, 201));
       const result = await perform(client.config, client.sdk);
       assert.equal(client.calls.length, 1);
@@ -149,8 +149,8 @@ test('real SDK HTTP and transport errors are not retried and public failures sta
         const canary = 'synthetic-sdk-error-private-canary';
         const sentinel = new Error(canary);
         const client = fixture(sub, operation, {
-          SERVERWARE_ISSUE_TITLE: 'Title', SERVERWARE_ISSUE_BODY: 'Body',
-          SERVERWARE_ISSUE_NUMBER: '11', SERVERWARE_COMMENT_BODY: 'Comment',
+          CATCHPLATE_ISSUE_TITLE: 'Title', CATCHPLATE_ISSUE_BODY: 'Body',
+          CATCHPLATE_ISSUE_NUMBER: '11', CATCHPLATE_COMMENT_BODY: 'Comment',
         }, () => {
           if (status === null) throw sentinel;
           return response({ message: canary }, status, { 'retry-after': '1' });
@@ -170,7 +170,7 @@ test('real SDK HTTP and transport errors are not retried and public failures sta
           (operation === 'list' ? ['ok', 'operation', 'httpStatus', 'error']
             : ['ok', 'operation', 'httpStatus', 'error', 'warning']).sort());
         if (operation !== 'list') assert.match(result.warning, /Inspect GitHub/);
-        for (const privateValue of [canary, ENV.SERVERWARE_APP_ID, ENV.SERVERWARE_PROXY_TOKEN, PUBLIC_GITHUB_DUMMY]) {
+        for (const privateValue of [canary, ENV.CATCHPLATE_APP_ID, ENV.CATCHPLATE_PROXY_TOKEN, PUBLIC_GITHUB_DUMMY]) {
           assert.equal(JSON.stringify(result).includes(privateValue), false);
         }
       });

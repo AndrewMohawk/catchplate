@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 
 verifier = importlib.import_module("verify_production_policy_identity")
 
-from serverware.policy_bundle import (  # noqa: E402
+from catchplate.policy_bundle import (  # noqa: E402
     canonical_json,
     compile_policy_bundle,
     demo_policy_bundle,
@@ -83,7 +83,7 @@ class ProductionPolicyIdentityVerifierTests(unittest.TestCase):
     def bundle(self, principals: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         bundle = demo_policy_bundle()
         bundle["metadata"] = {
-            "id": "serverware-production",
+            "id": "catchplate-production",
             "sequence": 17,
             "rollbackEpoch": 4,
             "signingKeyId": self.public_key_hash,

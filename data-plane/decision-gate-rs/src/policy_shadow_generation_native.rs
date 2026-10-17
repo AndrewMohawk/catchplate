@@ -1,6 +1,6 @@
 //! Source-owned cold handoff; worker process exit is never verifier authority.
 use super::*;
-use serverware_decision_gate::{native_shadow_workers as workers,
+use catchplate_decision_gate::{native_shadow_workers as workers,
     native_serving_privileges::{Prepared, Owner}, StartedGuestCohort};
 
 pub(crate) struct PreparedNativeShadowControl {

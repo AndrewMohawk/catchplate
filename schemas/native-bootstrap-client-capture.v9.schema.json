@@ -1,12 +1,12 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://serverware.invalid/schemas/native-bootstrap-client-capture.v9.schema.json",
+  "$id":"https://catchplate.invalid/schemas/native-bootstrap-client-capture.v9.schema.json",
   "title":"Data-only native application CONNECT and execution observation",
   "description":"Exact twelve fields; <=1.5MiB including final LF. This reports local execution/cleanup/retirement and durable outcome publication, NOT provider success, credential release, application compliance with proxy/trust environment, or fresh action authority. One CONNECT may carry multiple provider requests, each governed by the native proxy. No tunnel plaintext or client private key is captured.",
   "type":"object","additionalProperties":false,
   "required":["apiVersion","resultScope","okForAction","configurationSha256","requestSha256","endpoint","challengeSource","evidenceBase64url","verification","execution","installation","outcome"],
   "properties":{
-    "apiVersion":{"const":"serverware.nativeBootstrapClientCapture/v9"},
+    "apiVersion":{"const":"catchplate.nativeBootstrapClientCapture/v9"},
     "resultScope":{"const":"local-fixed-endpoint-bootstrap-application-proxy-observation"},
     "okForAction":{"const":false},
     "configurationSha256":{"$ref":"native-bootstrap-client-capture.v8.schema.json#/properties/configurationSha256"},

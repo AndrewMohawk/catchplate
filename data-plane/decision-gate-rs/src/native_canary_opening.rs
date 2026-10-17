@@ -21,10 +21,10 @@ pub(super) fn submit(state:&GateState,admission:&policy_shadow::PersistedIngress
     id[6]=(id[6]&15)|64;id[8]=(id[8]&63)|128;
     let id=hex::encode(id);
     let request=format!("{}-{}-{}-{}-{}",&id[..8],&id[8..12],&id[12..16],&id[16..20],&id[20..]);
-    let value=json!({"apiVersion":"serverware.policyCanaryEvidenceOriginal/v1","requestId":request,
+    let value=json!({"apiVersion":"catchplate.policyCanaryEvidenceOriginal/v1","requestId":request,
         "canaryId":canary,"events":[{"kind":"custody","record":record}]});
-    let raw=serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&value)?;
-    let batch=serverware_decision_gate::native_canary_evidence_v1::BatchOriginal::parse(
+    let raw=catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&value)?;
+    let batch=catchplate_decision_gate::native_canary_evidence_v1::BatchOriginal::parse(
         String::from_utf8(raw).map_err(|_|"opening ASCII original")?)?;
     let complete=native_canary_delivery::submit(state,batch,deadline)?;
     if complete.observation().status()!="consumed" {return Err("opening has no authenticated consumed completion".into());}

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-policy-canary-runtime-observation.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-policy-canary-runtime-observation.v1.schema.json",
   "title": "Actual terminal and candidate request observations",
   "$comment": "One event per durable delivery. Dedicated assignment-bound terminal-append or ledger-append originals, exact prior protected opening and terminal association. No legacy Fleet signature alias, complete range/checkpoint/readiness claim, or client-receipt proof. Complete canonical record <=65536 bytes; original event <=16384 bytes.",
   "$ref": "#/$defs/event",
@@ -12,7 +12,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "canary_id", "instance_id", "boot_id", "assignment_envelope_digest", "assignment_payload_digest", "load_receipt_envelope_digest", "publication_envelope_digest", "receipt", "opening_receipt_sha256", "terminal_receipt_sha256", "signing_public_key_base64url"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeCustodyRuntimeObservation/v1"},
+        "apiVersion": {"const": "catchplate.nativeCustodyRuntimeObservation/v1"},
         "canary_id": {"$ref": "#/$defs/sha256"},
         "instance_id": {"type": "string", "minLength": 1, "maxLength": 256},
         "boot_id": {"$ref": "#/$defs/sha256"},
@@ -64,7 +64,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "generationId", "ingressSequence", "openingReceiptSha256", "receiptSha256", "signatureMessageSha256", "recordSha256", "coverage"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeCustodyRuntimeObservation/v1"},
+        "apiVersion": {"const": "catchplate.nativeCustodyRuntimeObservation/v1"},
         "generationId": {"$ref": "#/$defs/sha256"}, "ingressSequence": {"$ref": "#/$defs/positive"},
         "openingReceiptSha256": {"$ref": "#/$defs/sha256"}, "receiptSha256": {"$ref": "#/$defs/sha256"},
         "signatureMessageSha256": {"$ref": "#/$defs/sha256"}, "recordSha256": {"$ref": "#/$defs/sha256"},

@@ -20,12 +20,12 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_capability as capability
-from serverware import authority_revocation_issuance as configured
-from serverware import authority_revocation_retention as retention
-from serverware.authority_store import planner_connection as admission
-from serverware.authority_store import revocation_capability as store
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_capability as capability
+from catchplate import authority_revocation_issuance as configured
+from catchplate import authority_revocation_retention as retention
+from catchplate.authority_store import planner_connection as admission
+from catchplate.authority_store import revocation_capability as store
 import test_authority_revocation_capability as capability_oracle
 import test_authority_revocation_issuance as issuance_oracle
 import test_authority_revocation_plan as oracle
@@ -64,7 +64,7 @@ def constructor_inputs(fixture, pins):
         "expected_witness_identity_digest": fixture.witness_identity,
         "expected_generation_sequence": fixture.generation_sequence,
         "expected_generation_digest": fixture.generation_digest,
-        "database_pins": ("serverware_policy_capability_issuer", "CN=fixture-issuer", "1", "CN=fixture-ca", 2)}
+        "database_pins": ("catchplate_policy_capability_issuer", "CN=fixture-issuer", "1", "CN=fixture-ca", 2)}
 
 
 def call_inputs(fixture):
@@ -217,7 +217,7 @@ class RevocationIssuerTests(unittest.TestCase):
         for name in ("expected_planner_identity", "expected_verifier_identity"):
             supplied[name]["measurementDigest"] = oracle.sha(b"mutated caller identity")
         supplied["issuer_pins"]["maximumAgeNs"] = 1
-        supplied["database_pins"] = ("serverware_policy_capability_issuer", "CN=changed", "2", "CN=changed-ca", 3)
+        supplied["database_pins"] = ("catchplate_policy_capability_issuer", "CN=changed", "2", "CN=changed-ca", 3)
         self.assertIs(owner._snapshot_configuration(), original)
         self.assertNotEqual(original[11], supplied["database_pins"])
         connection = Connection(fixture, pins)
@@ -236,12 +236,12 @@ class RevocationIssuerTests(unittest.TestCase):
                 ("expected_witness_identity_digest", None), ("expected_generation_digest", "sha256:" + "G" * 64),
                 ("expected_planner_identity", {}), ("expected_verifier_identity", {**fixture.signer_identity, "extra": None}),
                 ("issuer_pins", {**pins, "maximumAgeNs": True}), ("issuer_pins", {**pins, "extra": None}),
-                ("database_pins", None), ("database_pins", ["serverware_policy_capability_issuer", "dn", "1", "ca", 2]),
+                ("database_pins", None), ("database_pins", ["catchplate_policy_capability_issuer", "dn", "1", "ca", 2]),
                 ("database_pins", ("wrong_role", "dn", "1", "ca", 2)),
-                ("database_pins", (ForeignPin("serverware_policy_capability_issuer"), "dn", "1", "ca", 2)),
-                ("database_pins", ("serverware_policy_capability_issuer", "", "1", "ca", 2)),
-                ("database_pins", ("serverware_policy_capability_issuer", "dn", "1", "ca", True)),
-                ("database_pins", ("serverware_policy_capability_issuer", "dn", "1", "ca", float("nan")))):
+                ("database_pins", (ForeignPin("catchplate_policy_capability_issuer"), "dn", "1", "ca", 2)),
+                ("database_pins", ("catchplate_policy_capability_issuer", "", "1", "ca", 2)),
+                ("database_pins", ("catchplate_policy_capability_issuer", "dn", "1", "ca", True)),
+                ("database_pins", ("catchplate_policy_capability_issuer", "dn", "1", "ca", float("nan")))):
             with self.subTest(field=name), self.assertRaises(ValueError):
                 self.owner(fixture, pins, **{name: value})
         owner = self.owner(fixture, pins)

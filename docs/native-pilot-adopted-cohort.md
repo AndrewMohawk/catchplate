@@ -86,7 +86,7 @@ Six-document local file targets also pass; URLs and anchors were not checked.
 
 Both source archives, harnesses and all failed/successful logs are retained with
 checksums at
-`codex-offload/serverware/engineering-builds/9ee3923f-adopted-cohort-xztbVg/`.
+`codex-offload/catchplate/engineering-builds/9ee3923f-adopted-cohort-xztbVg/`.
 Fixtures use test signatures and synthetic public originals. No complete
 positive adopted service/launch ceremony, protected signing command, full
 retained owner graph, real fs-verity transfer, KMS, provider, YubiKey or

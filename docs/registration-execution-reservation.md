@@ -18,7 +18,7 @@ protected SQL execution and credential finalization.
 
 ## Produce the actual reserve
 
-[`authority_registration_execution_reservation._produce_on_configuration`](../serverware/authority_registration_execution_reservation.py)
+[`authority_registration_execution_reservation._produce_on_configuration`](../catchplate/authority_registration_execution_reservation.py)
 accepts the original planning request3/response4, complete before-vector,
 dedicated caller authorization and original execution grant. Configuration,
 generation, runtime-role identities, root and enrollment originals come from
@@ -60,7 +60,7 @@ retained grant originals + independently admitted scope/key/checkpoint
 protected SQL issuance/execution and credential finalization: separate steps
 ```
 
-[`RegistrationReservationDelivery`](../serverware/authority_registration_reservation_delivery.py)
+[`RegistrationReservationDelivery`](../catchplate/authority_registration_reservation_delivery.py)
 owns an actual `CurrentRootJournal` in a separate preprovisioned directory.
 It requires the original enrollment/root and an independently current exact
 local sequence/head. This is neither the control-plane grant-retention journal
@@ -97,15 +97,15 @@ independently held predecessor/head/fence and `executionRecordDigest`. That
 digest identifies the separately retained grant bundle; it is not a grant
 verification receipt. Enqueue durably retains the originals before any network
 send. New canonical chained records use the dedicated
-[reservation record codec](../serverware/authority_registration_reservation_records.py),
+[reservation record codec](../catchplate/authority_registration_reservation_records.py),
 not the old grant-retention format or completion-delivery format.
 
-The closed `serverware.registrationExecutionReservationRecord/v1` request
+The closed `catchplate.registrationExecutionReservationRecord/v1` request
 record has eleven fields: `schema`, `kind`, `enrollmentDigest`, `sequence`,
 `previousRecordDigest`, `predecessorSequence`, `predecessorHeadDigest`, `fence`,
 `executionRecordDigest`, `requestBase64Url` and `snapshotBase64Url`. An
 acknowledgment adds `receiptBase64Url`. The separate framed identity domain is
-`serverware.registrationExecutionReservationRecordIdentity/v1`.
+`catchplate.registrationExecutionReservationRecordIdentity/v1`.
 Original limits are 256 KiB for the reserve, 16 KiB for the snapshot and 16 KiB
 for the state receipt; a canonical local record is capped at 1 MiB, 32 nodes
 and depth two.

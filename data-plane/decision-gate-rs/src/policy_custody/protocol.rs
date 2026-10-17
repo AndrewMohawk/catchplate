@@ -14,19 +14,19 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 pub(super) const POLICY_CUSTODY_PROTOCOL_VERSION: &str =
-    "serverware.policyCustodyProtocol/v3";
+    "catchplate.policyCustodyProtocol/v3";
 pub(super) const POLICY_CUSTODY_SETTLEMENT_VERSION: &str =
-    "serverware.policyCustodySettlement/v3";
+    "catchplate.policyCustodySettlement/v3";
 pub(super) const POLICY_CUSTODY_CLEANUP_AUTHORIZATION_VERSION: &str =
-    "serverware.policyCustodyCleanupAuthorization/v3";
+    "catchplate.policyCustodyCleanupAuthorization/v3";
 pub(super) const POLICY_CUSTODY_KEY_AUTHORIZATION_VERSION: &str =
-    "serverware.policyCustodyCurrentKeyAuthorization/v3";
+    "catchplate.policyCustodyCurrentKeyAuthorization/v3";
 pub(super) const POLICY_CUSTODY_DURABLE_CONSUME_EVIDENCE_VERSION: &str =
-    "serverware.policyCustodyIndependentDurableConsumeEvidence/v3";
+    "catchplate.policyCustodyIndependentDurableConsumeEvidence/v3";
 pub(super) const POLICY_CUSTODY_WATCHDOG_REGISTRATION_VERSION: &str =
-    "serverware.policyCustodyWatchdogRegistration/v3";
+    "catchplate.policyCustodyWatchdogRegistration/v3";
 pub(super) const POLICY_CUSTODY_WATCHDOG_OWNERSHIP_VERSION: &str =
-    "serverware.policyCustodyWatchdogOwnership/v3";
+    "catchplate.policyCustodyWatchdogOwnership/v3";
 pub(super) const MAX_ENDPOINT_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub(super) const MAX_SETTLEMENT_CHAIN_STATES: usize = 4;
 pub(super) const MAX_TRUST_ANCESTRY_STEPS: usize = 4096;
@@ -34,43 +34,43 @@ pub(super) const MAX_TRUST_ANCESTRY_STEPS: usize = 4096;
 const ZERO_SHA256: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 const PROCESS_IDENTITY_DOMAIN: &[u8] =
-    b"serverware.policyCustodyEndpointProcessIdentity/v3";
+    b"catchplate.policyCustodyEndpointProcessIdentity/v3";
 const PIDFD_STAT_IDENTITY_DOMAIN: &[u8] =
-    b"serverware.policyCustodyPidfdStatIdentity/v3";
+    b"catchplate.policyCustodyPidfdStatIdentity/v3";
 const KEY_AUTHORIZATION_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCurrentKeyAuthorization/v3";
+    b"catchplate.policyCustodyCurrentKeyAuthorization/v3";
 const SETTLEMENT_STATE_DOMAIN: &[u8] =
-    b"serverware.policyCustodySettlementState/v3";
+    b"catchplate.policyCustodySettlementState/v3";
 const SETTLEMENT_NONCE_LEDGER_DOMAIN: &[u8] =
-    b"serverware.policyCustodyTransitionNonceLedger/v3";
+    b"catchplate.policyCustodyTransitionNonceLedger/v3";
 const SETTLEMENT_TRANSITION_DOMAIN: &[u8] =
-    b"serverware.policyCustodySettlementTransition/v3";
+    b"catchplate.policyCustodySettlementTransition/v3";
 const SETTLEMENT_TRANSITION_PAYLOAD_DOMAIN: &[u8] =
-    b"serverware.policyCustodySettlementTransitionPayload/v3";
+    b"catchplate.policyCustodySettlementTransitionPayload/v3";
 const ENDPOINT_REQUEST_DOMAIN: &[u8] =
-    b"serverware.policyCustodyEndpointRequest/v3";
+    b"catchplate.policyCustodyEndpointRequest/v3";
 const ENDPOINT_RESPONSE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyEndpointResponse/v3";
+    b"catchplate.policyCustodyEndpointResponse/v3";
 const ENDPOINT_RECEIPT_DOMAIN: &[u8] =
-    b"serverware.policyCustodyEndpointReceipt/v3";
+    b"catchplate.policyCustodyEndpointReceipt/v3";
 const DURABLE_CONSUME_BINDING_DOMAIN: &[u8] =
-    b"serverware.policyCustodyDurableConsumeBinding/v3";
+    b"catchplate.policyCustodyDurableConsumeBinding/v3";
 const CLEANUP_AUTHORIZATION_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupAuthorization/v3";
+    b"catchplate.policyCustodyCleanupAuthorization/v3";
 const CLEANUP_CURSOR_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupConsumptionCursor/v3";
+    b"catchplate.policyCustodyCleanupConsumptionCursor/v3";
 const WATCHDOG_REGISTRATION_DOMAIN: &[u8] =
-    b"serverware.policyCustodyWatchdogRegistration/v3";
+    b"catchplate.policyCustodyWatchdogRegistration/v3";
 const WATCHDOG_FD_MANIFEST_DOMAIN: &[u8] =
-    b"serverware.policyCustodyWatchdogFdManifest/v3";
+    b"catchplate.policyCustodyWatchdogFdManifest/v3";
 const WATCHDOG_OWNERSHIP_STATE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyWatchdogOwnershipState/v3";
+    b"catchplate.policyCustodyWatchdogOwnershipState/v3";
 const WATCHDOG_OWNERSHIP_ENVELOPE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyWatchdogOwnershipEnvelope/v3";
+    b"catchplate.policyCustodyWatchdogOwnershipEnvelope/v3";
 const TRUSTED_HOST_CONSUME_HEAD_DOMAIN: &[u8] =
-    b"serverware.policyCustodyTrustedHostConsumeHead/v3";
+    b"catchplate.policyCustodyTrustedHostConsumeHead/v3";
 const TRUSTED_HOST_CURRENT_HEAD_ATTESTATION_DOMAIN: &[u8] =
-    b"serverware.policyCustodyTrustedHostCurrentHeadAttestation/v3";
+    b"catchplate.policyCustodyTrustedHostCurrentHeadAttestation/v3";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ProtocolError {
@@ -294,22 +294,22 @@ impl PolicyCustodyEndpointRole {
     pub(super) fn receipt_signature_domain(self) -> &'static [u8] {
         match self {
             Self::SignerHsm => {
-                b"serverware.policyCustodySignerHsmReceipt/v3"
+                b"catchplate.policyCustodySignerHsmReceipt/v3"
             }
             Self::SettlementStore => {
-                b"serverware.policyCustodySettlementStoreReceipt/v3"
+                b"catchplate.policyCustodySettlementStoreReceipt/v3"
             }
             Self::FenceAuthority => {
-                b"serverware.policyCustodyFenceAuthorityReceipt/v3"
+                b"catchplate.policyCustodyFenceAuthorityReceipt/v3"
             }
             Self::CleanupWatchdog => {
-                b"serverware.policyCustodyCleanupWatchdogReceipt/v3"
+                b"catchplate.policyCustodyCleanupWatchdogReceipt/v3"
             }
             Self::CgroupExecutor => {
-                b"serverware.policyCustodyCgroupExecutorReceipt/v3"
+                b"catchplate.policyCustodyCgroupExecutorReceipt/v3"
             }
             Self::TerminationLedger => {
-                b"serverware.policyCustodyTerminationLedgerReceipt/v3"
+                b"catchplate.policyCustodyTerminationLedgerReceipt/v3"
             }
         }
     }
@@ -317,22 +317,22 @@ impl PolicyCustodyEndpointRole {
     pub(super) fn response_signature_domain(self) -> &'static [u8] {
         match self {
             Self::SignerHsm => {
-                b"serverware.policyCustodySignerHsmResponse/v3"
+                b"catchplate.policyCustodySignerHsmResponse/v3"
             }
             Self::SettlementStore => {
-                b"serverware.policyCustodySettlementStoreResponse/v3"
+                b"catchplate.policyCustodySettlementStoreResponse/v3"
             }
             Self::FenceAuthority => {
-                b"serverware.policyCustodyFenceAuthorityResponse/v3"
+                b"catchplate.policyCustodyFenceAuthorityResponse/v3"
             }
             Self::CleanupWatchdog => {
-                b"serverware.policyCustodyCleanupWatchdogResponse/v3"
+                b"catchplate.policyCustodyCleanupWatchdogResponse/v3"
             }
             Self::CgroupExecutor => {
-                b"serverware.policyCustodyCgroupExecutorResponse/v3"
+                b"catchplate.policyCustodyCgroupExecutorResponse/v3"
             }
             Self::TerminationLedger => {
-                b"serverware.policyCustodyTerminationLedgerResponse/v3"
+                b"catchplate.policyCustodyTerminationLedgerResponse/v3"
             }
         }
     }
@@ -4805,7 +4805,7 @@ pub(super) fn domain_separated_signature_preimage(
             )
         })?;
     let mut preimage = Vec::with_capacity(capacity);
-    preimage.extend_from_slice(b"serverware-signature-v1\0");
+    preimage.extend_from_slice(b"catchplate-signature-v1\0");
     preimage.extend_from_slice(&domain_length.to_be_bytes());
     preimage.extend_from_slice(domain);
     preimage.extend_from_slice(&payload_length.to_be_bytes());

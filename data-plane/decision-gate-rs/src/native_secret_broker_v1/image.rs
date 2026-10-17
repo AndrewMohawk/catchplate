@@ -93,18 +93,18 @@ impl Workspace {
     fn create(purpose: &Purpose) -> Result<Self, String> {
         let run = path("/run", true, false)?;
         let (name, parent_path): (&[u8], &str) = if matches!(purpose, Purpose::ExternalShadowVerifier) {
-            (b"serverware-native-shadow-verifier\0", "/run/serverware-native-shadow-verifier")
+            (b"catchplate-native-shadow-verifier\0", "/run/catchplate-native-shadow-verifier")
         } else if matches!(purpose, Purpose::ExternalShadowTimeIssuer) {
-            (b"serverware-native-shadow-time-issuer\0", "/run/serverware-native-shadow-time-issuer")
+            (b"catchplate-native-shadow-time-issuer\0", "/run/catchplate-native-shadow-time-issuer")
         } else if matches!(purpose, Purpose::ExternalGenerationOriginIssuer) {
-            (b"serverware-native-generation-origin-issuer\0", "/run/serverware-native-generation-origin-issuer")
+            (b"catchplate-native-generation-origin-issuer\0", "/run/catchplate-native-generation-origin-issuer")
         } else if matches!(purpose, Purpose::ExternalSetupHardware) {
-            (b"serverware-setup-native-hardware-verifier\0", "/run/serverware-setup-native-hardware-verifier")
+            (b"catchplate-setup-native-hardware-verifier\0", "/run/catchplate-setup-native-hardware-verifier")
         } else if matches!(purpose, Purpose::ExternalSetupProxy) {
-            (b"serverware-setup-native-proxy-verifier\0", "/run/serverware-setup-native-proxy-verifier")
+            (b"catchplate-setup-native-proxy-verifier\0", "/run/catchplate-setup-native-proxy-verifier")
         } else if matches!(purpose, Purpose::ExternalSetupFinal) {
-            (b"serverware-setup-native-final-authority\0", "/run/serverware-setup-native-final-authority")
-        } else { (b"serverware-native-broker\0", "/run/serverware-native-broker") };
+            (b"catchplate-setup-native-final-authority\0", "/run/catchplate-setup-native-final-authority")
+        } else { (b"catchplate-native-broker\0", "/run/catchplate-native-broker") };
         let result = unsafe { libc::mkdirat(run.as_raw_fd(), name.as_ptr().cast(), 0o700) };
         ensure(result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EEXIST),
             "native broker private parent creation failed")?;
@@ -153,8 +153,8 @@ impl Purpose {
     fn paths(&self) -> (&'static str, &'static str, &'static str) {
         match self {
             Self::Broker => (IMAGE_PATH, INTERPRETER_PATH, HELPER_PATH),
-            Self::RoleKeyProvisioner => ("/opt/serverware/native-role-key-provisioner-runtime.squashfs",
-                INTERPRETER_PATH, "/opt/serverware/serverware/native_role_key_provisioner.py"),
+            Self::RoleKeyProvisioner => ("/opt/catchplate/native-role-key-provisioner-runtime.squashfs",
+                INTERPRETER_PATH, "/opt/catchplate/catchplate/native_role_key_provisioner.py"),
             Self::ShadowCustody => (super::shadow_image::IMAGE_PATH,
                 super::shadow_image::EXECUTABLE_PATH, super::shadow_image::SECCOMP_PATH),
             Self::ShadowKeyDelivery => (super::shadow_key_delivery::IMAGE_PATH,
@@ -168,12 +168,12 @@ impl Purpose {
             Self::ExternalGenerationOriginIssuer => (crate::native_shadow_verifier_runtime_v1::ORIGIN_IMAGE_PATH,
                 crate::native_shadow_verifier_runtime_v1::INTERPRETER_PATH,
                 crate::native_shadow_verifier_runtime_v1::ORIGIN_ENTRYPOINT_PATH),
-            Self::ExternalSetupHardware => ("/opt/serverware/setup-native-hardware-verifier-runtime.squashfs",
-                INTERPRETER_PATH, "/opt/serverware/scripts/verify_native_setup_hardware.py"),
-            Self::ExternalSetupProxy => ("/opt/serverware/setup-native-proxy-verifier-runtime.squashfs",
-                INTERPRETER_PATH, "/opt/serverware/scripts/verify_native_setup_proxy.py"),
-            Self::ExternalSetupFinal => ("/opt/serverware/setup-native-final-authority-runtime.squashfs",
-                INTERPRETER_PATH, "/opt/serverware/scripts/issue_native_setup_final.py"),
+            Self::ExternalSetupHardware => ("/opt/catchplate/setup-native-hardware-verifier-runtime.squashfs",
+                INTERPRETER_PATH, "/opt/catchplate/scripts/verify_native_setup_hardware.py"),
+            Self::ExternalSetupProxy => ("/opt/catchplate/setup-native-proxy-verifier-runtime.squashfs",
+                INTERPRETER_PATH, "/opt/catchplate/scripts/verify_native_setup_proxy.py"),
+            Self::ExternalSetupFinal => ("/opt/catchplate/setup-native-final-authority-runtime.squashfs",
+                INTERPRETER_PATH, "/opt/catchplate/scripts/issue_native_setup_final.py"),
         }
     }
 }
@@ -206,7 +206,7 @@ impl Image {
         ensure(before.st_mode & libc::S_IFMT == libc::S_IFREG && before.st_size > 0
             && before.st_size as u64 <= MAX_IMAGE, "native broker full image size/type invalid")?;
         let image = owned(unsafe { libc::syscall(libc::SYS_memfd_create,
-            b"serverware-native-broker-image\0".as_ptr().cast::<libc::c_char>(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) as RawFd })?;
+            b"catchplate-native-broker-image\0".as_ptr().cast::<libc::c_char>(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) as RawFd })?;
         ensure(unsafe { libc::fchmod(image.as_raw_fd(), 0o600) } == 0, "native broker sealed image protection failed")?;
         let mut hash = Sha256::new(); let mut offset = 0i64; let mut buffer = [0u8; 65536];
         while offset < before.st_size {

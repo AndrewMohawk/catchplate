@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-execution-outcome-receipt.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-execution-outcome-receipt.v1.schema.json",
   "title": "Nonactionable native durable terminal outcome receipt",
   "description": "Closed nine-field local receipt, at most 4096 compact UTF-8 bytes. Actual producer returns it only after both exclusive files, file fsync, parent fsync and exact held/named readbacks finish within the original signed cleanup deadline. recordedBoottimeNs is sampled before marker publication and must be >= both retirement observations and < original cleanup bound; it is not a timestamp claiming when fsync completed. Scalar hashes alone do not prove custody or historical durability and authorize nothing.",
   "type": "object", "additionalProperties": false,
   "required": ["apiVersion", "resultScope", "slotSha256", "operationSha256", "outcomeSha256", "rawEvidenceSha256", "recordedBoottimeNs", "actionAuthorization", "okForAction"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeExecutionOutcomeReceipt/v1"},
+    "apiVersion": {"const": "catchplate.nativeExecutionOutcomeReceipt/v1"},
     "resultScope": {"const": "local-durable-native-terminal-outcome"},
     "slotSha256": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/digest"},
     "operationSha256": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/digest"},

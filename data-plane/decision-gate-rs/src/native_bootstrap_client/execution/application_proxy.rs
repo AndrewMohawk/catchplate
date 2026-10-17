@@ -4,7 +4,7 @@
 use super::{application_proxy_transport::TargetTransport, child::BlockedChild};
 use super::super::{config, ensure, originals::ArtifactV1};
 use serde::{Deserialize, Serialize};
-use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
+use catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
 use sha2::{Digest, Sha256};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::io::{Read, Write};

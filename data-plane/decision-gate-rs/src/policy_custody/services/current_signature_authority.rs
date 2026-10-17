@@ -71,11 +71,11 @@ use std::os::fd::{
 use std::rc::Rc;
 
 const SERVICE_RESPONSE_RECEIPT_DOMAIN: &[u8] =
-    b"serverware.policyCustodyServiceResponse/v3";
+    b"catchplate.policyCustodyServiceResponse/v3";
 const CURRENT_TRUST_HEAD_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCurrentTrustHead/v3";
+    b"catchplate.policyCustodyCurrentTrustHead/v3";
 const CURRENT_SIGNATURE_REQUEST_ID_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCurrentSignatureRequestId/v3";
+    b"catchplate.policyCustodyCurrentSignatureRequestId/v3";
 const MAX_PROGRESS_EVENTS: usize = 16;
 const MAX_CURRENT_SIGNATURE_SUBJECTS: usize = 64;
 

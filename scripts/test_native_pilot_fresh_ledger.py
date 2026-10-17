@@ -21,11 +21,11 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_policy_canary_native_opening as opening
-from serverware import native_pilot_assignment as assignment
-from serverware import native_pilot_native_service_authority as service
-from serverware import native_shadow_retrieval_artifacts as retrieval
-from serverware import policy_shadow_assignment_fields as fields
+from catchplate import authority_policy_canary_native_opening as opening
+from catchplate import native_pilot_assignment as assignment
+from catchplate import native_pilot_native_service_authority as service
+from catchplate import native_shadow_retrieval_artifacts as retrieval
+from catchplate import policy_shadow_assignment_fields as fields
 
 LEGACY_FIELDS = (
     "assignmentId", "canaryId", "assignmentRevision", "generationEpoch",
@@ -40,8 +40,8 @@ SCOPE_VALUES = (
     "execution_closure_manifest_sha256", "structurally_verified_seccomp_policy_sha256",
 )
 SET_VALUES = ("execution_closure_set_root_sha256", "structurally_verified_seccomp_set_root_sha256")
-V1 = "serverware.nativeShadowRetrievalStoreManifest/v1"
-V2 = "serverware.nativeShadowRetrievalStoreManifest/v2"
+V1 = "catchplate.nativeShadowRetrievalStoreManifest/v1"
+V2 = "catchplate.nativeShadowRetrievalStoreManifest/v2"
 INPUT_FIELDS = ("apiVersion", "operation", "configurationOriginal", "configurationSha256",
     "assignmentPayloadOriginal", "cohortConfigurationOriginal", "precreationOriginal", "observationOriginal",
     "coldConfigurationOriginal", "deliveryOriginal", "runtimeOriginal", "peerOriginal", "peerSha256",
@@ -73,7 +73,7 @@ def encoded(raw):
 def scope_original(version):
     value = {name: labelled(name) for name in SCOPE_VALUES}
     value["assignment_revision"] = 1
-    domain = "serverware.policyShadowProductionCustodyProofScope/v" + str(version)
+    domain = "catchplate.policyShadowProductionCustodyProofScope/v" + str(version)
     selected = SCOPE_VALUES
     if version == 2:
         value["api_version"] = domain
@@ -92,7 +92,7 @@ def synthetic_object(scope_raw):
     scope = json.loads(scope_raw)
     # This deliberately is not an operational custody event or a signed receipt.
     receipt = canonical({"syntheticWireControlOnly": True})
-    domain = "serverware.policyShadowAssignmentBoundCustodyReceipt/v"
+    domain = "catchplate.policyShadowAssignmentBoundCustodyReceipt/v"
     successor = "api_version" in scope
     authority = [domain + ("2" if successor else "1"), scope["binding_sha256"],
         scope["execution_closure_manifest_sha256"], scope["structurally_verified_seccomp_policy_sha256"]]
@@ -150,7 +150,7 @@ class FreshLedgerManifestTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             retrieval.fresh_ledger_manifest_original(scope_original(1))
         original = json.loads(self.fresh)
-        for api in (V1, "serverware.nativeShadowRetrievalStoreManifest/v3", None):
+        for api in (V1, "catchplate.nativeShadowRetrievalStoreManifest/v3", None):
             with self.subTest(api=api):
                 value = copy.deepcopy(original)
                 value["apiVersion"] = api
@@ -190,7 +190,7 @@ class FreshLedgerGrantSelectionTests(unittest.TestCase):
         # Unrelated fields are intentionally not complete authorities: these
         # controls call only the issuer's pure shape/profile gate, never sign().
         value = dict.fromkeys(INPUT_FIELDS, "SYNTHETIC SHAPE ONLY")
-        value.update(apiVersion="serverware.nativePilotNativeServiceAuthorityInput/v" + str(version),
+        value.update(apiVersion="catchplate.nativePilotNativeServiceAuthorityInput/v" + str(version),
             operation="retrieval", proofScopeOriginal=scope_original(2).decode("ascii"))
         if version == 2:
             value["retrievalManifestOriginal"] = retrieval.fresh_ledger_manifest_original(
@@ -200,7 +200,7 @@ class FreshLedgerGrantSelectionTests(unittest.TestCase):
     def grant_fixture(self, version):
         # No signature or independently approved guest/key is manufactured.
         value = dict.fromkeys(GRANT_FIELDS, "SYNTHETIC SHAPE ONLY")
-        value.update(apiVersion="serverware.nativeLedgerSpoolRetrievalGrant/v" + str(version),
+        value.update(apiVersion="catchplate.nativeLedgerSpoolRetrievalGrant/v" + str(version),
             purpose="native-ledger-spool-retrieval", proofScopeOriginalBase64url=encoded(scope_original(2)),
             store={"genesisSha256": labelled("genesis-pin-only"), "sequence": 0,
                 "headSha256": labelled("genesis-pin-only")}, terminal={},
@@ -220,8 +220,8 @@ class FreshLedgerGrantSelectionTests(unittest.TestCase):
     def test_input_mixed_versions_manifest_scope_and_operation_rejected(self):
         base = self.input_fixture(2)
         mutations = []
-        for api in ("serverware.nativePilotNativeServiceAuthorityInput/v1",
-                    "serverware.nativePilotNativeServiceAuthorityInput/v3", None):
+        for api in ("catchplate.nativePilotNativeServiceAuthorityInput/v1",
+                    "catchplate.nativePilotNativeServiceAuthorityInput/v3", None):
             mutations.append({**base, "apiVersion": api})
         for key in ("apiVersion", "retrievalManifestOriginal"):
             value = copy.deepcopy(base)
@@ -251,7 +251,7 @@ class FreshLedgerGrantSelectionTests(unittest.TestCase):
             value = self.grant_fixture(version)
             self.assertEqual(len(value), 20 if version == 3 else 21)
             self.assertEqual(service.grant_shape("retrieval", value),
-                "serverware.nativeLedgerSpoolRetrievalGrant.signature/v" + str(version))
+                "catchplate.nativeLedgerSpoolRetrievalGrant.signature/v" + str(version))
         self.assertNotEqual(service.grant_shape("retrieval", self.grant_fixture(3)),
             service.grant_shape("retrieval", self.grant_fixture(4)))
 
@@ -264,8 +264,8 @@ class FreshLedgerGrantSelectionTests(unittest.TestCase):
             value = copy.deepcopy(base)
             del value[key]
             mutations.append(value)
-        for api in ("serverware.nativeLedgerSpoolRetrievalGrant/v3",
-                    "serverware.nativeLedgerSpoolRetrievalGrant/v5", None):
+        for api in ("catchplate.nativeLedgerSpoolRetrievalGrant/v3",
+                    "catchplate.nativeLedgerSpoolRetrievalGrant/v5", None):
             mutations.append({**base, "apiVersion": api})
         mutations.append({**base, "purpose": "native-shadow-receipt-persistence"})
         for mode in (None, "fresh-ledger"):
@@ -301,9 +301,9 @@ class FreshLedgerGrantSelectionTests(unittest.TestCase):
 
 class AssignmentFieldIsolationTests(unittest.TestCase):
     def assert_no_database_or_application(self):
-        self.assertNotIn("serverware.db", sys.modules)
-        self.assertNotIn("serverware.app", sys.modules)
-        self.assertFalse(any(name == "serverware.authority_store" or name.startswith("serverware.authority_store.")
+        self.assertNotIn("catchplate.db", sys.modules)
+        self.assertNotIn("catchplate.app", sys.modules)
+        self.assertFalse(any(name == "catchplate.authority_store" or name.startswith("catchplate.authority_store.")
             for name in sys.modules))
 
     def test_exact_shared_legacy_and_native_fields_are_pure(self):
@@ -312,7 +312,7 @@ class AssignmentFieldIsolationTests(unittest.TestCase):
         self.assertEqual(fields.NATIVE_FIELDS, expected)
         self.assertIs(assignment.NATIVE_FIELDS, fields.NATIVE_FIELDS)
         self.assertEqual((len(set(fields.LEGACY_FIELDS)), len(set(fields.NATIVE_FIELDS))), (14, 16))
-        tree = ast.parse((ROOT / "serverware/policy_shadow_assignment_fields.py").read_text(encoding="utf-8"))
+        tree = ast.parse((ROOT / "catchplate/policy_shadow_assignment_fields.py").read_text(encoding="utf-8"))
         self.assertFalse(any(isinstance(node, (ast.Import, ast.ImportFrom, ast.Call)) for node in ast.walk(tree)))
         self.assert_no_database_or_application()
 
@@ -329,9 +329,9 @@ class AssignmentFieldIsolationTests(unittest.TestCase):
             with self.subTest(version=version, fields=tuple(payload)), self.assertRaises(ValueError):
                 opening.assignment_fields(payload, version=version)
         for version, payload in ((1, native), (2, successor)):
-            domain = "serverware.policyShadowAssignment/v" + str(version)
+            domain = "catchplate.policyShadowAssignment/v" + str(version)
             envelope = {"apiVersion": domain, "kind": "PolicyShadowAssignment",
-                "canonicalProfile": "serverware.canonicalJson/ascii-integer-v1", "signatureDomain": domain,
+                "canonicalProfile": "catchplate.canonicalJson/ascii-integer-v1", "signatureDomain": domain,
                 "payload": payload, "payloadSha256": sha(canonical(payload)), "signatureAlgorithm": "Ed25519",
                 "signingKeyId": labelled("invalid-test-key-id"), "signingKeySpkiSha256": labelled("invalid-test-spki"),
                 "signature": "A" * 86}  # Invalid zero sentinel: never signed or signature-verified.
@@ -339,9 +339,9 @@ class AssignmentFieldIsolationTests(unittest.TestCase):
         self.assert_no_database_or_application()
 
     def test_db_legacy_mapping_reuses_shared_constant_without_importing_db(self):
-        tree = ast.parse((ROOT / "serverware/db.py").read_text(encoding="utf-8"))
+        tree = ast.parse((ROOT / "catchplate/db.py").read_text(encoding="utf-8"))
         shared = [node for node in tree.body if isinstance(node, ast.ImportFrom)
-            and node.module == "serverware.policy_shadow_assignment_fields"]
+            and node.module == "catchplate.policy_shadow_assignment_fields"]
         aliases = [alias.asname or alias.name for node in shared for alias in node.names if alias.name == "LEGACY_FIELDS"]
         self.assertEqual(len(aliases), 1)
         mappings = [node.value for node in tree.body if isinstance(node, ast.Assign)

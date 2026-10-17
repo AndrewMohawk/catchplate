@@ -2,7 +2,7 @@
 // Inert request projection controls: importing the driver launches nothing.
 const assert = require('node:assert/strict');
 const {requestFrame, failureReceipt, copiedRecipeFrame} = require('./check_operator_gmail_sdk_browser.cjs');
-const origin = 'https://serverware-demo.example.com';
+const origin = 'https://catchplate-demo.example.com';
 const raw = Buffer.from('{ "exact": "bytes" }');
 const request = (url, method = 'GET', body = null, headers = {}) => ({
   url: () => url, method: () => method, postDataBuffer: () => body, headers: () => headers});
@@ -20,14 +20,14 @@ for (const value of [request('https://gmail.googleapis.com/'), request(origin + 
   request(origin + '/api/operator-demo/oauth/google/start', 'POST', raw),
   request(origin + '/api/operator-demo/applications', 'POST', raw), request(origin + '/', 'POST', raw),
   request(origin + '/', 'GET', raw), request(origin + '/', 'GET', null, {authorization: 'canary'}),
-  request(origin + '/', 'GET', null, {'x-serverware-admin-token': 'canary'}),
+  request(origin + '/', 'GET', null, {'x-catchplate-admin-token': 'canary'}),
   request(origin + '/', 'GET', null, {cookie: 'canary'}), request(origin + '/', 'GET', null, {'proxy-authorization': 'canary'}),
   request(origin + '/api/operator-demo/access-rules/gmail-read', 'POST', Buffer.alloc(4097))]) {
   assert.throws(() => requestFrame(value, 1));
 }
 const counters = {postCount: 0, getCount: 2, pageErrors: 0, consoleErrors: 0, refusedRequests: 1};
 assert.deepEqual(failureReceipt('await_observer', 'request_refused', counters), {
-  schema: 'serverware.privateGmailBrowserFailure/v1', stage: 'await_observer', code: 'request_refused', ...counters});
+  schema: 'catchplate.privateGmailBrowserFailure/v1', stage: 'await_observer', code: 'request_refused', ...counters});
 const safe = failureReceipt('secret-canary', 'secret-canary', {...counters, postCount: 'secret-canary', raw: 'secret-canary'});
 assert.equal(safe.stage, 'inputs'); assert.equal(safe.code, 'workflow'); assert.equal(safe.postCount, null);
 assert(!JSON.stringify(safe).includes('secret-canary'));

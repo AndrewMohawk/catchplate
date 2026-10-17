@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-policy-canary-finalization.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-policy-canary-finalization.v1.schema.json",
   "title": "Separately assigned native interval finalization",
   "$ref": "#/$defs/record",
   "$comment": "Closed v3 selection, distinct finalization policy and signature/quote purpose. Full signed statement33 includes required-null seal. Actual admission arm/close and last-Arc census bind the final full ledger snapshot. No legacy heartbeat expiry extension, readiness or activation permission. Original window sealDeadline and all byte/work/storage limits remain enforced.",
@@ -24,7 +24,7 @@
     ],
     "properties": {
       "apiVersion": {
-        "const": "serverware.nativePolicyShadowDrain/v1"
+        "const": "catchplate.nativePolicyShadowDrain/v1"
       },
       "generationId": {
         "$ref": "#/$defs/digest"
@@ -224,7 +224,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.policyCanaryFinalizationTrustRoots/v1"
+          "const": "catchplate.policyCanaryFinalizationTrustRoots/v1"
         },
         "awsNitroRootCertificatesPem": {
           "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/trustRoots/properties/awsNitroRootCertificatesPem"
@@ -252,7 +252,7 @@
       ],
       "properties": {
         "schema": {
-          "const": "serverware.policyCanaryFinalizationAuthorityPolicy/v1"
+          "const": "catchplate.policyCanaryFinalizationAuthorityPolicy/v1"
         },
         "deploymentId": {
           "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/component"
@@ -304,7 +304,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeCanaryDurableDelivery/v3"
+          "const": "catchplate.nativeCanaryDurableDelivery/v3"
         },
         "intakeUrl": {
           "$ref": "native-policy-canary-durable-delivery.v1.schema.json#/$defs/configuration/properties/intakeUrl"
@@ -376,7 +376,7 @@
       "properties": {
         "seal": {"oneOf": [{"type":"null"},{"$ref":"#/$defs/seal"}]},
         "apiVersion": {
-          "const": "serverware.nativePolicyShadowHeartbeatStatement/v2"
+          "const": "catchplate.nativePolicyShadowHeartbeatStatement/v2"
         },
         "purpose": {
           "const": "native-policy-shadow-finalization"
@@ -525,7 +525,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.nativeResponseProofKeyEvidence/v1"
+              "const": "catchplate.nativeResponseProofKeyEvidence/v1"
             },
             "responseProofPublicKey": {
               "type": "string",
@@ -557,7 +557,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativePolicyShadowHeartbeat/v2"
+          "const": "catchplate.nativePolicyShadowHeartbeat/v2"
         },
         "canary_id": {
           "type": "string",
@@ -603,7 +603,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativePolicyShadowHeartbeat/v2"
+          "const": "catchplate.nativePolicyShadowHeartbeat/v2"
         },
         "coverage": {
           "const": "native-finalization-heartbeat-only"

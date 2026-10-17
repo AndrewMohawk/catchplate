@@ -44,7 +44,7 @@ def main(argv=None):
     for signo in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(signo, cancelled)
     try:
-        from serverware.authority_local_activation_keys import LocalActivationKeyProvisioner
+        from catchplate.authority_local_activation_keys import LocalActivationKeyProvisioner
         from scripts.authority import native_pilot_authority_io as io
         owner = LocalActivationKeyProvisioner(**arguments(argv))
         raw = owner.run()

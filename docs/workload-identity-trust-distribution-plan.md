@@ -11,8 +11,8 @@ policies or running services were changed for this source work.
 
 The standard Rust ingress path in `data-plane/decision-gate-rs/src/main.rs`
 calls `load_proxy_ingress_config` once from `main`. It reads
-`SERVERWARE_PROXY_TLS_CERT`, `SERVERWARE_PROXY_TLS_KEY` and
-`SERVERWARE_PROXY_CLIENT_CA_BUNDLE` through bounded, no-follow, stable startup
+`CATCHPLATE_PROXY_TLS_CERT`, `CATCHPLATE_PROXY_TLS_KEY` and
+`CATCHPLATE_PROXY_CLIENT_CA_BUNDLE` through bounded, no-follow, stable startup
 file snapshots. The admitted client CA certificates populate a `RootCertStore`
 and mandatory `WebPkiClientVerifier`; the server permits TLS 1.3. The retained
 TLS configuration and client CA vector are immutable `Arc` values.
@@ -32,7 +32,7 @@ digest. `MtlsIdentityPolicy::matches` checks every configured SAN category and
 optional leaf/key/issuer digest against genuine ingress evidence. A principal's
 issuer selector is a single value, not an implicit old/new trust list.
 
-`serverware/enrollment.py:_identity_block` includes the current signed principal
+`catchplate/enrollment.py:_identity_block` includes the current signed principal
 `mtls` selectors in the packet. Its required enrollment pins do not separately
 name the workload ingress bundle hash. The independently pinned issuer used by
 the local CSR and certificate-admission client is therefore not evidence that

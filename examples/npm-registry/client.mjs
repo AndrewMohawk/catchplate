@@ -59,7 +59,7 @@ export function loadClientConfig(path, env, operation = 'view', now = Date.now()
       && packages.every(name => typeof name === 'string' && name.length <= 214
         && /^(?:[a-z0-9][a-z0-9._-]*|@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*)$/.test(name)));
     const packageName = publishing ? value.package : value.operation_bundle === 'npm_metadata_read_v1'
-      ? value.client_recipe?.package : env.SERVERWARE_NPM_PACKAGE || (packages.length === 1 ? packages[0] : undefined);
+      ? value.client_recipe?.package : env.CATCHPLATE_NPM_PACKAGE || (packages.length === 1 ? packages[0] : undefined);
     requireValue(packages.includes(packageName));
     const caPath = selected => {
       requireValue(typeof selected === 'string' && selected.length > 0 && selected.length <= 4096
@@ -69,11 +69,11 @@ export function loadClientConfig(path, env, operation = 'view', now = Date.now()
     // Only connection and allowed package/tag fields are imported. Operation,
     // version, project/output paths, tarball and publication confirmation stay local.
     return configuration({...env,
-      SERVERWARE_PROXY_URL: value.proxy_url, SERVERWARE_APP_ID: value.application_id,
-      SERVERWARE_PROXY_TOKEN: value.proxy_password, SERVERWARE_CA_FILE: caPath(value.ca_file),
-      SERVERWARE_PROXY_CA_FILE: value.proxy_ca_file == null ? undefined : caPath(value.proxy_ca_file),
-      SERVERWARE_NPM_PACKAGE: packageName,
-      ...(publishing ? {SERVERWARE_NPM_TAG: value.tag} : {}),
+      CATCHPLATE_PROXY_URL: value.proxy_url, CATCHPLATE_APP_ID: value.application_id,
+      CATCHPLATE_PROXY_TOKEN: value.proxy_password, CATCHPLATE_CA_FILE: caPath(value.ca_file),
+      CATCHPLATE_PROXY_CA_FILE: value.proxy_ca_file == null ? undefined : caPath(value.proxy_ca_file),
+      CATCHPLATE_NPM_PACKAGE: packageName,
+      ...(publishing ? {CATCHPLATE_NPM_TAG: value.tag} : {}),
     }, operation);
   } catch { throw new Error('npm example configuration or operation refused'); }
 }
@@ -144,7 +144,7 @@ export function verifyVersions(readFile = readFileSync) {
 // call instead stays inside its supervisor's group; that supervisor kills the
 // whole group on cancellation AND after completion, then removes its scratch.
 export function containedMetadataWorker(env, operation) {
-  const value = env.SERVERWARE_MCP_CONTAINED_WORKER;
+  const value = env.CATCHPLATE_MCP_CONTAINED_WORKER;
   requireValue(value === undefined || (value === '1' && operation === 'view'));
   return value === '1';
 }
@@ -211,7 +211,7 @@ async function main() {
       installationDirectory = config.output;
     }
     observe({ launcherStage: 'runtime_setup' });
-    taskRoot = mkdtempSync(join(tmpdir(), 'serverware-npm-example-'));
+    taskRoot = mkdtempSync(join(tmpdir(), 'catchplate-npm-example-'));
     requireValue((statSync(taskRoot).mode & 0o777) === 0o700);
     const paths = { root: taskRoot, cache: join(taskRoot, 'cache'),
       trust: join(taskRoot, 'trust.pem'), tarball: join(taskRoot, 'reviewed-package.tgz'),

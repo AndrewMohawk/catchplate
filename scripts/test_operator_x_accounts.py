@@ -15,12 +15,12 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import serverware
-from serverware import operator_x_accounts as accounts
-from serverware import operator_x_oauth_profile as profiles
-from serverware import operator_x_oauth_protocol as protocol
-from serverware import operator_x_transport as transport
-from serverware.http_client import HttpDeadline
+import catchplate
+from catchplate import operator_x_accounts as accounts
+from catchplate import operator_x_oauth_profile as profiles
+from catchplate import operator_x_oauth_protocol as protocol
+from catchplate import operator_x_transport as transport
+from catchplate.http_client import HttpDeadline
 
 
 def deny_network(event, _arguments):
@@ -116,7 +116,7 @@ class AccountsTests(unittest.TestCase):
         def selection(*_args):
             yield self.selection
 
-        for replacement in (patch.object(serverware, "operator_x_account_store", self.store, create=True),
+        for replacement in (patch.object(catchplate, "operator_x_account_store", self.store, create=True),
                 patch.object(accounts, "_transaction", transaction),
                 patch.object(accounts.admission, "require_runtime", return_value=object()),
                 patch.object(accounts.configuration, "_retained_selection", selection),

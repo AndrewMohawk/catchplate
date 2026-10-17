@@ -32,8 +32,8 @@ def sha256_prefixed(value: bytes) -> str:
 
 
 def key_path() -> Path:
-    default = Path(os.getenv("SERVERWARE_DATA_DIR", "/data")) / "external-tee-fixture-ed25519.pem"
-    return Path(os.getenv("SERVERWARE_EXTERNAL_TEE_FIXTURE_KEY", str(default)))
+    default = Path(os.getenv("CATCHPLATE_DATA_DIR", "/data")) / "external-tee-fixture-ed25519.pem"
+    return Path(os.getenv("CATCHPLATE_EXTERNAL_TEE_FIXTURE_KEY", str(default)))
 
 
 def load_key() -> Ed25519PrivateKey:

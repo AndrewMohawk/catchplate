@@ -20,8 +20,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_jit_compound_plan as source
-from serverware.authority_query_read_work import QueryReadValidationLimits
+from catchplate import authority_jit_compound_plan as source
+from catchplate.authority_query_read_work import QueryReadValidationLimits
 from test_authority_jit_compound import originals, replay
 from test_authority_jit_connected_originals import canonical, connected_fixture, meter
 

@@ -4,7 +4,7 @@ use super::*;
 
 #[test]
 fn response_headers_preserve_exact_static_wire_bytes() {
-    let cookie = "__Host-serverware-native-static-0123=private-nonce; Path=/; Secure; HttpOnly";
+    let cookie = "__Host-catchplate-native-static-0123=private-nonce; Path=/; Secure; HttpOnly";
     let header = response_header("application/json", 7, Some(cookie), "default-src 'none'").unwrap();
     assert_eq!(header.as_str(), format!("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 7\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'none'\r\nSet-Cookie: {cookie}\r\n\r\n"));
     let html = response_header("text/html; charset=utf-8", 0, None, "default-src 'none'").unwrap();

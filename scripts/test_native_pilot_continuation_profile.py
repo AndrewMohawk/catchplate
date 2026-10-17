@@ -20,8 +20,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import native_pilot_continuation_profile as profile
-from serverware import native_pilot_driver_authority as driver
+from catchplate import native_pilot_continuation_profile as profile
+from catchplate import native_pilot_driver_authority as driver
 from test_native_pilot_bridge_authorizations import fixture as bridge_fixture, pair, clocks
 from test_native_pilot_native_services import fixture as native_policy_fixture
 from test_native_pilot_generation_scope import key_fixture, signed_message, encoded, NOW
@@ -44,7 +44,7 @@ def bootstrap_fixture():
     config = json.loads(delivered["ownerConfigurationOriginal"])
     window = json.loads(delivered["windowOriginal"])["payload"]
     key = config["lifecycle"]["constructedAdmissionAuthority"]
-    early = {"apiVersion": "serverware.nativeShadowBootstrapDriverAdmission/v1",
+    early = {"apiVersion": "catchplate.nativeShadowBootstrapDriverAdmission/v1",
         "purpose": "native-driver-bootstrap-admission", "configurationSha256": control["configurationSha256"],
         "windowSha256": control["windowSha256"], "bootstrapObservationOriginal": delivered["observationOriginal"],
         "parent": {"processId": 42, "startTimeTicks": 99, "parentId": 2, "pidfdDevice": 0, "pidfdInode": 77},
@@ -52,7 +52,7 @@ def bootstrap_fixture():
         "issuedAtUnixNanos": NOW - 1_000_000, "expiresAtUnixNanos": NOW - 1_000_000 + 30_000_000_000,
         **{name: window[name] for name in ("startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs")},
         "signingKeyId": key["keyId"], "signingKeySpkiSha256": key["keySpkiSha256"]}
-    value = {"apiVersion": "serverware.nativePilotDriverAuthorityInput/v1", "operation": "bootstrap",
+    value = {"apiVersion": "catchplate.nativePilotDriverAuthorityInput/v1", "operation": "bootstrap",
         "controlOriginal": bridge["controlOriginal"], "configurationOriginal": delivered["ownerConfigurationOriginal"],
         "windowOriginal": delivered["windowOriginal"], "deliveryConfigurationOriginal": delivered["configurationOriginal"],
         "observationOriginal": delivered["observationOriginal"], "payloadOriginal": canonical(early).decode("ascii")}
@@ -101,7 +101,7 @@ class ContinuationProfileControls(unittest.TestCase):
         raw, actual_pair = profile._verifier(fragment, source, records, bootstrap, clocks=clocks())
         config = json.loads(raw)
         self.assertEqual(actual_pair, context)
-        self.assertEqual(config["apiVersion"], "serverware.nativeShadowNitroVerifierConfiguration/v3")
+        self.assertEqual(config["apiVersion"], "catchplate.nativeShadowNitroVerifierConfiguration/v3")
         self.assertEqual(config["expectedScope"]["guest"], guest)
         self.assertEqual(config["operation"]["deadlineBoottimeNs"], guest["startupDeadlineBoottimeNs"])
         bad = copy.deepcopy(fragment)
@@ -148,12 +148,12 @@ class ContinuationProfileControls(unittest.TestCase):
         scope_raw, admitted = b'{"synthetic":"signed-scope-slot"}', b'{"synthetic":"signed-admission-slot"}'
         raw = canonical({"publicAdmissionOriginal": canonical({
             "bootstrapObservationOriginal": observation.decode("ascii")}).decode("ascii")})
-        observed = {"constructedObservation": {"apiVersion": "serverware.nativeShadowDriverBridgeConstructed/v1",
+        observed = {"constructedObservation": {"apiVersion": "catchplate.nativeShadowDriverBridgeConstructed/v1",
             "observationSha256": sha(observation), "scopeSha256": sha(scope_raw)}, "constructedAdmissionSha256": sha(admitted)}
         profile._origin(observed, input_raw=raw, admission_raw=admitted, scope_raw=scope_raw)
         bad = copy.deepcopy(observed); bad["constructedAdmissionSha256"] = synthetic("different-actual-output")
         with self.assertRaises(ValueError): profile._origin(bad, input_raw=raw, admission_raw=admitted, scope_raw=scope_raw)
-        handoff = {"originHandoff": {"apiVersion": "serverware.nativeGenerationOriginHandoff/v1",
+        handoff = {"originHandoff": {"apiVersion": "catchplate.nativeGenerationOriginHandoff/v1",
             "okForAction": False, "automaticRetryAllowed": False, "originSha256": synthetic("relay-original")}}
         profile._handoff(handoff)
         for field in ("okForAction", "automaticRetryAllowed", "installed", "cleanupComplete"):

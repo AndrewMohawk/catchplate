@@ -7,11 +7,11 @@ Implementation is source-only: unbuilt, unexecuted and unprovisioned.
 
 The purpose is `bind-oidc-session-activation-release-outcome`. The envelope
 schema and signature domain are
-`serverware.signedOidcSessionActivationReleaseOutcomeAuthorization/v1`; the
+`catchplate.signedOidcSessionActivationReleaseOutcomeAuthorization/v1`; the
 payload schema is
-`serverware.oidcSessionActivationReleaseOutcomeAuthorization/v1`. Exact canonical
+`catchplate.oidcSessionActivationReleaseOutcomeAuthorization/v1`. Exact canonical
 original identity uses
-`serverware.oidcSessionActivationReleaseOutcomeAuthorizationIdentity/v1`.
+`catchplate.oidcSessionActivationReleaseOutcomeAuthorizationIdentity/v1`.
 
 The flat, closed payload has eighteen fields: `schema`, `sourceRevision`,
 `purpose`, `serviceUid`, `serviceGid`, `processMode`, `trustMode`,

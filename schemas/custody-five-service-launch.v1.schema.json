@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/custody-five-service-launch.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/custody-five-service-launch.v1.schema.json",
   "$ref": "#/$defs/configuration",
   "$comment": "Explicit software generation-only launch. Shape is not process ownership, native custody, generation completion or durability evidence. Real pinned fs-verity executable, parked child/PIDFD, C9, history signatures, memfd seals, original BOOTTIME and final-role admission remain mandatory.",
   "$defs": {
@@ -24,7 +24,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId", "services"],
       "properties": {
-        "apiVersion": {"const": "serverware.custodyFiveServiceLaunch/v1"},
+        "apiVersion": {"const": "catchplate.custodyFiveServiceLaunch/v1"},
         "bootIdBase64url": {"type": "string", "pattern": "^[A-Za-z0-9_-]{22}$"},
         "timeNamespaceDevice": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
         "timeNamespaceInode": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
@@ -47,7 +47,7 @@
     "guestLaunch": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "deliveryConfiguration", "delivery"],
       "properties": {
-        "apiVersion": {"const": "serverware.custodyOrdinaryServiceGuestLaunch/v1"},
+        "apiVersion": {"const": "catchplate.custodyOrdinaryServiceGuestLaunch/v1"},
         "deliveryConfiguration": {"$ref": "#/$defs/pin"}, "delivery": {"$ref": "#/$defs/pin"}
       }
     },

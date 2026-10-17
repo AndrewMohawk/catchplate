@@ -30,7 +30,7 @@ import test_operator_retained_upgrade as selected
 CANDIDATE_MANIFEST = "b3ac8f02465089754e1b6ac5260af104a0a1303f11751fd7998ce1d24fb1bbd0"
 CANDIDATE_FILES = 4811
 PREVIOUS_MANIFEST = "e5b70ccce9bcfc3065801391de59022648bbc645fa819b06840ba43412a73ff5"
-ARTIFACTS = Path("/srv/catchplate-fast/projects/serverware-operator-artifacts")
+ARTIFACTS = Path("/srv/catchplate-fast/projects/catchplate-operator-artifacts")
 TEST = "test_old_source_saved_authority_survives_current_google_off_upgrade_and_reopen"
 SCRATCH = Path("/scratch")
 

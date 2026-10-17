@@ -45,7 +45,7 @@ def require(condition):
 
 def render_config():
     root = Path(__file__).resolve().parents[1]
-    template = (root / 'docker/serverware-operator-demo/config/nginx.conf.template').read_text()
+    template = (root / 'docker/catchplate-operator-demo/config/nginx.conf.template').read_text()
     blocks = re.findall(r'(?ms)^stream \{\n.*?^\}', template)
     require(len(blocks) == 1)
     block = blocks[0]
@@ -237,7 +237,7 @@ def exercise(results):
                     connection.sendall(PAYLOADS[4])
                     require(read_exact(connection, len(REPLIES[4])) == REPLIES[4]); eof(connection)
                 rows = complete(backend, 5)
-                result = {'schema': 'serverware.proxyIngressRelayExercise/v1', 'ok': True,
+                result = {'schema': 'catchplate.proxyIngressRelayExercise/v1', 'ok': True,
                     'syntheticOnly': True, 'liveVerified': False, 'dockerStopProofRequired': True,
                     'opaqueBytesEqual': True, 'halfCloseResponseReceived': True,
                     'deniedPeerBackendConnections': 0, 'backendConnections': len(rows),
@@ -246,7 +246,7 @@ def exercise(results):
             finally:
                 backend.shutdown(); worker.join(timeout=2)
     except Exception:
-        result = {'schema': 'serverware.proxyIngressRelayExercise/v1', 'ok': False,
+        result = {'schema': 'catchplate.proxyIngressRelayExercise/v1', 'ok': False,
             'syntheticOnly': True, 'phase': phase, 'error': 'bounded relay exercise failed'}
     write_new(results, 'result.json', result)
     print(json.dumps(result, sort_keys=True), flush=True)

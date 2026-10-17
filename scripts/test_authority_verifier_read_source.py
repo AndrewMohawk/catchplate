@@ -20,8 +20,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
-from serverware.authority_store import verifier_read_sql as verifier
+from catchplate import authority_contract
+from catchplate.authority_store import verifier_read_sql as verifier
 
 
 EVIDENCE_TABLES = frozenset({
@@ -36,7 +36,7 @@ RECOVERY_TABLES = frozenset({
 TABLES = EVIDENCE_TABLES | RECOVERY_TABLES | frozenset({
     "policy_authority_authenticated_table_roots", "policy_authority_counted_index_heads",
 })
-CONTRACT = "serverware.policyAuthorityVerifierRead/v2"
+CONTRACT = "catchplate.policyAuthorityVerifierRead/v2"
 
 
 def read_source(relative, maximum=2 * 1024 * 1024):
@@ -100,8 +100,8 @@ def raising_guard(node, message):
 class AuthorityVerifierReadSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.db_source, cls.db = read_source("serverware/db.py", 16 * 1024 * 1024)
-        cls.schema_source, cls.schema = read_source("serverware/authority_store/schema.py")
+        cls.db_source, cls.db = read_source("catchplate/db.py", 16 * 1024 * 1024)
+        cls.schema_source, cls.schema = read_source("catchplate/authority_store/schema.py")
         cls.seal = function(cls.db, "_seal_postgres_schema_acl")
 
     def assert_shape(self, node, expression):
@@ -115,11 +115,11 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         self.assertIs(type(authority_contract.VERIFIER_READ_TABLES), frozenset)
         self.assertEqual(authority_contract.VERIFIER_READ_TABLES, TABLES)
         self.assertEqual(authority_contract.SOURCE_REVISION,
-                         "serverware.policyCandidateAuthoritySource/2026-07-30.351")
+                         "catchplate.policyCandidateAuthoritySource/2026-07-30.351")
         self.assertTrue(all(type(table) is str for table in authority_contract.VERIFIER_READ_TABLES))
 
     def test_real_helper_returns_fixed_sql_and_exact_separate_parameters(self):
-        for role, namespace in (("verifier_reader", "serverware_metadata"),
+        for role, namespace in (("verifier_reader", "catchplate_metadata"),
                                 ('quoted"reader', 'quoted"schema'),
                                 ("lecteur_\u00e9", "schema_\U0001f600")):
             with self.subTest(role=role, namespace=namespace):
@@ -189,7 +189,7 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         self.assertIn("%s::pg_catalog.text AS namespace_name", sql)
         self.assertIn("%s::pg_catalog.text[] AS required_tables", sql)
         self.assertNotIn("current_user", sql)
-        self.assertNotIn("serverware_metadata", sql)
+        self.assertNotIn("catchplate_metadata", sql)
         self.assertNotIn("SET ROLE", sql)
         self.assertNotIn("EXECUTE ", sql)
 
@@ -269,7 +269,7 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         self.assertEqual(sql.count("WHERE grant_entry.grantee = 0"), 4)
 
     def test_helper_has_no_database_registry_or_dynamic_sql_dependency(self):
-        _, tree = read_source("serverware/authority_store/verifier_read_sql.py", 64 * 1024)
+        _, tree = read_source("catchplate/authority_store/verifier_read_sql.py", 64 * 1024)
         imports = []
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -278,7 +278,7 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
                 imports.extend((node.module, alias.name, alias.asname) for alias in node.names)
         self.assertEqual(set(imports), {
             ("__future__", "annotations", None), (None, "hashlib", None),
-            ("serverware", "authority_contract", None),
+            ("catchplate", "authority_contract", None),
         })
         helper = function(tree, "verifier_read_privilege_check")
         forbidden = {"open", "eval", "exec", "compile", "__import__", "connect", "execute", "cursor"}
@@ -291,13 +291,13 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
 
     def test_db_and_operation_manifest_use_the_exact_shared_inventory(self):
         aliases = [alias for node in self.db.body if isinstance(node, ast.ImportFrom)
-                   and node.module == "serverware.authority_store" for alias in node.names
+                   and node.module == "catchplate.authority_store" for alias in node.names
                    if alias.name == "verifier_read_sql"]
         self.assertEqual([(alias.name, alias.asname) for alias in aliases],
                          [("verifier_read_sql", "_authority_verifier_read_sql")])
         self.assert_shape(assignment(self.db, "_POLICY_AUTHORITY_VERIFIER_READ_TABLES").value,
                           "authority_contract.VERIFIER_READ_TABLES")
-        _, contract = read_source("serverware/authority_contract.py")
+        _, contract = read_source("catchplate/authority_contract.py")
         digest = assignment(contract, "OPERATION_MANIFEST_DIGEST").value
         self.assert_shape(digest.func, "_digest")
         self.assert_shape(digest.args[0], "CONTRACT_SCHEMA")
@@ -390,7 +390,7 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
             "(type(runtime_read_only_tables) is not frozenset or "
             "runtime_read_only_tables != _POLICY_AUTHORITY_RUNTIME_READ_ONLY_TABLES)")
         self.assert_shape(guard.test,
-            "schema in {_POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME, 'serverware_candidate_authority_expected_v9'} "
+            "schema in {_POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME, 'catchplate_candidate_authority_expected_v9'} "
             "and (type(authority_verifier_role) is not str "
             "or re.fullmatch('[a-z][a-z0-9_]{0,62}', authority_verifier_role) is None "
             "or authority_verifier_role != _METADATA_STORE_AUTHORITY_VERIFIER_ROLE "
@@ -477,7 +477,7 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
 
     def test_source_contract_and_owner_profile_bind_role_table_set_contract_and_query_bytes(self):
         aliases = [alias for node in self.schema.body if isinstance(node, ast.ImportFrom)
-                   and node.module == "serverware.authority_store.verifier_read_sql" for alias in node.names]
+                   and node.module == "catchplate.authority_store.verifier_read_sql" for alias in node.names]
         self.assertEqual([(alias.name, alias.asname) for alias in aliases],
                          [("VERIFIER_READ_PRIVILEGE_SQL_DIGEST", None)])
         source_contract = function(self.schema, "_policy_candidate_authority_source_contract_digest")
@@ -544,19 +544,19 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         source_returns = [node for node in source_contract.body if isinstance(node, ast.Return)]
         self.assertEqual(len(source_returns), 1)
         self.assert_shape(source_returns[0].value,
-            "_policy_candidate_authority_framed_digest('serverware.policyCandidateAuthoritySourceContract/v1', material)")
+            "_policy_candidate_authority_framed_digest('catchplate.policyCandidateAuthoritySourceContract/v1', material)")
         material = assignment(profile, "material").value
         self.assert_shape(material.func, "dumps")
         self.assert_shape(dict_value(material.args[0], "verifierSessionContract"), "verifier_session_contract")
         returned = [node for node in profile.body if isinstance(node, ast.Return)]
         self.assertEqual(len(returned), 1)
         self.assert_shape(returned[0].value,
-            "_policy_candidate_authority_framed_digest('serverware.policyAuthorityOwnerVerificationProfile/v1', material.encode('ascii'))")
+            "_policy_candidate_authority_framed_digest('catchplate.policyAuthorityOwnerVerificationProfile/v1', material.encode('ascii'))")
 
     def test_service_mtls_and_exact_boolean_identity_precede_effective_admission(self):
-        _, tree = read_source("serverware/authority_service.py", 2 * 1024 * 1024)
+        _, tree = read_source("catchplate/authority_service.py", 2 * 1024 * 1024)
         aliases = [alias for node in tree.body if isinstance(node, ast.ImportFrom)
-                   and node.module == "serverware.authority_store.verifier_read_sql" for alias in node.names]
+                   and node.module == "catchplate.authority_store.verifier_read_sql" for alias in node.names]
         self.assertEqual([(alias.name, alias.asname) for alias in aliases],
                          [("verifier_read_privilege_check", None)])
         classes = [node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "AuthorityProcess"]
@@ -583,7 +583,7 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         self.assertEqual(len(query.args), 1)
         self.assertIsInstance(query.args[0], ast.Starred)
         self.assert_shape(query.args[0].value,
-            "verifier_read_privilege_check(role=self.role_config['databaseRole'], namespace='serverware_metadata')")
+            "verifier_read_privilege_check(role=self.role_config['databaseRole'], namespace='catchplate_metadata')")
         denial = raising_guard(reader, "WebAuthn authority read role is privileged")
         self.assert_shape(denial.test, "forbidden_authority is not None")
         self.assertLess(identity.lineno, identity_guard.lineno)
@@ -593,7 +593,7 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
             self.assertLess(denial.end_lineno, assignment(reader, name).lineno)
 
     def test_live_webauthn_reader_uses_exact_four_tables_without_granting_historical_helpers(self):
-        _, tree = read_source("serverware/authority_service.py", 2 * 1024 * 1024)
+        _, tree = read_source("catchplate/authority_service.py", 2 * 1024 * 1024)
         process = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "AuthorityProcess")
         reader = function(process, "_read_webauthn_authority")
         actual_tables = set()
@@ -603,7 +603,7 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
             strings = [node.value for node in ast.walk(call.args[0])
                        if isinstance(node, ast.Constant) and type(node.value) is str]
             for text in strings:
-                actual_tables.update(re.findall(r"(?:FROM|JOIN) serverware_metadata\.([a-z_]+)", text))
+                actual_tables.update(re.findall(r"(?:FROM|JOIN) catchplate_metadata\.([a-z_]+)", text))
         self.assertEqual(actual_tables, EVIDENCE_TABLES)
         self.assertEqual(len(calls(reader, "verifier_read_privilege_check")), 1)
         evidence = function(process, "_build_v9_webauthn_evidence")

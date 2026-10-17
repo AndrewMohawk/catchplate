@@ -23,8 +23,8 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_jit_original_authorization as source
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_jit_original_authorization as source
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
 
 EPOCH, MONOTONIC, LIFETIME = 1_800_000_000_000_000_000, 1_000_000_000, 1_000_000_000
@@ -112,7 +112,7 @@ class JitOriginalAuthorizationControls(unittest.TestCase):
                     self.assertEqual(observed.control, json.loads(raw))
                     self.assertNotIn("originalDeadlineNs", observed.control["context"])
                     self.assertEqual(observed.control["context"]["operation"], "jit.assertion.issue")
-                    other_domain = "serverware.policyAuthorityChallengeMaintenancePageAuthorizationSignature/v1"
+                    other_domain = "catchplate.policyAuthorityChallengeMaintenancePageAuthorizationSignature/v1"
                     with self.assertRaises(InvalidSignature):
                         PUBLIC.verify(signature, frame(other_domain, canonical(payload)).encode("ascii"))
 

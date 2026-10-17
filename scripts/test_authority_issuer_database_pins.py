@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import unittest
 
 
-ROLE = "serverware_policy_capability_issuer"
+ROLE = "catchplate_policy_capability_issuer"
 PINS = (ROLE, "/CN=component-issuer", "123", "/CN=component-ca", 5)
 
 
@@ -51,7 +51,7 @@ class SessionDouble:
 
 @cache
 def actual_code():
-    path = Path(__file__).resolve().parents[1] / "serverware/db.py"
+    path = Path(__file__).resolve().parents[1] / "catchplate/db.py"
     tree = ast.parse(path.read_bytes(), filename=str(path))
     names = {"_authority_database_pins", "_policy_authority_capability_issuer_pg_connect_raw"}
     functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
@@ -69,8 +69,8 @@ def actual_connector(session):
         calls.append(name)
         return "component-only-dsn"
     namespace = dict(re=re, MetadataStoreError=ValueError,
-        os=SimpleNamespace(environ={"SERVERWARE_PROCESS_MODE": "policy-authority-issuer",
-            "SERVERWARE_POLICY_AUTHORITY_CAPABILITY_ISSUER_TLS_CLIENT_DN": "wrong-ambient-pin"}),
+        os=SimpleNamespace(environ={"CATCHPLATE_PROCESS_MODE": "policy-authority-issuer",
+            "CATCHPLATE_POLICY_AUTHORITY_CAPABILITY_ISSUER_TLS_CLIENT_DN": "wrong-ambient-pin"}),
         _POLICY_AUTHORITY_ISSUER_PROCESS_MODE="policy-authority-issuer",
         _METADATA_STORE_AUTHORITY_CAPABILITY_ISSUER_ROLE=ROLE,
         _policy_authority_dsn_from_descriptor=descriptor,

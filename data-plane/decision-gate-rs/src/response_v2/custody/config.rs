@@ -10,13 +10,13 @@ use super::{
 };
 
 pub(crate) const TOPOLOGY_API_VERSION: &str =
-    "serverware.responseObservationV2CustodyTopology/v1";
+    "catchplate.responseObservationV2CustodyTopology/v1";
 pub(crate) const TOPOLOGY_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/custody-topology/v1\0";
+    b"catchplate.response-v2/custody-topology/v1\0";
 pub(crate) const TRUSTED_HOST_FAULT_DOMAIN: &str = "host-1";
 pub(crate) const TRUSTED_HOST_QUORUM_MODE: &str = "LOCAL_1_OF_1";
 pub(crate) const TEE_HARDWARE_GENERATION_VERIFIER_API_VERSION: &str =
-    "serverware.responseObservationV2TeeGenerationVerifier/v1";
+    "catchplate.responseObservationV2TeeGenerationVerifier/v1";
 pub(crate) const TRUSTED_HOST_SHARED_UDS_GID: u32 = 65_519;
 pub(crate) const GENERATION_MANIFEST_CREDENTIAL: &str =
     "response-v2-provider-generation.json";
@@ -410,13 +410,13 @@ impl GenerationPublicCredentialPaths {
             ));
         }
         let directory = std::env::var_os(
-            "SERVERWARE_RESPONSE_V2_GENERATION_PUBLIC_CREDENTIALS_DIRECTORY",
+            "CATCHPLATE_RESPONSE_V2_GENERATION_PUBLIC_CREDENTIALS_DIRECTORY",
         )
         .map(PathBuf::from)
         .ok_or_else(|| {
             V2RuntimeError::new(
                 "generation_readiness_credentials_missing",
-                "SERVERWARE_RESPONSE_V2_GENERATION_PUBLIC_CREDENTIALS_DIRECTORY is required for state-authority readiness",
+                "CATCHPLATE_RESPONSE_V2_GENERATION_PUBLIC_CREDENTIALS_DIRECTORY is required for state-authority readiness",
             )
         })?;
         validate_generation_credential_directory(&directory)?;

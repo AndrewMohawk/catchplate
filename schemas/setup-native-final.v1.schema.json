@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/setup-native-final.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/setup-native-final.v1.schema.json",
   "title": "Scoped native Setup final-authority authorization and protected consumption",
   "description": "Application validators additionally enforce exact canonical ASCII originals, full cryptographic verification, time ordering, key separation, genuine current protected rows/audits, reviewer separation and one-shot CAS. Scope is not measured-host or proxy-ready authority.",
   "$defs": {
@@ -35,7 +35,7 @@
       ],
       "properties": {
         "schema": {
-          "const": "serverware.setupNativeFinalAuthorityPolicy/v1"
+          "const": "catchplate.setupNativeFinalAuthorityPolicy/v1"
         },
         "credentialPolicy": {
           "type": "object"
@@ -66,7 +66,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.setupNativeFinalChallenge/v1"
+          "const": "catchplate.setupNativeFinalChallenge/v1"
         },
         "challengeId": {
           "$ref": "#/$defs/id"
@@ -129,7 +129,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.setupNativeFinalReceipt/v1"
+          "const": "catchplate.setupNativeFinalReceipt/v1"
         },
         "purpose": {
           "const": "native-setup-final-authorization"
@@ -349,7 +349,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.setupNativeFinalRequest/v1"
+          "const": "catchplate.setupNativeFinalRequest/v1"
         },
         "sessionId": {
           "$ref": "#/$defs/id"
@@ -366,7 +366,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.setupNativeFinalRequest/v1"
+          "const": "catchplate.setupNativeFinalRequest/v1"
         },
         "sessionId": {
           "$ref": "#/$defs/id"
@@ -387,7 +387,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.setupNativeFinalRequest/v1"
+          "const": "catchplate.setupNativeFinalRequest/v1"
         },
         "sessionId": {
           "$ref": "#/$defs/id"
@@ -415,7 +415,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.setupNativeFinalRequest/v1"
+              "const": "catchplate.setupNativeFinalRequest/v1"
             },
             "sessionId": {
               "$ref": "#/$defs/id"
@@ -436,7 +436,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.setupNativeFinalRequest/v1"
+              "const": "catchplate.setupNativeFinalRequest/v1"
             },
             "sessionId": {
               "$ref": "#/$defs/id"
@@ -485,7 +485,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.setupNativeFinalResponse/v1"
+          "const": "catchplate.setupNativeFinalResponse/v1"
         },
         "status": {
           "enum": [

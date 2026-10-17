@@ -21,7 +21,7 @@ RUNTIME = Path('/new-fixture/runtime')
 
 def configuration():
     return config.build(SOURCE, BINARY, RUNTIME, 'a' * 64,
-        'serverware-audit-private-123456abcdef', '172.16.249.48/28')
+        'catchplate-audit-private-123456abcdef', '172.16.249.48/28')
 
 
 def event(number):
@@ -60,17 +60,17 @@ class ConfigTests(unittest.TestCase):
         value = configuration()
         gate = value['services']['decision-gate-rs']
         app = value['services']['control-plane']
-        self.assertEqual(gate['environment']['SERVERWARE_CONTROL_PLANE_AUDIT_URL'], 'http://serverware:3000/api/data-plane/audit')
-        self.assertEqual(gate['environment']['SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL'], 'http://serverware:3000/api/data-plane/credential-leases')
-        self.assertEqual(app['environment']['SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS'], '["172.16.249.50/32"]')
-        self.assertEqual(gate['environment']['SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS'], '["172.16.249.50/32"]')
-        self.assertEqual(gate['environment']['SERVERWARE_DECISION_GATE_MANAGEMENT_HOST'], '172.16.249.52')
+        self.assertEqual(gate['environment']['CATCHPLATE_CONTROL_PLANE_AUDIT_URL'], 'http://catchplate:3000/api/data-plane/audit')
+        self.assertEqual(gate['environment']['CATCHPLATE_CONTROL_PLANE_CREDENTIAL_LEASE_URL'], 'http://catchplate:3000/api/data-plane/credential-leases')
+        self.assertEqual(app['environment']['CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS'], '["172.16.249.50/32"]')
+        self.assertEqual(gate['environment']['CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS'], '["172.16.249.50/32"]')
+        self.assertEqual(gate['environment']['CATCHPLATE_DECISION_GATE_MANAGEMENT_HOST'], '172.16.249.52')
         self.assertTrue(value['networks']['fixture']['internal'])
         self.assertNotIn('edge', value['services'])
 
     def test_generated_config_contains_no_live_mount_or_ingress(self):
         raw = json.dumps(configuration())
-        for forbidden in ('homelab_data', 'serverware-operator-demo/', 'traefik-v3-public', 'docker.sock'):
+        for forbidden in ('homelab_data', 'catchplate-operator-demo/', 'traefik-v3-public', 'docker.sock'):
             self.assertNotIn(forbidden, raw)
         self.assertEqual(configuration()['services']['initialize']['network_mode'], 'none')
 
@@ -82,23 +82,23 @@ class ConfigTests(unittest.TestCase):
         for change in changes:
             with self.subTest(change=change):
                 value = configuration()
-                value['services']['serverware'].update(change)
+                value['services']['catchplate'].update(change)
                 with self.assertRaises(ValueError):
                     config.validate(value, SOURCE, BINARY, RUNTIME)
 
     def test_mount_guard_rejects_live_or_writable_source(self):
         for volume in (config.bind('/live/data', '/data', False), config.bind(SOURCE, '/app', False)):
             value = configuration()
-            value['services']['serverware']['volumes'].append(volume)
+            value['services']['catchplate']['volumes'].append(volume)
             with self.assertRaises(ValueError):
                 config.validate(value, SOURCE, BINARY, RUNTIME)
 
     def test_subnet_and_project_guard(self):
         for subnet in ('0.0.0.0/0', '172.16.249.48/29', '8.8.8.0/28', '::1/128'):
             with self.assertRaises(ValueError):
-                config.build(SOURCE, BINARY, RUNTIME, 'a' * 64, 'serverware-audit-private-123456abcdef', subnet)
+                config.build(SOURCE, BINARY, RUNTIME, 'a' * 64, 'catchplate-audit-private-123456abcdef', subnet)
         with self.assertRaises(ValueError):
-            config.build(SOURCE, BINARY, RUNTIME, 'a' * 64, 'serverware-operator-demo', '172.16.249.48/28')
+            config.build(SOURCE, BINARY, RUNTIME, 'a' * 64, 'catchplate-operator-demo', '172.16.249.48/28')
 
 
 class StateTests(unittest.TestCase):
@@ -219,7 +219,7 @@ class StateTests(unittest.TestCase):
 
     def test_ack_shape_requires_exact_batch_and_detached_proof_headers(self):
         current = identity()
-        body = json.dumps({'apiVersion': 'serverware.dataPlaneAuditAck/v1', 'ok': True,
+        body = json.dumps({'apiVersion': 'catchplate.dataPlaneAuditAck/v1', 'ok': True,
             'accepted': 2, 'batchDigest': current['bodyDigest'], 'instanceId': relay.INSTANCE}).encode()
         headers = [(name, 'unit-shape-only-not-a-valid-signature') for name in relay.PROOF_HEADERS]
         relay.real_ack(200, headers, body, current)
@@ -251,11 +251,11 @@ class HandlerTests(unittest.TestCase):
 
     def test_attestation_passes_exact_path_and_response_bytes(self):
         selected = handler('/attestation?nonce=unit-nonce')
-        selected.forward.return_value = (200, [('Content-Type', 'application/json'), ('X-Serverware-Response-Signature', 'unit-only')], b' {"unit":true}\n')
+        selected.forward.return_value = (200, [('Content-Type', 'application/json'), ('X-Catchplate-Response-Signature', 'unit-only')], b' {"unit":true}\n')
         selected.handle_operation()
         selected.forward.assert_called_once_with(b'')
         self.assertTrue(selected.wfile.getvalue().endswith(b' {"unit":true}\n'))
-        self.assertIn(b'X-Serverware-Response-Signature: unit-only\r\n', selected.wfile.getvalue())
+        self.assertIn(b'X-Catchplate-Response-Signature: unit-only\r\n', selected.wfile.getvalue())
 
 
 class ClaimTests(unittest.TestCase):
@@ -281,7 +281,7 @@ class ClaimTests(unittest.TestCase):
                 private_check.claim_run('sha256:' + 'a' * 64, path=path)
 
     def test_claim_refusal_happens_before_acceptance_construction_or_mutation(self):
-        marker = json.dumps({'schema': 'serverware.privateOperatorAuditFixture/v1', 'syntheticOnly': True})
+        marker = json.dumps({'schema': 'catchplate.privateOperatorAuditFixture/v1', 'syntheticOnly': True})
         with patch.dict(os.environ, {'PRIVATE_OPERATOR_AUDIT_FIXTURE': '1'}), \
                 patch.object(Path, 'read_text', return_value=marker), \
                 patch.object(private_check, 'claim_run', side_effect=private_check.CheckFailure('already claimed')), \

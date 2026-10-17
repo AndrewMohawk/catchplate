@@ -2,8 +2,8 @@
 use super::*;
 use base64::Engine as _;
 
-pub(crate) const PROFILE: &str = "serverware.nativeCustodyOpening/v1";
-pub(crate) const EARLY_PROFILE:&str="serverware.nativeCustodyOpening/v2";
+pub(crate) const PROFILE: &str = "catchplate.nativeCustodyOpening/v1";
+pub(crate) const EARLY_PROFILE:&str="catchplate.nativeCustodyOpening/v2";
 
 /// No Deserialize or public field. Only the completed production admission,
 /// retained installed generation and current independently assigned key create
@@ -52,14 +52,14 @@ impl Opening {
                 key_spki_sha256:b.key_spki_sha256.clone(), key_material_sha256:b.key_material_sha256.clone() }))
         }).collect::<Result<BTreeMap<_,_>,ShadowError>>()?;
         let authority = &a.custody_authority;
-        let scope = hash_domain_frames(b"serverware.policyShadowProductionCustodyProofScope/v1", &[&canonical_json_bytes(&(
+        let scope = hash_domain_frames(b"catchplate.policyShadowProductionCustodyProofScope/v1", &[&canonical_json_bytes(&(
             &a.assignment_id, assignment.payload_sha256(), a.assignment_revision, &authority.authority_id,
             &authority.storage_realm_sha256, &authority.retrieval_namespace_sha256,
             &a.authority_key_independence.independence_root_sha256, configuration,
             production_custody_key_set_root(&bindings)?, &authority.execution_closure_manifest_sha256,
             &authority.structurally_verified_seccomp_policy_sha256))?]);
         let bound = canonical_json_bytes(&(
-            "serverware.policyShadowAssignmentBoundCustodyReceipt/v1", scope,
+            "catchplate.policyShadowAssignmentBoundCustodyReceipt/v1", scope,
             &authority.execution_closure_manifest_sha256, &authority.structurally_verified_seccomp_policy_sha256,
             PolicyShadowCustodySignerRole::IngressAdmission, Sha256Digest::compute(&receipt.canonical_signature_payload()?)))?;
         key.verify_strict(&signature_preimage(PolicyShadowCustodySignerRole::IngressAdmission.signature_domain(), &bound),

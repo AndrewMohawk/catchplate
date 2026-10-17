@@ -54,7 +54,7 @@ history checks. Unknown profiles and crossed manifest/revision pairs still fail.
 ## What the new profile selects
 
 `--native-jit-review-startup-v26` selects the closed
-`serverware.nativeStartupConfiguration/v26` contract. It keeps the encrypted
+`catchplate.nativeStartupConfiguration/v26` contract. It keeps the encrypted
 service-token, secret-broker, currentness, measured-audit, guest-cohort and cgroup
 prerequisites. It adds `measuredJitReview` and a distinct
 `postbootJitReviewVsockPort`; it does not enable static credential creation,
@@ -267,17 +267,17 @@ not a generic verifier-signed response or a reserved-writer acknowledgment.
 - [Buffered preparation caller](../data-plane/decision-gate-rs/src/native_release_jit_preparation.rs),
   [actual owner join](../data-plane/decision-gate-rs/src/native_jit_review.rs)
   and [native signing/quote join](../data-plane/decision-gate-rs/src/native_jit_review_custody.rs).
-- [Python assignment verification](../serverware/authority_native_jit_review_assignment.py)
-  and [custody verification](../serverware/authority_native_jit_review_custody.py).
-- [Fixed historical storage validator](../serverware/authority_native_jit_retained_history.py)
+- [Python assignment verification](../catchplate/authority_native_jit_review_assignment.py)
+  and [custody verification](../catchplate/authority_native_jit_review_custody.py).
+- [Fixed historical storage validator](../catchplate/authority_native_jit_retained_history.py)
   preserves v349 originals and expiry; it grants no opening authority.
 - [Private native browser transport](../data-plane/decision-gate-rs/src/native_browser_transport_v1.rs)
   owns the actual TLS/VSOCK connection without adding review or decision authority.
-- [HTTP submission](../serverware/native_release_jit_submission.py),
-  [independent admission channel](../serverware/authority_native_jit_submission.py),
-  [pending kernel](../serverware/authority_transition_native_jit_pending.py) and
-  [locked-plan retention](../serverware/authority_store/native_jit_retention.py),
-  with the [SQL payload guard](../serverware/authority_store/root_transition_sql.py).
+- [HTTP submission](../catchplate/native_release_jit_submission.py),
+  [independent admission channel](../catchplate/authority_native_jit_submission.py),
+  [pending kernel](../catchplate/authority_transition_native_jit_pending.py) and
+  [locked-plan retention](../catchplate/authority_store/native_jit_retention.py),
+  with the [SQL payload guard](../catchplate/authority_store/root_transition_sql.py).
 - [Rust pending submission](../data-plane/decision-gate-rs/src/native_release_jit_submission.rs).
 - [Preceding component evidence and atomic-write map](native-buffered-release-context.md#next-real-integration-boundary).
 
@@ -336,7 +336,7 @@ The exact successor `7191646d` then passed hosted
 **88/88 suites, 955 Python executions, 250 Node groups and zero skips**, in
 791.495 seconds. All 88 test-script hashes, both dependency locks and individual
 receipts were joined to that Git object. The original failed run remains
-preserved. The private result under `serverware-hosted-ci-38503173102.NFD0Mays`
+preserved. The private result under `catchplate-hosted-ci-38503173102.NFD0Mays`
 has SHA-256 `9fa8a5be4217c7d2917be18f583de0fa06bc8467659ecf2482c2e1d5001dda62`;
 its verification receipt has SHA-256
 `be48cb6f9a11787ed56a1d4820f63ec9ba3e8450d42520960400c46a25a10ad0`.
@@ -540,8 +540,8 @@ preserved. The bounded continuation used NVMe without a durability claim:
 `/srv/catchplate-fast/tmp/serverware-hosted-ci-38510282856-cont.0JpZb3eH`.
 Its aggregate result SHA-256 is
 `6162273f9a3a66eb9bcfe499ce77254afe055a866c8ec144351ebb857b6f7b2d`.
-The local batches remain under `serverware-native-review-*` and
-`serverware-review-signers-direct.00dvooTf` in the operator evidence root;
+The local batches remain under `catchplate-native-review-*` and
+`catchplate-review-signers-direct.00dvooTf` in the operator evidence root;
 the signer result SHA-256 is
 `efa73e7807cba73ab7661e7487fc30c4b9490dde2421deccf9184c602ce59397`.
 

@@ -52,7 +52,7 @@ def arguments(argv):
 
 def encode_result(mode, value):
     """Exact bytes accepted by the existing witness and package-signing inputs."""
-    from serverware import authority_artifact_spec as spec
+    from catchplate import authority_artifact_spec as spec
     if mode == "core":
         spec.validate_generation_core(value)
     elif mode == "package":
@@ -65,8 +65,8 @@ def encode_result(mode, value):
 def run(*, mode, spec_fd, spec_sha256, trust_fd, trust_sha256):
     from scripts.authority import generate_artifact_bundle as generator
     from scripts.authority import native_pilot_authority_io as io
-    from serverware import authority_artifact_spec as contract
-    from serverware.authority_local_artifacts import document, sha
+    from catchplate import authority_artifact_spec as contract
+    from catchplate.authority_local_artifacts import document, sha
 
     io._process()
     if mode not in ("core", "package") or spec_fd == trust_fd:

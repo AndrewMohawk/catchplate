@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from scripts.authority import local_successor_enrollment as cli
 from scripts.test_authority_local_database_credentials import fixture as tls_fixture
-from serverware import authority_local_successor_enrollment as local
+from catchplate import authority_local_successor_enrollment as local
 
 
 def fixture():
@@ -106,7 +106,7 @@ class ColdSuccessorEnrollmentTests(unittest.TestCase):
             with self.assertRaises(ValueError): cli.arguments(changed)
 
     def test_actual_owner_orders_source_and_private_match_before_signing(self):
-        tree = ast.parse((Path(__file__).resolve().parents[1] / "serverware/authority_local_successor_enrollment.py").read_text())
+        tree = ast.parse((Path(__file__).resolve().parents[1] / "catchplate/authority_local_successor_enrollment.py").read_text())
         owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "LocalSuccessorColdEnrollment")
         issue = next(node for node in owner.body if isinstance(node, ast.FunctionDef) and node.name == "issue")
         calls = [node for node in ast.walk(issue) if isinstance(node, ast.Call)]

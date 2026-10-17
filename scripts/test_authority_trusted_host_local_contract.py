@@ -12,8 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from jsonschema import Draft202012Validator, ValidationError
-from serverware import authority_artifact_spec as artifact
-from serverware import authority_stage_zero_contract as stage
+from catchplate import authority_artifact_spec as artifact
+from catchplate import authority_stage_zero_contract as stage
 
 
 def fixture():
@@ -23,7 +23,7 @@ def fixture():
     native = {key: interpreter[key] for key in ("path", "runtimePath", "sha256")}
     native.update(elfClass="ELF64", machine=62, ptInterp="/runtime/lib/ld-linux.so.2",
                   needed=["/runtime/lib/libc.so.6"])
-    source = {"path": "serverware/authority_launcher.py", "runtimePath": "/runtime/authority_launcher.py",
+    source = {"path": "catchplate/authority_launcher.py", "runtimePath": "/runtime/authority_launcher.py",
               "sha256": "sha256:" + "2" * 64, "size": 8192,
               "interfaceSchema": stage.LOCAL_STAGE_ZERO_INTERFACE_SCHEMA, "interpreter": interpreter}
     return source, [native]

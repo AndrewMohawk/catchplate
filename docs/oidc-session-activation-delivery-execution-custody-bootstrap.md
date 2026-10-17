@@ -5,8 +5,8 @@ root-signed receiving purpose: `grant`, process
 `oidc-session-activation-delivery-execution-authorizer`, UID/GID `65500`.
 It does not reuse the consume-planning history purpose or extend an old generic
 grant enrollment. The closed envelope and payload schemas are
-`serverware.signedOidcSessionActivationDeliveryExecutionCustody/v1` and
-`serverware.oidcSessionActivationDeliveryExecutionCustody/v1`.
+`catchplate.signedOidcSessionActivationDeliveryExecutionCustody/v1` and
+`catchplate.oidcSessionActivationDeliveryExecutionCustody/v1`.
 
 ## Original inputs and joins
 

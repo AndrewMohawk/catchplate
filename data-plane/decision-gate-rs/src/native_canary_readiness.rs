@@ -1,12 +1,12 @@
 //! One finalization-owned readiness request; no activation or retry authority.
 use super::*;
 use ring::rand::{SecureRandom,SystemRandom};
-use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes as ascii;
+use catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes as ascii;
 
 pub(crate) fn submit(state:&GateState,final_checkpoint_original:&Value,deadline:u64)->Result<(),String>{
     if native_canary_transport::boottime_ns()?>=deadline{return Err("native readiness original deadline expired".into());}
     let checkpoint=final_checkpoint_original.as_object().ok_or("native readiness final original")?;
-    if checkpoint.get("apiVersion")!=Some(&json!("serverware.nativeCumulativeCheckpoint/v2"))
+    if checkpoint.get("apiVersion")!=Some(&json!("catchplate.nativeCumulativeCheckpoint/v2"))
         || checkpoint.get("seal").is_none_or(Value::is_null){
         return Err("native readiness requires a real sealed final checkpoint".into());
     }
@@ -27,7 +27,7 @@ pub(crate) fn submit(state:&GateState,final_checkpoint_original:&Value,deadline:
             item["canaryId"]==canary && item["assignmentSha256"]==binding.canary_assignment_sha256){
             return Err("native readiness canary has no independent derivation permission".into());
         }
-        json!({"apiVersion":"serverware.nativePolicyReadinessRequest/v1",
+        json!({"apiVersion":"catchplate.nativePolicyReadinessRequest/v1",
             "canary_id":canary,"instance_id":final_checkpoint_original["instance_id"],"boot_id":final_checkpoint_original["boot_id"],
             "assignment_envelope_digest":final_checkpoint_original["assignment_envelope_digest"],
             "assignment_payload_digest":final_checkpoint_original["assignment_payload_digest"],
@@ -37,9 +37,9 @@ pub(crate) fn submit(state:&GateState,final_checkpoint_original:&Value,deadline:
     let mut id=[0u8;16];SystemRandom::new().fill(&mut id).map_err(|_|"native readiness entropy")?;
     id[6]=(id[6]&15)|64;id[8]=(id[8]&63)|128;let id=hex::encode(id);
     let request=format!("{}-{}-{}-{}-{}",&id[..8],&id[8..12],&id[12..16],&id[16..20],&id[20..]);
-    let batch=json!({"apiVersion":"serverware.policyCanaryEvidenceOriginal/v1","requestId":request,
+    let batch=json!({"apiVersion":"catchplate.policyCanaryEvidenceOriginal/v1","requestId":request,
         "canaryId":record["canary_id"],"events":[{"kind":"readiness","record":record}]});
-    let original=serverware_decision_gate::native_canary_evidence_v1::BatchOriginal::parse(
+    let original=catchplate_decision_gate::native_canary_evidence_v1::BatchOriginal::parse(
         String::from_utf8(ascii(&batch)?).map_err(|_|"native readiness ASCII")?)?;
     // Existing retained prepare/claim/send/capture/recover owner. The finalizer
     // marks its chain terminal BEFORE this call; even a missing ACK cannot

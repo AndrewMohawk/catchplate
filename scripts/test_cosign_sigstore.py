@@ -62,9 +62,9 @@ def expect_failure(mode: str, payload: dict[str, Any], env: dict[str, str], expe
         raise AssertionError(f"{mode} failed with wrong error, expected {expected!r}: {detail}")
 
 
-def sign_request(statement: dict[str, Any], *, service: str = "serverware") -> dict[str, Any]:
+def sign_request(statement: dict[str, Any], *, service: str = "catchplate") -> dict[str, Any]:
     return {
-        "apiVersion": "serverware.sigstoreSignRequest/v1",
+        "apiVersion": "catchplate.sigstoreSignRequest/v1",
         "kind": "oci-image-statement",
         "service": service,
         "image_id": "sha256:" + "1" * 64,
@@ -75,7 +75,7 @@ def sign_request(statement: dict[str, Any], *, service: str = "serverware") -> d
 
 def verify_request(sign_payload: dict[str, Any], signature_response: dict[str, Any]) -> dict[str, Any]:
     return {
-        "apiVersion": "serverware.sigstoreVerifyRequest/v1",
+        "apiVersion": "catchplate.sigstoreVerifyRequest/v1",
         "kind": sign_payload["kind"],
         "service": sign_payload["service"],
         "image_id": sign_payload["image_id"],
@@ -115,16 +115,16 @@ def main() -> None:
     env = os.environ.copy()
     env.update(
         {
-            "SERVERWARE_COSIGN_BINARY": f"{sys.executable} scripts/cosign_fixture.py",
-            "SERVERWARE_COSIGN_FIXTURE_KEY": str(fixture_key_path),
-            "SERVERWARE_COSIGN_KEY_ID": fixture_key_id,
-            "SERVERWARE_COSIGN_YES": "0",
+            "CATCHPLATE_COSIGN_BINARY": f"{sys.executable} scripts/cosign_fixture.py",
+            "CATCHPLATE_COSIGN_FIXTURE_KEY": str(fixture_key_path),
+            "CATCHPLATE_COSIGN_KEY_ID": fixture_key_id,
+            "CATCHPLATE_COSIGN_YES": "0",
         }
     )
     statement = {
         "_type": "https://in-toto.io/Statement/v1",
-        "subject": [{"name": "serverware", "digest": {"sha256": "1" * 64}}],
-        "predicateType": "https://serverware.local/test/v1",
+        "subject": [{"name": "catchplate", "digest": {"sha256": "1" * 64}}],
+        "predicateType": "https://catchplate.local/test/v1",
         "predicate": {"source": "cosign-adapter-test"},
     }
     sign_payload = sign_request(statement)
@@ -145,15 +145,15 @@ def main() -> None:
         raise AssertionError(f"cosign bundle digest encoding is invalid: {signature_response}") from exc
     if decoded_bundle_digest != expected_digest:
         raise AssertionError(f"cosign bundle did not sign the canonical statement digest: {signature_response}")
-    if (signature_response.get("key_provider") or {}).get("key_id") != env["SERVERWARE_COSIGN_KEY_ID"]:
+    if (signature_response.get("key_provider") or {}).get("key_id") != env["CATCHPLATE_COSIGN_KEY_ID"]:
         raise AssertionError(f"signature response did not bind configured key ID: {signature_response}")
     derived_key_env = dict(env)
-    derived_key_env.pop("SERVERWARE_COSIGN_KEY_ID")
+    derived_key_env.pop("CATCHPLATE_COSIGN_KEY_ID")
     derived_signature = run_adapter("sign", sign_payload, derived_key_env)
     if (derived_signature.get("key_provider") or {}).get("key_id") != fixture_key_id:
         raise AssertionError(f"signature response did not derive its embedded SPKI key ID: {derived_signature}")
     mismatched_key_env = dict(env)
-    mismatched_key_env["SERVERWARE_COSIGN_KEY_ID"] = "sha256:" + "c" * 64
+    mismatched_key_env["CATCHPLATE_COSIGN_KEY_ID"] = "sha256:" + "c" * 64
     expect_failure("sign", sign_payload, mismatched_key_env, "does not match the cosign bundle public key")
     transparency = signature_response.get("transparency") or {}
     for field in ("log_id", "entry_uuid", "integrated_time", "inclusion_proof"):
@@ -163,13 +163,13 @@ def main() -> None:
     if verified.get("ok") is not True or verified.get("verified_transparency") is not True:
         raise AssertionError(f"cosign verification failed: {verified}")
     pinned_env = dict(env)
-    pinned_env["SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID"] = transparency["log_id"]
+    pinned_env["CATCHPLATE_COSIGN_EXPECTED_REKOR_LOG_ID"] = transparency["log_id"]
     pinned_signature = run_adapter("sign", sign_payload, pinned_env)
     if (pinned_signature.get("transparency") or {}).get("log_id") != transparency["log_id"]:
         raise AssertionError(f"cosign adapter did not preserve pinned Rekor log ID: {pinned_signature}")
     wrong_rekor_env = dict(env)
-    wrong_rekor_env["SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID"] = "sha256:" + "0" * 64
-    expect_failure("sign", sign_payload, wrong_rekor_env, "SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID")
+    wrong_rekor_env["CATCHPLATE_COSIGN_EXPECTED_REKOR_LOG_ID"] = "sha256:" + "0" * 64
+    expect_failure("sign", sign_payload, wrong_rekor_env, "CATCHPLATE_COSIGN_EXPECTED_REKOR_LOG_ID")
 
     tampered_payload = verify_request(sign_payload, signature_response)
     tampered_payload["statement"] = dict(tampered_payload["statement"])
@@ -178,11 +178,11 @@ def main() -> None:
     expect_failure("verify", tampered_payload, env, "signature response statement_digest mismatch")
 
     no_transparency_env = dict(env)
-    no_transparency_env["SERVERWARE_COSIGN_FIXTURE_NO_TRANSPARENCY"] = "1"
+    no_transparency_env["CATCHPLATE_COSIGN_FIXTURE_NO_TRANSPARENCY"] = "1"
     expect_failure("sign", sign_payload, no_transparency_env, "missing transparency log entries")
 
     verify_fail_env = dict(env)
-    verify_fail_env["SERVERWARE_COSIGN_FIXTURE_VERIFY_FAIL"] = "1"
+    verify_fail_env["CATCHPLATE_COSIGN_FIXTURE_VERIFY_FAIL"] = "1"
     expect_failure("verify", verify_request(sign_payload, signature_response), verify_fail_env, "forced cosign fixture verify failure")
 
     print(

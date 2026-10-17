@@ -27,7 +27,7 @@ fn transport() -> BasicTransport {
 }
 fn snapshot() -> crate::Snapshot {
     let mut value = (*test_snapshot(1)).clone();
-    value.policy_id = "serverware-operator-demo".into();
+    value.policy_id = "catchplate-operator-demo".into();
     value.principals[0].proxy_authorization = Some(parse(&config()));
     value
 }
@@ -175,15 +175,15 @@ fn basic_transport_absence_preserves_both_legacy_digest_bytes() {
 #[test]
 fn basic_transport_schema_and_capability_admission_are_operator_v1_only() {
     let mut raw = policy_with_route(generic_policy_route("none", json!(1024)));
-    raw["apiVersion"] = json!("serverware.policy/v1"); raw["kind"] = json!("PolicyBundle");
-    raw["metadata"] = json!({"id":"serverware-operator-demo", "sequence":1, "rollbackEpoch":1});
+    raw["apiVersion"] = json!("catchplate.policy/v1"); raw["kind"] = json!("PolicyBundle");
+    raw["metadata"] = json!({"id":"catchplate-operator-demo", "sequence":1, "rollbackEpoch":1});
     raw["principals"][0]["proxyAuthorization"] = config();
     assert!(crate::validate_policy_schema(&raw).is_ok());
     assert!(crate::validate_policy_capabilities(&raw).is_ok());
     for mutation in 0..4 {
         let mut changed = raw.clone();
         match mutation {
-            0 => changed["apiVersion"] = json!("serverware.policy/v2"),
+            0 => changed["apiVersion"] = json!("catchplate.policy/v2"),
             1 => changed["metadata"]["id"] = json!("other-policy"),
             2 => changed["principals"][0]["proxyAuthorization"]["basicTransport"] = Value::Null,
             _ => changed["principals"][0]["proxyAuthorization"]["basicTransport"]["extra"] = json!(true),

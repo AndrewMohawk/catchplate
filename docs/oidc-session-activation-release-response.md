@@ -1,6 +1,6 @@
 # Independent private release response verification
 
-[`authority_oidc_session_activation_release_response.py`](../serverware/authority_oidc_session_activation_release_response.py)
+[`authority_oidc_session_activation_release_response.py`](../catchplate/authority_oidc_session_activation_release_response.py)
 consumes original public evidence and the exact private exchange to verify the
 returned token commitment. It accepts no admitted-result object, cached success,
 delivery AES key, history owner, signer or store. Its sole output is the exact

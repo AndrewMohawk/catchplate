@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 workspace = aws_fixture.workspace
 BINARY_DIGEST = "sha256:" + "6" * 64
 SCOPE = {"registry_id": "123456789012", "region": "us-east-1",
-    "repository_name": "serverware-fixture/image", "image_tag": "reviewed-1"}
+    "repository_name": "catchplate-fixture/image", "image_tag": "reviewed-1"}
 
 
 def encoded(value):
@@ -85,9 +85,9 @@ def connected():
     from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-    from serverware import ecr_image_artifact as artifact, ecr_publication_policy as policy
-    from serverware import operator_ecr_artifacts as uploads, operator_ecr_publications as owner
-    from serverware import operator_ecr_signing_api as api, operator_publication
+    from catchplate import ecr_image_artifact as artifact, ecr_publication_policy as policy
+    from catchplate import operator_ecr_artifacts as uploads, operator_ecr_publications as owner
+    from catchplate import operator_ecr_signing_api as api, operator_publication
 
     f = aws_fixture.Fixture()
     assert owner.readiness(), "ordinary owner bootstrap and private artifact root must be ready"
@@ -115,7 +115,7 @@ def connected():
 
     # The API imports the real app for its configured binary identity; no
     # lifespan/server startup is performed, and the audit hook forbids sockets.
-    from serverware import app
+    from catchplate import app
     assert app.EXPECTED_DATA_PLANE_BINARY_DIGEST == BINARY_DIGEST
 
     config_bytes = b'{"architecture":"amd64","os":"linux"}'
@@ -212,7 +212,7 @@ def connected():
         assert digest(ciphertext) == envelope["ciphertextSha256"]
         shared = recipient.exchange(X25519PublicKey.from_public_bytes(unb64url(envelope["serverEphemeralPublicKey"])))
         key = HKDF(algorithm=hashes.SHA256(), length=32, salt=unb64url(wire["recipientNonce"]),
-            info=b"serverware:credential-lease-envelope:v2\0" + hashlib.sha256(encoded(aad)).digest()).derive(shared)
+            info=b"catchplate:credential-lease-envelope:v2\0" + hashlib.sha256(encoded(aad)).digest()).derive(shared)
         plain = json.loads(AESGCM(key).decrypt(unb64url(envelope["aeadNonce"]), ciphertext, encoded(aad)))
         assert plain["apiVersion"] == api.SIGNED_VERSION
         assert_signature(plain, action, body)
@@ -266,9 +266,9 @@ class EcrConnectedTests(unittest.TestCase):
         self.environment.pop("PYTHONOPTIMIZE", None)
         artifacts = Path(self.scratch.name) / "artifacts"
         artifacts.mkdir(mode=0o700)
-        self.environment.update(SERVERWARE_ECR_ARTIFACT_ROOT=str(artifacts),
-            SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST=BINARY_DIGEST,
-            SERVERWARE_OPERATOR_DEMO_UPSTREAMS='["https://api.ecr.us-east-1.amazonaws.com"]')
+        self.environment.update(CATCHPLATE_ECR_ARTIFACT_ROOT=str(artifacts),
+            CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST=BINARY_DIGEST,
+            CATCHPLATE_OPERATOR_DEMO_UPSTREAMS='["https://api.ecr.us-east-1.amazonaws.com"]')
 
     def test_real_catalog_artifact_review_and_signing_reach_published(self):
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker"],

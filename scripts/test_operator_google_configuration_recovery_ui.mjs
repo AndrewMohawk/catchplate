@@ -6,13 +6,13 @@ import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import vm from 'node:vm';
 
-const ASSETS = new URL('../serverware/operator_demo_web/', import.meta.url);
+const ASSETS = new URL('../catchplate/operator_demo_web/', import.meta.url);
 const SOURCE = ['workspace_core.js', 'workspace_google.js', 'workspace_upstreams.js', 'workspace_google_configuration.js']
   .map(name => readFileSync(new URL(name, ASSETS), 'utf8')).join('\n');
 const HTML = readFileSync(new URL('index.html', ASSETS), 'utf8');
 const PATH = '/api/operator-demo/oauth/google/configuration/v2';
-const KEY = 'serverware.operator.google.configuration.operation.v2';
-const RECOVERY_KEY = 'serverware.operator.mutation.review.v1';
+const KEY = 'catchplate.operator.google.configuration.operation.v2';
+const RECOVERY_KEY = 'catchplate.operator.mutation.review.v1';
 const ID = '11111111-1111-4111-8111-111111111111';
 const OWNER = '22222222-2222-4222-8222-222222222222';
 const ORIGIN = 'https://operator.example.com';
@@ -24,28 +24,28 @@ const OLD = {allowed_upstreams: ['https://demo-upstream:8443'], fixture_cidrs: [
 const TARGET = {...OLD, allowed_upstreams: [...OLD.allowed_upstreams, 'https://gmail.googleapis.com']};
 const hash = character => 'sha256:' + character.repeat(64);
 const clone = value => JSON.parse(JSON.stringify(value));
-const profile = {schema: 'serverware.operatorGoogleProfile/v1', profile: 'operator-google-v1', provider_id: 'google',
+const profile = {schema: 'catchplate.operatorGoogleProfile/v1', profile: 'operator-google-v1', provider_id: 'google',
   client_id: CLIENT, redirect_uri: ORIGIN + '/api/oauth/callback/google', permission_preset: 'gmail_readonly', scopes: SCOPES,
   api_origins: ['https://gmail.googleapis.com'], authorization_url: 'https://accounts.google.com/o/oauth2/v2/auth',
   token_url: 'https://oauth2.googleapis.com/token', revocation_url: 'https://oauth2.googleapis.com/revoke',
   identity_url: 'https://openidconnect.googleapis.com/v1/userinfo'};
 function operation(status = 'pending') {
-  const value = {schema: 'serverware.operatorGoogleManagedSetup/v2', operation_id: ID, client_id: CLIENT,
+  const value = {schema: 'catchplate.operatorGoogleManagedSetup/v2', operation_id: ID, client_id: CLIENT,
     old_settings: clone(OLD), target_settings: clone(TARGET), expected_settings_digest: hash('b'), public_url: ORIGIN,
     redirect_uri: profile.redirect_uri, profile_binding: clone(profile), profile_binding_digest: hash('c'),
     reviewed_revision: 7, staged_revision: 8, policy_hash: hash('a'), created_at: '2026-10-10T12:00:00Z',
-    setup_contract: 'serverware.operatorGoogleManagedSetupBinding/v2',
+    setup_contract: 'catchplate.operatorGoogleManagedSetupBinding/v2',
     custody_ref: {owner_id: OWNER, config_version: 1, key_source: 'operator-provider-key-v1'}, secret_present: true,
     status, revision: status === 'pending' ? 8 : 9,
     completed_at: status === 'pending' ? null : '2026-10-10T12:01:00Z', activation_receipt: null};
-  if (status === 'activated') value.activation_receipt = {schema: 'serverware.operatorGoogleSetupActivation/v1',
+  if (status === 'activated') value.activation_receipt = {schema: 'catchplate.operatorGoogleSetupActivation/v1',
     operation_id: ID, activated_revision: 9, policy_hash: hash('a'), profile_binding_digest: hash('c'),
     settings_digest: hash('d'), activated_at: value.completed_at};
   return value;
 }
 function discovery(op) {
   const state = op.status === 'cancelled' ? 'unconfigured' : op.status;
-  return {schema: 'serverware.operatorGoogleConfiguration/v2', state, revision: op.revision, policy_hash: hash('a'),
+  return {schema: 'catchplate.operatorGoogleConfiguration/v2', state, revision: op.revision, policy_hash: hash('a'),
     effective_settings: clone(state === 'activated' ? TARGET : OLD),
     effective_settings_digest: state === 'activated' ? hash('d') : hash('b'), public_url: ORIGIN,
     redirect_uri: profile.redirect_uri, permission_preset: 'gmail_readonly', scopes: [...SCOPES],

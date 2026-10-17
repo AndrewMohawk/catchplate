@@ -24,7 +24,7 @@ not resolve the handoff requirement.
 
 ## Current candidate evidence
 
-Candidate `serverware-production-dependencies-linux-amd64-v3-candidate-cba01916`
+Candidate `catchplate-production-dependencies-linux-amd64-v3-candidate-cba01916`
 was prepared successfully from source commit
 `cba01916ef4353e92fa5c3ee56396eab1c6a5951`: **245 Rust crates and 31 Python
 wheels**. It remains **unpublished and unreviewed**; canonical reviewed dependency
@@ -63,7 +63,7 @@ also exactly match this checkout. **No candidate regeneration is needed for thes
 inputs.** This does not rebind the original preparation report to the newer source.
 
 The retained candidate is under the operator's home directory at
-`codex-offload/serverware/dependency-candidates/serverware-production-dependencies-linux-amd64-v3-candidate-cba01916/`.
+`codex-offload/catchplate/dependency-candidates/catchplate-production-dependencies-linux-amd64-v3-candidate-cba01916/`.
 Canonical `production-dependencies/*.sha256` still select the older snapshot;
 Python/Rust source and archive pins are stale, while musl/Debian hashes are unchanged.
 The checkout's `production-dependencies/cache/` currently contains only
@@ -130,7 +130,7 @@ The existing cache supplies the reviewed musl and broker-tool inputs. When Rust
 refresh is omitted, it must also supply the unchanged reviewed vendor archive:
 
 ```text
-/home/catchplate/codex-offload/serverware/current/production-dependencies/cache
+/home/catchplate/codex-offload/catchplate/current/production-dependencies/cache
 ```
 
 The directory's location and filenames do not prove integrity. The producer
@@ -169,8 +169,8 @@ docker pull --platform linux/amd64 \
 snapshot_workdir="$(mktemp -d /srv/catchplate-fast/tmp/serverware-dependency-candidate.XXXXXX)"
 python3 -B production-dependencies/prepare_snapshot.py \
   --expected-commit '<full-frozen-commit-id>' \
-  --existing-cache /home/catchplate/codex-offload/serverware/current/production-dependencies/cache \
-  --snapshot-id serverware-production-dependencies-linux-amd64-v3 \
+  --existing-cache /home/catchplate/codex-offload/catchplate/current/production-dependencies/cache \
+  --snapshot-id catchplate-production-dependencies-linux-amd64-v3 \
   --refresh-rust \
   --output "$snapshot_workdir/candidate"
 ```

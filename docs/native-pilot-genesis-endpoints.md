@@ -12,7 +12,7 @@ The fixed `--parked-genesis-endpoints` native controller creates exactly two
 parked children: `publicationGenesisRetrieval` and `publicationGenesis`.
 It exports their actual PIDFDs and sealed-executable observations. It does not
 select any hot-cohort role. A separately pinned root control and protected
-`/etc/serverware/native-publication-genesis-endpoints.json` authorize creation;
+`/etc/catchplate/native-publication-genesis-endpoints.json` authorize creation;
 the coordinator's signed precreation supplies the original window, not endpoint
 selection or permission to load keys. This deliberately avoids another
 precreation signature that would add no authority to the protected selection.
@@ -115,7 +115,7 @@ An offline compiler check is not native runtime acceptance or an approved
 release artifact.
 
 Exact archives, commands, logs and checksums are retained at
-`codex-offload/serverware/engineering-builds/8e9459d5-genesis-endpoints-jApq7d/`.
+`codex-offload/catchplate/engineering-builds/8e9459d5-genesis-endpoints-jApq7d/`.
 No cloud resource, paid test or broad unchanged test suite was used.
 
 The next [cold launch and coordinator assembly slice](native-pilot-genesis-assembly.md)

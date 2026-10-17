@@ -2,7 +2,7 @@
 use super::super::Sha256Digest;
 use serde::{Deserialize, Serialize};
 
-pub(super) const API: &str = "serverware.custodyOrdinaryPeerInspectionExchange/v1";
+pub(super) const API: &str = "catchplate.custodyOrdinaryPeerInspectionExchange/v1";
 pub(super) const MAX_IPC: usize = 4096;
 
 #[derive(Serialize, Deserialize)]

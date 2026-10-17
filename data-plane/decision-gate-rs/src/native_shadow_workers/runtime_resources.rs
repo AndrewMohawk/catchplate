@@ -10,12 +10,12 @@ use std::{cell::Cell, fs::File, os::fd::{AsRawFd, OwnedFd},
     os::unix::fs::{FileExt, MetadataExt}, time::{SystemTime, UNIX_EPOCH}};
 
 const PROFILE: &str = "trusted-host-local";
-const POLICY_API: &str = "serverware.nativeShadowRuntimeAttestationPolicy/v1";
+const POLICY_API: &str = "catchplate.nativeShadowRuntimeAttestationPolicy/v1";
 const MAX_POLICY: u64 = 64 * 1024;
 const MAX_ROOTS: u64 = 1024 * 1024;
 const MAX_BOOTSTRAP: u64 = 256 * 1024;
 const SEALS: i32 = libc::F_SEAL_SEAL | libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK;
-pub const EXECUTABLE: &str = "/usr/local/bin/serverware-native-runtime-attestation-verifier";
+pub const EXECUTABLE: &str = "/usr/local/bin/catchplate-native-runtime-attestation-verifier";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all="camelCase", deny_unknown_fields)]
@@ -72,7 +72,7 @@ impl Configuration {
     pub(super) fn inherited_fds(&self) -> [i32; 3] { [self.policy_fd, self.trust_roots_fd, self.signing_key_fd] }
     pub(super) fn validate(&self) -> Result<(), String> {
         let fds = self.inherited_fds();
-        require(self.api_version == "serverware.nativeShadowRuntimeResources/v1" && self.profile == PROFILE
+        require(self.api_version == "catchplate.nativeShadowRuntimeResources/v1" && self.profile == PROFILE
             && wire::hash(&self.policy_sha256) && wire::hash(&self.trust_roots_sha256)
             && fds.iter().all(|fd| *fd >= 12)
             && fds.iter().enumerate().all(|(i, fd)| !fds[..i].contains(fd)))
@@ -127,7 +127,7 @@ fn key(original: &Original, pins: &RuntimeAuthorityPins) -> Result<SigningKey, S
 impl Bootstrap {
     fn validate(&self) -> Result<(), String> {
         self.pins.validate()?;
-        require(self.api_version == "serverware.nativeShadowRuntimeBootstrap/v1" && self.profile == PROFILE
+        require(self.api_version == "catchplate.nativeShadowRuntimeBootstrap/v1" && self.profile == PROFILE
             && !self.policy_original.is_empty() && self.policy_original.len() <= MAX_POLICY as usize
             && wire::sha(self.policy_original.as_bytes()) == self.pins.policy_sha256
             && wire::hash(&self.trust_roots_sha256) && self.opening_unix_nanos >= self.pins.not_before_unix_nanos
@@ -172,7 +172,7 @@ impl ColdResources {
             .map_err(|_| "runtime wall clock unavailable")?.as_nanos()).map_err(|_| "runtime epoch overflow")?;
         let policy_raw = policy.bytes()?; let roots_raw = roots.bytes()?;
         require(wire::sha(&policy_raw) == config.policy_sha256 && wire::sha(&roots_raw) == config.trust_roots_sha256)?;
-        let cold = Bootstrap { api_version: "serverware.nativeShadowRuntimeBootstrap/v1".into(), profile: PROFILE.into(),
+        let cold = Bootstrap { api_version: "catchplate.nativeShadowRuntimeBootstrap/v1".into(), profile: PROFILE.into(),
             policy_original: String::from_utf8(policy_raw).map_err(|_| "runtime policy original is not UTF8")?,
             trust_roots_sha256: config.trust_roots_sha256, pins, opening_unix_nanos: opening_epoch,
             opening_boottime_ns: opening_boot, deadline_boottime_ns: deadline };
@@ -234,7 +234,7 @@ impl WorkerResources {
     }
     pub(super) fn job(&self, deadline: u64, input_sha256: &str) -> Result<JobTransfer, String> {
         self.check()?; require(wire::hash(input_sha256))?; self.cold.current(deadline)?;
-        let original = JobBootstrap { api_version: "serverware.nativeShadowRuntimeJob/v1".into(),
+        let original = JobBootstrap { api_version: "catchplate.nativeShadowRuntimeJob/v1".into(),
             cold: self.cold.clone(), input_sha256: input_sha256.into(), deadline_boottime_ns: deadline };
         let bootstrap = Sealed::new(&wire::encode(&original)?, false)?;
         let descriptors = [ipc::duplicate(bootstrap.file.as_raw_fd())?, ipc::duplicate(self.key.file.as_raw_fd())?,
@@ -263,7 +263,7 @@ impl JobResources {
         let raw = held.bytes()?;
         let bootstrap = Sealed::receive(held.file, super::UID, raw.len() as u64, &wire::sha(&raw), false)?;
         let original: JobBootstrap = wire::decode(&raw)?;
-        require(original.api_version == "serverware.nativeShadowRuntimeJob/v1" && wire::hash(&original.input_sha256))?;
+        require(original.api_version == "catchplate.nativeShadowRuntimeJob/v1" && wire::hash(&original.input_sha256))?;
         original.cold.validate()?; original.cold.current(original.deadline_boottime_ns)?;
         let key_original = Original::open(File::from(ipc::inherited(4)?), 0, 0o400, 32)?;
         let roots = Original::open(File::from(ipc::inherited(5)?), 0, 0o400, MAX_ROOTS)?;

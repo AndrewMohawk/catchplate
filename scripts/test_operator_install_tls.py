@@ -90,7 +90,7 @@ class TlsInstallTests(unittest.TestCase):
         self.install_fixture()
 
     def install_fixture(self):
-        configuration = config.validate({"schema": config.SCHEMA, "project_name": "serverware-tls-test",
+        configuration = config.validate({"schema": config.SCHEMA, "project_name": "catchplate-tls-test",
             "state_dir": str(self.instance), "console_origin": "https://" + HOSTS[0],
             "proxy_origin": "https://" + HOSTS[1], "allowed_upstreams": ["https://api.github.com"],
             "tls_certificate": str(self.cert_path), "tls_private_key": str(self.key_path),
@@ -105,7 +105,7 @@ class TlsInstallTests(unittest.TestCase):
             self.manifest = {"schema": state.SCHEMA, "config": configuration,
                 "instance_id": "11111111-1111-4111-8111-111111111111",
                 "images": {key: {"id": configuration[key + "_image"]} for key in ("paired", "edge")},
-                "artifact": {"schema": "serverware.standaloneArtifact/v1", "sourceRevision": "a" * 40,
+                "artifact": {"schema": "catchplate.standaloneArtifact/v1", "sourceRevision": "a" * 40,
                     **{name: "sha256:" + "3" * 64 for name in ("sourceTreeDigest", "compilerInputsDigest", "dataPlaneBinaryDigest")}},
                 "files": {name: state.digest(data) for name, data in contents.items()}}
             state.write_manifest(self.instance, self.manifest, exclusive=True)
@@ -180,7 +180,7 @@ class TlsInstallTests(unittest.TestCase):
 
     def test_stopped_edge_replacement_updates_only_tls_pins_and_keeps_recoverable_private_backup(self):
         result = self.replace()
-        self.assertEqual(result["schema"], "serverware.standaloneResult/v1")
+        self.assertEqual(result["schema"], "catchplate.standaloneResult/v1")
         self.assertEqual(result["operation"], "replace-tls"); self.assertEqual(result["status"], "stopped")
         self.assertEqual(result["services"], {"edge": "stopped_unchanged"}); self.assertIsNone(result["tls"])
         changed = state.load_manifest(self.instance)
@@ -290,7 +290,7 @@ class TlsInstallTests(unittest.TestCase):
         with patch.object(lifecycle, "_compose", return_value=json.dumps(expected).encode()) as compose:
             self.assertEqual(tls._probe_served_tls(self.manifest, self.new_certificate), expected)
             args = compose.call_args.args
-            self.assertEqual(args[1:8], ("exec", "-T", "serverware", "python", "-I", "-B", "-c"))
+            self.assertEqual(args[1:8], ("exec", "-T", "catchplate", "python", "-I", "-B", "-c"))
             self.assertEqual(json.loads(args[-1]), [list(HOSTS), expected_pin])
             self.assertIn("('edge',8443)", args[-2])
             self.assertIn("actual!=pin", args[-2])

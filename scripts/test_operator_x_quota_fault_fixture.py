@@ -79,13 +79,13 @@ class FaultFixtureTests(unittest.TestCase):
             recipe.validate(config, *ARGS, **PINS, fault_mode=mode)
             expected = deepcopy(original)
             services = expected["services"]
-            for name in ("serverware", "decision-gate-rs"):
-                services[name]["environment"]["SERVERWARE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED"] = "1"
+            for name in ("catchplate", "decision-gate-rs"):
+                services[name]["environment"]["CATCHPLATE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED"] = "1"
             services["provider"]["command"] += ["--profile", "fault"]
             services["x-post-pki"]["command"] += ["--profile", "fault"]
             services["check"]["command"][0] = "/app/scripts/check_operator_x_quota_fault.py"
             services["check"]["command"] += ["--fault-mode", mode]
-            services["serverware"]["environment"]["SERVERWARE_WEB_HOST"] = "127.0.0.1"
+            services["catchplate"]["environment"]["CATCHPLATE_WEB_HOST"] = "127.0.0.1"
             gate_hosts = next(row for row in services["decision-gate-rs"]["volumes"]
                 if row["target"] == "/etc/hosts")
             gate_hosts["source"] = str(ARGS[3] / "runtime/upstream-data/x-network/hosts-fault-gate")
@@ -93,8 +93,8 @@ class FaultFixtureTests(unittest.TestCase):
             relay = without_relay["services"].pop("quota-relay")
             self.assertEqual(without_relay, expected)
             self.assertEqual(config["services"]["decision-gate-rs"]["environment"]
-                ["SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL"],
-                "http://serverware:3000/api/data-plane/credential-leases")
+                ["CATCHPLATE_CONTROL_PLANE_CREDENTIAL_LEASE_URL"],
+                "http://catchplate:3000/api/data-plane/credential-leases")
             for name, service in config["services"].items():
                 for mount in service["volumes"]:
                     if mount["target"] == "/etc/hosts":
@@ -104,7 +104,7 @@ class FaultFixtureTests(unittest.TestCase):
             self.assertEqual(set(config["services"]), set(original["services"]) | {"quota-relay"})
             self.assertEqual(relay["command"], ["python", "-B", "-m", "scripts.operator_x_quota_fault_relay",
                 "--lifetime-seconds", "240"])
-            self.assertEqual(relay["depends_on"], {"serverware": {"condition": "service_healthy"}})
+            self.assertEqual(relay["depends_on"], {"catchplate": {"condition": "service_healthy"}})
             self.assertEqual((relay["cpus"], relay["mem_limit"], relay["memswap_limit"], relay["pids_limit"]),
                 (0.25, "128m", "128m", 32))
             self.assertEqual({row["target"] for row in relay["volumes"]},
@@ -131,7 +131,7 @@ class FaultFixtureTests(unittest.TestCase):
         self.assertEqual((recipe.INITIAL_TOKEN_SECONDS, recipe.CHECKER_SECONDS, recipe.KEEPER_SECONDS,
             recipe.EDGE_SECONDS, recipe.FAULT_RELAY_SECONDS, runner.WORK_SECONDS), (120, 180, 300, 240, 240, 390))
 
-    def test_fault_gate_hosts_change_only_serverware_and_recipe_refuses_other_wiring(self):
+    def test_fault_gate_hosts_change_only_catchplate_and_recipe_refuses_other_wiring(self):
         def mapping(raw):
             result = {}
             for line in raw.decode("ascii").splitlines():
@@ -141,10 +141,10 @@ class FaultFixtureTests(unittest.TestCase):
                     result[name] = address
             return result
         original = mapping(network.HOSTS)
-        self.assertEqual(original["serverware"], "127.0.0.1")
+        self.assertEqual(original["catchplate"], "127.0.0.1")
         self.assertEqual(network.FAULT_GATE_HOSTS_NAME, "hosts-fault-gate")
         self.assertEqual(network.FAULT_GATE_IP, "127.0.0.2")
-        self.assertEqual(mapping(network.FAULT_GATE_HOSTS), dict(original, serverware="127.0.0.2"))
+        self.assertEqual(mapping(network.FAULT_GATE_HOSTS), dict(original, catchplate="127.0.0.2"))
         config = recipe.build(*ARGS, **PINS, fault_mode="drop-ack")
         for target, value in (("source", "/synthetic/wrong-hosts"), ("read_only", False)):
             changed = deepcopy(config)
@@ -153,9 +153,9 @@ class FaultFixtureTests(unittest.TestCase):
             mount[target] = value
             with self.subTest(target=target), self.assertRaises(ValueError):
                 recipe.validate(changed, *ARGS, **PINS, fault_mode="drop-ack")
-        for service, field, value in (("serverware", "SERVERWARE_WEB_HOST", "0.0.0.0"),
-                ("decision-gate-rs", "SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL",
-                    "http://serverware:3001/api/data-plane/credential-leases")):
+        for service, field, value in (("catchplate", "CATCHPLATE_WEB_HOST", "0.0.0.0"),
+                ("decision-gate-rs", "CATCHPLATE_CONTROL_PLANE_CREDENTIAL_LEASE_URL",
+                    "http://catchplate:3001/api/data-plane/credential-leases")):
             changed = deepcopy(config); changed["services"][service]["environment"][field] = value
             with self.subTest(field=field), self.assertRaises(ValueError):
                 recipe.validate(changed, *ARGS, **PINS, fault_mode="drop-ack")
@@ -192,11 +192,11 @@ class FaultFixtureTests(unittest.TestCase):
             ["network.prepare_network_files(fault_gate=fault_gate)"])
 
     def test_gate_network_proof_is_explicit_and_provider_view_remains_strict(self):
-        def prove(view, hosts, *, wrong_serverware=False):
+        def prove(view, hosts, *, wrong_catchplate=False):
             mapping = {name: line.split()[0] for line in hosts.decode("ascii").splitlines()
                 for name in line.split()[1:]}
-            if wrong_serverware:
-                mapping["serverware"] = "127.0.0.1"
+            if wrong_catchplate:
+                mapping["catchplate"] = "127.0.0.1"
             paths = {"/etc/hosts": hosts, "/etc/resolv.conf": network.RESOLV}
             with patch.object(network.isolated, "assert_isolated_network") as base, \
                     patch.object(network, "Path", side_effect=lambda path: Mock(read_bytes=Mock(return_value=paths[path]))), \
@@ -215,7 +215,7 @@ class FaultFixtureTests(unittest.TestCase):
                 ("fault-gate", network.FAULT_GATE_HOSTS + b"127.0.0.1 extra\n", False),
                 ("alternate", network.HOSTS, False)):
             with self.subTest(view=view, wrong=wrong), self.assertRaises(ValueError):
-                prove(view, hosts, wrong_serverware=wrong)
+                prove(view, hosts, wrong_catchplate=wrong)
         with self.assertRaises(ValueError):
             network.assert_isolated_network(attached=False, view="fault-gate")
 
@@ -227,7 +227,7 @@ class FaultFixtureTests(unittest.TestCase):
             self.assertEqual(flow.revoke(token, hint)[0], 200)
         view = flow.state.observations()
         self.assertEqual(set(view), set(Flow().state.observations()))
-        self.assertEqual(view["schema"], "serverware.privateXQuotaFaultProvider/v1")
+        self.assertEqual(view["schema"], "catchplate.privateXQuotaFaultProvider/v1")
         self.assertEqual(view["counts"], {"total": 5, "authorize": 1, "code": 1, "refresh": 0,
             "identity": 1, "revoke": 2, "posts": 0, "rejected": 0})
         self.assertEqual(view["issuedGenerations"], [1]); self.assertEqual(view["posts"], [])
@@ -288,7 +288,7 @@ class FaultFixtureTests(unittest.TestCase):
             value.command = record
             value.public_view = lambda *a, **kw: record("publication", *a, **kw)
             value.container_rows = Mock(return_value=[{"Id": IDS[name], "Config": {"Labels": {
-                "com.docker.compose.service": name}}} for name in ("network", "provider", "serverware")])
+                "com.docker.compose.service": name}}} for name in ("network", "provider", "catchplate")])
             if failure is None:
                 value.start_app_then_gate(["docker", "compose"])
                 self.assertEqual([row[0] for row in calls], ["app-start", "publication", "fault-relay-start", "gate-start"])

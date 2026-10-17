@@ -61,7 +61,7 @@ def keywords(node):
 class RevocationHandoffSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.helper_source, cls.helper = read("serverware/authority_revocation_handoff.py", 64 * 1024)
+        cls.helper_source, cls.helper = read("catchplate/authority_revocation_handoff.py", 64 * 1024)
         cls.worker = definition(cls.helper, "_verify_observed_plan_handoff_on_work")
 
     def shape(self, actual, expected):
@@ -90,9 +90,9 @@ class RevocationHandoffSourceTests(unittest.TestCase):
             ("datetime", "datetime"), ("datetime", "timedelta"), ("datetime", "timezone"),
             ("cryptography.exceptions", "InvalidSignature"),
             ("cryptography.hazmat.primitives.asymmetric.ed25519", "Ed25519PublicKey"),
-            ("serverware.authority_query_read_work", "QueryReadValidationMetrics"),
-            ("serverware.authority_query_read_work", "_ValidationWork"),
-            *(('serverware', name) for name in (
+            ("catchplate.authority_query_read_work", "QueryReadValidationMetrics"),
+            ("catchplate.authority_query_read_work", "_ValidationWork"),
+            *(('catchplate', name) for name in (
                 "authority_revocation_capability", "authority_revocation_observed",
                 "authority_revocation_plan", "authority_revocation_retention", "authority_revocation_wire"))})
 
@@ -129,7 +129,7 @@ class RevocationHandoffSourceTests(unittest.TestCase):
             self.assertIn(guard, ast.unparse(self.worker))
         # The fourteen-field validator is the real source-owned validator, not
         # a fake expectedBefore graph used to make a full-context call succeed.
-        _source, observed = read("serverware/authority_revocation_observed.py")
+        _source, observed = read("catchplate/authority_revocation_observed.py")
         self.shape(assigned(observed, "_PARTIAL_CONTEXT_FIELDS"), 'production._CONTEXT_FIELDS - {"expectedBefore"}')
         self.shape(call(definition(observed, "_validate_partial_context"), "plan._expectation_context"),
             'plan._expectation_context(context)')
@@ -166,7 +166,7 @@ class RevocationHandoffSourceTests(unittest.TestCase):
         self.shape(comparisons[0].args[1], 'expected_source')
         self.shape(comparisons[1].args[0], '{name: authorization[name] for name in expected_authorization}')
         self.shape(comparisons[1].args[1], 'expected_authorization')
-        _source, capability = read("serverware/authority_revocation_capability.py")
+        _source, capability = read("catchplate/authority_revocation_capability.py")
         signature = definition(capability, "_signature")
         self.shape(call(signature, "key.verify"), 'key.verify(signature, message)')
         self.assertLess(call(signature, "key.verify").lineno,
@@ -219,13 +219,13 @@ class RevocationHandoffSourceTests(unittest.TestCase):
         self.assertEqual(calls(self.helper, "observed._read_revocation_root_inventory_on_work"), [])
         # Matching candidate identifiers is not successful proof admission:
         # the unchanged real worker checks exact read/write union and effects.
-        _source, mixed = read("serverware/authority_complete_read_write.py")
+        _source, mixed = read("catchplate/authority_complete_read_write.py")
         verify = definition(mixed, "_verify")
         self.shape(assigned(verify, "expected_union"), 'tuple(sorted(set(read_ids) | set(write_ids)))')
         union_guard = next(node for node in verify.body if isinstance(node, ast.If))
         self.shape(union_guard.test, 'tuple(item["indexId"] for item in owned["countedBeforeHeads"]) != expected_union')
         self.assertIsInstance(union_guard.body[0], ast.Raise)
-        _source, semantics = read("serverware/authority_revocation_semantics.py")
+        _source, semantics = read("catchplate/authority_revocation_semantics.py")
         replay = definition(semantics, "_verify")
         self.assertLess(call(replay, "retained._compute_and_package").lineno,
             call(replay, "_derive_revocation_effects").lineno)
@@ -258,7 +258,7 @@ class RevocationHandoffSourceTests(unittest.TestCase):
         self.assertEqual([node.target.id for node in metrics.body if isinstance(node, ast.AnnAssign)], [
             "capture", "transport", "authentication", "bindings", "projection", "replay",
             "planner_signature_attempts", "semantic_replays", "total_hashes", "total_input_bytes", "total_json_nodes"])
-        _source, retained = read("serverware/authority_revocation_retention.py")
+        _source, retained = read("catchplate/authority_revocation_retention.py")
         actual = definition(retained, "_verify_record_on_work")
         owns = call(actual, "capture._JSONCapture(ledger).visit")
         genuine = call(actual, "plan._verify_signed_revocation_plan_on_work")
@@ -271,7 +271,7 @@ class RevocationHandoffSourceTests(unittest.TestCase):
             "retained context differs from independently supplied historical expectations")''')
 
     def test_actual_service_dispatch_and_role_credentials_do_not_activate_handoff(self):
-        service_source, service = read("serverware/authority_service.py", 2 * 1024 * 1024)
+        service_source, service = read("catchplate/authority_service.py", 2 * 1024 * 1024)
         process = definition(service, "AuthorityProcess")
         handle = definition(process, "handle")
         admissions = calls(handle, "self._verify_internal_envelope")
@@ -287,11 +287,11 @@ class RevocationHandoffSourceTests(unittest.TestCase):
         self.shape(assigned(serving, "response"), 'self.process.handle(request)')
         credentials = definition(process, "_reject_wrong_credentials")
         self.shape(assigned(credentials, "allowed"), '''{
-            "verifier": {"SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN_FD"},
-            "planner": {"SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN_FD"},
-            "planner-writer": {"SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN_FD"},
-            "issuer": {"SERVERWARE_POLICY_AUTHORITY_CAPABILITY_ISSUER_POSTGRES_DSN_FD"},
-            "executor": {"SERVERWARE_POLICY_AUTHORITY_EXECUTOR_POSTGRES_DSN_FD"}}[self.role_name]''')
+            "verifier": {"CATCHPLATE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN_FD"},
+            "planner": {"CATCHPLATE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN_FD"},
+            "planner-writer": {"CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN_FD"},
+            "issuer": {"CATCHPLATE_POLICY_AUTHORITY_CAPABILITY_ISSUER_POSTGRES_DSN_FD"},
+            "executor": {"CATCHPLATE_POLICY_AUTHORITY_EXECUTOR_POSTGRES_DSN_FD"}}[self.role_name]''')
         self.assertNotIn("authority_revocation_handoff", service_source)
         self.assertNotIn("produce_observed_and_persist_with_cutoff", service_source)
         self.assertNotIn("RevocationPlanningCoordinator", service_source)

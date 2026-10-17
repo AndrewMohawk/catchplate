@@ -58,18 +58,18 @@ class ConfigurationTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory(prefix="x-post-config-offline-")
         self.addCleanup(directory.cleanup)
-        self.path = Path(directory.name) / "serverware-client.private.json"
-        self.local = {"SERVERWARE_X_POST_TEXT": TEXT, "SERVERWARE_X_POST_CONFIRM": "post-once"}
+        self.path = Path(directory.name) / "catchplate-client.private.json"
+        self.local = {"CATCHPLATE_X_POST_TEXT": TEXT, "CATCHPLATE_X_POST_CONFIRM": "post-once"}
         self.value = {"application_id": APP_ID, "access_rule_id": "00000000-0000-4000-8000-000000000002",
             "proxy_authentication": "basic_and_bearer_v1", "proxy_username": APP_ID, "proxy_password": TOKEN,
             "proxy_url": "https://proxy.example.test:8443", "token_expires_at_epoch_ms": 2**53 - 1,
-            "ca_file": "./serverware-ca.pem", "proxy_ca_file": None, "operation_bundle": "x_text_post_v1",
+            "ca_file": "./catchplate-ca.pem", "proxy_ca_file": None, "operation_bundle": "x_text_post_v1",
             "upstream_url": "https://api.x.com/2/tweets", "methods": ["POST"],
             "credential_input": "replace_exact", "response_mode": "x_post_json_v1",
             "request_headers": {"Authorization": "ignored"}, "request_body": {"text": "not local text"},
-            "SERVERWARE_X_POST_TEXT": "not local text", "SERVERWARE_X_POST_CONFIRM": "post-once",
+            "CATCHPLATE_X_POST_TEXT": "not local text", "CATCHPLATE_X_POST_CONFIRM": "post-once",
             "client_recipe": {"command": "never-execute", "confirmation_value": "post-once",
-                "environment": {"SERVERWARE_X_POST_TEXT": "not local text", "SERVERWARE_X_POST_CONFIRM": "post-once"}}}
+                "environment": {"CATCHPLATE_X_POST_TEXT": "not local text", "CATCHPLATE_X_POST_CONFIRM": "post-once"}}}
 
     def write(self, value=None):
         self.path.write_text(json.dumps(self.value if value is None else value), encoding="utf-8")
@@ -80,17 +80,17 @@ class ConfigurationTests(unittest.TestCase):
             selected = post.configuration_environment(self.write(), {**self.local, "X_ACCESS_TOKEN": "never-forward"})
         run.assert_not_called()
         self.assertEqual(set(selected), set(post.REQUIRED_ENV))
-        self.assertEqual(selected["SERVERWARE_CA_FILE"], str(self.path.parent / "serverware-ca.pem"))
-        self.assertEqual(selected["SERVERWARE_PROXY_TOKEN"], TOKEN)
-        self.assertEqual(selected["SERVERWARE_X_POST_TEXT"], TEXT)
-        self.assertEqual(selected["SERVERWARE_X_POST_CONFIRM"], "post-once")
+        self.assertEqual(selected["CATCHPLATE_CA_FILE"], str(self.path.parent / "catchplate-ca.pem"))
+        self.assertEqual(selected["CATCHPLATE_PROXY_TOKEN"], TOKEN)
+        self.assertEqual(selected["CATCHPLATE_X_POST_TEXT"], TEXT)
+        self.assertEqual(selected["CATCHPLATE_X_POST_CONFIRM"], "post-once")
         self.value["proxy_ca_file"] = "./proxy's $literal.pem"
         selected = post.configuration_environment(self.write(), self.local)
-        self.assertEqual(selected["SERVERWARE_PROXY_CA_FILE"], str(self.path.parent / "proxy's $literal.pem"))
+        self.assertEqual(selected["CATCHPLATE_PROXY_CA_FILE"], str(self.path.parent / "proxy's $literal.pem"))
 
     def test_json_cannot_supply_posting_text_or_confirmation(self):
-        for local in ({}, {"SERVERWARE_X_POST_TEXT": TEXT}, {"SERVERWARE_X_POST_CONFIRM": "post-once"},
-                {**self.local, "SERVERWARE_X_POST_CONFIRM": "true"}):
+        for local in ({}, {"CATCHPLATE_X_POST_TEXT": TEXT}, {"CATCHPLATE_X_POST_CONFIRM": "post-once"},
+                {**self.local, "CATCHPLATE_X_POST_CONFIRM": "true"}):
             with self.subTest(keys=sorted(local)), self.assertRaises(ValueError):
                 post.configuration_environment(self.write(), local)
         with patch.dict(os.environ, {}, clear=True), patch.object(post, "launch") as launch, \
@@ -128,13 +128,13 @@ class ConfigurationTests(unittest.TestCase):
         with self.assertRaises(OSError): post.configuration_environment(link, self.local)
         raw = json.dumps(self.value).encode()
         self.path.write_bytes(raw + b" " * (post.MAX_CONFIG_BYTES - len(raw)))
-        self.assertEqual(post.configuration_environment(self.path, self.local)["SERVERWARE_APP_ID"], APP_ID)
+        self.assertEqual(post.configuration_environment(self.path, self.local)["CATCHPLATE_APP_ID"], APP_ID)
 
     def test_cli_preserves_env_mode_and_uses_config_without_private_arguments(self):
         with patch.object(post, "launch", return_value=RESULT) as launch, patch("sys.stdout", io.StringIO()):
             self.assertEqual(post.main([]), 0)
             self.assertIs(launch.call_args.args[0], os.environ)
-        with patch.dict(os.environ, {**self.local, "SERVERWARE_PROXY_TOKEN": "wrong", "HTTPS_PROXY": "wrong"}, clear=True), \
+        with patch.dict(os.environ, {**self.local, "CATCHPLATE_PROXY_TOKEN": "wrong", "HTTPS_PROXY": "wrong"}, clear=True), \
                 patch.object(post, "check_versions"), patch.object(post.subprocess, "run",
                     return_value=SimpleNamespace(returncode=0, stdout=json.dumps(RESULT).encode(), stderr=b"")) as run, \
                 patch("sys.stdout", io.StringIO()):
@@ -142,7 +142,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertNotIn(TOKEN, " ".join(run.call_args.args[0]))
         self.assertNotIn(TEXT, " ".join(run.call_args.args[0]))
         self.assertNotIn("--config", run.call_args.args[0])
-        self.assertEqual(run.call_args.kwargs["env"]["SERVERWARE_X_POST_TEXT"], TEXT)
+        self.assertEqual(run.call_args.kwargs["env"]["CATCHPLATE_X_POST_TEXT"], TEXT)
         self.assertEqual(set(run.call_args.kwargs["env"]), set(post.REQUIRED_ENV))
 
     def test_bad_json_and_child_config_fail_before_launch_with_redacted_output(self):
@@ -165,9 +165,9 @@ class PostExampleTests(unittest.TestCase):
             Path(certifi.where()).read_bytes(), re.S).group()
         self.ca = Path(directory.name) / "public.pem"
         self.ca.write_bytes(self.pem)
-        self.env = {"SERVERWARE_PROXY_URL": "https://proxy.example.test:8443", "SERVERWARE_APP_ID": APP_ID,
-            "SERVERWARE_PROXY_TOKEN": TOKEN, "SERVERWARE_CA_FILE": str(self.ca),
-            "SERVERWARE_X_POST_TEXT": TEXT, "SERVERWARE_X_POST_CONFIRM": "post-once"}
+        self.env = {"CATCHPLATE_PROXY_URL": "https://proxy.example.test:8443", "CATCHPLATE_APP_ID": APP_ID,
+            "CATCHPLATE_PROXY_TOKEN": TOKEN, "CATCHPLATE_CA_FILE": str(self.ca),
+            "CATCHPLATE_X_POST_TEXT": TEXT, "CATCHPLATE_X_POST_CONFIRM": "post-once"}
 
     def test_installed_pins(self):
         post.check_versions()
@@ -188,7 +188,7 @@ class PostExampleTests(unittest.TestCase):
         self.assertEqual((request.method, request.url), ("POST", "https://api.x.com/2/tweets"))
         self.assertEqual(request.body, json.dumps({"text": TEXT}, allow_nan=False).encode())
         self.assertEqual(json.loads(request.body), {"text": TEXT})
-        self.assertEqual(request.headers["Authorization"], "Bearer serverware-x-post-placeholder-v1")
+        self.assertEqual(request.headers["Authorization"], "Bearer catchplate-x-post-placeholder-v1")
         self.assertEqual(request.headers["Content-Type"], "application/json")
         self.assertEqual(request.headers["Content-Length"], str(len(request.body)))
         self.assertEqual(request.headers["User-Agent"], "xdk-python/0.10.6")
@@ -212,18 +212,18 @@ class PostExampleTests(unittest.TestCase):
             calls.append(request)
             return response(request)
         with patch.object(HTTPAdapter, "send", send):
-            self.assertEqual(post.create_post({**self.env, "SERVERWARE_X_POST_TEXT": '"' * 16378}), RESULT)
+            self.assertEqual(post.create_post({**self.env, "CATCHPLATE_X_POST_TEXT": '"' * 16378}), RESULT)
         self.assertEqual(len(calls[0].body), 32768)
 
     def test_confirmation_and_unsafe_configuration_fail_before_send(self):
-        invalid = [("SERVERWARE_X_POST_CONFIRM", ""), ("SERVERWARE_X_POST_CONFIRM", "true"),
-            ("SERVERWARE_X_POST_CONFIRM", "post-once "), ("SERVERWARE_X_POST_TEXT", ""),
-            ("SERVERWARE_PROXY_URL", "http://proxy.test"), ("SERVERWARE_PROXY_URL", "https://user:secret@proxy.test"),
-            ("SERVERWARE_PROXY_URL", "https://proxy.test/path"), ("SERVERWARE_PROXY_URL", "https://proxy.test?"),
-            ("SERVERWARE_PROXY_URL", "https://proxy.test#"), ("SERVERWARE_PROXY_URL", "https://proxy.test:0"),
-            ("SERVERWARE_PROXY_URL", "https://proxy.test:99999"), ("SERVERWARE_PROXY_URL", "https://proxy.test\n"),
-            ("SERVERWARE_APP_ID", "wrong"), ("SERVERWARE_PROXY_TOKEN", "secret\n"),
-            ("SERVERWARE_CA_FILE", "relative.pem"), ("SERVERWARE_PROXY_CA_FILE", "")]
+        invalid = [("CATCHPLATE_X_POST_CONFIRM", ""), ("CATCHPLATE_X_POST_CONFIRM", "true"),
+            ("CATCHPLATE_X_POST_CONFIRM", "post-once "), ("CATCHPLATE_X_POST_TEXT", ""),
+            ("CATCHPLATE_PROXY_URL", "http://proxy.test"), ("CATCHPLATE_PROXY_URL", "https://user:secret@proxy.test"),
+            ("CATCHPLATE_PROXY_URL", "https://proxy.test/path"), ("CATCHPLATE_PROXY_URL", "https://proxy.test?"),
+            ("CATCHPLATE_PROXY_URL", "https://proxy.test#"), ("CATCHPLATE_PROXY_URL", "https://proxy.test:0"),
+            ("CATCHPLATE_PROXY_URL", "https://proxy.test:99999"), ("CATCHPLATE_PROXY_URL", "https://proxy.test\n"),
+            ("CATCHPLATE_APP_ID", "wrong"), ("CATCHPLATE_PROXY_TOKEN", "secret\n"),
+            ("CATCHPLATE_CA_FILE", "relative.pem"), ("CATCHPLATE_PROXY_CA_FILE", "")]
         with patch.object(HTTPAdapter, "send", side_effect=AssertionError("send")) as send:
             for key, value in invalid:
                 with self.subTest(key=key), self.assertRaises((ValueError, UnicodeError)):
@@ -258,7 +258,7 @@ class PostExampleTests(unittest.TestCase):
             self.assertEqual(client.session.max_redirects, 0)
 
     def test_both_tls_contexts_remain_verified_and_separate(self):
-        with post.configured_client({**self.env, "SERVERWARE_PROXY_CA_FILE": str(self.ca)}) as client:
+        with post.configured_client({**self.env, "CATCHPLATE_PROXY_CA_FILE": str(self.ca)}) as client:
             adapter = client.session.get_adapter(post.BASE_URL)
             request = requests.Request("POST", post.BASE_URL + "/2/tweets", json={"text": TEXT}).prepare()
             pool = adapter.get_connection_with_tls_context(request, verify=client.session.verify,

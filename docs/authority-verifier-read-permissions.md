@@ -40,7 +40,7 @@ failure or a claim that every WebAuthn operation takes this path.
 ## Coordinated source correction
 
 `authority_contract.VERIFIER_READ_CONTRACT` identifies
-`serverware.policyAuthorityVerifierRead/v2`; its frozen `VERIFIER_READ_TABLES`
+`catchplate.policyAuthorityVerifierRead/v2`; its frozen `VERIFIER_READ_TABLES`
 contains only the four evidence tables and two root/head tables above. The
 database facade uses that set directly. An evidence-only v1 installation lacks
 required SELECT permissions and must fail the v2 admission; it is not silently

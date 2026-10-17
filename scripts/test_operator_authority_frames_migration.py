@@ -82,10 +82,10 @@ class FramesMigrationTest(fixture.AuthoritySourceRevisionMigrationTests):
         started = datetime.now(timezone.utc)
         self.child("--cold-start", self.directory, expected=fixture.START_OUTPUT)
         finished, started_state = datetime.now(timezone.utc), self.logical()
-        rows = started_state["rows"]["serverware_store_migrations"]
+        rows = started_state["rows"]["catchplate_store_migrations"]
         name_index, time_index = rows["columns"].index("migration"), rows["columns"].index("applied_at")
         selected = [row for row in rows["values"] if row[name_index] == ["str", "policy_candidate_authority"]]
-        prior = [row for row in after["rows"]["serverware_store_migrations"]["values"]
+        prior = [row for row in after["rows"]["catchplate_store_migrations"]["values"]
             if row[name_index] == ["str", "policy_candidate_authority"]]
         self.assertEqual((len(selected), len(prior)), (1, 1))
         observed = datetime.fromisoformat(selected[0][time_index][1])
@@ -112,7 +112,7 @@ if __name__ == "__main__":
         suite = unittest.TestSuite([FramesMigrationTest("test_frames_transition")])
         result = unittest.TextTestRunner(verbosity=2).run(suite)
         ok = result.wasSuccessful() and result.testsRun == 1 and not result.skipped
-        print(json.dumps({"schema": "serverware.operatorAuthorityFramesTest/v1", "ok": ok,
+        print(json.dumps({"schema": "catchplate.operatorAuthorityFramesTest/v1", "ok": ok,
             "tests": result.testsRun, "coldStarts": 1 if ok else 0,
             "oldCommit": migration.OLD_COMMIT, "targetCommit": migration.TARGET_COMMIT,
             "liveStateMounted": False, "providerRequests": 0}, sort_keys=True))

@@ -65,10 +65,10 @@ binding; it cannot be transplanted to another database, generation, fence,
 nonce, timestamp or initialization ancestry.
 
 The fixed envelope schemas are
-`serverware.metadataAuditInitializationCheckpoint/v1` and
-`serverware.metadataAuditInitializationAuthorization/v1`. Their payload schemas
-are respectively `serverware.metadataAuditInitializationCheckpointPayload/v1`
-and `serverware.metadataAuditInitializationAuthorizationPayload/v1`.
+`catchplate.metadataAuditInitializationCheckpoint/v1` and
+`catchplate.metadataAuditInitializationAuthorization/v1`. Their payload schemas
+are respectively `catchplate.metadataAuditInitializationCheckpointPayload/v1`
+and `catchplate.metadataAuditInitializationAuthorizationPayload/v1`.
 Their purposes are `metadata-audit-initialization-checkpoint` and
 `metadata-audit-initialization-authorization`. These are separate from migration,
 artifact-generation, replay-witness and audit-inclusion purposes; none of those
@@ -78,12 +78,12 @@ Each envelope is exactly `schema`, `payload`, `signerKeyId`, `algorithm` and
 `signatureBase64Url`; the algorithm is Ed25519 and the key ID is SHA-256 of the
 canonical DER SPKI. Signing covers the ASCII `sha256:` digest of the canonical
 payload, using the fixed role's
-`serverware.metadataAuditInitializationCheckpointSignature/v1` or
-`serverware.metadataAuditInitializationAuthorizationSignature/v1` domain.
+`catchplate.metadataAuditInitializationCheckpointSignature/v1` or
+`catchplate.metadataAuditInitializationAuthorizationSignature/v1` domain.
 The artifact hash function length-prefixes both the domain and each frame.
 The exact original signed envelopes are separately committed with the matching
 `CheckpointEnvelope/v1` or `AuthorizationEnvelope/v1` domain under the same
-`serverware.metadataAuditInitialization` prefix. Preparation, full-row and
+`catchplate.metadataAuditInitialization` prefix. Preparation, full-row and
 evidence digests retain the transition core's **different NUL-terminated domain**
 framing; the two conventions must not be interchanged.
 
@@ -125,7 +125,7 @@ without returning evidence. The preparation owns absence data before iterator
 invocation, so caller buffer reuse cannot alter later root arithmetic.
 
 The immutable result retains original signed bytes and the actual preparation,
-with schema `serverware.metadataAuditInitializationEvidence/v1`, the explicit
+with schema `catchplate.metadataAuditInitializationEvidence/v1`, the explicit
 verification time, envelope/preparation digests, and verification boundary
 `pinned-signatures-and-local-recomputation`. Projections return fresh owned
 graphs. Direct construction checks representation only, not signatures or

@@ -58,7 +58,7 @@ impl Owner {
     pub fn recover_exchange(&mut self, id:&str, originals:Value, deadline:u64,
         relays:&NativeUpstreamRelaysV1)->Result<Reply,String>{
         wire::fields(&originals,&["apiVersion","okForAction","exchangeOriginal","custodyOriginal"])?;
-        ensure(originals["apiVersion"]=="serverware.nativeOAuthRecoveryOriginalResponse/v1" && originals["okForAction"]==false,
+        ensure(originals["apiVersion"]=="catchplate.nativeOAuthRecoveryOriginalResponse/v1" && originals["okForAction"]==false,
             "initial recovery acquisition is not data-only")?;
         ensure(self.exchange_configuration.as_ref().is_some_and(|(config,_)|config.recovery_targets.iter().any(|item|item==id)),
             "initial recovery target is not cold-selected")?;
@@ -75,7 +75,7 @@ impl Owner {
             let mut response=document(&self.process.exchange(&canonical_ascii_bytes(&request)?,deadline)?,MAX_FRAME)?;
             let mut transport:Option<VsockStreamV1>=None;
             let mut purpose:Option<String>=None; let mut sequence=0u64; let mut total=0usize;
-            while response["apiVersion"]=="serverware.nativeOAuthExchangeTls/v1" {
+            while response["apiVersion"]=="catchplate.nativeOAuthExchangeTls/v1" {
                 wire::fields(&response,&["apiVersion","providerId","purpose","sequence","ciphertext","read"])?;
                 let actual_provider=provider.ok_or("initial TLS requires an actual prior measured preparation")?;
                 let next=response["purpose"].as_str().ok_or("initial TLS purpose")?;
@@ -97,7 +97,7 @@ impl Owner {
                 let size=if read{stream.read(&mut input).map_err(|_|"initial TLS transport read uncertain")?}else{0}; input.truncate(size);
                 total=total.checked_add(output.len()+input.len()).ok_or("initial TLS aggregate overflow")?;
                 ensure(total<=512*1024,"initial TLS aggregate bound")?; self.check(deadline)?;
-                response=document(&self.process.exchange(&canonical_ascii_bytes(&json!({"apiVersion":"serverware.nativeOAuthExchangeTls/v1",
+                response=document(&self.process.exchange(&canonical_ascii_bytes(&json!({"apiVersion":"catchplate.nativeOAuthExchangeTls/v1",
                     "sequence":sequence,"ciphertext":if input.is_empty(){Value::Null}else{json!(encoded(&input))},"eof":read&&size==0}))?,deadline)?,MAX_FRAME)?;
             }
             self.check(deadline)?; Reply::parse(response,&config,&ingress)

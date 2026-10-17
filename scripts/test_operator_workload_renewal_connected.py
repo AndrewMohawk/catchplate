@@ -43,7 +43,7 @@ from scripts.check_operator_proxy_basic import BASIC, CONNECT_DENIED, PROXY, Pro
 from scripts.operator_ordinary_client_fixture import DUMMY_AUTHORIZATION, FIXTURE_PATH, QUERY_KEYS, REQUEST_BODY
 
 PATH = "/v1/workload/renew"
-DOMAIN = b"serverware.workload-token-renewal/v1\x00POST /v1/workload/renew\x00"
+DOMAIN = b"catchplate.workload-token-renewal/v1\x00POST /v1/workload/renew\x00"
 SEED = Path("/seed-output/client.json")
 REAUTH = "data_plane.connect.reauthentication_denied"
 KEEP_ALIVE = "data_plane.connect.keep_alive"
@@ -65,7 +65,7 @@ def seed_document():
     require(set(value) == {"schema", "application_id", "client_token", "token_sha256", "original_expiry_epoch_ms",
         "created_at", "created_at_epoch_ms", "seeded_at_epoch_ms", "original_lifetime_seconds",
         "modeled_retained_age_seconds", "synthetic_retained_state", "token_generation", "proxy_authentication"}
-        and value["schema"] == "serverware.privateWorkloadRenewalSeed/v1"
+        and value["schema"] == "catchplate.privateWorkloadRenewalSeed/v1"
         and value["synthetic_retained_state"] is True and value["original_lifetime_seconds"] == 3600
         and value["modeled_retained_age_seconds"] == 3450 and value["token_generation"] == 1
         and value["proxy_authentication"] == BASIC
@@ -174,7 +174,7 @@ class RenewalCheck(ProxyBasicCheck):
         token = secrets.token_urlsafe(32)
         self.issued_tokens.append(token)
         self.credentials(self.application["id"], token)
-        fields = {"schema":"serverware.workloadTokenRenewal/v1", "audience":enrollment["audience"],
+        fields = {"schema":"catchplate.workloadTokenRenewal/v1", "audience":enrollment["audience"],
             "application_id":self.application["id"], "enrollment_id":enrollment["enrollment_id"],
             "expected_token_generation":1, "operation_id":str(uuid.uuid4()), "issued_at_epoch_ms":issued,
             "expires_at_epoch_ms":issued + 60_000, "token_sha256":digest(token.encode("ascii")),
@@ -341,7 +341,7 @@ class RenewalCheck(ProxyBasicCheck):
         self.stock(token, "fresh_manual_connection_after_cancel")
         require(self.count() == 5, "final provider dispatch inventory differs")
         audit = self.verify_audit(baseline)
-        return {"ok":True, "schema":"serverware.operatorWorkloadRenewalConnected/v1", "syntheticOnly":True,
+        return {"ok":True, "schema":"catchplate.operatorWorkloadRenewalConnected/v1", "syntheticOnly":True,
             "productionReady":False, "realProviderVerified":False, "publicOriginVerified":False,
             "dataPlaneBinaryDigest":self.args.expected_binary_sha256, "seededRetainedManualToken":True,
             "checkerStartedAtEpochMs":started_at, "checkerElapsedMonotonicMs":(time.monotonic_ns() - started) // 1_000_000,

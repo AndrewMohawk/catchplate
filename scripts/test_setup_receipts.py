@@ -21,7 +21,7 @@ from jsonschema import Draft202012Validator
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from serverware.setup_receipts import (  # noqa: E402
+from catchplate.setup_receipts import (  # noqa: E402
     COMPLETION_IDENTITY_API_VERSION,
     ENROLLMENT_CHECKS,
     ENROLLMENT_RECEIPT_API_VERSION,
@@ -52,7 +52,7 @@ from serverware.setup_receipts import (  # noqa: E402
     verify_final_challenge_receipt,
     verify_setup_hardware_verification,
 )
-from serverware.setup_receipt_service import (  # noqa: E402
+from catchplate.setup_receipt_service import (  # noqa: E402
     SetupReceiptTrustConfigurationError,
     _trusted_root,
     build_setup_receipt_trust_profile,
@@ -246,7 +246,7 @@ def final_statement(completion: Any | None = None) -> dict[str, Any]:
 
 def final_document(completion: Any | None = None) -> dict[str, Any]:
     return sign_document(
-        "serverware.finalChallengeReceipt/v1",
+        "catchplate.finalChallengeReceipt/v1",
         "FinalChallengeConsumption",
         final_statement(completion),
         FINAL_KEY,
@@ -680,7 +680,7 @@ class FinalChallengeTests(unittest.TestCase):
             statement = final_statement(completion)
             statement[field] = digest("wrong-" + field)
             document = sign_document(
-                "serverware.finalChallengeReceipt/v1",
+                "catchplate.finalChallengeReceipt/v1",
                 "FinalChallengeConsumption",
                 statement,
                 FINAL_KEY,
@@ -697,7 +697,7 @@ class FinalChallengeTests(unittest.TestCase):
             statement = final_statement()
             statement[field] = value
             document = sign_document(
-                "serverware.finalChallengeReceipt/v1",
+                "catchplate.finalChallengeReceipt/v1",
                 "FinalChallengeConsumption",
                 statement,
                 FINAL_KEY,
@@ -708,7 +708,7 @@ class FinalChallengeTests(unittest.TestCase):
 
     def test_final_receipt_rejects_rogue_authority_and_hardware_trust(self) -> None:
         rogue_document = sign_document(
-            "serverware.finalChallengeReceipt/v1",
+            "catchplate.finalChallengeReceipt/v1",
             "FinalChallengeConsumption",
             final_statement(),
             ROGUE_KEY,
@@ -724,7 +724,7 @@ class FinalChallengeTests(unittest.TestCase):
         statement = final_statement()
         statement["verified"] = True
         document = sign_document(
-            "serverware.finalChallengeReceipt/v1",
+            "catchplate.finalChallengeReceipt/v1",
             "FinalChallengeConsumption",
             statement,
             FINAL_KEY,
@@ -746,7 +746,7 @@ class FinalChallengeTests(unittest.TestCase):
             statement["issued_at_unix"] = issued_at
             statement["expires_at_unix"] = expires_at
             document = sign_document(
-                "serverware.finalChallengeReceipt/v1",
+                "catchplate.finalChallengeReceipt/v1",
                 "FinalChallengeConsumption",
                 statement,
                 FINAL_KEY,
@@ -808,7 +808,7 @@ class SchemaAndIsolationTests(unittest.TestCase):
     def test_core_imports_no_environment_path_network_process_or_database_modules(
         self,
     ) -> None:
-        source_path = ROOT / "serverware" / "setup_receipts.py"
+        source_path = ROOT / "catchplate" / "setup_receipts.py"
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
         imported: set[str] = set()
         for node in ast.walk(tree):
@@ -859,7 +859,7 @@ class TrustSnapshotServiceTests(unittest.TestCase):
             )
 
     def test_trust_root_uses_one_non_symlink_snapshot_and_expected_spki(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="serverware-setup-trust-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="catchplate-setup-trust-") as temporary:
             root = Path(temporary)
             key_path = root / "enrollment.pub.pem"
             key_path.write_bytes(

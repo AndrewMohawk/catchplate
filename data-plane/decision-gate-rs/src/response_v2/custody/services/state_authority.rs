@@ -253,7 +253,7 @@ pub(super) fn query_replay_source_postgres(
     )?;
     let mut signed = SignedReplaySourceObservationV1 {
         api_version:
-            "serverware.responseV2ReplaySourceObservation/v1"
+            "catchplate.responseV2ReplaySourceObservation/v1"
                 .to_owned(),
         generation_id: scoped.generation_id,
         generation: scoped.generation,
@@ -1596,13 +1596,13 @@ fn trusted_host_authority<'a>(
         owner.require_signer(signing_key.logical_role(), signing_key.key_id(), &secret_key_path)?;
         Digest(owner.generation_sha256()?.to_owned())
     } else { std::env::var(
-        "SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256",
+        "CATCHPLATE_RESPONSE_V2_PROVIDER_GENERATION_SHA256",
     )
     .map(Digest)
     .map_err(|_| {
         V2RuntimeError::new(
             "state_authority_generation_pin_missing",
-            "SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256 is required",
+            "CATCHPLATE_RESPONSE_V2_PROVIDER_GENERATION_SHA256 is required",
         )
     })? };
     pinned_generation_sha256
@@ -1710,7 +1710,7 @@ fn postgres_backend_with_timeout(
     let cgroup_root = if config.guest_delivery.is_some() {
         PathBuf::from("/sys/fs/cgroup")
     } else { std::env::var_os(
-        "SERVERWARE_RESPONSE_V2_CGROUP_ROOT",
+        "CATCHPLATE_RESPONSE_V2_CGROUP_ROOT",
     )
     .map(PathBuf::from)
     .unwrap_or_else(|| PathBuf::from("/sys/fs/cgroup")) };

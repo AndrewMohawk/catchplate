@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives import serialization
 from scripts.authority import local_enrollment_attestation as cli
 from scripts.test_authority_local_enrollment_configuration import fixture
 from scripts.test_authority_local_configuration import sealed
-from serverware import authority_local_enrollment_attestation as local
+from catchplate import authority_local_enrollment_attestation as local
 
 PIN = "sha256:" + "1" * 64
 
@@ -24,7 +24,7 @@ PIN = "sha256:" + "1" * 64
 def selected():
     source, _, _, root = fixture()
     now, unix = time.clock_gettime_ns(time.CLOCK_BOOTTIME), time.time_ns()
-    rows = [dict(path="/run/source/serverware/" + name, kind="python", bytes=1, sha256=PIN)
+    rows = [dict(path="/run/source/catchplate/" + name, kind="python", bytes=1, sha256=PIN)
         for name in sorted(local.REQUIRED_MODULES)]
     rows.extend(dict(path=path, kind="native", bytes=1, sha256=PIN) for path in (
         "/usr/local/bin/python3.11", "/usr/local/lib/libpython3.11.so.1.0"))
@@ -74,7 +74,7 @@ class EnrollmentAttestationTests(unittest.TestCase):
         self.assertGreater(next(line for line, name in calls if name == "_produce_attestation_on_work"), keyline)
         self.assertNotIn("execve", {name for _, name in calls})
 
-    @unittest.skipUnless(os.environ.get("SERVERWARE_TEST_LOCAL_ENROLLMENT_SANDBOX") == "1"
+    @unittest.skipUnless(os.environ.get("CATCHPLATE_TEST_LOCAL_ENROLLMENT_SANDBOX") == "1"
         and os.getresuid() == os.getresgid() == (0, 0, 0) and sys.flags.isolated and sys.flags.dont_write_bytecode,
         "requires task-owned readonly container, CAP_CHOWN, disposable /run and root0700 replay tmpfs")
     def test_actual_retained_files_listener_replay_and_root_signature_then_mutation_refusal(self):
@@ -82,7 +82,7 @@ class EnrollmentAttestationTests(unittest.TestCase):
         source_root = Path(local.__file__).parent
         made_files, made_dirs, descriptors = [], [], []
         owner = listener = replay_fd = None
-        source = Path("/run/source/serverware")
+        source = Path("/run/source/catchplate")
         endpoint_parent = Path(local.entrypoint.LISTENER_PATH).parent
         replay = Path(local.entrypoint.REPLAY_PATH)
         require_empty = lambda path: self.assertEqual(list(path.iterdir()), [])
@@ -90,7 +90,7 @@ class EnrollmentAttestationTests(unittest.TestCase):
         self.assertEqual((replay.stat().st_uid, replay.stat().st_gid, stat.S_IMODE(replay.stat().st_mode)), (0, 0, 0o700))
         require_empty(replay)
         try:
-            for target in (Path("/run/source"), source, Path("/run/serverware"), endpoint_parent):
+            for target in (Path("/run/source"), source, Path("/run/catchplate"), endpoint_parent):
                 self.assertFalse(target.exists())
                 target.mkdir(mode=0o755); made_dirs.append(target)
             for name in sorted(local.REQUIRED_MODULES):

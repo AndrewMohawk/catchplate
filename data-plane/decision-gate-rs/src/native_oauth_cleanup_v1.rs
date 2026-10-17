@@ -7,11 +7,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const CHANNEL: &str = "serverware.nativeOAuthRefreshCleanupChannel/v1";
-pub const SCHEMA: &str = "serverware.nativeOAuthRefreshCleanupStatement/v1";
-pub const ATTESTATION_DOMAIN: &[u8] = b"serverware/native-oauth-refresh-cleanup-attestation/v1\0";
-pub const HTTP_REQUEST: &str = "serverware.nativeOAuthRefreshCleanupRequest/v1";
-pub const HTTP_RESPONSE: &str = "serverware.nativeOAuthRefreshCleanupResponse/v1";
+pub const CHANNEL: &str = "catchplate.nativeOAuthRefreshCleanupChannel/v1";
+pub const SCHEMA: &str = "catchplate.nativeOAuthRefreshCleanupStatement/v1";
+pub const ATTESTATION_DOMAIN: &[u8] = b"catchplate/native-oauth-refresh-cleanup-attestation/v1\0";
+pub const HTTP_REQUEST: &str = "catchplate.nativeOAuthRefreshCleanupRequest/v1";
+pub const HTTP_RESPONSE: &str = "catchplate.nativeOAuthRefreshCleanupResponse/v1";
 
 pub fn response_document(raw: &[u8]) -> Result<Value, String> {
     crate::native_oauth_refresh_v1::response_document(raw)
@@ -26,8 +26,8 @@ impl Target {
         ensure(!raw.is_empty() && raw.len() <= 65536 && URL_SAFE_NO_PAD.encode(&raw) == self.authorization_original, "cleanup grant bound")?;
         let value = crate::native_oauth_refresh_v1::response_document(&raw)?;
         ensure(canonical_ascii_bytes(&value)? == raw && value.as_object().is_some_and(|v| v.len() == 3)
-            && value["schema"] == "serverware.signedOAuthMeasuredRefreshCleanupAuthorization/v1"
-            && value["payload"]["schema"] == "serverware.oauthMeasuredRefreshCleanupAuthorization/v1"
+            && value["schema"] == "catchplate.signedOAuthMeasuredRefreshCleanupAuthorization/v1"
+            && value["payload"]["schema"] == "catchplate.oauthMeasuredRefreshCleanupAuthorization/v1"
             && value["payload"]["purpose"] == "measured-oauth-refresh-family-retirement", "cleanup grant family differs")?;
         let signature = value["signatureBase64Url"].as_str().ok_or("cleanup signature absent")?;
         let bytes = URL_SAFE_NO_PAD.decode(signature).map_err(|_|"cleanup signature encoding")?;
@@ -50,12 +50,12 @@ pub struct Configuration {
 }
 impl Configuration {
     pub fn validate(&self) -> Result<(), String> {
-        ensure(self.api_version == "serverware.nativeOAuthRefreshCleanupConfiguration/v1" && !self.targets.is_empty()
+        ensure(self.api_version == "catchplate.nativeOAuthRefreshCleanupConfiguration/v1" && !self.targets.is_empty()
             && self.targets.len() <= 16, "cleanup cold configuration family or bound")?;
         // Reuse only closed public application data predicates, never the
         // refresh permission, target list, helper owner or statement type.
         crate::native_oauth_refresh_v1::Configuration {
-            api_version: "serverware.nativeOAuthRefreshConfiguration/v1".to_owned(), source_revision: self.source_revision.clone(),
+            api_version: "catchplate.nativeOAuthRefreshConfiguration/v1".to_owned(), source_revision: self.source_revision.clone(),
             authority_root_public_key: self.authority_root_public_key.clone(), authority_root_spki_sha256: self.authority_root_spki_sha256.clone(),
             control_plane_configuration_digest: self.control_plane_configuration_digest.clone(), deployment_id: self.deployment_id.clone(),
             instance_id: self.instance_id.clone(), limits: crate::native_oauth_refresh_v1::Limits {

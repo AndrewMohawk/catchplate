@@ -21,11 +21,11 @@ from psycopg.rows import dict_row
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.native_postgres_results import run_native_fixture
+from catchplate.native_postgres_results import run_native_fixture
 
-from serverware.authority_store import postgres_trigger_manifest as catalog
-from serverware.authority_store import schema as production_schema
-from serverware.db_common import dumps
+from catchplate.authority_store import postgres_trigger_manifest as catalog
+from catchplate.authority_store import schema as production_schema
+from catchplate.db_common import dumps
 from test_webauthn_trust_projection_postgres import local_connection_parameters
 
 CONNECTION_PARAMETERS: dict[str, str | int] | None = None
@@ -35,7 +35,7 @@ def component_digest(value: dict) -> str:
     # Same canonical serializer and framing used by the complete manifest,
     # but this preimage deliberately covers only these two catalog components.
     return production_schema._policy_candidate_authority_framed_digest(
-        "serverware.policyCandidateAuthorityStructuralManifest/v1",
+        "catchplate.policyCandidateAuthorityStructuralManifest/v1",
         dumps(value).encode("utf-8"),
     )
 
@@ -51,8 +51,8 @@ class PostgresTriggerManifestTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.schema = "serverware_trigger_" + uuid.uuid4().hex
-        cls.other_schema = "serverware_trigger_" + uuid.uuid4().hex
+        cls.schema = "catchplate_trigger_" + uuid.uuid4().hex
+        cls.other_schema = "catchplate_trigger_" + uuid.uuid4().hex
         with cls.connection() as connection:
             if connection.execute("SELECT inet_server_addr() AS address").fetchone() != {"address": None}:
                 raise RuntimeError("PostgreSQL fixture must use a Unix socket")

@@ -12,9 +12,9 @@ accept a successful-material substitute.
 
 The fixed purpose is `issue-oidc-session-activation-release-grants`. The signed and
 payload schemas are
-`serverware.signedOidcSessionActivationReleaseGrantIssuerPolicy/v1` and
-`serverware.oidcSessionActivationReleaseGrantIssuerPolicy/v1`. The policy identity
-domain is `serverware.oidcSessionActivationReleaseGrantIssuerPolicyIdentity/v1`.
+`catchplate.signedOidcSessionActivationReleaseGrantIssuerPolicy/v1` and
+`catchplate.oidcSessionActivationReleaseGrantIssuerPolicy/v1`. The policy identity
+domain is `catchplate.oidcSessionActivationReleaseGrantIssuerPolicyIdentity/v1`.
 
 ## Independently authorized scope
 
@@ -26,7 +26,7 @@ The payload has exactly eleven fields:
 
 `proofBootstrapDigest` frames the full independently provisioned proof-bootstrap
 original with the distinct domain
-`serverware.oidcSessionActivationReleaseGrantIssuerProofBootstrapIdentity/v1`.
+`catchplate.oidcSessionActivationReleaseGrantIssuerProofBootstrapIdentity/v1`.
 It is not a payload hash, a returned proof digest or an accepted admission result.
 The potentially large proof bootstrap remains a separate original, not an embedded
 policy field. Genuine proof-bootstrap admission supplies the exact intent,
@@ -35,7 +35,7 @@ release custody, completed consume originals, target, caller and producer pins.
 `clientIdentity` retains the existing exact three-digest grammar. The independently
 root-selected client ID and identity are trusted-host-local metadata, not proof
 of measured process identity or hardware isolation. The existing client endpoint
-grammar fixes `/run/serverware/oidc-session-activation-token-release/release.sock`,
+grammar fixes `/run/catchplate/oidc-session-activation-token-release/release.sock`,
 connect-side peer 0:0 and an integer timeout of 1–30 seconds. That timeout cannot
 exceed the signed release launch timeout.
 

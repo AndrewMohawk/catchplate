@@ -1,4 +1,4 @@
-module serverware.example/x-post-go
+module catchplate.example/x-post-go
 
 go 1.23.0
 

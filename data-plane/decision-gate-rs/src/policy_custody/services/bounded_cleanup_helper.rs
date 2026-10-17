@@ -70,40 +70,40 @@ use std::os::fd::{
 use std::ptr;
 
 const CLEANUP_INTENT_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupEffectIntentReceipt/v3";
+    b"catchplate.policyCustodyCleanupEffectIntentReceipt/v3";
 const CLEANUP_INTENT_RECEIPT_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupEffectIntentReceipt/v3";
+    b"catchplate.policyCustodyCleanupEffectIntentReceipt/v3";
 const CLEANUP_RESULT_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyVerifiedCleanupResult/v1";
+    b"catchplate.policyCustodyVerifiedCleanupResult/v1";
 const CLEANUP_RESULT_RECEIPT_DOMAIN: &[u8] =
-    b"serverware.policyCustodyVerifiedCleanupResultReceipt/v1";
+    b"catchplate.policyCustodyVerifiedCleanupResultReceipt/v1";
 const CLEANUP_RESULT_RECORD_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupEffectResultRecord/v3";
+    b"catchplate.policyCustodyCleanupEffectResultRecord/v3";
 const MAX_CLIENT_OPERATIONS: usize = 256;
 const CLEANUP_PREPARE_IDEMPOTENCY_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupPrepareIdempotency/v3";
+    b"catchplate.policyCustodyCleanupPrepareIdempotency/v3";
 const CLEANUP_EXECUTE_IDEMPOTENCY_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupExecuteIdempotency/v3";
+    b"catchplate.policyCustodyCleanupExecuteIdempotency/v3";
 const CLEANUP_QUERY_IDEMPOTENCY_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupQueryIdempotency/v3";
+    b"catchplate.policyCustodyCleanupQueryIdempotency/v3";
 const CLEANUP_REQUEST_ID_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupHelperRequestId/v3";
+    b"catchplate.policyCustodyCleanupHelperRequestId/v3";
 const CLEANUP_REAP_OBSERVATION_IDEMPOTENCY_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupReapObservationIdempotency/v3";
+    b"catchplate.policyCustodyCleanupReapObservationIdempotency/v3";
 const CLEANUP_REAP_OBSERVATION_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupReapObservation/v3";
+    b"catchplate.policyCustodyCleanupReapObservation/v3";
 const CLEANUP_EXECUTION_CHECKPOINT_IDEMPOTENCY_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupExecutionCheckpointIdempotency/v3";
+    b"catchplate.policyCustodyCleanupExecutionCheckpointIdempotency/v3";
 const CLEANUP_EXECUTION_CHECKPOINT_REQUEST_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupExecutionCheckpointRequest/v3";
+    b"catchplate.policyCustodyCleanupExecutionCheckpointRequest/v3";
 const CLEANUP_PARENT_PROOF_IDEMPOTENCY_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupParentProofIdempotency/v3";
+    b"catchplate.policyCustodyCleanupParentProofIdempotency/v3";
 const CLEANUP_PARENT_PROOF_REQUEST_DOMAIN: &[u8] =
-    b"serverware.policyCustodyCleanupParentProofRequest/v3";
+    b"catchplate.policyCustodyCleanupParentProofRequest/v3";
 const REAP_OBSERVATION_VERSION: &str =
-    "serverware.policyCustodyCleanupReapObservation/v3";
+    "catchplate.policyCustodyCleanupReapObservation/v3";
 const VERIFIED_CLEANUP_EVIDENCE_VERSION: &str =
-    "serverware.policyCustodyWatchdogVerifiedCleanupEvidence/v3";
+    "catchplate.policyCustodyWatchdogVerifiedCleanupEvidence/v3";
 const MAX_CLIENT_TRANSITIONS_PER_CALL: usize = 8;
 const MAX_CGROUP_EVENTS_BYTES: usize = 4_096;
 const MAX_QUERY_SEQUENCE: u64 = 1_000_000;
@@ -246,7 +246,7 @@ fn exact_reap_observation_request(
     prepared: &PersistedCleanupEffectIntentV3,
 ) -> Result<Vec<u8>, ServiceError> {
     encode_canonical_frame(&(
-        "serverware.policyCustodyCleanupReapObservationRequest/v3",
+        "catchplate.policyCustodyCleanupReapObservationRequest/v3",
         prepared.intent.key(),
         &prepared.intent_receipt_sha256,
         &prepared.intent.retained_descriptors.worker_pidfd,

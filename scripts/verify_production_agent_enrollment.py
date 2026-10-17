@@ -15,8 +15,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from serverware_agent_trust.enrollment import load_trusted_ed25519_public_key, read_file_snapshot
-from serverware_agent_trust.receipts import (
+from catchplate_agent_trust.enrollment import load_trusted_ed25519_public_key, read_file_snapshot
+from catchplate_agent_trust.receipts import (
     EnrollmentReceiptExpected,
     SetupAssignment,
     canonical_json_bytes,
@@ -250,7 +250,7 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("production receipt does not bind the supplied launcher egress evidence exactly")
 
     return {
-        "apiVersion": "serverware.productionAgentEnrollmentVerification/v1",
+        "apiVersion": "catchplate.productionAgentEnrollmentVerification/v1",
         "kind": "ProductionAgentEnrollmentVerification",
         "ok": True,
         "verifiedAtUnix": int(time.time()),

@@ -30,8 +30,8 @@ def no_external_effects(event, _arguments):
 
 
 if __name__ == "__main__":
-    os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
-    os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
+    os.environ["CATCHPLATE_PROCESS_MODE"] = "metadata-bootstrap"
+    os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
     sys.addaudithook(no_external_effects)
 
 from cryptography.hazmat.primitives import hashes, serialization
@@ -40,14 +40,14 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from scripts import test_authority_native_jit_retained_history as historical
 from scripts import test_authority_native_jit_review_custody as crypto
-from serverware import authority_contract as contract
-from serverware import authority_native_jit_review_assignment as grammar
-from serverware import authority_native_jit_review_open_contract as wire
-from serverware import authority_native_jit_review_open_custody as custody
-from serverware import native_jit_review_material as material
-from serverware import native_jit_review_owner as sealing
-from serverware import native_jit_review_open_owner as native
-from serverware import native_secret_broker_helper as dispatcher
+from catchplate import authority_contract as contract
+from catchplate import authority_native_jit_review_assignment as grammar
+from catchplate import authority_native_jit_review_open_contract as wire
+from catchplate import authority_native_jit_review_open_custody as custody
+from catchplate import native_jit_review_material as material
+from catchplate import native_jit_review_owner as sealing
+from catchplate import native_jit_review_open_owner as native
+from catchplate import native_secret_broker_helper as dispatcher
 
 SECOND = 1_000_000_000
 NOW, BOOT = crypto.NOW + 90 * SECOND, 500 * SECOND
@@ -119,7 +119,7 @@ class Fixture:
                 "awsNitroRootCertificatesPem": [pki.root.public_bytes(serialization.Encoding.PEM).decode("ascii")],
                 "awsNitroCrlsDerBase64url": [], "nitroCertificateProfile": {
                     "profileId": "aws-nitro-attestation-pki-native-v1", "allowedLeafExtendedKeyUsageOids": []}}}
-        self.configuration = {"schema": "serverware.policyAuthorityServiceConfiguration/v6",
+        self.configuration = {"schema": "catchplate.policyAuthorityServiceConfiguration/v6",
             "roles": {"planner": {"enabledOperations": list(wire.OPERATIONS),
                 "responseSigningSpkiDigest": sha(crypto.public_spki(self.role))}}, custody.FIELD: self.policy}
         self.configuration_digest = crypto.framed(self.configuration["schema"], canonical(self.configuration))
@@ -184,22 +184,22 @@ class Fixture:
         raw = canonical(statement)
         signature = self.native.sign(statement["schema"].encode("ascii") + b"\0" + raw)
         key = self.native.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-        boot = hashlib.sha256(b"serverware/native-proof-custody-boot/v1\0" + b"b" * 32
+        boot = hashlib.sha256(b"catchplate/native-proof-custody-boot/v1\0" + b"b" * 32
             + bytes.fromhex(self.selected["keyId"][7:])
             + bytes.fromhex(self.selected["controlPlaneResponseSigningKeyId"][7:])).digest()
-        user_data = b"serverware/enclave-runtime-key-binding/v1\0\x04" + b"".join(
+        user_data = b"catchplate/enclave-runtime-key-binding/v1\0\x04" + b"".join(
             bytes.fromhex(self.selected[name][7:]) for name in crypto.QUOTE_SCOPE_FIELDS) + hashlib.sha256(key).digest() + boot
-        domain = nonce_domain or ("serverware/native-jit-review-open-" + purpose + "-attestation/v1").encode() + b"\0"
+        domain = nonce_domain or ("catchplate/native-jit-review-open-" + purpose + "-attestation/v1").encode() + b"\0"
         quote = self.pki.quote(public_key=key, user_data=user_data,
             nonce=hashlib.sha256(domain + hashlib.sha256(raw).digest() + signature).digest(),
             pcrs=self.selected["expectedPcrs"], now=NOW)
         return canonical({"statement": statement, "signature": "ed25519:" + encoded(signature),
-            "nativeKeyEvidence": {"apiVersion": "serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence": {"apiVersion": "catchplate.nativeResponseProofKeyEvidence/v1",
                 "responseProofPublicKey": encoded(key), "attestationDocumentB64": encoded(quote)},
             "assignmentOriginal": self.assignment_original}).decode("ascii")
 
     def sign_grant(self, *, key=None, domain=None):
-        return canonical({"schema": "serverware.signedNativeJitReviewOpeningAuthorization/v1",
+        return canonical({"schema": "catchplate.signedNativeJitReviewOpeningAuthorization/v1",
             "payload": self.grant, "signatureBase64Url": encoded((key or self.grant_key).sign(
                 (domain or wire.AUTHORIZATION_SCHEMA.encode() + b"\0") + canonical(self.grant)))}).decode()
 
@@ -273,7 +273,7 @@ class OpeningTests(unittest.TestCase):
 
     def test_bad_signature_wrong_purpose_and_generic_response_key_never_decrypt(self):
         for key, domain in ((self.f.role, None), (self.f.ack_key, None),
-                (self.f.grant_key, b"serverware.generic-response/v1\0")):
+                (self.f.grant_key, b"catchplate.generic-response/v1\0")):
             with self.subTest(domain=domain):
                 self.f = Fixture(self.pki, self.retained); self.f.configure()
                 self.f.command["authorizationOriginal"] = self.f.sign_grant(key=key, domain=domain)
@@ -299,7 +299,7 @@ class OpeningTests(unittest.TestCase):
     def test_native_quote_wrong_purpose_never_decrypts(self):
         f = self.f; f.configure()
         f.command["challengeOriginal"] = f.sign_native(f.challenge,
-            nonce_domain=b"serverware/native-release-jit-review-attestation/v1\0")
+            nonce_domain=b"catchplate/native-release-jit-review-attestation/v1\0")
         f.scope["challengeSha256"] = sha(f.command["challengeOriginal"].encode())
         f.command["authorizationOriginal"] = f.sign_grant()
         self.refuse()
@@ -471,7 +471,7 @@ class OpeningTests(unittest.TestCase):
         self.assertIsInstance(f.broker.jit_review_open_owner, native.Owner)
         self.assertEqual(dispatcher._document(canonical(f.command)), f.command)
         for changed in ({**f.command, "deadlineBoottimeNs": 1.5},
-                {"apiVersion": "serverware.nativeJitReviewChannel/v1", "phase": "seal-release-pair"}):
+                {"apiVersion": "catchplate.nativeJitReviewChannel/v1", "phase": "seal-release-pair"}):
             with self.assertRaises(ValueError): dispatcher._document(canonical(changed))
 
 

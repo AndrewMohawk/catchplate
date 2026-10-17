@@ -21,10 +21,10 @@ from scripts import operator_google_fixture as fixture
 from scripts import prepare_operator_google_fixture as prepare
 
 
-SOURCE = Path("/srv/catchplate-fast/projects/serverware-operator-workspace")
-BINARY = Path("/srv/catchplate-fast/tmp/reviewed/serverware-decision-gate")
-INITIALIZER = Path("/srv/catchplate-fast/projects/serverware-operator-audit-integration/scripts/private_operator_audit/initialize.py")
-ROOT = prepare.base.SCRATCH / "serverware-google-private.Review01"
+SOURCE = Path("/srv/catchplate-fast/projects/catchplate-operator-workspace")
+BINARY = Path("/srv/catchplate-fast/tmp/reviewed/catchplate-decision-gate")
+INITIALIZER = Path("/srv/catchplate-fast/projects/catchplate-operator-audit-integration/scripts/private_operator_audit/initialize.py")
+ROOT = prepare.base.SCRATCH / "catchplate-google-private.Review01"
 SCOPES = ("email", "https://www.googleapis.com/auth/gmail.readonly", "openid")
 
 
@@ -110,7 +110,7 @@ class ManifestTests(unittest.TestCase):
         value = prepare.build(SOURCE, BINARY, INITIALIZER, ROOT)
         prepare.validate(value, SOURCE, BINARY, INITIALIZER, ROOT)
         self.assertNotIn("networks", value)
-        self.assertEqual(set(value["services"]), {"initialize", "network", "provider", "serverware", "decision-gate-rs", "check"})
+        self.assertEqual(set(value["services"]), {"initialize", "network", "provider", "catchplate", "decision-gate-rs", "check"})
         for name, service in value["services"].items():
             self.assertFalse(service.get("ports") or service.get("privileged") or service.get("extra_hosts"))
             self.assertEqual(service["pull_policy"], "never")
@@ -120,17 +120,17 @@ class ManifestTests(unittest.TestCase):
                 self.assertNotIn("cap_add", service)
                 self.assertEqual(service["user"], "10001:10001")
         self.assertEqual(value["services"]["network"]["cap_add"], ["NET_ADMIN", "SETUID", "SETGID"])
-        self.assertEqual(value["services"]["serverware"]["command"], ["python", "-B", "-m", "serverware.operator_demo_runner"])
+        self.assertEqual(value["services"]["catchplate"]["command"], ["python", "-B", "-m", "catchplate.operator_demo_runner"])
         gate = value["services"]["decision-gate-rs"]
-        self.assertEqual(gate["entrypoint"], ["/usr/local/bin/serverware-decision-gate"])
-        self.assertEqual(gate["environment"]["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"], '["https://gmail.googleapis.com"]')
-        self.assertNotIn("SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS", gate["environment"])
+        self.assertEqual(gate["entrypoint"], ["/usr/local/bin/catchplate-decision-gate"])
+        self.assertEqual(gate["environment"]["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"], '["https://gmail.googleapis.com"]')
+        self.assertNotIn("CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS", gate["environment"])
 
     def test_manifest_mutations_fail_closed(self):
         original = prepare.build(SOURCE, BINARY, INITIALIZER, ROOT)
         for name, key, replacement in (("network", "network_mode", "host"),
                 ("network", "cap_add", ["NET_ADMIN"]), ("provider", "ports", ["443:443"]),
-                ("serverware", "privileged", True), ("decision-gate-rs", "entrypoint", ["/test-gate"]),
+                ("catchplate", "privileged", True), ("decision-gate-rs", "entrypoint", ["/test-gate"]),
                 ("check", "cap_add", ["NET_ADMIN"])):
             value = deepcopy(original)
             value["services"][name][key] = replacement
@@ -141,10 +141,10 @@ class ManifestTests(unittest.TestCase):
 
     def test_only_fixture_trust_and_client_secret_file(self):
         value = prepare.build(SOURCE, BINARY, INITIALIZER, ROOT)
-        app = value["services"]["serverware"]
+        app = value["services"]["catchplate"]
         self.assertEqual(app["environment"]["SSL_CERT_FILE"], "/fixture-google/ca.pem")
-        self.assertEqual(app["environment"]["SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE"],
-                         "/run/secrets/serverware/google-client.secret")
+        self.assertEqual(app["environment"]["CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE"],
+                         "/run/secrets/catchplate/google-client.secret")
         for service in value["services"].values():
             self.assertNotIn(fixture.CLIENT_SECRET, json.dumps(service))
             for mount in service["volumes"]:

@@ -30,7 +30,7 @@ def module(name, relative):
 
 
 example = module("ai_example", "examples/common-apps/ai_python.py")
-presets = module("ai_presets", "serverware/operator_common_apps_ai.py")
+presets = module("ai_presets", "catchplate/operator_common_apps_ai.py")
 
 
 def configuration(provider):
@@ -145,7 +145,7 @@ class StockSDKTests(unittest.TestCase):
                         self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
                         self.assertEqual(list(directory.iterdir()), [])
                         self.assertNotIn("HOME", os.environ)
-                        self.assertEqual(request.headers["x-api-key"], "serverware-anthropic-placeholder-v1")
+                        self.assertEqual(request.headers["x-api-key"], "catchplate-anthropic-placeholder-v1")
                         paths.append(directory)
                         return httpx2.Response(status, json=response_body("anthropic") if status == 200 else {
                             "error": {"type": "rate_limit_error", "message": "Synthetic refusal"}})
@@ -238,7 +238,7 @@ class StockSDKTests(unittest.TestCase):
 
     def test_shared_download_loader_resolves_ca_paths(self):
         application = "f5e131bf-c28a-4f97-8e54-1ac269607dce"
-        with tempfile.TemporaryDirectory(prefix="serverware-ai-config-") as directory:
+        with tempfile.TemporaryDirectory(prefix="catchplate-ai-config-") as directory:
             path = Path(directory) / "client.json"
             for provider in example.OPERATIONS:
                 preset = next(row for row in presets.PRESETS if row["id"] == provider)
@@ -247,14 +247,14 @@ class StockSDKTests(unittest.TestCase):
                     "proxy_authentication": "basic_and_bearer_v1", "proxy_username": application,
                     "proxy_password": "synthetic-proxy-token", "proxy_url": "https://proxy.example",
                     "token_expires_at_epoch_ms": time.time_ns() // 1000000 + 60000,
-                    "ca_file": "serverware-ca.pem", "proxy_ca_file": None,
+                    "ca_file": "catchplate-ca.pem", "proxy_ca_file": None,
                     "credential_input": "replace_exact", "response_mode": "unfiltered_json_or_empty_v2",
                     "request_headers": {preset["header_name"]: preset["placeholder"],
                         **preset["operations"][0].get("request_headers", {})}}
                 path.write_text(json.dumps(config), encoding="utf-8")
                 loaded = example.load_configuration(path)
                 example.validate_scope(loaded, "Hi")
-                self.assertEqual(loaded["ca_file"], str(Path(directory) / "serverware-ca.pem"))
+                self.assertEqual(loaded["ca_file"], str(Path(directory) / "catchplate-ca.pem"))
                 self.assertIsNone(loaded["proxy_ca_file"])
 
 

@@ -15,34 +15,34 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
-pub const PROTOCOL_NAME: &str = "serverware-coder-controller-v11";
+pub const PROTOCOL_NAME: &str = "catchplate-coder-controller-v11";
 pub const CLIENT_INSTALL_PATH: &str =
-    "/usr/local/libexec/serverware-coder-controller-client";
+    "/usr/local/libexec/catchplate-coder-controller-client";
 pub const DAEMON_INSTALL_PATH: &str =
-    "/usr/local/libexec/serverware-coder-controller";
+    "/usr/local/libexec/catchplate-coder-controller";
 pub const LAUNCHER_INSTALL_PATH: &str =
-    "/usr/local/libexec/serverware-coder-controller-launcher";
-pub const DEFAULT_SOCKET_PATH: &str = "/run/serverware/coder-controller-v11.sock";
+    "/usr/local/libexec/catchplate-coder-controller-launcher";
+pub const DEFAULT_SOCKET_PATH: &str = "/run/catchplate/coder-controller-v11.sock";
 pub const TRUSTED_PLAN_MANIFEST_PATH: &str =
-    "/etc/serverware/coder-controller-v11/trusted-plan-manifest-v11.bin";
+    "/etc/catchplate/coder-controller-v11/trusted-plan-manifest-v11.bin";
 pub const RECEIPT_PUBLIC_KEY_PATH: &str =
-    "/etc/serverware/coder-controller-v11/receipt-public-key.ed25519";
+    "/etc/catchplate/coder-controller-v11/receipt-public-key.ed25519";
 pub const FINAL_VERDICT_PUBLIC_KEY_PATH: &str =
-    "/etc/serverware/coder-controller-v11/final-verdict-public-key.ed25519";
+    "/etc/catchplate/coder-controller-v11/final-verdict-public-key.ed25519";
 pub const REQUESTER_SIGNING_KEY_PATH: &str =
-    "/etc/serverware/coder-controller-v11/requester-signing-key.ed25519";
+    "/etc/catchplate/coder-controller-v11/requester-signing-key.ed25519";
 pub const REQUESTER_PUBLIC_KEY_PATH: &str =
-    "/etc/serverware/coder-controller-v11/requester-public-key.ed25519";
+    "/etc/catchplate/coder-controller-v11/requester-public-key.ed25519";
 pub const REQUEST_TEMPLATE_DIRECTORY: &str =
-    "/etc/serverware/coder-controller-v11/request-templates";
+    "/etc/catchplate/coder-controller-v11/request-templates";
 pub const CONTROLLER_PLAN_API_SOCKET_PATH: &str =
-    "/run/serverware/controller-plan-api.sock";
+    "/run/catchplate/controller-plan-api.sock";
 pub const CONTROLLER_DOCKER_PROXY_SOCKET_PATH: &str =
-    "/run/serverware/controller-docker-proxy.sock";
+    "/run/catchplate/controller-docker-proxy.sock";
 pub const CONTROLLER_PLAN_EXECUTOR_SOCKET_PATH: &str =
-    "/run/serverware/controller-plan-executor-v11.sock";
+    "/run/catchplate/controller-plan-executor-v11.sock";
 pub const CONTROLLER_RECEIPT_AUTHORITY_SOCKET_PATH: &str =
-    "/run/serverware/controller-receipt-authority-v11.sock";
+    "/run/catchplate/controller-receipt-authority-v11.sock";
 pub const LAUNCH_CONTRACT_MAX_BYTES: usize = 1024 * 1024;
 
 pub const FIXED_FRAME_BYTES: usize = 256;
@@ -56,7 +56,7 @@ pub const RECEIPT_MAX_CHUNKS: u32 =
     (RECEIPT_MAX_BYTES / CHUNK_MAX_BYTES as u64) as u32;
 pub const MAX_DEADLINE_FUTURE_MS: u64 = 4 * 60 * 60 * 1000;
 pub const DEV_HELLO_TEXT: &str =
-    "serverware-coder-controller-v11/disabled-dev-hello";
+    "catchplate-coder-controller-v11/disabled-dev-hello";
 pub const DESCENDANT_SOURCE_MOUNTS_MUST_BE_READ_ONLY: bool = true;
 
 const FRAME_MAGIC: [u8; 8] = *b"SWCV11F\0";
@@ -328,7 +328,7 @@ fn write_canonical_json_v11(value: &Value, output: &mut Vec<u8>) -> Result<()> {
 
 fn lf11(tag: &str, parts: &[&[u8]]) -> Result<Vec<u8>> {
     let mut output = Vec::new();
-    output.extend_from_slice(b"serverware/controller/v11/");
+    output.extend_from_slice(b"catchplate/controller/v11/");
     let tag_len = u64::try_from(tag.len())
         .map_err(|_| ControllerError::Invalid("LF11 tag is too long"))?;
     output.extend_from_slice(&tag_len.to_be_bytes());
@@ -538,9 +538,9 @@ impl CanonicalPreallocationFrameV11 {
     }
 
     pub fn decode(bytes: &[u8; FIXED_FRAME_BYTES]) -> Result<Self> {
-        let kind = if &bytes[0..24] == b"SERVERWARE-CONTROLLER\0\0\0" {
+        let kind = if &bytes[0..24] == b"CATCHPLATE-CONTROLLER\0\0\0" {
             CanonicalFrameKindV11::Request
-        } else if &bytes[0..24] == b"SERVERWARE-RECEIPT\0\0\0\0\0\0" {
+        } else if &bytes[0..24] == b"CATCHPLATE-RECEIPT\0\0\0\0\0\0" {
             CanonicalFrameKindV11::Receipt
         } else {
             return Err(ControllerError::Invalid(
@@ -603,11 +603,11 @@ impl CanonicalPreallocationFrameV11 {
         let mut bytes = [0u8; FIXED_FRAME_BYTES];
         match self.kind {
             CanonicalFrameKindV11::Request => {
-                bytes[0..24].copy_from_slice(b"SERVERWARE-CONTROLLER\0\0\0")
+                bytes[0..24].copy_from_slice(b"CATCHPLATE-CONTROLLER\0\0\0")
             }
             CanonicalFrameKindV11::Receipt => {
                 bytes[0..24]
-                    .copy_from_slice(b"SERVERWARE-RECEIPT\0\0\0\0\0\0")
+                    .copy_from_slice(b"CATCHPLATE-RECEIPT\0\0\0\0\0\0")
             }
         }
         bytes[24..26].copy_from_slice(&11u16.to_be_bytes());
@@ -669,7 +669,7 @@ impl CanonicalPreallocationFrameV11 {
             envelope_name,
         ) = match self.kind {
             CanonicalFrameKindV11::Request => (
-                "SERVERWARE-CONTROLLER",
+                "CATCHPLATE-CONTROLLER",
                 "declaredCanonicalRequestBytes",
                 "maximumCanonicalRequestBytes",
                 "declaredEnvelopeBytes",
@@ -678,7 +678,7 @@ impl CanonicalPreallocationFrameV11 {
                 "requestEnvelopeSha256",
             ),
             CanonicalFrameKindV11::Receipt => (
-                "SERVERWARE-RECEIPT",
+                "CATCHPLATE-RECEIPT",
                 "declaredCanonicalReceiptBytes",
                 "maximumCanonicalReceiptBytes",
                 "declaredReceiptBodyBytes",
@@ -807,11 +807,11 @@ impl CanonicalPreallocationFrameV11 {
         let aggregate = d20_v11(AGGREGATE_MAX_BYTES);
         let (tag, magic) = match self.kind {
             CanonicalFrameKindV11::Request => {
-                ("pre-allocation-frame", b"SERVERWARE-CONTROLLER".as_slice())
+                ("pre-allocation-frame", b"CATCHPLATE-CONTROLLER".as_slice())
             }
             CanonicalFrameKindV11::Receipt => (
                 "receipt-pre-allocation-frame",
-                b"SERVERWARE-RECEIPT".as_slice(),
+                b"CATCHPLATE-RECEIPT".as_slice(),
             ),
         };
         h11(
@@ -963,14 +963,14 @@ impl CanonicalControllerRequestV11 {
             ),
         )?;
         let expected_domain = match lane.plan {
-            Plan::Build => "serverware/request-build/v11",
-            Plan::UnitNoBuild => "serverware/request-unit/v11",
+            Plan::Build => "catchplate/request-build/v11",
+            Plan::UnitNoBuild => "catchplate/request-unit/v11",
             Plan::IntegrationNoBuild => {
-                "serverware/request-integration/v11"
+                "catchplate/request-integration/v11"
             }
-            Plan::E2eNoBuild => "serverware/request-e2e/v11",
+            Plan::E2eNoBuild => "catchplate/request-e2e/v11",
             Plan::AttestationNoBuild => {
-                "serverware/request-attestation/v11"
+                "catchplate/request-attestation/v11"
             }
         };
         if domain != expected_domain {
@@ -1525,7 +1525,7 @@ fn set_frame_projection_placeholder_v11(
         chunks,
     ) = match kind {
         CanonicalFrameKindV11::Request => (
-            "SERVERWARE-CONTROLLER",
+            "CATCHPLATE-CONTROLLER",
             "declaredCanonicalRequestBytes",
             "maximumCanonicalRequestBytes",
             "declaredEnvelopeBytes",
@@ -1536,7 +1536,7 @@ fn set_frame_projection_placeholder_v11(
             REQUEST_MAX_CHUNKS,
         ),
         CanonicalFrameKindV11::Receipt => (
-            "SERVERWARE-RECEIPT",
+            "CATCHPLATE-RECEIPT",
             "declaredCanonicalReceiptBytes",
             "maximumCanonicalReceiptBytes",
             "declaredReceiptBodyBytes",
@@ -1800,7 +1800,7 @@ impl CanonicalControllerReceiptV11 {
         let receipt_authentication_envelope_sha256 =
             verify_typed_envelope_v11(
                 receipt_authentication,
-                "serverware/receipt-authentication/v11",
+                "catchplate/receipt-authentication/v11",
                 "controllerReceipt",
                 receipt_key,
                 receipt_spki_der_sha256,
@@ -1820,7 +1820,7 @@ impl CanonicalControllerReceiptV11 {
         )?;
         let final_verdict_envelope_sha256 = verify_typed_envelope_v11(
             final_verdict,
-            "serverware/final-verdict/v11",
+            "catchplate/final-verdict/v11",
             "finalVerdictCheckpoint",
             final_verdict_key,
             final_verdict_spki_der_sha256,
@@ -2053,11 +2053,11 @@ pub enum Plan {
 impl Plan {
     pub fn as_label(self) -> &'static str {
         match self {
-            Self::Build => "serverware-build-v1",
-            Self::UnitNoBuild => "serverware-unit-no-build-v1",
-            Self::IntegrationNoBuild => "serverware-integration-no-build-v1",
-            Self::E2eNoBuild => "serverware-e2e-no-build-v1",
-            Self::AttestationNoBuild => "serverware-attestation-no-build-v1",
+            Self::Build => "catchplate-build-v1",
+            Self::UnitNoBuild => "catchplate-unit-no-build-v1",
+            Self::IntegrationNoBuild => "catchplate-integration-no-build-v1",
+            Self::E2eNoBuild => "catchplate-e2e-no-build-v1",
+            Self::AttestationNoBuild => "catchplate-attestation-no-build-v1",
         }
     }
 
@@ -2066,11 +2066,11 @@ impl Plan {
             .strip_prefix("--plan=")
             .ok_or(ControllerError::Invalid("plan flag is not frozen v11 syntax"))?;
         match label {
-            "serverware-build-v1" => Ok(Self::Build),
-            "serverware-unit-no-build-v1" => Ok(Self::UnitNoBuild),
-            "serverware-integration-no-build-v1" => Ok(Self::IntegrationNoBuild),
-            "serverware-e2e-no-build-v1" => Ok(Self::E2eNoBuild),
-            "serverware-attestation-no-build-v1" => Ok(Self::AttestationNoBuild),
+            "catchplate-build-v1" => Ok(Self::Build),
+            "catchplate-unit-no-build-v1" => Ok(Self::UnitNoBuild),
+            "catchplate-integration-no-build-v1" => Ok(Self::IntegrationNoBuild),
+            "catchplate-e2e-no-build-v1" => Ok(Self::E2eNoBuild),
+            "catchplate-attestation-no-build-v1" => Ok(Self::AttestationNoBuild),
             _ => Err(ControllerError::Invalid("plan is not in the v11 allowlist")),
         }
     }
@@ -2866,7 +2866,7 @@ pub fn trusted_plan_binding_sha256(
 ) -> Digest {
     let mut bytes = Vec::with_capacity(128);
     bytes.extend_from_slice(
-        b"serverware-controller-v11/trusted-plan-binding\0",
+        b"catchplate-controller-v11/trusted-plan-binding\0",
     );
     bytes.extend_from_slice(&config_sha256);
     bytes.push(plan.code());
@@ -2885,7 +2885,7 @@ pub fn trusted_plan_table_sha256(
     }
     let mut bytes = Vec::with_capacity(256);
     bytes.extend_from_slice(
-        b"serverware-controller-v11/trusted-plan-table\0",
+        b"catchplate-controller-v11/trusted-plan-table\0",
     );
     bytes.extend_from_slice(&config_sha256);
     for (index, binding) in bindings.iter().enumerate() {
@@ -3618,7 +3618,7 @@ fn copy_digest(bytes: &[u8]) -> Digest {
 
 pub fn peer_binding(pid: u32, uid: u32, gid: u32, pidfd_identity: &str) -> Digest {
     let mut bytes = Vec::with_capacity(64 + pidfd_identity.len());
-    bytes.extend_from_slice(b"serverware-controller-v11/peer\0");
+    bytes.extend_from_slice(b"catchplate-controller-v11/peer\0");
     bytes.extend_from_slice(&pid.to_be_bytes());
     bytes.extend_from_slice(&uid.to_be_bytes());
     bytes.extend_from_slice(&gid.to_be_bytes());
@@ -3656,7 +3656,7 @@ impl ClientSubmission {
     ) -> Digest {
         let mut identity = Vec::with_capacity(160);
         identity.extend_from_slice(
-            b"serverware-controller-v11/canonical-client-request-id\0",
+            b"catchplate-controller-v11/canonical-client-request-id\0",
         );
         identity.push(lane.operation.code());
         identity.push(lane.plan.code());
@@ -4153,7 +4153,7 @@ impl HelloEnvelope {
 
     pub fn new(raw_nonce: Digest) -> Self {
         let mut bytes = Vec::with_capacity(64);
-        bytes.extend_from_slice(b"serverware-controller-v11/hello\0");
+        bytes.extend_from_slice(b"catchplate-controller-v11/hello\0");
         bytes.extend_from_slice(&raw_nonce);
         Self {
             raw_nonce,
@@ -4273,7 +4273,7 @@ impl EvidenceReference {
     pub fn canonical_digest(&self) -> Digest {
         let mut bytes =
             Vec::with_capacity(192 + self.namespace.len() + self.object_id.len());
-        bytes.extend_from_slice(b"serverware-controller-v11/evidence-reference\0");
+        bytes.extend_from_slice(b"catchplate-controller-v11/evidence-reference\0");
         bytes.extend_from_slice(&(self.namespace.len() as u64).to_be_bytes());
         bytes.extend_from_slice(self.namespace.as_bytes());
         bytes.extend_from_slice(&(self.object_id.len() as u64).to_be_bytes());
@@ -4412,7 +4412,7 @@ impl FixedPlanLaunchEntry {
             ));
         }
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"serverware-controller-v11/fixed-plan-launch\0");
+        bytes.extend_from_slice(b"catchplate-controller-v11/fixed-plan-launch\0");
         bytes.push(self.plan.code());
         encode_path_component(&mut bytes, &self.canonical_executable);
         encode_path_component(&mut bytes, &self.canonical_cwd);
@@ -4535,7 +4535,7 @@ impl RawFixedPlanLaunchTable {
         }
         let mut table_bytes = Vec::with_capacity(256);
         table_bytes.extend_from_slice(
-            b"serverware-controller-v11/fixed-plan-table\0",
+            b"catchplate-controller-v11/fixed-plan-table\0",
         );
         table_bytes.push(self.selected_plan.code());
         for plan in FIXED_PLAN_ORDER {
@@ -4891,7 +4891,7 @@ pub fn mandatory_denied_socket_paths() -> Vec<PathBuf> {
 fn canonical_path_digest(path: &Path) -> Digest {
     let bytes = path.as_os_str().as_bytes();
     let mut canonical = Vec::with_capacity(64 + bytes.len());
-    canonical.extend_from_slice(b"serverware-controller-v11/absolute-path\0");
+    canonical.extend_from_slice(b"catchplate-controller-v11/absolute-path\0");
     canonical.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
     canonical.extend_from_slice(bytes);
     sha256(&canonical)
@@ -5030,7 +5030,7 @@ pub(crate) fn trusted_host_measurement_bundle_sha256(
 ) -> Digest {
     let mut bytes = Vec::with_capacity(256);
     bytes.extend_from_slice(
-        b"serverware-controller-v11/trusted-host-measurements/no-tee\0",
+        b"catchplate-controller-v11/trusted-host-measurements/no-tee\0",
     );
     bytes.extend_from_slice(&measurements.verifier_executable_sha256);
     bytes.extend_from_slice(
@@ -6624,7 +6624,7 @@ pub fn trusted_host_supervisor_state_machine_sha256(
 ) -> Digest {
     let mut bytes = Vec::with_capacity(224);
     bytes.extend_from_slice(
-        b"serverware-controller-v11/shared-trusted-host-supervisor-state-machine\0",
+        b"catchplate-controller-v11/shared-trusted-host-supervisor-state-machine\0",
     );
     bytes.extend_from_slice(&measurements.shared_module_sha256);
     bytes.extend_from_slice(&measurements.backend_executable_sha256);
@@ -7007,7 +7007,7 @@ fn supervisor_state_transition_sha256(
 ) -> Digest {
     let mut bytes = Vec::with_capacity(256);
     bytes.extend_from_slice(
-        b"serverware-controller-v11/shared-supervisor-transition\0",
+        b"catchplate-controller-v11/shared-supervisor-transition\0",
     );
     bytes.extend_from_slice(&state_machine_identity_sha256);
     bytes.extend_from_slice(&registration_binding_sha256);
@@ -7729,7 +7729,7 @@ pub fn trusted_host_direct_supervisor_registration_sha256(
 ) -> Digest {
     let mut bytes = Vec::with_capacity(384);
     bytes.extend_from_slice(
-        b"serverware-controller-v11/direct-supervisor-registration\0",
+        b"catchplate-controller-v11/direct-supervisor-registration\0",
     );
     bytes.extend_from_slice(&raw.request_sha256);
     bytes.extend_from_slice(&raw.config_sha256);
@@ -7758,7 +7758,7 @@ pub fn trusted_host_direct_release_evidence_sha256(
 ) -> Digest {
     let mut bytes = Vec::with_capacity(192);
     bytes.extend_from_slice(
-        b"serverware-controller-v11/direct-supervisor-release-evidence\0",
+        b"catchplate-controller-v11/direct-supervisor-release-evidence\0",
     );
     bytes.extend_from_slice(&registration_binding_sha256);
     bytes.extend_from_slice(&authorization_sha256);
@@ -7775,7 +7775,7 @@ pub fn trusted_host_direct_containment_evidence_sha256(
 ) -> Digest {
     let mut bytes = Vec::with_capacity(192);
     bytes.extend_from_slice(
-        b"serverware-controller-v11/direct-supervisor-containment-evidence\0",
+        b"catchplate-controller-v11/direct-supervisor-containment-evidence\0",
     );
     bytes.extend_from_slice(&registration_binding_sha256);
     bytes.extend_from_slice(&authorization_sha256);
@@ -9018,7 +9018,7 @@ impl SupervisorChildHandle {
 
     pub fn registration_binding_sha256(&self) -> Digest {
         let mut bytes = Vec::with_capacity(224);
-        bytes.extend_from_slice(b"serverware-controller-v11/supervisor-child\0");
+        bytes.extend_from_slice(b"catchplate-controller-v11/supervisor-child\0");
         bytes.extend_from_slice(&self.request_sha256);
         bytes.extend_from_slice(&self.observed_source_sha256);
         bytes.extend_from_slice(&canonical_path_digest(&self.source_root));
@@ -9232,12 +9232,12 @@ impl RawGlobalRetrievalLedger {
 
 fn ordered_chunk_root(lengths: &[u32], digests: &[Digest]) -> Digest {
     if lengths.is_empty() {
-        return sha256(b"serverware-controller-v11/chunks/empty");
+        return sha256(b"catchplate-controller-v11/chunks/empty");
     }
     let mut level = Vec::with_capacity(digests.len());
     for (index, (length, digest)) in lengths.iter().zip(digests).enumerate() {
         let mut bytes = Vec::with_capacity(80);
-        bytes.extend_from_slice(b"serverware-controller-v11/chunks/leaf\0");
+        bytes.extend_from_slice(b"catchplate-controller-v11/chunks/leaf\0");
         bytes.extend_from_slice(&(index as u64).to_be_bytes());
         bytes.extend_from_slice(&length.to_be_bytes());
         bytes.extend_from_slice(digest);
@@ -9248,7 +9248,7 @@ fn ordered_chunk_root(lengths: &[u32], digests: &[Digest]) -> Digest {
         for pair in level.chunks(2) {
             let right = pair.get(1).unwrap_or(&pair[0]);
             let mut bytes = Vec::with_capacity(96);
-            bytes.extend_from_slice(b"serverware-controller-v11/chunks/node\0");
+            bytes.extend_from_slice(b"catchplate-controller-v11/chunks/node\0");
             bytes.extend_from_slice(&pair[0]);
             bytes.extend_from_slice(right);
             next.push(sha256(&bytes));
@@ -9260,7 +9260,7 @@ fn ordered_chunk_root(lengths: &[u32], digests: &[Digest]) -> Digest {
 
 fn retrieval_transcript(ledger_id: Digest, entry: &RetrievalLedgerEntry) -> Digest {
     let mut bytes = Vec::with_capacity(256);
-    bytes.extend_from_slice(b"serverware-controller-v11/retrieval/transcript\0");
+    bytes.extend_from_slice(b"catchplate-controller-v11/retrieval/transcript\0");
     bytes.extend_from_slice(&ledger_id);
     bytes.extend_from_slice(&entry.global_ordinal.to_be_bytes());
     bytes.extend_from_slice(&entry.predecessor_transcript_sha256);
@@ -10999,7 +10999,7 @@ fn validate_replay_matches_input(
 
 fn atomic_acceptance_input_sha256(input: &AtomicAcceptanceInput) -> Digest {
     let mut bytes = Vec::with_capacity(384);
-    bytes.extend_from_slice(b"serverware-controller-v11/atomic-acceptance\0");
+    bytes.extend_from_slice(b"catchplate-controller-v11/atomic-acceptance\0");
     bytes.push(input.lane.operation.code());
     bytes.push(input.lane.plan.code());
     bytes.extend_from_slice(&input.request_id);
@@ -11027,7 +11027,7 @@ fn terminal_receipt_closure_sha256(
 ) -> Digest {
     let mut bytes = Vec::with_capacity(384);
     bytes.extend_from_slice(
-        b"serverware-controller-v11/typed-terminal-receipt-closure\0",
+        b"catchplate-controller-v11/typed-terminal-receipt-closure\0",
     );
     bytes.push(kind as u8);
     bytes.extend_from_slice(&atomic_acceptance_input_sha256(input));
@@ -11241,7 +11241,7 @@ fn kernel_execution_result_sha256(
 ) -> Digest {
     let mut bytes = Vec::with_capacity(192);
     bytes.extend_from_slice(
-        b"serverware-controller-v11/kernel-monitor-result\0",
+        b"catchplate-controller-v11/kernel-monitor-result\0",
     );
     bytes.extend_from_slice(&raw.exec_start_exit.reference_sha256);
     bytes.extend_from_slice(&raw.path_and_file_identity.reference_sha256);
@@ -11262,7 +11262,7 @@ fn containment_terminal_result_sha256(
     };
     let mut bytes = Vec::with_capacity(416);
     bytes.extend_from_slice(
-        b"serverware-controller-v11/containment-terminal\0",
+        b"catchplate-controller-v11/containment-terminal\0",
     );
     bytes.push(kind);
     bytes.extend_from_slice(

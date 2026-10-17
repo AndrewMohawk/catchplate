@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="700" viewBox="0 0 1120 700" role="img" aria-labelledby="title desc">
-  <title id="title">Serverware portal OAuth login</title>
-  <desc id="desc">A screenshot-style diagram of the Serverware portal with OAuth login and credential assignment controls.</desc>
+  <title id="title">Catchplate portal OAuth login</title>
+  <desc id="desc">A screenshot-style diagram of the Catchplate portal with OAuth login and credential assignment controls.</desc>
   <rect width="1120" height="700" fill="#f5f7f5"/>
   <rect x="0" y="0" width="1120" height="64" fill="#ffffff" stroke="#d9dfd8"/>
   <rect x="24" y="17" width="30" height="30" rx="7" fill="#0f766e"/>
-  <text x="66" y="39" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#17211d">Serverware</text>
+  <text x="66" y="39" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#17211d">Catchplate</text>
   <rect x="742" y="18" width="90" height="28" rx="14" fill="#fef3c7"/>
   <text x="760" y="37" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#92400e">CA pending</text>
   <rect x="844" y="16" width="140" height="32" rx="6" fill="#ffffff" stroke="#d9dfd8"/>

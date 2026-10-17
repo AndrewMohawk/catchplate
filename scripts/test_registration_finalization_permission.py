@@ -27,8 +27,8 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import control_plane_registration_finalization_permission as permission
-from serverware import webauthn
+from catchplate import control_plane_registration_finalization_permission as permission
+from catchplate import webauthn
 
 
 RP_ID, ORIGIN = "completion.unit.invalid", "https://completion.unit.invalid"
@@ -229,7 +229,7 @@ class FinalizationPermissionControls(unittest.TestCase):
         self.assertNotEqual(first, permission._original(permission.contract.request_binding(other, recovery=False)))
 
     def test_wider_local_setup_does_not_change_ceremony_or_action_caps(self):
-        from serverware import authority_contract, authority_local_limits
+        from catchplate import authority_contract, authority_local_limits
         self.assertEqual(authority_local_limits.LOCAL_SETUP_MAX_NS, 5_400_000_000_000)
         self.assertEqual(authority_contract.VERIFIER_RESPONSE_MAX_AGE_NS, 30_000_000_000)
         self.assertEqual(permission.MAX_LIFETIME_NS, 120_000_000_000)
@@ -255,7 +255,7 @@ class FinalizationPermissionControls(unittest.TestCase):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == "db"]
         self.assertEqual(database_calls, ["webauthn.db.get_webauthn_credential"])
-        from serverware import authority_current_root_vector as vector
+        from catchplate import authority_current_root_vector as vector
         self.assertTrue({"webauthn_credentials", "webauthn_challenges", "control_plane_approvals"}
             <= set(vector.PRIMARY_TABLES))
         consume = function(permission, "consume")
@@ -267,7 +267,7 @@ class FinalizationPermissionControls(unittest.TestCase):
 
     def test_required_two_person_policy_refuses_before_pending_metadata_writes(self):
         from fastapi import HTTPException
-        from serverware import control_plane_registration_finalization_completion_routes as routes
+        from catchplate import control_plane_registration_finalization_completion_routes as routes
         # This is the pure source-policy refusal predicate, not authenticated
         # route dispatch or a successful application/approval fixture.
         for action in (permission.contract.COMPLETE_ACTION, permission.contract.RECOVER_ACTION):
@@ -288,7 +288,7 @@ class FinalizationPermissionControls(unittest.TestCase):
             guards = calls(body, "_approval_policy")
             self.assertTrue(guards)
             self.assertLess(min(node.lineno for node in guards), calls(body, downstream)[0].lineno)
-        from serverware import control_plane_registration_finalization_completion_pending as pending
+        from catchplate import control_plane_registration_finalization_completion_pending as pending
         body = function(pending, "_handle")
         guard = min(node.lineno for node in calls(body, "routes._approval_policy"))
         self.assertLess(guard, calls(body, "_options")[0].lineno)
@@ -298,7 +298,7 @@ class FinalizationPermissionControls(unittest.TestCase):
 
     def test_configured_two_person_refusal_precedes_possession_and_approval_helpers(self):
         from fastapi import HTTPException
-        from serverware import control_plane_registration_finalization_completion_routes as routes
+        from catchplate import control_plane_registration_finalization_completion_routes as routes
 
         # Exercise the actual permission component with its real refusal
         # predicate. Opaque objects are never admitted owners or identities;
@@ -324,7 +324,7 @@ class FinalizationPermissionControls(unittest.TestCase):
 
     def test_fixed_two_person_503_diagnostic_retains_uncertainty_for_both_modes(self):
         from fastapi import HTTPException
-        from serverware import control_plane_registration_finalization_completion_routes as routes
+        from catchplate import control_plane_registration_finalization_completion_routes as routes
 
         self.assertEqual(routes.TWO_PERSON_UNAVAILABLE_ERROR,
             "registration_finalization_completion_two_person_unavailable")
@@ -347,7 +347,7 @@ class FinalizationPermissionControls(unittest.TestCase):
 
     def test_arbitrary_server_details_and_retry_hints_are_redacted(self):
         from fastapi import HTTPException
-        from serverware import control_plane_registration_finalization_completion_routes as routes
+        from catchplate import control_plane_registration_finalization_completion_routes as routes
 
         class ForeignDetail(dict):
             pass

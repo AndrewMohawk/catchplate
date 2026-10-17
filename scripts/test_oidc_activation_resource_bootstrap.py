@@ -21,10 +21,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import control_plane_oidc_session_activation_consume_execution_bootstrap as consume
-from serverware import control_plane_oidc_session_activation_release_intent_bootstrap as intent
-from serverware import control_plane_oidc_session_activation_request_issuance_bootstrap as requested
-from serverware.authority_query_read_work import QueryReadValidationLimits, QueryReadWorkError, _ValidationWork
+from catchplate import control_plane_oidc_session_activation_consume_execution_bootstrap as consume
+from catchplate import control_plane_oidc_session_activation_release_intent_bootstrap as intent
+from catchplate import control_plane_oidc_session_activation_request_issuance_bootstrap as requested
+from catchplate.authority_query_read_work import QueryReadValidationLimits, QueryReadWorkError, _ValidationWork
 
 PIN = "sha256:" + "1" * 64
 OTHER = "sha256:" + "2" * 64
@@ -75,7 +75,7 @@ def cold_arguments():
 
 
 def body(module, function):
-    raw = (ROOT / "serverware" / (module + ".py")).read_text("utf-8")
+    raw = (ROOT / "catchplate" / (module + ".py")).read_text("utf-8")
     rows = [item for item in ast.parse(raw).body if isinstance(item, ast.FunctionDef) and item.name == function]
     if len(rows) != 1:
         raise AssertionError(function)

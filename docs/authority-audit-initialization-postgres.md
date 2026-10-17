@@ -77,7 +77,7 @@ before creating the snapshot and must separately admit the complete schema,
 function definitions, privileges, database generation, current root authority
 and commit-time evidence. These six table locks are not that measured fence or
 complete schema/ACL closure. The namespace is an exact lowercase ASCII SQL
-identifier, defaulting to `serverware_metadata`; the native fixture uses an
+identifier, defaulting to `catchplate_metadata`; the native fixture uses an
 explicit random schema, not SQL rewriting or a patched registry.
 
 ## Actual stream and proof path

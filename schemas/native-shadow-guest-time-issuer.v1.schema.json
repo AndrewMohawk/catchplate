@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-guest-time-issuer.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-guest-time-issuer.v1.schema.json",
   "$ref": "#/$defs/configuration",
   "$defs": {
     "sha256": { "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/sha256" },
@@ -27,7 +27,7 @@
       "description": "Separate cold-authority signature, at most 300 seconds. configurationSha256 hashes the complete canonical configuration excluding only authorization; no digest self-reference.",
       "required": ["apiVersion", "purpose", "configurationSha256", "issuedAtUnixNanos", "expiresAtUnixNanos", "signingKeyId"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeShadowGuestTimeIssuerAuthorization/v1" },
+        "apiVersion": { "const": "catchplate.nativeShadowGuestTimeIssuerAuthorization/v1" },
         "purpose": { "const": "native-shadow-guest-time-issuance" }, "configurationSha256": { "$ref": "#/$defs/sha256" },
         "issuedAtUnixNanos": { "$ref": "#/$defs/positive" }, "expiresAtUnixNanos": { "$ref": "#/$defs/positive" },
         "signingKeyId": { "$ref": "#/$defs/sha256" }
@@ -47,10 +47,10 @@
     },
     "configuration": {
       "type": "object", "additionalProperties": false,
-      "description": "Canonical ASCII no-LF original <=512 KiB at fixed /etc/serverware/native-shadow-guest-time-issuer.json, root:root0400 FD3. Its separate signed authorization and original signed C9 delivery must verify before challenge. Scalar bounds never establish guest sample provenance.",
+      "description": "Canonical ASCII no-LF original <=512 KiB at fixed /etc/catchplate/native-shadow-guest-time-issuer.json, root:root0400 FD3. Its separate signed authorization and original signed C9 delivery must verify before challenge. Scalar bounds never establish guest sample provenance.",
       "required": ["apiVersion", "uid", "gid", "operation", "issuerAuthorityKey", "timeKey", "guestAuthorityPublicKeyBase64url", "guestConfigurationOriginalBase64url", "guestDeliveryOriginalBase64url", "nitro", "collateralRevocation", "transport", "maximumBracketNanos", "timestampErrorNanos", "maximumClockRateErrorPpm", "maximumAnchorAgeNanos", "authorization"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeShadowGuestTimeIssuerConfiguration/v1" },
+        "apiVersion": { "const": "catchplate.nativeShadowGuestTimeIssuerConfiguration/v1" },
         "uid": { "$ref": "#/$defs/uid" }, "gid": { "$ref": "#/$defs/uid" },
         "operation": { "$ref": "native-shadow-nitro-verifier.v1.schema.json#/$defs/operation" },
         "issuerAuthorityKey": { "$ref": "#/$defs/key" }, "timeKey": { "$ref": "#/$defs/key" },
@@ -70,7 +70,7 @@
       "description": "Fresh issuer entropy and actual issuer time; <=30-second original issuer operation. This timestamp is NOT the guest BOOTTIME correlation.",
       "required": ["apiVersion", "purpose", "guest", "nonceBase64url", "issuedAtUnixNanos", "expiresAtUnixNanos", "maximumBracketNanos", "timestampErrorNanos", "maximumClockRateErrorPpm", "signingKeyId"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeShadowGuestTimeChallenge/v1" },
+        "apiVersion": { "const": "catchplate.nativeShadowGuestTimeChallenge/v1" },
         "purpose": { "const": "native-shadow-guest-time-challenge" }, "guest": { "$ref": "#/$defs/guest" },
         "nonceBase64url": { "$ref": "#/$defs/bytes32" }, "issuedAtUnixNanos": { "$ref": "#/$defs/positive" },
         "expiresAtUnixNanos": { "$ref": "#/$defs/positive" }, "maximumBracketNanos": { "$ref": "#/$defs/bracket" },
@@ -86,7 +86,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "purpose", "guest", "challengeSha256", "beforeBoottimeNs", "publicKeyBase64url"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeShadowGuestTimeStatement/v1" },
+        "apiVersion": { "const": "catchplate.nativeShadowGuestTimeStatement/v1" },
         "purpose": { "const": "native-shadow-guest-time-sample" }, "guest": { "$ref": "#/$defs/guest" },
         "challengeSha256": { "$ref": "#/$defs/sha256" }, "beforeBoottimeNs": { "$ref": "#/$defs/ns" },
         "publicKeyBase64url": { "$ref": "#/$defs/bytes32" }
@@ -101,7 +101,7 @@
       "description": "Whole canonical evidence <=64 KiB; NSM document <=12 KiB. The quoted ephemeral key signs exact samplePayload, including the after sample and original quote SHA.",
       "required": ["apiVersion", "statement", "afterBoottimeNs", "attestationDocumentBase64url", "signature"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeShadowGuestTimeEvidence/v1" }, "statement": { "$ref": "#/$defs/statement" },
+        "apiVersion": { "const": "catchplate.nativeShadowGuestTimeEvidence/v1" }, "statement": { "$ref": "#/$defs/statement" },
         "afterBoottimeNs": { "$ref": "#/$defs/ns" },
         "attestationDocumentBase64url": { "type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^[A-Za-z0-9_-]+$" },
         "signature": { "$ref": "#/$defs/signature" }
@@ -112,7 +112,7 @@
       "description": "An interval at the exact before-sample BOOTTIME, not an exact epoch point. Expiry is <=earliest+300 seconds and never renews original guest startup/lifetime. Consumers widen both bounds with elapsed BOOTTIME/rate and validate whole intervals.",
       "required": ["apiVersion", "purpose", "guest", "challengeSha256", "evidenceSha256", "quoteSha256", "anchorBoottimeNs", "earliestUnixNanos", "latestUnixNanos", "expiresAtUnixNanos", "maximumClockRateErrorPpm", "signingKeyId"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeShadowGuestTimeAnchor/v2" },
+        "apiVersion": { "const": "catchplate.nativeShadowGuestTimeAnchor/v2" },
         "purpose": { "const": "native-shadow-guest-trusted-time" }, "guest": { "$ref": "#/$defs/guest" },
         "challengeSha256": { "$ref": "#/$defs/sha256" }, "evidenceSha256": { "$ref": "#/$defs/sha256" },
         "quoteSha256": { "$ref": "#/$defs/sha256" }, "anchorBoottimeNs": { "$ref": "#/$defs/ns" },

@@ -15,10 +15,10 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_id as ids
-from serverware import authority_index_projection as projection
-from serverware import authority_index_trace as trace
-from serverware import authority_index_heads as heads
+from catchplate import authority_challenge_id as ids
+from catchplate import authority_index_projection as projection
+from catchplate import authority_index_trace as trace
+from catchplate import authority_index_heads as heads
 import test_authority_index_join as old_oracle
 
 
@@ -127,8 +127,8 @@ class ChallengeIndexTests(unittest.TestCase):
         # Render the actual shared source guards; SQL execution is a separate
         # PostgreSQL fixture, not simulated by this pure regression.
         import re
-        from serverware.authority_store import counted_path_sql as path
-        from serverware.authority_store import counted_store_sql as store
+        from catchplate.authority_store import counted_path_sql as path
+        from catchplate.authority_store import counted_store_sql as store
 
         compact = lambda value: " ".join(value.split())
         guard = compact(store._key_identity_check(
@@ -159,9 +159,9 @@ class ChallengeIndexTests(unittest.TestCase):
         self.assertIn(f"CONSTRAINT counted_leaves_suffix CHECK ( {guard} IS TRUE )", leaves)
 
         rendered_path = compact(path.counted_path_functions_sql('"fixture"')[0])
-        self.assertIn('identity_digest := "fixture".serverware_policy_authority_domain_digest( '
-            "'serverware.policyAuthorityBusinessKey/v1',source_table, "
-            '\"fixture\".serverware_policy_authority_wire_json(pg_catalog.jsonb_build_object(\'id\',event_id)));', rendered_path)
+        self.assertIn('identity_digest := "fixture".catchplate_policy_authority_domain_digest( '
+            "'catchplate.policyAuthorityBusinessKey/v1',source_table, "
+            '\"fixture\".catchplate_policy_authority_wire_json(pg_catalog.jsonb_build_object(\'id\',event_id)));', rendered_path)
         for side in ("old", "new"):
             self.assertIn(f"{side}_primary_key_digest := projected.primary_key_digest;", rendered_path)
             side_guard = compact(store._key_identity_check(
@@ -187,7 +187,7 @@ class ChallengeIndexTests(unittest.TestCase):
             trace.validate_count_read_trace("webauthn.challenge.claim", "policy_authority_counted_index_nodes", key)
 
     def test_deferred_retention_guard_uses_source_owner_without_table_grants(self):
-        from serverware.authority_store import challenge_retention_sql as retention_sql
+        from catchplate.authority_store import challenge_retention_sql as retention_sql
 
         statements = retention_sql.challenge_retention_installation_sql('"fixture"')
         guard = statements[1]
@@ -201,10 +201,10 @@ class ChallengeIndexTests(unittest.TestCase):
             "webauthn_challenges", "webauthn_recovery_ceremonies"))
         for ordinal, table in enumerate(retention_sql.SOURCE_TABLES):
             self.assertIn(f'FROM "fixture".{table} AS source_row', guard)
-            self.assertIn(f'CREATE CONSTRAINT TRIGGER serverware_retention_{ordinal} '
+            self.assertIn(f'CREATE CONSTRAINT TRIGGER catchplate_retention_{ordinal} '
                 f'AFTER INSERT OR UPDATE OR DELETE ON "fixture".{table} '
                 'DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION '
-                '"fixture".serverware_policy_authority_challenge_retention_guard()', statements)
+                '"fixture".catchplate_policy_authority_challenge_retention_guard()', statements)
         for field in retention_sql.INLINE_FIELDS:
             self.assertIn(f"actual->'{field}' IS DISTINCT FROM expected->'{field}'", guard)
         self.assertIn("RAISE EXCEPTION 'challenge retention original join differs'", guard)

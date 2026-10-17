@@ -8,7 +8,7 @@ operations. Receiving a file descriptor does **not** authorize operational use.
 ## Retain, retire, transfer
 
 The explicit `--run-native-genesis-handoff` command selects
-`serverware.nativePilotGenesisExecution/v2`. The original v1 command remains a
+`catchplate.nativePilotGenesisExecution/v2`. The original v1 command remains a
 64-job, Bundle-only flow. V2 has **66 jobs and the same 36 signing purposes**.
 Its final sequence is:
 
@@ -71,9 +71,9 @@ The supervisor package's existing publication entrypoint adds the explicit
 - a separate protected validator-control FD/hash;
 - the independently provisioned sealed authority-key FD.
 
-The closed control is `serverware.nativePublicationAdoptionAuthorityControl/v1`
+The closed control is `catchplate.nativePublicationAdoptionAuthorityControl/v1`
 with `validatorExecutableSha256` and `inputSha256`. It pins the fixed executable
-`/opt/serverware/serverware-native-publication-adoption-validator`; it cannot
+`/opt/catchplate/catchplate-native-publication-adoption-validator`; it cannot
 select another path, module, command or environment.
 
 The retained authority executes those exact static ELF bytes, supplies the
@@ -103,7 +103,7 @@ or anchors). No corrective rerun was required.
 The run used cached Python 3.11.15, an empty environment, private user/network
 namespaces, one CPU and a 240-second bound. Exact source archive, harnesses,
 commands, logs, file hashes and results are retained under
-`codex-offload/serverware/engineering-builds/8fb767ac-core-handoff-2p5pkO/`.
+`codex-offload/catchplate/engineering-builds/8fb767ac-core-handoff-2p5pkO/`.
 
 Controls cover synthetic framing/signatures, closed CLI/protocol compatibility,
 package fixtures, and real anonymous pipe/memfd/socket/PIDFD primitives. The

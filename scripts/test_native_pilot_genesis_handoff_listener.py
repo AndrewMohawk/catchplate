@@ -16,10 +16,10 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts import native_pilot_authority_runtime_entrypoint as entry
-from serverware import native_pilot_genesis_authority as authority
-from serverware import native_pilot_genesis_handoff_listener as listener
-from serverware import native_pilot_genesis_jobs as jobs
-from serverware import native_pilot_genesis_execution_protocol as execution
+from catchplate import native_pilot_genesis_authority as authority
+from catchplate import native_pilot_genesis_handoff_listener as listener
+from catchplate import native_pilot_genesis_jobs as jobs
+from catchplate import native_pilot_genesis_execution_protocol as execution
 
 
 def canonical(value):
@@ -31,7 +31,7 @@ def sha(raw):
 
 
 def fixture():
-    value = {"apiVersion": "serverware.nativePilotGenesisListenerConfiguration/v1", "window": {
+    value = {"apiVersion": "catchplate.nativePilotGenesisListenerConfiguration/v1", "window": {
         "bootIdBase64url": "AAECAwQFBgcICQoLDA0ODw", "timeNamespaceDevice": 11, "timeNamespaceInode": 12,
         "issuedAtBoottimeNs": "1000000000", "startupDeadlineBoottimeNs": "2000000000",
         "lifetimeDeadlineBoottimeNs": "4000000000", "invocationId": "1234567890abcdef1234567890abcdef"},
@@ -62,7 +62,7 @@ class GenesisHandoffListenerControls(unittest.TestCase):
         self.assertNotIn("coreHandoff", value)
         with self.assertRaises(ValueError):
             listener.configuration(canonical(value | {"coreHandoff": {"peerPid": 123, "peerUid": 0, "peerGid": 0}}), **clocks)
-        self.assertEqual(listener.ENDPOINT, "/run/serverware/native-pilot-core-handoff/core.sock")
+        self.assertEqual(listener.ENDPOINT, "/run/catchplate/native-pilot-core-handoff/core.sock")
 
     def test_late_configuration_requires_existing_handoff_profile_and_exact_original_bounds(self):
         value, clocks = fixture()
@@ -104,7 +104,7 @@ class GenesisHandoffListenerControls(unittest.TestCase):
         raw = request()
         value = dict(apiVersion=listener.REPLY_API, requestSha256=sha(raw), inputSha256=sha(b"input"), approvalSha256=sha(b"approval"))
         self.assertEqual(listener.reply(canonical(value), raw), value)
-        for changed in (value | {"requestSha256": sha(b"other")}, value | {"apiVersion": "serverware.nativePilotGenesisJobReply/v2"},
+        for changed in (value | {"requestSha256": sha(b"other")}, value | {"apiVersion": "catchplate.nativePilotGenesisJobReply/v2"},
                 value | {"path": "/tmp/caller-input"}, value | {"inputSha256": "unknown"}):
             with self.subTest(value=changed), self.assertRaises(ValueError): listener.reply(canonical(changed), raw)
         changed_request = json.loads(raw); changed_request["sequence"] = 1
@@ -121,8 +121,8 @@ class GenesisHandoffListenerControls(unittest.TestCase):
                 {"expiresAtUnixNanos": 9000000001}, {"approvedPeer": 123}):
             with self.subTest(fields=fields), self.assertRaises(ValueError):
                 listener.approval(canonical(value | fields), request_raw=raw, input_sha256=sha(b"input"))
-        self.assertEqual(listener.INPUT_PATH, "/etc/serverware/native-genesis-authority/listener-execution.input.json")
-        self.assertEqual(listener.APPROVAL_PATH, "/etc/serverware/native-genesis-authority/listener-execution.approval.json")
+        self.assertEqual(listener.INPUT_PATH, "/etc/catchplate/native-genesis-authority/listener-execution.input.json")
+        self.assertEqual(listener.APPROVAL_PATH, "/etc/catchplate/native-genesis-authority/listener-execution.approval.json")
 
     def test_raw_configuration_is_closed_canonical_and_bounded(self):
         value, clocks = fixture()

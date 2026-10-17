@@ -28,8 +28,8 @@ ROOT = Path(__file__).resolve().parents[1]
 ACTOR = workspace.common._ACTOR
 CLIENT = "fixture-x-public-client-id"
 SECRET = "synthetic-x-application-private-canary"
-KEY_DIRECTORY = "SERVERWARE_OPERATOR_X_CUSTODY_DIR"
-FLAG = "SERVERWARE_OPERATOR_MANAGED_X_ENABLED"
+KEY_DIRECTORY = "CATCHPLATE_OPERATOR_X_CUSTODY_DIR"
+FLAG = "CATCHPLATE_OPERATOR_MANAGED_X_ENABLED"
 
 
 def no_network(event, _arguments):
@@ -40,10 +40,10 @@ def no_network(event, _arguments):
 def fixture(*, reopen=False):
     if reopen:
         config, db, store, _ = workspace.common.backend(initialize=False)
-        from serverware import operator_catalog_schema as schema
+        from catchplate import operator_catalog_schema as schema
     else:
         config, db, store, _, schema, _, _ = workspace.workspace()
-    from serverware import operator_x_configuration as service
+    from catchplate import operator_x_configuration as service
     return config, db, store, schema, service
 
 
@@ -76,7 +76,7 @@ def refused(function, expected):
 
 def lifecycle():
     config, db, store, schema, service = fixture()
-    from serverware import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
+    from catchplate import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
     credential = workspace.create_credential(db, store, schema, inputs, mutations)["credential"]
     application = workspace.create_application(db, store, schema, inputs, mutations)["application"]
     workspace.create_rule(db, store, schema, inputs, mutations, application["id"], credential["id"])
@@ -226,7 +226,7 @@ def lost_ack():
 def pending(kind):
     config, _, _, schema, service = fixture()
     if kind == "google":
-        from serverware import operator_google_setup as setup
+        from catchplate import operator_google_setup as setup
         review = setup.review(ACTOR)
         command = {key: review[key] for key in (
             "expected_revision", "expected_policy_hash", "expected_settings_digest")}
@@ -234,7 +234,7 @@ def pending(kind):
             "client_id": "123-fixture.apps.googleusercontent.com"}, ACTOR)
         reason = "pending_google_configuration"
     else:
-        from serverware import operator_upstream_setup as setup
+        from catchplate import operator_upstream_setup as setup
         review = setup.review(ACTOR)
         command = {key: review[key] for key in (
             "expected_revision", "expected_policy_hash", "expected_settings_digest")}
@@ -274,7 +274,7 @@ def corrupt(kind):
                             conn.execute(sql)
                 elif kind == "extra-version":
                     # A valid extra ciphertext still lacks a retained configuration.
-                    from serverware import operator_publication as publication
+                    from catchplate import operator_publication as publication
                     conn.rollback()
                     with publication.exclusive():
                         conn.execute("BEGIN IMMEDIATE")
@@ -313,7 +313,7 @@ class XConfigurationTests(unittest.TestCase):
         directory = Path(self.scratch.name) / "x-custody"
         directory.mkdir(mode=0o700)
         self.environment.update({FLAG: "1", KEY_DIRECTORY: str(directory),
-            "SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED": "1", "SERVERWARE_PUBLIC_URL": "https://console.example.com"})
+            "CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED": "1", "CATCHPLATE_PUBLIC_URL": "https://console.example.com"})
 
     def run_worker(self, operation):
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation],

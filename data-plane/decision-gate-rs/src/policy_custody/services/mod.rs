@@ -159,17 +159,17 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 const SERVICE_RUNTIME_CONFIG_VERSION: &str =
-    "serverware.policyCustodyServiceRuntimeConfig/v4";
+    "catchplate.policyCustodyServiceRuntimeConfig/v4";
 const DURABLE_RECOVERY_STORE_CONFIG_CREDENTIAL: &str =
-    "serverware-policy-custody-durable-recovery-store.json";
+    "catchplate-policy-custody-durable-recovery-store.json";
 const CLEANUP_AUTHORIZATION_CONSUMER_CONFIG_CREDENTIAL: &str =
-    "serverware-policy-custody-cleanup-authorization-consumer.json";
+    "catchplate-policy-custody-cleanup-authorization-consumer.json";
 const RECOVERY_TARGET_PROVIDER_CONFIG_CREDENTIAL: &str =
-    "serverware-policy-custody-recovery-target-provider.json";
+    "catchplate-policy-custody-recovery-target-provider.json";
 const CURRENT_SIGNATURE_AUTHORITY_CONFIG_CREDENTIAL: &str =
-    "serverware-policy-custody-current-signature-authority.json";
+    "catchplate-policy-custody-current-signature-authority.json";
 const BOUNDED_CLEANUP_HELPER_CONFIG_CREDENTIAL: &str =
-    "serverware-policy-custody-bounded-cleanup-helper.json";
+    "catchplate-policy-custody-bounded-cleanup-helper.json";
 const LISTENER_FD_NAME: &str = "listener";
 const JOURNAL_FD_NAME: &str = "journal";
 const STATE_FD_NAME: &str = "state";

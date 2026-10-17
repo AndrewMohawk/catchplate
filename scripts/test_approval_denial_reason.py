@@ -14,19 +14,19 @@ sys.path.insert(0, str(ROOT))
 
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        os.environ["SERVERWARE_DATA_DIR"] = tmp
-        os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
-        os.environ["SERVERWARE_PUBLIC_URL"] = "http://localhost:3000"
-        os.environ.pop("SERVERWARE_METADATA_STORE_POSTGRES_DSN", None)
-        os.environ.pop("SERVERWARE_AUDIT_STORE_POSTGRES_DSN", None)
-        os.environ.pop("SERVERWARE_GRANT_STORE_POSTGRES_DSN", None)
+        os.environ["CATCHPLATE_DATA_DIR"] = tmp
+        os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
+        os.environ["CATCHPLATE_PUBLIC_URL"] = "http://localhost:3000"
+        os.environ.pop("CATCHPLATE_METADATA_STORE_POSTGRES_DSN", None)
+        os.environ.pop("CATCHPLATE_AUDIT_STORE_POSTGRES_DSN", None)
+        os.environ.pop("CATCHPLATE_GRANT_STORE_POSTGRES_DSN", None)
 
-        from serverware import app as app_module
-        from serverware import db, policy_bundle
-        from serverware.auth import AdminIdentity
+        from catchplate import app as app_module
+        from catchplate import db, policy_bundle
+        from catchplate.auth import AdminIdentity
 
         db.init_db()
         snapshot = policy_bundle.write_policy_bundle(policy_bundle.demo_policy_bundle("cred-demo-bearer"))

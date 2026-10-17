@@ -24,11 +24,11 @@ import (
 
 func environment() map[string]string {
 	return map[string]string{
-		"SERVERWARE_PROXY_URL":     "https://proxy.example.test:8443",
-		"SERVERWARE_APP_ID":        "11111111-1111-4111-8111-111111111111",
-		"SERVERWARE_PROXY_TOKEN":   base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)),
-		"SERVERWARE_CA_FILE":       "/synthetic/serverware-ca.pem",
-		"SERVERWARE_ALCHEMY_CHAIN": "eth-mainnet",
+		"CATCHPLATE_PROXY_URL":     "https://proxy.example.test:8443",
+		"CATCHPLATE_APP_ID":        "11111111-1111-4111-8111-111111111111",
+		"CATCHPLATE_PROXY_TOKEN":   base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)),
+		"CATCHPLATE_CA_FILE":       "/synthetic/catchplate-ca.pem",
+		"CATCHPLATE_ALCHEMY_CHAIN": "eth-mainnet",
 		"ALCHEMY_API_KEY":          "must-not-be-used", "WEB3_PROVIDER_URI": "https://must-not-be-used.invalid",
 		"HTTPS_PROXY": "http://must-not-be-used.invalid", "NO_PROXY": "*",
 	}
@@ -50,26 +50,26 @@ func TestConfigRequiresExplicitBoundedInputs(t *testing.T) {
 		t.Fatal("unexpected explicit configuration")
 	}
 	for _, tc := range []struct{ key, value string }{
-		{"SERVERWARE_PROXY_URL", "http://proxy.example.test"},
-		{"SERVERWARE_PROXY_URL", "https://user:secret@proxy.example.test"},
-		{"SERVERWARE_PROXY_URL", "https://proxy.example.test/path"},
-		{"SERVERWARE_PROXY_URL", "https://proxy.example.test?"},
-		{"SERVERWARE_PROXY_URL", "https://proxy.example.test#fragment"},
-		{"SERVERWARE_PROXY_URL", "https://proxy.example.test:0"},
-		{"SERVERWARE_PROXY_URL", "https://proxy.example.test:65536"},
-		{"SERVERWARE_PROXY_URL", "https://proxy.example.test:"},
-		{"SERVERWARE_PROXY_URL", "https://eth-mainnet.g.alchemy.com"},
-		{"SERVERWARE_PROXY_URL", "https://eth-sepolia.g.alchemy.com"},
-		{"SERVERWARE_PROXY_URL", "https://127.0.0.1"},
-		{"SERVERWARE_PROXY_URL", "https://[::1]"},
-		{"SERVERWARE_PROXY_URL", "https://Proxy.example.test"},
-		{"SERVERWARE_APP_ID", "not-an-application-id"},
-		{"SERVERWARE_PROXY_TOKEN", "not-an-issued-app-token"},
-		{"SERVERWARE_CA_FILE", ""},
-		{"SERVERWARE_ALCHEMY_CHAIN", ""},
-		{"SERVERWARE_ALCHEMY_CHAIN", "mainnet"},
-		{"SERVERWARE_ALCHEMY_CHAIN", "ETH-MAINNET"},
-		{"SERVERWARE_ALCHEMY_CHAIN", "https://eth-mainnet.g.alchemy.com/v2/secret"},
+		{"CATCHPLATE_PROXY_URL", "http://proxy.example.test"},
+		{"CATCHPLATE_PROXY_URL", "https://user:secret@proxy.example.test"},
+		{"CATCHPLATE_PROXY_URL", "https://proxy.example.test/path"},
+		{"CATCHPLATE_PROXY_URL", "https://proxy.example.test?"},
+		{"CATCHPLATE_PROXY_URL", "https://proxy.example.test#fragment"},
+		{"CATCHPLATE_PROXY_URL", "https://proxy.example.test:0"},
+		{"CATCHPLATE_PROXY_URL", "https://proxy.example.test:65536"},
+		{"CATCHPLATE_PROXY_URL", "https://proxy.example.test:"},
+		{"CATCHPLATE_PROXY_URL", "https://eth-mainnet.g.alchemy.com"},
+		{"CATCHPLATE_PROXY_URL", "https://eth-sepolia.g.alchemy.com"},
+		{"CATCHPLATE_PROXY_URL", "https://127.0.0.1"},
+		{"CATCHPLATE_PROXY_URL", "https://[::1]"},
+		{"CATCHPLATE_PROXY_URL", "https://Proxy.example.test"},
+		{"CATCHPLATE_APP_ID", "not-an-application-id"},
+		{"CATCHPLATE_PROXY_TOKEN", "not-an-issued-app-token"},
+		{"CATCHPLATE_CA_FILE", ""},
+		{"CATCHPLATE_ALCHEMY_CHAIN", ""},
+		{"CATCHPLATE_ALCHEMY_CHAIN", "mainnet"},
+		{"CATCHPLATE_ALCHEMY_CHAIN", "ETH-MAINNET"},
+		{"CATCHPLATE_ALCHEMY_CHAIN", "https://eth-mainnet.g.alchemy.com/v2/secret"},
 	} {
 		t.Run(tc.key+"/"+tc.value, func(t *testing.T) {
 			env := environment()

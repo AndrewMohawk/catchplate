@@ -30,10 +30,10 @@ const PROCESSING_NS: u64 = 30_000_000_000;
 const MAX_CERTIFICATE_BYTES: usize = 16 * 1024;
 const MAX_CLIENT_CHAIN_BYTES: usize = 64 * 1024;
 const MAX_QUOTE_BYTES: usize = 12 * 1024;
-const ROOT_SET_DOMAIN: &[u8] = b"serverware/mutual-tls-client-trust/v1\0";
-const REQUEST_DOMAIN: &[u8] = b"serverware/native-enrollment-bootstrap-key-binding/v1\0";
-const SIGNATURE_DOMAIN: &[u8] = b"serverware/native-enrollment-bootstrap-packet-signature/v1\0";
-const OPERATION_DOMAIN: &[u8] = b"serverware/native-enrollment-bootstrap-attempt-binding/v1\0";
+const ROOT_SET_DOMAIN: &[u8] = b"catchplate/mutual-tls-client-trust/v1\0";
+const REQUEST_DOMAIN: &[u8] = b"catchplate/native-enrollment-bootstrap-key-binding/v1\0";
+const SIGNATURE_DOMAIN: &[u8] = b"catchplate/native-enrollment-bootstrap-packet-signature/v1\0";
+const OPERATION_DOMAIN: &[u8] = b"catchplate/native-enrollment-bootstrap-attempt-binding/v1\0";
 
 /// Public originals only. Construction is private; no permission follows from
 /// this object and an independent receiver must authenticate the original COSE.

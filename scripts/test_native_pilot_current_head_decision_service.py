@@ -18,8 +18,8 @@ from cryptography.exceptions import InvalidSignature
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 from scripts.test_native_pilot_approval_current_heads import fixture
-from serverware import native_pilot_current_head_decision_service_profile as profile
-from serverware import native_pilot_supervisor_current_head_profile as evidence_profile
+from catchplate import native_pilot_current_head_decision_service_profile as profile
+from catchplate import native_pilot_supervisor_current_head_profile as evidence_profile
 
 p = profile.p
 ERRORS = (ValueError, KeyError, TypeError, InvalidSignature)
@@ -75,7 +75,7 @@ class CurrentHeadDecisionServiceControls(unittest.TestCase):
     def test_exact_eight_closed_filename_sets_and_fixed_directory(self):
         names = {name for job in profile.intake.JOB_NAMES for name in profile.filenames(job).values()}
         self.assertEqual(len(names), 32)
-        self.assertEqual(profile.DIRECTORY, "/etc/serverware/native-pilot-current-head-decisions")
+        self.assertEqual(profile.DIRECTORY, "/etc/catchplate/native-pilot-current-head-decisions")
         self.assertTrue(all("/" not in name and name.endswith(".json") for name in names))
         for job in ("../current-head", "stop", "*", ""):
             with self.subTest(job=job), self.assertRaises(ERRORS): profile.filenames(job)
@@ -126,7 +126,7 @@ class CurrentHeadDecisionServiceControls(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ERRORS): checked(value)
 
     def test_selected_service_source_forwards_only_after_pair_validation(self):
-        tree = ast.parse((ROOT / "serverware/native_pilot_current_head_decision_service.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/native_pilot_current_head_decision_service.py").read_text())
         owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "CurrentHeadDecisionService")
         methods = {node.name: node for node in owner.body if isinstance(node, ast.FunctionDef)}
         calls = [(node.func.attr, node.lineno) for node in ast.walk(methods["run"])
@@ -145,7 +145,7 @@ class CurrentHeadDecisionServiceControls(unittest.TestCase):
         self.assertNotIn("self._peer", ast.unparse(methods["check"]))
 
     def test_receiver_publishes_complete_final_names_through_retained_atomic_owner(self):
-        tree = ast.parse((ROOT / "serverware/native_pilot_current_head_decision_service.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/native_pilot_current_head_decision_service.py").read_text())
         owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "CurrentHeadDecisionService")
         methods = {node.name: node for node in owner.body if isinstance(node, ast.FunctionDef)}
         publish = ast.unparse(methods["_publish"])

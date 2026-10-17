@@ -1,10 +1,10 @@
 {
-  "schema": "serverware.alchemyRpcReadFixtures/v1",
+  "schema": "catchplate.alchemyRpcReadFixtures/v1",
   "adapter": "alchemy.rpc_read.v1",
   "chain": "eth-mainnet",
   "url": "https://eth-mainnet.g.alchemy.com/v2",
   "operation": {"operation":"alchemy.rpc.read","chain":"eth-mainnet","method":"eth_chainId","requestId":1},
-  "replacement": {"mode":"replaceExact","expectedValue":"Bearer serverware-alchemy-placeholder-v1"},
+  "replacement": {"mode":"replaceExact","expectedValue":"Bearer catchplate-alchemy-placeholder-v1"},
   "credentialBinding": {"credentialType":"static","provider":"operator-demo","subjects":["synthetic-alchemy-subject"],"secretClass":"bearerToken"},
   "request": {"allowedHeaders":["accept","accept-language","alchemy-ethers-sdk-method","alchemy-ethers-sdk-version","sec-fetch-mode","user-agent"],"discardHeaders":["accept-encoding"],"allowedQueryKeys":[],"allowedMediaTypes":["application/json"],"maxBodyBytes":65536,"valueRules":[]},
   "response": {"mode":"alchemyRpcReadJsonV1","maxBodyBytes":65536,"contentTypes":["application/json"],"allowedHeaders":[],"error":{"mode":"alchemyRpcReadJsonV1","maxBodyBytes":65536,"contentTypes":["application/json"],"allowedHeaders":[],"onInvalid":"block"}},

@@ -32,7 +32,7 @@ from scripts.check_operator_ordinary_client import OrdinaryClientCheck, START, R
 from scripts.run_operator_x_examples_fixture import failure_site
 
 PREFIX = "/api/operator-demo/approvals"
-SCHEMA = "serverware.privateHostApprovalCheck/v1"
+SCHEMA = "catchplate.privateHostApprovalCheck/v1"
 ERROR_CODES = {"host_trusted_approval_required", "host_trusted_approval_outcome_unknown",
     "host_trusted_approval_unavailable", "generic_header_not_allowed", "policy_snapshot_revoked"}
 
@@ -79,12 +79,12 @@ class HostApprovalCheck(OperatorCatalogCheck):
             "--suppress-connect-headers", "--request", "POST", "--data-binary", "@" + str(self.bodies[body_index]),
             "--header", "Authorization: " + oracle.DUMMY_AUTHORIZATION, "--header", "Content-Type: application/json",
             "--header", "Accept: application/json", "--header", "Accept-Encoding: identity",
-            "--header", "Connection: close", "--header", "User-Agent: serverware-test-run/" + self.run_id,
-            "--write-out", "\nserverware-host-approval:%{http_connect}:%{http_code}\n", target]
+            "--header", "Connection: close", "--header", "User-Agent: catchplate-test-run/" + self.run_id,
+            "--write-out", "\ncatchplate-host-approval:%{http_connect}:%{http_code}\n", target]
         private = ('proxy-user = "' + self.application["id"] + ":" + self.client_token + '"\n').encode()
         code, output, error = run_curl(argv, private, min(12, self.timeout()))
         self.clean(output); self.clean(error)
-        wire, separator, tail = output.rpartition(b"\nserverware-host-approval:")
+        wire, separator, tail = output.rpartition(b"\ncatchplate-host-approval:")
         status = re.fullmatch(rb"([0-9]{3}):([0-9]{3})\n", tail) if separator else None
         self.failure_observation = {"curlExit": code, "connectStatus": int(status[1]) if status else None,
             "httpStatus": int(status[2]) if status else None, "providerArrivals": None,

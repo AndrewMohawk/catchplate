@@ -20,14 +20,14 @@ LAUNCH_AUTHORITY_ROOT_SHA256 = "sha256:" + "6" * 64
 def build_artifact() -> dict:
     images = [
         {
-            "service": "serverware-control",
-            "tag": "serverware/control:production-local",
+            "service": "catchplate-control",
+            "tag": "catchplate/control:production-local",
             "dockerfile": "Dockerfile.production",
             "image_id": "sha256:" + "a" * 64,
         },
         {
-            "service": "serverware-decision-gate",
-            "tag": "serverware/decision-gate:production-local",
+            "service": "catchplate-decision-gate",
+            "tag": "catchplate/decision-gate:production-local",
             "dockerfile": "data-plane/decision-gate-rs/Dockerfile.production",
             "image_id": "sha256:" + "b" * 64,
             "binary_digest": "sha256:" + "1" * 64,
@@ -84,7 +84,7 @@ def assert_remote_launcher_verification() -> None:
         "launch_authority_key_id": LAUNCH_AUTHORITY_KEY_ID,
         "launch_authority_root_sha256": LAUNCH_AUTHORITY_ROOT_SHA256,
     }
-    repo_digest = "registry.prod.serverware.dev/serverware/decision-gate@sha256:" + "3" * 64
+    repo_digest = "registry.prod.catchplate.dev/catchplate/decision-gate@sha256:" + "3" * 64
     remote_image_id = image["image_id"]
     with (
         mock.patch.object(publisher, "inspect_repo_digest", return_value=repo_digest),
@@ -97,7 +97,7 @@ def assert_remote_launcher_verification() -> None:
     ):
         published = publisher.publish_image(
             image,
-            registry_prefix="registry.prod.serverware.dev/serverware",
+            registry_prefix="registry.prod.catchplate.dev/catchplate",
             tag="candidate",
             use_imagetools=True,
             expected_launch_authority=expected_authority,
@@ -124,7 +124,7 @@ def assert_remote_launcher_verification() -> None:
         try:
             publisher.publish_image(
                 image,
-                registry_prefix="registry.prod.serverware.dev/serverware",
+                registry_prefix="registry.prod.catchplate.dev/catchplate",
                 tag="candidate",
                 use_imagetools=True,
                 expected_launch_authority=expected_authority,
@@ -151,7 +151,7 @@ def assert_remote_launcher_verification() -> None:
         try:
             publisher.publish_image(
                 image,
-                registry_prefix="registry.prod.serverware.dev/serverware",
+                registry_prefix="registry.prod.catchplate.dev/catchplate",
                 tag="candidate",
                 use_imagetools=True,
                 expected_launch_authority=expected_authority,
@@ -165,7 +165,7 @@ def assert_remote_launcher_verification() -> None:
     mutated = build_artifact()["images"][1]
 
     def mutate_after_measurement(_image: str, path: str) -> str:
-        if path.endswith("serverware-decision-gate"):
+        if path.endswith("catchplate-decision-gate"):
             return str(mutated["binary_digest"])
         mutated["launch_authority_root_sha256"] = "sha256:" + "9" * 64
         return str(mutated["launcher_binary_digest"])
@@ -182,7 +182,7 @@ def assert_remote_launcher_verification() -> None:
         try:
             publisher.publish_image(
                 mutated,
-                registry_prefix="registry.prod.serverware.dev/serverware",
+                registry_prefix="registry.prod.catchplate.dev/catchplate",
                 tag="candidate",
                 use_imagetools=True,
                 expected_launch_authority=expected_authority,
@@ -195,19 +195,19 @@ def assert_remote_launcher_verification() -> None:
 
 
 def main() -> None:
-    if publisher.PUBLISHED_API_VERSION != "serverware.productionImagesPublished/v2":
+    if publisher.PUBLISHED_API_VERSION != "catchplate.productionImagesPublished/v2":
         raise AssertionError(f"published image contract was not promoted to v2: {publisher.PUBLISHED_API_VERSION}")
     assert_remote_launcher_verification()
-    if publisher.service_repo_name("serverware-decision-gate") != "decision-gate":
-        raise AssertionError("service repo mapping did not strip serverware prefix")
+    if publisher.service_repo_name("catchplate-decision-gate") != "decision-gate":
+        raise AssertionError("service repo mapping did not strip catchplate prefix")
     ref = publisher.repo_digest_from_inspect(
-        "registry.prod.serverware.dev/serverware/control",
+        "registry.prod.catchplate.dev/catchplate/control",
         [
-            "registry.other.serverware.dev/control@sha256:" + "0" * 64,
-            "registry.prod.serverware.dev/serverware/control@sha256:" + "1" * 64,
+            "registry.other.catchplate.dev/control@sha256:" + "0" * 64,
+            "registry.prod.catchplate.dev/catchplate/control@sha256:" + "1" * 64,
         ],
     )
-    if ref != "registry.prod.serverware.dev/serverware/control@sha256:" + "1" * 64:
+    if ref != "registry.prod.catchplate.dev/catchplate/control@sha256:" + "1" * 64:
         raise AssertionError(f"repo digest extraction failed: {ref}")
 
     with tempfile.TemporaryDirectory() as tmp_raw:
@@ -218,7 +218,7 @@ def main() -> None:
             "--build-file",
             str(build_file),
             "--registry-prefix",
-            "registry.prod.serverware.dev/serverware",
+            "registry.prod.catchplate.dev/catchplate",
             "--tag",
             "2026-05-25",
             "--dry-run",
@@ -228,8 +228,8 @@ def main() -> None:
         plan = json.loads(result.stdout.decode("utf-8"))
         tags = [item["tag"] for item in plan.get("commands") or []]
         if tags != [
-            "registry.prod.serverware.dev/serverware/control:2026-05-25",
-            "registry.prod.serverware.dev/serverware/decision-gate:2026-05-25",
+            "registry.prod.catchplate.dev/catchplate/control:2026-05-25",
+            "registry.prod.catchplate.dev/catchplate/decision-gate:2026-05-25",
         ]:
             raise AssertionError(f"publish dry-run planned wrong tags: {plan}")
 
@@ -237,7 +237,7 @@ def main() -> None:
         bad = build_artifact()
         bad["no_shell"] = {"ok": False}
         bad_file.write_text(json.dumps(bad, sort_keys=True) + "\n", encoding="utf-8")
-        rejected = run_script("--build-file", str(bad_file), "--registry-prefix", "registry.prod.serverware.dev/serverware", "--dry-run")
+        rejected = run_script("--build-file", str(bad_file), "--registry-prefix", "registry.prod.catchplate.dev/catchplate", "--dry-run")
         if rejected.returncode == 0 or "no_shell" not in detail(rejected):
             raise AssertionError(f"publisher accepted an unverified build artifact: {detail(rejected)}")
 
@@ -249,7 +249,7 @@ def main() -> None:
             "--build-file",
             str(missing_launcher_file),
             "--registry-prefix",
-            "registry.prod.serverware.dev/serverware",
+            "registry.prod.catchplate.dev/catchplate",
             "--dry-run",
         )
         if rejected.returncode == 0 or "launcher_binary_digest" not in detail(rejected):
@@ -258,7 +258,7 @@ def main() -> None:
         for fixture_name, mutate, expected_error in (
             (
                 "old-version",
-                lambda value: value.__setitem__("apiVersion", "serverware.productionImagesBuild/v1"),
+                lambda value: value.__setitem__("apiVersion", "catchplate.productionImagesBuild/v1"),
                 "productionImagesBuild/v2",
             ),
             (
@@ -287,13 +287,13 @@ def main() -> None:
                 "--build-file",
                 str(mutated_file),
                 "--registry-prefix",
-                "registry.prod.serverware.dev/serverware",
+                "registry.prod.catchplate.dev/catchplate",
                 "--dry-run",
             )
             if rejected.returncode == 0 or expected_error not in detail(rejected):
                 raise AssertionError(f"publisher accepted {fixture_name}: {detail(rejected)}")
 
-        placeholder = run_script("--build-file", str(build_file), "--registry-prefix", "registry.example/serverware", "--dry-run")
+        placeholder = run_script("--build-file", str(build_file), "--registry-prefix", "registry.example/catchplate", "--dry-run")
         if placeholder.returncode == 0 or "placeholder .example registry" not in detail(placeholder):
             raise AssertionError(f"publisher accepted a placeholder registry prefix: {detail(placeholder)}")
 

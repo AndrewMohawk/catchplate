@@ -9,10 +9,10 @@ use super::super::production_dispatch::{ProductionDispatchBindingV4,SignedProduc
 use std::os::unix::fs::{FileExt,MetadataExt};
 #[path="dispatch_service_client.rs"]
 pub(super) mod client;
-pub(super) const RUNTIME:&str="serverware.policyCustodyServiceRuntimeConfig/v6";
+pub(super) const RUNTIME:&str="catchplate.policyCustodyServiceRuntimeConfig/v6";
 pub(super) const GRANT_FD:&str="dispatch-grant";
 pub(super) const DIRECTORY:&str="dispatch-journal";
-const DOMAIN:&[u8]=b"serverware.custodyCommitRequestServiceGrant.signature/v1";
+const DOMAIN:&[u8]=b"catchplate.custodyCommitRequestServiceGrant.signature/v1";
 const MAX_RECORDS:usize=256;
 fn require(v:bool)->Result<(),ServiceError>{if v{Ok(())}else{Err(invalid())}}
 #[derive(Debug,Clone,Serialize,Deserialize)]
@@ -63,7 +63,7 @@ impl Gate {
         let grant_file=std::fs::File::from(take_activation_fd(activation,GRANT_FD)?);
         let grant_raw=read_grant(&grant_file)?;let grant:Grant=decode_canonical_frame(&grant_raw)?;
         let p=&grant.payload;let history=runtime.load_authority_history(&loaded.credentials,role)?;
-        require(p.api_version=="serverware.custodyCommitRequestServiceGrant/v1" && p.purpose=="commit-request-service-transition"
+        require(p.api_version=="catchplate.custodyCommitRequestServiceGrant/v1" && p.purpose=="commit-request-service-transition"
             && p.service_role==role && p.guest==association.binding() && p.runtime_configuration_sha256==loaded.exact_sha256
             && p.authority_history_manifest_sha256==runtime.authority_history_manifest_sha256
             && p.scope.issued_at_boottime_nanos>=p.guest.issued_at_boottime_ns.parse::<u64>().map_err(|_|invalid())?

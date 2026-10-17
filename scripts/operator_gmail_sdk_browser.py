@@ -18,12 +18,12 @@ import time
 
 from scripts.check_operator_demo import require
 
-ORIGIN = "https://serverware-demo.example.com"
+ORIGIN = "https://catchplate-demo.example.com"
 CATALOG = "/api/operator-demo/catalog"
 GRANT = "/api/operator-demo/access-rules/gmail-read"
 INTENTS = "/api/operator-demo/oauth/google/intents"
-SCHEMA = "serverware.privateGmailBrowserPermission/v1"
-JOINED_SCHEMA = "serverware.privateGmailBrowserSdk/v1"
+SCHEMA = "catchplate.privateGmailBrowserPermission/v1"
+JOINED_SCHEMA = "catchplate.privateGmailBrowserSdk/v1"
 MAX_FRAME, MAX_BODY, GRANT_SECONDS = 16384, 2 * 1024**2, 20
 
 
@@ -45,20 +45,20 @@ def strict_json(raw):
 _RECIPE_COMMENTS = (
     "# Gmail SDK job (Bash): run from examples/google-gmail-go with the reviewed ./gmail-example already built.",
     "# Prepare dependencies/build before supplying the app token. This recipe does not download or build anything.",
-    "# Set SERVERWARE_PROXY_TOKEN privately first. Never use a Google token. Both TLS checks remain enabled.",
-    "# serverware.gmailSdkClient/v1",
+    "# Set CATCHPLATE_PROXY_TOKEN privately first. Never use a Google token. Both TLS checks remain enabled.",
+    "# catchplate.gmailSdkClient/v1",
 )
 _RECIPE_PREFIX = "\n".join((
-    "(", "  set +x", "  set -eu", '  case "${SERVERWARE_PROXY_TOKEN-}" in',
-    "    ''|*[!A-Za-z0-9_-]*) printf '%s\\n' 'Set the issued Serverware application token privately' >&2; exit 1 ;;",
+    "(", "  set +x", "  set -eu", '  case "${CATCHPLATE_PROXY_TOKEN-}" in',
+    "    ''|*[!A-Za-z0-9_-]*) printf '%s\\n' 'Set the issued Catchplate application token privately' >&2; exit 1 ;;",
     "  esac",
-    '  [ "${#SERVERWARE_PROXY_TOKEN}" -eq 43 ] || { printf \'%s\\n\' \'Set the issued Serverware application token privately\' >&2; exit 1; }',
-    '  printf \'%s\\n\' "$SERVERWARE_PROXY_TOKEN" |',
+    '  [ "${#CATCHPLATE_PROXY_TOKEN}" -eq 43 ] || { printf \'%s\\n\' \'Set the issued Catchplate application token privately\' >&2; exit 1; }',
+    '  printf \'%s\\n\' "$CATCHPLATE_PROXY_TOKEN" |',
     "    /usr/bin/env -i LANG=C.UTF-8 /bin/sh -c ",
 ))
-_CHILD_PREFIX = ("set -eu", "IFS= read -r SERVERWARE_PROXY_TOKEN", "exec </dev/null",
-    "unset PWD OLDPWD SHLVL _", "export SERVERWARE_PROXY_TOKEN")
-_PUBLIC_ENV = ("SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID", "SERVERWARE_CA_FILE", "SERVERWARE_PROXY_CA_FILE")
+_CHILD_PREFIX = ("set -eu", "IFS= read -r CATCHPLATE_PROXY_TOKEN", "exec </dev/null",
+    "unset PWD OLDPWD SHLVL _", "export CATCHPLATE_PROXY_TOKEN")
+_PUBLIC_ENV = ("CATCHPLATE_PROXY_URL", "CATCHPLATE_APP_ID", "CATCHPLATE_CA_FILE", "CATCHPLATE_PROXY_CA_FILE")
 
 
 def _unquote_recipe(value):
@@ -104,10 +104,10 @@ def copied_client_environment(raw, *, application, rule, token):
     parsed = parse_copied_recipe(raw)
     environment = parsed["environment"]
     require(set(environment) == {"LANG", *_PUBLIC_ENV}
-        and environment["SERVERWARE_PROXY_URL"] == BROWSER_PROXY_URL
-        and environment["SERVERWARE_APP_ID"] == application["id"]
-        and environment["SERVERWARE_CA_FILE"] == str(TRUST_FILES["inner"])
-        and environment["SERVERWARE_PROXY_CA_FILE"] == str(TRUST_FILES["outer"])
+        and environment["CATCHPLATE_PROXY_URL"] == BROWSER_PROXY_URL
+        and environment["CATCHPLATE_APP_ID"] == application["id"]
+        and environment["CATCHPLATE_CA_FILE"] == str(TRUST_FILES["inner"])
+        and environment["CATCHPLATE_PROXY_CA_FILE"] == str(TRUST_FILES["outer"])
         and parsed["access_rule_id"] == rule["id"] and rule["application_id"] == application["id"]
         and type(application.get("token_expires_at_epoch_ms")) is int
         and parsed["token_expires_at_epoch_ms"] == application["token_expires_at_epoch_ms"]
@@ -115,37 +115,37 @@ def copied_client_environment(raw, *, application, rule, token):
         "copied Gmail recipe does not match the saved fixture")
     require(type(token) is str and re.fullmatch(r"[A-Za-z0-9_-]{43}", token) is not None
         and token.encode() not in raw, "copied Gmail recipe token boundary differs")
-    environment["SERVERWARE_PROXY_TOKEN"] = token
+    environment["CATCHPLATE_PROXY_TOKEN"] = token
     return environment
 
 
 def copied_phase_environment(environment, *, application, token, phase):
     from scripts.check_operator_gmail_sdk import PHASES, TRUST_FILES, UUID
-    require(type(environment) is dict and set(environment) == {"LANG", *_PUBLIC_ENV, "SERVERWARE_PROXY_TOKEN"}
+    require(type(environment) is dict and set(environment) == {"LANG", *_PUBLIC_ENV, "CATCHPLATE_PROXY_TOKEN"}
         and phase in PHASES and type(application) is str and UUID.fullmatch(application)
         and type(token) is str and re.fullmatch(r"[A-Za-z0-9_-]{43}", token),
         "copied Gmail SDK handoff unavailable")
     # All positive calls and revocation reuse the copied identity and token. The
     # existing explicit wrong-app control alone substitutes another saved app.
-    require((application != environment["SERVERWARE_APP_ID"] and token != environment["SERVERWARE_PROXY_TOKEN"])
-        if phase == "wrong_app" else (application == environment["SERVERWARE_APP_ID"]
-            and token == environment["SERVERWARE_PROXY_TOKEN"]), "copied Gmail SDK app differs")
+    require((application != environment["CATCHPLATE_APP_ID"] and token != environment["CATCHPLATE_PROXY_TOKEN"])
+        if phase == "wrong_app" else (application == environment["CATCHPLATE_APP_ID"]
+            and token == environment["CATCHPLATE_PROXY_TOKEN"]), "copied Gmail SDK app differs")
     result = dict(environment)
     if phase == "wrong_outer_ca":
-        result["SERVERWARE_CA_FILE"], result["SERVERWARE_PROXY_CA_FILE"] = (
-            environment["SERVERWARE_PROXY_CA_FILE"], environment["SERVERWARE_CA_FILE"])
+        result["CATCHPLATE_CA_FILE"], result["CATCHPLATE_PROXY_CA_FILE"] = (
+            environment["CATCHPLATE_PROXY_CA_FILE"], environment["CATCHPLATE_CA_FILE"])
     elif phase == "wrong_inner_ca":
-        result["SERVERWARE_CA_FILE"] = environment["SERVERWARE_PROXY_CA_FILE"]
-        result["SERVERWARE_PROXY_CA_FILE"] = str(TRUST_FILES["combined"])
+        result["CATCHPLATE_CA_FILE"] = environment["CATCHPLATE_PROXY_CA_FILE"]
+        result["CATCHPLATE_PROXY_CA_FILE"] = str(TRUST_FILES["combined"])
     elif phase == "wrong_app":
-        result["SERVERWARE_APP_ID"], result["SERVERWARE_PROXY_TOKEN"] = application, token
+        result["CATCHPLATE_APP_ID"], result["CATCHPLATE_PROXY_TOKEN"] = application, token
     return result
 
 
 def expected_payload(before, application_id, credential_id):
     return {"name": "Read Gmail", "application_id": application_id, "credential_id": credential_id,
         "operation_bundle": "gmail_read_v1", "age_policy": {"mode": "unrestricted"},
-        "credential_input": "replace_exact", "placeholder": "Bearer serverware-gmail-placeholder-v1",
+        "credential_input": "replace_exact", "placeholder": "Bearer catchplate-gmail-placeholder-v1",
         "expected_revision": before["revision"], "expected_policy_hash": before["policy"]["policy_hash"]}
 
 
@@ -179,7 +179,7 @@ def validate_intents(raw, credential):
     """Only the single already-connected fixture account's public history."""
     value = strict_json(raw)
     require(type(value) is dict and set(value) == {"apiVersion", "intents", "limits", "productionReady", "protectedActivationSupported"}
-        and value["apiVersion"] == "serverware.operatorGoogleConsent/v1" and value["productionReady"] is False
+        and value["apiVersion"] == "catchplate.operatorGoogleConsent/v1" and value["productionReady"] is False
         and value["protectedActivationSupported"] is False and value["limits"] == {"active": 32, "retained": 1024}
         and type(value["intents"]) is list and len(value["intents"]) == 1, "browser consent public envelope differs")
     row = value["intents"][0]
@@ -205,7 +205,7 @@ def exchange(check, frame, raw):
     connection.connect = lambda: setattr(connection, "sock", check.control.connect(check.timeout(), check.control_ca))
     try:
         headers = {**frame["headers"], "Host": check.control.host, "Connection": "close",
-            "Accept-Encoding": "identity", "X-Serverware-Admin-Token": check.admin_token}
+            "Accept-Encoding": "identity", "X-Catchplate-Admin-Token": check.admin_token}
         connection.request(frame["method"], frame["path"], body=raw if frame["method"] == "POST" else None, headers=headers)
         response = connection.getresponse()
         body, pairs = response.read(MAX_BODY + 1), response.getheaders()

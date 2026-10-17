@@ -16,8 +16,8 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts.authority import local_startup as cli
-from serverware import authority_fd_entrypoint as entrypoint
-from serverware import authority_launcher as launcher
+from catchplate import authority_fd_entrypoint as entrypoint
+from catchplate import authority_launcher as launcher
 
 SECRET = "sentinel-private-credential-do-not-print"
 ARGS = ["--plan-fd", "4", "--plan-sha256", "sha256:" + "1" * 64, "--listener-fd", "3"]
@@ -67,7 +67,7 @@ class FailureDiagnosticsTests(unittest.TestCase):
                 raise RuntimeError(SECRET)
         owner = SimpleNamespace(admitted=False, child_status=None, run=fail,
             close=Mock(side_effect=close_error))
-        module = ModuleType("serverware.authority_local_startup")
+        module = ModuleType("catchplate.authority_local_startup")
         module.LocalAuthorityStartup = SimpleNamespace(open=Mock(return_value=owner))
         module.encode = Mock(side_effect=AssertionError("failure fixture must not encode success"))
         with patch.dict(sys.modules, {module.__name__: module}), \
@@ -186,7 +186,7 @@ class ChildFailureDiagnosticsTests(unittest.TestCase):
             definitions = [next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name)
                            for tree in trees]
             self.assertEqual(ast.dump(definitions[0]), ast.dump(definitions[1]))
-        tree = ast.parse((ROOT / "serverware/authority_local_startup.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/authority_local_startup.py").read_text())
         owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "LocalAuthorityStartup")
         spawn = next(node for node in owner.body if isinstance(node, ast.FunctionDef) and node.name == "_spawn")
         stdio = [node for node in ast.walk(spawn) if isinstance(node, ast.For)

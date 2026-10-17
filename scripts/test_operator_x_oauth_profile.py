@@ -10,7 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from pydantic import ValidationError
-from serverware import operator_x_oauth_profile as profile
+from catchplate import operator_x_oauth_profile as profile
 
 CLIENT = "synthetic-X-client_123"
 ORIGIN = "https://console.example.com"
@@ -43,7 +43,7 @@ class ProfileTests(unittest.TestCase):
         self.assertNotIn(SECRET, repr(caught.exception))
 
     def test_exact_public_record_and_independent_digest(self):
-        expected = {"schema": "serverware.operatorXOAuthProfile/v1", "profile": "operator-x-oauth-v1",
+        expected = {"schema": "catchplate.operatorXOAuthProfile/v1", "profile": "operator-x-oauth-v1",
             "provider_id": "x", "client_id": CLIENT, "redirect_uri": ORIGIN + "/api/oauth/callback/x",
             "client_auth_method": "client_secret_basic", "permission_preset": "x_text_post_v1",
             "scopes": ["offline.access", "tweet.read", "tweet.write", "users.read"],
@@ -138,7 +138,7 @@ class ProfileTests(unittest.TestCase):
 
     def test_profile_objects_do_not_import_runtime_or_admit_lifecycle(self):
         selected()
-        for name in ("serverware.config", "serverware.db", "serverware.oauth", "serverware.operator_google_managed_config"):
+        for name in ("catchplate.config", "catchplate.db", "catchplate.oauth", "catchplate.operator_google_managed_config"):
             self.assertNotIn(name, sys.modules)
         self.assertFalse(hasattr(profile, "require_profile"))
         self.assertFalse(hasattr(profile, "load_configuration"))

@@ -19,8 +19,8 @@ PYTHON_VERSION = "3.12.14"
 NODE_SHA256 = "3dc3f85ca5539ca81b7d106992ebcd82d09bce27326016873653a661ad6b2a7d"
 NODE_MODULES = "examples/google-gmail-node/node_modules"
 PYTHON_PACKAGES = "/example-python/lib/python3.12/site-packages"
-OBSERVATION_SCHEMA = "serverware.privateGmailSdkObservations/v2"
-CHECK_SCHEMA = "serverware.privateGmailSdkCheck/v2"
+OBSERVATION_SCHEMA = "catchplate.privateGmailSdkObservations/v2"
+CHECK_SCHEMA = "catchplate.privateGmailSdkCheck/v2"
 SDK_HEADERS = {
     "node": {"accept": "application/json", "user-agent": "google-api-nodejs-client/9.2.0 (gzip)",
         "x-goog-api-client": "gdcl/9.2.0 gl-node/25.5.0"},

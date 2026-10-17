@@ -64,7 +64,7 @@ class ManagedMetadata:
 
     def catalog(self):
         snapshot = self.control_json(PREFIX + "/catalog", authenticated=True)
-        require(type(snapshot) is dict and snapshot.get("schema") == "serverware.operatorCatalog/v1"
+        require(type(snapshot) is dict and snapshot.get("schema") == "catchplate.operatorCatalog/v1"
             and snapshot.get("mode") == "operator-development" and snapshot.get("productionReady") is False
             and snapshot.get("hardwareVerified") is False
             and snapshot.get("allowed_upstreams") == self.managed_manifest["effective_settings"]["allowed_upstreams"]
@@ -78,7 +78,7 @@ class ManagedMetadata:
             require(capability is None, "unconfigured app advertised Google capability")
         else:
             profile = fixture.public_profile()
-            require(capability == {"schema": "serverware.operatorGoogleCapability/v1",
+            require(capability == {"schema": "catchplate.operatorGoogleCapability/v1",
                 **{key: profile[key] for key in ("profile", "provider_id", "permission_preset", "scopes", "api_origins", "redirect_uri")},
                 "authorization_origin": "https://accounts.google.com", "authorization_path": "/o/oauth2/v2/auth",
                 "start_path": "/api/operator-demo/oauth/google/start", "intents_path": "/api/operator-demo/oauth/google/intents"},
@@ -111,7 +111,7 @@ class Observation(ManagedMetadata, OperatorDemoCheck):
             "actual app readiness did not join the selected real gate")
         require(self.prepared_policy is None or self.prepared_policy == policy["policy_hash"],
             "Prepare/activation unexpectedly changed authority policy")
-        return {"ok": True, "schema": "serverware.managedGoogleFixtureObservation/v1", "syntheticOnly": True,
+        return {"ok": True, "schema": "catchplate.managedGoogleFixtureObservation/v1", "syntheticOnly": True,
             "phase": self.args.phase, "managedGoogle": self.managed_identity, "catalogRevision": catalog["revision"],
             "policyHash": policy["policy_hash"], "policySequence": policy["sequence"],
             "dataPlaneBinaryDigest": self.args.expected_binary_sha256, "actualAppGateReady": True,
@@ -131,7 +131,7 @@ class ManagedClients(ManagedMetadata, clients.ProxyBasicCheck):
             and all(not initial[key] and initial["limits"][key]["retained"] == 0 for key in COLLECTIONS)
             and self.count() == 0, "fresh activated private catalog and upstream required")
         capability = initial.get("capabilities", {}).get("application_proxy_authentication")
-        require(capability == {"schema": "serverware.operatorProxyAuthentication/v1", "modes": ["bearer", clients.BASIC],
+        require(capability == {"schema": "catchplate.operatorProxyAuthentication/v1", "modes": ["bearer", clients.BASIC],
             "path": PREFIX + "/applications/proxy-authentication"}
             and clients.V2_RESPONSE_MODE in initial.get("capabilities", {}).get("response_modes", []),
             "paired Basic and ordinary response capabilities unavailable")
@@ -197,7 +197,7 @@ class ManagedClients(ManagedMetadata, clients.ProxyBasicCheck):
         require(self.count() == 4 and self.expected_connects == 6 and self.expected_denials == 8, "fixed actual-client inventory differs")
         evidence = self.verify_client_audit(baseline, assigned, credential["id"])
         self.current(pins)
-        return {"ok": True, "schema": "serverware.operatorProxyBasicCheck/v1", "syntheticOnly": True,
+        return {"ok": True, "schema": "catchplate.operatorProxyBasicCheck/v1", "syntheticOnly": True,
             "productionReady": False, "realProviderVerified": False, "publicDnsVerified": False,
             "managedGoogle": self.managed_identity, "managedInitialRevision": self.managed_initial_revision,
             "googleConsentStarted": False, "proxyTransport": "private-verified-https-edge", "proxyHostname": clients.PROXY_HOST,

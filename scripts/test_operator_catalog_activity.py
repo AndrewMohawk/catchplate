@@ -20,7 +20,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import operator_catalog_activity as activity
+from catchplate import operator_catalog_activity as activity
 
 NOW = 1_800_000_000_000
 CREDENTIAL = str(uuid.UUID(int=1))
@@ -71,7 +71,7 @@ def refresh(version=2, **changes):
 
 
 def response(*, attempt=1, credential=CREDENTIAL, principal="agent:one", route="route:one"):
-    common = {"component": "serverware-decision-gate-rs", "attempt_id": digest(attempt),
+    common = {"component": "catchplate-decision-gate-rs", "attempt_id": digest(attempt),
               "flow_id": digest(attempt), "credential_ref": credential, "credential_version": 2,
               "principal_id": principal, "route_id": route, "policy_hash": digest(10),
               "request_digest": digest(11), "operation_digest": digest(12), "method": "GET"}
@@ -179,7 +179,7 @@ class OperatorCatalogActivityTests(unittest.TestCase):
 
     def test_empty_window_is_available_not_health_or_chain_proof(self):
         result = self.f.project()
-        self.assertEqual(result["schema"], "serverware.operatorAccountActivity/v1")
+        self.assertEqual(result["schema"], "catchplate.operatorAccountActivity/v1")
         self.assertEqual(result["chain_verification"], "not_checked")
         self.assertEqual(result["observed_at_epoch_ms"], NOW)
         self.assertEqual(len(result["accounts"]), 2)
@@ -198,7 +198,7 @@ class OperatorCatalogActivityTests(unittest.TestCase):
             "allowed_headers": ["accept", "content-type", "npm-auth-type", "npm-command", "npm-in-ci", "npm-scope",
                 "pacote-integrity", "pacote-pkg-id", "pacote-req-type", "pacote-version", "user-agent"],
             "response_mode": "npm_install_v1", "credential_input": "replace_exact",
-            "placeholder": "Bearer serverware-npm-placeholder-v1"}
+            "placeholder": "Bearer catchplate-npm-placeholder-v1"}
         self.f.catalog["access_rules"][0] = record
         self.f.catalog["credentials"][0]["auth_type"] = "bearer"
         for suffix, method in (("", "GET"), (".tarball", "GET"), (".audit", "POST")):
@@ -254,7 +254,7 @@ class OperatorCatalogActivityTests(unittest.TestCase):
     def x_refresh_fixture(self):
         intent, work = str(uuid.UUID(int=71)), str(uuid.UUID(int=72))
         self.f.catalog["credentials"][0].update(auth_type="x_oauth", operator_x_account={
-            "schema": "serverware.operatorXAccountBinding/v1", "intent_id": intent})
+            "schema": "catchplate.operatorXAccountBinding/v1", "intent_id": intent})
         return {"operation_id": intent, "provider": "x", "credential_id": CREDENTIAL,
             "work_id": work, "previous_credential_generation": 1,
             "credential_generation": 2, "revision": 9}
@@ -490,9 +490,9 @@ class OperatorCatalogActivityTests(unittest.TestCase):
         self.assertTrue(self.f.last_statements)
         self.assertTrue(all(statement.lstrip().upper().startswith("SELECT ")
                             for statement in self.f.last_statements))
-        self.assertNotIn("serverware.app", sys.modules)
-        self.assertNotIn("serverware.db", sys.modules)
-        self.assertNotIn("serverware.config", sys.modules)
+        self.assertNotIn("catchplate.app", sys.modules)
+        self.assertNotIn("catchplate.db", sys.modules)
+        self.assertNotIn("catchplate.config", sys.modules)
 
     def test_missing_snapshot_invalid_catalog_or_store_is_unavailable(self):
         candidates = [self.f.project(transaction=False), self.f.project(now=True)]

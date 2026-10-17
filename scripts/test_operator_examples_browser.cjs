@@ -12,7 +12,7 @@ const alchemy = require('./operator_alchemy_browser_fixture.cjs');
 
 async function main() {
   assert.equal(process.argv.length, 2, 'No live target arguments accepted');
-  const directory = await mkdtemp('/tmp/serverware-example-links-');
+  const directory = await mkdtemp('/tmp/catchplate-example-links-');
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
   const browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-background-networking']});
   const results = [];
@@ -42,14 +42,14 @@ async function main() {
       await view(page, 'proxy');
       await operatorPanelsAfterClient(page);
       await page.locator('#client-examples').waitFor({state: 'visible'});
-      assert.match(await page.title(), /Serverware/);
+      assert.match(await page.title(), /Catchplate/);
       assert.equal(new URL(page.url()).origin, 'https://operator-catalog.example.test');
       const labels = ['Node.js + GitHub Actions', 'Python', 'Go'];
       assert.deepEqual(await page.locator('#client-example-links a').allTextContents(), labels);
       for (const [index, language] of ['node', 'python', 'go'].entries()) {
         const link = page.locator('#client-example-links a').nth(index);
         assert.equal(await link.getAttribute('href'),
-          'https://github.com/AndrewMohawk/serverware/tree/main/examples/github-issues-' + language);
+          'https://github.com/AndrewMohawk/catchplate/tree/main/examples/github-issues-' + language);
         assert.equal(await link.getAttribute('rel'), 'noopener noreferrer');
       }
       await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', {configurable: true,
@@ -57,7 +57,7 @@ async function main() {
       for (const [language, command] of [['node', 'node client.mjs'],
         ['python', '.venv/bin/python -I -B issues.py'], ['go', './github-issues']]) {
         await page.locator('#client-example-runtime').selectOption(language);
-        const expected = command + ' --config ./serverware-client.private.json';
+        const expected = command + ' --config ./catchplate-client.private.json';
         assert.equal(await page.locator('#provider-config-command').innerText(), expected);
         assert((await page.locator('#provider-config-prepare').innerText()).startsWith('cd examples/github-issues-' + language));
         await page.locator('#copy-provider-config-command').click();
@@ -121,7 +121,7 @@ async function main() {
       assert.deepEqual(state.errors, []); assert.deepEqual(state.posts, []);
       results.push({diagnosticClientRequiresChoice: true, explicitDiagnosticAvailable: true, mutations: 0});
     });
-    const source = 'https://github.com/AndrewMohawk/serverware/';
+    const source = 'https://github.com/AndrewMohawk/catchplate/';
     const branch = 'main/';
     async function checkLinks(page, name, expected) {
       await ready(page); await view(page, 'proxy');
@@ -163,10 +163,10 @@ async function main() {
     });
     for (const [replace, basic] of [[false, false], [true, false], [true, true]]) {
       const rule = gmail.bundleRule(replace ? {credential_input: 'replace_exact',
-        placeholder: 'Bearer serverware-gmail-placeholder-v1'} : {});
+        placeholder: 'Bearer catchplate-gmail-placeholder-v1'} : {});
       await gmail.fixture(browser, gmail.options({rules: [rule], applications: [application(basic ? {proxy_authentication: 'basic_and_bearer_v1'} : {})],
         gmailTransform(value) {
-          if (basic) value.capabilities.application_proxy_authentication = {schema: 'serverware.operatorProxyAuthentication/v1',
+          if (basic) value.capabilities.application_proxy_authentication = {schema: 'catchplate.operatorProxyAuthentication/v1',
             modes: ['bearer', 'basic_and_bearer_v1'], path: '/api/operator-demo/applications/proxy-authentication'};
           return value;
         }}), async (page, state, observed) => {

@@ -26,7 +26,7 @@ new timeout starting when a later phase begins.
 ## Fixed private exchange
 
 The separate socket is
-`/run/serverware/oidc-session-activation-token-release/proof.sock`. The service
+`/run/catchplate/oidc-session-activation-token-release/proof.sock`. The service
 checks the actual Unix peer UID/GID 65532 before reading even the request
 header. The client expects the root-created listener peer, UID/GID 0.
 

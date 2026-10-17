@@ -33,8 +33,8 @@ def no_external_state(event, _args):
 
 
 sys.addaudithook(no_external_state)
-from serverware import npm_metadata, npm_publish as npm, policy_bundle as pb
-from serverware import policy_route_authority as authority
+from catchplate import npm_metadata, npm_publish as npm, policy_bundle as pb
+from catchplate import policy_route_authority as authority
 
 PACKAGE = "fixture-package"
 VERSION = "1.2.3"
@@ -86,16 +86,16 @@ def document(package=PACKAGE, tag="latest", *, window=None):
     if window is not None:
         constraints.append({"id": "publish.window", "type": "requestTimeWindow", "phase": "request",
             "timezone": "UTC", "dailyWindows": [dict(window)]})
-    return {"apiVersion": "serverware.policy/v1", "kind": "PolicyBundle",
+    return {"apiVersion": "catchplate.policy/v1", "kind": "PolicyBundle",
         "metadata": {"id": "npm-publish-test", "sequence": 1, "rollbackEpoch": 1},
         "defaults": {"action": "deny", "failMode": "closed", "unknownHosts": "block",
             "unknownPaths": "block", "validationFailure": "block"},
         "principals": [{"id": "agent:fixture", "sourceCidrs": ["127.0.0.1/32"],
-            "requiredHeaders": {"X-Serverware-Agent": "fixture"}}],
+            "requiredHeaders": {"X-Catchplate-Agent": "fixture"}}],
         "credentials": [{"id": "credential:fixture", "credentialType": "static", "provider": "operator-demo",
             "providerSubject": "fixture-subject", "injection": {"type": "bearer", "header": "Authorization"}}],
         "routes": [{"id": "route.npm-publish", "principals": ["agent:fixture"], "credentialRef": "credential:fixture",
-            "credentialHeader": {"mode": "replaceExact", "expectedValue": "Bearer serverware-npm-placeholder-v1"},
+            "credentialHeader": {"mode": "replaceExact", "expectedValue": "Bearer catchplate-npm-placeholder-v1"},
             "match": {"scheme": "https", "host": "registry.npmjs.org", "port": 443,
                 "methods": ["PUT"], "paths": ["/{package}"]},
             "adapter": {"type": "npm.publish.v1", "config": {"credentialBinding": {
@@ -130,7 +130,7 @@ class NpmPublishPureTests(unittest.TestCase):
         self.assertEqual(npm.response_envelope("test")["statusCodes"], STATUSES)
         original = document()
         for validate_schema in (True, False):
-            for version in ("serverware.policy/v1", "serverware.policy/v2"):
+            for version in ("catchplate.policy/v1", "catchplate.policy/v2"):
                 raw = deepcopy(original)
                 raw["apiVersion"] = version
                 if version.endswith("/v2"):
@@ -311,8 +311,8 @@ if not PURE:
     # no admission, transport, credential, response or production guard is mocked.
     import test_npm_metadata as parsed
     from types import SimpleNamespace
-    from serverware import adapters, policy_engine as engine
-    from serverware.constraints import _enforce_request_time_window
+    from catchplate import adapters, policy_engine as engine
+    from catchplate.constraints import _enforce_request_time_window
 
     class NpmPublishAdapterTests(unittest.TestCase):
         def setUp(self):
@@ -331,8 +331,8 @@ if not PURE:
             flow = self.flow()
             flow.response = SimpleNamespace(status_code=status, raw_content=body, content=body, trailers=None,
                 headers=parsed.ParsedHeaders(([(b"Content-Type", media)] if media is not None else []) + list(fields)))
-            flow.metadata.update(serverware_route=self.route,
-                serverware_operation=self.adapter.operation_fields(flow, self.route, self.params))
+            flow.metadata.update(catchplate_route=self.route,
+                catchplate_operation=self.adapter.operation_fields(flow, self.route, self.params))
             if guarded:
                 guard = engine._ResponseCredentialGuard(); guard.add_text_encodings(SECRET)
                 engine._install_response_credential_guard(flow, guard)
@@ -372,7 +372,7 @@ if not PURE:
         def test_actual_header_discard_and_canonical_body_commitments(self):
             flow = self.flow(fields=[(b"Accept", b"*/*"), (b"Npm-Command", b"publish"),
                 (b"Npm-Session", b"synthetic-session"), (b"Accept-Encoding", b"gzip,deflate"),
-                (b"X-Serverware-Agent", b"fixture")])
+                (b"X-Catchplate-Agent", b"fixture")])
             principal = self.snapshot.principals["agent:fixture"]
             credential = self.snapshot.credentials[self.route.credential_ref]
             self.assertTrue(adapters.preflight_request_admission(flow, self.route,

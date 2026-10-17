@@ -17,15 +17,15 @@ from test_authority_revocation_planning_source import assigned, call, calls, def
 class RevocationAtomicSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.text, cls.persistence = source("serverware/authority_revocation_persistence.py", 64 * 1024)
+        cls.text, cls.persistence = source("catchplate/authority_revocation_persistence.py", 64 * 1024)
         cls.owner = definition(cls.persistence, "RevocationPlannerPersistence")
         cls.method = definition(cls.owner, "persist_and_reserve_execution")
         cls.fixed = definition(cls.persistence, "_persist_and_reserve_on_configuration")
         cls.arguments = definition(cls.persistence, "_atomic_arguments_on_work")
         cls.operation = definition(cls.persistence, "_persist_and_reserve_on_connection")
         cls.inner = definition(cls.persistence, "_retain_and_reserve_in_common")
-        _, cls.store = source("serverware/authority_store/revocation_retention.py", 64 * 1024)
-        _, cls.execution = source("serverware/authority_store/revocation_execution.py", 64 * 1024)
+        _, cls.store = source("catchplate/authority_store/revocation_retention.py", 64 * 1024)
+        _, cls.execution = source("catchplate/authority_store/revocation_execution.py", 64 * 1024)
 
     def shape(self, actual, expected):
         self.assertEqual(ast.dump(actual), ast.dump(ast.parse("(" + expected.strip() + ")", mode="eval").body))
@@ -117,10 +117,10 @@ class RevocationAtomicSourceTests(unittest.TestCase):
             self.assertFalse(calls(method, spelling))
         # This is the actual charged canonical join, not scalar Python == or
         # a new ledger allowance. Two digest strings add 0H / 438B / 4N.
-        _, plan = source("serverware/authority_revocation_plan.py", 256 * 1024)
+        _, plan = source("catchplate/authority_revocation_plan.py", 256 * 1024)
         self.shape(definition(plan, "_same").body[0].value,
                    "semantics._canonical_equal(left, right, work=work, label=label)")
-        _, semantics = source("serverware/authority_revocation_semantics.py", 64 * 1024)
+        _, semantics = source("catchplate/authority_revocation_semantics.py", 64 * 1024)
         equal = definition(semantics, "_canonical_equal")
         self.assertEqual([ast.unparse(node) for node in calls(equal, "work.prepare_encoding")],
                          ["work.prepare_encoding(left)", "work.prepare_encoding(right)"])
@@ -138,7 +138,7 @@ class RevocationAtomicSourceTests(unittest.TestCase):
         self.assertIsNone(operation.args.vararg)
         self.assertEqual([(node.module, tuple(item.name for item in node.names))
             for node in operation.body if isinstance(node, ast.ImportFrom)],
-            [("serverware.authority_store", ("revocation_execution",))])
+            [("catchplate.authority_store", ("revocation_execution",))])
         self.shape(operation.body[2].value, "store._callback(work, store._transaction_connection, connection)")
         self.shape(assigned(operation, "raw"), "store._callback(work, store._require_planner_writer, connection)")
         common, = [node for node in ast.walk(operation) if isinstance(node, ast.With)]
@@ -187,7 +187,7 @@ class RevocationAtomicSourceTests(unittest.TestCase):
         transaction = definition(self.store, "_transaction_connection")
         self.shape(transaction.body[0].value, "_require_postgres_connection(connection)")
         self.shape(transaction.body[1].test, "connection.in_transaction is not True")
-        _, connection = source("serverware/authority_store/planner_connection.py", 64 * 1024)
+        _, connection = source("catchplate/authority_store/planner_connection.py", 64 * 1024)
         gate = definition(connection, "_require_planner_writer")
         self.shape(call(gate, "_require_serializable"), "_require_serializable(raw)")
         self.shape(call(gate, "_require_database_role"),
@@ -206,7 +206,7 @@ class RevocationAtomicSourceTests(unittest.TestCase):
         self.assertLess(opening.lineno, delegated.lineno)
         self.assertIs(runner.body[-1].value, delegated)
         self.assertFalse(calls(runner, "operation"))
-        _, writer = source("serverware/authority_revocation_writer_connection.py", 64 * 1024)
+        _, writer = source("catchplate/authority_revocation_writer_connection.py", 64 * 1024)
         owner = definition(writer, "_run_on_connection")
         guarded, = [node for node in owner.body if isinstance(node, ast.Try)]
         connection_scope, = [node for node in guarded.body if isinstance(node, ast.With)]
@@ -318,7 +318,7 @@ class RevocationAtomicSourceTests(unittest.TestCase):
         self.assertLess(match.lineno, fresh_checks[1].lineno)
 
     def test_atomic_owner_does_not_activate_service_actions_transport_or_widen_writer_peers(self):
-        _, service = source("serverware/authority_service.py", 2 * 1024 * 1024)
+        _, service = source("catchplate/authority_service.py", 2 * 1024 * 1024)
         process = definition(service, "AuthorityProcess")
         factory = definition(process, "_revocation_planner_persistence")
         self.assertEqual([item.arg for item in factory.args.args], ["self"])
@@ -360,7 +360,7 @@ class RevocationAtomicSourceTests(unittest.TestCase):
             for spelling in ("_socket_request", "_socket_request_bytes", "_socket_request_revocation_bytes",
                     "_recv_message", "_recv_revocation_invocation_bytes", "time.time_ns", "time.monotonic_ns"):
                 self.assertFalse(calls(function, spelling))
-        _, registry = source("serverware/authority_transition_registry.py")
+        _, registry = source("catchplate/authority_transition_registry.py")
         self.shape(assigned(registry, "_CLOSURE_ERRORS"), "_registry_closure_errors()")
         closed, = [node for node in registry.body if isinstance(node, ast.If)]
         self.shape(closed.test, "_CLOSURE_ERRORS")

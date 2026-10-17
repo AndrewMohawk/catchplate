@@ -1,6 +1,6 @@
 # OIDC activation indexed write replay
 
-[`authority_oidc_session_activation_writes`](../serverware/authority_oidc_session_activation_writes.py)
+[`authority_oidc_session_activation_writes`](../catchplate/authority_oidc_session_activation_writes.py)
 encodes fixed write-proof originals and genuinely replays the activation
 transition plus primary/counted-index mutations. This is source-only proof
 composition, not SQL execution, a committed session, token delivery, index
@@ -15,13 +15,13 @@ accepts 13 actual `CompleteReadWriteHead` records and 12 actual
 function authenticates a signature or grants semantic authority; a composing
 signer/receiver must run the original replay.
 
-The closed canonical `serverware.oidcSessionActivationWriteProof/v1` object
+The closed canonical `catchplate.oidcSessionActivationWriteProof/v1` object
 contains `schema`, `sourceRevision`, `operation`, `requestDigest`, `beforeHeads`
 and `writeFrontiers`. Each sorted head contains only `indexId`, `indexRevision`,
 `rootDigest` and `leafCount`; each frontier contains its fixed index ID and the
 actual leaf/opaque records. Unknown fields, profiles, duplicate/reordered heads,
 noncanonical bytes and unsupported source revisions fail closed. The framed
-identity domain is `serverware.oidcSessionActivationWriteProofIdentity/v1`.
+identity domain is `catchplate.oidcSessionActivationWriteProofIdentity/v1`.
 
 The inventory is the complete source-derived union: two session indexes, five
 delivery indexes, three credential indexes, two challenge indexes and the
@@ -57,8 +57,8 @@ The private ordinary result has `transition`, `write_proof_bytes`,
 `business_after_roots`, `authorization_after_roots`, `counted_after_heads`,
 `live` and `valid_until_epoch_ns`. No external entrypoint accepts this result
 as authority. The transition commitment uses the distinct
-`serverware.oidcSessionActivationIndexedTransition/v1` schema and
-`serverware.oidcSessionActivationIndexedTransitionIdentity/v1` framed domain.
+`catchplate.oidcSessionActivationIndexedTransition/v1` schema and
+`catchplate.oidcSessionActivationIndexedTransitionIdentity/v1` framed domain.
 It binds source, operation, request and write-proof identity; all six mutations;
 the actual result and already-complete `workUnits`; and genuine calculated
 business/authorization after roots plus all 13 after heads. Query/framework

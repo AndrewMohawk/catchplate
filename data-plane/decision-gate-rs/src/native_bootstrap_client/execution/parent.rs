@@ -4,7 +4,7 @@
 use super::start_authority::Containment;
 use super::super::{ensure, OriginalClock};
 use crate::linux_statx::{self, Statx, BASIC_STATS};
-use serverware_decision_gate::cgroup_control_v1;
+use catchplate_decision_gate::cgroup_control_v1;
 use std::ffi::CString;
 use std::fs::File;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd};

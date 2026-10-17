@@ -17,7 +17,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_recovery_invalidation_acquisition as source
+from catchplate import authority_recovery_invalidation_acquisition as source
 from test_authority_recovery_invalidation import fixture, meter
 
 proof = source.proof
@@ -27,7 +27,7 @@ def request_for(call):
     arguments = copy.deepcopy(call["context"]["arguments"])
     values = {name: value for name, value in arguments.items() if name != "businessIntent"}
     arguments["businessIntent"] = proof.contract.synthesize_business_intent(source.OPERATION, values)
-    request = dict(schema="serverware.policyAuthorityV9Request/v1", operation=source.OPERATION,
+    request = dict(schema="catchplate.policyAuthorityV9Request/v1", operation=source.OPERATION,
         operationId="sha256:" + "0" * 64, requestDigest="sha256:" + "0" * 64,
         handler=proof.contract.operation_spec(source.OPERATION)["handler"],
         operationManifestDigest=proof.contract.OPERATION_MANIFEST_DIGEST, arguments=arguments)
@@ -69,7 +69,7 @@ class HeadCursor:
         self.calls = []
 
     def execute(self, sql, parameters):
-        if "FROM serverware_metadata.policy_authority_counted_index_heads" not in sql:
+        if "FROM catchplate_metadata.policy_authority_counted_index_heads" not in sql:
             raise AssertionError("head fixture saw another physical query")
         self.calls.append((sql, parameters))
         return self

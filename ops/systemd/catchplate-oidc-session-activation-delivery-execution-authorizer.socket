@@ -1,0 +1,22 @@
+# Uninstalled deployment input. No account, permission or execution authority
+# is provisioned here. Recreating the socket invalidates its signed pins.
+[Unit]
+Description=Catchplate dedicated consume execution grant ingress
+Before=catchplate-oidc-session-activation-delivery-execution-authorizer.service
+After=systemd-tmpfiles-setup.service
+
+[Socket]
+ListenStream=/run/catchplate/oidc-session-activation-delivery-execution/authorizer.sock
+FileDescriptorName=catchplate-oidc-session-activation-delivery-execution-authorizer
+SocketUser=65500
+SocketGroup=65532
+SocketMode=0660
+DirectoryMode=0755
+Backlog=1
+Accept=no
+FlushPending=yes
+RemoveOnStop=yes
+Service=catchplate-oidc-session-activation-delivery-execution-authorizer.service
+
+[Install]
+WantedBy=sockets.target

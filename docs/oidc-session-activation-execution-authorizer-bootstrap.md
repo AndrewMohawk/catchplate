@@ -5,7 +5,7 @@ execution grant authorizer. It does not provision keys, install a service,
 authorize a present caller, produce a grant, reserve current-root state, invoke
 SQL or release a token. No build, test or runtime verification is claimed.
 
-[`oidc_session_activation_execution_authorizer_bootstrap.py`](../serverware/oidc_session_activation_execution_authorizer_bootstrap.py)
+[`oidc_session_activation_execution_authorizer_bootstrap.py`](../catchplate/oidc_session_activation_execution_authorizer_bootstrap.py)
 genuinely verifies the new role launch, the separate
 [receiving-custody original](oidc-session-activation-execution-custody-bootstrap.md)
 and its embedded [planner-bootstrap v3](oidc-session-activation-planner-bootstrap.md).
@@ -15,9 +15,9 @@ No previously returned material object is accepted as authority.
 
 The three new schemas are:
 
-- `serverware.signedOidcSessionActivationExecutionAuthorizerBootstrap/v1`;
-- `serverware.oidcSessionActivationExecutionAuthorizerBootstrap/v1`;
-- `serverware.oidcSessionActivationExecutionAuthorizerLaunch/v1`.
+- `catchplate.signedOidcSessionActivationExecutionAuthorizerBootstrap/v1`;
+- `catchplate.oidcSessionActivationExecutionAuthorizerBootstrap/v1`;
+- `catchplate.oidcSessionActivationExecutionAuthorizerLaunch/v1`.
 
 The signed envelope is exactly `{schema, payload, signatureBase64Url}`, with the
 signed-envelope schema also serving as its distinct root-signature domain.
@@ -42,8 +42,8 @@ Role and process mode are `oidc-session-activation-execution-authorizer`, the
 operation is `oidc.session.activate`, and the receiver consumer role is fixed
 to `grant`. Service UID/GID are 65506:65506; the request peer is 65532:65532.
 The source-fixed listener is
-`/run/serverware/oidc-session-activation-execution/authorizer.sock`, named
-`serverware-oidc-session-activation-execution-authorizer` for socket activation.
+`/run/catchplate/oidc-session-activation-execution/authorizer.sock`, named
+`catchplate-oidc-session-activation-execution-authorizer` for socket activation.
 
 | Launch field | Fixed FD | Original/resource |
 | --- | --- | --- |

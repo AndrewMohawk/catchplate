@@ -21,16 +21,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) const POLICY_CUSTODY_TERMINAL_SETTLEMENT_VERSION: &str =
-    "serverware.policyCustodyFiveServiceTerminalSettlement/v4";
+    "catchplate.policyCustodyFiveServiceTerminalSettlement/v4";
 
 const TERMINAL_TRANSITION_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyTerminalServiceTransition/v4";
+    b"catchplate.policyCustodyTerminalServiceTransition/v4";
 const TERMINAL_TRANSITION_RECEIPT_DOMAIN: &[u8] =
-    b"serverware.policyCustodyTerminalServiceTransitionReceipt/v4";
+    b"catchplate.policyCustodyTerminalServiceTransitionReceipt/v4";
 const TERMINAL_SETTLEMENT_ROOT_DOMAIN: &[u8] =
-    b"serverware.policyCustodyFiveServiceTerminalSettlementRoot/v4";
+    b"catchplate.policyCustodyFiveServiceTerminalSettlementRoot/v4";
 const TERMINAL_SETTLEMENT_EVIDENCE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyFiveServiceTerminalSettlementEvidence/v4";
+    b"catchplate.policyCustodyFiveServiceTerminalSettlementEvidence/v4";
 
 type ProductionAuthorityHistory = BoundedAuthorityHistoryV3<
     MAX_AUTHORITY_HISTORY_EPOCHS,

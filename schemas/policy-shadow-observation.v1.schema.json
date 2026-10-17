@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-shadow-observation.v1.schema.json",
-  "title": "Serverware Policy Shadow Observation v1",
+  "$id": "https://catchplate.invalid/schemas/policy-shadow-observation.v1.schema.json",
+  "title": "Catchplate Policy Shadow Observation v1",
   "$comment": "Exactly one signed observation accounts for each contiguous ingress sequence. Independently signed ingressEvidence authoritatively accounts for admission, while a distinct activeDecision envelope authoritatively records the terminal active result; the shadow signer cannot author either role. Native verification exactly joins assignment/load/policy/runtime/boot identities and requires both signed roles to match the outer result. Request commitments are keyed HMACs over canonical protected facts plus assignment payload digest/revision, boot identity, ingress sequence, key epoch, and signed observed time. The complete expansion set and root are deterministically derived by the verifier from the signed active/candidate evaluations, signed PolicyAuthorityAnalysis, compiled semantic authority binding, and pilot membership; evaluator omissions, duplicates, and extras fail.",
   "type": "object",
   "additionalProperties": false,
@@ -18,10 +18,10 @@
     "signature"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.policyShadowObservation/v1"},
+    "apiVersion": {"const": "catchplate.policyShadowObservation/v1"},
     "kind": {"const": "PolicyShadowObservation"},
-    "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
-    "signatureDomain": {"const": "serverware.policyShadowObservation/v1"},
+    "canonicalProfile": {"const": "catchplate.canonicalJson/ascii-integer-v1"},
+    "signatureDomain": {"const": "catchplate.policyShadowObservation/v1"},
     "payload": {"$ref": "#/$defs/payload"},
     "payloadSha256": {"$ref": "#/$defs/sha256"},
     "signatureAlgorithm": {"const": "Ed25519"},
@@ -300,7 +300,7 @@
         "effectIntentSha256": {"$ref":"#/$defs/sha256"},
         "preparedStateSha256": {"$ref":"#/$defs/sha256"}
       },
-      "$comment": "effectIdSha256 is the serverware.policyShadowActiveEffectPreparation/v1 domain hash over the canonical generation, ingress, effect kind, intent and prepared-state binding."
+      "$comment": "effectIdSha256 is the catchplate.policyShadowActiveEffectPreparation/v1 domain hash over the canonical generation, ingress, effect kind, intent and prepared-state binding."
     },
     "activeEffectBarrierReceipt": {
       "type": "object",
@@ -644,7 +644,7 @@
       ],
       "properties": {
         "algorithm": {"const": "HMAC-SHA-256"},
-        "domain": {"const": "serverware.policyShadowRequestCommitment/v1"},
+        "domain": {"const": "catchplate.policyShadowRequestCommitment/v1"},
         "keyId": {"$ref": "#/$defs/sha256"},
         "keyEpoch": {"$ref": "#/$defs/positiveI64"},
         "assignmentPayloadSha256": {"$ref": "#/$defs/sha256"},
@@ -821,10 +821,10 @@
         "signature"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.policyShadowIngressEvidence/v1"},
+        "apiVersion": {"const": "catchplate.policyShadowIngressEvidence/v1"},
         "kind": {"const": "PolicyShadowIngressEvidence"},
-        "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
-        "signatureDomain": {"const": "serverware.policyShadowIngressEvidence/v1"},
+        "canonicalProfile": {"const": "catchplate.canonicalJson/ascii-integer-v1"},
+        "signatureDomain": {"const": "catchplate.policyShadowIngressEvidence/v1"},
         "payload": {"$ref": "#/$defs/ingressEvidencePayload"},
         "payloadSha256": {"$ref": "#/$defs/sha256"},
         "signatureAlgorithm": {"const": "Ed25519"},
@@ -1117,7 +1117,7 @@
           "items": {"$ref": "#/$defs/merkleProofStep"}
         }
       },
-      "$comment": "Native verification derives principal and route leaves from HMAC-verified protected facts and recomputes both pilot roots with serverware.policyPilotMembershipNode/v1."
+      "$comment": "Native verification derives principal and route leaves from HMAC-verified protected facts and recomputes both pilot roots with catchplate.policyPilotMembershipNode/v1."
     },
     "nullablePilotMembershipEvidence": {
       "oneOf": [
@@ -1632,10 +1632,10 @@
         "signature"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.policyShadowActiveDecision/v1"},
+        "apiVersion": {"const": "catchplate.policyShadowActiveDecision/v1"},
         "kind": {"const": "PolicyShadowActiveDecision"},
-        "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
-        "signatureDomain": {"const": "serverware.policyShadowActiveDecision/v1"},
+        "canonicalProfile": {"const": "catchplate.canonicalJson/ascii-integer-v1"},
+        "signatureDomain": {"const": "catchplate.policyShadowActiveDecision/v1"},
         "payload": {"$ref": "#/$defs/activeDecisionPayload"},
         "payloadSha256": {"$ref": "#/$defs/sha256"},
         "signatureAlgorithm": {"const": "Ed25519"},

@@ -18,7 +18,7 @@ import tempfile
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import authority_fd_entrypoint as entry
+from catchplate import authority_fd_entrypoint as entry
 
 
 def canonical(value):
@@ -67,7 +67,7 @@ def main():
 
         for purpose, targets in slots.items():
             _, schema, name = profiles[purpose]
-            prefix = "/run/serverware/authority-trust/" + name
+            prefix = "/run/catchplate/authority-trust/" + name
             row = {"schema": schema, "sourceRevision": "inert-test",
                 "controlPlaneConfigurationDigest": digest(authority), "authorityRootFd": targets[1],
                 "authorityRootSha256": digest(root), "authorityRootSpkiSha256": digest(b"public-spki-fixture"),
@@ -87,7 +87,7 @@ def main():
 
         def selector(purpose, row):
             name = profiles[purpose][2]
-            store("/run/serverware/authority-trust/" + name + ".json", canonical(row))
+            store("/run/catchplate/authority-trust/" + name + ".json", canonical(row))
 
         def snapshots(targets):
             return [(entry._material_identity(os.fstat(fd)), os.pread(fd, 16385, 0)) for fd in targets]
@@ -157,7 +157,7 @@ def main():
                 refused(lambda: entry._open_currentness_assignment_material(90, occupied_descriptors=set()))
                 absent(slots["currentness"])
             selector("currentness", rows["currentness"])
-            store("/run/serverware/authority-trust/currentness-assignment-original.json", b"x" * 16385)
+            store("/run/catchplate/authority-trust/currentness-assignment-original.json", b"x" * 16385)
             refused(lambda: entry._open_currentness_assignment_material(90, occupied_descriptors=set()))
             absent(slots["currentness"])
     # Only the final role dispatch is replaced; no service is started.

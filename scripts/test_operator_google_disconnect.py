@@ -29,7 +29,7 @@ MISSING = "00000000-0000-4000-8000-000000000001"
 class Fixture(cleanup_tests.Fixture):
     def __init__(self):
         super().__init__()
-        from serverware import operator_google_disconnect
+        from catchplate import operator_google_disconnect
         self.disconnect = operator_google_disconnect
 
     def snapshot(self):
@@ -70,7 +70,7 @@ class Fixture(cleanup_tests.Fixture):
         result = json.loads(raw)
         assert result["outcome"] == "committed"
         operation = result["disconnect"]
-        assert operation["schema"] == "serverware.operatorGoogleDisconnect/v1"
+        assert operation["schema"] == "catchplate.operatorGoogleDisconnect/v1"
         assert operation["credential_id"] == core["id"]
         assert operation["credential_ids"] == [core["id"]]
         assert operation["affected_rule_ids"] == sorted(rule["id"] for rule in rules)
@@ -210,7 +210,7 @@ def http_guards():
             assert f.request("GET", path, **options)[0] == expected
             assert f.snapshot() == before and f.history == contacts
         capability = f.mutations.catalog_status()["capabilities"]["google_disconnect"]
-        assert capability == {"schema": "serverware.operatorGoogleDisconnectCapability/v1",
+        assert capability == {"schema": "catchplate.operatorGoogleDisconnectCapability/v1",
             "path": PATH, "status_path_prefix": PATH + "/", "requires_affected_rule_confirmation": True,
             "requires_project_wide_revocation_acknowledgement": True, "reconnect_supported": False}
         # Negative pre-upgrade fixture: no disconnect has ever been reserved.
@@ -456,7 +456,7 @@ def publication_failure():
 
 def damaged_disconnect_ownership(damage):
     """A real preexisting worker claim cannot outlive its durable authority."""
-    from serverware import operator_google_disconnect_store as durable
+    from catchplate import operator_google_disconnect_store as durable
     f = Fixture()
     with patch.object(f.oauth, "request_bytes", side_effect=f.transport):
         core = f.connect()
@@ -553,10 +553,10 @@ class OperatorGoogleDisconnectTests(unittest.TestCase):
     def worker(self, operation, *, fresh=None, credential_id=None):
         environment = dict(self.environment)
         if operation == "disabled-capability":
-            environment = {key: value for key, value in environment.items() if not key.startswith("SERVERWARE_")}
+            environment = {key: value for key, value in environment.items() if not key.startswith("CATCHPLATE_")}
             environment.update(workspace.common._ENVIRONMENT)
         if fresh is not None:
-            environment["SERVERWARE_DATA_DIR"] = str(self.directory.parent / fresh)
+            environment["CATCHPLATE_DATA_DIR"] = str(self.directory.parent / fresh)
         if credential_id is not None:
             environment["DISCONNECT_TEST_CREDENTIAL_ID"] = credential_id
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation],

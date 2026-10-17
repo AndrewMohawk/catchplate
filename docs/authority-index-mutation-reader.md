@@ -2,7 +2,7 @@
 
 ## Scope
 
-[`authority_index_mutation_reader.py`](../serverware/authority_index_mutation_reader.py)
+[`authority_index_mutation_reader.py`](../catchplate/authority_index_mutation_reader.py)
 acquires the sparse before-tree evidence needed to evaluate an entire batch of
 indexed primary mutations. It reads target leaves and untouched immediate
 siblings, then invokes the actual counted before/after evaluator. This is not
@@ -34,7 +34,7 @@ derives each target from those same verified row images. A full-row NEW digest
 is computed once per row, not separately for every index.
 
 Private factoring in
-[`authority_indexed_mutation.py`](../serverware/authority_indexed_mutation.py)
+[`authority_indexed_mutation.py`](../catchplate/authority_indexed_mutation.py)
 shares the genuine primary, projection and sparse-evaluation bodies. The
 existing public pure evaluator retains its original snapshot and alternating
 per-index prepare/evaluate order, budgets and frontier reservation credits.

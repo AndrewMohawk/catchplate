@@ -84,7 +84,7 @@ fn endpoint(lease: Option<&str>, target: &str) -> Result<Url, ()> {
 
 fn admit(head: &mut RequestHead) -> Result<Operation, StatusCode> {
     let selected = operation(&head.method, &head.target).ok_or(StatusCode::BAD_REQUEST)?;
-    if head.headers.keys().any(|name| name.starts_with("x-serverware-") || name.starts_with("remote-")
+    if head.headers.keys().any(|name| name.starts_with("x-catchplate-") || name.starts_with("remote-")
         || matches!(name.as_str(), "cookie" | "origin" | "x-forwarded-user" | "x-auth-request-user")) {
         return Err(StatusCode::UNAUTHORIZED);
     }
@@ -195,11 +195,11 @@ fn forward(state: &GateState, snapshot: &Arc<Snapshot>, authentication: &Authent
         .http1_only().build().map_err(|_| ())?;
     let method = reqwest::Method::from_bytes(selected.method().as_bytes()).map_err(|_| ())?;
     let mut request = client.request(method, url.clone())
-        .header("X-Serverware-Data-Plane-Token", token)
-        .header("X-Serverware-Principal-Id", &authentication.identity.principal_id)
-        .header("X-Serverware-Client-Token-Sha256", &authentication.token_sha256)
-        .header("X-Serverware-Policy-Hash", &snapshot.hash)
-        .header("X-Serverware-Response-Nonce", &nonce);
+        .header("X-Catchplate-Data-Plane-Token", token)
+        .header("X-Catchplate-Principal-Id", &authentication.identity.principal_id)
+        .header("X-Catchplate-Client-Token-Sha256", &authentication.token_sha256)
+        .header("X-Catchplate-Policy-Hash", &snapshot.hash)
+        .header("X-Catchplate-Response-Nonce", &nonce);
     if let Some(content_type) = selected.content_type() {
         request = request.header("Content-Type", content_type).body(raw.to_vec());
     }

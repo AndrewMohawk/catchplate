@@ -11,7 +11,7 @@ remains dormant, module-private and uncalled. Production acceptance remains
 
 The [evidence schema](../schemas/native-enrollment-evidence.v1.schema.json) has
 exactly nine fields. Its fixed `apiVersion` is
-`serverware.nativeEnrollmentEvidence/v1`, `evidenceScope` is
+`catchplate.nativeEnrollmentEvidence/v1`, `evidenceScope` is
 `unverified-enrollment-public-material`, and `okForAction` is `false`.
 
 | Original field | Decoded bound and meaning |
@@ -72,7 +72,7 @@ commitment and any legacy runtime-manifest digest remain distinct identities.
    key over the fixed preimage:
 
    ```text
-   "serverware/native-enrollment-packet-signature/v1\0"
+   "catchplate/native-enrollment-packet-signature/v1\0"
        || SHA256(exact assignment envelope including LF)[32]
        || packet_length:u64BE || exact_packet_bytes
    ```

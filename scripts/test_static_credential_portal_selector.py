@@ -23,8 +23,8 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.x509.oid import NameOID
-from serverware import authority_static_credential_assignment as assignment
-from serverware import authority_credential_currentness_policy as currentness
+from catchplate import authority_static_credential_assignment as assignment
+from catchplate import authority_credential_currentness_policy as currentness
 
 C, H = producer.creation.profile.canonical, producer.creation.profile.sha256
 B = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")

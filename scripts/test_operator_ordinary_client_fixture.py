@@ -115,7 +115,7 @@ class OrdinaryClientFixtureTests(unittest.TestCase):
 
     def test_fixed_metadata_is_emitted_only_by_v2_json_and_empty204(self):
         self.assertEqual(fixture.V2_RESPONSE_METADATA, (
-            ("server", "serverware-synthetic-upstream"),
+            ("server", "catchplate-synthetic-upstream"),
             ("date", "Thu, 01 Jan 1970 00:00:00 GMT"), ("cache-control", "no-store")))
         for base, status, body, media in (("json", 200, fixture.REQUEST_BODY, "application/json"),
                                         ("empty", 204, b"", fixture.EMPTY_RESPONSE_CONTENT_TYPE)):
@@ -141,7 +141,7 @@ class OrdinaryClientFixtureTests(unittest.TestCase):
         self.assertEqual(accepted, fixture.Admission("json", fixture.REQUEST_BODY_LENGTH))
         self.assertNotIn(AUTHORIZATION.decode(), repr(accepted))
         self.assertNotIn(AUTHORIZATION_SHA256, repr(accepted))
-        candidates = (fixture.DUMMY_AUTHORIZATION.encode(), b"Bearer SERVERWARE_WRONG",
+        candidates = (fixture.DUMMY_AUTHORIZATION.encode(), b"Bearer CATCHPLATE_WRONG",
             b"Bearer actual-provider-secret", b"Bearer synthetic-operator-" + b"A" * 31,
             b"Bearer synthetic-operator-" + b"A" * 129, b"Bearer synthetic-operator-" + b"!" * 43,
             b"bearer synthetic-operator-" + b"A" * 43, AUTHORIZATION + b" ", b" " + AUTHORIZATION, b"")

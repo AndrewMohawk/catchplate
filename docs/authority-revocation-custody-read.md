@@ -32,7 +32,7 @@ a replacement response. Reads neither insert nor repair custody records.
 
 ## Bounded framing
 
-`serverware.policyAuthorityRevocationCustodyReadTransfer/v1` uses request magic
+`catchplate.policyAuthorityRevocationCustodyReadTransfer/v1` uses request magic
 `SWCR\0\0\0\1`, two big-endian 64-bit lengths fixed at 71, and the two ASCII
 IDs. Response magic `SWRC\0\0\0\1` precedes six such lengths and the raw tuple.
 Response body caps are respectively 4 MiB, 4 MiB, 64 MiB, 512 KiB, 64 MiB and

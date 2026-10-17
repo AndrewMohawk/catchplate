@@ -11,68 +11,68 @@ use crate::response_observation_v2_api::{
 use super::config::CustodyServiceRole;
 
 pub(crate) const SERVICE_RPC_API_VERSION: &str =
-    "serverware.responseObservationV2CustodyServiceRpc/v1";
+    "catchplate.responseObservationV2CustodyServiceRpc/v1";
 pub(crate) const SERVICE_HANDSHAKE_API_VERSION: &str =
-    "serverware.responseObservationV2CustodyServiceHandshake/v1";
+    "catchplate.responseObservationV2CustodyServiceHandshake/v1";
 pub(crate) const READINESS_RECORD_API_VERSION: &str =
-    "serverware.responseObservationV2CustodyReadiness/v1";
+    "catchplate.responseObservationV2CustodyReadiness/v1";
 pub(crate) const STATE_AUTHORITY_API_VERSION: &str =
-    "serverware.responseObservationV2StateAuthority/v1";
+    "catchplate.responseObservationV2StateAuthority/v1";
 pub(crate) const SEQUENCE_STATE_AUTHORITY_API_VERSION: &str =
-    "serverware.responseObservationV2SequenceStateAuthority/v1";
+    "catchplate.responseObservationV2SequenceStateAuthority/v1";
 pub(crate) const STAGED_ORIGINAL_QUERY_API_VERSION: &str =
-    "serverware.responseObservationV2StagedOriginalQuery/v1";
+    "catchplate.responseObservationV2StagedOriginalQuery/v1";
 pub(crate) const STAGED_ORIGINAL_API_VERSION: &str =
-    "serverware.responseObservationV2StagedOriginal/v1";
+    "catchplate.responseObservationV2StagedOriginal/v1";
 pub(crate) const STATE_MUTATION_RECEIPT_API_VERSION: &str =
-    "serverware.responseObservationV2StateMutationReceipt/v1";
+    "catchplate.responseObservationV2StateMutationReceipt/v1";
 pub(crate) const ATTEMPT_STATE_OBSERVATION_API_VERSION: &str =
-    "serverware.responseObservationV2AttemptStateObservation/v1";
+    "catchplate.responseObservationV2AttemptStateObservation/v1";
 pub(crate) const TRANSITION_AUTHORIZATION_API_VERSION: &str =
-    "serverware.responseObservationV2TransitionAuthorization/v1";
+    "catchplate.responseObservationV2TransitionAuthorization/v1";
 pub(crate) const FINAL_ENVELOPE_VERIFICATION_API_VERSION: &str =
-    "serverware.responseObservationV2FinalEnvelopeVerification/v1";
+    "catchplate.responseObservationV2FinalEnvelopeVerification/v1";
 pub(crate) const CANONICAL_FINAL_ENVELOPE_API_VERSION: &str =
-    "serverware.responseObservationV2FinalEnvelope/v1";
+    "catchplate.responseObservationV2FinalEnvelope/v1";
 pub const CANONICAL_AUTHORITY_ENVELOPE_API_VERSION: &str =
-    "serverware.responseObservationV2FinalEnvelopeAuthority/v2";
+    "catchplate.responseObservationV2FinalEnvelopeAuthority/v2";
 pub const AUTHORITY_ARTIFACTS_ROOT_API_VERSION: &str =
-    "serverware.responseObservationV2AuthorityArtifactsRoot/v2";
+    "catchplate.responseObservationV2AuthorityArtifactsRoot/v2";
 pub const FINAL_AUTHORITY_ARTIFACT_COUNT: usize = 10;
 pub const AUTHORITY_PROOF_SEED_ARTIFACT_COUNT: usize = 9;
 pub const PRE_RELEASE_AUTHORITY_ARTIFACT_COUNT: usize =
     FINAL_AUTHORITY_ARTIFACT_COUNT;
 pub const CANONICAL_AUTHORITY_PROOF_SEED_API_VERSION: &str =
-    "serverware.responseObservationV2CanonicalAuthorityProofSeed/v2";
+    "catchplate.responseObservationV2CanonicalAuthorityProofSeed/v2";
 pub(crate) const IMMUTABLE_RAW_INSPECTION_API_VERSION: &str =
-    "serverware.responseObservationV2ImmutableRawInspection/v1";
+    "catchplate.responseObservationV2ImmutableRawInspection/v1";
 pub(crate) const RELEASE_METADATA_API_VERSION: &str =
-    "serverware.responseObservationV2ReleaseMetadata/v1";
+    "catchplate.responseObservationV2ReleaseMetadata/v1";
 pub(crate) const RELEASE_AUTHORIZATION_API_VERSION: &str =
-    "serverware.responseObservationV2ReleaseAuthorization/v2";
+    "catchplate.responseObservationV2ReleaseAuthorization/v2";
 pub(crate) const RELEASE_CONSUMPTION_API_VERSION: &str =
-    "serverware.responseObservationV2ReleaseConsumption/v2";
+    "catchplate.responseObservationV2ReleaseConsumption/v2";
 pub(crate) const RELEASE_CONSUMPTION_PREAUTHORIZATION_API_VERSION: &str =
-    "serverware.responseObservationV2ReleaseConsumptionPreauthorization/v1";
+    "catchplate.responseObservationV2ReleaseConsumptionPreauthorization/v1";
 pub(crate) const RELEASE_PREPARATION_RECEIPT_API_VERSION: &str =
-    "serverware.responseObservationV2ReleasePreparationReceipt/v1";
+    "catchplate.responseObservationV2ReleasePreparationReceipt/v1";
 pub(crate) const CUSTODY_ATTESTATION_API_VERSION: &str =
-    "serverware.responseObservationV2CustodyAttestation/v1";
+    "catchplate.responseObservationV2CustodyAttestation/v1";
 pub(crate) const CUSTODY_RECOVERY_API_VERSION: &str =
-    "serverware.responseObservationV2CustodyRecovery/v1";
+    "catchplate.responseObservationV2CustodyRecovery/v1";
 pub(crate) const CUSTODY_ERROR_API_VERSION: &str =
-    "serverware.responseObservationV2CustodyError/v1";
+    "catchplate.responseObservationV2CustodyError/v1";
 pub const PUBLIC_CUSTODY_API_VERSION: &str =
     crate::response_observation_v2_api::
         RESPONSE_OBSERVATION_V2_API_VERSION;
 pub(crate) const PUBLICATION_API_VERSION: &str =
-    "serverware.responseObservationV2Publication/v1";
+    "catchplate.responseObservationV2Publication/v1";
 pub(crate) const SETTLEMENT_API_VERSION: &str =
-    "serverware.responseObservationV2Settlement/v1";
+    "catchplate.responseObservationV2Settlement/v1";
 pub(crate) const SETTLEMENT_EVIDENCE_CONTEXT_API_VERSION: &str =
-    "serverware.responseObservationV2SettlementEvidenceContext/v1";
+    "catchplate.responseObservationV2SettlementEvidenceContext/v1";
 pub const AUTHORITY_SCOPE_API_VERSION: &str =
-    "serverware.responseObservationV2ProviderAuthorityScope/v2";
+    "catchplate.responseObservationV2ProviderAuthorityScope/v2";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1247,7 +1247,7 @@ pub fn released_projection_sha256_v2(
 ) -> Result<String, super::V2RuntimeError> {
     canonical_sha256(&serde_json::json!({
         "domain":
-            "serverware.responseObservationV2ReleasedProjection/v2",
+            "catchplate.responseObservationV2ReleasedProjection/v2",
         "rawResponseSha256": raw_response_sha256,
         "rawResponseByteLength": raw_response_byte_length,
         "requestMethod": request_method,
@@ -2243,7 +2243,7 @@ pub fn stable_resume_id_sha256(
     let mut hasher = Sha256::new();
     let generation_bytes = generation.to_be_bytes();
     for value in [
-        b"serverware.response-v2/stable-resume/v1".as_slice(),
+        b"catchplate.response-v2/stable-resume/v1".as_slice(),
         generation_id.as_bytes(),
         generation_bytes.as_slice(),
         request_sha256.as_bytes(),

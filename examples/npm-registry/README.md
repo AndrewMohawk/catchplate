@@ -1,4 +1,4 @@
-# npm registry through Serverware
+# npm registry through Catchplate
 
 A small stock-client project: **read metadata by default**, select a specific
 manifest with pacote, deliberately publish a reviewed local tarball, or install
@@ -19,7 +19,7 @@ runner), not an arbitrary numeric container UID with no passwd entry.
 
 ## Prepare the application
 
-In Serverware, save an npm-token connection, create an application whose proxy
+In Catchplate, save an npm-token connection, create an application whose proxy
 authentication supports **Basic** (Basic-only or Basic and Bearer), and grant
 either **Read package metadata** (`npm_metadata_read_v1`) for your exact package
 or **Publish package** (`npm_publish_v1`) for your exact package and tag. The
@@ -57,11 +57,11 @@ From **Proxy setup**, download the private client config and CA into this prepar
 example directory. For a metadata or publishing permission, read metadata with:
 
 ```sh
-node client.mjs --config ./serverware-client.private.json
+node client.mjs --config ./catchplate-client.private.json
 ```
 
 The file supplies the proxy login, saved package and CA paths; relative CA paths
-resolve beside the JSON. It contains a Serverware client token, never an npm
+resolve beside the JSON. It contains a Catchplate client token, never an npm
 provider token. Keep it private and out of source control. Its connection/scope
 fields are read as data; commands, environment fields and operation names in the
 file are never executed. Expired or mismatched configurations are refused.
@@ -82,24 +82,24 @@ or shell environment without committing them:
 
 | Variable | Meaning |
 | --- | --- |
-| `SERVERWARE_PROXY_URL` | HTTPS proxy origin, no credentials, path, query or fragment |
-| `SERVERWARE_APP_ID` | Serverware application UUID |
-| `SERVERWARE_PROXY_TOKEN` | That application's Serverware token, **not** an npm token |
-| `SERVERWARE_CA_FILE` | Trusted interception CA PEM obtained from your deployment |
-| `SERVERWARE_PROXY_CA_FILE` | Optional trusted private CA for the outer HTTPS proxy |
-| `SERVERWARE_NPM_PACKAGE` | Exact lowercase package name, for example `@your-scope/your-package` |
-| `SERVERWARE_NPM_VERSION` | Specific `major.minor.patch` release, needed by manifest/publish/install/ci |
+| `CATCHPLATE_PROXY_URL` | HTTPS proxy origin, no credentials, path, query or fragment |
+| `CATCHPLATE_APP_ID` | Catchplate application UUID |
+| `CATCHPLATE_PROXY_TOKEN` | That application's Catchplate token, **not** an npm token |
+| `CATCHPLATE_CA_FILE` | Trusted interception CA PEM obtained from your deployment |
+| `CATCHPLATE_PROXY_CA_FILE` | Optional trusted private CA for the outer HTTPS proxy |
+| `CATCHPLATE_NPM_PACKAGE` | Exact lowercase package name, for example `@your-scope/your-package` |
+| `CATCHPLATE_NPM_VERSION` | Specific `major.minor.patch` release, needed by manifest/publish/install/ci |
 
 Verify the CA through your trusted deployment/operator channel. This example
 does not bootstrap trust by downloading an unverified CA or disabling TLS.
-`serverware-npm-placeholder-v1` is intentionally public provider-dummy data; the
+`catchplate-npm-placeholder-v1` is intentionally public provider-dummy data; the
 proxy matches it before replacing it with its saved npm credential.
 
 ## Read metadata
 
 ```sh
 node client.mjs            # Stock npm view; read-only default.
-node client.mjs manifest   # Stock pacote.manifest for SERVERWARE_NPM_VERSION.
+node client.mjs manifest   # Stock pacote.manifest for CATCHPLATE_NPM_VERSION.
 ```
 
 Both operations print only a bounded package/version summary of the SDK result.
@@ -121,13 +121,13 @@ including transitive dependencies. No dependency is automatically authorized
 because another package names it. The example accepts a small private project
 whose `package.json` contains `name`, `version`, `private: true`, and exact
 ordinary-release `dependencies` (optional `description`/`license` are allowed).
-The selected `SERVERWARE_NPM_PACKAGE` and `SERVERWARE_NPM_VERSION` must appear in
+The selected `CATCHPLATE_NPM_PACKAGE` and `CATCHPLATE_NPM_VERSION` must appear in
 those direct dependencies. Workspaces, lifecycle scripts and Git/file/URL specs
 are outside this example.
 
 ```sh
-export SERVERWARE_NPM_PROJECT=/absolute/reviewed/consumer-project
-export SERVERWARE_NPM_OUTPUT=/absolute/new-installed-project
+export CATCHPLATE_NPM_PROJECT=/absolute/reviewed/consumer-project
+export CATCHPLATE_NPM_OUTPUT=/absolute/new-installed-project
 node client.mjs install
 ```
 
@@ -170,10 +170,10 @@ outside this project; only an already reviewed local tarball is accepted.
 Set these additional environment variables deliberately:
 
 ```sh
-export SERVERWARE_NPM_TAG=latest
-export SERVERWARE_NPM_TARBALL=/absolute/reviewed/package.tgz
-export SERVERWARE_NPM_TARBALL_SHA256='REPLACE_WITH_REVIEWED_64_CHARACTER_LOWERCASE_SHA256'
-export SERVERWARE_NPM_PUBLISH_CONFIRM=publish-publicly
+export CATCHPLATE_NPM_TAG=latest
+export CATCHPLATE_NPM_TARBALL=/absolute/reviewed/package.tgz
+export CATCHPLATE_NPM_TARBALL_SHA256='REPLACE_WITH_REVIEWED_64_CHARACTER_LOWERCASE_SHA256'
+export CATCHPLATE_NPM_PUBLISH_CONFIRM=publish-publicly
 node client.mjs publish
 ```
 
@@ -205,14 +205,14 @@ it is **not** an independent registry-state or audit proof. Stock npm can swallo
 preflight metadata errors before attempting PUT. The separate integration
 fixture verifies the prerequisite GET independently; this example does not.
 After a timeout or any failed publish, the write may have reached the registry.
-Inspect registry metadata and Serverware audit evidence before deciding what to
+Inspect registry metadata and Catchplate audit evidence before deciding what to
 do. Never automatically retry; a missing version in one observation does not
 prove an in-flight write cannot still complete.
 
 ## Trust, deadlines and CI
 
 Each invocation creates a private npmrc, empty global config, project and cache.
-The npmrc stores a literal `${SERVERWARE_PROXY_TOKEN}` reference, not the token.
+The npmrc stores a literal `${CATCHPLATE_PROXY_TOKEN}` reference, not the token.
 Only the child's curated environment contains the application token; ambient
 `NPM_TOKEN`, npm/proxy configuration, `NODE_OPTIONS` and TLS overrides are not
 forwarded. `HOME` is not reassigned or forwarded. npm can resolve the OS user's
@@ -240,9 +240,9 @@ Errors are fixed, redacted messages, never raw npm output, stacks or proxy URLs.
 triggered, read-only GitHub Actions sample for an Ubuntu GitHub-hosted runner.
 Checkout/setup actions use the same exact official commit pins as the GitHub
 issues example. Review the checked-in dependency lock before enabling it. The
-dependency installation step receives no Serverware secrets, and only the final
+dependency installation step receives no Catchplate secrets, and only the final
 read step receives the application token. No provider token, automatic publish
-or unverified CA download is included. Review the protected `serverware-demo`
+or unverified CA download is included. Review the protected `catchplate-demo`
 environment before deliberately copying it into `.github/workflows/`.
 
 ## Offline verification boundary
@@ -304,7 +304,7 @@ groups passed in a read-only, network-disabled container. The actual stock CLI
 also passed the separate loopback-only install, cold `ci`, and refused-audit
 protocol checks: 13 arrivals total, no cold-`ci` metadata reads, unchanged lock
 bytes, and audit failure rejected despite npm returning zero. That protocol
-fixture is not the Serverware proxy, does not exercise TLS, and does not
+fixture is not the Catchplate proxy, does not exercise TLS, and does not
 establish publication or provider access for the updated versions. The first
 CLI attempt ran as an unsupported numeric UID without a passwd entry and
 failed before any registry arrival; using the image's existing normal account
@@ -314,7 +314,7 @@ resolved that harness error without changing application configuration.
 
 On October 16, 2026, source `8b0277f041359ad24c7edbff169eeae3d3dd22f6`
 passed all **25 phases** with the current dependency pins through the real
-Serverware application, Rust gate and HTTPS proxy against a network-isolated
+Catchplate application, Rust gate and HTTPS proxy against a network-isolated
 synthetic registry. Nine commands succeeded and 16 expected refusals passed in
 152.680 seconds, including setup and cleanup. Three exact publications, install,
 cold `ci`, transitive package bytes, default-audit failure detection and the
@@ -331,7 +331,7 @@ the matching rollout is tracked separately. Publishing is never the default.
 
 On October 13, 2026, source `e7d7e05b` passed the actual 25-phase example flow
 with npm 11.20.0, pacote 21.5.1 and npm-registry-fetch 19.1.1 through the real
-Serverware application, Rust gate and HTTPS proxy against a network-isolated
+Catchplate application, Rust gate and HTTPS proxy against a network-isolated
 synthetic registry. Nine commands succeeded and 16 expected refusals passed.
 The run verified three exact publications, install and cold `ci` with transitive
 package bytes and an unchanged lock, successful default audit, rejected audit
@@ -365,7 +365,7 @@ passed separately. This is not real npm entitlement or Internet CONNECT proof.
 See [the installation record](../../docs/operator-npm-install.md).
 
 On 2026-10-11 UTC, the then-current launcher and worker passed all 21 integration
-cases through the actual Serverware application, Rust gate and HTTPS proxy
+cases through the actual Catchplate application, Rust gate and HTTPS proxy
 against an isolated synthetic registry. The run verified metadata reads, both
 scoped and unscoped publications, permission/time-window/revocation denials,
 missing-root TLS failures and local publication guards. Stored tarball bytes

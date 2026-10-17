@@ -35,7 +35,7 @@ root-owned `0700` start journal and retains its exclusive nonblocking lock.
 The closed inventory permits at most 64 exact `64-lowercase-hex.claim` files;
 foreign, incomplete, full or already-consumed inventories refuse without repair.
 
-The stable start slot is SHA-256 of `serverware.nativeWorkloadStartSlot/v1`, one
+The stable start slot is SHA-256 of `catchplate.nativeWorkloadStartSlot/v1`, one
 NUL byte, then the journal namespace and capability ID, each prefixed by its
 big-endian u32 byte length. New proof bytes or a changed token cannot make that
 same slot fresh. A record is exactly 73 bytes: `SWNESTR1`, byte `1`, the 32-byte

@@ -2,7 +2,7 @@
 
 This source-only contract separates execution of registration evidence from
 completion recovery. Neither action finalizes a credential or establishes a
-latest current head. The [pure helper](../serverware/control_plane_registration_handoff_http.py)
+latest current head. The [pure helper](../catchplate/control_plane_registration_handoff_http.py)
 owns bounded shapes and public projections, not HTTP handlers, actor/session
 authentication, database access or cryptographic verification. The current
 source is unbuilt and unexecuted.
@@ -57,7 +57,7 @@ the other fixed modes are `bootstrap-token`, `development-bootstrap` and
 `existing-webauthn`, with null session identifiers.
 
 The projection returns a fresh dictionary adding schema
-`serverware.webAuthnRegistrationHandoffIntent/v1` and the source-selected purpose
+`catchplate.webAuthnRegistrationHandoffIntent/v1` and the source-selected purpose
 and action to those seven fields. This is the ordinary request input for the
 existing canonical MFA/approval payload hash, not a successful replay token.
 Shape validation does not authenticate a supplied subject dictionary. The
@@ -75,10 +75,10 @@ actual private facade succeeds**, not on caller-supplied or merely retained
 response bytes.
 
 The SQL projection has schema
-`serverware.webAuthnRegistrationExecutionHandoff/v1`, status `observed-commit`
+`catchplate.webAuthnRegistrationExecutionHandoff/v1`, status `observed-commit`
 and `observationAuthenticated:false`. It deliberately labels an unsigned SQL
 observation, not signed completion. The completion projection has schema
-`serverware.webAuthnRegistrationCompletion/v1`, status `completion-acknowledged`
+`catchplate.webAuthnRegistrationCompletion/v1`, status `completion-acknowledged`
 and `observationAuthenticated:true`. That true field depends on the actual
 facade's genuine original-response verification; this pure helper performs no
 authentication and cannot establish it from an `acknowledged` byte label.

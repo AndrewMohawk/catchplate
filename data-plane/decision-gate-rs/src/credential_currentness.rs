@@ -3,7 +3,7 @@
 //! Polling failure blocks locally; it never fabricates a remote acknowledgement.
 
 use super::*;
-use serverware_decision_gate::native_currentness_v1 as wire;
+use catchplate_decision_gate::native_currentness_v1 as wire;
 use std::collections::BTreeMap;
 
 const PATH: &str = "/api/data-plane/credential-currentness";
@@ -165,13 +165,13 @@ fn post(state: &GateState, snapshot: &Arc<Snapshot>, id: &str, version: u64,
     let mut nonce = [0u8; 32];
     ring_rand::SystemRandom::new().fill(&mut nonce).map_err(|_| "currentness response nonce unavailable")?;
     let nonce = general_purpose::URL_SAFE_NO_PAD.encode(nonce);
-    let body = json!({"apiVersion":"serverware.credentialCurrentnessRequest/v1",
+    let body = json!({"apiVersion":"catchplate.credentialCurrentnessRequest/v1",
         "credentialId":id, "credentialVersion":version,
         "request":{"phase":phase,"arguments":arguments}});
     let timeout = custody_deadline_remaining(deadline, "currentness request")?.min(Duration::from_secs(3));
     let mut response = state.credential_lease_client.post(url.as_str())
-        .header("X-Serverware-Data-Plane-Token", state.credential_lease_token.as_deref().ok_or("currentness token absent")?)
-        .header("X-Serverware-Response-Nonce", &nonce).timeout(timeout).json(&body).send()
+        .header("X-Catchplate-Data-Plane-Token", state.credential_lease_token.as_deref().ok_or("currentness token absent")?)
+        .header("X-Catchplate-Response-Nonce", &nonce).timeout(timeout).json(&body).send()
         .map_err(|_| "currentness request outcome is unknown")?;
     let status = response.status();
     let bytes = read_bounded_control_plane_response_body(&mut response, MAX_REPLY, "currentness response")?;
@@ -182,7 +182,7 @@ fn post(state: &GateState, snapshot: &Arc<Snapshot>, id: &str, version: u64,
     current_shape(value.get("currentness").ok_or("currentness result projection absent")?)?;
     let current = if phase == "poll" {
         let reply: Observation = serde_json::from_value(value).map_err(|_| "currentness observation shape differs")?;
-        require(reply.api_version == "serverware.credentialCurrentnessObservation/v1")?;
+        require(reply.api_version == "catchplate.credentialCurrentnessObservation/v1")?;
         reply.currentness
     } else {
         let reply: ResultWire = serde_json::from_value(value).map_err(|_| "currentness result shape differs")?;
@@ -191,7 +191,7 @@ fn post(state: &GateState, snapshot: &Arc<Snapshot>, id: &str, version: u64,
             && wire::digest(&reply.request_digest) && wire::digest(&reply.audit_event_digest))?;
         reply.currentness
     };
-    require(current.root.api_version == "serverware.credentialCurrentnessRoot/v1"
+    require(current.root.api_version == "catchplate.credentialCurrentnessRoot/v1"
         && current.root.credential_id == id && current.root.credential_version == version
         && current.root.epoch == version && wire::digest(&current.root.root_sha256)
         && wire::digest(&current.root.origin_request_digest)
@@ -300,8 +300,8 @@ pub(super) fn wrap_request(state: &GateState, snapshot: &Arc<Snapshot>, scope: &
         custody_deadline_remaining(deadline, "currentness recipient binding")?;
         json!({"holderId":prepared.holder,"epoch":version,"registrationSha256":prepared.registration,"signature":signature})
     };
-    let api_version = if state.native_secret_broker.is_some() { "serverware.nativeCurrentCredentialLeaseRequest/v2" }
-        else { "serverware.nativeCurrentCredentialLeaseRequest/v1" };
+    let api_version = if state.native_secret_broker.is_some() { "catchplate.nativeCurrentCredentialLeaseRequest/v2" }
+        else { "catchplate.nativeCurrentCredentialLeaseRequest/v1" };
     Ok((json!({"apiVersion":api_version,
         "currentness":currentness,"leaseRequest":inner}), Some(currentness)))
 }
@@ -311,8 +311,8 @@ pub(super) fn unwrap_response(state: &GateState, purpose: CredentialLeasePurpose
     if !state.credential_currentness.enabled() { require(expected.is_none())?; return Ok((body.to_vec(), None)); }
     let value = response_value(body)?;
     let object = value.as_object().ok_or("currentness envelope is not an object")?;
-    let api_version = if state.native_secret_broker.is_some() { "serverware.nativeCurrentCredentialLeaseEnvelope/v2" }
-        else { "serverware.nativeCurrentCredentialLeaseEnvelope/v1" };
+    let api_version = if state.native_secret_broker.is_some() { "catchplate.nativeCurrentCredentialLeaseEnvelope/v2" }
+        else { "catchplate.nativeCurrentCredentialLeaseEnvelope/v1" };
     require(object.len() == 3 && object.get("apiVersion").and_then(Value::as_str)
         == Some(api_version) && object.contains_key("envelope"))?;
     let currentness = object.get("currentness").ok_or("currentness envelope pin absent")?;
@@ -360,7 +360,7 @@ fn poll_holder(state: &GateState, id: &str, version: u64) -> Result<(), String> 
     let barrier = reply.barrier.ok_or("currentness frozen barrier absent")?;
     let original = &barrier.original;
     require(reply.root.status == "quiescing" && barrier.status == "quiescing"
-        && original.api_version == "serverware.credentialCurrentnessBarrier/v1"
+        && original.api_version == "catchplate.credentialCurrentnessBarrier/v1"
         && original.credential_id == id && original.credential_version == version && original.epoch == version
         && reply.root.barrier_id.as_deref() == Some(original.barrier_id.as_str())
         && wire::uuid(&original.barrier_id) && original.holders.len() <= MAX_HOLDERS

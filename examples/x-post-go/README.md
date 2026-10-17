@@ -26,12 +26,12 @@ GOTOOLCHAIN=local go build -o x-post-example .
 
 Reuse that binary for subsequent jobs; no install or build is needed per run.
 For an existing posting grant, download its private client JSON and verified CA
-from **Proxy setup**. Set `SERVERWARE_X_POST_TEXT` to your intended post and
-`SERVERWARE_X_POST_CONFIRM=post-once` explicitly in your local environment, then
+from **Proxy setup**. Set `CATCHPLATE_X_POST_TEXT` to your intended post and
+`CATCHPLATE_X_POST_CONFIRM=post-once` explicitly in your local environment, then
 run from this directory:
 
 ```sh
-./x-post-example --config /private/path/serverware-client.private.json
+./x-post-example --config /private/path/catchplate-client.private.json
 ```
 
 This sends one real post, subject to the grant. **The JSON never supplies post
@@ -48,13 +48,13 @@ issued an explicit posting grant; isolated acceptance is not live authorization:
 
 | Input | Meaning |
 | --- | --- |
-| `SERVERWARE_PROXY_URL` | Explicit HTTPS proxy origin with a distinct DNS hostname; no credentials in the URL. |
-| `SERVERWARE_APP_ID` | Saved Serverware application UUID. |
-| `SERVERWARE_PROXY_TOKEN` | Private, issued Serverware application token, canonical 43-character base64url. Never an X token. |
-| `SERVERWARE_CA_FILE` | Inner interception CA PEM bundle. |
-| `SERVERWARE_PROXY_CA_FILE` | Optional additional outer proxy CA PEM bundle, alongside OS roots. |
-| `SERVERWARE_X_POST_TEXT` | Exact text, 1–16384 UTF-8 bytes, without NUL. |
-| `SERVERWARE_X_POST_CONFIRM` | Must equal `post-once`. This is a local intent check, not proxy authorization or a quota. |
+| `CATCHPLATE_PROXY_URL` | Explicit HTTPS proxy origin with a distinct DNS hostname; no credentials in the URL. |
+| `CATCHPLATE_APP_ID` | Saved Catchplate application UUID. |
+| `CATCHPLATE_PROXY_TOKEN` | Private, issued Catchplate application token, canonical 43-character base64url. Never an X token. |
+| `CATCHPLATE_CA_FILE` | Inner interception CA PEM bundle. |
+| `CATCHPLATE_PROXY_CA_FILE` | Optional additional outer proxy CA PEM bundle, alongside OS roots. |
+| `CATCHPLATE_X_POST_TEXT` | Exact text, 1–16384 UTF-8 bytes, without NUL. |
+| `CATCHPLATE_X_POST_CONFIRM` | Must equal `post-once`. This is a local intent check, not proxy authorization or a quota. |
 
 The SDK JSON body is additionally limited to 32768 bytes, including escaping.
 Newlines, tabs and carriage returns are preserved. These bounds are a supported
@@ -62,8 +62,8 @@ example profile, not complete X weighted-character or account-entitlement
 validation. No naive 280-codepoint limit is applied.
 
 The inner request carries only the public dummy bearer
-`serverware-x-post-placeholder-v1`. Serverware keeps the actual
-user-context X token on Serverware; this client does not perform OAuth or read
+`catchplate-x-post-placeholder-v1`. Catchplate keeps the actual
+user-context X token on Catchplate; this client does not perform OAuth or read
 ambient X/Twitter credentials. Application Basic authentication is attached only
 to CONNECT, never the inner request. Both TLS hops retain normal certificate
 verification and are checked against separate per-host root sets. Nonempty
@@ -75,7 +75,7 @@ The call has a 30-second context/client deadline. Success requires HTTP 201 and
 a 1–20-digit decimal post ID, and prints only `{"status":201,"id":"…"}`. Text,
 tokens and provider error bodies are never printed. After dispatch, **any failure means
 the outcome is unknown**, including a response withheld with HTTP 409. The post
-may already exist. Inspect Serverware audit records and the X account before any
+may already exist. Inspect Catchplate audit records and the X account before any
 further action; never automatically replay the job. This client cannot enforce
 cross-process deduplication or a shared daily quota.
 

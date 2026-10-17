@@ -8,7 +8,7 @@ const {join} = require('node:path');
 const {fixture: baseFixture, ready, view, NOW} = require('./test_operator_catalog_browser.cjs');
 
 const PREFIX = '/api/operator-demo/notifications';
-const STORAGE = 'serverware.operator.notifications.operation.v1';
+const STORAGE = 'catchplate.operator.notifications.operation.v1';
 const SECRET = 'https://receiver.example.test/SYNTHETIC_PRIVATE_NOTIFICATION_URL';
 const SLOTS = ['action_required.slack', 'action_required.webhook', 'audit_log.slack', 'audit_log.webhook'];
 const STATES = ['queued', 'sending', 'acknowledged', 'failed', 'outcome_unknown', 'suppressed', 'expired'];
@@ -29,7 +29,7 @@ function snapshot() {
     event_types: index === 1 ? [] : [EVENTS[slot.split('.')[0]][0]], max_attempts: index === 2 ? 3 : 1,
     last_delivery: index === 3 ? delivery() : index === 0 ?
       {...delivery('failed'), code: 'http_rejected', http_status: 429} : null}));
-  return {schema: 'serverware.operatorNotifications/v1', available: true, slots,
+  return {schema: 'catchplate.operatorNotifications/v1', available: true, slots,
     queue: Object.fromEntries(STATES.map(state => [state, state === 'outcome_unknown' ? 1 : 0])), cursor: null,
     backlog: {pending_source_events: 0, queue_capacity: 256, retained_capacity: 10000},
     capabilities: {action_required: {source_available: false, event_types: EVENTS.action_required},
@@ -86,7 +86,7 @@ async function fixture(browser, exercise, {lostReply = false} = {}) {
       assert.deepEqual(Object.keys(body).sort(), ['expected_revision', 'operation_id', 'slot']);
       target.last_delivery = delivery('queued'); state.snapshot.queue.queued++;
     }
-    const receipt = {schema: 'serverware.operatorNotificationOperation/v1', operation_id: body.operation_id, kind,
+    const receipt = {schema: 'catchplate.operatorNotificationOperation/v1', operation_id: body.operation_id, kind,
       slot: body.slot, revision: target.revision, status: kind === 'save' ? 'saved' : 'queued',
       delivery_id: kind === 'save' ? null : target.last_delivery.delivery_id, slot_state: kind === 'save' ? clone(target) : null};
     state.receipts.set(body.operation_id, clone(receipt));
@@ -95,7 +95,7 @@ async function fixture(browser, exercise, {lostReply = false} = {}) {
   }}, async (page, catalog) => {
     await ready(page); await view(page, 'notifications'); await settled(page); await page.clock.resume();
     assert.equal(new URL(page.url()).origin, 'https://operator-catalog.example.test');
-    assert.match(await page.title(), /Notifications.*Serverware/i);
+    assert.match(await page.title(), /Notifications.*Catchplate/i);
     assert.equal(await page.locator('[data-notification-slot]').count(), 4);
     await exercise(page, state);
     assert.equal(catalog.posts.length, state.posts.length);
@@ -105,7 +105,7 @@ async function fixture(browser, exercise, {lostReply = false} = {}) {
 }
 
 async function runSuite(browser) {
-  const artifacts = await mkdtemp('/tmp/serverware-notification-summary-');
+  const artifacts = await mkdtemp('/tmp/catchplate-notification-summary-');
   await fixture(browser, async (page, state) => {
     assert.equal(await page.locator('[data-notification-fields]:visible').count(), 0);
     assert.equal(await page.locator('[data-notification-edit]:visible').count(), 4);

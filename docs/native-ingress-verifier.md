@@ -1,7 +1,7 @@
 # Offline native ingress evidence verifier
 
 Status: source-only, unbuilt and unexecuted.
-[`serverware-native-ingress-verifier`](../data-plane/decision-gate-rs/src/bin/serverware-native-ingress-verifier.rs)
+[`catchplate-native-ingress-verifier`](../data-plane/decision-gate-rs/src/bin/catchplate-native-ingress-verifier.rs)
 checks the [startup public identity original](native-public-identity.md) against
 independently pinned expectations and Nitro trust roots. It verifies actual
 certificate and original Nitro signatures, not just matching digests. It does
@@ -16,7 +16,7 @@ evidence, expand this CLI, or turn its JSON output into enrollment authority.
 ## Fixed inputs and CLI
 
 ```text
-serverware-native-ingress-verifier \
+catchplate-native-ingress-verifier \
   --expectations /approved/ingress-expectations.json \
   --expectations-sha256 sha256:<exact-expectations-original-digest> \
   --trust-roots /approved/native-trust-roots.json \
@@ -58,7 +58,7 @@ has exactly thirteen required fields:
 
 | Field | Meaning |
 | --- | --- |
-| `apiVersion` | `serverware.nativeIngressAttestationExpectations/v1` |
+| `apiVersion` | `catchplate.nativeIngressAttestationExpectations/v1` |
 | `releaseRecordSha256`, `policyHash`, `configurationSha256` | Independent nonzero scope commitments. |
 | `clientTrustBundleSha256` | Independent framed installed-client-root commitment. |
 | `expectedPcrs` | Complete expected PCR inventory, 3–32 canonical indices in 0–31, including nonzero PCR0/1/2. |
@@ -73,7 +73,7 @@ All additional locked PCRs must match; zero reserved PCR values are permitted
 only when explicitly included in that independent inventory. Schema shape
 alone does not perform the actual canonical-host, SPIFFE, EIF or signature joins.
 
-Trust uses the existing closed `serverware.nativeResponseAttestationTrustRoots/v1`
+Trust uses the existing closed `catchplate.nativeResponseAttestationTrustRoots/v1`
 format and fixed `aws-nitro-attestation-pki-native-v1` profile described in the
 [native verifier guide](native-verifier.md). It requires independently pinned
 root DERs and an empty CRL inventory. Vendor CRL revocation is not proved;
@@ -118,7 +118,7 @@ This proves the signed commitment, not that a live endpoint is enforcing it.
 
 ## Local result, not enrollment or session authority
 
-The result is `serverware.nativeIngressAttestationVerification/v1`, with
+The result is `catchplate.nativeIngressAttestationVerification/v1`, with
 `resultScope=local-ingress-quote-only` and `okForAction=false`. It carries exact
 evidence/expectation/trust-original SHA-256s, scope/client-trust digests, CA and
 leaf certificate/SPKI digests, original Nitro-document digest, nonce,
@@ -149,8 +149,8 @@ The existing pinned offline Alpine build in
 [Dockerfile.production](../data-plane/decision-gate-rs/Dockerfile.production)
 adds this autobin without new dependencies, downloads or an entrypoint switch. Its
 recipe requires no ELF interpreter/dynamic `NEEDED` entries and at most 64 MiB.
-`native-ingress-verifier-artifact` exports `/serverware-native-ingress-verifier`;
-the runtime path is `/usr/local/libexec/serverware-native-ingress-verifier`,
+`native-ingress-verifier-artifact` exports `/catchplate-native-ingress-verifier`;
+the runtime path is `/usr/local/libexec/catchplate-native-ingress-verifier`,
 root-owned and mode 0555. This recipe has not been built or independently admitted.
 
 Frozen validation still needs genuine generated CA/leaf and original Nitro

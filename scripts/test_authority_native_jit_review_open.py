@@ -30,8 +30,8 @@ def no_external_effects(event, _arguments):
 
 
 if __name__ == "__main__":
-    os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
-    os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
+    os.environ["CATCHPLATE_PROCESS_MODE"] = "metadata-bootstrap"
+    os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
     sys.addaudithook(no_external_effects)
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -39,17 +39,17 @@ from scripts import test_authority_audit_capacity as counters
 from scripts import test_authority_native_jit_pending as pending_fixture
 from scripts import test_authority_native_jit_retained_history as old_fixture
 from scripts import test_authority_native_jit_review_custody as crypto
-from serverware import authority_contract as authority
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_native_jit_retained_history as history
-from serverware import authority_native_jit_review_open_contract as wire
-from serverware import authority_release_private_request as private
-from serverware import authority_successor_programs as programs
-from serverware import authority_transition_core as core
-from serverware import authority_transition_native_jit_review_open as kernel
-from serverware import authority_transition_quota as quota
-from serverware import authority_transition_registry as registry
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_contract as authority
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_native_jit_retained_history as history
+from catchplate import authority_native_jit_review_open_contract as wire
+from catchplate import authority_release_private_request as private
+from catchplate import authority_successor_programs as programs
+from catchplate import authority_transition_core as core
+from catchplate import authority_transition_native_jit_review_open as kernel
+from catchplate import authority_transition_quota as quota
+from catchplate import authority_transition_registry as registry
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
 NOW = 1_800_000_000_000_000_000
 SECOND = 1_000_000_000
@@ -96,7 +96,7 @@ def acknowledgment():
 
 def signed(value, key, *, domain=None):
     signature = key.sign((domain or value["schema"]).encode() + b"\0" + canonical(value))
-    return canonical({"schema": value["schema"].replace("serverware.native", "serverware.signedNative", 1),
+    return canonical({"schema": value["schema"].replace("catchplate.native", "catchplate.signedNative", 1),
         "payload": value, "signatureBase64Url": encoded(signature)}).decode()
 
 
@@ -175,7 +175,7 @@ class OpeningContractTests(unittest.TestCase):
             self.assertEqual(verify(signed(payload, self.key), public_key=self.key.public_key(),
                 now_epoch_ns=NOW + SECOND)["payload"], payload)
             with self.assertRaises(Exception):
-                verify(signed(payload, self.key, domain="serverware.genericVerifierResponse/v1"),
+                verify(signed(payload, self.key, domain="catchplate.genericVerifierResponse/v1"),
                     public_key=self.key.public_key(), now_epoch_ns=NOW + SECOND)
 
     def test_grant_never_parses_as_commit_ack(self):
@@ -366,7 +366,7 @@ class HistoricalProfileTests(unittest.TestCase):
 
     def test_literal_350_profile_remains_supported_after_current_source_changes(self):
         manifest = "sha256:ed6d471a03516c96aa4968b89e4d220f9d5aaa0dfc4c1f848acfcc58343de4f0"
-        revision = "serverware.policyCandidateAuthoritySource/2026-07-30.350"
+        revision = "catchplate.policyCandidateAuthoritySource/2026-07-30.350"
         fixture = old_fixture.Fixture(self.pki, manifest=manifest)
         fixture.row["source_revision"] = revision
         parsed = history.historical_retained_documents(retained_row=fixture.row,
@@ -385,7 +385,7 @@ class HistoricalProfileTests(unittest.TestCase):
         rows = {item["table"]: item["row"] for item in transition.mutations}
         retained = rows["policy_authority_native_jit_review_pairs"]
         self.assertEqual(retained["source_revision"],
-            "serverware.policyCandidateAuthoritySource/2026-07-30.351")
+            "catchplate.policyCandidateAuthoritySource/2026-07-30.351")
         self.assertEqual(retained["source_contract_digest"],
             "sha256:bb0f9a53066e10042f83a1576d2c44b1dcf497eee457bb8d3146d86f4d526256")
         self.assertEqual(retained["source_contract_digest"], authority.OPERATION_MANIFEST_DIGEST)
@@ -410,8 +410,8 @@ class HistoricalProfileTests(unittest.TestCase):
                 (old_fixture.MANIFEST, history.FRESH_SEALED_SOURCE_REVISION),
                 (history.FRESH_SEALED_MANIFEST, history.SEALED_351_SOURCE_REVISION),
                 (history.SEALED_351_MANIFEST, history.FRESH_SEALED_SOURCE_REVISION),
-                (history.SEALED_351_MANIFEST, "serverware.policyCandidateAuthoritySource/2026-07-30.352"),
-                (OTHER, "serverware.policyCandidateAuthoritySource/2026-07-30.352")):
+                (history.SEALED_351_MANIFEST, "catchplate.policyCandidateAuthoritySource/2026-07-30.352"),
+                (OTHER, "catchplate.policyCandidateAuthoritySource/2026-07-30.352")):
             with self.subTest(manifest=manifest, revision=revision):
                 fixture = old_fixture.Fixture(self.pki, manifest=manifest)
                 fixture.row["source_revision"] = revision

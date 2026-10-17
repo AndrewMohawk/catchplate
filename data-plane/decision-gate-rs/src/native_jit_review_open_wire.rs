@@ -9,8 +9,8 @@ const SCOPE: &[&str] = &["reviewId","approvalRequestId","reviewerId","sessionId"
     "ownerScopeDigest","browserNonceCommitment","recipientPublicKey","documentExpiresAtEpochNs",
     "approvalExpiresAtEpochNs","sessionExpiresAtEpochNs","assignmentExpiresAtEpochNs"];
 const EPOCHS: &[&str] = &["documentExpiresAtEpochNs","approvalExpiresAtEpochNs","sessionExpiresAtEpochNs","assignmentExpiresAtEpochNs"];
-const AUTHORIZATION: &str = "serverware.nativeJitReviewOpeningAuthorization/v1";
-const ACK: &str = "serverware.nativeJitReviewOpeningCommitAcknowledgment/v1";
+const AUTHORIZATION: &str = "catchplate.nativeJitReviewOpeningAuthorization/v1";
+const ACK: &str = "catchplate.nativeJitReviewOpeningCommitAcknowledgment/v1";
 pub(super) fn integer(v: &Value) -> Result<u64, String> { v.as_u64().filter(|n| *n > 0 && *n <= i64::MAX as u64).ok_or_else(|| "review integer".into()) }
 fn digest(v: &Value) -> Result<(), String> { require(v.as_str().is_some_and(current::digest)) }
 fn scope(value: &Value) -> Result<u64, String> {
@@ -32,7 +32,7 @@ pub(super) fn authority(original: &str, policy: &Value, acknowledgment: bool, no
     fields(&envelope, &["schema","payload","signatureBase64Url"])?;
     require(canonical_ascii_bytes(&envelope)? == original.as_bytes())?;
     let schema = if acknowledgment { ACK } else { AUTHORIZATION };
-    require(envelope["schema"] == schema.replacen("serverware.native","serverware.signedNative",1))?;
+    require(envelope["schema"] == schema.replacen("catchplate.native","catchplate.signedNative",1))?;
     let value = &envelope["payload"];
     fields(value, if acknowledgment {
         &["schema","operation","requestDigest","authorizationSha256","preparationSha256","scope","reviewDigest","receiptId",

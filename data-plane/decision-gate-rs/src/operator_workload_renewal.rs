@@ -9,7 +9,7 @@ const MAX_REQUEST: usize = 4096;
 const MAX_RESPONSE: usize = 8192;
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 const CREDENTIAL_HEADERS: &[&str] = &["authorization", "proxy-authorization", "cookie",
-    "x-serverware-admin-token", "x-serverware-bootstrap-token", "x-serverware-data-plane-token",
+    "x-catchplate-admin-token", "x-catchplate-bootstrap-token", "x-catchplate-data-plane-token",
     "remote-user", "remote-groups", "remote-email", "remote-name", "origin"];
 
 fn ordinary(state: &GateState) -> bool {
@@ -43,7 +43,7 @@ pub(super) fn capability(state: &GateState) -> Value {
     if !ordinary(state) || endpoint(state.credential_lease_url.as_deref()).is_err() {
         return Value::Null;
     }
-    json!({"schema":"serverware.proxyTokenRenewal/v1", "path":PATH,
+    json!({"schema":"catchplate.proxyTokenRenewal/v1", "path":PATH,
         "overlap_seconds":300, "max_request_bytes":MAX_REQUEST, "max_response_bytes":MAX_RESPONSE})
 }
 
@@ -82,7 +82,7 @@ fn closed_request(raw: &[u8]) -> bool {
             .is_some_and(|text| !text.is_empty() && text.len() <= 512))
         && INTEGERS.iter().all(|key| object.get(*key).and_then(Value::as_u64)
             .is_some_and(|number| number > 0 && number <= 9_007_199_254_740_991))
-        && object.get("schema").and_then(Value::as_str) == Some("serverware.workloadTokenRenewal/v1")
+        && object.get("schema").and_then(Value::as_str) == Some("catchplate.workloadTokenRenewal/v1")
 }
 
 struct Slot;
@@ -257,7 +257,7 @@ mod tests {
 
     fn request_bytes() -> Vec<u8> {
         // Whitespace is intentional: forwarding must not reserialize a proof.
-        format!(" \n{}\n", json!({"schema":"serverware.workloadTokenRenewal/v1",
+        format!(" \n{}\n", json!({"schema":"catchplate.workloadTokenRenewal/v1",
             "audience":"https://proxy.example.com/v1/workload/renew",
             "application_id":"12345678-1234-4234-8234-123456789abc",
             "enrollment_id":"22345678-1234-4234-8234-123456789abc",
@@ -363,16 +363,16 @@ mod tests {
             assert!(reserved(&target));
         }
         assert!(!reserved("/v1/workload/other"));
-        assert_eq!(endpoint(Some("http://serverware:3000/api/data-plane/credential-leases")).unwrap().as_str(),
-            "http://serverware:3000/api/operator-demo/workloads/renew");
-        for url in ["http://user@serverware/api/data-plane/credential-leases",
-            "http://serverware/api/data-plane/credential-leases?x=1", "http://serverware/other",
+        assert_eq!(endpoint(Some("http://catchplate:3000/api/data-plane/credential-leases")).unwrap().as_str(),
+            "http://catchplate:3000/api/operator-demo/workloads/renew");
+        for url in ["http://user@catchplate/api/data-plane/credential-leases",
+            "http://catchplate/api/data-plane/credential-leases?x=1", "http://catchplate/other",
             "file:///api/data-plane/credential-leases"] { assert!(endpoint(Some(url)).is_err()); }
     }
 
     #[test]
     fn exact_request_rejects_duplicate_extra_nested_and_wrong_scalar() {
-        let value = json!({"schema":"serverware.workloadTokenRenewal/v1", "audience":"https://example.com",
+        let value = json!({"schema":"catchplate.workloadTokenRenewal/v1", "audience":"https://example.com",
             "application_id":"app", "enrollment_id":"grant", "operation_id":"op", "token_sha256":"digest",
             "signature":"proof", "expected_token_generation":1, "issued_at_epoch_ms":1,
             "expires_at_epoch_ms":2, "token_expires_at_epoch_ms":3});

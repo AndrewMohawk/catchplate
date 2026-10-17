@@ -69,7 +69,7 @@ not completed enrollment or an optimized-startup measurement.
 ### Retained attempt is terminal, not still initializing
 
 A read-only recheck at 2026-10-11 01:38 UTC found the user-manager
-`serverware-pilot-20261010-r97-prelaunch.service` still running, but no R97 live
+`catchplate-pilot-20261010-r97-prelaunch.service` still running, but no R97 live
 scope or administrative service. The retained native log records
 `HOST_COORDINATOR_EXIT_CODE=1` after `wait_for_start()` failed its original
 clock check while waiting for registration to begin. The retained readiness
@@ -136,7 +136,7 @@ and mapping-fallback paths keep their prior behavior; both signing-boundary
 verification calls remain in place.
 
 The matching COMMON change is in
-`docker/serverware/pilot/prepare_authority_launch.py`. This integration and the
+`docker/catchplate/pilot/prepare_authority_launch.py`. This integration and the
 SDK change must be assembled together; neither changes the frozen R97 runtime.
 
 ## Third optimization: share the memo with native roster inspection
@@ -303,7 +303,7 @@ Both interpreters rejected a wrong catalog pin, fully read a different sealed
 exit without clearing the memo. Catalog hits had not populated that observed
 memo. An actual write-open of the sealed original was refused by the kernel.
 This exercises the measurement helpers, not an admitted startup owner, custom
-startup fallback reader, package signatures, or full Serverware startup.
+startup fallback reader, package signatures, or full Catchplate startup.
 
 The guest had no network device or credentials, read-only source/runtime
 inputs, a 60-second outer watchdog and shorter parent/child deadlines. It ran
@@ -640,7 +640,7 @@ Retained evidence directory:
 Its `guest.log` SHA-256 is
 `794f548fdd5b27924d4f15737c34bbe4fdffba45cf0f5707c27423e31132843c`.
 The guest ran from 21:53:23 to 21:53:27 UTC. Those four seconds are the tiny
-component probe, **not Serverware startup time**. The images, harness and log
+component probe, **not Catchplate startup time**. The images, harness and log
 were retained; no native pilot was restarted or altered.
 
 ### Cold catalog through prepared installation

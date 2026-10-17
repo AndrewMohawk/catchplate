@@ -18,10 +18,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import serverware_source_tree
+import catchplate_source_tree
 
 ROOT = Path(__file__).resolve().parent.parent
-BUILD_API_VERSION = "serverware.productionImagesBuild/v2"
+BUILD_API_VERSION = "catchplate.productionImagesBuild/v2"
 BUILD_KIND = "ProductionImagesBuild"
 PRODUCTION_PLATFORM = "linux/amd64"
 ENGINEERING_BOUNDED_BUILD_PROFILE = "engineering-bounded-8cpu-24g-per-step/v1"
@@ -33,12 +33,12 @@ ENGINEERING_BUILD_RESOURCES = (
     "cpu-quota=800000",
 )
 DEFAULT_IMAGES = (
-    ("serverware-control", "Dockerfile.production", "serverware/control:production-local"),
-    ("serverware-decision-gate", "data-plane/decision-gate-rs/Dockerfile.production", "serverware/decision-gate:production-local"),
+    ("catchplate-control", "Dockerfile.production", "catchplate/control:production-local"),
+    ("catchplate-decision-gate", "data-plane/decision-gate-rs/Dockerfile.production", "catchplate/decision-gate:production-local"),
 )
 DECISION_GATE_BINARY_PATHS = {
-    "binary_digest": "/usr/local/bin/serverware-decision-gate",
-    "launcher_binary_digest": "/usr/local/libexec/serverware-production-launcher",
+    "binary_digest": "/usr/local/bin/catchplate-decision-gate",
+    "launcher_binary_digest": "/usr/local/libexec/catchplate-production-launcher",
 }
 LAUNCH_AUTHORITY_ROOT = ROOT / "data-plane/decision-gate-rs/trust/launch-authority-root.ed25519.hex"
 ED25519_SPKI_DER_PREFIX = bytes.fromhex("302a300506032b6570032100")
@@ -50,9 +50,9 @@ NATIVE_DELIVERY_TARGET = "native-enclave-delivery"
 NATIVE_ROTATION_DELIVERY_TARGET = "native-enclave-rotation-delivery"
 NATIVE_DELIVERY_DOCKERFILE = "data-plane/decision-gate-rs/Dockerfile.production"
 NATIVE_BOOTSTRAP_CLIENT_TARGET = "native-bootstrap-client-artifact"
-NATIVE_BOOTSTRAP_CLIENT_FILE = "serverware-native-bootstrap-client"
+NATIVE_BOOTSTRAP_CLIENT_FILE = "catchplate-native-bootstrap-client"
 NATIVE_DELIVERY_CONTEXT_KEY = "production-native-delivery/authority.pem"
-NATIVE_DELIVERY_IMAGE_KEY = "/usr/share/serverware/native-delivery-authority.pem"
+NATIVE_DELIVERY_IMAGE_KEY = "/usr/share/catchplate/native-delivery-authority.pem"
 PRIVATE_CONTEXT_FILES = (
     "Dockerfile.production",
     "data-plane/decision-gate-rs/Dockerfile.production",
@@ -168,8 +168,8 @@ def verify_dependency_cache() -> None:
 
 def source_contract(*, development_dirty_tree: bool) -> dict[str, Any]:
     if development_dirty_tree:
-        return serverware_source_tree.development_source_contract(ROOT)
-    return serverware_source_tree.production_source_contract(ROOT)
+        return catchplate_source_tree.development_source_contract(ROOT)
+    return catchplate_source_tree.production_source_contract(ROOT)
 
 
 def source_tree_digest(*, development_dirty_tree: bool = False) -> str:
@@ -478,7 +478,7 @@ def copy_native_pilot_public_inputs(directory: Path, expected_sha256: str,
     document = json.loads(raw)
     fields = {"apiVersion", "sourceManifestSha256", *(item[0] for item in PUBLIC_GUEST_FILES.values())}
     if (type(document) is not dict or set(document) != fields
-            or document.get("apiVersion") != "serverware.nativeShadowCustodyImageInputs/v1"
+            or document.get("apiVersion") != "catchplate.nativeShadowCustodyImageInputs/v1"
             or (canonical_json(document) + "\n").encode("ascii") != raw
             or document["sourceManifestSha256"] != metadata["source_manifest_digest"]):
         raise RuntimeError("public guest manifest must be canonical ASCII plus exactly one LF and pin this exact admitted source")
@@ -543,7 +543,7 @@ def private_build_context(metadata: dict[str, Any]):
         metadata["source_file_modes_path"]: metadata["source_file_modes_digest"],
     }
     tracked_digests = _tracked_file_digests(metadata)
-    with tempfile.TemporaryDirectory(prefix="serverware-private-build-context.",
+    with tempfile.TemporaryDirectory(prefix="catchplate-private-build-context.",
                                     dir=os.environ.get("TMPDIR") or "/srv/catchplate-fast/tmp") as temporary:
         context = Path(temporary)
         for relative in (*PRIVATE_CONTEXT_FILES, *contract_paths):
@@ -564,7 +564,7 @@ def private_build_context(metadata: dict[str, Any]):
 def native_pilot_build_resource_profile(metadata: dict[str, Any]) -> dict[str, Any]:
     """Fixed strict-source pilot limits, not a development identity override."""
     if (
-        metadata["source_identity_mode"] != serverware_source_tree.PRODUCTION_IDENTITY_MODE
+        metadata["source_identity_mode"] != catchplate_source_tree.PRODUCTION_IDENTITY_MODE
         or metadata["production_release_eligible"] is not True
     ):
         raise RuntimeError("native pilot resource limits require strict production-commit identity")
@@ -646,7 +646,7 @@ def build_command(
             "--build-arg", "NATIVE_DELIVERY_AUTHORITY_SHA256=" + native_delivery_binding["public_key_pem_sha256"],
             "--build-arg", "NATIVE_DELIVERY_AUTHORITY_SPKI_SHA256=" + native_delivery_binding["public_key_spki_sha256"]))
     component = "control plane" if dockerfile == "Dockerfile.production" else "decision gate"
-    image_title = f"Serverware {component} {metadata['image_title_suffix']}"
+    image_title = f"Catchplate {component} {metadata['image_title_suffix']}"
     command.extend(source_build_arguments(metadata, image_title=image_title))
     command.append(str(context))
     return command
@@ -656,29 +656,29 @@ def source_build_arguments(
     metadata: dict[str, Any], *, image_title: str | None = None
 ) -> list[str]:
     values = [
-        ("SERVERWARE_IMAGE_SOURCE", metadata["source"]),
-        ("SERVERWARE_IMAGE_REVISION", metadata["revision"]),
-        ("SERVERWARE_IMAGE_CREATED", metadata["created"]),
-        ("SERVERWARE_SOURCE_TREE_DIGEST", metadata["source_tree_digest"]),
-        ("SERVERWARE_SOURCE_ARCHIVE", metadata["source_archive_path"]),
-        ("SERVERWARE_SOURCE_ARCHIVE_SHA256", metadata["source_archive_digest"]),
-        ("SERVERWARE_SOURCE_MANIFEST", metadata["source_manifest_path"]),
-        ("SERVERWARE_SOURCE_MANIFEST_SHA256", metadata["source_manifest_digest"]),
-        ("SERVERWARE_SOURCE_FILE_LIST", metadata["source_file_list_path"]),
-        ("SERVERWARE_SOURCE_FILE_LIST_SHA256", metadata["source_file_list_digest"]),
-        ("SERVERWARE_SOURCE_FILE_HASHES", metadata["source_file_hashes_path"]),
-        ("SERVERWARE_SOURCE_FILE_HASHES_SHA256", metadata["source_file_hashes_digest"]),
-        ("SERVERWARE_SOURCE_FILE_MODES", metadata["source_file_modes_path"]),
-        ("SERVERWARE_SOURCE_FILE_MODES_SHA256", metadata["source_file_modes_digest"]),
-        ("SERVERWARE_SOURCE_IDENTITY_MODE", metadata["source_identity_mode"]),
+        ("CATCHPLATE_IMAGE_SOURCE", metadata["source"]),
+        ("CATCHPLATE_IMAGE_REVISION", metadata["revision"]),
+        ("CATCHPLATE_IMAGE_CREATED", metadata["created"]),
+        ("CATCHPLATE_SOURCE_TREE_DIGEST", metadata["source_tree_digest"]),
+        ("CATCHPLATE_SOURCE_ARCHIVE", metadata["source_archive_path"]),
+        ("CATCHPLATE_SOURCE_ARCHIVE_SHA256", metadata["source_archive_digest"]),
+        ("CATCHPLATE_SOURCE_MANIFEST", metadata["source_manifest_path"]),
+        ("CATCHPLATE_SOURCE_MANIFEST_SHA256", metadata["source_manifest_digest"]),
+        ("CATCHPLATE_SOURCE_FILE_LIST", metadata["source_file_list_path"]),
+        ("CATCHPLATE_SOURCE_FILE_LIST_SHA256", metadata["source_file_list_digest"]),
+        ("CATCHPLATE_SOURCE_FILE_HASHES", metadata["source_file_hashes_path"]),
+        ("CATCHPLATE_SOURCE_FILE_HASHES_SHA256", metadata["source_file_hashes_digest"]),
+        ("CATCHPLATE_SOURCE_FILE_MODES", metadata["source_file_modes_path"]),
+        ("CATCHPLATE_SOURCE_FILE_MODES_SHA256", metadata["source_file_modes_digest"]),
+        ("CATCHPLATE_SOURCE_IDENTITY_MODE", metadata["source_identity_mode"]),
         (
-            "SERVERWARE_PRODUCTION_RELEASE_ELIGIBLE",
+            "CATCHPLATE_PRODUCTION_RELEASE_ELIGIBLE",
             "true" if metadata["production_release_eligible"] else "false",
         ),
         ("SOURCE_DATE_EPOCH", metadata["source_date_epoch"]),
     ]
     if image_title is not None:
-        values.insert(3, ("SERVERWARE_IMAGE_TITLE", image_title))
+        values.insert(3, ("CATCHPLATE_IMAGE_TITLE", image_title))
     arguments: list[str] = []
     for name, value in values:
         arguments.extend(("--build-arg", f"{name}={value}"))
@@ -804,7 +804,7 @@ def native_bootstrap_client_artifact_receipt(output: str, metadata: dict[str, An
     """Read back the fixed public export; not installation or runtime admission."""
     prefix = "type=local,dest="
     if (not output.startswith(prefix)
-            or metadata["source_identity_mode"] != serverware_source_tree.PRODUCTION_IDENTITY_MODE
+            or metadata["source_identity_mode"] != catchplate_source_tree.PRODUCTION_IDENTITY_MODE
             or metadata["production_release_eligible"] is not True):
         raise RuntimeError("bootstrap client receipt requires the strict local source build")
     raw = output[len(prefix):]
@@ -848,7 +848,7 @@ def native_bootstrap_client_artifact_receipt(output: str, metadata: dict[str, An
                 or any(getattr(directory_before, field) != getattr(os.fstat(directory), field) for field in fields)):
             raise RuntimeError("bootstrap client export changed during readback")
         return {
-            "apiVersion": "serverware.nativeBootstrapClientBuildArtifact/v1",
+            "apiVersion": "catchplate.nativeBootstrapClientBuildArtifact/v1",
             "path": str(destination / NATIVE_BOOTSTRAP_CLIENT_FILE),
             "sha256": "sha256:" + digest.hexdigest(), "size": size,
             "mode": stat.S_IMODE(before.st_mode),
@@ -935,13 +935,13 @@ def decision_gate_binary_digests(image: str) -> dict[str, str]:
 
 
 def image_launch_authority_binding(service: str, metadata: dict[str, str]) -> dict[str, str]:
-    if service != "serverware-decision-gate":
+    if service != "catchplate-decision-gate":
         return {}
     return {field: metadata[field] for field in LAUNCH_AUTHORITY_METADATA_FIELDS}
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build local shell-free Serverware production image candidates.")
+    parser = argparse.ArgumentParser(description="Build local shell-free Catchplate production image candidates.")
     parser.add_argument("--control-tag")
     parser.add_argument("--decision-gate-tag")
     parser.add_argument("--native-enclave-delivery-tag")
@@ -1054,7 +1054,7 @@ def main() -> None:
                     "build, inventory, package, and admission remain required"
                 ),
             }
-        placeholder_context = Path("/private/serverware-build-context")
+        placeholder_context = Path("/private/catchplate-build-context")
         if args.dry_run:
             print(
                 canonical_json(
@@ -1130,29 +1130,29 @@ def main() -> None:
         return
 
     if args.development_dirty_tree:
-        control_tag = args.control_tag or "serverware/control:development-dirty-tree"
+        control_tag = args.control_tag or "catchplate/control:development-dirty-tree"
         decision_gate_tag = (
             args.decision_gate_tag
-            or "serverware/decision-gate:development-dirty-tree"
+            or "catchplate/decision-gate:development-dirty-tree"
         )
         output = args.out or ".tmp/development-dirty-images-build.json"
     else:
-        control_tag = args.control_tag or "serverware/control:production-local"
+        control_tag = args.control_tag or "catchplate/control:production-local"
         decision_gate_tag = (
-            args.decision_gate_tag or "serverware/decision-gate:production-local"
+            args.decision_gate_tag or "catchplate/decision-gate:production-local"
         )
         output = args.out or ".tmp/production-images-build.json"
 
     image_specs = [
-        ("serverware-control", "Dockerfile.production", control_tag),
-        ("serverware-decision-gate", "data-plane/decision-gate-rs/Dockerfile.production", decision_gate_tag),
+        ("catchplate-control", "Dockerfile.production", control_tag),
+        ("catchplate-decision-gate", "data-plane/decision-gate-rs/Dockerfile.production", decision_gate_tag),
     ]
     if delivery_binding is not None:
-        image_specs = [("serverware-decision-gate", NATIVE_DELIVERY_DOCKERFILE, delivery_tag)]
+        image_specs = [("catchplate-decision-gate", NATIVE_DELIVERY_DOCKERFILE, delivery_tag)]
         output = args.out or (".tmp/" + ("development-" if args.development_dirty_tree else "")
             + delivery_target + "-build.json")
     if receiver_image_binding is not None:
-        image_specs = [("serverware-decision-gate", NATIVE_DELIVERY_DOCKERFILE, args.native_activation_receiver_tag)]
+        image_specs = [("catchplate-decision-gate", NATIVE_DELIVERY_DOCKERFILE, args.native_activation_receiver_tag)]
         output = args.out or (".tmp/development-native-activation-receiver-build.json" if args.development_dirty_tree
                               else ".tmp/native-activation-receiver-build.json")
     metadata = build_metadata(development_dirty_tree=args.development_dirty_tree)
@@ -1176,7 +1176,7 @@ def main() -> None:
         }
         metadata.update(resource_profile)
     if args.dry_run:
-        placeholder_context = Path("/private/serverware-build-context")
+        placeholder_context = Path("/private/catchplate-build-context")
         commands = [
             {
                 "service": service,
@@ -1250,7 +1250,7 @@ def main() -> None:
             built_image_id = image_id(spec["tag"])
             verify_image_platform(built_image_id, args.platform)
             binary_digests: dict[str, str] = {}
-            if spec["service"] == "serverware-decision-gate":
+            if spec["service"] == "catchplate-decision-gate":
                 binary_digests = decision_gate_binary_digests(built_image_id)
             delivery_result: dict[str, Any] = {}
             if receiver_image_binding is not None:
@@ -1258,7 +1258,7 @@ def main() -> None:
                     if image_file_sha256(built_image_id, path) != expected:
                         raise RuntimeError("built activation receiver image differs from its pinned public inputs")
                 config = json.loads(run(["docker", "image", "inspect", "--format", "{{json .Config}}", built_image_id]))
-                if (config.get("Entrypoint") != ["/usr/local/libexec/serverware-native-enclave-entrypoint"]
+                if (config.get("Entrypoint") != ["/usr/local/libexec/catchplate-native-enclave-entrypoint"]
                         or config.get("Cmd") != ["--activation-receiver-v1"] or config.get("User") != "0:0"):
                     raise RuntimeError("built activation receiver image startup differs from the fixed bootstrap")
                 delivery_result = {"target": NATIVE_ACTIVATION_RECEIVER_IMAGE_TARGET,
@@ -1270,7 +1270,7 @@ def main() -> None:
                     raise RuntimeError("built native delivery image contains a different public authority")
                 config = json.loads(run(["docker", "image", "inspect", "--format", "{{json .Config}}", built_image_id]))
                 expected_command = "--receive-rotation-configuration-v2" if rotation_delivery else "--receive-configuration-v1"
-                if (config.get("Entrypoint") != ["/usr/local/libexec/serverware-native-enclave-entrypoint"]
+                if (config.get("Entrypoint") != ["/usr/local/libexec/catchplate-native-enclave-entrypoint"]
                         or config.get("Cmd") != [expected_command] or config.get("User") != "0:0"):
                     raise RuntimeError("built native delivery startup differs from the explicitly selected purpose")
                 delivery_result = {"target": delivery_target,
@@ -1299,7 +1299,7 @@ def main() -> None:
         "metadata": metadata,
         "images": images,
         "no_shell": no_shell,
-        "publish_requirement": "publish these verified linux/amd64 image IDs unchanged, then set SERVERWARE_PRODUCTION_IMAGES to immutable @sha256 digest refs before live readiness",
+        "publish_requirement": "publish these verified linux/amd64 image IDs unchanged, then set CATCHPLATE_PRODUCTION_IMAGES to immutable @sha256 digest refs before live readiness",
     }
     if args.engineering_bounded_build:
         result["publish_requirement"] = (

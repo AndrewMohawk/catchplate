@@ -26,14 +26,14 @@ import test_native_pilot_genesis_ordinary_initial as initial_tests
 import test_native_pilot_ordinary_initial as initial_wire
 import test_native_pilot_publication_cold_binding as binding_tests
 from test_native_pilot_generation_scope import key_fixture, NOW
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_bridge_preparation as peer_wire
-from serverware import native_pilot_genesis_coordinator_peer as coordinator
-from serverware import native_pilot_genesis_ordinary_authority as authority
-from serverware import native_pilot_genesis_ordinary_runtime as runtime
-from serverware import native_pilot_genesis_ordinary_initial_profile as initial
-from serverware import native_pilot_ordinary_runtime_recipe as recipe
-from serverware import native_pilot_publication_cold_binding as binding
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_bridge_preparation as peer_wire
+from catchplate import native_pilot_genesis_coordinator_peer as coordinator
+from catchplate import native_pilot_genesis_ordinary_authority as authority
+from catchplate import native_pilot_genesis_ordinary_runtime as runtime
+from catchplate import native_pilot_genesis_ordinary_initial_profile as initial
+from catchplate import native_pilot_ordinary_runtime_recipe as recipe
+from catchplate import native_pilot_publication_cold_binding as binding
 
 p = g.p
 
@@ -44,13 +44,13 @@ def text(value): return g.canonical(value).decode("ascii")
 
 
 def native_signed(stem, payload, key):
-    message = b"serverware.signedEnvelope/v1\0serverware." + stem.encode("ascii") + b".signature/v1\0serverware.canonicalJson/ascii-integer-v1\0" + g.canonical(payload)
+    message = b"catchplate.signedEnvelope/v1\0catchplate." + stem.encode("ascii") + b".signature/v1\0catchplate.canonicalJson/ascii-integer-v1\0" + g.canonical(payload)
     return g.canonical({"payload": payload, "signature": p.encoded(key.sign(message))})
 
 
 def signed_grant(payload, key):
-    raw = g.canonical(payload); domain = b"serverware.nativePublicationGenesisGrant.signature/v1"
-    message = b"serverware-signature-v1\0" + len(domain).to_bytes(8, "big") + domain + len(raw).to_bytes(8, "big") + raw
+    raw = g.canonical(payload); domain = b"catchplate.nativePublicationGenesisGrant.signature/v1"
+    message = b"catchplate-signature-v1\0" + len(domain).to_bytes(8, "big") + domain + len(raw).to_bytes(8, "big") + raw
     return g.canonical({"payload": payload, "signatureBase64url": p.encoded(key.sign(message))})
 
 
@@ -167,8 +167,8 @@ def fixture():
             "runtimeConfig": {"path": "/approved/synthetic/" + role + "/runtime", "sha256": p.sha(runtimes[role])},
             "credentials": credentials, "activation": activation}
         delivery_inputs[role] = {**common, "operation": "delivery", "serviceRole": role, "payloadOriginal": text(payload), "activation": activation}
-        deliveries[role] = g.canonical({"apiVersion": "serverware.policyCustodyGuestDelivery/v1", "payload": payload,
-            "signatureBase64url": p.encoded(keys[role].sign(b"serverware.policyCustodyGuestDelivery.signature/v1\0" + g.canonical(payload)))})
+        deliveries[role] = g.canonical({"apiVersion": "catchplate.policyCustodyGuestDelivery/v1", "payload": payload,
+            "signatureBase64url": p.encoded(keys[role].sign(b"catchplate.policyCustodyGuestDelivery.signature/v1\0" + g.canonical(payload)))})
         activations[role] = activation
     items = {role: authority.verify_delivery(signed_raw=deliveries[role], configuration_raw=g.canonical(f["cold"][role]), runtime_raw=runtimes[role],
         history_raw=histories[role], activation=activations[role], **kw) for role in initial.ROLES}
@@ -198,11 +198,11 @@ def fixture():
     native_common = {"scope": scope, "expectedPeer": peer,
         **{name: {"epoch": reference(items[role]["history"]), "publicKeyBase64url": p.encoded(raw_public(f["rows"][role]["keys"]["service"]))}
             for name, role in (("durableAuthority", initial.ROLES[0]), ("currentAuthority", initial.ROLES[1]))}}
-    native_payload = {**native_common, "apiVersion": "serverware.nativePublicationGenesisAssignment/v1", "purpose": "native-policy-publication-genesis",
+    native_payload = {**native_common, "apiVersion": "catchplate.nativePublicationGenesisAssignment/v1", "purpose": "native-policy-publication-genesis",
         "authorization": authorization(guests[0]), "retrieval": {name: retrieval_public[name] for name in ("keyId", "keySpkiSha256", "publicKeyBase64url")}, "retrievalGuest": guests[1]}
     native_raw = native_signed("nativePublicationGenesisAssignment", native_payload, supervisor)
     role_key = {"role": "custody-publication-reconciliation", **{name: native_public[name] for name in ("keyId", "keySpkiSha256", "publicKeyBase64url")}, "grantSha256": p.sha(native_raw)}
-    retrieval_payload = {**native_common, "apiVersion": "serverware.nativePublicationGenesisRetrievalGrant/v1", "purpose": "native-policy-publication-genesis-retrieval",
+    retrieval_payload = {**native_common, "apiVersion": "catchplate.nativePublicationGenesisRetrievalGrant/v1", "purpose": "native-policy-publication-genesis-retrieval",
         "authorization": authorization(guests[1]), "native": role_key,
         "store": {"genesisSha256": labelled("approved-empty-store-head"), "sequence": 0, "headSha256": labelled("approved-empty-store-head")}}
     retrieval_raw = native_signed("nativePublicationGenesisRetrievalGrant", retrieval_payload, supervisor)
@@ -261,9 +261,9 @@ class ColdOrdinaryRuntimeTests(unittest.TestCase):
         for mutate in (lambda v: v.update(apiVersion=recipe.API), lambda v: v["services"].update({"bounded-cleanup-helper": {}})):
             value = copy.deepcopy(self.f["build_args"]["fragment"]); mutate(value)
             with self.assertRaises(ValueError): runtime.validate_policy(value)
-        for mutate in (lambda v: v["runtime"].update(apiVersion="serverware.policyCustodyServiceRuntimeConfig/v8"),
+        for mutate in (lambda v: v["runtime"].update(apiVersion="catchplate.policyCustodyServiceRuntimeConfig/v8"),
                 lambda v: v["runtime"].update(generationAdmission=None), lambda v: v["runtime"].update(publicationAdmission={"grantFdName": "publication-grant"}),
-                lambda v: v["runtime"].update(listenerSocketPath="/run/serverware-custody-business/" + role + "/listener.sock")):
+                lambda v: v["runtime"].update(listenerSocketPath="/run/catchplate-custody-business/" + role + "/listener.sock")):
             value = g.document(self.f["runtimes"][role], g.MAX_BYTES); mutate(value)
             with self.assertRaises(ValueError): runtime.validate_runtime(role, g.canonical(value))
 
@@ -296,7 +296,7 @@ class ColdOrdinaryRuntimeTests(unittest.TestCase):
             signed["signature"] = p.encoded(b"x" * 64); value[field] = text(signed); self.refused("grant", value)
         for mutate in (lambda payload: payload["scope"].update(commissioningIdSha256=labelled("other-scope")),
                 lambda payload: payload["expectedPeer"].update(pid=9999),
-                lambda payload: payload.update(apiVersion="serverware.nativePublicationServiceAssignment/v1")):
+                lambda payload: payload.update(apiVersion="catchplate.nativePublicationServiceAssignment/v1")):
             value = copy.deepcopy(base); signed = g.document(value["nativePublicationOriginal"].encode("ascii"), g.MAX_BYTES)
             mutate(signed["payload"])
             value["nativePublicationOriginal"] = native_signed("nativePublicationGenesisAssignment", signed["payload"], self.f["native_key"]).decode("ascii")

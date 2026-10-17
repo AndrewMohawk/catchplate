@@ -7,7 +7,7 @@ generation and request hashing. Native transport retains `Native`; old ordinary
 configuration retains `Legacy`. Returned versions, principal length, attestation
 JSON and cached material cannot choose or change that selection.
 
-The closed `serverware.policyAwareCredentialLease` families are Request v1
+The closed `catchplate.policyAwareCredentialLease` families are Request v1
 (metadata or uncontrolled dispatch) and v2 (controlled dispatch), RequestAuthority
 v1, ReleaseAuthorization v1/v2 (ordinary/durable), Envelope v1/v2 and Set v1/v2.
 They preserve the paired fields and omission/null rules: controlled requests
@@ -31,20 +31,20 @@ The ordinary PolicyAware path holds its own generated one-use
 The Native owner records `Native` and rejects PolicyAware preparation before
 key generation. PolicyAware requires an independently configured attestation
 command before generating its key. Its explicit command inputs are
-`serverware.policyAwareRecipientAttestationRequest/v1` or `/v2`, with the exact
+`catchplate.policyAwareRecipientAttestationRequest/v1` or `/v2`, with the exact
 `leaseRequestApiVersion` marker, public key, nonce, request digest and nullable or
 required authority digest. Legacy command inputs remain unchanged.
 
 That command must return genuine original
-`serverware.nativeCredentialRecipientEvidence/v1` naming the actual generated
+`catchplate.nativeCredentialRecipientEvidence/v1` naming the actual generated
 public key. The reused role-2 evidence family describes its cryptographic
 original, not ordinary transport becoming Native custody. The broker requires
 the real configured independent verifier even in development. No successful
 JSON verdict substitutes for the original quote/key/request association.
 
 `scripts/verify_native_lease_recipient.py` accepts an independently pinned
-`serverware.policyAwareCredentialRecipientExpectations/v1` original with exact
-`leaseRequestProfile = serverware.policyAwareCredentialLeaseRequest`. Its independently
+`catchplate.policyAwareCredentialRecipientExpectations/v1` original with exact
+`leaseRequestProfile = catchplate.policyAwareCredentialLeaseRequest`. Its independently
 pinned trust-root original and genuine role-2 checks remain required. Stdin and
 stdout include the exact PolicyAware `leaseRequestApiVersion`; v1 has no authority
 digest, while v2 requires dispatch-secret purpose and that digest. Native

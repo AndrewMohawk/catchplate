@@ -23,15 +23,15 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
-import serverware_source_tree
+import catchplate_source_tree
 import verify_nitro_tee
 import verify_production_readiness
-from serverware.http_client import request_bytes as bounded_request_bytes
-from serverware.policy_bundle import (
+from catchplate.http_client import request_bytes as bounded_request_bytes
+from catchplate.policy_bundle import (
     canonical_json as strict_canonical_json,
     strict_json_loads,
 )
-from serverware.response_identity import response_headers_binding
+from catchplate.response_identity import response_headers_binding
 
 
 def canonical_json(value: Any) -> str:
@@ -92,7 +92,7 @@ def trusted_ed25519_key(path: Path, label: str) -> tuple[Ed25519PublicKey, str, 
 
 
 def source_tree_digest(root: Path) -> str:
-    return serverware_source_tree.source_tree_digest(root)
+    return catchplate_source_tree.source_tree_digest(root)
 
 
 def request_bytes(
@@ -240,7 +240,7 @@ def run_sigstore_verifier(
 ) -> None:
     statement_digest = sha256_prefixed_json(statement)
     request = {
-        "apiVersion": "serverware.sigstoreVerifyRequest/v1",
+        "apiVersion": "catchplate.sigstoreVerifyRequest/v1",
         "kind": kind,
         "service": service,
         "image_id": image_id,
@@ -379,7 +379,7 @@ def verify_image_signature_bundle(
     normalized = normalized_image_signature_payload(bundle)
     if expected_digest != sha256_prefixed_json(normalized):
         raise ValueError("image signature bundle payload digest mismatch")
-    if bundle.get("apiVersion") != "serverware.imageSignatures/v1":
+    if bundle.get("apiVersion") != "catchplate.imageSignatures/v1":
         raise ValueError("image signature bundle apiVersion is invalid")
     metadata = bundle.get("metadata") if isinstance(bundle.get("metadata"), dict) else {}
     source_tree = provenance.get("source_tree") if isinstance(provenance.get("source_tree"), dict) else {}
@@ -486,11 +486,11 @@ def verify_response_signature(
     status: int,
 ) -> None:
     expected_proof_names = {
-        "x-serverware-response-key-id",
-        "x-serverware-response-body-sha256",
-        "x-serverware-response-statement-sha256",
-        "x-serverware-response-statement-b64",
-        "x-serverware-response-signature",
+        "x-catchplate-response-key-id",
+        "x-catchplate-response-body-sha256",
+        "x-catchplate-response-statement-sha256",
+        "x-catchplate-response-statement-b64",
+        "x-catchplate-response-signature",
     }
     proof_headers: dict[str, str] = {}
     authenticated_headers: list[tuple[bytes, bytes]] = []
@@ -510,7 +510,7 @@ def verify_response_signature(
             value_bytes = raw_value.encode("latin-1")
         except (UnicodeEncodeError, UnicodeDecodeError) as exc:
             raise ValueError("response contains a noncanonical header") from exc
-        if name.startswith("x-serverware-response-"):
+        if name.startswith("x-catchplate-response-"):
             if name not in expected_proof_names or name in proof_headers:
                 raise ValueError("response proof headers are unknown or repeated")
             proof_headers[name] = raw_value
@@ -518,7 +518,7 @@ def verify_response_signature(
             authenticated_headers.append((name.encode("ascii"), value_bytes))
     if set(proof_headers) != expected_proof_names:
         raise ValueError("response proof headers are missing")
-    statement_b64 = proof_headers["x-serverware-response-statement-b64"]
+    statement_b64 = proof_headers["x-catchplate-response-statement-b64"]
     if (
         not re.fullmatch(r"[A-Za-z0-9_-]+", statement_b64)
         or "=" in statement_b64
@@ -550,7 +550,7 @@ def verify_response_signature(
         "context",
     }:
         raise ValueError("response statement fields do not match v3")
-    if statement.get("version") != "serverware.responseSignature/v3":
+    if statement.get("version") != "catchplate.responseSignature/v3":
         raise ValueError("response signature version mismatch")
     if statement.get("nonce") != nonce:
         raise ValueError("response signature nonce mismatch")
@@ -575,17 +575,17 @@ def verify_response_signature(
     if statement.get("response_signing_key_id") != attestation.get("response_signing_key_id"):
         raise ValueError("response signing key id is not attested")
     if (
-        proof_headers["x-serverware-response-key-id"]
+        proof_headers["x-catchplate-response-key-id"]
         != statement.get("response_signing_key_id")
     ):
         raise ValueError("detached response signing key id mismatch")
     if (
-        proof_headers["x-serverware-response-body-sha256"]
+        proof_headers["x-catchplate-response-body-sha256"]
         != sha256_prefixed(body)
     ):
         raise ValueError("detached response body digest mismatch")
     if (
-        proof_headers["x-serverware-response-statement-sha256"]
+        proof_headers["x-catchplate-response-statement-sha256"]
         != sha256_prefixed(statement_bytes)
     ):
         raise ValueError("detached response statement digest mismatch")
@@ -621,7 +621,7 @@ def verify_response_signature(
         )
     verify_ed25519(
         public_key_pem,
-        proof_headers["x-serverware-response-signature"],
+        proof_headers["x-catchplate-response-signature"],
         statement_bytes,
         "response",
     )
@@ -656,33 +656,33 @@ def main(argv: list[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(
         description=(
-            "Development-only verification of a dev-signed Serverware quote. "
+            "Development-only verification of a dev-signed Catchplate quote. "
             "This mode is never production evidence."
         )
     )
-    parser.add_argument("--base", default="http://localhost:3000", help="Serverware control-plane base URL")
+    parser.add_argument("--base", default="http://localhost:3000", help="Catchplate control-plane base URL")
     parser.add_argument(
         "--admin-token",
-        default=os.getenv("SERVERWARE_ADMIN_TOKEN"),
+        default=os.getenv("CATCHPLATE_ADMIN_TOKEN"),
         help="development-only direct admin/auditor token",
     )
     parser.add_argument(
         "--admin-token-file",
-        default=os.getenv("SERVERWARE_ADMIN_TOKEN_FILE"),
+        default=os.getenv("CATCHPLATE_ADMIN_TOKEN_FILE"),
         help="admin/auditor token file",
     )
     parser.add_argument("--source-root", default=str(ROOT), help="local source tree to compare with release provenance")
     parser.add_argument(
         "--release-signing-trusted-key",
-        default=os.getenv("SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY", ""),
+        default=os.getenv("CATCHPLATE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY", ""),
     )
     parser.add_argument(
         "--image-signing-trusted-key",
-        default=os.getenv("SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY", ""),
+        default=os.getenv("CATCHPLATE_SIGSTORE_TRUSTED_PUBLIC_KEY", ""),
     )
     parser.add_argument(
         "--image-verify-command",
-        default=os.getenv("SERVERWARE_IMAGE_VERIFY_COMMAND", "python3 scripts/cosign_sigstore.py verify"),
+        default=os.getenv("CATCHPLATE_IMAGE_VERIFY_COMMAND", "python3 scripts/cosign_sigstore.py verify"),
     )
     parser.add_argument("--allow-missing-image-signatures", action="store_true")
     args = parser.parse_args(arguments)
@@ -690,14 +690,14 @@ def main(argv: list[str] | None = None) -> None:
     base = args.base.rstrip("/")
     token_sources: dict[str, str] = {}
     if args.admin_token is not None:
-        token_sources["SERVERWARE_ADMIN_TOKEN"] = args.admin_token
+        token_sources["CATCHPLATE_ADMIN_TOKEN"] = args.admin_token
     if args.admin_token_file is not None:
-        token_sources["SERVERWARE_ADMIN_TOKEN_FILE"] = args.admin_token_file
+        token_sources["CATCHPLATE_ADMIN_TOKEN_FILE"] = args.admin_token_file
     if base.startswith("https://"):
         args.admin_token = (
             verify_production_readiness.load_service_credential_for_tool(
                 token_sources,
-                "SERVERWARE_ADMIN_TOKEN",
+                "CATCHPLATE_ADMIN_TOKEN",
                 require_file=True,
             )
         )
@@ -707,7 +707,7 @@ def main(argv: list[str] | None = None) -> None:
         args.admin_token = (
             verify_production_readiness.load_service_credential_for_tool(
                 token_sources,
-                "SERVERWARE_ADMIN_TOKEN",
+                "CATCHPLATE_ADMIN_TOKEN",
                 require_file=False,
                 expected_control_plane_uid=local_uid,
                 expected_control_plane_gid=local_gid,
@@ -727,12 +727,12 @@ def main(argv: list[str] | None = None) -> None:
         "release signing trust root",
     )
 
-    admin_headers = {"X-Serverware-Admin-Token": args.admin_token}
+    admin_headers = {"X-Catchplate-Admin-Token": args.admin_token}
     nonce = secrets.token_urlsafe(24)
     attestation_query = f"nonce={nonce}"
     body, _proof_headers, raw_proof_headers, response_status = request_bytes(
         f"{base}/attestation?{attestation_query}",
-        headers={"X-Serverware-Response-Nonce": nonce},
+        headers={"X-Catchplate-Response-Nonce": nonce},
     )
     attestation = strict_json_loads(body)
     if not isinstance(attestation, dict):

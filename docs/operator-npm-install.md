@@ -6,7 +6,7 @@ the exact package names to permit, including every dependency. No old permission
 is broadened, and no package dependency is granted automatically.
 
 The UI offers this permission only when the same policy-loaded proxy health
-response advertises `serverware.operatorNpmInstallGate/v1` and the operator has
+response advertises `catchplate.operatorNpmInstallGate/v1` and the operator has
 approved `https://registry.npmjs.org`. One application cannot combine this grant
 with another active registry permission. Existing credentials, permission rows
 and policy history are preserved.

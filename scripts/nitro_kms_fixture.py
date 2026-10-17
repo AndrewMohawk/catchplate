@@ -60,10 +60,10 @@ def read_stdin() -> dict[str, Any]:
 
 
 def key_path() -> Path:
-    fixture_dir = os.getenv("SERVERWARE_NITRO_FIXTURE_DIR")
-    default_root = Path(fixture_dir) if fixture_dir else Path(os.getenv("SERVERWARE_DATA_DIR", "/data"))
+    fixture_dir = os.getenv("CATCHPLATE_NITRO_FIXTURE_DIR")
+    default_root = Path(fixture_dir) if fixture_dir else Path(os.getenv("CATCHPLATE_DATA_DIR", "/data"))
     default = default_root / "nitro-kms-fixture-ed25519.pem"
-    return Path(os.getenv("SERVERWARE_NITRO_KMS_FIXTURE_KEY", str(default)))
+    return Path(os.getenv("CATCHPLATE_NITRO_KMS_FIXTURE_KEY", str(default)))
 
 
 def load_key() -> Ed25519PrivateKey:
@@ -104,10 +104,10 @@ def request_without_digest(payload: dict[str, Any]) -> dict[str, Any]:
 
 def release() -> None:
     payload = read_stdin()
-    if os.getenv("SERVERWARE_NITRO_KMS_FIXTURE_DENY"):
+    if os.getenv("CATCHPLATE_NITRO_KMS_FIXTURE_DENY"):
         print(canonical_json({"ok": False, "provider": "fixture-kms-hsm", "reason": "fixture-deny"}))
         return
-    if payload.get("apiVersion") != "serverware.nitroKmsReleaseRequest/v1":
+    if payload.get("apiVersion") != "catchplate.nitroKmsReleaseRequest/v1":
         raise SystemExit("unexpected apiVersion")
     if payload.get("kind") != "NitroKmsMaterialRelease":
         raise SystemExit("unexpected kind")
@@ -154,9 +154,9 @@ def release() -> None:
             "pcrs": sorted((tee.get("pcrs") or {}).keys()),
         },
     }
-    if os.getenv("SERVERWARE_NITRO_KMS_FIXTURE_BAD_DIGEST"):
+    if os.getenv("CATCHPLATE_NITRO_KMS_FIXTURE_BAD_DIGEST"):
         response["request_digest"] = "sha256:" + "0" * 64
-    if os.getenv("SERVERWARE_NITRO_KMS_FIXTURE_SECRET_RESPONSE"):
+    if os.getenv("CATCHPLATE_NITRO_KMS_FIXTURE_SECRET_RESPONSE"):
         response["plaintext"] = "fixture-secret-that-must-never-be-accepted"
     response["signature"] = "ed25519:" + b64e(key.sign(canonical_json(response).encode("utf-8")))
     response["public_key_pem"] = info["public_key_pem"]

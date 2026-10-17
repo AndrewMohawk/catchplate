@@ -48,7 +48,7 @@ async function recipe(page, chain = CHAINS[0], method = RPC[0]) {
   assert.deepEqual(await page.locator('#alchemy-client-method option').evaluateAll(items => items.map(item => item.value)), RPC);
   assert.equal(await page.locator('#alchemy-client-method').inputValue(), method);
   const text = await page.locator('#client-command').innerText();
-  assert(text.includes(DUMMY)); assert(text.includes('SERVERWARE_PROXY_TOKEN'));
+  assert(text.includes(DUMMY)); assert(text.includes('CATCHPLATE_PROXY_TOKEN'));
   assert(text.includes("--request 'POST'")); assert(text.includes(api(chain) + '/v2'));
   assert(!text.includes(api(CHAINS.find(item => item !== chain))));
   assert(text.includes(JSON.stringify({jsonrpc: '2.0', id: 1, method, params: []})));
@@ -59,7 +59,7 @@ async function recipe(page, chain = CHAINS[0], method = RPC[0]) {
   assert.match(await page.locator('#connect-activation').innerText(), /no upstream request has been tested here/);
   assert.match(await page.locator('#client-guidance').innerText(), /No Alchemy request was tested here/);
   assert.match(await page.locator('#client-guidance').innerText(), /HTTP 200 can contain an RPC error/);
-  const source = 'https://github.com/AndrewMohawk/serverware/';
+  const source = 'https://github.com/AndrewMohawk/catchplate/';
   const branch = 'main/';
   const links = page.locator('#client-example-links a');
   assert.deepEqual(await links.evaluateAll(items => items.map(item => [item.textContent, item.getAttribute('href')])), [
@@ -275,7 +275,7 @@ const tests = [
       await pair(page); await page.locator('#connect-rule-choice').selectOption(IDS.rule); await review(page); await grant(page);
       await page.waitForFunction(() => !document.querySelector('#copy-command').disabled);
       assert(await page.locator('#alchemy-client-controls').isHidden());
-      assert((await page.locator('#client-command').innerText()).includes('serverware-x-placeholder-v1'));
+      assert((await page.locator('#client-command').innerText()).includes('catchplate-x-placeholder-v1'));
       assert((await page.locator('#client-command').innerText()).includes('https://api.x.com/2/users/by/username/example_user'));
       assert.equal(await page.locator('#client-example-links a').count(), 5);
       assert.match(await page.locator('#client-example-note').innerText(), /passed isolated SDK-through-proxy checks/);
@@ -286,14 +286,14 @@ const tests = [
 async function hashes() {
   const names = ['scripts/test_operator_alchemy_browser.cjs', 'scripts/operator_alchemy_browser_fixture.cjs',
     'scripts/operator_x_browser_fixture.cjs', 'scripts/test_operator_catalog_browser.cjs', 'scripts/test_operator_ordinary_modes_browser.cjs',
-    'serverware/operator_demo_portal.py', ...(await readdir(join(ROOT, 'serverware/operator_demo_web')))
-      .filter(name => /\.(?:html|css|js)$/.test(name)).sort().map(name => 'serverware/operator_demo_web/' + name)];
+    'catchplate/operator_demo_portal.py', ...(await readdir(join(ROOT, 'catchplate/operator_demo_web')))
+      .filter(name => /\.(?:html|css|js)$/.test(name)).sort().map(name => 'catchplate/operator_demo_web/' + name)];
   return Object.fromEntries(await Promise.all(names.map(async name =>
     [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')])));
 }
 async function runSuite(browser) {
   assert(browser && typeof browser.newContext === 'function');
-  const before = await hashes(); const directory = await mkdtemp('/tmp/serverware-alchemy-browser-');
+  const before = await hashes(); const directory = await mkdtemp('/tmp/catchplate-alchemy-browser-');
   console.log(JSON.stringify({phase: 'source-before', hashes: before, artifactDirectory: directory}));
   const contexts = new Set(); let timer; let finished = false; let passed = 0;
   const bounded = {async newContext(...args) {

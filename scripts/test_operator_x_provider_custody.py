@@ -18,9 +18,9 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from serverware import operator_provider_custody as google
-from serverware import operator_x_oauth_profile as profile
-from serverware import operator_x_provider_custody as custody
+from catchplate import operator_provider_custody as google
+from catchplate import operator_x_oauth_profile as profile
+from catchplate import operator_x_provider_custody as custody
 
 KEY = bytes(range(32))
 SECRET = "synthetic-X-application-secret-only"
@@ -67,7 +67,7 @@ class CustodyTests(unittest.TestCase):
         self.assertNotIn(repr(envelope.nonce), repr(envelope))
         self.assertNotIn(repr(envelope.ciphertext), repr(envelope))
         self.assertNotEqual(envelope.nonce, self.seal().nonce)
-        expected = {"schema": "serverware.operatorXProviderCustody/v1", "owner_id": OWNER_ID,
+        expected = {"schema": "catchplate.operatorXProviderCustody/v1", "owner_id": OWNER_ID,
             "config_version": 1, "public_profile": json.loads(self.binding.profile_json), "secret_present": True}
         self.assertEqual(material.public_view(), expected)
         material.public_view()["public_profile"]["scopes"].append("other")
@@ -76,7 +76,7 @@ class CustodyTests(unittest.TestCase):
 
     def test_independently_constructed_aad_matches_real_ciphertext(self):
         envelope = self.seal()
-        aad = {"schema": "serverware.operatorXProviderCustodyAAD/v1", "owner_id": OWNER_ID,
+        aad = {"schema": "catchplate.operatorXProviderCustodyAAD/v1", "owner_id": OWNER_ID,
             "config_version": 1, "public_profile": json.loads(self.binding.profile_json)}
         raw = json.dumps(aad, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
         self.assertEqual(AESGCM(KEY).decrypt(envelope.nonce, envelope.ciphertext, raw), SECRET.encode())
@@ -141,7 +141,7 @@ class CustodyTests(unittest.TestCase):
             self.assertEqual(custody.open_x(self.owner, envelope, key=KEY).secret, secret)
         for secret in ("", "x" * 4097, "é" * 2049, SECRET + "\n", "\ud800", None):
             self.refused(custody.seal_x, self.owner, self.binding, key=KEY, secret=secret)
-        aad = json.dumps({"schema": "serverware.operatorXProviderCustodyAAD/v1", "owner_id": OWNER_ID,
+        aad = json.dumps({"schema": "catchplate.operatorXProviderCustodyAAD/v1", "owner_id": OWNER_ID,
             "config_version": 1, "public_profile": json.loads(self.binding.profile_json)},
             sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
         for raw in (b"\xff", b"x\x00", b" x", b"x\n"):
@@ -151,7 +151,7 @@ class CustodyTests(unittest.TestCase):
 
     def test_no_runtime_key_or_activation_api_is_exposed(self):
         self.seal()
-        for name in ("serverware.config", "serverware.db", "serverware.oauth", "serverware.operator_provider_key"):
+        for name in ("catchplate.config", "catchplate.db", "catchplate.oauth", "catchplate.operator_provider_key"):
             self.assertNotIn(name, sys.modules)
         for name in ("initialize_first", "read_existing_master_key", "activate", "require_profile"):
             self.assertFalse(hasattr(custody, name))
@@ -174,12 +174,12 @@ class StoreTests(unittest.TestCase):
         self.assertNotIn(SECRET, repr(caught.exception))
 
     def install(self, conn=None):
-        with patch("serverware.operator_publication.assert_held") as held:
+        with patch("catchplate.operator_publication.assert_held") as held:
             custody.install_empty_store(conn if conn is not None else self.conn, self.owner)
         held.assert_called_once_with()
 
     def insert(self, selected=None, conn=None, secret=SECRET):
-        with patch("serverware.operator_publication.assert_held") as held:
+        with patch("catchplate.operator_publication.assert_held") as held:
             custody.insert_secret(conn if conn is not None else self.conn, self.owner,
                 selected if selected is not None else self.binding, key=KEY, secret=secret)
         held.assert_called_once_with()
@@ -192,7 +192,7 @@ class StoreTests(unittest.TestCase):
         self.refused(custody.install_empty_store, self.conn, self.owner)
         self.assertEqual(tuple(self.conn.iterdump()), before)
         self.conn.rollback()
-        with patch("serverware.operator_publication.assert_held") as held:
+        with patch("catchplate.operator_publication.assert_held") as held:
             self.refused(custody.install_empty_store, self.conn, self.owner)
         held.assert_not_called()
         self.refused(custody.inspect_public_binding, self.conn, self.owner, self.binding)
@@ -203,7 +203,7 @@ class StoreTests(unittest.TestCase):
         before = tuple(self.conn.iterdump())
         self.refused(custody.inspect_public_binding, self.conn, self.owner, self.binding, absent=True)
         self.refused(custody.read_secret, self.conn, self.owner, self.binding, key=KEY, absent=True)
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             self.refused(custody.insert_secret, self.conn, self.owner, self.binding, key=KEY, secret=SECRET, absent=True)
         self.assertEqual(tuple(self.conn.iterdump()), before)
         self.install()
@@ -253,7 +253,7 @@ class StoreTests(unittest.TestCase):
         self.install()
         self.insert()
         before = tuple(self.conn.iterdump())
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             self.refused(custody.install_empty_store, self.conn, self.owner)
             self.refused(custody.insert_secret, self.conn, self.owner, self.binding, key=KEY, secret="replacement")
         for table in (custody.TABLE, custody.META):
@@ -287,14 +287,14 @@ class StoreTests(unittest.TestCase):
         with patch.object(custody, "_key", side_effect=AssertionError("key touched")), \
                 patch.object(custody, "open_x", side_effect=AssertionError("secret touched")), \
                 patch.object(custody, "AESGCM", side_effect=AssertionError("cipher touched")), \
-                patch("serverware.operator_publication.assert_held", side_effect=AssertionError("writer touched")):
+                patch("catchplate.operator_publication.assert_held", side_effect=AssertionError("writer touched")):
             public = self.inspect()
         self.assertEqual(public["config_version"], 1)
         self.assertNotIn(SECRET, json.dumps(public))
         public["public_profile"]["scopes"].clear()
         self.assertEqual(self.inspect()["public_profile"]["scopes"], list(profile.SCOPES))
         self.assertEqual(tuple(self.conn.iterdump()), before)
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             self.refused(custody.insert_secret, self.conn, self.owner, self.binding, key=KEY, secret=SECRET)
 
     def test_all_unselected_rows_are_bounded_and_structurally_validated(self):
@@ -326,7 +326,7 @@ class StoreTests(unittest.TestCase):
                 self.conn.execute(sql)
                 before = tuple(self.conn.iterdump())
                 self.refused(custody.inspect_public_binding, self.conn, self.owner, self.binding)
-                with patch("serverware.operator_publication.assert_held"):
+                with patch("catchplate.operator_publication.assert_held"):
                     self.refused(custody.install_empty_store, self.conn, self.owner)
                 self.assertEqual(tuple(self.conn.iterdump()), before)
                 self.conn.execute("ROLLBACK TO malformed")
@@ -360,7 +360,7 @@ class StoreTests(unittest.TestCase):
         google_binding = google.bind_google(self.owner, config_version=1,
             public_profile=google.google._record("123-synthetic.apps.googleusercontent.com",
                 "https://console.example.com/api/oauth/callback/google"))
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             google.install_empty_store(self.conn, self.owner)
             google.insert_secret(self.conn, self.owner, google_binding, key=KEY, secret="synthetic-Google-secret")
         google_before = tuple(self.conn.execute(f"SELECT * FROM {google.TABLE}"))
@@ -382,17 +382,17 @@ class StoreTests(unittest.TestCase):
 
     def test_query_only_dirty_read_and_closed_connections_refuse_writes(self):
         self.conn.execute("PRAGMA query_only=ON")
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             self.refused(custody.install_empty_store, self.conn, self.owner)
         self.conn.execute("PRAGMA query_only=OFF")
         self.conn.execute("PRAGMA read_uncommitted=ON")
-        with patch("serverware.operator_publication.assert_held") as held:
+        with patch("catchplate.operator_publication.assert_held") as held:
             self.refused(custody.install_empty_store, self.conn, self.owner)
         held.assert_not_called()
         self.refused(custody.inspect_public_binding, self.conn, self.owner, self.binding)
         self.conn.close()
         self.refused(custody.inspect_public_binding, self.conn, self.owner, self.binding)
-        with patch("serverware.operator_publication.assert_held") as held:
+        with patch("catchplate.operator_publication.assert_held") as held:
             self.refused(custody.install_empty_store, self.conn, self.owner)
         held.assert_not_called()
 
@@ -422,7 +422,7 @@ class StoreTests(unittest.TestCase):
         with patch.object(custody, "_key", side_effect=AssertionError("key touched")), \
                 patch.object(custody, "open_x", side_effect=AssertionError("secret touched")), \
                 patch.object(custody, "AESGCM", side_effect=AssertionError("cipher touched")), \
-                patch("serverware.operator_publication.assert_held", side_effect=AssertionError("writer touched")):
+                patch("catchplate.operator_publication.assert_held", side_effect=AssertionError("writer touched")):
             actual = custody.inspect_public_roster(self.conn, self.owner)
         self.assertIs(type(actual), tuple)
         self.assertEqual(actual, expected)

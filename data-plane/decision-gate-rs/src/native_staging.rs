@@ -1,8 +1,8 @@
 //! Private measured-gate preparation for the selected staging family. It
 //! captures real process originals and cannot be constructed by deserialization.
 use super::*;
-use serverware_decision_gate::native_staging_v1 as profile;
-use serverware_decision_gate::native_response_gate::staging::{self as wire, CurrentProcess};
+use catchplate_decision_gate::native_staging_v1 as profile;
+use catchplate_decision_gate::native_response_gate::staging::{self as wire, CurrentProcess};
 
 pub(super) struct Prepared<'a> {
     state:&'a GateState,
@@ -45,7 +45,7 @@ impl<'a> Prepared<'a> {
             gate_key_id:signer.key_id.clone(),owner:process.original()?.clone(),request:request.clone(),
             predecessor_result_sha256:predecessor};
         let deadline=profile::deadline(&original)?;
-        require(deadline<=lifetime.deadline()&&deadline>serverware_decision_gate::native_secret_broker_v1::now()?)?;
+        require(deadline<=lifetime.deadline()&&deadline>catchplate_decision_gate::native_secret_broker_v1::now()?)?;
         let issued=epoch_ns()?;
         let expires=issued.checked_add(30_000_000_000).ok_or("staging expiry overflow")?
             .min(binding.deadline_at_epoch_ms.checked_mul(1_000_000).ok_or("staging original epoch overflow")?);
@@ -60,7 +60,7 @@ impl<'a> Prepared<'a> {
         require(policy_trust_is_fresh(self.state)
             && snapshot_is_active(self.state,&self.snapshot)
             && profile::binding(&self.statement.original)?.transaction.policy_sha256==self.snapshot.hash
-            && serverware_decision_gate::native_secret_broker_v1::now()?<self.deadline)?;
+            && catchplate_decision_gate::native_secret_broker_v1::now()?<self.deadline)?;
         profile::validate_statement(&self.statement,epoch_ns()?)
     }
     pub(super) fn statement(&self)->Result<&wire::NativeStatement,String> {

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
+use catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
 
 pub(super) const MAX_MANIFEST: usize = 32 * 1024;
 pub(super) const MAX_EXECUTABLE: u64 = 16 * 1024 * 1024;
@@ -96,9 +96,9 @@ pub(super) fn decode(raw: &[u8], combined_trust: bool, application: bool) -> Res
     let manifest: Manifest = serde_json::from_value(value)
         .map_err(|_| "native execution manifest fields are invalid")?;
     require(canonical_ascii_bytes(&manifest)?.as_slice() == raw)?;
-    require(manifest.api_version == (if application { "serverware.nativeExecutionManifest/v3" }
-            else if combined_trust { "serverware.nativeExecutionManifest/v2" }
-            else { "serverware.nativeExecutionManifest/v1" })
+    require(manifest.api_version == (if application { "catchplate.nativeExecutionManifest/v3" }
+            else if combined_trust { "catchplate.nativeExecutionManifest/v2" }
+            else { "catchplate.nativeExecutionManifest/v1" })
         && manifest.profile == "native-elf-erofs-v1"
         && manifest.loader_policy == "in-image-system-loader-v1"
         && manifest.rootfs.profile == "single-device-erofs-loop-fsverity-v1"

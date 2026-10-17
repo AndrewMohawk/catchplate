@@ -14,14 +14,14 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from serverware import authority_jit_compound_request_service as measured
-from serverware import authority_jit_compound_transport as planning_transport
-from serverware import authority_jit_original_actions as actions
-from serverware import authority_jit_original_authorization as authorization
-from serverware import authority_jit_original_service as pages
-from serverware import authority_jit_original_transport as transport
-from serverware import authority_jit_original_wire as wire
-from serverware.authority_query_read_work import QueryReadWorkError
+from catchplate import authority_jit_compound_request_service as measured
+from catchplate import authority_jit_compound_transport as planning_transport
+from catchplate import authority_jit_original_actions as actions
+from catchplate import authority_jit_original_authorization as authorization
+from catchplate import authority_jit_original_service as pages
+from catchplate import authority_jit_original_transport as transport
+from catchplate import authority_jit_original_wire as wire
+from catchplate.authority_query_read_work import QueryReadWorkError
 from test_authority_jit_compound_request import (
     arguments, clocks, verify, pins, work, EPOCH, MONO, LIFE, DEADLINE, source)
 from test_authority_jit_original_authorization import control, sign, verify as verify_page
@@ -227,7 +227,7 @@ class JitProcessingBoundsControls(unittest.TestCase):
                         native.assert_not_called()
 
     def test_actual_source_stack_retains_exact_owner_without_selectable_io_callback(self):
-        from serverware import authority_jit_compound_service as compound_service
+        from catchplate import authority_jit_compound_service as compound_service
 
         for function in (compound_service._produce_on_work, compound_service._producer_on_work,
                 pages._caller_on_work, actions.persist_page, actions.read_page,
@@ -237,7 +237,7 @@ class JitProcessingBoundsControls(unittest.TestCase):
         self.assertIn("processing_owner=", inspect.getsource(pages._PageCaller.persist))
         self.assertIn("processing_owner=", inspect.getsource(pages._PageCaller.read))
         root = Path(__file__).resolve().parents[1]
-        tree = ast.parse((root / "serverware/authority_service.py").read_text())
+        tree = ast.parse((root / "catchplate/authority_service.py").read_text())
         method = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
             and node.name == "_produce_jit_compound")
         self.assertIn("processing_owner=processing_owner", ast.unparse(method))

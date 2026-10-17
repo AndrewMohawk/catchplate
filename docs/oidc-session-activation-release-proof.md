@@ -7,10 +7,10 @@ delivery. It adds no generic operation or public endpoint.
 
 The fixed purpose is `prove-oidc-session-activation-committed-release`. The
 envelope schema and signature domain are
-`serverware.signedOidcSessionActivationReleaseProof/v1`; the payload schema is
-`serverware.oidcSessionActivationReleaseProof/v1`. Exact canonical proof bytes
-have identity domain `serverware.oidcSessionActivationReleaseProofIdentity/v1`.
-The separate `serverware.oidcSessionActivationReleaseProofCustodyIdentity/v1`
+`catchplate.signedOidcSessionActivationReleaseProof/v1`; the payload schema is
+`catchplate.oidcSessionActivationReleaseProof/v1`. Exact canonical proof bytes
+have identity domain `catchplate.oidcSessionActivationReleaseProofIdentity/v1`.
+The separate `catchplate.oidcSessionActivationReleaseProofCustodyIdentity/v1`
 domain is exported for the actual consumer to identify original release custody;
 it is not the proof signature domain or admission of those custody bytes.
 

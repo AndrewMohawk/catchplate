@@ -16,46 +16,46 @@ import sys
 
 FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
 ANCHORS = ("/", "/run", "/var", "/var/lib")
-SHARED = ("/var/lib/serverware", "/var/lib/serverware/custody-generation")
+SHARED = ("/var/lib/catchplate", "/var/lib/catchplate/custody-generation")
 ROLES = (
     "durable-recovery-store", "cleanup-authorization-consumer", "recovery-target-provider",
     "current-signature-authority", "bounded-cleanup-helper",
 )
 LEAVES = (
-    "/run/serverware-custody-business",
-    "/run/serverware-shadow-retrieval",
-    "/run/serverware-shadow-persistence",
-    "/run/serverware-shadow-trusted-time",
-    "/run/serverware-shadow-generation-install",
-    "/run/serverware-shadow-commit-request",
-    "/run/serverware-shadow-ingress-admission",
-    "/run/serverware-shadow-terminal-append",
-    "/run/serverware-shadow-dispatch-barrier",
-    "/run/serverware-shadow-active-effect-barrier",
-    "/run/serverware-shadow-active-effect-commit",
-    "/run/serverware-native-pilot-bridge",
-    "/var/lib/serverware/custody-business",
-    "/var/lib/serverware/native-ledger-spool",
-    "/var/lib/serverware/native-shadow-persistence",
-    "/var/lib/serverware/native-shadow-generation-install",
-    "/var/lib/serverware/native-pilot-bridge",
-) + tuple("/var/lib/serverware/custody-generation/" + role for role in ROLES)
+    "/run/catchplate-custody-business",
+    "/run/catchplate-shadow-retrieval",
+    "/run/catchplate-shadow-persistence",
+    "/run/catchplate-shadow-trusted-time",
+    "/run/catchplate-shadow-generation-install",
+    "/run/catchplate-shadow-commit-request",
+    "/run/catchplate-shadow-ingress-admission",
+    "/run/catchplate-shadow-terminal-append",
+    "/run/catchplate-shadow-dispatch-barrier",
+    "/run/catchplate-shadow-active-effect-barrier",
+    "/run/catchplate-shadow-active-effect-commit",
+    "/run/catchplate-native-pilot-bridge",
+    "/var/lib/catchplate/custody-business",
+    "/var/lib/catchplate/native-ledger-spool",
+    "/var/lib/catchplate/native-shadow-persistence",
+    "/var/lib/catchplate/native-shadow-generation-install",
+    "/var/lib/catchplate/native-pilot-bridge",
+) + tuple("/var/lib/catchplate/custody-generation/" + role for role in ROLES)
 TARGETS = SHARED + LEAVES
 PROFILES = ("legacy", "adopted-cold", "adopted-operational", "commissioning-startup", "commissioning-decisions")
-ADOPTED_SHARED = SHARED + ("/run/serverware",)
+ADOPTED_SHARED = SHARED + ("/run/catchplate",)
 ADOPTED_ADDITIONS = (
-    ("/run/serverware-custody-genesis", 0o711),
-    ("/var/lib/serverware/custody-genesis", 0o711),
-    ("/var/lib/serverware/publication-genesis-endpoints", 0o711),
-    ("/run/serverware-shadow-publication-reconciliation", 0o711),
-    ("/run/serverware/native-pilot-core-handoff", 0o700),
+    ("/run/catchplate-custody-genesis", 0o711),
+    ("/var/lib/catchplate/custody-genesis", 0o711),
+    ("/var/lib/catchplate/publication-genesis-endpoints", 0o711),
+    ("/run/catchplate-shadow-publication-reconciliation", 0o711),
+    ("/run/catchplate/native-pilot-core-handoff", 0o700),
 )
-OPERATIONAL_OBJECTS = "/var/lib/serverware/native-pilot-retrieval-objects"
+OPERATIONAL_OBJECTS = "/var/lib/catchplate/native-pilot-retrieval-objects"
 STARTUP_DIRECTORIES = (
-    "/etc/serverware/native-pilot-startup",
-    "/etc/serverware/native-pilot-current-head-decisions",
+    "/etc/catchplate/native-pilot-startup",
+    "/etc/catchplate/native-pilot-current-head-decisions",
 )
-DECISION_STATE_DIRECTORY = "/etc/serverware/native-pilot-current-head-state"
+DECISION_STATE_DIRECTORY = "/etc/catchplate/native-pilot-current-head-state"
 MAX_REPORT_BYTES = 32768
 
 
@@ -103,21 +103,21 @@ def selection(profile):
         if profile == "commissioning-decisions":
             leaves += (DECISION_STATE_DIRECTORY,)
             modes[DECISION_STATE_DIRECTORY] = 0o700
-        return ADOPTED_SHARED + ("/etc/serverware",), leaves, modes
+        return ADOPTED_SHARED + ("/etc/catchplate",), leaves, modes
     return ADOPTED_SHARED, leaves, modes
 
 
 def initial_report(profile, create):
     shared, leaves, _ = selection(profile)
     require(type(create) is bool, "invalid-resource-operation", "/")
-    report = {"apiVersion": "serverware.nativePilotResourceRoots/v1",
+    report = {"apiVersion": "catchplate.nativePilotResourceRoots/v1",
               "operation": "create" if create else "inspect", "result": "refused",
               "directories": [{"path": path, "kind": "resource-parent" if path in leaves else "shared-container",
                                "state": "not-inspected"} for path in shared + leaves],
               "releaseAuthority": False, "liveReady": False, "runtimeResourcesCreated": False,
               "filesystemSupportVerified": False}
     if profile != "legacy":
-        report["apiVersion"] = "serverware.nativePilotResourceRoots/v2"
+        report["apiVersion"] = "catchplate.nativePilotResourceRoots/v2"
         report["profile"] = profile
     if profile == "adopted-operational":
         # This is not the received cold-core directory or a populated store.
@@ -222,7 +222,7 @@ class Roots:
             if path in self.targets:
                 self.record(path, "present", info)
         # Inspect every existing target before creating anything. Shared
-        # /var/lib/serverware and selected /run/serverware or /etc/serverware
+        # /var/lib/catchplate and selected /run/catchplate or /etc/catchplate
         # may contain unrelated state and are not enumerated.
         self.recheck()
         self.check_populations()

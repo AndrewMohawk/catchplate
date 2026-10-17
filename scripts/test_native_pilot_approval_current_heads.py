@@ -22,8 +22,8 @@ from scripts.test_native_pilot_adopted_bridge_inputs import head_case, compose
 from scripts.test_native_pilot_adopted_current_head import fixture as head_fixture
 from scripts.test_native_pilot_adopted_supervisor import ticket
 from scripts.test_native_pilot_current_head import refresh_decision, refresh_request
-from serverware import native_pilot_approval_current_heads as intake
-from serverware.native_pilot_adopted_supervisor_policy import catalogue_original
+from catchplate import native_pilot_approval_current_heads as intake
+from catchplate.native_pilot_adopted_supervisor_policy import catalogue_original
 
 p = intake.p
 ERRORS = (ValueError, KeyError, TypeError, InvalidSignature)
@@ -38,7 +38,7 @@ def fixture(name=None):
     request["conductorRequestSha256"] = p.sha(p.canonical(conductor))
     if request["jobIndex"] == 1: request["conductorRequest"] = copy.deepcopy(conductor)
     request_raw = p.canonical(request)
-    observation_raw = p.canonical(dict(apiVersion="serverware.nativePilotAdoptedSupervisorObservation/v1",
+    observation_raw = p.canonical(dict(apiVersion="catchplate.nativePilotAdoptedSupervisorObservation/v1",
         policySha256=p.sha(b"synthetic-policy"),
         catalogueSha256=p.sha(catalogue_original()),
         intakeConfigurationSha256=p.sha(b"synthetic-intake"),
@@ -111,7 +111,7 @@ class CurrentHeadDecisionIngressControls(unittest.TestCase):
         with self.assertRaises(ERRORS): selected(f)
 
     def test_independent_approval_is_required_exact_and_cannot_be_recreated_from_validation(self):
-        for update in ({"apiVersion": "serverware.nativePilotAuthorityJobApproval/v1"},
+        for update in ({"apiVersion": "catchplate.nativePilotAuthorityJobApproval/v1"},
                 {"inputSha256": p.sha(b"other input")}, {"conductorRequestSha256": p.sha(b"other request")},
                 {"jobIndex": True}, {"deadlineBoottimeNs": "5001"}, {"expiresAtUnixNanos": "9001"}, {"extra": True}):
             f = fixture(); value = p.document(f["approval_raw"], intake.MAX_APPROVAL); value.update(update)

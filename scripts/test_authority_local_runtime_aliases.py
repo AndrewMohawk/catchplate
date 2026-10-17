@@ -8,11 +8,11 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import authority_artifact_spec as spec
-from serverware import authority_launcher as launcher
-from serverware import authority_stage_zero_contract as stage
+from catchplate import authority_artifact_spec as spec
+from catchplate import authority_launcher as launcher
+from catchplate import authority_stage_zero_contract as stage
 
-ROOT = "/var/lib/serverware/authority/generations/g0"
+ROOT = "/var/lib/catchplate/authority/generations/g0"
 
 
 def fixture():
@@ -21,7 +21,7 @@ def fixture():
     paths = (("runtime/python", "elf-executable", b"interpreter"),
         ("runtime/libpython", "elf-shared-object", b"library"),
         ("bootstrap/launcher.py", "authority-source", b"bootstrap"),
-        ("app/serverware/sample.py", "authority-source", b"module"),
+        ("app/catchplate/sample.py", "authority-source", b"module"),
         ("roles/witness.json", "role-manifest", b"role"),
         ("data/unmapped.json", "data", b"data"))
     files = [dict(path=path, kind=kind, mode=0o444, uid=0, gid=0, size=len(raw),
@@ -36,9 +36,9 @@ def fixture():
     bootstrap = dict(path="bootstrap/launcher.py", runtimePath="/runtime/authority-bootstrap/authority_launcher.py",
         size=by_path["bootstrap/launcher.py"]["size"], sha256=by_path["bootstrap/launcher.py"]["sha256"],
         interfaceSchema=spec.LOCAL_STAGE_ZERO_INTERFACE_SCHEMA, interpreter=interpreter)
-    imported = dict(module="serverware.sample", path="app/serverware/sample.py", kind="source",
-        isPackage=False, sha256=by_path["app/serverware/sample.py"]["sha256"])
-    closure = [dict(path="/runtime/app/serverware/sample.py", module=imported["module"], kind="source",
+    imported = dict(module="catchplate.sample", path="app/catchplate/sample.py", kind="source",
+        isPackage=False, sha256=by_path["app/catchplate/sample.py"]["sha256"])
+    closure = [dict(path="/runtime/app/catchplate/sample.py", module=imported["module"], kind="source",
         isPackage=False, sha256=imported["sha256"], size=by_path[imported["path"]]["size"])]
     mappings = {interpreter["runtimePath"]: interpreter["path"],
         native["objects"][0]["runtimePath"]: "runtime/libpython", bootstrap["runtimePath"]: bootstrap["path"],
@@ -78,7 +78,7 @@ class LocalRuntimeAliasTests(unittest.TestCase):
         for change in ("module", "kind", "package", "digest", "missing", "duplicate"):
             selected, _ = fixture()
             row = selected["launch_closure"][0]
-            if change == "module": row["module"] = "serverware.other"
+            if change == "module": row["module"] = "catchplate.other"
             elif change == "kind": row["kind"] = "extension"
             elif change == "package": row["isPackage"] = True
             elif change == "digest": row["sha256"] = "sha256:" + "0" * 64

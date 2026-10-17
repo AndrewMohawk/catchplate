@@ -86,14 +86,14 @@ def framed_http_response(
 
 
 def exercise_installed_trust_client_security(root: Path) -> None:
-    from serverware_agent_trust import attestation as trust_attestation
-    from serverware_agent_trust.http import request_bytes as trust_request_bytes
+    from catchplate_agent_trust import attestation as trust_attestation
+    from catchplate_agent_trust.http import request_bytes as trust_request_bytes
 
     publication_root = root / "installed-client-publication"
     publication_root.mkdir(mode=0o700)
     payload = b"-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----\n"
 
-    output = publication_root / "nested" / "private" / "serverware-ca.pem"
+    output = publication_root / "nested" / "private" / "catchplate-ca.pem"
     trust_attestation.publish_verified_ca(output, payload)
     output_stat = output.stat(follow_symlinks=False)
     if (
@@ -155,12 +155,12 @@ def exercise_installed_trust_client_security(root: Path) -> None:
     expect_value_error(
         "parent symlink CA output",
         lambda: trust_attestation.publish_verified_ca(
-            parent_symlink / "serverware-ca.pem",
+            parent_symlink / "catchplate-ca.pem",
             payload,
         ),
         "without following symlinks",
     )
-    if (parent_target / "serverware-ca.pem").exists():
+    if (parent_target / "catchplate-ca.pem").exists():
         raise AssertionError("parent symlink redirected CA publication")
 
     race_parent = publication_root / "race-parent"
@@ -168,7 +168,7 @@ def exercise_installed_trust_client_security(root: Path) -> None:
     detached_parent = publication_root / "race-parent-detached"
     attacker_parent = publication_root / "race-parent-attacker"
     attacker_parent.mkdir()
-    race_output = race_parent / "serverware-ca.pem"
+    race_output = race_parent / "catchplate-ca.pem"
     original_write_all = trust_attestation._write_all
 
     def substitute_parent(file_descriptor: int, value: bytes) -> None:
@@ -185,14 +185,14 @@ def exercise_installed_trust_client_security(root: Path) -> None:
         )
     finally:
         trust_attestation._write_all = original_write_all
-    if (attacker_parent / "serverware-ca.pem").exists():
+    if (attacker_parent / "catchplate-ca.pem").exists():
         raise AssertionError("concurrent parent substitution redirected CA publication")
 
     leaf_race_parent = publication_root / "leaf-race-parent"
     leaf_race_parent.mkdir()
     leaf_race_target = publication_root / "leaf-race-target"
     leaf_race_target.write_bytes(b"sentinel-leaf-race")
-    leaf_race_output = leaf_race_parent / "serverware-ca.pem"
+    leaf_race_output = leaf_race_parent / "catchplate-ca.pem"
 
     def substitute_leaf(file_descriptor: int, value: bytes) -> None:
         original_write_all(file_descriptor, value)
@@ -237,8 +237,8 @@ def exercise_installed_trust_client_security(root: Path) -> None:
         (
             "duplicate security header",
             b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n"
-            b"X-Serverware-Receipt: one\r\nX-Serverware-Receipt: two\r\n\r\n{}",
-            "duplicate X-Serverware-Receipt",
+            b"X-Catchplate-Receipt: one\r\nX-Catchplate-Receipt: two\r\n\r\n{}",
+            "duplicate X-Catchplate-Receipt",
         ),
         (
             "whitespace before colon",
@@ -327,7 +327,7 @@ def write_test_ca(ca_path: Path) -> None:
     from cryptography.x509.oid import NameOID
 
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Serverware Test CA")])
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Catchplate Test CA")])
     now = datetime.now(timezone.utc)
     cert = (
         x509.CertificateBuilder()
@@ -346,20 +346,20 @@ def write_test_ca(ca_path: Path) -> None:
 
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        os.environ["SERVERWARE_DATA_DIR"] = tmp
-        os.environ["SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED"] = "0"
-        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
-        os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
-        os.environ.pop("SERVERWARE_METADATA_STORE_POSTGRES_DSN", None)
-        os.environ.pop("SERVERWARE_AUDIT_STORE_POSTGRES_DSN", None)
-        os.environ.pop("SERVERWARE_GRANT_STORE_POSTGRES_DSN", None)
+        os.environ["CATCHPLATE_DATA_DIR"] = tmp
+        os.environ["CATCHPLATE_DIRECT_CA_DOWNLOAD_ENABLED"] = "0"
+        os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
+        os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
+        os.environ.pop("CATCHPLATE_METADATA_STORE_POSTGRES_DSN", None)
+        os.environ.pop("CATCHPLATE_AUDIT_STORE_POSTGRES_DSN", None)
+        os.environ.pop("CATCHPLATE_GRANT_STORE_POSTGRES_DSN", None)
 
-        from serverware import app as app_module
-        from serverware import db
-        from serverware.auth import AdminIdentity
-        from serverware_agent_trust import enrollment_tooling_contract
+        from catchplate import app as app_module
+        from catchplate import db
+        from catchplate.auth import AdminIdentity
+        from catchplate_agent_trust import enrollment_tooling_contract
         from verify_attestation import (
             canonical_json,
             enrollment_install_session,
@@ -407,14 +407,14 @@ def main() -> None:
                 "CA install session policy bad token",
                 lambda: app_module.ca_install_session_policy(
                     session["id"],
-                    x_serverware_ca_install_token="wrong-token",
+                    x_catchplate_ca_install_token="wrong-token",
                 ),
                 403,
                 "token mismatch",
             )
             policy_status = app_module.ca_install_session_policy(
                 session["id"],
-                x_serverware_ca_install_token=session["token"],
+                x_catchplate_ca_install_token=session["token"],
             )
             if policy_status.get("policy_hash") != expected_policy_hash:
                 raise AssertionError(f"scoped policy endpoint returned the wrong policy: {policy_status}")
@@ -428,7 +428,7 @@ def main() -> None:
                 "CA install session policy hash mismatch",
                 lambda: app_module.ca_install_session_policy(
                     session["id"],
-                    x_serverware_ca_install_token=session["token"],
+                    x_catchplate_ca_install_token=session["token"],
                 ),
                 409,
                 "policy changed",
@@ -440,14 +440,14 @@ def main() -> None:
             "CA install session bad token",
             lambda: app_module.ca_install_session_download(
                 session["id"],
-                x_serverware_ca_install_token="wrong-token",
+                x_catchplate_ca_install_token="wrong-token",
             ),
             403,
             "token mismatch",
         )
         response = app_module.ca_install_session_download(
             session["id"],
-            x_serverware_ca_install_token=session["token"],
+            x_catchplate_ca_install_token=session["token"],
         )
         if Path(response.path).name != "mitmproxy-ca-cert.pem":
             raise AssertionError(f"verified CA install session did not return the CA file: {response.path}")
@@ -455,7 +455,7 @@ def main() -> None:
             "CA install session one-use",
             lambda: app_module.ca_install_session_download(
                 session["id"],
-                x_serverware_ca_install_token=session["token"],
+                x_catchplate_ca_install_token=session["token"],
             ),
             409,
             "consumed",
@@ -469,7 +469,7 @@ def main() -> None:
             try:
                 app_module.ca_install_session_download(
                     concurrent_created["id"],
-                    x_serverware_ca_install_token=concurrent_created["token"],
+                    x_catchplate_ca_install_token=concurrent_created["token"],
                 )
                 return 200
             except app_module.HTTPException as exc:
@@ -496,7 +496,7 @@ def main() -> None:
             try:
                 app_module.ca_install_session_download(
                     retry_created["id"],
-                    x_serverware_ca_install_token=retry_created["token"],
+                    x_catchplate_ca_install_token=retry_created["token"],
                 )
             except RuntimeError as exc:
                 if "simulated audit outage" not in str(exc):
@@ -516,7 +516,7 @@ def main() -> None:
             db.record_audit_event = original_record_audit_event
         retry_response = app_module.ca_install_session_download(
             retry_created["id"],
-            x_serverware_ca_install_token=retry_created["token"],
+            x_catchplate_ca_install_token=retry_created["token"],
         )
         if Path(retry_response.path).name != "mitmproxy-ca-cert.pem":
             raise AssertionError("retry after an audit outage did not return the CA file")
@@ -537,7 +537,7 @@ def main() -> None:
             try:
                 app_module.ca_install_session_download(
                     finalize_retry_created["id"],
-                    x_serverware_ca_install_token=finalize_retry_created["token"],
+                    x_catchplate_ca_install_token=finalize_retry_created["token"],
                 )
             except OSError as exc:
                 if "simulated outbox state write failure" not in str(exc):
@@ -566,7 +566,7 @@ def main() -> None:
             raise AssertionError(f"consumption audit was not committed exactly once before retry: {before_retry_audits}")
         finalize_retry_response = app_module.ca_install_session_download(
             finalize_retry_created["id"],
-            x_serverware_ca_install_token=finalize_retry_created["token"],
+            x_catchplate_ca_install_token=finalize_retry_created["token"],
         )
         if Path(finalize_retry_response.path).name != "mitmproxy-ca-cert.pem":
             raise AssertionError("retry after outbox finalization failure did not return the CA file")
@@ -625,7 +625,7 @@ def main() -> None:
             try:
                 app_module.ca_install_session_download(
                     abandoned_created["id"],
-                    x_serverware_ca_install_token=abandoned_created["token"],
+                    x_catchplate_ca_install_token=abandoned_created["token"],
                 )
             except RuntimeError as exc:
                 if "simulated abandoned audit outage" not in str(exc):
@@ -688,11 +688,11 @@ def main() -> None:
             raise AssertionError("CA install token leaked into audit events")
 
         unsigned_packet = {
-            "apiVersion": "serverware.agentEnrollment/v1",
+            "apiVersion": "catchplate.agentEnrollment/v1",
             "kind": "AgentEnrollment",
             "nonce": session["nonce"],
             "tooling": enrollment_tooling_contract(),
-            "serverware": {"controlPlaneUrl": "https://serverware.example"},
+            "catchplate": {"controlPlaneUrl": "https://catchplate.example"},
             "ca": {
                 "installSession": {
                     "id": "A" * 32,
@@ -716,7 +716,7 @@ def main() -> None:
                 "signature": "ed25519:test",
             },
             "verificationReceipt": {
-                "apiVersion": "serverware.agentEnrollmentVerification/v1",
+                "apiVersion": "catchplate.agentEnrollmentVerification/v1",
                 "kind": "AgentEnrollmentVerification",
                 "nonce": session["nonce"],
                 "packetSha256": packet_digest,
@@ -729,15 +729,15 @@ def main() -> None:
         loaded_packet = load_enrollment_packet(packet_path)
         scoped_base, loaded_session = enrollment_install_session(
             loaded_packet,
-            base="https://serverware.example/",
+            base="https://catchplate.example/",
         )
-        if scoped_base != "https://serverware.example" or loaded_session["token"] != session["token"]:
+        if scoped_base != "https://catchplate.example" or loaded_session["token"] != session["token"]:
             raise AssertionError("verified enrollment packet did not yield its scoped verifier capability")
 
         mismatched_receipt = json.loads(json.dumps(verified_packet))
         mismatched_receipt["verificationReceipt"]["packetSha256"] = "sha256:" + "0" * 64
         try:
-            enrollment_install_session(mismatched_receipt, base="https://serverware.example")
+            enrollment_install_session(mismatched_receipt, base="https://catchplate.example")
         except ValueError as exc:
             if "does not bind" not in str(exc):
                 raise AssertionError(f"receipt digest mismatch failed with the wrong error: {exc}") from exc
@@ -844,7 +844,7 @@ def main() -> None:
             raise AssertionError("control-plane origin mismatch unexpectedly succeeded")
 
         duplicate_packet_path = Path(tmp) / "duplicate-enrollment.json"
-        duplicate_packet_path.write_text('{"apiVersion":"serverware.agentEnrollment/v1","apiVersion":"duplicate"}')
+        duplicate_packet_path.write_text('{"apiVersion":"catchplate.agentEnrollment/v1","apiVersion":"duplicate"}')
         try:
             load_enrollment_packet(duplicate_packet_path)
         except ValueError as exc:

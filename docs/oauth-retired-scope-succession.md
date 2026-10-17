@@ -187,7 +187,7 @@ Native phases are literal `inspect`, `material-claim`, `contact`, `finish`,
 `recover`, `prepare`, `claim`, `capture`, `stage`, `cancel`. There is no draft
 alias. The proof operation is `nativeOAuthRetiredScopeSuccession.sign/v1`;
 signature domain is the exact statement schema + NUL. NSM nonce is SHA256 of
-`serverware/native-oauth-retired-scope-succession-attestation/v1` + NUL + challenge
+`catchplate/native-oauth-retired-scope-succession-attestation/v1` + NUL + challenge
 32 + SHA256(statement) + signature64. Existing native key/boot role-4 evidence
 remains genuine and separately bound.
 

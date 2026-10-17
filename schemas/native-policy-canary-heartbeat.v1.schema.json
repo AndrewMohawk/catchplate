@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-policy-canary-heartbeat.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-policy-canary-heartbeat.v1.schema.json",
   "title": "Separately assigned native complete-ledger heartbeat",
   "$ref": "#/$defs/record",
   "$comment": "Canonical ASCII no LF. Record <=65536 bytes; complete existing intake and frame bounds unchanged. observed equals issued from the same trusted ledger snapshot; expiry within original operation, native lifetime, assignment and purpose. This is native-heartbeat-only, never a Fleet heartbeat/readiness seal. Current policy signature/key/quote and complete protected prior batch roots are independently verified; schema alone grants no authority.",
@@ -106,7 +106,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.policyCanaryHeartbeatTrustRoots/v1"
+          "const": "catchplate.policyCanaryHeartbeatTrustRoots/v1"
         },
         "awsNitroRootCertificatesPem": {
           "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/trustRoots/properties/awsNitroRootCertificatesPem"
@@ -134,7 +134,7 @@
       ],
       "properties": {
         "schema": {
-          "const": "serverware.policyCanaryHeartbeatAuthorityPolicy/v1"
+          "const": "catchplate.policyCanaryHeartbeatAuthorityPolicy/v1"
         },
         "deploymentId": {
           "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/component"
@@ -186,7 +186,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeCanaryDurableDelivery/v2"
+          "const": "catchplate.nativeCanaryDurableDelivery/v2"
         },
         "intakeUrl": {
           "$ref": "native-policy-canary-durable-delivery.v1.schema.json#/$defs/configuration/properties/intakeUrl"
@@ -256,7 +256,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativePolicyShadowHeartbeatStatement/v1"
+          "const": "catchplate.nativePolicyShadowHeartbeatStatement/v1"
         },
         "purpose": {
           "const": "native-policy-shadow-heartbeat"
@@ -405,7 +405,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.nativeResponseProofKeyEvidence/v1"
+              "const": "catchplate.nativeResponseProofKeyEvidence/v1"
             },
             "responseProofPublicKey": {
               "type": "string",
@@ -437,7 +437,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativePolicyShadowHeartbeat/v1"
+          "const": "catchplate.nativePolicyShadowHeartbeat/v1"
         },
         "canary_id": {
           "type": "string",
@@ -483,7 +483,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativePolicyShadowHeartbeat/v1"
+          "const": "catchplate.nativePolicyShadowHeartbeat/v1"
         },
         "coverage": {
           "const": "native-heartbeat-only"

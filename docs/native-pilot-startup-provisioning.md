@@ -9,7 +9,7 @@ the complete pilot deployment.
 
 ## What is delegated
 
-`serverware.nativePilotStartupProvisioningDelegation/v1` pins the exact startup
+`catchplate.nativePilotStartupProvisioningDelegation/v1` pins the exact startup
 configuration, supervisor/conductor/authority inventories and measured recipe.
 It includes the complete provider-policy and decision-configuration selections
 except for three fields that cannot exist until the real processes start:

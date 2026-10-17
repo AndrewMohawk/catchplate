@@ -20,16 +20,16 @@ from cryptography.exceptions import InvalidSignature
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_bridge_preparation as bridge
-from serverware import native_pilot_current_head_profile as head
-from serverware import native_pilot_initial_requests_profile as requests
-from serverware import native_pilot_ordinary_initial_profile as initial
-from serverware import native_pilot_ordinary_install as installation
-from serverware import native_pilot_ordinary_runtime_profile as runtime
-from serverware import native_pilot_peer_preparation as peers
-from serverware import native_pilot_service_authority as service
-from serverware import native_pilot_supervisor_current_head_profile as intake
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_bridge_preparation as bridge
+from catchplate import native_pilot_current_head_profile as head
+from catchplate import native_pilot_initial_requests_profile as requests
+from catchplate import native_pilot_ordinary_initial_profile as initial
+from catchplate import native_pilot_ordinary_install as installation
+from catchplate import native_pilot_ordinary_runtime_profile as runtime
+from catchplate import native_pilot_peer_preparation as peers
+from catchplate import native_pilot_service_authority as service
+from catchplate import native_pilot_supervisor_current_head_profile as intake
 from test_native_pilot_current_head import refresh_decision, refresh_request, signed_result
 from test_native_pilot_current_head_intake import fixture as old_fixture
 from test_native_pilot_helper_initial import export, refresh
@@ -45,9 +45,9 @@ def _fixture():
     source = old_fixture()
     f = source["fixture"]
     args = source["args"]
-    f["launch"]["apiVersion"] = "serverware.custodyFiveServiceLaunch/v7"
+    f["launch"]["apiVersion"] = "catchplate.custodyFiveServiceLaunch/v7"
     f["preparation"]["configurationSha256"] = sha(canonical(f["launch"]))
-    f["resources"].update(apiVersion="serverware.custodyFiveServiceInitialResources/v2",
+    f["resources"].update(apiVersion="catchplate.custodyFiveServiceInitialResources/v2",
         preparationSha256=sha(canonical(f["preparation"])))
     for index in (0, 3):
         role = g.ROLES[index]
@@ -180,7 +180,7 @@ class AdoptedCurrentHeadControls(unittest.TestCase):
             raw = f["inputs"]["current-head-" + role]
             for mutation in ("version", "history", "directories", "generation", "root", "checkpoint"):
                 value = json.loads(raw); selected = json.loads(value["runtimeOriginal"])
-                if mutation == "version": selected["runtime"]["apiVersion"] = "serverware.policyCustodyServiceRuntimeConfig/v8"
+                if mutation == "version": selected["runtime"]["apiVersion"] = "catchplate.policyCustodyServiceRuntimeConfig/v8"
                 elif mutation == "history": selected["runtime"]["authorityHistoryManifestSha256"] = labelled("other manifest")
                 elif mutation == "directories": selected["runtime"]["activationDirectoryIdentities"]["publication-journal"]["inode"] += 1
                 elif mutation == "generation": selected["runtime"]["operationGeneration"] += 1

@@ -60,7 +60,7 @@ file including its own digest or substitute a differently ordered object.
 ## Acyclic signed claims
 
 The enclosing body/runtime types remain v12. The embedded observer evidence is
-now exactly `serverware/runtime-observer-evidence/v13`; old v12 observer records
+now exactly `catchplate/runtime-observer-evidence/v13`; old v12 observer records
 are not accepted or silently upgraded. It adds required `runtime_claims_sha256`
 and `body_claims_sha256` fields.
 
@@ -86,7 +86,7 @@ Adding a wire field requires deliberately updating the corresponding projection.
 Observer canonical digest calculation retains the typed compact-JSON recipe:
 zero `canonical_evidence_sha256` and clear `observer_signature_b64`, retaining
 both claims digests and every other observer field. The Ed25519 message is
-exactly the bytes `serverware/runtime-observer-evidence/v13`, one NUL byte, then
+exactly the bytes `catchplate/runtime-observer-evidence/v13`, one NUL byte, then
 the raw 32-byte canonical evidence digest. The signature must be exactly 64 bytes
 encoded as canonical padded standard Base64, with no whitespace or alternatives.
 This framing is explicit; it is neither digest JSON nor a hex string.
@@ -130,7 +130,7 @@ Neither layer synthesizes absent evidence or bypasses cleanup.
 
 The fixed [BodyObserverExchangeV12 client](../data-plane/decision-gate-rs/src/body_observer_exchange_v12.rs)
 uses only the root-owned Unix stream endpoint
-`/run/serverware/coder/v12/runtime-observer/control.sock`. It checks the actual
+`/run/catchplate/coder/v12/runtime-observer/control.sock`. It checks the actual
 peer UID/GID `0:0` and immutable executable against the already admitted observer
 policy. The shared closed wire codec is also used by receiving-side admission.
 Peer custody requires Linux `SO_PEERPIDFD`, not a numeric PID reopen; the
@@ -148,9 +148,9 @@ context and target PID/start ticks/pidfd inode/custody digest. The ready frame
 must echo the held scope and deadline. Readiness is an unsigned protocol join,
 not an observer signature or proof of continuous acquisition.
 
-The fixed frame versions are `serverware.controllerBodyObserverLaunch/v12`,
-`serverware.controllerBodyObserverReady/v12` and
-`serverware.controllerBodyObserverTerminal/v12`. The launch aggregate, including
+The fixed frame versions are `catchplate.controllerBodyObserverLaunch/v12`,
+`catchplate.controllerBodyObserverReady/v12` and
+`catchplate.controllerBodyObserverTerminal/v12`. The launch aggregate, including
 original context and source/artifact/proxy bindings, is capped at 4 MiB; ready
 and terminal-request frames are capped at 4 KiB each. These transport versions
 do not replace the separately signed v13 observer-evidence contract.
@@ -172,7 +172,7 @@ helper and joins actual exit, held kernel identities, captured streams, generic
 manifest and any separately reconciled native inventory. Only after those checks
 does it call the retained output owner's structural `finalize`. That owner
 rechecks its own files and exclusively publishes the exact original as
-`.serverware-controller-output-v12/terminal.json`. Legacy worker-root terminal
+`.catchplate-controller-output-v12/terminal.json`. Legacy worker-root terminal
 reads and the lane/default fallback are removed. See
 [two-phase output custody](controller-body-output.md#manifest-and-original-result-joins).
 

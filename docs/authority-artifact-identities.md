@@ -44,10 +44,10 @@ to the complete source document, and derives the semantic digest. The artifact
 validator and stage-zero admission independently enforce the source and
 generation commitments. Neither identity substitutes for the other.
 
-The current closed contracts are `serverware.authorityArtifactBundle/v7`,
-`serverware.authorityGenerationStatement/v7`,
-`serverware.signedAuthorityArtifactPackage/v7`, and
-`serverware.unsignedAuthorityArtifactPackage/v7`. Revision `.108` introduced v3
+The current closed contracts are `catchplate.authorityArtifactBundle/v7`,
+`catchplate.authorityGenerationStatement/v7`,
+`catchplate.signedAuthorityArtifactPackage/v7`, and
+`catchplate.unsignedAuthorityArtifactPackage/v7`. Revision `.108` introduced v3
 for the operation contract; `.109` added configuration identities in v4; `.110`
 binds configuration v3 in v5 packages; `.111` binds configuration v4 in v6 packages.
 Revision `.113` binds service configuration v5 and witness configuration v4 in
@@ -103,7 +103,7 @@ authority. The real loaders perform signature and admission checks.
 
 Service and witness configuration bind `generationBindingDigest` rather than
 embedding the final generation digest or statement. This is the domain-framed
-digest of a nine-field `serverware.authorityConfigurationGenerationBinding/v1`
+digest of a nine-field `catchplate.authorityConfigurationGenerationBinding/v1`
 document: `schema`, `generationId`, `sequence`, `predecessorDigest`,
 `minimumRollbackSequence`, `validFrom`, `validUntil`, `operationManifestDigest`
 and `trustMode`. All are available before configuration files and the artifact
@@ -144,7 +144,7 @@ each containing exactly the five service roles. Witness configuration signs its
 own `roleBindingDigest`. None of these values depends on a final launch manifest.
 
 `role_binding_digest()` frames the full canonical 14-field artifact role entry
-under `serverware.authorityRoleBinding/v1`. This covers the raw role-file hash
+under `catchplate.authorityRoleBinding/v1`. This covers the raw role-file hash
 and path, role, UID/GID, process mode, entrypoint, listener, credential names,
 working directory, PATH, argv, environment allowlist and mutable-state policy.
 Factored role validation preserves all prior bounds and restrictions; bundle
@@ -152,7 +152,7 @@ executable and raw-file closure checks remain separate and mandatory. A raw
 role-file checksum alone cannot substitute for this semantic commitment.
 
 `role_runtime_closure_digest()` frames an exact document under
-`serverware.policyAuthorityRoleRuntimeClosure/v1`: `schema`, `roleBindingDigest`
+`catchplate.policyAuthorityRoleRuntimeClosure/v1`: `schema`, `roleBindingDigest`
 and `packageVersions`. The version map is bounded to 4096 nonempty ASCII
 name/version pairs of at most 256 characters each. The generator derives measured
 role references before configuration reads, then checks all signed static pins
@@ -173,7 +173,7 @@ comparison; it does not hash roles off-ledger or claim launch admission itself.
 
 Dynamic attestation remains distinct: it still checks `launchManifestDigest`
 against the actual active launch and computes `runtimeClosureDigest` using the
-existing `serverware.policyAuthorityRuntimeClosure/v2` framing of that final
+existing `catchplate.policyAuthorityRuntimeClosure/v2` framing of that final
 launch digest and admitted package versions. The static closure never replaces
 those runtime values. Root launch signature, complete artifact/package and
 credential admission, generation high-water, and active role checks remain.
@@ -185,9 +185,9 @@ ordinary credentials. Stage-zero request v5 requires an exact `bootstrapControl`
 
 | Field | Required meaning |
 | --- | --- |
-| `name` | `SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD` |
+| `name` | `CATCHPLATE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD` |
 | `fd` | The planned, separately preserved descriptor, at least 3 |
-| `envelopeSchema` | `serverware.signedPolicyAuthorityLaunchManifest/v7` |
+| `envelopeSchema` | `catchplate.signedPolicyAuthorityLaunchManifest/v7` |
 | `maximumBytes` | 67108864, the unchanged manifest byte ceiling |
 
 The slot contains no manifest hash. It identifies a document to admit, not an
@@ -243,7 +243,7 @@ actual signed request/certificate commitment, including each credential's size
 and raw file hash. `credential_set_digest` accepts only a list or tuple bounded
 to 256 before copying, validates every exact descriptor and sorted unique name,
 then hashes the unchanged nine-field public projection under
-`serverware.authorityCredentialSet/v1`. The descriptor number remains a separate
+`catchplate.authorityCredentialSet/v1`. The descriptor number remains a separate
 request binding, not part of that content-set projection.
 
 Stage-zero v4 distinguishes custody from assignment: `ownerUid` must be zero,
@@ -268,7 +268,7 @@ release evidence retains its separate runtime `credentialSetDigest`.
 
 Stage-zero v5 adds `runtimeEvidence`. For verifier, planner, planner-writer,
 issuer and executor it is a mandatory exact four-field object:
-`name` is `SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD`, `fd` is the planned
+`name` is `CATCHPLATE_POLICY_AUTHORITY_ATTESTATION_FD`, `fd` is the planned
 descriptor, `purpose` is `authority-attestation`, and `maximumBytes` is 4194304.
 For every other role the field must be null. The corresponding environment name
 is present only for those five roles and must contain the same descriptor.
@@ -341,11 +341,11 @@ static signed configuration + admitted generation/launch observations
 ```
 
 Within the unchanged 4 MiB evidence slot, source `.116` uses a canonical
-`serverware.authorityRuntimeEvidence/v1` wrapper containing the current cohort
+`catchplate.authorityRuntimeEvidence/v1` wrapper containing the current cohort
 and a separately root-authorized historical archive. See
 [historical replay](authority-historical-replay.md) for admission and lifetime
 boundaries. The current cohort remains canonical
-`serverware.signedTrustedHostLocalAttestationCohort/v1`: the exact
+`catchplate.signedTrustedHostLocalAttestationCohort/v1`: the exact
 `schema`, `payload`, `signature` envelope. Its payload has ten fields: schema,
 source revision, configuration digest, generation digest, operation-manifest
 digest, artifact-package digest, role-binding digests, receipts, issuance time

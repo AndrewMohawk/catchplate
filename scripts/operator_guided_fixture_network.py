@@ -16,11 +16,11 @@ import threading
 
 from scripts.operator_github_fixture_network import assert_isolated_network as base_isolation
 
-CONTROL_HOST = "serverware-guided.example.com"
-PROXY_HOST = "serverware-gmail-proxy.example.com"
+CONTROL_HOST = "catchplate-guided.example.com"
+PROXY_HOST = "catchplate-gmail-proxy.example.com"
 UPSTREAM_HOST, UPSTREAM_IP, LOOPBACK = "demo-upstream", "127.0.0.2", "127.0.0.1"
 KEEPER_SECONDS, EDGE_SECONDS = 300, 240
-HOSTS = ("127.0.0.1 localhost serverware decision-gate-rs " + CONTROL_HOST + " " + PROXY_HOST + "\n"
+HOSTS = ("127.0.0.1 localhost catchplate decision-gate-rs " + CONTROL_HOST + " " + PROXY_HOST + "\n"
     + UPSTREAM_IP + " " + UPSTREAM_HOST + "\n").encode("ascii")
 RESOLV = b"nameserver 127.0.0.1\noptions attempts:1 timeout:1\n"
 
@@ -35,7 +35,7 @@ def assert_isolated_network(*, attached=True):
     if attached:
         require(Path("/etc/hosts").read_bytes() == HOSTS and Path("/etc/resolv.conf").read_bytes() == RESOLV)
         for name, expected in [(UPSTREAM_HOST, UPSTREAM_IP)] + [(name, LOOPBACK) for name in
-                ("serverware", "decision-gate-rs", CONTROL_HOST, PROXY_HOST)]:
+                ("catchplate", "decision-gate-rs", CONTROL_HOST, PROXY_HOST)]:
             require({row[4][0] for row in socket.getaddrinfo(name, 443, socket.AF_INET, socket.SOCK_STREAM)} == {expected})
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             probe.bind((UPSTREAM_IP, 0))
@@ -69,7 +69,7 @@ def keep_namespace():
     status = dict(line.split(":", 1) for line in Path("/proc/self/status").read_text().splitlines() if ":" in line)
     require(all(int(status[key].strip(), 16) == 0 for key in ("CapEff", "CapPrm", "CapInh", "CapAmb"))
         and status["NoNewPrivs"].strip() == "1")
-    write_once(Path("/fixture-network/ready"), json.dumps({"schema": "serverware.guidedFixtureNetwork/v1",
+    write_once(Path("/fixture-network/ready"), json.dumps({"schema": "catchplate.guidedFixtureNetwork/v1",
         "network": "none", "interfaces": ["lo"], "effectiveCapabilities": 0}, sort_keys=True).encode("ascii"))
     stopped = threading.Event()
     for number in (signal.SIGTERM, signal.SIGINT):

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/response-observation-proof.v2.schema.json",
-  "title": "Serverware Negotiated Response Observation Proof v2",
+  "$id": "https://catchplate.invalid/schemas/response-observation-proof.v2.schema.json",
+  "title": "Catchplate Negotiated Response Observation Proof v2",
   "description": "Strict fail-closed successor to v1. This schema does not widen or redefine any v1 wire form. Verification purpose is verifier-side and closed: LIVE_AUTHORIZATION may yield the crate-private lifecycle capability only after current freshness/trust/revocation checks; ARCHIVAL_VERIFICATION authenticates immutable finalized history and can never authorize dispatch or state mutation.",
   "$comment": "Canonical JSON is UTF-8 RFC 8785 JCS. Duplicate object members, floating point values, negative integers, and integers above 2^53-1 are forbidden. The verifier reconstructs one canonical staged-request commitment from immutable HTTP/1.1 request bytes, including canonical target, exact physical headers after injection, exact body bytes, framing, provider operation semantics, injection template/result, exact policy credential generation, and verifier-extracted provider idempotency. Policy, operation, dispatch authorization, authority prerequisites, custody, and every terminal bind that commitment. Exact immutable upstream response bytes are retrieved and reconstructed before bounded response-policy validation and attestation. Local acquisition uncertainty requires exact current and predecessor record/evidence retrieval or exact signed genesis absence, plus one proof-independent pinned store/cluster/credential-ledger namespace and canonical GENESIS predecessor state, a conflict key derived only from that immutable identity plus GENESIS or exact predecessor record ID, a linearizable CAS transition, threshold quorum, and separately administered transparency-log inclusion/consistency/no-conflict proof. Mutable ledger, checkpoint, or rollback assertions cannot partition the conflict namespace. Successful attestation and publication each require a non-null artifact-time trusted checkpoint with historical key/trust/non-revocation and runtime-attestation inclusion evidence; finalization-time evidence alone is insufficient. Credential authority follows the policy-committed closed primary/cleanup automaton and selected-path root; mode none requires both arrays empty and all other modes retain one combined maximum of eight operations. Recovery and dispatch roles require distinct current non-revoked keys. Read uncertainty is non-passing and has no write recovery seal. A conforming decoder MUST reject duplicate members before schema or typed decoding. This schema is only a closed structural prefilter: authority requires the crate-private Rust verifier, role-scoped signatures, trusted time, independent attestation, and immutable exact-byte retrieval.",
   "type": "object",
@@ -15,10 +15,10 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.responseObservationProof/v2"
+      "const": "catchplate.responseObservationProof/v2"
     },
     "kind": {
-      "const": "ServerwareResponseObservationProof"
+      "const": "CatchplateResponseObservationProof"
     },
     "finalizedEnvelope": {
       "$ref": "#/$defs/finalizedEnvelope"
@@ -1642,10 +1642,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.localCredentialReconciliation/v2"
+          "const": "catchplate.localCredentialReconciliation/v2"
         },
         "kind": {
-          "const": "ServerwareLocalCredentialReconciliation"
+          "const": "CatchplateLocalCredentialReconciliation"
         },
         "attemptId": {
           "$ref": "#/$defs/sha256"
@@ -2346,10 +2346,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.localReconciliationLedgerWitness/v2"
+          "const": "catchplate.localReconciliationLedgerWitness/v2"
         },
         "kind": {
-          "const": "ServerwareLocalReconciliationLedgerWitness"
+          "const": "CatchplateLocalReconciliationLedgerWitness"
         },
         "attemptId": {
           "$ref": "#/$defs/sha256"
@@ -6366,7 +6366,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseObservationEvidence/v2"
+          "const": "catchplate.responseObservationEvidence/v2"
         },
         "evidenceType": {
           "enum": [
@@ -6433,7 +6433,7 @@
               "const": "route-semantic-profile"
             },
             "signatureDomain": {
-              "const": "serverware.response-observation-v2/route-semantic-profile-evidence-signature"
+              "const": "catchplate.response-observation-v2/route-semantic-profile-evidence-signature"
             },
             "payload": {
               "$ref": "#/$defs/routeSemanticProfileEvidencePayload"
@@ -6453,7 +6453,7 @@
               "const": "reserve"
             },
             "signatureDomain": {
-              "const": "serverware.response-observation-v2/reserve-signature"
+              "const": "catchplate.response-observation-v2/reserve-signature"
             },
             "payload": {
               "$ref": "#/$defs/reserveEvidencePayload"
@@ -6473,7 +6473,7 @@
               "const": "credential-authority"
             },
             "signatureDomain": {
-              "const": "serverware.response-observation-v2/credential-authority-signature"
+              "const": "catchplate.response-observation-v2/credential-authority-signature"
             },
             "payload": {
               "$ref": "#/$defs/credentialAuthorityEvidencePayload"
@@ -6493,7 +6493,7 @@
               "const": "durable-recovery-seal"
             },
             "signatureDomain": {
-              "const": "serverware.response-observation-v2/durable-recovery-seal-signature"
+              "const": "catchplate.response-observation-v2/durable-recovery-seal-signature"
             },
             "payload": {
               "$ref": "#/$defs/durableRecoverySealPayload"
@@ -6513,7 +6513,7 @@
               "const": "dispatch"
             },
             "signatureDomain": {
-              "const": "serverware.response-observation-v2/dispatch-signature"
+              "const": "catchplate.response-observation-v2/dispatch-signature"
             },
             "payload": {
               "$ref": "#/$defs/dispatchEvidencePayload"
@@ -6535,7 +6535,7 @@
                   "const": "terminal"
                 },
                 "signatureDomain": {
-                  "const": "serverware.response-observation-v2/cancellation-signature"
+                  "const": "catchplate.response-observation-v2/cancellation-signature"
                 },
                 "payload": {
                   "allOf": [
@@ -6566,7 +6566,7 @@
                   "const": "terminal"
                 },
                 "signatureDomain": {
-                  "const": "serverware.response-observation-v2/exact-response-unsupported-signature"
+                  "const": "catchplate.response-observation-v2/exact-response-unsupported-signature"
                 },
                 "payload": {
                   "allOf": [
@@ -6597,7 +6597,7 @@
                   "const": "terminal"
                 },
                 "signatureDomain": {
-                  "const": "serverware.response-observation-v2/response-rejection-signature"
+                  "const": "catchplate.response-observation-v2/response-rejection-signature"
                 },
                 "payload": {
                   "allOf": [
@@ -6628,7 +6628,7 @@
                   "const": "terminal"
                 },
                 "signatureDomain": {
-                  "const": "serverware.response-observation-v2/completion-signature"
+                  "const": "catchplate.response-observation-v2/completion-signature"
                 },
                 "payload": {
                   "allOf": [
@@ -6659,7 +6659,7 @@
                   "const": "terminal"
                 },
                 "signatureDomain": {
-                  "const": "serverware.response-observation-v2/write-transition-unknown-signature"
+                  "const": "catchplate.response-observation-v2/write-transition-unknown-signature"
                 },
                 "payload": {
                   "allOf": [
@@ -6690,7 +6690,7 @@
                   "const": "terminal"
                 },
                 "signatureDomain": {
-                  "const": "serverware.response-observation-v2/read-transition-unknown-signature"
+                  "const": "catchplate.response-observation-v2/read-transition-unknown-signature"
                 },
                 "payload": {
                   "allOf": [
@@ -6723,7 +6723,7 @@
               "const": "custody-authority"
             },
             "signatureDomain": {
-              "const": "serverware.response-observation-v2/custody-authority-signature"
+              "const": "catchplate.response-observation-v2/custody-authority-signature"
             },
             "payload": {
               "$ref": "#/$defs/custodyAuthorityEvidencePayload"
@@ -6743,7 +6743,7 @@
               "const": "local-reconciliation-continuity"
             },
             "signatureDomain": {
-              "const": "serverware.response-observation-v2/local-reconciliation-continuity-signature"
+              "const": "catchplate.response-observation-v2/local-reconciliation-continuity-signature"
             },
             "payload": {
               "$ref": "#/$defs/localReconciliationContinuityEvidencePayload"
@@ -6763,7 +6763,7 @@
               "const": "local-reconciliation-ledger-witness"
             },
             "signatureDomain": {
-              "const": "serverware.response-observation-v2/local-reconciliation-ledger-witness-signature"
+              "const": "catchplate.response-observation-v2/local-reconciliation-ledger-witness-signature"
             },
             "payload": {
               "$ref": "#/$defs/localReconciliationLedgerWitnessPayload"
@@ -6783,7 +6783,7 @@
               "const": "local-reconciliation-genesis-absence"
             },
             "signatureDomain": {
-              "const": "serverware.response-observation-v2/local-reconciliation-genesis-absence-signature"
+              "const": "catchplate.response-observation-v2/local-reconciliation-genesis-absence-signature"
             },
             "payload": {
               "$ref": "#/$defs/localReconciliationGenesisAbsenceEvidencePayload"
@@ -6803,7 +6803,7 @@
               "const": "local-reconciliation-recovery"
             },
             "signatureDomain": {
-              "const": "serverware.response-observation-v2/local-reconciliation-recovery-signature"
+              "const": "catchplate.response-observation-v2/local-reconciliation-recovery-signature"
             },
             "payload": {
               "$ref": "#/$defs/localReconciliationRecoveryEvidencePayload"
@@ -6823,7 +6823,7 @@
               "const": "persistence"
             },
             "signatureDomain": {
-              "const": "serverware.response-observation-v2/persistence-signature"
+              "const": "catchplate.response-observation-v2/persistence-signature"
             },
             "payload": {
               "$ref": "#/$defs/persistenceEvidencePayload"
@@ -6843,7 +6843,7 @@
               "const": "finalization-checkpoint"
             },
             "signatureDomain": {
-              "const": "serverware.response-observation-v2/finalization-checkpoint-signature"
+              "const": "catchplate.response-observation-v2/finalization-checkpoint-signature"
             },
             "payload": {
               "$ref": "#/$defs/finalizationCheckpointEvidencePayload"
@@ -6863,7 +6863,7 @@
               "const": "artifact-time-checkpoint"
             },
             "signatureDomain": {
-              "const": "serverware.response-observation-v2/artifact-time-checkpoint-signature"
+              "const": "catchplate.response-observation-v2/artifact-time-checkpoint-signature"
             },
             "payload": {
               "$ref": "#/$defs/artifactTimeCheckpointEvidencePayload"
@@ -6907,10 +6907,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseObservationEnvelope/v2"
+          "const": "catchplate.responseObservationEnvelope/v2"
         },
         "kind": {
-          "const": "ServerwareResponseObservationEnvelope"
+          "const": "CatchplateResponseObservationEnvelope"
         },
         "attemptId": {
           "$ref": "#/$defs/sha256"
@@ -7328,7 +7328,7 @@
           "$ref": "#/$defs/sha256"
         },
         "canonicalization": {
-          "const": "RFC8785-JCS/serverware-integers-and-unique-keys/v1"
+          "const": "RFC8785-JCS/catchplate-integers-and-unique-keys/v1"
         },
         "envelopeSha256": {
           "$ref": "#/$defs/sha256"

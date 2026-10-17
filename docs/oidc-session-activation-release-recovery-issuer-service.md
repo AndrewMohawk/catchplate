@@ -46,7 +46,7 @@ UID/GID 65532 before any request bytes are read. Startup admits only that exact
 owned socket alongside the inherited inventory; there is no descriptor exemption.
 
 The fixed socket is
-`/run/serverware/oidc-session-activation-token-release/recovery-grants.sock`.
+`/run/catchplate/oidc-session-activation-token-release/recovery-grants.sock`.
 The [bounded protocol](oidc-session-activation-release-recovery-grant-transport.md)
 receives its fixed issuer purpose followed by the seven original recovery
 request frames. Only that suffix is passed to the

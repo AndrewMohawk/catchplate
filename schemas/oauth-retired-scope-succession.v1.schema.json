@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/oauth-retired-scope-succession.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/oauth-retired-scope-succession.v1.schema.json",
   "title": "Append-only independently authorized retired-scope succession originals",
   "$comment": "Closed source-only producer/consumer contract; schema acceptance is not permission. No old fence mutation, retry, absent-row completion, global completeness claim, proof ceiling increase or automatic non-target reopening.",
   "oneOf": [
@@ -1470,7 +1470,7 @@
       ],
       "properties": {
         "schema": {
-          "const": "serverware.oauthRetiredScopeSuccessionAuthorization/v1"
+          "const": "catchplate.oauthRetiredScopeSuccessionAuthorization/v1"
         },
         "sourceRevision": {
           "type": "string",
@@ -1632,7 +1632,7 @@
       ],
       "properties": {
         "schema": {
-          "const": "serverware.signedOAuthRetiredScopeSuccessionAuthorization/v1"
+          "const": "catchplate.signedOAuthRetiredScopeSuccessionAuthorization/v1"
         },
         "payload": {
           "$ref": "#/$defs/authorization"
@@ -1653,7 +1653,7 @@
       ],
       "properties": {
         "schema": {
-          "const": "serverware.oauthRetiredScopeSuccessionInventory/v1"
+          "const": "catchplate.oauthRetiredScopeSuccessionInventory/v1"
         },
         "authorizations": {
           "type": "array",
@@ -1809,7 +1809,7 @@
       ],
       "properties": {
         "schema": {
-          "const": "serverware.oauthRetiredScopeSuccessionAuthorityPolicy/v1"
+          "const": "catchplate.oauthRetiredScopeSuccessionAuthorityPolicy/v1"
         },
         "enrollmentRootPublicKeyBase64Url": {
           "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/policy/properties/enrollmentRootPublicKeyBase64Url"
@@ -1913,7 +1913,7 @@
       ],
       "properties": {
         "schema": {
-          "const": "serverware.oauthApplicationStartup/v5"
+          "const": "catchplate.oauthApplicationStartup/v5"
         },
         "sourceRevision": {
           "type": "string",
@@ -1994,7 +1994,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeOAuthSuccessionStatement/v1"
+          "const": "catchplate.nativeOAuthSuccessionStatement/v1"
         },
         "phase": {
           "enum": [
@@ -2084,7 +2084,7 @@
           ]
         }
       },
-      "$comment": "Exact24. Literal prepare (never draft). Own nativeOAuthRetiredScopeSuccession.sign/v1; signature domain schema+NUL. NSM nonce SHA256(serverware/native-oauth-retired-scope-succession-attestation/v1+NUL || challenge32 || SHA256(statement) || signature64). Phase input SHA binds exact arguments except native_evidence. Whole original operation <=30s, clipped to grant."
+      "$comment": "Exact24. Literal prepare (never draft). Own nativeOAuthRetiredScopeSuccession.sign/v1; signature domain schema+NUL. NSM nonce SHA256(catchplate/native-oauth-retired-scope-succession-attestation/v1+NUL || challenge32 || SHA256(statement) || signature64). Phase input SHA binds exact arguments except native_evidence. Whole original operation <=30s, clipped to grant."
     },
     "evidence": {
       "type": "object",
@@ -2801,7 +2801,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeOAuthSuccessionRequest/v1"
+          "const": "catchplate.nativeOAuthSuccessionRequest/v1"
         },
         "operation": {
           "enum": [
@@ -2833,7 +2833,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeOAuthSuccessionResponse/v1"
+          "const": "catchplate.nativeOAuthSuccessionResponse/v1"
         },
         "requestOriginal": {
           "$ref": "#/$defs/encoded",
@@ -3075,7 +3075,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeOAuthSuccessionRecoveryOriginalRequest/v1"
+          "const": "catchplate.nativeOAuthSuccessionRecoveryOriginalRequest/v1"
         },
         "authorizationId": {
           "$ref": "#/$defs/uuid"
@@ -3098,7 +3098,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeOAuthSuccessionRecoveryOriginalResponse/v1"
+          "const": "catchplate.nativeOAuthSuccessionRecoveryOriginalResponse/v1"
         },
         "okForAction": {
           "const": false
@@ -3154,7 +3154,7 @@
       ],
       "properties": {
         "schema": {
-          "const": "serverware.nativeOAuthSuccessionIntent/v1"
+          "const": "catchplate.nativeOAuthSuccessionIntent/v1"
         },
         "providerId": {
           "$ref": "#/$defs/provider"
@@ -3263,7 +3263,7 @@
       ],
       "properties": {
         "schema": {
-          "const": "serverware.nativeOAuthSuccessionTransport/v1"
+          "const": "catchplate.nativeOAuthSuccessionTransport/v1"
         },
         "requestSha256": {
           "$ref": "#/$defs/digest"

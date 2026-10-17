@@ -14,10 +14,10 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from serverware import authority_recovery_history_acquisition as acquisition
-from serverware import authority_recovery_history as history
-from serverware.authority_index_contract import CountedNode
-from serverware.authority_index_heads import CapturedIndexHead
+from catchplate import authority_recovery_history_acquisition as acquisition
+from catchplate import authority_recovery_history as history
+from catchplate.authority_index_contract import CountedNode
+from catchplate.authority_index_heads import CapturedIndexHead
 from test_authority_recovery_history import Fixture, credential
 
 

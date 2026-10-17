@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import authority_contract, db
-from serverware.authority_store import metadata_schema_source, schema
+from catchplate import authority_contract, db
+from catchplate.authority_store import metadata_schema_source, schema
 
 
 class StructuralManifestTests(unittest.TestCase):
@@ -38,7 +38,7 @@ class StructuralManifestTests(unittest.TestCase):
             self.assertTrue(all(type(template) is dict for template in actual))
             count += len(actual)
         self.assertGreater(count, 0)
-        domain = "serverware.policyCandidateAuthoritySourceContract/v1"
+        domain = "catchplate.policyCandidateAuthoritySourceContract/v1"
         self.assertEqual(digest, db._policy_candidate_authority_framed_digest(
             domain, original_dumps(material).encode("utf-8")))
         operation = next(name for name, grant in grants.items() if grant["mutationTemplates"])
@@ -59,7 +59,7 @@ class StructuralManifestTests(unittest.TestCase):
         self.assertEqual(schema._policy_candidate_authority_manifest_json(original), original)
         self.assertEqual(json.loads(original), manifest)
         self.assertEqual(digest, db._policy_candidate_authority_framed_digest(
-            "serverware.policyCandidateAuthorityStructuralManifest/v1", original.encode("ascii")))
+            "catchplate.policyCandidateAuthorityStructuralManifest/v1", original.encode("ascii")))
         with self.assertRaises(db.PolicyCandidateAuthorityError):
             db._candidate_authority_canonical_json("ordinary original", original)
         with self.assertRaises(db.PolicyCandidateAuthorityError):
@@ -87,7 +87,7 @@ class StructuralManifestTests(unittest.TestCase):
                 schema._policy_candidate_authority_manifest_json(original)
         source = metadata_schema_source.metadata_base_schema_source()
         self.assertIn("length(structural_manifest_json)\n                    BETWEEN 2 AND 8388608", source)
-        tree = ast.parse((ROOT / "serverware/authority_store/schema.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/authority_store/schema.py").read_text())
         validator = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
             and node.name == "_validate_policy_candidate_authority_structure")
         calls = [node for node in ast.walk(validator) if isinstance(node, ast.Call)
@@ -95,7 +95,7 @@ class StructuralManifestTests(unittest.TestCase):
             and node.func.id == "_policy_candidate_authority_manifest_json"]
         self.assertEqual(len(calls), 1)
         self.assertIn("structural_manifest_json", ast.unparse(calls[0]))
-        current = (ROOT / "serverware/authority_current_root_commit_reader.py").read_text()
+        current = (ROOT / "catchplate/authority_current_root_commit_reader.py").read_text()
         self.assertIn("db._policy_candidate_authority_manifest_digest(manifest)", current)
 
 

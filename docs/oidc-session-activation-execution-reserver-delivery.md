@@ -4,10 +4,10 @@ This is source packaging for the dedicated activation reserver, not deployment,
 provisioning or successful runtime evidence. The units remain unrendered and
 uninstalled. No account, key, directory, enrollment, checkpoint or socket ACL is
 created. The flow is the fixed isolated
-[launcher](../serverware/oidc_session_activation_execution_reserver_launcher.py)
-→ root [entrypoint](../serverware/oidc_session_activation_execution_reserver_entrypoint.py)
+[launcher](../catchplate/oidc_session_activation_execution_reserver_launcher.py)
+→ root [entrypoint](../catchplate/oidc_session_activation_execution_reserver_entrypoint.py)
 → permanently unprivileged
-[runner](../serverware/oidc_session_activation_execution_reserver_runner.py).
+[runner](../catchplate/oidc_session_activation_execution_reserver_runner.py).
 
 ## Fixed originals and resources
 
@@ -17,7 +17,7 @@ isolated Python and one fixed `--root-delivery` or `--run` entry, never a
 caller-selected module or environment-supplied credential path.
 
 The root-owned trust directory
-`/run/serverware/oidc-session-activation-execution-reserver-trust` contains
+`/run/catchplate/oidc-session-activation-execution-reserver-trust` contains
 `root-public-key.pem`, `bootstrap.json` and `custody.json`. They are independent
 originals: the role launch is not a substituted receiving statement. Bounds are
 16 KiB for the root public key, 4 MiB for the role bootstrap and 8 MiB for the
@@ -35,10 +35,10 @@ external receiving-custody original.
 | 205 | Signed, independently provisioned reservation journal directory |
 
 Only the purpose-bound bundle and delivery keys share the existing fixed paths
-`/run/secrets/serverware-oidc-session-activation-bundle-key` and
-`/run/secrets/serverware-oidc-session-activation-delivery-key`. The computation
+`/run/secrets/catchplate-oidc-session-activation-bundle-key` and
+`/run/secrets/catchplate-oidc-session-activation-delivery-key`. The computation
 key is independently supplied at
-`/run/secrets/serverware-oidc-session-activation-execution-computation-key`.
+`/run/secrets/catchplate-oidc-session-activation-execution-computation-key`.
 This role receives no caller, grant-authorizer, planner or completion private
 signing key and no planner-journal encryption key. Private source files are
 root-owned mode `0400`, single-link regular files with protected root-owned
@@ -46,7 +46,7 @@ ancestors; all fixed originals are opened without following symlinks and
 checked against their pathname and descriptor before and after reading.
 
 The journal is fixed to
-`/var/lib/serverware/oidc-session-activation-execution-reservations`, owned by
+`/var/lib/catchplate/oidc-session-activation-execution-reservations`, owned by
 `65505:65505`, mode `0700`. `_journal(fd)` joins its actual directory and fixed
 pathname; `_journal_directory(device, inode)` opens only that existing signed
 identity. Neither helper creates, clears or chooses a checkpoint from storage.
@@ -82,12 +82,12 @@ assertions do not establish measured runtime or hostile-host anti-rollback.
 
 ## Uninstalled service inputs
 
-The [socket](../ops/systemd/serverware-oidc-session-activation-execution-reserver.socket)
-is `/run/serverware/oidc-session-activation-execution/reserver.sock`,
+The [socket](../ops/systemd/catchplate-oidc-session-activation-execution-reserver.socket)
+is `/run/catchplate/oidc-session-activation-execution/reserver.sock`,
 UID `65505`, group `65532`, mode `0660`, backlog one, `Accept=no`. Its activated
 FD is nonblocking. Recreating it invalidates the original signed inode pins.
 
-The [service template](../ops/systemd/serverware-oidc-session-activation-execution-reserver.service.in)
+The [service template](../ops/systemd/catchplate-oidc-session-activation-execution-reserver.service.in)
 uses these independent provisioning placeholders:
 
 - `ACTIVATION_RESERVER_RELEASE_ROOT` and `ACTIVATION_RESERVER_TRUST_DIR`;

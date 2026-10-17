@@ -45,7 +45,7 @@ pub(crate) fn validate_authority_result(
     let expected_resume_id = {
         let mut hasher = sha2::Sha256::new();
         for value in [
-            b"serverware.response-v2/stable-resume/v1".as_slice(),
+            b"catchplate.response-v2/stable-resume/v1".as_slice(),
             canonical_command.as_slice(),
             result.operation_id.as_bytes(),
             result.idempotency_key.as_bytes(),

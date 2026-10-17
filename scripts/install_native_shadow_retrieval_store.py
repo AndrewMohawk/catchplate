@@ -5,7 +5,7 @@ import sys
 if not sys.flags.isolated:
     raise SystemExit("Run the installed operator tool with Python isolated mode (-I).")
 
-from serverware.native_shadow_retrieval_store import main
+from catchplate.native_shadow_retrieval_store import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

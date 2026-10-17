@@ -135,7 +135,7 @@ pub(super) fn verify_enrollment(
     challenge: &[u8; 32],
     now: u64,
 ) -> Result<VerifiedNitro, String> {
-    const DOMAIN: &[u8] = b"serverware/enclave-runtime-key-binding/v1\0";
+    const DOMAIN: &[u8] = b"catchplate/enclave-runtime-key-binding/v1\0";
     if expected_public_key == &[0; 32] || challenge == &[0; 32]
         || expected_user_data.len() != DOMAIN.len() + 1 + 7 * 32
         || !expected_user_data.starts_with(DOMAIN)

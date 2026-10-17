@@ -18,7 +18,7 @@ production-approved runtime assembly described below.
 
 The new normal Rust gate built successfully in **5 minutes 37 seconds** with
 the pinned Rust 1.88 compiler and retained engineering dependency candidate,
-using `cargo build --release --frozen --offline --bin serverware-decision-gate`.
+using `cargo build --release --frozen --offline --bin catchplate-decision-gate`.
 The isolated container had no network, a read-only root, four CPUs, 24 GiB of
 memory and no additional swap; it exited zero without an OOM or timeout.
 
@@ -38,7 +38,7 @@ source/dependency comparison. Two focused regression tests and all 26 inert
 template renders passed; compiler, vendor and full source-equality guards were
 not relaxed.
 
-Fresh assembly `serverware-pilot-20261010-r97` completed all 22 steps. Its public
+Fresh assembly `catchplate-pilot-20261010-r97` completed all 22 steps. Its public
 configuration digest is
 `5e5192baf8126072d893eb820bf42ef03fe603fffa1cceebb6c7b4f84ba2f7cf`.
 The final launch-file digest is
@@ -46,8 +46,8 @@ The final launch-file digest is
 The assembly receipt retains `liveWindowStarted=false`.
 
 The waiting Start page is published at
-<https://serverware.example.com/> behind the existing sign-in boundary.
-Its user unit is `serverware-pilot-20261010-r97-prelaunch.service`, published as
+<https://catchplate.example.com/> behind the existing sign-in boundary.
+Its user unit is `catchplate-pilot-20261010-r97-prelaunch.service`, published as
 PID 4091667, invocation `d0667c3061bc4735ab8fbc4f4c9f700f`.
 An operator-loopback GET verified HTTP 200, the actual Start page, one enabled
 Start button, the hidden disabled recovery button and `Cache-Control: no-store`.
@@ -96,7 +96,7 @@ provider, policy, transcript and fresh-head adapter modules. Raw TAR sizes are
 
 The three archives, logs, observer/harness, frozen source and candidate-manifest
 diff are retained under the operator's home directory at
-`codex-offload/serverware/engineering-builds/f13b0dd2-matched-runtimes-s2CpTj/`.
+`codex-offload/catchplate/engineering-builds/f13b0dd2-matched-runtimes-s2CpTj/`.
 This removes the mixed-source engineering-export gap, not release or deployment
 requirements: the unchanged candidate remains unpublished, manifests remain
 engineering overrides, and every report has `productionReleaseEligible=false`.
@@ -126,7 +126,7 @@ seconds: one passed and five exposed another missing preloaded real module,
 All 84 distinct controls are resolved, not a full final-snapshot rerun.
 Thirteen-file grammar, both Make inventories and nine actual imports passed;
 there were no errors or skips. Evidence is retained at
-`codex-offload/serverware/engineering-builds/f901de6c-initial-state-e5cydo/`.
+`codex-offload/catchplate/engineering-builds/f901de6c-initial-state-e5cydo/`.
 These checks did not rebuild packages or establish installed execution.
 
 Further matching native engineering exports are on hold while the next bounded
@@ -171,7 +171,7 @@ source-manifest SHA-256 is
 Archive hash from the retained build receipt, not a repeated TAR hash:
 `a96631dd6aae995f617a6c8e2b4c69380a3a6edd3c047a92f1a62024d3719fed`.
 The durable evidence destination is
-`codex-offload/serverware/engineering-builds/508ea68e-lifecycle-cli-hLUp5a/`
+`codex-offload/catchplate/engineering-builds/508ea68e-lifecycle-cli-hLUp5a/`
 under the operator's home directory; preservation is part of the result handoff.
 
 This export includes the fixed lifecycle caller and installer commands, but
@@ -217,7 +217,7 @@ does not close remaining cleanup, provisioning and connected execution gaps.
 Retain these older build results rather than rebuilding them for status.
 
 Exact logs/reports, provenance and copy-verified hashes are retained under
-`/home/catchplate/codex-offload/serverware/engineering-builds/`:
+`/home/catchplate/codex-offload/catchplate/engineering-builds/`:
 `04cf155a-native-images-jg1ez3`, `7193b2a1-python-jg1ez3`, and
 `facdb895-native-tools-jg1ez3`. Each contains `RESULT.md` and `SHA256SUMS`, with
 earlier failed attempts kept separately. Extracted staging remains private
@@ -285,9 +285,9 @@ and `workload-sidecar.json` only after successful build and inventory:
 
 | Exported path beneath `artifacts/` | Mode | Consumer |
 | --- | --- | --- |
-| `usr/local/libexec/serverware-workload-sidecar` | 0555 | Fixed workload service executable |
-| `usr/share/serverware/install_workload_sidecar_unit.py` | 0444 | Offline unit-file output helper |
-| `usr/share/serverware/native-workload-sidecar.v1.schema.json` | 0444 | Existing fourteen-field cold configuration contract |
+| `usr/local/libexec/catchplate-workload-sidecar` | 0555 | Fixed workload service executable |
+| `usr/share/catchplate/install_workload_sidecar_unit.py` | 0444 | Offline unit-file output helper |
+| `usr/share/catchplate/native-workload-sidecar.v1.schema.json` | 0444 | Existing fourteen-field cold configuration contract |
 
 The existing Docker owner retains its no-interpreter/no-needed-library ELF and
 64 MiB executable checks. The post-export inventory refuses extra entries,
@@ -310,7 +310,7 @@ execution acceptance false. A built executable does not prove usable traffic.
 The separate `native-pilot-conductor-artifact` target in the top-level
 `Dockerfile.production` supplies the Python operator's filesystem. It combines
 the existing pinned Python/libpython/stdlib/vendor artifact, the pinned
-distroless base's system libraries, verified `serverware` sources, the conductor
+distroless base's system libraries, verified `catchplate` sources, the conductor
 script and its fixed isolated bootstrap. The default control-plane image stage
 remains unchanged. This does not include native service executables, protected
 configuration, keys, resource mounts or an independent authority coordinator.
@@ -419,10 +419,10 @@ This uses the same private build context, offline RUN steps and fixed per-RUN
 8-CPU/24-GiB/no-swap profile, not an aggregate resource limit. It requires no
 guest inputs or keys. The output contains `attempt.json`, `artifacts/`,
 `package/runtime-rootfs.tar`, `package/package.json` and
-`authority-runtime.json`. The separate `serverware.nativePilotAuthorityRuntime/v1`
+`authority-runtime.json`. The separate `catchplate.nativePilotAuthorityRuntime/v1`
 inventory binds the complete conductor sources plus the four exact authority
 script originals, retaining the existing bounded file/link/hash checks. Its
-`serverware.nativePilotAuthorityPackage/v1` archive is unsigned and uses the
+`catchplate.nativePilotAuthorityPackage/v1` archive is unsigned and uses the
 same sorted records, normalized root ownership, source epoch and exact readback.
 
 The installed authority command has this fixed prefix:
@@ -486,7 +486,7 @@ those inputs itself.
 The independently supplied input directory must contain `inputs.json`,
 `seccomp.bpf`, `runtime.json`, `build-recipe.json`, and `provenance.json`.
 `inputs.json` is the existing canonical ASCII plus exactly one LF
-`serverware.nativeShadowCustodyImageInputs/v1` document. Its source pin must
+`catchplate.nativeShadowCustodyImageInputs/v1` document. Its source pin must
 equal `preparation.json`'s `source.source_manifest_digest`; its four other pins
 must bind the exact public originals. Both the outer copier and custody packager
 require that same byte format; neither normalizes the supplied original. Its
@@ -505,7 +505,7 @@ python3 -B scripts/export_native_shadow_bootstrap_runtime.py \
 ```
 
 Use the resulting `runtime.json` as `--runtime` below. Its two source-fixed
-fields select `serverware.nativeShadowDriverBootstrapRuntime/v1` and
+fields select `catchplate.nativeShadowDriverBootstrapRuntime/v1` and
 `measure-final-driver-before-operational-admission`; the existing guest parser
 requires those exact values. The original is canonical ASCII without a terminal
 LF, unlike `inputs.json`. This avoids embedding the later image-bound runtime
@@ -551,7 +551,7 @@ target, policy, dependency pins or resource overrides. The existing
 stages. An unsupported resource capability fails without an unbounded fallback.
 
 The sole executable is exported to
-`pilot-operator-tools/artifacts/usr/local/bin/serverware-export-custody-seccomp`
+`pilot-operator-tools/artifacts/usr/local/bin/catchplate-export-custody-seccomp`
 under the selected output parent. `attempt.json` records the source and resource
 profile; `operator-tools.json` is written only after the exact export inventory,
 ELF header, mode, size and actual file hash checks succeed. These are unsigned
@@ -593,7 +593,7 @@ or automatically retried.
 make build-native-pilot-artifacts \
   NATIVE_PILOT_OUTPUT=/srv/catchplate-fast/tmp/pilot-built-artifacts \
   NATIVE_PILOT_PREPARATION=/srv/catchplate-fast/tmp/pilot-build-preparation/preparation.json \
-  NATIVE_PILOT_PUBLIC_INPUTS=/srv/serverware-public-guest-build \
+  NATIVE_PILOT_PUBLIC_INPUTS=/srv/catchplate-public-guest-build \
   NATIVE_PILOT_PUBLIC_INPUTS_SHA256=sha256:INDEPENDENTLY_SUPPLIED_MANIFEST_DIGEST
 ```
 
@@ -834,7 +834,7 @@ The final report records `ok:true`, `no_shell.ok:true`,
 `identity_mode:development-dirty-tree` and `production_release_eligible:false`.
 Original outputs, invocation, cache restoration, resource observations and the
 bounded result summary are retained with verified hashes under
-`codex-offload/serverware/engineering-builds/172f6b4e-uessyy`. The report SHA-256
+`codex-offload/catchplate/engineering-builds/172f6b4e-uessyy`. The report SHA-256
 is `bdf6db64b432b4f29d51b40ae6abfb85143561a87eb287eb787ba9e9cb30f366`.
 Stopped-container packaging checks are not project tests or a deployed pilot.
 The later `b6087f5d` compiler-input isolation is not included in this result and
@@ -855,7 +855,7 @@ compiled successfully in attempt 16.
 
 The full log, exact command/source selection, diagnostic index and worker-limit
 observations are retained under
-`codex-offload/serverware/engineering-builds/d865eeb8-suhpli` with a verified
+`codex-offload/catchplate/engineering-builds/d865eeb8-suhpli` with a verified
 `SHA256SUMS` manifest. Both sampled Rust workers had the selected 8-CPU,
 24-GiB, no-swap limits; those limits remain per RUN, not aggregate. No broad
 test suite, pilot launch, cloud provisioning or automatic retry ran. Attempt 16
@@ -877,13 +877,13 @@ The resulting local engineering image IDs are:
 
 Retained `build.log`, original `images-build.json` and concise
 `build-summary.json` are under
-`codex-offload/serverware/engineering-builds/253730f0-tvtsws`.
-The final `serverware.productionImagesBuild/v2` report records
+`codex-offload/catchplate/engineering-builds/253730f0-tvtsws`.
+The final `catchplate.productionImagesBuild/v2` report records
 `identity_mode:development-dirty-tree`, `ok:true`, `no_shell.ok:true` and
 `production_release_eligible:false`. The existing stopped-container ELF and
 no-shell checks passed; they are not a project test suite or live pilot evidence.
 Prior attempt 13's failed diagnostics remain separately retained under
-`codex-offload/serverware/engineering-builds/de80246e-h5r8bz`.
+`codex-offload/catchplate/engineering-builds/de80246e-h5r8bz`.
 
 These source-built images are not an assembled, deployed or testable native
 pilot. Remaining artifact assembly, independently admitted public inputs,
@@ -916,9 +916,9 @@ The coordinator must implement eleven one-shot phases in exactly this order:
 `bootstrap-admission`, `endpoint-precreation`, `endpoint-inputs`,
 `endpoint-deliveries`, `service-originals`, `bridge-runtime`, `bridge-delivery`, `release`,
 `constructed-admission`, `generation-origin`, `shutdown`. Requests use
-`serverware.nativePilotOperatorRequest/v1` with `sequence`, `phase`, public
+`catchplate.nativePilotOperatorRequest/v1` with `sequence`, `phase`, public
 `payload` and decimal-string `deadlineBoottimeNs`; replies use
-`serverware.nativePilotOperatorReply/v1` with the same sequence/phase,
+`catchplate.nativePilotOperatorReply/v1` with the same sequence/phase,
 `requestSha256` of the exact canonical request excluding LF, and phase-specific
 `inputs`. Frames are canonical ASCII JSON plus one LF, bounded to 32 MiB each
 and 128 MiB total in both directions. The retained owners still validate every

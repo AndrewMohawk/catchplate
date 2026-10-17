@@ -8,8 +8,8 @@ Direct fixture JSONB images remain component inputs, not independently current r
 
 ## Fixed event boundary
 
-[`counted_maintenance_sql.py`](../serverware/authority_store/counted_maintenance_sql.py)
-defines `serverware_policy_authority_counted_apply_event(table, operation,
+[`counted_maintenance_sql.py`](../catchplate/authority_store/counted_maintenance_sql.py)
+defines `catchplate_policy_authority_counted_apply_event(table, operation,
 old_row, new_row)`. Only the six source-indexed tables and normalized INSERT,
 UPDATE and DELETE shapes are accepted. UPDATE must preserve the exact text ID;
 a primary-key change requires the primary trigger's DELETE/INSERT normalization.
@@ -26,8 +26,8 @@ SQL statement. Separate DELETE and INSERT calls are not an atomic-pair API.
 
 ## Actual per-profile update
 
-[`counted_path_sql.py`](../serverware/authority_store/counted_path_sql.py)
-defines the invoker `serverware_policy_authority_counted_apply_index`:
+[`counted_path_sql.py`](../catchplate/authority_store/counted_path_sql.py)
+defines the invoker `catchplate_policy_authority_counted_apply_index`:
 
 1. Measure both full rows with the real bounded wire walker; validate actual
    source projections even for nonmembers. Derive the genuine BusinessKey/v1

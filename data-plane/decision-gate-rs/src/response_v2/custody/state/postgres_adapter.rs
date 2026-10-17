@@ -335,7 +335,7 @@ impl PostgresUdsBackend {
         }
         Ok(Self {
             socket_path: backend_socket_path.to_path_buf(),
-            database: "serverware_response_v2".to_owned(),
+            database: "catchplate_response_v2".to_owned(),
             user: service_id.to_owned(),
             timeout,
             cgroup_root: PathBuf::from(SYSTEM_CGROUP_ROOT),
@@ -351,7 +351,7 @@ impl PostgresUdsBackend {
             socket_path: state_directory
                 .join("postgres")
                 .join(".s.PGSQL.5432"),
-            database: "serverware_response_v2".to_owned(),
+            database: "catchplate_response_v2".to_owned(),
             user: service_id.to_owned(),
             timeout,
             cgroup_root: PathBuf::from(SYSTEM_CGROUP_ROOT),
@@ -409,7 +409,7 @@ impl PostgresUdsBackend {
         let mut hasher = Sha256::new();
         let mut seen = BTreeSet::new();
         hasher.update(
-            b"serverware.response-v2/postgres-reconciliation/v1",
+            b"catchplate.response-v2/postgres-reconciliation/v1",
         );
         for job in jobs {
             let domain_name = job.require_text("domain")?;
@@ -949,7 +949,7 @@ impl PgConnection {
         for (name, value) in [
             ("user", user),
             ("database", database),
-            ("application_name", "serverware-response-v2-state-authority"),
+            ("application_name", "catchplate-response-v2-state-authority"),
             ("client_encoding", "UTF8"),
         ] {
             body.extend_from_slice(name.as_bytes());

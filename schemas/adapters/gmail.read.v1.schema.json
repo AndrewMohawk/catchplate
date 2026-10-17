@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.local/schemas/adapters/gmail.read.v1.schema.json",
-  "title": "Serverware closed Gmail message-read authority v1",
+  "$id": "https://catchplate.local/schemas/adapters/gmail.read.v1.schema.json",
+  "title": "Catchplate closed Gmail message-read authority v1",
   "$comment": "Unrestricted message reads retain their exact contract. Optional recent_internal_date_v1 requires orderedFormV1, explicit list maxResults 1..32 and fresh internalDate evidence at the Rust gate, never query-only age proof. Legacy gmail.v1 is unchanged.",
   "type": "object",
   "additionalProperties": false,

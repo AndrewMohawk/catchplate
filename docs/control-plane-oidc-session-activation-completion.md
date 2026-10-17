@@ -1,6 +1,6 @@
 # Configured private activation completion continuation
 
-[`control_plane_oidc_session_activation_completion.py`](../serverware/control_plane_oidc_session_activation_completion.py)
+[`control_plane_oidc_session_activation_completion.py`](../catchplate/control_plane_oidc_session_activation_completion.py)
 extends the fixed private activation dispatch with one genuine completion
 service exchange and public verification of its signed originals. This is
 source only: unbuilt, unexecuted and unprovisioned. It adds no public route,

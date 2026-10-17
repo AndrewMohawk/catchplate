@@ -21,9 +21,9 @@ use std::net::{IpAddr, Ipv6Addr};
 use std::time::{SystemTime, UNIX_EPOCH};
 use x509_parser::extensions::ParsedExtension;
 
-const REQUEST_SCHEMA: &str = "serverware.signedWorkloadIdentityBootstrapRequest/v1";
-const PAYLOAD_SCHEMA: &str = "serverware.workloadIdentityBootstrapRequest/v1";
-const DOMAIN: &[u8] = b"serverware.workloadIdentityBootstrapRequest/v1\0";
+const REQUEST_SCHEMA: &str = "catchplate.signedWorkloadIdentityBootstrapRequest/v1";
+const PAYLOAD_SCHEMA: &str = "catchplate.workloadIdentityBootstrapRequest/v1";
+const DOMAIN: &[u8] = b"catchplate.workloadIdentityBootstrapRequest/v1\0";
 const MAX_REQUEST: usize = 64 * 1024;
 const MAX_CSR: usize = 16 * 1024;
 const MAX_ISSUER: usize = 64 * 1024;

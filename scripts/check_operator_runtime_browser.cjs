@@ -10,8 +10,8 @@ const {join, dirname, basename, resolve, isAbsolute} = require('node:path');
 const {createHash} = require('node:crypto');
 const {execFile} = require('node:child_process');
 const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
-const ROOT = resolve(__dirname, '..'), LEGACY_PUBLIC = 'https://serverware-demo.example.com';
-const CANONICAL_PUBLIC = 'https://serverware.example.com';
+const ROOT = resolve(__dirname, '..'), LEGACY_PUBLIC = 'https://catchplate-demo.example.com';
+const CANONICAL_PUBLIC = 'https://catchplate.example.com';
 let PUBLIC = LEGACY_PUBLIC;
 const CATALOG = '/api/operator-demo/catalog', NOTIFICATIONS = '/api/operator-demo/notifications', UPSTREAMS = '/api/operator-demo/proxy/upstreams';
 const PATHS = ['/', CATALOG, NOTIFICATIONS, UPSTREAMS], FIXTURE = 'https://demo-upstream:8443';
@@ -49,7 +49,7 @@ let expectedUpstreams = [FIXTURE], expectedRevision = null;
 const observesX = () => managedX || xConfigurationDisabled;
 const paths = () => [...PATHS, ...(managedGoogle ? [GOOGLE] : []), ...(observesX() ? [X_CONFIGURATION] : [])];
 const children = new Set(), before = {}, seen = {};
-const receipt = {schema: 'serverware.operatorRuntimeReadonlyBrowser/v1', ok: false, gets: [], screenshots: [], refused_requests: 0,
+const receipt = {schema: 'catchplate.operatorRuntimeReadonlyBrowser/v1', ok: false, gets: [], screenshots: [], refused_requests: 0,
   page_errors: 0, console_errors: 0, boundary: 'Actual internal app HTML/APIs only. No external SSO, provider, proxy, CA, delivery or mutation acceptance.'};
 function parseRuntimeOptions(args) {
   need(Array.isArray(args) && args.length >= 3 && args.length <= 12 && args.every(value => typeof value === 'string'),
@@ -85,7 +85,7 @@ function parseRuntimeOptions(args) {
   return selected;
 }
 function sourceDirectory(commit, explicit = null) {
-  const directory = explicit === null ? join(dirname(ROOT), 'serverware-operator-artifacts/source-' + commit) : explicit;
+  const directory = explicit === null ? join(dirname(ROOT), 'catchplate-operator-artifacts/source-' + commit) : explicit;
   need(/^[0-9a-f]{40}$/.test(commit) && typeof directory === 'string' && directory.length <= 4096 &&
     isAbsolute(directory) && resolve(directory) === directory && basename(directory) === 'source-' + commit,
     'source_directory_not_exact');
@@ -150,8 +150,8 @@ async function identity() {
     '"project":{{json (index .Config.Labels "com.docker.compose.project")}},"service":{{json (index .Config.Labels "com.docker.compose.service")}},"mounts":[' +
     '{{range .Mounts}}{{if eq .Destination "/app"}}{"source":{{json .Source}},"rw":{{json .RW}},"type":{{json .Type}}}{{end}}{{end}}]}';
   const actual = JSON.parse(await command('/usr/bin/docker', ['inspect', '--format', format, appId]));
-  need(actual.id === appId && actual.running === true && actual.health === 'healthy' && actual.project === 'serverware-operator-demo' &&
-    actual.service === 'serverware' && serial(actual.mounts) === serial([{source, rw: false, type: 'bind'}]), 'runtime_identity_mismatch');
+  need(actual.id === appId && actual.running === true && actual.health === 'healthy' && actual.project === 'catchplate-operator-demo' &&
+    actual.service === 'catchplate' && serial(actual.mounts) === serial([{source, rw: false, type: 'bind'}]), 'runtime_identity_mismatch');
   const verified = JSON.parse(await command('/usr/bin/python3', ['-I', '-B', join(__dirname, 'verify_operator_source_snapshot.py'), '--commit', commit,
     '--source-directory', source], '', 40000));
   need(verified.ok === true && verified.commit === commit && verified.source === source && verified.git_blob_equality === true &&
@@ -163,7 +163,7 @@ async function identity() {
 function sourceScriptFiles() {
   // Read only the fixed literal from the already Git-verified source. Never
   // execute its renderer or permit arbitrary filenames/imports from the tuple.
-  const portal = readFileSync(join(source, 'serverware/operator_demo_portal.py'), 'utf8');
+  const portal = readFileSync(join(source, 'catchplate/operator_demo_portal.py'), 'utf8');
   need(Buffer.byteLength(portal, 'utf8') <= 65536 && (portal.match(/^SCRIPT_FILES\s*=/gm) || []).length === 1,
     'renderer_roster_refused');
   const match = /^SCRIPT_FILES = \(([^)]*)\)/m.exec(portal);
@@ -182,7 +182,7 @@ function selectXConfigurationProfile() {
 }
 function documentBytes() {
   const names = sourceScriptFiles();
-  const asset = name => readFileSync(join(source, 'serverware/operator_demo_web', name), 'utf8');
+  const asset = name => readFileSync(join(source, 'catchplate/operator_demo_web', name), 'utf8');
   let html = asset('index.html'); const scripts = names.map(asset).join('\n'), css = asset('style.css');
   need(!/<\/script/i.test(scripts) && !/<\/style/i.test(css), 'renderer_raw_text_terminator');
   for (const [marker, value] of [['__OPERATOR_DEMO_STYLE__', css], ['__OPERATOR_DEMO_SCRIPT__', "(() => {\n'use strict';\n" + scripts + '\n})();\n']]) {
@@ -202,7 +202,7 @@ function validate(path, value) {
     if (managedX) {
       need(!xConfigurationDisabled && exactKeys(value, ['schema', 'state', 'revision', 'policy_hash', 'redirect_uri',
         'permission_preset', 'scopes', 'configuration', 'operation', 'review', 'blocked_reason', 'consent_ready']) &&
-        value.schema === 'serverware.operatorXConfiguration/v1' && value.state === 'unconfigured' &&
+        value.schema === 'catchplate.operatorXConfiguration/v1' && value.state === 'unconfigured' &&
         value.revision === expectedRevision && value.revision === before[CATALOG].revision &&
         value.policy_hash === before[CATALOG].policy.policy_hash && PUBLIC === CANONICAL_PUBLIC &&
         value.redirect_uri === PUBLIC + '/api/oauth/callback/x' && value.permission_preset === 'x_text_post_v1' &&
@@ -213,7 +213,7 @@ function validate(path, value) {
     } else need(xConfigurationDisabled && exactKeys(value, ['detail']) && value.detail === X_CONFIGURATION_DISABLED_DETAIL,
         'disabled_x_configuration_mismatch');
   } else if (path === CATALOG) {
-    need(value.schema === 'serverware.operatorCatalog/v1' && value.mode === 'operator-development' && value.productionReady === false &&
+    need(value.schema === 'catchplate.operatorCatalog/v1' && value.mode === 'operator-development' && value.productionReady === false &&
       value.hardwareVerified === false && serial(value.allowed_upstreams) === serial(expectedUpstreams), 'catalog_profile_or_destination_changed');
     for (const key of ['credentials', 'applications', 'access_rules']) need(Array.isArray(value[key]) && value[key].length > 0, 'retained_resources_missing');
     if (expectedRevision === null) need(value.applications.every(app => app.status === 'active' && app.token_status === 'expired' &&
@@ -229,7 +229,7 @@ function validate(path, value) {
       /^sha256:[0-9a-f]{64}$/.test(value.policy.policy_hash) && value.policy.loaded_policy_hash === value.policy.policy_hash,
       'managed_x_catalog_mismatch');
   } else if (path === NOTIFICATIONS) {
-    need(value.schema === 'serverware.operatorNotifications/v1' && value.available === true && Array.isArray(value.slots) &&
+    need(value.schema === 'catchplate.operatorNotifications/v1' && value.available === true && Array.isArray(value.slots) &&
       serial(value.slots.map(slot => slot.slot).sort()) === serial([...SLOTS].sort()), 'notification_slots_missing');
     for (const slot of value.slots) need(slot.enabled === false && slot.secret_present === false && slot.revision === 0 &&
       slot.label === '' && serial(slot.event_types) === '[]' && slot.last_delivery === null, 'notification_slot_not_unconfigured');
@@ -239,7 +239,7 @@ function validate(path, value) {
   } else if (path === GOOGLE) {
     need(managedGoogle && exactKeys(value, ['schema', 'state', 'revision', 'policy_hash', 'effective_settings', 'effective_settings_digest',
       'public_url', 'redirect_uri', 'permission_preset', 'scopes', 'blocked_reason', 'review', 'operation', 'readiness']) &&
-      value.schema === 'serverware.operatorGoogleConfiguration/v2' && value.state === 'unconfigured' && value.revision === expectedGoogleRevision() &&
+      value.schema === 'catchplate.operatorGoogleConfiguration/v2' && value.state === 'unconfigured' && value.revision === expectedGoogleRevision() &&
       value.revision === before[CATALOG].revision && value.policy_hash === before[CATALOG].policy.policy_hash &&
       exactKeys(value.effective_settings, ['allowed_upstreams', 'fixture_cidrs']) &&
       serial(value.effective_settings) === serial(before[UPSTREAMS].old_settings) &&
@@ -253,14 +253,14 @@ function validate(path, value) {
     const review = value.review;
     need(exactKeys(review, ['schema', 'expected_revision', 'expected_policy_hash', 'expected_settings_digest', 'old_settings',
       'target_settings', 'public_url', 'redirect_uri', 'provider_id', 'permission_preset', 'scopes', 'eligible']) &&
-      review.schema === 'serverware.operatorGoogleManagedSetupReview/v2' && review.expected_revision === value.revision &&
+      review.schema === 'catchplate.operatorGoogleManagedSetupReview/v2' && review.expected_revision === value.revision &&
       review.expected_policy_hash === value.policy_hash && review.expected_settings_digest === value.effective_settings_digest &&
       serial(review.old_settings) === serial(value.effective_settings) &&
       serial(review.target_settings) === serial({allowed_upstreams: expectedGoogleOrigins(), fixture_cidrs: value.effective_settings.fixture_cidrs}) &&
       review.public_url === PUBLIC && review.redirect_uri === value.redirect_uri && review.provider_id === 'google' &&
       review.permission_preset === 'gmail_readonly' && serial(review.scopes) === serial(GOOGLE_SCOPES) && review.eligible === true,
       'managed_google_review_mismatch');
-  } else need(value.schema === 'serverware.operatorUpstreamSetupReview/v1' &&
+  } else need(value.schema === 'catchplate.operatorUpstreamSetupReview/v1' &&
     exactKeys(value.old_settings, ['allowed_upstreams', 'fixture_cidrs']) &&
     serial(value.old_settings.allowed_upstreams) === serial(expectedUpstreams) &&
     value.expected_settings_digest === 'sha256:' + sha(serial(value.old_settings)) &&
@@ -390,7 +390,7 @@ async function run() {
     try {
       const path = request.url().slice(PUBLIC.length), headers = await request.allHeaders();
       need(request.url() === PUBLIC + path && paths().includes(path) && request.method() === 'GET' && !request.postDataBuffer() &&
-        !headers.authorization && !headers['proxy-authorization'] && !headers['x-serverware-admin-token'] && !headers.cookie &&
+        !headers.authorization && !headers['proxy-authorization'] && !headers['x-catchplate-admin-token'] && !headers.cookie &&
         !headers['transfer-encoding'] && (!headers['content-length'] || headers['content-length'] === '0'), 'browser_request_refused');
       seen[path] = (seen[path] || 0) + 1;
       need(path === '/' ? phase === 'render' && seen[path] === 1 && request.isNavigationRequest() && request.resourceType() === 'document' :
@@ -415,7 +415,7 @@ async function run() {
   page.on('worker', () => receipt.refused_requests++); context.on('serviceworker', () => receipt.refused_requests++);
   await page.goto(new URL('/', PUBLIC).href, {waitUntil: 'networkidle'});
   await page.waitForFunction(() => !document.getElementById('credential-fields').disabled && document.getElementById('load-error').hidden);
-  need(await page.title() === 'Overview - Serverware operator workspace' && seen[CATALOG] === 1, 'landing_failed');
+  need(await page.title() === 'Overview - Catchplate operator workspace' && seen[CATALOG] === 1, 'landing_failed');
   phase = 'proxy';
   const xResponse = observesX() ? page.waitForResponse(value =>
     value.url() === PUBLIC + X_CONFIGURATION && value.request().method() === 'GET') : null;

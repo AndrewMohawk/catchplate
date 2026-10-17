@@ -58,26 +58,26 @@ def expect_validation_error(
 
 
 def main() -> None:
-    with tempfile.TemporaryDirectory(prefix="serverware-setup-session-api-") as tmp:
-        os.environ["SERVERWARE_DATA_DIR"] = tmp
-        os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
-        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
+    with tempfile.TemporaryDirectory(prefix="catchplate-setup-session-api-") as tmp:
+        os.environ["CATCHPLATE_DATA_DIR"] = tmp
+        os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
+        os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
         for name in (
-            "SERVERWARE_METADATA_STORE_POSTGRES_DSN",
-            "SERVERWARE_AUDIT_STORE_POSTGRES_DSN",
-            "SERVERWARE_GRANT_STORE_POSTGRES_DSN",
+            "CATCHPLATE_METADATA_STORE_POSTGRES_DSN",
+            "CATCHPLATE_AUDIT_STORE_POSTGRES_DSN",
+            "CATCHPLATE_GRANT_STORE_POSTGRES_DSN",
         ):
             os.environ.pop(name, None)
 
         from fastapi import HTTPException
         from pydantic import ValidationError
 
-        from serverware import app as app_module
-        from serverware import db
-        from serverware.auth import AdminIdentity
+        from catchplate import app as app_module
+        from catchplate import db
+        from catchplate.auth import AdminIdentity
 
         db.init_db()
 

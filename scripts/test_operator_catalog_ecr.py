@@ -8,12 +8,12 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import ecr_publication_policy as wire
-from serverware import operator_catalog_ecr as ecr
-from serverware import operator_catalog_inputs as inputs
-from serverware import operator_catalog_policy as catalog_policy
-from serverware import operator_catalog_schema as schema
-from serverware import policy_bundle
+from catchplate import ecr_publication_policy as wire
+from catchplate import operator_catalog_ecr as ecr
+from catchplate import operator_catalog_inputs as inputs
+from catchplate import operator_catalog_policy as catalog_policy
+from catchplate import operator_catalog_schema as schema
+from catchplate import policy_bundle
 
 APP = "00000000-0000-4000-8000-000000000001"
 CREDENTIAL = "00000000-0000-4000-8000-000000000002"
@@ -33,7 +33,7 @@ def fixture():
         "credential_kind": "long_term", "expires_at": None, "status": "active"}
     application = {"id": APP, "principal_id": "agent:operator-demo:" + APP, "status": "active",
         "token_sha256": "sha256:" + "1" * 64, "token_expires_at_epoch_ms": 2000000000000}
-    with patch("serverware.operator_demo.settings", return_value={"allowed_upstreams": ["https://api.ecr.us-east-1.amazonaws.com"]}):
+    with patch("catchplate.operator_demo.settings", return_value={"allowed_upstreams": ["https://api.ecr.us-east-1.amazonaws.com"]}):
         raw = catalog_policy.render({"credentials": [credential], "applications": [application], "access_rules": [rule]},
             1, "sha256:" + "2" * 64)
     return rule, credential, raw
@@ -47,7 +47,7 @@ class EcrCatalogTests(unittest.TestCase):
         self.assertIsInstance(embedded_schema, dict)
         self.assertIsInstance(embedded_schema.get("$defs"), dict)
         self.assertEqual(embedded_schema["$id"],
-            "https://serverware.local/schemas/adapters/aws.ecr.publish.v1.schema.json")
+            "https://catchplate.local/schemas/adapters/aws.ecr.publish.v1.schema.json")
 
     def test_typed_catalog_compiles_closed_signing_without_header_injection(self):
         rule, credential, raw = fixture()

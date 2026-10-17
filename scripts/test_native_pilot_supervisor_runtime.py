@@ -53,7 +53,7 @@ def fixture(parent, profile="supervisor"):
     root = parent / "root"
     root.mkdir()
     source_names = (
-        "serverware/__init__.py", "serverware/synthetic.py",
+        "catchplate/__init__.py", "catchplate/synthetic.py",
         "scripts/native_pilot_runtime_entrypoint.py", "scripts/run_native_pilot.py",
         "scripts/native_pilot_authority_runtime_entrypoint.py",
         "scripts/run_native_pilot_authority_coordinator.py", "scripts/native_pilot_runtime_artifacts.py",
@@ -74,7 +74,7 @@ def fixture(parent, profile="supervisor"):
     )
     originals = {name: ("# synthetic source original: " + name + "\n").encode("ascii") for name in source_names}
     for name, raw in originals.items():
-        if name.startswith("serverware/") or name in source_names[2:4]:
+        if name.startswith("catchplate/") or name in source_names[2:4]:
             prefix = "app/"
         elif name in source_names[4:10] and profile in ("authority", "supervisor"):
             prefix = "authority/app/"
@@ -83,20 +83,20 @@ def fixture(parent, profile="supervisor"):
         else:
             continue
         write(root / (prefix + name), raw)
-    tree = {"version": "serverware.sourceTree/v3", "identityMode": "production-commit",
+    tree = {"version": "catchplate.sourceTree/v3", "identityMode": "production-commit",
         "productionReleaseEligible": True, "commit": "1" * 40, "commitTimestamp": "1234567890",
         "files": [{"path": name, "type": "file", "mode": "100644", "bytes": len(raw), "sha256": sha(raw)}
                   for name, raw in sorted(originals.items())]}
     source = {"revision": tree["commit"], "source_tree_digest": sha(canonical(tree)),
         "source_archive_digest": sha(b"synthetic archive identity, not an actual Git archive"),
         "source_date_epoch": tree["commitTimestamp"]}
-    manifest = {"apiVersion": "serverware.sourceArchive/v1", "identityMode": "production-commit",
+    manifest = {"apiVersion": "catchplate.sourceArchive/v1", "identityMode": "production-commit",
         "productionReleaseEligible": True, "commit": source["revision"],
         "commitTimestamp": source["source_date_epoch"], "sourceTreeDigest": source["source_tree_digest"],
         "sourceTreeManifest": tree, "archive": {"sha256": source["source_archive_digest"]}}
     manifest_raw = canonical(manifest) + b"\n"
     source["source_manifest_digest"] = sha(manifest_raw)
-    write(root / "usr/share/serverware/source-manifest.json", manifest_raw)
+    write(root / "usr/share/catchplate/source-manifest.json", manifest_raw)
     elf = bytearray(64)
     elf[:7] = b"\x7fELF\x02\x01\x01"
     elf[16:18] = (2).to_bytes(2, "little")
@@ -132,7 +132,7 @@ class SupervisorRuntimeTests(unittest.TestCase):
     def test_distinct_supervisor_inventory_and_source_namespaces(self):
         root, source = fixture(self.directory())
         observed = runtime.supervisor_inventory(root, source)
-        self.assertEqual(observed["apiVersion"], "serverware.nativePilotSupervisorRuntime/v1")
+        self.assertEqual(observed["apiVersion"], "catchplate.nativePilotSupervisorRuntime/v1")
         self.assertEqual(observed["target"], "native-pilot-supervisor-artifact")
         self.assertEqual(observed["command"], ["/runtime/python/bin/python3", "-I", "-B",
             "/supervisor/app/scripts/native_pilot_supervisor_runtime_entrypoint.py", "--run-native-pilot"])
@@ -155,15 +155,15 @@ class SupervisorRuntimeTests(unittest.TestCase):
         self.assertIn("authority/app/scripts/authority/native_pilot_authority_io.py", files)
         self.assertIn("authority/app/scripts/authority/prepare_native_pilot_closure_set.py", files)
         self.assertIn("authority/app/scripts/verify_nitro_tee.py", files)
-        self.assertIn("app/serverware/synthetic.py", files)
+        self.assertIn("app/catchplate/synthetic.py", files)
         self.assertFalse(observed["requiredArguments"]["childInventoriesDerived"])
         self.assertFalse(observed["requiredArguments"]["currentnessDecisionsDerived"])
         for name in ("releaseAuthority", "liveReady", "launchPrepared", "dynamicLoaderClosureVerified"):
             self.assertIs(observed[name], False)
 
     def test_child_profiles_remain_source_fixed(self):
-        for profile, observe, api in (("conductor", runtime.inventory, "serverware.nativePilotConductorRuntime/v1"),
-                ("authority", runtime.authority_inventory, "serverware.nativePilotAuthorityRuntime/v1")):
+        for profile, observe, api in (("conductor", runtime.inventory, "catchplate.nativePilotConductorRuntime/v1"),
+                ("authority", runtime.authority_inventory, "catchplate.nativePilotAuthorityRuntime/v1")):
             with self.subTest(profile=profile):
                 root, source = fixture(self.directory(), profile)
                 value = observe(root, source)
@@ -189,7 +189,7 @@ class SupervisorRuntimeTests(unittest.TestCase):
                     path = root / "authority/app/scripts/verify_nitro_tee.py"
                     path.chmod(0o600); write(path, b"# altered public validator\n")
                 else:
-                    path = root / "app/serverware/synthetic.py"
+                    path = root / "app/catchplate/synthetic.py"
                     path.parent.chmod(0o755); path.unlink(); path.parent.chmod(0o555)
                 with self.assertRaises(RuntimeError):
                     runtime.supervisor_inventory(root, source)
@@ -198,7 +198,7 @@ class SupervisorRuntimeTests(unittest.TestCase):
         for mutation in ("not-production", "duplicate", "wrong-original-pin"):
             with self.subTest(mutation=mutation):
                 root, source = fixture(self.directory())
-                path = root / "usr/share/serverware/source-manifest.json"
+                path = root / "usr/share/catchplate/source-manifest.json"
                 value = json.loads(path.read_bytes())
                 if mutation == "not-production":
                     value["productionReleaseEligible"] = False
@@ -235,7 +235,7 @@ class SupervisorRuntimeTests(unittest.TestCase):
         first = packaging.package_supervisor(root, observed, parent / "first")
         second = packaging.package_supervisor(root, observed, parent / "second")
         self.assertEqual(first, second)
-        self.assertEqual(first["apiVersion"], "serverware.nativePilotSupervisorPackage/v1")
+        self.assertEqual(first["apiVersion"], "catchplate.nativePilotSupervisorPackage/v1")
         archive_raw = (parent / "first/runtime-rootfs.tar").read_bytes()
         self.assertEqual(first["archive"]["sha256"], sha(archive_raw))
         self.assertEqual(first["inventorySha256"], sha(canonical(observed)))

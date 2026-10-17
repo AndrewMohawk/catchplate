@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-custody-image-inputs.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-custody-image-inputs.v1.schema.json",
   "title": "Public static custody image build inputs; not release authority",
   "description": "Exact ASCII canonical JSON with one LF, <=16KiB, separately SHA-256 pinned. Pins external public originals only; no key, trust, boot or time provisioning.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "sourceManifestSha256", "seccompSha256", "runtimeConfigurationSha256", "buildRecipeSha256", "provenanceStatementSha256"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeShadowCustodyImageInputs/v1"},
+    "apiVersion": {"const": "catchplate.nativeShadowCustodyImageInputs/v1"},
     "sourceManifestSha256": {"$ref": "#/$defs/digest"},
     "seccompSha256": {"$ref": "#/$defs/digest"},
     "runtimeConfigurationSha256": {"$ref": "#/$defs/digest"},

@@ -3,7 +3,7 @@
 use super::*;
 use crate::policy_shadow::policy_custody::services::production::ProductionServiceHistoricalKeyringsV4;
 use crate::policy_shadow::policy_custody::production_dispatch::ClosedProductionDispatchResponseV4;
-pub(in crate::policy_shadow::policy_custody::services) const BRIDGE_RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v6";
+pub(in crate::policy_shadow::policy_custody::services) const BRIDGE_RUNTIME:&str="catchplate.policyCustodyProductionRpcRuntime/v6";
 #[derive(Debug,Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(in crate::policy_shadow::policy_custody::services) struct Selection {
@@ -12,7 +12,7 @@ pub(in crate::policy_shadow::policy_custody::services) struct Selection {
 fn roles()->[TrustedHostServiceRoleV3;2]{[TrustedHostServiceRoleV3::DurableRecoveryStore,TrustedHostServiceRoleV3::CurrentSignatureAuthority]}
 impl Selection {
     pub(in crate::policy_shadow::policy_custody::services) fn validate(&self)->Result<(),ServiceError>{
-        require(self.api_version=="serverware.nativeCommitRequestServices/v1"
+        require(self.api_version=="catchplate.nativeCommitRequestServices/v1"
             && self.service_grant_originals.keys().copied().collect::<BTreeSet<_>>()==BTreeSet::from(roles())
             && self.service_grant_originals.values().all(|v|!v.is_empty()&&v.len()<=65536&&v.is_ascii()))
     }
@@ -32,7 +32,7 @@ impl Client {
         for (role,raw) in selection.service_grant_originals {
             let grant:Grant=decode_canonical_frame(raw.as_bytes())?;let p=&grant.payload;
             let h=histories.borrowed();let history=h.history(historical_service_role(role));
-            require(p.api_version=="serverware.custodyCommitRequestServiceGrant/v1" && p.purpose=="commit-request-service-transition"
+            require(p.api_version=="catchplate.custodyCommitRequestServiceGrant/v1" && p.purpose=="commit-request-service-transition"
                 && p.service_role==role && expected_configurations.get(&role)==Some(&p.runtime_configuration_sha256)
                 && p.guest.runtime_configuration_sha256==p.runtime_configuration_sha256
                 && &p.authority_history_manifest_sha256==history.manifest_sha256()

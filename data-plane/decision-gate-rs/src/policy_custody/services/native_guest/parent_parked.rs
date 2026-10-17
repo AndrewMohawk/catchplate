@@ -78,8 +78,8 @@ impl Prepared {
         if good {
             let mut poll=libc::pollfd{fd:pidfd,events:libc::POLLIN,revents:0};
             good &= unsafe{libc::poll(&mut poll,1,0)}==0;
-            good &= unsafe{bind(rights[0],self.launch_target.as_raw_fd(),c"/etc/serverware/native-shadow-guest-launch.json")}
-                && unsafe{bind(rights[1],self.image_target.as_raw_fd(),c"/opt/serverware/native-shadow-custody-runtime.squashfs")};
+            good &= unsafe{bind(rights[0],self.launch_target.as_raw_fd(),c"/etc/catchplate/native-shadow-guest-launch.json")}
+                && unsafe{bind(rights[1],self.image_target.as_raw_fd(),c"/opt/catchplate/native-shadow-custody-runtime.squashfs")};
             // All received sources are duplicated above the destination range
             // before assignment; kernel allocation need not choose high FDs.
             let mut retained=[-1i32;65];
@@ -94,7 +94,7 @@ impl Prepared {
             good &= unsafe{libc::chdir(c"/".as_ptr())}==0 && unsafe{libc::getppid()}==self.parent;
         }
         if good {
-            let argv=[c"serverware-policy-shadow-custody-guest".as_ptr(),std::ptr::null()];
+            let argv=[c"catchplate-policy-shadow-custody-guest".as_ptr(),std::ptr::null()];
             let env:[*const libc::c_char;1]=[std::ptr::null()];
             unsafe{libc::syscall(libc::SYS_execveat,self.executable.as_raw_fd(),c"".as_ptr(),
                 argv.as_ptr(),env.as_ptr(),libc::AT_EMPTY_PATH);}

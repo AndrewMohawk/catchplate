@@ -14,7 +14,7 @@ no slot or key; no repository crypto is imported into this selector. Original
 root ownership, seals, 4 MiB intake, and exact canonical outer JSON checks stay
 in place. Actual root authentication still belongs to child startup admission.
 
-The non-null nested `serverware.controlPlaneOidcSessionActivationRelease/v1`
+The non-null nested `catchplate.controlPlaneOidcSessionActivationRelease/v1`
 object has exactly `schema`, `clientAuthorization`, `serverBootstrap`, and
 `expectedScope`. Each public original is transported as canonical base64url
 with an exact `byteCount`; the independent expected scope is the existing closed

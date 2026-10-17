@@ -18,7 +18,7 @@ import sys
 MODE = "startup-provisioning"
 INPUTS = ("supervisor-inventory", "delegation", "configuration", "recipe",
     "conductor-inventory", "authority-inventory")
-RESULT_API = "serverware.nativePilotStartupProvisioningResult/v1"
+RESULT_API = "catchplate.nativePilotStartupProvisioningResult/v1"
 STATUSES = ("complete-public-provisioning", "failed-cleanup-complete", "cleanup-unknown-owner-retained")
 _CANCELLATION = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}
 
@@ -82,8 +82,8 @@ def main():
             and os.getresuid() == os.getresgid() == (0, 0, 0))
         selected = _arguments(sys.argv[1:])
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from serverware import native_pilot_genesis_parent_control_io as ownership
-        from serverware.native_pilot_startup_provisioning import StartupProvisioner, StartupProvisionerError
+        from catchplate import native_pilot_genesis_parent_control_io as ownership
+        from catchplate.native_pilot_startup_provisioning import StartupProvisioner, StartupProvisionerError
         with ownership.owning():
             try: owner = StartupProvisioner.open(**selected)
             except StartupProvisionerError as error:

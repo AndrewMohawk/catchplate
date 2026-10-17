@@ -1,7 +1,7 @@
 //! One actual generation/snapshot, one signed heartbeat, one durable delivery.
 use super::*;
-use serverware_decision_gate::native_canary_finalization_v1 as wire;
-use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes as ascii;
+use catchplate_decision_gate::native_canary_finalization_v1 as wire;
+use catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes as ascii;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD,Engine as _};
 use ring::rand::{SecureRandom,SystemRandom};
 
@@ -54,7 +54,7 @@ fn checkpoint_owned(state:&GateState,deadline:u64,snapshot:policy_core::NativeAc
         if nonce==[0;32]{return Err("heartbeat zero nonce".into());}
         let opening=snapshot.last_ingress();
         let statement=json!({"apiVersion":wire::SCHEMA,"purpose":wire::PURPOSE,"deploymentId":owner.authority.configuration().deployment_id,
-            "instanceId":scope["instance_id"],"holderId":serverware_decision_gate::native_currentness_v1::holder_id(&signer.boot_id,&signer.key_id)?,
+            "instanceId":scope["instance_id"],"holderId":catchplate_decision_gate::native_currentness_v1::holder_id(&signer.boot_id,&signer.key_id)?,
             "bootId":signer.boot_id,"keyId":signer.key_id,"controlPlaneResponseSigningKeyId":signer.control_plane_response_signing_key_id,
             "policyHash":current.hash,"dataPlaneBinarySha256":state.binary_digest,"purposeAssignmentSha256":purpose,
             "canaryId":canary,"canaryAssignmentSha256":scope["assignment_envelope_digest"],"canaryBootId":scope["boot_id"],
@@ -82,12 +82,12 @@ fn checkpoint_owned(state:&GateState,deadline:u64,snapshot:policy_core::NativeAc
         let original=String::from_utf8(raw).map_err(|_|"heartbeat ASCII")?;
         let mut id=[0u8;16];SystemRandom::new().fill(&mut id).map_err(|_|"heartbeat request entropy")?;id[6]=(id[6]&15)|64;id[8]=(id[8]&63)|128;
         let id=hex::encode(id);let request=format!("{}-{}-{}-{}-{}",&id[..8],&id[8..12],&id[12..16],&id[16..20],&id[20..]);
-        let batch=json!({"apiVersion":"serverware.policyCanaryEvidenceOriginal/v1","requestId":request,"canaryId":canary,"events":[{"kind":"custody","record":record}]});
+        let batch=json!({"apiVersion":"catchplate.policyCanaryEvidenceOriginal/v1","requestId":request,"canaryId":canary,"events":[{"kind":"custody","record":record}]});
         let window_end=scope["windowEndsAtUnixNanos"].as_u64().ok_or("final original window end")?;
         let delay=if observed<window_end {(window_end-observed).min(wire::number(policy,"maximumGapNanos")?/2)}
             else {wire::number(policy,"maximumGapNanos")?/2};
         let next=boot.checked_add(delay).ok_or("final cadence overflow")?;
-        Ok((original,serverware_decision_gate::native_canary_evidence_v1::BatchOriginal::parse(String::from_utf8(ascii(&batch)?).map_err(|_|"heartbeat batch ASCII")?)?,deadline,observed,next))
+        Ok((original,catchplate_decision_gate::native_canary_evidence_v1::BatchOriginal::parse(String::from_utf8(ascii(&batch)?).map_err(|_|"heartbeat batch ASCII")?)?,deadline,observed,next))
     })();
     let (original,batch,deadline,observed,next)=match result{Ok(value)=>value,Err(error)=>{owner.finalization.poisoned=true;return Err(error);}};
     drop(owner);
@@ -136,9 +136,9 @@ pub(crate) fn tick(state:&GateState)->Result<(),String>{
         let mut id=[0u8;16];SystemRandom::new().fill(&mut id).map_err(|_|"final checkpoint entropy")?;
         id[6]=(id[6]&15)|64;id[8]=(id[8]&63)|128;let id=hex::encode(id);
         let request=format!("{}-{}-{}-{}-{}",&id[..8],&id[8..12],&id[12..16],&id[16..20],&id[20..]);
-        let batch=json!({"apiVersion":"serverware.policyCanaryEvidenceOriginal/v1","requestId":request,
+        let batch=json!({"apiVersion":"catchplate.policyCanaryEvidenceOriginal/v1","requestId":request,
             "canaryId":event["record"]["canary_id"],"events":[event]});
-        let batch=serverware_decision_gate::native_canary_evidence_v1::BatchOriginal::parse(
+        let batch=catchplate_decision_gate::native_canary_evidence_v1::BatchOriginal::parse(
             String::from_utf8(ascii(&batch)?).map_err(|_|"final batch ASCII")?)?;
         let complete=native_canary_delivery::submit(state,batch,heartbeat.deadline)?;
         state.policy_shadow.native_cumulative_complete(attempt,&digest,&complete)?;

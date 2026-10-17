@@ -180,7 +180,7 @@ class FixtureReceiptControls(unittest.TestCase):
 
 class ConnectionPolicyContract(unittest.TestCase):
     def test_actual_checker_input_compiles_under_signed_policy_schema(self):
-        from serverware import operator_demo_store as store, policy_bundle
+        from catchplate import operator_demo_store as store, policy_bundle
         captured = {}
 
         class Captured(Exception):
@@ -200,7 +200,7 @@ class ConnectionPolicyContract(unittest.TestCase):
         row.update(id="contract", principal_id="agent:operator-demo:contract",
                    credential_id="credential-contract", token_sha256="sha256:" + "a" * 64,
                    token_expires_at_epoch_ms=4102444800000)
-        with patch("serverware.operator_demo.settings", return_value={"fixture_cidrs": ["172.16.249.18/32"]}):
+        with patch("catchplate.operator_demo.settings", return_value={"fixture_cidrs": ["172.16.249.18/32"]}):
             document = store._build([row], 2, "sha256:" + "b" * 64)
         policy_bundle.compile_policy_bundle(document, validate_schema=True, enforce_signed_policy_constraints=True)
         # The authoritative schema owns Content-Type through the body policy,

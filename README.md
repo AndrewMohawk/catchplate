@@ -1,18 +1,23 @@
 > Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
 
-# Serverware
+# Catchplate
 
 Let applications use your credentials without giving them your credentials.
 
-Serverware is an HTTP(S) proxy for scripts, services, CI jobs and AI agents.
+Catchplate is an HTTP(S) proxy for scripts, services, CI jobs and AI agents.
 Store a provider key or connect an account once, then give each application its
-own scoped Serverware login. The proxy checks its permissions, supplies the
+own scoped Catchplate login. The proxy checks its permissions, supplies the
 provider credential and records the outcome. Supported permissions can also
 restrict response data or require human approval.
 
+**Rename in progress:** the GitHub repository and source are now Catchplate.
+The retained running installation and earlier verification records still use
+Serverware identities; the renamed build, state migration and public cutover
+are not yet verified. See the [rename checklist](docs/catchplate-rename.md).
+
 ## Start here
 
-- **Administrator:** [open the running console](https://serverware.example.com/)
+- **Administrator:** [open the retained console](https://serverware.example.com/)
   with the homelab sign-in, then follow [your first client](docs/wiki/Getting-started.md).
 - **Developer:** already have a private client configuration and CA? Follow the
   [developer quickstart](docs/developer-quickstart.md) to run a matching example.
@@ -30,8 +35,8 @@ The versioned guides above work without a published GitHub Wiki.
 
 | Thing | What it is | Example |
 | --- | --- | --- |
-| Credential | A provider account or key kept in Serverware | GitHub App installation or npm token |
-| Client | Your application, with its own expiring Serverware token | Issue triage worker or release job |
+| Credential | A provider account or key kept in Catchplate | GitHub App installation or npm token |
+| Client | Your application, with its own expiring Catchplate token | Issue triage worker or release job |
 | Permission | What that client may do with a credential | Read issues in one repository |
 
 To save a key: **Credentials → choose provider → paste key → Save credential**.
@@ -66,7 +71,7 @@ unrestricted access to every endpoint a provider offers.
 | A reviewed AWS ECR image publication | [ECR workflow](docs/operator-ecr-publication.md) |
 
 Dependency installation happens once in the example project, before supplying
-its private configuration. The configuration contains a Serverware client
+its private configuration. The configuration contains a Catchplate client
 token, not the upstream credential: keep it out of Git, prompts and logs.
 TLS verification stays enabled; use the downloaded CA in the intended client.
 Posting, publishing and other actions require explicit inputs and confirmation.
@@ -87,7 +92,8 @@ Posting, publishing and other actions require explicit inputs and confirmation.
   disconnect accounts and recover uncertain saves without accidental retries.
 
 The console and forward proxy have different addresses. The running proxy is
-`https://serverware-proxy.example.com/`; use the configuration downloaded
+`https://serverware-proxy.example.com/` until the verified Catchplate cutover;
+use the configuration downloaded
 from the console, not the console address, in your client.
 
 ## Current scope and trust
@@ -114,13 +120,14 @@ remaining real-provider work.
 ## Self-hosting and contributing
 
 The running instance is available now. A new
-[standalone installer](docker/serverware-standalone/README.md) packages
+[standalone installer](docker/catchplate-standalone/README.md) packages
 the app, proxy and authenticated TLS edge without homelab dependencies.
-**Isolated installation and lifecycle verified:** both build paths and fresh
+**Pre-rename isolated installation and lifecycle verified:** both build paths and fresh
 starts passed, with separate browser, persisted-state restart and TLS replacement
-checks. Public deployment and real-provider use remain separate. See the [verification record](docs/standalone-installation-verification.md)
+checks. The renamed package still needs its own verification; public deployment
+and real-provider use remain separate. See the [verification record](docs/standalone-installation-verification.md)
 and [self-hosting/activation guide](docs/self-hosting.md).
-The [retained deployment](docker/serverware-operator-demo/README.md)
+The [retained deployment](docker/catchplate-operator-demo/README.md)
 records the existing instance and is **not** a new-install command.
 Do not apply its state paths, identity or credentials to another installation.
 The older [development reference](docs/development-reference.md) covers a

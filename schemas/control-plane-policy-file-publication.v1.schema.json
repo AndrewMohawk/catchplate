@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/control-plane-policy-file-publication.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/control-plane-policy-file-publication.v1.schema.json",
   "title": "Committed policy file materialization and explicit interruption resolution",
   "description": "Data-only closed HTTP shapes. Actual signed policy originals, current committed authority, physical WebAuthn, distinct actors, definite commits, protected file identities and nonrenewing deadlines are verified by retained source owners, not this schema. No activation, signing, high-water advance or retry permission.",
   "anyOf": [
@@ -19,7 +19,7 @@
     "mfa": {
       "type": "object", "additionalProperties": false, "required": ["publicationProfile", "assertion"],
       "properties": {
-        "publicationProfile": {"const": "serverware.policyFileApprovalOptions/v1"},
+        "publicationProfile": {"const": "catchplate.policyFileApprovalOptions/v1"},
         "assertion": {"$ref": "#/$defs/assertion"},
         "approvalId": {"$ref": "#/$defs/approvalId"}
       },
@@ -69,7 +69,7 @@
     "optionsRequest": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "action", "resourceId", "payloadDigest", "request"],
       "properties": {
-        "apiVersion": {"const": "serverware.policyFileApprovalOptions/v1"},
+        "apiVersion": {"const": "catchplate.policyFileApprovalOptions/v1"},
         "action": {"enum": ["policy.file.materialize", "policy.file.genesis.materialize", "policy.file.resolve"]},
         "resourceId": {"const": "active-policy-file"}, "payloadDigest": {"$ref": "#/$defs/digest"},
         "request": {"$ref": "#/$defs/binding"},
@@ -78,14 +78,14 @@
       "description": "POST dedicated policy-file options route. Source checks action against binding kind. Absent/null approvalId selects request; actual actor and selected row determine decide versus consume."
     },
     "optionsResponse": {
-      "type": "object", "additionalProperties": false, "required": ["publicKey", "serverware"],
+      "type": "object", "additionalProperties": false, "required": ["publicKey", "catchplate"],
       "properties": {
         "publicKey": {"$ref": "control-plane-publication-approval.v1.schema.json#/$defs/optionsResponse/properties/publicKey"},
-        "serverware": {
+        "catchplate": {
           "type": "object", "additionalProperties": false,
           "required": ["schema", "operation", "operationId", "challengeId", "credentialRecordId", "payloadDigest", "expiresAt"],
           "properties": {
-            "schema": {"const": "serverware.policyFileApprovalOptions/v1"},
+            "schema": {"const": "catchplate.policyFileApprovalOptions/v1"},
             "operation": {"enum": ["policy-file-approval.request", "policy-file-approval.decide", "policy-file-approval.consume"]},
             "operationId": {"$ref": "#/$defs/digest"}, "challengeId": {"$ref": "#/$defs/digest"},
             "credentialRecordId": {"type": "string", "minLength": 1, "maxLength": 256},
@@ -99,7 +99,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "ok", "publicationId", "completionSha256", "outcome", "automaticRetryAllowed"],
       "properties": {
-        "schema": {"const": "serverware.policyFilePublicationResult/v1"}, "ok": {"const": true},
+        "schema": {"const": "catchplate.policyFilePublicationResult/v1"}, "ok": {"const": true},
         "publicationId": {"$ref": "#/$defs/id"}, "completionSha256": {"$ref": "#/$defs/digest"},
         "outcome": {"enum": ["materialized", "finalize-installed", "abandon-uninstalled"]}, "automaticRetryAllowed": {"const": false}
       }
@@ -108,7 +108,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "fileSha256", "automaticRetryAllowed", "incompletePublicationId", "terminalSha256", "attempts", "terminalMatches"],
       "properties": {
-        "schema": {"const": "serverware.policyFilePublicationObservation/v1"}, "fileSha256": {"$ref": "#/$defs/nullableDigest"},
+        "schema": {"const": "catchplate.policyFilePublicationObservation/v1"}, "fileSha256": {"$ref": "#/$defs/nullableDigest"},
         "automaticRetryAllowed": {"const": false},
         "incompletePublicationId": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
         "terminalSha256": {"$ref": "#/$defs/nullableDigest"}, "terminalMatches": {"type": "boolean"},

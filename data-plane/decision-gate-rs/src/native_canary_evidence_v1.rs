@@ -8,10 +8,10 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
-pub const SCHEMA: &str = "serverware.nativeCanaryEvidenceIntakeStatement/v1";
-pub const BATCH_SCHEMA: &str = "serverware.policyCanaryEvidenceOriginal/v1";
-pub const HTTP_SCHEMA: &str = "serverware.policyCanaryControlledEvidence/v1";
-pub const ATTESTATION_DOMAIN: &[u8] = b"serverware/canary-evidence-intake-attestation/v1\0";
+pub const SCHEMA: &str = "catchplate.nativeCanaryEvidenceIntakeStatement/v1";
+pub const BATCH_SCHEMA: &str = "catchplate.policyCanaryEvidenceOriginal/v1";
+pub const HTTP_SCHEMA: &str = "catchplate.policyCanaryControlledEvidence/v1";
+pub const ATTESTATION_DOMAIN: &[u8] = b"catchplate/canary-evidence-intake-attestation/v1\0";
 pub const INTAKE_PATH: &str = "/api/data-plane/policy-canary/controlled-evidence";
 pub const INSPECT_PATH: &str = "/api/data-plane/policy-canary/controlled-evidence/inspect";
 pub const MAX_ORIGINAL: usize = 1024 * 1024;
@@ -32,7 +32,7 @@ pub fn component(value: &str) -> bool {
 }
 pub fn workload_uri(deployment: &str, instance: &str) -> Result<String, String> {
     if !component(deployment) || !component(instance) { return Err("canary workload components".into()); }
-    Ok(format!("spiffe://serverware.policy-canary/{deployment}/{instance}"))
+    Ok(format!("spiffe://catchplate.policy-canary/{deployment}/{instance}"))
 }
 fn text(value: &str) -> bool {
     !value.is_empty() && value.chars().count() <= 256 && value.trim() == value
@@ -172,7 +172,7 @@ impl PreparedEvidence {
         self.check(tls, self.deadline)?;
         let envelope = serde_json::json!({"statement":self.statement,
             "signature":format!("ed25519:{}", URL_SAFE_NO_PAD.encode(signature)),
-            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence":{"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1",
                 "responseProofPublicKey":URL_SAFE_NO_PAD.encode(public_key),"attestationDocumentB64":URL_SAFE_NO_PAD.encode(quote)},
             "clientCertificateDerBase64Url":URL_SAFE_NO_PAD.encode(tls.certificate_der())});
         if canonical_ascii_bytes(&envelope)?.len() > MAX_EVIDENCE { return Err("canary evidence bound".into()); }

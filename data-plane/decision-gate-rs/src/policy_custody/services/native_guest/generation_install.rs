@@ -25,7 +25,7 @@ use crate::policy_shadow::policy_custody::protocol::domain_separated_signature_p
 #[path="generation_store.rs"] mod store;
 #[path="generation_history.rs"] mod history;
 use services::generation_recovery as recovery;
-const DOMAIN:&str="serverware.nativeGenerationCoordinatorAssignment.signature/v1";
+const DOMAIN:&str="catchplate.nativeGenerationCoordinatorAssignment.signature/v1";
 // Same independently inspected complete-original cap as the fixed proof peers.
 pub(in crate::policy_shadow::policy_custody::services) const MAX_CONFIGURATION:usize=super::ordinary_histories::MAX_CONFIGURATION;
 #[derive(Serialize,Deserialize)]
@@ -45,16 +45,16 @@ struct Payload {
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(crate) struct Configuration {payload:Payload,signature:CanonicalEd25519Signature}
 impl Configuration {
-    fn journal_limits(&self)->Result<store::Limits,ShadowError>{self.domain()?;Ok(if self.payload.api_version=="serverware.nativeGenerationCoordinatorAssignment/v2"{
+    fn journal_limits(&self)->Result<store::Limits,ShadowError>{self.domain()?;Ok(if self.payload.api_version=="catchplate.nativeGenerationCoordinatorAssignment/v2"{
         store::Limits::EmbeddedHistories
     }else{store::Limits::Legacy})}
     fn domain(&self)->Result<&'static str,ShadowError>{match self.payload.api_version.as_str(){
-        "serverware.nativeGenerationCoordinatorAssignment/v1"=>Ok(DOMAIN),
-        "serverware.nativeGenerationCoordinatorAssignment/v2"=>Ok("serverware.nativeGenerationCoordinatorAssignment.signature/v2"),
+        "catchplate.nativeGenerationCoordinatorAssignment/v1"=>Ok(DOMAIN),
+        "catchplate.nativeGenerationCoordinatorAssignment/v2"=>Ok("catchplate.nativeGenerationCoordinatorAssignment.signature/v2"),
         _=>Err(ShadowError::BindingDrift),
     }}
     pub(in crate::policy_shadow::policy_custody::services) fn validate_shape(&self)->Result<(),ShadowError>{
-        self.domain()?;let p=&self.payload;let successor=p.api_version=="serverware.nativeGenerationCoordinatorAssignment/v2";
+        self.domain()?;let p=&self.payload;let successor=p.api_version=="catchplate.nativeGenerationCoordinatorAssignment/v2";
         require(p.purpose=="native-generation-installation"
             && p.guest.service_role=="production-bridge" && p.expected_peer.uid!=0 && p.expected_peer.gid!=0
             && p.expected_peer.uid!=p.guest.uid && p.services.keys().copied().collect::<BTreeSet<_>>()==services::generation_service_client::roles()
@@ -178,7 +178,7 @@ fn preparation_root(p:&Preparation)->Result<Sha256Digest,ShadowError>{
         &p.bounded_cleanup_prepare_receipt_sha256,&p.current_signature_prepare_receipt_sha256)
 }
 fn preparation_digest(p:&Preparation)->Result<Sha256Digest,ShadowError>{
-    Ok(hash_domain_frames(b"serverware.policyShadowCustodyGenerationPreparationReceipt/v1",&[&canonical_json_bytes(&(
+    Ok(hash_domain_frames(b"catchplate.policyShadowCustodyGenerationPreparationReceipt/v1",&[&canonical_json_bytes(&(
         &p.transition_id_sha256,preparation_root(p)?,&p.durable_intent_receipt_sha256,&p.driver_generation_receipt_sha256,
         p.prepared_at_boottime_nanos,p.commit_deadline_boottime_nanos))?]))
 }
@@ -240,13 +240,13 @@ impl Service {
             };
             self.poisoned=false;self.check(keys,trust,time)?;check()?;
             let local=&keys.keys[&AuthorityRole::CustodyResultEnvelope];
-            let result_sha256=hash_domain_frames(b"serverware.policyCustodyProductionAuthorityEndpointResponse/v4",&[&canonical_json_bytes(&result)?]);
+            let result_sha256=hash_domain_frames(b"catchplate.policyCustodyProductionAuthorityEndpointResponse/v4",&[&canonical_json_bytes(&result)?]);
             let mut reply=Reply{api_version:PRODUCTION_AUTHORITY_ENDPOINT_PROTOCOL_VERSION.into(),endpoint:request.endpoint,
                 request_sha256:request.request_sha256.clone(),replay_id_sha256:request.replay_id_sha256.clone(),completed_at_boottime_nanos:guest::now()?,
                 authority_key_id:local.binding.key_id.clone(),authority_key_spki_sha256:local.binding.key_spki_sha256.clone(),
                 result,result_sha256,signature_base64:String::new()};
             require(reply.completed_at_boottime_nanos<request.deadline_boottime_nanos)?;
-            let preimage=domain_separated_signature_preimage(b"serverware.policyCustodyProductionAuthorityEndpointSignature/v4",
+            let preimage=domain_separated_signature_preimage(b"catchplate.policyCustodyProductionAuthorityEndpointSignature/v4",
                 &reply.signature_payload().map_err(fail)?).map_err(fail)?;
             reply.signature_base64=URL_SAFE_NO_PAD.encode(local.key.sign(&preimage).to_bytes());
             let raw=services::common::encode_canonical_frame(&reply).map_err(fail)?;
@@ -297,7 +297,7 @@ impl Service {
         let five_service_receipts_root_sha256=production_custody_five_service_receipts_root(&durable_recovery_store_receipt_sha256,
             &cleanup_authorization_receipt_sha256,&recovery_target_receipt_sha256,&bounded_cleanup_receipt_sha256,&current_signature_receipt_sha256)?;
         let preparation_receipt_sha256=preparation_digest(&preparation)?;
-        let durable_commit_receipt_sha256=hash_domain_frames(b"serverware.policyShadowCustodyGenerationCommit/v1",&[&canonical_json_bytes(&(
+        let durable_commit_receipt_sha256=hash_domain_frames(b"catchplate.policyShadowCustodyGenerationCommit/v1",&[&canonical_json_bytes(&(
             &preparation.transition_id_sha256,&preparation_receipt_sha256,&five_service_receipts_root_sha256,&key_history.historical_key_chain_root_sha256))?]);
         let payload=ProductionCustodyGenerationInstallReceiptPayload{
             transition_id_sha256:preparation.transition_id_sha256.clone(),preparation_receipt_sha256,
@@ -315,7 +315,7 @@ impl Service {
             bounded_cleanup_receipt_sha256,current_signature_receipt_sha256,five_service_receipts_root_sha256,
             issued_at_unix_nanos:install_context.issued_at_unix_nanos,expires_at_unix_nanos:install_context.expires_at_unix_nanos};
         payload.validate_intrinsic()?;
-        Ok(InstallMaterial{api_version:"serverware.nativeGenerationInstallMaterial/v1".into(),request:request.clone(),services:replies.clone(),payload})
+        Ok(InstallMaterial{api_version:"catchplate.nativeGenerationInstallMaterial/v1".into(),request:request.clone(),services:replies.clone(),payload})
     }
     fn propose(&mut self,request:&Generation,replies:&Replies,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,
         time:&dyn TrustedTime)->Result<Proposal,ShadowError>{
@@ -358,7 +358,7 @@ impl Service {
                 self.request_scope(&self.prepared.as_ref().ok_or(ShadowError::BindingDrift)?.0,keys,trust,time)?;
                 // This settles only the exact cold-generation admission. It is
                 // not process termination or cleanup/lifetime settlement.
-                let material=AbortMaterial{api_version:"serverware.nativeGenerationAbortMaterial/v1".into(),request:request.clone(),
+                let material=AbortMaterial{api_version:"catchplate.nativeGenerationAbortMaterial/v1".into(),request:request.clone(),
                     services:replies.clone(),observed_at_boottime_nanos:prepared_at_boottime_nanos};
                 let settled=self.persist(&material,keys,trust,time,deadline)?;self.abort_material=Some(material);
                 let result=ProductionGenerationAbortResultWireV4{transition_id_sha256:request.transition_id_sha256().clone(),
@@ -382,7 +382,7 @@ impl Service {
         let deadline=conclusion.certification.deadline();
         self.members_match(&conclusion.certification.proposal().map_err(fail)?.request,
             &conclusion.certification.proposal().map_err(fail)?.services,false)?;
-        let completed=Completed{api_version:"serverware.nativeGenerationCoordinatorCompleted/v1".into(),conclusion:conclusion.clone(),response:response.clone()};
+        let completed=Completed{api_version:"catchplate.nativeGenerationCoordinatorCompleted/v1".into(),conclusion:conclusion.clone(),response:response.clone()};
         self.persist(&completed,keys,trust,time,deadline)?;self.accept_completion(completed)?;Ok(response)
     }
     fn check(&self,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
@@ -399,7 +399,7 @@ impl Service {
             bounded_cleanup_helper:self.members[&Role::BoundedCleanupHelper].history()}
     }
     fn members_match(&self,request:&Generation,replies:&Replies,retained:bool)->Result<(),ShadowError>{
-        require(replies.api_version=="serverware.custodyGenerationServicesResult/v1"
+        require(replies.api_version=="catchplate.custodyGenerationServicesResult/v1"
             && replies.request_sha256==request.request_sha256().map_err(fail)?
             && replies.services.keys().copied().collect::<BTreeSet<_>>()==services::generation_service_client::roles())?;
         for (role,exchange) in &replies.services {
@@ -425,7 +425,7 @@ impl Service {
         require(trust.current_checkpoint()?==checkpoint)
     }
     fn conclusion(&self,conclusion:&Conclude)->Result<Completion,ShadowError>{
-        require(conclusion.api_version=="serverware.nativeGenerationCoordinatorConclusion/v1"
+        require(conclusion.api_version=="catchplate.nativeGenerationCoordinatorConclusion/v1"
             && conclusion.certificates.keys().copied().collect::<BTreeSet<_>>()==services::generation_service_client::roles())?;
         let proposal=conclusion.certification.proposal().map_err(fail)?;
         require(self.pending.as_ref()==Some(proposal))?;
@@ -439,7 +439,7 @@ impl Service {
         let mut transitions=Vec::new();
         for (role,certificate) in &conclusion.certificates {
             let (_,effect)=conclusion.certification.local(*role).map_err(fail)?;
-            require(certificate.api_version=="serverware.custodyServiceGenerationCertified/v1"
+            require(certificate.api_version=="catchplate.custodyServiceGenerationCertified/v1"
                 && certificate.certification_command_sha256==command_sha256
                 && certificate.local_effect_sha256==Sha256Digest::compute(&canonical_json_bytes(effect)?)
                 && certificate.transition.authority_epoch==self.members[role].history().current_epoch().map_err(fail)?.epoch_reference())?;
@@ -456,7 +456,7 @@ impl Service {
     }
     fn accept_completion(&mut self,completed:Completed)->Result<(),ShadowError>{
         let expected=self.conclusion(&completed.conclusion)?;
-        require(completed.api_version=="serverware.nativeGenerationCoordinatorCompleted/v1" && completed.response==expected)?;
+        require(completed.api_version=="catchplate.nativeGenerationCoordinatorCompleted/v1" && completed.response==expected)?;
         let proposal=self.pending.take().ok_or(ShadowError::BindingDrift)?;
         if proposal.request.transition()==Transition::Prepare {
             require(self.prepared.is_none() && self.completed.is_none())?;
@@ -471,7 +471,7 @@ impl Service {
         for original in originals {
             let value:serde_json::Value=guest::exact(original.as_bytes())?;
             if matches!(value.get("payload").and_then(|v|v.get("apiVersion")).and_then(|v|v.as_str()),
-                Some("serverware.nativeGenerationCoordinatorAssignment/v1"|"serverware.nativeGenerationCoordinatorAssignment/v2")) {
+                Some("catchplate.nativeGenerationCoordinatorAssignment/v1"|"catchplate.nativeGenerationCoordinatorAssignment/v2")) {
                 require(self.history_authority.is_none() && self.pending.is_none() && self.prepared.is_none())?;
                 let authority:Configuration=guest::exact(original.as_bytes())?;authority.verify(keys,trust,time)?;
                 require(canonical_json_bytes(&authority.payload.services)?==canonical_json_bytes(&self.configuration.payload.services)?
@@ -504,7 +504,7 @@ impl Service {
                         && wire.aborted_at_boottime_nanos==material.observed_at_boottime_nanos)?;
                 }
                 self.pending=Some(proposal);
-            }else if value.get("apiVersion").and_then(|v|v.as_str())==Some("serverware.nativeGenerationAbortMaterial/v1") {
+            }else if value.get("apiVersion").and_then(|v|v.as_str())==Some("catchplate.nativeGenerationAbortMaterial/v1") {
                 require(self.abort_material.is_none() && self.material.is_none() && self.pending.is_none()
                     && self.prepared.is_some() && self.completed.is_none())?;
                 let material:AbortMaterial=guest::exact(original.as_bytes())?;
@@ -512,7 +512,7 @@ impl Service {
                     && material.observed_at_boottime_nanos<material.request.deadline_boottime_nanos())?;
                 self.require_preparation(&material.request)?;self.members_match(&material.request,&material.services,true)?;
                 self.abort_material=Some(material);
-            }else if value.get("apiVersion").and_then(|v|v.as_str())==Some("serverware.nativeGenerationInstallMaterial/v1") {
+            }else if value.get("apiVersion").and_then(|v|v.as_str())==Some("catchplate.nativeGenerationInstallMaterial/v1") {
                 require(self.material.is_none() && self.pending.is_none() && self.prepared.is_some() && self.completed.is_none())?;
                 let material:InstallMaterial=guest::exact(original.as_bytes())?;
                 self.members_match(&material.request,&material.services,true)?;

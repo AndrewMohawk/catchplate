@@ -98,7 +98,7 @@ pub(super) fn run(mut prepared:Prepared,identity:driver_identity::Owner,
     let (path,digest)=selected.verifier_transport.retained_selected_pin(verifier_role)?;
     let verifier=original(&mut rights,"verifier",&Pin{path:path.into(),sha256:digest.clone()},0,0,32768)?;
     require(rights.is_empty())?;
-    let notice=canonical_json_bytes(&serde_json::json!({"apiVersion":"serverware.nativeShadowDriverPhaseTwoRetained/v1",
+    let notice=canonical_json_bytes(&serde_json::json!({"apiVersion":"catchplate.nativeShadowDriverPhaseTwoRetained/v1",
         "observationSha256":Sha256Digest::compute(&canonical_json_bytes(&retained.observation)?),
         "scopeSha256":Sha256Digest::compute(retained.phase.scope())}))?;
     require(retrieval_peer::send(retained.prepared.channel.as_fd(),&notice,&[])?)?;

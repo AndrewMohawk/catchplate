@@ -13,7 +13,7 @@ enum Purpose { Unbound, Setup }
 /// Reconnect arrives with the original signed family fence. It never creates
 /// an issuance/Setup draft or sends private callback correlation to the portal.
 pub(super) fn reconnect_page(portal_origin:&str)->Result<(Vec<u8>,String),String>{
-    serverware_decision_gate::native_oauth_reconnect_v1::origin(portal_origin)?;
+    catchplate_decision_gate::native_oauth_reconnect_v1::origin(portal_origin)?;
     let script=r#"'use strict';
 const need=v=>{if(!v)throw new Error('Native reconnect unavailable; no automatic retry.');};
 function decode(s){need(typeof s==='string'&&s.length>0&&s.length<=11184811&&/^[A-Za-z0-9_-]+$/.test(s));const b=atob(s.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-s.length%4)%4));need(b.length<=8*1024*1024);return new TextDecoder('utf-8',{fatal:true}).decode(Uint8Array.from(b,c=>c.charCodeAt(0)));}
@@ -28,7 +28,7 @@ document.getElementById('continue').onclick=async()=>{
     const reply=await fetch('/oauth/begin',{method:'POST',credentials:'same-origin',redirect:'error',cache:'no-store',headers:{'Content-Type':'application/json'},body:raw,signal:AbortSignal.timeout(30000)});
     need(reply.status===200&&reply.headers.get('content-type')==='application/json');
     const text=await reply.text();need(new TextEncoder().encode(text).length<=64*1024);
-    const result=JSON.parse(text);need(Object.keys(result).sort().join(',')==='apiVersion,exchangeId,location'&&result.apiVersion==='serverware.nativeOAuthReconnectAuthorizationRedirect/v1');
+    const result=JSON.parse(text);need(Object.keys(result).sort().join(',')==='apiVersion,exchangeId,location'&&result.apiVersion==='catchplate.nativeOAuthReconnectAuthorizationRedirect/v1');
     const url=new URL(result.location);need(url.protocol==='https:'&&!url.username&&!url.password&&!url.hash&&!url.port
       &&((url.hostname==='accounts.google.com'&&url.pathname==='/o/oauth2/v2/auth')||(url.hostname==='twitter.com'&&url.pathname==='/i/oauth2/authorize')));
     location.assign(url.href);
@@ -37,14 +37,14 @@ document.getElementById('continue').onclick=async()=>{
 "#;
     let hash=STANDARD.encode(Sha256::digest(script.as_bytes()));
     let csp=format!("default-src 'none'; script-src 'sha256-{hash}'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
-    let html=format!("<!doctype html><meta charset=utf-8><title>Serverware confidential reconnect</title><h1>Reconnect the authorized provider account</h1><p>The original family authorization and fence are checked before consent. The callback and private browser correlation stay at this native origin.</p><button id=continue type=button>Continue once</button><p id=status></p><script>{script}</script>");
+    let html=format!("<!doctype html><meta charset=utf-8><title>Catchplate confidential reconnect</title><h1>Reconnect the authorized provider account</h1><p>The original family authorization and fence are checked before consent. The callback and private browser correlation stay at this native origin.</p><button id=continue type=button>Continue once</button><p id=status></p><script>{script}</script>");
     Ok((html.into_bytes(),csp))
 }
 
 /// The immutable grant and full signed fence precede every historical contact
 /// and fresh PKCE value. A lost browser response is observation-only recovery.
 pub(super) fn succession_page(portal_origin:&str)->Result<(Vec<u8>,String),String>{
-    serverware_decision_gate::native_oauth_succession_v1::origin(portal_origin)?;
+    catchplate_decision_gate::native_oauth_succession_v1::origin(portal_origin)?;
     let script=r#"'use strict';
 const need=v=>{if(!v)throw new Error('Native succession unavailable; no automatic retry.');};
 function decode(s){need(typeof s==='string'&&s.length>0&&s.length<=11184811&&/^[A-Za-z0-9_-]+$/.test(s));const b=atob(s.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-s.length%4)%4));need(b.length<=8*1024*1024);return new TextDecoder('utf-8',{fatal:true}).decode(Uint8Array.from(b,c=>c.charCodeAt(0)));}
@@ -60,11 +60,11 @@ document.getElementById('continue').onclick=async()=>{
     need(reply.status===200&&reply.headers.get('content-type')==='application/json');
     const text=await reply.text();need(new TextEncoder().encode(text).length<=64*1024);
     const result=JSON.parse(text);
-    if(result.apiVersion==='serverware.nativeOAuthSuccessionTerminalObservation/v1'){
+    if(result.apiVersion==='catchplate.nativeOAuthSuccessionTerminalObservation/v1'){
       need(Object.keys(result).sort().join(',')==='apiVersion,exchangeId,status'&&['retirement-rejected','retirement-unknown'].includes(result.status));
       document.getElementById('status').textContent='Historical retirement did not complete. The scope remains fenced; no fresh consent or retry is authorized. Inspect the retained operation in the control-plane portal.';return;
     }
-    need(Object.keys(result).sort().join(',')==='apiVersion,exchangeId,location'&&result.apiVersion==='serverware.nativeOAuthSuccessionAuthorizationRedirect/v1');
+    need(Object.keys(result).sort().join(',')==='apiVersion,exchangeId,location'&&result.apiVersion==='catchplate.nativeOAuthSuccessionAuthorizationRedirect/v1');
     const url=new URL(result.location);need(url.protocol==='https:'&&!url.username&&!url.password&&!url.hash&&!url.port
       &&((url.hostname==='accounts.google.com'&&url.pathname==='/o/oauth2/v2/auth')||(url.hostname==='twitter.com'&&url.pathname==='/i/oauth2/authorize')));
     location.assign(url.href);
@@ -73,17 +73,17 @@ document.getElementById('continue').onclick=async()=>{
 "#;
     let hash=STANDARD.encode(Sha256::digest(script.as_bytes()));
     let csp=format!("default-src 'none'; script-src 'sha256-{hash}'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
-    let html=format!("<!doctype html><meta charset=utf-8><title>Serverware retired-scope succession</title><h1>Continue the authorized retired scope once</h1><p>The full signed fence and exact historical material are verified first. Only accepted retirement closure permits fresh same-account consent. Credentials and private browser correlation stay inside the measured helper.</p><button id=continue type=button>Continue once</button><p id=status></p><script>{script}</script>");
+    let html=format!("<!doctype html><meta charset=utf-8><title>Catchplate retired-scope succession</title><h1>Continue the authorized retired scope once</h1><p>The full signed fence and exact historical material are verified first. Only accepted retirement closure permits fresh same-account consent. Credentials and private browser correlation stay inside the measured helper.</p><button id=continue type=button>Continue once</button><p id=status></p><script>{script}</script>");
     Ok((html.into_bytes(),csp))
 }
 
 fn render(authorize:bool,portal_origin:&str,purpose:Purpose)->Result<(Vec<u8>,String),String>{
-    serverware_decision_gate::native_oauth_exchange_v1::origin(portal_origin)?;
+    catchplate_decision_gate::native_oauth_exchange_v1::origin(portal_origin)?;
     let portal=serde_json::to_string(portal_origin).map_err(|_|"native portal origin encoding")?;
     let action=if authorize {"authorize"} else {"begin"};
     let (fragment, redirect_schema) = match purpose {
-        Purpose::Unbound => ("nativeOAuthDraft", "serverware.nativeOAuthAuthorizationRedirect/v1"),
-        Purpose::Setup => ("nativeOAuthSetupDraft", "serverware.nativeOAuthSetupAuthorizationRedirect/v1"),
+        Purpose::Unbound => ("nativeOAuthDraft", "catchplate.nativeOAuthAuthorizationRedirect/v1"),
+        Purpose::Setup => ("nativeOAuthSetupDraft", "catchplate.nativeOAuthSetupAuthorizationRedirect/v1"),
     };
     let script=format!(r#"'use strict';
 const portal={portal},action='{action}';
@@ -112,14 +112,14 @@ document.getElementById('continue').onclick=async()=>{{
 "#);
     let hash=STANDARD.encode(Sha256::digest(script.as_bytes()));
     let csp=format!("default-src 'none'; script-src 'sha256-{hash}'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
-    let html=format!("<!doctype html><meta charset=utf-8><title>Serverware confidential consent</title><h1>Confidential provider consent</h1><p>The provider callback and private browser correlation stay at this independently trusted native origin.</p><button id=continue type=button>Continue once</button><p id=status></p><script>{script}</script>");
+    let html=format!("<!doctype html><meta charset=utf-8><title>Catchplate confidential consent</title><h1>Confidential provider consent</h1><p>The provider callback and private browser correlation stay at this independently trusted native origin.</p><button id=continue type=button>Continue once</button><p id=status></p><script>{script}</script>");
     Ok((html.into_bytes(),csp))
 }
 
 pub(super) fn terminal(status:&str,portal_origin:&str)->Result<Vec<u8>,String>{
-    serverware_decision_gate::native_oauth_exchange_v1::origin(portal_origin)?;
+    catchplate_decision_gate::native_oauth_exchange_v1::origin(portal_origin)?;
     if !matches!(status,"staged"|"observed-staged"|"cancelled"|"captured-unusable") {return Err("native result status differs".to_owned());}
     // Origin validation excludes markup and non-HTTPS navigation. No private
     // callback values, provider error bodies or credentials reach this page.
-    Ok(format!("<!doctype html><meta charset=utf-8><title>Serverware consent status</title><h1>Consent status: {status}</h1><p>This is not credential activation or a retry grant.</p><a href=\"{portal_origin}/\" rel=noreferrer>Return to the control-plane portal</a>").into_bytes())
+    Ok(format!("<!doctype html><meta charset=utf-8><title>Catchplate consent status</title><h1>Consent status: {status}</h1><p>This is not credential activation or a retry grant.</p><a href=\"{portal_origin}/\" rel=noreferrer>Return to the control-plane portal</a>").into_bytes())
 }

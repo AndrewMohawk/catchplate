@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 
 export const REGISTRY = 'https://registry.npmjs.org/';
-export const PUBLIC_NPM_DUMMY = 'serverware-npm-placeholder-v1';
+export const PUBLIC_NPM_DUMMY = 'catchplate-npm-placeholder-v1';
 export const VERSIONS = Object.freeze({ npm: '11.21.1', pacote: '21.5.1', 'npm-registry-fetch': '19.1.1' });
 export const OPERATIONS = new Set(['view', 'manifest', 'publish', 'install', 'ci']);
 export const isInstallation = operation => operation === 'install' || operation === 'ci';
@@ -25,33 +25,33 @@ function required(env, name, max = 4096) {
 export function configuration(env, operation = 'view') {
   requireValue(OPERATIONS.has(operation));
   requireValue(env.NODE_TLS_REJECT_UNAUTHORIZED === undefined || env.NODE_TLS_REJECT_UNAUTHORIZED === '1');
-  const proxy = new URL(required(env, 'SERVERWARE_PROXY_URL'));
+  const proxy = new URL(required(env, 'CATCHPLATE_PROXY_URL'));
   requireValue(proxy.protocol === 'https:' && proxy.hostname && !proxy.username && !proxy.password
     && proxy.pathname === '/' && !proxy.search && !proxy.hash);
-  const applicationId = required(env, 'SERVERWARE_APP_ID', 36);
+  const applicationId = required(env, 'CATCHPLATE_APP_ID', 36);
   requireValue(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(applicationId));
-  const token = required(env, 'SERVERWARE_PROXY_TOKEN');
+  const token = required(env, 'CATCHPLATE_PROXY_TOKEN');
   requireValue(/^[A-Za-z0-9_-]+$/.test(token));
-  const packageName = required(env, 'SERVERWARE_NPM_PACKAGE', 214);
+  const packageName = required(env, 'CATCHPLATE_NPM_PACKAGE', 214);
   requireValue(NAME.test(packageName));
   const config = { operation, proxyUrl: proxy.origin, applicationId, token, packageName,
-    caFile: required(env, 'SERVERWARE_CA_FILE'),
-    proxyCaFile: env.SERVERWARE_PROXY_CA_FILE ? required(env, 'SERVERWARE_PROXY_CA_FILE') : null };
+    caFile: required(env, 'CATCHPLATE_CA_FILE'),
+    proxyCaFile: env.CATCHPLATE_PROXY_CA_FILE ? required(env, 'CATCHPLATE_PROXY_CA_FILE') : null };
   if (operation !== 'view') {
-    config.version = required(env, 'SERVERWARE_NPM_VERSION', 128);
+    config.version = required(env, 'CATCHPLATE_NPM_VERSION', 128);
     requireValue(VERSION.test(config.version));
   }
   if (operation === 'publish') {
-    config.tag = required(env, 'SERVERWARE_NPM_TAG', 64);
+    config.tag = required(env, 'CATCHPLATE_NPM_TAG', 64);
     requireValue(/^[a-z][a-z0-9._-]{0,63}$/.test(config.tag));
-    config.tarball = required(env, 'SERVERWARE_NPM_TARBALL');
-    config.tarballSha256 = required(env, 'SERVERWARE_NPM_TARBALL_SHA256', 64);
+    config.tarball = required(env, 'CATCHPLATE_NPM_TARBALL');
+    config.tarballSha256 = required(env, 'CATCHPLATE_NPM_TARBALL_SHA256', 64);
     requireValue(/^[0-9a-f]{64}$/.test(config.tarballSha256)
-      && env.SERVERWARE_NPM_PUBLISH_CONFIRM === 'publish-publicly');
+      && env.CATCHPLATE_NPM_PUBLISH_CONFIRM === 'publish-publicly');
   }
   if (isInstallation(operation)) {
-    config.project = required(env, 'SERVERWARE_NPM_PROJECT');
-    config.output = required(env, 'SERVERWARE_NPM_OUTPUT');
+    config.project = required(env, 'CATCHPLATE_NPM_PROJECT');
+    config.output = required(env, 'CATCHPLATE_NPM_OUTPUT');
     requireValue([config.project, config.output].every(value => isAbsolute(value)
       && resolve(value) === value && value !== '/') && config.project !== config.output
       && !config.output.startsWith(config.project + '/'));
@@ -64,8 +64,8 @@ export function npmConfiguration(config) {
   return [
     'registry=' + REGISTRY,
     '//registry.npmjs.org/:_authToken=' + PUBLIC_NPM_DUMMY,
-    'https-proxy=https://' + config.applicationId + ':${SERVERWARE_PROXY_TOKEN}@' + authority,
-    'cache=${SERVERWARE_NPM_CACHE}', 'noproxy=', 'strict-ssl=true',
+    'https-proxy=https://' + config.applicationId + ':${CATCHPLATE_PROXY_TOKEN}@' + authority,
+    'cache=${CATCHPLATE_NPM_CACHE}', 'noproxy=', 'strict-ssl=true',
     'fetch-retries=0', 'fetch-timeout=10000', 'update-notifier=false',
     'progress=false', 'logs-max=0', isInstallation(config.operation) ? 'loglevel=error' : 'loglevel=silent', '',
   ].join('\n');
@@ -76,18 +76,18 @@ export function childEnvironment(config, paths) {
   // HOME is neither reassigned nor forwarded. npm uses the OS account lookup;
   // explicit user/global config paths and cache control its configuration.
   return { LANG: 'C.UTF-8', PATH: '/usr/bin:/bin',
-    NODE_EXTRA_CA_CERTS: paths.trust, SERVERWARE_CA_FILE: paths.trust,
-    SERVERWARE_PROXY_URL: config.proxyUrl, SERVERWARE_APP_ID: config.applicationId,
-    SERVERWARE_PROXY_TOKEN: config.token, SERVERWARE_NPM_PACKAGE: config.packageName,
-    SERVERWARE_NPM_CACHE: paths.cache, SERVERWARE_NPM_WORK: paths.root,
-    ...(config.version ? { SERVERWARE_NPM_VERSION: config.version } : {}),
+    NODE_EXTRA_CA_CERTS: paths.trust, CATCHPLATE_CA_FILE: paths.trust,
+    CATCHPLATE_PROXY_URL: config.proxyUrl, CATCHPLATE_APP_ID: config.applicationId,
+    CATCHPLATE_PROXY_TOKEN: config.token, CATCHPLATE_NPM_PACKAGE: config.packageName,
+    CATCHPLATE_NPM_CACHE: paths.cache, CATCHPLATE_NPM_WORK: paths.root,
+    ...(config.version ? { CATCHPLATE_NPM_VERSION: config.version } : {}),
     ...(isInstallation(config.operation) ? {
-      SERVERWARE_NPM_PROJECT: config.project, SERVERWARE_NPM_OUTPUT: paths.project,
+      CATCHPLATE_NPM_PROJECT: config.project, CATCHPLATE_NPM_OUTPUT: paths.project,
     } : {}),
     ...(config.operation === 'publish' ? {
-      SERVERWARE_NPM_TAG: config.tag, SERVERWARE_NPM_TARBALL: paths.tarball,
-      SERVERWARE_NPM_TARBALL_SHA256: config.tarballSha256,
-      SERVERWARE_NPM_PUBLISH_CONFIRM: 'publish-publicly',
+      CATCHPLATE_NPM_TAG: config.tag, CATCHPLATE_NPM_TARBALL: paths.tarball,
+      CATCHPLATE_NPM_TARBALL_SHA256: config.tarballSha256,
+      CATCHPLATE_NPM_PUBLISH_CONFIRM: 'publish-publicly',
     } : {}) };
 }
 
@@ -248,7 +248,7 @@ export function publishSummary(config, result, bytes) {
 
 export function failure(operation) {
   return { ok: false, operation: OPERATIONS.has(operation) ? operation : null,
-    error: 'npm example failed; check configuration, permissions and Serverware audit logs.',
+    error: 'npm example failed; check configuration, permissions and Catchplate audit logs.',
     ...(operation === 'publish' ? {
       warning: 'Publication may be unconfirmed. Inspect registry metadata and audit evidence; do not automatically retry.',
     } : {}) };

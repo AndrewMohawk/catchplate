@@ -56,7 +56,7 @@ the token, contact a provider, reopen a fence or renew the old operation.
 ## Explicit startup and custody
 
 `--native-measured-pending-retirement-startup-v13` selects
-`serverware.nativeStartupConfiguration/v13`; the enclave image selector is
+`catchplate.nativeStartupConfiguration/v13`; the enclave image selector is
 `--measured-pending-retirement-v13`. It retains every v12 owner and adds the
 required `measuredPendingRetirement` configuration. Earlier profiles and the
 default v6 selector are unchanged; missing material does not enable a fallback.

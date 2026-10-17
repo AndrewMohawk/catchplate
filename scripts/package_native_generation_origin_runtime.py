@@ -25,7 +25,7 @@ from package_native_broker_runtime import (
 
 ROOT = Path("/generation-origin-issuer-runtime")
 OUTPUT = Path("/generation-origin-issuer-output")
-ENTRYPOINT = Path("/opt/serverware/scripts/issue_native_generation_origin.py")
+ENTRYPOINT = Path("/opt/catchplate/scripts/issue_native_generation_origin.py")
 PACKAGES = {**CRYPTO_PACKAGES, "cbor2": "5.9.0"}
 
 
@@ -57,7 +57,7 @@ def main():
                  "native_shadow_nitro_verifier.py", "native_shadow_time_profile.py",
                  "native_generation_origin_profile.py", "native_generation_origin_originals.py",
                  "native_generation_origin_issuer.py"):
-        closure.add(SOURCE / "serverware" / name, SITE / "serverware" / name)
+        closure.add(SOURCE / "catchplate" / name, SITE / "catchplate" / name)
     # scripts is deliberately a namespace package, as in the admitted source.
     # No other scripts or authority/store modules enter its isolated search path.
     closure.add(SOURCE / "scripts/verify_nitro_tee.py", SITE / "scripts/verify_nitro_tee.py")
@@ -69,10 +69,10 @@ def main():
     # Nitro dependency. It neither invokes run() nor verifies any real evidence.
     subprocess.run(["/usr/sbin/chroot", str(ROOT), str(INTERPRETER), "-I", "-B", "-c",
         "import cbor2,cffi,pycparser,cryptography; import _cbor2,_cffi_backend; "
-        "import scripts.verify_nitro_tee; import serverware.native_shadow_nitro_profile; "
-        "import serverware.native_shadow_nitro_originals; import serverware.native_shadow_nitro_verifier; "
-        "import serverware.native_shadow_time_profile; import serverware.native_generation_origin_profile; "
-        "import serverware.native_generation_origin_originals; import serverware.native_generation_origin_issuer; import sys; from importlib.metadata import version; assert sys.prefix == '/usr/local'; "
+        "import scripts.verify_nitro_tee; import catchplate.native_shadow_nitro_profile; "
+        "import catchplate.native_shadow_nitro_originals; import catchplate.native_shadow_nitro_verifier; "
+        "import catchplate.native_shadow_time_profile; import catchplate.native_generation_origin_profile; "
+        "import catchplate.native_generation_origin_originals; import catchplate.native_generation_origin_issuer; import sys; from importlib.metadata import version; assert sys.prefix == '/usr/local'; "
         "assert cryptography.__version__ == '50.0.0'; assert version('cbor2') == '5.9.0'"],
         env=ENV, check=True, timeout=30)
     image = OUTPUT / "native-generation-origin-issuer-runtime.squashfs"
@@ -85,10 +85,10 @@ def main():
     with image.open("rb") as stream:
         image_hash = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
     runtime_image = {"profile": "sealed-memfd-squashfs-v1",
-        "imagePath": "/opt/serverware/native-generation-origin-issuer-runtime.squashfs",
+        "imagePath": "/opt/catchplate/native-generation-origin-issuer-runtime.squashfs",
         "imageSha256": image_hash, "interpreterSha256": closure.files[str(INTERPRETER)]["sha256"],
         "entrypointSha256": closure.files[str(ENTRYPOINT)]["sha256"]}
-    manifest = {"apiVersion": "serverware.nativeGenerationOriginIssuerRuntimeBuild/v1",
+    manifest = {"apiVersion": "catchplate.nativeGenerationOriginIssuerRuntimeBuild/v1",
         "purpose": "independent-native-generation-origin-issuer-v1", "runtimeImage": runtime_image,
         "sourceManifestSha256": sha(original(Path("/source-contract/source-manifest.json"))),
         "sourceDateEpoch": epoch, "imageBytes": image.stat().st_size,

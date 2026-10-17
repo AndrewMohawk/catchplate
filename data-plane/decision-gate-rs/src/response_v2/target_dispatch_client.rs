@@ -1,8 +1,8 @@
 //! One retained authenticated session, no target-contact retry or reopen path.
 use super::*;
-use serverware_decision_gate::native_target_dispatch_v1 as profile;
-use serverware_decision_gate::native_response_gate::{state_receipt, target_dispatch as wire};
-use serverware_decision_gate::{CustodyServiceRole, ServiceOperationV1};
+use catchplate_decision_gate::native_target_dispatch_v1 as profile;
+use catchplate_decision_gate::native_response_gate::{state_receipt, target_dispatch as wire};
+use catchplate_decision_gate::{CustodyServiceRole, ServiceOperationV1};
 use base64::{engine::general_purpose::STANDARD,Engine as _};
 
 fn invalid()->ResponseObservationV2TransactionError {ResponseObservationV2TransactionError::InvalidResponse}
@@ -61,11 +61,11 @@ pub(super) fn signed<T:Serialize>(client:&ResponseObservationV2Client,role:&str,
     let mut original=domain.to_vec();original.extend(custody_canonical_json_bytes(value).map_err(|_|invalid())?);
     ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519,public).verify(&original,&signature_bytes).map_err(|_|invalid())
 }
-pub(super) fn scope(client:&ResponseObservationV2Client,value:&serverware_decision_gate::ProviderAuthorityScopeV2,
+pub(super) fn scope(client:&ResponseObservationV2Client,value:&catchplate_decision_gate::ProviderAuthorityScopeV2,
     attempt:&str,operation:&str,revision:u64,fence:u64)->Result<(),ResponseObservationV2TransactionError> {
     let pin=client.role_keys.get("linearizable-store").ok_or_else(invalid)?;
     let mut unsigned=value.clone();unsigned.operation_binding_sha256.clear();
-    if value.api_version!="serverware.responseObservationV2ProviderAuthorityScope/v2"
+    if value.api_version!="catchplate.responseObservationV2ProviderAuthorityScope/v2"
         || value.role_identity_root_sha256!=client.role_identity_root_sha256
         || !value.allowed_operations.contains(&ServiceOperationV1::StateCas)
         || value.operation_binding_sha256!=profile::sha256(&custody_canonical_json_bytes(&unsigned).map_err(|_|invalid())?)
@@ -82,7 +82,7 @@ pub(super) fn scope(client:&ResponseObservationV2Client,value:&serverware_decisi
 fn receipt(client:&ResponseObservationV2Client,value:&wire::SignedStateMutationReceiptV1,frame:&state_receipt::RpcRequestFrame,
     original:&wire::DispatchOriginal,revision:u64,state:&str)->Result<(),ResponseObservationV2TransactionError> {
     let digest=state_receipt::sha256_digest(&state_receipt::canonical_jcs_bytes(frame).map_err(|_|invalid())?).0;
-    if value.api_version!="serverware.responseObservationV2StateMutationReceipt/v1"
+    if value.api_version!="catchplate.responseObservationV2StateMutationReceipt/v1"
         || value.generation_id!=client.generation_id || value.generation!=client.provider_generation
         || value.operation!=ServiceOperationV1::StateCas || value.signer_logical_role!="linearizable-store"
         || value.request_id!=frame.request.request_id.0 || value.operation_id!=frame.request.operation_id.0
@@ -97,7 +97,7 @@ fn receipt(client:&ResponseObservationV2Client,value:&wire::SignedStateMutationR
 }
 fn observation(client:&ResponseObservationV2Client,value:&wire::SignedAttemptStateObservationV1,
     original:&wire::DispatchOriginal,revision:u64,state:state_receipt::AttemptState)->Result<(),ResponseObservationV2TransactionError> {
-    if value.api_version!="serverware.responseObservationV2AttemptStateObservation/v1"
+    if value.api_version!="catchplate.responseObservationV2AttemptStateObservation/v1"
         || !is_sha256_digest(&value.authoritative_state_sha256) || value.proof_material.is_some()
         || value.generation_id!=client.generation_id || value.generation!=client.provider_generation
         || value.operation!=ServiceOperationV1::StateCas || value.signer_logical_role!="linearizable-store"
@@ -172,7 +172,7 @@ impl ResponseObservationV2Session<'_> {
         let original=&captured.request.permit.original;
         let capture_sha=profile::sha256(&profile::canonical(&captured.request.capture).map_err(|_|invalid())?);
         let next=captured.request.permit.post_state.attempt_revision.checked_add(2).ok_or_else(invalid)?;
-        if completed.api_version!="serverware.responseV2.targetCaptureCommitted/v1" || completed.capture_sha256!=capture_sha
+        if completed.api_version!="catchplate.responseV2.targetCaptureCommitted/v1" || completed.capture_sha256!=capture_sha
             || completed.object.object_sha256!=captured.request.raw_response.sha256
             || completed.object.byte_length!=captured.request.raw_response.byte_length
             || completed.object.object_type!=ImmutableObjectType::UpstreamResponse
@@ -203,7 +203,7 @@ pub(super) fn execute_native_capture(state:&GateState,snapshot:&Arc<Snapshot>,de
     stable_resume_id:&str,staged:&ImmutableObjectReference,staged_input:&ExactByteObjectDescriptor,
     staged_bytes:&[u8],shadow:Option<&policy_core::ShadowRequestHandle>,barrier_crossed:&mut bool)
     ->Result<(EvidenceReference,ImmutableObjectReference,ResponseSecretGuard,Option<CommittedNativeCapture>),ResponseObservationV2TransactionError> {
-    use serverware_decision_gate::native_response_gate::state_receipt::{Digest,Identifier};
+    use catchplate_decision_gate::native_response_gate::state_receipt::{Digest,Identifier};
     if staged.object_type!=ImmutableObjectType::StagedRequest || staged.object_sha256!=staged_input.sha256
         || staged.byte_length!=staged_input.byte_length || cursor.attempt.state!=V2AttemptState::Staged {
         return Err(invalid());
@@ -270,10 +270,10 @@ pub(super) fn execute_native_capture(state:&GateState,snapshot:&Arc<Snapshot>,de
     if let Some(permit)=shadow_permit.take() {
         let (effect,outcome)=match &result {
             Ok((evidence,object,_,_))=>(digest_json_ensure_ascii(&json!({
-                "domain":"serverware.policyShadowNativeCapture/v1","requestSha256":final_request_sha,
+                "domain":"catchplate.policyShadowNativeCapture/v1","requestSha256":final_request_sha,
                 "dispatchEvidenceSha256":evidence.evidence_sha256,"upstreamResponseSha256":object.object_sha256,
                 "outcome":"response-observed"})),ActiveEffectCommitState::Committed),
-            Err(_)=>(digest_json_ensure_ascii(&json!({"domain":"serverware.policyShadowNativeCapture/v1",
+            Err(_)=>(digest_json_ensure_ascii(&json!({"domain":"catchplate.policyShadowNativeCapture/v1",
                 "requestSha256":final_request_sha,"outcome":"capture-outcome-unknown"})),ActiveEffectCommitState::OutcomeUnknown),
         };
         permit.commit_provider_send(outcome,&effect).map_err(|_|ResponseObservationV2TransactionError::OutcomeUnknown)?;

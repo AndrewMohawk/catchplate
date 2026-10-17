@@ -12,11 +12,11 @@ The concrete endpoint now has private Host/NativeRetrieval transport ownership. 
 
 ## Explicit selection and originals
 
-At the existing protected `/etc/serverware/native-shadow-guest-launch.json`, the additive exact2 profile is:
+At the existing protected `/etc/catchplate/native-shadow-guest-launch.json`, the additive exact2 profile is:
 
-`{apiVersion:"serverware.nativeShadowRetrievalBridgeLaunch/v1",keyAdmission:<unchanged launch11>}`.
+`{apiVersion:"catchplate.nativeShadowRetrievalBridgeLaunch/v1",keyAdmission:<unchanged launch11>}`.
 
-Old key-admission launch1, retrieval-server launch1 and TrustedHostNoTee loaders retain their selection. The wrapper selects implementation, not operational authority. The actual independently signed C9 production-bridge runtime still supplies every complete bridge dependency, the Retrieval endpoint's peer14, public-key credential and pins, and the fixed server path `/run/serverware-shadow-retrieval/listener.sock`. Parent and guest decode the same retained signed runtime original themselves.
+Old key-admission launch1, retrieval-server launch1 and TrustedHostNoTee loaders retain their selection. The wrapper selects implementation, not operational authority. The actual independently signed C9 production-bridge runtime still supplies every complete bridge dependency, the Retrieval endpoint's peer14, public-key credential and pins, and the fixed server path `/run/catchplate-shadow-retrieval/listener.sock`. Parent and guest decode the same retained signed runtime original themselves.
 
 The signed6..69 activation inventory additionally contains `retrieval-peer-directory`: the actual root:root0711 socket-only directory, O_RDONLY. Its socket leaf must be the actual server UID and client primary GID, mode0660. The Retrieval endpoint activation is an actual fresh unnamed, unconnected AF_UNIX SOCK_SEQPACKET, not a root-connected substitute. All ordinary bridge activation requirements remain. The extra directory is consumed only by this profile before the existing exact activation-name check.
 

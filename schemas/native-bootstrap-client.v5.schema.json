@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-bootstrap-client.v5.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-bootstrap-client.v5.schema.json",
   "title": "Explicit native executable-workload bootstrap client v5",
   "description": "Closed independently pinned configuration, at most 16384 bytes. Requires actual egress v4, launch manifest v2, separate attachment authority and independent workload start authority/immutable execution manifest. A successful older diagnostic never selects this profile. Installation is forbidden, including null; this does not implicitly install a CA. All actual signature, original, journal, namespace, network and guardian checks remain mandatory. Source presence is not a verified runtime.",
   "type": "object", "additionalProperties": false,
   "required": ["apiVersion", "endpoint", "timeoutMilliseconds", "startupEvidence", "startupExpectations", "sessionScope", "trustRoots", "clientCertificate", "clientPrivateKey", "callerIssuer", "delegationAuthorizer", "setupAuthorizer", "request", "clientChallengeBase64url", "expectedCallerPrincipal", "expectedTargetPrincipal", "expectedTargetNonce", "expectedTargetRequestSha256", "egress", "attachment", "execution"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeBootstrapClient/v5"},
+    "apiVersion": {"const": "catchplate.nativeBootstrapClient/v5"},
     "endpoint": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/endpoint"},
     "timeoutMilliseconds": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/timeoutMilliseconds"},
     "startupEvidence": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/startupEvidence"},

@@ -19,7 +19,7 @@ descriptors remain held, with no-follow opening and named/held identity checks.
 These locks are cooperative local serialization, not protection from hostile root
 or proof against filesystem rollback.
 
-The slot is SHA-256 over `serverware/native-network-attachment-slot/v1` plus NUL,
+The slot is SHA-256 over `catchplate/native-network-attachment-slot/v1` plus NUL,
 then each signed journal namespace and capability ID framed with its big-endian
 u32 byte length. A fresh child, proof, operation or token does not create a fresh
 slot. The separate operation association binds actual retained owners and exact

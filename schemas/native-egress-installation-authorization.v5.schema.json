@@ -1,11 +1,11 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://serverware.invalid/schemas/native-egress-installation-authorization.v5.schema.json",
+  "$id":"https://catchplate.invalid/schemas/native-egress-installation-authorization.v5.schema.json",
   "title":"Explicit executable application loopback and adapter egress permission v5",
   "description":"Closed canonical ASCII/no-LF <=32768 bytes. Distinct v5 payload-schema plus NUL signing domain. New cold application profile only; old diagnostic/execution clients refuse it before effects. Existing irreversible creation claim precedes child-only loopback UP/listener creation. Existing kernel claim precedes fixed exact loopback TCP rules; no host firewall, NAT, default route or generic networking authority.",
   "type":"object","additionalProperties":false,"required":["schema","payload","signature"],
   "properties":{
-    "schema":{"const":"serverware.signedNativeEgressInstallationAuthorization/v5"},
+    "schema":{"const":"catchplate.signedNativeEgressInstallationAuthorization/v5"},
     "signature":{"$ref":"native-egress-installation-authorization.v4.schema.json#/properties/signature"},
     "payload":{"$ref":"#/$defs/payload"}
   },
@@ -13,7 +13,7 @@
     "type":"object","additionalProperties":false,
     "required":["schema","sourceRevision","purpose","trustMode","authorizationId","setupSha256","delegationSha256","targetRequestSha256","policyRequirementsSha256","releaseRecordSha256","policyHash","configurationSha256","runtimeCaCertificateSha256","runtimeCaSpkiSha256","ingressLeafCertificateSha256","clientTrustBundleSha256","clientChallengeSha256","targetPrincipalId","targetNonce","targetSpkiSha256","proxy","networkOwner","machineIdSha256","workload","ruleset","capability","journal","creationJournal","childNetworkPolicy","issuedAtEpochNs","expiresAtEpochNs","applicationProxy"],
     "properties":{
-      "schema":{"const":"serverware.nativeEgressInstallationAuthorization/v5"},
+      "schema":{"const":"catchplate.nativeEgressInstallationAuthorization/v5"},
       "sourceRevision":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/payload/properties/sourceRevision"},
       "purpose":{"const":"native-egress-installation"},"trustMode":{"const":"trusted-host-local"},
       "authorizationId":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/identifier"},

@@ -3,7 +3,7 @@
 ## Boundary
 
 `validate_query_reads_measured` in
-[`authority_query_reads.py`](../serverware/authority_query_reads.py) adds one
+[`authority_query_reads.py`](../catchplate/authority_query_reads.py) adds one
 cumulative work budget to genuine query-observation validation. It reuses the
 existing source snapshot, record reconstruction, address association, deferred
 value resolution and observation capture. It does not replace those checks

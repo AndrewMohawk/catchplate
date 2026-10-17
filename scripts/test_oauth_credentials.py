@@ -28,7 +28,7 @@ def config_probe(env: dict[str, str], *, expected_error: str | None = None, reda
             sys.executable,
             "-c",
             (
-                "import json; from serverware import config; "
+                "import json; from catchplate import config; "
                 "print(json.dumps({'google': bool(config.GOOGLE_OAUTH_CLIENT_SECRET), "
                 "'x': bool(config.X_OAUTH_CLIENT_SECRET)}))"
             ),
@@ -61,74 +61,74 @@ def write_secret(path: Path, value: str, mode: int = 0o600) -> Path:
 
 def run_config_secret_file_tests(tmp_path: Path) -> None:
     relevant_names = {
-        "SERVERWARE_RELEASE_CHANNEL",
-        "SERVERWARE_PUBLIC_URL",
-        "SERVERWARE_OAUTH_STATE_TTL_SECONDS",
-        "SERVERWARE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS",
-        "SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT",
-        "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID",
-        "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET",
-        "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
-        "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI",
-        "SERVERWARE_X_OAUTH_CLIENT_ID",
-        "SERVERWARE_X_OAUTH_CLIENT_SECRET",
-        "SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE",
-        "SERVERWARE_X_OAUTH_REDIRECT_URI",
-        "SERVERWARE_TWITTER_OAUTH_CLIENT_ID",
-        "SERVERWARE_TWITTER_OAUTH_CLIENT_SECRET",
-        "SERVERWARE_TWITTER_OAUTH_REDIRECT_URI",
+        "CATCHPLATE_RELEASE_CHANNEL",
+        "CATCHPLATE_PUBLIC_URL",
+        "CATCHPLATE_OAUTH_STATE_TTL_SECONDS",
+        "CATCHPLATE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS",
+        "CATCHPLATE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT",
+        "CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID",
+        "CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET",
+        "CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
+        "CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI",
+        "CATCHPLATE_X_OAUTH_CLIENT_ID",
+        "CATCHPLATE_X_OAUTH_CLIENT_SECRET",
+        "CATCHPLATE_X_OAUTH_CLIENT_SECRET_FILE",
+        "CATCHPLATE_X_OAUTH_REDIRECT_URI",
+        "CATCHPLATE_TWITTER_OAUTH_CLIENT_ID",
+        "CATCHPLATE_TWITTER_OAUTH_CLIENT_SECRET",
+        "CATCHPLATE_TWITTER_OAUTH_REDIRECT_URI",
     }
     base_env = {name: value for name, value in os.environ.items() if name not in relevant_names}
     google_secret = write_secret(tmp_path / "google-client-secret", "test-google-client-secret-0123456789")
     x_secret = write_secret(tmp_path / "x-client-secret", "test-x-client-secret-0123456789")
     base_env.update(
         {
-            "SERVERWARE_RELEASE_CHANNEL": "prod",
-            "SERVERWARE_PUBLIC_URL": "https://serverware.test",
-            "SERVERWARE_OAUTH_STATE_TTL_SECONDS": "600",
-            "SERVERWARE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS": "900",
-            "SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT": "1000",
-            "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID": "test-google-client",
-            "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE": str(google_secret),
-            "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI": "https://serverware.test/api/oauth/callback/google",
-            "SERVERWARE_X_OAUTH_CLIENT_ID": "test-x-client",
-            "SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE": str(x_secret),
-            "SERVERWARE_X_OAUTH_REDIRECT_URI": "https://serverware.test/api/oauth/callback/x",
+            "CATCHPLATE_RELEASE_CHANNEL": "prod",
+            "CATCHPLATE_PUBLIC_URL": "https://catchplate.test",
+            "CATCHPLATE_OAUTH_STATE_TTL_SECONDS": "600",
+            "CATCHPLATE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS": "900",
+            "CATCHPLATE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT": "1000",
+            "CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID": "test-google-client",
+            "CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE": str(google_secret),
+            "CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI": "https://catchplate.test/api/oauth/callback/google",
+            "CATCHPLATE_X_OAUTH_CLIENT_ID": "test-x-client",
+            "CATCHPLATE_X_OAUTH_CLIENT_SECRET_FILE": str(x_secret),
+            "CATCHPLATE_X_OAUTH_REDIRECT_URI": "https://catchplate.test/api/oauth/callback/x",
         }
     )
     config_probe(base_env)
 
     invalid_pending_capacity_env = dict(base_env)
-    invalid_pending_capacity_env["SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT"] = "10001"
+    invalid_pending_capacity_env["CATCHPLATE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT"] = "10001"
     config_probe(invalid_pending_capacity_env, expected_error="must be between 1 and 10000")
 
     ambiguous_env = dict(base_env)
     ambiguous_secret = "test-ambiguous-client-secret-0123456789"
-    ambiguous_env["SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET"] = ambiguous_secret
+    ambiguous_env["CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET"] = ambiguous_secret
     config_probe(
         ambiguous_env,
-        expected_error="must not set both SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET",
+        expected_error="must not set both CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET",
         redacted_value=ambiguous_secret,
     )
 
     unsafe_mode = write_secret(tmp_path / "unsafe-mode-client-secret", "test-unsafe-secret-0123456789", 0o644)
     unsafe_mode_env = dict(base_env)
-    unsafe_mode_env["SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE"] = str(unsafe_mode)
+    unsafe_mode_env["CATCHPLATE_X_OAUTH_CLIENT_SECRET_FILE"] = str(unsafe_mode)
     config_probe(unsafe_mode_env, expected_error="mode 0400 or 0600")
 
     oversized = write_secret(tmp_path / "oversized-client-secret", "x" * 4097)
     oversized_env = dict(base_env)
-    oversized_env["SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE"] = str(oversized)
+    oversized_env["CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE"] = str(oversized)
     config_probe(oversized_env, expected_error="between 1 and 4096 bytes")
 
     symlink = tmp_path / "symlink-client-secret"
     symlink.symlink_to(google_secret)
     symlink_env = dict(base_env)
-    symlink_env["SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE"] = str(symlink)
+    symlink_env["CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE"] = str(symlink)
     config_probe(symlink_env, expected_error="non-symlink secret file")
 
     relative_env = dict(base_env)
-    relative_env["SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE"] = "relative-client-secret"
+    relative_env["CATCHPLATE_X_OAUTH_CLIENT_SECRET_FILE"] = "relative-client-secret"
     config_probe(relative_env, expected_error="must be an absolute path")
 
 
@@ -136,34 +136,34 @@ def verify_compose_oauth_contract() -> None:
     development = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     production = (ROOT / "docker-compose.production.yml").read_text(encoding="utf-8")
     for setting_name in (
-        "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID",
-        "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI",
-        "SERVERWARE_X_OAUTH_CLIENT_ID",
-        "SERVERWARE_X_OAUTH_REDIRECT_URI",
+        "CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID",
+        "CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI",
+        "CATCHPLATE_X_OAUTH_CLIENT_ID",
+        "CATCHPLATE_X_OAUTH_REDIRECT_URI",
     ):
         if f"{setting_name}: ${{{setting_name}:-" not in development:
             raise AssertionError(f"development Compose does not forward optional {setting_name}")
     for setting_name, container_path in (
-        ("SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE", "/run/secrets/serverware-google-oauth-client-secret"),
-        ("SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE", "/run/secrets/serverware-x-oauth-client-secret"),
+        ("CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE", "/run/secrets/catchplate-google-oauth-client-secret"),
+        ("CATCHPLATE_X_OAUTH_CLIENT_SECRET_FILE", "/run/secrets/catchplate-x-oauth-client-secret"),
     ):
         if f"{setting_name}: ${{{setting_name}:+{container_path}}}" not in development:
             raise AssertionError(f"development Compose does not forward optional safe path for {setting_name}")
         if f"${{{setting_name}:-/dev/null}}:{container_path}:ro" not in development:
             raise AssertionError(f"development Compose does not mount optional {setting_name}")
     for setting_name in (
-        "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID",
-        "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI",
-        "SERVERWARE_X_OAUTH_CLIENT_ID",
-        "SERVERWARE_X_OAUTH_REDIRECT_URI",
+        "CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID",
+        "CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI",
+        "CATCHPLATE_X_OAUTH_CLIENT_ID",
+        "CATCHPLATE_X_OAUTH_REDIRECT_URI",
     ):
         if f"{setting_name}: ${{{setting_name}:?" not in production:
             raise AssertionError(f"production Compose does not require {setting_name}")
-    if "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET:" in production or "SERVERWARE_X_OAUTH_CLIENT_SECRET:" in production:
+    if "CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET:" in production or "CATCHPLATE_X_OAUTH_CLIENT_SECRET:" in production:
         raise AssertionError("production Compose forwards a plaintext OAuth client secret")
     for container_path in (
-        "/run/secrets/serverware-google-oauth-client-secret:ro",
-        "/run/secrets/serverware-x-oauth-client-secret:ro",
+        "/run/secrets/catchplate-google-oauth-client-secret:ro",
+        "/run/secrets/catchplate-x-oauth-client-secret:ro",
     ):
         if container_path not in production:
             raise AssertionError(f"production Compose does not mount {container_path}")
@@ -1559,34 +1559,34 @@ def main(*, setup_session_only: bool = False) -> None:
             run_config_secret_file_tests(Path(tmp))
         if not setup_session_only and compose_manifests_available():
             verify_compose_oauth_contract()
-        os.environ["SERVERWARE_DATA_DIR"] = tmp
-        os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
-        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
-        os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_DATA_DIR"] = tmp
+        os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
+        os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
+        os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
         for name in (
-            "SERVERWARE_METADATA_STORE_POSTGRES_DSN",
-            "SERVERWARE_AUDIT_STORE_POSTGRES_DSN",
-            "SERVERWARE_GRANT_STORE_POSTGRES_DSN",
+            "CATCHPLATE_METADATA_STORE_POSTGRES_DSN",
+            "CATCHPLATE_AUDIT_STORE_POSTGRES_DSN",
+            "CATCHPLATE_GRANT_STORE_POSTGRES_DSN",
         ):
             os.environ.pop(name, None)
-        os.environ["SERVERWARE_PUBLIC_URL"] = "https://serverware.test"
-        os.environ["SERVERWARE_GOOGLE_OAUTH_CLIENT_ID"] = "google-client"
-        os.environ["SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET"] = "google-secret"
-        os.environ["SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI"] = "https://serverware.test/api/oauth/callback/google"
-        os.environ["SERVERWARE_X_OAUTH_CLIENT_ID"] = "x-client"
-        os.environ["SERVERWARE_X_OAUTH_CLIENT_SECRET"] = "x-secret"
-        os.environ["SERVERWARE_X_OAUTH_REDIRECT_URI"] = "https://serverware.test/api/oauth/callback/x"
+        os.environ["CATCHPLATE_PUBLIC_URL"] = "https://catchplate.test"
+        os.environ["CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID"] = "google-client"
+        os.environ["CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET"] = "google-secret"
+        os.environ["CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI"] = "https://catchplate.test/api/oauth/callback/google"
+        os.environ["CATCHPLATE_X_OAUTH_CLIENT_ID"] = "x-client"
+        os.environ["CATCHPLATE_X_OAUTH_CLIENT_SECRET"] = "x-secret"
+        os.environ["CATCHPLATE_X_OAUTH_REDIRECT_URI"] = "https://catchplate.test/api/oauth/callback/x"
 
-        from serverware import db, oauth
+        from catchplate import db, oauth
 
         db.init_db()
         run_oauth_setup_session_state_tests(oauth, db, Path(tmp))
-        from serverware import runtime
-        from serverware import app as app_module
-        from serverware.auth import AdminIdentity
-        from serverware.policy_bundle import (
+        from catchplate import runtime
+        from catchplate import app as app_module
+        from catchplate.auth import AdminIdentity
+        from catchplate.policy_bundle import (
             PolicyBundleError,
             compile_policy_bundle,
             demo_policy_bundle,
@@ -1598,7 +1598,7 @@ def main(*, setup_session_only: bool = False) -> None:
             mitmproxy_module.http = http_module
             sys.modules["mitmproxy"] = mitmproxy_module
             sys.modules["mitmproxy.http"] = http_module
-        from serverware.policy_engine import _inject_credential
+        from catchplate.policy_engine import _inject_credential
 
         identity = AdminIdentity("user:operator", frozenset({"admin", "credential_owner", "policy_author"}), "test")
 
@@ -4368,27 +4368,27 @@ def run_google_family_race_only(*, postgres_dsn: str | None = None) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         schema = None
         backend = "postgres" if postgres_dsn else "sqlite"
-        os.environ["SERVERWARE_DATA_DIR"] = tmp
-        os.environ["SERVERWARE_RELEASE_CHANNEL"] = "test"
-        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
+        os.environ["CATCHPLATE_DATA_DIR"] = tmp
+        os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "test"
+        os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
         if postgres_dsn:
             import psycopg
 
-            schema = f"serverware_oauth_race_{uuid.uuid4().hex}"
+            schema = f"catchplate_oauth_race_{uuid.uuid4().hex}"
             with psycopg.connect(postgres_dsn, autocommit=True) as conn:
                 conn.execute(f'CREATE SCHEMA "{schema}"')
             separator = "&" if "?" in postgres_dsn else "?"
             options = urllib.parse.quote(f"-csearch_path={schema}", safe="")
             isolated_dsn = f"{postgres_dsn}{separator}options={options}"
             for store in ("METADATA", "AUDIT", "GRANT"):
-                os.environ[f"SERVERWARE_{store}_STORE_BACKEND"] = "postgres"
-                os.environ[f"SERVERWARE_{store}_STORE_POSTGRES_DSN"] = isolated_dsn
+                os.environ[f"CATCHPLATE_{store}_STORE_BACKEND"] = "postgres"
+                os.environ[f"CATCHPLATE_{store}_STORE_POSTGRES_DSN"] = isolated_dsn
         else:
             for store in ("METADATA", "AUDIT", "GRANT"):
-                os.environ[f"SERVERWARE_{store}_STORE_BACKEND"] = "sqlite"
-                os.environ.pop(f"SERVERWARE_{store}_STORE_POSTGRES_DSN", None)
+                os.environ[f"CATCHPLATE_{store}_STORE_BACKEND"] = "sqlite"
+                os.environ.pop(f"CATCHPLATE_{store}_STORE_POSTGRES_DSN", None)
         try:
-            from serverware import db
+            from catchplate import db
 
             db.init_db()
             run_google_pending_activation_quarantine_race(db, backend=backend)

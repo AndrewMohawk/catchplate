@@ -1,6 +1,6 @@
 # Activation current-auth and final cookie boundary
 
-[The final delivery module](../serverware/control_plane_oidc_session_activation_delivery.py)
+[The final delivery module](../catchplate/control_plane_oidc_session_activation_delivery.py)
 owns the last token acquisition, current-session admission and cookie emission
 for the actual public activation orchestrator. It does not reuse the legacy
 direct-SQL activation or recovery-token path. Source wiring is not deployed or
@@ -39,7 +39,7 @@ authoritative roles and current credential trust. Active expiry and provider
 expiry must still match the retained session and remain live.
 
 The only success body is `{"ok": true, "authenticated": true}`. The token enters
-only the staged `serverware_oidc_session` cookie: HttpOnly, SameSite=Strict,
+only the staged `catchplate_oidc_session` cookie: HttpOnly, SameSite=Strict,
 path `/`, Secure for an HTTPS request, and positive Max-Age derived from the
 fresh actual session/provider expiry and the original guarded epoch. The
 helper does not replace the old cookie on failure and does not create retry

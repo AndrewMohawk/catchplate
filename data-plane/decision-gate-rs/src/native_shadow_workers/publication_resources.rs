@@ -9,7 +9,7 @@ use std::{cell::RefCell, fs::File, os::fd::{AsRawFd, OwnedFd},
     os::unix::fs::{FileExt, MetadataExt}, time::{SystemTime, UNIX_EPOCH}};
 
 const PROFILE: &str = "trusted-host-local";
-const FORMAT: &str = "serverware.privateGenerationPublicationJournal/v1";
+const FORMAT: &str = "catchplate.privateGenerationPublicationJournal/v1";
 const MAX_JOURNAL: u64 = 64 * 1024 * 1024;
 const MAX_PUBLIC: u64 = 16 * 1024;
 const MAX_NITRO_BOOTSTRAP: u64 = 256 * 1024;
@@ -42,14 +42,14 @@ pub struct Configuration {
 }
 impl Configuration {
     pub(super) fn runtime_verification_required(&self) -> bool {
-        self.api_version == "serverware.nativeShadowPublicationResources/v2"
+        self.api_version == "catchplate.nativeShadowPublicationResources/v2"
     }
     pub(super) fn inherited_fds(&self) -> [i32; 4] {
         [self.descriptor_fd, self.checkpoint_fd, self.signing_key_fd, self.journal_fd]
     }
     pub(super) fn validate(&self) -> Result<(), String> {
         let fds = [self.descriptor_fd, self.checkpoint_fd, self.signing_key_fd, self.journal_fd];
-        require((self.api_version == "serverware.nativeShadowPublicationResources/v1" || self.runtime_verification_required())
+        require((self.api_version == "catchplate.nativeShadowPublicationResources/v1" || self.runtime_verification_required())
             && self.profile == PROFILE && wire::hash(&self.descriptor_sha256)
             && wire::hash(&self.checkpoint_sha256) && fds.iter().all(|fd| *fd >= 12)
             && fds.iter().enumerate().all(|(i, fd)| !fds[..i].contains(fd)))
@@ -182,7 +182,7 @@ fn inspect(raw: &[u8], base: &Checkpoint, complete: bool) -> Result<Checkpoint, 
 struct Journal { file: File, identity: Identity, base: Checkpoint, limit: u64, retained: RefCell<Vec<u8>> }
 impl Journal {
     fn open(file: File, checkpoint: Checkpoint, limit: u64) -> Result<Self, String> {
-        require(checkpoint.api_version == "serverware.privateGenerationPublicationCheckpoint/v1"
+        require(checkpoint.api_version == "catchplate.privateGenerationPublicationCheckpoint/v1"
             && wire::hash(&checkpoint.descriptor_sha256) && wire::hash(&checkpoint.head_sha256)
             && checkpoint.byte_count <= limit && checkpoint.inode != 0)?;
         let id = journal_identity(&file)?;
@@ -213,14 +213,14 @@ impl Bootstrap {
         else { MAX_PUBLIC * if job { 4 } else { 3 } }
     }
     fn job_api(&self) -> &'static str {
-        if self.runtime_verification.is_some() { "serverware.nativeShadowPublicationJob/v2" }
-        else { "serverware.nativeShadowPublicationJob/v1" }
+        if self.runtime_verification.is_some() { "catchplate.nativeShadowPublicationJob/v2" }
+        else { "catchplate.nativeShadowPublicationJob/v1" }
     }
     fn validate(&self) -> Result<(Descriptor, Checkpoint), String> {
         self.pins.validate()?;
         require(match self.api_version.as_str() {
-            "serverware.nativeShadowPublicationBootstrap/v1" => self.runtime_verification.is_none(),
-            "serverware.nativeShadowPublicationBootstrap/v2" => self.runtime_verification.is_some(),
+            "catchplate.nativeShadowPublicationBootstrap/v1" => self.runtime_verification.is_none(),
+            "catchplate.nativeShadowPublicationBootstrap/v2" => self.runtime_verification.is_some(),
             _ => false,
         })?;
         if let Some(runtime) = &self.runtime_verification {
@@ -236,7 +236,7 @@ impl Bootstrap {
             && wire::sha(self.descriptor_original.as_bytes()) == self.pins.replay_store_sha256)?;
         let descriptor: Descriptor = wire::decode(self.descriptor_original.as_bytes())?;
         let checkpoint: Checkpoint = wire::decode(self.checkpoint_original.as_bytes())?;
-        require(descriptor.api_version == "serverware.privateGenerationPublicationStore/v1"
+        require(descriptor.api_version == "catchplate.privateGenerationPublicationStore/v1"
             && descriptor.profile == PROFILE && wire::hash(&descriptor.namespace_sha256) && descriptor.journal_format == FORMAT
             && descriptor.publication_signing_key_id == self.pins.key_id
             && descriptor.publication_signing_key_spki_sha256 == self.pins.key_spki_sha256
@@ -277,8 +277,8 @@ impl ColdResources {
         let opening_epoch = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)
             .map_err(|_| "publication local clock unavailable")?.as_nanos()).map_err(|_| "publication local clock overflow")?;
         let cold = Bootstrap { api_version: if runtime_verification.is_some() {
-                "serverware.nativeShadowPublicationBootstrap/v2".into()
-            } else { "serverware.nativeShadowPublicationBootstrap/v1".into() }, profile: PROFILE.into(),
+                "catchplate.nativeShadowPublicationBootstrap/v2".into()
+            } else { "catchplate.nativeShadowPublicationBootstrap/v1".into() }, profile: PROFILE.into(),
             descriptor_original: String::from_utf8(descriptor_raw).map_err(|_| "publication descriptor not UTF8")?,
             checkpoint_original: String::from_utf8(checkpoint_raw).map_err(|_| "publication checkpoint not UTF8")?, pins,
             opening_unix_nanos: opening_epoch, opening_boottime_ns: opening_boot, deadline_boottime_ns: deadline,

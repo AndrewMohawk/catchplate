@@ -21,13 +21,13 @@ use crate::workload_identity_trust_crypto as crypto;
 mod authority_source_revision_v1;
 pub(super) use authority_source_revision_v1::SOURCE_REVISION;
 const PROFILE: &str = "immutable-single-issuer-startup-v1";
-const SCHEMA: &str = "serverware.workloadIdentityTrustAuthorization/v1";
-const PREFIX: &str = "SERVERWARE_WORKLOAD_IDENTITY_TRUST_";
+const SCHEMA: &str = "catchplate.workloadIdentityTrustAuthorization/v1";
+const PREFIX: &str = "CATCHPLATE_WORKLOAD_IDENTITY_TRUST_";
 const NAMES: [&str; 4] = [
-    "SERVERWARE_WORKLOAD_IDENTITY_TRUST_AUTHORIZATION",
-    "SERVERWARE_WORKLOAD_IDENTITY_TRUST_AUTHORIZER_PUBLIC_KEY",
-    "SERVERWARE_WORKLOAD_IDENTITY_TRUST_AUTHORIZER_SHA256",
-    "SERVERWARE_WORKLOAD_IDENTITY_TRUST_DEPLOYMENT_ID",
+    "CATCHPLATE_WORKLOAD_IDENTITY_TRUST_AUTHORIZATION",
+    "CATCHPLATE_WORKLOAD_IDENTITY_TRUST_AUTHORIZER_PUBLIC_KEY",
+    "CATCHPLATE_WORKLOAD_IDENTITY_TRUST_AUTHORIZER_SHA256",
+    "CATCHPLATE_WORKLOAD_IDENTITY_TRUST_DEPLOYMENT_ID",
 ];
 const MAX_AUTHORIZATION: u64 = 128 * 1024;
 const MAX_KEY: u64 = 16 * 1024;
@@ -130,7 +130,7 @@ impl PendingTrust {
         let bundle_digest = crate::sha256_prefixed(&bundle);
         let issuer_digest = crate::sha256_prefixed(&issuer_spki);
         let principals = principal_inventory(snapshot, &issuer_digest)?;
-        let scope = json!({"schema":"serverware.workloadIdentityTrustStartupScope/v1",
+        let scope = json!({"schema":"catchplate.workloadIdentityTrustStartupScope/v1",
             "profile":PROFILE, "deploymentId":self.deployment,
             "runtimeBinarySha256":actual_binary, "policyHash":snapshot.hash,
             "serverCertificateSpkiSha256":server_spki, "clientTrustBundleSha256":bundle_digest});
@@ -152,7 +152,7 @@ impl PendingTrust {
         let deadline = self.started.checked_add(Duration::from_nanos(self.expires - self.epoch))
             .ok_or_else(refused)?;
         self.current()?;
-        let public = json!({"schema":"serverware.workloadIdentityTrustAdmission/v1", "profile":PROFILE,
+        let public = json!({"schema":"catchplate.workloadIdentityTrustAdmission/v1", "profile":PROFILE,
             "authorizationSha256":crate::sha256_prefixed(&self.authorization),
             "authorizerSpkiSha256":crate::sha256_prefixed(&self.authorizer_spki),
             "configurationDigest":configuration,
@@ -203,7 +203,7 @@ pub(super) fn prepare(is_production: bool) -> Result<Option<PendingTrust>, Strin
     if Instant::now() >= processing_deadline { return Err(refused()); }
     let envelope = crate::strict_json_value_from_slice(&authorization).map_err(|_| refused())?;
     object(&envelope, &["schema", "payload", "signature"])?;
-    if envelope["schema"] != "serverware.signedWorkloadIdentityTrustAuthorization/v1"
+    if envelope["schema"] != "catchplate.signedWorkloadIdentityTrustAuthorization/v1"
         || canonical(&envelope)? != authorization { return Err(refused()); }
     let payload = envelope["payload"].clone();
     object(&payload, &["schema", "sourceRevision", "purpose", "trustMode", "profile",
@@ -280,7 +280,7 @@ fn principal_inventory(snapshot: &Snapshot, issuer: &str) -> Result<Value, Strin
         return Err(refused());
     }
     let value = Value::Array(principals);
-    if canonical(&json!({"schema":"serverware.workloadIdentityTrustPrincipals/v1", "principals":value}))?.len()
+    if canonical(&json!({"schema":"catchplate.workloadIdentityTrustPrincipals/v1", "principals":value}))?.len()
         > MAX_PRINCIPALS_BYTES { return Err(refused()); }
     Ok(value)
 }

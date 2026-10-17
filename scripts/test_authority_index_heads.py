@@ -18,10 +18,10 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_index_heads as heads
-from serverware import authority_index_projection as projection
-from serverware import authority_index_reader as reader
-from serverware.authority_query_read_work import (
+from catchplate import authority_index_heads as heads
+from catchplate import authority_index_projection as projection
+from catchplate import authority_index_reader as reader
+from catchplate.authority_query_read_work import (
     _ValidationWork, QueryReadValidationLimits, QueryReadWorkError,
 )
 import test_authority_counted_installation as installation_oracle
@@ -30,7 +30,7 @@ import test_authority_index_range as tree_oracle
 
 
 OPERATION = "webauthn.credential.revoke"
-PROFILE = "serverware.policyAuthorityCountedHeadRead/v1"
+PROFILE = "catchplate.policyAuthorityCountedHeadRead/v1"
 TABLE = "policy_authority_counted_index_heads"
 IDS = tuple(sorted((
     "webauthn_credential_id", "webauthn_credential_user_history", "webauthn_credential_live_trust",
@@ -79,8 +79,8 @@ def expected_work(rows):
         byte_count += 2 * len(wire(descriptor))
         node_count += 2 * nodes(descriptor)
         profile = profile_oracle.expected_profile(identity)
-        values = ("serverware.policyAuthorityCountedIndexEmpty/v1",
-                  "serverware.policyAuthorityCountedIndex/v1", identity, profile.table,
+        values = ("catchplate.policyAuthorityCountedIndexEmpty/v1",
+                  "catchplate.policyAuthorityCountedIndex/v1", identity, profile.table,
                   profile.projection_digest, "160", "0", "", "0")
         byte_count += sum(8 + 2 * len(value.encode("utf-8")) for value in values)
         node_count += 2 * len(values)
@@ -124,7 +124,7 @@ class Cursor:
     def execute(self, sql, parameters):
         expected_where = "WHERE head.index_id IN (" + ", ".join("%s" for _ in IDS) + ") "
         if (not sql.startswith("SELECT CASE WHEN pg_catalog.pg_typeof(head.index_id)")
-                or f"FROM serverware_metadata.{TABLE} AS head " not in sql
+                or f"FROM catchplate_metadata.{TABLE} AS head " not in sql
                 or sql.split("WHERE ", 1)[1] != expected_where[6:] + 'ORDER BY head.index_id COLLATE "C" LIMIT %s'
                 or parameters != (*IDS, 10)):
             raise AssertionError("head SQL is not the one bounded source-ID-only SELECT")
@@ -237,7 +237,7 @@ class AuthorityIndexHeadTests(unittest.TestCase):
 
     def test_each_source_commitment_rejects_a_canonical_but_wrong_value(self):
         for field, value in (("table_name", "webauthn_trust_publications"),
-                ("counted_profile", "serverware.policyAuthorityCountedIndex/v2"),
+                ("counted_profile", "catchplate.policyAuthorityCountedIndex/v2"),
                 ("projection_digest", "sha256:" + "e" * 64),
                 ("projection_manifest_digest", "sha256:" + "d" * 64)):
             rows = source_rows()

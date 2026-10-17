@@ -39,11 +39,11 @@ def b64d(value: str) -> bytes:
 
 
 def key_path() -> Path:
-    return Path(os.getenv("SERVERWARE_SIGSTORE_FIXTURE_KEY", str(ROOT / ".tmp" / "sigstore-fixture-ed25519.pem")))
+    return Path(os.getenv("CATCHPLATE_SIGSTORE_FIXTURE_KEY", str(ROOT / ".tmp" / "sigstore-fixture-ed25519.pem")))
 
 
 def log_path() -> Path:
-    return Path(os.getenv("SERVERWARE_SIGSTORE_FIXTURE_LOG", str(ROOT / ".tmp" / "sigstore-fixture-rekor.jsonl")))
+    return Path(os.getenv("CATCHPLATE_SIGSTORE_FIXTURE_LOG", str(ROOT / ".tmp" / "sigstore-fixture-rekor.jsonl")))
 
 
 def load_key() -> Ed25519PrivateKey:
@@ -127,7 +127,7 @@ def sign() -> dict[str, Any]:
     signature = "sigstore-fixture-ed25519:" + b64e(key.sign(canonical_json(payload).encode("utf-8")))
     transparency = append_log(
         {
-            "apiVersion": "serverware.sigstoreFixtureLog/v1",
+            "apiVersion": "catchplate.sigstoreFixtureLog/v1",
             "kind": request.get("kind"),
             "service": request.get("service"),
             "image_id": request.get("image_id"),
@@ -142,10 +142,10 @@ def sign() -> dict[str, Any]:
         "statement_digest": statement_digest,
         "signature": signature,
         "key_provider": {
-            "type": os.getenv("SERVERWARE_SIGSTORE_FIXTURE_KEY_PROVIDER", "kms"),
-            "key_ref": os.getenv("SERVERWARE_SIGSTORE_FIXTURE_KEY_REF", "kms://fixture/serverware-release-images"),
+            "type": os.getenv("CATCHPLATE_SIGSTORE_FIXTURE_KEY_PROVIDER", "kms"),
+            "key_ref": os.getenv("CATCHPLATE_SIGSTORE_FIXTURE_KEY_REF", "kms://fixture/catchplate-release-images"),
             "key_id": info["key_id"],
-            "workload_identity": os.getenv("SERVERWARE_SIGSTORE_FIXTURE_WORKLOAD_IDENTITY", "fixture://github-actions/serverware-release"),
+            "workload_identity": os.getenv("CATCHPLATE_SIGSTORE_FIXTURE_WORKLOAD_IDENTITY", "fixture://github-actions/catchplate-release"),
         },
         "transparency": transparency,
         "bundle": {

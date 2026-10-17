@@ -7,10 +7,10 @@ use super::super::authority_history::AuthorityEpochRefV3;
 use super::super::production_dispatch::{SignedProductionServiceTransitionV4 as Transition,ClosedProductionDispatchResultV4 as ResultBody};
 use super::common::DurableAppendJournal;
 use std::os::unix::fs::{FileExt,MetadataExt};
-pub(super) const API:&str="serverware.nativeSpoolCurrentCommand/v1";
+pub(super) const API:&str="catchplate.nativeSpoolCurrentCommand/v1";
 pub(super) const GRANT_FD:&str="spool-current-grant";
 pub(super) const DIRECTORY:&str="spool-current-journal";
-const DOMAIN:&[u8]=b"serverware.nativeSpoolCurrentGrant.signature/v1";
+const DOMAIN:&[u8]=b"catchplate.nativeSpoolCurrentGrant.signature/v1";
 const MAX_RECORDS:usize=128;
 #[derive(Debug,Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -28,9 +28,9 @@ pub(super) struct Payload {
 pub(super) struct Grant {pub(super) payload:Payload,pub(super) signature_base64url:String}
 impl Grant {
     pub(super) fn verify(&self,history:&RuntimeAuthorityHistory)->Result<(spool_head::Grant,VerifyingKey),ServiceError>{
-        let p=&self.payload;let effects=p.api_version=="serverware.nativeSpoolCurrentGrant/v3";
-        let completion=effects || p.api_version=="serverware.nativeSpoolCurrentGrant/v2";
-        require((completion || p.api_version=="serverware.nativeSpoolCurrentGrant/v1") && p.purpose=="native-spool-current-signature"
+        let p=&self.payload;let effects=p.api_version=="catchplate.nativeSpoolCurrentGrant/v3";
+        let completion=effects || p.api_version=="catchplate.nativeSpoolCurrentGrant/v2";
+        require((completion || p.api_version=="catchplate.nativeSpoolCurrentGrant/v1") && p.purpose=="native-spool-current-signature"
             && p.guest.service_role=="current-signature-authority" && p.runtime_configuration_sha256==p.guest.runtime_configuration_sha256
             && &p.authority_history_manifest_sha256==history.manifest_sha256()
             && p.head_grant_original.is_ascii() && !p.head_grant_original.is_empty() && p.head_grant_original.len()<=65536
@@ -38,11 +38,11 @@ impl Grant {
         let sig=URL_SAFE_NO_PAD.decode(&self.signature_base64url).map_err(|_|invalid())?;
         require(sig.len()==64 && URL_SAFE_NO_PAD.encode(&sig)==self.signature_base64url)?;
         history.root_authority_key().verify_strict(&super::super::protocol::domain_separated_signature_preimage(
-            if effects{b"serverware.nativeSpoolCurrentGrant.signature/v3"}else if completion{b"serverware.nativeSpoolCurrentGrant.signature/v2"}else{DOMAIN},&encode_canonical_frame(p)?)?,
+            if effects{b"catchplate.nativeSpoolCurrentGrant.signature/v3"}else if completion{b"catchplate.nativeSpoolCurrentGrant.signature/v2"}else{DOMAIN},&encode_canonical_frame(p)?)?,
             &Signature::from_slice(&sig).map_err(|_|invalid())?).map_err(|_|invalid())?;
         let head:spool_head::Grant=decode_canonical_frame(p.head_grant_original.as_bytes())?;
         require(head.completion_selected()==completion && head.payload.completion.is_some()==completion && head.effects_selected()==effects
-            && head.payload.api_version==(if effects{"serverware.nativeSpoolHeadGrant/v3"}else if completion{"serverware.nativeSpoolHeadGrant/v2"}else{"serverware.nativeSpoolHeadGrant/v1"})
+            && head.payload.api_version==(if effects{"catchplate.nativeSpoolHeadGrant/v3"}else if completion{"catchplate.nativeSpoolHeadGrant/v2"}else{"catchplate.nativeSpoolHeadGrant/v1"})
             && head.payload.purpose=="native-shared-spool-head"
             && head.payload.guest.service_role=="durable-recovery-store" && head.payload.guest.uid!=p.guest.uid
             && head.payload.guest.boot_id_base64url==p.guest.boot_id_base64url
@@ -77,11 +77,11 @@ impl Command {
         Self::Ledger(v)=>&v.completion.payload.claim.request,Self::Effect(v)=>&v.completion.prepared.core.request}}
     fn durable(&self)->&Reply{match self{Self::Ledger(v)=>&v.durable,Self::Effect(v)=>&v.durable}}
     pub(super) fn deadline(&self)->Result<u64,ServiceError>{match self{Self::Ledger(v)=>v.deadline(),Self::Effect(v)=>{
-        require(v.api_version=="serverware.nativeSpoolCurrentCommand/v2")?;self.request().validate().map_err(|_|invalid())?;
+        require(v.api_version=="catchplate.nativeSpoolCurrentCommand/v2")?;self.request().validate().map_err(|_|invalid())?;
         Ok(self.request().binding().operation_deadline_boottime_nanos)}}}
 }
 pub(super) fn is_command(raw:&[u8])->Result<bool,ServiceError>{let value:serde_json::Value=decode_canonical_frame(raw)?;
-    Ok(matches!(value.get("apiVersion").and_then(|v|v.as_str()),Some(API|"serverware.nativeSpoolCurrentCommand/v2")))}
+    Ok(matches!(value.get("apiVersion").and_then(|v|v.as_str()),Some(API|"catchplate.nativeSpoolCurrentCommand/v2")))}
 pub(super) struct Input {command:Command,epoch:AuthorityEpochRefV3,predecessor:Sha256Digest,completed:u64}
 impl Input {pub(super) fn sign(&self,key:&SigningKey)->Result<Transition,ServiceError>{
     let (Reply::Committed{result,..}|Reply::EffectCommitted{result,..})=self.command.durable() else{return Err(invalid());};

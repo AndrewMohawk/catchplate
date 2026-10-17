@@ -75,22 +75,22 @@ jobs:
           spec = importlib.util.spec_from_file_location('normal_runner', 'scripts/run_native_jit_review_rust.py')
           runner = importlib.util.module_from_spec(spec); spec.loader.exec_module(runner)
           root = Path(os.environ['RUNNER_TEMP']) / 'normal-proxy-rust/artifact'
-          assert {p.name for p in root.iterdir()} == {'normal.json', 'serverware-decision-gate'}
+          assert {p.name for p in root.iterdir()} == {'normal.json', 'catchplate-decision-gate'}
           receipt = json.loads(runner.read(root / 'normal.json'))
           tree = subprocess.check_output(['git', 'ls-tree', '-rz', '--full-tree', os.environ['GITHUB_SHA']], timeout=30)
           identity = runner.normal_input_identity(Path.cwd(), runner.normal_git_files(tree))
-          runner.verify_normal_receipt(receipt, runner.read(root / 'serverware-decision-gate', 512 * 1024**2), identity)
-          assert stat.S_IMODE((root / 'serverware-decision-gate').stat().st_mode) == 0o555
+          runner.verify_normal_receipt(receipt, runner.read(root / 'catchplate-decision-gate', 512 * 1024**2), identity)
+          assert stat.S_IMODE((root / 'catchplate-decision-gate').stat().st_mode) == 0o555
           assert receipt['sourceRevision'] == os.environ['GITHUB_SHA']
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='ascii') as output:
-              output.write('name=serverware-normal-proxy-' + receipt['buildInputIdentity'] + '\n')
+              output.write('name=catchplate-normal-proxy-' + receipt['buildInputIdentity'] + '\n')
           PY
       - name: Upload only the normal executable and public provenance
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ steps.artifact.outputs.name }}
           path: |
-            ${{ runner.temp }}/normal-proxy-rust/artifact/serverware-decision-gate
+            ${{ runner.temp }}/normal-proxy-rust/artifact/catchplate-decision-gate
             ${{ runner.temp }}/normal-proxy-rust/artifact/normal.json
           if-no-files-found: error
           retention-days: 30
@@ -98,7 +98,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: serverware-normal-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          name: catchplate-normal-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/normal-proxy-rust/normal-failure.json
           if-no-files-found: warn
           retention-days: 7

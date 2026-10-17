@@ -33,11 +33,11 @@ from psycopg.types.json import Jsonb
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.native_postgres_results import run_native_fixture
-from serverware.authority_store.counted_hash_sql import counted_hash_functions_sql
-from serverware.authority_store.counted_projection_sql import counted_projection_functions_sql
-from serverware.authority_store.primary_tree_sql import framed_digest_function_sql
-from serverware.authority_store.wire_json_sql import wire_json_function_sql
+from catchplate.native_postgres_results import run_native_fixture
+from catchplate.authority_store.counted_hash_sql import counted_hash_functions_sql
+from catchplate.authority_store.counted_projection_sql import counted_projection_functions_sql
+from catchplate.authority_store.primary_tree_sql import framed_digest_function_sql
+from catchplate.authority_store.wire_json_sql import wire_json_function_sql
 import test_authority_index_join as oracle
 from test_authority_root_transition_postgres import production_digest_functions
 from test_webauthn_trust_projection_postgres import local_connection_parameters
@@ -78,11 +78,11 @@ def expected_projection(index_id: str, row: dict, *, expiry_us: int = 1) -> list
     profile = oracle.expected_profile(index_id)
     key_bytes = json.dumps({"id": row["id"]}, ensure_ascii=True, allow_nan=False,
                            sort_keys=True, separators=(",", ":")).encode("ascii")
-    material = b"serverware.policyAuthorityBusinessKey/v1\0"
+    material = b"catchplate.policyAuthorityBusinessKey/v1\0"
     for frame in (profile.table.encode("ascii"), key_bytes):
         material += len(frame).to_bytes(8, "big") + frame
     key_digest = "sha256:" + hashlib.sha256(material).hexdigest()
-    row_digest = oracle.framed("serverware.policyAuthorityAuthenticatedRow/v1",
+    row_digest = oracle.framed("catchplate.policyAuthorityAuthenticatedRow/v1",
                                profile.table.encode("ascii"), oracle.utf8_json(row))
     leaf = oracle.expected_leaf(profile, row, {"keyDigest": key_digest},
                                 {"rowDigest": row_digest}, expiry_us=expiry_us)
@@ -130,7 +130,7 @@ class AuthorityCountedProjectionPostgresTests(unittest.TestCase):
             self.connection.close()
 
     def function(self, suffix: str) -> sql.Identifier:
-        return sql.Identifier(self.schema, "serverware_policy_authority_" + suffix)
+        return sql.Identifier(self.schema, "catchplate_policy_authority_" + suffix)
 
     @contextmanager
     def rollback_variant(self):
@@ -186,7 +186,7 @@ class AuthorityCountedProjectionPostgresTests(unittest.TestCase):
                 row = sample_row(index_id)
                 row.update(id=identity, credential_id=identity, fixture_payload={"雪": [identity, True, None]})
                 actual = self.assert_projection(index_id, row)[0]
-                auth_key = oracle.framed("serverware.policyAuthorityAuthenticatedKey/v1", b"webauthn_credentials",
+                auth_key = oracle.framed("catchplate.policyAuthorityAuthenticatedKey/v1", b"webauthn_credentials",
                                          oracle.utf8_json({"id": identity}))
                 self.assertNotEqual(actual["primary_key_digest"], auth_key)
         first = self.assert_projection(index_id, {**sample_row(index_id), "credential_id": "é"})[0]

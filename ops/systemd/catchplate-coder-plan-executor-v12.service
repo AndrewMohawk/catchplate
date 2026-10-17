@@ -1,0 +1,47 @@
+[Unit]
+Description=Catchplate Coder v12 plan executor with mandatory per-invocation signed readiness
+PartOf=catchplate-coder-v12.target
+After=local-fs.target catchplate-coder-runtime-v12.service catchplate-coder-plan-executor-v12.socket catchplate-coder-lifecycle-v12.service catchplate-coder-docker-proxy-v12.service catchplate-coder-receipt-authority-v12.service catchplate-coder-final-verdict-authority-v12.service
+Requires=catchplate-coder-runtime-v12.service catchplate-coder-plan-executor-v12.socket catchplate-coder-lifecycle-v12.service catchplate-coder-docker-proxy-v12.service catchplate-coder-receipt-authority-v12.service catchplate-coder-final-verdict-authority-v12.service
+Before=catchplate-coder-controller-v12.service catchplate-coder-readiness-v12.service
+RequiresMountsFor=/var/lib/catchplate/coder-controller-v12
+
+[Service]
+Type=notify
+User=catchplate-coder-executor
+Group=catchplate-coder-executor
+SupplementaryGroups=catchplate-coder-executor-api catchplate-coder-docker-api catchplate-coder-lifecycle-api catchplate-coder-cas
+UMask=0077
+LoadCredentialEncrypted=plan-executor-capability-key:@RELEASE_ROOT@/credentials/plan-executor-capability-key.cred
+Environment=CATCHPLATE_CODER_PLAN_EXECUTOR_CONFIG_SHA256=@PLAN_EXECUTOR_CONFIG_SHA256@
+Environment=CATCHPLATE_CODER_REQUIRE_PER_INVOCATION_READINESS_V12=1
+Sockets=catchplate-coder-plan-executor-v12.socket
+ExecStart=@RELEASE_ROOT@/bin/catchplate-coder-plan-executor-v12 --config @RELEASE_ROOT@/config/plan-executor-v12.conf daemon
+ExecStop=/bin/kill -TERM $MAINPID
+Restart=on-failure
+RestartSec=2s
+TimeoutStartSec=60s
+TimeoutStopSec=120s
+KillMode=control-group
+SendSIGKILL=yes
+FinalKillSignal=SIGKILL
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+ReadWritePaths=/run/catchplate/coder/v12/plan-executor /var/lib/catchplate/coder-controller-v12/executor /var/lib/catchplate/coder-controller-v12/cas
+
+[Install]
+WantedBy=catchplate-coder-v12.target

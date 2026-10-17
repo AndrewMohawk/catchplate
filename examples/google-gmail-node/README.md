@@ -1,8 +1,8 @@
 # Gmail with the official Node.js SDK
 
-List a small inbox sample through Serverware using Google's generated
+List a small inbox sample through Catchplate using Google's generated
 `@googleapis/gmail` client. The operator owns the Google account's real OAuth
-credentials and refresh tokens. This example receives only a Serverware
+credentials and refresh tokens. This example receives only a Catchplate
 application ID/token, the proxy address, and CA certificates.
 
 It lists at most two pages of five INBOX messages, then calls `messages.get`
@@ -24,7 +24,7 @@ attachment, history, profile or Calendar calls.
    must advertise `orderedFormV1` and replace this exact full header value:
 
    ```text
-   Bearer serverware-gmail-placeholder-v1
+   Bearer catchplate-gmail-placeholder-v1
    ```
 
    This is a public placeholder, never a real Google token. Automatic header
@@ -41,7 +41,7 @@ Go, Node.js and Python under **Gmail SDK language**; choose **Node.js** for this
 project's copied shell recipe. The Node client also accepts the private JSON
 download generated for any of those languages. Prepare dependencies first:
 the recipe does not install or build them. See the
-[deployment record](../../docker/serverware-operator-demo/README.md) for the live
+[deployment record](../../docker/catchplate-operator-demo/README.md) for the live
 release. All three SDK jobs have isolated synthetic-provider proxy evidence in
 the [verification record](../../docs/operator-gmail-job-verification.md), not
 real Google acceptance.
@@ -66,8 +66,8 @@ CA from **Proxy setup**. Keep the JSON private and place the CA at the path
 recorded in it (relative paths resolve beside the JSON, not your working directory):
 
 ```sh
-chmod 600 /path/to/serverware-client.private.json
-node client.mjs --config /path/to/serverware-client.private.json
+chmod 600 /path/to/catchplate-client.private.json
+node client.mjs --config /path/to/catchplate-client.private.json
 ```
 
 Use the complete download, not just its nested `client_recipe`. The client checks
@@ -76,7 +76,7 @@ matching connection fields in both copies. It accepts the default Go recipe
 (v1) and Node/Python recipes (v2), but never runs JSON entrypoints, arguments or
 commands, and imports only validated connection settings and the saved age policy. File settings
 override ambient connection values; an absent optional proxy CA clears any
-ambient `SERVERWARE_PROXY_CA_FILE`. Keep this token-bearing JSON out of source
+ambient `CATCHPLATE_PROXY_CA_FILE`. Keep this token-bearing JSON out of source
 control and obtain a fresh download if its token has expired.
 
 The env-only invocation still works. `.env.example` is reference configuration;
@@ -85,10 +85,10 @@ the following in the process environment, with the token injected privately
 through your secret manager—not a command-line argument or shell-history literal:
 
 ```sh
-export SERVERWARE_PROXY_URL='https://your-proxy.example:443'
-export SERVERWARE_APP_ID='your-saved-application-uuid'
-export SERVERWARE_CA_FILE='/absolute/path/to/serverware-ca.pem'
-# Set SERVERWARE_PROXY_TOKEN privately; optional SERVERWARE_PROXY_CA_FILE.
+export CATCHPLATE_PROXY_URL='https://your-proxy.example:443'
+export CATCHPLATE_APP_ID='your-saved-application-uuid'
+export CATCHPLATE_CA_FILE='/absolute/path/to/catchplate-ca.pem'
+# Set CATCHPLATE_PROXY_TOKEN privately; optional CATCHPLATE_PROXY_CA_FILE.
 node client.mjs
 ```
 
@@ -105,7 +105,7 @@ permission's maximum of 32. Direct metadata reads do not project out `internalDa
 This query is a convenience, not proof of age: the proxy checks Gmail's
 `internalDate` and can deny the whole response when that evidence is missing or
 too old. The bounded inbox sample is not a completeness guarantee. For the copied
-Bash recipe or an environment-only run, `SERVERWARE_GMAIL_MAX_AGE_DAYS='7'`
+Bash recipe or an environment-only run, `CATCHPLATE_GMAIL_MAX_AGE_DAYS='7'`
 selects the same convenience query; it cannot grant or change permission.
 With `--config`, only the downloaded top-level policy supplies this hint, never
 an ambient variable or nested recipe override.
@@ -130,7 +130,7 @@ other users and diagnostics. Errors print one fixed message and exit nonzero.
 The [official Google Node client](https://github.com/googleapis/google-api-nodejs-client)
 generates the list/get calls and serializes the queries and headers. An
 `OAuth2` instance holds only the static public dummy, without refresh credentials
-or a refresh handler. Google OAuth refresh remains Serverware's responsibility.
+or a refresh handler. Google OAuth refresh remains Catchplate's responsibility.
 
 The documented [Gaxios `fetchImplementation` option](https://github.com/googleapis/gaxios#request-options)
 connects those unmodified SDK requests to Undici `request` and its standard
@@ -141,10 +141,10 @@ headers that `fetch` adds but the Gmail permission does not accept. The adapter
 does not remove, reorder, or replace the SDK's request headers/query values.
 
 - Outer TLS verifies the proxy DNS name using Node's bundled public roots plus
-  the optional `SERVERWARE_PROXY_CA_FILE`.
-- Inner TLS verifies `gmail.googleapis.com` using only `SERVERWARE_CA_FILE`.
+  the optional `CATCHPLATE_PROXY_CA_FILE`.
+- Inner TLS verifies `gmail.googleapis.com` using only `CATCHPLATE_CA_FILE`.
 - Basic `Proxy-Authorization` holds the application ID/token on CONNECT only.
-  Gmail receives only the public dummy Bearer header before Serverware replaces it.
+  Gmail receives only the public dummy Bearer header before Catchplate replaces it.
 - Ambient `HTTPS_PROXY`, `NO_PROXY`, or Google universe settings cannot bypass
   the explicit dispatcher or change the fixed Gmail endpoint. No global trust
   store is changed, and neither token appears in a URL.

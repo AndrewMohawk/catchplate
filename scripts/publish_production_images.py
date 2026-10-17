@@ -15,7 +15,7 @@ import build_production_images
 
 ROOT = Path(__file__).resolve().parent.parent
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-PUBLISHED_API_VERSION = "serverware.productionImagesPublished/v2"
+PUBLISHED_API_VERSION = "catchplate.productionImagesPublished/v2"
 PUBLISHED_KIND = "ProductionImagesPublished"
 
 
@@ -79,7 +79,7 @@ def load_build(path: Path) -> dict[str, Any]:
     if parsed.get("ok") is not True:
         raise ValueError(f"production image build artifact is not ok: {parsed}")
     if (
-        parsed.get("identity_mode") != build_production_images.serverware_source_tree.PRODUCTION_IDENTITY_MODE
+        parsed.get("identity_mode") != build_production_images.catchplate_source_tree.PRODUCTION_IDENTITY_MODE
         or parsed.get("production_release_eligible") is not True
     ):
         raise ValueError("production image build artifact is not bound to a clean production commit")
@@ -123,7 +123,7 @@ def load_build(path: Path) -> dict[str, Any]:
         validate_digest(metadata.get(field), f"production image build metadata {field}")
     if (
         metadata.get("source_identity_mode")
-        != build_production_images.serverware_source_tree.PRODUCTION_IDENTITY_MODE
+        != build_production_images.catchplate_source_tree.PRODUCTION_IDENTITY_MODE
         or metadata.get("production_release_eligible") is not True
         or metadata.get("image_title_suffix") != "production"
         or not isinstance(metadata.get("source_contract"), dict)
@@ -148,24 +148,24 @@ def load_build(path: Path) -> dict[str, Any]:
         if type(image) is not dict:
             raise ValueError(f"production image build images[{index}] must be a JSON object")
         service = image.get("service")
-        if service not in {"serverware-control", "serverware-decision-gate"} or service in seen_services:
+        if service not in {"catchplate-control", "catchplate-decision-gate"} or service in seen_services:
             raise ValueError(f"production image build has unexpected or duplicate service: {service!r}")
         seen_services.add(str(service))
         expected_fields = {"service", "tag", "dockerfile", "image_id"}
-        if service == "serverware-decision-gate":
+        if service == "catchplate-decision-gate":
             expected_fields |= {
                 *build_production_images.DECISION_GATE_BINARY_PATHS,
                 *build_production_images.LAUNCH_AUTHORITY_METADATA_FIELDS,
             }
         require_exact_fields(image, expected_fields, f"production image build {service}")
         image_ids.add(validate_image_id(image.get("image_id")))
-        if service == "serverware-decision-gate":
+        if service == "catchplate-decision-gate":
             decision_gate_declared_digests(image)
             if launch_authority_binding(image, "production image build decision-gate") != expected_authority:
                 raise ValueError(
                     "production image build decision-gate launch-authority binding does not match build metadata"
                 )
-    if seen_services != {"serverware-control", "serverware-decision-gate"}:
+    if seen_services != {"catchplate-control", "catchplate-decision-gate"}:
         raise ValueError("production image build service set is incomplete")
     results = no_shell.get("results")
     if not isinstance(results, list) or len(results) != len(images):
@@ -184,8 +184,8 @@ def load_build(path: Path) -> dict[str, Any]:
 
 def service_repo_name(service: str) -> str:
     name = service.strip().lower().replace("_", "-")
-    if name.startswith("serverware-"):
-        name = name[len("serverware-") :]
+    if name.startswith("catchplate-"):
+        name = name[len("catchplate-") :]
     return name or "image"
 
 
@@ -281,8 +281,8 @@ def publish_image(
 ) -> dict[str, Any]:
     service = str(image.get("service") or "")
     local_id = validate_image_id(image.get("image_id"))
-    declared_digests = decision_gate_declared_digests(image) if service == "serverware-decision-gate" else {}
-    if service == "serverware-decision-gate":
+    declared_digests = decision_gate_declared_digests(image) if service == "catchplate-decision-gate" else {}
+    if service == "catchplate-decision-gate":
         declared_authority = launch_authority_binding(image, "decision-gate build image")
         if declared_authority != expected_launch_authority:
             raise ValueError("decision-gate build image launch-authority binding does not match build metadata")
@@ -305,7 +305,7 @@ def publish_image(
             f"registry digest resolves to {remote_image_id}"
         )
     measured_digests: dict[str, str] = {}
-    if service == "serverware-decision-gate":
+    if service == "catchplate-decision-gate":
         for field, path in build_production_images.DECISION_GATE_BINARY_PATHS.items():
             measured = build_production_images.image_file_sha256(digest_ref, path)
             expected = declared_digests[field]
@@ -367,13 +367,13 @@ def command_plan(build: dict[str, Any], *, registry_prefix: str, tag: str) -> li
 
 def write_env(path: Path, production_images: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("SERVERWARE_PRODUCTION_IMAGES=" + ",".join(production_images) + "\n", encoding="utf-8")
+    path.write_text("CATCHPLATE_PRODUCTION_IMAGES=" + ",".join(production_images) + "\n", encoding="utf-8")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Push shell-free production image candidates and emit digest-pinned refs.")
     parser.add_argument("--build-file", default=".tmp/production-images-build.json")
-    parser.add_argument("--registry-prefix", required=True, help="Registry/repository prefix, for example registry.prod.serverware.dev/serverware")
+    parser.add_argument("--registry-prefix", required=True, help="Registry/repository prefix, for example registry.prod.catchplate.dev/catchplate")
     parser.add_argument("--tag", default="production-candidate")
     parser.add_argument("--out", default=".tmp/production-images-published.json")
     parser.add_argument("--env-out", default=".tmp/production-images.env")
@@ -412,7 +412,7 @@ def main() -> None:
             "source_build_file": args.build_file,
             "images": images,
             "remote_no_shell": remote_no_shell,
-            "env": {"SERVERWARE_PRODUCTION_IMAGES": ",".join(production_images)},
+            "env": {"CATCHPLATE_PRODUCTION_IMAGES": ",".join(production_images)},
         }
         output_path = Path(args.out)
         output_path.parent.mkdir(parents=True, exist_ok=True)

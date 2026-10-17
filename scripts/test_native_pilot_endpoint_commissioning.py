@@ -16,18 +16,18 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scripts.test_native_pilot_fresh_ledger import canonical, encoded, labelled, scope_original, sha
-from serverware import native_pilot_assignment as assignment
-from serverware import native_pilot_publication as publication
-from serverware import native_pilot_publication_profiles as profiles
-from serverware import native_pilot_supervisor as supervisor
-from serverware import native_pilot_supervisor_endpoint_policy as endpoints
-from serverware import native_pilot_supervisor_policy as policy
-from serverware import native_shadow_retrieval_artifacts as retrieval
+from catchplate import native_pilot_assignment as assignment
+from catchplate import native_pilot_publication as publication
+from catchplate import native_pilot_publication_profiles as profiles
+from catchplate import native_pilot_supervisor as supervisor
+from catchplate import native_pilot_supervisor_endpoint_policy as endpoints
+from catchplate import native_pilot_supervisor_policy as policy
+from catchplate import native_shadow_retrieval_artifacts as retrieval
 
 
 def fragment():
-    return {"apiVersion": "serverware.nativePilotSupervisorEndpointPolicy/v2",
-        "initialization": "fresh-ledger", "objectDirectory": "/var/lib/serverware/empty-retrieval",
+    return {"apiVersion": "catchplate.nativePilotSupervisorEndpointPolicy/v2",
+        "initialization": "fresh-ledger", "objectDirectory": "/var/lib/catchplate/empty-retrieval",
         "peerExpectations": {name: labelled(name) for name in
             ("cgroupPathSha256", "securityLabelSha256", "configurationGenerationSha256")}}
 
@@ -37,9 +37,9 @@ def envelope(version=2):
     payload.update(custodyAuthority={}, authorityKeyIndependence={})
     if version == 2:
         payload["nativeClosureSet"] = {"setRootSha256": labelled("set"), "seccompSetRootSha256": labelled("seccomp")}
-    domain = "serverware.policyShadowAssignment/v" + str(version)
+    domain = "catchplate.policyShadowAssignment/v" + str(version)
     return {"apiVersion": domain, "kind": "PolicyShadowAssignment", "signatureDomain": domain,
-        "canonicalProfile": "serverware.canonicalJson/ascii-integer-v1", "signatureAlgorithm": "Ed25519",
+        "canonicalProfile": "catchplate.canonicalJson/ascii-integer-v1", "signatureAlgorithm": "Ed25519",
         "payload": payload, "payloadSha256": sha(canonical(payload)), "signingKeyId": labelled("key-id"),
         "signingKeySpkiSha256": labelled("spki"), "signature": "A" * 86}  # Invalid zero sentinel only.
 
@@ -56,7 +56,7 @@ def peer():
     pieces.extend((bytes.fromhex(value["executableSha256"][7:]), value["cgroupPathSha256"].encode("ascii"),
         value["cgroupMountId"].to_bytes(8, "big"), value["cgroupInode"].to_bytes(8, "big"),
         value["securityLabelSha256"].encode("ascii"), value["configurationGenerationSha256"].encode("ascii")))
-    value["processIdentitySha256"] = sha(b"serverware.policyCustodyPeerProcessIdentity/v4\0"
+    value["processIdentitySha256"] = sha(b"catchplate.policyCustodyPeerProcessIdentity/v4\0"
         + b"".join(len(piece).to_bytes(8, "big") + piece for piece in pieces))
     return value
 
@@ -118,13 +118,13 @@ class EndpointCommissioningGrammarTests(unittest.TestCase):
             policy.ENDPOINT_LAUNCH_POLICY_API, policy.SERVICE_MATERIAL_POLICY_API, policy.HELPER_INITIAL_POLICY_API,
             policy.CURRENT_HEAD_POLICY_API, policy.BRIDGE_RUNTIME_POLICY_API, policy.BRIDGE_COMMISSIONING_POLICY_API,
             policy.CONTINUATION_POLICY_API, policy.NATIVE_TERMINAL_POLICY_API, policy.INTERACTIVE_POLICY_API}), 20)
-        self.assertEqual(policy.HELPER_INITIAL_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v14")
-        self.assertEqual(policy.CURRENT_HEAD_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v15")
-        self.assertEqual(policy.BRIDGE_RUNTIME_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v16")
-        self.assertEqual(policy.BRIDGE_COMMISSIONING_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v17")
-        self.assertEqual(policy.CONTINUATION_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v18")
-        self.assertEqual(policy.NATIVE_TERMINAL_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v19")
-        self.assertEqual(policy.INTERACTIVE_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v20")
+        self.assertEqual(policy.HELPER_INITIAL_POLICY_API, "catchplate.nativePilotSupervisorCommissioningPolicy/v14")
+        self.assertEqual(policy.CURRENT_HEAD_POLICY_API, "catchplate.nativePilotSupervisorCommissioningPolicy/v15")
+        self.assertEqual(policy.BRIDGE_RUNTIME_POLICY_API, "catchplate.nativePilotSupervisorCommissioningPolicy/v16")
+        self.assertEqual(policy.BRIDGE_COMMISSIONING_POLICY_API, "catchplate.nativePilotSupervisorCommissioningPolicy/v17")
+        self.assertEqual(policy.CONTINUATION_POLICY_API, "catchplate.nativePilotSupervisorCommissioningPolicy/v18")
+        self.assertEqual(policy.NATIVE_TERMINAL_POLICY_API, "catchplate.nativePilotSupervisorCommissioningPolicy/v19")
+        self.assertEqual(policy.INTERACTIVE_POLICY_API, "catchplate.nativePilotSupervisorCommissioningPolicy/v20")
         self.assertEqual(policy.NATIVE_TERMINAL_FIELDS, policy.CONTINUATION_FIELDS)
         self.assertEqual(policy.CONTINUATION_POLICY_APIS,
             (policy.CONTINUATION_POLICY_API, policy.NATIVE_TERMINAL_POLICY_API, policy.INTERACTIVE_POLICY_API))
@@ -149,7 +149,7 @@ class EndpointCommissioningGrammarTests(unittest.TestCase):
             "native-service-" + operation for operation in ("commitRequest", "ingress", "ledger", "terminal",
                 "dispatchBarrier", "activeEffectBarrier", "activeEffectCommit", "retrieval", "persistence", "trustedTime"))
             + ("native-generation-install-grant",))
-        self.assertEqual(policy.INITIAL_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v4")
+        self.assertEqual(policy.INITIAL_POLICY_API, "catchplate.nativePilotSupervisorCommissioningPolicy/v4")
         self.assertEqual(len(policy.LEGACY_KEY_PURPOSES), 42)
         self.assertEqual(len(policy.INITIAL_KEY_PURPOSES), 57)
         self.assertEqual(len(policy.NATIVE_KEY_PURPOSES), 77)
@@ -174,7 +174,7 @@ class EndpointCommissioningGrammarTests(unittest.TestCase):
             values.append({**fragment(), name: {}})
         for mode in (None, "", "historical", False):
             values.append({**fragment(), "initialization": mode})
-        values.append({**fragment(), "apiVersion": "serverware.nativePilotSupervisorEndpointPolicy/v1"})
+        values.append({**fragment(), "apiVersion": "catchplate.nativePilotSupervisorEndpointPolicy/v1"})
         for name in fragment():
             value = fragment()
             del value[name]
@@ -184,7 +184,7 @@ class EndpointCommissioningGrammarTests(unittest.TestCase):
                 endpoints.validate_policy(value)
 
     def test_fragment_path_and_peer_bounds(self):
-        for path in ("/", "/a", "/a/b", "var/lib/serverware", "/var//serverware/a", "/var/./serverware/a",
+        for path in ("/", "/a", "/a/b", "var/lib/catchplate", "/var//catchplate/a", "/var/./catchplate/a",
                      "/var/lib/../a", "/var/lib/a\0b", "/var/lib/" + "x" * 256, "/" + "/".join(["a"] * 33)):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 endpoints.validate_policy({**fragment(), "objectDirectory": path})
@@ -203,7 +203,7 @@ class EndpointCommissioningGrammarTests(unittest.TestCase):
         for purpose, raw in values.items():
             with self.subTest(purpose=purpose):
                 self.assertEqual(publication.DESTINATIONS[purpose],
-                    "/etc/serverware/native-pilot-inputs/" + purpose + ".json")
+                    "/etc/catchplate/native-pilot-inputs/" + purpose + ".json")
                 publication._shape(purpose, raw)
                 with self.assertRaises(ValueError):
                     profiles.shape(purpose, raw + b"\n")
@@ -214,7 +214,7 @@ class EndpointCommissioningGrammarTests(unittest.TestCase):
     def test_endpoint_publication_refuses_legacy_scope_manifest_and_assignment(self):
         with self.assertRaises(ValueError):
             profiles.shape("endpoint-proof-scope", scope_original(1))
-        value = {"apiVersion": "serverware.nativeShadowRetrievalStoreManifest/v1",
+        value = {"apiVersion": "catchplate.nativeShadowRetrievalStoreManifest/v1",
             "proofScopeOriginalBase64url": encoded(scope_original(2)), "objectOriginalsBase64url": []}
         with self.assertRaises(ValueError):
             profiles.shape("endpoint-retrieval-manifest", canonical(value))

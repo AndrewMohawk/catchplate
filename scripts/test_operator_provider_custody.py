@@ -21,7 +21,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import operator_provider_custody as custody
+from catchplate import operator_provider_custody as custody
 
 CLIENT = "123-synthetic.apps.googleusercontent.com"
 CALLBACK = "https://console.example.com/api/oauth/callback/google"
@@ -48,12 +48,12 @@ class CustodyTests(unittest.TestCase):
         self.addCleanup(self.conn.close)
 
     def install(self):
-        with patch("serverware.operator_publication.assert_held") as held:
+        with patch("catchplate.operator_publication.assert_held") as held:
             custody.install_empty_store(self.conn, self.owner)
         self.assertEqual(held.call_count, 1)
 
     def insert(self, selected=None, secret=SECRET):
-        with patch("serverware.operator_publication.assert_held") as held:
+        with patch("catchplate.operator_publication.assert_held") as held:
             custody.insert_secret(self.conn, self.owner, selected or self.binding, key=KEY, secret=secret)
         self.assertEqual(held.call_count, 1)
 
@@ -124,7 +124,7 @@ class CustodyTests(unittest.TestCase):
         self.refused(custody.install_empty_store, self.conn, self.owner)
         self.assertEqual(self.conn.execute("SELECT count(*) FROM sqlite_master").fetchone()[0], 0)
         self.conn.rollback()
-        with patch("serverware.operator_publication.assert_held") as held:
+        with patch("catchplate.operator_publication.assert_held") as held:
             self.refused(custody.install_empty_store, self.conn, self.owner)
         held.assert_not_called()
         self.refused(custody.read_secret, self.conn, self.owner, self.binding, key=KEY)
@@ -132,7 +132,7 @@ class CustodyTests(unittest.TestCase):
     def test_closed_connection_errors_are_fixed(self):
         self.conn.close()
         self.refused(custody.read_secret, self.conn, self.owner, self.binding, key=KEY)
-        with patch("serverware.operator_publication.assert_held") as held:
+        with patch("catchplate.operator_publication.assert_held") as held:
             self.refused(custody.install_empty_store, self.conn, self.owner)
             self.refused(custody.insert_secret, self.conn, self.owner, self.binding, key=KEY, secret=SECRET)
         held.assert_not_called()
@@ -154,14 +154,14 @@ class CustodyTests(unittest.TestCase):
         self.refused(custody.read_secret, self.conn, self.owner, self.binding, key=KEY)
         self.conn.execute(f"DROP TRIGGER {custody.TABLE}_retained")
         self.refused(custody.read_secret, self.conn, self.owner, self.binding, key=KEY)
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             self.refused(custody.install_empty_store, self.conn, self.owner)
 
     def test_case_variant_schema_is_malformed_not_absent(self):
         self.conn.execute("CREATE TABLE Operator_Provider_Custody (unexpected TEXT)")
         self.refused(custody.read_secret, self.conn, self.owner, self.binding, key=KEY)
         before = tuple(self.conn.iterdump())
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             self.refused(custody.install_empty_store, self.conn, self.owner)
         self.assertEqual(tuple(self.conn.iterdump()), before)
 
@@ -176,7 +176,7 @@ class CustodyTests(unittest.TestCase):
     def test_retention_guards_and_duplicate_insert(self):
         self.install()
         self.insert()
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             self.refused(custody.insert_secret, self.conn, self.owner, self.binding, key=KEY, secret="replacement")
         for command in (f"DELETE FROM {custody.TABLE}", f"UPDATE {custody.TABLE} SET config_version=2",
                 f"INSERT OR REPLACE INTO {custody.TABLE} SELECT * FROM {custody.TABLE}",
@@ -207,7 +207,7 @@ class CustodyTests(unittest.TestCase):
         self.conn.execute("BEGIN")
         self.assertEqual(custody.read_secret(self.conn, self.owner, self.binding, key=KEY).secret, SECRET)
         self.assertEqual(tuple(self.conn.iterdump()), before)
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             self.refused(custody.insert_secret, self.conn, self.owner, self.binding, key=KEY, secret=SECRET)
 
     def test_blob_type_and_oversized_profile_refused_before_fetch(self):
@@ -248,7 +248,7 @@ class CustodyTests(unittest.TestCase):
                 patch.object(custody, "_key", side_effect=AssertionError("key validation")), \
                 patch.object(custody, "open_secret", side_effect=AssertionError("secret open")), \
                 patch.object(custody, "AESGCM", side_effect=AssertionError("cipher use")), \
-                patch("serverware.operator_publication.assert_held", side_effect=AssertionError("writer guard")):
+                patch("catchplate.operator_publication.assert_held", side_effect=AssertionError("writer guard")):
             public = custody.inspect_public_binding(self.conn, self.owner, self.binding)
         self.assertEqual(public, expected)
         self.assertNotIn(SECRET, json.dumps(public))
@@ -329,14 +329,14 @@ class CustodyTests(unittest.TestCase):
     def test_public_inspection_import_independent_without_a_key_or_decryption(self):
         program = '''
 import importlib.abc, sqlite3, sys
-forbidden = {"serverware.config", "serverware.crypto", "serverware.db", "serverware.operator_publication"}
+forbidden = {"catchplate.config", "catchplate.crypto", "catchplate.db", "catchplate.operator_publication"}
 class Forbidden(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         if fullname in forbidden:
             raise AssertionError("forbidden import")
 sys.meta_path.insert(0, Forbidden())
 sys.path.insert(0, sys.argv[1])
-from serverware import operator_provider_custody as c
+from catchplate import operator_provider_custody as c
 o = c.admit_development_owner(sys.argv[2], operator_development=True,
     release_channel="dev", production_image=False, native_or_enrolled=False)
 b = c.bind_google(o, config_version=1, public_profile=c.google._record(
@@ -367,7 +367,7 @@ conn.close()
 
 class ExistingKeyTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="serverware-custody-test-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="catchplate-custody-test-")
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
         self.directory.chmod(0o700)
@@ -468,7 +468,7 @@ class ExistingKeyTests(unittest.TestCase):
         conn = sqlite3.connect(dbpath)
         try:
             conn.execute("BEGIN IMMEDIATE")
-            with patch("serverware.operator_publication.assert_held"):
+            with patch("catchplate.operator_publication.assert_held"):
                 custody.install_empty_store(conn, self.owner)
                 custody.insert_secret(conn, self.owner, binding(self.owner), key=KEY, secret=SECRET)
             conn.commit()
@@ -479,11 +479,11 @@ class ExistingKeyTests(unittest.TestCase):
 import importlib.abc, pathlib, sqlite3, sys
 class Forbidden(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname in {"serverware.config", "serverware.crypto", "serverware.db"}:
+        if fullname in {"catchplate.config", "catchplate.crypto", "catchplate.db"}:
             raise AssertionError("forbidden import")
 sys.meta_path.insert(0, Forbidden())
 sys.path.insert(0, sys.argv[1])
-from serverware import operator_provider_custody as c
+from catchplate import operator_provider_custody as c
 o = c.admit_development_owner(sys.argv[3], operator_development=True,
     release_channel="dev", production_image=False, native_or_enrolled=False)
 b = c.bind_google(o, config_version=1, public_profile=c.google._record(
@@ -494,7 +494,7 @@ conn = sqlite3.connect((d / "synthetic.sqlite3").as_uri() + "?mode=ro", uri=True
 conn.execute("PRAGMA query_only=ON")
 conn.execute("BEGIN")
 assert c.read_secret(conn, o, b, key=k).secret == "synthetic-provider-secret-not-real"
-assert not {"serverware.config", "serverware.crypto", "serverware.db"}.intersection(sys.modules)
+assert not {"catchplate.config", "catchplate.crypto", "catchplate.db"}.intersection(sys.modules)
 conn.close()
 '''
         result = subprocess.run([sys.executable, "-B", "-c", program, str(ROOT), str(self.directory), self.owner.owner_id],

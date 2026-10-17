@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/retained-fd-ed25519-sign.v1.schema.json",
-  "title": "Serverware retained-FD stable-release signing protocol v1",
+  "$id": "https://catchplate.invalid/schemas/retained-fd-ed25519-sign.v1.schema.json",
+  "title": "Catchplate retained-FD stable-release signing protocol v1",
   "description": "A production signer must retrieve the exact preauthorization from an external signer-owned rollback-resistant authorization, consumption, authorization-sequence, and release-tuple backend; compare every field and digest; enforce expiry and monotonic transition rules; atomically consume the one-use authorization; reconstruct the stable-release statement under its fixed domain; and only then sign. This protocol never accepts caller-selected message bytes. Retained integer FDs do not authenticate the peer, so a trusted measured launcher must create and preserve the intended pipe endpoints and sealed nonce memfd without substitution. Process-local fixtures cannot prove restart or rollback resistance.",
   "oneOf": [
     {
@@ -32,7 +32,7 @@
           "const": "Ed25519"
         },
         "apiVersion": {
-          "const": "serverware.retainedFdEd25519SignRequest/v1"
+          "const": "catchplate.retainedFdEd25519SignRequest/v1"
         },
         "keyId": {
           "$ref": "#/$defs/sha256"
@@ -78,7 +78,7 @@
           "const": "Ed25519"
         },
         "apiVersion": {
-          "const": "serverware.retainedFdEd25519SignResponse/v1"
+          "const": "catchplate.retainedFdEd25519SignResponse/v1"
         },
         "approvedIssuerRequestSha256": {
           "$ref": "#/$defs/sha256"

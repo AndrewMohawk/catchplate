@@ -27,11 +27,11 @@ not copied into the verifier root.
 | --- | --- |
 | Artifact directory | `/shadow-verifier-output` |
 | Image | `native-shadow-verifier-runtime.squashfs`, at most 512 MiB |
-| Deployment image path | `/opt/serverware/native-shadow-verifier-runtime.squashfs` |
+| Deployment image path | `/opt/catchplate/native-shadow-verifier-runtime.squashfs` |
 | Interpreter within image | `/usr/local/bin/python3.11` |
-| Entrypoint within image | `/opt/serverware/scripts/verify_native_shadow_custody.py` |
+| Entrypoint within image | `/opt/catchplate/scripts/verify_native_shadow_custody.py` |
 | Invocation | Fixed interpreter with `-I -B` and the fixed entrypoint; no application arguments |
-| Manifest | `native-shadow-verifier-runtime.json`, API `serverware.nativeShadowVerifierRuntimeBuild/v1` |
+| Manifest | `native-shadow-verifier-runtime.json`, API `catchplate.nativeShadowVerifierRuntimeBuild/v1` |
 
 The manifest's `purpose` is `external-shadow-nitro-verifier-v1`. Its
 `runtimeImage` contains exactly `profile`, `imagePath`, `imageSha256`,
@@ -45,7 +45,7 @@ outputs, not independent deployment approval or evidence of successful loading.
 
 The fixed entrypoint lazily invokes `native_shadow_nitro_verifier.run`, which
 opens the real `native_shadow_nitro_originals.Originals` owner. These modules and
-`native_shadow_nitro_profile` are copied individually with `serverware/__init__.py`.
+`native_shadow_nitro_profile` are copied individually with `catchplate/__init__.py`.
 The actual COSE/PKI verifier is the unchanged `scripts/verify_nitro_tee.py`, placed
 in the isolated interpreter's `site-packages/scripts` namespace package. No
 other script or CP/storage module is part of that namespace.
@@ -76,7 +76,7 @@ The purpose-only copier method `shadow_verifier_mount_targets()` accepts no
 paths or content. It creates just these root-owned empty mount targets:
 
 - `/proc`, a `0555` directory for genuine procfs.
-- `/etc/serverware/native-shadow-nitro-verifier.json`, a zero-byte `0400` file
+- `/etc/catchplate/native-shadow-nitro-verifier.json`, a zero-byte `0400` file
   recorded with its empty-content hash in the ordinary file inventory.
 
 The empty configuration can never pass Originals' nonempty configuration check.

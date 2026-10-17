@@ -1,6 +1,6 @@
 # Authenticating returned registration completion originals
 
-[`authority_registration_completion_response._verify_on_work`](../serverware/authority_registration_completion_response.py)
+[`authority_registration_completion_response._verify_on_work`](../catchplate/authority_registration_completion_response.py)
 is a private, registration-only receiver for the
 [cold completion service's raw4 response](registration-execution-completion-service.md).
 It authenticates the returned originals for
@@ -67,7 +67,7 @@ The generic completion-control verifier already authenticates the exact embedded
 writer-observation bytes and their hash. This receiver additionally enforces
 the actual producer's observation profile:
 
-- Exact `serverware.policyAuthorityCurrentRootCommitObservation/v1` schema and
+- Exact `catchplate.policyAuthorityCurrentRootCommitObservation/v1` schema and
   current source revision; closed five-field object and complete marker.
 - At most 16 KiB, 256 JSON nodes and depth 3; exact canonical encoding from the
   real completion producer, not an alternate unsigned observation format.

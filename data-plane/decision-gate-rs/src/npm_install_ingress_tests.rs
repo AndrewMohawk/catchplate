@@ -33,7 +33,7 @@ fn install_snapshot(mode: &str) -> Arc<Snapshot> {
     route.jit = json!({});
     value.credentials.insert(CREDENTIAL.into(), Credential {provider:"operator-demo".into(),
         provider_subject:Some("synthetic-npm".into()), injection:json!({"type":"bearer",
-            "header":"Authorization","__serverwareCredentialType":"static"})});
+            "header":"Authorization","__catchplateCredentialType":"static"})});
     Arc::new(value)
 }
 
@@ -251,7 +251,7 @@ fn npm_install_startup_profiles_are_closed_and_all_three_modes_are_joined() {
     }
     let embedded = closed_embedded_policy_schema().unwrap();
     assert!(embedded["$defs"].get("adapter_npm_install_v1__root").is_some());
-    assert_eq!(npm_install::gate_capability(),json!({"schema":"serverware.operatorNpmInstallGate/v1",
+    assert_eq!(npm_install::gate_capability(),json!({"schema":"catchplate.operatorNpmInstallGate/v1",
         "adapter":"npm.install.v1","modes":["metadata","tarball","audit"]}));
 }
 

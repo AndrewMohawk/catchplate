@@ -30,13 +30,13 @@ def unavailable_dependency(name: str) -> ModuleType:
 # remain a startup blocker. No DB/runtime operation may be silently stubbed into
 # success, and these pure functions must not access either dependency.
 MODULE_NAME = "traversal_response_evidence_policy_engine_unit"
-SPEC = importlib.util.spec_from_file_location(MODULE_NAME, ROOT / "serverware/policy_engine.py")
+SPEC = importlib.util.spec_from_file_location(MODULE_NAME, ROOT / "catchplate/policy_engine.py")
 assert SPEC is not None and SPEC.loader is not None
 policy_engine = importlib.util.module_from_spec(SPEC)
 with mock.patch.dict(sys.modules, {
     MODULE_NAME: policy_engine,
-    "serverware.db": unavailable_dependency("serverware.db"),
-    "serverware.runtime": unavailable_dependency("serverware.runtime"),
+    "catchplate.db": unavailable_dependency("catchplate.db"),
+    "catchplate.runtime": unavailable_dependency("catchplate.runtime"),
 }):
     SPEC.loader.exec_module(policy_engine)
 
@@ -54,8 +54,8 @@ class TraversalResponseEvidenceTests(unittest.TestCase):
         return SimpleNamespace(metadata={
             # Presence selects the pure producer. This marker is not a validated
             # reservation and is never presented to an authority operation.
-            "serverware_durable_policy_reservation": object(),
-            "serverware_durable_policy_claims": [{
+            "catchplate_durable_policy_reservation": object(),
+            "catchplate_durable_policy_claims": [{
                 "type": "traversalBudget",
                 "constraint_id": "traversal-response",
                 "lineage_digest": LINEAGE_DIGEST,

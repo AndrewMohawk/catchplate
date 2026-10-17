@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/public-attestation-bundle.v3.schema.json",
-  "title": "Serverware public attestation bundle v3",
+  "$id": "https://catchplate.invalid/schemas/public-attestation-bundle.v3.schema.json",
+  "title": "Catchplate public attestation bundle v3",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -15,7 +15,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.publicAttestationBundle/v3"
+      "const": "catchplate.publicAttestationBundle/v3"
     },
     "bundle": {
       "type": "object",
@@ -90,31 +90,31 @@
           ],
           "properties": {
             "endpointBundle": {
-              "const": "serverware.publicAttestationBundle/v3"
+              "const": "catchplate.publicAttestationBundle/v3"
             },
             "liveSessionProof": {
-              "const": "serverware.liveSessionProof/v1"
+              "const": "catchplate.liveSessionProof/v1"
             },
             "liveWitnessHead": {
-              "const": "serverware.liveWitnessHead/v1"
+              "const": "catchplate.liveWitnessHead/v1"
             },
             "nonceAuthorityVerifierStateTransition": {
-              "const": "serverware.nonceAuthorityVerifierStateTransition/v3"
+              "const": "catchplate.nonceAuthorityVerifierStateTransition/v3"
             },
             "protectedLiveWitnessState": {
-              "const": "serverware.protectedLiveWitnessState/v2"
+              "const": "catchplate.protectedLiveWitnessState/v2"
             },
             "releaseConfig": {
-              "const": "serverware.publicAttestationConfig/v2"
+              "const": "catchplate.publicAttestationConfig/v2"
             },
             "releaseIdentity": {
-              "const": "serverware.releaseIdentity/v1"
+              "const": "catchplate.releaseIdentity/v1"
             },
             "stableReleaseStatement": {
-              "const": "serverware.stableReleaseStatement/v1"
+              "const": "catchplate.stableReleaseStatement/v1"
             },
             "trustRoots": {
-              "const": "serverware.publicNitroTrustRoots/v4"
+              "const": "catchplate.publicNitroTrustRoots/v4"
             }
           }
         }
@@ -204,7 +204,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.publicAttestationProducerBinding/v3"
+          "const": "catchplate.publicAttestationProducerBinding/v3"
         },
         "callerNonceSha256": {"$ref": "#/$defs/sha256"},
         "descriptorSha256": {"$ref": "#/$defs/sha256"},
@@ -312,7 +312,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.signedPublicAttestationProducerBinding/v1"
+          "const": "catchplate.signedPublicAttestationProducerBinding/v1"
         },
         "payload": {"$ref": "#/$defs/producerBindingPayload"},
         "payloadSha256": {"$ref": "#/$defs/sha256"},

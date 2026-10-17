@@ -5,7 +5,7 @@
 Source `.75` adds the fixed [registration family](webauthn-successor-transitions.md#registration-query-and-mutation-integration-75), using two ordinary or four OIDC joins on the same ledger. The six-query/five-head/101-context-hash figures below describe revocation; registration uses its exact 2/2/79 or 4/4/91 schedule, without a larger budget.
 
 This document describes the implemented source-only batch contract in
-[`authority_complete_query_batch.py`](../serverware/authority_complete_query_batch.py).
+[`authority_complete_query_batch.py`](../catchplate/authority_complete_query_batch.py).
 It is unbuilt and unexecuted. No build, test or SQL execution is claimed, and
 the public planner's complete-query gate remains closed. The
 [private acquisition path](authority-complete-acquisition.md) now calls the same
@@ -13,7 +13,7 @@ proof body with its existing meter; it does not enable a retained protocol.
 
 The batch covers the six source-declared roles for explicit
 `webauthn.credential.revoke`. It connects
-[bound query declarations](../serverware/authority_complete_query.py) to actual
+[bound query declarations](../catchplate/authority_complete_query.py) to actual
 [complete-range/primary joins](authority-index-primary-join.md), under one shared
 verification budget. It is not a general query language or operation authorizer.
 Supplied roots, arguments and cutoff remain supplied evidence, not an

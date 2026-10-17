@@ -11,12 +11,12 @@ import unittest
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import native_pilot_interactive as interval
-from serverware import native_shadow_nitro_profile as p
+from catchplate import native_pilot_interactive as interval
+from catchplate import native_shadow_nitro_profile as p
 
 
 def fixture():
-    handoff = {"apiVersion": "serverware.nativeGenerationOriginHandoff/v1",
+    handoff = {"apiVersion": "catchplate.nativeGenerationOriginHandoff/v1",
         "okForAction": False, "automaticRetryAllowed": False, "originSha256": "sha256:" + "a" * 64}
     policy = {"apiVersion": interval.API, "stopAtBoottimeNanos": 500, "expiresAtUnixNanos": 5000}
     action = {"action": "run-interactive", "originHandoffSha256": p.sha(p.canonical(handoff)),
@@ -24,7 +24,7 @@ def fixture():
     result = {"apiVersion": interval.RESULT_API, "actionSha256": p.sha(p.canonical(action)),
         "originHandoffSha256": action["originHandoffSha256"], "startedAtBoottimeNanos": 100,
         "endedAtBoottimeNanos": 510, "endedAtUnixNanos": 3000, "reason": "approved-interval-ended"}
-    terminal = {"apiVersion": "serverware.nativePilotOperatorResult/v1", "status": "stopped-cleanup-complete",
+    terminal = {"apiVersion": "catchplate.nativePilotOperatorResult/v1", "status": "stopped-cleanup-complete",
         "phase": "shutdown", "pilotAcceptanceVerified": False, "productionReleaseEligible": False,
         "interactiveResult": copy.deepcopy(result)}
     return policy, handoff, action, result, terminal
@@ -32,18 +32,18 @@ def fixture():
 
 class InteractiveTests(unittest.TestCase):
     def test_continuation_v1_and_v2_keep_closed_independent_selections(self):
-        from serverware import native_pilot_supervisor_continuation_policy as continuation
+        from catchplate import native_pilot_supervisor_continuation_policy as continuation
         from test_native_pilot_continuation_profile import policy_fixture, bridge_fixture
         source, _, _ = bridge_fixture()
         legacy = {"apiVersion": continuation.API,
-            "endpointImages": {role: {"path": "/opt/serverware/" + role + ".squashfs",
+            "endpointImages": {role: {"path": "/opt/catchplate/" + role + ".squashfs",
                 "sha256": p.sha(role.encode("ascii"))} for role in continuation.cohort.ENDPOINT_ROLES},
             "constructedAdmission": policy_fixture(source)}
         selected = {**legacy, "apiVersion": continuation.INTERACTIVE_API, "interactive": fixture()[0]}
         self.assertEqual(continuation.validate_policy(legacy), legacy)
         self.assertEqual(continuation.validate_policy(selected), selected)
         for changed in ({**legacy, "interactive": fixture()[0]},
-                {**selected, "apiVersion": "serverware.nativePilotSupervisorContinuationPolicy/v3"},
+                {**selected, "apiVersion": "catchplate.nativePilotSupervisorContinuationPolicy/v3"},
                 {key: value for key, value in selected.items() if key != "interactive"},
                 {**selected, "interactive": {**fixture()[0], "durationNanos": 100}},
                 {**selected, "endpointImages": {}}):

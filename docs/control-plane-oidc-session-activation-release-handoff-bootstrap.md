@@ -1,7 +1,7 @@
 # Static public release-handoff configuration
 
-Explicit `serverware.signedControlPlaneEnrollmentBootstrap/v11` and payload
-`serverware.controlPlaneEnrollmentBootstrap/v11` add one nullable field,
+Explicit `catchplate.signedControlPlaneEnrollmentBootstrap/v11` and payload
+`catchplate.controlPlaneEnrollmentBootstrap/v11` add one nullable field,
 `oidcSessionActivationReleaseHandoff`. All v2–v10 shapes remain closed and
 unchanged. The parent original cap remains 4 MiB. The older
 `oidcSessionActivationRelease` / `release_client` lane remains separate, with
@@ -14,7 +14,7 @@ control-plane identity, or authority to create post-intent root grants.
 
 ## Closed configuration
 
-The nested `serverware.controlPlaneOidcSessionActivationReleaseHandoff/v1`
+The nested `catchplate.controlPlaneOidcSessionActivationReleaseHandoff/v1`
 object has exactly four fields:
 
 | Field | Meaning |
@@ -25,7 +25,7 @@ object has exactly four fields:
 | `endpoint` | Exact `{path, timeoutSeconds, peerUid, peerGid}` |
 
 The endpoint path is
-`/run/serverware/oidc-session-activation-token-release/release.sock`, timeout is
+`/run/catchplate/oidc-session-activation-token-release/release.sock`, timeout is
 an integer from 1 through 30 seconds, and both peer IDs are exactly zero for
 the existing root-created listener. The grammar reuses the actual release
 client authorization endpoint checks. This configuration selects the live

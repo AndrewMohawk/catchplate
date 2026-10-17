@@ -14,9 +14,9 @@ mod external_driver;
 #[path="proof_cohort_adoption.rs"]
 mod adoption;
 const MAX_WIRE:usize=32768;
-const LAUNCH_PATH:&str="/etc/serverware/native-shadow-guest-launch.json";
-const IMAGE_PATH:&str="/opt/serverware/native-shadow-custody-runtime.squashfs";
-const SOURCE_API:&str="serverware.nativeShadowProofCohortOriginals/v1";
+const LAUNCH_PATH:&str="/etc/catchplate/native-shadow-guest-launch.json";
+const IMAGE_PATH:&str="/opt/catchplate/native-shadow-custody-runtime.squashfs";
+const SOURCE_API:&str="catchplate.nativeShadowProofCohortOriginals/v1";
 
 struct Control {socket:OwnedFd,peer:libc::ucred,pidfd:OwnedFd}
 impl Control {
@@ -316,7 +316,7 @@ impl Cohort {
             Ok(ChildOriginal{process_id:identity.0,start_time_ticks:identity.1,executable:self.executables[index].observation()?})
         };
         let endpoint=self.admission.endpoint_only();
-        let original=Observations{api_version:if self.admission.adoption_selected(){adoption::ORIGINALS_API}else if endpoint{"serverware.nativeShadowProofCohortOriginals/v6"}else if self.admission.eleven(){"serverware.nativeShadowProofCohortOriginals/v5"}else if self.admission.eight(){"serverware.nativeShadowProofCohortOriginals/v4"}else if self.admission.seven(){"serverware.nativeShadowProofCohortOriginals/v3"}else if self.admission.six(){"serverware.nativeShadowProofCohortOriginals/v2"}else{SOURCE_API},configuration_sha256:self.admission.configuration_sha256(),
+        let original=Observations{api_version:if self.admission.adoption_selected(){adoption::ORIGINALS_API}else if endpoint{"catchplate.nativeShadowProofCohortOriginals/v6"}else if self.admission.eleven(){"catchplate.nativeShadowProofCohortOriginals/v5"}else if self.admission.eight(){"catchplate.nativeShadowProofCohortOriginals/v4"}else if self.admission.seven(){"catchplate.nativeShadowProofCohortOriginals/v3"}else if self.admission.six(){"catchplate.nativeShadowProofCohortOriginals/v2"}else{SOURCE_API},configuration_sha256:self.admission.configuration_sha256(),
             precreation_sha256:self.admission.precreation_sha256(),invocation_id:self.admission.invocation_id().into(),
             retrieval:child(0)?,persistence:child(1)?,trusted_time:child(2)?,generation_install:child(3)?,bridge:if endpoint{None}else{Some(child(4)?)},
             external_driver:self.external_driver.as_ref().map(external_driver::Owner::original).transpose()?,
@@ -391,7 +391,7 @@ impl Cohort {
                 let original=selected.closure.open(1024*1024)?;
                 let value:serde_json::Value=exact(&original.read(1024*1024).map_err(fail)?)?;
                 require(value.get("apiVersion").and_then(serde_json::Value::as_str)
-                    ==Some("serverware.nativeCustodyClosure/v5"))?;
+                    ==Some("catchplate.nativeCustodyClosure/v5"))?;
             }
             let (inspection,remote)=prepare_inspection(service,&files,&activation)?;
             let image_original=release.image.open(512*1024*1024)?;

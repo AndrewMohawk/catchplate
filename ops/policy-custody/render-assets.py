@@ -4,7 +4,7 @@
 Usage: render-assets.py INPUT_MANIFEST_JSON OUTPUT_DIRECTORY
 
 The input object must contain exactly:
-  apiVersion: serverware.policyCustodyAssetRenderManifest/v5
+  apiVersion: catchplate.policyCustodyAssetRenderManifest/v5
   runtimeConfigMode: trusted-launcher-after-live-measurement-v1
   releaseRoot, runtimeConfigRoot: absolute paths
   driverIdentity: exact measured effective uid and primary gid
@@ -51,16 +51,16 @@ ROLES = (
     "bounded-cleanup-helper",
 )
 CONFIG_TEMPLATES = tuple(
-    f"serverware-policy-custody-{role}.json.in" for role in ROLES
+    f"catchplate-policy-custody-{role}.json.in" for role in ROLES
 )
 ASSET_RENDER_MANIFEST_VERSION = (
-    "serverware.policyCustodyAssetRenderManifest/v5"
+    "catchplate.policyCustodyAssetRenderManifest/v5"
 )
 RUNTIME_CONFIG_MODE = (
     "trusted-launcher-after-live-measurement-v1"
 )
 POLICY_CUSTODY_RUNTIME_CONFIG_ROOT = (
-    "/run/serverware/policy-custody/runtime/current"
+    "/run/catchplate/policy-custody/runtime/current"
 )
 TOP_LEVEL_KEYS = {
     "apiVersion",
@@ -103,7 +103,7 @@ EMPTY_SHA256 = (
     "27ae41e4649b934ca495991b7852b855"
 )
 PEER_PROCESS_IDENTITY_DOMAIN = (
-    b"serverware.policyCustodyPeerProcessIdentity/v4"
+    b"catchplate.policyCustodyPeerProcessIdentity/v4"
 )
 MAX_STARTUP_TIMEOUT_MILLIS = 30_000
 MAX_EXECUTABLE_LENGTH = 256 * 1024 * 1024
@@ -587,7 +587,7 @@ def inspect_release_binaries(
         fail("releaseRoot must be a root-owned immutable directory")
     binaries: dict[str, dict[str, object]] = {}
     for role in ROLES:
-        path = release_root / "bin" / f"serverware-policy-custody-{role}"
+        path = release_root / "bin" / f"catchplate-policy-custody-{role}"
         observed, digest = inspect_root_file(
             path,
             f"{role} release executable",
@@ -639,7 +639,7 @@ def validate_runtime_header(
     )
     if (
         runtime["apiVersion"]
-        != "serverware.policyCustodyServiceRuntimeConfig/v4"
+        != "catchplate.policyCustodyServiceRuntimeConfig/v4"
     ):
         fail(f"{role}:runtime apiVersion is unsupported")
     require_integer(
@@ -720,7 +720,7 @@ def validate_runtime_header(
         f"{role}:sharedConfigurationSha256",
     )
     expected_listener = (
-        f"/run/serverware/policy-custody/{role}.sock"
+        f"/run/catchplate/policy-custody/{role}.sock"
     )
     if runtime["listenerSocketPath"] != expected_listener:
         fail(
@@ -1035,7 +1035,7 @@ def validate_directives(
         kind, payload = directive.split("=", 1)
         name, source = payload.split(":", 1)
         require_absolute(source, f"{role}:{name} credential source")
-        if name == f"serverware-policy-custody-{role}.json":
+        if name == f"catchplate-policy-custody-{role}.json":
             fail(f"{role} duplicates the base configuration credential")
         if name in directives:
             fail(f"{role} repeats credential name {name}")
@@ -1185,7 +1185,7 @@ def main() -> None:
         for template_name in CONFIG_TEMPLATES:
             template = script_dir / template_name
             role = template_name.removeprefix(
-                "serverware-policy-custody-"
+                "catchplate-policy-custody-"
             ).removesuffix(".json.in")
             destination = (
                 staging
@@ -1245,13 +1245,13 @@ def main() -> None:
         service_destination = (
             staging
             / "systemd"
-            / "serverware-policy-custody@.service"
+            / "catchplate-policy-custody@.service"
         )
         write_exact(
             service_destination,
             render_text_template(
                 systemd_source
-                / "serverware-policy-custody@.service.in",
+                / "catchplate-policy-custody@.service.in",
                 {
                     "RELEASE_ROOT": release_root_text,
                     "RUNTIME_CONFIG_ROOT": runtime_config_root,
@@ -1261,9 +1261,9 @@ def main() -> None:
         )
         emitted.append(service_destination)
         for plain_name in (
-            "serverware-policy-custody@.socket",
-            "serverware-policy-custody-sockets.target",
-            "serverware-policy-custody.target",
+            "catchplate-policy-custody@.socket",
+            "catchplate-policy-custody-sockets.target",
+            "catchplate-policy-custody.target",
         ):
             destination = staging / "systemd" / plain_name
             write_exact(
@@ -1277,14 +1277,14 @@ def main() -> None:
             dropin = (
                 staging
                 / "systemd"
-                / f"serverware-policy-custody@{role}.service.d"
+                / f"catchplate-policy-custody@{role}.service.d"
             )
             capability_destination = dropin / "capabilities.conf"
             write_exact(
                 capability_destination,
                 render_text_template(
                     systemd_source
-                    / f"serverware-policy-custody@{role}.service.d"
+                    / f"catchplate-policy-custody@{role}.service.d"
                     / "capabilities.conf.in",
                     {},
                 ),
@@ -1318,13 +1318,13 @@ def main() -> None:
         sysusers_destination = (
             staging
             / "sysusers.d"
-            / "serverware-policy-custody.conf"
+            / "catchplate-policy-custody.conf"
         )
         write_exact(
             sysusers_destination,
             (
                 script_dir
-                / "serverware-policy-custody.sysusers.conf"
+                / "catchplate-policy-custody.sysusers.conf"
             ).read_bytes(),
             0o444,
         )
@@ -1333,13 +1333,13 @@ def main() -> None:
         tmpfiles_destination = (
             staging
             / "tmpfiles.d"
-            / "serverware-policy-custody.conf"
+            / "catchplate-policy-custody.conf"
         )
         write_exact(
             tmpfiles_destination,
             (
                 script_dir
-                / "serverware-policy-custody.tmpfiles.conf"
+                / "catchplate-policy-custody.tmpfiles.conf"
             ).read_bytes(),
             0o444,
         )
@@ -1361,7 +1361,7 @@ def main() -> None:
         installation_manifest = canonical_json(
             {
                 "apiVersion": (
-                    "serverware.policyCustodyHostInstallation/v1"
+                    "catchplate.policyCustodyHostInstallation/v1"
                 ),
                 "authorityMode": "trusted-host-no-tee",
                 "hardwareProof": False,
@@ -1377,7 +1377,7 @@ def main() -> None:
                 },
                 "driverIdentity": driver_identity,
                 "socketContract": {
-                    "directory": "/run/serverware/policy-custody",
+                    "directory": "/run/catchplate/policy-custody",
                     "directoryMode": "0750",
                     "ownerUser": "root",
                     "ownerGroup": socket_access_group["group"],
@@ -1389,10 +1389,10 @@ def main() -> None:
                     "passCredentials": True,
                 },
                 "socketActivationTarget": (
-                    "serverware-policy-custody-sockets.target"
+                    "catchplate-policy-custody-sockets.target"
                 ),
                 "readinessTarget": (
-                    "serverware-policy-custody.target"
+                    "catchplate-policy-custody.target"
                 ),
                 "services": [
                     {
@@ -1400,15 +1400,15 @@ def main() -> None:
                         "identity": service_identities[role],
                         "binary": release_binaries[role],
                         "configCredential": (
-                            f"serverware-policy-custody-{role}.json"
+                            f"catchplate-policy-custody-{role}.json"
                         ),
                         "socketPath": (
-                            "/run/serverware/policy-custody/"
+                            "/run/catchplate/policy-custody/"
                             f"{role}.sock"
                         ),
                         "stateCapabilities": [
                             (
-                                "/var/lib/serverware/policy-custody/"
+                                "/var/lib/catchplate/policy-custody/"
                                 f"{role}/{name}"
                             )
                             for name in state_capabilities[role]
@@ -1442,7 +1442,7 @@ def main() -> None:
         receipt = canonical_json(
             {
                 "apiVersion": (
-                    "serverware.policyCustodyRenderedAssets/v5"
+                    "catchplate.policyCustodyRenderedAssets/v5"
                 ),
                 "runtimeConfigMode": RUNTIME_CONFIG_MODE,
                 "runtimeConfigInstallRoot": runtime_config_root,

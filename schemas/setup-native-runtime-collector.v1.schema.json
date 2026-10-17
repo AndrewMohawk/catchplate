@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.local/schemas/setup-native-runtime-collector.v1.schema.json",
+  "$id": "https://catchplate.local/schemas/setup-native-runtime-collector.v1.schema.json",
   "title": "Operator routing inputs for the existing native Setup collector",
   "description": "Local configuration only, not a signed evidence profile, new grant or permission. Its exact bytes and proof-client binary digest must be supplied independently of the response. Actual native, collector and Setup owners retain their original checks.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "proofClient", "nativeVerifier", "nativeTrustRoots", "nativeIngress", "proxy", "proxyServerName", "proxyCa", "proxyClientCertificate", "proxyClientKey", "innerCa", "collectorKey", "controlPlaneResponseKey", "maximumContactSeconds"],
   "properties": {
-    "apiVersion": {"const": "serverware.setupNativeRuntimeCollector/v1"},
+    "apiVersion": {"const": "catchplate.setupNativeRuntimeCollector/v1"},
     "proofClient": {"$ref": "#/$defs/artifact"},
     "nativeVerifier": {"$ref": "#/$defs/artifact"},
     "nativeTrustRoots": {"$ref": "#/$defs/artifact"},

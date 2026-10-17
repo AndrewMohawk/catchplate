@@ -44,7 +44,7 @@ fn admit_staged<'a>(config:&'a Config,request:&wire::StagedPutRequest,file:File)
     use std::os::unix::fs::FileExt;
     let value=admit(config,request.request.clone())?;
     verification::claim(config,&value,&request.claim,&request.authority_result)?;
-    if request.api_version!="serverware.responseV2.nativeStagedPut/v1"||value.phase()!="STAGE" {return Err(fail("closed staged storage purpose differs"));}
+    if request.api_version!="catchplate.responseV2.nativeStagedPut/v1"||value.phase()!="STAGE" {return Err(fail("closed staged storage purpose differs"));}
     let V2OperationRequest::Stage{params,..}=&value.original().request else{return Err(fail("staged object original missing"));};
     let descriptor=params.credential_free_request.clone();
     if descriptor.media_type!=ExactObjectMediaType::Http11Request||descriptor.byte_length>wire::MAX_INPUT

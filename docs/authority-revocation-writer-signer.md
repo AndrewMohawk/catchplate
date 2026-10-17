@@ -58,11 +58,11 @@ signature, proof replay or database operation is introduced by this helper.
 ## Descriptor and role boundaries
 
 Only the writer gains
-`SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD`. The launcher and
+`CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD`. The launcher and
 artifact role-manifest inventory require it alongside the existing writer
 credentials. The descriptor entrypoint maps it to the writer signing-key
 credential named by
-`/run/secrets/serverware-authority-planner-writer-signing-key`; the explicit
+`/run/secrets/catchplate-authority-planner-writer-signing-key`; the explicit
 trusted-host-local path opens the corresponding systemd credential name.
 This is not a general service `_PATH` fallback.
 

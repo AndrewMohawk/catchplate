@@ -218,7 +218,7 @@ impl ContextOwner {
         let root=std::fs::metadata("/").map_err(fail)?;
         let cgroup=std::fs::read("/proc/self/cgroup").map_err(fail)?;
         require(!cgroup.is_empty() && cgroup.len()<=16384)?;
-        let context=Context{api_version:"serverware.nativeShadowKeyAdmissionContext/v1".into(),
+        let context=Context{api_version:"catchplate.nativeShadowKeyAdmissionContext/v1".into(),
             profile:"same-process-native-originals-v1".into(),guest_sha256:Sha256Digest::compute(&canonical_json_bytes(&association.binding())?),
             execution_closure_manifest_sha256:closure.manifest_sha256().clone(),process_id:own.0,process_start_ticks:own.1,pidfd_inode:own.2,
             parent_process_id:parent.0,parent_start_ticks:parent.1,parent_pidfd_inode:parent.2,cgroup_sha256:Sha256Digest::compute(&cgroup),

@@ -21,41 +21,41 @@ from typing import Any
 
 PROVIDER = "aws-nitro-enclaves"
 TEE_PLATFORM = "aws-nitro"
-USER_DATA_PREFIX = b"serverware:nitro-production-claims:v2:"
-REQUEST_VERSION = "serverware.nitroAttestationRequest/v2"
-CLAIMS_VERSION = "serverware.productionAttestationClaims/v2"
-IDENTITY_VERSION = "serverware.productionAttestationIdentity/v2"
-COMPLETION_IDENTITY_VERSION = "serverware.finalCompletionIdentity/v3"
+USER_DATA_PREFIX = b"catchplate:nitro-production-claims:v2:"
+REQUEST_VERSION = "catchplate.nitroAttestationRequest/v2"
+CLAIMS_VERSION = "catchplate.productionAttestationClaims/v2"
+IDENTITY_VERSION = "catchplate.productionAttestationIdentity/v2"
+COMPLETION_IDENTITY_VERSION = "catchplate.finalCompletionIdentity/v3"
 COMPLETION_CORE_VERSIONS = {
-    "builderA": "serverware.completionBuilderCore/v1",
-    "builderB": "serverware.completionBuilderCore/v1",
-    "custody": "serverware.completionCustodyCore/v1",
-    "eif": "serverware.completionEifCore/v1",
-    "hardware": "serverware.completionHardwareCore/v1",
-    "promotion": "serverware.completionPromotionCore/v1",
-    "release": "serverware.completionReleaseCore/v1",
-    "response": "serverware.completionResponseCore/v1",
-    "runtime": "serverware.completionRuntimeCore/v1",
-    "source": "serverware.completionSourceCore/v1",
-    "trust": "serverware.completionTrustCore/v1",
-    "witness": "serverware.completionWitnessCore/v1",
+    "builderA": "catchplate.completionBuilderCore/v1",
+    "builderB": "catchplate.completionBuilderCore/v1",
+    "custody": "catchplate.completionCustodyCore/v1",
+    "eif": "catchplate.completionEifCore/v1",
+    "hardware": "catchplate.completionHardwareCore/v1",
+    "promotion": "catchplate.completionPromotionCore/v1",
+    "release": "catchplate.completionReleaseCore/v1",
+    "response": "catchplate.completionResponseCore/v1",
+    "runtime": "catchplate.completionRuntimeCore/v1",
+    "source": "catchplate.completionSourceCore/v1",
+    "trust": "catchplate.completionTrustCore/v1",
+    "witness": "catchplate.completionWitnessCore/v1",
 }
 COMPLETION_CORE_FIELDS = frozenset(
     {*COMPLETION_CORE_VERSIONS, "continuity"}
 )
-RUNTIME_VERSION = "serverware.productionAttestationRuntime/v2"
-CUSTODY_VERSION = "serverware.enclaveKeyCustody/v3"
-PROMOTED_MANIFEST_VERSION = "serverware.consolidatedTestArtifacts/v6"
+RUNTIME_VERSION = "catchplate.productionAttestationRuntime/v2"
+CUSTODY_VERSION = "catchplate.enclaveKeyCustody/v3"
+PROMOTED_MANIFEST_VERSION = "catchplate.consolidatedTestArtifacts/v6"
 PIPELINE = "manifest-v6-promoted-oci-nitro-eif"
 SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 SHA384_RE = re.compile(r"sha384:[0-9a-f]{96}\Z")
 IDENTIFIER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}\Z")
 MAX_STATE_BYTES = 8 * 1024 * 1024
 STATE_PATHS = {
-    "productionIdentity": "SERVERWARE_NITRO_PRODUCTION_IDENTITY_PATH",
-    "promotedManifest": "SERVERWARE_NITRO_PROMOTED_MANIFEST_PATH",
-    "runtimeState": "SERVERWARE_NITRO_RUNTIME_STATE_PATH",
-    "keyCustody": "SERVERWARE_NITRO_KEY_CUSTODY_PATH",
+    "productionIdentity": "CATCHPLATE_NITRO_PRODUCTION_IDENTITY_PATH",
+    "promotedManifest": "CATCHPLATE_NITRO_PROMOTED_MANIFEST_PATH",
+    "runtimeState": "CATCHPLATE_NITRO_RUNTIME_STATE_PATH",
+    "keyCustody": "CATCHPLATE_NITRO_KEY_CUSTODY_PATH",
 }
 
 
@@ -857,7 +857,7 @@ def validate_state(
         )
         if (
             generation_statement.get("apiVersion")
-            != "serverware.enclaveKeyGeneration/v1"
+            != "catchplate.enclaveKeyGeneration/v1"
             or release.get("generationNitroDocumentSha256")
             != generation_statement.get("nitroDocumentSha256")
             or release.get("encryptionContextSha256")
@@ -1053,10 +1053,10 @@ def build_claims(
     ):
         require_digest(tls_binding.get(field), f"TLS {field}")
     if (
-        tls_binding.get("apiVersion") != "serverware.enclaveTlsScope/v2"
+        tls_binding.get("apiVersion") != "catchplate.enclaveTlsScope/v2"
         or tls_binding.get("provider") != "enclave-nitro-tls"
         or tls_binding.get("exporterLabel")
-        != "EXPORTER-Serverware-Attestation-v1"
+        != "EXPORTER-Catchplate-Attestation-v1"
         or not isinstance(tls_binding.get("connectionId"), str)
         or IDENTIFIER_RE.fullmatch(tls_binding["connectionId"]) is None
         or type(tls_binding.get("issuedAtUnix")) is not int
@@ -1386,7 +1386,7 @@ def run_nsm_helper(
     if not 1024 <= max_document_bytes <= 1024 * 1024:
         raise SystemExit("Nitro attestation document bound is invalid")
     if not command_template.strip():
-        raise SystemExit("--command-template or SERVERWARE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE is required")
+        raise SystemExit("--command-template or CATCHPLATE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE is required")
     if "{user_data_path}" not in command_template or "{nonce_path}" not in command_template:
         raise SystemExit(
             "Nitro NSM helper must consume both {user_data_path} and {nonce_path}"
@@ -1436,7 +1436,7 @@ def run_nsm_helper(
 def attest(args: argparse.Namespace) -> None:
     payload = read_stdin()
     user_data, claims, nonce = validate_request(payload)
-    template = args.command_template or os.getenv("SERVERWARE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE", "")
+    template = args.command_template or os.getenv("CATCHPLATE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE", "")
     raw = run_nsm_helper(
         command_template=template,
         user_data=user_data,
@@ -1485,13 +1485,13 @@ def attest(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Normalize an in-enclave Nitro NSM attestation helper into Serverware's quote command contract.")
+    parser = argparse.ArgumentParser(description="Normalize an in-enclave Nitro NSM attestation helper into Catchplate's quote command contract.")
     subparsers = parser.add_subparsers(dest="command")
     attest_parser = subparsers.add_parser("attest")
     attest_parser.add_argument("--command-template", default=None)
-    attest_parser.add_argument("--output-format", choices=("auto", "raw", "b64", "json"), default=os.getenv("SERVERWARE_NITRO_NSM_OUTPUT_FORMAT", "auto"))
-    attest_parser.add_argument("--timeout", type=float, default=float(os.getenv("SERVERWARE_NITRO_NSM_TIMEOUT_SECONDS", "10")))
-    attest_parser.add_argument("--max-document-bytes", type=int, default=int(os.getenv("SERVERWARE_NITRO_NSM_MAX_DOCUMENT_BYTES", str(1024 * 1024))))
+    attest_parser.add_argument("--output-format", choices=("auto", "raw", "b64", "json"), default=os.getenv("CATCHPLATE_NITRO_NSM_OUTPUT_FORMAT", "auto"))
+    attest_parser.add_argument("--timeout", type=float, default=float(os.getenv("CATCHPLATE_NITRO_NSM_TIMEOUT_SECONDS", "10")))
+    attest_parser.add_argument("--max-document-bytes", type=int, default=int(os.getenv("CATCHPLATE_NITRO_NSM_MAX_DOCUMENT_BYTES", str(1024 * 1024))))
     attest_parser.add_argument("--allow-fixtures-for-test", action="store_true")
     args = parser.parse_args()
     if args.command != "attest":

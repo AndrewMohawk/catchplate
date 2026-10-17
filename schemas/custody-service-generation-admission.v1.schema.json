@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/custody-service-generation-admission.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/custody-service-generation-admission.v1.schema.json",
   "$ref": "#/$defs/grant",
   "$comment": "Closed subordinate service-admission records, not a completed generation installation or native attestation. Rust additionally checks actual C9 ownership, full signatures, role epochs, current state, exact original lifetime and fsync completion.",
   "$defs": {
@@ -65,7 +65,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.custodyGenerationServices/v1"
+          "const": "catchplate.custodyGenerationServices/v1"
         },
         "grants": {
           "type": "object",
@@ -193,7 +193,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.custodyServiceGenerationGrant/v1"
+          "const": "catchplate.custodyServiceGenerationGrant/v1"
         },
         "purpose": {
           "const": "cold-service-generation-admission"
@@ -421,7 +421,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.custodyServiceGenerationCommand/v1"
+          "const": "catchplate.custodyServiceGenerationCommand/v1"
         },
         "request": {
           "$ref": "#/$defs/request"
@@ -455,7 +455,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.policyCustodyAuthorityHistory/v3"
+          "const": "catchplate.policyCustodyAuthorityHistory/v3"
         },
         "authorityRole": {
           "type": "object",
@@ -541,7 +541,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.custodyServiceGenerationEffect/v1"
+          "const": "catchplate.custodyServiceGenerationEffect/v1"
         },
         "purpose": {
           "const": "cold-service-generation-admission"
@@ -622,7 +622,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.custodyServiceGenerationObservation/v1"
+          "const": "catchplate.custodyServiceGenerationObservation/v1"
         },
         "purpose": {
           "const": "cold-service-generation-observation"
@@ -748,7 +748,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.custodyGenerationServicesResult/v1"
+          "const": "catchplate.custodyGenerationServicesResult/v1"
         },
         "requestSha256": {
           "$ref": "#/$defs/sha256"

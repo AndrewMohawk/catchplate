@@ -13,9 +13,9 @@ from pathlib import Path
 import unittest
 from unittest import mock
 
-from serverware import authority_recovery_invalidation_configuration as source
-from serverware import authority_recovery_retention_policy as policy
-from serverware.authority_query_read_work import QueryReadValidationLimits
+from catchplate import authority_recovery_invalidation_configuration as source
+from catchplate import authority_recovery_retention_policy as policy
+from catchplate.authority_query_read_work import QueryReadValidationLimits
 from test_authority_jit_original_configuration import Fixture as ConfigurationFixture, digest, work
 from test_authority_recovery_custody import fixture as recovery_fixture
 
@@ -72,7 +72,7 @@ class RecoveryInvalidationConfigurationControls(unittest.TestCase):
                 selected[name] = value
                 with self.subTest(field=name, value=value), self.assertRaises(policy.RecoveryRetentionPolicyError):
                     policy.capture_policy(selected, work=work())
-        for change in (lambda value: value.update(schema="serverware.policyAuthorityChallengeMaintenancePolicy/v1"),
+        for change in (lambda value: value.update(schema="catchplate.policyAuthorityChallengeMaintenancePolicy/v1"),
                 lambda value: value.update(verified=True), lambda value: value.pop("maximumRetained")):
             selected = policy.project_policy(terminal_retention_seconds=86_400, maximum_retained=100)
             change(selected)
@@ -171,7 +171,7 @@ class RecoveryInvalidationConfigurationControls(unittest.TestCase):
         configured = result._snapshot()
         self.assertEqual(configured[6], original_digest)
         self.assertEqual(configured[1][4], 100_000)
-        self.assertEqual(configured[1][2][0], "serverware_policy_authority_planner")
+        self.assertEqual(configured[1][2][0], "catchplate_policy_authority_planner")
 
     def test_real_key_pair_original_work_and_cancellation_are_not_substituted(self):
         fixture = Fixture()
@@ -205,10 +205,10 @@ class RecoveryInvalidationConfigurationControls(unittest.TestCase):
         self.assertIn("canonical_json_bytes", calls)
         self.assertIn("payload_bytes = canonical_json_bytes(payload)", ast.unparse(validator))
         for name in ("authority_service.py", "authority_local_configuration.py"):
-            tree = ast.parse((ROOT / "serverware" / name).read_text())
+            tree = ast.parse((ROOT / "catchplate" / name).read_text())
             calls = {ast.unparse(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
             self.assertIn("recovery_configuration.configuration", calls)
-        tree = ast.parse((ROOT / "serverware/authority_recovery_invalidation_configuration.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/authority_recovery_invalidation_configuration.py").read_text())
         calls = {ast.unparse(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
         self.assertIn("planning.RecoveryInvalidationReadPlanner", calls)
         self.assertIn("owner.RecoveryInvalidationPlanOwner", calls)

@@ -20,11 +20,11 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
 
-from serverware import custody_generation_grants as grants
-from serverware import native_pilot_current_head_profile as head
-from serverware import native_pilot_initial_requests_profile as requests
-from serverware import native_pilot_ordinary_initial_profile as initial
-from serverware import native_pilot_ordinary_runtime_profile as runtime
+from catchplate import custody_generation_grants as grants
+from catchplate import native_pilot_current_head_profile as head
+from catchplate import native_pilot_initial_requests_profile as requests
+from catchplate import native_pilot_ordinary_initial_profile as initial
+from catchplate import native_pilot_ordinary_runtime_profile as runtime
 from test_native_pilot_current_head import configuration_raw, signed_result, WINDOW_DOMAIN
 from test_native_pilot_generation_scope import key_fixture
 from test_native_pilot_initial_requests import fixture as single_fixture
@@ -83,7 +83,7 @@ def fixture(*, lifetime_boottime_ns=9_000_000):
     self_role = primary["initialCheckpoint"]["payload"]["endpointRole"]
     assert members[self_role] == f["histories"][HELPER]
     f["helper_histories"] = members
-    f["fragment"]["apiVersion"] = "serverware.nativePilotOrdinaryRuntimePolicy/v2"
+    f["fragment"]["apiVersion"] = "catchplate.nativePilotOrdinaryRuntimePolicy/v2"
     # The helper's own explicit pins avoid collisions with CSA subjects such
     # as the independently distinct DRS settlement-store process.
     current = f["fragment"]["services"][ROLES[3]]
@@ -93,7 +93,7 @@ def fixture(*, lifetime_boottime_ns=9_000_000):
     public = f["initial_policy"]["services"][HELPER]["authorities"]["service"]
     raw_key = base64.urlsafe_b64decode(public["publicKeySpkiBase64"] + "==")[-32:]
     row["credentials"].append({"name": "helper-service-public",
-        "original": {"path": "/etc/serverware/synthetic-helper-service-public", "sha256": sha(raw_key)},
+        "original": {"path": "/etc/catchplate/synthetic-helper-service-public", "sha256": sha(raw_key)},
         "length": 32, "signing": None})
     row["service"].update(initialEndpointRoles=list(HELPER_ROLES), initialEndpointPins={role: {
         "endpointVerifyingKeyCredential": "helper-service-public",
@@ -133,7 +133,7 @@ def export(selection, kw):
             rows.setdefault(service_role, {})[endpoint_role] = row
         else:
             rows[service_role] = row
-    return {"apiVersion": "serverware.nativePilotInitialTrustRequests/v2", "launchSha256": sha(kw["launch_original"]),
+    return {"apiVersion": "catchplate.nativePilotInitialTrustRequests/v2", "launchSha256": sha(kw["launch_original"]),
         "preparationSha256": sha(kw["preparation_original"]), "resourcesSha256": sha(kw["resources_original"]),
         "requestedAtBoottimeNanos": 1201, "startupDeadlineBoottimeNs": kw["window"]["startupDeadlineBoottimeNs"],
         "lifetimeDeadlineBoottimeNs": kw["window"]["lifetimeDeadlineBoottimeNs"], "requests": rows}
@@ -145,10 +145,10 @@ def head_input(f, contexts, kw, endpoint_role):
     config = json.loads(configuration_raw())
     window = copy.deepcopy(f["window"])
     window.update(configurationSha256=sha(configuration_raw()), signingKeyId=config["bootstrapAuthority"]["keyId"])
-    signed_window = {"apiVersion": "serverware.nativeShadowDriverBootstrapWindow/v1", "payload": window,
+    signed_window = {"apiVersion": "catchplate.nativeShadowDriverBootstrapWindow/v1", "payload": window,
         "signatureBase64url": encoded(key_fixture("window")[0].sign(WINDOW_DOMAIN + canonical(window)))}
     root = f["initial_policy"]["services"][HELPER]["authorities"]["root"]
-    return {"apiVersion": "serverware.nativePilotCurrentHeadAuthorityInput/v2", "serviceRole": HELPER,
+    return {"apiVersion": "catchplate.nativePilotCurrentHeadAuthorityInput/v2", "serviceRole": HELPER,
         "endpointRole": endpoint_role, "runtimeOriginal": f["runtimes"][HELPER].decode("ascii"),
         "driverConfigurationOriginal": configuration_raw().decode("ascii"),
         "driverWindowOriginal": canonical(signed_window).decode("ascii"),
@@ -182,7 +182,7 @@ class HelperInitialControls(unittest.TestCase):
             elif change == "null": value["initialEndpointHistories"] = None
             elif change == "primary-copy": value["initialEndpointHistories"][HELPER_ROLES[0]] = f["histories"][HELPER].decode("ascii")
             elif change == "root": value["runtime"]["authorityHistoryRootKeyId"] = labelled("wrong root")
-            elif change == "legacy": value["runtime"]["apiVersion"] = "serverware.policyCustodyServiceRuntimeConfig/v5"
+            elif change == "legacy": value["runtime"]["apiVersion"] = "catchplate.policyCustodyServiceRuntimeConfig/v5"
             else:
                 wrapper = json.loads(value["initialEndpointHistories"][HELPER_ROLES[0]])
                 wrapper["initialCheckpoint"]["authoritySignatureBase64"] = encoded(bytes(64))
@@ -206,7 +206,7 @@ class HelperInitialControls(unittest.TestCase):
         self.assertEqual(check(f["fragment"]), f["fragment"])
         for change in ("legacy", "subset", "secret-as-public"):
             value = copy.deepcopy(f["fragment"]); row = value["services"][HELPER]
-            if change == "legacy": value["apiVersion"] = "serverware.nativePilotOrdinaryRuntimePolicy/v1"
+            if change == "legacy": value["apiVersion"] = "catchplate.nativePilotOrdinaryRuntimePolicy/v1"
             elif change == "subset": row["service"]["initialEndpointRoles"].pop()
             else: row["service"]["initialEndpointPins"][HELPER_ROLES[0]]["endpointVerifyingKeyCredential"] = "signing-seed"
             with self.subTest(change=change), self.assertRaises(ValueError): check(value)
@@ -232,7 +232,7 @@ class HelperInitialControls(unittest.TestCase):
             self.assertEqual(row["requestSha256"], framed(head.REQUEST_DOMAIN, (row["requestOriginal"].encode("ascii"),)))
         for change in ("legacy", "missing", "swapped"):
             bad = copy.deepcopy(value)
-            if change == "legacy": bad["apiVersion"] = "serverware.nativePilotInitialTrustRequests/v1"
+            if change == "legacy": bad["apiVersion"] = "catchplate.nativePilotInitialTrustRequests/v1"
             elif change == "missing": del bad["requests"][HELPER][HELPER_ROLES[0]]
             else: bad["requests"][HELPER][HELPER_ROLES[0]] = bad["requests"][HELPER][HELPER_ROLES[1]]
             with self.subTest(change=change), self.assertRaises(ValueError): requests.shape(canonical(bad))
@@ -271,12 +271,12 @@ class HelperInitialControls(unittest.TestCase):
             "path": initial.INITIAL_CREDENTIAL_PATHS[HELPER], "sha256": sha(f["histories"][HELPER])},
             "length": len(f["histories"][HELPER]), "signing": None})
         delivery["signatureBase64url"] = encoded(f["delivery_keys"][HELPER].sign(
-            b"serverware.policyCustodyGuestDelivery.signature/v1\0" + canonical(payload)))
+            b"catchplate.policyCustodyGuestDelivery.signature/v1\0" + canonical(payload)))
         raw = canonical(delivery)
         _, guest = grants._admit_delivery(signed_raw=raw, cold_raw=canonical(f["cold"][HELPER]),
             cold_sha=sha(canonical(f["cold"][HELPER])), role=HELPER, activation=payload["activation"], boot=kw["boot"],
             startup=5000, lifetime=9000000, now=1300, commitment=False)
-        grant = {"apiVersion": "serverware.custodyServiceGenerationGrant/v1", "purpose": "cold-service-generation-admission",
+        grant = {"apiVersion": "catchplate.custodyServiceGenerationGrant/v1", "purpose": "cold-service-generation-admission",
             "serviceRole": HELPER, "guest": guest, "runtimeConfigurationSha256": sha(f["runtimes"][HELPER]),
             "authorityHistoryManifestSha256": json.loads(f["histories"][HELPER])["history"]["manifestSha256"],
             "scope": scope_fixture(), "issuedAtBoottimeNanos": 1300, "expiresAtBoottimeNanos": 9000000}

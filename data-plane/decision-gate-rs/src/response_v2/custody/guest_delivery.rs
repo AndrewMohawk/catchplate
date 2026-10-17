@@ -17,7 +17,7 @@ use super::config::{CustodyServiceRole, GenerationBootstrapCredentialPaths,
     GenerationPublicCredentialPaths, ScopedCustodyServiceConfig,
     ServiceRoleKeyDescriptorV1, GENERATION_READINESS_PROOF_FILE};
 
-const DOMAIN: &[u8] = b"serverware.responseV2.guestCredentialDelivery.signature/v1\0";
+const DOMAIN: &[u8] = b"catchplate.responseV2.guestCredentialDelivery.signature/v1\0";
 const MAX_MANIFEST: u64 = 4 * 1024 * 1024;
 const MAX_DELIVERY: u64 = 64 * 1024;
 const MAX_WINDOW_NS: u64 = 600_000_000_000;
@@ -47,7 +47,7 @@ pub(crate) struct Authority {
 impl Authority {
     pub(crate) fn validate(&self) -> Result<(), V2RuntimeError> {
         let public = decode::<32>(&self.public_key_base64url)?;
-        if self.api_version != "serverware.responseV2.guestDeliveryAuthority/v1"
+        if self.api_version != "catchplate.responseV2.guestDeliveryAuthority/v1"
             || digest(&public) != self.key_id
         { return Err(fail("guest-delivery authority identity mismatch")); }
         VerifyingKey::from_bytes(&public).map_err(|_| fail("invalid delivery authority key"))?;
@@ -374,7 +374,7 @@ fn admission(config_path: &Path, role: CustodyServiceRole, path: &Path, sha256: 
     let now = super::recovery::boottime_ns()?;
     let issued = ns(&payload.issued_at_boottime_ns)?;
     let deadline = ns(&payload.deadline_boottime_ns)?;
-    if envelope.api_version != "serverware.responseV2.guestCredentialDelivery/v1"
+    if envelope.api_version != "catchplate.responseV2.guestCredentialDelivery/v1"
         || payload.configuration_sha256 != digest(&config_original.bytes)
         || payload.authority_key_id != authority.key_id
         || payload.generation_id != scoped.generation_id || payload.generation != scoped.generation

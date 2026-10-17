@@ -70,7 +70,7 @@ AUTH_SIGNER = "signer:onboarding-production-1"
 AUTH_VERIFIER = "verifier:independent-auditor-1"
 AUTH_CHALLENGE = bytes(range(32))
 TEST_AUTHENTICATED_SIGNATURE_DOMAIN = (
-    b"serverware.onboardingEvidenceVerifierEnvelope/v1\x00"
+    b"catchplate.onboardingEvidenceVerifierEnvelope/v1\x00"
 )
 TEST_P256_ORDER = (
     0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
@@ -153,7 +153,7 @@ def test_authenticated_signature_payload(
     return TEST_AUTHENTICATED_SIGNATURE_DOMAIN + canonical_json(
         {
             "apiVersion": (
-                "serverware.onboardingEvidenceVerifierEnvelope/v1"
+                "catchplate.onboardingEvidenceVerifierEnvelope/v1"
             ),
             "signedStatement": statement,
         }
@@ -366,9 +366,9 @@ def http_request(
 ) -> bytes:
     headers = {"host": host}
     if principal is not None:
-        headers["x-serverware-principal"] = principal
+        headers["x-catchplate-principal"] = principal
     if credential is not None:
-        headers["x-serverware-credential-id"] = credential
+        headers["x-catchplate-credential-id"] = credential
     if body:
         headers["content-type"] = "application/json"
         headers["content-length"] = str(len(body))
@@ -485,8 +485,8 @@ def valid_journey() -> dict[str, object]:
                 ),
                 "signatureArtifactPath": "source/webauthn-signature.der",
                 "publicKeyArtifactPath": "source/webauthn-public-key.pem",
-                "expectedOrigin": "https://serverware.example",
-                "expectedRpId": "serverware.example",
+                "expectedOrigin": "https://catchplate.example",
+                "expectedRpId": "catchplate.example",
                 "expectedSignatureCounter": 7,
             },
         },
@@ -529,7 +529,7 @@ def build_artifacts(
         200,
         "OK",
         {
-            "schema": "serverware.gatewayNormalizedGmailMessages/v1",
+            "schema": "catchplate.gatewayNormalizedGmailMessages/v1",
             "captureTimeAuthenticated": False,
             "capturedAtEpochSeconds": GMAIL_CAPTURE,
             "messages": [
@@ -551,7 +551,7 @@ def build_artifacts(
     x_search_request = http_request(
         "GET",
         (
-            "/2/tweets/search/recent?query=serverware"
+            "/2/tweets/search/recent?query=catchplate"
             f"&start_time={quote('2026-07-20T12:00:00Z')}"
             f"&end_time={quote('2026-07-27T12:00:00Z')}"
             "&tweet.fields=created_at"
@@ -699,11 +699,11 @@ def build_artifacts(
 class OnboardingEvidenceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(
-            prefix="serverware-onboarding-evidence-"
+            prefix="catchplate-onboarding-evidence-"
         )
         self.root = Path(self.temporary.name).resolve()
         self.replay_temporary = tempfile.TemporaryDirectory(
-            prefix="serverware-onboarding-replay-"
+            prefix="catchplate-onboarding-replay-"
         )
         self.replay_root = Path(self.replay_temporary.name).resolve()
         self.replay_root.chmod(0o700)
@@ -1043,10 +1043,10 @@ class OnboardingEvidenceTest(unittest.TestCase):
             16,
         )
         literal_signature_domain = (
-            b"serverware.onboardingEvidenceVerifierEnvelope/v1\x00"
+            b"catchplate.onboardingEvidenceVerifierEnvelope/v1\x00"
         )
         literal_statement_type = (
-            "serverware.onboardingEvidenceManifestDigest/v1"
+            "catchplate.onboardingEvidenceManifestDigest/v1"
         )
         literal_spki_der = bytes.fromhex(
             "3059301306072a8648ce3d020106082a8648ce3d030107"
@@ -1100,7 +1100,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
         )
         statement: dict[str, object] = {
             "statementType": literal_statement_type,
-            "manifestApiVersion": "serverware.onboardingEvidence/v3",
+            "manifestApiVersion": "catchplate.onboardingEvidence/v3",
             "assuranceProfile": "manifest-authentication-only-v1",
             "challengeScope": "envelope-response-only",
             "verifierChallengeSha256": "sha256:" + "00" * 32,
@@ -1120,11 +1120,11 @@ class OnboardingEvidenceTest(unittest.TestCase):
             (
                 literal_signature_domain,
                 b'{"apiVersion":'
-                b'"serverware.onboardingEvidenceVerifierEnvelope/v1",',
+                b'"catchplate.onboardingEvidenceVerifierEnvelope/v1",',
                 b'"signedStatement":{"assuranceProfile":'
                 b'"manifest-authentication-only-v1","challengeScope":'
                 b'"envelope-response-only","manifestApiVersion":'
-                b'"serverware.onboardingEvidence/v3","manifestSha256":"sha256:',
+                b'"catchplate.onboardingEvidence/v3","manifestSha256":"sha256:',
                 b"11" * 32,
                 b'","signatureAlgorithm":"ES256-SHA256",'
                 b'"signatureEncoding":"asn1-der-low-s",'
@@ -1132,7 +1132,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
                 b'"signingKeySha256":"',
                 literal_spki_sha256.encode("ascii"),
                 b'","statementType":'
-                b'"serverware.onboardingEvidenceManifestDigest/v1",'
+                b'"catchplate.onboardingEvidenceManifestDigest/v1",'
                 b'"underlyingJourneyActionsChallengeBound":false,'
                 b'"underlyingV3TimestampsAuthenticated":false,'
                 b'"validFromEpochSeconds":100,'
@@ -1153,7 +1153,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
         )
         envelope = {
             "apiVersion": (
-                "serverware.onboardingEvidenceVerifierEnvelope/v1"
+                "catchplate.onboardingEvidenceVerifierEnvelope/v1"
             ),
             "signedStatement": statement,
             "signature": {"value": base64url_without_padding(signature)},
@@ -1198,7 +1198,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
         mutated_outer = TEST_AUTHENTICATED_SIGNATURE_DOMAIN + canonical_json(
             {
                 "apiVersion": (
-                    "serverware.onboardingEvidenceVerifierEnvelope/v2"
+                    "catchplate.onboardingEvidenceVerifierEnvelope/v2"
                 ),
                 "signedStatement": statement,
             }
@@ -1315,7 +1315,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
         )
         expected_marker = {
             "apiVersion": (
-                "serverware.onboardingEvidenceChallengeConsumption/v1"
+                "catchplate.onboardingEvidenceChallengeConsumption/v1"
             ),
             "verifierChallengeSha256": sha256(AUTH_CHALLENGE),
             "statementSha256": sha256(
@@ -2360,7 +2360,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
             f"{sha256(AUTH_CHALLENGE)[7:]}.used"
         )
         prefix = (
-            ".serverware-onboarding-"
+            ".catchplate-onboarding-"
             + hashlib.sha256(marker_leaf.encode("utf-8")).hexdigest()[:20]
             + "-"
         )
@@ -2817,7 +2817,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
         self.assertEqual(gmail["messageCount"], 2)
         self.assertEqual(
             gmail["responseFormat"],
-            "serverware.gatewayNormalizedGmailMessages/v1",
+            "catchplate.gatewayNormalizedGmailMessages/v1",
         )
         self.assertFalse(gmail["captureTimeAuthenticated"])
         self.assertEqual(
@@ -2982,7 +2982,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
         with self.assertRaisesRegex(evidence.EvidenceError, "clientDataJSON.origin"):
             self.create()
 
-        client["origin"] = "https://serverware.example"
+        client["origin"] = "https://catchplate.example"
         client["challenge"] = base64.urlsafe_b64encode(b"wrong").rstrip(b"=").decode()
         self.write_fixture(
             journey=journey,
@@ -3078,7 +3078,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
         self,
     ) -> None:
         base = {
-            "schema": "serverware.gatewayNormalizedGmailMessages/v1",
+            "schema": "catchplate.gatewayNormalizedGmailMessages/v1",
             "captureTimeAuthenticated": False,
             "capturedAtEpochSeconds": GMAIL_CAPTURE,
             "messages": [
@@ -3130,7 +3130,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
             (
                 "missing",
                 {
-                    "schema": "serverware.gatewayNormalizedGmailMessages/v1",
+                    "schema": "catchplate.gatewayNormalizedGmailMessages/v1",
                     "captureTimeAuthenticated": False,
                     "capturedAtEpochSeconds": GMAIL_CAPTURE,
                     "messages": [{"id": "m1"}],
@@ -3140,7 +3140,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
             (
                 "older",
                 {
-                    "schema": "serverware.gatewayNormalizedGmailMessages/v1",
+                    "schema": "catchplate.gatewayNormalizedGmailMessages/v1",
                     "captureTimeAuthenticated": False,
                     "capturedAtEpochSeconds": GMAIL_CAPTURE,
                     "messages": [
@@ -3157,7 +3157,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
             (
                 "future",
                 {
-                    "schema": "serverware.gatewayNormalizedGmailMessages/v1",
+                    "schema": "catchplate.gatewayNormalizedGmailMessages/v1",
                     "captureTimeAuthenticated": False,
                     "capturedAtEpochSeconds": GMAIL_CAPTURE,
                     "messages": [
@@ -3174,7 +3174,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
             (
                 "unparseable",
                 {
-                    "schema": "serverware.gatewayNormalizedGmailMessages/v1",
+                    "schema": "catchplate.gatewayNormalizedGmailMessages/v1",
                     "captureTimeAuthenticated": False,
                     "capturedAtEpochSeconds": GMAIL_CAPTURE,
                     "messages": [
@@ -3197,7 +3197,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
         bad_method = http_request(
             "POST",
             (
-                "/2/tweets/search/recent?query=serverware"
+                "/2/tweets/search/recent?query=catchplate"
                 f"&start_time={quote('2026-07-20T12:00:00Z')}"
                 f"&end_time={quote('2026-07-27T12:00:00Z')}"
                 "&tweet.fields=created_at"
@@ -3213,7 +3213,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
         excessive = http_request(
             "GET",
             (
-                "/2/tweets/search/recent?query=serverware"
+                "/2/tweets/search/recent?query=catchplate"
                 f"&start_time={quote('2026-07-19T12:00:00Z')}"
                 f"&end_time={quote('2026-07-27T12:00:00Z')}"
                 "&tweet.fields=created_at"
@@ -3343,12 +3343,12 @@ class OnboardingEvidenceTest(unittest.TestCase):
             (
                 "principal",
                 request.replace(REQUESTER.encode(), b"operator:other"),
-                "x-serverware-principal",
+                "x-catchplate-principal",
             ),
             (
                 "credential",
                 request.replace(NPM_CREDENTIAL.encode(), b"credential:other"),
-                "x-serverware-credential-id",
+                "x-catchplate-credential-id",
             ),
             (
                 "method",
@@ -3494,7 +3494,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
             self.create()
         self.assertFalse((self.root / "evidence.json").exists())
         self.assertEqual(
-            list(self.root.glob(".serverware-onboarding-*.pending")),
+            list(self.root.glob(".catchplate-onboarding-*.pending")),
             [],
         )
 
@@ -3518,7 +3518,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
         ):
             self.create()
         self.assertFalse((self.root / "evidence.json").exists())
-        pending = list(self.root.glob(".serverware-onboarding-*.pending"))
+        pending = list(self.root.glob(".catchplate-onboarding-*.pending"))
         self.assertEqual(len(pending), 1)
         self.assertEqual(pending[0].stat().st_size, 32)
         with self.assertRaisesRegex(
@@ -3552,7 +3552,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
         ):
             self.create()
         final = self.root / "evidence.json"
-        pending = list(self.root.glob(".serverware-onboarding-*.pending"))
+        pending = list(self.root.glob(".catchplate-onboarding-*.pending"))
         self.assertTrue(final.exists())
         self.assertEqual(len(pending), 1)
         self.assertEqual(final.stat().st_ino, pending[0].stat().st_ino)
@@ -3603,7 +3603,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
             self.create()
         self.assertEqual((self.root / "evidence.json").read_bytes(), b"collision")
         self.assertEqual(
-            list(self.root.glob(".serverware-onboarding-*.pending")),
+            list(self.root.glob(".catchplate-onboarding-*.pending")),
             [],
         )
 
@@ -3638,7 +3638,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
             self.create()
         self.assertFalse((self.root / "evidence.json").exists())
         self.assertEqual(
-            list(self.root.glob(".serverware-onboarding-*.pending")),
+            list(self.root.glob(".catchplate-onboarding-*.pending")),
             [],
         )
 
@@ -3657,7 +3657,7 @@ class OnboardingEvidenceTest(unittest.TestCase):
         ):
             self.create()
         final = self.root / "evidence.json"
-        pending = list(self.root.glob(".serverware-onboarding-*.pending"))
+        pending = list(self.root.glob(".catchplate-onboarding-*.pending"))
         self.assertTrue(final.exists())
         self.assertEqual(len(pending), 1)
         self.assertEqual(final.stat().st_ino, pending[0].stat().st_ino)

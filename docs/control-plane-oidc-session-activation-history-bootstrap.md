@@ -9,7 +9,7 @@ historical root objects. No new catalog, key source, live descriptor lane or
 execution permission is implied. The complete parent, all histories and encoded
 enrollments still fit one 4 MiB maximum; oversize input is refused.
 
-`serverware.controlPlaneOidcSessionActivationHistory/v1` has exactly `schema`
+`catchplate.controlPlaneOidcSessionActivationHistory/v1` has exactly `schema`
 and `activations`. Each sorted unique entry has `configurationDigest`,
 `plannerAttestationReceiptDigest`, `activationExecution`, `activationPlanning`,
 `consumeExecution` and `releaseIntent`. Its child shapes are the existing
@@ -17,7 +17,7 @@ activation v4, planning v1, consume v4 and intent v1. No root or archive is
 accepted in this new entry. Selection requires matching independently admitted
 registration and finalization scopes in the shared archive.
 
-`serverware.controlPlaneOidcSessionActivationHistory/v2` preserves that inventory
+`catchplate.controlPlaneOidcSessionActivationHistory/v2` preserves that inventory
 and adds exactly nullable `completionRecovery` to every entry. A non-null value
 uses the existing closed completion-recovery v1 shape, with distinct optional
 activation/consume lanes. Each lane independently pins `packetDigest`,

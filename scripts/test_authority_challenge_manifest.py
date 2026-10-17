@@ -10,14 +10,14 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_manifest as manifest
-from serverware import authority_challenge_maintenance as maintenance
-from serverware import authority_index_projection as projection
-from serverware import authority_radix_mutation as primary
-from serverware import authority_radix_proof as radix
-from serverware.authority_index_contract import empty_node
-from serverware.authority_index_heads import CapturedIndexHead
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_challenge_manifest as manifest
+from catchplate import authority_challenge_maintenance as maintenance
+from catchplate import authority_index_projection as projection
+from catchplate import authority_radix_mutation as primary
+from catchplate import authority_radix_proof as radix
+from catchplate.authority_index_contract import empty_node
+from catchplate.authority_index_heads import CapturedIndexHead
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
 
 def work():

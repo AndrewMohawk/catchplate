@@ -1,4 +1,4 @@
-module serverware.example/google-gmail-go
+module catchplate.example/google-gmail-go
 
 go 1.25.0
 

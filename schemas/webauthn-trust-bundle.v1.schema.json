@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.local/schemas/webauthn-trust-bundle.v1.schema.json",
-  "title": "Serverware WebAuthn Trust Bundle v1",
+  "$id": "https://catchplate.local/schemas/webauthn-trust-bundle.v1.schema.json",
+  "title": "Catchplate WebAuthn Trust Bundle v1",
   "type": "object",
   "required": ["apiVersion", "kind", "metadata", "roots"],
   "additionalProperties": false,
   "properties": {
-    "apiVersion": {"const": "serverware.webauthnTrust/v1"},
+    "apiVersion": {"const": "catchplate.webauthnTrust/v1"},
     "kind": {"const": "WebAuthnTrustBundle"},
     "metadata": {
       "type": "object",

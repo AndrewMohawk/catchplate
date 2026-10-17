@@ -8,12 +8,12 @@ no key, descriptor, TLS credential, SQL reader, environment override or path
 provisioning. The entire root-signed parent still has its original 4 MiB bound;
 embedding a planner original does not increase it.
 
-The nested `serverware.controlPlaneOidcSessionActivationPlanning/v1` object has
+The nested `catchplate.controlPlaneOidcSessionActivationPlanning/v1` object has
 exactly `schema`, `plannerBootstrap`, and `plannerEndpoint`. The bootstrap record
 contains canonical `base64Url` and exact `byteCount`, bounded by the actual
 planner's source cap. The endpoint has exactly `socketPath`,
 `requestTimeoutSeconds`, `listenerUid`, and `listenerGid`: fixed
-`/run/serverware/oidc-session-activation/planner.sock`, integer 1–30 seconds, and
+`/run/catchplate/oidc-session-activation/planner.sock`, integer 1–30 seconds, and
 the root-created listener peer 0:0. This peer is not an attestation of the later
 accepting process.
 

@@ -16,7 +16,7 @@ port = int(sys.argv[2])
 def connect(authority: str, agent: str | None = "demo-agent", proxy_auth: str | None = None) -> tuple[int, dict | None]:
     headers = [f"CONNECT {authority} HTTP/1.1", f"Host: {authority}"]
     if agent:
-        headers.append(f"X-Serverware-Agent: {agent}")
+        headers.append(f"X-Catchplate-Agent: {agent}")
     if proxy_auth:
         headers.append(f"Proxy-Authorization: {proxy_auth}")
     request = ("\r\n".join(headers) + "\r\n\r\n").encode("ascii")

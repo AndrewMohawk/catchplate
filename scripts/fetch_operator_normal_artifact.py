@@ -24,10 +24,10 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-REPOSITORY = "AndrewMohawk/serverware"
+REPOSITORY = "AndrewMohawk/catchplate"
 API = "https://api.github.com/repos/" + REPOSITORY
 ZIP_LIMIT, JSON_LIMIT = 128 * 1024**2, 8 * 1024**2
-LOCAL_SOURCE = Path("/home/catchplate/serverware")
+LOCAL_SOURCE = Path("/home/catchplate/catchplate")
 LOCAL_OUTPUT_ROOT = Path("/srv/catchplate-fast/tmp")
 
 
@@ -57,9 +57,9 @@ def validate_invocation(*, local_operator, environment, platform, uid, euid, sou
 
 
 def validate_local_output_shape(output):
-    require(output.is_absolute() and output.name == "serverware-normal-proxy"
+    require(output.is_absolute() and output.name == "catchplate-normal-proxy"
         and output.parent.parent == LOCAL_OUTPUT_ROOT
-        and re.fullmatch(r"serverware-normal-artifact\.[A-Za-z0-9]{6,32}", output.parent.name))
+        and re.fullmatch(r"catchplate-normal-artifact\.[A-Za-z0-9]{6,32}", output.parent.name))
 
 
 def validate_private_directory(info, uid):
@@ -68,7 +68,7 @@ def validate_private_directory(info, uid):
 
 
 def validate_output(output, *, local_operator, environment):
-    require(output.is_absolute() and output.name == "serverware-normal-proxy"
+    require(output.is_absolute() and output.name == "catchplate-normal-proxy"
         and not output.exists() and not output.is_symlink())
     if local_operator:
         validate_local_output_shape(output)
@@ -130,7 +130,7 @@ def select_artifact(payload, run, identity):
     require(type(payload) is dict and type(payload["total_count"]) is int
         and payload["total_count"] == len(payload["artifacts"]) <= 8)
     matches = [row for row in payload["artifacts"]
-        if row["name"] == "serverware-normal-proxy-" + identity]
+        if row["name"] == "catchplate-normal-proxy-" + identity]
     require(len(matches) == 1)
     row = matches[0]
     require(type(row["id"]) is int and row["id"] > 0 and row["expired"] is False
@@ -147,7 +147,7 @@ def archive_files(raw, artifact):
         and "sha256:" + hashlib.sha256(raw).hexdigest() == artifact["digest"])
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
         rows = archive.infolist()
-        require(len(rows) == 2 and {row.filename for row in rows} == {"normal.json", "serverware-decision-gate"})
+        require(len(rows) == 2 and {row.filename for row in rows} == {"normal.json", "catchplate-decision-gate"})
         result = {}
         for row in rows:
             mode = row.external_attr >> 16
@@ -168,8 +168,8 @@ class GitHub:
         require(type(token) is str and token and "\n" not in token and "\r" not in token)
         require(type(local_operator) is bool)
         self.token = token
-        self.user_agent = ("Serverware-local-normal-artifact/1" if local_operator
-            else "Serverware-hosted-normal-artifact/1")
+        self.user_agent = ("Catchplate-local-normal-artifact/1" if local_operator
+            else "Catchplate-hosted-normal-artifact/1")
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
     def request(self, path, limit=JSON_LIMIT, *, archive=False):
@@ -202,7 +202,7 @@ class GitHub:
 
 
 def selection_receipt(receipt, run, artifact, original, current, *, local_operator):
-    selection = {"schema":"serverware.selectedNormalRust/v1", "ok":True, "appCommit":current,
+    selection = {"schema":"catchplate.selectedNormalRust/v1", "ok":True, "appCommit":current,
         "buildCommit":receipt["sourceRevision"], "buildRunId":run["id"], "buildRunAttempt":run["run_attempt"],
         "artifactId":artifact["id"], "artifactZipSha256":artifact["digest"].removeprefix("sha256:"),
         "receiptSha256":hashlib.sha256(original).hexdigest(),
@@ -220,7 +220,7 @@ def parse_arguments(argv=None):
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--local-operator", action="store_true", help="explicit local operator download only; "
-        "requires clean canonical main and an existing mode-0700 NVMe serverware-normal-artifact.<suffix> parent")
+        "requires clean canonical main and an existing mode-0700 NVMe catchplate-normal-artifact.<suffix> parent")
     return parser.parse_args(argv)
 
 
@@ -271,7 +271,7 @@ def main():
         run, producer.identity_digest(identity))
     files = archive_files(github.request(f"/actions/artifacts/{artifact['id']}/zip", ZIP_LIMIT, archive=True), artifact)
     receipt = document(files["normal.json"])
-    producer.verify_normal_receipt(receipt, files["serverware-decision-gate"], identity)
+    producer.verify_normal_receipt(receipt, files["catchplate-decision-gate"], identity)
     require(receipt["sourceRevision"] == run["head_sha"]
         and receipt["runnerSourceSha256"] == producer.sha(source / producer.NORMAL_RUNNER)
         and receipt["github"] == {"repository":REPOSITORY, "runId":run["id"], "runAttempt":run["run_attempt"],
@@ -287,7 +287,7 @@ def main():
         with (output / name).open("xb") as stream:
             stream.write(raw)
             stream.flush()
-            os.fchmod(stream.fileno(), 0o555 if name == "serverware-decision-gate" else 0o444)
+            os.fchmod(stream.fileno(), 0o555 if name == "catchplate-decision-gate" else 0o444)
     print(json.dumps(selection, sort_keys=True), flush=True)
 
 

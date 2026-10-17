@@ -43,7 +43,7 @@ has exactly three envelope fields: `apiVersion`, `delegation` and
 The signature preimage is:
 
 ```text
-"serverware/native-enrollment-bootstrap-delegation/v1\0"
+"catchplate/native-enrollment-bootstrap-delegation/v1\0"
     || canonical compact sorted JSON(delegation), without LF
 ```
 
@@ -73,7 +73,7 @@ signed pins do not prove those runtime keys were observed.
 
 ## Producer, receiver and retained bounds
 
-The [Python module](../serverware/native_enrollment_bootstrap_delegation.py)
+The [Python module](../catchplate/native_enrollment_bootstrap_delegation.py)
 provides `_produce_on_work` and `_verify_on_work`. Both require actual target
 request bytes (at most 64 KiB), separately selected issuer PEM bytes (at most
 64 KiB), dedicated public-key original/pin, and the inherited work, live window

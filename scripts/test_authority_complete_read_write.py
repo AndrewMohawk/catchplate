@@ -21,16 +21,16 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_complete_query_batch as read_batch
-from serverware import authority_complete_read_write as composer
-from serverware import authority_contract
-from serverware import authority_index_contract as counted
-from serverware import authority_index_join as joined
-from serverware import authority_index_mutation as sparse
-from serverware import authority_index_projection as projection
-from serverware import authority_indexed_mutation as indexed
-from serverware import authority_radix_mutation as primary
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_complete_query_batch as read_batch
+from catchplate import authority_complete_read_write as composer
+from catchplate import authority_contract
+from catchplate import authority_index_contract as counted
+from catchplate import authority_index_join as joined
+from catchplate import authority_index_mutation as sparse
+from catchplate import authority_index_projection as projection
+from catchplate import authority_indexed_mutation as indexed
+from catchplate import authority_radix_mutation as primary
 import test_authority_complete_query_batch as read_oracle
 import test_authority_index_join as join_oracle
 import test_authority_index_range as range_oracle
@@ -775,7 +775,7 @@ class CompleteReadWriteTests(unittest.TestCase):
             actual = values(metric)
             actual["primary"], actual["index"] = values(metric.primary), values(metric.index)
             self.assertEqual(actual, expected)
-        manifest = join_oracle.framed("serverware.policyAuthorityIndexProjectionManifest/v1",
+        manifest = join_oracle.framed("catchplate.policyAuthorityIndexProjectionManifest/v1",
             join_oracle.utf8_json([join_oracle.descriptor(name) for name in read_oracle.ALL_INDEX_IDS]))
         self.assertEqual(result.projection_manifest_digest, manifest)
         self.assertEqual((composer.MAX_TOTAL_HASHES, composer.MAX_TOTAL_INPUT_BYTES, composer.MAX_TOTAL_JSON_NODES),

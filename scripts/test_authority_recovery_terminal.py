@@ -16,8 +16,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_recovery_terminal as terminal
-from serverware import authority_query_read_work as measured
+from catchplate import authority_recovery_terminal as terminal
+from catchplate import authority_query_read_work as measured
 from test_authority_audit_capacity import aggregate_row
 from test_authority_radix_mutation import IndependentTree
 from test_authority_radix_proof import sql_digest, sql_json
@@ -69,7 +69,7 @@ def challenge(parent, **changes):
     value.update(changes)
     value.update({name: None for name in terminal.retention.DERIVED_FIELDS})
     value.update(retention_reference_mask=1, retention_recovery_id=parent["id"],
-        retention_recovery_row_digest=sql_digest("serverware.policyAuthorityAuthenticatedRow/v1",
+        retention_recovery_row_digest=sql_digest("catchplate.policyAuthorityAuthenticatedRow/v1",
             terminal.CEREMONIES.encode("ascii"), sql_json(parent)))
     return value
 
@@ -133,7 +133,7 @@ class RecoveryTerminalControls(unittest.TestCase):
             joined = changes[terminal.retention.CHALLENGE_TABLE]["row"]
             self.assertEqual(joined["used_at"], NOW.isoformat() if used is None else used)
             self.assertEqual(joined["retention_recovery_row_digest"], sql_digest(
-                "serverware.policyAuthorityAuthenticatedRow/v1", terminal.CEREMONIES.encode(), sql_json(after)))
+                "catchplate.policyAuthorityAuthenticatedRow/v1", terminal.CEREMONIES.encode(), sql_json(after)))
             self.assertEqual(joined["retention_reference_mask"], 1)
             self.assertEqual(call["context"].selected_rows, before)
         for original in (ceremony(status="consumed"), ceremony(expires_at=(NOW + timedelta(seconds=1)).isoformat())):

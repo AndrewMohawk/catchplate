@@ -18,7 +18,7 @@ from types import SimpleNamespace
 from scripts.check_operator_catalog import COLLECTIONS, PREFIX, OperatorCatalogCheck
 from scripts.check_operator_demo import SHA256, require, token_file
 from scripts.check_operator_ordinary_client import DRAIN_COUNTERS
-from serverware.operator_demo import _destinations, origin
+from catchplate.operator_demo import _destinations, origin
 
 LOSS_COUNTERS = ("dropped", "required_failed")
 AUDIT_COUNTERS = LOSS_COUNTERS + ("send_failed",) + DRAIN_COUNTERS
@@ -44,10 +44,10 @@ def audit_drained(audit, *, expected_send_failed=None):
 class ReadonlyPair(OperatorCatalogCheck):
     def catalog(self):
         upstreams, _ = _destinations(
-            json.loads(os.environ.get("SERVERWARE_OPERATOR_DEMO_UPSTREAMS", "null")),
-            json.loads(os.environ.get("SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS", "[]")))
+            json.loads(os.environ.get("CATCHPLATE_OPERATOR_DEMO_UPSTREAMS", "null")),
+            json.loads(os.environ.get("CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS", "[]")))
         snapshot = self.control_json(PREFIX + "/catalog", authenticated=True)
-        require(isinstance(snapshot, dict) and snapshot.get("schema") == "serverware.operatorCatalog/v1"
+        require(isinstance(snapshot, dict) and snapshot.get("schema") == "catchplate.operatorCatalog/v1"
                 and snapshot.get("mode") == "operator-development"
                 and snapshot.get("productionReady") is False and snapshot.get("hardwareVerified") is False
                 and snapshot.get("allowed_upstreams") == list(upstreams)
@@ -90,17 +90,17 @@ def main():
             "audit failed-attempt baseline must be nonnegative")
     require(re.fullmatch(r"sha256:[0-9a-f]{64}", pins.binary_sha256)
             and re.fullmatch(r"sha256:[0-9a-f]{64}", pins.policy_hash), "exact public pins required")
-    require(os.environ.get("SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST") == pins.binary_sha256,
+    require(os.environ.get("CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST") == pins.binary_sha256,
             "app expected binary differs")
     args = SimpleNamespace(timeout_seconds=40, control_base="http://172.16.249.19:3000",
         management_base="http://172.16.249.20:9091", proxy_url="http://172.16.249.20:8080",
-        operator_origin=origin(os.environ.get("SERVERWARE_PUBLIC_URL", "").strip())[0],
+        operator_origin=origin(os.environ.get("CATCHPLATE_PUBLIC_URL", "").strip())[0],
         upstream_address="172.16.249.18",
         expected_binary_sha256=pins.binary_sha256, proxy_ca_file=None, control_ca_file=None,
         management_ca_file=None, ca_file=Path("/data/mitmproxy/mitmproxy-ca-cert.pem"),
         upstream_ca_file=Path("/demo-upstream/ca.pem"))
     check = ReadonlyPair(args)
-    check.admin_token = token_file(Path("/run/secrets/serverware/admin.token"))
+    check.admin_token = token_file(Path("/run/secrets/catchplate/admin.token"))
     check.policy_hash = pins.policy_hash
     catalog, health = check.wait_catalog_loaded("retained_pair_readonly")
     while True:

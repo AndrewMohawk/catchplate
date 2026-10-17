@@ -85,7 +85,7 @@ def exercise_external_verify_contract() -> None:
             verify_command="verify",
             require_transparency=True,
             kind="test",
-            service="serverware",
+            service="catchplate",
             image_id=None,
             statement=statement,
         )
@@ -110,7 +110,7 @@ def exercise_external_verify_contract() -> None:
                 verify_command="verify",
                 require_transparency=True,
                 kind="test",
-                service="serverware",
+                service="catchplate",
                 image_id=None,
                 statement=statement,
             )
@@ -138,7 +138,7 @@ def exercise_external_verify_contract() -> None:
                 verify_command="verify",
                 require_transparency=True,
                 kind="test",
-                service="serverware",
+                service="catchplate",
                 image_id=None,
                 statement=statement,
             )
@@ -153,18 +153,18 @@ def exercise_external_verify_contract() -> None:
 
 def exercise_env_file_preload() -> None:
     managed_keys = {
-        "SERVERWARE_IMAGE_SIGNATURE_PROVIDER",
-        "SERVERWARE_IMAGE_SIGN_COMMAND",
-        "SERVERWARE_IMAGE_VERIFY_COMMAND",
-        "SERVERWARE_COSIGN_BINARY",
-        "SERVERWARE_COSIGN_KEY",
-        "SERVERWARE_COSIGN_KEY_ID",
-        "SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID",
-        "SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY",
-        "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY",
-        "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY",
-        "SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER",
-        "SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID",
+        "CATCHPLATE_IMAGE_SIGNATURE_PROVIDER",
+        "CATCHPLATE_IMAGE_SIGN_COMMAND",
+        "CATCHPLATE_IMAGE_VERIFY_COMMAND",
+        "CATCHPLATE_COSIGN_BINARY",
+        "CATCHPLATE_COSIGN_KEY",
+        "CATCHPLATE_COSIGN_KEY_ID",
+        "CATCHPLATE_COSIGN_EXPECTED_REKOR_LOG_ID",
+        "CATCHPLATE_REQUIRE_SIGSTORE_TRANSPARENCY",
+        "CATCHPLATE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY",
+        "CATCHPLATE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY",
+        "CATCHPLATE_TRANSPARENCY_EXPECTED_PROVIDER",
+        "CATCHPLATE_TRANSPARENCY_EXPECTED_LOG_ID",
     }
     original = {key: os.environ.get(key) for key in managed_keys}
     with tempfile.TemporaryDirectory() as tmp_raw:
@@ -172,18 +172,18 @@ def exercise_env_file_preload() -> None:
         env_file.write_text(
             "\n".join(
                 [
-                    "SERVERWARE_IMAGE_SIGNATURE_PROVIDER=sigstore-command",
-                    "SERVERWARE_IMAGE_SIGN_COMMAND='python3 scripts/cosign_sigstore.py sign'",
-                    "SERVERWARE_IMAGE_VERIFY_COMMAND='python3 scripts/cosign_sigstore.py verify'",
-                    "SERVERWARE_COSIGN_BINARY=/usr/local/bin/cosign",
-                    "SERVERWARE_COSIGN_KEY=awskms://arn:aws:kms:us-east-1:111122223333:key/serverware-signing",
-                    "SERVERWARE_COSIGN_KEY_ID=sha256:" + "1" * 64,
-                    "SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID=sha256:" + "2" * 64,
-                    "SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY=1",
-                    "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY=/etc/serverware/release-trust/release-provenance.pem",
-                    "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY=/etc/serverware/release-trust/external-checkpoint.pem",
-                    "SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER=managed-release-log",
-                    "SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID=sha256:" + "3" * 64,
+                    "CATCHPLATE_IMAGE_SIGNATURE_PROVIDER=sigstore-command",
+                    "CATCHPLATE_IMAGE_SIGN_COMMAND='python3 scripts/cosign_sigstore.py sign'",
+                    "CATCHPLATE_IMAGE_VERIFY_COMMAND='python3 scripts/cosign_sigstore.py verify'",
+                    "CATCHPLATE_COSIGN_BINARY=/usr/local/bin/cosign",
+                    "CATCHPLATE_COSIGN_KEY=awskms://arn:aws:kms:us-east-1:111122223333:key/catchplate-signing",
+                    "CATCHPLATE_COSIGN_KEY_ID=sha256:" + "1" * 64,
+                    "CATCHPLATE_COSIGN_EXPECTED_REKOR_LOG_ID=sha256:" + "2" * 64,
+                    "CATCHPLATE_REQUIRE_SIGSTORE_TRANSPARENCY=1",
+                    "CATCHPLATE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY=/etc/catchplate/release-trust/release-provenance.pem",
+                    "CATCHPLATE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY=/etc/catchplate/release-trust/external-checkpoint.pem",
+                    "CATCHPLATE_TRANSPARENCY_EXPECTED_PROVIDER=managed-release-log",
+                    "CATCHPLATE_TRANSPARENCY_EXPECTED_LOG_ID=sha256:" + "3" * 64,
                 ]
             )
             + "\n",
@@ -192,21 +192,21 @@ def exercise_env_file_preload() -> None:
         try:
             for key in managed_keys:
                 os.environ.pop(key, None)
-            os.environ["SERVERWARE_IMAGE_SIGN_COMMAND"] = "explicit-sign-command"
+            os.environ["CATCHPLATE_IMAGE_SIGN_COMMAND"] = "explicit-sign-command"
             signer.preload_env_file(["--env-file", str(env_file)])
-            if os.environ["SERVERWARE_IMAGE_SIGN_COMMAND"] != "explicit-sign-command":
+            if os.environ["CATCHPLATE_IMAGE_SIGN_COMMAND"] != "explicit-sign-command":
                 raise AssertionError("env preload overwrote an explicit signer command")
-            if os.environ.get("SERVERWARE_IMAGE_VERIFY_COMMAND") != "python3 scripts/cosign_sigstore.py verify":
+            if os.environ.get("CATCHPLATE_IMAGE_VERIFY_COMMAND") != "python3 scripts/cosign_sigstore.py verify":
                 raise AssertionError("env preload did not load the verifier command")
-            if os.environ.get("SERVERWARE_COSIGN_BINARY") != "/usr/local/bin/cosign":
+            if os.environ.get("CATCHPLATE_COSIGN_BINARY") != "/usr/local/bin/cosign":
                 raise AssertionError("env preload did not load the production cosign binary")
-            if os.environ.get("SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY") != "1":
+            if os.environ.get("CATCHPLATE_REQUIRE_SIGSTORE_TRANSPARENCY") != "1":
                 raise AssertionError("env preload did not load the transparency requirement")
-            if os.environ.get("SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY") != "/etc/serverware/release-trust/release-provenance.pem":
+            if os.environ.get("CATCHPLATE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY") != "/etc/catchplate/release-trust/release-provenance.pem":
                 raise AssertionError("env preload did not load the release provenance trust root")
-            if os.environ.get("SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY") != "/etc/serverware/release-trust/external-checkpoint.pem":
+            if os.environ.get("CATCHPLATE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY") != "/etc/catchplate/release-trust/external-checkpoint.pem":
                 raise AssertionError("env preload did not load the external checkpoint trust root")
-            if os.environ.get("SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER") != "managed-release-log":
+            if os.environ.get("CATCHPLATE_TRANSPARENCY_EXPECTED_PROVIDER") != "managed-release-log":
                 raise AssertionError("env preload did not load the external checkpoint provider")
         finally:
             for key, value in original.items():
@@ -218,8 +218,8 @@ def exercise_env_file_preload() -> None:
 
 def exercise_stale_provenance_rejection() -> None:
     digest = "sha256:" + "a" * 64
-    original = signer.serverware_source_tree.source_tree_digest
-    signer.serverware_source_tree.source_tree_digest = lambda _root: digest  # type: ignore[assignment]
+    original = signer.catchplate_source_tree.source_tree_digest
+    signer.catchplate_source_tree.source_tree_digest = lambda _root: digest  # type: ignore[assignment]
     try:
         if signer.verify_current_source_tree({"source_tree": {"digest": digest}}) != digest:
             raise AssertionError("current source tree binding was not returned")
@@ -235,7 +235,7 @@ def exercise_stale_provenance_rejection() -> None:
         else:
             raise AssertionError("image signing accepted stale release provenance")
     finally:
-        signer.serverware_source_tree.source_tree_digest = original  # type: ignore[assignment]
+        signer.catchplate_source_tree.source_tree_digest = original  # type: ignore[assignment]
 
 
 def exercise_independent_provenance_trust() -> None:
@@ -251,7 +251,7 @@ def exercise_independent_provenance_trust() -> None:
     )
     provenance = {
         "version": 2,
-        "source": "serverware-digest-pinned-production-release",
+        "source": "catchplate-digest-pinned-production-release",
         "source_tree": {"digest": "sha256:" + "a" * 64},
     }
     provenance_digest = signer.sha256_prefixed_json(provenance)
@@ -289,7 +289,7 @@ def exercise_independent_provenance_trust() -> None:
     leaf_hash = release_verifier.transparency_leaf_hash(item)
     tree_head_hash = leaf_hash
     signed_tree_head_payload = {
-        "version": "serverware.transparencyLog/v1",
+        "version": "catchplate.transparencyLog/v1",
         "created_at": "2026-07-15T00:00:01+00:00",
         "log_id": anchor_key_id,
         "tree_head_hash": tree_head_hash,
@@ -474,8 +474,8 @@ def exercise_independent_provenance_trust() -> None:
 
 
 def main() -> None:
-    control_ref = "registry.prod.serverware.dev/serverware/control@sha256:" + "a" * 64
-    gate_ref = "registry.prod.serverware.dev/serverware/decision-gate@sha256:" + "b" * 64
+    control_ref = "registry.prod.catchplate.dev/catchplate/control@sha256:" + "a" * 64
+    gate_ref = "registry.prod.catchplate.dev/catchplate/decision-gate@sha256:" + "b" * 64
     inventory = signer.production_image_inventory([control_ref, gate_ref])
     if set(inventory) != {"control", "decision-gate"}:
         raise AssertionError(f"production image services were not derived from refs: {inventory}")
@@ -484,7 +484,7 @@ def main() -> None:
     if inventory["decision-gate"]["repo_digests"] != [gate_ref]:
         raise AssertionError(f"decision-gate repo digest was not preserved: {inventory}")
     try:
-        signer.production_image_inventory(["registry.prod.serverware.dev/serverware/control:latest"])
+        signer.production_image_inventory(["registry.prod.catchplate.dev/catchplate/control:latest"])
     except ValueError as exc:
         if "digest-pinned" not in str(exc):
             raise AssertionError(f"mutable ref failed for the wrong reason: {exc}") from exc
@@ -583,18 +583,18 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmp_raw:
         tmp = Path(tmp_raw)
         images_env = tmp / "production-images.env"
-        images_env.write_text("SERVERWARE_PRODUCTION_IMAGES=" + ",".join([control_ref, gate_ref]) + "\n", encoding="utf-8")
+        images_env.write_text("CATCHPLATE_PRODUCTION_IMAGES=" + ",".join([control_ref, gate_ref]) + "\n", encoding="utf-8")
         if signer.image_refs_from_env_file(images_env) != [control_ref, gate_ref]:
             raise AssertionError("production image refs were not loaded from the env fragment")
         extra_env = tmp / "extra.env"
         extra_env.write_text(
-            "SERVERWARE_PRODUCTION_IMAGES=" + control_ref + "\nSERVERWARE_ADMIN_TOKEN=secret\n",
+            "CATCHPLATE_PRODUCTION_IMAGES=" + control_ref + "\nCATCHPLATE_ADMIN_TOKEN=secret\n",
             encoding="utf-8",
         )
         try:
             signer.image_refs_from_env_file(extra_env)
         except ValueError as exc:
-            if "must contain only SERVERWARE_PRODUCTION_IMAGES" not in str(exc):
+            if "must contain only CATCHPLATE_PRODUCTION_IMAGES" not in str(exc):
                 raise AssertionError(f"extra key failed for the wrong reason: {exc}") from exc
         else:
             raise AssertionError("production image signing accepted an env fragment with extra keys")

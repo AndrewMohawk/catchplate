@@ -3,8 +3,8 @@
 ## Source boundary
 
 Source `.62` adds
-[`AuthorityProcess._persist_and_reserve_revocation_plan`](../serverware/authority_service.py)
-and inert [input/policy helpers](../serverware/authority_revocation_writer_action.py).
+[`AuthorityProcess._persist_and_reserve_revocation_plan`](../catchplate/authority_service.py)
+and inert [input/policy helpers](../catchplate/authority_revocation_writer_action.py).
 The private method binds independently supplied history to measured policy,
 constructs the real configured writer and invokes
 [atomic retention and reservation](authority-revocation-atomic.md).

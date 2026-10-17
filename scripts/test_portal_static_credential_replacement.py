@@ -15,8 +15,8 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-APP = (ROOT / "serverware/app.py").read_text()
-FRAGMENT = (ROOT / "serverware/portal_static_credential_replacement.py").read_text()
+APP = (ROOT / "catchplate/app.py").read_text()
+FRAGMENT = (ROOT / "catchplate/portal_static_credential_replacement.py").read_text()
 
 
 def literal(source: str, name: str) -> str:
@@ -32,7 +32,7 @@ def literal(source: str, name: str) -> str:
 
 UI = literal(APP, "UI_HTML")
 SCRIPT = literal(FRAGMENT, "STATIC_CREDENTIAL_REPLACEMENT_SCRIPT")
-ROTATION_PAGE_SCRIPT = literal((ROOT / "serverware/portal_static_credential_rotation.py").read_text(),
+ROTATION_PAGE_SCRIPT = literal((ROOT / "catchplate/portal_static_credential_rotation.py").read_text(),
     "STATIC_CREDENTIAL_ROTATION_PAGE_SCRIPT")
 
 
@@ -210,9 +210,9 @@ assert.equal(calls.length,0);assert.equal(hardware,0);
         self.assertIn("color: var(--text); background: var(--panel);", dialog_style)
         for suffix in ("HTML", "SCRIPT"):
             name = f"STATIC_CREDENTIAL_REPLACEMENT_{suffix}"
-            self.assertEqual(UI.count(f"__SERVERWARE_{name}__"), 1)
-            self.assertIn(f'("__SERVERWARE_{name}__", {name})', APP)
-        self.assertIn("from serverware.portal_static_credential_replacement import (", APP)
+            self.assertEqual(UI.count(f"__CATCHPLATE_{name}__"), 1)
+            self.assertIn(f'("__CATCHPLATE_{name}__", {name})', APP)
+        self.assertIn("from catchplate.portal_static_credential_replacement import (", APP)
         self.assertEqual(UI.count("    initCredentialReplacement();"), 1)
         self.assertIn("credentialReplacementButton(item)", helper("credentialActions"))
         for name in ("markOIDCSessionStatusUnknown", "signInWithOIDC", "signOutOperator"):

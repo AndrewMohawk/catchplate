@@ -1,6 +1,6 @@
 # Prepare a real retrieval activation
 
-`serverware.native_shadow_retrieval_activation.RetrievalActivation` supplies the
+`catchplate.native_shadow_retrieval_activation.RetrievalActivation` supplies the
 actual listener/object-directory originals missing from the server launch path.
 It is an operator/launcher API, not an HTTP endpoint or a running service.
 No preparation, signing, socket operation or launch has been executed for this
@@ -11,13 +11,13 @@ source checkpoint.
 The independent operator supplies the pinned C9 guest configuration, pinned
 expected-peer original, an already-open root:root0555 immutable-object directory,
 and one explicit startup deadline. Prepare the fixed
-`/run/serverware-shadow-retrieval` directory as root:root0711 beforehand; all
+`/run/catchplate-shadow-retrieval` directory as root:root0711 beforehand; all
 ancestors must be protected. The API creates neither directories nor keys.
 
 The owner checks its actual process/start/boot/time namespace and retains the
 object-directory descriptor and protected path ancestors. It exclusively binds
 one fresh AF_UNIX SOCK_SEQPACKET socket at
-`/run/serverware-shadow-retrieval/listener.sock`, with mandatory credential and
+`/run/catchplate-shadow-retrieval/listener.sock`, with mandatory credential and
 PIDFD support. The pathname becomes final guest UID / expected peer primary GID,
 mode0660. It stays **bound but not listening**: the actual guest must call
 `listen` after its permanent identity drop and real admission.

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="1200" viewBox="0 0 900 1200" role="img" aria-labelledby="title desc">
-  <title id="title">A policy-checked npm publish with credential replacement inside Serverware</title>
-  <desc id="desc">Intended flow, not a deployed-pilot claim. Application or CI sends npm publish for @acme/widgets using a Serverware workload credential, illustrated by username:password, and has no npm token. Inside its trust boundary Serverware authenticates and consumes the workload credential, then checks the package and 09:00 to 17:00 UTC time window for this request. A failed check blocks the request without contacting npm. If allowed, Serverware attaches the npm token from its protected credential store instead of the removed workload credential. The npm registry receives an authenticated publish. Serverware validates the response and returns the result to the application without returning the npm token. The illustrative username:password value is not a production default, and credential labels are conceptual rather than literal HTTP headers.</desc>
+  <title id="title">A policy-checked npm publish with credential replacement inside Catchplate</title>
+  <desc id="desc">Intended flow, not a deployed-pilot claim. Application or CI sends npm publish for @acme/widgets using a Catchplate workload credential, illustrated by username:password, and has no npm token. Inside its trust boundary Catchplate authenticates and consumes the workload credential, then checks the package and 09:00 to 17:00 UTC time window for this request. A failed check blocks the request without contacting npm. If allowed, Catchplate attaches the npm token from its protected credential store instead of the removed workload credential. The npm registry receives an authenticated publish. Catchplate validates the response and returns the result to the application without returning the npm token. The illustrative username:password value is not a production default, and credential labels are conceptual rather than literal HTTP headers.</desc>
   <rect width="900" height="1200" rx="24" fill="#f8fafc"/>
   <g font-family="Arial, Helvetica, sans-serif">
     <text x="52" y="54" fill="#14243d" font-size="32" font-weight="700">Publish safely, one request at a time</text>
@@ -18,7 +18,7 @@
 
     <!-- Every secret-bearing replacement step stays within this boundary. -->
     <rect x="68" y="336" width="780" height="622" rx="22" fill="#eef2ff" stroke="#4338ca" stroke-width="2.5"/>
-    <text x="92" y="376" fill="#4338ca" font-size="25" font-weight="700" letter-spacing="1">SERVERWARE</text>
+    <text x="92" y="376" fill="#4338ca" font-size="25" font-weight="700" letter-spacing="1">CATCHPLATE</text>
     <text x="641" y="376" fill="#4b6197" font-size="21">Trust boundary</text>
 
     <path d="M450 278V404" fill="none" stroke="#405bb3" stroke-width="3"/>

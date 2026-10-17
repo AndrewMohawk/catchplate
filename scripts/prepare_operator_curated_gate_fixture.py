@@ -20,23 +20,23 @@ from scripts import prepare_operator_proxy_basic_fixture as basic
 
 base = basic.base
 CHECKER = "scripts/check_operator_curated_gate.py"
-LEAVES = (".operator-publication.lock", ".serverware-operator-demo.json",
+LEAVES = (".operator-publication.lock", ".catchplate-operator-demo.json",
           "mitmproxy/mitmproxy-ca-cert.pem", "mitmproxy/mitmproxy-ca.pem")
 
 
 def build(source, binary, initializer, root, subnet, *, expected_binary_sha256):
     """Pure closed recipe derived from, not replacing, the Basic fixture."""
     base.require(root.parent == base.SCRATCH and re.fullmatch(
-        r"serverware-curated-gate-private\.[A-Za-z0-9]{6,32}", root.name), "fresh curated fixture root required")
-    template = root.with_name("serverware-proxy-basic-private." + root.name.split(".", 1)[1])
+        r"catchplate-curated-gate-private\.[A-Za-z0-9]{6,32}", root.name), "fresh curated fixture root required")
+    template = root.with_name("catchplate-proxy-basic-private." + root.name.split(".", 1)[1])
     config = basic.build(source, binary, initializer, template, subnet, expected_binary_sha256=expected_binary_sha256)
     for service in config["services"].values():
         for mount in service["volumes"]:
             path = Path(mount["source"])
             if path.is_relative_to(template):
                 mount["source"] = str(root / path.relative_to(template))
-    config["name"] = "serverware-curated-gate-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
-    config["services"]["serverware"]["environment"]["SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED"] = "1"
+    config["name"] = "catchplate-curated-gate-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
+    config["services"]["catchplate"]["environment"]["CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED"] = "1"
     data = root / "runtime/app-data"
     gate = config["services"]["decision-gate-rs"]
     for mount in gate["volumes"]:
@@ -57,14 +57,14 @@ def prepare(args):
     base.fresh_root(args.job_root, must_exist=args.write)
     sources = basic.source_inventory(args.source, args.source_manifest, args.expected_source_manifest_sha256,
         args.expected_source_commit)
-    base.require({CHECKER, "scripts/prepare_operator_curated_gate_fixture.py", "serverware/operator_gate_publication.py"}
+    base.require({CHECKER, "scripts/prepare_operator_curated_gate_fixture.py", "catchplate/operator_gate_publication.py"}
         <= sources.keys(), "curated fixture source missing")
     for path, expected in ((args.binary, args.expected_binary_sha256), (args.initializer, base.INITIALIZER_SHA256)):
         base.require(path.resolve() == path and path.is_file() and not path.is_symlink()
             and base.digest(path) == expected, "actual Rust binary or existing initializer differs")
     basic.dependency_inventory()
     compose = json.dumps(config, indent=2, sort_keys=True) + "\n"
-    receipt = {"schema": "serverware.privateCuratedGatePreparation/v1", "project": config["name"],
+    receipt = {"schema": "catchplate.privateCuratedGatePreparation/v1", "project": config["name"],
         "jobRoot": str(args.job_root), "source": str(args.source), "sourceCommit": args.expected_source_commit,
         "sourceManifest": str(args.source_manifest), "sourceManifestSha256": args.expected_source_manifest_sha256,
         "sourceFiles": len(sources), "binary": str(args.binary), "binarySha256": args.expected_binary_sha256,

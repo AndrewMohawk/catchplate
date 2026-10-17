@@ -15,13 +15,13 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 TCP_LABELS = {
-    'traefik.tcp.routers.serverware-operator-proxy.rule':
-        'HostSNI(`serverware-proxy.example.com`)',
-    'traefik.tcp.routers.serverware-operator-proxy.entrypoints': 'websecure',
-    'traefik.tcp.routers.serverware-operator-proxy.tls': 'true',
-    'traefik.tcp.routers.serverware-operator-proxy.tls.options': 'mcp-http1@file',
-    'traefik.tcp.routers.serverware-operator-proxy.service': 'serverware-operator-proxy',
-    'traefik.tcp.services.serverware-operator-proxy.loadbalancer.server.port': '9090',
+    'traefik.tcp.routers.catchplate-operator-proxy.rule':
+        'HostSNI(`catchplate-proxy.example.com`)',
+    'traefik.tcp.routers.catchplate-operator-proxy.entrypoints': 'websecure',
+    'traefik.tcp.routers.catchplate-operator-proxy.tls': 'true',
+    'traefik.tcp.routers.catchplate-operator-proxy.tls.options': 'mcp-http1@file',
+    'traefik.tcp.routers.catchplate-operator-proxy.service': 'catchplate-operator-proxy',
+    'traefik.tcp.services.catchplate-operator-proxy.loadbalancer.server.port': '9090',
 }
 
 
@@ -40,11 +40,11 @@ def directives(text):
 class ProxyIngressTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        stack = ROOT / 'docker/serverware-operator-demo'
+        stack = ROOT / 'docker/catchplate-operator-demo'
         cls.template = (stack / 'config/nginx.conf.template').read_text()
         env = {key: value for key, value in os.environ.items()
                if key in {'PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR'}}
-        env.update(GOMAXPROCS='2', DOCKER_HOST='unix:///serverware-ingress-test-no-daemon.sock',
+        env.update(GOMAXPROCS='2', DOCKER_HOST='unix:///catchplate-ingress-test-no-daemon.sock',
             TRAEFIK_IPV4='192.0.2.17', OPERATOR_DEMO_UPSTREAMS='["https://demo-upstream:8443"]',
             OPERATOR_DEMO_SDK_SOURCE='/fixture/source', OPERATOR_DEMO_RUST_BINARY='/fixture/gate',
             OPERATOR_DEMO_RUST_BINARY_SHA256='1' * 64, OPERATOR_DEMO_DATA_ROOT='/fixture/data')
@@ -58,7 +58,7 @@ class ProxyIngressTests(unittest.TestCase):
         observed = {name: {key: value for key, value in service.get('labels', {}).items()
                           if key.startswith('traefik.tcp.')}
                     for name, service in self.services.items()}
-        self.assertEqual(observed, {'edge': TCP_LABELS, 'serverware': {},
+        self.assertEqual(observed, {'edge': TCP_LABELS, 'catchplate': {},
                                    'demo-upstream': {}, 'decision-gate-rs': {}})
         edge = self.services['edge']
         self.assertEqual(edge['labels']['traefik.enable'], 'true')
@@ -114,13 +114,13 @@ proxy_ssl off;
 
     def test_console_and_management_ports_remain_separate(self):
         labels = self.services['edge']['labels']
-        self.assertEqual(labels['traefik.http.services.serverware-demo-edge.loadbalancer.server.port'], '8080')
-        self.assertEqual(labels['traefik.http.routers.serverware-public.middlewares'], 'authelia-public@file')
-        self.assertEqual(labels['traefik.http.routers.serverware-lab.middlewares'], 'localnetwork@file')
+        self.assertEqual(labels['traefik.http.services.catchplate-demo-edge.loadbalancer.server.port'], '8080')
+        self.assertEqual(labels['traefik.http.routers.catchplate-public.middlewares'], 'authelia-public@file')
+        self.assertEqual(labels['traefik.http.routers.catchplate-lab.middlewares'], 'localnetwork@file')
         gate = self.services['decision-gate-rs']['environment']
-        self.assertEqual(gate['SERVERWARE_DECISION_GATE_MANAGEMENT_HOST'], '172.16.249.20')
-        self.assertEqual(gate['SERVERWARE_DECISION_GATE_MANAGEMENT_PORT'], '9091')
-        self.assertIn('include /run/secrets/serverware-edge/admin-header.conf;',
+        self.assertEqual(gate['CATCHPLATE_DECISION_GATE_MANAGEMENT_HOST'], '172.16.249.20')
+        self.assertEqual(gate['CATCHPLATE_DECISION_GATE_MANAGEMENT_PORT'], '9091')
+        self.assertIn('include /run/secrets/catchplate-edge/admin-header.conf;',
                       self.template.split('\nhttp {\n', 1)[1])
         self.assertNotIn('9091', stream_block(self.template))
 

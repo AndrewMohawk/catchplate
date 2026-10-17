@@ -17,7 +17,7 @@ its independently pinned packet. Response `SWODCR02` has six frames:
 3. A canonical descriptor of at most 1,024 bytes with exactly `schema`,
    `effectsDigest`, `deliveryEnvelopeBase64Url`, `createdAt`, and `expiresAt`.
 
-The descriptor schema is `serverware.oidcSessionActivationReleaseHints/v1`.
+The descriptor schema is `catchplate.oidcSessionActivationReleaseHints/v1`.
 Its encrypted envelope decodes to the existing exact 100-byte format, never a
 plaintext credential. Dates retain their canonical original UTC spelling and
 the existing maximum delivery lifetime. Uncertainty is `uncertain` and five

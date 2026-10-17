@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-publication-genesis-closure-set.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-publication-genesis-closure-set.v1.schema.json",
   "description": "Unsigned exact cold-three static set. All three use immutable v1 manifests, including the coordinator. Canonical ASCII no-LF original <=12MiB; each manifest <=1MiB. Schema validation does not authenticate provenance, assignment or live custody.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "members", "setRootSha256", "seccompSetRootSha256"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativePublicationGenesisClosureSet/v1"},
+    "apiVersion": {"const": "catchplate.nativePublicationGenesisClosureSet/v1"},
     "setRootSha256": {"$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"},
     "seccompSetRootSha256": {"$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"},
     "members": {

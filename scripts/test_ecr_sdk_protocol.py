@@ -24,10 +24,10 @@ def prohibit_network(event, _args):
 
 sys.addaudithook(prohibit_network)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import ecr_sdk_protocol as protocol
+from catchplate import ecr_sdk_protocol as protocol
 
 
-REGISTRY, REGION, REPOSITORY = "123456789012", "us-east-1", "team/serverware-fixture"
+REGISTRY, REGION, REPOSITORY = "123456789012", "us-east-1", "team/catchplate-fixture"
 UPLOAD = "00000000-0000-4000-8000-000000000001"
 OTHER_UPLOAD = "11111111-1111-4111-8111-111111111111"
 PART = b"PRIVATE-LAYER-CANARY\x00\xff\r\n"

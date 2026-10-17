@@ -20,14 +20,14 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from mitmproxy import http
-from serverware import adapters, policy_bundle as pb, policy_engine as engine
+from catchplate import adapters, policy_bundle as pb, policy_engine as engine
 import test_gmail_read_bundle as baseline
 
 LIST = baseline.LIST
 MODE = "orderedFormV1"
 DEFAULT_HEADERS = [(b"Accept", b"*/*"), (b"Accept-Encoding", b"gzip, deflate"),
     (b"User-Agent", b"python-requests-fixture"), (b"Connection", b"keep-alive"),
-    (b"X-Serverware-Agent", b"buffered-fixture")]
+    (b"X-Catchplate-Agent", b"buffered-fixture")]
 
 
 def document(*, ordered=True):
@@ -253,12 +253,12 @@ class GmailOrderedQueryIntegrationTests(unittest.TestCase):
         with self.assertRaises(pb.PolicyBundleError):
             engine._durable_policy_claims(flow(), snapshot=self.snapshot, principal=self.principal,
                 route=corrupt, credential_version=7, operation_fields={"operation": "gmail.messages.list"})
-        for atomic, proof in (("1", None), ("0", b"x-serverware-proof-nonce"),
-                ("0", b"x-serverware-stream-proof-nonce"), ("0", b"x-serverware-observation-nonce")):
+        for atomic, proof in (("1", None), ("0", b"x-catchplate-proof-nonce"),
+                ("0", b"x-catchplate-stream-proof-nonce"), ("0", b"x-catchplate-observation-nonce")):
             headers = list(DEFAULT_HEADERS)
             if proof is not None:
                 headers.append((proof, b"synthetic"))
-            with patch.dict(os.environ, {"SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": atomic}), \
+            with patch.dict(os.environ, {"CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": atomic}), \
                     patch.object(engine, "get_policy_snapshot", return_value=self.snapshot), \
                     patch.object(engine.runtime, "get_credential_generation", side_effect=AssertionError("must not read generation")) as generation:
                 result = engine.evaluate_request(flow(LIST + "?q=a+b", headers=headers))

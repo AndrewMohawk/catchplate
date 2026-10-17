@@ -5,15 +5,15 @@ use super::super::Sha256Digest;
 use super::protocol::PolicyCustodyOperation;
 use serde::{Deserialize,Serialize};
 
-pub(in crate::policy_shadow) const RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v12";
-pub(in crate::policy_shadow) const QUERY_API:&str="serverware.nativeCompletedInvocationQuery/v1";
-pub(in crate::policy_shadow) const PROOF_API:&str="serverware.nativeCompletedInvocationProof/v1";
-pub(in crate::policy_shadow) const WIRE_API:&str="serverware.nativeInvocationSettlement/v1";
-pub(in crate::policy_shadow) const PUBLICATION_RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v13";
-pub(in crate::policy_shadow) const ADOPTION_RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v14";
-pub(in crate::policy_shadow) const PUBLICATION_QUERY_API:&str="serverware.nativeCompletedInvocationQuery/v2";
-pub(in crate::policy_shadow) const PUBLICATION_PROOF_API:&str="serverware.nativeCompletedInvocationProof/v2";
-pub(in crate::policy_shadow) const PUBLICATION_WIRE_API:&str="serverware.nativeInvocationSettlement/v2";
+pub(in crate::policy_shadow) const RUNTIME:&str="catchplate.policyCustodyProductionRpcRuntime/v12";
+pub(in crate::policy_shadow) const QUERY_API:&str="catchplate.nativeCompletedInvocationQuery/v1";
+pub(in crate::policy_shadow) const PROOF_API:&str="catchplate.nativeCompletedInvocationProof/v1";
+pub(in crate::policy_shadow) const WIRE_API:&str="catchplate.nativeInvocationSettlement/v1";
+pub(in crate::policy_shadow) const PUBLICATION_RUNTIME:&str="catchplate.policyCustodyProductionRpcRuntime/v13";
+pub(in crate::policy_shadow) const ADOPTION_RUNTIME:&str="catchplate.policyCustodyProductionRpcRuntime/v14";
+pub(in crate::policy_shadow) const PUBLICATION_QUERY_API:&str="catchplate.nativeCompletedInvocationQuery/v2";
+pub(in crate::policy_shadow) const PUBLICATION_PROOF_API:&str="catchplate.nativeCompletedInvocationProof/v2";
+pub(in crate::policy_shadow) const PUBLICATION_WIRE_API:&str="catchplate.nativeInvocationSettlement/v2";
 
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]

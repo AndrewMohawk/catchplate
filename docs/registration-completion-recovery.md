@@ -7,7 +7,7 @@ unbuilt and unexecuted**, not production acceptance or credential finalization.
 
 ## Scope and authorization
 
-[`inspect_retained_registration_recovery_subject`](../serverware/control_plane_registration_recovery_subject.py)
+[`inspect_retained_registration_recovery_subject`](../catchplate/control_plane_registration_recovery_subject.py)
 loads the actual immutable signer/grant association. Genuine
 [historical signer replay](registration-signer-history.md) verifies the original
 ceremony and evidence, then reconstructs its user/challenge/session/mode and
@@ -23,7 +23,7 @@ the configured bootstrap token in the empty-history branch. Current session,
 roles, CSRF and credential history remain enforced. An old registration or
 execution permission never authorizes the new recovery action.
 
-[`recover_retained_registration_completion`](../serverware/control_plane_registration_recovery.py)
+[`recover_retained_registration_completion`](../catchplate/control_plane_registration_recovery.py)
 accepts only a local selector and independently authenticated user/session
 scalars, not a successful subject object. Under the actual cold owner's lock it
 repeats genuine historical subject replay and the exact caller join before any

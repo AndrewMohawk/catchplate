@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/bootstrap-receipt.v3.schema.json",
-  "title": "Serverware Production Bootstrap Receipt v3",
+  "$id": "https://catchplate.invalid/schemas/bootstrap-receipt.v3.schema.json",
+  "title": "Catchplate Production Bootstrap Receipt v3",
   "$comment": "This sealed native-launcher receipt records trusted-host readiness evidence only. The v3/v2/v3 launch and nonce assurances are non-authoritative host evidence and are not TEE proof or final release authority.",
   "type": "object",
   "additionalProperties": false,
@@ -24,7 +24,7 @@
     "environment"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.bootstrapReceipt/v3"},
+    "apiVersion": {"const": "catchplate.bootstrapReceipt/v3"},
     "kind": {"const": "ProductionBootstrapReceipt"},
     "launchId": {"$ref": "#/$defs/hex64"},
     "bootIdSha256": {"$ref": "#/$defs/sha256"},
@@ -33,7 +33,7 @@
     "sourceTreeDigest": {"$ref": "#/$defs/sha256"},
     "launchAuthorization": {"$ref": "#/$defs/launchAuthorization"},
     "nonceRollbackAssurance": {"$ref": "#/$defs/nonceRollbackAssurance"},
-    "productionEnv": {"$ref": "#/$defs/etcServerwareFile"},
+    "productionEnv": {"$ref": "#/$defs/etcCatchplateFile"},
     "python": {"$ref": "#/$defs/python"},
     "scripts": {"$ref": "#/$defs/scripts"},
     "composeFile": {"$ref": "#/$defs/file"},
@@ -160,12 +160,12 @@
         }
       ]
     },
-    "etcServerwareFile": {
+    "etcCatchplateFile": {
       "allOf": [
         {"$ref": "#/$defs/file"},
         {
           "properties": {
-            "path": {"pattern": "^/etc/serverware/.+$"}
+            "path": {"pattern": "^/etc/catchplate/.+$"}
           }
         }
       ]
@@ -304,7 +304,7 @@
         "launchAuthorityWitnessStoreAssuranceSha256"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.launchAuthorizationRequest/v2"},
+        "apiVersion": {"const": "catchplate.launchAuthorizationRequest/v2"},
         "kind": {"const": "ProductionLaunchAuthorizationRequest"},
         "launcherNonce": {"$ref": "#/$defs/hex64"},
         "bootIdSha256": {"$ref": "#/$defs/sha256"},
@@ -333,7 +333,7 @@
         "authorizationScope": {"const": "trusted-host-readiness"},
         "freshnessAuthority": {"const": "trusted-host-wall-clock"},
         "launchAttemptJournalDomain": {
-          "const": "serverware.launchAuthorizationAttemptJournal/v1"
+          "const": "catchplate.launchAuthorizationAttemptJournal/v1"
         },
         "launchAttemptRecoveryIdentitySha256": {"$ref": "#/$defs/sha256"},
         "launchAuthorityWitnessChallenge": {"$ref": "#/$defs/hex64"},
@@ -385,7 +385,7 @@
       "required": ["apiVersion", "kind", "statement", "signature"],
       "properties": {
         "apiVersion": {
-          "const": "serverware.launchAuthorityWitnessTransition/v1"
+          "const": "catchplate.launchAuthorityWitnessTransition/v1"
         },
         "kind": {"const": "LaunchAuthorityWitnessTransition"},
         "statement": {"$ref": "#/$defs/monotonicWitnessStatement"},
@@ -458,7 +458,7 @@
       "additionalProperties": false,
       "required": ["apiVersion", "kind", "statement", "signature"],
       "properties": {
-        "apiVersion": {"const": "serverware.launchAuthorization/v2"},
+        "apiVersion": {"const": "catchplate.launchAuthorization/v2"},
         "kind": {"const": "ProductionLaunchAuthorization"},
         "statement": {"$ref": "#/$defs/authorizationStatement"},
         "signature": {"$ref": "#/$defs/signature"}
@@ -525,7 +525,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.productionLaunchGlobalRoleRegistry/v1"
+          "const": "catchplate.productionLaunchGlobalRoleRegistry/v1"
         },
         "claimScope": {"const": "roles-present-in-native-launch-contract"},
         "roles": {"$ref": "#/$defs/globalRoleRegistryRoles"},
@@ -584,7 +584,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.productionNonceRollbackAssuranceBinding/v1"
+          "const": "catchplate.productionNonceRollbackAssuranceBinding/v1"
         },
         "contractSha256": {"$ref": "#/$defs/sha256"},
         "pinsFile": {
@@ -592,7 +592,7 @@
             {"$ref": "#/$defs/readOnlyFile"},
             {
               "properties": {
-                "path": {"pattern": "^/etc/serverware/.+$"},
+                "path": {"pattern": "^/etc/catchplate/.+$"},
                 "metadata": {
                   "properties": {
                     "size": {"minimum": 1, "maximum": 65536}
@@ -678,10 +678,10 @@
             {"const": "LANG"},
             {"const": "LC_ALL"},
             {"const": "PATH"},
-            {"const": "SERVERWARE_BOOTSTRAP_RECEIPT_API_VERSION"},
-            {"const": "SERVERWARE_BOOTSTRAP_RECEIPT_FD"},
-            {"const": "SERVERWARE_BOOTSTRAP_RECEIPT_SHA256"},
-            {"const": "SERVERWARE_LAUNCHER_IMPORT_MODE"},
+            {"const": "CATCHPLATE_BOOTSTRAP_RECEIPT_API_VERSION"},
+            {"const": "CATCHPLATE_BOOTSTRAP_RECEIPT_FD"},
+            {"const": "CATCHPLATE_BOOTSTRAP_RECEIPT_SHA256"},
+            {"const": "CATCHPLATE_LAUNCHER_IMPORT_MODE"},
             {"const": "TZ"}
           ],
           "items": false

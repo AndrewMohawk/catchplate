@@ -8,14 +8,14 @@ This source is unbuilt, unexecuted and unprovisioned.
 
 ## Closed request profile
 
-[`authority_oidc_session_activation_delivery_completion_dispatch_transport.py`](../serverware/authority_oidc_session_activation_delivery_completion_dispatch_transport.py)
+[`authority_oidc_session_activation_delivery_completion_dispatch_transport.py`](../catchplate/authority_oidc_session_activation_delivery_completion_dispatch_transport.py)
 defines exactly two request frames: literal
 `complete-oidc-session-activation-delivery`, then the original signed consume
 caller authorization. Request magic is `SWODCM02`. Each frame and the whole
 exchange are bounded before body allocation; trailing bytes fail closed.
 
 Only signed service launch
-`serverware.oidcSessionActivationDeliveryCompletionLaunch/v2` selects this
+`catchplate.oidcSessionActivationDeliveryCompletionLaunch/v2` selects this
 grammar and peer UID/GID 65532. The service keeps its existing isolated UID/GID
 65497 and inherited resources. Its actual owner must compare the received
 authorization byte-for-byte with the genuinely admitted root-held original,

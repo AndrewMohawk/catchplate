@@ -10,10 +10,10 @@ from types import SimpleNamespace
 import unittest
 
 from fastapi import HTTPException
-from serverware import authority_contract
+from catchplate import authority_contract
 
 
-SOURCE = Path(__file__).resolve().parents[1] / "serverware/app.py"
+SOURCE = Path(__file__).resolve().parents[1] / "catchplate/app.py"
 CATEGORIES = (
     "_CONTROLLED_AUTHORITY_OPERATOR_ROLES",
     "_SPECIALIZED_AUTHORITY_OPERATIONS",
@@ -78,7 +78,7 @@ def generic_route_prefix(name, namespace):
 class AuthorityApiClassificationTests(unittest.TestCase):
     def test_full_app_import_registers_attestation_without_response_model(self):
         # Import registers routes; never enter the ASGI lifespan or call a handler.
-        from serverware import app
+        from catchplate import app
 
         routes = [route for route in app._fastapi_app.routes
                   if getattr(route, "path", None) == "/attestation"
@@ -111,7 +111,7 @@ class AuthorityApiClassificationTests(unittest.TestCase):
     def test_native_review_routes_do_not_activate_or_allow_generic_dispatch(self):
         # Use actual imported handlers, not a substitute owner or route prefix.
         # Incomplete arguments and role traps must never be reached on refusal.
-        from serverware import app, native_jit_review_open_service
+        from catchplate import app, native_jit_review_open_service
 
         self.assertIsNone(native_jit_review_open_service.selected())
         operations = {"jit.review-open.authorize", "jit.review-open.receipt.issue"}

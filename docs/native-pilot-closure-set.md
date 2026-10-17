@@ -1,6 +1,6 @@
 # Static native pilot closure set
 
-`serverware.native_pilot_closure_set` is an unsigned fixed-role producer and
+`catchplate.native_pilot_closure_set` is an unsigned fixed-role producer and
 validator. It describes supplied static manifests; it does not approve them,
 verify an assignment signature, sign or install anything, reconstruct a live
 guest, or enable a commissioning policy by itself. The later explicit assignment
@@ -9,7 +9,7 @@ to admission and extend supervisor coverage to seven jobs, not runtime acceptanc
 
 ## Exact public original
 
-`serverware.nativeCustodyExecutionClosureSet/v1` has exactly `apiVersion`,
+`catchplate.nativeCustodyExecutionClosureSet/v1` has exactly `apiVersion`,
 `members`, `setRootSha256`, and `seccompSetRootSha256`. The canonical ASCII JSON
 original has no LF and is at most 12 MiB. Each member is exactly `{role,manifest}`;
 each canonical manifest is at most 1 MiB. There are exactly eleven members in
@@ -42,11 +42,11 @@ SHA256 of ASCII domain, NUL, big-endian u64 byte length and the bytes `x`.
 For each fixed ordered member:
 
 ```text
-leaf = F("serverware.nativeCustodyExecutionClosureSetLeaf/v1",
+leaf = F("catchplate.nativeCustodyExecutionClosureSetLeaf/v1",
          C([role, completeManifest]))
-setRootSha256 = F("serverware.nativeCustodyExecutionClosureSetRoot/v1",
+setRootSha256 = F("catchplate.nativeCustodyExecutionClosureSetRoot/v1",
                   C([leafDigestString, ...]))
-seccompSetRootSha256 = F("serverware.nativeCustodySeccompSetRoot/v1",
+seccompSetRootSha256 = F("catchplate.nativeCustodySeccompSetRoot/v1",
                          C([[role, actualStructurallyVerifiedPolicySha256], ...]))
 ```
 
@@ -84,7 +84,7 @@ the closed set and returns `role`, `setRootSha256`, `seccompSetRootSha256`,
 ## Protected-input preparation command
 
 `scripts/authority/prepare_native_pilot_closure_set.py` accepts a canonical
-`serverware.nativePilotClosureSetPreparation/v1` original with exactly
+`catchplate.nativePilotClosureSetPreparation/v1` original with exactly
 `apiVersion` and the complete ordered `members` array. Its 12 MiB input bound
 and per-manifest checks are unchanged. The independently selected SHA-256 pin
 must match the literal input bytes; choosing a hash does not establish approval.

@@ -1,6 +1,6 @@
 # Independent consume pending admission
 
-[`authority_oidc_session_activation_delivery_pending_admission.py`](../serverware/authority_oidc_session_activation_delivery_pending_admission.py)
+[`authority_oidc_session_activation_delivery_pending_admission.py`](../catchplate/authority_oidc_session_activation_delivery_pending_admission.py)
 checks a genuine reservation response against independently held current pending
 pins. A signed ACK is not its own latest-head authority. This is source-only,
 unbuilt, unexecuted and unprovisioned. Its dedicated original-input continuation

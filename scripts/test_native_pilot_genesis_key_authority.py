@@ -17,9 +17,9 @@ from cryptography.exceptions import InvalidSignature
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_closure_set as sets
-from serverware import native_pilot_genesis_key_profile as profile
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_closure_set as sets
+from catchplate import native_pilot_genesis_key_profile as profile
 import test_native_pilot_closure_set as manifests
 import test_native_pilot_genesis_bootstrap_profiles as bootstrap
 import test_native_pilot_genesis_delivery as delivery_tests
@@ -27,8 +27,8 @@ import test_native_pilot_publication_cold_binding as binding_tests
 from test_native_pilot_generation_scope import NOW, key_fixture
 
 p = g.p
-ROLE_DOMAIN = "serverware.nativeShadowRoleKeyAssignment.signature/v2"
-ADMISSION_DOMAIN = "serverware.nativeShadowKeyAdmissionAssignment.signature/v1"
+ROLE_DOMAIN = "catchplate.nativeShadowRoleKeyAssignment.signature/v2"
+ADMISSION_DOMAIN = "catchplate.nativeShadowKeyAdmissionAssignment.signature/v1"
 PAIR_FIELDS = ("roleKeyInputOriginal", "roleKeyOriginal", "admissionInputOriginal", "admissionOriginal")
 
 
@@ -37,8 +37,8 @@ def labelled(value):
 
 
 def independent_signed(domain, payload, key):
-    message = (b"serverware.signedEnvelope/v1\0" + domain.encode("ascii")
-        + b"\0serverware.canonicalJson/ascii-integer-v1\0" + g.canonical(payload))
+    message = (b"catchplate.signedEnvelope/v1\0" + domain.encode("ascii")
+        + b"\0catchplate.canonicalJson/ascii-integer-v1\0" + g.canonical(payload))
     return g.canonical({"payload": payload, "signature": p.encoded(key.sign(message))})
 
 
@@ -119,8 +119,8 @@ class GenesisKeyAuthorityTests(unittest.TestCase):
                 checked = profile.admitted_pair(role, *(pair[field] for field in PAIR_FIELDS), **self.clocks)
                 payload = checked["authorization"]["payload"]
                 admission = checked["admissionAuthorization"]["payload"]
-                self.assertEqual(payload["apiVersion"], "serverware.nativeShadowRoleKeyAssignment/v2")
-                self.assertEqual(admission["apiVersion"], "serverware.nativeShadowKeyAdmissionAssignment/v1")
+                self.assertEqual(payload["apiVersion"], "catchplate.nativeShadowRoleKeyAssignment/v2")
+                self.assertEqual(admission["apiVersion"], "catchplate.nativeShadowKeyAdmissionAssignment/v1")
                 self.assertEqual(admission["keyAuthorizationSha256"], p.sha(pair["roleKeyOriginal"]))
                 self.assertEqual(checked["expectedScope"]["admissionAuthorizationSha256"], p.sha(pair["admissionOriginal"]))
                 self.assertEqual(checked["source"]["coldBindingInputOriginal"], self.f["coldBindingInputOriginal"])
@@ -141,7 +141,7 @@ class GenesisKeyAuthorityTests(unittest.TestCase):
         self.refused(value)
 
     def test_old_hot_selector_extra_fields_and_zero_challenge_refuse(self):
-        for changes in ({"apiVersion": "serverware.nativePilotKeyAuthorityInput/v1"}, {"role": "retrieval"},
+        for changes in ({"apiVersion": "catchplate.nativePilotKeyAuthorityInput/v1"}, {"role": "retrieval"},
                 {"futureGrantSha256": labelled("not authority")}, {"operation": "possession"}):
             self.refused({**self.value(), **changes})
         value = self.value(); value["policy"]["challengeBase64url"] = p.encoded(bytes(32))

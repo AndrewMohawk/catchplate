@@ -17,7 +17,7 @@ credential or that it has particular permissions. Do not enter credentials in
 chat; use the authenticated form.
 
 Temporary credentials require the complete tuple, including the session token
-and expiry. Serverware does not discover host profiles, contact instance
+and expiry. Catchplate does not discover host profiles, contact instance
 metadata, assume a role or automatically renew imported sessions. AWS documents
 the session-token requirement and original expiry in
 [using temporary credentials](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_temp_use-resources.html).
@@ -73,6 +73,6 @@ checks use synthetic keys/owners; they do not commission a native service.
 Use `make verify-operator-aws-credentials`, `make verify-operator-aws-browser`
 and `make verify-credential-ciphertext-codec` with the documented test dependencies.
 Execution receipts and source hashes are retained outside Git in
-`serverware-operator-workspace-evidence/aws-credentials.0oM3vMMf`; earlier failures
+`catchplate-operator-workspace-evidence/aws-credentials.0oM3vMMf`; earlier failures
 are preserved. No AWS request, publication, new pilot or live credential mutation
 was part of these checks.

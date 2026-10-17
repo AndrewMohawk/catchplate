@@ -23,7 +23,7 @@ const FS_IOC_GETFLAGS: libc::c_ulong = 0x80086601;
 const FS_IMMUTABLE_FL: libc::c_uint = 0x00000010;
 const MAX_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_PATH_BYTES: usize = 4096;
-const CUSTODY_DOMAIN: &[u8] = b"serverware/controller-body-target-custody/v12\0";
+const CUSTODY_DOMAIN: &[u8] = b"catchplate/controller-body-target-custody/v12\0";
 
 pub(super) struct HeldBodyTargetV12 {
     owner_pid: libc::pid_t,
@@ -141,7 +141,7 @@ impl HeldBodyTargetV12 {
             kind: namespace.kind, identity: &namespace.identity,
         }).collect::<Vec<_>>();
         let claims = CustodyClaims {
-            version: "serverware.controllerBodyTargetCustody/v12",
+            version: "catchplate.controllerBodyTargetCustody/v12",
             host_pid: pid, start_ticks, pidfd: &held.pidfd_identity,
             proc: &held.proc_identity, supervisor_sha256: &expected_supervisor_sha256,
             executable: &held.executable_identity, namespaces: &held.namespaces,

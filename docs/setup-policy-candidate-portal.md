@@ -71,10 +71,10 @@ continuation original, with no added readiness claim.
 
 ## Actual publication continuation
 
-Two additive owner-bound POST routes use the exact three fields `{apiVersion: "serverware.setupPolicyMaterializationRequest/v1", sessionId, expectedRevision: 3}` (raw request <=4096 bytes). They reconstruct the actual protected candidate-bound continuation0 and completed generation; they do not run the expired original bind request again. Old Setup revision3 and the four association routes remain unchanged.
+Two additive owner-bound POST routes use the exact three fields `{apiVersion: "catchplate.setupPolicyMaterializationRequest/v1", sessionId, expectedRevision: 3}` (raw request <=4096 bytes). They reconstruct the actual protected candidate-bound continuation0 and completed generation; they do not run the expired original bind request again. Old Setup revision3 and the four association routes remain unchanged.
 
 - `/materialize-draft` additionally requires the literal `policy_publisher` role. It verifies the actual signed candidate and current committed artifact/high-water, rechecks the real publication journal and existing target-file digest, and returns exact6: `apiVersion`, `okForAction:false`, `automaticRetryAllowed:false`, `continuationOriginal`, `requestOriginal`, `bindingOriginal`. It generates one actual publication ID and `reason:null`; the exact body contains the signed candidate bytes, artifact pin and nonnull existing-file pin. Missing file, incomplete journal, full journal, stale/uncommitted candidate or association refuses. No genesis/repair fallback or file effect is performed by drafting.
-- `/installed` returns exact5: `apiVersion:serverware.setupPolicyInstalledObservation/v1`, `okForAction:false`, `automaticRetryAllowed:false`, `nativeGateVerified:false`, `observationOriginal`. The real retained `LoadedPublication` reader joins the locked materializer journal, exact file/stat originals, signed policy, actual process-global control-plane loader, reviewed assignment, consumed approval and completed settlement audit. It is not a supplied loader flag or a path-only existence check.
+- `/installed` returns exact5: `apiVersion:catchplate.setupPolicyInstalledObservation/v1`, `okForAction:false`, `automaticRetryAllowed:false`, `nativeGateVerified:false`, `observationOriginal`. The real retained `LoadedPublication` reader joins the locked materializer journal, exact file/stat originals, signed policy, actual process-global control-plane loader, reviewed assignment, consumed approval and completed settlement audit. It is not a supplied loader flag or a path-only existence check.
 
 The portal deliberately keeps the two role permissions separate: the Setup owner needs both `credential_owner` and `policy_publisher` to obtain a publication draft; the policy-file request/consume controls also require that same owner and both roles. A different literal `policy_publisher` may import the same data-only draft and approve without becoming the Setup owner. No admin-token fallback or credential-owner-as-publisher alias is allowed. Imported JSON is review data, never signature or authorization proof.
 
@@ -105,10 +105,10 @@ The [native producer and cold-input guide](setup-native-policy-observation.md)
 records the fixed management route, signed trust association and explicit
 entrypoint selection; no roots or descriptors are provisioned by the portal.
 
-The exact six-field response is `apiVersion: serverware.setupNativePolicyObservation/v1`,
+The exact six-field response is `apiVersion: catchplate.setupNativePolicyObservation/v1`,
 `okForAction:false`, `automaticRetryAllowed:false`, `proxyReady:false`,
 `setupSessionId` and `observationOriginal`. The nested canonical ASCII original
-is `serverware.setupNativeLoadedPolicyObservation/v1`, scope
+is `catchplate.setupNativeLoadedPolicyObservation/v1`, scope
 `native-loaded-policy-only`, with the three false flags, the narrowly scoped
 `nativeLoadedPolicyVerified:true`, exact continuation/current-credential hashes,
 and unchanged native request/evidence strings. The original signed request and

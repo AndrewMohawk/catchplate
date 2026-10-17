@@ -4,10 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-PROFILE_NAME="${SERVERWARE_APPARMOR_PROFILE:-serverware-docker}"
-PROFILE_PATH="${SERVERWARE_APPARMOR_PROFILE_PATH:-security/apparmor/serverware-docker}"
-OVERRIDE_PATH="${SERVERWARE_APPARMOR_COMPOSE_OVERRIDE:-docker-compose.apparmor.yml}"
-SERVICES_RAW="${SERVERWARE_APPARMOR_SERVICES:-serverware,audit-anchor,grant-store,demo-upstream,decision-gate-rs}"
+PROFILE_NAME="${CATCHPLATE_APPARMOR_PROFILE:-catchplate-docker}"
+PROFILE_PATH="${CATCHPLATE_APPARMOR_PROFILE_PATH:-security/apparmor/catchplate-docker}"
+OVERRIDE_PATH="${CATCHPLATE_APPARMOR_COMPOSE_OVERRIDE:-docker-compose.apparmor.yml}"
+SERVICES_RAW="${CATCHPLATE_APPARMOR_SERVICES:-catchplate,audit-anchor,grant-store,demo-upstream,decision-gate-rs}"
 
 python3 - <<'PY'
 import json
@@ -15,14 +15,14 @@ import os
 import re
 from pathlib import Path
 
-profile_name = os.environ.get("SERVERWARE_APPARMOR_PROFILE", "serverware-docker")
-profile_path = Path(os.environ.get("SERVERWARE_APPARMOR_PROFILE_PATH", "security/apparmor/serverware-docker"))
-override_path = Path(os.environ.get("SERVERWARE_APPARMOR_COMPOSE_OVERRIDE", "docker-compose.apparmor.yml"))
+profile_name = os.environ.get("CATCHPLATE_APPARMOR_PROFILE", "catchplate-docker")
+profile_path = Path(os.environ.get("CATCHPLATE_APPARMOR_PROFILE_PATH", "security/apparmor/catchplate-docker"))
+override_path = Path(os.environ.get("CATCHPLATE_APPARMOR_COMPOSE_OVERRIDE", "docker-compose.apparmor.yml"))
 services = [
     item.strip()
     for item in os.environ.get(
-        "SERVERWARE_APPARMOR_SERVICES",
-        "serverware,audit-anchor,grant-store,demo-upstream,decision-gate-rs",
+        "CATCHPLATE_APPARMOR_SERVICES",
+        "catchplate,audit-anchor,grant-store,demo-upstream,decision-gate-rs",
     ).split(",")
     if item.strip()
 ]
@@ -53,7 +53,7 @@ if missing_services:
 print(json.dumps({"ok": True, "stage": "static", "profile": str(profile_path), "override": str(override_path), "services": services}, sort_keys=True))
 PY
 
-if [[ "${SERVERWARE_APPARMOR_DRY_RUN:-0}" =~ ^(1|true|TRUE|yes|YES)$ ]]; then
+if [[ "${CATCHPLATE_APPARMOR_DRY_RUN:-0}" =~ ^(1|true|TRUE|yes|YES)$ ]]; then
   python3 - <<'PY'
 import json
 import os
@@ -61,18 +61,18 @@ print(json.dumps({
     "ok": True,
     "apparmor_runtime": "dry-run",
     "reason": "static profile and compose override checks passed",
-    "profile": os.environ.get("SERVERWARE_APPARMOR_PROFILE", "serverware-docker"),
+    "profile": os.environ.get("CATCHPLATE_APPARMOR_PROFILE", "catchplate-docker"),
 }, sort_keys=True))
 PY
   exit 0
 fi
 
 if [[ "$(uname -s)" != "Linux" ]]; then
-  echo "AppArmor runtime verification requires a Linux Docker host; set SERVERWARE_APPARMOR_DRY_RUN=1 for static contract checks" >&2
+  echo "AppArmor runtime verification requires a Linux Docker host; set CATCHPLATE_APPARMOR_DRY_RUN=1 for static contract checks" >&2
   exit 1
 fi
 
-if [[ "${SERVERWARE_APPARMOR_INSTALL:-0}" =~ ^(1|true|TRUE|yes|YES)$ ]]; then
+if [[ "${CATCHPLATE_APPARMOR_INSTALL:-0}" =~ ^(1|true|TRUE|yes|YES)$ ]]; then
   ./scripts/install_apparmor_profile.sh >/dev/null
 fi
 
@@ -88,7 +88,7 @@ fi
 
 IFS=',' read -r -a SERVICES <<< "$SERVICES_RAW"
 
-if [[ "${SERVERWARE_APPARMOR_START:-1}" =~ ^(1|true|TRUE|yes|YES)$ ]]; then
+if [[ "${CATCHPLATE_APPARMOR_START:-1}" =~ ^(1|true|TRUE|yes|YES)$ ]]; then
   docker compose -f docker-compose.yml -f "$OVERRIDE_PATH" up -d --build "${SERVICES[@]}"
 fi
 
@@ -97,13 +97,13 @@ import json
 import os
 import subprocess
 
-profile_name = os.environ.get("SERVERWARE_APPARMOR_PROFILE", "serverware-docker")
-override = os.environ.get("SERVERWARE_APPARMOR_COMPOSE_OVERRIDE", "docker-compose.apparmor.yml")
+profile_name = os.environ.get("CATCHPLATE_APPARMOR_PROFILE", "catchplate-docker")
+override = os.environ.get("CATCHPLATE_APPARMOR_COMPOSE_OVERRIDE", "docker-compose.apparmor.yml")
 services = [
     item.strip()
     for item in os.environ.get(
-        "SERVERWARE_APPARMOR_SERVICES",
-        "serverware,audit-anchor,grant-store,demo-upstream,decision-gate-rs",
+        "CATCHPLATE_APPARMOR_SERVICES",
+        "catchplate,audit-anchor,grant-store,demo-upstream,decision-gate-rs",
     ).split(",")
     if item.strip()
 ]
@@ -129,11 +129,11 @@ for service in services:
     checked.append({"service": service, "attr": attr})
 
 probe = command(
-    [*compose, "exec", "-T", "serverware", "sh", "-c", "cat /proc/sys/kernel/hostname >/dev/null"],
+    [*compose, "exec", "-T", "catchplate", "sh", "-c", "cat /proc/sys/kernel/hostname >/dev/null"],
     check=False,
 )
 if probe.returncode == 0:
-    raise AssertionError("serverware: expected AppArmor to deny reading /proc/sys/kernel/hostname")
+    raise AssertionError("catchplate: expected AppArmor to deny reading /proc/sys/kernel/hostname")
 
 print(
     json.dumps(

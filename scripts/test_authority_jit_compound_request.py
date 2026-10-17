@@ -25,9 +25,9 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from serverware import authority_jit_compound_request as source
-from serverware import authority_jit_compound_request_service as measured
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_jit_compound_request as source
+from catchplate import authority_jit_compound_request_service as measured
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 from test_authority_jit_connected_originals import connected_fixture
 
 

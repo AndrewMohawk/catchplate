@@ -22,7 +22,7 @@ OUTPUT = Path("/broker-output")
 SOURCE = Path("/source")
 SITE = Path("/usr/local/lib/python3.11/site-packages")
 INTERPRETER = Path("/usr/local/bin/python3.11")
-HELPER = Path("/opt/serverware/serverware/native_secret_broker_helper.py")
+HELPER = Path("/opt/catchplate/catchplate/native_secret_broker_helper.py")
 MAX_FILE = 128 * 1024 * 1024
 MAX_TOTAL = 512 * 1024 * 1024
 MAX_FILES = 20000
@@ -253,13 +253,13 @@ class Closure:
             "external mount target is not source-fixed")
         proc = self.root / "proc"
         proc.mkdir(mode=0o555)
-        configuration = self.root / "etc/serverware" / leaf
+        configuration = self.root / "etc/catchplate" / leaf
         configuration.parent.mkdir(parents=True)
         with configuration.open("xb"):
             pass
         configuration.chmod(0o400)
         os.utime(configuration, (self.epoch, self.epoch))
-        name = "/etc/serverware/" + leaf
+        name = "/etc/catchplate/" + leaf
         require(name not in self.files and len(self.files) < MAX_FILES,
                 "verifier mount target conflicts with the admitted file inventory")
         self.files[name] = {"sha256": sha(b""), "size": 0, "mode": "0400"}
@@ -295,8 +295,8 @@ class Closure:
 def add_broker_sources(closure: Closure) -> None:
     """Stage exactly the source-fixed broker modules, including its entrypoint."""
     for name in BROKER_MODULES:
-        closure.add(SOURCE / "serverware" / name, SITE / "serverware" / name)
-    closure.add(SOURCE / "serverware/native_secret_broker_helper.py", HELPER)
+        closure.add(SOURCE / "catchplate" / name, SITE / "catchplate" / name)
+    closure.add(SOURCE / "catchplate/native_secret_broker_helper.py", HELPER)
 
 
 def main() -> None:
@@ -326,8 +326,8 @@ def main() -> None:
     # This check executes only during the single post-freeze build, in the
     # generated root with no outside modules, loader cache or environment.
     subprocess.run(["/usr/sbin/chroot", str(ROOT), str(INTERPRETER), "-I", "-B", "-c",
-                    "import ssl,cryptography,cffi,pycparser; import serverware.native_kms_cms; "
-                    "import serverware.native_secret_broker_helper; import sys; "
+                    "import ssl,cryptography,cffi,pycparser; import catchplate.native_kms_cms; "
+                    "import catchplate.native_secret_broker_helper; import sys; "
                     "assert sys.prefix == '/usr/local'; assert cryptography.__version__ == '50.0.0'"],
                    env=ENV, check=True, timeout=30)
     image = OUTPUT / "native-broker-runtime.squashfs"
@@ -342,11 +342,11 @@ def main() -> None:
     with image.open("rb") as stream:
         image_hash = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
     helper_image = {"profile": "sealed-memfd-squashfs-v1",
-                    "imagePath": "/opt/serverware/native-broker-runtime.squashfs",
+                    "imagePath": "/opt/catchplate/native-broker-runtime.squashfs",
                     "imageSha256": image_hash,
                     "interpreterSha256": closure.files[str(INTERPRETER)]["sha256"],
                     "helperSha256": closure.files[str(HELPER)]["sha256"]}
-    manifest = {"apiVersion": "serverware.nativeBrokerRuntimeBuild/v1", "helperImage": helper_image,
+    manifest = {"apiVersion": "catchplate.nativeBrokerRuntimeBuild/v1", "helperImage": helper_image,
                 "sourceManifestSha256": sha(original(Path("/source-contract/source-manifest.json"))),
                 "sourceDateEpoch": epoch, "imageBytes": image.stat().st_size,
                 "interpreterPath": str(INTERPRETER), "helperPath": str(HELPER),

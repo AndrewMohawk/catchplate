@@ -26,7 +26,7 @@ The fixed inherited resources are root 198, bootstrap 199, sealed delivery AES
 key 200, exact outcome directory 201 and preauthorized listener 202. The actual
 startup now accepts and owns one connection for the finite worker; framing and
 response I/O remain in the separate service/transport. Its fixed source endpoint is
-`/run/serverware/oidc-session-activation-token-release/release.sock`, with the
+`/run/catchplate/oidc-session-activation-token-release/release.sock`, with the
 separately pinned private peer 65532. There is no public or browser endpoint.
 
 The root-selected `live-release` profile constructs a genuine

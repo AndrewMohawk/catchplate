@@ -25,12 +25,12 @@ import migrate_operator_authority_contract as shared
 ROOT = shared.ROOT
 PIN_FILE = ROOT / "scripts/operator_native_jit_schema_migration_pins.json"
 # Replaced only by the reviewed output of genuine old/target initialization.
-# Missing or provisional pins refuse before any Serverware import or DB open.
+# Missing or provisional pins refuse before any Catchplate import or DB open.
 PIN_SHA256 = "sha256:9bc74904575a444124ec487a5da3da488dd168a9abe672210efa81943670770a"
 TRANSITION = "native-jit-pair-v1"
-PIN_SCHEMA = "serverware.operatorNativeJitSchemaMigrationPins/v1"
-SCHEMA = "serverware.operatorNativeJitSchemaMigrationPlan/v1"
-RECEIPT_SCHEMA = "serverware.operatorNativeJitSchemaMigrationReceipt/v1"
+PIN_SCHEMA = "catchplate.operatorNativeJitSchemaMigrationPins/v1"
+SCHEMA = "catchplate.operatorNativeJitSchemaMigrationPlan/v1"
+RECEIPT_SCHEMA = "catchplate.operatorNativeJitSchemaMigrationReceipt/v1"
 OLD_COMMIT = "35817cf50b0dc87cf06a07c0c9ce273f13af323f"
 TARGET_COMMIT = "aca8e74ed8cb2c790342fb3265ba12606ba88005"
 TABLE = "policy_authority_native_jit_review_pairs"
@@ -78,18 +78,18 @@ def require_pins(pinned):
 
 def source(pinned, directory):
     require_pins(pinned)
-    expected = {**shared.ENVIRONMENT, "SERVERWARE_DATA_DIR": str(directory)}
+    expected = {**shared.ENVIRONMENT, "CATCHPLATE_DATA_DIR": str(directory)}
     require(all(name in expected and value == expected[name]
-        for name, value in os.environ.items() if name.startswith("SERVERWARE_")))
+        for name, value in os.environ.items() if name.startswith("CATCHPLATE_")))
     os.environ.update(expected)
     for relative, digest in pinned["target"]["sourceFiles"].items():
         path = ROOT / relative
         require(not path.is_symlink() and path.is_file() and path.resolve().is_relative_to(ROOT)
             and sha(path.read_bytes()) == digest)
-    require(not any(name == "serverware" or name.startswith("serverware.") for name in sys.modules))
+    require(not any(name == "catchplate" or name.startswith("catchplate.") for name in sys.modules))
     sys.path.insert(0, str(ROOT))
-    from serverware import db, operator_catalog_schema, authority_native_jit_retention_schema
-    from serverware.authority_store.metadata_schema_source import metadata_schema_source
+    from catchplate import db, operator_catalog_schema, authority_native_jit_retention_schema
+    from catchplate.authority_store.metadata_schema_source import metadata_schema_source
     ddl, addition = metadata_schema_source(), authority_native_jit_retention_schema.source()
     require(db._policy_candidate_authority_source_contract_digest() == pinned["target"]["sourceContractDigest"]
         and sha(ddl.encode()) == pinned["target"]["emittedDdlSha256"]
@@ -112,7 +112,7 @@ def ordered_audit(conn):
 def inspect(conn, pinned, helpers, *, target=False):
     """Old exact independent pins; after creation, actual target validation too."""
     db, catalog, ddl, _addition = helpers
-    from serverware.authority_store.metadata_schema import configure_sqlite_metadata_connection
+    from catchplate.authority_store.metadata_schema import configure_sqlite_metadata_connection
     configure_sqlite_metadata_connection(conn)
     selected = pinned["target" if target else "old"]
     schema = objects(conn)
@@ -128,7 +128,7 @@ def inspect(conn, pinned, helpers, *, target=False):
     require(set(contract) == {"schema_version", "contract_id", "source_revision", "source_contract_digest",
         "structural_manifest_json", "structural_manifest_digest", "offline_migration_receipt_digest", "installed_at"})
     require(contract["schema_version"] == 9 and contract["source_revision"] == selected["sourceRevision"]
-        and contract["contract_id"] == "serverware.policyCandidateAuthoritySchema/v9"
+        and contract["contract_id"] == "catchplate.policyCandidateAuthoritySchema/v9"
         and contract["source_contract_digest"] == selected["sourceContractDigest"]
         and sha(contract["structural_manifest_json"].encode()) == selected["structuralManifestJsonSha256"]
         and contract["structural_manifest_digest"] == selected["structuralManifestDigest"]
@@ -137,7 +137,7 @@ def inspect(conn, pinned, helpers, *, target=False):
         manifest, digest = db._validate_policy_candidate_authority_structure(conn,
             require_recorded_contract=True, source_schema_program=ddl)
         require(contract["structural_manifest_json"] == manifest and contract["structural_manifest_digest"] == digest)
-    versions = conn.execute("SELECT version FROM serverware_store_migrations "
+    versions = conn.execute("SELECT version FROM catchplate_store_migrations "
         "WHERE migration='policy_candidate_authority'").fetchall()
     require(len(versions) == 1 and versions[0][0] == 9)
     for name in selected["emptyTables"]:
@@ -146,7 +146,7 @@ def inspect(conn, pinned, helpers, *, target=False):
     require(catalog.active(conn))
     catalog.read_catalog(conn)
     if optional:
-        from serverware import operator_upstream_setup
+        from catchplate import operator_upstream_setup
         operator_upstream_setup._rows(conn)
     return {"contract": contract, "rows": row_commitments(conn, tables), "orderedAudit": ordered_audit(conn),
         "sqliteObjectsSha256": sha(canonical(schema)), "variant": "optional" if optional else "base"}
@@ -219,7 +219,7 @@ def apply(directory, pinned, helpers, reviewed, expected_plan_sha256, backup, *,
                         require_recorded_contract=False, source_schema_program=ddl)
                     require(sha(manifest.encode()) == pinned["target"]["structuralManifestJsonSha256"]
                         and digest == pinned["target"]["structuralManifestDigest"])
-                    trigger = db._policy_candidate_authority_object_name("serverware", CONTRACT_TABLE, "immutable", "update")
+                    trigger = db._policy_candidate_authority_object_name("catchplate", CONTRACT_TABLE, "immutable", "update")
                     triggers = conn.execute("SELECT sql FROM sqlite_schema WHERE type='trigger' AND name=? AND tbl_name=?",
                         (trigger, CONTRACT_TABLE)).fetchall()
                     require(len(triggers) == 1)

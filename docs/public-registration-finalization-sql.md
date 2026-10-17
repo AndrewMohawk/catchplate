@@ -8,14 +8,14 @@ OIDC session. Production acceptance remains **0/6 verified**.
 
 ## Fixed request contract
 
-[Two POST handlers](../serverware/control_plane_registration_finalization_sql_routes.py)
+[Two POST handlers](../catchplate/control_plane_registration_finalization_sql_routes.py)
 select the same dedicated operation:
 
 - `/api/webauthn/register/execute-finalization` for a current operator.
 - `/api/auth/session/webauthn/register/execute-finalization` for the actual
   pending OIDC cookie session.
 
-The [closed request parser](../serverware/control_plane_registration_finalization_sql_http.py)
+The [closed request parser](../catchplate/control_plane_registration_finalization_sql_http.py)
 requires `purpose: "execute-registration-finalization"` and a canonical
 `sha256:` `localDigest` identifying the retained **finalization grant**, not its
 earlier evidence grant or a reservation record. Optional fields are
@@ -38,7 +38,7 @@ existing `sql_handoff_enabled` scopes. They genuinely inspect retained-original
 ownership before authorizing the new action. The owned seven-scalar subject
 (`localDigest`, `userId`, `challengeId`, `sessionId`, `mode`, `requestDigest`,
 `operationId`) becomes the domain-separated
-`serverware.webAuthnRegistrationFinalizationExecutionIntent/v1` binding for
+`catchplate.webAuthnRegistrationFinalizationExecutionIntent/v1` binding for
 `webauthn.registration.finalization.execute`. A posted subject dictionary and a
 historical enrollment mode cannot supply present permission.
 
@@ -81,7 +81,7 @@ The response has exactly nine fields:
 
 | Field | Value |
 | --- | --- |
-| `schema` | `serverware.webAuthnRegistrationFinalizationExecution/v1` |
+| `schema` | `catchplate.webAuthnRegistrationFinalizationExecution/v1` |
 | `status` | `observed-commit` |
 | `purpose` | `execute-registration-finalization` |
 | `localDigest` | The same canonical retained finalization-grant locator |

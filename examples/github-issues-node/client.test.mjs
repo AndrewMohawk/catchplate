@@ -7,48 +7,48 @@ import test from 'node:test';
 import { PUBLIC_GITHUB_DUMMY, configuration, createClient, failure, loadClientConfig, parseArguments, perform, proxyOptions } from './client.mjs';
 
 const env = () => ({
-  SERVERWARE_PROXY_URL: 'https://proxy.example.test:443',
-  SERVERWARE_APP_ID: '11111111-2222-4333-8444-555555555555',
-  SERVERWARE_PROXY_TOKEN: 'synthetic_app_token',
-  SERVERWARE_CA_FILE: '/trusted/inner.pem',
-  SERVERWARE_GITHUB_OWNER: 'example-owner',
-  SERVERWARE_GITHUB_REPO: 'example.repo',
+  CATCHPLATE_PROXY_URL: 'https://proxy.example.test:443',
+  CATCHPLATE_APP_ID: '11111111-2222-4333-8444-555555555555',
+  CATCHPLATE_PROXY_TOKEN: 'synthetic_app_token',
+  CATCHPLATE_CA_FILE: '/trusted/inner.pem',
+  CATCHPLATE_GITHUB_OWNER: 'example-owner',
+  CATCHPLATE_GITHUB_REPO: 'example.repo',
 });
 const pem = (label) => Buffer.from('-----BEGIN CERTIFICATE-----\n' + label + '\n-----END CERTIFICATE-----');
 const NOW = 1_791_996_000_000;
 const downloaded = () => ({
-  application_id: env().SERVERWARE_APP_ID,
+  application_id: env().CATCHPLATE_APP_ID,
   access_rule_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
-  proxy_url: env().SERVERWARE_PROXY_URL,
+  proxy_url: env().CATCHPLATE_PROXY_URL,
   proxy_authentication: 'basic_and_bearer_v1',
-  proxy_username: env().SERVERWARE_APP_ID,
+  proxy_username: env().CATCHPLATE_APP_ID,
   proxy_password: 'downloaded_synthetic_token',
   token_expires_at_epoch_ms: NOW + 60_000,
-  ca_file: './serverware-ca.pem',
+  ca_file: './catchplate-ca.pem',
   repository: { owner: 'downloaded-owner', name: 'downloaded.repo' },
   upstream_url: 'https://api.github.com/repos/downloaded-owner/downloaded.repo/issues',
   operation_bundle: 'github_issues_read_v1', methods: ['GET'],
   client_recipe: { proxy_ca_file: null },
 });
 function configFile(t) {
-  const directory = mkdtempSync(join(tmpdir(), 'serverware-github-config-'));
+  const directory = mkdtempSync(join(tmpdir(), 'catchplate-github-config-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const path = join(directory, 'serverware-client.private.json');
+  const path = join(directory, 'catchplate-client.private.json');
   return { directory, path, write(value) { writeFileSync(path, JSON.stringify(value), { mode: 0o600 }); return path; } };
 }
 
 test('downloaded console config overrides ambient connection scope and resolves CA paths', (t) => {
   const fixture = configFile(t), value = downloaded();
-  value.client_recipe.environment = { SERVERWARE_PROXY_TOKEN: 'never-import', SERVERWARE_ISSUE_BODY: 'never-import' };
+  value.client_recipe.environment = { CATCHPLATE_PROXY_TOKEN: 'never-import', CATCHPLATE_ISSUE_BODY: 'never-import' };
   value.client_recipe.entrypoint = 'never-execute';
   value.request_headers = { Authorization: 'never-import' };
-  const ambient = { ...env(), SERVERWARE_PROXY_CA_FILE: '/stale/outer.pem', GITHUB_TOKEN: 'never-import' };
+  const ambient = { ...env(), CATCHPLATE_PROXY_CA_FILE: '/stale/outer.pem', GITHUB_TOKEN: 'never-import' };
   const config = loadClientConfig(fixture.write(value), ambient, undefined, NOW);
   assert.deepEqual(config, { operation: 'list', proxyUrl: value.proxy_url,
     applicationId: value.application_id, token: value.proxy_password,
     owner: value.repository.owner, repo: value.repository.name,
-    caFile: join(fixture.directory, 'serverware-ca.pem'), proxyCaFile: null });
-  assert.equal(ambient.SERVERWARE_PROXY_CA_FILE, '/stale/outer.pem');
+    caFile: join(fixture.directory, 'catchplate-ca.pem'), proxyCaFile: null });
+  assert.equal(ambient.CATCHPLATE_PROXY_CA_FILE, '/stale/outer.pem');
   value.client_recipe.proxy_ca_file = './outer.pem';
   assert.equal(loadClientConfig(fixture.write(value), ambient, 'list', NOW).proxyCaFile, join(fixture.directory, 'outer.pem'));
   delete value.client_recipe;
@@ -57,7 +57,7 @@ test('downloaded console config overrides ambient connection scope and resolves 
 
 test('config CLI defaults to reads; writes remain explicit and local-content only', (t) => {
   const fixture = configFile(t), value = downloaded();
-  const local = { SERVERWARE_ISSUE_TITLE: 'Local title', SERVERWARE_ISSUE_BODY: 'Local body' };
+  const local = { CATCHPLATE_ISSUE_TITLE: 'Local title', CATCHPLATE_ISSUE_BODY: 'Local body' };
   assert.throws(() => loadClientConfig(fixture.write(value), local, 'create-issue', NOW));
   value.operation_bundle = 'github_issues_write_v1'; value.methods = ['GET', 'POST'];
   value.operation = 'create-issue'; value.environment = local; value.body = 'Never imported';
@@ -111,7 +111,7 @@ test('config input is bounded regular JSON and errors never include private byte
 
 test('read-only default ignores ambient provider tokens and stale write content', () => {
   const config = configuration({ ...env(), GITHUB_TOKEN: 'never_use', GH_TOKEN: 'also_never_use',
-    SERVERWARE_ISSUE_TITLE: 'stale', SERVERWARE_ISSUE_BODY: 'stale' });
+    CATCHPLATE_ISSUE_TITLE: 'stale', CATCHPLATE_ISSUE_BODY: 'stale' });
   assert.equal(config.operation, 'list');
   assert.equal(config.body, undefined);
   assert.equal(JSON.stringify(config).includes('never_use'), false);
@@ -119,31 +119,31 @@ test('read-only default ignores ambient provider tokens and stale write content'
 
 test('closed operations, exact repository and HTTPS identity validation', () => {
   for (const patch of [
-    { SERVERWARE_PROXY_URL: 'http://proxy.example.test' },
-    { SERVERWARE_PROXY_URL: 'https://user:password@proxy.example.test' },
-    { SERVERWARE_PROXY_URL: 'https://proxy.example.test/path' },
-    { SERVERWARE_PROXY_URL: 'https://proxy.example.test?query=1' },
-    { SERVERWARE_APP_ID: '' }, { SERVERWARE_PROXY_TOKEN: 'bad\nvalue' },
-    { SERVERWARE_GITHUB_OWNER: '../other' }, { SERVERWARE_GITHUB_REPO: '..' },
-    { SERVERWARE_CA_FILE: '' }, { NODE_TLS_REJECT_UNAUTHORIZED: '0' },
+    { CATCHPLATE_PROXY_URL: 'http://proxy.example.test' },
+    { CATCHPLATE_PROXY_URL: 'https://user:password@proxy.example.test' },
+    { CATCHPLATE_PROXY_URL: 'https://proxy.example.test/path' },
+    { CATCHPLATE_PROXY_URL: 'https://proxy.example.test?query=1' },
+    { CATCHPLATE_APP_ID: '' }, { CATCHPLATE_PROXY_TOKEN: 'bad\nvalue' },
+    { CATCHPLATE_GITHUB_OWNER: '../other' }, { CATCHPLATE_GITHUB_REPO: '..' },
+    { CATCHPLATE_CA_FILE: '' }, { NODE_TLS_REJECT_UNAUTHORIZED: '0' },
   ]) assert.throws(() => configuration({ ...env(), ...patch }));
   assert.throws(() => configuration(env(), 'delete'));
 });
 
 test('explicit writes require bodies and appropriate identity before SDK creation', () => {
   assert.throws(() => configuration(env(), 'create-issue'));
-  assert.throws(() => configuration({ ...env(), SERVERWARE_ISSUE_TITLE: 'Title' }, 'create-issue'));
-  assert.throws(() => configuration({ ...env(), SERVERWARE_ISSUE_NUMBER: '1', SERVERWARE_COMMENT_BODY: '  ' }, 'create-comment'));
-  assert.throws(() => configuration({ ...env(), SERVERWARE_ISSUE_NUMBER: '01', SERVERWARE_COMMENT_BODY: 'Body' }, 'create-comment'));
-  assert.throws(() => configuration({ ...env(), SERVERWARE_ISSUE_TITLE: 'Title', SERVERWARE_ISSUE_BODY: 'x'.repeat(61441) }, 'create-issue'));
-  assert.throws(() => configuration({ ...env(), SERVERWARE_ISSUE_TITLE: 'Title', SERVERWARE_ISSUE_BODY: '\t'.repeat(40000) + 'body' }, 'create-issue'));
+  assert.throws(() => configuration({ ...env(), CATCHPLATE_ISSUE_TITLE: 'Title' }, 'create-issue'));
+  assert.throws(() => configuration({ ...env(), CATCHPLATE_ISSUE_NUMBER: '1', CATCHPLATE_COMMENT_BODY: '  ' }, 'create-comment'));
+  assert.throws(() => configuration({ ...env(), CATCHPLATE_ISSUE_NUMBER: '01', CATCHPLATE_COMMENT_BODY: 'Body' }, 'create-comment'));
+  assert.throws(() => configuration({ ...env(), CATCHPLATE_ISSUE_TITLE: 'Title', CATCHPLATE_ISSUE_BODY: 'x'.repeat(61441) }, 'create-issue'));
+  assert.throws(() => configuration({ ...env(), CATCHPLATE_ISSUE_TITLE: 'Title', CATCHPLATE_ISSUE_BODY: '\t'.repeat(40000) + 'body' }, 'create-issue'));
 });
 
 test('proxy credentials and two CA trust domains stay separate', () => {
   const seen = [];
-  const options = proxyOptions(configuration({ ...env(), SERVERWARE_PROXY_CA_FILE: '/trusted/outer.pem' }),
+  const options = proxyOptions(configuration({ ...env(), CATCHPLATE_PROXY_CA_FILE: '/trusted/outer.pem' }),
     (path) => { seen.push(path); return pem(path); });
-  assert.equal(options.token, 'Basic ' + Buffer.from(env().SERVERWARE_APP_ID + ':synthetic_app_token').toString('base64'));
+  assert.equal(options.token, 'Basic ' + Buffer.from(env().CATCHPLATE_APP_ID + ':synthetic_app_token').toString('base64'));
   assert.deepEqual(seen, ['/trusted/outer.pem', '/trusted/inner.pem']);
   assert.deepEqual(options.proxyTls, { ca: pem('/trusted/outer.pem'), rejectUnauthorized: true });
   assert.deepEqual(options.requestTls, { ca: pem('/trusted/inner.pem'), rejectUnauthorized: true });
@@ -199,8 +199,8 @@ test('each explicit creation makes exactly one ordinary SDK call', async () => {
     create: async (payload) => { calls.push(payload); return { status: 201, data: { number: 7 } }; },
     createComment: async (payload) => { calls.push(payload); return { status: 201, data: { id: 8 } }; },
   } } };
-  await perform(configuration({ ...env(), SERVERWARE_ISSUE_TITLE: 'Explicit title', SERVERWARE_ISSUE_BODY: 'Explicit body' }, 'create-issue'), sdk);
-  await perform(configuration({ ...env(), SERVERWARE_ISSUE_NUMBER: '7', SERVERWARE_COMMENT_BODY: 'Explicit comment' }, 'create-comment'), sdk);
+  await perform(configuration({ ...env(), CATCHPLATE_ISSUE_TITLE: 'Explicit title', CATCHPLATE_ISSUE_BODY: 'Explicit body' }, 'create-issue'), sdk);
+  await perform(configuration({ ...env(), CATCHPLATE_ISSUE_NUMBER: '7', CATCHPLATE_COMMENT_BODY: 'Explicit comment' }, 'create-comment'), sdk);
   assert.deepEqual(calls, [
     { owner: 'example-owner', repo: 'example.repo', title: 'Explicit title', body: 'Explicit body' },
     { owner: 'example-owner', repo: 'example.repo', issue_number: 7, body: 'Explicit comment' },
@@ -210,7 +210,7 @@ test('each explicit creation makes exactly one ordinary SDK call', async () => {
 test('uncertain write has no retry and fixed diagnostics cannot reflect SDK secrets', async () => {
   let calls = 0;
   const error = Object.assign(new Error('secret_canary'), { status: 503, request: { token: 'secret_canary' } });
-  const config = configuration({ ...env(), SERVERWARE_ISSUE_TITLE: 'Title', SERVERWARE_ISSUE_BODY: 'Body' }, 'create-issue');
+  const config = configuration({ ...env(), CATCHPLATE_ISSUE_TITLE: 'Title', CATCHPLATE_ISSUE_BODY: 'Body' }, 'create-issue');
   await assert.rejects(perform(config, { rest: { issues: { create: async () => { calls++; throw error; } } } }));
   assert.equal(calls, 1);
   const result = failure(error, config.operation);

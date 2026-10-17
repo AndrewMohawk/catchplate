@@ -19,9 +19,9 @@ from cryptography.exceptions import InvalidSignature
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
 
-from serverware import native_pilot_genesis_inputs as facade
-from serverware import native_pilot_genesis_execution_protocol as wire
-from serverware import native_pilot_genesis_jobs as jobs
+from catchplate import native_pilot_genesis_inputs as facade
+from catchplate import native_pilot_genesis_execution_protocol as wire
+from catchplate import native_pilot_genesis_jobs as jobs
 import test_native_pilot_genesis_jobs as job_tests
 import test_native_pilot_genesis_native_inputs as native_tests
 import test_native_pilot_genesis_ordinary_inputs as ordinary_tests
@@ -83,7 +83,7 @@ def request_case(name, *, records, observed, clocks, configuration_raw):
             assert len(outputs) == 1
             prior[row.name]["result"] = observed[outputs[0]]
         else:
-            prior[row.name]["result"] = g.canonical({"apiVersion": "serverware.nativePilotGenesisOwnerResult/v1",
+            prior[row.name]["result"] = g.canonical({"apiVersion": "catchplate.nativePilotGenesisOwnerResult/v1",
                 "action": row.name, "observationSha256": {key: p.sha(observed[key]) for key in outputs}})
     old_keys = {key for row in CATALOGUE[:max(index - 1, 0)] for key in OUTPUTS.get(row.name, ())}
     new_keys = OUTPUTS.get(CATALOGUE[index - 1].name, ()) if index else ()
@@ -249,7 +249,7 @@ class GenesisInputFacadeControls(unittest.TestCase):
 
     def test_old_or_wrong_request_and_execution_versions_remain_closed(self):
         case, selection = self.case("closure-set"), self.foundation["closure-set"]
-        for api in (wire.REQUEST_API, "serverware.nativePilotAuthorityJobRequest/v2"):
+        for api in (wire.REQUEST_API, "catchplate.nativePilotAuthorityJobRequest/v2"):
             with self.subTest(api=api), self.assertRaises(ERRORS):
                 self.compose(replace_request(case, apiVersion=api), selection)
         with self.assertRaises(ERRORS):

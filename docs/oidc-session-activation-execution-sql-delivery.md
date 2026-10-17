@@ -15,7 +15,7 @@ dedicated SQL process, not a relabeled reserver. It owns no signing key.
 | 204 | Independently pinned attempt journal directory |
 
 The fixed trust directory is
-`/run/serverware/oidc-session-activation-execution-sql-trust`, containing
+`/run/catchplate/oidc-session-activation-execution-sql-trust`, containing
 `root-public-key.pem` (16 KiB cap), `bootstrap.json` (4 MiB) and `custody.json`
 (8 MiB). The genuine [bootstrap](oidc-session-activation-execution-sql-bootstrap.md)
 admits the independent role, receiving custody, embedded planner and original
@@ -24,7 +24,7 @@ The receiver identity comes from the independent signed role statement, not
 the request, a computation measurement or a successful caller-supplied DTO.
 
 The AES originals use the existing fixed bundle/delivery paths under
-`/run/secrets/serverware-oidc-session-activation-*-key`. Each is root-owned,
+`/run/secrets/catchplate-oidc-session-activation-*-key`. Each is root-owned,
 mode `0400`, single-link and exactly 32 bytes. Actual key digests must match
 genuine receiving custody. No computation, planner, grant, completion or state
 signer and no planner-journal encryption key is delivered.
@@ -35,12 +35,12 @@ Fixed originals are opened without following symlinks through protected,
 root-owned ancestors. Bounded reads retain descriptor and pathname identity
 before and after capture. Trust/AES originals become sealed descriptors.
 The attempt directory is fixed to
-`/var/lib/serverware/oidc-session-activation-execution-sql-attempts`, owned by
+`/var/lib/catchplate/oidc-session-activation-execution-sql-attempts`, owned by
 `65504:65504`, mode `0700`; its signed device/inode is checked without creating
 or clearing it. The independent attempt checkpoint is not selected from disk.
 
 libpq needs five fixed TLS paths under
-`/run/serverware/oidc-session-activation-execution-sql-tls`: `ca.pem`,
+`/run/catchplate/oidc-session-activation-execution-sql-tls`: `ca.pem`,
 `issuer.crt`, `issuer.key`, `executor.crt`, `executor.key`. Each file is
 root-owned, single-link and bound by signed exact length/digest. Public files
 are mode `0444` and at most 64 KiB; private keys are root:65504 mode `0440`
@@ -58,12 +58,12 @@ no root-delivery success object substitutes for it.
 
 ## Uninstalled service inputs
 
-The [socket](../ops/systemd/serverware-oidc-session-activation-execution-sql.socket)
-uses `/run/serverware/oidc-session-activation-execution/sql.sock`, owner65504,
+The [socket](../ops/systemd/catchplate-oidc-session-activation-execution-sql.socket)
+uses `/run/catchplate/oidc-session-activation-execution/sql.sock`, owner65504,
 peer group65532, mode `0660`, backlog one and `Accept=no`. Its FD is
 nonblocking; recreating the socket invalidates signed inode pins.
 
-The [service template](../ops/systemd/serverware-oidc-session-activation-execution-sql.service.in)
+The [service template](../ops/systemd/catchplate-oidc-session-activation-execution-sql.service.in)
 requires `ACTIVATION_SQL_RELEASE_ROOT`, `ACTIVATION_SQL_TRUST_DIR`,
 `ACTIVATION_SQL_TLS_DIR`, `ACTIVATION_SQL_BUNDLE_KEY`,
 `ACTIVATION_SQL_DELIVERY_KEY` and `ACTIVATION_SQL_JOURNAL_DIR`. Trust, TLS,

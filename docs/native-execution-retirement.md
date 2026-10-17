@@ -1,13 +1,13 @@
 # Native execution resource retirement
 
 This is source-only support, not a tested pilot or a reusable cleanup receipt.
-The explicit cold `serverware.nativeBootstrapClient/v7` profile requires actual
+The explicit cold `catchplate.nativeBootstrapClient/v7` profile requires actual
 egress, attachment and execution inputs. `installation` is required: null means
 execution-only; an object selects the existing separately authorized CA install
 and immutable in-image trust path. No output flag selects permission.
 
 V7 requires independently signed
-`serverware.nativeWorkloadStartAuthorization/v2` inside its matching signed-v2
+`catchplate.nativeWorkloadStartAuthorization/v2` inside its matching signed-v2
 envelope. The original payload schema plus NUL plus canonical ASCII payload is
 the signature domain. Containment adds exactly
 `retirementProfile: remove-empty-owned-leaf-v1`. V1 grants and cold profiles v5/v6

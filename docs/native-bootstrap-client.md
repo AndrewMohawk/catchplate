@@ -1,7 +1,7 @@
 # Fixed native bootstrap acquisition client
 
-`serverware-native-bootstrap-client` performs one fixed HTTPS POST to
-`/_serverware/native-enrollment/bootstrap`. It verifies the returned original
+`catchplate-native-bootstrap-client` performs one fixed HTTPS POST to
+`/_catchplate/native-enrollment/bootstrap`. It verifies the returned original
 bootstrap signatures, quotes and session against the same held TLS connection.
 Its v1 public output is a local diagnostic capture with `okForAction: false`, not
 an enrollment, installation, issuer grant or production acceptance receipt.
@@ -20,13 +20,13 @@ for their separate authority boundaries.
 The binary accepts exactly two flags, once each, in either order:
 
 ```text
-serverware-native-bootstrap-client --configuration /absolute/client.json --configuration-sha256 sha256:<independent-64-lowercase-hex-pin>
+catchplate-native-bootstrap-client --configuration /absolute/client.json --configuration-sha256 sha256:<independent-64-lowercase-hex-pin>
 ```
 
 There are no environment defaults, arbitrary HTTP options, proxy settings,
 redirects, alternate endpoints, reconnects, automatic retries or CONNECT mode.
 The [closed configuration schema](../schemas/native-bootstrap-client.v1.schema.json)
-is `serverware.nativeBootstrapClient/v1`, at most 16 KiB, with all 18 fields required:
+is `catchplate.nativeBootstrapClient/v1`, at most 16 KiB, with all 18 fields required:
 
 | Field | Original or expectation |
 | --- | --- |
@@ -112,7 +112,7 @@ target selector, install capability or egress requirement has been completed.
 ## Output and failures
 
 For v1, exit zero emits one public JSON line, at most 1.5 MiB:
-`serverware.nativeBootstrapClientCapture/v1`, scope
+`catchplate.nativeBootstrapClientCapture/v1`, scope
 `local-fixed-endpoint-bootstrap-originals-only`, `okForAction: false`,
 configuration/request hashes, fixed endpoint, `challengeSource:
 "independently-pinned"`, exact evidence bytes in `evidenceBase64url`, and the

@@ -22,7 +22,7 @@ import test_github_app_secret_boundary as helpers
 SECRET = '{"access_token":"synthetic-access-canary","refresh_token":"synthetic-refresh-canary"}'
 PUBLIC = {"id": "synthetic-x-id", "credential_version": 3, "kind": "oauth2",
     "metadata": {"oauth": True, "provider_id": "x"}}
-MARKERS = (None, False, 0, "malformed", [], {}, {"schema": "serverware.operatorXAccountBinding/v1"})
+MARKERS = (None, False, 0, "malformed", [], {}, {"schema": "catchplate.operatorXAccountBinding/v1"})
 
 
 def marked(marker):
@@ -32,7 +32,7 @@ def marked(marker):
 def injection(public, private):
     def read(_identifier, include_secret=False):
         return deepcopy(private if include_secret else public)
-    return helpers.functions("serverware/policies.py", {"inject_credential", "_secret_for_injection"}, {
+    return helpers.functions("catchplate/policies.py", {"inject_credential", "_secret_for_injection"}, {
         "db": SimpleNamespace(get_credential=Mock(side_effect=read)),
         "github_app_boundary": helpers.boundary, "json": json,
         "SECRET_FIELD_PATH_RE": re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")})

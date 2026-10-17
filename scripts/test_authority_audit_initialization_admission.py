@@ -25,10 +25,10 @@ from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_audit_initialization as initialization
-from serverware import authority_audit_initialization_admission as admission
-from serverware import authority_audit_initialization_signatures as signatures
-from serverware import authority_contract
+from catchplate import authority_audit_initialization as initialization
+from catchplate import authority_audit_initialization_admission as admission
+from catchplate import authority_audit_initialization_signatures as signatures
+from catchplate import authority_contract
 import test_authority_audit_initialization as initialization_fixture
 from test_authority_audit_initialization import (
     AGGREGATE, KEY, OUTBOX, aggregate_tree, absence,
@@ -38,18 +38,18 @@ from test_authority_audit_inventory import InventoryTree, outbox_row, wire_diges
 
 ROLES = {
     "checkpoint": {
-        "schema": "serverware.metadataAuditInitializationCheckpoint/v1",
-        "payload": "serverware.metadataAuditInitializationCheckpointPayload/v1",
+        "schema": "catchplate.metadataAuditInitializationCheckpoint/v1",
+        "payload": "catchplate.metadataAuditInitializationCheckpointPayload/v1",
         "purpose": "metadata-audit-initialization-checkpoint",
-        "signature": "serverware.metadataAuditInitializationCheckpointSignature/v1",
-        "envelope": "serverware.metadataAuditInitializationCheckpointEnvelope/v1",
+        "signature": "catchplate.metadataAuditInitializationCheckpointSignature/v1",
+        "envelope": "catchplate.metadataAuditInitializationCheckpointEnvelope/v1",
     },
     "authorization": {
-        "schema": "serverware.metadataAuditInitializationAuthorization/v1",
-        "payload": "serverware.metadataAuditInitializationAuthorizationPayload/v1",
+        "schema": "catchplate.metadataAuditInitializationAuthorization/v1",
+        "payload": "catchplate.metadataAuditInitializationAuthorizationPayload/v1",
         "purpose": "metadata-audit-initialization-authorization",
-        "signature": "serverware.metadataAuditInitializationAuthorizationSignature/v1",
-        "envelope": "serverware.metadataAuditInitializationAuthorizationEnvelope/v1",
+        "signature": "catchplate.metadataAuditInitializationAuthorizationSignature/v1",
+        "envelope": "catchplate.metadataAuditInitializationAuthorizationEnvelope/v1",
     },
 }
 MAX_INTEGER = 2**63 - 1
@@ -305,7 +305,7 @@ class InitializationAdmissionTests(unittest.TestCase):
     def payloads(self):
         common = {
             "sourceRevision": authority_contract.SOURCE_REVISION,
-            "preparationProfile": "serverware.metadataAuditCapacityInitializationProfile/v1",
+            "preparationProfile": "catchplate.metadataAuditCapacityInitializationProfile/v1",
             "operationManifestDigest": authority_contract.OPERATION_MANIFEST_DIGEST,
             "trustPolicyDigest": self.trust.policy_digest, "binding": self.binding(),
             "expiresAtEpochNs": 100_000_000_000,
@@ -317,7 +317,7 @@ class InitializationAdmissionTests(unittest.TestCase):
             "initializationDisposition": "initial-install-only"}
         authorization = {**self.signing.payload("authorization"), **copy.deepcopy(common),
             "issuedAtEpochNs": 20_000_000_000, "checkpointEnvelopeDigest": label_digest("replaced-when-signing"),
-            "preparationDigest": wire_digest("serverware.metadataAuditCapacityInitializationPreparation/v1",
+            "preparationDigest": wire_digest("catchplate.metadataAuditCapacityInitializationPreparation/v1",
                                             wire_json(self.prepared_document)),
             "counterRowDigest": self.prepared_document["counterRowDigest"],
             "afterRoots": copy.deepcopy(self.prepared_document["afterRoots"])}
@@ -362,13 +362,13 @@ class InitializationAdmissionTests(unittest.TestCase):
     def test_real_signed_pair_recomputes_exact_independent_preparation(self):
         evidence = self.verify()
         expected = {
-            "schema": "serverware.metadataAuditInitializationEvidence/v1",
+            "schema": "catchplate.metadataAuditInitializationEvidence/v1",
             "checkpoint": json.loads(self.checkpoint),
             "checkpointEnvelopeDigest": signed_digest(ROLES["checkpoint"]["envelope"], self.checkpoint),
             "authorization": json.loads(self.authorization),
             "authorizationEnvelopeDigest": signed_digest(ROLES["authorization"]["envelope"], self.authorization),
             "preparation": self.prepared_document,
-            "preparationDigest": wire_digest("serverware.metadataAuditCapacityInitializationPreparation/v1",
+            "preparationDigest": wire_digest("catchplate.metadataAuditCapacityInitializationPreparation/v1",
                                             wire_json(self.prepared_document)),
             "verifiedAtEpochNs": self.now,
             "verificationBoundary": "pinned-signatures-and-local-recomputation",
@@ -377,7 +377,7 @@ class InitializationAdmissionTests(unittest.TestCase):
         self.assertEqual(evidence.json_projection(), expected)
         self.assertEqual(evidence.canonical_bytes, wire_json(expected))
         self.assertEqual(evidence.digest,
-                         wire_digest("serverware.metadataAuditInitializationEvidence/v1", wire_json(expected)))
+                         wire_digest("catchplate.metadataAuditInitializationEvidence/v1", wire_json(expected)))
         self.assertEqual(evidence.preparation.canonical_bytes, wire_json(self.prepared_document))
         self.assertEqual(evidence.checkpoint_bytes, self.checkpoint)
         self.assertEqual(evidence.authorization_bytes, self.authorization)
@@ -614,7 +614,7 @@ class InitializationAdmissionTests(unittest.TestCase):
         prepared = initialization_fixture.AuditCapacityInitializationTests.expected(self, aggregate=aggregate)
         checkpoint = {**self.checkpoint_payload, "beforeRoots": prepared["beforeRoots"]}
         authorization = {**self.authorization_payload,
-            "preparationDigest": wire_digest("serverware.metadataAuditCapacityInitializationPreparation/v1",
+            "preparationDigest": wire_digest("catchplate.metadataAuditCapacityInitializationPreparation/v1",
                                             wire_json(prepared)),
             "counterRowDigest": prepared["counterRowDigest"], "afterRoots": prepared["afterRoots"]}
         valid = self.signed_pair(checkpoint_payload=checkpoint, authorization_payload=authorization)

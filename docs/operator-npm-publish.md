@@ -16,7 +16,7 @@ Earlier failed runs and their original evidence boundaries remain documented bel
 ## Operator workflow
 
 1. Select an existing named npm-token connection (`npm_token_v1`), or save one.
-   The real npm token remains in Serverware. Saving it does not verify the npm
+   The real npm token remains in Catchplate. Saving it does not verify the npm
    account, package rights, expiration or provider policy, and does not renew it.
 2. Choose the application and **Publish package**. This option requires the
    matching app/gate capability and an operator-approved
@@ -52,24 +52,24 @@ its transport. These exact versions passed the isolated seven-phase flow in
 run twenty. Use the exact application ID, HTTPS proxy authority and CA material
 shown by your deployment; the placeholders below are not a working endpoint.
 
-Save a dedicated `serverware-npm.npmrc`. Keep the `${...}` references literal in
-the file. `SERVERWARE_PROXY_TOKEN` is the **application's Serverware token**, not
+Save a dedicated `catchplate-npm.npmrc`. Keep the `${...}` references literal in
+the file. `CATCHPLATE_PROXY_TOKEN` is the **application's Catchplate token**, not
 the provider's npm token. The registry value below is intentionally public dummy
-data, which Serverware matches before injecting its saved credential.
+data, which Catchplate matches before injecting its saved credential.
 
 ```ini
 registry=https://registry.npmjs.org/
-https-proxy=https://<application-id>:${SERVERWARE_PROXY_TOKEN}@<proxy-host>:<proxy-port>
-//registry.npmjs.org/:_authToken=serverware-npm-placeholder-v1
+https-proxy=https://<application-id>:${CATCHPLATE_PROXY_TOKEN}@<proxy-host>:<proxy-port>
+//registry.npmjs.org/:_authToken=catchplate-npm-placeholder-v1
 strict-ssl=true
 noproxy=
 fetch-retries=0
 update-notifier=false
-cache=${SERVERWARE_NPM_CACHE}
+cache=${CATCHPLATE_NPM_CACHE}
 ```
 
 Use a clean client environment and a fresh private cache directory named by
-`SERVERWARE_NPM_CACHE`. Remove conflicting inherited npm, proxy and TLS settings.
+`CATCHPLATE_NPM_CACHE`. Remove conflicting inherited npm, proxy and TLS settings.
 Load the extra CA before Node starts. `NODE_EXTRA_CA_CERTS` adds trust while
 retaining Node's default roots; if the outer HTTPS proxy uses a private CA, the
 scoped extra-CA file must contain both that CA and the interception CA. Keep TLS
@@ -82,8 +82,8 @@ any package-specific publishing configuration too; it cannot broaden the grant.
 This command changes the registry and is never run by the setup page:
 
 ```sh
-NODE_EXTRA_CA_CERTS="$(realpath ./serverware-ca.pem)" npm \
-  --userconfig ./serverware-npm.npmrc --globalconfig /dev/null \
+NODE_EXTRA_CA_CERTS="$(realpath ./catchplate-ca.pem)" npm \
+  --userconfig ./catchplate-npm.npmrc --globalconfig /dev/null \
   publish ./package.tgz --access=public --tag=latest \
   --ignore-scripts=true --provenance=false --force=false \
   --dry-run=false --workspaces=false --json
@@ -128,7 +128,7 @@ including its 1 MiB success and 64 KiB error limits.
 A timeout, lost reply or blocked response can occur **after** the registry has
 received the PUT. Treat the write outcome as unknown, not as proof that nothing
 was published. There is no automatic retry or exactly-once guarantee. Inspect
-the package's registry metadata and Serverware audit evidence before deciding
+the package's registry metadata and Catchplate audit evidence before deciding
 what to do; a single missing version observation is not proof an in-flight write
 cannot still finish. Do not automatically repeat `npm publish` or add a generic
 retry loop. Likewise, a lost permission-save reply requires inspection of saved
@@ -379,7 +379,7 @@ its SHA-256 is
 Both builds used the same frozen 4,938-file source tree and offline dependency
 inventory. These are fresh test executions, not a relabelled earlier binary or
 combined historical pass count. Build and test receipts are retained in
-`serverware-genuine-rust-response-diag.j5yQ1LeF` under the private evidence root.
+`catchplate-genuine-rust-response-diag.j5yQ1LeF` under the private evidence root.
 
 The eleventh isolated stock-client run used that exact new normal binary and
 source, with unchanged deadlines, resource limits, seven-command recipe and
@@ -404,8 +404,8 @@ The stopped database passed `quick_check` and retained three response releases
 denial, two established CONNECTs, two keep-alive events and 17 issued leases.
 The isolated project containers and networks are absent after cleanup; all
 4,938 source and 1,782 npm files remain unchanged. The one-shot run receipt and
-logs are retained in `serverware-npm-publish-runner.50YMCZ2u`; runtime data is
-preserved in `serverware-npm-publish-private.AmyKEaAg`. Nothing was replayed or
+logs are retained in `catchplate-npm-publish-runner.50YMCZ2u`; runtime data is
+preserved in `catchplate-npm-publish-private.AmyKEaAg`. Nothing was replayed or
 promoted to the live demo.
 
 The next narrow control-plane correction changes operator high-water reads to
@@ -453,8 +453,8 @@ two established CONNECTs, two keep-alives and 11 issued leases were retained.
 No CONNECT/upstream-resolution denial was stored. All project containers and
 networks were removed, private runtime evidence retained, and all 4,939 source
 and 1,782 npm files remained unchanged. Receipts are in
-`serverware-npm-publish-runner.lOXT2PYo`, runtime data in
-`serverware-npm-publish-private.fpE8q8SZ`. The run was not retried or promoted.
+`catchplate-npm-publish-runner.lOXT2PYo`, runtime data in
+`catchplate-npm-publish-private.fpE8q8SZ`. The run was not retried or promoted.
 
 A second narrow lifecycle correction closes the SQLite connection owned by
 `drain_metadata_audit_outbox()` after its existing transaction context exits,
@@ -505,8 +505,8 @@ same three prerequisite/unscoped response releases, one earlier denial, two
 established CONNECTs and two keep-alives. All project containers and networks
 were removed, while private evidence was retained. All 4,940 source files and
 1,782 npm files remained unchanged. Receipts are in
-`serverware-npm-publish-runner.ICReyHDi`, with runtime data in
-`serverware-npm-publish-private.eLoDjS3P`. The run was not retried or promoted.
+`catchplate-npm-publish-runner.ICReyHDi`, with runtime data in
+`catchplate-npm-publish-private.eLoDjS3P`. The run was not retried or promoted.
 
 A follow-up source correction extracts the existing ownership-aware outbox
 context into opt-in `db.metadata_connection()` and applies it to seven more
@@ -560,8 +560,8 @@ three prerequisite/unscoped response releases, one earlier denial, three
 established CONNECTs (including scoped) and two keep-alives. No scoped response
 release or CONNECT/upstream-resolution denial was retained. All project
 containers and networks were removed; all 4,941 source and 1,782 npm files
-remained unchanged. Receipts are in `serverware-npm-publish-runner.zQQuTjOW`,
-with private runtime evidence in `serverware-npm-publish-private.riK50xhb`.
+remained unchanged. Receipts are in `catchplate-npm-publish-runner.zQQuTjOW`,
+with private runtime evidence in `catchplate-npm-publish-private.riK50xhb`.
 No run was restarted and nothing was promoted. The next diagnostic boundary
 is the application's actual execution state during the transport stall; these
 results do not justify pooling, caching or a deadline increase by themselves.
@@ -605,8 +605,8 @@ The stopped copy passed `quick_check` and retained the same phase/count pattern
 as run fourteen: 15 leases, three releases, one denial, three CONNECTs and two
 keep-alives. Cleanup succeeded, the wrapper hash matched afterward, and all
 4,941 source and 1,782 npm files remained unchanged. Receipts and frames are
-in `serverware-npm-publish-diagnostic-runner.lWTJdsyo`; the stopped private data
-is in `serverware-npm-publish-private.LPrK4IjN`.
+in `catchplate-npm-publish-diagnostic-runner.lWTJdsyo`; the stopped private data
+is in `catchplate-npm-publish-private.LPrK4IjN`.
 
 `scripts/test_db_wal_connection_setup.py` then characterized disposable tmpfs
 copies of that stopped SQLite database: 1,335 schema objects and 1,288,121 SQL
@@ -639,7 +639,7 @@ checkpoint.
 ### Bounded setup candidate and stock run sixteen
 
 Commit `5afe10e1` adds a process-local setup gate in
-`serverware/sqlite_connection_setup.py`, reached only by `db.connect()`'s
+`catchplate/sqlite_connection_setup.py`, reached only by `db.connect()`'s
 existing SQLite branch. Every caller still gets a fresh handle, both SQL
 functions, row factory, WAL assignment and foreign-key enforcement. Borrowed
 connections and PostgreSQL bypass the helper. The gate ends before caller
@@ -686,8 +686,8 @@ including scoped metadata/publish and outside-window metadata, three denials,
 five CONNECTs, five keep-alives and 64 credential leases. There is no retained
 outside-window publish release. Cleanup succeeds, no project containers or
 networks remain, and all 4,946 source and 1,782 npm files remain unchanged.
-Evidence is in `serverware-npm-publish-runner.FTgo1eR4`; stopped private data is
-in `serverware-npm-publish-private.bOrnkKZe`. The run receipt SHA-256 is
+Evidence is in `catchplate-npm-publish-runner.FTgo1eR4`; stopped private data is
+in `catchplate-npm-publish-private.bOrnkKZe`. The run receipt SHA-256 is
 `9a6cb1794b6fdba79160394695c6d17f0fa2f09fa63f5fe4024db57e99f31a60`.
 
 Source inspection identifies the next integration defect: matching
@@ -730,7 +730,7 @@ review caught an incorrect test assertion: ordinary legacy success omits a
 top-level `preview` field. The assertion now checks that absence and the actual
 `legacy_rate_limits_committed` result, alongside its existing counter checks.
 The interrupted compilation is not a test failure or pass. Its frozen source,
-logs and terminal receipt remain in `serverware-genuine-rust-response-read.LxeT9IH6`;
+logs and terminal receipt remain in `catchplate-genuine-rust-response-read.LxeT9IH6`;
 the production repair is unchanged, and the corrected test requires a new
 source freeze and run.
 
@@ -742,7 +742,7 @@ Two new groups failed on fixture assumptions: the existing local quota returns
 403 rather than 429, and raw colons in a date query are refused before semantic
 admission. The test now requires the exact quota error and canonical `%3A`
 query encoding; production behavior is unchanged. Evidence remains in
-`serverware-genuine-rust-ordinary-semantics.gE6GcmF4`. The six additional exact
+`catchplate-genuine-rust-ordinary-semantics.gE6GcmF4`. The six additional exact
 tests, normal release build and stock fixture did not run from that snapshot.
 
 The final corrected source snapshot `995d5d18911256491846cf4d585f09e4a854bcaf`
@@ -758,7 +758,7 @@ produced a new 40,897,712-byte executable, SHA-256
 `5c803d937fa0c3fc6ee72ef73bd503e27da2756b5bfac0f590a220735d0c1fe4`.
 Both runs exited successfully without OOM or deadline termination. Frozen
 source, original phase logs, manifests and terminal receipts are retained in
-`serverware-genuine-rust-ordinary-fixed.TJMtScbX`. Test receipt SHA-256:
+`catchplate-genuine-rust-ordinary-fixed.TJMtScbX`. Test receipt SHA-256:
 `10c7b042d9cec69cc6fab8d6bb79ce41da7778e2993f550075cccd6824c28677`;
 normal-build receipt SHA-256:
 `05702c90c63cc158a8a2f0912151c1be450ceead8146fa2539fad18f1a36fcb6`.
@@ -803,8 +803,8 @@ The original seven phases, 64-issued-lease bound, deadlines, resource limits,
 zero client retries and normal app entrypoint were unchanged. The runner exited
 1 and its scoped cleanup succeeded; no fixture containers or networks remain.
 Runtime files and originals are retained in
-`serverware-npm-publish-private.P9QtY1Ru` and
-`serverware-npm-publish-runner.f4Ash5Tj`. Run-receipt SHA-256:
+`catchplate-npm-publish-private.P9QtY1Ru` and
+`catchplate-npm-publish-runner.f4Ash5Tj`. Run-receipt SHA-256:
 `ba87a77fa9193113c6f810c89d7a892f28df3b9290c8a1947712ae43daf102c2`.
 The failed fixture was not restarted, and the live demo/native pilot was not
 changed.
@@ -849,7 +849,7 @@ compilation took **4 minutes 55 seconds**; the six new background-renewal
 groups completed in **0.42 seconds**. The 51,420,344-byte test executable has
 SHA-256 `03eb7a78dc12da978f8fe3ee249b53c14436234fcf14b96059a4e54c71342b4d`.
 
-Evidence is retained in `serverware-genuine-rust-background-renewal.UnelJrUY`.
+Evidence is retained in `catchplate-genuine-rust-background-renewal.UnelJrUY`.
 Test-receipt SHA-256:
 `fc98d3de725e82c22faa26fb6bd71d3853b2394717cdc977f4f8e73d401fdd88`.
 The source archive is SHA-256
@@ -913,8 +913,8 @@ separate acquisition, commit/materialization and response-completion timing;
 do not extend deadlines, retry the mutation or remove publication coordination
 to turn this failed run into acceptance.
 
-Originals are retained in `serverware-npm-publish-runner.te64GJ1X` and
-`serverware-npm-publish-private.41QYQs6r`. Run-receipt SHA-256:
+Originals are retained in `catchplate-npm-publish-runner.te64GJ1X` and
+`catchplate-npm-publish-private.41QYQs6r`. Run-receipt SHA-256:
 `8577312237b889932373074a8a2cbde0a759d458495862b9ca7876b33c0d2984`.
 Checker-result SHA-256:
 `0f0ad5bdb34ce19efff6a6c842fc0fb0fde074e3f688f1ce8db8a7dacffda8bc`.
@@ -1024,8 +1024,8 @@ can add bounded, fixed-label progress records to the admitted revocation tracker
 and retain a separate post-stop log snapshot, without changing transaction
 ordering or deadlines. Neither diagnostic is implemented by this checkpoint.
 
-Originals are retained in `serverware-catalog-receipt-validation.koRjRmL8` and
-`serverware-npm-publish-private.KtH13Z0W`. Run-receipt SHA-256:
+Originals are retained in `catchplate-catalog-receipt-validation.koRjRmL8` and
+`catchplate-npm-publish-private.KtH13Z0W`. Run-receipt SHA-256:
 `740e035d094627a603038a2e932497c5c3eadd331dbbd7e50c2d291176786efd`.
 Checker-result SHA-256:
 `960fa4414339f8f41161a92f423205a80aac93817547a5a3402d8e21c7585536`.
@@ -1035,7 +1035,7 @@ rollout, real provider request, notification delivery or native-pilot action was
 ### Revocation progress diagnostics
 
 Already admitted, input-validated `revoke_application` requests now emit a
-separate `serverware.operatorCatalogProgress/v1` record at nine existing marks:
+separate `catchplate.operatorCatalogProgress/v1` record at nine existing marks:
 worker queue, slot and entry; publication wait and acquisition; SQLite open and
 BEGIN; and commit start and completion. Each closed record contains only the
 fixed operation/stage, elapsed milliseconds and a process-local ordinal.
@@ -1099,8 +1099,8 @@ collector should request `docker ps --no-trunc` when gathering cleanup IDs and
 use separate ID-format and duplicate assertions, retaining the exact join and
 original cleanup budget.
 
-Originals are retained in `serverware-catalog-timing-validation.qg5M5tPT` and
-`serverware-npm-publish-private.kiNN0MiC`. Run-receipt SHA-256:
+Originals are retained in `catchplate-catalog-timing-validation.qg5M5tPT` and
+`catchplate-npm-publish-private.kiNN0MiC`. Run-receipt SHA-256:
 `761e89f4ddd07f939ce48b0b139e8718fb77828f4d0aab3e9426aec5b660e42e`.
 Checker-result SHA-256:
 `9859f6716cd159c0015f561de6630fc7b7a634fc6221f2eff307babb74c793bf`.
@@ -1168,7 +1168,7 @@ app/gate pair before reopening the same edge. The separate internal-app browser
 check passed at **20:13:27 UTC** after correcting the checker's asset list and
 adding explicit navigation waits; both earlier checker receipts remain intact.
 The accepted-source alias matches the actual candidate configuration exactly.
-See the [current deployment checkpoint](../docker/serverware-operator-demo/README.md#current-npm-capable-managed-deployment)
+See the [current deployment checkpoint](../docker/catchplate-operator-demo/README.md#current-npm-capable-managed-deployment)
 for the precise preservation, browser and monitoring evidence. This update did
 not renew expired app tokens, approve a real registry destination, contact npm,
 configure notification receivers or perform a native/hardware action.

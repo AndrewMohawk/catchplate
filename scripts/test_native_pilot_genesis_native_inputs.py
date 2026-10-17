@@ -18,9 +18,9 @@ from cryptography.exceptions import InvalidSignature
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import native_pilot_genesis_native_inputs as compiler
-from serverware import native_pilot_genesis_jobs as jobs
-from serverware import native_pilot_genesis_launch_install as installation
+from catchplate import native_pilot_genesis_native_inputs as compiler
+from catchplate import native_pilot_genesis_jobs as jobs
+from catchplate import native_pilot_genesis_launch_install as installation
 import test_native_pilot_genesis_key_authority as key_tests
 import test_native_pilot_genesis_launch as launch_tests
 import test_native_pilot_genesis_ordinary_runtime as ordinary_tests
@@ -51,8 +51,8 @@ def fixed_row(base, role, runtime_raw=None):
     row.update(delivery=delivery, pair=pair)
     clocks = transport_tests.clocks_for(base)
     for kind, module, api, domain in (
-            ("encrypted", jobs.encrypted, "serverware.nativeShadowEncryptedKeyDelivery/v1", transport_tests.ENCRYPTED_DOMAIN),
-            ("verifier", jobs.verifier, "serverware.nativeShadowVerifierTransport/v1", transport_tests.VERIFIER_DOMAIN)):
+            ("encrypted", jobs.encrypted, "catchplate.nativeShadowEncryptedKeyDelivery/v1", transport_tests.ENCRYPTED_DOMAIN),
+            ("verifier", jobs.verifier, "catchplate.nativeShadowVerifierTransport/v1", transport_tests.VERIFIER_DOMAIN)):
         value = module.input_document(row[kind + "_input_raw"])
         value.update({name: raw.decode("ascii") for name, raw in pair.items()})
         raw = p.canonical(value)

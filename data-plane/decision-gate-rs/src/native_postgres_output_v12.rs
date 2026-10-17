@@ -17,7 +17,7 @@ use serde_json::json;
 use std::os::fd::RawFd;
 
 const MANIFEST_NAME: &str = "native-postgres-sources-v1.json";
-const MANIFEST_SCHEMA: &str = "serverware.nativePostgresPreparedSources/v1";
+const MANIFEST_SCHEMA: &str = "catchplate.nativePostgresPreparedSources/v1";
 const RUNTIME_NAME: &str = "runtime-result.json";
 
 fn rejected(message: &'static str) -> ControllerError {

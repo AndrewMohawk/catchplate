@@ -32,10 +32,10 @@ produced after genuine Nitro verification is a different protocol and cannot
 stand in for either authorization.
 
 The role-key payload is the existing eighteen-field
-`serverware.nativeShadowRoleKeyAssignment/v2`. Its exact signature domain is
-`serverware.nativeShadowRoleKeyAssignment.signature/v2`. Admission uses the
-existing seventeen-field `serverware.nativeShadowKeyAdmissionAssignment/v1`
-and `serverware.nativeShadowKeyAdmissionAssignment.signature/v1` domain.
+`catchplate.nativeShadowRoleKeyAssignment/v2`. Its exact signature domain is
+`catchplate.nativeShadowRoleKeyAssignment.signature/v2`. Admission uses the
+existing seventeen-field `catchplate.nativeShadowKeyAdmissionAssignment/v1`
+and `catchplate.nativeShadowKeyAdmissionAssignment.signature/v1` domain.
 Both retain the existing `{payload, signature}` envelope. The second signature
 binds the SHA256 of the complete first signed original, not a predicted result.
 
@@ -153,7 +153,7 @@ cloud or paid action ran. Production acceptance remains **0/6**.
 Durable evidence is retained at:
 
 ```text
-/home/catchplate/codex-offload/serverware/engineering-builds/dbf915d4-key-authorizations-0Urfnc/
+/home/catchplate/codex-offload/catchplate/engineering-builds/dbf915d4-key-authorizations-0Urfnc/
 ```
 
 It contains the frozen source archive/commit, exact check and runner scripts,

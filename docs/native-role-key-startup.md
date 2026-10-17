@@ -1,6 +1,6 @@
 # Native role-key startup v12
 
-`serverware.nativeStartupConfiguration/v12` explicitly adds required
+`catchplate.nativeStartupConfiguration/v12` explicitly adds required
 `guestRoleKeyProvisioner` to the eighteen v11 fields. The gate selector is
 `--native-guest-role-keys-startup-v12`; the fixed image entrypoint selector is
 `--guest-role-keys-v12`. Configuration and launch originals keep their existing

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/oidc-session-activation-retained-ri-delivery.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/oidc-session-activation-retained-ri-delivery.v1.schema.json",
   "title": "Current-authority delivery over retained RI originals",
   "description": "Four explicit closed signed profiles. This data schema verifies neither signatures nor custody, current authority, source revision, original-byte digests, elapsed time, possession or execution. Canonical no-LF originals, exact sourceRevision, aggregate byte/node/depth/work limits, cross-field equality and nonrenewing lifetime checks are enforced by the paired Python owners. Old profiles are not admitted by this bundle.",
   "oneOf": [
@@ -106,7 +106,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "consumerRole", "processMode", "serviceUid", "serviceGid", "receiverIdentity", "configurationDigest", "generationDigest", "runtimeClosureDigest", "deliveryKeyDigest", "plannerBootstrap", "activationRequestDigest", "activationOperationId", "deliveryEnvelopeDigest", "deliveryScope", "releaseIntentDigest", "consumeRequestDigest", "consumeOperation", "issuedAtEpochNs", "expiresAtEpochNs", "trustMode", "hardwareBacked", "nativeStageZero", "hsmBackedKeys", "teeVerified", "externalWitnessVerified", "intentAuthorityRoot", "intentAuthorityInterval", "intentEnrollment", "proofEnrollment", "proofScope", "historicalReleaseCustody", "currentActivationPlanner"],
       "properties": {
-        "schema": {"const": "serverware.oidcSessionActivationReleaseCustody/v2"}, "sourceRevision": {"$ref": "#/$defs/sourceRevision"},
+        "schema": {"const": "catchplate.oidcSessionActivationReleaseCustody/v2"}, "sourceRevision": {"$ref": "#/$defs/sourceRevision"},
         "consumerRole": {"const": "token-release"}, "processMode": {"const": "oidc-session-activation-token-release"},
         "serviceUid": {"const": 65502}, "serviceGid": {"const": 65502}, "receiverIdentity": {"$ref": "#/$defs/identity"},
         "configurationDigest": {"$ref": "#/$defs/digest"}, "generationDigest": {"$ref": "#/$defs/digest"},
@@ -129,7 +129,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "purpose", "role", "trustMode", "completionBootstrap", "proofEnrollment", "releaseCustody", "intent", "intentEnrollment", "completionRequest", "stateReceipt", "currentActivationPlanner", "proofScope", "expectedRelease", "callerId", "issuedAtEpochNs", "expiresAtEpochNs", "requestTimeoutSeconds"],
       "properties": {
-        "schema": {"const": "serverware.oidcSessionActivationRetainedReleaseGrantBridge/v1"}, "sourceRevision": {"$ref": "#/$defs/sourceRevision"},
+        "schema": {"const": "catchplate.oidcSessionActivationRetainedReleaseGrantBridge/v1"}, "sourceRevision": {"$ref": "#/$defs/sourceRevision"},
         "purpose": {"const": "authorize-current-release-grants-over-retained-intent"}, "role": {"const": "oidc-session-activation-release-proof"},
         "trustMode": {"const": "trusted-host-local"}, "completionBootstrap": {"$ref": "#/$defs/original32MiB"},
         "proofEnrollment": {"$ref": "#/$defs/original16KiB"}, "releaseCustody": {"$ref": "#/$defs/original8MiB"},
@@ -145,7 +145,7 @@
     "endpoint": {
       "type": "object", "additionalProperties": false, "required": ["path", "timeoutSeconds", "peerUid", "peerGid"],
       "properties": {
-        "path": {"const": "/run/serverware/oidc-session-activation-token-release/release.sock"},
+        "path": {"const": "/run/catchplate/oidc-session-activation-token-release/release.sock"},
         "timeoutSeconds": {"$ref": "#/$defs/timeout"}, "peerUid": {"const": 0}, "peerGid": {"const": 0}
       }
     },
@@ -153,13 +153,13 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "processMode", "serviceUid", "serviceGid", "rootPublicKeyFd", "bootstrapFd", "deliveryKeyFd", "outcomeDirectoryFd", "listenerFd", "inheritedFileDescriptors", "outcomeDirectoryDevice", "outcomeDirectoryInode", "outcomeDirectoryUid", "outcomeDirectoryGid", "outcomeDirectoryMode", "listenerPath", "peerUid", "peerGid", "listenerSocketDevice", "listenerSocketInode", "listenerPathDevice", "listenerPathInode", "requestTimeoutSeconds"],
       "properties": {
-        "schema": {"const": "serverware.oidcSessionActivationReleaseLaunch/v1"}, "processMode": {"const": "oidc-session-activation-token-release"},
+        "schema": {"const": "catchplate.oidcSessionActivationReleaseLaunch/v1"}, "processMode": {"const": "oidc-session-activation-token-release"},
         "serviceUid": {"const": 65502}, "serviceGid": {"const": 65502}, "rootPublicKeyFd": {"const": 198},
         "bootstrapFd": {"const": 199}, "deliveryKeyFd": {"const": 200}, "outcomeDirectoryFd": {"const": 201}, "listenerFd": {"const": 202},
         "inheritedFileDescriptors": {"const": [198, 199, 200, 201, 202]},
         "outcomeDirectoryDevice": {"$ref": "#/$defs/device"}, "outcomeDirectoryInode": {"$ref": "#/$defs/inode"},
         "outcomeDirectoryUid": {"const": 65502}, "outcomeDirectoryGid": {"const": 65502}, "outcomeDirectoryMode": {"const": 448},
-        "listenerPath": {"const": "/run/serverware/oidc-session-activation-token-release/release.sock"},
+        "listenerPath": {"const": "/run/catchplate/oidc-session-activation-token-release/release.sock"},
         "peerUid": {"const": 65532}, "peerGid": {"const": 65532},
         "listenerSocketDevice": {"$ref": "#/$defs/device"}, "listenerSocketInode": {"$ref": "#/$defs/inode"},
         "listenerPathDevice": {"$ref": "#/$defs/device"}, "listenerPathInode": {"$ref": "#/$defs/inode"},
@@ -171,7 +171,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "purpose", "trustMode", "proofBootstrapDigest", "clientId", "clientIdentity", "endpoint", "releaseLaunch", "issuedAtEpochNs", "expiresAtEpochNs"],
       "properties": {
-        "schema": {"const": "serverware.oidcSessionActivationReleaseGrantIssuerPolicy/v2"}, "sourceRevision": {"$ref": "#/$defs/sourceRevision"},
+        "schema": {"const": "catchplate.oidcSessionActivationReleaseGrantIssuerPolicy/v2"}, "sourceRevision": {"$ref": "#/$defs/sourceRevision"},
         "purpose": {"const": "issue-oidc-session-activation-release-grants"}, "trustMode": {"const": "trusted-host-local"},
         "proofBootstrapDigest": {"$ref": "#/$defs/digest"}, "clientId": {"$ref": "#/$defs/token"},
         "clientIdentity": {"$ref": "#/$defs/identity"}, "endpoint": {"$ref": "#/$defs/endpoint"},
@@ -202,7 +202,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "purpose", "role", "profile", "configurationDigest", "databaseId", "generationDigest", "runtimeClosureDigest", "receiverIdentity", "callerId", "producerId", "producerIdentity", "stateReceiptDigest", "expectedRelease", "releaseCustodyDigest", "evidenceCustodyDigest", "deliveryKeyDigest", "storageScope", "recoveryScope", "releaseCustody", "storageAuthorization", "recoveryAuthorization", "issuedAtEpochNs", "expiresAtEpochNs", "trustMode", "launch", "hardwareBacked", "nativeStageZero", "hsmBackedKeys", "teeVerified", "externalWitnessVerified"],
       "properties": {
-        "schema": {"const": "serverware.oidcSessionActivationReleaseBootstrap/v2"}, "sourceRevision": {"$ref": "#/$defs/sourceRevision"},
+        "schema": {"const": "catchplate.oidcSessionActivationReleaseBootstrap/v2"}, "sourceRevision": {"$ref": "#/$defs/sourceRevision"},
         "purpose": {"const": "launch-oidc-session-activation-token-release"}, "role": {"const": "oidc-session-activation-token-release"},
         "profile": {"const": "live-release"}, "configurationDigest": {"$ref": "#/$defs/digest"},
         "databaseId": {"$ref": "#/$defs/token"}, "generationDigest": {"$ref": "#/$defs/digest"}, "runtimeClosureDigest": {"$ref": "#/$defs/digest"},
@@ -223,19 +223,19 @@
     },
     "releaseCustodyEnvelopeV2": {
       "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
-      "properties": {"schema": {"const": "serverware.signedOidcSessionActivationReleaseCustody/v2"}, "payload": {"$ref": "#/$defs/releaseCustodyV2"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}}
+      "properties": {"schema": {"const": "catchplate.signedOidcSessionActivationReleaseCustody/v2"}, "payload": {"$ref": "#/$defs/releaseCustodyV2"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}}
     },
     "retainedGrantBridgeEnvelopeV1": {
       "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
-      "properties": {"schema": {"const": "serverware.signedOidcSessionActivationRetainedReleaseGrantBridge/v1"}, "payload": {"$ref": "#/$defs/retainedGrantBridgeV1"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}}
+      "properties": {"schema": {"const": "catchplate.signedOidcSessionActivationRetainedReleaseGrantBridge/v1"}, "payload": {"$ref": "#/$defs/retainedGrantBridgeV1"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}}
     },
     "grantIssuerPolicyEnvelopeV2": {
       "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
-      "properties": {"schema": {"const": "serverware.signedOidcSessionActivationReleaseGrantIssuerPolicy/v2"}, "payload": {"$ref": "#/$defs/grantIssuerPolicyV2"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}}
+      "properties": {"schema": {"const": "catchplate.signedOidcSessionActivationReleaseGrantIssuerPolicy/v2"}, "payload": {"$ref": "#/$defs/grantIssuerPolicyV2"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}}
     },
     "liveReleaseEnvelopeV2": {
       "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
-      "properties": {"schema": {"const": "serverware.signedOidcSessionActivationReleaseBootstrap/v2"}, "payload": {"$ref": "#/$defs/liveReleaseV2"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}}
+      "properties": {"schema": {"const": "catchplate.signedOidcSessionActivationReleaseBootstrap/v2"}, "payload": {"$ref": "#/$defs/liveReleaseV2"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}}
     }
   }
 }

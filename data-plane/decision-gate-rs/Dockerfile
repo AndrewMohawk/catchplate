@@ -13,15 +13,15 @@ COPY schemas /schemas
 COPY scripts/discard_headers_parity.v1.json /scripts/discard_headers_parity.v1.json
 COPY policies/credential-limits.examples.json /policies/credential-limits.examples.json
 COPY ops/policy-custody /policy-custody-assets
-COPY ops/systemd/serverware-policy-custody-sockets.target /policy-custody-assets/systemd/serverware-policy-custody-sockets.target
-COPY ops/systemd/serverware-policy-custody.target /policy-custody-assets/systemd/serverware-policy-custody.target
-COPY ops/systemd/serverware-policy-custody@.socket /policy-custody-assets/systemd/serverware-policy-custody@.socket
-COPY ops/systemd/serverware-policy-custody@.service.in /policy-custody-assets/systemd/serverware-policy-custody@.service.in
-COPY ops/systemd/serverware-policy-custody@durable-recovery-store.service.d /policy-custody-assets/systemd/serverware-policy-custody@durable-recovery-store.service.d
-COPY ops/systemd/serverware-policy-custody@cleanup-authorization-consumer.service.d /policy-custody-assets/systemd/serverware-policy-custody@cleanup-authorization-consumer.service.d
-COPY ops/systemd/serverware-policy-custody@recovery-target-provider.service.d /policy-custody-assets/systemd/serverware-policy-custody@recovery-target-provider.service.d
-COPY ops/systemd/serverware-policy-custody@current-signature-authority.service.d /policy-custody-assets/systemd/serverware-policy-custody@current-signature-authority.service.d
-COPY ops/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d /policy-custody-assets/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d
+COPY ops/systemd/catchplate-policy-custody-sockets.target /policy-custody-assets/systemd/catchplate-policy-custody-sockets.target
+COPY ops/systemd/catchplate-policy-custody.target /policy-custody-assets/systemd/catchplate-policy-custody.target
+COPY ops/systemd/catchplate-policy-custody@.socket /policy-custody-assets/systemd/catchplate-policy-custody@.socket
+COPY ops/systemd/catchplate-policy-custody@.service.in /policy-custody-assets/systemd/catchplate-policy-custody@.service.in
+COPY ops/systemd/catchplate-policy-custody@durable-recovery-store.service.d /policy-custody-assets/systemd/catchplate-policy-custody@durable-recovery-store.service.d
+COPY ops/systemd/catchplate-policy-custody@cleanup-authorization-consumer.service.d /policy-custody-assets/systemd/catchplate-policy-custody@cleanup-authorization-consumer.service.d
+COPY ops/systemd/catchplate-policy-custody@recovery-target-provider.service.d /policy-custody-assets/systemd/catchplate-policy-custody@recovery-target-provider.service.d
+COPY ops/systemd/catchplate-policy-custody@current-signature-authority.service.d /policy-custody-assets/systemd/catchplate-policy-custody@current-signature-authority.service.d
+COPY ops/systemd/catchplate-policy-custody@bounded-cleanup-helper.service.d /policy-custody-assets/systemd/catchplate-policy-custody@bounded-cleanup-helper.service.d
 
 FROM rust-source AS build
 
@@ -29,19 +29,19 @@ ARG CARGO_BUILD_JOBS=2
 
 RUN set -eu; \
     cargo build --release --locked \
-        --bin serverware-decision-gate \
-        --bin serverware-proof-client \
-        --bin serverware-response-proof-fixture \
-        --bin serverware-custody-runtime \
-        --bin serverware-response-observation-v2-custody \
-        --bin serverware-policy-shadow-custody \
-        --bin serverware-policy-custody-durable-recovery-store \
-        --bin serverware-policy-custody-recovery-target-provider \
-        --bin serverware-policy-custody-current-signature-authority \
-        --bin serverware-policy-custody-cleanup-authorization-consumer \
-        --bin serverware-policy-custody-bounded-cleanup-helper; \
-    ledger_directory=/runtime-layout/serverware-custody-state; \
-    ledger_payload='{"activeBindingCount":0,"activeBindingsAccumulator":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","apiVersion":"serverware.custodyAttemptLedger/v2","commitSequence":0,"maxObservedEpochMs":0,"prunedThroughEpochMs":0}'; \
+        --bin catchplate-decision-gate \
+        --bin catchplate-proof-client \
+        --bin catchplate-response-proof-fixture \
+        --bin catchplate-custody-runtime \
+        --bin catchplate-response-observation-v2-custody \
+        --bin catchplate-policy-shadow-custody \
+        --bin catchplate-policy-custody-durable-recovery-store \
+        --bin catchplate-policy-custody-recovery-target-provider \
+        --bin catchplate-policy-custody-current-signature-authority \
+        --bin catchplate-policy-custody-cleanup-authorization-consumer \
+        --bin catchplate-policy-custody-bounded-cleanup-helper; \
+    ledger_directory=/runtime-layout/catchplate-custody-state; \
+    ledger_payload='{"activeBindingCount":0,"activeBindingsAccumulator":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","apiVersion":"catchplate.custodyAttemptLedger/v2","commitSequence":0,"maxObservedEpochMs":0,"prunedThroughEpochMs":0}'; \
     install -d -m 0700 "$ledger_directory"; \
     ledger_checksum="$(printf '%s' "$ledger_payload" | sha256sum)"; \
     ledger_checksum="${ledger_checksum%% *}"; \
@@ -320,7 +320,7 @@ FROM --platform=linux/amd64 debian:bookworm-slim@sha256:7b140f374b289a7c2befc338
 ENV HOME=/tmp \
     TMPDIR=/tmp \
     PATH=/usr/bin:/bin
-COPY --from=coder-test-collector --chown=65532:65532 /test-runtime /opt/serverware-rust-tests
+COPY --from=coder-test-collector --chown=65532:65532 /test-runtime /opt/catchplate-rust-tests
 RUN ! command -v cargo >/dev/null 2>&1 \
     && ! command -v rustc >/dev/null 2>&1 \
     && test ! -e /src \
@@ -328,14 +328,14 @@ RUN ! command -v cargo >/dev/null 2>&1 \
     && test ! -e /cargo-test-target \
     && test ! -e /tmp/cargo-test-messages.jsonl
 USER 65532:65532
-ENTRYPOINT ["/opt/serverware-rust-tests/coder-test-runner"]
+ENTRYPOINT ["/opt/catchplate-rust-tests/coder-test-runner"]
 
 FROM --platform=linux/amd64 debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS runtime
 
-RUN groupadd --gid 10001 serverware \
+RUN groupadd --gid 10001 catchplate \
     && groupadd --gid 10003 custody-shared \
     && groupadd --gid 65519 response-v2-shared \
-    && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin serverware \
+    && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin catchplate \
     && useradd --uid 10002 --gid 10003 --no-create-home --shell /usr/sbin/nologin custody \
     && useradd --uid 65520 --gid 65519 --no-create-home --shell /usr/sbin/nologin response-v2-router \
     && useradd --uid 65521 --gid 65519 --no-create-home --shell /usr/sbin/nologin response-v2-state \
@@ -344,36 +344,36 @@ RUN groupadd --gid 10001 serverware \
     && useradd --uid 65524 --gid 65519 --no-create-home --shell /usr/sbin/nologin response-v2-ledger \
     && useradd --uid 65525 --gid 65519 --no-create-home --shell /usr/sbin/nologin response-v2-release \
     && useradd --uid 65526 --gid 65519 --no-create-home --shell /usr/sbin/nologin response-v2-watchdog \
-    && install -d -o custody -g custody-shared -m 0710 /run/serverware-custody \
-    && install -d -o response-v2-router -g response-v2-shared -m 0710 /run/serverware-response-v2/router \
-    && install -d -o response-v2-state -g response-v2-shared -m 0710 /run/serverware-response-v2/state \
-    && install -d -o response-v2-transport -g response-v2-shared -m 0710 /run/serverware-response-v2/credential-transport \
-    && install -d -o response-v2-policy -g response-v2-shared -m 0710 /run/serverware-response-v2/policy-proof-verifier \
-    && install -d -o response-v2-ledger -g response-v2-shared -m 0710 /run/serverware-response-v2/immutable-artifact-ledger \
-    && install -d -o response-v2-release -g response-v2-shared -m 0710 /run/serverware-response-v2/release-attestor-publisher \
-    && install -d -o response-v2-watchdog -g response-v2-shared -m 0710 /run/serverware-response-v2/cleanup-watchdog \
-    && install -d -o response-v2-router -g response-v2-shared -m 0700 /var/lib/serverware-response-v2/custody-router \
-    && install -d -o response-v2-state -g response-v2-shared -m 0700 /var/lib/serverware-response-v2/state-authority \
-    && install -d -o response-v2-transport -g response-v2-shared -m 0700 /var/lib/serverware-response-v2/credential-transport \
-    && install -d -o response-v2-policy -g response-v2-shared -m 0700 /var/lib/serverware-response-v2/policy-proof-verifier \
-    && install -d -o response-v2-ledger -g response-v2-shared -m 0700 /var/lib/serverware-response-v2/immutable-artifact-ledger \
-    && install -d -o response-v2-release -g response-v2-shared -m 0700 /var/lib/serverware-response-v2/release-attestor-publisher \
-    && install -d -o response-v2-watchdog -g response-v2-shared -m 0700 /var/lib/serverware-response-v2/cleanup-watchdog
-COPY --from=build /src/target/release/serverware-decision-gate /usr/local/bin/serverware-decision-gate
-COPY --from=build /src/target/release/serverware-proof-client /usr/local/bin/serverware-proof-client
-COPY --from=build /src/target/release/serverware-response-proof-fixture /usr/local/bin/serverware-response-proof-fixture
-COPY --from=build /src/target/release/serverware-custody-runtime /usr/local/bin/serverware-custody-runtime
-COPY --from=build /src/target/release/serverware-response-observation-v2-custody /usr/local/bin/serverware-response-observation-v2-custody
-COPY --from=build /src/target/release/serverware-policy-shadow-custody /usr/local/bin/serverware-policy-shadow-custody
-COPY --from=build /src/target/release/serverware-policy-custody-durable-recovery-store /usr/local/bin/serverware-policy-custody-durable-recovery-store
-COPY --from=build /src/target/release/serverware-policy-custody-recovery-target-provider /usr/local/bin/serverware-policy-custody-recovery-target-provider
-COPY --from=build /src/target/release/serverware-policy-custody-current-signature-authority /usr/local/bin/serverware-policy-custody-current-signature-authority
-COPY --from=build /src/target/release/serverware-policy-custody-cleanup-authorization-consumer /usr/local/bin/serverware-policy-custody-cleanup-authorization-consumer
-COPY --from=build /src/target/release/serverware-policy-custody-bounded-cleanup-helper /usr/local/bin/serverware-policy-custody-bounded-cleanup-helper
-COPY --from=build --chown=0:0 /policy-custody-assets /usr/share/serverware/policy-custody
-COPY --from=build --chown=10002:10003 --chmod=0700 /runtime-layout/serverware-custody-state /var/lib/serverware-custody
-COPY --from=build --chown=10002:10003 --chmod=0600 /runtime-layout/serverware-custody-state/manifest.json /var/lib/serverware-custody/manifest.json
-COPY --from=build --chown=10002:10003 --chmod=0600 /runtime-layout/serverware-custody-state/ledger.lock /var/lib/serverware-custody/ledger.lock
-USER serverware
+    && install -d -o custody -g custody-shared -m 0710 /run/catchplate-custody \
+    && install -d -o response-v2-router -g response-v2-shared -m 0710 /run/catchplate-response-v2/router \
+    && install -d -o response-v2-state -g response-v2-shared -m 0710 /run/catchplate-response-v2/state \
+    && install -d -o response-v2-transport -g response-v2-shared -m 0710 /run/catchplate-response-v2/credential-transport \
+    && install -d -o response-v2-policy -g response-v2-shared -m 0710 /run/catchplate-response-v2/policy-proof-verifier \
+    && install -d -o response-v2-ledger -g response-v2-shared -m 0710 /run/catchplate-response-v2/immutable-artifact-ledger \
+    && install -d -o response-v2-release -g response-v2-shared -m 0710 /run/catchplate-response-v2/release-attestor-publisher \
+    && install -d -o response-v2-watchdog -g response-v2-shared -m 0710 /run/catchplate-response-v2/cleanup-watchdog \
+    && install -d -o response-v2-router -g response-v2-shared -m 0700 /var/lib/catchplate-response-v2/custody-router \
+    && install -d -o response-v2-state -g response-v2-shared -m 0700 /var/lib/catchplate-response-v2/state-authority \
+    && install -d -o response-v2-transport -g response-v2-shared -m 0700 /var/lib/catchplate-response-v2/credential-transport \
+    && install -d -o response-v2-policy -g response-v2-shared -m 0700 /var/lib/catchplate-response-v2/policy-proof-verifier \
+    && install -d -o response-v2-ledger -g response-v2-shared -m 0700 /var/lib/catchplate-response-v2/immutable-artifact-ledger \
+    && install -d -o response-v2-release -g response-v2-shared -m 0700 /var/lib/catchplate-response-v2/release-attestor-publisher \
+    && install -d -o response-v2-watchdog -g response-v2-shared -m 0700 /var/lib/catchplate-response-v2/cleanup-watchdog
+COPY --from=build /src/target/release/catchplate-decision-gate /usr/local/bin/catchplate-decision-gate
+COPY --from=build /src/target/release/catchplate-proof-client /usr/local/bin/catchplate-proof-client
+COPY --from=build /src/target/release/catchplate-response-proof-fixture /usr/local/bin/catchplate-response-proof-fixture
+COPY --from=build /src/target/release/catchplate-custody-runtime /usr/local/bin/catchplate-custody-runtime
+COPY --from=build /src/target/release/catchplate-response-observation-v2-custody /usr/local/bin/catchplate-response-observation-v2-custody
+COPY --from=build /src/target/release/catchplate-policy-shadow-custody /usr/local/bin/catchplate-policy-shadow-custody
+COPY --from=build /src/target/release/catchplate-policy-custody-durable-recovery-store /usr/local/bin/catchplate-policy-custody-durable-recovery-store
+COPY --from=build /src/target/release/catchplate-policy-custody-recovery-target-provider /usr/local/bin/catchplate-policy-custody-recovery-target-provider
+COPY --from=build /src/target/release/catchplate-policy-custody-current-signature-authority /usr/local/bin/catchplate-policy-custody-current-signature-authority
+COPY --from=build /src/target/release/catchplate-policy-custody-cleanup-authorization-consumer /usr/local/bin/catchplate-policy-custody-cleanup-authorization-consumer
+COPY --from=build /src/target/release/catchplate-policy-custody-bounded-cleanup-helper /usr/local/bin/catchplate-policy-custody-bounded-cleanup-helper
+COPY --from=build --chown=0:0 /policy-custody-assets /usr/share/catchplate/policy-custody
+COPY --from=build --chown=10002:10003 --chmod=0700 /runtime-layout/catchplate-custody-state /var/lib/catchplate-custody
+COPY --from=build --chown=10002:10003 --chmod=0600 /runtime-layout/catchplate-custody-state/manifest.json /var/lib/catchplate-custody/manifest.json
+COPY --from=build --chown=10002:10003 --chmod=0600 /runtime-layout/catchplate-custody-state/ledger.lock /var/lib/catchplate-custody/ledger.lock
+USER catchplate
 EXPOSE 9090
-ENTRYPOINT ["/usr/local/bin/serverware-decision-gate"]
+ENTRYPOINT ["/usr/local/bin/catchplate-decision-gate"]

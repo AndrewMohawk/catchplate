@@ -42,7 +42,7 @@ def main(argv=None):
         print(USAGE, end="")
         return 0
     try:
-        from serverware.authority_local_enrollment_configuration import LocalEnrollmentConfigurationBuilder
+        from catchplate.authority_local_enrollment_configuration import LocalEnrollmentConfigurationBuilder
         LocalEnrollmentConfigurationBuilder(**arguments(argv)).publish()
         return 0
     except BaseException:

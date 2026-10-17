@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from serverware.policy_bundle import (  # noqa: E402
+from catchplate.policy_bundle import (  # noqa: E402
     PolicyBundleError,
     compile_policy_bundle,
     policy_hash,
@@ -30,7 +30,7 @@ from verify_attestation import (  # noqa: E402
 )
 
 
-REPORT_API_VERSION = "serverware.productionPolicyIdentityVerification/v1"
+REPORT_API_VERSION = "catchplate.productionPolicyIdentityVerification/v1"
 REPORT_KIND = "ProductionPolicyIdentityVerification"
 MAX_INPUT_BYTES = 8 * 1024 * 1024
 MAX_PUBLIC_KEY_BYTES = 64 * 1024

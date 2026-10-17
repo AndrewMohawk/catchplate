@@ -1,5 +1,5 @@
 use super::*;
-use serverware_decision_gate::{
+use catchplate_decision_gate::{
     CustodyServiceRole, ProviderAuthorityScopeV2,
     ServiceOperationV1,
 };
@@ -25,7 +25,7 @@ pub(super) fn response_observation_v2_http11_request(
         request.body.len().to_string(),
     );
     if canonical_headers.keys().any(|name| {
-        name.starts_with(SERVERWARE_INTERNAL_HEADER_PREFIX)
+        name.starts_with(CATCHPLATE_INTERNAL_HEADER_PREFIX)
             || matches!(
                 name.as_str(),
                 "authorization"
@@ -241,7 +241,7 @@ pub(super) fn execute_response_observation_v2_transaction(
             }))
         });
     let route_semantics = json!({
-        "apiVersion":"serverware.responseObservationV2RouteSemantics/v1",
+        "apiVersion":"catchplate.responseObservationV2RouteSemantics/v1",
         "principalId":principal_id,
         "routeId":route_id,
         "scheme":upstream_url.scheme(),
@@ -339,7 +339,7 @@ pub(super) fn execute_response_observation_v2_transaction(
             ResponseObservationV2TransactionError::InvalidResponse
         })?;
     let runtime_attestation = json!({
-        "apiVersion":"serverware.responseObservationV2GateRuntimeEvidence/v1",
+        "apiVersion":"catchplate.responseObservationV2GateRuntimeEvidence/v1",
         "helloAttestation":&session.hello_attestation,
         "connectionIdentitySha256":
             execution.connection_identity_sha256,
@@ -496,7 +496,7 @@ pub(super) fn execute_response_observation_v2_transaction(
             ResponseObservationV2TransactionError::InvalidResponse
         })?;
     let authorization_evidence = json!({
-        "apiVersion":"serverware.responseObservationV2ReservedAuthorityEvidence/v1",
+        "apiVersion":"catchplate.responseObservationV2ReservedAuthorityEvidence/v1",
         "requestSha256":client_request_sha256,
         "policySha256":snapshot.hash,
         "authorityPlanSha256":
@@ -589,7 +589,7 @@ pub(super) fn execute_response_observation_v2_transaction(
             ResponseObservationV2TransactionError::Unavailable
         })?;
     let credential_template = json!({
-        "apiVersion":"serverware.responseObservationV2CredentialTemplate/v1",
+        "apiVersion":"catchplate.responseObservationV2CredentialTemplate/v1",
         "injectionPlan":injection_plan,
         "credentialRequired":
             credential_binding_sha256.is_some(),
@@ -709,7 +709,7 @@ pub(super) fn execute_response_observation_v2_transaction(
             ResponseObservationV2TransactionError::InvalidResponse
         })?;
     let policy_snapshot = json!({
-        "apiVersion":"serverware.responseObservationV2PolicySnapshot/v1",
+        "apiVersion":"catchplate.responseObservationV2PolicySnapshot/v1",
         "policyId":snapshot.policy_id,
         "policySha256":snapshot.hash,
         "policySequence":snapshot.policy_sequence,
@@ -802,7 +802,7 @@ pub(super) fn execute_response_observation_v2_transaction(
                 {
                     let effect_sha256 =
                         digest_json_ensure_ascii(&json!({
-                            "domain":"serverware.policyShadowCustodyDispatchResult/v1",
+                            "domain":"catchplate.policyShadowCustodyDispatchResult/v1",
                             "requestSha256":final_request_commitment,
                             "outcome":"custody-dispatch-unknown",
                         }));
@@ -835,7 +835,7 @@ pub(super) fn execute_response_observation_v2_transaction(
                 {
                     let effect_sha256 =
                         digest_json_ensure_ascii(&json!({
-                            "domain":"serverware.policyShadowCustodyDispatchResult/v1",
+                            "domain":"catchplate.policyShadowCustodyDispatchResult/v1",
                             "requestSha256":&final_request_commitment,
                             "dispatchEvidenceSha256":
                                 &dispatch_evidence.evidence_sha256,
@@ -860,7 +860,7 @@ pub(super) fn execute_response_observation_v2_transaction(
                 {
                     let effect_sha256 =
                         digest_json_ensure_ascii(&json!({
-                            "domain":"serverware.policyShadowCustodyDispatchResult/v1",
+                            "domain":"catchplate.policyShadowCustodyDispatchResult/v1",
                             "requestSha256":&final_request_commitment,
                             "outcome":"invalid-custody-terminal",
                         }));
@@ -885,7 +885,7 @@ pub(super) fn execute_response_observation_v2_transaction(
             ResponseObservationV2TransactionError::Unavailable
         })?;
     let lifecycle_evidence = json!({
-        "apiVersion":"serverware.responseObservationV2LifecycleState/v1",
+        "apiVersion":"catchplate.responseObservationV2LifecycleState/v1",
         "transaction":transaction,
         "stagedRequest":staged_request,
         "stagingEvidence":staging_evidence,
@@ -1151,7 +1151,7 @@ pub(super) fn execute_response_observation_v2_transaction(
     let exact_replay_key_sha256 =
         digest_json_ensure_ascii(&json!({
             "apiVersion":
-                "serverware.responseObservationV2ExactReplayKey/v2",
+                "catchplate.responseObservationV2ExactReplayKey/v2",
             "generationId":&client.generation_id,
             "generation":client.provider_generation,
             "requestSha256":client_request_sha256,
@@ -1297,7 +1297,7 @@ pub(super) fn execute_response_observation_v2_transaction(
     let transition_chain_bytes =
         custody_canonical_json_bytes(&json!({
             "domain":
-                "serverware.responseObservationTransitionChain/v1",
+                "catchplate.responseObservationTransitionChain/v1",
             "attempt":&cursor.attempt,
             "authorityEvidenceRoot":&authority_evidence_root,
             "stagingEvidence":&staging_evidence,
@@ -1315,7 +1315,7 @@ pub(super) fn execute_response_observation_v2_transaction(
     let finalization_id =
         digest_json_ensure_ascii(&json!({
             "apiVersion":
-                "serverware.responseObservationV2FinalizationId/v1",
+                "catchplate.responseObservationV2FinalizationId/v1",
             "generationId":&client.generation_id,
             "generation":client.provider_generation,
             "attemptId":&attempt_id,
@@ -1630,7 +1630,7 @@ pub(super) fn execute_response_observation_v2_transaction(
             != inspection.response_body_sha256
         || digest_json_ensure_ascii(&json!({
             "apiVersion":
-                "serverware.responseObservationV2ReleasedProjection/v2",
+                "catchplate.responseObservationV2ReleasedProjection/v2",
             "rawResponseSha256":
                 &inspection.raw_response.object_sha256,
             "rawResponseByteLength":
@@ -1704,7 +1704,7 @@ pub(super) fn execute_response_observation_v2_transaction(
         // reached only after all normal release and completion checks above.
         // A native capture is never converted into a legacy transport signature.
         let mut active_validation = json!({
-            "domain":"serverware.policyShadowNativeReleasedResponse/v1",
+            "domain":"catchplate.policyShadowNativeReleasedResponse/v1",
             "outcome":"released",
             "inspectionReceiptSha256":inspection.inspection_receipt_sha256,
             "finalEnvelopeVerificationSha256":final_envelope_verification.verification_result_sha256,
@@ -1717,7 +1717,7 @@ pub(super) fn execute_response_observation_v2_transaction(
                 Ok(None) => ("absent", None),
                 Err(()) => ("unavailable", None),
             };
-            active_validation["domain"] = json!("serverware.policyShadowNativeReleasedResponse/v2");
+            active_validation["domain"] = json!("catchplate.policyShadowNativeReleasedResponse/v2");
             active_validation["releasedEntitySha256"] = json!(sha256_prefixed(&parsed.entity_body));
             active_validation["releasedEntityBytes"] = json!(parsed.entity_body.len());
             active_validation["releasedStatus"] = json!(parsed.status);
@@ -1803,7 +1803,7 @@ pub(super) fn response_observation_v2_validate_response_data_provider_scope(
         })?,
     );
     if scope.api_version
-            != serverware_decision_gate::
+            != catchplate_decision_gate::
                 AUTHORITY_SCOPE_API_VERSION
         || scope.generation_id != client.generation_id
         || scope.generation != client.provider_generation
@@ -1948,12 +1948,12 @@ fn response_observation_v2_validate_final_verification(
     finalized_revision: u64,
     stable_resume_id: &str,
     canonical_authority_envelope:
-        &serverware_decision_gate::
+        &catchplate_decision_gate::
             CanonicalAuthorityEnvelopeDescriptorV2,
     envelope: &V2CanonicalFinalEnvelopeV1,
     inspection: &SignedV2ImmutableResponseInspectionV1,
 ) -> Result<(), ResponseObservationV2TransactionError> {
-    serverware_decision_gate::validate_canonical_authority_envelope(
+    catchplate_decision_gate::validate_canonical_authority_envelope(
         canonical_authority_envelope,
     )
     .map_err(|_| {
@@ -1968,7 +1968,7 @@ fn response_observation_v2_validate_final_verification(
         })?,
     );
     let final_envelope_sha256 =
-        serverware_decision_gate::
+        catchplate_decision_gate::
             canonical_authority_envelope_preimage_sha256(
                 canonical_authority_envelope,
             )
@@ -2279,7 +2279,7 @@ fn response_observation_v2_validate_exact_release_preparation(
         &preparation.signer_key_material_sha256,
         &signature,
         &unsigned,
-        serverware_decision_gate::
+        catchplate_decision_gate::
             V2_EXACT_RELEASE_PREPARATION_SIGNATURE_DOMAIN,
     )
 }
@@ -2593,7 +2593,7 @@ fn response_observation_v2_authority_proof_input(
 ) -> Result<
     (
         Vec<u8>,
-        serverware_decision_gate::
+        catchplate_decision_gate::
             CanonicalAuthorityEnvelopeProofInputV2,
     ),
     ResponseObservationV2TransactionError,
@@ -2610,7 +2610,7 @@ fn response_observation_v2_authority_proof_input(
         );
     }
     let proof =
-        serverware_decision_gate::
+        catchplate_decision_gate::
             build_canonical_authority_proof_input_from_seed(
                 &inspection.authority_proof_seed,
                 &preparation.authority_receipt,
@@ -2651,7 +2651,7 @@ pub(super) fn response_observation_v2_authority_plan(
         })
     });
     json!({
-        "apiVersion":"serverware.responseObservationV2AuthorityPlan/v1",
+        "apiVersion":"catchplate.responseObservationV2AuthorityPlan/v1",
         "required":release.is_some(),
         "reservation":reservation,
         "jit":decision
@@ -2668,7 +2668,7 @@ pub(super) fn response_observation_v2_dispatch_authorization(
     let Some(release) = release.as_mut() else {
         return Ok(json!({
             "apiVersion":
-                "serverware.responseObservationV2DispatchAuthorization/v1",
+                "catchplate.responseObservationV2DispatchAuthorization/v1",
             "required":false,
         }));
     };
@@ -2677,7 +2677,7 @@ pub(super) fn response_observation_v2_dispatch_authorization(
     })?;
     Ok(json!({
         "apiVersion":
-            "serverware.responseObservationV2DispatchAuthorization/v1",
+            "catchplate.responseObservationV2DispatchAuthorization/v1",
         "required":true,
         "observedAtEpochMs":dispatch.observed_at_epoch_ms,
         "reservationExpiresAtEpochMs":

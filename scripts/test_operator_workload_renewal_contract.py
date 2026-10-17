@@ -20,7 +20,7 @@ from pydantic import ValidationError
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import operator_workload_renewal as wire
+from catchplate import operator_workload_renewal as wire
 
 
 def no_external_work(event, _args):
@@ -36,7 +36,7 @@ ENROLLMENT = "22345678-1234-4234-8234-123456789abc"
 OPERATION = "32345678-1234-4234-8234-123456789abc"
 OTHER = "42345678-1234-4234-8234-123456789abc"
 AUDIENCE = "https://proxy.example.test/v1/workload/renew"
-DOMAIN = b"serverware.workload-token-renewal/v1\x00POST /v1/workload/renew\x00"
+DOMAIN = b"catchplate.workload-token-renewal/v1\x00POST /v1/workload/renew\x00"
 
 
 def canonical(value):
@@ -46,7 +46,7 @@ def canonical(value):
 
 
 def fields(**changes):
-    return {"schema": "serverware.workloadTokenRenewal/v1", "audience": AUDIENCE,
+    return {"schema": "catchplate.workloadTokenRenewal/v1", "audience": AUDIENCE,
         "application_id": APP, "enrollment_id": ENROLLMENT,
         "expected_token_generation": 7, "operation_id": OPERATION,
         "issued_at_epoch_ms": NOW, "expires_at_epoch_ms": NOW + 60_000,
@@ -138,7 +138,7 @@ class RenewalContractTests(unittest.TestCase):
 
     def test_schema_verifier_signature_and_audience_bounds(self):
         value = self.signed()
-        cases = {"schema": ("serverware.workloadTokenRenewal/v2", value["schema"] + "\n", "", None),
+        cases = {"schema": ("catchplate.workloadTokenRenewal/v2", value["schema"] + "\n", "", None),
             "token_sha256": ("a" * 64, "sha256:" + "A" * 64, "sha256:" + "a" * 63,
                 "sha256:" + "g" * 64, value["token_sha256"] + "\n", None),
             "signature": ("a" * 127, "a" * 129, "A" * 128, "g" * 128,
@@ -272,7 +272,7 @@ class RenewalContractTests(unittest.TestCase):
         self.assertNotEqual(wire.key_fingerprint(self.public), wire.key_fingerprint(self.other_public))
 
     def test_gate_descriptor_has_exact_keys_values_and_types(self):
-        expected = {"schema": "serverware.proxyTokenRenewal/v1", "path": "/v1/workload/renew",
+        expected = {"schema": "catchplate.proxyTokenRenewal/v1", "path": "/v1/workload/renew",
             "overlap_seconds": 300, "max_request_bytes": 4096, "max_response_bytes": 8192}
         self.assertEqual(wire.gate_descriptor(), expected)
         self.assertTrue(wire.gate_descriptor_matches(expected))
@@ -303,8 +303,8 @@ class RenewalContractTests(unittest.TestCase):
 
     def test_pure_contract_does_not_import_runtime_or_mutate_authority(self):
         self.parsed().verify(self.public, AUDIENCE)
-        for name in ("serverware.config", "serverware.db", "serverware.runtime",
-                "serverware.operator_catalog_store", "serverware.operator_catalog_mutations"):
+        for name in ("catchplate.config", "catchplate.db", "catchplate.runtime",
+                "catchplate.operator_catalog_store", "catchplate.operator_catalog_mutations"):
             self.assertNotIn(name, sys.modules)
         for name in ("renew", "enroll", "publish", "revoke", "materialize"):
             self.assertFalse(hasattr(wire, name))

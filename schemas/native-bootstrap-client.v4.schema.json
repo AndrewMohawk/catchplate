@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-bootstrap-client.v4.schema.json",
-  "title": "Serverware fixed native bootstrap client with scoped network attachment v4",
+  "$id": "https://catchplate.invalid/schemas/native-bootstrap-client.v4.schema.json",
+  "title": "Catchplate fixed native bootstrap client with scoped network attachment v4",
   "description": "Closed independently pinned configuration, at most 16384 bytes: the 18 v1 fields plus required nonnull egress and attachment. Installation is forbidden, including null. Older profiles reject attachment, including null. Runtime admits startup and protected authority originals before client private-key access/network. Egress authorization v3 explicitly authorizes the fixed child-network policy before the durable creation claim and clone. A separately signed attachment authority, protected token and journal authorize only the fixed attachment transaction after genuine same-session proof and firewall readback. No application start, persistent supervision, connectivity or combined CA-installation permission is implied by schema validation.",
   "type": "object", "additionalProperties": false,
   "required": [
@@ -12,7 +12,7 @@
     "egress", "attachment"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeBootstrapClient/v4"},
+    "apiVersion": {"const": "catchplate.nativeBootstrapClient/v4"},
     "endpoint": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/endpoint"},
     "timeoutMilliseconds": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/timeoutMilliseconds"},
     "startupEvidence": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/startupEvidence"},

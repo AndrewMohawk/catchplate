@@ -12,22 +12,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
-from serverware.authority_store import primary_tree_sql as tree_sql
-from serverware.authority_store.wire_json_sql import WIRE_JSON_MAX_BYTES
+from catchplate import authority_contract
+from catchplate.authority_store import primary_tree_sql as tree_sql
+from catchplate.authority_store.wire_json_sql import WIRE_JSON_MAX_BYTES
 
 
-NAMESPACE = '"serverware_metadata"'
+NAMESPACE = '"catchplate_metadata"'
 MANIFEST = "sha256:" + "a" * 64
-PREFIX = "serverware_policy_authority_"
+PREFIX = "catchplate_policy_authority_"
 FUNCTIONS = ("canonical_json", "framed_digest", "authenticated_empty",
              "authenticated_apply", "authenticated_trigger")
 
 
 def sources() -> tuple[str, str]:
     result = []
-    for relative, maximum in (("serverware/db.py", 16 * 1024 * 1024),
-                              ("serverware/authority_store/primary_tree_sql.py", 128 * 1024)):
+    for relative, maximum in (("catchplate/db.py", 16 * 1024 * 1024),
+                              ("catchplate/authority_store/primary_tree_sql.py", 128 * 1024)):
         path = ROOT / relative
         if path.stat().st_size > maximum:
             raise AssertionError("primary tree source fixture exceeded its read bound")
@@ -47,8 +47,8 @@ class AuthorityPrimaryTreeSourceTests(unittest.TestCase):
         self.assertEqual(len(rendered), 5)
         for text, function in zip(rendered, FUNCTIONS):
             self.assertIs(type(text), str)
-            self.assertEqual(re.findall(r"CREATE OR REPLACE FUNCTION\s+\"serverware_metadata\"\.\s*"
-                                       r"(serverware_[a-z_]+)\(", text), [PREFIX + function])
+            self.assertEqual(re.findall(r"CREATE OR REPLACE FUNCTION\s+\"catchplate_metadata\"\.\s*"
+                                       r"(catchplate_[a-z_]+)\(", text), [PREFIX + function])
             self.assertIn("SET search_path = pg_catalog, " + NAMESPACE + ", pg_temp", text)
             self.assertNotRegex(text, r"\{(?:guard_namespace|_POLICY_|authority_query_manifest)")
         self.assertEqual(tree_sql.TREE_JSON_MAX_BYTES, 72 * 1024 * 1024)
@@ -112,7 +112,7 @@ class AuthorityPrimaryTreeSourceTests(unittest.TestCase):
                       "INTO empty_children FROM pg_catalog.generate_series( 1, 16 ) AS ordinal;", loop)
         self.assertEqual(loop.count("empty_child :="), 1)
         self.assertIn("empty_child := " + NAMESPACE + ". " + PREFIX + "framed_digest( "
-                      "'serverware.policyAuthorityAuthenticatedNode/v1', current_depth::text, "
+                      "'catchplate.policyAuthorityAuthenticatedNode/v1', current_depth::text, "
                       + NAMESPACE + ". " + PREFIX + "canonical_json( empty_children ) );", loop)
         self.assertIn("parent_digest := COALESCE( parent_digest, empty_child );", after)
 

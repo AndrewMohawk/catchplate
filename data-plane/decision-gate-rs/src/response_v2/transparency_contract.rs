@@ -8,34 +8,34 @@ use sha2::{Digest as _, Sha256};
 use std::fmt;
 
 pub const RELEASE_TRANSPARENCY_PROOF_API_VERSION: &str =
-    "serverware.responseV2.releaseTransparencyProof/v2";
+    "catchplate.responseV2.releaseTransparencyProof/v2";
 pub const RELEASE_TRANSPARENCY_PROOF_KIND: &str =
-    "ServerwareResponseV2ReleaseTransparencyProof";
+    "CatchplateResponseV2ReleaseTransparencyProof";
 pub const RELEASE_IDENTITY_RECORD_API_VERSION: &str =
-    "serverware.responseV2.releaseIdentityRecord/v2";
+    "catchplate.responseV2.releaseIdentityRecord/v2";
 pub const RELEASE_IDENTITY_RECORD_KIND: &str =
-    "ServerwareResponseV2ReleaseIdentityRecord";
+    "CatchplateResponseV2ReleaseIdentityRecord";
 pub const RELEASE_TRANSPARENCY_LEAF_API_VERSION: &str =
-    "serverware.responseV2.releaseTransparencyLeaf/v2";
+    "catchplate.responseV2.releaseTransparencyLeaf/v2";
 pub const RELEASE_TRANSPARENCY_LEAF_KIND: &str =
-    "ServerwareResponseV2ReleaseTransparencyLeaf";
+    "CatchplateResponseV2ReleaseTransparencyLeaf";
 pub const RELEASE_TRANSPARENCY_CHECKPOINT_API_VERSION: &str =
-    "serverware.responseV2.releaseTransparencyCheckpoint/v2";
+    "catchplate.responseV2.releaseTransparencyCheckpoint/v2";
 pub const RELEASE_TRANSPARENCY_CHECKPOINT_KIND: &str =
-    "ServerwareResponseV2ReleaseTransparencyCheckpoint";
+    "CatchplateResponseV2ReleaseTransparencyCheckpoint";
 pub const RELEASE_TRANSPARENCY_TRUST_PIN_API_VERSION: &str =
-    "serverware.responseV2.releaseTransparencyTrustPin/v2";
+    "catchplate.responseV2.releaseTransparencyTrustPin/v2";
 pub const RELEASE_TRANSPARENCY_TRUST_PIN_KIND: &str =
-    "ServerwareResponseV2ReleaseTransparencyTrustPin";
+    "CatchplateResponseV2ReleaseTransparencyTrustPin";
 
 const RELEASE_IDENTITY_SIGNATURE_DOMAIN_NAME: &str =
-    "serverware.responseV2.releaseIdentityRecord.signature/v2";
+    "catchplate.responseV2.releaseIdentityRecord.signature/v2";
 const RELEASE_IDENTITY_SIGNATURE_DOMAIN: &[u8] =
-    b"SERVERWARE\0RESPONSE-V2-RELEASE-IDENTITY\0V2\0";
+    b"CATCHPLATE\0RESPONSE-V2-RELEASE-IDENTITY\0V2\0";
 const TRANSPARENCY_CHECKPOINT_SIGNATURE_DOMAIN_NAME: &str =
-    "serverware.responseV2.releaseTransparencyCheckpoint.signature/v2";
+    "catchplate.responseV2.releaseTransparencyCheckpoint.signature/v2";
 const TRANSPARENCY_CHECKPOINT_SIGNATURE_DOMAIN: &[u8] =
-    b"SERVERWARE\0RESPONSE-V2-RELEASE-TRANSPARENCY-CHECKPOINT\0V2\0";
+    b"CATCHPLATE\0RESPONSE-V2-RELEASE-TRANSPARENCY-CHECKPOINT\0V2\0";
 const ED25519_SPKI_PREFIX: &[u8] = &[
     0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21,
     0x00,

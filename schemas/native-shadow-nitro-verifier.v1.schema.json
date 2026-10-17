@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-nitro-verifier.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-nitro-verifier.v1.schema.json",
   "$ref": "#/$defs/configuration",
   "$defs": {
     "sha256": { "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/sha256" },
@@ -65,7 +65,7 @@
       "description": "Independently current application-level denied-certificate inventory, NOT an AWS CRL or proof that vendor revocation information exists.",
       "required": ["apiVersion", "profile", "generation", "issuedAtUnixNanos", "expiresAtUnixNanos", "deniedCertificateSha256s"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeShadowNitroApplicationRevocation/v1" },
+        "apiVersion": { "const": "catchplate.nativeShadowNitroApplicationRevocation/v1" },
         "profile": { "const": "application-denial-inventory-no-vendor-crl-v1" }, "generation": { "$ref": "#/$defs/positive" },
         "issuedAtUnixNanos": { "$ref": "#/$defs/positive" }, "expiresAtUnixNanos": { "$ref": "#/$defs/positive" },
         "deniedCertificateSha256s": { "type": "array", "maxItems": 1024, "uniqueItems": true, "items": { "$ref": "#/$defs/sha256" } }
@@ -85,7 +85,7 @@
       "description": "Fixed root:root0400 named original, supplied on FD3. No request may select this configuration. It contains only public inputs, never a verifier seed.",
       "required": ["apiVersion", "uid", "gid", "operation", "authorization", "expectedStatement", "authorityKeys", "trustCheckpoint", "nitro", "collateralRevocation", "expectedAttestation", "maximumResultAgeNanos"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeShadowNitroVerifierConfiguration/v1" }, "uid": { "$ref": "#/$defs/uid" }, "gid": { "$ref": "#/$defs/uid" },
+        "apiVersion": { "const": "catchplate.nativeShadowNitroVerifierConfiguration/v1" }, "uid": { "$ref": "#/$defs/uid" }, "gid": { "$ref": "#/$defs/uid" },
         "operation": { "$ref": "#/$defs/operation" }, "authorization": { "oneOf": [
           { "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/authorization" },
           { "$ref": "native-shadow-encrypted-keys.v1.schema.json#/$defs/keyAuthorizationV2" }
@@ -117,7 +117,7 @@
     },
     "response": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "result"],
-      "properties": { "apiVersion": { "const": "serverware.nativeShadowNitroVerifierResult/v1" }, "result": { "$ref": "#/$defs/result" } }
+      "properties": { "apiVersion": { "const": "catchplate.nativeShadowNitroVerifierResult/v1" }, "result": { "$ref": "#/$defs/result" } }
     }
   }
 }

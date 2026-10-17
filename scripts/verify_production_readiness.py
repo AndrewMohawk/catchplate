@@ -76,10 +76,10 @@ METADATA_TABLES = (
     "policy_high_water",
 )
 GRANT_TABLES = ("approval_grants", "approval_grant_consumptions")
-AUDIT_TABLES = ("serverware_audit_events",)
+AUDIT_TABLES = ("catchplate_audit_events",)
 RECOVERY_WITNESS_TABLES = (
-    "serverware_recovery_authorization_claims",
-    "serverware_recovery_witness_heads",
+    "catchplate_recovery_authorization_claims",
+    "catchplate_recovery_witness_heads",
 )
 KMS_KEY_PREFIXES = (
     "awskms://",
@@ -92,21 +92,21 @@ KMS_KEY_PREFIXES = (
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 BASE64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 INTERNAL_SERVICE_TOKEN_NAMES = (
-    "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
-    "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
-    "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN",
-    "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
-    "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN",
-    "SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN",
+    "CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
+    "CATCHPLATE_DATA_PLANE_AUDIT_TOKEN",
+    "CATCHPLATE_DATA_PLANE_GRANT_CONSUME_TOKEN",
+    "CATCHPLATE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
+    "CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN",
+    "CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN",
 )
 CONTROL_PLANE_SERVICE_CREDENTIAL_NAMES = (
-    "SERVERWARE_ADMIN_TOKEN",
-    "SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN",
+    "CATCHPLATE_ADMIN_TOKEN",
+    "CATCHPLATE_WEBAUTHN_BOOTSTRAP_TOKEN",
     *INTERNAL_SERVICE_TOKEN_NAMES,
-    "SERVERWARE_AUDIT_ANCHOR_TOKEN",
+    "CATCHPLATE_AUDIT_ANCHOR_TOKEN",
 )
 SHARED_SERVICE_CREDENTIAL_NAMES = frozenset(
-    (*INTERNAL_SERVICE_TOKEN_NAMES, "SERVERWARE_AUDIT_ANCHOR_TOKEN")
+    (*INTERNAL_SERVICE_TOKEN_NAMES, "CATCHPLATE_AUDIT_ANCHOR_TOKEN")
 )
 MAX_OAUTH_CLIENT_SECRET_FILE_BYTES = 4096
 MAX_SERVICE_CREDENTIAL_FILE_BYTES = 4096
@@ -118,33 +118,33 @@ CONTROL_PLANE_RUNTIME_GID = 65532
 SHARED_SERVICE_CREDENTIAL_RUNTIME_GID = 65530
 SHARED_SERVICE_CREDENTIAL_OWNER_UID = 0
 MAX_POSIX_ID = (1 << 32) - 2
-HARDWARE_PROOF_API_VERSION = "serverware.hardwareAssurance/v1"
+HARDWARE_PROOF_API_VERSION = "catchplate.hardwareAssurance/v1"
 HARDWARE_PROOF_MAX_AGE_SECONDS = 900
 HARDWARE_PROOF_FUTURE_SKEW_SECONDS = 30
-FINAL_CHALLENGE_RECEIPT_API_VERSION = "serverware.finalChallengeReceipt/v1"
+FINAL_CHALLENGE_RECEIPT_API_VERSION = "catchplate.finalChallengeReceipt/v1"
 FINAL_CHALLENGE_RECEIPT_MAX_AGE_SECONDS = 900
 SETUP_TRUST_KEY_SETTINGS = (
-    "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY",
-    "SERVERWARE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY",
-    "SERVERWARE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY",
-    "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY",
+    "CATCHPLATE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY",
+    "CATCHPLATE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY",
+    "CATCHPLATE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY",
+    "CATCHPLATE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY",
 )
 RELEASE_TRUST_KEY_SETTINGS = (
-    "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY",
-    "SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY",
-    "SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY",
-    "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY",
-    "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
-    "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
-    "SERVERWARE_POLICY_SIGNING_PUBLIC_KEY",
-    "SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY",
-    "SERVERWARE_WEBAUTHN_TRUST_SIGNING_PUBLIC_KEY",
-    "SERVERWARE_TEE_QUOTE_SIGNING_PUBLIC_KEY",
+    "CATCHPLATE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY",
+    "CATCHPLATE_SIGSTORE_TRUSTED_PUBLIC_KEY",
+    "CATCHPLATE_REKOR_TRUSTED_PUBLIC_KEY",
+    "CATCHPLATE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY",
+    "CATCHPLATE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+    "CATCHPLATE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
+    "CATCHPLATE_POLICY_SIGNING_PUBLIC_KEY",
+    "CATCHPLATE_RESPONSE_SIGNING_PUBLIC_KEY",
+    "CATCHPLATE_WEBAUTHN_TRUST_SIGNING_PUBLIC_KEY",
+    "CATCHPLATE_TEE_QUOTE_SIGNING_PUBLIC_KEY",
 )
 REQUIRED_ONLINE_SIGNING_PUBLIC_KEYS = (
-    "SERVERWARE_POLICY_SIGNING_PUBLIC_KEY",
-    "SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY",
-    "SERVERWARE_WEBAUTHN_TRUST_SIGNING_PUBLIC_KEY",
+    "CATCHPLATE_POLICY_SIGNING_PUBLIC_KEY",
+    "CATCHPLATE_RESPONSE_SIGNING_PUBLIC_KEY",
+    "CATCHPLATE_WEBAUTHN_TRUST_SIGNING_PUBLIC_KEY",
 )
 RELEASE_IDENTITY_FIELDS = {
     "source_tree_digest",
@@ -361,11 +361,11 @@ def validate_hardware_assurance_document(
     )
     require_valid(
         document.get("apiVersion") == HARDWARE_PROOF_API_VERSION,
-        f"SERVERWARE_HARDWARE_ASSURANCE must contain a {HARDWARE_PROOF_API_VERSION} document",
+        f"CATCHPLATE_HARDWARE_ASSURANCE must contain a {HARDWARE_PROOF_API_VERSION} document",
     )
     require_valid(
-        document.get("kind") == "ServerwareHardwareAssurance",
-        "hardware assurance kind must be ServerwareHardwareAssurance",
+        document.get("kind") == "CatchplateHardwareAssurance",
+        "hardware assurance kind must be CatchplateHardwareAssurance",
     )
     statement = require_exact_keys(
         document.get("statement"),
@@ -491,11 +491,11 @@ def validate_hardware_assurance_document(
 
     expected_key_id = require_sha256(
         expected_trusted_key_id,
-        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
+        "CATCHPLATE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
     )
     require_valid(
         hmac.compare_digest(trusted_key_id, expected_key_id),
-        "hardware assurance verifier key bytes do not match SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
+        "hardware assurance verifier key bytes do not match CATCHPLATE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
     )
     signing_key_id = require_sha256(
         document.get("signing_key_id"),
@@ -553,7 +553,7 @@ def validate_hardware_assurance_document(
     if expected_challenge_nonce:
         expected_nonce_bytes = decode_canonical_base64url(
             expected_challenge_nonce,
-            "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
+            "CATCHPLATE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
         )
         require_valid(len(expected_nonce_bytes) >= 32, "expected hardware challenge is too short")
         challenge_matches = hmac.compare_digest(
@@ -564,7 +564,7 @@ def validate_hardware_assurance_document(
             challenge_nonce_sha256,
             require_sha256(
                 expected_challenge_nonce_sha256,
-                "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256",
+                "CATCHPLATE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256",
             ),
         )
     require_valid(
@@ -605,7 +605,7 @@ def validate_final_challenge_receipt_document(
     )
     require_valid(
         document.get("apiVersion") == FINAL_CHALLENGE_RECEIPT_API_VERSION,
-        f"SERVERWARE_FINAL_CHALLENGE_RECEIPT must contain a {FINAL_CHALLENGE_RECEIPT_API_VERSION} document",
+        f"CATCHPLATE_FINAL_CHALLENGE_RECEIPT must contain a {FINAL_CHALLENGE_RECEIPT_API_VERSION} document",
     )
     require_valid(
         document.get("kind") == "FinalChallengeConsumption",
@@ -623,7 +623,7 @@ def validate_final_challenge_receipt_document(
     )
     require_valid(
         hmac.compare_digest(provider, expected_provider),
-        "SERVERWARE_FINAL_CHALLENGE_RECEIPT authority provider must match the configured provider",
+        "CATCHPLATE_FINAL_CHALLENGE_RECEIPT authority provider must match the configured provider",
     )
     consumption_id = statement.get("consumption_id")
     require_valid(
@@ -698,11 +698,11 @@ def validate_final_challenge_receipt_document(
 
     expected_key_id = require_sha256(
         expected_trusted_key_id,
-        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
+        "CATCHPLATE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
     )
     require_valid(
         hmac.compare_digest(trusted_key_id, expected_key_id),
-        "final challenge authority key bytes do not match SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
+        "final challenge authority key bytes do not match CATCHPLATE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
     )
     signing_key_id = require_sha256(
         document.get("signing_key_id"),
@@ -722,11 +722,11 @@ def validate_final_challenge_receipt_document(
 
 def redacted_environment_summary(env: dict[str, str]) -> dict[str, Any]:
     return {
-        "env_keys": sorted(key for key in env if key.startswith("SERVERWARE_")),
-        "production_readiness_env_path": env.get("SERVERWARE_PRODUCTION_READINESS_ENV_PATH"),
-        "production_readiness_env_sha256": env.get("SERVERWARE_PRODUCTION_READINESS_ENV_SHA256"),
-        "production_images_env_path": env.get("SERVERWARE_PRODUCTION_IMAGES_ENV_PATH"),
-        "production_images_env_sha256": env.get("SERVERWARE_PRODUCTION_IMAGES_ENV_SHA256"),
+        "env_keys": sorted(key for key in env if key.startswith("CATCHPLATE_")),
+        "production_readiness_env_path": env.get("CATCHPLATE_PRODUCTION_READINESS_ENV_PATH"),
+        "production_readiness_env_sha256": env.get("CATCHPLATE_PRODUCTION_READINESS_ENV_SHA256"),
+        "production_images_env_path": env.get("CATCHPLATE_PRODUCTION_IMAGES_ENV_PATH"),
+        "production_images_env_sha256": env.get("CATCHPLATE_PRODUCTION_IMAGES_ENV_SHA256"),
         "secret_values_redacted": True,
     }
 
@@ -802,15 +802,15 @@ def valid_pcr_policy(raw: str) -> bool:
 
 
 def check_no_dev_or_fixture(env: dict[str, str], failures: list[str]) -> None:
-    add(failures, not env_bool(env, "SERVERWARE_DEV_AUTHENTICATOR"), "SERVERWARE_DEV_AUTHENTICATOR must be disabled")
-    release_channel = env.get("SERVERWARE_RELEASE_CHANNEL", "").strip().lower()
-    add(failures, release_channel not in {"", "dev", "local", "test"}, "SERVERWARE_RELEASE_CHANNEL must be a production channel")
-    public_url = env.get("SERVERWARE_PUBLIC_URL", "").strip()
+    add(failures, not env_bool(env, "CATCHPLATE_DEV_AUTHENTICATOR"), "CATCHPLATE_DEV_AUTHENTICATOR must be disabled")
+    release_channel = env.get("CATCHPLATE_RELEASE_CHANNEL", "").strip().lower()
+    add(failures, release_channel not in {"", "dev", "local", "test"}, "CATCHPLATE_RELEASE_CHANNEL must be a production channel")
+    public_url = env.get("CATCHPLATE_PUBLIC_URL", "").strip()
     if public_url:
         parsed = urllib.parse.urlparse(public_url)
-        add(failures, parsed.scheme == "https", "SERVERWARE_PUBLIC_URL must use https in production")
-        add(failures, parsed.hostname not in {"localhost", "127.0.0.1", "::1"}, "SERVERWARE_PUBLIC_URL must not be localhost")
-        add(failures, not placeholder_hostname(parsed.hostname), "SERVERWARE_PUBLIC_URL must not use .example placeholder domains")
+        add(failures, parsed.scheme == "https", "CATCHPLATE_PUBLIC_URL must use https in production")
+        add(failures, parsed.hostname not in {"localhost", "127.0.0.1", "::1"}, "CATCHPLATE_PUBLIC_URL must not be localhost")
+        add(failures, not placeholder_hostname(parsed.hostname), "CATCHPLATE_PUBLIC_URL must not use .example placeholder domains")
 
 
 def resolve_service_credential(
@@ -924,22 +924,22 @@ def check_control_plane_security(
         expected_shared_owner_uid=expected_shared_owner_uid,
         expected_shared_gid=expected_shared_gid,
     )
-    token = resolver("SERVERWARE_ADMIN_TOKEN")
-    add(failures, bool(token), "SERVERWARE_ADMIN_TOKEN must be explicitly configured for production")
-    add(failures, len(token) >= 32, "SERVERWARE_ADMIN_TOKEN must be at least 32 characters")
+    token = resolver("CATCHPLATE_ADMIN_TOKEN")
+    add(failures, bool(token), "CATCHPLATE_ADMIN_TOKEN must be explicitly configured for production")
+    add(failures, len(token) >= 32, "CATCHPLATE_ADMIN_TOKEN must be at least 32 characters")
     add(
         failures,
-        token not in {"dev-admin-token", "admin", "password", "changeme", "serverware"},
-        "SERVERWARE_ADMIN_TOKEN must not use a development/default value",
+        token not in {"dev-admin-token", "admin", "password", "changeme", "catchplate"},
+        "CATCHPLATE_ADMIN_TOKEN must not use a development/default value",
     )
-    anchor_token = resolver("SERVERWARE_AUDIT_ANCHOR_TOKEN")
-    add(failures, len(anchor_token) >= 32, "SERVERWARE_AUDIT_ANCHOR_TOKEN must be at least 32 characters")
-    bootstrap_token = resolver("SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN")
+    anchor_token = resolver("CATCHPLATE_AUDIT_ANCHOR_TOKEN")
+    add(failures, len(anchor_token) >= 32, "CATCHPLATE_AUDIT_ANCHOR_TOKEN must be at least 32 characters")
+    bootstrap_token = resolver("CATCHPLATE_WEBAUTHN_BOOTSTRAP_TOKEN")
     resolved_credentials = [
-        ("SERVERWARE_ADMIN_TOKEN", token),
-        ("SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN", bootstrap_token),
+        ("CATCHPLATE_ADMIN_TOKEN", token),
+        ("CATCHPLATE_WEBAUTHN_BOOTSTRAP_TOKEN", bootstrap_token),
         *[(name, resolver(name)) for name in INTERNAL_SERVICE_TOKEN_NAMES],
-        ("SERVERWARE_AUDIT_ANCHOR_TOKEN", anchor_token),
+        ("CATCHPLATE_AUDIT_ANCHOR_TOKEN", anchor_token),
     ]
     for index, (left_name, left_token) in enumerate(resolved_credentials):
         for right_name, right_token in resolved_credentials[index + 1 :]:
@@ -950,7 +950,7 @@ def check_control_plane_security(
                 or not hmac.compare_digest(left_token, right_token),
                 f"service credentials must be distinct: {left_name} and {right_name}",
             )
-    roles = {role.strip() for role in env.get("SERVERWARE_ADMIN_ROLES", "").split(",") if role.strip()}
+    roles = {role.strip() for role in env.get("CATCHPLATE_ADMIN_ROLES", "").split(",") if role.strip()}
     required_roles = {
         "admin",
         "approver",
@@ -964,23 +964,23 @@ def check_control_plane_security(
     add(
         failures,
         roles == required_roles,
-        "SERVERWARE_ADMIN_ROLES must equal the closed administrative, policy, credential, audit, approval, and setup attestation role vocabulary",
+        "CATCHPLATE_ADMIN_ROLES must equal the closed administrative, policy, credential, audit, approval, and setup attestation role vocabulary",
     )
     setup_trust_roles = (
         (
-            "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY",
-            "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_KEY_ID",
-            "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PROVIDER",
+            "CATCHPLATE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY",
+            "CATCHPLATE_SETUP_ENROLLMENT_VERIFIER_KEY_ID",
+            "CATCHPLATE_SETUP_ENROLLMENT_VERIFIER_PROVIDER",
         ),
         (
-            "SERVERWARE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY",
-            "SERVERWARE_SETUP_HARDWARE_VERIFIER_KEY_ID",
-            "SERVERWARE_SETUP_HARDWARE_VERIFIER_PROVIDER",
+            "CATCHPLATE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY",
+            "CATCHPLATE_SETUP_HARDWARE_VERIFIER_KEY_ID",
+            "CATCHPLATE_SETUP_HARDWARE_VERIFIER_PROVIDER",
         ),
         (
-            "SERVERWARE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY",
-            "SERVERWARE_SETUP_FINAL_AUTHORITY_KEY_ID",
-            "SERVERWARE_SETUP_FINAL_AUTHORITY_PROVIDER",
+            "CATCHPLATE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY",
+            "CATCHPLATE_SETUP_FINAL_AUTHORITY_KEY_ID",
+            "CATCHPLATE_SETUP_FINAL_AUTHORITY_PROVIDER",
         ),
     )
     setup_key_ids: list[str] = []
@@ -1025,57 +1025,57 @@ def check_control_plane_security(
     check_cross_domain_trust_key_separation(env, failures)
     try:
         setup_challenge_ttl = int(
-            env.get("SERVERWARE_SETUP_ATTESTATION_CHALLENGE_TTL_SECONDS", "")
+            env.get("CATCHPLATE_SETUP_ATTESTATION_CHALLENGE_TTL_SECONDS", "")
         )
     except ValueError:
         setup_challenge_ttl = 0
     add(
         failures,
         30 <= setup_challenge_ttl <= 900,
-        "SERVERWARE_SETUP_ATTESTATION_CHALLENGE_TTL_SECONDS must be between 30 and 900",
+        "CATCHPLATE_SETUP_ATTESTATION_CHALLENGE_TTL_SECONDS must be between 30 and 900",
     )
-    add(failures, env_bool(env, "SERVERWARE_OIDC_ENABLED"), "control-plane OIDC authentication must be enabled")
-    oidc_issuer = env.get("SERVERWARE_OIDC_ISSUER", "").strip()
+    add(failures, env_bool(env, "CATCHPLATE_OIDC_ENABLED"), "control-plane OIDC authentication must be enabled")
+    oidc_issuer = env.get("CATCHPLATE_OIDC_ISSUER", "").strip()
     parsed_issuer = urllib.parse.urlparse(oidc_issuer)
     add(
         failures,
         parsed_issuer.scheme == "https" and bool(parsed_issuer.netloc),
-        "SERVERWARE_OIDC_ISSUER must be an https URL",
+        "CATCHPLATE_OIDC_ISSUER must be an https URL",
     )
     add(
         failures,
         parsed_issuer.hostname not in {"localhost", "127.0.0.1", "::1"},
-        "SERVERWARE_OIDC_ISSUER must not be localhost",
+        "CATCHPLATE_OIDC_ISSUER must not be localhost",
     )
     add(
         failures,
         not placeholder_hostname(parsed_issuer.hostname),
-        "SERVERWARE_OIDC_ISSUER must not use .example placeholder domains",
+        "CATCHPLATE_OIDC_ISSUER must not use .example placeholder domains",
     )
-    add(failures, bool(env.get("SERVERWARE_OIDC_AUDIENCE", "").strip()), "SERVERWARE_OIDC_AUDIENCE must be configured")
+    add(failures, bool(env.get("CATCHPLATE_OIDC_AUDIENCE", "").strip()), "CATCHPLATE_OIDC_AUDIENCE must be configured")
     add(
         failures,
-        bool(env.get("SERVERWARE_OIDC_JWKS_JSON", "").strip() or env.get("SERVERWARE_OIDC_JWKS_PATH", "").strip()),
-        "SERVERWARE_OIDC_JWKS_JSON or SERVERWARE_OIDC_JWKS_PATH must be configured",
+        bool(env.get("CATCHPLATE_OIDC_JWKS_JSON", "").strip() or env.get("CATCHPLATE_OIDC_JWKS_PATH", "").strip()),
+        "CATCHPLATE_OIDC_JWKS_JSON or CATCHPLATE_OIDC_JWKS_PATH must be configured",
     )
-    add(failures, bool(env.get("SERVERWARE_OIDC_ROLE_CLAIM", "").strip()), "SERVERWARE_OIDC_ROLE_CLAIM must be configured")
+    add(failures, bool(env.get("CATCHPLATE_OIDC_ROLE_CLAIM", "").strip()), "CATCHPLATE_OIDC_ROLE_CLAIM must be configured")
     add(
         failures,
-        env_bool(env, "SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED"),
+        env_bool(env, "CATCHPLATE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED"),
         "high-risk control-plane mutations must require WebAuthn MFA",
     )
     add(
         failures,
         env_bool(
             env,
-            "SERVERWARE_CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION",
+            "CATCHPLATE_CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION",
         ),
         "high-risk control-plane mutations must require hardware-attested WebAuthn",
     )
     mutation_authenticator_classes = {
         item.strip()
         for item in env.get(
-            "SERVERWARE_CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES", ""
+            "CATCHPLATE_CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES", ""
         ).split(",")
         if item.strip()
     }
@@ -1083,15 +1083,15 @@ def check_control_plane_security(
         failures,
         bool(mutation_authenticator_classes)
         and mutation_authenticator_classes.issubset({"yubikey", "hardware"}),
-        "SERVERWARE_CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES must be limited to yubikey and hardware",
+        "CATCHPLATE_CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES must be limited to yubikey and hardware",
     )
     add(
         failures,
-        not env_bool(env, "SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED", default=True),
+        not env_bool(env, "CATCHPLATE_DIRECT_CA_DOWNLOAD_ENABLED", default=True),
         "direct CA download must be disabled in production; use verifier-mediated install sessions",
     )
     try:
-        ca_session_ttl = int(env.get("SERVERWARE_CA_INSTALL_SESSION_TTL_SECONDS", "0"))
+        ca_session_ttl = int(env.get("CATCHPLATE_CA_INSTALL_SESSION_TTL_SECONDS", "0"))
     except ValueError:
         ca_session_ttl = 0
     add(
@@ -1101,10 +1101,10 @@ def check_control_plane_security(
     )
     add(
         failures,
-        env_bool(env, "SERVERWARE_CONTROL_PLANE_TWO_PERSON_REQUIRED"),
+        env_bool(env, "CATCHPLATE_CONTROL_PLANE_TWO_PERSON_REQUIRED"),
         "high-risk control-plane mutations must require two-person approval",
     )
-    two_person_actions = {item.strip() for item in env.get("SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS", "").split(",") if item.strip()}
+    two_person_actions = {item.strip() for item in env.get("CATCHPLATE_CONTROL_PLANE_TWO_PERSON_ACTIONS", "").split(",") if item.strip()}
     required_two_person_actions = {
         "credential.create",
         "credential.oauth.activate",
@@ -1127,25 +1127,25 @@ def check_control_plane_security(
     add(
         failures,
         "*" in two_person_actions or required_two_person_actions.issubset(two_person_actions),
-        "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS must cover credential creation, exact-account OAuth activation, uncertain OAuth issuance resolution, route, policy publish, WebAuthn enrollment, revocation, trust publication, RBAC, deprovisioning, token rotation, break-glass, and setup attestation finalization mutations",
+        "CATCHPLATE_CONTROL_PLANE_TWO_PERSON_ACTIONS must cover credential creation, exact-account OAuth activation, uncertain OAuth issuance resolution, route, policy publish, WebAuthn enrollment, revocation, trust publication, RBAC, deprovisioning, token rotation, break-glass, and setup attestation finalization mutations",
     )
     add(
         failures,
         len(bootstrap_token) >= 32,
-        "SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN must contain at least 32 characters",
+        "CATCHPLATE_WEBAUTHN_BOOTSTRAP_TOKEN must contain at least 32 characters",
     )
     add(
         failures,
-        env_bool(env, "SERVERWARE_POLICY_PUBLISH_DRY_RUN_REQUIRED"),
+        env_bool(env, "CATCHPLATE_POLICY_PUBLISH_DRY_RUN_REQUIRED"),
         "policy publishing must require dry-run decision tests",
     )
     add(
         failures,
-        env_bool(env, "SERVERWARE_POLICY_CANARY_REQUIRED"),
+        env_bool(env, "CATCHPLATE_POLICY_CANARY_REQUIRED"),
         "policy publishing must require canary activation before full activation",
     )
     try:
-        canary_observation_seconds = int(env.get("SERVERWARE_POLICY_CANARY_MIN_OBSERVATION_SECONDS", "0"))
+        canary_observation_seconds = int(env.get("CATCHPLATE_POLICY_CANARY_MIN_OBSERVATION_SECONDS", "0"))
     except ValueError:
         canary_observation_seconds = 0
     add(
@@ -1154,7 +1154,7 @@ def check_control_plane_security(
         "policy canary activation must require a positive observation window",
     )
     try:
-        canary_audit_events = int(env.get("SERVERWARE_POLICY_CANARY_MIN_AUDIT_EVENTS", "0"))
+        canary_audit_events = int(env.get("CATCHPLATE_POLICY_CANARY_MIN_AUDIT_EVENTS", "0"))
     except ValueError:
         canary_audit_events = 0
     add(
@@ -1163,7 +1163,7 @@ def check_control_plane_security(
         "policy canary activation must require audit evidence",
     )
     try:
-        canary_max_denials = int(env.get("SERVERWARE_POLICY_CANARY_MAX_DENIALS", "0"))
+        canary_max_denials = int(env.get("CATCHPLATE_POLICY_CANARY_MAX_DENIALS", "0"))
     except ValueError:
         canary_max_denials = -1
     add(
@@ -1171,12 +1171,12 @@ def check_control_plane_security(
         canary_max_denials == 0,
         "policy canary activation must fail closed on canary denials",
     )
-    origin = env.get("SERVERWARE_WEBAUTHN_ORIGIN", env.get("SERVERWARE_PUBLIC_URL", "")).strip()
+    origin = env.get("CATCHPLATE_WEBAUTHN_ORIGIN", env.get("CATCHPLATE_PUBLIC_URL", "")).strip()
     if origin:
         parsed = urllib.parse.urlparse(origin)
-        add(failures, parsed.scheme == "https", "SERVERWARE_WEBAUTHN_ORIGIN must use https in production")
-        add(failures, parsed.hostname not in {"localhost", "127.0.0.1", "::1"}, "SERVERWARE_WEBAUTHN_ORIGIN must not be localhost")
-        add(failures, not placeholder_hostname(parsed.hostname), "SERVERWARE_WEBAUTHN_ORIGIN must not use .example placeholder domains")
+        add(failures, parsed.scheme == "https", "CATCHPLATE_WEBAUTHN_ORIGIN must use https in production")
+        add(failures, parsed.hostname not in {"localhost", "127.0.0.1", "::1"}, "CATCHPLATE_WEBAUTHN_ORIGIN must not be localhost")
+        add(failures, not placeholder_hostname(parsed.hostname), "CATCHPLATE_WEBAUTHN_ORIGIN must not use .example placeholder domains")
 
 
 def check_oauth_secret_file(env: dict[str, str], *, provider: str, setting_name: str, failures: list[str]) -> None:
@@ -1523,51 +1523,51 @@ def check_cross_domain_trust_key_separation(
 
 
 def check_oauth_providers(env: dict[str, str], failures: list[str]) -> None:
-    public_url = env.get("SERVERWARE_PUBLIC_URL", "").strip()
+    public_url = env.get("CATCHPLATE_PUBLIC_URL", "").strip()
     parsed_public_url = urllib.parse.urlparse(public_url)
     public_url_is_https = parsed_public_url.scheme == "https" and bool(parsed_public_url.netloc)
-    add(failures, public_url_is_https, "OAuth providers require an HTTPS SERVERWARE_PUBLIC_URL")
+    add(failures, public_url_is_https, "OAuth providers require an HTTPS CATCHPLATE_PUBLIC_URL")
 
     try:
-        state_ttl = int(env.get("SERVERWARE_OAUTH_STATE_TTL_SECONDS", ""))
+        state_ttl = int(env.get("CATCHPLATE_OAUTH_STATE_TTL_SECONDS", ""))
     except ValueError:
         state_ttl = 0
     add(
         failures,
         60 <= state_ttl <= 900,
-        "SERVERWARE_OAUTH_STATE_TTL_SECONDS must be between 60 and 900 seconds",
+        "CATCHPLATE_OAUTH_STATE_TTL_SECONDS must be between 60 and 900 seconds",
     )
     try:
-        pending_credential_ttl = int(env.get("SERVERWARE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS", ""))
+        pending_credential_ttl = int(env.get("CATCHPLATE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS", ""))
     except ValueError:
         pending_credential_ttl = 0
     add(
         failures,
         60 <= pending_credential_ttl <= 3600,
-        "SERVERWARE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS must be between 60 and 3600 seconds",
+        "CATCHPLATE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS must be between 60 and 3600 seconds",
     )
     try:
         pending_credential_max_count = int(
-            env.get("SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT", "")
+            env.get("CATCHPLATE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT", "")
         )
     except ValueError:
         pending_credential_max_count = 0
     add(
         failures,
         1 <= pending_credential_max_count <= 10_000,
-        "SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT must be between 1 and 10000",
+        "CATCHPLATE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT must be between 1 and 10000",
     )
     setup_bounds = {
-        "SERVERWARE_SETUP_SESSION_TTL_SECONDS": (300, 604_800),
-        "SERVERWARE_SETUP_SESSION_MAX_ACTIVE": (1, 100_000),
-        "SERVERWARE_SETUP_SESSION_MAX_RETAINED": (1, 1_000_000),
-        "SERVERWARE_SETUP_SESSION_RETENTION_SECONDS": (300, 7_776_000),
-        "SERVERWARE_SETUP_SESSION_EVIDENCE_MAX_BYTES": (1024, 1_048_576),
-        "SERVERWARE_SETUP_SESSION_EVIDENCE_MAX_COUNT": (1, 1024),
-        "SERVERWARE_SETUP_SESSION_EVENT_MAX_BYTES": (1024, 262_144),
-        "SERVERWARE_SETUP_SESSION_EVENT_MAX_COUNT": (4, 4096),
-        "SERVERWARE_SETUP_SESSION_AUDIT_OUTBOX_MAX_PENDING": (100, 1_000_000),
-        "SERVERWARE_SETUP_SESSION_AUDIT_CLAIM_TTL_SECONDS": (5, 3600),
+        "CATCHPLATE_SETUP_SESSION_TTL_SECONDS": (300, 604_800),
+        "CATCHPLATE_SETUP_SESSION_MAX_ACTIVE": (1, 100_000),
+        "CATCHPLATE_SETUP_SESSION_MAX_RETAINED": (1, 1_000_000),
+        "CATCHPLATE_SETUP_SESSION_RETENTION_SECONDS": (300, 7_776_000),
+        "CATCHPLATE_SETUP_SESSION_EVIDENCE_MAX_BYTES": (1024, 1_048_576),
+        "CATCHPLATE_SETUP_SESSION_EVIDENCE_MAX_COUNT": (1, 1024),
+        "CATCHPLATE_SETUP_SESSION_EVENT_MAX_BYTES": (1024, 262_144),
+        "CATCHPLATE_SETUP_SESSION_EVENT_MAX_COUNT": (4, 4096),
+        "CATCHPLATE_SETUP_SESSION_AUDIT_OUTBOX_MAX_PENDING": (100, 1_000_000),
+        "CATCHPLATE_SETUP_SESSION_AUDIT_CLAIM_TTL_SECONDS": (5, 3600),
     }
     setup_values: dict[str, int] = {}
     for setting_name, (minimum, maximum) in setup_bounds.items():
@@ -1582,25 +1582,25 @@ def check_oauth_providers(env: dict[str, str], failures: list[str]) -> None:
         )
     add(
         failures,
-        setup_values["SERVERWARE_SETUP_SESSION_MAX_ACTIVE"]
-        <= setup_values["SERVERWARE_SETUP_SESSION_MAX_RETAINED"],
-        "SERVERWARE_SETUP_SESSION_MAX_RETAINED must not be below SERVERWARE_SETUP_SESSION_MAX_ACTIVE",
+        setup_values["CATCHPLATE_SETUP_SESSION_MAX_ACTIVE"]
+        <= setup_values["CATCHPLATE_SETUP_SESSION_MAX_RETAINED"],
+        "CATCHPLATE_SETUP_SESSION_MAX_RETAINED must not be below CATCHPLATE_SETUP_SESSION_MAX_ACTIVE",
     )
     try:
-        replay_capacity = int(env.get("SERVERWARE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES", ""))
+        replay_capacity = int(env.get("CATCHPLATE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES", ""))
     except ValueError:
         replay_capacity = 0
     add(
         failures,
         10_000 <= replay_capacity <= 10_000_000,
-        "SERVERWARE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES must be between 10000 and 10000000",
+        "CATCHPLATE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES must be between 10000 and 10000000",
     )
 
     plaintext_names = (
-        "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET",
-        "SERVERWARE_X_OAUTH_CLIENT_SECRET",
-        "SERVERWARE_TWITTER_OAUTH_CLIENT_SECRET",
-        "SERVERWARE_OIDC_CLIENT_SECRET",
+        "CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET",
+        "CATCHPLATE_X_OAUTH_CLIENT_SECRET",
+        "CATCHPLATE_TWITTER_OAUTH_CLIENT_SECRET",
+        "CATCHPLATE_OIDC_CLIENT_SECRET",
     )
     for setting_name in plaintext_names:
         add(
@@ -1613,16 +1613,16 @@ def check_oauth_providers(env: dict[str, str], failures: list[str]) -> None:
         (
             "Google",
             "google",
-            "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID",
-            "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
-            "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI",
+            "CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID",
+            "CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
+            "CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI",
         ),
         (
             "X",
             "x",
-            "SERVERWARE_X_OAUTH_CLIENT_ID",
-            "SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE",
-            "SERVERWARE_X_OAUTH_REDIRECT_URI",
+            "CATCHPLATE_X_OAUTH_CLIENT_ID",
+            "CATCHPLATE_X_OAUTH_CLIENT_SECRET_FILE",
+            "CATCHPLATE_X_OAUTH_REDIRECT_URI",
         ),
     )
     for provider, provider_id, client_id_name, secret_file_name, redirect_name in providers:
@@ -1645,11 +1645,11 @@ def check_oauth_providers(env: dict[str, str], failures: list[str]) -> None:
 
     add(
         failures,
-        env_bool(env, "SERVERWARE_OIDC_BROWSER_LOGIN_ENABLED"),
+        env_bool(env, "CATCHPLATE_OIDC_BROWSER_LOGIN_ENABLED"),
         "operator browser OIDC login must be enabled",
     )
-    oidc_issuer = urllib.parse.urlparse(env.get("SERVERWARE_OIDC_ISSUER", "").strip())
-    for name in ("SERVERWARE_OIDC_AUTHORIZATION_ENDPOINT", "SERVERWARE_OIDC_TOKEN_ENDPOINT"):
+    oidc_issuer = urllib.parse.urlparse(env.get("CATCHPLATE_OIDC_ISSUER", "").strip())
+    for name in ("CATCHPLATE_OIDC_AUTHORIZATION_ENDPOINT", "CATCHPLATE_OIDC_TOKEN_ENDPOINT"):
         value = env.get(name, "").strip()
         parsed = urllib.parse.urlparse(value)
         add(
@@ -1661,106 +1661,106 @@ def check_oauth_providers(env: dict[str, str], failures: list[str]) -> None:
         )
     add(
         failures,
-        bool(env.get("SERVERWARE_OIDC_CLIENT_ID", "").strip())
-        and env.get("SERVERWARE_OIDC_CLIENT_ID", "").strip()
-        == env.get("SERVERWARE_OIDC_AUDIENCE", "").strip(),
-        "SERVERWARE_OIDC_CLIENT_ID must match SERVERWARE_OIDC_AUDIENCE",
+        bool(env.get("CATCHPLATE_OIDC_CLIENT_ID", "").strip())
+        and env.get("CATCHPLATE_OIDC_CLIENT_ID", "").strip()
+        == env.get("CATCHPLATE_OIDC_AUDIENCE", "").strip(),
+        "CATCHPLATE_OIDC_CLIENT_ID must match CATCHPLATE_OIDC_AUDIENCE",
     )
     check_oauth_secret_file(
         env,
         provider="operator OIDC",
-        setting_name="SERVERWARE_OIDC_CLIENT_SECRET_FILE",
+        setting_name="CATCHPLATE_OIDC_CLIENT_SECRET_FILE",
         failures=failures,
     )
-    oidc_redirect = env.get("SERVERWARE_OIDC_REDIRECT_URI", "").strip()
+    oidc_redirect = env.get("CATCHPLATE_OIDC_REDIRECT_URI", "").strip()
     expected_oidc_redirect = f"{public_url.rstrip('/')}/api/auth/oidc/callback"
     add(
         failures,
         public_url_is_https and oidc_redirect == expected_oidc_redirect,
-        f"SERVERWARE_OIDC_REDIRECT_URI must be the exact HTTPS callback {expected_oidc_redirect}",
+        f"CATCHPLATE_OIDC_REDIRECT_URI must be the exact HTTPS callback {expected_oidc_redirect}",
     )
     oidc_scopes = [
         item.strip()
-        for item in env.get("SERVERWARE_OIDC_BROWSER_SCOPES", "").split(",")
+        for item in env.get("CATCHPLATE_OIDC_BROWSER_SCOPES", "").split(",")
         if item.strip()
     ]
     add(
         failures,
         "openid" in oidc_scopes and len(oidc_scopes) == len(set(oidc_scopes)) <= 20,
-        "SERVERWARE_OIDC_BROWSER_SCOPES must be unique, bounded, and include openid",
+        "CATCHPLATE_OIDC_BROWSER_SCOPES must be unique, bounded, and include openid",
     )
     add(
         failures,
-        env.get("SERVERWARE_OIDC_TOKEN_AUTH_METHOD", "").strip()
+        env.get("CATCHPLATE_OIDC_TOKEN_AUTH_METHOD", "").strip()
         in {"client_secret_basic", "client_secret_post"},
         "production browser OIDC must authenticate the token endpoint client",
     )
     try:
-        oidc_login_ttl = int(env.get("SERVERWARE_OIDC_LOGIN_STATE_TTL_SECONDS", ""))
-        oidc_session_ttl = int(env.get("SERVERWARE_OIDC_SESSION_TTL_SECONDS", ""))
+        oidc_login_ttl = int(env.get("CATCHPLATE_OIDC_LOGIN_STATE_TTL_SECONDS", ""))
+        oidc_session_ttl = int(env.get("CATCHPLATE_OIDC_SESSION_TTL_SECONDS", ""))
     except ValueError:
         oidc_login_ttl = 0
         oidc_session_ttl = 0
     add(
         failures,
         60 <= oidc_login_ttl <= 900,
-        "SERVERWARE_OIDC_LOGIN_STATE_TTL_SECONDS must be between 60 and 900 seconds",
+        "CATCHPLATE_OIDC_LOGIN_STATE_TTL_SECONDS must be between 60 and 900 seconds",
     )
     add(
         failures,
         300 <= oidc_session_ttl <= 43_200,
-        "SERVERWARE_OIDC_SESSION_TTL_SECONDS must be between 300 and 43200 seconds",
+        "CATCHPLATE_OIDC_SESSION_TTL_SECONDS must be between 300 and 43200 seconds",
     )
     add(
         failures,
-        env_bool(env, "SERVERWARE_OIDC_SESSION_WEBAUTHN_REQUIRED"),
+        env_bool(env, "CATCHPLATE_OIDC_SESSION_WEBAUTHN_REQUIRED"),
         "production OIDC browser sessions must require WebAuthn binding",
     )
     try:
         oidc_session_webauthn_ttl = int(
-            env.get("SERVERWARE_OIDC_SESSION_WEBAUTHN_CHALLENGE_TTL_SECONDS", "")
+            env.get("CATCHPLATE_OIDC_SESSION_WEBAUTHN_CHALLENGE_TTL_SECONDS", "")
         )
     except ValueError:
         oidc_session_webauthn_ttl = 0
     add(
         failures,
         30 <= oidc_session_webauthn_ttl <= 300,
-        "SERVERWARE_OIDC_SESSION_WEBAUTHN_CHALLENGE_TTL_SECONDS must be between 30 and 300 seconds",
+        "CATCHPLATE_OIDC_SESSION_WEBAUTHN_CHALLENGE_TTL_SECONDS must be between 30 and 300 seconds",
     )
     try:
         oidc_session_pending_ttl = int(
-            env.get("SERVERWARE_OIDC_SESSION_WEBAUTHN_PENDING_TTL_SECONDS", "")
+            env.get("CATCHPLATE_OIDC_SESSION_WEBAUTHN_PENDING_TTL_SECONDS", "")
         )
     except ValueError:
         oidc_session_pending_ttl = 0
     add(
         failures,
         60 <= oidc_session_pending_ttl <= 300,
-        "SERVERWARE_OIDC_SESSION_WEBAUTHN_PENDING_TTL_SECONDS must be between 60 and 300 seconds",
+        "CATCHPLATE_OIDC_SESSION_WEBAUTHN_PENDING_TTL_SECONDS must be between 60 and 300 seconds",
     )
     add(
         failures,
-        env_bool(env, "SERVERWARE_WEBAUTHN_RECOVERY_ENABLED"),
+        env_bool(env, "CATCHPLATE_WEBAUTHN_RECOVERY_ENABLED"),
         "production must enable offline WebAuthn recovery",
     )
     recovery_key_id = check_trusted_public_key_file(
         env,
-        "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY",
+        "CATCHPLATE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY",
         failures,
         require_ed25519=True,
     )
     expected_recovery_key_id = env.get(
-        "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_KEY_ID", ""
+        "CATCHPLATE_WEBAUTHN_RECOVERY_ROOT_KEY_ID", ""
     ).strip()
     add(
         failures,
         bool(recovery_key_id)
         and SHA256_RE.fullmatch(expected_recovery_key_id) is not None
         and hmac.compare_digest(recovery_key_id or "", expected_recovery_key_id),
-        "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_KEY_ID must match the offline root SPKI digest",
+        "CATCHPLATE_WEBAUTHN_RECOVERY_ROOT_KEY_ID must match the offline root SPKI digest",
     )
     recovery_key_path = Path(
-        env.get("SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY", "")
+        env.get("CATCHPLATE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY", "")
     )
     try:
         recovery_key_mode = stat.S_IMODE(recovery_key_path.lstat().st_mode)
@@ -1769,31 +1769,31 @@ def check_oauth_providers(env: dict[str, str], failures: list[str]) -> None:
     add(
         failures,
         recovery_key_mode & 0o022 == 0,
-        "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY must not be group/world writable",
+        "CATCHPLATE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY must not be group/world writable",
     )
     recovery_provider = env.get(
-        "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PROVIDER", ""
+        "CATCHPLATE_WEBAUTHN_RECOVERY_ROOT_PROVIDER", ""
     ).strip()
     add(
         failures,
         3 <= len(recovery_provider) <= 128
         and "replace" not in recovery_provider.lower()
         and "example" not in recovery_provider.lower(),
-        "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PROVIDER must identify the offline authority",
+        "CATCHPLATE_WEBAUTHN_RECOVERY_ROOT_PROVIDER must identify the offline authority",
     )
-    recovery_audience = env.get("SERVERWARE_WEBAUTHN_RECOVERY_AUDIENCE", "").strip()
+    recovery_audience = env.get("CATCHPLATE_WEBAUTHN_RECOVERY_AUDIENCE", "").strip()
     parsed_recovery_audience = urllib.parse.urlparse(recovery_audience)
     add(
         failures,
         recovery_audience == public_url
         and parsed_recovery_audience.scheme == "https"
         and not placeholder_hostname(parsed_recovery_audience.hostname),
-        "SERVERWARE_WEBAUTHN_RECOVERY_AUDIENCE must exactly match the production public URL",
+        "CATCHPLATE_WEBAUTHN_RECOVERY_AUDIENCE must exactly match the production public URL",
     )
     try:
-        recovery_ttl = int(env.get("SERVERWARE_WEBAUTHN_RECOVERY_TTL_SECONDS", ""))
+        recovery_ttl = int(env.get("CATCHPLATE_WEBAUTHN_RECOVERY_TTL_SECONDS", ""))
         recovery_max_live = int(
-            env.get("SERVERWARE_WEBAUTHN_RECOVERY_MAX_LIVE", "")
+            env.get("CATCHPLATE_WEBAUTHN_RECOVERY_MAX_LIVE", "")
         )
     except ValueError:
         recovery_ttl = 0
@@ -1801,108 +1801,108 @@ def check_oauth_providers(env: dict[str, str], failures: list[str]) -> None:
     add(
         failures,
         30 <= recovery_ttl <= min(300, oidc_session_pending_ttl),
-        "SERVERWARE_WEBAUTHN_RECOVERY_TTL_SECONDS must be between 30 seconds and the pending-session TTL",
+        "CATCHPLATE_WEBAUTHN_RECOVERY_TTL_SECONDS must be between 30 seconds and the pending-session TTL",
     )
     add(
         failures,
         1 <= recovery_max_live <= 10_000,
-        "SERVERWARE_WEBAUTHN_RECOVERY_MAX_LIVE must be between 1 and 10000",
+        "CATCHPLATE_WEBAUTHN_RECOVERY_MAX_LIVE must be between 1 and 10000",
     )
 
 
 def check_nitro(env: dict[str, str], failures: list[str]) -> None:
-    add(failures, env.get("SERVERWARE_TEE_QUOTE_PROVIDER") == "aws-nitro-enclaves", "TEE quote provider must be aws-nitro-enclaves")
-    add(failures, env.get("SERVERWARE_TEE_PLATFORM") == "aws-nitro", "TEE platform must be aws-nitro")
-    add(failures, not env_bool(env, "SERVERWARE_NITRO_FIXTURE"), "SERVERWARE_NITRO_FIXTURE must be disabled")
-    add(failures, not env_bool(env, "SERVERWARE_NITRO_ALLOW_DEBUG"), "SERVERWARE_NITRO_ALLOW_DEBUG must be disabled")
-    add(failures, not env_bool(env, "SERVERWARE_NITRO_ALLOW_DEBUG_RELEASE"), "SERVERWARE_NITRO_ALLOW_DEBUG_RELEASE must be disabled")
-    attestation_command = env.get("SERVERWARE_NITRO_ATTESTATION_COMMAND", "").strip()
-    add(failures, bool(attestation_command), "SERVERWARE_NITRO_ATTESTATION_COMMAND must be configured for fresh NSM documents")
+    add(failures, env.get("CATCHPLATE_TEE_QUOTE_PROVIDER") == "aws-nitro-enclaves", "TEE quote provider must be aws-nitro-enclaves")
+    add(failures, env.get("CATCHPLATE_TEE_PLATFORM") == "aws-nitro", "TEE platform must be aws-nitro")
+    add(failures, not env_bool(env, "CATCHPLATE_NITRO_FIXTURE"), "CATCHPLATE_NITRO_FIXTURE must be disabled")
+    add(failures, not env_bool(env, "CATCHPLATE_NITRO_ALLOW_DEBUG"), "CATCHPLATE_NITRO_ALLOW_DEBUG must be disabled")
+    add(failures, not env_bool(env, "CATCHPLATE_NITRO_ALLOW_DEBUG_RELEASE"), "CATCHPLATE_NITRO_ALLOW_DEBUG_RELEASE must be disabled")
+    attestation_command = env.get("CATCHPLATE_NITRO_ATTESTATION_COMMAND", "").strip()
+    add(failures, bool(attestation_command), "CATCHPLATE_NITRO_ATTESTATION_COMMAND must be configured for fresh NSM documents")
     add(
         failures,
         attestation_command and not command_mentions(attestation_command, "fixture", "nitro_attestation_fixture.py"),
-        "SERVERWARE_NITRO_ATTESTATION_COMMAND must not use fixture helpers",
+        "CATCHPLATE_NITRO_ATTESTATION_COMMAND must not use fixture helpers",
     )
     add(
         failures,
-        not env.get("SERVERWARE_NITRO_ATTESTATION_DOCUMENT") and not env.get("SERVERWARE_NITRO_ATTESTATION_DOCUMENT_B64"),
+        not env.get("CATCHPLATE_NITRO_ATTESTATION_DOCUMENT") and not env.get("CATCHPLATE_NITRO_ATTESTATION_DOCUMENT_B64"),
         "production Nitro readiness must use a fresh attestation command, not a static document env var",
     )
-    nsm_template = env.get("SERVERWARE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE", "").strip()
+    nsm_template = env.get("CATCHPLATE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE", "").strip()
     add(
         failures,
         not nsm_template or not command_mentions(nsm_template, "fixture", "nitro_attestation_fixture.py"),
-        "SERVERWARE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE must not use fixture helpers",
+        "CATCHPLATE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE must not use fixture helpers",
     )
     add(
         failures,
-        bool(env.get("SERVERWARE_NITRO_ROOT_CERT") or env.get("SERVERWARE_NITRO_ROOT_CERT_PEM")),
-        "Nitro root certificate must be pinned with SERVERWARE_NITRO_ROOT_CERT[_PEM]",
+        bool(env.get("CATCHPLATE_NITRO_ROOT_CERT") or env.get("CATCHPLATE_NITRO_ROOT_CERT_PEM")),
+        "Nitro root certificate must be pinned with CATCHPLATE_NITRO_ROOT_CERT[_PEM]",
     )
     add(
         failures,
-        valid_pcr_policy(env.get("SERVERWARE_NITRO_EXPECTED_PCRS", "")),
-        "SERVERWARE_NITRO_EXPECTED_PCRS must be a non-empty JSON PCR allowlist with 48-byte SHA384 values",
+        valid_pcr_policy(env.get("CATCHPLATE_NITRO_EXPECTED_PCRS", "")),
+        "CATCHPLATE_NITRO_EXPECTED_PCRS must be a non-empty JSON PCR allowlist with 48-byte SHA384 values",
     )
     add(
         failures,
-        env_bool(env, "SERVERWARE_NITRO_REQUIRE_KMS_COMMAND"),
-        "SERVERWARE_NITRO_REQUIRE_KMS_COMMAND must be enabled",
+        env_bool(env, "CATCHPLATE_NITRO_REQUIRE_KMS_COMMAND"),
+        "CATCHPLATE_NITRO_REQUIRE_KMS_COMMAND must be enabled",
     )
-    kms_command = env.get("SERVERWARE_NITRO_KMS_RELEASE_COMMAND", "").strip()
-    add(failures, bool(kms_command), "SERVERWARE_NITRO_KMS_RELEASE_COMMAND must be configured")
+    kms_command = env.get("CATCHPLATE_NITRO_KMS_RELEASE_COMMAND", "").strip()
+    add(failures, bool(kms_command), "CATCHPLATE_NITRO_KMS_RELEASE_COMMAND must be configured")
     add(
         failures,
         kms_command and not command_mentions(kms_command, "fixture", "nitro_kms_fixture.py"),
-        "SERVERWARE_NITRO_KMS_RELEASE_COMMAND must not use fixture helpers",
+        "CATCHPLATE_NITRO_KMS_RELEASE_COMMAND must not use fixture helpers",
     )
-    kms_materials_file = Path(env.get("SERVERWARE_NITRO_KMS_MATERIALS_FILE", "").strip())
+    kms_materials_file = Path(env.get("CATCHPLATE_NITRO_KMS_MATERIALS_FILE", "").strip())
     add(
         failures,
         kms_materials_file.is_absolute(),
-        "SERVERWARE_NITRO_KMS_MATERIALS_FILE must be an absolute host path",
+        "CATCHPLATE_NITRO_KMS_MATERIALS_FILE must be an absolute host path",
     )
     materials = {
         item.strip()
-        for item in env.get("SERVERWARE_NITRO_ALLOWED_MATERIALS", ",".join(sorted(REQUIRED_MATERIALS))).split(",")
+        for item in env.get("CATCHPLATE_NITRO_ALLOWED_MATERIALS", ",".join(sorted(REQUIRED_MATERIALS))).split(",")
         if item.strip()
     }
     add(failures, materials == REQUIRED_MATERIALS, "Nitro allowed materials must be exactly broker-kek and decision-gate-ca")
 
 
 def check_attested_credential_delivery(env: dict[str, str], failures: list[str]) -> None:
-    tls_dir = Path(env.get("SERVERWARE_CONTROL_PLANE_TLS_DIR", "").strip())
-    anchor_tls_dir = Path(env.get("SERVERWARE_AUDIT_ANCHOR_TLS_DIR", "").strip())
-    helper_dir = Path(env.get("SERVERWARE_ATTESTATION_HELPER_DIR", "").strip())
-    provenance_file = Path(env.get("SERVERWARE_RELEASE_PROVENANCE_FILE", "").strip())
-    signatures_file = Path(env.get("SERVERWARE_IMAGE_SIGNATURES_FILE", "").strip())
-    add(failures, tls_dir.is_absolute(), "SERVERWARE_CONTROL_PLANE_TLS_DIR must be an absolute path")
-    add(failures, anchor_tls_dir.is_absolute(), "SERVERWARE_AUDIT_ANCHOR_TLS_DIR must be an absolute path")
-    add(failures, helper_dir.is_absolute(), "SERVERWARE_ATTESTATION_HELPER_DIR must be an absolute path")
-    add(failures, provenance_file.is_absolute(), "SERVERWARE_RELEASE_PROVENANCE_FILE must be an absolute path")
-    add(failures, signatures_file.is_absolute(), "SERVERWARE_IMAGE_SIGNATURES_FILE must be an absolute path")
-    control_plane_base = urllib.parse.urlparse(env.get("SERVERWARE_PRODUCTION_CONTROL_PLANE_BASE", ""))
+    tls_dir = Path(env.get("CATCHPLATE_CONTROL_PLANE_TLS_DIR", "").strip())
+    anchor_tls_dir = Path(env.get("CATCHPLATE_AUDIT_ANCHOR_TLS_DIR", "").strip())
+    helper_dir = Path(env.get("CATCHPLATE_ATTESTATION_HELPER_DIR", "").strip())
+    provenance_file = Path(env.get("CATCHPLATE_RELEASE_PROVENANCE_FILE", "").strip())
+    signatures_file = Path(env.get("CATCHPLATE_IMAGE_SIGNATURES_FILE", "").strip())
+    add(failures, tls_dir.is_absolute(), "CATCHPLATE_CONTROL_PLANE_TLS_DIR must be an absolute path")
+    add(failures, anchor_tls_dir.is_absolute(), "CATCHPLATE_AUDIT_ANCHOR_TLS_DIR must be an absolute path")
+    add(failures, helper_dir.is_absolute(), "CATCHPLATE_ATTESTATION_HELPER_DIR must be an absolute path")
+    add(failures, provenance_file.is_absolute(), "CATCHPLATE_RELEASE_PROVENANCE_FILE must be an absolute path")
+    add(failures, signatures_file.is_absolute(), "CATCHPLATE_IMAGE_SIGNATURES_FILE must be an absolute path")
+    control_plane_base = urllib.parse.urlparse(env.get("CATCHPLATE_PRODUCTION_CONTROL_PLANE_BASE", ""))
     add(
         failures,
         control_plane_base.scheme == "https" and bool(control_plane_base.hostname),
-        "SERVERWARE_PRODUCTION_CONTROL_PLANE_BASE must be an HTTPS URL",
+        "CATCHPLATE_PRODUCTION_CONTROL_PLANE_BASE must be an HTTPS URL",
     )
     add(
         failures,
-        not env_bool(env, "SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES"),
-        "SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES must be disabled",
+        not env_bool(env, "CATCHPLATE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES"),
+        "CATCHPLATE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES must be disabled",
     )
 
     command_settings = (
-        ("SERVERWARE_TEE_QUOTE_COMMAND", "TEE quote command"),
-        ("SERVERWARE_TEE_QUOTE_VERIFY_COMMAND", "TEE quote verification command"),
-        ("SERVERWARE_KEY_RELEASE_COMMAND", "key-release command"),
-        ("SERVERWARE_MASTER_KEY_UNSEAL_COMMAND", "in-TEE broker KEK unseal command"),
-        ("SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE", "Nitro NSM recipient unwrap command"),
-        ("SERVERWARE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND", "recipient attestation command"),
-        ("SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND", "response proof attestation command"),
-        ("SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND", "recipient attestation verification command"),
-        ("SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND", "control-plane attestation verification command"),
+        ("CATCHPLATE_TEE_QUOTE_COMMAND", "TEE quote command"),
+        ("CATCHPLATE_TEE_QUOTE_VERIFY_COMMAND", "TEE quote verification command"),
+        ("CATCHPLATE_KEY_RELEASE_COMMAND", "key-release command"),
+        ("CATCHPLATE_MASTER_KEY_UNSEAL_COMMAND", "in-TEE broker KEK unseal command"),
+        ("CATCHPLATE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE", "Nitro NSM recipient unwrap command"),
+        ("CATCHPLATE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND", "recipient attestation command"),
+        ("CATCHPLATE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND", "response proof attestation command"),
+        ("CATCHPLATE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND", "recipient attestation verification command"),
+        ("CATCHPLATE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND", "control-plane attestation verification command"),
     )
     for name, label in command_settings:
         command = env.get(name, "").strip()
@@ -1921,67 +1921,67 @@ def check_attested_credential_delivery(env: dict[str, str], failures: list[str])
         )
 
     for name in (
-        "SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE",
-        "SERVERWARE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND",
-        "SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND",
-        "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND",
-        "SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND",
+        "CATCHPLATE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE",
+        "CATCHPLATE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND",
+        "CATCHPLATE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND",
+        "CATCHPLATE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND",
+        "CATCHPLATE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND",
     ):
         words = command_words(env.get(name, ""))
         helper_path = Path(words[0]) if words else Path()
         add(
             failures,
-            bool(words) and helper_path.is_absolute() and helper_path.parent == Path("/opt/serverware/bin"),
-            f"{name} must name an absolute executable under /opt/serverware/bin",
+            bool(words) and helper_path.is_absolute() and helper_path.parent == Path("/opt/catchplate/bin"),
+            f"{name} must name an absolute executable under /opt/catchplate/bin",
         )
 
     add(
         failures,
-        command_words(env.get("SERVERWARE_MASTER_KEY_UNSEAL_COMMAND", ""))
+        command_words(env.get("CATCHPLATE_MASTER_KEY_UNSEAL_COMMAND", ""))
         == ["/usr/bin/python3", "/app/scripts/aws_nitro_kms_unseal.py", "unseal"],
-        "SERVERWARE_MASTER_KEY_UNSEAL_COMMAND must use the measured image-bundled Nitro/KMS unseal adapter",
+        "CATCHPLATE_MASTER_KEY_UNSEAL_COMMAND must use the measured image-bundled Nitro/KMS unseal adapter",
     )
     add(
         failures,
-        "{recipient_ciphertext_path}" in env.get("SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE", ""),
-        "SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE must consume {recipient_ciphertext_path}",
+        "{recipient_ciphertext_path}" in env.get("CATCHPLATE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE", ""),
+        "CATCHPLATE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE must consume {recipient_ciphertext_path}",
     )
 
-    data_plane_instance_id = env.get("SERVERWARE_DATA_PLANE_INSTANCE_ID", "").strip()
+    data_plane_instance_id = env.get("CATCHPLATE_DATA_PLANE_INSTANCE_ID", "").strip()
     add(
         failures,
         data_plane_instance_id.startswith("spiffe://") and len(data_plane_instance_id) > len("spiffe://"),
-        "SERVERWARE_DATA_PLANE_INSTANCE_ID must be a non-empty SPIFFE ID",
+        "CATCHPLATE_DATA_PLANE_INSTANCE_ID must be a non-empty SPIFFE ID",
     )
 
-    collector_command = env.get("SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND", "").strip()
+    collector_command = env.get("CATCHPLATE_PROXY_PROOF_COLLECTOR_COMMAND", "").strip()
     collector_words = command_words(collector_command)
     collector_path = Path(collector_words[0]) if collector_words else Path()
     add(
         failures,
         len(collector_words) == 1
         and collector_path.is_absolute()
-        and collector_path.parent == Path("/opt/serverware/bin"),
-        "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND must name one absolute executable under /opt/serverware/bin",
+        and collector_path.parent == Path("/opt/catchplate/bin"),
+        "CATCHPLATE_PROXY_PROOF_COLLECTOR_COMMAND must name one absolute executable under /opt/catchplate/bin",
     )
     add(
         failures,
         bool(collector_words) and not command_mentions(collector_command, "fixture"),
-        "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND must not use a fixture",
+        "CATCHPLATE_PROXY_PROOF_COLLECTOR_COMMAND must not use a fixture",
     )
-    proof_url = urllib.parse.urlparse(env.get("SERVERWARE_PROXY_PROOF_URL", ""))
+    proof_url = urllib.parse.urlparse(env.get("CATCHPLATE_PROXY_PROOF_URL", ""))
     add(
         failures,
         proof_url.scheme == "https" and bool(proof_url.hostname) and not proof_url.username and not proof_url.password,
-        "SERVERWARE_PROXY_PROOF_URL must be an HTTPS URL without userinfo",
+        "CATCHPLATE_PROXY_PROOF_URL must be an HTTPS URL without userinfo",
     )
-    add(failures, bool(env.get("SERVERWARE_PROXY_PROOF_ADDRESS", "").strip()), "SERVERWARE_PROXY_PROOF_ADDRESS is required")
+    add(failures, bool(env.get("CATCHPLATE_PROXY_PROOF_ADDRESS", "").strip()), "CATCHPLATE_PROXY_PROOF_ADDRESS is required")
     add(
         failures,
-        bool(env.get("SERVERWARE_PROXY_PROOF_AGENT_ID", "").strip()),
-        "SERVERWARE_PROXY_PROOF_AGENT_ID is required",
+        bool(env.get("CATCHPLATE_PROXY_PROOF_AGENT_ID", "").strip()),
+        "CATCHPLATE_PROXY_PROOF_AGENT_ID is required",
     )
-    proof_principal_id = env.get("SERVERWARE_PROXY_PROOF_PRINCIPAL_ID", "").strip()
+    proof_principal_id = env.get("CATCHPLATE_PROXY_PROOF_PRINCIPAL_ID", "").strip()
     add(
         failures,
         bool(proof_principal_id)
@@ -1990,42 +1990,42 @@ def check_attested_credential_delivery(env: dict[str, str], failures: list[str])
             character.isspace() or not character.isprintable()
             for character in proof_principal_id
         ),
-        "SERVERWARE_PROXY_PROOF_PRINCIPAL_ID must be a bounded canonical principal ID",
+        "CATCHPLATE_PROXY_PROOF_PRINCIPAL_ID must be a bounded canonical principal ID",
     )
     for name in (
-        "SERVERWARE_PROXY_RESPONSE_PROOF_FILE",
-        "SERVERWARE_PROXY_PROOF_CA_BUNDLE",
-        "SERVERWARE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY",
-        "SERVERWARE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY",
-        "SERVERWARE_PROXY_PROOF_VERIFIER_PUBLIC_KEY",
+        "CATCHPLATE_PROXY_RESPONSE_PROOF_FILE",
+        "CATCHPLATE_PROXY_PROOF_CA_BUNDLE",
+        "CATCHPLATE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY",
+        "CATCHPLATE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY",
+        "CATCHPLATE_PROXY_PROOF_VERIFIER_PUBLIC_KEY",
     ):
         add(failures, Path(env.get(name, "").strip()).is_absolute(), f"{name} must be an absolute path")
     for name in (
-        "SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID",
-        "SERVERWARE_PROXY_PROOF_VERIFIER_KEY_ID",
+        "CATCHPLATE_PROXY_PROOF_COLLECTOR_KEY_ID",
+        "CATCHPLATE_PROXY_PROOF_VERIFIER_KEY_ID",
     ):
         add(
             failures,
             SHA256_RE.fullmatch(env.get(name, "").strip()) is not None,
             f"{name} must be a sha256: digest",
         )
-    configured_proof_instance = env.get("SERVERWARE_PROXY_SERVER_INSTANCE_ID", data_plane_instance_id).strip()
+    configured_proof_instance = env.get("CATCHPLATE_PROXY_SERVER_INSTANCE_ID", data_plane_instance_id).strip()
     add(
         failures,
         configured_proof_instance == data_plane_instance_id,
-        "SERVERWARE_PROXY_SERVER_INSTANCE_ID must exactly match SERVERWARE_DATA_PLANE_INSTANCE_ID",
+        "CATCHPLATE_PROXY_SERVER_INSTANCE_ID must exactly match CATCHPLATE_DATA_PLANE_INSTANCE_ID",
     )
-    for name in ("SERVERWARE_POLICY_MIN_SEQUENCE", "SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH"):
+    for name in ("CATCHPLATE_POLICY_MIN_SEQUENCE", "CATCHPLATE_POLICY_MIN_ROLLBACK_EPOCH"):
         try:
             monotonic_floor = int(env.get(name, "0"))
         except ValueError:
             monotonic_floor = 0
         add(failures, monotonic_floor > 0, f"{name} must be a positive integer")
     for stale_name in (
-        "SERVERWARE_PROXY_CLIENT_NONCE",
-        "SERVERWARE_PROXY_REQUEST_DIGEST",
-        "SERVERWARE_PROXY_OPERATION_DIGEST",
-        "SERVERWARE_PROXY_TLS_CHANNEL_BINDING",
+        "CATCHPLATE_PROXY_CLIENT_NONCE",
+        "CATCHPLATE_PROXY_REQUEST_DIGEST",
+        "CATCHPLATE_PROXY_OPERATION_DIGEST",
+        "CATCHPLATE_PROXY_TLS_CHANNEL_BINDING",
     ):
         add(
             failures,
@@ -2033,32 +2033,32 @@ def check_attested_credential_delivery(env: dict[str, str], failures: list[str])
             f"{stale_name} must not be statically configured; the readiness runner generates it",
         )
 
-    add(failures, env_bool(env, "SERVERWARE_KEY_RELEASE_REQUIRED"), "external key release must be required")
+    add(failures, env_bool(env, "CATCHPLATE_KEY_RELEASE_REQUIRED"), "external key release must be required")
     add(
         failures,
-        not env.get("SERVERWARE_MASTER_KEY", "").strip(),
-        "SERVERWARE_MASTER_KEY must not be configured in production",
+        not env.get("CATCHPLATE_MASTER_KEY", "").strip(),
+        "CATCHPLATE_MASTER_KEY must not be configured in production",
     )
-    add(failures, not env_bool(env, "SERVERWARE_KEY_RELEASE_ALLOW_DEBUG"), "key release must reject debug attestation")
+    add(failures, not env_bool(env, "CATCHPLATE_KEY_RELEASE_ALLOW_DEBUG"), "key release must reject debug attestation")
     try:
-        rollback_floor = int(env.get("SERVERWARE_KEY_RELEASE_MIN_ROLLBACK_EPOCH", "0"))
+        rollback_floor = int(env.get("CATCHPLATE_KEY_RELEASE_MIN_ROLLBACK_EPOCH", "0"))
     except ValueError:
         rollback_floor = 0
     add(failures, rollback_floor >= 1, "key release must enforce a positive rollback-epoch floor")
     add(
         failures,
-        env_bool(env, "SERVERWARE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST"),
+        env_bool(env, "CATCHPLATE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST"),
         "key release must require the measured data-plane binary digest",
     )
-    expected_digest = env.get("SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST", "").strip()
+    expected_digest = env.get("CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST", "").strip()
     add(
         failures,
         SHA256_RE.fullmatch(expected_digest) is not None,
-        "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST must be a sha256-prefixed 64-hex digest",
+        "CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST must be a sha256-prefixed 64-hex digest",
     )
     add(
         failures,
-        env_bool(env, "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED"),
+        env_bool(env, "CATCHPLATE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED"),
         "credential leases must require recipient attestation",
     )
 
@@ -2070,33 +2070,33 @@ def check_release_completion_trust(
     expected_control_plane_uid: int = CONTROL_PLANE_RUNTIME_UID,
     expected_control_plane_gid: int = CONTROL_PLANE_RUNTIME_GID,
 ) -> None:
-    provider = env.get("SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER", "").strip()
-    expected_provider = env.get("SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER", "").strip()
-    add(failures, bool(provider), "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER must be configured")
+    provider = env.get("CATCHPLATE_EXTERNAL_CHECKPOINT_PROVIDER", "").strip()
+    expected_provider = env.get("CATCHPLATE_TRANSPARENCY_EXPECTED_PROVIDER", "").strip()
+    add(failures, bool(provider), "CATCHPLATE_EXTERNAL_CHECKPOINT_PROVIDER must be configured")
     add(
         failures,
         bool(provider) and provider == expected_provider,
-        "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER must match SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER",
+        "CATCHPLATE_EXTERNAL_CHECKPOINT_PROVIDER must match CATCHPLATE_TRANSPARENCY_EXPECTED_PROVIDER",
     )
     key_ids = {}
     for setting_name in (
-        "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY",
-        "SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY",
-        "SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY",
-        "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY",
+        "CATCHPLATE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY",
+        "CATCHPLATE_SIGSTORE_TRUSTED_PUBLIC_KEY",
+        "CATCHPLATE_REKOR_TRUSTED_PUBLIC_KEY",
+        "CATCHPLATE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY",
     ):
         key_ids[setting_name] = check_trusted_public_key_file(
             env,
             setting_name,
             failures,
             require_ecdsa_or_rsa=(
-                setting_name == "SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY"
+                setting_name == "CATCHPLATE_SIGSTORE_TRUSTED_PUBLIC_KEY"
             ),
         )
     for setting_name, expected_id_name in (
-        ("SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY", "SERVERWARE_COSIGN_KEY_ID"),
-        ("SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY", "SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID"),
-        ("SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY", "SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID"),
+        ("CATCHPLATE_SIGSTORE_TRUSTED_PUBLIC_KEY", "CATCHPLATE_COSIGN_KEY_ID"),
+        ("CATCHPLATE_REKOR_TRUSTED_PUBLIC_KEY", "CATCHPLATE_COSIGN_EXPECTED_REKOR_LOG_ID"),
+        ("CATCHPLATE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY", "CATCHPLATE_TRANSPARENCY_EXPECTED_LOG_ID"),
     ):
         expected_key_id = env.get(expected_id_name, "").strip()
         add(
@@ -2112,34 +2112,34 @@ def check_release_completion_trust(
         )
     response_key_id = check_trusted_public_key_file(
         env,
-        "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY",
+        "CATCHPLATE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY",
         failures,
         require_ed25519=True,
     )
     expected_response_key_id = env.get(
-        "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID",
+        "CATCHPLATE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID",
         "",
     ).strip()
     add(
         failures,
         SHA256_RE.fullmatch(expected_response_key_id) is not None,
-        "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID must be a sha256: SPKI public-key digest",
+        "CATCHPLATE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID must be a sha256: SPKI public-key digest",
     )
     add(
         failures,
         response_key_id is not None
         and hmac.compare_digest(response_key_id, expected_response_key_id),
-        "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY SPKI identity must match SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID",
+        "CATCHPLATE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY SPKI identity must match CATCHPLATE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID",
     )
     online_response_key_id = check_trusted_public_key_file(
         env,
-        "SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY",
+        "CATCHPLATE_RESPONSE_SIGNING_PUBLIC_KEY",
         failures,
         require_ed25519=True,
     )
     response_private_key_bytes = read_bounded_regular_file(
         env,
-        "SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE",
+        "CATCHPLATE_RESPONSE_SIGNING_PRIVATE_KEY_FILE",
         failures,
         file_label="response-signing private-key",
         max_bytes=MAX_TRUSTED_PUBLIC_KEY_FILE_BYTES,
@@ -2165,7 +2165,7 @@ def check_release_completion_trust(
             )
         except (TypeError, ValueError):
             failures.append(
-                "SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE must contain an unencrypted Ed25519 PKCS#8 private key"
+                "CATCHPLATE_RESPONSE_SIGNING_PRIVATE_KEY_FILE must contain an unencrypted Ed25519 PKCS#8 private key"
             )
     add(
         failures,
@@ -2184,24 +2184,24 @@ def check_release_completion_trust(
 
 
 def check_final_challenge_authority(env: dict[str, str], failures: list[str]) -> None:
-    mode = env.get("SERVERWARE_COMPLETION_VERIFICATION_MODE", "readiness").strip()
+    mode = env.get("CATCHPLATE_COMPLETION_VERIFICATION_MODE", "readiness").strip()
     add(
         failures,
         mode in {"readiness", "final"},
-        "SERVERWARE_COMPLETION_VERIFICATION_MODE must be readiness or final",
+        "CATCHPLATE_COMPLETION_VERIFICATION_MODE must be readiness or final",
     )
     receipt_settings = (
-        "SERVERWARE_FINAL_CHALLENGE_RECEIPT",
-        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
-        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
-        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER",
+        "CATCHPLATE_FINAL_CHALLENGE_RECEIPT",
+        "CATCHPLATE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
+        "CATCHPLATE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
+        "CATCHPLATE_FINAL_CHALLENGE_AUTHORITY_PROVIDER",
     )
     hardware_settings = (
-        "SERVERWARE_HARDWARE_ASSURANCE",
-        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
-        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
-        "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
-        "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256",
+        "CATCHPLATE_HARDWARE_ASSURANCE",
+        "CATCHPLATE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+        "CATCHPLATE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
+        "CATCHPLATE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
+        "CATCHPLATE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256",
     )
     configured = {
         name: env.get(name, "").strip()
@@ -2216,15 +2216,15 @@ def check_final_challenge_authority(env: dict[str, str], failures: list[str]) ->
         return
     for name in (
         *receipt_settings,
-        "SERVERWARE_HARDWARE_ASSURANCE",
-        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
-        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
+        "CATCHPLATE_HARDWARE_ASSURANCE",
+        "CATCHPLATE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+        "CATCHPLATE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
     ):
         value = configured[name]
         add(failures, bool(value), f"final verification mode requires {name}")
-    expected_nonce = configured["SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE"]
+    expected_nonce = configured["CATCHPLATE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE"]
     expected_nonce_digest = configured[
-        "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256"
+        "CATCHPLATE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256"
     ]
     add(
         failures,
@@ -2235,28 +2235,28 @@ def check_final_challenge_authority(env: dict[str, str], failures: list[str]) ->
         try:
             decoded_nonce = decode_canonical_base64url(
                 expected_nonce,
-                "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
+                "CATCHPLATE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
             )
         except ValueError:
             decoded_nonce = b""
         add(
             failures,
             len(decoded_nonce) >= 32,
-            "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE must be unpadded base64url for at least 32 bytes",
+            "CATCHPLATE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE must be unpadded base64url for at least 32 bytes",
         )
     if expected_nonce_digest:
         add(
             failures,
             SHA256_RE.fullmatch(expected_nonce_digest) is not None,
-            "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256 must be a sha256 digest",
+            "CATCHPLATE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256 must be a sha256 digest",
         )
     required_values = [
         configured[name]
         for name in (
             *receipt_settings,
-            "SERVERWARE_HARDWARE_ASSURANCE",
-            "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
-            "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
+            "CATCHPLATE_HARDWARE_ASSURANCE",
+            "CATCHPLATE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+            "CATCHPLATE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
         )
     ]
     if not all(required_values) or bool(expected_nonce) == bool(expected_nonce_digest):
@@ -2265,31 +2265,31 @@ def check_final_challenge_authority(env: dict[str, str], failures: list[str]) ->
         failures,
         re.fullmatch(
             r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}",
-            configured["SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER"],
+            configured["CATCHPLATE_FINAL_CHALLENGE_AUTHORITY_PROVIDER"],
         )
         is not None,
-        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER must be a canonical provider identifier",
+        "CATCHPLATE_FINAL_CHALLENGE_AUTHORITY_PROVIDER must be a canonical provider identifier",
     )
     expected_hardware_key_id = configured[
-        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID"
+        "CATCHPLATE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID"
     ]
     expected_authority_key_id = configured[
-        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID"
+        "CATCHPLATE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID"
     ]
     add(
         failures,
         SHA256_RE.fullmatch(expected_hardware_key_id) is not None,
-        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID must be a sha256: SPKI public-key digest",
+        "CATCHPLATE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID must be a sha256: SPKI public-key digest",
     )
     add(
         failures,
         SHA256_RE.fullmatch(expected_authority_key_id) is not None,
-        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID must be a sha256: SPKI public-key digest",
+        "CATCHPLATE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID must be a sha256: SPKI public-key digest",
     )
 
     hardware_payload = read_bounded_regular_file(
         env,
-        "SERVERWARE_HARDWARE_ASSURANCE",
+        "CATCHPLATE_HARDWARE_ASSURANCE",
         failures,
         file_label="hardware assurance",
         max_bytes=MAX_HARDWARE_ASSURANCE_FILE_BYTES,
@@ -2298,13 +2298,13 @@ def check_final_challenge_authority(env: dict[str, str], failures: list[str]) ->
     if hardware_payload is not None:
         try:
             hardware_assurance = strict_json_object(
-                hardware_payload, "SERVERWARE_HARDWARE_ASSURANCE"
+                hardware_payload, "CATCHPLATE_HARDWARE_ASSURANCE"
             )
         except ValueError as exc:
             failures.append(str(exc))
     hardware_key = load_trusted_public_key_file(
         env,
-        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+        "CATCHPLATE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
         failures,
         require_ed25519=True,
     )
@@ -2315,7 +2315,7 @@ def check_final_challenge_authority(env: dict[str, str], failures: list[str]) ->
             failures,
             SHA256_RE.fullmatch(expected_hardware_key_id) is not None
             and hmac.compare_digest(hardware_key_id, expected_hardware_key_id),
-            "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY SPKI identity must match SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
+            "CATCHPLATE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY SPKI identity must match CATCHPLATE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
         )
         if hardware_assurance is not None:
             try:
@@ -2332,7 +2332,7 @@ def check_final_challenge_authority(env: dict[str, str], failures: list[str]) ->
 
     receipt_payload = read_bounded_regular_file(
         env,
-        "SERVERWARE_FINAL_CHALLENGE_RECEIPT",
+        "CATCHPLATE_FINAL_CHALLENGE_RECEIPT",
         failures,
         file_label="final challenge receipt",
         max_bytes=MAX_FINAL_CHALLENGE_RECEIPT_FILE_BYTES,
@@ -2341,13 +2341,13 @@ def check_final_challenge_authority(env: dict[str, str], failures: list[str]) ->
     if receipt_payload is not None:
         try:
             receipt = strict_json_object(
-                receipt_payload, "SERVERWARE_FINAL_CHALLENGE_RECEIPT"
+                receipt_payload, "CATCHPLATE_FINAL_CHALLENGE_RECEIPT"
             )
         except ValueError as exc:
             failures.append(str(exc))
     authority_key = load_trusted_public_key_file(
         env,
-        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
+        "CATCHPLATE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
         failures,
         require_ed25519=True,
     )
@@ -2357,7 +2357,7 @@ def check_final_challenge_authority(env: dict[str, str], failures: list[str]) ->
             failures,
             SHA256_RE.fullmatch(expected_authority_key_id) is not None
             and hmac.compare_digest(authority_key_id, expected_authority_key_id),
-            "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY SPKI identity must match SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
+            "CATCHPLATE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY SPKI identity must match CATCHPLATE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
         )
         if receipt is not None and hardware_key is not None:
             expected_challenge_digest = expected_nonce_digest
@@ -2365,7 +2365,7 @@ def check_final_challenge_authority(env: dict[str, str], failures: list[str]) ->
                 try:
                     decoded_expected_nonce = decode_canonical_base64url(
                         expected_nonce,
-                        "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
+                        "CATCHPLATE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
                     )
                 except ValueError:
                     decoded_expected_nonce = b""
@@ -2382,7 +2382,7 @@ def check_final_challenge_authority(env: dict[str, str], failures: list[str]) ->
                     trusted_key_id=authority_key_id,
                     expected_trusted_key_id=expected_authority_key_id,
                     expected_provider=configured[
-                        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER"
+                        "CATCHPLATE_FINAL_CHALLENGE_AUTHORITY_PROVIDER"
                     ],
                     expected_challenge_nonce_sha256=expected_challenge_digest,
                     expected_hardware_verifier_key_id=hardware_key[1],
@@ -2393,40 +2393,40 @@ def check_final_challenge_authority(env: dict[str, str], failures: list[str]) ->
 
 
 def check_cosign(env: dict[str, str], failures: list[str]) -> None:
-    add(failures, env.get("SERVERWARE_IMAGE_SIGNATURE_PROVIDER") == "sigstore-command", "image signature provider must be sigstore-command")
-    sign_command = env.get("SERVERWARE_IMAGE_SIGN_COMMAND", "").strip()
-    verify_command = env.get("SERVERWARE_IMAGE_VERIFY_COMMAND", "").strip()
-    add(failures, bool(sign_command), "SERVERWARE_IMAGE_SIGN_COMMAND must be configured")
-    add(failures, bool(verify_command), "SERVERWARE_IMAGE_VERIFY_COMMAND must be configured")
+    add(failures, env.get("CATCHPLATE_IMAGE_SIGNATURE_PROVIDER") == "sigstore-command", "image signature provider must be sigstore-command")
+    sign_command = env.get("CATCHPLATE_IMAGE_SIGN_COMMAND", "").strip()
+    verify_command = env.get("CATCHPLATE_IMAGE_VERIFY_COMMAND", "").strip()
+    add(failures, bool(sign_command), "CATCHPLATE_IMAGE_SIGN_COMMAND must be configured")
+    add(failures, bool(verify_command), "CATCHPLATE_IMAGE_VERIFY_COMMAND must be configured")
     add(
         failures,
         sign_command and not command_mentions(sign_command, "fixture", "cosign_fixture.py", "sigstore_fixture.py"),
-        "SERVERWARE_IMAGE_SIGN_COMMAND must not use fixture helpers",
+        "CATCHPLATE_IMAGE_SIGN_COMMAND must not use fixture helpers",
     )
     add(
         failures,
         verify_command and not command_mentions(verify_command, "fixture", "cosign_fixture.py", "sigstore_fixture.py"),
-        "SERVERWARE_IMAGE_VERIFY_COMMAND must not use fixture helpers",
+        "CATCHPLATE_IMAGE_VERIFY_COMMAND must not use fixture helpers",
     )
-    cosign_binary = env.get("SERVERWARE_COSIGN_BINARY", "cosign").strip()
-    add(failures, bool(cosign_binary), "SERVERWARE_COSIGN_BINARY must be configured")
+    cosign_binary = env.get("CATCHPLATE_COSIGN_BINARY", "cosign").strip()
+    add(failures, bool(cosign_binary), "CATCHPLATE_COSIGN_BINARY must be configured")
     add(
         failures,
         not command_mentions(cosign_binary, "fixture", "cosign_fixture.py"),
-        "SERVERWARE_COSIGN_BINARY must not use fixture helpers",
+        "CATCHPLATE_COSIGN_BINARY must not use fixture helpers",
     )
-    add(failures, env_bool(env, "SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY"), "Sigstore transparency evidence must be required")
-    key_ref = env.get("SERVERWARE_COSIGN_KEY", "").strip()
-    cert_identity = env.get("SERVERWARE_COSIGN_CERT_IDENTITY", "").strip()
-    cert_issuer = env.get("SERVERWARE_COSIGN_CERT_OIDC_ISSUER", "").strip()
+    add(failures, env_bool(env, "CATCHPLATE_REQUIRE_SIGSTORE_TRANSPARENCY"), "Sigstore transparency evidence must be required")
+    key_ref = env.get("CATCHPLATE_COSIGN_KEY", "").strip()
+    cert_identity = env.get("CATCHPLATE_COSIGN_CERT_IDENTITY", "").strip()
+    cert_issuer = env.get("CATCHPLATE_COSIGN_CERT_OIDC_ISSUER", "").strip()
     kms_key_ok = key_ref.startswith(KMS_KEY_PREFIXES)
     add(
         failures,
         kms_key_ok,
-        "cosign must use SERVERWARE_COSIGN_KEY with a KMS/HSM-backed URI",
+        "cosign must use CATCHPLATE_COSIGN_KEY with a KMS/HSM-backed URI",
     )
     if key_ref:
-        add(failures, kms_key_ok, f"SERVERWARE_COSIGN_KEY must use a KMS/HSM-backed URI prefix: {', '.join(KMS_KEY_PREFIXES)}")
+        add(failures, kms_key_ok, f"CATCHPLATE_COSIGN_KEY must use a KMS/HSM-backed URI prefix: {', '.join(KMS_KEY_PREFIXES)}")
     add(
         failures,
         not cert_identity and not cert_issuer,
@@ -2434,111 +2434,111 @@ def check_cosign(env: dict[str, str], failures: list[str]) -> None:
     )
     add(
         failures,
-        bool(env.get("SERVERWARE_COSIGN_KEY_ID", "").strip()),
-        "SERVERWARE_COSIGN_KEY_ID must pin the stable signing public-key identity",
+        bool(env.get("CATCHPLATE_COSIGN_KEY_ID", "").strip()),
+        "CATCHPLATE_COSIGN_KEY_ID must pin the stable signing public-key identity",
     )
-    add(failures, bool(env.get("SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID", "").strip()), "Sigstore/Rekor log ID must be pinned")
+    add(failures, bool(env.get("CATCHPLATE_COSIGN_EXPECTED_REKOR_LOG_ID", "").strip()), "Sigstore/Rekor log ID must be pinned")
 
 
 def expected_sigstore_key_id(env: dict[str, str]) -> str | None:
-    explicit = env.get("SERVERWARE_COSIGN_KEY_ID", "").strip()
+    explicit = env.get("CATCHPLATE_COSIGN_KEY_ID", "").strip()
     return explicit or None
 
 
 def check_transparency(env: dict[str, str], failures: list[str]) -> None:
-    release_anchor = urllib.parse.urlparse(env.get("SERVERWARE_RELEASE_ANCHOR_BASE", "").strip())
+    release_anchor = urllib.parse.urlparse(env.get("CATCHPLATE_RELEASE_ANCHOR_BASE", "").strip())
     add(
         failures,
         release_anchor.scheme == "https" and bool(release_anchor.hostname),
-        "SERVERWARE_RELEASE_ANCHOR_BASE must be an HTTPS URL",
+        "CATCHPLATE_RELEASE_ANCHOR_BASE must be an HTTPS URL",
     )
     add(
         failures,
         not placeholder_hostname(release_anchor.hostname),
-        "SERVERWARE_RELEASE_ANCHOR_BASE must not use .example placeholder domains",
+        "CATCHPLATE_RELEASE_ANCHOR_BASE must not use .example placeholder domains",
     )
     add(
         failures,
         (release_anchor.hostname or "").lower() not in {"localhost", "127.0.0.1", "::1"},
-        "SERVERWARE_RELEASE_ANCHOR_BASE must not be loopback",
+        "CATCHPLATE_RELEASE_ANCHOR_BASE must not be loopback",
     )
-    release_anchor_ca = env.get("SERVERWARE_RELEASE_ANCHOR_CA_BUNDLE", "").strip()
+    release_anchor_ca = env.get("CATCHPLATE_RELEASE_ANCHOR_CA_BUNDLE", "").strip()
     if release_anchor_ca:
         add(
             failures,
             Path(release_anchor_ca).is_absolute(),
-            "SERVERWARE_RELEASE_ANCHOR_CA_BUNDLE must be an absolute path when configured",
+            "CATCHPLATE_RELEASE_ANCHOR_CA_BUNDLE must be an absolute path when configured",
         )
     add(
         failures,
-        env_bool(env, "SERVERWARE_TRANSPARENCY_CHECKPOINT_REQUIRED"),
+        env_bool(env, "CATCHPLATE_TRANSPARENCY_CHECKPOINT_REQUIRED"),
         "external transparency checkpoint publication must be required",
     )
-    checkpoint_command = env.get("SERVERWARE_TRANSPARENCY_CHECKPOINT_COMMAND", "").strip()
-    add(failures, bool(checkpoint_command), "SERVERWARE_TRANSPARENCY_CHECKPOINT_COMMAND must be configured")
+    checkpoint_command = env.get("CATCHPLATE_TRANSPARENCY_CHECKPOINT_COMMAND", "").strip()
+    add(failures, bool(checkpoint_command), "CATCHPLATE_TRANSPARENCY_CHECKPOINT_COMMAND must be configured")
     add(
         failures,
         not command_mentions(checkpoint_command, "external_transparency_log.py"),
         "legacy local external_transparency_log.py fixture must not be used in production",
     )
-    mode = env.get("SERVERWARE_TRANSPARENCY_CHECKPOINT_MODE", "").strip()
-    add(failures, mode != "fixture", "SERVERWARE_TRANSPARENCY_CHECKPOINT_MODE must not be fixture in production")
-    url = env.get("SERVERWARE_TRANSPARENCY_LOG_URL", "").strip()
+    mode = env.get("CATCHPLATE_TRANSPARENCY_CHECKPOINT_MODE", "").strip()
+    add(failures, mode != "fixture", "CATCHPLATE_TRANSPARENCY_CHECKPOINT_MODE must not be fixture in production")
+    url = env.get("CATCHPLATE_TRANSPARENCY_LOG_URL", "").strip()
     parsed = urllib.parse.urlparse(url)
-    add(failures, parsed.scheme == "https" and bool(parsed.netloc), "SERVERWARE_TRANSPARENCY_LOG_URL must be an https URL")
+    add(failures, parsed.scheme == "https" and bool(parsed.netloc), "CATCHPLATE_TRANSPARENCY_LOG_URL must be an https URL")
     add(
         failures,
         not placeholder_hostname(parsed.hostname),
-        "SERVERWARE_TRANSPARENCY_LOG_URL must not use .example placeholder domains",
+        "CATCHPLATE_TRANSPARENCY_LOG_URL must not use .example placeholder domains",
     )
     add(
         failures,
-        not env_bool(env, "SERVERWARE_TRANSPARENCY_ALLOW_INSECURE_HTTP"),
-        "SERVERWARE_TRANSPARENCY_ALLOW_INSECURE_HTTP must be disabled",
+        not env_bool(env, "CATCHPLATE_TRANSPARENCY_ALLOW_INSECURE_HTTP"),
+        "CATCHPLATE_TRANSPARENCY_ALLOW_INSECURE_HTTP must be disabled",
     )
-    add(failures, bool(env.get("SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER", "").strip()), "managed transparency provider must be pinned")
-    add(failures, bool(env.get("SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID", "").strip()), "managed transparency log ID must be pinned")
-    headers = env_json_object(env, "SERVERWARE_TRANSPARENCY_LOG_HEADERS")
+    add(failures, bool(env.get("CATCHPLATE_TRANSPARENCY_EXPECTED_PROVIDER", "").strip()), "managed transparency provider must be pinned")
+    add(failures, bool(env.get("CATCHPLATE_TRANSPARENCY_EXPECTED_LOG_ID", "").strip()), "managed transparency log ID must be pinned")
+    headers = env_json_object(env, "CATCHPLATE_TRANSPARENCY_LOG_HEADERS")
     if headers:
         forbidden = {"authorization", "content-length", "host"}
         bad = sorted(key for key in headers if key.lower() in forbidden)
-        add(failures, not bad, f"SERVERWARE_TRANSPARENCY_LOG_HEADERS cannot override {bad}")
+        add(failures, not bad, f"CATCHPLATE_TRANSPARENCY_LOG_HEADERS cannot override {bad}")
 
 
 def check_apparmor(env: dict[str, str], failures: list[str]) -> None:
-    profile = ROOT / "security" / "apparmor" / "serverware-docker"
+    profile = ROOT / "security" / "apparmor" / "catchplate-docker"
     override = ROOT / "docker-compose.apparmor.yml"
     add(failures, profile.exists(), "AppArmor profile file must exist")
     add(failures, override.exists(), "AppArmor Compose override must exist")
-    expected_profile = env.get("SERVERWARE_APPARMOR_EXPECTED_PROFILE", "serverware-docker").strip()
-    add(failures, expected_profile == "serverware-docker", "SERVERWARE_APPARMOR_EXPECTED_PROFILE must pin serverware-docker")
+    expected_profile = env.get("CATCHPLATE_APPARMOR_EXPECTED_PROFILE", "catchplate-docker").strip()
+    add(failures, expected_profile == "catchplate-docker", "CATCHPLATE_APPARMOR_EXPECTED_PROFILE must pin catchplate-docker")
 
 
 def check_shared_stores(env: dict[str, str], failures: list[str]) -> None:
     add(
         failures,
-        not env.get("SERVERWARE_DECISION_GATE_BASE", "").strip(),
+        not env.get("CATCHPLATE_DECISION_GATE_BASE", "").strip(),
         "production must use the shared grant store instead of the gate's local management API",
     )
-    add(failures, env.get("SERVERWARE_METADATA_STORE_BACKEND") == "postgres", "metadata store must be postgres")
-    add(failures, bool(env.get("SERVERWARE_METADATA_STORE_POSTGRES_DSN", "").strip()), "metadata Postgres DSN must be configured")
-    add(failures, env.get("SERVERWARE_GRANT_STORE_BACKEND") == "postgres", "grant store must be postgres")
-    add(failures, bool(env.get("SERVERWARE_GRANT_STORE_POSTGRES_DSN", "").strip()), "grant Postgres DSN must be configured")
-    metadata_dsn = env.get("SERVERWARE_METADATA_STORE_POSTGRES_DSN", "").strip()
-    grant_dsn = env.get("SERVERWARE_GRANT_STORE_POSTGRES_DSN", "").strip()
+    add(failures, env.get("CATCHPLATE_METADATA_STORE_BACKEND") == "postgres", "metadata store must be postgres")
+    add(failures, bool(env.get("CATCHPLATE_METADATA_STORE_POSTGRES_DSN", "").strip()), "metadata Postgres DSN must be configured")
+    add(failures, env.get("CATCHPLATE_GRANT_STORE_BACKEND") == "postgres", "grant store must be postgres")
+    add(failures, bool(env.get("CATCHPLATE_GRANT_STORE_POSTGRES_DSN", "").strip()), "grant Postgres DSN must be configured")
+    metadata_dsn = env.get("CATCHPLATE_METADATA_STORE_POSTGRES_DSN", "").strip()
+    grant_dsn = env.get("CATCHPLATE_GRANT_STORE_POSTGRES_DSN", "").strip()
     add(
         failures,
         bool(metadata_dsn) and hmac.compare_digest(metadata_dsn, grant_dsn),
         "atomic release authorization requires metadata and grant stores on the same writer DSN and schema",
     )
-    add(failures, env.get("SERVERWARE_AUDIT_STORE_BACKEND") == "postgres", "audit store must be postgres")
-    add(failures, bool(env.get("SERVERWARE_AUDIT_STORE_POSTGRES_DSN", "").strip()), "audit Postgres DSN must be configured")
+    add(failures, env.get("CATCHPLATE_AUDIT_STORE_BACKEND") == "postgres", "audit store must be postgres")
+    add(failures, bool(env.get("CATCHPLATE_AUDIT_STORE_POSTGRES_DSN", "").strip()), "audit Postgres DSN must be configured")
     witness_dsn = env.get(
-        "SERVERWARE_WEBAUTHN_RECOVERY_WITNESS_POSTGRES_DSN", ""
+        "CATCHPLATE_WEBAUTHN_RECOVERY_WITNESS_POSTGRES_DSN", ""
     ).strip()
     add(
         failures,
-        env.get("SERVERWARE_WEBAUTHN_RECOVERY_WITNESS_BACKEND") == "postgres",
+        env.get("CATCHPLATE_WEBAUTHN_RECOVERY_WITNESS_BACKEND") == "postgres",
         "recovery authorization witness must use Postgres",
     )
     add(
@@ -2553,9 +2553,9 @@ def check_shared_stores(env: dict[str, str], failures: list[str]) -> None:
         and not hmac.compare_digest(metadata_dsn, witness_dsn),
         "recovery authorization witness must not reuse the metadata DSN",
     )
-    metadata_fault_domain = env.get("SERVERWARE_METADATA_STORE_FAULT_DOMAIN_ID", "").strip()
+    metadata_fault_domain = env.get("CATCHPLATE_METADATA_STORE_FAULT_DOMAIN_ID", "").strip()
     witness_fault_domain = env.get(
-        "SERVERWARE_WEBAUTHN_RECOVERY_WITNESS_FAULT_DOMAIN_ID", ""
+        "CATCHPLATE_WEBAUTHN_RECOVERY_WITNESS_FAULT_DOMAIN_ID", ""
     ).strip()
     for label, value in (
         ("metadata store", metadata_fault_domain),
@@ -2578,11 +2578,11 @@ def check_shared_stores(env: dict[str, str], failures: list[str]) -> None:
     )
     add(
         failures,
-        env_bool(env, "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED"),
+        env_bool(env, "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED"),
         "atomic release authorization must be enabled",
     )
     release_authorization_url = env.get(
-        "SERVERWARE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL", ""
+        "CATCHPLATE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL", ""
     ).strip()
     add(
         failures,
@@ -2608,13 +2608,13 @@ def check_shared_stores(env: dict[str, str], failures: list[str]) -> None:
         )
     try:
         reservation_ttl = int(
-            env.get("SERVERWARE_RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS", "")
+            env.get("CATCHPLATE_RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS", "")
         )
         dispatch_ttl = int(
-            env.get("SERVERWARE_RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS", "")
+            env.get("CATCHPLATE_RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS", "")
         )
         reconcile_limit = int(
-            env.get("SERVERWARE_RELEASE_AUTHORIZATION_RECONCILE_LIMIT", "")
+            env.get("CATCHPLATE_RELEASE_AUTHORIZATION_RECONCILE_LIMIT", "")
         )
     except ValueError:
         reservation_ttl = dispatch_ttl = reconcile_limit = 0
@@ -2644,11 +2644,11 @@ def check_internal_service_auth(
     expected_shared_owner_uid: int = SHARED_SERVICE_CREDENTIAL_OWNER_UID,
     expected_shared_gid: int = SHARED_SERVICE_CREDENTIAL_RUNTIME_GID,
 ) -> None:
-    instance_id = env.get("SERVERWARE_DATA_PLANE_INSTANCE_ID", "").strip()
+    instance_id = env.get("CATCHPLATE_DATA_PLANE_INSTANCE_ID", "").strip()
     add(
         failures,
         instance_id.startswith("spiffe://") and len(instance_id) > len("spiffe://"),
-        "SERVERWARE_DATA_PLANE_INSTANCE_ID must identify the authenticated data-plane instance",
+        "CATCHPLATE_DATA_PLANE_INSTANCE_ID must identify the authenticated data-plane instance",
     )
     tokens = [
         (
@@ -2683,16 +2683,16 @@ def check_internal_service_auth(
 def check_agent_egress(env: dict[str, str], failures: list[str]) -> None:
     add(
         failures,
-        env_bool(env, "SERVERWARE_AGENT_EGRESS_POLICY_REQUIRED"),
+        env_bool(env, "CATCHPLATE_AGENT_EGRESS_POLICY_REQUIRED"),
         "agent egress policy enforcement must be required",
     )
-    mode = env.get("SERVERWARE_AGENT_EGRESS_POLICY_MODE", "").strip()
+    mode = env.get("CATCHPLATE_AGENT_EGRESS_POLICY_MODE", "").strip()
     add(
         failures,
         mode in {"kubernetes-network-policy", "iptables", "nftables", "cloud-firewall"},
         "agent egress policy mode must be kubernetes-network-policy, iptables, nftables, or cloud-firewall",
     )
-    raw_cidrs = [item.strip() for item in env.get("SERVERWARE_AGENT_EGRESS_PROXY_CIDRS", "").split(",") if item.strip()]
+    raw_cidrs = [item.strip() for item in env.get("CATCHPLATE_AGENT_EGRESS_PROXY_CIDRS", "").split(",") if item.strip()]
     add(failures, bool(raw_cidrs), "agent egress proxy CIDRs must be configured")
     for cidr in raw_cidrs:
         try:
@@ -2702,29 +2702,29 @@ def check_agent_egress(env: dict[str, str], failures: list[str]) -> None:
             continue
         add(failures, network.prefixlen != 0, "agent egress proxy CIDRs must not be universal routes")
     try:
-        port = int(env.get("SERVERWARE_AGENT_EGRESS_PROXY_PORT", "0"))
+        port = int(env.get("CATCHPLATE_AGENT_EGRESS_PROXY_PORT", "0"))
     except ValueError:
         port = 0
     add(failures, 1 <= port <= 65535, "agent egress proxy port must be configured")
     add(
         failures,
-        bool(env.get("SERVERWARE_AGENT_ENROLLMENT_REQUIRED", "").strip() or env_bool(env, "SERVERWARE_AGENT_ENROLLMENT_PACKET_REQUIRED")),
+        bool(env.get("CATCHPLATE_AGENT_ENROLLMENT_REQUIRED", "").strip() or env_bool(env, "CATCHPLATE_AGENT_ENROLLMENT_PACKET_REQUIRED")),
         "agent enrollment packets must be required before production credentials are enabled",
     )
 
 
 def production_images(env: dict[str, str]) -> list[str]:
-    return [item.strip() for item in env.get("SERVERWARE_PRODUCTION_IMAGES", "").split(",") if item.strip()]
+    return [item.strip() for item in env.get("CATCHPLATE_PRODUCTION_IMAGES", "").split(",") if item.strip()]
 
 
 def check_production_images(env: dict[str, str], failures: list[str]) -> None:
     add(
         failures,
-        env_bool(env, "SERVERWARE_PRODUCTION_IMAGE_NO_SHELL_REQUIRED"),
+        env_bool(env, "CATCHPLATE_PRODUCTION_IMAGE_NO_SHELL_REQUIRED"),
         "production image no-shell verification must be required",
     )
     images = production_images(env)
-    add(failures, len(images) == 2, "SERVERWARE_PRODUCTION_IMAGES must list exactly control and decision-gate image refs")
+    add(failures, len(images) == 2, "CATCHPLATE_PRODUCTION_IMAGES must list exactly control and decision-gate image refs")
     for image in images:
         add(
             failures,
@@ -2742,17 +2742,17 @@ def check_production_images(env: dict[str, str], failures: list[str]) -> None:
             not placeholder_hostname(image_ref_hostname(image)),
             f"production image ref must not use .example placeholder registry domains: {image}",
         )
-    control_image = env.get("SERVERWARE_CONTROL_PLANE_IMAGE", "").strip()
-    gate_image = env.get("SERVERWARE_DECISION_GATE_IMAGE", "").strip()
+    control_image = env.get("CATCHPLATE_CONTROL_PLANE_IMAGE", "").strip()
+    gate_image = env.get("CATCHPLATE_DECISION_GATE_IMAGE", "").strip()
     add(
         failures,
         control_image in images and control_image.rsplit("/", 1)[-1].startswith("control@sha256:"),
-        "SERVERWARE_CONTROL_PLANE_IMAGE must select the digest-pinned control image",
+        "CATCHPLATE_CONTROL_PLANE_IMAGE must select the digest-pinned control image",
     )
     add(
         failures,
         gate_image in images and gate_image.rsplit("/", 1)[-1].startswith("decision-gate@sha256:"),
-        "SERVERWARE_DECISION_GATE_IMAGE must select the digest-pinned decision-gate image",
+        "CATCHPLATE_DECISION_GATE_IMAGE must select the digest-pinned decision-gate image",
     )
 
 
@@ -2779,32 +2779,32 @@ def require_response_fields(response: dict[str, Any], fields: set[str], label: s
 
 
 def run_sigstore_probe(env: dict[str, str]) -> dict[str, Any]:
-    sign_command = command_words(env.get("SERVERWARE_IMAGE_SIGN_COMMAND", ""))
-    verify_command = command_words(env.get("SERVERWARE_IMAGE_VERIFY_COMMAND", ""))
+    sign_command = command_words(env.get("CATCHPLATE_IMAGE_SIGN_COMMAND", ""))
+    verify_command = command_words(env.get("CATCHPLATE_IMAGE_VERIFY_COMMAND", ""))
     if not sign_command:
-        raise RuntimeError("SERVERWARE_IMAGE_SIGN_COMMAND must be configured for live Sigstore probe")
+        raise RuntimeError("CATCHPLATE_IMAGE_SIGN_COMMAND must be configured for live Sigstore probe")
     if not verify_command:
-        raise RuntimeError("SERVERWARE_IMAGE_VERIFY_COMMAND must be configured for live Sigstore probe")
+        raise RuntimeError("CATCHPLATE_IMAGE_VERIFY_COMMAND must be configured for live Sigstore probe")
 
-    nonce = f"serverware-production-readiness-sigstore-{int(time.time())}"
+    nonce = f"catchplate-production-readiness-sigstore-{int(time.time())}"
     subject_digest = hashlib.sha256(nonce.encode("utf-8")).hexdigest()
     statement = {
         "_type": "https://in-toto.io/Statement/v1",
         "subject": [
             {
-                "name": "serverware-production-readiness-probe",
+                "name": "catchplate-production-readiness-probe",
                 "digest": {"sha256": subject_digest},
             }
         ],
-        "predicateType": "https://serverware.dev/production-readiness/sigstore-probe/v1",
+        "predicateType": "https://catchplate.dev/production-readiness/sigstore-probe/v1",
         "predicate": {
             "nonce": nonce,
-            "releaseChannel": env.get("SERVERWARE_RELEASE_CHANNEL", ""),
+            "releaseChannel": env.get("CATCHPLATE_RELEASE_CHANNEL", ""),
             "purpose": "prove configured production Sigstore signing and verification command path",
         },
     }
     sign_request = {
-        "apiVersion": "serverware.sigstoreSignRequest/v1",
+        "apiVersion": "catchplate.sigstoreSignRequest/v1",
         "kind": "production-readiness-probe",
         "service": "production-readiness",
         "image_id": sha256_prefixed_bytes(nonce.encode("utf-8")),
@@ -2820,7 +2820,7 @@ def run_sigstore_probe(env: dict[str, str]) -> dict[str, Any]:
     expected_key_id = expected_sigstore_key_id(env)
     if expected_key_id and key_provider.get("key_id") != expected_key_id:
         raise RuntimeError("Sigstore sign response did not bind the expected key identity")
-    require_transparency = env_bool(env, "SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY")
+    require_transparency = env_bool(env, "CATCHPLATE_REQUIRE_SIGSTORE_TRANSPARENCY")
     transparency = signature.get("transparency") or {}
     if require_transparency:
         require_response_fields(
@@ -2828,12 +2828,12 @@ def run_sigstore_probe(env: dict[str, str]) -> dict[str, Any]:
             {"log_id", "entry_uuid", "integrated_time", "inclusion_proof"},
             "Sigstore transparency",
         )
-    expected_log_id = env.get("SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID", "").strip()
+    expected_log_id = env.get("CATCHPLATE_COSIGN_EXPECTED_REKOR_LOG_ID", "").strip()
     if expected_log_id and transparency.get("log_id") != expected_log_id:
         raise RuntimeError("Sigstore sign response did not bind the expected Rekor log ID")
 
     verify_request = {
-        "apiVersion": "serverware.sigstoreVerifyRequest/v1",
+        "apiVersion": "catchplate.sigstoreVerifyRequest/v1",
         "kind": sign_request["kind"],
         "service": sign_request["service"],
         "image_id": sign_request["image_id"],
@@ -2864,12 +2864,12 @@ def run_sigstore_probe(env: dict[str, str]) -> dict[str, Any]:
 
 
 def production_readiness_checkpoint(env: dict[str, str]) -> dict[str, Any]:
-    nonce = f"serverware-production-readiness-transparency-{int(time.time())}"
+    nonce = f"catchplate-production-readiness-transparency-{int(time.time())}"
     record = {
-        "kind": "serverware.productionReadinessTransparencyProbe",
+        "kind": "catchplate.productionReadinessTransparencyProbe",
         "version": "v1",
         "nonce": nonce,
-        "releaseChannel": env.get("SERVERWARE_RELEASE_CHANNEL", ""),
+        "releaseChannel": env.get("CATCHPLATE_RELEASE_CHANNEL", ""),
     }
     record_digest = sha256_prefixed_json(record)
     leaf = {"record_digest": record_digest, "nonce": nonce}
@@ -2877,13 +2877,13 @@ def production_readiness_checkpoint(env: dict[str, str]) -> dict[str, Any]:
     tree_size = int(time.time())
     tree_head_hash = sha256_prefixed_json({"leaf_hash": leaf_hash, "tree_size": tree_size})
     signed_tree_head = {
-        "version": "serverware.signedTreeHead/v1",
+        "version": "catchplate.signedTreeHead/v1",
         "tree_size": tree_size,
         "tree_head_hash": tree_head_hash,
         "signature": "production-readiness-probe",
     }
     return {
-        "version": "serverware.transparencyCheckpoint/v1",
+        "version": "catchplate.transparencyCheckpoint/v1",
         "mode": "signed-merkle-transparency-log",
         "sequence": tree_size,
         "record_digest": record_digest,
@@ -2896,9 +2896,9 @@ def production_readiness_checkpoint(env: dict[str, str]) -> dict[str, Any]:
 
 
 def run_transparency_probe(env: dict[str, str]) -> dict[str, Any]:
-    checkpoint_command = command_words(env.get("SERVERWARE_TRANSPARENCY_CHECKPOINT_COMMAND", ""))
+    checkpoint_command = command_words(env.get("CATCHPLATE_TRANSPARENCY_CHECKPOINT_COMMAND", ""))
     if not checkpoint_command:
-        raise RuntimeError("SERVERWARE_TRANSPARENCY_CHECKPOINT_COMMAND must be configured for live transparency probe")
+        raise RuntimeError("CATCHPLATE_TRANSPARENCY_CHECKPOINT_COMMAND must be configured for live transparency probe")
     checkpoint = production_readiness_checkpoint(env)
     response = run_command(checkpoint_command, env=env, input_obj=checkpoint) or {}
     if response.get("ok") is not True:
@@ -2961,8 +2961,8 @@ def postgres_table_probe(label: str, dsn: str, required_tables: tuple[str, ...])
 
 
 def run_shared_store_probe(env: dict[str, str]) -> dict[str, Any]:
-    metadata_dsn = env.get("SERVERWARE_METADATA_STORE_POSTGRES_DSN", "").strip()
-    grant_dsn = env.get("SERVERWARE_GRANT_STORE_POSTGRES_DSN", "").strip()
+    metadata_dsn = env.get("CATCHPLATE_METADATA_STORE_POSTGRES_DSN", "").strip()
+    grant_dsn = env.get("CATCHPLATE_GRANT_STORE_POSTGRES_DSN", "").strip()
     if not metadata_dsn or not grant_dsn or not hmac.compare_digest(
         metadata_dsn, grant_dsn
     ):
@@ -2971,20 +2971,20 @@ def run_shared_store_probe(env: dict[str, str]) -> dict[str, Any]:
         )
     stores = {
         "metadata": (
-            env.get("SERVERWARE_METADATA_STORE_POSTGRES_DSN", "").strip(),
+            env.get("CATCHPLATE_METADATA_STORE_POSTGRES_DSN", "").strip(),
             METADATA_TABLES,
         ),
         "grant": (
-            env.get("SERVERWARE_GRANT_STORE_POSTGRES_DSN", "").strip(),
+            env.get("CATCHPLATE_GRANT_STORE_POSTGRES_DSN", "").strip(),
             GRANT_TABLES,
         ),
         "audit": (
-            env.get("SERVERWARE_AUDIT_STORE_POSTGRES_DSN", "").strip(),
+            env.get("CATCHPLATE_AUDIT_STORE_POSTGRES_DSN", "").strip(),
             AUDIT_TABLES,
         ),
         "recovery_witness": (
             env.get(
-                "SERVERWARE_WEBAUTHN_RECOVERY_WITNESS_POSTGRES_DSN", ""
+                "CATCHPLATE_WEBAUTHN_RECOVERY_WITNESS_POSTGRES_DSN", ""
             ).strip(),
             RECOVERY_WITNESS_TABLES,
         ),
@@ -3021,9 +3021,9 @@ def live_claims(env: dict[str, str], claims_file: str | None) -> dict[str, Any]:
     if claims_file:
         parsed = json.loads(Path(claims_file).read_text(encoding="utf-8"))
     else:
-        parsed = env_json_object(env, "SERVERWARE_PRODUCTION_READINESS_CLAIMS_JSON")
+        parsed = env_json_object(env, "CATCHPLATE_PRODUCTION_READINESS_CLAIMS_JSON")
     if not isinstance(parsed, dict):
-        raise RuntimeError("live mode requires --claims-file or SERVERWARE_PRODUCTION_READINESS_CLAIMS_JSON")
+        raise RuntimeError("live mode requires --claims-file or CATCHPLATE_PRODUCTION_READINESS_CLAIMS_JSON")
     parsed = json.loads(json.dumps(parsed))
     parsed["nonce"] = f"production-readiness-{int(time.time())}"
     return parsed
@@ -3060,7 +3060,7 @@ def run_live_probes(
     image_args: list[str] = []
     for image in production_images(env):
         image_args.extend(["--image", image])
-    if env_bool(env, "SERVERWARE_PRODUCTION_IMAGE_PULL"):
+    if env_bool(env, "CATCHPLATE_PRODUCTION_IMAGE_PULL"):
         image_args.append("--pull")
     image_scan = run_command([sys.executable, "scripts/verify_production_images_no_shell.py", *image_args], env=env)
     probes["production_images_no_shell"] = {
@@ -3091,7 +3091,7 @@ def emit_result(result: dict[str, Any], out_path: str | None) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Fail-closed production readiness gate for Serverware external trust dependencies.")
+    parser = argparse.ArgumentParser(description="Fail-closed production readiness gate for Catchplate external trust dependencies.")
     parser.add_argument("--mode", choices=("config", "live"), default="config")
     parser.add_argument("--claims-file", default=None)
     parser.add_argument("--nitro-evidence-file", default=None)

@@ -19,9 +19,9 @@ ORIGINALS = ["intent_bytes", "relay_bytes", "envelope_bytes", "evaluation_contex
 class RevocationWriterClientSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.text, cls.tree = source("serverware/authority_revocation_writer_client.py", 64 * 1024)
+        cls.text, cls.tree = source("catchplate/authority_revocation_writer_client.py", 64 * 1024)
         cls.client = definition(cls.tree, "_send_on_configuration")
-        _, cls.service = source("serverware/authority_service.py", 2 * 1024 * 1024)
+        _, cls.service = source("catchplate/authority_service.py", 2 * 1024 * 1024)
         cls.process = definition(cls.service, "AuthorityProcess")
         cls.adapter = definition(cls.process, "_send_revocation_writer_commitments")
 
@@ -104,7 +104,7 @@ class RevocationWriterClientSourceTests(unittest.TestCase):
         self.assertLess(fixed.lineno, key.lineno)
         self.assertLess(key.lineno, callbacks[0].lineno)
         self.assertLess(callbacks[0].lineno, callbacks[1].lineno)
-        _, mapper = source("serverware/authority_revocation_verifier.py", 64 * 1024)
+        _, mapper = source("catchplate/authority_revocation_verifier.py", 64 * 1024)
         actual = definition(mapper, "_verifier_from_configuration_on_work")
         capture = call(actual, "configuration._capture_configuration_on_work")
         for decoded in calls(actual, "configuration._key"):
@@ -186,7 +186,7 @@ class RevocationWriterClientSourceTests(unittest.TestCase):
         self.assertFalse(calls(self.service, "self._send_revocation_writer_commitments"))
         self.assertFalse(calls(self.service, "commitment._produce_intent_on_work"))
         self.assertFalse(calls(self.service, "commitment._produce_relay_on_work"))
-        _, registry = source("serverware/authority_transition_registry.py")
+        _, registry = source("catchplate/authority_transition_registry.py")
         self.shape(assigned(registry, "_CLOSURE_ERRORS"), "_registry_closure_errors()")
         guard, = [node for node in registry.body if isinstance(node, ast.If)]
         self.shape(guard.test, "_CLOSURE_ERRORS")

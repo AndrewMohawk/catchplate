@@ -48,7 +48,7 @@ fn transcript(receiver: Receiver, decision: &Value) {
     let calls = receiver.finish();
     assert_eq!(calls.iter().map(|(kind,_)| kind.as_str()).collect::<Vec<_>>(),
         ["generationMetadata", "attestation", "audit", "dispatchSecret"]);
-    assert_eq!(calls[0].1["apiVersion"], "serverware.credentialLeaseRequest/v3");
+    assert_eq!(calls[0].1["apiVersion"], "catchplate.credentialLeaseRequest/v3");
     assert_eq!(calls[2].1, start);
     let events = start["events"].as_array().unwrap();
     assert_eq!(events.len(), 1);
@@ -56,7 +56,7 @@ fn transcript(receiver: Receiver, decision: &Value) {
     for name in ["request_digest", "operation_digest", "attempt_id"] {
         assert_eq!(events[0]["event"][name], decision[name]);
     }
-    assert_eq!(calls[3].1["apiVersion"], "serverware.operatorXQuotaCredentialLeaseRequest/v1");
+    assert_eq!(calls[3].1["apiVersion"], "catchplate.operatorXQuotaCredentialLeaseRequest/v1");
     assert_eq!(calls[3].1["operatorXQuota"]["canonicalRequest"], decision["canonical_request"]);
     assert!(!serde_json::to_string(&start).unwrap().contains("synthetic-google-release-secret"));
 }

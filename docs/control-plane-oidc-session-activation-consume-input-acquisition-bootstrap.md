@@ -1,7 +1,7 @@
 # Public consume-input acquisition configuration
 
-Explicit `serverware.signedControlPlaneEnrollmentBootstrap/v13` and payload
-`serverware.controlPlaneEnrollmentBootstrap/v13` add one nullable field,
+Explicit `catchplate.signedControlPlaneEnrollmentBootstrap/v13` and payload
+`catchplate.controlPlaneEnrollmentBootstrap/v13` add one nullable field,
 `oidcSessionActivationConsumeInputAcquisition`. All v2–v12 closed shapes, caps
 and purpose reservations remain unchanged. No additional key or descriptor is
 delivered to the public application.
@@ -9,13 +9,13 @@ delivered to the public application.
 ## Fixed endpoint and original policy
 
 The nested schema is
-`serverware.controlPlaneOidcSessionActivationConsumeInputAcquisition/v1`.
+`catchplate.controlPlaneOidcSessionActivationConsumeInputAcquisition/v1`.
 Its exact fields are `schema`, `endpoint` and `issuerPolicy`. The endpoint has
 exactly these fields:
 
 | Field | Required value |
 | --- | --- |
-| `path` | `/run/serverware/oidc-session-activation-consume-inputs/grants.sock` |
+| `path` | `/run/catchplate/oidc-session-activation-consume-inputs/grants.sock` |
 | `timeoutSeconds` | Exact integer from 1 through 30 |
 | `peerUid` | Exact integer `0` |
 | `peerGid` | Exact integer `0` |

@@ -18,8 +18,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_jit_assertion_transition as staged
-from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
+from catchplate import authority_jit_assertion_transition as staged
+from catchplate.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
 from test_authority_jit_assertion_planning import originals, configuration
 
 
@@ -294,7 +294,7 @@ class JitAssertionTransitionControls(unittest.TestCase):
         self.assertTrue(owner._failed)
 
     def test_existing_public_bodies_share_extracted_semantics_and_accounting(self):
-        root = Path(__file__).resolve().parents[1] / "serverware"
+        root = Path(__file__).resolve().parents[1] / "catchplate"
         parsed = ast.parse((root / "authority_jit_assertion_receipt.py").read_text())
         transition = next(item for item in parsed.body if isinstance(item, ast.FunctionDef)
                           and item.name == "transition")

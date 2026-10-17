@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/policy-genesis-maintenance-portal.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/policy-genesis-maintenance-portal.v1.schema.json",
   "title": "Cold genesis maintenance portal review observations",
   "description": "Source-fixed POST /api/policy/genesis-maintenance/context and /review, available only behind the actual cold maintenance owner. Data is never approval, reservation, filesystem permission or a renewed deadline. Existing publication effect/inspection contracts are unchanged. No key, trust root, DSN or target path is a browser input.",
   "oneOf": [
@@ -40,13 +40,13 @@
     },
     "contextRequest": {
       "type": "object", "additionalProperties": false, "required": ["schema"],
-      "properties": {"schema": {"const": "serverware.policyGenesisMaintenancePortalContextRequest/v1"}},
+      "properties": {"schema": {"const": "catchplate.policyGenesisMaintenancePortalContextRequest/v1"}},
       "description": "Cookie-authenticated current policy_publisher plus CSRF before body acquisition. Body <=1KiB. Context is the original admitted cold target, not a new current-writer reservation."
     },
     "context": {
       "type": "object", "additionalProperties": false,
       "required": ["schema", "actor", "targetOriginal", "maintenanceExpiresAtEpochNs", "approvals", "maxPolicyOriginalBytes", "hardwareRequired", "distinctApproverRequired", "automaticRetryAllowed", "restartRequired"],
-      "properties": {"schema": {"const": "serverware.policyGenesisMaintenancePortalContext/v1"}, "actor": {"$ref": "#/$defs/actor"},
+      "properties": {"schema": {"const": "catchplate.policyGenesisMaintenancePortalContext/v1"}, "actor": {"$ref": "#/$defs/actor"},
         "targetOriginal": {"$ref": "#/$defs/canonical"}, "maintenanceExpiresAtEpochNs": {"$ref": "#/$defs/epoch"},
         "approvals": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/queueItem"}},
         "maxPolicyOriginalBytes": {"const": 16777216}, "hardwareRequired": {"const": true}, "distinctApproverRequired": {"const": true},
@@ -56,20 +56,20 @@
     "bundleReview": {
       "type": "object", "additionalProperties": false,
       "required": ["schema", "kind", "publicationId", "reason", "policyOriginalBase64url"],
-      "properties": {"schema": {"const": "serverware.policyGenesisMaintenancePortalReviewRequest/v1"}, "kind": {"const": "bundle"},
+      "properties": {"schema": {"const": "catchplate.policyGenesisMaintenancePortalReviewRequest/v1"}, "kind": {"const": "bundle"},
         "publicationId": {"$ref": "#/$defs/publicationId"}, "reason": {"$ref": "#/$defs/reason"}, "policyOriginalBase64url": {"$ref": "#/$defs/original"}}
     },
     "approvalReview": {
       "type": "object", "additionalProperties": false,
       "required": ["schema", "kind", "approvalId", "policyOriginalBase64url"],
-      "properties": {"schema": {"const": "serverware.policyGenesisMaintenancePortalReviewRequest/v1"}, "kind": {"const": "approval"},
+      "properties": {"schema": {"const": "catchplate.policyGenesisMaintenancePortalReviewRequest/v1"}, "kind": {"const": "approval"},
         "approvalId": {"$ref": "#/$defs/approvalId"}, "policyOriginalBase64url": {"$ref": "#/$defs/original"}},
       "description": "Looks up the actual purpose-specific approval original; requester/approver roles are independently read. Supplied bundle must match the exact retained material, including for resolution."
     },
     "resolutionReview": {
       "type": "object", "additionalProperties": false,
       "required": ["schema", "kind", "publicationId", "intentSha256", "outcome", "reason", "policyOriginalBase64url"],
-      "properties": {"schema": {"const": "serverware.policyGenesisMaintenancePortalReviewRequest/v1"}, "kind": {"const": "resolution"},
+      "properties": {"schema": {"const": "catchplate.policyGenesisMaintenancePortalReviewRequest/v1"}, "kind": {"const": "resolution"},
         "publicationId": {"$ref": "#/$defs/publicationId"}, "intentSha256": {"$ref": "#/$defs/digest"},
         "outcome": {"enum": ["finalize-installed", "abandon-uninstalled"]}, "reason": {"$ref": "#/$defs/reason"},
         "policyOriginalBase64url": {"$ref": "#/$defs/original"}},
@@ -78,7 +78,7 @@
     "review": {
       "type": "object", "additionalProperties": false,
       "required": ["schema", "actor", "requestOriginal", "materialOriginal", "payloadDigest", "approval", "policyOriginalBytes", "maintenanceExpiresAtEpochNs", "automaticRetryAllowed"],
-      "properties": {"schema": {"const": "serverware.policyGenesisMaintenancePortalReview/v1"}, "actor": {"$ref": "#/$defs/actor"},
+      "properties": {"schema": {"const": "catchplate.policyGenesisMaintenancePortalReview/v1"}, "actor": {"$ref": "#/$defs/actor"},
         "requestOriginal": {"$ref": "#/$defs/canonical"}, "materialOriginal": {"$ref": "#/$defs/canonical"},
         "payloadDigest": {"$ref": "#/$defs/digest"}, "approval": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/approval"}]},
         "policyOriginalBytes": {"type": "integer", "minimum": 1, "maximum": 16777216},

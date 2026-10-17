@@ -30,7 +30,7 @@ import test_operator_workspace_store as workspace
 
 ROOT = Path(__file__).resolve().parents[1]
 PATH = "/api/operator-demo/oauth/google/configuration/v2"
-SCHEMA = "serverware.operatorGoogleConfiguration/v2"
+SCHEMA = "catchplate.operatorGoogleConfiguration/v2"
 FIELDS = {"schema", "state", "revision", "policy_hash", "effective_settings", "effective_settings_digest",
     "public_url", "redirect_uri", "permission_preset", "scopes", "review", "operation", "readiness", "blocked_reason"}
 UNKNOWN = "synthetic-private-error-detail-must-not-be-public"
@@ -332,7 +332,7 @@ def receipt_isolation(request):
         # runtime. The new routes must not expose or cancel that namespace.
         actor = f.auth.require_admin(SimpleNamespace(headers={}, cookies={}), consent_tests.ADMIN).user_id
         operation = f.setup.prepare({key: value for key, value in payload.items() if key != "client_secret"}, actor)
-        assert operation["schema"] == "serverware.operatorGoogleSetup/v1"
+        assert operation["schema"] == "catchplate.operatorGoogleSetup/v1"
     else:
         operation = f.setup.prepare_configuration(payload, "different-synthetic-administrator")
         with no_new_custody_reads(f):
@@ -408,8 +408,8 @@ def external_off(_request):
 class GoogleConfigurationTests(unittest.TestCase):
     def setUp(self):
         managed_tests.ManagedGoogleConfigurationTests.setUp(self)
-        self.environment.update({"SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST": health_tests.BINARY,
-            "SERVERWARE_DECISION_GATE_BASE": "http://127.0.0.1:9091"})
+        self.environment.update({"CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST": health_tests.BINARY,
+            "CATCHPLATE_DECISION_GATE_BASE": "http://127.0.0.1:9091"})
 
     def worker(self, name, request=None, *, changes=None):
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", name],
@@ -440,7 +440,7 @@ class GoogleConfigurationTests(unittest.TestCase):
         data, provider = Path(self.scratch.name) / "legacy-data", Path(self.scratch.name) / "legacy-provider"
         data.mkdir(mode=0o700)
         provider.mkdir(mode=0o700)
-        self.worker("receipt_isolation", {"legacy": True}, changes={"SERVERWARE_DATA_DIR": str(data),
+        self.worker("receipt_isolation", {"legacy": True}, changes={"CATCHPLATE_DATA_DIR": str(data),
             managed_tests.KEY_DIRECTORY: str(provider)})
 
     def test_activated_discovery_exact_pair_and_stale_health_survive_second_restart(self):
@@ -452,7 +452,7 @@ class GoogleConfigurationTests(unittest.TestCase):
 class ExternalGoogleConfigurationTests(unittest.TestCase):
     def setUp(self):
         consent_tests.OperatorGoogleConsentTests.setUp(self)
-        self.environment.update({managed_tests.FLAG: "0", "SERVERWARE_DECISION_GATE_BASE": "http://127.0.0.1:9091"})
+        self.environment.update({managed_tests.FLAG: "0", "CATCHPLATE_DECISION_GATE_BASE": "http://127.0.0.1:9091"})
 
     worker = GoogleConfigurationTests.worker
 

@@ -1,14 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-aware-response-expectations.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/policy-aware-response-expectations.v1.schema.json",
   "title": "Independently pinned policy-aware ordinary response expectations v1",
   "description": "Closed nine-field protected input, bounded to 16 KiB and pinned by its exact original SHA-256 before contact. It selects ordinary PolicyAware, never Native, and creates no signature, attestation or authorization verdict. Runtime retains the actual file owner and original deadline and rejoins these pins to genuine response originals.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "statementProfile", "responseSigningKeyId", "controlPlaneResponseSigningKeyId", "policyDigest", "releaseDigest", "dataPlaneBinaryDigest", "serverInstanceId", "principalId"],
   "properties": {
-    "apiVersion": {"const": "serverware.policyAwareResponseExpectations/v1"},
-    "statementProfile": {"const": "serverware.policyAwareResponseStatements/v1"},
+    "apiVersion": {"const": "catchplate.policyAwareResponseExpectations/v1"},
+    "statementProfile": {"const": "catchplate.policyAwareResponseStatements/v1"},
     "responseSigningKeyId": {"$ref": "#/$defs/nonzeroSha256"},
     "controlPlaneResponseSigningKeyId": {"$ref": "#/$defs/nonzeroSha256"},
     "policyDigest": {"$ref": "#/$defs/nonzeroSha256"},

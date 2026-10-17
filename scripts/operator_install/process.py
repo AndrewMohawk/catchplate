@@ -13,7 +13,7 @@ def _failure(stdout=b"", stderr=b"", *, timed_out=False) -> InstallError:
     """Retain only bounded command output, never its arguments, input or env."""
     message = "A required local command timed out" if timed_out else "A required local command failed"
     try:
-        descriptor, path = tempfile.mkstemp(prefix="serverware-standalone-command-", suffix=".log")
+        descriptor, path = tempfile.mkstemp(prefix="catchplate-standalone-command-", suffix=".log")
         with os.fdopen(descriptor, "wb") as output:
             os.fchmod(output.fileno(), 0o600)
             for heading, value in ((b"stdout (bounded tail)\n", stdout), (b"\nstderr (bounded tail)\n", stderr)):

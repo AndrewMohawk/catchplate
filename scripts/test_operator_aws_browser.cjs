@@ -22,7 +22,7 @@ const TOKEN = 'synthetic-aws-session-' + 'D'.repeat(64);
 const ERROR = 'synthetic-private-aws-error-NEVER-RENDER';
 const PRIVATE = [ACCESS, SESSION_ACCESS, SECRET, TOKEN, ERROR];
 const clone = value => JSON.parse(JSON.stringify(value));
-const CAPABILITY = {schema: 'serverware.operatorAwsCredentials/v1', connection_type: 'aws_sigv4_v1',
+const CAPABILITY = {schema: 'catchplate.operatorAwsCredentials/v1', connection_type: 'aws_sigv4_v1',
   create_path: CREATE, replace_path: REPLACE, revoke_path: REVOKE,
   credential_kinds: ['long_term', 'session'], signing_available: false, automatic_renewal: false};
 const awsCredential = (changes = {}) => credential({name: 'Stored AWS tuple', version: 1,
@@ -102,7 +102,7 @@ async function fixture(browser, options, exercise) {
       const original = Storage.prototype.setItem;
       Storage.prototype.setItem = function(...args) {
         if (!(this === sessionStorage && args.length === 2 &&
-            args[0] === 'serverware.operator.mutation.review.v1' && args[1] === 'required')) window.__awsStorageWrites++;
+            args[0] === 'catchplate.operator.mutation.review.v1' && args[1] === 'required')) window.__awsStorageWrites++;
         return original.apply(this, args);
       };
     });
@@ -139,7 +139,7 @@ async function fixture(browser, options, exercise) {
     for (const path of [CATALOG, CREATE, REPLACE, REVOKE]) await controls.context.route(ORIGIN + path, handler);
     try {
       await page.reload({waitUntil: 'networkidle'}); assert.equal(new URL(page.url()).origin, ORIGIN);
-      assert.match(await page.title(), /Serverware/i);
+      assert.match(await page.title(), /Catchplate/i);
       await exercise(page, state, observed, {arrival, release: () => release?.()});
       assert.deepEqual(state.posts, [], 'no generic credential/grant/application mutation');
       assert(observed.posts.length <= 1); await privateAbsent(page);
@@ -174,7 +174,7 @@ async function refresh(page) {
   await page.waitForFunction(() => window.__awsRendered); await page.evaluate(() => { delete window.__awsRendered; });
 }
 async function saved(page, prefix) {
-  await page.waitForFunction(id => /(?:credentials saved|tuple replaced) in Serverware/.test(document.getElementById(id).textContent), prefix + '-status');
+  await page.waitForFunction(id => /(?:credentials saved|tuple replaced) in Catchplate/.test(document.getElementById(id).textContent), prefix + '-status');
   await privateAbsent(page);
 }
 async function uncertain(page, reviewed = true) {
@@ -188,7 +188,7 @@ async function screenshot(page, name) {
 
 const tests = [
   ['AWS storage guidance follows the selected credential type on desktop and mobile', async browser => {
-    const initialHtml = await readFile(join(ROOT, 'serverware/operator_demo_web/index.html'), 'utf8');
+    const initialHtml = await readFile(join(ROOT, 'catchplate/operator_demo_web/index.html'), 'utf8');
     assert.match(initialHtml, /<p\b[^>]*\bid="aws-storage-availability"[^>]*\bhidden(?:\s|>)/,
       'AWS-only guidance starts hidden for the default manual selection');
     for (const width of [1280, 390]) await fixture(browser, {credentials: []}, async (page, state, observed) => {
@@ -330,7 +330,7 @@ const tests = [
         await refresh(page); await uncertain(page); assert.equal(observed.posts.length, 1);
       }
       assert.equal(state.revision, 2); assert.equal(observed.posts.length, 1);
-      assert(!/Complete AWS tuple replaced in Serverware/.test(await page.locator('#aws-replace-status').innerText()));
+      assert(!/Complete AWS tuple replaced in Catchplate/.test(await page.locator('#aws-replace-status').innerText()));
       await page.clock.runFor(6000); assert.equal(observed.posts.length, 1);
     });
   }],
@@ -349,15 +349,15 @@ const tests = [
 
 async function hashes() {
   const names = ['scripts/test_operator_aws_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
-    'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
-    ...(await readdir(join(ROOT, 'serverware/operator_demo_web'))).filter(name => /\.(?:html|css|js)$/.test(name))
-      .sort().map(name => 'serverware/operator_demo_web/' + name)];
+    'scripts/test_operator_ordinary_modes_browser.cjs', 'catchplate/operator_demo_portal.py',
+    ...(await readdir(join(ROOT, 'catchplate/operator_demo_web'))).filter(name => /\.(?:html|css|js)$/.test(name))
+      .sort().map(name => 'catchplate/operator_demo_web/' + name)];
   return Object.fromEntries(await Promise.all(names.map(async name =>
     [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')])));
 }
 async function runSuite(browser) {
   assert(browser && typeof browser.newContext === 'function'); const before = await hashes();
-  artifacts = await mkdtemp('/tmp/serverware-aws-browser-');
+  artifacts = await mkdtemp('/tmp/catchplate-aws-browser-');
   console.log(JSON.stringify({phase: 'source-before', hashes: before, artifactDirectory: artifacts}));
   const contexts = new Set(); let timer; let finished = false; let passed = 0;
   const bounded = {async newContext(...args) {

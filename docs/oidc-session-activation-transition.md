@@ -1,6 +1,6 @@
 # Private OIDC activation transition
 
-[`authority_transition_oidc_session_activation._transition_on_work`](../serverware/authority_transition_oidc_session_activation.py)
+[`authority_transition_oidc_session_activation._transition_on_work`](../catchplate/authority_transition_oidc_session_activation.py)
 derives five ordinary business-row effects for `oidc.session.activate`: consume
 the session-binding challenge, advance the credential counter, rotate/activate
 the pending session, insert an authenticated encrypted-token delivery, and
@@ -52,7 +52,7 @@ fresh caller admission; neither a posted locator nor these scalar pins proves
 that prerequisite. The fresh activation challenge is separate from the retained
 registration challenge.
 
-The actual [activation read worker](../serverware/authority_oidc_session_activation_reads.py)
+The actual [activation read worker](../catchplate/authority_oidc_session_activation_reads.py)
 replays primary membership/nonmembership and
 complete counted-index range proofs. Required empty ranges cover the new
 session token and all five delivery uniqueness columns (`session_id`, old/new
@@ -72,7 +72,7 @@ trust-policy provenance are not learned from the request.
 
 Delivery and audit IDs use the existing deterministic identity primitive with
 the actual request digest and distinct `activation-delivery`/`activation-audit`
-purposes. The real [delivery original helper](../serverware/oidc_session_activation_delivery.py)
+purposes. The real [delivery original helper](../catchplate/oidc_session_activation_delivery.py)
 authenticates the exact ciphertext against a scope derived here, with expiry
 `min(database time + explicit 5–60 second TTL, session expiry)`. Ciphertext is a
 separate private input, avoiding a request-digest/envelope/ID cycle; the actual

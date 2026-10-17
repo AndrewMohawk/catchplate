@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
 from scripts.test_native_pilot_genesis_core import fixture as core_fixture
-from serverware import native_pilot_genesis_process as process
+from catchplate import native_pilot_genesis_process as process
 
 p, g = process.p, process.core.g
 

@@ -3,8 +3,8 @@
 ## Status and boundary
 
 This is a source-only, unactivated reconstruction component. The model in
-[`authority_index_contract.py`](../serverware/authority_index_contract.py) and
-verifier in [`authority_index_range.py`](../serverware/authority_index_range.py)
+[`authority_index_contract.py`](../catchplate/authority_index_contract.py) and
+verifier in [`authority_index_range.py`](../catchplate/authority_index_range.py)
 are not an installed secondary-index protocol. The current source has not been
 built or executed. No WebAuthn kernel is registered by this work, and the
 [startup blocker](authority-transition-startup-blocker.md) remains.
@@ -38,13 +38,13 @@ not interpret that layout or prove which row fields produced a path. The joined
 consumer rederives the fixed encoding; SQL codec/migration admission remains
 outstanding.
 
-The fixed profile is `serverware.policyAuthorityCountedIndex/v1`. Every hash
+The fixed profile is `catchplate.policyAuthorityCountedIndex/v1`. Every hash
 length-prefixes every frame, including its domain, with an unsigned eight-byte
 big-endian length. Common frames contain that profile, index ID, table name,
 projection digest and the decimal leaf depth `160`. Empty, leaf and branch
-domains are respectively `serverware.policyAuthorityCountedIndexEmpty/v1`,
-`serverware.policyAuthorityCountedIndexLeaf/v1` and
-`serverware.policyAuthorityCountedIndexNode/v1`.
+domains are respectively `catchplate.policyAuthorityCountedIndexEmpty/v1`,
+`catchplate.policyAuthorityCountedIndexLeaf/v1` and
+`catchplate.policyAuthorityCountedIndexNode/v1`.
 
 An empty commitment binds depth, prefix and count zero directly, without a
 recursively materialized empty ladder. A leaf binds depth, full path, count one,
@@ -106,7 +106,7 @@ limit is an exact positive integer; a caller can tighten, not expand, them.
 The `input_bytes` metric is a closed scalar-framing measure, not JSON size or
 an assertion about allocations made before this call. Each already validated
 ASCII field costs its byte length plus eight bytes for its length frame. The
-header measures `serverware.policyAuthorityIndexRangeInput/v1`, the profile,
+header measures `catchplate.policyAuthorityIndexRangeInput/v1`, the profile,
 index/table/projection identity, depth, expected root digest/count, interval
 bounds (`top` for an absent upper bound) and frontier-entry count. A leaf adds
 its `leaf` tag, key and two primary commitments. An opaque entry adds its

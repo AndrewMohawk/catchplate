@@ -206,14 +206,14 @@ pub(super) fn execute(pending: Pending, mut proof: native_verifier::BootstrapIns
         owner_uid: grant.network_owner.owner_uid,
     }, &clock)?;
     let mut slot = Sha256::new();
-    slot.update(b"serverware/native-ca-installation-slot/v1\0");
+    slot.update(b"catchplate/native-ca-installation-slot/v1\0");
     for scalar in [grant.journal.namespace.as_bytes(), grant.ca_install.capability_id.as_bytes()] {
         slot.update((scalar.len() as u64).to_be_bytes());
         slot.update(scalar);
     }
     let reservation_id: [u8; 32] = slot.finalize().into();
     let mut association = Sha256::new();
-    association.update(b"serverware/native-ca-installation-operation/v1\0");
+    association.update(b"catchplate/native-ca-installation-operation/v1\0");
     for commitment in [grant.original_sha256, proof.setup_sha256(), proof.evidence_sha256(),
         proof.packet_sha256(), digest(configuration_raw), digest(&ca_der)] { association.update(commitment); }
     let association_sha256: [u8; 32] = association.finalize().into();
@@ -255,7 +255,7 @@ pub(super) fn execute(pending: Pending, mut proof: native_verifier::BootstrapIns
     };
     destination.check()?;
     guard.check()?;
-    let result = json!({"apiVersion":"serverware.nativeCaInstallationReceipt/v1",
+    let result = json!({"apiVersion":"catchplate.nativeCaInstallationReceipt/v1",
         "resultScope":"local-authorized-native-ca-installation-only", "okForAction":false,
         "status":status, "authorizationSha256":digest_text(&grant.original_sha256),
         "operationSha256":digest_text(&association_sha256), "reservationSha256":digest_text(&reservation_id),

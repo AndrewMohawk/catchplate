@@ -3,7 +3,7 @@
 
 Use python3 -I -B as root with --input-fd, its independently approved complete
 --input-sha256, and a distinct preprovisioned sealed --authority-key-fd. Input
-is the exact canonical serverware.measuredAuditAuthorityPolicy/v1 payload,
+is the exact canonical catchplate.measuredAuditAuthorityPolicy/v1 payload,
 including its full configuration digest, native targets and original interval.
 No field, timestamp, key, approval or assignment is generated or renewed here.
 
@@ -27,8 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import native_pilot_authority_io as io
-from serverware import data_plane_audit_authority as authority
-from serverware import native_shadow_nitro_originals as originals
+from catchplate import data_plane_audit_authority as authority
+from catchplate import native_shadow_nitro_originals as originals
 
 MAX_INPUT = 2 * 1024 * 1024
 MAX_OUTPUT = 3 * 1024 * 1024
@@ -62,7 +62,7 @@ def _sign(value, raw, key, check):
     signature = key.sign(preimage)
     check()
     result = authority.canonical({
-        "schema": "serverware.signedMeasuredAuditAuthorityPolicy/v1",
+        "schema": "catchplate.signedMeasuredAuditAuthorityPolicy/v1",
         "payload": admitted,
         "signatureBase64Url": base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii"),
     })

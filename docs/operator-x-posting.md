@@ -29,7 +29,7 @@ rules. The operation is classified as a write, not as a read-only HTTP POST.
 The signed credential binding selects one verified X OAuth subject and OAuth
 client, with `offline.access`, `tweet.read`, `tweet.write` and `users.read` scopes.
 An app-only bearer key is not a substitute. Applications send only the public
-`serverware-x-post-placeholder-v1` dummy; exact Authorization replacement selects
+`catchplate-x-post-placeholder-v1` dummy; exact Authorization replacement selects
 the stored access token. Existing current-generation and credential metadata
 checks remain authoritative. This adapter does not obtain consent or refresh a
 token itself.
@@ -230,8 +230,8 @@ disabling remain refused; account disconnect does not implement those separate
 configuration-change workflows.
 
 The deployment owner must explicitly select
-`SERVERWARE_OPERATOR_MANAGED_X_ENABLED=1` and an existing private 0700
-`SERVERWARE_OPERATOR_X_CUSTODY_DIR`, mounted only in the app. This directory must
+`CATCHPLATE_OPERATOR_MANAGED_X_ENABLED=1` and an existing private 0700
+`CATCHPLATE_OPERATOR_X_CUSTODY_DIR`, mounted only in the app. This directory must
 be separate and non-nested from both app data and Google's provider key directory;
 it must also be kept out of gate/notification mounts. The reviewed managed-X
 Compose release now explicitly selects this capability with a separate empty
@@ -264,7 +264,7 @@ disabled, read-only source and fresh disposable data. UI and browser-helper test
 used inert DOM/transport fixtures: no rendered-browser, real-provider, Internet
 proxy or deployed-X acceptance is claimed. No Rust build, service restart, DNS
 change or pilot ran. The operator-owned private evidence directory is
-`serverware-operator-workspace-evidence/x-configuration-connected.basqSwQ1`.
+`catchplate-operator-workspace-evidence/x-configuration-connected.basqSwQ1`.
 
 `operator_x_oauth_protocol.py` additionally builds private request descriptions
 and classifies supplied token, identity and revocation responses. All ten

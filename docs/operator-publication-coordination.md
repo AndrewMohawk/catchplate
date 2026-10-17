@@ -48,7 +48,7 @@ For an existing store, stop **all** old and new operator app and gate processes
 before explicitly running the offline helper in the matching operator context:
 
 ```sh
-python -m serverware.operator_publication --provision-existing-stopped
+python -m catchplate.operator_publication --provision-existing-stopped
 ```
 
 The flag acknowledges that prerequisite; it cannot prove services are stopped.

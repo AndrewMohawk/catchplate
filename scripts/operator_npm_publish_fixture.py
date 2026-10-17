@@ -30,15 +30,15 @@ from scripts import operator_npm_metadata_fixture as metadata
 from scripts.operator_npm_metadata_fixture_network import FIXTURE_IP, assert_isolated_network
 
 ORIGIN, TOKEN, PLACEHOLDER = metadata.ORIGIN, metadata.TOKEN, metadata.PLACEHOLDER
-SCHEMA = "serverware.privateNpmPublishObservations/v1"
-PACKAGES = ("serverware-fixture-publish", "@serverware-fixture/publish")
+SCHEMA = "catchplate.privateNpmPublishObservations/v1"
+PACKAGES = ("catchplate-fixture-publish", "@catchplate-fixture/publish")
 TAG = "fixture"
 MAX_BODY, MAX_ATTEMPTS = 65536, 16
 CASES = (
     ("prerequisite", PACKAGES[0], "1.0.1", False),
     ("unscoped", PACKAGES[0], "2.0.0", True),
     ("scoped", PACKAGES[1], "3.0.0", True),
-    ("wrong_package", "serverware-fixture-forbidden", "4.0.0", False),
+    ("wrong_package", "catchplate-fixture-forbidden", "4.0.0", False),
     ("outside_window", PACKAGES[0], "5.0.0", False),
     ("wrong_placeholder", PACKAGES[0], "6.0.0", False),
     ("revoked_app", PACKAGES[1], "7.0.0", False),
@@ -49,7 +49,7 @@ ARRIVALS = (("prerequisite", "GET"), ("unscoped", "GET"), ("unscoped", "PUT"),
     ("scoped", "GET"), ("scoped", "PUT"), ("outside_window", "GET"))
 FULL, CORGI = metadata.FULL, metadata.CORGI
 encoded, digest, path = metadata.encoded, metadata.digest, metadata.path
-REFUSAL_SCHEMA = "serverware.privateNpmPublishRefusal/v1"
+REFUSAL_SCHEMA = "catchplate.privateNpmPublishRefusal/v1"
 REFUSAL_STAGES = frozenset({"sequence", "target", "framing", "headers", "publish_identity",
     "publish_manifest", "publish_attachment", "publish_integrity", "storage", "response"})
 REFUSAL_METHODS = frozenset({"GET", "PUT", "POST", "PATCH", "DELETE", "HEAD", "OPTIONS"})

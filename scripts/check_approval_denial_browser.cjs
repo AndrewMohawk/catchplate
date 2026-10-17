@@ -24,7 +24,7 @@ const ORIGIN = 'https://approval-denial.example.test';
 const ID = '11111111-1111-4111-8111-111111111111';
 const RECEIPT = '22222222-2222-4222-8222-222222222222';
 const CHALLENGE = '33333333-3333-4333-8333-333333333333';
-const MARKER = `serverware.approvalDecisionUncertain.${ID}`;
+const MARKER = `catchplate.approvalDecisionUncertain.${ID}`;
 const PRIVATE_REVIEW = 'SYNTHETIC_PRIVATE_REVIEW_DISPLAY';
 const REASON = 'Synthetic reviewer chose to deny this request';
 const CSRF = 'synthetic-csrf-not-an-authorization';
@@ -51,8 +51,8 @@ function fixtures(spec) {
   const now = Date.now();
   const at = offset => new Date(now + offset).toISOString();
   // Independent literals matching db.approval_public_summary and the stored
-  // serverware.jitApproverPolicy/v1 DTO, not a production-function-derived oracle.
-  const policy = {schema: 'serverware.jitApproverPolicy/v1', requiredRoles: ['approver'], roleMatch: 'any',
+  // catchplate.jitApproverPolicy/v1 DTO, not a production-function-derived oracle.
+  const policy = {schema: 'catchplate.jitApproverPolicy/v1', requiredRoles: ['approver'], roleMatch: 'any',
     allowedApproverIds: spec.votePending ? ['oidc:synthetic-reviewer', 'oidc:synthetic-second'] : ['oidc:synthetic-reviewer'],
     allowAnyApproverId: false, requireWebAuthn: true, threshold: spec.votePending ? 2 : 1,
     credentialPolicy: {allowedCredentialRecordIds: ['synthetic-record'], allowedAuthenticatorClasses: ['hardware'],
@@ -77,7 +77,7 @@ function fixtures(spec) {
     review_receipt: {id: RECEIPT, expires_at: at(90000)}};
   const options = {publicKey: {challenge: BYTES.challenge, rpId: new URL(ORIGIN).hostname,
     allowCredentials: [{type: 'public-key', id: CREDENTIAL}], timeout: 120000, userVerification: 'required'},
-  serverware: {operation: spec.kind === 'approve' ? 'jit.decide' : 'jit.deny', authorityChallengeId: CHALLENGE}};
+  catchplate: {operation: spec.kind === 'approve' ? 'jit.decide' : 'jit.deny', authorityChallengeId: CHALLENGE}};
   return {item, review, options, approvedUntil: at(30000)};
 }
 
@@ -157,7 +157,7 @@ async function runCase(browser, html, spec, evidenceDir) {
       assert(ledger.length <= 160, 'request budget exceeded');
       assert.equal(url.origin, ORIGIN, 'external origin attempted');
       assert.equal(request.headers().authorization, undefined, 'unexpected real authorization header');
-      assert.equal(request.headers()['x-serverware-admin-token'], undefined, 'unexpected operator token');
+      assert.equal(request.headers()['x-catchplate-admin-token'], undefined, 'unexpected operator token');
       assert.equal(request.headers().cookie, undefined, 'unexpected cookie');
       if (method === 'GET' && (url.pathname === '/' || url.pathname === `/approvals/${ID}`)) {
         assert.equal(url.search, '');
@@ -202,7 +202,7 @@ async function runCase(browser, html, spec, evidenceDir) {
         return await route.fulfill(response(value));
       }
       assert.equal(method, 'POST', 'only synthetic decision POSTs are allowed');
-      assert.equal(request.headers()['x-serverware-csrf-token'], CSRF);
+      assert.equal(request.headers()['x-catchplate-csrf-token'], CSRF);
       assert.equal(request.headers()['content-type'], 'application/json');
       const body = request.postDataJSON();
       if (url.pathname === optionsPath) {
@@ -242,7 +242,7 @@ async function runCase(browser, html, spec, evidenceDir) {
   };
     phase('document-load');
     await page.goto(ORIGIN + '/', {waitUntil: 'networkidle'});
-    assert.equal(await page.title(), 'Serverware');
+    assert.equal(await page.title(), 'Catchplate');
     const queue = page.locator('#approvals');
     await queue.getByRole('button', {name: 'Review', exact: true}).waitFor({state: 'visible'});
     assert(await queue.getByRole('button', {name: 'Deny', exact: true}).isDisabled());
@@ -391,13 +391,13 @@ async function check(browser, configuration) {
   const raw = fs.readFileSync(fixturePath);
   assert.equal(sha(raw), fixtureSha256, 'exported fixture changed');
   const fixture = JSON.parse(raw);
-  assert.equal(fixture.schema, 'serverware.approvalDenialBrowserFixture/v1');
+  assert.equal(fixture.schema, 'catchplate.approvalDenialBrowserFixture/v1');
   assert.equal(fixture.syntheticOnly, true);
-  assert.equal(fixture.sourceSha256['serverware/app.py'], appSha256);
+  assert.equal(fixture.sourceSha256['catchplate/app.py'], appSha256);
   assert.equal(sha(fixture.html), fixture.htmlSha256);
   fs.mkdirSync(evidenceDir, {mode: 0o700});
   const before = browser.contexts();
-  const result = {schema: 'serverware.approvalDenialBrowserResult/v1', syntheticOnly: true,
+  const result = {schema: 'catchplate.approvalDenialBrowserResult/v1', syntheticOnly: true,
     actualBackendVerified: false, nativeAuthorityVerified: false, hardwareVerified: false,
     decisionsCovered: ['approve', 'deny'],
     passed: false, fixtureSha256, htmlSha256: fixture.htmlSha256, sourceSha256: fixture.sourceSha256,

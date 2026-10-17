@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/response-v2-release-transparency-proof.v2.schema.json",
-  "title": "Serverware Response v2 Release Transparency Proof",
+  "$id": "https://catchplate.invalid/schemas/response-v2-release-transparency-proof.v2.schema.json",
+  "title": "Catchplate Response v2 Release Transparency Proof",
   "$comment": "The logged leaf contains only a preexisting signed release identity record. It deliberately has no request, attempt, response, finalization, final-envelope, or response-artifact field, so inclusion cannot be made circular by hashing the response that contains this proof. Verification still requires the Rust verifier to validate RFC6962 inclusion and consistency, both Ed25519 signatures, the independently pinned log SPKI and anchor, freshness and revocation, and exact release identity bindings.",
   "$ref": "#/$defs/releaseTransparencyArtifact",
   "$defs": {
@@ -72,10 +72,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseV2.releaseIdentityRecord/v2"
+          "const": "catchplate.responseV2.releaseIdentityRecord/v2"
         },
         "kind": {
-          "const": "ServerwareResponseV2ReleaseIdentityRecord"
+          "const": "CatchplateResponseV2ReleaseIdentityRecord"
         },
         "schemaVersion": {
           "const": "2"
@@ -146,7 +146,7 @@
           "$ref": "#/$defs/sha256"
         },
         "signingDomain": {
-          "const": "serverware.responseV2.releaseIdentityRecord.signature/v2"
+          "const": "catchplate.responseV2.releaseIdentityRecord.signature/v2"
         },
         "signedPayloadSha256": {
           "$ref": "#/$defs/sha256"
@@ -186,10 +186,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseV2.releaseTransparencyLeaf/v2"
+          "const": "catchplate.responseV2.releaseTransparencyLeaf/v2"
         },
         "kind": {
-          "const": "ServerwareResponseV2ReleaseTransparencyLeaf"
+          "const": "CatchplateResponseV2ReleaseTransparencyLeaf"
         },
         "schemaVersion": {
           "const": "2"
@@ -227,10 +227,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseV2.releaseTransparencyCheckpoint/v2"
+          "const": "catchplate.responseV2.releaseTransparencyCheckpoint/v2"
         },
         "kind": {
-          "const": "ServerwareResponseV2ReleaseTransparencyCheckpoint"
+          "const": "CatchplateResponseV2ReleaseTransparencyCheckpoint"
         },
         "schemaVersion": {
           "const": "2"
@@ -290,7 +290,7 @@
           "$ref": "#/$defs/sha256"
         },
         "signingDomain": {
-          "const": "serverware.responseV2.releaseTransparencyCheckpoint.signature/v2"
+          "const": "catchplate.responseV2.releaseTransparencyCheckpoint.signature/v2"
         },
         "signedPayloadSha256": {
           "$ref": "#/$defs/sha256"
@@ -339,10 +339,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseV2.releaseTransparencyProof/v2"
+          "const": "catchplate.responseV2.releaseTransparencyProof/v2"
         },
         "kind": {
-          "const": "ServerwareResponseV2ReleaseTransparencyProof"
+          "const": "CatchplateResponseV2ReleaseTransparencyProof"
         },
         "schemaVersion": {
           "const": "2"
@@ -429,10 +429,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseV2.releaseTransparencyTrustPin/v2"
+          "const": "catchplate.responseV2.releaseTransparencyTrustPin/v2"
         },
         "kind": {
-          "const": "ServerwareResponseV2ReleaseTransparencyTrustPin"
+          "const": "CatchplateResponseV2ReleaseTransparencyTrustPin"
         },
         "schemaVersion": {
           "const": "2"

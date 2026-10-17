@@ -1,11 +1,11 @@
 //! One retained, native-custody-backed pending submission. This cannot mint a
 //! reservation or release capability, including on an authenticated response.
 use super::*;
-use serverware_decision_gate::native_jit_review_v1::SignedReleasePair;
+use catchplate_decision_gate::native_jit_review_v1::SignedReleasePair;
 
 pub(crate) const PATH: &str = "/api/data-plane/release-authorizations/native-jit-submit";
 pub(crate) const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
-const SCHEMA: &str = "serverware.nativeJitPendingSubmission/v1";
+const SCHEMA: &str = "catchplate.nativeJitPendingSubmission/v1";
 
 pub(crate) fn signed_headers(headers: &[ControlPlaneAuthorizationReceiptResponseHeader]) -> Result<(), String> {
     for (name, value) in [("cache-control", "no-store"), ("content-type", "application/json")] {
@@ -20,7 +20,7 @@ pub(crate) fn signed_headers(headers: &[ControlPlaneAuthorizationReceiptResponse
 
 fn approval_id(child_digest: &str) -> Result<String, String> {
     require(is_sha256_digest(child_digest))?;
-    let identity = json!({"schema":"serverware.policyAuthorityDeterministicIdentity/v1",
+    let identity = json!({"schema":"catchplate.policyAuthorityDeterministicIdentity/v1",
         "operation":"jit.request", "requestDigest":child_digest, "purpose":"jit-approval-request"});
     let digest = sha256_prefixed(&native_response_profile::canonical_ascii_bytes(&identity)?);
     let mut compact = digest[7..39].as_bytes().to_vec();
@@ -152,7 +152,7 @@ pub(super) fn submit<'state>(retained: UnadmittedPreparation<'state, '_>, eviden
     // The result says pendingOnly; no grant/quota/budget reservation is claimed.
     for kind in [ActiveMutableEffectKind::ReleaseReserve, ActiveMutableEffectKind::JitGrantReserve] {
         prepare_shadow_release_effect(shadow, retained.request.snapshot, &mut permits, kind,
-            "native-jit-submit", &json!({"domain":"serverware.nativeJitPendingIntent/v1",
+            "native-jit-submit", &json!({"domain":"catchplate.nativeJitPendingIntent/v1",
                 "attemptId":retained.request.attempt_id, "bindingDigest":expected.binding,
                 "pendingOnly":true}), &payload)?;
     }

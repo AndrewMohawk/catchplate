@@ -8,7 +8,7 @@ are connected in source. The independently pinned SQL receiver has its own
 actual cold pending consumer remains open, so token-release row 12 stays in
 progress. Source is unbuilt, unexecuted and unprovisioned.
 
-[`oidc_session_activation_delivery_execution_reserver_bootstrap.py`](../serverware/oidc_session_activation_delivery_execution_reserver_bootstrap.py)
+[`oidc_session_activation_delivery_execution_reserver_bootstrap.py`](../catchplate/oidc_session_activation_delivery_execution_reserver_bootstrap.py)
 genuinely verifies its own launch, the four detached receiving originals and
 three enrollment originals. It accepts no successful material in place of
 those bytes, and neither observes nor chooses its own expected checkpoints.
@@ -17,17 +17,17 @@ those bytes, and neither observes nor chooses its own expected checkpoints.
 
 The closed signed-envelope, payload and launch schemas are:
 
-- `serverware.signedOidcSessionActivationDeliveryExecutionReserverBootstrap/v1`;
-- `serverware.oidcSessionActivationDeliveryExecutionReserverBootstrap/v1`;
-- `serverware.oidcSessionActivationDeliveryExecutionReserverLaunch/v1`.
+- `catchplate.signedOidcSessionActivationDeliveryExecutionReserverBootstrap/v1`;
+- `catchplate.oidcSessionActivationDeliveryExecutionReserverBootstrap/v1`;
+- `catchplate.oidcSessionActivationDeliveryExecutionReserverLaunch/v1`.
 
 Role/process mode is `oidc-session-activation-delivery-execution-reserver`,
 UID/GID 65499:65499, control-plane peer 65532:65532, and operation only
 `oidc.session.activation-delivery.consume`. The listener is
-`/run/serverware/oidc-session-activation-delivery-execution/reserver.sock`, named
-`serverware-oidc-session-activation-delivery-execution-reserver`. The journal
+`/run/catchplate/oidc-session-activation-delivery-execution/reserver.sock`, named
+`catchplate-oidc-session-activation-delivery-execution-reserver`. The journal
 directory is fixed to
-`/var/lib/serverware/oidc-session-activation-delivery-execution-reservations`.
+`/var/lib/catchplate/oidc-session-activation-delivery-execution-reservations`.
 
 | Launch field | FD | Original/resource |
 | --- | --- | --- |
@@ -114,7 +114,7 @@ state authority's current predecessor, or vice versa.
 
 `stateEndpoint` is exactly `{socketPath, requestTimeoutSeconds, serviceUid,
 serviceGid, listenerUid, listenerGid}`: fixed current-root path
-`/run/serverware/current-root/state.sock`, timeout 1–30 seconds, service
+`/run/catchplate/current-root/state.sock`, timeout 1–30 seconds, service
 65516:65516 and root-owned listener 0:0. The separate
 [state v8 profile](current-root-delivery-reserve-peer.md) must admit the consume
 reserver. The actual locked state owner still has to match the exact current

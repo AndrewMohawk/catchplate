@@ -105,7 +105,7 @@ fn route(method: &str, path: &str) -> Result<Kind, String> {
 }
 pub(crate) fn cookie_name(id: &str) -> Result<String, String> {
     require(current::uuid(id))?;
-    Ok(format!("__Host-serverware-native-jit-review-{}", id.replace('-', "")))
+    Ok(format!("__Host-catchplate-native-jit-review-{}", id.replace('-', "")))
 }
 pub(crate) fn cookie(id: &str, nonce: &str, remaining_seconds: u64) -> Result<Zeroizing<String>, String> {
     current::bytes32(nonce)?; require((1..=300).contains(&remaining_seconds))?;
@@ -137,7 +137,7 @@ mod tests {
         let id="00000000-0000-4000-8000-000000000001";
         let nonce=URL_SAFE_NO_PAD.encode([7u8;32]);
         let value=cookie(id,&nonce,30).unwrap();
-        assert!(value.starts_with("__Host-serverware-native-jit-review-00000000000040008000000000000001="));
+        assert!(value.starts_with("__Host-catchplate-native-jit-review-00000000000040008000000000000001="));
         assert!(value.ends_with("; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=30"));
         assert!(cookie(id,&nonce,1).unwrap().ends_with("Max-Age=1"));
         assert!(cookie(id,&nonce,0).is_err());assert!(cookie(id,&nonce,301).is_err());
@@ -150,7 +150,7 @@ mod tests {
         assert!(!html.contains("__PORTAL__")&&!html.contains("__NONCE__"));
         assert!(html.contains("event.source!==source||event.origin!==portal"));
         assert!(html.contains("view.textContent=text"));
-        assert!(html.contains("send({type:\"serverware.native-jit-review.disclosed\",reviewId})"));
+        assert!(html.contains("send({type:\"catchplate.native-jit-review.disclosed\",reviewId})"));
         assert!(html.contains("phase=\"disclosure-attempted\""));
         assert!(html.contains("reader=response.body.getReader()")&&html.contains("size>maximum"));
         assert!(html.contains("deadline=Math.min(deadline,performance.now()+remaining)"));

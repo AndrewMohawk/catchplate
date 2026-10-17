@@ -89,9 +89,9 @@ become stale; signed source bytes do not prevent concurrent changes or authorize
 later execution. Physical deployment, runtime verification and authenticated
 public successor orchestration remain separate unfinished work.
 
-Source: [private service composition](../serverware/authority_service.py),
-[fixed exchange actions](../serverware/authority_webauthn_registration_source_actions.py),
-[bounded transport](../serverware/authority_webauthn_registration_source_transport.py),
-[source-byte replay](../serverware/authority_webauthn_registration_source_wire.py),
-[actual source acquisition](../serverware/authority_webauthn_registration_source_acquisition.py),
-and [membership/query replay](../serverware/authority_webauthn_registration_source_proofs.py).
+Source: [private service composition](../catchplate/authority_service.py),
+[fixed exchange actions](../catchplate/authority_webauthn_registration_source_actions.py),
+[bounded transport](../catchplate/authority_webauthn_registration_source_transport.py),
+[source-byte replay](../catchplate/authority_webauthn_registration_source_wire.py),
+[actual source acquisition](../catchplate/authority_webauthn_registration_source_acquisition.py),
+and [membership/query replay](../catchplate/authority_webauthn_registration_source_proofs.py).

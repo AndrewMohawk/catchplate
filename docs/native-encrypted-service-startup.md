@@ -1,6 +1,6 @@
 # Native encrypted service-token startup
 
-`serverware.nativeStartupConfiguration/v6` connects the full native proxy's service credentials to the actual enclave broker. This is source integration only: no build, enclave execution, provider contact or deployment acceptance is claimed. It does not establish a secretless EIF, complete configuration delivery, measured OAuth effects or N06 closure.
+`catchplate.nativeStartupConfiguration/v6` connects the full native proxy's service credentials to the actual enclave broker. This is source integration only: no build, enclave execution, provider contact or deployment acceptance is claimed. It does not establish a secretless EIF, complete configuration delivery, measured OAuth effects or N06 closure.
 
 ## Explicit cold selection
 

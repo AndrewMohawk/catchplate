@@ -28,7 +28,7 @@ exporter. The exporter carries that existing signed receipt unchanged. It does
 not rerun a decision, invent a success DTO, ask for a new signature, or export
 request bodies or injected credentials.
 
-`serverware.nativeCustodyRuntimeObservation/v1` is a closed 12-field carrier of
+`catchplate.nativeCustodyRuntimeObservation/v1` is a closed 12-field carrier of
 the original 21-field receipt. Terminal uses the independently assigned
 `CustodyTerminalAppend` key/domain; candidate uses `CustodyLedgerAppend`. Both
 retain the assignment-bound production custody proof scope and full raw signed

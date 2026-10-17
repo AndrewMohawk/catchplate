@@ -40,7 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import native_pilot_authority_io as io
 import send_native_configuration as transport
-from serverware import native_shadow_nitro_originals as originals
+from catchplate import native_shadow_nitro_originals as originals
 
 MAX_INPUT = 64 * 1024 * 1024
 OUTPUT_CHUNK = 64 * 1024

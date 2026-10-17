@@ -25,13 +25,13 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract as authority
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_persistence as persistence
-from serverware import authority_revocation_retention as retention
-from serverware import authority_revocation_writer_action as action
-from serverware import authority_revocation_writer_commitment as commitment
-from serverware.authority_store import planner_connection as admission
+from catchplate import authority_contract as authority
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_persistence as persistence
+from catchplate import authority_revocation_retention as retention
+from catchplate import authority_revocation_writer_action as action
+from catchplate import authority_revocation_writer_commitment as commitment
+from catchplate.authority_store import planner_connection as admission
 import test_authority_revocation_capability as signature_oracle
 import test_authority_revocation_capability_producer as key_oracle
 import test_authority_revocation_persistence as persistence_oracle
@@ -41,13 +41,13 @@ import test_authority_revocation_wire as wire_oracle
 import test_authority_revocation_writer_action as action_oracle
 
 
-OUTER_SCHEMA = "serverware.policyAuthorityInternalEnvelope/v3"
-INTENT_SCHEMA = "serverware.policyAuthorityRevocationWriterIntent/v1"
-RELAY_SCHEMA = "serverware.policyAuthorityRevocationWriterRelay/v1"
+OUTER_SCHEMA = "catchplate.policyAuthorityInternalEnvelope/v3"
+INTENT_SCHEMA = "catchplate.policyAuthorityRevocationWriterIntent/v1"
+RELAY_SCHEMA = "catchplate.policyAuthorityRevocationWriterRelay/v1"
 INTENT_PURPOSE = "authorize-revocation-writer-custody"
 RELAY_PURPOSE = "relay-revocation-writer-custody"
-INTENT_ID_DOMAIN = "serverware.policyAuthorityRevocationWriterIntentEnvelope/v1"
-RELAY_ID_DOMAIN = "serverware.policyAuthorityRevocationWriterRelayEnvelope/v1"
+INTENT_ID_DOMAIN = "catchplate.policyAuthorityRevocationWriterIntentEnvelope/v1"
+RELAY_ID_DOMAIN = "catchplate.policyAuthorityRevocationWriterRelayEnvelope/v1"
 OUTER_FIELDS = ("schema", "envelopeId", "parentEnvelopeId", "purpose", "configurationDigest",
     "issuedAtEpochNs", "issuedMonotonicNs", "deadlineMonotonicNs", "fence", "payload", "signature")
 INTENT_FIELDS = ("schema", "sourceRevision", "generationSequence", "generationDigest", "capabilityId",
@@ -383,7 +383,7 @@ class RevocationWriterCommitmentTests(unittest.TestCase):
         changes = (("outer", "envelopeId", digest), ("outer", "parentEnvelopeId", digest),
             ("outer", "configurationDigest", digest), ("outer", "fence", 99),
             ("outer", "deadlineMonotonicNs", 1), ("outer", "purpose", "persist-plan"),
-            ("outer", "schema", "serverware.policyAuthorityInternalEnvelope/v2"),
+            ("outer", "schema", "catchplate.policyAuthorityInternalEnvelope/v2"),
             ("payload", "sourceRevision", "unaccepted-source"), ("payload", "generationSequence", 99),
             ("payload", "generationDigest", digest), ("payload", "schema", "unknown/v1"))
         for target in ("intent", "relay"):
@@ -587,7 +587,7 @@ class RevocationWriterCommitmentTests(unittest.TestCase):
                 fixture.plan.payload["webauthnEvidence"]["verifierSignatureBase64url"] = oracle.encoded(bytes(64))
                 fixture.plan.payload["webauthnEvidence"]["verifierSignatureDigest"] = oracle.sha(bytes(64))
                 fixture.plan.payload["authorizationProjection"]["assertionEvidenceDigest"] = oracle.framed(
-                    "serverware.policyAuthorityWebAuthnAssertionEvidence/v1", oracle.wire(fixture.plan.payload["webauthnEvidence"]))
+                    "catchplate.policyAuthorityWebAuthnAssertionEvidence/v1", oracle.wire(fixture.plan.payload["webauthnEvidence"]))
                 fixture.plan.rehash()
             fixture.action.arguments["envelope_bytes"] = oracle.wire(fixture.plan.envelope)
             fixture.rebuild()

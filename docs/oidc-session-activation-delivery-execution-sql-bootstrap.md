@@ -1,6 +1,6 @@
 # Consume SQL receiver bootstrap prerequisites
 
-[`oidc_session_activation_delivery_execution_sql_bootstrap.py`](../serverware/oidc_session_activation_delivery_execution_sql_bootstrap.py)
+[`oidc_session_activation_delivery_execution_sql_bootstrap.py`](../catchplate/oidc_session_activation_delivery_execution_sql_bootstrap.py)
 authenticates a distinct root-signed resource contract for the consume SQL
 worker. The separate [OS delivery](oidc-session-activation-delivery-execution-sql-delivery.md),
 [cold service](oidc-session-activation-delivery-execution-sql-service.md) and
@@ -12,9 +12,9 @@ uninstalled and unprovisioned; no production acceptance is claimed.
 ## Fixed role and originals
 
 The closed envelope/payload/launch schemas are
-`serverware.signedOidcSessionActivationDeliveryExecutionSqlBootstrap/v1`,
-`serverware.oidcSessionActivationDeliveryExecutionSqlBootstrap/v1` and
-`serverware.oidcSessionActivationDeliveryExecutionSqlLaunch/v1`. The role is
+`catchplate.signedOidcSessionActivationDeliveryExecutionSqlBootstrap/v1`,
+`catchplate.oidcSessionActivationDeliveryExecutionSqlBootstrap/v1` and
+`catchplate.oidcSessionActivationDeliveryExecutionSqlLaunch/v1`. The role is
 `oidc-session-activation-delivery-execution-sql`, fixed UID/GID **65498**, with
 private peer **65532**. No signing-key field or descriptor exists.
 
@@ -83,16 +83,16 @@ The exact inherited descriptor inventory is fixed, not caller-selectable:
 | 207 | Historical delivery AES key |
 | 208 | Separate attempt-journal directory |
 
-The listener is `/run/serverware/oidc-session-activation-delivery-execution/sql.sock`.
+The listener is `/run/catchplate/oidc-session-activation-delivery-execution/sql.sock`.
 The attempt directory is
-`/var/lib/serverware/oidc-session-activation-delivery-execution-sql-attempts`.
+`/var/lib/catchplate/oidc-session-activation-delivery-execution-sql-attempts`.
 Future delivery must enforce owner 65498, mode 0700, original device/inode and
 exact FD continuity. These paths and three root-authenticated AES pins do not
 create or deliver keys, accounts, descriptors or socket permissions. No planner,
 grant, computation or completion signing key is available to this role.
 
 Five TLS files have fixed paths under
-`/run/serverware/oidc-session-activation-delivery-execution-sql-tls/`:
+`/run/catchplate/oidc-session-activation-delivery-execution-sql-tls/`:
 `ca.pem`, `issuer.crt`, `issuer.key`, `executor.crt`, `executor.key`. Each has a
 root-pinned byte count and digest; keys are at most 16 KiB, certificates/CA at
 most 64 KiB. Issuer/executor identity tuples, certificate pins and key pins must
@@ -103,8 +103,8 @@ checks remain future cold-delivery obligations.
 `issuer_configuration` and `executor_configuration` are exact eight-tuples:
 `(dsn, connect_timeout_seconds, role, tls_client_dn, tls_client_serial,
 tls_issuer_dn, query_manifest_digest, expected_structure_manifest_digest)`.
-The roles are source-fixed `serverware_policy_authority_successor_issuer` and
-`serverware_policy_authority_successor_executor`. DSNs use the closed root-pinned
+The roles are source-fixed `catchplate_policy_authority_successor_issuer` and
+`catchplate_policy_authority_successor_executor`. DSNs use the closed root-pinned
 endpoint, `sslmode=verify-full`, fixed TLS paths, `passfile=/dev/null` and disabled
 GSS encryption. These match existing resource-owner constructor fields, not an
 implemented consume producer. A catalog-checked owner must still establish the

@@ -8,10 +8,10 @@ import { MockAgent, getGlobalDispatcher, setGlobalDispatcher } from 'undici';
 import { configuration, createSdk, failure, oneLookupInterceptor, perform,
   PUBLIC_X_DUMMY, X_ORIGIN } from './client.mjs';
 
-const ENV = { SERVERWARE_PROXY_URL: 'https://proxy.example.test',
-  SERVERWARE_APP_ID: '11111111-2222-4333-8444-555555555555',
-  SERVERWARE_PROXY_TOKEN: 'synthetic_app_token', SERVERWARE_CA_FILE: '/synthetic/inner.pem',
-  SERVERWARE_X_USERNAME: 'fixture_user' };
+const ENV = { CATCHPLATE_PROXY_URL: 'https://proxy.example.test',
+  CATCHPLATE_APP_ID: '11111111-2222-4333-8444-555555555555',
+  CATCHPLATE_PROXY_TOKEN: 'synthetic_app_token', CATCHPLATE_CA_FILE: '/synthetic/inner.pem',
+  CATCHPLATE_X_USERNAME: 'fixture_user' };
 const PATH = '/2/users/by/username/fixture_user';
 const EXPECTED_HEADERS = { authorization: 'Bearer ' + PUBLIC_X_DUMMY,
   accept: 'application/json', 'content-type': 'application/json',
@@ -51,7 +51,7 @@ test('real pinned SDK serializes the bodyless lookup and actual JSON headers', {
   assert.equal(f.calls[0].path, PATH);
   assert.equal(f.calls[0].body == null, true);
   const inner = JSON.stringify(f.calls[0].headers);
-  for (const privateValue of [ENV.SERVERWARE_APP_ID, ENV.SERVERWARE_PROXY_TOKEN, 'proxy-authorization']) {
+  for (const privateValue of [ENV.CATCHPLATE_APP_ID, ENV.CATCHPLATE_PROXY_TOKEN, 'proxy-authorization']) {
     assert.equal(inner.includes(privateValue), false);
   }
 });

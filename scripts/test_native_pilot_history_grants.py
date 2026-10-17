@@ -19,9 +19,9 @@ from cryptography.exceptions import InvalidSignature
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import native_pilot_generation_install_authority as generation
-from serverware import native_pilot_native_service_authority as native
-from serverware import native_pilot_publication_profiles as publication
+from catchplate import native_pilot_generation_install_authority as generation
+from catchplate import native_pilot_native_service_authority as native
+from catchplate import native_pilot_publication_profiles as publication
 from test_native_pilot_closure_set import canonical, sha, synthetic
 from test_native_pilot_generation_scope import encoded, key_fixture, signed_message
 
@@ -71,7 +71,7 @@ def common():
 def native_payload(operation, *, successor):
     _, stem, old, purpose = next(row for row in PROFILES if row[0] == operation)
     version = old + int(successor)
-    value = common() | {"apiVersion": "serverware." + stem + "/v" + str(version),
+    value = common() | {"apiVersion": "catchplate." + stem + "/v" + str(version),
         "purpose": purpose, "scope": {"syntheticShapeOnly": True}, "expectedPeer": {"syntheticShapeOnly": True}}
     if operation != "commitRequest":
         value.update(proofScopeOriginal=original(operation, "proof"),
@@ -81,7 +81,7 @@ def native_payload(operation, *, successor):
             "generationGrantOriginal": original(role, "generation"), "runtimeOriginal": original(role, "runtime"),
             "historyOriginal": original(role, "history"), "rootKeyId": synthetic(role + "/root-id"),
             "rootKeySpkiSha256": synthetic(role + "/root-spki")} for role in ROLES}
-    return value, "serverware." + stem + ".signature/v" + str(version)
+    return value, "catchplate." + stem + ".signature/v" + str(version)
 
 
 def generation_payload(*, successor):
@@ -92,12 +92,12 @@ def generation_payload(*, successor):
     if successor:
         for role, row in rows.items():
             row["runtimeOriginal"] = original(role, "runtime")
-    value = common() | {"apiVersion": "serverware.nativeGenerationCoordinatorAssignment/v" + str(version),
+    value = common() | {"apiVersion": "catchplate.nativeGenerationCoordinatorAssignment/v" + str(version),
         "purpose": "native-generation-installation", "services": rows,
         "keyHistory": {"currentKeyEpoch": 1, "predecessors": []},
         "journal": {"genesisSha256": synthetic("genesis"), "sequence": 0, "headSha256": synthetic("genesis")},
         "expectedPeer": {"syntheticShapeOnly": True}}
-    return value, "serverware.nativeGenerationCoordinatorAssignment.signature/v" + str(version)
+    return value, "catchplate.nativeGenerationCoordinatorAssignment.signature/v" + str(version)
 
 
 def signed(value, domain):
@@ -194,7 +194,7 @@ class HistoryGrantShapeTests(unittest.TestCase):
             payload = copy.deepcopy(modern); del payload["services"][role]["runtimeOriginal"]
             self.refused("generationInstall", signed(payload, domain))
         for payload in (modern | {"apiVersion": legacy["apiVersion"]}, legacy | {"apiVersion": modern["apiVersion"]},
-                modern | {"apiVersion": None}, modern | {"apiVersion": "serverware.nativeGenerationCoordinatorAssignment/v3"}):
+                modern | {"apiVersion": None}, modern | {"apiVersion": "catchplate.nativeGenerationCoordinatorAssignment/v3"}):
             self.refused("generationInstall", signed(payload, domain))
 
     def test_complete_role_maps_and_exact_rows_are_required(self):

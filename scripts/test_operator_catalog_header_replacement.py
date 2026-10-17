@@ -35,7 +35,7 @@ def values():
 
 def input_contract():
     from pydantic import ValidationError
-    from serverware.operator_catalog_inputs import RuleInput
+    from catchplate.operator_catalog_inputs import RuleInput
     base = values()
     assert RuleInput(**base).credential_input == "insert"
     assert RuleInput(**base, credential_input="insert").placeholder is None
@@ -211,7 +211,7 @@ def migration_restart():
     assert workspace.snapshot(db) == original_state
     assert config.POLICY_BUNDLE_PATH.read_bytes() == original_bytes
     assert all("credential_input" not in rule and "placeholder" not in rule for rule in original["access_rules"])
-    from serverware import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
+    from catchplate import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
     create_rule(db, store, schema, inputs, mutations, original["applications"][0], original["credentials"][0],
         credential_input="replace_exact", placeholder=PLACEHOLDER)
     current = workspace.catalog(db, schema)

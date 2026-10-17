@@ -1,8 +1,8 @@
 # Encrypted activation execution originals
 
-[`authority_oidc_session_activation_execution_bundle.py`](../serverware/authority_oidc_session_activation_execution_bundle.py)
+[`authority_oidc_session_activation_execution_bundle.py`](../catchplate/authority_oidc_session_activation_execution_bundle.py)
 is a source-only, private ciphertext codec. It seals the exact canonical
-`serverware.oidcSessionActivationPrivateOriginals/v2` document retained by the
+`catchplate.oidcSessionActivationPrivateOriginals/v2` document retained by the
 [activation journal](oidc-session-activation-journal.md). It does not export a
 key, expose tokens in a generic SQL packet, authenticate the document's alleged
 authority, or execute activation. No build, test or runtime verification was run.
@@ -22,7 +22,7 @@ The context is exactly:
 
 | Field | Binding |
 | --- | --- |
-| `schema` | `serverware.oidcSessionActivationExecutionOriginalsContext/v1` |
+| `schema` | `catchplate.oidcSessionActivationExecutionOriginalsContext/v1` |
 | `operation` | `oidc.session.activate` |
 | `sourceRevision` | Current fixed source revision |
 | `configurationDigest` | Independently admitted configuration |
@@ -34,7 +34,7 @@ The binary frame is `SWOAX001`, an unsigned 64-bit big-endian plaintext length,
 a fresh 12-byte nonce, and AES-256-GCM ciphertext with its 16-byte tag. Overhead
 is exactly 44 bytes. No plaintext, key or context graph is serialized into it.
 The canonical context is bounded to 4 KiB and used only as associated data,
-after the distinct `serverware.oidcSessionActivationExecutionOriginals/v1` NUL
+after the distinct `catchplate.oidcSessionActivationExecutionOriginals/v1` NUL
 domain and exact magic/length header. Opening uses the independently supplied
 expected context; nothing received supplies those expectations.
 

@@ -24,9 +24,9 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import native_postgres_batch as batch
-from serverware import native_postgres_inventory as inventory
-from serverware import native_postgres_results as reporting
+from catchplate import native_postgres_batch as batch
+from catchplate import native_postgres_inventory as inventory
+from catchplate import native_postgres_results as reporting
 
 
 EXPECTED_SUITES = (
@@ -114,7 +114,7 @@ def document(result):
 
 class NativePostgresInventoryTests(unittest.TestCase):
     def test_exact_closed_ten_suite_shapes_and_182_declared_methods(self):
-        self.assertEqual(inventory.INVENTORY_SCHEMA, "serverware.nativePostgresInventory/v1")
+        self.assertEqual(inventory.INVENTORY_SCHEMA, "catchplate.nativePostgresInventory/v1")
         self.assertIsNone(inventory.validate_inventory())
         self.assertIs(type(inventory.SUITES), tuple)
         self.assertEqual(tuple((suite.script, len(suite.test_ids), suite.disposable_cluster,
@@ -169,7 +169,7 @@ class NativePostgresInventoryTests(unittest.TestCase):
             with self.subTest(total=total), mock.patch.object(inventory, "TOTAL_TESTS", total):
                 with self.assertRaises(ValueError):
                     inventory.validate_inventory()
-        for schema in (None, "serverware.nativePostgresInventory/v0"):
+        for schema in (None, "catchplate.nativePostgresInventory/v0"):
             with self.subTest(schema=schema), mock.patch.object(inventory, "INVENTORY_SCHEMA", schema):
                 with self.assertRaises(ValueError):
                     inventory.validate_inventory()
@@ -177,10 +177,10 @@ class NativePostgresInventoryTests(unittest.TestCase):
     def test_all_fixed_commands_bind_source_script_socket_report_and_exact_disposable_flags(self):
         for index, (script, _, disposable, _) in enumerate(EXPECTED_SUITES):
             expected = (
-                "/usr/local/bin/python3.11", "/opt/serverware/src/" + script,
+                "/usr/local/bin/python3.11", "/opt/catchplate/src/" + script,
                 "--postgres-dsn",
-                "host=/run/serverware-native-postgres port=5432 dbname=postgres user=serverware_fixture_admin",
-                "--prepared-result", f"/opt/serverware/output/native-postgres/reports/{index:02d}.json",
+                "host=/run/catchplate-native-postgres port=5432 dbname=postgres user=catchplate_fixture_admin",
+                "--prepared-result", f"/opt/catchplate/output/native-postgres/reports/{index:02d}.json",
             )
             if disposable:
                 expected += ("--disposable-cluster",)
@@ -212,7 +212,7 @@ class NativePostgresRecorderTests(unittest.TestCase):
         counts.update(expected=2, started=2, stopped=2, passed=2)
         expected_ids = ["SyntheticNative.test_first", "SyntheticNative.test_second"]
         expected = {
-            "schema": "serverware.nativePostgresFixtureResult/v1",
+            "schema": "catchplate.nativePostgresFixtureResult/v1",
             "script": SYNTHETIC_SCRIPT, "sourceSha256": SYNTHETIC_SOURCE_DIGEST,
             "expectedTestIds": expected_ids,
             "tests": [{"id": test_id, "started": True, "stopped": True, "status": "PASS",
@@ -555,7 +555,7 @@ class NativePostgresSourceHookTests(unittest.TestCase):
             with self.subTest(script=script):
                 tree = ast.parse((ROOT / script).read_text(encoding="utf-8"))
                 imports = [node for node in tree.body if isinstance(node, ast.ImportFrom)
-                           and node.module == "serverware.native_postgres_results"]
+                           and node.module == "catchplate.native_postgres_results"]
                 self.assertEqual(len(imports), 1)
                 self.assertEqual([(alias.name, alias.asname) for alias in imports[0].names],
                                  [("run_native_fixture", None)])

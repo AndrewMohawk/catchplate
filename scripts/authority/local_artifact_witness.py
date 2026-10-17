@@ -16,7 +16,7 @@ an actually empty store and independently supplied genesis trust; append require
 the exact prior durable head SHA and current artifact trust high-water. No keys,
 history, package evidence or trust advancement are generated here. Explicit
 Approval/v2 initialize-and-append requires emptyWitnessConvention
-serverware.authorityTrustedHostLocalEmptyWitness/v1 and verifies the supplied
+catchplate.authorityTrustedHostLocalEmptyWitness/v1 and verifies the supplied
 genesis anchors against the actual held empty directory and witness public key
 before creating a lock or file. These anchors are not prior signed checkpoints.
 Approval/v1 and established append behavior are unchanged; v2 cannot append.
@@ -65,7 +65,7 @@ def main(argv=None):
     except (TypeError, ValueError):
         print("local artifact witness refused: use --help", file=sys.stderr)
         return 2
-    from serverware.authority_local_artifact_witness import LocalArtifactWitness
+    from catchplate.authority_local_artifact_witness import LocalArtifactWitness
     from scripts.authority import native_pilot_authority_io as io
     owner = None
     def cancelled(signo, frame):

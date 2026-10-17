@@ -2,7 +2,7 @@
 
 ## Current operator deployment
 
-The [retained operator deployment](../docker/serverware-operator-demo/README.md)
+The [retained operator deployment](../docker/catchplate-operator-demo/README.md)
 includes these adapters and client recipes in its app/Rust pair. Their provider
 origins remain disabled until the operator explicitly configures them. Including
 the code is not provider activation, a verified live credential or a successful
@@ -82,7 +82,7 @@ Two existing shortcuts would be incorrect:
 - The existing `x.v2` adapter requires an OAuth2 credential, provider `x`, client
   identity and scopes. Both [its schema](../schemas/adapters/x.v2.schema.json)
   and `_validate_route_credential_binding` in
-  [policy_bundle.py](../serverware/policy_bundle.py) enforce this. Do not relax it
+  [policy_bundle.py](../catchplate/policy_bundle.py) enforce this. Do not relax it
   to accept an imported app-only bearer token or fabricate OAuth metadata.
 - A generic exact GET can serve clients without a Content-Type header, but the
   official X TypeScript SDK sends `application/json` even for GET. Existing
@@ -103,7 +103,7 @@ is not an NFT GET or a generic POST grant.
 | Connection marker | `x_app_bearer_v1` | `alchemy_key_v1` |
 | Permission bundle | `x_username_read_v1` | `alchemy_chain_status_read_v1` |
 | Credential input | Imported app-only bearer token | API key or access key, not a URL, Notify token or wallet key |
-| SDK dummy | `serverware-x-placeholder-v1` | `serverware-alchemy-placeholder-v1` |
+| SDK dummy | `catchplate-x-placeholder-v1` | `catchplate-alchemy-placeholder-v1` |
 | Upstream authentication | Exact dummy `Bearer …` replaced by stored token | Exact dummy `Bearer …` replaced by stored key |
 | Target | `https://api.x.com:443/2/users/by/username/<saved-name>` | Selected exact `https://eth-mainnet.g.alchemy.com:443/v2` or `https://eth-sepolia.g.alchemy.com:443/v2` |
 | Authority input | One lowercase ASCII `[a-z0-9_]{1,15}` username per rule | One enum `eth-mainnet` or `eth-sepolia`; both fixed read methods |
@@ -169,10 +169,10 @@ occupy the seams below; their verification levels remain separate.
 
 | Owner | Files and work |
 | --- | --- |
-| Python contract/catalog | New `serverware/x_app_read.py`, `alchemy_rpc_read.py`, `operator_catalog_x.py`, `operator_catalog_alchemy.py`; modify `operator_catalog_inputs.py`, `operator_catalog_schema.py`, `operator_catalog_mutations.py`, `operator_catalog_policy.py`, `adapters.py`, `policy_bundle.py`. Own strict inputs, closed connection dispatch, derived rules, signed policy rendering, parser parity and public capabilities. |
+| Python contract/catalog | New `catchplate/x_app_read.py`, `alchemy_rpc_read.py`, `operator_catalog_x.py`, `operator_catalog_alchemy.py`; modify `operator_catalog_inputs.py`, `operator_catalog_schema.py`, `operator_catalog_mutations.py`, `operator_catalog_policy.py`, `adapters.py`, `policy_bundle.py`. Own strict inputs, closed connection dispatch, derived rules, signed policy rendering, parser parity and public capabilities. |
 | Rust/schema | New `data-plane/decision-gate-rs/src/x_app_read.rs`, `alchemy_rpc_read.rs` and focused tests; narrow joins in `main.rs` and `buffered_response.rs`; new schemas under `schemas/adapters/` plus `schemas/policy-bundle.v1.schema.json`. Own startup embedded-schema compilation, request normalization, typed operation fields/read classification, response profile/finalizer joins and actual no-body/body preparation paths. |
-| API admission | `serverware/operator_catalog_api.py`, `operator_demo.py`: add only the four named POST paths below using existing admin, exact Origin, strict JSON, no-store, bounded-worker and fixed-error behavior. Coordinate optional closed timing labels; unknown timing operations must not affect mutation results. |
-| UI | New `serverware/operator_demo_web/workspace_x.js`, `workspace_alchemy.js`; narrow updates to `workspace_core.js`, `workspace_connect.js`, `workspace_resources.js`, `workspace_proxy_audit.js`, `index.html`. Own exact DTO projection, guided controls, write-only secret clearing, saved-rule recovery, compatibility copy and public example links. |
+| API admission | `catchplate/operator_catalog_api.py`, `operator_demo.py`: add only the four named POST paths below using existing admin, exact Origin, strict JSON, no-store, bounded-worker and fixed-error behavior. Coordinate optional closed timing labels; unknown timing operations must not affect mutation results. |
+| UI | New `catchplate/operator_demo_web/workspace_x.js`, `workspace_alchemy.js`; narrow updates to `workspace_core.js`, `workspace_connect.js`, `workspace_resources.js`, `workspace_proxy_audit.js`, `index.html`. Own exact DTO projection, guided controls, write-only secret clearing, saved-rule recovery, compatibility copy and public example links. |
 | Runnable examples | New `examples/x-username-{node,python,go}/` and `examples/alchemy-chain-status-{node,python,go}/`, with pinned dependency files, README, tests and Node GitHub Actions example. Own ordinary SDK configuration, not a replacement HTTP implementation masquerading as the SDK. |
 | Acceptance | New focused catalog/API/browser/provider-fixture tests, reusing the existing GitHub/npm isolated fixture architecture. Rust tests stay with the Rust owner. One runtime owner executes frozen source and records results; source authors do not imply execution. |
 
@@ -270,7 +270,7 @@ Source references: [X SDKs](https://docs.x.com/tools-and-libraries),
 [Go Ethereum RPC options](https://raw.githubusercontent.com/ethereum/go-ethereum/master/rpc/client_opt.go).
 
 The X Node Actions recipe remains an inactive, unexecuted example. GitHub Actions
-stores only the scoped **Serverware application token** as a
+stores only the scoped **Catchplate application token** as a
 secret. Application ID, proxy URL, public CA and dummy provider token are client
 configuration, never Alchemy/X key material. Use explicit manual workflow
 dispatch and pinned actions/dependencies; no provider request on PRs or page

@@ -23,8 +23,8 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.test_native_pilot_genesis_rendezvous import fixture as rendezvous_fixture
 from scripts.test_native_pilot_supervisor_approval_channel import copies, pending as legacy_pending
-from serverware import native_pilot_lifecycle_approval_wire as wire
-from serverware import native_pilot_supervisor_approval_channel as channel
+from catchplate import native_pilot_lifecycle_approval_wire as wire
+from catchplate import native_pilot_supervisor_approval_channel as channel
 
 p = wire.p
 
@@ -227,11 +227,11 @@ def adopted_transcript(value, rows):
     """No phase producer is run: only exact public request/observation grammar."""
     result, previous, sequence = [], None, 0
     for conductor_sequence, (phase, jobs) in enumerate(wire.adopted.JOBS.items(), 1):
-        conductor = dict(apiVersion="serverware.nativePilotOperatorRequest/v2", sequence=conductor_sequence,
+        conductor = dict(apiVersion="catchplate.nativePilotOperatorRequest/v2", sequence=conductor_sequence,
             phase=phase, payload={"syntheticTransportPayload": True},
             deadlineBoottimeNs=str(value["deadline"]), expiresAtUnixNanos=str(value["expiry"]))
         conductor_raw = p.canonical(conductor)
-        observation_raw = p.canonical(dict(apiVersion="serverware.nativePilotAdoptedSupervisorObservation/v1",
+        observation_raw = p.canonical(dict(apiVersion="catchplate.nativePilotAdoptedSupervisorObservation/v1",
             policySha256=p.sha(rows["policy"][1]), catalogueSha256=p.sha(wire.policy.catalogue_original()),
             intakeConfigurationSha256=p.sha(rows["intake_configuration"][1]),
             conductorRequestOriginal=conductor_raw.decode("ascii"), measuredConfiguration=None, recipeOriginals=None))

@@ -1,6 +1,6 @@
 // Failure-only observations, never approval or a replacement for success checks.
 // No exception message, path, argv, provider body or stderr is returned.
-export const DIAGNOSTIC_SCHEMA = 'serverware.npmExampleDiagnostic/v1';
+export const DIAGNOSTIC_SCHEMA = 'catchplate.npmExampleDiagnostic/v1';
 const LAUNCHER = new Set(['configuration', 'versions', 'trust', 'publication_input', 'installation_input',
   'runtime_setup', 'worker_process', 'worker_summary', 'installation_summary', 'cleanup', 'other']);
 const WORKER = new Set(['configuration', 'runtime', 'dependencies', 'manifest', 'installation_input',

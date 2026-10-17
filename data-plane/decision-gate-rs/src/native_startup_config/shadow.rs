@@ -54,7 +54,7 @@ pub(super) struct ShadowConfigV2 {
     publication_handoff: PinnedVerifierConfigV1,
     custody_config: ArtifactV1,
     startup_active_authorization: ArtifactV1,
-    workers: serverware_decision_gate::native_shadow_workers::Configuration,
+    workers: catchplate_decision_gate::native_shadow_workers::Configuration,
 }
 
 fn exact_version<'de,D:serde::Deserializer<'de>>(de:D,expected:&str)->Result<String,D::Error> {
@@ -62,24 +62,24 @@ fn exact_version<'de,D:serde::Deserializer<'de>>(de:D,expected:&str)->Result<Str
     if value==expected {Ok(value)} else {Err(serde::de::Error::custom("native shadow profile version differs"))}
 }
 fn version_two<'de,D:serde::Deserializer<'de>>(de:D)->Result<String,D::Error> {
-    exact_version(de,"serverware.nativeShadowConfiguration/v2")
+    exact_version(de,"catchplate.nativeShadowConfiguration/v2")
 }
 fn version_three<'de,D:serde::Deserializer<'de>>(de:D)->Result<String,D::Error> {
-    exact_version(de,"serverware.nativeShadowConfiguration/v3")
+    exact_version(de,"catchplate.nativeShadowConfiguration/v3")
 }
 fn version_four<'de,D:serde::Deserializer<'de>>(de:D)->Result<String,D::Error> {
-    exact_version(de,"serverware.nativeShadowConfiguration/v4")
+    exact_version(de,"catchplate.nativeShadowConfiguration/v4")
 }
 fn version_five<'de,D:serde::Deserializer<'de>>(de:D)->Result<String,D::Error> {
-    exact_version(de,"serverware.nativeShadowConfiguration/v5")
+    exact_version(de,"catchplate.nativeShadowConfiguration/v5")
 }
 fn version_six<'de,D:serde::Deserializer<'de>>(de:D)->Result<String,D::Error> {
-    exact_version(de,"serverware.nativeShadowConfiguration/v6")
+    exact_version(de,"catchplate.nativeShadowConfiguration/v6")
 }
 
 impl ShadowConfigV2 {
     pub(super) fn into_config(self) -> Result<PolicyShadowGenerationConfig, String> {
-        if self.api_version != "serverware.nativeShadowConfiguration/v2" {
+        if self.api_version != "catchplate.nativeShadowConfiguration/v2" {
             return Err("native shadow worker configuration version differs".into());
         }
         self.workers.validate_legacy()?;
@@ -132,7 +132,7 @@ pub(super) struct ShadowConfigV4 {
     api_version:String,trust_manifest:ArtifactV1,runtime_verifier:PinnedVerifierConfigV1,
     webauthn_verifier:PinnedVerifierConfigV1,publication_handoff:PinnedVerifierConfigV1,
     custody_config:ArtifactV1,startup_active_authorization:ArtifactV1,
-    workers:serverware_decision_gate::native_shadow_workers::Configuration,
+    workers:catchplate_decision_gate::native_shadow_workers::Configuration,
     #[serde(default,deserialize_with="present_activation")]
     native_activation:Option<super::super::policy_shadow_generation::activation::Configuration>,
 }
@@ -142,7 +142,7 @@ fn present_activation<'de,D:serde::Deserializer<'de>>(deserializer:D)
 }
 impl ShadowConfigV4 {
     fn into_config(self)->Result<PolicyShadowGenerationConfig,String> {
-        if self.api_version!="serverware.nativeShadowConfiguration/v4" || !self.workers.publication_resources()
+        if self.api_version!="catchplate.nativeShadowConfiguration/v4" || !self.workers.publication_resources()
             || self.workers.runtime_resources() {
             return Err("native publication nested profile differs".into());
         }
@@ -164,13 +164,13 @@ pub(super) struct ShadowConfigV5 {
     api_version:String,trust_manifest:ArtifactV1,runtime_verifier:PinnedVerifierConfigV1,
     webauthn_verifier:PinnedVerifierConfigV1,publication_handoff:PinnedVerifierConfigV1,
     custody_config:ArtifactV1,startup_active_authorization:ArtifactV1,
-    workers:serverware_decision_gate::native_shadow_workers::Configuration,
+    workers:catchplate_decision_gate::native_shadow_workers::Configuration,
     #[serde(default,deserialize_with="present_activation")]
     native_activation:Option<super::super::policy_shadow_generation::activation::Configuration>,
 }
 impl ShadowConfigV5 {
     fn into_config(self)->Result<PolicyShadowGenerationConfig,String> {
-        if self.api_version!="serverware.nativeShadowConfiguration/v5" || !self.workers.runtime_resources() {
+        if self.api_version!="catchplate.nativeShadowConfiguration/v5" || !self.workers.runtime_resources() {
             return Err("native runtime-verifier nested profile differs".into());
         }
         self.workers.validate()?;
@@ -190,13 +190,13 @@ pub(super) struct ShadowConfigV3{
     api_version:String,trust_manifest:ArtifactV1,runtime_verifier:PinnedVerifierConfigV1,
     webauthn_verifier:PinnedVerifierConfigV1,publication_handoff:PinnedVerifierConfigV1,
     custody_config:ArtifactV1,startup_active_authorization:ArtifactV1,
-    workers:serverware_decision_gate::native_shadow_workers::Configuration,
+    workers:catchplate_decision_gate::native_shadow_workers::Configuration,
     native_activation:super::super::policy_shadow_generation::activation::Configuration,
 }
 impl ShadowConfigV3{
     fn into_config(self)->Result<PolicyShadowGenerationConfig,String>{
-        if self.api_version!="serverware.nativeShadowConfiguration/v3"{return Err("native activation nested profile differs".into());}
-        let mut value=ShadowConfigV2{api_version:"serverware.nativeShadowConfiguration/v2".into(),trust_manifest:self.trust_manifest,
+        if self.api_version!="catchplate.nativeShadowConfiguration/v3"{return Err("native activation nested profile differs".into());}
+        let mut value=ShadowConfigV2{api_version:"catchplate.nativeShadowConfiguration/v2".into(),trust_manifest:self.trust_manifest,
             runtime_verifier:self.runtime_verifier,webauthn_verifier:self.webauthn_verifier,publication_handoff:self.publication_handoff,
             custody_config:self.custody_config,startup_active_authorization:self.startup_active_authorization,workers:self.workers}.into_config()?;
         value.native_activation=Some(self.native_activation);Ok(value)
@@ -212,12 +212,12 @@ pub(super) struct ShadowConfigV6 {
     api_version:String,trust_manifest:ArtifactV1,runtime_verifier:PinnedVerifierConfigV1,
     publication_handoff:PinnedVerifierConfigV1,custody_config:ArtifactV1,
     startup_active_authorization:ArtifactV1,
-    workers:serverware_decision_gate::native_shadow_workers::Configuration,
+    workers:catchplate_decision_gate::native_shadow_workers::Configuration,
     native_activation:super::super::policy_shadow_generation::activation::Configuration,
 }
 impl ShadowConfigV6 {
     fn into_config(self)->Result<PolicyShadowGenerationConfig,String> {
-        if self.api_version!="serverware.nativeShadowConfiguration/v6"
+        if self.api_version!="catchplate.nativeShadowConfiguration/v6"
             || !self.workers.runtime_resources() || !self.workers.publication_resources() {
             return Err("native-only activation requires runtime and publication resources".into());
         }

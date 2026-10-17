@@ -143,7 +143,7 @@ def file_fixture(
     size: int = 3,
 ) -> dict[str, Any]:
     return {
-        "path": f"/opt/serverware/release/{label}",
+        "path": f"/opt/catchplate/release/{label}",
         "sha256": (
             sha256
             if sha256 is not None
@@ -186,7 +186,7 @@ def bootstrap_receipt_fixture(
         "reproducibleBuildVerificationSha256"
     ]
     return {
-        "apiVersion": "serverware.bootstrapReceipt/v3",
+        "apiVersion": "catchplate.bootstrapReceipt/v3",
         "kind": "ProductionBootstrapReceipt",
         "launchId": request["launcherNonce"],
         "bootIdSha256": request["bootIdSha256"],
@@ -196,14 +196,14 @@ def bootstrap_receipt_fixture(
                 mode=0o500,
                 sha256=request["launcherSha256"],
             ),
-            "path": "/opt/serverware/launchers/sha256-launcher/serverware-production-launcher",
+            "path": "/opt/catchplate/launchers/sha256-launcher/catchplate-production-launcher",
         },
         "manifest": {
             **file_fixture(
                 "manifest",
                 sha256=request["manifestSha256"],
             ),
-            "path": "/etc/serverware/production-release-launch.json",
+            "path": "/etc/catchplate/production-release-launch.json",
         },
         "sourceTreeDigest": request["sourceTreeDigest"],
         "launchAuthorization": {
@@ -218,14 +218,14 @@ def bootstrap_receipt_fixture(
             "verifiedAtUnixSeconds": NOW,
         },
         "nonceRollbackAssurance": {
-            "apiVersion": "serverware.productionNonceRollbackAssuranceBinding/v1",
+            "apiVersion": "catchplate.productionNonceRollbackAssuranceBinding/v1",
             "contractSha256": request["nonceRollbackAssuranceContractSha256"],
             "pinsFile": {
                 **file_fixture(
                     "nonce-rollback-assurance-pins",
                     sha256=request["nonceRollbackAssurancePinsSha256"],
                 ),
-                "path": "/etc/serverware/nonce-rollback-assurance-pins.json",
+                "path": "/etc/catchplate/nonce-rollback-assurance-pins.json",
             },
             "retainedSnapshotFd": 199,
             "retainedSnapshotSha256": request[
@@ -243,29 +243,29 @@ def bootstrap_receipt_fixture(
         },
         "productionEnv": {
             **file_fixture("production.env"),
-            "path": "/etc/serverware/production.env",
+            "path": "/etc/catchplate/production.env",
         },
         "python": {
             **file_fixture("python", mode=0o500),
-            "path": "/opt/serverware/release/runtime/python/bin/python3",
+            "path": "/opt/catchplate/release/runtime/python/bin/python3",
             "importRoots": [
                 {
-                    "path": "/opt/serverware/release",
+                    "path": "/opt/catchplate/release",
                     "sha256": digest("7"),
                     "metadata": metadata_fixture(link_count=2, mode=0o500),
                 },
                 {
-                    "path": "/opt/serverware/release/runtime/python/lib/python3.12",
+                    "path": "/opt/catchplate/release/runtime/python/lib/python3.12",
                     "sha256": digest("8"),
                     "metadata": metadata_fixture(link_count=2, mode=0o500),
                 },
                 {
-                    "path": "/opt/serverware/release/runtime/python/lib/python3.12/lib-dynload",
+                    "path": "/opt/catchplate/release/runtime/python/lib/python3.12/lib-dynload",
                     "sha256": digest("9"),
                     "metadata": metadata_fixture(link_count=2, mode=0o500),
                 },
                 {
-                    "path": "/opt/serverware/release/vendor",
+                    "path": "/opt/catchplate/release/vendor",
                     "sha256": digest("a"),
                     "metadata": metadata_fixture(link_count=2, mode=0o500),
                 }
@@ -286,9 +286,9 @@ def bootstrap_receipt_fixture(
                 "LANG",
                 "LC_ALL",
                 "PATH",
-                "SERVERWARE_BOOTSTRAP_RECEIPT_API_VERSION",
-                "SERVERWARE_BOOTSTRAP_RECEIPT_FD",
-                "SERVERWARE_BOOTSTRAP_RECEIPT_SHA256",
+                "CATCHPLATE_BOOTSTRAP_RECEIPT_API_VERSION",
+                "CATCHPLATE_BOOTSTRAP_RECEIPT_FD",
+                "CATCHPLATE_BOOTSTRAP_RECEIPT_SHA256",
                 "TZ",
             ],
             "sha256": digest("d"),
@@ -590,7 +590,7 @@ class LaunchAuthorizationTests(unittest.TestCase):
 
         journal_domain_substitution = deepcopy(request)
         journal_domain_substitution["launchAttemptJournalDomain"] = (
-            "serverware.launchAuthorizationAttemptJournal/v2"
+            "catchplate.launchAuthorizationAttemptJournal/v2"
         )
         with self.assertRaisesRegex(
             protocol.LaunchAuthorizationError,
@@ -918,17 +918,17 @@ class LaunchAuthorizationTests(unittest.TestCase):
 
         hostile_documents: list[dict[str, Any]] = []
         v2 = deepcopy(receipt)
-        v2["apiVersion"] = "serverware.bootstrapReceipt/v2"
+        v2["apiVersion"] = "catchplate.bootstrapReceipt/v2"
         hostile_documents.append(v2)
         old_request = deepcopy(receipt)
         old_request["launchAuthorization"]["request"][
             "apiVersion"
-        ] = "serverware.launchAuthorizationRequest/v1"
+        ] = "catchplate.launchAuthorizationRequest/v1"
         hostile_documents.append(old_request)
         old_envelope = deepcopy(receipt)
         old_envelope["launchAuthorization"]["envelope"][
             "apiVersion"
-        ] = "serverware.launchAuthorization/v1"
+        ] = "catchplate.launchAuthorization/v1"
         hostile_documents.append(old_envelope)
         missing_assurance = deepcopy(receipt)
         missing_assurance["nonceRollbackAssurance"].pop("contractSha256")
@@ -1123,7 +1123,7 @@ class LaunchAuthorizationTests(unittest.TestCase):
         original_digest = protocol.launch_authorization_request_sha256(original)
 
         v1 = deepcopy(original)
-        v1["apiVersion"] = "serverware.launchAuthorizationRequest/v1"
+        v1["apiVersion"] = "catchplate.launchAuthorizationRequest/v1"
         with self.assertRaises(protocol.LaunchAuthorizationError):
             protocol.validate_launch_authorization_request(v1)
 
@@ -1173,7 +1173,7 @@ class LaunchAuthorizationTests(unittest.TestCase):
             )
 
         v1_authorization = deepcopy(authorization)
-        v1_authorization["apiVersion"] = "serverware.launchAuthorization/v1"
+        v1_authorization["apiVersion"] = "catchplate.launchAuthorization/v1"
         with self.assertRaises(protocol.LaunchAuthorizationError):
             protocol.validate_launch_authorization(v1_authorization)
 
@@ -1248,7 +1248,7 @@ class LaunchAuthorizationTests(unittest.TestCase):
         with self.assertRaisesRegex(protocol.LaunchAuthorizationError, "signature"):
             self.verify(corrupted)
 
-        for domain in (b"", b"serverware.wrongLaunchAuthorization/v1\0"):
+        for domain in (b"", b"catchplate.wrongLaunchAuthorization/v1\0"):
             wrong_domain = self.resign(valid, domain=domain)
             with self.subTest(domain=domain), self.assertRaisesRegex(
                 protocol.LaunchAuthorizationError, "signature"

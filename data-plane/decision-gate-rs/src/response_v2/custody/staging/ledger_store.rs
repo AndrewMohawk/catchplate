@@ -51,7 +51,7 @@ impl<'capture> Stored<'capture> {
         let lock = Record { identity:Identity::of(&lock_file)?, file:lock_file,
             parent:root, name:"staged-put.lock".to_owned(), length:0, mode:0o600 };
         let slot = receipt_wire::sha(&receipt_wire::original(&serde_json::json!({
-            "domain":"serverware.responseV2.stagedPersistenceClaim/v1",
+            "domain":"catchplate.responseV2.stagedPersistenceClaim/v1",
             "generationId":captured.generation_id(), "attemptId":captured.attempt_id(),
             "fencingToken":captured.fencing_token(), "purpose":receipt_wire::KIND }))?)[7..].to_owned();
         let mut owner = Self { captured, directories, records:Vec::new(), lock, uid:process.uid, gid:process.gid,

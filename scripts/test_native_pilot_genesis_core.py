@@ -17,8 +17,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_genesis_core_profile as wire
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_genesis_core_profile as wire
 
 p = g.p
 
@@ -35,14 +35,14 @@ def fixture():
         public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         materials[name] = dict(keyId=digest(name), keySpkiSha256=p.sha(bytes.fromhex("302a300506032b6570032100") + public),
             publicKeyBase64url=p.encoded(public))
-    scope = dict(apiVersion="serverware.nativePublicationGenesisScope/v1", commissioningIdSha256=digest("commission"),
+    scope = dict(apiVersion="catchplate.nativePublicationGenesisScope/v1", commissioningIdSha256=digest("commission"),
         productionConfigurationBindingSha256=digest("config"), assignmentPayloadSha256=digest("assignment"),
         assignmentRevision=1, proofScopeOriginal='{"fixture":"not-native-admission"}', retrievalNamespaceSha256=digest("namespace"),
         initialPublicationRevision=1, bootIdBase64url=p.encoded(bytes(range(16))), timeNamespaceDevice=0,
         timeNamespaceInode=(1 << 63) + 10, issuedAtBoottimeNanos=10, expiresAtBoottimeNanos=100)
     guest = dict(uid=1234, gid=1235, deliverySha256=digest("delivery"))
     authorization = dict(issuedAtUnixNanos=1000, expiresAtUnixNanos=2000, trustCheckpointId=digest("trust"), guest=guest)
-    genesis_raw = g.canonical(dict(apiVersion="serverware.nativeLedgerSpoolStoreGenesis/v1", guest=guest,
+    genesis_raw = g.canonical(dict(apiVersion="catchplate.nativeLedgerSpoolStoreGenesis/v1", guest=guest,
         proofScopeSha256=p.sha(scope["proofScopeOriginal"].encode("ascii"))))
     native = dict(scope=scope, authorization=authorization, retrieval=materials["retrieval"], retrievalGuest=guest)
     native_raw = g.canonical(dict(payload=native, signature=p.encoded(bytes(64))))
@@ -57,41 +57,41 @@ def fixture():
             serviceSigningKeySpkiSha256=materials[name]["keySpkiSha256"])
         payload[name + "PublicKeyBase64url"] = materials[name]["publicKeyBase64url"]
     grants = {role: digest(role + " grant") for role in wire.ordinary.initial.ROLES}
-    state = dict(apiVersion="serverware.nativePublicationInitialState/v1", scopeSha256=sha(scope), publicationRevision=1,
+    state = dict(apiVersion="catchplate.nativePublicationInitialState/v1", scopeSha256=sha(scope), publicationRevision=1,
         state="uninstalled", ledgerEventOrdinal=0, **{name: None for name in ("predecessorGenerationSha256",
             "committedGenerationSha256", "publishedGenerationSha256", "firstIngressSequence", "lastIngressSequence",
             "preparedPublicationSha256")})
-    evidence = dict(apiVersion="serverware.nativePublicationGenesis/v1", scope=scope, genesisOriginal=g.canonical(state).decode("ascii"),
+    evidence = dict(apiVersion="catchplate.nativePublicationGenesis/v1", scope=scope, genesisOriginal=g.canonical(state).decode("ascii"),
         grantSha256=grants[wire.ordinary.initial.ROLES[0]], authorityEpoch=payload["durableAuthorityEpoch"], observedAtBoottimeNanos=20)
     evidence["signatureBase64url"] = p.encoded(keys["durable"].sign(wire._ordinary_message(
-        b"serverware.nativePublicationGenesisEvidence.signature/v1", [evidence[name] for name in (
+        b"catchplate.nativePublicationGenesisEvidence.signature/v1", [evidence[name] for name in (
             "apiVersion", "scope", "genesisOriginal", "grantSha256", "authorityEpoch", "observedAtBoottimeNanos")])))
-    core = dict(apiVersion="serverware.nativeInitialPublicationCore/v1", nativeGrantSha256=p.sha(native_raw), genesis=evidence,
+    core = dict(apiVersion="catchplate.nativeInitialPublicationCore/v1", nativeGrantSha256=p.sha(native_raw), genesis=evidence,
         observedAtUnixNanos=1100, trustCheckpointSha256=digest("trust"), signingKeyId=materials["native"]["keyId"],
         signingKeySpkiSha256=materials["native"]["keySpkiSha256"])
     prepared = dict(core=core, preparedAtBoottimeNanos=30)
     prepared["signature"] = p.encoded(keys["native"].sign(wire.ordinary.native_message(wire.PREPARED_DOMAIN, [core, 30])))
-    core_raw = g.canonical(core); identity = p.framed(b"serverware.nativeInitialPublicationCore/v1", (core_raw,))
-    rid = p.framed(b"serverware.nativeInitialPublicationRetrievalId/v1", (scope["retrievalNamespaceSha256"].encode("ascii"), identity.encode("ascii")))
-    stored_payload = dict(apiVersion="serverware.nativePublicationGenesisStorage/v1", guest=guest, grantSha256=p.sha(retrieval_raw),
+    core_raw = g.canonical(core); identity = p.framed(b"catchplate.nativeInitialPublicationCore/v1", (core_raw,))
+    rid = p.framed(b"catchplate.nativeInitialPublicationRetrievalId/v1", (scope["retrievalNamespaceSha256"].encode("ascii"), identity.encode("ascii")))
+    stored_payload = dict(apiVersion="catchplate.nativePublicationGenesisStorage/v1", guest=guest, grantSha256=p.sha(retrieval_raw),
         coreSha256=identity, objectSha256=p.sha(core_raw), fsveritySha256=digest("fixture-not-measured-verity"), retrievalIdSha256=rid,
-        retrievalProofSha256=p.framed(b"serverware.nativeInitialPublicationRetrievalProof/v1",
+        retrievalProofSha256=p.framed(b"catchplate.nativeInitialPublicationRetrievalProof/v1",
             (scope["proofScopeOriginal"].encode("ascii"), rid.encode("ascii"), core_raw)),
         previousHeadSha256=p.sha(genesis_raw), sequence=1, storedAtBoottimeNanos=40, originalDeadlineBoottimeNanos=100,
         signingKeyId=materials["retrieval"]["keyId"], signingKeySpkiSha256=materials["retrieval"]["keySpkiSha256"])
     stored = dict(payload=stored_payload, signature=p.encoded(keys["retrieval"].sign(
         wire.ordinary.native_message(wire.STORAGE_DOMAIN, stored_payload))))
-    completion = dict(apiVersion="serverware.nativePublicationGenesisCompletion/v1", prepared=prepared, stored=stored,
+    completion = dict(apiVersion="catchplate.nativePublicationGenesisCompletion/v1", prepared=prepared, stored=stored,
         receiptOriginal='{"fixture":"not-a-receipt"}', completedAtBoottimeNanos=50)
     completion["signature"] = p.encoded(keys["native"].sign(wire.ordinary.native_message(wire.COMPLETION_DOMAIN,
         [completion[name] for name in ("apiVersion", "prepared", "stored", "receiptOriginal", "completedAtBoottimeNanos")])))
     bundle = dict(completion=completion); prior = evidence
     for name, role, moment in zip(("durable", "current"), wire.ordinary.initial.ROLES, (60, 70)):
-        row = dict(apiVersion="serverware.nativePublicationGenesisWitness/v1", scopeSha256=sha(scope),
+        row = dict(apiVersion="catchplate.nativePublicationGenesisWitness/v1", scopeSha256=sha(scope),
             commissioningIdSha256=scope["commissioningIdSha256"], completionSha256=sha(completion), predecessorEvidenceSha256=sha(prior),
             grantSha256=grants[role], authorityEpoch=payload[name + "AuthorityEpoch"], completedAtBoottimeNanos=moment)
         row["signatureBase64url"] = p.encoded(keys[name].sign(wire._ordinary_message(
-            b"serverware.nativePublicationGenesisWitness.signature/v1", [row[field] for field in wire.WITNESS_FIELDS[:-1]])))
+            b"catchplate.nativePublicationGenesisWitness.signature/v1", [row[field] for field in wire.WITNESS_FIELDS[:-1]])))
         bundle[name], prior = row, row
     kwargs = dict(scope=scope, native_grant_raw=native_raw, retrieval_grant_raw=retrieval_raw,
         ordinary_payloads={role: copy.deepcopy(payload) for role in wire.ordinary.initial.ROLES}, ordinary_grant_sha256=grants,

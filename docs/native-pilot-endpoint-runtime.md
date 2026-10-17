@@ -4,7 +4,7 @@ The .368 source batch gives the ten fixed native endpoints an explicit runtime
 original. It is canonical ASCII JSON with exactly two fields:
 
 ```json
-{"apiVersion":"serverware.nativePilotEndpointRuntime/v1","role":"retrieval"}
+{"apiVersion":"catchplate.nativePilotEndpointRuntime/v1","role":"retrieval"}
 ```
 
 The role must match the actual source-selected endpoint: `retrieval`,

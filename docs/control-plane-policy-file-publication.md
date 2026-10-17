@@ -42,14 +42,14 @@ bytes. A binding hash is not verification or effect permission.
 
 For either action, use the dedicated
 `POST /api/policy/file-publication/webauthn/options` with apiVersion
-`serverware.policyFileApprovalOptions/v1`, action `policy.file.materialize` or
+`catchplate.policyFileApprovalOptions/v1`, action `policy.file.materialize` or
 `policy.file.resolve`, resourceId `active-policy-file`, payloadDigest, full
 request binding and optional approvalId. The actual actor and row select
 request, decide or consume. The response is the existing publicKey five-field
-shape plus seven-field serverware metadata with this distinct profile/operation.
+shape plus seven-field catchplate metadata with this distinct profile/operation.
 Generic mutation options explicitly refuse these actions.
 
-MFA is `{publicationProfile: "serverware.policyFileApprovalOptions/v1", assertion}`;
+MFA is `{publicationProfile: "catchplate.policyFileApprovalOptions/v1", assertion}`;
 the continuing requester also supplies approvalId. Initial submission creates a
 real pending approval and returns the existing exact 428 continuation. The
 distinct publisher uses `/api/control-plane/approvals/{id}/approve`, `note: null`
@@ -70,14 +70,14 @@ and cannot perform another effect. See the
 ## Actual current-authority serialization
 
 The materializer uses a **separate** private PostgreSQL connection with the fixed
-role `serverware_policy_file_materializer`. Its protected UTF-8 DSN file and
+role `catchplate_policy_file_materializer`. Its protected UTF-8 DSN file and
 independent exact byte hash are configured by
-`SERVERWARE_POLICY_FILE_MATERIALIZER_DSN_PATH` and
-`SERVERWARE_POLICY_FILE_MATERIALIZER_DSN_SHA256`. It cannot use an elevated app
+`CATCHPLATE_POLICY_FILE_MATERIALIZER_DSN_PATH` and
+`CATCHPLATE_POLICY_FILE_MATERIALIZER_DSN_SHA256`. It cannot use an elevated app
 runtime role. No DSN or policy original is returned by these APIs.
 
 The existing offline metadata bootstrap source installs
-`serverware_metadata.serverware_policy_file_current_lock(text,text)`, a fixed
+`catchplate_metadata.catchplate_policy_file_current_lock(text,text)`, a fixed
 SECURITY DEFINER procedure owned by the existing metadata authority owner. The
 role has schema USAGE and this function only: no table/sequence DML, schema
 creation, TEMP, inherited membership or generic SQL selector. Runtime admission
@@ -109,7 +109,7 @@ monotonic clock, fixed parent, journal, old/new originals and staged inode. Its
 30-second allowance opens on entry to the concrete publication owner, after HTTP
 body decoding; this is not a pre-body time/resource claim. Challenge and approval
 expiry only narrow it. The journal is the fixed sibling
-`.serverware-policy-file-publications`, protected 0700 on the same device. Files
+`.catchplate-policy-file-publications`, protected 0700 on the same device. Files
 are exclusive, nofollow, single-link 0600. Actual parent EX|NB precedes journal
 EX|NB, excluding a cooperating live publisher. Named and held identities and
 exact original bytes are rechecked, including original inode custody across

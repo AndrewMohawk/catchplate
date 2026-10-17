@@ -22,12 +22,12 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_configuration as configuration
-from serverware import authority_revocation_issuance as configured
-from serverware import authority_revocation_retention as retention
-from serverware.authority_store import planner_connection as admission
+from catchplate import authority_contract
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_configuration as configuration
+from catchplate import authority_revocation_issuance as configured
+from catchplate import authority_revocation_retention as retention
+from catchplate.authority_store import planner_connection as admission
 import test_authority_revocation_capability as capability_oracle
 import test_authority_revocation_capability_producer as signer_oracle
 import test_authority_revocation_invocation as invocation_oracle
@@ -36,10 +36,10 @@ import test_authority_revocation_issuance as issuance_oracle
 import test_authority_revocation_plan as oracle
 
 
-CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v6"
-GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v4"
-VERIFIER_SESSION = "serverware.policyAuthorityVerifierSession/v2"
-ISSUER_SESSION = "serverware.policyAuthorityCapabilityIssuerSession/v1"
+CONFIG_SCHEMA = "catchplate.policyAuthorityServiceConfiguration/v6"
+GENERATION_SCHEMA = "catchplate.authorityGenerationLaunchContext/v4"
+VERIFIER_SESSION = "catchplate.policyAuthorityVerifierSession/v2"
+ISSUER_SESSION = "catchplate.policyAuthorityCapabilityIssuerSession/v1"
 GENERATION_FIELDS = ("schema", "sequence", "digest", "predecessorDigest", "minimumRollbackSequence",
     "operationManifestDigest", "configurationPayloadBindings", "configurationBindingDigest", "roleBindingDigests")
 ROLE_NAMES = ("verifier", "planner", "planner-writer", "issuer", "executor")
@@ -81,7 +81,7 @@ class ConfigurationFixture:
                 "signingSpkiDigest": spki(key), "responseSigningSpkiDigest": spki(key),
                 "requestTimeoutSeconds": 1.25, "databaseConnectTimeoutSeconds": 2.5}
         roles["planner"]["plannerSessionIdentityDigest"] = planner_identity["sessionIdentityDigest"]
-        roles["issuer"] = {"processMode": "policy-authority-issuer", "databaseRole": "serverware_policy_capability_issuer",
+        roles["issuer"] = {"processMode": "policy-authority-issuer", "databaseRole": "catchplate_policy_capability_issuer",
             "tlsClientDn": "CN=fixture-issuer", "tlsClientSerial": "73", "tlsIssuerDn": "CN=fixture-ca",
             "measurementDigest": oracle.sha(b"configured issuer measurement"),
             "attestationReceiptDigest": oracle.sha(b"configured issuer attestation"),

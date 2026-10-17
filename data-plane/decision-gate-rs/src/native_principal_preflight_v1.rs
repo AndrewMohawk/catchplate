@@ -14,11 +14,11 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 pub const EVIDENCE_SELECTOR: &str = "principal-v3";
-pub const REQUEST_EXPORTER_LABEL: &[u8] = b"EXPORTER-Serverware-Native-Principal-Request-v1";
+pub const REQUEST_EXPORTER_LABEL: &[u8] = b"EXPORTER-Catchplate-Native-Principal-Request-v1";
 pub const MAX_REQUEST_BYTES: usize = 32 * 1024;
 pub const MAX_STATEMENT_BYTES: usize = 4096;
-const REQUEST_DOMAIN: &[u8] = b"serverware/native-principal-request-binding/v1\0";
-const NONCE_DOMAIN: &[u8] = b"serverware/native-principal-session-challenge/v1\0";
+const REQUEST_DOMAIN: &[u8] = b"catchplate/native-principal-request-binding/v1\0";
+const NONCE_DOMAIN: &[u8] = b"catchplate/native-principal-session-challenge/v1\0";
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -55,15 +55,15 @@ pub fn request_original(method: &str, target: &str, http_version: &str,
         require(size <= MAX_REQUEST_BYTES)?;
     }
     let get = |name: &str| headers.get(name).map(String::as_str);
-    require(get("x-serverware-ingress-evidence") == Some(EVIDENCE_SELECTOR)
+    require(get("x-catchplate-ingress-evidence") == Some(EVIDENCE_SELECTOR)
         && get("host").is_some() && get("content-length").is_none()
         && get("transfer-encoding").is_none())?;
     match get("connection") {
-        Some("close") => require(get("x-serverware-ingress-continuation").is_none())?,
-        Some("keep-alive") => require(get("x-serverware-ingress-continuation") == Some("connect-v1"))?,
+        Some("close") => require(get("x-catchplate-ingress-continuation").is_none())?,
+        Some("keep-alive") => require(get("x-catchplate-ingress-continuation") == Some("connect-v1"))?,
         _ => return Err("native principal request connection profile differs".into()),
     }
-    let challenge = get("x-serverware-ingress-challenge").ok_or("native principal challenge is absent")?;
+    let challenge = get("x-catchplate-ingress-challenge").ok_or("native principal challenge is absent")?;
     require(challenge.len() == 43)?;
     let decoded = URL_SAFE_NO_PAD.decode(challenge).map_err(|_| "native principal challenge encoding differs")?;
     require(decoded.len() == 32 && decoded.iter().any(|byte| *byte != 0)

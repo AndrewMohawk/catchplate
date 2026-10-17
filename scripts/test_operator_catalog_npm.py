@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ACTOR = "operator-npm-catalog-test"
 TOKEN = "npm_synthetic_catalog_token_123456789"
 REPLACEMENT = "npm_synthetic_catalog_replacement_987654321"
-PACKAGES = ["@serverware/fixture", "serverware-fixture"]
+PACKAGES = ["@catchplate/fixture", "catchplate-fixture"]
 BUNDLE = "npm_metadata_read_v1"
 
 
@@ -48,7 +48,7 @@ class Fixture(github_tests.Fixture):
         return self.call(self.mutations.create_npm_rule,
             self.inputs.NpmMetadataRuleInput(**self.fields(application, credential, packages)), ACTOR)
 
-    def generic(self, application, credential, path="/serverware-fixture", methods=None):
+    def generic(self, application, credential, path="/catchplate-fixture", methods=None):
         return self.call(self.mutations.create_rule, self.inputs.RuleInput(**self.review(),
             name="Generic registry path", application_id=application["id"], credential_id=credential["id"],
             upstream_url="https://registry.npmjs.org" + path,
@@ -67,7 +67,7 @@ class Fixture(github_tests.Fixture):
 
 
 def signed_metadata():
-    from serverware import npm_metadata
+    from catchplate import npm_metadata
     f = Fixture()
     policy_before = f.snapshot()[1:]
     credential, application = f.credential()["credential"], f.application()
@@ -219,7 +219,7 @@ def retained_legacy():
     workspace.migrate(db, schema)
     assert workspace.snapshot(db) == before and config.POLICY_BUNDLE_PATH.read_bytes() == signed
     old = workspace.catalog(db, schema)
-    from serverware import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
+    from catchplate import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
     with patch.object(store, "loaded_policy_hash", return_value=None):
         result = mutations.create_npm_credential(inputs.NpmTokenInput(**workspace.review(db, store, schema),
             name="Explicit new npm token", secret=TOKEN), ACTOR)
@@ -278,7 +278,7 @@ class PureCatalogNpmTests(unittest.TestCase):
             "packages": list(PACKAGES)}
 
     def test_exact_packages_and_no_caller_selected_authority(self):
-        from serverware.operator_catalog_inputs import NpmMetadataRuleInput
+        from catchplate.operator_catalog_inputs import NpmMetadataRuleInput
         self.assertEqual(NpmMetadataRuleInput(**self.fields()).packages, PACKAGES)
         for packages in ([], ["*"], ["pkg", "pkg"], ["z", "a"], ["@scope/*"], ["UPPER"], ["pkg/path"],
                 ["/pkg"], ["%2fpkg"], ["-pkg"], ["@scope/pkg/-/file.tgz"], ["a" * 215], ["p" + str(i) for i in range(65)]):
@@ -292,7 +292,7 @@ class PureCatalogNpmTests(unittest.TestCase):
                 NpmMetadataRuleInput(**{**self.fields(), key: value})
 
     def test_token_hidden_and_validation_does_not_quote_secret(self):
-        from serverware.operator_catalog_inputs import NpmTokenInput
+        from catchplate.operator_catalog_inputs import NpmTokenInput
         fields = {key: self.fields()[key] for key in ("expected_revision", "expected_policy_hash", "name")}
         self.assertNotIn(TOKEN, repr(NpmTokenInput(**fields, secret=TOKEN)))
         for secret in ("", "invalid private token", "line\nbreak", "x" * 8193, "tökén"):
@@ -306,7 +306,7 @@ class PureCatalogNpmTests(unittest.TestCase):
                     self.fail("invalid token admitted")
 
     def test_closed_marker_dispatch_never_upgrades_unmarked_bearer(self):
-        from serverware import operator_catalog_schema as schema
+        from catchplate import operator_catalog_schema as schema
         record = {"auth_type": "bearer", "header_name": "Authorization"}
         self.assertFalse(schema.validate_static_connection(record))
         for marker in ("npm_token_v1", "github_token_v1"):
@@ -321,9 +321,9 @@ class PureCatalogNpmTests(unittest.TestCase):
                 schema.validate_static_connection({**record, "connection_type": marker}, {})
 
     def test_derived_metadata_rule_and_overlap_are_closed(self):
-        from serverware import operator_catalog_npm as npm, npm_metadata
-        from serverware.operator_catalog_inputs import NpmMetadataRuleInput
-        from serverware.operator_catalog_schema import CatalogIntegrityError
+        from catchplate import operator_catalog_npm as npm, npm_metadata
+        from catchplate.operator_catalog_inputs import NpmMetadataRuleInput
+        from catchplate.operator_catalog_schema import CatalogIntegrityError
         record = npm.record_fields(NpmMetadataRuleInput(**self.fields()))
         record.update(id="rule", route_id="operator.rule", status="active")
         credential = {"id": "credential", "auth_type": "bearer", "header_name": "Authorization",
@@ -350,12 +350,12 @@ class PureCatalogNpmTests(unittest.TestCase):
 class ConnectedCatalogNpmTests(unittest.TestCase):
     def setUp(self):
         workspace.common.OperatorDemoPersistenceTests.setUp(self)
-        self.environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.example.com","https://api.github.com","https://registry.npmjs.org"]'
+        self.environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.example.com","https://api.github.com","https://registry.npmjs.org"]'
 
     def run_worker(self, name):
         environment = dict(self.environment)
         if name == "destination":
-            environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.example.com"]'
+            environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.example.com"]'
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", name],
             cwd=ROOT, env=environment, capture_output=True, text=True, timeout=90)
         if result.returncode != 0:

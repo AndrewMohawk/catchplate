@@ -44,7 +44,7 @@ it does not reinterpret revocation Snapshot/v4 or admit an original capability.
 Its explicit `capabilityDigest` is scope only. Trusted measurement and cold
 signer/serving ownership remain unimplemented.
 
-The complete-vector codec and [delta compatibility check](../serverware/authority_current_root_delta.py)
+The complete-vector codec and [delta compatibility check](../catchplate/authority_current_root_delta.py)
 bind all source tables/profiles and preserve nonwritable descriptors. Primary
 revisions advance per row mutation; counted revisions advance per event with
 an old or new member. Neither advances merely once per transition, and positive
@@ -64,7 +64,7 @@ state-signed receipt are durably appended before a response is returned.
 Reserve leaves capacity for completion; reaching a quota cannot justify
 discarding an unresolved decision.
 
-[`authority_current_root_authorization.py`](../serverware/authority_current_root_authorization.py)
+[`authority_current_root_authorization.py`](../catchplate/authority_current_root_authorization.py)
 authenticates original root enrollment and reserve/complete controls on the
 caller's work. `_verify_request_on_work` checks the supplied evaluation instant;
 `_verify_historical_request_on_work` verifies original signatures, intervals,
@@ -80,7 +80,7 @@ database closure before the enrolled completion key signs the complete control.
 The inner observation is unsigned on its own. A fresh completion can follow
 grant expiry without renewing execution authority or clearing unresolved state.
 
-[`CurrentRootDecisionOwner`](../serverware/authority_current_root_decisions.py)
+[`CurrentRootDecisionOwner`](../catchplate/authority_current_root_decisions.py)
 takes the actual journal, original enrollment/root key, state private key and
 independently current `expected_sequence`/`expected_head_digest`. Its fixed
 recovery validates every request/receipt and replays state before requiring the
@@ -136,7 +136,7 @@ retention. Publication/response uncertainty must be reconciled from the same
 records and externally admitted checkpoint, not by automatically retrying a
 potentially committing operation.
 
-The implemented [`CurrentRootJournal`](../serverware/authority_current_root_journal.py)
+The implemented [`CurrentRootJournal`](../catchplate/authority_current_root_journal.py)
 takes a directory FD with pinned device/inode/UID/GID and a limit of 2–1,024
 records, at most 1 MiB each. It owns an independent directory description and
 nonblocking singleton lease, requires mode `0700`, and accepts only contiguous

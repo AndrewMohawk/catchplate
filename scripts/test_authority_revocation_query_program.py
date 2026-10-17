@@ -22,11 +22,11 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_complete_query as complete
-from serverware import authority_contract
-from serverware import authority_transition_core as core
-from serverware import authority_transition_webauthn as candidate
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_complete_query as complete
+from catchplate import authority_contract
+from catchplate import authority_transition_core as core
+from catchplate import authority_transition_webauthn as candidate
 import test_authority_complete_query as complete_oracle
 
 
@@ -52,8 +52,8 @@ def source_values(**changes):
 def arguments(values):
     owned = copy.deepcopy(values)
     return {**owned, "businessIntent": {
-        "schema": "serverware.policyAuthorityBusinessIntent/v2", "operation": OPERATION,
-        "planningAdapterId": "serverware.policyAuthorityPlanningAdapter/revoke_webauthn_credential/v1",
+        "schema": "catchplate.policyAuthorityBusinessIntent/v2", "operation": OPERATION,
+        "planningAdapterId": "catchplate.policyAuthorityPlanningAdapter/revoke_webauthn_credential/v1",
         "arguments": copy.deepcopy(owned),
     }}
 
@@ -61,7 +61,7 @@ def arguments(values):
 def audit_identity(request_digest, subject):
     label = "credential" if subject is None else "approval:" + subject
     subject_hash = hashlib.sha256(label.encode("utf-8")).hexdigest()
-    material = {"schema": "serverware.policyAuthorityDeterministicIdentity/v1",
+    material = {"schema": "catchplate.policyAuthorityDeterministicIdentity/v1",
         "operation": OPERATION, "requestDigest": request_digest,
         "purpose": "webauthn-revocation-audit:" + subject_hash}
     digits = list(hashlib.sha256(wire(material)).hexdigest()[:32])
@@ -72,14 +72,14 @@ def audit_identity(request_digest, subject):
 
 
 def counter_identity():
-    domain = b"serverware.metadataAuditOutboxCapacityPartition/v1\0"
+    domain = b"catchplate.metadataAuditOutboxCapacityPartition/v1\0"
     partition = "sha256:" + hashlib.sha256(domain + (6).to_bytes(8, "big") + b"global").hexdigest()
     return "metadata-audit-outbox-global-capacity-v1:" + partition
 
 
 def point_document(name, table, identifier, *, column="id"):
-    return {"schema": "serverware.policyAuthorityQueryProgram/v1",
-        "queryId": f"serverware.policyAuthorityQuery/{OPERATION}/{name}/{table}/v1",
+    return {"schema": "catchplate.policyAuthorityQueryProgram/v1",
+        "queryId": f"catchplate.policyAuthorityQuery/{OPERATION}/{name}/{table}/v1",
         "table": table, "predicates": [{"column": column, "operator": "eq", "value": identifier}],
         "orderBy": [{"column": column, "descending": False}], "maximumRows": 1,
         "overflowDisposition": "fail-closed", "absentKey": {column: identifier},
@@ -96,7 +96,7 @@ def trust_query_documents():
     publication["predicates"] = [{"column": "scope", "operator": "eq", "value": "global"},
         {"column": "status", "operator": "eq", "value": "published"}]
     publication["predicates"].extend({"column": column, "operator": "eq", "value": {
-        "schema": "serverware.policyAuthoritySelectedRowField/v1",
+        "schema": "catchplate.policyAuthoritySelectedRowField/v1",
         "table": "webauthn_trust_publication_high_water", "key": {"authority_scope": "webauthn-metadata"},
         "column": source}} for column, source in (
             ("bundle_digest", "publication_digest"), ("payload_digest", "metadata_blob_digest"),
@@ -109,7 +109,7 @@ def resolved_trust_document(document, high_water):
     result = copy.deepcopy(document)
     for predicate in result.get("predicates", ()):
         value = predicate["value"]
-        if type(value) is dict and value.get("schema") == "serverware.policyAuthoritySelectedRowField/v1":
+        if type(value) is dict and value.get("schema") == "catchplate.policyAuthoritySelectedRowField/v1":
             if (value["table"] != "webauthn_trust_publication_high_water"
                     or value["key"] != {"authority_scope": "webauthn-metadata"}):
                 raise AssertionError("fixture reference left its fixed proved high-water row")
@@ -165,7 +165,7 @@ class RevocationQueryProgramTests(unittest.TestCase):
         self.assertEqual(wire(documents(actual)), wire(expected))
         self.assertEqual([query.query_id for query in actual], [entry["queryId"] for entry in expected])
         self.assertTrue(all(type(query) is (complete.CompleteIndexQuery
-            if entry["schema"] == "serverware.policyAuthorityCompleteIndexQuery/v1" else core.BoundedQuery)
+            if entry["schema"] == "catchplate.policyAuthorityCompleteIndexQuery/v1" else core.BoundedQuery)
             for query, entry in zip(actual, expected)))
 
     def test_cascade_exact_fields_bytes_and_order_match_independent_source_documents(self):

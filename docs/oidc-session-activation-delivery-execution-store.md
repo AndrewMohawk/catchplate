@@ -1,6 +1,6 @@
 # First-exact consume execution ciphertext
 
-[`DeliveryExecutionBundleStore`](../serverware/authority_oidc_session_activation_delivery_execution_store.py)
+[`DeliveryExecutionBundleStore`](../catchplate/authority_oidc_session_activation_delivery_execution_store.py)
 retains the first exact encrypted consume-original bundle under independently
 supplied configuration, key and directory pins. This is source-only, unbuilt and
 unexecuted. Storage integrity is not caller permission, full semantic replay,
@@ -30,7 +30,7 @@ magic, big-endian context length (four bytes), original-plan length (four bytes)
 and ciphertext-bundle length (eight bytes). The bodies are canonical context,
 the exact original consume-plan envelope and the original encrypted bundle.
 The basename is `consume-execution-` plus the hex portion of the framed context
-digest under `serverware.oidcSessionActivationDeliveryExecutionStoreSlot/v1`.
+digest under `catchplate.oidcSessionActivationDeliveryExecutionStoreSlot/v1`.
 There is no supplied pathname, latest-record lookup or alternate format.
 
 The whole record, including all framing, is at most **64 MiB**. Context is at
@@ -76,7 +76,7 @@ or create historical execution authority.
 
 ## Shared mechanics, separate authority
 
-The private [storage engine](../serverware/authority_oidc_execution_store_core.py)
+The private [storage engine](../catchplate/authority_oidc_execution_store_core.py)
 accepts exactly the actual activation and consume wrapper classes. Each public
 wrapper also rejects the other receiver type and subclasses. No caller chooses
 a profile, codec, callback or success carrier. The activation wrapper preserves

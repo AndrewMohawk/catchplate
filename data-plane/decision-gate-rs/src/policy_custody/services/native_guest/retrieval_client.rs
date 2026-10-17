@@ -10,7 +10,7 @@ use std::os::fd::{AsFd,OwnedFd};
 #[path="retrieval_client_peer.rs"] mod inspection;
 pub(in crate::policy_shadow::policy_custody::services) use inspection::{Inspector,Session};
 pub(super) const DIRECTORY_NAME:&str="retrieval-peer-directory";
-pub(super) const SOCKET_PATH:&str="/run/serverware-shadow-retrieval/listener.sock";
+pub(super) const SOCKET_PATH:&str="/run/catchplate-shadow-retrieval/listener.sock";
 
 struct Selection {endpoint:ProductionProofEndpointConfigV4,runtime_sha256:Sha256Digest}
 pub(super) fn assigned_peer(files:&FileAdmission)->Result<services::ExpectedPeerCredentialV3,ShadowError> {

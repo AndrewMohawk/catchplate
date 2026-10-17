@@ -186,10 +186,10 @@ pub(super) fn run() -> Result<(), String> {
     connection.check()?;
     let mut result = json!({
         "apiVersion":if workload_issuer.is_some() {
-            "serverware.nativeIngressClientCapture/v3"
+            "catchplate.nativeIngressClientCapture/v3"
         } else if generated_challenge.is_some() {
-            "serverware.nativeIngressClientCapture/v2"
-        } else { "serverware.nativeIngressClientCapture/v1" },
+            "catchplate.nativeIngressClientCapture/v2"
+        } else { "catchplate.nativeIngressClientCapture/v1" },
         "resultScope":if workload_issuer.is_some() {
             "local-fixed-endpoint-session-client-trust-and-quote-only"
         } else { "local-fixed-endpoint-session-and-quote-only" }, "okForAction":false,

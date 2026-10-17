@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v8.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-startup-configuration.v8.schema.json",
   "title": "Cold native guest inspector parent and original lifetime",
   "$comment": "Explicit --native-startup-inspector-v8 only, or fixed image entrypoint --guest-inspector-v8. Exact v7 encrypted/measured-refresh fields plus guestInspector. Old modes refuse v8. <=16MiB retained independently pinned cold configuration. Actual signed guest router delivery and root Prepared owner precede the fixed clone; initialization is not cohort readiness or release authority.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion","gate","native","shadow","responseObservationV2","policy","enrollmentAuthorizer","enrollmentSetupAuthorizer","enrollmentProxyEndpoint","credentialCurrentness","secretBroker","measuredAudit","encryptedServiceTokens","measuredRefresh","guestInspector"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeStartupConfiguration/v8"},
+    "apiVersion": {"const": "catchplate.nativeStartupConfiguration/v8"},
     "gate": {"$ref": "native-startup-configuration.v6.schema.json#/$defs/gate"},
     "native": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/native"},
     "shadow": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/shadow"},
@@ -35,11 +35,11 @@
     "guestInspector": {
       "type": "object","additionalProperties": false,"required": ["apiVersion","executable","configuration","delivery"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeGuestInspector/v1"},
+        "apiVersion": {"const": "catchplate.nativeGuestInspector/v1"},
         "executable": {
           "type": "object","additionalProperties": false,"required": ["path","sha256"],
           "properties": {
-            "path": {"const": "/usr/local/bin/serverware-response-v2-guest-inspector"},
+            "path": {"const": "/usr/local/bin/catchplate-response-v2-guest-inspector"},
             "sha256": {"$ref": "#/$defs/sha256"}
           }
         },

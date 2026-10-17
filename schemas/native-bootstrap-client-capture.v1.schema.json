@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-bootstrap-client-capture.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-bootstrap-client-capture.v1.schema.json",
   "title": "Local native bootstrap client original capture v1",
   "description": "Public local diagnostic, not an authenticated receipt or issuance authority. The producing client emits one UTF-8 JSON line including exactly one final LF, at most 1572864 bytes. Keep the actual producer exit status separately; a valid shape cannot prove successful acquisition. Packet extraction checks exact target request association and publishes data only, never an accepted verification result.",
   "type": "object", "additionalProperties": false,
   "required": ["apiVersion", "resultScope", "okForAction", "configurationSha256", "requestSha256", "endpoint", "challengeSource", "evidenceBase64url", "verification"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeBootstrapClientCapture/v1"},
+    "apiVersion": {"const": "catchplate.nativeBootstrapClientCapture/v1"},
     "resultScope": {"const": "local-fixed-endpoint-bootstrap-originals-only"},
     "okForAction": {"const": false},
     "configurationSha256": {"$ref": "#/$defs/digest"},

@@ -112,9 +112,9 @@ def genesis_operation(mode):
 def _sign_adoption(arguments, runtime):
     """Retain the genuine native validator owner through output and cleanup."""
     from scripts.authority import native_pilot_authority_io as io
-    from serverware import native_pilot_genesis_parent_control_io as owner_io
-    from serverware.native_pilot_publication_adoption_authority import AdoptionAuthority, AdoptionAuthorityError
-    from serverware import native_shadow_nitro_originals as originals
+    from catchplate import native_pilot_genesis_parent_control_io as owner_io
+    from catchplate.native_pilot_publication_adoption_authority import AdoptionAuthority, AdoptionAuthorityError
+    from catchplate import native_shadow_nitro_originals as originals
 
     owner = None
 
@@ -188,29 +188,29 @@ def main():
     from scripts.run_native_pilot_supervisor import _SelfRuntime
     from scripts.authority import native_pilot_authority_io as io
     from scripts.authority import prepare_native_pilot_closure_set as preparation
-    from serverware import native_pilot_assignment as assignment
-    from serverware import native_pilot_genesis_parent_authority as genesis
-    from serverware import native_pilot_genesis_ordinary_initial_authority as initial
-    from serverware import native_pilot_genesis_ordinary_authority as ordinary
-    from serverware import native_pilot_genesis_delivery_authority as delivery
-    from serverware import native_pilot_genesis_key_authority as keys
-    from serverware import native_pilot_genesis_closure_authority as closure
-    from serverware import native_pilot_genesis_native_service_authority as service
-    from serverware import native_pilot_genesis_endpoint_release_authority as endpoint_release
-    from serverware import native_pilot_genesis_encrypted_authority as encrypted
-    from serverware import native_pilot_genesis_verifier_authority as verifier
-    from serverware import native_pilot_genesis_launch_profile as launch
-    from serverware import native_pilot_publication_cold_binding as cold_binding
-    from serverware import native_pilot_adopted_commands as adopted
-    from serverware import native_pilot_adopted_cohort_authority as adopted_cohort
-    from serverware import native_pilot_ordinary_initial_authority as adopted_initial
-    from serverware import native_pilot_ordinary_publication_authority as adopted_publication
-    from serverware import native_pilot_service_authority as adopted_service
-    from serverware import native_pilot_bridge_authorization_profile as adopted_bridge
-    from serverware import native_pilot_bridge_launch_profile as adopted_bridge_launch
-    from serverware import native_pilot_current_head_profile as adopted_head
-    from serverware import native_pilot_current_head_authority as adopted_head_authority
-    from serverware import native_shadow_nitro_originals as originals
+    from catchplate import native_pilot_assignment as assignment
+    from catchplate import native_pilot_genesis_parent_authority as genesis
+    from catchplate import native_pilot_genesis_ordinary_initial_authority as initial
+    from catchplate import native_pilot_genesis_ordinary_authority as ordinary
+    from catchplate import native_pilot_genesis_delivery_authority as delivery
+    from catchplate import native_pilot_genesis_key_authority as keys
+    from catchplate import native_pilot_genesis_closure_authority as closure
+    from catchplate import native_pilot_genesis_native_service_authority as service
+    from catchplate import native_pilot_genesis_endpoint_release_authority as endpoint_release
+    from catchplate import native_pilot_genesis_encrypted_authority as encrypted
+    from catchplate import native_pilot_genesis_verifier_authority as verifier
+    from catchplate import native_pilot_genesis_launch_profile as launch
+    from catchplate import native_pilot_publication_cold_binding as cold_binding
+    from catchplate import native_pilot_adopted_commands as adopted
+    from catchplate import native_pilot_adopted_cohort_authority as adopted_cohort
+    from catchplate import native_pilot_ordinary_initial_authority as adopted_initial
+    from catchplate import native_pilot_ordinary_publication_authority as adopted_publication
+    from catchplate import native_pilot_service_authority as adopted_service
+    from catchplate import native_pilot_bridge_authorization_profile as adopted_bridge
+    from catchplate import native_pilot_bridge_launch_profile as adopted_bridge_launch
+    from catchplate import native_pilot_current_head_profile as adopted_head
+    from catchplate import native_pilot_current_head_authority as adopted_head_authority
+    from catchplate import native_shadow_nitro_originals as originals
 
     runtime = None
     try:

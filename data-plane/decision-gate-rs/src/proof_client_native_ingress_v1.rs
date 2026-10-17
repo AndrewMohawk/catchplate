@@ -128,9 +128,9 @@ impl NativeIngressAdmission {
         let value = json::parse(&raw, MAX_CONFIGURATION)?;
         let version = value.get("apiVersion").and_then(Value::as_str);
         let (client_trust_v2, principal_v3, expected_version) = match version {
-            Some("serverware.nativeProxyIngress/v1") => (false, false, "serverware.nativeProxyIngress/v1"),
-            Some("serverware.nativeProxyIngress/v2") => (true, false, "serverware.nativeProxyIngress/v2"),
-            Some("serverware.nativeProxyIngress/v3") => (true, true, "serverware.nativeProxyIngress/v3"),
+            Some("catchplate.nativeProxyIngress/v1") => (false, false, "catchplate.nativeProxyIngress/v1"),
+            Some("catchplate.nativeProxyIngress/v2") => (true, false, "catchplate.nativeProxyIngress/v2"),
+            Some("catchplate.nativeProxyIngress/v3") => (true, true, "catchplate.nativeProxyIngress/v3"),
             _ => return Err("native ingress configuration version is unsupported".to_owned()),
         };
         let fields = value.as_object().ok_or("native ingress configuration is not an object")?;

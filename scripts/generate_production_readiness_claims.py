@@ -24,7 +24,7 @@ from verify_attestation import (
     verify_quote,
     verify_runtime_digest,
 )
-from serverware.http_client import request_bytes
+from catchplate.http_client import request_bytes
 import verify_production_readiness
 
 
@@ -54,7 +54,7 @@ def sha256_prefixed(value: bytes) -> str:
 
 
 def request_json(url: str, admin_token: str | None = None, *, ca_bundle: str | None = None) -> dict[str, Any]:
-    headers = {"X-Serverware-Admin-Token": admin_token} if admin_token else {}
+    headers = {"X-Catchplate-Admin-Token": admin_token} if admin_token else {}
     request = urllib.request.Request(url, headers=headers)
     context = ssl.create_default_context(cafile=ca_bundle) if ca_bundle else None
     return json.loads(
@@ -214,21 +214,21 @@ def write_claims(path: Path, claims: dict[str, Any]) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate a verified claims file for production Nitro/KMS readiness probes.")
-    parser.add_argument("--base", default="http://localhost:3000", help="Serverware control-plane base URL")
+    parser.add_argument("--base", default="http://localhost:3000", help="Catchplate control-plane base URL")
     parser.add_argument("--ca-bundle", default=None, help="CA bundle for the production control-plane TLS service")
     parser.add_argument(
         "--admin-token",
-        default=os.getenv("SERVERWARE_ADMIN_TOKEN"),
+        default=os.getenv("CATCHPLATE_ADMIN_TOKEN"),
         help="development-only direct admin token for policy verification",
     )
     parser.add_argument(
         "--admin-token-file",
-        default=os.getenv("SERVERWARE_ADMIN_TOKEN_FILE"),
+        default=os.getenv("CATCHPLATE_ADMIN_TOKEN_FILE"),
         help="production admin-token file",
     )
     parser.add_argument("--nonce", default=None)
     parser.add_argument("--out", default=None)
-    parser.add_argument("--tee-verify-command", default=os.getenv("SERVERWARE_TEE_QUOTE_VERIFY_COMMAND"))
+    parser.add_argument("--tee-verify-command", default=os.getenv("CATCHPLATE_TEE_QUOTE_VERIFY_COMMAND"))
     parser.add_argument("--skip-policy-verify", action="store_true")
     parser.add_argument("--allow-debug-claims", action="store_true")
     args = parser.parse_args()
@@ -239,12 +239,12 @@ def main() -> None:
     if not args.skip_policy_verify:
         token_sources: dict[str, str] = {}
         if args.admin_token is not None:
-            token_sources["SERVERWARE_ADMIN_TOKEN"] = args.admin_token
+            token_sources["CATCHPLATE_ADMIN_TOKEN"] = args.admin_token
         if args.admin_token_file is not None:
-            token_sources["SERVERWARE_ADMIN_TOKEN_FILE"] = args.admin_token_file
+            token_sources["CATCHPLATE_ADMIN_TOKEN_FILE"] = args.admin_token_file
         admin_token = verify_production_readiness.load_service_credential_for_tool(
             token_sources,
-            "SERVERWARE_ADMIN_TOKEN",
+            "CATCHPLATE_ADMIN_TOKEN",
             require_file=not args.allow_debug_claims,
         )
 

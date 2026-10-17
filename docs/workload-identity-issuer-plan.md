@@ -15,13 +15,13 @@ services, trust stores or cloud resources were provisioned. See the
 
 | Actual source | Reuse and boundary |
 | --- | --- |
-| `serverware/enrollment.py:build_agent_enrollment` | Produces the genuine signed packet from the current policy snapshot, attestation pins, principal and nonce. `_identity_block` includes public mTLS selectors only. Packet signing is `response_identity.sign_statement`; that response key is not a certificate-issuance key. |
-| `serverware/app.py:agent_enrollment` (`POST /api/agents/enrollment`) | Currently requires `policy_author`, builds the packet, creates a purpose-specific CA-install session, and binds the final packet to that session. This route and its session token authorize neither workload certificate signing nor an issuer key read. |
-| `serverware/control_plane_runner.py:main` | Admits custody, enrollment and the public workload-identity caller before application/DB/HTTP imports, with reverse-order exceptional and normal cleanup. |
-| `serverware/control_plane_custody_startup.py:require_started` and `control_plane_custody_client._snapshot` | Supply the actual already-admitted runtime root, original inherited descriptor inventory and current receipt. Reuse those originals; do not repeat runtime inventory admission after a journal has opened descriptors. |
-| `serverware/control_plane_startup.py:validate_control_plane_configuration` | Requires the genuine workload-identity startup owner alongside existing owners; a signed disabled profile is explicit. No PID environment flag or lazy app initialization substitutes for admission. |
-| `data-plane/decision-gate-rs/src/main.rs:load_proxy_ingress_config` | `mtls` mode loads `SERVERWARE_PROXY_TLS_CERT`, `SERVERWARE_PROXY_TLS_KEY` and `SERVERWARE_PROXY_CLIENT_CA_BUNDLE`; rustls requires TLS 1.3 and client authentication. The loaded public bundle digest is recorded in `ProxyIngressAttestation.client_trust_bundle_sha256`. Issuance alone does not install that bundle or prove a handshake. |
-| `serverware_agent_trust/workload_identity_provisioning.py` | Current local producer/admitter consumes exact pinned packet, packet-signing key and issuer originals, then the retained request/key and returned leaf. Its standard CSR and signed request establish possession only. |
+| `catchplate/enrollment.py:build_agent_enrollment` | Produces the genuine signed packet from the current policy snapshot, attestation pins, principal and nonce. `_identity_block` includes public mTLS selectors only. Packet signing is `response_identity.sign_statement`; that response key is not a certificate-issuance key. |
+| `catchplate/app.py:agent_enrollment` (`POST /api/agents/enrollment`) | Currently requires `policy_author`, builds the packet, creates a purpose-specific CA-install session, and binds the final packet to that session. This route and its session token authorize neither workload certificate signing nor an issuer key read. |
+| `catchplate/control_plane_runner.py:main` | Admits custody, enrollment and the public workload-identity caller before application/DB/HTTP imports, with reverse-order exceptional and normal cleanup. |
+| `catchplate/control_plane_custody_startup.py:require_started` and `control_plane_custody_client._snapshot` | Supply the actual already-admitted runtime root, original inherited descriptor inventory and current receipt. Reuse those originals; do not repeat runtime inventory admission after a journal has opened descriptors. |
+| `catchplate/control_plane_startup.py:validate_control_plane_configuration` | Requires the genuine workload-identity startup owner alongside existing owners; a signed disabled profile is explicit. No PID environment flag or lazy app initialization substitutes for admission. |
+| `data-plane/decision-gate-rs/src/main.rs:load_proxy_ingress_config` | `mtls` mode loads `CATCHPLATE_PROXY_TLS_CERT`, `CATCHPLATE_PROXY_TLS_KEY` and `CATCHPLATE_PROXY_CLIENT_CA_BUNDLE`; rustls requires TLS 1.3 and client authentication. The loaded public bundle digest is recorded in `ProxyIngressAttestation.client_trust_bundle_sha256`. Issuance alone does not install that bundle or prove a handshake. |
+| `catchplate_agent_trust/workload_identity_provisioning.py` | Current local producer/admitter consumes exact pinned packet, packet-signing key and issuer originals, then the retained request/key and returned leaf. Its standard CSR and signed request establish possession only. |
 
 `control_plane_enrollment_startup._EnrollmentOwner` is a WebAuthn/registration
 authority owner, not a workload CA. `ca_material.ensure_mitm_ca_material` concerns
@@ -64,8 +64,8 @@ the same original contract, not bypass it.
 ## Original-only issuance contract
 
 The implemented closed payload domains are
-`serverware.workloadIdentityIssuerBootstrap/v1` and
-`serverware.workloadIdentityIssuanceAuthorization/v1`, each with an explicitly
+`catchplate.workloadIdentityIssuerBootstrap/v1` and
+`catchplate.workloadIdentityIssuanceAuthorization/v1`, each with an explicitly
 paired signed envelope. Their canonical encoding, Ed25519 domain separation and
 original-byte bounds are source-fixed; this is not a deployed service claim.
 
@@ -85,8 +85,8 @@ Each issuance authorization pins:
   issuance slot for the same nonce.
 
 The request is the existing canonical
-`serverware.signedWorkloadIdentityRequest/v1` original. Its P-256 signature is
-over `b"serverware.workloadIdentityRequest/v1\x00" + canonical(payload)`;
+`catchplate.signedWorkloadIdentityRequest/v1` original. Its P-256 signature is
+over `b"catchplate.workloadIdentityRequest/v1\x00" + canonical(payload)`;
 the PKCS#10 signature must independently verify under the same exact CSR key.
 The worker must also genuinely verify the signed enrollment packet under its
 independently configured packet key and match all original bindings. No
@@ -146,15 +146,15 @@ external anti-rollback witness.
 All four groups below are connected in source, not built or executed. Public
 action source does not establish a provisioned callable deployment:
 
-1. `serverware/workload_identity_issuance_authorization.py` and
+1. `catchplate/workload_identity_issuance_authorization.py` and
    `workload_identity_issuer_bootstrap.py`: closed producer/verifier contracts
    and original-only cold admission. Both have `_produce_on_work` and
    `_verify_on_work`; the grant module also has the original-only
    `_verify_certificate_on_work`. Shared public verification is factored into
-   `serverware_agent_trust/workload_identity_originals.py`, with optional actual
+   `catchplate_agent_trust/workload_identity_originals.py`, with optional actual
    inherited-work metering in the existing signed-packet verifier. Neither accepts the local
    `PreparedIdentity` or `ProvisionedIdentity` objects as authority.
-2. `serverware/workload_identity_issuer_startup.py`,
+2. `catchplate/workload_identity_issuer_startup.py`,
    `workload_identity_issuer_service.py`, `workload_identity_issuer_journal.py`
    plus `workload_identity_issuer_entrypoint.py`, its launcher and transport:
    exact cold resource ownership, one guarded `_serve_on_owner` using the actual
@@ -162,7 +162,7 @@ action source does not establish a provisioned callable deployment:
    return. The service accepts raw `(grant, packet, request)` originals, not a
    successful verification object. Lifetime/work
    arguments are the actual service's inherited context, not posted values.
-3. `serverware/control_plane_workload_identity_bootstrap.py`,
+3. `catchplate/control_plane_workload_identity_bootstrap.py`,
    `control_plane_workload_identity_startup.py` and
    `control_plane_workload_identity_client.py`: public-only bootstrap and one
    endpoint/peer-bound exchange. The startup owner follows existing custody and
@@ -214,7 +214,7 @@ logs or chat.
 An authorized operator must provision the CA and separate grant authorizer,
 their admitted cold originals, dedicated identities/resources and durable
 storage. The issuer CA public certificate must be independently distributed to
-the proxy's `SERVERWARE_PROXY_CLIENT_CA_BUNDLE`; proxy server trust remains a
+the proxy's `CATCHPLATE_PROXY_CLIENT_CA_BUNDLE`; proxy server trust remains a
 separate client input. Bind the actual ingress bundle digest and policy issuer
 selectors to deployment evidence. Never install trust from the CSR or issuance
 reply, mutate trust implicitly at HTTP request time, or claim the intended bundle

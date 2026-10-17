@@ -1,0 +1,78 @@
+# REVIEW REQUIRED: unrendered and uninstalled single-assignment deployment input.
+# Do not install/start before independent binary, configuration, account, host
+# inventory and fixed ingress-assignment admission. This is not a production
+# mapping, trust enrollment, cloud permission or evidence that serving has run.
+# Precreate catchplate-native-ingress as a dedicated nonroot account/group with
+# no supplementary privileged groups, login, cloud credentials or secret access.
+# Provision the public, nonsecret config separately, immutable to this account
+# and readable by it. No TLS private keys, credentials or secret mounts belong
+# here: genuine client mTLS authentication must remain inside the enclave.
+# Replace only @CONFIGURATION_PATH@ (an absolute canonical single-word path,
+# without whitespace, quotes, backslash, dollar or percent) and
+# @CONFIGURATION_SHA256@ (sha256: plus 64 lowercase hex digits). No renderer or
+# provisioning is supplied. Review the exact resulting arguments before use.
+# The config retains one original parent CLOCK_BOOTTIME deadline: no restart or
+# new relative window is authorized. No [Install] section enables this input.
+
+[Unit]
+Description=Catchplate fixed-assignment native parent ciphertext ingress
+After=local-fs.target network-online.target
+Wants=network-online.target
+RequiresMountsFor=/usr/local/libexec/catchplate-native-parent-ingress @CONFIGURATION_PATH@
+AssertPathExists=/usr/local/libexec/catchplate-native-parent-ingress
+AssertPathExists=@CONFIGURATION_PATH@
+StartLimitIntervalSec=infinity
+StartLimitBurst=1
+
+[Service]
+# Successful exec is not ingress readiness, enclave identity or trust admission.
+Type=exec
+User=catchplate-native-ingress
+Group=catchplate-native-ingress
+DynamicUser=no
+WorkingDirectory=/
+ExecStart=/usr/local/libexec/catchplate-native-parent-ingress --configuration @CONFIGURATION_PATH@ --configuration-sha256 @CONFIGURATION_SHA256@
+Restart=no
+TimeoutStartSec=10s
+# TERM requests actual joined cancellation. A clipped in-progress VSOCK connect
+# can delay cleanup; stop escalation is not a hard kernel/syscall watchdog or
+# proof that blocked tasks have exited. Independently verify final termination.
+KillSignal=SIGTERM
+KillMode=control-group
+TimeoutStopSec=10s
+SendSIGKILL=yes
+FinalKillSignal=SIGKILL
+OOMPolicy=stop
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+UMask=0077
+LimitCORE=0
+LimitNOFILE=512
+TasksMax=32
+MemoryMax=128M
+MemorySwapMax=0
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+KeyringMode=private
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+# Only the fixed TCP listener and fixed VSOCK enclave endpoint are required.
+# Use the admitted parent network namespace; no alternate network is provisioned.
+RestrictAddressFamilies=AF_VSOCK AF_INET AF_INET6

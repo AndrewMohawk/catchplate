@@ -22,11 +22,11 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_contract
-from serverware import authority_query_read_work as accounting
-from serverware import authority_transition_core as core
-from serverware import authority_transition_webauthn as candidate
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_contract
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_transition_core as core
+from catchplate import authority_transition_webauthn as candidate
 import test_authority_revocation_query_program as recipe_oracle
 
 
@@ -153,7 +153,7 @@ def expected_work(fixture):
         expected.utf8(label)
         purpose = "webauthn-revocation-audit:" + hashlib.sha256(label.encode("utf-8")).hexdigest()
         expected.utf8(purpose)
-        expected.graph({"schema": "serverware.policyAuthorityDeterministicIdentity/v1",
+        expected.graph({"schema": "catchplate.policyAuthorityDeterministicIdentity/v1",
             "operation": OPERATION, "requestDigest": fixture.inputs["request_digest"],
             "purpose": purpose})
         expected.hash_work += 2
@@ -370,7 +370,7 @@ class RevocationQueryWorkTests(unittest.TestCase):
         subject = "approbation-雪"
         label = "approval:" + subject
         purpose = "webauthn-revocation-audit:" + hashlib.sha256(label.encode("utf-8")).hexdigest()
-        document = {"schema": "serverware.policyAuthorityDeterministicIdentity/v1", "operation": OPERATION,
+        document = {"schema": "catchplate.policyAuthorityDeterministicIdentity/v1", "operation": OPERATION,
             "requestDigest": recipe_oracle.REQUEST_DIGEST, "purpose": purpose}
         expected = ExpectedWork()
         expected.utf8(label)

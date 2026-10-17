@@ -12,11 +12,11 @@ use super::production::{ProductionAuthorityEndpointIdentityV4 as EndpointIdentit
     ProductionProofEndpointKindV4 as Proof};
 use crate::policy_shadow::PolicyShadowCustodySignerRole as Signer;
 
-pub(super) const RUNTIME: &str = "serverware.nativePublicationGenesisCoordinatorRuntime/v1";
+pub(super) const RUNTIME: &str = "catchplate.nativePublicationGenesisCoordinatorRuntime/v1";
 /// Full, late-authorized runtime for the explicitly selected measured bootstrap.
 /// This document is still hashed in full by C9 and the closure assignment; it
 /// is not the static bootstrap document stored in the immutable image.
-pub(super) const BOOTSTRAP_RUNTIME: &str = "serverware.nativePublicationGenesisCoordinatorRuntime/v2";
+pub(super) const BOOTSTRAP_RUNTIME: &str = "catchplate.nativePublicationGenesisCoordinatorRuntime/v2";
 pub(super) const RESULT_FD: &str = "publication-genesis-result";
 pub(super) const RESULT_PARENT_FD: &str = "publication-genesis-result-parent";
 pub(super) const MAX_CONFIGURATION: usize = 4 * 1024 * 1024;
@@ -213,11 +213,11 @@ fn native(owner: &native_guest::AdmittedGuest, scope: &fixed::Scope,
         && response.completed_at_boottime_nanos < deadline && response.authority_key_id == key.key_id
         && response.authority_key_spki_sha256 == key.key_spki_sha256
         && response.result_sha256 == crate::policy_shadow::hash_domain_frames(
-            b"serverware.policyCustodyProductionAuthorityEndpointResponse/v4", &[&encode_canonical_frame(&response.result)?]))?;
+            b"catchplate.policyCustodyProductionAuthorityEndpointResponse/v4", &[&encode_canonical_frame(&response.result)?]))?;
     let signature = URL_SAFE_NO_PAD.decode(&response.signature_base64).map_err(|_| invalid())?;
     require(signature.len() == 64 && URL_SAFE_NO_PAD.encode(&signature) == response.signature_base64)?;
     key.material()?.verify_strict(&super::super::protocol::domain_separated_signature_preimage(
-        b"serverware.policyCustodyProductionAuthorityEndpointSignature/v4",
+        b"catchplate.policyCustodyProductionAuthorityEndpointSignature/v4",
         &response.signature_payload().map_err(|_| invalid())?)?,
         &Signature::from_slice(&signature).map_err(|_| invalid())?).map_err(|_| invalid())?;
     session.after_verify(&packet, deadline).map_err(|_| invalid())?;
@@ -347,7 +347,7 @@ pub(super) fn run(configuration: Configuration, owner: Arc<native_guest::Admitte
     bundle.verify(scope, &d.native, &d.retrieval, &d.durable_authority_epoch, &durable_key,
         &d.current_authority_epoch, &current_key)?;
     let bundle_raw = encode_canonical_frame(&bundle)?;
-    let handoff = Handoff { api_version: "serverware.nativePublicationGenesisHandoff/v1".into(),
+    let handoff = Handoff { api_version: "catchplate.nativePublicationGenesisHandoff/v1".into(),
         commissioning_id_sha256: scope.commissioning_id_sha256.clone(), scope_sha256: sha(scope)?,
         bundle_sha256: Sha256Digest::compute(&bundle_raw),
         bundle_original: String::from_utf8(bundle_raw).map_err(|_| invalid())? };
@@ -365,7 +365,7 @@ pub(super) fn run(configuration: Configuration, owner: Arc<native_guest::Admitte
         wait_for_fd(result.progress_fd().as_raw_fd(), libc::POLLIN, Some(deadline)).map_err(|_| invalid())?;
     };
     let ack: Acknowledgment = decode_canonical_frame(&reply)?;
-    require(ack.api_version == "serverware.nativePublicationGenesisHandoffAck/v1"
+    require(ack.api_version == "catchplate.nativePublicationGenesisHandoffAck/v1"
         && ack.handoff_sha256 == Sha256Digest::compute(&raw))?;
     result.check().map_err(|_| invalid())?;
     check(&owner, scope)?;

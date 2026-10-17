@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-activation-readiness.v2.schema.json",
-  "title": "Serverware Policy Activation Readiness v2",
+  "$id": "https://catchplate.invalid/schemas/policy-activation-readiness.v2.schema.json",
+  "title": "Catchplate Policy Activation Readiness v2",
   "$comment": "This is verification evidence, not an activation command. Native verification pins this envelope to the assignment's activation-readiness key, reconstructs and domain-hashes the immutable detached ReadinessCore, requires complete assigned-fleet coverage by previously verified final checkpoints, recomputes aggregate counters and latency percentiles, and enforces zero drops, errors, indeterminate outcomes, unavailable evidence, response divergence, gaps, or chain failures. Expansion classification comes only from a separately signed compiler-produced PolicyAuthorityAnalysis. Approved expansion is limited by exact semantic cells and pilot roots/limits and requires WebAuthn over the exact core. Pure verification exposes no activation side effect; activation requires one crate-private custody transaction that atomically revalidates current readiness/trust, consumes approval and assertion replay/counter state, and CAS-publishes the candidate.",
   "type": "object",
   "additionalProperties": false,
@@ -18,10 +18,10 @@
     "signature"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.policyActivationReadiness/v2"},
+    "apiVersion": {"const": "catchplate.policyActivationReadiness/v2"},
     "kind": {"const": "PolicyActivationReadiness"},
-    "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
-    "signatureDomain": {"const": "serverware.policyActivationReadiness/v2"},
+    "canonicalProfile": {"const": "catchplate.canonicalJson/ascii-integer-v1"},
+    "signatureDomain": {"const": "catchplate.policyActivationReadiness/v2"},
     "payload": {"$ref": "#/$defs/payload"},
     "payloadSha256": {"$ref": "#/$defs/sha256"},
     "signatureAlgorithm": {"const": "Ed25519"},
@@ -168,10 +168,10 @@
         "signature"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.policyAuthorityAnalysis/v1"},
+        "apiVersion": {"const": "catchplate.policyAuthorityAnalysis/v1"},
         "kind": {"const": "PolicyAuthorityAnalysis"},
-        "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
-        "signatureDomain": {"const": "serverware.policyAuthorityAnalysis/v1"},
+        "canonicalProfile": {"const": "catchplate.canonicalJson/ascii-integer-v1"},
+        "signatureDomain": {"const": "catchplate.policyAuthorityAnalysis/v1"},
         "payload": {"$ref": "#/$defs/policyAuthorityAnalysisPayload"},
         "payloadSha256": {"$ref": "#/$defs/sha256"},
         "signatureAlgorithm": {"const": "Ed25519"},
@@ -501,7 +501,7 @@
         "expiresAtUnixNanos"
       ],
       "properties": {
-        "coreVersion": {"const": "serverware.policyReadinessCore/v2"},
+        "coreVersion": {"const": "catchplate.policyReadinessCore/v2"},
         "readinessRevision": {"$ref": "#/$defs/positiveI64"},
         "assignmentSha256": {"$ref": "#/$defs/sha256"},
         "assignmentPayloadSha256": {"$ref": "#/$defs/sha256"},
@@ -536,12 +536,12 @@
         "activationPrecondition": {"$ref": "#/$defs/activationPrecondition"},
         "evidenceRootSha256": {
           "$ref": "#/$defs/sha256",
-          "$comment": "SHA-256 over serverware.policyReadinessEvidenceRoot/v2 domain-separated length frames containing assignmentPayloadSha256 raw bytes, authorityKeyIndependenceSha256 raw bytes, memberEvidenceRootSha256 raw bytes, terminalReceiptCount and terminalReceiptRootSha256, publicationReceiptCount and publicationReceiptRootSha256, canonical aggregateCounters, canonical readinessThresholds, policyAuthorityAnalysisSha256 raw bytes, custodyReceiptEvidenceRequirementsSha256 raw bytes, responseValidationObligationsRootSha256 raw bytes, and canonical trustCheckpoint."
+          "$comment": "SHA-256 over catchplate.policyReadinessEvidenceRoot/v2 domain-separated length frames containing assignmentPayloadSha256 raw bytes, authorityKeyIndependenceSha256 raw bytes, memberEvidenceRootSha256 raw bytes, terminalReceiptCount and terminalReceiptRootSha256, publicationReceiptCount and publicationReceiptRootSha256, canonical aggregateCounters, canonical readinessThresholds, policyAuthorityAnalysisSha256 raw bytes, custodyReceiptEvidenceRequirementsSha256 raw bytes, responseValidationObligationsRootSha256 raw bytes, and canonical trustCheckpoint."
         },
         "issuedAtUnixNanos": {"$ref": "#/$defs/signedI64"},
         "expiresAtUnixNanos": {"$ref": "#/$defs/signedI64"}
       },
-      "$comment": "readinessCoreSha256 = SHA-256 domain frame over canonical readinessCore bytes using serverware.policyReadinessCore/v2. The expected readiness key fields exactly equal the assignment activation-readiness binding, and the enclosing envelope signer and independently resolved public-key material must match them. The core contains every activation-relevant candidate, predecessor, fleet, evidence, threshold, authority-cell, pilot, CAS, deadline, key-independence, terminal-evidence, and publication-evidence binding. Native verification requires the aggregate receipt counts/roots to equal fleetReadiness, satisfy the signed PolicyAuthorityAnalysis requirements, and include at least one verified publication receipt per covered member before activation can be ready."
+      "$comment": "readinessCoreSha256 = SHA-256 domain frame over canonical readinessCore bytes using catchplate.policyReadinessCore/v2. The expected readiness key fields exactly equal the assignment activation-readiness binding, and the enclosing envelope signer and independently resolved public-key material must match them. The core contains every activation-relevant candidate, predecessor, fleet, evidence, threshold, authority-cell, pilot, CAS, deadline, key-independence, terminal-evidence, and publication-evidence binding. Native verification requires the aggregate receipt counts/roots to equal fleetReadiness, satisfy the signed PolicyAuthorityAnalysis requirements, and include at least one verified publication receipt per covered member before activation can be ready."
     },
     "webauthnAssertion": {
       "type": "object",
@@ -663,10 +663,10 @@
         "signature"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.policyActivationApproval/v2"},
+        "apiVersion": {"const": "catchplate.policyActivationApproval/v2"},
         "kind": {"const": "PolicyActivationApproval"},
-        "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
-        "signatureDomain": {"const": "serverware.policyActivationApproval/v2"},
+        "canonicalProfile": {"const": "catchplate.canonicalJson/ascii-integer-v1"},
+        "signatureDomain": {"const": "catchplate.policyActivationApproval/v2"},
         "payload": {"$ref": "#/$defs/activationApprovalPayload"},
         "payloadSha256": {"$ref": "#/$defs/sha256"},
         "signatureAlgorithm": {"const": "Ed25519"},

@@ -124,7 +124,7 @@ fn custody_call_context(
     let context = custody.open_call(
         Sha256Digest::compute(
             format!(
-                "serverware.policyShadowCustodyCall/v2\0{operation}\0{binding}\0{}",
+                "catchplate.policyShadowCustodyCall/v2\0{operation}\0{binding}\0{}",
                 now_epoch_ms()
             )
             .as_bytes(),
@@ -809,17 +809,17 @@ fn separated_plan(
                     destination: destination.clone(),
                 });
                 let lease_policy = canonical_digest(&json!({
-                    "domain":"serverware.credentialLeaseRequirement/v1",
+                    "domain":"catchplate.credentialLeaseRequirement/v1",
                     "credentialSlotSha256":credential_slot.as_str(),
                     "destination":destination.as_str(),
                 }))?;
                 let decryption_context = canonical_digest(&json!({
-                    "domain":"serverware.credentialDecryptRequirement/v1",
+                    "domain":"catchplate.credentialDecryptRequirement/v1",
                     "credentialSlotSha256":credential_slot.as_str(),
                     "destination":destination.as_str(),
                 }))?;
                 let injection_commitment = canonical_digest(&json!({
-                    "domain":"serverware.credentialInjectionRequirement/v1",
+                    "domain":"catchplate.credentialInjectionRequirement/v1",
                     "credentialSlotSha256":credential_slot.as_str(),
                     "destination":destination.as_str(),
                 }))?;
@@ -1235,7 +1235,7 @@ fn effect_conditions(
         conditions.push(ConditionalIntent::ResolveCredentialVersion {
             credential_slot: credential_id.clone(),
             credential_claim_sha256: canonical_digest(&json!({
-                "domain":"serverware.policyShadowCredentialResolutionClaim/v1",
+                "domain":"catchplate.policyShadowCredentialResolutionClaim/v1",
                 "credentialSlotSha256":sha256_prefixed(credential_id.as_bytes()),
                 "providerSha256":sha256_prefixed(credential.provider.as_bytes()),
                 "providerSubjectSha256":credential
@@ -1249,7 +1249,7 @@ fn effect_conditions(
         });
         if credential.kind() == "oauth2" {
             let oauth_authority_sha256 = canonical_digest(&json!({
-                "domain":"serverware.policyShadowOauthAuthority/v1",
+                "domain":"catchplate.policyShadowOauthAuthority/v1",
                 "credentialSlotSha256":sha256_prefixed(
                     credential_id.as_bytes()
                 ),
@@ -1271,7 +1271,7 @@ fn effect_conditions(
             .to_string();
             match credential
                 .injection
-                .get("__serverwareOAuthOperation")
+                .get("__catchplateOAuthOperation")
                 .and_then(Value::as_str)
                 .unwrap_or("exchange")
             {
@@ -1314,7 +1314,7 @@ fn effect_conditions(
     {
         conditions.push(ConditionalIntent::BindIdempotencyKey {
             idempotency_commitment_sha256: canonical_digest(&json!({
-                "domain":"serverware.policyShadowIdempotencyBinding/v1",
+                "domain":"catchplate.policyShadowIdempotencyBinding/v1",
                 "routeSha256":sha256_prefixed(route.id.as_bytes()),
                 "principalSha256":sha256_prefixed(principal_id.as_bytes()),
                 "operationSha256":canonical_digest(operation)?,
@@ -1333,7 +1333,7 @@ fn effect_conditions(
     {
         conditions.push(ConditionalIntent::ResolveRecoveryState {
             recovery_commitment_sha256: canonical_digest(&json!({
-                "domain":"serverware.policyShadowRecoveryResolution/v1",
+                "domain":"catchplate.policyShadowRecoveryResolution/v1",
                 "routeSha256":sha256_prefixed(route.id.as_bytes()),
                 "principalSha256":sha256_prefixed(principal_id.as_bytes()),
                 "operationSha256":canonical_digest(operation)?,
@@ -1386,7 +1386,7 @@ fn effect_conditions(
         let claim = serde_json::to_value(&quota)
             .map_err(|_| "serialize exact shared quota claim".to_string())?;
         let claim_sha256 = canonical_digest(&json!({
-            "domain":"serverware.policyShadowExactQuotaClaim/v1",
+            "domain":"catchplate.policyShadowExactQuotaClaim/v1",
             "credentialVersionResolved":credential_version.is_some(),
             "claim":claim,
         }))?
@@ -1416,7 +1416,7 @@ fn effect_conditions(
         conditions.push(ConditionalIntent::ReserveQuota {
             counter_sha256: sha256_prefixed(counter_key.as_bytes()),
             claim_sha256: canonical_digest(&json!({
-                "domain":"serverware.policyShadowExactLocalQuotaClaim/v1",
+                "domain":"catchplate.policyShadowExactLocalQuotaClaim/v1",
                 "constraint":constraint,
                 "counterKey":counter_key,
                 "policyHash":snapshot.hash,
@@ -1471,7 +1471,7 @@ fn effect_conditions(
                 .ok_or("durable budget claim key is missing")?;
             let budget_sha256 = sha256_prefixed(budget_key.as_bytes());
             let claim_sha256 = canonical_digest(&json!({
-                "domain":"serverware.policyShadowExactDurableClaim/v1",
+                "domain":"catchplate.policyShadowExactDurableClaim/v1",
                 "credentialVersionResolved":credential_version.is_some(),
                 "claim":claim,
             }))?
@@ -1841,7 +1841,7 @@ fn evaluate_policy_plan_request(
         let typed_conditions = serde_json::to_value(&conditions)
             .map_err(|_| "serialize typed conditions".to_string())?;
         validations.push(canonical_digest(&json!({
-            "domain":"serverware.policyTypedConditions/v1",
+            "domain":"catchplate.policyTypedConditions/v1",
             "conditions":typed_conditions,
         }))?);
         validations.sort_by(|left, right| left.as_str().cmp(right.as_str()));
@@ -2147,7 +2147,7 @@ fn request_binding(
         .clone()
         .unwrap_or_else(|| sha256_prefixed(request.body.as_bytes()));
     let value = json!({
-        "domain":"serverware.shadowAdmissionBinding/v1",
+        "domain":"catchplate.shadowAdmissionBinding/v1",
         "policyHash":snapshot.hash,
         "policySequence":snapshot.policy_sequence,
         "rollbackEpoch":snapshot.rollback_epoch,
@@ -2607,7 +2607,7 @@ impl ShadowAccountingEvent {
     fn canonical_value(&self) -> Value {
         let phase = self.spool_phase();
         let mut value = json!({
-            "domain":"serverware.policyShadowRuntimeAccountingEvent/v1",
+            "domain":"catchplate.policyShadowRuntimeAccountingEvent/v1",
             "ingressSequence":self.ingress_sequence,
             "requestBindingSha256":self.request_binding_sha256,
             "requestCommitmentSha256":self.request_commitment_sha256,
@@ -2631,7 +2631,7 @@ impl ShadowAccountingEvent {
             value["reason"] = json!(reason);
         }
         if let Some(original) = &self.observation_original {
-            value["domain"] = json!("serverware.policyShadowRuntimeAccountingEvent/v2");
+            value["domain"] = json!("catchplate.policyShadowRuntimeAccountingEvent/v2");
             value["observationOriginal"] = original.as_ref().clone();
         }
         value
@@ -4934,7 +4934,7 @@ impl AccountingLedger {
         let compacted_record_count = u64::try_from(compacted.len())
             .map_err(|_| "compaction record count exceeds u64".to_string())?;
         let ordered_range_root = canonical_digest(&json!({
-            "domain":"serverware.policyShadowSpoolCompactedOrderedRange/v1",
+            "domain":"catchplate.policyShadowSpoolCompactedOrderedRange/v1",
             "generationId":accounting.generation_id,
             "firstEventOrdinal":first.event_ordinal(),
             "lastEventOrdinal":last.event_ordinal(),
@@ -4962,7 +4962,7 @@ impl AccountingLedger {
             .map(|receipt| receipt.resulting_head_sha256().to_digest())
             .transpose()?;
         let expected_new_root = canonical_digest(&json!({
-            "domain":"serverware.policyShadowCompactedSpoolRoot/v1",
+            "domain":"catchplate.policyShadowCompactedSpoolRoot/v1",
             "generationId":accounting.generation_id,
             "oldSpoolHeadSha256":accounting.last_spill_head_sha256,
             "compactedOrderedRangeRootSha256":ordered_range_root,
@@ -5052,7 +5052,7 @@ impl AccountingLedger {
         let ordered_range = {
             let accounting = &state.generations[index];
             json!({
-                "domain":"serverware.policyShadowSpoolCompactedOrderedRange/v1",
+                "domain":"catchplate.policyShadowSpoolCompactedOrderedRange/v1",
                 "generationId":accounting.generation_id,
                 "firstEventOrdinal":receipt.compacted_first_event_ordinal(),
                 "lastEventOrdinal":receipt.compacted_through_event_ordinal(),
@@ -5082,7 +5082,7 @@ impl AccountingLedger {
         let (retained_ordinal, retained_head) =
             receipt.retained_successor();
         let expected_new_root = canonical_digest(&json!({
-            "domain":"serverware.policyShadowCompactedSpoolRoot/v1",
+            "domain":"catchplate.policyShadowCompactedSpoolRoot/v1",
             "generationId":state.generations[index].generation_id,
             "oldSpoolHeadSha256":state.generations[index].last_spill_head_sha256,
             "compactedOrderedRangeRootSha256":exact_root,
@@ -5210,7 +5210,7 @@ impl AccountingLedger {
     fn status(&self) -> Value {
         let Ok(state) = self.state.try_lock() else {
             return json!({
-                "api_version":"serverware.policyShadowRuntimeStatus/v2",
+                "api_version":"catchplate.policyShadowRuntimeStatus/v2",
                 "readiness":false,
                 "readiness_reason":"accounting_state_poisoned",
             });
@@ -5273,7 +5273,7 @@ impl AccountingLedger {
             })
             .collect::<Vec<_>>();
         json!({
-            "api_version":"serverware.policyShadowRuntimeStatus/v2",
+            "api_version":"catchplate.policyShadowRuntimeStatus/v2",
             "readiness":false,
             "readiness_reason":if state.hard_unready
                 || self.hard_unready_signal.load(Ordering::Acquire)
@@ -5450,7 +5450,7 @@ const _: () = assert!(std::mem::size_of::<Option<CredentialPrerequisiteEvidence>
 impl CredentialPrerequisiteEvidence {
     fn commitment(&self) -> String {
         digest_json_ensure_ascii(&json!({
-            "domain":"serverware.policyShadowOuterCredentialPrerequisites/v1",
+            "domain":"catchplate.policyShadowOuterCredentialPrerequisites/v1",
             "evidence":self,
         }))
     }
@@ -5619,7 +5619,7 @@ impl CredentialOuterResult {
 
     fn result_commitment(&self) -> Result<String, String> {
         Ok(digest_json_ensure_ascii(&json!({
-            "domain":"serverware.policyShadowCredentialEffectResult/v1",
+            "domain":"catchplate.policyShadowCredentialEffectResult/v1",
             "version":self.version,
             "metadataSha256":self.metadata.to_digest()?.as_str(),
             "secretAvailable":self.secret_available,
@@ -5749,7 +5749,7 @@ fn final_active_outcome_digest(
     terminal_response_sha256: &str,
 ) -> String {
     digest_json_ensure_ascii(&json!({
-        "domain":"serverware.policyShadowFinalActiveOutcome/v2",
+        "domain":"catchplate.policyShadowFinalActiveOutcome/v2",
         "activePlanSha256":active_plan_sha256,
         "outcome":outcome,
         "returnedHttpStatus":returned_http_status,
@@ -6106,7 +6106,7 @@ impl ShadowRequestHandle {
         }
         let scope_digest = digest_json_ensure_ascii(&credential_lease_scope_commitment(scope));
         let parent_digest = digest_json_ensure_ascii(&json!({
-            "domain":"serverware.policyShadowCredentialPrerequisiteParent/v1",
+            "domain":"catchplate.policyShadowCredentialPrerequisiteParent/v1",
             "generation":self.inner.generation.generation_id(),
             "ingressSequence":self.inner.ingress_sequence,
             "requestBinding":self.inner.request_binding_sha256,
@@ -6133,12 +6133,12 @@ impl ShadowRequestHandle {
         // Existing barrier wire signs these opaque digests; the closed parent
         // preimage adds no new wire/profile interpretation or permission.
         let intent = digest_json_ensure_ascii(&json!({
-            "domain":"serverware.policyShadowCredentialOuterIntent/v2",
+            "domain":"catchplate.policyShadowCredentialOuterIntent/v2",
             "parent":parent_digest,
             "intent":Sha256Digest::parse(intent_sha256.to_string()).map_err(shadow_error)?,
         }));
         let prepared = digest_json_ensure_ascii(&json!({
-            "domain":"serverware.policyShadowCredentialOuterPreparedState/v2",
+            "domain":"catchplate.policyShadowCredentialOuterPreparedState/v2",
             "parent":parent_digest,
             "preparedState":Sha256Digest::parse(prepared_state_sha256.to_string()).map_err(shadow_error)?,
         }));
@@ -6634,7 +6634,7 @@ impl ShadowRequestHandle {
         let mut commit = |name: &'static str, value: Option<&Value>| -> Result<(), String> {
             let value = value.ok_or_else(|| format!("active effect result {name} is unavailable"))?;
             explicit_effect_commitments.push(digest_json_ensure_ascii(&json!({
-                "domain":"serverware.policyShadowExplicitEffectResult/v1",
+                "domain":"catchplate.policyShadowExplicitEffectResult/v1",
                 "name":name,
                 "value":value,
             })));
@@ -6815,7 +6815,7 @@ impl ShadowRequestHandle {
             );
         }
         let effect_results_value = json!({
-            "domain":"serverware.policyShadowFinalEffectResults/v2",
+            "domain":"catchplate.policyShadowFinalEffectResults/v2",
             "activePlanSha256":pending.active_plan_sha256.as_str(),
             "explicitCommitments":pending.explicit_effect_commitments.as_slice(),
             "terminalResponseSha256":terminal_response_sha256.as_str(),
@@ -7064,7 +7064,7 @@ impl ShadowRequestHandle {
             returned_http_status,
             terminal_response_sha256,
             Some(digest_json_ensure_ascii(&json!({
-                "domain":"serverware.policyShadowExactLocalResponse/v1",
+                "domain":"catchplate.policyShadowExactLocalResponse/v1",
                 "status":returned_http_status,
                 "wireResponseSha256":sha256_prefixed(local_response),
                 "wireResponseBytes":local_response.len(),
@@ -7158,7 +7158,7 @@ impl ShadowRequestHandle {
                 ActiveEffectRequirement::DispatchAuthorization => (
                     ActiveEffectTerminalState::Denied,
                     canonical_digest(&json!({
-                        "domain":"serverware.policyShadowDispatchAuthorization/v1",
+                        "domain":"catchplate.policyShadowDispatchAuthorization/v1",
                         "authorized":false,
                         "status":returned_http_status,
                     }))?,
@@ -7168,7 +7168,7 @@ impl ShadowRequestHandle {
                 | ActiveEffectRequirement::GmailMetadataFanout => (
                     ActiveEffectTerminalState::NotReached,
                     canonical_digest(&json!({
-                        "domain":"serverware.policyShadowEffectNotReached/v1",
+                        "domain":"catchplate.policyShadowEffectNotReached/v1",
                         "requirement":requirement,
                         "stage":"pre-dispatch-local-response",
                         "status":returned_http_status,
@@ -7178,7 +7178,7 @@ impl ShadowRequestHandle {
                     Some(Value::Null) => (
                         ActiveEffectTerminalState::NotReached,
                         canonical_digest(&json!({
-                            "domain":"serverware.policyShadowEffectNotReached/v1",
+                            "domain":"catchplate.policyShadowEffectNotReached/v1",
                             "requirement":requirement,
                             "stage":"pre-dispatch-local-response",
                             "status":returned_http_status,
@@ -7191,7 +7191,7 @@ impl ShadowRequestHandle {
                             ActiveEffectTerminalState::Completed
                         },
                         canonical_digest(&json!({
-                            "domain":"serverware.policyShadowNamedEffectResult/v1",
+                            "domain":"catchplate.policyShadowNamedEffectResult/v1",
                             "requirement":requirement,
                             "value":value,
                         }))?,
@@ -7199,7 +7199,7 @@ impl ShadowRequestHandle {
                     None => (
                         ActiveEffectTerminalState::NotReached,
                         canonical_digest(&json!({
-                            "domain":"serverware.policyShadowEffectNotReached/v1",
+                            "domain":"catchplate.policyShadowEffectNotReached/v1",
                             "requirement":requirement,
                             "stage":"pre-dispatch-local-response",
                             "status":returned_http_status,
@@ -7344,7 +7344,7 @@ impl ShadowRequestHandle {
             returned_http_status,
             returned_response,
             Some(digest_json_ensure_ascii(&json!({
-                "domain":"serverware.policyShadowExactPostDispatchLocalResponse/v1",
+                "domain":"catchplate.policyShadowExactPostDispatchLocalResponse/v1",
                 "status":returned_http_status,
                 "responseSha256":terminal_response_sha256,
                 "responseBytes":returned_response.len(),
@@ -7401,7 +7401,7 @@ impl ShadowRequestHandle {
                             }
                         },
                         canonical_digest(&json!({
-                            "domain":"serverware.policyShadowNamedEffectResult/v1",
+                            "domain":"catchplate.policyShadowNamedEffectResult/v1",
                             "requirement":requirement,
                             "value":value,
                         }))?,
@@ -7417,7 +7417,7 @@ impl ShadowRequestHandle {
                     (
                         ActiveEffectTerminalState::Completed,
                         canonical_digest(&json!({
-                            "domain":"serverware.policyShadowNamedEffectResult/v1",
+                            "domain":"catchplate.policyShadowNamedEffectResult/v1",
                             "requirement":requirement,
                             "value":value,
                         }))?,
@@ -7431,7 +7431,7 @@ impl ShadowRequestHandle {
                 ActiveEffectRequirement::DispatchAuthorization => (
                     ActiveEffectTerminalState::Completed,
                     canonical_digest(&json!({
-                        "domain":"serverware.policyShadowDispatchAuthorization/v1",
+                        "domain":"catchplate.policyShadowDispatchAuthorization/v1",
                         "authorized":true,
                     }))?,
                 ),
@@ -7444,7 +7444,7 @@ impl ShadowRequestHandle {
                     match native_dispatch_completion_sha256 {
                         Some(digest) => Sha256Digest::parse(digest.to_owned()).map_err(shadow_error)?,
                         None => canonical_digest(&json!({
-                            "domain":"serverware.policyShadowDispatchTerminal/v1",
+                            "domain":"catchplate.policyShadowDispatchTerminal/v1",
                             "failureClassSha256":sha256_prefixed(reason.label().as_bytes()),
                             "providerResponseObserved":provider_response_observed,
                         }))?,
@@ -7467,7 +7467,7 @@ impl ShadowRequestHandle {
                                 ActiveEffectTerminalState::Completed
                             },
                             canonical_digest(&json!({
-                                "domain":"serverware.policyShadowNamedEffectResult/v1",
+                                "domain":"catchplate.policyShadowNamedEffectResult/v1",
                                 "requirement":requirement,
                                 "value":value,
                             }))?,
@@ -7475,7 +7475,7 @@ impl ShadowRequestHandle {
                         _ => (
                             ActiveEffectTerminalState::ProviderOutcomeUnknown,
                             canonical_digest(&json!({
-                                "domain":"serverware.policyShadowProviderTruthUnknown/v1",
+                                "domain":"catchplate.policyShadowProviderTruthUnknown/v1",
                                 "requirement":requirement,
                                 "failureClassSha256":sha256_prefixed(
                                     reason.label().as_bytes()
@@ -7492,7 +7492,7 @@ impl ShadowRequestHandle {
                         Some(value) if !value.is_null() => (
                             ActiveEffectTerminalState::Completed,
                             canonical_digest(&json!({
-                                "domain":"serverware.policyShadowNamedEffectResult/v1",
+                                "domain":"catchplate.policyShadowNamedEffectResult/v1",
                                 "requirement":requirement,
                                 "value":value,
                             }))?,
@@ -7500,7 +7500,7 @@ impl ShadowRequestHandle {
                         _ => (
                             ActiveEffectTerminalState::RecoveryRequired,
                             canonical_digest(&json!({
-                                "domain":"serverware.policyShadowRecoveryRequired/v1",
+                                "domain":"catchplate.policyShadowRecoveryRequired/v1",
                                 "failureClassSha256":sha256_prefixed(
                                     reason.label().as_bytes()
                                 ),
@@ -7523,7 +7523,7 @@ impl ShadowRequestHandle {
                         ActiveEffectTerminalState::NotReached
                     },
                     canonical_digest(&json!({
-                        "domain":"serverware.policyShadowResponseValidationUnavailable/v1",
+                        "domain":"catchplate.policyShadowResponseValidationUnavailable/v1",
                         "requirement":requirement,
                         "providerResponseObserved":provider_response_observed,
                         "failureClassSha256":sha256_prefixed(
@@ -7538,7 +7538,7 @@ impl ShadowRequestHandle {
                         ActiveEffectTerminalState::NotReached
                     },
                     canonical_digest(&json!({
-                        "domain":"serverware.policyShadowGmailMetadataUnavailable/v1",
+                        "domain":"catchplate.policyShadowGmailMetadataUnavailable/v1",
                         "requirement":requirement,
                         "providerResponseObserved":provider_response_observed,
                         "failureClassSha256":sha256_prefixed(
@@ -7592,7 +7592,7 @@ impl ShadowRequestHandle {
                                 ActiveEffectTerminalState::Completed
                             },
                             canonical_digest(&json!({
-                                "domain":"serverware.policyShadowNamedEffectResult/v1",
+                                "domain":"catchplate.policyShadowNamedEffectResult/v1",
                                 "requirement":requirement,
                                 "value":value,
                             }))?,
@@ -7600,7 +7600,7 @@ impl ShadowRequestHandle {
                         _ => (
                             ActiveEffectTerminalState::ProviderOutcomeUnknown,
                             canonical_digest(&json!({
-                                "domain":"serverware.policyShadowEffectStateUnknown/v1",
+                                "domain":"catchplate.policyShadowEffectStateUnknown/v1",
                                 "requirement":requirement,
                                 "failureClassSha256":sha256_prefixed(
                                     reason.label().as_bytes()
@@ -7673,7 +7673,7 @@ impl ShadowRequestHandle {
             })?;
         let effect_authority_commitments_sha256 =
             digest_json_ensure_ascii(&json!({
-                "domain":"serverware.policyShadowDispatchAuthorities/v1",
+                "domain":"catchplate.policyShadowDispatchAuthorities/v1",
                 "activePlanSha256":pending.active_plan_sha256.as_str(),
                 "explicitEffectCommitments":
                     pending.explicit_effect_commitments.as_slice(),
@@ -8152,7 +8152,7 @@ impl AuthenticatedTransportCaptureReceipt {
         authority: &dyn RawResponseCaptureAuthority,
     ) -> Result<Self, String> {
         let expected_payload_sha256 = digest_json_ensure_ascii(&json!({
-            "domain":"serverware.policyShadowTransportCapturePayload/v1",
+            "domain":"catchplate.policyShadowTransportCapturePayload/v1",
             "runtimeBootSha256":wire.runtime_boot_sha256.as_str(),
             "generationId":wire.generation_id.as_str(),
             "requestBindingSha256":wire.request_binding_sha256.as_str(),
@@ -8168,7 +8168,7 @@ impl AuthenticatedTransportCaptureReceipt {
                 wire.runtime_attestation_sha256.as_str(),
         }));
         let expected_receipt_sha256 = digest_json_ensure_ascii(&json!({
-            "domain":"serverware.policyShadowTransportCaptureReceipt/v1",
+            "domain":"catchplate.policyShadowTransportCaptureReceipt/v1",
             "payloadSha256":expected_payload_sha256.as_str(),
             "signerKeySha256":wire.signer_key_sha256.as_str(),
             "runtimeAttestationSha256":
@@ -8333,7 +8333,7 @@ impl ActiveTerminalEffectSet {
             .iter()
             .map(|evidence| {
                 digest_json_ensure_ascii(&json!({
-                    "domain":"serverware.policyShadowTypedTerminalEffect/v1",
+                    "domain":"catchplate.policyShadowTypedTerminalEffect/v1",
                     "requirement":evidence.requirement(),
                     "terminalState":evidence.terminal_state(),
                     "resultSha256":evidence.result_sha256().as_str(),
@@ -8650,7 +8650,7 @@ impl ActiveGmailMetadataEvidence {
 
     fn commitment(&self) -> String {
         digest_json_ensure_ascii(&json!({
-            "domain":"serverware.policyShadowActiveGmailMetadataEvidence/v1",
+            "domain":"catchplate.policyShadowActiveGmailMetadataEvidence/v1",
             "generationId":self.generation_id.as_str(),
             "requestBindingSha256":self.request_binding_sha256.as_str(),
             "routeSha256":self.route_sha256.as_str(),
@@ -8770,7 +8770,7 @@ impl ShadowResponseHook {
                 .map(|active| active.final_outcome.clone());
         }
         record.response_facts_sha256 = Some(digest_json_ensure_ascii(&json!({
-            "domain":"serverware.policyShadowUnavailableResponse/v1",
+            "domain":"catchplate.policyShadowUnavailableResponse/v1",
             "terminalReason":reason,
             "returnedResponseSha256":returned_response.map(sha256_prefixed),
             "returnedResponseBytes":returned_response.map(|response| response.len()),
@@ -8885,7 +8885,7 @@ impl ShadowResponseAttempt {
         let captured_at_epoch_ms = checked_epoch_ms(now_epoch_ms())
             .map_err(|_| "shadow response timestamp is outside the supported range".to_string())?;
         let response_facts = json!({
-            "domain":"serverware.policyShadowExactResponseFacts/v1",
+            "domain":"catchplate.policyShadowExactResponseFacts/v1",
             "capturedAtEpochMs":captured_at_epoch_ms,
             "status":status,
             "physicalHeaderCount":capture.physical_header_count,
@@ -8903,7 +8903,7 @@ impl ShadowResponseAttempt {
         });
         let response_facts_sha256 = digest_json_ensure_ascii(&response_facts);
         let bound_active_validation = json!({
-            "domain":"serverware.policyShadowBoundActiveResponseValidation/v1",
+            "domain":"catchplate.policyShadowBoundActiveResponseValidation/v1",
             "activePolicySnapshotSha256":self.hook.inner.generation.identity.active_snapshot_sha256.as_str(),
             "responseObligationRootSha256":self.hook.inner.generation.identity.response_obligation_root_sha256.as_str(),
             "responseFactsSha256":response_facts_sha256.as_str(),
@@ -9479,7 +9479,7 @@ impl ShadowRuntime {
     }
 
     pub(crate) fn native_cumulative_complete(&self,attempt:NativeCumulativeAttempt,checkpoint:&Sha256Digest,
-        completion:&serverware_decision_gate::native_canary_delivery_v1::Completion)->Result<(),String> {
+        completion:&catchplate_decision_gate::native_canary_delivery_v1::Completion)->Result<(),String> {
         let observation=completion.observation();
         if observation.status()!="consumed" {return Err("native cumulative lacks definite protected consumption".into());}
         let original=observation.intake()["batch_original"].as_str().ok_or("native cumulative committed batch absent")?;
@@ -10966,7 +10966,7 @@ impl ShadowRuntime {
     ) {
         let binding = sha256_prefixed(
             format!(
-                "serverware.shadowMalformedTarget/v1\0{}\0{}\0{}\0{}",
+                "catchplate.shadowMalformedTarget/v1\0{}\0{}\0{}\0{}",
                 snapshot.hash, method, target, captured_at_epoch_ms
             )
             .as_bytes(),
@@ -10995,7 +10995,7 @@ impl ShadowRuntime {
         if let Some(profile) = &self.operator_demo { return profile.matches(&snapshot.hash); }
         let binding = sha256_prefixed(
             format!(
-                "serverware.shadowIngressAccounting/v2\0{}\0{}\0{}\0{:?}",
+                "catchplate.shadowIngressAccounting/v2\0{}\0{}\0{}\0{:?}",
                 snapshot.hash, method, target, ingress
             )
             .as_bytes(),
@@ -11058,7 +11058,7 @@ impl ShadowRuntime {
                 ShadowRuntimeEvent::UnsupportedRequiredIngress
             },
             Some(digest_json_ensure_ascii(&json!({
-                "domain":"serverware.policyShadowTransportAccounting/v2",
+                "domain":"catchplate.policyShadowTransportAccounting/v2",
                 "capturedAtEpochMs":captured_at_epoch_ms,
                 "requestCommitmentSha256":admission
                     .sampling()
@@ -11112,7 +11112,7 @@ impl ShadowRuntime {
     pub(crate) fn status(&self) -> Value {
         if let Some(profile) = &self.operator_demo { return profile.status(); }
         if let Some(profile) = &self.development_sandbox {
-            return json!({"api_version":"serverware.policyShadowRuntimeStatus/v2",
+            return json!({"api_version":"catchplate.policyShadowRuntimeStatus/v2",
                 "mode":"synthetic-development", "enabled":false, "readiness":false,
                 "readiness_reason":"intentionally_uncommissioned_synthetic_sandbox",
                 "production_custody_bound":false, "active_generation":null,
@@ -11331,7 +11331,7 @@ fn evaluate_candidate_response_behavior(
                         cutoff_ms,
                     )?;
                     object.insert(
-                        "serverwareAgeProof".to_string(),
+                        "catchplateAgeProof".to_string(),
                         Value::String("validated".to_string()),
                     );
                 }
@@ -11496,14 +11496,14 @@ fn evaluate_candidate_response(
         .candidate_plan()
         .map(|plan| {
             digest_json_ensure_ascii(&json!({
-                "domain":"serverware.policyShadowCandidateResponseObligations/v1",
+                "domain":"catchplate.policyShadowCandidateResponseObligations/v1",
                 "commitments":plan.response_validation_commitments(),
             }))
         })
         .ok_or("candidate response plan is unavailable")?;
     let response_policy = response_policy_for_route(route);
     Ok(json!({
-        "domain":"serverware.policyShadowCandidateResponseValidation/v1",
+        "domain":"catchplate.policyShadowCandidateResponseValidation/v1",
         "outcome":if validation.is_ok() {"accepted"} else {"rejected"},
         "routeIdSha256":sha256_prefixed(route.id.as_bytes()),
         "capturedAtEpochMs":captured_at_epoch_ms,
@@ -12690,7 +12690,7 @@ mod query_explicit_time_tests {
         assert!(evaluation.rewrite.is_none());
         assert!(evaluation.conditions.is_empty());
         assert_eq!(evaluation.dispatch_projection.as_ref(), Some(&json!({
-            "domain":"serverware.policyShadowNoDispatch/v1",
+            "domain":"catchplate.policyShadowNoDispatch/v1",
             "outcome":{"kind":"deny","reason":expected},
         })));
         match &evaluation.plan {
@@ -12883,11 +12883,11 @@ mod principal_explicit_time_tests {
     #[test]
     fn managed_previous_verifier_uses_explicit_time_in_all_four_policy_lanes() {
         let mut held = (*snapshot()).clone();
-        held.policy_id = "serverware-operator-demo".into();
+        held.policy_id = "catchplate-operator-demo".into();
         let current = "synthetic-replacement-token";
         let config = json!({"scheme":"Bearer", "tokenId":"12345678-1234-4234-9234-123456789abc",
             "tokenSha256":sha256_prefixed(current.as_bytes()), "sourceCidrs":["127.0.0.1/32"],
-            "expiresAtEpochMs":4000, "managedRenewal":{"schema":"serverware.proxyTokenRenewal/v1",
+            "expiresAtEpochMs":4000, "managedRenewal":{"schema":"catchplate.proxyTokenRenewal/v1",
                 "enrollmentId":"22345678-1234-4234-9234-123456789abc", "enrollmentExpiresAtEpochMs":5000,
                 "rotatedAtEpochMs":1000, "previousToken":{"tokenSha256":sha256_prefixed(TOKEN.as_bytes()),
                     "originalExpiresAtEpochMs":3000, "expiresAtEpochMs":2000}}});

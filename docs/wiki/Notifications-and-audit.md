@@ -24,7 +24,7 @@ Choose at least one event before enabling a destination. An enabled slot with no
 
 Where offered, the audit-only preset buttons add proxy blocks/errors, credential/permission changes, or approval history to that slot's draft. They preserve existing selections, include only events advertised by the instance, and never enable, save or send automatically. Review the selected events and explicitly save. They do not change action-alert filters or make an unavailable approval source active.
 
-The first saved configuration starts from the current committed audit head; it does not replay the whole historical log. Later filter changes do not silently expand another slot's selection. [Notification contract](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-notifications.md#two-channels-four-independent-destinations).
+The first saved configuration starts from the current committed audit head; it does not replay the whole historical log. Later filter changes do not silently expand another slot's selection. [Notification contract](https://github.com/AndrewMohawk/catchplate/blob/main/docs/operator-notifications.md#two-channels-four-independent-destinations).
 
 ## Test the saved destination
 
@@ -32,13 +32,13 @@ After saving, use **Send synthetic test** for that exact enabled slot. It sends 
 
 Check the delivery result: **queued** is not **delivered**. A receiver acknowledgement is not proof that a person acted, that a YubiKey ceremony completed or that an audit archive was verified. If the request's result is uncertain, use **Check operation result (read only)**. Do not repeat the test automatically.
 
-Each slot supports one to three total attempts. Only known pre-dispatch DNS, connection or TLS failures are eligible for the documented automatic retry. HTTP errors and uncertain delivery are not automatically replayed. New configuration revisions suppress queued deliveries for the old revision rather than redirecting them to the new URL. [Retry and recovery](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-notifications.md#outbox-retry-and-recovery).
+Each slot supports one to three total attempts. Only known pre-dispatch DNS, connection or TLS failures are eligible for the documented automatic retry. HTTP errors and uncertain delivery are not automatically replayed. New configuration revisions suppress queued deliveries for the old revision rather than redirecting them to the new URL. [Retry and recovery](https://github.com/AndrewMohawk/catchplate/blob/main/docs/operator-notifications.md#outbox-retry-and-recovery).
 
 ## Why an action alert might not arrive
 
 An enabled destination does not create an actionable source. The optional native observation bridge needs separately admitted owner/readiness information and the original action deadline. Legacy ordinary approval/JIT alerts remain suppressed. Host-trusted review is now deployed in this same app, but its action-alert source and receiver delivery require separate verification. Configuring Slack neither enables approvals nor starts a pilot.
 
-A real required action belongs on its authenticated review page. Notification links are locators, not bearer approvals, and delivery cannot extend the deadline. Check the source status as well as the destination/worker status. [Action-source boundary](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-notifications.md#what-messages-mean).
+A real required action belongs on its authenticated review page. Notification links are locators, not bearer approvals, and delivery cannot extend the deadline. Check the source status as well as the destination/worker status. [Action-source boundary](https://github.com/AndrewMohawk/catchplate/blob/main/docs/operator-notifications.md#what-messages-mean).
 
 ## Inspect a client's request
 
@@ -46,7 +46,7 @@ A real required action belongs on its authenticated review page. Notification li
 
 New workspace builds include **Pending actions** for saved request metadata.
 Deployment status is recorded in the
-[project tracker](https://github.com/AndrewMohawk/serverware/blob/main/docs/project-completion.md#current-live-deployment).
+[project tracker](https://github.com/AndrewMohawk/catchplate/blob/main/docs/project-completion.md#current-live-deployment).
 Choose **Select request** to inspect its ID, client, route, method, expiry and
 policy. Reopening its exact link keeps that selection; a missing request never
 silently selects another. The queue shows at most the first 100 visible pending
@@ -75,8 +75,8 @@ current view as checked. Wait for the history request to finish first.
 
 A blocked response can follow an attempted provider request; it does not always mean the request was denied before dispatch. If a write may have reached the provider, do not automatically retry it. See [uncertain outcomes](Troubleshooting.md).
 
-Local chain verification checks the stored chain, not an independent external witness or hardware attestation. Notifications contain selected safe summaries/references, not raw request/response bodies or a complete independently verified audit archive. Keep the original audit store as authoritative. [Audit UI](https://github.com/AndrewMohawk/serverware/blob/main/serverware/operator_demo_web/workspace_proxy_audit.js), [notification projections](https://github.com/AndrewMohawk/serverware/blob/main/docs/operator-notifications.md#what-messages-mean).
+Local chain verification checks the stored chain, not an independent external witness or hardware attestation. Notifications contain selected safe summaries/references, not raw request/response bodies or a complete independently verified audit archive. Keep the original audit store as authoritative. [Audit UI](https://github.com/AndrewMohawk/catchplate/blob/main/catchplate/operator_demo_web/workspace_proxy_audit.js), [notification projections](https://github.com/AndrewMohawk/catchplate/blob/main/docs/operator-notifications.md#what-messages-mean).
 
-## Serverware alerts are not proxied application webhooks
+## Catchplate alerts are not proxied application webhooks
 
-These settings configure messages sent by Serverware itself. They do not grant a client permission to call Slack or arbitrary webhooks through the credential proxy. Such application traffic needs its own supported credential, destination and permission; generic JSON support is not a universal webhook adapter.
+These settings configure messages sent by Catchplate itself. They do not grant a client permission to call Slack or arbitrary webhooks through the credential proxy. Such application traffic needs its own supported credential, destination and permission; generic JSON support is not a universal webhook adapter.

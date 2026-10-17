@@ -19,9 +19,9 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.authority_store import counted_installation as installation
-from serverware.authority_store import counted_hash_sql, counted_projection_sql
-from serverware.authority_store import counted_path_sql, counted_maintenance_sql, counted_store_sql
+from catchplate.authority_store import counted_installation as installation
+from catchplate.authority_store import counted_hash_sql, counted_projection_sql
+from catchplate.authority_store import counted_path_sql, counted_maintenance_sql, counted_store_sql
 import test_authority_index_join as profile_oracle
 import test_authority_index_range as tree_oracle
 
@@ -74,15 +74,15 @@ def descriptor(index_id):
 
 
 def expected_heads():
-    manifest = profile_oracle.framed("serverware.policyAuthorityIndexProjectionManifest/v1",
+    manifest = profile_oracle.framed("catchplate.policyAuthorityIndexProjectionManifest/v1",
         profile_oracle.utf8_json([descriptor(name) for name in INDEX_IDS]))
     result = []
     for name in sorted(INDEX_IDS):
         document = descriptor(name)
         profile = profile_oracle.contract.IndexProfile(name, document["table"], profile_oracle.framed(
-            "serverware.policyAuthorityIndexProjectionDescriptor/v1", profile_oracle.utf8_json(document)))
+            "catchplate.policyAuthorityIndexProjectionDescriptor/v1", profile_oracle.utf8_json(document)))
         result.append({"index_id": name, "table_name": profile.table,
-            "counted_profile": "serverware.policyAuthorityCountedIndex/v1",
+            "counted_profile": "catchplate.policyAuthorityCountedIndex/v1",
             "projection_digest": profile.projection_digest, "projection_manifest_digest": manifest,
             "index_revision": 0, "root_digest": tree_oracle.empty(profile, "")[0], "leaf_count": 0})
     return result
@@ -341,12 +341,12 @@ class AuthorityCountedInstallationTests(unittest.TestCase):
         self.assertEqual(installation.counted_functions_sql(NAMESPACE), expected_functions)
         contract = installation.counted_installation_contract()
         self.assertEqual(set(contract), {"schema", "profile", "sourceTables", "storeTables", "ddl", "functions", "genesisHeads"})
-        self.assertEqual(contract["schema"], "serverware.policyAuthorityCountedInstallation/v1")
+        self.assertEqual(contract["schema"], "catchplate.policyAuthorityCountedInstallation/v1")
         self.assertEqual(contract["profile"], "transaction-locked-fresh-empty-or-exact-existing-no-repair/v1")
         self.assertEqual(contract["sourceTables"], list(SOURCES))
         self.assertEqual(contract["storeTables"], list(STORES))
         self.assertEqual(contract["genesisHeads"], expected_heads())
-        canonical = '"serverware_metadata"'
+        canonical = '"catchplate_metadata"'
         self.assertEqual(contract["ddl"], list(counted_store_sql.counted_store_ddl(canonical)))
         self.assertEqual(contract["functions"], list(
             counted_hash_sql.counted_hash_functions_sql(canonical)

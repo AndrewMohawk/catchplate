@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-oauth-measured-cleanup.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-oauth-measured-cleanup.v1.schema.json",
   "title": "Independent measured OAuth family retirement and encrypted transport custody",
   "$comment": "Data-only projections, not permissions. Exact canonical ASCII, independent native assignment and family grant signatures, current holder drain, original deadlines and protected claims are enforced by actual owners. Cold config <=1MiB, grant <=64KiB, arguments <=1MiB, response wrapper <=8MiB. Recovery is observation-only and cannot contact. A reported accepted response does not prove provider token invalidity or reactivate a credential.",
   "oneOf": [
@@ -214,7 +214,7 @@
       ],
       "properties": {
         "schema": {
-          "const": "serverware.oauthMeasuredRefreshCleanupAuthorization/v1"
+          "const": "catchplate.oauthMeasuredRefreshCleanupAuthorization/v1"
         },
         "sourceRevision": {
           "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/sourceRevision"
@@ -348,7 +348,7 @@
       ],
       "properties": {
         "schema": {
-          "const": "serverware.signedOAuthMeasuredRefreshCleanupAuthorization/v1"
+          "const": "catchplate.signedOAuthMeasuredRefreshCleanupAuthorization/v1"
         },
         "payload": {
           "$ref": "#/$defs/authorizationPayload"
@@ -374,7 +374,7 @@
       ],
       "properties": {
         "schema": {
-          "const": "serverware.oauthMeasuredRefreshCleanupAuthorityPolicy/v1"
+          "const": "catchplate.oauthMeasuredRefreshCleanupAuthorityPolicy/v1"
         },
         "grantRootPublicKeyBase64Url": {
           "$ref": "#/$defs/bytes32"
@@ -417,7 +417,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeOAuthRefreshCleanupConfiguration/v1"
+          "const": "catchplate.nativeOAuthRefreshCleanupConfiguration/v1"
         },
         "sourceRevision": {
           "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/configuration/properties/sourceRevision"
@@ -489,7 +489,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeOAuthRefreshCleanupStatement/v1"
+          "const": "catchplate.nativeOAuthRefreshCleanupStatement/v1"
         },
         "phase": {
           "enum": [
@@ -740,7 +740,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeOAuthRefreshCleanupRequest/v1"
+          "const": "catchplate.nativeOAuthRefreshCleanupRequest/v1"
         },
         "operation": {
           "enum": [
@@ -767,7 +767,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeOAuthRefreshCleanupResponse/v1"
+          "const": "catchplate.nativeOAuthRefreshCleanupResponse/v1"
         },
         "requestOriginal": {
           "$ref": "#/$defs/encoded",
@@ -802,7 +802,7 @@
       ],
       "properties": {
         "schema": {
-          "const": "serverware.nativeOAuthRefreshCleanupTransport/v1"
+          "const": "catchplate.nativeOAuthRefreshCleanupTransport/v1"
         },
         "requestSha256": {
           "$ref": "#/$defs/digest"

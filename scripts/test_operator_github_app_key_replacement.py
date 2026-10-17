@@ -62,7 +62,7 @@ class Fixture(existing.Fixture):
         return credential
 
     def next_transport(self):
-        from serverware import github_app
+        from catchplate import github_app
         return patch.object(github_app.http_client, "request_bytes", self.next_provider)
 
     def core(self, connection=None):
@@ -101,7 +101,7 @@ class Fixture(existing.Fixture):
 
 
 def replacement_success():
-    from serverware import operator_github_app as owner
+    from catchplate import operator_github_app as owner
     f = Fixture()
     f.install(shared=True)
     before, core, catalog = f.snapshot(), f.core(), f.catalog()
@@ -188,7 +188,7 @@ def admission_controls():
 
 
 def provider_and_audit_rollback():
-    from serverware import operator_github_app as owner
+    from catchplate import operator_github_app as owner
     f = Fixture()
     f.install(shared=True)
     before = f.snapshot()
@@ -238,7 +238,7 @@ def final_cas_race():
 
 
 def generation_guards():
-    from serverware import operator_github_app as owner
+    from catchplate import operator_github_app as owner
     f = Fixture()
     credential = f.install()
     with f.next_transport():
@@ -269,7 +269,7 @@ def generation_guards():
 
 
 def postcommit_failure():
-    from serverware import operator_github_app as owner, runtime
+    from catchplate import operator_github_app as owner, runtime
     f = Fixture()
     f.install(shared=True)
     before = f.snapshot()
@@ -307,7 +307,7 @@ def postcommit_failure():
 
 
 def stale_refresh_and_reopen():
-    from serverware import operator_github_app as owner
+    from catchplate import operator_github_app as owner
     f = Fixture()
     f.install(shared=True)
     route, policy = f.runtime()
@@ -353,8 +353,8 @@ def reopen_worker():
 async def api_story():
     from test_operator_catalog_body_routing import BodyTransport
     f = Fixture(full_startup=True)
-    from serverware import app as application
-    from serverware import operator_catalog_api as api
+    from catchplate import app as application
+    from catchplate import operator_catalog_api as api
     app = BodyTransport(application.app, ADMIN)
 
     async def call(method, path, body=None, *, status=200, authenticate=True, origin=ORIGIN, media="application/json"):
@@ -376,7 +376,7 @@ async def api_story():
         before = f.snapshot()
         catalog = await call("GET", "/api/operator-demo/catalog")
         require(catalog["capabilities"]["github_app_key_replacement"] == {
-            "schema": "serverware.operatorGithubAppKeyReplacement/v1", "path": PATH},
+            "schema": "catchplate.operatorGithubAppKeyReplacement/v1", "path": PATH},
             "dedicated replacement capability")
         with f.next_transport():
             with patch.object(api, "_payload", wraps=api._payload) as parser:

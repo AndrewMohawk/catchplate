@@ -32,36 +32,36 @@ RUN --network=none set -eu; \
 
 FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS verified-production-source
 
-ARG SERVERWARE_SOURCE_ARCHIVE
-ARG SERVERWARE_SOURCE_ARCHIVE_SHA256
-ARG SERVERWARE_SOURCE_MANIFEST
-ARG SERVERWARE_SOURCE_MANIFEST_SHA256
-ARG SERVERWARE_SOURCE_FILE_LIST
-ARG SERVERWARE_SOURCE_FILE_LIST_SHA256
-ARG SERVERWARE_SOURCE_FILE_HASHES
-ARG SERVERWARE_SOURCE_FILE_HASHES_SHA256
-ARG SERVERWARE_SOURCE_FILE_MODES
-ARG SERVERWARE_SOURCE_FILE_MODES_SHA256
+ARG CATCHPLATE_SOURCE_ARCHIVE
+ARG CATCHPLATE_SOURCE_ARCHIVE_SHA256
+ARG CATCHPLATE_SOURCE_MANIFEST
+ARG CATCHPLATE_SOURCE_MANIFEST_SHA256
+ARG CATCHPLATE_SOURCE_FILE_LIST
+ARG CATCHPLATE_SOURCE_FILE_LIST_SHA256
+ARG CATCHPLATE_SOURCE_FILE_HASHES
+ARG CATCHPLATE_SOURCE_FILE_HASHES_SHA256
+ARG CATCHPLATE_SOURCE_FILE_MODES
+ARG CATCHPLATE_SOURCE_FILE_MODES_SHA256
 
 WORKDIR /build
-COPY ${SERVERWARE_SOURCE_ARCHIVE} /source-contract/source.tar
-COPY ${SERVERWARE_SOURCE_MANIFEST} /source-contract/source-manifest.json
-COPY ${SERVERWARE_SOURCE_FILE_LIST} /source-contract/source.files
-COPY ${SERVERWARE_SOURCE_FILE_HASHES} /source-contract/source.files.sha256
-COPY ${SERVERWARE_SOURCE_FILE_MODES} /source-contract/source.files.mode
+COPY ${CATCHPLATE_SOURCE_ARCHIVE} /source-contract/source.tar
+COPY ${CATCHPLATE_SOURCE_MANIFEST} /source-contract/source-manifest.json
+COPY ${CATCHPLATE_SOURCE_FILE_LIST} /source-contract/source.files
+COPY ${CATCHPLATE_SOURCE_FILE_HASHES} /source-contract/source.files.sha256
+COPY ${CATCHPLATE_SOURCE_FILE_MODES} /source-contract/source.files.mode
 RUN --network=none set -eu; \
-    test -n "${SERVERWARE_SOURCE_ARCHIVE_SHA256}"; \
-    test -n "${SERVERWARE_SOURCE_MANIFEST_SHA256}"; \
-    test -n "${SERVERWARE_SOURCE_FILE_LIST_SHA256}"; \
-    test -n "${SERVERWARE_SOURCE_FILE_HASHES_SHA256}"; \
-    test -n "${SERVERWARE_SOURCE_FILE_MODES_SHA256}"; \
-    printf '%s  %s\n' "${SERVERWARE_SOURCE_ARCHIVE_SHA256#sha256:}" /source-contract/source.tar | sha256sum -c -; \
-    printf '%s  %s\n' "${SERVERWARE_SOURCE_MANIFEST_SHA256#sha256:}" /source-contract/source-manifest.json | sha256sum -c -; \
-    printf '%s  %s\n' "${SERVERWARE_SOURCE_FILE_LIST_SHA256#sha256:}" /source-contract/source.files | sha256sum -c -; \
-    printf '%s  %s\n' "${SERVERWARE_SOURCE_FILE_HASHES_SHA256#sha256:}" /source-contract/source.files.sha256 | sha256sum -c -; \
-    printf '%s  %s\n' "${SERVERWARE_SOURCE_FILE_MODES_SHA256#sha256:}" /source-contract/source.files.mode | sha256sum -c -; \
+    test -n "${CATCHPLATE_SOURCE_ARCHIVE_SHA256}"; \
+    test -n "${CATCHPLATE_SOURCE_MANIFEST_SHA256}"; \
+    test -n "${CATCHPLATE_SOURCE_FILE_LIST_SHA256}"; \
+    test -n "${CATCHPLATE_SOURCE_FILE_HASHES_SHA256}"; \
+    test -n "${CATCHPLATE_SOURCE_FILE_MODES_SHA256}"; \
+    printf '%s  %s\n' "${CATCHPLATE_SOURCE_ARCHIVE_SHA256#sha256:}" /source-contract/source.tar | sha256sum -c -; \
+    printf '%s  %s\n' "${CATCHPLATE_SOURCE_MANIFEST_SHA256#sha256:}" /source-contract/source-manifest.json | sha256sum -c -; \
+    printf '%s  %s\n' "${CATCHPLATE_SOURCE_FILE_LIST_SHA256#sha256:}" /source-contract/source.files | sha256sum -c -; \
+    printf '%s  %s\n' "${CATCHPLATE_SOURCE_FILE_HASHES_SHA256#sha256:}" /source-contract/source.files.sha256 | sha256sum -c -; \
+    printf '%s  %s\n' "${CATCHPLATE_SOURCE_FILE_MODES_SHA256#sha256:}" /source-contract/source.files.mode | sha256sum -c -; \
     tar -tf /source-contract/source.tar > /source-contract/archive.files; \
-    printf '%s  %s\n' "${SERVERWARE_SOURCE_FILE_LIST_SHA256#sha256:}" /source-contract/archive.files | sha256sum -c -; \
+    printf '%s  %s\n' "${CATCHPLATE_SOURCE_FILE_LIST_SHA256#sha256:}" /source-contract/archive.files | sha256sum -c -; \
     mkdir -p /source; \
     tar --no-same-owner -xf /source-contract/source.tar -C /source; \
     cd /source; \
@@ -110,59 +110,59 @@ FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86
 
 ARG SOURCE_DATE_EPOCH="0"
 COPY --from=python-deps /deps /runtime/deps
-COPY --from=verified-production-source /source/serverware/authority_fd_entrypoint.py /runtime/authority-bootstrap/authority_fd_entrypoint.py
-COPY --from=verified-production-source /source/serverware/authority_launcher.py /runtime/authority-bootstrap/authority_launcher.py
-COPY --from=verified-production-source /source/serverware/registration_evidence_signer_launcher.py /runtime/authority-bootstrap/registration_evidence_signer_launcher.py
-COPY --from=verified-production-source /source/serverware/current_root_state_launcher.py /runtime/authority-bootstrap/current_root_state_launcher.py
-COPY --from=verified-production-source /source/serverware/registration_execution_authorizer_launcher.py /runtime/authority-bootstrap/registration_execution_authorizer_launcher.py
-COPY --from=verified-production-source /source/serverware/registration_finalization_authorizer_launcher.py /runtime/authority-bootstrap/registration_finalization_authorizer_launcher.py
-COPY --from=verified-production-source /source/serverware/registration_execution_reserver_launcher.py /runtime/authority-bootstrap/registration_execution_reserver_launcher.py
-COPY --from=verified-production-source /source/serverware/registration_finalization_reserver_launcher.py /runtime/authority-bootstrap/registration_finalization_reserver_launcher.py
-COPY --from=verified-production-source /source/serverware/registration_execution_sql_launcher.py /runtime/authority-bootstrap/registration_execution_sql_launcher.py
-COPY --from=verified-production-source /source/serverware/registration_finalization_sql_launcher.py /runtime/authority-bootstrap/registration_finalization_sql_launcher.py
-COPY --from=verified-production-source /source/serverware/registration_execution_completion_launcher.py /runtime/authority-bootstrap/registration_execution_completion_launcher.py
-COPY --from=verified-production-source /source/serverware/registration_finalization_completion_launcher.py /runtime/authority-bootstrap/registration_finalization_completion_launcher.py
-COPY --from=verified-production-source /source/serverware/registration_execution_authorizer_dynamic_launcher.py /runtime/authority-bootstrap/registration_execution_authorizer_dynamic_launcher.py
-COPY --from=verified-production-source /source/serverware/registration_execution_reserver_dynamic_launcher.py /runtime/authority-bootstrap/registration_execution_reserver_dynamic_launcher.py
-COPY --from=verified-production-source /source/serverware/registration_execution_sql_dynamic_launcher.py /runtime/authority-bootstrap/registration_execution_sql_dynamic_launcher.py
-COPY --from=verified-production-source /source/serverware/registration_execution_completion_dynamic_launcher.py /runtime/authority-bootstrap/registration_execution_completion_dynamic_launcher.py
-COPY --from=verified-production-source /source/serverware/registration_finalization_authorizer_dynamic_launcher.py /runtime/authority-bootstrap/registration_finalization_authorizer_dynamic_launcher.py
-COPY --from=verified-production-source /source/serverware/registration_finalization_reserver_dynamic_launcher.py /runtime/authority-bootstrap/registration_finalization_reserver_dynamic_launcher.py
-COPY --from=verified-production-source /source/serverware/registration_finalization_sql_dynamic_launcher.py /runtime/authority-bootstrap/registration_finalization_sql_dynamic_launcher.py
-COPY --from=verified-production-source /source/serverware/registration_finalization_completion_dynamic_launcher.py /runtime/authority-bootstrap/registration_finalization_completion_dynamic_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_planner_launcher.py /runtime/authority-bootstrap/oidc_session_activation_planner_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_request_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_request_dynamic_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_execution_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_execution_dynamic_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_consume_input_issuer_sealed_launcher.py /runtime/authority-bootstrap/oidc_session_activation_consume_input_issuer_sealed_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_consume_dynamic_sealed_launcher.py /runtime/authority-bootstrap/oidc_session_activation_consume_dynamic_sealed_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_proof_input_issuer_sealed_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_proof_input_issuer_sealed_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_proof_dynamic_sealed_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_proof_dynamic_sealed_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_grant_issuer_sealed_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_grant_issuer_sealed_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_dynamic_sealed_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_dynamic_sealed_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_request_issuer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_request_issuer_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_delivery_planner_launcher.py /runtime/authority-bootstrap/oidc_session_activation_delivery_planner_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_consume_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_consume_dynamic_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_execution_authorizer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_execution_authorizer_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_delivery_execution_authorizer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_delivery_execution_authorizer_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_execution_reserver_launcher.py /runtime/authority-bootstrap/oidc_session_activation_execution_reserver_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_delivery_execution_reserver_launcher.py /runtime/authority-bootstrap/oidc_session_activation_delivery_execution_reserver_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_execution_sql_launcher.py /runtime/authority-bootstrap/oidc_session_activation_execution_sql_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_delivery_execution_sql_launcher.py /runtime/authority-bootstrap/oidc_session_activation_delivery_execution_sql_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_completion_launcher.py /runtime/authority-bootstrap/oidc_session_activation_completion_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_delivery_completion_launcher.py /runtime/authority-bootstrap/oidc_session_activation_delivery_completion_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_proof_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_proof_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_proof_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_proof_dynamic_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_proof_input_issuer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_proof_input_issuer_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_grant_issuer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_grant_issuer_launcher.py
-COPY --from=verified-production-source /source/serverware/workload_identity_issuer_launcher.py /runtime/authority-bootstrap/workload_identity_issuer_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_recovery_issuer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_recovery_issuer_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_grant_issuer_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_grant_issuer_dynamic_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_consume_input_issuer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_consume_input_issuer_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_dynamic_launcher.py
-COPY --from=verified-production-source /source/serverware/oidc_session_activation_release_recovery_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_recovery_dynamic_launcher.py
-COPY --from=verified-production-source /source/serverware /runtime/app/serverware
-COPY --from=verified-production-source /source/serverware_agent_trust /runtime/app/serverware_agent_trust
+COPY --from=verified-production-source /source/catchplate/authority_fd_entrypoint.py /runtime/authority-bootstrap/authority_fd_entrypoint.py
+COPY --from=verified-production-source /source/catchplate/authority_launcher.py /runtime/authority-bootstrap/authority_launcher.py
+COPY --from=verified-production-source /source/catchplate/registration_evidence_signer_launcher.py /runtime/authority-bootstrap/registration_evidence_signer_launcher.py
+COPY --from=verified-production-source /source/catchplate/current_root_state_launcher.py /runtime/authority-bootstrap/current_root_state_launcher.py
+COPY --from=verified-production-source /source/catchplate/registration_execution_authorizer_launcher.py /runtime/authority-bootstrap/registration_execution_authorizer_launcher.py
+COPY --from=verified-production-source /source/catchplate/registration_finalization_authorizer_launcher.py /runtime/authority-bootstrap/registration_finalization_authorizer_launcher.py
+COPY --from=verified-production-source /source/catchplate/registration_execution_reserver_launcher.py /runtime/authority-bootstrap/registration_execution_reserver_launcher.py
+COPY --from=verified-production-source /source/catchplate/registration_finalization_reserver_launcher.py /runtime/authority-bootstrap/registration_finalization_reserver_launcher.py
+COPY --from=verified-production-source /source/catchplate/registration_execution_sql_launcher.py /runtime/authority-bootstrap/registration_execution_sql_launcher.py
+COPY --from=verified-production-source /source/catchplate/registration_finalization_sql_launcher.py /runtime/authority-bootstrap/registration_finalization_sql_launcher.py
+COPY --from=verified-production-source /source/catchplate/registration_execution_completion_launcher.py /runtime/authority-bootstrap/registration_execution_completion_launcher.py
+COPY --from=verified-production-source /source/catchplate/registration_finalization_completion_launcher.py /runtime/authority-bootstrap/registration_finalization_completion_launcher.py
+COPY --from=verified-production-source /source/catchplate/registration_execution_authorizer_dynamic_launcher.py /runtime/authority-bootstrap/registration_execution_authorizer_dynamic_launcher.py
+COPY --from=verified-production-source /source/catchplate/registration_execution_reserver_dynamic_launcher.py /runtime/authority-bootstrap/registration_execution_reserver_dynamic_launcher.py
+COPY --from=verified-production-source /source/catchplate/registration_execution_sql_dynamic_launcher.py /runtime/authority-bootstrap/registration_execution_sql_dynamic_launcher.py
+COPY --from=verified-production-source /source/catchplate/registration_execution_completion_dynamic_launcher.py /runtime/authority-bootstrap/registration_execution_completion_dynamic_launcher.py
+COPY --from=verified-production-source /source/catchplate/registration_finalization_authorizer_dynamic_launcher.py /runtime/authority-bootstrap/registration_finalization_authorizer_dynamic_launcher.py
+COPY --from=verified-production-source /source/catchplate/registration_finalization_reserver_dynamic_launcher.py /runtime/authority-bootstrap/registration_finalization_reserver_dynamic_launcher.py
+COPY --from=verified-production-source /source/catchplate/registration_finalization_sql_dynamic_launcher.py /runtime/authority-bootstrap/registration_finalization_sql_dynamic_launcher.py
+COPY --from=verified-production-source /source/catchplate/registration_finalization_completion_dynamic_launcher.py /runtime/authority-bootstrap/registration_finalization_completion_dynamic_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_planner_launcher.py /runtime/authority-bootstrap/oidc_session_activation_planner_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_request_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_request_dynamic_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_execution_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_execution_dynamic_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_consume_input_issuer_sealed_launcher.py /runtime/authority-bootstrap/oidc_session_activation_consume_input_issuer_sealed_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_consume_dynamic_sealed_launcher.py /runtime/authority-bootstrap/oidc_session_activation_consume_dynamic_sealed_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_release_proof_input_issuer_sealed_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_proof_input_issuer_sealed_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_release_proof_dynamic_sealed_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_proof_dynamic_sealed_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_release_grant_issuer_sealed_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_grant_issuer_sealed_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_release_dynamic_sealed_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_dynamic_sealed_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_request_issuer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_request_issuer_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_delivery_planner_launcher.py /runtime/authority-bootstrap/oidc_session_activation_delivery_planner_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_consume_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_consume_dynamic_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_execution_authorizer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_execution_authorizer_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_delivery_execution_authorizer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_delivery_execution_authorizer_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_execution_reserver_launcher.py /runtime/authority-bootstrap/oidc_session_activation_execution_reserver_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_delivery_execution_reserver_launcher.py /runtime/authority-bootstrap/oidc_session_activation_delivery_execution_reserver_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_execution_sql_launcher.py /runtime/authority-bootstrap/oidc_session_activation_execution_sql_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_delivery_execution_sql_launcher.py /runtime/authority-bootstrap/oidc_session_activation_delivery_execution_sql_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_completion_launcher.py /runtime/authority-bootstrap/oidc_session_activation_completion_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_delivery_completion_launcher.py /runtime/authority-bootstrap/oidc_session_activation_delivery_completion_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_release_proof_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_proof_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_release_proof_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_proof_dynamic_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_release_proof_input_issuer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_proof_input_issuer_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_release_grant_issuer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_grant_issuer_launcher.py
+COPY --from=verified-production-source /source/catchplate/workload_identity_issuer_launcher.py /runtime/authority-bootstrap/workload_identity_issuer_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_release_recovery_issuer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_recovery_issuer_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_release_grant_issuer_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_grant_issuer_dynamic_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_consume_input_issuer_launcher.py /runtime/authority-bootstrap/oidc_session_activation_consume_input_issuer_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_release_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_release_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_dynamic_launcher.py
+COPY --from=verified-production-source /source/catchplate/oidc_session_activation_release_recovery_dynamic_launcher.py /runtime/authority-bootstrap/oidc_session_activation_release_recovery_dynamic_launcher.py
+COPY --from=verified-production-source /source/catchplate /runtime/app/catchplate
+COPY --from=verified-production-source /source/catchplate_agent_trust /runtime/app/catchplate_agent_trust
 COPY --from=verified-production-source /source/pyproject.toml /runtime/app/pyproject.toml
 COPY --from=verified-production-source /source/scripts /runtime/app/scripts
 COPY --from=verified-production-source /source/schemas /runtime/app/schemas
@@ -170,88 +170,88 @@ COPY --from=verified-production-source /source/policies /runtime/app/policies
 COPY --from=verified-production-source /source/security /runtime/app/security
 COPY --from=verified-production-source /source/ops/policy-custody /runtime/app/ops/policy-custody
 COPY --from=verified-production-source /source/ops/production-readiness.env.example /runtime/app/ops/production-readiness.env.example
-COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody-sockets.target /runtime/app/ops/systemd/serverware-policy-custody-sockets.target
-COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody.target /runtime/app/ops/systemd/serverware-policy-custody.target
-COPY --from=verified-production-source /source/ops/systemd/serverware-registration-evidence.socket /runtime/app/ops/systemd/serverware-registration-evidence.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-registration-evidence.service.in /runtime/app/ops/systemd/serverware-registration-evidence.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-current-root-state.socket /runtime/app/ops/systemd/serverware-current-root-state.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-current-root-state.service.in /runtime/app/ops/systemd/serverware-current-root-state.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-registration-execution-authorizer.socket /runtime/app/ops/systemd/serverware-registration-execution-authorizer.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-registration-execution-authorizer.service.in /runtime/app/ops/systemd/serverware-registration-execution-authorizer.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-registration-finalization-authorizer.socket /runtime/app/ops/systemd/serverware-registration-finalization-authorizer.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-registration-finalization-authorizer.service.in /runtime/app/ops/systemd/serverware-registration-finalization-authorizer.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-registration-execution-reserver.socket /runtime/app/ops/systemd/serverware-registration-execution-reserver.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-registration-execution-reserver.service.in /runtime/app/ops/systemd/serverware-registration-execution-reserver.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-registration-finalization-reserver.socket /runtime/app/ops/systemd/serverware-registration-finalization-reserver.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-registration-finalization-reserver.service.in /runtime/app/ops/systemd/serverware-registration-finalization-reserver.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-registration-execution-sql.socket /runtime/app/ops/systemd/serverware-registration-execution-sql.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-registration-execution-sql.service.in /runtime/app/ops/systemd/serverware-registration-execution-sql.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-registration-finalization-sql.socket /runtime/app/ops/systemd/serverware-registration-finalization-sql.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-registration-finalization-sql.service.in /runtime/app/ops/systemd/serverware-registration-finalization-sql.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-registration-execution-completion.socket /runtime/app/ops/systemd/serverware-registration-execution-completion.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-registration-execution-completion.service.in /runtime/app/ops/systemd/serverware-registration-execution-completion.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-registration-finalization-completion.socket /runtime/app/ops/systemd/serverware-registration-finalization-completion.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-registration-finalization-completion.service.in /runtime/app/ops/systemd/serverware-registration-finalization-completion.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-planner.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-planner.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-planner.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-planner.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-delivery-planner.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-delivery-planner.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-delivery-planner.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-delivery-planner.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-execution-authorizer.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-execution-authorizer.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-execution-authorizer.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-execution-authorizer.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-delivery-execution-authorizer.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-delivery-execution-authorizer.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-delivery-execution-authorizer.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-delivery-execution-authorizer.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-execution-reserver.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-execution-reserver.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-execution-reserver.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-execution-reserver.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-execution-sql.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-execution-sql.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-execution-sql.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-execution-sql.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-delivery-execution-sql.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-delivery-execution-sql.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-delivery-execution-sql.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-delivery-execution-sql.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-completion.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-completion.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-completion.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-completion.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-delivery-completion.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-delivery-completion.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-delivery-completion.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-delivery-completion.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-proof.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-release-proof.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-proof.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-release-proof.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-proof-bootstrap.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-release-proof-bootstrap.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-proof-dynamic.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-release-proof-dynamic.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-proof-dynamic.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-release-proof-dynamic.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-proof-input-issuer.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-release-proof-input-issuer.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-proof-input-issuer.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-release-proof-input-issuer.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-proof-input-issuer.service.d /runtime/app/ops/systemd/serverware-oidc-session-activation-release-proof-input-issuer.service.d
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-grant-issuer.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-release-grant-issuer.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-grant-issuer.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-release-grant-issuer.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-workload-identity-issuer.socket /runtime/app/ops/systemd/serverware-workload-identity-issuer.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-workload-identity-issuer.service.in /runtime/app/ops/systemd/serverware-workload-identity-issuer.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-workload-identity-issuer-sequential.socket /runtime/app/ops/systemd/serverware-workload-identity-issuer-sequential.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-workload-identity-issuer-sequential.service.in /runtime/app/ops/systemd/serverware-workload-identity-issuer-sequential.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-recovery-issuer.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-release-recovery-issuer.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-recovery-issuer.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-release-recovery-issuer.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-grant-issuer-bootstrap.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-release-grant-issuer-bootstrap.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-grant-issuer-dynamic.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-release-grant-issuer-dynamic.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-grant-issuer-dynamic.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-release-grant-issuer-dynamic.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-consume-input-issuer.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-consume-input-issuer.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-consume-input-issuer.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-consume-input-issuer.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-consume-input-issuer.service.d /runtime/app/ops/systemd/serverware-oidc-session-activation-consume-input-issuer.service.d
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-consume-bootstrap.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-consume-bootstrap.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-consume-dynamic.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-consume-dynamic.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-consume-dynamic.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-consume-dynamic.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-token-release.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-token-release.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-token-release.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-token-release.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-token-release-bootstrap.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-token-release-bootstrap.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-token-release-dynamic.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-token-release-dynamic.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-token-release-dynamic.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-token-release-dynamic.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-recovery-bootstrap.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-release-recovery-bootstrap.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-recovery-dynamic.socket /runtime/app/ops/systemd/serverware-oidc-session-activation-release-recovery-dynamic.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-oidc-session-activation-release-recovery-dynamic.service.in /runtime/app/ops/systemd/serverware-oidc-session-activation-release-recovery-dynamic.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@.socket /runtime/app/ops/systemd/serverware-policy-custody@.socket
-COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@.service.in /runtime/app/ops/systemd/serverware-policy-custody@.service.in
-COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@durable-recovery-store.service.d /runtime/app/ops/systemd/serverware-policy-custody@durable-recovery-store.service.d
-COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@cleanup-authorization-consumer.service.d /runtime/app/ops/systemd/serverware-policy-custody@cleanup-authorization-consumer.service.d
-COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@recovery-target-provider.service.d /runtime/app/ops/systemd/serverware-policy-custody@recovery-target-provider.service.d
-COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@current-signature-authority.service.d /runtime/app/ops/systemd/serverware-policy-custody@current-signature-authority.service.d
-COPY --from=verified-production-source /source/ops/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d /runtime/app/ops/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d
+COPY --from=verified-production-source /source/ops/systemd/catchplate-policy-custody-sockets.target /runtime/app/ops/systemd/catchplate-policy-custody-sockets.target
+COPY --from=verified-production-source /source/ops/systemd/catchplate-policy-custody.target /runtime/app/ops/systemd/catchplate-policy-custody.target
+COPY --from=verified-production-source /source/ops/systemd/catchplate-registration-evidence.socket /runtime/app/ops/systemd/catchplate-registration-evidence.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-registration-evidence.service.in /runtime/app/ops/systemd/catchplate-registration-evidence.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-current-root-state.socket /runtime/app/ops/systemd/catchplate-current-root-state.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-current-root-state.service.in /runtime/app/ops/systemd/catchplate-current-root-state.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-registration-execution-authorizer.socket /runtime/app/ops/systemd/catchplate-registration-execution-authorizer.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-registration-execution-authorizer.service.in /runtime/app/ops/systemd/catchplate-registration-execution-authorizer.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-registration-finalization-authorizer.socket /runtime/app/ops/systemd/catchplate-registration-finalization-authorizer.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-registration-finalization-authorizer.service.in /runtime/app/ops/systemd/catchplate-registration-finalization-authorizer.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-registration-execution-reserver.socket /runtime/app/ops/systemd/catchplate-registration-execution-reserver.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-registration-execution-reserver.service.in /runtime/app/ops/systemd/catchplate-registration-execution-reserver.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-registration-finalization-reserver.socket /runtime/app/ops/systemd/catchplate-registration-finalization-reserver.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-registration-finalization-reserver.service.in /runtime/app/ops/systemd/catchplate-registration-finalization-reserver.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-registration-execution-sql.socket /runtime/app/ops/systemd/catchplate-registration-execution-sql.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-registration-execution-sql.service.in /runtime/app/ops/systemd/catchplate-registration-execution-sql.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-registration-finalization-sql.socket /runtime/app/ops/systemd/catchplate-registration-finalization-sql.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-registration-finalization-sql.service.in /runtime/app/ops/systemd/catchplate-registration-finalization-sql.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-registration-execution-completion.socket /runtime/app/ops/systemd/catchplate-registration-execution-completion.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-registration-execution-completion.service.in /runtime/app/ops/systemd/catchplate-registration-execution-completion.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-registration-finalization-completion.socket /runtime/app/ops/systemd/catchplate-registration-finalization-completion.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-registration-finalization-completion.service.in /runtime/app/ops/systemd/catchplate-registration-finalization-completion.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-planner.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-planner.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-planner.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-planner.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-delivery-planner.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-delivery-planner.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-delivery-planner.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-delivery-planner.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-execution-authorizer.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-execution-authorizer.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-execution-authorizer.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-execution-authorizer.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-delivery-execution-authorizer.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-delivery-execution-authorizer.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-delivery-execution-authorizer.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-delivery-execution-authorizer.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-execution-reserver.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-execution-reserver.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-execution-reserver.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-execution-reserver.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-execution-sql.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-execution-sql.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-execution-sql.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-execution-sql.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-delivery-execution-sql.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-delivery-execution-sql.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-delivery-execution-sql.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-delivery-execution-sql.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-completion.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-completion.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-completion.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-completion.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-delivery-completion.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-delivery-completion.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-delivery-completion.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-delivery-completion.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-release-proof.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-release-proof.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-release-proof.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-release-proof.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-release-proof-bootstrap.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-release-proof-bootstrap.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-release-proof-dynamic.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-release-proof-dynamic.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-release-proof-dynamic.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-release-proof-dynamic.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-release-proof-input-issuer.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-release-proof-input-issuer.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-release-proof-input-issuer.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-release-proof-input-issuer.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-release-proof-input-issuer.service.d /runtime/app/ops/systemd/catchplate-oidc-session-activation-release-proof-input-issuer.service.d
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-release-grant-issuer.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-release-grant-issuer.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-release-grant-issuer.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-release-grant-issuer.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-workload-identity-issuer.socket /runtime/app/ops/systemd/catchplate-workload-identity-issuer.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-workload-identity-issuer.service.in /runtime/app/ops/systemd/catchplate-workload-identity-issuer.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-workload-identity-issuer-sequential.socket /runtime/app/ops/systemd/catchplate-workload-identity-issuer-sequential.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-workload-identity-issuer-sequential.service.in /runtime/app/ops/systemd/catchplate-workload-identity-issuer-sequential.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-release-recovery-issuer.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-release-recovery-issuer.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-release-recovery-issuer.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-release-recovery-issuer.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-release-grant-issuer-bootstrap.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-release-grant-issuer-bootstrap.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-release-grant-issuer-dynamic.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-release-grant-issuer-dynamic.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-release-grant-issuer-dynamic.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-release-grant-issuer-dynamic.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-consume-input-issuer.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-consume-input-issuer.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-consume-input-issuer.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-consume-input-issuer.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-consume-input-issuer.service.d /runtime/app/ops/systemd/catchplate-oidc-session-activation-consume-input-issuer.service.d
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-consume-bootstrap.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-consume-bootstrap.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-consume-dynamic.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-consume-dynamic.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-consume-dynamic.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-consume-dynamic.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-token-release.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-token-release.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-token-release.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-token-release.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-token-release-bootstrap.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-token-release-bootstrap.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-token-release-dynamic.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-token-release-dynamic.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-token-release-dynamic.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-token-release-dynamic.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-release-recovery-bootstrap.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-release-recovery-bootstrap.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-release-recovery-dynamic.socket /runtime/app/ops/systemd/catchplate-oidc-session-activation-release-recovery-dynamic.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-oidc-session-activation-release-recovery-dynamic.service.in /runtime/app/ops/systemd/catchplate-oidc-session-activation-release-recovery-dynamic.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-policy-custody@.socket /runtime/app/ops/systemd/catchplate-policy-custody@.socket
+COPY --from=verified-production-source /source/ops/systemd/catchplate-policy-custody@.service.in /runtime/app/ops/systemd/catchplate-policy-custody@.service.in
+COPY --from=verified-production-source /source/ops/systemd/catchplate-policy-custody@durable-recovery-store.service.d /runtime/app/ops/systemd/catchplate-policy-custody@durable-recovery-store.service.d
+COPY --from=verified-production-source /source/ops/systemd/catchplate-policy-custody@cleanup-authorization-consumer.service.d /runtime/app/ops/systemd/catchplate-policy-custody@cleanup-authorization-consumer.service.d
+COPY --from=verified-production-source /source/ops/systemd/catchplate-policy-custody@recovery-target-provider.service.d /runtime/app/ops/systemd/catchplate-policy-custody@recovery-target-provider.service.d
+COPY --from=verified-production-source /source/ops/systemd/catchplate-policy-custody@current-signature-authority.service.d /runtime/app/ops/systemd/catchplate-policy-custody@current-signature-authority.service.d
+COPY --from=verified-production-source /source/ops/systemd/catchplate-policy-custody@bounded-cleanup-helper.service.d /runtime/app/ops/systemd/catchplate-policy-custody@bounded-cleanup-helper.service.d
 COPY --from=verified-production-source /source/docker-compose.apparmor.yml /runtime/app/docker-compose.apparmor.yml
-RUN --network=none printf 'serverware.productionImage/v1\n' > /runtime/app/.serverware-production-image \
+RUN --network=none printf 'catchplate.productionImage/v1\n' > /runtime/app/.catchplate-production-image \
     && mkdir -p /runtime/custody-trust /runtime/gate-materials \
     && chmod 0555 /runtime/authority-bootstrap \
     && chmod 0444 /runtime/authority-bootstrap/authority_fd_entrypoint.py \
@@ -310,7 +310,7 @@ RUN --network=none printf 'serverware.productionImage/v1\n' > /runtime/app/.serv
     && find /runtime/app/ops/policy-custody /runtime/app/ops/systemd -type d -exec chmod 0555 {} + \
     && find /runtime/app/ops/policy-custody /runtime/app/ops/systemd -type f -exec chmod 0444 {} + \
     && chmod 0444 /runtime/app/ops/production-readiness.env.example \
-    && chmod 0444 /runtime/app/.serverware-production-image \
+    && chmod 0444 /runtime/app/.catchplate-production-image \
     && find /runtime -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
 # Separate unsigned conductor filesystem, not the control-plane image or a
@@ -320,13 +320,13 @@ FROM verified-production-source AS native-pilot-conductor-files
 
 ARG SOURCE_DATE_EPOCH="0"
 RUN --network=none set -eu; \
-    install -d -m 0555 /conductor/app/scripts /conductor/usr/share/serverware; \
+    install -d -m 0555 /conductor/app/scripts /conductor/usr/share/catchplate; \
     install -d -m 0755 /conductor-base/var/local /conductor-base/etc; \
     ln -s /usr/share/zoneinfo/Etc/UTC /conductor-base/etc/localtime; \
-    cp -R /source/serverware /conductor/app/serverware; \
+    cp -R /source/catchplate /conductor/app/catchplate; \
     install -m 0444 /source/scripts/run_native_pilot.py /conductor/app/scripts/run_native_pilot.py; \
     install -m 0444 /source/scripts/native_pilot_runtime_entrypoint.py /conductor/app/scripts/native_pilot_runtime_entrypoint.py; \
-    install -m 0444 /source-contract/source-manifest.json /conductor/usr/share/serverware/source-manifest.json; \
+    install -m 0444 /source-contract/source-manifest.json /conductor/usr/share/catchplate/source-manifest.json; \
     test -z "$(find /conductor -type l -print -quit)"; \
     find /conductor -type d -exec chmod 0555 {} +; \
     find /conductor -type f -exec chmod 0444 {} +; \
@@ -341,7 +341,7 @@ FROM gcr.io/distroless/python3-debian12:nonroot@sha256:7d1042ce588ab97019fe95c24
 COPY --from=production-python-runtime-artifact --chown=0:0 /runtime /runtime
 COPY --from=production-python-runtime-artifact --chown=0:0 /vendor /vendor
 COPY --from=native-pilot-conductor-files --chown=0:0 /conductor/app /app
-COPY --from=native-pilot-conductor-files --chown=0:0 /conductor/usr/share/serverware /usr/share/serverware
+COPY --from=native-pilot-conductor-files --chown=0:0 /conductor/usr/share/catchplate /usr/share/catchplate
 # The pilot has no use for the base's setgid /var/local. Preserve the strict
 # no-set-id inventory by replacing that exact empty directory with root0755.
 # Resolve the base's zoneinfo/localtime link through its genuine pinned UTC
@@ -417,43 +417,43 @@ COPY --from=native-pilot-supervisor-rootfs / /
 
 FROM gcr.io/distroless/python3-debian12:nonroot@sha256:7d1042ce588ab97019fe95c24ffca7bc5a82ccdac572511d5e09bda4435c89c5
 
-ARG SERVERWARE_IMAGE_SOURCE="https://github.com/example/private-deployment"
-ARG SERVERWARE_IMAGE_TITLE="invalid source identity"
-ARG SERVERWARE_IMAGE_REVISION="unknown"
-ARG SERVERWARE_IMAGE_CREATED="unknown"
-ARG SERVERWARE_SOURCE_TREE_DIGEST="unknown"
-ARG SERVERWARE_SOURCE_ARCHIVE_SHA256="unknown"
-ARG SERVERWARE_SOURCE_MANIFEST_SHA256="unknown"
-ARG SERVERWARE_SOURCE_IDENTITY_MODE="invalid"
-ARG SERVERWARE_PRODUCTION_RELEASE_ELIGIBLE="false"
+ARG CATCHPLATE_IMAGE_SOURCE="https://github.com/example/private-deployment"
+ARG CATCHPLATE_IMAGE_TITLE="invalid source identity"
+ARG CATCHPLATE_IMAGE_REVISION="unknown"
+ARG CATCHPLATE_IMAGE_CREATED="unknown"
+ARG CATCHPLATE_SOURCE_TREE_DIGEST="unknown"
+ARG CATCHPLATE_SOURCE_ARCHIVE_SHA256="unknown"
+ARG CATCHPLATE_SOURCE_MANIFEST_SHA256="unknown"
+ARG CATCHPLATE_SOURCE_IDENTITY_MODE="invalid"
+ARG CATCHPLATE_PRODUCTION_RELEASE_ELIGIBLE="false"
 ARG SOURCE_DATE_EPOCH="0"
 
-LABEL org.opencontainers.image.title="${SERVERWARE_IMAGE_TITLE}" \
-      org.opencontainers.image.source="${SERVERWARE_IMAGE_SOURCE}" \
-      org.opencontainers.image.revision="${SERVERWARE_IMAGE_REVISION}" \
-      org.opencontainers.image.created="${SERVERWARE_IMAGE_CREATED}" \
-      dev.serverware.source_tree_digest="${SERVERWARE_SOURCE_TREE_DIGEST}" \
-      dev.serverware.source_archive_digest="${SERVERWARE_SOURCE_ARCHIVE_SHA256}" \
-      dev.serverware.source_manifest_digest="${SERVERWARE_SOURCE_MANIFEST_SHA256}" \
-      dev.serverware.source_identity_mode="${SERVERWARE_SOURCE_IDENTITY_MODE}" \
-      dev.serverware.production_release_eligible="${SERVERWARE_PRODUCTION_RELEASE_ELIGIBLE}"
+LABEL org.opencontainers.image.title="${CATCHPLATE_IMAGE_TITLE}" \
+      org.opencontainers.image.source="${CATCHPLATE_IMAGE_SOURCE}" \
+      org.opencontainers.image.revision="${CATCHPLATE_IMAGE_REVISION}" \
+      org.opencontainers.image.created="${CATCHPLATE_IMAGE_CREATED}" \
+      dev.catchplate.source_tree_digest="${CATCHPLATE_SOURCE_TREE_DIGEST}" \
+      dev.catchplate.source_archive_digest="${CATCHPLATE_SOURCE_ARCHIVE_SHA256}" \
+      dev.catchplate.source_manifest_digest="${CATCHPLATE_SOURCE_MANIFEST_SHA256}" \
+      dev.catchplate.source_identity_mode="${CATCHPLATE_SOURCE_IDENTITY_MODE}" \
+      dev.catchplate.production_release_eligible="${CATCHPLATE_PRODUCTION_RELEASE_ELIGIBLE}"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/vendor:/app \
-    SERVERWARE_DATA_DIR=/data
+    CATCHPLATE_DATA_DIR=/data
 
 COPY --from=production-python-runtime-artifact --chown=0:0 /runtime /runtime
 COPY --from=production-python-runtime-artifact --chown=0:0 /vendor /vendor
 COPY --from=runtime-tree --chown=0:0 /runtime/authority-bootstrap /runtime/authority-bootstrap
 COPY --from=runtime-tree --chown=0:0 /runtime/app /app
-COPY --from=verified-production-source --chown=0:0 /source-contract/source-manifest.json /usr/share/serverware/source-manifest.json
-COPY --from=runtime-tree --chown=65532:65532 --chmod=0755 /runtime/custody-trust /run/serverware/custody-trust
-COPY --from=runtime-tree --chown=65532:65532 --chmod=0750 /runtime/gate-materials /run/serverware/gate
+COPY --from=verified-production-source --chown=0:0 /source-contract/source-manifest.json /usr/share/catchplate/source-manifest.json
+COPY --from=runtime-tree --chown=65532:65532 --chmod=0755 /runtime/custody-trust /run/catchplate/custody-trust
+COPY --from=runtime-tree --chown=65532:65532 --chmod=0750 /runtime/gate-materials /run/catchplate/gate
 WORKDIR /app
 
 EXPOSE 3000
 
 USER nonroot:nonroot
 ENTRYPOINT ["/runtime/python/bin/python3"]
-CMD ["-m", "serverware.control_plane_runner"]
+CMD ["-m", "catchplate.control_plane_runner"]

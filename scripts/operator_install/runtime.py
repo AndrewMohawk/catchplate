@@ -6,7 +6,15 @@ import re
 import sys
 import urllib.request
 
-ARTIFACT = Path("/opt/serverware/artifact.json")
+ARTIFACT = Path("/opt/catchplate/artifact.json")
+
+
+def require_complete_migration(data_dir=Path("/data")):
+    try:
+        (data_dir / "rebrand-incomplete.json").lstat()
+    except FileNotFoundError:
+        return
+    raise ValueError("standalone gate refused incomplete rebrand migration")
 
 
 def artifact():
@@ -15,7 +23,7 @@ def artifact():
         raise ValueError("standalone artifact manifest too large")
     value = json.loads(raw)
     if (set(value) != {"schema", "sourceRevision", "sourceTreeDigest", "compilerInputsDigest", "dataPlaneBinaryDigest"}
-            or value["schema"] != "serverware.standaloneArtifact/v1"
+            or value["schema"] != "catchplate.standaloneArtifact/v1"
             or not re.fullmatch(r"[0-9a-f]{40}", value["sourceRevision"])
             or any(not re.fullmatch(r"sha256:[0-9a-f]{64}", value[key])
                 for key in ("sourceTreeDigest", "compilerInputsDigest", "dataPlaneBinaryDigest"))):
@@ -33,7 +41,7 @@ def pair_status():
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
 
     def get(url, filename):
-        token = (Path("/run/secrets/serverware") / filename).read_text().strip()
+        token = (Path("/run/secrets/catchplate") / filename).read_text().strip()
         if not token or len(token) > 4096:
             raise ValueError("standalone machine credential unavailable")
         request = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
@@ -64,10 +72,14 @@ def main():
         print(json.dumps(pair_status(), sort_keys=True))
     elif role == "app":
         artifact()
-        os.execv(sys.executable, [sys.executable, "-B", "-m", "serverware.operator_demo_runner"])
+        os.execv(sys.executable, [sys.executable, "-B", "-m", "catchplate.operator_demo_runner"])
     elif role == "gate":
+        require_complete_migration()
+        high_water = os.environ.get("CATCHPLATE_POLICY_HIGH_WATER_FILE")
+        if high_water:
+            require_complete_migration(Path(high_water).parent)
         artifact()
-        os.execv("/usr/local/bin/serverware-decision-gate", ["serverware-decision-gate"])
+        os.execv("/usr/local/bin/catchplate-decision-gate", ["catchplate-decision-gate"])
     else:
         raise ValueError("unknown standalone role")
 

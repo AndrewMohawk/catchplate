@@ -10,14 +10,14 @@ from unittest.mock import patch
 from scripts import prepare_operator_google_fixture as prepare
 
 
-SOURCE = Path("/srv/catchplate-fast/projects/serverware-operator-workspace")
-INITIALIZER = Path("/srv/catchplate-fast/projects/serverware-operator-audit-integration/scripts/private_operator_audit/initialize.py")
-ROOT = prepare.base.SCRATCH / "serverware-google-private.mEXqYbMf"
-ARTIFACTS = Path("/srv/catchplate-fast/projects/serverware-operator-artifacts")
-OLD_BINARY = ARTIFACTS / ("sha256-" + prepare.BINARY_SHA256) / "serverware-decision-gate"
+SOURCE = Path("/srv/catchplate-fast/projects/catchplate-operator-workspace")
+INITIALIZER = Path("/srv/catchplate-fast/projects/catchplate-operator-audit-integration/scripts/private_operator_audit/initialize.py")
+ROOT = prepare.base.SCRATCH / "catchplate-google-private.mEXqYbMf"
+ARTIFACTS = Path("/srv/catchplate-fast/projects/catchplate-operator-artifacts")
+OLD_BINARY = ARTIFACTS / ("sha256-" + prepare.BINARY_SHA256) / "catchplate-decision-gate"
 NEW_SHA = "a" * 64  # Synthetic digest input, never a release/artifact assertion.
-NEW_BINARY = ARTIFACTS / ("sha256-" + NEW_SHA) / "serverware-decision-gate"
-ENV_KEY = "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST"
+NEW_BINARY = ARTIFACTS / ("sha256-" + NEW_SHA) / "catchplate-decision-gate"
+ENV_KEY = "CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST"
 
 
 class GmailJobPreparationTests(unittest.TestCase):
@@ -54,7 +54,7 @@ class GmailJobPreparationTests(unittest.TestCase):
     def test_new_profile_changes_only_fixed_commands_and_matching_pin(self):
         expected = prepare.build(SOURCE, NEW_BINARY, INITIALIZER, ROOT)
         services = expected["services"]
-        services["serverware"]["environment"][ENV_KEY] = "sha256:" + NEW_SHA
+        services["catchplate"]["environment"][ENV_KEY] = "sha256:" + NEW_SHA
         services["provider"]["command"] = ["python", "-B", "-m",
             "scripts.operator_gmail_job_fixture", "--lifetime-seconds", "300"]
         command = services["check"]["command"]
@@ -96,9 +96,9 @@ class GmailJobPreparationTests(unittest.TestCase):
             modified["services"][name]["command"] = command
             with self.subTest(service=name, command=command), self.assertRaises(ValueError):
                 self.validate(modified)
-        for name in ("serverware", "check"):
+        for name in ("catchplate", "check"):
             modified = deepcopy(original)
-            if name == "serverware":
+            if name == "catchplate":
                 modified["services"][name]["environment"][ENV_KEY] = "sha256:" + prepare.BINARY_SHA256
             else:
                 command = modified["services"][name]["command"]
@@ -111,12 +111,12 @@ class GmailJobPreparationTests(unittest.TestCase):
     def test_isolation_trust_and_source_mutations_refused(self):
         for name, key, value in (("network", "network_mode", "host"),
                 ("provider", "ports", ["443:443"]), ("check", "cap_add", ["NET_ADMIN"]),
-                ("serverware", "restart", "always"), ("check", "memswap_limit", "1g")):
+                ("catchplate", "restart", "always"), ("check", "memswap_limit", "1g")):
             modified = self.build()
             modified["services"][name][key] = value
             with self.subTest(service=name, key=key), self.assertRaises(ValueError):
                 self.validate(modified)
-        for name in ("serverware", "provider", "check"):
+        for name in ("catchplate", "provider", "check"):
             modified = self.build()
             modified["services"][name]["volumes"][0]["read_only"] = False
             with self.subTest(writable_source=name), self.assertRaises(ValueError):
@@ -201,7 +201,7 @@ class GmailJobPreparationTests(unittest.TestCase):
             elif scenario == "alternate_import":
                 modified["services"]["check"]["environment"]["PYTHONPATH"] += ":/tmp"
             else:
-                name = {"app_mount": "serverware", "provider_mount": "provider", "gate_mount": "decision-gate-rs"}[scenario]
+                name = {"app_mount": "catchplate", "provider_mount": "provider", "gate_mount": "decision-gate-rs"}[scenario]
                 modified["services"][name]["volumes"].append(mount)
             with self.subTest(scenario=scenario), self.assertRaises(ValueError):
                 self.validate(modified)
@@ -224,7 +224,7 @@ class GmailJobPreparationTests(unittest.TestCase):
         root = prepare.GMAIL_CLIENT_DEPENDENCIES
         paths = [root / ("payload-" + str(number) + ".py") for number in range(143)]
         manifest_path = root / "manifest.json"
-        manifest = {"schema": "serverware.syntheticRequestsDependencies/v1", "moduleSubdirectory": "site-packages",
+        manifest = {"schema": "catchplate.syntheticRequestsDependencies/v1", "moduleSubdirectory": "site-packages",
             "files": [{"path": path.name, "size": 1, "sha256": "a" * 64} for path in paths]}
         encoded = json.dumps(manifest)
         for scenario in ("valid", "missing", "extra", "hash", "symlink", "hardlink", "writable", "manifest"):

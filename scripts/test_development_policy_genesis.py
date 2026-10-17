@@ -21,11 +21,11 @@ import sys
 sys.path.insert(0, sys.argv[1])
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from serverware import development_policy_genesis as module
-from serverware import policy_bundle as bundles
+from catchplate import development_policy_genesis as module
+from catchplate import policy_bundle as bundles
 
 scenario = sys.argv[2]
-root = Path(os.environ['SERVERWARE_DATA_DIR'])
+root = Path(os.environ['CATCHPLATE_DATA_DIR'])
 # An actual signature with a synthetic fixture key, not authority/genesis state.
 key = Ed25519PrivateKey.from_private_bytes(b'g' * 32)
 public = key.public_key()
@@ -60,13 +60,13 @@ def refusal(call):
 if scenario == 'signed':
     trust, bound = module.signed_demo(raw)
     assert trust.signing_key_id == value['metadata']['signingKeyId']
-    assert bound['policyId'] == 'serverware-demo' and bound['sequence'] == 1
+    assert bound['policyId'] == 'catchplate-demo' and bound['sequence'] == 1
     assert not bundles.POLICY_SIGNING_KEY_PATH.exists()
     tampered = raw.replace(b'demo-upstream', b'evil-upstream')
     refusal(lambda: module.signed_demo(tampered))
     changed = copy.deepcopy(value); changed['routes'][0]['match']['host'] = 'other-upstream'
     refusal(lambda: module.signed_demo(signed(changed)))
-    os.environ['SERVERWARE_POLICY_REVOKED_SIGNING_KEY_IDS'] = trust.signing_key_id
+    os.environ['CATCHPLATE_POLICY_REVOKED_SIGNING_KEY_IDS'] = trust.signing_key_id
     refusal(lambda: module.signed_demo(raw))
 elif scenario == 'open':
     owner = module.OfflineDevelopmentGenesis.open(**kwargs)
@@ -74,7 +74,7 @@ elif scenario == 'open':
     owner.check(); owner.close()
     assert owner.closed and not owner.handles
     assert not bundles.POLICY_BUNDLE_PATH.exists() and not (root / module.STAGE).exists()
-    assert 'serverware.authority_service' not in sys.modules
+    assert 'catchplate.authority_service' not in sys.modules
     refusal(lambda: module.OfflineDevelopmentGenesis.open(**kwargs))
 elif scenario == 'missing-dsn':
     owner = module.OfflineDevelopmentGenesis.open(**kwargs)
@@ -109,7 +109,7 @@ elif scenario in ('existing-target', 'existing-stage', 'journal-history', 'wrong
         # real target parent; an earlier schema/signature rejection must fail.
         assert owner.raw == raw and owner.input_identity is not None
         assert owner.trust is not None and owner.trust.signing_key_id == value['metadata']['signingKeyId']
-        assert owner.material_binding['policyId'] == 'serverware-demo'
+        assert owner.material_binding['policyId'] == 'catchplate-demo'
         assert owner.material_binding['sequence'] == 1
         assert owner.material_binding['kind'] == 'genesis-materialize'
         assert owner.parent is not None
@@ -195,10 +195,10 @@ os.close(fd)
 
 class DevelopmentPolicyGenesisTests(unittest.TestCase):
     def scenario(self, name):
-        environment = {key: value for key, value in os.environ.items() if not key.startswith("SERVERWARE_")}
-        with tempfile.TemporaryDirectory(prefix="serverware-development-genesis-") as directory:
-            environment.update(SERVERWARE_DATA_DIR=directory, SERVERWARE_RELEASE_CHANNEL="dev",
-                               SERVERWARE_PROCESS_MODE="metadata-bootstrap")
+        environment = {key: value for key, value in os.environ.items() if not key.startswith("CATCHPLATE_")}
+        with tempfile.TemporaryDirectory(prefix="catchplate-development-genesis-") as directory:
+            environment.update(CATCHPLATE_DATA_DIR=directory, CATCHPLATE_RELEASE_CHANNEL="dev",
+                               CATCHPLATE_PROCESS_MODE="metadata-bootstrap")
             result = subprocess.run([sys.executable, "-I", "-B", "-c", CHILD, str(ROOT), name],
                 cwd=ROOT, env=environment, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -236,25 +236,25 @@ class DevelopmentPolicyGenesisTests(unittest.TestCase):
                 cli.arguments(value)
 
     def test_actual_mode_guard_refuses_production_wrong_mode_and_admin_configuration(self):
-        base = {key: value for key, value in os.environ.items() if not key.startswith("SERVERWARE_")}
+        base = {key: value for key, value in os.environ.items() if not key.startswith("CATCHPLATE_")}
         # No invalid descriptor stands in for the mode refusal: call the actual
         # pre-effect guard before any input, storage or PostgreSQL acquisition.
         code = """
 import sys
 sys.path.insert(0, sys.argv[1])
-from serverware.development_policy_genesis import require_development, DevelopmentGenesisError
+from catchplate.development_policy_genesis import require_development, DevelopmentGenesisError
 try:
     require_development()
 except DevelopmentGenesisError:
     raise SystemExit(0)
 raise AssertionError('forbidden mode admitted')
 """
-        for changed in ({"SERVERWARE_PRODUCTION_IMAGE": "1"}, {"SERVERWARE_RELEASE_CHANNEL": "production"},
-                        {"SERVERWARE_PROCESS_MODE": "serverware-control-plane"},
-                        {"SERVERWARE_METADATA_STORE_ADMIN_POSTGRES_DSN": "never-contact-this"}):
-            with self.subTest(changed=changed), tempfile.TemporaryDirectory(prefix="serverware-genesis-refusal-") as directory:
-                environment = {**base, "SERVERWARE_DATA_DIR": directory, "SERVERWARE_RELEASE_CHANNEL": "dev",
-                    "SERVERWARE_PROCESS_MODE": "metadata-bootstrap", **changed}
+        for changed in ({"CATCHPLATE_PRODUCTION_IMAGE": "1"}, {"CATCHPLATE_RELEASE_CHANNEL": "production"},
+                        {"CATCHPLATE_PROCESS_MODE": "catchplate-control-plane"},
+                        {"CATCHPLATE_METADATA_STORE_ADMIN_POSTGRES_DSN": "never-contact-this"}):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory(prefix="catchplate-genesis-refusal-") as directory:
+                environment = {**base, "CATCHPLATE_DATA_DIR": directory, "CATCHPLATE_RELEASE_CHANNEL": "dev",
+                    "CATCHPLATE_PROCESS_MODE": "metadata-bootstrap", **changed}
                 result = subprocess.run([sys.executable, "-I", "-B", "-c", code, str(ROOT)],
                     cwd=ROOT, env=environment, capture_output=True, text=True, timeout=60)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

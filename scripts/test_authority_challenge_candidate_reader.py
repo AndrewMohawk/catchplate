@@ -15,14 +15,14 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_candidate_reader as candidate
-from serverware import authority_index_projection as projection
-from serverware import authority_index_reader as reader
-from serverware import authority_index_trace as trace_shapes
-from serverware import authority_query_read_work as measured
-from serverware import authority_transition_core as core
-from serverware.authority_index_contract import KeyInterval
-from serverware.authority_index_heads import CapturedIndexHead
+from catchplate import authority_challenge_candidate_reader as candidate
+from catchplate import authority_index_projection as projection
+from catchplate import authority_index_reader as reader
+from catchplate import authority_index_trace as trace_shapes
+from catchplate import authority_query_read_work as measured
+from catchplate import authority_transition_core as core
+from catchplate.authority_index_contract import KeyInterval
+from catchplate.authority_index_heads import CapturedIndexHead
 from test_authority_index_range import IndependentIndex
 from test_authority_radix_proof import sql_digest, sql_json, wire_digest, wire_json
 
@@ -51,9 +51,9 @@ class Cursor:
                 user_id="user", scope_key="scope", created_at="2026-01-01T00:00:00+00:00",
                 expires_at="2026-01-01T00:05:00+00:00", retention_reference_mask=0,
                 used_at="2026-01-01T00:01:00+00:00" if phase in {"old", "overflow"} else None)
-            key_digest = wire_digest("serverware.policyAuthorityBusinessKey/v1",
+            key_digest = wire_digest("catchplate.policyAuthorityBusinessKey/v1",
                 b"webauthn_challenges", wire_json({"id": identity}))
-            row_digest = sql_digest("serverware.policyAuthorityAuthenticatedRow/v1",
+            row_digest = sql_digest("catchplate.policyAuthorityAuthenticatedRow/v1",
                 b"webauthn_challenges", sql_json(row))
             leaf = projection.project_row(profile.index_id, row,
                 primary_key_digest=key_digest, primary_row_digest=row_digest)
@@ -66,7 +66,7 @@ class Cursor:
         self.transform = lambda rows: rows
 
     def execute(self, sql, parameters):
-        if 'FROM "serverware_metadata"."policy_authority_counted_index_leaves" AS leaf' not in sql:
+        if 'FROM "catchplate_metadata"."policy_authority_counted_index_leaves" AS leaf' not in sql:
             raise AssertionError("candidate fixture received a non-leaf SQL read")
         self.calls.append((sql, parameters))
         upper = parameters[2] if len(parameters) == 5 else None

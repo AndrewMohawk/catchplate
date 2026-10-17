@@ -6,8 +6,8 @@ credential registration, OIDC activation or independent currentness evidence.
 
 ## Explicit cold scope
 
-[The nested bootstrap](../serverware/control_plane_registration_finalization_bootstrap.py)
-admits `serverware.controlPlaneRegistrationFinalization/v2` only inside the
+[The nested bootstrap](../catchplate/control_plane_registration_finalization_bootstrap.py)
+admits `catchplate.controlPlaneRegistrationFinalization/v2` only inside the
 existing root-signed control-plane parent v4. An explicit nested v3 extension
 below adds SQL endpoint/current-pending configuration only. Nested v1 remains unchanged and
 grant-only; it has no reservation endpoint or predecessor. No new key descriptor,
@@ -19,7 +19,7 @@ The closed v2 object has the original six fields (`schema`,
 
 | Field | Exact contract |
 | --- | --- |
-| `reserverEndpoint` | `{socketPath, requestTimeoutSeconds, listenerUid, listenerGid}`; path `/run/serverware/registration-finalization/reserver.sock`, integer timeout 1–30 seconds, listener UID/GID `0:0`. |
+| `reserverEndpoint` | `{socketPath, requestTimeoutSeconds, listenerUid, listenerGid}`; path `/run/catchplate/registration-finalization/reserver.sock`, integer timeout 1–30 seconds, listener UID/GID `0:0`. |
 | `statePredecessor` | `{sequence, headDigest, nextFence}`; independently root-signed sequence, canonical SHA-256 head and positive fence. |
 
 FD 204 remains the dedicated finalization caller key. The actual configured
@@ -39,13 +39,13 @@ for parent admission and key custody.
 
 ## Opt-in current-pending pins, not a witness
 
-`serverware.controlPlaneRegistrationFinalization/v3` is exactly the eight v2
+`catchplate.controlPlaneRegistrationFinalization/v3` is exactly the eight v2
 fields plus `sqlEndpoint` and `currentPending`, under the same signed parent
 v4 and dedicated FD204. Nested v1/v2 remain unchanged and do not gain SQL
 configuration implicitly.
 
 `sqlEndpoint` has the closed endpoint shape above, with fixed path
-`/run/serverware/registration-finalization/sql.sock`, integer timeout 1–30
+`/run/catchplate/registration-finalization/sql.sock`, integer timeout 1–30
 seconds and root-activated listener peer `0:0`. `currentPending` is exactly
 `{sequence, headDigest, fence}`: a positive sequence, canonical SHA-256 head
 and positive fence. Its sequence must equal the independently root-signed
@@ -79,7 +79,7 @@ reservation path does not automatically invoke the SQL path.
 
 ## One original-bound exchange
 
-[The actual enrollment owner](../serverware/control_plane_enrollment_startup.py)
+[The actual enrollment owner](../catchplate/control_plane_enrollment_startup.py)
 exposes `finalization_reservation_enabled` and the private method
 `_request_registration_finalization_reservation(*, originals, live_window,
 transport_deadline_ns, work)`. The method requires raw10, in order:
@@ -89,7 +89,7 @@ transport_deadline_ns, work)`. The method requires raw10, in order:
 3. The original complete before-vector.
 4. The original finalization execution grant.
 
-[`_reserve_on_owner`](../serverware/control_plane_registration_finalization_execution.py)
+[`_reserve_on_owner`](../catchplate/control_plane_registration_finalization_execution.py)
 retains the actual cold owner, configuration, keys, PID and custody binding via
 the existing `_scope`. It genuinely replays the complete finalization grant and
 custody originals before contacting the fixed reserver once. It keeps that

@@ -17,7 +17,7 @@ value when submitted, cancelled, navigated away from, or invalidated by changed
 saved state.
 
 The action appears only for active bearer/custom-header credentials when the
-server advertises the exact `serverware.operatorStaticKeyReplacement/v1`
+server advertises the exact `catchplate.operatorStaticKeyReplacement/v1`
 capability. Google accounts use a different lifecycle and cannot use this action.
 
 ## Transaction and API
@@ -134,7 +134,7 @@ The console maintenance window was 10:45:07–10:46:45 UTC. Public console/catal
 kept their authentication redirects; lab health returned 200, and monitoring
 confirmed successful checks at 10:47:20 and 10:48:20 UTC. All four services are
 healthy with zero restarts and no host-published ports. See the
-[historical deployment checkpoint](../docker/serverware-operator-demo/README.md#historical-live-ca08fd35f4307347-checkpoint).
+[historical deployment checkpoint](../docker/catchplate-operator-demo/README.md#historical-live-ca08fd35f4307347-checkpoint).
 
 The bounded internal read-only browser check used actual deployed HTML/catalog
 and kept administrator authentication out of the browser. Attempt 1 stopped at

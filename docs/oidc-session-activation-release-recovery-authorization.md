@@ -7,11 +7,11 @@ unexecuted and unprovisioned; this module opens no key, directory or token.
 
 The fixed purpose is `recover-oidc-session-activation-release`. The envelope
 schema and signature domain are
-`serverware.signedOidcSessionActivationReleaseRecoveryAuthorization/v1`; the
+`catchplate.signedOidcSessionActivationReleaseRecoveryAuthorization/v1`; the
 payload schema is
-`serverware.oidcSessionActivationReleaseRecoveryAuthorization/v1`. Exact
+`catchplate.oidcSessionActivationReleaseRecoveryAuthorization/v1`. Exact
 canonical original identity uses
-`serverware.oidcSessionActivationReleaseRecoveryAuthorizationIdentity/v1`.
+`catchplate.oidcSessionActivationReleaseRecoveryAuthorizationIdentity/v1`.
 Neither the existing release-custody schema nor the separate
 [storage authorization](oidc-session-activation-release-outcome-authorization.md)
 accepts this new purpose as a fallback.

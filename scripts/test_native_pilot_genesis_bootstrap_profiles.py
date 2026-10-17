@@ -20,22 +20,22 @@ sys.path.insert(0, str(ROOT / "scripts" / "authority"))
 
 import prepare_native_pilot_closure_set as preparation
 import test_native_pilot_closure_set as fixtures
-from serverware import native_pilot_assignment as assignment
-from serverware import native_pilot_closure_set as closure
+from catchplate import native_pilot_assignment as assignment
+from catchplate import native_pilot_closure_set as closure
 
-API = "serverware.nativePublicationGenesisClosureSet/v2"
+API = "catchplate.nativePublicationGenesisClosureSet/v2"
 ROLES = ("publicationGenesisRetrieval", "publicationGenesis", "publicationGenesisCoordinator")
-LEAF = "serverware.nativePublicationGenesisClosureSetLeaf/v2"
-ROOT_DOMAIN = "serverware.nativePublicationGenesisClosureSetRoot/v2"
-SECCOMP = "serverware.nativePublicationGenesisSeccompSetRoot/v2"
-PREPARATION = "serverware.nativePilotClosureSetPreparation/v3"
-AUTHORITY_INPUT = "serverware.nativePilotAssignmentAuthorityInput/v3"
+LEAF = "catchplate.nativePublicationGenesisClosureSetLeaf/v2"
+ROOT_DOMAIN = "catchplate.nativePublicationGenesisClosureSetRoot/v2"
+SECCOMP = "catchplate.nativePublicationGenesisSeccompSetRoot/v2"
+PREPARATION = "catchplate.nativePilotClosureSetPreparation/v3"
+AUTHORITY_INPUT = "catchplate.nativePilotAssignmentAuthorityInput/v3"
 
 
 def manifest(role, *, late=False):
     value = fixtures.manifest_fixture(role)
     if late:
-        value.update(apiVersion="serverware.nativeCustodyExecutionClosure/v2",
+        value.update(apiVersion="catchplate.nativeCustodyExecutionClosure/v2",
             profile="measured-bootstrap-late-runtime-static-amd64-v1")
         value["manifestSha256"] = fixtures.frame(value["apiVersion"],
             [value[name] for name in fixtures.MANIFEST_FIELDS[:-1]])
@@ -65,7 +65,7 @@ class GenesisBootstrapProfileTests(unittest.TestCase):
         self.assertEqual(closure.GENESIS_ROLES, ROLES)
         self.assertEqual(tuple(row["role"] for row in self.value["members"]), ROLES)
         self.assertEqual([row["manifest"]["apiVersion"] for row in self.members],
-            ["serverware.nativeCustodyExecutionClosure/v1"] * 2 + ["serverware.nativeCustodyExecutionClosure/v2"])
+            ["catchplate.nativeCustodyExecutionClosure/v1"] * 2 + ["catchplate.nativeCustodyExecutionClosure/v2"])
         leaves = [fixtures.frame(LEAF, [row["role"], row["manifest"]]) for row in self.members]
         policies = [[row["role"], row["manifest"]["seccompPolicy"]["structurallyVerifiedPolicySha256"]]
             for row in self.members]
@@ -141,7 +141,7 @@ class GenesisBootstrapProfileTests(unittest.TestCase):
     def test_assignment_input_v3_closed_selection_before_key_use(self):
         value = authority_input(self.value, self.raw)
         self.assertEqual(assignment.input_document(fixtures.canonical(value)), (value, API))
-        cases = [dict(value, apiVersion="serverware.nativePilotAssignmentAuthorityInput/v" + str(version))
+        cases = [dict(value, apiVersion="catchplate.nativePilotAssignmentAuthorityInput/v" + str(version))
             for version in (1, 2, 4)]
         cases += [dict(value, setApiVersion=api) for api in
             (closure.API, closure.GENESIS_API, closure.PUBLICATION_API, None)]

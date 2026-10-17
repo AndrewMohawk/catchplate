@@ -19,14 +19,14 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import native_pilot_ordinary_key_profile as profile
-from serverware import native_pilot_supervisor as supervisor
+from catchplate import native_pilot_ordinary_key_profile as profile
+from catchplate import native_pilot_supervisor as supervisor
 
 ROLES = ("durable-recovery-store", "cleanup-authorization-consumer", "recovery-target-provider",
     "current-signature-authority", "bounded-cleanup-helper")
-PROCESS_DOMAIN = b"serverware.policyCustodyEndpointProcessIdentity/v3"
-PIDFD_DOMAIN = b"serverware.policyCustodyPidfdStatIdentity/v3"
-KEY_DOMAIN = b"serverware.policyCustodyCurrentKeyAuthorization/v3"
+PROCESS_DOMAIN = b"catchplate.policyCustodyEndpointProcessIdentity/v3"
+PIDFD_DOMAIN = b"catchplate.policyCustodyPidfdStatIdentity/v3"
+KEY_DOMAIN = b"catchplate.policyCustodyCurrentKeyAuthorization/v3"
 
 
 def canonical(value):
@@ -73,12 +73,12 @@ def preparation_fixture():
     cold, services, rows = {}, {}, {}
     for index, role in enumerate(ROLES):
         public = hashlib.sha256(("SYNTHETIC PUBLIC BYTES / " + role).encode("ascii")).digest()
-        cold[role] = {"apiVersion": "serverware.policyCustodyGuestConfiguration/v1", "serviceRole": role,
+        cold[role] = {"apiVersion": "catchplate.policyCustodyGuestConfiguration/v1", "serviceRole": role,
             "uid": 31001 + index, "gid": 32001 + index,
             "authority": {"publicKeyBase64url": encoded(public), "keyId": sha(public)}}
         cold_sha = sha(canonical(cold[role]))
         services[role] = {"executableSha256": labelled("executable-" + str(index)),
-            "deliveryConfiguration": {"path": "/etc/serverware/custody-" + role + "-configuration.json",
+            "deliveryConfiguration": {"path": "/etc/catchplate/custody-" + role + "-configuration.json",
                 "sha256": cold_sha}}
         rows[role] = {"configurationSha256": cold_sha, "plannedUid": 31001 + index,
             "plannedGid": 32001 + index, "processId": 41001 + index, "startTimeTicks": 51001 + index,
@@ -88,17 +88,17 @@ def preparation_fixture():
     common = {"bootIdBase64url": encoded(bytes(range(1, 17))), "timeNamespaceDevice": 11,
         "timeNamespaceInode": 12, "startupDeadlineBoottimeNs": "5000", "lifetimeDeadlineBoottimeNs": "9000",
         "invocationId": "123456789abcdef0123456789abcdef0"}
-    launch = {"apiVersion": "serverware.custodyFiveServiceLaunch/v6", **common, "services": services}
+    launch = {"apiVersion": "catchplate.custodyFiveServiceLaunch/v6", **common, "services": services}
     window = {**common, "configurationSha256": labelled("driver-configuration"),
         "signingKeyId": labelled("driver-window-key"), "issuedAtBoottimeNs": "1000"}
-    observation = {"apiVersion": "serverware.custodyFiveServicePreparation/v1", "phase": "parked-pre-exec",
+    observation = {"apiVersion": "catchplate.custodyFiveServicePreparation/v1", "phase": "parked-pre-exec",
         **common, "configurationSha256": sha(canonical(launch)), "issuedAtBoottimeNs": "1100", "services": rows}
     return observation, launch, cold, window, 1200
 
 
 def payload_fixture():
     domain = {"authorityBootId": list(range(1, 17)), "timeNamespaceDevice": 11, "timeNamespaceInode": 12}
-    return {"apiVersion": "serverware.policyCustodyCurrentKeyAuthorization/v3", "endpointRole": "settlement-store",
+    return {"apiVersion": "catchplate.policyCustodyCurrentKeyAuthorization/v3", "endpointRole": "settlement-store",
         "endpointProcessIdentitySha256": identity_fixture()["identitySha256"], "exactEndpointGeneration": 2,
         "authorizedSigningKeyId": labelled("service-key-id"), "authorizedSigningKeySpkiSha256": labelled("service-spki"),
         "checkpointSequence": 3, "predecessorCheckpointSha256": labelled("prior-checkpoint"),
@@ -142,7 +142,7 @@ class OrdinaryKeyProfileTests(unittest.TestCase):
         payload = payload_fixture()
         authority_id, authority_spki = labelled("checkpoint-authority-id"), labelled("checkpoint-authority-spki")
         raw = canonical([payload, authority_id, authority_spki])
-        expected = (b"serverware-signature-v1\0" + struct.pack(">Q", len(KEY_DOMAIN)) + KEY_DOMAIN
+        expected = (b"catchplate-signature-v1\0" + struct.pack(">Q", len(KEY_DOMAIN)) + KEY_DOMAIN
             + struct.pack(">Q", len(raw)) + raw)
         self.assertEqual(profile.signature_preimage(payload, authority_id, authority_spki), expected)
         # Encoding sentinel only: deliberately no valid signature or signer.
@@ -223,7 +223,7 @@ class OrdinaryKeyProfileTests(unittest.TestCase):
         payload = payload_fixture()
         self.assertEqual(profile.validate_payload(payload, identity=identity_fixture(), window=window, now=now), payload)
         mutations = [{**payload, field: invalid} for field, invalid in (
-            ("apiVersion", "serverware.policyCustodyCurrentKeyAuthorization/v4"),
+            ("apiVersion", "catchplate.policyCustodyCurrentKeyAuthorization/v4"),
             ("endpointProcessIdentitySha256", labelled("wrong-process")), ("revocationStatus", "revoked"),
             ("checkpointSequence", True), ("rollbackFloorCheckpointSequence", 4),
             ("rollbackFloorEndpointGeneration", 3), ("validFromBoottime", None))]

@@ -2,10 +2,10 @@
 //! Signed FENCE precedes cleanup; complete accepted closure precedes fresh PKCE.
 //! Original scope, holder drains and purpose-specific native custody stay live.
 use super::*;
-use serverware_decision_gate::native_oauth_browser_v1::{Accepted,Kind};
-use serverware_decision_gate::native_oauth_succession_v1::{self as wire,BrowserTls,Configuration,Prepared,Reply};
-use serverware_decision_gate::native_secret_broker_v1 as broker;
-use serverware_decision_gate::enclave_vsock_v1::VsockShutdownV1;
+use catchplate_decision_gate::native_oauth_browser_v1::{Accepted,Kind};
+use catchplate_decision_gate::native_oauth_succession_v1::{self as wire,BrowserTls,Configuration,Prepared,Reply};
+use catchplate_decision_gate::native_secret_broker_v1 as broker;
+use catchplate_decision_gate::enclave_vsock_v1::VsockShutdownV1;
 
 pub(super) struct Owner {
     config:Configuration, endpoint:String, recovery_endpoint:String, ingress:Arc<BrowserTls>,
@@ -49,19 +49,19 @@ fn post(state:&GateState,url:&str,body:Vec<u8>,deadline:u64)->Result<Value,Strin
     native_service_remaining(state)?;
     if body.len()>3*1024*1024{return Err("succession complete HTTP request bound".to_owned());}
     let remaining=deadline.checked_sub(broker::now()?).filter(|value|*value>0).ok_or("succession original operation interval expired")?;
-    let mut response=state.credential_lease_client.post(url).header("X-Serverware-Data-Plane-Token",
+    let mut response=state.credential_lease_client.post(url).header("X-Catchplate-Data-Plane-Token",
         state.credential_lease_token.as_deref().ok_or("succession service token absent")?)
         .header("Content-Type","application/json").body(body).timeout(Duration::from_nanos(remaining))
         .send().map_err(|_|"succession writer response uncertain; no resubmission")?;
     if !response.status().is_success(){return Err("succession writer refused; no fallback or retry".to_owned());}
     let raw=read_bounded_control_plane_response_body(&mut response,8*1024*1024,"native succession")?;
     if broker::now()?>=deadline{return Err("succession writer response arrived after original operation interval".to_owned());}
-    serverware_decision_gate::native_oauth_refresh_v1::response_document(&raw)
+    catchplate_decision_gate::native_oauth_refresh_v1::response_document(&raw)
 }
 
 fn receipt(state:&GateState,owner:&Owner,helper:&mut broker::Owner,prepared:&Prepared,deadline:u64)->Result<Reply,String>{
     owner.ingress.check(deadline)?; native_service_remaining(state)?;
-    let body=serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&prepared.wire(evidence(state,prepared,deadline)?)?)?;
+    let body=catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&prepared.wire(evidence(state,prepared,deadline)?)?)?;
     let mut originals=post(state,&owner.endpoint,body,deadline)?;
     if originals["apiVersion"]!=wire::HTTP_RESPONSE || originals.as_object().is_none_or(|value|value.len()!=3
         || !["apiVersion","requestOriginal","responseOriginal"].iter().all(|name|value.contains_key(*name))) {
@@ -199,16 +199,16 @@ fn browser(state:&GateState,owner:&mut Owner,mut request:Accepted)->Result<(),St
             Reply::Prepared(prepared) if matches!(request.kind(),Kind::Begin)=>{
                 let reply=begin(state,owner,&mut helper,Reply::Prepared(prepared),deadline)?;
                 if let Reply::Complete{exchange_id,status,..}=reply {
-                    let body=serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&json!({
-                        "apiVersion":"serverware.nativeOAuthSuccessionTerminalObservation/v1","exchangeId":exchange_id,"status":status}))?;
+                    let body=catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&json!({
+                        "apiVersion":"catchplate.nativeOAuthSuccessionTerminalObservation/v1","exchangeId":exchange_id,"status":status}))?;
                     return request.respond("application/json",&body,None,"default-src 'none'; frame-ancestors 'none'");
                 }
                 let Reply::Redirect{exchange_id,location,name,value,expires}=reply else{return Err("succession begin has no terminal handoff".to_owned());};
                 let epoch=u64::try_from(OffsetDateTime::now_utc().unix_timestamp_nanos()).map_err(|_|"succession cookie clock invalid")?;
                 let max_age=expires.checked_sub(epoch).filter(|value|*value>=1_000_000_000).ok_or("succession original cookie expired")?/1_000_000_000;
                 let cookie=format!("{name}={value}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age={max_age}");
-                let body=serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&json!({
-                    "apiVersion":"serverware.nativeOAuthSuccessionAuthorizationRedirect/v1","exchangeId":exchange_id,"location":location}))?;
+                let body=catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&json!({
+                    "apiVersion":"catchplate.nativeOAuthSuccessionAuthorizationRedirect/v1","exchangeId":exchange_id,"location":location}))?;
                 if body.len()>64*1024{return Err("succession redirect response bound".to_owned());}
                 owner.ingress.check(deadline)?;
                 request.respond("application/json",&body,Some(&cookie),"default-src 'none'; frame-ancestors 'none'")
@@ -217,7 +217,7 @@ fn browser(state:&GateState,owner:&mut Owner,mut request:Accepted)->Result<(),St
                 let Reply::Complete{exchange_id,status,..}=complete(state,owner,&mut helper,reply,deadline,false)?
                     else{return Err("succession callback did not terminate".to_owned());};
                 let page=native_oauth_browser_pages::terminal(&status,&owner.config.portal_origin)?;
-                let cookie=format!("__Host-serverware-native-oauth-{}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0",exchange_id.replace('-',""));
+                let cookie=format!("__Host-catchplate-native-oauth-{}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0",exchange_id.replace('-',""));
                 request.respond("text/html; charset=utf-8",&page,Some(&cookie),"default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
             },
             _=>Err("succession native browser/helper phase mismatch".to_owned()),
@@ -236,8 +236,8 @@ pub(super) fn initialize(state:&GateState)->Result<(),String>{
             // This bounds only fresh observation/verification. The private
             // owner clips recovery to retained original grant/capture expiry.
             let deadline=broker::now()?.checked_add(30_000_000_000).ok_or("succession recovery interval overflow")?.min(owner.ingress.deadline());
-            let original=post(state,&owner.recovery_endpoint,serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(
-                &json!({"apiVersion":"serverware.nativeOAuthSuccessionRecoveryOriginalRequest/v1","authorizationId":id}))?,deadline)?;
+            let original=post(state,&owner.recovery_endpoint,catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(
+                &json!({"apiVersion":"catchplate.nativeOAuthSuccessionRecoveryOriginalRequest/v1","authorizationId":id}))?,deadline)?;
             let relays=state.native_upstream_relays.as_ref().ok_or("succession recovery relays absent")?;
             let mut helper=state.native_secret_broker.as_ref().ok_or("succession recovery helper absent")?.lock().map_err(|_|"succession recovery helper poisoned")?;
             let reply=helper.recover_succession(&id,original,deadline,relays)?;

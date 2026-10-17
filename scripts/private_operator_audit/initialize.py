@@ -32,7 +32,7 @@ def initialize(root=ROOT):
             os.fchown(out.fileno(), 10001, 10001)
     fd = os.open(root / '.private-fixture.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
     with os.fdopen(fd, 'w', encoding='ascii') as out:
-        json.dump({'schema': 'serverware.privateOperatorAuditFixture/v1', 'syntheticOnly': True}, out)
+        json.dump({'schema': 'catchplate.privateOperatorAuditFixture/v1', 'syntheticOnly': True}, out)
         out.flush()
         os.fsync(out.fileno())
         os.fchown(out.fileno(), 10001, 10001)

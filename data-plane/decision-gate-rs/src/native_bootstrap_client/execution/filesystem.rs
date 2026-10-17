@@ -7,7 +7,7 @@
 use super::{elf, manifest::{self, Manifest, MAX_EXECUTABLE, MAX_IMAGE, MAX_MANIFEST}};
 use super::super::{originals::{ArtifactV1, HeldOriginal}, OriginalClock};
 use crate::linux_statx::{self, Statx, BASIC_STATS, SYNC_AS_STAT};
-use serverware_decision_gate::erofs_loop_v1::{self, ErofsLoopExpectationV1};
+use catchplate_decision_gate::erofs_loop_v1::{self, ErofsLoopExpectationV1};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};

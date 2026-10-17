@@ -23,13 +23,13 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_index_contract as contract
-from serverware import authority_index_mutation as sparse
-from serverware import authority_index_mutation_reader as reader
-from serverware import authority_index_projection as projection
-from serverware import authority_indexed_mutation as indexed
-from serverware import authority_radix_mutation as primary
-from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits, QueryReadWorkError
+from catchplate import authority_index_contract as contract
+from catchplate import authority_index_mutation as sparse
+from catchplate import authority_index_mutation_reader as reader
+from catchplate import authority_index_projection as projection
+from catchplate import authority_indexed_mutation as indexed
+from catchplate import authority_radix_mutation as primary
+from catchplate.authority_query_read_work import _ValidationWork, QueryReadValidationLimits, QueryReadWorkError
 import test_authority_indexed_mutation as oracle
 import test_authority_index_frontier as range_oracle
 
@@ -147,13 +147,13 @@ class Cursor:
     def execute(self, sql, parameters):
         if not sql.startswith("SELECT ") or not isinstance(parameters, tuple):
             raise AssertionError("reader did not issue its fixed parameterized SELECT")
-        if 'FROM "serverware_metadata"."' + LEAF_TABLE + '" AS leaf' in sql:
+        if 'FROM "catchplate_metadata"."' + LEAF_TABLE + '" AS leaf' in sql:
             kind, identities = "leaf", parameters[:-2]
             rows = [self.store.leaves[parameters[-2], key] for key in identities
                     if (parameters[-2], key) in self.store.leaves]
             if sql.count("(%s::pg_catalog.text)") != len(identities):
                 raise AssertionError("leaf VALUES does not match exact target identities")
-        elif 'FROM "serverware_metadata"."' + NODE_TABLE + '" AS node' in sql:
+        elif 'FROM "catchplate_metadata"."' + NODE_TABLE + '" AS node' in sql:
             kind = "node"
             identities = tuple(zip(parameters[:-2:2], parameters[1:-2:2]))
             rows = [self.store.nodes[parameters[-2], depth, prefix] for depth, prefix in identities
@@ -188,7 +188,7 @@ def expected_metrics(fixture, store):
     hashes += sum(value["before_hashes"] + value["after_hashes"] for value in index_metrics.values())
     pure_bytes = primary_metrics["input_bytes"] + oracle.context_bytes(arguments["index_inputs"])
     pure_bytes += sum(value["input_bytes"] for value in index_metrics.values())
-    heads = frames("serverware.policyAuthorityCountedMutationReadHeads/v1", len(fixture.indexes))
+    heads = frames("catchplate.policyAuthorityCountedMutationReadHeads/v1", len(fixture.indexes))
     heads += sum(frames(name, 29, info["before"].root.digest, info["before"].root.count)
                  for name, info in fixture.indexes.items())
     parameters = returned_bytes = returned = leaf_reads = node_reads = targets_count = siblings_count = 0
@@ -222,13 +222,13 @@ def frontier_bytes(frontier):
 def preflight_peak(fixture, store):
     """Independent worst-positive-sibling reservation, not a spent-work metric."""
     actual = expected_metrics(fixture, store)
-    proof_bytes = frames("serverware.policyAuthorityIndexedMutationInput/v1", len(fixture.indexes))
+    proof_bytes = frames("catchplate.policyAuthorityIndexedMutationInput/v1", len(fixture.indexes))
     fold_hashes, components = 0, {}
     for name, info, targets, opened, siblings, _ in plans(fixture):
         old = [pair[0] for pair in info["targets"].values() if pair[0] is not None]
         maximum_frontier = len(old) + len(siblings)
         profile, root = info["profile"], info["before"].root
-        amount = frames("serverware.policyAuthorityIndexMutationInput/v1", contract.PROFILE,
+        amount = frames("catchplate.policyAuthorityIndexMutationInput/v1", contract.PROFILE,
             name, profile.table, profile.projection_digest, 160, root.digest, root.count,
             len(targets), maximum_frontier)
         for key, pair in sorted(info["targets"].items()):
@@ -430,7 +430,7 @@ class IndexMutationReaderTests(unittest.TestCase):
         self.assertEqual([(kind, parameters) for kind, _, parameters in cursor.calls], expected)
         for (kind, _, bound), (table, key) in zip(cursor.calls, trace.calls):
             self.assertEqual(table, LEAF_TABLE if kind == "leaf" else NODE_TABLE)
-            self.assertEqual(key["profile"], "serverware.policyAuthorityCountedIndexMutationRead/v1")
+            self.assertEqual(key["profile"], "catchplate.policyAuthorityCountedIndexMutationRead/v1")
             self.assertEqual((key["indexId"], key["indexRevision"], key["limit"]), (bound[-2], 29, bound[-1]))
             self.assertEqual(set(key), {"profile", "indexId", "projectionDigest", "indexRevision",
                 "rootDigest", "rootCount", "limit", "targets" if kind == "leaf" else "prefixes"})

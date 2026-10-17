@@ -9,8 +9,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_execution_stream as stream
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_challenge_execution_stream as stream
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
 
 def work():

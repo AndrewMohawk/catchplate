@@ -10,7 +10,7 @@ const {readyFrame, requestFrame, responseFrame, continueFrame, checkerFailureFra
   failureReceipt, publicFailureReceipt, applicationRevocationDialog, downloadedBytes, validateChecker,
   credentialReplyFault, recoveryEvidence, validateRecovery} =
   require('./check_operator_guided_browser.cjs');
-const origin = 'https://serverware-guided.example.com', prefix = '/api/operator-demo';
+const origin = 'https://catchplate-guided.example.com', prefix = '/api/operator-demo';
 const digest = 'sha256:' + 'a'.repeat(64), runId = 'operator-check-' + 'b'.repeat(32);
 const ids = {credential: '11111111-1111-4111-8111-111111111111', application: '22222222-2222-4222-8222-222222222222',
   rule: '33333333-3333-4333-8333-333333333333'};
@@ -22,10 +22,10 @@ const oracleBody = Buffer.from('\n{\n  "z": [1e+02, 18446744073709551617],\n' +
   '  "escaped": "\\u0061\\/b",\n' +
   '  "nested": {"items": [true, null, {"number": 1.2300}]}\n' + '}\r\n', 'ascii');
 const oracleHash = 'sha256:' + crypto.createHash('sha256').update(oracleBody).digest('hex');
-const ready = () => ({kind: 'ready', schema: 'serverware.privateGuidedBrowser/v1', origin,
-  proxyUrl: 'https://serverware-gmail-proxy.example.com', upstreamUrl: 'https://demo-upstream:8443/ordinary-client',
+const ready = () => ({kind: 'ready', schema: 'catchplate.privateGuidedBrowser/v1', origin,
+  proxyUrl: 'https://catchplate-gmail-proxy.example.com', upstreamUrl: 'https://demo-upstream:8443/ordinary-client',
   names: {credential: runId + '-key', application: runId + '-app', rule: runId + '-rule'},
-  providerSecret: 'synthetic-private-fixture-only', tokenTtlSeconds: 3600, placeholder: 'Bearer SERVERWARE_DUMMY',
+  providerSecret: 'synthetic-private-fixture-only', tokenTtlSeconds: 3600, placeholder: 'Bearer CATCHPLATE_DUMMY',
   caPath: '/client-trust/inner-ca.pem', initialRevision: 1, initialPolicyHash: digest, timeoutSeconds: 180});
 const request = (url, method = 'GET', body = null, headers = {}) => ({url: () => url, method: () => method,
   postDataBuffer: () => body, headers: () => headers});
@@ -41,7 +41,7 @@ function result() {
   Object.assign(eventCounts, {'data_plane.credential.release_started': 1, 'data_plane.response.released': 1,
     'data_plane.connect.established': 1, 'data_plane.connect.denied': 1, 'data_plane.policy.reloaded': 2,
     'data_plane.credential_lease.issued': 2});
-  return {schema: 'serverware.privateGuidedCheck/v1', ok: true, syntheticOnly: true, realProviderVerified: false,
+  return {schema: 'catchplate.privateGuidedCheck/v1', ok: true, syntheticOnly: true, realProviderVerified: false,
     publicDnsVerified: false, externalSsoVerified: false, productionReady: false, hardwareVerified: false,
     runId, dataPlaneBinaryDigest: digest, resourceIds: {...ids}, initialRevision: 1, finalRevision: 7,
     initialPolicyHash: digest, policyHash: digest, providerArrivals: 1, proxyAttempts: 2,
@@ -55,7 +55,7 @@ function result() {
 }
 test('ready pins exact isolated origins, one run namespace, and original lifetime', () => {
   assert.deepEqual(readyFrame(ready()), ready());
-  for (const change of [v => v.origin = 'https://serverware.example.com', v => v.proxyUrl += ':8443',
+  for (const change of [v => v.origin = 'https://catchplate.example.com', v => v.proxyUrl += ':8443',
     v => v.upstreamUrl = 'https://demo-upstream:8443/echo', v => v.upstreamUrl += '?case=json_proxy_basic_v1',
     v => v.timeoutSeconds = 181, v => v.tokenTtlSeconds = 7200, v => v.initialRevision = true,
     v => v.names.application += '-other', v => v.names.rule = 'other', v => v.providerSecret = 'x\nprivate',
@@ -83,7 +83,7 @@ test('unreviewed endpoints, retries, framing and private browser headers fail cl
     request(origin + route, 'POST', body, {...headers, 'content-type': 'text/plain'})]) {
     assert.throws(() => requestFrame(item, 1, route));
   }
-  for (const key of ['authorization', 'Authorization', 'proxy-authorization', 'cookie', 'x-serverware-admin-token', 'content-encoding', 'transfer-encoding'])
+  for (const key of ['authorization', 'Authorization', 'proxy-authorization', 'cookie', 'x-catchplate-admin-token', 'content-encoding', 'transfer-encoding'])
     assert.throws(() => requestFrame(request(origin + route, 'POST', body, {...headers, [key]: 'private'}), 1, route));
   for (const id of [true, 0, -1, 101, 1.5, '1']) assert.throws(() => requestFrame(request(origin + '/'), id, null));
 });
@@ -140,8 +140,8 @@ test('recovery acceptance requires every typed observation and never accepts mis
   }
   assert.throws(() => validateRecovery({...recovery(), private: 'private-canary'}));
   const source = require('node:fs').readFileSync(require('node:path').join(__dirname,
-    '../serverware/operator_demo_web/workspace_core.js'), 'utf8');
-  assert(source.includes("const key = 'serverware.operator.mutation.review.v1', value = 'required'"));
+    '../catchplate/operator_demo_web/workspace_core.js'), 'utf8');
+  assert(source.includes("const key = 'catchplate.operator.mutation.review.v1', value = 'required'"));
 });
 test('checkpoints bind checker continuation to the exact phase, frame, and created IDs', () => {
   const value = {kind: 'continue', id: 8, phase: 'revoke_rule', resourceIds: {...ids}};
@@ -153,7 +153,7 @@ test('checkpoints bind checker continuation to the exact phase, frame, and creat
 });
 test('actual download stream bytes are copied and temporary download is deleted without saveAs', async () => {
   const chunks = [Buffer.from('{"private":'), Buffer.from('"synthetic"}')]; let deleted = 0;
-  const download = {suggestedFilename: () => 'serverware-client.private.json',
+  const download = {suggestedFilename: () => 'catchplate-client.private.json',
     createReadStream: async () => Readable.from(chunks), delete: async () => { deleted++; }};
   const bytes = await downloadedBytes(download);
   assert.equal(bytes.toString(), '{"private":"synthetic"}'); assert.equal(deleted, 1);
@@ -162,7 +162,7 @@ test('actual download stream bytes are copied and temporary download is deleted 
 test('download errors, oversize and wrong name still delete temporary private artifact', async () => {
   for (const failure of ['size', 'name', 'stream', 'empty']) {
     let deleted = 0;
-    const value = {suggestedFilename: () => failure === 'name' ? 'private-other.json' : 'serverware-client.private.json',
+    const value = {suggestedFilename: () => failure === 'name' ? 'private-other.json' : 'catchplate-client.private.json',
       createReadStream: async () => { if (failure === 'stream') throw new Error('private');
         return Readable.from(failure === 'empty' ? [] : [Buffer.alloc(16385)]); }, delete: async () => { deleted++; }};
     await assert.rejects(downloadedBytes(value)); assert.equal(deleted, 1);
@@ -177,7 +177,7 @@ test('closed failure receipt never retains source errors or secret-bearing arbit
   assert.equal(recoveryFailure.stage, 'credential_reload'); assert.equal(recoveryFailure.credentialRecovery.lostReplyCount, null);
   assert.equal(recoveryFailure.credentialRecovery.holdAfterReload, null); assert(!JSON.stringify(recoveryFailure).includes('private-canary'));
   // A terminal failure before ready has no request ID or pending checkpoint.
-  const frame = {kind: 'result', result: {schema: 'serverware.privateGuidedCheck/v1', ok: false,
+  const frame = {kind: 'result', result: {schema: 'catchplate.privateGuidedCheck/v1', ok: false,
     error: 'guided_check_failed', stage: 'preflight', exceptionType: 'CheckFailure', failureSite: null}};
   assert.deepEqual(checkerFailureFrame(frame), {stage: 'preflight', exceptionType: 'CheckFailure', failureSite: null});
   const located = clone(frame); located.result.failureSite = {module: 'scripts.check_operator_guided', line: 200};
@@ -219,7 +219,7 @@ test('public failure projection validates canonical closed evidence and omits st
     {capturedBytes: 12, sha256: digest, truncated: false});
   const encode = value => Buffer.from(JSON.stringify(value) + '\n');
   const projected = publicFailureReceipt(encode(source));
-  assert.equal(projected.schema, 'serverware.guidedBrowserFailure/v1');
+  assert.equal(projected.schema, 'catchplate.guidedBrowserFailure/v1');
   assert.deepEqual(projected.checkerStderr, {capturedBytes: 12, truncated: false});
   assert.deepEqual(projected.checkerFailure, source.checkerFailure);
   assert(!JSON.stringify(projected).includes(digest));
@@ -266,7 +266,7 @@ test('client revocation retains the full current renewal warning and exact confi
   // Read source as text only; do not import or evaluate the UI. A future product
   // confirmation change must update this exact joined-journey expectation.
   const source = require('node:fs').readFileSync(require('node:path').join(__dirname,
-    '../serverware/operator_demo_web/workspace_applications.js'), 'utf8');
+    '../catchplate/operator_demo_web/workspace_applications.js'), 'utf8');
   const confirmations = [...source.matchAll(/window\.confirm\(`(Revoke application [^`]+)`\)/g)];
   assert.equal(confirmations.length, 1);
   const rendered = confirmations[0][1].replaceAll('${application.name}', runId + '-app')

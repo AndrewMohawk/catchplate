@@ -15,9 +15,9 @@ const V2 = 'unfiltered_json_or_empty_v2'; const V1 = 'unfiltered_json_or_empty_v
 const ALL = ['projected_json', 'unfiltered_json', V1, V2];
 const options = changes => supplied({responseModes: ALL, ...changes});
 const SOURCE_FILES = ['scripts/test_operator_minimum_setup_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
-  'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py', ...['index.html', 'style.css', 'app.js',
+  'scripts/test_operator_ordinary_modes_browser.cjs', 'catchplate/operator_demo_portal.py', ...['index.html', 'style.css', 'app.js',
     'workspace_core.js', 'workspace_github.js', 'workspace_google.js', 'workspace_applications.js', 'workspace_resources.js', 'workspace_proxy_audit.js', 'workspace_connect.js']
-    .map(name => 'serverware/operator_demo_web/' + name)];
+    .map(name => 'catchplate/operator_demo_web/' + name)];
 let artifacts;
 async function hashes() { return Object.fromEntries(await Promise.all(SOURCE_FILES.map(async name =>
   [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')]))); }
@@ -54,7 +54,7 @@ function exactDefault(body, name, methods = ['GET']) {
 }
 function pureChecks() {
   const source = ['workspace_core.js', 'workspace_github.js']
-    .map(name => readFileSync(join(ROOT, 'serverware/operator_demo_web', name), 'utf8')).join('\n');
+    .map(name => readFileSync(join(ROOT, 'catchplate/operator_demo_web', name), 'utf8')).join('\n');
   const evaluate = (expression, input) => vm.runInNewContext(source + '\n' + expression, {input}, {timeout: 1000});
   const catalog = modes => ({capabilities: {response_modes: modes}});
   assert.equal(evaluate('operatorPermissionName("", ["POST"], "/v1/send")'), 'POST /v1/send');
@@ -176,7 +176,7 @@ const tests = [
 async function main() {
   assert.equal(process.argv.length, 2, 'no live target or credential inputs'); const before = await hashes();
   console.log(JSON.stringify({phase: 'source-before', hashes: before})); console.log(JSON.stringify(pureChecks()));
-  const root = '/srv/catchplate-fast/projects/serverware-operator-artifacts'; assert((await stat(root)).isDirectory());
+  const root = '/srv/catchplate-fast/projects/catchplate-operator-artifacts'; assert((await stat(root)).isDirectory());
   artifacts = await mkdtemp(join(root, 'minimum-setup-browser-synthetic-')); console.log(JSON.stringify({artifactDirectory: artifacts}));
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
   const browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-background-networking']}); let deadline;

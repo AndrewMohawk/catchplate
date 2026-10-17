@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-oauth-capture-retirement.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-oauth-capture-retirement.v1.schema.json",
   "title": "Explicit native pre-subject capture provider retirement configuration",
   "$comment": "Public data only. The actual helper independently admits a distinct provider-retirement grant root, native exchangeIds assignment and signed writer originals. Neither a configuration, an exchange UUID nor a digest grants contact. Exact canonical byte bounds, sorted IDs, same current boot, helper lifetime and original deadlines are enforced by source owners. Older native startup profiles do not select this purpose.",
   "$ref": "#/$defs/configuration",
@@ -33,7 +33,7 @@
       "required": ["apiVersion", "sourceRevision", "authorityRootPublicKey", "authorityRootSpkiSha256",
         "controlPlaneConfigurationDigest", "deploymentId", "instanceId", "applications", "targets"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeOAuthCaptureRetirementConfiguration/v1"},
+        "apiVersion": {"const": "catchplate.nativeOAuthCaptureRetirementConfiguration/v1"},
         "sourceRevision": {"$ref": "oauth-application-enrollment.v1.schema.json#/$defs/revision"},
         "authorityRootPublicKey": {"$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/bytes32"},
         "authorityRootSpkiSha256": {"$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/digest"},

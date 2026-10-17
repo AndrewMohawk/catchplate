@@ -44,7 +44,7 @@ def _stop(_number, _frame):
 
 
 def _report(status, owner):
-    value = dict(apiVersion="serverware.nativePilotApprovalProviderResult/v1", status=status,
+    value = dict(apiVersion="catchplate.nativePilotApprovalProviderResult/v1", status=status,
         stage="opening" if owner is None else owner.stage,
         approvalsDelivered=0 if owner is None else owner.approvals,
         completionReceipts=0 if owner is None else owner.completions,
@@ -67,8 +67,8 @@ def main():
             and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0))
         selected = _arguments(sys.argv[1:])
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from serverware import native_pilot_genesis_parent_control_io as ownership
-        from serverware.native_pilot_approval_provider import ApprovalProvider, ApprovalProviderError
+        from catchplate import native_pilot_genesis_parent_control_io as ownership
+        from catchplate.native_pilot_approval_provider import ApprovalProvider, ApprovalProviderError
         with ownership.owning():
             try:
                 owner = ApprovalProvider.open(**selected)

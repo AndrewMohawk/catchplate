@@ -10,7 +10,7 @@ pub(crate) const MODE: &str = "xAppReadJsonV1";
 pub(crate) const CONTENT_TYPE_POLICY: &str = "xAppReadJsonUtf8V1";
 pub(crate) const HOST: &str = "api.x.com";
 pub(crate) const OPERATION: &str = "x.username.read";
-pub(crate) const PLACEHOLDER: &str = "Bearer serverware-x-placeholder-v1";
+pub(crate) const PLACEHOLDER: &str = "Bearer catchplate-x-placeholder-v1";
 pub(crate) const HEADERS: &[&str] = &["accept", "accept-language", "sec-fetch-mode", "user-agent"];
 pub(crate) const DISCARD: &[&str] = &["accept-encoding"];
 pub(crate) const STATUSES: &[u16] = &[200, 400, 401, 403, 404, 429, 500, 502, 503, 504];
@@ -21,7 +21,7 @@ const ERROR_BYTES: u64 = 65_536;
 /// Compiled support only: consumers must independently join current policy and
 /// health. This is not a provider, credential or successful lookup observation.
 pub(crate) fn gate_capability() -> Value {
-    json!({"schema":"serverware.operatorXAppReadGate/v1","adapter":ADAPTER,"operation":OPERATION})
+    json!({"schema":"catchplate.operatorXAppReadGate/v1","adapter":ADAPTER,"operation":OPERATION})
 }
 
 fn exact(object: &Map<String, Value>, keys: &[&str]) -> bool {

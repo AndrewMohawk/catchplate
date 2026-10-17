@@ -28,9 +28,9 @@ NETWORK_HELPER = "scripts/operator_github_fixture_network.py"
 
 
 def build(source, binary, initializer, root, node, sdk, *, expected_binary_sha256):
-    require(root.parent == base.SCRATCH and re.fullmatch(r"serverware-github-private\.[A-Za-z0-9]{6,32}", root.name),
+    require(root.parent == base.SCRATCH and re.fullmatch(r"catchplate-github-private\.[A-Za-z0-9]{6,32}", root.name),
             "fresh private GitHub NVMe root required")
-    template = root.with_name("serverware-proxy-basic-private." + root.name.split(".", 1)[1])
+    template = root.with_name("catchplate-proxy-basic-private." + root.name.split(".", 1)[1])
     # Reuse hardened base services; its temporary bridge manifest is NEVER used.
     config = basic.build(source, binary, initializer, template, "172.16.249.48/28",
                          expected_binary_sha256=expected_binary_sha256)
@@ -38,7 +38,7 @@ def build(source, binary, initializer, root, node, sdk, *, expected_binary_sha25
         for mount in service["volumes"]:
             path = Path(mount["source"])
             if path.is_relative_to(template): mount["source"] = str(root / path.relative_to(template))
-    config["name"] = "serverware-github-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
+    config["name"] = "catchplate-github-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
     config.pop("networks")
     services, runtime = config["services"], root / "runtime"
     common = deepcopy(services.pop("demo-upstream"))
@@ -48,17 +48,17 @@ def build(source, binary, initializer, root, node, sdk, *, expected_binary_sha25
                   cpus=0.5, mem_limit="256m", memswap_limit="256m", pids_limit=32)
     hosts = [bind(runtime / "upstream-data/github-network/hosts", "/etc/hosts"),
              bind(runtime / "upstream-data/github-network/resolv.conf", "/etc/resolv.conf")]
-    for name in ("serverware", "decision-gate-rs"):
+    for name in ("catchplate", "decision-gate-rs"):
         environment = services[name]["environment"]
-        environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.github.com"]'
-        environment.pop("SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS")
+        environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.github.com"]'
+        environment.pop("CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS")
         services[name]["volumes"] = [mount for mount in services[name]["volumes"] if mount["target"] != "/demo-upstream"]
-    app = services["serverware"]
+    app = services["catchplate"]
     app["depends_on"] = {"github": {"condition": "service_healthy"}}
-    app["environment"]["SERVERWARE_DECISION_GATE_BASE"] = "http://127.0.0.1:9091"
+    app["environment"]["CATCHPLATE_DECISION_GATE_BASE"] = "http://127.0.0.1:9091"
     gate = services["decision-gate-rs"]
-    gate["environment"].update(SERVERWARE_UPSTREAM_CA_BUNDLE="/github-public/ca.pem",
-        SERVERWARE_DECISION_GATE_HOST="127.0.0.1", SERVERWARE_DECISION_GATE_MANAGEMENT_HOST="127.0.0.1")
+    gate["environment"].update(CATCHPLATE_UPSTREAM_CA_BUNDLE="/github-public/ca.pem",
+        CATCHPLATE_DECISION_GATE_HOST="127.0.0.1", CATCHPLATE_DECISION_GATE_MANAGEMENT_HOST="127.0.0.1")
     gate["volumes"].append(bind(runtime / "upstream-data/github/ca.pem", "/github-public/ca.pem"))
     gate["healthcheck"] = base.health("http://127.0.0.1:9091/healthz", start=20)
     services["github-pki"] = {**deepcopy(common), "profiles": ["github-pki"], "network_mode": "none",
@@ -91,7 +91,7 @@ def build(source, binary, initializer, root, node, sdk, *, expected_binary_sha25
     edge["command"] = ["-m", "scripts.operator_github_fixture_network", "edge"]
     check = services["check"]
     check["environment"] = {"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": "/app"}
-    check["command"] = ["/app/" + CHECKER, "--control-base", "http://serverware:3000",
+    check["command"] = ["/app/" + CHECKER, "--control-base", "http://catchplate:3000",
         "--management-base", "http://127.0.0.1:9091", "--proxy-url", "https://" + basic.PROXY_HOST + ":8443",
         "--operator-origin", base.ORIGIN, "--expected-binary-sha256", "sha256:" + expected_binary_sha256,
         "--ca-file", "/client-trust/inner-ca.pem", "--proxy-ca-file", "/client-trust/outer-ca.pem",
@@ -103,7 +103,7 @@ def build(source, binary, initializer, root, node, sdk, *, expected_binary_sha25
         bind(runtime / ".private-fixture.json", "/private-fixture.json"),
         bind(runtime / "upstream-data/github/ca.pem", "/client-trust/github-ca.pem")]
     check["volumes"] += [bind(runtime / "basic-pki" / name, "/client-trust/" + name) for name in ("inner-ca.pem", "outer-ca.pem")]
-    for name in ("serverware", "decision-gate-rs", "github", "edge", "check"):
+    for name in ("catchplate", "decision-gate-rs", "github", "edge", "check"):
         service = services[name]
         service.pop("networks", None)
         service.pop("dns", None)
@@ -134,13 +134,13 @@ def prepare(args):
     require(digest(args.sdk_root / "package-lock.json") == LOCK_SHA256, "exact acquired SDK lock differs")
     manifest = basic.pinned_json(args.sdk_manifest, args.expected_sdk_manifest_sha256)
     observed = basic.inventory(args.sdk_root / "node_modules", limit=8192, byte_limit=64 * 1024**2)
-    require(manifest == {"schema": "serverware.privateGithubDependencies/v1", "packageLockSha256": LOCK_SHA256, "files": observed},
+    require(manifest == {"schema": "catchplate.privateGithubDependencies/v1", "packageLockSha256": LOCK_SHA256, "files": observed},
         "externally pinned full SDK payload differs")
     for package, version in (("@octokit/rest", "22.0.1"), ("undici", "8.11.2")):
         value = json.loads((args.sdk_root / "node_modules" / package / "package.json").read_text())
         require(value.get("name") == package and value.get("version") == version, "SDK package identity differs")
     compose = json.dumps(config, indent=2, sort_keys=True) + "\n"
-    receipt = {"schema": "serverware.privateGithubPreparation/v1", "project": config["name"],
+    receipt = {"schema": "catchplate.privateGithubPreparation/v1", "project": config["name"],
         "jobRoot": str(args.job_root), "source": str(args.source), "sourceCommit": args.expected_source_commit,
         "sourceManifestSha256": args.expected_source_manifest_sha256, "sourceSha256": source_files,
         "binary": str(args.binary), "binarySha256": args.expected_binary_sha256,

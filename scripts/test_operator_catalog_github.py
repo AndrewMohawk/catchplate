@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ACTOR = "operator-github-catalog-test"
 TOKEN = "github_pat_synthetic_catalog_token_123456789"
 REPLACEMENT = "github_pat_synthetic_catalog_replacement_987654321"
-REPOSITORY = {"owner": "serverware-fixture", "name": "operator-demo"}
+REPOSITORY = {"owner": "catchplate-fixture", "name": "operator-demo"}
 READ = "github_issues_read_v1"
 WRITE = "github_issues_write_v1"
 
@@ -105,7 +105,7 @@ def signed_presets():
     first, second = f.rule(app_read, credential), f.rule(app_write, credential, WRITE)
     signed = f.signed()
     assert len(signed["routes"]) == 2 and len(signed["credentials"]) == 1
-    from serverware import github_issues
+    from catchplate import github_issues
     for result, app, bundle in ((first, app_read, READ), (second, app_write, WRITE)):
         rule = result["access_rule"]
         route = next(item for item in signed["routes"] if item["id"] == rule["route_id"])
@@ -116,7 +116,7 @@ def signed_presets():
             "methods": ["GET"] if bundle == READ else ["GET", "POST"],
             "paths": github_issues.route_paths(REPOSITORY)}
         assert route["credentialRef"] == credential["id"] and route["principals"] == [app["principal_id"]]
-        assert route["credentialHeader"] == {"mode": "replaceExact", "expectedValue": "token serverware-github-placeholder-v1"}
+        assert route["credentialHeader"] == {"mode": "replaceExact", "expectedValue": "token catchplate-github-placeholder-v1"}
         cfg = route["adapter"]["config"]
         assert cfg["githubRepository"] == REPOSITORY and cfg["operationBundle"] == bundle
         assert cfg["request"] == github_issues.request_profile(bundle)
@@ -144,7 +144,7 @@ def legacy_retained():
     assert workspace.snapshot(db) == before and config.POLICY_BUNDLE_PATH.read_bytes() == signed
     old = workspace.catalog(db, schema)
     assert all("connection_type" not in row for row in old["credentials"])
-    from serverware import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
+    from catchplate import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
     with patch.object(store, "loaded_policy_hash", return_value=None):
         result = mutations.create_github_credential(inputs.GithubTokenInput(**workspace.review(db, store, schema),
             name="Explicit new GitHub token", secret=TOKEN), ACTOR)
@@ -332,7 +332,7 @@ def safe_worker_failure(error):
         frames.append({"file": filename, "function": function, "line": trace.tb_lineno})
         frames = frames[-16:]
         trace = trace.tb_next
-    return {"schema": "serverware.syntheticTestFailure/v1", "exception_type": name, "frames": frames}
+    return {"schema": "catchplate.syntheticTestFailure/v1", "exception_type": name, "frames": frames}
 
 
 def worker_failure_summary(result):
@@ -342,7 +342,7 @@ def worker_failure_summary(result):
             raise ValueError()
         value = json.loads(result.stdout)
         assert isinstance(value, dict) and set(value) == {"schema", "exception_type", "frames"}
-        assert value["schema"] == "serverware.syntheticTestFailure/v1"
+        assert value["schema"] == "catchplate.syntheticTestFailure/v1"
         assert isinstance(value["exception_type"], str)
         assert re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", value["exception_type"])
         assert isinstance(value["frames"], list) and len(value["frames"]) <= 16
@@ -360,12 +360,12 @@ def worker_failure_summary(result):
 class OperatorCatalogGithubTests(unittest.TestCase):
     def setUp(self):
         workspace.common.OperatorDemoPersistenceTests.setUp(self)
-        self.environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.example.com","https://api.github.com"]'
+        self.environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.example.com","https://api.github.com"]'
 
     def run_worker(self, name):
         environment = dict(self.environment)
         if name == "destination":
-            environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.example.com"]'
+            environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.example.com"]'
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", name],
             cwd=ROOT, env=environment, capture_output=True, text=True, timeout=90)
         if result.returncode != 0:

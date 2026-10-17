@@ -4,7 +4,10 @@
 
 ## Use the current instance
 
-Open [Serverware](https://serverware.example.com/) with the homelab login.
+Open the [retained instance](https://serverware.example.com/) with the homelab login.
+The Catchplate source rename is complete, but the renamed build, retained-state
+migration and hostname cutover are pending. Follow the [rename status](catchplate-rename.md);
+do not change an existing deployment's paths or private configuration by hand.
 It is already running: opening it does not build the proxy, start a pilot or
 require a security-key ceremony. Follow [Getting started](wiki/Getting-started.md)
 to save a provider credential, create a client and grant a permission. Developers
@@ -18,11 +21,12 @@ Do not recreate its state, regenerate its keys or run a historical rollout scrip
 
 ## Install a new instance
 
-The [standalone installation guide](../docker/serverware-standalone/README.md)
+The [standalone installation guide](../docker/catchplate-standalone/README.md)
 provides the new host-trusted app/proxy/Nginx package and one JSON configuration.
-**Isolated installation and lifecycle verified.** Both build paths and fresh
+**Pre-rename isolated installation and lifecycle verified.** Both build paths and fresh
 starts passed, together with browser, persisted-state restart and TLS replacement
-checks. Public deployment and real-provider use remain separate. Follow the
+checks. Those Serverware results do not verify the renamed Catchplate package;
+its build/startup checks are pending. Public deployment and real-provider use remain separate. Follow the
 [verification record](standalone-installation-verification.md) for current results.
 It does not
 depend on the homelab login or retained deployment paths. You supply a Linux
@@ -55,7 +59,7 @@ the owner must recheck that exact operation against current saved state.
 | Prepared change | Deployment-owner action |
 | --- | --- |
 | Proxy destinations | Review the exact pending operation and target list. Stop old app/proxy writers, take a stopped-consistent backup, and set the same reviewed destination list on both app and proxy before the controlled paired restart. |
-| Managed Google application | The secret is already encrypted in Serverware. Recheck the exact pending operation, then perform the controlled app/proxy restart with existing managed-provider custody preserved. Startup selects that prepared configuration and publishes the matching Google destination/profile. Do not copy its secret into environment files or add the legacy Google layer. |
+| Managed Google application | The secret is already encrypted in Catchplate. Recheck the exact pending operation, then perform the controlled app/proxy restart with existing managed-provider custody preserved. Startup selects that prepared configuration and publishes the matching Google destination/profile. Do not copy its secret into environment files or add the legacy Google layer. |
 | X application | Saving managed X configuration is immediate; it does not need this restart handoff. Account consent and destination readiness remain separate. |
 
 For either restart, use the deployment's current reviewed configuration and
@@ -68,4 +72,4 @@ do not force activation or silently prepare it again.
 
 See [destination changes](operator-proxy-destinations.md),
 [managed Google configuration](operator-provider-configuration.md#operator-configuration-workflow)
-and [retained-state maintenance](../docker/serverware-operator-demo/README.md#approval-and-state-preservation-gate).
+and [retained-state maintenance](../docker/catchplate-operator-demo/README.md#approval-and-state-preservation-gate).

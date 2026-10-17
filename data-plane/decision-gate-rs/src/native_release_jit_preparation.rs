@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 pub(super) const PATH: &str = "/api/data-plane/release-authorizations/native-jit-prepare";
 pub(super) const MAX_RESPONSE_BYTES: u64 = 512 * 1024;
-const SCHEMA: &str = "serverware.nativeReleaseJitPreparation/v1";
+const SCHEMA: &str = "catchplate.nativeReleaseJitPreparation/v1";
 #[path = "native_release_jit_submission.rs"]
 pub(super) mod submission;
 
@@ -221,7 +221,7 @@ fn review_display(request: &Claims<'_>) -> Result<(String, Value), String> {
 }
 
 fn validate_originals(wire: &Wire, request: &Claims<'_>) -> Result<(), String> {
-    serverware_decision_gate::native_secret_broker_v1::validate_release_jit_review_originals(
+    catchplate_decision_gate::native_secret_broker_v1::validate_release_jit_review_originals(
         wire.runtime_input.as_bytes(), wire.parent_request.as_bytes(), wire.child_request.as_bytes())?;
     let parent = object(&wire.parent_request)?;
     let arguments = object(field(&parent, "arguments")?.get())?;

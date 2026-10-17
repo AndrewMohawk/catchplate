@@ -56,7 +56,7 @@ and are not undone or retried after a refusal.
 The default two-person action list now includes recovery and its requester-role
 classification explicitly permits approver, like activation authorization.
 **Configuration migration:** installations explicitly setting
-`SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS` must add
+`CATCHPLATE_CONTROL_PLANE_TWO_PERSON_ACTIONS` must add
 `webauthn.oidc-session.activation.recover` or `*` when global two-person approval
 is enabled. An old explicit list does not inherit the new default: options and
 authorization fail closed until this action is covered. No secret configuration

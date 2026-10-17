@@ -1,11 +1,11 @@
 # Optional public-only acquisition socket for explicit parent/v12 configuration.
 # Does not provision an issuer or release worker, or expose any root signing key.
 services:
-  serverware:
+  catchplate:
     volumes:
       - type: bind
-        source: ${SERVERWARE_OIDC_SESSION_ACTIVATION_RELEASE_GRANTS_SOCKET:?set preprovisioned release-grant issuer socket}
-        target: /run/serverware/oidc-session-activation-token-release/grants.sock
+        source: ${CATCHPLATE_OIDC_SESSION_ACTIVATION_RELEASE_GRANTS_SOCKET:?set preprovisioned release-grant issuer socket}
+        target: /run/catchplate/oidc-session-activation-token-release/grants.sock
         read_only: true
         bind:
           create_host_path: false

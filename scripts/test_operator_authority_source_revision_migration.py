@@ -56,8 +56,8 @@ def source_matches(source, selected):
     """Check actual fixed source bytes before the child imports any app code."""
     pinned = migration.pins()
     require(pinned["oldCommit"] == OLD_COMMIT and pinned["targetBaseCommit"] == TARGET_COMMIT)
-    require(not any(name == "serverware" or name.startswith("serverware.")
-        or name == "serverware_agent_trust" or name.startswith("serverware_agent_trust.")
+    require(not any(name == "catchplate" or name.startswith("catchplate.")
+        or name == "catchplate_agent_trust" or name.startswith("catchplate_agent_trust.")
         for name in sys.modules))
     for relative, expected in pinned[selected]["sourceFiles"].items():
         path = Path(source) / relative
@@ -75,12 +75,12 @@ def selected_backend(source, directory, *, create):
         provider.mkdir(mode=0o700)
     require(provider.is_dir() and not provider.is_symlink()
         and stat.S_IMODE(provider.stat().st_mode) == 0o700 and not list(provider.iterdir()))
-    os.environ.update(SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED="1",
-        SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR=str(provider), SERVERWARE_DECISION_GATE_BASE="")
-    from serverware import operator_google_managed_config
+    os.environ.update(CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED="1",
+        CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR=str(provider), CATCHPLATE_DECISION_GATE_BASE="")
+    from catchplate import operator_google_managed_config
     operator_google_managed_config.bootstrap()  # Real cold bootstrap, before configured imports.
     backend = ordinary.backend()
-    require(os.environ.get("SERVERWARE_CONTROL_PLANE_STARTUP_VALIDATED_PID") == str(os.getpid())
+    require(os.environ.get("CATCHPLATE_CONTROL_PLANE_STARTUP_VALIDATED_PID") == str(os.getpid())
         and not operator_google_managed_config.selected())
     return workspace, custody, provider, backend
 
@@ -90,7 +90,7 @@ def require_owned_source(source, custody, provider):
     require(not list(provider.iterdir()))
     require(all(Path(module.__file__).resolve().is_relative_to(source)
         for name, module in tuple(sys.modules.items())
-        if name == "serverware_agent_trust" or name.startswith("serverware_agent_trust.")))
+        if name == "catchplate_agent_trust" or name.startswith("catchplate_agent_trust.")))
 
 
 def seed(directory):
@@ -103,7 +103,7 @@ def seed(directory):
     historical.upstream_fixture()
     # Reproduce the existing genuine-old quota preservation fixture using its
     # actual initialized owners. These rows do not claim authenticated X use.
-    from serverware import operator_x_quota as quota, operator_publication as publication
+    from catchplate import operator_x_quota as quota, operator_publication as publication
     with publication.exclusive(), closing(db.connect()) as conn, conn:
         conn.execute("BEGIN IMMEDIATE")
         quota.require_ready(conn)
@@ -155,8 +155,8 @@ def source_refusal(directory):
         pass
     else:
         raise AssertionError("caller-authored source pins accepted")
-    require(not any(name == "serverware" or name.startswith("serverware.")
-        or name == "serverware_agent_trust" or name.startswith("serverware_agent_trust.")
+    require(not any(name == "catchplate" or name.startswith("catchplate.")
+        or name == "catchplate_agent_trust" or name.startswith("catchplate_agent_trust.")
         for name in sys.modules))
     print('{"changedSourceRefusedBeforeImport":true}')
 
@@ -167,7 +167,7 @@ class AuthoritySourceRevisionMigrationTests(unittest.TestCase):
         global _OWNED_ROOT
         os.umask(0o077)
         for key in tuple(os.environ):
-            if key.startswith("SERVERWARE_"):
+            if key.startswith("CATCHPLATE_"):
                 del os.environ[key]
         cls.pinned = migration.pins()  # Absent or unreviewed pins fail, never skip.
         require(cls.pinned["oldCommit"] == OLD_COMMIT and cls.pinned["targetBaseCommit"] == TARGET_COMMIT)
@@ -209,7 +209,7 @@ class AuthoritySourceRevisionMigrationTests(unittest.TestCase):
     def db(self):
         with closing(sqlite3.connect(self.directory / migration.DATABASE)) as conn, conn:
             conn.row_factory = sqlite3.Row
-            from serverware.authority_store.metadata_schema import configure_sqlite_metadata_connection
+            from catchplate.authority_store.metadata_schema import configure_sqlite_metadata_connection
             configure_sqlite_metadata_connection(conn)
             yield conn
 
@@ -304,7 +304,7 @@ class AuthoritySourceRevisionMigrationTests(unittest.TestCase):
         reviewed = self.plan()
         self.assertEqual(self.files(), files)
         self.assertEqual({str(path): migration.identity(path.stat()) for path in self.directory.rglob("*")}, identities)
-        self.assertEqual(reviewed["schema"], "serverware.operatorAuthoritySourceRevisionPlan/v1")
+        self.assertEqual(reviewed["schema"], "catchplate.operatorAuthoritySourceRevisionPlan/v1")
         self.assertEqual(reviewed["variant"], "optional")
         self.assertEqual(len(reviewed["rows"]), 218)
         for table in ("credentials", "credential_generations", "operator_catalog_credentials",
@@ -318,7 +318,7 @@ class AuthoritySourceRevisionMigrationTests(unittest.TestCase):
         self.assertEqual(receipt["status"], "committed")
         self.assertEqual(receipt["rebuiltTables"], list(migration.CHANGED_TABLES))
         self.assertEqual(len(receipt["rebuiltTables"]), 34)
-        self.assertEqual(receipt["schema"], "serverware.operatorAuthoritySourceRevisionReceipt/v1")
+        self.assertEqual(receipt["schema"], "catchplate.operatorAuthoritySourceRevisionReceipt/v1")
         self.assertEqual(receipt["pinsSha256"], migration.PIN_SHA256)
         self.assertEqual(receipt["planSha256"], migration.sha(migration.canonical(reviewed)))
         self.assertEqual(receipt["orderedAudit"], reviewed["orderedAudit"])
@@ -335,10 +335,10 @@ class AuthoritySourceRevisionMigrationTests(unittest.TestCase):
             started = datetime.now(timezone.utc)
             self.child("--cold-start", self.directory, expected=START_OUTPUT)
             finished, after = datetime.now(timezone.utc), self.logical()
-            rows = after["rows"]["serverware_store_migrations"]
+            rows = after["rows"]["catchplate_store_migrations"]
             name_index, time_index = rows["columns"].index("migration"), rows["columns"].index("applied_at")
             selected = [row for row in rows["values"] if row[name_index] == ["str", "policy_candidate_authority"]]
-            prior = [row for row in before["rows"]["serverware_store_migrations"]["values"]
+            prior = [row for row in before["rows"]["catchplate_store_migrations"]["values"]
                 if row[name_index] == ["str", "policy_candidate_authority"]]
             self.assertEqual((len(selected), len(prior)), (1, 1))
             observed = datetime.fromisoformat(selected[0][time_index][1])
@@ -462,7 +462,7 @@ class AuthoritySourceRevisionMigrationTests(unittest.TestCase):
 
     def test_populated_pair_and_parent_are_preserved_on_refusal(self):
         # Valid storage sentinels, not forged claims of verified native custody.
-        from serverware import authority_native_jit_retention_contract as retention
+        from catchplate import authority_native_jit_retention_contract as retention
         reviewed = self.plan()
         identity = str(uuid.UUID(int=93))
         digest = "sha256:" + "1" * 64
@@ -499,7 +499,7 @@ class AuthoritySourceRevisionMigrationTests(unittest.TestCase):
 
     def test_stale_plan_and_changed_closed_plan_fields_refused(self):
         reviewed = self.plan()
-        for change in ({"schema": "serverware.operatorAuthorityContractMigrationPlan/v1"},
+        for change in ({"schema": "catchplate.operatorAuthorityContractMigrationPlan/v1"},
                 {"transitionId": "historical"}, {"extra": True}, {"pinsSha256": "sha256:" + "0" * 64}):
             self.assert_refused_without_write(lambda: self.apply({**reviewed, **change}))
         self.assert_refused_without_write(lambda: migration.apply(self.directory, self.pinned, self.helpers,
@@ -581,7 +581,7 @@ if __name__ == "__main__":
             frames = re.findall(r'File "[^"\n]*/test_operator_authority_source_revision_migration\.py", line ([0-9]+)', trace)
             failures.append({"sourceLines": [int(value) for value in frames[-12:]]})
         passed = result.wasSuccessful() and result.testsRun == 14 and not result.skipped
-        print(json.dumps({"schema": "serverware.operatorAuthoritySourceRevisionTests/v1", "ok": passed,
+        print(json.dumps({"schema": "catchplate.operatorAuthoritySourceRevisionTests/v1", "ok": passed,
             "tests": result.testsRun, "expectedTests": 14, "failures": len(result.failures),
             "errors": len(result.errors), "skipped": len(result.skipped), "diagnostics": failures,
             "oldCommit": OLD_COMMIT, "targetCommit": TARGET_COMMIT,

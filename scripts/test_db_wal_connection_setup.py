@@ -25,8 +25,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware.authority_store.metadata_schema import configure_sqlite_metadata_connection
-from serverware.operator_google_cleanup_store import configure_connection
+from catchplate.authority_store.metadata_schema import configure_sqlite_metadata_connection
+from catchplate.operator_google_cleanup_store import configure_connection
 
 TIMEOUT = 0.1
 STRATEGIES = ("repeated_assignment", "read_mode_first")
@@ -126,7 +126,7 @@ def retained_matrix(source, *, serialized_only=False):
         raise ValueError("absolute non-symlink stopped SQLite path required")
     before, observations, schemas = fingerprint(source), [], []
     strategies = (SERIALIZED,) if serialized_only else STRATEGIES
-    with tempfile.TemporaryDirectory(prefix="serverware-wal-characterization-") as directory:
+    with tempfile.TemporaryDirectory(prefix="catchplate-wal-characterization-") as directory:
         for round_number in (1, 2):
             # Reverse ordering reduces a simple first-strategy cache bias; this
             # is still a small characterization, not a statistical benchmark.
@@ -134,7 +134,7 @@ def retained_matrix(source, *, serialized_only=False):
                 for callers in (1, 3):
                     trial = Path(directory) / f"trial-{round_number}-{strategy}-{callers}"
                     trial.mkdir(mode=0o700)
-                    path = trial / "serverware.sqlite3"
+                    path = trial / "catchplate.sqlite3"
                     for suffix in before:
                         shutil.copyfile(Path(str(source) + suffix), Path(str(path) + suffix))
                         Path(str(path) + suffix).chmod(0o600)
@@ -146,7 +146,7 @@ def retained_matrix(source, *, serialized_only=False):
         raise ValueError("stopped SQLite input changed during characterization")
     if any(item != schemas[0] for item in schemas):
         raise ValueError("copied SQLite schema or mode diverged between trials")
-    return {"schema": "serverware.privateWalSetupCharacterization/v1", "sqliteVersion": sqlite3.sqlite_version,
+    return {"schema": "catchplate.privateWalSetupCharacterization/v1", "sqliteVersion": sqlite3.sqlite_version,
         "scope": "temporary-copy-fresh-connection-not-original-filesystem-or-workload",
         "busyTimeoutSeconds": TIMEOUT, "schemaSize": schemas[0], "sourceUnchanged": True,
         "copiedSuffixes": sorted(before), "observations": observations}
@@ -154,7 +154,7 @@ def retained_matrix(source, *, serialized_only=False):
 
 class WalConnectionSetupTests(unittest.TestCase):
     def setUp(self):
-        self.directory = tempfile.TemporaryDirectory(prefix="serverware-wal-controls-")
+        self.directory = tempfile.TemporaryDirectory(prefix="catchplate-wal-controls-")
         self.addCleanup(self.directory.cleanup)
         self.path = Path(self.directory.name) / "synthetic.sqlite3"
         with closing(sqlite3.connect(self.path)) as conn, conn:
@@ -220,7 +220,7 @@ class WalConnectionSetupTests(unittest.TestCase):
         with closing(sqlite3.connect(self.path)) as conn:
             self.assertEqual(conn.execute("SELECT value FROM synthetic").fetchone()[0], "synthetic")
             self.assertIsNone(conn.execute("SELECT 1 FROM sqlite_master WHERE name='uncommitted_schema'").fetchone())
-        print(json.dumps({"schema": "serverware.privateWalHeldLockCharacterization/v1",
+        print(json.dumps({"schema": "catchplate.privateWalHeldLockCharacterization/v1",
             "sqliteVersion": sqlite3.sqlite_version, "observations": observations}, sort_keys=True))
 
     def test_exclusive_read_failure_does_not_fall_through_or_mutate_input_copy(self):

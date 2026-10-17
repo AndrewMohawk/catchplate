@@ -11,17 +11,17 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts import run_native_pilot_supervisor as cli
 from scripts import native_pilot_supervisor_runtime_entrypoint as entry
-from serverware import native_pilot_adopted_publication as adopted
-from serverware import native_pilot_coordinator_channel as wire
-from serverware import native_pilot_precreation_install as precreation
-from serverware import native_pilot_publication as publisher
-from serverware import native_pilot_publication_profiles as profiles
+from catchplate import native_pilot_adopted_publication as adopted
+from catchplate import native_pilot_coordinator_channel as wire
+from catchplate import native_pilot_precreation_install as precreation
+from catchplate import native_pilot_publication as publisher
+from catchplate import native_pilot_publication_profiles as profiles
 
 p = wire.p
 
 
 def request(*, selected=False):
-    value = {"apiVersion": "serverware.nativePilotOperatorRequest/v" + ("2" if selected else "1"),
+    value = {"apiVersion": "catchplate.nativePilotOperatorRequest/v" + ("2" if selected else "1"),
         "sequence": 1, "phase": "bootstrap-admission", "payload": {"synthetic": True}, "deadlineBoottimeNs": "200"}
     if selected:
         value["expiresAtUnixNanos"] = "300"
@@ -111,7 +111,7 @@ class AdoptedOrchestrationControls(unittest.TestCase):
     def test_precreation_cannot_silently_upgrade_old_bundle(self):
         for selected in (False, True):
             value = dict.fromkeys(precreation.FIELDS)
-            value["apiVersion"] = "serverware.nativePilotPrecreationBundle/v" + ("1" if selected else "2")
+            value["apiVersion"] = "catchplate.nativePilotPrecreationBundle/v" + ("1" if selected else "2")
             raw = p.canonical(value)
             with self.assertRaises(ValueError): precreation._prepare(raw, p.sha(raw), adopted=selected)
 

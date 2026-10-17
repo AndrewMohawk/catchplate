@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/control-plane-publication-approval.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/control-plane-publication-approval.v1.schema.json",
   "title": "Purpose-bound admin-token publication approval originals",
   "description": "Closed purpose-specific HTTP producer bodies, controlled argument originals and resolution journal records. These data shapes are not signatures, current physical trust, cold custody, committed approval or filesystem permission. Operation selection, exact canonical ASCII digests, UTF-8 byte limits, actual rows/actors, hardware trust and nonrenewing deadlines are enforced by retained source owners. Generic v1/v2 mutation options are not this profile. No source cohort is pinned by this schema.",
   "anyOf": [
@@ -43,7 +43,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "action", "resourceId", "payloadDigest", "request"],
       "properties": {
-        "apiVersion": {"const": "serverware.publicationApprovalOptions/v1"},
+        "apiVersion": {"const": "catchplate.publicationApprovalOptions/v1"},
         "action": {"const": "control_plane.token.publication.resolve"},
         "resourceId": {"const": "admin-token"},
         "payloadDigest": {"$ref": "#/$defs/digest"},
@@ -60,7 +60,7 @@
       }
     },
     "optionsResponse": {
-      "type": "object", "additionalProperties": false, "required": ["publicKey", "serverware"],
+      "type": "object", "additionalProperties": false, "required": ["publicKey", "catchplate"],
       "properties": {
         "publicKey": {
           "type": "object", "additionalProperties": false,
@@ -73,11 +73,11 @@
             "userVerification": {"const": "required"}
           }
         },
-        "serverware": {
+        "catchplate": {
           "type": "object", "additionalProperties": false,
           "required": ["schema", "operation", "operationId", "challengeId", "credentialRecordId", "payloadDigest", "expiresAt"],
           "properties": {
-            "schema": {"const": "serverware.publicationApprovalOptions/v1"},
+            "schema": {"const": "catchplate.publicationApprovalOptions/v1"},
             "operation": {"enum": ["publication-approval.request", "publication-approval.decide", "publication-approval.consume"]},
             "operationId": {"$ref": "#/$defs/digest"},
             "challengeId": {"$ref": "#/$defs/digest"},
@@ -109,7 +109,7 @@
     "assertionMfa": {
       "type": "object", "additionalProperties": false, "required": ["publicationProfile", "assertion"],
       "properties": {
-        "publicationProfile": {"const": "serverware.publicationApprovalOptions/v1"},
+        "publicationProfile": {"const": "catchplate.publicationApprovalOptions/v1"},
         "assertion": {"$ref": "#/$defs/assertion"}
       },
       "description": "Initial requester or different approver. No caller-supplied verification metadata or approvalId."
@@ -117,7 +117,7 @@
     "consumptionMfa": {
       "type": "object", "additionalProperties": false, "required": ["publicationProfile", "assertion", "approvalId"],
       "properties": {
-        "publicationProfile": {"const": "serverware.publicationApprovalOptions/v1"},
+        "publicationProfile": {"const": "catchplate.publicationApprovalOptions/v1"},
         "assertion": {"$ref": "#/$defs/assertion"},
         "approvalId": {"$ref": "#/$defs/approvalId"}
       },
@@ -144,7 +144,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "ok", "publicationId", "intentSha256", "outcome", "resolutionCompletionSha256", "automaticRetryAllowed"],
       "properties": {
-        "schema": {"const": "serverware.adminTokenPublicationResolution/v1"},
+        "schema": {"const": "catchplate.adminTokenPublicationResolution/v1"},
         "ok": {"const": true},
         "publicationId": {"$ref": "#/$defs/publicationId"},
         "intentSha256": {"$ref": "#/$defs/digest"},
@@ -206,7 +206,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "attemptId", "intentSha256", "outcome", "actorId", "payloadDigest", "approvalId", "reason", "fileSha256", "fileIdentity", "priorCompletionSha256", "auditId", "authorityRequestDigest"],
       "properties": {
-        "schema": {"const": "serverware.adminTokenPublicationResolutionClaim/v2"},
+        "schema": {"const": "catchplate.adminTokenPublicationResolutionClaim/v2"},
         "attemptId": {"$ref": "#/$defs/publicationId"},
         "intentSha256": {"$ref": "#/$defs/digest"},
         "outcome": {"$ref": "#/$defs/outcome"},
@@ -226,7 +226,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "attemptId", "intentSha256", "resolutionClaimSha256", "outcome", "fileSha256", "fileIdentity"],
       "properties": {
-        "schema": {"const": "serverware.adminTokenPublicationResolutionComplete/v1"},
+        "schema": {"const": "catchplate.adminTokenPublicationResolutionComplete/v1"},
         "attemptId": {"$ref": "#/$defs/publicationId"},
         "intentSha256": {"$ref": "#/$defs/digest"},
         "resolutionClaimSha256": {"$ref": "#/$defs/digest"},
@@ -240,7 +240,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "attemptId", "resolutionCompletionSha256", "auditId", "authorityRequestDigest"],
       "properties": {
-        "schema": {"const": "serverware.adminTokenPublicationResolutionSettled/v2"},
+        "schema": {"const": "catchplate.adminTokenPublicationResolutionSettled/v2"},
         "attemptId": {"$ref": "#/$defs/publicationId"},
         "resolutionCompletionSha256": {"$ref": "#/$defs/digest"},
         "auditId": {"$ref": "#/$defs/auditUuid"},

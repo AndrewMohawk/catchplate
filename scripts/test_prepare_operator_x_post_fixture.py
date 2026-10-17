@@ -19,7 +19,7 @@ from scripts import prepare_operator_x_post_fixture as recipe
 
 SOURCE, BINARY, INITIALIZER = (Path('/synthetic/' + name) for name in ('source', 'gate', 'initialize.py'))
 NODE = Path('/home/catchplate/.nvm/versions/node/v25.5.0/bin/node')
-JOB = Path('/srv/catchplate-fast/tmp/serverware-x-post-private.abcdef12')
+JOB = Path('/srv/catchplate-fast/tmp/catchplate-x-post-private.abcdef12')
 MODULES, PYTHON, PACKAGES, GO = (Path('/synthetic/' + name) for name in ('node_modules', 'python', 'packages', 'x-post'))
 ARGS = (SOURCE, BINARY, INITIALIZER, JOB, NODE, MODULES, PYTHON, PACKAGES, GO)
 PINS = dict(expected_binary_sha256='a' * 64, expected_go_sha256='b' * 64,
@@ -40,7 +40,7 @@ class RecipeTests(InertTests):
 
     def test_closed_service_roster_network_and_original_resource_bounds(self):
         self.assertEqual(set(self.config), {'name', 'services'})
-        self.assertEqual(recipe.RUNTIME_SERVICES, {'network', 'provider', 'serverware', 'decision-gate-rs', 'edge', 'check'})
+        self.assertEqual(recipe.RUNTIME_SERVICES, {'network', 'provider', 'catchplate', 'decision-gate-rs', 'edge', 'check'})
         self.assertEqual(set(self.config['services']), recipe.RUNTIME_SERVICES | {'initialize', 'x-post-pki', 'basic-pki'})
         for name, service in self.config['services'].items():
             self.assertEqual(service['network_mode'], 'none' if name in
@@ -65,8 +65,8 @@ class RecipeTests(InertTests):
     def test_optional_bytecode_is_exactly_two_app_only_readonly_mounts(self):
         from scripts import prepare_operator_python_bytecode as bytecode
         root, pin = Path('/synthetic/bytecode'), 'd' * 64
-        expected_mounts = [recipe.bind(root / 'cache/serverware', '/app/serverware/__pycache__'),
-            recipe.bind(root / 'cache/authority_store', '/app/serverware/authority_store/__pycache__')]
+        expected_mounts = [recipe.bind(root / 'cache/catchplate', '/app/catchplate/__pycache__'),
+            recipe.bind(root / 'cache/authority_store', '/app/catchplate/authority_store/__pycache__')]
         self.assertEqual(bytecode.mounts(root), expected_mounts)
         for lane in ({}, {'quota': True}, {'fault_mode': 'drop-ack'}, {'fault_mode': 'revoke-before-release'}):
             with self.subTest(lane=lane):
@@ -76,16 +76,16 @@ class RecipeTests(InertTests):
                 cached = recipe.build(*ARGS, **PINS, **lane, python_bytecode=root,
                     expected_python_bytecode_manifest_sha256=pin)
                 expected = deepcopy(original)
-                expected['services']['serverware']['volumes'] += expected_mounts
+                expected['services']['catchplate']['volumes'] += expected_mounts
                 self.assertEqual(cached, expected)
-                self.assertEqual(cached['services']['serverware']['image'], bytecode.APP_IMAGE)
-                self.assertEqual(cached['services']['serverware']['command'],
-                    ['python', '-B', '-m', 'serverware.operator_demo_runner'])
+                self.assertEqual(cached['services']['catchplate']['image'], bytecode.APP_IMAGE)
+                self.assertEqual(cached['services']['catchplate']['command'],
+                    ['python', '-B', '-m', 'catchplate.operator_demo_runner'])
                 recipe.validate(cached, *ARGS, **PINS, **lane, python_bytecode=root,
                     expected_python_bytecode_manifest_sha256=pin)
                 for index in (-1, -2):
                     changed = deepcopy(cached)
-                    changed['services']['serverware']['volumes'][index]['read_only'] = False
+                    changed['services']['catchplate']['volumes'][index]['read_only'] = False
                     with self.assertRaises(ValueError):
                         recipe.validate(changed, *ARGS, **PINS, **lane, python_bytecode=root,
                             expected_python_bytecode_manifest_sha256=pin)
@@ -113,21 +113,21 @@ class RecipeTests(InertTests):
             self.assertEqual(recipe.build(*ARGS, **PINS), self.config)
 
     def test_managed_app_only_custody_and_original_curated_gate_leaf_binds(self):
-        app, gate = (self.config['services'][name] for name in ('serverware', 'decision-gate-rs'))
+        app, gate = (self.config['services'][name] for name in ('catchplate', 'decision-gate-rs'))
         env = app['environment']
-        self.assertEqual(env['SERVERWARE_PUBLIC_URL'], 'https://serverware-x.example.com')
-        self.assertEqual(env['SERVERWARE_OPERATOR_MANAGED_X_ENABLED'], '1')
-        self.assertEqual(env['SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED'], '1')
+        self.assertEqual(env['CATCHPLATE_PUBLIC_URL'], 'https://catchplate-x.example.com')
+        self.assertEqual(env['CATCHPLATE_OPERATOR_MANAGED_X_ENABLED'], '1')
+        self.assertEqual(env['CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED'], '1')
         self.assertEqual(env['SSL_CERT_FILE'], '/x-public/ca.pem')
-        self.assertEqual(env['SERVERWARE_OPERATOR_X_CUSTODY_DIR'], '/x-custody')
-        for key in ('SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED', 'SERVERWARE_KEY_RELEASE_REQUIRED',
-                'SERVERWARE_DEV_AUTHENTICATOR', 'SERVERWARE_DEV_DEMO_SEED'):
+        self.assertEqual(env['CATCHPLATE_OPERATOR_X_CUSTODY_DIR'], '/x-custody')
+        for key in ('CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED', 'CATCHPLATE_KEY_RELEASE_REQUIRED',
+                'CATCHPLATE_DEV_AUTHENTICATOR', 'CATCHPLATE_DEV_DEMO_SEED'):
             self.assertEqual(env[key], '0')
         self.assertEqual(app['depends_on'], {'provider': {'condition': 'service_healthy'}})
         custody = [(name, row) for name, service in self.config['services'].items()
             for row in service['volumes'] if row['target'] == '/x-custody']
         self.assertEqual(len(custody), 1)
-        self.assertEqual(custody[0][0], 'serverware')
+        self.assertEqual(custody[0][0], 'catchplate')
         self.assertEqual(custody[0][1]['source'], str(JOB / 'runtime/x-custody'))
         self.assertFalse(custody[0][1]['read_only'])
         gate_data = {row['target']: row for row in gate['volumes'] if row['target'].startswith('/data')}
@@ -136,7 +136,7 @@ class RecipeTests(InertTests):
         for leaf in recipe.LEAVES:
             self.assertEqual(gate_data['/data/' + leaf]['source'], str(JOB / 'runtime/app-data' / leaf))
         self.assertTrue(all(row['read_only'] for row in gate_data.values()))
-        self.assertEqual(gate['environment']['SERVERWARE_OPERATOR_MANAGED_X_ENABLED'], '1')
+        self.assertEqual(gate['environment']['CATCHPLATE_OPERATOR_MANAGED_X_ENABLED'], '1')
 
     def test_provider_private_observations_and_fixed_public_tls_paths(self):
         provider = self.config['services']['provider']
@@ -163,7 +163,7 @@ class RecipeTests(InertTests):
         self.assertEqual(check['entrypoint'], ['/example-python/bin/python', '-B'])
         self.assertEqual(check['command'][0], '/app/scripts/check_operator_x_post.py')
         flags = dict(zip(check['command'][1::2], check['command'][2::2]))
-        self.assertEqual(flags['--control-base'], 'https://serverware-x.example.com')
+        self.assertEqual(flags['--control-base'], 'https://catchplate-x.example.com')
         self.assertEqual(flags['--operator-origin'], flags['--control-base'])
         self.assertEqual(flags['--proxy-url'], 'https://proxy.operator-basic.example.test:8443')
         self.assertEqual(flags['--timeout-seconds'], '180')
@@ -186,22 +186,22 @@ class RecipeTests(InertTests):
     def test_actual_production_origin_admission_and_closed_fixture_consistency(self):
         # The production validator is pure; do not patch it, activate the app,
         # initialize state or resolve the public-form fixture hostname.
-        from serverware import operator_demo
+        from catchplate import operator_demo
         from scripts import operator_x_post_fixture_network as network
         from scripts import operator_x_post_fixture as provider
         from scripts import check_operator_x_post as checker
         self.assertEqual(operator_demo.origin(recipe.CONTROL_ORIGIN),
-            ('https://serverware-x.example.com', '/'))
+            ('https://catchplate-x.example.com', '/'))
         with self.assertRaises(ValueError):
-            operator_demo.origin('https://serverware-x.example.test')
+            operator_demo.origin('https://catchplate-x.example.test')
         self.assertEqual(recipe.CONTROL_ORIGIN, network.CONTROL_ORIGIN)
         self.assertEqual(recipe.CONTROL_ORIGIN, checker.CONTROL)
-        self.assertEqual(network.CONTROL_HOST, 'serverware-x.example.com')
+        self.assertEqual(network.CONTROL_HOST, 'catchplate-x.example.com')
         self.assertEqual(provider.CALLBACK_URL, recipe.CONTROL_ORIGIN + checker.CALLBACK)
         mapping = {host: row[0] for row in (line.split() for line in network.HOSTS.decode().splitlines())
             for host in row[1:]}
         self.assertEqual(mapping[network.CONTROL_HOST], '127.0.0.1')
-        self.assertNotIn('serverware-x.example.test', mapping)
+        self.assertNotIn('catchplate-x.example.test', mapping)
         self.assertEqual(mapping['api.x.com'], '93.184.216.34')
         self.assertEqual(mapping['x.com'], '93.184.216.34')
         self.assertEqual(network.PROXY_HOST, 'proxy.operator-basic.example.test')
@@ -220,9 +220,9 @@ class RecipeTests(InertTests):
             lambda c: c['services']['check']['environment'].update(HOME='/tmp'),
             lambda c: c['services']['decision-gate-rs']['volumes'][-1].update(read_only=False),
             lambda c: c['services']['decision-gate-rs']['volumes'].append(
-                deepcopy(c['services']['serverware']['volumes'][-2])),
+                deepcopy(c['services']['catchplate']['volumes'][-2])),
             lambda c: c['services']['provider']['command'].__setitem__(-1, '301'),
-            lambda c: c['services']['serverware']['environment'].update(SERVERWARE_OPERATOR_MANAGED_X_ENABLED='0')]
+            lambda c: c['services']['catchplate']['environment'].update(CATCHPLATE_OPERATOR_MANAGED_X_ENABLED='0')]
         for index, change in enumerate(changes):
             changed = deepcopy(self.config); change(changed)
             with self.subTest(index=index), self.assertRaises(ValueError): recipe.validate(changed, *ARGS, **PINS)
@@ -232,7 +232,7 @@ class RecipeTests(InertTests):
             for invalid in (None, True, 'a' * 63, 'A' * 64, 'sha256:' + 'a' * 64):
                 changed = dict(PINS); changed[key] = invalid
                 with self.subTest(key=key, invalid=invalid), self.assertRaises(ValueError): recipe.build(*ARGS, **changed)
-        for invalid in (Path('/tmp') / JOB.name, JOB.with_name('serverware-x-private.abcdef12')):
+        for invalid in (Path('/tmp') / JOB.name, JOB.with_name('catchplate-x-private.abcdef12')):
             with self.assertRaises(ValueError): recipe.build(*ARGS[:3], invalid, *ARGS[4:], **PINS)
         for index in (0, 1, 2, 4, 5, 6, 7, 8):
             changed = list(ARGS); changed[index] = Path('/synthetic/../different')
@@ -321,7 +321,7 @@ class InventoryTests(InertTests):
         args = (self.root / 'node', self.root / 'runtime', self.root / 'packages')
         observed = recipe.dependencies(*args)
         self.assertEqual(set(observed), {'schema', 'node', 'python', 'pythonRuntime'})
-        self.assertEqual(observed['schema'], 'serverware.privateXPostDependencies/v1')
+        self.assertEqual(observed['schema'], 'catchplate.privateXPostDependencies/v1')
         self.write('runtime/bin/activate', b'changed, still never executed\n')
         self.assertNotEqual(recipe.dependencies_sha256(recipe.dependencies(*args)), recipe.dependencies_sha256(observed))
         self.write('node/undici/package.json', b'{"name":"undici","version":"0.0.0"}')

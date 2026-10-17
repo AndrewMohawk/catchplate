@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-shadow-assignment.v2.schema.json",
+  "$id": "https://catchplate.invalid/schemas/policy-shadow-assignment.v2.schema.json",
   "description": "Native-only explicit successor; exact canonical ASCII no-LF signed envelope <=4MiB. Both roots authorize the fixed11 closure set. Legacy custodyAuthority executionClosureManifestSha256 and structurallyVerifiedSeccompPolicySha256 STILL identify its bridge member, not either set root. Signer, trusted-time, independence, fleet/policy and original-byte checks remain receiving authority duties. Generic v1 DB admission is not extended.",
   "type": "object",
   "additionalProperties": false,
@@ -18,16 +18,16 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.policyShadowAssignment/v2"
+      "const": "catchplate.policyShadowAssignment/v2"
     },
     "kind": {
       "const": "PolicyShadowAssignment"
     },
     "canonicalProfile": {
-      "const": "serverware.canonicalJson/ascii-integer-v1"
+      "const": "catchplate.canonicalJson/ascii-integer-v1"
     },
     "signatureDomain": {
-      "const": "serverware.policyShadowAssignment/v2"
+      "const": "catchplate.policyShadowAssignment/v2"
     },
     "payload": {
       "type": "object",

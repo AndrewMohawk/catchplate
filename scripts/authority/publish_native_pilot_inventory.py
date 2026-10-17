@@ -10,8 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from cryptography.hazmat.primitives import serialization
 
-from serverware import authority_policy_canary as profile
-from serverware import native_pilot_inventory_publication as publication
+from catchplate import authority_policy_canary as profile
+from catchplate import native_pilot_inventory_publication as publication
 
 
 def read_fd(number, maximum, *, private=False):

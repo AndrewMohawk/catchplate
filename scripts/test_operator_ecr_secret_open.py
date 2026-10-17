@@ -21,7 +21,7 @@ import test_operator_aws_release_boundary as shared
 
 def check_opening():
     config, db, store, bundles, schema, inputs, mutations = shared.workspace.workspace()
-    from serverware import crypto, operator_publication, aws_ecr_signing, runtime
+    from catchplate import crypto, operator_publication, aws_ecr_signing, runtime
     f = SimpleNamespace(config=config, db=db, store=store, inputs=inputs, mutations=mutations, runtime=runtime)
     f.review = lambda: shared.workspace.review(db, store, schema)
     def call(function, *args):

@@ -15,11 +15,11 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.policy_bundle import (
+from catchplate.policy_bundle import (
     PolicyBundleError, _fresh_policy_snapshot, compile_policy_bundle,
     policy_hash, validate_credential_header_replacement, validate_policy_schema,
 )
-from serverware.policy_route_authority import prepare_unsigned
+from catchplate.policy_route_authority import prepare_unsigned
 
 
 def descriptor(value="Bearer caller-chosen-dummy"):
@@ -48,12 +48,12 @@ def bundle(*, replacement=True, custom=False):
             "allowedResponseHeaderNames": [], "responseHeaderRules": []}]}
     if replacement:
         route["credentialHeader"] = descriptor("custom-dummy" if custom else "Bearer caller-chosen-dummy")
-    return {"apiVersion": "serverware.policy/v1", "kind": "PolicyBundle",
+    return {"apiVersion": "catchplate.policy/v1", "kind": "PolicyBundle",
         "metadata": {"id": "header-fixture", "sequence": 1, "rollbackEpoch": 1},
         "defaults": {"action": "deny", "failMode": "closed", "unknownHosts": "block",
             "unknownPaths": "block", "validationFailure": "block"},
         "principals": [{"id": "agent:fixture", "sourceCidrs": ["127.0.0.1/32"],
-            "requiredHeaders": {"X-Serverware-Agent": "fixture"}}],
+            "requiredHeaders": {"X-Catchplate-Agent": "fixture"}}],
         "credentials": [{"id": "credential:fixture", "credentialType": "static",
             "provider": "fixture", "providerSubject": "subject:fixture", "injection": injection}],
         "routes": [route]}
@@ -126,7 +126,7 @@ class CredentialHeaderReplacementTests(unittest.TestCase):
         reserved = ("Cookie", "Host", "Content-Type", "Content-Length", "Content-Encoding",
             "Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
             "Proxy-Connection", "TE", "Trailer", "Transfer-Encoding", "Upgrade",
-            "X-Serverware-Agent", "X-Serverware-Private")
+            "X-Catchplate-Agent", "X-Catchplate-Private")
         for name in reserved:
             for alias in (name, name.lower().replace("-", "_")):
                 for kind in ("bearer", "header"):
@@ -189,7 +189,7 @@ class CredentialHeaderReplacementTests(unittest.TestCase):
 
     def test_v2_route_authority_pins_include_the_new_route_descriptor(self):
         document = bundle()
-        document["apiVersion"] = "serverware.policy/v2"
+        document["apiVersion"] = "catchplate.policy/v2"
         declarations = [{"routeId": "route.header-fixture", "operationName": "fixture.read", "operation": "read"}]
         signed_shape = prepare_unsigned(document, declarations)
         compiled = compile_fixture(signed_shape)
@@ -201,7 +201,7 @@ class CredentialHeaderReplacementTests(unittest.TestCase):
         self.assertNotEqual(compile_fixture(changed).compiled_route_authority, compiled.compiled_route_authority)
 
     def test_python_prototype_refuses_new_descriptor_without_transport_flag(self):
-        from serverware import policy_engine
+        from catchplate import policy_engine
         route = compile_fixture(bundle()).routes[0]
         for metadata in ({}, {policy_engine.LEGACY_MITM_TRANSPORT_METADATA_KEY: True}):
             denied = policy_engine._legacy_mitm_route_admission(SimpleNamespace(metadata=metadata), route)

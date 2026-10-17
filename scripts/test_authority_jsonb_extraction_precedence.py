@@ -20,7 +20,7 @@ import unittest
 from test_authority_executor_optional_evidence import _one, _read, _template
 
 
-SCHEMA = "serverware_jsonb_precedence_component"
+SCHEMA = "catchplate_jsonb_precedence_component"
 NAMESPACE = '"' + SCHEMA + '"'
 DENIAL = "native publication current-root hold is unresolved"
 
@@ -34,7 +34,7 @@ def _json(value):
 
 
 def _hold():
-    tree = _read("serverware/authority_native_activation_hold.py")
+    tree = _read("catchplate/authority_native_activation_hold.py")
     constants = {node.targets[0].id: node.value for node in tree.body
         if type(node) is ast.Assign and len(node.targets) == 1 and type(node.targets[0]) is ast.Name}
     table, scope, exempt = (ast.literal_eval(constants[name]) for name in ("TABLE", "SCOPE", "EXEMPT"))
@@ -56,7 +56,7 @@ def _hold():
 
 
 def _vectors():
-    tree = _read("serverware/authority_store/successor_execution_sql.py")
+    tree = _read("catchplate/authority_store/successor_execution_sql.py")
     function = _one([node for node in tree.body if type(node) is ast.FunctionDef and node.name == "_packet"])
     template = _one([node.value for node in function.body if type(node) is ast.Return])
     body = _template(template)
@@ -213,7 +213,7 @@ class JsonbExtractionSourceControls(unittest.TestCase):
         self.assertEqual(program.count("WHEN SQLSTATE 'P0001'"), 5)
         self.assertIn("ROLLBACK;", program)
         self.assertNotIn("COMMIT;", program)
-        self.assertNotIn("serverware.authority_transition_registry", sys.modules)
+        self.assertNotIn("catchplate.authority_transition_registry", sys.modules)
 
 
 if __name__ == "__main__":

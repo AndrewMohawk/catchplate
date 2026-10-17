@@ -5,8 +5,8 @@ new signing role. Old five-service launch/v1, guest launch/v1 and
 `--guest-c9-generation` remain unchanged. Runtime remains generation-only v5;
 the separate commitment runtime/selector is not admitted by this branch.
 
-The independently installed `/etc/serverware/custody-generation-five.json`
-selects closed `serverware.custodyFiveServiceLaunch/v2` (the same eight fields).
+The independently installed `/etc/catchplate/custody-generation-five.json`
+selects closed `catchplate.custodyFiveServiceLaunch/v2` (the same eight fields).
 `FiveServiceLaunch.start()` then uses the fixed
 `--guest-c9-generation-inspected` selector for all five actual parked children.
 No environment or release flag can select inspection. `GenerationInputs`

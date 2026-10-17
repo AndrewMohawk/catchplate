@@ -1,0 +1,31 @@
+# Explicit opt-in only: base + exactly one reviewed app/gate source override +
+# this file. Never use the old accepted app merely because this layer renders.
+# The retained-store first-enable transition must be prepared before startup.
+# Requires Compose support for !reset; inspect the resolved model before use.
+services:
+  catchplate:
+    # Remove the base demo's external-DNS sink. Docker's normal resolver is used;
+    # this changes container egress, not public DNS records or inbound routing.
+    dns: !reset []
+    networks:
+      outbound: {}
+    environment:
+      CATCHPLATE_OPERATOR_GOOGLE_PROFILE: operator-google-v1
+      CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID: ${CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID:?Set the reviewed Google OAuth web-client ID}
+      CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI: https://catchplate-demo.example.com/api/oauth/callback/google
+      CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE: /run/secrets/catchplate-google/client.secret
+      CATCHPLATE_PUBLIC_URL: https://catchplate-demo.example.com
+      CATCHPLATE_OPERATOR_DEMO_UPSTREAMS: ${CATCHPLATE_OPERATOR_GOOGLE_UPSTREAMS:?Set the exact reviewed retained-plus-Google JSON origin list}
+    volumes:
+      - type: bind
+        source: ${OPERATOR_GOOGLE_CLIENT_SECRET_FILE:?Set the absolute private Google OAuth client-secret file path}
+        target: /run/secrets/catchplate-google/client.secret
+        read_only: true
+        bind: {create_host_path: false}
+
+  decision-gate-rs:
+    environment:
+      CATCHPLATE_OPERATOR_GOOGLE_PROFILE: operator-google-v1
+      CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID: ${CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID:?Set the reviewed Google OAuth web-client ID}
+      CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI: https://catchplate-demo.example.com/api/oauth/callback/google
+      CATCHPLATE_OPERATOR_DEMO_UPSTREAMS: ${CATCHPLATE_OPERATOR_GOOGLE_UPSTREAMS:?Set the exact reviewed retained-plus-Google JSON origin list}

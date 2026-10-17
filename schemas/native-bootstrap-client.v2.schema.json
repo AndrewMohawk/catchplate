@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-bootstrap-client.v2.schema.json",
-  "title": "Serverware fixed native bootstrap client with authorized local CA installation v2",
+  "$id": "https://catchplate.invalid/schemas/native-bootstrap-client.v2.schema.json",
+  "title": "Catchplate fixed native bootstrap client with authorized local CA installation v2",
   "description": "Closed independently pinned configuration, at most 16384 bytes: the 18 original v1 fields plus the required three-artifact installation object. Runtime requires an explicit root launcher and protected configuration/token originals, independent host-installation grant, actual same-connection native verification, observed host/namespace and one-use local journal before destination effects. Schema validation is not authority or installation evidence. V1 remains diagnostic-only and rejects installation even when null.",
   "type": "object", "additionalProperties": false,
   "required": [
@@ -12,7 +12,7 @@
     "installation"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeBootstrapClient/v2"},
+    "apiVersion": {"const": "catchplate.nativeBootstrapClient/v2"},
     "endpoint": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/endpoint"},
     "timeoutMilliseconds": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/timeoutMilliseconds"},
     "startupEvidence": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/startupEvidence"},

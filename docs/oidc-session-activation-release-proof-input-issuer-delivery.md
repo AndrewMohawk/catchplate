@@ -1,6 +1,6 @@
 # Root-original proof-input issuer launch
 
-[oidc_session_activation_release_proof_input_issuer_bootstrap.py](../serverware/oidc_session_activation_release_proof_input_issuer_bootstrap.py)
+[oidc_session_activation_release_proof_input_issuer_bootstrap.py](../catchplate/oidc_session_activation_release_proof_input_issuer_bootstrap.py)
 defines the separately root-signed launch for the one-shot
 `oidc-session-activation-release-proof-input-issuer`, UID/GID 65494, with public
 caller UID/GID 65532. This module performs no file, socket, key-byte or database
@@ -10,11 +10,11 @@ runtime acceptance or provisioning.
 ## Closed launch profiles and originals
 
 The signed and payload schemas are
-`serverware.signedOidcSessionActivationReleaseProofInputIssuerBootstrap/v1` and
-`serverware.oidcSessionActivationReleaseProofInputIssuerBootstrap/v1`. Purpose is
+`catchplate.signedOidcSessionActivationReleaseProofInputIssuerBootstrap/v1` and
+`catchplate.oidcSessionActivationReleaseProofInputIssuerBootstrap/v1`. Purpose is
 `launch-oidc-session-activation-release-proof-input-issuer`; trust mode is fixed
 to `trusted-host-local`. The bootstrap identity has its own
-`serverware.oidcSessionActivationReleaseProofInputIssuerBootstrapIdentity/v1`
+`catchplate.oidcSessionActivationReleaseProofInputIssuerBootstrapIdentity/v1`
 domain.
 
 The payload pins the exact issuer policy, completion bootstrap, proof enrollment
@@ -26,9 +26,9 @@ fresh issue/expiry and the closed launch. A byte digest is not proof that a
 private key was opened, paired, sealed or independently provisioned.
 
 The original nested launch schema
-`serverware.oidcSessionActivationReleaseProofInputIssuerLaunch/v1` remains closed
+`catchplate.oidcSessionActivationReleaseProofInputIssuerLaunch/v1` remains closed
 and worker-only. Explicit nested
-`serverware.oidcSessionActivationReleaseProofInputIssuerLaunch/v2` has exactly
+`catchplate.oidcSessionActivationReleaseProofInputIssuerLaunch/v2` has exactly
 the v1 fields plus mandatory `grantDeliveryEndpoint`; the signed and payload
 schemas above remain v1 and authenticate that version choice. Neither profile
 has a non-staging fallback. The exact inherited inventory is unchanged:
@@ -46,19 +46,19 @@ has a non-staging fallback. The exact inherited inventory is unchanged:
 
 The launch fixes the role, process, UID/GID, peer and descriptor fields, exact
 inventory, listener path and socket/path device/inode pins. The request listener
-is `/run/serverware/oidc-session-activation-release-proof-inputs/grants.sock`,
-named `serverware-oidc-session-activation-release-proof-input-issuer`.
+is `/run/catchplate/oidc-session-activation-release-proof-inputs/grants.sock`,
+named `catchplate-oidc-session-activation-release-proof-input-issuer`.
 Request timeout is an exact integer from 1 to 30 seconds.
 
 The mandatory staging endpoint is
-`/run/serverware/oidc-session-activation-token-release/proof-bootstrap.sock`,
+`/run/catchplate/oidc-session-activation-token-release/proof-bootstrap.sock`,
 with expected root peer 0:0 and timeout 1–30 seconds, no larger than the launch
 request timeout. Signed resource pins are independent policy; this module does
 not observe matching listeners, files, directories or a ready worker.
 
 For launch v2, `grantDeliveryEndpoint` uses the same closed
 `{path, timeoutSeconds, peerUid, peerGid}` grammar but only the separate
-`/run/serverware/oidc-session-activation-token-release/grant-issuer-bootstrap.sock`
+`/run/catchplate/oidc-session-activation-token-release/grant-issuer-bootstrap.sock`
 root listener, peer 0:0. Its timeout is 1–30 seconds and cannot exceed the
 original launch timeout. The actual service must stage the exact same issued
 bootstrap to the proof worker, establish that ACK and normal close, then stage

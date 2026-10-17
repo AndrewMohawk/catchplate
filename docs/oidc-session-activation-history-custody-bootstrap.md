@@ -12,8 +12,8 @@ filesystem path or service is provisioned by this module.
 `oidc_session_activation_history_custody_bootstrap.py` defines:
 
 - Envelope/signature domain
-  `serverware.signedOidcSessionActivationHistoryCustody/v1`, with payload schema
-  `serverware.oidcSessionActivationHistoryCustody/v1`.
+  `catchplate.signedOidcSessionActivationHistoryCustody/v1`, with payload schema
+  `catchplate.oidcSessionActivationHistoryCustody/v1`.
 - Operation `oidc.session.activate`, consumer role `completion-history`, process
   mode `oidc-session-activation-completion`, and fixed UID/GID `65503:65503`.
   This dedicated identity was unused in the existing scoped process/unit source;
@@ -91,8 +91,8 @@ remain completion-only at UID/GID `65503:65503`. They never auto-detect or accep
 the new profile. Explicit `_verify_consume_on_work` and
 `_produce_consume_on_work` use the same original-input signatures but select only:
 
-- `serverware.signedOidcSessionActivationHistoryCustody/v2` and
-  `serverware.oidcSessionActivationHistoryCustody/v2`;
+- `catchplate.signedOidcSessionActivationHistoryCustody/v2` and
+  `catchplate.oidcSessionActivationHistoryCustody/v2`;
 - operation `oidc.session.activation-delivery.consume`, consumer role
   `consume-planning-history`, process `oidc-session-activation-delivery-planner`,
   and UID/GID `65501:65501`;
@@ -126,8 +126,8 @@ live_window, transport_deadline_ns)` and the analogous
 `_produce_consume_grant_on_work(*, payload, root_private_key, root_public_key,
 work, live_window, transport_deadline_ns)` select only:
 
-- `serverware.signedOidcSessionActivationHistoryCustody/v3` and
-  `serverware.oidcSessionActivationHistoryCustody/v3`;
+- `catchplate.signedOidcSessionActivationHistoryCustody/v3` and
+  `catchplate.oidcSessionActivationHistoryCustody/v3`;
 - operation `oidc.session.activation-delivery.consume`, consumer role
   `consume-grant-history`, mode
   `oidc-session-activation-delivery-execution-authorizer`, and UID/GID

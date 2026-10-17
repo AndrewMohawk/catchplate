@@ -34,22 +34,22 @@ from psycopg.conninfo import conninfo_to_dict
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.native_postgres_results import run_native_fixture
+from catchplate.native_postgres_results import run_native_fixture
 
-from serverware import authority_webauthn_trust as trust
-from serverware.authority_store.webauthn_trust_sql import (
+from catchplate import authority_webauthn_trust as trust
+from catchplate.authority_store.webauthn_trust_sql import (
     locked_webauthn_trust_projection,
     webauthn_credential_policy_sql,
 )
-from serverware.authority_store.metadata_schema_source import metadata_base_schema_source
-from serverware.authority_store.wire_json_sql import wire_json_function_sql
+from catchplate.authority_store.metadata_schema_source import metadata_base_schema_source
+from catchplate.authority_store.wire_json_sql import wire_json_function_sql
 
 
 CONNECTION_PARAMETERS: dict[str, str | int] | None = None
 PUBLICATIONS = "webauthn_trust_publications"
 HIGH_WATER = "webauthn_trust_publication_high_water"
-POLICY_DOMAIN = "serverware.policyAuthorityCredentialPolicy/v1"
-HIGH_WATER_DOMAIN = "serverware.webauthnTrustHighWater/v1"
+POLICY_DOMAIN = "catchplate.policyAuthorityCredentialPolicy/v1"
+HIGH_WATER_DOMAIN = "catchplate.webauthnTrustHighWater/v1"
 
 
 def local_connection_parameters(dsn: str) -> dict[str, str | int]:
@@ -92,12 +92,12 @@ def local_connection_parameters(dsn: str) -> dict[str, str | int]:
         "sslmode": "disable",
         "gssencmode": "disable",
         "passfile": "/dev/null",
-        "application_name": "serverware-trust-projection-fixture",
+        "application_name": "catchplate-trust-projection-fixture",
     }
 
 
 def production_table_declarations() -> list[str]:
-    source_path = ROOT / "serverware/authority_store/metadata_schema_source.py"
+    source_path = ROOT / "catchplate/authority_store/metadata_schema_source.py"
     if source_path.stat().st_size > 16 * 1024 * 1024:
         raise ValueError("database schema source exceeds fixture bound")
     declaration = metadata_base_schema_source()
@@ -171,7 +171,7 @@ class WebAuthnTrustProjectionPostgresTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.schema = "serverware_trust_projection_" + uuid.uuid4().hex
+        cls.schema = "catchplate_trust_projection_" + uuid.uuid4().hex
         cls.namespace = '"' + cls.schema + '"'
         with cls.connection() as connection:
             if connection.execute("SELECT inet_server_addr(), getdatabaseencoding()").fetchone() != (None, "UTF8"):
@@ -229,8 +229,8 @@ class WebAuthnTrustProjectionPostgresTests(unittest.TestCase):
                            input_row->>'credential_id' AS credential_id
                     INTO STRICT assertion_evidence;
                     policy := {webauthn_credential_policy_sql()};
-                    policy_wire := {cls.namespace}.serverware_policy_authority_wire_json(policy);
-                    policy_digest := {cls.namespace}.serverware_policy_authority_domain_digest(
+                    policy_wire := {cls.namespace}.catchplate_policy_authority_wire_json(policy);
+                    policy_digest := {cls.namespace}.catchplate_policy_authority_domain_digest(
                         '{POLICY_DOMAIN}', policy_wire);
                     -- This is the active guard's equality predicate only.
                     -- It is not the full executor, its row CAS, or a write.
@@ -394,27 +394,27 @@ class WebAuthnTrustProjectionPostgresTests(unittest.TestCase):
                     self.assertEqual(waiter.execute(update).rowcount, 1)
 
     def test_namespace_matches_existing_quoted_identifier_contract(self) -> None:
-        self.assertIn('"serverware_metadata".', locked_webauthn_trust_projection('"serverware_metadata"'))
-        for invalid in (None, "serverware_metadata", '"a"; SELECT 1', '"a-b"', '"A"', '"' + "a" * 129 + '"'):
+        self.assertIn('"catchplate_metadata".', locked_webauthn_trust_projection('"catchplate_metadata"'))
+        for invalid in (None, "catchplate_metadata", '"a"; SELECT 1', '"a-b"', '"A"', '"' + "a" * 129 + '"'):
             with self.subTest(namespace=invalid), self.assertRaises(ValueError):
                 locked_webauthn_trust_projection(invalid)
 
     def test_connection_admission_rejects_tcp_and_configuration_overrides(self) -> None:
         for dsn, message in (
-            ("host=127.0.0.1 dbname=postgres user=serverware", "one exact local Unix socket"),
-            ("host=localhost dbname=postgres user=serverware", "one exact local Unix socket"),
-            ("host=/ dbname=postgres user=serverware", "one exact local Unix socket"),
-            ("hostaddr=127.0.0.1 dbname=postgres user=serverware", "unsupported override"),
+            ("host=127.0.0.1 dbname=postgres user=catchplate", "one exact local Unix socket"),
+            ("host=localhost dbname=postgres user=catchplate", "one exact local Unix socket"),
+            ("host=/ dbname=postgres user=catchplate", "one exact local Unix socket"),
+            ("hostaddr=127.0.0.1 dbname=postgres user=catchplate", "unsupported override"),
             ("service=fixture", "unsupported override"),
             ("options=-cstatement_timeout=0", "unsupported override"),
-            ("dbname=postgres user=serverware", "requires host, dbname, and user"),
+            ("dbname=postgres user=catchplate", "requires host, dbname, and user"),
         ):
             with self.subTest(dsn=dsn), patch.dict(os.environ, {}, clear=True):
                 with self.assertRaisesRegex(ValueError, message):
                     local_connection_parameters(dsn)
         with patch.dict(os.environ, {"PGSERVICE": "redirect"}, clear=True):
             with self.assertRaisesRegex(ValueError, "forbids ambient PG configuration"):
-                local_connection_parameters("host=/fixture dbname=postgres user=serverware")
+                local_connection_parameters("host=/fixture dbname=postgres user=catchplate")
 
     def test_credential_policy_sql_matches_independent_sixteen_field_python_wire_and_digest(self) -> None:
         row = policy_credential()

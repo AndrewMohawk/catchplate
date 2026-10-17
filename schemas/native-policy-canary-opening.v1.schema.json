@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-policy-canary-opening.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-policy-canary-opening.v1.schema.json",
   "title": "Actual native custody opening, not terminal canary evidence",
   "$comment": "One custody event in one existing batch. Exact raw opening and dedicated assignment-bound CustodyIngressAdmission signature; protected prerequisite lookup and complete prior-batch proof are mandatory. Schema alone grants no admission, physical storage proof or contact authority. Canonical record limit 65536 bytes. The complete signed native assignment16 is not projected into a new record or re-admitted.",
   "$ref": "#/$defs/record",
@@ -12,7 +12,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "canary_id", "instance_id", "boot_id", "assignment_envelope_digest", "assignment_payload_digest", "load_receipt_envelope_digest", "publication_envelope_digest", "opening_receipt", "signing_public_key_base64url"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeCustodyOpening/v1"},
+        "apiVersion": {"const": "catchplate.nativeCustodyOpening/v1"},
         "canary_id": {"$ref": "#/$defs/sha256"},
         "instance_id": {"type": "string", "minLength": 1, "maxLength": 256},
         "boot_id": {"$ref": "#/$defs/sha256"},
@@ -58,7 +58,7 @@
     "batch": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "requestId", "canaryId", "events"],
       "properties": {
-        "apiVersion": {"const": "serverware.policyCanaryEvidenceOriginal/v1"},
+        "apiVersion": {"const": "catchplate.policyCanaryEvidenceOriginal/v1"},
         "requestId": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
         "canaryId": {"$ref": "#/$defs/sha256"},
         "events": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "#/$defs/event"}}

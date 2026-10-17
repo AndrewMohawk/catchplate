@@ -11,8 +11,8 @@ observation or permission imported from a diagnostic DTO.
 
 The [closed schema](../schemas/native-network-attachment-authorization.v1.schema.json)
 has exactly `schema`, `payload` and `signature`. The envelope is
-`serverware.signedNativeNetworkAttachmentAuthorization/v1`; the payload is
-`serverware.nativeNetworkAttachmentAuthorization/v1`, purpose
+`catchplate.signedNativeNetworkAttachmentAuthorization/v1`; the payload is
+`catchplate.nativeNetworkAttachmentAuthorization/v1`, purpose
 `native-network-attachment`, trust mode `trusted-host-local`. Ed25519 signs the
 payload schema's ASCII bytes, NUL and the exact sorted compact `ensure_ascii`
 JSON payload (including escaped DEL), with no LF. The entire original is bounded

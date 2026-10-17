@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v11.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-startup-configuration.v11.schema.json",
   "title": "Explicit native measured refresh family-retirement startup",
   "$comment": "Cold-selected v11 only: exact v10 retained owners plus independently authorized measuredCleanup. Neither this data-only configuration nor any returned statement grants retirement permission. Actual signed family authorization, measured helper assignment, current holder drain, one-shot contact claim and original lifetime remain mandatory. Prior startup profiles do not infer or accept this version.",
   "type": "object",
@@ -27,7 +27,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.nativeStartupConfiguration/v11"
+      "const": "catchplate.nativeStartupConfiguration/v11"
     },
     "gate": {
       "$ref": "native-startup-configuration.v10.schema.json#/properties/gate"

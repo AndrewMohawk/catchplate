@@ -32,7 +32,7 @@ class Fixture:
     def __init__(self, *, seed_credential=True):
         (self.config, self.db, self.store, self.bundles, self.catalog,
             self.inputs, self.mutations) = workspace.workspace()
-        from serverware import operator_google_setup, operator_provider_custody, operator_publication
+        from catchplate import operator_google_setup, operator_provider_custody, operator_publication
         self.setup, self.custody, self.publication = operator_google_setup, operator_provider_custody, operator_publication
         if seed_credential:
             # This slice consumes an existing key. Use the real credential-save
@@ -246,7 +246,7 @@ def input_and_runtime_admission():
                 assert f.setup._rows(conn)[0]["status"] == "cancelled"
             f.refused(lambda: f.setup.prepare_managed(candidate, ACTOR))
     candidate = f.payload()
-    with patch.dict(os.environ, {"SERVERWARE_OAUTH_APPLICATION_CONFIG_FD": "77"}):
+    with patch.dict(os.environ, {"CATCHPLATE_OAUTH_APPLICATION_CONFIG_FD": "77"}):
         f.refused(lambda: f.setup.prepare_managed(candidate, ACTOR))
     return {"strict_inputs": True, "inspection_is_not_runtime_admission": True}
 
@@ -306,7 +306,7 @@ def worker(name):
 class ManagedSetupTests(unittest.TestCase):
     def setUp(self):
         workspace.common.OperatorDemoPersistenceTests.setUp(self)
-        self.environment["SERVERWARE_PUBLIC_URL"] = PUBLIC_URL
+        self.environment["CATCHPLATE_PUBLIC_URL"] = PUBLIC_URL
 
     def run_worker(self, operation):
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation],

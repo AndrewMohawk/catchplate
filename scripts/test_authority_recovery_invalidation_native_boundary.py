@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import authority_recovery_invalidation_plan_owner as source
+from catchplate import authority_recovery_invalidation_plan_owner as source
 from test_authority_recovery_invalidation_plan import (
     clocks, materials, meter, owner, produce_arguments,
 )

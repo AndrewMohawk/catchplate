@@ -15,8 +15,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_mutation_reservation_guard as source
-from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
+from catchplate import authority_mutation_reservation_guard as source
+from catchplate.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
 
 
 def fixture():

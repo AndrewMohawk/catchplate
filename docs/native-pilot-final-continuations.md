@@ -37,7 +37,7 @@ closed. Approved public-file hashes do not establish independent provenance.
 | Stop | Actual preceding origin-observation request and reported origin handoff; produces a stop request, not cleanup proof |
 
 `driver-phase-two-public` is an exclusive publication slot at
-`/etc/serverware/native-pilot-inputs/driver-phase-two-public.json`. This closes
+`/etc/catchplate/native-pilot-inputs/driver-phase-two-public.json`. This closes
 the former dependency on a future bundle already existing at a supplied path.
 The old small pin-only input remains read-only. Both paths preserve exact scope
 bytes and the existing version-selected bundle limits. Public files remaining
@@ -118,6 +118,6 @@ six-decision owner, real publication or cleanup was exercised.
 
 The exact archive, harness, command, log, result and verified checksums are
 retained at
-`codex-offload/serverware/engineering-builds/7366262f-final-continuations-c55dIc/`.
+`codex-offload/catchplate/engineering-builds/7366262f-final-continuations-c55dIc/`.
 The archive SHA-256 is
 `b3ef53993bb1a1eb6dfa28daa25783ade95a62d18f4b8eb561e33ae3557a2359`.

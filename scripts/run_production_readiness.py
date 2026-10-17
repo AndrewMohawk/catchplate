@@ -41,27 +41,27 @@ PLACEHOLDER_RE = re.compile(
 )
 EXAMPLE_DOMAIN_RE = re.compile(r"(^|[/:@,])([A-Za-z0-9-]+\.)*example([/:,]|$)", re.IGNORECASE)
 SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}")
-PRODUCTION_PYTHON_EXECUTABLE_ENV = "SERVERWARE_PRODUCTION_PYTHON_EXECUTABLE"
-EXECUTABLE_DIGEST_MANIFEST_ENV = "SERVERWARE_ATTESTATION_EXECUTABLE_SHA256_MANIFEST"
+PRODUCTION_PYTHON_EXECUTABLE_ENV = "CATCHPLATE_PRODUCTION_PYTHON_EXECUTABLE"
+EXECUTABLE_DIGEST_MANIFEST_ENV = "CATCHPLATE_ATTESTATION_EXECUTABLE_SHA256_MANIFEST"
 ATTESTATION_HELPER_COMMAND_SETTINGS = (
-    "SERVERWARE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE",
-    "SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE",
-    "SERVERWARE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND",
-    "SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND",
-    "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND",
-    "SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND",
-    "SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND",
+    "CATCHPLATE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE",
+    "CATCHPLATE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE",
+    "CATCHPLATE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND",
+    "CATCHPLATE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND",
+    "CATCHPLATE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND",
+    "CATCHPLATE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND",
+    "CATCHPLATE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND",
 )
-PROOF_COLLECTOR_COMMAND_SETTING = "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND"
-PROXY_PROOF_CONTRACT_ENV = "SERVERWARE_PROXY_PROOF_CONTRACT"
-PROXY_STREAM_BODY_FILE_ENV = "SERVERWARE_PROXY_STREAM_BODY_FILE"
-PROXY_PROOF_MAX_STREAM_BYTES_ENV = "SERVERWARE_PROXY_PROOF_MAX_STREAM_BYTES"
-PROXY_OBSERVATION_BODY_FILE_ENV = "SERVERWARE_PROXY_OBSERVATION_BODY_FILE"
+PROOF_COLLECTOR_COMMAND_SETTING = "CATCHPLATE_PROXY_PROOF_COLLECTOR_COMMAND"
+PROXY_PROOF_CONTRACT_ENV = "CATCHPLATE_PROXY_PROOF_CONTRACT"
+PROXY_STREAM_BODY_FILE_ENV = "CATCHPLATE_PROXY_STREAM_BODY_FILE"
+PROXY_PROOF_MAX_STREAM_BYTES_ENV = "CATCHPLATE_PROXY_PROOF_MAX_STREAM_BYTES"
+PROXY_OBSERVATION_BODY_FILE_ENV = "CATCHPLATE_PROXY_OBSERVATION_BODY_FILE"
 PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES_ENV = (
-    "SERVERWARE_PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES"
+    "CATCHPLATE_PROXY_PROOF_MAX_OBSERVATION_BODY_BYTES"
 )
 PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST_ENV = (
-    "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST"
+    "CATCHPLATE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST"
 )
 BUFFERED_PROXY_PROOF_CONTRACT = "buffered-v3"
 OBSERVATION_PROXY_PROOF_CONTRACT = "observation-v1"
@@ -73,46 +73,46 @@ PROXY_PROOF_CONTRACTS = frozenset(
         STREAMING_PROXY_PROOF_CONTRACT,
     )
 )
-PRODUCTION_DOCKER_EXECUTABLE_ENV = "SERVERWARE_DOCKER_EXECUTABLE"
-DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV = "SERVERWARE_DOCKER_COMPOSE_PLUGIN_EXECUTABLE"
-DOCKER_COMPOSE_PLUGIN_SHA256_ENV = "SERVERWARE_DOCKER_COMPOSE_PLUGIN_SHA256"
-DOCKER_UNIX_SOCKET_ENV = "SERVERWARE_DOCKER_UNIX_SOCKET"
-DOCKER_DAEMON_ID_ENV = "SERVERWARE_DOCKER_DAEMON_ID"
-DOCKER_COMPOSE_PROJECT_NAME_ENV = "SERVERWARE_DOCKER_COMPOSE_PROJECT_NAME"
+PRODUCTION_DOCKER_EXECUTABLE_ENV = "CATCHPLATE_DOCKER_EXECUTABLE"
+DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV = "CATCHPLATE_DOCKER_COMPOSE_PLUGIN_EXECUTABLE"
+DOCKER_COMPOSE_PLUGIN_SHA256_ENV = "CATCHPLATE_DOCKER_COMPOSE_PLUGIN_SHA256"
+DOCKER_UNIX_SOCKET_ENV = "CATCHPLATE_DOCKER_UNIX_SOCKET"
+DOCKER_DAEMON_ID_ENV = "CATCHPLATE_DOCKER_DAEMON_ID"
+DOCKER_COMPOSE_PROJECT_NAME_ENV = "CATCHPLATE_DOCKER_COMPOSE_PROJECT_NAME"
 VERIFY_PRODUCTION_READINESS_SCRIPT_SHA256_ENV = (
-    "SERVERWARE_VERIFY_PRODUCTION_READINESS_SCRIPT_SHA256"
+    "CATCHPLATE_VERIFY_PRODUCTION_READINESS_SCRIPT_SHA256"
 )
 VERIFY_RELEASE_COMPLETION_SCRIPT_SHA256_ENV = (
-    "SERVERWARE_VERIFY_RELEASE_COMPLETION_SCRIPT_SHA256"
+    "CATCHPLATE_VERIFY_RELEASE_COMPLETION_SCRIPT_SHA256"
 )
 PRODUCTION_HOST_PREFLIGHT_SCRIPT_SHA256_ENV = (
-    "SERVERWARE_PRODUCTION_HOST_PREFLIGHT_SCRIPT_SHA256"
+    "CATCHPLATE_PRODUCTION_HOST_PREFLIGHT_SCRIPT_SHA256"
 )
-PRODUCTION_HOST_PREFLIGHT_MAX_AGE_ENV = "SERVERWARE_PRODUCTION_HOST_PREFLIGHT_MAX_AGE_SECONDS"
+PRODUCTION_HOST_PREFLIGHT_MAX_AGE_ENV = "CATCHPLATE_PRODUCTION_HOST_PREFLIGHT_MAX_AGE_SECONDS"
 PRODUCTION_HOST_PREFLIGHT_SIGNING_PRIVATE_KEY_ENV = (
-    "SERVERWARE_PRODUCTION_HOST_PREFLIGHT_SIGNING_PRIVATE_KEY"
+    "CATCHPLATE_PRODUCTION_HOST_PREFLIGHT_SIGNING_PRIVATE_KEY"
 )
 PRODUCTION_HOST_PREFLIGHT_SIGNING_PUBLIC_KEY_ENV = (
-    "SERVERWARE_PRODUCTION_HOST_PREFLIGHT_SIGNING_PUBLIC_KEY"
+    "CATCHPLATE_PRODUCTION_HOST_PREFLIGHT_SIGNING_PUBLIC_KEY"
 )
 PRODUCTION_HOST_PREFLIGHT_SIGNING_KEY_ID_ENV = (
-    "SERVERWARE_PRODUCTION_HOST_PREFLIGHT_SIGNING_KEY_ID"
+    "CATCHPLATE_PRODUCTION_HOST_PREFLIGHT_SIGNING_KEY_ID"
 )
 PINNED_PYTHON_SCRIPTS = {
     "production_host_preflight.py": PRODUCTION_HOST_PREFLIGHT_SCRIPT_SHA256_ENV,
     "verify_production_readiness.py": VERIFY_PRODUCTION_READINESS_SCRIPT_SHA256_ENV,
     "verify_release_completion.py": VERIFY_RELEASE_COMPLETION_SCRIPT_SHA256_ENV,
 }
-FINAL_LAUNCHER_CONTRACT_ENV = "SERVERWARE_FINAL_LAUNCHER_CONTRACT"
+FINAL_LAUNCHER_CONTRACT_ENV = "CATCHPLATE_FINAL_LAUNCHER_CONTRACT"
 FINAL_LAUNCHER_CONTRACT = "descriptor-sealed-bootstrap-v3"
-BOOTSTRAP_RECEIPT_FD_ENV = "SERVERWARE_BOOTSTRAP_RECEIPT_FD"
-BOOTSTRAP_RECEIPT_SHA256_ENV = "SERVERWARE_BOOTSTRAP_RECEIPT_SHA256"
-BOOTSTRAP_RECEIPT_API_VERSION_ENV = "SERVERWARE_BOOTSTRAP_RECEIPT_API_VERSION"
-BOOTSTRAP_RECEIPT_API_VERSION = "serverware.bootstrapReceipt/v3"
+BOOTSTRAP_RECEIPT_FD_ENV = "CATCHPLATE_BOOTSTRAP_RECEIPT_FD"
+BOOTSTRAP_RECEIPT_SHA256_ENV = "CATCHPLATE_BOOTSTRAP_RECEIPT_SHA256"
+BOOTSTRAP_RECEIPT_API_VERSION_ENV = "CATCHPLATE_BOOTSTRAP_RECEIPT_API_VERSION"
+BOOTSTRAP_RECEIPT_API_VERSION = "catchplate.bootstrapReceipt/v3"
 BOOTSTRAP_RECEIPT_KIND = "ProductionBootstrapReceipt"
 BOOTSTRAP_RECEIPT_FIXED_FD = 198
-COMPLETION_PROOF_API_VERSION = "serverware.completionProof/v6"
-READINESS_CHECKSUM_API_VERSION = "serverware.readinessChecksum/v1"
+COMPLETION_PROOF_API_VERSION = "catchplate.completionProof/v6"
+READINESS_CHECKSUM_API_VERSION = "catchplate.readinessChecksum/v1"
 COMPLETION_PROOF_V6_ENVELOPE_FIELDS = frozenset(
     {
         "proof_core_sha256",
@@ -123,17 +123,17 @@ COMPLETION_PROOF_V6_ENVELOPE_FIELDS = frozenset(
     }
 )
 FINAL_COMPLETION_RESULT_API_VERSION = (
-    "serverware.releaseCompletionVerification/v1"
+    "catchplate.releaseCompletionVerification/v1"
 )
 LAUNCH_AUTHORIZATION_REQUEST_API_VERSION = (
-    "serverware.launchAuthorizationRequest/v2"
+    "catchplate.launchAuthorizationRequest/v2"
 )
-LAUNCH_AUTHORIZATION_API_VERSION = "serverware.launchAuthorization/v2"
+LAUNCH_AUTHORIZATION_API_VERSION = "catchplate.launchAuthorization/v2"
 NONCE_ROLLBACK_ASSURANCE_BINDING_API_VERSION = (
-    "serverware.productionNonceRollbackAssuranceBinding/v1"
+    "catchplate.productionNonceRollbackAssuranceBinding/v1"
 )
 NONCE_ROLLBACK_ASSURANCE_PINS_API_VERSION = (
-    "serverware.productionNonceRollbackAssurancePins/v1"
+    "catchplate.productionNonceRollbackAssurancePins/v1"
 )
 NONCE_ROLLBACK_ASSURANCE_REQUEST_DOMAIN = (
     LAUNCH_AUTHORIZATION_REQUEST_API_VERSION.encode("ascii") + b"\0"
@@ -232,33 +232,33 @@ BOOTSTRAP_RECEIPT_COMMITTED_ENV_NAMES = [
     BOOTSTRAP_RECEIPT_API_VERSION_ENV,
     BOOTSTRAP_RECEIPT_FD_ENV,
     BOOTSTRAP_RECEIPT_SHA256_ENV,
-    "SERVERWARE_LAUNCHER_IMPORT_MODE",
+    "CATCHPLATE_LAUNCHER_IMPORT_MODE",
     "TZ",
 ]
-POLICY_TRUST_ROOT_ENV = "SERVERWARE_POLICY_IDENTITY_TRUSTED_PUBLIC_KEY"
-POLICY_TRUST_ROOT_ID_ENV = "SERVERWARE_POLICY_IDENTITY_TRUSTED_PUBLIC_KEY_ID"
+POLICY_TRUST_ROOT_ENV = "CATCHPLATE_POLICY_IDENTITY_TRUSTED_PUBLIC_KEY"
+POLICY_TRUST_ROOT_ID_ENV = "CATCHPLATE_POLICY_IDENTITY_TRUSTED_PUBLIC_KEY_ID"
 POLICY_ACTIVATION_TRUST_ROOT_ENV = (
-    "SERVERWARE_POLICY_ACTIVATION_TRUSTED_PUBLIC_KEY"
+    "CATCHPLATE_POLICY_ACTIVATION_TRUSTED_PUBLIC_KEY"
 )
 POLICY_ACTIVATION_TRUST_ROOT_ID_ENV = (
-    "SERVERWARE_POLICY_ACTIVATION_TRUSTED_PUBLIC_KEY_ID"
+    "CATCHPLATE_POLICY_ACTIVATION_TRUSTED_PUBLIC_KEY_ID"
 )
 REPRODUCIBLE_BUILD_TRUST_ROOT_ENV = (
-    "SERVERWARE_REPRODUCIBLE_BUILD_TRUSTED_PUBLIC_KEY"
+    "CATCHPLATE_REPRODUCIBLE_BUILD_TRUSTED_PUBLIC_KEY"
 )
 REPRODUCIBLE_BUILD_TRUST_ROOT_ID_ENV = (
-    "SERVERWARE_REPRODUCIBLE_BUILD_TRUSTED_PUBLIC_KEY_ID"
+    "CATCHPLATE_REPRODUCIBLE_BUILD_TRUSTED_PUBLIC_KEY_ID"
 )
 FINAL_CONTROL_PLANE_UID = 65532
 FINAL_CONTROL_PLANE_GID = 65532
 FINAL_SERVICE_USERS = {
-    "serverware": "65532:65532",
+    "catchplate": "65532:65532",
     "audit-anchor": "nonroot:nonroot",
     "custody-runtime": "65531:65530",
     "decision-gate-rs": "65532:65532",
 }
-LAUNCHER_TRUSTED_ENV_PATH_INPUT = "SERVERWARE_LAUNCHER_TRUSTED_PRODUCTION_ENV_PATH"
-LAUNCHER_TRUSTED_ENV_SHA256_INPUT = "SERVERWARE_LAUNCHER_TRUSTED_PRODUCTION_ENV_SHA256"
+LAUNCHER_TRUSTED_ENV_PATH_INPUT = "CATCHPLATE_LAUNCHER_TRUSTED_PRODUCTION_ENV_PATH"
+LAUNCHER_TRUSTED_ENV_SHA256_INPUT = "CATCHPLATE_LAUNCHER_TRUSTED_PRODUCTION_ENV_SHA256"
 LAUNCHER_TRUST_INPUT_NAMES = frozenset(
     (LAUNCHER_TRUSTED_ENV_PATH_INPUT, LAUNCHER_TRUSTED_ENV_SHA256_INPUT)
 )
@@ -271,11 +271,11 @@ PINNED_EXECUTABLE_COMMAND_SETTINGS = frozenset(
     )
 )
 PROXY_DIGEST_ENV_SETTINGS = {
-    "proxy_client_request_digest": "SERVERWARE_PROXY_EXPECTED_CLIENT_REQUEST_DIGEST",
-    "proxy_request_digest": "SERVERWARE_PROXY_EXPECTED_REQUEST_DIGEST",
-    "proxy_operation_digest": "SERVERWARE_PROXY_EXPECTED_OPERATION_DIGEST",
+    "proxy_client_request_digest": "CATCHPLATE_PROXY_EXPECTED_CLIENT_REQUEST_DIGEST",
+    "proxy_request_digest": "CATCHPLATE_PROXY_EXPECTED_REQUEST_DIGEST",
+    "proxy_operation_digest": "CATCHPLATE_PROXY_EXPECTED_OPERATION_DIGEST",
 }
-COMPLETION_P99_LIMIT_ENV = "SERVERWARE_COMPLETION_P99_LIMIT_MS"
+COMPLETION_P99_LIMIT_ENV = "CATCHPLATE_COMPLETION_P99_LIMIT_MS"
 MAX_COMPLETION_PROOF_BYTES = 64 * 1024 * 1024
 MAX_PROXY_STREAM_BODY_BYTES = 64 * 1024 * 1024
 MAX_PROXY_OBSERVATION_BODY_BYTES = 16 * 1024 * 1024
@@ -325,7 +325,7 @@ PYTHON_FD_BOOTSTRAP = (
     "import os,sys;fd=int(sys.argv[1]);path=sys.argv[2];"
     "root=os.path.dirname(os.path.dirname(path));"
     "sys.path[:0]=[os.path.join(root,'scripts'),root];"
-    "os.environ['SERVERWARE_EXECUTING_SCRIPT_FD']=str(fd);"
+    "os.environ['CATCHPLATE_EXECUTING_SCRIPT_FD']=str(fd);"
     "sys.argv=[path,*sys.argv[3:]];"
     "size=os.fstat(fd).st_size;os.lseek(fd,0,os.SEEK_SET);"
     "data=b'';"
@@ -1197,7 +1197,7 @@ def validate_nonce_rollback_assurance_contract(
         public["nonceAuthorityVerifierStateStoreIdentitySha256"],
     }
     if (
-        assurance["apiVersion"] != "serverware.nonceAuthorityAssurance/v1"
+        assurance["apiVersion"] != "catchplate.nonceAuthorityAssurance/v1"
         or assurance["productionEligible"] is not True
         or assurance["assuranceLevel"] != "productionRollbackProtected"
         or type(assurance["authorityEpoch"]) is not int
@@ -1482,7 +1482,7 @@ def validate_bootstrap_receipt_summary(value: Any) -> dict[str, Any]:
     launcher = _validate_receipt_file(summary["launcher"], "launcher")
     launcher_hex = str(launcher["sha256"])[len("sha256:") :]
     expected_launcher_path = (
-        f"/opt/serverware/launchers/sha256-{launcher_hex}/serverware-production-launcher"
+        f"/opt/catchplate/launchers/sha256-{launcher_hex}/catchplate-production-launcher"
     )
     if launcher["path"] != expected_launcher_path:
         raise ValueError("bootstrap receipt launcher path is not content-addressed by its digest")
@@ -1609,7 +1609,7 @@ def load_sealed_bootstrap_receipt(
     launcher = _validate_receipt_file(receipt["launcher"], "launcher")
     launcher_hex = str(launcher["sha256"])[len("sha256:") :]
     if launcher["path"] != (
-        f"/opt/serverware/launchers/sha256-{launcher_hex}/serverware-production-launcher"
+        f"/opt/catchplate/launchers/sha256-{launcher_hex}/catchplate-production-launcher"
     ):
         raise ValueError("bootstrap receipt launcher path is not content-addressed by its digest")
     for field in ("manifest", "productionEnv", "composeFile"):
@@ -1945,7 +1945,7 @@ def normalize_compose_runtime_model(model: Any) -> dict[str, Any]:
         if not isinstance(config, dict):
             raise ValueError(f"rendered Compose service {service} is invalid")
         compose_user = str(config.get("user") or "")
-        if service == "serverware" and compose_user != FINAL_SERVICE_USERS[service]:
+        if service == "catchplate" and compose_user != FINAL_SERVICE_USERS[service]:
             raise ValueError("final control-plane Compose user must be exactly 65532:65532")
         normalized_services[service] = {
             "image": str(config.get("image") or ""),
@@ -2526,10 +2526,10 @@ def build_final_child_environment(
             "final launcher environment contains forbidden runtime/loader injection settings: "
             + ", ".join(ambient_injections)
         )
-    invalid_loaded = sorted(name for name in loaded if not name.startswith("SERVERWARE_"))
+    invalid_loaded = sorted(name for name in loaded if not name.startswith("CATCHPLATE_"))
     if invalid_loaded:
         raise ValueError(
-            "final production env contains non-SERVERWARE child environment settings: "
+            "final production env contains non-CATCHPLATE child environment settings: "
             + ", ".join(invalid_loaded)
         )
     loaded_injections = forbidden_process_environment_names(loaded)
@@ -2540,7 +2540,7 @@ def build_final_child_environment(
         )
     child = {**FINAL_CHILD_FIXED_ENV, **loaded}
     for name, value in (additions or {}).items():
-        if not name.startswith("SERVERWARE_"):
+        if not name.startswith("CATCHPLATE_"):
             raise ValueError(f"final child env addition is not allowlisted: {name}")
         child[name] = value
     return child
@@ -3088,7 +3088,7 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
         current_freshness_verified = True
     expected_contract = {
         "apiVersion": COMPLETION_PROOF_API_VERSION,
-        "kind": "ServerwarePreEnclaveReadiness",
+        "kind": "CatchplatePreEnclaveReadiness",
         "verificationOk": True,
         "finalCompletionVerified": False,
         "actionAuthorization": None,
@@ -3132,7 +3132,7 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
             or nonce_assurance.get("purpose") != "readiness-only"
             or not isinstance(launch_manifest, dict)
             or launch_manifest.get("apiVersion")
-            != "serverware.productionReadinessLaunch/v3"
+            != "catchplate.productionReadinessLaunch/v3"
             or launch_manifest.get("purpose") != "readiness-only"
             or launch_manifest.get("verified") is not True
             or launch_manifest.get("manifestSha256")
@@ -3156,7 +3156,7 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
         "enforcement": "not-native-launcher-enforced",
         "verified": False,
         "launchManifest": {
-            "apiVersion": "serverware.productionReadinessLaunch/v3",
+            "apiVersion": "catchplate.productionReadinessLaunch/v3",
             "purpose": "readiness-only",
             "verified": False,
         },
@@ -3179,14 +3179,14 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
     }
     preflight_summary = proof.get("production_host_preflight")
     expected_preflight_boundary = {
-        "apiVersion": "serverware.productionHostReadinessBoundary/v1",
+        "apiVersion": "catchplate.productionHostReadinessBoundary/v1",
         "verificationMode": "readiness",
-        "launchManifestApiVersion": "serverware.productionReadinessLaunch/v3",
+        "launchManifestApiVersion": "catchplate.productionReadinessLaunch/v3",
         "launchAuthorizationRequestApiVersion": (
-            "serverware.launchAuthorizationRequest/v2"
+            "catchplate.launchAuthorizationRequest/v2"
         ),
-        "launchAuthorizationApiVersion": "serverware.launchAuthorization/v2",
-        "bootstrapReceiptApiVersion": "serverware.bootstrapReceipt/v3",
+        "launchAuthorizationApiVersion": "catchplate.launchAuthorization/v2",
+        "bootstrapReceiptApiVersion": "catchplate.bootstrapReceipt/v3",
         "authorizationScope": "trusted-host-readiness",
         "freshnessAuthority": "trusted-host-wall-clock",
         "launcherEvidenceVerified": launcher_enforced,
@@ -3709,10 +3709,10 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
                 namespace_artifacts = item.get("container_namespace_artifacts")
                 expected_artifact_destinations = (
                     {
-                        "/run/serverware/release/release-provenance.json",
-                        "/run/serverware/release/image-signatures.json",
+                        "/run/catchplate/release/release-provenance.json",
+                        "/run/catchplate/release/image-signatures.json",
                     }
-                    if service in {"serverware", "decision-gate-rs"}
+                    if service in {"catchplate", "decision-gate-rs"}
                     else set()
                 )
                 if (
@@ -3734,11 +3734,11 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
                     )
                 for destination, artifact_label in (
                     (
-                        "/run/serverware/release/release-provenance.json",
+                        "/run/catchplate/release/release-provenance.json",
                         "release_provenance",
                     ),
                     (
-                        "/run/serverware/release/image-signatures.json",
+                        "/run/catchplate/release/image-signatures.json",
                         "image_signatures",
                     ),
                 ):
@@ -3766,7 +3766,7 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
             }
             if expected_proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
                 expected_channel_binding["exporter_label"] = (
-                    "EXPORTER-Serverware-Proxy-Stream-v1"
+                    "EXPORTER-Catchplate-Proxy-Stream-v1"
                 )
             expected_channel_digest = "sha256:" + hashlib.sha256(
                 canonical_json(expected_channel_binding).encode("utf-8")
@@ -3925,7 +3925,7 @@ def validate_proxy_proof_policy_consistency(
     principal_id: str,
     proof_url: str,
 ) -> None:
-    from serverware.policy_bundle import compile_policy_bundle, strict_json_loads
+    from catchplate.policy_bundle import compile_policy_bundle, strict_json_loads
 
     try:
         bundle = strict_json_loads(policy_bundle_path.read_bytes())
@@ -3946,13 +3946,13 @@ def validate_proxy_proof_policy_consistency(
         expected_agent_ids = [
             value
             for name, value in principal.required_headers.items()
-            if name.lower() == "x-serverware-agent"
+            if name.lower() == "x-catchplate-agent"
         ]
         if expected_agent_ids and all(value == agent_id for value in expected_agent_ids):
             mapped_principals.append(principal.id)
     if mapped_principals != [principal_id]:
         raise ValueError(
-            "SERVERWARE_PROXY_PROOF_AGENT_ID and SERVERWARE_PROXY_PROOF_PRINCIPAL_ID "
+            "CATCHPLATE_PROXY_PROOF_AGENT_ID and CATCHPLATE_PROXY_PROOF_PRINCIPAL_ID "
             "do not map to the same unique principal in the exact --policy-bundle JSON"
         )
 
@@ -3961,7 +3961,7 @@ def validate_proxy_proof_policy_consistency(
         proof_host = parsed_url.hostname
         proof_port = parsed_url.port
     except ValueError as exc:
-        raise ValueError("SERVERWARE_PROXY_PROOF_URL is invalid") from exc
+        raise ValueError("CATCHPLATE_PROXY_PROOF_URL is invalid") from exc
     if (
         not parsed_url.scheme
         or not proof_host
@@ -3969,7 +3969,7 @@ def validate_proxy_proof_policy_consistency(
         or parsed_url.password is not None
         or parsed_url.fragment
     ):
-        raise ValueError("SERVERWARE_PROXY_PROOF_URL is invalid")
+        raise ValueError("CATCHPLATE_PROXY_PROOF_URL is invalid")
     if proof_port is None:
         proof_port = 443 if parsed_url.scheme.lower() == "https" else 80
     proof_path = parsed_url.path or "/"
@@ -3983,7 +3983,7 @@ def validate_proxy_proof_policy_consistency(
     )
     if matched is None:
         raise ValueError(
-            "SERVERWARE_PROXY_PROOF_PRINCIPAL_ID is not authorized for the GET proof URL "
+            "CATCHPLATE_PROXY_PROOF_PRINCIPAL_ID is not authorized for the GET proof URL "
             "scheme, host, port, and path in the exact --policy-bundle JSON"
         )
 
@@ -4027,7 +4027,7 @@ def collector_command(args: argparse.Namespace) -> dict[str, Any]:
         args.proxy_client_nonce,
     ]
     if args.proxy_agent_id:
-        agent_header = f"X-Serverware-Agent: {args.proxy_agent_id}"
+        agent_header = f"X-Catchplate-Agent: {args.proxy_agent_id}"
         argv.extend(["--proxy-header", agent_header, "--header", agent_header])
     if args.proxy_proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
         argv.extend(
@@ -4403,8 +4403,8 @@ def parse_observation_collector_artifact(
             "production response observation proof top-level shape is invalid"
         )
     if (
-        document.get("apiVersion") != "serverware.responseObservationProof/v1"
-        or document.get("kind") != "ServerwareResponseObservationProof"
+        document.get("apiVersion") != "catchplate.responseObservationProof/v1"
+        or document.get("kind") != "CatchplateResponseObservationProof"
     ):
         raise ValueError("production response observation proof has the wrong type")
     request = document.get("request")
@@ -4474,7 +4474,7 @@ def parse_observation_collector_artifact(
     if (
         tls_channel_binding.get("type") != "tls-exporter"
         or tls_channel_binding.get("label")
-        != "EXPORTER-Serverware-Response-Observation-v1"
+        != "EXPORTER-Catchplate-Response-Observation-v1"
     ):
         raise ValueError(
             "production response observation proof TLS exporter contract is invalid"
@@ -4664,7 +4664,7 @@ def run_collector(command: dict[str, Any], args: argparse.Namespace, env: dict[s
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run Serverware's production readiness gates from a strict env file.")
+    parser = argparse.ArgumentParser(description="Run Catchplate's production readiness gates from a strict env file.")
     parser.add_argument("--env-file", default=os.getenv("PRODUCTION_READINESS_ENV", "ops/production-readiness.env"))
     parser.add_argument("--compose-file", default="docker-compose.production.yml")
     parser.add_argument("--python", default=None)
@@ -4698,7 +4698,7 @@ def main() -> None:
     parser.add_argument("--claims-file", default=".tmp/production-readiness-claims.json")
     parser.add_argument("--nitro-evidence-out", default=".tmp/nitro-kms-evidence.json")
     parser.add_argument("--readiness-out", default=".tmp/production-readiness.json")
-    parser.add_argument("--completion-proof-out", default=".tmp/serverware-completion-proof.json")
+    parser.add_argument("--completion-proof-out", default=".tmp/catchplate-completion-proof.json")
     parser.add_argument("--production-host-preflight", default=".tmp/production-host-preflight.json")
     parser.add_argument("--production-host-preflight-signing-public-key", default=None)
     parser.add_argument("--production-host-preflight-signing-key-id", default=None)
@@ -4729,7 +4729,7 @@ def main() -> None:
     parser.add_argument("--reproducible-build-signature", required=True)
     parser.add_argument("--reproducible-build-trusted-public-key", required=True)
     parser.add_argument("--reproducible-build-trusted-public-key-id", default=None)
-    parser.add_argument("--kms-materials", default="/etc/serverware/kms-materials.json")
+    parser.add_argument("--kms-materials", default="/etc/catchplate/kms-materials.json")
     parser.add_argument(
         "--control-plane-response-signing-public-key",
         default=None,
@@ -4820,10 +4820,10 @@ def main() -> None:
         print(f"production readiness env error: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
-    env_verification_mode = loaded.get("SERVERWARE_COMPLETION_VERIFICATION_MODE")
+    env_verification_mode = loaded.get("CATCHPLATE_COMPLETION_VERIFICATION_MODE")
     if env_verification_mode and env_verification_mode != "readiness":
         print(
-            "production readiness env error: SERVERWARE_COMPLETION_VERIFICATION_MODE "
+            "production readiness env error: CATCHPLATE_COMPLETION_VERIFICATION_MODE "
             "must be readiness; final verification belongs to the independent "
             "Manifest-v6 public Nitro verifier",
             file=sys.stderr,
@@ -4832,7 +4832,7 @@ def main() -> None:
     if env_verification_mode and env_verification_mode != args.verification_mode:
         print(
             "production readiness env error: --verification-mode must match "
-            "SERVERWARE_COMPLETION_VERIFICATION_MODE in the production readiness env file",
+            "CATCHPLATE_COMPLETION_VERIFICATION_MODE in the production readiness env file",
             file=sys.stderr,
         )
         raise SystemExit(1)
@@ -5067,7 +5067,7 @@ def main() -> None:
         args.production_host_preflight_signing_public_key = (
             args.production_host_preflight_signing_public_key
             or loaded.get(PRODUCTION_HOST_PREFLIGHT_SIGNING_PUBLIC_KEY_ENV)
-            or loaded.get("SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY")
+            or loaded.get("CATCHPLATE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY")
             or "readiness-unbound"
         )
         args.production_host_preflight_signing_key_id = (
@@ -5092,16 +5092,16 @@ def main() -> None:
         env = os.environ.copy()
         env.update(loaded)
     trust_settings = {
-        "release_provenance_trusted_public_key": "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY",
-        "sigstore_trusted_public_key": "SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY",
-        "rekor_trusted_public_key": "SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY",
-        "external_checkpoint_provider": "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER",
-        "external_checkpoint_trusted_public_key": "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY",
+        "release_provenance_trusted_public_key": "CATCHPLATE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY",
+        "sigstore_trusted_public_key": "CATCHPLATE_SIGSTORE_TRUSTED_PUBLIC_KEY",
+        "rekor_trusted_public_key": "CATCHPLATE_REKOR_TRUSTED_PUBLIC_KEY",
+        "external_checkpoint_provider": "CATCHPLATE_EXTERNAL_CHECKPOINT_PROVIDER",
+        "external_checkpoint_trusted_public_key": "CATCHPLATE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY",
         "control_plane_response_signing_public_key": (
-            "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY"
+            "CATCHPLATE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY"
         ),
         "control_plane_response_signing_public_key_id": (
-            "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID"
+            "CATCHPLATE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID"
         ),
         "policy_trusted_public_key": POLICY_TRUST_ROOT_ENV,
         "policy_activation_trusted_public_key": POLICY_ACTIVATION_TRUST_ROOT_ENV,
@@ -5196,15 +5196,15 @@ def main() -> None:
         )
         raise SystemExit(1)
     legacy_final_env_names = (
-        "SERVERWARE_FINAL_CHALLENGE_RECEIPT",
-        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
-        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
-        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER",
-        "SERVERWARE_HARDWARE_ASSURANCE",
-        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
-        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
-        "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
-        "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256",
+        "CATCHPLATE_FINAL_CHALLENGE_RECEIPT",
+        "CATCHPLATE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
+        "CATCHPLATE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
+        "CATCHPLATE_FINAL_CHALLENGE_AUTHORITY_PROVIDER",
+        "CATCHPLATE_HARDWARE_ASSURANCE",
+        "CATCHPLATE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+        "CATCHPLATE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
+        "CATCHPLATE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
+        "CATCHPLATE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256",
     )
     for env_name in legacy_final_env_names:
         env.pop(env_name, None)
@@ -5216,7 +5216,7 @@ def main() -> None:
             file=sys.stderr,
         )
         raise SystemExit(1)
-    env["SERVERWARE_COMPLETION_VERIFICATION_MODE"] = "readiness"
+    env["CATCHPLATE_COMPLETION_VERIFICATION_MODE"] = "readiness"
     if not args.config_only:
         missing = []
         env_proof_contract = loaded.get(PROXY_PROOF_CONTRACT_ENV)
@@ -5502,14 +5502,14 @@ def main() -> None:
             raise SystemExit(1)
 
         proof_settings = {
-            "proxy_response_proof": "SERVERWARE_PROXY_RESPONSE_PROOF_FILE",
-            "proxy_proof_collector_command": "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND",
-            "proxy_address": "SERVERWARE_PROXY_PROOF_ADDRESS",
-            "proxy_proof_url": "SERVERWARE_PROXY_PROOF_URL",
-            "proxy_proof_ca": "SERVERWARE_PROXY_PROOF_CA_BUNDLE",
-            "proxy_collector_key": "SERVERWARE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY",
-            "proxy_collector_public_key": "SERVERWARE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY",
-            "proxy_proof_verifier_public_key": "SERVERWARE_PROXY_PROOF_VERIFIER_PUBLIC_KEY",
+            "proxy_response_proof": "CATCHPLATE_PROXY_RESPONSE_PROOF_FILE",
+            "proxy_proof_collector_command": "CATCHPLATE_PROXY_PROOF_COLLECTOR_COMMAND",
+            "proxy_address": "CATCHPLATE_PROXY_PROOF_ADDRESS",
+            "proxy_proof_url": "CATCHPLATE_PROXY_PROOF_URL",
+            "proxy_proof_ca": "CATCHPLATE_PROXY_PROOF_CA_BUNDLE",
+            "proxy_collector_key": "CATCHPLATE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY",
+            "proxy_collector_public_key": "CATCHPLATE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY",
+            "proxy_proof_verifier_public_key": "CATCHPLATE_PROXY_PROOF_VERIFIER_PUBLIC_KEY",
         }
         for attribute, env_name in proof_settings.items():
             argument_value = getattr(args, attribute)
@@ -5563,12 +5563,12 @@ def main() -> None:
                 except ValueError as exc:
                     print(f"production readiness env error: {exc}", file=sys.stderr)
                     raise SystemExit(1) from exc
-        explicit_server_instance = loaded.get("SERVERWARE_PROXY_SERVER_INSTANCE_ID")
-        data_plane_instance = loaded.get("SERVERWARE_DATA_PLANE_INSTANCE_ID")
+        explicit_server_instance = loaded.get("CATCHPLATE_PROXY_SERVER_INSTANCE_ID")
+        data_plane_instance = loaded.get("CATCHPLATE_DATA_PLANE_INSTANCE_ID")
         if explicit_server_instance and data_plane_instance and explicit_server_instance != data_plane_instance:
             print(
-                "production readiness env error: SERVERWARE_PROXY_SERVER_INSTANCE_ID and "
-                "SERVERWARE_DATA_PLANE_INSTANCE_ID must match",
+                "production readiness env error: CATCHPLATE_PROXY_SERVER_INSTANCE_ID and "
+                "CATCHPLATE_DATA_PLANE_INSTANCE_ID must match",
                 file=sys.stderr,
             )
             raise SystemExit(1)
@@ -5591,14 +5591,14 @@ def main() -> None:
         )
         if not args.proxy_server_instance_id:
             missing.append(
-                "SERVERWARE_PROXY_SERVER_INSTANCE_ID or SERVERWARE_DATA_PLANE_INSTANCE_ID"
+                "CATCHPLATE_PROXY_SERVER_INSTANCE_ID or CATCHPLATE_DATA_PLANE_INSTANCE_ID"
                 if args.launcher_enforced
-                else "--proxy-server-instance-id or SERVERWARE_PROXY_SERVER_INSTANCE_ID or "
-                "SERVERWARE_DATA_PLANE_INSTANCE_ID"
+                else "--proxy-server-instance-id or CATCHPLATE_PROXY_SERVER_INSTANCE_ID or "
+                "CATCHPLATE_DATA_PLANE_INSTANCE_ID"
             )
         for attribute, env_name in (
-            ("proxy_agent_id", "SERVERWARE_PROXY_PROOF_AGENT_ID"),
-            ("proxy_principal_id", "SERVERWARE_PROXY_PROOF_PRINCIPAL_ID"),
+            ("proxy_agent_id", "CATCHPLATE_PROXY_PROOF_AGENT_ID"),
+            ("proxy_principal_id", "CATCHPLATE_PROXY_PROOF_PRINCIPAL_ID"),
         ):
             argument_value = getattr(args, attribute)
             env_value = loaded.get(env_name)
@@ -5616,15 +5616,15 @@ def main() -> None:
             )
         if not args.proxy_agent_id:
             missing.append(
-                "SERVERWARE_PROXY_PROOF_AGENT_ID (must be pinned in the production readiness env file)"
+                "CATCHPLATE_PROXY_PROOF_AGENT_ID (must be pinned in the production readiness env file)"
                 if args.launcher_enforced
-                else "--proxy-agent-id or SERVERWARE_PROXY_PROOF_AGENT_ID"
+                else "--proxy-agent-id or CATCHPLATE_PROXY_PROOF_AGENT_ID"
             )
         if not args.proxy_principal_id:
             missing.append(
-                "SERVERWARE_PROXY_PROOF_PRINCIPAL_ID (must be pinned in the production readiness env file)"
+                "CATCHPLATE_PROXY_PROOF_PRINCIPAL_ID (must be pinned in the production readiness env file)"
                 if args.launcher_enforced
-                else "--proxy-principal-id or SERVERWARE_PROXY_PROOF_PRINCIPAL_ID"
+                else "--proxy-principal-id or CATCHPLATE_PROXY_PROOF_PRINCIPAL_ID"
             )
         for attribute, env_name in PROXY_DIGEST_ENV_SETTINGS.items():
             argument_value = getattr(args, attribute)
@@ -5654,10 +5654,10 @@ def main() -> None:
                 )
                 raise SystemExit(1)
             setattr(args, attribute, value)
-        env_max_age = loaded.get("SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS")
+        env_max_age = loaded.get("CATCHPLATE_PROXY_PROOF_MAX_AGE_SECONDS")
         if args.launcher_enforced and env_max_age is None:
             missing.append(
-                "SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS (must be pinned in the production readiness env file)"
+                "CATCHPLATE_PROXY_PROOF_MAX_AGE_SECONDS (must be pinned in the production readiness env file)"
             )
             max_age = None
         else:
@@ -5666,7 +5666,7 @@ def main() -> None:
                 parsed_env_max_age = int(raw_max_age)
             except ValueError as exc:
                 print(
-                    "production readiness env error: SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS must be an integer",
+                    "production readiness env error: CATCHPLATE_PROXY_PROOF_MAX_AGE_SECONDS must be an integer",
                     file=sys.stderr,
                 )
                 raise SystemExit(1) from exc
@@ -5677,7 +5677,7 @@ def main() -> None:
             ):
                 print(
                     "production readiness env error: --proxy-proof-max-age-seconds must match "
-                    "SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS for launcher-enforced readiness",
+                    "CATCHPLATE_PROXY_PROOF_MAX_AGE_SECONDS for launcher-enforced readiness",
                     file=sys.stderr,
                 )
                 raise SystemExit(1)
@@ -5708,7 +5708,7 @@ def main() -> None:
                 raise SystemExit(1) from exc
             if len(collector_words) != 1 or not Path(collector_words[0]).is_absolute():
                 print(
-                    "production readiness env error: SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND must be one "
+                    "production readiness env error: CATCHPLATE_PROXY_PROOF_COLLECTOR_COMMAND must be one "
                     "absolute executable for launcher-enforced readiness",
                     file=sys.stderr,
                 )
@@ -5768,14 +5768,14 @@ def main() -> None:
             raise SystemExit(1) from exc
     control_plane_base = (
         args.control_plane_base
-        or loaded.get("SERVERWARE_PRODUCTION_CONTROL_PLANE_BASE")
-        or loaded.get("SERVERWARE_PUBLIC_URL")
+        or loaded.get("CATCHPLATE_PRODUCTION_CONTROL_PLANE_BASE")
+        or loaded.get("CATCHPLATE_PUBLIC_URL")
         or "https://localhost:3000"
     )
     control_plane_ca_bundle = (
         args.control_plane_ca_bundle
-        or loaded.get("SERVERWARE_PRODUCTION_CONTROL_PLANE_CA_BUNDLE")
-        or str(Path(loaded.get("SERVERWARE_CONTROL_PLANE_TLS_DIR", "/etc/serverware/control-plane-tls")) / "ca.pem")
+        or loaded.get("CATCHPLATE_PRODUCTION_CONTROL_PLANE_CA_BUNDLE")
+        or str(Path(loaded.get("CATCHPLATE_CONTROL_PLANE_TLS_DIR", "/etc/catchplate/control-plane-tls")) / "ca.pem")
     )
     args.claims_args = [
         "--base",
@@ -5785,19 +5785,19 @@ def main() -> None:
         *args.claims_args,
     ]
     images_env = Path(args.production_images_env)
-    env["SERVERWARE_PRODUCTION_READINESS_ENV_PATH"] = str(env_file)
-    env["SERVERWARE_PRODUCTION_READINESS_ENV_SHA256"] = (
+    env["CATCHPLATE_PRODUCTION_READINESS_ENV_PATH"] = str(env_file)
+    env["CATCHPLATE_PRODUCTION_READINESS_ENV_SHA256"] = (
         "sha256:" + hashlib.sha256(production_env_bytes).hexdigest()
     )
     args.production_readiness_env_sha256 = env[
-        "SERVERWARE_PRODUCTION_READINESS_ENV_SHA256"
+        "CATCHPLATE_PRODUCTION_READINESS_ENV_SHA256"
     ]
     args.pre_run_completion_proof_state = capture_optional_proof_state(
         Path(args.completion_proof_out)
     )
-    env["SERVERWARE_PRODUCTION_IMAGES_ENV_PATH"] = str(images_env)
+    env["CATCHPLATE_PRODUCTION_IMAGES_ENV_PATH"] = str(images_env)
     if images_env.exists():
-        env["SERVERWARE_PRODUCTION_IMAGES_ENV_SHA256"] = sha256_prefixed_file(images_env)
+        env["CATCHPLATE_PRODUCTION_IMAGES_ENV_SHA256"] = sha256_prefixed_file(images_env)
     commands = command_plan(args)
     bootstrap_pass_fds = tuple(
         sorted(

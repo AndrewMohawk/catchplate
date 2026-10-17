@@ -1,11 +1,11 @@
 # Optional public-only acquisition socket for explicit parent/v13 configuration.
 # Does not provision an issuer/consume worker or expose any root signing key.
 services:
-  serverware:
+  catchplate:
     volumes:
       - type: bind
-        source: ${SERVERWARE_OIDC_SESSION_ACTIVATION_CONSUME_INPUTS_SOCKET:?set preprovisioned consume-input issuer socket}
-        target: /run/serverware/oidc-session-activation-consume-inputs/grants.sock
+        source: ${CATCHPLATE_OIDC_SESSION_ACTIVATION_CONSUME_INPUTS_SOCKET:?set preprovisioned consume-input issuer socket}
+        target: /run/catchplate/oidc-session-activation-consume-inputs/grants.sock
         read_only: true
         bind:
           create_host_path: false

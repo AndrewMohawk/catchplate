@@ -23,7 +23,7 @@ class UpstreamContractTests(unittest.TestCase):
         headers = [(b"authorization", b"Bearer demo-token-from-vault")]
         if sensitive_headers:
             headers += [(b"cookie", b"synthetic-cookie"),
-                        (b"x-serverware-data-plane-token", b"synthetic-service-token")]
+                        (b"x-catchplate-data-plane-token", b"synthetic-service-token")]
         return Request({
             "type": "http", "method": "GET", "scheme": "https",
             "server": ("demo-upstream", 8443), "path": "/echo", "root_path": "",
@@ -60,7 +60,7 @@ class UpstreamContractTests(unittest.TestCase):
             "type": "http", "method": "POST", "scheme": "https",
             "server": ("demo-upstream", 8443), "path": "/json-nested-redact",
             "root_path": "", "query_string": b"",
-            "headers": [(b"user-agent", ("serverware-test-run/" + run_id).encode("ascii"))],
+            "headers": [(b"user-agent", ("catchplate-test-run/" + run_id).encode("ascii"))],
         }, receive=receive)
         self.assertEqual(asyncio.run(demo_upstream.request_count("POST", "/json-nested-redact", run_id))["count"], 0)
         asyncio.run(demo_upstream.json_nested_redact(request))

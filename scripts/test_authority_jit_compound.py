@@ -17,8 +17,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_jit_compound as source
-from serverware.authority_query_read_work import QueryReadValidationLimits
+from catchplate import authority_jit_compound as source
+from catchplate.authority_query_read_work import QueryReadValidationLimits
 from test_authority_jit_connected_originals import (
     connected_fixture, capture_seven, first_receipt, canonical, meter,
 )

@@ -14,13 +14,13 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_candidates as candidates
-from serverware import authority_index_projection as projection
-from serverware import authority_query_read_work as measured
-from serverware import authority_transition_core as core
-from serverware.authority_index_contract import CountedNode, KeyInterval
-from serverware.authority_index_heads import CapturedIndexHead
-from serverware.authority_index_mutation import IndexLeafChange
+from catchplate import authority_challenge_candidates as candidates
+from catchplate import authority_index_projection as projection
+from catchplate import authority_query_read_work as measured
+from catchplate import authority_transition_core as core
+from catchplate.authority_index_contract import CountedNode, KeyInterval
+from catchplate.authority_index_heads import CapturedIndexHead
+from catchplate.authority_index_mutation import IndexLeafChange
 from test_authority_radix_proof import sql_digest, sql_json, wire_digest, wire_json
 
 
@@ -40,9 +40,9 @@ def pair(ordinal, phase="expire", *, changed=False, earlier=False):
         used_at=("2026-01-01T00:00:00+00:00" if earlier else "2026-01-01T00:01:00+00:00")
             if phase in {"old", "overflow"} else None,
         retention_reference_mask=0, payload_json='{"changed":true}' if changed else "{}")
-    key = wire_digest("serverware.policyAuthorityBusinessKey/v1", b"webauthn_challenges",
+    key = wire_digest("catchplate.policyAuthorityBusinessKey/v1", b"webauthn_challenges",
                       wire_json({"id": value["id"]}))
-    digest = sql_digest("serverware.policyAuthorityAuthenticatedRow/v1", b"webauthn_challenges", sql_json(value))
+    digest = sql_digest("catchplate.policyAuthorityAuthenticatedRow/v1", b"webauthn_challenges", sql_json(value))
     leaf = projection.project_row(candidates.source.PHASE_INDEX[phase], value,
                                  primary_key_digest=key, primary_row_digest=digest)
     return leaf, value["id"]

@@ -27,18 +27,18 @@ DATA = Path("/data")
 OUTPUT = Path("/seed-output")
 MARKER = Path("/private-fixture.json")
 OWNER = (10001, 10001)
-SCHEMA = "serverware.privateWorkloadRenewalSeed/v1"
+SCHEMA = "catchplate.privateWorkloadRenewalSeed/v1"
 EVENT = "operator_fixture.workload_renewal_retained_client_seeded"
 DEFAULTS = {
-    "SERVERWARE_RELEASE_CHANNEL": "dev",
-    "SERVERWARE_PROCESS_MODE": "serverware-control-plane",
-    "SERVERWARE_METADATA_STORE_BACKEND": "sqlite",
-    "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite",
-    "SERVERWARE_GRANT_STORE_BACKEND": "sqlite",
-    "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
-    "SERVERWARE_KEY_RELEASE_REQUIRED": "0",
-    "SERVERWARE_DEV_AUTHENTICATOR": "0",
-    "SERVERWARE_DEV_DEMO_SEED": "0",
+    "CATCHPLATE_RELEASE_CHANNEL": "dev",
+    "CATCHPLATE_PROCESS_MODE": "catchplate-control-plane",
+    "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_AUDIT_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_GRANT_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
+    "CATCHPLATE_KEY_RELEASE_REQUIRED": "0",
+    "CATCHPLATE_DEV_AUTHENTICATOR": "0",
+    "CATCHPLATE_DEV_DEMO_SEED": "0",
 }
 
 
@@ -104,7 +104,7 @@ def fixture_marker():
         require(len(raw) == info.st_size)
     value = json.loads(raw, object_pairs_hook=unique)
     require(type(value) is dict and set(value) == {"schema", "syntheticOnly"}
-        and value["schema"] == "serverware.privateOperatorAuditFixture/v1"
+        and value["schema"] == "catchplate.privateOperatorAuditFixture/v1"
         and value["syntheticOnly"] is True)
     return hashlib.sha256(raw).hexdigest()
 
@@ -115,9 +115,9 @@ def seed():
         and os.getgid() == os.getegid() == OWNER[1]
         and Path(__file__).resolve() == Path("/app/scripts/seed_operator_workload_renewal_connected.py"))
     require({name for _, name in socket.if_nameindex()} == {"lo"})
-    require(os.environ.get("SERVERWARE_OPERATOR_DEMO") == "1"
-        and os.environ.get("SERVERWARE_DATA_DIR") == str(DATA)
-        and os.environ.get("SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED", "0") == "0")
+    require(os.environ.get("CATCHPLATE_OPERATOR_DEMO") == "1"
+        and os.environ.get("CATCHPLATE_DATA_DIR") == str(DATA)
+        and os.environ.get("CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED", "0") == "0")
     for name, value in DEFAULTS.items():
         os.environ.setdefault(name, value)
         require(os.environ[name] == value)
@@ -135,14 +135,14 @@ def seed():
 
             # Same real bootstrap order as the focused operator backend.
             sys.path.insert(0, "/app")
-            from serverware import operator_demo
+            from catchplate import operator_demo
             operator_demo.activate()
-            from serverware import config, db, operator_demo_store as store
-            from serverware import operator_catalog_policy as policy
-            from serverware import operator_catalog_schema as schema
-            from serverware import operator_publication, policy_bundle
+            from catchplate import config, db, operator_demo_store as store
+            from catchplate import operator_catalog_policy as policy
+            from catchplate import operator_catalog_schema as schema
+            from catchplate import operator_publication, policy_bundle
             require(operator_demo.active() and config.DATA_DIR == DATA
-                and config.DB_PATH == DATA / "serverware.sqlite3")
+                and config.DB_PATH == DATA / "catchplate.sqlite3")
             db.init_db()
             store.initialize()
 

@@ -17,11 +17,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts import install_native_pilot_genesis_job as command
 from scripts.test_native_pilot_genesis_execution import configuration
-from serverware import native_pilot_genesis_authority_channel as channel
-from serverware import native_pilot_genesis_execution_protocol as wire
-from serverware import native_pilot_genesis_job_install as installation
-from serverware import native_pilot_genesis_jobs as jobs
-from serverware import native_pilot_genesis_rendezvous_install as rendezvous
+from catchplate import native_pilot_genesis_authority_channel as channel
+from catchplate import native_pilot_genesis_execution_protocol as wire
+from catchplate import native_pilot_genesis_job_install as installation
+from catchplate import native_pilot_genesis_jobs as jobs
+from catchplate import native_pilot_genesis_rendezvous_install as rendezvous
 
 p, g = wire.p, wire.g
 
@@ -97,7 +97,7 @@ class ColdJobInstallationControls(unittest.TestCase):
 
     def test_old_request_approval_and_configuration_do_not_select_cold66(self):
         value = fixture()
-        for api in (wire.REQUEST_API, "serverware.nativePilotAuthorityJobRequest/v2"):
+        for api in (wire.REQUEST_API, "catchplate.nativePilotAuthorityJobRequest/v2"):
             with self.subTest(api=api), self.assertRaises(ValueError):
                 prepare(ticket(value, apiVersion=api))
         approval = g.document(value["approval_raw"], installation.MAX_APPROVAL)

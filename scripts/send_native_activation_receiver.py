@@ -39,9 +39,9 @@ import time
 
 PARENT_CID, PORT = 3, 9103
 MAX_OBSERVATION, MAX_COMPLETION = 8192, 1024 * 1024
-OBSERVATION_API = "serverware.nativeShadowActivationReceiverObservation/v1"
-COMPLETION_API = "serverware.nativeShadowActivationReceiverCompletion/v2"
-INSTALLATION_API = "serverware.nativeShadowActivationReceiverInstallation/v1"
+OBSERVATION_API = "catchplate.nativeShadowActivationReceiverObservation/v1"
+COMPLETION_API = "catchplate.nativeShadowActivationReceiverCompletion/v2"
+INSTALLATION_API = "catchplate.nativeShadowActivationReceiverInstallation/v1"
 OBSERVATION_FIELDS = {"apiVersion", "okForAction", "configurationSha256", "deliveryConfigurationSha256",
     "processId", "processStartTicks", "processPidfdInode", "bootIdBase64url", "timeNamespaceDevice",
     "timeNamespaceInode", "observedAtBoottimeNs", "localCid", "localPort", "peerCid", "peerPort", "activation"}

@@ -9,8 +9,8 @@ const {execFileSync} = require('node:child_process');
 const vm = require('node:vm');
 
 const ROOT = path.resolve(__dirname, '..');
-const ASSETS = path.join(ROOT, 'serverware/operator_demo_web');
-const PORTAL = path.join(ROOT, 'serverware/operator_demo_portal.py');
+const ASSETS = path.join(ROOT, 'catchplate/operator_demo_web');
+const PORTAL = path.join(ROOT, 'catchplate/operator_demo_portal.py');
 const CHECKER = path.join(__dirname, 'check_operator_runtime_browser.cjs');
 const NOW = 1800000000000, FIXTURE = 'https://demo-upstream:8443', GMAIL = 'https://gmail.googleapis.com';
 const UPSTREAM_LISTS = [[FIXTURE], [FIXTURE, GMAIL],
@@ -19,15 +19,15 @@ const CATALOG = '/api/operator-demo/catalog', UPSTREAMS = '/api/operator-demo/pr
 const GOOGLE = '/api/operator-demo/oauth/google/configuration/v2';
 const X_CONFIGURATION = '/api/operator-demo/oauth/x/configuration/v1';
 const X_DISABLED = {detail: 'X configuration is not supported by this deployment'};
-const PUBLIC = 'https://serverware-demo.example.com', POLICY = 'sha256:' + 'a'.repeat(64);
+const PUBLIC = 'https://catchplate-demo.example.com', POLICY = 'sha256:' + 'a'.repeat(64);
 const source = fs.readFileSync(CHECKER, 'utf8');
 const entrypoint = '\n(async () => {\n';
 assert.equal(source.split(entrypoint).length, 2, 'one explicit runtime entrypoint');
 const declarations = source.split(entrypoint)[0];
 
 // Invoke the actual standalone Python renderer, not a second JS rendering
-// implementation. Its only imports are stdlib; do not import serverware/app.
-const reference = JSON.parse(execFileSync(process.env.SERVERWARE_TEST_PYTHON || '/usr/bin/python3',
+// implementation. Its only imports are stdlib; do not import catchplate/app.
+const reference = JSON.parse(execFileSync(process.env.CATCHPLATE_TEST_PYTHON || '/usr/bin/python3',
   ['-I', '-B', '-c', `
 import base64, importlib.util, json, pathlib, sys
 def deny_runtime(event, args):
@@ -62,7 +62,7 @@ variants.append({'scripts': scripts,
     'html': base64.b64encode(module.render().encode('utf-8')).decode('ascii')})
 print(json.dumps({'scripts': module.SCRIPT_FILES,
     'html': base64.b64encode(module.render().encode('utf-8')).decode('ascii'), 'variants': variants}))
-`, path.join(ROOT, 'serverware/operator_demo_portal.py')],
+`, path.join(ROOT, 'catchplate/operator_demo_portal.py')],
   {encoding: 'utf8', timeout: 10000, maxBuffer: 8 * 1024 * 1024,
     env: {PATH: '/usr/bin:/bin', LANG: 'C.UTF-8'}}));
 const expected = Buffer.from(reference.html, 'base64');
@@ -110,7 +110,7 @@ function reviewed(origins = UPSTREAM_LISTS[2], revision = 39, managed = true) {
   f.run('expectedUpstreams = origins; expectedRevision = revision; managedGoogle = managed');
   const app = (id, status, expiry, token, access, rules) => ({id, status, token_expires_at_epoch_ms: expiry,
     token_generation: 1, token_status: token, access_status: access, active_rule_count: rules});
-  const catalog = {schema: 'serverware.operatorCatalog/v1', mode: 'operator-development', productionReady: false,
+  const catalog = {schema: 'catchplate.operatorCatalog/v1', mode: 'operator-development', productionReady: false,
     hardwareVerified: false, revision: revision === null ? 13 : revision, allowed_upstreams: [...origins],
     policy: {activation: 'active', policy_hash: POLICY, loaded_policy_hash: POLICY},
     capabilities: {oauth: false, google_oauth: null}, observed_activity: {observed_at_epoch_ms: NOW},
@@ -122,15 +122,15 @@ function reviewed(origins = UPSTREAM_LISTS[2], revision = 39, managed = true) {
   const settings = {allowed_upstreams: [...origins], fixture_cidrs: ['127.0.0.0/8']};
   // Independent fixed-key canonical input, not the checker's serial/hash helper.
   const digest = 'sha256:' + require('node:crypto').createHash('sha256').update(JSON.stringify(settings)).digest('hex');
-  const upstreams = {schema: 'serverware.operatorUpstreamSetupReview/v1', old_settings: settings,
+  const upstreams = {schema: 'catchplate.operatorUpstreamSetupReview/v1', old_settings: settings,
     expected_settings_digest: digest, cold_restart_required: true, eligible: true, pending_operation_id: null,
     blocked_reason: null, expected_revision: catalog.revision, expected_policy_hash: POLICY};
-  const google = {schema: 'serverware.operatorGoogleConfiguration/v2', state: 'unconfigured', revision: catalog.revision,
+  const google = {schema: 'catchplate.operatorGoogleConfiguration/v2', state: 'unconfigured', revision: catalog.revision,
     policy_hash: POLICY, effective_settings: structuredClone(settings), effective_settings_digest: digest,
     public_url: PUBLIC, redirect_uri: PUBLIC + '/api/oauth/callback/google', permission_preset: 'gmail_readonly',
     scopes: ['email', 'https://www.googleapis.com/auth/gmail.readonly', 'openid'], blocked_reason: null, operation: null,
     readiness: {pair_ready: true, consent_ready: false, loaded_policy_hash: POLICY},
-    review: {schema: 'serverware.operatorGoogleManagedSetupReview/v2', expected_revision: catalog.revision,
+    review: {schema: 'catchplate.operatorGoogleManagedSetupReview/v2', expected_revision: catalog.revision,
       expected_policy_hash: POLICY, expected_settings_digest: digest, old_settings: structuredClone(settings),
       target_settings: {allowed_upstreams: origins.includes(GMAIL) ? [...origins] : [...origins, GMAIL],
         fixture_cidrs: ['127.0.0.0/8']}, public_url: PUBLIC, redirect_uri: PUBLIC + '/api/oauth/callback/google',
@@ -155,8 +155,8 @@ function enabledX(managed = false) {
   const sample = reviewed(UPSTREAM_LISTS[2], 81, managed), {f, catalog} = sample;
   f.run('managedX = true; PUBLIC = CANONICAL_PUBLIC; selectXConfigurationProfile();');
   Object.assign(catalog.capabilities, {x_oauth: null, x_post: null});
-  const configuration = {schema: 'serverware.operatorXConfiguration/v1', state: 'unconfigured', revision: 81,
-    policy_hash: POLICY, redirect_uri: 'https://serverware.example.com/api/oauth/callback/x',
+  const configuration = {schema: 'catchplate.operatorXConfiguration/v1', state: 'unconfigured', revision: 81,
+    policy_hash: POLICY, redirect_uri: 'https://catchplate.example.com/api/oauth/callback/x',
     permission_preset: 'x_text_post_v1', scopes: ['offline.access', 'tweet.read', 'tweet.write', 'users.read'],
     configuration: null, operation: null, blocked_reason: null, consent_ready: false,
     review: {expected_revision: 81, expected_policy_hash: POLICY}};
@@ -372,7 +372,7 @@ const tests = [
       '/api/operator-demo/oauth/x/accounts/11111111-1111-4111-8111-111111111111/disconnect-review',
       '/api/operator-demo/oauth/x/disconnect', '/api/operator-demo/access-rules/x-post',
       X_CONFIGURATION + '?review=true', X_CONFIGURATION + '/',
-      'https://serverware-demo.example.com' + X_CONFIGURATION]) {
+      'https://catchplate-demo.example.com' + X_CONFIGURATION]) {
       f.context.fixturePath = route;
       await assert.rejects(f.run('get(fixturePath)'), error => error.message === 'get_route_or_bound');
     }
@@ -604,7 +604,7 @@ const tests = [
     assert.equal(parse(base).sourceDirectory, null);
     f.context.fixtureCommit = base[1];
     assert.equal(f.run('sourceDirectory(fixtureCommit)'),
-      path.join(path.dirname(ROOT), 'serverware-operator-artifacts/source-' + base[1]));
+      path.join(path.dirname(ROOT), 'catchplate-operator-artifacts/source-' + base[1]));
     const all = [...base, '--managed-google-unconfigured', '--expected-upstreams', JSON.stringify(UPSTREAM_LISTS[2]),
       '--expected-catalog-revision', '39', '--canonical-origin', '--source-directory', selected];
     assert.equal(parse(all).sourceDirectory, selected);
@@ -638,8 +638,8 @@ const tests = [
       const f = fixture();
       f.context.fixtureSource = selected; f.context.fixtureApp = app; f.context.fixtureCommit = 'b'.repeat(40);
       f.context.fixtureCalls = [];
-      f.context.fixtureInspect = {id: app, running: true, health: 'healthy', project: 'serverware-operator-demo',
-        service: 'serverware', mounts: [{source: mismatch === 'mount' ? selected + '-wrong' : selected, rw: false, type: 'bind'}]};
+      f.context.fixtureInspect = {id: app, running: true, health: 'healthy', project: 'catchplate-operator-demo',
+        service: 'catchplate', mounts: [{source: mismatch === 'mount' ? selected + '-wrong' : selected, rw: false, type: 'bind'}]};
       f.context.fixtureVerified = {ok: true, commit: 'b'.repeat(40), source: mismatch === 'host' ? selected + '-wrong' : selected,
         git_blob_equality: true, world_readable_and_nonwritable: true, manifest_sha256: digest, files: 2};
       f.context.fixtureReply = {ok: true, manifest_sha256: mismatch === 'container' ? 'e'.repeat(64) : digest, files: 2};
@@ -661,7 +661,7 @@ const tests = [
     assert.equal(forbiddenCalls, 0);
   }],
   ['canonical origin is a closed explicit opt-in with unchanged paths and renderer proof', () => {
-    const canonical = 'https://serverware.example.com', base = ['a'.repeat(64), 'b'.repeat(40), '/synthetic/fresh'];
+    const canonical = 'https://catchplate.example.com', base = ['a'.repeat(64), 'b'.repeat(40), '/synthetic/fresh'];
     const {f, catalog, upstreams, google} = reviewed();
     const parse = args => { f.context.args = args; return JSON.parse(f.run('JSON.stringify(parseRuntimeOptions(args))')); };
     assert.equal(parse(base).publicOrigin, PUBLIC);
@@ -670,7 +670,7 @@ const tests = [
       '--expected-catalog-revision', '39', '--canonical-origin'];
     assert.equal(parse(all).publicOrigin, canonical);
     for (const suffix of [['--canonical-origin', '--canonical-origin'], ['--canonical-origin', canonical],
-      ['--canonical-origin=https://serverware.example.com'], ['--public-origin', canonical],
+      ['--canonical-origin=https://catchplate.example.com'], ['--public-origin', canonical],
       ['--canonical-origin', 'https://unreviewed.invalid']]) assert.throws(() => parse([...base, ...suffix]));
     parse(all);
     f.run('PUBLIC = new URL(parseRuntimeOptions(args).publicOrigin).origin');
@@ -884,7 +884,7 @@ const tests = [
         async isDisabled() { return selector === '#x-configuration-save' ? failed !== selector : failed === selector; },
         async inputValue() { return failed === selector ? 'synthetic-input-canary' : ''; },
         async innerText() { return failed === selector ? 'wrong' : selector === '#x-configuration-callback' ?
-          'https://serverware.example.com/api/oauth/callback/x' : 'Not configured. Enter settings.'; },
+          'https://catchplate.example.com/api/oauth/callback/x' : 'Not configured. Enter settings.'; },
         async textContent() { return failed === selector ? 'wrong' : ['offline.access', 'tweet.read', 'tweet.write', 'users.read'].join('\n'); }
       }; }};
       if (failed === null) await f.run('verifyXConfigurationUnconfigured(fixturePage)');
@@ -894,7 +894,7 @@ const tests = [
     const disabled = disabledX(); disabled.context.fixturePage = {locator: forbidden};
     await disabled.run('verifyXConfigurationUnconfigured(fixturePage)');
     const {f} = enabledX(); f.run('xConfigurationBrowserReadComplete = true; seen[X_CONFIGURATION] = 1;');
-    f.context.fixtureMessage = {type: () => 'error', location: () => ({url: 'https://serverware.example.com' + X_CONFIGURATION}),
+    f.context.fixtureMessage = {type: () => 'error', location: () => ({url: 'https://catchplate.example.com' + X_CONFIGURATION}),
       text: () => 'Failed to load resource: the server responded with a status of 404 (Not Found)'};
     f.run('recordConsole(fixtureMessage)'); assert.equal(f.run('receipt.console_errors'), 1, 'enabled mode has no 404 exception');
     assert.equal(forbiddenCalls, 0);

@@ -22,15 +22,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts import run_ordinary_regression as bounded
 
-SCHEMA = "serverware.nativeReviewSignerUnits/v1"
-CANARY = b"serverware synthetic nonroot signer fixture\n"
-FIXTURE = "SERVERWARE_TEST_NONROOT_KEY_FIXTURE"
+SCHEMA = "catchplate.nativeReviewSignerUnits/v1"
+CANARY = b"catchplate synthetic nonroot signer fixture\n"
+FIXTURE = "CATCHPLATE_TEST_NONROOT_KEY_FIXTURE"
 FIXTURE_UID = FIXTURE + "_UID"
 SCRIPT = "scripts/test_native_jit_review_signers.py"
 SOURCE_FILES = (SCRIPT, "scripts/run_native_jit_review_signers.py", "scripts/run_ordinary_regression.py",
-    "serverware/authority_native_jit_review_open_signers.py", "serverware/authority_service.py",
-    "serverware/authority_launch_guard.py", "serverware/authority_native_jit_review_open_custody.py",
-    "serverware/authority_native_jit_review_assignment.py", "serverware/authority_stage_zero_contract.py",
+    "catchplate/authority_native_jit_review_open_signers.py", "catchplate/authority_service.py",
+    "catchplate/authority_launch_guard.py", "catchplate/authority_native_jit_review_open_custody.py",
+    "catchplate/authority_native_jit_review_assignment.py", "catchplate/authority_stage_zero_contract.py",
     "requirements.lock")
 
 

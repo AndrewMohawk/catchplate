@@ -33,30 +33,30 @@ Both profiles include this unchanged legacy inventory:
 
 | Fixed parent(s) | Actual later writer and fresh child |
 | --- | --- |
-| `/run/serverware-custody-business`, `/var/lib/serverware/custody-business` | `BusinessResources` creates the five role directories, listener sockets and role-specific business directories. Do not precreate the roles here. |
-| `/var/lib/serverware/custody-generation/{durable-recovery-store,cleanup-authorization-consumer,recovery-target-provider,current-signature-authority,bounded-cleanup-helper}` | `GenerationInputs` requires these existing role parents, then creates `generation-journal` and the selected dispatch/spool journals. |
-| `/run/serverware-shadow-{retrieval,persistence,trusted-time,generation-install,commit-request,ingress-admission,terminal-append,dispatch-barrier,active-effect-barrier,active-effect-commit}` | The respective retained native owners create their real `listener.sock`; this helper never creates a socket. Braces denote the fixed literal inventory, not a caller-supplied pattern. |
-| `/var/lib/serverware/native-ledger-spool` | `SpoolInputs` creates the original invocation-ID directory and held `ledger.lock`; the helper leaves this root empty. |
-| `/var/lib/serverware/native-shadow-persistence` | `PersistenceInputs` creates fresh `journal`, then its held lock and independently admitted originals. |
-| `/var/lib/serverware/native-shadow-generation-install` | The GenerationInstall resource owner creates fresh `journal`, `generation.lock` and supplied genesis/record originals. |
-| `/run/serverware-native-pilot-bridge`, `/var/lib/serverware/native-pilot-bridge` | The bridge resource owner creates its listener and `production-journal`; the helper leaves both parents empty. |
+| `/run/catchplate-custody-business`, `/var/lib/catchplate/custody-business` | `BusinessResources` creates the five role directories, listener sockets and role-specific business directories. Do not precreate the roles here. |
+| `/var/lib/catchplate/custody-generation/{durable-recovery-store,cleanup-authorization-consumer,recovery-target-provider,current-signature-authority,bounded-cleanup-helper}` | `GenerationInputs` requires these existing role parents, then creates `generation-journal` and the selected dispatch/spool journals. |
+| `/run/catchplate-shadow-{retrieval,persistence,trusted-time,generation-install,commit-request,ingress-admission,terminal-append,dispatch-barrier,active-effect-barrier,active-effect-commit}` | The respective retained native owners create their real `listener.sock`; this helper never creates a socket. Braces denote the fixed literal inventory, not a caller-supplied pattern. |
+| `/var/lib/catchplate/native-ledger-spool` | `SpoolInputs` creates the original invocation-ID directory and held `ledger.lock`; the helper leaves this root empty. |
+| `/var/lib/catchplate/native-shadow-persistence` | `PersistenceInputs` creates fresh `journal`, then its held lock and independently admitted originals. |
+| `/var/lib/catchplate/native-shadow-generation-install` | The GenerationInstall resource owner creates fresh `journal`, `generation.lock` and supplied genesis/record originals. |
+| `/run/catchplate-native-pilot-bridge`, `/var/lib/catchplate/native-pilot-bridge` | The bridge resource owner creates its listener and `production-journal`; the helper leaves both parents empty. |
 
 The `adopted-cold` profile adds only these parents:
 
 | Fixed parent | Required owner/mode | Actual later writer |
 | --- | --- | --- |
-| `/run/serverware-custody-genesis`, `/var/lib/serverware/custody-genesis` | root:root `0711` | Cold ordinary resources create their two role directories, listeners and journals. |
-| `/var/lib/serverware/publication-genesis-endpoints` | root:root `0711` | Cold endpoint resources create the actual Retrieval object/spool directories and held store lock. |
-| `/run/serverware-shadow-publication-reconciliation` | root:root `0711` | The selected cold or operational Publication owner creates its own listener. These ceremonies must not share a populated parent. |
-| `/run/serverware/native-pilot-core-handoff` | root:root `0700` | The actual cold sender creates the protected sequence-packet listener; this helper creates no socket. |
+| `/run/catchplate-custody-genesis`, `/var/lib/catchplate/custody-genesis` | root:root `0711` | Cold ordinary resources create their two role directories, listeners and journals. |
+| `/var/lib/catchplate/publication-genesis-endpoints` | root:root `0711` | Cold endpoint resources create the actual Retrieval object/spool directories and held store lock. |
+| `/run/catchplate-shadow-publication-reconciliation` | root:root `0711` | The selected cold or operational Publication owner creates its own listener. These ceremonies must not share a populated parent. |
+| `/run/catchplate/native-pilot-core-handoff` | root:root `0700` | The actual cold sender creates the protected sequence-packet listener; this helper creates no socket. |
 
-The adopted profile also admits the shared ancestor `/run/serverware`: it is
+The adopted profile also admits the shared ancestor `/run/catchplate`: it is
 created as root:root `0755` only if missing. Existing protected modes and unrelated
 contents remain untouched; this shared container is not enumerated. The handoff
 leaf is still checked separately for its exact mode and empty population.
 
 New resource parents use the exact selected modes above. The two shared containers
-`/var/lib/serverware` and `/var/lib/serverware/custody-generation` are created
+`/var/lib/catchplate` and `/var/lib/catchplate/custody-generation` are created
 as root:root `0755` only if missing; existing protected modes are left intact.
 The former may contain unrelated directories and is never enumerated. `/`,
 `/run`, `/var` and `/var/lib` must already exist and are never created or changed.
@@ -80,8 +80,8 @@ authority and lifetimes. This helper does not test filesystem feature support,
 prepare Retrieval objects, write configs/grants/keys/genesis, generate secrets,
 provision namespaces, start children, enable services or claim readiness.
 
-The legacy report remains `serverware.nativePilotResourceRoots/v1` with unchanged
-fields. The selected successor reports `serverware.nativePilotResourceRoots/v2`
+The legacy report remains `catchplate.nativePilotResourceRoots/v1` with unchanged
+fields. The selected successor reports `catchplate.nativePilotResourceRoots/v2`
 and `profile: "adopted-cold"`; neither report carries release authority. The
 focused controls in `scripts/test_native_pilot_resource_roots.py` cover the closed
 inventories and temporary-tree FD-relative filesystem behavior, not provisioning

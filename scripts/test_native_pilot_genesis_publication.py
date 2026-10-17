@@ -16,8 +16,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_genesis_publication as publication
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_genesis_publication as publication
 import test_native_pilot_genesis_parent_authority as parents
 
 p = g.p

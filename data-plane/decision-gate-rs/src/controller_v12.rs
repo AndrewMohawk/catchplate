@@ -13,11 +13,11 @@ use std::fmt;
 pub const REQUEST_CONTRACT_VERSION: u16 = 11;
 pub const RECEIPT_CONTRACT_VERSION: u16 = 12;
 pub const CONTROLLER_RUNTIME_PROTOCOL_V12: &str =
-    "serverware/controller-runtime/v12";
+    "catchplate/controller-runtime/v12";
 pub const CONTROLLER_EXECUTOR_PROTOCOL_V12: &str =
-    "serverware/controller-plan-invocation/v12";
+    "catchplate/controller-plan-invocation/v12";
 pub const CONTROLLER_LIFECYCLE_PROTOCOL_V12: &str =
-    "serverware/controller-lifecycle/v12";
+    "catchplate/controller-lifecycle/v12";
 pub const TRUSTED_HOST_PROFILE: &str =
     "TrustedHostNoTee/userspace-digest/no-IMA-appraisal";
 
@@ -663,7 +663,7 @@ impl LifecycleCleanupRequestV12 {
         verifying_key
             .verify(
                 &[
-                    b"serverware/controller-lifecycle-cleanup-authority/v12\0"
+                    b"catchplate/controller-lifecycle-cleanup-authority/v12\0"
                         .as_slice(),
                     projection.as_slice(),
                 ]
@@ -705,7 +705,7 @@ impl LifecycleCleanupRequestV12 {
         self.controller_signature = signing_key
             .sign(
                 &[
-                    b"serverware/controller-lifecycle-cleanup-authority/v12\0"
+                    b"catchplate/controller-lifecycle-cleanup-authority/v12\0"
                         .as_slice(),
                     signature_projection.as_slice(),
                 ]
@@ -800,7 +800,7 @@ impl LifecycleCleanupResponseV12 {
             )
         })? != self.exact_plan_terminal_aggregate
             || aggregate.protocol
-                != "serverware/private-dind-plan-aggregate-terminal/v12"
+                != "catchplate/private-dind-plan-aggregate-terminal/v12"
             || aggregate.plan_id != request.plan_id
             || aggregate.request_sha256_canonical
                 != request.request_sha256_canonical

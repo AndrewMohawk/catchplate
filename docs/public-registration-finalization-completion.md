@@ -1,7 +1,7 @@
 # Public finalization completion and recovery
 
-The source-only [HTTP contract](../serverware/control_plane_registration_finalization_completion_http.py)
-and [routes](../serverware/control_plane_registration_finalization_completion_routes.py)
+The source-only [HTTP contract](../catchplate/control_plane_registration_finalization_completion_http.py)
+and [routes](../catchplate/control_plane_registration_finalization_completion_routes.py)
 expose separate present-permission actions for the retained finalization grant
 locator. They do not execute or retry SQL, activate an OIDC session, or turn an
 unsigned SQL observation into authenticated completion. Fourteen focused
@@ -53,10 +53,10 @@ or inconsistent credential history is denied.
 Pending `/options` responses contain exactly `schema`, `purpose`, `localDigest`,
 `action`, `resourceId`, `payloadDigest`, `publicKey`, `expiresAtEpochNs`, and
 `automaticRetryAllowed: false`, with schema
-`serverware.webAuthnRegistrationFinalizationPermissionOptions/v1`. These are
+`catchplate.webAuthnRegistrationFinalizationPermissionOptions/v1`. These are
 actual server-generated action-bound options, not an accepted posted binding.
 
-The [possession helper](../serverware/control_plane_registration_finalization_permission.py)
+The [possession helper](../catchplate/control_plane_registration_finalization_permission.py)
 retains one random nonce on the admitted enrollment owner, bounded by its
 original context and at most 120 seconds. It burns the nonce before signature
 verification; rejection or an uncertain response does not permit reissue on that
@@ -95,8 +95,8 @@ retained. See [historical finalization admission](registration-finalization-hist
 
 Successful `202` responses contain exactly nine fields:
 
-- `schema`: `serverware.webAuthnRegistrationFinalizationCompletion/v1`, or
-  `serverware.webAuthnRegistrationFinalizationCompletionRecovery/v1` for recovery;
+- `schema`: `catchplate.webAuthnRegistrationFinalizationCompletion/v1`, or
+  `catchplate.webAuthnRegistrationFinalizationCompletionRecovery/v1` for recovery;
 - `status`: `finalization-completion-acknowledged`, or
   `finalization-completion-recovered` for recovery;
 - the fixed `purpose` and same finalization-grant `localDigest`;

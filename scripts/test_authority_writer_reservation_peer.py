@@ -24,7 +24,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 
-SOURCE = Path(__file__).resolve().parents[1] / "serverware/authority_service.py"
+SOURCE = Path(__file__).resolve().parents[1] / "catchplate/authority_service.py"
 PIN = "sha256:" + "1" * 64
 
 
@@ -51,11 +51,11 @@ def source_component():
     references = {node.id for original in nodes for node in ast.walk(original) if isinstance(node, ast.Name)}
     imports = []
     for original in tree.body:
-        if isinstance(original, ast.ImportFrom) and original.module == "serverware":
+        if isinstance(original, ast.ImportFrom) and original.module == "catchplate":
             aliases = [alias for alias in original.names if (alias.asname or alias.name) in references]
             if aliases:
-                imports.append(ast.ImportFrom(module="serverware", names=aliases, level=0))
-    imports.append(ast.ImportFrom(module="serverware", names=[ast.alias(name="authority_contract")], level=0))
+                imports.append(ast.ImportFrom(module="catchplate", names=aliases, level=0))
+    imports.append(ast.ImportFrom(module="catchplate", names=[ast.alias(name="authority_contract")], level=0))
     module = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0),
         *imports, *nodes], type_ignores=[])
     code = compile(ast.fix_missing_locations(module), str(SOURCE), "exec")
@@ -130,7 +130,7 @@ class Component:
         self.server.peer_uid = self.rows["planner"]["serviceUid"]
         self.server.peer_gid = self.rows["planner"]["serviceGid"]
         self.server._serve_revocation_writer = lambda *args, **kwargs: self.calls.append(("detached-writer", None))
-        from serverware import authority_public_revocation_transport as public
+        from catchplate import authority_public_revocation_transport as public
         self.detached_magics = set(eval(magic_code, namespace)) | set(public.REQUEST_MAGICS)
 
     def request(self, purpose="reserve-execution-envelope", *, signer="verifier", **changes):

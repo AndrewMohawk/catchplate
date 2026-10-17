@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl
 from scripts import check_operator_gmail_sdk as sdk
 from scripts import operator_gmail_sdk_age_fixture as fixture
 
-SCHEMA = "serverware.privateGmailAgeCheck/v1"
+SCHEMA = "catchplate.privateGmailAgeCheck/v1"
 ERRORS = {"old-list": "gmail_read_age_internal_date_too_old",
     "missing-list": "gmail_read_age_metadata_invalid", "future-list": "gmail_read_age_internal_date_future",
     "mismatch-list": "gmail_read_age_metadata_id_mismatch", "old-get": "gmail_read_age_internal_date_too_old",
@@ -19,7 +19,7 @@ ERRORS = {"old-list": "gmail_read_age_internal_date_too_old",
 
 def observe(check, count):
     status, value = check.json_request(check.upstream, sdk.base.fixture.OBSERVATIONS_PATH, context=check.upstream_ca)
-    sdk.require(status == 200 and value.get("schema") == "serverware.privateGoogleObservations/v1", "age observations unavailable")
+    sdk.require(status == 200 and value.get("schema") == "catchplate.privateGoogleObservations/v1", "age observations unavailable")
     age = value.get("gmailAge", {})
     sdk.require(age.get("schema") == fixture.SCHEMA and age.get("maxAttempts") == 32
         and type(age.get("anchorEpochMs")) is int and type(age.get("attempts")) is list
@@ -65,14 +65,14 @@ def observe(check, count):
 
 
 def configuration(app, token, rule, name):
-    environment = {"SERVERWARE_PROXY_URL": sdk.PROXY, "SERVERWARE_APP_ID": app["id"],
-        "SERVERWARE_PROXY_TOKEN": token, "SERVERWARE_CA_FILE": str(sdk.TRUST_FILES["inner"]),
-        "SERVERWARE_PROXY_CA_FILE": str(sdk.TRUST_FILES["outer"])}
+    environment = {"CATCHPLATE_PROXY_URL": sdk.PROXY, "CATCHPLATE_APP_ID": app["id"],
+        "CATCHPLATE_PROXY_TOKEN": token, "CATCHPLATE_CA_FILE": str(sdk.TRUST_FILES["inner"]),
+        "CATCHPLATE_PROXY_CA_FILE": str(sdk.TRUST_FILES["outer"])}
     value = {**rule, "application_id": app["id"], "access_rule_id": rule["id"],
         "token_expires_at_epoch_ms": app["token_expires_at_epoch_ms"], "proxy_authentication": "basic_and_bearer_v1",
         "proxy_username": app["id"], "proxy_password": token, "proxy_url": sdk.PROXY,
         "ca_file": str(sdk.TRUST_FILES["inner"]), "proxy_ca_file": str(sdk.TRUST_FILES["outer"]),
-        "client_recipe": {"schema": "serverware.gmailSdkClient/v2", "clear_environment": True,
+        "client_recipe": {"schema": "catchplate.gmailSdkClient/v2", "clear_environment": True,
             "environment": environment, "access_rule_id": rule["id"], "token_expires_at_epoch_ms": app["token_expires_at_epoch_ms"]}}
     path = Path("/tmp/gmail-age-" + name + ".json")
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)

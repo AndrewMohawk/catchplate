@@ -1,6 +1,6 @@
 # Completion-recovery release proof
 
-`serverware/control_plane_oidc_session_activation_completion_recovery_proof.py`
+`catchplate/control_plane_oidc_session_activation_completion_recovery_proof.py`
 consumes the actual sealed [intent continuation](control-plane-oidc-session-activation-completion-recovery-intent.md).
 `_proof_on_intent` spends the root orchestrator's one-use proof latch at entry,
 including on read-only reuse. `_require_proof` checks the privately constructed

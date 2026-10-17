@@ -24,32 +24,32 @@ window.addEventListener("message",async event=>{
   if(event.source!==source||event.origin!==portal)return;
   const m=event.data;
   try{
-    if(phase==="ready"&&exact(m,["type","approvalRequestId"])&&m.type==="serverware.native-jit-review.start"){
+    if(phase==="ready"&&exact(m,["type","approvalRequestId"])&&m.type==="catchplate.native-jit-review.start"){
       phase="challenge-attempted";deadline=performance.now()+30000;
       if(!literal(m.approvalRequestId,128))throw Error("Approval identity bound");
       const result=JSON.parse(await post("/reviews/jit/challenge",{approvalRequestId:m.approvalRequestId}));
-      if(!exact(result,["apiVersion","challengeOriginal"])||result.apiVersion!=="serverware.nativeJitReviewChallengeResponse/v1")throw Error("Challenge framing refused");
+      if(!exact(result,["apiVersion","challengeOriginal"])||result.apiVersion!=="catchplate.nativeJitReviewChallengeResponse/v1")throw Error("Challenge framing refused");
       const challenge=JSON.parse(result.challengeOriginal).statement;reviewId=challenge.reviewId;
       if(typeof reviewId!=="string")throw Error("Challenge identity absent");
       const remaining=Math.floor(challenge.expiresAtEpochNs/1e6)-Date.now()-1;
       if(!(remaining>0))throw Error("Challenge expired");deadline=Math.min(deadline,performance.now()+remaining);
       phase="authorization";status.textContent="Waiting for current reviewer authorization.";
-      send({type:"serverware.native-jit-review.challenge",challengeOriginal:result.challengeOriginal});
-    }else if(phase==="authorization"&&exact(m,["type","authorizationOriginal","parentOriginal","childOriginal","pairOriginal","proofOriginal"])&&m.type==="serverware.native-jit-review.authorized"){
+      send({type:"catchplate.native-jit-review.challenge",challengeOriginal:result.challengeOriginal});
+    }else if(phase==="authorization"&&exact(m,["type","authorizationOriginal","parentOriginal","childOriginal","pairOriginal","proofOriginal"])&&m.type==="catchplate.native-jit-review.authorized"){
       phase="prepare-attempted";
       if(!literal(m.authorizationOriginal,64*1024)||!literal(m.parentOriginal,512*1024)||!literal(m.childOriginal,512*1024)||!literal(m.pairOriginal,1024*1024)||!literal(m.proofOriginal,128*1024))throw Error("Authorization original bound");
       const result=JSON.parse(await post("/reviews/jit/prepare",{reviewId,authorizationOriginal:m.authorizationOriginal,parentOriginal:m.parentOriginal,childOriginal:m.childOriginal,pairOriginal:m.pairOriginal,proofOriginal:m.proofOriginal}));
-      if(!exact(result,["apiVersion","preparationOriginal"])||result.apiVersion!=="serverware.nativeJitReviewPreparationResponse/v1")throw Error("Preparation framing refused");
+      if(!exact(result,["apiVersion","preparationOriginal"])||result.apiVersion!=="catchplate.nativeJitReviewPreparationResponse/v1")throw Error("Preparation framing refused");
       phase="commit";status.textContent="Private review is withheld until its receipt commits.";
-      send({type:"serverware.native-jit-review.prepared",preparationOriginal:result.preparationOriginal});
-    }else if(phase==="commit"&&exact(m,["type","commitAckOriginal"])&&m.type==="serverware.native-jit-review.committed"){
+      send({type:"catchplate.native-jit-review.prepared",preparationOriginal:result.preparationOriginal});
+    }else if(phase==="commit"&&exact(m,["type","commitAckOriginal"])&&m.type==="catchplate.native-jit-review.committed"){
       phase="disclosure-attempted";
       if(!literal(m.commitAckOriginal,64*1024))throw Error("Commit acknowledgment bound");
       const text=await post("/reviews/jit/disclose",{reviewId,commitAckOriginal:m.commitAckOriginal},256*1024);
       view.textContent=text;status.textContent="Protected review opened. This does not approve or run the request.";
-      phase="complete";send({type:"serverware.native-jit-review.disclosed",reviewId});
+      phase="complete";send({type:"catchplate.native-jit-review.disclosed",reviewId});
     }
   }catch(_){phase="uncertain";status.textContent="Review failed, expired, or has an uncertain outcome. It will not retry.";}
 });
-if(source)send({type:"serverware.native-jit-review.ready"});
+if(source)send({type:"catchplate.native-jit-review.ready"});
 </script>

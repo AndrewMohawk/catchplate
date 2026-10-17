@@ -14,7 +14,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import request_query_compat as query
+from catchplate import request_query_compat as query
 
 
 FIXTURES = ROOT / "scripts/fixtures/ordered_form_query_v1.json"
@@ -33,7 +33,7 @@ class OrderedFormQueryTests(unittest.TestCase):
         self.assertEqual(str(raised.exception), code)
 
     def test_fixture_identity_and_fixed_bounds(self):
-        self.assertEqual(self.fixtures["schema"], "serverware.orderedFormQueryVectors/v1")
+        self.assertEqual(self.fixtures["schema"], "catchplate.orderedFormQueryVectors/v1")
         self.assertEqual(self.fixtures["mode"], query.MODE)
         self.assertEqual(self.fixtures["adapter"], query.ADAPTER)
         self.assertEqual(self.fixtures["limits"], {

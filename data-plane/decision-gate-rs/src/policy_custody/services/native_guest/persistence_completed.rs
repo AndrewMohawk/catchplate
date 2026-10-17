@@ -8,10 +8,10 @@ impl Service {
     pub(super) fn completed_invocation(&self,request:&Request,query:&Query,keys:&AdmittedKeys,
         trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<Proof,ShadowError>{
         require(matches!(self.configuration.payload.api_version.as_str(),
-            "serverware.nativeShadowPersistenceServiceAssignment/v2"|"serverware.nativeShadowPersistenceServiceAssignment/v3"|"serverware.nativeShadowPersistenceServiceAssignment/v4")
+            "catchplate.nativeShadowPersistenceServiceAssignment/v2"|"catchplate.nativeShadowPersistenceServiceAssignment/v3"|"catchplate.nativeShadowPersistenceServiceAssignment/v4")
             && self.configuration.payload.permissions.contains(&Permission::VerifyCompletedInvocation))?;
         if query.publication_selected() {
-            require(matches!(self.configuration.payload.api_version.as_str(),"serverware.nativeShadowPersistenceServiceAssignment/v3"|"serverware.nativeShadowPersistenceServiceAssignment/v4")
+            require(matches!(self.configuration.payload.api_version.as_str(),"catchplate.nativeShadowPersistenceServiceAssignment/v3"|"catchplate.nativeShadowPersistenceServiceAssignment/v4")
                 && self.configuration.payload.permissions.contains(&Permission::VerifyPublicationInvocation))?;
         }
         query.validate().map_err(fail)?;let binding=query.dispatch.binding();let now=guest::now()?;

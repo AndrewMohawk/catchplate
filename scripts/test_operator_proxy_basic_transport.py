@@ -22,7 +22,7 @@ from scripts import operator_proxy_basic_tls as relay
 
 
 LEGACY = "proxy.operator-basic.example.test"
-GMAIL = "serverware-gmail-proxy.example.com"
+GMAIL = "catchplate-gmail-proxy.example.com"
 OUTPUTS = {"outer-ca.pem", "outer-cert.pem", "outer-key.pem", "inner-ca.pem", "requests-ca.pem"}
 
 
@@ -54,7 +54,7 @@ class ProxyBasicTransportTests(unittest.TestCase):
                         | ({"x-custody"} if profile == 'managed-x-post' else set())), sorted(OUTPUTS), []]))
                 stack.enter_context(patch.object(setup.socket, "if_nameindex", return_value=[(1, "lo")]))
                 stack.enter_context(patch.object(setup, "_read_public_file", return_value=json.dumps({
-                    "schema": "serverware.privateOperatorAuditFixture/v1", "syntheticOnly": True}).encode()))
+                    "schema": "catchplate.privateOperatorAuditFixture/v1", "syntheticOnly": True}).encode()))
                 stack.enter_context(patch.object(setup, "_inner_root", return_value=(inner, inner_pem)))
                 fresh = stack.enter_context(patch.object(setup, "_fresh_directory", side_effect=[20, 30]))
                 writes = stack.enter_context(patch.object(setup, "_write",

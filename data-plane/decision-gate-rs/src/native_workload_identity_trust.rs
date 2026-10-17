@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) const MAX_AUTHORIZATION: usize = 128 * 1024;
-const SCHEMA: &str = "serverware.nativeWorkloadIdentityTrustAuthorization/v1";
+const SCHEMA: &str = "catchplate.nativeWorkloadIdentityTrustAuthorization/v1";
 const PROFILE: &str = "immutable-native-framed-der-startup-v1";
 const PERIOD: u64 = 24 * 60 * 60 * 1_000_000_000;
 
@@ -86,7 +86,7 @@ fn principals(snapshot: &Snapshot, issuers: &HashSet<String>) -> Result<Value, S
     require((1..=64).contains(&entries.len())
         && entries.windows(2).all(|p| p[0]["principalId"] != p[1]["principalId"]))?;
     let result = Value::Array(entries);
-    require(bytes(&json!({"schema":"serverware.workloadIdentityTrustPrincipals/v1",
+    require(bytes(&json!({"schema":"catchplate.workloadIdentityTrustPrincipals/v1",
         "principals":result}))?.len() <= 64 * 1024)?;
     Ok(result)
 }
@@ -112,7 +112,7 @@ impl Pending {
         require(key != parameters.control_plane_response_key)?;
         let envelope = strict_json_value_from_slice(&original).map_err(|_| refused())?;
         exact(&envelope, &["schema", "payload", "signature"])?;
-        require(envelope["schema"] == "serverware.signedNativeWorkloadIdentityTrustAuthorization/v1"
+        require(envelope["schema"] == "catchplate.signedNativeWorkloadIdentityTrustAuthorization/v1"
             && bytes(&envelope)? == original)?;
         let payload = envelope["payload"].clone();
         exact(&payload, &["schema","sourceRevision","purpose","profile","authorizerSpkiSha256",
@@ -148,7 +148,7 @@ impl Pending {
         let mut issuers = HashSet::new();
         let mut inventory = Vec::new();
         let mut framed = Sha256::new();
-        framed.update(b"serverware/mutual-tls-client-trust/v1\0");
+        framed.update(b"catchplate/mutual-tls-client-trust/v1\0");
         framed.update((roots.len() as u32).to_be_bytes());
         for root in roots {
             total = total.checked_add(root.len()).ok_or_else(refused)?;

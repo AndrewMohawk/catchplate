@@ -8,7 +8,7 @@ enabled by this module. Source remains unbuilt and unexecuted.
 
 ## Original inputs and actual current proofs
 
-[`authority_transition_oidc_session_activation_delivery`](../serverware/authority_transition_oidc_session_activation_delivery.py)
+[`authority_transition_oidc_session_activation_delivery`](../catchplate/authority_transition_oidc_session_activation_delivery.py)
 provides `_full_transition_with_liveness_on_work(context, *, ...)`, requiring
 original `old_token_bytes`, six independent delivery/subject identifiers,
 independently admitted current authentication/trust policies, original primary
@@ -65,7 +65,7 @@ The worker derives exactly:
 
 Already-consumed, stale, revoked, inconsistent or colliding state raises an
 error; no no-op denial is returned as success. The result is the closed
-`serverware.oidcSessionActivationDeliveryConsumptionEffects/v1` document with
+`catchplate.oidcSessionActivationDeliveryConsumptionEffects/v1` document with
 derived-consumption status, subject/delivery identifiers, assertion/new-token/
 ciphertext digests, consumption time and `tokenReleased: false`. It contains no
 token or ciphertext. The actual row mutation preserves ciphertext unchanged.

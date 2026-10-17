@@ -1,6 +1,6 @@
 //! Dedicated native audit mTLS client; generated client key never leaves TLS memory.
 use super::*;
-use serverware_decision_gate::native_audit_batch_v1 as wire;
+use catchplate_decision_gate::native_audit_batch_v1 as wire;
 
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -27,7 +27,7 @@ impl<'de> Deserialize<'de> for Configuration {
         enum Cold { Legacy(ConfigurationV1), Postboot(super::native_audit_assignment::ConfigurationV2) }
         match Cold::deserialize(decoder)? {
             Cold::Legacy(config) => {
-                if config.api_version!="serverware.nativeMeasuredAuditConfiguration/v1" {
+                if config.api_version!="catchplate.nativeMeasuredAuditConfiguration/v1" {
                     return Err(serde::de::Error::custom("native audit configuration version differs"));
                 }
                 Ok(Self::Legacy(config))
@@ -69,7 +69,7 @@ pub(super) fn prepare(config:Configuration, roots:&ControlPlaneClientConfig,
             config
         }
         Configuration::Legacy(config)=>{
-            if config.api_version!="serverware.nativeMeasuredAuditConfiguration/v1" || !wire::digest(&config.assignment_sha256)
+            if config.api_version!="catchplate.nativeMeasuredAuditConfiguration/v1" || !wire::digest(&config.assignment_sha256)
                 || config.initial_sequence==0 || config.initial_sequence>=i64::MAX as u64
                 || (config.initial_sequence==1)!=config.previous_batch_sha256.is_none()
                 || config.previous_batch_sha256.as_ref().is_some_and(|v|!wire::digest(v))

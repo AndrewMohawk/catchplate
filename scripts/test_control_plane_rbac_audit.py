@@ -52,7 +52,7 @@ def sign_jwt(
         "exp": now + 300,
         "iat": now,
         "nbf": now - 5,
-        "serverware_roles": roles,
+        "catchplate_roles": roles,
     }
     encoded_header = b64u(json.dumps(header, separators=(",", ":"), sort_keys=True).encode())
     encoded_payload = b64u(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
@@ -104,8 +104,8 @@ def expect_generation_conflict(func: Any, *, expected: int, current: int) -> Non
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         issuer = "https://idp.example"
-        audience = "serverware-control-plane"
-        kid = "serverware-rbac-test"
+        audience = "catchplate-control-plane"
+        kid = "catchplate-rbac-test"
         private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         numbers = private_key.public_key().public_numbers()
         jwks = {
@@ -120,26 +120,26 @@ def main() -> None:
                 }
             ]
         }
-        os.environ["SERVERWARE_DATA_DIR"] = tmp
+        os.environ["CATCHPLATE_DATA_DIR"] = tmp
         for store in ("METADATA", "GRANT", "AUDIT"):
-            os.environ[f"SERVERWARE_{store}_STORE_BACKEND"] = "sqlite"
-            os.environ.pop(f"SERVERWARE_{store}_STORE_POSTGRES_DSN", None)
-        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
-        os.environ.pop("SERVERWARE_ADMIN_TOKEN", None)
-        os.environ["SERVERWARE_DEV_AUTHENTICATOR"] = "1"
-        os.environ["SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED"] = "1"
-        os.environ["SERVERWARE_PUBLIC_URL"] = "http://localhost:3000"
-        os.environ["SERVERWARE_WEBAUTHN_ORIGIN"] = "http://localhost:3000"
-        os.environ["SERVERWARE_OIDC_ENABLED"] = "1"
-        os.environ["SERVERWARE_OIDC_ISSUER"] = issuer
-        os.environ["SERVERWARE_OIDC_AUDIENCE"] = audience
-        os.environ["SERVERWARE_OIDC_JWKS_JSON"] = json.dumps(jwks, separators=(",", ":"), sort_keys=True)
-        os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
+            os.environ[f"CATCHPLATE_{store}_STORE_BACKEND"] = "sqlite"
+            os.environ.pop(f"CATCHPLATE_{store}_STORE_POSTGRES_DSN", None)
+        os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
+        os.environ.pop("CATCHPLATE_ADMIN_TOKEN", None)
+        os.environ["CATCHPLATE_DEV_AUTHENTICATOR"] = "1"
+        os.environ["CATCHPLATE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED"] = "1"
+        os.environ["CATCHPLATE_PUBLIC_URL"] = "http://localhost:3000"
+        os.environ["CATCHPLATE_WEBAUTHN_ORIGIN"] = "http://localhost:3000"
+        os.environ["CATCHPLATE_OIDC_ENABLED"] = "1"
+        os.environ["CATCHPLATE_OIDC_ISSUER"] = issuer
+        os.environ["CATCHPLATE_OIDC_AUDIENCE"] = audience
+        os.environ["CATCHPLATE_OIDC_JWKS_JSON"] = json.dumps(jwks, separators=(",", ":"), sort_keys=True)
+        os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
 
         from fastapi import HTTPException
-        from serverware import app as app_module
-        from serverware import auth, db, webauthn
-        from serverware.auth import AdminIdentity
+        from catchplate import app as app_module
+        from catchplate import auth, db, webauthn
+        from catchplate.auth import AdminIdentity
 
         db.init_db()
         user_id = "user:admin"
@@ -249,7 +249,7 @@ def main() -> None:
             roles=["admin", "credential_owner"],
             subject="operator@example.com",
         )
-        operator_identity = auth.require_admin(FakeRequest(operator_token), x_serverware_admin_token=None)
+        operator_identity = auth.require_admin(FakeRequest(operator_token), x_catchplate_admin_token=None)
         if operator_identity.roles != frozenset({"auditor", "policy_author"}):
             raise AssertionError(f"authoritative binding did not replace JWT roles: {operator_identity}")
         auth.require_role("policy_author")(operator_identity)
@@ -312,7 +312,7 @@ def main() -> None:
         if deprovisioned["binding"]["status"] != "deprovisioned" or deprovisioned["binding"]["roles"]:
             raise AssertionError(f"subject was not deprovisioned: {deprovisioned}")
         try:
-            auth.require_admin(FakeRequest(operator_token), x_serverware_admin_token=None)
+            auth.require_admin(FakeRequest(operator_token), x_catchplate_admin_token=None)
         except HTTPException as exc:
             if exc.status_code != 403 or "deprovisioned" not in str(exc.detail):
                 raise AssertionError(f"deprovisioned OIDC subject failed incorrectly: {exc.status_code} {exc.detail}") from exc
@@ -355,7 +355,7 @@ def main() -> None:
                 ),
             )
         try:
-            auth.require_admin(FakeRequest(operator_token), x_serverware_admin_token=None)
+            auth.require_admin(FakeRequest(operator_token), x_catchplate_admin_token=None)
         except HTTPException as exc:
             if exc.status_code != 503 or "unavailable" not in str(exc.detail):
                 raise AssertionError(
@@ -391,7 +391,7 @@ def main() -> None:
                 "binding_table_revision WHERE authority_id = 1"
             )
 
-        unaffected_identity = auth.require_admin(FakeRequest(unaffected_token), x_serverware_admin_token=None)
+        unaffected_identity = auth.require_admin(FakeRequest(unaffected_token), x_catchplate_admin_token=None)
         if unaffected_identity.roles != frozenset({"auditor"}):
             raise AssertionError(f"deprovisioning another subject changed this binding: {unaffected_identity}")
 
@@ -412,7 +412,7 @@ def main() -> None:
             )
         }
         app_module.rbac_role_binding_update(subject_id, reprovision_payload, identity=identity)
-        reprovisioned_identity = auth.require_admin(FakeRequest(operator_token), x_serverware_admin_token=None)
+        reprovisioned_identity = auth.require_admin(FakeRequest(operator_token), x_catchplate_admin_token=None)
         if reprovisioned_identity.roles != frozenset({"approver"}):
             raise AssertionError(f"reprovisioned roles were not applied immediately: {reprovisioned_identity}")
         auth.require_role("approver")(reprovisioned_identity)
@@ -492,7 +492,7 @@ def main() -> None:
                 subject="unbound@example.com",
             )
             try:
-                auth.require_admin(FakeRequest(unbound_token), x_serverware_admin_token=None)
+                auth.require_admin(FakeRequest(unbound_token), x_catchplate_admin_token=None)
             except HTTPException as exc:
                 if exc.status_code != 403 or "not provisioned" not in str(exc.detail):
                     raise AssertionError(f"unbound production OIDC subject failed incorrectly: {exc.status_code} {exc.detail}") from exc
@@ -502,7 +502,7 @@ def main() -> None:
             rbac_path.write_text("{not-json")
             projected_file_identity = auth.require_admin(
                 FakeRequest(operator_token),
-                x_serverware_admin_token=None,
+                x_catchplate_admin_token=None,
             )
             if projected_file_identity.roles != frozenset({"approver"}):
                 raise AssertionError(
@@ -526,7 +526,7 @@ def main() -> None:
                     ('["admin"]', subject_id),
                 )
             try:
-                auth.require_admin(FakeRequest(operator_token), x_serverware_admin_token=None)
+                auth.require_admin(FakeRequest(operator_token), x_catchplate_admin_token=None)
             except HTTPException as exc:
                 if exc.status_code != 503 or "unavailable" not in str(exc.detail):
                     raise AssertionError(
@@ -545,7 +545,7 @@ def main() -> None:
                     "binding_table_revision WHERE authority_id = 1"
                 )
 
-            local_identity = auth.require_admin(FakeRequest(auth.admin_token()), x_serverware_admin_token=None)
+            local_identity = auth.require_admin(FakeRequest(auth.admin_token()), x_catchplate_admin_token=None)
             if local_identity.auth_method != "bearer-token":
                 raise AssertionError(f"local admin token was affected by RBAC state: {local_identity}")
         finally:

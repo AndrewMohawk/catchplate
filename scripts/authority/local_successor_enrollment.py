@@ -42,7 +42,7 @@ def main(argv=None):
         print(USAGE, end=""); return 0
     owner = None
     try:
-        from serverware.authority_local_successor_enrollment import LocalSuccessorColdEnrollment, ColdEnrollmentError
+        from catchplate.authority_local_successor_enrollment import LocalSuccessorColdEnrollment, ColdEnrollmentError
         try: owner = LocalSuccessorColdEnrollment(**arguments(argv))
         except ColdEnrollmentError as error: owner = error.owner; raise
         owner.publish(); owner.close(); return 0

@@ -1,6 +1,6 @@
 # Configured activation plan owner
 
-[`OidcSessionActivationPlanOwner`](../serverware/authority_oidc_session_activation_plan_owner.py)
+[`OidcSessionActivationPlanOwner`](../catchplate/authority_oidc_session_activation_plan_owner.py)
 composes the actual read-only activation reader, complete indexed write replay,
 planner signature and encrypted original journal. This reusable source owner
 checks supplied configuration joins; it does **not** independently admit that

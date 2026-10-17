@@ -2,7 +2,7 @@
 //! private source API; no HTTP upload, synthetic record or readiness flag is
 //! introduced here. Unknown claim/contact state is irreversible.
 use super::*;
-use serverware_decision_gate::{native_canary_delivery_v1 as wire,native_canary_evidence_v1 as intake};
+use catchplate_decision_gate::{native_canary_delivery_v1 as wire,native_canary_evidence_v1 as intake};
 pub(super) use wire::Configuration;
 use std::collections::BTreeMap;
 
@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 pub(crate) fn native_cumulative_selected(state:&GateState)->Result<bool,String>{
     let Some(holder)=&state.measured_canary_delivery else{return Ok(false);};
     let owner=holder.try_lock().map_err(|_|"native cumulative delivery owner busy")?;
-    if owner.authority.configuration().api_version=="serverware.nativeCanaryDurableDelivery/v1" {return Ok(false);}
+    if owner.authority.configuration().api_version=="catchplate.nativeCanaryDurableDelivery/v1" {return Ok(false);}
     owner.check(state)?;
     if owner.heartbeat.poisoned {return Err("native heartbeat owner is poisoned".into());}
     owner.authority.native_cumulative_selected()
@@ -19,7 +19,7 @@ pub(crate) fn native_cumulative_selected(state:&GateState)->Result<bool,String>{
 pub(crate) fn native_finalization_selected(state:&GateState)->Result<bool,String>{
     let Some(holder)=&state.measured_canary_delivery else{return Ok(false);};
     let owner=holder.try_lock().map_err(|_|"native finalization delivery owner busy")?;
-    if owner.authority.configuration().api_version!="serverware.nativeCanaryDurableDelivery/v3" {return Ok(false);}
+    if owner.authority.configuration().api_version!="catchplate.nativeCanaryDurableDelivery/v3" {return Ok(false);}
     owner.check(state)?;
     if owner.finalization.poisoned {return Err("native finalization owner is poisoned".into());}
     owner.authority.native_finalization_selected()
@@ -73,12 +73,12 @@ pub(super) fn retain_readiness(state:&GateState,record:&Value,completion:wire::C
     let result=strict_json_value_from_slice(result_raw.as_bytes()).map_err(|e|e.to_string())?;
     let results=result["results"].as_array().ok_or("native readiness result inventory")?;
     if results.len()!=1 || results[0]["kind"]!="readiness"
-        || results[0]["recordSha256"]!=sha256_prefixed(&serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(record)?){
+        || results[0]["recordSha256"]!=sha256_prefixed(&catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(record)?){
         return Err("native readiness result differs from source record".into());
     }
     let original=results[0]["storedOriginal"].as_str().ok_or("native readiness stored original")?.to_owned();
     let stored=strict_json_value_from_slice(original.as_bytes()).map_err(|e|e.to_string())?;
-    if stored["apiVersion"]!="serverware.nativePolicyReadinessResult/v1" || stored["okForAction"]!=false
+    if stored["apiVersion"]!="catchplate.nativePolicyReadinessResult/v1" || stored["okForAction"]!=false
         || stored["activationApprovalConsumed"]!=false || stored["automaticRetryAllowed"]!=false{
         return Err("native readiness stored result has another purpose".into());
     }
@@ -154,7 +154,7 @@ impl Owner {
     fn finish(&mut self,canary:&str,pending:Pending,result:Result<wire::Completion,String>)->Result<wire::Completion,String>{
         match result {
             Ok(value) if pending.phase==Phase::Consumed=>{
-                self.heads.insert(canary.into(),sha256_prefixed(&serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(value.observation().head())?));
+                self.heads.insert(canary.into(),sha256_prefixed(&catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(value.observation().head())?));
                 Ok(value)
             },
             other=>{self.pending.insert(canary.into(),pending);other},
@@ -214,7 +214,7 @@ pub(super) fn recover(state:&GateState,target:&wire::RecoveryTarget,deadline:u64
     if same && observed.observation().status()=="consumed" {
         let head=observed.observation().head();
         if head["slot_id"]==target.slot_id && head["status"]=="consumed" {
-            owner.heads.insert(target.canary_id.clone(),sha256_prefixed(&serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(head)?));
+            owner.heads.insert(target.canary_id.clone(),sha256_prefixed(&catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(head)?));
             owner.pending.remove(&target.canary_id);
         }
     }

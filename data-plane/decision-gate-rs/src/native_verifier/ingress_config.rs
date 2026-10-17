@@ -37,7 +37,7 @@ impl Expectations {
             "clientTrustBundleSha256", "expectedPcrs", "expectedEif", "expectedModuleId",
             "maxAgeSeconds", "futureSkewSeconds", "nonceBase64url", "ingressHost", "serverInstanceId",
         ])?;
-        ensure(text(&value, "apiVersion")? == "serverware.nativeIngressAttestationExpectations/v1",
+        ensure(text(&value, "apiVersion")? == "catchplate.nativeIngressAttestationExpectations/v1",
             "native ingress expectations version differs")?;
         let scope = SessionScope::parse_fields(&value)?;
         let nonce = fixed_b64::<32>(text(&value, "nonceBase64url")?)?;
@@ -54,7 +54,7 @@ impl SessionScope {
             "clientTrustBundleSha256", "expectedPcrs", "expectedEif", "expectedModuleId",
             "maxAgeSeconds", "futureSkewSeconds", "ingressHost", "serverInstanceId",
         ])?;
-        ensure(text(&value, "apiVersion")? == "serverware.nativeIngressSessionScope/v1",
+        ensure(text(&value, "apiVersion")? == "catchplate.nativeIngressSessionScope/v1",
             "native ingress session scope version differs")?;
         Self::parse_fields(&value)
     }

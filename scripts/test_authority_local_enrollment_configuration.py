@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from scripts.authority import local_enrollment_configuration as cli
 from scripts.test_authority_local_configuration import fixture as service_fixture, sealed
 from scripts.test_authority_local_keys import synthetic_audit_inventory_original
-from serverware import authority_local_enrollment_configuration as local
+from catchplate import authority_local_enrollment_configuration as local
 
 PIN = "sha256:" + "1" * 64
 
@@ -148,7 +148,7 @@ class EnrollmentConfigurationTests(unittest.TestCase):
         raw = local.canonical(selected)
         fd = sealed(raw)
         try:
-            with patch.dict(os.environ, {"SERVERWARE_RELEASE_CHANNEL": "dev", "SERVERWARE_PROCESS_MODE": "metadata-bootstrap"}):
+            with patch.dict(os.environ, {"CATCHPLATE_RELEASE_CHANNEL": "dev", "CATCHPLATE_PROCESS_MODE": "metadata-bootstrap"}):
                 owner = local.LocalEnrollmentConfigurationBuilder(approval_fd=fd, approval_sha256=local.sha(raw))
                 output = owner.build()
                 self.assertEqual(local.document(output, local.io.MAX_PUBLIC)["schema"], local.configuration.SCHEMA)

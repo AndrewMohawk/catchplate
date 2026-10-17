@@ -28,7 +28,7 @@ dedicated Ed25519 binding signature. The independently registered key verifies
 the complete original recipient request. Holder possession alone is insufficient.
 
 Both strict routes require an exact POST path, no query and one valid original
-`X-Serverware-Response-Nonce` before effects. The existing ASGI signer authenticates
+`X-Catchplate-Response-Nonce` before effects. The existing ASGI signer authenticates
 the actual final response bytes and request context; these routes do not create
 another signer or accept caller-provided response evidence.
 

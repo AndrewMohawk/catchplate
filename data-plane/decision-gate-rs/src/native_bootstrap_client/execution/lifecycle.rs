@@ -98,7 +98,7 @@ pub(in super::super) fn execute(prepared: PreparedStart, parents: Arc<ExecutionP
     let (retirement, host) = if let Some(host) = host {
         let (absent, removed, host) = guarded.retire(&cleanup, host)?;
         let operation = guarded.operation_sha256().iter().map(|b| format!("{b:02x}")).collect::<String>();
-        (Some(RetirementObservation { schema: "serverware.nativeExecutionRetirementObservation/v1",
+        (Some(RetirementObservation { schema: "catchplate.nativeExecutionRetirementObservation/v1",
             result_scope: "local-owned-network-and-cgroup-retirement-observation",
             operation_sha256: format!("sha256:{operation}"), cleanup_before_boottime_ns: guarded.cleanup_boottime_ns(),
             host_veth_absence: absent, cgroup_removal: removed, action_authorization: None, ok_for_action: false }), Some(host))
@@ -121,8 +121,8 @@ pub(in super::super) fn execute(prepared: PreparedStart, parents: Arc<ExecutionP
     let originals = if publishing { Some(TerminalOriginals {
         guardian: cleanup.guardian().original().to_vec(), events: cleanup.child().leaf_empty().original().to_vec(),
         leader: cleanup.child().original().to_vec() }) } else { None };
-    let mut observation = LifecycleObservation { schema: if retiring { "serverware.nativeExecutionObservation/v2" }
-            else { "serverware.nativeExecutionObservation/v1" },
+    let mut observation = LifecycleObservation { schema: if retiring { "catchplate.nativeExecutionObservation/v2" }
+            else { "catchplate.nativeExecutionObservation/v1" },
         result_scope: "local-single-attempt-execution-and-cleanup-observation",
         execution, output: cleanup.into_output(), cleanup: observations, workload_succeeded,
         action_authorization: None, ok_for_action: false, retirement,

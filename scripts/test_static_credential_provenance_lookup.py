@@ -17,15 +17,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "scripts")]
 
 import test_authority_static_rotation as fixture
-from serverware import authority_request_commitment as commitment
-from serverware import control_plane_static_credential_provenance as lookup
-from serverware import control_plane_static_credential_rotation as http
-from serverware import db
+from catchplate import authority_request_commitment as commitment
+from catchplate import control_plane_static_credential_provenance as lookup
+from catchplate import control_plane_static_credential_rotation as http
+from catchplate import db
 
 # Currentness._rows is the genuine SELECT/serializer implementation. Its
 # unrelated live custody transport cannot be initialized in this inert test.
-with mock.patch.dict(sys.modules, {"serverware.control_plane_custody_client": SimpleNamespace()}):
-    from serverware import control_plane_credential_currentness
+with mock.patch.dict(sys.modules, {"catchplate.control_plane_custody_client": SimpleNamespace()}):
+    from catchplate import control_plane_credential_currentness
 
 C, H, B = fixture.C, fixture.H, fixture.B
 
@@ -46,15 +46,15 @@ def retained(f, version):
     digest = codec.request_digest(codec.OPERATION, values)
     operation_id = commitment.operation_id(codec.OPERATION, digest)
     capability = H(b"synthetic capability")
-    transaction = commitment.framed_digest("serverware.policyAuthorityPlannerTransaction/v1",
+    transaction = commitment.framed_digest("catchplate.policyAuthorityPlannerTransaction/v1",
         operation_id.encode(), digest.encode(), capability.encode())
-    typed = {"schema": "serverware.policyAuthorityV9Request/v1", "operation": codec.OPERATION,
+    typed = {"schema": "catchplate.policyAuthorityV9Request/v1", "operation": codec.OPERATION,
         "operationId": operation_id, "requestDigest": digest,
         "handler": fixture.contract.operation_spec(codec.OPERATION)["handler"],
         "operationManifestDigest": fixture.contract.OPERATION_MANIFEST_DIGEST,
         "arguments": {**values, "businessIntent": fixture.contract.synthesize_business_intent(codec.OPERATION, values)}}
     measured = {name: H(name.encode()) for name in lookup._PLAN_FIELDS}
-    measured.update(schema="serverware.policyAuthorityMeasuredPlan/v3", operation=codec.OPERATION,
+    measured.update(schema="catchplate.policyAuthorityMeasuredPlan/v3", operation=codec.OPERATION,
         operationId=operation_id, requestDigest=digest, capabilityId=capability, plannerTransactionId=transaction,
         sourceRevision=fixture.contract.SOURCE_REVISION, authoritySchemaVersion=fixture.contract.SCHEMA_VERSION,
         operationContractDigest=fixture.contract.OPERATION_MANIFEST_DIGEST,
@@ -62,7 +62,7 @@ def retained(f, version):
         handlerContractDigest=fixture.contract.handler_contract_digest(codec.OPERATION))
     field = "staticCredentialCustodyEvidence" if version == 1 else "staticCredentialRotationEvidence"
     payload = {name: None for name in lookup._PAYLOAD_FIELDS}
-    payload.update(schema="serverware.policyAuthorityPlannerResponse/v3", measuredPlan=measured,
+    payload.update(schema="catchplate.policyAuthorityPlannerResponse/v3", measuredPlan=measured,
         typedRequest=typed, **{field: evidence})
     raw = C(payload)
     row = dict(planner_transaction_id=transaction, operation=codec.OPERATION, operation_id=operation_id,
@@ -77,7 +77,7 @@ def retained(f, version):
     head = {"credential_id": f["item"], "last_version": version, "updated_at": stamp}
     predecessor = None if version == 1 else values["request"]["predecessorBarrierSha256"]
     root = fixture.current.new_root(f["item"], version, digest, stamp, predecessor=predecessor)
-    event = {"schema": "serverware.staticCredentialCreationAudit/v1" if version == 1 else fixture.provenance.ROTATION_AUDIT_SCHEMA,
+    event = {"schema": "catchplate.staticCredentialCreationAudit/v1" if version == 1 else fixture.provenance.ROTATION_AUDIT_SCHEMA,
         "operation": codec.OPERATION, "requestDigest": digest, "credentialId": f["item"], "credentialVersion": version,
         "candidateSha256": codec.approval_payload_digest(values), "intentSha256": native["intentSha256"],
         "nativeGenerationSha256": H(values["request"]["nativeGenerationOriginal"].encode()),
@@ -88,7 +88,7 @@ def retained(f, version):
         event["credentialPostSha256"] = H(fixture.rows.credential_original(credential))
     outbox = {**f["outbox"], "id": fixture.provenance.generation_outbox_id(original),
         "event_type": codec.OPERATION, "event_json": C(event).decode(),
-        "event_digest": fixture.core.framed_digest("serverware.metadataAuditOutboxEvent/v1", C(event)),
+        "event_digest": fixture.core.framed_digest("catchplate.metadataAuditOutboxEvent/v1", C(event)),
         "created_at": stamp, "audited_at": fixture.STAMP(f["now"] + 1_000_000_000)}
     return dict(row=row, payload=payload, original=original, credential=credential, head=head,
         root=root, outbox=outbox, version=version, duplicate=False, change=False)

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/live-witness-head.v1.schema.json",
-  "title": "Serverware live witness head v1",
+  "$id": "https://catchplate.invalid/schemas/live-witness-head.v1.schema.json",
+  "title": "Catchplate live witness head v1",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -13,7 +13,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.liveWitnessHead/v1"
+      "const": "catchplate.liveWitnessHead/v1"
     },
     "payload": {
       "type": "object",
@@ -91,7 +91,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationWitnessInvocationBinding/v1"
+          "const": "catchplate.attestationWitnessInvocationBinding/v1"
         },
         "currentRequestSha256": {"$ref": "#/$defs/sha256"},
         "producerEphemeralKeySpkiSha256": {"$ref": "#/$defs/sha256"},

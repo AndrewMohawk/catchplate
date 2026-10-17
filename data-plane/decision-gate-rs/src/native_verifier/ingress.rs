@@ -19,9 +19,9 @@ const MAX_INPUT: usize = 64 * 1024;
 const MAX_CERTIFICATE: usize = 16 * 1024;
 const MAX_DOCUMENT: usize = 12 * 1024;
 const MAX_SPKI: usize = 1024;
-const KEY_BINDING_DOMAIN: &[u8] = b"serverware/enclave-runtime-key-binding/v1\0";
-const INGRESS_BINDING_DOMAIN: &[u8] = b"serverware/native-tls13-mandatory-client-auth/v1\0";
-const CLIENT_TRUST_DOMAIN: &[u8] = b"serverware/mutual-tls-client-trust/v1\0";
+const KEY_BINDING_DOMAIN: &[u8] = b"catchplate/enclave-runtime-key-binding/v1\0";
+const INGRESS_BINDING_DOMAIN: &[u8] = b"catchplate/native-tls13-mandatory-client-auth/v1\0";
+const CLIENT_TRUST_DOMAIN: &[u8] = b"catchplate/mutual-tls-client-trust/v1\0";
 const CLIENT_TRUST_PROFILE: &str = "native-framed-der-v1";
 
 pub(super) enum EvidenceProfile { Startup, Session, SessionClientTrust }
@@ -77,11 +77,11 @@ pub(super) fn verify_original(raw: &[u8], expected: &SessionScope, roots: &Trust
     ensure(*quote_nonce != [0; 32], "native ingress quote nonce must be nonzero")?;
     let (scope, version, expose_client_trust) = match profile {
         EvidenceProfile::Startup => ("unverified-startup-public-material",
-            "serverware.nativeIngressPublicEvidence/v1", false),
+            "catchplate.nativeIngressPublicEvidence/v1", false),
         EvidenceProfile::Session => ("unverified-session-public-material",
-            "serverware.nativeIngressPublicEvidence/v1", false),
+            "catchplate.nativeIngressPublicEvidence/v1", false),
         EvidenceProfile::SessionClientTrust => ("unverified-session-public-material",
-            "serverware.nativeIngressPublicEvidence/v2", true),
+            "catchplate.nativeIngressPublicEvidence/v2", true),
     };
     ensure(raw.len() > 1 && raw.len() <= MAX_INPUT && raw.last() == Some(&b'\n'),
         "native ingress evidence requires one bounded original JSON line")?;
@@ -340,9 +340,9 @@ impl VerifiedIngress {
         expected: &SessionScope, profile: SummaryProfile) -> Value {
         let (version, pin_field) = match profile {
             SummaryProfile::Expectations =>
-                ("serverware.nativeIngressAttestationVerification/v1", "expectationsSha256"),
+                ("catchplate.nativeIngressAttestationVerification/v1", "expectationsSha256"),
             SummaryProfile::SessionScope =>
-                ("serverware.nativeIngressAttestationVerification/v2", "sessionScopeSha256"),
+                ("catchplate.nativeIngressAttestationVerification/v2", "sessionScopeSha256"),
         };
         let mut result = json!({
             "apiVersion":version,
@@ -363,7 +363,7 @@ impl VerifiedIngress {
             "quoteIssuedAtUnixSeconds":self.issued, "verifiedAtUnixSeconds":self.verified_at,
         });
         if let Some(originals) = &self.client_trust_certificates {
-            result["apiVersion"] = json!("serverware.nativeIngressAttestationVerification/v3");
+            result["apiVersion"] = json!("catchplate.nativeIngressAttestationVerification/v3");
             result["clientTrustProfile"] = json!(CLIENT_TRUST_PROFILE);
             result["clientTrustCertificateCount"] = json!(originals.len());
         }

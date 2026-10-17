@@ -35,7 +35,7 @@ role-4 public key and original NSM document against its own purpose. Forwarded
 certificate headers and configured identity strings confer no authority.
 
 The companion intake policy is explicitly corrected to
-`serverware.policyCanaryIntakeAuthorityPolicy/v2`, exact eight fields. Its old
+`catchplate.policyCanaryIntakeAuthorityPolicy/v2`, exact eight fields. Its old
 embedded `controlPlaneConfigurationDigest` was a hash fixed-point requirement:
 the actual custody/runtime digest equals the authority digest of the whole
 payload, including that policy. The v1 shape is refused, not silently widened.
@@ -100,7 +100,7 @@ history even if a later head points to another slot.
 ## Actual completion and persisted-row proof
 
 The response schema is the distinct closed
-`serverware.policyAuthorityCanaryDeliveryRuntimeResponse/v1`: the existing
+`catchplate.policyAuthorityCanaryDeliveryRuntimeResponse/v1`: the existing
 sixteen runtime fields plus `authorityConfigurationOriginal` and
 `deliveryOriginals`. The latter has exactly:
 
@@ -204,9 +204,9 @@ role-4 signer and dedicated TLS owner, using separate phase signature/NSM
 domains. Each statement has 25 fields (the intake 22 without `batchSha256`, plus
 `slotId`, `requestSha256`, `httpSha256`, `originalExpiresAtEpochNs`). Native
 `bootId` and `canaryBootId` retain their distinct encodings. The signature is
-over `serverware.nativeCanaryDeliveryStatement/v1/PHASE`, NUL and the full
+over `catchplate.nativeCanaryDeliveryStatement/v1/PHASE`, NUL and the full
 canonical ASCII statement. NSM nonce is SHA-256 of
-`serverware/canary-delivery-PHASE-attestation/v1`, NUL, nonce32,
+`catchplate/canary-delivery-PHASE-attestation/v1`, NUL, nonce32,
 SHA-256(statement) and signature64. Phase is `prepare`, `claim` or `recover`.
 
 Before any intake send, that actual native owner must verify the separately

@@ -13,7 +13,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from serverware.http_client import HttpClientError, HttpDeadline, request_json
+from catchplate.http_client import HttpClientError, HttpDeadline, request_json
 
 
 class QuietThreadingHTTPServer(ThreadingHTTPServer):

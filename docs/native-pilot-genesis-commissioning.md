@@ -64,7 +64,7 @@ Cold invocation requires:
   independently approved **supervisor package**, which includes the authority
   scripts and cold producers;
 - `--genesis-configuration-fd` and `--genesis-configuration-sha256`, selecting a
-  protected `serverware.nativePilotGenesisExecution/v1` original containing
+  protected `catchplate.nativePilotGenesisExecution/v1` original containing
   exactly `apiVersion`, the original seven-field `window`, and
   `expiresAtUnixNanos`;
 - `--authority-key PURPOSE=FD` for every source-selected cold key purpose.
@@ -75,7 +75,7 @@ No example descriptor numbers here constitute a runnable provisioned setup.
 The installed package is admitted before key access. The coordinator does not
 derive an approved package inventory from whichever source happens to exist.
 
-Each `serverware.nativePilotGenesisJobRequest/v1` has six fields:
+Each `catchplate.nativePilotGenesisJobRequest/v1` has six fields:
 `apiVersion`, `sequence`, `job`, `deadlineBoottimeNs`, `observation`, and
 `previousResult`. Observations contain newly available literal public originals;
 the previous result retains its exact bytes and SHA-256. The independent
@@ -85,14 +85,14 @@ input, including actual observations and preceding signatures.
 Before replying, that supervisor must install these root-owned `0400` files:
 
 ```text
-/etc/serverware/native-genesis-authority/<fixed-job>.input.json
-/etc/serverware/native-genesis-authority/<fixed-job>.approval.json
+/etc/catchplate/native-genesis-authority/<fixed-job>.input.json
+/etc/catchplate/native-genesis-authority/<fixed-job>.approval.json
 ```
 
 The reply binds `sequence`, `job`, `requestSha256`, `inputSha256` and
-`approvalSha256` under `serverware.nativePilotGenesisJobReply/v1`. The separate
+`approvalSha256` under `catchplate.nativePilotGenesisJobReply/v1`. The separate
 approval original binds the request, input, sequence, job and original deadline
-under `serverware.nativePilotGenesisJobApproval/v1`. Unknown jobs, supplied
+under `catchplate.nativePilotGenesisJobApproval/v1`. Unknown jobs, supplied
 paths, extra fields, queued future replies and changed originals are refused.
 Every input is retained through actual cleanup. Frames and aggregate retained
 bytes are bounded; a partial exchange authorizes no retry.
@@ -122,11 +122,11 @@ This corrects an incompatible ordinary Python check: native C9 opens the
 runtime as root, while only credential originals are service-owned. The
 installer neither writes plaintext private seeds nor changes that distinction.
 
-Parent and ordinary files use fixed names directly under `/etc/serverware`.
+Parent and ordinary files use fixed names directly under `/etc/catchplate`.
 Cold native components use fixed role/component names under
-`/etc/serverware/native-pilot-inputs`. Configuration and trust remain separately
+`/etc/catchplate/native-pilot-inputs`. Configuration and trust remain separately
 provisioned prerequisites. The native image's
-`/etc/serverware/native-shadow-guest-launch.json` is a preexisting mount target,
+`/etc/catchplate/native-shadow-guest-launch.json` is a preexisting mount target,
 **not** an output to create or replace. The actual native parent selects the
 distinct host launch original through its retained release/FD4 path.
 
@@ -165,7 +165,7 @@ synthetic supervisor-package compatibility. They do **not** execute a complete
 64-job commissioning ceremony or turn test observation data into live owners.
 
 The exact archive, harnesses, commands and logs are retained at
-`codex-offload/serverware/engineering-builds/90e62b3d-genesis-commissioning-EEzb6G/`.
+`codex-offload/catchplate/engineering-builds/90e62b3d-genesis-commissioning-EEzb6G/`.
 The test batch used one CPU, an empty environment, a private user/network
 namespace and a 240-second outer bound. No protected installation, private-key
 entrypoint, live owner, native service, cloud resource or paid test ran.

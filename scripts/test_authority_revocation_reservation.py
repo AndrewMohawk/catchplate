@@ -19,18 +19,18 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_retention as retention
-from serverware.authority_store import planner_connection as admission
-from serverware.authority_store import revocation_execution as reservation
-from serverware.authority_store import revocation_retention as store
+from catchplate import authority_contract
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_retention as retention
+from catchplate.authority_store import planner_connection as admission
+from catchplate.authority_store import revocation_execution as reservation
+from catchplate.authority_store import revocation_retention as store
 import test_authority_revocation_persistence as persistence_oracle
 import test_authority_revocation_plan as oracle
 import test_authority_revocation_wire as wire_oracle
 
 
-TABLE = "serverware_metadata.policy_authority_execution_envelopes"
+TABLE = "catchplate_metadata.policy_authority_execution_envelopes"
 RESERVATION_FIELDS = (
     "envelope_id", "parent_envelope_id", "purpose", "operation", "operation_id",
     "request_digest", "capability_id", "planner_transaction_id", "authorization_projection_digest",
@@ -53,7 +53,7 @@ class _RequestCeiling:
 
 def expected_request(fixture):
     parent, _ = persistence_oracle.expected_rows(fixture, fixture.now_epoch_ns)
-    return {"schema": "serverware.policyAuthorityRevocationExecutionRequest/v1",
+    return {"schema": "catchplate.policyAuthorityRevocationExecutionRequest/v1",
         "planProtocol": "revocation-v4", "retainedRecordDigest": parent["retained_record_digest"],
         "rootTransitionDigest": fixture.payload["measuredPlan"]["rootTransitionDigest"],
         "typedRequest": copy.deepcopy(fixture.semantic.request)}
@@ -359,7 +359,7 @@ class RevocationReservationTests(unittest.TestCase):
                         terminal_receipt_json=receipt.decode("ascii"), terminal_receipt_digest=oracle.sha(receipt))
                 else:
                     terminal.update(failure_code="fixture-failure", failure_digest=oracle.framed(
-                        "serverware.policyAuthorityExecutionFailure/v1", b"fixture-failure"))
+                        "catchplate.policyAuthorityExecutionFailure/v1", b"fixture-failure"))
                 # Real table status/nullability shapes, not a claim that this
                 # synthetic terminal response passed an execution consumer.
                 recorder.envelopes[identity] = terminal

@@ -25,7 +25,7 @@ fn config(basic: bool, renewed: bool) -> Value {
 
 fn snapshot(value: &Value) -> Snapshot {
     let mut snapshot = (*crate::tests::test_snapshot(1)).clone();
-    snapshot.policy_id = "serverware-operator-demo".into();
+    snapshot.policy_id = "catchplate-operator-demo".into();
     let principal = &mut snapshot.principals[0];
     principal.source_cidrs = vec!["127.0.0.0/8".parse().unwrap()];
     principal.required_headers = BTreeMap::from([("x-agent-class".into(), "build".into())]);
@@ -156,7 +156,7 @@ fn managed_parser_rejects_nonfinite_unknown_and_malformed_fields() {
         }
     }
     for (path, raw) in [
-        ("/managedRenewal/schema", json!("serverware.proxyTokenRenewal/v2")),
+        ("/managedRenewal/schema", json!("catchplate.proxyTokenRenewal/v2")),
         ("/managedRenewal/enrollmentId", json!("not-a-uuid")),
         ("/managedRenewal/previousToken", Value::Null),
         ("/managedRenewal/previousToken/tokenSha256", json!(hash(true))),
@@ -197,12 +197,12 @@ fn enrollment_of_expired_manual_token_does_not_revive_it() {
 #[test]
 fn bearer_only_option_requires_both_signed_operator_profile_and_runtime() {
     let config = config(false, true);
-    let mut raw = json!({"apiVersion":"serverware.policy/v1", "metadata":{"id":"serverware-operator-demo"},
+    let mut raw = json!({"apiVersion":"catchplate.policy/v1", "metadata":{"id":"catchplate-operator-demo"},
         "principals":[{"proxyAuthorization":config}]});
     assert!(validate_raw_policy(&raw).is_ok());
-    raw["apiVersion"] = json!("serverware.policy/v2");
+    raw["apiVersion"] = json!("catchplate.policy/v2");
     assert!(validate_raw_policy(&raw).is_err());
-    raw["apiVersion"] = json!("serverware.policy/v1"); raw["metadata"]["id"] = json!("native");
+    raw["apiVersion"] = json!("catchplate.policy/v1"); raw["metadata"]["id"] = json!("native");
     assert!(validate_raw_policy(&raw).is_err());
     let mut held = snapshot(&config);
     assert!(require_scope(&held, true).is_ok());

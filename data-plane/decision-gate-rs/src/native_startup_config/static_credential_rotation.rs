@@ -1,7 +1,7 @@
 //! Explicit postboot N+1 rotation selection. No creation or OAuth purpose is
 //! implicitly enabled, and the caller retains the complete v25 original.
 use super::*;
-use serverware_decision_gate::native_static_credential_rotation_v1::Configuration as RotationConfiguration;
+use catchplate_decision_gate::native_static_credential_rotation_v1::Configuration as RotationConfiguration;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -15,15 +15,15 @@ struct ConfigurationV25 {
     enrollment_authorizer: EnrollmentAuthorizerV1,
     enrollment_setup_authorizer: EnrollmentAuthorizerV1,
     enrollment_proxy_endpoint: String,
-    credential_currentness: serverware_decision_gate::native_currentness_v1::Configuration,
-    secret_broker: serverware_decision_gate::native_secret_broker_v1::Configuration,
+    credential_currentness: catchplate_decision_gate::native_currentness_v1::Configuration,
+    secret_broker: catchplate_decision_gate::native_secret_broker_v1::Configuration,
     measured_audit: super::super::native_audit_transport::Configuration,
-    encrypted_service_tokens: serverware_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
+    encrypted_service_tokens: catchplate_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
     measured_static_credential_rotation: RotationConfiguration,
-    guest_inspector: serverware_decision_gate::GuestInspectorConfiguration,
-    guest_cohort: serverware_decision_gate::GuestCohortConfiguration,
-    guest_role_key_provisioner: serverware_decision_gate::GuestRoleKeyProvisionerConfiguration,
-    gate_cgroup: serverware_decision_gate::native_gate_cgroup::Configuration,
+    guest_inspector: catchplate_decision_gate::GuestInspectorConfiguration,
+    guest_cohort: catchplate_decision_gate::GuestCohortConfiguration,
+    guest_role_key_provisioner: catchplate_decision_gate::GuestRoleKeyProvisionerConfiguration,
+    gate_cgroup: catchplate_decision_gate::native_gate_cgroup::Configuration,
     postboot_audit_vsock_port: u32,
 }
 
@@ -39,9 +39,9 @@ pub(super) fn configuration(raw: &[u8])
     }
     let original: ConfigurationV25 = serde_json::from_value(value)
         .map_err(|_| "rotation native startup violates its closed contract")?;
-    ensure(original.api_version == "serverware.nativeStartupConfiguration/v25"
-        && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
-        && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+    ensure(original.api_version == "catchplate.nativeStartupConfiguration/v25"
+        && original.enrollment_authorizer.api_version == "catchplate.nativeEnrollmentAuthorizer/v1"
+        && original.enrollment_setup_authorizer.api_version == "catchplate.nativeEnrollmentSetupAuthorizer/v1",
         "rotation native startup authorizer version differs")?;
     original.credential_currentness.validate()?;
     original.secret_broker.validate()?;

@@ -25,7 +25,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_witness_journal as journal
+from catchplate import authority_witness_journal as journal
 
 
 RECORD = b'{"kind":"fixture","stateSequence":1}\n'
@@ -432,7 +432,7 @@ class WitnessJournalIOTests(unittest.TestCase):
 
 
 def witness_source():
-    path = ROOT / "serverware/authority_witness.py"
+    path = ROOT / "catchplate/authority_witness.py"
     if path.stat().st_size > 512 * 1024:
         raise AssertionError("witness source exceeds fixture inspection bound")
     source = path.read_text(encoding="utf-8")
@@ -461,7 +461,7 @@ class WitnessJournalSourceLinkageTests(unittest.TestCase):
     def test_guarded_witness_uses_shared_helper_after_flock_and_before_activation(self):
         source, parsed, methods = witness_source()
         imports = [node for node in parsed.body if isinstance(node, ast.ImportFrom)
-                   and node.module == "serverware.authority_witness_journal"]
+                   and node.module == "catchplate.authority_witness_journal"]
         self.assertEqual(len(imports), 1)
         self.assertEqual({(item.name, item.asname) for item in imports[0].names},
                          {("JournalConflict", None), ("WitnessJournalIO", None)})
@@ -570,7 +570,7 @@ class WitnessJournalSourceLinkageTests(unittest.TestCase):
         self.assertIn("directory_identity_after.st_mtime_ns", load)
         self.assertIn("directory_identity_after.st_ctime_ns", load)
         self.assertIn("witness state is below its externally pinned high-water", load)
-        helper_path = ROOT / "serverware/authority_witness_journal.py"
+        helper_path = ROOT / "catchplate/authority_witness_journal.py"
         self.assertLessEqual(helper_path.stat().st_size, 32 * 1024)
         helper = ast.parse(helper_path.read_text(encoding="utf-8"))
         self.assertEqual({node.module for node in helper.body if isinstance(node, ast.ImportFrom)},

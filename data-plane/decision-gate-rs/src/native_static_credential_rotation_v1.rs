@@ -11,13 +11,13 @@ use std::sync::Arc;
 
 pub use crate::native_oauth_exchange_v1::{origin, BrowserTls};
 pub(crate) use crate::native_oauth_refresh_v1::{ensure, sha};
-pub const CHANNEL: &str = "serverware.nativeStaticCredentialRotationChannel/v1";
-pub const SCHEMA: &str = "serverware.nativeStaticCredentialRotationStatement/v1";
-pub const ATTESTATION_DOMAIN: &[u8] = b"serverware/native-static-credential-rotation-attestation/v1\0";
+pub const CHANNEL: &str = "catchplate.nativeStaticCredentialRotationChannel/v1";
+pub const SCHEMA: &str = "catchplate.nativeStaticCredentialRotationStatement/v1";
+pub const ATTESTATION_DOMAIN: &[u8] = b"catchplate/native-static-credential-rotation-attestation/v1\0";
 pub const SIGN_OPERATION: &str = "nativeStaticCredentialRotation.sign/v1";
 pub const OPERATION: &str = "credential.static.rotate";
-pub const CANDIDATE_RESPONSE: &str = "serverware.nativeStaticCredentialRotationCandidateResponse/v1";
-pub const PREPARATION_RESPONSE: &str = "serverware.nativeStaticCredentialRotationPreparationResponse/v1";
+pub const CANDIDATE_RESPONSE: &str = "catchplate.nativeStaticCredentialRotationCandidateResponse/v1";
+pub const PREPARATION_RESPONSE: &str = "catchplate.nativeStaticCredentialRotationPreparationResponse/v1";
 const MAX_ARGUMENT: usize = 2 * 1024 * 1024;
 const MAX_SECRET: usize = 1024 * 1024;
 const MAX_GENERATION: usize = (MAX_SECRET * 4 + 2) / 3 + 8192;
@@ -81,7 +81,7 @@ pub struct RotationPolicy {
 impl RotationPolicy {
     pub fn validate(&self) -> Result<(), String> {
         self.credential_policy.validate()?;
-        ensure(self.schema == "serverware.staticCredentialRotationAuthorityPolicy/v1"
+        ensure(self.schema == "catchplate.staticCredentialRotationAuthorityPolicy/v1"
             && self.native_custody_purpose == SCHEMA
             && kek(&self.native_secret_kek_id)
             && (1..=30).contains(&self.operation_max_seconds) && (1..=3600).contains(&self.intent_max_seconds)
@@ -100,7 +100,7 @@ pub struct Configuration {
 impl Configuration {
     pub fn validate(&self) -> Result<(), String> {
         self.static_credential_rotation_policy.validate()?;
-        ensure(self.api_version == "serverware.nativeStaticCredentialRotationConfiguration/v1"
+        ensure(self.api_version == "catchplate.nativeStaticCredentialRotationConfiguration/v1"
             && current::digest(&self.control_plane_configuration_digest)
             && (1..=16).contains(&self.candidate_capacity) && deployment(&self.deployment_id)
             && text(&self.instance_id, 512) && self.instance_id.starts_with("spiffe://")
@@ -183,7 +183,7 @@ fn generation(raw: &str) -> Result<Value, String> {
     fields(&value, &["apiVersion", "purpose", "actorId", "controlPlaneConfigurationDigest", "intentSha256",
         "credentialId", "credentialVersion", "envelope"])?;
     ensure(canonical_ascii_bytes(&value)? == raw.as_bytes()
-        && value["apiVersion"] == "serverware.nativeStaticCredentialRotationGeneration/v1" && value["purpose"] == OPERATION
+        && value["apiVersion"] == "catchplate.nativeStaticCredentialRotationGeneration/v1" && value["purpose"] == OPERATION
         && actor(string(&value["actorId"])?) && current::digest(string(&value["controlPlaneConfigurationDigest"])?)
         && current::digest(string(&value["intentSha256"])?) && current::uuid(string(&value["credentialId"])?)
         && value["credentialVersion"].as_u64().is_some_and(|v| (2..=i64::MAX as u64).contains(&v)), "static generation fields differ")?;
@@ -238,7 +238,7 @@ impl Reply {
                 request.issued_at_epoch_ns, request.expires_at_epoch_ns, config)?;
             let generation_raw = string(&candidate["nativeGenerationOriginal"])?;
             let native = generation(generation_raw)?;
-            ensure(intent.api_version == "serverware.staticCredentialRotationIntent/v1" && intent.operation == OPERATION
+            ensure(intent.api_version == "catchplate.staticCredentialRotationIntent/v1" && intent.operation == OPERATION
                 && candidate["intentOriginal"] == command["intentOriginal"] && candidate["intentSha256"] == sha(raw.as_bytes())
                 && candidate["generationSha256"] == sha(generation_raw.as_bytes())
                 && native["intentSha256"] == candidate["intentSha256"] && native["actorId"] == intent.actor_id
@@ -337,7 +337,7 @@ impl Prepared {
         encoded(signature, 64, Some(64))?;
         let key = &evidence["nativeKeyEvidence"];
         fields(key, &["apiVersion", "responseProofPublicKey", "attestationDocumentB64"])?;
-        ensure(key["apiVersion"] == "serverware.nativeResponseProofKeyEvidence/v1", "static native key evidence differs")?;
+        ensure(key["apiVersion"] == "catchplate.nativeResponseProofKeyEvidence/v1", "static native key evidence differs")?;
         current::bytes32(string(&key["responseProofPublicKey"])?)?;
         encoded(string(&key["attestationDocumentB64"])?, 12 * 1024, None)?;
         ensure(canonical_ascii_bytes(&evidence)?.len() <= 32 * 1024, "static evidence bound")?;

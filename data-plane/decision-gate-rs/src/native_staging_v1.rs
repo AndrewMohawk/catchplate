@@ -114,7 +114,7 @@ pub(crate) fn verify(configuration: &Configuration, evidence: &NativeEvidence, n
         && statement.control_plane_response_signing_key_id == assignment.control_plane_response_signing_key_id
         && binding(&statement.original)?.transaction.policy_sha256 == assignment.policy_hash,
         "native staging signer is outside independently admitted purpose")?;
-    ensure(evidence.native_key_evidence.api_version == "serverware.nativeResponseProofKeyEvidence/v1",
+    ensure(evidence.native_key_evidence.api_version == "catchplate.nativeResponseProofKeyEvidence/v1",
         "native staging key evidence family differs")?;
     let key: [u8; 32] = fixed(&evidence.native_key_evidence.response_proof_public_key)?;
     let mut spki = vec![0x30,0x2a,0x30,0x05,0x06,0x03,0x2b,0x65,0x70,0x03,0x21,0x00]; spki.extend(key);
@@ -123,10 +123,10 @@ pub(crate) fn verify(configuration: &Configuration, evidence: &NativeEvidence, n
         .ok_or("native staging signature family differs")?)?;
     VerifyingKey::from_bytes(&key).map_err(|_| "native staging public key invalid")?
         .verify(&preimage(statement)?, &Signature::from_bytes(&signature)).map_err(|_| "native staging signature failed")?;
-    let mut boot = Sha256::new(); boot.update(b"serverware/native-proof-custody-boot/v1\0");
+    let mut boot = Sha256::new(); boot.update(b"catchplate/native-proof-custody-boot/v1\0");
     boot.update(fixed::<32>(&assignment.boot_id)?); boot.update(digest_bytes(&assignment.key_id)?);
     boot.update(digest_bytes(&assignment.control_plane_response_signing_key_id)?);
-    let mut user_data = b"serverware/enclave-runtime-key-binding/v1\0\x04".to_vec();
+    let mut user_data = b"catchplate/enclave-runtime-key-binding/v1\0\x04".to_vec();
     for value in [&assignment.release_record_sha256,&assignment.policy_hash,&assignment.configuration_sha256,
         &assignment.ca_certificate_sha256,&assignment.ca_public_key_spki_sha256,&assignment.expected_binary_digest] {
         user_data.extend(digest_bytes(value)?);

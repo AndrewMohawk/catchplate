@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT))
 from scripts import test_native_jit_broker_channel as channel
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-SCHEMA = "serverware.nativeJitRustContractFixture/v1"
+SCHEMA = "catchplate.nativeJitRustContractFixture/v1"
 BOUNDARY = "synthetic-local-process-no-native-admission"
 MAX_FIXTURE_BYTES = 128 * 1024
 CASE_FIELDS = {"name", "configurationOriginal", "commandOriginal", "responseOriginal",
@@ -130,7 +130,7 @@ class NativeJitRustContractTests(unittest.TestCase):
                 self.assertEqual(opened["redacted_display"]["numbers"], [-0.5, 1e-5, 1e20, -(2**64 + 17)])
                 for spelling in ("1e-05", "1e+20", "18446744073709551633", "-18446744073709551633"):
                     self.assertTrue(spelling in case["commandOriginal"], "canonical private number spelling changed")
-                wrapper = {"schema": "serverware.jitCanonicalReviewPayload/v1",
+                wrapper = {"schema": "catchplate.jitCanonicalReviewPayload/v1",
                     "url": documents["url"], "canonical_request": documents["canonical_request"]}
                 self.assertEqual(len(response["pair"]["items"]), 2)
                 for item, plaintext in zip(response["pair"]["items"], (C(wrapper), C(documents["redacted_display"]))):

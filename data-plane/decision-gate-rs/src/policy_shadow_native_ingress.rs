@@ -1,9 +1,9 @@
 //! Explicit native early sampling. This HMAC commits only the actual opening
 //! context; it is deliberately NOT a ProtectedRequestFacts commitment.
 use super::*;
-pub(crate) const EVENT:&str="serverware.nativeShadowIngressAdmissionEvent/v1";
-pub(crate) const DOMAIN:&[u8]=b"serverware.nativeIngressSamplingCommitment/v1";
-pub(crate) fn is_opening_event(tag:Option<&str>)->bool{matches!(tag,Some("serverware.policyShadowIngressAdmissionEvent/v1"|EVENT))}
+pub(crate) const EVENT:&str="catchplate.nativeShadowIngressAdmissionEvent/v1";
+pub(crate) const DOMAIN:&[u8]=b"catchplate.nativeIngressSamplingCommitment/v1";
+pub(crate) fn is_opening_event(tag:Option<&str>)->bool{matches!(tag,Some("catchplate.policyShadowIngressAdmissionEvent/v1"|EVENT))}
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(crate) struct Context {
@@ -16,7 +16,7 @@ pub(crate) struct Context {
 impl Context {
     pub(crate) fn from_generation(generation:&ShadowGenerationIdentity,request:Sha256Digest,sequence:u64,observed:i64)->Result<Self,ShadowError>{
         let (key,epoch)=generation.request_commitment_key_binding();
-        let value=Self{api_version:"serverware.nativeIngressSamplingContext/v1".into(),assignment_payload_sha256:generation.assignment_payload_sha256().clone(),
+        let value=Self{api_version:"catchplate.nativeIngressSamplingContext/v1".into(),assignment_payload_sha256:generation.assignment_payload_sha256().clone(),
             assignment_revision:generation.assignment_revision(),runtime_boot_id_sha256:generation.runtime_boot_id_sha256().clone(),
             generation_id:generation.generation_id().clone(),request_binding_sha256:request,ingress_sequence:sequence,
             sampling_basis_points:generation.sampling_basis_points(),key_id:key.clone(),key_epoch:epoch,observed_at_unix_nanos:observed};
@@ -24,7 +24,7 @@ impl Context {
     }
     pub(crate) fn validate(&self,generation:&ShadowGenerationIdentity)->Result<(),ShadowError>{
         generation.validate()?;let (key,epoch)=generation.request_commitment_key_binding();let (start,end)=generation.assignment_window_unix_nanos();
-        if self.api_version!="serverware.nativeIngressSamplingContext/v1" || &self.assignment_payload_sha256!=generation.assignment_payload_sha256()
+        if self.api_version!="catchplate.nativeIngressSamplingContext/v1" || &self.assignment_payload_sha256!=generation.assignment_payload_sha256()
             || self.assignment_revision!=generation.assignment_revision() || &self.runtime_boot_id_sha256!=generation.runtime_boot_id_sha256()
             || &self.generation_id!=generation.generation_id() || self.ingress_sequence<generation.ingress_range_start_sequence()
             || self.sampling_basis_points!=generation.sampling_basis_points() || &self.key_id!=key || self.key_epoch!=epoch
@@ -66,7 +66,7 @@ pub(crate) struct Wire {
 impl Wire {
     pub(crate) fn require_binding(&self,generation:&ShadowGenerationIdentity,request:&Sha256Digest,first:u64,last:u64)->Result<(),ShadowError>{
         let c=&self.sampling_commitment.context;c.validate(generation)?;
-        if self.api_version!="serverware.nativeIngressCustodyAdmission/v1" || &c.request_binding_sha256!=request
+        if self.api_version!="catchplate.nativeIngressCustodyAdmission/v1" || &c.request_binding_sha256!=request
             || first!=generation.ingress_range_start_sequence() || c.ingress_sequence<first || c.ingress_sequence>last
             || !self.opening_spill_receipt.matches_event(&self.sampling_commitment.event(generation)?) {
             return Err(ShadowError::BindingDrift);

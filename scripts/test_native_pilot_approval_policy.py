@@ -22,7 +22,7 @@ from cryptography.exceptions import InvalidSignature
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 from scripts import test_native_pilot_lifecycle_inputs as source_fixture
-from serverware import native_pilot_approval_policy as policy
+from catchplate import native_pilot_approval_policy as policy
 
 p = policy.p
 ERRORS = (ValueError, InvalidSignature)
@@ -72,11 +72,11 @@ def pending(prepared, job="driver-bootstrap", *, payload=None):
     index = tuple(item.name for _, item in policy.ADOPTED).index(job)
     conductor_sequence = tuple(policy.adopted.profile.JOBS).index(phase) + 1
     deadline = prepared["deadline"] - prepared["_reserve"] if phase in ("generation-origin", "shutdown") else prepared["startupDeadline"]
-    conductor = {"apiVersion": "serverware.nativePilotOperatorRequest/v2", "sequence": conductor_sequence,
+    conductor = {"apiVersion": "catchplate.nativePilotOperatorRequest/v2", "sequence": conductor_sequence,
         "phase": phase, "payload": {} if payload is None else payload,
         "deadlineBoottimeNs": str(deadline), "expiresAtUnixNanos": str(prepared["epochLimit"])}
     conductor_raw = p.canonical(conductor)
-    observed = {"apiVersion": "serverware.nativePilotAdoptedSupervisorObservation/v1",
+    observed = {"apiVersion": "catchplate.nativePilotAdoptedSupervisorObservation/v1",
         "policySha256": p.sha(b"synthetic actual bootstrap policy pin"),
         "catalogueSha256": p.sha(policy.lifecycle.policy.catalogue_original()),
         "intakeConfigurationSha256": p.sha(b"synthetic actual intake pin"),
@@ -248,7 +248,7 @@ class ApprovalPolicyControls(unittest.TestCase):
         value["adopted"]["stop"] = {"rule": policy.INTERACTIVE_STOP, "selection": {"action": {
             "action": "run-interactive", **{name: interval[name] for name in policy.lifecycle.interactive.FIELDS[1:]}}}}
         prepared = prepare(self.source, value)
-        handoff = {"apiVersion": "serverware.nativeGenerationOriginHandoff/v1", "okForAction": False,
+        handoff = {"apiVersion": "catchplate.nativeGenerationOriginHandoff/v1", "okForAction": False,
             "automaticRetryAllowed": False, "originSha256": p.sha(b"actual transcript origin test bytes")}
         packet = pending(prepared, "stop", payload={"originHandoff": handoff})
         selected = policy.selection(prepared, "adopted", "stop", packet)

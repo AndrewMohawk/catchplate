@@ -374,7 +374,7 @@ def prepare_snapshot(repository, revision, output, *, predecessor=None,
             manifest = [[name, entries[name][0], entries[name][1], records[name]["sha256"],
                          format(stat.S_IMODE(records[name]["stamp"][2]), "04o")]
                         for name in sorted(entries)]
-            return {"schema": "serverware.operatorBuildSnapshot/v1", "ok": True,
+            return {"schema": "catchplate.operatorBuildSnapshot/v1", "ok": True,
                     "revision": revision, "tree": tree_oid, "source": str(output),
                     "predecessorRevision": predecessor_revision, "files": len(entries),
                     "bytes": total, "reusedMtimes": reused, "freshMtimes": len(entries) - reused,

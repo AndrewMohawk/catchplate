@@ -7,9 +7,9 @@ import inspect
 import unittest
 from unittest import mock
 
-from serverware import authority_contract as authority
-from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
-from serverware.authority_store import recovery_history_pages as pages
+from catchplate import authority_contract as authority
+from catchplate.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
+from catchplate.authority_store import recovery_history_pages as pages
 
 
 def work():

@@ -15,7 +15,7 @@ before creating a child while coverage is incomplete.
 Supervisor commissioning policy/v14 adds `helperInitialHistoriesOriginal`, with
 purpose `initial-driver-bootstrap-precreation-endpoints-generations-and-helper-histories`.
 The nested policy has exactly `apiVersion`, selecting
-`serverware.nativePilotSupervisorHelperInitialPolicy/v1`, and
+`catchplate.nativePilotSupervisorHelperInitialPolicy/v1`, and
 `supplementalEndpointRoles`. Its three roles must be the native-ordered complement
 of the helper's existing approved primary role within `settlement-store`,
 `fence-authority`, `cgroup-executor`, `termination-ledger`.
@@ -100,7 +100,7 @@ data; it does not authenticate a full input or acquire a real phase owner.
 
 The exact archive, harness, commands, logs, result and eight-file verified
 checksum manifest are retained locally at
-`/home/catchplate/codex-offload/serverware/engineering-builds/0295499c-helper-ceremonies-wLTBeO/`.
+`/home/catchplate/codex-offload/catchplate/engineering-builds/0295499c-helper-ceremonies-wLTBeO/`.
 Archive SHA-256:
 `66e2e7b8fa34f0795d33a0043358948e59462f41708efa2bfed9be2512deb605`.
 

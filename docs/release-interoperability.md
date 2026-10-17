@@ -5,10 +5,10 @@
 Sigstore/Rekor counters use ProtoJSON int64 representations. The release tools
 must accept canonical nonnegative decimal strings or JSON integers for the
 recognized foreign-protocol counter fields, bounded to signed 64-bit range.
-Serverware-owned generation, sequence, epoch, index and tree-size fields remain
+Catchplate-owned generation, sequence, epoch, index and tree-size fields remain
 integer-only. `scripts/sigstore_json.py` defines explicit bundle, response,
 transparency and image-signature scopes; it is not a general relaxation of the
-Serverware canonical profile.
+Catchplate canonical profile.
 
 Validation preserves representations. Changing `"0"` to `0` changes the outer
 signed statement and its digest, even though both parse to the same counter.
@@ -41,7 +41,7 @@ even if equal. The signed payload and normalized artifact use only
 counter representation described above.
 
 Opaque receipts are no longer supported. Setting
-`SERVERWARE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT=0` fails explicitly before
+`CATCHPLATE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT=0` fails explicitly before
 publication or fixture signing; operators must supply the verifiable receipt
 protocol. Valid receipt signatures do not by themselves establish trusted log
 identity: final verification still uses independently pinned log keys/provider.
@@ -49,7 +49,7 @@ identity: final verification still uses independently pinned log keys/provider.
 ## Readiness checksum publication
 
 Readiness `completionProof/v6` uses a closed `integrity_metadata` object with
-`apiVersion: serverware.readinessChecksum/v1`. Its `publicationToken` is exactly
+`apiVersion: catchplate.readinessChecksum/v1`. Its `publicationToken` is exactly
 32 lowercase hexadecimal characters: a random publication identifier, not a
 generation or rollback counter. The token selects the `<proof>.sha256.<token>`
 sidecar. Owner-only atomic publication and local readers' exact path,
@@ -57,14 +57,14 @@ canonical-byte digest, and current-invocation token/inode checks remain required
 
 Unversioned metadata and the old string-valued `generation` field are rejected,
 not aliased or coerced. Regenerate readiness output through the current writer;
-do not rewrite retained evidence. Serverware generation, sequence and epoch
+do not rewrite retained evidence. Catchplate generation, sequence and epoch
 counters remain integer-only. A checksum supplies no independent authentication:
 this metadata and any embedded host-readiness context remain readiness-only,
 never final release or action authority.
 
 ## Exact latency policy units
 
-`--p99-limit-ms` and `SERVERWARE_COMPLETION_P99_LIMIT_MS` accept canonical decimal
+`--p99-limit-ms` and `CATCHPLATE_COMPLETION_P99_LIMIT_MS` accept canonical decimal
 text with at most six fractional millisecond digits. Conversion is exact, never
 through binary floating point, and must produce a positive integer nanosecond
 value no greater than 9223372036854775807. Exponents, signs, leading zeroes,
@@ -121,7 +121,7 @@ that requires Gmail user `me` does not also need to capture `gmailUser`.
 Release provenance must account for the exact eighteen services declared in
 `docker-compose.production.yml`, each using its required control or gate image.
 The gate shares the control-plane network namespace. Both published ports belong
-to `serverware`: loopback control port 3000 and the explicitly configured proxy
+to `catchplate`: loopback control port 3000 and the explicitly configured proxy
 address on port 8080, targeting 9090. The management listener is not published.
 Custody group memberships and the isolated healthcheck command are closed
 contracts, not arbitrary caller-selected values.

@@ -111,32 +111,32 @@ impl Configuration {
         let has_observation = original.get("setupInstallationObservation").is_some();
         let wire: Wire = serde_json::from_value(original)
             .map_err(|_| "bootstrap client configuration violates its closed contract")?;
-        ensure(((wire.api_version == "serverware.nativeBootstrapClient/v1"
+        ensure(((wire.api_version == "catchplate.nativeBootstrapClient/v1"
                     && !has_installation && !has_egress && !has_attachment && !has_execution)
-                || (wire.api_version == "serverware.nativeBootstrapClient/v2"
+                || (wire.api_version == "catchplate.nativeBootstrapClient/v2"
                     && wire.installation.is_some() && !has_egress && !has_attachment && !has_execution)
-                || (wire.api_version == "serverware.nativeBootstrapClient/v3"
+                || (wire.api_version == "catchplate.nativeBootstrapClient/v3"
                     && wire.egress.is_some() && !has_installation && !has_attachment && !has_execution)
-                || (wire.api_version == "serverware.nativeBootstrapClient/v4"
+                || (wire.api_version == "catchplate.nativeBootstrapClient/v4"
                     && wire.egress.is_some() && wire.attachment.is_some() && !has_installation && !has_execution)
-                || (wire.api_version == "serverware.nativeBootstrapClient/v5"
+                || (wire.api_version == "catchplate.nativeBootstrapClient/v5"
                     && wire.egress.is_some() && wire.attachment.is_some() && wire.execution.is_some()
                     && !has_installation)
-                || (wire.api_version == "serverware.nativeBootstrapClient/v6"
+                || (wire.api_version == "catchplate.nativeBootstrapClient/v6"
                     && wire.egress.is_some() && wire.attachment.is_some() && wire.execution.is_some()
                     && wire.installation.is_some())
-                || (matches!(wire.api_version.as_str(), "serverware.nativeBootstrapClient/v7"
-                        | "serverware.nativeBootstrapClient/v8")
+                || (matches!(wire.api_version.as_str(), "catchplate.nativeBootstrapClient/v7"
+                        | "catchplate.nativeBootstrapClient/v8")
                     && wire.egress.is_some() && wire.attachment.is_some() && wire.execution.is_some()
                     && has_installation)
-                || (wire.api_version == "serverware.nativeBootstrapClient/v9"
+                || (wire.api_version == "catchplate.nativeBootstrapClient/v9"
                     && wire.egress.is_some() && wire.attachment.is_some() && wire.execution.is_some()
                     && wire.installation.is_some() && wire.application_proxy.is_some())
-                || (wire.api_version == "serverware.nativeBootstrapClient/v10"
+                || (wire.api_version == "catchplate.nativeBootstrapClient/v10"
                     && wire.installation.is_some() && wire.setup_installation_observation.is_some()
                     && !has_egress && !has_attachment && !has_execution))
-            && has_application == (wire.api_version == "serverware.nativeBootstrapClient/v9")
-            && has_observation == (wire.api_version == "serverware.nativeBootstrapClient/v10")
+            && has_application == (wire.api_version == "catchplate.nativeBootstrapClient/v9")
+            && has_observation == (wire.api_version == "catchplate.nativeBootstrapClient/v10")
             && (100..=30_000).contains(&wire.timeout_milliseconds),
             "bootstrap client profile or timeout differs")?;
         if let Some(inputs) = &wire.installation { inputs.validate()?; }
@@ -181,9 +181,9 @@ impl Configuration {
             egress: wire.egress,
             attachment: wire.attachment,
             execution: wire.execution,
-            retirement: matches!(wire.api_version.as_str(), "serverware.nativeBootstrapClient/v7"
-                | "serverware.nativeBootstrapClient/v8" | "serverware.nativeBootstrapClient/v9"),
-            outcome: matches!(wire.api_version.as_str(),"serverware.nativeBootstrapClient/v8"|"serverware.nativeBootstrapClient/v9"),
+            retirement: matches!(wire.api_version.as_str(), "catchplate.nativeBootstrapClient/v7"
+                | "catchplate.nativeBootstrapClient/v8" | "catchplate.nativeBootstrapClient/v9"),
+            outcome: matches!(wire.api_version.as_str(),"catchplate.nativeBootstrapClient/v8"|"catchplate.nativeBootstrapClient/v9"),
             application_proxy:wire.application_proxy,
             setup_installation_observation:wire.setup_installation_observation,
         })

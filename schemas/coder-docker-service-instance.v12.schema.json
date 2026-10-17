@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/coder-docker-service-instance.v12.schema.json",
-  "title": "Serverware Docker ServiceInstance V12",
+  "$id": "https://catchplate.dev/schemas/coder-docker-service-instance.v12.schema.json",
+  "title": "Catchplate Docker ServiceInstance V12",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -117,7 +117,7 @@
         {
           "properties": {
             "domain": {
-              "const": "serverware/service-instance/v12"
+              "const": "catchplate/service-instance/v12"
             }
           }
         }

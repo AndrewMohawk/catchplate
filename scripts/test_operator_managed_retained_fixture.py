@@ -22,9 +22,9 @@ from scripts import check_operator_managed_retained_fixture as checker
 
 
 SOURCE = Path('/synthetic/source')
-BINARY = Path('/synthetic/serverware-decision-gate')
+BINARY = Path('/synthetic/catchplate-decision-gate')
 BINARY_SHA = '1' * 64
-ROOT = fixture.base.SCRATCH / 'serverware-managed-retained-private.Unit001'
+ROOT = fixture.base.SCRATCH / 'catchplate-managed-retained-private.Unit001'
 
 
 class RecipeTests(unittest.TestCase):
@@ -34,9 +34,9 @@ class RecipeTests(unittest.TestCase):
 
     def test_three_services_only_without_initializer_provider_upstream_or_external_network(self):
         self.assertEqual(set(self.config), {'name', 'services'})
-        self.assertEqual(set(self.services), {'serverware', 'decision-gate-rs', 'network'})
+        self.assertEqual(set(self.services), {'catchplate', 'decision-gate-rs', 'network'})
         self.assertEqual({name: service['image'] for name, service in self.services.items()},
-            {'serverware': fixture.base.APP_IMAGE, 'decision-gate-rs': fixture.base.GATE_IMAGE, 'network': fixture.base.GATE_IMAGE})
+            {'catchplate': fixture.base.APP_IMAGE, 'decision-gate-rs': fixture.base.GATE_IMAGE, 'network': fixture.base.GATE_IMAGE})
         self.assertEqual(self.config, fixture.build(SOURCE, BINARY, ROOT, expected_binary_sha256=BINARY_SHA))
         for name, service in self.services.items():
             with self.subTest(service=name):
@@ -52,53 +52,53 @@ class RecipeTests(unittest.TestCase):
                 self.assertLessEqual(service['cpus'], 2)
                 self.assertLessEqual(service['pids_limit'], 128)
                 self.assertEqual(service['labels']['traefik.enable'], 'false')
-        self.assertEqual(self.services['serverware']['command'], ['python', '-B', '-m', 'serverware.operator_demo_runner'])
-        self.assertEqual(self.services['decision-gate-rs']['entrypoint'], ['/usr/local/bin/serverware-decision-gate'])
+        self.assertEqual(self.services['catchplate']['command'], ['python', '-B', '-m', 'catchplate.operator_demo_runner'])
+        self.assertEqual(self.services['decision-gate-rs']['entrypoint'], ['/usr/local/bin/catchplate-decision-gate'])
 
     def test_retained_addresses_metadata_urls_and_unconfigured_manifest(self):
         self.assertEqual(fixture.ADDRESSES, ('172.16.249.18', '172.16.249.19', '172.16.249.20'))
         self.assertEqual(fixture.HOSTS.decode().splitlines(), ['127.0.0.1 localhost',
-            '172.16.249.18 demo-upstream', '172.16.249.19 serverware', '172.16.249.20 decision-gate-rs'])
+            '172.16.249.18 demo-upstream', '172.16.249.19 catchplate', '172.16.249.20 decision-gate-rs'])
         self.assertEqual(fixture.RESOLV, b'nameserver 127.0.0.1\noptions attempts:1 timeout:1\n')
         manifest = fixture.manifest()
         self.assertEqual(set(manifest), {'schema', 'operation', 'profile_binding', 'profile_binding_digest',
             'effective_settings', 'effective_settings_digest'})
-        self.assertEqual(manifest['schema'], 'serverware.operatorGoogleGateConfiguration/v1')
+        self.assertEqual(manifest['schema'], 'catchplate.operatorGoogleGateConfiguration/v1')
         self.assertIsNone(manifest['operation'])
         self.assertIsNone(manifest['profile_binding'])
         self.assertIsNone(manifest['profile_binding_digest'])
         self.assertEqual(manifest['effective_settings_digest'], 'sha256:' + fixture.snapshots.digest(manifest['effective_settings']))
-        for name in ('serverware', 'decision-gate-rs'):
+        for name in ('catchplate', 'decision-gate-rs'):
             env = self.services[name]['environment']
-            self.assertEqual(json.loads(env['SERVERWARE_OPERATOR_DEMO_UPSTREAMS']), manifest['effective_settings']['allowed_upstreams'])
-            self.assertEqual(json.loads(env['SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS']), manifest['effective_settings']['fixture_cidrs'])
-            self.assertEqual(env['SERVERWARE_OPERATOR_DEMO_PROXY_URL'], 'https://serverware-proxy.example.com:443')
-            self.assertEqual(env['SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED'], '1')
-        app = self.services['serverware']['environment']
-        self.assertEqual(app['SERVERWARE_PUBLIC_URL'], 'https://serverware-demo.example.com')
-        self.assertEqual(app['SERVERWARE_DECISION_GATE_BASE'], 'http://decision-gate-rs:9091')
-        self.assertEqual(app['SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST'], 'sha256:' + BINARY_SHA)
+            self.assertEqual(json.loads(env['CATCHPLATE_OPERATOR_DEMO_UPSTREAMS']), manifest['effective_settings']['allowed_upstreams'])
+            self.assertEqual(json.loads(env['CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS']), manifest['effective_settings']['fixture_cidrs'])
+            self.assertEqual(env['CATCHPLATE_OPERATOR_DEMO_PROXY_URL'], 'https://catchplate-proxy.example.com:443')
+            self.assertEqual(env['CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED'], '1')
+        app = self.services['catchplate']['environment']
+        self.assertEqual(app['CATCHPLATE_PUBLIC_URL'], 'https://catchplate-demo.example.com')
+        self.assertEqual(app['CATCHPLATE_DECISION_GATE_BASE'], 'http://decision-gate-rs:9091')
+        self.assertEqual(app['CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST'], 'sha256:' + BINARY_SHA)
         gate = self.services['decision-gate-rs']['environment']
-        for field, suffix in (('SERVERWARE_POLICY_TRUST_ROOT_ATTESTATION_URL', '/attestation'),
-                ('SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL', '/api/data-plane/credential-leases'),
-                ('SERVERWARE_CONTROL_PLANE_AUDIT_URL', '/api/data-plane/audit')):
-            self.assertEqual(gate[field], 'http://serverware:3000' + suffix)
-        self.assertEqual(gate['SERVERWARE_DECISION_GATE_MANAGEMENT_HOST'], fixture.ADDRESSES[2])
-        self.assertEqual(gate['SERVERWARE_DATA_PLANE_AUDIT_BATCH_MAX'], '1')
-        self.assertNotIn('SERVERWARE_DATA_PLANE_AUDIT_QUEUE_MAX', gate)
+        for field, suffix in (('CATCHPLATE_POLICY_TRUST_ROOT_ATTESTATION_URL', '/attestation'),
+                ('CATCHPLATE_CONTROL_PLANE_CREDENTIAL_LEASE_URL', '/api/data-plane/credential-leases'),
+                ('CATCHPLATE_CONTROL_PLANE_AUDIT_URL', '/api/data-plane/audit')):
+            self.assertEqual(gate[field], 'http://catchplate:3000' + suffix)
+        self.assertEqual(gate['CATCHPLATE_DECISION_GATE_MANAGEMENT_HOST'], fixture.ADDRESSES[2])
+        self.assertEqual(gate['CATCHPLATE_DATA_PLANE_AUDIT_BATCH_MAX'], '1')
+        self.assertNotIn('CATCHPLATE_DATA_PLANE_AUDIT_QUEUE_MAX', gate)
 
     def test_notifications_on_and_managed_admission_have_no_provider_or_native_binding(self):
-        env = self.services['serverware']['environment']
-        for name in ('SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED', 'SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED'):
+        env = self.services['catchplate']['environment']
+        for name in ('CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED', 'CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED'):
             self.assertEqual(env[name], '1')
-        for name in ('SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED', 'SERVERWARE_KEY_RELEASE_REQUIRED',
-                'SERVERWARE_DEV_AUTHENTICATOR', 'SERVERWARE_DEV_DEMO_SEED'):
+        for name in ('CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED', 'CATCHPLATE_KEY_RELEASE_REQUIRED',
+                'CATCHPLATE_DEV_AUTHENTICATOR', 'CATCHPLATE_DEV_DEMO_SEED'):
             self.assertEqual(env[name], '0')
-        for name in ('SERVERWARE_METADATA_STORE_BACKEND', 'SERVERWARE_AUDIT_STORE_BACKEND', 'SERVERWARE_GRANT_STORE_BACKEND'):
+        for name in ('CATCHPLATE_METADATA_STORE_BACKEND', 'CATCHPLATE_AUDIT_STORE_BACKEND', 'CATCHPLATE_GRANT_STORE_BACKEND'):
             self.assertEqual(env[name], 'sqlite')
-        self.assertEqual(env['SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR'], '/provider-custody')
-        self.assertEqual(env['SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR'], '/notification-custody')
-        self.assertEqual(env['SERVERWARE_OPERATOR_NOTIFICATIONS_PRIVATE_DESTINATIONS_JSON'], '{"bindings":[]}')
+        self.assertEqual(env['CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR'], '/provider-custody')
+        self.assertEqual(env['CATCHPLATE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR'], '/notification-custody')
+        self.assertEqual(env['CATCHPLATE_OPERATOR_NOTIFICATIONS_PRIVATE_DESTINATIONS_JSON'], '{"bindings":[]}')
         for service in self.services.values():
             keys = service.get('environment', {})
             self.assertFalse(any('CLIENT_SECRET' in name or 'GOOGLE_CLIENT' in name or 'PILOT_SOURCE' in name
@@ -112,13 +112,13 @@ class RecipeTests(unittest.TestCase):
             row = gate['/data/' + leaf]
             self.assertEqual(row['source'], str(ROOT / 'runtime/app-data' / leaf))
             self.assertTrue(row['read_only'])
-        app = {row['target']: row for row in self.services['serverware']['volumes']}
+        app = {row['target']: row for row in self.services['catchplate']['volumes']}
         for target, relative in (('/data', 'runtime/app-data'), ('/provider-custody', 'provider-custody'),
                 ('/notification-custody', 'notification-custody')):
             self.assertEqual(app[target]['source'], str(ROOT / relative))
             self.assertFalse(app[target]['read_only'])
         self.assertNotIn('/private-audit-fixture.json', app)
-        for target in ('/provider-custody', '/notification-custody', '/run/secrets/serverware/admin.token'):
+        for target in ('/provider-custody', '/notification-custody', '/run/secrets/catchplate/admin.token'):
             self.assertNotIn(target, gate)
         for service in self.services.values():
             for row in service['volumes']:
@@ -145,15 +145,15 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual({row['target'] for row in keeper['volumes']}, {'/app', '/etc/hosts', '/etc/resolv.conf'})
         self.assertTrue(all(row['read_only'] for row in keeper['volumes']))
         self.assertEqual(fixture.KEEPER_SECONDS, 600)
-        self.assertEqual(self.services['serverware']['depends_on'], {'network': {'condition': 'service_healthy'}})
-        self.assertEqual(self.services['decision-gate-rs']['depends_on'], {'serverware': {'condition': 'service_healthy'}})
-        for name in ('serverware', 'decision-gate-rs'):
+        self.assertEqual(self.services['catchplate']['depends_on'], {'network': {'condition': 'service_healthy'}})
+        self.assertEqual(self.services['decision-gate-rs']['depends_on'], {'catchplate': {'condition': 'service_healthy'}})
+        for name in ('catchplate', 'decision-gate-rs'):
             self.assertEqual(self.services[name]['user'], '10001:10001')
             self.assertNotIn('cap_add', self.services[name])
 
     def test_job_paths_and_binary_pin_are_closed(self):
-        for root in (Path('/tmp/serverware-managed-retained-private.Unit001'), ROOT / 'child',
-                ROOT.with_name('serverware-managed-retained-private.short'), ROOT.with_name('serverware-catalog-private.Unit001')):
+        for root in (Path('/tmp/catchplate-managed-retained-private.Unit001'), ROOT / 'child',
+                ROOT.with_name('catchplate-managed-retained-private.short'), ROOT.with_name('catchplate-catalog-private.Unit001')):
             with self.subTest(root=str(root)), self.assertRaises(ValueError):
                 fixture.build(SOURCE, BINARY, root, expected_binary_sha256=BINARY_SHA)
         for digest in ('', 'sha256:' + BINARY_SHA, 'A' * 64, '1' * 63):
@@ -187,11 +187,11 @@ class PreparationTests(unittest.TestCase):
         self.binary.write_bytes(b'not an executable; pure inventory fixture')
         self.binary.chmod(0o444)
         self.manifest = self.root / 'source-manifest.json'
-        self.manifest.write_text(json.dumps({'schema': 'serverware.privateProxyBasicSource/v1',
+        self.manifest.write_text(json.dumps({'schema': 'catchplate.privateProxyBasicSource/v1',
             'sourceCommit': '2' * 40, 'files': hashes}, sort_keys=True))
         self.historical = self.root / 'historical.json'
         self.historical.write_text('{}')
-        self.job = self.root / 'serverware-managed-retained-private.Unit001'
+        self.job = self.root / 'catchplate-managed-retained-private.Unit001'
         self.job.mkdir(mode=0o700)
         self.args = SimpleNamespace(job_root=self.job, source=self.source, binary=self.binary,
             source_manifest=self.manifest, expected_source_manifest_sha256=fixture.base.digest(self.manifest),
@@ -212,7 +212,7 @@ class PreparationTests(unittest.TestCase):
         runtime.chmod(0o700)
         for name in ('notification-custody', 'provider-custody'):
             (self.job / name).mkdir(mode=0o700)
-        database = data / 'serverware.sqlite3'
+        database = data / 'catchplate.sqlite3'
         with sqlite3.connect(database) as connection:
             connection.execute('CREATE TABLE audit_events(event_type TEXT)')
             connection.execute('CREATE TABLE operator_demo_settings(singleton INTEGER PRIMARY KEY,settings_json TEXT)')
@@ -316,12 +316,12 @@ class PreparationTests(unittest.TestCase):
         original = filename.read_bytes()
         controls = (
             lambda value: value['services'].update(provider=deepcopy(value['services']['network'])),
-            lambda value: value['services']['serverware'].update(ports=['3000:3000']),
+            lambda value: value['services']['catchplate'].update(ports=['3000:3000']),
             lambda value: value['services']['network'].update(network_mode='host'),
             lambda value: value['services']['decision-gate-rs'].update(cap_add=['NET_ADMIN']),
             lambda value: value['services']['decision-gate-rs']['volumes'].append(
                 fixture.base.bind(self.job / 'runtime/app-data', '/private-data')),
-            lambda value: value['services']['serverware']['environment'].update(SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED='0'),
+            lambda value: value['services']['catchplate']['environment'].update(CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED='0'),
         )
         for index, control in enumerate(controls):
             value = json.loads(original)
@@ -564,7 +564,7 @@ class ProbeTests(unittest.TestCase):
         # Execute definitions only; the actual function runs with inert proc and
         # socket methods. keeper(), NETLINK, setuid and real /proc never run.
         exec(compile(checker.NETWORK_PROBE, '<inert-network-oracle>', 'exec'), scope)
-        names = dict(zip(('demo-upstream', 'serverware', 'decision-gate-rs'), fixture.ADDRESSES))
+        names = dict(zip(('demo-upstream', 'catchplate', 'decision-gate-rs'), fixture.ADDRESSES))
         def resolve(host, *_):
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ((resolution or names)[host], 443))]
         with patch.object(socket, 'if_nameindex', return_value=interfaces or [(1, 'lo')]), \
@@ -595,7 +595,7 @@ class ProbeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.network(interfaces=[(1, 'lo'), (2, 'eth0')])
         with self.assertRaises(ValueError):
-            self.network(resolution={'demo-upstream': '203.0.113.1', 'serverware': fixture.ADDRESSES[1],
+            self.network(resolution={'demo-upstream': '203.0.113.1', 'catchplate': fixture.ADDRESSES[1],
                 'decision-gate-rs': fixture.ADDRESSES[2]})
 
 

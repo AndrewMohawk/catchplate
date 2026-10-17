@@ -14,8 +14,8 @@ Changing the tree serializer would instead change existing tree addresses and
 roots. Neither representation nor its digest framing is interchangeable.
 
 `authority_store/wire_json_sql.py` installs a separate
-`serverware_policy_authority_wire_json(jsonb)` function. The existing
-`serverware_policy_authority_canonical_json` definition, recursion and all 11
+`catchplate_policy_authority_wire_json(jsonb)` function. The existing
+`catchplate_policy_authority_canonical_json` definition, recursion and all 11
 primary-tree call sites remain unchanged. The 71 message call sites in `db.py`
 now use the wire function; v9 executor and root-transition message consumers
 also use it. Export-chain message commitments are wire consumers, not persisted

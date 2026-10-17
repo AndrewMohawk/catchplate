@@ -34,7 +34,7 @@ CURL = {"path": "/usr/bin/curl", "sha256": "c" * 64, "bytes": 300000,
     "version": "curl 7.88.1 (x86_64-pc-linux-gnu) libcurl/7.88.1 OpenSSL/3",
     "protocols": ["http", "https"], "features": ["HTTPS-proxy", "SSL"]}
 ARGS = (Path("/synthetic/source"), Path("/synthetic/gate"), Path("/synthetic/initializer.py"),
-    Path("/srv/catchplate-fast/tmp/serverware-guided-private.abcdefgh"))
+    Path("/srv/catchplate-fast/tmp/catchplate-guided-private.abcdefgh"))
 
 
 def receipt():

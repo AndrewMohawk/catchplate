@@ -27,7 +27,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 from scripts import operator_x_post_fixture_network as network
 from scripts import operator_x_post_profiles as profiles
 
-CLIENT_ID = "serverware-x-post-fixture-client"
+CLIENT_ID = "catchplate-x-post-fixture-client"
 CLIENT_SECRET = "synthetic-x-post-fixture-client-secret"
 SUBJECT, USERNAME = "18446744073709551001", "operator_x"
 SCOPES = ("offline.access", "tweet.read", "tweet.write", "users.read")
@@ -41,7 +41,7 @@ MAX_CONTACTS, MAX_OBSERVATIONS, MAX_BODY = 64, 128, 32768
 POST_KEYS = frozenset(("ordinal", "client", "case", "generation", "requestBodySha256",
     "requestBodyBytes", "requestHeaders", "timestampEpochMs", "responseBodySha256",
     "responseBytes", "status", "postId", "providerCredentialMatched", "proxyAuthorizationPresent"))
-QUOTA_OBSERVATION_SCHEMA = "serverware.privateXQuotaProvider/v1"
+QUOTA_OBSERVATION_SCHEMA = "catchplate.privateXQuotaProvider/v1"
 
 
 def require(condition):
@@ -375,7 +375,7 @@ class FaultState(State):
 
     def _view(self):
         value = super()._view()
-        value["schema"] = "serverware.privateXQuotaFaultProvider/v1"
+        value["schema"] = "catchplate.privateXQuotaFaultProvider/v1"
         return value
 
     def _issue(self, generation, ttl, wall, mono):
@@ -440,7 +440,7 @@ def setup(*, fault_gate=False):
         and root.parent.stat().st_uid == 10001)
     network.assert_isolated_network(attached=False)
     require(json.loads(Path("/private-fixture.json").read_bytes()) == {
-        "schema": "serverware.privateOperatorAuditFixture/v1", "syntheticOnly": True})
+        "schema": "catchplate.privateOperatorAuditFixture/v1", "syntheticOnly": True})
     now = datetime.now(timezone.utc)
     key, leaf_key = ec.generate_private_key(ec.SECP256R1()), ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Private managed X posting fixture CA")])

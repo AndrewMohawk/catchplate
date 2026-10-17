@@ -4,12 +4,12 @@
 use super::*;
 use base64::{engine::general_purpose::{STANDARD,URL_SAFE_NO_PAD},Engine as _};
 use ed25519_dalek::pkcs8::{DecodePublicKey,EncodePublicKey};
-use serverware_decision_gate::native_audit_batch_v1 as wire;
-use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
+use catchplate_decision_gate::native_audit_batch_v1 as wire;
+use catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
 use std::collections::{BTreeMap,BTreeSet};
 
-const POLICY:&str="serverware.measuredAuditAuthorityPolicy/v1";
-const SIGNED:&str="serverware.signedMeasuredAuditAuthorityPolicy/v1";
+const POLICY:&str="catchplate.measuredAuditAuthorityPolicy/v1";
+const SIGNED:&str="catchplate.signedMeasuredAuditAuthorityPolicy/v1";
 const MAX_ORIGINAL:usize=3*1024*1024;
 const MAX_PAYLOAD:usize=2*1024*1024;
 const MAX_INTERVAL:u64=86_400_000_000_000;
@@ -84,7 +84,7 @@ impl ConfigurationV2 {
         Ok(key)
     }
     pub(super) fn validate(&self)->Result<(),String> {
-        require(self.api_version=="serverware.nativeMeasuredAuditConfiguration/v2"
+        require(self.api_version=="catchplate.nativeMeasuredAuditConfiguration/v2"
             && wire::component(&self.deployment_id) && wire::component(&self.instance_id) && wire::uuid(&self.epoch_id)
             && !self.source_revision.is_empty() && self.source_revision.chars().count()<=256
             && wire::digest(&self.control_plane_configuration_digest))?;
@@ -123,7 +123,7 @@ impl Native {
         require([&self.holder_id,&self.key_id,&self.configuration_sha256,&self.ca_certificate_sha256,
             &self.ca_public_key_spki_sha256].iter().all(|v|wire::digest(v))
             && self.key_id!=root_id && self.key_id!=self.control_plane_response_signing_key_id
-            && self.holder_id==serverware_decision_gate::native_currentness_v1::holder_id(&self.boot_id,&self.key_id)?
+            && self.holder_id==catchplate_decision_gate::native_currentness_v1::holder_id(&self.boot_id,&self.key_id)?
             && !self.expected_module_id.is_empty() && self.expected_module_id.chars().count()<=256
             && self.expected_module_id.trim()==self.expected_module_id && !self.expected_module_id.chars().any(char::is_control))
     }
@@ -163,7 +163,7 @@ fn certificate(pem:&str)->Result<(Vec<u8>,String),String> {
     Ok((value.contents,spki))
 }
 fn trust(value:&TrustRoots)->Result<(),String> {
-    require(value.api_version=="serverware.measuredAuditNativeTrustRoots/v1"
+    require(value.api_version=="catchplate.measuredAuditNativeTrustRoots/v1"
         && (1..=16).contains(&value.aws_nitro_root_certificates_pem.len()) && value.aws_nitro_crls_der_base64url.is_empty()
         && canonical_ascii_bytes(value)?.len()<=128*1024
         && value.nitro_certificate_profile.profile_id=="aws-nitro-attestation-pki-native-v1")?;

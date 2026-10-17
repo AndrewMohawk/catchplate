@@ -26,8 +26,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import native_pilot_publication_adoption_profile as profile
-from serverware import native_pilot_publication_adoption_authority as authority
+from catchplate import native_pilot_publication_adoption_profile as profile
+from catchplate import native_pilot_publication_adoption_authority as authority
 
 p, g = profile.p, profile.g
 
@@ -43,17 +43,17 @@ def fixture(version=2):
     scope.update(apiVersion=profile.cold.GENESIS_API, assignmentRevision=1, initialPublicationRevision=1,
         proofScopeOriginal="{}", bootIdBase64url=boot[0], timeNamespaceDevice=boot[1], timeNamespaceInode=boot[2],
         issuedAtBoottimeNanos=100, expiresAtBoottimeNanos=1000)
-    configuration = dict(apiVersion="serverware.nativePublicationGenesisCoordinatorRuntime/v" + str(version),
+    configuration = dict(apiVersion="catchplate.nativePublicationGenesisCoordinatorRuntime/v" + str(version),
         scope=scope, durableGrantOriginal="{}", currentGrantOriginal="{}", histories=[], serviceSessions=[],
         nativeEndpoints=[], resultPeer={})
     payload = {name: digest for name in profile.PAYLOAD_FIELDS}
-    payload.update(apiVersion="serverware.nativePublicationAdoptionAuthorization/v" + str(version),
+    payload.update(apiVersion="catchplate.nativePublicationAdoptionAuthorization/v" + str(version),
         purpose="cold-publication-to-operational", coldConfigurationOriginal=g.canonical(configuration).decode("ascii"),
         coldBundleOriginal="{}", coldNativeGrantOriginal="{}", coldRetrievalGrantOriginal="{}",
         priorSupervisor=selected, assignmentRevision=1, proofScopeOriginal="{}", native=selected, retrieval=selected,
         targetHistories=[], authority=selected, revocationGeneration=1, issuedAtUnixNanos=1000,
         expiresAtUnixNanos=2000, issuedAtBoottimeNanos=200, expiresAtBoottimeNanos=900)
-    value = dict(apiVersion="serverware.nativePublicationAdoptionValidationInput/v" + str(version),
+    value = dict(apiVersion="catchplate.nativePublicationAdoptionValidationInput/v" + str(version),
         payloadOriginal=g.canonical(payload).decode("ascii"), currentTrustOriginal="{}", currentTrustSha256=p.sha(b"{}"),
         currentAssignmentOriginal="{}", currentClosureSetOriginal="{}", currentConfigurationBindingSha256=digest,
         currentProofScopeOriginal="{}", targetHistories=[dict(serviceRole=role, runtimeOriginal="{}", historyOriginal="{}",
@@ -81,8 +81,8 @@ class AdoptionAuthorityControls(unittest.TestCase):
         for version in (1, 2):
             value, clocks, key = fixture(version)
             held = prepare(value, clocks)
-            expected = (b"serverware.signedEnvelope/v1\0serverware.nativePublicationAdoptionAuthorization.signature/v"
-                + str(version).encode("ascii") + b"\0serverware.canonicalJson/ascii-integer-v1\0" + held["payloadOriginal"])
+            expected = (b"catchplate.signedEnvelope/v1\0catchplate.nativePublicationAdoptionAuthorization.signature/v"
+                + str(version).encode("ascii") + b"\0catchplate.canonicalJson/ascii-integer-v1\0" + held["payloadOriginal"])
             self.assertEqual(profile.message(held), expected)
             signature = key.sign(expected)
             profile.authority(held["payload"]["authority"]).verify(signature, expected)
@@ -92,14 +92,14 @@ class AdoptionAuthorityControls(unittest.TestCase):
         self.assertNotEqual(*messages)
 
     def test_mixed_unknown_profiles_and_changed_cold_runtime_refuse(self):
-        for field, replacement in (("apiVersion", "serverware.nativePublicationAdoptionValidationInput/v1"),
-                ("apiVersion", "serverware.nativePublicationAdoptionValidationInput/v3")):
+        for field, replacement in (("apiVersion", "catchplate.nativePublicationAdoptionValidationInput/v1"),
+                ("apiVersion", "catchplate.nativePublicationAdoptionValidationInput/v3")):
             value, clocks, _ = fixture(); value[field] = replacement
             with self.assertRaises(ValueError): prepare(value, clocks)
         value, clocks, _ = fixture()
         payload = g.document(value["payloadOriginal"].encode(), profile.MAX_AUTHORIZATION)
         cold = g.document(payload["coldConfigurationOriginal"].encode(), profile.MAX_AUTHORIZATION)
-        cold["apiVersion"] = "serverware.nativePublicationGenesisCoordinatorRuntime/v1"
+        cold["apiVersion"] = "catchplate.nativePublicationGenesisCoordinatorRuntime/v1"
         payload["coldConfigurationOriginal"] = g.canonical(cold).decode()
         value["payloadOriginal"] = g.canonical(payload).decode()
         with self.assertRaises(ValueError): prepare(value, clocks)
@@ -126,7 +126,7 @@ class AdoptionAuthorityControls(unittest.TestCase):
     def test_each_output_binding_is_exact_and_no_extra_success_status(self):
         value, clocks, _ = fixture(); held = prepare(value, clocks); expected = packet(held)
         self.assertEqual(profile.result(g.canonical(expected), held), expected)
-        mutations = dict(apiVersion="serverware.nativePublicationAdoptionValidation/v1", inputSha256=p.sha(b"other"),
+        mutations = dict(apiVersion="catchplate.nativePublicationAdoptionValidation/v1", inputSha256=p.sha(b"other"),
             payloadSha256=p.sha(b"other payload"), payloadOriginal="{}", signingKeyId=p.sha(b"other key"),
             signingKeySpkiSha256=p.sha(b"other spki"), publicKeyBase64url=p.encoded(bytes([7]) * 32),
             deadlineBoottimeNanos=901, expiresAtUnixNanos=2001)

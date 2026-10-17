@@ -25,7 +25,7 @@ renews expiry or automatically replans after uncertainty.
 
 The purpose is `prepare-retained-registration-finalization`, with action
 `webauthn.registration.finalization.prepare`. Its distinct
-`serverware.webAuthnRegistrationFinalizationPreparationIntent/v1` binds the
+`catchplate.webAuthnRegistrationFinalizationPreparationIntent/v1` binds the
 source action/purpose and genuinely replayed local record, user, challenge,
 session, original mode, request digest and operation ID. Evidence-admission or
 historical-recovery permission is not permission for this action.
@@ -67,7 +67,7 @@ Successful HTTP `202` contains exactly:
 
 | Field | Meaning |
 | --- | --- |
-| `schema` | `serverware.webAuthnRegistrationFinalizationPreparation/v1` |
+| `schema` | `catchplate.webAuthnRegistrationFinalizationPreparation/v1` |
 | `status` | `finalization-prepared` |
 | `purpose` | `prepare-retained-registration-finalization` |
 | `localDigest` | Unchanged input execution/evidence-admission locator. |
@@ -96,5 +96,5 @@ Those execution/activation integrations and full frozen verification remain
 open. See the [portal handoff controls](portal-registration-handoff.md) for
 explicit source-level preparation/inspection UI, not a completed enrollment claim.
 
-Source: [routes](../serverware/control_plane_registration_finalization_routes.py)
-and [HTTP contract](../serverware/control_plane_registration_finalization_http.py).
+Source: [routes](../catchplate/control_plane_registration_finalization_routes.py)
+and [HTTP contract](../catchplate/control_plane_registration_finalization_http.py).

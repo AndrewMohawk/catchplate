@@ -44,23 +44,23 @@ def assert_check(result: dict[str, Any], check_id: str, status: str) -> None:
 
 
 def main() -> None:
-    with tempfile.TemporaryDirectory(prefix="serverware-setup-verify-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="catchplate-setup-verify-") as tmp:
         data_dir = Path(tmp)
-        os.environ["SERVERWARE_DATA_DIR"] = tmp
-        os.environ["SERVERWARE_POLICY_BUNDLE"] = str(data_dir / "policy-bundle.json")
-        os.environ["SERVERWARE_POLICY_SIGNING_KEY"] = str(data_dir / "policy-signing-ed25519.pem")
-        os.environ["SERVERWARE_POLICY_SIGNING_PUBLIC_KEY"] = str(data_dir / "policy-signing-ed25519.pub.pem")
-        os.environ["SERVERWARE_ADMIN_TOKEN"] = ADMIN_TOKEN
-        os.environ["SERVERWARE_ADMIN_USER"] = "user:setup-verifier"
-        os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
-        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
-        os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_DATA_DIR"] = tmp
+        os.environ["CATCHPLATE_POLICY_BUNDLE"] = str(data_dir / "policy-bundle.json")
+        os.environ["CATCHPLATE_POLICY_SIGNING_KEY"] = str(data_dir / "policy-signing-ed25519.pem")
+        os.environ["CATCHPLATE_POLICY_SIGNING_PUBLIC_KEY"] = str(data_dir / "policy-signing-ed25519.pub.pem")
+        os.environ["CATCHPLATE_ADMIN_TOKEN"] = ADMIN_TOKEN
+        os.environ["CATCHPLATE_ADMIN_USER"] = "user:setup-verifier"
+        os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
+        os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
+        os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
         for name in (
-            "SERVERWARE_METADATA_STORE_POSTGRES_DSN",
-            "SERVERWARE_AUDIT_STORE_POSTGRES_DSN",
-            "SERVERWARE_GRANT_STORE_POSTGRES_DSN",
+            "CATCHPLATE_METADATA_STORE_POSTGRES_DSN",
+            "CATCHPLATE_AUDIT_STORE_POSTGRES_DSN",
+            "CATCHPLATE_GRANT_STORE_POSTGRES_DSN",
         ):
             os.environ.pop(name, None)
 
@@ -68,16 +68,16 @@ def main() -> None:
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-        from serverware import app as app_module
-        from serverware import db
-        from serverware.auth import AdminIdentity
-        from serverware.policy_bundle import (
+        from catchplate import app as app_module
+        from catchplate import db
+        from catchplate.auth import AdminIdentity
+        from catchplate.policy_bundle import (
             PolicyBundleError,
             compile_policy_bundle,
             demo_policy_bundle,
             write_policy_bundle,
         )
-        from serverware.setup_receipts import (
+        from catchplate.setup_receipts import (
             Ed25519TrustRoot,
             EnrollmentReceiptExpected,
             ReceiptVerificationError,
@@ -198,7 +198,7 @@ def main() -> None:
                 app_module._verify_setup_enrollment_receipt(
                     canonical_json_bytes(
                         {
-                            "apiVersion": "serverware.enrollmentVerifierReceipt/v2",
+                            "apiVersion": "catchplate.enrollmentVerifierReceipt/v2",
                             "kind": "EnrollmentVerifierReceipt",
                         }
                     ),
@@ -359,7 +359,7 @@ def main() -> None:
                 {
                     "id": "agent:unassigned",
                     "sourceCidrs": ["127.0.0.1/32"],
-                    "requiredHeaders": {"X-Serverware-Agent": "unassigned-agent"},
+                    "requiredHeaders": {"X-Catchplate-Agent": "unassigned-agent"},
                 }
             )
             policy_credential = bundle["credentials"][0]
@@ -446,7 +446,7 @@ def main() -> None:
                 identity=AdminIdentity("user:setup-verifier", frozenset({"policy_author"}), "test"),
             )
         except app_module.HTTPException as exc:
-            if exc.status_code != 400 or "SERVERWARE_PUBLIC_URL" not in str(exc.detail):
+            if exc.status_code != 400 or "CATCHPLATE_PUBLIC_URL" not in str(exc.detail):
                 raise AssertionError(f"hostile enrollment origin failed incorrectly: {exc.detail}") from exc
         else:
             raise AssertionError("enrollment accepted an operator-controlled control-plane origin")

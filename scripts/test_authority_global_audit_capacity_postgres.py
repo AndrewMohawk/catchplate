@@ -32,16 +32,16 @@ from psycopg import sql
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.native_postgres_results import run_native_fixture
+from catchplate.native_postgres_results import run_native_fixture
 
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_contract
-from serverware import authority_transition_core as core
-from serverware.authority_store.audit_capacity_sql import (
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_contract
+from catchplate import authority_transition_core as core
+from catchplate.authority_store.audit_capacity_sql import (
     AUDIT_CAPACITY_FUNCTION_NAME,
     audit_capacity_function_sql,
 )
-from serverware.authority_store.wire_json_sql import wire_json_function_sql
+from catchplate.authority_store.wire_json_sql import wire_json_function_sql
 from test_authority_root_transition_postgres import production_digest_functions
 from test_webauthn_trust_projection_postgres import local_connection_parameters
 
@@ -82,14 +82,14 @@ def framed(domain: str, *frames: bytes) -> str:
     return "sha256:" + digest.hexdigest()
 
 
-PARTITION = framed("serverware.metadataAuditOutboxCapacityPartition/v1", b"global")
+PARTITION = framed("catchplate.metadataAuditOutboxCapacityPartition/v1", b"global")
 IDENTITY = KIND + ":" + PARTITION
-EMPTY_EXPIRY = framed("serverware.policyAuthorityAggregateExpiryIndex/v1", b"[]")
+EMPTY_EXPIRY = framed("catchplate.policyAuthorityAggregateExpiryIndex/v1", b"[]")
 
 
 def refresh_state(row: dict) -> dict:
     state = {
-        "schema": "serverware.policyAuthorityAggregateState/v1",
+        "schema": "catchplate.policyAuthorityAggregateState/v1",
         "aggregateId": row["aggregate_id"], "aggregateKind": row["aggregate_kind"],
         "partitionDigest": row["partition_digest"], "revision": row["revision"],
         "liveCount": row["live_count"], "activeCount": row["active_count"],
@@ -102,7 +102,7 @@ def refresh_state(row: dict) -> dict:
         "workPageId": row["work_page_id"],
     }
     row["state_json"] = canonical(state)
-    row["state_digest"] = framed("serverware.policyAuthorityAggregateState/v1",
+    row["state_digest"] = framed("catchplate.policyAuthorityAggregateState/v1",
                                   row["state_json"].encode("ascii"))
     return row
 
@@ -123,7 +123,7 @@ def outbox_row(item_id: str = "audit-one", status: object = "pending") -> dict:
     return {
         "id": item_id, "event_type": "component.audit", "actor_type": "admin", "actor_id": "owner",
         "event_json": event,
-        "event_digest": framed("serverware.metadataAuditOutboxEvent/v1", event.encode("ascii")),
+        "event_digest": framed("catchplate.metadataAuditOutboxEvent/v1", event.encode("ascii")),
         "storage_format_version": 2, "status": status, "claim_id": None, "claimed_at": None,
         "attempts": 0, "audited_at": None, "audit_event_hash": None, "last_error": None,
         "created_at": "1970-01-01T00:00:02+00:00",
@@ -133,7 +133,7 @@ def outbox_row(item_id: str = "audit-one", status: object = "pending") -> dict:
 def selected(table: str, key: dict, row: dict | None) -> dict:
     return {
         "table": table, "key": copy.deepcopy(key),
-        "keyDigest": framed("serverware.policyAuthorityBusinessKey/v1",
+        "keyDigest": framed("catchplate.policyAuthorityBusinessKey/v1",
                             table.encode("ascii"), canonical(key).encode("ascii")),
         "present": row is not None, "row": copy.deepcopy(row), "contractSelector": None,
     }
@@ -185,7 +185,7 @@ class AuthorityGlobalAuditCapacityPostgresTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.schema = "serverware_audit_capacity_" + uuid.uuid4().hex
+        cls.schema = "catchplate_audit_capacity_" + uuid.uuid4().hex
         cls.namespace = '"' + cls.schema + '"'
         with cls.connection() as connection:
             if connection.execute("SELECT inet_server_addr(), getdatabaseencoding()").fetchone() != (None, "UTF8"):
@@ -426,7 +426,7 @@ class AuthorityGlobalAuditCapacityPostgresTests(unittest.TestCase):
             self.assert_reject(*fixture([], before=before), sql_message="state framing is invalid")
         before = counter_row()
         before["state_json"] = json.dumps(json.loads(before["state_json"]), sort_keys=True, indent=1)
-        before["state_digest"] = framed("serverware.policyAuthorityAggregateState/v1", before["state_json"].encode())
+        before["state_digest"] = framed("catchplate.policyAuthorityAggregateState/v1", before["state_json"].encode())
         self.assert_reject(*fixture([], before=before), sql_message="state framing is invalid")
 
     def test_compact_byte_ceiling_applies_to_complete_row(self) -> None:

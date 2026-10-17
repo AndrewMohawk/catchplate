@@ -31,16 +31,16 @@ if __name__ == "__main__":
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from serverware import authority_static_credential_custody as creation
-from serverware import authority_static_credential_rotation_custody as rotation
-from serverware import authority_static_credential_provenance as public
-from serverware import static_credential_provenance_values as leaf
+from catchplate import authority_static_credential_custody as creation
+from catchplate import authority_static_credential_rotation_custody as rotation
+from catchplate import authority_static_credential_provenance as public
+from catchplate import static_credential_provenance_values as leaf
 
 
 NOW = 123_000_000_000
 IDENTIFIER = "12345678-1234-4234-8234-123456789abc"
-CREATION_SCHEMA = "serverware.staticCredentialCreationProvenance/v1"
-ROTATION_SCHEMA = "serverware.staticCredentialRotationProvenance/v1"
+CREATION_SCHEMA = "catchplate.staticCredentialCreationProvenance/v1"
+ROTATION_SCHEMA = "catchplate.staticCredentialRotationProvenance/v1"
 
 
 def canonical(value):
@@ -66,10 +66,10 @@ def fixture(rotated=False):
         "controlPlaneResponseSigningKeyId", "controlPlaneConfigurationDigest",
         "intentSha256", "generationSha256", "inputSha256", "policyHash", "dataPlaneBinarySha256",
         "ingressLeafCertificateSha256", "ingressLeafSpkiSha256")}
-    statement.update(apiVersion=("serverware.nativeStaticCredentialRotationStatement/v1" if rotated
-        else "serverware.nativeStaticCredentialGenerationStatement/v1"),
+    statement.update(apiVersion=("catchplate.nativeStaticCredentialRotationStatement/v1" if rotated
+        else "catchplate.nativeStaticCredentialGenerationStatement/v1"),
         operation="credential.static.rotate" if rotated else "credential.static.create",
-        holderId=sha(b"serverware/credential-currentness-holder/v1\0" + boot + bytes.fromhex(key_id[7:])),
+        holderId=sha(b"catchplate/credential-currentness-holder/v1\0" + boot + bytes.fromhex(key_id[7:])),
         bootId=encoded(boot), keyId=key_id, deploymentId="fixture", instanceId="spiffe://fixture/native",
         actorId="oidc:synthetic", credentialId=IDENTIFIER, credentialVersion=2 if rotated else 1,
         secretKekId="attested-memory-kek:" + "a" * 24, generationCreatedAtEpochNs=NOW - 1,
@@ -81,7 +81,7 @@ def fixture(rotated=False):
             "predecessorBarrierSha256", "predecessorCurrentnessRootSha256")})
     proof = {"statement": statement,
         "signature": "ed25519:" + encoded(key.sign(statement["apiVersion"].encode("ascii") + b"\0" + canonical(statement))),
-        "nativeKeyEvidence": {"apiVersion": "serverware.nativeResponseProofKeyEvidence/v1",
+        "nativeKeyEvidence": {"apiVersion": "catchplate.nativeResponseProofKeyEvidence/v1",
             "responseProofPublicKey": encoded(public_key.public_bytes(serialization.Encoding.Raw,
                 serialization.PublicFormat.Raw)), "attestationDocumentB64": encoded(b"synthetic-not-a-Nitro-quote")}}
     return proof

@@ -1,0 +1,19 @@
+[Unit]
+Description=Catchplate Coder v12 privileged lifecycle RPC socket
+PartOf=catchplate-coder-v12.target
+After=catchplate-coder-runtime-v12.service
+Requires=catchplate-coder-runtime-v12.service
+Before=catchplate-coder-lifecycle-v12.service
+
+[Socket]
+ListenStream=/run/catchplate/coder/v12/lifecycle-privileged/control.sock
+SocketUser=root
+SocketGroup=catchplate-coder-lifecycle-privileged-api
+SocketMode=0660
+DirectoryMode=0750
+RemoveOnStop=yes
+Accept=no
+Service=catchplate-coder-lifecycle-privileged-v12.service
+
+[Install]
+WantedBy=catchplate-coder-v12.target

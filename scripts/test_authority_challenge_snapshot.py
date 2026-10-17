@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from serverware import authority_challenge_snapshot as snapshot
+from catchplate import authority_challenge_snapshot as snapshot
 from test_authority_challenge_manifest import context
 
 
@@ -37,7 +37,7 @@ class CursorDouble:
         if sql == snapshot.transaction_source._TRANSACTION_SQL and parameters == ():
             self.results = [self.transaction_row.copy()]
         elif (sql.startswith(f'SELECT {snapshot.reader._NODE_SELECT} FROM '
-                f'"serverware_metadata"."{snapshot.reader.NODE_TABLE}" AS node JOIN (VALUES ')
+                f'"catchplate_metadata"."{snapshot.reader.NODE_TABLE}" AS node JOIN (VALUES ')
                 and parameters[-2] in snapshot.compounds.WRITE_IDS
                 and type(parameters[-1]) is int and 1 <= parameters[-1] <= 257):
             self.results = []

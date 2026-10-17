@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.local/schemas/adapters/npm.publish.v1.schema.json",
-  "title": "Serverware closed npm single-version publish v1",
+  "$id": "https://catchplate.local/schemas/adapters/npm.publish.v1.schema.json",
+  "title": "Catchplate closed npm single-version publish v1",
   "$comment": "One exact package and configured tag, PUT only. No deletion, tag editing, provenance or tarball downloading. Compiler and runtime check exact authority and integrity.",
   "type": "object", "additionalProperties": false,
   "required": ["credentialBinding", "package", "tag", "request", "response"],

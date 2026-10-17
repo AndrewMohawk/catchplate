@@ -2,7 +2,7 @@
 """Sign one independently approved fixed-ten-endpoint cohort original.
 
 Closed input grammar (canonical ASCII JSON, no LF, at most 2 MiB):
-  Common exact fields: apiVersion="serverware.nativePilotCohortAuthorityInput/v1",
+  Common exact fields: apiVersion="catchplate.nativePilotCohortAuthorityInput/v1",
   operation (matching the CLI), configurationOriginal, configurationSha256,
   coldOriginals, payloadOriginal.
   Release adds exactly precreationOriginal and observationsOriginal.
@@ -40,8 +40,8 @@ sys.path.insert(0, str(_SCRIPT))
 sys.path.insert(0, str(_SCRIPT.parent.parent))
 
 import native_pilot_authority_io as io
-from serverware import native_shadow_nitro_originals as originals
-from serverware import native_shadow_proof_cohort_assignment as cohort
+from catchplate import native_shadow_nitro_originals as originals
+from catchplate import native_shadow_proof_cohort_assignment as cohort
 
 p = cohort.p
 MAX_INPUT_BYTES = 2 * 1024 * 1024
@@ -83,12 +83,12 @@ def main():
         raw = io.read_public(args.input_fd, MAX_INPUT_BYTES)
         extra = ("precreationOriginal", "observationsOriginal") if args.operation == "release" else ()
         value = p.fields(p.document(raw, MAX_INPUT_BYTES), FIELDS + extra)
-        p.require(value["apiVersion"] == "serverware.nativePilotCohortAuthorityInput/v1"
+        p.require(value["apiVersion"] == "catchplate.nativePilotCohortAuthorityInput/v1"
                   and value["operation"] == args.operation)
         configuration_raw = _original(value["configurationOriginal"], cohort.MAX_BYTES)
         configuration_sha256 = p.digest(value["configurationSha256"])
         config = cohort.configuration(configuration_raw)
-        p.require(config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v7"
+        p.require(config["apiVersion"] == "catchplate.nativeShadowProofCohortConfiguration/v7"
                   and cohort.roles(config) == ROLES and p.sha(configuration_raw) == configuration_sha256)
         cold = p.fields(value["coldOriginals"], ROLES)
         kwargs = {name: _original(cold[role], cohort.delivery.MAX_DELIVERY)

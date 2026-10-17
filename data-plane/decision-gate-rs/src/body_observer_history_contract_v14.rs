@@ -16,8 +16,8 @@ use std::fmt;
 use std::io::Write;
 use std::marker::PhantomData;
 
-pub(super) const SNAPSHOT_VERSION: &str = "serverware.controllerBodyMappingSnapshot/v14";
-pub(super) const HISTORY_EVENT_VERSION: &str = "serverware.controllerBodyHistoryEvent/v14";
+pub(super) const SNAPSHOT_VERSION: &str = "catchplate.controllerBodyMappingSnapshot/v14";
+pub(super) const HISTORY_EVENT_VERSION: &str = "catchplate.controllerBodyHistoryEvent/v14";
 pub(super) const MAX_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
 pub(super) const MAX_HISTORY_EVENT_BYTES: usize = 256 * 1024;
 pub(super) const MAX_LIVE_TASKS: u32 = 8192;
@@ -28,8 +28,8 @@ const MAX_PATHNAME_BASE64_BYTES: usize = ((MAX_PATHNAME_BYTES + 2) / 3) * 4;
 const MAX_DEPTH: usize = 16;
 const MAX_SNAPSHOT_NODES: usize = 400_000;
 const MAX_EVENT_NODES: usize = 20_000;
-const SNAPSHOT_DOMAIN: &[u8] = b"serverware/controller-body-mapping-snapshot/v14\0";
-const EVENT_DOMAIN: &[u8] = b"serverware/controller-body-history-event/v14\0";
+const SNAPSHOT_DOMAIN: &[u8] = b"catchplate/controller-body-mapping-snapshot/v14\0";
+const EVENT_DOMAIN: &[u8] = b"catchplate/controller-body-history-event/v14\0";
 
 // Declaration order is the typed canonical wire order. Digests use the same
 // fixed 32-byte JSON array representation as existing typed scope records.

@@ -6,7 +6,7 @@
 //! CLOCK_BOOTTIME bound; no equality with the enclave clock is inferred.
 
 use serde::Deserialize;
-use serverware_decision_gate::enclave_parent_ingress_v1::validate_parent_ingress_v1;
+use catchplate_decision_gate::enclave_parent_ingress_v1::validate_parent_ingress_v1;
 use std::net::SocketAddr;
 
 pub(super) const MAX_CONFIGURATION_BYTES: usize = 16 * 1024;
@@ -29,7 +29,7 @@ impl ConfigurationV1 {
         let config: Self = serde_json::from_value(value)
             .map_err(|_| "parent ingress configuration does not match its closed contract")?;
         super::ensure(
-            config.api_version == "serverware.nativeParentIngressConfiguration/v1",
+            config.api_version == "catchplate.nativeParentIngressConfiguration/v1",
             "parent ingress configuration version is invalid",
         )?;
         // The serving library owns the exact address/CID/port/resource shape

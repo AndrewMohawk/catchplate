@@ -1,0 +1,20 @@
+[Unit]
+Description=Catchplate Coder v12 root-owned controller ingress
+PartOf=catchplate-coder-v12.target
+After=catchplate-coder-runtime-v12.service
+Requires=catchplate-coder-runtime-v12.service
+Before=catchplate-coder-controller-v12.service
+
+[Socket]
+ListenSequentialPacket=/run/catchplate/coder/v12/controller/control.sock
+SocketUser=root
+SocketGroup=@CLIENT_GROUP@
+SocketMode=0660
+DirectoryMode=0750
+Backlog=128
+RemoveOnStop=yes
+Accept=no
+Service=catchplate-coder-controller-v12.service
+
+[Install]
+WantedBy=catchplate-coder-v12.target

@@ -101,7 +101,7 @@ def emit(configuration: str, pin: str, netns: str, output: str) -> None:
     original_path(configuration)
     original_path(netns)
     original_path(output)
-    require(Path(output).name == "serverware-workload-sidecar.service"
+    require(Path(output).name == "catchplate-workload-sidecar.service"
             and output not in (configuration, netns))
     with ExitStack() as stack:
         cfg, cfg_parent, cfg_name = acquire(stack, configuration, os.O_RDONLY | os.O_NONBLOCK)
@@ -114,7 +114,7 @@ def emit(configuration: str, pin: str, netns: str, output: str) -> None:
         scope = json.loads(raw.decode("utf-8"), object_pairs_hook=strict_object,
                            parse_constant=lambda _: require(False))
         require(isinstance(scope, dict) and set(scope) == FIELDS
-                and scope["apiVersion"] == "serverware.nativeWorkloadSidecar/v1"
+                and scope["apiVersion"] == "catchplate.nativeWorkloadSidecar/v1"
                 and scope["profile"] == "native-attested-local-connect-v1")
         ns = scope["namespace"]
         require(isinstance(ns, dict) and set(ns) == {"device", "inode", "bootId", "uid", "gid"}
@@ -142,11 +142,11 @@ def emit(configuration: str, pin: str, netns: str, output: str) -> None:
             require((named_ns.st_dev, named_ns.st_ino) == expected_ns)
 
         check()
-        unit = ("[Unit]\nDescription=Serverware native workload local CONNECT sidecar\n\n"
+        unit = ("[Unit]\nDescription=Catchplate native workload local CONNECT sidecar\n\n"
                 "[Service]\nType=simple\n"
                 f"User={ns['uid']}\nGroup={ns['gid']}\n"
                 f"NetworkNamespacePath={netns}\n"
-                "ExecStart=/usr/local/libexec/serverware-workload-sidecar "
+                "ExecStart=/usr/local/libexec/catchplate-workload-sidecar "
                 f"--configuration {configuration} --configuration-sha256 {pin}\n"
                 "Restart=no\nNoNewPrivileges=yes\nCapabilityBoundingSet=\nAmbientCapabilities=\n"
                 "UMask=0077\nLimitCORE=0\nKillMode=control-group\nTimeoutStopSec=120s\n"
@@ -184,7 +184,7 @@ def main() -> None:
     parser.add_argument("--network-namespace", required=True,
                         help="existing absolute no-symlink bind-mounted workload netns path")
     parser.add_argument("--output", required=True,
-                        help="new serverware-workload-sidecar.service in an existing owner-only directory")
+                        help="new catchplate-workload-sidecar.service in an existing owner-only directory")
     args = parser.parse_args()
     emit(args.configuration, args.configuration_sha256, args.network_namespace, args.output)
 

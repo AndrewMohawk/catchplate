@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_witness_capacity as capacity
+from catchplate import authority_witness_capacity as capacity
 
 
 I64 = 2**63 - 1
@@ -250,7 +250,7 @@ class WitnessCapacityTests(unittest.TestCase):
 
 
 def witness_source():
-    path = ROOT / "serverware/authority_witness.py"
+    path = ROOT / "catchplate/authority_witness.py"
     if path.stat().st_size > 512 * 1024:
         raise AssertionError("witness source exceeds fixture inspection bound")
     source = path.read_text(encoding="utf-8")
@@ -275,7 +275,7 @@ class WitnessCapacitySourceLinkageTests(unittest.TestCase):
     def test_source_limits_are_signed_bounded_and_usage_starts_before_recovery(self):
         source, parsed, methods, _functions = witness_source()
         imports = [node for node in parsed.body if isinstance(node, ast.ImportFrom)
-                   and node.module == "serverware"
+                   and node.module == "catchplate"
                    and any(alias.name == "authority_witness_capacity" for alias in node.names)]
         self.assertEqual(len(imports), 1)
         self.assertEqual([(alias.name, alias.asname) for alias in imports[0].names],

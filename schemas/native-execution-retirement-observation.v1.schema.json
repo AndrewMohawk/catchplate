@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-execution-retirement-observation.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-execution-retirement-observation.v1.schema.json",
   "title": "Nonactionable owned native network and cgroup retirement observation",
   "description": "Closed eight-field historical observation emitted only by the actual retained cleanup owners. Both host veth ifindex and name must be absent from complete bounded host RTNL observations while the signed bridge remains unchanged. Cgroup removal means one successful exact descriptor-relative empty-leaf removal, parent-relative ENOENT and retained original leaf identity, not recursive deletion or a claim of memory reclamation. All observations remain under the original signed cleanup deadline. This is neither current-state evidence nor permission to retry, restart, remove a CA, delete another resource or repair history.",
   "type": "object", "additionalProperties": false,
   "required": ["schema", "resultScope", "operationSha256", "cleanupBeforeBoottimeNs", "hostVethAbsence", "cgroupRemoval", "actionAuthorization", "okForAction"],
   "properties": {
-    "schema": {"const": "serverware.nativeExecutionRetirementObservation/v1"},
+    "schema": {"const": "catchplate.nativeExecutionRetirementObservation/v1"},
     "resultScope": {"const": "local-owned-network-and-cgroup-retirement-observation"},
     "operationSha256": {"$ref": "#/$defs/digest"},
     "cleanupBeforeBoottimeNs": {"$ref": "#/$defs/positiveU64"},

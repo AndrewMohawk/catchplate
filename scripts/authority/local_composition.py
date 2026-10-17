@@ -36,7 +36,7 @@ def main(argv=None):
         print(USAGE, end="")
         return 0
     try:
-        from serverware.authority_local_composition import LocalCompositionIssuer
+        from catchplate.authority_local_composition import LocalCompositionIssuer
         LocalCompositionIssuer(**arguments(argv)).publish()
         return 0
     except BaseException:

@@ -16,9 +16,9 @@ from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import authority_contract
-from serverware import db as database
-from serverware.authority_store import planner_read_sql, policy_file_read_sql, policy_file_genesis_sql
+from catchplate import authority_contract
+from catchplate import db as database
+from catchplate.authority_store import planner_read_sql, policy_file_read_sql, policy_file_genesis_sql
 
 spec = importlib.util.spec_from_file_location("provision_metadata_roles", Path(__file__).with_name("provision_metadata_roles.py"))
 cli = importlib.util.module_from_spec(spec)
@@ -31,9 +31,9 @@ def fixture():
         _AUDIT_STORE_RUNTIME_ROLE="pilot_audit_runtime",
         _METADATA_STORE_AUTHORITY_EXECUTOR_ROLE="pilot_authority_executor",
         _METADATA_STORE_AUTHORITY_VERIFIER_ROLE="pilot_authority_verifier",
-        _METADATA_STORE_AUTHORITY_OWNER_ROLE="serverware_policy_authority_owner",
-        _METADATA_STORE_AUTHORITY_CAPABILITY_ISSUER_ROLE="serverware_policy_capability_issuer",
-        _METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE="serverware_policy_authority_planner_writer",
+        _METADATA_STORE_AUTHORITY_OWNER_ROLE="catchplate_policy_authority_owner",
+        _METADATA_STORE_AUTHORITY_CAPABILITY_ISSUER_ROLE="catchplate_policy_capability_issuer",
+        _METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE="catchplate_policy_authority_planner_writer",
         _METADATA_STORE_AUTHORITY_COMPLETION_READER_ROLE=authority_contract.COMPLETION_READER_ROLE,
         authority_contract=authority_contract, _policy_file_read_sql=policy_file_read_sql,
         _policy_file_genesis_sql=policy_file_genesis_sql,
@@ -46,10 +46,10 @@ def fixture():
 
 def environment():
     return {**{name: "explicit_test_role" for name in cli.REQUIRED_ROLES},
-            "SERVERWARE_PROCESS_MODE": "metadata-bootstrap",
-            "SERVERWARE_METADATA_STORE_BACKEND": "postgres",
-            "SERVERWARE_AUDIT_STORE_BACKEND": "postgres",
-            "SERVERWARE_METADATA_STORE_ADMIN_POSTGRES_DSN": "secret-test-dsn"}
+            "CATCHPLATE_PROCESS_MODE": "metadata-bootstrap",
+            "CATCHPLATE_METADATA_STORE_BACKEND": "postgres",
+            "CATCHPLATE_AUDIT_STORE_BACKEND": "postgres",
+            "CATCHPLATE_METADATA_STORE_ADMIN_POSTGRES_DSN": "secret-test-dsn"}
 
 
 class MetadataRoleProvisioningTests(unittest.TestCase):
@@ -66,7 +66,7 @@ class MetadataRoleProvisioningTests(unittest.TestCase):
     def test_role_aliases_and_invalid_identifiers_refuse(self):
         for field, value in (("_METADATA_STORE_AUTHORITY_EXECUTOR_ROLE", "pilot_metadata_runtime"),
                              ("_METADATA_STORE_RUNTIME_ROLE", planner_read_sql.ROLE),
-                             ("_AUDIT_STORE_RUNTIME_ROLE", "serverware_policy_authority_owner"),
+                             ("_AUDIT_STORE_RUNTIME_ROLE", "catchplate_policy_authority_owner"),
                              ("_METADATA_STORE_RUNTIME_ROLE", 'bad";SELECT 1')):
             db = fixture()
             setattr(db, field, value)
@@ -89,7 +89,7 @@ class MetadataRoleProvisioningTests(unittest.TestCase):
                 self.assertFalse(json.loads(out.getvalue())["credentialsIssued"])
 
     def test_wrong_mode_backend_or_missing_role_refuses_before_import(self):
-        for key, value in (("SERVERWARE_PROCESS_MODE", ""), ("SERVERWARE_METADATA_STORE_BACKEND", "sqlite"),
+        for key, value in (("CATCHPLATE_PROCESS_MODE", ""), ("CATCHPLATE_METADATA_STORE_BACKEND", "sqlite"),
                            (cli.REQUIRED_ROLES[0], "")):
             selected = environment()
             selected[key] = value

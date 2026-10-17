@@ -2,7 +2,7 @@
 
 This is source-only encrypted local retention for the [activation plan](oidc-session-activation-plan.md), not a deployed custody service, an execution permission or proof of session activation. The source has not been built or exercised. No directory, key, launch authority or recovery checkpoint is provisioned by this slice.
 
-`serverware/authority_oidc_session_activation_journal.py` owns one nonroot, PID-bound `ActivationOriginalJournal`. The constructor receives an already opened directory descriptor, independent device/inode/UID/GID pins, record/byte quotas, configuration digest, two distinct exact 32-byte keys, and the caller's existing work/window and optional inherited monotonic deadline. It does not read environment keys, use legacy `crypto.encrypt_secret`, open another allowance or infer a trusted configuration from stored records.
+`catchplate/authority_oidc_session_activation_journal.py` owns one nonroot, PID-bound `ActivationOriginalJournal`. The constructor receives an already opened directory descriptor, independent device/inode/UID/GID pins, record/byte quotas, configuration digest, two distinct exact 32-byte keys, and the caller's existing work/window and optional inherited monotonic deadline. It does not read environment keys, use legacy `crypto.encrypt_secret`, open another allowance or infer a trusted configuration from stored records.
 
 ## Fixed private contract
 
@@ -14,7 +14,7 @@ The private methods are:
 - `_snapshot_configuration()`: return the held tuple `(source_revision, configuration_digest, journal_key, delivery_key, (device, inode, uid, gid), maximum_records, quota_bytes)` under actual PID/readiness/lock guards. It performs no unmetered inventory scan. This tuple contains private keys and must never be logged or returned publicly.
 - `close()`: close only the journal's independently opened directory description; never delete retained records or unlock a borrowed descriptor.
 
-The exact four-field storage scope is `sourceRevision`, `configurationDigest`, `requestDigest`, `planDigest`. Source and configuration must equal the independently configured owner. The request digest joins the retained typed request; the plan digest is computed from the actual signed envelope original using `serverware.policyAuthorityOidcSessionActivationPlanIdentity/v2`. This binding is not signature verification or semantic replay.
+The exact four-field storage scope is `sourceRevision`, `configurationDigest`, `requestDigest`, `planDigest`. Source and configuration must equal the independently configured owner. The request digest joins the retained typed request; the plan digest is computed from the actual signed envelope original using `catchplate.policyAuthorityOidcSessionActivationPlanIdentity/v2`. This binding is not signature verification or semantic replay.
 
 Private `_encode_original_on_work(value, *, scope, work)` and `_decode_original_on_work(original_bytes, *, scope, work)` own/canonically encode or decode the fixed document. Their caller must preserve its existing live guard around these helpers. The journal's actual append/read paths do so. No successful verification object is accepted or returned.
 
@@ -41,7 +41,7 @@ The canonical private document has exactly sixteen fields:
 
 | Field | Retained original |
 | --- | --- |
-| `schema` | `serverware.oidcSessionActivationPrivateOriginals/v2` |
+| `schema` | `catchplate.oidcSessionActivationPrivateOriginals/v2` |
 | `sourceRevision` | Exact current source revision |
 | `request` | The exact seven-field typed `oidc.session.activate` request |
 | `scope` | The plan's exact fifteen-field private subject/policy/configuration/key/time scope |
@@ -72,7 +72,7 @@ records without these fields are not upgraded or accepted as v2 automatically.
 
 ## Encryption and durable first originals
 
-The journal uses AES-256-GCM with the independently supplied journal key, a fresh 12-byte CSPRNG nonce and fixed domain `serverware.oidcSessionActivationJournal/v2` followed by NUL. This key must differ from the independently supplied delivery key; there is no fallback or automatic key rotation.
+The journal uses AES-256-GCM with the independently supplied journal key, a fresh 12-byte CSPRNG nonce and fixed domain `catchplate.oidcSessionActivationJournal/v2` followed by NUL. This key must differ from the independently supplied delivery key; there is no fallback or automatic key rotation.
 
 The binary frame is `SWOAJ002`, a two-byte big-endian scope length, an eight-byte big-endian plaintext length, the nonce, canonical scope bytes and ciphertext with its 16-byte tag. Associated data is the fixed domain, the first eighteen frame bytes and the exact canonical scope. Only the bounded four-field scope and framing are cleartext. The complete private document, including both tokens and the signed plan, is encrypted. Ciphertext is genuinely opened and the exact original compared before publication and again after durable readback.
 

@@ -1,4 +1,4 @@
-# Go: read Ethereum chain status through Serverware
+# Go: read Ethereum chain status through Catchplate
 
 **Current isolated SDK-through-proxy/TLS acceptance passed** from source
 `dcf70631` with go-ethereum v1.17.0 and normal Rust SHA-256 prefix `0908732386fa`.
@@ -11,7 +11,7 @@ not an Alchemy-specific SDK or a replacement HTTP implementation. It makes two
 separate read-only RPC calls, `eth_chainId` and `eth_blockNumber`, for one selected
 chain. No batching, arbitrary RPC, wallet, transaction, WebSocket or NFT operation
 is available in this entrypoint. The real Alchemy API/access key stays in
-Serverware; the application only receives its scoped proxy credential.
+Catchplate; the application only receives its scoped proxy credential.
 
 Do not use the recipe until your deployment supports the complete paired
 Alchemy preset and passes the
@@ -34,7 +34,7 @@ For an existing permission, download its private client JSON and verified CA
 from **Proxy setup**, then run from this directory:
 
 ```sh
-./chain-status-example --config /private/path/serverware-client.private.json
+./chain-status-example --config /private/path/catchplate-client.private.json
 ```
 
 This imports the saved Basic application login and exact chain-status scope;
@@ -46,7 +46,7 @@ to the environment in file mode. The environment-only invocation below remains
 supported; both modes refuse ambient `SSL_CERT_FILE` and `SSL_CERT_DIR`.
 
 When `alchemy_key_v1` and `alchemy_chain_status_read_v1` are supported, save the
-Alchemy API/access key in Serverware, create an application, and grant
+Alchemy API/access key in Catchplate, create an application, and grant
 **Alchemy chain status: read** for `eth-mainnet` or `eth-sepolia`. Select the
 application's **Basic and Bearer** authentication mode (`basic_and_bearer_v1`);
 this recipe uses Basic only on the proxy CONNECT request. Check the saved rule
@@ -60,12 +60,12 @@ only and is not automatically loaded:
 
 | Variable | Value |
 | --- | --- |
-| `SERVERWARE_PROXY_URL` | HTTPS proxy origin, optionally with a port; no credentials or path |
-| `SERVERWARE_APP_ID` | Saved application UUID |
-| `SERVERWARE_PROXY_TOKEN` | Issued Serverware application token, **not** an Alchemy key |
-| `SERVERWARE_CA_FILE` | Local PEM file containing the verified interception CA |
-| `SERVERWARE_PROXY_CA_FILE` | Optional extra CA for outer HTTPS-proxy TLS; omit for public trust |
-| `SERVERWARE_ALCHEMY_CHAIN` | Exactly `eth-mainnet` or `eth-sepolia`, matching the saved rule |
+| `CATCHPLATE_PROXY_URL` | HTTPS proxy origin, optionally with a port; no credentials or path |
+| `CATCHPLATE_APP_ID` | Saved application UUID |
+| `CATCHPLATE_PROXY_TOKEN` | Issued Catchplate application token, **not** an Alchemy key |
+| `CATCHPLATE_CA_FILE` | Local PEM file containing the verified interception CA |
+| `CATCHPLATE_PROXY_CA_FILE` | Optional extra CA for outer HTTPS-proxy TLS; omit for public trust |
+| `CATCHPLATE_ALCHEMY_CHAIN` | Exactly `eth-mainnet` or `eth-sepolia`, matching the saved rule |
 
 Supply the application token through an environment/CI secret store, not command
 arguments, URLs or tracked files. Use a supported Go release at least 1.25;
@@ -99,7 +99,7 @@ The client uses `rpc.DialOptions` with the documented `WithHTTPClient` and
 `https://eth-mainnet.g.alchemy.com/v2` or
 `https://eth-sepolia.g.alchemy.com/v2` URL; no endpoint override or key-in-path URL
 is accepted. `WithHeader` supplies the public dummy
-`Authorization: Bearer serverware-alchemy-placeholder-v1`. Serverware replaces
+`Authorization: Bearer catchplate-alchemy-placeholder-v1`. Catchplate replaces
 that exact value. No real provider key is read from the application's environment.
 
 Both calls use normal `CallContext` with an explicitly non-nil empty variadic
@@ -140,7 +140,7 @@ or `InsecureSkipVerify` is used.
 The example refuses nonempty `SSL_CERT_FILE` or `SSL_CERT_DIR`, because Go's
 system-root loader otherwise honors those ambient overrides. It does not silently
 modify your environment. Remove those overrides before running, and use
-`SERVERWARE_PROXY_CA_FILE` for an explicitly selected extra outer-proxy CA.
+`CATCHPLATE_PROXY_CA_FILE` for an explicitly selected extra outer-proxy CA.
 
 ## Dependency and acceptance boundary
 

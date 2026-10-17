@@ -24,7 +24,7 @@ sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
 from scripts import native_pilot_runtime_artifacts as artifacts
 from scripts import test_native_pilot_adopted_bridge_keys as signed
 from scripts import test_native_pilot_supervisor_runtime as runtime_fixture
-from serverware import native_pilot_lifecycle_inputs as compiler
+from catchplate import native_pilot_lifecycle_inputs as compiler
 
 p = compiler.p
 FAILURES = (ValueError, InvalidSignature)

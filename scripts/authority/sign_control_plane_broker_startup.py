@@ -14,8 +14,8 @@ import stat
 
 from cryptography.hazmat.primitives import serialization
 
-from serverware import authority_contract
-from serverware import control_plane_broker_startup as profile
+from catchplate import authority_contract
+from catchplate import control_plane_broker_startup as profile
 
 
 def _read(path, *, maximum, private=False):

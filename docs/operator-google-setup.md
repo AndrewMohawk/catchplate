@@ -71,7 +71,7 @@ application grants remain subsequent explicit actions.
 
 ## Deployment and recovery
 
-Use the [optional deployment layer and maintenance sequence](../docker/serverware-operator-demo/GOOGLE-SETUP.md).
+Use the [optional deployment layer and maintenance sequence](../docker/catchplate-operator-demo/GOOGLE-SETUP.md).
 First deploy the setup-capable source with Google still disabled. Prepare the
 operation, stop the old writers/gate, verify a consistent private backup, then
 restart the reviewed app/gate pair with the exact approved configuration and

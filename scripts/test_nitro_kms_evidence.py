@@ -46,15 +46,15 @@ def fixture_env(tmp: Path) -> dict[str, str]:
     env = os.environ.copy()
     env.update(
         {
-            "SERVERWARE_NITRO_FIXTURE": "1",
-            "SERVERWARE_NITRO_FIXTURE_DIR": str(fixture_dir),
-            "SERVERWARE_NITRO_ROOT_CERT": str(fixture_dir / "root.cert.pem"),
-            "SERVERWARE_NITRO_EXPECTED_PCRS": canonical_json(FIXTURE_PCRS),
-            "SERVERWARE_NITRO_ALLOW_DEBUG": "0",
-            "SERVERWARE_NITRO_ALLOW_DEBUG_RELEASE": "0",
-            "SERVERWARE_NITRO_REQUIRE_KMS_COMMAND": "1",
-            "SERVERWARE_NITRO_ATTESTATION_COMMAND": f"{sys.executable} scripts/nitro_attestation_fixture.py attest",
-            "SERVERWARE_NITRO_KMS_RELEASE_COMMAND": f"{sys.executable} scripts/nitro_kms_fixture.py release",
+            "CATCHPLATE_NITRO_FIXTURE": "1",
+            "CATCHPLATE_NITRO_FIXTURE_DIR": str(fixture_dir),
+            "CATCHPLATE_NITRO_ROOT_CERT": str(fixture_dir / "root.cert.pem"),
+            "CATCHPLATE_NITRO_EXPECTED_PCRS": canonical_json(FIXTURE_PCRS),
+            "CATCHPLATE_NITRO_ALLOW_DEBUG": "0",
+            "CATCHPLATE_NITRO_ALLOW_DEBUG_RELEASE": "0",
+            "CATCHPLATE_NITRO_REQUIRE_KMS_COMMAND": "1",
+            "CATCHPLATE_NITRO_ATTESTATION_COMMAND": f"{sys.executable} scripts/nitro_attestation_fixture.py attest",
+            "CATCHPLATE_NITRO_KMS_RELEASE_COMMAND": f"{sys.executable} scripts/nitro_kms_fixture.py release",
         }
     )
     return env
@@ -164,13 +164,13 @@ def main() -> None:
             raise AssertionError(f"collector accepted an unauthorized requested material: {output_text(unauthorized_material)}")
 
         bad_b64_env = dict(env)
-        bad_b64_env["SERVERWARE_NITRO_ATTESTATION_FIXTURE_BAD_B64"] = "1"
+        bad_b64_env["CATCHPLATE_NITRO_ATTESTATION_FIXTURE_BAD_B64"] = "1"
         bad_b64 = run_collector(bad_b64_env, claims_file, "--allow-fixtures-for-test")
         if bad_b64.returncode == 0 or "attestation_document_b64 is invalid base64url" not in output_text(bad_b64):
             raise AssertionError(f"collector accepted malformed Nitro attestation base64: {output_text(bad_b64)}")
 
         secret_env = dict(env)
-        secret_env["SERVERWARE_NITRO_KMS_FIXTURE_SECRET_RESPONSE"] = "1"
+        secret_env["CATCHPLATE_NITRO_KMS_FIXTURE_SECRET_RESPONSE"] = "1"
         secret_result = run_collector(secret_env, claims_file, "--allow-fixtures-for-test")
         if secret_result.returncode == 0 or "plaintext material" not in output_text(secret_result):
             raise AssertionError(f"collector accepted a plaintext KMS response: {output_text(secret_result)}")

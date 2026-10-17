@@ -17,16 +17,16 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-os.environ.setdefault("SERVERWARE_DATA_DIR", str(Path(".tmp/test-codebase-attestation/data").resolve()))
-os.environ.pop("SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY", None)
-os.environ.pop("SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY_ID_PATH", None)
+os.environ.setdefault("CATCHPLATE_DATA_DIR", str(Path(".tmp/test-codebase-attestation/data").resolve()))
+os.environ.pop("CATCHPLATE_RESPONSE_SIGNING_PUBLIC_KEY", None)
+os.environ.pop("CATCHPLATE_RESPONSE_SIGNING_PUBLIC_KEY_ID_PATH", None)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-import serverware.response_identity as response_identity
-from serverware.response_identity import (
+import catchplate.response_identity as response_identity
+from catchplate.response_identity import (
     canonical_json,
     response_headers_binding,
     response_public_key_info,
@@ -69,16 +69,16 @@ def stop_publishers(*publishers: subprocess.Popen[str]) -> None:
 def exercise_response_identity_publication() -> None:
     repository_root = Path(__file__).resolve().parents[1]
     base_env = dict(os.environ)
-    base_env.pop("SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY", None)
-    base_env.pop("SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY_ID_PATH", None)
+    base_env.pop("CATCHPLATE_RESPONSE_SIGNING_PUBLIC_KEY", None)
+    base_env.pop("CATCHPLATE_RESPONSE_SIGNING_PUBLIC_KEY_ID_PATH", None)
     for setting_name in (
-        "SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY",
-        "SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY_ID_PATH",
+        "CATCHPLATE_RESPONSE_SIGNING_PUBLIC_KEY",
+        "CATCHPLATE_RESPONSE_SIGNING_PUBLIC_KEY_ID_PATH",
     ):
         env = dict(base_env)
-        env[setting_name] = "/tmp/serverware-unpaired-response-identity"
+        env[setting_name] = "/tmp/catchplate-unpaired-response-identity"
         probe = subprocess.run(
-            [sys.executable, "-c", "import serverware.config"],
+            [sys.executable, "-c", "import catchplate.config"],
             cwd=repository_root,
             env=env,
             capture_output=True,
@@ -274,10 +274,10 @@ def exercise_response_identity_publication() -> None:
             process_env = dict(base_env)
             process_env.update(
                 {
-                    "SERVERWARE_DATA_DIR": str(process_root / "data"),
-                    "SERVERWARE_RESPONSE_SIGNING_KEY": str(process_private),
-                    "SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY": str(process_public),
-                    "SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY_ID_PATH": str(process_id),
+                    "CATCHPLATE_DATA_DIR": str(process_root / "data"),
+                    "CATCHPLATE_RESPONSE_SIGNING_KEY": str(process_private),
+                    "CATCHPLATE_RESPONSE_SIGNING_PUBLIC_KEY": str(process_public),
+                    "CATCHPLATE_RESPONSE_SIGNING_PUBLIC_KEY_ID_PATH": str(process_id),
                 }
             )
             slow_publisher = subprocess.Popen(
@@ -285,7 +285,7 @@ def exercise_response_identity_publication() -> None:
                     sys.executable,
                     "-c",
                     (
-                        "import pathlib,time\nimport serverware.response_identity as r\n"
+                        "import pathlib,time\nimport catchplate.response_identity as r\n"
                         "original=r._prepare_publication\nfirst=[True]\n"
                         f"signal=pathlib.Path({str(process_signal)!r})\n"
                         f"release=pathlib.Path({str(process_release)!r})\n"
@@ -334,7 +334,7 @@ def exercise_response_identity_publication() -> None:
                         sys.executable,
                         "-c",
                         (
-                            "import pathlib\nimport serverware.response_identity as r\n"
+                            "import pathlib\nimport catchplate.response_identity as r\n"
                             "original_flock=r.fcntl.flock\n"
                             f"attempt=pathlib.Path({str(process_lock_attempt)!r})\n"
                             f"restaged=pathlib.Path({str(process_restage)!r})\n"
@@ -399,7 +399,7 @@ def exercise_response_identity_publication() -> None:
                 [
                     sys.executable,
                     "-c",
-                    "import serverware.response_identity as r; r.response_public_key_info()",
+                    "import catchplate.response_identity as r; r.response_public_key_info()",
                 ],
                 cwd=repository_root,
                 env=process_env,
@@ -510,7 +510,7 @@ def exercise_response_identity_publication() -> None:
                 raise AssertionError("response identity target-race hook did not execute")
             if race_public.read_bytes() != b"raced-public\n" or race_id.read_bytes() != b"stale-id\n":
                 raise AssertionError("response identity publication changed the post-race state")
-            if list(race_root.glob(".serverware-response-*.tmp")):
+            if list(race_root.glob(".catchplate-response-*.tmp")):
                 raise AssertionError("response identity publication left temporary files after failure")
     finally:
         response_identity._target_snapshot = original_snapshot
@@ -523,7 +523,7 @@ def exercise_response_identity_publication() -> None:
 
 
 def exercise_bounded_control_plane_response_signing() -> None:
-    import serverware.app as app_module
+    import catchplate.app as app_module
     from starlette.requests import Request
     from starlette.responses import Response
     from starlette.responses import StreamingResponse
@@ -554,7 +554,7 @@ def exercise_bounded_control_plane_response_signing() -> None:
         headers: list[tuple[bytes, bytes]] = []
         if nonce is not None:
             headers.append(
-                (b"x-serverware-response-nonce", nonce.encode("latin-1"))
+                (b"x-catchplate-response-nonce", nonce.encode("latin-1"))
             )
         return Request(
             {
@@ -569,7 +569,7 @@ def exercise_bounded_control_plane_response_signing() -> None:
                 "root_path": "",
                 "headers": headers,
                 "client": ("192.0.2.1", 12345),
-                "server": ("serverware.test", 443),
+                "server": ("catchplate.test", 443),
             }
         )
 
@@ -658,14 +658,14 @@ def exercise_bounded_control_plane_response_signing() -> None:
 
     def statement_from(response) -> dict[str, object]:
         return json.loads(
-            b64d(response.headers["x-serverware-response-statement-b64"])
+            b64d(response.headers["x-catchplate-response-statement-b64"])
         )
 
     def verify(response, statement: dict[str, object]) -> None:
         authenticated_headers = [
             (name, value)
             for name, value in response.raw_headers
-            if not name.lower().startswith(b"x-serverware-response-")
+            if not name.lower().startswith(b"x-catchplate-response-")
         ]
         headers_digest, header_count = response_headers_binding(
             authenticated_headers
@@ -682,7 +682,7 @@ def exercise_bounded_control_plane_response_signing() -> None:
         )
         public_key.verify(
             b64d(
-                response.headers["x-serverware-response-signature"].split(
+                response.headers["x-catchplate-response-signature"].split(
                     ":", 1
                 )[1]
             ),
@@ -696,7 +696,7 @@ def exercise_bounded_control_plane_response_signing() -> None:
             captured_worker.update(kwargs)
             captured_worker["thread_id"] = threading.get_ident()
             return {
-                "X-Serverware-Response-Test-Signature": "captured"
+                "X-Catchplate-Response-Test-Signature": "captured"
             }
 
         app_module._signed_control_plane_response_headers = (
@@ -745,7 +745,7 @@ def exercise_bounded_control_plane_response_signing() -> None:
             raise AssertionError("event-loop response construction changed the body")
         if (
             captured_response.headers.get(
-                "x-serverware-response-test-signature"
+                "x-catchplate-response-test-signature"
             )
             != "captured"
         ):
@@ -838,7 +838,7 @@ def exercise_bounded_control_plane_response_signing() -> None:
         expected_query = "code=oauth-code-secret&state=oauth-state-secret"
         if statement != {
             **statement,
-            "version": "serverware.responseSignature/v3",
+            "version": "catchplate.responseSignature/v3",
             "request": {
                 "method": "POST",
                 "path": "/api/bounded-response",
@@ -908,7 +908,7 @@ def exercise_bounded_control_plane_response_signing() -> None:
 
 
 def exercise_middleware_blocking_offload() -> None:
-    import serverware.app as app_module
+    import catchplate.app as app_module
     from fastapi import HTTPException
     from starlette.requests import Request
     from starlette.responses import Response
@@ -931,7 +931,7 @@ def exercise_middleware_blocking_offload() -> None:
                 "query_string": b"",
                 "headers": [],
                 "client": ("192.0.2.1", 12345),
-                "server": ("serverware.test", 443),
+                "server": ("catchplate.test", 443),
             }
         )
 
@@ -1058,7 +1058,7 @@ def exercise_middleware_blocking_offload() -> None:
 
 
 def exercise_exported_asgi_signing_boundary() -> None:
-    import serverware.app as app_module
+    import catchplate.app as app_module
     from starlette.responses import Response, StreamingResponse
 
     original_header_builder = (
@@ -1069,10 +1069,10 @@ def exercise_exported_asgi_signing_boundary() -> None:
         app_module._SIGNED_RESPONSE_BUFFER_ADMISSION_SECONDS
     )
     original_route_count = len(app_module._fastapi_app.router.routes)
-    normal_path = "/__serverware_test__/signed-boundary"
-    failure_path = "/__serverware_test__/endpoint-failure"
-    iterator_failure_path = "/__serverware_test__/iterator-failure"
-    invalid_no_body_path = "/__serverware_test__/invalid-no-body"
+    normal_path = "/__catchplate_test__/signed-boundary"
+    failure_path = "/__catchplate_test__/endpoint-failure"
+    iterator_failure_path = "/__catchplate_test__/iterator-failure"
+    invalid_no_body_path = "/__catchplate_test__/invalid-no-body"
     partial_secret = b"partial-response-must-not-escape"
     normal_calls: list[bool] = []
 
@@ -1083,7 +1083,7 @@ def exercise_exported_asgi_signing_boundary() -> None:
             [
                 (b"set-cookie", b"first=one; Path=/"),
                 (b"set-cookie", b"second=two; Path=/"),
-                (b"x-serverware-response-signature", b"downstream-forgery"),
+                (b"x-catchplate-response-signature", b"downstream-forgery"),
             ]
         )
         return response
@@ -1137,16 +1137,16 @@ def exercise_exported_asgi_signing_boundary() -> None:
         error = None
         try:
             request_headers = [
-                (b"host", b"serverware.test"),
+                (b"host", b"catchplate.test"),
                 (
-                    b"x-serverware-response-nonce",
+                    b"x-catchplate-response-nonce",
                     b"exported-boundary-test",
                 ),
             ]
             if duplicate_nonce:
                 request_headers.append(
                     (
-                        b"x-serverware-response-nonce",
+                        b"x-catchplate-response-nonce",
                         b"ambiguous-second-value",
                     )
                 )
@@ -1163,7 +1163,7 @@ def exercise_exported_asgi_signing_boundary() -> None:
                     "root_path": "",
                     "headers": request_headers,
                     "client": ("192.0.2.1", 12345),
-                    "server": ("serverware.test", 443),
+                    "server": ("catchplate.test", 443),
                 },
                 receive,
                 send,
@@ -1181,7 +1181,7 @@ def exercise_exported_asgi_signing_boundary() -> None:
                 "exported signing boundary did not pass raw headers"
             )
         signing_inputs.append(dict(kwargs))
-        return {"X-Serverware-Response-Test-Signed": "yes"}
+        return {"X-Catchplate-Response-Test-Signed": "yes"}
 
     def failing_signer(**_kwargs: object) -> dict[str, str]:
         raise RuntimeError("synthetic signer failure")
@@ -1212,7 +1212,7 @@ def exercise_exported_asgi_signing_boundary() -> None:
         }
         if (
             int(start["status"]) != expected_status
-            or headers.get("x-serverware-response-test-signed") != "yes"
+            or headers.get("x-catchplate-response-test-signed") != "yes"
         ):
             raise AssertionError(
                 f"exported ASGI response was not signed: {messages}"
@@ -1287,7 +1287,7 @@ def exercise_exported_asgi_signing_boundary() -> None:
                 f"repeated response headers were collapsed: {cookies}"
             )
         if any(
-            name.lower() == b"x-serverware-response-signature"
+            name.lower() == b"x-catchplate-response-signature"
             for name, _value in normal_headers
         ):
             raise AssertionError(
@@ -1426,7 +1426,7 @@ def exercise_exported_asgi_signing_boundary() -> None:
 
 
 def exercise_signed_only_uvicorn_boundary() -> None:
-    from serverware.signed_http import (
+    from catchplate.signed_http import (
         SignedOnlyHttpToolsProtocol,
         _SignedHttpToolsRequestResponseCycle,
         validate_signed_http_protocol,
@@ -1581,7 +1581,7 @@ def exercise_signed_only_uvicorn_boundary() -> None:
                     "status": 200,
                     "headers": [
                         (b"content-length", str(len(body)).encode("ascii")),
-                        (b"x-serverware-test-signed", b"yes"),
+                        (b"x-catchplate-test-signed", b"yes"),
                     ],
                 }
             )
@@ -1597,8 +1597,8 @@ def exercise_signed_only_uvicorn_boundary() -> None:
             signed_application
         )
         protocol.data_received(
-            b"GET /first HTTP/1.1\r\nHost: serverware.test\r\n\r\n"
-            b"GET /second HTTP/1.1\r\nHost: serverware.test\r\n\r\n"
+            b"GET /first HTTP/1.1\r\nHost: catchplate.test\r\n\r\n"
+            b"GET /second HTTP/1.1\r\nHost: catchplate.test\r\n\r\n"
         )
         if not isinstance(
             protocol.cycle, _SignedHttpToolsRequestResponseCycle
@@ -1618,7 +1618,7 @@ def exercise_signed_only_uvicorn_boundary() -> None:
             state.total_requests != 2
             or called_paths != ["/first", "/second"]
             or wire.count(b"HTTP/1.1 200 OK\r\n") != 2
-            or wire.count(b"x-serverware-test-signed: yes\r\n") != 2
+            or wire.count(b"x-catchplate-test-signed: yes\r\n") != 2
             or b"Internal Server Error" in wire
             or b"100 Continue" in wire
         ):
@@ -1633,7 +1633,7 @@ def exercise_signed_only_uvicorn_boundary() -> None:
             failing_application
         )
         failing_protocol.data_received(
-            b"GET /fail HTTP/1.1\r\nHost: serverware.test\r\n\r\n"
+            b"GET /fail HTTP/1.1\r\nHost: catchplate.test\r\n\r\n"
         )
         for _attempt in range(5):
             await asyncio.sleep(0)
@@ -1652,7 +1652,7 @@ def exercise_signed_only_uvicorn_boundary() -> None:
         )
         expect_protocol.data_received(
             b"POST /expect HTTP/1.1\r\n"
-            b"Host: serverware.test\r\n"
+            b"Host: catchplate.test\r\n"
             b"Content-Length: 1\r\n"
             b"Expect: 100-continue\r\n\r\n"
         )
@@ -1672,7 +1672,7 @@ def exercise_signed_only_uvicorn_boundary() -> None:
         )
         upgrade_protocol.data_received(
             b"GET /upgrade HTTP/1.1\r\n"
-            b"Host: serverware.test\r\n"
+            b"Host: catchplate.test\r\n"
             b"Connection: Upgrade\r\n"
             b"Upgrade: websocket\r\n\r\n"
         )
@@ -1759,8 +1759,8 @@ def signed_bundle_fixture(
     image_id = "sha256:" + "6" * 64
     statement = {
         "_type": "https://in-toto.io/Statement/v1",
-        "predicateType": "https://serverware.local/attestations/oci-image/v1",
-        "subject": [{"name": "serverware", "digest": {"sha256": "6" * 64}}],
+        "predicateType": "https://catchplate.local/attestations/oci-image/v1",
+        "subject": [{"name": "catchplate", "digest": {"sha256": "6" * 64}}],
         "predicate": {
             "image_id": image_id,
             "repo_digests": [],
@@ -1774,7 +1774,7 @@ def signed_bundle_fixture(
     }
     image_sigstore = fixture_sigstore(key, key_id, public_key_pem, statement)
     bundle: dict[str, object] = {
-        "apiVersion": "serverware.imageSignatures/v1",
+        "apiVersion": "catchplate.imageSignatures/v1",
         "kind": "ImageSignatureBundle",
         "metadata": {
             "provenanceDigest": provenance_digest,
@@ -1788,7 +1788,7 @@ def signed_bundle_fixture(
         },
         "images": [
             {
-                "service": "serverware",
+                "service": "catchplate",
                 "image_id": image_id,
                 "statement": statement,
                 "statement_digest": verifier.sha256_prefixed_json(statement),
@@ -1851,7 +1851,7 @@ def exercise_bundle_verification() -> None:
             "cyclonedx": {"sha256": "sha256:" + "8" * 64, "components": 2}
         },
         "images": {
-            "serverware": {"image_id": "sha256:" + "6" * 64, "repo_digests": []}
+            "catchplate": {"image_id": "sha256:" + "6" * 64, "repo_digests": []}
         },
     }
     provenance_digest = verifier.sha256_prefixed_json(provenance)
@@ -1876,7 +1876,7 @@ def exercise_bundle_verification() -> None:
         provenance_digest,
         release_key_id,
     )
-    from serverware import attestation as attestation_module
+    from catchplate import attestation as attestation_module
 
     original_provenance_path = attestation_module.RELEASE_PROVENANCE_PATH
     original_signatures_path = attestation_module.IMAGE_SIGNATURES_PATH
@@ -2154,12 +2154,12 @@ def exercise_verifier_state_v3_wire_contract() -> None:
             {
                 **transition["request"],
                 "apiVersion":
-                "serverware.nonceAuthorityVerifierStateCommitRequest/v2",
+                "catchplate.nonceAuthorityVerifierStateCommitRequest/v2",
             },
             {
                 **recovery_request,
                 "apiVersion":
-                "serverware.attestationVerifierStateRecoveryRequest/v1",
+                "catchplate.attestationVerifierStateRecoveryRequest/v1",
             },
             {
                 **recovery_response,
@@ -2261,19 +2261,19 @@ def main() -> None:
     )[0]
     if first_cookie_digest == second_cookie_digest:
         raise AssertionError("response header binding lost repeated-field order")
-    assert headers["X-Serverware-Response-Body-SHA256"] == sha256_prefixed(body)
+    assert headers["X-Catchplate-Response-Body-SHA256"] == sha256_prefixed(body)
     assert statement["request"]["query_sha256"] == sha256_prefixed(
         sensitive_query.encode("utf-8")
     )
     assert "query" not in statement["request"]
     assert "oauth-code-canary" not in canonical_json(statement)
     assert "oauth-state-canary" not in canonical_json(statement)
-    assert statement["version"] == "serverware.responseSignature/v3"
-    decoded = json.loads(b64d(headers["X-Serverware-Response-Statement-B64"]))
+    assert statement["version"] == "catchplate.responseSignature/v3"
+    decoded = json.loads(b64d(headers["X-Catchplate-Response-Statement-B64"]))
     assert decoded == statement
     public_key = serialization.load_pem_public_key(response_public_key_info()["pem"].encode("ascii"))
     public_key.verify(
-        b64d(headers["X-Serverware-Response-Signature"].split(":", 1)[1]),
+        b64d(headers["X-Catchplate-Response-Signature"].split(":", 1)[1]),
         canonical_json(statement).encode("utf-8"),
     )
     attestation = {
@@ -2302,8 +2302,8 @@ def main() -> None:
             raw_headers
             + (
                 (
-                    "X-Serverware-Response-Signature",
-                    headers["X-Serverware-Response-Signature"],
+                    "X-Catchplate-Response-Signature",
+                    headers["X-Catchplate-Response-Signature"],
                 ),
             ),
             200,
@@ -2315,7 +2315,7 @@ def main() -> None:
                     name,
                     "sha256:" + "0" * 64
                     if name.lower()
-                    == "x-serverware-response-body-sha256"
+                    == "x-catchplate-response-body-sha256"
                     else value,
                 )
                 for name, value in raw_headers
@@ -2386,7 +2386,7 @@ class SealedTerminalJournalBehavioralFixtures(unittest.TestCase):
         import os
         import tempfile
 
-        from serverware import attestation as attestation_module
+        from catchplate import attestation as attestation_module
 
         body = b'{"stable":"terminal-result"}'
         historical_tls = {
@@ -2515,7 +2515,7 @@ class SealedTerminalJournalBehavioralFixtures(unittest.TestCase):
 
             evidence = {
                 "apiVersion": (
-                    "serverware.publicAttestationTerminalAuthorityEvidence/v1"
+                    "catchplate.publicAttestationTerminalAuthorityEvidence/v1"
                 ),
                 "status": "aborted",
                 "recoveryIdentity": identity,
@@ -2542,7 +2542,7 @@ class SealedTerminalJournalBehavioralFixtures(unittest.TestCase):
             self.assertFalse(os.path.exists(terminal_path))
 
     def test_cross_process_no_replace_idempotency_and_conflict(self) -> None:
-        from serverware import attestation as attestation_module
+        from catchplate import attestation as attestation_module
 
         context = multiprocessing.get_context("fork")
         historical_tls = {
@@ -2711,7 +2711,7 @@ class SealedTerminalJournalBehavioralFixtures(unittest.TestCase):
     def test_cross_process_distinct_identity_capacity_is_atomic(
         self,
     ) -> None:
-        from serverware import attestation as attestation_module
+        from catchplate import attestation as attestation_module
 
         context = multiprocessing.get_context("fork")
         key = bytes(range(32))
@@ -2740,7 +2740,7 @@ class SealedTerminalJournalBehavioralFixtures(unittest.TestCase):
         ) -> dict[str, object]:
             return {
                 "apiVersion": (
-                    "serverware."
+                    "catchplate."
                     "publicAttestationTerminalAuthorityEvidence/v1"
                 ),
                 "status": status,

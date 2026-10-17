@@ -20,13 +20,13 @@ import cryptography
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import native_pilot_operator_channel as channel
-from serverware.native_pilot_operator import Operator
+from catchplate import native_pilot_operator_channel as channel
+from catchplate.native_pilot_operator import Operator
 
 CHILD = """
 import json, sys, time
 sys.path[:0] = json.loads(sys.argv[1])
-from serverware.native_pilot_operator_channel import Channel, OperatorChannelError
+from catchplate.native_pilot_operator_channel import Channel, OperatorChannelError
 owner = Channel.open_adopted() if sys.argv[2] == 'adopted' else Channel.open()
 try:
     bounds = {'expires_at_unix_ns': time.time_ns() +

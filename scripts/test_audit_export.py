@@ -18,18 +18,18 @@ def parse_jsonl(payload: str) -> list[dict]:
 
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        os.environ["SERVERWARE_DATA_DIR"] = tmp
-        os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
-        os.environ.pop("SERVERWARE_AUDIT_STORE_POSTGRES_DSN", None)
-        os.environ.pop("SERVERWARE_METADATA_STORE_POSTGRES_DSN", None)
-        os.environ.pop("SERVERWARE_GRANT_STORE_POSTGRES_DSN", None)
-        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
+        os.environ["CATCHPLATE_DATA_DIR"] = tmp
+        os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
+        os.environ.pop("CATCHPLATE_AUDIT_STORE_POSTGRES_DSN", None)
+        os.environ.pop("CATCHPLATE_METADATA_STORE_POSTGRES_DSN", None)
+        os.environ.pop("CATCHPLATE_GRANT_STORE_POSTGRES_DSN", None)
+        os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
 
-        from serverware import app as app_module
-        from serverware import db
-        from serverware.auth import AdminIdentity
+        from catchplate import app as app_module
+        from catchplate import db
+        from catchplate.auth import AdminIdentity
 
         db.init_db()
         db.record_audit_event(
@@ -79,9 +79,9 @@ def main() -> None:
 
         direct = parse_jsonl(db.export_audit_events_jsonl(principal_id="agent:alpha", decision="deny"))
         if [item["kind"] for item in direct] != [
-            "serverware.auditExport.v1",
-            "serverware.auditEvent.v1",
-            "serverware.auditExportEnd.v1",
+            "catchplate.auditExport.v1",
+            "catchplate.auditEvent.v1",
+            "catchplate.auditExportEnd.v1",
         ]:
             raise AssertionError(f"audit export kinds are wrong: {direct}")
         header, event_line, footer = direct

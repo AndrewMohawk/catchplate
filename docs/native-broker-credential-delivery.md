@@ -22,7 +22,7 @@ An HTTP request, successful quote or copied configuration value cannot select
 it. `controlPlaneCustodyStartup/v2` retains the existing ten startup fields and
 adds `credentialBrokerProfile` and `signature`. The signature covers every
 other field as canonical ASCII JSON, prefixed by the purpose-specific byte
-domain `serverware/control-plane-broker-startup/v1` followed by NUL.
+domain `catchplate/control-plane-broker-startup/v1` followed by NUL.
 
 The genuine startup client first admits its existing runtime-root signature,
 attestation, process identity and inherited FD inventory. It then verifies the
@@ -48,7 +48,7 @@ the control-plane service. This tool has not been executed for this source.
 | Genuinely uncontrolled dispatch | Same v1 | Broker envelope/set v1; ciphertext-only dispatch entry |
 | Controlled dispatch | `nativeBrokerCredentialLeaseRequest/v2` | Broker envelope/set v2; actual native request/release authority |
 
-All family names have the `serverware.` prefix. The outer
+All family names have the `catchplate.` prefix. The outer
 `nativeCurrentCredentialLeaseRequest/v2` and matching envelope v2 bind the
 original inner broker request to the current measured holder. Old outer v1,
 old native, policy-aware and legacy families are neither reinterpreted nor
@@ -56,7 +56,7 @@ fallbacks. Existing native authority/release formats remain exact.
 
 Recipient verification independently selects
 `nativeBrokerCredentialRecipientExpectations/v1` with
-`leaseRequestProfile: serverware.nativeBrokerCredentialLeaseRequest`. The
+`leaseRequestProfile: catchplate.nativeBrokerCredentialLeaseRequest`. The
 existing CLI digest pin, genuine role-2 quote, original release/PCR/TLS/key and
 full request binding still apply. Ordinary native expectations do not admit
 broker requests. X25519/HKDF/AES-GCM retains its existing recipe; the explicit

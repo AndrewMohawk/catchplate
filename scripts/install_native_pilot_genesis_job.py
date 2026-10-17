@@ -17,8 +17,8 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.authority import native_pilot_authority_io as output
-from serverware import native_pilot_genesis_job_install as installation
-from serverware import native_pilot_genesis_parent_control_io as io
+from catchplate import native_pilot_genesis_job_install as installation
+from catchplate import native_pilot_genesis_parent_control_io as io
 
 p = installation.p
 ORIGINALS = ("configuration", "request", "input", "approval")

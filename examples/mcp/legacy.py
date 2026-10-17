@@ -39,17 +39,17 @@ NPM_CLIENT = Path(__file__).resolve().parents[1] / "npm-registry" / "client.mjs"
 
 class LegacyConfigurationError(ValueError):
     def __init__(self):
-        super().__init__("Unsupported, expired or invalid downloaded Serverware permission.")
+        super().__init__("Unsupported, expired or invalid downloaded Catchplate permission.")
 
 
 class LegacyArgumentError(ValueError):
     def __init__(self):
-        super().__init__("Arguments do not match this configured Serverware operation; nothing was sent.")
+        super().__init__("Arguments do not match this configured Catchplate operation; nothing was sent.")
 
 
 class NpmMetadataError(ValueError):
     def __init__(self):
-        super().__init__("npm metadata did not complete. Check Node 25.5.0, the locked npm example dependencies, the application login and Serverware's audit/Pending actions. Nothing was retried.")
+        super().__init__("npm metadata did not complete. Check Node 25.5.0, the locked npm example dependencies, the application login and Catchplate's audit/Pending actions. Nothing was retried.")
 
 
 def _require(value):
@@ -107,28 +107,28 @@ def _family(config):
         target = "https://api.github.com/repos/" + repo["owner"] + "/" + repo["name"] + "/issues"
         methods = ["GET"] if bundle == "github_issues_read_v1" else ["GET", "POST"]
         provider, scope = "github", {"repository": deepcopy(repo)}
-        mode, placeholder = "unfiltered_json_or_empty_v2", "token serverware-github-placeholder-v1"
+        mode, placeholder = "unfiltered_json_or_empty_v2", "token catchplate-github-placeholder-v1"
     elif bundle == "gmail_read_v1":
         policy = _gmail_age_policy(config)
         _require(config.get("query_mode") == "orderedFormV1")
         target = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
         provider, scope = "gmail", {"account": "me", "age_policy": deepcopy(policy)}
-        mode, placeholder = "gmail_read_json_v1", "Bearer serverware-gmail-placeholder-v1"
+        mode, placeholder = "gmail_read_json_v1", "Bearer catchplate-gmail-placeholder-v1"
     elif bundle == "alchemy_chain_status_read_v1":
         chain = _enum(config.get("chain"), {"eth-mainnet", "eth-sepolia"})
         _require(config.get("rpc_methods") == ["eth_chainId", "eth_blockNumber"])
         target = "https://" + chain + ".g.alchemy.com/v2"
         provider, scope, methods = "alchemy", {"chain": chain}, ["POST"]
-        mode, placeholder = "alchemy_rpc_read_json_v1", "Bearer serverware-alchemy-placeholder-v1"
+        mode, placeholder = "alchemy_rpc_read_json_v1", "Bearer catchplate-alchemy-placeholder-v1"
     elif bundle == "x_username_read_v1":
         username = _text(config.get("username"), maximum=15, pattern=r"[a-z0-9_]{1,15}")
         target = "https://api.x.com/2/users/by/username/" + username
         provider, scope = "x_lookup", {"username": username}
-        mode, placeholder = "x_app_read_json_v1", "Bearer serverware-x-placeholder-v1"
+        mode, placeholder = "x_app_read_json_v1", "Bearer catchplate-x-placeholder-v1"
     elif bundle == "x_text_post_v1":
         target = "https://api.x.com/2/tweets"
         provider, scope, methods = "x_post", {"operation": "text_only_post"}, ["POST"]
-        mode, placeholder = "x_post_json_v1", "Bearer serverware-x-post-placeholder-v1"
+        mode, placeholder = "x_post_json_v1", "Bearer catchplate-x-post-placeholder-v1"
     else:
         packages = config.get("packages")
         _require(type(packages) is list and 1 <= len(packages) <= 64
@@ -138,7 +138,7 @@ def _family(config):
         _require(type(recipe) is dict and recipe.get("package") in packages)
         target = "https://registry.npmjs.org/"
         provider, scope = "npm", {"package": recipe["package"]}
-        mode, placeholder = "npm_metadata_json_v1", "Bearer serverware-npm-placeholder-v1"
+        mode, placeholder = "npm_metadata_json_v1", "Bearer catchplate-npm-placeholder-v1"
     _require(config.get("upstream_url") == target and config.get("methods") == methods
         and config.get("response_mode") == mode)
     supplied = config.get("request_headers")
@@ -378,13 +378,13 @@ def execute_external(config):
         _require(all(selected.get(key) == config.get(key) for key in (
             "application_id", "access_rule_id", "operation_bundle", "packages", "client_recipe",
             "proxy_url", "proxy_password", "ca_file", "proxy_ca_file")))
-        temporary = os.environ.get("SERVERWARE_MCP_CALL_TEMP", "")
+        temporary = os.environ.get("CATCHPLATE_MCP_CALL_TEMP", "")
         _require(temporary and Path(temporary).is_absolute() and Path(temporary).is_dir()
             and not Path(temporary).is_symlink() and Path(temporary).stat().st_mode & 0o777 == 0o700)
         _require(os.getsid(0) == os.getpid() and os.getpgrp() == os.getpid())
         result = subprocess.run([node, str(NPM_CLIENT), "--config", selected["_config_path"], "view"],
             cwd=NPM_CLIENT.parent, env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8",
-                "TMPDIR": temporary, "SERVERWARE_MCP_CONTAINED_WORKER": "1"},
+                "TMPDIR": temporary, "CATCHPLATE_MCP_CONTAINED_WORKER": "1"},
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             timeout=25, check=False, start_new_session=False)
         _require(result.returncode == 0 and not result.stderr and len(result.stdout) <= 16384)

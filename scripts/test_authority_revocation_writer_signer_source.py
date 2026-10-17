@@ -13,13 +13,13 @@ import unittest
 from test_authority_revocation_planning_source import assigned, call, calls, definition, source
 
 
-WRITER_DESCRIPTOR = "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD"
+WRITER_DESCRIPTOR = "CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD"
 WRITER_DESCRIPTORS = {
-    "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
-    "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
-    "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
+    "CATCHPLATE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
+    "CATCHPLATE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
+    "CATCHPLATE_POLICY_AUTHORITY_CONFIG_FD",
     WRITER_DESCRIPTOR,
-    "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN_FD",
+    "CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN_FD",
 }
 
 
@@ -34,11 +34,11 @@ def field(mapping, name):
 class RevocationWriterSignerSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        _, cls.tree = source("serverware/authority_revocation_writer_signer.py", 64 * 1024)
-        _, cls.service = source("serverware/authority_service.py", 2 * 1024 * 1024)
+        _, cls.tree = source("catchplate/authority_revocation_writer_signer.py", 64 * 1024)
+        _, cls.service = source("catchplate/authority_service.py", 2 * 1024 * 1024)
         cls.process = definition(cls.service, "AuthorityProcess")
-        _, cls.launcher = source("serverware/authority_launcher.py", 256 * 1024)
-        _, cls.entrypoint = source("serverware/authority_fd_entrypoint.py", 128 * 1024)
+        _, cls.launcher = source("catchplate/authority_launcher.py", 256 * 1024)
+        _, cls.entrypoint = source("catchplate/authority_fd_entrypoint.py", 128 * 1024)
         _, cls.generator = source("scripts/authority/generate_artifact_bundle.py", 256 * 1024)
 
     def shape(self, actual, expected):
@@ -124,7 +124,7 @@ class RevocationWriterSignerSourceTests(unittest.TestCase):
             for name in ("verifier", "planner", "issuer", "executor"))''')
         self.shape(launch, "self.launch_identity_key.public_key()")
         descriptor = call(writer, "_read_bounded_descriptor")
-        self.shape(descriptor, '''_read_bounded_descriptor("SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY",
+        self.shape(descriptor, '''_read_bounded_descriptor("CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY",
             maximum=64 * 1024, require_root_owned=True, require_descriptor=True)''')
         bound = call(writer, "authority_revocation_writer_signer._signer_from_pem")
         self.shape(bound, '''authority_revocation_writer_signer._signer_from_pem(private_value,
@@ -179,13 +179,13 @@ class RevocationWriterSignerSourceTests(unittest.TestCase):
 
     def test_writer_fd_is_required_paths_and_wrong_roles_are_denied_and_runtime_inherits_no_role_signer(self):
         self.shape(assigned(self.service, "PLANNER_WRITER_SIGNING_KEY_ENVIRONMENTS"), '''{
-            "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD",
-            "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_PATH"}''')
+            "CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD",
+            "CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_PATH"}''')
         reject = definition(self.process, "_reject_wrong_credentials")
         self.shape(assigned(reject, "writer_signing_descriptor"),
-            'bool(os.environ.get("SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD", "").strip())')
+            'bool(os.environ.get("CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD", "").strip())')
         self.shape(assigned(reject, "writer_signing_path"),
-            'bool(os.environ.get("SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_PATH", "").strip())')
+            'bool(os.environ.get("CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_PATH", "").strip())')
         denial = reject.body[-1]
         self.shape(denial.test, '''self.role_name == "planner-writer"
             and (not writer_signing_descriptor or writer_signing_path)
@@ -231,11 +231,11 @@ class RevocationWriterSignerSourceTests(unittest.TestCase):
         # Delivery includes bootstrap control and runtime evidence, whereas
         # ordinary credentials cannot hash either launch output into itself.
         self.assertEqual({item.elts[0].value for item in writer_sources.elts},
-                         WRITER_DESCRIPTORS | {"SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD",
-                                               "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD"})
+                         WRITER_DESCRIPTORS | {"CATCHPLATE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD",
+                                               "CATCHPLATE_POLICY_AUTHORITY_ATTESTATION_FD"})
         signer_source, = [item for item in writer_sources.elts if item.elts[0].value == WRITER_DESCRIPTOR]
-        self.shape(signer_source, '''("SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD",
-            "/run/secrets/serverware-authority-planner-writer-signing-key")''')
+        self.shape(signer_source, '''("CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD",
+            "/run/secrets/catchplate-authority-planner-writer-signing-key")''')
         for key, value in zip(sources.keys, sources.values):
             if key.value != "planner-writer":
                 self.assertNotIn(WRITER_DESCRIPTOR, [node.value for node in ast.walk(value)
@@ -266,7 +266,7 @@ class RevocationWriterSignerSourceTests(unittest.TestCase):
         consumption = definition(self.process, "_trusted_host_local_consumption_receipt")
         self.shape(assigned(consumption, "signing_key"),
                    'self.signing_key if self.role_name == "verifier" else self.launch_identity_key')
-        _, mapper_tree = source("serverware/authority_revocation_writer_configuration.py", 64 * 1024)
+        _, mapper_tree = source("catchplate/authority_revocation_writer_configuration.py", 64 * 1024)
         mapper = definition(mapper_tree, "_persistence_from_configuration_on_work")
         self.assertEqual(len(calls(mapper, "configuration._capture_configuration_on_work")), 1)
         self.assertEqual(len(calls(mapper, "configuration._key")), 2)
@@ -296,7 +296,7 @@ class RevocationWriterSignerSourceTests(unittest.TestCase):
         topology = ast.unparse(definition(definition(self.service, "MeasuredConfiguration"), "_verify_role_topology"))
         self.assertIn("(int(planner_writer.get('peerUid', -1)), int(planner_writer.get('peerGid', -1))) != "
                       "(int(planner['serviceUid']), int(planner['serviceGid']))", topology)
-        _, registry = source("serverware/authority_transition_registry.py")
+        _, registry = source("catchplate/authority_transition_registry.py")
         self.shape(assigned(registry, "_CLOSURE_ERRORS"), "_registry_closure_errors()")
         closed, = [node for node in registry.body if isinstance(node, ast.If)]
         self.shape(closed.test, "_CLOSURE_ERRORS")

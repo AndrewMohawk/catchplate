@@ -11,7 +11,7 @@ pub(super) fn open() -> Result<RuntimeAdmission, String> {
     let launch = Original::open("native-generation-origin-issuer-launch.json", 16384)?;
     let selected: OriginLaunch = serde_json::from_value(document(&launch.bytes, 16384)?)
         .map_err(|_| "issuer launch not closed")?;
-    ensure(selected.api_version == "serverware.nativeGenerationOriginIssuerLaunch/v1"
+    ensure(selected.api_version == "catchplate.nativeGenerationOriginIssuerLaunch/v1"
         && selected.runtime_image.profile == "sealed-memfd-squashfs-v1"
         && selected.runtime_image.image_path == ORIGIN_IMAGE_PATH, "issuer launch purpose differs")?;
     for pin in [&selected.issuer_configuration_sha256, &selected.runtime_image.image_sha256,
@@ -23,7 +23,7 @@ pub(super) fn open() -> Result<RuntimeAdmission, String> {
     let expected = ["apiVersion", "uid", "gid", "operation", "issuerAuthorityKey", "originKey",
         "target", "nitro", "collateralRevocation", "transport", "authorization"];
     ensure(fields.len() == expected.len() && expected.iter().all(|key| fields.contains_key(*key))
-        && value["apiVersion"] == "serverware.nativeGenerationOriginIssuerConfiguration/v1", "issuer policy shape differs")?;
+        && value["apiVersion"] == "catchplate.nativeGenerationOriginIssuerConfiguration/v1", "issuer policy shape differs")?;
     let uid = value["uid"].as_u64().and_then(|v| u32::try_from(v).ok()).ok_or("issuer UID invalid")?;
     let gid = value["gid"].as_u64().and_then(|v| u32::try_from(v).ok()).ok_or("issuer GID invalid")?;
     ensure([uid, gid].iter().all(|v| *v > 0 && *v < u32::MAX && ![64988,64989,64990,65534].contains(v)),

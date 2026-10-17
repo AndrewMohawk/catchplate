@@ -26,9 +26,9 @@ from psycopg.types.json import Jsonb
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.native_postgres_results import run_native_fixture
+from catchplate.native_postgres_results import run_native_fixture
 
-from serverware.authority_store.mutation_sql import (
+from catchplate.authority_store.mutation_sql import (
     apply_mutation_sql,
     closed_record_sql,
     locked_primary_key_row_sql,
@@ -77,7 +77,7 @@ class AuthorityMutationPostgresTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.schema = "serverware_mutation_" + uuid.uuid4().hex
+        cls.schema = "catchplate_mutation_" + uuid.uuid4().hex
         cls.namespace = '"' + cls.schema + '"'
         with cls.connection() as connection:
             if connection.execute("SELECT inet_server_addr()").fetchone() != (None,):
@@ -403,7 +403,7 @@ class AuthorityMutationPostgresTests(unittest.TestCase):
 
     def test_source_interpolation_and_namespace_input_boundary(self) -> None:
         # Source-only wiring, separate from the real PostgreSQL controls above.
-        tree = ast.parse((ROOT / "serverware/authority_store/executor_v9.py").read_text(encoding="utf-8"))
+        tree = ast.parse((ROOT / "catchplate/authority_store/executor_v9.py").read_text(encoding="utf-8"))
         installer = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                          and node.name == "install_authority_v9_executor")
         calls = [node.func.id for node in ast.walk(installer)

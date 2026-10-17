@@ -60,9 +60,9 @@ class Fixture:
     def __init__(self):
         (self.config, self.db, self.store, self.bundles, self.schema,
             self.inputs, self.mutations) = workspace.workspace()
-        from serverware import app, policy_engine, runtime
+        from catchplate import app, policy_engine, runtime
         self.app, self.engine, self.runtime = app, policy_engine, runtime
-        self.expected_tuple = {"schema": "serverware.awsSigV4Credentials/v1",
+        self.expected_tuple = {"schema": "catchplate.awsSigV4Credentials/v1",
             "credential_kind": "long_term", "access_key_id": ACCESS,
             "secret_access_key": SECRET, "session_token": None, "expires_at": None}
         result = self.call(self.mutations.create_aws_credential,
@@ -296,7 +296,7 @@ def normal_oauth_projection_control():
 
 def native_pre_unwrap_refusals():
     f = Fixture()
-    from serverware import credential_ciphertext, native_secret_broker_helper as native
+    from catchplate import credential_ciphertext, native_secret_broker_helper as native
     row = credential_ciphertext.row_projection(f.aws_row)
     ordinary = {"provider_id": "operator-demo", "provider_subject": f.aws["metadata"]["provider_subject"],
         "secret_class": "bearerToken"}

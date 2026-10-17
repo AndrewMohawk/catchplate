@@ -30,7 +30,7 @@ when publication installed a token whose plaintext was lost.
 3. Click **Fresh passkey + request resolution approval**. The panel rereads the
    selected observation, computes the existing canonical binding for
    `control_plane.token.publication.resolve` / `admin-token`, obtains genuine
-   `serverware.publicationApprovalOptions/v1` options with the exact five-field
+   `catchplate.publicationApprovalOptions/v1` options with the exact five-field
    request binding. It checks the closed response, expected
    `publication-approval.request` operation and payload digest, then uses the
    opaque authority challenge for genuine WebAuthn. One resolution POST carries
@@ -86,7 +86,7 @@ operator handling; this panel offers no retry, rename, deletion, journal repair,
 token restoration, archival or approval bypass. Later rotation requires its
 own authorization after the server has established a definite terminal anchor.
 
-Implementation: [`portal_admin_token_publication.py`](../serverware/portal_admin_token_publication.py)
+Implementation: [`portal_admin_token_publication.py`](../catchplate/portal_admin_token_publication.py)
 contains the HTML and script fragments; the existing embedded portal supplies
 fixed insertion points, auth/context hooks, genuine WebAuthn conversions and
 data-only bounded parser/canonical-hash helpers. Existing HTTP paths remain;

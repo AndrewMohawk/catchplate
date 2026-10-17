@@ -1,14 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-candidate-artifact-evidence-request.v1.schema.json",
-  "title": "Serverware Policy Candidate Artifact Evidence Request v1",
+  "$id": "https://catchplate.invalid/schemas/policy-candidate-artifact-evidence-request.v1.schema.json",
+  "title": "Catchplate Policy Candidate Artifact Evidence Request v1",
   "$comment": "The request carries an externally signed, canonical candidate-artifact envelope. The server verifies the pinned Ed25519 signer and exact durable active predecessor; it does not sign candidate evidence.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "requestId", "record"],
   "properties": {
     "apiVersion": {
-      "const": "serverware.policyCandidateArtifactEvidenceRequest/v1"
+      "const": "catchplate.policyCandidateArtifactEvidenceRequest/v1"
     },
     "requestId": {"$ref": "#/$defs/uuidV4"},
     "record": {"$ref": "#/$defs/record"}

@@ -9,12 +9,12 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import native_pilot_bridge_runtime as runtime
-from serverware import native_pilot_bridge_install as install
-from serverware import native_pilot_bridge_runtime_policy as policy
-from serverware import native_pilot_delivery_authority as c9
-from serverware import native_pilot_peer_preparation as peers
-from serverware import native_shadow_driver_outgoing as outgoing
+from catchplate import native_pilot_bridge_runtime as runtime
+from catchplate import native_pilot_bridge_install as install
+from catchplate import native_pilot_bridge_runtime_policy as policy
+from catchplate import native_pilot_delivery_authority as c9
+from catchplate import native_pilot_peer_preparation as peers
+from catchplate import native_shadow_driver_outgoing as outgoing
 from test_native_pilot_bridge_runtime import fixture as legacy_fixture, canonical
 
 p = runtime.p
@@ -25,7 +25,7 @@ def publication_grant(role):
     payload = {name: None for name in ("guest", "runtimeConfigurationSha256", "authorityHistoryManifestSha256",
         "native", "retrieval", "initialTransitionHeadSha256", "initialDurableTransitionHeadSha256",
         "durableAuthorityEpoch", "durablePublicKeyBase64url")}
-    payload.update(apiVersion="serverware.nativePublicationServiceGrant/v2",
+    payload.update(apiVersion="catchplate.nativePublicationServiceGrant/v2",
         purpose="native-policy-publication-state", serviceRole=role, admission={"adoption": {}})
     return canonical({"payload": payload, "signatureBase64url": p.encoded(bytes(64))}).decode("ascii")
 
@@ -38,12 +38,12 @@ def fixture():
         "rootKeyId": p.sha(("synthetic-root/" + role).encode("ascii")),
         "rootKeySpkiSha256": p.sha(("synthetic-spki/" + role).encode("ascii"))}
         for role in runtime.generation.ROLES]
-    value["publication"] = {"apiVersion": "serverware.nativePublicationServices/v2",
+    value["publication"] = {"apiVersion": "catchplate.nativePublicationServices/v2",
         "durableGrantOriginal": publication_grant(runtime.generation.ROLES[0]),
         "currentGrantOriginal": publication_grant(runtime.generation.ROLES[3])}
     for role in (runtime.generation.ROLES[0], runtime.generation.ROLES[3]):
         value["ordinaryInitialHistories"][role]["runtimeOriginal"] = canonical({"runtime": {
-            "apiVersion": "serverware.policyCustodyServiceRuntimeConfig/v12",
+            "apiVersion": "catchplate.policyCustodyServiceRuntimeConfig/v12",
             "publicationAdmission": {"grantFdName": "publication-grant"}}}).decode("ascii")
     peer = {name: 2 for name in outgoing._PEER_FIELDS}
     for name in outgoing._PEER_FIELDS:
@@ -86,7 +86,7 @@ class AdoptedBridgeControls(unittest.TestCase):
     def test_explicit_runtime_launch_and_native_aggregate_bound(self):
         raw = canonical(fixture())
         self.assertEqual(runtime.runtime_version(raw), 14)
-        self.assertEqual(runtime.launch_for_runtime(raw), "serverware.nativeProofBridgeLaunch/v10")
+        self.assertEqual(runtime.launch_for_runtime(raw), "catchplate.nativeProofBridgeLaunch/v10")
         self.assertEqual(runtime.maximum_for_launch(runtime.ADOPTED_LAUNCH), 4 * 1024 * 1024)
         install.shape("bridge-runtime", raw)
         for version in (13, 15):
@@ -120,10 +120,10 @@ class AdoptedBridgeControls(unittest.TestCase):
         for mutation in ("missing", "old-selection", "old-grant", "wrong-role", "no-adoption", "bad-signature"):
             value = fixture(); selected = value["publication"]
             if mutation == "missing": del selected["currentGrantOriginal"]
-            elif mutation == "old-selection": selected["apiVersion"] = "serverware.nativePublicationServices/v1"
+            elif mutation == "old-selection": selected["apiVersion"] = "catchplate.nativePublicationServices/v1"
             else:
                 grant = json.loads(selected["durableGrantOriginal"])
-                if mutation == "old-grant": grant["payload"]["apiVersion"] = "serverware.nativePublicationServiceGrant/v1"
+                if mutation == "old-grant": grant["payload"]["apiVersion"] = "catchplate.nativePublicationServiceGrant/v1"
                 elif mutation == "wrong-role": grant["payload"]["serviceRole"] = runtime.generation.ROLES[3]
                 elif mutation == "no-adoption": grant["payload"]["admission"]["adoption"] = None
                 else: grant["signatureBase64url"] = p.encoded(bytes(63))
@@ -135,7 +135,7 @@ class AdoptedBridgeControls(unittest.TestCase):
             for mutation in ("version", "fd"):
                 value = fixture(); row = value["ordinaryInitialHistories"][role]
                 target = json.loads(row["runtimeOriginal"])
-                if mutation == "version": target["runtime"]["apiVersion"] = "serverware.policyCustodyServiceRuntimeConfig/v8"
+                if mutation == "version": target["runtime"]["apiVersion"] = "catchplate.policyCustodyServiceRuntimeConfig/v8"
                 else: target["runtime"]["publicationAdmission"]["grantFdName"] = "dispatch-grant"
                 row["runtimeOriginal"] = canonical(target).decode("ascii")
                 with self.assertRaises(ValueError): runtime.shape(canonical(value))
@@ -152,12 +152,12 @@ class AdoptedBridgeControls(unittest.TestCase):
 
     def test_old_input_wire_does_not_gain_adopted_inventory_by_retagging_runtime(self):
         value = {name: "{}" for name in c9.INPUT_FIELDS}
-        value.update(apiVersion="serverware.nativePilotDeliverySigningInput/v3", role="bridge",
+        value.update(apiVersion="catchplate.nativePilotDeliverySigningInput/v3", role="bridge",
             runtimeOriginal=canonical(fixture()).decode("ascii"))
         self.assertEqual(c9.input_document(canonical(value)), value)
         for mutation in ("old-api", "endpoint", "old-runtime"):
             changed = copy.deepcopy(value)
-            if mutation == "old-api": changed["apiVersion"] = "serverware.nativePilotDeliverySigningInput/v1"
+            if mutation == "old-api": changed["apiVersion"] = "catchplate.nativePilotDeliverySigningInput/v1"
             elif mutation == "endpoint": changed["role"] = "retrieval"
             else: changed["runtimeOriginal"] = canonical(legacy_fixture(12)).decode("ascii")
             with self.assertRaises(ValueError): c9.input_document(canonical(changed))

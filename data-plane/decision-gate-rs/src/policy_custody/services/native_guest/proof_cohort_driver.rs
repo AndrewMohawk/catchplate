@@ -4,15 +4,15 @@ use super::*;
 use crate::policy_shadow::policy_custody::services::ExpectedPeerCredentialV3;
 use std::os::unix::fs::FileExt;
 
-pub(super) const CONFIG_API:&str="serverware.nativeShadowProofCohortConfiguration/v7";
+pub(super) const CONFIG_API:&str="catchplate.nativeShadowProofCohortConfiguration/v7";
 pub(super) const ROLES:&[&str]=&["retrieval","persistence","trustedTime","generationInstall",
     "commitRequest","ingressAdmission","terminalAppend","dispatchBarrier","activeEffectBarrier","activeEffectCommit"];
-pub(super) const RELEASE_API:&str="serverware.nativeShadowProofCohortRelease/v6";
-pub(super) const RELEASE_DOMAIN:&[u8]=b"serverware.nativeShadowProofCohortRelease.signature/v6\0";
-pub(super) const CLEANUP_API:&str="serverware.nativeShadowProofCohortCleanup/v6";
-pub(super) const CLEANUP_DOMAIN:&[u8]=b"serverware.nativeShadowProofCohortCleanup.signature/v6\0";
-pub(super) const TERMINAL_API:&str="serverware.nativeShadowProofCohortTerminal/v6";
-pub(super) const CLEANUP_RESULT_API:&str="serverware.nativeShadowProofCohortCleanupResult/v6";
+pub(super) const RELEASE_API:&str="catchplate.nativeShadowProofCohortRelease/v6";
+pub(super) const RELEASE_DOMAIN:&[u8]=b"catchplate.nativeShadowProofCohortRelease.signature/v6\0";
+pub(super) const CLEANUP_API:&str="catchplate.nativeShadowProofCohortCleanup/v6";
+pub(super) const CLEANUP_DOMAIN:&[u8]=b"catchplate.nativeShadowProofCohortCleanup.signature/v6\0";
+pub(super) const TERMINAL_API:&str="catchplate.nativeShadowProofCohortTerminal/v6";
+pub(super) const CLEANUP_RESULT_API:&str="catchplate.nativeShadowProofCohortCleanupResult/v6";
 const MAX_EXECUTABLE:usize=64*1024*1024;
 const SEALS:i32=libc::F_SEAL_WRITE|libc::F_SEAL_GROW|libc::F_SEAL_SHRINK|libc::F_SEAL_SEAL;
 pub(super) fn logical_index(index:usize,adopted:bool)->Result<usize,ShadowError>{
@@ -79,7 +79,7 @@ fn sealed(file:&File)->Result<(u64,u64,u64),ShadowError>{
 fn executable(file:&File,digest:&Sha256Digest)->Result<(u64,u64,u64),ShadowError>{
     let id=sealed(file)?;let mut bytes=vec![0;id.2 as usize];file.read_exact_at(&mut bytes,0).map_err(fail)?;
     require(Sha256Digest::compute(&bytes)==*digest)?;
-    serverware_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&bytes).map_err(fail)?;
+    catchplate_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&bytes).map_err(fail)?;
     require(sealed(file)?==id)?;Ok(id)
 }
 impl Owner {
@@ -87,7 +87,7 @@ impl Owner {
         admission:&inputs::Admission)->Result<Self,ShadowError>{
         require(admission.endpoint_only() && !raw.is_empty() && raw.len()<=MAX_WIRE && rights.len()==3)?;
         let input:Input=exact(raw)?;
-        require(input.api_version=="serverware.nativeShadowEndpointDriverBinding/v1"
+        require(input.api_version=="catchplate.nativeShadowEndpointDriverBinding/v1"
             && input.configuration_original.is_ascii() && input.window_original.is_ascii() && input.observation_original.is_ascii()
             && Sha256Digest::compute(input.configuration_original.as_bytes())==config.configuration_sha256
             && Sha256Digest::compute(input.window_original.as_bytes())==config.window_sha256
@@ -131,7 +131,7 @@ impl Owner {
         observation.require_process(driver.as_fd(),&file)?;
         let supervisor_fd=pidfd_identity(supervisor.as_fd())?;let driver_fd=pidfd_identity(driver.as_fd())?;
         require(supervisor_fd!=driver_fd)?;
-        let original=BindingOriginal{api_version:"serverware.nativeShadowEndpointDriverOriginal/v1",
+        let original=BindingOriginal{api_version:"catchplate.nativeShadowEndpointDriverOriginal/v1",
             binding_sha256:Sha256Digest::compute(raw),configuration_sha256:config.configuration_sha256.clone(),
             window_sha256:config.window_sha256.clone(),observation_sha256:config.observation_sha256.clone(),
             supervisor:ProcessOriginal{process_id:supervisor_pid,start_time_ticks:supervisor_start,

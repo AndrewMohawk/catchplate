@@ -35,7 +35,7 @@ HISTORY_FIELDS = frozenset({
 class RevocationWriterCommitmentSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.text, cls.tree = source("serverware/authority_revocation_writer_commitment.py", 128 * 1024)
+        cls.text, cls.tree = source("catchplate/authority_revocation_writer_commitment.py", 128 * 1024)
 
     def shape(self, actual, expected):
         self.assertEqual(ast.dump(actual), ast.dump(ast.parse("(" + expected.strip() + ")", mode="eval").body))
@@ -75,12 +75,12 @@ class RevocationWriterCommitmentSourceTests(unittest.TestCase):
 
     def test_closed_controls_detach_source_bounded_history_without_widening_shared_work(self):
         literals = {
-            "INTENT_SCHEMA": "serverware.policyAuthorityRevocationWriterIntent/v1",
-            "RELAY_SCHEMA": "serverware.policyAuthorityRevocationWriterRelay/v1",
+            "INTENT_SCHEMA": "catchplate.policyAuthorityRevocationWriterIntent/v1",
+            "RELAY_SCHEMA": "catchplate.policyAuthorityRevocationWriterRelay/v1",
             "INTENT_PURPOSE": "authorize-revocation-writer-custody",
             "RELAY_PURPOSE": "relay-revocation-writer-custody",
-            "INTENT_ID_DOMAIN": "serverware.policyAuthorityRevocationWriterIntentEnvelope/v1",
-            "RELAY_ID_DOMAIN": "serverware.policyAuthorityRevocationWriterRelayEnvelope/v1",
+            "INTENT_ID_DOMAIN": "catchplate.policyAuthorityRevocationWriterIntentEnvelope/v1",
+            "RELAY_ID_DOMAIN": "catchplate.policyAuthorityRevocationWriterRelayEnvelope/v1",
             "MAX_CONTROL_NODES": 4096, "MAX_CONTROL_DEPTH": 2}
         for name, value in literals.items():
             self.assertEqual(ast.literal_eval(assigned(self.tree, name)), value)
@@ -105,16 +105,16 @@ class RevocationWriterCommitmentSourceTests(unittest.TestCase):
                 ("MAX_HISTORY_DEPTH", "capture.MAX_JSON_DEPTH"),
                 ("HISTORY_FIELDS", "action._EXTERNAL_FIELDS - {'database_now'}")):
             self.shape(assigned(self.tree, name), expression)
-        _, plan = source("serverware/authority_revocation_plan.py", 256 * 1024)
+        _, plan = source("catchplate/authority_revocation_plan.py", 256 * 1024)
         self.assertEqual(ast.literal_eval(assigned(plan, "_VERIFICATION_INPUTS").args[0]) - {
             "envelope", "planner_public_key", "verifier_public_key", "expected_planner_identity",
             "expected_verifier_identity", "database_now"}, HISTORY_FIELDS)
-        _, authority = source("serverware/authority_contract.py", 512 * 1024)
+        _, authority = source("catchplate/authority_contract.py", 512 * 1024)
         self.shape(assigned(authority, "MAX_REQUEST_BYTES"), "4 * 1024 * 1024")
         self.assertEqual(ast.literal_eval(assigned(authority, "INTERNAL_ENVELOPE_SCHEMA")),
-                         "serverware.policyAuthorityInternalEnvelope/v3")
-        _, accounting = source("serverware/authority_query_read_work.py", 64 * 1024)
-        _, capture = source("serverware/authority_complete_query_batch.py", 128 * 1024)
+                         "catchplate.policyAuthorityInternalEnvelope/v3")
+        _, accounting = source("catchplate/authority_query_read_work.py", 64 * 1024)
+        _, capture = source("catchplate/authority_complete_query_batch.py", 128 * 1024)
         for tree, byte_name, node_name in ((accounting, "MAX_INPUT_BYTES", "MAX_JSON_NODES"),
                                          (capture, "MAX_TOTAL_INPUT_BYTES", "MAX_TOTAL_JSON_NODES")):
             self.shape(assigned(tree, byte_name), "64 * 1024 * 1024")
@@ -150,13 +150,13 @@ class RevocationWriterCommitmentSourceTests(unittest.TestCase):
         self.shape(assigned(self.tree, "_EPOCH"), "datetime(1970, 1, 1, tzinfo=timezone.utc)")
         for spelling in ("datetime.now", "datetime.fromtimestamp", "time.time_ns", "time.monotonic_ns"):
             self.assertFalse(calls(self.tree, spelling))
-        _, action = source("serverware/authority_revocation_writer_action.py", 64 * 1024)
+        _, action = source("catchplate/authority_revocation_writer_action.py", 64 * 1024)
         captured = definition(action, "_capture_action_inputs")
         self.shape(assigned(captured, "database_now"), 'expectations["database_now"]')
         self.assertIn("type(database_now) is not datetime or database_now.tzinfo is not timezone.utc", ast.unparse(captured))
         self.shape(assigned(captured, "owned"), """retention.capture._JSONCapture(ledger).visit({
             name: value for name, value in expectations.items() if name != "database_now"})""")
-        _, capture = source("serverware/authority_complete_query_batch.py", 128 * 1024)
+        _, capture = source("catchplate/authority_complete_query_batch.py", 128 * 1024)
         visit = definition(definition(capture, "_JSONCapture"), "visit")
         self.assertEqual([item.arg for item in visit.args.args[:3]], ["self", "value", "depth"])
         self.assertEqual(ast.literal_eval(visit.args.defaults[0]), 0)
@@ -205,7 +205,7 @@ class RevocationWriterCommitmentSourceTests(unittest.TestCase):
         for spelling in ("wire._decode_envelope", "retention._verify_record_on_work", "action._assert_policy_on_work",
                 "plan._verify_signed_revocation_plan_on_work", "plan.mixed._verify"):
             self.assertFalse(calls(self.tree, spelling))
-        _, wire = source("serverware/authority_revocation_wire.py", 64 * 1024)
+        _, wire = source("catchplate/authority_revocation_wire.py", 64 * 1024)
         loader = call(definition(wire, "_decode_object"), "json.loads")
         self.shape(keywords(loader)["object_pairs_hook"], "_unique_object")
         self.shape(keywords(loader)["parse_float"], "_reject_number")
@@ -244,7 +244,7 @@ class RevocationWriterCommitmentSourceTests(unittest.TestCase):
         self.shape(guards[3].test, "work.measure(unsigned) != (unsigned_size, unsigned_nodes)")
         self.shape(guards[4].test, "plan.core.canonical_bytes(unsigned) != original")
         self.shape(guards[5].test, "len(result) != envelope_size")
-        _, production = source("serverware/authority_revocation_capability_production.py", 64 * 1024)
+        _, production = source("catchplate/authority_revocation_capability_production.py", 64 * 1024)
         key_binding = definition(production, "_key_binding")
         self.shape(call(key_binding, "work.charge"), "work.charge(input_bytes=3 * 32 + 2 * 64)")
         self.assertEqual(len(calls(key_binding, "_callback")), 4)
@@ -332,7 +332,7 @@ class RevocationWriterCommitmentSourceTests(unittest.TestCase):
             historical_expectations_bytes, arguments, history, _metrics(phases, 0, 2, work))""")
 
     def test_measured_policy_and_both_genuine_replays_remain_separate_required_boundaries(self):
-        _, service = source("serverware/authority_service.py", 2 * 1024 * 1024)
+        _, service = source("catchplate/authority_service.py", 2 * 1024 * 1024)
         action = definition(definition(service, "AuthorityProcess"), "_persist_and_reserve_revocation_plan")
         capture = call(action, "authority_revocation_writer_action._capture_action_inputs")
         policy = call(action, "authority_revocation_writer_action._assert_policy_on_work")
@@ -345,7 +345,7 @@ class RevocationWriterCommitmentSourceTests(unittest.TestCase):
         self.assertEqual([node.lineno for node in (capture, policy, factory, atomic)],
                          sorted(node.lineno for node in (capture, policy, factory, atomic)))
         self.assertNotIn("authority_revocation_writer_commitment", ast.unparse(action))
-        _, action_tree = source("serverware/authority_revocation_writer_action.py", 64 * 1024)
+        _, action_tree = source("catchplate/authority_revocation_writer_action.py", 64 * 1024)
         check = definition(action_tree, "_assert_policy_on_work")
         self.shape(assigned(check, "assertion_age"), 'payload["webauthn"]["maximumChallengeAgeNs"]')
         self.shape(assigned(check, "verifier_age"), 'payload["roles"]["verifier"]["maximumInternalAgeNs"]')
@@ -353,7 +353,7 @@ class RevocationWriterCommitmentSourceTests(unittest.TestCase):
             min(verifier_age, authority.VERIFIER_RESPONSE_MAX_AGE_NS), authority.VERIFIER_MAX_CLOCK_SKEW_NS)""")
         self.assertFalse(any(isinstance(node, (ast.Attribute, ast.Subscript))
             and isinstance(node.ctx, ast.Store) for node in ast.walk(check)))
-        _, persistence = source("serverware/authority_revocation_persistence.py", 64 * 1024)
+        _, persistence = source("catchplate/authority_revocation_persistence.py", 64 * 1024)
         operation = definition(persistence, "_persist_and_reserve_on_connection")
         common, = [node for node in ast.walk(operation) if isinstance(node, ast.With)]
         self.shape(call(common, "_retain_and_reserve_in_common"), """_retain_and_reserve_in_common(
@@ -368,21 +368,21 @@ class RevocationWriterCommitmentSourceTests(unittest.TestCase):
         self.shape(reserved, """revocation_execution.reserve_revocation_execution_envelope(
             envelope_id=envelope_id, planner_transaction_id=planner_transaction_id,
             connection=connection, work=work, **expectations)""")
-        _, store = source("serverware/authority_store/revocation_retention.py", 64 * 1024)
+        _, store = source("catchplate/authority_store/revocation_retention.py", 64 * 1024)
         self.shape(call(definition(store, "persist_revocation_planner_record"), "retention._verify_record_on_work"),
             """retention._verify_record_on_work(envelope_bytes=envelope_bytes,
                 evaluation_context_bytes=evaluation_context_bytes, work=work, **expectations)""")
         self.shape(call(definition(store, "_read_revocation_record_on_work"), "retention._verify_record_on_work"),
             """retention._verify_record_on_work(envelope_bytes=envelope,
                 evaluation_context_bytes=context, work=work, **expectations)""")
-        _, execution = source("serverware/authority_store/revocation_execution.py", 64 * 1024)
+        _, execution = source("catchplate/authority_store/revocation_execution.py", 64 * 1024)
         self.shape(call(definition(execution, "reserve_revocation_execution_envelope"),
             "store._read_revocation_record_on_work"), """store._read_revocation_record_on_work(
                 planner_transaction_id=planner_transaction_id, connection=connection,
                 work=work, _expected_raw=raw, expectations=owned)""")
 
     def test_controls_do_not_open_public_routes_peer_topology_or_registry(self):
-        service_text, service = source("serverware/authority_service.py", 2 * 1024 * 1024)
+        service_text, service = source("catchplate/authority_service.py", 2 * 1024 * 1024)
         process = definition(service, "AuthorityProcess")
         handle = definition(process, "handle")
         served = definition(definition(service, "AuthorityServer"), "_serve_connection")
@@ -411,7 +411,7 @@ class RevocationWriterCommitmentSourceTests(unittest.TestCase):
         topology = ast.unparse(definition(definition(service, "MeasuredConfiguration"), "_verify_role_topology"))
         self.assertIn("(int(planner_writer.get('peerUid', -1)), int(planner_writer.get('peerGid', -1))) != "
                       "(int(planner['serviceUid']), int(planner['serviceGid']))", topology)
-        registry_text, registry = source("serverware/authority_transition_registry.py")
+        registry_text, registry = source("catchplate/authority_transition_registry.py")
         self.shape(assigned(registry, "_CLOSURE_ERRORS"), "_registry_closure_errors()")
         guard, = [node for node in registry.body if isinstance(node, ast.If)]
         self.shape(guard.test, "_CLOSURE_ERRORS")
@@ -423,10 +423,10 @@ class RevocationWriterCommitmentSourceTests(unittest.TestCase):
         closure = makefile.read_text(encoding="utf-8").split(
             "override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES :=", 1)[1].split("CODER_TIMEOUT ?=", 1)[0]
         paths = {item for item in closure.split() if item != "\\"}
-        self.assertTrue({"serverware/authority_revocation_writer_commitment.py",
-            "serverware/authority_revocation_writer_action.py", "serverware/authority_revocation_persistence.py",
-            "serverware/authority_store/revocation_retention.py", "serverware/authority_store/revocation_execution.py",
-            "serverware/authority_revocation_capability_production.py"} <= paths)
+        self.assertTrue({"catchplate/authority_revocation_writer_commitment.py",
+            "catchplate/authority_revocation_writer_action.py", "catchplate/authority_revocation_persistence.py",
+            "catchplate/authority_store/revocation_retention.py", "catchplate/authority_store/revocation_execution.py",
+            "catchplate/authority_revocation_capability_production.py"} <= paths)
 
 
 if __name__ == "__main__":

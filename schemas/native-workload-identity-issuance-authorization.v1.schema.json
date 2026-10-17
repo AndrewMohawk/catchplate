@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-workload-identity-issuance-authorization.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-workload-identity-issuance-authorization.v1.schema.json",
   "title": "Separate native workload identity issuance authorization v1",
   "description": "Canonical ensure_ascii sorted compact JSON, without LF, at most 32768 bytes. Dedicated Ed25519 authorization over the exact payload schema ASCII plus NUL plus canonical payload bytes. Runtime requires the exact current source revision, independently authenticated native cold bootstrap v2, genuine original setup/delegation/CSR/PoP and target certificate selectors. Neither native role-5 capture nor diagnostic verdict supplies issuer permission. Schema validation alone is not signature, cold-profile, interval, selector or issuance admission.",
   "type": "object", "additionalProperties": false,
   "required": ["schema", "payload", "signature"],
   "properties": {
-    "schema": {"const": "serverware.signedNativeWorkloadIdentityIssuanceAuthorization/v1"},
+    "schema": {"const": "catchplate.signedNativeWorkloadIdentityIssuanceAuthorization/v1"},
     "signature": {"type": "string", "minLength": 94, "maxLength": 94, "pattern": "^ed25519:[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])"},
     "payload": {
       "type": "object", "additionalProperties": false,
@@ -21,8 +21,8 @@
         "notBeforeEpochSeconds", "notAfterEpochSeconds", "issuedAtEpochNs", "expiresAtEpochNs"
       ],
       "properties": {
-        "schema": {"const": "serverware.nativeWorkloadIdentityIssuanceAuthorization/v1"},
-        "sourceRevision": {"description": "Must equal the verifier's actual source-owned authority.SOURCE_REVISION, never a request-selected revision.", "type": "string", "maxLength": 128, "pattern": "^serverware\\.policyCandidateAuthoritySource/[0-9]{4}-[0-9]{2}-[0-9]{2}\\.[0-9]+(?![\\s\\S])"},
+        "schema": {"const": "catchplate.nativeWorkloadIdentityIssuanceAuthorization/v1"},
+        "sourceRevision": {"description": "Must equal the verifier's actual source-owned authority.SOURCE_REVISION, never a request-selected revision.", "type": "string", "maxLength": 128, "pattern": "^catchplate\\.policyCandidateAuthoritySource/[0-9]{4}-[0-9]{2}-[0-9]{2}\\.[0-9]+(?![\\s\\S])"},
         "purpose": {"const": "native-workload-identity-issuance"},
         "trustMode": {"const": "trusted-host-local"},
         "bootstrapDigest": {"description": "Exact independently root-signed native issuer bootstrap v2 original.", "$ref": "#/$defs/digest"},

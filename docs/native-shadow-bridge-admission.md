@@ -17,7 +17,7 @@ The new independently assigned `nativeShadowBridgeAdmissionAssignment/v1`
 adds `productionConfigurationBindingSha256` to the old closed admission field
 inventory and has purpose `native-shadow-context-and-production-admission`.
 Its separate signature domain is
-`serverware.nativeShadowBridgeAdmissionAssignment.signature/v1`. The actual
+`catchplate.nativeShadowBridgeAdmissionAssignment.signature/v1`. The actual
 native configuration factory provides that binding; a request cannot provide
 an activated configuration or substitute its own context. The same current
 supervisor-role assignment, full key inventory, independence, revocation and
@@ -26,8 +26,8 @@ freshness checks still run before encrypted keys are admitted.
 The real continuation calls `bind_bridge_admission` on the existing prepared
 key owner, then `admit_external`. The new statement retains the complete native
 context and adds the actual configuration binding. Its possession domain is
-`serverware.nativeShadowBridgeAdmissionPossession.signature/v1`. The fixed NSM
-prefix is `serverware/native-shadow-bridge-admission-evidence/v1` plus NUL,
+`catchplate.nativeShadowBridgeAdmissionPossession.signature/v1`. The fixed NSM
+prefix is `catchplate/native-shadow-bridge-admission-evidence/v1` plus NUL,
 followed by the four original 32-byte statement/full-key/local-key/possession
 hashes. This consumes the SAME irreversible key-quote latch; it cannot follow
 either old quote purpose or retry a failed attempt. There is no second KMS
@@ -46,9 +46,9 @@ original time/deadline bounds.
 Only after those checks, the actual separately assigned verifier key emits:
 
 - A context/config result using
-  `serverware.nativeShadowBridgeContextResult.signature/v1`.
+  `catchplate.nativeShadowBridgeContextResult.signature/v1`.
 - The genuine full production result using unchanged
-  `serverware.policyShadowCustodyAttestationVerifier/v1`.
+  `catchplate.policyShadowCustodyAttestationVerifier/v1`.
 
 The closed combined envelope retains both complete canonical originals. The
 same quote, measurement, endorsement, collateral, current checkpoint, full key

@@ -7,7 +7,7 @@ current launcher targets the unsigned `33140e27` package in an isolated guest,
 with the exact retained `17ab194b` Rust executable and measured guest libraries.
 The Rust build inputs match the selected source; this is not a rebuilt image.
 Six distinct proxy service credentials and read-only runtime disks are prepared.
-The existing `serverware-pilot-17ab194b` database, witness and synthetic upstream
+The existing `catchplate-pilot-17ab194b` database, witness and synthetic upstream
 support that guest; its normal app and proxy have not run. No demo seed,
 verified CA handoff, browser acceptance or proxy request has completed.
 
@@ -36,10 +36,10 @@ nor the outer process timeout extends it.
 
 The browser and physical FIDO2 YubiKey belong on your own computer, not in the
 AWS console or an unattended server browser. The selected browser origin is
-**https://serverware.example.com/**. Use this exact HTTPS hostname, not
+**https://catchplate.example.com/**. Use this exact HTTPS hostname, not
 localhost, the lab alias or the server's IP address. Sign in through the usual
 homelab Authelia login with the `operator` account. The pilot ingress permits
-only that operator; Authelia login does not itself enroll a Serverware key or
+only that operator; Authelia login does not itself enroll a Catchplate key or
 grant an application administrator session.
 
 No SSH tunnel is needed for the browser. The [homelab ingress](homelab-deployment.md)
@@ -105,7 +105,7 @@ From the provided checkout, use Bash, Python 3 and curl. Replace the example
 path with the absolute path to the public CA supplied in the runtime handoff:
 
 ```bash
-SERVERWARE_PILOT_CA=/absolute/path/to/serverware-ca.pem \
+CATCHPLATE_PILOT_CA=/absolute/path/to/catchplate-ca.pem \
   bash scripts/check_development_pilot.sh
 ```
 
@@ -151,7 +151,7 @@ both requests above, plus retained evidence and clean shutdown. No such result
 is claimed by this draft.
 
 The existing implementation references are the [development setup recipe](development-reference.md),
-[UI and seed route](../serverware/app.py), [demo policy](../policies/demo.policy.json),
+[UI and seed route](../catchplate/app.py), [demo policy](../policies/demo.policy.json),
 and the focused Rust [CONNECT](../scripts/test_decision_gate_connect.sh),
 [MITM](../scripts/test_decision_gate_mitm.sh) and
 [forwarding](../scripts/test_decision_gate_forward.sh) checks. Those scripts

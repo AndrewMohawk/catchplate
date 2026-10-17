@@ -40,14 +40,14 @@ PROOF_KEYS = {"apiVersion", "capability", "profileBindingSha256", "outcome", "re
 class Fixture:
     def __init__(self, *, google=True):
         self.config, self.db, self.store, self.bundles, self.schema, inputs, mutations = workspace.workspace()
-        from serverware import app, response_identity, operator_google_lease_reconciliation as proof
+        from catchplate import app, response_identity, operator_google_lease_reconciliation as proof
         # Import only after the real cold environment has been admitted.
         import test_credential_lease_delivery as delivery
         from cryptography.hazmat.primitives import serialization
         self.app, self.proof, self.delivery = app, proof, delivery
         self.profile = None
         if google:
-            from serverware import operator_catalog_oauth_profile as profiles
+            from catchplate import operator_catalog_oauth_profile as profiles
             self.profile = profiles.require_lease_reconciliation_profile()
             intent = str(uuid.uuid4())
             self.metadata = {"oauth": True, "refreshable": True, "provider_id": "google",
@@ -104,7 +104,7 @@ class Fixture:
         private = X25519PrivateKey.generate()
         public = private.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         nonce = os.urandom(32)
-        value = {"apiVersion": "serverware.credentialLeaseRequest/v3",
+        value = {"apiVersion": "catchplate.credentialLeaseRequest/v3",
             "purpose": "generationMetadata" if expected is None else "dispatchSecret",
             "principalId": self.application["principal_id"], "routeId": self.rule["route_id"],
             "credentialId": self.credential["id"], "recipientPublicKey": self.delivery.b64e(public),
@@ -118,8 +118,8 @@ class Fixture:
 
     def send(self, value, *, status=200, response_nonce=None):
         response = self.delivery.app_request(self.app.app, "POST", PATH, payload=value, headers={
-            "X-Serverware-Data-Plane-Token": TOKEN,
-            "X-Serverware-Response-Nonce": response_nonce or value["recipientNonce"]})
+            "X-Catchplate-Data-Plane-Token": TOKEN,
+            "X-Catchplate-Response-Nonce": response_nonce or value["recipientNonce"]})
         self.delivery.assert_status(response, status, "isolated operator Google lease")
         self.delivery.verify_response_signature(response, public_key=self.signing_key,
             key_id=self.signing_key_id, method="POST", target=PATH,
@@ -359,7 +359,7 @@ def audit_boundary():
 
 def disabled_static_control():
     f = Fixture(google=False)
-    from serverware import operator_catalog_oauth_profile as profiles
+    from catchplate import operator_catalog_oauth_profile as profiles
     assert profiles.selected() is False
     old = f.metadata_lease()
     row, changed = f.db.update_credential_secret_if_version(f.credential["id"], expected_version=1,
@@ -388,19 +388,19 @@ class OperatorGoogleReconciliationTests(unittest.TestCase):
 
     def setUp(self):
         common.OperatorDemoPersistenceTests.setUp(self)
-        self.environment.update(SERVERWARE_PUBLIC_URL="https://operator.example.com",
-            SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN=TOKEN,
-            SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST=BINARY,
-            SERVERWARE_SECRET_LEASE_TTL_SECONDS="5")
+        self.environment.update(CATCHPLATE_PUBLIC_URL="https://operator.example.com",
+            CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN=TOKEN,
+            CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST=BINARY,
+            CATCHPLATE_SECRET_LEASE_TTL_SECONDS="5")
         if self._testMethodName != "test_disabled_static_control":
             secret = Path(self.scratch.name) / "google-client-secret"
             secret.write_text(CLIENT_SECRET, encoding="utf-8")
             secret.chmod(0o600)
-            self.environment.update(SERVERWARE_OPERATOR_GOOGLE_PROFILE="operator-google-v1",
-                SERVERWARE_OPERATOR_DEMO_UPSTREAMS='["https://api.example.com","https://gmail.googleapis.com"]',
-                SERVERWARE_GOOGLE_OAUTH_CLIENT_ID="synthetic-reconciliation.apps.googleusercontent.com",
-                SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE=str(secret),
-                SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI="https://operator.example.com/api/oauth/callback/google")
+            self.environment.update(CATCHPLATE_OPERATOR_GOOGLE_PROFILE="operator-google-v1",
+                CATCHPLATE_OPERATOR_DEMO_UPSTREAMS='["https://api.example.com","https://gmail.googleapis.com"]',
+                CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID="synthetic-reconciliation.apps.googleusercontent.com",
+                CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE=str(secret),
+                CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI="https://operator.example.com/api/oauth/callback/google")
 
     def command(self, operation):
         return [sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation]

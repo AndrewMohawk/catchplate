@@ -23,7 +23,7 @@ endpoints. Shape-valid response bytes and a matching local socket peer are not
 authorization, replay, commit, completion, currentness or token-release proof.
 
 The consume authorizer, reserver and SQL wrappers retain their separate
-`/run/serverware/oidc-session-activation-delivery-execution/` socket paths,
+`/run/catchplate/oidc-session-activation-delivery-execution/` socket paths,
 magic bytes and role admission. They exchange raw4/raw1, raw5/raw3 and raw8/raw4
 respectively. Their dedicated literal entry functions cannot select an
 activation operation, and only the operation-neutral unsigned SQL response
@@ -65,7 +65,7 @@ successful result object as authority.
 ## Completion's unchanged selector and custody boundary
 
 The completion wrapper uses the existing
-`/run/serverware/oidc-session-activation/completion.sock` endpoint and
+`/run/catchplate/oidc-session-activation/completion.sock` endpoint and
 `SWOACM01` / `SWOACR01` framing. The service runs at UID/GID 65503 and admits
 request peer 65532 before reading frames; the caller checks the root-created
 listener's kernel peer 0:0. These distinct checks do not grant history custody

@@ -8,8 +8,8 @@ none of these component fixtures is production or full-operation evidence.
 
 The measured planner emits mandatory `rootTransition` in PlannerResponse/v3 and
 `rootTransitionDigest` in MeasuredPlan/v3. SignedMeasuredPlan also moves to v3.
-The closed `serverware.policyAuthorityPrimaryRootTransition/v1` object contains
-the fixed `serverware.policyAuthorityPrimaryRootTransitionProfile/v2` identifier,
+The closed `catchplate.policyAuthorityPrimaryRootTransition/v1` object contains
+the fixed `catchplate.policyAuthorityPrimaryRootTransitionProfile/v2` identifier,
 complete ordered business and authorization before/after root vectors, and
 strict integer work metrics. Each root includes table, revision, digest and
 leaf count. Snapshot/v3 appends the transition digest as its ninth frame. The

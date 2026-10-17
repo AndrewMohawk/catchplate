@@ -22,9 +22,9 @@ wire request cannot choose new history, roots, SQL, keys or an operation. Its
 packet selector must equal the independently pinned packet.
 
 The closed schemas are
-`serverware.signedRegistrationExecutionCompletionBootstrap/v1`,
-`serverware.registrationExecutionCompletionBootstrap/v1` and
-`serverware.registrationExecutionCompletionLaunch/v1`. The bootstrap original
+`catchplate.signedRegistrationExecutionCompletionBootstrap/v1`,
+`catchplate.registrationExecutionCompletionBootstrap/v1` and
+`catchplate.registrationExecutionCompletionLaunch/v1`. The bootstrap original
 is at most 4 MiB; its signed launch is at most 300 seconds and request timeout
 1–30 seconds. `_verify_on_work` authenticates originals before cold resource
 selection; `_produce_on_work` signs independent claims, not proof of provenance.
@@ -53,7 +53,7 @@ the earlier execution window or permit SQL execution again.
 The process mode is `registration-execution-completion`, UID/GID
 `65515:65515`, with no supplementary groups. It accepts the actual control-plane
 peer `65532:65532`. Its root-activated listener is
-`/run/serverware/registration-execution/completion.sock`, pathname owner/group
+`/run/catchplate/registration-execution/completion.sock`, pathname owner/group
 `65515:65532`, mode `0660`. Client-side peer admission expects listener owner
 `0:0`, not the dropped service UID.
 
@@ -61,19 +61,19 @@ Root delivery retains exactly five descriptors:
 
 | FD | Original owner input |
 | --- | --- |
-| 198 | `/run/serverware/registration-completion-trust/root-public-key.pem` |
-| 199 | Signed `/run/serverware/registration-completion-trust/bootstrap.json` |
+| 198 | `/run/catchplate/registration-completion-trust/root-public-key.pem` |
+| 199 | Signed `/run/catchplate/registration-completion-trust/bootstrap.json` |
 | 200 | Actual activated listener |
 | 201 | Sealed original completion Ed25519 key |
-| 202 | `/var/lib/serverware/registration-completion-delivery` directory, `65515:65515`, mode `0700` |
+| 202 | `/var/lib/catchplate/registration-completion-delivery` directory, `65515:65515`, mode `0700` |
 
 The completion key source is
-`/run/serverware/registration-completion-keys/completion-ed25519.pem`, root-owned
+`/run/catchplate/registration-completion-keys/completion-ed25519.pem`, root-owned
 mode `0400`, at most 4096 bytes; root delivery seals its original before dropping
 privileges. It is not returned on the wire. Local sealed custody is not an HSM,
 hardware attestation or protection against a hostile privileged host.
 
-Five root-owned TLS originals below `/run/serverware/registration-completion-tls`
+Five root-owned TLS originals below `/run/catchplate/registration-completion-tls`
 are bound to the signed bootstrap:
 
 | Files | Mode and bound per file |
@@ -101,7 +101,7 @@ replacement after an observation.
 
 ## Fixed raw2 request and raw4 response
 
-[`authority_registration_completion_transport.py`](../serverware/authority_registration_completion_transport.py)
+[`authority_registration_completion_transport.py`](../catchplate/authority_registration_completion_transport.py)
 uses request magic `SWRCMP01` and response magic `SWRCMR01`. Each frame contains
 the eight-byte magic, one big-endian u64 length for each body, then the bodies
 in order and exact EOF. The client half-closes after its request.
@@ -134,7 +134,7 @@ finalization or an independently current state lease.
 ## Genuine readback and retained-original reuse
 
 The existing
-[`recover_and_deliver`](../serverware/authority_successor_completion_recovery.py)
+[`recover_and_deliver`](../catchplate/authority_successor_completion_recovery.py)
 composition uses actual `SuccessorExecutionRecoveryReader`,
 `CurrentRootCommitReader`, `CurrentRootCompletionDelivery` and
 `CurrentRootDecisionClient` owners. Custody recovery retrieves the original
@@ -169,11 +169,11 @@ from historical receipts. Uncertainty permits none of those actions.
 ## Source packaging and remaining boundaries
 
 The source chain is the
-[`bootstrap`](../serverware/registration_execution_completion_bootstrap.py),
-[`root entrypoint`](../serverware/registration_execution_completion_entrypoint.py),
-[`startup owner`](../serverware/registration_execution_completion_startup.py),
-[`runner`](../serverware/registration_execution_completion_runner.py) and
-[`fixed launcher`](../serverware/registration_execution_completion_launcher.py).
+[`bootstrap`](../catchplate/registration_execution_completion_bootstrap.py),
+[`root entrypoint`](../catchplate/registration_execution_completion_entrypoint.py),
+[`startup owner`](../catchplate/registration_execution_completion_startup.py),
+[`runner`](../catchplate/registration_execution_completion_runner.py) and
+[`fixed launcher`](../catchplate/registration_execution_completion_launcher.py).
 The runner calls `initialize_from_environment()`, `require_started()` and
 `close()`. The actual owner's `serve_once()` returns `False` only while idle,
 `True` after one completed connection; an exception ends the launch. Its
@@ -182,8 +182,8 @@ result's ID to the actual same-pending retained completion original. Ordinary
 recovery failures return uncertain-empty; cancellation is not converted into
 an acknowledgment or rollback claim.
 [`Dockerfile.production`](../Dockerfile.production) copies the launcher and the
-uninstalled [socket](../ops/systemd/serverware-registration-execution-completion.socket)
-and [service template](../ops/systemd/serverware-registration-execution-completion.service.in).
+uninstalled [socket](../ops/systemd/catchplate-registration-execution-completion.socket)
+and [service template](../ops/systemd/catchplate-registration-execution-completion.service.in).
 It changes no entrypoint and activates nothing.
 
 The template needs reviewed literal substitutions for `COMPLETION_RELEASE_ROOT`,

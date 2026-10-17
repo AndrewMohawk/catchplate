@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use zeroize::Zeroize;
 
-const CHANNEL: &str = "serverware.nativeStaticCredentialChannel/v1";
+const CHANNEL: &str = "catchplate.nativeStaticCredentialChannel/v1";
 const MAX_BODY: usize = 8 * 1024 * 1024;
 const MAX_ORIGINAL: usize = 2 * 1024 * 1024;
 const MAX_SECRET: usize = 1024 * 1024;
@@ -24,7 +24,7 @@ enum Purpose { Creation, Rotation }
 impl Purpose {
     fn channel(self) -> &'static str {
         match self { Self::Creation => CHANNEL,
-            Self::Rotation => "serverware.nativeStaticCredentialRotationChannel/v1" }
+            Self::Rotation => "catchplate.nativeStaticCredentialRotationChannel/v1" }
     }
     fn path(self) -> &'static str {
         match self { Self::Creation => "/credentials/static", Self::Rotation => "/credentials/static/rotate" }
@@ -202,8 +202,8 @@ fn nonce() -> Result<String, String> {
 
 fn cookie_name(id: &str, purpose: Purpose) -> Result<String, String> {
     wire::ensure(current::uuid(id), "static cookie credential identity")?;
-    let prefix = match purpose { Purpose::Creation => "__Host-serverware-native-static-",
-        Purpose::Rotation => "__Host-serverware-native-static-rotate-" };
+    let prefix = match purpose { Purpose::Creation => "__Host-catchplate-native-static-",
+        Purpose::Rotation => "__Host-catchplate-native-static-rotate-" };
     Ok(format!("{prefix}{}", id.replace('-', "")))
 }
 
@@ -243,9 +243,9 @@ fn page_for(portal_origin: &str, purpose: Purpose) -> Result<(Vec<u8>, String), 
     let nonce = nonce()?;
     let (title, effect, action, completed, prefix, intent, operation) = match purpose {
         Purpose::Creation => ("Native static credential intake", "create a credential", "Create", "create a credential",
-            "serverware.nativeStaticCredential", "serverware.staticCredentialCreationIntent/v1", "credential.static.create"),
+            "catchplate.nativeStaticCredential", "catchplate.staticCredentialCreationIntent/v1", "credential.static.create"),
         Purpose::Rotation => ("Native static credential rotation", "replace the current credential", "Rotate", "rotate a credential",
-            "serverware.nativeStaticCredentialRotation", "serverware.staticCredentialRotationIntent/v1", "credential.static.rotate"),
+            "catchplate.nativeStaticCredentialRotation", "catchplate.staticCredentialRotationIntent/v1", "credential.static.rotate"),
     };
     let body = PAGE.replace("__PURPOSE_TITLE__", title).replace("__EFFECT__", effect)
         .replace("__ACTION__", action).replace("__COMPLETED__", completed)

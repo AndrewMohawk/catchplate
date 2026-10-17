@@ -28,14 +28,14 @@ FIXTURE = 'scripts/fixtures/native_release_jit_preparation.json'
 FIXTURE_SHA = 'b1bdf10c83bee503dbf82be8a0fc2e72f9121db4110f0e7f61186bd09d578b23'
 LOG_LIMIT = 8 * 1024**2
 RESERVE = 2 * 1024**3
-LABEL = 'com.serverware.hosted-native-review'
+LABEL = 'com.catchplate.hosted-native-review'
 CONFIG = '[source.crates-io]\nreplace-with = "vendored-sources"\n[source.vendored-sources]\ndirectory = "/vendor"\n'
 BUILD_ENV = {'CARGO_HOME': '/cargo-home', 'CARGO_TARGET_DIR': '/target', 'CARGO_BUILD_JOBS': '1',
              'CARGO_NET_RETRY': '0', 'SOURCE_DATE_EPOCH': '0', 'RUSTFLAGS': '-C link-arg=-Wl,--build-id=none'}
 NORMAL_COMMAND = ('cargo', 'build', '--release', '--frozen', '--offline', '--bin',
-                  'serverware-decision-gate', '--message-format=json')
+                  'catchplate-decision-gate', '--message-format=json')
 NORMAL_FILES = ('scripts/discard_headers_parity.v1.json', 'policies/credential-limits.examples.json')
-NORMAL_SCHEMA = 'serverware.hostedNormalRust/v1'
+NORMAL_SCHEMA = 'catchplate.hostedNormalRust/v1'
 NORMAL_WORKFLOW = '.github/workflows/native-review-rust.yml'
 NORMAL_RUNNER = 'scripts/run_native_jit_review_rust.py'
 NORMAL_BUILD_SECONDS = 1800
@@ -112,7 +112,7 @@ def normal_failure_receipt(run):
     # of timeout. Only the outer supervisor directly observes reason=timeout.
     pending = len(run.receipt.get('pendingChildren', []))
     require(pending <= len(NORMAL_COMMAND_LABELS), 'failure pending bound')
-    return {'schema': 'serverware.hostedNormalRustFailure/v1', 'ok': False,
+    return {'schema': 'catchplate.hostedNormalRustFailure/v1', 'ok': False,
         'sourceRevision': run.revision, 'phase': run.normal_phase, 'normalBuildLimitSeconds': NORMAL_BUILD_SECONDS,
         'failedCommands': commands, 'workers': workers, 'pendingChildren': pending,
         'normalBinaryPublished': False, 'automaticRetry': False, 'cacheRestored': False}
@@ -149,7 +149,7 @@ def cargo_row(raw, phase):
     require([row['success'] for row in rows if row.get('reason') == 'build-finished'] == [True], 'Cargo completion missing')
     binary = phase == 'bintest'
     selected = [row for row in rows if row.get('reason') == 'compiler-artifact'
-                and row.get('target', {}).get('name') == ('serverware-decision-gate' if binary else 'serverware_decision_gate')
+                and row.get('target', {}).get('name') == ('catchplate-decision-gate' if binary else 'catchplate_decision_gate')
                 and row['target']['kind'] == (['bin'] if binary else ['lib'])
                 and row['profile']['test'] is (phase != 'library') and row['fresh'] is False]
     require(len(selected) == 1, 'unique fresh artifact missing')
@@ -230,7 +230,7 @@ def normal_input_identity(repository, git_files):
         rows[name] = {'mode': mode, 'gitBlob': oid, 'sha256': hashlib.sha256(body).hexdigest()}
     version = manifest['package']['version']
     require(type(version) is str and re.fullmatch(r'[0-9A-Za-z.+-]{1,128}', version), 'package version differs')
-    return {'schema': 'serverware.normalRustBuildInputs/v1', 'configuration': normal_configuration(),
+    return {'schema': 'catchplate.normalRustBuildInputs/v1', 'configuration': normal_configuration(),
             'packageVersion': version, 'files': rows}
 
 
@@ -238,8 +238,8 @@ def normal_cargo_rows(raw):
     rows = [json.loads(line) for line in raw.splitlines()]
     require([row['success'] for row in rows if row.get('reason') == 'build-finished'] == [True], 'normal build incomplete')
     selected = {}
-    for kind, name, source in (('binary', 'serverware-decision-gate', 'main.rs'),
-                               ('library', 'serverware_decision_gate', 'custody_protocol.rs')):
+    for kind, name, source in (('binary', 'catchplate-decision-gate', 'main.rs'),
+                               ('library', 'catchplate_decision_gate', 'custody_protocol.rs')):
         matches = [row for row in rows if row.get('reason') == 'compiler-artifact'
                    and row.get('target', {}).get('name') == name]
         require(len(matches) == 1, 'normal target is missing or ambiguous')
@@ -249,8 +249,8 @@ def normal_cargo_rows(raw):
                 and row['profile']['test'] is False and row['profile']['opt_level'] == '3'
                 and row['fresh'] is False and row['features'] == [], 'normal Cargo profile/target differs')
         selected[kind] = row
-    require(selected['binary']['executable'] == '/target/release/serverware-decision-gate'
-            and selected['binary']['filenames'] == ['/target/release/serverware-decision-gate']
+    require(selected['binary']['executable'] == '/target/release/catchplate-decision-gate'
+            and selected['binary']['filenames'] == ['/target/release/catchplate-decision-gate']
             and selected['library']['executable'] is None, 'normal executable path differs')
     return selected
 
@@ -299,7 +299,7 @@ def verify_normal_receipt(receipt, binary_bytes, current_identity):
             and re.fullmatch('[0-9a-f]{40}', receipt['sourceRevision'])
             and re.fullmatch('[0-9a-f]{64}', receipt['runnerSourceSha256'])
             and receipt['buildInputs'] == current_identity
-            and current_identity['schema'] == 'serverware.normalRustBuildInputs/v1'
+            and current_identity['schema'] == 'catchplate.normalRustBuildInputs/v1'
             and current_identity['configuration'] == normal_configuration()
             and receipt['buildInputIdentity'] == identity_digest(current_identity), 'normal build identity differs')
     files = current_identity['files']
@@ -312,7 +312,7 @@ def verify_normal_receipt(receipt, binary_bytes, current_identity):
     require(type(binary_bytes) is bytes and 64 <= len(binary_bytes) <= 512 * 1024**2
             and binary_bytes[:7] == b'\x7fELF\x02\x01\x01' and binary_bytes[18:20] == b'\x3e\x00'
             and binary_bytes[16:18] in (b'\x02\x00', b'\x03\x00'), 'normal ELF format differs')
-    require(receipt['binary'] == {'name': 'serverware-decision-gate', 'sha256': hashlib.sha256(binary_bytes).hexdigest(),
+    require(receipt['binary'] == {'name': 'catchplate-decision-gate', 'sha256': hashlib.sha256(binary_bytes).hexdigest(),
                                  'bytes': len(binary_bytes), 'mode': '0555'}, 'normal ELF identity differs')
     toolchain = receipt['toolchain']
     require(type(toolchain) is dict and set(toolchain) == {'rustcVersionVerbose', 'cargoVersion'}
@@ -327,15 +327,15 @@ def verify_normal_receipt(receipt, binary_bytes, current_identity):
         require(type(item) is dict and set(item) == {'artifactPath', 'artifactSha256', 'depInfoPath', 'depInfoSha256', 'files', 'environment'}
                 and re.fullmatch('[0-9a-f]{64}', item['artifactSha256'])
                 and re.fullmatch('[0-9a-f]{64}', item['depInfoSha256'])
-                and re.fullmatch(r'/target/release/deps/serverware_decision_gate-[0-9a-f]{16}\.d', item['depInfoPath'])
+                and re.fullmatch(r'/target/release/deps/catchplate_decision_gate-[0-9a-f]{16}\.d', item['depInfoPath'])
                 and type(item['files']) is dict and CRATE + 'src/' + source in item['files']
                 and all(name in files and row == files[name] for name, row in item['files'].items())
                 and type(item['environment']) is dict and set(item['environment']) <= {'CARGO_PKG_VERSION'}
                 and all(value == current_identity['packageVersion'] for value in item['environment'].values()),
                 'normal compiler input provenance differs')
-        require((item['artifactPath'] == '/target/release/serverware-decision-gate'
+        require((item['artifactPath'] == '/target/release/catchplate-decision-gate'
                  and item['artifactSha256'] == receipt['binary']['sha256']) if kind == 'binary' else
-                item['artifactPath'] == item['depInfoPath'].removesuffix('.d').replace('/serverware_', '/libserverware_') + '.rlib',
+                item['artifactPath'] == item['depInfoPath'].removesuffix('.d').replace('/catchplate_', '/libcatchplate_') + '.rlib',
                 'normal compiler artifact differs')
     require(type(receipt['cleanup']) is dict and set(receipt['cleanup']) == {'allOwnedContainersRemoved', 'phases'}
             and receipt['cleanup']['allOwnedContainersRemoved'] is True
@@ -451,7 +451,7 @@ class HostedRun:
         require(isinstance(emitted, str) and re.fullmatch(r'/target/release/(?:deps/)?[A-Za-z0-9_-]+(?:\.rlib)?', emitted), 'artifact path refused')
         path = self.root / emitted.removeprefix('/')
         if phase == 'library':
-            aliases = [item for item in (self.root / 'target/release/deps').glob('libserverware_decision_gate-*.rlib') if item.samefile(path)]
+            aliases = [item for item in (self.root / 'target/release/deps').glob('libcatchplate_decision_gate-*.rlib') if item.samefile(path)]
             require(len(aliases) == 1, 'hashed library alias missing')
             dep = aliases[0].with_name(aliases[0].name.removeprefix('lib')).with_suffix('.d')
         else:
@@ -489,7 +489,7 @@ class HostedRun:
         lock = read(self.repo / CRATE / 'Cargo.lock'); packages = tomllib.loads(lock.decode())['package']
         require(all((item.get('source') == 'registry+https://github.com/rust-lang/crates.io-index'
                      and re.fullmatch('[0-9a-f]{64}', item.get('checksum', '')))
-                    or ('source' not in item and item['name'] == 'serverware-decision-gate') for item in packages), 'nonpublic/unpinned dependency')
+                    or ('source' not in item and item['name'] == 'catchplate-decision-gate') for item in packages), 'nonpublic/unpinned dependency')
         roster_raw = read(self.repo / ROSTER); roster = json.loads(roster_raw)
         require({kind: sum(len(item['names']) for item in roster.values() if item['kind'] == kind)
                  for kind in ('library', 'binary')} == {'library': 29, 'binary': 24}, 'control roster count changed')
@@ -503,7 +503,7 @@ class HostedRun:
         for phase, command in (
             ('library', ['cargo', 'build', '--lib']),
             ('libtest', ['cargo', 'test', '--lib', '--no-run']),
-            ('bintest', ['cargo', 'test', '--bin', 'serverware-decision-gate', '--no-run'])):
+            ('bintest', ['cargo', 'test', '--bin', 'catchplate-decision-gate', '--no-run'])):
             self.container(phase, command + ['--release', '--frozen', '--offline', '--message-format=json'], 900)
             self.artifact(phase, git_files)
         artifacts = self.receipt['artifacts']; script = ['set -eu',
@@ -515,7 +515,7 @@ class HostedRun:
                 script.append(shlex.join([executable, item['prefix'], option]) + ' > /results/' + label + '-' + suffix + '.txt')
         for label, source, code, _ in APIS:
             command = shlex.join(['rustc', '--edition=2021', '--emit=metadata', '--error-format=json', '--extern',
-                'serverware_decision_gate=' + artifacts['library']['path'], '-L', 'dependency=/target/release/deps',
+                'catchplate_decision_gate=' + artifacts['library']['path'], '-L', 'dependency=/target/release/deps',
                 '/repository/' + CRATE + 'src/' + source, '-o', '/tmp/' + label + '.rmeta'])
             command += ' > /results/' + label + '.stdout 2> /results/' + label + '.stderr'
             script.append('if ' + command + '; then exit 1; fi' if code else command)
@@ -526,7 +526,7 @@ class HostedRun:
         for label, source, code, line in APIS:
             check_api(read(self.results / (label + '.stdout')), read(self.results / (label + '.stderr')), code, source, line)
         for item in artifacts.values(): require(sha(self.root / item['path'].removeprefix('/')) == item['sha256'], 'tested artifact changed')
-        require(not (self.root / 'target/release/serverware-decision-gate').exists(), 'normal proxy binary unexpectedly exists')
+        require(not (self.root / 'target/release/catchplate-decision-gate').exists(), 'normal proxy binary unexpectedly exists')
         _, dirty = self.command('source-after', ['git', '-C', str(self.repo), 'status', '--porcelain=v1', '--untracked-files=all'], 30)
         require(not dirty and sha(self.repo / CRATE / 'Cargo.lock') == self.receipt['cargoLockSha256'], 'checkout changed')
         self.receipt.update({'ok': True, 'passed': {'library': 29, 'binary': 24, 'api': 5}, 'skipped': 0})
@@ -546,7 +546,7 @@ class HostedRun:
         lock = read(self.repo / CRATE / 'Cargo.lock'); packages = tomllib.loads(lock.decode())['package']
         require(all((item.get('source') == 'registry+https://github.com/rust-lang/crates.io-index'
                      and re.fullmatch('[0-9a-f]{64}', item.get('checksum', '')))
-                    or ('source' not in item and item['name'] == 'serverware-decision-gate') for item in packages),
+                    or ('source' not in item and item['name'] == 'catchplate-decision-gate') for item in packages),
                 'nonpublic/unpinned dependency')
         repository = os.environ.get('GITHUB_REPOSITORY', '')
         require(os.environ.get('GITHUB_SHA') == self.revision and os.environ.get('GITHUB_JOB') == 'normal-proxy'
@@ -567,24 +567,24 @@ class HostedRun:
             'cargo --version > /results/normal-cargo.txt\nexec ' + shlex.join(NORMAL_COMMAND)], NORMAL_BUILD_SECONDS)
         self.normal_phase = 'artifact-validation'
         rows = normal_cargo_rows(read(self.results / 'normal.stdout.log'))
-        binary_path = self.root / 'target/release/serverware-decision-gate'
+        binary_path = self.root / 'target/release/catchplate-decision-gate'
         binary_bytes = read(binary_path, 512 * 1024**2)
         require(binary_path.stat().st_mode & 0o111, 'normal ELF is not executable')
         # Cargo's root .d can omit rustc env-dep records. Join the actual compiler
         # unit through its ELF hardlink/identical bytes, then parse its complete .d.
-        units = [path for path in (self.root / 'target/release/deps').glob('serverware_decision_gate-*')
-                 if re.fullmatch(r'serverware_decision_gate-[0-9a-f]{16}', path.name)]
+        units = [path for path in (self.root / 'target/release/deps').glob('catchplate_decision_gate-*')
+                 if re.fullmatch(r'catchplate_decision_gate-[0-9a-f]{16}', path.name)]
         require(1 <= len(units) <= 4, 'normal compiler unit count differs')
         aliases = [path for path in units if not path.is_symlink()
                    and (path.samefile(binary_path) or read(path, 512 * 1024**2) == binary_bytes)]
         require(len(aliases) == 1, 'normal compiler-unit ELF join missing')
         library = [path for path in rows['library']['filenames']
-                   if re.fullmatch(r'/target/release/(?:libserverware_decision_gate|deps/libserverware_decision_gate-[0-9a-f]{16})\.rlib', path)]
+                   if re.fullmatch(r'/target/release/(?:libcatchplate_decision_gate|deps/libcatchplate_decision_gate-[0-9a-f]{16})\.rlib', path)]
         require(len(library) == 1, 'linked library artifact missing')
         library_path = self.root / library[0].removeprefix('/')
         library_bytes = read(library_path, 512 * 1024**2)
-        library_units = [path for path in (self.root / 'target/release/deps').glob('libserverware_decision_gate-*.rlib')
-                         if re.fullmatch(r'libserverware_decision_gate-[0-9a-f]{16}\.rlib', path.name)]
+        library_units = [path for path in (self.root / 'target/release/deps').glob('libcatchplate_decision_gate-*.rlib')
+                         if re.fullmatch(r'libcatchplate_decision_gate-[0-9a-f]{16}\.rlib', path.name)]
         require(1 <= len(library_units) <= 4, 'linked library compiler unit count differs')
         library_aliases = [path for path in library_units if not path.is_symlink()
                            and (path.samefile(library_path) or read(path, 512 * 1024**2) == library_bytes)]
@@ -593,7 +593,7 @@ class HostedRun:
                  'library': '/' + library_aliases[0].relative_to(self.root).as_posix()}
         compiler = {}
         for kind, artifact_path in units.items():
-            stem = artifact_path if kind == 'binary' else artifact_path.removesuffix('.rlib').replace('/libserverware_', '/serverware_')
+            stem = artifact_path if kind == 'binary' else artifact_path.removesuffix('.rlib').replace('/libcatchplate_', '/catchplate_')
             dep_path = stem + '.d'
             targets = {dep_path, artifact_path}
             if kind == 'library':
@@ -629,7 +629,7 @@ class HostedRun:
             'runnerSourceSha256': sha(self.repo / NORMAL_RUNNER),
             'toolchain': {'rustcVersionVerbose': read(self.results / 'normal-rustc.txt', 4096).decode('ascii'),
                           'cargoVersion': read(self.results / 'normal-cargo.txt', 4096).decode('ascii')},
-            'binary': {'name': 'serverware-decision-gate', 'sha256': hashlib.sha256(binary_bytes).hexdigest(),
+            'binary': {'name': 'catchplate-decision-gate', 'sha256': hashlib.sha256(binary_bytes).hexdigest(),
                        'bytes': len(binary_bytes), 'mode': '0555'}, 'compilerInputs': compiler,
             'cleanup': {'allOwnedContainersRemoved': True, 'phases': ['provision', 'normal']},
             'normalBinary': True, 'tested': False, 'deployed': False, 'nativeAdmission': False,
@@ -637,7 +637,7 @@ class HostedRun:
         verify_normal_receipt(receipt, binary_bytes, identity)
         self.normal_phase = 'export'
         export = self.root / 'artifact'; export.mkdir(mode=0o700)
-        with (export / 'serverware-decision-gate').open('xb') as stream:
+        with (export / 'catchplate-decision-gate').open('xb') as stream:
             stream.write(binary_bytes); stream.flush(); os.fsync(stream.fileno()); os.fchmod(stream.fileno(), 0o555)
         save(export / 'normal.json', receipt)
         self.receipt.update({'ok': True, 'normalProxyBinaryBuilt': True,

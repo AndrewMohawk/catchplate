@@ -10,38 +10,38 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub(crate) const INSTALL_RECEIPT_API_VERSION: &str =
-    "serverware.policyShadowGenerationPublication/v2";
+    "catchplate.policyShadowGenerationPublication/v2";
 pub(crate) const INSTALL_RECEIPT_KIND: &str =
     "PolicyShadowGenerationPublication";
 pub(crate) const PUBLICATION_PREPARATION_API_VERSION: &str =
-    "serverware.policyShadowGenerationPublicationPreparation/v1";
+    "catchplate.policyShadowGenerationPublicationPreparation/v1";
 pub(crate) const PUBLICATION_PREPARATION_KIND: &str =
     "PolicyShadowGenerationPublicationPreparation";
 pub(crate) const PUBLICATION_HANDOFF_API_VERSION: &str =
-    "serverware.policyShadowGenerationPublicationHandoff/v1";
+    "catchplate.policyShadowGenerationPublicationHandoff/v1";
 pub(crate) const PUBLICATION_SIGNATURE_DOMAIN: &str =
-    "serverware.policyShadowGenerationPublication/v2";
+    "catchplate.policyShadowGenerationPublication/v2";
 pub(crate) const PUBLICATION_PREPARATION_SIGNATURE_DOMAIN: &str =
-    "serverware.policyShadowGenerationPublicationPreparation/v1";
+    "catchplate.policyShadowGenerationPublicationPreparation/v1";
 pub(crate) const STARTUP_ATTESTATION_HANDOFF_API_VERSION: &str =
-    "serverware.policyShadowRuntimeAttestationHandoff/v2";
+    "catchplate.policyShadowRuntimeAttestationHandoff/v2";
 pub(crate) const STARTUP_ATTESTATION_RECEIPT_API_VERSION: &str =
-    "serverware.policyRuntimeAttestation/v2";
+    "catchplate.policyRuntimeAttestation/v2";
 pub(crate) const STARTUP_ATTESTATION_RECEIPT_KIND: &str =
     "PolicyRuntimeAttestation";
 pub(crate) const SHADOW_ROLE_AUTHORIZATION_API_VERSION: &str =
-    "serverware.policyShadowRoleAuthorization/v1";
+    "catchplate.policyShadowRoleAuthorization/v1";
 pub(crate) const SHADOW_ROLE_AUTHORIZATION_KIND: &str =
     "PolicyShadowRoleAuthorization";
 pub(crate) const RUNTIME_EVIDENCE_API_VERSION: &str =
-    "serverware.policyShadowRuntimeAttestationEvidence/v1";
+    "catchplate.policyShadowRuntimeAttestationEvidence/v1";
 
 pub(crate) const RUNTIME_VERIFIER_RESPONSE_API_VERSION: &str =
-    "serverware.policyShadowRuntimeAttestationVerification/v2";
+    "catchplate.policyShadowRuntimeAttestationVerification/v2";
 pub(crate) const RUNTIME_VERIFIER_RESPONSE_KIND: &str =
     "PolicyShadowRuntimeAttestationVerification";
 pub(crate) const RUNTIME_VERIFIER_SIGNATURE_DOMAIN: &str =
-    "serverware.policyShadowRuntimeAttestationVerification/v2";
+    "catchplate.policyShadowRuntimeAttestationVerification/v2";
 
 pub(crate) const MAX_RUNTIME_EVIDENCE_BYTES: usize = 1024 * 1024;
 pub(crate) const MAX_PUBLICATION_HANDOFF_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
@@ -750,7 +750,7 @@ pub(crate) fn startup_attestation_handoff_chain_sha256(
     attestation_policy_sha256: &Sha256Digest,
 ) -> Result<Sha256Digest, String> {
     domain_digest(
-        b"serverware.policyShadowRuntimeAttestationEvidenceChain/v1",
+        b"catchplate.policyShadowRuntimeAttestationEvidenceChain/v1",
         &(
             STARTUP_ATTESTATION_HANDOFF_API_VERSION,
             &handoff.receipt_id,
@@ -812,7 +812,7 @@ pub(crate) fn generation_publication_high_water_digests(
             GenerationInstallError::invalid(error.to_string())
         })?;
     let custody_high_water_sha256 = framed_domain_digest(
-        b"serverware.policyShadowCustodyPublicationHighWater/v1",
+        b"catchplate.policyShadowCustodyPublicationHighWater/v1",
         &[&custody_bytes],
     );
     let ingress_sequence = generation
@@ -838,7 +838,7 @@ pub(crate) fn generation_publication_high_water_digests(
             GenerationInstallError::invalid(error.to_string())
         })?;
     let ingress_high_water_sha256 = framed_domain_digest(
-        b"serverware.policyShadowIngressPublicationHighWater/v1",
+        b"catchplate.policyShadowIngressPublicationHighWater/v1",
         &[&ingress_bytes],
     );
     if custody.authoritative_ledger_head_sha256
@@ -892,7 +892,7 @@ pub(crate) fn publication_attestation_chain_sha256(
             GenerationInstallError::invalid(error.to_string())
         })?;
     Ok(framed_domain_digest(
-        b"serverware.policyShadowRuntimeAttestationChain/v1",
+        b"catchplate.policyShadowRuntimeAttestationChain/v1",
         &[&chain_bytes, &binding_bytes],
     ))
 }
@@ -1100,7 +1100,7 @@ pub(crate) fn publication_reservation_receipt_sha256(
     trust: &PublicationTrustBinding,
 ) -> Result<Sha256Digest, ShadowError> {
     domain_digest(
-        b"serverware.policyShadowGenerationDurableReplayReservation/v1",
+        b"catchplate.policyShadowGenerationDurableReplayReservation/v1",
         &(
             request,
             &generation.generation_id,
@@ -1124,7 +1124,7 @@ pub(crate) fn publication_commit_receipt_sha256(
     trust: &PublicationTrustBinding,
 ) -> Result<Sha256Digest, ShadowError> {
     domain_digest(
-        b"serverware.policyShadowGenerationDurableReplayCommit/v1",
+        b"catchplate.policyShadowGenerationDurableReplayCommit/v1",
         &(
             request,
             preparation_envelope_sha256,
@@ -1167,7 +1167,7 @@ pub(crate) fn validate_publication_common(
     let evidence = &startup_attestation.evidence;
     let evidence_bytes = canonical_json_bytes(&evidence.evidence)?;
     let expected_handoff_sha256 = domain_digest(
-        b"serverware.policyShadowGenerationManagementHandoff/v1",
+        b"catchplate.policyShadowGenerationManagementHandoff/v1",
         &(
             request.request_id.as_str(),
             request.replay_id.as_str(),

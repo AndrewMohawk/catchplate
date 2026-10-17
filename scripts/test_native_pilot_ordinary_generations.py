@@ -19,14 +19,14 @@ from cryptography.exceptions import InvalidSignature
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import custody_generation_grants as grants
-from serverware import native_pilot_ordinary_generation_profile as profile
-from serverware import native_pilot_ordinary_initial_profile as initial
-from serverware import native_pilot_ordinary_install as installer
-from serverware import native_pilot_publication as publication
-from serverware import native_pilot_service_authority as authority
-from serverware import native_pilot_supervisor_ordinary_generations as composer
-from serverware import native_pilot_supervisor_policy as policy
+from catchplate import custody_generation_grants as grants
+from catchplate import native_pilot_ordinary_generation_profile as profile
+from catchplate import native_pilot_ordinary_initial_profile as initial
+from catchplate import native_pilot_ordinary_install as installer
+from catchplate import native_pilot_publication as publication
+from catchplate import native_pilot_service_authority as authority
+from catchplate import native_pilot_supervisor_ordinary_generations as composer
+from catchplate import native_pilot_supervisor_policy as policy
 from test_native_pilot_ordinary_commissioning import fixture, plan, private, runtimes
 from test_native_pilot_ordinary_keys import ROLES, canonical, encoded, labelled, sha
 
@@ -39,7 +39,7 @@ SCOPE_FIELDS = ("previousConfigurationBindingSha256", "successorConfigurationBin
 
 
 def policy_fragment():
-    return {"apiVersion": "serverware.nativePilotOrdinaryGenerationPolicy/v1",
+    return {"apiVersion": "catchplate.nativePilotOrdinaryGenerationPolicy/v1",
         "installationIssuedAtUnixNanos": 1000, "installationExpiresAtUnixNanos": 2000}
 
 
@@ -80,8 +80,8 @@ def context():
                 "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId")},
             "issuedAtBoottimeNs": "1200", "runtimeConfig": {"path": installer.RUNTIME_PATHS[role], "sha256": sha(built[role])},
             "credentials": credentials, "activation": activation}
-        signature = f["delivery_keys"][role].sign(b"serverware.policyCustodyGuestDelivery.signature/v1\0" + canonical(payload))
-        signed[role] = canonical({"apiVersion": "serverware.policyCustodyGuestDelivery/v1", "payload": payload,
+        signature = f["delivery_keys"][role].sign(b"catchplate.policyCustodyGuestDelivery.signature/v1\0" + canonical(payload))
+        signed[role] = canonical({"apiVersion": "catchplate.policyCustodyGuestDelivery/v1", "payload": payload,
             "signatureBase64url": encoded(signature)})
     f.update(runtimes=built, deliveries=signed)
     return f
@@ -101,8 +101,8 @@ def root_pin(f, role):
 
 def result(role, payload, *, key=None):
     raw = canonical(payload)
-    domain = b"serverware.custodyServiceGenerationGrant.signature/v1"
-    message = b"serverware-signature-v1\0" + len(domain).to_bytes(8, "big") + domain + len(raw).to_bytes(8, "big") + raw
+    domain = b"catchplate.custodyServiceGenerationGrant.signature/v1"
+    message = b"catchplate-signature-v1\0" + len(domain).to_bytes(8, "big") + domain + len(raw).to_bytes(8, "big") + raw
     signature = (key or private(role + "/root")).sign(message)
     signed = canonical({"payload": payload, "signatureBase64url": encoded(signature)})
     return {"original": signed.decode("ascii"), "sha256": sha(signed),

@@ -9,7 +9,7 @@ No build, test, provider contact, or deployment is included in this source slice
 ## Independent admission and actual producer
 
 The signed-delivery-bound cold custody configuration must explicitly contain
-`ledgerRawPersistence: {"apiVersion":"serverware.responseV2.ledgerRawPersistence/v1"}`.
+`ledgerRawPersistence: {"apiVersion":"catchplate.responseV2.ledgerRawPersistence/v1"}`.
 Omission preserves the previous profile; explicit null refuses. Selection also
 requires the separately assigned `targetDispatch` native capture purpose, actual
 guest delivery, and `ledgerExactRead`. Selection is not write permission.

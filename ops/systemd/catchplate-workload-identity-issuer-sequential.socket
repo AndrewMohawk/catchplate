@@ -1,0 +1,22 @@
+# Uninstalled source. Select the explicit signed native service v3 profile.
+[Unit]
+Description=Catchplate bounded sequential private workload issuer ingress
+Before=catchplate-workload-identity-issuer-sequential.service
+After=systemd-tmpfiles-setup.service
+Conflicts=catchplate-workload-identity-issuer.service catchplate-workload-identity-issuer.socket
+
+[Socket]
+ListenStream=/run/catchplate/workload-identity-issuer/issuer.sock
+FileDescriptorName=catchplate-workload-identity-issuer
+SocketUser=65492
+SocketGroup=65532
+SocketMode=0660
+DirectoryMode=0755
+Backlog=1
+Accept=no
+FlushPending=yes
+RemoveOnStop=yes
+Service=catchplate-workload-identity-issuer-sequential.service
+
+[Install]
+WantedBy=sockets.target

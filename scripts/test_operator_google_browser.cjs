@@ -34,7 +34,7 @@ const SECOND_RULE_ID = '44444444-5555-4555-8555-555555555555';
 const MIMIC_APPLICATION_ID = '88888888-8888-4888-8888-888888888888';
 const ACTION_RULE_ID = '99999999-9999-4999-8999-999999999999';
 const SECOND_ACCOUNT = 'other-operator@example.test';
-const ACTIVITY_SCHEMA = 'serverware.operatorAccountActivity/v1';
+const ACTIVITY_SCHEMA = 'catchplate.operatorAccountActivity/v1';
 const ACTIVITY_ERROR = 'synthetic-raw-provider-error-NEVER-DISPLAY';
 const RESPONSE_EVENT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const SUCCESS_EVENT = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -63,9 +63,9 @@ const activity = (changes = {}) => ({schema: ACTIVITY_SCHEMA, status: 'available
 const observedActivity = (accounts, changes = {}) => activity({accounts,
   window: {...activity().window, rows_scanned: 8, bytes_read: 2048}, ...changes});
 const INPUTS = ['scripts/test_operator_google_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
-  'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
+  'scripts/test_operator_ordinary_modes_browser.cjs', 'catchplate/operator_demo_portal.py',
   ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js', 'workspace_applications.js', 'workspace_resources.js',
-    'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_google.js'].map(name => 'serverware/operator_demo_web/' + name)];
+    'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_google.js'].map(name => 'catchplate/operator_demo_web/' + name)];
 let artifacts;
 
 async function hashes() { return Object.fromEntries(await Promise.all(INPUTS.map(async name =>
@@ -152,7 +152,7 @@ async function unavailable(page, state) {
   assert.equal(state.posts.length, 0); await privateAbsent(page);
 }
 function generatorChecks() {
-  const {credentialHeaderTarget, clientCredentialInput, buildCurlCommand} = require('../serverware/operator_demo_web/app.js');
+  const {credentialHeaderTarget, clientCredentialInput, buildCurlCommand} = require('../catchplate/operator_demo_web/app.js');
   assert.equal(credentialHeaderTarget(google()), 'Authorization');
   assert.equal(clientCredentialInput({credentialInput: 'insert', credential: google()}), null);
   assert.deepEqual(clientCredentialInput({credentialInput: 'replace_exact', placeholder: DUMMY, credential: google()}), {name: 'Authorization', value: DUMMY});
@@ -160,14 +160,14 @@ function generatorChecks() {
   const command = buildCurlCommand({proxyUrl: 'https://proxy.example.test', upstreamUrl: googleRule().upstream_url, method: 'GET',
     credentialInput: 'replace_exact', placeholder: DUMMY, credential: google({access_token: PRIVATE[0], refresh_token: PRIVATE[1]})});
   assert(command.includes("Authorization: Bearer GOOGLE-DUMMY-'\\''literal'\\''-$value"));
-  assert(command.includes('Proxy-Authorization: Bearer $SERVERWARE_PROXY_TOKEN')); assert(command.includes('--cacert'));
+  assert(command.includes('Proxy-Authorization: Bearer $CATCHPLATE_PROXY_TOKEN')); assert(command.includes('--cacert'));
   for (const value of PRIVATE) assert(!command.includes(value));
-  const resources = readFileSync(join(ROOT, 'serverware/operator_demo_web/workspace_resources.js'), 'utf8');
+  const resources = readFileSync(join(ROOT, 'catchplate/operator_demo_web/workspace_resources.js'), 'utf8');
   const permission = input => runInNewContext(resources + '\noperatorGooglePermission(input)', {input}, {timeout: 1000});
   assert.equal(permission(google()), 'Read Gmail');
   for (const permission_preset of ['gmail_full_access', '', null, undefined])
     assert.equal(permission(google({permission_preset})), 'Unsupported permission preset');
-  const connect = readFileSync(join(ROOT, 'serverware/operator_demo_web/workspace_connect.js'), 'utf8');
+  const connect = readFileSync(join(ROOT, 'catchplate/operator_demo_web/workspace_connect.js'), 'utf8');
   const labels = (input, reserved = []) => JSON.parse(JSON.stringify(runInNewContext(connect + '\noperatorConnectResourceChoices(input, reserved)', {input, reserved}, {timeout: 1000})));
   assert.deepEqual(labels([application()]), [{id: IDS.application, name: 'Reporting application'}]);
   const duplicateApps = [application({name: 'Same name'}), application({id: SECOND_APPLICATION_ID, name: 'Same  name'})];
@@ -224,8 +224,8 @@ const malformedActivity = [
 ];
 function activityProjectionChecks() {
   const core = ['workspace_core.js', 'workspace_github.js']
-    .map(name => readFileSync(join(ROOT, 'serverware/operator_demo_web', name), 'utf8')).join('\n');
-  const {clientCredentialInput, credentialHeaderTarget} = require('../serverware/operator_demo_web/app.js');
+    .map(name => readFileSync(join(ROOT, 'catchplate/operator_demo_web', name), 'utf8')).join('\n');
+  const {clientCredentialInput, credentialHeaderTarget} = require('../catchplate/operator_demo_web/app.js');
   const state = {credentials: [google()], applications: [application()], rules: [googleRule()], revision: 1,
     sequence: 1, active: digest(1), loaded: digest(1), responseModes: capabilities.responseModes,
     credentialInputModes: capabilities.credentialInputModes};
@@ -412,17 +412,17 @@ const tests = [
   ['Google replacement uses the fixed Authorization header and full Bearer dummy hint in both editors', browser => fixture(browser, supplied(), async (page, state) => {
     await ready(page); await view(page, 'access-rules'); await page.locator('#rule-credential-input').selectOption('replace_exact');
     assert.equal(await page.locator('#rule-credential-header').innerText(), 'Authorization');
-    assert.equal(await page.locator('#rule-placeholder').getAttribute('placeholder'), 'Bearer SERVERWARE_DUMMY');
+    assert.equal(await page.locator('#rule-placeholder').getAttribute('placeholder'), 'Bearer CATCHPLATE_DUMMY');
     await useGoogle(page); await page.locator('#connect-credential-input').selectOption('replace_exact');
     assert.equal(await page.locator('#connect-header-target').innerText(), 'Authorization');
-    assert.equal(await page.locator('#connect-placeholder').getAttribute('placeholder'), 'Bearer SERVERWARE_DUMMY');
+    assert.equal(await page.locator('#connect-placeholder').getAttribute('placeholder'), 'Bearer CATCHPLATE_DUMMY');
     assert.equal(state.posts.length, 0);
   })],
   ...['insert', 'replace_exact'].map(mode => ['active saved Google ' + mode + ' rule produces a separate application-auth connection template', browser => fixture(browser,
     supplied({rules: [googleRule(mode)]}), async (page, state) => {
       await useGoogle(page); await reviewSaved(page); await configured(page);
       const command = await page.locator('#client-command').innerText();
-      assert(command.includes('Proxy-Authorization: Bearer $SERVERWARE_PROXY_TOKEN'));
+      assert(command.includes('Proxy-Authorization: Bearer $CATCHPLATE_PROXY_TOKEN'));
       assert.equal(command.includes("--header 'Authorization:"), mode === 'replace_exact');
       if (mode === 'replace_exact') assert(command.includes("Authorization: Bearer GOOGLE-DUMMY-'\\''literal'\\''-$value"));
       assert(await page.locator('#download-config').isDisabled(), 'existing application token is not retrieved');
@@ -498,7 +498,7 @@ const tests = [
     supplied({credentials: [quarantine()], rules: [googleRule('replace_exact', {status: 'revoked'})]}), async (page, state, {context}) => {
       await ready(page); // Nearby control: quarantined account with only revoked references is accepted.
       const endpoint = 'https://operator-catalog.example.test/api/operator-demo/catalog'; let calls = 0;
-      const observed = {schema: 'serverware.operatorCatalog/v1', mode: 'operator-development', productionReady: false,
+      const observed = {schema: 'catchplate.operatorCatalog/v1', mode: 'operator-development', productionReady: false,
         hardwareVerified: false, revision: 2, policy: {policy_hash: digest(1), loaded_policy_hash: digest(1), sequence: 1, activation: 'active'},
         proxy_url: 'https://proxy.example.test', allowed_upstreams: ['https://gmail.googleapis.com'],
         credentials: [quarantine({active_rule_count: 0})], applications: [application({active_rule_count: 1, access_status: 'active'})],
@@ -687,7 +687,7 @@ async function main() {
   const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
   if (selection !== 'activity-only') console.log(JSON.stringify(generatorChecks()));
   if (selection === 'all' || selection === 'activity-only') console.log(JSON.stringify(activityProjectionChecks()));
-  const artifactRoot = '/srv/catchplate-fast/projects/serverware-operator-artifacts';
+  const artifactRoot = '/srv/catchplate-fast/projects/catchplate-operator-artifacts';
   assert((await stat(artifactRoot)).isDirectory()); artifacts = await mkdtemp(join(artifactRoot, 'google-browser-synthetic-'));
   console.log(JSON.stringify({artifactDirectory: artifacts, scope: 'public-account synthetic screenshots only'}));
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');

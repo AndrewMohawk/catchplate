@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/native-shadow-retrieval-store.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/native-shadow-retrieval-store.v1.schema.json",
   "title": "Native immutable retrieval store operator artifacts",
   "description": "Public data only. Exact ASCII/integer canonical originals, independent pins and actual filesystem checks remain mandatory. Neither form grants service or release authority.",
   "oneOf": [{"$ref": "#/$defs/manifest"}, {"$ref": "#/$defs/installed"}],
@@ -11,7 +11,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "proofScopeOriginalBase64url", "objectOriginalsBase64url"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeShadowRetrievalStoreManifest/v1"},
+        "apiVersion": {"const": "catchplate.nativeShadowRetrievalStoreManifest/v1"},
         "proofScopeOriginalBase64url": {"type": "string", "minLength": 1, "maxLength": 21846, "pattern": "^[A-Za-z0-9_-]+$"},
         "objectOriginalsBase64url": {
           "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
@@ -38,7 +38,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "manifestSha256", "releaseAuthority", "serviceReady", "directoryDevice", "directoryInode", "directoryMode", "objects"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeShadowRetrievalStoreInstalled/v1"},
+        "apiVersion": {"const": "catchplate.nativeShadowRetrievalStoreInstalled/v1"},
         "manifestSha256": {"$ref": "#/$defs/digest"},
         "releaseAuthority": {"const": false},
         "serviceReady": {"const": false},

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/streaming-response-proof.v1.schema.json",
-  "title": "Serverware Streaming Proxy Response Proof v1",
+  "$id": "https://catchplate.invalid/schemas/streaming-response-proof.v1.schema.json",
+  "title": "Catchplate Streaming Proxy Response Proof v1",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -14,8 +14,8 @@
     "vendor_tee"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.streamingProxyResponseProof/v1"},
-    "kind": {"const": "ServerwareStreamingProxyResponseProof"},
+    "apiVersion": {"const": "catchplate.streamingProxyResponseProof/v1"},
+    "kind": {"const": "CatchplateStreamingProxyResponseProof"},
     "external_capture": {"$ref": "#/$defs/capture"},
     "collector_signature": {"$ref": "#/$defs/ed25519Signature"},
     "streaming_response_statement": {"$ref": "#/$defs/statement"},
@@ -92,8 +92,8 @@
       "minItems": 2,
       "maxItems": 2,
       "prefixItems": [
-        {"const": "X-Serverware-Stream-Proof-B64"},
-        {"const": "X-Serverware-Stream-Proof-SHA256"}
+        {"const": "X-Catchplate-Stream-Proof-B64"},
+        {"const": "X-Catchplate-Stream-Proof-SHA256"}
       ],
       "items": false
     },
@@ -287,7 +287,7 @@
                 "type": "string",
                 "pattern": "^[!#$%&'*+.^_`|~0-9a-z-]+$",
                 "not": {
-                  "pattern": "(?:^x-serverware-response-|^connection$|^keep-alive$|^proxy-authenticate$|^proxy-authorization$|^te$|^trailer$|^transfer-encoding$|^upgrade$|authorization|cookie|secret|token|password|passwd|api-key|apikey|private-key)"
+                  "pattern": "(?:^x-catchplate-response-|^connection$|^keep-alive$|^proxy-authenticate$|^proxy-authorization$|^te$|^trailer$|^transfer-encoding$|^upgrade$|authorization|cookie|secret|token|password|passwd|api-key|apikey|private-key)"
                 },
                 "maxLength": 256
               },
@@ -318,7 +318,7 @@
         "response"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.controlPlaneAuthorizationReceipt/v1"},
+        "apiVersion": {"const": "catchplate.controlPlaneAuthorizationReceipt/v1"},
         "kind": {"const": "ControlPlaneAuthorizationReceipt"},
         "principal_id": {"$ref": "#/$defs/identifier"},
         "route_id": {"$ref": "#/$defs/identifier"},
@@ -383,7 +383,7 @@
           "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
         },
         "trailer": {
-          "const": "X-Serverware-Stream-Proof-B64, X-Serverware-Stream-Proof-SHA256"
+          "const": "X-Catchplate-Stream-Proof-B64, X-Catchplate-Stream-Proof-SHA256"
         },
         "transfer-encoding": {"const": "chunked"}
       }
@@ -425,7 +425,7 @@
       "required": ["type", "exporter_label", "value"],
       "properties": {
         "type": {"const": "tls-exporter"},
-        "exporter_label": {"const": "EXPORTER-Serverware-Proxy-Stream-v1"},
+        "exporter_label": {"const": "EXPORTER-Catchplate-Proxy-Stream-v1"},
         "value": {"$ref": "#/$defs/nonce"}
       }
     },
@@ -483,7 +483,7 @@
         "tls_channel_binding"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.streamingResponseStatement/v1"},
+        "apiVersion": {"const": "catchplate.streamingResponseStatement/v1"},
         "issued_at_unix": {"$ref": "#/$defs/positiveUint64"},
         "client_nonce": {"$ref": "#/$defs/nonce"},
         "client_request_digest": {"$ref": "#/$defs/sha256"},
@@ -546,7 +546,7 @@
         "response_signing_key_id"
       ],
       "properties": {
-        "streaming_response_statement_api_version": {"const": "serverware.streamingResponseStatement/v1"},
+        "streaming_response_statement_api_version": {"const": "catchplate.streamingResponseStatement/v1"},
         "streaming_response_statement_sha256": {"$ref": "#/$defs/sha256"},
         "issued_at_unix": {"$ref": "#/$defs/positiveUint64"},
         "client_nonce_sha256": {"$ref": "#/$defs/sha256"},
@@ -588,7 +588,7 @@
         },
         "server_instance_identity_digest": {"$ref": "#/$defs/sha256"},
         "tls_channel_binding_type": {"const": "tls-exporter"},
-        "tls_exporter_label": {"const": "EXPORTER-Serverware-Proxy-Stream-v1"},
+        "tls_exporter_label": {"const": "EXPORTER-Catchplate-Proxy-Stream-v1"},
         "tls_channel_binding_sha256": {"$ref": "#/$defs/sha256"},
         "response_signing_key_id": {"$ref": "#/$defs/sha256"}
       }
@@ -672,8 +672,8 @@
       "additionalProperties": false,
       "required": ["apiVersion", "kind", "statement", "signature"],
       "properties": {
-        "apiVersion": {"const": "serverware.vendorTeeVerification/v1"},
-        "kind": {"const": "ServerwareVendorTeeVerification"},
+        "apiVersion": {"const": "catchplate.vendorTeeVerification/v1"},
+        "kind": {"const": "CatchplateVendorTeeVerification"},
         "statement": {"$ref": "#/$defs/developmentVerifierStatement"},
         "signature": {"type": "null"}
       }
@@ -683,8 +683,8 @@
       "additionalProperties": false,
       "required": ["apiVersion", "kind", "statement", "signature"],
       "properties": {
-        "apiVersion": {"const": "serverware.vendorTeeVerification/v1"},
-        "kind": {"const": "ServerwareVendorTeeVerification"},
+        "apiVersion": {"const": "catchplate.vendorTeeVerification/v1"},
+        "kind": {"const": "CatchplateVendorTeeVerification"},
         "statement": {"$ref": "#/$defs/productionVerifierStatement"},
         "signature": {"$ref": "#/$defs/ed25519SignatureText"}
       }
@@ -718,8 +718,8 @@
         "vendor_tee"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.streamingResponseRuntimeProof/v1"},
-        "kind": {"const": "ServerwareStreamingResponseRuntimeProof"},
+        "apiVersion": {"const": "catchplate.streamingResponseRuntimeProof/v1"},
+        "kind": {"const": "CatchplateStreamingResponseRuntimeProof"},
         "streaming_response_statement": {"$ref": "#/$defs/statement"},
         "streaming_response_statement_sha256": {"$ref": "#/$defs/sha256"},
         "server_signature": {"$ref": "#/$defs/ed25519Signature"},
@@ -753,7 +753,7 @@
         "runtime_proof_sha256"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.streamingProxyResponseCapture/v1"},
+        "apiVersion": {"const": "catchplate.streamingProxyResponseCapture/v1"},
         "environment": {"enum": ["development", "production"]},
         "collection_mode": {"const": "strict-incremental-stream-capture"},
         "classification": {"const": "runtime-verified-complete-stream"},

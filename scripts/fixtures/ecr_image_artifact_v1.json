@@ -1,5 +1,5 @@
 {
-  "schema": "serverware.ecrImageArtifactVector/v1",
+  "schema": "catchplate.ecrImageArtifactVector/v1",
   "note": "Synthetic content-integrity vector, not a runnable image or approval. Repeated layer bytes are verified once.",
   "manifest": "{\n  \"schemaVersion\": 2,\n  \"mediaType\": \"application/vnd.oci.image.manifest.v1+json\",\n  \"config\": {\n    \"mediaType\": \"application/vnd.oci.image.config.v1+json\",\n    \"digest\": \"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a\",\n    \"size\": 2\n  },\n  \"layers\": [\n    {\n      \"mediaType\": \"application/vnd.oci.image.layer.v1.tar\",\n      \"digest\": \"sha256:ef4182005c776adbe672c9a92b383063e5025609baa2998e8927dc006eae19bf\",\n      \"size\": 16\n    },\n    {\n      \"mediaType\": \"application/vnd.oci.image.layer.v1.tar\",\n      \"digest\": \"sha256:ef4182005c776adbe672c9a92b383063e5025609baa2998e8927dc006eae19bf\",\n      \"size\": 16\n    }\n  ],\n  \"annotations\": {\n    \"org.opencontainers.image.title\": \"Synthetic λ vector\"\n  }\n}\n",
   "blobs": [
@@ -7,7 +7,7 @@
     {"digest": "sha256:ef4182005c776adbe672c9a92b383063e5025609baa2998e8927dc006eae19bf", "utf8": "synthetic-layer\n"}
   ],
   "expected_commitment": {
-    "schema": "serverware.ecrVerifiedImage/v1",
+    "schema": "catchplate.ecrVerifiedImage/v1",
     "manifest": {"media_type": "application/vnd.oci.image.manifest.v1+json", "digest": "sha256:de6da78c82e9f7688037d159c277011904f79902b66b9390e425c4b9c631834d", "size": 735},
     "config": {"media_type": "application/vnd.oci.image.config.v1+json", "digest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a", "size": 2},
     "layers": [
@@ -20,6 +20,6 @@
     ],
     "total_blob_bytes": 18
   },
-  "expected_commitment_json": "{\"blobs\":[{\"digest\":\"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a\",\"size\":2},{\"digest\":\"sha256:ef4182005c776adbe672c9a92b383063e5025609baa2998e8927dc006eae19bf\",\"size\":16}],\"config\":{\"digest\":\"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a\",\"media_type\":\"application/vnd.oci.image.config.v1+json\",\"size\":2},\"layers\":[{\"digest\":\"sha256:ef4182005c776adbe672c9a92b383063e5025609baa2998e8927dc006eae19bf\",\"media_type\":\"application/vnd.oci.image.layer.v1.tar\",\"size\":16},{\"digest\":\"sha256:ef4182005c776adbe672c9a92b383063e5025609baa2998e8927dc006eae19bf\",\"media_type\":\"application/vnd.oci.image.layer.v1.tar\",\"size\":16}],\"manifest\":{\"digest\":\"sha256:de6da78c82e9f7688037d159c277011904f79902b66b9390e425c4b9c631834d\",\"media_type\":\"application/vnd.oci.image.manifest.v1+json\",\"size\":735},\"schema\":\"serverware.ecrVerifiedImage/v1\",\"total_blob_bytes\":18}",
-  "expected_commitment_sha256": "sha256:a433807a418a8d5bb2674e45321ce12b8983f21e4198ed2f386bc540fe311973"
+  "expected_commitment_json": "{\"blobs\":[{\"digest\":\"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a\",\"size\":2},{\"digest\":\"sha256:ef4182005c776adbe672c9a92b383063e5025609baa2998e8927dc006eae19bf\",\"size\":16}],\"config\":{\"digest\":\"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a\",\"media_type\":\"application/vnd.oci.image.config.v1+json\",\"size\":2},\"layers\":[{\"digest\":\"sha256:ef4182005c776adbe672c9a92b383063e5025609baa2998e8927dc006eae19bf\",\"media_type\":\"application/vnd.oci.image.layer.v1.tar\",\"size\":16},{\"digest\":\"sha256:ef4182005c776adbe672c9a92b383063e5025609baa2998e8927dc006eae19bf\",\"media_type\":\"application/vnd.oci.image.layer.v1.tar\",\"size\":16}],\"manifest\":{\"digest\":\"sha256:de6da78c82e9f7688037d159c277011904f79902b66b9390e425c4b9c631834d\",\"media_type\":\"application/vnd.oci.image.manifest.v1+json\",\"size\":735},\"schema\":\"catchplate.ecrVerifiedImage/v1\",\"total_blob_bytes\":18}",
+  "expected_commitment_sha256": "sha256:03cb97c1f655f85753754a8e4692d4c8e54402d38d42a6de6226ce6c2e22b26b"
 }

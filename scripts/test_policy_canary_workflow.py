@@ -153,7 +153,7 @@ def exercise_candidate_handoff_credential_recheck(
         for field in app_module._POLICY_SHADOW_RUNTIME_ATTESTATION_HANDOFF_FIELDS
     }
     runtime_attestation["apiVersion"] = (
-        "serverware.policyShadowRuntimeAttestationHandoff/v2"
+        "catchplate.policyShadowRuntimeAttestationHandoff/v2"
     )
     candidate_bundle_digest = digest("b")
     context = {
@@ -239,7 +239,7 @@ def exercise_candidate_handoff_credential_recheck(
         )
         app_module.db.claim_policy_shadow_generation_request = claim_request
         payload = app_module.PolicyAuthorityCandidateHandoffRequest(
-            apiVersion="serverware.policyAuthorityCandidateHandoff/v1",
+            apiVersion="catchplate.policyAuthorityCandidateHandoff/v1",
             requestId="00000000-0000-4000-8000-000000000099",
             candidateId="candidate:handoff-recheck",
             artifactEnvelopeDigest=digest("3"),
@@ -297,16 +297,16 @@ def exercise_candidate_handoff_credential_recheck(
 
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        os.environ["SERVERWARE_DATA_DIR"] = tmp
-        os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
-        os.environ["SERVERWARE_DEV_AUTHENTICATOR"] = "1"
+        os.environ["CATCHPLATE_DATA_DIR"] = tmp
+        os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
+        os.environ["CATCHPLATE_DEV_AUTHENTICATOR"] = "1"
 
-        from serverware import app as app_module
-        from serverware import db, policy_bundle
-        from serverware.auth import AdminIdentity
+        from catchplate import app as app_module
+        from catchplate import db, policy_bundle
+        from catchplate.auth import AdminIdentity
 
         db.init_db()
         identity = AdminIdentity(
@@ -477,7 +477,7 @@ def main() -> None:
         ):
             request = app_module.PolicyAuthorityPortalPackageImportRequest(
                 apiVersion=
-                    "serverware.policyAuthorityPortalPackageImportRequest/v1",
+                    "catchplate.policyAuthorityPortalPackageImportRequest/v1",
                 requestId=request_id,
                 purpose=purpose,
                 package={},
@@ -490,7 +490,7 @@ def main() -> None:
         activation_request = (
             app_module.PolicyAuthorityDecisionGateActivationRequest(
                 apiVersion=
-                    "serverware.policyAuthorityDecisionGateActivationRequest/v1",
+                    "catchplate.policyAuthorityDecisionGateActivationRequest/v1",
                 canaryId="durable-canary",
                 generationId="sha256:" + "1" * 64,
                 generationPublicationEnvelopeDigest="sha256:" + "2" * 64,

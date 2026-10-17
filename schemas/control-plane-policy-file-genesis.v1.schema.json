@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/control-plane-policy-file-genesis.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/control-plane-policy-file-genesis.v1.schema.json",
   "title": "Explicit finalized-genesis policy file publication",
   "description": "Data only. Actual retained owners independently verify positive finalized signed genesis, audit inclusion, current committed tuple, exact signed policy bytes and fresh hardware two-person approval. Null expected file and an empty local journal never prove genesis. No activation, authority initialization, retry or repair permission.",
   "oneOf": [{"$ref": "#/$defs/request"}, {"$ref": "#/$defs/binding"}],

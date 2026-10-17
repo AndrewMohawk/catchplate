@@ -1,0 +1,23 @@
+# Uninstalled template. Reserve/completion callers require independently
+# provisioned socket-group access; SO_PEERCRED still checks their primary IDs.
+# Recreating this socket invalidates the separately signed listener identities.
+[Unit]
+Description=Catchplate independently enrolled current-root state ingress
+Before=catchplate-current-root-state.service
+After=systemd-tmpfiles-setup.service
+
+[Socket]
+ListenStream=/run/catchplate/current-root/state.sock
+FileDescriptorName=catchplate-current-root-state
+SocketUser=65516
+SocketGroup=65516
+SocketMode=0660
+DirectoryMode=0755
+Backlog=16
+Accept=no
+FlushPending=yes
+RemoveOnStop=yes
+Service=catchplate-current-root-state.service
+
+[Install]
+WantedBy=sockets.target

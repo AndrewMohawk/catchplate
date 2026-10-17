@@ -1,12 +1,12 @@
 //! Explicit pre-key two-phase owner. Retained scope is NOT a running bridge.
 use super::*;
 use super::super::super::guest_original::Process;
-use serverware_decision_gate::native_secret_broker_v1::shadow_image::ShadowImage;
+use catchplate_decision_gate::native_secret_broker_v1::shadow_image::ShadowImage;
 use std::fs::File;
 use std::os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd,OwnedFd};
 use std::os::unix::fs::{FileExt,MetadataExt};
-const WINDOW_DOMAIN:&[u8]=b"serverware.nativeShadowDriverBootstrapWindow.signature/v1\0";
-const SCOPE_DOMAIN:&[u8]=b"serverware.nativeShadowDriverScope.signature/v1\0";
+const WINDOW_DOMAIN:&[u8]=b"catchplate.nativeShadowDriverBootstrapWindow.signature/v1\0";
+const SCOPE_DOMAIN:&[u8]=b"catchplate.nativeShadowDriverScope.signature/v1\0";
 #[path="driver_continuation.rs"]
 pub(in crate::policy_shadow) mod continuation;
 pub(super) const MAX_BUNDLE:usize=16*1024*1024;
@@ -66,10 +66,10 @@ impl Cold {
         let configuration_bytes=configuration.read(65536).map_err(fail)?.to_vec();
         let config:Configuration=exact(&configuration_bytes)?;
         require(matches!((config.api_version.as_str(),config.continuation.is_some(),config.lifecycle.is_some()),
-            ("serverware.nativeShadowDriverBootstrapConfiguration/v1",false,false)
-            |("serverware.nativeShadowDriverBootstrapConfiguration/v2",true,false)
-            |("serverware.nativeShadowDriverBootstrapConfiguration/v3",true,false)
-            |("serverware.nativeShadowDriverBootstrapConfiguration/v4",true,true))
+            ("catchplate.nativeShadowDriverBootstrapConfiguration/v1",false,false)
+            |("catchplate.nativeShadowDriverBootstrapConfiguration/v2",true,false)
+            |("catchplate.nativeShadowDriverBootstrapConfiguration/v3",true,false)
+            |("catchplate.nativeShadowDriverBootstrapConfiguration/v4",true,true))
             && config.uid>0 && config.gid>0 && config.uid!=u32::MAX && config.gid!=u32::MAX
             && ![64988,64989,64990,65534].contains(&config.uid) && ![64988,64989,64990,65534].contains(&config.gid)
             && config.bootstrap_authority.key_id!=config.phase_two_authority.key_id)?;
@@ -80,12 +80,12 @@ impl Cold {
         }
         let delivery_configuration=config.delivery_configuration.open(65536)?;
         let delivery_cold:super::super::Configuration=exact(&delivery_configuration.read(65536).map_err(fail)?)?;
-        require(delivery_cold.api_version=="serverware.policyCustodyGuestConfiguration/v1"
+        require(delivery_cold.api_version=="catchplate.policyCustodyGuestConfiguration/v1"
             && delivery_cold.service_role==super::super::Role::ProductionBridge
             && delivery_cold.uid==config.uid && delivery_cold.gid==config.gid)?;
         let window=Original::driver_bootstrap_window().map_err(fail)?;
         let window_bytes=window.read(32768).map_err(fail)?.to_vec();let signed:SignedWindow=exact(&window_bytes)?;
-        require(signed.api_version=="serverware.nativeShadowDriverBootstrapWindow/v1")?;
+        require(signed.api_version=="catchplate.nativeShadowDriverBootstrapWindow/v1")?;
         verify(&config.bootstrap_authority.key()?,WINDOW_DOMAIN,&signed.payload,&signed.signature_base64url)?;
         let w=&signed.payload;let domain=process.domain();
         let issued=decimal(&w.issued_at_boottime_ns)?;let startup=decimal(&w.startup_deadline_boottime_ns)?;
@@ -113,7 +113,7 @@ impl Cold {
     pub(super) fn startup(&self)->u64 {self.startup}
     pub(super) fn operational(&self)->bool {self.config.continuation.is_some()}
     pub(super) fn bridge_admission_selected(&self)->bool {matches!(self.config.api_version.as_str(),
-        "serverware.nativeShadowDriverBootstrapConfiguration/v3"|"serverware.nativeShadowDriverBootstrapConfiguration/v4")}
+        "catchplate.nativeShadowDriverBootstrapConfiguration/v3"|"catchplate.nativeShadowDriverBootstrapConfiguration/v4")}
     pub(super) fn lifecycle(&self)->Option<driver_lifecycle::wire::Configuration>{self.config.lifecycle.clone()}
     pub(super) fn lifetime(&self)->u64 {self.lifetime}
     pub(super) fn uid(&self)->u32 {self.config.uid}
@@ -128,13 +128,13 @@ impl Cold {
         // the later operational runtime or given that runtime's digest.
         let bytes=read_file(image.configuration(),65536)?;
         let runtime:BootstrapRuntime=exact(&bytes)?;
-        require(runtime.api_version=="serverware.nativeShadowDriverBootstrapRuntime/v1"
+        require(runtime.api_version=="catchplate.nativeShadowDriverBootstrapRuntime/v1"
             && runtime.purpose=="measure-final-driver-before-operational-admission")?;
         require(read_file(image.seccomp(),32768)?==custody_seccomp_raw_bytes(p.seccomp_policy.exact_instructions()))?;
         self.check()?;Ok(image)
     }
     pub(super) fn check_observation(&self,v:&driver_identity::Observation)->Result<(),ShadowError> {
-        self.check()?;require(v.api_version=="serverware.nativeShadowDriverObservation/v1"
+        self.check()?;require(v.api_version=="catchplate.nativeShadowDriverObservation/v1"
             && v.configuration_sha256==Sha256Digest::compute(&self.configuration_bytes)
             && v.window_sha256==Sha256Digest::compute(&self.window_bytes)
             && v.invocation_id==self.signed.payload.invocation_id && v.uid==self.uid() && v.gid==self.gid()
@@ -245,10 +245,10 @@ impl PhaseTwo {
         cold.check_observation(observation)?;require(scope.len()<=32768)?;
         let signed:SignedScope=exact(scope)?;let s=&signed.payload;
         let domain=match (cold.config.api_version.as_str(),s.api_version.as_str(),s.operation.is_some()) {
-            ("serverware.nativeShadowDriverBootstrapConfiguration/v1","serverware.nativeShadowDriverScope/v1",false)=>SCOPE_DOMAIN,
-            ("serverware.nativeShadowDriverBootstrapConfiguration/v2","serverware.nativeShadowDriverScope/v2",true)=>b"serverware.nativeShadowDriverScope.signature/v2\0".as_slice(),
-            ("serverware.nativeShadowDriverBootstrapConfiguration/v3","serverware.nativeShadowDriverScope/v3",true)=>b"serverware.nativeShadowDriverScope.signature/v3\0".as_slice(),
-            ("serverware.nativeShadowDriverBootstrapConfiguration/v4","serverware.nativeShadowDriverScope/v4",true)=>b"serverware.nativeShadowDriverScope.signature/v4\0".as_slice(),
+            ("catchplate.nativeShadowDriverBootstrapConfiguration/v1","catchplate.nativeShadowDriverScope/v1",false)=>SCOPE_DOMAIN,
+            ("catchplate.nativeShadowDriverBootstrapConfiguration/v2","catchplate.nativeShadowDriverScope/v2",true)=>b"catchplate.nativeShadowDriverScope.signature/v2\0".as_slice(),
+            ("catchplate.nativeShadowDriverBootstrapConfiguration/v3","catchplate.nativeShadowDriverScope/v3",true)=>b"catchplate.nativeShadowDriverScope.signature/v3\0".as_slice(),
+            ("catchplate.nativeShadowDriverBootstrapConfiguration/v4","catchplate.nativeShadowDriverScope/v4",true)=>b"catchplate.nativeShadowDriverScope.signature/v4\0".as_slice(),
             _=>return Err(ShadowError::BindingDrift),
         };
         verify(&cold.config.phase_two_authority.key()?,domain,s,&signed.signature_base64url)?;
@@ -270,12 +270,12 @@ impl PhaseTwo {
             && Sha256Digest::compute(originals.runtime_original.as_bytes())==s.originals.runtime_sha256
             && Sha256Digest::compute(originals.delivery_original.as_bytes())==s.originals.delivery_sha256)?;
         let initial_history=matches!(runtime.get("apiVersion").and_then(serde_json::Value::as_str),
-            Some("serverware.policyCustodyProductionRpcRuntime/v10"|"serverware.policyCustodyProductionRpcRuntime/v11"
+            Some("catchplate.policyCustodyProductionRpcRuntime/v10"|"catchplate.policyCustodyProductionRpcRuntime/v11"
                 |crate::policy_shadow::policy_custody::native_terminal::RUNTIME
-                |"serverware.policyCustodyProductionRpcRuntime/v13"|"serverware.policyCustodyProductionRpcRuntime/v14"));
+                |"catchplate.policyCustodyProductionRpcRuntime/v13"|"catchplate.policyCustodyProductionRpcRuntime/v14"));
         let bundle_bound=if initial_history {
-            require(s.api_version=="serverware.nativeShadowDriverScope/v4"
-                && cold.config.api_version=="serverware.nativeShadowDriverBootstrapConfiguration/v4")?;
+            require(s.api_version=="catchplate.nativeShadowDriverScope/v4"
+                && cold.config.api_version=="catchplate.nativeShadowDriverBootstrapConfiguration/v4")?;
             let selected:crate::policy_shadow::policy_custody::services::production::ProductionRpcRuntimeConfigV4=
                 exact(originals.runtime_original.as_bytes())?;
             selected.validate().map_err(fail)?;
@@ -293,7 +293,7 @@ impl PhaseTwo {
         let key=VerifyingKey::from_bytes(&keybytes).map_err(fail)?;
         verify(&key,super::super::SIGNATURE_DOMAIN,&delivery.payload,&delivery.signature_base64url)?;
         let p=&delivery.payload;let w=&cold.signed.payload;
-        require(delivery.api_version=="serverware.policyCustodyGuestDelivery/v1" && originals.delivery_original.len()<=65536
+        require(delivery.api_version=="catchplate.policyCustodyGuestDelivery/v1" && originals.delivery_original.len()<=65536
             && p.configuration_sha256==cold.config.delivery_configuration.sha256
             && p.authority_key_id==cold.delivery_cold.authority.key_id && p.service_role==super::super::Role::ProductionBridge
             && p.uid==cold.uid() && p.gid==cold.gid() && p.boot_id_base64url==w.boot_id_base64url
@@ -351,7 +351,7 @@ fn run_inner()->Result<(),ShadowError> {
     if prepared.cold.config.continuation.is_some() {
         return continuation::continue_owned(prepared,identity,observation,phase_two,rights.collect());
     }
-    let notice=canonical_json_bytes(&serde_json::json!({"apiVersion":"serverware.nativeShadowDriverPhaseTwoRetained/v1",
+    let notice=canonical_json_bytes(&serde_json::json!({"apiVersion":"catchplate.nativeShadowDriverPhaseTwoRetained/v1",
         "observationSha256":Sha256Digest::compute(&canonical_json_bytes(&observation)?),
         "scopeSha256":Sha256Digest::compute(phase_two.scope())}))?;
     require(retrieval_peer::send(prepared.channel.as_fd(),&notice,&[])?)?;

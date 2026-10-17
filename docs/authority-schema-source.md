@@ -87,8 +87,8 @@ membership policy or ACL normalization is changed. Existing independent
 role-membership and owner-function admission remain required.
 
 The schema source contract now commits the complete UTF-8 schema program under
-`serverware.metadataSchemaProgram/v1`, the configured owner name, and ownership
-contract `serverware.policyAuthorityObjectOwnership/v1`. An older recorded source
+`catchplate.metadataSchemaProgram/v1`, the configured owner name, and ownership
+contract `catchplate.policyAuthorityObjectOwnership/v1`. An older recorded source
 digest is intentionally not accepted just because its SQL revision is `.26`.
 Receipt-only repair does not authorize unrelated source/owner-contract upgrades.
 

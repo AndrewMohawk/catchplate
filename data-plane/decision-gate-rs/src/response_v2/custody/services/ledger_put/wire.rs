@@ -5,9 +5,9 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-pub(super) const RECEIPT: &str = "serverware.responseV2.rawStorageReceipt/v1";
-pub(super) const DOMAIN: &[u8] = b"serverware.responseV2.rawStorageReceipt/v1\0";
-pub(super) const RESULT: &str = "serverware.responseV2.rawPersistenceResult/v1";
+pub(super) const RECEIPT: &str = "catchplate.responseV2.rawStorageReceipt/v1";
+pub(super) const DOMAIN: &[u8] = b"catchplate.responseV2.rawStorageReceipt/v1\0";
+pub(super) const RESULT: &str = "catchplate.responseV2.rawPersistenceResult/v1";
 pub(super) const KIND: &str = "raw-response";
 pub(super) const MEDIA: &str = "http11-response";
 pub(super) const META_BOUND: usize = 256 * 1024;

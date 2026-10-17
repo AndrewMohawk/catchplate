@@ -8,7 +8,7 @@
 
 use super::{start::StartOwner, start_reservation::StartPermit};
 use crate::linux_statx::{self, Statx, BASIC_STATS, SYNC_AS_STAT};
-use serverware_decision_gate::cgroup_control_v1::{self, DirectoryObservationV1, EventsV1};
+use catchplate_decision_gate::cgroup_control_v1::{self, DirectoryObservationV1, EventsV1};
 use std::cell::Cell;
 use std::ffi::{CStr, CString};
 use std::mem::zeroed;

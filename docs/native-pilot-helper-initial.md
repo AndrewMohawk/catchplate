@@ -11,13 +11,13 @@ percentage or a complete count of remaining work.
 
 ## Four authenticated helper roles
 
-`serverware.policyCustodyServiceRuntimeConfig/v9` selects only the bounded
+`catchplate.policyCustodyServiceRuntimeConfig/v9` selects only the bounded
 cleanup helper. Its existing flat runtime gains `initialEndpointHistories` and
 `initialEndpointPins`, each with exactly four source-ordered roles:
 `settlement-store`, `fence-authority`, `cgroup-executor`, `termination-ledger`.
 Older service profiles retain their closed fields and behavior.
 
-The [history validator](../serverware/native_pilot_ordinary_initial_profile.py)
+The [history validator](../catchplate/native_pilot_ordinary_initial_profile.py)
 authenticates four separately signed initial wrappers under the approved root.
 Each uses the existing checkpoint and three-party retained-anchor ceremony;
 one role's signature or identity cannot be relabeled for another. Shared
@@ -26,7 +26,7 @@ while the role-specific identity/checkpoint commitments differ. Each literal
 wrapper is bounded to 1 MiB; the complete runtime keeps its existing bound.
 The primary history remains an exact member, not a newly reconstructed wrapper.
 
-The [flat runtime validator](../serverware/native_pilot_ordinary_runtime_profile.py)
+The [flat runtime validator](../catchplate/native_pilot_ordinary_runtime_profile.py)
 binds each pin to its actual member identity, checkpoint, listener, public
 verification credentials and approved zero-consumed cursor. Every consume
 predecessor must differ from **all four members'** typed initial-history
@@ -37,7 +37,7 @@ the generation/helper journals.
 
 ## Eight requests, separate currentness decisions
 
-The [retained request owner](../serverware/native_pilot_initial_requests.py)
+The [retained request owner](../catchplate/native_pilot_initial_requests.py)
 now exports `nativePilotInitialTrustRequests/v2`: one genuine request for each
 of the four other ordinary services, plus four role-specific helper requests.
 It authenticates the complete selection before sampling entropy and one fixed
@@ -47,12 +47,12 @@ the earliest authentic ordinary generation-grant expiry, never extended.
 
 `nativePilotCurrentHeadAuthorityInput/v2` adds explicit `endpointRole` and
 `runtimeOriginal` for the helper, binding the selected literal member and pin.
-Its [shared preparation](../serverware/native_pilot_current_head_profile.py)
+Its [shared preparation](../catchplate/native_pilot_current_head_profile.py)
 still requires an independently approved, request-bound currentness decision.
 Old signatures do not establish that no newer checkpoint exists. Input/v1 and
 the legacy positive-consume floor remain unchanged.
 
-The [handshake builder](../serverware/native_pilot_service_handshakes.py)
+The [handshake builder](../catchplate/native_pilot_service_handshakes.py)
 verifies the actual signed current-head result before framing the later native
 handshake. Its digest includes the signed head and is distinct from the earlier
 trust-request digest. Framing neither transmits a packet nor proves readiness.
@@ -62,11 +62,11 @@ ordered four handshakes; repeating one head cannot satisfy the role set.
 ## Empty journal, durable installation, durable seal
 
 The unsigned
-`serverware.policyCustodyCleanupHelperInitialBootstrap/v1` manifest has eight
+`catchplate.policyCustodyCleanupHelperInitialBootstrap/v1` manifest has eight
 closed fields: `apiVersion`, `initialization: "fresh-helper"`,
 `operationGeneration`, `sharedConfigurationSha256`,
 `serviceConfigurationSha256`, `initialEndpointHistorySha256`, `deadline`, and
-`manifestSha256`. The [public builder](../serverware/native_pilot_helper_bootstrap_profile.py)
+`manifestSha256`. The [public builder](../catchplate/native_pilot_helper_bootstrap_profile.py)
 derives literal runtime/history hashes and the domain-framed manifest digest;
 that is approved initialization data, not evidence that a journal is empty.
 
@@ -106,7 +106,7 @@ expecting a nonexistent nested `service` object. Literal runtime, history,
 root-signed generation grant, guest and scope joins still apply. Runtime/v11
 also binds the helper manifest and exact ordered handshake roles.
 
-The [bridge-launch adapter](../serverware/native_pilot_bridge_launch_publication.py)
+The [bridge-launch adapter](../catchplate/native_pilot_bridge_launch_publication.py)
 backs `prepare_bridge_bundle` and `checked_bridge_result` in the existing launch
 module. It verifies actual C9/key/admission originals and reuses the installer's
 public closure/encrypted-delivery/verifier/TrustedTime checks, preserving
@@ -150,7 +150,7 @@ tests were **not typechecked or executed** in this pass.
 
 Both exact archives, commands, complete logs, results and verified checksums
 are retained at
-`codex-offload/serverware/engineering-builds/ddf64ac0-helper-startup-aOHhDb/`.
+`codex-offload/catchplate/engineering-builds/ddf64ac0-helper-startup-aOHhDb/`.
 These are synthetic signature/byte-association/refusal checks and compilation,
 not real helper socket exchange, journal durability, protected owner/signing
 entrypoint, KMS/provider/hardware or live-pilot evidence. No cloud or paid

@@ -51,7 +51,7 @@ there is no environment/default selection or host-factory fallback.
 
 `NativeCustodyLifecycleOwner::public_admission_original(expected_source)`
 returns actual checked public bytes. The closed object is
-`serverware.nativeShadowDriverPublicAdmission/v1`, exact ten fields: apiVersion,
+`catchplate.nativeShadowDriverPublicAdmission/v1`, exact ten fields: apiVersion,
 bootstrapObservationOriginal, phaseScopeOriginal, phaseBundleOriginal,
 closureOriginal, assignmentOriginal, keyConfigurationOriginal,
 admissionAuthorizationOriginal, evidenceOriginal, combinedResultOriginal.

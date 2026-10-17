@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-custody-closure.v2.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-custody-closure.v2.schema.json",
   "$ref": "#/$defs/configuration",
   "$defs": {
     "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
@@ -75,11 +75,11 @@
       }
     },
     "manifest": {
-      "description": "runtimeConfigurationSha256 is the immutable bootstrap image runtime only in this explicit v2 profile. The separate authorization guest fully binds the actual operational runtime/C9. Dedicated signature domain serverware.nativeCustodyClosureAssignment.signature/v2; actual retained measured owner is mandatory.",
+      "description": "runtimeConfigurationSha256 is the immutable bootstrap image runtime only in this explicit v2 profile. The separate authorization guest fully binds the actual operational runtime/C9. Dedicated signature domain catchplate.nativeCustodyClosureAssignment.signature/v2; actual retained measured owner is mandatory.",
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "profile", "imageSha256", "workerExecutableSha256", "seccompPolicy", "runtimeConfigurationSha256", "buildProvenance", "manifestSha256"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeCustodyExecutionClosure/v2" }, "profile": { "$ref": "#/$defs/profile" },
+        "apiVersion": { "const": "catchplate.nativeCustodyExecutionClosure/v2" }, "profile": { "$ref": "#/$defs/profile" },
         "imageSha256": { "$ref": "#/$defs/sha256" }, "workerExecutableSha256": { "$ref": "#/$defs/sha256" },
         "seccompPolicy": { "$ref": "#/$defs/seccompPolicy" }, "runtimeConfigurationSha256": { "$ref": "#/$defs/sha256" },
         "buildProvenance": { "$ref": "#/$defs/buildProvenance" }, "manifestSha256": { "$ref": "#/$defs/sha256" }
@@ -89,7 +89,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "purpose", "profile", "assignmentId", "assignmentPayloadSha256", "assignmentRevision", "manifestSha256", "guest", "trustCheckpointId", "revocationGeneration", "revocationRootSha256", "issuedAtUnixNanos", "expiresAtUnixNanos", "signingKeyId", "signingKeySpkiSha256"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeCustodyClosureAssignment/v2" },
+        "apiVersion": { "const": "catchplate.nativeCustodyClosureAssignment/v2" },
         "purpose": { "const": "shadow-custody-bootstrap-late-runtime" }, "profile": { "$ref": "#/$defs/profile" },
         "assignmentId": { "$ref": "#/$defs/sha256" }, "assignmentPayloadSha256": { "$ref": "#/$defs/sha256" },
         "assignmentRevision": { "$ref": "#/$defs/positive" }, "manifestSha256": { "$ref": "#/$defs/sha256" },
@@ -106,7 +106,7 @@
     "configuration": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "manifest", "authorization"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeCustodyClosure/v2" },
+        "apiVersion": { "const": "catchplate.nativeCustodyClosure/v2" },
         "manifest": { "$ref": "#/$defs/manifest" }, "authorization": { "$ref": "#/$defs/assignment" }
       }
     }

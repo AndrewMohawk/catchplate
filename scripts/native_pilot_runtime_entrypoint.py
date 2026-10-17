@@ -27,7 +27,7 @@ def main():
     # -I intentionally ignores PYTHONPATH and the script directory. Only these
     # fixed, packaged roots are added; no caller module or path is accepted.
     sys.path[:0] = ["/vendor", "/app"]
-    from serverware.native_pilot_adopted_intake import invocation
+    from catchplate.native_pilot_adopted_intake import invocation
     try:
         invocation(sys.argv[1:])  # Exact legacy flag or explicit fixed adopted intake.
     except (ValueError, TypeError):

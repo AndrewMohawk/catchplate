@@ -13,11 +13,11 @@ boundaries and the broader lifecycle/channel requirements.
 ## Legacy v1 authority and exact originals
 
 `workload_identity_issuer_bootstrap.py` admits a canonical Ed25519 root-signed
-`serverware.signedWorkloadIdentityIssuerBootstrap/v1` envelope whose payload
-domain is `serverware.workloadIdentityIssuerBootstrap/v1`.
+`catchplate.signedWorkloadIdentityIssuerBootstrap/v1` envelope whose payload
+domain is `catchplate.workloadIdentityIssuerBootstrap/v1`.
 `workload_identity_issuance_authorization.py` admits a separately signed
-`serverware.signedWorkloadIdentityIssuanceAuthorization/v1` envelope whose
-payload domain is `serverware.workloadIdentityIssuanceAuthorization/v1`.
+`catchplate.signedWorkloadIdentityIssuanceAuthorization/v1` envelope whose
+payload domain is `catchplate.workloadIdentityIssuanceAuthorization/v1`.
 Each signature covers the ASCII payload domain, a zero byte, and the canonical
 payload original. Unsupported source revisions are rejected.
 
@@ -37,7 +37,7 @@ validity. Its serial is canonical lowercase hexadecimal, with no leading zero,
 and represents a positive integer below `2**159`. Digest strings use
 `sha256:` followed by 64 lowercase hexadecimal digits.
 
-The shared `serverware_agent_trust/workload_identity_originals.py` preserves the
+The shared `catchplate_agent_trust/workload_identity_originals.py` preserves the
 local client profile: standard P-256 PKCS#10 CSR, empty subject, critical exact
 DNS/URI SANs, genuine CSR signature and a separate canonical low-S request proof.
 The independent issuer digest is inside that request proof. The worker replays
@@ -115,10 +115,10 @@ separate obligations. The legacy public caller and old packet meanings stay stri
 | Worker | UID/GID 65492; process mode `workload-identity-issuer` |
 | Socket peer | UID/GID 65532 |
 | Inherited descriptors | 198 root public original; 199 bootstrap; 200 listener; 201 CA key; 202 journal directory |
-| Public trust originals | `/run/serverware/workload-identity-issuer-trust/root-public-key.pem` and `bootstrap.json` |
-| CA private key | `/run/secrets/serverware-workload-identity-issuer-ca-key` |
-| Listener | `/run/serverware/workload-identity-issuer/issuer.sock`, named owner 65492:65532, mode 0660 |
-| Journal | `/var/lib/serverware/workload-identity-issuer`, owner 65492:65492, mode 0700 |
+| Public trust originals | `/run/catchplate/workload-identity-issuer-trust/root-public-key.pem` and `bootstrap.json` |
+| CA private key | `/run/secrets/catchplate-workload-identity-issuer-ca-key` |
+| Listener | `/run/catchplate/workload-identity-issuer/issuer.sock`, named owner 65492:65532, mode 0660 |
+| Journal | `/var/lib/catchplate/workload-identity-issuer`, owner 65492:65492, mode 0700 |
 
 The bootstrap separately pins the listener descriptor's device/inode and the
 named socket's device/inode; those are not assumed equal. The launcher checks

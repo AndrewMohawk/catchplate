@@ -7,12 +7,12 @@ rule selecting that credential and the permitted destination and operations.
 Choose how this client supplies provider authentication:
 
 - **Add credential automatically:** the client omits the provider credential
-  header. Serverware adds its stored credential after authorization.
+  header. Catchplate adds its stored credential after authorization.
 - **Replace a dummy header value:** the client sends a configured public
-  placeholder. For `Authorization: Bearer SERVERWARE_PLACEHOLDER`, configure
-  the complete value `Bearer SERVERWARE_PLACEHOLDER`, including the prefix.
+  placeholder. For `Authorization: Bearer CATCHPLATE_PLACEHOLDER`, configure
+  the complete value `Bearer CATCHPLATE_PLACEHOLDER`, including the prefix.
 
-The client still authenticates separately to Serverware using its application
+The client still authenticates separately to Catchplate using its application
 token. That token is not the placeholder and is never provider authentication.
 Never paste a real provider secret or application token into the placeholder
 field: it is public configuration and appears in client examples.
@@ -64,7 +64,7 @@ that distinction. Secrets remain in credential storage and are injected only
 after request authorization.
 
 Replacement cannot target cookies, framing/content headers, hop-by-hop or proxy
-authentication headers, or Serverware internal headers. Reserved names and
+authentication headers, or Catchplate internal headers. Reserved names and
 principal identity collisions are checked case-insensitively, including
 underscore-to-hyphen aliases. `Authorization` is available through bearer
 injection, not custom-header injection. Generic allowed/required/discard header

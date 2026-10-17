@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.example/schemas/setup-native-runtime.v1.schema.json",
+  "$id": "https://catchplate.example/schemas/setup-native-runtime.v1.schema.json",
   "title": "One-use Setup native buffered capture association",
   "description": "Explicit trusted collector plus independently verified original native quote and dispatch signatures. Neither schema, local verdict nor HTTP success supplies action, measured-host, final enrollment or proxy-readiness authority.",
   "oneOf": [{"$ref": "#/$defs/sessionRequest"}, {"$ref": "#/$defs/prepareRequest"}, {"$ref": "#/$defs/completeRequest"}],
@@ -11,17 +11,17 @@
     "original": {"type": "string", "minLength": 2, "pattern": "^[\\u0000-\\u007f]+$"},
     "nullableDigest": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
     "sessionRequest": {"type": "object", "additionalProperties": false, "required": ["apiVersion", "sessionId"],
-      "properties": {"apiVersion": {"const": "serverware.setupNativeRuntimeRequest/v1"}, "sessionId": {"$ref": "#/$defs/uuid"}}},
+      "properties": {"apiVersion": {"const": "catchplate.setupNativeRuntimeRequest/v1"}, "sessionId": {"$ref": "#/$defs/uuid"}}},
     "prepareRequest": {"type": "object", "additionalProperties": false, "required": ["apiVersion", "sessionId", "assertion"],
-      "properties": {"apiVersion": {"const": "serverware.setupNativeRuntimeRequest/v1"}, "sessionId": {"$ref": "#/$defs/uuid"},
+      "properties": {"apiVersion": {"const": "catchplate.setupNativeRuntimeRequest/v1"}, "sessionId": {"$ref": "#/$defs/uuid"},
         "assertion": {"type": "object", "description": "Actual existing hardware WebAuthn assertion, bounded to 16 KiB by the original owner."}}},
     "completeRequest": {"type": "object", "additionalProperties": false, "required": ["apiVersion", "sessionId", "captureOriginalBase64url"],
-      "properties": {"apiVersion": {"const": "serverware.setupNativeRuntimeRequest/v1"}, "sessionId": {"$ref": "#/$defs/uuid"},
+      "properties": {"apiVersion": {"const": "catchplate.setupNativeRuntimeRequest/v1"}, "sessionId": {"$ref": "#/$defs/uuid"},
         "captureOriginalBase64url": {"type": "string", "minLength": 1, "maxLength": 699051, "pattern": "^[A-Za-z0-9_-]+$",
           "description": "Exact actual nativeResponseCapture/v2 UTF-8 file bytes, including original whitespace/LF, no normalization; decoded bound 524288 bytes."}}},
     "clientRequest": {"type": "object", "additionalProperties": false,
       "required": ["apiVersion", "method", "scheme", "authority", "path", "query", "headers", "body_sha256"],
-      "properties": {"apiVersion": {"const": "serverware.clientProofRequest/v1"}, "method": {"const": "GET"}, "scheme": {"const": "https"},
+      "properties": {"apiVersion": {"const": "catchplate.clientProofRequest/v1"}, "method": {"const": "GET"}, "scheme": {"const": "https"},
         "authority": {"type": "string", "minLength": 1, "maxLength": 256}, "path": {"type": "string", "pattern": "^/", "maxLength": 4096},
         "query": {"const": []}, "headers": {"const": {}}, "body_sha256": {"const": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
       "description": "Producer-preserving ASCII DNS authority with optional canonical non-443 port, no IP/IDNA/default-port normalization; percent-free path without dot segments. No query, custom header or request body."},
@@ -40,17 +40,17 @@
       "description": "Same shape-only native15 assignment validator, independently admitted for this separate purpose. No currentness/role grant is reused. The statement provenance digest is NOT aliased to the native quote release-record digest."},
     "trustRoots": {"type": "object", "additionalProperties": false,
       "required": ["apiVersion", "awsNitroRootCertificatesPem", "awsNitroCrlsDerBase64url", "nitroCertificateProfile"],
-      "properties": {"apiVersion": {"const": "serverware.setupNativeRuntimeTrustRoots/v1"},
+      "properties": {"apiVersion": {"const": "catchplate.setupNativeRuntimeTrustRoots/v1"},
         "awsNitroRootCertificatesPem": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
         "awsNitroCrlsDerBase64url": {"const": []}, "nitroCertificateProfile": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/certificateProfile"}}},
     "policy": {"type": "object", "additionalProperties": false, "required": ["schema", "credentialPolicy", "trustRoots", "scopes"],
-      "properties": {"schema": {"const": "serverware.setupNativeRuntimeAuthorityPolicy/v1"},
+      "properties": {"schema": {"const": "catchplate.setupNativeRuntimeAuthorityPolicy/v1"},
         "credentialPolicy": {"$ref": "setup-native-canary.v1.schema.json#/$defs/credentialPolicy"}, "trustRoots": {"$ref": "#/$defs/trustRoots"},
         "scopes": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"$ref": "#/$defs/scope"}}}},
     "attempt": {"type": "object", "additionalProperties": false,
       "required": ["apiVersion", "attemptId", "sessionId", "associationSha256", "scopeSha256", "nonce", "principalId", "routeId", "policyHash",
         "credentialId", "credentialVersion", "clientRequestSha256", "issuedAtEpochNs", "expiresAtEpochNs"],
-      "properties": {"apiVersion": {"const": "serverware.setupNativeRuntimeAttempt/v1"}, "attemptId": {"$ref": "#/$defs/uuid"},
+      "properties": {"apiVersion": {"const": "catchplate.setupNativeRuntimeAttempt/v1"}, "attemptId": {"$ref": "#/$defs/uuid"},
         "sessionId": {"$ref": "#/$defs/uuid"}, "associationSha256": {"$ref": "#/$defs/digest"}, "scopeSha256": {"$ref": "#/$defs/digest"},
         "nonce": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"}, "principalId": {"type": "string", "minLength": 1, "maxLength": 1024},
         "routeId": {"type": "string", "minLength": 1, "maxLength": 1024}, "policyHash": {"$ref": "#/$defs/digest"},
@@ -68,20 +68,20 @@
     "result": {"type": "object", "additionalProperties": false,
       "required": ["apiVersion", "resultScope", "okForAction", "nativeHostVerified", "enrollmentComplete", "proxyReady", "attemptSha256", "captureSha256",
         "serverStatementSha256", "requestSha256", "operationSha256", "dispatchReceiptSha256", "responseBodySha256", "responseStatus", "collectorKeyId", "nativeKeyId", "attestationDocumentSha256"],
-      "properties": {"apiVersion": {"const": "serverware.setupNativeRuntimeEvidence/v1"}, "resultScope": {"const": "trusted-collector-and-native-signatures-only"},
+      "properties": {"apiVersion": {"const": "catchplate.setupNativeRuntimeEvidence/v1"}, "resultScope": {"const": "trusted-collector-and-native-signatures-only"},
         "okForAction": {"const": false}, "nativeHostVerified": {"const": false}, "enrollmentComplete": {"const": false}, "proxyReady": {"const": false},
         "attemptSha256": {"$ref": "#/$defs/digest"}, "captureSha256": {"$ref": "#/$defs/digest"}, "serverStatementSha256": {"$ref": "#/$defs/digest"},
         "requestSha256": {"$ref": "#/$defs/digest"}, "operationSha256": {"$ref": "#/$defs/digest"}, "dispatchReceiptSha256": {"$ref": "#/$defs/digest"},
         "responseBodySha256": {"$ref": "#/$defs/digest"}, "responseStatus": {"type": "integer", "minimum": 200, "maximum": 299},
         "collectorKeyId": {"$ref": "#/$defs/digest"}, "nativeKeyId": {"$ref": "#/$defs/digest"}, "attestationDocumentSha256": {"$ref": "#/$defs/digest"}}},
-    "options": {"type": "object", "additionalProperties": false, "required": ["publicKey", "serverware"],
+    "options": {"type": "object", "additionalProperties": false, "required": ["publicKey", "catchplate"],
       "properties": {"publicKey": {"$ref": "setup-native-canary.v1.schema.json#/$defs/options/properties/publicKey"},
-        "serverware": {"type": "object", "additionalProperties": false, "required": ["schema", "operation", "operationId", "challengeId", "credentialRecordId", "payloadDigest"],
-          "properties": {"schema": {"const": "serverware.setupNativeRuntimeOptions/v1"}, "operation": {"const": "setup.native-runtime.prepare"},
+        "catchplate": {"type": "object", "additionalProperties": false, "required": ["schema", "operation", "operationId", "challengeId", "credentialRecordId", "payloadDigest"],
+          "properties": {"schema": {"const": "catchplate.setupNativeRuntimeOptions/v1"}, "operation": {"const": "setup.native-runtime.prepare"},
             "operationId": {"$ref": "#/$defs/digest"}, "challengeId": {"$ref": "#/$defs/digest"}, "credentialRecordId": {"$ref": "#/$defs/uuid"}, "payloadDigest": {"$ref": "#/$defs/digest"}}}}},
     "response": {"type": "object", "additionalProperties": false,
       "required": ["apiVersion", "status", "okForAction", "automaticRetryAllowed", "nativeHostVerified", "enrollmentComplete", "proxyReady"],
-      "properties": {"apiVersion": {"const": "serverware.setupNativeRuntimeResponse/v1"},
+      "properties": {"apiVersion": {"const": "catchplate.setupNativeRuntimeResponse/v1"},
         "status": {"enum": ["fresh-assertion-required", "capture-outcome-unknown", "runtime-evidence-recorded", "observation", "refused"]},
         "okForAction": {"const": false}, "automaticRetryAllowed": {"const": false}, "nativeHostVerified": {"const": false},
         "enrollmentComplete": {"const": false}, "proxyReady": {"const": false}, "options": {"$ref": "#/$defs/options"},
@@ -114,7 +114,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.setupNativeRuntimeAttempt/v2"
+          "const": "catchplate.setupNativeRuntimeAttempt/v2"
         },
         "attemptId": {
           "$ref": "#/$defs/uuid"
@@ -247,7 +247,7 @@
           "maximum": 300000000000
         },
         "apiVersion": {
-          "const": "serverware.setupNativeRuntimeRotationScope/v1"
+          "const": "catchplate.setupNativeRuntimeRotationScope/v1"
         },
         "continuationSha256": {
           "$ref": "#/$defs/digest"
@@ -276,7 +276,7 @@
       ],
       "properties": {
         "schema": {
-          "const": "serverware.setupNativeRuntimeAuthorityPolicy/v1"
+          "const": "catchplate.setupNativeRuntimeAuthorityPolicy/v1"
         },
         "credentialPolicy": {
           "$ref": "setup-native-canary.v1.schema.json#/$defs/credentialPolicy"

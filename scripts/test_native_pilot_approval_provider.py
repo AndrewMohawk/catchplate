@@ -22,8 +22,8 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 from scripts import run_native_pilot_approval_provider as cli
 from scripts import test_native_pilot_approval_policy as policy_fixture
 from scripts import test_native_pilot_adopted_supervisor as adopted_fixture
-from serverware import native_pilot_approval_provider as provider
-from serverware import native_pilot_approval_install as approvals
+from catchplate import native_pilot_approval_provider as provider
+from catchplate import native_pilot_approval_install as approvals
 
 p = provider.p
 
@@ -42,7 +42,7 @@ def changed(flag, value):
 
 
 def methods():
-    tree = ast.parse((ROOT / "serverware/native_pilot_approval_provider.py").read_text())
+    tree = ast.parse((ROOT / "catchplate/native_pilot_approval_provider.py").read_text())
     owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "ApprovalProvider")
     return {node.name: node for node in owner.body if isinstance(node, ast.FunctionDef)}
 

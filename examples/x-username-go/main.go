@@ -23,7 +23,7 @@ import (
 )
 
 const xHost = "api.x.com"
-const dummyToken = "serverware-x-placeholder-v1" // Public placeholder, not a credential.
+const dummyToken = "catchplate-x-placeholder-v1" // Public placeholder, not a credential.
 
 var (
 	usernamePattern         = regexp.MustCompile(`^[a-z0-9_]{1,15}$`)
@@ -42,15 +42,15 @@ type config struct {
 
 func readConfig(getenv func(string) string) (config, error) {
 	c := config{
-		appID: getenv("SERVERWARE_APP_ID"), proxyToken: getenv("SERVERWARE_PROXY_TOKEN"),
-		caFile: getenv("SERVERWARE_CA_FILE"), proxyCAFile: getenv("SERVERWARE_PROXY_CA_FILE"),
-		username: getenv("SERVERWARE_X_USERNAME"),
+		appID: getenv("CATCHPLATE_APP_ID"), proxyToken: getenv("CATCHPLATE_PROXY_TOKEN"),
+		caFile: getenv("CATCHPLATE_CA_FILE"), proxyCAFile: getenv("CATCHPLATE_PROXY_CA_FILE"),
+		username: getenv("CATCHPLATE_X_USERNAME"),
 	}
-	p, err := url.Parse(getenv("SERVERWARE_PROXY_URL"))
+	p, err := url.Parse(getenv("CATCHPLATE_PROXY_URL"))
 	if err != nil || p.Scheme != "https" || p.Opaque != "" || p.User != nil ||
 		p.Host == "" || p.RawQuery != "" || p.ForceQuery || p.Fragment != "" ||
 		(p.Path != "" && p.Path != "/") || p.RawPath != "" {
-		return config{}, errors.New("SERVERWARE_PROXY_URL must be an HTTPS origin without credentials, query, or fragment")
+		return config{}, errors.New("CATCHPLATE_PROXY_URL must be an HTTPS origin without credentials, query, or fragment")
 	}
 	host := p.Hostname()
 	if host == xHost || net.ParseIP(host) != nil || len(host) > 253 || !strings.Contains(host, ".") {
@@ -72,10 +72,10 @@ func readConfig(getenv func(string) string) (config, error) {
 	decoded, err := base64.RawURLEncoding.DecodeString(c.proxyToken)
 	if !uuidPattern.MatchString(c.appID) || err != nil || len(decoded) != 32 ||
 		base64.RawURLEncoding.EncodeToString(decoded) != c.proxyToken {
-		return config{}, errors.New("set the saved application UUID and its issued SERVERWARE_PROXY_TOKEN")
+		return config{}, errors.New("set the saved application UUID and its issued CATCHPLATE_PROXY_TOKEN")
 	}
 	if c.caFile == "" || !usernamePattern.MatchString(c.username) {
-		return config{}, errors.New("set SERVERWARE_CA_FILE and the exact permitted lowercase X username (1-15 letters, digits, or underscores)")
+		return config{}, errors.New("set CATCHPLATE_CA_FILE and the exact permitted lowercase X username (1-15 letters, digits, or underscores)")
 	}
 	p.Path = ""
 	c.proxy = p
@@ -98,7 +98,7 @@ func readCAFile(path string) ([]byte, error) {
 func clientTLS(proxyHost string, proxyRoots *x509.CertPool, innerPEM []byte) (*tls.Config, error) {
 	innerRoots := x509.NewCertPool()
 	if proxyRoots == nil || !innerRoots.AppendCertsFromPEM(innerPEM) {
-		return nil, errors.New("configured Serverware CA file is not a PEM certificate bundle")
+		return nil, errors.New("configured Catchplate CA file is not a PEM certificate bundle")
 	}
 	outerRoots := proxyRoots.Clone()
 	combined := outerRoots.Clone()
@@ -198,7 +198,7 @@ func lookupUsername(ctx context.Context, client *twitter.Client, username string
 		!userIDPattern.MatchString(response.Raw.Users[0].ID) ||
 		!responseUsernamePattern.MatchString(response.Raw.Users[0].UserName) ||
 		!strings.EqualFold(response.Raw.Users[0].UserName, username) {
-		return summary{}, errors.New("X username read failed; inspect Serverware audit records and the saved permission (no automatic retry)")
+		return summary{}, errors.New("X username read failed; inspect Catchplate audit records and the saved permission (no automatic retry)")
 	}
 	return summary{Users: 1}, nil
 }

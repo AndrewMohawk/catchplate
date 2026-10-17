@@ -21,10 +21,10 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 import test_native_pilot_genesis_parent_authority as parents
 import test_native_pilot_genesis_closure_schema as closures
 import test_native_pilot_genesis_ordinary_runtime as ordinary_tests
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_genesis_delivery_authority as authority
-from serverware import native_pilot_genesis_coordinator_runtime as runtime
-from serverware import native_pilot_genesis_endpoint_profile as endpoints
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_genesis_delivery_authority as authority
+from catchplate import native_pilot_genesis_coordinator_runtime as runtime
+from catchplate import native_pilot_genesis_endpoint_profile as endpoints
 
 p = g.p
 
@@ -50,7 +50,7 @@ def peer(uid, pid, *, identity=None):
     parts += [bytes.fromhex(value["executableSha256"].removeprefix("sha256:")), value["cgroupPathSha256"].encode("ascii"),
         value["cgroupMountId"].to_bytes(8, "big"), value["cgroupInode"].to_bytes(8, "big"),
         value["securityLabelSha256"].encode("ascii"), value["configurationGenerationSha256"].encode("ascii")]
-    value["processIdentitySha256"] = p.framed(b"serverware.policyCustodyPeerProcessIdentity/v4", parts)
+    value["processIdentitySha256"] = p.framed(b"catchplate.policyCustodyPeerProcessIdentity/v4", parts)
     return value
 
 
@@ -84,7 +84,7 @@ def coordinator_runtime(*, cold_binding_input=None):
             "expectedSocketPath": runtime.ordinary.listener(role),
             "expectedPeer": peer(61000 + index, 2000 + index, identity=f["f"]["rows"][role]["identity"])})
     native = [{"kind": kind, "activationFdName": runtime.NATIVE_SESSIONS[index],
-        "expectedSocketPath": "/run/serverware-shadow-" + kind + "/listener.sock",
+        "expectedSocketPath": "/run/catchplate-shadow-" + kind + "/listener.sock",
         "expectedPeer": peer(62002 - index, 3002 - index)} for index, kind in enumerate(runtime.NATIVE)]
     return {"apiVersion": runtime.API, "scope": g.document(grant_raws[0], 262144)["payload"]["scope"],
         "durableGrantOriginal": grant_raws[0].decode("ascii"), "currentGrantOriginal": grant_raws[1].decode("ascii"),
@@ -101,7 +101,7 @@ def fixture(role=authority.ROLES[0], *, cold_binding_input=None):
     cold_configs, cold_keys, observations, resources = {}, {}, {}, {}
     for index, member in enumerate(endpoints.ROLES):
         key, selected = parents.selected_key(10 + index)
-        cold = {"apiVersion": "serverware.policyCustodyGuestConfiguration/v1", "authority": selected,
+        cold = {"apiVersion": "catchplate.policyCustodyGuestConfiguration/v1", "authority": selected,
             "serviceRole": "production-bridge", "uid": 62001 + index, "gid": 62001 + index}
         cold_configs[member], cold_keys[member] = cold, key
         manifest = closures.fixture(member)["manifest"]
@@ -138,7 +138,7 @@ def fixture(role=authority.ROLES[0], *, cold_binding_input=None):
         "issuedAtBoottimeNs": window["issuedAtBoottimeNs"], "services": resources}
     if role in endpoints.ROLES:
         cold, key, observed = cold_configs[role], cold_keys[role], observations[role]
-        runtime_raw = g.canonical({"apiVersion": "serverware.nativePilotEndpointRuntime/v1", "role": role})
+        runtime_raw = g.canonical({"apiVersion": "catchplate.nativePilotEndpointRuntime/v1", "role": role})
         activation, image = resources[role]["activation"], owner["services"][role]["image"]
         extra = dict(ownerConfigurationOriginal=text(owner), preparationOriginal=text(preparation), resourcesOriginal=text(resource_wire))
     else:
@@ -158,8 +158,8 @@ def fixture(role=authority.ROLES[0], *, cold_binding_input=None):
     value = {"apiVersion": authority.API, "role": role, "parentOriginals": parent_originals,
         "configurationOriginal": text(cold), "runtimeOriginal": runtime_raw.decode("ascii"),
         "payloadOriginal": text(payload), "activationOriginal": text(activation), "image": image, **extra}
-    raw = g.canonical({"apiVersion": "serverware.policyCustodyGuestDelivery/v1", "payload": payload,
-        "signatureBase64url": p.encoded(key.sign(b"serverware.policyCustodyGuestDelivery.signature/v1\0" + g.canonical(payload)))})
+    raw = g.canonical({"apiVersion": "catchplate.policyCustodyGuestDelivery/v1", "payload": payload,
+        "signatureBase64url": p.encoded(key.sign(b"catchplate.policyCustodyGuestDelivery.signature/v1\0" + g.canonical(payload)))})
     return dict(input=value, raw=raw, configuration=cold, window=window, observed=observed, parentOriginals=parent_originals,
         key=key, boot=parent["boot"], now=parent["now"], runtime_raw=runtime_raw, image_sha256=image["sha256"],
         executable_sha256=observed["executable"]["sha256"])
@@ -230,8 +230,8 @@ class GenesisDeliveryTests(unittest.TestCase):
         payload = g.document(value["payloadOriginal"].encode("ascii"), 65536)
         payload.update(timeNamespaceDevice=window["timeNamespaceDevice"], timeNamespaceInode=window["timeNamespaceInode"])
         value["payloadOriginal"] = text(payload)
-        result = g.canonical({"apiVersion": "serverware.policyCustodyGuestDelivery/v1", "payload": payload,
-            "signatureBase64url": p.encoded(f["key"].sign(b"serverware.policyCustodyGuestDelivery.signature/v1\0" + g.canonical(payload)))})
+        result = g.canonical({"apiVersion": "catchplate.policyCustodyGuestDelivery/v1", "payload": payload,
+            "signatureBase64url": p.encoded(f["key"].sign(b"catchplate.policyCustodyGuestDelivery.signature/v1\0" + g.canonical(payload)))})
         context = authority.verified_delivery(authority.ROLES[0], p.canonical(value), result,
             boot=(f["boot"][0], (1 << 64) - 1, (1 << 64) - 1), now_boottime_ns=f["now"])
         self.assertEqual(context["guest"]["timeNamespaceInode"], (1 << 64) - 1)

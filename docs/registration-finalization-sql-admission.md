@@ -1,6 +1,6 @@
 # Finalization originals before protected SQL
 
-The source-only [finalization SQL admission bridge](../serverware/authority_registration_finalization_sql_admission.py)
+The source-only [finalization SQL admission bridge](../catchplate/authority_registration_finalization_sql_admission.py)
 authenticates retained finalization raw10 and reservation raw3 before supplying
 original arguments to the actual `SuccessorExecutionIssuer`. It does not open
 a database, issue a packet, sign, claim an attempt, execute SQL, complete a

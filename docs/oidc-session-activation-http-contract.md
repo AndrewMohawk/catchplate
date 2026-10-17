@@ -13,7 +13,7 @@ The body is an immutable JSON object of at most 256 KiB, with exactly:
 
 | Field | Required data |
 | --- | --- |
-| `schema` | `serverware.oidcSessionActivationHttpRequest/v1` |
+| `schema` | `catchplate.oidcSessionActivationHttpRequest/v1` |
 | `purpose` | `dispatch-oidc-session-activation` |
 | `localDigest` | Existing canonical retained-finalization `sha256:` locator |
 | `mfa` | Object requiring a nonempty `assertion` object; optional `approvalId` text of 1–4,096 characters |
@@ -63,7 +63,7 @@ not supply or manufacture it.
 
 The two output-only helpers return exactly `schema`, `purpose`, `localDigest`,
 `status`, `dispatchState`, `sessionState` and `automaticRetryAllowed`.
-The schema is `serverware.oidcSessionActivationHttpFailure/v1`, purpose is the
+The schema is `catchplate.oidcSessionActivationHttpFailure/v1`, purpose is the
 fixed dispatch purpose, locator is a canonical digest or `null`, session state
 is always `unknown`, and automatic retry is always `false`.
 

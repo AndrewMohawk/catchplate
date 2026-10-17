@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/coder-test-controller-receipt.v12.schema.json",
-  "title": "Serverware Controller Receipt Contract v12",
+  "$id": "https://catchplate.invalid/schemas/coder-test-controller-receipt.v12.schema.json",
+  "title": "Catchplate Controller Receipt Contract v12",
   "description": "Closed ReceiptV12 wire contract layered on the canonical controller request v11. FinalSettlementArtifactV12 is also fully defined for durable lookup and settlement verification without creating a receipt digest cycle.",
   "$ref": "#/$defs/receipt",
   "$defs": {
@@ -257,7 +257,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/controller-trusted-receive/v12"
+          "const": "catchplate/controller-trusted-receive/v12"
         },
         "payload": {
           "$ref": "#/$defs/trustedReceivePayload"
@@ -274,7 +274,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/controller-trusted-receive/v12"
+                  "const": "catchplate/controller-trusted-receive/v12"
                 },
                 "signerRole": {
                   "const": "controllerIngress"
@@ -323,7 +323,7 @@
       ],
       "properties": {
         "replayNamespace": {
-          "const": "serverware/controller-receipt/v12"
+          "const": "catchplate/controller-receipt/v12"
         },
         "replayKey": {
           "type": "string",
@@ -430,14 +430,14 @@
       "properties": {
         "domain": {
           "enum": [
-            "serverware/controller-trusted-receive/v12",
-            "serverware/receipt-authentication/v12",
-            "serverware/receipt-tree-head/v12",
-            "serverware/receipt-external-witness/v12",
-            "serverware/final-verdict/v12",
-            "serverware/trust-generation-authorization/v12",
-            "serverware/trust-generation/v12",
-            "serverware/final-settlement/v12"
+            "catchplate/controller-trusted-receive/v12",
+            "catchplate/receipt-authentication/v12",
+            "catchplate/receipt-tree-head/v12",
+            "catchplate/receipt-external-witness/v12",
+            "catchplate/final-verdict/v12",
+            "catchplate/trust-generation-authorization/v12",
+            "catchplate/trust-generation/v12",
+            "catchplate/final-settlement/v12"
           ]
         },
         "payloadSha256": {
@@ -614,7 +614,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/receipt-authentication/v12"
+          "const": "catchplate/receipt-authentication/v12"
         },
         "payload": {
           "$ref": "#/$defs/receiptAuthenticationPayload"
@@ -631,7 +631,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/receipt-authentication/v12"
+                  "const": "catchplate/receipt-authentication/v12"
                 },
                 "signerRole": {
                   "const": "controllerReceiptAuthentication"
@@ -780,7 +780,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/receipt-tree-head/v12"
+          "const": "catchplate/receipt-tree-head/v12"
         },
         "payload": {
           "$ref": "#/$defs/treeHeadPayload"
@@ -797,7 +797,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/receipt-tree-head/v12"
+                  "const": "catchplate/receipt-tree-head/v12"
                 },
                 "signerRole": {
                   "const": "controllerReceiptLog"
@@ -840,7 +840,7 @@
       ],
       "properties": {
         "treeDomain": {
-          "const": "SERVERWARE_CONTROLLER_RECEIPTS_V12"
+          "const": "CATCHPLATE_CONTROLLER_RECEIPTS_V12"
         },
         "leafOrdinal": {
           "$ref": "#/$defs/u64"
@@ -876,7 +876,7 @@
       ],
       "properties": {
         "treeDomain": {
-          "const": "SERVERWARE_CONTROLLER_RECEIPTS_V12"
+          "const": "CATCHPLATE_CONTROLLER_RECEIPTS_V12"
         },
         "fromTreeSize": {
           "$ref": "#/$defs/u64"
@@ -946,7 +946,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/receipt-external-witness/v12"
+          "const": "catchplate/receipt-external-witness/v12"
         },
         "payload": {
           "$ref": "#/$defs/externalWitnessPayload"
@@ -963,7 +963,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/receipt-external-witness/v12"
+                  "const": "catchplate/receipt-external-witness/v12"
                 },
                 "signerRole": {
                   "const": "controllerReceiptExternalWitness"
@@ -1264,7 +1264,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/trust-generation-authorization/v12"
+          "const": "catchplate/trust-generation-authorization/v12"
         },
         "payload": {
           "$ref": "#/$defs/trustGenerationAuthorizationPayload"
@@ -1281,7 +1281,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/trust-generation-authorization/v12"
+                  "const": "catchplate/trust-generation-authorization/v12"
                 },
                 "signerRole": {
                   "const": "controllerTrustRoot"
@@ -1433,7 +1433,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/trust-generation/v12"
+          "const": "catchplate/trust-generation/v12"
         },
         "payload": {
           "$ref": "#/$defs/trustGenerationPayload"
@@ -1450,7 +1450,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/trust-generation/v12"
+                  "const": "catchplate/trust-generation/v12"
                 },
                 "signerRole": {
                   "const": "controllerTrustGeneration"
@@ -1674,7 +1674,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/final-verdict/v12"
+          "const": "catchplate/final-verdict/v12"
         },
         "payload": {
           "$ref": "#/$defs/finalVerdictPayload"
@@ -1691,7 +1691,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/final-verdict/v12"
+                  "const": "catchplate/final-verdict/v12"
                 },
                 "signerRole": {
                   "const": "controllerFinalVerdict"
@@ -1904,7 +1904,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/final-settlement/v12"
+          "const": "catchplate/final-settlement/v12"
         },
         "payload": {
           "$ref": "#/$defs/finalSettlementPayload"
@@ -1921,7 +1921,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/final-settlement/v12"
+                  "const": "catchplate/final-settlement/v12"
                 },
                 "signerRole": {
                   "const": "controllerFinalSettlement"
@@ -2143,7 +2143,7 @@
       ],
       "properties": {
         "protocol": {
-          "const": "serverware/controller-lifecycle/v12"
+          "const": "catchplate/controller-lifecycle/v12"
         },
         "operation": {
           "const": "DESTROY_AND_RECONCILE"
@@ -2197,7 +2197,7 @@
       ],
       "properties": {
         "protocol": {
-          "const": "serverware/controller-lifecycle/v12"
+          "const": "catchplate/controller-lifecycle/v12"
         },
         "operation": {
           "const": "DESTROY_AND_RECONCILE"
@@ -2241,7 +2241,7 @@
     "json": "Every object is RFC 8785 canonical JSON encoded as UTF-8. A bounded duplicate-aware streaming preflight rejects duplicate keys, floating-point and negative values, unsafe JSON integers above 2^53-1, invalid UTF-8, noncanonical numbers, excess nesting, excess members, excess strings, trailing bytes, and inputs larger than the operation-specific bound before object allocation. All counters and lengths other than literal contractVersion use D20 strings.",
     "clientArtifact": "The schema root remains ReceiptV12 for controller wire compatibility. The closed finalSettlementArtifact definition is used by durable lookup and settlement verification. It is non-cyclic: the artifact may carry one ReceiptV12, while ReceiptV12 never embeds the settlement artifact. finalSettlementArtifactSha256 = H12('final-settlement-artifact',JCS(finalSettlementArtifact)) is an external lookup and commit binding and is intentionally not embedded in the artifact itself.",
     "requestV11": "requestAdmission retains the exact 256-byte canonical preallocation frame, exact canonical request v11 bytes, and a controller-ingress signature over trusted receive time, CLOCK_BOOTTIME observation, absolute request deadline, frame and request digests and limits, current requester authorization and revocation high-water, verifier profile, full relationship profile, and controller configuration. Native verification invokes the canonical v11 frame decoder and request verifier and never creates a fresh requestedAt for an expired request. requestAdmissionSha256 = H12('canonical-request-admission-v11',JCS(requestAdmission)).",
-    "digest": "H12(tag,parts...) = SHA-256(UTF8('serverware/controller/v12/') || U64BE(LEN(tag)) || UTF8(tag) || each U64BE(LEN(part)) || part). JSON parts are exact RFC 8785 bytes. Hex digest fields decode to exactly 32 bytes before entering a preimage.",
+    "digest": "H12(tag,parts...) = SHA-256(UTF8('catchplate/controller/v12/') || U64BE(LEN(tag)) || UTF8(tag) || each U64BE(LEN(part)) || part). JSON parts are exact RFC 8785 bytes. Hex digest fields decode to exactly 32 bytes before entering a preimage.",
     "signature": "A v12 signature signs H12('signature-message',UTF8(domain),HEX(payloadSha256),UTF8(signedAt),UTF8(acceptedAt),UTF8(signerRole),UTF8(signerPrincipalId),UTF8(signerKeyId),HEX(signerSpkiDerSha256),HEX(keyAuthorization.keyAuthorizationSha256)). The signature's domain, role, principal, key, SPKI, authorization, validity, revocation, and high-water must equal an independently resolved current pin; carried authorization is join evidence only.",
     "typedEnvelope": "payloadSha256 = H12('payload',UTF8(domain),JCS(payload)). envelopeSha256 = H12('typed-envelope',UTF8(domain),HEX(payloadSha256),JCS(signature)). receiptAuthenticationEnvelopeSha256, signedTreeHeadEnvelopeSha256, externalWitnessCheckpointEnvelopeSha256, finalVerdictEnvelopeSha256, authorizationChainEnvelopeSha256, generationEnvelopeSha256, and finalSettlementCheckpointEnvelopeSha256 use this sole formula.",
     "receiptBody": "receiptBodySha256 = H12('receipt-body',JCS(receiptBody)); receiptBodyCanonicalBytes is its exact canonical byte length. Root, body, authentication, log leaf, final trust, and final verdict fields named receiptId, receiptSequence, replayKeySha256, requestV11Sha256, requestEnvelopeSha256, requestCanonicalBytes, terminalEvidenceRootSha256, terminalStateRootSha256, bodyTrustObservationSha256, receiptBodySha256, and receiptBodyCanonicalBytes agree byte-for-byte wherever present.",

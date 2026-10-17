@@ -9,7 +9,7 @@ agent-enrollment v1 and native startup v1/v2 retain their existing semantics.
 ## Independent setup authority
 
 Native startup v3 adds the required `enrollmentSetupAuthorizer` object with exactly
-`apiVersion: serverware.nativeEnrollmentSetupAuthorizer/v1`, `publicKeyPem` and
+`apiVersion: catchplate.nativeEnrollmentSetupAuthorizer/v1`, `publicKeyPem` and
 `publicKeyPemSha256`. Existing `enrollmentAuthorizer` and
 `enrollmentProxyEndpoint` remain mandatory. The new independently pinned public
 Ed25519 key has a separate setup purpose; delegation authority does not imply
@@ -22,15 +22,15 @@ issuer/key and target issuer/key SPKI commitments. Signed pins constrain scope;
 only the actual native admission establishes runtime and connection provenance.
 See the [cold-key schema](../schemas/native-enrollment-setup-authorizer.v1.schema.json).
 
-The [Python producer and original verifier](../serverware/native_enrollment_bootstrap_setup.py)
+The [Python producer and original verifier](../catchplate/native_enrollment_bootstrap_setup.py)
 pair with the [Rust original verifier](../data-plane/decision-gate-rs/src/native_enrollment_bootstrap_setup_v1.rs).
 The closed envelope contains `apiVersion`, `setup` and `signatureBase64url`.
-The envelope version is `serverware.signedNativeEnrollmentBootstrapSetup/v1`;
-the 21-field payload version is `serverware.nativeEnrollmentBootstrapSetup/v1`
+The envelope version is `catchplate.signedNativeEnrollmentBootstrapSetup/v1`;
+the 21-field payload version is `catchplate.nativeEnrollmentBootstrapSetup/v1`
 and purpose is `native-enrollment-bootstrap-setup`. Ed25519 signs:
 
 ```text
-ASCII("serverware/native-enrollment-bootstrap-setup/v1") || NUL || canonical setup JSON
+ASCII("catchplate/native-enrollment-bootstrap-setup/v1") || NUL || canonical setup JSON
 ```
 
 Canonical JSON is sorted, compact and `ensure_ascii=True`, with lowercase Unicode
@@ -103,7 +103,7 @@ It then constructs exactly these seven [packet-v2 fields](../schemas/native-enro
 
 | Field | Exact original / decoded bound |
 | --- | --- |
-| `apiVersion` | `serverware.nativeEnrollmentPacket/v2` |
+| `apiVersion` | `catchplate.nativeEnrollmentPacket/v2` |
 | `purpose` | `workload-bootstrap` |
 | `delegationBase64url` | Signed delegation including LF / 32 KiB |
 | `setupAuthorizationBase64url` | Signed setup including LF / 32 KiB |
@@ -116,7 +116,7 @@ canonical sorted compact ASCII with exactly one LF, at most 512 KiB. It has no
 legacy `runtimeManifestDigest` alias, copied verification result or installation
 receipt. This container itself is unsigned.
 
-The [SDK decoder](../serverware_agent_trust/native_enrollment_packet.py) exposes only
+The [SDK decoder](../catchplate_agent_trust/native_enrollment_packet.py) exposes only
 `decode_packet_originals_on_budget(*, packet_bytes, budget)`. It checks the exact
 flat shape, canonical encoding, component bounds and caller's existing deadline,
 then returns frozen, non-repr original-byte fields `delegation_bytes`,

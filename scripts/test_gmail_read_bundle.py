@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from mitmproxy import http
-from serverware import adapters, policy_bundle as pb, policy_engine as engine
+from catchplate import adapters, policy_bundle as pb, policy_engine as engine
 import test_buffered_passthrough_response as buffered
 
 LIST = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
@@ -65,8 +65,8 @@ class GmailReadBundleTests(unittest.TestCase):
         flow.response = http.Response.make(status, b"")
         flow.response.headers = http.Headers(fields if fields is not None else [(b"Content-Type", b"application/json")])
         flow.response.raw_content = body
-        flow.metadata.update(serverware_route=self.route,
-            serverware_operation=self.adapter.operation_fields(flow, self.route, params or {}))
+        flow.metadata.update(catchplate_route=self.route,
+            catchplate_operation=self.adapter.operation_fields(flow, self.route, params or {}))
         if guarded:
             guard = engine._ResponseCredentialGuard()
             guard.add_text_encodings(SECRET)
@@ -197,7 +197,7 @@ class GmailReadBundleTests(unittest.TestCase):
                 (request(LIST + "/id?pageToken=x"), {"message_id": "id"}),
                 (request(fields=[(b"accept-encoding", b"gzip")]), {})):
             self.assertFalse(self.adapter.validate_request(flow, self.route, params).allowed)
-        for header in (b"x-serverware-proof-nonce", b"x-serverware-stream-proof-nonce", b"x-serverware-observation-nonce"):
+        for header in (b"x-catchplate-proof-nonce", b"x-catchplate-stream-proof-nonce", b"x-catchplate-observation-nonce"):
             self.assertFalse(self.adapter.validate_request(request(fields=[(header, b"fixture")]), self.route, {}).allowed)
 
     def test_whole_json_list_detail_errors_and_metadata_preserve_body(self):
@@ -257,7 +257,7 @@ class GmailReadBundleTests(unittest.TestCase):
         flow = self.response(b'{}', fields=[(b"Content-Type", b"application/json"), (b"X-Unselected", SECRET.encode())])
         self.assertFalse(self.admit_response(flow).allowed)
         self.assertFalse(self.admit_response(self.response(b'{}', guarded=False)).allowed)
-        for header in (b"Set-Cookie", b"Authorization", b"x_serverware_token"):
+        for header in (b"Set-Cookie", b"Authorization", b"x_catchplate_token"):
             self.assertFalse(self.admit_response(self.response(b'{}', fields=[(b"Content-Type", b"application/json"), (header, b"x")])).allowed)
 
     def test_json_inspection_and_container_limits_do_not_rewrite_wire_bytes(self):

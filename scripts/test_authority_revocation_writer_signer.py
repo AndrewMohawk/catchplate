@@ -25,7 +25,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_revocation_writer_signer as signer
+from catchplate import authority_revocation_writer_signer as signer
 
 
 def private_pem(key, encryption=None):

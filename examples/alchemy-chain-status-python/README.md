@@ -39,7 +39,7 @@ the dependency update and regression tests are not an exploit-reachability test.
 
 ## Configure one saved permission
 
-First save the Alchemy key privately in Serverware, approve the exact provider
+First save the Alchemy key privately in Catchplate, approve the exact provider
 destination and save a chain-status permission for one application. Wait for
 the matching gate/policy to load. The application must have **Basic proxy
 authentication enabled**; a bearer-only proxy application is not sufficient.
@@ -48,19 +48,19 @@ Download **Private client configuration** and the interception CA from **Proxy
 setup**, then run from this example directory:
 
 ```sh
-.venv/bin/python -B chain_status.py --config /private/path/serverware-client.private.json
+.venv/bin/python -B chain_status.py --config /private/path/catchplate-client.private.json
 ```
 
 The complete JSON download selects the saved chain and connection. Relative CA
 paths resolve beside that JSON file. Keep the file private: it contains the
-Serverware application token. Its headers, request body and commands are not
+Catchplate application token. Its headers, request body and commands are not
 executed; this example still performs only the two fixed chain-status reads.
 Expired application tokens and mismatched permissions are refused before launch.
 
 Alternatively, keep the environment-only invocation below.
 Set the variables illustrated in `.env.example` through your secret manager or
 private shell environment. The program does not load `.env` automatically.
-`SERVERWARE_PROXY_TOKEN` is only the scoped **Serverware application token**.
+`CATCHPLATE_PROXY_TOKEN` is only the scoped **Catchplate application token**.
 Never configure an Alchemy key, wallet secret or key-containing provider URL in
 this client. Keep real environment files and CA material out of commits.
 
@@ -68,17 +68,17 @@ this client. Keep real environment files and CA material out of commits.
 .venv/bin/python chain_status.py
 ```
 
-`SERVERWARE_ALCHEMY_CHAIN` is exactly `eth-mainnet` or `eth-sepolia`. The program
+`CATCHPLATE_ALCHEMY_CHAIN` is exactly `eth-mainnet` or `eth-sepolia`. The program
 constructs only `https://eth-mainnet.g.alchemy.com/v2` or
 `https://eth-sepolia.g.alchemy.com/v2`, without a key path or query. The inner
 Authorization value is the public dummy
-`Bearer serverware-alchemy-placeholder-v1`; the paired gate replaces it with
+`Bearer catchplate-alchemy-placeholder-v1`; the paired gate replaces it with
 the saved provider key. Requests applies application-ID/password Basic
 authentication to **CONNECT**, never to the inner provider request.
 
-`SERVERWARE_CA_FILE` is the downloaded public interception CA, added to certifi
+`CATCHPLATE_CA_FILE` is the downloaded public interception CA, added to certifi
 for the inner destination TLS connection. Outer HTTPS-proxy TLS uses its own
-verified context with certifi roots. Supply `SERVERWARE_PROXY_CA_FILE` only when
+verified context with certifi roots. Supply `CATCHPLATE_PROXY_CA_FILE` only when
 the proxy needs an additional public CA. Both paths must be absolute; private
 keys are refused. DNS/IPv4 HTTPS proxy origins are supported. TLS and hostname
 verification remain enabled on both legs; no ambient proxy, `.netrc`, bypass,

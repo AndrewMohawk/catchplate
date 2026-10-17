@@ -35,7 +35,7 @@ The actual verifier also exposes fixed
 `_prepare_webauthn_installation_evidence` compositions. These take original signed
 evidence and its original ceremony/installation inputs, plus admitted publication
 and optional session rows, instead of a caller-built typed request. The
-[invocation assembler](../serverware/authority_webauthn_evidence_invocation.py)
+[invocation assembler](../catchplate/authority_webauthn_evidence_invocation.py)
 derives the evidence digest, selected IDs, business intent, request commitment and
 operation ID using the existing source constructors, retains exact original-input
 bytes, and immediately enters the same preparation path on the same work.

@@ -302,7 +302,7 @@ remains unbuilt and unexecuted.
 ## Signed transition policy and configured handoff
 
 Source `.102` adds optional `webauthnTransitions`, schema
-`serverware.policyAuthorityWebAuthnTransitionPolicy/v1`, with exactly the
+`catchplate.policyAuthorityWebAuthnTransitionPolicy/v1`, with exactly the
 `registration`, `stage` and `completion` slots. Absence grants no transition
 authority; null disables that fixed operation. Each enabled slot pins its actual
 operation, explicit canonical Ed25519 raw key/SPKI and bounded evidence/assertion
@@ -343,8 +343,8 @@ verification. All source remains unbuilt and unexecuted.
 ## Signed transition plans and held production owners
 
 Source `.101` adds the separate
-`serverware.policyAuthorityWebAuthnTransitionPlan/v1` payload and
-`serverware.policyAuthorityWebAuthnTransitionPlanEnvelope/v1` envelope,
+`catchplate.policyAuthorityWebAuthnTransitionPlan/v1` payload and
+`catchplate.policyAuthorityWebAuthnTransitionPlanEnvelope/v1` envelope,
 without relabelling any legacy or evidence-admission protocol. The canonical
 raw-four result contains the signed envelope, original proof record, original
 inputs and full evaluation context. Its closed 14-field payload binds all three
@@ -383,7 +383,7 @@ infrastructure and consolidated frozen-build verification remain required.
 Source `.100` extends the three existing `acquire_originals` methods without
 changing ordinary `acquire`. After the real read scopes close,
 `authority_webauthn_transition_proof_production.py` packages the acquisition as
-canonical `serverware.policyAuthorityWebAuthnTransitionProof/v1` bytes and invokes
+canonical `catchplate.policyAuthorityWebAuthnTransitionProof/v1` bytes and invokes
 `authority_webauthn_transition_proof.py` for genuine offline replay before return.
 The result keeps the acquisition, input bytes/digest and semantic observations,
 and adds `proof_bytes` and `proof_digest`; none is an authority token.
@@ -438,7 +438,7 @@ legacy exclusions are unchanged. Source is unbuilt and unexecuted.
 `authority_webauthn_evidence.py` signs and verifies original canonical envelopes
 for two fixed purposes: `registration-attestation` and `trust-installation`.
 Both use purpose-specific v2 claims inside
-`serverware.policyAuthorityWebAuthnEvidence/v1`. The envelope binds source,
+`catchplate.policyAuthorityWebAuthnEvidence/v1`. The envelope binds source,
 purpose, signer identity and SPKI, claims and issue/expiry times. It has a
 4 MiB / 4,096-node / depth-16 limit and at most a 30-second validity interval;
 independently configured age/skew may be stricter.
@@ -622,7 +622,7 @@ durable replay and operation activation remain separate unfinished boundaries.
 
 Service configuration may contain exactly one additional known field,
 `webauthnEvidenceAdmission`, with schema
-`serverware.policyAuthorityWebAuthnEvidenceAdmissionPolicy/v1` and closed
+`catchplate.policyAuthorityWebAuthnEvidenceAdmissionPolicy/v1` and closed
 `registration` and `installation` slots. An absent extension grants neither
 purpose; a null slot disables that purpose. A present null extension is invalid.
 The old closed payload shape remains supported; arbitrary extension fields do
@@ -699,7 +699,7 @@ revocation-only v4 remains unchanged.
 ## Separate signed admission plans and proof replay
 
 Source `.86` adds `webauthn-evidence-admission-v1`, with closed plan schema
-`serverware.policyAuthorityWebAuthnEvidenceAdmissionPlan/v1` and its separate
+`catchplate.policyAuthorityWebAuthnEvidenceAdmissionPlan/v1` and its separate
 signed envelope. It binds the typed request, source/operation/query manifests,
 configuration and planner identity/SPKI, historical database cutoff, detached
 original-input digest, exact selected rows, primary proofs, query observations,
@@ -804,7 +804,7 @@ owned expectations before signing, not reconstructed from a signed response or
 database row. The existing live window also covers this encoding work.
 
 The context codec uses the closed flat twenty-field
-`serverware.policyAuthorityWebAuthnEvidencePlanEvaluationContext/v1` document:
+`catchplate.policyAuthorityWebAuthnEvidencePlanEvaluationContext/v1` document:
 `schema`, `sourceRevision` and the plan verifier's eighteen exact expectations.
 Those expectations preserve request, both before-root classes, original-input
 commitment, configuration/planner/evidence pins, original cutoff and evaluation
@@ -820,7 +820,7 @@ context bytes and complete equality with that graph, then invokes genuine
 signed-plan proof and semantic replay using the independent graph, never the
 stored context as authority. It subsequently derives both actual raw-key hashes,
 three original-byte hashes and a closed sixteen-field record commitment under
-`serverware.policyAuthorityWebAuthnEvidenceAdmissionRetainedPlan/v1`.
+`catchplate.policyAuthorityWebAuthnEvidenceAdmissionRetainedPlan/v1`.
 That commitment binds the original plan identity, request/operation/configuration,
 key fingerprints and byte counts/hashes; it is not a signed custody receipt.
 
@@ -957,11 +957,11 @@ historical input provenance, root currentness, a one-use capability or execution
 
 Source `.93` adds two separate flat controls, not legacy internal/v3 envelopes
 or revocation-v4 requests. The 19-field
-`serverware.signedPolicyAuthorityWebAuthnEvidenceCustodyIntent/v1` commits the
+`catchplate.signedPolicyAuthorityWebAuthnEvidenceCustodyIntent/v1` commits the
 retained-record identity and the exact byte digest/count of four detached
 originals: signed plan, original inputs, evaluation context and independently
 supplied historical expectations. The 13-field
-`serverware.signedPolicyAuthorityWebAuthnEvidenceCustodyRelay/v1` commits the
+`catchplate.signedPolicyAuthorityWebAuthnEvidenceCustodyRelay/v1` commits the
 complete original intent's digest/count and the same retained-record identity.
 Each binds source, fixed retain/relay purpose, configuration digest, generation
 sequence/digest, one of the two evidence-admission operations and issue/expiry
@@ -1130,7 +1130,7 @@ production infrastructure. No build or execution has validated this source.
 ## Authenticated retained-original lookup
 
 Source `.95` adds the separate 13-field
-`serverware.signedPolicyAuthorityWebAuthnEvidenceCustodyReadRequest/v1` control,
+`catchplate.signedPolicyAuthorityWebAuthnEvidenceCustodyReadRequest/v1` control,
 with purpose `read-evidence-plan`. One verifier signature binds the requested
 retained-record digest, exact historical-document digest/count, current
 configuration and generation, source, operation and issue/expiry times. The

@@ -16,7 +16,7 @@ import signal
 import sys
 
 MODE = "--run-native-pilot-lifecycle"
-RESULT_API = "serverware.nativePilotLifecycleResult/v1"
+RESULT_API = "catchplate.nativePilotLifecycleResult/v1"
 _PREFIX = (
     ("supervisor-inventory-fd", "fd"), ("supervisor-inventory-sha256", "sha"),
     ("listener-configuration-fd", "fd"), ("listener-configuration-sha256", "sha"),
@@ -105,12 +105,12 @@ def main():
         _require(sys.flags.isolated == 1 and sys.flags.dont_write_bytecode == 1
             and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0))
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from serverware import native_pilot_genesis_jobs as cold
-        from serverware import native_pilot_adopted_phase_profile as adopted
-        from serverware import native_pilot_genesis_parent_control_io as ownership
-        from serverware.native_pilot_genesis_authority import _SelfRuntime
-        from serverware.native_pilot_lifecycle import CommissioningLifecycle, LifecycleError
-        from serverware.native_pilot_supervisor_approval_channel import ApprovalChannel, ApprovalChannelError
+        from catchplate import native_pilot_genesis_jobs as cold
+        from catchplate import native_pilot_adopted_phase_profile as adopted
+        from catchplate import native_pilot_genesis_parent_control_io as ownership
+        from catchplate.native_pilot_genesis_authority import _SelfRuntime
+        from catchplate.native_pilot_lifecycle import CommissioningLifecycle, LifecycleError
+        from catchplate.native_pilot_supervisor_approval_channel import ApprovalChannel, ApprovalChannelError
 
         selected = _arguments(sys.argv[1:], cold.KEY_PURPOSES, adopted.KEY_PURPOSES)
         runtime = _SelfRuntime()  # Retain partial inventory acquisition before admission.

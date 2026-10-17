@@ -16,8 +16,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts.test_authority_local_prepared_install import PreparedTree, digest
-from serverware import authority_local_artifact_measure as measure
-from serverware import authority_local_install as install
+from catchplate import authority_local_artifact_measure as measure
+from catchplate import authority_local_install as install
 
 
 class ScanTree(PreparedTree):
@@ -123,7 +123,7 @@ class PreparedScanTests(unittest.TestCase):
                 inode = fixture.real_stat(fixture.prepared / name).st_ino
                 self.assertEqual(sum(size for seen, _, size in fixture.reads if seen == inode), len(raw))
                 catalog_rows.append(row)
-            encoded = json.dumps({"schema": "serverware.sealedContentCatalog/v1",
+            encoded = json.dumps({"schema": "catchplate.sealedContentCatalog/v1",
                 "entries": sorted(catalog_rows, key=lambda row: (row["fsVerityDigest"], row["size"]))},
                 sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
             # Producer measurements above read actual bytes. Clear only the

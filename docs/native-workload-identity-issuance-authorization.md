@@ -32,8 +32,8 @@ The actual authenticated cold owner alone selects the verifier.
 The [new grant schema](../schemas/native-workload-identity-issuance-authorization.v1.schema.json)
 is a closed three-field envelope:
 
-- `schema`: `serverware.signedNativeWorkloadIdentityIssuanceAuthorization/v1`;
-- `payload`: exact 34-field `serverware.nativeWorkloadIdentityIssuanceAuthorization/v1`;
+- `schema`: `catchplate.signedNativeWorkloadIdentityIssuanceAuthorization/v1`;
+- `payload`: exact 34-field `catchplate.nativeWorkloadIdentityIssuanceAuthorization/v1`;
 - `signature`: `ed25519:` plus canonical unpadded base64url of the raw 64-byte signature.
 
 The entire envelope is sorted compact `ensure_ascii=True` JSON, at most 32 KiB,
@@ -61,7 +61,7 @@ original container, not a host-signed legacy enrollment packet.
 ## Original-only producer and admission APIs
 
 The private source module
-[`native_workload_identity_issuance_authorization.py`](../serverware/native_workload_identity_issuance_authorization.py)
+[`native_workload_identity_issuance_authorization.py`](../catchplate/native_workload_identity_issuance_authorization.py)
 provides `_verify_on_work`, `_verify_certificate_on_work` and `_produce_on_work`.
 The verification entrypoints receive raw grant/bootstrap/packet/request originals,
 the independent cold root public key, and the caller's existing work ledger,

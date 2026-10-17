@@ -10,9 +10,9 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import development_sandbox, sandbox_portal
+from catchplate import development_sandbox, sandbox_portal
 
-ASSETS = ROOT / "serverware" / "sandbox_web"
+ASSETS = ROOT / "catchplate" / "sandbox_web"
 
 
 class Elements(HTMLParser):
@@ -50,8 +50,8 @@ class SandboxPortalTests(unittest.TestCase):
         self.assertNotIn("__SANDBOX_SCRIPT__", document)
         self.assertEqual(document.count("<style>"), 1)
         self.assertEqual(document.count("<script>"), 1)
-        self.assertNotIn("serverware.config", sys.modules)
-        self.assertNotIn("serverware.app", sys.modules)
+        self.assertNotIn("catchplate.config", sys.modules)
+        self.assertNotIn("catchplate.app", sys.modules)
 
     def test_missing_or_duplicate_asset_marker_is_rejected(self):
         original = Path.read_text
@@ -92,7 +92,7 @@ class SandboxPortalTests(unittest.TestCase):
             self.assertIn(("section", section), [(tag, attrs.get("id")) for tag, attrs in elements])
         ca = next(attrs for _, attrs in elements if attrs.get("id") == "ca-download")
         self.assertEqual(ca["href"], "/ca.pem")
-        self.assertEqual(ca["download"], "serverware-ca.pem")
+        self.assertEqual(ca["download"], "catchplate-ca.pem")
         for tag, attrs in elements:
             if tag in {"a", "form", "button"}:
                 for key in ("href", "action", "formaction"):

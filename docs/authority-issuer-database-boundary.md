@@ -16,11 +16,11 @@ This does not activate a configured successor service route or a public gate.
 
 The existing immutable contract declares these three functions:
 
-| Function under `serverware_metadata` | Argument types | Existing purpose |
+| Function under `catchplate_metadata` | Argument types | Existing purpose |
 | --- | --- | --- |
-| `serverware_policy_authority_issue_capability` | Four `text` arguments | Legacy capability issuer |
-| `serverware_policy_authority_issue_writer_capability` | Five `text` arguments | Current v3 writer capability issuer |
-| `serverware_policy_authority_record_witness_receipt` | Four `text` arguments | Existing terminal witness receipt recorder |
+| `catchplate_policy_authority_issue_capability` | Four `text` arguments | Legacy capability issuer |
+| `catchplate_policy_authority_issue_writer_capability` | Five `text` arguments | Current v3 writer capability issuer |
+| `catchplate_policy_authority_record_witness_receipt` | Four `text` arguments | Existing terminal witness receipt recorder |
 
 The writer issuer's fifth argument is the credential-issuance digest. Its final
 installer removes the old four-argument overload. Previously the grant loop and

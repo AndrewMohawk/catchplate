@@ -31,7 +31,7 @@ flowchart LR
     G -->|Role-specific authorization| S[Internal services]
 ```
 
-`serverware.nativeServiceTokensEnvelope/v1` has exactly apiVersion, binding,
+`catchplate.nativeServiceTokensEnvelope/v1` has exactly apiVersion, binding,
 secretKekId, nonce and ciphertext. Its binding names the workload instance,
 actual gate binary, admitted policy hash, exact service URLs and atomic-release
 mode. Startup must derive the expected binding from its actual retained inputs;

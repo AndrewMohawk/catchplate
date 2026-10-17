@@ -39,7 +39,7 @@ response = {
     "KeyId": sys.argv[sys.argv.index("--key-id") + 1],
     "CiphertextBlob": base64.b64encode(b"ciphertext:" + plaintext[:8]).decode("ascii"),
 }
-if os.getenv("SERVERWARE_FAKE_AWS_RETURN_PLAINTEXT"):
+if os.getenv("CATCHPLATE_FAKE_AWS_RETURN_PLAINTEXT"):
     response["Plaintext"] = base64.b64encode(plaintext).decode("ascii")
 print(json.dumps(response, sort_keys=True))
 """,
@@ -50,7 +50,7 @@ print(json.dumps(response, sort_keys=True))
 
 def run_helper(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[bytes]:
     run_env = os.environ.copy()
-    run_env.pop("SERVERWARE_FAKE_AWS_RETURN_PLAINTEXT", None)
+    run_env.pop("CATCHPLATE_FAKE_AWS_RETURN_PLAINTEXT", None)
     if env is not None:
         run_env.update(env)
     return subprocess.run(
@@ -81,12 +81,12 @@ def main() -> None:
                     "broker-kek": {
                         "key_id": "arn:aws:kms:us-east-1:111122223333:key/broker",
                         "plaintext_path": str(broker),
-                        "encryption_context": {"service": "serverware", "material": "broker-kek"},
+                        "encryption_context": {"service": "catchplate", "material": "broker-kek"},
                     },
                     "decision-gate-ca": {
                         "key_id": "arn:aws:kms:us-east-1:111122223333:key/ca",
                         "plaintext_path": str(ca),
-                        "encryption_context": {"service": "serverware", "material": "decision-gate-ca"},
+                        "encryption_context": {"service": "catchplate", "material": "decision-gate-ca"},
                     },
                 }
             ),
@@ -194,7 +194,7 @@ def main() -> None:
             aws_command,
             "--out",
             str(tmp / "rejected.json"),
-            env={"SERVERWARE_FAKE_AWS_RETURN_PLAINTEXT": "1"},
+            env={"CATCHPLATE_FAKE_AWS_RETURN_PLAINTEXT": "1"},
         )
         if rejected.returncode == 0 or "Plaintext" not in detail(rejected):
             raise AssertionError(f"materials helper accepted plaintext AWS response: {detail(rejected)}")

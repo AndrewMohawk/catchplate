@@ -10,7 +10,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from serverware import runtime
+from catchplate import runtime
 
 
 def proof_context(**changes: object) -> dict[str, object]:

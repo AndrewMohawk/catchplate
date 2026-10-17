@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_page_configuration as source
+from catchplate import authority_challenge_page_configuration as source
 from test_authority_challenge_configuration import Fixture as BaseFixture, digest, work
 
 
@@ -35,7 +35,7 @@ class Fixture(BaseFixture):
             plannerSessionIdentityDigest=roles["planner"]["plannerSessionIdentityDigest"],
             plannerSigningSpkiDigest=roles["planner"]["signingSpkiDigest"],
             plannerSigningPublicKeyBase64Url=roles["planner"]["signingPublicKeyBase64Url"],
-            databaseConnectTimeoutSeconds=2.75, databaseRole="serverware_policy_authority_planner_writer",
+            databaseConnectTimeoutSeconds=2.75, databaseRole="catchplate_policy_authority_planner_writer",
             tlsClientDn="CN=synthetic-writer", tlsClientSerial="19", tlsIssuerDn="CN=synthetic-ca")
         self.seal()
 
@@ -63,7 +63,7 @@ class ChallengePageConfigurationControls(unittest.TestCase):
         verifier = fixture.payload["roles"]["verifier"]
         cohort = fixture.runtime["roles"]
         verifier_values = (fixture.digest, verifier["measurementDigest"], cohort["verifier"]["attestationReceiptDigest"])
-        framed = b"serverware.policyAuthorityVerifierSession/v2\x00" + b"".join(
+        framed = b"catchplate.policyAuthorityVerifierSession/v2\x00" + b"".join(
             len(value.encode("utf-8")).to_bytes(8, "big") + value.encode("utf-8") for value in verifier_values)
         for role, selected in values.items():
             self.assertIs(type(selected), source._PageConfiguration)
@@ -88,7 +88,7 @@ class ChallengePageConfigurationControls(unittest.TestCase):
         self.assertIsNone(writer.private_key)
         self.assertIs(type(writer.persistence), source.page_persistence.MaintenancePagePersistence)
         self.assertEqual(source.page_persistence._snapshot(writer.persistence),
-            ("host=synthetic.invalid dbname=synthetic", 2, ("serverware_policy_authority_planner_writer",
+            ("host=synthetic.invalid dbname=synthetic", 2, ("catchplate_policy_authority_planner_writer",
                 "CN=synthetic-writer", "19", "CN=synthetic-ca")))
         self.assertGreater(meter.hash_work, 0)
 

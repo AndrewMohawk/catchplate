@@ -1,4 +1,4 @@
-module serverware.example/x-username-go
+module catchplate.example/x-username-go
 
 go 1.23.0
 

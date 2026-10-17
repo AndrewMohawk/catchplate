@@ -1,6 +1,6 @@
 # Fresh completion-recovery LIVE exchange
 
-`serverware/control_plane_oidc_session_activation_completion_recovery_delivery_exchange.py`
+`catchplate/control_plane_oidc_session_activation_completion_recovery_delivery_exchange.py`
 connects the actual fresh release-purpose owner to one protected LIVE exchange.
 It accepts no posted target, successful material, raw request or permission DTO.
 It does not revive `_ActivationPermission`, sign an intent, contact proof setup,

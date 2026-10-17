@@ -8,8 +8,8 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 const MAX_BYTES: usize = 32 * 1024;
-const SCHEMA: &str = "serverware.nativeCaInstallationAuthorization/v1";
-const ENVELOPE: &str = "serverware.signedNativeCaInstallationAuthorization/v1";
+const SCHEMA: &str = "catchplate.nativeCaInstallationAuthorization/v1";
+const ENVELOPE: &str = "catchplate.signedNativeCaInstallationAuthorization/v1";
 const MAX_EPOCH_MS: u64 = 9_223_372_036_854;
 
 #[derive(Serialize)]

@@ -12,7 +12,7 @@ pub(crate) const MODE: &str = "npmMetadataJsonV1";
 pub(crate) const CONTENT_TYPE_POLICY: &str = "npmJsonUtf8V1";
 pub(crate) const HOST: &str = "registry.npmjs.org";
 pub(crate) const PATH: &str = "/{package}";
-pub(crate) const PLACEHOLDER: &str = "Bearer serverware-npm-placeholder-v1";
+pub(crate) const PLACEHOLDER: &str = "Bearer catchplate-npm-placeholder-v1";
 pub(crate) const HEADERS: &[&str] = &[
     "accept",
     "npm-auth-type",

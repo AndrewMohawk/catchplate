@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-commit-request.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-commit-request.v1.schema.json",
   "$ref": "#/$defs/launch",
   "$defs": {
     "sha": {
@@ -170,7 +170,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowCommitRequestServiceAssignment/v1"
+          "const": "catchplate.nativeShadowCommitRequestServiceAssignment/v1"
         },
         "purpose": {
           "const": "native-shadow-ledger-commit-request"
@@ -239,7 +239,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowCommitRequestGuestLaunch/v1"
+          "const": "catchplate.nativeShadowCommitRequestGuestLaunch/v1"
         },
         "keyAdmission": {
           "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
@@ -259,7 +259,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeProofBridgeLaunch/v2"
+          "const": "catchplate.nativeProofBridgeLaunch/v2"
         },
         "keyAdmission": {
           "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
@@ -294,7 +294,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.custodyCommitRequestServiceGrant/v1"
+          "const": "catchplate.custodyCommitRequestServiceGrant/v1"
         },
         "purpose": {
           "const": "commit-request-service-transition"
@@ -362,13 +362,13 @@
     "ordinaryLaunch": {
       "type":"object","additionalProperties":false,
       "required":["apiVersion","deliveryConfiguration","delivery"],
-      "properties":{"apiVersion":{"const":"serverware.custodyOrdinaryServiceGuestLaunch/v3"},
+      "properties":{"apiVersion":{"const":"catchplate.custodyOrdinaryServiceGuestLaunch/v3"},
         "deliveryConfiguration":{"$ref":"#/$defs/pin"},"delivery":{"$ref":"#/$defs/pin"}}
     },
     "inspectedOrdinaryLaunch": {
       "type":"object","additionalProperties":false,
       "required":["apiVersion","deliveryConfiguration","delivery","peerInspectionCredential"],
-      "properties":{"apiVersion":{"const":"serverware.custodyOrdinaryServiceGuestLaunch/v4"},
+      "properties":{"apiVersion":{"const":"catchplate.custodyOrdinaryServiceGuestLaunch/v4"},
         "deliveryConfiguration":{"$ref":"#/$defs/pin"},"delivery":{"$ref":"#/$defs/pin"},
         "peerInspectionCredential":{"const":"peer-inspection-policy"}}
     },
@@ -381,7 +381,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeCommitRequestServices/v1"
+          "const": "catchplate.nativeCommitRequestServices/v1"
         },
         "serviceGrantOriginals": {
           "type": "object",

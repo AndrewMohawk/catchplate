@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.local/schemas/adapters/npm.registry.schema.json",
-  "title": "Serverware npm registry adapter config",
+  "$id": "https://catchplate.local/schemas/adapters/npm.registry.schema.json",
+  "title": "Catchplate npm registry adapter config",
   "type": "object",
   "$defs": {
     "allowedFields": {
@@ -47,7 +47,7 @@
       "maxItems": 16,
       "uniqueItems": true,
       "items": {
-        "$ref": "https://serverware.local/schemas/policy-bundle.v1.schema.json#/$defs/requestValueRule"
+        "$ref": "https://catchplate.local/schemas/policy-bundle.v1.schema.json#/$defs/requestValueRule"
       }
     },
     "credentialBinding": {
@@ -90,7 +90,7 @@
           "maxItems": 64,
           "uniqueItems": true,
           "items": {
-            "$ref": "https://serverware.local/schemas/policy-bundle.v1.schema.json#/$defs/adapterRequestHeaderName"
+            "$ref": "https://catchplate.local/schemas/policy-bundle.v1.schema.json#/$defs/adapterRequestHeaderName"
           }
         },
         "discardHeaders": {

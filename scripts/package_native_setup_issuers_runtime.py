@@ -33,17 +33,17 @@ PROFILES = (
 # provenance and the distinct rotation custody grammar. Both imports are lazy.
 # Uncalled transition/request-effect factories are NOT recursively packaged.
 ROOT_MODULES = (
-    "serverware.native_setup_independent_verifier", "serverware.native_setup_independent_originals",
-    "serverware.native_setup_final_authority", "serverware.authority_setup_native_final",
-    "serverware.authority_setup_native_runtime_policy", "serverware.authority_setup_native_runtime_capture",
-    "serverware.authority_setup_native_runtime_receipt", "serverware.authority_query_read_work",
-    "serverware.authority_policy_canary_policy", "scripts.verify_nitro_tee",
-    "serverware.authority_static_credential_provenance",
-    "serverware.authority_static_credential_rotation_custody",
+    "catchplate.native_setup_independent_verifier", "catchplate.native_setup_independent_originals",
+    "catchplate.native_setup_final_authority", "catchplate.authority_setup_native_final",
+    "catchplate.authority_setup_native_runtime_policy", "catchplate.authority_setup_native_runtime_capture",
+    "catchplate.authority_setup_native_runtime_receipt", "catchplate.authority_query_read_work",
+    "catchplate.authority_policy_canary_policy", "scripts.verify_nitro_tee",
+    "catchplate.authority_static_credential_provenance",
+    "catchplate.authority_static_credential_rotation_custody",
 )
-FORBIDDEN = frozenset({"serverware.app", "serverware.db", "serverware.authority_service",
-    "serverware.authority_factory", "serverware.authority_client", "serverware.authority_transitions"})
-PREFIXES = ("serverware.", "serverware_agent_trust.", "scripts.")
+FORBIDDEN = frozenset({"catchplate.app", "catchplate.db", "catchplate.authority_service",
+    "catchplate.authority_factory", "catchplate.authority_client", "catchplate.authority_transitions"})
+PREFIXES = ("catchplate.", "catchplate_agent_trust.", "scripts.")
 
 
 def source_path(module):
@@ -66,9 +66,9 @@ def source_inventory():
     pending, selected = list(ROOT_MODULES), {}
 
     def add(module):
-        require(module not in FORBIDDEN and not module.startswith(("serverware.authority_store",
-            "serverware.control_plane", "serverware.portal_")), "issuer closure reached control-plane execution")
-        if module in {"serverware", "serverware_agent_trust", "scripts"} or module.startswith(PREFIXES):
+        require(module not in FORBIDDEN and not module.startswith(("catchplate.authority_store",
+            "catchplate.control_plane", "catchplate.portal_")), "issuer closure reached control-plane execution")
+        if module in {"catchplate", "catchplate_agent_trust", "scripts"} or module.startswith(PREFIXES):
             path = source_path(module)
             require(path is not None or module == "scripts", "issuer source dependency is absent")
             if path is not None and module not in selected:
@@ -109,7 +109,7 @@ def source_inventory():
                 add(base)
                 # `from package import module` imports the child if it exists;
                 # ordinary names/functions do not become invented module files.
-                if base in {"serverware", "serverware_agent_trust", "scripts"} or base.startswith(PREFIXES):
+                if base in {"catchplate", "catchplate_agent_trust", "scripts"} or base.startswith(PREFIXES):
                     for alias in node.names:
                         if alias.name != "*" and source_path(base + "." + alias.name) is not None:
                             add(base + "." + alias.name)
@@ -122,7 +122,7 @@ def build(purpose, entry_name, modules, epoch):
     root, output = Path("/" + purpose + "-runtime"), Path("/setup-issuers-output") / purpose
     root.mkdir(); output.mkdir()
     closure = Closure(epoch, purpose=purpose)
-    entrypoint = Path("/opt/serverware/scripts") / entry_name
+    entrypoint = Path("/opt/catchplate/scripts") / entry_name
     closure.add(INTERPRETER, INTERPRETER, executable=True)
     closure.add(Path("/usr/local/lib/libpython3.11.so.1.0"), Path("/usr/local/lib/libpython3.11.so.1.0"))
     closure.tree(Path("/usr/local/lib/python3.11"), Path("/usr/local/lib/python3.11"), stdlib=True)
@@ -158,10 +158,10 @@ def build(purpose, entry_name, modules, epoch):
     require(0 < image.stat().st_size <= MAX_TOTAL, "Setup issuer image exceeds bound")
     with image.open("rb") as stream:
         image_hash = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
-    runtime = {"profile":"sealed-memfd-squashfs-v1", "imagePath":"/opt/serverware/"+image.name,
+    runtime = {"profile":"sealed-memfd-squashfs-v1", "imagePath":"/opt/catchplate/"+image.name,
         "imageSha256":image_hash, "interpreterSha256":closure.files[str(INTERPRETER)]["sha256"],
         "entrypointSha256":closure.files[str(entrypoint)]["sha256"]}
-    manifest = {"apiVersion":"serverware.setupNativeIndependentIssuerRuntimeBuild/v1", "purpose":purpose,
+    manifest = {"apiVersion":"catchplate.setupNativeIndependentIssuerRuntimeBuild/v1", "purpose":purpose,
         "runtimeImage":runtime, "sourceManifestSha256":sha(original(Path("/source-contract/source-manifest.json"))),
         "sourceDateEpoch":epoch, "imageBytes":image.stat().st_size, "packages":PACKAGES,
         "sourceModules":sorted(modules), "files":inventory, "mountTargets":targets, "releaseAuthority":False}

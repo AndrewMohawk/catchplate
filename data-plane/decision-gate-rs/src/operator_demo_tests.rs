@@ -31,7 +31,7 @@ const TOKEN: &str = "synthetic-client-token-never-a-provider-secret";
 
 fn snapshot(sequence: u64) -> Snapshot {
     let mut snapshot = (*test_snapshot(sequence)).clone();
-    snapshot.policy_id = "serverware-operator-demo".to_owned();
+    snapshot.policy_id = "catchplate-operator-demo".to_owned();
     snapshot.principals[0].proxy_authorization = Some(ProxyAuthorizationPolicy::BearerToken {
         token_sha256: sha256_prefixed(TOKEN.as_bytes()),
         source_cidrs: vec![],
@@ -77,7 +77,7 @@ fn operator_demo_managed_google_status_and_disabled_cold_scope() {
     let mut admitted = profile(&original, public_deployment());
     assert!(admitted.status().get("managed_google").is_none());
     let settings = json!({"allowed_upstreams":["https://api.example.com"],"fixture_cidrs":[]});
-    let manifest = json!({"schema":"serverware.operatorGoogleGateConfiguration/v1",
+    let manifest = json!({"schema":"catchplate.operatorGoogleGateConfiguration/v1",
         "operation":null,"profile_binding":null,"profile_binding_digest":null,
         "effective_settings":settings,
         "effective_settings_digest":crate::digest_json_ensure_ascii(&settings)});
@@ -91,7 +91,7 @@ fn operator_demo_managed_google_status_and_disabled_cold_scope() {
     changed.credentials.insert("google-account".into(), crate::Credential {
         provider:"google".into(), provider_subject:Some("synthetic-subject".into()),
         injection:json!({"type":"bearer","header":"Authorization","field":"access_token",
-            "__serverwareCredentialType":"oauth2"}),
+            "__catchplateCredentialType":"oauth2"}),
     });
     assert!(admitted.validate_snapshot(&changed).is_err());
     assert_eq!(admitted.status()["managed_google"], identity);
@@ -127,7 +127,7 @@ struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {
         let path = env::temp_dir().join(format!(
-            "serverware-operator-demo-{}-{}",
+            "catchplate-operator-demo-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -243,7 +243,7 @@ fn operator_demo_origin_capacity_is_bounded_at_thirty_two() {
 #[test]
 fn operator_demo_marker_is_distinct_private_regular_and_single_link() {
     let scratch = Scratch::new();
-    let marker = scratch.0.join(".serverware-operator-demo.json");
+    let marker = scratch.0.join(".catchplate-operator-demo.json");
     fs::write(&marker, MARKER).unwrap();
     fs::set_permissions(&marker, fs::Permissions::from_mode(0o600)).unwrap();
     validate_marker(&scratch.0).unwrap();
@@ -255,7 +255,7 @@ fn operator_demo_marker_is_distinct_private_regular_and_single_link() {
     fs::set_permissions(&marker, fs::Permissions::from_mode(0o600)).unwrap();
     fs::write(
         &marker,
-        b"{\"schema\": \"serverware.developmentSandbox/v1\", \"syntheticOnly\": true}\n",
+        b"{\"schema\": \"catchplate.developmentSandbox/v1\", \"syntheticOnly\": true}\n",
     )
     .unwrap();
     assert!(validate_marker(&scratch.0).is_err());
@@ -398,7 +398,7 @@ fn operator_demo_monotonic_reload_revokes_old_effects_and_readiness() {
     stale_sequence.policy_sequence = 2;
     assert!(profile.prepare_reload(&next, &stale_sequence).is_err());
     let mut changed_id = snapshot(3);
-    changed_id.policy_id = "serverware-demo".into();
+    changed_id.policy_id = "catchplate-demo".into();
     assert!(profile.prepare_reload(&next, &changed_id).is_err());
     let runtime = ShadowRuntime::new_operator_demo(profile);
     assert!(runtime.serving_ready(&next));
@@ -421,11 +421,11 @@ fn signed_policy(key: &SigningKey, key_id: &str, sequence: u64, deny_all: bool) 
         policy["principals"][0]["proxyAuthorization"]["expiresAtEpochMs"] = json!(1);
         policy["routes"][0]["match"]["methods"] = json!(["GET"]);
         policy["routes"][0]["match"]["paths"] =
-            json!(["/__serverware_operator_demo_unconfigured__"]);
+            json!(["/__catchplate_operator_demo_unconfigured__"]);
     }
-    policy["apiVersion"] = json!("serverware.policy/v1");
+    policy["apiVersion"] = json!("catchplate.policy/v1");
     policy["kind"] = json!("PolicyBundle");
-    policy["metadata"] = json!({"id":"serverware-operator-demo", "sequence":sequence,
+    policy["metadata"] = json!({"id":"catchplate-operator-demo", "sequence":sequence,
         "rollbackEpoch":1, "signingKeyId":key_id});
     let signature = key.sign(canonical_json(&signature_payload(&policy)).as_bytes());
     policy["metadata"]["signature"] = json!(format!(
@@ -536,7 +536,7 @@ fn operator_demo_source_keeps_reload_guard_native_paths_and_post_send_validation
     assert!(after_send.contains("else if let Some(permit) = operator_dispatch_permit"));
     assert!(after_send.contains("permit.commit_provider_send(effect_state"));
     let synthetic = include_str!("development_sandbox.rs");
-    assert!(synthetic.contains("serverware.developmentSandbox/v1"));
+    assert!(synthetic.contains("catchplate.developmentSandbox/v1"));
     assert!(synthetic.contains("(\"https\", \"demo-upstream\", 8443)"));
     assert!(!synthetic.contains("operator_demo"));
 }

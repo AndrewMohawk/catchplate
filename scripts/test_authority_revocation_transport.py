@@ -21,7 +21,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_transport as transport
+from catchplate import authority_transport as transport
 
 
 REQUEST_LIMIT = 4 * 1024 * 1024

@@ -151,7 +151,7 @@ pub(super) fn verification_stage(message: &str, headers: &HeaderMap, snapshot: &
 
 fn context_shape(headers: &HeaderMap, snapshot: &Snapshot) -> Option<(bool, Option<bool>)> {
     let mut values = headers
-        .get_all("x-serverware-response-statement-b64")
+        .get_all("x-catchplate-response-statement-b64")
         .iter();
     let encoded = values.next()?.as_bytes();
     if values.next().is_some() || encoded.len() > MAX_CONTROL_PLANE_RESPONSE_HEADER_BYTES {

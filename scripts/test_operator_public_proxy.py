@@ -39,7 +39,7 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
 
 
 def config():
-    return {"schema": "serverware.publicProxySmoke/v1", "run_id": "public-proxy-" + "a" * 32,
+    return {"schema": "catchplate.publicProxySmoke/v1", "run_id": "public-proxy-" + "a" * 32,
         "application_id": "11111111-1111-4111-8111-111111111111", "client_token": "s" * 43,
         "credential_id": "22222222-2222-4222-8222-222222222222", "rule_id": "33333333-3333-4333-8333-333333333333",
         "policy_hash": "sha256:" + "1" * 64, "authorization_sha256": "sha256:" + "2" * 64,
@@ -50,14 +50,14 @@ def response_document():
     return {"method": "POST", "path": "/echo", "authorization_present": True, "authorization_scheme": "Bearer",
         "authorization_matches_expected": True, "proxy_authorization_seen": False,
         "query": {"_data_plane_token_seen": False, "_cookie_seen": False}, "credential_marker": "other",
-        "proxy_authorization": None, "cookie": None, "x_api_key": None, "serverware_agent": None}
+        "proxy_authorization": None, "cookie": None, "x_api_key": None, "catchplate_agent": None}
 
 
 def response(value=None, *, extra=(), trailer=b"200:200:0:0:203.0.113.10\n", body=None):
     body = body if body is not None else json.dumps(response_document() if value is None else value, separators=(",", ":")).encode()
     headers = [("Content-Type", "application/json"), ("Content-Length", str(len(body))),
-        ("X-Serverware-Policy-Hash", config()["policy_hash"]), ("X-Serverware-Response-Body-SHA256", checker.sha(body)),
-        ("X-Serverware-Request-Digest", "sha256:" + "3" * 64), ("X-Serverware-Operation-Digest", "sha256:" + "4" * 64)]
+        ("X-Catchplate-Policy-Hash", config()["policy_hash"]), ("X-Catchplate-Response-Body-SHA256", checker.sha(body)),
+        ("X-Catchplate-Request-Digest", "sha256:" + "3" * 64), ("X-Catchplate-Operation-Digest", "sha256:" + "4" * 64)]
     head = b"HTTP/1.1 200 OK\r\n" + b"\r\n".join((key + ": " + item).encode() for key, item in [*headers, *extra])
     return head + b"\r\n\r\n" + body + checker.TRAILER + trailer
 
@@ -93,7 +93,7 @@ class PublicProxyControls(unittest.TestCase):
     def test_curl_fixed_scope_tls_no_redirect_retry_or_secret_argv(self):
         args = checker.curl_arguments(config(), "/private/ca.pem", "/private/body.json")
         self.assertEqual(args[:4], ["/usr/bin/curl", "-q", "--config", "-"])
-        self.assertEqual(args[args.index("--proxy") + 1], "https://serverware-proxy.example.com:443")
+        self.assertEqual(args[args.index("--proxy") + 1], "https://catchplate-proxy.example.com:443")
         self.assertEqual(args[-1], "https://demo-upstream:8443/echo?expectedAuthorizationSha256=sha256%3A" + "2" * 64)
         for option, value in (("--retry", "0"), ("--max-redirs", "0"), ("--max-time", "20"),
             ("--max-filesize", "65536"), ("--noproxy", ""), ("--cacert", "/private/ca.pem")):
@@ -102,7 +102,7 @@ class PublicProxyControls(unittest.TestCase):
             self.assertNotIn(forbidden, args)
         self.assertNotIn(config()["client_token"], " ".join(args))
         self.assertIn("Accept-Encoding: identity", args)
-        self.assertIn("User-Agent: serverware-test-run/" + config()["run_id"], args)
+        self.assertIn("User-Agent: catchplate-test-run/" + config()["run_id"], args)
         with patch.object(checker.subprocess, "Popen", side_effect=checker.CheckError()) as launched:
             self.refused(checker.run_curl, args, b"private-canary")
         self.assertEqual(launched.call_args.kwargs["env"], {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"})
@@ -110,7 +110,7 @@ class PublicProxyControls(unittest.TestCase):
 
     def test_positive_commitments_only(self):
         result = checker.validate_result(config(), "positive", 0, response(), b"")
-        self.assertEqual(result["schema"], "serverware.publicProxySmokeResult/v1")
+        self.assertEqual(result["schema"], "catchplate.publicProxySmokeResult/v1")
         self.assertEqual(result["request_digest"], "sha256:" + "3" * 64)
         self.assertEqual(result["operation_digest"], "sha256:" + "4" * 64)
         self.assertEqual(result["peer"], "203.0.113.10")
@@ -124,7 +124,7 @@ class PublicProxyControls(unittest.TestCase):
             response().replace(b"Content-Length:", b"Other-Length:"), response() + b"trailing"):
             self.refused(checker.validate_result, config(), "positive", 0, changed, b"")
         for name in ("Content-Length", "Transfer-Encoding", "Trailer", "Set-Cookie", "Cookie", "Authorization",
-            "Proxy-Authorization", "X-Serverware-Data-Plane-Token", "X-Serverware-Agent", "Location", "Content-Encoding"):
+            "Proxy-Authorization", "X-Catchplate-Data-Plane-Token", "X-Catchplate-Agent", "Location", "Content-Encoding"):
             self.refused(checker.validate_result, config(), "positive", 0, response(extra=[(name, "private-canary")]), b"")
         self.refused(checker.validate_result, config(), "positive", 0, response(body=b"{}" * 32769), b"")
 
@@ -132,7 +132,7 @@ class PublicProxyControls(unittest.TestCase):
         for key, value in (("method", "GET"), ("path", "/wrong"), ("authorization_present", 1),
             ("authorization_scheme", "Basic"), ("authorization_matches_expected", False), ("proxy_authorization_seen", 0),
             ("proxy_authorization", "private-canary"), ("cookie", "private-canary"), ("x_api_key", "private-canary"),
-            ("serverware_agent", "private-canary"), ("extra", "private-canary"), ("credential_marker", "initial")):
+            ("catchplate_agent", "private-canary"), ("extra", "private-canary"), ("credential_marker", "initial")):
             value_body = response_document(); value_body[key] = value
             self.refused(checker.validate_result, config(), "positive", 0, response(value_body), b"")
         for value in ({"_data_plane_token_seen": 0, "_cookie_seen": False}, {"_data_plane_token_seen": False, "_cookie_seen": True}):

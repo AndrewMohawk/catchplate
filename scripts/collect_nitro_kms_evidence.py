@@ -89,9 +89,9 @@ def load_claims(env: dict[str, str], claims_file: str | None, nonce: str | None)
     if claims_file:
         parsed = json.loads(Path(claims_file).read_text(encoding="utf-8"))
     else:
-        raw = env.get("SERVERWARE_PRODUCTION_READINESS_CLAIMS_JSON", "").strip()
+        raw = env.get("CATCHPLATE_PRODUCTION_READINESS_CLAIMS_JSON", "").strip()
         if not raw:
-            raise RuntimeError("claims require --claims-file or SERVERWARE_PRODUCTION_READINESS_CLAIMS_JSON")
+            raise RuntimeError("claims require --claims-file or CATCHPLATE_PRODUCTION_READINESS_CLAIMS_JSON")
         parsed = json.loads(raw)
     if not isinstance(parsed, dict):
         raise RuntimeError("claims must be a JSON object")
@@ -113,19 +113,19 @@ def assert_no_secret_fields(value: Any, path: str = "$") -> None:
 
 
 def validate_live_config(env: dict[str, str], *, allow_fixtures_for_test: bool) -> None:
-    attestation_command = env.get("SERVERWARE_NITRO_ATTESTATION_COMMAND", "").strip()
-    kms_command = env.get("SERVERWARE_NITRO_KMS_RELEASE_COMMAND", "").strip()
+    attestation_command = env.get("CATCHPLATE_NITRO_ATTESTATION_COMMAND", "").strip()
+    kms_command = env.get("CATCHPLATE_NITRO_KMS_RELEASE_COMMAND", "").strip()
     if not attestation_command:
-        raise RuntimeError("SERVERWARE_NITRO_ATTESTATION_COMMAND must be configured")
+        raise RuntimeError("CATCHPLATE_NITRO_ATTESTATION_COMMAND must be configured")
     if not kms_command:
-        raise RuntimeError("SERVERWARE_NITRO_KMS_RELEASE_COMMAND must be configured")
-    if not env_bool(env, "SERVERWARE_NITRO_REQUIRE_KMS_COMMAND"):
-        raise RuntimeError("SERVERWARE_NITRO_REQUIRE_KMS_COMMAND must be enabled")
+        raise RuntimeError("CATCHPLATE_NITRO_KMS_RELEASE_COMMAND must be configured")
+    if not env_bool(env, "CATCHPLATE_NITRO_REQUIRE_KMS_COMMAND"):
+        raise RuntimeError("CATCHPLATE_NITRO_REQUIRE_KMS_COMMAND must be enabled")
     if allow_fixtures_for_test:
         return
-    if env_bool(env, "SERVERWARE_NITRO_FIXTURE"):
-        raise RuntimeError("live Nitro evidence must not use SERVERWARE_NITRO_FIXTURE")
-    if env.get("SERVERWARE_NITRO_ATTESTATION_DOCUMENT") or env.get("SERVERWARE_NITRO_ATTESTATION_DOCUMENT_B64"):
+    if env_bool(env, "CATCHPLATE_NITRO_FIXTURE"):
+        raise RuntimeError("live Nitro evidence must not use CATCHPLATE_NITRO_FIXTURE")
+    if env.get("CATCHPLATE_NITRO_ATTESTATION_DOCUMENT") or env.get("CATCHPLATE_NITRO_ATTESTATION_DOCUMENT_B64"):
         raise RuntimeError("live Nitro evidence must use a fresh attestation command, not a static document")
     if command_mentions(attestation_command, "fixture", "nitro_attestation_fixture.py"):
         raise RuntimeError("live Nitro evidence must not use the attestation fixture helper")
@@ -307,11 +307,11 @@ def collect_evidence(
 
     raw_b64 = quote.get("raw_attestation_document_b64")
     raw_attestation = b64d(raw_b64, "Nitro quote raw_attestation_document_b64") if isinstance(raw_b64, str) and raw_b64 else b""
-    attestation_command = env.get("SERVERWARE_NITRO_ATTESTATION_COMMAND", "").strip()
-    kms_command = env.get("SERVERWARE_NITRO_KMS_RELEASE_COMMAND", "").strip()
-    expected_pcrs = env.get("SERVERWARE_NITRO_EXPECTED_PCRS", "").strip()
+    attestation_command = env.get("CATCHPLATE_NITRO_ATTESTATION_COMMAND", "").strip()
+    kms_command = env.get("CATCHPLATE_NITRO_KMS_RELEASE_COMMAND", "").strip()
+    expected_pcrs = env.get("CATCHPLATE_NITRO_EXPECTED_PCRS", "").strip()
     evidence = {
-        "apiVersion": "serverware.nitroKmsEvidence/v1",
+        "apiVersion": "catchplate.nitroKmsEvidence/v1",
         "kind": "NitroKmsEvidence",
         "ok": True,
         "generated_at_unix": int(time.time()),
@@ -332,7 +332,7 @@ def collect_evidence(
             "attestation_command_sha256": sha256_prefixed(attestation_command.encode("utf-8")),
             "kms_release_command_sha256": sha256_prefixed(kms_command.encode("utf-8")),
             "expected_pcrs_sha256": sha256_prefixed(expected_pcrs.encode("utf-8")) if expected_pcrs else None,
-            "kms_command_required": env_bool(env, "SERVERWARE_NITRO_REQUIRE_KMS_COMMAND"),
+            "kms_command_required": env_bool(env, "CATCHPLATE_NITRO_REQUIRE_KMS_COMMAND"),
             "fixtures_allowed_for_test": allow_fixtures_for_test,
         },
         "redaction": {
@@ -378,7 +378,7 @@ def main() -> None:
             print(canonical_json(evidence))
     except Exception as exc:
         failure = {
-            "apiVersion": "serverware.nitroKmsEvidence/v1",
+            "apiVersion": "catchplate.nitroKmsEvidence/v1",
             "kind": "NitroKmsEvidence",
             "ok": False,
             "error": str(exc),

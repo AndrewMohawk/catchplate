@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-enrollment-evidence.v1.schema.json",
-  "title": "Serverware native enrollment public evidence v1",
+  "$id": "https://catchplate.invalid/schemas/native-enrollment-evidence.v1.schema.json",
+  "title": "Catchplate native enrollment public evidence v1",
   "description": "Unverified public originals for the explicit native enrollment receiver. The complete wire original must be canonical compact sorted UTF-8 JSON plus exactly one LF, at most 1048576 bytes. Runtime verification enforces those byte/canonicalization limits, strict decoded bounds, independently pinned assignment authority, exact packet signature and genuine Nitro role-3/role-5 evidence on the caller's actual retained TLS connection. Schema shape alone verifies none of those properties. A successful diagnostic still has okForAction=false: no packet-semantic approval, installation permission, durable one-use claim, signing route or production enrollment receipt follows.",
   "type": "object",
   "additionalProperties": false,
@@ -18,7 +18,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.nativeEnrollmentEvidence/v1"
+      "const": "catchplate.nativeEnrollmentEvidence/v1"
     },
     "evidenceScope": {
       "const": "unverified-enrollment-public-material"
@@ -46,7 +46,7 @@
       "minLength": 86,
       "maxLength": 86,
       "pattern": "^[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])",
-      "description": "Canonical unpadded URL-safe base64 of the raw 64-byte Ed25519 signature over the fixed NUL-terminated serverware/native-enrollment-packet-signature/v1 domain, SHA256(exact assignment including LF), unsigned packet byte count as u64BE, and the exact packet bytes. No ed25519: prefix."
+      "description": "Canonical unpadded URL-safe base64 of the raw 64-byte Ed25519 signature over the fixed NUL-terminated catchplate/native-enrollment-packet-signature/v1 domain, SHA256(exact assignment including LF), unsigned packet byte count as u64BE, and the exact packet bytes. No ed25519: prefix."
     },
     "enrollmentPublicKeyBase64url": {
       "type": "string",

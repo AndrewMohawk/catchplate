@@ -51,7 +51,7 @@ def main(argv=None):
     if argv == ["--help"]: print(USAGE, end=""); return 0
     try:
         selected = arguments(argv)
-        from serverware.authority_local_trust import LocalTrustIssuer
+        from catchplate.authority_local_trust import LocalTrustIssuer
         LocalTrustIssuer(**selected).publish()
         return 0
     except BaseException:

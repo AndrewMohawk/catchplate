@@ -8,10 +8,10 @@ use services::guest_original::Process;
 use services::publication_genesis_client::{Configuration as Runtime,RESULT_FD,RESULT_PARENT_FD};
 use std::os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd,OwnedFd};
 const MAX_WIRE:usize=32768;
-const PRECREATE_DOMAIN:&str="serverware.nativePublicationGenesisPrecreation.signature/v1";
-const RELEASE_DOMAIN:&str="serverware.nativePublicationGenesisParentRelease.signature/v1";
-const LAUNCH_PATH:&str="/etc/serverware/native-shadow-guest-launch.json";
-const IMAGE_PATH:&str="/opt/serverware/native-shadow-custody-runtime.squashfs";
+const PRECREATE_DOMAIN:&str="catchplate.nativePublicationGenesisPrecreation.signature/v1";
+const RELEASE_DOMAIN:&str="catchplate.nativePublicationGenesisParentRelease.signature/v1";
+const LAUNCH_PATH:&str="/etc/catchplate/native-shadow-guest-launch.json";
+const IMAGE_PATH:&str="/opt/catchplate/native-shadow-custody-runtime.squashfs";
 
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -59,12 +59,12 @@ impl Admission {
         let configuration=Original::publication_genesis_parent().map_err(fail)?;
         let configuration_raw=configuration.read(MAX_WIRE).map_err(fail)?.to_vec();
         let config:Configuration=exact(&configuration_raw)?;
-        require(config.api_version=="serverware.nativePublicationGenesisParent/v1"
+        require(config.api_version=="catchplate.nativePublicationGenesisParent/v1"
             && config.executable_sha256!=Sha256Digest::compute(&[])
             && config.precreation_authority.key()?!=config.release_authority.key()?)?;
         let cold=config.delivery_configuration.open(65536)?;
         let value:services::guest::Configuration=exact(&cold.read(65536).map_err(fail)?)?;
-        require(value.api_version=="serverware.policyCustodyGuestConfiguration/v1"
+        require(value.api_version=="catchplate.policyCustodyGuestConfiguration/v1"
             && value.service_role==services::guest::Role::ProductionBridge
             && value.uid>0 && value.gid>0 && value.uid!=u32::MAX && value.gid!=u32::MAX
             && ![64988,64989,64990,65534].contains(&value.uid)
@@ -72,7 +72,7 @@ impl Admission {
         let precreation=Original::publication_genesis_precreation().map_err(fail)?;
         let precreation_raw=precreation.read(MAX_WIRE).map_err(fail)?.to_vec();
         let signed:Precreation=exact(&precreation_raw)?;
-        require(signed.api_version=="serverware.nativePublicationGenesisPrecreation/v1")?;
+        require(signed.api_version=="catchplate.nativePublicationGenesisPrecreation/v1")?;
         verify(&config.precreation_authority.key()?,PRECREATE_DOMAIN,&signed.payload,&signed.signature_base64url)?;
         let w=&signed.payload;let domain=process.domain();
         let boot=URL_SAFE_NO_PAD.decode(&w.boot_id_base64url).map_err(fail)?;
@@ -257,7 +257,7 @@ impl Owner {
         let (process_id,start_time_ticks)=child.parked_identity()?;
         let mut stat:libc::stat=unsafe{std::mem::zeroed()};
         require(unsafe{libc::fstat(child.parked_pidfd()?.as_raw_fd(),&mut stat)}==0)?;
-        let raw=canonical_json_bytes(&Observation{api_version:"serverware.nativePublicationGenesisParentObservation/v1",
+        let raw=canonical_json_bytes(&Observation{api_version:"catchplate.nativePublicationGenesisParentObservation/v1",
             configuration_sha256:Sha256Digest::compute(&self.admission.configuration_raw),
             precreation_sha256:Sha256Digest::compute(&self.admission.precreation_raw),invocation_id:self.admission.window.invocation_id.clone(),
             process_id,start_time_ticks,pidfd_device:stat.st_dev,pidfd_inode:stat.st_ino,executable:self.executable.observation()?,
@@ -278,7 +278,7 @@ impl Owner {
         self.release=Some(packet.bytes);
         let signed:Release=exact(self.release.as_ref().ok_or(ShadowError::BindingDrift)?)?;
         let p=&signed.payload;
-        require(signed.api_version=="serverware.nativePublicationGenesisParentRelease/v1"
+        require(signed.api_version=="catchplate.nativePublicationGenesisParentRelease/v1"
             && p.configuration_sha256==Sha256Digest::compute(&self.admission.configuration_raw)
             && p.precreation_sha256==Sha256Digest::compute(&self.admission.precreation_raw)
             && p.observation_sha256==Sha256Digest::compute(self.observation.as_ref().ok_or(ShadowError::BindingDrift)?)

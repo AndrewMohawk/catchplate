@@ -4,7 +4,7 @@ This source-only slice supplies local authenticated-original inspection for a
 future, separately authorized OIDC activation transition. It is unbuilt and
 unexecuted. It does not activate a session or add a public activation endpoint.
 
-The [inspector](../serverware/control_plane_registration_activation_subject.py)
+The [inspector](../catchplate/control_plane_registration_activation_subject.py)
 exports:
 
 ```text

@@ -77,7 +77,7 @@ require_upgrade_stream_size() {
 # exact request recipe (CRLF lines and the final empty line), matching
 # docker_readiness_upgrade_v12::request_head; this preparer does not sign it:
 # POST <independently selected /v1.* target> HTTP/1.1\r\n
-# Host: docker\r\nConnection: Upgrade\r\nUpgrade: serverware-readiness\r\n
+# Host: docker\r\nConnection: Upgrade\r\nUpgrade: catchplate-readiness\r\n
 # Content-Length: 0\r\n\r\n
 # At least one server byte is observed before the client write half closes,
 # and at least one remaining server byte is observed after that half-close.
@@ -147,7 +147,7 @@ teardown_fixture_sha256=$(sha_file "$output_root/fixtures/teardown.fixture")
 descriptor=$output_root/readiness-assets-v12.descriptor.tmp
 {
     printf '%s\n' \
-        "fixture_set_digest_contract=serverware/readiness-assets-digest/v12" \
+        "fixture_set_digest_contract=catchplate/readiness-assets-digest/v12" \
         "docker_101_fixture_sha256=$docker_101_fixture_sha256" \
         "docker_half_close_fixture_sha256=$docker_half_close_fixture_sha256" \
         "build_pinned_pull_fixture_sha256=$build_pinned_pull_fixture_sha256" \

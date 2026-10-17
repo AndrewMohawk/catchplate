@@ -1,0 +1,21 @@
+# Uninstalled source input. One independently provisioned post-intent worker.
+[Unit]
+Description=Catchplate private committed-release proof ingress
+Before=catchplate-oidc-session-activation-release-proof.service
+After=systemd-tmpfiles-setup.service
+
+[Socket]
+ListenStream=/run/catchplate/oidc-session-activation-token-release/proof.sock
+FileDescriptorName=catchplate-oidc-session-activation-release-proof
+SocketUser=65497
+SocketGroup=65532
+SocketMode=0660
+DirectoryMode=0755
+Backlog=1
+Accept=no
+FlushPending=yes
+RemoveOnStop=yes
+Service=catchplate-oidc-session-activation-release-proof.service
+
+[Install]
+WantedBy=sockets.target

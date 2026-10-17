@@ -47,7 +47,7 @@ adds only these profiles; old recovery formats retain their current-only interpr
   explicitly selects policy v2/current custody v2 before contacting the fixed
   `recovery-grants.sock`; it is not a permission token or a signed envelope itself.
 
-Wire names retain their actual `serverware.` prefix and casing as specified in
+Wire names retain their actual `catchplate.` prefix and casing as specified in
 the schema. The three signed envelopes remain exactly
 `schema`/`payload`/`signatureBase64Url`. Existing canonical no-LF encoding and
 framed original signature verification are retained, with the explicit envelope

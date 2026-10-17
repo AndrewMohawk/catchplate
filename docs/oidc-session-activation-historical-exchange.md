@@ -8,7 +8,7 @@ separately admitted historical custody and completion path exists.
 ## Authenticate originals, not a returned success object
 
 The new private
-[`authority_oidc_session_activation_execution_history`](../serverware/authority_oidc_session_activation_execution_history.py)
+[`authority_oidc_session_activation_execution_history`](../catchplate/authority_oidc_session_activation_execution_history.py)
 receives the real signed plan and encrypted bundle (raw2), independently
 expected request/scope/journal digest, complete before-vector, planner/state
 keys and state enrollment, distinct bundle/delivery AES keys, and an existing
@@ -39,7 +39,7 @@ a token, create a live replay result or become accepted authority inputs.
 
 ## Original caller and execution grant
 
-[`authority_oidc_session_activation_history_exchange`](../serverware/authority_oidc_session_activation_history_exchange.py)
+[`authority_oidc_session_activation_history_exchange`](../catchplate/authority_oidc_session_activation_history_exchange.py)
 composes those originals with actual caller authorization, execution grant and
 independently supplied caller/grant/current-root enrollments. All external
 graphs, immutable bytes and keys are held before signature/decryption callbacks.

@@ -19,10 +19,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "scripts")]
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from serverware import authority_native_jit_review_plan_owner as owner
-from serverware import authority_native_jit_review_plan_stream as stream
-from serverware import authority_release_private_request as request_source
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_native_jit_review_plan_owner as owner
+from catchplate import authority_native_jit_review_plan_stream as stream
+from catchplate import authority_release_private_request as request_source
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 from test_authority_native_jit_review_current_chunks import canonical, frames, native, row
 
 reads, wire = stream.reads, stream.reads.contract

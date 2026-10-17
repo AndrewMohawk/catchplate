@@ -24,7 +24,7 @@ protocol is missing. Neither gate is replaced by a successful component result.
 
 ## Actual acquisition and proof path
 
-[`TypedTransitionPlanningProgram._read_revocation_inputs`](../serverware/authority_planner.py)
+[`TypedTransitionPlanningProgram._read_revocation_inputs`](../catchplate/authority_planner.py)
 owns the request, manifest, assertion data and primary-root graphs before any
 database callback. It requires the exact revocation candidate, private complete
 trace and caller-owned meter. The assertion data may be the genuine verifier's
@@ -64,20 +64,20 @@ The caller still owns the read-only MVCC transaction and must independently
 admit keys, capability, roots and time. Request/receipt verification does not
 establish those authorities or permit persistence and execution.
 
-[`_CompleteQueryAcquisition`](../serverware/authority_complete_acquisition.py)
+[`_CompleteQueryAcquisition`](../catchplate/authority_complete_acquisition.py)
 requires the actual cursor, trace and caller-owned `_ValidationWork`, source
 arguments, cutoff, six declarations and primary before-root vectors. The caller
 must own the read-only transaction and root capture. The collector copies its
 context, rebinds every declaration to the genuine source role/arguments/cutoff,
 and checks the full argument bytes and ordered roles when the mixed reader begins.
 
-1. The [head reader](../serverware/authority_index_heads.py) captures the exact
+1. The [head reader](../catchplate/authority_index_heads.py) captures the exact
    nine-head union of complete-read and potential-write profiles in one bounded
    SQL read. It checks source profile/manifest commitments, revisions, counts and
    empty-root conventions. Five heads serve the six read roles; both session
    partitions share one head. Capturing potential-write heads is not write-proof
    reconstruction.
-2. The genuine [range reader](../serverware/authority_index_reader.py) acquires
+2. The genuine [range reader](../catchplate/authority_index_reader.py) acquires
    each role's inside leaves and canonical outside frontier, then reconstructs
    that range against its captured head. Every empty role still has a frontier.
    Hint lists bound results; they do not select addresses or permit truncation.
@@ -164,7 +164,7 @@ Historical indexed scalar framing is distinct from physical UTF-8 scans and
 encodings; the adapter charges both defined components without charging
 transport twice. See [writer accounting](authority-index-mutation-reader.md).
 
-The hash-free [trace validator](../serverware/authority_index_trace.py) admits
+The hash-free [trace validator](../catchplate/authority_index_trace.py) admits
 only the exact source head, range, primary-fetch and writer markers under the private
 trace permission. It adds no trace allowance, mutation permission or generic
 metadata access. Shape validation does not replace genuine profile, interval,

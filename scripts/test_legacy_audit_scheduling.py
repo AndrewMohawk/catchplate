@@ -18,8 +18,8 @@ from unittest.mock import AsyncMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from starlette.requests import Request
 from fastapi import HTTPException
-from serverware import app as application
-from serverware import control_plane_data_plane_audit as measured
+from catchplate import app as application
+from catchplate import control_plane_data_plane_audit as measured
 
 
 BODY = (b' {"events":[{"eventId":"sha256:' + b'1' * 64
@@ -74,7 +74,7 @@ class LegacyAuditSchedulingTests(unittest.IsolatedAsyncioTestCase):
             result = await pending
         self.assertEqual(called[0][:2], (1, TOKEN))
         self.assertNotEqual(called[0][2], threading.get_ident())
-        self.assertEqual(result, {"apiVersion": "serverware.dataPlaneAuditAck/v1", "ok": True,
+        self.assertEqual(result, {"apiVersion": "catchplate.dataPlaneAuditAck/v1", "ok": True,
             "accepted": 1, "batchDigest": "sha256:" + hashlib.sha256(BODY).hexdigest(),
             "instanceId": application.DATA_PLANE_INSTANCE_ID})
 

@@ -7,7 +7,7 @@ caller or establish production readiness.
 
 ## Root-enrolled dedicated authorizer
 
-[`authority_successor_execution_grant_enrollment._produce_on_work`](../serverware/authority_successor_execution_grant_enrollment.py)
+[`authority_successor_execution_grant_enrollment._produce_on_work`](../catchplate/authority_successor_execution_grant_enrollment.py)
 takes `current_root_enrollment_bytes`, the independently held root private/public
 keys, actual `authorizer_public_key`, `authorizer_measurement_digest`,
 `maximum_grant_age_ns`, `maximum_clock_skew_ns` and existing `work`. It returns
@@ -25,7 +25,7 @@ The helper generates no key, reads no clock and issues no execution grant.
 
 ## Original plans, independently authorized scope
 
-[`authority_successor_execution_grant_production._produce_on_work`](../serverware/authority_successor_execution_grant_production.py)
+[`authority_successor_execution_grant_production._produce_on_work`](../catchplate/authority_successor_execution_grant_production.py)
 accepts the fixed operation, original plan frames, independently admitted
 expectations and planner/operation public keys, complete before-vector bytes,
 original grant and current-root enrollments, independent root public key,
@@ -95,8 +95,8 @@ replay carrier.
 ## Authority that remains external
 
 The successor grant signing helpers support only
-`serverware.signedPolicyAuthoritySuccessorExecutionGrant/v1` and
-`serverware.signedPolicyAuthoritySuccessorExecutionGrantEnrollment/v1`.
+`catchplate.signedPolicyAuthoritySuccessorExecutionGrant/v1` and
+`catchplate.signedPolicyAuthoritySuccessorExecutionGrantEnrollment/v1`.
 The original outputs remain bounded to 64 KiB and 16 KiB respectively; replay
 originals retain the existing aggregate and cumulative-work limits.
 A signature binds an enrolled assertion; it is not evidence that

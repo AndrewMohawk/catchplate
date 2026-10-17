@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.local/schemas/adapters/npm.metadata.v1.schema.json",
-  "title": "Serverware closed npm package metadata lookup v1",
+  "$id": "https://catchplate.local/schemas/adapters/npm.metadata.v1.schema.json",
+  "title": "Catchplate closed npm package metadata lookup v1",
   "$comment": "Metadata only; no installation, tarballs, query, audit or writes. Compiler also enforces strictly sorted packages and exact bound GET authority.",
   "type": "object", "additionalProperties": false,
   "required": ["credentialBinding", "packages", "request", "response"],

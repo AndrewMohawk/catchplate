@@ -1,7 +1,7 @@
 # Fixed-target native parent relay
 
 Status: source-only, unbuilt and unexecuted.
-[`serverware-native-parent-relay`](../data-plane/decision-gate-rs/src/bin/serverware-native-parent-relay.rs)
+[`catchplate-native-parent-relay`](../data-plane/decision-gate-rs/src/bin/catchplate-native-parent-relay.rs)
 provides a parent-side CLI for the existing bounded relay owner. It forwards
 opaque bytes to one configured literal TCP endpoint; it does not terminate TLS,
 obtain credentials, verify Nitro evidence or provision an admitted service.
@@ -15,7 +15,7 @@ The command shape is below. Paths and pins are placeholders, not a ready or
 independently approved deployment:
 
 ```text
-serverware-native-parent-relay \
+catchplate-native-parent-relay \
   --configuration /approved/parent-relay.json \
   --configuration-sha256 sha256:<exact-configuration-original-digest>
 ```
@@ -30,7 +30,7 @@ object contains:
 
 | Field | Contract |
 | --- | --- |
-| `apiVersion` | Exactly `serverware.nativeParentRelayConfiguration/v1`. |
+| `apiVersion` | Exactly `catchplate.nativeParentRelayConfiguration/v1`. |
 | `listenPort` | Fixed parent vsock port greater than 1,023 and not `u32::MAX`. |
 | `expectedEnclaveCid` | One concrete expected enclave CID greater than 3, not `u32::MAX`; checked against the actual peer/listener scope. |
 | `target` | One literal `SocketAddr`, including TCP port; no hostname, DNS, redirect or on-wire target override. |
@@ -109,16 +109,16 @@ The recipe checks for no ELF interpreter, no dynamic `NEEDED` entries and a
 size of at most 64 MiB. It adds no dependencies or downloads.
 
 The scratch target `native-parent-relay-artifact` exports
-`/serverware-native-parent-relay`. The final image installs the static-stage
-binary at `/usr/local/libexec/serverware-native-parent-relay`, root-owned with
+`/catchplate-native-parent-relay`. The final image installs the static-stage
+binary at `/usr/local/libexec/catchplate-native-parent-relay`, root-owned with
 mode 0555. Its decision-gate `ENTRYPOINT` is unchanged: installation does not
 automatically run a parent relay or place that process on a Nitro parent host.
 The ordinary glibc build output is not this static export.
 
 The repository also supplies a review-required
-[systemd service template](../ops/systemd/serverware-native-parent-relay.service.in)
+[systemd service template](../ops/systemd/catchplate-native-parent-relay.service.in)
 for one assignment. It uses the fixed libexec binary and a separately
-precreated unprivileged `serverware-native-relay` account/group; its only
+precreated unprivileged `catchplate-native-relay` account/group; its only
 substitutions are literal `@CONFIGURATION_PATH@` and `@CONFIGURATION_SHA256@`.
 It has `Restart=no`, no install section or renderer, and TERM followed by a
 ten-second control-group KILL escalation. That escalation is not a hard kernel

@@ -16,8 +16,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_index_trace as trace_contract
-from serverware import authority_jit_index_reader as source
+from catchplate import authority_index_trace as trace_contract
+from catchplate import authority_jit_index_reader as source
 from test_authority_index_mutation_reader import Cursor, LEAF_FIELDS, NODE_FIELDS, frames
 from test_authority_index_range import IndependentIndex
 from test_authority_jit_indexed_phases import fixture, meter, primary
@@ -32,7 +32,7 @@ class Store:
             tree, leaves = trees[profile.table], []
             for row in tree.rows.values():
                 key_digest = tree.selected(tree.key(row))["keyDigest"]
-                row_digest = sql_digest("serverware.policyAuthorityAuthenticatedRow/v1",
+                row_digest = sql_digest("catchplate.policyAuthorityAuthenticatedRow/v1",
                     profile.table.encode("ascii"), sql_json(row))
                 leaf = source.phases.projection.project_row(head.index_id, row,
                     primary_key_digest=key_digest, primary_row_digest=row_digest)
@@ -294,7 +294,7 @@ class JitIndexReaderControls(unittest.TestCase):
         self.assertIs(values[2].limits, original_limits)
         self.assertTrue(owner._failed and values[3].failed and values[4]._failed)
         parsed = ast.parse((Path(__file__).resolve().parents[1]
-            / "serverware/authority_jit_index_reader.py").read_text())
+            / "catchplate/authority_jit_index_reader.py").read_text())
         forbidden = {"_ValidationWork", "QueryReadValidationLimits", "_ReadAcquisitionBudget",
             "_verify_primary", "_evaluate_one_index", "_acquire_indexed_primary_batch", "read_phase",
             "connect", "commit"}

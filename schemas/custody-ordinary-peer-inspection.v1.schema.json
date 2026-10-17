@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/custody-ordinary-peer-inspection.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/custody-ordinary-peer-inspection.v1.schema.json",
   "$ref": "#/$defs/policy",
   "description": "Explicit non-signing C9 inspection purpose. Shapes are not peer measurements, constructed service notices, native custody or generation readiness. The genuine worker independently performs the existing full host peer checks on one actual session.",
   "$defs": {
@@ -11,7 +11,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId", "services"],
       "properties": {
-        "apiVersion": {"const": "serverware.custodyFiveServiceLaunch/v2"},
+        "apiVersion": {"const": "catchplate.custodyFiveServiceLaunch/v2"},
         "bootIdBase64url": {"type": "string", "pattern": "^[A-Za-z0-9_-]{22}$"},
         "timeNamespaceDevice": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
         "timeNamespaceInode": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
@@ -25,7 +25,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "deliveryConfiguration", "delivery", "peerInspectionCredential"],
       "properties": {
-        "apiVersion": {"const": "serverware.custodyOrdinaryServiceGuestLaunch/v2"},
+        "apiVersion": {"const": "catchplate.custodyOrdinaryServiceGuestLaunch/v2"},
         "deliveryConfiguration": {"$ref": "custody-five-service-launch.v1.schema.json#/$defs/pin"},
         "delivery": {"$ref": "custody-five-service-launch.v1.schema.json#/$defs/pin"},
         "peerInspectionCredential": {"const": "peer-inspection-policy"}
@@ -35,7 +35,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "purpose", "runtimeConfigurationSha256", "serviceRole", "uid", "gid", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs"],
       "properties": {
-        "apiVersion": {"const": "serverware.custodyOrdinaryPeerInspection/v1"},
+        "apiVersion": {"const": "catchplate.custodyOrdinaryPeerInspection/v1"},
         "purpose": {"const": "ordinary-service-peer-inspection"},
         "runtimeConfigurationSha256": {"$ref": "#/$defs/sha256"},
         "serviceRole": {"$ref": "#/$defs/role"},
@@ -50,7 +50,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "deliverySha256", "serviceRole", "invocationId", "phase"],
       "properties": {
-        "apiVersion": {"const": "serverware.custodyOrdinaryListening/v1"},
+        "apiVersion": {"const": "catchplate.custodyOrdinaryListening/v1"},
         "deliverySha256": {"$ref": "#/$defs/sha256"},
         "serviceRole": {"$ref": "#/$defs/role"},
         "invocationId": {"type": "string", "pattern": "^[0-9a-f]{32}$"},

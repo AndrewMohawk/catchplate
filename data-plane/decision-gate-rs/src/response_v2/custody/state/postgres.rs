@@ -5,7 +5,7 @@ use super::StateCollectionV1;
 use crate::response_observation_v2::custody::V2RuntimeError;
 
 pub(crate) const POSTGRES_AUTHORITY_CONTRACT_API_VERSION: &str =
-    "serverware.responseObservationV2PostgresAuthority/v1";
+    "catchplate.responseObservationV2PostgresAuthority/v1";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

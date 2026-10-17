@@ -1,12 +1,12 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://serverware.invalid/schemas/native-bootstrap-client.v9.schema.json",
+  "$id":"https://catchplate.invalid/schemas/native-bootstrap-client.v9.schema.json",
   "title":"Explicit native ordinary-application CONNECT client v9",
   "description":"Closed 23-field cold configuration, <=16384 original bytes. Requires separate genuine CA installation, execution manifest v3, start authorization v4 and egress authorization v5. applicationProxy contains TARGET mTLS originals, never the bootstrap caller identity. Every pin is joined to the signed immutable manifest and current same-connection native principal preflight. No connection retry, authority fallback, DNS, or provider credentials in the application.",
   "type":"object","additionalProperties":false,
   "required":["apiVersion","endpoint","timeoutMilliseconds","startupEvidence","startupExpectations","sessionScope","trustRoots","clientCertificate","clientPrivateKey","callerIssuer","delegationAuthorizer","setupAuthorizer","request","clientChallengeBase64url","expectedCallerPrincipal","expectedTargetPrincipal","expectedTargetNonce","expectedTargetRequestSha256","installation","egress","attachment","execution","applicationProxy"],
   "properties":{
-    "apiVersion":{"const":"serverware.nativeBootstrapClient/v9"},
+    "apiVersion":{"const":"catchplate.nativeBootstrapClient/v9"},
     "endpoint":{"$ref":"native-bootstrap-client.v8.schema.json#/properties/endpoint"},
     "timeoutMilliseconds":{"$ref":"native-bootstrap-client.v8.schema.json#/properties/timeoutMilliseconds"},
     "startupEvidence":{"$ref":"native-bootstrap-client.v8.schema.json#/properties/startupEvidence"},

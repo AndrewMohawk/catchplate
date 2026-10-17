@@ -3,7 +3,7 @@
 ## Scope and trust boundary
 
 The private measured worker in
-[`authority_webauthn_assertion.py`](../serverware/authority_webauthn_assertion.py)
+[`authority_webauthn_assertion.py`](../catchplate/authority_webauthn_assertion.py)
 executes the genuine pinned-verifier receipt checks under an enclosing
 computation's remaining work allowance. It does not accept a previous verifier
 result as authority, replace signature verification with a digest comparison,

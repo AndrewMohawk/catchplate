@@ -16,14 +16,14 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 TEMP = tempfile.TemporaryDirectory(prefix="npm-weekday-example-")
-os.environ["SERVERWARE_DATA_DIR"] = TEMP.name
-os.environ["SERVERWARE_RELEASE_CHANNEL"] = "test"
+os.environ["CATCHPLATE_DATA_DIR"] = TEMP.name
+os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "test"
 for store in ("METADATA", "AUDIT", "GRANT"):
-    os.environ[f"SERVERWARE_{store}_STORE_BACKEND"] = "sqlite"
-    os.environ.pop(f"SERVERWARE_{store}_STORE_POSTGRES_DSN", None)
+    os.environ[f"CATCHPLATE_{store}_STORE_BACKEND"] = "sqlite"
+    os.environ.pop(f"CATCHPLATE_{store}_STORE_POSTGRES_DSN", None)
 
-from serverware.constraints import _enforce_request_time_window
-from serverware.policy_bundle import compile_policy_bundle
+from catchplate.constraints import _enforce_request_time_window
+from catchplate.policy_bundle import compile_policy_bundle
 
 
 class NpmWeekdayHoursExampleControls(unittest.TestCase):
@@ -77,7 +77,7 @@ class NpmWeekdayHoursExampleControls(unittest.TestCase):
         self.assertTrue(scheduled["jit"]["approvers"]["authn"]["requireHardwareAttestation"])
         self.assertEqual(scheduled["adapter"]["config"]["credentialBinding"]["subjects"],
             ["replace-with-verified-npm-account"])
-        legacy_header = {"X-Serverware-Agent": "example-agent"}
+        legacy_header = {"X-Catchplate-Agent": "example-agent"}
         for evidence in (None, {**self.evidence, "verified": False},
                 {**self.evidence, "spki_sha256": "sha256:" + "0" * 64}):
             with self.subTest(evidence=evidence):

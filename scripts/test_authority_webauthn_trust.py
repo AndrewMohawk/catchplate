@@ -20,14 +20,14 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_webauthn_trust as trust
-from serverware import authority_contract
-from serverware.authority_query_read_work import QueryReadValidationLimits, QueryReadWorkError, _ValidationWork
-from serverware.authority_store import mutation_sql
-from serverware.authority_store import webauthn_trust_sql as trust_sql
+from catchplate import authority_webauthn_trust as trust
+from catchplate import authority_contract
+from catchplate.authority_query_read_work import QueryReadValidationLimits, QueryReadWorkError, _ValidationWork
+from catchplate.authority_store import mutation_sql
+from catchplate.authority_store import webauthn_trust_sql as trust_sql
 
 
-DOMAIN = "serverware.webauthnTrustHighWater/v1"
+DOMAIN = "catchplate.webauthnTrustHighWater/v1"
 
 
 def document():
@@ -62,7 +62,7 @@ def credential():
 
 
 def policy_document(row):
-    return {"schema": "serverware.policyAuthorityCredentialPolicy/v1",
+    return {"schema": "catchplate.policyAuthorityCredentialPolicy/v1",
         "credentialRecordId": row["id"], "credentialId": row["credential_id"],
         "userId": row["user_id"], "authenticatorClass": row["authenticator_class"],
         "aaguid": row["aaguid"], "attestationTrusted": bool(row["attestation_trusted"]),
@@ -213,7 +213,7 @@ class WebAuthnTrustTests(unittest.TestCase):
             trust_high_water_digest=commitment(document()))
         self.assertEqual(actual, expected)
         self.assertEqual(trust.credential_policy_digest(actual),
-                         commitment(expected, "serverware.policyAuthorityCredentialPolicy/v1"))
+                         commitment(expected, "catchplate.policyAuthorityCredentialPolicy/v1"))
         row["public_key_cose"] = "different-key"
         changed = trust.credential_policy_document(credential=row, high_water=document(),
             trust_high_water_digest=commitment(document()))
@@ -242,7 +242,7 @@ class WebAuthnTrustTests(unittest.TestCase):
     def test_actual_key_and_policy_share_exact_independent_budget(self):
         row = credential()
         expected = policy_document(row)
-        domain = "serverware.policyAuthorityCredentialPolicy/v1"
+        domain = "catchplate.policyAuthorityCredentialPolicy/v1"
         high_water = commitment(document())
         units = (2, 3 * len(row["public_key_cose"].encode("utf-8"))
                  + 3 * len(wire(expected)) + 2 * len(domain) + 9, 2 + 2 * 33 + 2)
@@ -264,7 +264,7 @@ class WebAuthnTrustTests(unittest.TestCase):
                 trust.credential_policy_digest(actual, work=work)
 
     def test_actual_service_calls_shared_worker_without_importing_service(self):
-        path = ROOT / "serverware/authority_service.py"
+        path = ROOT / "catchplate/authority_service.py"
         self.assertLess(path.stat().st_size, 2 * 1024 * 1024)
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
@@ -275,10 +275,10 @@ class WebAuthnTrustTests(unittest.TestCase):
         self.assertEqual(calls.count("high_water_digest"), 1)
         self.assertEqual(calls.count("credential_policy_document"), 1)
         self.assertEqual(calls.count("credential_policy_digest"), 1)
-        helper = ast.parse((ROOT / "serverware/authority_webauthn_trust.py").read_text(encoding="utf-8"))
+        helper = ast.parse((ROOT / "catchplate/authority_webauthn_trust.py").read_text(encoding="utf-8"))
         imports = {node.module for node in helper.body if isinstance(node, ast.ImportFrom)}
-        self.assertTrue({"serverware.authority_service", "serverware.authority_planner",
-                         "serverware.authority_transition_registry"}.isdisjoint(imports))
+        self.assertTrue({"catchplate.authority_service", "catchplate.authority_planner",
+                         "catchplate.authority_transition_registry"}.isdisjoint(imports))
 
     def test_nullable_and_text_aaguid_remain_exact_policy_values_and_commitments(self):
         observed = []
@@ -291,7 +291,7 @@ class WebAuthnTrustTests(unittest.TestCase):
                 self.assertEqual(actual, expected)
                 self.assertIs(type(actual["aaguid"]), type(value))
                 result = trust.credential_policy_digest(actual)
-                self.assertEqual(result, commitment(expected, "serverware.policyAuthorityCredentialPolicy/v1"))
+                self.assertEqual(result, commitment(expected, "catchplate.policyAuthorityCredentialPolicy/v1"))
                 observed.append(result)
                 row["aaguid"] = "caller changed"
                 self.assertEqual(actual["aaguid"], value)
@@ -320,7 +320,7 @@ class WebAuthnTrustTests(unittest.TestCase):
 
     def test_sql_expression_has_exact_sixteen_literal_fields_and_json_aaguid_projection(self):
         expected = (
-            ("schema", "'serverware.policyAuthorityCredentialPolicy/v1'"),
+            ("schema", "'catchplate.policyAuthorityCredentialPolicy/v1'"),
             ("credentialRecordId", "assertion_evidence.credential_record_id"),
             ("credentialId", "assertion_evidence.credential_id"),
             ("userId", "credential_mutation.value->'expectedRow'->>'user_id'"),
@@ -347,15 +347,15 @@ class WebAuthnTrustTests(unittest.TestCase):
         for arguments in (("caller SQL",), ({"aaguid": "caller projection"},)):
             with self.assertRaises(TypeError):
                 trust_sql.webauthn_credential_policy_sql(*arguments)
-        _, tree = source_tree("serverware/authority_store/webauthn_trust_sql.py")
+        _, tree = source_tree("catchplate/authority_store/webauthn_trust_sql.py")
         self.assertEqual([alias.name for node in tree.body if isinstance(node, ast.Import)
             for alias in node.names], ["re", "textwrap"])
         self.assertEqual([node.module for node in tree.body if isinstance(node, ast.ImportFrom)], ["__future__"])
 
     def test_active_executor_interpolates_the_real_shared_policy_inside_existing_digest_and_cas(self):
-        source, tree = source_tree("serverware/authority_store/executor_v9.py")
+        source, tree = source_tree("catchplate/authority_store/executor_v9.py")
         aliases = [alias for node in tree.body if isinstance(node, ast.ImportFrom)
-            and node.module == "serverware.authority_store.webauthn_trust_sql" for alias in node.names]
+            and node.module == "catchplate.authority_store.webauthn_trust_sql" for alias in node.names]
         self.assertEqual([(alias.name, alias.asname) for alias in aliases],
             [("locked_webauthn_trust_projection", None), ("webauthn_credential_policy_sql", None)])
         installer = source_function(tree, "install_authority_v9_executor")
@@ -368,40 +368,40 @@ class WebAuthnTrustTests(unittest.TestCase):
         self.assertEqual(len(owners), 1)
         sql = "".join(item.value if isinstance(item, ast.Constant) else "{"
             + ast.unparse(item.value) + "}" for item in owners[0].values)
-        active = sql.split("AS $serverware_execute_v9$", 1)[1].split("$serverware_execute_v9$;", 1)[0]
-        self.assertIn(sql_tokens("serverware_policy_authority_domain_digest("
-            "'serverware.policyAuthorityCredentialPolicy/v1', {namespace}."
-            "serverware_policy_authority_wire_json({webauthn_credential_policy_sql()})"
+        active = sql.split("AS $catchplate_execute_v9$", 1)[1].split("$catchplate_execute_v9$;", 1)[0]
+        self.assertIn(sql_tokens("catchplate_policy_authority_domain_digest("
+            "'catchplate.policyAuthorityCredentialPolicy/v1', {namespace}."
+            "catchplate_policy_authority_wire_json({webauthn_credential_policy_sql()})"
             ") = assertion_evidence.credential_policy_digest"), sql_tokens(active))
         self.assertIn("authority v9 WebAuthn CAS mutations are incomplete", active)
         self.assertIn("{apply_mutation_sql(namespace)}", active)
-        mutation = mutation_sql.apply_mutation_sql('"serverware_metadata"')
+        mutation = mutation_sql.apply_mutation_sql('"catchplate_metadata"')
         self.assertIn("WHERE %s FOR UPDATE", mutation)
         self.assertIn("current_row IS DISTINCT FROM mutation->'expectedRow'", mutation)
         self.assertEqual(source.count("{webauthn_credential_policy_sql()}"), 1)
 
     def test_legacy_apply_and_begin_are_overridden_by_unconditional_v9_denial(self):
-        _, tree = source_tree("serverware/authority_store/executor_v9.py")
+        _, tree = source_tree("catchplate/authority_store/executor_v9.py")
         literals = "\n".join(strings(source_function(tree, "install_authority_v9_executor")))
-        for tag, message in (("serverware_legacy_apply_v9", "legacy authority apply is disabled by schema v9"),
-                             ("serverware_legacy_begin_v9", "legacy controlled writer begin is disabled by schema v9"),
-                             ("serverware_legacy_finish_v9", "legacy controlled writer finish is disabled by schema v9")):
+        for tag, message in (("catchplate_legacy_apply_v9", "legacy authority apply is disabled by schema v9"),
+                             ("catchplate_legacy_begin_v9", "legacy controlled writer begin is disabled by schema v9"),
+                             ("catchplate_legacy_finish_v9", "legacy controlled writer finish is disabled by schema v9")):
             bodies = re.findall(rf"AS \${tag}\$(.*?)\${tag}\$;", literals, re.DOTALL)
             self.assertEqual(len(bodies), 1)
             self.assertEqual(" ".join(bodies[0].split()), f"BEGIN RAISE EXCEPTION '{message}'; END;")
-        source, db_tree = source_tree("serverware/db.py", 16 * 1024 * 1024)
+        source, db_tree = source_tree("catchplate/db.py", 16 * 1024 * 1024)
         calls = [node for node in ast.walk(db_tree) if isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
             and node.func.value.id == "_authority_executor_v9" and node.func.attr == "install_authority_v9_executor"]
         self.assertEqual(len(calls), 1)
         prefix = "\n".join(source.splitlines()[:calls[0].lineno - 1])
-        for tag in ("serverware_owner_apply", "serverware_begin_controlled_writer", "serverware_finish_controlled_writer"):
+        for tag in ("catchplate_owner_apply", "catchplate_begin_controlled_writer", "catchplate_finish_controlled_writer"):
             self.assertIn(f"${tag}$", prefix)
 
     def test_dormant_challenge_issuer_is_outside_exact_executor_grants(self):
-        legacy = "serverware_policy_authority_issue_webauthn_challenge"
+        legacy = "catchplate_policy_authority_issue_webauthn_challenge"
         self.assertNotIn(legacy, {name for name, _, _ in authority_contract.EXECUTOR_FUNCTION_SIGNATURES})
-        _, tree = source_tree("serverware/db.py", 16 * 1024 * 1024)
+        _, tree = source_tree("catchplate/db.py", 16 * 1024 * 1024)
         inventory = source_assignment(tree, "_POLICY_AUTHORITY_EXECUTOR_FUNCTION_SIGNATURES")
         self.assertIn("authority_contract.EXECUTOR_FUNCTION_SIGNATURES", ast.unparse(inventory))
         self.assertNotIn(legacy, strings(source_assignment(tree, "_POLICY_AUTHORITY_CAPABILITY_ISSUER_FUNCTIONS")))
@@ -426,7 +426,7 @@ class WebAuthnTrustTests(unittest.TestCase):
         self.assertIn("authority_contract.EXECUTOR_ARGUMENT_TYPES", ast.unparse(executor_loops[0]))
 
     def test_current_service_challenge_producer_and_receipt_require_same_seven_fields(self):
-        _, tree = source_tree("serverware/authority_service.py")
+        _, tree = source_tree("catchplate/authority_service.py")
         producer = source_function(tree, "_prepare_webauthn_challenge_writer")
         payload = source_assignment(producer, "challenge_payload")
         self.assertIsInstance(payload, ast.Dict)
@@ -444,7 +444,7 @@ class WebAuthnTrustTests(unittest.TestCase):
         producer_calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute) and node.func.attr == "_prepare_webauthn_challenge_writer"]
         self.assertEqual(len(producer_calls), 1)
-        self.assertFalse(any("serverware_policy_authority_issue_webauthn_challenge" in value for value in strings(tree)))
+        self.assertFalse(any("catchplate_policy_authority_issue_webauthn_challenge" in value for value in strings(tree)))
 
 
 if __name__ == "__main__":

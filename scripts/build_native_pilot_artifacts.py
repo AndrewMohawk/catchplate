@@ -22,58 +22,58 @@ import native_pilot_tar_export as runtime_tar
 
 DOCKERFILE = "data-plane/decision-gate-rs/Dockerfile.production"
 PROFILES = {
-    "nativeStartup": "serverware.nativeStartupConfiguration/v22",
+    "nativeStartup": "catchplate.nativeStartupConfiguration/v22",
     "nativeStartupSelector": "--native-workload-trust-startup-v22",
     "nativeEnclaveSelector": "--workload-trust-v22",
-    "nativeWorkloadTrust": "serverware.nativeWorkloadIdentityTrustAuthorization/v1",
-    "cohort": "serverware.nativeShadowProofCohortConfiguration/v7",
+    "nativeWorkloadTrust": "catchplate.nativeWorkloadIdentityTrustAuthorization/v1",
+    "cohort": "catchplate.nativeShadowProofCohortConfiguration/v7",
     "cohortRoles": ["retrieval", "persistence", "trustedTime", "generationInstall",
                     "commitRequest", "ingressAdmission", "terminalAppend", "dispatchBarrier",
                     "activeEffectBarrier", "activeEffectCommit"],
-    "externalBridge": "serverware.nativeShadowDriverBootstrapConfiguration/v4",
-    "bridgeLaunch": "serverware.nativeProofBridgeLaunch/v5",
-    "bridgeRuntime": "serverware.policyCustodyProductionRpcRuntime/v9",
-    "spool": "serverware.nativeSpoolServices/v3",
-    "ordinaryLaunch": "serverware.custodyFiveServiceLaunch/v6",
-    "ordinaryEffectsRuntime": "serverware.policyCustodyServiceRuntimeConfig/v8",
+    "externalBridge": "catchplate.nativeShadowDriverBootstrapConfiguration/v4",
+    "bridgeLaunch": "catchplate.nativeProofBridgeLaunch/v5",
+    "bridgeRuntime": "catchplate.policyCustodyProductionRpcRuntime/v9",
+    "spool": "catchplate.nativeSpoolServices/v3",
+    "ordinaryLaunch": "catchplate.custodyFiveServiceLaunch/v6",
+    "ordinaryEffectsRuntime": "catchplate.policyCustodyServiceRuntimeConfig/v8",
     "ordinaryEffectsSelector": "--guest-c9-effects-inspected",
 }
 ORDINARY_ROLES = ("durable-recovery-store", "recovery-target-provider", "current-signature-authority",
                   "cleanup-authorization-consumer", "bounded-cleanup-helper")
 NATIVE_FILES = {
-    "usr/local/bin/serverware-policy-shadow-custody-guest": (0o555, 64 * 1024 * 1024),
-    "opt/serverware/serverware-native-shadow-proof-cohort": (0o555, 64 * 1024 * 1024),
-    "opt/serverware/serverware-native-shadow-guest-supervisor": (0o555, 64 * 1024 * 1024),
-    "opt/serverware/serverware-native-activation-relay": (0o555, 64 * 1024 * 1024),
-    "opt/serverware/serverware-native-publication-genesis-controller": (0o555, 64 * 1024 * 1024),
-    "opt/serverware/serverware-native-publication-adoption-validator": (0o555, 64 * 1024 * 1024),
-    "usr/local/bin/serverware-native-shadow-worker": (0o555, 64 * 1024 * 1024),
-    "usr/local/bin/serverware-native-publication-handoff": (0o555, 64 * 1024 * 1024),
-    "opt/serverware/native-shadow-custody-runtime.squashfs": (0o444, 256 * 1024 * 1024),
-    "usr/share/serverware/native-shadow-custody-runtime.json": (0o444, 4 * 1024 * 1024),
+    "usr/local/bin/catchplate-policy-shadow-custody-guest": (0o555, 64 * 1024 * 1024),
+    "opt/catchplate/catchplate-native-shadow-proof-cohort": (0o555, 64 * 1024 * 1024),
+    "opt/catchplate/catchplate-native-shadow-guest-supervisor": (0o555, 64 * 1024 * 1024),
+    "opt/catchplate/catchplate-native-activation-relay": (0o555, 64 * 1024 * 1024),
+    "opt/catchplate/catchplate-native-publication-genesis-controller": (0o555, 64 * 1024 * 1024),
+    "opt/catchplate/catchplate-native-publication-adoption-validator": (0o555, 64 * 1024 * 1024),
+    "usr/local/bin/catchplate-native-shadow-worker": (0o555, 64 * 1024 * 1024),
+    "usr/local/bin/catchplate-native-publication-handoff": (0o555, 64 * 1024 * 1024),
+    "opt/catchplate/native-shadow-custody-runtime.squashfs": (0o444, 256 * 1024 * 1024),
+    "usr/share/catchplate/native-shadow-custody-runtime.json": (0o444, 4 * 1024 * 1024),
 }
-OPERATOR_FILE = "usr/local/bin/serverware-export-custody-seccomp"
+OPERATOR_FILE = "usr/local/bin/catchplate-export-custody-seccomp"
 OPERATOR_MAX_BYTES = 64 * 1024 * 1024
-SIDECAR_BINARY = "usr/local/libexec/serverware-workload-sidecar"
+SIDECAR_BINARY = "usr/local/libexec/catchplate-workload-sidecar"
 SIDECAR_FILES = {
     SIDECAR_BINARY: (0o555, 64 * 1024 * 1024, None),
-    "usr/share/serverware/install_workload_sidecar_unit.py":
+    "usr/share/catchplate/install_workload_sidecar_unit.py":
         (0o444, 128 * 1024, "scripts/install_workload_sidecar_unit.py"),
-    "usr/share/serverware/native-workload-sidecar.v1.schema.json":
+    "usr/share/catchplate/native-workload-sidecar.v1.schema.json":
         (0o444, 64 * 1024, "schemas/native-workload-sidecar.v1.schema.json"),
 }
 
 
 def preparation(metadata):
     return {
-        "apiVersion": "serverware.nativePilotBuildPreparation/v1",
+        "apiVersion": "catchplate.nativePilotBuildPreparation/v1",
         "releaseAuthority": False, "liveReady": False, "launchPrepared": False,
         "source": {key: metadata[key] for key in ("revision", "source_tree_digest", "source_manifest_digest",
                                                    "source_archive_digest", "source_date_epoch")},
         "profiles": PROFILES,
         "buildResourceProfile": build.native_pilot_build_resource_profile(metadata),
         "publicGuestBuildInputs": {
-            "apiVersion": "serverware.nativeShadowCustodyImageInputs/v1",
+            "apiVersion": "catchplate.nativeShadowCustodyImageInputs/v1",
             "sourceManifestSha256": metadata["source_manifest_digest"],
             "files": ["inputs.json", *build.PUBLIC_GUEST_FILES],
             "independentManifestSha256Required": True,
@@ -95,16 +95,16 @@ def preparation(metadata):
         "existingOwners": {
             "operatorConductor": "python3 -B scripts/run_native_pilot.py --run-native-pilot",
             "packagedOperatorConductor": "/runtime/python/bin/python3 -I -B /app/scripts/native_pilot_runtime_entrypoint.py --run-native-pilot",
-            "operatorChannel": "serverware.native_pilot_operator_channel.Channel: exclusive machine pipes, canonical request/reply originals, original absolute deadlines, no authority or retries",
+            "operatorChannel": "catchplate.native_pilot_operator_channel.Channel: exclusive machine pipes, canonical request/reply originals, original absolute deadlines, no authority or retries",
             "operatorPhases": "bootstrap-admission / endpoint-precreation / endpoint-inputs / endpoint-deliveries / service-originals / bridge-runtime / bridge-delivery / release / constructed-admission / generation-origin / shutdown",
-            "liveComposition": "serverware.native_pilot_launch.NativePilotLaunch.start / start_endpoints / prepare_resources / prepare_bridge_connections / prepare_operational_inputs / release",
-            "nativeCohort": "serverware.native_shadow_proof_cohort_control.ParkedProofCohort.start_for_driver",
-            "ordinaryFive": "serverware.custody_generation_launch.FiveServiceLaunch.start_effects",
-            "generationInputs": "serverware.custody_generation_business.BusinessResources.prepare_commitment(five).commitment_inputs()",
-            "spoolResources": "serverware.native_shadow_spool_inputs.SpoolInputs.prepare",
-            "driver": "serverware.native_shadow_driver_bootstrap.DriverBootstrap.start",
-            "outgoingAndContinuation": "serverware.native_shadow_driver_outgoing.OutgoingResources.prepare / serverware.native_shadow_driver_resources.BridgeResources.prepare_native_peers / serverware.native_shadow_driver_inputs.OperationalInputs.prepare_pilot",
-            "orderedRelease": "serverware.custody_generation_launch.FiveServiceLaunch.release_endpoint_cohort / ParkedProofCohort.continue_driver",
+            "liveComposition": "catchplate.native_pilot_launch.NativePilotLaunch.start / start_endpoints / prepare_resources / prepare_bridge_connections / prepare_operational_inputs / release",
+            "nativeCohort": "catchplate.native_shadow_proof_cohort_control.ParkedProofCohort.start_for_driver",
+            "ordinaryFive": "catchplate.custody_generation_launch.FiveServiceLaunch.start_effects",
+            "generationInputs": "catchplate.custody_generation_business.BusinessResources.prepare_commitment(five).commitment_inputs()",
+            "spoolResources": "catchplate.native_shadow_spool_inputs.SpoolInputs.prepare",
+            "driver": "catchplate.native_shadow_driver_bootstrap.DriverBootstrap.start",
+            "outgoingAndContinuation": "catchplate.native_shadow_driver_outgoing.OutgoingResources.prepare / catchplate.native_shadow_driver_resources.BridgeResources.prepare_native_peers / catchplate.native_shadow_driver_inputs.OperationalInputs.prepare_pilot",
+            "orderedRelease": "catchplate.custody_generation_launch.FiveServiceLaunch.release_endpoint_cohort / ParkedProofCohort.continue_driver",
         },
         "boundary": "Preparation is build data only. Actual live owners must measure, admit, sign independently, retain and release under original deadlines; no launch is performed. The separate conductor-runtime command packages the Python operator rootfs, not its independent authority coordinator or service configuration. Independent admission, installation and provisioned live services remain required.",
     }
@@ -170,7 +170,7 @@ def package_public_inputs(args, metadata, plan):
     # The existing custody packager treats the other three originals as opaque
     # pinned bytes. Copying/hashing them is not runtime or provenance admission.
     manifest = {
-        "apiVersion": "serverware.nativeShadowCustodyImageInputs/v1",
+        "apiVersion": "catchplate.nativeShadowCustodyImageInputs/v1",
         "sourceManifestSha256": metadata["source_manifest_digest"],
         **{field: "sha256:" + hashlib.sha256(originals[name]).hexdigest()
            for name, (field, _) in build.PUBLIC_GUEST_FILES.items()},
@@ -203,11 +203,11 @@ def native_inventory(output):
         if stat.S_IMODE(path.lstat().st_mode) != mode:
             raise RuntimeError("native artifact mode differs from fixed Docker target")
         entries[relative] = {"sha256": "sha256:" + hashlib.sha256(raw).hexdigest(), "bytes": len(raw), "mode": format(mode, "04o")}
-    manifest = json.loads(read_original(root / "usr/share/serverware/native-shadow-custody-runtime.json", 4 * 1024 * 1024))
-    if (manifest.get("apiVersion") != "serverware.nativeShadowCustodyRuntimeBuild/v1"
+    manifest = json.loads(read_original(root / "usr/share/catchplate/native-shadow-custody-runtime.json", 4 * 1024 * 1024))
+    if (manifest.get("apiVersion") != "catchplate.nativeShadowCustodyRuntimeBuild/v1"
             or manifest.get("releaseAuthority") is not False
-            or manifest.get("imageSha256") != entries["opt/serverware/native-shadow-custody-runtime.squashfs"]["sha256"]
-            or manifest.get("workerExecutableSha256") != entries["usr/local/bin/serverware-policy-shadow-custody-guest"]["sha256"]):
+            or manifest.get("imageSha256") != entries["opt/catchplate/native-shadow-custody-runtime.squashfs"]["sha256"]
+            or manifest.get("workerExecutableSha256") != entries["usr/local/bin/catchplate-policy-shadow-custody-guest"]["sha256"]):
         raise RuntimeError("actual guest package manifest differs from exported artifacts")
     return entries, manifest
 
@@ -218,7 +218,7 @@ def operator_inventory(output):
     # first extra entry; this is not a recursive artifact-directory scan.
     directories = {
         "": {"usr"}, "usr": {"local"}, "usr/local": {"bin"},
-        "usr/local/bin": {"serverware-export-custody-seccomp"},
+        "usr/local/bin": {"catchplate-export-custody-seccomp"},
     }
     for relative, expected in directories.items():
         directory = root / relative
@@ -260,9 +260,9 @@ def sidecar_inventory(output, metadata):
     root = output / "artifacts"
     directories = {
         "": {"usr"}, "usr": {"local", "share"}, "usr/local": {"libexec"},
-        "usr/local/libexec": {"serverware-workload-sidecar"},
-        "usr/share": {"serverware"},
-        "usr/share/serverware": {"install_workload_sidecar_unit.py",
+        "usr/local/libexec": {"catchplate-workload-sidecar"},
+        "usr/share": {"catchplate"},
+        "usr/share/catchplate": {"install_workload_sidecar_unit.py",
                                  "native-workload-sidecar.v1.schema.json"},
     }
     fields = ("st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid",
@@ -322,14 +322,14 @@ def assemble_sidecar(metadata, output):
                                            "source_archive_digest", "source_date_epoch")}
     target = build.NATIVE_WORKLOAD_SIDECAR_TARGET
     write_original(output / "attempt.json", {
-        "apiVersion": "serverware.nativePilotWorkloadSidecarAttempt/v1", "source": source,
+        "apiVersion": "catchplate.nativePilotWorkloadSidecarAttempt/v1", "source": source,
         "target": target, "buildResourceProfile": profile,
         "releaseAuthority": False, "liveReady": False, "launchPrepared": False,
     })
     _, exported = export_fixed_runtime(metadata, output, target)
     artifacts = sidecar_inventory(output, metadata)
     write_original(output / "workload-sidecar.json", {
-        "apiVersion": "serverware.nativePilotWorkloadSidecarArtifacts/v1", "artifactBuildComplete": True,
+        "apiVersion": "catchplate.nativePilotWorkloadSidecarArtifacts/v1", "artifactBuildComplete": True,
         "source": source, "target": target, "buildResourceProfile": profile, "artifacts": artifacts,
         "rawExport": exported,
         "releaseAuthority": False, "liveReady": False, "launchPrepared": False, "executionAccepted": False,
@@ -344,14 +344,14 @@ def assemble_operator_tools(metadata, output):
     source = {key: metadata[key] for key in ("revision", "source_tree_digest", "source_manifest_digest",
                                            "source_archive_digest", "source_date_epoch")}
     write_original(output / "attempt.json", {
-        "apiVersion": "serverware.nativePilotOperatorToolsAttempt/v1", "source": source,
+        "apiVersion": "catchplate.nativePilotOperatorToolsAttempt/v1", "source": source,
         "target": build.NATIVE_PILOT_OPERATOR_TARGET, "buildResourceProfile": profile,
         "releaseAuthority": False, "liveReady": False, "launchPrepared": False,
     })
     _, exported = export_fixed_runtime(metadata, output, build.NATIVE_PILOT_OPERATOR_TARGET)
     artifacts = operator_inventory(output)
     write_original(output / "operator-tools.json", {
-        "apiVersion": "serverware.nativePilotOperatorTools/v1", "artifactBuildComplete": True,
+        "apiVersion": "catchplate.nativePilotOperatorTools/v1", "artifactBuildComplete": True,
         "source": source, "target": build.NATIVE_PILOT_OPERATOR_TARGET,
         "buildResourceProfile": profile, "artifacts": artifacts,
         "rawExport": exported,
@@ -401,7 +401,7 @@ def assemble_conductor_runtime(metadata, output):
                                            "source_archive_digest", "source_date_epoch")}
     target = build.NATIVE_PILOT_CONDUCTOR_TARGET
     write_original(output / "attempt.json", {
-        "apiVersion": "serverware.nativePilotConductorBuildAttempt/v1", "source": source,
+        "apiVersion": "catchplate.nativePilotConductorBuildAttempt/v1", "source": source,
         "target": target, "buildResourceProfile": profile,
         "releaseAuthority": False, "liveReady": False, "launchPrepared": False,
     })
@@ -409,7 +409,7 @@ def assemble_conductor_runtime(metadata, output):
     runtime = conductor_runtime.inventory(root, metadata)
     package = conductor_package.package(root, runtime, output / "package")
     write_original(output / "conductor-runtime.json", {
-        "apiVersion": "serverware.nativePilotConductorArtifacts/v1", "artifactBuildComplete": True,
+        "apiVersion": "catchplate.nativePilotConductorArtifacts/v1", "artifactBuildComplete": True,
         "source": source, "target": target, "buildResourceProfile": profile,
         "rawExport": exported,
         "runtimeInventorySha256": package["inventorySha256"], "package": package,
@@ -425,7 +425,7 @@ def assemble_authority_runtime(metadata, output):
                                            "source_archive_digest", "source_date_epoch")}
     target = build.NATIVE_PILOT_AUTHORITY_TARGET
     write_original(output / "attempt.json", {
-        "apiVersion": "serverware.nativePilotAuthorityBuildAttempt/v1", "source": source,
+        "apiVersion": "catchplate.nativePilotAuthorityBuildAttempt/v1", "source": source,
         "target": target, "buildResourceProfile": profile,
         "releaseAuthority": False, "liveReady": False, "launchPrepared": False,
     })
@@ -433,7 +433,7 @@ def assemble_authority_runtime(metadata, output):
     runtime = conductor_runtime.authority_inventory(root, metadata)
     package = conductor_package.package_authority(root, runtime, output / "package")
     write_original(output / "authority-runtime.json", {
-        "apiVersion": "serverware.nativePilotAuthorityArtifacts/v1", "artifactBuildComplete": True,
+        "apiVersion": "catchplate.nativePilotAuthorityArtifacts/v1", "artifactBuildComplete": True,
         "source": source, "target": target, "buildResourceProfile": profile,
         "rawExport": exported,
         "runtimeInventorySha256": package["inventorySha256"], "package": package,
@@ -448,7 +448,7 @@ def assemble_supervisor_runtime(metadata, output):
     source = {key: metadata[key] for key in conductor_runtime.SOURCE_FIELDS}
     target = build.NATIVE_PILOT_SUPERVISOR_TARGET
     write_original(output / "attempt.json", {
-        "apiVersion": "serverware.nativePilotSupervisorBuildAttempt/v1", "source": source,
+        "apiVersion": "catchplate.nativePilotSupervisorBuildAttempt/v1", "source": source,
         "target": target, "buildResourceProfile": profile,
         "releaseAuthority": False, "liveReady": False, "launchPrepared": False,
     })
@@ -456,14 +456,14 @@ def assemble_supervisor_runtime(metadata, output):
     runtime = conductor_runtime.supervisor_inventory(root, metadata)
     package = conductor_package.package_supervisor(root, runtime, output / "package")
     write_original(output / "supervisor-runtime.json", {
-        "apiVersion": "serverware.nativePilotSupervisorArtifacts/v1", "artifactBuildComplete": True,
+        "apiVersion": "catchplate.nativePilotSupervisorArtifacts/v1", "artifactBuildComplete": True,
         "source": source, "target": target, "buildResourceProfile": profile,
         "rawExport": exported,
         "runtimeInventorySha256": package["inventorySha256"], "package": package,
         "profiles": {
-            "supervisorPolicy": "serverware.nativePilotSupervisorCommissioningPolicy/v18",
-            "bridgeLaunch": "serverware.nativeProofBridgeLaunch/v7",
-            "bridgeRuntime": "serverware.policyCustodyProductionRpcRuntime/v11",
+            "supervisorPolicy": "catchplate.nativePilotSupervisorCommissioningPolicy/v18",
+            "bridgeLaunch": "catchplate.nativeProofBridgeLaunch/v7",
+            "bridgeRuntime": "catchplate.policyCustodyProductionRpcRuntime/v11",
         },
         "releaseAuthority": False, "liveReady": False, "launchPrepared": False, "executionAccepted": False,
         "boundary": "Unsigned local supervisor rootfs and portable package only. Independent admission of three inventories, protected v18 policy and measured recipe, exact purpose keys, authenticated late-approval peer and original live resources remain required. No approval, signing, provisioning, pilot or service was executed.",
@@ -480,20 +480,20 @@ def assemble(args, metadata, plan, output):
     images = []
     with build.private_build_context(metadata) as context:
         build.copy_native_pilot_public_inputs(args.public_inputs, args.public_inputs_sha256, metadata, context)
-        write_original(output / "attempt.json", {"apiVersion": "serverware.nativePilotBuildAttempt/v1",
+        write_original(output / "attempt.json", {"apiVersion": "catchplate.nativePilotBuildAttempt/v1",
             "source": plan["source"], "releaseAuthority": False, "liveReady": False,
             "buildResourceProfile": plan["buildResourceProfile"],
             "publicInputsSha256": args.public_inputs_sha256})
         for service, dockerfile in (("control", "Dockerfile.production"), ("gate", DOCKERFILE)):
-            tag = "serverware/native-pilot-" + service + ":" + metadata["revision"]
+            tag = "catchplate/native-pilot-" + service + ":" + metadata["revision"]
             build.run_build(build.build_command(dockerfile, tag, platform=build.PRODUCTION_PLATFORM,
                 metadata=metadata, context=context, native_pilot_bounded_build=True))
             image = build.image_id(tag)
             build.verify_image_platform(image, build.PRODUCTION_PLATFORM)
-            paths = (["/usr/local/bin/serverware-decision-gate",
-                      "/usr/local/bin/serverware-proof-client",
-                      "/usr/local/libexec/serverware-native-response-verifier"] +
-                     ["/usr/local/bin/serverware-policy-custody-" + role for role in ORDINARY_ROLES]) if service == "gate" else ["/app/serverware/app.py"]
+            paths = (["/usr/local/bin/catchplate-decision-gate",
+                      "/usr/local/bin/catchplate-proof-client",
+                      "/usr/local/libexec/catchplate-native-response-verifier"] +
+                     ["/usr/local/bin/catchplate-policy-custody-" + role for role in ORDINARY_ROLES]) if service == "gate" else ["/app/catchplate/app.py"]
             # Existing stopped-container export owner; no image entrypoint runs.
             originals = {path: build.image_file_sha256(image, path) for path in paths}
             images.append({"service": service, "imageId": image, "tag": tag, "originalSha256s": originals})
@@ -504,7 +504,7 @@ def assemble(args, metadata, plan, output):
     artifacts, guest = native_inventory(output)
     if guest.get("sourceManifestSha256") != metadata["source_manifest_digest"] or guest.get("inputManifestSha256") != args.public_inputs_sha256:
         raise RuntimeError("guest artifact source/public-input pins differ from this attempt")
-    result = {"apiVersion": "serverware.nativePilotArtifacts/v1", "artifactBuildComplete": True,
+    result = {"apiVersion": "catchplate.nativePilotArtifacts/v1", "artifactBuildComplete": True,
         "releaseAuthority": False, "liveReady": False, "launchPrepared": False, "executionAccepted": False,
         "source": plan["source"], "profiles": PROFILES, "images": images, "nativeArtifacts": artifacts,
         "buildResourceProfile": plan["buildResourceProfile"],
@@ -553,14 +553,14 @@ def main():
             assemble_supervisor_runtime(metadata, new_output(args.out))
         else:
             assemble_sidecar(metadata, new_output(args.out))
-        print(build.canonical_json({"apiVersion": "serverware.nativePilotBuildCommand/v1", "command": args.command,
+        print(build.canonical_json({"apiVersion": "catchplate.nativePilotBuildCommand/v1", "command": args.command,
             "output": str(args.out), "artifactBuildComplete": True,
             "releaseAuthority": False, "liveReady": False, "launchPrepared": False}))
         return
     plan = preparation(metadata)
     if args.command == "public-inputs":
         measured = package_public_inputs(args, metadata, plan)
-        print(build.canonical_json({"apiVersion": "serverware.nativePilotBuildCommand/v1", "command": args.command,
+        print(build.canonical_json({"apiVersion": "catchplate.nativePilotBuildCommand/v1", "command": args.command,
             "output": str(args.out), "releaseAuthority": False, "liveReady": False, "launchPrepared": False,
             **measured}))
         return
@@ -568,7 +568,7 @@ def main():
     write_original(output / "preparation.json", plan)
     if args.command == "build":
         assemble(args, metadata, plan, output)
-    print(build.canonical_json({"apiVersion": "serverware.nativePilotBuildCommand/v1", "command": args.command,
+    print(build.canonical_json({"apiVersion": "catchplate.nativePilotBuildCommand/v1", "command": args.command,
         "output": str(output), "releaseAuthority": False, "liveReady": False, "launchPrepared": False}))
 
 

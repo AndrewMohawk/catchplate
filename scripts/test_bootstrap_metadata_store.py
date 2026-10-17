@@ -23,8 +23,8 @@ def configuration():
     # real credentials, pins, roles or a provisioned database in this suite.
     return {
         **{name: "explicit-test-selection" for name in cli.REQUIRED},
-        **{"SERVERWARE_" + name + "_BACKEND": "postgres" for name in cli.BACKENDS},
-        "SERVERWARE_PROCESS_MODE": "metadata-bootstrap",
+        **{"CATCHPLATE_" + name + "_BACKEND": "postgres" for name in cli.BACKENDS},
+        "CATCHPLATE_PROCESS_MODE": "metadata-bootstrap",
     }
 
 
@@ -48,10 +48,10 @@ class BootstrapMetadataStoreTests(unittest.TestCase):
         loader.assert_not_called()
 
     def test_normal_runtime_and_missing_mode_are_refused_before_import(self):
-        for mode in ("", "serverware", "policy-authority-executor"):
+        for mode in ("", "catchplate", "policy-authority-executor"):
             with self.subTest(mode=mode):
                 selected = configuration()
-                selected["SERVERWARE_PROCESS_MODE"] = mode
+                selected["CATCHPLATE_PROCESS_MODE"] = mode
                 status, _, _, loader = self.invoke([], selected)
                 self.assertEqual(status, 2)
                 loader.assert_not_called()
@@ -61,7 +61,7 @@ class BootstrapMetadataStoreTests(unittest.TestCase):
             for value in ("sqlite", ""):
                 with self.subTest(backend=backend, value=value):
                     selected = configuration()
-                    selected["SERVERWARE_" + backend + "_BACKEND"] = value
+                    selected["CATCHPLATE_" + backend + "_BACKEND"] = value
                     status, _, _, loader = self.invoke([], selected)
                     self.assertEqual(status, 2)
                     loader.assert_not_called()
@@ -75,7 +75,7 @@ class BootstrapMetadataStoreTests(unittest.TestCase):
                 self.assertEqual(status, 2)
                 loader.assert_not_called()
         selected = configuration()
-        selected["SERVERWARE_WEBAUTHN_RECOVERY_WITNESS_BACKEND"] = "postgres"
+        selected["CATCHPLATE_WEBAUTHN_RECOVERY_WITNESS_BACKEND"] = "postgres"
         status, _, _, loader = self.invoke([], selected)
         self.assertEqual(status, 2)
         loader.assert_not_called()
@@ -99,7 +99,7 @@ class BootstrapMetadataStoreTests(unittest.TestCase):
             call._successor_installation_pins("EXECUTOR"),
             call._successor_installation_pins("RECOVERY"),
             call._policy_authority_verifier_public_key(),
-            call.init_db(bootstrap_contract_id="serverware.metadataStoreBootstrap/v1"),
+            call.init_db(bootstrap_contract_id="catchplate.metadataStoreBootstrap/v1"),
         ])
 
     def test_guard_rejection_prevents_dispatch_without_secret_output(self):
@@ -155,7 +155,7 @@ class BootstrapMetadataStoreTests(unittest.TestCase):
 
     def test_initial_rbac_validation_and_exact_selection_shared_by_api_and_cli(self):
         # A routing fixture, not acceptance of these synthetic clock values.
-        validator_module = ModuleType("serverware.authority_local_rbac_bootstrap")
+        validator_module = ModuleType("catchplate.authority_local_rbac_bootstrap")
         validator_module.selected_timestamp = Mock()
         arguments = dict(initial_rbac_timestamp_epoch_ns=2000,
             original_issued_at_unix_ns=1000, original_expires_at_unix_ns=3000)

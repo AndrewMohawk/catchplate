@@ -31,7 +31,7 @@ def document(*, new_request=True, new_response=True, maximum=1024):
 
 
 def compile_snapshot(value=None):
-    from serverware.policy_bundle import compile_policy_bundle
+    from catchplate.policy_bundle import compile_policy_bundle
     return compile_policy_bundle(document() if value is None else value,
         validate_schema=True)
 
@@ -55,7 +55,7 @@ def response_flow(body, *, status=200, fields=None, trailers=None):
 
 
 def runtime():
-    from serverware import adapters, policy_engine
+    from catchplate import adapters, policy_engine
     return adapters, policy_engine, adapters.get_adapter("generic.rest")
 
 

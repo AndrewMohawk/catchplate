@@ -14,7 +14,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WRITER_ROLE = "serverware_policy_authority_planner_writer"
+WRITER_ROLE = "catchplate_policy_authority_planner_writer"
 IDENTITY_FIELDS = {
     "server_version_num", "role", "session_role", "transaction_isolation",
     "transaction_read_only", "transaction_deferrable", "ssl", "client_dn", "client_serial",
@@ -63,8 +63,8 @@ def call(tree, spelling):
 class RevocationWriterConnectionSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.text, cls.tree = source("serverware/authority_revocation_writer_connection.py")
-        cls.persistence_text, cls.persistence = source("serverware/authority_revocation_persistence.py")
+        cls.text, cls.tree = source("catchplate/authority_revocation_writer_connection.py")
+        cls.persistence_text, cls.persistence = source("catchplate/authority_revocation_persistence.py")
         cls.runner_body = definition(cls.tree, "_run_on_connection")
 
     def assert_shape(self, node, expected):
@@ -74,8 +74,8 @@ class RevocationWriterConnectionSourceTests(unittest.TestCase):
         imports = [(node.module, tuple((alias.name, alias.asname) for alias in node.names))
             for node in self.tree.body if isinstance(node, ast.ImportFrom)]
         self.assertEqual(imports, [("__future__", (("annotations", None),)),
-            ("serverware", (("authority_revocation_root_reader", "reader"),)),
-            ("serverware.authority_store.planner_writer_sql", (("planner_writer_privilege_check", None),))])
+            ("catchplate", (("authority_revocation_root_reader", "reader"),)),
+            ("catchplate.authority_store.planner_writer_sql", (("planner_writer_privilege_check", None),))])
         self.assertFalse(any(isinstance(node, ast.Import) for node in self.tree.body))
         self.assertEqual([item.arg for item in self.runner_body.args.args], ["connection"])
         self.assertEqual([item.arg for item in self.runner_body.args.kwonlyargs],
@@ -118,7 +118,7 @@ class RevocationWriterConnectionSourceTests(unittest.TestCase):
         self.assertFalse(calls(validator, "_callback"))
 
     def test_actual_closed_nineteen_field_query_checks_pg16_tls_role_and_writer_mode(self):
-        _, reader = source("serverware/authority_revocation_root_reader.py")
+        _, reader = source("catchplate/authority_revocation_root_reader.py")
         false_fields = tuple(item.value for item in assigned(reader, "_FALSE_FIELDS").elts)
         self.assertEqual(false_fields, FALSE_FIELDS)
         fields = assigned(reader, "_IDENTITY_FIELDS").args[0]
@@ -168,14 +168,14 @@ class RevocationWriterConnectionSourceTests(unittest.TestCase):
         self.assert_shape(statements[0], "cursor.execute(_SET_TRANSACTION)")
         self.assert_shape(statements[1], "cursor.execute(_IDENTITY_SQL)")
         self.assert_shape(statements[2],
-            "cursor.execute(*planner_writer_privilege_check(role=database_identity[0], namespace='serverware_metadata'))")
+            "cursor.execute(*planner_writer_privilege_check(role=database_identity[0], namespace='catchplate_metadata'))")
         identity = call(self.runner_body, "_admit_identity")
         self.assert_shape(identity, "_admit_identity(cursor.execute(_IDENTITY_SQL).fetchone(), database_identity)")
         denied, = [node for node in ast.walk(self.runner_body) if isinstance(node, ast.If)
             and any(item is statements[2] for item in ast.walk(node.test))]
         self.assert_shape(denied.test,
             "cursor.execute(*planner_writer_privilege_check(role=database_identity[0], "
-            "namespace='serverware_metadata')).fetchone() is not None")
+            "namespace='catchplate_metadata')).fetchone() is not None")
         self.assert_shape(denied.body[0].exc,
             "RevocationWriterConnectionError('revocation writer effective privileges are not source exact')")
         operation = call(self.runner_body, "operation")
@@ -231,7 +231,7 @@ class RevocationWriterConnectionSourceTests(unittest.TestCase):
                 "self._binding is not binding or not _same_slots((self._info, self._connection), binding)")
         self.assert_shape(checks[-1].test, "not isinstance(value, int) or isinstance(value, bool) or value != 2")
         self.assert_shape(info.body[-1].value, "connection._call(observe)")
-        _, reader = source("serverware/authority_revocation_root_reader.py")
+        _, reader = source("catchplate/authority_revocation_root_reader.py")
         physical = definition(reader, "_connection_identity")
         self.assert_shape(assigned(physical, "actual"), "connection.info.transaction_status")
         self.assert_shape(assigned(physical, "identity"), "connection.pgconn")
@@ -361,7 +361,7 @@ class RevocationWriterConnectionSourceTests(unittest.TestCase):
         closed = guarded.body[-2]
         self.assert_shape(closed.test, "_callback(work, lambda: connection.closed) is not True")
         self.assert_shape(guarded.body[-1].value, "result")
-        _, reader = source("serverware/authority_revocation_root_reader.py")
+        _, reader = source("catchplate/authority_revocation_root_reader.py")
         context = definition(reader, "_context")
         entered = definition(context, "enter")
         self.assert_shape(assigned(entered, "value"), "manager.__enter__()")
@@ -384,7 +384,7 @@ class RevocationWriterConnectionSourceTests(unittest.TestCase):
         owned = call(runner, "_inputs_from_configuration")
         self.assert_shape(owned, "_inputs_from_configuration(configuration, expectations, work)")
         db_import, = [node for node in runner.body if isinstance(node, ast.ImportFrom)
-            and node.module == "serverware" and [(item.name, item.asname) for item in node.names] == [("db", None)]]
+            and node.module == "catchplate" and [(item.name, item.asname) for item in node.names] == [("db", None)]]
         role_guard, = [node for node in runner.body if isinstance(node, ast.If)]
         self.assert_shape(role_guard.test, "configuration[6][0] != db._METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE")
         self.assert_shape(role_guard.body[0].exc,
@@ -401,7 +401,7 @@ class RevocationWriterConnectionSourceTests(unittest.TestCase):
         self.assertFalse(calls(runner, "_ValidationWork"))
 
     def test_issuer_connector_and_legacy_service_routes_are_not_repurposed(self):
-        _, issuer = source("serverware/authority_revocation_issuance.py")
+        _, issuer = source("catchplate/authority_revocation_issuance.py")
         issuer_run = definition(issuer, "_run_on_configuration")
         self.assert_shape(call(issuer_run, "persistence._connect"), "persistence._connect(work, opener)")
         self.assertFalse(calls(issuer_run, "writer_connection._run_on_connection"))
@@ -409,7 +409,7 @@ class RevocationWriterConnectionSourceTests(unittest.TestCase):
         for name in ("issue", "issue_authenticated"):
             method = definition(issuer_owner, name)
             self.assertEqual(len(calls(method, "db._policy_authority_capability_issuer_pg_connect_raw")), 1)
-        _, service = source("serverware/authority_service.py", 2 * 1024 * 1024)
+        _, service = source("catchplate/authority_service.py", 2 * 1024 * 1024)
         handle = definition(definition(service, "AuthorityProcess"), "handle")
         writer_branch, = [node for node in ast.walk(handle) if isinstance(node, ast.If)
             and ast.unparse(node.test) == "self.role_name == 'planner-writer'"]
@@ -419,7 +419,7 @@ class RevocationWriterConnectionSourceTests(unittest.TestCase):
         self.assertFalse(calls(handle, "writer_connection._run_on_connection"))
         self.assertFalse(calls(handle, "RevocationPlannerPersistence"))
         # Do not describe the unchanged legacy gate as newly TLS-admitted.
-        _, legacy = source("serverware/authority_store/planner_connection.py")
+        _, legacy = source("catchplate/authority_store/planner_connection.py")
         admission = definition(legacy, "_require_planner_writer")
         self.assertEqual([ast.unparse(node.func) for node in calls(admission, "_require_postgres_connection")],
                          ["_require_postgres_connection"])

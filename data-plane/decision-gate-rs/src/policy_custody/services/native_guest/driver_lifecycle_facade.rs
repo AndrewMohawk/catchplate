@@ -68,7 +68,7 @@ impl Inspector {
         crate::policy_shadow::policy_custody::services::validate_listener(self.listener.as_fd(),&self.path).map_err(fail)
     }
     pub(super) fn description(&self)->Result<Vec<u8>,ShadowError>{
-        self.check()?;canonical_json_bytes(&wire::FacadeDescription{api_version:"serverware.nativeShadowDriverFacadeDescription/v1".into(),
+        self.check()?;canonical_json_bytes(&wire::FacadeDescription{api_version:"catchplate.nativeShadowDriverFacadeDescription/v1".into(),
             listener_path:self.path.clone(),listener_device:self.listener_identity.0,listener_inode:self.listener_identity.1,
             runtime_configuration_sha256:self.runtime.clone(),scope_sha256:self.scope.clone(),
             process_id:self.source.process.original.process_id,start_time_ticks:self.source.process.original.start_time_ticks,
@@ -97,13 +97,13 @@ impl Inspector {
             && packet.credentials.gid==self.source.gid)?;
         retrieval_peer::same_process(packet.pidfd.as_fd(),packet.credentials.pid)?;
         let notice:wire::AdmissionNotice=exact(&packet.bytes)?;
-        require(notice.api_version=="serverware.nativeShadowDriverPublicAdmissionNotice/v1"
+        require(notice.api_version=="catchplate.nativeShadowDriverPublicAdmissionNotice/v1"
             && notice.observation_sha256==Sha256Digest::compute(&canonical_json_bytes(observation)?)
             && notice.scope_sha256==self.scope)?;
         let file=File::from(packet.rights.into_iter().next().ok_or(ShadowError::BindingDrift)?);
         let raw=wire::read_public(&file,&notice,self.source.uid,self.source.gid)?;
         let originals:wire::PublicAdmission=exact(&raw)?;
-        require(originals.api_version=="serverware.nativeShadowDriverPublicAdmission/v1"
+        require(originals.api_version=="catchplate.nativeShadowDriverPublicAdmission/v1"
             && originals.bootstrap_observation_original.as_bytes()==canonical_json_bytes(observation)?
             && originals.phase_scope_original.as_bytes()==phase.scope()
             && originals.phase_bundle_original.as_bytes()==phase.public_bundle_original()?)?;

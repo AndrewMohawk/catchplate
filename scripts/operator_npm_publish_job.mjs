@@ -113,11 +113,11 @@ try {
   const clientHome = root + '/home', cache = root + '/cache';
   mkdirSync(clientHome, { mode: 0o700 }); mkdirSync(cache, { mode: 0o700 });
   const config = root + '/user.npmrc';
-  const placeholder = phase === 'wrong_placeholder' ? 'serverware-wrong-placeholder-v1' : 'serverware-npm-placeholder-v1';
+  const placeholder = phase === 'wrong_placeholder' ? 'catchplate-wrong-placeholder-v1' : 'catchplate-npm-placeholder-v1';
   writeFileSync(config, [
     'registry=https://registry.npmjs.org/', '//registry.npmjs.org/:_authToken=' + placeholder,
-    'https-proxy=https://' + input.applicationId + ':${SERVERWARE_PROXY_TOKEN}@proxy.operator-basic.example.test:8443',
-    'cache=${SERVERWARE_NPM_CACHE}', 'noproxy=', 'strict-ssl=true', 'fetch-retries=0', 'fetch-timeout=10000',
+    'https-proxy=https://' + input.applicationId + ':${CATCHPLATE_PROXY_TOKEN}@proxy.operator-basic.example.test:8443',
+    'cache=${CATCHPLATE_NPM_CACHE}', 'noproxy=', 'strict-ssl=true', 'fetch-retries=0', 'fetch-timeout=10000',
     'update-notifier=false', 'progress=false', 'logs-max=0', 'loglevel=silent', '',
   ].join('\n'), { flag: 'wx', mode: 0o600 });
   stage = 'npm_spawn';
@@ -125,7 +125,7 @@ try {
     '--globalconfig', '/dev/null', 'publish', tarballPath, '--access=public', '--tag=fixture',
     '--ignore-scripts=true', '--provenance=false', '--force=false', '--dry-run=false', '--workspaces=false', '--json'], {
     cwd: root, env: { LANG: 'C.UTF-8', PATH: '/usr/bin:/bin', HOME: clientHome, NODE_EXTRA_CA_CERTS: extraCa,
-      SERVERWARE_PROXY_TOKEN: input.token, SERVERWARE_NPM_CACHE: cache },
+      CATCHPLATE_PROXY_TOKEN: input.token, CATCHPLATE_NPM_CACHE: cache },
     timeout: 15000, killSignal: 'SIGKILL', maxBuffer: 262144, encoding: 'utf8',
   });
   stage = 'npm_process';
@@ -160,7 +160,7 @@ try {
 } finally {
   clearTimeout(timer);
 }
-process.stdout.write(JSON.stringify({ schema: 'serverware.privateNpmPublishClient/v1', phase,
+process.stdout.write(JSON.stringify({ schema: 'catchplate.privateNpmPublishClient/v1', phase,
   npmVersion: '11.8.0', pacoteVersion: '21.0.4', registryFetchVersion: '19.1.1', strictSSL: true,
   extraCaPreservesDefaultRoots: true, configuredRetries: 0, isolatedCache: true,
   requestRewrite: false, force: false, dryRun: false, provenance: false, ...result }) + '\n');

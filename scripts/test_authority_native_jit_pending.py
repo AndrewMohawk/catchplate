@@ -32,19 +32,19 @@ def no_external_effects(event, _arguments):
 
 
 if __name__ == "__main__":
-    os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
-    os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
+    os.environ["CATCHPLATE_PROCESS_MODE"] = "metadata-bootstrap"
+    os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
     sys.addaudithook(no_external_effects)
 
 from scripts import test_authority_native_jit_review_custody as crypto
-from serverware import authority_audit_capacity as audit_capacity
-from serverware import authority_contract as contract
-from serverware import authority_native_jit_review_custody as custody
-from serverware import authority_native_jit_retention_contract as storage
-from serverware import authority_transition_core as core
-from serverware import authority_transition_native_jit_pending as pending
-from serverware import authority_transition_quota as quota
-from serverware import authority_transition_release as release
+from catchplate import authority_audit_capacity as audit_capacity
+from catchplate import authority_contract as contract
+from catchplate import authority_native_jit_review_custody as custody
+from catchplate import authority_native_jit_retention_contract as storage
+from catchplate import authority_transition_core as core
+from catchplate import authority_transition_native_jit_pending as pending
+from catchplate import authority_transition_quota as quota
+from catchplate import authority_transition_release as release
 
 NOW = datetime.fromtimestamp(crypto.NOW // crypto.SECOND, timezone.utc)
 AGGREGATES = "policy_authority_bounded_aggregate_states"
@@ -66,7 +66,7 @@ def framed(domain, *frames):
 
 def selection(table, key, row=None):
     return {"table": table, "key": copy.deepcopy(key),
-        "keyDigest": framed("serverware.policyAuthorityBusinessKey/v1", table.encode(), canonical(key)),
+        "keyDigest": framed("catchplate.policyAuthorityBusinessKey/v1", table.encode(), canonical(key)),
         "present": row is not None, "row": copy.deepcopy(row), "contractSelector": None}
 
 
@@ -75,16 +75,16 @@ def aggregate(kind, partition, *, limit, count=0, expiry=None):
         "partition_digest": partition, "revision": 1, "live_count": count, "active_count": count,
         "capacity_limit": limit, "reserved_units_json": "{}", "committed_units_json": "{}",
         "next_sequence": count, "minimum_expiry_epoch_ns": expiry,
-        "expiry_index_root_digest": framed("serverware.policyAuthorityAggregateExpiryIndex/v1", b"[]"),
+        "expiry_index_root_digest": framed("catchplate.policyAuthorityAggregateExpiryIndex/v1", b"[]"),
         "work_page_id": None, "updated_at_epoch_ns": crypto.NOW,
         "source_revision": contract.SOURCE_REVISION}
-    state = {"schema": "serverware.policyAuthorityAggregateState/v1",
+    state = {"schema": "catchplate.policyAuthorityAggregateState/v1",
         "aggregateId": row["aggregate_id"], "aggregateKind": kind, "partitionDigest": partition,
         "revision": 1, "liveCount": count, "activeCount": count, "capacityLimit": limit,
         "reservedUnits": {}, "committedUnits": {}, "nextSequence": count,
         "minimumExpiryEpochNs": expiry, "expiryIndexRootDigest": row["expiry_index_root_digest"], "workPageId": None}
     row.update(state_json=canonical(state).decode("ascii"),
-        state_digest=framed("serverware.policyAuthorityAggregateState/v1", canonical(state)))
+        state_digest=framed("catchplate.policyAuthorityAggregateState/v1", canonical(state)))
     return selection(AGGREGATES, {"aggregate_id": row["aggregate_id"]}, row)
 
 
@@ -205,7 +205,7 @@ class NativeJitPendingTests(unittest.TestCase):
                 ("redacted_display", "approval-review-json/v1")):
             self.assertTrue(row[field].startswith("native-jit:v1:"))
             value = json.loads(row[field][len("native-jit:v1:"):])
-            self.assertEqual(value, {"schema": "serverware.nativeJitReviewReference/v1",
+            self.assertEqual(value, {"schema": "catchplate.nativeJitReviewReference/v1",
                 "approvalRequestId": row["id"], "parentRequestDigest": f.parent["requestDigest"],
                 "pairSha256": sha(f.retained["pairOriginal"].encode()), "valueKind": kind})
 
@@ -315,7 +315,7 @@ class NativeJitPendingTests(unittest.TestCase):
         expected = {field: raw[field] for field in ("attempt_id", "flow_id", "principal_id", "route_id",
             "credential_id", "credential_version", "policy_hash", "request_digest", "operation_digest",
             "operation_context", "require_jit_grant")}
-        expected.update(api_version="serverware.nativeReleaseAuthorizationBinding/v2",
+        expected.update(api_version="catchplate.nativeReleaseAuthorizationBinding/v2",
             durable_policy=raw["durable_policy_binding"], approver_policy=crypto.preparation_fixture.approver_policy(),
             shared_quotas=[crypto.preparation_fixture.quota_claim()])
         result = f.transition().result

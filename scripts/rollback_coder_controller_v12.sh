@@ -89,51 +89,51 @@ test "$(id -u)" -eq 0 || fail "controller-v12 rollback must run as root"
 target_release_id=$1
 validate_release_id "$target_release_id"
 
-install_root=/opt/serverware/coder-controller-v12
+install_root=/opt/catchplate/coder-controller-v12
 releases_root=$install_root/releases
 current_link=$install_root/current
-state_root=/var/lib/serverware/coder-controller-v12
+state_root=/var/lib/catchplate/coder-controller-v12
 staging_parent=$state_root/install-staging
-trust_root=/etc/serverware/coder-controller-v12/trust
+trust_root=/etc/catchplate/coder-controller-v12/trust
 systemd_root=/etc/systemd/system
-target_unit=serverware-coder-v12.target
+target_unit=catchplate-coder-v12.target
 release_signer=$trust_root/release-bundle-signer-public-key.pem
 config_authority=$trust_root/configuration-authority-public-key.pem
 witness_verification_key=$trust_root/external-witness-verification-key.pem
 
 units="
-serverware-coder-runtime-v12.service
-serverware-coder-controller-v12.socket
-serverware-coder-plan-executor-v12.socket
-serverware-coder-docker-proxy-v12.socket
-serverware-coder-lifecycle-v12.socket
-serverware-coder-trust-generation-v12.socket
-serverware-coder-external-witness-v12.socket
-serverware-coder-final-settlement-v12.socket
-serverware-coder-receipt-authority-v12.socket
-serverware-coder-final-verdict-authority-v12.socket
-serverware-coder-lifecycle-privileged-v12.socket
-serverware-coder-log-custody-authority-v12.socket
-serverware-coder-private-dind-reconcile-v12.service
-serverware-coder-lifecycle-privileged-v12.service
-serverware-coder-lifecycle-v12.service
-serverware-coder-trust-generation-v12.service
-serverware-coder-external-witness-v12.service
-serverware-coder-final-settlement-v12.service
-serverware-coder-log-custody-authority-v12.service
-serverware-coder-receipt-authority-v12.service
-serverware-coder-final-verdict-authority-v12.service
-serverware-coder-docker-proxy-v12.service
-serverware-coder-plan-executor-v12.service
-serverware-coder-controller-v12.service
-serverware-coder-readiness-v12.service
-serverware-coder-v12.target
+catchplate-coder-runtime-v12.service
+catchplate-coder-controller-v12.socket
+catchplate-coder-plan-executor-v12.socket
+catchplate-coder-docker-proxy-v12.socket
+catchplate-coder-lifecycle-v12.socket
+catchplate-coder-trust-generation-v12.socket
+catchplate-coder-external-witness-v12.socket
+catchplate-coder-final-settlement-v12.socket
+catchplate-coder-receipt-authority-v12.socket
+catchplate-coder-final-verdict-authority-v12.socket
+catchplate-coder-lifecycle-privileged-v12.socket
+catchplate-coder-log-custody-authority-v12.socket
+catchplate-coder-private-dind-reconcile-v12.service
+catchplate-coder-lifecycle-privileged-v12.service
+catchplate-coder-lifecycle-v12.service
+catchplate-coder-trust-generation-v12.service
+catchplate-coder-external-witness-v12.service
+catchplate-coder-final-settlement-v12.service
+catchplate-coder-log-custody-authority-v12.service
+catchplate-coder-receipt-authority-v12.service
+catchplate-coder-final-verdict-authority-v12.service
+catchplate-coder-docker-proxy-v12.service
+catchplate-coder-plan-executor-v12.service
+catchplate-coder-controller-v12.service
+catchplate-coder-readiness-v12.service
+catchplate-coder-v12.target
 "
 
 for path in \
-    /opt/serverware "$install_root" "$releases_root" \
-    /var/lib/serverware "$state_root" "$staging_parent" \
-    /etc/serverware /etc/serverware/coder-controller-v12 "$trust_root" "$systemd_root"
+    /opt/catchplate "$install_root" "$releases_root" \
+    /var/lib/catchplate "$state_root" "$staging_parent" \
+    /etc/catchplate /etc/catchplate/coder-controller-v12 "$trust_root" "$systemd_root"
 do
     test ! -L "$path" || fail "protected rollback path is a symlink: $path"
 done
@@ -146,10 +146,10 @@ do
 done
 
 install -d -o root -g root -m 0755 /run/lock
-exec 9>/run/lock/serverware-coder-controller-v12.install.lock
+exec 9>/run/lock/catchplate-coder-controller-v12.install.lock
 flock --exclusive --nonblock 9 \
     || fail "another controller-v12 install or rollback transaction is active"
-chmod 0600 /run/lock/serverware-coder-controller-v12.install.lock
+chmod 0600 /run/lock/catchplate-coder-controller-v12.install.lock
 
 test -L "$current_link" || fail "current release link is absent or not a symlink"
 current_target=$(readlink "$current_link")
@@ -377,20 +377,20 @@ systemctl is-enabled --quiet "$target_unit" && current_was_enabled=1 || true
 
 stop_units_bounded() {
     timeout --signal=KILL 45s systemctl stop \
-        serverware-coder-controller-v12.service \
-        serverware-coder-plan-executor-v12.service \
-        serverware-coder-docker-proxy-v12.service \
-        serverware-coder-lifecycle-v12.service >/dev/null 2>&1 || true
-    if systemctl is-active --quiet serverware-coder-private-dind-reconcile-v12.service; then
+        catchplate-coder-controller-v12.service \
+        catchplate-coder-plan-executor-v12.service \
+        catchplate-coder-docker-proxy-v12.service \
+        catchplate-coder-lifecycle-v12.service >/dev/null 2>&1 || true
+    if systemctl is-active --quiet catchplate-coder-private-dind-reconcile-v12.service; then
         timeout --signal=KILL 210s systemctl stop \
-            serverware-coder-private-dind-reconcile-v12.service >/dev/null 2>&1 \
+            catchplate-coder-private-dind-reconcile-v12.service >/dev/null 2>&1 \
             || fail "private DinD reconciliation did not produce bounded terminal cleanup"
     fi
     timeout --signal=KILL 45s systemctl stop "$target_unit" $units >/dev/null 2>&1 || true
     for unit in $units
     do
         case "$unit" in
-        serverware-coder-private-dind-reconcile-v12.service) ;;
+        catchplate-coder-private-dind-reconcile-v12.service) ;;
         *.service)
             systemctl kill --kill-who=all --signal=KILL "$unit" >/dev/null 2>&1 || true
             ;;
@@ -408,10 +408,10 @@ restore_current() {
     status=$?
     test "$rollback_required" -eq 1 || exit "$status"
     reconcile_load_state=$(systemctl show --property=LoadState --value \
-        serverware-coder-private-dind-reconcile-v12.service 2>/dev/null || true)
+        catchplate-coder-private-dind-reconcile-v12.service 2>/dev/null || true)
     if test "$reconcile_load_state" = loaded \
         && ! timeout --signal=KILL 210s systemctl stop \
-            serverware-coder-private-dind-reconcile-v12.service >/dev/null 2>&1
+            catchplate-coder-private-dind-reconcile-v12.service >/dev/null 2>&1
     then
         trap - EXIT HUP INT TERM
         echo "rollback target could not complete signed private DinD cleanup; refusing automatic service restoration" >&2
@@ -421,7 +421,7 @@ restore_current() {
     for unit in $units
     do
         case "$unit" in
-        serverware-coder-private-dind-reconcile-v12.service) ;;
+        catchplate-coder-private-dind-reconcile-v12.service) ;;
         *.service)
             systemctl kill --kill-who=all --signal=KILL "$unit" >/dev/null 2>&1 || true
             ;;
@@ -460,31 +460,31 @@ sync -f "$install_root"
 systemctl daemon-reload
 systemctl start "$target_unit"
 for unit in \
-    serverware-coder-runtime-v12.service \
-    serverware-coder-controller-v12.socket \
-    serverware-coder-plan-executor-v12.socket \
-    serverware-coder-docker-proxy-v12.socket \
-    serverware-coder-lifecycle-v12.socket \
-    serverware-coder-trust-generation-v12.socket \
-    serverware-coder-external-witness-v12.socket \
-    serverware-coder-final-settlement-v12.socket \
-    serverware-coder-receipt-authority-v12.socket \
-    serverware-coder-final-verdict-authority-v12.socket \
-    serverware-coder-lifecycle-privileged-v12.socket \
-    serverware-coder-log-custody-authority-v12.socket \
-    serverware-coder-private-dind-reconcile-v12.service \
-    serverware-coder-lifecycle-privileged-v12.service \
-    serverware-coder-lifecycle-v12.service \
-    serverware-coder-trust-generation-v12.service \
-    serverware-coder-external-witness-v12.service \
-    serverware-coder-final-settlement-v12.service \
-    serverware-coder-log-custody-authority-v12.service \
-    serverware-coder-receipt-authority-v12.service \
-    serverware-coder-final-verdict-authority-v12.service \
-    serverware-coder-docker-proxy-v12.service \
-    serverware-coder-plan-executor-v12.service \
-    serverware-coder-controller-v12.service \
-    serverware-coder-readiness-v12.service
+    catchplate-coder-runtime-v12.service \
+    catchplate-coder-controller-v12.socket \
+    catchplate-coder-plan-executor-v12.socket \
+    catchplate-coder-docker-proxy-v12.socket \
+    catchplate-coder-lifecycle-v12.socket \
+    catchplate-coder-trust-generation-v12.socket \
+    catchplate-coder-external-witness-v12.socket \
+    catchplate-coder-final-settlement-v12.socket \
+    catchplate-coder-receipt-authority-v12.socket \
+    catchplate-coder-final-verdict-authority-v12.socket \
+    catchplate-coder-lifecycle-privileged-v12.socket \
+    catchplate-coder-log-custody-authority-v12.socket \
+    catchplate-coder-private-dind-reconcile-v12.service \
+    catchplate-coder-lifecycle-privileged-v12.service \
+    catchplate-coder-lifecycle-v12.service \
+    catchplate-coder-trust-generation-v12.service \
+    catchplate-coder-external-witness-v12.service \
+    catchplate-coder-final-settlement-v12.service \
+    catchplate-coder-log-custody-authority-v12.service \
+    catchplate-coder-receipt-authority-v12.service \
+    catchplate-coder-final-verdict-authority-v12.service \
+    catchplate-coder-docker-proxy-v12.service \
+    catchplate-coder-plan-executor-v12.service \
+    catchplate-coder-controller-v12.service \
+    catchplate-coder-readiness-v12.service
 do
     systemctl is-active --quiet "$unit" \
         || fail "rollback readiness gate failed: $unit"

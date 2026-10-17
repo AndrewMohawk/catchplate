@@ -37,7 +37,7 @@ except ModuleNotFoundError:
 PREFIX = "/api/operator-demo"
 COLLECTIONS = ("credentials", "applications", "access_rules")
 CLAIM_NAME = ".operator-catalog-acceptance.claim"
-MARKER = {"schema": "serverware.privateOperatorAuditFixture/v1", "syntheticOnly": True}
+MARKER = {"schema": "catchplate.privateOperatorAuditFixture/v1", "syntheticOnly": True}
 TOKEN = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
 WARM_MIN_REMAINING_MS = 1000
 WARM_STAGES = {"before_app1_revoke", "before_app2_rotate"}
@@ -76,7 +76,7 @@ def claim_fixture(marker: Path, claim: Path) -> None:
     except FileExistsError:
         raise CheckFailure("fixture acceptance already claimed; never retry this runtime") from None
     with os.fdopen(descriptor, "w", encoding="ascii") as target:
-        target.write('{"schema":"serverware.operatorCatalogClaim/v1","oneShot":true}\n')
+        target.write('{"schema":"catchplate.operatorCatalogClaim/v1","oneShot":true}\n')
         target.flush()
         os.fsync(target.fileno())
     descriptor = os.open(claim.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -106,7 +106,7 @@ class OperatorCatalogCheck(OperatorDemoCheck):
 
     def catalog(self):
         snapshot = self.control_json(PREFIX + "/catalog", authenticated=True)
-        require(isinstance(snapshot, dict) and snapshot.get("schema") == "serverware.operatorCatalog/v1"
+        require(isinstance(snapshot, dict) and snapshot.get("schema") == "catchplate.operatorCatalog/v1"
                 and snapshot.get("mode") == "operator-development"
                 and snapshot.get("productionReady") is False and snapshot.get("hardwareVerified") is False
                 and snapshot.get("allowed_upstreams") == ["https://" + AUTHORITY]
@@ -520,7 +520,7 @@ class OperatorCatalogCheck(OperatorDemoCheck):
         features.checkpoint(self, "lifecycle")
         feature_app, feature_rule = features.run_features(self, credential)
         audit_ids, attempt_ids = self.verify_catalog_audit()
-        result = {"ok": True, "schema": "serverware.operatorCatalogCheck/v1", "mode": "operator-development",
+        result = {"ok": True, "schema": "catchplate.operatorCatalogCheck/v1", "mode": "operator-development",
             "productionReady": False, "hardwareVerified": False, "publicDnsVerified": False,
             "proxyTransport": "private-http-connect-leg" if self.proxy.scheme == "http" else "verified-private-https-edge",
             "originTlsVerified": True, "runId": self.run_id, "checks": self.results,

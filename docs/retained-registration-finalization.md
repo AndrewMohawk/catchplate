@@ -1,6 +1,6 @@
 # Preparing finalization from retained registration originals
 
-[`control_plane_registration_finalization.prepare_retained_registration_finalization`](../serverware/control_plane_registration_finalization.py)
+[`control_plane_registration_finalization.prepare_retained_registration_finalization`](../catchplate/control_plane_registration_finalization.py)
 adds a separately authorized **preparation** facade. It does not finalize a
 credential or report registration success. This source is unbuilt and
 unexecuted; it is not deployment or production acceptance.

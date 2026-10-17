@@ -19,11 +19,11 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_complete_query as complete
-from serverware import authority_index_heads as heads
-from serverware import authority_index_reader as reader
-from serverware import authority_index_trace as trace_contract
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_complete_query as complete
+from catchplate import authority_index_heads as heads
+from catchplate import authority_index_reader as reader
+from catchplate import authority_index_trace as trace_contract
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 import test_authority_index_frontier as frontier_oracle
 import test_authority_index_heads as head_oracle
 
@@ -32,10 +32,10 @@ OPERATION = "webauthn.credential.revoke"
 HEAD_TABLE = "policy_authority_counted_index_heads"
 LEAF_TABLE = "policy_authority_counted_index_leaves"
 NODE_TABLE = "policy_authority_counted_index_nodes"
-HEAD_PROFILE = "serverware.policyAuthorityCountedHeadRead/v1"
-RANGE_PROFILE = "serverware.policyAuthorityCountedIndexRead/v1"
-PRIMARY_PROFILE = "serverware.policyAuthorityCompletePrimaryRead/v1"
-MUTATION_PROFILE = "serverware.policyAuthorityCountedIndexMutationRead/v1"
+HEAD_PROFILE = "catchplate.policyAuthorityCountedHeadRead/v1"
+RANGE_PROFILE = "catchplate.policyAuthorityCountedIndexRead/v1"
+PRIMARY_PROFILE = "catchplate.policyAuthorityCompletePrimaryRead/v1"
+MUTATION_PROFILE = "catchplate.policyAuthorityCountedIndexMutationRead/v1"
 DIGEST = "sha256:" + "a" * 64
 ROLES = (
     ("sessions_pending_webauthn", "oidc_browser_sessions", "webauthn_session_credential_status"),
@@ -61,7 +61,7 @@ def head_marker():
 def context(role=ROLES[2]):
     name, table, index_id = role
     return {"profile": RANGE_PROFILE,
-        "queryId": f"serverware.policyAuthorityQuery/{OPERATION}/{name}/{table}/v1",
+        "queryId": f"catchplate.policyAuthorityQuery/{OPERATION}/{name}/{table}/v1",
         "indexId": index_id, "projectionDigest": DIGEST,
         "indexRevision": 17, "rootDigest": "sha256:" + "b" * 64, "rootCount": 2}
 

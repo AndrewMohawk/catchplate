@@ -1,6 +1,6 @@
 # Historical evidence-planning request authentication
 
-[`authority_webauthn_evidence_plan_request_history.py`](../serverware/authority_webauthn_evidence_plan_request_history.py)
+[`authority_webauthn_evidence_plan_request_history.py`](../catchplate/authority_webauthn_evidence_plan_request_history.py)
 adds a separate private original-byte verifier. The existing live request
 verifier and its expiry semantics remain unchanged. This implementation is
 source-only; it has not been executed or admitted for production.

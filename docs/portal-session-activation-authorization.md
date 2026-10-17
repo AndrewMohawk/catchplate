@@ -19,7 +19,7 @@ browser-entered keys or target identities are never posted as authority.
 Every call obtains new options with its exact schema, profile and purpose,
 then collects a real assertion from the server's sole target key. Activation
 also fetches `/api/auth/session/webauthn/options`, validates the distinct
-`serverware.challenge_id`, narrows that actual allowed-key list to the same
+`catchplate.challenge_id`, narrows that actual allowed-key list to the same
 target, and collects a second real assertion. Permission and planning proofs
 are never reused or substituted for one another. A later approval continuation
 repeats both activation ceremonies, or the selected recovery ceremony.
@@ -34,7 +34,7 @@ do not replace the server's current-session and original-evidence admission.
 ## Approval is not automatic retry
 
 Only the actual server approval gate's bounded HTTP 428 projection is accepted:
-`serverware.oidcSessionActivationApprovalRequired/v1`, exact action/resource/
+`catchplate.oidcSessionActivationApprovalRequired/v1`, exact action/resource/
 payload binding, an approval ID, `dispatchState: approval-required`,
 `automaticRetryAllowed: false` and `freshAuthorizationRequired: true`.
 `sessionActivationApproval` rejects ordinary 428s, mismatched bindings and all

@@ -25,8 +25,8 @@ EXTERNAL_FIELDS = frozenset({
 class RevocationWriterActionSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.text, cls.tree = source("serverware/authority_revocation_writer_action.py", 64 * 1024)
-        _, cls.service = source("serverware/authority_service.py", 2 * 1024 * 1024)
+        cls.text, cls.tree = source("catchplate/authority_revocation_writer_action.py", 64 * 1024)
+        _, cls.service = source("catchplate/authority_service.py", 2 * 1024 * 1024)
         cls.process = definition(cls.service, "AuthorityProcess")
         cls.action = definition(cls.process, "_persist_and_reserve_revocation_plan")
         cls.continuation = definition(cls.service, "_revocation_writer_from_owned_configuration")
@@ -39,12 +39,12 @@ class RevocationWriterActionSourceTests(unittest.TestCase):
             for node in self.tree.body if isinstance(node, ast.ImportFrom)]
         self.assertEqual(imports, [("__future__", (("annotations", None),)),
             ("datetime", (("datetime", None), ("timezone", None))),
-            ("serverware", (("authority_contract", "authority"),)),
-            ("serverware", (("authority_revocation_retention", "retention"),))])
+            ("catchplate", (("authority_contract", "authority"),)),
+            ("catchplate", (("authority_revocation_retention", "retention"),))])
         self.assertFalse(any(isinstance(node, ast.Import) for node in self.tree.body))
         self.shape(assigned(self.tree, "_EXTERNAL_FIELDS"), '''retention.wire._EXPECTATIONS - {
             "planner_public_key", "verifier_public_key", "expected_planner_identity", "expected_verifier_identity"}''')
-        _, plan = source("serverware/authority_revocation_plan.py", 256 * 1024)
+        _, plan = source("catchplate/authority_revocation_plan.py", 256 * 1024)
         fields = assigned(plan, "_VERIFICATION_INPUTS").args[0]
         self.assertEqual({item.value for item in fields.elts} - {"envelope", "planner_public_key",
             "verifier_public_key", "expected_planner_identity", "expected_verifier_identity"}, EXTERNAL_FIELDS)
@@ -110,10 +110,10 @@ class RevocationWriterActionSourceTests(unittest.TestCase):
         self.shape(skew, 'retention.plan.contract._integer(owned["maximum_clock_skew_ns"])')
         self.assertEqual([node.lineno for node in (owned, request, positive, skew, roots, joined)],
                          sorted(node.lineno for node in (owned, request, positive, skew, roots, joined)))
-        _, contract = source("serverware/authority_revocation_plan_contract.py", 64 * 1024)
+        _, contract = source("catchplate/authority_revocation_plan_contract.py", 64 * 1024)
         integer = definition(contract, "_integer")
         self.shape(integer.body[0].test, "type(value) is not int or not minimum <= value <= maximum")
-        _, plan = source("serverware/authority_revocation_plan.py", 256 * 1024)
+        _, plan = source("catchplate/authority_revocation_plan.py", 256 * 1024)
         self.shape(definition(plan, "_same").body[0].value,
                    "semantics._canonical_equal(left, right, work=work, label=label)")
         forbidden = {"_ValidationWork", "QueryReadValidationLimits", "_PackagingLedger", "Ed25519PublicKey",
@@ -150,7 +150,7 @@ class RevocationWriterActionSourceTests(unittest.TestCase):
         self.assertFalse(any(isinstance(node, ast.Return) for node in ast.walk(policy)))
         self.assertFalse(calls(policy, "retention.capture._JSONCapture"))
         self.assertNotIn("planner-writer", ast.unparse(policy))
-        _, authority = source("serverware/authority_contract.py", 512 * 1024)
+        _, authority = source("catchplate/authority_contract.py", 512 * 1024)
         self.shape(assigned(authority, "VERIFIER_RESPONSE_MAX_AGE_NS"), "30 * 1_000_000_000")
         self.shape(assigned(authority, "VERIFIER_MAX_CLOCK_SKEW_NS"), "5 * 1_000_000_000")
 
@@ -214,7 +214,7 @@ class RevocationWriterActionSourceTests(unittest.TestCase):
         for actual, expected in zip(callbacks, (
                 'authority_revocation_configuration.production._callback(work, lambda: authority_launch_guard.require_active("planner-writer"))',
                 '''authority_revocation_configuration.production._callback(work,
-                    lambda: _read_dsn_descriptor("SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN"))''',
+                    lambda: _read_dsn_descriptor("CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN"))''',
                 'authority_revocation_configuration.production._callback(work, lambda: dict(authority_launch_guard.generation()))')):
             self.shape(actual, expected)
         mapped = call(continuation, "authority_revocation_writer_configuration._persistence_from_configuration_on_work")
@@ -229,7 +229,7 @@ class RevocationWriterActionSourceTests(unittest.TestCase):
         self.assertLess(held.lineno, mapped.lineno)
         self.assertFalse(any(isinstance(node, ast.Name) and node.id in {"self", "opener", "operation"}
                              for node in ast.walk(continuation)))
-        _, mapper = source("serverware/authority_revocation_writer_configuration.py", 64 * 1024)
+        _, mapper = source("catchplate/authority_revocation_writer_configuration.py", 64 * 1024)
         factory = definition(mapper, "_persistence_from_configuration_on_work")
         recapture = call(factory, "configuration._capture_configuration_on_work")
         self.shape(recapture, '''configuration._capture_configuration_on_work(payload=payload,
@@ -241,7 +241,7 @@ class RevocationWriterActionSourceTests(unittest.TestCase):
                          sorted(node.lineno for node in (recapture, *keys, actual_owner)))
 
     def test_action_suffix_keeps_genuine_atomic_capture_and_two_original_byte_replays(self):
-        _, persistence = source("serverware/authority_revocation_persistence.py", 64 * 1024)
+        _, persistence = source("catchplate/authority_revocation_persistence.py", 64 * 1024)
         atomic = definition(definition(persistence, "RevocationPlannerPersistence"), "persist_and_reserve_execution")
         self.shape(call(atomic, "_persist_and_reserve_on_configuration"),
             '''_persist_and_reserve_on_configuration(configuration,
@@ -272,14 +272,14 @@ class RevocationWriterActionSourceTests(unittest.TestCase):
             connection=connection, work=work, **expectations)''')
         self.shape(operation.body[-1].value, "result")
         self.shape(inner.body[-1].value, "(retained_receipt, execution_reservation)")
-        _, store = source("serverware/authority_store/revocation_retention.py", 64 * 1024)
+        _, store = source("catchplate/authority_store/revocation_retention.py", 64 * 1024)
         initial = definition(store, "persist_revocation_planner_record")
         replay = definition(store, "_read_revocation_record_on_work")
         self.shape(call(initial, "retention._verify_record_on_work"), '''retention._verify_record_on_work(
             envelope_bytes=envelope_bytes, evaluation_context_bytes=evaluation_context_bytes, work=work, **expectations)''')
         self.shape(call(replay, "retention._verify_record_on_work"), '''retention._verify_record_on_work(
             envelope_bytes=envelope, evaluation_context_bytes=context, work=work, **expectations)''')
-        _, execution = source("serverware/authority_store/revocation_execution.py", 64 * 1024)
+        _, execution = source("catchplate/authority_store/revocation_execution.py", 64 * 1024)
         reserved_read = call(definition(execution, "reserve_revocation_execution_envelope"), "store._read_revocation_record_on_work")
         self.shape(reserved_read, '''store._read_revocation_record_on_work(planner_transaction_id=planner_transaction_id,
             connection=connection, work=work, _expected_raw=raw, expectations=owned)''')
@@ -309,7 +309,7 @@ class RevocationWriterActionSourceTests(unittest.TestCase):
         self.assertLess(peer.lineno, call(served, "self.process.handle").lineno)
         self.assertFalse(calls(self.service, "self._persist_and_reserve_revocation_plan"))
         self.assertFalse(calls(self.service, "self._revocation_planner_persistence"))
-        _, registry = source("serverware/authority_transition_registry.py")
+        _, registry = source("catchplate/authority_transition_registry.py")
         self.shape(assigned(registry, "_CLOSURE_ERRORS"), "_registry_closure_errors()")
         closed, = [node for node in registry.body if isinstance(node, ast.If)]
         self.shape(closed.test, "_CLOSURE_ERRORS")

@@ -1,7 +1,7 @@
 //! Opt-in native capture orchestration. This is local evidence, not release authority.
 use super::*;
 use super::proof_client_native_verifier_v1::NativeResponseVerifierV1;
-use serverware_decision_gate::response_principal_compatibility_v1::{
+use catchplate_decision_gate::response_principal_compatibility_v1::{
     require_response_principal_compatible, ResponseProofPrincipalProfile,
 };
 use std::net::{IpAddr, SocketAddr};
@@ -115,7 +115,7 @@ impl NativeCaptureSessionV1 {
             || args.expected_principal_id != args.expected_principal_id.trim()
             || args.expected_principal_id.len() > maximum_principal
             || args.expected_principal_id.chars().any(char::is_control)
-            || args.proxy_headers.iter().any(|(name, value)| name.eq_ignore_ascii_case("x-serverware-agent")
+            || args.proxy_headers.iter().any(|(name, value)| name.eq_ignore_ascii_case("x-catchplate-agent")
                 && (value.is_empty() || value != value.trim() || value.len() > maximum_principal
                     || value.chars().any(char::is_control))) {
             return Err("native principal arguments exceed the admitted ingress profile".to_owned());
@@ -321,9 +321,9 @@ impl NativeCaptureSessionV1 {
         let verification = self.verifier.verify(proof, nonce, self.deadline)?;
         capture["runtime_proof_sha256"] = json!(runtime_digest);
         let mut artifact = json!({
-            "apiVersion":if self.native_principal_profile() { "serverware.nativeResponseCapture/v2" }
-                else { "serverware.nativeResponseCapture/v1" },
-            "kind":"ServerwareNativeResponseCapture",
+            "apiVersion":if self.native_principal_profile() { "catchplate.nativeResponseCapture/v2" }
+                else { "catchplate.nativeResponseCapture/v1" },
+            "kind":"CatchplateNativeResponseCapture",
             "resultScope":"local-capture-and-native-quote-only",
             "okForAction":false,
             "environment":"native-unadmitted",

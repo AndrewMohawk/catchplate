@@ -21,12 +21,12 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
-from serverware.authority_store import revocation_capability_sql as renderer
+from catchplate import authority_contract
+from catchplate.authority_store import revocation_capability_sql as renderer
 
 
-LOAD = "serverware_policy_authority_load_revocation_issuance"
-ISSUE = "serverware_policy_authority_issue_revocation_capability"
+LOAD = "catchplate_policy_authority_load_revocation_issuance"
+ISSUE = "catchplate_policy_authority_issue_revocation_capability"
 SIGNATURES = {LOAD: ("text",) * 6, ISSUE: ("text",) * 8}
 ISSUER_ARGUMENTS = ("supplied_issuer_measurement_digest", "supplied_issuer_attestation_receipt_digest",
     "supplied_issuer_credential_issuance_digest")
@@ -79,19 +79,19 @@ def compact(value):
 class RevocationIssuanceSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.sql_source, cls.sql_tree = read_source("serverware/authority_store/revocation_capability_sql.py")
-        cls.owner_source, cls.owner_tree = read_source("serverware/authority_store/revocation_capability.py")
-        cls.db_source, cls.db_tree = read_source("serverware/db.py", 16 * 1024 * 1024)
-        cls.schema_source, cls.schema_tree = read_source("serverware/authority_store/schema.py")
-        cls.executor_source, cls.executor_tree = read_source("serverware/authority_store/executor_v9.py")
-        cls.service_source, cls.service_tree = read_source("serverware/authority_service.py")
+        cls.sql_source, cls.sql_tree = read_source("catchplate/authority_store/revocation_capability_sql.py")
+        cls.owner_source, cls.owner_tree = read_source("catchplate/authority_store/revocation_capability.py")
+        cls.db_source, cls.db_tree = read_source("catchplate/db.py", 16 * 1024 * 1024)
+        cls.schema_source, cls.schema_tree = read_source("catchplate/authority_store/schema.py")
+        cls.executor_source, cls.executor_tree = read_source("catchplate/authority_store/executor_v9.py")
+        cls.service_source, cls.service_tree = read_source("catchplate/authority_service.py")
         cls.sql = renderer.revocation_capability_functions_sql(SQL_NAMESPACE, **CONFIGURATION)
         cls.functions = {}
         for name in (LOAD, ISSUE):
             matches = re.findall(r"CREATE OR REPLACE FUNCTION " + re.escape(SQL_NAMESPACE) + r"\." + name
                 + r"\((.*?)\)\s*RETURNS pg_catalog\.jsonb LANGUAGE plpgsql SECURITY DEFINER VOLATILE"
                 + r"\s*SET search_path = pg_catalog, " + re.escape(SQL_NAMESPACE) + r", pg_temp"
-                + r"\s*AS \$serverware_revocation_issuer\$(.*?)\$serverware_revocation_issuer\$;",
+                + r"\s*AS \$catchplate_revocation_issuer\$(.*?)\$catchplate_revocation_issuer\$;",
                 cls.sql, re.S)
             if len(matches) != 1:
                 raise AssertionError("actual rendered issuer definition is not unique: " + name)
@@ -149,7 +149,7 @@ class RevocationIssuanceSourceTests(unittest.TestCase):
             for argument, pin in zip(ISSUER_ARGUMENTS, ("1", "2", "3")):
                 self.assertIn(argument + " IS DISTINCT FROM 'sha256:" + pin * 64 + "'", body)
             self.assertLess(body.index("revocation issuer identity is not pinned"), body.index("SELECT * INTO STRICT fence_row"))
-            self.assertIn("'serverware.policyAuthorityCapabilityIssuerSession/v1', session_user, rvi_tls_dn, rvi_tls_serial, rvi_tls_issuer", body)
+            self.assertIn("'catchplate.policyAuthorityCapabilityIssuerSession/v1', session_user, rvi_tls_dn, rvi_tls_serial, rvi_tls_issuer", body)
 
     def test_lock_order_uses_actual_fence_table_and_original_unused_parent_envelope(self):
         self.assertNotIn("policy_authority_replay_fences", self.sql)
@@ -196,8 +196,8 @@ class RevocationIssuanceSourceTests(unittest.TestCase):
         for prefix, maximum in (("rvi_envelope", 4 * 1024 * 1024), ("rvi_request", 64 * 1024)):
             self.assertIn("octet_length(" + prefix + "_bytes) NOT BETWEEN 2 AND " + str(maximum), source)
             self.assertIn("convert_to(rvi_canonical, 'UTF8') IS DISTINCT FROM " + prefix + "_bytes", source)
-            self.assertIn("serverware_policy_authority_wire_walk( " + prefix + ", 16, 4096, " + str(maximum) + ", FALSE)", source)
-            self.assertIn("serverware_policy_authority_wire_walk( " + prefix + ", 16, rv_measured.visited_nodes, rv_measured.emitted_bytes, TRUE)", source)
+            self.assertIn("catchplate_policy_authority_wire_walk( " + prefix + ", 16, 4096, " + str(maximum) + ", FALSE)", source)
+            self.assertIn("catchplate_policy_authority_wire_walk( " + prefix + ", 16, rv_measured.visited_nodes, rv_measured.emitted_bytes, TRUE)", source)
         self.assertEqual(source.count("revocation issuer signature transport is not exact"), 3)
         for literal in ("original transport is not ASCII", "original JSON is not canonical",
                 "original transport is not exact", "revocation issuer original execution bytes changed"):
@@ -214,8 +214,8 @@ class RevocationIssuanceSourceTests(unittest.TestCase):
             "authoritySnapshotDigest", "exactRequestBytesDigest", "capabilityDigest", "signerKeyDigest", "witnessKeyDigest",
             "envelopeDigest", "envelopeByteCount", "witnessRequestBytesDigest", "witnessRequestByteCount"))
         source = compact(self.functions[ISSUE][1])
-        self.assertIn("serverware_policy_authority_framed_digest('serverware.policyAuthorityWebAuthnCredentialBinding/v1', rvi_webauthn_text)", source)
-        self.assertIn("'serverware.policyAuthorityWebAuthnChallengeRow/v1', rvi_canonical", source)
+        self.assertIn("catchplate_policy_authority_framed_digest('catchplate.policyAuthorityWebAuthnCredentialBinding/v1', rvi_webauthn_text)", source)
+        self.assertIn("'catchplate.policyAuthorityWebAuthnChallengeRow/v1', rvi_canonical", source)
         self.assertIn("WHERE value->>'table' = 'webauthn_credentials'", source)
         self.assertIn("'aaguid', rvi_credential->'aaguid'", source)
         for anchor in ("revocation issuer capability payload binding changed",
@@ -331,8 +331,8 @@ class RevocationIssuanceSourceTests(unittest.TestCase):
     def test_legacy_retry_witness_executor_and_failure_guards_precede_old_authority_paths(self):
         installer = ast.get_source_segment(self.executor_source,
             named(self.executor_tree, "install_authority_v9_executor"))
-        writer = installer.split("AS $serverware_issue_writer_capability_v3$", 1)[1].split(
-            "$serverware_issue_writer_capability_v3$", 1)[0]
+        writer = installer.split("AS $catchplate_issue_writer_capability_v3$", 1)[1].split(
+            "$catchplate_issue_writer_capability_v3$", 1)[0]
         writer = compact(writer)
         self.assertLess(writer.index("legacy writer issuer requires v3 capability protocol"),
             writer.index("RETURN capability_value->>'capabilityId'"))
@@ -355,7 +355,7 @@ class RevocationIssuanceSourceTests(unittest.TestCase):
         for tree in (self.service_tree, self.executor_tree):
             self.assertFalse(calls(tree, "_issue_on_connection"))
         self.assertNotIn("authority_store.revocation_capability", self.service_source)
-        self.assertNotIn("serverware_policy_authority_load_revocation_issuance", self.service_source)
+        self.assertNotIn("catchplate_policy_authority_load_revocation_issuance", self.service_source)
 
 
 if __name__ == "__main__":

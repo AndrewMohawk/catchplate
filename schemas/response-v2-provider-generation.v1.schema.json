@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/response-v2-provider-generation.v1.schema.json",
-  "title": "Serverware Response v2 Provider Generation",
+  "$id": "https://catchplate.invalid/schemas/response-v2-provider-generation.v1.schema.json",
+  "title": "Catchplate Response v2 Provider Generation",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -23,10 +23,10 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.responseV2.providerGeneration/v1"
+      "const": "catchplate.responseV2.providerGeneration/v1"
     },
     "kind": {
-      "const": "ServerwareResponseV2ProviderGeneration"
+      "const": "CatchplateResponseV2ProviderGeneration"
     },
     "schemaVersion": {
       "const": "1"
@@ -184,7 +184,7 @@
           "$comment": "Informational binding only. Verification MUST use an independently pinned generation trust anchor and MUST NOT trust a key merely because this document names it."
         },
         "signingDomain": {
-          "const": "serverware.responseV2.providerGeneration.signature/v1"
+          "const": "catchplate.responseV2.providerGeneration.signature/v1"
         },
         "signedPayloadSha256": {
           "$ref": "#/$defs/sha256"

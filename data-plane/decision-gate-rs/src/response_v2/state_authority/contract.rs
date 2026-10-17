@@ -2,46 +2,46 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 pub const STATE_AUTHORITY_API_VERSION: &str =
-    "serverware.responseV2.stateAuthority/v1";
+    "catchplate.responseV2.stateAuthority/v1";
 pub const STATE_AUTHORITY_SCHEMA_VERSION: &str = "1";
 pub const STATE_AUTHORITY_RPC_KIND: &str =
-    "ServerwareResponseV2StateAuthorityRpc";
+    "CatchplateResponseV2StateAuthorityRpc";
 pub const STATE_AUTHORITY_RESULT_KIND: &str =
-    "ServerwareResponseV2StateAuthorityResult";
+    "CatchplateResponseV2StateAuthorityResult";
 pub const STATE_AUTHORITY_GENERATION_RPC_KIND: &str =
-    "ServerwareResponseV2StateAuthorityGenerationRpc";
+    "CatchplateResponseV2StateAuthorityGenerationRpc";
 pub const STATE_AUTHORITY_GENERATION_RESULT_KIND: &str =
-    "ServerwareResponseV2StateAuthorityGenerationResult";
+    "CatchplateResponseV2StateAuthorityGenerationResult";
 pub const PROVIDER_GENERATION_API_VERSION: &str =
-    "serverware.responseV2.providerGeneration/v1";
+    "catchplate.responseV2.providerGeneration/v1";
 pub const PROVIDER_GENERATION_KIND: &str =
-    "ServerwareResponseV2ProviderGeneration";
+    "CatchplateResponseV2ProviderGeneration";
 pub const NESTED_AUTHORITY_API_VERSION: &str =
-    "serverware.responseV2.nestedAuthorityArtifact/v1";
+    "catchplate.responseV2.nestedAuthorityArtifact/v1";
 pub const NESTED_AUTHORITY_KIND: &str =
-    "ServerwareResponseV2NestedAuthorityArtifact";
+    "CatchplateResponseV2NestedAuthorityArtifact";
 pub const FINAL_ENVELOPE_API_VERSION: &str =
-    "serverware.responseV2.canonicalFinalEnvelope/v1";
+    "catchplate.responseV2.canonicalFinalEnvelope/v1";
 pub const FINAL_ENVELOPE_KIND: &str =
-    "ServerwareResponseV2CanonicalFinalEnvelope";
+    "CatchplateResponseV2CanonicalFinalEnvelope";
 pub const IMMUTABLE_RAW_OBJECT_API_VERSION: &str =
-    "serverware.responseV2.immutableRawObject/v1";
+    "catchplate.responseV2.immutableRawObject/v1";
 pub const IMMUTABLE_RAW_OBJECT_KIND: &str =
-    "ServerwareResponseV2ImmutableRawObject";
+    "CatchplateResponseV2ImmutableRawObject";
 pub const SIGNED_CHECKPOINT_API_VERSION: &str =
-    "serverware.responseV2.signedCheckpoint/v1";
+    "catchplate.responseV2.signedCheckpoint/v1";
 pub const SIGNED_CHECKPOINT_KIND: &str =
-    "ServerwareResponseV2SignedCheckpoint";
+    "CatchplateResponseV2SignedCheckpoint";
 pub const RESUME_RECORD_API_VERSION: &str =
-    "serverware.responseV2.resumeRecord/v1";
+    "catchplate.responseV2.resumeRecord/v1";
 pub const RELEASE_REPLAY_API_VERSION: &str =
-    "serverware.responseV2.releaseReplay/v1";
+    "catchplate.responseV2.releaseReplay/v1";
 pub const TRUSTED_HOST_ATTESTATION_MODE: &str = "TrustedHostNoTee";
 pub const LOCAL_FAULT_DOMAIN_ID: &str = "host-1";
 pub const LOCAL_QUORUM_PROFILE: &str = "LOCAL_1_OF_1";
 pub const SIGNATURE_ALGORITHM: &str = "Ed25519";
 pub const JCS_PROFILE: &str =
-    "RFC8785-JCS/serverware-safe-integers-unique-keys/v1";
+    "RFC8785-JCS/catchplate-safe-integers-unique-keys/v1";
 pub const DIGEST_PREFIX: &str = "sha256:";
 pub const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 

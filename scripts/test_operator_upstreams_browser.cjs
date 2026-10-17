@@ -11,7 +11,7 @@ const {review, receipt, OLD, TARGET, FIXTURE, NPM, digest} = require('./test_ope
 const ROOT = resolve(__dirname, '..');
 const ORIGIN = 'https://operator-catalog.example.test';
 const PATH = '/api/operator-demo/proxy/upstreams';
-const STORAGE = 'serverware.operator.upstreams.operation.v1';
+const STORAGE = 'catchplate.operator.upstreams.operation.v1';
 const clone = value => JSON.parse(JSON.stringify(value));
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 function reviewed(state) {
@@ -24,7 +24,7 @@ function reviewed(state) {
 function terminal(state, status) {
   const value = {...clone(state.operation), status, revision: ++state.revision, completed_at: '2026-10-10T12:01:00+00:00'};
   if (status === 'activated') {
-    value.activation_receipt = {schema: 'serverware.operatorUpstreamSetupActivation/v1', operation_id: value.operation_id,
+    value.activation_receipt = {schema: 'catchplate.operatorUpstreamSetupActivation/v1', operation_id: value.operation_id,
       activated_revision: value.revision, policy_hash: value.policy_hash, settings_digest: value.target_settings_digest, activated_at: value.completed_at};
     state.settings = clone(value.target_settings); state.settingsDigest = value.target_settings_digest;
     state.allowedUpstreams = [...state.settings.allowed_upstreams];
@@ -83,7 +83,7 @@ async function fixture(browser, config, exercise) {
     };
     await controls.context.route(ORIGIN + PATH, handler); await controls.context.route(ORIGIN + PATH + '/**', handler);
     await page.reload({waitUntil: 'networkidle'}); await ready(page);
-    assert.equal(await page.title(), 'Overview - Serverware operator workspace'); assert.equal(new URL(page.url()).origin, ORIGIN);
+    assert.equal(await page.title(), 'Overview - Catchplate operator workspace'); assert.equal(new URL(page.url()).origin, ORIGIN);
     await exercise(page, state, observed);
     assert.deepEqual(state.posts, [], 'no unrelated catalog, token or notification writes');
     assert.deepEqual({credentials: state.credentials, applications: state.applications, rules: state.rules}, resourceBefore);
@@ -164,14 +164,14 @@ const tests = [
   })],
 ];
 async function hashes() {
-  const assets = await readdir(join(ROOT, 'serverware/operator_demo_web'));
+  const assets = await readdir(join(ROOT, 'catchplate/operator_demo_web'));
   const files = ['scripts/test_operator_upstreams_browser.cjs', 'scripts/test_operator_upstreams_ui.cjs',
-    'scripts/test_operator_catalog_browser.cjs', 'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
-    ...assets.filter(name => /\.(?:js|css|html)$/.test(name)).sort().map(name => 'serverware/operator_demo_web/' + name)];
+    'scripts/test_operator_catalog_browser.cjs', 'scripts/test_operator_ordinary_modes_browser.cjs', 'catchplate/operator_demo_portal.py',
+    ...assets.filter(name => /\.(?:js|css|html)$/.test(name)).sort().map(name => 'catchplate/operator_demo_web/' + name)];
   return Object.fromEntries(await Promise.all(files.map(async name => [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')])));
 }
 async function runSuite(browser) {
-  const before = await hashes(); const directory = await mkdtemp('/tmp/serverware-upstreams-browser-');
+  const before = await hashes(); const directory = await mkdtemp('/tmp/catchplate-upstreams-browser-');
   console.log(JSON.stringify({phase: 'source-before', hashes: before, artifactDirectory: directory}));
   const contexts = new Set(); let finished = false; let timeout; let passed = 0;
   const bounded = {async newContext(...args) {

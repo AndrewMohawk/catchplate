@@ -60,7 +60,7 @@ currentness checks and actual proxy dispatch remain separate unfinished work.
 
 ## Verified foundation (2026-10-10)
 
-[`aws_ecr_signing.py`](../serverware/aws_ecr_signing.py) and
+[`aws_ecr_signing.py`](../catchplate/aws_ecr_signing.py) and
 [`aws_ecr_signing.rs`](../data-plane/decision-gate-rs/src/aws_ecr_signing.rs)
 implement a closed five-action ECR SigV4 primitive, exact outbound request
 comparison, and separate freshness checks. They are **not wired into credential
@@ -88,7 +88,7 @@ Reproducible test sources:
 [`test_aws_ecr_signing.py`](../scripts/test_aws_ecr_signing.py),
 [`test_aws_ecr_sdk_contract.py`](../scripts/test_aws_ecr_sdk_contract.py), and the
 Rust module's embedded tests. Local receipts are retained under
-`serverware-operator-workspace-evidence/aws-ecr-signing.EWMxu1ty` (outside Git).
+`catchplate-operator-workspace-evidence/aws-ecr-signing.EWMxu1ty` (outside Git).
 The integration and real-provider acceptance gates below remain open.
 
 ## Product flow and existing source boundary
@@ -105,10 +105,10 @@ explicitly leaves its integration open. The
 [workspace requirements](operator-workspace-requirements.md#what-the-original-examples-imply)
 distinguish operation bundles from generic header replacement and optional
 content restrictions. Current `CredentialInput` in
-[`operator_catalog_inputs.py`](../serverware/operator_catalog_inputs.py) only
+[`operator_catalog_inputs.py`](../catchplate/operator_catalog_inputs.py) only
 admits bearer/header secrets; the separate `AwsSigV4CredentialInput` implements
 [encrypted AWS tuple management](operator-aws-credentials.md), without granting
-AWS access. [`policy_engine.py`](../serverware/policy_engine.py)
+AWS access. [`policy_engine.py`](../catchplate/policy_engine.py)
 `_secret_for_injection`/`_inject_credential` are not an AWS signing interface.
 
 Default permissions must be narrow, explicit presets, not `service:*` or an IAM
@@ -134,7 +134,7 @@ required YubiKey approval from that original publication journey.
   credentials and ambiguous duplicate authentication fields. Dummy signatures
   are not proof of identity, account ownership or permission.
 - After route/operation authorization, consume the dummy authentication and
-  construct **real SigV4 for the final outbound request** inside Serverware.
+  construct **real SigV4 for the final outbound request** inside Catchplate.
   Bind method, URI/query, selected headers, exact body bytes/hash, service,
   region, policy, application and current credential generation. Recheck the
   built request immediately before dispatch; no later rewrite may invalidate

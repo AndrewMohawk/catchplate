@@ -17,8 +17,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_jit_assertion_replay as replay
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_jit_assertion_replay as replay
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 from test_authority_jit_assertion_planning import originals, configuration
 from test_authority_radix_mutation import IndependentTree
 from test_authority_radix_proof import sql_digest, sql_json
@@ -61,7 +61,7 @@ def fixture():
         for business_row in trees[profile.table].rows.values():
             key = trees[profile.table].key(business_row)
             selected_row = trees[profile.table].selected(key)
-            digest = sql_digest("serverware.policyAuthorityAuthenticatedRow/v1",
+            digest = sql_digest("catchplate.policyAuthorityAuthenticatedRow/v1",
                 profile.table.encode("ascii"), sql_json(business_row))
             leaf = replay.projection.project_row(identity, business_row,
                 primary_key_digest=selected_row["keyDigest"], primary_row_digest=digest)

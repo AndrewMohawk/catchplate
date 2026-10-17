@@ -31,35 +31,35 @@ def configuration(family):
     base = {"application_id": APP, "access_rule_id": "00000000-0000-4000-8000-000000000002",
         "proxy_authentication": "basic_and_bearer_v1", "proxy_username": APP, "proxy_password": TOKEN,
         "proxy_url": "https://proxy.example.test:8443", "token_expires_at_epoch_ms": 2**53 - 1,
-        "ca_file": "./serverware-ca.pem", "credential_input": "replace_exact", "methods": ["GET"]}
+        "ca_file": "./catchplate-ca.pem", "credential_input": "replace_exact", "methods": ["GET"]}
     if family in {"github_read", "github_write"}:
         base.update(operation_bundle="github_issues_" + ("read" if family == "github_read" else "write") + "_v1",
             repository={"owner": "fixture-owner", "name": "fixture-repo"},
             upstream_url="https://api.github.com/repos/fixture-owner/fixture-repo/issues",
             response_mode="unfiltered_json_or_empty_v2", request_body_mode="preserve_json_v1", query_mode="githubRestV1",
-            request_headers={"Authorization": "token serverware-github-placeholder-v1"},
+            request_headers={"Authorization": "token catchplate-github-placeholder-v1"},
             methods=["GET"] if family == "github_read" else ["GET", "POST"])
     elif family == "gmail":
         base.update(operation_bundle="gmail_read_v1", age_policy={"mode": "unrestricted"}, query_mode="orderedFormV1",
             upstream_url="https://gmail.googleapis.com/gmail/v1/users/me/messages", response_mode="gmail_read_json_v1",
-            request_headers={"Authorization": "Bearer serverware-gmail-placeholder-v1"})
+            request_headers={"Authorization": "Bearer catchplate-gmail-placeholder-v1"})
     elif family == "alchemy":
         base.update(operation_bundle="alchemy_chain_status_read_v1", chain="eth-sepolia",
             rpc_methods=["eth_chainId", "eth_blockNumber"], upstream_url="https://eth-sepolia.g.alchemy.com/v2",
             response_mode="alchemy_rpc_read_json_v1", methods=["POST"],
-            request_headers={"Authorization": "Bearer serverware-alchemy-placeholder-v1", "Content-Type": "application/json"})
+            request_headers={"Authorization": "Bearer catchplate-alchemy-placeholder-v1", "Content-Type": "application/json"})
     elif family == "x_lookup":
         base.update(operation_bundle="x_username_read_v1", username="fixture_user",
             upstream_url="https://api.x.com/2/users/by/username/fixture_user", response_mode="x_app_read_json_v1",
-            request_headers={"Authorization": "Bearer serverware-x-placeholder-v1"})
+            request_headers={"Authorization": "Bearer catchplate-x-placeholder-v1"})
     elif family == "x_post":
         base.update(operation_bundle="x_text_post_v1", upstream_url="https://api.x.com/2/tweets",
             response_mode="x_post_json_v1", methods=["POST"],
-            request_headers={"Authorization": "Bearer serverware-x-post-placeholder-v1"})
+            request_headers={"Authorization": "Bearer catchplate-x-post-placeholder-v1"})
     else:
         base.update(operation_bundle="npm_metadata_read_v1", upstream_url="https://registry.npmjs.org/",
             packages=["@fixture/package", "unscoped"], client_recipe={"package": "@fixture/package"},
-            response_mode="npm_metadata_json_v1", request_headers={"Authorization": "Bearer serverware-npm-placeholder-v1"})
+            response_mode="npm_metadata_json_v1", request_headers={"Authorization": "Bearer catchplate-npm-placeholder-v1"})
     return base
 
 
@@ -75,11 +75,11 @@ def response(prepared, value=None, status=200):
 
 class LegacyTests(unittest.TestCase):
     def setUp(self):
-        directory = tempfile.TemporaryDirectory(prefix="serverware-mcp-legacy-offline-")
+        directory = tempfile.TemporaryDirectory(prefix="catchplate-mcp-legacy-offline-")
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
         self.path = self.root / "client.private.json"
-        self.ca = self.root / "serverware-ca.pem"
+        self.ca = self.root / "catchplate-ca.pem"
         self.ca.write_bytes(re.search(rb"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
             Path(certifi.where()).read_bytes(), re.S).group())
 
@@ -111,7 +111,7 @@ class LegacyTests(unittest.TestCase):
         for changes in ({"proxy_username": "wrong"}, {"application_id": "bad"}, {"proxy_url": "http://proxy.test"},
                 {"token_expires_at_epoch_ms": 0}, {"upstream_url": "https://api.github.com/repos/other/repo/issues"},
                 {"repository": {"owner": "fixture-owner", "name": ".."}}, {"methods": ["POST"]},
-                {"request_headers": {"Authorization": TOKEN}}, {"request_headers": {"Authorization": "token serverware-github-placeholder-v1", "X-Private": TOKEN}},
+                {"request_headers": {"Authorization": TOKEN}}, {"request_headers": {"Authorization": "token catchplate-github-placeholder-v1", "X-Private": TOKEN}},
                 {"operation_bundle": "npm_install_v1"}, {"operation_bundle": "npm_publish_v1"},
                 {"operation_bundle": "aws_s3_v1"}, {"query_mode": "orderedFormV1"}):
             with self.subTest(keys=list(changes)), self.assertRaises(legacy.LegacyConfigurationError) as error:
@@ -246,7 +246,7 @@ class LegacyTests(unittest.TestCase):
         self.assertEqual(len(seen), 1)
         self.assertEqual(result["status"], 201)
         self.assertEqual(seen[0].body, body)
-        self.assertEqual(seen[0].headers["Authorization"], "Bearer serverware-x-post-placeholder-v1")
+        self.assertEqual(seen[0].headers["Authorization"], "Bearer catchplate-x-post-placeholder-v1")
 
     def test_npm_scoped_metadata_uses_only_fixed_contained_existing_client(self):
         config, body, query = self.prepare("npm", "npm_metadata")
@@ -255,7 +255,7 @@ class LegacyTests(unittest.TestCase):
         self.assertEqual(config["_legacy_runner"], "npm_metadata")
         self.assertEqual(config["_npm_node_executable"], legacy.NODE_EXECUTABLE)
         summary = {"ok": True, "operation": "view", "package": "@fixture/package", "version": "1.2.3", "tarballFetched": False}
-        with patch.dict(os.environ, {"SERVERWARE_MCP_CALL_TEMP": str(self.root)}, clear=True), \
+        with patch.dict(os.environ, {"CATCHPLATE_MCP_CALL_TEMP": str(self.root)}, clear=True), \
                 patch.object(legacy.os, "getsid", return_value=os.getpid()), \
                 patch.object(legacy.os, "getpgrp", return_value=os.getpid()), \
                 patch.object(legacy, "NODE_EXECUTABLE", None), \
@@ -264,12 +264,12 @@ class LegacyTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(command, [legacy.NODE_EXECUTABLE, str(legacy.NPM_CLIENT), "--config", str(self.path), "view"])
         self.assertNotIn(TOKEN, " ".join(command))
-        self.assertEqual(run.call_args.kwargs["env"], {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "TMPDIR": str(self.root), "SERVERWARE_MCP_CONTAINED_WORKER": "1"})
+        self.assertEqual(run.call_args.kwargs["env"], {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "TMPDIR": str(self.root), "CATCHPLATE_MCP_CONTAINED_WORKER": "1"})
         self.assertFalse(run.call_args.kwargs["start_new_session"])
         self.assertEqual(run.call_args.kwargs["timeout"], 25)
         for result in (SimpleNamespace(returncode=1, stderr=TOKEN.encode(), stdout=b""),
                 SimpleNamespace(returncode=0, stderr=b"", stdout=TOKEN.encode())):
-            with patch.dict(os.environ, {"SERVERWARE_MCP_CALL_TEMP": str(self.root)}, clear=True), \
+            with patch.dict(os.environ, {"CATCHPLATE_MCP_CALL_TEMP": str(self.root)}, clear=True), \
                     patch.object(legacy.os, "getsid", return_value=os.getpid()), \
                     patch.object(legacy.os, "getpgrp", return_value=os.getpid()), \
                     patch.object(legacy.subprocess, "run", return_value=result), self.assertRaises(legacy.NpmMetadataError) as error:

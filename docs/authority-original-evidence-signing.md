@@ -129,10 +129,10 @@ global credential history. Installation likewise retains its independent
 physical-readback and committed-stage requirements. Source composition alone
 does not establish runtime startup, deployment or production readiness.
 
-Source: [registration source proofs](../serverware/authority_webauthn_registration_source_proofs.py),
-[source acquisition](../serverware/authority_webauthn_registration_source_acquisition.py),
-[configured read owner](../serverware/authority_webauthn_evidence_planning.py),
-[registration signing](../serverware/authority_webauthn_registration_signing.py),
-[registration production](../serverware/authority_webauthn_registration_production.py),
-[installation signing](../serverware/authority_webauthn_installation_signing.py), and
-[original invocation assembly](../serverware/authority_webauthn_evidence_invocation.py).
+Source: [registration source proofs](../catchplate/authority_webauthn_registration_source_proofs.py),
+[source acquisition](../catchplate/authority_webauthn_registration_source_acquisition.py),
+[configured read owner](../catchplate/authority_webauthn_evidence_planning.py),
+[registration signing](../catchplate/authority_webauthn_registration_signing.py),
+[registration production](../catchplate/authority_webauthn_registration_production.py),
+[installation signing](../catchplate/authority_webauthn_installation_signing.py), and
+[original invocation assembly](../catchplate/authority_webauthn_evidence_invocation.py).

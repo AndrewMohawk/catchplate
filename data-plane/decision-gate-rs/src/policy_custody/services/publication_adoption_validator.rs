@@ -14,10 +14,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[path="publication_adoption_validator_io.rs"]
 mod io;
-const INPUT_API:&str="serverware.nativePublicationAdoptionValidationInput/v1";
-const OUTPUT_API:&str="serverware.nativePublicationAdoptionValidation/v1";
-const BOOTSTRAP_INPUT_API:&str="serverware.nativePublicationAdoptionValidationInput/v2";
-const BOOTSTRAP_OUTPUT_API:&str="serverware.nativePublicationAdoptionValidation/v2";
+const INPUT_API:&str="catchplate.nativePublicationAdoptionValidationInput/v1";
+const OUTPUT_API:&str="catchplate.nativePublicationAdoptionValidation/v1";
+const BOOTSTRAP_INPUT_API:&str="catchplate.nativePublicationAdoptionValidationInput/v2";
+const BOOTSTRAP_OUTPUT_API:&str="catchplate.nativePublicationAdoptionValidation/v2";
 const MAX_INPUT:usize=32*1024*1024;
 fn refused(_:impl std::fmt::Display)->ShadowError { ShadowError::BindingDrift }
 fn ensure(value:bool)->Result<(),ShadowError> {
@@ -41,8 +41,8 @@ mod selection_tests {
         assert_eq!(selected_output(BOOTSTRAP_INPUT_API,super::super::BOOTSTRAP_API).unwrap(),BOOTSTRAP_OUTPUT_API);
         assert!(selected_output(INPUT_API,super::super::BOOTSTRAP_API).is_err());
         assert!(selected_output(BOOTSTRAP_INPUT_API,super::super::API).is_err());
-        assert!(selected_output("serverware.nativePublicationAdoptionValidationInput/v3",super::super::BOOTSTRAP_API).is_err());
-        assert!(selected_output(BOOTSTRAP_INPUT_API,"serverware.nativePublicationAdoptionAuthorization/v3").is_err());
+        assert!(selected_output("catchplate.nativePublicationAdoptionValidationInput/v3",super::super::BOOTSTRAP_API).is_err());
+        assert!(selected_output(BOOTSTRAP_INPUT_API,"catchplate.nativePublicationAdoptionAuthorization/v3").is_err());
     }
 }
 fn exact<T:DeserializeOwned+Serialize>(raw:&[u8],maximum:usize)->Result<T,ShadowError>{
@@ -146,7 +146,7 @@ struct IssuerTrust<'a> {configuration:TrustConfiguration,checkpoint:AtomicTrustC
 impl<'a> IssuerTrust<'a> {
     fn open(raw:&[u8],clock:&'a IssuerClock)->Result<Self,ShadowError>{
         let configuration:TrustConfiguration=exact(raw,1024*1024)?;
-        ensure(configuration.api_version=="serverware.nativeShadowGuestTrust/v1"
+        ensure(configuration.api_version=="catchplate.nativeShadowGuestTrust/v1"
             && !configuration.role_keys.is_empty() && configuration.role_keys.len()<=128
             && configuration.role_keys.windows(2).all(|pair|pair[0].role<pair[1].role))?;
         let assignment=configuration.assignment_key.material()?;
@@ -218,7 +218,7 @@ fn current_scope(input:&Input,p:&Payload,assignment:&VerifiedAssignment)->Result
     let measured=native_custody_closure::closure_set::ValidatedSet::from_publication_bytes(
         input.current_closure_set_original.as_bytes(),&set.set_root_sha256,&set.seccomp_set_root_sha256)?;
     let bridge=measured.role_binding("bridge")?;
-    ensure(scope.api_version=="serverware.policyShadowProductionCustodyProofScope/v2"
+    ensure(scope.api_version=="catchplate.policyShadowProductionCustodyProofScope/v2"
         && scope.execution_closure_set_root_sha256==set.set_root_sha256
         && scope.structurally_verified_seccomp_set_root_sha256==set.seccomp_set_root_sha256
         && scope.assignment_id==a.assignment_id && scope.assignment_payload_sha256==*assignment.payload_sha256()
@@ -259,7 +259,7 @@ fn current_scope(input:&Input,p:&Payload,assignment:&VerifiedAssignment)->Result
     let values_array=values.as_array_mut().ok_or(ShadowError::BindingDrift)?;
     values_array.push(serde_json::to_value(&scope.execution_closure_set_root_sha256).map_err(refused)?);
     values_array.push(serde_json::to_value(&scope.structurally_verified_seccomp_set_root_sha256).map_err(refused)?);
-    ensure(scope.binding_sha256==hash_domain_frames(b"serverware.policyShadowProductionCustodyProofScope/v2",
+    ensure(scope.binding_sha256==hash_domain_frames(b"catchplate.policyShadowProductionCustodyProofScope/v2",
         &[&canonical_json_bytes(&values)?]))
 }
 

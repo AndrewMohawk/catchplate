@@ -24,7 +24,7 @@ computed hash or protected FD does not itself approve anything. The input is
 bounded to 256 KiB and has exactly these four fields:
 
 ```text
-apiVersion = serverware.nativePilotBootstrapInstallationInput/v1
+apiVersion = catchplate.nativePilotBootstrapInstallationInput/v1
 configurationOriginal
 windowOriginal
 controlOriginal
@@ -45,7 +45,7 @@ installer retains its exact FD and named ancestors, verifies its pin and the
 configured driver UID/GID, and rechecks it throughout publication.
 
 The fixed supervisor must already exist at
-`/opt/serverware/serverware-native-shadow-guest-supervisor`, root:root `0555`,
+`/opt/catchplate/catchplate-native-shadow-guest-supervisor`, root:root `0555`,
 single-link and at most 64 MiB. Its actual retained bytes must match the supplied
 control pin and the existing driver's static Linux/amd64 ELF rules: supported
 ELF type, bounded program table, and neither PT_DYNAMIC nor PT_INTERP. This is
@@ -54,7 +54,7 @@ actual executable FD, path and protected ancestors remain checked throughout.
 
 All destination parents must already exist under root ownership without
 group/other write permission. The shared public publisher also requires the
-pre-provisioned `/etc/serverware/native-pilot-inputs/` directory; this installer
+pre-provisioned `/etc/catchplate/native-pilot-inputs/` directory; this installer
 does not create it or write any files beneath it.
 
 ## Exclusive publication and result
@@ -69,16 +69,16 @@ All three destinations must be absent. Publication uses the existing retained
 public-file owner, with exclusive creation, root:root `0400` single-link files,
 fsync and exact readback, in this fixed order:
 
-1. `/etc/serverware/native-shadow-driver-bootstrap.json`
-2. `/etc/serverware/native-shadow-driver-bootstrap-window.json`
-3. `/etc/serverware/native-shadow-driver-bootstrap-control.json`
+1. `/etc/catchplate/native-shadow-driver-bootstrap.json`
+2. `/etc/catchplate/native-shadow-driver-bootstrap-window.json`
+3. `/etc/catchplate/native-shadow-driver-bootstrap-control.json`
 
 Control is last, not an atomic transaction or launch trigger. An error, expired
 deadline, partial write or incomplete output leaves all created files for
 explicit reconciliation. There is no overwrite, existing-file adoption, rollback
 or automatic retry. An independent supervisor must bound filesystem stalls.
 
-Successful stdout is canonical `serverware.nativePilotBootstrapInstallation/v1`
+Successful stdout is canonical `catchplate.nativePilotBootstrapInstallation/v1`
 JSON without LF on a root-owned supervisor pipe. It records `bundleSha256`,
 `configurationSha256`, `windowSha256`, `supervisorExecutableSha256`,
 `invocationId`, the original startup/lifetime deadlines, and `pins` for the three

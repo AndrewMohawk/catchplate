@@ -14,8 +14,8 @@ deadline, pins the exact original file SHA-256 and retains its ownership. The
 [closed v1 schema](../schemas/policy-aware-response-expectations.v1.schema.json)
 contains exactly nine fields:
 
-- `apiVersion`: `serverware.policyAwareResponseExpectations/v1`.
-- `statementProfile`: `serverware.policyAwareResponseStatements/v1`.
+- `apiVersion`: `catchplate.policyAwareResponseExpectations/v1`.
+- `statementProfile`: `catchplate.policyAwareResponseStatements/v1`.
 - `responseSigningKeyId`, `controlPlaneResponseSigningKeyId`, `policyDigest`,
   `releaseDigest` and `dataPlaneBinaryDigest`: canonical nonzero SHA-256 pins.
 - `serverInstanceId` and `principalId`: independently configured exact identities.
@@ -37,15 +37,15 @@ checks output aliases. These checks do not renew the operation window.
 ## Original verification
 
 Only the selected statement family is admitted: buffered
-`serverware.policyAwareProxyResponseStatement/v1`, streaming
-`serverware.policyAwareStreamingResponseStatement/v1`, or observation
-`serverware.policyAwareResponseObservationStatement/v1`. The actual statement,
+`catchplate.policyAwareProxyResponseStatement/v1`, streaming
+`catchplate.policyAwareStreamingResponseStatement/v1`, or observation
+`catchplate.policyAwareResponseObservationStatement/v1`. The actual statement,
 signature key, policy/release/binary and server identity are compared to the pins.
 Observation may retain its existing null-principal form where the original
 observation contract allows it; that does not assert successful principal
 authentication. Other statement principals must equal the independent pin.
 
-The ordinary vendor envelope and `serverware.vendorTeeVerification/v1` receipt
+The ordinary vendor envelope and `catchplate.vendorTeeVerification/v1` receipt
 stay unchanged. Profile-aware entry points reject Native and require the exact
 selected original statement version. Expected attested claims use that same
 version and actual statement digest; signed legacy bytes are never relabeled.
@@ -70,7 +70,7 @@ on its separate genuine original verifier path.
 The [closed statement schema](../schemas/policy-aware-response-statements.v1.schema.json)
 includes the matching policy-aware receipt and normalized-policy commitment.
 The [closed artifact schema](../schemas/policy-aware-response-artifacts.v1.schema.json)
-covers these five actual client labels (each prefixed with `serverware.`):
+covers these five actual client labels (each prefixed with `catchplate.`):
 
 | Mode | Proof artifact | Capture artifact |
 | --- | --- | --- |
@@ -78,9 +78,9 @@ covers these five actual client labels (each prefixed with `serverware.`):
 | Streaming | `policyAwareStreamingProxyResponseProof/v1` | `policyAwareStreamingProxyResponseCapture/v1` |
 | Observation | `policyAwareResponseObservationProof/v1` | Included in the proof's request/response fields |
 
-The three proof kinds are respectively `ServerwarePolicyAwareProxyResponseProof`,
-`ServerwarePolicyAwareStreamingProxyResponseProof`, and
-`ServerwarePolicyAwareResponseObservationProof`. Runtime envelopes remain the
+The three proof kinds are respectively `CatchplatePolicyAwareProxyResponseProof`,
+`CatchplatePolicyAwareStreamingProxyResponseProof`, and
+`CatchplatePolicyAwareResponseObservationProof`. Runtime envelopes remain the
 ordinary `proxyResponseRuntimeProof/v2`, `streamingResponseRuntimeProof/v1`, and
 `responseObservationRuntimeProof/v1` families; their nested statements and claims
 must match the independently selected profile. A schema-valid artifact or a

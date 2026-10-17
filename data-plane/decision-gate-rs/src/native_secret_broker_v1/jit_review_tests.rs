@@ -3,7 +3,7 @@
 use super::*;
 
 fn fixture() -> Vec<Value> {
-    let path = std::env::var_os("SERVERWARE_TEST_JIT_RUST_FIXTURE")
+    let path = std::env::var_os("CATCHPLATE_TEST_JIT_RUST_FIXTURE")
         .expect("the actual Python FD3 fixture is required; this test never skips");
     let file = std::fs::File::open(path).expect("read actual FD3 fixture");
     assert!(file.metadata().expect("fixture metadata").len() <= 128 * 1024);
@@ -13,7 +13,7 @@ fn fixture() -> Vec<Value> {
     if bytes.last() == Some(&b'\n') { bytes.pop(); }
     let value = document(&bytes, 128 * 1024).expect("canonical actual FD3 fixture");
     fields(&value, &["schema", "boundary", "cases"]).unwrap();
-    assert!(value["schema"] == "serverware.nativeJitRustContractFixture/v1"
+    assert!(value["schema"] == "catchplate.nativeJitRustContractFixture/v1"
         && value["boundary"] == "synthetic-local-process-no-native-admission");
     let cases = value["cases"].as_array().expect("two fixture cases");
     assert!(cases.len() == 2 && cases[0]["name"] == "ordinary" && cases[1]["name"] == "clipped");

@@ -139,7 +139,7 @@ def safe_evidence(check):
 
 def checkpoint(check, stage):
     require(stage in {"lifecycle", "negative-phase", "features"}, "unexpected acceptance checkpoint")
-    value = {"schema": "serverware.operatorCatalogObservations/v1", "stage": stage,
+    value = {"schema": "catchplate.operatorCatalogObservations/v1", "stage": stage,
         "acceptanceComplete": False, **safe_evidence(check)}
     path = check.args.run_claim_file.parent / (".operator-catalog-" + stage + "-observations.json")
     directory = path.parent.stat()
@@ -209,7 +209,7 @@ def request(check, path, placeholder):
     try:
         with TunnelTLS(raw, check.ca, check.timeout) as tls:
             headers = [f"GET {path} HTTP/1.1", f"Host: {AUTHORITY}", "Connection: close",
-                f"User-Agent: serverware-test-run/{check.run_id}", "Accept: application/json"]
+                f"User-Agent: catchplate-test-run/{check.run_id}", "Accept: application/json"]
             if placeholder is not None:
                 require(isinstance(placeholder, str) and len(placeholder) <= 1024
                         and all(32 <= ord(character) < 127 for character in placeholder), "unsafe synthetic header")
@@ -243,7 +243,7 @@ def run_features(check, credential):
     application, token, _ = check.mutate("/applications", {"name": check.run_id + "-features",
         "token_lifetime_seconds": 3600}, collection="applications", result_key="application",
         event="operator_catalog.application.created", creates=True, token=True)
-    placeholder = "Bearer serverware-placeholder-" + check.run_id
+    placeholder = "Bearer catchplate-placeholder-" + check.run_id
     rule, _, _ = check.mutate("/access-rules", {"name": check.run_id + "-exact-full-json",
         "application_id": application["id"], "credential_id": credential["id"],
         "upstream_url": "https://" + AUTHORITY + "/echo", "methods": ["GET"],

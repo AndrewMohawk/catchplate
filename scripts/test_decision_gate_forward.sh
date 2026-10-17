@@ -24,7 +24,7 @@ def release_store() -> dict:
     ) FROM release_authorization_attempts WHERE route_id = 'demo.echo'
     """
     output = subprocess.check_output(
-        ["docker", "compose", "exec", "-T", "grant-store", "psql", "-U", "serverware", "-d", "serverware", "-Atq", "-c", query],
+        ["docker", "compose", "exec", "-T", "grant-store", "psql", "-U", "catchplate", "-d", "catchplate", "-Atq", "-c", query],
         text=True,
     )
     return json.loads(output)
@@ -49,8 +49,8 @@ before_forward = release_store()
 status, payload = request(
     "GET https://demo-upstream:8443/echo HTTP/1.1\r\n"
     "Host: demo-upstream:8443\r\n"
-    "X-Serverware-Agent: demo-agent\r\n"
-    "X-Serverware-Data-Plane-Token: caller-controlled-value\r\n"
+    "X-Catchplate-Agent: demo-agent\r\n"
+    "X-Catchplate-Data-Plane-Token: caller-controlled-value\r\n"
     "Connection: close\r\n\r\n"
 )
 assert status == 200, payload
@@ -60,14 +60,14 @@ assert payload["credential_marker"] == "initial", payload
 assert "authorization_sha256" not in payload, payload
 assert "authorization" not in payload, payload
 assert "proxy_authorization" not in payload, payload
-assert "serverware_agent" not in payload, payload
+assert "catchplate_agent" not in payload, payload
 assert payload["query"]["_data_plane_token_seen"] is False, payload
 assert payload["path"] == "/echo", payload
 
 status, payload = request(
     "GET https://demo-upstream:8443/echo HTTP/1.1\r\n"
     "Host: demo-upstream:8443\r\n"
-    "X-Serverware-Agent: demo-token-agent\r\n"
+    "X-Catchplate-Agent: demo-token-agent\r\n"
     "Proxy-Authorization: Bearer demo-agent-proxy-token\r\n"
     "Connection: close\r\n\r\n"
 )
@@ -78,7 +78,7 @@ assert payload["credential_marker"] == "initial", payload
 assert "authorization_sha256" not in payload, payload
 assert "authorization" not in payload, payload
 assert "proxy_authorization" not in payload, payload
-assert "serverware_agent" not in payload, payload
+assert "catchplate_agent" not in payload, payload
 assert payload["path"] == "/echo", payload
 
 after_forward = release_store()
@@ -90,7 +90,7 @@ assert after_forward["uncorrelated"] == before_forward["uncorrelated"], (before_
 status, payload = request(
     "GET https://demo-upstream:8443/echo HTTP/1.1\r\n"
     "Host: demo-upstream:8443\r\n"
-    "X-Serverware-Agent: demo-token-agent\r\n"
+    "X-Catchplate-Agent: demo-token-agent\r\n"
     "Connection: close\r\n\r\n"
 )
 assert status == 403, payload
@@ -99,7 +99,7 @@ assert payload["payload"]["error"] == "client_principal_denied", payload
 status, payload = request(
     "GET https://demo-upstream:8443/not-allowed HTTP/1.1\r\n"
     "Host: demo-upstream:8443\r\n"
-    "X-Serverware-Agent: demo-agent\r\n"
+    "X-Catchplate-Agent: demo-agent\r\n"
     "Connection: close\r\n\r\n"
 )
 assert status == 403, payload
@@ -116,7 +116,7 @@ assert payload["payload"]["error"] == "client_principal_denied", payload
 status, payload = request(
     "GET https://unknown-upstream:8443/echo HTTP/1.1\r\n"
     "Host: unknown-upstream:8443\r\n"
-    "X-Serverware-Agent: demo-agent\r\n"
+    "X-Catchplate-Agent: demo-agent\r\n"
     "Connection: close\r\n\r\n"
 )
 assert status == 403, payload

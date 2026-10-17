@@ -45,7 +45,7 @@ The production Dockerfile consumes its verified source archive and hash-locked
 Python wheelhouse. The pinned Python 3.11 image supplies the actual interpreter,
 libpython, standard library and extension modules. Only locked `cryptography`,
 `cffi` and `pycparser` distributions enter the helper's normal site-packages,
-together with purpose-fixed Serverware helper/CMS modules. Package metadata
+together with purpose-fixed Catchplate helper/CMS modules. Package metadata
 and licenses travel with those distributions.
 
 `scripts/package_native_broker_runtime.py` runs only in the offline build stage.
@@ -121,7 +121,7 @@ deployed image, genuine Nitro admission or a live provider request.
 
 ### Private JIT sealing channel
 
-The helper now dispatches `serverware.nativeJitReviewChannel/v1` on its existing
+The helper now dispatches `catchplate.nativeJitReviewChannel/v1` on its existing
 anonymous parent socket. Configuration requires the actually provisioned broker
 KEK and completed encrypted service-token exchange. Configuration is one-use;
 other active purpose operations exclude JIT commands. Existing idle owners may coexist, but
@@ -175,7 +175,7 @@ must explicitly carry and verify it.
 `make verify-native-jit-rust-fixture` exercises two actual Python FD3 children
 and can export their synthetic canonical originals with `--emit-fixture`.
 `make verify-native-jit-rust-contract` requires that exported file through
-`SERVERWARE_TEST_JIT_RUST_FIXTURE`. Its Rust tests check correlation against the
+`CATCHPLATE_TEST_JIT_RUST_FIXTURE`. Its Rust tests check correlation against the
 recorded receipt clocks; they do not instantiate the measured Rust broker owner
 or manufacture a `Prepared`. Cached/vendored dependencies suffice for this
 offline library-only build; neither target starts the app or a pilot.
@@ -188,7 +188,7 @@ a file-size limit incorrectly applied to cache copying, then an incompatible
 one-file Docker logging setting. Neither started Cargo; both were corrected
 without changing test inputs or rebuilding the live proxy. The successful run
 used the same pinned fixture and unchanged source hashes, with no test retry.
-Evidence: `../serverware-operator-workspace-evidence/jit-rust-broker.BZSBgu4J/`.
+Evidence: `../catchplate-operator-workspace-evidence/jit-rust-broker.BZSBgu4J/`.
 
 This connection does not make a working approval workflow: the authenticated
 confidential native caller, distinct fresh proof,
@@ -209,11 +209,11 @@ dependencies; it does not publish or accept that candidate.
 
 | Artifact | Fixed location |
 | --- | --- |
-| Broker filesystem | `/opt/serverware/native-broker-runtime.squashfs` |
-| Build inventory and expected pins | `/usr/share/serverware/native-broker-runtime.json` |
-| Native-only entrypoint | `/usr/local/libexec/serverware-native-enclave-entrypoint` |
+| Broker filesystem | `/opt/catchplate/native-broker-runtime.squashfs` |
+| Build inventory and expected pins | `/usr/share/catchplate/native-broker-runtime.json` |
+| Native-only entrypoint | `/usr/local/libexec/catchplate-native-enclave-entrypoint` |
 | Interpreter inside private root | `/usr/local/bin/python3.11` |
-| Helper inside private root | `/opt/serverware/serverware/native_secret_broker_helper.py` |
+| Helper inside private root | `/opt/catchplate/catchplate/native_secret_broker_helper.py` |
 
 The manifest lists each packaged file's path, mode, size and SHA-256, the source
 manifest digest and image/interpreter/helper hashes. Its `helperImage` object

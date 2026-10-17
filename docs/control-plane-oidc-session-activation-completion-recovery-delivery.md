@@ -14,7 +14,7 @@ options endpoint appends `/options`. Both use the closed 64 KiB recovery carrier
 with no posted target, grant, root policy or token. The actual fresh actor checks
 old-token possession, original-bound target, current roles/trust, Origin/CSRF,
 WebAuthn and configured approval. Its signed request binding uses
-`serverware.oidcSessionActivationCompletionRecoveryDeliveryIntent/v1` and
+`catchplate.oidcSessionActivationCompletionRecoveryDeliveryIntent/v1` and
 `recoveryPurpose=release`, distinct from completion and intent/proof preparation.
 
 The async route invokes the bounded synchronous core on the same ASGI thread.
@@ -59,7 +59,7 @@ no successful permission DTO or copied token crosses the HTTP orchestrator.
    and cookie again at the final signed ASGI send boundary.
 
 Successful public DATA uses
-`serverware.oidcSessionActivationCompletionRecoveryDeliveryResponse/v1`, purpose
+`catchplate.oidcSessionActivationCompletionRecoveryDeliveryResponse/v1`, purpose
 `release`, status `released`, session state `active` and
 `automaticRetryAllowed=false`, with no token or authority field in JSON. Only
 genuine receiving and fresh current-auth can stage the cookie. Pre-send failures

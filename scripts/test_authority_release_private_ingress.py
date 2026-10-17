@@ -32,25 +32,25 @@ def no_external_effects(event, _arguments):
 
 
 if __name__ == "__main__":
-    os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
-    os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
+    os.environ["CATCHPLATE_PROCESS_MODE"] = "metadata-bootstrap"
+    os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
     sys.addaudithook(no_external_effects)
 
-from serverware import authority_contract as contract
-from serverware import authority_jit_private_request as child
-from serverware import authority_planner as planner
-from serverware import authority_release_private_input as privacy
-from serverware import authority_release_private_request as ingress
-from serverware import authority_request_commitment as commitment
-from serverware import authority_service as service
-from serverware import db
-from serverware import release_authorization_profiles as profiles
-from serverware.authority_store import authority_dispatch, executor_v9
+from catchplate import authority_contract as contract
+from catchplate import authority_jit_private_request as child
+from catchplate import authority_planner as planner
+from catchplate import authority_release_private_input as privacy
+from catchplate import authority_release_private_request as ingress
+from catchplate import authority_request_commitment as commitment
+from catchplate import authority_service as service
+from catchplate import db
+from catchplate import release_authorization_profiles as profiles
+from catchplate.authority_store import authority_dispatch, executor_v9
 
 OPERATION = "release.reserve"
 HANDLER = "reserve_release_authorization_v2"
-INPUT_SCHEMA = "serverware.policyAuthorityPrivateReleaseWriterInput/v1"
-PUBLIC_SCHEMA = "serverware.releaseReserveCommitments/v1"
+INPUT_SCHEMA = "catchplate.policyAuthorityPrivateReleaseWriterInput/v1"
+PUBLIC_SCHEMA = "catchplate.releaseReserveCommitments/v1"
 UNAVAILABLE = "Private JIT release custody and atomic retention are unavailable"
 PRIVATE_ERROR = "Private JIT release input requires its explicit private profile"
 PIN = "sha256:" + "a" * 64
@@ -132,7 +132,7 @@ def capture(original, operation=OPERATION):
 def typed_request(arguments, operation=OPERATION):
     typed = service._synthesize_business_arguments(operation, arguments)
     digest = service._controlled_writer_request_digest(operation, arguments)
-    return {"schema": "serverware.policyAuthorityV9Request/v1", "operation": operation,
+    return {"schema": "catchplate.policyAuthorityV9Request/v1", "operation": operation,
         "handler": contract.operation_spec(operation)["handler"],
         "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST,
         "arguments": typed, "requestDigest": digest,
@@ -298,7 +298,7 @@ class PrivateReleaseIngressTests(unittest.TestCase):
                     expected = marshaled(original, operation)
                     selected, envelope = capture(original, operation)
                     self.assertEqual(selected, operation)
-                    self.assertEqual(envelope, {"schema": "serverware.policyAuthorityControlledWriterInput/v1",
+                    self.assertEqual(envelope, {"schema": "catchplate.policyAuthorityControlledWriterInput/v1",
                         "handler": contract.operation_spec(operation)["handler"],
                         "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST, "arguments": expected})
                     self.assertEqual(service._extract_v9_runtime_input(operation, envelope["handler"], envelope),
@@ -352,7 +352,7 @@ class PrivateReleaseIngressTests(unittest.TestCase):
 
     def test_old_generic_envelope_cannot_smuggle_the_new_projection_into_service(self):
         _, document = capture(values())
-        for envelope in ({"schema": "serverware.policyAuthorityControlledWriterInput/v1",
+        for envelope in ({"schema": "catchplate.policyAuthorityControlledWriterInput/v1",
                 "handler": HANDLER, "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST,
                 "arguments": document["arguments"]},
                 {"input": document["arguments"], "webauthnAuthorization": {"not": "authority"}}):

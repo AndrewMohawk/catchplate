@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/response-v2-guest-role.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/response-v2-guest-role.v1.schema.json",
   "title": "Fixed guest custody role startup",
   "$comment": "Data grammar only. Canonical UTF8 sorted JSON without LF, bootstrap <=16384 bytes and passive startup notice <=1024 bytes. Actual private parent/child PIDFD custody, independently signed role/config/delivery/generation, current boot, immutable originals and original deadlines are enforced by source owners. No input command, readiness permission, retry or host fallback is defined.",
   "oneOf": [{"$ref": "#/$defs/bootstrap"}, {"$ref": "#/$defs/startup"}],
@@ -14,7 +14,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "configurationPath", "configurationSha256", "deliveryPath", "deliverySha256", "serviceRole", "gateLifetimeDeadlineBoottimeNs", "channelNonce"],
       "properties": {
-        "apiVersion": {"const": "serverware.responseV2.guestRoleBootstrap/v1"},
+        "apiVersion": {"const": "catchplate.responseV2.guestRoleBootstrap/v1"},
         "configurationPath": {"$ref": "#/$defs/path"},
         "configurationSha256": {"$ref": "#/$defs/sha"},
         "deliveryPath": {"$ref": "#/$defs/path"},
@@ -29,7 +29,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "channelNonce", "bootstrapSha256", "serviceRole", "phase"],
       "properties": {
-        "apiVersion": {"const": "serverware.responseV2.guestRoleStartup/v1"},
+        "apiVersion": {"const": "catchplate.responseV2.guestRoleStartup/v1"},
         "channelNonce": {"$ref": "#/$defs/nonce"},
         "bootstrapSha256": {"$ref": "#/$defs/sha"},
         "serviceRole": {"$ref": "#/$defs/role"},

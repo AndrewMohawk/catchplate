@@ -1,12 +1,12 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://serverware.invalid/schemas/native-startup-configuration.v7.schema.json",
+  "$id":"https://catchplate.invalid/schemas/native-startup-configuration.v7.schema.json",
   "title":"Cold native measured due-refresh with encrypted service and application material",
   "$comment":"Explicit --native-measured-refresh-startup only; v1-v6 contracts remain unchanged. Actual encrypted service-token Pending->Installed owner, native KMS broker, same-boot role4 key, permanent serving privileges and all-holder currentness are required. <=16MiB independently admitted original. This is neither a release signature nor current issuance permission.",
   "type":"object","additionalProperties":false,
   "required":["apiVersion","gate","native","shadow","responseObservationV2","policy","enrollmentAuthorizer","enrollmentSetupAuthorizer","enrollmentProxyEndpoint","credentialCurrentness","secretBroker","measuredAudit","encryptedServiceTokens","measuredRefresh"],
   "properties":{
-    "apiVersion":{"const":"serverware.nativeStartupConfiguration/v7"},
+    "apiVersion":{"const":"catchplate.nativeStartupConfiguration/v7"},
     "gate":{"$ref":"native-startup-configuration.v6.schema.json#/$defs/gate"},
     "native":{"$ref":"native-startup-configuration.v4.schema.json#/$defs/native"},
     "shadow":{"$ref":"native-startup-configuration.v4.schema.json#/$defs/shadow"},

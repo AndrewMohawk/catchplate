@@ -13,7 +13,7 @@ The path is:
 
 ## Original authority, fresh completion only
 
-[`authority_current_root_completion._produce_complete_on_work`](../serverware/authority_current_root_completion.py)
+[`authority_current_root_completion._produce_complete_on_work`](../catchplate/authority_current_root_completion.py)
 accepts the original enrollment, reserve request/state receipt, computation
 snapshot, execution grant/enrollment and family-specific plan originals. It
 requires independently admitted history and keys, request-authorization digest,
@@ -36,13 +36,13 @@ monotonic deadline, using the caller's existing work allowance throughout.
 
 ## Fixed database read owner
 
-[`CurrentRootCommitReader`](../serverware/authority_current_root_commit_reader.py)
+[`CurrentRootCommitReader`](../catchplate/authority_current_root_commit_reader.py)
 holds exactly eight settings: DSN, connection timeout, database role, TLS client
 DN/serial/issuer DN, source query-manifest digest and independently admitted
 `expected_structure_manifest_digest`. The creator PID is retained and checked.
 The required eighth field is a breaking source contract: there is no seven-field
 or optional-pin fallback. The role must be the independently provisioned
-`serverware_policy_authority_completion_reader`; there is no environment role
+`catchplate_policy_authority_completion_reader`; there is no environment role
 override or role creation in this slice.
 
 The [cold completion bootstrap](registration-execution-completion-service.md)
@@ -61,7 +61,7 @@ The actual metadata bootstrap and expected-schema ACL sealer grant schema
 - `policy_authority_authenticated_table_roots`
 - `policy_authority_counted_index_heads`
 
-The source-fixed [privilege checker](../serverware/authority_store/completion_read_sql.py)
+The source-fixed [privilege checker](../catchplate/authority_store/completion_read_sql.py)
 uses the real effective-privilege query. It rejects business-table reads, DML,
 function execution, role membership, grant options, schema creation and database
 CREATE/TEMPORARY privileges. Role aliases are rejected. No marker insert
@@ -72,7 +72,7 @@ The reader uses actual PostgreSQL 16 role/TLS/ACL admission and a fresh physical
 catalog against the required manifest before and after the committed-state
 observer on that same physical connection, using the caller's unchanged work
 allowance and original deadlines. The
-[fixed observation](../serverware/authority_store/current_root_commit_observation.py)
+[fixed observation](../catchplate/authority_store/current_root_commit_observation.py)
 performs seven observation SELECTs on that same transaction:
 
 `transaction → marker → transaction → all primary roots → transaction → all counted heads → transaction`
@@ -94,7 +94,7 @@ authenticity, hostile-host antirollback or independent latest-root currentness.
 After the database connection is closed, the producer encodes the exact five
 fields `schema`, `sourceRevision`, `marker`, `afterVectorDigest` and
 `observedAtEpochNs` under
-`serverware.policyAuthorityCurrentRootCommitObservation/v1`. This bounded inner
+`catchplate.policyAuthorityCurrentRootCommitObservation/v1`. This bounded inner
 record is **unsigned on its own**. Its original bytes, hash and byte count occupy
 the complete control's existing `writerReceipt*` fields.
 

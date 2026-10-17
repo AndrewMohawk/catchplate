@@ -38,11 +38,11 @@ def worker(kind, operation):
     original = persistence if kind == "persistence" else revocation
     if operation == "reopen":
         original.worker(operation)
-        from serverware import operator_catalog_schema as schema
+        from catchplate import operator_catalog_schema as schema
         assert schema.active(), "unpatched recovery did not activate the real catalog"
         return
 
-    database = Path(os.environ["SERVERWARE_DATA_DIR"]) / "serverware.sqlite3"
+    database = Path(os.environ["CATCHPLATE_DATA_DIR"]) / "catchplate.sqlite3"
     if operation == "bootstrap":
         assert not database.exists(), "legacy bootstrap requires fresh synthetic data"
     else:
@@ -50,7 +50,7 @@ def worker(kind, operation):
         with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
             _assert_no_catalog(connection)
             assert connection.execute("SELECT COUNT(*) FROM operator_demo_policy").fetchone()[0] == 1
-    from serverware import operator_catalog_schema as schema
+    from catchplate import operator_catalog_schema as schema
     with patch.object(schema, "initialize", _fixture_initializer):
         original.worker(operation)
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:

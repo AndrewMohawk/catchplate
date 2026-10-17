@@ -1,7 +1,7 @@
 """Real official SDK + Requests, synthetic send boundary; never contact Google.
 
 TLS checks use real certificates and in-memory handshakes. These tests do not
-claim a Serverware lease, proxy acceptance, consent or deployed integration.
+claim a Catchplate lease, proxy acceptance, consent or deployed integration.
 """
 import base64
 from copy import deepcopy
@@ -59,7 +59,7 @@ class ConfigurationTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory(prefix="gmail-config-offline-")
         self.addCleanup(self.directory.cleanup)
-        self.path = Path(self.directory.name) / "serverware-client.private.json"
+        self.path = Path(self.directory.name) / "catchplate-client.private.json"
         self.token = base64.urlsafe_b64encode(b"c" * 32).decode().rstrip("=")
         rule = "00000000-0000-4000-8000-000000000002"
         # Full workspace_proxy_audit download, including its nested SDK recipe;
@@ -67,17 +67,17 @@ class ConfigurationTests(unittest.TestCase):
         self.value = {"application_id": APP, "access_rule_id": rule,
             "proxy_url": "https://proxy.example.test:8443", "proxy_authentication": "basic_and_bearer_v1",
             "proxy_username": APP, "proxy_password": self.token, "token_expires_at_epoch_ms": 2**53 - 1,
-            "ca_file": "./serverware-ca.pem", "proxy_ca_file": None,
+            "ca_file": "./catchplate-ca.pem", "proxy_ca_file": None,
             "operation_bundle": "gmail_read_v1", "upstream_url": example.ORIGIN + example.LIST_PATH,
             "methods": ["GET"], "response_mode": "passthrough", "credential_input": "replace_exact",
             "request_headers": {"Authorization": example.PLACEHOLDER}, "query_mode": "orderedFormV1",
             "age_policy": {"mode": "unrestricted"}, "client_recipe": {
-                "schema": "serverware.gmailSdkClient/v1", "clear_environment": True,
+                "schema": "catchplate.gmailSdkClient/v1", "clear_environment": True,
                 "example_directory": "examples/google-gmail-go", "entrypoint": "./gmail-example",
                 "access_rule_id": rule, "token_expires_at_epoch_ms": 2**53 - 1,
-                "environment": {"LANG": "C.UTF-8", "SERVERWARE_PROXY_URL": "https://proxy.example.test:8443",
-                    "SERVERWARE_APP_ID": APP, "SERVERWARE_PROXY_TOKEN": self.token,
-                    "SERVERWARE_CA_FILE": "./serverware-ca.pem"}}}
+                "environment": {"LANG": "C.UTF-8", "CATCHPLATE_PROXY_URL": "https://proxy.example.test:8443",
+                    "CATCHPLATE_APP_ID": APP, "CATCHPLATE_PROXY_TOKEN": self.token,
+                    "CATCHPLATE_CA_FILE": "./catchplate-ca.pem"}}}
         previous = logging.root.manager.disable
         self.addCleanup(logging.disable, previous)
 
@@ -113,7 +113,7 @@ class ConfigurationTests(unittest.TestCase):
             value = deepcopy(self.value)
             recipe = value["client_recipe"]
             if language != "go":
-                recipe.update(schema="serverware.gmailSdkClient/v2", language=language,
+                recipe.update(schema="catchplate.gmailSdkClient/v2", language=language,
                     arguments=["client.mjs"] if language == "node" else ["-I", "-B", "gmail.py"],
                     resolve_ca_paths=True, resolve_executable_from_path=language == "node",
                     entrypoint="node" if language == "node" else ".venv/bin/python",
@@ -121,20 +121,20 @@ class ConfigurationTests(unittest.TestCase):
             with self.subTest(language=language), patch.object(example.subprocess, "run") as run:
                 selected = example.configuration_environment(self.write(value))
             run.assert_not_called()
-            self.assertEqual(selected, {"SERVERWARE_PROXY_URL": value["proxy_url"], "SERVERWARE_APP_ID": APP,
-                "SERVERWARE_PROXY_TOKEN": self.token, "SERVERWARE_CA_FILE": str(self.path.parent / "serverware-ca.pem")})
+            self.assertEqual(selected, {"CATCHPLATE_PROXY_URL": value["proxy_url"], "CATCHPLATE_APP_ID": APP,
+                "CATCHPLATE_PROXY_TOKEN": self.token, "CATCHPLATE_CA_FILE": str(self.path.parent / "catchplate-ca.pem")})
         recipe.update(language="ignored", entrypoint="do-not-execute", arguments=["do-not-execute"],
             example_directory="/not/the/path/base")
         recipe["environment"].update(HTTPS_PROXY="wrong", GOOGLE_APPLICATION_CREDENTIALS="wrong",
-            SSLKEYLOGFILE="wrong", PATH="wrong", SERVERWARE_PROXY_CA_FILE="./proxy's $literal.pem")
+            SSLKEYLOGFILE="wrong", PATH="wrong", CATCHPLATE_PROXY_CA_FILE="./proxy's $literal.pem")
         value["proxy_ca_file"] = "./proxy's $literal.pem"
         before = deepcopy(value)
         with patch.object(example.subprocess, "run") as run:
             selected = example.configuration_environment(self.write(value))
         run.assert_not_called()
         self.assertEqual(value, before)
-        self.assertEqual(set(selected), set(example.REQUIRED_ENV) | {"SERVERWARE_PROXY_CA_FILE"})
-        self.assertEqual(selected["SERVERWARE_PROXY_CA_FILE"], str(self.path.parent / "proxy's $literal.pem"))
+        self.assertEqual(set(selected), set(example.REQUIRED_ENV) | {"CATCHPLATE_PROXY_CA_FILE"})
+        self.assertEqual(selected["CATCHPLATE_PROXY_CA_FILE"], str(self.path.parent / "proxy's $literal.pem"))
 
     def test_wrapper_and_recipe_connection_disagreements_refuse(self):
         mutations = (("application_id", "00000000-0000-4000-8000-000000000003"),
@@ -148,7 +148,7 @@ class ConfigurationTests(unittest.TestCase):
         for field, invalid in mutations:
             with self.subTest(field=field), self.assertRaises(ValueError):
                 example.configuration_environment(self.write({**self.value, field: invalid}))
-        for field, invalid in (("schema", "serverware.gmailSdkClient/v3"), ("clear_environment", False),
+        for field, invalid in (("schema", "catchplate.gmailSdkClient/v3"), ("clear_environment", False),
                 ("environment", []), ("access_rule_id", "not-a-uuid"), ("token_expires_at_epoch_ms", 2**53 - 2)):
             value = deepcopy(self.value)
             value["client_recipe"][field] = invalid
@@ -172,10 +172,10 @@ class ConfigurationTests(unittest.TestCase):
             value["access_rule_id"] = value["client_recipe"]["access_rule_id"] = rule
             with self.subTest(rule=rule), self.assertRaises(ValueError):
                 example.configuration_environment(self.write(value))
-        for field, key, invalid in (("proxy_url", "SERVERWARE_PROXY_URL", "http://proxy.example.test"),
-                ("proxy_password", "SERVERWARE_PROXY_TOKEN", "private-canary\n"),
-                ("ca_file", "SERVERWARE_CA_FILE", ""), ("ca_file", "SERVERWARE_CA_FILE", "x" * 513),
-                ("ca_file", "SERVERWARE_CA_FILE", "./bad\n.pem"), ("ca_file", "SERVERWARE_CA_FILE", None)):
+        for field, key, invalid in (("proxy_url", "CATCHPLATE_PROXY_URL", "http://proxy.example.test"),
+                ("proxy_password", "CATCHPLATE_PROXY_TOKEN", "private-canary\n"),
+                ("ca_file", "CATCHPLATE_CA_FILE", ""), ("ca_file", "CATCHPLATE_CA_FILE", "x" * 513),
+                ("ca_file", "CATCHPLATE_CA_FILE", "./bad\n.pem"), ("ca_file", "CATCHPLATE_CA_FILE", None)):
             value = deepcopy(self.value)
             value[field] = value["client_recipe"]["environment"][key] = invalid
             with self.subTest(field=field, invalid_type=type(invalid).__name__), self.assertRaises(ValueError):
@@ -197,14 +197,14 @@ class ConfigurationTests(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(ValueError): example.configuration_environment(self.path)
         raw = json.dumps(self.value).encode()
         self.path.write_bytes(raw + b" " * (example.MAX_CONFIG_BYTES - len(raw)))
-        self.assertEqual(example.configuration_environment(self.path)["SERVERWARE_APP_ID"], APP)
+        self.assertEqual(example.configuration_environment(self.path)["CATCHPLATE_APP_ID"], APP)
 
     def test_cli_preserves_environment_only_mode_and_keeps_token_off_child_argv(self):
         good = {"pages": 1, "messages_read": 0, "more_pages": False}
         with patch.object(example, "launch", return_value=good) as launch, patch("sys.stdout", io.StringIO()):
             self.assertEqual(example.main([]), 0)
             self.assertIs(launch.call_args.args[0], os.environ)
-        with patch.dict(os.environ, {"SERVERWARE_PROXY_TOKEN": "wrong", "HTTPS_PROXY": "wrong"}, clear=True), \
+        with patch.dict(os.environ, {"CATCHPLATE_PROXY_TOKEN": "wrong", "HTTPS_PROXY": "wrong"}, clear=True), \
                 patch.object(example, "check_versions"), patch.object(example.subprocess, "run",
                     return_value=subprocess.CompletedProcess([], 0, json.dumps(good).encode(), b"")) as run, \
                 patch("sys.stdout", io.StringIO()) as out, patch("sys.stderr", io.StringIO()) as err:
@@ -216,7 +216,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(argv[-1], "--child")
         self.assertNotIn(self.token, " ".join(argv))
         self.assertNotIn("--config", argv)
-        self.assertEqual(options["env"]["SERVERWARE_PROXY_TOKEN"], self.token)
+        self.assertEqual(options["env"]["CATCHPLATE_PROXY_TOKEN"], self.token)
         self.assertEqual(set(options["env"]), set(example.REQUIRED_ENV))
         self.assertEqual(options["timeout"], 120)
 
@@ -292,9 +292,9 @@ class GmailTests(unittest.TestCase):
         path = Path(self.temp.name)
         self.inner, self.inner_key = certificate(path, "gmail.googleapis.com")
         self.outer, self.outer_key = certificate(path, "proxy.example.test")
-        self.env = {"SERVERWARE_PROXY_URL": "https://proxy.example.test:8443", "SERVERWARE_APP_ID": APP,
-            "SERVERWARE_PROXY_TOKEN": TOKEN, "SERVERWARE_CA_FILE": str(self.inner),
-            "SERVERWARE_PROXY_CA_FILE": str(self.outer)}
+        self.env = {"CATCHPLATE_PROXY_URL": "https://proxy.example.test:8443", "CATCHPLATE_APP_ID": APP,
+            "CATCHPLATE_PROXY_TOKEN": TOKEN, "CATCHPLATE_CA_FILE": str(self.inner),
+            "CATCHPLATE_PROXY_CA_FILE": str(self.outer)}
 
     def run_job(self, send):
         with patch.object(HTTPAdapter, "send", send), example.configured_http(self.env) as http:
@@ -317,19 +317,19 @@ class GmailTests(unittest.TestCase):
         original = dict(ambient)
         self.assertEqual(example.child_environment(ambient), self.env)
         self.assertEqual(ambient, original)
-        for key, bad in (("SERVERWARE_PROXY_URL", "http://proxy.example"),
-                ("SERVERWARE_PROXY_URL", "https://u:p@proxy.example"),
-                ("SERVERWARE_PROXY_URL", "https://proxy.example/path"),
-                ("SERVERWARE_PROXY_URL", "https://proxy.example?"),
-                ("SERVERWARE_PROXY_URL", "https://proxy.example#"),
-                ("SERVERWARE_PROXY_URL", "https://gmail.googleapis.com"),
-                ("SERVERWARE_PROXY_URL", "https://127.0.0.1"),
-                ("SERVERWARE_PROXY_URL", "https://Proxy.example"),
-                ("SERVERWARE_PROXY_URL", "https://proxy.example:0"),
-                ("SERVERWARE_PROXY_URL", "https://proxy.example:65536"),
-                ("SERVERWARE_APP_ID", "not-uuid"), ("SERVERWARE_PROXY_TOKEN", TOKEN + "="),
-                ("SERVERWARE_PROXY_TOKEN", "B" * 43), ("SERVERWARE_CA_FILE", "relative"),
-                ("SERVERWARE_PROXY_CA_FILE", "")):
+        for key, bad in (("CATCHPLATE_PROXY_URL", "http://proxy.example"),
+                ("CATCHPLATE_PROXY_URL", "https://u:p@proxy.example"),
+                ("CATCHPLATE_PROXY_URL", "https://proxy.example/path"),
+                ("CATCHPLATE_PROXY_URL", "https://proxy.example?"),
+                ("CATCHPLATE_PROXY_URL", "https://proxy.example#"),
+                ("CATCHPLATE_PROXY_URL", "https://gmail.googleapis.com"),
+                ("CATCHPLATE_PROXY_URL", "https://127.0.0.1"),
+                ("CATCHPLATE_PROXY_URL", "https://Proxy.example"),
+                ("CATCHPLATE_PROXY_URL", "https://proxy.example:0"),
+                ("CATCHPLATE_PROXY_URL", "https://proxy.example:65536"),
+                ("CATCHPLATE_APP_ID", "not-uuid"), ("CATCHPLATE_PROXY_TOKEN", TOKEN + "="),
+                ("CATCHPLATE_PROXY_TOKEN", "B" * 43), ("CATCHPLATE_CA_FILE", "relative"),
+                ("CATCHPLATE_PROXY_CA_FILE", "")):
             with self.subTest(key=key, bad=bad), self.assertRaises(ValueError):
                 example.settings({**self.env, key: bad})
 

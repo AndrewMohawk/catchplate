@@ -127,8 +127,8 @@ class HostControls(unittest.TestCase):
                     self.assertEqual(data[2], role in ('plan', 'freeze', 'observe1', 'observe2'))
 
     def test_startup_plan_uses_only_private_derived_file_and_matches_inspected_environment(self):
-        captured = (b'SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST=sha256:old\n'
-            b'PYTHONDONTWRITEBYTECODE=0\nSERVERWARE_DATA_DIR=/data\nOPAQUE_VALUE=fixture=value #literal\n')
+        captured = (b'CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST=sha256:old\n'
+            b'PYTHONDONTWRITEBYTECODE=0\nCATCHPLATE_DATA_DIR=/data\nOPAQUE_VALUE=fixture=value #literal\n')
         derived = host.startup_environment_bytes(captured)
         for role in ('startup1', 'startup2'):
             with patch.object(host, 'startup_environment', return_value={'sha256': host.sha(derived)}), \
@@ -137,7 +137,7 @@ class HostControls(unittest.TestCase):
             selected = host.plan(role, INPUTS)
             argv = selected['createArgv']
             overrides = host.environment(derived.decode().splitlines())
-            key = 'SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST'
+            key = 'CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST'
             self.assertEqual(overrides[key], expected[key])
             self.assertEqual(overrides[key], 'sha256:' + host.BINARY_SHA)
             self.assertNotIn('--env', argv)
@@ -153,17 +153,17 @@ class HostControls(unittest.TestCase):
 
     def test_startup_environment_replaces_only_two_existing_keys_in_original_order(self):
         before = (b'FIRST=fixture=unchanged #literal\nPYTHONDONTWRITEBYTECODE=0\n'
-            b'MIDDLE=\nSERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST=sha256:old\nLAST=unchanged\n')
+            b'MIDDLE=\nCATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST=sha256:old\nLAST=unchanged\n')
         after = host.startup_environment_bytes(before)
         self.assertEqual(after.splitlines(), [b'FIRST=fixture=unchanged #literal', b'PYTHONDONTWRITEBYTECODE=1',
-            b'MIDDLE=', ('SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST=sha256:' + host.BINARY_SHA).encode(),
+            b'MIDDLE=', ('CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST=sha256:' + host.BINARY_SHA).encode(),
             b'LAST=unchanged'])
         self.assertEqual(list(host.environment(before.decode().splitlines())),
             list(host.environment(after.decode().splitlines())))
         self.assertTrue(after.endswith(b'\n'))
 
     def test_startup_environment_refuses_duplicate_missing_or_noncanonical_lines(self):
-        valid = b'PYTHONDONTWRITEBYTECODE=0\nSERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST=sha256:old\n'
+        valid = b'PYTHONDONTWRITEBYTECODE=0\nCATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST=sha256:old\n'
         for captured in (valid + b'PYTHONDONTWRITEBYTECODE=1\n', valid.removesuffix(b'\n'),
                 valid.replace(b'\n', b'\r\n'), valid + b'\n', valid + b'#comment\n',
                 valid + b'INVALID\n', valid + b'OPAQUE_VALUE=\x00\n', b'OTHER=value\n', b'x' * 65537):
@@ -175,7 +175,7 @@ class HostControls(unittest.TestCase):
             st_nlink=1, st_dev=7, st_ino=9, st_size=200, st_mtime_ns=3, st_ctime_ns=4)
 
     def test_startup_environment_creation_is_exclusive_private_and_rechecked(self):
-        captured = b'PYTHONDONTWRITEBYTECODE=0\nSERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST=sha256:old\n'
+        captured = b'PYTHONDONTWRITEBYTECODE=0\nCATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST=sha256:old\n'
         derived = host.startup_environment_bytes(captured)
         metadata = self.startup_environment_metadata()
         def pinned(path, digest, limit):
@@ -201,7 +201,7 @@ class HostControls(unittest.TestCase):
                 host.startup_environment(CFG, create=True)
 
     def test_startup_environment_rejects_permissions_owner_link_or_identity_changes(self):
-        captured = b'PYTHONDONTWRITEBYTECODE=0\nSERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST=sha256:old\n'
+        captured = b'PYTHONDONTWRITEBYTECODE=0\nCATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST=sha256:old\n'
         derived = host.startup_environment_bytes(captured)
         for change in ({'st_mode': stat.S_IFREG | 0o444}, {'st_uid': 10001}, {'st_gid': 10001},
                 {'st_nlink': 2}, {'st_mode': stat.S_IFLNK | 0o400}):

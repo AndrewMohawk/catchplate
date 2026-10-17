@@ -3,7 +3,7 @@
 This is source-only implementation, unbuilt and unexecuted. Historical admission
 does not renew permission to finalize a credential or activate an OIDC session.
 
-The private [historical exchange](../serverware/authority_registration_finalization_history_exchange.py)
+The private [historical exchange](../catchplate/authority_registration_finalization_history_exchange.py)
 accepts independent configuration/generation/runtime identity, the three original
 current-root/grant/finalization-caller enrollments, a pinned root key, and this
 exact finalization raw10 inventory:
@@ -40,10 +40,10 @@ Retained ownership must independently reconstruct the complete finalization
 request from genuine signer originals and compare it, not trust local record
 associations or user IDs alone.
 
-The [completion history wrapper](../serverware/authority_registration_finalization_completion_history.py)
+The [completion history wrapper](../catchplate/authority_registration_finalization_completion_history.py)
 additionally captures original reserve raw3, completion raw4 and independently
 expected pending sequence/head/fence. It calls the actual
-[finalization receiving verifier](../serverware/authority_registration_finalization_completion_response.py),
+[finalization receiving verifier](../catchplate/authority_registration_finalization_completion_response.py),
 which replays the original pending/plan/grant scope and authenticates completion
 and state signatures. Its result contains original completion/state bytes and
 their identities. An `uncertain` response is not authenticated completion.

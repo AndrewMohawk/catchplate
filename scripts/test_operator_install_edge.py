@@ -26,7 +26,7 @@ import unittest
 
 
 REPO = Path(__file__).resolve().parent.parent
-TEMPLATE = REPO / "docker/serverware-standalone/nginx.conf.template"
+TEMPLATE = REPO / "docker/catchplate-standalone/nginx.conf.template"
 NGINX = "nginx@sha256:1ed1b0e1d7652937d6cbdaf4018c7b6fc009a7dd6c3047351e2eddda745de43f"
 PYTHON = "sha256:ec7d6c95cd3692a2e2d228a8b1ca74e4025b54121fcc4c5da6f09cfa473315ad"
 CONSOLE, PROXY = "console.example.test", "proxy.example.test"
@@ -57,9 +57,9 @@ class EdgeContract(unittest.TestCase):
                          {"CONSOLE_HOST", "PROXY_HOST", "CONSOLE_HOST_REGEX"})
         stream, http = text.split("\nhttp {", 1)
         self.assertNotIn("operator-admin-header.conf", stream)
-        self.assertEqual(http.count("include /run/serverware/operator-admin-header.conf;"), 1)
+        self.assertEqual(http.count("include /run/catchplate/operator-admin-header.conf;"), 1)
         self.assertIn("proxy_pass_request_headers off;", http)
-        self.assertIn("auth_basic_user_file /run/serverware/htpasswd;", http)
+        self.assertIn("auth_basic_user_file /run/catchplate/htpasswd;", http)
         self.assertNotIn("access_log /", text)
         self.assertNotIn("$request_uri", text)
         self.assertNotIn("${", render())
@@ -89,7 +89,7 @@ class EdgeRuntime(unittest.TestCase):
         command(["docker", "image", "inspect", NGINX])
         command(["docker", "image", "inspect", PYTHON])
         scratch = Path(os.environ.get("TMPDIR", "/srv/catchplate-fast/tmp"))
-        with tempfile.TemporaryDirectory(prefix="serverware-edge-test.", dir=scratch) as temporary:
+        with tempfile.TemporaryDirectory(prefix="catchplate-edge-test.", dir=scratch) as temporary:
             root = Path(temporary)
             secrets = root / "secrets"
             secrets.mkdir(mode=0o755)
@@ -101,14 +101,14 @@ class EdgeRuntime(unittest.TestCase):
             digest = command(["openssl", "passwd", "-6", "-stdin"], data=PASSWORD.encode() + b"\n")
             (secrets / "htpasswd").write_bytes(b"operator:" + digest)
             (secrets / "operator-admin-header.conf").write_text(
-                'proxy_set_header X-Serverware-Admin-Token "' + ADMIN + '";\n')
+                'proxy_set_header X-Catchplate-Admin-Token "' + ADMIN + '";\n')
             config = root / "nginx.conf"
             config.write_text(render())
             hosts = root / "hosts"
-            hosts.write_text("127.0.0.1 localhost serverware decision-gate-rs edge\n")
+            hosts.write_text("127.0.0.1 localhost catchplate decision-gate-rs edge\n")
             for path in (config, hosts, *secrets.iterdir()):
                 path.chmod(0o444)  # Synthetic only; enclosing host scratch remains0700.
-            edge_mounts = ["--mount", f"type=bind,src={secrets},dst=/run/serverware,readonly",
+            edge_mounts = ["--mount", f"type=bind,src={secrets},dst=/run/catchplate,readonly",
                            "--mount", f"type=bind,src={config},dst=/etc/nginx/nginx.conf,readonly"]
             restricted = ["--read-only", "--cap-drop", "ALL", "--security-opt",
                           "no-new-privileges:true", "--pids-limit", "32", "--memory", "128m",
@@ -116,7 +116,7 @@ class EdgeRuntime(unittest.TestCase):
             temporary_fs = ["--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=8m,mode=0700,uid=10001,gid=10001"]
             # Syntax proof is network-none and does not require running backends.
             command(["docker", "run", "--rm", "--network", "none", *restricted, *temporary_fs,
-                     "--add-host", "serverware:127.0.0.1", "--add-host", "decision-gate-rs:127.0.0.1",
+                     "--add-host", "catchplate:127.0.0.1", "--add-host", "decision-gate-rs:127.0.0.1",
                      *edge_mounts, "--entrypoint", "nginx", NGINX, "-t"])
             with ExitStack() as cleanup:
                 fixture = command([
@@ -252,9 +252,9 @@ def probe() -> None:
         checks += 1
     headers = {
         "Authorization": BASIC, "Proxy-Authorization": "caller-secret-canary",
-        "X-Serverware-Admin-Token": "caller-secret-canary",
-        "X-Serverware-Bootstrap-Token": "caller-secret-canary",
-        "X-Serverware-Data-Plane-Token": "caller-secret-canary",
+        "X-Catchplate-Admin-Token": "caller-secret-canary",
+        "X-Catchplate-Bootstrap-Token": "caller-secret-canary",
+        "X-Catchplate-Data-Plane-Token": "caller-secret-canary",
         "Forwarded": "host=foreign.example.test", "X-Forwarded-For": "192.0.2.1",
         "X-Forwarded-Host": "foreign.example.test", "X-Forwarded-Proto": "http",
         "X-Forwarded-Port": "1234", "Remote-User": "caller-secret-canary",
@@ -264,19 +264,19 @@ def probe() -> None:
     assert status == 200
     observed = json.loads(data)
     received = {key.lower(): value for key, value in observed["headers"].items()}
-    assert received["x-serverware-admin-token"] == ADMIN
+    assert received["x-catchplate-admin-token"] == ADMIN
     assert received["host"] == received["x-forwarded-host"] == CONSOLE
     assert received["x-forwarded-proto"] == "https" and received["x-forwarded-port"] == "443"
     assert received["cookie"] == "ordinary=retained"
     for name in ("authorization", "proxy-authorization", "forwarded", "x-forwarded-for",
-                 "remote-user", "x-serverware-bootstrap-token", "x-serverware-data-plane-token"):
+                 "remote-user", "x-catchplate-bootstrap-token", "x-catchplate-data-plane-token"):
         assert name not in received
     assert "caller-secret-canary" not in data.decode()
     assert observed["path"] == "/api/test?query-canary=1"
     checks += 1
     body = b'{"synthetic":"unchanged"}'
     status, data = request("POST", {"Authorization": BASIC, "Origin": "https://" + CONSOLE,
-                                   "Content-Type": "application/json", "X-Serverware-CSRF-Token": "test"}, body)
+                                   "Content-Type": "application/json", "X-Catchplate-CSRF-Token": "test"}, body)
     assert status == 200 and json.loads(data)["body"].encode() == body
     checks += 1
     assert request(headers={"Authorization": BASIC, "Host": CONSOLE + ":443"})[0] == 200

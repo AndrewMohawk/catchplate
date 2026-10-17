@@ -16,8 +16,8 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS.parent))
 from scripts import run_native_pilot_lifecycle as cli
-from serverware.native_pilot_genesis_jobs import KEY_PURPOSES as COLD_KEYS
-from serverware.native_pilot_adopted_phase_profile import KEY_PURPOSES as ADOPTED_KEYS
+from catchplate.native_pilot_genesis_jobs import KEY_PURPOSES as COLD_KEYS
+from catchplate.native_pilot_adopted_phase_profile import KEY_PURPOSES as ADOPTED_KEYS
 
 
 def arguments():

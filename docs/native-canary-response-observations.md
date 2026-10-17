@@ -32,7 +32,7 @@ replay, re-sign or second intake contact is introduced.
 
 ## Closed original and controlled consumer
 
-`serverware.nativeCustodyResponseObservation/v1` is exact 13 fields, adding
+`catchplate.nativeCustodyResponseObservation/v1` is exact 13 fields, adding
 `request_observation_receipt_sha256` to the provenance/receipt carrier. The
 existing `nativeCustodyRuntimeObservation/v1` stays exact 12. The unchanged
 21-field signed receipt is phase `response`, event `response-evaluated`, signed

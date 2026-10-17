@@ -8,8 +8,8 @@ const {resolve} = require('node:path');
 const {webcrypto, createHash} = require('node:crypto');
 const vm = require('node:vm');
 const ROOT = resolve(__dirname, '..');
-const asset = name => readFileSync(resolve(ROOT, 'serverware/operator_demo_web', name), 'utf8');
-const portal = readFileSync(resolve(ROOT, 'serverware/operator_demo_portal.py'), 'utf8');
+const asset = name => readFileSync(resolve(ROOT, 'catchplate/operator_demo_web', name), 'utf8');
+const portal = readFileSync(resolve(ROOT, 'catchplate/operator_demo_portal.py'), 'utf8');
 const files = [...portal.match(/SCRIPT_FILES = \(([^)]*)\)/)[1].matchAll(/"([a-z_]+\.js)"/g)].map(match => match[1]);
 const source = files.filter(name => name !== 'app.js').map(asset).join('\n');
 const html = asset('index.html');
@@ -22,7 +22,7 @@ const KEY = '12'.repeat(32);
 const fingerprint = 'sha256:' + createHash('sha256').update(Buffer.from(KEY, 'hex')).digest('hex');
 const digest = letter => 'sha256:' + letter.repeat(64);
 const clone = value => JSON.parse(JSON.stringify(value));
-const cap = () => ({schema: 'serverware.workloadTokenRenewal/v1', enroll_path: '/api/operator-demo/applications/renewal/enroll',
+const cap = () => ({schema: 'catchplate.workloadTokenRenewal/v1', enroll_path: '/api/operator-demo/applications/renewal/enroll',
   cancel_path: '/api/operator-demo/applications/renewal/cancel', path: '/v1/workload/renew', audience: PROXY + '/v1/workload/renew',
   overlap_seconds: 300, token_lifetime_seconds: {min: 3600, max: 86400, default: 3600},
   enrollment_lifetime_seconds: {min: 86400, max: 7776000, default: 2592000}, single_writer: true});
@@ -33,7 +33,7 @@ const application = (changes = {}) => ({id: ID, name: 'Reporting job', status: '
   revoked_at: null, principal_id: 'agent:operator-demo:' + ID, token_generation: 1,
   token_expires_at_epoch_ms: NOW + 86400000, token_status: 'valid', access_status: 'unassigned', active_rule_count: 0,
   client_renewal: null, ...changes});
-const catalog = (changes = {}) => ({schema: 'serverware.operatorCatalog/v1', mode: 'operator-development', productionReady: false,
+const catalog = (changes = {}) => ({schema: 'catchplate.operatorCatalog/v1', mode: 'operator-development', productionReady: false,
   hardwareVerified: false, revision: 7, policy: {policy_hash: digest('a'), loaded_policy_hash: digest('a'), sequence: 2, activation: 'active'},
   proxy_url: PROXY, applications: [application()], credentials: [], access_rules: [], allowed_upstreams: [], limits: {},
   capabilities: {oauth: false, workload_renewal: cap()}, ...changes});
@@ -133,7 +133,7 @@ const tests = [
   }],
   ['setup is exact public helper DTO, not a token or key export', () => {
     const setup = evaluate('workloadRenewalSetup(input)', application({client_renewal: enrollment(), private_key: 'NEVER', client_token: 'NEVER'}));
-    assert.equal(setup.schema, 'serverware.managedClientSetup/v1');
+    assert.equal(setup.schema, 'catchplate.managedClientSetup/v1');
     assert.deepEqual(Object.keys(setup).sort(), ['schema', 'application_id', 'enrollment_id', 'audience', 'public_key_fingerprint',
       'token_generation', 'token_expires_at_epoch_ms', 'enrollment_expires_at_epoch_ms', 'token_lifetime_seconds', 'overlap_seconds'].sort());
     assert(!JSON.stringify(setup).includes('NEVER')); assert(!JSON.stringify(setup).includes(KEY));

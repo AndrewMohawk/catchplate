@@ -33,10 +33,10 @@ def refused(function, error):
 
 def worker(name):
     config, db, _, schema, configuration = fixture.fixture()
-    from serverware import operator_x_account_store as store, operator_publication as publication
-    from serverware import operator_x_oauth_protocol as protocol
-    from serverware import operator_x_oauth_profile as profiles
-    from serverware.http_client import HttpDeadline
+    from catchplate import operator_x_account_store as store, operator_publication as publication
+    from catchplate import operator_x_oauth_protocol as protocol
+    from catchplate import operator_x_oauth_profile as profiles
+    from catchplate.http_client import HttpDeadline
     configuration.configure(fixture.payload(configuration), fixture.ACTOR)
 
     @contextmanager

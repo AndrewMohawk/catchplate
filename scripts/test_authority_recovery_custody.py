@@ -6,9 +6,9 @@ import fcntl
 import os
 import unittest
 
-from serverware import authority_launcher as launcher
-from serverware import authority_recovery_configuration as configuration
-from serverware import authority_recovery_custody as custody
+from catchplate import authority_launcher as launcher
+from catchplate import authority_recovery_configuration as configuration
+from catchplate import authority_recovery_custody as custody
 
 
 def fixture():

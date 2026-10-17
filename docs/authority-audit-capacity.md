@@ -4,7 +4,7 @@ Status: source implementation and source review only, unbuilt and unexecuted.
 This is not an authenticated starting count, a startup repair, successful audit
 delivery or production acceptance. See the [global integration contract](authority-global-audit-capacity-design.md).
 
-`serverware.audit_outbox_contract.MAX_PENDING` owns the existing 100,000-record
+`catchplate.audit_outbox_contract.MAX_PENDING` owns the existing 100,000-record
 limit. The legacy DB constant and global capacity validator use that value;
 an aggregate cannot choose another limit. Generic quota and maintenance
 aggregates retain their separately defined capacity and arithmetic.

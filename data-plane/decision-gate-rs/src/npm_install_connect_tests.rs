@@ -13,7 +13,7 @@ const AUTHORITY: &str = "registry.npmjs.org:443";
 
 fn snapshot() -> Arc<Snapshot> {
     let mut value = (*test_snapshot(1)).clone();
-    value.policy_id = "serverware-operator-demo".into();
+    value.policy_id = "catchplate-operator-demo".into();
     value.principals[0].proxy_authorization = parse_proxy_authorization(Some(&json!({
         "scheme":"Bearer", "tokenId":APP, "tokenSha256":sha256_prefixed(TOKEN.as_bytes()),
         "expiresAtEpochMs":now_epoch_ms()+60_000, "basicTransport":{"username":APP}
@@ -36,7 +36,7 @@ fn snapshot() -> Arc<Snapshot> {
     route.jit = json!({});
     value.credentials.insert("credential:npm-install".into(), Credential {
         provider:"operator-demo".into(), provider_subject:Some("synthetic-npm".into()),
-        injection:json!({"type":"bearer", "header":"Authorization", "__serverwareCredentialType":"static"}),
+        injection:json!({"type":"bearer", "header":"Authorization", "__catchplateCredentialType":"static"}),
     });
     npm_install::validate_route(route).unwrap();
     Arc::new(value)

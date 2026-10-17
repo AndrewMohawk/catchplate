@@ -6,10 +6,10 @@ const {context, rawCatalog, npmRule, cap, existingPair, IDS, clone} = require('.
 const {publishRule} = require('./test_operator_npm_publish_ui.cjs');
 const BUNDLE = 'npm_install_v1';
 const PACKAGES = ['@example/fixture', 'example-package'];
-const capability = () => ({schema: 'serverware.operatorNpmInstall/v1', connection_type: 'npm_token_v1',
+const capability = () => ({schema: 'catchplate.operatorNpmInstall/v1', connection_type: 'npm_token_v1',
   create_rule_path: '/api/operator-demo/access-rules/npm-install', registry_origin: 'https://registry.npmjs.org',
-  destination_allowed: true, operation_bundles: [BUNDLE], sdk_auth_token: 'serverware-npm-placeholder-v1',
-  placeholder: 'Bearer serverware-npm-placeholder-v1', response_mode: 'npm_install_v1', source_pair_required: true,
+  destination_allowed: true, operation_bundles: [BUNDLE], sdk_auth_token: 'catchplate-npm-placeholder-v1',
+  placeholder: 'Bearer catchplate-npm-placeholder-v1', response_mode: 'npm_install_v1', source_pair_required: true,
   max_active_rules_per_application: 1, max_packages: 64, modes: ['metadata', 'tarball', 'audit'],
   dependencies_require_explicit_grant: true});
 // Independent public DTO oracle, not generated with npmInstallRuleFields.
@@ -85,8 +85,8 @@ const tests = [
     const input = {proxyUrl: 'https://proxy.example.test', applicationId: IDS.application,
       proxyAuthentication: 'basic_and_bearer_v1', packages: PACKAGES};
     const text = pure.run('buildNpmInstallClientRecipe(input)', input);
-    for (const value of ['SERVERWARE_PROXY_TOKEN', 'SERVERWARE_CA_FILE', 'SERVERWARE_NPM_PROJECT', 'SERVERWARE_NPM_OUTPUT',
-      'SERVERWARE_NPM_PACKAGE', 'SERVERWARE_NPM_VERSION', 'node client.mjs install', 'node client.mjs ci',
+    for (const value of ['CATCHPLATE_PROXY_TOKEN', 'CATCHPLATE_CA_FILE', 'CATCHPLATE_NPM_PROJECT', 'CATCHPLATE_NPM_OUTPUT',
+      'CATCHPLATE_NPM_PACKAGE', 'CATCHPLATE_NPM_VERSION', 'node client.mjs install', 'node client.mjs ci',
       'Lifecycle scripts are disabled', 'default npm audit remains on', 'including dependencies', 'does not exist']) assert(text.includes(value), value);
     assert(!text.includes('strict-ssl=false')); assert(!text.includes('curl '));
     for (const changes of [{proxyAuthentication: 'bearer'}, {proxyUrl: 'http://proxy.example.test'},

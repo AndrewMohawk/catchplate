@@ -31,7 +31,7 @@ the original custody, intent and proof intervals; they are not live allowances.
 
 ## Explicit grant-only bridge and fixed issuer
 
-`serverware.oidcSessionActivationRetainedReleaseGrantBridge/v1` has the existing
+`catchplate.oidcSessionActivationRetainedReleaseGrantBridge/v1` has the existing
 retained proof-bootstrap original inventory plus `currentActivationPlanner`, but
 replaces `launch` with bounded `requestTimeoutSeconds`. Its purpose is exactly
 `authorize-current-release-grants-over-retained-intent`. It supplies no listener,

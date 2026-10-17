@@ -31,17 +31,17 @@ from psycopg.types.json import Jsonb
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.authority_store.counted_hash_sql import counted_hash_functions_sql
-from serverware.authority_store.counted_projection_sql import counted_projection_functions_sql
-from serverware.authority_store.counted_store_sql import counted_store_ddl
-from serverware.authority_store.counted_path_sql import counted_path_functions_sql
-from serverware.authority_store.counted_maintenance_sql import counted_maintenance_functions_sql
-from serverware.authority_store.primary_tree_sql import framed_digest_function_sql
-from serverware.authority_store import primary_tree_sql, counted_installation
-from serverware.authority_store.wire_json_sql import wire_json_function_sql
-from serverware import authority_index_mutation_reader as mutation_reader
-from serverware import authority_indexed_mutation as indexed
-from serverware.native_postgres_results import run_native_fixture
+from catchplate.authority_store.counted_hash_sql import counted_hash_functions_sql
+from catchplate.authority_store.counted_projection_sql import counted_projection_functions_sql
+from catchplate.authority_store.counted_store_sql import counted_store_ddl
+from catchplate.authority_store.counted_path_sql import counted_path_functions_sql
+from catchplate.authority_store.counted_maintenance_sql import counted_maintenance_functions_sql
+from catchplate.authority_store.primary_tree_sql import framed_digest_function_sql
+from catchplate.authority_store import primary_tree_sql, counted_installation
+from catchplate.authority_store.wire_json_sql import wire_json_function_sql
+from catchplate import authority_index_mutation_reader as mutation_reader
+from catchplate import authority_indexed_mutation as indexed
+from catchplate.native_postgres_results import run_native_fixture
 import test_authority_counted_projection_postgres as row_oracle
 import test_authority_counted_store_postgres as storage_oracle
 import test_authority_index_join as profile_oracle
@@ -219,7 +219,7 @@ class AuthorityCountedMaintenancePostgresTests(unittest.TestCase):
 
     def call(self, table, operation, old, new):
         self.connection.execute(sql.SQL("SELECT {}(%s::text,%s::text,%s::jsonb,%s::jsonb)").format(
-            self.object("serverware_policy_authority_counted_apply_event")),
+            self.object("catchplate_policy_authority_counted_apply_event")),
             (table, operation, None if old is None else Jsonb(old), None if new is None else Jsonb(new))).fetchone()
 
     def apply(self, table, operation, old, new):
@@ -314,8 +314,8 @@ class AuthorityCountedMaintenancePostgresTests(unittest.TestCase):
                 "WHERE table_name=%s ORDER BY root_revision"
             ).format(self.object(primary_oracle.HISTORY)), (table,)).fetchall()
             expected = [(operation,
-                sql_digest("serverware.policyAuthorityAuthenticatedKey/v1", table.encode("ascii"), sql_json(key)),
-                None if row is None else sql_digest("serverware.policyAuthorityAuthenticatedRow/v1",
+                sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1", table.encode("ascii"), sql_json(key)),
+                None if row is None else sql_digest("catchplate.policyAuthorityAuthenticatedRow/v1",
                     table.encode("ascii"), sql_json(row))) for operation, key, row in events]
             self.assertEqual(journal, expected)
 
@@ -615,7 +615,7 @@ class AuthorityCountedMaintenancePostgresTests(unittest.TestCase):
         self.apply(table, "UPDATE", row, {**row, "sign_count": row["sign_count"] + 1})
 
     def test_real_function_catalog_invoker_contract_has_no_trigger_attachment(self):
-        names = ("serverware_policy_authority_counted_apply_event", "serverware_policy_authority_counted_apply_index")
+        names = ("catchplate_policy_authority_counted_apply_event", "catchplate_policy_authority_counted_apply_index")
         rows = self.connection.execute(
             "SELECT p.proname, pg_catalog.pg_get_function_identity_arguments(p.oid), "
             "pg_catalog.pg_get_function_result(p.oid), p.provolatile, p.prosecdef, p.proconfig "
@@ -808,15 +808,15 @@ class AuthorityCountedMaintenancePostgresTests(unittest.TestCase):
         # adopting even an empty pre-existing canonical namespace.
         row = self.connection.execute(
             "SELECT oid FROM pg_catalog.pg_namespace WHERE nspname=%s",
-            ("serverware_metadata",)).fetchone()
+            ("catchplate_metadata",)).fetchone()
         if row is not None:
             raise RuntimeError("reader fixture canonical namespace already exists")
 
     def create_reader_store(self):
         self.require_absent_reader_namespace()
-        self.connection.execute('CREATE SCHEMA "serverware_metadata"')
-        self.connection.execute('REVOKE ALL ON SCHEMA "serverware_metadata" FROM PUBLIC')
-        for statement in counted_store_ddl('"serverware_metadata"'):
+        self.connection.execute('CREATE SCHEMA "catchplate_metadata"')
+        self.connection.execute('REVOKE ALL ON SCHEMA "catchplate_metadata" FROM PUBLIC')
+        for statement in counted_store_ddl('"catchplate_metadata"'):
             self.connection.execute(statement)
 
     def seed_reader_store(self, fixture):
@@ -831,7 +831,7 @@ class AuthorityCountedMaintenancePostgresTests(unittest.TestCase):
             if rows:
                 with self.connection.cursor() as cursor:
                     cursor.executemany(sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
-                        sql.Identifier("serverware_metadata", table),
+                        sql.Identifier("catchplate_metadata", table),
                         sql.SQL(",").join(sql.Identifier(name) for name in columns),
                         sql.SQL(",").join(sql.Placeholder() for _ in columns)),
                         [tuple(row[name] for name in columns) for row in rows])
@@ -840,7 +840,7 @@ class AuthorityCountedMaintenancePostgresTests(unittest.TestCase):
         return {table: tuple(row[0] for row in self.connection.execute(
             sql.SQL('SELECT pg_catalog.to_jsonb(t) FROM {} AS t '
                     'ORDER BY pg_catalog.to_jsonb(t)::text COLLATE "C"').format(
-                        sql.Identifier("serverware_metadata", table))).fetchall())
+                        sql.Identifier("catchplate_metadata", table))).fetchall())
             for table in (HEADS, LEAVES, NODES)}
 
     def acquire_reader(self, fixture):
@@ -928,7 +928,7 @@ class AuthorityCountedMaintenancePostgresTests(unittest.TestCase):
         for assignment, value in (("index_revision", 30), ("primary_id", "wrong-primary-id")):
             with self.subTest(field=assignment), self.variant():
                 self.connection.execute(sql.SQL("UPDATE {} SET {}=%s WHERE index_id=%s AND index_key=%s").format(
-                    sql.Identifier("serverware_metadata", LEAVES), sql.Identifier(assignment)), (value, name, target))
+                    sql.Identifier("catchplate_metadata", LEAVES), sql.Identifier(assignment)), (value, name, target))
                 with self.assertRaises(ValueError):
                     self.acquire_reader(fixture)
                 self.assertTrue(self.reader_trace)
@@ -945,11 +945,11 @@ class AuthorityCountedMaintenancePostgresTests(unittest.TestCase):
             with self.subTest(area=area), self.variant():
                 if area == "leaf":
                     self.connection.execute(sql.SQL("DELETE FROM {} WHERE index_id=%s AND index_key=%s").format(
-                        sql.Identifier("serverware_metadata", LEAVES)), (name, target))
+                        sql.Identifier("catchplate_metadata", LEAVES)), (name, target))
                 else:
                     self.connection.execute(sql.SQL(
                         "UPDATE {} SET node_digest=%s WHERE index_id=%s AND depth=%s AND path_prefix=%s").format(
-                            sql.Identifier("serverware_metadata", NODES)),
+                            sql.Identifier("catchplate_metadata", NODES)),
                         ("sha256:" + "f" * 64, name, len(opaque.prefix), opaque.prefix))
                 with self.assertRaises(ValueError):
                     self.acquire_reader(fixture)
@@ -958,15 +958,15 @@ class AuthorityCountedMaintenancePostgresTests(unittest.TestCase):
 
     def test_reader_namespace_refusal_preserves_existing_empty_and_sentinel_schemas(self):
         self.require_absent_reader_namespace()
-        self.connection.execute('CREATE SCHEMA "serverware_metadata"')
+        self.connection.execute('CREATE SCHEMA "catchplate_metadata"')
         with self.assertRaisesRegex(RuntimeError, "already exists"):
             self.create_reader_store()
-        self.connection.execute('CREATE TABLE "serverware_metadata".reader_fixture_sentinel (value text NOT NULL)')
-        self.connection.execute('INSERT INTO "serverware_metadata".reader_fixture_sentinel VALUES (%s)', ("keep",))
+        self.connection.execute('CREATE TABLE "catchplate_metadata".reader_fixture_sentinel (value text NOT NULL)')
+        self.connection.execute('INSERT INTO "catchplate_metadata".reader_fixture_sentinel VALUES (%s)', ("keep",))
         with self.assertRaisesRegex(RuntimeError, "already exists"):
             self.create_reader_store()
         self.assertEqual(self.connection.execute(
-            'SELECT value FROM "serverware_metadata".reader_fixture_sentinel').fetchall(), [("keep",)])
+            'SELECT value FROM "catchplate_metadata".reader_fixture_sentinel').fetchall(), [("keep",)])
 
 
 if __name__ == "__main__":

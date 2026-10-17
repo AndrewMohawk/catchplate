@@ -40,20 +40,20 @@ def response(prepared, value=None, status=200, raw=None):
 
 class CommonAppsTests(unittest.TestCase):
     def setUp(self):
-        directory = tempfile.TemporaryDirectory(prefix="serverware-common-apps-offline-")
+        directory = tempfile.TemporaryDirectory(prefix="catchplate-common-apps-offline-")
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
         self.config_path = self.root / "client.private.json"
-        self.ca_path = self.root / "serverware-ca.pem"
+        self.ca_path = self.root / "catchplate-ca.pem"
         self.ca_path.write_bytes(re.search(rb"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
             Path(certifi.where()).read_bytes(), re.S).group())
         self.config = {"application_id": APP_ID, "access_rule_id": RULE_ID,
             "proxy_authentication": "basic_and_bearer_v1", "proxy_username": APP_ID,
             "proxy_password": TOKEN, "proxy_url": "https://proxy.example.test:8443",
-            "token_expires_at_epoch_ms": 2**53 - 1, "ca_file": "./serverware-ca.pem",
+            "token_expires_at_epoch_ms": 2**53 - 1, "ca_file": "./catchplate-ca.pem",
             "app_preset": "gitlab", "app_operation": "project_issues", "scope": {"project_id": "12345"},
             "upstream_url": "https://gitlab.com/api/v4/projects/12345/issues", "methods": ["GET"],
-            "request_headers": {"PRIVATE-TOKEN": "serverware-gitlab-placeholder-v1"},
+            "request_headers": {"PRIVATE-TOKEN": "catchplate-gitlab-placeholder-v1"},
             "request_query": {}, "query_keys": ["state", "page", "per_page"], "request_body": None,
             "credential_input": "replace_exact", "response_mode": "unfiltered_json_or_empty_v2",
             "client_recipe": {"automatic_retries": 0}}
@@ -130,7 +130,7 @@ class CommonAppsTests(unittest.TestCase):
         for provider, (host, auth, prefix) in example.PROVIDERS.items():
             with self.subTest(provider=provider):
                 value = {**self.config, "app_preset": provider, "upstream_url": "https://" + host + "/api",
-                    "request_headers": {auth: prefix + "serverware-" + provider + "-placeholder-v1"}}
+                    "request_headers": {auth: prefix + "catchplate-" + provider + "-placeholder-v1"}}
                 loaded = example.load_configuration(self.write(value))
                 self.assertEqual(loaded["ca_file"], str(self.ca_path))
                 self.assertIsNone(loaded["proxy_ca_file"])
@@ -138,11 +138,11 @@ class CommonAppsTests(unittest.TestCase):
 
     def test_current_preset_descriptors_produce_runnable_downloads(self):
         root = Path(__file__).resolve().parents[2]
-        if not (root / "serverware").is_dir():
+        if not (root / "catchplate").is_dir():
             self.skipTest("Preset source checks require the full repository checkout")
         count = 0
         for name in ("operator_common_apps_ai", "operator_common_apps_services"):
-            spec = importlib.util.spec_from_file_location(name, root / "serverware" / (name + ".py"))
+            spec = importlib.util.spec_from_file_location(name, root / "catchplate" / (name + ".py"))
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             for app in module.PRESETS:
@@ -196,7 +196,7 @@ class CommonAppsTests(unittest.TestCase):
         self.assertEqual(len(seen), 1)
         adapter, prepared, kwargs = seen[0]
         self.assertEqual(prepared.url, self.config["upstream_url"] + "?per_page=5&state=opened")
-        self.assertEqual(prepared.headers["PRIVATE-TOKEN"], "serverware-gitlab-placeholder-v1")
+        self.assertEqual(prepared.headers["PRIVATE-TOKEN"], "catchplate-gitlab-placeholder-v1")
         self.assertNotIn("Proxy-Authorization", prepared.headers)
         self.assertNotIn("Content-Type", prepared.headers)
         self.assertIsNone(prepared.body)
@@ -216,7 +216,7 @@ class CommonAppsTests(unittest.TestCase):
     def test_write_requires_explicit_body_and_confirmation_never_uses_suggestion(self):
         self.config.update(app_preset="slack", app_operation="post_message", scope={"channel": "C0123456789"},
             upstream_url="https://slack.com/api/chat.postMessage", methods=["POST"],
-            request_headers={"Authorization": "Bearer serverware-slack-placeholder-v1"},
+            request_headers={"Authorization": "Bearer catchplate-slack-placeholder-v1"},
             request_body={"channel": "C0123456789", "text": "Not automatically sent"}, query_keys=[])
         config = self.load()
         body_path = self.root / "request.json"
@@ -285,7 +285,7 @@ class CommonAppsTests(unittest.TestCase):
         for provider, field in (("slack", "ok"), ("cloudflare", "success")):
             host, auth, prefix = example.PROVIDERS[provider]
             config = {**self.config, "app_preset": provider, "upstream_url": "https://" + host + "/api",
-                "request_headers": {auth: prefix + "serverware-" + provider + "-placeholder-v1"}}
+                "request_headers": {auth: prefix + "catchplate-" + provider + "-placeholder-v1"}}
             with self.subTest(provider=provider), patch.object(example, "execute",
                     return_value={"status": 200, "response": {field: False}}), \
                     patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()) as err:

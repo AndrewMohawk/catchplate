@@ -1,16 +1,16 @@
 services:
-  serverware:
+  catchplate:
     platform: linux/amd64
     build:
       context: .
-    command: ["python", "-m", "serverware.control_plane_runner"]
+    command: ["python", "-m", "catchplate.control_plane_runner"]
     init: true
     read_only: true
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
-      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+      - seccomp=./security/seccomp/catchplate-deny-dangerous.json
     pids_limit: 256
     mem_limit: 768m
     ulimits:
@@ -18,107 +18,107 @@ services:
         soft: 0
         hard: 0
     environment:
-      SERVERWARE_DATA_DIR: /data
-      SERVERWARE_PROCESS_MODE: serverware-control-plane
-      SERVERWARE_PUBLIC_URL: ${SERVERWARE_PUBLIC_URL:-http://localhost:${SERVERWARE_CONTROL_PLANE_HOST_PORT:-3000}}
-      SERVERWARE_OAUTH_STATE_TTL_SECONDS: ${SERVERWARE_OAUTH_STATE_TTL_SECONDS:-600}
-      SERVERWARE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS: ${SERVERWARE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS:-900}
-      SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT: ${SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT:-1000}
-      SERVERWARE_SETUP_SESSION_TTL_SECONDS: ${SERVERWARE_SETUP_SESSION_TTL_SECONDS:-86400}
-      SERVERWARE_SETUP_SESSION_MAX_ACTIVE: ${SERVERWARE_SETUP_SESSION_MAX_ACTIVE:-1000}
-      SERVERWARE_SETUP_SESSION_MAX_RETAINED: ${SERVERWARE_SETUP_SESSION_MAX_RETAINED:-10000}
-      SERVERWARE_SETUP_SESSION_RETENTION_SECONDS: ${SERVERWARE_SETUP_SESSION_RETENTION_SECONDS:-604800}
-      SERVERWARE_SETUP_SESSION_EVIDENCE_MAX_BYTES: ${SERVERWARE_SETUP_SESSION_EVIDENCE_MAX_BYTES:-1048576}
-      SERVERWARE_SETUP_SESSION_EVIDENCE_MAX_COUNT: ${SERVERWARE_SETUP_SESSION_EVIDENCE_MAX_COUNT:-64}
-      SERVERWARE_SETUP_SESSION_EVENT_MAX_BYTES: ${SERVERWARE_SETUP_SESSION_EVENT_MAX_BYTES:-16384}
-      SERVERWARE_SETUP_SESSION_EVENT_MAX_COUNT: ${SERVERWARE_SETUP_SESSION_EVENT_MAX_COUNT:-128}
-      SERVERWARE_SETUP_SESSION_AUDIT_OUTBOX_MAX_PENDING: ${SERVERWARE_SETUP_SESSION_AUDIT_OUTBOX_MAX_PENDING:-10000}
-      SERVERWARE_SETUP_SESSION_AUDIT_CLAIM_TTL_SECONDS: ${SERVERWARE_SETUP_SESSION_AUDIT_CLAIM_TTL_SECONDS:-60}
-      SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY: ${SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY:+/run/serverware/setup-trust/enrollment-verifier.pub.pem}
-      SERVERWARE_SETUP_ENROLLMENT_VERIFIER_KEY_ID: ${SERVERWARE_SETUP_ENROLLMENT_VERIFIER_KEY_ID:-}
-      SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PROVIDER: ${SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PROVIDER:-}
-      SERVERWARE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY: ${SERVERWARE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY:+/run/serverware/setup-trust/hardware-verifier.pub.pem}
-      SERVERWARE_SETUP_HARDWARE_VERIFIER_KEY_ID: ${SERVERWARE_SETUP_HARDWARE_VERIFIER_KEY_ID:-}
-      SERVERWARE_SETUP_HARDWARE_VERIFIER_PROVIDER: ${SERVERWARE_SETUP_HARDWARE_VERIFIER_PROVIDER:-}
-      SERVERWARE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY: ${SERVERWARE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY:+/run/serverware/setup-trust/final-authority.pub.pem}
-      SERVERWARE_SETUP_FINAL_AUTHORITY_KEY_ID: ${SERVERWARE_SETUP_FINAL_AUTHORITY_KEY_ID:-}
-      SERVERWARE_SETUP_FINAL_AUTHORITY_PROVIDER: ${SERVERWARE_SETUP_FINAL_AUTHORITY_PROVIDER:-}
-      SERVERWARE_SETUP_ATTESTATION_CHALLENGE_TTL_SECONDS: ${SERVERWARE_SETUP_ATTESTATION_CHALLENGE_TTL_SECONDS:-300}
-      SERVERWARE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES: ${SERVERWARE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES:-1000000}
-      SERVERWARE_POLICY_CANARY_REQUIRED: ${SERVERWARE_POLICY_CANARY_REQUIRED:-0}
-      SERVERWARE_POLICY_CANARY_MIN_OBSERVATION_SECONDS: ${SERVERWARE_POLICY_CANARY_MIN_OBSERVATION_SECONDS:-0}
-      SERVERWARE_POLICY_CANARY_MIN_AUDIT_EVENTS: ${SERVERWARE_POLICY_CANARY_MIN_AUDIT_EVENTS:-0}
-      SERVERWARE_POLICY_CANARY_MAX_DENIALS: ${SERVERWARE_POLICY_CANARY_MAX_DENIALS:-0}
-      SERVERWARE_GOOGLE_OAUTH_CLIENT_ID: ${SERVERWARE_GOOGLE_OAUTH_CLIENT_ID:-}
-      SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET: ${SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET:-}
-      SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE: ${SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE:+/run/secrets/serverware-google-oauth-client-secret}
-      SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI: ${SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI:-${SERVERWARE_PUBLIC_URL:-http://localhost:${SERVERWARE_CONTROL_PLANE_HOST_PORT:-3000}}/api/oauth/callback/google}
-      SERVERWARE_X_OAUTH_CLIENT_ID: ${SERVERWARE_X_OAUTH_CLIENT_ID:-}
-      SERVERWARE_X_OAUTH_CLIENT_SECRET: ${SERVERWARE_X_OAUTH_CLIENT_SECRET:-}
-      SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE: ${SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE:+/run/secrets/serverware-x-oauth-client-secret}
-      SERVERWARE_X_OAUTH_REDIRECT_URI: ${SERVERWARE_X_OAUTH_REDIRECT_URI:-${SERVERWARE_PUBLIC_URL:-http://localhost:${SERVERWARE_CONTROL_PLANE_HOST_PORT:-3000}}/api/oauth/callback/x}
-      SERVERWARE_OIDC_ENABLED: ${SERVERWARE_OIDC_ENABLED:-0}
-      SERVERWARE_OIDC_BROWSER_LOGIN_ENABLED: ${SERVERWARE_OIDC_BROWSER_LOGIN_ENABLED:-0}
-      SERVERWARE_OIDC_ISSUER: ${SERVERWARE_OIDC_ISSUER:-}
-      SERVERWARE_OIDC_AUDIENCE: ${SERVERWARE_OIDC_AUDIENCE:-}
-      SERVERWARE_OIDC_JWKS_JSON: ${SERVERWARE_OIDC_JWKS_JSON:-}
-      SERVERWARE_OIDC_AUTHORIZATION_ENDPOINT: ${SERVERWARE_OIDC_AUTHORIZATION_ENDPOINT:-}
-      SERVERWARE_OIDC_TOKEN_ENDPOINT: ${SERVERWARE_OIDC_TOKEN_ENDPOINT:-}
-      SERVERWARE_OIDC_CLIENT_ID: ${SERVERWARE_OIDC_CLIENT_ID:-}
-      SERVERWARE_OIDC_CLIENT_SECRET: ${SERVERWARE_OIDC_CLIENT_SECRET:-}
-      SERVERWARE_OIDC_CLIENT_SECRET_FILE: ${SERVERWARE_OIDC_CLIENT_SECRET_FILE:+/run/secrets/serverware-oidc-client-secret}
-      SERVERWARE_OIDC_REDIRECT_URI: ${SERVERWARE_OIDC_REDIRECT_URI:-${SERVERWARE_PUBLIC_URL:-http://localhost:${SERVERWARE_CONTROL_PLANE_HOST_PORT:-3000}}/api/auth/oidc/callback}
-      SERVERWARE_OIDC_BROWSER_SCOPES: ${SERVERWARE_OIDC_BROWSER_SCOPES:-openid,profile,email}
-      SERVERWARE_OIDC_TOKEN_AUTH_METHOD: ${SERVERWARE_OIDC_TOKEN_AUTH_METHOD:-client_secret_basic}
-      SERVERWARE_OIDC_LOGIN_STATE_TTL_SECONDS: ${SERVERWARE_OIDC_LOGIN_STATE_TTL_SECONDS:-300}
-      SERVERWARE_OIDC_SESSION_TTL_SECONDS: ${SERVERWARE_OIDC_SESSION_TTL_SECONDS:-3600}
-      SERVERWARE_ADMIN_TOKEN: dev-admin-token
-      SERVERWARE_ADMIN_USER: user:demo
-      SERVERWARE_DEV_AUTHENTICATOR: "1"
-      SERVERWARE_DECISION_GATE_BASE: http://decision-gate-rs:9091
-      SERVERWARE_DATA_PLANE_INSTANCE_ID: spiffe://development.serverware/decision-gate/local
-      SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN: dev-credential-lease-token
-      SERVERWARE_DATA_PLANE_AUDIT_TOKEN: dev-audit-ingest-token
-      SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN: dev-grant-consume-token
-      SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN: dev-rate-limit-consume-token
-      SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN: dev-release-authorization-token
-      SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN: dev-rust-management-token
-      SERVERWARE_AUDIT_ANCHOR_URL: http://audit-anchor:9100/anchors
-      SERVERWARE_AUDIT_ANCHOR_TOKEN: dev-audit-anchor-token
-      SERVERWARE_AUDIT_ANCHOR_INTERVAL_SECONDS: "0.5"
-      SERVERWARE_AUDIT_ANCHOR_TIMEOUT_SECONDS: "30"
-      SERVERWARE_AUDIT_STORE_BACKEND: postgres
-      SERVERWARE_AUDIT_STORE_POSTGRES_DSN: postgresql://serverware:serverware@grant-store:5432/serverware
-      SERVERWARE_METADATA_STORE_BACKEND: postgres
-      SERVERWARE_METADATA_STORE_POSTGRES_DSN: postgresql://serverware:serverware@grant-store:5432/serverware
-      SERVERWARE_GRANT_STORE_BACKEND: postgres
-      SERVERWARE_GRANT_STORE_POSTGRES_DSN: postgresql://serverware:serverware@grant-store:5432/serverware
-      SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED: "1"
-      SERVERWARE_RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS: "15"
-      SERVERWARE_RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS: "30"
-      SERVERWARE_RELEASE_AUTHORIZATION_RECONCILE_LIMIT: "100"
-      SERVERWARE_RELEASE_PROVENANCE: /data/release-provenance.json
-      SERVERWARE_IMAGE_SIGNATURES: /data/image-signatures.json
-      SERVERWARE_KEY_RELEASE_REQUIRED: "1"
-      SERVERWARE_RELEASE_CHANNEL: dev
-      SERVERWARE_KEY_RELEASE_MIN_ROLLBACK_EPOCH: "1"
-      SERVERWARE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST: "1"
-      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: ${SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST:-}
-      SERVERWARE_RESPONSE_SIGNING_KEY: /run/serverware/response-signing-private/response-signing-ed25519.pem
-      SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY: /custody-trust/control-plane-response-signing.pub.pem
-      SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY_ID_PATH: /custody-trust/control-plane-response-signing.key-id
+      CATCHPLATE_DATA_DIR: /data
+      CATCHPLATE_PROCESS_MODE: catchplate-control-plane
+      CATCHPLATE_PUBLIC_URL: ${CATCHPLATE_PUBLIC_URL:-http://localhost:${CATCHPLATE_CONTROL_PLANE_HOST_PORT:-3000}}
+      CATCHPLATE_OAUTH_STATE_TTL_SECONDS: ${CATCHPLATE_OAUTH_STATE_TTL_SECONDS:-600}
+      CATCHPLATE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS: ${CATCHPLATE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS:-900}
+      CATCHPLATE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT: ${CATCHPLATE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT:-1000}
+      CATCHPLATE_SETUP_SESSION_TTL_SECONDS: ${CATCHPLATE_SETUP_SESSION_TTL_SECONDS:-86400}
+      CATCHPLATE_SETUP_SESSION_MAX_ACTIVE: ${CATCHPLATE_SETUP_SESSION_MAX_ACTIVE:-1000}
+      CATCHPLATE_SETUP_SESSION_MAX_RETAINED: ${CATCHPLATE_SETUP_SESSION_MAX_RETAINED:-10000}
+      CATCHPLATE_SETUP_SESSION_RETENTION_SECONDS: ${CATCHPLATE_SETUP_SESSION_RETENTION_SECONDS:-604800}
+      CATCHPLATE_SETUP_SESSION_EVIDENCE_MAX_BYTES: ${CATCHPLATE_SETUP_SESSION_EVIDENCE_MAX_BYTES:-1048576}
+      CATCHPLATE_SETUP_SESSION_EVIDENCE_MAX_COUNT: ${CATCHPLATE_SETUP_SESSION_EVIDENCE_MAX_COUNT:-64}
+      CATCHPLATE_SETUP_SESSION_EVENT_MAX_BYTES: ${CATCHPLATE_SETUP_SESSION_EVENT_MAX_BYTES:-16384}
+      CATCHPLATE_SETUP_SESSION_EVENT_MAX_COUNT: ${CATCHPLATE_SETUP_SESSION_EVENT_MAX_COUNT:-128}
+      CATCHPLATE_SETUP_SESSION_AUDIT_OUTBOX_MAX_PENDING: ${CATCHPLATE_SETUP_SESSION_AUDIT_OUTBOX_MAX_PENDING:-10000}
+      CATCHPLATE_SETUP_SESSION_AUDIT_CLAIM_TTL_SECONDS: ${CATCHPLATE_SETUP_SESSION_AUDIT_CLAIM_TTL_SECONDS:-60}
+      CATCHPLATE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY: ${CATCHPLATE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY:+/run/catchplate/setup-trust/enrollment-verifier.pub.pem}
+      CATCHPLATE_SETUP_ENROLLMENT_VERIFIER_KEY_ID: ${CATCHPLATE_SETUP_ENROLLMENT_VERIFIER_KEY_ID:-}
+      CATCHPLATE_SETUP_ENROLLMENT_VERIFIER_PROVIDER: ${CATCHPLATE_SETUP_ENROLLMENT_VERIFIER_PROVIDER:-}
+      CATCHPLATE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY: ${CATCHPLATE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY:+/run/catchplate/setup-trust/hardware-verifier.pub.pem}
+      CATCHPLATE_SETUP_HARDWARE_VERIFIER_KEY_ID: ${CATCHPLATE_SETUP_HARDWARE_VERIFIER_KEY_ID:-}
+      CATCHPLATE_SETUP_HARDWARE_VERIFIER_PROVIDER: ${CATCHPLATE_SETUP_HARDWARE_VERIFIER_PROVIDER:-}
+      CATCHPLATE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY: ${CATCHPLATE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY:+/run/catchplate/setup-trust/final-authority.pub.pem}
+      CATCHPLATE_SETUP_FINAL_AUTHORITY_KEY_ID: ${CATCHPLATE_SETUP_FINAL_AUTHORITY_KEY_ID:-}
+      CATCHPLATE_SETUP_FINAL_AUTHORITY_PROVIDER: ${CATCHPLATE_SETUP_FINAL_AUTHORITY_PROVIDER:-}
+      CATCHPLATE_SETUP_ATTESTATION_CHALLENGE_TTL_SECONDS: ${CATCHPLATE_SETUP_ATTESTATION_CHALLENGE_TTL_SECONDS:-300}
+      CATCHPLATE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES: ${CATCHPLATE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES:-1000000}
+      CATCHPLATE_POLICY_CANARY_REQUIRED: ${CATCHPLATE_POLICY_CANARY_REQUIRED:-0}
+      CATCHPLATE_POLICY_CANARY_MIN_OBSERVATION_SECONDS: ${CATCHPLATE_POLICY_CANARY_MIN_OBSERVATION_SECONDS:-0}
+      CATCHPLATE_POLICY_CANARY_MIN_AUDIT_EVENTS: ${CATCHPLATE_POLICY_CANARY_MIN_AUDIT_EVENTS:-0}
+      CATCHPLATE_POLICY_CANARY_MAX_DENIALS: ${CATCHPLATE_POLICY_CANARY_MAX_DENIALS:-0}
+      CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID: ${CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID:-}
+      CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET: ${CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET:-}
+      CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE: ${CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE:+/run/secrets/catchplate-google-oauth-client-secret}
+      CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI: ${CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI:-${CATCHPLATE_PUBLIC_URL:-http://localhost:${CATCHPLATE_CONTROL_PLANE_HOST_PORT:-3000}}/api/oauth/callback/google}
+      CATCHPLATE_X_OAUTH_CLIENT_ID: ${CATCHPLATE_X_OAUTH_CLIENT_ID:-}
+      CATCHPLATE_X_OAUTH_CLIENT_SECRET: ${CATCHPLATE_X_OAUTH_CLIENT_SECRET:-}
+      CATCHPLATE_X_OAUTH_CLIENT_SECRET_FILE: ${CATCHPLATE_X_OAUTH_CLIENT_SECRET_FILE:+/run/secrets/catchplate-x-oauth-client-secret}
+      CATCHPLATE_X_OAUTH_REDIRECT_URI: ${CATCHPLATE_X_OAUTH_REDIRECT_URI:-${CATCHPLATE_PUBLIC_URL:-http://localhost:${CATCHPLATE_CONTROL_PLANE_HOST_PORT:-3000}}/api/oauth/callback/x}
+      CATCHPLATE_OIDC_ENABLED: ${CATCHPLATE_OIDC_ENABLED:-0}
+      CATCHPLATE_OIDC_BROWSER_LOGIN_ENABLED: ${CATCHPLATE_OIDC_BROWSER_LOGIN_ENABLED:-0}
+      CATCHPLATE_OIDC_ISSUER: ${CATCHPLATE_OIDC_ISSUER:-}
+      CATCHPLATE_OIDC_AUDIENCE: ${CATCHPLATE_OIDC_AUDIENCE:-}
+      CATCHPLATE_OIDC_JWKS_JSON: ${CATCHPLATE_OIDC_JWKS_JSON:-}
+      CATCHPLATE_OIDC_AUTHORIZATION_ENDPOINT: ${CATCHPLATE_OIDC_AUTHORIZATION_ENDPOINT:-}
+      CATCHPLATE_OIDC_TOKEN_ENDPOINT: ${CATCHPLATE_OIDC_TOKEN_ENDPOINT:-}
+      CATCHPLATE_OIDC_CLIENT_ID: ${CATCHPLATE_OIDC_CLIENT_ID:-}
+      CATCHPLATE_OIDC_CLIENT_SECRET: ${CATCHPLATE_OIDC_CLIENT_SECRET:-}
+      CATCHPLATE_OIDC_CLIENT_SECRET_FILE: ${CATCHPLATE_OIDC_CLIENT_SECRET_FILE:+/run/secrets/catchplate-oidc-client-secret}
+      CATCHPLATE_OIDC_REDIRECT_URI: ${CATCHPLATE_OIDC_REDIRECT_URI:-${CATCHPLATE_PUBLIC_URL:-http://localhost:${CATCHPLATE_CONTROL_PLANE_HOST_PORT:-3000}}/api/auth/oidc/callback}
+      CATCHPLATE_OIDC_BROWSER_SCOPES: ${CATCHPLATE_OIDC_BROWSER_SCOPES:-openid,profile,email}
+      CATCHPLATE_OIDC_TOKEN_AUTH_METHOD: ${CATCHPLATE_OIDC_TOKEN_AUTH_METHOD:-client_secret_basic}
+      CATCHPLATE_OIDC_LOGIN_STATE_TTL_SECONDS: ${CATCHPLATE_OIDC_LOGIN_STATE_TTL_SECONDS:-300}
+      CATCHPLATE_OIDC_SESSION_TTL_SECONDS: ${CATCHPLATE_OIDC_SESSION_TTL_SECONDS:-3600}
+      CATCHPLATE_ADMIN_TOKEN: dev-admin-token
+      CATCHPLATE_ADMIN_USER: user:demo
+      CATCHPLATE_DEV_AUTHENTICATOR: "1"
+      CATCHPLATE_DECISION_GATE_BASE: http://decision-gate-rs:9091
+      CATCHPLATE_DATA_PLANE_INSTANCE_ID: spiffe://development.catchplate/decision-gate/local
+      CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN: dev-credential-lease-token
+      CATCHPLATE_DATA_PLANE_AUDIT_TOKEN: dev-audit-ingest-token
+      CATCHPLATE_DATA_PLANE_GRANT_CONSUME_TOKEN: dev-grant-consume-token
+      CATCHPLATE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN: dev-rate-limit-consume-token
+      CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN: dev-release-authorization-token
+      CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN: dev-rust-management-token
+      CATCHPLATE_AUDIT_ANCHOR_URL: http://audit-anchor:9100/anchors
+      CATCHPLATE_AUDIT_ANCHOR_TOKEN: dev-audit-anchor-token
+      CATCHPLATE_AUDIT_ANCHOR_INTERVAL_SECONDS: "0.5"
+      CATCHPLATE_AUDIT_ANCHOR_TIMEOUT_SECONDS: "30"
+      CATCHPLATE_AUDIT_STORE_BACKEND: postgres
+      CATCHPLATE_AUDIT_STORE_POSTGRES_DSN: postgresql://catchplate:catchplate@grant-store:5432/catchplate
+      CATCHPLATE_METADATA_STORE_BACKEND: postgres
+      CATCHPLATE_METADATA_STORE_POSTGRES_DSN: postgresql://catchplate:catchplate@grant-store:5432/catchplate
+      CATCHPLATE_GRANT_STORE_BACKEND: postgres
+      CATCHPLATE_GRANT_STORE_POSTGRES_DSN: postgresql://catchplate:catchplate@grant-store:5432/catchplate
+      CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED: "1"
+      CATCHPLATE_RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS: "15"
+      CATCHPLATE_RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS: "30"
+      CATCHPLATE_RELEASE_AUTHORIZATION_RECONCILE_LIMIT: "100"
+      CATCHPLATE_RELEASE_PROVENANCE: /data/release-provenance.json
+      CATCHPLATE_IMAGE_SIGNATURES: /data/image-signatures.json
+      CATCHPLATE_KEY_RELEASE_REQUIRED: "1"
+      CATCHPLATE_RELEASE_CHANNEL: dev
+      CATCHPLATE_KEY_RELEASE_MIN_ROLLBACK_EPOCH: "1"
+      CATCHPLATE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST: "1"
+      CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST: ${CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST:-}
+      CATCHPLATE_RESPONSE_SIGNING_KEY: /run/catchplate/response-signing-private/response-signing-ed25519.pem
+      CATCHPLATE_RESPONSE_SIGNING_PUBLIC_KEY: /custody-trust/control-plane-response-signing.pub.pem
+      CATCHPLATE_RESPONSE_SIGNING_PUBLIC_KEY_ID_PATH: /custody-trust/control-plane-response-signing.key-id
     ports:
-      - "127.0.0.1:${SERVERWARE_CONTROL_PLANE_HOST_PORT:-3000}:3000"
+      - "127.0.0.1:${CATCHPLATE_CONTROL_PLANE_HOST_PORT:-3000}:3000"
     volumes:
-      - serverware-data:/data
-      - serverware-custody-trust:/custody-trust
-      - serverware-response-signing-private:/run/serverware/response-signing-private
-      - ${SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/serverware-google-oauth-client-secret:ro
-      - ${SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/serverware-x-oauth-client-secret:ro
-      - ${SERVERWARE_OIDC_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/serverware-oidc-client-secret:ro
-      - ${SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY:-/dev/null}:/run/serverware/setup-trust/enrollment-verifier.pub.pem:ro
-      - ${SERVERWARE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY:-/dev/null}:/run/serverware/setup-trust/hardware-verifier.pub.pem:ro
-      - ${SERVERWARE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY:-/dev/null}:/run/serverware/setup-trust/final-authority.pub.pem:ro
+      - catchplate-data:/data
+      - catchplate-custody-trust:/custody-trust
+      - catchplate-response-signing-private:/run/catchplate/response-signing-private
+      - ${CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/catchplate-google-oauth-client-secret:ro
+      - ${CATCHPLATE_X_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/catchplate-x-oauth-client-secret:ro
+      - ${CATCHPLATE_OIDC_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/catchplate-oidc-client-secret:ro
+      - ${CATCHPLATE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY:-/dev/null}:/run/catchplate/setup-trust/enrollment-verifier.pub.pem:ro
+      - ${CATCHPLATE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY:-/dev/null}:/run/catchplate/setup-trust/hardware-verifier.pub.pem:ro
+      - ${CATCHPLATE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY:-/dev/null}:/run/catchplate/setup-trust/final-authority.pub.pem:ro
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=64m
     depends_on:
@@ -141,7 +141,7 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+      - seccomp=./security/seccomp/catchplate-deny-dangerous.json
     pids_limit: 128
     mem_limit: 256m
     ulimits:
@@ -150,17 +150,17 @@ services:
         hard: 0
     command: ["python", "scripts/audit_anchor_sink.py"]
     environment:
-      SERVERWARE_AUDIT_ANCHOR_TOKEN: dev-audit-anchor-token
-      SERVERWARE_AUDIT_ANCHOR_PATH: /anchors/transparency-log.jsonl
-      SERVERWARE_TRANSPARENCY_LOG_SIGNING_KEY: /anchors/transparency-log-ed25519.pem
-      SERVERWARE_TRANSPARENCY_CHECKPOINT_COMMAND: python scripts/transparency_checkpoint.py checkpoint
-      SERVERWARE_TRANSPARENCY_CHECKPOINT_MODE: fixture
-      SERVERWARE_TRANSPARENCY_CHECKPOINT_REQUIRED: "1"
-      SERVERWARE_EXTERNAL_TRANSPARENCY_LOG_PATH: /anchors/managed-transparency-log.jsonl
+      CATCHPLATE_AUDIT_ANCHOR_TOKEN: dev-audit-anchor-token
+      CATCHPLATE_AUDIT_ANCHOR_PATH: /anchors/transparency-log.jsonl
+      CATCHPLATE_TRANSPARENCY_LOG_SIGNING_KEY: /anchors/transparency-log-ed25519.pem
+      CATCHPLATE_TRANSPARENCY_CHECKPOINT_COMMAND: python scripts/transparency_checkpoint.py checkpoint
+      CATCHPLATE_TRANSPARENCY_CHECKPOINT_MODE: fixture
+      CATCHPLATE_TRANSPARENCY_CHECKPOINT_REQUIRED: "1"
+      CATCHPLATE_EXTERNAL_TRANSPARENCY_LOG_PATH: /anchors/managed-transparency-log.jsonl
     ports:
-      - "127.0.0.1:${SERVERWARE_AUDIT_ANCHOR_HOST_PORT:-9100}:9100"
+      - "127.0.0.1:${CATCHPLATE_AUDIT_ANCHOR_HOST_PORT:-9100}:9100"
     volumes:
-      - serverware-audit-anchors:/anchors
+      - catchplate-audit-anchors:/anchors
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=32m
     healthcheck:
@@ -179,7 +179,7 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+      - seccomp=./security/seccomp/catchplate-deny-dangerous.json
     pids_limit: 128
     mem_limit: 512m
     ulimits:
@@ -187,19 +187,19 @@ services:
         soft: 0
         hard: 0
     environment:
-      POSTGRES_DB: serverware
-      POSTGRES_USER: serverware
-      POSTGRES_PASSWORD: serverware
+      POSTGRES_DB: catchplate
+      POSTGRES_USER: catchplate
+      POSTGRES_PASSWORD: catchplate
       PGDATA: /var/lib/postgresql/data/pgdata
     expose:
       - "5432"
     volumes:
-      - serverware-grant-store:/var/lib/postgresql/data
+      - catchplate-grant-store:/var/lib/postgresql/data
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=32m
       - /var/run/postgresql:rw,noexec,nosuid,nodev,size=8m,uid=70,gid=70,mode=3775
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U serverware -d serverware"]
+      test: ["CMD-SHELL", "pg_isready -U catchplate -d catchplate"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -213,7 +213,7 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+      - seccomp=./security/seccomp/catchplate-deny-dangerous.json
     pids_limit: 128
     mem_limit: 256m
     ulimits:
@@ -224,7 +224,7 @@ services:
     expose:
       - "8443"
     volumes:
-      - serverware-data:/data
+      - catchplate-data:/data
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=32m
     healthcheck:
@@ -236,7 +236,7 @@ services:
   custody-runtime:
     profiles: ["custody"]
     platform: linux/amd64
-    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    image: ${CATCHPLATE_DECISION_GATE_DEV_IMAGE:-catchplate-decision-gate:dev}
     pull_policy: never
     init: true
     read_only: true
@@ -245,7 +245,7 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+      - seccomp=./security/seccomp/catchplate-deny-dangerous.json
     pids_limit: 64
     mem_limit: 128m
     user: "10002:10003"
@@ -253,21 +253,21 @@ services:
       core:
         soft: 0
         hard: 0
-    entrypoint: ["/usr/local/bin/serverware-custody-runtime"]
-    command: ["--socket", "/run/serverware-custody/custody.sock"]
+    entrypoint: ["/usr/local/bin/catchplate-custody-runtime"]
+    command: ["--socket", "/run/catchplate-custody/custody.sock"]
     environment:
-      SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY: /custody-trust/control-plane-response-signing.pub.pem
-      SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID_FILE: /custody-trust/control-plane-response-signing.key-id
-      SERVERWARE_CUSTODY_EXPECTED_CLIENT_UID: "10001"
-      SERVERWARE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY: /var/lib/serverware-custody
+      CATCHPLATE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY: /custody-trust/control-plane-response-signing.pub.pem
+      CATCHPLATE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID_FILE: /custody-trust/control-plane-response-signing.key-id
+      CATCHPLATE_CUSTODY_EXPECTED_CLIENT_UID: "10001"
+      CATCHPLATE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY: /var/lib/catchplate-custody
     volumes:
-      - serverware-custody-socket:/run/serverware-custody
-      - serverware-custody-trust:/custody-trust:ro
-      - serverware-custody-state:/var/lib/serverware-custody
+      - catchplate-custody-socket:/run/catchplate-custody
+      - catchplate-custody-trust:/custody-trust:ro
+      - catchplate-custody-state:/var/lib/catchplate-custody
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
     depends_on:
-      serverware:
+      catchplate:
         condition: service_healthy
 
   # Required generation pins and credential mounts live in the opt-in custody
@@ -276,7 +276,7 @@ services:
   response-v2-generation-bootstrap:
     profiles: ["custody"]
     platform: linux/amd64
-    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    image: ${CATCHPLATE_DECISION_GATE_DEV_IMAGE:-catchplate-decision-gate:dev}
     pull_policy: never
     user: "65521:65519"
     init: true
@@ -285,20 +285,20 @@ services:
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
-      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/serverware-deny-dangerous.json}
+      - seccomp=${CATCHPLATE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/catchplate-deny-dangerous.json}
     pids_limit: 32
     mem_limit: 128m
-    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
-    command: ["--bootstrap-generation", "--config", "/run/serverware-response-v2/config/custody.json"]
+    entrypoint: ["/usr/local/bin/catchplate-response-observation-v2-custody"]
+    command: ["--bootstrap-generation", "--config", "/run/catchplate-response-v2/config/custody.json"]
     environment:
-      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-generation-bootstrap
-      SERVERWARE_RESPONSE_V2_CGROUP_ROOT: /sys/fs/cgroup/serverware-response-v2
+      CREDENTIALS_DIRECTORY: /run/credentials/catchplate-response-v2-generation-bootstrap
+      CATCHPLATE_RESPONSE_V2_CGROUP_ROOT: /sys/fs/cgroup/catchplate-response-v2
     volumes:
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_DATA_DIR:-serverware-response-v2-state-data}:/var/lib/serverware-response-v2/state-authority
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_DATA_DIR:-serverware-response-v2-ledger-data}:/var/lib/serverware-response-v2/immutable-artifact-ledger:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POSTGRES_SOCKET_DIR:-/dev/null}:/run/postgresql:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CGROUP_ROOT:-/dev/null}:/sys/fs/cgroup/serverware-response-v2:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_STATE_DATA_DIR:-catchplate-response-v2-state-data}:/var/lib/catchplate-response-v2/state-authority
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_LEDGER_DATA_DIR:-catchplate-response-v2-ledger-data}:/var/lib/catchplate-response-v2/immutable-artifact-ledger:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/catchplate-response-v2/config:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_POSTGRES_SOCKET_DIR:-/dev/null}:/run/postgresql:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_CGROUP_ROOT:-/dev/null}:/sys/fs/cgroup/catchplate-response-v2:ro
     cgroup: host
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=8m
@@ -307,7 +307,7 @@ services:
   response-v2-state-authority:
     profiles: ["custody"]
     platform: linux/amd64
-    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    image: ${CATCHPLATE_DECISION_GATE_DEV_IMAGE:-catchplate-decision-gate:dev}
     pull_policy: never
     user: "65521:65519"
     init: true
@@ -316,28 +316,28 @@ services:
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
-      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/serverware-deny-dangerous.json}
+      - seccomp=${CATCHPLATE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/catchplate-deny-dangerous.json}
     pids_limit: 64
     mem_limit: 256m
-    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
-    command: ["--service", "state-authority", "--config", "/run/serverware-response-v2/config/custody.json"]
+    entrypoint: ["/usr/local/bin/catchplate-response-observation-v2-custody"]
+    command: ["--service", "state-authority", "--config", "/run/catchplate-response-v2/config/custody.json"]
     environment:
-      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-state-authority
-      SERVERWARE_RESPONSE_V2_GENERATION_PUBLIC_CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-generation-public
-      SERVERWARE_RESPONSE_V2_CGROUP_ROOT: /sys/fs/cgroup/serverware-response-v2
+      CREDENTIALS_DIRECTORY: /run/credentials/catchplate-response-v2-state-authority
+      CATCHPLATE_RESPONSE_V2_GENERATION_PUBLIC_CREDENTIALS_DIRECTORY: /run/credentials/catchplate-response-v2-generation-public
+      CATCHPLATE_RESPONSE_V2_CGROUP_ROOT: /sys/fs/cgroup/catchplate-response-v2
     healthcheck:
-      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "state-authority", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      test: ["CMD", "/usr/local/bin/catchplate-response-observation-v2-custody", "--service", "state-authority", "--config", "/run/catchplate-response-v2/config/custody.json", "--check-readiness"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 10s
     volumes:
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-serverware-response-v2-state-socket}:/run/serverware-response-v2/state
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_DATA_DIR:-serverware-response-v2-state-data}:/var/lib/serverware-response-v2/state-authority
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_KEY_DIR:-/dev/null}:/run/credentials/serverware-response-v2-state-authority:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POSTGRES_SOCKET_DIR:-/dev/null}:/run/postgresql:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CGROUP_ROOT:-/dev/null}:/sys/fs/cgroup/serverware-response-v2:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-catchplate-response-v2-state-socket}:/run/catchplate-response-v2/state
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_STATE_DATA_DIR:-catchplate-response-v2-state-data}:/var/lib/catchplate-response-v2/state-authority
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/catchplate-response-v2/config:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_STATE_KEY_DIR:-/dev/null}:/run/credentials/catchplate-response-v2-state-authority:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_POSTGRES_SOCKET_DIR:-/dev/null}:/run/postgresql:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_CGROUP_ROOT:-/dev/null}:/sys/fs/cgroup/catchplate-response-v2:ro
     cgroup: host
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
@@ -348,7 +348,7 @@ services:
   response-v2-credential-transport:
     profiles: ["custody"]
     platform: linux/amd64
-    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    image: ${CATCHPLATE_DECISION_GATE_DEV_IMAGE:-catchplate-decision-gate:dev}
     pull_policy: never
     user: "65522:65519"
     init: true
@@ -356,25 +356,25 @@ services:
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
-      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/serverware-deny-dangerous.json}
+      - seccomp=${CATCHPLATE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/catchplate-deny-dangerous.json}
     pids_limit: 64
     mem_limit: 256m
-    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
-    command: ["--service", "credential-transport", "--config", "/run/serverware-response-v2/config/custody.json"]
+    entrypoint: ["/usr/local/bin/catchplate-response-observation-v2-custody"]
+    command: ["--service", "credential-transport", "--config", "/run/catchplate-response-v2/config/custody.json"]
     environment:
-      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-credential-transport
+      CREDENTIALS_DIRECTORY: /run/credentials/catchplate-response-v2-credential-transport
     healthcheck:
-      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "credential-transport", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      test: ["CMD", "/usr/local/bin/catchplate-response-observation-v2-custody", "--service", "credential-transport", "--config", "/run/catchplate-response-v2/config/custody.json", "--check-readiness"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 10s
     volumes:
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CREDENTIAL_SOCKET_DIR:-serverware-response-v2-credential-socket}:/run/serverware-response-v2/credential-transport
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-serverware-response-v2-state-socket}:/run/serverware-response-v2/state:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CREDENTIAL_DATA_DIR:-serverware-response-v2-credential-data}:/var/lib/serverware-response-v2/credential-transport
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CREDENTIAL_KEY_DIR:-/dev/null}:/run/credentials/serverware-response-v2-credential-transport:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_CREDENTIAL_SOCKET_DIR:-catchplate-response-v2-credential-socket}:/run/catchplate-response-v2/credential-transport
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-catchplate-response-v2-state-socket}:/run/catchplate-response-v2/state:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_CREDENTIAL_DATA_DIR:-catchplate-response-v2-credential-data}:/var/lib/catchplate-response-v2/credential-transport
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/catchplate-response-v2/config:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_CREDENTIAL_KEY_DIR:-/dev/null}:/run/credentials/catchplate-response-v2-credential-transport:ro
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
     networks:
@@ -386,7 +386,7 @@ services:
   response-v2-policy-proof-verifier:
     profiles: ["custody"]
     platform: linux/amd64
-    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    image: ${CATCHPLATE_DECISION_GATE_DEV_IMAGE:-catchplate-decision-gate:dev}
     pull_policy: never
     user: "65523:65519"
     init: true
@@ -395,25 +395,25 @@ services:
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
-      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/serverware-deny-dangerous.json}
+      - seccomp=${CATCHPLATE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/catchplate-deny-dangerous.json}
     pids_limit: 64
     mem_limit: 192m
-    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
-    command: ["--service", "policy-proof-verifier", "--config", "/run/serverware-response-v2/config/custody.json"]
+    entrypoint: ["/usr/local/bin/catchplate-response-observation-v2-custody"]
+    command: ["--service", "policy-proof-verifier", "--config", "/run/catchplate-response-v2/config/custody.json"]
     environment:
-      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-policy-proof-verifier
+      CREDENTIALS_DIRECTORY: /run/credentials/catchplate-response-v2-policy-proof-verifier
     healthcheck:
-      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "policy-proof-verifier", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      test: ["CMD", "/usr/local/bin/catchplate-response-observation-v2-custody", "--service", "policy-proof-verifier", "--config", "/run/catchplate-response-v2/config/custody.json", "--check-readiness"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 10s
     volumes:
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POLICY_SOCKET_DIR:-serverware-response-v2-policy-socket}:/run/serverware-response-v2/policy-proof-verifier
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-serverware-response-v2-state-socket}:/run/serverware-response-v2/state:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POLICY_DATA_DIR:-serverware-response-v2-policy-data}:/var/lib/serverware-response-v2/policy-proof-verifier
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POLICY_KEY_DIR:-/dev/null}:/run/credentials/serverware-response-v2-policy-proof-verifier:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_POLICY_SOCKET_DIR:-catchplate-response-v2-policy-socket}:/run/catchplate-response-v2/policy-proof-verifier
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-catchplate-response-v2-state-socket}:/run/catchplate-response-v2/state:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_POLICY_DATA_DIR:-catchplate-response-v2-policy-data}:/var/lib/catchplate-response-v2/policy-proof-verifier
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/catchplate-response-v2/config:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_POLICY_KEY_DIR:-/dev/null}:/run/credentials/catchplate-response-v2-policy-proof-verifier:ro
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
     depends_on:
@@ -423,7 +423,7 @@ services:
   response-v2-immutable-artifact-ledger:
     profiles: ["custody"]
     platform: linux/amd64
-    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    image: ${CATCHPLATE_DECISION_GATE_DEV_IMAGE:-catchplate-decision-gate:dev}
     pull_policy: never
     user: "65524:65519"
     init: true
@@ -432,25 +432,25 @@ services:
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
-      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/serverware-deny-dangerous.json}
+      - seccomp=${CATCHPLATE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/catchplate-deny-dangerous.json}
     pids_limit: 64
     mem_limit: 256m
-    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
-    command: ["--service", "immutable-artifact-ledger", "--config", "/run/serverware-response-v2/config/custody.json"]
+    entrypoint: ["/usr/local/bin/catchplate-response-observation-v2-custody"]
+    command: ["--service", "immutable-artifact-ledger", "--config", "/run/catchplate-response-v2/config/custody.json"]
     environment:
-      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-immutable-artifact-ledger
+      CREDENTIALS_DIRECTORY: /run/credentials/catchplate-response-v2-immutable-artifact-ledger
     healthcheck:
-      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "immutable-artifact-ledger", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      test: ["CMD", "/usr/local/bin/catchplate-response-observation-v2-custody", "--service", "immutable-artifact-ledger", "--config", "/run/catchplate-response-v2/config/custody.json", "--check-readiness"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 10s
     volumes:
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_SOCKET_DIR:-serverware-response-v2-ledger-socket}:/run/serverware-response-v2/immutable-artifact-ledger
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-serverware-response-v2-state-socket}:/run/serverware-response-v2/state:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_DATA_DIR:-serverware-response-v2-ledger-data}:/var/lib/serverware-response-v2/immutable-artifact-ledger
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_KEY_DIR:-/dev/null}:/run/credentials/serverware-response-v2-immutable-artifact-ledger:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_LEDGER_SOCKET_DIR:-catchplate-response-v2-ledger-socket}:/run/catchplate-response-v2/immutable-artifact-ledger
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-catchplate-response-v2-state-socket}:/run/catchplate-response-v2/state:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_LEDGER_DATA_DIR:-catchplate-response-v2-ledger-data}:/var/lib/catchplate-response-v2/immutable-artifact-ledger
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/catchplate-response-v2/config:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_LEDGER_KEY_DIR:-/dev/null}:/run/credentials/catchplate-response-v2-immutable-artifact-ledger:ro
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
     depends_on:
@@ -460,7 +460,7 @@ services:
   response-v2-release-attestor-publisher:
     profiles: ["custody"]
     platform: linux/amd64
-    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    image: ${CATCHPLATE_DECISION_GATE_DEV_IMAGE:-catchplate-decision-gate:dev}
     pull_policy: never
     user: "65525:65519"
     init: true
@@ -469,25 +469,25 @@ services:
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
-      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/serverware-deny-dangerous.json}
+      - seccomp=${CATCHPLATE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/catchplate-deny-dangerous.json}
     pids_limit: 64
     mem_limit: 192m
-    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
-    command: ["--service", "release-attestor-publisher", "--config", "/run/serverware-response-v2/config/custody.json"]
+    entrypoint: ["/usr/local/bin/catchplate-response-observation-v2-custody"]
+    command: ["--service", "release-attestor-publisher", "--config", "/run/catchplate-response-v2/config/custody.json"]
     environment:
-      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-release-attestor-publisher
+      CREDENTIALS_DIRECTORY: /run/credentials/catchplate-response-v2-release-attestor-publisher
     healthcheck:
-      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "release-attestor-publisher", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      test: ["CMD", "/usr/local/bin/catchplate-response-observation-v2-custody", "--service", "release-attestor-publisher", "--config", "/run/catchplate-response-v2/config/custody.json", "--check-readiness"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 10s
     volumes:
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_SOCKET_DIR:-serverware-response-v2-release-socket}:/run/serverware-response-v2/release-attestor-publisher
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-serverware-response-v2-state-socket}:/run/serverware-response-v2/state:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_DATA_DIR:-serverware-response-v2-release-data}:/var/lib/serverware-response-v2/release-attestor-publisher
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_KEY_DIR:-/dev/null}:/run/credentials/serverware-response-v2-release-attestor-publisher:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_RELEASE_SOCKET_DIR:-catchplate-response-v2-release-socket}:/run/catchplate-response-v2/release-attestor-publisher
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-catchplate-response-v2-state-socket}:/run/catchplate-response-v2/state:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_RELEASE_DATA_DIR:-catchplate-response-v2-release-data}:/var/lib/catchplate-response-v2/release-attestor-publisher
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/catchplate-response-v2/config:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_RELEASE_KEY_DIR:-/dev/null}:/run/credentials/catchplate-response-v2-release-attestor-publisher:ro
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
     depends_on:
@@ -501,7 +501,7 @@ services:
   response-v2-cleanup-watchdog:
     profiles: ["custody"]
     platform: linux/amd64
-    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    image: ${CATCHPLATE_DECISION_GATE_DEV_IMAGE:-catchplate-decision-gate:dev}
     pull_policy: never
     user: "65526:65519"
     init: true
@@ -512,26 +512,26 @@ services:
     cap_add: [KILL]
     security_opt:
       - no-new-privileges:true
-      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/serverware-deny-dangerous.json}
+      - seccomp=${CATCHPLATE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/catchplate-deny-dangerous.json}
     pids_limit: 64
     mem_limit: 128m
-    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
-    command: ["--service", "cleanup-watchdog", "--config", "/run/serverware-response-v2/config/custody.json"]
+    entrypoint: ["/usr/local/bin/catchplate-response-observation-v2-custody"]
+    command: ["--service", "cleanup-watchdog", "--config", "/run/catchplate-response-v2/config/custody.json"]
     environment:
-      CREDENTIALS_DIRECTORY: /run/credentials/serverware-response-v2-cleanup-watchdog
+      CREDENTIALS_DIRECTORY: /run/credentials/catchplate-response-v2-cleanup-watchdog
     healthcheck:
-      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "cleanup-watchdog", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      test: ["CMD", "/usr/local/bin/catchplate-response-observation-v2-custody", "--service", "cleanup-watchdog", "--config", "/run/catchplate-response-v2/config/custody.json", "--check-readiness"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 10s
     volumes:
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_WATCHDOG_SOCKET_DIR:-serverware-response-v2-watchdog-socket}:/run/serverware-response-v2/cleanup-watchdog
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-serverware-response-v2-state-socket}:/run/serverware-response-v2/state:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_WATCHDOG_DATA_DIR:-serverware-response-v2-watchdog-data}:/var/lib/serverware-response-v2/cleanup-watchdog
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_WATCHDOG_KEY_DIR:-/dev/null}:/run/credentials/serverware-response-v2-cleanup-watchdog:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CGROUP_ROOT:-/dev/null}:/sys/fs/cgroup/serverware-response-v2
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_WATCHDOG_SOCKET_DIR:-catchplate-response-v2-watchdog-socket}:/run/catchplate-response-v2/cleanup-watchdog
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-catchplate-response-v2-state-socket}:/run/catchplate-response-v2/state:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_WATCHDOG_DATA_DIR:-catchplate-response-v2-watchdog-data}:/var/lib/catchplate-response-v2/cleanup-watchdog
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/catchplate-response-v2/config:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_WATCHDOG_KEY_DIR:-/dev/null}:/run/credentials/catchplate-response-v2-cleanup-watchdog:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_CGROUP_ROOT:-/dev/null}:/sys/fs/cgroup/catchplate-response-v2
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
     depends_on:
@@ -541,7 +541,7 @@ services:
   response-v2-custody-router:
     profiles: ["custody"]
     platform: linux/amd64
-    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    image: ${CATCHPLATE_DECISION_GATE_DEV_IMAGE:-catchplate-decision-gate:dev}
     pull_policy: never
     user: "65520:65519"
     init: true
@@ -550,27 +550,27 @@ services:
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
-      - seccomp=${SERVERWARE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/serverware-deny-dangerous.json}
+      - seccomp=${CATCHPLATE_RESPONSE_OBSERVATION_V2_SECCOMP_PROFILE:-./security/seccomp/catchplate-deny-dangerous.json}
     pids_limit: 64
     mem_limit: 192m
-    entrypoint: ["/usr/local/bin/serverware-response-observation-v2-custody"]
-    command: ["--service", "custody-router", "--config", "/run/serverware-response-v2/config/custody.json"]
+    entrypoint: ["/usr/local/bin/catchplate-response-observation-v2-custody"]
+    command: ["--service", "custody-router", "--config", "/run/catchplate-response-v2/config/custody.json"]
     healthcheck:
-      test: ["CMD", "/usr/local/bin/serverware-response-observation-v2-custody", "--service", "custody-router", "--config", "/run/serverware-response-v2/config/custody.json", "--check-readiness"]
+      test: ["CMD", "/usr/local/bin/catchplate-response-observation-v2-custody", "--service", "custody-router", "--config", "/run/catchplate-response-v2/config/custody.json", "--check-readiness"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 10s
     volumes:
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_ROUTER_SOCKET_DIR:-serverware-response-v2-router-socket}:/run/serverware-response-v2/router
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-serverware-response-v2-state-socket}:/run/serverware-response-v2/state:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_CREDENTIAL_SOCKET_DIR:-serverware-response-v2-credential-socket}:/run/serverware-response-v2/credential-transport:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_POLICY_SOCKET_DIR:-serverware-response-v2-policy-socket}:/run/serverware-response-v2/policy-proof-verifier:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_LEDGER_SOCKET_DIR:-serverware-response-v2-ledger-socket}:/run/serverware-response-v2/immutable-artifact-ledger:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_RELEASE_SOCKET_DIR:-serverware-response-v2-release-socket}:/run/serverware-response-v2/release-attestor-publisher:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_WATCHDOG_SOCKET_DIR:-serverware-response-v2-watchdog-socket}:/run/serverware-response-v2/cleanup-watchdog:ro
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_ROUTER_DATA_DIR:-serverware-response-v2-router-data}:/var/lib/serverware-response-v2/custody-router
-      - ${SERVERWARE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/serverware-response-v2/config:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_ROUTER_SOCKET_DIR:-catchplate-response-v2-router-socket}:/run/catchplate-response-v2/router
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_STATE_SOCKET_DIR:-catchplate-response-v2-state-socket}:/run/catchplate-response-v2/state:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_CREDENTIAL_SOCKET_DIR:-catchplate-response-v2-credential-socket}:/run/catchplate-response-v2/credential-transport:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_POLICY_SOCKET_DIR:-catchplate-response-v2-policy-socket}:/run/catchplate-response-v2/policy-proof-verifier:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_LEDGER_SOCKET_DIR:-catchplate-response-v2-ledger-socket}:/run/catchplate-response-v2/immutable-artifact-ledger:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_RELEASE_SOCKET_DIR:-catchplate-response-v2-release-socket}:/run/catchplate-response-v2/release-attestor-publisher:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_WATCHDOG_SOCKET_DIR:-catchplate-response-v2-watchdog-socket}:/run/catchplate-response-v2/cleanup-watchdog:ro
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_ROUTER_DATA_DIR:-catchplate-response-v2-router-data}:/var/lib/catchplate-response-v2/custody-router
+      - ${CATCHPLATE_RESPONSE_OBSERVATION_V2_PUBLIC_CONFIG_DIR:-/dev/null}:/run/catchplate-response-v2/config:ro
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
     depends_on:
@@ -589,7 +589,7 @@ services:
 
   decision-gate-rs:
     platform: linux/amd64
-    image: ${SERVERWARE_DECISION_GATE_DEV_IMAGE:-serverware-decision-gate:dev}
+    image: ${CATCHPLATE_DECISION_GATE_DEV_IMAGE:-catchplate-decision-gate:dev}
     build:
       context: .
       dockerfile: data-plane/decision-gate-rs/Dockerfile
@@ -600,7 +600,7 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+      - seccomp=./security/seccomp/catchplate-deny-dangerous.json
     pids_limit: 256
     mem_limit: 512m
     ulimits:
@@ -608,71 +608,71 @@ services:
         soft: 0
         hard: 0
     environment:
-      SERVERWARE_POLICY_BUNDLE: /data/policy-bundle.json
-      SERVERWARE_POLICY_TRUST_ROOT_ATTESTATION_URL: http://serverware:3000/attestation
-      SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL: http://serverware:3000/api/data-plane/credential-leases
-      SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES: "1"
-      SERVERWARE_RELEASE_CHANNEL: dev
-      SERVERWARE_UPSTREAM_CA_BUNDLE: /data/demo-upstream/ca.pem
-      SERVERWARE_MITM_CA_CERT: /data/decision-gate-ca-cert.pem
-      SERVERWARE_MITM_CA_KEY: /data/decision-gate-ca-key.pem
-      SERVERWARE_CREDENTIAL_LEASE_POLL_SECONDS: "0.25"
-      SERVERWARE_POLICY_POLL_SECONDS: "0.25"
-      SERVERWARE_CONTROL_PLANE_AUDIT_URL: http://serverware:3000/api/data-plane/audit
-      SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL: http://serverware:3000/api/data-plane/grants/consume
-      SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL: http://serverware:3000/api/data-plane/rate-limits/consume
-      SERVERWARE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL: http://serverware:3000/api/data-plane/release-authorizations
-      SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED: "1"
-      SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN: dev-credential-lease-token
-      SERVERWARE_DATA_PLANE_AUDIT_TOKEN: dev-audit-ingest-token
-      SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN: dev-grant-consume-token
-      SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN: dev-rate-limit-consume-token
-      SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN: dev-release-authorization-token
-      SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN: dev-rust-management-token
-      SERVERWARE_DECISION_GATE_HOST: 0.0.0.0
-      SERVERWARE_DECISION_GATE_PORT: "9090"
-      SERVERWARE_DECISION_GATE_MANAGEMENT_HOST: 0.0.0.0
-      SERVERWARE_DECISION_GATE_MANAGEMENT_PORT: "9091"
-      SERVERWARE_RELEASE_PROVENANCE: /data/release-provenance.json
-      SERVERWARE_IMAGE_SIGNATURES: /data/image-signatures.json
-      SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND: /usr/local/bin/serverware-response-proof-fixture
-      SERVERWARE_DATA_PLANE_INSTANCE_ID: spiffe://development.serverware/decision-gate/local
+      CATCHPLATE_POLICY_BUNDLE: /data/policy-bundle.json
+      CATCHPLATE_POLICY_TRUST_ROOT_ATTESTATION_URL: http://catchplate:3000/attestation
+      CATCHPLATE_CONTROL_PLANE_CREDENTIAL_LEASE_URL: http://catchplate:3000/api/data-plane/credential-leases
+      CATCHPLATE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES: "1"
+      CATCHPLATE_RELEASE_CHANNEL: dev
+      CATCHPLATE_UPSTREAM_CA_BUNDLE: /data/demo-upstream/ca.pem
+      CATCHPLATE_MITM_CA_CERT: /data/decision-gate-ca-cert.pem
+      CATCHPLATE_MITM_CA_KEY: /data/decision-gate-ca-key.pem
+      CATCHPLATE_CREDENTIAL_LEASE_POLL_SECONDS: "0.25"
+      CATCHPLATE_POLICY_POLL_SECONDS: "0.25"
+      CATCHPLATE_CONTROL_PLANE_AUDIT_URL: http://catchplate:3000/api/data-plane/audit
+      CATCHPLATE_CONTROL_PLANE_GRANT_CONSUME_URL: http://catchplate:3000/api/data-plane/grants/consume
+      CATCHPLATE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL: http://catchplate:3000/api/data-plane/rate-limits/consume
+      CATCHPLATE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL: http://catchplate:3000/api/data-plane/release-authorizations
+      CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED: "1"
+      CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN: dev-credential-lease-token
+      CATCHPLATE_DATA_PLANE_AUDIT_TOKEN: dev-audit-ingest-token
+      CATCHPLATE_DATA_PLANE_GRANT_CONSUME_TOKEN: dev-grant-consume-token
+      CATCHPLATE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN: dev-rate-limit-consume-token
+      CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN: dev-release-authorization-token
+      CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN: dev-rust-management-token
+      CATCHPLATE_DECISION_GATE_HOST: 0.0.0.0
+      CATCHPLATE_DECISION_GATE_PORT: "9090"
+      CATCHPLATE_DECISION_GATE_MANAGEMENT_HOST: 0.0.0.0
+      CATCHPLATE_DECISION_GATE_MANAGEMENT_PORT: "9091"
+      CATCHPLATE_RELEASE_PROVENANCE: /data/release-provenance.json
+      CATCHPLATE_IMAGE_SIGNATURES: /data/image-signatures.json
+      CATCHPLATE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND: /usr/local/bin/catchplate-response-proof-fixture
+      CATCHPLATE_DATA_PLANE_INSTANCE_ID: spiffe://development.catchplate/decision-gate/local
     ports:
       # The ordinary proxy default remains "127.0.0.1:8080:9090"; isolated lifecycle tests use ephemeral host ports.
-      - "127.0.0.1:${SERVERWARE_DECISION_GATE_PROXY_HOST_PORT:-8080}:9090"
-      - "127.0.0.1:${SERVERWARE_DECISION_GATE_DIRECT_HOST_PORT:-9090}:9090"
-      - "127.0.0.1:${SERVERWARE_DECISION_GATE_MANAGEMENT_HOST_PORT:-9091}:9091"
+      - "127.0.0.1:${CATCHPLATE_DECISION_GATE_PROXY_HOST_PORT:-8080}:9090"
+      - "127.0.0.1:${CATCHPLATE_DECISION_GATE_DIRECT_HOST_PORT:-9090}:9090"
+      - "127.0.0.1:${CATCHPLATE_DECISION_GATE_MANAGEMENT_HOST_PORT:-9091}:9091"
     volumes:
-      - serverware-data:/data:ro
-      - serverware-custody-socket:/run/serverware-custody:ro
+      - catchplate-data:/data:ro
+      - catchplate-custody-socket:/run/catchplate-custody:ro
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=32m
     depends_on:
-      - serverware
+      - catchplate
       - demo-upstream
 
 volumes:
-  serverware-data:
-  serverware-audit-anchors:
-  serverware-grant-store:
-  serverware-custody-socket:
-  serverware-custody-trust:
-  serverware-custody-state:
-  serverware-response-signing-private:
-  serverware-response-v2-router-socket:
-  serverware-response-v2-state-socket:
-  serverware-response-v2-credential-socket:
-  serverware-response-v2-policy-socket:
-  serverware-response-v2-ledger-socket:
-  serverware-response-v2-release-socket:
-  serverware-response-v2-watchdog-socket:
-  serverware-response-v2-router-data:
-  serverware-response-v2-state-data:
-  serverware-response-v2-credential-data:
-  serverware-response-v2-policy-data:
-  serverware-response-v2-ledger-data:
-  serverware-response-v2-release-data:
-  serverware-response-v2-watchdog-data:
+  catchplate-data:
+  catchplate-audit-anchors:
+  catchplate-grant-store:
+  catchplate-custody-socket:
+  catchplate-custody-trust:
+  catchplate-custody-state:
+  catchplate-response-signing-private:
+  catchplate-response-v2-router-socket:
+  catchplate-response-v2-state-socket:
+  catchplate-response-v2-credential-socket:
+  catchplate-response-v2-policy-socket:
+  catchplate-response-v2-ledger-socket:
+  catchplate-response-v2-release-socket:
+  catchplate-response-v2-watchdog-socket:
+  catchplate-response-v2-router-data:
+  catchplate-response-v2-state-data:
+  catchplate-response-v2-credential-data:
+  catchplate-response-v2-policy-data:
+  catchplate-response-v2-ledger-data:
+  catchplate-response-v2-release-data:
+  catchplate-response-v2-watchdog-data:
 
 networks:
   response-v2-egress:

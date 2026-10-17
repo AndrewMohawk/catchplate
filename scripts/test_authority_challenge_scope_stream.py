@@ -9,13 +9,13 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_counts as counts
-from serverware import authority_challenge_maintenance as maintenance
-from serverware import authority_challenge_scope_stream as stream
-from serverware import authority_index_projection as projection
-from serverware import authority_query_read_work as measured
-from serverware.authority_index_contract import IndexLeaf
-from serverware.authority_index_heads import CapturedIndexHead
+from catchplate import authority_challenge_counts as counts
+from catchplate import authority_challenge_maintenance as maintenance
+from catchplate import authority_challenge_scope_stream as stream
+from catchplate import authority_index_projection as projection
+from catchplate import authority_query_read_work as measured
+from catchplate.authority_index_contract import IndexLeaf
+from catchplate.authority_index_heads import CapturedIndexHead
 from test_authority_challenge_row_transition import row
 from test_authority_index_range import IndependentIndex
 from test_authority_index_range_count import count_frontier

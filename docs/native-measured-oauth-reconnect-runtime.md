@@ -89,7 +89,7 @@ Only a definitely admitted same-owner PREPARE receipt can produce
 `authorization-redirect`: exact exchange UUID, fixed Google/X authorization
 URL, original cookie name/value and original contact expiry. The gate returns
 exact3 `{apiVersion,exchangeId,location}` with
-`serverware.nativeOAuthReconnectAuthorizationRedirect/v1`, while setting the
+`catchplate.nativeOAuthReconnectAuthorizationRedirect/v1`, while setting the
 original Secure/HttpOnly/SameSite=Lax cookie. It never sends the private PKCE
 verifier, client secret or provider token to the control plane or browser.
 

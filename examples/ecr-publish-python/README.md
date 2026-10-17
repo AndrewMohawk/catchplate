@@ -1,14 +1,14 @@
 # Publish one reviewed image to ECR with Boto3
 
-This example stages an exact image in Serverware, requests a host-trusted review,
+This example stages an exact image in Catchplate, requests a host-trusted review,
 then uses **stock Boto3** to publish that explicitly selected image through the
-HTTPS proxy. AWS keys stay in Serverware. The public dummy AWS credentials in
+HTTPS proxy. AWS keys stay in Catchplate. The public dummy AWS credentials in
 the script are SDK signing placeholders, not provider credentials or the
-Serverware client login.
+Catchplate client login.
 
 This is an ECR API workflow, **not `docker push`**, Docker registry login, an
 image build, a multi-platform/index upload, or TEE/YubiKey enforcement. Someone
-controlling the Serverware host remains trusted. The source tests below do not
+controlling the Catchplate host remains trusted. The source tests below do not
 establish real AWS acceptance or availability in a particular deployment.
 
 Connected verification with the normal `a69503f8` / `ffe0fbe4…` proxy and stock
@@ -23,7 +23,7 @@ push or hardware acceptance. See the [current verification record](../../docs/op
 ## Setup
 
 Use Linux with Python 3.12 and the full repository checkout: the client reuses
-Serverware's existing image verifier, sealed-content holder, and protocol parser.
+Catchplate's existing image verifier, sealed-content holder, and protocol parser.
 Install the reviewed dependencies in a private environment before adding client
 credentials:
 
@@ -39,12 +39,12 @@ startup; use this environment rather than older system SDK packages. urllib3
 The example continues to use [documented SDK proxy/retry configuration](https://docs.aws.amazon.com/boto3/latest/guide/configuration.html),
 without transport patches.
 
-In Serverware, save your AWS credential, select an existing application, and add
+In Catchplate, save your AWS credential, select an existing application, and add
 an ECR publication permission for one account, region, existing repository and
 image tag. Download its private client JSON and the public interception CA.
 The AWS credential itself must **not** be in the download or the job environment.
 Restrict the downloaded JSON to its owner, for example `chmod 600
-serverware-client.private.json`, and keep it out of Git and logs.
+catchplate-client.private.json`, and keep it out of Git and logs.
 
 CA paths are relative to the downloaded JSON. `ca_file` verifies intercepted ECR
 TLS. Optional `proxy_ca_file` verifies the outer HTTPS proxy/control endpoint;
@@ -76,11 +76,11 @@ original manifest bytes. It checks content
 integrity, **not** whether the image is runnable or safe. Limits: 4 MiB
 manifest/config, 512 MiB per layer, 1 GiB unique blob content, 128 layer references.
 
-## 2. Stage in Serverware and request review
+## 2. Stage in Catchplate and request review
 
 ```sh
 .venv-ecr/bin/python -I -B examples/ecr-publish-python/publish.py stage \
-  --config /private/serverware-client.private.json \
+  --config /private/catchplate-client.private.json \
   --stage /absolute/private-parent/new-image-stage
 ```
 
@@ -91,12 +91,12 @@ review. This command performs **no ECR requests**.
 
 It prints JSON lines: the newly created publication ID first, then the final
 `awaiting_review` status. Save that ID even if a later staging request fails.
-Review the exact image digest, account, repository and tag in the Serverware
+Review the exact image digest, account, repository and tag in the Catchplate
 console. No background polling or automatic continuation occurs.
 
 ```sh
 .venv-ecr/bin/python -I -B examples/ecr-publish-python/publish.py status \
-  --config /private/serverware-client.private.json \
+  --config /private/catchplate-client.private.json \
   --publication <exact-publication-uuid>
 ```
 
@@ -107,7 +107,7 @@ to publish the selected image/tag and have reviewed its approved status:
 
 ```sh
 .venv-ecr/bin/python -I -B examples/ecr-publish-python/publish.py publish \
-  --config /private/serverware-client.private.json \
+  --config /private/catchplate-client.private.json \
   --stage /absolute/private-parent/new-image-stage \
   --publication <exact-publication-uuid> \
   --execute-write
@@ -130,7 +130,7 @@ repository on every call:
 
 Already available blobs are not uploaded again. One upload is active at a time.
 The publication ID is attached with the documented SDK `user_agent_extra`
-setting as `ServerwarePublication/<uuid>`; it selects a publication but is not
+setting as `CatchplatePublication/<uuid>`; it selects a publication but is not
 authorization. There are no SDK event hooks or patched production transports.
 The proxy checks approval/currentness and replaces the dummy AWS signature.
 

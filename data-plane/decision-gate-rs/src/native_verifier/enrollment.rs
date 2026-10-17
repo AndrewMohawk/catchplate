@@ -30,9 +30,9 @@ const MAX_INPUT_BYTES: usize = 3 * 1024 * 1024;
 const MAX_RESULT_BYTES: usize = 4096;
 const PROCESSING_NS: u64 = 30_000_000_000;
 const NS_PER_SECOND: u64 = 1_000_000_000;
-const RUNTIME_DOMAIN: &[u8] = b"serverware/enclave-runtime-key-binding/v1\0";
-const REQUEST_DOMAIN: &[u8] = b"serverware/native-enrollment-key-binding/v1\0";
-const SIGNATURE_DOMAIN: &[u8] = b"serverware/native-enrollment-packet-signature/v1\0";
+const RUNTIME_DOMAIN: &[u8] = b"catchplate/enclave-runtime-key-binding/v1\0";
+const REQUEST_DOMAIN: &[u8] = b"catchplate/native-enrollment-key-binding/v1\0";
+const SIGNATURE_DOMAIN: &[u8] = b"catchplate/native-enrollment-packet-signature/v1\0";
 const ROLE: u8 = 5;
 
 /// Starts before outer JSON decode, not after the assignment or quote. Later
@@ -128,7 +128,7 @@ fn originals(raw: &[u8], processing: &mut Processing) -> Result<Originals, Strin
     exact(&evidence, &["apiVersion", "evidenceScope", "okForAction", "assignmentBase64url",
         "packetBase64url", "ingressSessionEvidenceBase64url", "enrollmentSignatureBase64url",
         "enrollmentPublicKeyBase64url", "enrollmentQuoteBase64url"])?;
-    ensure(text(&evidence, "apiVersion")? == "serverware.nativeEnrollmentEvidence/v1"
+    ensure(text(&evidence, "apiVersion")? == "catchplate.nativeEnrollmentEvidence/v1"
         && text(&evidence, "evidenceScope")? == "unverified-enrollment-public-material"
         && evidence.get("okForAction").and_then(Value::as_bool) == Some(false),
         "native enrollment evidence version or scope differs")?;
@@ -252,7 +252,7 @@ pub(super) fn verify(raw: &[u8], authorizer_pem: &[u8], pem_sha: &str,
     // Encoding and its fixed bound precede all final lifetime checks. These
     // scalar diagnostics must never be fed back as verification authority.
     let result = value!({
-        "apiVersion":"serverware.nativeEnrollmentVerification/v1",
+        "apiVersion":"catchplate.nativeEnrollmentVerification/v1",
         "resultScope":"local-enrollment-signature-and-session-only", "okForAction":false,
         "evidenceSha256":digest_text(&digest(raw)),
         "assignmentSha256":digest_text(&assigned.original_sha256()),

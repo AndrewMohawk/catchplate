@@ -16,8 +16,8 @@ from types import SimpleNamespace
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "serverware/authority_service.py"
-DIAGNOSTICS_SOURCE = ROOT / "serverware/authority_denial_diagnostics.py"
+SOURCE = ROOT / "catchplate/authority_service.py"
+DIAGNOSTICS_SOURCE = ROOT / "catchplate/authority_denial_diagnostics.py"
 SECRET = "synthetic-secret-message-token-and-dsn"
 SECRET_PATH = "/synthetic-private-path-token/"
 
@@ -140,7 +140,7 @@ class DenialDiagnosticTests(unittest.TestCase):
     def test_replay_witness_stage_and_exact_service_alias(self):
         aliases = [(alias.name, alias.asname) for node in self.tree.body
                    if isinstance(node, ast.ImportFrom)
-                   and node.module == "serverware.authority_denial_diagnostics"
+                   and node.module == "catchplate.authority_denial_diagnostics"
                    for alias in node.names]
         self.assertEqual(aliases, [("report_denial", "_denial_diagnostics")])
         diagnostic, writes, flags, _namespace = self.diagnostic()
@@ -228,7 +228,7 @@ class DenialDiagnosticTests(unittest.TestCase):
                 sends = [event for event in actual if event[0] == "send"]
                 self.assertEqual(len(sends), 1)
                 self.assertEqual(sends[0][1], {
-                    "schema": "serverware.policyAuthorityError/v1",
+                    "schema": "catchplate.policyAuthorityError/v1",
                     "code": "authority_denied",
                     "detailDigest": "sha256:" + hashlib.sha256(SECRET.encode()).hexdigest(),
                 })

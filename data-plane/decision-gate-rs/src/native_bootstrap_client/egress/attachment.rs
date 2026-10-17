@@ -3,7 +3,7 @@
 use super::{attachment_authority, authority, effect::Installed, ensure, EgressGuard};
 use super::super::{config, originals::{ArtifactV1, HeldOriginal}, OriginalClock};
 use serde::Deserialize;
-use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
+use catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
 use std::io::Write;
@@ -131,7 +131,7 @@ pub(in super::super) fn execute<'egress>(pending: Pending, egress: &'egress Egre
     let guard = PreattachmentGuard::bind(pending, egress, installed)?;
     let a = guard.authority();
     let mut slot = Sha256::new();
-    slot.update(b"serverware/native-network-attachment-slot/v1\0");
+    slot.update(b"catchplate/native-network-attachment-slot/v1\0");
     for value in [a.journal.namespace.as_bytes(), a.capability.capability_id.as_bytes()] {
         slot.update((value.len() as u32).to_be_bytes());
         slot.update(value);
@@ -171,7 +171,7 @@ pub(in super::super) fn execute<'egress>(pending: Pending, egress: &'egress Egre
     guard.verify_firewall()?;
     journal.complete(&plan, &verified)?;
     let observation = serde_json::json!({
-        "apiVersion":"serverware.nativeNetworkAttachmentObservation/v1",
+        "apiVersion":"catchplate.nativeNetworkAttachmentObservation/v1",
         "resultScope":"local-authorized-network-attachment-observed-before-owner-teardown",
         "okForAction":false,
         "status":"observed-attached",
@@ -238,7 +238,7 @@ impl<'egress> PreattachmentGuard<'egress> {
                 "native attachment reuses an independent parent key or CA capability")?;
         }
         let mut scope = Sha256::new();
-        scope.update(b"serverware/native-network-attachment-operation/v1\0");
+        scope.update(b"catchplate/native-network-attachment-operation/v1\0");
         for digest in [a.original_sha256, egress.precreation.creation_scope_sha256,
             egress.association_sha256, installed.semantic_sha256(), installed.evidence_sha256()]
         { scope.update(digest); }

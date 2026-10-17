@@ -5,7 +5,7 @@ use super::{b64, config::{Expectations, TrustRoots}, decode_b64, digest, digest_
     ensure, exact, fixed_b64, fresh, json, nitro, now_seconds, parse_digest, pem_der, text, uint};
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde_json::{json, Value};
-use serverware_decision_gate::native_response_profile_v1 as response_profile;
+use catchplate_decision_gate::native_response_profile_v1 as response_profile;
 use sha2::{Digest, Sha256};
 
 const COMMON: &[&str] = &[
@@ -17,12 +17,12 @@ const AUTHORIZED: &[&str] = &[
     "client_request_digest", "release_authority", "control_plane_authorization_receipt",
     "upstream_response", "policy_digest",
 ];
-const BUFFERED: &str = "serverware.proxyResponseStatement/v2";
-const STREAMING: &str = "serverware.streamingResponseStatement/v1";
-const OBSERVATION: &str = "serverware.responseObservationStatement/v1";
-const BOOT_DOMAIN: &[u8] = b"serverware/native-proof-custody-boot/v1\0";
-const CHALLENGE_DOMAIN: &[u8] = b"serverware/native-response-attestation-challenge/v1\0";
-const BINDING_DOMAIN: &[u8] = b"serverware/enclave-runtime-key-binding/v1\0";
+const BUFFERED: &str = "catchplate.proxyResponseStatement/v2";
+const STREAMING: &str = "catchplate.streamingResponseStatement/v1";
+const OBSERVATION: &str = "catchplate.responseObservationStatement/v1";
+const BOOT_DOMAIN: &[u8] = b"catchplate/native-proof-custody-boot/v1\0";
+const CHALLENGE_DOMAIN: &[u8] = b"catchplate/native-response-attestation-challenge/v1\0";
+const BINDING_DOMAIN: &[u8] = b"catchplate/enclave-runtime-key-binding/v1\0";
 const ED25519_SPKI_PREFIX: &[u8] = &[0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00];
 
 pub(super) fn verify(raw: &[u8], expected: &Expectations, roots: &TrustRoots) -> Result<Value, String> {
@@ -31,9 +31,9 @@ pub(super) fn verify(raw: &[u8], expected: &Expectations, roots: &TrustRoots) ->
         "apiVersion", "kind", "server_statement", "server_statement_sha256", "server_signature", "native_attestation",
     ])?;
     let envelope_version = if expected.native_principal_profile { response_profile::NATIVE_ENVELOPE }
-        else { "serverware.nativeResponseRuntimeProof/v1" };
+        else { "catchplate.nativeResponseRuntimeProof/v1" };
     ensure(text(&envelope, "apiVersion")? == envelope_version
-        && text(&envelope, "kind")? == "ServerwareNativeResponseRuntimeProof", "native envelope version/kind differs")?;
+        && text(&envelope, "kind")? == "CatchplateNativeResponseRuntimeProof", "native envelope version/kind differs")?;
     let statement = envelope.get("server_statement").ok_or("native statement is missing")?;
     let version = text(statement, "apiVersion")?;
     let mut fields = COMMON.to_vec();
@@ -106,7 +106,7 @@ pub(super) fn verify(raw: &[u8], expected: &Expectations, roots: &TrustRoots) ->
 
     let attestation = envelope.get("native_attestation").ok_or("native attestation is missing")?;
     exact(attestation, &["apiVersion", "attestationDocumentB64", "responseProofPublicKey"])?;
-    ensure(text(attestation, "apiVersion")? == "serverware.nativeResponseProofKeyEvidence/v1"
+    ensure(text(attestation, "apiVersion")? == "catchplate.nativeResponseProofKeyEvidence/v1"
         && fixed_b64::<32>(text(attestation, "responseProofPublicKey")?)? == raw_key,
         "native role-4 evidence key/version differs")?;
     let document = decode_b64(text(attestation, "attestationDocumentB64")?, 12 * 1024)?;
@@ -130,7 +130,7 @@ pub(super) fn verify(raw: &[u8], expected: &Expectations, roots: &TrustRoots) ->
     fresh(issued, finished, expected)?;
     Ok(json!({
         "apiVersion": if expected.native_principal_profile { response_profile::NATIVE_VERDICT }
-            else { "serverware.nativeResponseAttestationVerification/v1" },
+            else { "catchplate.nativeResponseAttestationVerification/v1" },
         "ok": true, "debug": false, "resultScope": "local-signature-and-native-quote-only", "okForAction": false,
         "statementApiVersion": version, "serverStatementSha256": digest_text(&statement_digest),
         "signatureSha256": digest_text(&digest(&signature)), "clientNonce": b64(&expected.nonce),

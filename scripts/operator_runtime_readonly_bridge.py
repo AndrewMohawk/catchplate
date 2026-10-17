@@ -14,9 +14,9 @@ import signal
 import stat
 import sys
 
-PUBLIC = "https://serverware-demo.example.com"
-CANONICAL_PUBLIC = "https://serverware.example.com"
-TOKEN_FILE = "/run/secrets/serverware/admin.token"
+PUBLIC = "https://catchplate-demo.example.com"
+CANONICAL_PUBLIC = "https://catchplate.example.com"
+TOKEN_FILE = "/run/secrets/catchplate/admin.token"
 PATHS = {"/", "/api/operator-demo/catalog", "/api/operator-demo/notifications", "/api/operator-demo/proxy/upstreams"}
 GOOGLE_CONFIGURATION = "/api/operator-demo/oauth/google/configuration/v2"
 X_CONFIGURATION = "/api/operator-demo/oauth/x/configuration/v1"
@@ -34,7 +34,7 @@ def require(value):
 
 def public_origin():
     """Only the two reviewed deployment origins; no arbitrary header input."""
-    value = os.environ.get("SERVERWARE_PUBLIC_URL", PUBLIC)
+    value = os.environ.get("CATCHPLATE_PUBLIC_URL", PUBLIC)
     require(value in {PUBLIC, CANONICAL_PUBLIC})
     return value
 
@@ -91,19 +91,19 @@ def get_path(command):
     if "x_configuration_disabled" in command:
         require(set(command) == {"op", "path", "x_configuration_disabled"}
             and command["x_configuration_disabled"] is True and command["path"] == X_CONFIGURATION
-            and os.environ.get("SERVERWARE_OPERATOR_MANAGED_X_ENABLED", "0") == "0")
+            and os.environ.get("CATCHPLATE_OPERATOR_MANAGED_X_ENABLED", "0") == "0")
         return command["path"]
     if "managed_x_unconfigured" in command:
         require(set(command) == {"op", "path", "managed_x_unconfigured"}
             and command["managed_x_unconfigured"] is True and command["path"] == X_CONFIGURATION
-            and os.environ.get("SERVERWARE_OPERATOR_MANAGED_X_ENABLED") == "1"
+            and os.environ.get("CATCHPLATE_OPERATOR_MANAGED_X_ENABLED") == "1"
             and public_origin() == CANONICAL_PUBLIC)
         return command["path"]
     managed = "managed_google_unconfigured" in command
     require(set(command) == ({"op", "path", "managed_google_unconfigured"} if managed else {"op", "path"}))
     if managed:
         require(command["managed_google_unconfigured"] is True
-            and os.environ.get("SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED") == "1")
+            and os.environ.get("CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED") == "1")
     require(command["path"] in PATHS or managed and command["path"] == GOOGLE_CONFIGURATION)
     return command["path"]
 
@@ -111,7 +111,7 @@ def get_path(command):
 def x_unconfigured(value, origin):
     require(type(value) is dict and set(value) == {"schema", "state", "revision", "policy_hash", "redirect_uri",
         "permission_preset", "scopes", "configuration", "operation", "review", "blocked_reason", "consent_ready"})
-    require(value["schema"] == "serverware.operatorXConfiguration/v1" and value["state"] == "unconfigured"
+    require(value["schema"] == "catchplate.operatorXConfiguration/v1" and value["state"] == "unconfigured"
         and type(value["revision"]) is int and 0 < value["revision"] <= 2**53 - 1
         and type(value["policy_hash"]) is str and re.fullmatch(r"sha256:[0-9a-f]{64}", value["policy_hash"])
         and origin == CANONICAL_PUBLIC and value["redirect_uri"] == origin + "/api/oauth/callback/x"
@@ -139,7 +139,7 @@ def get(command):
     try:
         media = "text/html" if path == "/" else "application/json"
         connection.request("GET", path, headers={"Host": origin.removeprefix("https://"), "Origin": origin,
-            "X-Serverware-Admin-Token": token, "Accept-Encoding": "identity", "Accept": media, "Connection": "close"})
+            "X-Catchplate-Admin-Token": token, "Accept-Encoding": "identity", "Accept": media, "Connection": "close"})
         response = connection.getresponse()
         headers = response.getheaders()
         require(response.status == (404 if command.get("x_configuration_disabled") is True else 200)
@@ -176,12 +176,12 @@ def main():
     try:
         require(len(sys.argv) == 2 and len(sys.argv[1]) <= 1024)
         command = json.loads(sys.argv[1])
-        require("SERVERWARE_PUBLIC_URL" in os.environ)
+        require("CATCHPLATE_PUBLIC_URL" in os.environ)
         public_origin()  # Refuse an unknown deployment before source/token/socket access.
-        require(isinstance(command, dict) and os.environ.get("SERVERWARE_OPERATOR_DEMO") == "1" and
-                os.environ.get("SERVERWARE_ADMIN_TOKEN_FILE") == TOKEN_FILE and
-                "SERVERWARE_ADMIN_TOKEN" not in os.environ and os.environ.get("SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED") == "1" and
-                "SERVERWARE_OPERATOR_NOTIFICATIONS_PILOT_SOURCE_JSON" not in os.environ)
+        require(isinstance(command, dict) and os.environ.get("CATCHPLATE_OPERATOR_DEMO") == "1" and
+                os.environ.get("CATCHPLATE_ADMIN_TOKEN_FILE") == TOKEN_FILE and
+                "CATCHPLATE_ADMIN_TOKEN" not in os.environ and os.environ.get("CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED") == "1" and
+                "CATCHPLATE_OPERATOR_NOTIFICATIONS_PILOT_SOURCE_JSON" not in os.environ)
         print(json.dumps(source(command) if command.get("op") == "source" else get(command), separators=(",", ":")))
     except Exception:
         print('{"ok":false,"reason":"runtime_readonly_bridge_refused"}')

@@ -11,11 +11,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import authority_local_artifacts as local
-from serverware import authority_local_artifact_measure as measure
+from catchplate import authority_local_artifacts as local
+from catchplate import authority_local_artifact_measure as measure
 from scripts.authority import local_artifacts as cli
 from scripts.authority import generate_artifact_bundle as generator
-from serverware import authority_launcher as launcher
+from catchplate import authority_launcher as launcher
 
 
 class OCIOriginalControls(unittest.TestCase):
@@ -76,10 +76,10 @@ class OCIOriginalControls(unittest.TestCase):
             with self.assertRaises(generator.GeneratorError):
                 generator._oci_document(fd, {row["path"]: changed}, row["path"], name="OCI manifest")
 
-    def test_serverware_canonical_document_contract_is_unchanged(self):
+    def test_catchplate_canonical_document_contract_is_unchanged(self):
         with self.original(b'{ "a": 1 }\n') as (fd, row):
             with self.assertRaises(generator.GeneratorError):
-                generator._canonical_json_document(fd, row["path"], row, name="Serverware document")
+                generator._canonical_json_document(fd, row["path"], row, name="Catchplate document")
 
 
 def selection():
@@ -105,7 +105,7 @@ class LocalArtifactControls(unittest.TestCase):
     def test_generator_accepts_actual_launcher_credential_rosters(self):
         roles = self.launcher_roles()
         planner = next(row for row in roles if row["role"] == "planner")
-        self.assertIn("SERVERWARE_RBAC_WITNESS_CLIENT_KEY_FD", planner["credentialNames"])
+        self.assertIn("CATCHPLATE_RBAC_WITNESS_CLIENT_KEY_FD", planner["credentialNames"])
         generator._validate_required_role_manifests(roles)
 
     def test_generator_refuses_missing_witness_or_extra_credentials(self):
@@ -113,7 +113,7 @@ class LocalArtifactControls(unittest.TestCase):
             roles = self.launcher_roles()
             planner = next(row for row in roles if row["role"] == "planner")
             if mutation == "missing-witness":
-                planner["credentialNames"].remove("SERVERWARE_RBAC_WITNESS_CLIENT_KEY_FD")
+                planner["credentialNames"].remove("CATCHPLATE_RBAC_WITNESS_CLIENT_KEY_FD")
             else:
                 planner["credentialNames"].append("UNAPPROVED_KEY_FD")
                 planner["credentialNames"].sort()
@@ -230,7 +230,7 @@ class LocalArtifactControls(unittest.TestCase):
                 cli.arguments(changed)
 
     def test_source_order_authenticates_before_keys_and_publishes_receipt_last(self):
-        source = (ROOT / "serverware" / "authority_local_artifacts.py").read_text()
+        source = (ROOT / "catchplate" / "authority_local_artifacts.py").read_text()
         tree = ast.parse(source)
         method = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "produce")
         text = ast.get_source_segment(source, method)

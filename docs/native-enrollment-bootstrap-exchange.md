@@ -11,7 +11,7 @@ on Nitro hardware. The full production acceptance gates remain separate.
 
 ## Fixed request
 
-The native proxy reserves `POST /_serverware/native-enrollment/bootstrap` for one
+The native proxy reserves `POST /_catchplate/native-enrollment/bootstrap` for one
 bounded HTTP/1.1 exchange on the caller's actual mutual-TLS connection. The path
 does not fall back to development enrollment, management authorization or
 ordinary upstream proxy dispatch. Full caller policy, separate delegation and
@@ -24,7 +24,7 @@ has exactly these fields:
 
 | Field | Meaning and decoded limit |
 | --- | --- |
-| `apiVersion` | `serverware.nativeEnrollmentBootstrapRequest/v1` |
+| `apiVersion` | `catchplate.nativeEnrollmentBootstrapRequest/v1` |
 | `delegationBase64url` | Exact independently signed caller-to-target delegation, 32 KiB |
 | `setupAuthorizationBase64url` | Exact separately signed setup authorization, 32 KiB |
 | `targetRequestBase64url` | Exact target request containing CSR and proof of possession, 64 KiB |
@@ -77,7 +77,7 @@ those inputs independently; server success status is not an attestation verdict.
 ## Fixed client and packaging
 
 The [single-purpose client](native-bootstrap-client.md),
-`serverware-native-bootstrap-client`, uses a pinned configuration and literal
+`catchplate-native-bootstrap-client`, uses a pinned configuration and literal
 endpoint. It verifies original startup evidence
 before acquiring the client private key or contacting the network, builds and
 retains the reviewed TLS configuration, and tracks the actual selected client
@@ -104,7 +104,7 @@ diagnostic are not an installation capability or production receipt.
 The production Dockerfile includes the new binary in its frozen static build,
 checks dynamic-interpreter/dependency absence and a 64 MiB file ceiling, provides
 the `native-bootstrap-client-artifact` export stage, and declares installation at
-`/usr/local/libexec/serverware-native-bootstrap-client`. These are packaging
+`/usr/local/libexec/catchplate-native-bootstrap-client`. These are packaging
 declarations, not evidence that a binary or image has been built or deployed.
 
 ## Still required

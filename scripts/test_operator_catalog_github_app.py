@@ -33,7 +33,7 @@ ACTOR = "operator-github-app-catalog-test"
 ADMIN = "synthetic-github-app-catalog-administrator"
 ORIGIN = "https://console.example.com"
 PATH = "/api/operator-demo/credentials/github-app"
-REPOSITORY = {"owner": "serverware-fixture", "name": "operator-demo"}
+REPOSITORY = {"owner": "catchplate-fixture", "name": "operator-demo"}
 APP_ID, INSTALLATION_ID, ACCOUNT_ID, REPOSITORY_ID = 12345, 23456, 34567, 45678
 NETWORK_ATTEMPTS = []
 
@@ -84,7 +84,7 @@ class Provider:
         self.jwts.append(token)
 
     def __call__(self, request, *, timeout, max_bytes, require_https, deadline, expected_statuses):
-        from serverware.http_client import HttpDeadline, HttpResponse
+        from catchplate.http_client import HttpDeadline, HttpResponse
         require(timeout == 10.0 and require_https is True and type(deadline) is HttpDeadline
             and deadline.expires_at > time.monotonic()
             and expected_statuses == tuple(range(200, 600)), "bounded actual provider transport contract")
@@ -92,11 +92,11 @@ class Provider:
         require(headers.get("accept") == "application/vnd.github+json"
             and headers.get("x-github-api-version") == "2022-11-28"
             and headers.get("accept-encoding") == "identity"
-            and headers.get("user-agent") == "serverware-github-app/1"
+            and headers.get("user-agent") == "catchplate-github-app/1"
             and headers.get("authorization", "").startswith("Bearer "), "actual provider headers")
         authorization = headers["authorization"].removeprefix("Bearer ")
         method, url = request.get_method(), request.full_url
-        if url == "https://api.github.com/repos/serverware-fixture/operator-demo/installation":
+        if url == "https://api.github.com/repos/catchplate-fixture/operator-demo/installation":
             require(method == "GET" and request.data is None and max_bytes == 1048576,
                 "fixed installation request")
             self.jwt(authorization)
@@ -145,13 +145,13 @@ class Fixture:
         if full_startup:
             # Match the real cold runner: bootstrap readers must run BEFORE
             # db/store initialization admits the retained publication owner.
-            Path(os.environ["SERVERWARE_DATA_DIR"]).mkdir(mode=0o700)
-            from serverware import operator_demo
+            Path(os.environ["CATCHPLATE_DATA_DIR"]).mkdir(mode=0o700)
+            from catchplate import operator_demo
             operator_demo.activate()
-            from serverware.control_plane_startup import validate_control_plane_startup
+            from catchplate.control_plane_startup import validate_control_plane_startup
             validate_control_plane_startup()
-            from serverware import config, db, operator_demo_store, policy_bundle
-            from serverware import operator_catalog_schema, operator_catalog_inputs, operator_catalog_mutations
+            from catchplate import config, db, operator_demo_store, policy_bundle
+            from catchplate import operator_catalog_schema, operator_catalog_inputs, operator_catalog_mutations
             self.config, self.db, self.store, self.bundles = config, db, operator_demo_store, policy_bundle
             self.schema, self.inputs, self.mutations = operator_catalog_schema, operator_catalog_inputs, operator_catalog_mutations
         else:
@@ -163,7 +163,7 @@ class Fixture:
         self.provider, self.application_tokens = Provider(self.key), []
 
     def transport(self):
-        from serverware import github_app
+        from catchplate import github_app
         return patch.object(github_app.http_client, "request_bytes", self.provider)
 
     def review(self):
@@ -252,17 +252,17 @@ def save_and_policy():
             route = next(item for item in signed["routes"] if item["id"] == rule["route_id"])
             require(route["match"] == {"scheme": "https", "host": "api.github.com", "port": 443,
                 "methods": ["GET"] if bundle == legacy.READ else ["GET", "POST"],
-                "paths": ["/repos/serverware-fixture/operator-demo/issues",
-                    "/repos/serverware-fixture/operator-demo/issues/{issue_number}",
-                    "/repos/serverware-fixture/operator-demo/issues/{issue_number}/comments",
-                    "/repos/serverware-fixture/operator-demo/issues/comments/{comment_id}"]},
+                "paths": ["/repos/catchplate-fixture/operator-demo/issues",
+                    "/repos/catchplate-fixture/operator-demo/issues/{issue_number}",
+                    "/repos/catchplate-fixture/operator-demo/issues/{issue_number}/comments",
+                    "/repos/catchplate-fixture/operator-demo/issues/comments/{comment_id}"]},
                 "signed exact repository method ceiling")
             require(route["credentialRef"] == credential["id"] and route["principals"] == [app["principal_id"]]
                 and route["adapter"]["config"]["githubRepository"] == REPOSITORY
                 and route["adapter"]["config"]["operationBundle"] == bundle
                 and route["credentialHeader"] == {"mode": "replaceExact",
-                    "expectedValue": "token serverware-github-placeholder-v1"}, "signed App route binding")
-            from serverware import operator_github_app as owner
+                    "expectedValue": "token catchplate-github-placeholder-v1"}, "signed App route binding")
+            from catchplate import operator_github_app as owner
             compiled = f.bundles.compile_policy_bundle(signed, verify_signature=True, validate_schema=True)
             runtime_route = next(item for item in compiled.routes if item.id == rule["route_id"])
             runtime_policy = compiled.credentials[credential["id"]]
@@ -363,7 +363,7 @@ def provider_refusal():
     with f.transport():
         f.provider.installation_changes = {"app_id": APP_ID + 1}
         before = f.snapshot()
-        from serverware.operator_github_app import GitHubAppUnavailable
+        from catchplate.operator_github_app import GitHubAppUnavailable
         refused(lambda: f.create(installation_id=None), GitHubAppUnavailable)
         require(f.snapshot() == before and f.provider.calls == ["installation"] and not f.provider.tokens,
             "wrong App installation was persisted or minted")
@@ -374,7 +374,7 @@ def provider_refusal():
 
 
 def token_refresh_and_backoff():
-    from serverware import operator_github_app as owner
+    from catchplate import operator_github_app as owner
     f = Fixture()
     with f.transport():
         # A real short-lived provider response is valid provisioning evidence
@@ -443,7 +443,7 @@ def token_refresh_and_backoff():
 async def api_story():
     from test_operator_notifications_connected_backend import FullASGI
     f = Fixture(full_startup=True)
-    from serverware import app as application
+    from catchplate import app as application
     app = FullASGI(application.app, ADMIN)
 
     async def call(method, path, *, body=None, status=200, authenticate=True,
@@ -524,9 +524,9 @@ OPERATIONS = {"saved": save_and_policy, "ceilings": ceilings_and_lifecycle,
 class OperatorCatalogGithubAppTests(unittest.TestCase):
     def setUp(self):
         workspace.common.OperatorDemoPersistenceTests.setUp(self)
-        self.environment.update(SERVERWARE_OPERATOR_DEMO_UPSTREAMS='["https://api.example.com","https://api.github.com"]',
-            SERVERWARE_PUBLIC_URL=ORIGIN, SERVERWARE_ADMIN_TOKEN=ADMIN, SERVERWARE_ADMIN_USER=ACTOR,
-            SERVERWARE_ADMIN_ROLES="admin", SERVERWARE_DECISION_GATE_BASE="")
+        self.environment.update(CATCHPLATE_OPERATOR_DEMO_UPSTREAMS='["https://api.example.com","https://api.github.com"]',
+            CATCHPLATE_PUBLIC_URL=ORIGIN, CATCHPLATE_ADMIN_TOKEN=ADMIN, CATCHPLATE_ADMIN_USER=ACTOR,
+            CATCHPLATE_ADMIN_ROLES="admin", CATCHPLATE_DECISION_GATE_BASE="")
         for key in tuple(self.environment):
             if key.lower() in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}:
                 self.environment.pop(key)

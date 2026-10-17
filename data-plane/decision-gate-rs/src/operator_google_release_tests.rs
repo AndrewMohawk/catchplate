@@ -272,12 +272,12 @@ impl Fixture {
 // short TTL and changed metadata are negative material, not verifier stubs.
 fn material(authority: &Authority, incoming: &IncomingRequest, mode: &str) -> Vec<u8> {
     let original: Value = strict_json_from_slice(&incoming.body).unwrap();
-    let quota = original["apiVersion"] == "serverware.operatorXQuotaCredentialLeaseRequest/v1";
+    let quota = original["apiVersion"] == "catchplate.operatorXQuotaCredentialLeaseRequest/v1";
     let request: CredentialLeaseRequest = if quota {
         assert!(authority.x);
         let mut ordinary = original.clone();
         ordinary.as_object_mut().unwrap().remove("operatorXQuota");
-        ordinary["apiVersion"] = json!("serverware.credentialLeaseRequest/v3");
+        ordinary["apiVersion"] = json!("catchplate.credentialLeaseRequest/v3");
         serde_json::from_value(ordinary).unwrap()
     } else { strict_json_from_slice(&incoming.body).unwrap() };
     let now = now_epoch_ms() as u64;
@@ -290,7 +290,7 @@ fn material(authority: &Authority, incoming: &IncomingRequest, mode: &str) -> Ve
     let version = if matches!(mode,"wrong-version"|"predecision-advance") { 8 } else { 7 };
     let mut values = authority.metadata();
     if mode == "wrong-metadata" { values.insert("synthetic_drift".into(), json!(true)); }
-    let aad = json!({"apiVersion":"serverware.credentialLeaseEnvelope/v2", "algorithm":"X25519-HKDF-SHA256-AES-256-GCM",
+    let aad = json!({"apiVersion":"catchplate.credentialLeaseEnvelope/v2", "algorithm":"X25519-HKDF-SHA256-AES-256-GCM",
         "recipientKeyId":request.recipient_key_id, "recipientNonce":request.recipient_nonce,
         "policyHash":request.policy_hash, "dataPlaneBinaryDigest":request.data_plane_binary_digest,
         "principalId":request.principal_id,"routeId":request.route_id,"credentialId":request.credential_id,
@@ -298,7 +298,7 @@ fn material(authority: &Authority, incoming: &IncomingRequest, mode: &str) -> Ve
     let mut credential = json!({"credentialId":request.credential_id,"credentialVersion":version,
         "metadataSha256":credential_lease_metadata_sha256(&values),"metadata":values});
     if request.purpose == CredentialLeasePurpose::DispatchSecret { credential["secret"] = json!(SECRET); }
-    let plaintext = json!({"apiVersion":"serverware.credentialLeaseSet/v3","purpose":request.purpose,
+    let plaintext = json!({"apiVersion":"catchplate.credentialLeaseSet/v3","purpose":request.purpose,
         "requestBindingSha256":request_binding,"releaseAuthorization":null,
         "recipientKeyId":request.recipient_key_id,"recipientNonce":request.recipient_nonce,
         "policyHash":request.policy_hash,"dataPlaneBinaryDigest":request.data_plane_binary_digest,
@@ -309,7 +309,7 @@ fn material(authority: &Authority, incoming: &IncomingRequest, mode: &str) -> Ve
     let secret = X25519StaticSecret::from([109u8;32]);
     let shared = secret.diffie_hellman(&X25519PublicKey::from(recipient));
     let aad_bytes = canonical_json(&aad).into_bytes();
-    let mut info = b"serverware:credential-lease-envelope:v2\0".to_vec();
+    let mut info = b"catchplate:credential-lease-envelope:v2\0".to_vec();
     info.extend_from_slice(&Sha256::digest(&aad_bytes));
     let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, &nonce).extract(shared.as_bytes());
     let mut key_bytes = [0u8;32];
@@ -334,9 +334,9 @@ fn material(authority: &Authority, incoming: &IncomingRequest, mode: &str) -> Ve
             "attempt_nonce":original["operatorXQuota"]["attemptNonce"],
             "recipient_digest":digest_json_ensure_ascii(&json!({"recipientKeyId":original["recipientKeyId"],"recipientNonce":original["recipientNonce"]})),
             "request_binding_digest":request_binding,"expires_at_epoch_ms":expires});
-        envelope = json!({"apiVersion":"serverware.operatorXQuotaCredentialLeaseResponse/v1",
+        envelope = json!({"apiVersion":"catchplate.operatorXQuotaCredentialLeaseResponse/v1",
             "requestBindingSha256":request_binding,"credentialLease":envelope,
-            "reservation":{"schema":"serverware.operatorXPostingQuotaReservation/v1",
+            "reservation":{"schema":"catchplate.operatorXPostingQuotaReservation/v1",
                 "reservation_id":"11111111-1111-4111-8111-111111111111",
                 "bucket_key":sha256_prefixed(b"synthetic-x-account-day"),"utc_day":now/86_400_000,
                 "expires_at_epoch_ms":expires,"binding_digest":digest_json_ensure_ascii(&binding)}});
@@ -353,7 +353,7 @@ fn advanced(authority: &Authority, incoming: &IncomingRequest, foreign_google: b
         crate::operator_x_profile::tests::manifest(true).to_string().as_bytes()).unwrap().state.profile.unwrap();
     let selected_x=authority.x && !foreign_google;
     let binding=if selected_x {x_profile.binding_digest().to_owned()} else {google().binding_digest().to_owned()};
-    let body = json!({"apiVersion":"serverware.operatorCredentialLeaseNoEnvelope/v1",
+    let body = json!({"apiVersion":"catchplate.operatorCredentialLeaseNoEnvelope/v1",
         "capability":if selected_x {crate::operator_x_profile::CAPABILITY} else {"operator-google-v1"},"outcome":"noSecretEnvelopeIssued",
         "reason":"generationAdvancedBeforeEnvelope","purpose":"dispatchSecret",
         "profileBindingSha256":binding,"requestBodySha256":digest_json_ensure_ascii(&wire),

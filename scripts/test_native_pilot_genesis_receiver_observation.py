@@ -19,9 +19,9 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import native_pilot_genesis_handoff_listener as listener
-from serverware import native_pilot_genesis_receiver_observation as peer
-from serverware import native_shadow_nitro_originals as originals
+from catchplate import native_pilot_genesis_handoff_listener as listener
+from catchplate import native_pilot_genesis_receiver_observation as peer
+from catchplate import native_shadow_nitro_originals as originals
 from test_native_pilot_genesis_handoff_listener import fixture
 
 

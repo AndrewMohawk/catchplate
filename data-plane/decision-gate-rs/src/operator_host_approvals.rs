@@ -4,11 +4,11 @@
 use super::*;
 use std::borrow::Cow;
 
-const FLAG: &str = "SERVERWARE_HOST_TRUSTED_APPROVALS_ENABLED";
+const FLAG: &str = "CATCHPLATE_HOST_TRUSTED_APPROVALS_ENABLED";
 const MARKER: &str = "hostTrustedApproval";
-const POLICY: &str = "serverware.hostTrustedApprovalPolicy/v1";
-const REQUEST: &str = "serverware.hostTrustedApprovalClaimRequest/v1";
-const RESPONSE: &str = "serverware.hostTrustedApprovalClaimResponse/v1";
+const POLICY: &str = "catchplate.hostTrustedApprovalPolicy/v1";
+const REQUEST: &str = "catchplate.hostTrustedApprovalClaimRequest/v1";
+const RESPONSE: &str = "catchplate.hostTrustedApprovalClaimResponse/v1";
 const PATH: &str = "/api/data-plane/host-trusted-approvals/claim";
 const ERROR: &str = "host_trusted_approval_unavailable";
 
@@ -168,7 +168,7 @@ pub(super) fn configure(state: &mut GateState) -> Result<(), String> {
 }
 
 pub(super) fn capability(state: &GateState) -> Value {
-    json!({"schema":"serverware.hostTrustedApprovalRuntime/v1", "enabled":ordinary(state),
+    json!({"schema":"catchplate.hostTrustedApprovalRuntime/v1", "enabled":ordinary(state),
         "claim_request_version":REQUEST, "claim_response_version":RESPONSE})
 }
 
@@ -293,7 +293,7 @@ pub(super) fn claim(
         .audit_client
         .post(endpoint(state)?)
         .header(
-            "X-Serverware-Data-Plane-Token",
+            "X-Catchplate-Data-Plane-Token",
             state.credential_lease_token.as_deref().ok_or(ERROR)?,
         )
         .header("Content-Type", "application/json")

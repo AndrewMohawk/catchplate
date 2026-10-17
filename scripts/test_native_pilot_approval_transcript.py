@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 from scripts import test_native_pilot_lifecycle_inputs as bootstrap_fixture
 from scripts.test_native_pilot_publication_cold_binding import fixture as cold_fixture
 from scripts.test_native_pilot_adopted_current_head import fixture as head_fixture
-from serverware import native_pilot_approval_transcript as transcript
+from catchplate import native_pilot_approval_transcript as transcript
 
 p = transcript.p
 FAILURES = (ValueError, KeyError, TypeError, InvalidSignature)

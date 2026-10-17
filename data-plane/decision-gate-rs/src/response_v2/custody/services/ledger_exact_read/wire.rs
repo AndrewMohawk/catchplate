@@ -5,10 +5,10 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-pub(super) const REQUEST: &str = "serverware.responseV2.ledgerExactReadRequest/v1";
-pub(super) const RESPONSE: &str = "serverware.responseV2.ledgerExactReadResult/v1";
-pub(super) const REQUEST_DOMAIN: &[u8] = b"serverware.responseV2.ledgerExactReadRequest/v1\0";
-pub(super) const RESPONSE_DOMAIN: &[u8] = b"serverware.responseV2.ledgerExactReadResult/v1\0";
+pub(super) const REQUEST: &str = "catchplate.responseV2.ledgerExactReadRequest/v1";
+pub(super) const RESPONSE: &str = "catchplate.responseV2.ledgerExactReadResult/v1";
+pub(super) const REQUEST_DOMAIN: &[u8] = b"catchplate.responseV2.ledgerExactReadRequest/v1\0";
+pub(super) const RESPONSE_DOMAIN: &[u8] = b"catchplate.responseV2.ledgerExactReadResult/v1\0";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

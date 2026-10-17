@@ -27,18 +27,18 @@ REQUEST_SCALARS = ("intent_envelope_id", "relay_envelope_id", "execution_envelop
 class RevocationWriterAcknowledgmentStorageSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        _, cls.tree = source("serverware/authority_store/revocation_writer_acknowledgment.py", 64 * 1024)
-        _, cls.persistence = source("serverware/authority_revocation_persistence.py", 64 * 1024)
-        _, cls.request = source("serverware/authority_store/revocation_writer_request.py", 64 * 1024)
-        _, cls.retention = source("serverware/authority_store/revocation_retention.py", 64 * 1024)
-        _, cls.writer = source("serverware/authority_revocation_writer_connection.py", 64 * 1024)
-        _, cls.contract = source("serverware/authority_contract.py", 512 * 1024)
+        _, cls.tree = source("catchplate/authority_store/revocation_writer_acknowledgment.py", 64 * 1024)
+        _, cls.persistence = source("catchplate/authority_revocation_persistence.py", 64 * 1024)
+        _, cls.request = source("catchplate/authority_store/revocation_writer_request.py", 64 * 1024)
+        _, cls.retention = source("catchplate/authority_store/revocation_retention.py", 64 * 1024)
+        _, cls.writer = source("catchplate/authority_revocation_writer_connection.py", 64 * 1024)
+        _, cls.contract = source("catchplate/authority_contract.py", 512 * 1024)
 
     def shape(self, actual, expected):
         self.assertEqual(ast.dump(actual), ast.dump(ast.parse("(" + expected.strip() + ")", mode="eval").body))
 
     def test_exact_ten_field_sql_and_nineteen_scalar_request_projection_are_source_owned(self):
-        self.shape(assigned(self.tree, "_TABLE"), '"serverware_metadata." + authority.REVOCATION_WRITER_ACK_TABLE')
+        self.shape(assigned(self.tree, "_TABLE"), '"catchplate_metadata." + authority.REVOCATION_WRITER_ACK_TABLE')
         self.shape(assigned(self.tree, "_FIELDS"), "authority.REVOCATION_WRITER_ACK_COLUMNS")
         self.assertEqual(tuple(item.value for item in assigned(self.contract, "REVOCATION_WRITER_ACK_COLUMNS").elts), ACK_FIELDS)
         self.shape(assigned(self.contract, "REVOCATION_WRITER_ACK_TABLE"),
@@ -224,7 +224,7 @@ class RevocationWriterAcknowledgmentStorageSourceTests(unittest.TestCase):
         runner = definition(self.persistence, "_run_on_configuration")
         captured = call(runner, "_inputs_from_configuration")
         imported, = [node for node in runner.body if isinstance(node, ast.ImportFrom)
-                     and node.module == "serverware" and [item.name for item in node.names] == ["db"]]
+                     and node.module == "catchplate" and [item.name for item in node.names] == ["db"]]
         opened = call(runner, "_connect")
         delegated = call(runner, "writer_connection._run_on_connection")
         self.assertEqual([node.lineno for node in (captured, imported, opened, delegated)],

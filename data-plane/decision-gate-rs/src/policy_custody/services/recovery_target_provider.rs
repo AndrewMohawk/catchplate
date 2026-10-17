@@ -70,15 +70,15 @@ use std::os::fd::{
 };
 
 const SERVICE_RESPONSE_RECEIPT_DOMAIN: &[u8] =
-    b"serverware.policyCustodyServiceResponse/v3";
+    b"catchplate.policyCustodyServiceResponse/v3";
 const RECOVERY_TARGET_REQUEST_ID_DOMAIN: &[u8] =
-    b"serverware.policyCustodyRecoveryTargetRequestId/v3";
+    b"catchplate.policyCustodyRecoveryTargetRequestId/v3";
 const RECOVERY_TARGET_DIGEST_DOMAIN: &[u8] =
-    b"serverware.policyCustodyRecoveryTarget/v3";
+    b"catchplate.policyCustodyRecoveryTarget/v3";
 const REAP_LINEAGE_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyRecoveryTargetReapLineage/v3";
+    b"catchplate.policyCustodyRecoveryTargetReapLineage/v3";
 const REAP_LINEAGE_PROOF_DOMAIN: &[u8] =
-    b"serverware.policyCustodyRecoveryTargetReapLineageProof/v3";
+    b"catchplate.policyCustodyRecoveryTargetReapLineageProof/v3";
 const CGROUP2_SUPER_MAGIC: libc::c_long = 0x6367_7270;
 const MAX_PROGRESS_EVENTS: usize = 8;
 const MAX_FDINFO_BYTES: usize = 16 * 1024;

@@ -1,7 +1,7 @@
 # Native observation preimage receiver
 
 The actual delivery/v3 worker selects inner
-`serverware.policyShadowRuntimeAccountingEvent/v2` only for
+`catchplate.policyShadowRuntimeAccountingEvent/v2` only for
 `candidate-evaluated` and `response-evaluated`. Its exact additional field is
 the required, non-null `observationOriginal`. All other events and the old
 delivery profiles retain the exact accounting/v1 fields. This is not a new

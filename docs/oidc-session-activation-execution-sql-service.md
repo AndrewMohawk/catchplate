@@ -56,7 +56,7 @@ permission. Other failures can close without a response and remain uncertain.
 ## Custody, attempts and cleanup
 
 The separate private 0700 attempt directory is
-`/var/lib/serverware/oidc-session-activation-execution-sql-attempts`. Its exact
+`/var/lib/catchplate/oidc-session-activation-execution-sql-attempts`. Its exact
 device/inode and independently current local checkpoint come from root
 admission, not recovered records or a database receipt. The actual journal
 owns an independent open/flock and immutable bounded records.
@@ -69,7 +69,7 @@ per-record cold budgets. Attempt claiming, one-use identities, checkpoint
 comparison, poisoning and no-pruning semantics are unchanged.
 
 The source-fixed TLS directory is
-`/run/serverware/oidc-session-activation-execution-sql-tls`: `ca.pem`,
+`/run/catchplate/oidc-session-activation-execution-sql-tls`: `ca.pem`,
 `issuer.crt`, `issuer.key`, `executor.crt`, `executor.key`. Signed original
 digest/size pins are checked at cold admission, then protected path/metadata
 continuity is checked. Public files are root-owned 0444; private libpq files

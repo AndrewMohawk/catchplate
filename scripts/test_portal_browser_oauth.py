@@ -61,11 +61,11 @@ X_JIT_ROUTE_ID = "browser.x.post.one-per-day.jit"
 NPM_JIT_ROUTE_ID = "browser.npm.common-writes.jit"
 NPM_CONTENTION_ROUTE_ID = "browser.npm.publish.concurrent-one-use.jit"
 NPM_CREDENTIAL_ID = "cred-demo-bearer"
-NPM_PACKAGE_NAME = "@scope/serverware-browser"
-NPM_PACKAGE_PATH = "@scope%2fserverware-browser"
+NPM_PACKAGE_NAME = "@scope/catchplate-browser"
+NPM_PACKAGE_PATH = "@scope%2fcatchplate-browser"
 NPM_PACKAGE_VERSION = "1.2.3"
-NPM_CONTENTION_PACKAGE_NAME = "@scope/serverware-contention"
-NPM_CONTENTION_PACKAGE_PATH = "@scope%2fserverware-contention"
+NPM_CONTENTION_PACKAGE_NAME = "@scope/catchplate-contention"
+NPM_CONTENTION_PACKAGE_PATH = "@scope%2fcatchplate-contention"
 NPM_CONTENTION_PACKAGE_VERSION = "9.8.7"
 NPM_REMAINING_VERSION = "1.2.2"
 NPM_REVISION = "42-deadbeef"
@@ -77,12 +77,12 @@ GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
 ]
 X_SCOPES = ["tweet.read", "tweet.write", "users.read", "offline.access"]
-OAUTH_COOKIE_PREFIX = "__Host-serverware-oauth-"
+OAUTH_COOKIE_PREFIX = "__Host-catchplate-oauth-"
 OAUTH_STATE_TTL_SECONDS = 600
 OAUTH_COOKIE_CLOCK_SKEW_SECONDS = 2
 EXPECTED_NPM_VERSION = "11.8.0"
-if "_SERVERWARE_NPM_COMPANION_CLIENT" not in globals():
-    _SERVERWARE_NPM_COMPANION_CLIENT: Any | None = None
+if "_CATCHPLATE_NPM_COMPANION_CLIENT" not in globals():
+    _CATCHPLATE_NPM_COMPANION_CLIENT: Any | None = None
 DEFAULT_TIMEOUT_MS = 20_000
 JOURNEY_TIMEOUT_SECONDS = 10 * 60
 CLEANUP_TIMEOUT_SECONDS = 90
@@ -92,18 +92,18 @@ MAX_EVIDENCE_FILE_BYTES = 32 * 1024 * 1024
 MAX_GATE_LOG_BYTES = 8 * 1024 * 1024
 MAX_BROWSER_OBSERVATIONS = 20_000
 MAX_ENROLLMENT_PACKET_BYTES = 1024 * 1024
-HOST_ENROLLMENT_IDENTITY_VERSION = "serverware.agentTrustHostIdentity/v1"
-HOST_ENROLLMENT_TOOLING_VERSION = "serverware.agentEnrollmentTooling/v1"
+HOST_ENROLLMENT_IDENTITY_VERSION = "catchplate.agentTrustHostIdentity/v1"
+HOST_ENROLLMENT_TOOLING_VERSION = "catchplate.agentEnrollmentTooling/v1"
 HOST_ENROLLMENT_EXPECTED_MODULES = {
-    "serverware_agent_trust",
-    "serverware_agent_trust.attestation",
-    "serverware_agent_trust.enrollment",
-    "serverware_agent_trust.http",
+    "catchplate_agent_trust",
+    "catchplate_agent_trust.attestation",
+    "catchplate_agent_trust.enrollment",
+    "catchplate_agent_trust.http",
 }
 HOST_ENROLLMENT_MAX_TOTAL_BYTES = 64 * 1024 * 1024
-CONSOLIDATED_BUILD_VERSION = "serverware.consolidatedTestArtifacts/v2"
-SAME_JOURNEY_CALLBACK_VERSION = "serverware.browserEnrollmentHostCallback/v1"
-SAME_JOURNEY_RESULT_VERSION = "serverware.agentTrustSameJourneyResult/v1"
+CONSOLIDATED_BUILD_VERSION = "catchplate.consolidatedTestArtifacts/v2"
+SAME_JOURNEY_CALLBACK_VERSION = "catchplate.browserEnrollmentHostCallback/v1"
+SAME_JOURNEY_RESULT_VERSION = "catchplate.agentTrustSameJourneyResult/v1"
 SAME_JOURNEY_NOT_ESTABLISHED = {
     "build-provenance",
     "hardware-attestation",
@@ -695,7 +695,7 @@ def _load_same_journey_contract(
 ) -> dict[str, Any]:
     _require(
         args.same_journey_artifact_manifest is not None,
-        "SERVERWARE_BROWSER_PREBUILT_BUILD_MANIFEST or "
+        "CATCHPLATE_BROWSER_PREBUILT_BUILD_MANIFEST or "
         "--same-journey-artifact-manifest is required",
     )
     artifact_manifest_path = args.same_journey_artifact_manifest.resolve(strict=True)
@@ -1231,7 +1231,7 @@ def _write_local_fixture_attestation_documents(
         "teeCustodyProven": False,
     }
     provenance_payload = {
-        "apiVersion": "serverware.localFixtureReleaseProvenance/v1",
+        "apiVersion": "catchplate.localFixtureReleaseProvenance/v1",
         "assurance": {
             "classification": "local-fixture-metadata-only",
             "factOrigin": "caller-supplied-and-locally-measured",
@@ -1264,7 +1264,7 @@ def _write_local_fixture_attestation_documents(
         ),
     }
     image_payload = {
-        "apiVersion": "serverware.localFixtureImageSignatures/v1",
+        "apiVersion": "catchplate.localFixtureImageSignatures/v1",
         "assurance": {
             "classification": "unsigned-local-fixture-binding",
             **limitations,
@@ -1311,7 +1311,7 @@ def _write_mitm_ca(work_dir: Path) -> tuple[Path, Path]:
     work_dir.mkdir(parents=True, exist_ok=True)
     key = ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name(
-        [x509.NameAttribute(NameOID.COMMON_NAME, "Serverware browser Rust gate CA")]
+        [x509.NameAttribute(NameOID.COMMON_NAME, "Catchplate browser Rust gate CA")]
     )
     now = dt.datetime.now(dt.timezone.utc)
     certificate = (
@@ -1382,76 +1382,76 @@ def _configure_environment(
     }
     _require(len(service_tokens) == 6, "data-plane service tokens must be distinct")
     values = {
-        "SERVERWARE_DATA_DIR": str(data_dir),
-        "SERVERWARE_RELEASE_CHANNEL": "dev",
-        "SERVERWARE_PUBLIC_URL": public_url,
-        "SERVERWARE_WEB_TLS_CERT_FILE": str(simulator.server_cert_path),
-        "SERVERWARE_WEB_TLS_KEY_FILE": str(simulator.server_key_path),
-        "SERVERWARE_ADMIN_TOKEN": ADMIN_TOKEN,
-        "SERVERWARE_ADMIN_USER": "user:demo",
-        "SERVERWARE_ADMIN_ROLES": (
+        "CATCHPLATE_DATA_DIR": str(data_dir),
+        "CATCHPLATE_RELEASE_CHANNEL": "dev",
+        "CATCHPLATE_PUBLIC_URL": public_url,
+        "CATCHPLATE_WEB_TLS_CERT_FILE": str(simulator.server_cert_path),
+        "CATCHPLATE_WEB_TLS_KEY_FILE": str(simulator.server_key_path),
+        "CATCHPLATE_ADMIN_TOKEN": ADMIN_TOKEN,
+        "CATCHPLATE_ADMIN_USER": "user:demo",
+        "CATCHPLATE_ADMIN_ROLES": (
             "admin,approver,auditor,policy_author,policy_publisher,credential_owner,"
             "attestation_operator,attestation_reviewer"
         ),
-        "SERVERWARE_DEV_AUTHENTICATOR": "1",
-        "SERVERWARE_KEY_RELEASE_REQUIRED": "0",
-        "SERVERWARE_METADATA_STORE_BACKEND": "sqlite",
-        "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite",
-        "SERVERWARE_GRANT_STORE_BACKEND": "sqlite",
-        "SERVERWARE_OIDC_ENABLED": "0",
-        "SERVERWARE_OIDC_BROWSER_LOGIN_ENABLED": "0",
-        "SERVERWARE_CONTROL_PLANE_TWO_PERSON_REQUIRED": "1",
-        "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS": "credential.oauth.activate",
-        "SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED": "0",
-        "SERVERWARE_CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION": "0",
-        "SERVERWARE_POLICY_PUBLISH_DRY_RUN_REQUIRED": "1",
-        "SERVERWARE_POLICY_CANARY_REQUIRED": "0",
-        "SERVERWARE_POLICY_CANARY_MIN_OBSERVATION_SECONDS": "0",
-        "SERVERWARE_POLICY_CANARY_MIN_AUDIT_EVENTS": "0",
-        "SERVERWARE_POLICY_CANARY_MAX_DENIALS": "0",
-        "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID": simulator.GOOGLE_CLIENT_ID,
-        "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET": simulator.GOOGLE_CLIENT_SECRET,
-        "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI": f"{public_url}/api/oauth/callback/google",
-        "SERVERWARE_X_OAUTH_CLIENT_ID": simulator.X_CLIENT_ID,
-        "SERVERWARE_X_OAUTH_CLIENT_SECRET": simulator.X_CLIENT_SECRET,
-        "SERVERWARE_X_OAUTH_REDIRECT_URI": f"{public_url}/api/oauth/callback/x",
-        "SERVERWARE_WEBAUTHN_RP_ID": public_host,
-        "SERVERWARE_WEBAUTHN_ORIGIN": public_url,
-        "SERVERWARE_DATA_PLANE_INSTANCE_ID": (
-            "spiffe://test.serverware/decision-gate/browser-oauth"
+        "CATCHPLATE_DEV_AUTHENTICATOR": "1",
+        "CATCHPLATE_KEY_RELEASE_REQUIRED": "0",
+        "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite",
+        "CATCHPLATE_AUDIT_STORE_BACKEND": "sqlite",
+        "CATCHPLATE_GRANT_STORE_BACKEND": "sqlite",
+        "CATCHPLATE_OIDC_ENABLED": "0",
+        "CATCHPLATE_OIDC_BROWSER_LOGIN_ENABLED": "0",
+        "CATCHPLATE_CONTROL_PLANE_TWO_PERSON_REQUIRED": "1",
+        "CATCHPLATE_CONTROL_PLANE_TWO_PERSON_ACTIONS": "credential.oauth.activate",
+        "CATCHPLATE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED": "0",
+        "CATCHPLATE_CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION": "0",
+        "CATCHPLATE_POLICY_PUBLISH_DRY_RUN_REQUIRED": "1",
+        "CATCHPLATE_POLICY_CANARY_REQUIRED": "0",
+        "CATCHPLATE_POLICY_CANARY_MIN_OBSERVATION_SECONDS": "0",
+        "CATCHPLATE_POLICY_CANARY_MIN_AUDIT_EVENTS": "0",
+        "CATCHPLATE_POLICY_CANARY_MAX_DENIALS": "0",
+        "CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID": simulator.GOOGLE_CLIENT_ID,
+        "CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET": simulator.GOOGLE_CLIENT_SECRET,
+        "CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI": f"{public_url}/api/oauth/callback/google",
+        "CATCHPLATE_X_OAUTH_CLIENT_ID": simulator.X_CLIENT_ID,
+        "CATCHPLATE_X_OAUTH_CLIENT_SECRET": simulator.X_CLIENT_SECRET,
+        "CATCHPLATE_X_OAUTH_REDIRECT_URI": f"{public_url}/api/oauth/callback/x",
+        "CATCHPLATE_WEBAUTHN_RP_ID": public_host,
+        "CATCHPLATE_WEBAUTHN_ORIGIN": public_url,
+        "CATCHPLATE_DATA_PLANE_INSTANCE_ID": (
+            "spiffe://test.catchplate/decision-gate/browser-oauth"
         ),
-        "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN": CREDENTIAL_LEASE_TOKEN,
-        "SERVERWARE_DATA_PLANE_AUDIT_TOKEN": AUDIT_TOKEN,
-        "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN": GRANT_CONSUME_TOKEN,
-        "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN": RATE_LIMIT_CONSUME_TOKEN,
-        "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN": (
+        "CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN": CREDENTIAL_LEASE_TOKEN,
+        "CATCHPLATE_DATA_PLANE_AUDIT_TOKEN": AUDIT_TOKEN,
+        "CATCHPLATE_DATA_PLANE_GRANT_CONSUME_TOKEN": GRANT_CONSUME_TOKEN,
+        "CATCHPLATE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN": RATE_LIMIT_CONSUME_TOKEN,
+        "CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN": (
             RELEASE_AUTHORIZATION_TOKEN
         ),
-        "SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN": MANAGEMENT_TOKEN,
-        "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "1",
-        "SERVERWARE_RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS": "30",
-        "SERVERWARE_RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS": "30",
-        "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST": data_plane_digest,
-        "SERVERWARE_RELEASE_PROVENANCE": str(
+        "CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN": MANAGEMENT_TOKEN,
+        "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "1",
+        "CATCHPLATE_RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS": "30",
+        "CATCHPLATE_RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS": "30",
+        "CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST": data_plane_digest,
+        "CATCHPLATE_RELEASE_PROVENANCE": str(
             data_dir / "release-provenance.json"
         ),
-        "SERVERWARE_IMAGE_SIGNATURES": str(data_dir / "image-signatures.json"),
-        "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED": "0",
-        "SERVERWARE_AUDIT_ANCHOR_URL": "",
-        "SERVERWARE_DECISION_GATE_BASE": "",
+        "CATCHPLATE_IMAGE_SIGNATURES": str(data_dir / "image-signatures.json"),
+        "CATCHPLATE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED": "0",
+        "CATCHPLATE_AUDIT_ANCHOR_URL": "",
+        "CATCHPLATE_DECISION_GATE_BASE": "",
         "SSL_CERT_FILE": str(simulator.ca_cert_path),
         "NO_PROXY": "127.0.0.1,localhost",
         "no_proxy": "127.0.0.1,localhost",
     }
     for name in (
-        "SERVERWARE_METADATA_STORE_POSTGRES_DSN",
-        "SERVERWARE_AUDIT_STORE_POSTGRES_DSN",
-        "SERVERWARE_GRANT_STORE_POSTGRES_DSN",
-        "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
-        "SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE",
-        "SERVERWARE_TWITTER_OAUTH_CLIENT_ID",
-        "SERVERWARE_TWITTER_OAUTH_CLIENT_SECRET",
-        "SERVERWARE_TWITTER_OAUTH_REDIRECT_URI",
+        "CATCHPLATE_METADATA_STORE_POSTGRES_DSN",
+        "CATCHPLATE_AUDIT_STORE_POSTGRES_DSN",
+        "CATCHPLATE_GRANT_STORE_POSTGRES_DSN",
+        "CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
+        "CATCHPLATE_X_OAUTH_CLIENT_SECRET_FILE",
+        "CATCHPLATE_TWITTER_OAUTH_CLIENT_ID",
+        "CATCHPLATE_TWITTER_OAUTH_CLIENT_SECRET",
+        "CATCHPLATE_TWITTER_OAUTH_REDIRECT_URI",
     ):
         os.environ.pop(name, None)
     os.environ.update(values)
@@ -1539,52 +1539,52 @@ class _DecisionGateProcess:
         env = os.environ.copy()
         env.update(
             {
-                "SERVERWARE_POLICY_BUNDLE": str(self.data_dir / "policy-bundle.json"),
-                "SERVERWARE_POLICY_TRUST_ROOT_ATTESTATION_URL": (
+                "CATCHPLATE_POLICY_BUNDLE": str(self.data_dir / "policy-bundle.json"),
+                "CATCHPLATE_POLICY_TRUST_ROOT_ATTESTATION_URL": (
                     f"{self.portal_url}/attestation"
                 ),
-                "SERVERWARE_CONTROL_PLANE_CA_BUNDLE": str(
+                "CATCHPLATE_CONTROL_PLANE_CA_BUNDLE": str(
                     self.simulator.ca_cert_path
                 ),
-                "SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL": (
+                "CATCHPLATE_CONTROL_PLANE_CREDENTIAL_LEASE_URL": (
                     f"{self.portal_url}/api/data-plane/credential-leases"
                 ),
-                "SERVERWARE_CONTROL_PLANE_AUDIT_URL": (
+                "CATCHPLATE_CONTROL_PLANE_AUDIT_URL": (
                     f"{self.portal_url}/api/data-plane/audit"
                 ),
-                "SERVERWARE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL": (
+                "CATCHPLATE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL": (
                     f"{self.portal_url}/api/data-plane/release-authorizations"
                 ),
-                "SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES": "1",
-                "SERVERWARE_RELEASE_CHANNEL": "dev",
-                "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "1",
-                "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN": (
+                "CATCHPLATE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES": "1",
+                "CATCHPLATE_RELEASE_CHANNEL": "dev",
+                "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "1",
+                "CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN": (
                     CREDENTIAL_LEASE_TOKEN
                 ),
-                "SERVERWARE_DATA_PLANE_AUDIT_TOKEN": AUDIT_TOKEN,
-                "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN": GRANT_CONSUME_TOKEN,
-                "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN": (
+                "CATCHPLATE_DATA_PLANE_AUDIT_TOKEN": AUDIT_TOKEN,
+                "CATCHPLATE_DATA_PLANE_GRANT_CONSUME_TOKEN": GRANT_CONSUME_TOKEN,
+                "CATCHPLATE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN": (
                     RATE_LIMIT_CONSUME_TOKEN
                 ),
-                "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN": (
+                "CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN": (
                     RELEASE_AUTHORIZATION_TOKEN
                 ),
-                "SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN": MANAGEMENT_TOKEN,
-                "SERVERWARE_DATA_PLANE_INSTANCE_ID": (
-                    "spiffe://test.serverware/decision-gate/browser-oauth"
+                "CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN": MANAGEMENT_TOKEN,
+                "CATCHPLATE_DATA_PLANE_INSTANCE_ID": (
+                    "spiffe://test.catchplate/decision-gate/browser-oauth"
                 ),
-                "SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND": str(
+                "CATCHPLATE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND": str(
                     self.response_proof_fixture
                 ),
-                "SERVERWARE_MITM_CA_CERT": str(self.ca_cert_path),
-                "SERVERWARE_MITM_CA_KEY": str(self.ca_key_path),
-                "SERVERWARE_UPSTREAM_CA_BUNDLE": str(self.simulator.ca_cert_path),
-                "SERVERWARE_POLICY_POLL_SECONDS": "0.05",
-                "SERVERWARE_CREDENTIAL_LEASE_POLL_SECONDS": "0.05",
-                "SERVERWARE_DECISION_GATE_HOST": "127.0.0.1",
-                "SERVERWARE_DECISION_GATE_PORT": str(self.proxy_port),
-                "SERVERWARE_DECISION_GATE_MANAGEMENT_HOST": "127.0.0.1",
-                "SERVERWARE_DECISION_GATE_MANAGEMENT_PORT": str(
+                "CATCHPLATE_MITM_CA_CERT": str(self.ca_cert_path),
+                "CATCHPLATE_MITM_CA_KEY": str(self.ca_key_path),
+                "CATCHPLATE_UPSTREAM_CA_BUNDLE": str(self.simulator.ca_cert_path),
+                "CATCHPLATE_POLICY_POLL_SECONDS": "0.05",
+                "CATCHPLATE_CREDENTIAL_LEASE_POLL_SECONDS": "0.05",
+                "CATCHPLATE_DECISION_GATE_HOST": "127.0.0.1",
+                "CATCHPLATE_DECISION_GATE_PORT": str(self.proxy_port),
+                "CATCHPLATE_DECISION_GATE_MANAGEMENT_HOST": "127.0.0.1",
+                "CATCHPLATE_DECISION_GATE_MANAGEMENT_PORT": str(
                     self.management_port
                 ),
                 "SSL_CERT_FILE": str(self.simulator.ca_cert_path),
@@ -1604,7 +1604,7 @@ class _DecisionGateProcess:
         )
         self._log_monitor_thread = threading.Thread(
             target=self._monitor_log,
-            name="serverware-browser-gate-log-monitor",
+            name="catchplate-browser-gate-log-monitor",
             daemon=True,
         )
         self._log_monitor_thread.start()
@@ -1814,7 +1814,7 @@ def _closed_response_header_array(
             "content-length",
             "content-type",
             "x-content-type-options",
-            "x-serverware-enrollment-packet-sha256",
+            "x-catchplate-enrollment-packet-sha256",
         }
         <= set(values),
         f"{label} omitted an authority-bearing response header",
@@ -1938,7 +1938,7 @@ def _playwright_response_tls_evidence(
             "as proof of the exact enrollment response connection"
         )
     return {
-        "apiVersion": "serverware.browserResponseTlsEvidence/v1",
+        "apiVersion": "catchplate.browserResponseTlsEvidence/v1",
         "originCertificateAvailable": leaf_spki_sha256 is not None,
         "responseSpecificTlsProven": response_specific_tls_proven,
         "certificateSha256": certificate_sha256,
@@ -2107,10 +2107,10 @@ def _run_same_journey_callback(
     )
     _require(
         [item for item in response_headers_array if item["name"]
-         == "x-serverware-enrollment-packet-sha256"]
+         == "x-catchplate-enrollment-packet-sha256"]
         == [
             {
-                "name": "x-serverware-enrollment-packet-sha256",
+                "name": "x-catchplate-enrollment-packet-sha256",
                 "value": response_header_sha256,
             }
         ],
@@ -2135,7 +2135,7 @@ def _run_same_journey_callback(
             "verifierContractBindsResponseSpecificTls",
         }
         and response_tls_evidence["apiVersion"]
-        == "serverware.browserResponseTlsEvidence/v1"
+        == "catchplate.browserResponseTlsEvidence/v1"
         and response_tls_evidence["expectedLeafSpkiSha256"] == leaf_spki_sha256
         and response_tls_evidence["verifierContractBindsResponseSpecificTls"] is False,
         "browser response TLS evidence has an open or inconsistent schema",
@@ -2146,7 +2146,7 @@ def _run_same_journey_callback(
         "browser enrollment response status or URL differs from the exact HTTPS endpoint",
     )
     response_record = {
-        "apiVersion": "serverware.browserEnrollmentResponse/v2",
+        "apiVersion": "catchplate.browserEnrollmentResponse/v2",
         "bodyLength": len(packet_bytes),
         "bodySha256": packet_sha256,
         "framing": {
@@ -2286,42 +2286,42 @@ def _run_same_journey_callback(
         "PYTHONNOUSERSITE": "1",
         "SSL_CERT_FILE": str(portal_ca_path),
         "TZ": "UTC",
-        "SERVERWARE_BROWSER_SAME_JOURNEY_CALLBACK": "1",
-        "SERVERWARE_BROWSER_ATTESTATION_SOURCE": "live-host-supplied",
-        "SERVERWARE_BROWSER_ENROLLMENT_FIXTURE": "0",
-        "SERVERWARE_BROWSER_GATE_STATE": "running",
-        "SERVERWARE_BROWSER_PORTAL_STATE": "running",
-        "SERVERWARE_BROWSER_BUILD_MANIFEST": str(
+        "CATCHPLATE_BROWSER_SAME_JOURNEY_CALLBACK": "1",
+        "CATCHPLATE_BROWSER_ATTESTATION_SOURCE": "live-host-supplied",
+        "CATCHPLATE_BROWSER_ENROLLMENT_FIXTURE": "0",
+        "CATCHPLATE_BROWSER_GATE_STATE": "running",
+        "CATCHPLATE_BROWSER_PORTAL_STATE": "running",
+        "CATCHPLATE_BROWSER_BUILD_MANIFEST": str(
             contract["artifactManifest"].absolute()
         ),
-        "SERVERWARE_BROWSER_PREBUILT_BUILD_MANIFEST": str(
+        "CATCHPLATE_BROWSER_PREBUILT_BUILD_MANIFEST": str(
             contract["artifactManifest"].absolute()
         ),
-        "SERVERWARE_BROWSER_PREBUILT_HOST_IDENTITY": str(
+        "CATCHPLATE_BROWSER_PREBUILT_HOST_IDENTITY": str(
             contract["hostIdentity"].absolute()
         ),
-        "SERVERWARE_BROWSER_SAME_JOURNEY_PYTHON": str(
+        "CATCHPLATE_BROWSER_SAME_JOURNEY_PYTHON": str(
             contract["hostPython"].absolute()
         ),
-        "SERVERWARE_BROWSER_SAME_JOURNEY_VERIFIER": str(
+        "CATCHPLATE_BROWSER_SAME_JOURNEY_VERIFIER": str(
             contract["callbackScript"].absolute()
         ),
-        "SERVERWARE_BROWSER_PID": str(browser_pid),
-        "SERVERWARE_BROWSER_PORTAL_PID": str(browser_pid),
-        "SERVERWARE_BROWSER_PACKET_PATH": str(packet_path.absolute()),
-        "SERVERWARE_BROWSER_RESPONSE_RECORD_PATH": str(
+        "CATCHPLATE_BROWSER_PID": str(browser_pid),
+        "CATCHPLATE_BROWSER_PORTAL_PID": str(browser_pid),
+        "CATCHPLATE_BROWSER_PACKET_PATH": str(packet_path.absolute()),
+        "CATCHPLATE_BROWSER_RESPONSE_RECORD_PATH": str(
             response_record_path.absolute()
         ),
-        "SERVERWARE_BROWSER_RESPONSE_RECORD_SHA256": response_record_sha256,
-        "SERVERWARE_BROWSER_CHALLENGE_PATH": str(challenge_path.absolute()),
-        "SERVERWARE_BROWSER_HTTPS_ORIGIN": public_url,
-        "SERVERWARE_BROWSER_PLAYWRIGHT_DOWNLOAD_SHA256": packet_sha256,
-        "SERVERWARE_BROWSER_RESPONSE_HEADER_SHA256": response_header_sha256,
-        "SERVERWARE_BROWSER_ENROLLMENT_PRINCIPAL": principal,
-        "SERVERWARE_BROWSER_ENROLLMENT_NONCE": nonce,
-        "SERVERWARE_BROWSER_GATE_PID": str(gate.pid),
-        "SERVERWARE_BROWSER_GATE_BINARY_SHA256": decision_gate_digest,
-        "SERVERWARE_BROWSER_RESPONSE_SIGNING_KEY_ID": str(
+        "CATCHPLATE_BROWSER_RESPONSE_RECORD_SHA256": response_record_sha256,
+        "CATCHPLATE_BROWSER_CHALLENGE_PATH": str(challenge_path.absolute()),
+        "CATCHPLATE_BROWSER_HTTPS_ORIGIN": public_url,
+        "CATCHPLATE_BROWSER_PLAYWRIGHT_DOWNLOAD_SHA256": packet_sha256,
+        "CATCHPLATE_BROWSER_RESPONSE_HEADER_SHA256": response_header_sha256,
+        "CATCHPLATE_BROWSER_ENROLLMENT_PRINCIPAL": principal,
+        "CATCHPLATE_BROWSER_ENROLLMENT_NONCE": nonce,
+        "CATCHPLATE_BROWSER_GATE_PID": str(gate.pid),
+        "CATCHPLATE_BROWSER_GATE_BINARY_SHA256": decision_gate_digest,
+        "CATCHPLATE_BROWSER_RESPONSE_SIGNING_KEY_ID": str(
             pinning["responseSigningKeyId"]
         ),
         "ALL_PROXY": "",
@@ -2491,7 +2491,7 @@ def _run_same_journey_callback(
         and instructions.get("stderrEmpty") is True
         and instructions.get("textIncludedInResult") is False
         and instructions.get("command")
-        == "serverware-enrollment --verify-packet --emit-verified-instructions"
+        == "catchplate-enrollment --verify-packet --emit-verified-instructions"
         and instructions.get("secureOutputPath") == str(instructions_path.absolute())
         and isinstance(browser_binding, dict)
         and set(browser_binding)
@@ -2752,18 +2752,18 @@ def _assert_simulator_contract(
 def _assert_redirect_validation(work_dir: Path) -> None:
     default = OAuthProviderSimulator(work_dir / "default-contract")
     _require(
-        default.redirect_base_url == "https://serverware.test",
+        default.redirect_base_url == "https://catchplate.test",
         "simulator default redirect origin changed",
     )
     invalid_origins = (
-        "http://serverware.test",
-        "https://serverware.test/path",
-        "https://serverware.test?query=1",
-        "https://user@serverware.test",
-        "https://serverware.test#fragment",
-        "https://serverware.test:70000",
-        " https://serverware.test",
-        "https://serverware.test.",
+        "http://catchplate.test",
+        "https://catchplate.test/path",
+        "https://catchplate.test?query=1",
+        "https://user@catchplate.test",
+        "https://catchplate.test#fragment",
+        "https://catchplate.test:70000",
+        " https://catchplate.test",
+        "https://catchplate.test.",
     )
     for index, origin in enumerate(invalid_origins):
         try:
@@ -2841,7 +2841,7 @@ def _npm_publish_document() -> dict[str, Any]:
     return _npm_publish_document_for(
         NPM_PACKAGE_NAME,
         NPM_PACKAGE_VERSION,
-        b"serverware-browser-npm-fixture-v1",
+        b"catchplate-browser-npm-fixture-v1",
     )
 
 
@@ -2849,7 +2849,7 @@ def _npm_contention_publish_document() -> dict[str, Any]:
     return _npm_publish_document_for(
         NPM_CONTENTION_PACKAGE_NAME,
         NPM_CONTENTION_PACKAGE_VERSION,
-        b"serverware-browser-npm-contention-v1",
+        b"catchplate-browser-npm-contention-v1",
     )
 
 
@@ -2920,7 +2920,7 @@ class _NpmRegistryFixture:
         self.port = int(self._server.server_address[1])
         self._thread = threading.Thread(
             target=self._server.serve_forever,
-            name="serverware-browser-npm-registry",
+            name="catchplate-browser-npm-registry",
             daemon=True,
         )
         self._started = False
@@ -3106,7 +3106,7 @@ class _NpmRegistryFixture:
             and not tarball_url.query
             and not tarball_url.fragment
             and tarball_url.path.endswith(
-                f"/serverware-browser-{NPM_PACKAGE_VERSION}.tgz"
+                f"/catchplate-browser-{NPM_PACKAGE_VERSION}.tgz"
             )
         )
 
@@ -3321,7 +3321,7 @@ class _NpmRegistryFixture:
             return
         shutdown_thread = threading.Thread(
             target=self._server.shutdown,
-            name="serverware-browser-npm-registry-shutdown",
+            name="catchplate-browser-npm-registry-shutdown",
             daemon=True,
         )
         shutdown_thread.start()
@@ -3363,7 +3363,7 @@ class _UvicornThread:
         )
         self._thread = threading.Thread(
             target=self._run,
-            name="serverware-browser-oauth-portal",
+            name="catchplate-browser-oauth-portal",
             daemon=True,
         )
 
@@ -3415,11 +3415,11 @@ def _api_result(
         """
         async ({path, method, payload, timeoutMs, maxBytes}) => {
           const token = document.querySelector('#admin-token')?.value || '';
-          return window.__serverwareBoundedFetch(path, {
+          return window.__catchplateBoundedFetch(path, {
             method,
             headers: {
               'Content-Type': 'application/json',
-              'X-Serverware-Admin-Token': token,
+              'X-Catchplate-Admin-Token': token,
               'Authorization': `Bearer ${token}`
             },
             body: method === 'GET' ? undefined : JSON.stringify(payload || {}),
@@ -3874,7 +3874,7 @@ def _install_dev_webauthn_shim(context: Any) -> None:
               }
             }
           };
-          Object.defineProperty(window, '__serverwareBoundedFetch', {
+          Object.defineProperty(window, '__catchplateBoundedFetch', {
             configurable: false,
             writable: false,
             value: boundedFetch
@@ -3934,7 +3934,7 @@ def _install_dev_webauthn_shim(context: Any) -> None:
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
-                  'X-Serverware-Admin-Token': token,
+                  'X-Catchplate-Admin-Token': token,
                   'Authorization': `Bearer ${token}`
                 },
                 body: JSON.stringify({challenge}),
@@ -4010,7 +4010,7 @@ def _install_dev_webauthn_shim(context: Any) -> None:
               };
             }
           });
-          window.__serverwareDevWebAuthnShim = true;
+          window.__catchplateDevWebAuthnShim = true;
         })();
         """
     )
@@ -4042,7 +4042,7 @@ def _assert_single_approval_decision(
     ]
     approvals = _api_json(page, "/api/approvals")
     matches = [item for item in approvals if item.get("id") == approval_id]
-    from serverware import db
+    from catchplate import db
 
     audit_events = [
         item
@@ -4096,7 +4096,7 @@ def _assert_stripe_uses_manual_credential_flow(
         """
         () => ({
           provider: document.querySelector('#oauth-provider')?.value || '',
-          draft: sessionStorage.getItem('serverware.oauthDraft'),
+          draft: sessionStorage.getItem('catchplate.oauthDraft'),
           setupSessionId: state.oauthSetupSessionId
         })
         """
@@ -4179,7 +4179,7 @@ def _assert_stripe_uses_manual_credential_flow(
           revision: state.setupSession?.revision ?? null,
           oauthSetupSessionId: state.oauthSetupSessionId,
           oauthProvider: document.querySelector('#oauth-provider')?.value || '',
-          oauthDraft: sessionStorage.getItem('serverware.oauthDraft')
+          oauthDraft: sessionStorage.getItem('catchplate.oauthDraft')
         })
         """
     )
@@ -4207,11 +4207,11 @@ def _assert_stripe_uses_manual_credential_flow(
         """
         async ({sessionId, revision, timeoutMs, maxBytes}) => {
           const token = document.querySelector('#admin-token')?.value || '';
-          return window.__serverwareBoundedFetch(`/api/setup/sessions/${encodeURIComponent(sessionId)}/cancel`, {
+          return window.__catchplateBoundedFetch(`/api/setup/sessions/${encodeURIComponent(sessionId)}/cancel`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'X-Serverware-Admin-Token': token,
+              'X-Catchplate-Admin-Token': token,
               'Authorization': `Bearer ${token}`
             },
             credentials: 'same-origin',
@@ -4378,7 +4378,7 @@ def _connect_oauth(
         () => {
           try {
             const mutation = JSON.parse(
-              sessionStorage.getItem('serverware.pendingMutation') || 'null'
+              sessionStorage.getItem('catchplate.pendingMutation') || 'null'
             );
             return mutation?.kind === 'oauth-activate'
               && typeof mutation?.approvalId === 'string';
@@ -4390,7 +4390,7 @@ def _connect_oauth(
         timeout=_journey_timeout_ms(label="Playwright wait"),
     )
     pending_mutation = page.evaluate(
-        "() => JSON.parse(sessionStorage.getItem('serverware.pendingMutation'))"
+        "() => JSON.parse(sessionStorage.getItem('catchplate.pendingMutation'))"
     )
     approval_id = pending_mutation["approvalId"]
     _require(
@@ -4400,11 +4400,11 @@ def _connect_oauth(
     self_approval = page.evaluate(
         """
         async ({id, token, timeoutMs, maxBytes}) => {
-          const response = await window.__serverwareBoundedFetch(`/api/control-plane/approvals/${id}/approve`, {
+          const response = await window.__catchplateBoundedFetch(`/api/control-plane/approvals/${id}/approve`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'X-Serverware-Admin-Token': token,
+              'X-Catchplate-Admin-Token': token,
               'Authorization': `Bearer ${token}`
             },
             body: JSON.stringify({note: 'requester self-approval must fail'}),
@@ -4448,11 +4448,11 @@ def _connect_oauth(
     reviewer_activation = reviewer_page.evaluate(
         """
         async ({pendingId, setupSessionId, setupRevision, token, timeoutMs, maxBytes}) => {
-          const response = await window.__serverwareBoundedFetch(`/api/oauth/pending/${pendingId}/activate`, {
+          const response = await window.__catchplateBoundedFetch(`/api/oauth/pending/${pendingId}/activate`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              'X-Serverware-Admin-Token': token,
+              'X-Catchplate-Admin-Token': token,
               'Authorization': `Bearer ${token}`
             },
             body: JSON.stringify({
@@ -4523,7 +4523,7 @@ def _connect_oauth(
     page.wait_for_function(
         """
         (id) => !(state.pendingOAuthCredentials || []).some((item) => item.id === id)
-          && sessionStorage.getItem('serverware.pendingMutation') === null
+          && sessionStorage.getItem('catchplate.pendingMutation') === null
         """,
         arg=pending["id"],
         timeout=_journey_timeout_ms(label="Playwright wait"),
@@ -4687,7 +4687,7 @@ def _assert_policy_evidence(
     reviewer_page: Any,
     browser_observations: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    from serverware.policy_bundle import provider_request_profile
+    from catchplate.policy_bundle import provider_request_profile
 
     bundle = policy["bundle"]
     defaults = bundle.get("defaults") or {}
@@ -4935,8 +4935,8 @@ def _assert_policy_evidence(
         and production_authn.get("requireHardwareAttestation") is True,
         "canonical production npm template lost its separate hardware-only contract",
     )
-    from serverware import db
-    from serverware.webauthn import credential_trust_status
+    from catchplate import db
+    from catchplate.webauthn import credential_trust_status
 
     development_credentials = [
         item
@@ -5210,7 +5210,7 @@ def _capture_element_screenshot(page: Any, selector: str, destination: Path) -> 
 
 
 def _jit_state_snapshot(route_id: str, credential_id: str) -> dict[str, Any]:
-    from serverware import db
+    from catchplate import db
 
     def rows(conn: Any, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
         return [dict(item) for item in conn.execute(sql, params).fetchall()]
@@ -5437,7 +5437,7 @@ class _PreparedConnectTlsClient:
         connect_request = (
             f"CONNECT {authority} HTTP/1.1\r\n"
             f"Host: {authority}\r\n"
-            "X-Serverware-Agent: demo-agent\r\n"
+            "X-Catchplate-Agent: demo-agent\r\n"
             "Connection: keep-alive\r\n\r\n"
         ).encode("ascii")
         connect_timeout = _journey_timeout_seconds(
@@ -5614,7 +5614,7 @@ def _send_two_connect_tls_requests_concurrently(
         threading.Thread(
             target=send,
             args=(index,),
-            name=f"serverware-one-use-contention-{index + 1}",
+            name=f"catchplate-one-use-contention-{index + 1}",
             daemon=True,
         )
         for index in range(2)
@@ -6281,7 +6281,7 @@ def _npm_request_bytes(
         path = "/-/npm/v1/tokens"
         command = "token-create"
         body_value = {
-            "name": "serverware-browser-token",
+            "name": "catchplate-browser-token",
             "readonly": False,
             "cidr_whitelist": [],
         }
@@ -6300,7 +6300,7 @@ def _npm_request_bytes(
         f"Host: 127.0.0.1:{registry.port}\r\n"
         "Accept: application/json\r\n"
         f"Npm-Command: {command}\r\n"
-        f"User-Agent: serverware-browser-rust-{command}\r\n"
+        f"User-Agent: catchplate-browser-rust-{command}\r\n"
     )
     if body_value is not None:
         headers += (
@@ -6329,7 +6329,7 @@ def _npm_contention_request_bytes(
         f"Host: 127.0.0.1:{registry.port}\r\n"
         "Accept: application/json\r\n"
         "Content-Type: application/json\r\n"
-        "User-Agent: serverware-browser-rust-contention\r\n"
+        "User-Agent: catchplate-browser-rust-contention\r\n"
         f"Content-Length: {len(body)}\r\n"
         "Connection: close\r\n\r\n"
     ).encode("ascii") + body
@@ -6387,7 +6387,7 @@ def _exercise_rust_reads(
         "GET /gmail/v1/users/me/messages?maxResults=2 HTTP/1.1\r\n"
         f"Host: 127.0.0.1:{simulator_port}\r\n"
         "Accept: application/json\r\n"
-        "User-Agent: serverware-browser-rust-gmail\r\n"
+        "User-Agent: catchplate-browser-rust-gmail\r\n"
         "Connection: close\r\n\r\n"
     ).encode("ascii")
     gmail = _send_connect_tls_request(
@@ -6408,12 +6408,12 @@ def _exercise_rust_reads(
         and all(
             isinstance(item, dict)
             and set(item).issubset(
-                {"id", "threadId", "internalDate", "serverwareAgeProof"}
+                {"id", "threadId", "internalDate", "catchplateAgeProof"}
             )
             and isinstance(item.get("id"), str)
             and isinstance(item.get("threadId"), str)
             and str(item.get("internalDate") or "").isdigit()
-            and item.get("serverwareAgeProof") == "validated"
+            and item.get("catchplateAgeProof") == "validated"
             and 0 <= now_ms - int(item["internalDate"]) <= 30 * 86_400_000
             for item in gmail_messages
         )
@@ -6423,10 +6423,10 @@ def _exercise_rust_reads(
 
     x_request = (
         "GET /2/tweets/search/recent"
-        "?max_results=10&query=serverware&tweet.fields=created_at HTTP/1.1\r\n"
+        "?max_results=10&query=catchplate&tweet.fields=created_at HTTP/1.1\r\n"
         f"Host: 127.0.0.1:{simulator_port}\r\n"
         "Accept: application/json\r\n"
-        "User-Agent: serverware-browser-rust-x-search\r\n"
+        "User-Agent: catchplate-browser-rust-x-search\r\n"
         "Connection: close\r\n\r\n"
     ).encode("ascii")
     x_search = _send_connect_tls_request(
@@ -6493,7 +6493,7 @@ def _exercise_rust_jit(
     binary_digest: str,
     screenshots_dir: Path | None,
 ) -> dict[str, Any]:
-    from serverware import db
+    from catchplate import db
 
     simulator_port = urlsplit(simulator.base_url).port
     _require(simulator_port is not None, "simulator URL omitted its port")
@@ -6507,7 +6507,7 @@ def _exercise_rust_jit(
         f"Host: 127.0.0.1:{simulator_port}\r\n"
         "Accept: application/json\r\n"
         "Content-Type: application/json\r\n"
-        "User-Agent: serverware-browser-rust-jit\r\n"
+        "User-Agent: catchplate-browser-rust-jit\r\n"
         f"Content-Length: {len(body)}\r\n"
         "Connection: close\r\n\r\n"
     ).encode("ascii") + body
@@ -6798,7 +6798,7 @@ def _exercise_rust_jit(
         "GET /2/users/me HTTP/1.1\r\n"
         f"Host: 127.0.0.1:{simulator_port}\r\n"
         "Accept: application/json\r\n"
-        "User-Agent: serverware-browser-rust-unknown-route\r\n"
+        "User-Agent: catchplate-browser-rust-unknown-route\r\n"
         "Connection: close\r\n\r\n"
     ).encode("ascii")
     unknown_before = _jit_state_snapshot(X_JIT_ROUTE_ID, credential_id)
@@ -6848,8 +6848,8 @@ def _approve_npm_jit_request(
     expected_package_name: str | None,
     expected_package_version: str | None,
 ) -> dict[str, Any]:
-    from serverware import db
-    from serverware.webauthn import credential_trust_status
+    from catchplate import db
+    from catchplate.webauthn import credential_trust_status
 
     approval_id = decision["approval_id"]
     denied_review = _api_result(
@@ -7613,7 +7613,7 @@ def _write_deterministic_npm_cli_tarball(work_dir: Path) -> tuple[Path, bytes]:
         {
             "name": NPM_PACKAGE_NAME,
             "version": NPM_PACKAGE_VERSION,
-            "description": "Serverware installed npm compatibility fixture",
+            "description": "Catchplate installed npm compatibility fixture",
             "license": "UNLICENSED",
         },
         sort_keys=True,
@@ -7653,15 +7653,15 @@ def _write_deterministic_npm_cli_tarball(work_dir: Path) -> tuple[Path, bytes]:
     ) as compressed:
         compressed.write(tar_buffer.getvalue())
     tarball = gzip_buffer.getvalue()
-    path = work_dir / "serverware-installed-npm-fixture.tgz"
+    path = work_dir / "catchplate-installed-npm-fixture.tgz"
     path.write_bytes(tarball)
     path.chmod(0o600)
     return path, tarball
 
 
 def _installed_npm_contract() -> dict[str, Any]:
-    if _SERVERWARE_NPM_COMPANION_CLIENT is not None:
-        return _SERVERWARE_NPM_COMPANION_CLIENT.contract()
+    if _CATCHPLATE_NPM_COMPANION_CLIENT is not None:
+        return _CATCHPLATE_NPM_COMPANION_CLIENT.contract()
     npm_command = shutil.which("npm")
     node_command = shutil.which("node")
     _require(npm_command is not None, "installed npm executable is unavailable")
@@ -7859,7 +7859,7 @@ class _NpmCliProxyBridge:
         self._active_socket: socket.socket | ssl.SSLSocket | None = None
         self._thread = threading.Thread(
             target=self._serve,
-            name="serverware-npm-cli-public-proxy-bridge",
+            name="catchplate-npm-cli-public-proxy-bridge",
             daemon=True,
         )
 
@@ -8043,8 +8043,8 @@ def _run_installed_npm_publish(
     cwd: Path,
     environment: dict[str, str],
 ) -> dict[str, Any]:
-    if _SERVERWARE_NPM_COMPANION_CLIENT is not None:
-        return _SERVERWARE_NPM_COMPANION_CLIENT.run_publish(
+    if _CATCHPLATE_NPM_COMPANION_CLIENT is not None:
+        return _CATCHPLATE_NPM_COMPANION_CLIENT.run_publish(
             command,
             cwd=cwd,
             environment=environment,
@@ -8071,7 +8071,7 @@ def _run_installed_npm_publish(
     ):
         _require(
             secret.encode("utf-8") not in output_bytes,
-            "installed npm output exposed Serverware credential material",
+            "installed npm output exposed Catchplate credential material",
         )
     output_text = output_bytes.decode("utf-8", errors="replace")
     return {
@@ -8086,8 +8086,8 @@ def _run_installed_npm_publish(
 
 
 def _assert_installed_npm_contract_unchanged(contract: dict[str, Any]) -> None:
-    if _SERVERWARE_NPM_COMPANION_CLIENT is not None:
-        _SERVERWARE_NPM_COMPANION_CLIENT.assert_contract(contract)
+    if _CATCHPLATE_NPM_COMPANION_CLIENT is not None:
+        _CATCHPLATE_NPM_COMPANION_CLIENT.assert_contract(contract)
         return
     artifacts = {
         "npm executable": (
@@ -8154,7 +8154,7 @@ def _derive_npm_v2_canonical_from_raw_wire(
     policy_hash: str,
     credential_version: int,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    from serverware.policy_bundle import provider_request_profile
+    from catchplate.policy_bundle import provider_request_profile
 
     parsed = _parse_raw_http_request(
         raw_request,
@@ -8193,9 +8193,9 @@ def _derive_npm_v2_canonical_from_raw_wire(
             "authorization",
             "proxy-authorization",
             "cookie",
-            "x-serverware-agent",
+            "x-catchplate-agent",
         }.intersection(headers)
-        and not any(name.startswith("x-serverware-") for name in headers),
+        and not any(name.startswith("x-catchplate-") for name in headers),
         "captured npm public CLI request carried agent-supplied credential material",
     )
 
@@ -8249,7 +8249,7 @@ def _derive_npm_v2_canonical_from_raw_wire(
         for name, value in headers.items()
         if name not in non_forwardable
         and name not in nominated
-        and not name.startswith("x-serverware-")
+        and not name.startswith("x-catchplate-")
     }
     unexpected_forwarded = set(forwarded_headers) - allowed_headers
     _require(
@@ -8511,7 +8511,7 @@ def _exercise_installed_npm_cli_with_bridge(
     credential_version: int,
     work_dir: Path,
 ) -> dict[str, Any]:
-    from serverware import db
+    from catchplate import db
 
     contract = _installed_npm_contract()
     cli_dir = work_dir / "installed-npm-cli"
@@ -8597,11 +8597,11 @@ def _exercise_installed_npm_cli_with_bridge(
         "--progress=false",
     ]
     command_is_bound = (
-        _SERVERWARE_NPM_COMPANION_CLIENT.validate_command(
+        _CATCHPLATE_NPM_COMPANION_CLIENT.validate_command(
             command,
             contract=contract,
         )
-        if _SERVERWARE_NPM_COMPANION_CLIENT is not None
+        if _CATCHPLATE_NPM_COMPANION_CLIENT is not None
         else (
             Path(command[0]) == contract["npmExecutable"]
             and Path(command[0]).resolve(strict=True)
@@ -8910,8 +8910,8 @@ def _exercise_installed_npm_cli_with_bridge(
         "public npm CLI bridge did not retain the exact bounded wire observations",
     )
     companion_execution = (
-        _SERVERWARE_NPM_COMPANION_CLIENT.observations()
-        if _SERVERWARE_NPM_COMPANION_CLIENT is not None
+        _CATCHPLATE_NPM_COMPANION_CLIENT.observations()
+        if _CATCHPLATE_NPM_COMPANION_CLIENT is not None
         else None
     )
     return {
@@ -9654,7 +9654,7 @@ def _run_browser_journey(
             )
             _require(
                 reviewer_page.evaluate(
-                    "window.__serverwareDevWebAuthnShim === true"
+                    "window.__catchplateDevWebAuthnShim === true"
                 ),
                 "browser WebAuthn shim was not installed",
             )
@@ -9790,7 +9790,7 @@ def _run_browser_journey(
             final_bootstrap = _api_json(page, "/api/bootstrap")
             final_policy_api = _api_json(page, "/api/policy")
             api_documents.extend([final_bootstrap, final_policy_api])
-            from serverware import db
+            from catchplate import db
 
             stored_x_credential = db.get_credential(x_credential["id"])
             stored_npm_credential = db.get_credential(NPM_CREDENTIAL_ID)
@@ -9890,14 +9890,14 @@ def _run_browser_journey(
                 item["value"]
                 for item in enrollment_response_headers_array
                 if item["name"]
-                == "x-serverware-enrollment-packet-sha256"
+                == "x-catchplate-enrollment-packet-sha256"
             ]
             enrollment_response_header_map = {
                 item["name"]: item["value"]
                 for item in enrollment_response_headers_array
             }
             enrollment_response_sha256 = enrollment_response_header_map.get(
-                "x-serverware-enrollment-packet-sha256"
+                "x-catchplate-enrollment-packet-sha256"
             )
             observed_enrollment_response_sha256 = (
                 "sha256:"
@@ -9951,7 +9951,7 @@ def _run_browser_journey(
                     """
                     ({policyHash, routeId, credentialId}) => {
                       const packet = state.enrollmentPacket;
-                      return packet?.apiVersion === 'serverware.agentEnrollment/v1'
+                      return packet?.apiVersion === 'catchplate.agentEnrollment/v1'
                         && packet?.principalId === 'agent:demo'
                         && packet?.pinning?.policyHash === policyHash
                         && (packet?.allowedRoutes || []).some(
@@ -10013,7 +10013,7 @@ def _run_browser_journey(
             )
             _require(
                 download.suggested_filename
-                == "serverware-enrollment-agent-demo.json",
+                == "catchplate-enrollment-agent-demo.json",
                 "downloaded enrollment packet filename is not principal-bound",
             )
             unknown_route_canaries = [
@@ -10366,7 +10366,7 @@ def main() -> None:
     global _JOURNEY_DEADLINE
 
     parser = argparse.ArgumentParser(
-        description="Drive the real HTTPS Serverware portal through deterministic Google and X OAuth",
+        description="Drive the real HTTPS Catchplate portal through deterministic Google and X OAuth",
         allow_abbrev=False,
     )
     parser.add_argument(
@@ -10382,7 +10382,7 @@ def main() -> None:
         / "decision-gate-rs"
         / "target"
         / "debug"
-        / "serverware-decision-gate",
+        / "catchplate-decision-gate",
     )
     parser.add_argument(
         "--response-proof-fixture",
@@ -10392,14 +10392,14 @@ def main() -> None:
         / "decision-gate-rs"
         / "target"
         / "debug"
-        / "serverware-response-proof-fixture",
+        / "catchplate-response-proof-fixture",
     )
     parser.add_argument(
         "--same-journey-host-python",
         type=Path,
         default=(
             Path(value)
-            if (value := os.getenv("SERVERWARE_BROWSER_SAME_JOURNEY_PYTHON"))
+            if (value := os.getenv("CATCHPLATE_BROWSER_SAME_JOURNEY_PYTHON"))
             else None
         ),
         help="exact prebuilt host-venv interpreter used for the synchronous callback",
@@ -10411,7 +10411,7 @@ def main() -> None:
     parser.add_argument(
         "--same-journey-host-entrypoint",
         type=Path,
-        help="exact prebuilt serverware-enrollment entrypoint recorded in the host identity",
+        help="exact prebuilt catchplate-enrollment entrypoint recorded in the host identity",
     )
     parser.add_argument(
         "--same-journey-host-entrypoint-sha256",
@@ -10422,7 +10422,7 @@ def main() -> None:
         type=Path,
         default=(
             Path(value)
-            if (value := os.getenv("SERVERWARE_BROWSER_SAME_JOURNEY_VERIFIER"))
+            if (value := os.getenv("CATCHPLATE_BROWSER_SAME_JOURNEY_VERIFIER"))
             else None
         ),
         help="exact verify_agent_trust_same_journey.py callback script",
@@ -10436,7 +10436,7 @@ def main() -> None:
         type=Path,
         default=(
             Path(value)
-            if (value := os.getenv("SERVERWARE_BROWSER_PREBUILT_HOST_IDENTITY"))
+            if (value := os.getenv("CATCHPLATE_BROWSER_PREBUILT_HOST_IDENTITY"))
             else None
         ),
         help="checksum-closed identity recorded by the prebuilt host interpreter",
@@ -10450,7 +10450,7 @@ def main() -> None:
         type=Path,
         default=(
             Path(value)
-            if (value := os.getenv("SERVERWARE_BROWSER_PREBUILT_BUILD_MANIFEST"))
+            if (value := os.getenv("CATCHPLATE_BROWSER_PREBUILT_BUILD_MANIFEST"))
             else None
         ),
         help="frozen consolidated build-artifact manifest",
@@ -10473,7 +10473,7 @@ def main() -> None:
             Path(value)
             if (
                 value := os.getenv(
-                    "SERVERWARE_BROWSER_SECURE_INSTRUCTIONS_OUT"
+                    "CATCHPLATE_BROWSER_SECURE_INSTRUCTIONS_OUT"
                 )
             )
             else None
@@ -10487,7 +10487,7 @@ def main() -> None:
             Path(value)
             if (
                 value := os.getenv(
-                    "SERVERWARE_BROWSER_SAME_JOURNEY_RESULT_OUT"
+                    "CATCHPLATE_BROWSER_SAME_JOURNEY_RESULT_OUT"
                 )
             )
             else None
@@ -10535,10 +10535,10 @@ def main() -> None:
         screenshots_dir.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(
-        prefix="serverware-oauth-contract-"
+        prefix="catchplate-oauth-contract-"
     ) as raw_contract_tmp:
         _assert_redirect_validation(Path(raw_contract_tmp))
-    with tempfile.TemporaryDirectory(prefix="serverware-browser-oauth-") as raw_tmp:
+    with tempfile.TemporaryDirectory(prefix="catchplate-browser-oauth-") as raw_tmp:
         tmp = Path(raw_tmp)
         listener = _reserve_https_socket()
         portal_port = int(listener.getsockname()[1])
@@ -10564,7 +10564,7 @@ def main() -> None:
             _assert_simulator_contract(simulator, public_url)
             npm_registry = _NpmRegistryFixture(simulator)
             npm_registry.start()
-            data_dir = tmp / "serverware"
+            data_dir = tmp / "catchplate"
             _configure_environment(
                 data_dir,
                 public_url,
@@ -10578,10 +10578,10 @@ def main() -> None:
                 contract=same_journey_contract,
             )
 
-            from serverware import app as app_module
-            from serverware import oauth as oauth_module
+            from catchplate import app as app_module
+            from catchplate import oauth as oauth_module
             from fastapi import HTTPException, Request
-            from serverware.auth import AdminIdentity, require_admin
+            from catchplate.auth import AdminIdentity, require_admin
 
             identities = {
                 "operator": AdminIdentity(

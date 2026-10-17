@@ -2,7 +2,7 @@
 
 use super::{decode_b64, ensure, exact, fixed_b64, json, parse_digest, pem_der, text, uint};
 use serde_json::Value;
-use serverware_decision_gate::native_response_profile_v1 as response_profile;
+use catchplate_decision_gate::native_response_profile_v1 as response_profile;
 use std::collections::BTreeMap;
 
 pub(super) struct Expectations {
@@ -27,7 +27,7 @@ impl Expectations {
     pub(super) fn parse(raw: &[u8]) -> Result<Self, String> {
         let value = json::parse(raw, 16 * 1024)?;
         let native_principal_profile = match text(&value, "apiVersion")? {
-            "serverware.nativeResponseAttestationExpectations/v1" => false,
+            "catchplate.nativeResponseAttestationExpectations/v1" => false,
             response_profile::NATIVE_EXPECTATIONS => true,
             _ => return Err("native expectations version differs".to_owned()),
         };
@@ -98,7 +98,7 @@ impl TrustRoots {
         exact(&value, &[
             "apiVersion", "awsNitroRootCertificatesPem", "awsNitroCrlsDerBase64url", "nitroCertificateProfile",
         ])?;
-        ensure(text(&value, "apiVersion")? == "serverware.nativeResponseAttestationTrustRoots/v1",
+        ensure(text(&value, "apiVersion")? == "catchplate.nativeResponseAttestationTrustRoots/v1",
             "native trust-root version differs")?;
         let input = value.get("awsNitroRootCertificatesPem").and_then(Value::as_array)
             .ok_or("native root inventory is not an array")?;

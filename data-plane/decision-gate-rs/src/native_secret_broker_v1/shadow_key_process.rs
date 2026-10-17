@@ -17,7 +17,7 @@ impl Process {
         let fd=unsafe{libc::syscall(libc::SYS_memfd_create,b"shadow-key-bootstrap\0".as_ptr(),libc::MFD_CLOEXEC|libc::MFD_ALLOW_SEALING)} as i32;
         ensure(fd>=0,"shadow key bootstrap memfd unavailable")?;
         let mut bootstrap=unsafe{File::from_raw_fd(fd)};
-        let raw=super::super::canonical_ascii_bytes(&serde_json::json!({"apiVersion":"serverware.nativeShadowKeyHelperBootstrap/v1",
+        let raw=super::super::canonical_ascii_bytes(&serde_json::json!({"apiVersion":"catchplate.nativeShadowKeyHelperBootstrap/v1",
             "uid":uid,"gid":gid,"deadlineBoottimeNs":deadline.to_string()}))?;
         bootstrap.write_all(&raw).map_err(error)?;
         ensure(unsafe{libc::fchmod(fd,0o600)}==0 && unsafe{libc::fcntl(fd,libc::F_ADD_SEALS,15)}==0,

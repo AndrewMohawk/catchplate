@@ -41,8 +41,8 @@ def no_external_effects(event, _arguments):
 if __name__ == "__main__":
     # Match the retained/native component suites: import canonical validators
     # in the development-only offline profile, never a launched authority.
-    os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
-    os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
+    os.environ["CATCHPLATE_PROCESS_MODE"] = "metadata-bootstrap"
+    os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
     sys.addaudithook(no_external_effects)
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -51,11 +51,11 @@ from scripts import test_authority_audit_capacity as counters
 from scripts import test_authority_native_jit_retained_history as retained_fixture
 from scripts import test_authority_native_jit_review_open as reviewer_fixture
 from scripts import test_native_jit_review_open_owner as opening_fixture
-from serverware import authority_current_root_authorization as root_authorization
-from serverware import authority_native_jit_review_plan_owner as owner
-from serverware import authority_native_jit_review_plan_stream as stream
-from serverware import authority_release_private_request as request_source
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_current_root_authorization as root_authorization
+from catchplate import authority_native_jit_review_plan_owner as owner
+from catchplate import authority_native_jit_review_plan_stream as stream
+from catchplate import authority_release_private_request as request_source
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 from test_authority_index_range import IndependentIndex
 from test_authority_native_jit_review_current_chunks import frames, native
 from test_authority_radix_mutation import IndependentTree
@@ -124,7 +124,7 @@ def full_vector(trees):
         for row in tree.rows.values():
             selected = tree.selected(tree.key(row))
             leaf = vector.projection.project_row(identity, row, primary_key_digest=selected["keyDigest"],
-                primary_row_digest=sql_digest("serverware.policyAuthorityAuthenticatedRow/v1",
+                primary_row_digest=sql_digest("catchplate.policyAuthorityAuthenticatedRow/v1",
                     profile.table.encode("ascii"), sql_json(row)))
             if leaf is not None:
                 leaves.append(leaf)
@@ -368,7 +368,7 @@ class NativeReviewPlanOriginalReplayTests(unittest.TestCase):
         # This isolates the suffix: cold admission and SQL delivery are explicit
         # test doubles. Original proof/row/native replay and signing are real;
         # this is not evidence of a launched owner or a successful database read.
-        from serverware import authority_native_jit_review_service as service
+        from catchplate import authority_native_jit_review_service as service
         case = OriginalFixture(self.pki)
         seed = case.plan_owner()
         checks = []
@@ -388,7 +388,7 @@ class NativeReviewPlanOriginalReplayTests(unittest.TestCase):
             yield case.opening.grant_key
 
         work = meter()
-        from serverware import authority_successor_execution_window as windows
+        from catchplate import authority_successor_execution_window as windows
         window = windows._narrow(LIVE,
             deadline_epoch_ns=wire.validate_challenge_original(case.challenge)["statement"]["expiresAtEpochNs"],
             maximum_lifetime_ns=wire.MAX_INTERVAL_NS, maximum_clock_skew_ns=0)
@@ -438,7 +438,7 @@ class NativeReviewPlanOriginalReplayTests(unittest.TestCase):
         self.assertNotIn(TOKEN, result.before_vector_original + result.after_vector_original + result.mutations_original)
 
     def test_receipt_writer_uses_same_replay_and_only_four_authenticated_effect_rows(self):
-        from serverware import authority_current_root_execution_admission as pending
+        from catchplate import authority_current_root_execution_admission as pending
 
         case = self.receipt_fixture()
         manifest, chunks = case.prepared()

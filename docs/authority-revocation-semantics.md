@@ -2,7 +2,7 @@
 
 ## Status and purpose
 
-[`authority_revocation_semantics.py`](../serverware/authority_revocation_semantics.py)
+[`authority_revocation_semantics.py`](../catchplate/authority_revocation_semantics.py)
 connects the actual request commitment, pinned verifier receipt, complete
 read/write proofs, revocation kernel and audit-capacity finalizer. It rejects
 proved writes whose complete effects differ from those genuine computations.

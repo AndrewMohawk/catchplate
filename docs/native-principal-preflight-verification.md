@@ -14,7 +14,7 @@ Its nested public identity remains `nativeIngressPublicEvidence/v2`, admitting
 the exact held client-root inventory and server leaf/CA originals. The statement
 is at most 4096 bytes of sorted compact UTF-8 JSON without LF, with exactly:
 
-- `apiVersion: serverware.nativePrincipalPreflight/v1` and `principalId`;
+- `apiVersion: catchplate.nativePrincipalPreflight/v1` and `principalId`;
 - `identityPolicySha256`, `policySha256`, `clientCertificateSha256`,
   `clientSpkiSha256`, `requestBindingSha256`;
 - `sourceAddress`, a canonical IP string or null.

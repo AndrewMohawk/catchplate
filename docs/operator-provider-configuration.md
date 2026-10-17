@@ -9,7 +9,7 @@ publication are deployed to the operator demo at source
 The live pair is managed-capable but Google remains **unconfigured**:
 `pair_ready: true`, `consent_ready: false`. No live Google Prepare,
 provider activation, account consent or provider request was performed by this
-rollout. See the [current deployment receipt](../docker/serverware-operator-demo/README.md#current-managed-capable-deployment).
+rollout. See the [current deployment receipt](../docker/catchplate-operator-demo/README.md#current-managed-capable-deployment).
 
 The isolated tests below establish separate configuration, encrypted-storage
 and proxy boundaries. They are not a continuous real-provider acceptance or
@@ -51,7 +51,7 @@ claim of an error-free authenticated external application journey.
 The default synthetic-only destination remained unchanged. No new credentials,
 tokens, provider configuration, consent, notification delivery or native hardware
 action was exercised. Exact runtime identities, evidence and route observations
-are in the [deployment receipt](../docker/serverware-operator-demo/README.md#current-managed-capable-deployment).
+are in the [deployment receipt](../docker/catchplate-operator-demo/README.md#current-managed-capable-deployment).
 
 ### Operator configuration workflow
 
@@ -119,8 +119,8 @@ test explicitly opens that panel and checks its visible scopes and destination.
 No application change was needed for these browser-harness corrections.
 
 Evidence is retained in
-`serverware-operator-workspace-evidence/google-configuration.4iQIGjJt` and
-`serverware-operator-workspace-evidence/google-configuration-connected.uWVeJ1Yl`.
+`catchplate-operator-workspace-evidence/google-configuration.4iQIGjJt` and
+`catchplate-operator-workspace-evidence/google-configuration-connected.uWVeJ1Yl`.
 The latter includes `google-configuration-connected-9D6Tw8/acceptance.json`,
 source/archive pins, the container command, terminal state and removal receipt.
 Private test containers were removed; source and results were retained.
@@ -133,21 +133,21 @@ this UI through provider consent and a supported client request.
 ### Historical v1 preparation and cold-read checkpoint
 
 The import-independent primitives in
-[`operator_provider_custody.py`](../serverware/operator_provider_custody.py)
+[`operator_provider_custody.py`](../catchplate/operator_provider_custody.py)
 now provide encrypted provider-application storage, exact owner/version/public
 profile binding, publication-guarded transactional writes, and an existing-key-only
 reader. They neither create a missing master key nor select a configuration
 version. Public projections contain no secret or encrypted envelope.
 
 The internal `prepare_managed` operation in
-[`operator_google_setup.py`](../serverware/operator_google_setup.py) now stores
+[`operator_google_setup.py`](../catchplate/operator_google_setup.py) now stores
 encrypted custody, its exact version reference, the pending setup record,
 catalog revision and audit record in one real publication-locked transaction.
 It uses the existing setup lifecycle with a separate closed managed grammar;
 the legacy API still rejects secrets. Preparation is inactive, and cancellation
 does not select or enable a provider configuration.
 
-[`operator_publication.py`](../serverware/operator_publication.py) also supplies
+[`operator_publication.py`](../catchplate/operator_publication.py) also supplies
 an import-independent, bounded shared-lock reader over an existing SQLite
 snapshot, including committed WAL data. It creates no schema, lock or master
 key. SQLite may coordinate existing WAL state through sidecars; this is not a
@@ -183,7 +183,7 @@ encrypted preparation and audit rollback; fresh processes validate exact
 cold reads without importing runtime configuration/database/key-initialization
 modules. The existing public setup, publication and Google profile regressions
 also pass. Evidence is retained under
-`serverware-operator-workspace-evidence/google-managed-preparation.PFpa4l7D`;
+`catchplate-operator-workspace-evidence/google-managed-preparation.PFpa4l7D`;
 temporary test containers were removed, not evidence or live services.
 No managed activation, writable settings API, real Google request, live upgrade
 or native-pilot acceptance was exercised by these tests.
@@ -203,8 +203,8 @@ container, including fresh preparation, activation, second restart, commit
 gating, cancellation/reprepare, stale configuration and missing custody refusal,
 rollback, and actor-owned recovery after a lost response. The independent key
 module's 21 focused checks also passed. Evidence is retained under
-`serverware-operator-workspace-evidence/google-managed-cold.sZ8pumYD` and
-`serverware-operator-workspace-evidence/curated-boundary.IFPloRyU`.
+`catchplate-operator-workspace-evidence/google-managed-cold.sZ8pumYD` and
+`catchplate-operator-workspace-evidence/curated-boundary.IFPloRyU`.
 This checkpoint is the app-side internal consumer only: paired public gate
 configuration, later upstream transitions, observed runtime readiness and the
 writable API/UI required the separate subsequent checkpoints. No live Google
@@ -232,7 +232,7 @@ connected groups: three destination-change, nine public-projection, three
 readiness and three affected legacy-publication checks. The readiness group uses
 real SQLite, publication locks and catalog changes with synthetic health
 transport; it is not an actual managed Rust-gate observation. Evidence is in
-`serverware-operator-workspace-evidence/google-managed-public.Ve6JtMhG`.
+`catchplate-operator-workspace-evidence/google-managed-public.Ve6JtMhG`.
 At this checkpoint, the Rust consumer still needed its own compile/runtime
 acceptance.
 Writable settings, real Google consent, live migration and native acceptance
@@ -241,7 +241,7 @@ are not established by this checkpoint.
 ### Actual managed app/gate fixture checkpoint
 
 On 2026-10-10, all 13 focused managed-Google Rust tests passed, and the normal
-`cargo build --release --frozen --offline --bin serverware-decision-gate`
+`cargo build --release --frozen --offline --bin catchplate-decision-gate`
 completed with exit 0 at build source
 `ff6d86b1a0267dcb5915e07684bdc5b216dbde7d`. The resulting binary is
 `333ff7a3db00ab2bf03644fc965aed9b691bdd6ddc4ec651273e6d0c36f053e0`.
@@ -259,13 +259,13 @@ and curl Basic/Bearer checks passed with four upstream forwards, eight
 authentication denials, two policy reloads and zero functional retries.
 
 Evidence is retained in
-`serverware-operator-workspace-evidence/managed-gate.CuSszToX`:
+`catchplate-operator-workspace-evidence/managed-gate.CuSszToX`:
 `result.json`, `unconfigured.stdout`, `activated.stdout`, `clients.stdout`,
 `mount-before.json`, `mount-after.json`, `compiled-source-join.json` and
 `teardown.json`. The same evidence directory retains `rust-build/`, including
 the build/test receipts and logs, original source archive and compiler-input
 record. The byte-verified executable is retained under
-`serverware-operator-artifacts/sha256-333ff7a3db00ab2bf03644fc965aed9b691bdd6ddc4ec651273e6d0c36f053e0/serverware-decision-gate`.
+`catchplate-operator-artifacts/sha256-333ff7a3db00ab2bf03644fc965aed9b691bdd6ddc4ec651273e6d0c36f053e0/catchplate-decision-gate`.
 Private Compose teardown exited 0; fixture data and evidence were retained.
 This is synthetic
 internal configuration/proxy proof only: no real Google consent or provider
@@ -302,7 +302,7 @@ state on refusal, current-CAS rejection of old observations, and both callbacks
 plus actor-owned recovery while gate health is unavailable. Health and provider
 transports are synthetic; managed refresh, disconnect and leases were not
 executed by this batch. Evidence is retained in
-`serverware-operator-workspace-evidence/google-managed-consent.vm77HTMZ`, with
+`catchplate-operator-workspace-evidence/google-managed-consent.vm77HTMZ`, with
 the exact source archive/manifest, command, log and successful network-none
 container termination. This is not browser, live gate/provider, deployment or
 native-pilot acceptance.
@@ -328,9 +328,9 @@ The existing authenticated catalog readout exposes `proxy_url`,
 `allowed_upstreams`, catalog revision and policy observation, saved resources,
 and versioned capabilities. Reuse that readout rather than returning raw
 environment variables or adding a second settings authority. Relevant owners
-are `serverware/operator_catalog_mutations.py:catalog_status`,
-`serverware/operator_catalog_capabilities.py` and
-`serverware/operator_catalog_gmail.py:capabilities`.
+are `catchplate/operator_catalog_mutations.py:catalog_status`,
+`catchplate/operator_catalog_capabilities.py` and
+`catchplate/operator_catalog_gmail.py:capabilities`.
 
 Google discovery joins the cold profile and retained database binding in a
 read transaction. Unconfigured is distinct from malformed or drifted. A saved
@@ -465,7 +465,7 @@ Seven connected checks passed on 2026-10-10 in 96.799 seconds in a network-none
 container: real policy changes, disabled-mode compatibility, stale/missing copy
 repair, postcommit failure followed by fresh startup, unsafe paths and actual
 shared-lock exclusion. Evidence is retained in
-`serverware-operator-workspace-evidence/curated-boundary.IFPloRyU`.
+`catchplate-operator-workspace-evidence/curated-boundary.IFPloRyU`.
 The separate internal-network fixture at source `6773f2d7` also passed its
 one-shot stock Requests/curl Basic/Bearer client check: four upstream forwards,
 eight authentication denials and two policy reloads. Before/after mount and

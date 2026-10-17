@@ -7,10 +7,10 @@ authorize token disclosure.
 
 The purpose is `enroll-oidc-session-activation-committed-release-producer`. The
 envelope schema and signature domain are
-`serverware.signedOidcSessionActivationReleaseProofEnrollment/v1`. The payload
-schema is `serverware.oidcSessionActivationReleaseProofEnrollment/v1`; exact
+`catchplate.signedOidcSessionActivationReleaseProofEnrollment/v1`. The payload
+schema is `catchplate.oidcSessionActivationReleaseProofEnrollment/v1`; exact
 original identity uses
-`serverware.oidcSessionActivationReleaseProofEnrollmentIdentity/v1`.
+`catchplate.oidcSessionActivationReleaseProofEnrollmentIdentity/v1`.
 
 The closed payload contains `schema`, `sourceRevision`, `purpose`, seven scope
 fields, `proofKey`, `maximumAgeNs` and `maximumClockSkewNs`. Scope is exactly

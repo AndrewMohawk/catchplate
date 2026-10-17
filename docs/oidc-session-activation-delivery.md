@@ -8,7 +8,7 @@ claimed for this source checkpoint.
 
 ## Fixed originals and independently admitted scope
 
-[`oidc_session_activation_delivery.py`](../serverware/oidc_session_activation_delivery.py)
+[`oidc_session_activation_delivery.py`](../catchplate/oidc_session_activation_delivery.py)
 uses the pinned `cryptography` AES-GCM primitive with an independently supplied
 exact 32-byte custody key. It neither generates that key nor loads an environment
 secret, key file, configuration fallback or caller-selected crypto provider.
@@ -31,7 +31,7 @@ proves server custody: the caller must use the real private producer and retain
 the original token through the genuine activation composition.
 
 Authenticated associated data has the fixed
-`serverware.oidcSessionActivationDelivery/v1` domain and an exact closed scope:
+`catchplate.oidcSessionActivationDelivery/v1` domain and an exact closed scope:
 `deliveryId`, `userId`, `sessionId`, `credentialId`, `credentialRecordId`,
 `challengeId`, `assertionDigest`, `oldTokenDigest`, `newTokenDigest`, `createdAt`,
 `expiresAt`. Digests are canonical `sha256:` strings; credential IDs retain the

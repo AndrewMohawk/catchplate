@@ -20,7 +20,7 @@ The new value is literal canonical ASCII JSON with exactly three fields:
 
 ```json
 {
-  "apiVersion": "serverware.nativePilotOrdinaryGenerationPolicy/v1",
+  "apiVersion": "catchplate.nativePilotOrdinaryGenerationPolicy/v1",
   "installationIssuedAtUnixNanos": 1,
   "installationExpiresAtUnixNanos": 2
 }
@@ -96,7 +96,7 @@ namespace, CPU 0 and `-I -S -B`; it started at
 `2026-09-30T22:47:24.626188444Z` and exited **0**.
 
 One cached, offline Rust 1.88 `cargo check --offline --locked --bin
-serverware-decision-gate -j1` also exited **0**, reporting **54.91 seconds**.
+catchplate-decision-gate -j1` also exited **0**, reporting **54.91 seconds**.
 Its retained run started at `2026-09-30T22:47:22.684846251Z` and finished at
 `2026-09-30T22:48:18.889653491Z`. The limits were no network, one CPU, 8 GiB,
 128 PIDs and a 1,200-second timeout. The missing cached image reference was
@@ -105,7 +105,7 @@ retain **312 library warnings and 2,439 binary warnings**. No Rust tests or
 project service binaries were run.
 
 Evidence location:
-`/home/catchplate/codex-offload/serverware/engineering-builds/22e4ca2f-generation-commissioning-Jm6lTz/`.
+`/home/catchplate/codex-offload/catchplate/engineering-builds/22e4ca2f-generation-commissioning-Jm6lTz/`.
 All eleven copied files were byte-compared; `SHA256SUMS` verifies the ten listed
 original/result files. Both retained sessions ended with exit **0**.
 The exact-source archive is **84,858,880 bytes**, SHA256

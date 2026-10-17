@@ -31,8 +31,8 @@ class BytecodeTests(unittest.TestCase):
         self.helper = Path(cache.__file__).read_bytes()
         (self.source / "scripts").mkdir()
         (self.source / cache.SCRIPT).write_bytes(self.helper)
-        self.files = {"serverware/__init__.py": b"", "serverware/app.py": b"raise RuntimeError('never execute')\n",
-            "serverware/authority_store/example.py": b"VALUE = 7\n"}
+        self.files = {"catchplate/__init__.py": b"", "catchplate/app.py": b"raise RuntimeError('never execute')\n",
+            "catchplate/authority_store/example.py": b"VALUE = 7\n"}
         for name, raw in self.files.items():
             path = self.source / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -42,7 +42,7 @@ class BytecodeTests(unittest.TestCase):
         self.git = self.enterContext(patch.object(cache, "_git", side_effect=self.git_output))
         self.record = cache._source_record(self.source, COMMIT, self.source)
         self.artifact.mkdir()
-        for relative in ("cache", "cache/serverware", "cache/authority_store"):
+        for relative in ("cache", "cache/catchplate", "cache/authority_store"):
             (self.artifact / relative).mkdir()
         payload = []
         for item in self.record["files"]:
@@ -51,7 +51,7 @@ class BytecodeTests(unittest.TestCase):
             name = cache._cache_path(item["path"])
             cache._write(self.artifact / name, raw)
             payload.append({"path": name, "sha256": cache.sha(raw), "size": len(raw), "sourceHashHex": raw[8:16].hex()})
-        self.manifest = {"schema": "serverware.operatorPythonBytecode/v1", "source": self.record,
+        self.manifest = {"schema": "catchplate.operatorPythonBytecode/v1", "source": self.record,
             "sourceManifestSha256": cache.sha(cache.canonical(self.record)),
             "interpreter": deepcopy(cache.INTERPRETER), "files": payload}
         self.pin = self.write_manifest()
@@ -63,7 +63,7 @@ class BytecodeTests(unittest.TestCase):
             return self.helper
         self.assertEqual(arguments[:3], ("ls-tree", "-rz", "--full-tree"))
         self.assertIn(arguments[3], (COMMIT, NEXT))
-        self.assertEqual(arguments[4:], ("--", "serverware"))
+        self.assertEqual(arguments[4:], ("--", "catchplate"))
         return b"".join(b"100644 blob " + hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest().encode()
             + b"\t" + name.encode() + b"\0" for name, raw in sorted(self.files.items()))
 
@@ -100,15 +100,15 @@ class BytecodeTests(unittest.TestCase):
     def test_docs_only_commit_reuse_requires_exact_committed_payload_and_helper(self):
         result = self.validate(commit=NEXT)
         self.assertEqual((result["sourceCommit"], result["producerCommit"]), (NEXT, COMMIT))
-        self.files["serverware/new_module.py"] = b"NEW = 1\n"
-        (self.source / "serverware/new_module.py").write_bytes(self.files["serverware/new_module.py"])
+        self.files["catchplate/new_module.py"] = b"NEW = 1\n"
+        (self.source / "catchplate/new_module.py").write_bytes(self.files["catchplate/new_module.py"])
         with self.assertRaises(ValueError):
             self.validate(commit=NEXT)
 
     def test_changed_source_helper_and_wrong_external_pin_refuse(self):
         with self.assertRaises(ValueError):
             self.validate(expected_manifest_sha256="f" * 64)
-        path = self.source / "serverware/app.py"
+        path = self.source / "catchplate/app.py"
         original = path.read_bytes(); path.write_bytes(b"different\n")
         with self.assertRaises(ValueError):
             self.validate()
@@ -165,10 +165,10 @@ class BytecodeTests(unittest.TestCase):
             self.validate()
 
     def test_source_mountpoints_are_existing_real_dirs_never_created_or_emptied(self):
-        mountpoint = self.source / "serverware/__pycache__"
+        mountpoint = self.source / "catchplate/__pycache__"
         unrelated = mountpoint / "host-cache"; unrelated.write_bytes(b"unchanged")
         self.validate(); self.assertEqual(unrelated.read_bytes(), b"unchanged")
-        second = self.source / "serverware/authority_store/__pycache__"; second.rmdir()
+        second = self.source / "catchplate/authority_store/__pycache__"; second.rmdir()
         with self.assertRaises(FileNotFoundError):
             self.validate()
         self.assertFalse(second.exists())
@@ -185,14 +185,14 @@ class BytecodeTests(unittest.TestCase):
             with self.subTest(destination=destination), self.assertRaises(ValueError):
                 cache.source_manifest(source=self.source, commit=COMMIT, repository=self.source, output=destination)
         self.assertFalse((self.source / "new-output").exists())
-        (self.source / "serverware/app.py").write_bytes(b"wrong object\n")
+        (self.source / "catchplate/app.py").write_bytes(b"wrong object\n")
         with self.assertRaises(ValueError):
             cache.source_manifest(source=self.source, commit=COMMIT, repository=self.source, output=self.root / "unused")
 
     def test_pure_exact_mount_projection_and_no_runtime_flag_changes(self):
         rows = cache.mounts(Path("/synthetic/artifact"))
-        self.assertEqual([row["target"] for row in rows], ["/app/serverware/__pycache__", "/app/serverware/authority_store/__pycache__"])
-        self.assertEqual([row["source"] for row in rows], ["/synthetic/artifact/cache/serverware", "/synthetic/artifact/cache/authority_store"])
+        self.assertEqual([row["target"] for row in rows], ["/app/catchplate/__pycache__", "/app/catchplate/authority_store/__pycache__"])
+        self.assertEqual([row["source"] for row in rows], ["/synthetic/artifact/cache/catchplate", "/synthetic/artifact/cache/authority_store"])
         self.assertTrue(all(row["read_only"] and row["bind"] == {"create_host_path": False} for row in rows))
         with self.assertRaises(ValueError):
             cache.mounts(Path("relative"))

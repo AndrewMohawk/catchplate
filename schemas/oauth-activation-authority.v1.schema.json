@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/oauth-activation-authority.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/oauth-activation-authority.v1.schema.json",
   "title": "OAuth activation authority data contracts (not authority by themselves)",
   "oneOf": [
     {"$ref": "#/$defs/policy"},
@@ -16,7 +16,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "enrollmentRootPublicKeyBase64Url", "enrollmentRootSpkiSha256", "controlPlaneConfigurationDigest", "deploymentId"],
       "properties": {
-        "schema": {"const": "serverware.oauthActivationAuthorityPolicy/v1"},
+        "schema": {"const": "catchplate.oauthActivationAuthorityPolicy/v1"},
         "enrollmentRootPublicKeyBase64Url": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
         "enrollmentRootSpkiSha256": {"$ref": "#/$defs/digest"},
         "controlPlaneConfigurationDigest": {"$ref": "#/$defs/digest"},
@@ -62,7 +62,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "requestDigest", "requestEvidenceDigest", "credentialPolicy", "decisionDigest", "decisionEvidenceDigest", "consumptionDigest", "consumptionEvidenceDigest"],
       "properties": {
-        "schema": {"const": "serverware.oauthActivationApprovalProvenance/v1"},
+        "schema": {"const": "catchplate.oauthActivationApprovalProvenance/v1"},
         "requestDigest": {"$ref": "#/$defs/digest"}, "requestEvidenceDigest": {"$ref": "#/$defs/digest"},
         "credentialPolicy": {"$ref": "#/$defs/credentialPolicy"},
         "decisionDigest": {"$ref": "#/$defs/nullableDigest"}, "decisionEvidenceDigest": {"$ref": "#/$defs/nullableDigest"},

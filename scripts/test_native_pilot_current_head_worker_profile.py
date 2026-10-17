@@ -18,7 +18,7 @@ from cryptography.exceptions import InvalidSignature
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 from scripts.test_native_pilot_approval_current_heads import fixture as head_fixture
-from serverware import native_pilot_current_head_worker_profile as profile
+from catchplate import native_pilot_current_head_worker_profile as profile
 
 p = profile.p
 ERRORS = (ValueError, KeyError, TypeError, InvalidSignature)
@@ -94,7 +94,7 @@ class CurrentHeadWorkerProfileControls(unittest.TestCase):
         self.assertEqual(set(value["targets"]), set(profile.JOB_NAMES))
         self.assertEqual(len({(row["serviceRole"], row["endpointRole"]) for row in value["targets"].values()}), 8)
         self.assertLess(len({row["endpointRole"] for row in value["targets"].values()}), 8)
-        self.assertEqual(profile.STATE_DIRECTORY, "/etc/serverware/native-pilot-current-head-state")
+        self.assertEqual(profile.STATE_DIRECTORY, "/etc/catchplate/native-pilot-current-head-state")
         for change in ("extra", "missing", "bool"):
             value = copy.deepcopy(self.source["state"])
             if change == "extra": value["fresh"] = True

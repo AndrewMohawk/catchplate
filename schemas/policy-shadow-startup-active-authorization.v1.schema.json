@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-shadow-startup-active-authorization.v1.schema.json",
-  "title": "Serverware Policy Shadow Startup Active Authorization v1",
+  "$id": "https://catchplate.invalid/schemas/policy-shadow-startup-active-authorization.v1.schema.json",
+  "title": "Catchplate Policy Shadow Startup Active Authorization v1",
   "$comment": "Canonical root-owned startup gate. Activated records must be emitted by the same durable publication transaction that commits the active snapshot; a portal-side post-commit reconstruction is not atomic.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "authorizationKind", "activeSnapshotIdentitySha256", "activePolicySha256", "activePolicySequence", "activeRollbackEpoch", "activationTransactionSha256", "activationPublicationReceiptSha256", "activationPublicationRevision"],
   "properties": {
-    "apiVersion": {"const": "serverware.policyShadowStartupActiveAuthorization/v1"},
+    "apiVersion": {"const": "catchplate.policyShadowStartupActiveAuthorization/v1"},
     "authorizationKind": {"enum": ["genesis", "activated"]},
     "activeSnapshotIdentitySha256": {"$ref": "#/$defs/sha256"},
     "activePolicySha256": {"$ref": "#/$defs/sha256"},

@@ -9,7 +9,7 @@ handlers still use legacy finalization.
 
 ## HTTP preparation boundary
 
-The actual [`app.py`](../serverware/app.py) routes are:
+The actual [`app.py`](../catchplate/app.py) routes are:
 
 - `POST /api/webauthn/register/prepare`: authenticated admin/approver admission.
 - `POST /api/auth/session/webauthn/register/prepare`: actual pending-OIDC session
@@ -26,7 +26,7 @@ matching actual body length, no query string and no transfer/content encoding.
 Bounded depth/node/string limits and strict JSON parsing apply before model use.
 
 Success is a no-store **202**, schema
-`serverware.webAuthnRegistrationCustodyPreparation/v1`, with `status: prepared`,
+`catchplate.webAuthnRegistrationCustodyPreparation/v1`, with `status: prepared`,
 `localDigest`, and `registrationCompleted: false`. It reports local PREPARED
 originals only. These endpoints do not forward, retry, finalize a credential or
 activate an OIDC session. A failure can follow grant consumption or a local
@@ -35,7 +35,7 @@ neither resend nor fallback to `/verify`.
 
 ## Fixed source path
 
-[`control_plane_registration_preparation.py`](../serverware/control_plane_registration_preparation.py)
+[`control_plane_registration_preparation.py`](../catchplate/control_plane_registration_preparation.py)
 provides `prepare_registration_custody(originals)` and the separate explicit
 `prepare_and_forward_registration_custody(originals)`. The real operator/OIDC
 handler must already have admitted enrollment and captured the original browser
@@ -58,7 +58,7 @@ real grant/source/attestation verification and evidence signing; the caller then
 genuinely verifies its response. Endpoint peer credentials alone are not evidence
 or signer authority. These are trusted-host-local admissions, not TEE proof.
 
-The [signer client](../serverware/authority_webauthn_registration_signer_client.py)
+The [signer client](../catchplate/authority_webauthn_registration_signer_client.py)
 retains the exact original request eight and response two alongside ordinary
 regenerated request/input fields. The existing evidence-only APIs keep their
 old three-field result. No grant or exchange is repeated to obtain originals,
@@ -67,20 +67,20 @@ and no successful-verification object is accepted as a substitute for replay.
 ## Independent verifier admission before custody preparation
 
 The dedicated
-[`authority_webauthn_registration_custody_caller.py`](../serverware/authority_webauthn_registration_custody_caller.py)
+[`authority_webauthn_registration_custody_caller.py`](../catchplate/authority_webauthn_registration_custody_caller.py)
 protocol uses request magic `SWRCPQ01` and response magic `SWRCPR01`. It carries
 the unchanged signer raw8 plus raw2 through the existing control-plane → relay
 → verifier topology, with current configuration scope and the original absolute
 deadline. It returns only the exact prepared evidence-custody raw6.
 The cold
-[`ControlPlaneCustodyClient.prepare_registration_custody`](../serverware/control_plane_custody_client.py)
+[`ControlPlaneCustodyClient.prepare_registration_custody`](../catchplate/control_plane_custody_client.py)
 holds that raw10 and selects only its already admitted relay endpoint; this
 transport method itself neither appends locally nor contacts the remote writer.
 
 The verifier runs the actual configured
-[`signer_response._verify_on_configuration`](../serverware/authority_webauthn_registration_signer_response.py)
+[`signer_response._verify_on_configuration`](../catchplate/authority_webauthn_registration_signer_response.py)
 against independent keys/configuration before its actual
-[`_prepare_webauthn_evidence_custody`](../serverware/authority_service.py).
+[`_prepare_webauthn_evidence_custody`](../catchplate/authority_service.py).
 That replay authenticates the grant and source controls, verifies source
 memberships/query associations and original attestation/evidence semantics,
 and compares the regenerated input bytes. The real custody path then prepares
@@ -113,7 +113,7 @@ remote store lacks it, and an observation is not new execution authority.
 ## Finalization remains a separate prerequisite
 
 The fixed
-[`signer_response._verify_finalization_on_configuration`](../serverware/authority_webauthn_registration_signer_response.py)
+[`signer_response._verify_finalization_on_configuration`](../catchplate/authority_webauthn_registration_signer_response.py)
 now genuinely replays the original grant/source/attestation/evidence and exact
 returned input bytes, then derives a typed `webauthn.registration.finalize`
 request and the actual empty transition-input encoding. Its bounded sorted

@@ -14,7 +14,7 @@ impl Retained {
             keys.public_bridge_originals(trust,time)?;
         require(evidence_original.len()<=131072 && combined_result_original.len()<=32768)?;
         let text=|bytes:Vec<u8>|->Result<String,ShadowError>{require(bytes.is_ascii())?;String::from_utf8(bytes).map_err(fail)};
-        let original=wire::PublicAdmission{api_version:"serverware.nativeShadowDriverPublicAdmission/v1".into(),
+        let original=wire::PublicAdmission{api_version:"catchplate.nativeShadowDriverPublicAdmission/v1".into(),
             bootstrap_observation_original:text(canonical_json_bytes(&self.observation)?)?,
             phase_scope_original:text(self.phase.scope().to_vec())?,
             phase_bundle_original:text(self.phase.public_bundle_original()?)?,
@@ -28,7 +28,7 @@ impl Retained {
         let mut file=unsafe{File::from_raw_fd(fd as i32)};file.write_all(&raw).map_err(fail)?;
         require(unsafe{libc::fchmod(file.as_raw_fd(),0o400)}==0
             && unsafe{libc::fcntl(file.as_raw_fd(),libc::F_ADD_SEALS,super::super::SEALS)}==0)?;
-        let notice=wire::AdmissionNotice{api_version:"serverware.nativeShadowDriverPublicAdmissionNotice/v1".into(),
+        let notice=wire::AdmissionNotice{api_version:"catchplate.nativeShadowDriverPublicAdmissionNotice/v1".into(),
             observation_sha256:Sha256Digest::compute(original.bootstrap_observation_original.as_bytes()),
             scope_sha256:Sha256Digest::compute(original.phase_scope_original.as_bytes()),
             original_sha256:Sha256Digest::compute(&raw),length:raw.len() as u64};

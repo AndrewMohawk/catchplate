@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-ingress-client.v3.schema.json",
-  "title": "Serverware native ingress client configuration v3",
+  "$id": "https://catchplate.invalid/schemas/native-ingress-client.v3.schema.json",
+  "title": "Catchplate native ingress client configuration v3",
   "description": "Closed configuration original, at most 16384 bytes, for one fixed native-ingress quotation exchange using a controller-generated session challenge and explicit client-trust-v2 session evidence. The independently pinned workloadIssuer is a canonical single-certificate PEM (at most 65536 bytes, DER at most 16384 bytes); genuine verification joins it to the quoted runtime DER trust inventory and verifies the exact configured client chain under only that anchor. The independently pinned sessionScope is nonce-free; sessionExpectations and challengeSource are not accepted. Shape does not establish pin provenance, release admission, private-key isolation, CA installation permission or action authority. Runtime validates canonical endpoint/path spelling, actual held files, signatures and the actual TLS session.",
   "type": "object",
   "additionalProperties": false,
@@ -11,7 +11,7 @@
     "clientCertificate", "clientPrivateKey", "workloadIssuer"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeIngressClient/v3"},
+    "apiVersion": {"const": "catchplate.nativeIngressClient/v3"},
     "endpoint": {
       "description": "Canonical literal SocketAddr with nonzero port, not a hostname. Runtime rejects unspecified, multicast, broadcast and scoped IPv6 destinations, including mapped IPv4 exclusions; private and loopback literals remain permitted. This spelling pattern is not an IP parser or route-admission rule.",
       "type": "string",
@@ -23,7 +23,7 @@
     "startupEvidence": {"$ref": "#/$defs/artifact"},
     "startupExpectations": {"$ref": "#/$defs/artifact"},
     "sessionScope": {
-      "description": "Independently pinned serverware.nativeIngressSessionScope/v1 original, at most 16384 bytes. It fixes the complete expected session scope but contains no nonce; the controller generates the challenge for this exchange rather than loading it from this artifact.",
+      "description": "Independently pinned catchplate.nativeIngressSessionScope/v1 original, at most 16384 bytes. It fixes the complete expected session scope but contains no nonce; the controller generates the challenge for this exchange rather than loading it from this artifact.",
       "$ref": "#/$defs/artifact"
     },
     "trustRoots": {"$ref": "#/$defs/artifact"},

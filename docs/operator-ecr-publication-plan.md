@@ -74,7 +74,7 @@ and manifest bytes are retained; reparsing a manifest and serializing equivalent
 JSON does not preserve its identity.
 
 The supported profile caps request bodies at 16 MiB and decoded parts at
-10 MiB. These are Serverware limits, not a claim that every AWS API limit equals
+10 MiB. These are Catchplate limits, not a claim that every AWS API limit equals
 them. The AWS API and service-quota pages currently disagree about maximum
 part size; real-provider acceptance must resolve supported sizes and small/final
 parts. The advertised `partSize` is validated rather than ignored. See
@@ -219,7 +219,7 @@ source files were unchanged afterward and the disposable container was removed.
 The first launcher attempt could not read its mounted private evidence directory
 and ran no tests; mounting only the nonsecret runner file corrected that harness
 permission issue. Both attempts are retained under
-`serverware-operator-workspace-evidence/jit-request-ingress.dXd2u4HI`. No database
+`catchplate-operator-workspace-evidence/jit-request-ingress.dXd2u4HI`. No database
 was started or accessed and no successful cold approval is claimed.
 
 ### Private request documents must stay out of signed plans
@@ -229,9 +229,9 @@ and the executor retains the exact request envelope. Including the original URL,
 canonical request or display document there would retain plaintext independently
 of approval storage.
 
-The actual facade now selects `serverware.policyAuthorityPrivateJitWriterInput/v2`
+The actual facade now selects `catchplate.policyAuthorityPrivateJitWriterInput/v2`
 before intent synthesis. Its transient private channel carries those three
-originals; the public arguments use `serverware.jitRequestCommitments/v2`, the
+originals; the public arguments use `catchplate.jitRequestCommitments/v2`, the
 three individual hashes and a commitment to the complete original marshaled
 arguments. The actual service reconstructs and validates the originals before
 creating the public-only intent and authority request digest. A caller cannot
@@ -257,7 +257,7 @@ decision-component tests. It used the existing Python 3.11.15 image with no
 network, read-only source and bounded resources; no build, download or database
 startup ran. All 20 pinned source files were unchanged afterward, and the
 disposable container was removed. Logs and pins are retained under
-`serverware-operator-workspace-evidence/jit-private-ingress.73a5hKuC`.
+`catchplate-operator-workspace-evidence/jit-private-ingress.73a5hKuC`.
 Writer tests establish refusal before database access, not successful persistence
 or native admission. Independent source review found no raw-JIT bypass through
 the operation-specific measured digest callers.
@@ -310,7 +310,7 @@ owners; they do not establish native admission or end-to-end approvals. Both run
 used the existing Python 3.11.15 image, no network, read-only source and bounded
 resources. Source pins remained unchanged and disposable containers were removed.
 Logs and pins are retained under
-`serverware-operator-workspace-evidence/jit-review-storage.rJfXoBjq`.
+`catchplate-operator-workspace-evidence/jit-review-storage.rJfXoBjq`.
 
 The focused receipt checks require no pilot or build:
 
@@ -319,11 +319,11 @@ make verify-authority-webauthn-receipts
 # Actual decision-kernel and policy-domain component controls:
 make verify-authority-jit-approval
 # For an already prepared disposable local Unix-socket PostgreSQL fixture:
-SERVERWARE_TEST_POSTGRES_DISPOSABLE=1 make verify-authority-webauthn-receipts-postgres
-SERVERWARE_TEST_POSTGRES_DISPOSABLE=1 make verify-authority-jit-approval-postgres
+CATCHPLATE_TEST_POSTGRES_DISPOSABLE=1 make verify-authority-webauthn-receipts-postgres
+CATCHPLATE_TEST_POSTGRES_DISPOSABLE=1 make verify-authority-jit-approval-postgres
 ```
 
-The PostgreSQL target also requires `SERVERWARE_TEST_POSTGRES_DSN`; it never
+The PostgreSQL target also requires `CATCHPLATE_TEST_POSTGRES_DSN`; it never
 starts a database or falls back to the application's connection configuration.
 
 The October 11 focused run passed all **12 tests** (three signed-producer/source,
@@ -336,7 +336,7 @@ engineering image with no network, read-only source and a disposable Unix-socket
 database. The complete job took 16.237 seconds, exited zero without OOM, and
 shut down cleanly; the test container was removed and source hashes were
 unchanged. No build or download ran. Logs, source pins and execution evidence
-are retained in `serverware-operator-workspace-evidence/webauthn-receipt-binding.4DjdDwvh`.
+are retained in `catchplate-operator-workspace-evidence/webauthn-receipt-binding.4DjdDwvh`.
 These are signed synthetic-input and actual SQL-guard results, not a complete
 authority transaction, physical-key approval, provider request or deployment.
 
@@ -349,7 +349,7 @@ passed ten policy-projection and six reader-projection tests. Earlier failed
 checkpoints are retained, not replaced: a missing first-decision aggregate
 INSERT template, an incomplete disposable RBAC fixture, and a stale test-only
 query-count oracle. Logs and per-run source pins are under
-`serverware-operator-workspace-evidence/jit-approval-integration.H8suZhEl`.
+`catchplate-operator-workspace-evidence/jit-approval-integration.H8suZhEl`.
 
 The expanded joined fixture then passed all **eight groups** (three pure and
 five PostgreSQL), for **78 passing focused groups** across this source repair.
@@ -419,7 +419,7 @@ Planner-only tests use a trusted immutable-byte fixture reader; the joined SDK
 tests use the actual sealed capture owner.
 
 Receipts, commands, source hashes and full output are retained outside Git under
-`serverware-operator-workspace-evidence/ecr-publication.zJuI7G4q/initial`.
+`catchplate-operator-workspace-evidence/ecr-publication.zJuI7G4q/initial`.
 This source-only update changes no deployed service, DNS record, native attempt,
 credential grant or AWS destination. The authority and live-transport gaps above
 remain open.

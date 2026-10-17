@@ -2,14 +2,14 @@
 //! relay; only the independently pinned issuer signature admits a time range.
 use super::*;
 use ed25519_dalek::{Signer,SigningKey};
-use serverware_decision_gate::enclave_runtime_identity_v1::ShadowTimeNsmV1;
-use serverware_decision_gate::enclave_vsock_v1::VsockStreamV1;
+use catchplate_decision_gate::enclave_runtime_identity_v1::ShadowTimeNsmV1;
+use catchplate_decision_gate::enclave_vsock_v1::VsockStreamV1;
 use std::io::{Read,Write};
 use zeroize::Zeroizing;
 
-const CHALLENGE_DOMAIN:&str="serverware.nativeShadowGuestTimeChallenge.signature/v1";
-const SAMPLE_DOMAIN:&str="serverware.nativeShadowGuestTimeSample.signature/v1";
-const ANCHOR_DOMAIN:&str="serverware.nativeShadowGuestTimeAnchor.signature/v2";
+const CHALLENGE_DOMAIN:&str="catchplate.nativeShadowGuestTimeChallenge.signature/v1";
+const SAMPLE_DOMAIN:&str="catchplate.nativeShadowGuestTimeSample.signature/v1";
+const ANCHOR_DOMAIN:&str="catchplate.nativeShadowGuestTimeAnchor.signature/v2";
 const MAXIMUM:usize=65536;
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -81,7 +81,7 @@ impl Clock {
         Self::acquire_owned(original,association,key,key_id,prekey,nsm)
     }
     pub(super) fn acquire_late(original:Original,association:GuestClosureAssociation,key:&VerifyingKey,
-        key_id:&Sha256Digest,prekey:&PrekeyExecutable,prepared:serverware_decision_gate::enclave_runtime_identity_v1::PreparedShadowTimeNsmV1)
+        key_id:&Sha256Digest,prekey:&PrekeyExecutable,prepared:catchplate_decision_gate::enclave_runtime_identity_v1::PreparedShadowTimeNsmV1)
         ->Result<Self,ShadowError> {
         association.check_native_preparation().map_err(fail)?;
         require(association.owner.native_continuation.is_some())?;
@@ -93,7 +93,7 @@ impl Clock {
         prekey.check()?;
         let bootstrap:Bootstrap=exact(&original.read(MAXIMUM).map_err(fail)?)?;
         let maximum_bracket=decimal(&bootstrap.maximum_bracket_nanos)?;
-        require(bootstrap.api_version=="serverware.nativeShadowGuestTimeBootstrap/v1"
+        require(bootstrap.api_version=="catchplate.nativeShadowGuestTimeBootstrap/v1"
             && bootstrap.guest==association.binding() && &bootstrap.signing_key_id==key_id
             && bootstrap.parent_port>1023 && bootstrap.parent_port<u32::MAX
             && maximum_bracket<=1_000_000_000 && (0..=1_000_000_000).contains(&bootstrap.timestamp_error_nanos)
@@ -104,7 +104,7 @@ impl Clock {
             association.check_native_preparation().map_err(fail)?;stream.verify_connected_original(deadline).map_err(fail)?;
             let challenge_original=receive(&mut stream,b"SWNGTC1\0")?;
             let challenge:Challenge=exact(&challenge_original)?;let p=&challenge.payload;
-            require(p.api_version=="serverware.nativeShadowGuestTimeChallenge/v1"
+            require(p.api_version=="catchplate.nativeShadowGuestTimeChallenge/v1"
                 && p.purpose=="native-shadow-guest-time-challenge" && p.guest==bootstrap.guest
                 && p.signing_key_id==bootstrap.signing_key_id && p.maximum_bracket_nanos==bootstrap.maximum_bracket_nanos
                 && p.timestamp_error_nanos==bootstrap.timestamp_error_nanos
@@ -127,7 +127,7 @@ impl Clock {
             let public=signing.verifying_key().to_bytes();drop(seed);
             association.check_native_preparation().map_err(fail)?;prekey.check()?;
             let before=now()?;
-            let statement=Statement{api_version:"serverware.nativeShadowGuestTimeStatement/v1",
+            let statement=Statement{api_version:"catchplate.nativeShadowGuestTimeStatement/v1",
                 purpose:"native-shadow-guest-time-sample",guest:association.binding(),
                 challenge_sha256:Sha256Digest::compute(&challenge_original),before_boottime_ns:before.to_string(),
                 public_key_base64url:URL_SAFE_NO_PAD.encode(public)};
@@ -139,7 +139,7 @@ impl Clock {
             let quote_sha256=Sha256Digest::compute(&document);
             let sample=Sample{statement:&statement,after_boottime_ns:after.to_string(),quote_sha256:quote_sha256.clone()};
             let signed=signing.sign(&signature_preimage(SAMPLE_DOMAIN,&canonical_json_bytes(&sample)?));drop(signing);
-            let evidence=Evidence{api_version:"serverware.nativeShadowGuestTimeEvidence/v1",statement:&statement,
+            let evidence=Evidence{api_version:"catchplate.nativeShadowGuestTimeEvidence/v1",statement:&statement,
                 after_boottime_ns:after.to_string(),attestation_document_base64url:URL_SAFE_NO_PAD.encode(&document),
                 signature:CanonicalEd25519Signature(URL_SAFE_NO_PAD.encode(signed.to_bytes()))};
             let evidence_original=canonical_json_bytes(&evidence)?;
@@ -155,7 +155,7 @@ impl Clock {
                 .ok_or(ShadowError::CounterOverflow)?;
             let maximum_width=i64::try_from(after-before).map_err(fail)?.checked_add(tolerance.checked_mul(2)
                 .ok_or(ShadowError::CounterOverflow)?).ok_or(ShadowError::CounterOverflow)?;
-            require(a.api_version=="serverware.nativeShadowGuestTimeAnchor/v2" && a.purpose=="native-shadow-guest-trusted-time"
+            require(a.api_version=="catchplate.nativeShadowGuestTimeAnchor/v2" && a.purpose=="native-shadow-guest-trusted-time"
                 && a.guest==bootstrap.guest && a.signing_key_id==bootstrap.signing_key_id
                 && a.challenge_sha256==statement.challenge_sha256 && a.evidence_sha256==Sha256Digest::compute(&evidence_original)
                 && a.quote_sha256==quote_sha256 && a.anchor_boottime_ns==before.to_string()
@@ -204,7 +204,7 @@ impl Clock {
         let (sampled,earliest,latest)=self.sampled_interval()?;
         let binding=association.binding();
         Ok(super::trusted_time_sample::Sample {
-            api_version:"serverware.nativeShadowTrustedTimeSample/v1".into(),purpose:"native-shadow-trusted-time-sample".into(),
+            api_version:"catchplate.nativeShadowTrustedTimeSample/v1".into(),purpose:"native-shadow-trusted-time-sample".into(),
             assignment_payload_sha256:assignment.clone(),service_guest_sha256:Sha256Digest::compute(&canonical_json_bytes(&binding)?),
             clock_anchor_sha256:Sha256Digest::compute(&self.anchor_original),
             clock_bootstrap_sha256:Sha256Digest::compute(&canonical_json_bytes(&self.bootstrap)?),

@@ -11,7 +11,7 @@ The [CLI parser](../data-plane/decision-gate-rs/src/native_startup_config/cli.rs
 accepts this shape; the paths/digests below are placeholders, not a ready launch:
 
 ```text
-serverware-decision-gate --native-startup \
+catchplate-decision-gate --native-startup \
   --configuration /approved/private-native-configuration.json \
   --configuration-sha256 sha256:<exact-configuration-original-digest> \
   --launch /approved/native-launch.json \
@@ -44,7 +44,7 @@ has exactly these required camelCase fields:
 
 | Field | Contract |
 | --- | --- |
-| `apiVersion` | Exactly `serverware.nativeStartupConfiguration/v1`. |
+| `apiVersion` | Exactly `catchplate.nativeStartupConfiguration/v1`. |
 | `gate` | The [closed gate configuration](native-config-gate.md), including service tokens, policy trust and supplied checkpoint. |
 | `native` | The native settings below. |
 | `shadow` | The shadow settings below. |
@@ -107,7 +107,7 @@ The launch original has exactly these required fields:
 
 | Field | Contract |
 | --- | --- |
-| `apiVersion` | Exactly `serverware.nativeStartupLaunch/v1`. |
+| `apiVersion` | Exactly `catchplate.nativeStartupLaunch/v1`. |
 | `releaseRecordSha256` | Canonical SHA-256 release-record reference; this loader does not verify or admit that record. |
 | `configurationSha256` | Must equal the CLI configuration pin, already checked against the actual configuration original. |
 | `deadlineBoottimeNs` | Unsigned absolute `CLOCK_BOOTTIME` deadline for this launch, not a renewable duration. |

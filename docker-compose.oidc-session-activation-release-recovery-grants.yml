@@ -2,17 +2,17 @@
 # This source recipe does not create an issuer, signing key or release worker.
 # A mounted socket is not actor permission, fresh recovery authority or readiness.
 services:
-  serverware:
+  catchplate:
     volumes:
       - type: bind
-        source: ${SERVERWARE_OIDC_SESSION_ACTIVATION_RELEASE_RECOVERY_GRANTS_SOCKET:?set preprovisioned recovery-grant issuer socket}
-        target: /run/serverware/oidc-session-activation-token-release/recovery-grants.sock
+        source: ${CATCHPLATE_OIDC_SESSION_ACTIVATION_RELEASE_RECOVERY_GRANTS_SOCKET:?set preprovisioned recovery-grant issuer socket}
+        target: /run/catchplate/oidc-session-activation-token-release/recovery-grants.sock
         read_only: true
         bind:
           create_host_path: false
       - type: bind
-        source: ${SERVERWARE_OIDC_SESSION_ACTIVATION_RELEASE_RECOVERY_BOOTSTRAP_SOCKET:?set preprovisioned root recovery-bootstrap socket}
-        target: /run/serverware/oidc-session-activation-token-release/recovery-bootstrap.sock
+        source: ${CATCHPLATE_OIDC_SESSION_ACTIVATION_RELEASE_RECOVERY_BOOTSTRAP_SOCKET:?set preprovisioned root recovery-bootstrap socket}
+        target: /run/catchplate/oidc-session-activation-token-release/recovery-bootstrap.sock
         read_only: true
         bind:
           create_host_path: false

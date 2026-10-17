@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware.authority_store import challenge_execution_custody_sql as custody
+from catchplate.authority_store import challenge_execution_custody_sql as custody
 
 
 NAMESPACE = '"fixture"'
@@ -38,12 +38,12 @@ class ChallengeExecutionCustodySQLSourceTests(unittest.TestCase):
         sql = custody.step_body_sql(NAMESPACE)
         framing = sql.index("maintenance custody original framing differs")
         parse = sql.index("cxs_descriptor_json::pg_catalog.jsonb")
-        wire = sql.index("serverware_policy_authority_wire_walk(")
+        wire = sql.index("catchplate_policy_authority_wire_walk(")
         typed = sql.index("maintenance custody descriptor is not source closed")
         self.assertLess(framing, parse)
         self.assertLess(parse, wire)
         self.assertLess(wire, typed)
-        self.assertEqual(sql.count("serverware_policy_authority_wire_walk("), 4)
+        self.assertEqual(sql.count("catchplate_policy_authority_wire_walk("), 4)
         for original in ("cxs_descriptor_json", "cxs_body_json"):
             self.assertIn("cxs_rendered.rendered COLLATE \"C\" IS DISTINCT FROM "
                 + original + ' COLLATE "C"', sql)

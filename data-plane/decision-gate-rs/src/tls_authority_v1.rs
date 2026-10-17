@@ -23,7 +23,7 @@ use time::OffsetDateTime;
 const MAX_CLIENT_TRUST_ROOTS: usize = 32;
 const MAX_CLIENT_TRUST_CERTIFICATE_BYTES: usize = 64 * 1024;
 const MAX_CLIENT_TRUST_BYTES: usize = 1024 * 1024;
-const CLIENT_TRUST_DOMAIN: &[u8] = b"serverware/mutual-tls-client-trust/v1\0";
+const CLIENT_TRUST_DOMAIN: &[u8] = b"catchplate/mutual-tls-client-trust/v1\0";
 
 pub struct TlsAuthorityV1 {
     ca_cert: Certificate,
@@ -106,7 +106,7 @@ impl TlsAuthorityV1 {
         params.not_before = not_before;
         params.not_after = not_after;
         params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
-        params.distinguished_name.push(DnType::CommonName, "Serverware In-Memory TLS Authority");
+        params.distinguished_name.push(DnType::CommonName, "Catchplate In-Memory TLS Authority");
         params.key_usages.push(KeyUsagePurpose::KeyCertSign);
         params.key_usages.push(KeyUsagePurpose::CrlSign);
         let ca_cert = params.self_signed(&ca_key)
@@ -122,7 +122,7 @@ impl TlsAuthorityV1 {
     /// moves only into the in-process TLS client, and is never returned as PEM.
     pub fn audit_client_identity(&self, uri:&str, not_before:OffsetDateTime, not_after:OffsetDateTime)
         ->Result<(reqwest::Identity,Vec<u8>),String> {
-        if self.generated_validity!=Some((not_before,not_after)) || !uri.starts_with("spiffe://serverware.audit/") {
+        if self.generated_validity!=Some((not_before,not_after)) || !uri.starts_with("spiffe://catchplate.audit/") {
             return Err("audit TLS identity requires the original generated CA interval".into());
         }
         let key=KeyPair::generate().map_err(|_|"generate native audit client key")?;

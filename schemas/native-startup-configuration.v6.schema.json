@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v6.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-startup-configuration.v6.schema.json",
   "title": "Cold native proxy with purpose-bound encrypted service tokens",
   "$comment": "Explicit v6 only through --native-encrypted-startup. Original <=16MiB duplicate-free integer-only JSON; exact owner-only original acquisition and independent release admission remain required. All plaintext bearer slots are present and null. The actual broker opens the purpose-fixed envelope only after measured executable, admitted policy and identity joins, on the unchanged deadline. Pending tokens cannot enter GateState. JSON Schema does not establish custody, exact binding equality, URL policy, valid certificates or runtime readiness. Versions 1-5 are unchanged.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "gate", "native", "shadow", "responseObservationV2", "policy", "enrollmentAuthorizer", "enrollmentSetupAuthorizer", "enrollmentProxyEndpoint", "credentialCurrentness", "secretBroker", "measuredAudit", "encryptedServiceTokens"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeStartupConfiguration/v6"},
+    "apiVersion": {"const": "catchplate.nativeStartupConfiguration/v6"},
     "gate": {"$ref": "#/$defs/gate"},
     "native": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/native"},
     "shadow": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/shadow"},

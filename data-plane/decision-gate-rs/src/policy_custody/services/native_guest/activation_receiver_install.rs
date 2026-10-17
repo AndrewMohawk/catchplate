@@ -7,23 +7,23 @@ use std::fs::File;
 use std::os::fd::FromRawFd;
 use std::os::unix::fs::{FileExt, MetadataExt};
 
-const DOMAIN: &str = "serverware.nativeShadowActivationReceiverInstallation.signature/v1";
-const NAMESPACE: &str = "/etc/serverware/native-activation-inputs";
-const LAUNCH: &str = "/etc/serverware/native-shadow-guest-launch.json";
-const VERIFIER: &str = "/etc/serverware/native-shadow-public-exchange.json";
+const DOMAIN: &str = "catchplate.nativeShadowActivationReceiverInstallation.signature/v1";
+const NAMESPACE: &str = "/etc/catchplate/native-activation-inputs";
+const LAUNCH: &str = "/etc/catchplate/native-shadow-guest-launch.json";
+const VERIFIER: &str = "/etc/catchplate/native-shadow-public-exchange.json";
 const MAX_TOTAL: usize = 720 * 1024;
 const ROSTER: [(&str, usize); 13] = [
-    ("/etc/serverware/native-activation-inputs/activation-authority.json", 512 * 1024),
-    ("/etc/serverware/native-activation-inputs/activation.json", 65536),
-    ("/etc/serverware/native-activation-inputs/admission.json", 65536),
-    ("/etc/serverware/native-activation-inputs/assignment.json", 512 * 1024),
-    ("/etc/serverware/native-activation-inputs/closure.json", 512 * 1024),
-    ("/etc/serverware/native-activation-inputs/delivery.json", 65536),
-    ("/etc/serverware/native-activation-inputs/encrypted-keys.json", 65536),
-    ("/etc/serverware/native-activation-inputs/keys.json", 65536),
-    ("/etc/serverware/native-activation-inputs/runtime.json", 512 * 1024),
-    ("/etc/serverware/native-activation-inputs/time-bootstrap.json", 65536),
-    ("/etc/serverware/native-activation-inputs/trust.json", 512 * 1024),
+    ("/etc/catchplate/native-activation-inputs/activation-authority.json", 512 * 1024),
+    ("/etc/catchplate/native-activation-inputs/activation.json", 65536),
+    ("/etc/catchplate/native-activation-inputs/admission.json", 65536),
+    ("/etc/catchplate/native-activation-inputs/assignment.json", 512 * 1024),
+    ("/etc/catchplate/native-activation-inputs/closure.json", 512 * 1024),
+    ("/etc/catchplate/native-activation-inputs/delivery.json", 65536),
+    ("/etc/catchplate/native-activation-inputs/encrypted-keys.json", 65536),
+    ("/etc/catchplate/native-activation-inputs/keys.json", 65536),
+    ("/etc/catchplate/native-activation-inputs/runtime.json", 512 * 1024),
+    ("/etc/catchplate/native-activation-inputs/time-bootstrap.json", 65536),
+    ("/etc/catchplate/native-activation-inputs/trust.json", 512 * 1024),
     (LAUNCH, 32768), (VERIFIER, 32768),
 ];
 
@@ -60,8 +60,8 @@ impl Completion {
         observation_sha: &Sha256Digest) -> Result<(Sha256Digest, Installed, process::Timer), ShadowError> {
         cold.check()?;
         let p = &self.installation.payload;
-        require(self.api_version == "serverware.nativeShadowActivationReceiverCompletion/v2"
-            && p.api_version == "serverware.nativeShadowActivationReceiverInstallation/v1"
+        require(self.api_version == "catchplate.nativeShadowActivationReceiverCompletion/v2"
+            && p.api_version == "catchplate.nativeShadowActivationReceiverInstallation/v1"
             && p.purpose == "install-activation-public-originals"
             && p.observation_sha256 == *observation_sha
             && p.configuration_sha256 == cold.configuration_sha256()
@@ -108,13 +108,13 @@ impl Completion {
         let delivery: guest::Envelope = exact(public(&files,
             &selected.delivery.path.to_string_lossy(), &selected.delivery.sha256)?)?;
         let d = &delivery.payload;
-        require(delivery.api_version == "serverware.policyCustodyGuestDelivery/v1"
+        require(delivery.api_version == "catchplate.policyCustodyGuestDelivery/v1"
             && d.authority_key_id == Sha256Digest::compute(key.as_bytes())
             && d.issued_at_boottime_ns == p.issued_at_boottime_ns
             && d.startup_deadline_boottime_ns == p.startup_deadline_boottime_ns)?;
         let signature = URL_SAFE_NO_PAD.decode(&delivery.signature_base64url).map_err(fail)?;
         require(signature.len() == 64 && URL_SAFE_NO_PAD.encode(&signature) == delivery.signature_base64url)?;
-        let mut message = b"serverware.policyCustodyGuestDelivery.signature/v1\0".to_vec();
+        let mut message = b"catchplate.policyCustodyGuestDelivery.signature/v1\0".to_vec();
         message.extend(canonical_json_bytes(d)?);
         key.verify_strict(&message, &Signature::from_bytes(&signature.try_into().map_err(fail)?))
             .map_err(|_| ShadowError::SignatureInvalid)?;
@@ -124,7 +124,7 @@ impl Completion {
         public(&files, &runtime_path, &d.runtime_config.sha256)?;
         let encrypted: serde_json::Value = serde_json::from_slice(public(&files,
             &selected.encrypted_keys.path.to_string_lossy(), &selected.encrypted_keys.sha256)?).map_err(fail)?;
-        require(encrypted["apiVersion"] == "serverware.nativeShadowEncryptedKeyDelivery/v1")?;
+        require(encrypted["apiVersion"] == "catchplate.nativeShadowEncryptedKeyDelivery/v1")?;
         let inventory_sha = encrypted["authorization"]["payload"]["transport"]["encryptedInventorySha256"]
             .as_str().ok_or(ShadowError::BindingDrift)?;
         let mut inventories = 0usize;
@@ -150,7 +150,7 @@ impl Completion {
             time_namespace_inode: d.time_namespace_inode, issued_at_boottime_ns: d.issued_at_boottime_ns.clone(),
             startup_deadline_boottime_ns: d.startup_deadline_boottime_ns.clone(),
             lifetime_deadline_boottime_ns: d.lifetime_deadline_boottime_ns.clone(), invocation_id: d.invocation_id.clone() };
-        require(service.payload.api_version == "serverware.nativeShadowActivationServiceAssignment/v2"
+        require(service.payload.api_version == "catchplate.nativeShadowActivationServiceAssignment/v2"
             && service.payload.purpose == "native-policy-activation-publication"
             && d.service_role == guest::Role::ProductionBridge && service.payload.guest == binding)?;
         service.signature.decode()?;
@@ -221,18 +221,18 @@ impl Installed {
         require(fd >= 0)?;
         let root = Directory::from(unsafe { File::from_raw_fd(fd) })?;
         let etc = Directory::open(&root, "etc")?;
-        let serverware = Directory::open(&etc, "serverware")?;
-        serverware.absent("native-activation-inputs")?;
-        serverware.absent("native-shadow-guest-launch.json")?;
-        serverware.absent("native-shadow-public-exchange.json")?;
+        let catchplate = Directory::open(&etc, "catchplate")?;
+        catchplate.absent("native-activation-inputs")?;
+        catchplate.absent("native-shadow-guest-launch.json")?;
+        catchplate.absent("native-shadow-public-exchange.json")?;
         check()?;
-        require(unsafe { libc::mkdirat(serverware.file.as_raw_fd(), c"native-activation-inputs".as_ptr(), 0o700) } == 0)?;
+        require(unsafe { libc::mkdirat(catchplate.file.as_raw_fd(), c"native-activation-inputs".as_ptr(), 0o700) } == 0)?;
         check()?;
-        let namespace = Directory::open(&serverware, "native-activation-inputs")?;
+        let namespace = Directory::open(&catchplate, "native-activation-inputs")?;
         require(namespace.mode & 0o7777 == 0o700)?;
         namespace.file.sync_all().map_err(fail)?; check()?;
-        serverware.file.sync_all().map_err(fail)?; check()?;
-        let mut owner = Self { directories: vec![root, etc, serverware, namespace], files: Vec::new() };
+        catchplate.file.sync_all().map_err(fail)?; check()?;
+        let mut owner = Self { directories: vec![root, etc, catchplate, namespace], files: Vec::new() };
         // Publish launch last. Any partial installation remains on disk and
         // refuses a later exclusive attempt; it is never silently adopted.
         for item in files.iter().filter(|v| v.path != LAUNCH).chain(files.iter().filter(|v| v.path == LAUNCH)) {
@@ -275,7 +275,7 @@ impl Installed {
     pub(crate) fn check(&self) -> Result<(), ShadowError> {
         require(unsafe { libc::getuid() } == 0 && unsafe { libc::geteuid() } == 0)?;
         for directory in &self.directories { directory.check()?; }
-        for (parent, child, name) in [(0, 1, "etc"), (1, 2, "serverware"), (2, 3, "native-activation-inputs")] {
+        for (parent, child, name) in [(0, 1, "etc"), (1, 2, "catchplate"), (2, 3, "native-activation-inputs")] {
             self.directories[parent].child(name, self.directories[child].device, self.directories[child].inode)?;
         }
         for value in &self.files {

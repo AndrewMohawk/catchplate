@@ -24,7 +24,7 @@ import time
 
 PYTHON_IMAGE = "sha256:ec7d6c95cd3692a2e2d228a8b1ca74e4025b54121fcc4c5da6f09cfa473315ad"
 LIBATOMIC = Path("/usr/lib/x86_64-linux-gnu/libatomic.so.1.2.0")
-RUNTIME_SERVICES = {"network", "x", "serverware", "decision-gate-rs", "edge", "check"}
+RUNTIME_SERVICES = {"network", "x", "catchplate", "decision-gate-rs", "edge", "check"}
 MAX_LOG_BYTES = 4 * 1024**2
 
 
@@ -63,7 +63,7 @@ def failure_site(error, source):
         except (OSError, ValueError, RuntimeError):
             relative = None
         if (relative is not None and relative.suffix == ".py"
-                and relative.parts[0] in {"scripts", "serverware"}
+                and relative.parts[0] in {"scripts", "catchplate"}
                 and all(re.fullmatch(r"[A-Za-z0-9_]+", part) for part in relative.with_suffix("").parts)
                 and frame.f_code.co_name != "require"):
             site = {"module": ".".join(relative.with_suffix("").parts), "line": trace.tb_lineno}
@@ -82,8 +82,8 @@ class Run:
     PROVIDER_PKI_SERVICE = "x-pki"
     NODE_EXAMPLE_DIRECTORY = "examples/x-username-node"
     GO_MOUNT_TARGET = "/example-go/x-username"
-    CLAIM_SCHEMA = "serverware.privateXExamplesRunClaim/v1"
-    TERMINAL_SCHEMA = "serverware.privateXExamplesRun/v1"
+    CLAIM_SCHEMA = "catchplate.privateXExamplesRunClaim/v1"
+    TERMINAL_SCHEMA = "catchplate.privateXExamplesRun/v1"
     REAL_PROVIDER_VERIFIED = "realXVerified"
 
     def __init__(self, args):
@@ -253,13 +253,13 @@ class Run:
                 ("initialize", 30, ["--profile", "prepare", "run", "--rm", "--no-deps", "--pull", "never", "initialize"]),
                 (self.PROVIDER_PKI_SERVICE, 30, ["--profile", self.PROVIDER_PKI_SERVICE, "run", "--rm", "--no-deps", "--pull", "never", self.PROVIDER_PKI_SERVICE]),
                 ("network", 25, ["up", "-d", "--no-build", "--pull", "never", "--wait", "--wait-timeout", "20", "network"]),
-                ("baseline", 95, ["up", "-d", "--no-build", "--pull", "never", "--wait", "--wait-timeout", "80", self.PROVIDER_SERVICE, "serverware", "decision-gate-rs"]),
+                ("baseline", 95, ["up", "-d", "--no-build", "--pull", "never", "--wait", "--wait-timeout", "80", self.PROVIDER_SERVICE, "catchplate", "decision-gate-rs"]),
                 ("basic-pki", 30, ["--profile", "basic-pki", "run", "--rm", "--no-deps", "--pull", "never", "basic-pki"]),
                 ("edge", 15, ["--profile", "edge", "up", "-d", "--no-build", "--pull", "never", "--no-deps", "edge"])):
                 self.command(phase, compose + arguments, seconds)
             phase = "revision"
-            code = "import http.client,json; from pathlib import Path; c=http.client.HTTPConnection('127.0.0.1',3000,timeout=4); c.request('GET','/api/operator-demo/catalog',headers={'Connection':'close','X-Serverware-Admin-Token':Path('/run/secrets/serverware/admin.token').read_text().strip()}); r=c.getresponse(); raw=r.read(1048577); assert r.status==200 and len(raw)<=1048576; d=json.loads(raw); assert d['schema']=='serverware.operatorCatalog/v1' and all(d[k]==[] for k in ('credentials','applications','access_rules')); v=d['revision']; assert type(v) is int and 1<=v<=3; print(v); c.close()"
-            revision = int(self.command(phase, compose + ["exec", "-T", "serverware", "python", "-B", "-c", code], 10))
+            code = "import http.client,json; from pathlib import Path; c=http.client.HTTPConnection('127.0.0.1',3000,timeout=4); c.request('GET','/api/operator-demo/catalog',headers={'Connection':'close','X-Catchplate-Admin-Token':Path('/run/secrets/catchplate/admin.token').read_text().strip()}); r=c.getresponse(); raw=r.read(1048577); assert r.status==200 and len(raw)<=1048576; d=json.loads(raw); assert d['schema']=='catchplate.operatorCatalog/v1' and all(d[k]==[] for k in ('credentials','applications','access_rules')); v=d['revision']; assert type(v) is int and 1<=v<=3; print(v); c.close()"
+            revision = int(self.command(phase, compose + ["exec", "-T", "catchplate", "python", "-B", "-c", code], 10))
             check["command"][-1] = str(revision)
             with compose_path.open("w", encoding="utf-8") as output:
                 json.dump(config, output, sort_keys=True, indent=2)
@@ -289,7 +289,7 @@ class Run:
             self.save("container-observations.json", observations)
             phase = "running-binary"
             actual = self.command(phase, compose + ["exec", "-T", "decision-gate-rs", "python", "-c",
-                "import hashlib; print(hashlib.sha256(open('/usr/local/bin/serverware-decision-gate','rb').read()).hexdigest())"], 10).decode().strip()
+                "import hashlib; print(hashlib.sha256(open('/usr/local/bin/catchplate-decision-gate','rb').read()).hexdigest())"], 10).decode().strip()
             require(actual == args.expected_binary_sha256)
             checker = next(row["Id"] for row in rows if row["Config"]["Labels"]["com.docker.compose.service"] == "check")
             phase = "checker"

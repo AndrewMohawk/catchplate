@@ -155,7 +155,7 @@ class OrdinaryClientLowerLevelTests(unittest.TestCase):
         self.assertTrue(self.engine._provider_request_matches_canonical(flow, after, credential))
 
     def test_compiler_and_runtime_refuse_contradictory_request_profiles(self):
-        from serverware.policy_bundle import PolicyBundleError
+        from catchplate.policy_bundle import PolicyBundleError
         changes = ({"allowedFields": []}, {"allowedFields": ["a"]}, {"maxRecordBytes": 64},
             {"allowedMediaTypes": ["text/plain"]}, {"maxBodyBytes": 0},
             {"maxBodyBytes": True}, {"maxBodyBytes": 16777217},
@@ -226,7 +226,7 @@ class OrdinaryClientLowerLevelTests(unittest.TestCase):
             self.assertFalse(self.admit_response(fx.response_flow(b'"' + b"a" * 1024 + b'"', status=status)).allowed)
 
     def test_response_contract_is_paired_and_envelopes_do_not_relax_old_modes(self):
-        from serverware.policy_bundle import PolicyBundleError, compile_policy_bundle
+        from catchplate.policy_bundle import PolicyBundleError, compile_policy_bundle
         for change in ({"bodyPresence": "required"}, {"contentTypes": []}, {"statusCodes": [200]},
                 {"statusCodes": [200, 204, 205]}, {"statusCodes": [204, 302]}):
             value = fx.document()
@@ -269,7 +269,7 @@ class OrdinaryClientLowerLevelTests(unittest.TestCase):
 
     def test_new_whole_response_rejects_durable_claims_with_valid_old_control(self):
         import test_buffered_passthrough_response as buffered
-        from serverware.policy_bundle import PolicyBundleError
+        from catchplate.policy_bundle import PolicyBundleError
         value = buffered.bundle(buffered.projected())
         value["routes"][0]["constraints"].append({"id": "fixture.durable", "type": "slidingWindowLimit",
             "max": 5, "windowSeconds": 3600, "windowSemantics": "sliding", "measure": "operationCount",
@@ -312,7 +312,7 @@ class OrdinaryClientLowerLevelTests(unittest.TestCase):
 
 def catalog_inputs():
     from pydantic import ValidationError
-    from serverware.operator_catalog_inputs import RuleInput
+    from catchplate.operator_catalog_inputs import RuleInput
     values = fx.input_values()
     accepted = RuleInput(**values)
     assert accepted.request_body_mode == fx.REQUEST_API_MODE
@@ -338,7 +338,7 @@ def catalog_migration():
     assert store.get_policy_high_water() == high_water
     old = workspace.catalog(db, schema)
     assert all("request_body_mode" not in rule for rule in old["access_rules"])
-    from serverware import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
+    from catchplate import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
     values = {**fx.input_values(), **workspace.review(db, store, schema),
         "application_id": old["applications"][0]["id"], "credential_id": old["credentials"][0]["id"]}
     created = mutations.create_rule(inputs.RuleInput(**values), workspace.common._ACTOR)
@@ -358,7 +358,7 @@ def catalog_migration():
     assert response["maxBodyBytes"] == 1048576 and response["error"]["maxBodyBytes"] == 65536
     assert all(item["bodyPresence"] == fx.PRESENCE and 204 in item["statusCodes"]
         for item in route["constraints"] if item["type"] == "responseEnvelope")
-    from serverware import operator_catalog_policy as policy
+    from catchplate import operator_catalog_policy as policy
     state = workspace.rows(db, "operator_demo_policy")[0]
     for request_only in (False, True):
         independent = deepcopy(current)

@@ -23,10 +23,10 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_query_read_work as accounting
-from serverware import authority_transition_core as core
-from serverware import authority_transition_webauthn as candidate
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_transition_core as core
+from catchplate import authority_transition_webauthn as candidate
 import test_authority_audit_capacity_work as capacity_oracle
 import test_authority_revocation_query_program as recipe_oracle
 import test_webauthn_revoke_transition as context_oracle
@@ -61,13 +61,13 @@ def framed(domain, *values):
 
 def selected(table, key, row):
     return {"table": table, "key": copy.deepcopy(key),
-        "keyDigest": framed("serverware.policyAuthorityBusinessKey/v1", table.encode("ascii"), wire(key)),
+        "keyDigest": framed("catchplate.policyAuthorityBusinessKey/v1", table.encode("ascii"), wire(key)),
         "present": row is not None, "row": copy.deepcopy(row), "contractSelector": None}
 
 
 def mutation(selection, row):
     kind = "UPDATE" if selection["present"] else "INSERT"
-    domain = "serverware.policyAuthorityMutationTemplate/v1"
+    domain = "catchplate.policyAuthorityMutationTemplate/v1"
     template = {"schema": domain, "operation": OPERATION, "table": selection["table"],
         "mutation": kind, "before": "present" if kind == "UPDATE" else "absent",
         "after": "present", "predicate": "exact-primary-key-and-full-row-cas-v1", "cardinality": 1}
@@ -95,7 +95,7 @@ class KernelFixture:
         self.arguments = recipe_oracle.arguments(self.values)
         self.now = original.database_now
         self.request_digest = digest(b"pure candidate revoke fixture")
-        self.operation_id = framed("serverware.policyAuthorityOperation/v2",
+        self.operation_id = framed("catchplate.policyAuthorityOperation/v2",
                                    OPERATION.encode("ascii"), self.request_digest.encode("ascii"))
         self.signer_id = "credential-signer" if separate_signer else self.values["record_id"]
         rows = [selected(item["table"], item["key"], item["row"]) for item in original.selected_rows
@@ -122,17 +122,17 @@ class KernelFixture:
                    "rpId": "unit.example", "origin": "https://unit.example"}
         challenge["payload_json"] = wire(payload).decode("ascii")
         public = {**payload, "challengeId": challenge["id"], "challenge": challenge["challenge"],
-            "challengeRowDigest": framed("serverware.policyAuthorityWebAuthnChallengeRow/v1",
+            "challengeRowDigest": framed("catchplate.policyAuthorityWebAuthnChallengeRow/v1",
                                          wire(context_oracle.challenge_binding(challenge)))}
         evidence = {"operation": OPERATION, "operationId": self.operation_id,
             "requestDigest": self.request_digest, "credentialRecordId": self.signer_id,
             "credentialId": signer["credential_id"], "challengeId": challenge["id"],
             "challengeDigest": digest(wire(public)), "clientChallengeDigest": digest(self.raw_challenge),
             "rpId": "unit.example", "origin": "https://unit.example", "priorCounter": 2, "counter": 3,
-            "trustHighWaterDigest": framed("serverware.webauthnTrustHighWater/v1",
+            "trustHighWaterDigest": framed("catchplate.webauthnTrustHighWater/v1",
                 wire(trust_oracle.trust_high_water_document(high_water))),
             "metadataPublicationSequence": high_water["publication_sequence"],
-            "credentialPolicyDigest": framed("serverware.policyAuthorityCredentialPolicy/v1",
+            "credentialPolicyDigest": framed("catchplate.policyAuthorityCredentialPolicy/v1",
                 wire(trust_oracle.credential_policy_document(signer, high_water)))}
         for subject in self.subjects:
             rows.append(selected("metadata_audit_outbox",
@@ -157,7 +157,7 @@ class KernelFixture:
         event_bytes = wire(event)
         row = {"id": identity, "event_type": event_type, "actor_type": actor_type, "actor_id": actor_id,
             "event_json": event_bytes.decode("ascii"),
-            "event_digest": framed("serverware.metadataAuditOutboxEvent/v1", event_bytes),
+            "event_digest": framed("catchplate.metadataAuditOutboxEvent/v1", event_bytes),
             "storage_format_version": 2, "status": "pending", "claim_id": None, "claimed_at": None,
             "attempts": 0, "audited_at": None, "audit_event_hash": None, "last_error": None,
             "created_at": self.now.astimezone(timezone.utc).isoformat()}
@@ -364,7 +364,7 @@ def audit_work(work, fixture, subject, change):
     purpose = "webauthn-revocation-audit:" + hashlib.sha256(label.encode("utf-8")).hexdigest()
     work.utf8(label)
     work.utf8(purpose)
-    work.canonical({"schema": "serverware.policyAuthorityDeterministicIdentity/v1",
+    work.canonical({"schema": "catchplate.policyAuthorityDeterministicIdentity/v1",
         "operation": OPERATION, "requestDigest": fixture.request_digest, "purpose": purpose})
     work.hashes += 2
     exact_work(work, fixture.context, "metadata_audit_outbox", change["key"])
@@ -429,11 +429,11 @@ def trust_work(work, fixture, credential, evidence):
     work.compare(publication["status"], "pending")
     work.graph(publication)
     document = trust_oracle.trust_high_water_document(high_water)
-    high_digest = framed("serverware.webauthnTrustHighWater/v1", wire(document))
+    high_digest = framed("catchplate.webauthnTrustHighWater/v1", wire(document))
     policy = trust_oracle.credential_policy_document(credential, high_water)
-    policy_digest = framed("serverware.policyAuthorityCredentialPolicy/v1", wire(policy))
-    for domain, value in (("serverware.webauthnTrustHighWater/v1", document),
-                          ("serverware.policyAuthorityCredentialPolicy/v1", policy)):
+    policy_digest = framed("catchplate.policyAuthorityCredentialPolicy/v1", wire(policy))
+    for domain, value in (("catchplate.webauthnTrustHighWater/v1", document),
+                          ("catchplate.policyAuthorityCredentialPolicy/v1", policy)):
         work.canonical(value)
         work.utf8(domain)
         work.input_bytes += 9 + len(wire(value))
@@ -470,7 +470,7 @@ def assertion_work(work, fixture, expected):
     binding = context_oracle.challenge_binding(challenge_row)
     payload = json.loads(challenge_row["payload_json"])
     public = {**payload, "challengeId": challenge_row["id"], "challenge": challenge_row["challenge"],
-        "challengeRowDigest": framed("serverware.policyAuthorityWebAuthnChallengeRow/v1", wire(binding))}
+        "challengeRowDigest": framed("catchplate.policyAuthorityWebAuthnChallengeRow/v1", wire(binding))}
     work.utf8(OPERATION)
     work.utf8(fixture.request_digest)
     work.hashes += 1
@@ -560,7 +560,7 @@ class WebAuthnRevocationWorkTests(unittest.TestCase):
 
     def test_challenge_binding_charges_full_projection_source_and_ten_field_encoding(self):
         original = KernelFixture().lookup("webauthn_challenges", "assertion-challenge")["row"]
-        expected_digest = framed("serverware.policyAuthorityWebAuthnChallengeRow/v1",
+        expected_digest = framed("catchplate.policyAuthorityWebAuthnChallengeRow/v1",
                                  wire(context_oracle.challenge_binding(original)))
         for retained in (False, True):
             row = copy.deepcopy(original)
@@ -580,7 +580,7 @@ class WebAuthnRevocationWorkTests(unittest.TestCase):
                 self.assertEqual(metric_tuple(shared), independent.total)
                 self.assertEqual(row, before)
                 self.assertNotEqual(expected_digest,
-                    framed("serverware.policyAuthorityWebAuthnChallengeRow/v1", wire(row)))
+                    framed("catchplate.policyAuthorityWebAuthnChallengeRow/v1", wire(row)))
                 for limits in ({"max_input_bytes": independent.input_bytes - 1},
                                {"max_json_nodes": independent.json_nodes - 1}):
                     with self.assertRaises(accounting.QueryReadWorkError):
@@ -1049,7 +1049,7 @@ class WebAuthnRevocationWorkTests(unittest.TestCase):
         # event fails its measured 2MiB bound before its dict-copy/serializer.
         self.assertEqual((canonical.call_count, mutations.call_count, hashes.call_count), (1, 0, 2))
         self.assertEqual(canonical.call_args.args[0]["schema"],
-                         "serverware.policyAuthorityDeterministicIdentity/v1")
+                         "catchplate.policyAuthorityDeterministicIdentity/v1")
         result = {"component": "encoding only", "ok": True}
         length, count = len(wire(result)), nodes(result)
         for limits in ({"max_input_bytes": 2 * length - 1}, {"max_json_nodes": 2 * count - 1}):

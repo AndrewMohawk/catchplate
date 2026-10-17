@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-custody-execution-closure-set.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-custody-execution-closure-set.v1.schema.json",
   "description": "Unsigned static exact-eleven-guest commitments. Canonical ASCII no-LF original <=12MiB; each canonical manifest <=1MiB. Neither schema validation nor matching roots is independent assignment authority or live-owner admission. Existing legacy assignment and proof-scope fields keep their original meaning.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "members", "setRootSha256", "seccompSetRootSha256"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeCustodyExecutionClosureSet/v1"},
+    "apiVersion": {"const": "catchplate.nativeCustodyExecutionClosureSet/v1"},
     "setRootSha256": {"$ref": "#/$defs/digest"},
     "seccompSetRootSha256": {"$ref": "#/$defs/digest"},
     "members": {

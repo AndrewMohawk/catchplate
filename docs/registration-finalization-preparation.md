@@ -7,7 +7,7 @@ not a verified registration endpoint or production authentication claim.
 ## Preserve the original evidence
 
 The private
-[`prepare_registration_finalization`](../serverware/control_plane_registration_preparation.py)
+[`prepare_registration_finalization`](../catchplate/control_plane_registration_preparation.py)
 accepts the retained signer request's eight original byte strings and its two
 original response byte strings. It does **not** call the signer again. A new
 signature would create a different evidence identity from the one admitted into
@@ -53,7 +53,7 @@ the population or authorize a retry. Non-OIDC registration sends empty hints.
 
 ## Fixed private transport and durability
 
-[`authority_webauthn_registration_finalization_caller`](../serverware/authority_webauthn_registration_finalization_caller.py)
+[`authority_webauthn_registration_finalization_caller`](../catchplate/authority_webauthn_registration_finalization_caller.py)
 uses distinct `SWRFPQ01` / `SWRFPR01` framing over the existing configured
 control-plane → runtime relay → verifier peer topology. The request carries
 unchanged signer raw10 plus canonical sibling-list bytes; the response carries
@@ -80,7 +80,7 @@ The [new public grant action](public-registration-finalization-grant.md) does
 not upgrade this older raw7. After separate present-purpose permission and
 retained ownership/completion replay, it issues dedicated authorization before
 requesting one new plan. The distinct
-[`authority_webauthn_registration_finalization_execution_caller`](../serverware/authority_webauthn_registration_finalization_execution_caller.py)
+[`authority_webauthn_registration_finalization_execution_caller`](../catchplate/authority_webauthn_registration_finalization_execution_caller.py)
 uses `SWRFXQ01` / `SWRFXR01`: the same signer request8/response2 plus sibling
 hints produce custody raw7 **and** the complete before-vector. The configured
 verifier obtains that vector from one actual `CurrentRootReader`; the planning

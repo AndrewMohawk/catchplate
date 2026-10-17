@@ -179,7 +179,7 @@ impl Accepted {
         }
     }
     fn nonce(&self,id:&str)->Result<&str,String>{
-        let name=format!("__Host-serverware-native-oauth-{}",id.replace('-',""));
+        let name=format!("__Host-catchplate-native-oauth-{}",id.replace('-',""));
         self.cookies.get(&name).map(String::as_str).ok_or_else(||"original native browser cookie absent".to_owned())
     }
     pub fn respond(&mut self,content_type:&str,body:&[u8],cookie:Option<&str>,csp:&str)->Result<(),String>{

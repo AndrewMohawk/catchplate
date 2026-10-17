@@ -149,11 +149,11 @@ use rustls::{RootCertStore, ServerConfig, ServerConnection, StreamOwned};
 use serde::de::{self, DeserializeOwned, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Map, Value};
-use serverware_decision_gate::response_principal_compatibility_v1::{
+use catchplate_decision_gate::response_principal_compatibility_v1::{
     require_response_principal_compatible, ResponseProofPrincipalProfile,
 };
-use serverware_decision_gate::release_profile_v1::{ReleaseOperation, ReleaseProfile, StatementKind};
-use serverware_decision_gate::{native_response_profile_v1 as native_response_profile,
+use catchplate_decision_gate::release_profile_v1::{ReleaseOperation, ReleaseProfile, StatementKind};
+use catchplate_decision_gate::{native_response_profile_v1 as native_response_profile,
     native_lease_profile_v1 as native_lease_profile,
     native_approver_policy_v1,
     NATIVE_RESPONSE_PROOF_SIGN_OPERATION, NATIVE_STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
@@ -163,7 +163,7 @@ use serverware_decision_gate::{native_response_profile_v1 as native_response_pro
     NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V1, NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V2,
     NATIVE_RELEASE_AUTHORIZATION_COMPLETE_V1, NATIVE_RELEASE_AUTHORIZATION_COMPLETE_V2,
     NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V1, NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V2};
-use serverware_decision_gate::{
+use catchplate_decision_gate::{
     canonical_json_bytes as custody_canonical_json_bytes,
     decode_canonical_json as decode_canonical_custody_json, read_frame as read_custody_frame,
     response_observation_v2_release_consume_binding_sha256,
@@ -288,13 +288,13 @@ use serverware_decision_gate::{
     RESPONSE_OBSERVATION_V2_MAX_OPERATION_MS,
     response_observation_v2_lifecycle_state_sha256,
 };
-use serverware_decision_gate::enclave_runtime_identity_v1::{
+use catchplate_decision_gate::enclave_runtime_identity_v1::{
     CredentialRecipientV1, EnclaveRuntimeIdentityV1, PendingCredentialRecipientV1,
     QuotedCredentialRecipientV1, QuotedMutualTlsIngressV1, NativeIngressConnectionV1, TlsAuthorityV1,
 };
-use serverware_decision_gate::enclave_vsock_v1::{VsockListenerV1, VsockShutdownV1, VsockStreamV1};
-use serverware_decision_gate::enclave_bootstrap_v1::EnclaveBootstrapV1;
-use serverware_decision_gate::native_upstream_relays_v1::{
+use catchplate_decision_gate::enclave_vsock_v1::{VsockListenerV1, VsockShutdownV1, VsockStreamV1};
+use catchplate_decision_gate::enclave_bootstrap_v1::EnclaveBootstrapV1;
+use catchplate_decision_gate::native_upstream_relays_v1::{
     NativeUpstreamRelaysV1,
 };
 use sha2::{Digest, Sha256, Sha512};
@@ -374,7 +374,7 @@ const MAX_CONTROL_PLANE_SIGNED_RESPONSE_HEADER_NAME_BYTES: usize = 256;
 const MAX_CONTROL_PLANE_SIGNED_RESPONSE_HEADER_VALUE_B64_BYTES: usize =
     ((MAX_CONTROL_PLANE_SIGNED_RESPONSE_HEADER_BYTES + 2) / 3) * 4;
 const CONTROL_PLANE_AUTHORIZATION_RECEIPT_API_VERSION: &str =
-    "serverware.controlPlaneAuthorizationReceipt/v1";
+    "catchplate.controlPlaneAuthorizationReceipt/v1";
 const POLICY_TRUST_ROOT_ATTESTATION_PATH: &str = "/attestation";
 const CREDENTIAL_LEASE_PATH: &str = "/api/data-plane/credential-leases";
 const AUDIT_INGEST_PATH: &str = "/api/data-plane/audit";
@@ -386,19 +386,19 @@ const RELEASE_AUTHORIZATION_RESERVE_PATH: &str =
 const RELEASE_AUTHORIZATION_DISPATCH_PATH: &str = "/api/data-plane/release-authorizations/dispatch";
 const RELEASE_AUTHORIZATION_COMPLETE_PATH: &str =
     "/api/data-plane/release-authorizations/complete";
-const RELEASE_AUTHORIZATION_RESPONSE_V1: &str = "serverware.releaseAuthorization/v1";
-const RELEASE_AUTHORIZATION_RESPONSE_V2: &str = "serverware.releaseAuthorization/v2";
-const RELEASE_AUTHORIZATION_RESERVE_V1: &str = "serverware.releaseAuthorizationReserve/v1";
-const RELEASE_AUTHORIZATION_RESERVE_V2: &str = "serverware.releaseAuthorizationReserve/v2";
-const RELEASE_AUTHORIZATION_DISPATCH_V1: &str = "serverware.releaseAuthorizationDispatch/v1";
-const RELEASE_AUTHORIZATION_DISPATCH_V2: &str = "serverware.releaseAuthorizationDispatch/v2";
-const RELEASE_AUTHORIZATION_COMPLETE_V1: &str = "serverware.releaseAuthorizationComplete/v1";
-const RELEASE_AUTHORIZATION_COMPLETE_V2: &str = "serverware.releaseAuthorizationComplete/v2";
-const RELEASE_AUTHORIZATION_BINDING_V2: &str = "serverware.releaseAuthorizationBinding/v2";
+const RELEASE_AUTHORIZATION_RESPONSE_V1: &str = "catchplate.releaseAuthorization/v1";
+const RELEASE_AUTHORIZATION_RESPONSE_V2: &str = "catchplate.releaseAuthorization/v2";
+const RELEASE_AUTHORIZATION_RESERVE_V1: &str = "catchplate.releaseAuthorizationReserve/v1";
+const RELEASE_AUTHORIZATION_RESERVE_V2: &str = "catchplate.releaseAuthorizationReserve/v2";
+const RELEASE_AUTHORIZATION_DISPATCH_V1: &str = "catchplate.releaseAuthorizationDispatch/v1";
+const RELEASE_AUTHORIZATION_DISPATCH_V2: &str = "catchplate.releaseAuthorizationDispatch/v2";
+const RELEASE_AUTHORIZATION_COMPLETE_V1: &str = "catchplate.releaseAuthorizationComplete/v1";
+const RELEASE_AUTHORIZATION_COMPLETE_V2: &str = "catchplate.releaseAuthorizationComplete/v2";
+const RELEASE_AUTHORIZATION_BINDING_V2: &str = "catchplate.releaseAuthorizationBinding/v2";
 const ATTESTATION_EXECUTABLE_SHA256_MANIFEST_ENV: &str =
-    "SERVERWARE_ATTESTATION_EXECUTABLE_SHA256_MANIFEST";
+    "CATCHPLATE_ATTESTATION_EXECUTABLE_SHA256_MANIFEST";
 const CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND_ENV: &str =
-    "SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND";
+    "CATCHPLATE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND";
 const MAX_CONTROL_PLANE_ATTESTATION_VERIFIER_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RELEASE_AUTHORIZATION_CANONICAL_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_REQUEST_HEADER_BYTES: usize = 64 * 1024;
@@ -442,53 +442,53 @@ const DEFAULT_REQUEST_HEAD_DEADLINE_MS: u64 = 10_000;
 const DEFAULT_REQUEST_BODY_DEADLINE_MS: u64 = 120_000;
 const DEFAULT_RESPONSE_WRITE_DEADLINE_MS: u64 = 120_000;
 const SOCKET_IO_SLICE: Duration = Duration::from_secs(1);
-const RESPONSE_PROOF_EXPORTER_LABEL: &[u8] = b"EXPORTER-Serverware-Proxy-Response-v1";
-const STREAM_RESPONSE_PROOF_EXPORTER_LABEL: &[u8] = b"EXPORTER-Serverware-Proxy-Stream-v1";
-const RESPONSE_OBSERVATION_EXPORTER_LABEL: &[u8] = b"EXPORTER-Serverware-Response-Observation-v1";
-const SERVERWARE_INTERNAL_HEADER_PREFIX: &str = "x-serverware-";
-const RESPONSE_PROOF_NONCE_HEADER: &str = "x-serverware-proof-nonce";
-const STREAM_RESPONSE_PROOF_NONCE_HEADER: &str = "x-serverware-stream-proof-nonce";
-const RESPONSE_OBSERVATION_NONCE_HEADER: &str = "x-serverware-observation-nonce";
-const STREAM_RESPONSE_PROOF_B64_TRAILER: &str = "X-Serverware-Stream-Proof-B64";
-const STREAM_RESPONSE_PROOF_SHA256_TRAILER: &str = "X-Serverware-Stream-Proof-SHA256";
+const RESPONSE_PROOF_EXPORTER_LABEL: &[u8] = b"EXPORTER-Catchplate-Proxy-Response-v1";
+const STREAM_RESPONSE_PROOF_EXPORTER_LABEL: &[u8] = b"EXPORTER-Catchplate-Proxy-Stream-v1";
+const RESPONSE_OBSERVATION_EXPORTER_LABEL: &[u8] = b"EXPORTER-Catchplate-Response-Observation-v1";
+const CATCHPLATE_INTERNAL_HEADER_PREFIX: &str = "x-catchplate-";
+const RESPONSE_PROOF_NONCE_HEADER: &str = "x-catchplate-proof-nonce";
+const STREAM_RESPONSE_PROOF_NONCE_HEADER: &str = "x-catchplate-stream-proof-nonce";
+const RESPONSE_OBSERVATION_NONCE_HEADER: &str = "x-catchplate-observation-nonce";
+const STREAM_RESPONSE_PROOF_B64_TRAILER: &str = "X-Catchplate-Stream-Proof-B64";
+const STREAM_RESPONSE_PROOF_SHA256_TRAILER: &str = "X-Catchplate-Stream-Proof-SHA256";
 const STREAM_RESPONSE_PROOF_TRAILER_DECLARATION: &str =
-    "X-Serverware-Stream-Proof-B64, X-Serverware-Stream-Proof-SHA256";
-const RESPONSE_OBSERVATION_PROOF_B64_TRAILER: &str = "X-Serverware-Observation-Proof-B64";
-const RESPONSE_OBSERVATION_PROOF_SHA256_TRAILER: &str = "X-Serverware-Observation-Proof-SHA256";
+    "X-Catchplate-Stream-Proof-B64, X-Catchplate-Stream-Proof-SHA256";
+const RESPONSE_OBSERVATION_PROOF_B64_TRAILER: &str = "X-Catchplate-Observation-Proof-B64";
+const RESPONSE_OBSERVATION_PROOF_SHA256_TRAILER: &str = "X-Catchplate-Observation-Proof-SHA256";
 const RESPONSE_OBSERVATION_PROOF_TRAILER_DECLARATION: &str =
-    "X-Serverware-Observation-Proof-B64, X-Serverware-Observation-Proof-SHA256";
+    "X-Catchplate-Observation-Proof-B64, X-Catchplate-Observation-Proof-SHA256";
 const MAX_STREAM_RESPONSE_RUNTIME_PROOF_BYTES: usize = 96 * 1024;
 const MAX_RESPONSE_OBSERVATION_RUNTIME_PROOF_BYTES: usize = 128 * 1024;
 const MAX_LOCAL_RESPONSE_OBSERVATION_NONCES: usize = 65_536;
-const RESPONSE_PROOF_CUSTODY_SOCKET_ENV: &str = "SERVERWARE_RESPONSE_PROOF_CUSTODY_SOCKET";
-const RESPONSE_PROOF_RELEASE_PROFILE_ENV: &str = "SERVERWARE_RESPONSE_PROOF_RELEASE_PROFILE";
+const RESPONSE_PROOF_CUSTODY_SOCKET_ENV: &str = "CATCHPLATE_RESPONSE_PROOF_CUSTODY_SOCKET";
+const RESPONSE_PROOF_RELEASE_PROFILE_ENV: &str = "CATCHPLATE_RESPONSE_PROOF_RELEASE_PROFILE";
 const RESPONSE_PROOF_CUSTODY_EXPECTED_UID_ENV: &str =
-    "SERVERWARE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID";
+    "CATCHPLATE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID";
 const RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS_ENV: &str =
-    "SERVERWARE_RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS";
+    "CATCHPLATE_RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS";
 const DEFAULT_RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS: u64 = 3_000;
 const MAX_RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS: u64 = 30_000;
 const RESPONSE_PROOF_CUSTODY_HEALTH_PROBE_INTERVAL: Duration = Duration::from_secs(1);
 const RESPONSE_PROOF_CUSTODY_HEALTH_MAX_STALENESS: Duration = Duration::from_secs(6);
 const RESPONSE_OBSERVATION_V2_SOCKET_ENV: &str =
-    "SERVERWARE_RESPONSE_OBSERVATION_V2_SOCKET";
+    "CATCHPLATE_RESPONSE_OBSERVATION_V2_SOCKET";
 const RESPONSE_OBSERVATION_V2_EXPECTED_UID_ENV: &str =
-    "SERVERWARE_RESPONSE_OBSERVATION_V2_EXPECTED_UID";
+    "CATCHPLATE_RESPONSE_OBSERVATION_V2_EXPECTED_UID";
 const RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS_ENV: &str =
-    "SERVERWARE_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS";
+    "CATCHPLATE_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS";
 const RESPONSE_OBSERVATION_V2_ATTESTATION_MODE_ENV: &str =
-    "SERVERWARE_RESPONSE_OBSERVATION_V2_ATTESTATION_MODE";
+    "CATCHPLATE_RESPONSE_OBSERVATION_V2_ATTESTATION_MODE";
 const RESPONSE_OBSERVATION_V2_SIGNER_KEY_SHA256_ENV: &str =
-    "SERVERWARE_RESPONSE_OBSERVATION_V2_SIGNER_KEY_SHA256";
+    "CATCHPLATE_RESPONSE_OBSERVATION_V2_SIGNER_KEY_SHA256";
 const RESPONSE_OBSERVATION_V2_ROLE_IDENTITY_ROOT_SHA256_ENV: &str =
-    "SERVERWARE_RESPONSE_OBSERVATION_V2_ROLE_IDENTITY_ROOT_SHA256";
+    "CATCHPLATE_RESPONSE_OBSERVATION_V2_ROLE_IDENTITY_ROOT_SHA256";
 const RESPONSE_OBSERVATION_V2_PROOF_PINS_ROOT_SHA256_ENV: &str =
-    "SERVERWARE_RESPONSE_OBSERVATION_V2_PROOF_PINS_ROOT_SHA256";
+    "CATCHPLATE_RESPONSE_OBSERVATION_V2_PROOF_PINS_ROOT_SHA256";
 const RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND_ENV: &str =
-    "SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND";
+    "CATCHPLATE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND";
 const DEFAULT_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS: u64 = 5_000;
 const MAX_RESPONSE_OBSERVATION_V2_STARTUP_TIMEOUT_MS: u64 = 30_000;
-const ENROLLMENT_SESSION_HEADER: &str = "x-serverware-enrollment-session";
+const ENROLLMENT_SESSION_HEADER: &str = "x-catchplate-enrollment-session";
 const SUPPORTED_ADAPTER_TYPES: [&str; 12] = ["generic.rest", "gmail.v1", "gmail.read.v1", "x.v2", "npm.registry", "npm.metadata.v1", "npm.publish.v1", "npm.install.v1", "x.app_read.v1", "x.post.v1", "alchemy.rpc_read.v1", "aws.ecr.publish.v1"];
 const NPM_PUBLIC_REGISTRY_HOST: &str = "registry.npmjs.org";
 const NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT: &str = "npm-public-registry-receipt-v1";
@@ -970,20 +970,20 @@ struct Credential {
 impl Credential {
     fn kind(&self) -> &str {
         self.injection
-            .get("__serverwareCredentialType")
+            .get("__catchplateCredentialType")
             .and_then(Value::as_str)
             .unwrap_or("static")
     }
 
     fn oauth_client_id(&self) -> Option<&str> {
         self.injection
-            .get("__serverwareOAuthClientId")
+            .get("__catchplateOAuthClientId")
             .and_then(Value::as_str)
     }
 
     fn scopes(&self) -> impl Iterator<Item = &str> {
         self.injection
-            .get("__serverwareGrantedScopes")
+            .get("__catchplateGrantedScopes")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
@@ -1044,14 +1044,14 @@ fn credential_injection_with_signed_identity(
         .cloned()
         .ok_or("credential injection must be an object")?;
     injection.insert(
-        "__serverwareCredentialType".to_string(),
+        "__catchplateCredentialType".to_string(),
         Value::String(credential_type.to_string()),
     );
     if let Some(client_id) = credential.get("oauthClientId") {
-        injection.insert("__serverwareOAuthClientId".to_string(), client_id.clone());
+        injection.insert("__catchplateOAuthClientId".to_string(), client_id.clone());
     }
     injection.insert(
-        "__serverwareGrantedScopes".to_string(),
+        "__catchplateGrantedScopes".to_string(),
         credential
             .get("scopes")
             .cloned()
@@ -2717,9 +2717,9 @@ impl MitmAuthority {
 }
 
 struct GateState {
-    native_serving_privileges: Option<Arc<serverware_decision_gate::native_serving_privileges::Owner>>,
-    native_secret_broker: Option<Mutex<serverware_decision_gate::native_secret_broker_v1::Owner>>,
-    native_jit_review: Option<Mutex<serverware_decision_gate::native_jit_review_v1::Owner>>,
+    native_serving_privileges: Option<Arc<catchplate_decision_gate::native_serving_privileges::Owner>>,
+    native_secret_broker: Option<Mutex<catchplate_decision_gate::native_secret_broker_v1::Owner>>,
+    native_jit_review: Option<Mutex<catchplate_decision_gate::native_jit_review_v1::Owner>>,
     native_jit_review_open: Option<Mutex<native_jit_review_open::Owner>>,
     measured_refresh: Option<Mutex<native_oauth_refresh::Owner>>,
     measured_cleanup: Option<Mutex<native_oauth_cleanup::Owner>>,
@@ -3988,7 +3988,7 @@ fn transition_gmail_metadata_child_authorization_with_result(
         snapshot,
         effect_kind,
         &json!({
-            "domain":"serverware.policyShadowGmailChildLedgerTransitionIntent/v1",
+            "domain":"catchplate.policyShadowGmailChildLedgerTransitionIntent/v1",
             "authorizationSha256":authorization.authorization_digest.as_str(),
             "childRequestSha256":
                 authorization.material.child_request_digest.as_str(),
@@ -3997,7 +3997,7 @@ fn transition_gmail_metadata_child_authorization_with_result(
             "terminalResultSha256":terminal_result_sha256,
         }),
         &json!({
-            "domain":"serverware.policyShadowGmailChildLedgerTransitionPreparedState/v1",
+            "domain":"catchplate.policyShadowGmailChildLedgerTransitionPreparedState/v1",
             "expectedPhase":gmail_metadata_child_phase_label(expected),
         }),
     )?;
@@ -4018,7 +4018,7 @@ fn transition_gmail_metadata_child_authorization_with_result(
         permit,
         effect_state,
         &json!({
-            "domain":"serverware.policyShadowGmailChildLedgerTransitionResult/v1",
+            "domain":"catchplate.policyShadowGmailChildLedgerTransitionResult/v1",
             "expectedPhase":gmail_metadata_child_phase_label(expected),
             "nextPhase":gmail_metadata_child_phase_label(next),
             "transitioned":transition_result.is_ok(),
@@ -5224,7 +5224,7 @@ impl<'a> CredentialLeaseRequestCleanup<'a> {
                 snapshot,
                 ActiveMutableEffectKind::Cleanup,
                 &json!({
-                    "domain":"serverware.policyShadowCredentialCleanupIntent/v1",
+                    "domain":"catchplate.policyShadowCredentialCleanupIntent/v1",
                     "principalIdSha256":
                         sha256_prefixed(cache_key.scope.principal_id.as_bytes()),
                     "routeIdSha256":
@@ -5235,7 +5235,7 @@ impl<'a> CredentialLeaseRequestCleanup<'a> {
                         cache_key.request_authority_sha256.as_deref(),
                 }),
                 &json!({
-                    "domain":"serverware.policyShadowCredentialCleanupPreparedState/v1",
+                    "domain":"catchplate.policyShadowCredentialCleanupPreparedState/v1",
                     "leaseKeySha256":digest_json_ensure_ascii(&json!({
                         "scope":credential_lease_scope_commitment(&cache_key.scope),
                         "releaseAuthorization":cache_key.release_authorization,
@@ -5281,7 +5281,7 @@ impl<'a> CredentialLeaseRequestCleanup<'a> {
                 cleanup_permit,
                 ActiveEffectCommitState::Committed,
                 &json!({
-                    "domain":"serverware.policyShadowCredentialCleanupResult/v1",
+                    "domain":"catchplate.policyShadowCredentialCleanupResult/v1",
                     "removedLeaseSha256":removed_sha256,
                     "secretMaterialWiped":true,
                 }),
@@ -5643,7 +5643,7 @@ struct CredentialLeaseBrokerEntry {
     credential_version: u64,
     metadata_sha256: String,
     metadata: BTreeMap<String, Value>,
-    encrypted_credential: serverware_decision_gate::native_secret_broker_v1::EncryptedCredential,
+    encrypted_credential: catchplate_decision_gate::native_secret_broker_v1::EncryptedCredential,
     storage_metadata: String,
 }
 
@@ -5948,13 +5948,13 @@ fn parse_release_authorization_response_contract(
     let durable = object.get("durablePolicy");
     match expected_version {
         RELEASE_AUTHORIZATION_RESPONSE_V1 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V1
-            | "serverware.policyAwareReleaseAuthorizationResponse/v1" if durable.is_some() => {
+            | "catchplate.policyAwareReleaseAuthorizationResponse/v1" if durable.is_some() => {
             return Err(
                 "release authorization v1 response must omit durablePolicy".to_string(),
             )
         }
         RELEASE_AUTHORIZATION_RESPONSE_V2 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V2
-            | "serverware.policyAwareReleaseAuthorizationResponse/v2"
+            | "catchplate.policyAwareReleaseAuthorizationResponse/v2"
             if durable.is_none_or(|value| !value.is_object()) =>
         {
             return Err(
@@ -5963,8 +5963,8 @@ fn parse_release_authorization_response_contract(
         }
         RELEASE_AUTHORIZATION_RESPONSE_V1 | RELEASE_AUTHORIZATION_RESPONSE_V2
             | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V1 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V2
-            | "serverware.policyAwareReleaseAuthorizationResponse/v1"
-            | "serverware.policyAwareReleaseAuthorizationResponse/v2" => {}
+            | "catchplate.policyAwareReleaseAuthorizationResponse/v1"
+            | "catchplate.policyAwareReleaseAuthorizationResponse/v2" => {}
         _ => {
             return Err(
                 "release authorization response version is unsupported".to_string(),
@@ -5974,9 +5974,9 @@ fn parse_release_authorization_response_contract(
     if exact_dispatch_shape {
         let expected_fields = match expected_version {
             RELEASE_AUTHORIZATION_RESPONSE_V1 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V1
-                | "serverware.policyAwareReleaseAuthorizationResponse/v1" => &DISPATCH_V1_FIELDS[..],
+                | "catchplate.policyAwareReleaseAuthorizationResponse/v1" => &DISPATCH_V1_FIELDS[..],
             RELEASE_AUTHORIZATION_RESPONSE_V2 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V2
-                | "serverware.policyAwareReleaseAuthorizationResponse/v2" => &DISPATCH_V2_FIELDS[..],
+                | "catchplate.policyAwareReleaseAuthorizationResponse/v2" => &DISPATCH_V2_FIELDS[..],
             _ => unreachable!("supported release response version checked above"),
         };
         if !object_has_exact_fields(object, expected_fields) {
@@ -5985,7 +5985,7 @@ fn parse_release_authorization_response_contract(
             );
         }
         if matches!(expected_version, RELEASE_AUTHORIZATION_RESPONSE_V2 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V2
-            | "serverware.policyAwareReleaseAuthorizationResponse/v2")
+            | "catchplate.policyAwareReleaseAuthorizationResponse/v2")
             && !durable
                 .and_then(Value::as_object)
                 .is_some_and(|durable| {
@@ -6015,7 +6015,7 @@ fn parse_release_authorization_response_contract(
                 .ok_or("release authorization dispatch quota is not an object")?;
             let expected_quota_fields = match quota.get("windowKind") {
                 None if matches!(expected_version, RELEASE_AUTHORIZATION_RESPONSE_V1 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V1
-                    | "serverware.policyAwareReleaseAuthorizationResponse/v1") => {
+                    | "catchplate.policyAwareReleaseAuthorizationResponse/v1") => {
                     &LEGACY_FIXED_QUOTA_FIELDS[..]
                 }
                 Some(Value::String(kind)) if kind == "fixed" => {
@@ -6132,9 +6132,9 @@ fn parse_release_authorization_dispatch_request(
         request.durable_policy.as_ref(),
     ) {
         (RELEASE_AUTHORIZATION_DISPATCH_V1 | NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V1
-            | "serverware.policyAwareReleaseAuthorizationDispatch/v1", None) => {}
+            | "catchplate.policyAwareReleaseAuthorizationDispatch/v1", None) => {}
         (RELEASE_AUTHORIZATION_DISPATCH_V2 | NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V2
-            | "serverware.policyAwareReleaseAuthorizationDispatch/v2", Some(_)) => {}
+            | "catchplate.policyAwareReleaseAuthorizationDispatch/v2", Some(_)) => {}
         _ => {
             return Err(
                 "release authorization dispatch request version and durable policy are inconsistent"
@@ -7372,7 +7372,7 @@ fn management_api_authorized(state: &GateState, headers: &BTreeMap<String, Strin
         return false;
     };
     lower_headers(headers)
-        .get("x-serverware-data-plane-token")
+        .get("x-catchplate-data-plane-token")
         .is_some_and(|provided| constant_time_eq(provided, expected))
 }
 
@@ -7841,7 +7841,7 @@ impl Principal {
     fn managed_connect_continuity_digest(&self) -> Option<String> {
         let authorization = self.proxy_authorization.as_ref()?.managed_continuity_value()?;
         Some(digest_json_ensure_ascii(&json!({
-            "schema":"serverware.managedConnectContinuity/v1", "principalId":self.id,
+            "schema":"catchplate.managedConnectContinuity/v1", "principalId":self.id,
             "sourceCidrs":canonical_cidr_strings(&self.source_cidrs),
             "mtls":self.mtls.as_ref().map(MtlsIdentityPolicy::identity_policy_value),
             "requiredHeaders":self.required_headers, "proxyAuthorization":authorization,
@@ -7951,7 +7951,7 @@ impl ConnectAuthentication {
             })
             .unwrap_or(Value::Null);
         let mut value = json!({
-            "apiVersion":"serverware.connectAuthenticationBinding/v1",
+            "apiVersion":"catchplate.connectAuthenticationBinding/v1",
             "principalId":self.principal_id,
             "clientIp":self.client_ip,
             "requiredHeaderDigests":
@@ -10336,9 +10336,9 @@ fn credential_injection_target(injection: &Value) -> Result<CredentialInjectionT
             {
                 return Err("credential injection header is invalid".to_string());
             }
-            if is_serverware_internal_header(name) {
+            if is_catchplate_internal_header(name) {
                 return Err(format!(
-                    "credential injection header {name} is reserved for Serverware internals"
+                    "credential injection header {name} is reserved for Catchplate internals"
                 ));
             }
         }
@@ -10393,7 +10393,7 @@ fn validate_managed_oauth_injection(
 
 fn is_non_forwardable_agent_header(name: &str) -> bool {
     is_standard_hop_by_hop_header(name)
-        || is_serverware_internal_header(name)
+        || is_catchplate_internal_header(name)
         || matches!(
             name,
             "authorization" | "cookie" | "content-encoding" | "content-length" | "host"
@@ -10412,7 +10412,7 @@ fn is_reserved_discard_header_candidate(name: &str) -> bool {
         return false;
     }
     is_standard_hop_by_hop_header(name)
-        || is_serverware_internal_header(name)
+        || is_catchplate_internal_header(name)
         || name.starts_with("proxy-")
         || name.starts_with("sec-")
         || name.starts_with("x-forwarded-")
@@ -11023,7 +11023,7 @@ fn validate_provider_request_profile_config(
 
 fn is_provider_request_profile_exempt_header(name: &str) -> bool {
     is_standard_hop_by_hop_header(name)
-        || is_serverware_internal_header(name)
+        || is_catchplate_internal_header(name)
         || matches!(name, "content-encoding" | "content-length" | "host")
 }
 
@@ -11721,7 +11721,7 @@ fn validate_route_credential_binding(
     if adapter_type == aws_ecr_publication::ADAPTER
         && (credential.kind() != "static" || credential.provider != "operator-demo"
             || credential.injection["type"] != "awsEcrSigningV1"
-            || credential.injection.as_object().is_none_or(|v|v.keys().any(|k|k!="type" && !k.starts_with("__serverware")))) {
+            || credential.injection.as_object().is_none_or(|v|v.keys().any(|k|k!="type" && !k.starts_with("__catchplate")))) {
         return Err("ECR requires dedicated static AWS signing with no generic injection target".into());
     }
     if adapter_type == x_post::ADAPTER { x_post::validate_credential(credential)?; }
@@ -12787,7 +12787,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 if matches!(
                     normalized.as_str(),
                     "authorization" | "cookie" | "proxy-authorization"
-                ) || is_serverware_internal_header(&normalized)
+                ) || is_catchplate_internal_header(&normalized)
                 {
                     return Err(format!(
                         "route {route_id} generic.rest allows credential or internal header {normalized} supplied by the agent"
@@ -14818,40 +14818,40 @@ static POLICY_BUNDLE_V2_SCHEMA_VALIDATOR: OnceLock<Result<jsonschema::Validator,
 
 fn embedded_adapter_schema(reference: &str) -> Option<(&'static str, &'static str)> {
     match reference {
-        "https://serverware.local/schemas/adapters/generic.rest.schema.json" => {
+        "https://catchplate.local/schemas/adapters/generic.rest.schema.json" => {
             Some(("adapter_generic_rest", include_str!("../../../schemas/adapters/generic.rest.schema.json")))
         }
-        "https://serverware.local/schemas/adapters/gmail.v1.schema.json" => {
+        "https://catchplate.local/schemas/adapters/gmail.v1.schema.json" => {
             Some(("adapter_gmail_v1", include_str!("../../../schemas/adapters/gmail.v1.schema.json")))
         }
-        "https://serverware.local/schemas/adapters/gmail.read.v1.schema.json" => {
+        "https://catchplate.local/schemas/adapters/gmail.read.v1.schema.json" => {
             Some(("adapter_gmail_read_v1", include_str!("../../../schemas/adapters/gmail.read.v1.schema.json")))
         }
-        "https://serverware.local/schemas/adapters/npm.registry.schema.json" => {
+        "https://catchplate.local/schemas/adapters/npm.registry.schema.json" => {
             Some(("adapter_npm_registry", include_str!("../../../schemas/adapters/npm.registry.schema.json")))
         }
-        "https://serverware.local/schemas/adapters/npm.metadata.v1.schema.json" => {
+        "https://catchplate.local/schemas/adapters/npm.metadata.v1.schema.json" => {
             Some(("adapter_npm_metadata_v1", include_str!("../../../schemas/adapters/npm.metadata.v1.schema.json")))
         }
-        "https://serverware.local/schemas/adapters/x.app_read.v1.schema.json" => {
+        "https://catchplate.local/schemas/adapters/x.app_read.v1.schema.json" => {
             Some(("adapter_x_app_read_v1", include_str!("../../../schemas/adapters/x.app_read.v1.schema.json")))
         }
-        "https://serverware.local/schemas/adapters/x.post.v1.schema.json" => {
+        "https://catchplate.local/schemas/adapters/x.post.v1.schema.json" => {
             Some(("adapter_x_post_v1", include_str!("../../../schemas/adapters/x.post.v1.schema.json")))
         }
-        "https://serverware.local/schemas/adapters/alchemy.rpc_read.v1.schema.json" => {
+        "https://catchplate.local/schemas/adapters/alchemy.rpc_read.v1.schema.json" => {
             Some(("adapter_alchemy_rpc_read_v1", include_str!("../../../schemas/adapters/alchemy.rpc_read.v1.schema.json")))
         }
-        "https://serverware.local/schemas/adapters/aws.ecr.publish.v1.schema.json" => {
+        "https://catchplate.local/schemas/adapters/aws.ecr.publish.v1.schema.json" => {
             Some(("adapter_aws_ecr_publish_v1", include_str!("../../../schemas/adapters/aws.ecr.publish.v1.schema.json")))
         }
-        "https://serverware.local/schemas/adapters/npm.publish.v1.schema.json" => {
+        "https://catchplate.local/schemas/adapters/npm.publish.v1.schema.json" => {
             Some(("adapter_npm_publish_v1", include_str!("../../../schemas/adapters/npm.publish.v1.schema.json")))
         }
-        "https://serverware.local/schemas/adapters/npm.install.v1.schema.json" => {
+        "https://catchplate.local/schemas/adapters/npm.install.v1.schema.json" => {
             Some(("adapter_npm_install_v1", include_str!("../../../schemas/adapters/npm.install.v1.schema.json")))
         }
-        "https://serverware.local/schemas/adapters/x.v2.schema.json" => {
+        "https://catchplate.local/schemas/adapters/x.v2.schema.json" => {
             Some(("adapter_x_v2", include_str!("../../../schemas/adapters/x.v2.schema.json")))
         }
         _ => None,
@@ -14879,7 +14879,7 @@ fn rewrite_embedded_schema_refs(
                         None => raw.to_string(),
                     }
                 } else if let Some(name) = raw.strip_prefix(
-                    "https://serverware.local/schemas/policy-bundle.v1.schema.json#/$defs/",
+                    "https://catchplate.local/schemas/policy-bundle.v1.schema.json#/$defs/",
                 ) {
                     format!("#/$defs/{name}")
                 } else if let Some((prefix, _)) = embedded_adapter_schema(raw) {
@@ -14910,18 +14910,18 @@ fn closed_embedded_policy_schema() -> Result<Value, String> {
         .and_then(Value::as_object_mut)
         .ok_or("embedded policy bundle schema has no $defs registry")?;
     let adapters = [
-        "https://serverware.local/schemas/adapters/generic.rest.schema.json",
-        "https://serverware.local/schemas/adapters/gmail.v1.schema.json",
-        "https://serverware.local/schemas/adapters/gmail.read.v1.schema.json",
-        "https://serverware.local/schemas/adapters/npm.registry.schema.json",
-        "https://serverware.local/schemas/adapters/npm.metadata.v1.schema.json",
-        "https://serverware.local/schemas/adapters/x.app_read.v1.schema.json",
-        "https://serverware.local/schemas/adapters/x.post.v1.schema.json",
-        "https://serverware.local/schemas/adapters/alchemy.rpc_read.v1.schema.json",
-        "https://serverware.local/schemas/adapters/aws.ecr.publish.v1.schema.json",
-        "https://serverware.local/schemas/adapters/npm.publish.v1.schema.json",
-        "https://serverware.local/schemas/adapters/npm.install.v1.schema.json",
-        "https://serverware.local/schemas/adapters/x.v2.schema.json",
+        "https://catchplate.local/schemas/adapters/generic.rest.schema.json",
+        "https://catchplate.local/schemas/adapters/gmail.v1.schema.json",
+        "https://catchplate.local/schemas/adapters/gmail.read.v1.schema.json",
+        "https://catchplate.local/schemas/adapters/npm.registry.schema.json",
+        "https://catchplate.local/schemas/adapters/npm.metadata.v1.schema.json",
+        "https://catchplate.local/schemas/adapters/x.app_read.v1.schema.json",
+        "https://catchplate.local/schemas/adapters/x.post.v1.schema.json",
+        "https://catchplate.local/schemas/adapters/alchemy.rpc_read.v1.schema.json",
+        "https://catchplate.local/schemas/adapters/aws.ecr.publish.v1.schema.json",
+        "https://catchplate.local/schemas/adapters/npm.publish.v1.schema.json",
+        "https://catchplate.local/schemas/adapters/npm.install.v1.schema.json",
+        "https://catchplate.local/schemas/adapters/x.v2.schema.json",
     ];
     for adapter_id in adapters {
         let (prefix, source) =
@@ -15457,7 +15457,7 @@ fn compile_signed_snapshot(
     running_binary_digest: &str,
     require_attested_policy_hash: bool,
 ) -> Result<Snapshot, String> {
-    let expected = env::var("SERVERWARE_EXPECTED_POLICY_SIGNING_KEY_ID")
+    let expected = env::var("CATCHPLATE_EXPECTED_POLICY_SIGNING_KEY_ID")
         .ok().filter(|value| !value.trim().is_empty());
     compile_signed_snapshot_with_expected_key(raw, trust_root, running_binary_digest,
         require_attested_policy_hash, expected.as_deref())
@@ -15487,7 +15487,7 @@ fn compile_signed_snapshot_with_expected_key(
     require_attested_policy_hash: bool,
     expected_signing_key_id: Option<&str>,
 ) -> Result<Snapshot, String> {
-    if !matches!(raw.get("apiVersion").and_then(Value::as_str), Some("serverware.policy/v1" | "serverware.policy/v2")) {
+    if !matches!(raw.get("apiVersion").and_then(Value::as_str), Some("catchplate.policy/v1" | "catchplate.policy/v2")) {
         return Err("apiVersion must select a supported signed policy profile".to_string());
     }
     if raw.get("kind").and_then(Value::as_str) != Some("PolicyBundle") {
@@ -15852,7 +15852,7 @@ fn compile_signed_snapshot_with_expected_key(
 
 fn policy_high_water_for(snapshot: &Snapshot) -> PolicyHighWater {
     PolicyHighWater {
-        api_version: "serverware.policyHighWater/v1".to_string(),
+        api_version: "catchplate.policyHighWater/v1".to_string(),
         policy_id: snapshot.policy_id.clone(),
         sequence: snapshot.policy_sequence,
         rollback_epoch: snapshot.rollback_epoch,
@@ -15864,7 +15864,7 @@ fn validate_policy_high_water(
     candidate: &Snapshot,
     high_water: &PolicyHighWater,
 ) -> Result<(), String> {
-    if high_water.api_version != "serverware.policyHighWater/v1" {
+    if high_water.api_version != "catchplate.policyHighWater/v1" {
         return Err("policy high-water record has an unsupported api_version".to_string());
     }
     if candidate.policy_id != high_water.policy_id {
@@ -16239,7 +16239,7 @@ fn refresh_policy_snapshot_guarded(
             if let Err(error) = require_operator_token_runtime(state, &snapshot) {
                 state.policy_reload_failed.fetch_add(1, Ordering::Relaxed);
                 enqueue_audit(state, "data_plane.policy.reload_failed", json!({
-                    "component":"serverware-decision-gate-rs", "error":error,
+                    "component":"catchplate-decision-gate-rs", "error":error,
                     "candidate_policy_hash":snapshot.hash,
                 }));
                 return Err(error.to_owned());
@@ -16251,7 +16251,7 @@ fn refresh_policy_snapshot_guarded(
                 if let Err(err) = trust.check_snapshot(&snapshot) {
                     state.policy_reload_failed.fetch_add(1, Ordering::Relaxed);
                     enqueue_audit(state, "data_plane.policy.reload_failed", json!({
-                        "component":"serverware-decision-gate-rs", "error":err.clone(),
+                        "component":"catchplate-decision-gate-rs", "error":err.clone(),
                         "candidate_policy_id":snapshot.policy_id,
                         "candidate_sequence":snapshot.policy_sequence,
                         "candidate_rollback_epoch":snapshot.rollback_epoch,
@@ -16270,7 +16270,7 @@ fn refresh_policy_snapshot_guarded(
                     state,
                     "data_plane.policy.reload_failed",
                     json!({
-                        "component":"serverware-decision-gate-rs",
+                        "component":"catchplate-decision-gate-rs",
                         "error":err.clone(),
                         "candidate_policy_id":snapshot.policy_id,
                         "candidate_sequence":snapshot.policy_sequence,
@@ -16289,7 +16289,7 @@ fn refresh_policy_snapshot_guarded(
                     state,
                     "data_plane.policy.reload_failed",
                     json!({
-                        "component":"serverware-decision-gate-rs",
+                        "component":"catchplate-decision-gate-rs",
                         "error":err.clone(),
                         "candidate_policy_id":snapshot.policy_id,
                         "candidate_sequence":snapshot.policy_sequence,
@@ -16314,7 +16314,7 @@ fn refresh_policy_snapshot_guarded(
                 .map_err(|error| {
                     state.policy_reload_failed.fetch_add(1, Ordering::Relaxed);
                     enqueue_audit(state, "data_plane.policy.reload_failed", json!({
-                        "component":"serverware-decision-gate-rs", "error":"operator_demo_policy_refused",
+                        "component":"catchplate-decision-gate-rs", "error":"operator_demo_policy_refused",
                         "candidate_policy_hash":snapshot.hash,
                     }));
                     error
@@ -16335,7 +16335,7 @@ fn refresh_policy_snapshot_guarded(
                     state,
                     "data_plane.policy.reload_failed",
                     json!({
-                        "component":"serverware-decision-gate-rs",
+                        "component":"catchplate-decision-gate-rs",
                         "error":err.clone(),
                         "candidate_policy_id":snapshot.policy_id,
                         "candidate_sequence":snapshot.policy_sequence,
@@ -16373,7 +16373,7 @@ fn refresh_policy_snapshot_guarded(
                     state,
                     "data_plane.policy.reload_failed",
                     json!({
-                        "component":"serverware-decision-gate-rs",
+                        "component":"catchplate-decision-gate-rs",
                         "error":err.clone(),
                         "candidate_policy_id":snapshot.policy_id,
                         "candidate_sequence":snapshot.policy_sequence,
@@ -16475,7 +16475,7 @@ fn refresh_policy_snapshot_guarded(
                 state,
                 "data_plane.policy.reloaded",
                 json!({
-                    "component":"serverware-decision-gate-rs",
+                    "component":"catchplate-decision-gate-rs",
                     "previous_policy_hash":previous.hash.clone(),
                     "policy_hash":next.hash.clone(),
                     "policy_id":next.policy_id.clone(),
@@ -16499,7 +16499,7 @@ fn refresh_policy_snapshot_guarded(
                 state,
                 "data_plane.policy.reload_failed",
                 json!({
-                    "component":"serverware-decision-gate-rs",
+                    "component":"catchplate-decision-gate-rs",
                     "active_policy_hash":current_snapshot(state).hash.clone(),
                     "error":"policy_reload_failed",
                     "error_sha256":sha256_prefixed(err.as_bytes()),
@@ -16533,7 +16533,7 @@ fn validate_enrollment_session_id(value: &str) -> Result<(), String> {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
         return Err(
-            "X-Serverware-Enrollment-Session must contain 24-128 base64url characters".to_string(),
+            "X-Catchplate-Enrollment-Session must contain 24-128 base64url characters".to_string(),
         );
     }
     Ok(())
@@ -16548,7 +16548,7 @@ fn enrollment_session_id_from_headers(
             continue;
         }
         if enrollment_session_id.is_some() {
-            return Err("X-Serverware-Enrollment-Session is duplicated or ambiguous".to_string());
+            return Err("X-Catchplate-Enrollment-Session is duplicated or ambiguous".to_string());
         }
         validate_enrollment_session_id(value)?;
         enrollment_session_id = Some(value.clone());
@@ -16561,7 +16561,7 @@ fn inherit_connect_enrollment_session(
     enrollment_session_id: Option<&str>,
 ) -> Result<(), String> {
     if enrollment_session_id_from_headers(headers)?.is_some() {
-        return Err("tunneled request must not supply X-Serverware-Enrollment-Session".to_string());
+        return Err("tunneled request must not supply X-Catchplate-Enrollment-Session".to_string());
     }
     if let Some(enrollment_session_id) = enrollment_session_id {
         validate_enrollment_session_id(enrollment_session_id)?;
@@ -16636,9 +16636,9 @@ fn is_standard_hop_by_hop_header(name: &str) -> bool {
     )
 }
 
-fn is_serverware_internal_header(name: &str) -> bool {
-    name.get(..SERVERWARE_INTERNAL_HEADER_PREFIX.len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(SERVERWARE_INTERNAL_HEADER_PREFIX))
+fn is_catchplate_internal_header(name: &str) -> bool {
+    name.get(..CATCHPLATE_INTERNAL_HEADER_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(CATCHPLATE_INTERNAL_HEADER_PREFIX))
 }
 
 fn credential_injection_header(injection: &Value) -> Option<String> {
@@ -16838,7 +16838,7 @@ fn discarded_request_header_evidence(
     // A public digest would expose low-entropy values to offline guessing. Until
     // a dedicated audit HMAC key exists, retain only closed presence metadata.
     json!({
-        "schema":"serverware.discardedRequestHeaders/v1",
+        "schema":"catchplate.discardedRequestHeaders/v1",
         "declared_names":discard_headers,
         "present_names":present_names,
         "present_count":present_count,
@@ -16993,13 +16993,13 @@ fn canonical_client_proof_request_for_version(
 fn canonical_client_proof_request(
     request: &IncomingRequest,
 ) -> Result<CanonicalSafeProofRequest, String> {
-    canonical_client_proof_request_for_version(request, "serverware.clientProofRequest/v1")
+    canonical_client_proof_request_for_version(request, "catchplate.clientProofRequest/v1")
 }
 
 fn canonical_streaming_client_proof_request(
     request: &IncomingRequest,
 ) -> Result<CanonicalSafeProofRequest, String> {
-    canonical_client_proof_request_for_version(request, "serverware.streamingClientProofRequest/v1")
+    canonical_client_proof_request_for_version(request, "catchplate.streamingClientProofRequest/v1")
 }
 
 fn client_proof_request_digest(
@@ -17938,7 +17938,7 @@ fn validate_response_proof_configuration(
 ) -> Result<(), String> {
     if is_production && attestation_command.is_none() {
         return Err(
-            "production requires SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND and SERVERWARE_DATA_PLANE_INSTANCE_ID"
+            "production requires CATCHPLATE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND and CATCHPLATE_DATA_PLANE_INSTANCE_ID"
                 .to_string(),
         );
     }
@@ -17946,12 +17946,12 @@ fn validate_response_proof_configuration(
     // presence alone does not opt development traffic into response proofs.
     if attestation_command.is_some() {
         let instance_id = server_instance_id.ok_or_else(|| {
-            "SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND requires SERVERWARE_DATA_PLANE_INSTANCE_ID"
+            "CATCHPLATE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND requires CATCHPLATE_DATA_PLANE_INSTANCE_ID"
                 .to_string()
         })?;
         if !instance_id.starts_with("spiffe://") || instance_id.len() <= "spiffe://".len() {
             return Err(
-                "SERVERWARE_DATA_PLANE_INSTANCE_ID must be a non-empty SPIFFE ID for response proofs"
+                "CATCHPLATE_DATA_PLANE_INSTANCE_ID must be a non-empty SPIFFE ID for response proofs"
                     .to_string(),
             );
         }
@@ -18623,7 +18623,7 @@ fn validate_control_plane_authorization_receipt_profile(
     let canonical_statement_json = Zeroizing::new(canonical_json_ensure_ascii(&canonical_statement));
     if canonical_statement_json.as_bytes() != statement_bytes.as_slice()
         || response.statement_sha256.as_str() != sha256_prefixed(&statement_bytes)
-        || statement.version != "serverware.responseSignature/v3"
+        || statement.version != "catchplate.responseSignature/v3"
         || statement.nonce.as_deref() != Some(request.nonce.as_str())
         || statement.request.method != request.method
         || statement.request.path != request.path
@@ -18899,7 +18899,7 @@ fn attach_response_proof_inner(
     let upstream_response =
         upstream_response.ok_or("response proof upstream response binding is unavailable")?;
     let client_request_digest =
-        required_parsed_response_header(&parsed.headers, "x-serverware-client-request-digest")?;
+        required_parsed_response_header(&parsed.headers, "x-catchplate-client-request-digest")?;
     if client_request_digest.as_str() != expected_client_request_digest {
         return Err("response proof client request digest mismatch".to_string());
     }
@@ -18913,13 +18913,13 @@ fn attach_response_proof_inner(
         state.response_proof_signer.release_profile(),
     )?;
     let request_digest =
-        required_parsed_response_header(&parsed.headers, "x-serverware-request-digest")?;
+        required_parsed_response_header(&parsed.headers, "x-catchplate-request-digest")?;
     let operation_digest =
-        required_parsed_response_header(&parsed.headers, "x-serverware-operation-digest")?;
+        required_parsed_response_header(&parsed.headers, "x-catchplate-operation-digest")?;
     let policy_digest =
-        required_parsed_response_header(&parsed.headers, "x-serverware-policy-hash")?;
+        required_parsed_response_header(&parsed.headers, "x-catchplate-policy-hash")?;
     let declared_body_digest =
-        required_parsed_response_header(&parsed.headers, "x-serverware-response-body-sha256")?;
+        required_parsed_response_header(&parsed.headers, "x-catchplate-response-body-sha256")?;
     let body_digest = sha256_prefixed(parsed.body);
     if declared_body_digest.as_str() != body_digest {
         return Err("response proof emitted body digest mismatch".to_string());
@@ -18955,11 +18955,11 @@ fn attach_response_proof_inner(
     for name in [
         "content-length",
         "content-type",
-        "x-serverware-client-request-digest",
-        "x-serverware-policy-hash",
-        "x-serverware-request-digest",
-        "x-serverware-operation-digest",
-        "x-serverware-response-body-sha256",
+        "x-catchplate-client-request-digest",
+        "x-catchplate-policy-hash",
+        "x-catchplate-request-digest",
+        "x-catchplate-operation-digest",
+        "x-catchplate-response-body-sha256",
     ] {
         if let Some(value) = parsed.headers.get(name) {
             selected_headers.insert(name.to_string(), value.clone());
@@ -19071,8 +19071,8 @@ fn attach_response_proof_inner(
         "response_signing_key_id":state.response_proof_signing_key_id,
     }));
     let attestation_request = SensitiveJsonValue::new(json!({
-        "apiVersion":"serverware.responseProofAttestationRequest/v2",
-        "kind":"ServerwareResponseProofAttestationRequest",
+        "apiVersion":"catchplate.responseProofAttestationRequest/v2",
+        "kind":"CatchplateResponseProofAttestationRequest",
         "server_statement_sha256":statement_digest,
         "response_signing_key_id":state.response_proof_signing_key_id,
         "response_signing_public_key_pem":state.response_proof_public_key_pem,
@@ -19094,8 +19094,8 @@ fn attach_response_proof_inner(
         .cloned()
         .ok_or("response proof attestation output is missing vendor_tee")?;
     SensitiveJsonValue::new(json!({
-        "apiVersion":"serverware.proxyResponseRuntimeProof/v2",
-        "kind":"ServerwareProxyResponseRuntimeProof",
+        "apiVersion":"catchplate.proxyResponseRuntimeProof/v2",
+        "kind":"CatchplateProxyResponseRuntimeProof",
         "server_statement":&*statement,
         "server_statement_sha256":statement_digest,
         "server_signature":{
@@ -19117,13 +19117,13 @@ fn attach_response_proof_inner(
         &response,
         parsed.header_end,
         &[
-            ("X-Serverware-Response-Proof-B64", runtime_proof_b64.as_str()),
+            ("X-Catchplate-Response-Proof-B64", runtime_proof_b64.as_str()),
             (
-                "X-Serverware-Response-Proof-SHA256",
+                "X-Catchplate-Response-Proof-SHA256",
                 runtime_proof_digest.as_str(),
             ),
             (
-                "X-Serverware-Response-Key-Id",
+                "X-Catchplate-Response-Key-Id",
                 state.response_proof_signing_key_id.as_str(),
             ),
         ],
@@ -19155,7 +19155,7 @@ fn encode_streaming_response_runtime_proof(
 
 fn response_observation_id(client_nonce: &str) -> String {
     digest_json(&json!({
-        "contract":"serverware.responseObservationStatement/v1",
+        "contract":"catchplate.responseObservationStatement/v1",
         "client_nonce":client_nonce,
     }))
 }
@@ -19293,8 +19293,8 @@ fn response_observation_wire_headers(
                     | "content-length"
                     | "trailer"
                     | "transfer-encoding"
-                    | "x-serverware-observation-proof-b64"
-                    | "x-serverware-observation-proof-sha256"
+                    | "x-catchplate-observation-proof-b64"
+                    | "x-catchplate-observation-proof-sha256"
             )
         })
         .map(|(name, value)| (name.clone(), value.clone()))
@@ -19514,8 +19514,8 @@ fn build_response_observation_runtime_proof(
         "observation_source":"gate-authored",
     }));
     let attestation_request = SensitiveJsonValue::new(json!({
-        "apiVersion":"serverware.responseObservationProofAttestationRequest/v1",
-        "kind":"ServerwareResponseObservationProofAttestationRequest",
+        "apiVersion":"catchplate.responseObservationProofAttestationRequest/v1",
+        "kind":"CatchplateResponseObservationProofAttestationRequest",
         "server_statement_sha256":statement_digest,
         "response_signing_key_id":state.response_proof_signing_key_id,
         "response_signing_public_key_pem":state.response_proof_public_key_pem,
@@ -19538,8 +19538,8 @@ fn build_response_observation_runtime_proof(
         .cloned()
         .ok_or("response observation proof attestation output is missing vendor_tee")?;
     SensitiveJsonValue::new(json!({
-        "apiVersion":"serverware.responseObservationRuntimeProof/v1",
-        "kind":"ServerwareResponseObservationRuntimeProof",
+        "apiVersion":"catchplate.responseObservationRuntimeProof/v1",
+        "kind":"CatchplateResponseObservationRuntimeProof",
         "server_statement":&*statement,
         "server_statement_sha256":statement_digest,
         "server_signature":{
@@ -20009,8 +20009,8 @@ fn build_streaming_response_runtime_proof(
         "response_signing_key_id":state.response_proof_signing_key_id,
     }));
     let attestation_request = SensitiveJsonValue::new(json!({
-        "apiVersion":"serverware.streamingResponseProofAttestationRequest/v1",
-        "kind":"ServerwareStreamingResponseProofAttestationRequest",
+        "apiVersion":"catchplate.streamingResponseProofAttestationRequest/v1",
+        "kind":"CatchplateStreamingResponseProofAttestationRequest",
         "streaming_response_statement_api_version":state.response_proof_signer.release_profile().statement(StatementKind::Streaming),
         "streaming_response_statement_sha256":statement_digest,
         "response_signing_key_id":state.response_proof_signing_key_id,
@@ -20033,8 +20033,8 @@ fn build_streaming_response_runtime_proof(
         .cloned()
         .ok_or("streaming response proof attestation output is missing vendor_tee")?;
     SensitiveJsonValue::new(json!({
-        "apiVersion":"serverware.streamingResponseRuntimeProof/v1",
-        "kind":"ServerwareStreamingResponseRuntimeProof",
+        "apiVersion":"catchplate.streamingResponseRuntimeProof/v1",
+        "kind":"CatchplateStreamingResponseRuntimeProof",
         "streaming_response_statement":&*statement,
         "streaming_response_statement_sha256":statement_digest,
         "server_signature":{
@@ -20079,14 +20079,14 @@ fn validate_control_plane_signed_response_detached_headers(
     label: &str,
 ) -> Result<(), String> {
     const EXPECTED: [&str; 5] = [
-        "x-serverware-response-body-sha256",
-        "x-serverware-response-key-id",
-        "x-serverware-response-signature",
-        "x-serverware-response-statement-b64",
-        "x-serverware-response-statement-sha256",
+        "x-catchplate-response-body-sha256",
+        "x-catchplate-response-key-id",
+        "x-catchplate-response-signature",
+        "x-catchplate-response-statement-b64",
+        "x-catchplate-response-statement-sha256",
     ];
     for name in headers.keys().map(HeaderName::as_str) {
-        if name.starts_with("x-serverware-response-") && !EXPECTED.contains(&name) {
+        if name.starts_with("x-catchplate-response-") && !EXPECTED.contains(&name) {
             return Err(format!("{label} has an unexpected detached proof header"));
         }
     }
@@ -20107,7 +20107,7 @@ fn validate_canonical_response_nonce(nonce: &str, label: &str) -> Result<(), Str
 }
 
 fn excluded_control_plane_response_header(name: &str) -> bool {
-    name.starts_with("x-serverware-response-")
+    name.starts_with("x-catchplate-response-")
         || matches!(
             name,
             "connection"
@@ -20321,12 +20321,12 @@ fn verify_control_plane_signed_response_with_context(
     validate_control_plane_signed_response_detached_headers(headers, label)?;
     let expected_key_id = authentication.key_id.as_str();
     let header_key_id =
-        required_signed_response_header(headers, "X-Serverware-Response-Key-Id", label)?;
+        required_signed_response_header(headers, "X-Catchplate-Response-Key-Id", label)?;
     if header_key_id.as_str() != expected_key_id {
         return Err(format!("{label} signing key is not attested"));
     }
     let statement_b64 =
-        required_signed_response_header(headers, "X-Serverware-Response-Statement-B64", label)?;
+        required_signed_response_header(headers, "X-Catchplate-Response-Statement-B64", label)?;
     if statement_b64.contains('=') {
         return Err(format!("{label} statement is not unpadded base64url"));
     }
@@ -20352,7 +20352,7 @@ fn verify_control_plane_signed_response_with_context(
         return Err(format!("{label} statement is not canonical JSON"));
     }
     let signature_value =
-        required_signed_response_header(headers, "X-Serverware-Response-Signature", label)?;
+        required_signed_response_header(headers, "X-Catchplate-Response-Signature", label)?;
     let signature_b64 = signature_value
         .strip_prefix("ed25519:")
         .ok_or_else(|| format!("{label} signature must use ed25519"))?;
@@ -20382,7 +20382,7 @@ fn verify_control_plane_signed_response_with_context(
     let response_headers = canonical_control_plane_response_header_items(headers)?;
     let (expected_response_headers_digest, expected_response_header_count) =
         digest_control_plane_response_header_items(&response_headers)?;
-    if statement.version != "serverware.responseSignature/v3"
+    if statement.version != "catchplate.responseSignature/v3"
         || statement.nonce.as_deref() != Some(response_nonce)
         || statement.status_code != status.as_u16()
         || statement.body_sha256 != expected_body_digest
@@ -20393,13 +20393,13 @@ fn verify_control_plane_signed_response_with_context(
         return Err(format!("{label} statement binding mismatch"));
     }
     let header_body_digest =
-        required_signed_response_header(headers, "X-Serverware-Response-Body-SHA256", label)?;
+        required_signed_response_header(headers, "X-Catchplate-Response-Body-SHA256", label)?;
     if header_body_digest.as_str() != expected_body_digest {
         return Err(format!("{label} body digest header mismatch"));
     }
     let statement_digest = sha256_prefixed(&statement_bytes);
     let header_statement_digest =
-        required_signed_response_header(headers, "X-Serverware-Response-Statement-SHA256", label)?;
+        required_signed_response_header(headers, "X-Catchplate-Response-Statement-SHA256", label)?;
     if header_statement_digest.as_str() != statement_digest {
         return Err(format!("{label} statement digest header mismatch"));
     }
@@ -21187,7 +21187,7 @@ fn decrypt_credential_lease_envelope_with_owner(
     }
     let aad_digest = Sha256::digest(&aad_bytes);
     let mut hkdf_info =
-        Zeroizing::new(b"serverware:credential-lease-envelope:v2\0".to_vec());
+        Zeroizing::new(b"catchplate:credential-lease-envelope:v2\0".to_vec());
     hkdf_info.extend_from_slice(&aad_digest);
     let server_public_key: [u8; 32] = server_public_key
         .try_into()
@@ -21576,7 +21576,7 @@ fn credential_lease_request_wire_value_profile(
     let uncontrolled = if broker { native_secret_broker::request_version(false) } else { native_lease_profile::request_version(false, profile) };
     let controlled = if broker { native_secret_broker::request_version(true) } else { native_lease_profile::request_version(true, profile) };
     if profile.has_approver_policy() && (request.recipient_attestation.as_ref().and_then(|value| value.get("apiVersion"))
-        .and_then(Value::as_str) != Some("serverware.nativeCredentialRecipientEvidence/v1")
+        .and_then(Value::as_str) != Some("catchplate.nativeCredentialRecipientEvidence/v1")
         || !credential_lease_principal_valid(&request.principal_id, profile)
         || !valid_release_authorization_identity(Some(&request.route_id))
         || !valid_release_authorization_identity(Some(&request.credential_id))) {
@@ -21632,7 +21632,7 @@ fn credential_lease_request_wire_value_profile(
 
 fn release_reservation_id(attempt_id: &str, binding_digest: &str) -> String {
     digest_json_ensure_ascii(&json!({
-        "apiVersion":"serverware.releaseReservationIdentity/v1",
+        "apiVersion":"catchplate.releaseReservationIdentity/v1",
         "attemptId":attempt_id,
         "bindingDigest":binding_digest,
     }))
@@ -22235,7 +22235,7 @@ fn fetch_scoped_credential_lease_attempt_on_deadline(
             // Only original public evidence travels out. No local successful-
             // verification claims or replacement public key can be supplied.
             request_body.recipient_attestation = Some(json!({
-                "apiVersion":"serverware.nativeCredentialRecipientEvidence/v1",
+                "apiVersion":"catchplate.nativeCredentialRecipientEvidence/v1",
                 "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(quoted.quote().document()),
                 "recipientPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(quoted.quote().public_key()),
             }));
@@ -22248,12 +22248,12 @@ fn fetch_scoped_credential_lease_attempt_on_deadline(
             {
                 let mut attestation_request = json!({
                     "apiVersion":if profile == ReleaseProfile::PolicyAware {
-                        if request_bound { "serverware.policyAwareRecipientAttestationRequest/v2" }
-                        else { "serverware.policyAwareRecipientAttestationRequest/v1" }
+                        if request_bound { "catchplate.policyAwareRecipientAttestationRequest/v2" }
+                        else { "catchplate.policyAwareRecipientAttestationRequest/v1" }
                     } else if request_bound {
-                        "serverware.recipientAttestationRequest/v4"
+                        "catchplate.recipientAttestationRequest/v4"
                     } else {
-                        "serverware.recipientAttestationRequest/v3"
+                        "catchplate.recipientAttestationRequest/v3"
                     },
                     "purpose":purpose,
                     "requestBindingSha256":request_binding_sha256,
@@ -22302,8 +22302,8 @@ fn fetch_scoped_credential_lease_attempt_on_deadline(
     let mut request = state
         .credential_lease_client
         .post(request_url)
-        .header("X-Serverware-Data-Plane-Token", token)
-        .header("X-Serverware-Response-Nonce", recipient_nonce.as_str())
+        .header("X-Catchplate-Data-Plane-Token", token)
+        .header("X-Catchplate-Response-Nonce", recipient_nonce.as_str())
         .json(&request_wire);
     if let Some(remaining) = native_upstream_remaining(state, &snapshot.hash)? {
         request = request.timeout(remaining.min(CREDENTIAL_LEASE_REQUEST_TIMEOUT));
@@ -22433,7 +22433,7 @@ fn fetch_scoped_credential_lease_attempt_on_deadline(
 
 fn run_bounded_json_command(command: &str, request: &Value, label: &str) -> Result<Value, String> {
     #[cfg(test)]
-    if command == "__serverware_test_attestation_in_process__" {
+    if command == "__catchplate_test_attestation_in_process__" {
         let _ = (request, label);
         return Ok(json!({"vendor_tee":{"provider":"unit-test"}}));
     }
@@ -24349,7 +24349,7 @@ where
             Ok(response) => (
                 ActiveEffectCommitState::Committed,
                 digest_json_ensure_ascii(&json!({
-                    "domain":"serverware.policyShadowProviderSendResult/v1",
+                    "domain":"catchplate.policyShadowProviderSendResult/v1",
                     "requestSha256":final_upstream_request_commitment.as_str(),
                     "status":response.status().as_u16(),
                     "outcome":"response-observed",
@@ -24358,7 +24358,7 @@ where
             Err(_) => (
                 ActiveEffectCommitState::OutcomeUnknown,
                 digest_json_ensure_ascii(&json!({
-                    "domain":"serverware.policyShadowProviderSendResult/v1",
+                    "domain":"catchplate.policyShadowProviderSendResult/v1",
                     "requestSha256":final_upstream_request_commitment.as_str(),
                     "outcome":"provider-send-unknown",
                 })),
@@ -24830,7 +24830,7 @@ fn pem_certificates(bundle: &str) -> Vec<Vec<u8>> {
 
 fn load_upstream_client_config() -> Result<UpstreamClientConfig, String> {
     let mut root_certificates = Vec::new();
-    if let Ok(path) = env::var("SERVERWARE_UPSTREAM_CA_BUNDLE") {
+    if let Ok(path) = env::var("CATCHPLATE_UPSTREAM_CA_BUNDLE") {
         if !path.trim().is_empty() {
             let text = fs::read_to_string(&path)
                 .map_err(|err| format!("read upstream CA bundle {path}: {err}"))?;
@@ -25281,7 +25281,7 @@ fn audit_upstream_preparation_error(
         state,
         "data_plane.upstream_resolution.denied",
         json!({
-            "component":"serverware-decision-gate-rs",
+            "component":"catchplate-decision-gate-rs",
             "outcome":"denied",
             "stage":"upstream_resolution",
             "error":error.code(),
@@ -25325,7 +25325,7 @@ fn build_control_plane_client(timeout: Duration) -> Result<Client, String> {
 
 fn control_plane_client_builder(timeout: Duration) -> Result<reqwest::blocking::ClientBuilder, String> {
     let mut config = ControlPlaneClientConfig::builtin();
-    if let Ok(path) = env::var("SERVERWARE_CONTROL_PLANE_CA_BUNDLE") {
+    if let Ok(path) = env::var("CATCHPLATE_CONTROL_PLANE_CA_BUNDLE") {
         if !path.trim().is_empty() {
             let text = fs::read_to_string(&path)
                 .map_err(|err| format!("read control-plane CA bundle {path}: {err}"))?;
@@ -25568,7 +25568,7 @@ fn pop_audit_batch(state: &GateState) -> Vec<AuditEvent> {
         let next_len = serialized_len
             .saturating_add(separator_len)
             .saturating_add(event_len);
-        let maximum=if state.measured_audit.is_some() {serverware_decision_gate::native_audit_batch_v1::MAX_EVENTS}
+        let maximum=if state.measured_audit.is_some() {catchplate_decision_gate::native_audit_batch_v1::MAX_EVENTS}
             else {MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES};
         if next_len > maximum {
             if !batch.is_empty() {
@@ -25741,8 +25741,8 @@ fn post_serialized_legacy_audit_batch_on_deadline(
     let mut request = state
         .audit_client
         .post(url)
-        .header("X-Serverware-Data-Plane-Token", token.as_str())
-        .header("X-Serverware-Response-Nonce", response_nonce.as_str())
+        .header("X-Catchplate-Data-Plane-Token", token.as_str())
+        .header("X-Catchplate-Response-Nonce", response_nonce.as_str())
         .header("Content-Type", "application/json")
         .body(body.to_vec());
     if let Some(permit) = publication.as_ref() {
@@ -25809,12 +25809,12 @@ fn post_serialized_legacy_audit_batch_on_deadline(
             "audit acknowledgement instance binding mismatch",
         )));
     }
-    if acknowledgement.api_version != "serverware.dataPlaneAuditAck/v1"
+    if acknowledgement.api_version != "catchplate.dataPlaneAuditAck/v1"
         || !acknowledgement.ok
         || acknowledgement.accepted != expected_count
         || acknowledgement.batch_digest != batch_digest
     {
-        let stage = if acknowledgement.api_version != "serverware.dataPlaneAuditAck/v1" || !acknowledgement.ok {
+        let stage = if acknowledgement.api_version != "catchplate.dataPlaneAuditAck/v1" || !acknowledgement.ok {
             Stage::AckContractMismatch
         } else if acknowledgement.accepted != expected_count {
             Stage::AckCountMismatch
@@ -25893,7 +25893,7 @@ fn decision_audit_event(
     let mut event = Map::new();
     event.insert(
         "component".to_string(),
-        Value::String("serverware-decision-gate-rs".to_string()),
+        Value::String("catchplate-decision-gate-rs".to_string()),
     );
     event.insert(
         "method".to_string(),
@@ -25957,7 +25957,7 @@ fn connect_audit_event(
 ) -> Value {
     with_enrollment_session_id(
         json!({
-            "component":"serverware-decision-gate-rs",
+            "component":"catchplate-decision-gate-rs",
             "method":"CONNECT",
             "target":target,
             "authority":decision.get("authority").cloned().unwrap_or(Value::Null),
@@ -25997,17 +25997,17 @@ fn audit_status(state: &GateState) -> Value {
 }
 
 fn build_mitm_authority() -> Result<Option<MitmAuthority>, String> {
-    let cert_path = env::var("SERVERWARE_MITM_CA_CERT")
+    let cert_path = env::var("CATCHPLATE_MITM_CA_CERT")
         .ok()
         .filter(|value| !value.trim().is_empty());
-    let key_path = env::var("SERVERWARE_MITM_CA_KEY")
+    let key_path = env::var("CATCHPLATE_MITM_CA_KEY")
         .ok()
         .filter(|value| !value.trim().is_empty());
     let (Some(cert_path), Some(key_path)) = (cert_path, key_path) else {
-        if env::var("SERVERWARE_MITM_CA_CERT").is_ok() || env::var("SERVERWARE_MITM_CA_KEY").is_ok()
+        if env::var("CATCHPLATE_MITM_CA_CERT").is_ok() || env::var("CATCHPLATE_MITM_CA_KEY").is_ok()
         {
             return Err(
-                "SERVERWARE_MITM_CA_CERT and SERVERWARE_MITM_CA_KEY must be set together"
+                "CATCHPLATE_MITM_CA_CERT and CATCHPLATE_MITM_CA_KEY must be set together"
                     .to_string(),
             );
         }
@@ -26305,7 +26305,7 @@ fn create_grant(state: &GateState, payload: GrantCreate) -> Value {
             state,
             "data_plane.grant.received",
             json!({
-                "component":"serverware-decision-gate-rs",
+                "component":"catchplate-decision-gate-rs",
                 "grant_id":grant_id.clone(),
                 "approval_id":payload.approval_id.clone(),
                 "principal_id":payload.principal_id.clone(),
@@ -26493,7 +26493,7 @@ fn consume_shared_grant(
             let request = state
                 .audit_client
                 .post(grant_consume_url)
-                .header("X-Serverware-Data-Plane-Token", token.as_str())
+                .header("X-Catchplate-Data-Plane-Token", token.as_str())
                 .header("Content-Type", "application/json")
                 .body(body.as_slice().to_vec());
             let response = bounded_service_request(state, request)?.send();
@@ -26712,8 +26712,8 @@ where F: FnMut(),
         let request = state
             .audit_client
             .post(&url)
-            .header("X-Serverware-Data-Plane-Token", token)
-            .header("X-Serverware-Response-Nonce", response_nonce.as_str())
+            .header("X-Catchplate-Data-Plane-Token", token)
+            .header("X-Catchplate-Response-Nonce", response_nonce.as_str())
             .header("Content-Type", "application/json")
             .body(body.as_slice().to_vec());
         let mut request = bounded_service_request(state, request)?;
@@ -28604,7 +28604,7 @@ fn commit_shadow_release_effects(
     let mut first_error = None;
     for (effect_kind, permit) in permits {
         let result = json!({
-            "domain":"serverware.policyShadowReleaseLifecycleEffectResult/v1",
+            "domain":"catchplate.policyShadowReleaseLifecycleEffectResult/v1",
             "effectKind":effect_kind,
             "phase":phase,
             "providerResultSha256":provider_result_sha256.as_str(),
@@ -28653,7 +28653,7 @@ fn prepare_shadow_release_effect(
                 ActiveEffectCommitState::Aborted,
                 phase,
                 &json!({
-                    "domain":"serverware.policyShadowReleaseLifecyclePreparationFailed/v1",
+                    "domain":"catchplate.policyShadowReleaseLifecyclePreparationFailed/v1",
                     "failedEffectKind":effect_kind,
                     "phase":phase,
                 }),
@@ -28759,7 +28759,7 @@ where
     }
     let finalization = finalization.ok_or("credential prerequisite lost its active lifecycle")?;
     let intent = json!({
-        "domain":"serverware.policyShadowCredentialEffectIntent/v1",
+        "domain":"catchplate.policyShadowCredentialEffectIntent/v1",
         "effectKind":effect_kind,
         "principalIdSha256":sha256_prefixed(scope.principal_id.as_bytes()),
         "routeIdSha256":sha256_prefixed(scope.route_id.as_bytes()),
@@ -28767,7 +28767,7 @@ where
         "policySha256":snapshot.hash,
     });
     let prepared_state = json!({
-        "domain":"serverware.policyShadowCredentialPreparedState/v1",
+        "domain":"catchplate.policyShadowCredentialPreparedState/v1",
         "snapshotEpoch":snapshot.epoch,
         "policySequence":snapshot.policy_sequence,
         "rollbackEpoch":snapshot.rollback_epoch,
@@ -28777,7 +28777,7 @@ where
         &digest_json_ensure_ascii(&prepared_state),
     )?;
     let aborted = digest_json_ensure_ascii(&json!({
-        "domain":"serverware.policyShadowCredentialEffectResult/v1",
+        "domain":"catchplate.policyShadowCredentialEffectResult/v1",
         "outcome":"credential-provider-not-started",
     }));
     let mut permits = prepare_credential_siblings(
@@ -28797,7 +28797,7 @@ where
         Ok(info) => (
             ActiveEffectCommitState::Committed,
             json!({
-                "domain":"serverware.policyShadowCredentialEffectResult/v1",
+                "domain":"catchplate.policyShadowCredentialEffectResult/v1",
                 "version":info.version,
                 "metadataSha256":credential_lease_metadata_sha256(&info.metadata),
                 "secretAvailable":info.secret_available,
@@ -28806,7 +28806,7 @@ where
         Err(_) => (
             ActiveEffectCommitState::OutcomeUnknown,
             json!({
-                "domain":"serverware.policyShadowCredentialEffectResult/v1",
+                "domain":"catchplate.policyShadowCredentialEffectResult/v1",
                 "outcome":"credential-provider-outcome-unknown",
             }),
         ),
@@ -28920,7 +28920,7 @@ where
         }
     }
     let prepared_state = json!({
-        "domain":"serverware.policyShadowConstraintPreparedState/v1",
+        "domain":"catchplate.policyShadowConstraintPreparedState/v1",
         "policySha256":snapshot.hash,
         "policySequence":snapshot.policy_sequence,
         "rollbackEpoch":snapshot.rollback_epoch,
@@ -28943,14 +28943,14 @@ where
         Ok(()) => (
             ActiveEffectCommitState::Committed,
             json!({
-                "domain":"serverware.policyShadowConstraintEffectResult/v1",
+                "domain":"catchplate.policyShadowConstraintEffectResult/v1",
                 "outcome":"committed",
             }),
         ),
         Err(payload) => (
             ActiveEffectCommitState::OutcomeUnknown,
             json!({
-                "domain":"serverware.policyShadowConstraintEffectResult/v1",
+                "domain":"catchplate.policyShadowConstraintEffectResult/v1",
                 "outcome":"constraint-denied-or-provider-unknown",
                 "resultSha256":digest_json_ensure_ascii(payload),
             }),
@@ -29000,7 +29000,7 @@ where
         Err(_) => (
             ActiveEffectCommitState::OutcomeUnknown,
             json!({
-                "domain":"serverware.policyShadowActiveEffectResult/v1",
+                "domain":"catchplate.policyShadowActiveEffectResult/v1",
                 "effectKind":effect_kind,
                 "outcome":"provider-outcome-unknown",
             }),
@@ -29266,7 +29266,7 @@ fn request_release_authorization_with_connect<'a>(
         ActiveMutableEffectKind::ReleaseReserve,
         "reserve",
         &json!({
-            "domain":"serverware.policyShadowReleaseReserveIntent/v1",
+            "domain":"catchplate.policyShadowReleaseReserveIntent/v1",
             "attemptId":attempt_id,
             "bindingDigest":expected_binding_digest,
             "requestDigest":request_digest,
@@ -29282,14 +29282,14 @@ fn request_release_authorization_with_connect<'a>(
             ActiveMutableEffectKind::JitGrantReserve,
             "reserve",
             &json!({
-                "domain":"serverware.policyShadowJitReserveIntent/v1",
+                "domain":"catchplate.policyShadowJitReserveIntent/v1",
                 "attemptId":attempt_id,
                 "bindingDigest":expected_binding_digest.as_str(),
                 "requestDigest":request_digest,
                 "operationDigest":expected_operation_digest,
             }),
             &json!({
-                "domain":"serverware.policyShadowJitReservePreparedState/v1",
+                "domain":"catchplate.policyShadowJitReservePreparedState/v1",
                 "grantRequired":true,
                 "releasePayloadSha256":
                     digest_json_ensure_ascii(&payload),
@@ -29304,14 +29304,14 @@ fn request_release_authorization_with_connect<'a>(
             ActiveMutableEffectKind::QuotaReserve,
             "reserve",
             &json!({
-                "domain":"serverware.policyShadowQuotaReserveIntent/v1",
+                "domain":"catchplate.policyShadowQuotaReserveIntent/v1",
                 "attemptId":attempt_id,
                 "bindingDigest":expected_binding_digest.as_str(),
                 "claimsSha256":
                     digest_json_ensure_ascii(&json!(expected_quotas)),
             }),
             &json!({
-                "domain":"serverware.policyShadowQuotaReservePreparedState/v1",
+                "domain":"catchplate.policyShadowQuotaReservePreparedState/v1",
                 "releasePayloadSha256":
                     digest_json_ensure_ascii(&payload),
             }),
@@ -29325,7 +29325,7 @@ fn request_release_authorization_with_connect<'a>(
             ActiveMutableEffectKind::DurableBudgetReserve,
             "reserve",
             &json!({
-                "domain":"serverware.policyShadowBudgetReserveIntent/v1",
+                "domain":"catchplate.policyShadowBudgetReserveIntent/v1",
                 "attemptId":attempt_id,
                 "bindingDigest":expected_binding_digest.as_str(),
                 "claimSha256":digest_json_ensure_ascii(
@@ -29333,7 +29333,7 @@ fn request_release_authorization_with_connect<'a>(
                 ),
             }),
             &json!({
-                "domain":"serverware.policyShadowBudgetReservePreparedState/v1",
+                "domain":"catchplate.policyShadowBudgetReservePreparedState/v1",
                 "releasePayloadSha256":
                     digest_json_ensure_ascii(&payload),
             }),
@@ -29353,7 +29353,7 @@ fn request_release_authorization_with_connect<'a>(
         Ok(response) => (
             ActiveEffectCommitState::Committed,
             json!({
-                "domain":"serverware.policyShadowReleaseReserveResult/v1",
+                "domain":"catchplate.policyShadowReleaseReserveResult/v1",
                 "status":response.status.as_u16(),
                 "responseBodySha256":sha256_prefixed(&response.body),
             }),
@@ -29361,7 +29361,7 @@ fn request_release_authorization_with_connect<'a>(
         Err(_) => (
             ActiveEffectCommitState::OutcomeUnknown,
             json!({
-                "domain":"serverware.policyShadowReleaseReserveResult/v1",
+                "domain":"catchplate.policyShadowReleaseReserveResult/v1",
                 "outcome":"control-plane-outcome-unknown",
             }),
         ),
@@ -29879,12 +29879,12 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
                 ActiveMutableEffectKind::ReleaseDispatch,
                 "dispatch",
                 &json!({
-                    "domain":"serverware.policyShadowReleaseDispatchIntent/v1",
+                    "domain":"catchplate.policyShadowReleaseDispatchIntent/v1",
                     "attemptId":self.reservation.attempt_id.as_str(),
                     "bindingDigest":self.reservation.binding_digest.as_str(),
                 }),
                 &json!({
-                    "domain":"serverware.policyShadowReleaseDispatchPreparedState/v1",
+                    "domain":"catchplate.policyShadowReleaseDispatchPreparedState/v1",
                     "stage":"reserved",
                 }),
             )?;
@@ -29896,7 +29896,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
                     ActiveMutableEffectKind::JitGrantDispatch,
                     "dispatch",
                     &json!({
-                        "domain":"serverware.policyShadowJitDispatchIntent/v1",
+                        "domain":"catchplate.policyShadowJitDispatchIntent/v1",
                         "attemptId":self.reservation.attempt_id.as_str(),
                         "bindingDigest":self.reservation.binding_digest.as_str(),
                         "grantIdSha256":self.reservation.grant_id.as_ref().map(
@@ -29910,7 +29910,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
                             ),
                     }),
                     &json!({
-                        "domain":"serverware.policyShadowJitDispatchPreparedState/v1",
+                        "domain":"catchplate.policyShadowJitDispatchPreparedState/v1",
                         "stage":"reserved",
                     }),
                 )?;
@@ -29927,7 +29927,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
                 Ok((response, evidence)) => (
                     ActiveEffectCommitState::Committed,
                     json!({
-                        "domain":"serverware.policyShadowReleaseDispatchResult/v1",
+                        "domain":"catchplate.policyShadowReleaseDispatchResult/v1",
                         "dispatchStartedAtEpochMs":
                             response.dispatch_started_at_epoch_ms,
                         "dispatchExpiresAtEpochMs":
@@ -29939,7 +29939,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
                 Err(_) => (
                     ActiveEffectCommitState::OutcomeUnknown,
                     json!({
-                        "domain":"serverware.policyShadowReleaseDispatchResult/v1",
+                        "domain":"catchplate.policyShadowReleaseDispatchResult/v1",
                         "outcome":"dispatch-transition-unknown",
                     }),
                 ),
@@ -30122,7 +30122,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
             release_effect_kind,
             completion_phase,
             &json!({
-                "domain":"serverware.policyShadowReleaseCompletionIntent/v1",
+                "domain":"catchplate.policyShadowReleaseCompletionIntent/v1",
                 "attemptId":self.reservation.attempt_id.as_str(),
                 "bindingDigest":self.reservation.binding_digest.as_str(),
                 "outcome":retained.outcome.as_str(),
@@ -30142,7 +30142,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
                 jit_effect_kind,
                 completion_phase,
                 &json!({
-                    "domain":"serverware.policyShadowJitCompletionIntent/v1",
+                    "domain":"catchplate.policyShadowJitCompletionIntent/v1",
                     "attemptId":self.reservation.attempt_id.as_str(),
                     "bindingDigest":self.reservation.binding_digest.as_str(),
                     "grantIdSha256":self.reservation.grant_id.as_ref().map(
@@ -30166,7 +30166,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
                 quota_effect_kind,
                 completion_phase,
                 &json!({
-                    "domain":"serverware.policyShadowQuotaCompletionIntent/v1",
+                    "domain":"catchplate.policyShadowQuotaCompletionIntent/v1",
                     "attemptId":self.reservation.attempt_id.as_str(),
                     "bindingDigest":self.reservation.binding_digest.as_str(),
                     "claimsSha256":digest_json_ensure_ascii(
@@ -30190,7 +30190,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
                 budget_effect_kind,
                 completion_phase,
                 &json!({
-                    "domain":"serverware.policyShadowBudgetCompletionIntent/v1",
+                    "domain":"catchplate.policyShadowBudgetCompletionIntent/v1",
                     "attemptId":self.reservation.attempt_id.as_str(),
                     "bindingDigest":self.reservation.binding_digest.as_str(),
                     "claimSha256":digest_json_ensure_ascii(
@@ -30216,7 +30216,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
                 Ok(response) => (
                     ActiveEffectCommitState::Committed,
                     json!({
-                        "domain":"serverware.policyShadowReleaseCompletionResult/v1",
+                        "domain":"catchplate.policyShadowReleaseCompletionResult/v1",
                         "state":response.state.as_str(),
                         "completionOutcome":
                             response.completion_outcome.as_deref(),
@@ -30225,7 +30225,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
                 Err(_) => (
                     ActiveEffectCommitState::OutcomeUnknown,
                     json!({
-                        "domain":"serverware.policyShadowReleaseCompletionResult/v1",
+                        "domain":"catchplate.policyShadowReleaseCompletionResult/v1",
                         "outcome":"completion-transition-unknown",
                     }),
                 ),
@@ -33216,7 +33216,7 @@ fn enforce_shared_rate_limit(
     let request = state
         .audit_client
         .post(url)
-        .header("X-Serverware-Data-Plane-Token", token.as_str())
+        .header("X-Catchplate-Data-Plane-Token", token.as_str())
         .header("Content-Type", "application/json")
         .body(std::mem::take(&mut *body));
     let mut response = bounded_service_request(state, request)
@@ -37617,7 +37617,7 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
             shadow_finalization.as_ref(),
             snapshot,
             &json!({
-                "domain":"serverware.policyShadowConstraintEffectIntent/v1",
+                "domain":"catchplate.policyShadowConstraintEffectIntent/v1",
                 "principalId":principal.id.as_str(),
                 "routeId":route.id.as_str(),
                 "requestDigest":request_digest.as_str(),
@@ -37900,7 +37900,7 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
             shadow_finalization.as_ref(),
             snapshot,
             &json!({
-                "domain":"serverware.policyShadowConstraintEffectIntent/v1",
+                "domain":"catchplate.policyShadowConstraintEffectIntent/v1",
                 "principalId":principal.id.as_str(),
                 "routeId":route.id.as_str(),
                 "requestDigest":request_digest.as_str(),
@@ -37946,7 +37946,7 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
             snapshot,
             ActiveMutableEffectKind::JitGrantComplete,
             &json!({
-                "domain":"serverware.policyShadowJitGrantCompleteIntent/v1",
+                "domain":"catchplate.policyShadowJitGrantCompleteIntent/v1",
                 "principalId":principal.id.as_str(),
                 "routeId":route.id.as_str(),
                 "credentialVersion":credential_version,
@@ -37955,7 +37955,7 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
                 "attemptId":grant_attempt_id.as_str(),
             }),
             &json!({
-                "domain":"serverware.policyShadowJitGrantPreparedState/v1",
+                "domain":"catchplate.policyShadowJitGrantPreparedState/v1",
                 "policySha256":snapshot.hash.as_str(),
                 "flowId":flow_id.as_str(),
             }),
@@ -37983,7 +37983,7 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
             },
             |(grant, store, pending)| {
                 json!({
-                    "domain":"serverware.policyShadowJitGrantCompleteResult/v1",
+                    "domain":"catchplate.policyShadowJitGrantCompleteResult/v1",
                     "grantIdSha256":grant.as_ref().map(|grant| {
                         sha256_prefixed(grant.id.as_bytes())
                     }),
@@ -38028,7 +38028,7 @@ fn decide_internal_with_mode_and_shadow_and_google<'a>(
         let committed = grant_audit_reservation.as_mut().is_some_and(|reservation| {
             let event = with_enrollment_session_id(
                 json!({
-                    "component":"serverware-decision-gate-rs",
+                    "component":"catchplate-decision-gate-rs",
                     "grant_id":grant.id.clone(),
                     "approval_id":grant.approval_id.clone(),
                     "principal_id":principal.id.clone(),
@@ -39029,7 +39029,7 @@ fn allowed_decision_discard_headers_profile(
 }
 
 fn insert_header(headers: &mut HeaderMap, name: &str, value: &str) -> Result<(), String> {
-    if is_serverware_internal_header(name) {
+    if is_catchplate_internal_header(name) {
         return Err("credential_injection_header_reserved".to_string());
     }
     validate_injected_header_value(value)?;
@@ -39179,7 +39179,7 @@ fn apply_credential_injection(
             let name = injection
                 .get("name")
                 .and_then(Value::as_str)
-                .unwrap_or("serverware_token");
+                .unwrap_or("catchplate_token");
             if !secret.as_bytes().iter().copied().all(is_cookie_octet) {
                 return Err("credential cookie value is not canonical cookie-octet".to_string());
             }
@@ -39456,7 +39456,7 @@ fn apply_bound_credential_injection(
         snapshot,
         ActiveMutableEffectKind::CredentialInjection,
         &json!({
-            "domain":"serverware.policyShadowCredentialInjectionIntent/v1",
+            "domain":"catchplate.policyShadowCredentialInjectionIntent/v1",
             "principalIdSha256":
                 sha256_prefixed(lease.scope.principal_id.as_bytes()),
             "routeIdSha256":
@@ -39469,7 +39469,7 @@ fn apply_bound_credential_injection(
                 digest_json_ensure_ascii(injection_plan),
         }),
         &json!({
-            "domain":"serverware.policyShadowCredentialInjectionPreparedState/v1",
+            "domain":"catchplate.policyShadowCredentialInjectionPreparedState/v1",
             "precredentialUrlSha256":
                 sha256_prefixed(precredential_url.as_str().as_bytes()),
             "precredentialHeaderCount":headers.len(),
@@ -39497,7 +39497,7 @@ fn apply_bound_credential_injection(
             Ok(_) => (
                 ActiveEffectCommitState::Committed,
                 json!({
-                    "domain":"serverware.policyShadowCredentialInjectionResult/v1",
+                    "domain":"catchplate.policyShadowCredentialInjectionResult/v1",
                     "outcome":"injected",
                     "finalUrlSha256":
                         sha256_prefixed(final_url.as_str().as_bytes()),
@@ -39507,7 +39507,7 @@ fn apply_bound_credential_injection(
             Err(_) => (
                 ActiveEffectCommitState::OutcomeUnknown,
                 json!({
-                    "domain":"serverware.policyShadowCredentialInjectionResult/v1",
+                    "domain":"catchplate.policyShadowCredentialInjectionResult/v1",
                     "outcome":"injection-state-unknown",
                 }),
             ),
@@ -39649,7 +39649,7 @@ fn apply_gmail_child_bound_credential_injection(
         snapshot,
         ActiveMutableEffectKind::CredentialInjection,
         &json!({
-            "domain":"serverware.policyShadowGmailChildCredentialInjectionIntent/v1",
+            "domain":"catchplate.policyShadowGmailChildCredentialInjectionIntent/v1",
             "authorizationSha256":authorization.authorization_digest.as_str(),
             "childRequestSha256":
                 authorization.material.child_request_digest.as_str(),
@@ -39663,7 +39663,7 @@ fn apply_gmail_child_bound_credential_injection(
                 digest_json_ensure_ascii(injection_plan),
         }),
         &json!({
-            "domain":"serverware.policyShadowGmailChildCredentialInjectionPreparedState/v1",
+            "domain":"catchplate.policyShadowGmailChildCredentialInjectionPreparedState/v1",
             "precredentialChildUrlSha256":
                 sha256_prefixed(precredential_child_url.as_str().as_bytes()),
             "precredentialHeaderCount":child_headers.len(),
@@ -39708,7 +39708,7 @@ fn apply_gmail_child_bound_credential_injection(
             Ok(_) => (
                 ActiveEffectCommitState::Committed,
                 json!({
-                    "domain":"serverware.policyShadowGmailChildCredentialInjectionResult/v1",
+                    "domain":"catchplate.policyShadowGmailChildCredentialInjectionResult/v1",
                     "outcome":"injected",
                     "finalChildUrlSha256":
                         sha256_prefixed(final_child_url.as_str().as_bytes()),
@@ -39718,7 +39718,7 @@ fn apply_gmail_child_bound_credential_injection(
             Err(_) => (
                 ActiveEffectCommitState::OutcomeUnknown,
                 json!({
-                    "domain":"serverware.policyShadowGmailChildCredentialInjectionResult/v1",
+                    "domain":"catchplate.policyShadowGmailChildCredentialInjectionResult/v1",
                     "outcome":"injection-state-unknown",
                 }),
             ),
@@ -39910,7 +39910,7 @@ fn send_gmail_metadata_child_with_authorization(
                         shadow_final_upstream_request_commitment(request)?;
                     let effect_authority_commitment =
                         digest_json_ensure_ascii(&json!({
-                            "domain":"serverware.policyShadowGmailMetadataChildDispatch/v1",
+                            "domain":"catchplate.policyShadowGmailMetadataChildDispatch/v1",
                             "authorizationSha256":
                                 authorization.authorization_digest.as_str(),
                             "childRequestSha256":
@@ -40074,7 +40074,7 @@ fn validate_gmail_internal_date_str_at_cutoff(
 fn gmail_metadata_fanout_audit_event(decision: &Value, details: Value) -> Value {
     let mut event = Map::from_iter([(
         "component".to_string(),
-        Value::String("serverware-decision-gate-rs".to_string()),
+        Value::String("catchplate-decision-gate-rs".to_string()),
     )]);
     for key in [
         "principal_id",
@@ -40146,7 +40146,7 @@ fn gmail_parent_decision_binding(
     parent_release: &Map<String, Value>,
 ) -> Value {
     json!({
-        "apiVersion":"serverware.gmailMetadataParentDecisionBinding/v1",
+        "apiVersion":"catchplate.gmailMetadataParentDecisionBinding/v1",
         "allowed":decision.get("allowed"),
         "authorizes_forwarding":decision.get("authorizes_forwarding"),
         "principal_id":decision.get("principal_id"),
@@ -40433,7 +40433,7 @@ fn derive_gmail_metadata_child_authorization_profile(
     }
     let child_request_digest = digest_json_ensure_ascii(child_request);
     let material = GmailMetadataChildAuthorizationMaterial {
-        api_version: "serverware.gmailMetadataChildAuthorization/v1",
+        api_version: "catchplate.gmailMetadataChildAuthorization/v1",
         principal_id: principal_id.to_string(),
         route_id: route_id.to_string(),
         policy_hash: snapshot.hash.clone(),
@@ -40578,23 +40578,23 @@ fn gmail_metadata_child_result_sha256(
 ) -> String {
     let binding = match result {
         GmailMetadataChildResult::Hydrated { record, .. } => json!({
-            "domain":"serverware.gmailMetadataChildTerminalResult/v1",
+            "domain":"catchplate.gmailMetadataChildTerminalResult/v1",
             "outcome":"hydrated",
             "recordSha256":digest_json_ensure_ascii(record),
         }),
         GmailMetadataChildResult::Dropped { record } => json!({
-            "domain":"serverware.gmailMetadataChildTerminalResult/v1",
+            "domain":"catchplate.gmailMetadataChildTerminalResult/v1",
             "outcome":"dropped",
             "recordSha256":digest_json_ensure_ascii(record),
         }),
         GmailMetadataChildResult::Blocked { payload, record } => json!({
-            "domain":"serverware.gmailMetadataChildTerminalResult/v1",
+            "domain":"catchplate.gmailMetadataChildTerminalResult/v1",
             "outcome":"blocked",
             "payloadSha256":digest_json_ensure_ascii(payload),
             "recordSha256":digest_json_ensure_ascii(record),
         }),
         GmailMetadataChildResult::Indeterminate { payload, record } => json!({
-            "domain":"serverware.gmailMetadataChildTerminalResult/v1",
+            "domain":"catchplate.gmailMetadataChildTerminalResult/v1",
             "outcome":"indeterminate",
             "payloadSha256":digest_json_ensure_ascii(payload),
             "recordSha256":digest_json_ensure_ascii(record),
@@ -40846,7 +40846,7 @@ fn fetch_gmail_metadata_child(
         snapshot,
         ActiveMutableEffectKind::GmailChildRegister,
         &json!({
-            "domain":"serverware.policyShadowGmailChildRegistrationIntent/v1",
+            "domain":"catchplate.policyShadowGmailChildRegistrationIntent/v1",
             "authorizationSha256":
                 child_authorization.authorization_digest.as_str(),
             "childRequestSha256":
@@ -40855,7 +40855,7 @@ fn fetch_gmail_metadata_child(
             "fanoutCount":fanout_count,
         }),
         &json!({
-            "domain":"serverware.policyShadowGmailChildRegistrationPreparedState/v1",
+            "domain":"catchplate.policyShadowGmailChildRegistrationPreparedState/v1",
             "phase":"unregistered",
         }),
     ) {
@@ -40892,7 +40892,7 @@ fn fetch_gmail_metadata_child(
         registration_permit,
         registration_state,
         &json!({
-            "domain":"serverware.policyShadowGmailChildRegistrationResult/v1",
+            "domain":"catchplate.policyShadowGmailChildRegistrationResult/v1",
             "registered":registration_result.is_ok(),
             "registrationErrorSha256":registration_error_sha256,
         }),
@@ -43648,13 +43648,13 @@ fn filter_gmail_message_fields(
         _ => Map::new(),
     };
     if include_age_proof
-        && message.get("serverwareAgeProof").and_then(Value::as_str) == Some("validated")
+        && message.get("catchplateAgeProof").and_then(Value::as_str) == Some("validated")
     {
         let proof = message
-            .get("serverwareAgeProof")
+            .get("catchplateAgeProof")
             .expect("validated Gmail proof is present");
         if let Some(mut replaced) =
-            filtered.insert("serverwareAgeProof".to_string(), proof.clone())
+            filtered.insert("catchplateAgeProof".to_string(), proof.clone())
         {
             zeroize_json_value(&mut replaced);
         }
@@ -43852,13 +43852,13 @@ fn release_forward_response(
         .and_then(Value::as_str)
     {
         headers.push((
-            "X-Serverware-Client-Request-Digest".to_string(),
+            "X-Catchplate-Client-Request-Digest".to_string(),
             SensitiveString::new(client_request_digest.to_string()),
         ));
     }
     headers.extend([
         (
-            "X-Serverware-Policy-Hash".to_string(),
+            "X-Catchplate-Policy-Hash".to_string(),
             SensitiveString::new(
                 decision
                     .get("policy_hash")
@@ -43868,7 +43868,7 @@ fn release_forward_response(
             ),
         ),
         (
-            "X-Serverware-Request-Digest".to_string(),
+            "X-Catchplate-Request-Digest".to_string(),
             SensitiveString::new(
                 decision
                     .get("request_digest")
@@ -43878,7 +43878,7 @@ fn release_forward_response(
             ),
         ),
         (
-            "X-Serverware-Operation-Digest".to_string(),
+            "X-Catchplate-Operation-Digest".to_string(),
             SensitiveString::new(
                 decision
                     .get("operation_digest")
@@ -43888,7 +43888,7 @@ fn release_forward_response(
             ),
         ),
         (
-            "X-Serverware-Response-Body-SHA256".to_string(),
+            "X-Catchplate-Response-Body-SHA256".to_string(),
             SensitiveString::new(response_body_sha256),
         ),
     ]);
@@ -46272,7 +46272,7 @@ fn validate_forward_response_with_gmail_age(
                         .into();
                 }
                 if let Some(mut replaced) = object.insert(
-                    "serverwareAgeProof".to_string(),
+                    "catchplateAgeProof".to_string(),
                     Value::String("validated".to_string()),
                 ) {
                     zeroize_json_value(&mut replaced);
@@ -47108,7 +47108,7 @@ fn finalize_upstream_response_with_gmail_age(
                 gmail_age,
             );
             let released = parse_buffered_response(&response)
-                .is_ok_and(|parsed| parsed.headers.contains_key("x-serverware-policy-hash"));
+                .is_ok_and(|parsed| parsed.headers.contains_key("x-catchplate-policy-hash"));
             finish_shadow_parsed_response_unavailable(
                 snapshot,
                 &mut shadow_response_attempt,
@@ -47435,7 +47435,7 @@ fn shadow_final_upstream_request_commitment(
     });
     Ok(sha256_prefixed(
         &custody_canonical_json_bytes(&json!({
-            "domain":"serverware.policyShadowFinalUpstreamRequest/v1",
+            "domain":"catchplate.policyShadowFinalUpstreamRequest/v1",
             "method":request.method().as_str(),
             "urlSha256":sha256_prefixed(request.url().as_str().as_bytes()),
             "headers":committed_headers,
@@ -48604,7 +48604,7 @@ fn forward_absolute_request_inner_with_prepared_and_connect<'a>(
     }
     if let (Some(output), ForwardResult::Buffered(response)) = (gmail_age_output, &result) {
         if parse_buffered_response(response).is_ok_and(|parsed|
-            parsed.status == 200 && parsed.headers.contains_key("x-serverware-policy-hash"))
+            parsed.status == 200 && parsed.headers.contains_key("x-catchplate-policy-hash"))
         { *output = gmail_age; }
     }
     result
@@ -50242,7 +50242,7 @@ fn forward_absolute_request_to_with_connect<W: TerminalDeadlineWrite>(
                         "data_plane.response_proof.denied"
                     },
                     json!({
-                        "component":"serverware-decision-gate-rs",
+                        "component":"catchplate-decision-gate-rs",
                         "outcome":"denied",
                         "error":if proof_kind == Some(ResponseProofKind::Streaming) {
                             "streaming_response_proof_request_binding_invalid"
@@ -50303,7 +50303,7 @@ fn forward_absolute_request_to_with_connect<W: TerminalDeadlineWrite>(
                         "data_plane.response_proof.denied"
                     },
                     json!({
-                        "component":"serverware-decision-gate-rs",
+                        "component":"catchplate-decision-gate-rs",
                         "outcome":"denied",
                         "stage":"post_shadow_capture_pre_upstream",
                         "error":error,
@@ -50406,7 +50406,7 @@ fn forward_absolute_request_to_with_connect<W: TerminalDeadlineWrite>(
                 state,
                 "data_plane.response_observation_proof.denied",
                 json!({
-                    "component":"serverware-decision-gate-rs",
+                    "component":"catchplate-decision-gate-rs",
                     "outcome":"denied",
                     "stage":"post_shadow_capture_pre_upstream",
                     "error":error,
@@ -50614,7 +50614,7 @@ fn forward_absolute_request_to_with_connect<W: TerminalDeadlineWrite>(
                                 state,
                                 "data_plane.response_observation_proof.emitted",
                                 json!({
-                                    "component":"serverware-decision-gate-rs",
+                                    "component":"catchplate-decision-gate-rs",
                                     "outcome":"emitted",
                                     "client_nonce_sha256":sha256_prefixed(&context.client_nonce_bytes),
                                     "client_request_digest":client_request_digest,
@@ -50628,7 +50628,7 @@ fn forward_absolute_request_to_with_connect<W: TerminalDeadlineWrite>(
                                 state,
                                 "data_plane.response_observation_proof.failed",
                                 json!({
-                                    "component":"serverware-decision-gate-rs",
+                                    "component":"catchplate-decision-gate-rs",
                                     "outcome":"incomplete",
                                     "error":"response_observation_proof_unavailable",
                                     "policy_hash":snapshot.hash,
@@ -50687,7 +50687,7 @@ fn forward_absolute_request_to_with_connect<W: TerminalDeadlineWrite>(
                             state,
                             "data_plane.response_proof.failed",
                             json!({
-                                "component":"serverware-decision-gate-rs",
+                                "component":"catchplate-decision-gate-rs",
                                 "outcome":"denied",
                                 "error":"response_proof_unavailable",
                                 "policy_hash":snapshot.hash,
@@ -50723,7 +50723,7 @@ fn forward_absolute_request_to_with_connect<W: TerminalDeadlineWrite>(
                         state,
                         "data_plane.response_proof.emitted",
                         json!({
-                            "component":"serverware-decision-gate-rs",
+                            "component":"catchplate-decision-gate-rs",
                             "outcome":"emitted",
                             "client_nonce_sha256":sha256_prefixed(&context.client_nonce_bytes),
                             "client_request_digest":client_request_digest,
@@ -51241,7 +51241,7 @@ fn build_runtime_manifest(
         .expect("policy high-water mutex poisoned")
         .clone();
     let mut manifest = json!({
-        "component":"serverware-decision-gate-rs",
+        "component":"catchplate-decision-gate-rs",
         "version":env!("CARGO_PKG_VERSION"),
         "binary_digest":state.binary_digest,
         "policy_hash":snapshot.hash,
@@ -51554,7 +51554,7 @@ fn handle_connect_request(
         &state, &snapshot, &request, &connect_authentication,
     ) {
         enqueue_audit(&state, "data_plane.connect.denied", json!({
-            "component":"serverware-decision-gate-rs", "method":"CONNECT",
+            "component":"catchplate-decision-gate-rs", "method":"CONNECT",
             "target":connect_target, "outcome":"denied", "stage":"content_encoding",
             "error":error, "client_ip":client_ip, "policy_hash":snapshot.hash,
         }));
@@ -51588,7 +51588,7 @@ fn handle_connect_request(
                 &state,
                 "data_plane.connect.denied",
                 json!({
-                    "component":"serverware-decision-gate-rs",
+                    "component":"catchplate-decision-gate-rs",
                     "method":"CONNECT",
                     "target":connect_target,
                     "authority":authority_string(&host, port),
@@ -51615,7 +51615,7 @@ fn handle_connect_request(
                 &state,
                 "data_plane.connect.denied",
                 json!({
-                    "component":"serverware-decision-gate-rs",
+                    "component":"catchplate-decision-gate-rs",
                     "method":"CONNECT",
                     "target":connect_target,
                     "authority":authority_string(&host, port),
@@ -51698,7 +51698,7 @@ fn handle_connect_request(
                 &state,
                 "data_plane.connect.reauthentication_denied",
                 json!({
-                    "component":"serverware-decision-gate-rs",
+                    "component":"catchplate-decision-gate-rs",
                     "method":"CONNECT",
                     "target":connect_target,
                     "authority":authority,
@@ -51829,7 +51829,7 @@ fn handle_connect_request(
                     "data_plane.response_proof.denied"
                 },
                 json!({
-                    "component":"serverware-decision-gate-rs",
+                    "component":"catchplate-decision-gate-rs",
                     "outcome":"denied",
                     "error":"response_proof_request_invalid",
                     "client_ip":client_ip,
@@ -51848,7 +51848,7 @@ fn handle_connect_request(
                 &state,
                 "data_plane.response_proof.denied",
                 json!({
-                    "component":"serverware-decision-gate-rs",
+                    "component":"catchplate-decision-gate-rs",
                     "outcome":"denied",
                     "error":"response_proof_unavailable",
                     "stage":"pre_upstream",
@@ -52391,9 +52391,9 @@ fn handle_gate_connection(
                 || head.target==policy_shadow_generation::activation::PATH);
     let management_post = head.method == "POST"
         && (matches!(head.target.as_str(), "/v1/decide" | "/v1/grants")
-            || head.target == serverware_decision_gate::native_loaded_policy_v1::PATH
-            || head.target == serverware_decision_gate::native_generation_origin_v1::PATH
-            || head.target == serverware_decision_gate::native_setup_hardware_v1::PATH
+            || head.target == catchplate_decision_gate::native_loaded_policy_v1::PATH
+            || head.target == catchplate_decision_gate::native_generation_origin_v1::PATH
+            || head.target == catchplate_decision_gate::native_setup_hardware_v1::PATH
             || policy_shadow_install_post
             || policy_shadow_lookup_post
             || policy_shadow_activation_post);
@@ -52415,15 +52415,15 @@ fn handle_gate_connection(
             let _ = stream.flush();
             return;
         }
-        if head.method == "POST" && head.target == serverware_decision_gate::native_loaded_policy_v1::PATH {
+        if head.method == "POST" && head.target == catchplate_decision_gate::native_loaded_policy_v1::PATH {
             native_loaded_policy::handle(&state,head,&mut stream);
             return;
         }
-        if head.method == "POST" && head.target == serverware_decision_gate::native_setup_hardware_v1::PATH {
+        if head.method == "POST" && head.target == catchplate_decision_gate::native_setup_hardware_v1::PATH {
             native_setup_hardware::handle(&state,head,&mut stream);
             return;
         }
-        if head.method=="POST" && head.target==serverware_decision_gate::native_generation_origin_v1::PATH {
+        if head.method=="POST" && head.target==catchplate_decision_gate::native_generation_origin_v1::PATH {
             native_generation_origin::handle(&state,head,&mut stream);return;
         }
         if policy_shadow_install_post || policy_shadow_lookup_post || policy_shadow_activation_post {
@@ -52776,7 +52776,7 @@ fn handle_gate_connection(
                     &state,
                     "data_plane.policy_shadow.generation_rejected",
                     json!({
-                        "component":"serverware-decision-gate-rs",
+                        "component":"catchplate-decision-gate-rs",
                         "error":error.code(),
                         "error_sha256":error.detail_sha256(),
                     }),
@@ -52827,7 +52827,7 @@ fn handle_gate_connection(
                     &state,
                     "data_plane.policy_shadow.activation_rejected",
                     json!({
-                        "component":"serverware-decision-gate-rs",
+                        "component":"catchplate-decision-gate-rs",
                         "error":error.code(),
                         "error_sha256":error.detail_sha256(),
                     }),
@@ -53023,7 +53023,7 @@ fn validate_pinned_verifier_path(command: &PinnedVerifierCommand) -> Result<(), 
 }
 
 fn validate_static_amd64_elf_verifier(bytes: &[u8]) -> Result<(), String> {
-    serverware_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(bytes)
+    catchplate_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(bytes)
 }
 
 fn read_authenticated_verifier_bytes(command: &PinnedVerifierCommand) -> Result<Vec<u8>, String> {
@@ -53110,7 +53110,7 @@ fn sealed_authenticated_verifier_snapshot(
     command: &PinnedVerifierCommand,
 ) -> Result<fs::File, String> {
     let bytes = read_authenticated_verifier_bytes(command)?;
-    let name = CString::new("serverware-control-plane-attestation-verifier")
+    let name = CString::new("catchplate-control-plane-attestation-verifier")
         .expect("static memfd name contains no NUL");
     // The sealed memfd is the exact byte snapshot whose digest was checked above.
     let fd =
@@ -53340,7 +53340,7 @@ fn materialize_native_proxy_ingress(
     ingress.verify_live(deadline)?;
     let tls = ingress.tls();
     let mut chain_digest = Sha256::new();
-    chain_digest.update(b"serverware/native-tls-server-chain/v1\0");
+    chain_digest.update(b"catchplate/native-tls-server-chain/v1\0");
     chain_digest.update((tls.certificate_chain().len() as u32).to_be_bytes());
     for certificate in tls.certificate_chain() {
         chain_digest.update((certificate.len() as u64).to_be_bytes());
@@ -53392,7 +53392,7 @@ fn load_proxy_ingress_config(
     is_production: bool,
     workload_trust_configured: bool,
 ) -> Result<(ProxyIngressConfig, ProxyIngressAttestation), String> {
-    let mode = env::var("SERVERWARE_PROXY_INGRESS_MODE")
+    let mode = env::var("CATCHPLATE_PROXY_INGRESS_MODE")
         .unwrap_or_else(|_| {
             if is_production {
                 "mtls".to_string()
@@ -53401,7 +53401,7 @@ fn load_proxy_ingress_config(
             }
         });
     if mode != mode.trim() || mode.chars().any(char::is_control) {
-        return Err("SERVERWARE_PROXY_INGRESS_MODE is not canonical".to_string());
+        return Err("CATCHPLATE_PROXY_INGRESS_MODE is not canonical".to_string());
     }
     if mode == "development-raw" || mode == operator_demo::INGRESS_MODE {
         if is_production || workload_trust_configured {
@@ -53411,17 +53411,17 @@ fn load_proxy_ingress_config(
             );
         }
         let operator_edge = mode == operator_demo::INGRESS_MODE;
-        if operator_edge && env::var("SERVERWARE_OPERATOR_DEMO").as_deref() != Ok("1") {
+        if operator_edge && env::var("CATCHPLATE_OPERATOR_DEMO").as_deref() != Ok("1") {
             return Err("operator-demo-tls-edge requires explicit operator demo admission".to_string());
         }
         for name in [
-            "SERVERWARE_PROXY_TLS_CERT",
-            "SERVERWARE_PROXY_TLS_KEY",
-            "SERVERWARE_PROXY_CLIENT_CA_BUNDLE",
+            "CATCHPLATE_PROXY_TLS_CERT",
+            "CATCHPLATE_PROXY_TLS_KEY",
+            "CATCHPLATE_PROXY_CLIENT_CA_BUNDLE",
         ] {
             if env::var_os(name).is_some() {
                 return Err(format!(
-                    "{name} must be absent when SERVERWARE_PROXY_INGRESS_MODE=development-raw"
+                    "{name} must be absent when CATCHPLATE_PROXY_INGRESS_MODE=development-raw"
                 ));
             }
         }
@@ -53442,13 +53442,13 @@ fn load_proxy_ingress_config(
     }
     if mode != "mtls" {
         return Err(
-            "SERVERWARE_PROXY_INGRESS_MODE must be mtls, development-raw or operator-demo-tls-edge".to_string(),
+            "CATCHPLATE_PROXY_INGRESS_MODE must be mtls, development-raw or operator-demo-tls-edge".to_string(),
         );
     }
 
-    let certificate_path = required_proxy_tls_path("SERVERWARE_PROXY_TLS_CERT")?;
-    let private_key_path = required_proxy_tls_path("SERVERWARE_PROXY_TLS_KEY")?;
-    let client_ca_path = required_proxy_tls_path("SERVERWARE_PROXY_CLIENT_CA_BUNDLE")?;
+    let certificate_path = required_proxy_tls_path("CATCHPLATE_PROXY_TLS_CERT")?;
+    let private_key_path = required_proxy_tls_path("CATCHPLATE_PROXY_TLS_KEY")?;
+    let client_ca_path = required_proxy_tls_path("CATCHPLATE_PROXY_CLIENT_CA_BUNDLE")?;
     let certificate_bytes = read_proxy_tls_file_snapshot(
         &certificate_path,
         "proxy TLS certificate chain",
@@ -54013,23 +54013,23 @@ fn main() -> Result<(), String> {
     if native_startup_config::run_from_process_arguments()?.is_some() {
         return Ok(());
     }
-    let policy_path = env::var("SERVERWARE_POLICY_BUNDLE")
+    let policy_path = env::var("CATCHPLATE_POLICY_BUNDLE")
         .unwrap_or_else(|_| "/data/policy-bundle.json".to_string());
-    let release_channel = env::var("SERVERWARE_RELEASE_CHANNEL").ok();
+    let release_channel = env::var("CATCHPLATE_RELEASE_CHANNEL").ok();
     let is_production = production_mode(release_channel.as_deref());
     let pending_workload_trust = workload_identity_trust::prepare(is_production)?;
     let (mut proxy_ingress, mut proxy_ingress_attestation) =
         load_proxy_ingress_config(is_production, pending_workload_trust.is_some())?;
     let allow_insecure_dev_credential_leases =
-        env::var("SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES").as_deref() == Ok("1");
+        env::var("CATCHPLATE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES").as_deref() == Ok("1");
     if is_production && allow_insecure_dev_credential_leases {
         return Err(
-            "SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES is forbidden outside an explicit development release channel"
+            "CATCHPLATE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES is forbidden outside an explicit development release channel"
                 .to_string(),
         );
     }
     let policy_trust_root_attestation_url =
-        env::var("SERVERWARE_POLICY_TRUST_ROOT_ATTESTATION_URL")
+        env::var("CATCHPLATE_POLICY_TRUST_ROOT_ATTESTATION_URL")
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
@@ -54047,7 +54047,7 @@ fn main() -> Result<(), String> {
         && (verifier_command.is_some() || verifier_expected_sha256.is_some())
     {
         return Err(format!(
-            "{CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND_ENV} and its SHA-256 pin require SERVERWARE_POLICY_TRUST_ROOT_ATTESTATION_URL"
+            "{CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND_ENV} and its SHA-256 pin require CATCHPLATE_POLICY_TRUST_ROOT_ATTESTATION_URL"
         ));
     }
     let verifier = configure_control_plane_attestation_verifier(
@@ -54059,7 +54059,7 @@ fn main() -> Result<(), String> {
     let policy_trust_root_source = if let Some(url) = policy_trust_root_attestation_url {
         PolicyTrustRootSource::AttestedControlPlane {
             url,
-            expected_quote_key_id: env::var("SERVERWARE_EXPECTED_CONTROL_PLANE_QUOTE_KEY_ID")
+            expected_quote_key_id: env::var("CATCHPLATE_EXPECTED_CONTROL_PLANE_QUOTE_KEY_ID")
                 .ok()
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
@@ -54068,7 +54068,7 @@ fn main() -> Result<(), String> {
         }
     } else {
         PolicyTrustRootSource::File(
-            env::var("SERVERWARE_POLICY_SIGNING_PUBLIC_KEY")
+            env::var("CATCHPLATE_POLICY_SIGNING_PUBLIC_KEY")
                 .unwrap_or_else(|_| "/data/policy-signing-ed25519.pub.pem".to_string()),
         )
     };
@@ -54080,48 +54080,48 @@ fn main() -> Result<(), String> {
                 PolicyTrustRootSource::AttestedControlPlane { .. }
             ),
         )?;
-    let credential_lease_url = env::var("SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL")
+    let credential_lease_url = env::var("CATCHPLATE_CONTROL_PLANE_CREDENTIAL_LEASE_URL")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     let credential_lease_recipient_attestation_command =
-        env::var("SERVERWARE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND")
+        env::var("CATCHPLATE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND")
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
     let response_proof_attestation_command =
-        env::var("SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND")
+        env::var("CATCHPLATE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND")
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
-    let server_instance_id = env::var("SERVERWARE_DATA_PLANE_INSTANCE_ID")
+    let server_instance_id = env::var("CATCHPLATE_DATA_PLANE_INSTANCE_ID")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     let atomic_release_authorization_enabled =
-        match env::var("SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED").as_deref() {
+        match env::var("CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED").as_deref() {
             Ok("1") => true,
             Ok("0") | Err(env::VarError::NotPresent) => false,
             Ok(_) => {
                 return Err(
-                    "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED must be 0 or 1".to_string(),
+                    "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED must be 0 or 1".to_string(),
                 )
             }
             Err(err) => {
                 return Err(format!(
-                    "read SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED: {err}"
+                    "read CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED: {err}"
                 ))
             }
         };
-    let policy_poll_seconds = env::var("SERVERWARE_POLICY_POLL_SECONDS")
+    let policy_poll_seconds = env::var("CATCHPLATE_POLICY_POLL_SECONDS")
         .ok()
         .and_then(|value| value.parse::<f64>().ok())
         .unwrap_or(0.25);
-    let credential_lease_poll_seconds = env::var("SERVERWARE_CREDENTIAL_LEASE_POLL_SECONDS")
+    let credential_lease_poll_seconds = env::var("CATCHPLATE_CREDENTIAL_LEASE_POLL_SECONDS")
         .ok()
         .map(|value| {
             value.parse::<f64>().map_err(|_| {
-                "SERVERWARE_CREDENTIAL_LEASE_POLL_SECONDS must be a number".to_string()
+                "CATCHPLATE_CREDENTIAL_LEASE_POLL_SECONDS must be a number".to_string()
             })
         })
         .transpose()?
@@ -54130,30 +54130,30 @@ fn main() -> Result<(), String> {
         || !(0.05..=1.0).contains(&credential_lease_poll_seconds)
     {
         return Err(
-            "SERVERWARE_CREDENTIAL_LEASE_POLL_SECONDS must be between 0.05 and 1 for five-second leases"
+            "CATCHPLATE_CREDENTIAL_LEASE_POLL_SECONDS must be between 0.05 and 1 for five-second leases"
                 .to_string(),
         );
     }
-    let credential_lease_renewal_workers = env::var("SERVERWARE_CREDENTIAL_LEASE_REFRESH_WORKERS")
+    let credential_lease_renewal_workers = env::var("CATCHPLATE_CREDENTIAL_LEASE_REFRESH_WORKERS")
         .ok()
         .map(|value| {
             value.parse::<usize>().map_err(|_| {
-                "SERVERWARE_CREDENTIAL_LEASE_REFRESH_WORKERS must be an integer".to_string()
+                "CATCHPLATE_CREDENTIAL_LEASE_REFRESH_WORKERS must be an integer".to_string()
             })
         })
         .transpose()?
         .unwrap_or(4);
     if !(1..=32).contains(&credential_lease_renewal_workers) {
         return Err(
-            "SERVERWARE_CREDENTIAL_LEASE_REFRESH_WORKERS must be between 1 and 32".to_string(),
+            "CATCHPLATE_CREDENTIAL_LEASE_REFRESH_WORKERS must be between 1 and 32".to_string(),
         );
     }
     let credential_lease_renewal_queue_capacity =
-        env::var("SERVERWARE_CREDENTIAL_LEASE_REFRESH_QUEUE_CAPACITY")
+        env::var("CATCHPLATE_CREDENTIAL_LEASE_REFRESH_QUEUE_CAPACITY")
             .ok()
             .map(|value| {
                 value.parse::<usize>().map_err(|_| {
-                    "SERVERWARE_CREDENTIAL_LEASE_REFRESH_QUEUE_CAPACITY must be an integer"
+                    "CATCHPLATE_CREDENTIAL_LEASE_REFRESH_QUEUE_CAPACITY must be an integer"
                         .to_string()
                 })
             })
@@ -54161,81 +54161,81 @@ fn main() -> Result<(), String> {
             .unwrap_or(1024);
     if !(1..=65_536).contains(&credential_lease_renewal_queue_capacity) {
         return Err(
-            "SERVERWARE_CREDENTIAL_LEASE_REFRESH_QUEUE_CAPACITY must be between 1 and 65536"
+            "CATCHPLATE_CREDENTIAL_LEASE_REFRESH_QUEUE_CAPACITY must be between 1 and 65536"
                 .to_string(),
         );
     }
-    let credential_lease_cache_max = env::var("SERVERWARE_CREDENTIAL_LEASE_CACHE_MAX")
+    let credential_lease_cache_max = env::var("CATCHPLATE_CREDENTIAL_LEASE_CACHE_MAX")
         .ok()
         .map(|value| {
             value
                 .parse::<usize>()
-                .map_err(|_| "SERVERWARE_CREDENTIAL_LEASE_CACHE_MAX must be an integer".to_string())
+                .map_err(|_| "CATCHPLATE_CREDENTIAL_LEASE_CACHE_MAX must be an integer".to_string())
         })
         .transpose()?
         .unwrap_or(10_000);
     if !(1..=1_000_000).contains(&credential_lease_cache_max) {
         return Err(
-            "SERVERWARE_CREDENTIAL_LEASE_CACHE_MAX must be between 1 and 1000000".to_string(),
+            "CATCHPLATE_CREDENTIAL_LEASE_CACHE_MAX must be between 1 and 1000000".to_string(),
         );
     }
     let credential_lease_renewal_interval = Duration::from_secs_f64(credential_lease_poll_seconds);
-    let audit_url = env::var("SERVERWARE_CONTROL_PLANE_AUDIT_URL")
+    let audit_url = env::var("CATCHPLATE_CONTROL_PLANE_AUDIT_URL")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     let credential_lease_token =
-        configured_service_token("SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN")?;
-    let audit_token = configured_service_token("SERVERWARE_DATA_PLANE_AUDIT_TOKEN")?;
+        configured_service_token("CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN")?;
+    let audit_token = configured_service_token("CATCHPLATE_DATA_PLANE_AUDIT_TOKEN")?;
     let grant_consume_token =
-        configured_service_token("SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN")?;
+        configured_service_token("CATCHPLATE_DATA_PLANE_GRANT_CONSUME_TOKEN")?;
     let rate_limit_consume_token =
-        configured_service_token("SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN")?;
+        configured_service_token("CATCHPLATE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN")?;
     let release_authorization_token =
-        configured_service_token("SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN")?;
-    let management_token = configured_service_token("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN")?;
+        configured_service_token("CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN")?;
+    let management_token = configured_service_token("CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN")?;
     let configured_tokens = [
         (
-            "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
+            "CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
             &credential_lease_token,
         ),
-        ("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", &audit_token),
+        ("CATCHPLATE_DATA_PLANE_AUDIT_TOKEN", &audit_token),
         (
-            "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN",
+            "CATCHPLATE_DATA_PLANE_GRANT_CONSUME_TOKEN",
             &grant_consume_token,
         ),
         (
-            "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
+            "CATCHPLATE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
             &rate_limit_consume_token,
         ),
         (
-            "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN",
+            "CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN",
             &release_authorization_token,
         ),
-        ("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN", &management_token),
+        ("CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN", &management_token),
     ];
     validate_configured_internal_service_tokens(is_production, &configured_tokens)?;
     let mut required_tokens = vec![
         (
-            "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
+            "CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
             &credential_lease_token,
         ),
-        ("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", &audit_token),
-        ("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN", &management_token),
+        ("CATCHPLATE_DATA_PLANE_AUDIT_TOKEN", &audit_token),
+        ("CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN", &management_token),
     ];
     if atomic_release_authorization_enabled {
         required_tokens.push((
-            "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN",
+            "CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN",
             &release_authorization_token,
         ));
     } else {
         required_tokens.extend([
             (
-                "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN",
+                "CATCHPLATE_DATA_PLANE_GRANT_CONSUME_TOKEN",
                 &grant_consume_token,
             ),
             (
-                "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
+                "CATCHPLATE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
                 &rate_limit_consume_token,
             ),
         ]);
@@ -54243,63 +54243,63 @@ fn main() -> Result<(), String> {
     validate_internal_service_tokens(is_production, &required_tokens)?;
     if audit_url.is_some() != audit_token.is_some() {
         return Err(
-            "SERVERWARE_CONTROL_PLANE_AUDIT_URL and SERVERWARE_DATA_PLANE_AUDIT_TOKEN must be set together"
+            "CATCHPLATE_CONTROL_PLANE_AUDIT_URL and CATCHPLATE_DATA_PLANE_AUDIT_TOKEN must be set together"
                 .to_string(),
         );
     }
     if audit_url.is_some() && server_instance_id.is_none() {
         return Err(
-            "SERVERWARE_CONTROL_PLANE_AUDIT_URL requires SERVERWARE_DATA_PLANE_INSTANCE_ID"
+            "CATCHPLATE_CONTROL_PLANE_AUDIT_URL requires CATCHPLATE_DATA_PLANE_INSTANCE_ID"
                 .to_string(),
         );
     }
     if credential_lease_url.is_some() && credential_lease_token.is_none() {
         return Err(
-            "SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL requires SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN"
+            "CATCHPLATE_CONTROL_PLANE_CREDENTIAL_LEASE_URL requires CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN"
                 .to_string(),
         );
     }
-    let grant_consume_url = env::var("SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL")
+    let grant_consume_url = env::var("CATCHPLATE_CONTROL_PLANE_GRANT_CONSUME_URL")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     if grant_consume_url.is_some() && grant_consume_token.is_none() {
         return Err(
-            "SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL requires SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN"
+            "CATCHPLATE_CONTROL_PLANE_GRANT_CONSUME_URL requires CATCHPLATE_DATA_PLANE_GRANT_CONSUME_TOKEN"
                 .to_string(),
         );
     }
     if is_production && !atomic_release_authorization_enabled && grant_consume_url.is_none() {
         return Err(
-            "production requires SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL for shared JIT grants"
+            "production requires CATCHPLATE_CONTROL_PLANE_GRANT_CONSUME_URL for shared JIT grants"
                 .to_string(),
         );
     }
-    let rate_limit_consume_url = env::var("SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL")
+    let rate_limit_consume_url = env::var("CATCHPLATE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     if rate_limit_consume_url.is_some() && rate_limit_consume_token.is_none() {
         return Err(
-            "SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL requires SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN"
+            "CATCHPLATE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL requires CATCHPLATE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN"
                 .to_string(),
         );
     }
     let release_authorization_base_url =
-        env::var("SERVERWARE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL")
+        env::var("CATCHPLATE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL")
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
     if atomic_release_authorization_enabled {
         if release_authorization_base_url.is_none() {
             return Err(
-                "atomic release authorization requires SERVERWARE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL"
+                "atomic release authorization requires CATCHPLATE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL"
                     .to_string(),
             );
         }
         if release_authorization_token.is_none() {
             return Err(
-                "atomic release authorization requires SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"
+                "atomic release authorization requires CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"
                     .to_string(),
             );
         }
@@ -54347,16 +54347,16 @@ fn main() -> Result<(), String> {
     if credential_lease_url.is_some() && !allow_insecure_dev_credential_leases {
         if credential_lease_recipient_attestation_command.is_none() {
             return Err(
-                "credential leases require SERVERWARE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND"
+                "credential leases require CATCHPLATE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND"
                     .to_string(),
             );
         }
-        if env::var("SERVERWARE_CONTROL_PLANE_CA_BUNDLE")
+        if env::var("CATCHPLATE_CONTROL_PLANE_CA_BUNDLE")
             .ok()
             .is_none_or(|value| value.trim().is_empty())
         {
             return Err(
-                "credential leases require SERVERWARE_CONTROL_PLANE_CA_BUNDLE outside explicit development mode"
+                "credential leases require CATCHPLATE_CONTROL_PLANE_CA_BUNDLE outside explicit development mode"
                     .to_string(),
             );
         }
@@ -54369,69 +54369,69 @@ fn main() -> Result<(), String> {
             }
         ) {
             return Err(
-                "credential leases require a pinned quote key or SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND"
+                "credential leases require a pinned quote key or CATCHPLATE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND"
                     .to_string(),
             );
         }
     }
-    let audit_queue_max = env::var("SERVERWARE_DATA_PLANE_AUDIT_QUEUE_MAX")
+    let audit_queue_max = env::var("CATCHPLATE_DATA_PLANE_AUDIT_QUEUE_MAX")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(10_000)
         .max(1);
-    let audit_batch_max = env::var("SERVERWARE_DATA_PLANE_AUDIT_BATCH_MAX")
+    let audit_batch_max = env::var("CATCHPLATE_DATA_PLANE_AUDIT_BATCH_MAX")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .clamp(1, 200);
-    let grant_cache_max = env::var("SERVERWARE_DATA_PLANE_GRANT_CACHE_MAX")
+    let grant_cache_max = env::var("CATCHPLATE_DATA_PLANE_GRANT_CACHE_MAX")
         .ok()
         .map(|value| {
             value
                 .parse::<usize>()
-                .map_err(|_| "SERVERWARE_DATA_PLANE_GRANT_CACHE_MAX must be an integer".to_string())
+                .map_err(|_| "CATCHPLATE_DATA_PLANE_GRANT_CACHE_MAX must be an integer".to_string())
         })
         .transpose()?
         .unwrap_or(100_000);
     if !(1..=1_000_000).contains(&grant_cache_max) {
         return Err(
-            "SERVERWARE_DATA_PLANE_GRANT_CACHE_MAX must be between 1 and 1000000".to_string(),
+            "CATCHPLATE_DATA_PLANE_GRANT_CACHE_MAX must be between 1 and 1000000".to_string(),
         );
     }
-    let gmail_proof_cache_max = env::var("SERVERWARE_GMAIL_PROOF_CACHE_MAX")
+    let gmail_proof_cache_max = env::var("CATCHPLATE_GMAIL_PROOF_CACHE_MAX")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(10_000)
         .max(1);
-    let audit_flush_ms = env::var("SERVERWARE_DATA_PLANE_AUDIT_FLUSH_MS")
+    let audit_flush_ms = env::var("CATCHPLATE_DATA_PLANE_AUDIT_FLUSH_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(100)
         .max(10);
     let request_head_deadline = bounded_duration_env(
-        "SERVERWARE_DATA_PLANE_REQUEST_HEAD_DEADLINE_MS",
+        "CATCHPLATE_DATA_PLANE_REQUEST_HEAD_DEADLINE_MS",
         DEFAULT_REQUEST_HEAD_DEADLINE_MS,
         100,
         30_000,
     )?;
     let request_body_deadline = bounded_duration_env(
-        "SERVERWARE_DATA_PLANE_REQUEST_BODY_DEADLINE_MS",
+        "CATCHPLATE_DATA_PLANE_REQUEST_BODY_DEADLINE_MS",
         DEFAULT_REQUEST_BODY_DEADLINE_MS,
         1_000,
         600_000,
     )?;
     let response_write_deadline = bounded_duration_env(
-        "SERVERWARE_DATA_PLANE_RESPONSE_WRITE_DEADLINE_MS",
+        "CATCHPLATE_DATA_PLANE_RESPONSE_WRITE_DEADLINE_MS",
         DEFAULT_RESPONSE_WRITE_DEADLINE_MS,
         1_000,
         600_000,
     )?;
-    let host = env::var("SERVERWARE_DECISION_GATE_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
-    let port = env::var("SERVERWARE_DECISION_GATE_PORT").unwrap_or_else(|_| "9090".to_string());
-    let management_host = env::var("SERVERWARE_DECISION_GATE_MANAGEMENT_HOST")
+    let host = env::var("CATCHPLATE_DECISION_GATE_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let port = env::var("CATCHPLATE_DECISION_GATE_PORT").unwrap_or_else(|_| "9090".to_string());
+    let management_host = env::var("CATCHPLATE_DECISION_GATE_MANAGEMENT_HOST")
         .unwrap_or_else(|_| "127.0.0.1".to_string());
     let management_port =
-        env::var("SERVERWARE_DECISION_GATE_MANAGEMENT_PORT").unwrap_or_else(|_| "9091".to_string());
+        env::var("CATCHPLATE_DECISION_GATE_MANAGEMENT_PORT").unwrap_or_else(|_| "9091".to_string());
     if (is_production
         || policy_shadow_generation_control.is_some())
         && !management_bind_is_loopback(&management_host)
@@ -54445,27 +54445,27 @@ fn main() -> Result<(), String> {
         response_proof_attestation_command.as_deref(),
         server_instance_id.as_deref(),
     )?;
-    let policy_high_water_path = env::var("SERVERWARE_POLICY_HIGH_WATER_FILE")
+    let policy_high_water_path = env::var("CATCHPLATE_POLICY_HIGH_WATER_FILE")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from);
     if is_production && policy_high_water_path.is_none() {
-        return Err("production requires SERVERWARE_POLICY_HIGH_WATER_FILE".to_string());
+        return Err("production requires CATCHPLATE_POLICY_HIGH_WATER_FILE".to_string());
     }
-    let policy_minimum_sequence = env::var("SERVERWARE_POLICY_MIN_SEQUENCE")
+    let policy_minimum_sequence = env::var("CATCHPLATE_POLICY_MIN_SEQUENCE")
         .ok()
         .map(|value| {
             value.parse::<u64>().map_err(|_| {
-                "SERVERWARE_POLICY_MIN_SEQUENCE must be a positive integer".to_string()
+                "CATCHPLATE_POLICY_MIN_SEQUENCE must be a positive integer".to_string()
             })
         })
         .transpose()?
         .unwrap_or(1);
-    let policy_minimum_rollback_epoch = env::var("SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH")
+    let policy_minimum_rollback_epoch = env::var("CATCHPLATE_POLICY_MIN_ROLLBACK_EPOCH")
         .ok()
         .map(|value| {
             value.parse::<u64>().map_err(|_| {
-                "SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH must be a positive integer".to_string()
+                "CATCHPLATE_POLICY_MIN_ROLLBACK_EPOCH must be a positive integer".to_string()
             })
         })
         .transpose()?
@@ -54474,42 +54474,42 @@ fn main() -> Result<(), String> {
         return Err("policy monotonic floors must be positive integers".to_string());
     }
     if is_production
-        && (env::var("SERVERWARE_POLICY_MIN_SEQUENCE").is_err()
-            || env::var("SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH").is_err())
+        && (env::var("CATCHPLATE_POLICY_MIN_SEQUENCE").is_err()
+            || env::var("CATCHPLATE_POLICY_MIN_ROLLBACK_EPOCH").is_err())
     {
         return Err(
-            "production requires SERVERWARE_POLICY_MIN_SEQUENCE and SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH"
+            "production requires CATCHPLATE_POLICY_MIN_SEQUENCE and CATCHPLATE_POLICY_MIN_ROLLBACK_EPOCH"
                 .to_string(),
         );
     }
-    let proxy_workers = env::var("SERVERWARE_DECISION_GATE_PROXY_WORKERS")
+    let proxy_workers = env::var("CATCHPLATE_DECISION_GATE_PROXY_WORKERS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(16)
         .clamp(1, 192);
     if is_production && proxy_workers > 24 {
         return Err(
-            "production SERVERWARE_DECISION_GATE_PROXY_WORKERS must not exceed 24 under the 512 MiB container memory limit"
+            "production CATCHPLATE_DECISION_GATE_PROXY_WORKERS must not exceed 24 under the 512 MiB container memory limit"
                 .to_string(),
         );
     }
-    let management_workers = env::var("SERVERWARE_DECISION_GATE_MANAGEMENT_WORKERS")
+    let management_workers = env::var("CATCHPLATE_DECISION_GATE_MANAGEMENT_WORKERS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(8)
         .clamp(1, 32);
-    let proxy_queue_capacity = env::var("SERVERWARE_DECISION_GATE_PROXY_QUEUE_CAPACITY")
+    let proxy_queue_capacity = env::var("CATCHPLATE_DECISION_GATE_PROXY_QUEUE_CAPACITY")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(256)
         .clamp(1, 4096);
-    let management_queue_capacity = env::var("SERVERWARE_DECISION_GATE_MANAGEMENT_QUEUE_CAPACITY")
+    let management_queue_capacity = env::var("CATCHPLATE_DECISION_GATE_MANAGEMENT_QUEUE_CAPACITY")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(32)
         .clamp(1, 256);
-    let release_provenance_path = env::var("SERVERWARE_RELEASE_PROVENANCE").ok();
-    let image_signatures_path = env::var("SERVERWARE_IMAGE_SIGNATURES").ok();
+    let release_provenance_path = env::var("CATCHPLATE_RELEASE_PROVENANCE").ok();
+    let image_signatures_path = env::var("CATCHPLATE_IMAGE_SIGNATURES").ok();
     // The selected operator profile is the only legacy mode that shares a
     // mutable policy with its audit receiver. Pin and lock before the FIRST load,
     // not merely before starting workers, so restart cannot cross publication.
@@ -54769,7 +54769,7 @@ fn main() -> Result<(), String> {
     }
     let snapshot = current_snapshot(&state);
     eprintln!(
-        "serverware decision gate listening proxy={host}:{port} proxy_ingress={} management={management_host}:{management_port} policy_hash={} binary_digest={} routes={} leases={} credential_lease_protocol={} connect_mitm={} audit={}",
+        "catchplate decision gate listening proxy={host}:{port} proxy_ingress={} management={management_host}:{management_port} policy_hash={} binary_digest={} routes={} leases={} credential_lease_protocol={} connect_mitm={} audit={}",
         state.proxy_ingress_attestation.mode,
         snapshot.hash,
         state.binary_digest,
@@ -54897,7 +54897,7 @@ mod tests {
         identity_signature[0] = 1;
         assert!(weak_key
             .verify_strict(
-                b"serverware hostile strict-verification vector",
+                b"catchplate hostile strict-verification vector",
                 &Signature::from_bytes(&identity_signature),
             )
             .is_err());
@@ -54961,7 +54961,7 @@ mod tests {
     fn test_temp_path(label: &str) -> PathBuf {
         static NEXT_PATH: AtomicU64 = AtomicU64::new(0);
         env::temp_dir().join(format!(
-            "serverware-decision-gate-{label}-{}-{}",
+            "catchplate-decision-gate-{label}-{}-{}",
             std::process::id(),
             NEXT_PATH.fetch_add(1, Ordering::Relaxed)
         ))
@@ -55819,7 +55819,7 @@ mod tests {
     pub(super) fn test_snapshot(epoch: u64) -> Arc<Snapshot> {
         Arc::new(Snapshot {
             epoch,
-            hash: sha256_prefixed(format!("serverware:test-policy:epoch:{epoch}").as_bytes()),
+            hash: sha256_prefixed(format!("catchplate:test-policy:epoch:{epoch}").as_bytes()),
             policy_id: "policy:test".to_string(),
             policy_sequence: epoch.max(1),
             rollback_epoch: 1,
@@ -55964,7 +55964,7 @@ mod tests {
 
         let mut unrelated_policy_change = snapshot.clone();
         unrelated_policy_change.epoch = 2;
-        unrelated_policy_change.hash = sha256_prefixed(b"serverware:test-policy:epoch:2");
+        unrelated_policy_change.hash = sha256_prefixed(b"catchplate:test-policy:epoch:2");
         unrelated_policy_change.routes[0]
             .methods
             .insert("PUT".to_string());
@@ -56279,7 +56279,7 @@ mod tests {
         let attempt_id = format!("sha256:{marker:064x}");
         let binding_digest = format!("sha256:{:064x}", marker + 10_000);
         CredentialLeaseRequestAuthority {
-            api_version: "serverware.credentialLeaseRequestAuthority/v1".to_string(),
+            api_version: "catchplate.credentialLeaseRequestAuthority/v1".to_string(),
             reservation_id: release_reservation_id(&attempt_id, &binding_digest),
             attempt_id,
             binding_digest,
@@ -56309,7 +56309,7 @@ mod tests {
             "operation":operation_context.clone(),
         });
         let request_authority = CredentialLeaseRequestAuthority {
-            api_version: "serverware.credentialLeaseRequestAuthority/v1".to_string(),
+            api_version: "catchplate.credentialLeaseRequestAuthority/v1".to_string(),
             attempt_id: authorization.attempt_id.clone(),
             reservation_id: authorization.reservation_id.clone(),
             binding_digest: authorization.binding_digest.clone(),
@@ -56523,7 +56523,7 @@ mod tests {
         .expect_err("relative custody socket must fail")
         .contains("absolute"));
         assert!(response_proof_custody_config_from_values(
-            Some(OsString::from("/run/serverware/custody.sock")),
+            Some(OsString::from("/run/catchplate/custody.sock")),
             None,
             None,
             false,
@@ -56532,7 +56532,7 @@ mod tests {
         .expect_err("custody peer UID must never be implicit")
         .contains("explicitly configured"));
         assert!(response_proof_custody_config_from_values(
-            Some(OsString::from("/run/serverware/custody.sock")),
+            Some(OsString::from("/run/catchplate/custody.sock")),
             Some(OsString::from("1000")),
             None,
             true,
@@ -56541,7 +56541,7 @@ mod tests {
         .expect_err("production custody peer must use a distinct UID")
         .contains("must differ"));
         let configured = response_proof_custody_config_from_values(
-            Some(OsString::from("/run/serverware/custody.sock")),
+            Some(OsString::from("/run/catchplate/custody.sock")),
             Some(OsString::from("123")),
             Some(OsString::from("2500")),
             true,
@@ -56551,7 +56551,7 @@ mod tests {
         .expect("custody enabled");
         assert_eq!(
             configured.socket_path,
-            PathBuf::from("/run/serverware/custody.sock")
+            PathBuf::from("/run/catchplate/custody.sock")
         );
         assert_eq!(configured.expected_uid, 123);
         assert_eq!(configured.startup_timeout, Duration::from_millis(2500));
@@ -57274,7 +57274,7 @@ mod tests {
 
     #[test]
     fn control_plane_client_ignores_ambient_proxy_environment() {
-        if env::var("SERVERWARE_NO_PROXY_TEST_CHILD").as_deref() == Ok("1") {
+        if env::var("CATCHPLATE_NO_PROXY_TEST_CHILD").as_deref() == Ok("1") {
             let client = build_control_plane_client(Duration::from_millis(100))
                 .expect("control-plane client");
             client
@@ -57297,7 +57297,7 @@ mod tests {
                 "tests::control_plane_client_ignores_ambient_proxy_environment",
                 "--nocapture",
             ])
-            .env("SERVERWARE_NO_PROXY_TEST_CHILD", "1")
+            .env("CATCHPLATE_NO_PROXY_TEST_CHILD", "1")
             .env("HTTP_PROXY", proxy_url.as_str())
             .env("HTTPS_PROXY", proxy_url.as_str())
             .env("ALL_PROXY", proxy_url.as_str())
@@ -57436,8 +57436,8 @@ mod tests {
     #[test]
     fn release_evidence_mtimes_detect_published_artifacts() {
         let suffix = format!("{}-{}", std::process::id(), now_epoch_ms());
-        let provenance = env::temp_dir().join(format!("serverware-provenance-{suffix}.json"));
-        let signatures = env::temp_dir().join(format!("serverware-image-signatures-{suffix}.json"));
+        let provenance = env::temp_dir().join(format!("catchplate-provenance-{suffix}.json"));
+        let signatures = env::temp_dir().join(format!("catchplate-image-signatures-{suffix}.json"));
         let provenance_path = provenance.to_string_lossy().into_owned();
         let signatures_path = signatures.to_string_lossy().into_owned();
 
@@ -58189,7 +58189,7 @@ mod tests {
         .expect_err("stale policy grant must be rejected");
         assert_eq!(
             stale,
-            GrantAdmissionError::InactivePolicy(sha256_prefixed(b"serverware:test-policy:epoch:2"))
+            GrantAdmissionError::InactivePolicy(sha256_prefixed(b"catchplate:test-policy:epoch:2"))
         );
         assert!(state.grants.lock().expect("grant cache").is_empty());
     }
@@ -58250,7 +58250,7 @@ mod tests {
                 &request,
                 StatusCode::OK,
                 json!({
-                    "apiVersion":"serverware.releaseAuthorization/v1",
+                    "apiVersion":"catchplate.releaseAuthorization/v1",
                     "ok":true,
                     "authorized":false,
                     "state":"denied",
@@ -58429,7 +58429,7 @@ mod tests {
                     });
                 let body = if index == 0 {
                     json!({
-                        "apiVersion":"serverware.releaseAuthorization/v1",
+                        "apiVersion":"catchplate.releaseAuthorization/v1",
                         "ok":true,
                         "authorized":false,
                         "state":"denied",
@@ -58452,7 +58452,7 @@ mod tests {
                     })
                 } else if index == 1 {
                     json!({
-                        "apiVersion":"serverware.releaseAuthorization/v1",
+                        "apiVersion":"catchplate.releaseAuthorization/v1",
                         "ok":true,
                         "authorized":true,
                         "state":"reserved",
@@ -58480,7 +58480,7 @@ mod tests {
                     );
                     assert_eq!(payload["outcome"], "not_forwarded");
                     json!({
-                        "apiVersion":"serverware.releaseAuthorization/v1",
+                        "apiVersion":"catchplate.releaseAuthorization/v1",
                         "ok":true,
                         "authorized":false,
                         "state":"cancelled",
@@ -58536,7 +58536,7 @@ mod tests {
                 .push("credential-dispatch");
             let response_nonce = request
                 .headers
-                .get("x-serverware-response-nonce")
+                .get("x-catchplate-response-nonce")
                 .expect("credential response nonce");
             let response = signed_control_plane_test_response(
                 &response_signing_key,
@@ -58610,12 +58610,12 @@ mod tests {
             .expect("captured credential payload");
         assert_eq!(
             credential["apiVersion"],
-            "serverware.credentialLeaseRequest/v4"
+            "catchplate.credentialLeaseRequest/v4"
         );
         assert_eq!(credential["purpose"], "dispatchSecret");
         assert_eq!(
             credential["requestAuthority"]["apiVersion"],
-            "serverware.credentialLeaseRequestAuthority/v1"
+            "catchplate.credentialLeaseRequestAuthority/v1"
         );
         assert_eq!(
             credential["requestAuthority"]["attemptId"],
@@ -58679,7 +58679,7 @@ mod tests {
                 &request,
                 StatusCode::OK,
                 json!({
-                    "apiVersion":"serverware.releaseAuthorization/v1",
+                    "apiVersion":"catchplate.releaseAuthorization/v1",
                     "ok":true,
                     "authorized":false,
                     "state":"denied",
@@ -58820,7 +58820,7 @@ mod tests {
     ) -> ReleaseAuthorizationResponse {
         let now_ms = u64::try_from(now_epoch_ms()).expect("current epoch fits u64");
         ReleaseAuthorizationResponse {
-            api_version: "serverware.releaseAuthorization/v1".to_string(),
+            api_version: "catchplate.releaseAuthorization/v1".to_string(),
             ok: true,
             authorized,
             state: state.to_string(),
@@ -59237,7 +59237,7 @@ mod tests {
         idempotent_replay: bool,
     ) -> Value {
         json!({
-            "apiVersion":"serverware.releaseAuthorization/v1",
+            "apiVersion":"catchplate.releaseAuthorization/v1",
             "ok":true,
             "authorized":authorized,
             "state":state,
@@ -59295,7 +59295,7 @@ mod tests {
             control_plane_response_headers_binding(&response_headers)
                 .expect("canonical signed response headers");
         let statement = json!({
-            "version":"serverware.responseSignature/v3",
+            "version":"catchplate.responseSignature/v3",
             "issued_at_ms":issued_at_ms,
             "request":{
                 "method":request.method,
@@ -59326,20 +59326,20 @@ mod tests {
             body,
             &[
                 (
-                    "X-Serverware-Response-Key-Id".to_string(),
+                    "X-Catchplate-Response-Key-Id".to_string(),
                     key_id.to_string(),
                 ),
-                ("X-Serverware-Response-Body-SHA256".to_string(), body_sha256),
+                ("X-Catchplate-Response-Body-SHA256".to_string(), body_sha256),
                 (
-                    "X-Serverware-Response-Statement-B64".to_string(),
+                    "X-Catchplate-Response-Statement-B64".to_string(),
                     statement_b64,
                 ),
                 (
-                    "X-Serverware-Response-Statement-SHA256".to_string(),
+                    "X-Catchplate-Response-Statement-SHA256".to_string(),
                     statement_sha256,
                 ),
                 (
-                    "X-Serverware-Response-Signature".to_string(),
+                    "X-Catchplate-Response-Signature".to_string(),
                     format!(
                         "ed25519:{}",
                         general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())
@@ -59431,11 +59431,11 @@ mod tests {
         assert_eq!(original.request_body.as_ptr(), request_allocation);
         let signed = &original.authentication;
         for (actual, header) in [
-            (signed.key_id.as_str(), "x-serverware-response-key-id"),
-            (signed.body_digest.as_str(), "x-serverware-response-body-sha256"),
-            (signed.statement_b64.as_str(), "x-serverware-response-statement-b64"),
-            (signed.statement_digest.as_str(), "x-serverware-response-statement-sha256"),
-            (signed.signature.as_str(), "x-serverware-response-signature"),
+            (signed.key_id.as_str(), "x-catchplate-response-key-id"),
+            (signed.body_digest.as_str(), "x-catchplate-response-body-sha256"),
+            (signed.statement_b64.as_str(), "x-catchplate-response-statement-b64"),
+            (signed.statement_digest.as_str(), "x-catchplate-response-statement-sha256"),
+            (signed.signature.as_str(), "x-catchplate-response-signature"),
         ] {
             assert_eq!(actual, headers.get(header).unwrap().to_str().unwrap());
         }
@@ -59562,7 +59562,7 @@ mod tests {
     ) -> Vec<u8> {
         let response_nonce = request
             .headers
-            .get("x-serverware-response-nonce")
+            .get("x-catchplate-response-nonce")
             .expect("release response nonce");
         validate_canonical_response_nonce(response_nonce, "test release response")
             .expect("canonical release response nonce");
@@ -59627,7 +59627,7 @@ mod tests {
         assert!(expires_at_epoch_ms > issued_at_epoch_ms);
         let aad = if request_bound {
             json!({
-                "apiVersion":"serverware.credentialLeaseEnvelope/v3",
+                "apiVersion":"catchplate.credentialLeaseEnvelope/v3",
                 "algorithm":"X25519-HKDF-SHA256-AES-256-GCM",
                 "purpose":"dispatchSecret",
                 "requestBindingSha256":request_binding_sha256,
@@ -59644,7 +59644,7 @@ mod tests {
             })
         } else {
             json!({
-                "apiVersion":"serverware.credentialLeaseEnvelope/v2",
+                "apiVersion":"catchplate.credentialLeaseEnvelope/v2",
                 "algorithm":"X25519-HKDF-SHA256-AES-256-GCM",
                 "recipientKeyId":lease_request.recipient_key_id,
                 "recipientNonce":lease_request.recipient_nonce,
@@ -59659,9 +59659,9 @@ mod tests {
         };
         let mut plaintext = json!({
             "apiVersion":if request_bound {
-                "serverware.credentialLeaseSet/v4"
+                "catchplate.credentialLeaseSet/v4"
             } else {
-                "serverware.credentialLeaseSet/v3"
+                "catchplate.credentialLeaseSet/v3"
             },
             "purpose":"dispatchSecret",
             "requestBindingSha256":request_binding_sha256,
@@ -59704,7 +59704,7 @@ mod tests {
         let shared_secret = server_private_key.diffie_hellman(&recipient_public_key);
         assert!(shared_secret.was_contributory());
         let aad_digest = Sha256::digest(&aad_bytes);
-        let mut hkdf_info = b"serverware:credential-lease-envelope:v2\0".to_vec();
+        let mut hkdf_info = b"catchplate:credential-lease-envelope:v2\0".to_vec();
         hkdf_info.extend_from_slice(&aad_digest);
         let salt = hkdf::Salt::new(hkdf::HKDF_SHA256, &recipient_nonce_bytes);
         let prk = salt.extract(shared_secret.as_bytes());
@@ -59727,9 +59727,9 @@ mod tests {
         .expect("credential lease encryption");
         let mut envelope = json!({
             "apiVersion":if request_bound {
-                "serverware.credentialLeaseEnvelope/v3"
+                "catchplate.credentialLeaseEnvelope/v3"
             } else {
-                "serverware.credentialLeaseEnvelope/v2"
+                "catchplate.credentialLeaseEnvelope/v2"
             },
             "algorithm":"X25519-HKDF-SHA256-AES-256-GCM",
             "recipientKeyId":aad["recipientKeyId"],
@@ -59838,7 +59838,7 @@ mod tests {
     ) -> Vec<u8> {
         let response_nonce = request
             .headers
-            .get("x-serverware-response-nonce")
+            .get("x-catchplate-response-nonce")
             .expect("audit response nonce");
         validate_canonical_response_nonce(response_nonce, "test audit acknowledgement")
             .expect("canonical audit response nonce");
@@ -59850,7 +59850,7 @@ mod tests {
             u64::try_from(now_epoch_ms()).expect("current epoch fits u64"),
             status,
             json!({
-                "apiVersion":"serverware.dataPlaneAuditAck/v1",
+                "apiVersion":"catchplate.dataPlaneAuditAck/v1",
                 "ok":true,
                 "accepted":accepted,
                 "batchDigest":batch_digest,
@@ -60164,7 +60164,7 @@ mod tests {
                 .send(reserve_payload)
                 .expect("capture reserve");
             let reserve_body = json!({
-                "apiVersion":"serverware.releaseAuthorization/v1",
+                "apiVersion":"catchplate.releaseAuthorization/v1",
                 "ok":true,
                 "authorized":true,
                 "state":"reserved",
@@ -60201,7 +60201,7 @@ mod tests {
                 .send(completion_payload)
                 .expect("capture completion");
             let completion_body = json!({
-                "apiVersion":"serverware.releaseAuthorization/v1",
+                "apiVersion":"catchplate.releaseAuthorization/v1",
                 "ok":true,
                 "authorized":false,
                 "state":"cancelled",
@@ -60446,7 +60446,7 @@ mod tests {
         reservation_expires_at_epoch_ms: u64,
     ) -> Value {
         json!({
-            "apiVersion":"serverware.releaseAuthorization/v1",
+            "apiVersion":"catchplate.releaseAuthorization/v1",
             "ok":true,
             "authorized":true,
             "state":"reserved",
@@ -60641,7 +60641,7 @@ mod tests {
                 read_release_test_http_request(&listener);
             let first_nonce = first_request
                 .headers
-                .get("x-serverware-response-nonce")
+                .get("x-catchplate-response-nonce")
                 .expect("first release nonce")
                 .clone();
             first_stream
@@ -60657,7 +60657,7 @@ mod tests {
                 read_release_test_http_request(&listener);
             let second_nonce = second_request
                 .headers
-                .get("x-serverware-response-nonce")
+                .get("x-catchplate-response-nonce")
                 .expect("second release nonce");
             assert_ne!(first_nonce.as_str(), second_nonce.as_str());
             second_stream
@@ -60782,7 +60782,7 @@ mod tests {
                 read_release_test_http_request(&listener);
             payload_sender.send(payload).expect("capture completion");
             let body = json!({
-                "apiVersion":"serverware.releaseAuthorization/v1",
+                "apiVersion":"catchplate.releaseAuthorization/v1",
                 "ok":true,
                 "authorized":false,
                 "state":"cancelled",
@@ -61005,7 +61005,7 @@ mod tests {
         assert_eq!(payloads.len(), 3);
         assert_eq!(
             payloads[0]["apiVersion"],
-            "serverware.releaseAuthorizationDispatch/v1"
+            "catchplate.releaseAuthorizationDispatch/v1"
         );
         assert_eq!(payloads[1], payloads[0]);
         assert_eq!(payloads[2]["outcome"], "unknown");
@@ -61146,7 +61146,7 @@ mod tests {
                     &request,
                     StatusCode::OK,
                     json!({
-                        "apiVersion":"serverware.releaseAuthorization/v2",
+                        "apiVersion":"catchplate.releaseAuthorization/v2",
                         "ok":true,
                         "authorized":true,
                         "state":"committed",
@@ -61261,7 +61261,7 @@ mod tests {
         assert!(payloads.iter().all(|payload| payload == &payloads[0]));
         assert_eq!(
             payloads[0]["apiVersion"],
-            "serverware.releaseAuthorizationComplete/v2"
+            "catchplate.releaseAuthorizationComplete/v2"
         );
         assert_eq!(payloads[0]["outcome"], "forwarded");
         assert_eq!(
@@ -61324,7 +61324,7 @@ mod tests {
                     .as_ref()
                     .expect("reserve establishes binding digest");
                 let body = json!({
-                    "apiVersion":"serverware.releaseAuthorization/v1",
+                    "apiVersion":"catchplate.releaseAuthorization/v1",
                     "ok":true,
                     "authorized":true,
                     "state":state,
@@ -61454,7 +61454,7 @@ mod tests {
     fn enrollment_session_header_is_strict_singleton_base64url() {
         for session_id in ["a".repeat(24), "Z_9-".repeat(32)] {
             let raw = format!(
-                "CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\nX-Serverware-Enrollment-Session: {session_id}\r\n\r\n"
+                "CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\nX-Catchplate-Enrollment-Session: {session_id}\r\n\r\n"
             );
             let head = parse_head(raw.as_bytes()).expect("valid enrollment session header");
             assert_eq!(
@@ -61471,7 +61471,7 @@ mod tests {
             format!("{},b", "a".repeat(24)),
         ] {
             let raw = format!(
-                "CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\nX-Serverware-Enrollment-Session: {invalid}\r\n\r\n"
+                "CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\nX-Catchplate-Enrollment-Session: {invalid}\r\n\r\n"
             );
             assert!(parse_head(raw.as_bytes())
                 .err()
@@ -61481,7 +61481,7 @@ mod tests {
 
         let session_id = "a".repeat(24);
         let duplicate = format!(
-            "CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\nX-Serverware-Enrollment-Session: {session_id}\r\nx-serverware-enrollment-session: {session_id}\r\n\r\n"
+            "CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\nX-Catchplate-Enrollment-Session: {session_id}\r\nx-catchplate-enrollment-session: {session_id}\r\n\r\n"
         );
         assert_eq!(
             parse_head(duplicate.as_bytes())
@@ -61492,10 +61492,10 @@ mod tests {
 
         let ambiguous = BTreeMap::from([
             (
-                "X-Serverware-Enrollment-Session".to_string(),
+                "X-Catchplate-Enrollment-Session".to_string(),
                 session_id.clone(),
             ),
-            ("x-serverware-enrollment-session".to_string(), session_id),
+            ("x-catchplate-enrollment-session".to_string(), session_id),
         ]);
         assert!(enrollment_session_id_from_headers(&ambiguous)
             .expect_err("case-ambiguous enrollment session must fail closed")
@@ -61529,7 +61529,7 @@ mod tests {
     fn service_token_configuration_preserves_env_defaults_and_rejects_dual_sources() {
         assert_eq!(
             configured_service_token_values(
-                "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+                "CATCHPLATE_DATA_PLANE_AUDIT_TOKEN",
                 Some(OsString::from("  development-token  ")),
                 None,
             )
@@ -61538,7 +61538,7 @@ mod tests {
         );
         assert_eq!(
             configured_service_token_values(
-                "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+                "CATCHPLATE_DATA_PLANE_AUDIT_TOKEN",
                 Some(OsString::new()),
                 None,
             )
@@ -61546,26 +61546,26 @@ mod tests {
             None
         );
         assert_eq!(
-            configured_service_token_values("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", None, None,)
+            configured_service_token_values("CATCHPLATE_DATA_PLANE_AUDIT_TOKEN", None, None,)
                 .expect("unconfigured token"),
             None
         );
         assert!(configured_service_token_values(
-            "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+            "CATCHPLATE_DATA_PLANE_AUDIT_TOKEN",
             Some(OsString::new()),
             Some(OsString::new()),
         )
         .expect_err("blank but present sources must remain mutually exclusive")
         .contains("mutually exclusive"));
         assert!(configured_service_token_values(
-            "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+            "CATCHPLATE_DATA_PLANE_AUDIT_TOKEN",
             None,
             Some(OsString::new()),
         )
         .expect_err("blank token file path")
         .contains("must identify"));
         assert!(configured_service_token_values(
-            "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+            "CATCHPLATE_DATA_PLANE_AUDIT_TOKEN",
             None,
             Some(OsString::from("relative-token-file")),
         )
@@ -61584,7 +61584,7 @@ mod tests {
             );
             assert_eq!(
                 configured_service_token_values(
-                    "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+                    "CATCHPLATE_DATA_PLANE_AUDIT_TOKEN",
                     None,
                     Some(path.as_os_str().to_os_string()),
                 )
@@ -61605,7 +61605,7 @@ mod tests {
         let link = test_temp_path("service-token-symlink");
         std::os::unix::fs::symlink(&target, &link).expect("create service token symlink");
         assert!(configured_service_token_values(
-            "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+            "CATCHPLATE_DATA_PLANE_AUDIT_TOKEN",
             None,
             Some(link.as_os_str().to_os_string()),
         )
@@ -61617,7 +61617,7 @@ mod tests {
         let directory = test_temp_path("service-token-directory");
         fs::create_dir(&directory).expect("create service token directory");
         assert!(configured_service_token_values(
-            "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+            "CATCHPLATE_DATA_PLANE_AUDIT_TOKEN",
             None,
             Some(directory.as_os_str().to_os_string()),
         )
@@ -61631,7 +61631,7 @@ mod tests {
             0o600,
         );
         assert!(configured_service_token_values(
-            "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+            "CATCHPLATE_DATA_PLANE_AUDIT_TOKEN",
             None,
             Some(oversized.as_os_str().to_os_string()),
         )
@@ -61647,7 +61647,7 @@ mod tests {
             );
             assert!(
                 configured_service_token_values(
-                    "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+                    "CATCHPLATE_DATA_PLANE_AUDIT_TOKEN",
                     None,
                     Some(path.as_os_str().to_os_string()),
                 )
@@ -61673,7 +61673,7 @@ mod tests {
             );
             assert!(
                 configured_service_token_values(
-                    "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+                    "CATCHPLATE_DATA_PLANE_AUDIT_TOKEN",
                     None,
                     Some(path.as_os_str().to_os_string()),
                 )
@@ -61745,13 +61745,13 @@ mod tests {
             "rate-limit-consume-token",
         ] {
             headers.insert(
-                "X-Serverware-Data-Plane-Token".to_string(),
+                "X-Catchplate-Data-Plane-Token".to_string(),
                 wrong_scope.to_string(),
             );
             assert!(!management_api_authorized(&state, &headers));
         }
         headers.insert(
-            "X-Serverware-Data-Plane-Token".to_string(),
+            "X-Catchplate-Data-Plane-Token".to_string(),
             "management-only-token".to_string(),
         );
         assert!(management_api_authorized(&state, &headers));
@@ -61773,38 +61773,38 @@ mod tests {
                 "Basic ambient-proxy-authority".to_string(),
             ),
             (
-                "X-Serverware-Admin-Token".to_string(),
+                "X-Catchplate-Admin-Token".to_string(),
                 "admin-secret".to_string(),
             ),
             (
-                "X-Serverware-Audit-Anchor-Token".to_string(),
+                "X-Catchplate-Audit-Anchor-Token".to_string(),
                 "anchor-secret".to_string(),
             ),
             (
-                "X-Serverware-CA-Install-Token".to_string(),
+                "X-Catchplate-CA-Install-Token".to_string(),
                 "ca-install-secret".to_string(),
             ),
             (
-                "X-Serverware-CSRF-Token".to_string(),
+                "X-Catchplate-CSRF-Token".to_string(),
                 "csrf-secret".to_string(),
             ),
             (
-                "X-Serverware-Data-Plane-Token".to_string(),
+                "X-Catchplate-Data-Plane-Token".to_string(),
                 "service-secret".to_string(),
             ),
             (
-                "X-Serverware-Response-Nonce".to_string(),
+                "X-Catchplate-Response-Nonce".to_string(),
                 "future-internal-value".to_string(),
             ),
             (
-                "x-SeRvErWaRe-Future-Internal".to_string(),
+                "x-Catchplate-Future-Internal".to_string(),
                 "future-mixed-case-value".to_string(),
             ),
             (
-                "X-Serverware-Enrollment-Session".to_string(),
+                "X-Catchplate-Enrollment-Session".to_string(),
                 "A_-0123456789abcdefghijk".to_string(),
             ),
-            ("X-Serverware-Agent".to_string(), "agent:test".to_string()),
+            ("X-Catchplate-Agent".to_string(), "agent:test".to_string()),
             ("X-Visible".to_string(), "visible".to_string()),
         ]);
         let forwarded = client_forward_header_material(&headers, &json!({"type":"bearer"}))
@@ -61836,8 +61836,8 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("visible")
         );
-        assert!(!upstream.contains_key("x-serverware-response-nonce"));
-        assert!(!upstream.contains_key("x-serverware-future-internal"));
+        assert!(!upstream.contains_key("x-catchplate-response-nonce"));
+        assert!(!upstream.contains_key("x-catchplate-future-internal"));
     }
 
     #[test]
@@ -61854,7 +61854,7 @@ mod tests {
         route.port = upstream.port();
         route.methods = HashSet::from(["GET".to_string()]);
         route.adapter_config["request"] = json!({
-            "allowedHeaders":["accept", "x-serverware-response-nonce"],
+            "allowedHeaders":["accept", "x-catchplate-response-nonce"],
             "allowedQueryKeys":[],
             "bodyMode":"none",
             "discardHeaders":["npm-session"],
@@ -61870,7 +61870,7 @@ mod tests {
                 "must-not-reach-the-buffered-upstream".to_string(),
             ),
             (
-                "X-Serverware-Response-Nonce".to_string(),
+                "X-Catchplate-Response-Nonce".to_string(),
                 "must-not-leave-the-data-plane".to_string(),
             ),
         ]);
@@ -61920,7 +61920,7 @@ mod tests {
         let route = &mut snapshot.routes[0];
         route.methods = HashSet::from(["GET".to_string()]);
         route.adapter_config["request"] = json!({
-            "allowedHeaders":["accept", "x-serverware-response-nonce"],
+            "allowedHeaders":["accept", "x-catchplate-response-nonce"],
             "allowedQueryKeys":[],
             "bodyMode":"none",
             "discardHeaders":["npm-session"],
@@ -61936,7 +61936,7 @@ mod tests {
                 "must-not-reach-the-buffered-upstream".to_string(),
             ),
             (
-                "X-Serverware-Response-Nonce".to_string(),
+                "X-Catchplate-Response-Nonce".to_string(),
                 "must-not-leave-the-data-plane".to_string(),
             ),
         ]);
@@ -61988,7 +61988,7 @@ mod tests {
         assert!(unsent
             .headers()
             .keys()
-            .all(|name| !name.as_str().starts_with("x-serverware-")));
+            .all(|name| !name.as_str().starts_with("x-catchplate-")));
         for value in unsent.headers().values() {
             assert!(!value
                 .as_bytes()
@@ -61996,7 +61996,7 @@ mod tests {
                 .any(|part| part == b"must-not-"));
         }
         // The client proof retains ordinary original headers; route discards apply only
-        // to provider material. Internal Serverware headers remain absent from both.
+        // to provider material. Internal Catchplate headers remain absent from both.
         assert_eq!(
             canonical_client_proof_headers(&headers).expect("proof headers"),
             BTreeMap::from([
@@ -62028,11 +62028,11 @@ mod tests {
                 "Basic ambient-proxy-authority".to_string(),
             ),
             (
-                "X-Serverware-Data-Plane-Token".to_string(),
+                "X-Catchplate-Data-Plane-Token".to_string(),
                 "service-session".to_string(),
             ),
             (
-                "X-Serverware-Proof-Nonce".to_string(),
+                "X-Catchplate-Proof-Nonce".to_string(),
                 "proof-nonce".to_string(),
             ),
             ("X-Visible".to_string(), "visible".to_string()),
@@ -62158,7 +62158,7 @@ mod tests {
     #[test]
     fn audit_acknowledgement_rejects_unknown_fields() {
         let acknowledgement = serde_json::to_vec(&json!({
-            "apiVersion":"serverware.dataPlaneAuditAck/v1",
+            "apiVersion":"catchplate.dataPlaneAuditAck/v1",
             "ok":true,
             "accepted":1,
             "batchDigest":test_audit_event_id(1),
@@ -62194,7 +62194,7 @@ mod tests {
 
         let mut ambiguous = correlated_test_decision_request(session_id);
         ambiguous.headers.insert(
-            "X-Serverware-Enrollment-Session".to_string(),
+            "X-Catchplate-Enrollment-Session".to_string(),
             session_id.to_string(),
         );
         let denied = decide_internal(&state, &snapshot, ambiguous, Some("agent:test"));
@@ -62822,7 +62822,7 @@ mod tests {
         signing_key_id: &str,
         sequence: u64,
     ) -> Value {
-        policy["apiVersion"] = json!("serverware.policy/v1");
+        policy["apiVersion"] = json!("catchplate.policy/v1");
         policy["kind"] = json!("PolicyBundle");
         policy["metadata"] = json!({
             "id":"policy:test",
@@ -63146,7 +63146,7 @@ mod tests {
 
     fn lease_envelope() -> Value {
         json!({
-            "apiVersion": "serverware.credentialLeaseEnvelope/v2",
+            "apiVersion": "catchplate.credentialLeaseEnvelope/v2",
             "algorithm": "X25519-HKDF-SHA256-AES-256-GCM",
             "recipientKeyId": "sha256:recipient",
             "recipientNonce": "canonical-nonce",
@@ -63182,7 +63182,7 @@ mod tests {
             ("scopes".to_string(), json!(["gmail.readonly"])),
         ]);
         let value = json!({
-            "apiVersion": "serverware.credentialLeaseSet/v3",
+            "apiVersion": "catchplate.credentialLeaseSet/v3",
             "purpose": "generationMetadata",
             "requestBindingSha256": sha256_prefixed(b"request"),
             "releaseAuthorization": null,
@@ -63214,7 +63214,7 @@ mod tests {
     #[test]
     fn credential_lease_v3_request_binds_purpose_and_exact_scope() {
         let request = CredentialLeaseRequest {
-            api_version: "serverware.credentialLeaseRequest/v3".to_string(),
+            api_version: "catchplate.credentialLeaseRequest/v3".to_string(),
             purpose: CredentialLeasePurpose::GenerationMetadata,
             principal_id: "agent:test".to_string(),
             route_id: "route:test".to_string(),
@@ -63236,7 +63236,7 @@ mod tests {
             })),
         };
         let value = serde_json::to_value(request).expect("serialize lease request");
-        assert_eq!(value["apiVersion"], "serverware.credentialLeaseRequest/v3");
+        assert_eq!(value["apiVersion"], "catchplate.credentialLeaseRequest/v3");
         assert_eq!(value["purpose"], "generationMetadata");
         assert!(value["expectedCredentialVersion"].is_null());
         assert!(value["expectedMetadataSha256"].is_null());
@@ -63331,7 +63331,7 @@ mod tests {
         let recipient_nonce = "B".repeat(43);
         let reservation_id = release_reservation_id(&attempt_id, &binding_digest);
         let authority = CredentialLeaseRequestAuthority {
-            api_version: "serverware.credentialLeaseRequestAuthority/v1".to_string(),
+            api_version: "catchplate.credentialLeaseRequestAuthority/v1".to_string(),
             attempt_id: attempt_id.clone(),
             reservation_id: reservation_id.clone(),
             binding_digest: binding_digest.clone(),
@@ -63346,7 +63346,7 @@ mod tests {
         validate_credential_lease_request_authority(&authority)
             .expect("shared Python/Rust golden request authority");
         let expected_authority_json = [
-            r#"{"apiVersion":"serverware.credentialLeaseRequestAuthority/v1","attemptId":""#,
+            r#"{"apiVersion":"catchplate.credentialLeaseRequestAuthority/v1","attemptId":""#,
             attempt_id.as_str(),
             r#"","bindingDigest":""#,
             binding_digest.as_str(),
@@ -63372,7 +63372,7 @@ mod tests {
         );
 
         let request = CredentialLeaseRequest {
-            api_version: "serverware.credentialLeaseRequest/v4".to_string(),
+            api_version: "catchplate.credentialLeaseRequest/v4".to_string(),
             purpose: CredentialLeasePurpose::DispatchSecret,
             principal_id: "agent:golden".to_string(),
             route_id: "gmail.messages".to_string(),
@@ -63390,7 +63390,7 @@ mod tests {
             recipient_attestation: None,
         };
         let expected_request_binding_json = [
-            r#"{"apiVersion":"serverware.credentialLeaseRequest/v4","credentialId":"credential:golden","dataPlaneBinaryDigest":""#,
+            r#"{"apiVersion":"catchplate.credentialLeaseRequest/v4","credentialId":"credential:golden","dataPlaneBinaryDigest":""#,
             binary_digest.as_str(),
             r#"","expectedCredentialVersion":7,"expectedMetadataSha256":""#,
             metadata_digest.as_str(),
@@ -63417,7 +63417,7 @@ mod tests {
         assert!(wire["releaseAuthorization"].is_null());
 
         let expected_aad_json = [
-            r#"{"algorithm":"X25519-HKDF-SHA256-AES-256-GCM","apiVersion":"serverware.credentialLeaseEnvelope/v3","credentialId":"credential:golden","dataPlaneBinaryDigest":""#,
+            r#"{"algorithm":"X25519-HKDF-SHA256-AES-256-GCM","apiVersion":"catchplate.credentialLeaseEnvelope/v3","credentialId":"credential:golden","dataPlaneBinaryDigest":""#,
             binary_digest.as_str(),
             r#"","expiresAtEpochMs":4102444800000,"issuedAtEpochMs":4102444795000,"policyHash":""#,
             policy_hash.as_str(),
@@ -63433,7 +63433,7 @@ mod tests {
         ]
         .concat();
         let aad = json!({
-            "apiVersion":"serverware.credentialLeaseEnvelope/v3",
+            "apiVersion":"catchplate.credentialLeaseEnvelope/v3",
             "algorithm":"X25519-HKDF-SHA256-AES-256-GCM",
             "purpose":"dispatchSecret",
             "requestBindingSha256":request_binding_sha256,
@@ -63449,7 +63449,7 @@ mod tests {
             "expiresAtEpochMs":4_102_444_800_000u64,
         });
         assert_eq!(canonical_json_ensure_ascii(&aad), expected_aad_json);
-        let mut hkdf_info = b"serverware:credential-lease-envelope:v2\0".to_vec();
+        let mut hkdf_info = b"catchplate:credential-lease-envelope:v2\0".to_vec();
         hkdf_info.extend_from_slice(&Sha256::digest(expected_aad_json.as_bytes()));
         assert_eq!(hkdf_info.len(), 72);
     }
@@ -63483,7 +63483,7 @@ mod tests {
         let attempt_id = format!("sha256:{}", "9".repeat(64));
         let binding_digest = format!("sha256:{}", "a".repeat(64));
         let authority = CredentialLeaseRequestAuthority {
-            api_version: "serverware.credentialLeaseRequestAuthority/v1".to_string(),
+            api_version: "catchplate.credentialLeaseRequestAuthority/v1".to_string(),
             attempt_id: attempt_id.clone(),
             reservation_id: release_reservation_id(&attempt_id, &binding_digest),
             binding_digest: binding_digest.clone(),
@@ -63557,7 +63557,7 @@ mod tests {
             7_102,
         );
         let request = |authority: CredentialLeaseRequestAuthority| CredentialLeaseRequest {
-            api_version: "serverware.credentialLeaseRequest/v4".to_string(),
+            api_version: "catchplate.credentialLeaseRequest/v4".to_string(),
             purpose: CredentialLeasePurpose::DispatchSecret,
             principal_id: scope.principal_id.clone(),
             route_id: scope.route_id.clone(),
@@ -63578,7 +63578,7 @@ mod tests {
         let request_b = request(authority_b.clone());
         let wire = credential_lease_request_wire_value(&request_a)
             .expect("request-bound v4 wire");
-        assert_eq!(wire["apiVersion"], "serverware.credentialLeaseRequest/v4");
+        assert_eq!(wire["apiVersion"], "catchplate.credentialLeaseRequest/v4");
         assert_eq!(
             wire["requestAuthority"],
             serde_json::to_value(&authority_a).expect("serialize authority")
@@ -63610,13 +63610,13 @@ mod tests {
         );
 
         let mut legacy = request_a;
-        legacy.api_version = "serverware.credentialLeaseRequest/v3".to_string();
+        legacy.api_version = "catchplate.credentialLeaseRequest/v3".to_string();
         assert!(credential_lease_request_wire_value(&legacy)
             .expect_err("request-bound dispatch must reject legacy v3")
             .contains("requires request v4"));
 
         let mut uncontrolled = request_b;
-        uncontrolled.api_version = "serverware.credentialLeaseRequest/v3".to_string();
+        uncontrolled.api_version = "catchplate.credentialLeaseRequest/v3".to_string();
         uncontrolled.request_authority = None;
         let uncontrolled_wire = credential_lease_request_wire_value(&uncontrolled)
             .expect("uncontrolled dispatch keeps legacy v3");
@@ -63693,7 +63693,7 @@ mod tests {
             HeaderValue::from_static("session=second; HttpOnly"),
         );
         headers.insert(
-            "x-serverware-response-signature",
+            "x-catchplate-response-signature",
             HeaderValue::from_static("excluded-proof-material"),
         );
         headers.insert("connection", HeaderValue::from_static("close"));
@@ -63785,7 +63785,7 @@ mod tests {
     #[test]
     fn response_statement_rejects_unknown_context_fields() {
         let value = json!({
-            "version": "serverware.responseSignature/v3",
+            "version": "catchplate.responseSignature/v3",
             "issued_at_ms": 1,
             "request": {
                 "method": "POST",
@@ -65179,7 +65179,7 @@ mod tests {
                     .push(json!(if field == "allowedMediaTypes" {
                         "application/problem+json"
                     } else {
-                        "x-serverware-unlisted"
+                        "x-catchplate-unlisted"
                     }));
                 assert!(validate_provider_request_profile_config(
                     "route:provider-profile",
@@ -65319,7 +65319,7 @@ mod tests {
             "proxy_authorization",
             "traceparent",
             "x-goog-user-project",
-            "x_serverware_proof_nonce",
+            "x_catchplate_proof_nonce",
         ] {
             let error =
                 validate_policy_capabilities(&policy_with_route(route_with_discard(json!([name]))))
@@ -65551,7 +65551,7 @@ mod tests {
                 "",
                 BTreeMap::from([
                     ("x-goog-api-client".to_string(), "test".to_string()),
-                    ("x-serverware-agent".to_string(), "trusted".to_string()),
+                    ("x-catchplate-agent".to_string(), "trusted".to_string()),
                 ]),
             ),
             (
@@ -65644,7 +65644,7 @@ mod tests {
             }
 
             let separator = if target.contains('?') { '&' } else { '?' };
-            let unknown_query = format!("{target}{separator}serverware_unknown=true");
+            let unknown_query = format!("{target}{separator}catchplate_unknown=true");
             let denied = validate_provider_request_admission(
                 &request,
                 &Url::parse(&unknown_query).expect("provider URL with unknown query"),
@@ -66003,7 +66003,7 @@ mod tests {
         .expect("shared discard-header parity vector");
         assert_eq!(
             parity_vector["apiVersion"],
-            json!("serverware.discardHeadersParity/v2")
+            json!("catchplate.discardHeadersParity/v2")
         );
         let raw_target_vector = &parity_vector["rawAbsoluteTarget"];
         for target in raw_target_vector["valid"]
@@ -66713,7 +66713,7 @@ mod tests {
                 .send(reserve_payload.clone())
                 .expect("capture compiled reserve");
             let reserve_body = json!({
-                "apiVersion":"serverware.releaseAuthorization/v1",
+                "apiVersion":"catchplate.releaseAuthorization/v1",
                 "ok":true,
                 "authorized":true,
                 "state":"reserved",
@@ -66750,7 +66750,7 @@ mod tests {
                 .send(completion_payload)
                 .expect("capture compiled completion");
             let completion_body = json!({
-                "apiVersion":"serverware.releaseAuthorization/v1",
+                "apiVersion":"catchplate.releaseAuthorization/v1",
                 "ok":true,
                 "authorized":false,
                 "state":"cancelled",
@@ -67373,10 +67373,10 @@ mod tests {
             "pub(crate) fn from_transport_adapter("
         ));
         assert!(!policy_core_source.contains(
-            "serverware.policyShadowParsedActiveResponseValidation/v1"
+            "catchplate.policyShadowParsedActiveResponseValidation/v1"
         ));
         assert!(!policy_core_source.contains(
-            "serverware.policyShadowObservedGmailMetadataResponse/v1"
+            "catchplate.policyShadowObservedGmailMetadataResponse/v1"
         ));
         let generation_source = policy_core_source
             .split_once("struct ShadowGeneration {")
@@ -67580,7 +67580,7 @@ mod tests {
         assert!(!policy_core_source.contains("UnsignedShadowRecord"));
         assert!(!policy_core_source.contains("record_missing_generation"));
         assert!(!policy_core_source.contains(
-            "serverware.policyShadowDeterministicSampling/v2"
+            "catchplate.policyShadowDeterministicSampling/v2"
         ));
         assert!(policy_core_source.contains(
             "decision_time_binding: Option<DecisionTimeBinding>"
@@ -69660,17 +69660,17 @@ mod tests {
     }
 
     #[test]
-    fn generic_policy_rejects_serverware_internal_header_prefix() {
+    fn generic_policy_rejects_catchplate_internal_header_prefix() {
         let mut allowed_route = generic_policy_route("none", json!(1024));
         allowed_route["adapter"]["config"]["request"]["allowedHeaders"] =
-            json!(["X-Serverware-Response-Nonce"]);
+            json!(["X-Catchplate-Response-Nonce"]);
         let error = validate_policy_capabilities(&policy_with_route(allowed_route))
             .expect_err("future internal header must fail generic allowedHeaders admission");
         assert!(error.contains("credential or internal header"), "{error}");
 
         let mut required_route = generic_policy_route("none", json!(1024));
         required_route["adapter"]["config"]["request"]["requiredHeaders"] = json!({
-            "x-serverware-response-nonce":{
+            "x-catchplate-response-nonce":{
                 "type":"string",
                 "minLength":1,
                 "maxLength":128
@@ -69682,7 +69682,7 @@ mod tests {
         let error = validate_generic_required_header_policy(
             "route:test",
             request,
-            &HashSet::from(["x-serverware-response-nonce".to_string()]),
+            &HashSet::from(["x-catchplate-response-nonce".to_string()]),
         )
         .expect_err("future internal header must fail generic requiredHeaders admission");
         assert!(error.contains("not an allowed forwarded header"), "{error}");
@@ -69695,13 +69695,13 @@ mod tests {
             "providerSubject":"account:test",
             "injection":{
                 "type":"header",
-                "name":"X-Serverware-Response-Nonce"
+                "name":"X-Catchplate-Response-Nonce"
             }
         }]);
         let error = validate_policy_capabilities(&injection_policy)
             .expect_err("internal credential injection target must fail policy admission");
         assert!(
-            error.contains("reserved for Serverware internals"),
+            error.contains("reserved for Catchplate internals"),
             "{error}"
         );
     }
@@ -69816,7 +69816,7 @@ mod tests {
         assert!(ordinary.raw_headers_digest.is_none());
         assert_eq!(ordinary.raw_header_count, 0);
 
-        let raw_headers = b"Host: example.test\r\nX-Serverware-Observation-Nonce: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\r\nConnection: close\r\n";
+        let raw_headers = b"Host: example.test\r\nX-Catchplate-Observation-Nonce: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\r\nConnection: close\r\n";
         let mut wire = b"GET /resource HTTP/1.1\r\n".to_vec();
         wire.extend_from_slice(raw_headers);
         wire.extend_from_slice(b"\r\n");
@@ -71796,8 +71796,8 @@ mod tests {
     #[test]
     fn invalid_credential_projection_reload_retains_last_good_snapshot() {
         let suffix = format!("{}-{}", std::process::id(), now_epoch_ms());
-        let policy_path = env::temp_dir().join(format!("serverware-policy-{suffix}.json"));
-        let trust_path = env::temp_dir().join(format!("serverware-policy-key-{suffix}.pem"));
+        let policy_path = env::temp_dir().join(format!("catchplate-policy-{suffix}.json"));
+        let trust_path = env::temp_dir().join(format!("catchplate-policy-key-{suffix}.pem"));
         let (signing_key, public_key_pem, signing_key_id) =
             response_proof_signing_material().expect("test policy signing material");
         fs::write(&trust_path, public_key_pem).expect("write policy trust fixture");
@@ -71846,8 +71846,8 @@ mod tests {
     #[test]
     fn signed_policy_loader_rejects_unknown_fields_at_every_policy_layer() {
         let suffix = format!("{}-{}", std::process::id(), now_epoch_ms());
-        let policy_path = env::temp_dir().join(format!("serverware-policy-schema-{suffix}.json"));
-        let trust_path = env::temp_dir().join(format!("serverware-policy-schema-key-{suffix}.pem"));
+        let policy_path = env::temp_dir().join(format!("catchplate-policy-schema-{suffix}.json"));
+        let trust_path = env::temp_dir().join(format!("catchplate-policy-schema-key-{suffix}.pem"));
         let (signing_key, public_key_pem, signing_key_id) =
             response_proof_signing_material().expect("test policy signing material");
         fs::write(&trust_path, public_key_pem).expect("write policy trust fixture");
@@ -71946,8 +71946,8 @@ mod tests {
     #[test]
     fn policy_reload_retains_metadata_generation_floor_for_relevant_credential_ids() {
         let suffix = format!("{}-{}", std::process::id(), now_epoch_ms());
-        let policy_path = env::temp_dir().join(format!("serverware-policy-{suffix}.json"));
-        let trust_path = env::temp_dir().join(format!("serverware-policy-key-{suffix}.pem"));
+        let policy_path = env::temp_dir().join(format!("catchplate-policy-{suffix}.json"));
+        let trust_path = env::temp_dir().join(format!("catchplate-policy-key-{suffix}.pem"));
         let (signing_key, public_key_pem, signing_key_id) =
             response_proof_signing_material().expect("test policy signing material");
         fs::write(&trust_path, public_key_pem).expect("write policy trust fixture");
@@ -72697,7 +72697,7 @@ mod tests {
             ("https://api.x.com/2/tweets/123", "tweets.read"),
             ("https://api.x.com/2/tweets/analytics", "analytics.read"),
             (
-                "https://api.x.com/2/tweets/search/recent?query=serverware",
+                "https://api.x.com/2/tweets/search/recent?query=catchplate",
                 "search.read",
             ),
             ("https://api.x.com/2/users/me", "users.read"),
@@ -72770,7 +72770,7 @@ mod tests {
             request.url.zeroize();
             request
                 .url
-                .push_str(&format!("https://api.x.com{path}?query=serverware"));
+                .push_str(&format!("https://api.x.com{path}?query=catchplate"));
             let url = Url::parse(&request.url).expect("historical X URL");
             let denied = validate_adapter(&request, &BTreeMap::new(), &url, &route_match)
                 .expect_err("recent-search mode must deny historical endpoints");
@@ -72782,7 +72782,7 @@ mod tests {
         request.url.zeroize();
         request
             .url
-            .push_str("https://api.x.com/2/tweets/counts/recent?query=serverware");
+            .push_str("https://api.x.com/2/tweets/counts/recent?query=catchplate");
         let url = Url::parse(&request.url).expect("recent X URL");
         validate_adapter(&request, &BTreeMap::new(), &url, &route_match)
             .expect("recent-search mode permits the exact recent counts endpoint");
@@ -74244,10 +74244,10 @@ mod tests {
                 .expect("streaming canonical request"),
         )
         .expect("serialize streaming request");
-        assert_eq!(buffered["apiVersion"], "serverware.clientProofRequest/v1");
+        assert_eq!(buffered["apiVersion"], "catchplate.clientProofRequest/v1");
         assert_eq!(
             streaming["apiVersion"],
-            "serverware.streamingClientProofRequest/v1"
+            "catchplate.streamingClientProofRequest/v1"
         );
         assert_eq!(buffered["headers"], json!({"x-visible":"visible"}));
         assert_eq!(streaming["headers"], buffered["headers"]);
@@ -74460,7 +74460,7 @@ mod tests {
                 read_release_test_http_request(&release_listener);
             assert_eq!(
                 reserve["apiVersion"],
-                "serverware.releaseAuthorizationReserve/v1"
+                "catchplate.releaseAuthorizationReserve/v1"
             );
             assert!(reserve["credentialRef"].is_null());
             assert_eq!(reserve["credentialVersion"], 0);
@@ -74485,7 +74485,7 @@ mod tests {
             let reservation_expires_at =
                 u64::try_from(now_epoch_ms()).expect("current epoch") + 60_000;
             let reserve_body = json!({
-                "apiVersion":"serverware.releaseAuthorization/v1",
+                "apiVersion":"catchplate.releaseAuthorization/v1",
                 "ok":true,
                 "authorized":true,
                 "state":"reserved",
@@ -74529,14 +74529,14 @@ mod tests {
                 .expect("dispatch request JSON");
             assert_eq!(
                 dispatch["apiVersion"],
-                "serverware.releaseAuthorizationDispatch/v1"
+                "catchplate.releaseAuthorizationDispatch/v1"
             );
             assert_eq!(dispatch["attemptId"], attempt_id);
             assert_eq!(dispatch["bindingDigest"], binding_digest);
             let dispatch_started_at = u64::try_from(now_epoch_ms()).expect("current epoch");
             let dispatch_expires_at = dispatch_started_at + 30_000;
             let dispatch_body = json!({
-                "apiVersion":"serverware.releaseAuthorization/v1",
+                "apiVersion":"catchplate.releaseAuthorization/v1",
                 "ok":true,
                 "authorized":true,
                 "state":"dispatching",
@@ -74556,7 +74556,7 @@ mod tests {
             });
             let response_nonce = dispatch_request
                 .headers
-                .get("x-serverware-response-nonce")
+                .get("x-catchplate-response-nonce")
                 .expect("dispatch response nonce");
             dispatch_stream
                 .write_all(&signed_control_plane_test_response(
@@ -74574,13 +74574,13 @@ mod tests {
                 read_release_test_http_request(&release_listener);
             assert_eq!(
                 complete["apiVersion"],
-                "serverware.releaseAuthorizationComplete/v1"
+                "catchplate.releaseAuthorizationComplete/v1"
             );
             assert_eq!(complete["attemptId"], attempt_id);
             assert_eq!(complete["bindingDigest"], binding_digest);
             assert_eq!(complete["outcome"], "forwarded");
             let complete_body = json!({
-                "apiVersion":"serverware.releaseAuthorization/v1",
+                "apiVersion":"catchplate.releaseAuthorization/v1",
                 "ok":true,
                 "authorized":true,
                 "state":"committed",
@@ -74616,7 +74616,7 @@ mod tests {
         ));
         state.release_authorization_token = Some("release-token".to_string());
         state.response_proof_attestation_command =
-            Some("__serverware_test_attestation_in_process__".to_string());
+            Some("__catchplate_test_attestation_in_process__".to_string());
         state.server_instance_id = Some("server:test".to_string());
         let release_provenance = write_secure_test_fixture(
             "streaming-runtime-proof-provenance.json",
@@ -74683,9 +74683,9 @@ mod tests {
         let proof = strict_json_value_from_slice(&proof_bytes).expect("runtime proof JSON");
         assert_eq!(
             proof["apiVersion"],
-            "serverware.streamingResponseRuntimeProof/v1"
+            "catchplate.streamingResponseRuntimeProof/v1"
         );
-        assert_eq!(proof["kind"], "ServerwareStreamingResponseRuntimeProof");
+        assert_eq!(proof["kind"], "CatchplateStreamingResponseRuntimeProof");
         let statement = &proof["streaming_response_statement"];
         assert!(statement["release_authority"]["credential_ref"].is_null());
         assert_eq!(statement["release_authority"]["credential_version"], 0);
@@ -75056,8 +75056,8 @@ mod tests {
     #[test]
     fn streaming_runtime_proof_rejects_canonical_payload_over_96_kib() {
         let oversized = json!({
-            "apiVersion":"serverware.streamingResponseRuntimeProof/v1",
-            "kind":"ServerwareStreamingResponseRuntimeProof",
+            "apiVersion":"catchplate.streamingResponseRuntimeProof/v1",
+            "kind":"CatchplateStreamingResponseRuntimeProof",
             "padding":"x".repeat(MAX_STREAM_RESPONSE_RUNTIME_PROOF_BYTES),
         });
         assert!(encode_streaming_response_runtime_proof(&oversized)
@@ -75154,9 +75154,9 @@ mod tests {
         ));
         let response = String::from_utf8(wire).expect("HTTP response");
         assert!(response.starts_with("HTTP/1.1 403"));
-        assert!(!response.contains("X-Serverware-Response-Proof-B64"));
-        assert!(!response.contains("X-Serverware-Response-Proof-SHA256"));
-        assert!(!response.contains("X-Serverware-Response-Key-Id"));
+        assert!(!response.contains("X-Catchplate-Response-Proof-B64"));
+        assert!(!response.contains("X-Catchplate-Response-Proof-SHA256"));
+        assert!(!response.contains("X-Catchplate-Response-Key-Id"));
         let audit = state.audit_queue.lock().expect("audit queue");
         assert!(audit
             .iter()
@@ -75463,7 +75463,7 @@ mod tests {
             control_plane_authorization_receipt: test_dispatch_evidence(1000, 2000, 1500).receipt,
         };
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nX-Serverware-Client-Request-Digest: {supplied_client_digest}\r\nX-Serverware-Request-Digest: sha256:{}\r\nX-Serverware-Operation-Digest: sha256:{}\r\nX-Serverware-Policy-Hash: {}\r\nX-Serverware-Response-Body-SHA256: {}\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nX-Catchplate-Client-Request-Digest: {supplied_client_digest}\r\nX-Catchplate-Request-Digest: sha256:{}\r\nX-Catchplate-Operation-Digest: sha256:{}\r\nX-Catchplate-Policy-Hash: {}\r\nX-Catchplate-Response-Body-SHA256: {}\r\n\r\n",
             "c".repeat(64),
             "d".repeat(64),
             snapshot.hash,
@@ -75595,7 +75595,7 @@ mod tests {
         let response_text = String::from_utf8(response.to_vec()).expect("HTTP response");
         assert!(response_text.starts_with("HTTP/1.1 200"));
         assert!(response_text.contains(&format!(
-            "X-Serverware-Client-Request-Digest: {client_request_digest}\r\n"
+            "X-Catchplate-Client-Request-Digest: {client_request_digest}\r\n"
         )));
     }
 
@@ -76779,7 +76779,7 @@ mod tests {
         .expect_err("included list operation requires v2 durable release authorization")
         .contains("requires exact release authorization"));
         let list_release_authorization = CredentialLeaseReleaseAuthorization {
-            api_version: "serverware.credentialLeaseReleaseAuthorization/v2".to_string(),
+            api_version: "catchplate.credentialLeaseReleaseAuthorization/v2".to_string(),
             kind: CredentialLeaseReleaseKind::AtomicReservation,
             state: "reserved".to_string(),
             attempt_id: list_request_authority.attempt_id.clone(),
@@ -76817,7 +76817,7 @@ mod tests {
         let crossed_now_ms = u64::try_from(now_epoch_ms()).expect("current epoch fits u64");
         let mut crossed_list_v1 = list_release_authorization.clone();
         crossed_list_v1.api_version =
-            "serverware.credentialLeaseReleaseAuthorization/v1".to_string();
+            "catchplate.credentialLeaseReleaseAuthorization/v1".to_string();
         crossed_list_v1.durable_policy = None;
         crossed_list_v1.quota_claims = vec![CredentialLeaseReleaseQuotaClaim {
             counter_key: format!("sha256:{}", "8".repeat(64)),
@@ -76847,7 +76847,7 @@ mod tests {
         jit_snapshot_value.routes[0].jit = json!({"required":true});
         let jit_snapshot = Arc::new(jit_snapshot_value);
         let crossed_get_v2 = CredentialLeaseReleaseAuthorization {
-            api_version: "serverware.credentialLeaseReleaseAuthorization/v2".to_string(),
+            api_version: "catchplate.credentialLeaseReleaseAuthorization/v2".to_string(),
             kind: CredentialLeaseReleaseKind::JitGrant,
             state: "reserved".to_string(),
             attempt_id: get_request_authority.attempt_id.clone(),
@@ -78325,13 +78325,13 @@ mod tests {
                     "Proxy-Authorization".to_string(),
                     "Basic proxy-secret".to_string(),
                 ),
-                ("X-Serverware-Agent".to_string(), "agent:test".to_string()),
+                ("X-Catchplate-Agent".to_string(), "agent:test".to_string()),
                 (
-                    "X-Serverware-Data-Plane-Token".to_string(),
+                    "X-Catchplate-Data-Plane-Token".to_string(),
                     "identity-secret".to_string(),
                 ),
                 (
-                    "X-Serverware-Proof-Nonce".to_string(),
+                    "X-Catchplate-Proof-Nonce".to_string(),
                     "proof-nonce".to_string(),
                 ),
                 ("X-Visible".to_string(), "visible".to_string()),
@@ -78348,7 +78348,7 @@ mod tests {
             canonical_client_proof_request(&request).expect("canonical binding"),
         )
         .expect("serialize binding");
-        assert_eq!(canonical["apiVersion"], "serverware.clientProofRequest/v1");
+        assert_eq!(canonical["apiVersion"], "catchplate.clientProofRequest/v1");
         assert_eq!(canonical["method"], "GET");
         assert_eq!(canonical["scheme"], "https");
         assert_eq!(canonical["authority"], "example.test");
@@ -78359,7 +78359,7 @@ mod tests {
         let digest = client_proof_request_digest(&request, &context).expect("request digest");
 
         request.headers.insert(
-            "X-Serverware-Proof-Nonce".to_string(),
+            "X-Catchplate-Proof-Nonce".to_string(),
             "different-nonce".to_string(),
         );
         let equivalent_context = ResponseProofContext {
@@ -78853,7 +78853,7 @@ mod tests {
             let response = http_response(
                 "200 OK",
                 json!({
-                    "apiVersion":"serverware.dataPlaneAuditAck/v1",
+                    "apiVersion":"catchplate.dataPlaneAuditAck/v1",
                     "accepted":1,
                     "batchDigest":sha256_prefixed(&request.body),
                 }),
@@ -78888,11 +78888,11 @@ mod tests {
         }))
         .expect("serialize expected audit body");
         assert_eq!(request.body, expected_body);
-        assert!(request.headers.contains_key("x-serverware-response-nonce"));
+        assert!(request.headers.contains_key("x-catchplate-response-nonce"));
         assert!(
             error
                 .message
-                .contains("missing X-Serverware-Response-Key-Id"),
+                .contains("missing X-Catchplate-Response-Key-Id"),
             "{error}"
         );
     }
@@ -79034,11 +79034,11 @@ mod tests {
         assert_eq!(requests[0].body, expected_body);
         let first_nonce = requests[0]
             .headers
-            .get("x-serverware-response-nonce")
+            .get("x-catchplate-response-nonce")
             .expect("first response nonce");
         let second_nonce = requests[1]
             .headers
-            .get("x-serverware-response-nonce")
+            .get("x-catchplate-response-nonce")
             .expect("second response nonce");
         assert_ne!(first_nonce, second_nonce, "each POST needs a fresh nonce");
     }
@@ -81345,7 +81345,7 @@ mod tests {
                 };
                 let response_nonce = request
                     .headers
-                    .get("x-serverware-response-nonce")
+                    .get("x-catchplate-response-nonce")
                     .expect("credential response nonce");
                 let response = signed_encrypted_dispatch_credential_response(
                     &response_signing_key,
@@ -81381,7 +81381,7 @@ mod tests {
             );
             assert_eq!(payload["outcome"], "not_forwarded");
             let body = json!({
-                "apiVersion":"serverware.releaseAuthorization/v1",
+                "apiVersion":"catchplate.releaseAuthorization/v1",
                 "ok":true,
                 "authorized":false,
                 "state":"cancelled",
@@ -81893,12 +81893,12 @@ mod tests {
             assert!(apply_credential_injection(
                 headers,
                 url,
-                &json!({"type":"header","name":"x-serverware-secret"}),
+                &json!({"type":"header","name":"x-catchplate-secret"}),
                 &lease,
             )
             .err()
             .expect("reserved injection header must fail")
-            .contains("reserved for Serverware internals"));
+            .contains("reserved for Catchplate internals"));
             drop(lease);
             drop(release);
             assert_only_exact_release_secret_removed(&fixture);
@@ -82129,7 +82129,7 @@ mod tests {
                     "reserve" => {
                         assert_eq!(
                             payload["apiVersion"],
-                            "serverware.releaseAuthorizationReserve/v1"
+                            "catchplate.releaseAuthorizationReserve/v1"
                         );
                         let current_attempt = payload["attemptId"]
                             .as_str()
@@ -82140,7 +82140,7 @@ mod tests {
                         attempt_id = Some(current_attempt.clone());
                         binding_digest = Some(current_binding.clone());
                         json!({
-                            "apiVersion":"serverware.releaseAuthorization/v1",
+                            "apiVersion":"catchplate.releaseAuthorization/v1",
                             "ok":true,
                             "authorized":true,
                             "state":"reserved",
@@ -82162,7 +82162,7 @@ mod tests {
                     "dispatch" => {
                         assert_eq!(
                             payload["apiVersion"],
-                            "serverware.releaseAuthorizationDispatch/v1"
+                            "catchplate.releaseAuthorizationDispatch/v1"
                         );
                         assert_eq!(payload["attemptId"], attempt_id.as_deref().unwrap());
                         assert_eq!(
@@ -82176,7 +82176,7 @@ mod tests {
                         dispatch_started_at = Some(current_dispatch_started_at);
                         dispatch_expires_at = Some(current_dispatch_expires_at);
                         json!({
-                            "apiVersion":"serverware.releaseAuthorization/v1",
+                            "apiVersion":"catchplate.releaseAuthorization/v1",
                             "ok":true,
                             "authorized":true,
                             "state":"dispatching",
@@ -82198,7 +82198,7 @@ mod tests {
                     "complete" => {
                         assert_eq!(
                             payload["apiVersion"],
-                            "serverware.releaseAuthorizationComplete/v1"
+                            "catchplate.releaseAuthorizationComplete/v1"
                         );
                         assert_eq!(payload["attemptId"], attempt_id.as_deref().unwrap());
                         assert_eq!(
@@ -82207,7 +82207,7 @@ mod tests {
                         );
                         assert_eq!(payload["outcome"], "forwarded");
                         json!({
-                            "apiVersion":"serverware.releaseAuthorization/v1",
+                            "apiVersion":"catchplate.releaseAuthorization/v1",
                             "ok":true,
                             "authorized":true,
                             "state":"committed",
@@ -82261,7 +82261,7 @@ mod tests {
                 .push("credential");
             let response_nonce = request
                 .headers
-                .get("x-serverware-response-nonce")
+                .get("x-catchplate-response-nonce")
                 .expect("credential response nonce");
             let response = signed_encrypted_dispatch_credential_response(
                 &credential_signing_key,
@@ -82482,7 +82482,7 @@ mod tests {
             *captured_request.lock().expect("captured credential request") = Some(payload);
             let response_nonce = request
                 .headers
-                .get("x-serverware-response-nonce")
+                .get("x-catchplate-response-nonce")
                 .expect("credential response nonce");
             let response = signed_encrypted_dispatch_credential_response(
                 &response_signing_key,
@@ -82558,7 +82558,7 @@ mod tests {
             .clone()
             .expect("post-reserve credential request");
         assert_eq!(request["purpose"], "dispatchSecret");
-        assert_eq!(request["apiVersion"], "serverware.credentialLeaseRequest/v4");
+        assert_eq!(request["apiVersion"], "catchplate.credentialLeaseRequest/v4");
         assert_eq!(
             request["requestAuthority"],
             serde_json::to_value(&request_authority).expect("serialize request authority")
@@ -83330,7 +83330,7 @@ mod tests {
     #[test]
     fn policy_high_water_persists_across_restart() {
         let path = env::temp_dir().join(format!(
-            "serverware-policy-high-water-{}-{}.json",
+            "catchplate-policy-high-water-{}-{}.json",
             std::process::id(),
             now_epoch_ms()
         ));
@@ -83838,7 +83838,7 @@ mod tests {
         };
         let spoofed_headers = BTreeMap::from([
             ("x-forwarded-client-cert".to_string(), "trusted".to_string()),
-            ("x-serverware-mtls-spiffe".to_string(), "spiffe://agents.example/workload".to_string()),
+            ("x-catchplate-mtls-spiffe".to_string(), "spiffe://agents.example/workload".to_string()),
         ]);
         assert!(
             !principal.matches(Some("127.0.0.1"), &spoofed_headers),
@@ -84116,7 +84116,7 @@ mod tests {
             "attemptId":sha256_prefixed(b"version-attempt"),
             "claimDigest":sha256_prefixed(b"version-claims"),
             "reservationId":"reservation:version",
-            "actorId":"spiffe://serverware/data-plane/version",
+            "actorId":"spiffe://catchplate/data-plane/version",
             "reservationDeadlineAtEpochMs":1,
             "dispatchDeadlineAtEpochMs":null,
             "responseEvidenceDigest":null,
@@ -84198,7 +84198,7 @@ mod tests {
         let attempt_id = sha256_prefixed(b"dispatch-request-attempt");
         let binding_digest = sha256_prefixed(b"dispatch-request-binding");
         let claim_digest = sha256_prefixed(b"dispatch-request-claim");
-        let actor_id = "spiffe://serverware/data-plane/dispatch-request";
+        let actor_id = "spiffe://catchplate/data-plane/dispatch-request";
         let reservation_id = "reservation:dispatch-request";
         let dispatch_deadline_at_epoch_ms = u64::MAX - 2;
         let reservation_deadline_at_epoch_ms = u64::MAX - 1;
@@ -84271,7 +84271,7 @@ mod tests {
         for (field, replacement) in [
             (
                 "actorId",
-                Value::String("spiffe://serverware/data-plane/substituted".to_string()),
+                Value::String("spiffe://catchplate/data-plane/substituted".to_string()),
             ),
             ("attemptId", Value::String(sha256_prefixed(b"substituted-attempt"))),
             ("claimDigest", Value::String(sha256_prefixed(b"substituted-claim"))),
@@ -84976,7 +84976,7 @@ mod tests {
 
         let claims = vec![weighted_claim, traversal_claim];
         let expected = ReleaseAuthorizationDurablePolicyBinding {
-            actor_id: "spiffe://serverware/data-plane/test".to_string(),
+            actor_id: "spiffe://catchplate/data-plane/test".to_string(),
             claim_digest: digest_json_ensure_ascii(&Value::Array(claims.clone())),
             claims,
         };
@@ -85013,7 +85013,7 @@ mod tests {
         )
         .expect("idempotent reserve replay");
         let mut actor_substitution = reserve_response.clone();
-        actor_substitution.actor_id = "spiffe://serverware/data-plane/other".to_string();
+        actor_substitution.actor_id = "spiffe://catchplate/data-plane/other".to_string();
         assert!(validate_reserve_durable_policy_response(
             Some(&actor_substitution),
             Some(&expected),
@@ -85351,7 +85351,7 @@ mod tests {
             "record_count_field":record_field,
         })];
         ValidatedDurablePolicyReservation {
-            actor_id: "spiffe://serverware/policy-engine".to_string(),
+            actor_id: "spiffe://catchplate/policy-engine".to_string(),
             claim_digest: digest_json_ensure_ascii(&Value::Array(claims.clone())),
             claims,
             reservation_id: "reservation:response-fixture".to_string(),
@@ -85659,7 +85659,7 @@ mod tests {
 
         let digest = sha256_prefixed(b"sensitive-json-owner-test");
         let traversal = ValidatedDurablePolicyReservation {
-            actor_id: "spiffe://serverware/policy-engine".to_string(),
+            actor_id: "spiffe://catchplate/policy-engine".to_string(),
             claim_digest: digest.clone(),
             claims: vec![json!({
                 "type":"traversalBudget",

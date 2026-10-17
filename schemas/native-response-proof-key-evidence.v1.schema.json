@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-response-proof-key-evidence.v1.schema.json",
-  "title": "Serverware native response-proof key evidence v1",
+  "$id": "https://catchplate.invalid/schemas/native-response-proof-key-evidence.v1.schema.json",
+  "title": "Catchplate native response-proof key evidence v1",
   "description": "Original role-4 evidence only. Shape conformance does not verify a Nitro document, key possession, authorization, current witness state or any response proof.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "attestationDocumentB64", "responseProofPublicKey"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeResponseProofKeyEvidence/v1"},
+    "apiVersion": {"const": "catchplate.nativeResponseProofKeyEvidence/v1"},
     "attestationDocumentB64": {
       "description": "Original Nitro document in unpadded URL-safe base64. Runtime verification checks canonical encoding, the 12288-byte decoded bound, signature, independently pinned scope and challenge.",
       "type": "string",

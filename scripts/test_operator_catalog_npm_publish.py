@@ -22,7 +22,7 @@ import test_operator_workspace_store as workspace
 
 ROOT = Path(__file__).resolve().parents[1]
 ACTOR = "operator-npm-publish-catalog-test"
-PACKAGE = "@serverware/fixture"
+PACKAGE = "@catchplate/fixture"
 BUNDLE = "npm_publish_v1"
 WINDOW = {"start": "09:00", "end": "17:00"}
 
@@ -54,7 +54,7 @@ def route_pair(f, rule):
 
 
 def signed_publish():
-    from serverware import npm_metadata, npm_publish
+    from catchplate import npm_metadata, npm_publish
     f = Fixture()
     before_policy = f.snapshot()[1:]
     credential, application = f.credential()["credential"], f.application()
@@ -85,7 +85,7 @@ def signed_publish():
     assert companion["adapter"]["config"]["credentialBinding"] == config["credentialBinding"]
     assert companion["constraints"] == [npm_metadata.response_envelope(companion["id"] + ".envelope")]
     other = f.application()
-    unrestricted = f.rule(other, credential, package="serverware-fixture")["access_rule"]
+    unrestricted = f.rule(other, credential, package="catchplate-fixture")["access_rule"]
     assert unrestricted["tag"] == "latest" and unrestricted["publishing_window"] is None
     assert len(route_pair(f, unrestricted)[0]["constraints"]) == 1
     status = f.call(f.mutations.catalog_status)
@@ -293,7 +293,7 @@ class PureNpmPublishCatalogTests(unittest.TestCase):
             "credential_id": activity_tests.CREDENTIAL, "operation_bundle": BUNDLE, "package": PACKAGE}
 
     def test_exact_public_dto_and_safe_defaults(self):
-        from serverware.operator_catalog_inputs import NpmPublishRuleInput
+        from catchplate.operator_catalog_inputs import NpmPublishRuleInput
         value = NpmPublishRuleInput(**self.fields())
         self.assertEqual(value.tag, "latest")
         self.assertIsNone(value.publishing_window)
@@ -306,7 +306,7 @@ class PureNpmPublishCatalogTests(unittest.TestCase):
                 NpmPublishRuleInput(**{**self.fields(), key: value})
 
     def test_window_is_exact_utc_daytime_no_hidden_weekdays(self):
-        from serverware.operator_catalog_inputs import NpmPublishRuleInput
+        from catchplate.operator_catalog_inputs import NpmPublishRuleInput
         for window in ({"start": "17:00", "end": "09:00"}, {"start": "09:00", "end": "09:00"},
                 {"start": "9:00", "end": "17:00"}, {"start": "09:00", "end": "24:00"},
                 {**WINDOW, "timezone": "UTC"}, {**WINDOW, "weekdays": ["mon"]}, {}, True):
@@ -314,9 +314,9 @@ class PureNpmPublishCatalogTests(unittest.TestCase):
                 NpmPublishRuleInput(**self.fields(), publishing_window=window)
 
     def test_alias_is_derived_from_exact_canonical_record(self):
-        from serverware import operator_catalog_npm_publish as publish
-        from serverware.operator_catalog_inputs import NpmPublishRuleInput
-        from serverware.operator_catalog_schema import CatalogIntegrityError
+        from catchplate import operator_catalog_npm_publish as publish
+        from catchplate.operator_catalog_inputs import NpmPublishRuleInput
+        from catchplate.operator_catalog_schema import CatalogIntegrityError
         record = publish.record_fields(NpmPublishRuleInput(**self.fields()))
         record.update(id=activity_tests.RULE, route_id="operator." + activity_tests.RULE, status="active")
         self.assertEqual(publish.route_ids(record), (record["route_id"], record["route_id"] + ".metadata"))
@@ -327,7 +327,7 @@ class PureNpmPublishCatalogTests(unittest.TestCase):
         catalog = {"credentials": [{"id": activity_tests.CREDENTIAL, "auth_type": "bearer"}],
             "applications": [{"id": activity_tests.APPLICATION, "principal_id": "principal"}],
             "access_rules": [record]}
-        from serverware import operator_catalog_activity
+        from catchplate import operator_catalog_activity
         routes = operator_catalog_activity._indexes(catalog)[2]
         self.assertEqual(set(routes), set(publish.route_ids(record)))
         duplicate = {**record, "id": activity_tests.OTHER_RULE, "operation_bundle": "not-publish",
@@ -339,12 +339,12 @@ class PureNpmPublishCatalogTests(unittest.TestCase):
 class ConnectedNpmPublishCatalogTests(unittest.TestCase):
     def setUp(self):
         workspace.common.OperatorDemoPersistenceTests.setUp(self)
-        self.environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.example.com","https://api.github.com","https://registry.npmjs.org"]'
+        self.environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.example.com","https://api.github.com","https://registry.npmjs.org"]'
 
     def worker(self, name):
         environment = dict(self.environment)
         if name == "destination":
-            environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.example.com"]'
+            environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.example.com"]'
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", name],
             cwd=ROOT, env=environment, capture_output=True, text=True, timeout=90)
         if result.returncode != 0:

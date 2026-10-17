@@ -282,7 +282,7 @@ def live_tls_binding() -> dict:
         "enclaveBootId": "enclave-boot-0001",
         "enclaveInstanceId": "enclave-instance-0001",
         "expiresAtUnix": 1_060,
-        "exporterLabel": "EXPORTER-Serverware-Attestation-v1",
+        "exporterLabel": "EXPORTER-Catchplate-Attestation-v1",
         "exporterSha256": verifier.sha256(b"tls-exporter"),
         "issuedAtUnix": 1_000,
         "leafCertificateSha256":
@@ -322,7 +322,7 @@ def signed_live_session_fixture(
         witness_signing_key_id=witness_signing_key_id,
     )
     selected_request = (
-        b'{"apiVersion":"serverware.publicAttestationRequest/v1",'
+        b'{"apiVersion":"catchplate.publicAttestationRequest/v1",'
         b'"callerNonceBase64url":"bm5ubm5ubm5ubm5ubm5ubm5ubm5ubm5ubm5ubm5ubm4"}'
         if request_body is None
         else request_body
@@ -331,7 +331,7 @@ def signed_live_session_fixture(
         verifier.canonical_json_bytes(
             {
                 "apiVersion":
-                "serverware.publicAttestationEvidenceBody/v1",
+                "catchplate.publicAttestationEvidenceBody/v1",
                 "releaseIdentity": release_identity,
             }
         )
@@ -650,7 +650,7 @@ class CanonicalProfileFixtures(unittest.TestCase):
         value = {"apiVersion": verifier.BUNDLE_VERSION, "count": (1 << 63) - 1}
         self.assertEqual(
             verifier.canonical_json_bytes(value),
-            b'{"apiVersion":"serverware.publicNitroVerificationBundle/v2","count":9223372036854775807}',
+            b'{"apiVersion":"catchplate.publicNitroVerificationBundle/v2","count":9223372036854775807}',
         )
 
     def test_float_is_rejected(self) -> None:
@@ -742,38 +742,38 @@ class ClosedVersionFixtures(unittest.TestCase):
                 verifier.STABLE_RELEASE_STATEMENT_VERSION,
             },
             {
-                "serverware.publicNitroVerificationBundle/v2",
-                "serverware.publicNitroExpectations/v2",
-                "serverware.publicNitroTrustRoots/v4",
-                "serverware.sourceInputManifest/v3",
-                "serverware.gitSourceInventory/v3",
-                "serverware.untrackedSourceApproval/v2",
-                "serverware.ociBuildWatchdogReceipt/v4",
-                "serverware.verificationPromotionReceipt/v4",
-                "serverware.enclaveKeyCustody/v3",
-                "serverware.enclaveTlsScope/v2",
-                "serverware.enclaveTlsScopeEnvelope/v2",
-                "serverware.attestationResponse/v2",
-                "serverware.releaseIdentity/v1",
-                "serverware.liveSessionProof/v1",
-                "serverware.liveWitnessHead/v1",
-                "serverware.protectedLiveWitnessState/v2",
-                "serverware.publicAttestationBundle/v3",
-                "serverware.publicAttestationConfig/v2",
-                "serverware.publicReleaseGraph/v1",
-                "serverware.stableReleaseStatement/v1",
+                "catchplate.publicNitroVerificationBundle/v2",
+                "catchplate.publicNitroExpectations/v2",
+                "catchplate.publicNitroTrustRoots/v4",
+                "catchplate.sourceInputManifest/v3",
+                "catchplate.gitSourceInventory/v3",
+                "catchplate.untrackedSourceApproval/v2",
+                "catchplate.ociBuildWatchdogReceipt/v4",
+                "catchplate.verificationPromotionReceipt/v4",
+                "catchplate.enclaveKeyCustody/v3",
+                "catchplate.enclaveTlsScope/v2",
+                "catchplate.enclaveTlsScopeEnvelope/v2",
+                "catchplate.attestationResponse/v2",
+                "catchplate.releaseIdentity/v1",
+                "catchplate.liveSessionProof/v1",
+                "catchplate.liveWitnessHead/v1",
+                "catchplate.protectedLiveWitnessState/v2",
+                "catchplate.publicAttestationBundle/v3",
+                "catchplate.publicAttestationConfig/v2",
+                "catchplate.publicReleaseGraph/v1",
+                "catchplate.stableReleaseStatement/v1",
             },
         )
 
     def test_legacy_versions_do_not_cross_accept(self) -> None:
         rejected = {
-            "serverware.publicNitroVerificationBundle/v1",
-            "serverware.sourceInputManifest/v2",
-            "serverware.ociBuildWatchdogReceipt/v3",
-            "serverware.verificationPromotionReceipt/v3",
-            "serverware.enclaveKeyCustody/v2",
-            "serverware.enclaveTlsScope/v1",
-            "serverware.attestationResponse/v1",
+            "catchplate.publicNitroVerificationBundle/v1",
+            "catchplate.sourceInputManifest/v2",
+            "catchplate.ociBuildWatchdogReceipt/v3",
+            "catchplate.verificationPromotionReceipt/v3",
+            "catchplate.enclaveKeyCustody/v2",
+            "catchplate.enclaveTlsScope/v1",
+            "catchplate.attestationResponse/v1",
             "manifest-v6-nitro-eif",
             "legacy-docker-dev-nsm",
         }
@@ -921,7 +921,7 @@ class ReleaseIdentityAndLiveSessionFixtures(unittest.TestCase):
             "result-version": {
                 **copy.deepcopy(result),
                 "apiVersion":
-                "serverware.liveAttestationVerificationResult/v0",
+                "catchplate.liveAttestationVerificationResult/v0",
             },
             "wrong-committed-state-shape": copy.deepcopy(result),
             "committed-state-version": copy.deepcopy(result),
@@ -943,7 +943,7 @@ class ReleaseIdentityAndLiveSessionFixtures(unittest.TestCase):
         ]["stateStoreHeadSha256"]
         shape_cases["committed-state-version"][
             "committedNonceAuthorityVerifierState"
-        ]["apiVersion"] = "serverware.nonceAuthorityVerifierState/v0"
+        ]["apiVersion"] = "catchplate.nonceAuthorityVerifierState/v0"
         shape_cases["committed-state-time-type"][
             "committedNonceAuthorityVerifierState"
         ]["committedAtUnix"] = True
@@ -1077,7 +1077,7 @@ class ReleaseIdentityAndLiveSessionFixtures(unittest.TestCase):
             ),
         }
         hostile["descriptor-version"][1]["apiVersion"] = (
-            "serverware.publicAttestationProducerDescriptor/v1"
+            "catchplate.publicAttestationProducerDescriptor/v1"
         )
         hostile["descriptor-peer-uid"][1]["nonceService"][
             "expectedPeerUid"
@@ -1095,7 +1095,7 @@ class ReleaseIdentityAndLiveSessionFixtures(unittest.TestCase):
             "nonceAuthorityVerifierStateStoreRollbackMechanism"
         ] = "customRollbackClaim"
         hostile["request-version"][1]["apiVersion"] = (
-            "serverware.publicAttestationProducerRequest/v1"
+            "catchplate.publicAttestationProducerRequest/v1"
         )
         hostile["request-service-endpoint"][1]["liveSessionRequest"][
             "nonceAuthorityVerifierStateTransition"
@@ -1338,7 +1338,7 @@ class CompletionIdentityAndHeaderFixtures(unittest.TestCase):
                 "hardware_proof": False,
                 "independently_authenticated": False,
                 "integrity_metadata": {
-                    "apiVersion": "serverware.readinessChecksum/v1",
+                    "apiVersion": "catchplate.readinessChecksum/v1",
                     "authenticity_requires_external_signature_or_checkpoint":
                     True,
                     "detached_sha256_path": "/run/readiness.sha256",
@@ -1346,7 +1346,7 @@ class CompletionIdentityAndHeaderFixtures(unittest.TestCase):
                     "independently_authenticated": False,
                     "scope": "checksum-only",
                 },
-                "kind": "ServerwarePreEnclaveReadiness",
+                "kind": "CatchplatePreEnclaveReadiness",
                 "okForAction": False,
                 "proof_core_sha256": verifier.sha256(
                     b"readiness-only-core"
@@ -1373,7 +1373,7 @@ class CompletionIdentityAndHeaderFixtures(unittest.TestCase):
         for name, field, value in (
             ("final", "finalCompletionVerified", True),
             ("actionable", "okForAction", True),
-            ("final-kind", "kind", "ServerwareCompletionProof"),
+            ("final-kind", "kind", "CatchplateCompletionProof"),
             ("final-mode", "verification_mode", "final"),
             ("final-scope", "result_scope", "final-completion"),
         ):
@@ -1402,7 +1402,7 @@ class CompletionIdentityAndHeaderFixtures(unittest.TestCase):
         verifier.validate_completion_v6_contract_shape(valid)
         metadata = valid["integrity_metadata"]
         for label, field, value, expected_error in (
-            ("version", "apiVersion", "serverware.readinessChecksum/v2", "closed readinessChecksum/v1 contract"),
+            ("version", "apiVersion", "catchplate.readinessChecksum/v2", "closed readinessChecksum/v1 contract"),
             ("integer-token", "publicationToken", 1, "closed readinessChecksum/v1 contract"),
             ("boolean-token", "publicationToken", True, "closed readinessChecksum/v1 contract"),
             ("uppercase-token", "publicationToken", "A" * 32, "closed readinessChecksum/v1 contract"),
@@ -1623,15 +1623,15 @@ class CompletionIdentityAndHeaderFixtures(unittest.TestCase):
             verifier.DETACHED_PROOF_HEADERS,
             {
                 "statement": (
-                    "x-serverware-attestation-statement-b64:"
+                    "x-catchplate-attestation-statement-b64:"
                     "base64url(canonical-statement)"
                 ),
                 "statementSha256": (
-                    "x-serverware-attestation-statement-sha256:"
+                    "x-catchplate-attestation-statement-sha256:"
                     "sha256(canonical-statement)"
                 ),
                 "signature": (
-                    "x-serverware-attestation-signature:"
+                    "x-catchplate-attestation-signature:"
                     "ed25519(canonical-statement)"
                 ),
             },
@@ -1640,9 +1640,9 @@ class CompletionIdentityAndHeaderFixtures(unittest.TestCase):
     def test_legacy_detached_header_schema_is_not_accepted(self) -> None:
         legacy = {
             "names": [
-                "x-serverware-attestation-statement-b64",
-                "x-serverware-attestation-statement-sha256",
-                "x-serverware-attestation-signature",
+                "x-catchplate-attestation-statement-b64",
+                "x-catchplate-attestation-statement-sha256",
+                "x-catchplate-attestation-signature",
             ],
             "statementAndSignatureExcludedFromSignedCore": True,
         }
@@ -2797,7 +2797,7 @@ class NonceAuthorityVerifierStateServiceFixtures(unittest.TestCase):
         producer_channel_challenge = b64u(b"p" * 32)
         producer_invocation = {
             "apiVersion":
-            "serverware.publicAttestationProducerInvocation/v1",
+            "catchplate.publicAttestationProducerInvocation/v1",
             "callerNonceSha256": caller_nonce_sha256,
             "expiresAtUnix": expires_at,
             "issuedAtUnix": self.now,
@@ -3608,10 +3608,10 @@ class NonceAuthorityVerifierStateServiceFixtures(unittest.TestCase):
         self,
     ) -> None:
         finalized = (
-            "serverware.attestationVerifierStateCommitRequest/v3"
+            "catchplate.attestationVerifierStateCommitRequest/v3"
         )
         obsolete = (
-            "serverware.nonceAuthorityVerifierStateCommitRequest/v2"
+            "catchplate.nonceAuthorityVerifierStateCommitRequest/v2"
         )
         self.assertEqual(
             verifier_state_service.COMMIT_REQUEST_VERSION,
@@ -3647,16 +3647,16 @@ class NonceAuthorityVerifierStateServiceFixtures(unittest.TestCase):
         )
         self.assertEqual(
             verifier_state_service.RECOVERY_REQUEST_VERSION,
-            "serverware.attestationVerifierStateRecoveryRequest/v3",
+            "catchplate.attestationVerifierStateRecoveryRequest/v3",
         )
         self.assertEqual(
             verifier_state_service.RECOVERY_RESPONSE_VERSION,
-            "serverware.attestationVerifierStateRecoveryResponse/v3",
+            "catchplate.attestationVerifierStateRecoveryResponse/v3",
         )
         for obsolete_recovery_version in (
-            "serverware.attestationVerifierStateRecoveryRequest/v1",
-            "serverware.nonceAuthorityVerifierStateRecoveryRequest/v1",
-            "serverware.nonceAuthorityVerifierStateRecoveryRequest/v2",
+            "catchplate.attestationVerifierStateRecoveryRequest/v1",
+            "catchplate.nonceAuthorityVerifierStateRecoveryRequest/v1",
+            "catchplate.nonceAuthorityVerifierStateRecoveryRequest/v2",
         ):
             hostile = {
                 "apiVersion": obsolete_recovery_version,
@@ -3692,7 +3692,7 @@ class NonceAuthorityVerifierStateServiceFixtures(unittest.TestCase):
         )
         obsolete_summary = {
             "apiVersion":
-            "serverware.nonceAuthorityVerifierStateTransition/v1",
+            "catchplate.nonceAuthorityVerifierStateTransition/v1",
             "nonceConsumptionReceiptSha256":
             fixture["document"]["nonceConsumptionReceiptSha256"],
             "nonceConsumptionSha256":
@@ -3933,7 +3933,7 @@ class NonceAuthorityVerifierStateServiceFixtures(unittest.TestCase):
         )
         service_configuration = {
             "apiVersion":
-            "serverware.attestationVerifierStateServiceConfiguration/v3",
+            "catchplate.attestationVerifierStateServiceConfiguration/v3",
             "assurance": self.assurance,
             "assuranceSha256": self.assurance_sha256,
             "authorizationLifetimeSeconds": 12,
@@ -3994,13 +3994,13 @@ class NonceAuthorityVerifierStateServiceFixtures(unittest.TestCase):
             {
                 **copy.deepcopy(transition["request"]),
                 "apiVersion":
-                "serverware.nonceAuthorityVerifierStateCommitRequest/v2",
+                "catchplate.nonceAuthorityVerifierStateCommitRequest/v2",
             },
             "obsolete-recovery-version":
             {
                 **copy.deepcopy(recovery_request),
                 "apiVersion":
-                "serverware.attestationVerifierStateRecoveryRequest/v1",
+                "catchplate.attestationVerifierStateRecoveryRequest/v1",
             },
             "commit-omission":
             {
@@ -5003,7 +5003,7 @@ class NonceAuthorityVerifierStateServiceFixtures(unittest.TestCase):
             [
                 x509.NameAttribute(
                     NameOID.COMMON_NAME,
-                    "serverware-verifier-fixture",
+                    "catchplate-verifier-fixture",
                 )
             ]
         )
@@ -5023,7 +5023,7 @@ class NonceAuthorityVerifierStateServiceFixtures(unittest.TestCase):
                 x509.SubjectAlternativeName(
                     [
                         x509.UniformResourceIdentifier(
-                            "spiffe://serverware/verifier"
+                            "spiffe://catchplate/verifier"
                         )
                     ]
                 ),
@@ -5040,20 +5040,20 @@ class NonceAuthorityVerifierStateServiceFixtures(unittest.TestCase):
         )
         verifier_state_service.ListenerPeerPolicy(
             expected_spki_sha256=verifier.sha256(client_spki_der),
-            expected_spiffe_uri="spiffe://serverware/verifier",
+            expected_spiffe_uri="spiffe://catchplate/verifier",
         ).validate_certificate_der(certificate_der)
         hostile = (
             {
                 "expected_spki_sha256":
                 verifier.sha256(b"wrong-client-spki"),
                 "expected_spiffe_uri":
-                "spiffe://serverware/verifier",
+                "spiffe://catchplate/verifier",
             },
             {
                 "expected_spki_sha256":
                 verifier.sha256(client_spki_der),
                 "expected_spiffe_uri":
-                "spiffe://serverware/other",
+                "spiffe://catchplate/other",
             },
         )
         for policy in hostile:
@@ -5180,7 +5180,7 @@ class NonceAuthorityVerifierStateServiceFixtures(unittest.TestCase):
             verifier.sha256(b"fixture-server-certificate")
         )
         client._expected_server_spiffe_uri = (
-            "spiffe://serverware/verifier-state"
+            "spiffe://catchplate/verifier-state"
         )
         client._timeout = 1.0
         client._request_slots = threading.BoundedSemaphore(1)
@@ -5514,7 +5514,7 @@ class PublicNitroFinalSignerFixtures(unittest.TestCase):
         self.assertEqual(
             verifier.PUBLIC_NITRO_LIVE_RESULT_ENVELOPE_DOMAIN,
             (
-                b"serverware.publicNitroLiveVerificationResultEnvelope/v1"
+                b"catchplate.publicNitroLiveVerificationResultEnvelope/v1"
                 b"\x00signatureAlgorithm=Ed25519\x00"
             ),
         )

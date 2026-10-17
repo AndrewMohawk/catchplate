@@ -23,23 +23,23 @@ from psycopg import sql
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_index_contract as contract
-from serverware import authority_index_projection as projection
-from serverware.authority_store import counted_hash_sql
-from serverware.native_postgres_results import run_native_fixture
+from catchplate import authority_index_contract as contract
+from catchplate import authority_index_projection as projection
+from catchplate.authority_store import counted_hash_sql
+from catchplate.native_postgres_results import run_native_fixture
 from test_webauthn_trust_projection_postgres import local_connection_parameters
 import test_authority_index_range as oracle
 import test_authority_index_join as profile_oracle
 
 
 CONNECTION_PARAMETERS = None
-PREFIX = "serverware_policy_authority_"
+PREFIX = "catchplate_policy_authority_"
 EXPECTED_NAMES = tuple(PREFIX + name for name in (
     "counted_profile", "counted_frame_digest", "counted_empty", "counted_leaf", "counted_branch"))
 I64 = 2**63 - 1
-EMPTY_DOMAIN = "serverware.policyAuthorityCountedIndexEmpty/v1"
-LEAF_DOMAIN = "serverware.policyAuthorityCountedIndexLeaf/v1"
-BRANCH_DOMAIN = "serverware.policyAuthorityCountedIndexNode/v1"
+EMPTY_DOMAIN = "catchplate.policyAuthorityCountedIndexEmpty/v1"
+LEAF_DOMAIN = "catchplate.policyAuthorityCountedIndexLeaf/v1"
+BRANCH_DOMAIN = "catchplate.policyAuthorityCountedIndexNode/v1"
 
 
 class CountedHashPostgresTests(unittest.TestCase):
@@ -234,11 +234,11 @@ class CountedHashPostgresTests(unittest.TestCase):
         self.assertEqual(self.empty(self.profile.index_id, ""), oracle.empty(self.profile, "")[0])
 
     def test_closed_frame_helper_rejects_domains_arity_null_nonascii_and_array_aliases(self):
-        frames = ["serverware.policyAuthorityCountedIndex/v1", self.profile.index_id,
+        frames = ["catchplate.policyAuthorityCountedIndex/v1", self.profile.index_id,
                   self.profile.table, self.profile.projection_digest, "160", "0", "", "0"]
         actual = self.call("counted_frame_digest", (EMPTY_DOMAIN, frames), ("text", "text[]"))[0]
         self.assertEqual(actual, oracle.framed(EMPTY_DOMAIN, *frames))
-        cases = ((None, frames), ("serverware.policyAuthorityAuthenticatedNode/v1", frames),
+        cases = ((None, frames), ("catchplate.policyAuthorityAuthenticatedNode/v1", frames),
                  (EMPTY_DOMAIN, None), (EMPTY_DOMAIN, []), (EMPTY_DOMAIN, frames[:-1]),
                  (LEAF_DOMAIN, frames), (BRANCH_DOMAIN, frames),
                  (EMPTY_DOMAIN, [None] + frames[1:]), (EMPTY_DOMAIN, ["x" * 161] + frames[1:]),
@@ -279,7 +279,7 @@ class CountedHashPostgresTests(unittest.TestCase):
                 self.assertEqual(result, expected_result)
                 self.assertEqual(returns_set, name in (PREFIX + "counted_profile", PREFIX + "counted_branch"))
                 self.assertEqual(settings, [f"search_path=pg_catalog, {self.schema}, pg_temp"])
-        for namespace in (None, "serverware_metadata", '"Upper"', '"bad-name"', '"a"; SELECT 1', '"' + "a" * 64 + '"'):
+        for namespace in (None, "catchplate_metadata", '"Upper"', '"bad-name"', '"a"; SELECT 1', '"' + "a" * 64 + '"'):
             with self.subTest(namespace=namespace), self.assertRaises(ValueError):
                 counted_hash_sql.counted_hash_functions_sql(namespace)
 

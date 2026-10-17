@@ -19,9 +19,9 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 from cryptography.exceptions import InvalidSignature
 import test_native_pilot_genesis_delivery as transcripts
 import test_native_pilot_genesis_parent_authority as parents
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_genesis_endpoint_profile as wire
-from serverware import native_pilot_genesis_endpoint_control as control
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_genesis_endpoint_profile as wire
+from catchplate import native_pilot_genesis_endpoint_control as control
 
 p = g.p
 
@@ -116,7 +116,7 @@ class EndpointProtocolTests(unittest.TestCase):
         context = transcripts.authority.verified_delivery(wire.ROLES[0], g.canonical(self.source), self.f["raw"],
             boot=self.f["boot"], now_boottime_ns=self.f["now"])
         proof = g.canonical({"syntheticProofOnly": True})
-        genesis = g.canonical({"apiVersion": "serverware.nativeLedgerSpoolStoreGenesis/v1", "guest": context["guest"],
+        genesis = g.canonical({"apiVersion": "catchplate.nativeLedgerSpoolStoreGenesis/v1", "guest": context["guest"],
             "proofScopeSha256": p.sha(proof)})
         directory = wire.resources(self.resources_raw)["services"][wire.ROLES[0]]["activation"][2]
         value = {"apiVersion": wire.STORE_API, "resourcesSha256": p.sha(self.resources_raw), "deliverySha256": p.sha(self.f["raw"]),

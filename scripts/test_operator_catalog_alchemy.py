@@ -31,7 +31,7 @@ BUNDLE = "alchemy_chain_status_read_v1"
 MARKER = "alchemy_key_v1"
 ORIGIN = "https://eth-mainnet.g.alchemy.com"
 OTHER_ORIGIN = "https://eth-sepolia.g.alchemy.com"
-GATE_DESCRIPTOR = {"schema": "serverware.operatorAlchemyRpcReadGate/v1",
+GATE_DESCRIPTOR = {"schema": "catchplate.operatorAlchemyRpcReadGate/v1",
     "adapter": "alchemy.rpc_read.v1", "operation": "alchemy.rpc.read"}
 HEADERS = ["accept", "accept-language", "alchemy-ethers-sdk-method",
     "alchemy-ethers-sdk-version", "sec-fetch-mode", "user-agent"]
@@ -57,7 +57,7 @@ def refused(callback, error=ValueError):
 def gate_payload(store):
     return {"ok": True, "policy_hash": store.get_policy_high_water()["policy_hash"],
         "operator_alchemy_rpc_read": dict(GATE_DESCRIPTOR),
-        "operator_x_app_read": {"schema": "serverware.operatorXAppReadGate/v1",
+        "operator_x_app_read": {"schema": "catchplate.operatorXAppReadGate/v1",
             "adapter": "x.app_read.v1", "operation": "x.username.read"}}
 
 
@@ -121,7 +121,7 @@ class Fixture(shared.Fixture):
 
 
 def signed():
-    from serverware import alchemy_rpc_read as alchemy
+    from catchplate import alchemy_rpc_read as alchemy
     f = Fixture()
     before = f.snapshot()[1:]
     credential, application = f.credential()["credential"], f.application()
@@ -145,7 +145,7 @@ def signed():
     assert route["match"] == {"scheme": "https", "host": "eth-mainnet.g.alchemy.com", "port": 443,
         "methods": ["POST"], "paths": ["/v2"]}
     assert route["credentialRef"] == credential["id"] and route["principals"] == [application["principal_id"]]
-    assert route["credentialHeader"] == {"mode": "replaceExact", "expectedValue": "Bearer serverware-alchemy-placeholder-v1"}
+    assert route["credentialHeader"] == {"mode": "replaceExact", "expectedValue": "Bearer catchplate-alchemy-placeholder-v1"}
     assert route["adapter"]["type"] == "alchemy.rpc_read.v1"
     config = route["adapter"]["config"]
     assert set(config) == {"credentialBinding", "chain", "request", "response"}
@@ -169,14 +169,14 @@ def signed():
     assert result["policy"]["activation"] == "pending" and result["policy"]["loaded_policy_hash"] is None
     status = f.call(f.mutations.catalog_status)
     assert status["capabilities"]["alchemy"] == {
-        "schema": "serverware.operatorAlchemyRpcRead/v1", "connection_type": MARKER,
+        "schema": "catchplate.operatorAlchemyRpcRead/v1", "connection_type": MARKER,
         "create_credential_path": "/api/operator-demo/credentials/alchemy-key",
         "create_rule_path": "/api/operator-demo/access-rules/alchemy-chain-status",
         "chains": [{"chain": CHAIN, "api_origin": ORIGIN, "destination_allowed": True},
             {"chain": OTHER_CHAIN, "api_origin": OTHER_ORIGIN, "destination_allowed": True}],
         "operation_bundles": [BUNDLE], "rpc_methods": ["eth_chainId", "eth_blockNumber"],
-        "sdk_auth_token": "serverware-alchemy-placeholder-v1",
-        "placeholder": "Bearer serverware-alchemy-placeholder-v1",
+        "sdk_auth_token": "catchplate-alchemy-placeholder-v1",
+        "placeholder": "Bearer catchplate-alchemy-placeholder-v1",
         "response_mode": "alchemy_rpc_read_json_v1", "source_pair_required": True}
     with closing(f.db.connect()) as conn:
         kinds = {row[0] for row in conn.execute("SELECT event_type FROM audit_events")}
@@ -247,7 +247,7 @@ def crossed():
         operation_bundle=shared.READ, repository=shared.REPOSITORY), ACTOR))
     refused(lambda: f.call(f.mutations.create_npm_rule, f.inputs.NpmMetadataRuleInput(**f.review(),
         name="No crossed npm grant", application_id=application["id"], credential_id=credential["id"],
-        operation_bundle="npm_metadata_read_v1", packages=["serverware-fixture"]), ACTOR))
+        operation_bundle="npm_metadata_read_v1", packages=["catchplate-fixture"]), ACTOR))
     refused(lambda: f.call(f.mutations.create_x_rule, f.inputs.XUsernameRuleInput(**f.review(),
         name="No crossed X grant", application_id=application["id"], credential_id=credential["id"],
         operation_bundle="x_username_read_v1", username="fixture_user"), ACTOR))
@@ -372,7 +372,7 @@ def gate_refusals():
     assert stale != good["policy_hash"]
     descriptors = [None, {}, [], {**GATE_DESCRIPTOR, "unknown": True},
         *({**GATE_DESCRIPTOR, field: value} for field, value in (
-            ("schema", "serverware.operatorAlchemyRpcReadGate/v0"), ("adapter", "alchemy.v2"),
+            ("schema", "catchplate.operatorAlchemyRpcReadGate/v0"), ("adapter", "alchemy.v2"),
             ("operation", "alchemy.write"), ("schema", True))),
         *({key: value for key, value in GATE_DESCRIPTOR.items() if key != missing}
             for missing in GATE_DESCRIPTOR)]
@@ -468,7 +468,7 @@ def coexistence():
 
 def rpc_boundary():
     """Validate the fixed body grammar used by the actually signed adapter."""
-    from serverware import alchemy_rpc_read as alchemy
+    from catchplate import alchemy_rpc_read as alchemy
     f = Fixture()
     credential, application = f.credential()["credential"], f.application()
     f.rule(application, credential)
@@ -531,7 +531,7 @@ def legacy():
     workspace.migrate(db, schema)
     assert workspace.snapshot(db) == before and config.POLICY_BUNDLE_PATH.read_bytes() == signed_bytes
     old = workspace.catalog(db, schema)
-    from serverware import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
+    from catchplate import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
     with observed_gate(config, store), patch.object(store, "loaded_policy_hash", return_value=None):
         result = mutations.create_alchemy_credential(inputs.AlchemyKeyInput(**workspace.review(db, store, schema),
             name="New separate Alchemy key", secret=TOKEN), ACTOR)
@@ -553,14 +553,14 @@ OPERATIONS = {"signed": signed, "inputs": inputs_and_cas, "crossed": crossed,
 class OperatorCatalogAlchemyTests(unittest.TestCase):
     def setUp(self):
         workspace.common.OperatorDemoPersistenceTests.setUp(self)
-        self.environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(
+        self.environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(
             ["https://api.example.com", "https://api.github.com", "https://registry.npmjs.org",
                 "https://api.x.com", ORIGIN, OTHER_ORIGIN])
 
     def worker(self, name):
         environment = dict(self.environment)
         if name == "destination":
-            environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(["https://api.example.com", OTHER_ORIGIN])
+            environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps(["https://api.example.com", OTHER_ORIGIN])
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", name],
             cwd=ROOT, env=environment, capture_output=True, text=True, timeout=90)
         if result.returncode:

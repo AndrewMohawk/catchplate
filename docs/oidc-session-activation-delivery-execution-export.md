@@ -1,6 +1,6 @@
 # Private first-exact consume ciphertext export
 
-[`authority_oidc_session_activation_delivery_execution_export._export_on_work`](../serverware/authority_oidc_session_activation_delivery_execution_export.py)
+[`authority_oidc_session_activation_delivery_execution_export._export_on_work`](../catchplate/authority_oidc_session_activation_delivery_execution_export.py)
 connects the actual retained consume-plan owner to the dedicated
 `DeliveryExecutionBundleStore`. It returns only the first exact durable
 ciphertext. This source-only composition does not admit a received success

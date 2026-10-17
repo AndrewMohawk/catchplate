@@ -1,6 +1,6 @@
 """Bounded internal relay to the real receiver; faults only audit ACK delivery.
 
-The operator profile requires the canonical serverware:3000 service name. This
+The operator profile requires the canonical catchplate:3000 service name. This
 fixture owns that name only in its separate internal Compose network and sends
 three explicitly allowed operations to control-plane:3000. No signing key or
 live state is mounted. The checker alone can arm/release the one-shot fault.
@@ -19,14 +19,14 @@ from urllib.parse import urlsplit
 MAX_BODY = 2 * 1024 * 1024
 AUDIT = '/api/data-plane/audit'
 LEASE = '/api/data-plane/credential-leases'
-INSTANCE = 'spiffe://operator-demo.serverware/decision-gate/local'
+INSTANCE = 'spiffe://operator-demo.catchplate/decision-gate/local'
 SHA = re.compile(r'sha256:[0-9a-f]{64}\Z')
-FORWARD_HEADERS = ('Content-Type', 'Accept', 'X-Serverware-Data-Plane-Token',
-                   'X-Serverware-Response-Nonce')
+FORWARD_HEADERS = ('Content-Type', 'Accept', 'X-Catchplate-Data-Plane-Token',
+                   'X-Catchplate-Response-Nonce')
 HOP_HEADERS = frozenset(('connection', 'keep-alive', 'transfer-encoding', 'upgrade',
                          'proxy-authenticate', 'proxy-authorization', 'te', 'trailer'))
-PROOF_HEADERS = ('x-serverware-response-key-id', 'x-serverware-response-statement-b64',
-                 'x-serverware-response-statement-sha256', 'x-serverware-response-signature')
+PROOF_HEADERS = ('x-catchplate-response-key-id', 'x-catchplate-response-statement-b64',
+                 'x-catchplate-response-statement-sha256', 'x-catchplate-response-signature')
 
 
 def digest(raw):
@@ -54,7 +54,7 @@ def real_ack(status, headers, body, identity):
     if status != 200 or not all(lowered.get(key) for key in PROOF_HEADERS):
         raise ValueError('real receiver signed success required before fault')
     value = json.loads(body)
-    if value != {'apiVersion': 'serverware.dataPlaneAuditAck/v1', 'ok': True,
+    if value != {'apiVersion': 'catchplate.dataPlaneAuditAck/v1', 'ok': True,
         'accepted': len(identity['eventIds']), 'batchDigest': identity['bodyDigest'], 'instanceId': INSTANCE}:
         raise ValueError('real receiver ACK does not match exact original batch')
 
@@ -135,7 +135,7 @@ class FaultState:
     def snapshot(self):
         with self.lock:
             # Only fixed labels, body/nonce hashes and synthetic audit IDs escape.
-            return json.loads(json.dumps({'schema': 'serverware.privateAuditRelay/v1',
+            return json.loads(json.dumps({'schema': 'catchplate.privateAuditRelay/v1',
                 'armed': self.armed, 'released': self.released, 'dropped': self.dropped,
                 'original': self.original, 'attempts': self.records,
                 'requiredAttempts': self.required_records, 'failure': self.failure}))
@@ -199,7 +199,7 @@ class RelayHandler(BaseHTTPRequestHandler):
         # Destination and operation whitelist are code constants, never input URLs.
         connection = http.client.HTTPConnection('control-plane', 3000, timeout=4)
         headers = {name: self.headers[name] for name in FORWARD_HEADERS if name in self.headers}
-        headers.update({'Host': 'serverware:3000', 'Connection': 'close'})
+        headers.update({'Host': 'catchplate:3000', 'Connection': 'close'})
         try:
             connection.request(self.command, self.path, body=body, headers=headers)
             response = connection.getresponse()
@@ -247,7 +247,7 @@ class RelayHandler(BaseHTTPRequestHandler):
             return self.send_json(404, {'error': 'fixture_operation_refused'})
         mode, record, identity = 'pass', None, None
         if parsed.path == AUDIT:
-            identity = batch_identity(body, self.headers.get('X-Serverware-Response-Nonce'))
+            identity = batch_identity(body, self.headers.get('X-Catchplate-Response-Nonce'))
             mode, record = self.server.fault.before(identity)
             if mode == 'hold':
                 return self.close_without_response()

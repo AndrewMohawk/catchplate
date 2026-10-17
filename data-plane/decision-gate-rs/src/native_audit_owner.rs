@@ -3,7 +3,7 @@
 //! An uncertain command is retained verbatim; no new signature, split or epoch
 //! reset can bypass it. A new boot needs an independent exact continuation.
 use super::*;
-use serverware_decision_gate::native_audit_batch_v1 as wire;
+use catchplate_decision_gate::native_audit_batch_v1 as wire;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD,Engine as _};
 use ring::rand::{SecureRandom, SystemRandom};
 
@@ -81,7 +81,7 @@ impl Owner {
         let snapshot=current_snapshot(state); let nonce=fresh_control_plane_response_nonce()?;
         if !snapshot_is_active(state,&snapshot) {return Err("audit response trust inactive".into());}
         let request=self.client.post(&self.url).header("Content-Type","application/json")
-            .header("X-Serverware-Response-Nonce",&nonce).body(raw.to_vec());
+            .header("X-Catchplate-Response-Nonce",&nonce).body(raw.to_vec());
         let mut response=bounded_service_request(state,request)?.send().map_err(|_|"audit transport outcome unknown")?;
         let status=response.status();
         let body=read_bounded_control_plane_response_body(&mut response,(wire::MAX_ENVELOPE+64*1024) as u64,"measured audit acknowledgement")?;
@@ -90,7 +90,7 @@ impl Owner {
         verify_control_plane_signed_response(&snapshot,&self.url,"POST",&nonce,status,response.headers(),&body,"measured audit acknowledgement")?;
         if !status.is_success() {return Err("measured audit intake refused original".into());}
         let ack:Ack=strict_json_from_slice(&body).map_err(|_|"audit acknowledgement shape")?;
-        if !ack.ok || ack.api_version!="serverware.measuredAuditAck/v1" || ack.epoch_id!=self.config.epoch_id
+        if !ack.ok || ack.api_version!="catchplate.measuredAuditAck/v1" || ack.epoch_id!=self.config.epoch_id
             || ack.assignment_sha256!=self.config.assignment_sha256 || ack.request_sha256!=sha256_prefixed(raw)
             || ack.sequence!=self.sequence || ack.previous_batch_sha256!=self.previous {return Err("audit acknowledgement scope differs".into());}
         Ok(ack)

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/coder-docker-runner-execution.v12.schema.json",
-  "title": "Serverware Docker RunnerExecution V12",
+  "$id": "https://catchplate.dev/schemas/coder-docker-runner-execution.v12.schema.json",
+  "title": "Catchplate Docker RunnerExecution V12",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -125,7 +125,7 @@
     },
     "ownerNamespace": {
       "type": "string",
-      "pattern": "^serverware-[a-z0-9][a-z0-9-]{7,62}$",
+      "pattern": "^catchplate-[a-z0-9][a-z0-9-]{7,62}$",
       "maxLength": 63
     },
     "noBuildProfile": {
@@ -449,7 +449,7 @@
         {
           "properties": {
             "domain": {
-              "const": "serverware/runner-execution/v12"
+              "const": "catchplate/runner-execution/v12"
             }
           }
         }

@@ -19,7 +19,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import policy_bundle as pb
+from catchplate import policy_bundle as pb
 from scripts.test_proxy_basic_transport import (
     CLIENT, MAX_EXPIRY, NOW, OTHER_USERNAME, TOKEN, USERNAME,
     authorization as basic_authorization, basic, document as basic_document,
@@ -36,7 +36,7 @@ CUTOFF = ROTATED + 300_000
 ORIGINAL_EXPIRY = NOW_MS + 600_000
 CURRENT_EXPIRY = NOW_MS + 3_600_000
 GRANT_EXPIRY = NOW_MS + 86_400_000
-SCHEMA = "serverware.proxyTokenRenewal/v1"
+SCHEMA = "catchplate.proxyTokenRenewal/v1"
 
 
 def verifier(token):
@@ -219,7 +219,7 @@ class ProxyManagedRenewalTests(unittest.TestCase):
         self.assert_invalid(raw)
 
     def test_schema_and_enrollment_identifier_are_exact(self):
-        for value in (None, True, 1, SCHEMA.upper(), SCHEMA + " ", "serverware.proxyTokenRenewal/v2"):
+        for value in (None, True, 1, SCHEMA.upper(), SCHEMA + " ", "catchplate.proxyTokenRenewal/v2"):
             with self.subTest(schema=value):
                 self.assert_invalid(replace(authorization(), ("managedRenewal", "schema"), value))
         for value in (None, True, 1, "", ENROLLMENT.upper(), ENROLLMENT + "\n", ENROLLMENT.replace("-", "")):

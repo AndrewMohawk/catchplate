@@ -35,12 +35,12 @@ def no_effects(event, _arguments):
 sys.addaudithook(no_effects)
 
 from fastapi import FastAPI, HTTPException  # noqa: E402
-import serverware  # noqa: E402
-from serverware import auth, operator_catalog_api as admission  # noqa: E402
-from serverware import operator_x_admission as feature, operator_x_configuration as service  # noqa: E402
-from serverware import operator_x_configuration_api as api  # noqa: E402
-from serverware.operator_catalog_schema import CatalogConflict  # noqa: E402
-from serverware.operator_x_oauth_profile import XOAuthApplicationInput  # noqa: E402
+import catchplate  # noqa: E402
+from catchplate import auth, operator_catalog_api as admission  # noqa: E402
+from catchplate import operator_x_admission as feature, operator_x_configuration as service  # noqa: E402
+from catchplate import operator_x_configuration_api as api  # noqa: E402
+from catchplate.operator_catalog_schema import CatalogConflict  # noqa: E402
+from catchplate.operator_x_oauth_profile import XOAuthApplicationInput  # noqa: E402
 
 ORIGIN = "https://console.example.com"
 ADMIN = "synthetic-x-configuration-admin-private-canary"
@@ -55,16 +55,16 @@ SHA = "sha256:" + "1" * 64
 @lru_cache(maxsize=1)
 def actual_worker_module():
     names = {"_finish_bounded_blocking_worker", "_run_bounded_blocking"}
-    tree = ast.parse((ROOT / "serverware/app.py").read_text())
+    tree = ast.parse((ROOT / "catchplate/app.py").read_text())
     definitions = [node for node in tree.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names]
     if len(definitions) != len(names):
         raise AssertionError("actual bounded worker source changed")
-    module = ModuleType("serverware.app")
+    module = ModuleType("catchplate.app")
     module.__dict__["asyncio"] = asyncio
     selected = ast.Module(body=[ast.ImportFrom(module="__future__",
         names=[ast.alias(name="annotations")], level=0), *definitions], type_ignores=[])
-    exec(compile(ast.fix_missing_locations(selected), str(ROOT / "serverware/app.py"), "exec"), module.__dict__)
+    exec(compile(ast.fix_missing_locations(selected), str(ROOT / "catchplate/app.py"), "exec"), module.__dict__)
     return module
 
 
@@ -78,14 +78,14 @@ class XConfigurationApiTests(unittest.IsolatedAsyncioTestCase):
         self.stack.enter_context(patch.multiple(auth, ADMIN_TOKEN=ADMIN, ADMIN_USER_ID=ACTOR,
             ADMIN_ROLES=("admin",), OIDC_ENABLED=False, OIDC_BROWSER_LOGIN_ENABLED=False))
         self.worker = actual_worker_module()
-        self.stack.enter_context(patch.dict(sys.modules, {"serverware.app": self.worker}))
-        self.stack.enter_context(patch.object(serverware, "app", self.worker, create=True))
+        self.stack.enter_context(patch.dict(sys.modules, {"catchplate.app": self.worker}))
+        self.stack.enter_context(patch.object(catchplate, "app", self.worker, create=True))
         self.slots = asyncio.BoundedSemaphore(1)
         self.stack.enter_context(patch.object(admission, "_WORKER_SLOTS", self.slots))
         self.discover = self.stack.enter_context(patch.object(service, "configuration",
-            return_value={"schema": "serverware.operatorXConfiguration/v1", "state": "unconfigured",
+            return_value={"schema": "catchplate.operatorXConfiguration/v1", "state": "unconfigured",
                 "consent_ready": False}))
-        self.receipt = {"schema": "serverware.operatorXConfigurationOperation/v1",
+        self.receipt = {"schema": "catchplate.operatorXConfigurationOperation/v1",
             "operation_id": OPERATION, "status": "committed", "config_version": 1,
             "committed_revision": 2, "policy_hash": SHA, "profile_binding_digest": SHA,
             "public_profile": {"provider_id": "x"}, "client_secret_configured": True, "consent_ready": False}
@@ -104,7 +104,7 @@ class XConfigurationApiTests(unittest.IsolatedAsyncioTestCase):
             body = json.dumps(body, ensure_ascii=True).encode("ascii")
         fields = [(b"host", b"console.example.com")]
         if authenticate:
-            fields.append((b"x-serverware-admin-token", ADMIN.encode()))
+            fields.append((b"x-catchplate-admin-token", ADMIN.encode()))
         if origin:
             fields.append((b"origin", ORIGIN.encode()))
         if headers is None and method == "POST":
@@ -175,7 +175,7 @@ class XConfigurationApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_actual_admin_role_duplicate_credentials_origin_and_query_guards(self):
         for options, expected in (({"authenticate": False}, 401),
-                ({"headers": [(b"x-serverware-admin-token", b"extra")]}, 401),
+                ({"headers": [(b"x-catchplate-admin-token", b"extra")]}, 401),
                 ({"headers": [(b"authorization", b"Bearer a"), (b"authorization", b"Bearer b")]}, 401)):
             await self.expect(expected, **options)
         with patch.object(auth, "ADMIN_ROLES", ("viewer",)):

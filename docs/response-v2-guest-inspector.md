@@ -7,7 +7,7 @@ quote substitute, custody provider, relay identity or successful-verifier DTO.
 Nothing here establishes a built image, launched cohort, working kernel/LSM,
 or testable pilot.
 
-The new binary is serverware-response-v2-guest-inspector, with no arguments
+The new binary is catchplate-response-v2-guest-inspector, with no arguments
 or environment. Host measurement and the existing signed generation/TEE,
 backend, readiness and response authorization contracts remain unchanged.
 The source-owned privileged launcher and router client are separate required
@@ -94,7 +94,7 @@ measurement. Measurement exact six fields are processBindingSha256, uid,
 gid, cgroupSha256, securityLabelSha256 and executableSha256. The process
 binding hashes the real PIDFD namespace PID vector, proc directory device and
 inode, and process start ticks with the fixed
-serverware.responseV2.guestInspectorProcess/v1 + NUL domain and big-endian
+catchplate.responseV2.guestInspectorProcess/v1 + NUL domain and big-endian
 integer framing. No descriptors, process memory, numeric target, keys, generic
 verdict, release permission or persistent currentness claim are returned.
 

@@ -1,0 +1,19 @@
+[Unit]
+Description=Catchplate Coder v12 local final-settlement RPC
+PartOf=catchplate-coder-v12.target
+After=catchplate-coder-runtime-v12.service
+Requires=catchplate-coder-runtime-v12.service
+Before=catchplate-coder-final-settlement-v12.service
+
+[Socket]
+ListenStream=/run/catchplate/coder/v12/final-settlement/control.sock
+SocketUser=root
+SocketGroup=catchplate-coder-settlement-api
+SocketMode=0660
+DirectoryMode=0750
+RemoveOnStop=yes
+Accept=no
+Service=catchplate-coder-final-settlement-v12.service
+
+[Install]
+WantedBy=catchplate-coder-v12.target

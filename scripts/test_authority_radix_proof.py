@@ -21,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_radix_proof as radix
+from catchplate import authority_radix_proof as radix
 
 
 def sql_json(value: object) -> bytes:
@@ -54,20 +54,20 @@ class TreeFixture:
         self.table = "webauthn_credentials"
         self.rows = rows if rows is not None else {"record-a": {"id": "record-a", "sign_count": 2}, "record-b": {"id": "record-b", "sign_count": 4}}
         self.tree_digest = wire_digest if wrong_tree_framing else sql_digest
-        self.empty = {64: self.tree_digest("serverware.policyAuthorityAuthenticatedEmptyLeaf/v1", b"64")}
+        self.empty = {64: self.tree_digest("catchplate.policyAuthorityAuthenticatedEmptyLeaf/v1", b"64")}
         for depth in range(63, -1, -1):
             self.empty[depth] = self.tree_digest(
-                "serverware.policyAuthorityAuthenticatedNode/v1", str(depth).encode(), sql_json([self.empty[depth + 1]] * 16),
+                "catchplate.policyAuthorityAuthenticatedNode/v1", str(depth).encode(), sql_json([self.empty[depth + 1]] * 16),
             )
         self.leaves: dict[str, dict] = {}
         self.nodes: dict[tuple[int, str], str] = {}
-        domain = "serverware.policyAuthorityBusinessKey/v1" if wrong_business_path else "serverware.policyAuthorityAuthenticatedKey/v1"
+        domain = "catchplate.policyAuthorityBusinessKey/v1" if wrong_business_path else "catchplate.policyAuthorityAuthenticatedKey/v1"
         for revision, (item_id, row) in enumerate(self.rows.items(), 1):
             key = {"id": item_id}
             tree_key = self.tree_digest(domain, self.table.encode(), sql_json(key))
-            row_digest = self.tree_digest("serverware.policyAuthorityAuthenticatedRow/v1", self.table.encode(), sql_json(row))
+            row_digest = self.tree_digest("catchplate.policyAuthorityAuthenticatedRow/v1", self.table.encode(), sql_json(row))
             leaf_digest = self.tree_digest(
-                "serverware.policyAuthorityAuthenticatedLeaf/v1", self.table.encode(), tree_key.encode(), sql_json(key), row_digest.encode(),
+                "catchplate.policyAuthorityAuthenticatedLeaf/v1", self.table.encode(), tree_key.encode(), sql_json(key), row_digest.encode(),
             )
             self.leaves[tree_key] = {
                 "key_json": sql_json(key).decode(), "row_digest": row_digest,
@@ -78,7 +78,7 @@ class TreeFixture:
             prefixes = {path[:depth] for node_depth, path in self.nodes if node_depth == depth + 1}
             for prefix in prefixes:
                 children = [self.nodes.get((depth + 1, prefix + format(index, "x")), self.empty[depth + 1]) for index in range(16)]
-                self.nodes[(depth, prefix)] = self.tree_digest("serverware.policyAuthorityAuthenticatedNode/v1", str(depth).encode(), sql_json(children))
+                self.nodes[(depth, prefix)] = self.tree_digest("catchplate.policyAuthorityAuthenticatedNode/v1", str(depth).encode(), sql_json(children))
         self.root = {"table": self.table, "rootRevision": len(self.rows), "rootDigest": self.nodes.get((0, ""), self.empty[0]), "leafCount": len(self.rows)}
 
     def selected(self, item_id: str, *, absent: bool = False) -> dict:
@@ -86,17 +86,17 @@ class TreeFixture:
         row = None if absent else self.rows[item_id]
         return {
             "table": self.table, "key": key,
-            "keyDigest": wire_digest("serverware.policyAuthorityBusinessKey/v1", self.table.encode(), wire_json(key)),
+            "keyDigest": wire_digest("catchplate.policyAuthorityBusinessKey/v1", self.table.encode(), wire_json(key)),
             "present": row is not None, "row": copy.deepcopy(row), "contractSelector": None,
         }
 
     def proof(self, selected: dict, *, wrong_business_path: bool = False) -> dict:
-        domain = "serverware.policyAuthorityBusinessKey/v1" if wrong_business_path else "serverware.policyAuthorityAuthenticatedKey/v1"
+        domain = "catchplate.policyAuthorityBusinessKey/v1" if wrong_business_path else "catchplate.policyAuthorityAuthenticatedKey/v1"
         tree_key = self.tree_digest(domain, self.table.encode(), sql_json(selected["key"]))
         path = tree_key[7:]
         leaf = self.leaves.get(tree_key)
         proof = {
-            "schema": "serverware.policyAuthorityRadixMultiproof/v3", "table": self.table,
+            "schema": "catchplate.policyAuthorityRadixMultiproof/v3", "table": self.table,
             "key": selected["key"], "keyDigest": selected["keyDigest"], "present": selected["present"],
             "rowDigest": leaf["row_digest"] if selected["present"] else None,
             "leafDigest": leaf["leaf_digest"] if selected["present"] else self.empty[64],
@@ -109,14 +109,14 @@ class TreeFixture:
                 for depth in range(64)
             ],
         }
-        proof["proofDigest"] = wire_digest("serverware.policyAuthorityRadixMultiproof/v3", wire_json(proof))
+        proof["proofDigest"] = wire_digest("catchplate.policyAuthorityRadixMultiproof/v3", wire_json(proof))
         return proof
 
 
 class FixtureCursor:
     """Read-only SQL responder, not a PostgreSQL transaction or acceptance mock."""
 
-    def __init__(self, tree: TreeFixture, *, namespace: str = "serverware_metadata") -> None:
+    def __init__(self, tree: TreeFixture, *, namespace: str = "catchplate_metadata") -> None:
         self.tree = tree
         self.namespace = namespace
         self.calls: list[tuple[str, tuple]] = []
@@ -181,7 +181,7 @@ class AuthorityRadixProofTests(unittest.TestCase):
             expected = self.tree.proof(row)
             self.assertEqual(proof, expected)
             self.assertEqual(radix.reconstruct_multiproof_root(proof, selected=row), self.tree.root["rootDigest"])
-            tree_key = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1", self.tree.table.encode(), sql_json(row["key"]))
+            tree_key = sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1", self.tree.table.encode(), sql_json(row["key"]))
             self.assertNotEqual(tree_key, row["keyDigest"])
             self.assertEqual(proof["keyDigest"], row["keyDigest"])
             self.assertIn(("policy_authority_authenticated_leaves", {"tableName": self.tree.table, "keyDigest": tree_key}), trace.reads)
@@ -190,7 +190,7 @@ class AuthorityRadixProofTests(unittest.TestCase):
 
     def test_explicit_namespace_preserves_proof_bytes_parameters_and_read_count(self) -> None:
         row = self.tree.selected("record-a")
-        for namespace in ("serverware_metadata", "radix_fixture_a9", "a" * 63, "select"):
+        for namespace in ("catchplate_metadata", "radix_fixture_a9", "a" * 63, "select"):
             with self.subTest(namespace=namespace):
                 cursor = FixtureCursor(self.tree, namespace=namespace)
                 trace = FixtureTrace()
@@ -259,7 +259,7 @@ class AuthorityRadixProofTests(unittest.TestCase):
 
     def test_leaf_projection_sentinels_malformed_json_and_exact_types_deny(self) -> None:
         row = self.tree.selected("record-a")
-        tree_key = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1", self.tree.table.encode(), sql_json(row["key"]))
+        tree_key = sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1", self.tree.table.encode(), sql_json(row["key"]))
         original = copy.deepcopy(self.tree.leaves[tree_key])
 
         class StringSubclass(str):
@@ -284,7 +284,7 @@ class AuthorityRadixProofTests(unittest.TestCase):
 
     def test_oversized_driver_key_json_and_utf8_byte_bounds_deny(self) -> None:
         row = self.tree.selected("record-a")
-        tree_key = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1", self.tree.table.encode(), sql_json(row["key"]))
+        tree_key = sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1", self.tree.table.encode(), sql_json(row["key"]))
         # Deliberately bypass the SQL projection as a hostile responder control.
         # This bounded allocation is not a simulation of native PostgreSQL IO.
         self.tree.leaves[tree_key]["key_json"] = " " * (radix.authority_contract.MAX_RESULT_BYTES + 1)
@@ -325,7 +325,7 @@ class AuthorityRadixProofTests(unittest.TestCase):
 
     def test_invalid_retained_leaf_never_becomes_nonmembership(self) -> None:
         selected = self.tree.selected("record-a", absent=True)
-        tree_key = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1", self.tree.table.encode(), sql_json(selected["key"]))
+        tree_key = sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1", self.tree.table.encode(), sql_json(selected["key"]))
         self.tree.leaves[tree_key]["key_json"] = None
         with self.assertRaisesRegex(radix.RadixProofError, "key JSON is not bounded"):
             radix.derive_multiproofs(
@@ -370,10 +370,10 @@ class AuthorityRadixProofTests(unittest.TestCase):
         self.assertEqual(radix.reconstruct_multiproof_root(proof, selected=row), tree.root["rootDigest"])
         self.assertEqual(radix.tree_json_bytes(row["row"]), sql_json(row["row"]))
         self.assertNotEqual(sql_json(row["row"]), wire_json(row["row"]))
-        self.assertEqual(row["keyDigest"], wire_digest("serverware.policyAuthorityBusinessKey/v1", tree.table.encode(), wire_json(row["key"])))
+        self.assertEqual(row["keyDigest"], wire_digest("catchplate.policyAuthorityBusinessKey/v1", tree.table.encode(), wire_json(row["key"])))
         # This tree fixture distinguishes the two representations; the separate
         # SQL wire serializer and actual byte admission need real-engine proof.
-        self.assertNotEqual(row["keyDigest"], wire_digest("serverware.policyAuthorityBusinessKey/v1", tree.table.encode(), sql_json(row["key"])))
+        self.assertNotEqual(row["keyDigest"], wire_digest("catchplate.policyAuthorityBusinessKey/v1", tree.table.encode(), sql_json(row["key"])))
 
     def test_unsupported_numeric_representation_is_rejected_not_rounded(self) -> None:
         for value in (1.5, 1.0, float("inf"), float("nan"), Decimal("1.20")):
@@ -459,7 +459,7 @@ class AuthorityRadixProofTests(unittest.TestCase):
 
     def test_selected_business_identity_cannot_be_replaced_by_tree_identity(self) -> None:
         row = self.tree.selected("record-a")
-        row["keyDigest"] = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1", self.tree.table.encode(), sql_json(row["key"]))
+        row["keyDigest"] = sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1", self.tree.table.encode(), sql_json(row["key"]))
         with self.assertRaisesRegex(radix.RadixProofError, "business key digest"):
             radix.derive_multiproofs(FixtureCursor(self.tree), selected_rows=(row,), roots=(self.tree.root,), trace=FixtureTrace())
         proof = self.tree.proof(row)
@@ -470,33 +470,33 @@ class AuthorityRadixProofTests(unittest.TestCase):
         row = self.tree.selected("record-a")
         with self.assertRaisesRegex(radix.RadixProofError, "relation root"):
             radix.derive_multiproofs(FixtureCursor(self.tree), selected_rows=(row,), roots=(), trace=FixtureTrace())
-        tree_key = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1", self.tree.table.encode(), sql_json(row["key"]))
+        tree_key = sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1", self.tree.table.encode(), sql_json(row["key"]))
         self.tree.leaves[tree_key]["row_digest"] = "sha256:" + "0" * 64
         with self.assertRaisesRegex(radix.RadixProofError, "authenticated leaf"):
             radix.derive_multiproofs(FixtureCursor(self.tree), selected_rows=(row,), roots=(self.tree.root,), trace=FixtureTrace())
 
     def test_source_wiring_preserves_stored_domain_and_active_proof_calls(self) -> None:
-        database = (ROOT / "serverware/db.py").read_text()
-        tree_path = ROOT / "serverware/authority_store/primary_tree_sql.py"
+        database = (ROOT / "catchplate/db.py").read_text()
+        tree_path = ROOT / "catchplate/authority_store/primary_tree_sql.py"
         self.assertLess(tree_path.stat().st_size, 128 * 1024)
         tree_source = tree_path.read_text(encoding="utf-8")
         self.assertIn("conn.execute(_primary_tree_sql.framed_digest_function_sql(guard_namespace))", database)
         self.assertIn("_primary_tree_sql.authenticated_tree_functions_sql(", database)
-        framed_body = tree_source.split("AS $serverware_framed_digest$", 1)[1].split("$serverware_framed_digest$", 1)[0]
+        framed_body = tree_source.split("AS $catchplate_framed_digest$", 1)[1].split("$catchplate_framed_digest$", 1)[0]
         self.assertIn("digest_material := pg_catalog.int8send(", framed_body)
         self.assertIn("pg_catalog.octet_length(encoded_domain)::bigint", framed_body)
         self.assertIn(") || encoded_domain;", framed_body)
-        apply_body = tree_source.split("AS $serverware_authenticated_apply$", 1)[1].split("$serverware_authenticated_apply$", 1)[0]
-        self.assertIn("'serverware.policyAuthorityAuthenticatedKey/v1'", apply_body)
+        apply_body = tree_source.split("AS $catchplate_authenticated_apply$", 1)[1].split("$catchplate_authenticated_apply$", 1)[0]
+        self.assertIn("'catchplate.policyAuthorityAuthenticatedKey/v1'", apply_body)
         self.assertNotIn("policyAuthorityBusinessKey/v1", apply_body)
-        planner = (ROOT / "serverware/authority_planner.py").read_text()
+        planner = (ROOT / "catchplate/authority_planner.py").read_text()
         self.assertIn("counter_proofs = authority_radix_proof.derive_multiproofs(", planner)
         self.assertIn("business_proofs = authority_radix_proof.derive_multiproofs_batched(", planner)
         self.assertIn("return authority_radix_proof.reconstruct_multiproof_root(", planner)
-        executor = (ROOT / "serverware/authority_store/executor_v9.py").read_text()
-        self.assertIn("'serverware.policyAuthorityBusinessKey/v1'", executor)
+        executor = (ROOT / "catchplate/authority_store/executor_v9.py").read_text()
+        self.assertIn("'catchplate.policyAuthorityBusinessKey/v1'", executor)
         # Do not import the blocked registry or substitute success for it.
-        registry = (ROOT / "serverware/authority_transition_registry.py").read_text()
+        registry = (ROOT / "catchplate/authority_transition_registry.py").read_text()
         self.assertNotIn("authority_transition_webauthn", registry)
 
 

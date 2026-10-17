@@ -8,7 +8,7 @@ installation, runtime readiness, principal authorization or production admission
 
 An explicit [workload-trust v2 profile](native-workload-trust.md) now exports the
 actual retained ordered client-root DER inventory under the same genuine role-3
-commitment. Request it with `x-serverware-ingress-evidence: client-trust-v2`.
+commitment. Request it with `x-catchplate-ingress-evidence: client-trust-v2`.
 Absent selector preserves the v1 wire below; unsupported or repeated selectors
 fail. The [v2 outer schema](../schemas/native-ingress-session-evidence.v2.schema.json)
 requires a paired v2 nested original, with `clientTrustProfile` and
@@ -26,7 +26,7 @@ provider permission.
 ## Exact request and shared challenge
 
 The request is exactly `GET /attestation`, with no query or body. The fixed
-`x-serverware-ingress-challenge` header carries canonical unpadded URL-safe
+`x-catchplate-ingress-challenge` header carries canonical unpadded URL-safe
 base64 of a nonzero 32-byte caller challenge. The actual TLS 1.3 handshake and
 mandatory client-certificate verification precede this request. The route does
 not bypass mTLS, add a public unauthenticated management listener or convert a
@@ -46,10 +46,10 @@ exports `EXPORTER_LABEL`, `CHALLENGE_HEADER` and
 obtains exactly 32 exporter bytes using:
 
 ```text
-label   = "EXPORTER-Serverware-Native-Ingress-v1"
+label   = "EXPORTER-Catchplate-Native-Ingress-v1"
 context = raw caller challenge[32]
 
-quote nonce = SHA256("serverware/native-ingress-session-challenge/v1\0"
+quote nonce = SHA256("catchplate/native-ingress-session-challenge/v1\0"
                      || raw challenge[32] || actual exporter[32])
 ```
 
@@ -60,7 +60,7 @@ came from TLS, that a challenge is fresh, or that any caller is authorized.
 
 ## One explicit CONNECT continuation
 
-An opt-in proof client can request `x-serverware-ingress-continuation: connect-v1`
+An opt-in proof client can request `x-catchplate-ingress-continuation: connect-v1`
 and `Connection: keep-alive` on this same challenge-bearing GET. The successful
 response has exactly four headers: `Content-Length`, `Connection: keep-alive`,
 `Content-Type: application/json`, and `Cache-Control: no-store`, with the unchanged
@@ -77,7 +77,7 @@ upstream authorization still run; a quote is not permission to proxy traffic.
 
 The [proof-client opt-in](native-proof-client.md#opt-in-ingress-attestation-before-connect)
 uses a separately pinned
-[serverware.nativeProxyIngress/v1 configuration](../schemas/native-proxy-ingress.v1.schema.json).
+[catchplate.nativeProxyIngress/v1 configuration](../schemas/native-proxy-ingress.v1.schema.json).
 It verifies still-fresh startup evidence before reading the outer client private
 key, joins the actual outer CA/name/peer, and generates one fresh challenge.
 The evidence response is framed by its exact bounded Content-Length rather
@@ -127,7 +127,7 @@ has exactly six fields:
 
 | Field | Contract |
 | --- | --- |
-| `apiVersion` | `serverware.nativeIngressSessionEvidence/v1` |
+| `apiVersion` | `catchplate.nativeIngressSessionEvidence/v1` |
 | `evidenceScope` | `unverified-session-public-material` |
 | `okForAction` | `false` |
 | `clientChallengeBase64url` | Echo of the nonzero raw 32-byte caller challenge. |
@@ -135,7 +135,7 @@ has exactly six fields:
 | `publicIdentityBase64url` | Canonical unpadded base64url of the exact nested public-identity line, including its final LF. |
 
 The outer body is compact JSON plus one LF, at most 96 KiB. The nested line is
-at most 64 KiB and retains `serverware.nativeIngressPublicEvidence/v1`, but its
+at most 64 KiB and retains `catchplate.nativeIngressPublicEvidence/v1`, but its
 scope is explicitly `unverified-session-public-material`. Its quote nonce is
 the derived session nonce above, not the startup nonce. The
 [startup stdout export](native-public-identity.md) keeps its separate
@@ -177,7 +177,7 @@ Challenge ownership is explicit; the verifier does not generate randomness:
 | --- | --- |
 | [Startup offline verifier CLI](native-ingress-verifier.md) | The original startup quote nonce. |
 | V1 `verify_ingress_session` | `nonceBase64url` in the pinned expectations is the raw caller challenge. |
-| V2 `verify_ingress_session_with_challenge` | The explicit raw challenge is separate from pinned `serverware.nativeIngressSessionScope/v1`, which has no nonce field. |
+| V2 `verify_ingress_session_with_challenge` | The explicit raw challenge is separate from pinned `catchplate.nativeIngressSessionScope/v1`, which has no nonce field. |
 
 Both session APIs derive the quote nonce from that challenge and the actual
 exporter. The nonce-free [scope schema](../schemas/native-ingress-session-scope.v1.schema.json)
@@ -219,7 +219,7 @@ has exactly eight fields:
 
 | Field | Meaning |
 | --- | --- |
-| `apiVersion` | `serverware.nativeIngressSessionVerification/v1` or `serverware.nativeIngressSessionVerification/v2`, matching the API. |
+| `apiVersion` | `catchplate.nativeIngressSessionVerification/v1` or `catchplate.nativeIngressSessionVerification/v2`, matching the API. |
 | `resultScope` | `local-ingress-session-and-quote-only` |
 | `okForAction` | `false` |
 | `evidenceSha256` | SHA-256 of the exact outer evidence original, including its LF. |
@@ -229,9 +229,9 @@ has exactly eight fields:
 | `quoteVerification` | The existing 18-field local quote-only result for the nested original. |
 
 In both nested results, `nonceBase64url` is the derived quote nonce. V1 preserves
-`serverware.nativeIngressAttestationVerification/v1` and `expectationsSha256`,
+`catchplate.nativeIngressAttestationVerification/v1` and `expectationsSha256`,
 hashing the exact original that contains the raw caller challenge. V2 uses
-`serverware.nativeIngressAttestationVerification/v2` with the same 18 fields
+`catchplate.nativeIngressAttestationVerification/v2` with the same 18 fields
 except `sessionScopeSha256` replaces that hash field: it hashes the exact pinned
 nonce-free scope, not a reconstructed expectation containing the challenge.
 Neither result is a transferable session-admission or action token. The server's

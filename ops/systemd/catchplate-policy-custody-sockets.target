@@ -1,0 +1,16 @@
+[Unit]
+Description=Catchplate policy-custody authenticated seqpacket sockets
+BindsTo=catchplate-policy-custody@durable-recovery-store.socket
+BindsTo=catchplate-policy-custody@cleanup-authorization-consumer.socket
+BindsTo=catchplate-policy-custody@recovery-target-provider.socket
+BindsTo=catchplate-policy-custody@current-signature-authority.socket
+BindsTo=catchplate-policy-custody@bounded-cleanup-helper.socket
+After=local-fs.target systemd-tmpfiles-setup.service
+After=catchplate-policy-custody@durable-recovery-store.socket
+After=catchplate-policy-custody@cleanup-authorization-consumer.socket
+After=catchplate-policy-custody@recovery-target-provider.socket
+After=catchplate-policy-custody@current-signature-authority.socket
+After=catchplate-policy-custody@bounded-cleanup-helper.socket
+
+[Install]
+WantedBy=multi-user.target

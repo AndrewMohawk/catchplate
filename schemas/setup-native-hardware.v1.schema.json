@@ -1,6 +1,6 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://serverware.dev/schemas/setup-native-hardware.v1.schema.json",
+  "$id":"https://catchplate.dev/schemas/setup-native-hardware.v1.schema.json",
   "title":"Purpose-fixed native Setup hardware and independently verified proxy originals",
   "$ref":"#/$defs/httpRequest",
   "$defs":{
@@ -12,13 +12,13 @@
       "properties":{"provider":{"type":"string","minLength":1,"maxLength":128},"publicKeyPem":{"type":"string","minLength":1,"maxLength":16384}}},
     "authorityPolicy":{"type":"object","additionalProperties":false,
       "required":["schema","credentialPolicy","hardwareVerifier","proxyVerifier","finalAuthority","maximumAttemptNanos"],
-      "properties":{"schema":{"const":"serverware.setupNativeHardwareAuthorityPolicy/v1"},"credentialPolicy":{"type":"object"},
+      "properties":{"schema":{"const":"catchplate.setupNativeHardwareAuthorityPolicy/v1"},"credentialPolicy":{"type":"object"},
         "hardwareVerifier":{"$ref":"#/$defs/authority"},"proxyVerifier":{"$ref":"#/$defs/authority"},"finalAuthority":{"$ref":"#/$defs/authority"},
         "maximumAttemptNanos":{"type":"integer","minimum":1000000000,"maximum":300000000000}}},
     "attempt":{"type":"object","additionalProperties":false,
       "required":["apiVersion","attemptId","sessionId","ownerId","associationSha256","runtimeSha256","enrollmentSha256","installationSha256",
         "scopeSha256","nonce","policyHash","principalId","routeId","credentialId","credentialVersion","issuedAtEpochNs","expiresAtEpochNs"],
-      "properties":{"apiVersion":{"const":"serverware.setupNativeHardwareAttempt/v1"},"attemptId":{"$ref":"#/$defs/id"},
+      "properties":{"apiVersion":{"const":"catchplate.setupNativeHardwareAttempt/v1"},"attemptId":{"$ref":"#/$defs/id"},
         "sessionId":{"$ref":"#/$defs/id"},"ownerId":{"type":"string","pattern":"^oidc:","maxLength":1024},
         "associationSha256":{"$ref":"#/$defs/digest"},"runtimeSha256":{"$ref":"#/$defs/digest"},"enrollmentSha256":{"$ref":"#/$defs/digest"},
         "installationSha256":{"$ref":"#/$defs/digest"},"scopeSha256":{"$ref":"#/$defs/digest"},"nonce":{"type":"string","pattern":"^[A-Za-z0-9_-]{43}$"},
@@ -27,14 +27,14 @@
         "issuedAtEpochNs":{"$ref":"#/$defs/epoch"},"expiresAtEpochNs":{"$ref":"#/$defs/epoch"}}},
     "statement":{"type":"object","additionalProperties":false,
       "required":["apiVersion","attempt","policyOriginalSha256","routePolicyDigest","bootId","keyId","controlPlaneResponseSigningKeyId","dataPlaneBinarySha256","observedAtEpochNs"],
-      "properties":{"apiVersion":{"const":"serverware.nativeSetupHardwareStatement/v1"},"attempt":{"$ref":"#/$defs/attempt"},
+      "properties":{"apiVersion":{"const":"catchplate.nativeSetupHardwareStatement/v1"},"attempt":{"$ref":"#/$defs/attempt"},
         "policyOriginalSha256":{"$ref":"#/$defs/digest"},"routePolicyDigest":{"$ref":"#/$defs/digest"},"bootId":{"type":"string","pattern":"^[A-Za-z0-9_-]{43}$"},
         "keyId":{"$ref":"#/$defs/digest"},"controlPlaneResponseSigningKeyId":{"$ref":"#/$defs/digest"},
         "dataPlaneBinarySha256":{"$ref":"#/$defs/digest"},"observedAtEpochNs":{"$ref":"#/$defs/epoch"}}},
     "evidence":{"type":"object","additionalProperties":false,"required":["statement","signature","nativeKeyEvidence"],
       "properties":{"statement":{"$ref":"#/$defs/statement"},"signature":{"type":"string","pattern":"^ed25519:[A-Za-z0-9_-]{86}$"},
         "nativeKeyEvidence":{"type":"object","additionalProperties":false,"required":["apiVersion","attestationDocumentB64","responseProofPublicKey"],
-          "properties":{"apiVersion":{"const":"serverware.nativeResponseProofKeyEvidence/v1"},
+          "properties":{"apiVersion":{"const":"catchplate.nativeResponseProofKeyEvidence/v1"},
             "attestationDocumentB64":{"type":"string","minLength":1,"maxLength":16384,"pattern":"^[A-Za-z0-9_-]+$"},
             "responseProofPublicKey":{"type":"string","pattern":"^[A-Za-z0-9_-]{43}$"}}}}},
     "receipt":{"type":"object","additionalProperties":false,"required":["payload","signature"],
@@ -42,7 +42,7 @@
     "receiptPayload":{"type":"object","additionalProperties":false,
       "required":["apiVersion","purpose","resultScope","attemptSha256","evidenceSha256","runtimeSha256","enrollmentSha256","installationSha256",
         "scopeSha256","quoteSha256","releaseRecordSha256","policyHash","verifierKeyId","verifierProvider","issuedAtEpochNs","expiresAtEpochNs","measuredHost","finalSetup","proxyReady"],
-      "properties":{"apiVersion":{"const":"serverware.setupNativeIndependentVerification/v1"},"purpose":{"enum":["hardware-verifier","proxy-verifier"]},
+      "properties":{"apiVersion":{"const":"catchplate.setupNativeIndependentVerification/v1"},"purpose":{"enum":["hardware-verifier","proxy-verifier"]},
         "resultScope":{"const":"enclave-hardware-and-proxy-only"},"attemptSha256":{"$ref":"#/$defs/digest"},"evidenceSha256":{"$ref":"#/$defs/digest"},
         "runtimeSha256":{"$ref":"#/$defs/digest"},"enrollmentSha256":{"$ref":"#/$defs/digest"},"installationSha256":{"$ref":"#/$defs/digest"},
         "scopeSha256":{"$ref":"#/$defs/digest"},"quoteSha256":{"$ref":"#/$defs/digest"},"releaseRecordSha256":{"$ref":"#/$defs/digest"},
@@ -54,7 +54,7 @@
         "verifierRequestOriginal":{"anyOf":[{"type":"null"},{"$ref":"#/$defs/original"}]}}},
     "result":{"type":"object","additionalProperties":false,
       "required":["apiVersion","resultScope","hostAssociationTrust","measuredHost","finalSetup","proxyReady","okForAction","attemptSha256","evidenceSha256","hardwareReceiptSha256","proxyReceiptSha256"],
-      "properties":{"apiVersion":{"const":"serverware.setupNativeHardwareResult/v1"},"resultScope":{"const":"enclave-hardware-and-proxy-only"},
+      "properties":{"apiVersion":{"const":"catchplate.setupNativeHardwareResult/v1"},"resultScope":{"const":"enclave-hardware-and-proxy-only"},
         "hostAssociationTrust":{"const":"trusted-host-local"},"measuredHost":{"const":false},"finalSetup":{"const":false},"proxyReady":{"const":false},"okForAction":{"const":false},
         "attemptSha256":{"$ref":"#/$defs/digest"},"evidenceSha256":{"$ref":"#/$defs/digest"},"hardwareReceiptSha256":{"$ref":"#/$defs/digest"},"proxyReceiptSha256":{"$ref":"#/$defs/digest"}}},
     "public":{"type":"object","additionalProperties":false,"required":["revision","phase","attemptSha256","prepareRequestDigest","completeRequestDigest"],
@@ -64,12 +64,12 @@
         {"properties":{"revision":{"const":1},"phase":{"const":"hardware_proxy_verified"},"completeRequestDigest":{"$ref":"#/$defs/digest"}}}]},
     "response":{"type":"object","additionalProperties":false,
       "required":["apiVersion","status","okForAction","automaticRetryAllowed","measuredHost","enrollmentComplete","proxyReady","hostAssociationTrust"],
-      "properties":{"apiVersion":{"const":"serverware.setupNativeHardwareResponse/v1"},"status":{"type":"string"},"okForAction":{"const":false},
+      "properties":{"apiVersion":{"const":"catchplate.setupNativeHardwareResponse/v1"},"status":{"type":"string"},"okForAction":{"const":false},
         "automaticRetryAllowed":{"const":false},"measuredHost":{"const":false},"enrollmentComplete":{"const":false},"proxyReady":{"const":false},
-        "hostAssociationTrust":{"const":"trusted-host-local"},"options":{"type":"object","additionalProperties":false,"required":["publicKey","serverware"],
-          "properties":{"publicKey":{"type":"object"},"serverware":{"type":"object","additionalProperties":false,
+        "hostAssociationTrust":{"const":"trusted-host-local"},"options":{"type":"object","additionalProperties":false,"required":["publicKey","catchplate"],
+          "properties":{"publicKey":{"type":"object"},"catchplate":{"type":"object","additionalProperties":false,
             "required":["schema","operation","operationId","challengeId","credentialRecordId","payloadDigest"],
-            "properties":{"schema":{"const":"serverware.setupNativeHardwareOptions/v1"},"operation":{"const":"setup.native-hardware.prepare"},
+            "properties":{"schema":{"const":"catchplate.setupNativeHardwareOptions/v1"},"operation":{"const":"setup.native-hardware.prepare"},
               "operationId":{"$ref":"#/$defs/digest"},"challengeId":{"$ref":"#/$defs/digest"},"credentialRecordId":{"$ref":"#/$defs/id"},"payloadDigest":{"$ref":"#/$defs/digest"}}}}},
         "hardware":{"anyOf":[{"type":"null"},{"$ref":"#/$defs/public"}]},"bundle":{"anyOf":[{"type":"null"},{"$ref":"#/$defs/bundle"}]},
         "resultOriginal":{"anyOf":[{"type":"null"},{"allOf":[{"$ref":"#/$defs/original"},{"maxLength":8192}]}]}},
@@ -82,7 +82,7 @@
       ]},
     "verifierConfiguration":{"type":"object","additionalProperties":false,
       "required":["apiVersion","role","uid","gid","operation","authorityRootPublicKeyPem","authorityConfigurationOriginal","authorityConfigurationSha256","controlPlaneConfigurationDigest"],
-      "properties":{"apiVersion":{"const":"serverware.setupNativeIndependentVerifierConfiguration/v1"},"role":{"enum":["hardware-verifier","proxy-verifier"]},
+      "properties":{"apiVersion":{"const":"catchplate.setupNativeIndependentVerifierConfiguration/v1"},"role":{"enum":["hardware-verifier","proxy-verifier"]},
         "uid":{"type":"integer","minimum":1,"maximum":4294967294},"gid":{"type":"integer","minimum":1,"maximum":4294967294},
         "authorityRootPublicKeyPem":{"type":"string","minLength":1,"maxLength":16384},"authorityConfigurationOriginal":{"$ref":"#/$defs/original"},
         "authorityConfigurationSha256":{"$ref":"#/$defs/digest"},"controlPlaneConfigurationDigest":{"$ref":"#/$defs/digest"},
@@ -92,11 +92,11 @@
             "deadlineBoottimeNs":{"type":"string","pattern":"^[1-9][0-9]{0,19}$"}}}}},
     "httpRequest":{"oneOf":[{"$ref":"#/$defs/readRequest"},{"$ref":"#/$defs/prepareRequest"},{"$ref":"#/$defs/completeRequest"}]},
     "readRequest":{"type":"object","additionalProperties":false,"required":["apiVersion","sessionId"],
-      "properties":{"apiVersion":{"const":"serverware.setupNativeHardwareRequest/v1"},"sessionId":{"$ref":"#/$defs/id"}}},
+      "properties":{"apiVersion":{"const":"catchplate.setupNativeHardwareRequest/v1"},"sessionId":{"$ref":"#/$defs/id"}}},
     "prepareRequest":{"type":"object","additionalProperties":false,"required":["apiVersion","sessionId","assertion"],
-      "properties":{"apiVersion":{"const":"serverware.setupNativeHardwareRequest/v1"},"sessionId":{"$ref":"#/$defs/id"},"assertion":{"type":"object"}}},
+      "properties":{"apiVersion":{"const":"catchplate.setupNativeHardwareRequest/v1"},"sessionId":{"$ref":"#/$defs/id"},"assertion":{"type":"object"}}},
     "completeRequest":{"type":"object","additionalProperties":false,"required":["apiVersion","sessionId","evidenceOriginal","hardwareReceiptOriginal","proxyReceiptOriginal"],
-      "properties":{"apiVersion":{"const":"serverware.setupNativeHardwareRequest/v1"},"sessionId":{"$ref":"#/$defs/id"},
+      "properties":{"apiVersion":{"const":"catchplate.setupNativeHardwareRequest/v1"},"sessionId":{"$ref":"#/$defs/id"},
         "evidenceOriginal":{"allOf":[{"$ref":"#/$defs/original"},{"maxLength":65536}]},
         "hardwareReceiptOriginal":{"allOf":[{"$ref":"#/$defs/original"},{"maxLength":16384}]},
         "proxyReceiptOriginal":{"allOf":[{"$ref":"#/$defs/original"},{"maxLength":16384}]}}}
@@ -127,7 +127,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.setupNativeHardwareAttempt/v2"
+          "const": "catchplate.setupNativeHardwareAttempt/v2"
         },
         "attemptId": {
           "$ref": "#/$defs/id"
@@ -210,7 +210,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeSetupHardwareStatement/v1"
+          "const": "catchplate.nativeSetupHardwareStatement/v1"
         },
         "attempt": {
           "$ref": "#/$defs/rotatedAttempt"
@@ -275,7 +275,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.nativeResponseProofKeyEvidence/v1"
+              "const": "catchplate.nativeResponseProofKeyEvidence/v1"
             },
             "attestationDocumentB64": {
               "type": "string",

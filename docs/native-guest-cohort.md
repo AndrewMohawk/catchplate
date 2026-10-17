@@ -7,11 +7,11 @@ and retain it explicitly; the DTO alone grants no role or launch permission.
 
 ## Inputs and owners
 
-`serverware.nativeGuestCohort/v1` has exactly four fields:
+`catchplate.nativeGuestCohort/v1` has exactly four fields:
 
 - `apiVersion` selects this closed contract.
 - `executable` pins the static worker at
-  `/usr/local/bin/serverware-response-v2-guest-role` (at most 64 MiB).
+  `/usr/local/bin/catchplate-response-v2-guest-role` (at most 64 MiB).
 - `configuration` pins the actual common signed-delivery-bound custody config.
 - `deliveries` contains exactly one protected original for each of the seven
   service roles. Each has `serviceRole`, `path` and `sha256`.
@@ -62,7 +62,7 @@ The startup order follows actual service dependencies:
    generation activation finishes; other roles emit it after their real role
    readiness artifact is published.
 
-Each exact five-field `serverware.responseV2.guestRoleStartup/v1` message binds
+Each exact five-field `catchplate.responseV2.guestRoleStartup/v1` message binds
 the original nonce/bootstrap hash, service role and next phase. Actual kernel
 SCM credentials must match the signed final UID/GID; the per-message PIDFD must
 identify the exact clone-owned child. Duplicate, reordered or extra progress

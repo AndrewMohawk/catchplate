@@ -12,10 +12,10 @@ use crate::policy_shadow::{AuthorityRole,PublicationReconciliationReceiptWire as
     canonical_json_bytes,hash_domain_frames,signature_preimage};
 use ed25519_dalek::Signer;
 
-pub(super) const SNAPSHOT_DOMAIN:&[u8]=b"serverware.nativePublicationSnapshot.signature/v1";
-pub(super) const PREPARED_DOMAIN:&str="serverware.nativePublicationPreparation.signature/v1";
-pub(super) const PROPOSAL_DOMAIN:&str="serverware.nativePublicationProposal.signature/v1";
-pub(super) const STORAGE_DOMAIN:&str="serverware.nativePublicationStorage.signature/v1";
+pub(super) const SNAPSHOT_DOMAIN:&[u8]=b"catchplate.nativePublicationSnapshot.signature/v1";
+pub(super) const PREPARED_DOMAIN:&str="catchplate.nativePublicationPreparation.signature/v1";
+pub(super) const PROPOSAL_DOMAIN:&str="catchplate.nativePublicationProposal.signature/v1";
+pub(super) const STORAGE_DOMAIN:&str="catchplate.nativePublicationStorage.signature/v1";
 pub(super) const MAX_ORIGINAL:usize=1024*1024;
 fn require(ok:bool)->Result<(),ServiceError>{if ok{Ok(())}else{Err(invalid())}}
 fn original<T:serde::de::DeserializeOwned+Serialize>(raw:&str)->Result<T,ServiceError>{
@@ -95,7 +95,7 @@ impl Admission {
 pub(super) fn state_sha(current:&str,pending:&Option<String>)->Result<Sha256Digest,ServiceError>{
     let _:Receipt=original(current)?;
     if let Some(raw)=pending{let _:PreparedGenerationPublication=original(raw)?;}
-    Ok(hash_domain_frames(b"serverware.nativePublicationState/v1",&[&encode_canonical_frame(&(current,pending))?]))
+    Ok(hash_domain_frames(b"catchplate.nativePublicationState/v1",&[&encode_canonical_frame(&(current,pending))?]))
 }
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -111,7 +111,7 @@ impl Snapshot {
         &self.pending_prepared_original,&self.state_sha256,&self.authority_epoch,self.observed_at_boottime_nanos))}
     pub(super) fn validate(&self)->Result<(),ServiceError>{
         self.request.validate().map_err(|_|invalid())?;let binding=self.request.binding();
-        require(self.api_version=="serverware.nativePublicationSnapshot/v1"
+        require(self.api_version=="catchplate.nativePublicationSnapshot/v1"
             && self.state_sha256==state_sha(&self.current_receipt_original,&self.pending_prepared_original)?
             && self.authority_epoch.authority_role==super::super::authority_history::HistoricalAuthorityRoleV3::IsolatedService(
                 HistoricalServiceRoleV3::DurableRecoveryStore)
@@ -132,7 +132,7 @@ impl Snapshot {
     }
     pub(super) fn sign(request:Dispatch,native_grant_sha256:Sha256Digest,current_receipt_original:String,
         pending_prepared_original:Option<String>,authority_epoch:AuthorityEpochRefV3,now:u64,key:&SigningKey)->Result<Self,ServiceError>{
-        let mut value=Self{api_version:"serverware.nativePublicationSnapshot/v1".into(),native_grant_sha256,request,
+        let mut value=Self{api_version:"catchplate.nativePublicationSnapshot/v1".into(),native_grant_sha256,request,
             state_sha256:state_sha(&current_receipt_original,&pending_prepared_original)?,current_receipt_original,
             pending_prepared_original,authority_epoch,observed_at_boottime_nanos:now,signature_base64url:String::new()};
         value.validate()?;
@@ -187,11 +187,11 @@ fn candidate(admission:&Admission,snapshot:&Snapshot)->Result<Candidate,ServiceE
                     current.prepared_publication_sha256.clone().ok_or_else(invalid)?)
             }else{
                 (admission.first_ingress_sequence,admission.last_ingress_sequence,hash_domain_frames(
-                    b"serverware.nativePublicationPreparedState/v1",&[&encode_canonical_frame(&(
+                    b"catchplate.nativePublicationPreparedState/v1",&[&encode_canonical_frame(&(
                         &snapshot.state_sha256,&snapshot.request,admission.first_ingress_sequence,admission.last_ingress_sequence))?]))
             };
             require(first==admission.first_ingress_sequence && last==admission.last_ingress_sequence)?;
-            let range=hash_domain_frames(b"serverware.policyShadowPersistedSequenceRange/v1",&[&canonical_json_bytes(&(
+            let range=hash_domain_frames(b"catchplate.policyShadowPersistedSequenceRange/v1",&[&canonical_json_bytes(&(
                 successor.generation_id(),first,last,successor.ingress_range_predecessor_head_sha256())).map_err(|_|invalid())?]);
             let mut prepared=PreparedGenerationPublication::from_custody(previous.as_ref(),&successor,first,last,
                 current.ledger_event_ordinal,current.ledger_head_sha256.clone(),range,current.spool_root_sha256.clone(),preparation)
@@ -224,7 +224,7 @@ fn candidate(admission:&Admission,snapshot:&Snapshot)->Result<Candidate,ServiceE
 }
 impl Core {
     pub(super) fn new(admission:&Admission,snapshot:Snapshot,native:&RoleKey,now:i64,checkpoint:Sha256Digest)->Result<Self,ServiceError>{
-        let value=Self{api_version:"serverware.nativePublicationCore/v1".into(),native_grant_sha256:native.grant_sha256.clone(),
+        let value=Self{api_version:"catchplate.nativePublicationCore/v1".into(),native_grant_sha256:native.grant_sha256.clone(),
             request:snapshot.request.clone(),candidate:candidate(admission,&snapshot)?,snapshot,observed_at_unix_nanos:now,
             trust_checkpoint_sha256:checkpoint,signing_key_id:native.key_id.clone(),signing_key_spki_sha256:native.key_spki_sha256.clone()};
         value.validate(admission,native)?;Ok(value)
@@ -232,20 +232,20 @@ impl Core {
     pub(super) fn validate(&self,admission:&Admission,native:&RoleKey)->Result<(),ServiceError>{
         admission.validate(native)?;admission.request(&self.request)?;self.snapshot.validate()?;
         admission.verify_receipt(&self.snapshot.current_receipt_original,native)?;
-        require(self.api_version=="serverware.nativePublicationCore/v1" && self.request==self.snapshot.request
+        require(self.api_version=="catchplate.nativePublicationCore/v1" && self.request==self.snapshot.request
             && self.native_grant_sha256==native.grant_sha256 && self.snapshot.native_grant_sha256==native.grant_sha256
             && self.signing_key_id==native.key_id && self.signing_key_spki_sha256==native.key_spki_sha256
             && self.observed_at_unix_nanos>0 && self.trust_checkpoint_sha256!=Sha256Digest::compute(&[])
             && self.candidate==candidate(admission,&self.snapshot)?)
     }
     pub(super) fn identity(&self)->Result<Sha256Digest,ServiceError>{
-        Ok(hash_domain_frames(b"serverware.nativePublicationCore/v1",&[&encode_canonical_frame(self)?]))
+        Ok(hash_domain_frames(b"catchplate.nativePublicationCore/v1",&[&encode_canonical_frame(self)?]))
     }
     pub(super) fn retrieval_id(&self,namespace:&Sha256Digest)->Result<Sha256Digest,ServiceError>{
-        Ok(hash_domain_frames(b"serverware.nativePublicationRetrievalId/v1",&[namespace.as_str().as_bytes(),self.identity()?.as_str().as_bytes()]))
+        Ok(hash_domain_frames(b"catchplate.nativePublicationRetrievalId/v1",&[namespace.as_str().as_bytes(),self.identity()?.as_str().as_bytes()]))
     }
     pub(super) fn retrieval_proof(&self,scope:&[u8],id:&Sha256Digest)->Result<Sha256Digest,ServiceError>{
-        Ok(hash_domain_frames(b"serverware.nativePublicationRetrievalProof/v1",&[scope,id.as_str().as_bytes(),&encode_canonical_frame(self)?]))
+        Ok(hash_domain_frames(b"catchplate.nativePublicationRetrievalProof/v1",&[scope,id.as_str().as_bytes(),&encode_canonical_frame(self)?]))
     }
     pub(super) fn payload(&self,stored:&Stored)->Result<Vec<u8>,ServiceError>{
         let Candidate::Commit{publication_revision,predecessor_generation_sha256,prepared}=&self.candidate else{return Err(invalid());};
@@ -289,7 +289,7 @@ pub(super) fn stored_verify_assigned(stored:&Stored,prepared:&Prepared,admission
 fn stored_verify_key(stored:&Stored,prepared:&Prepared,admission:&Admission,retrieval:&RetrievalAuthority)->Result<(),ServiceError>{
     let core=&prepared.core;let p=&stored.payload;
     require(matches!(core.candidate,Candidate::Commit{..})
-        && p.api_version=="serverware.nativePublicationStorage/v1" && p.grant_sha256!=Sha256Digest::compute(&[])
+        && p.api_version=="catchplate.nativePublicationStorage/v1" && p.grant_sha256!=Sha256Digest::compute(&[])
         && p.signing_key_id==retrieval.key_id && p.signing_key_spki_sha256==retrieval.key_spki_sha256
         && p.core_sha256==core.identity()? && p.object_sha256==sha(core)? && p.fsverity_sha256!=Sha256Digest::compute(&[])
         && p.sequence>0 && p.sequence<=128 && p.previous_head_sha256!=Sha256Digest::compute(&[])
@@ -313,7 +313,7 @@ pub(super) fn final_artifact(core:&Core,stored:Option<&Stored>,sign:impl FnOnce(
         Candidate::Commit{publication_revision,predecessor_generation_sha256,prepared}=>{
             let stored=stored.ok_or_else(invalid)?;let current:Receipt=original(&core.snapshot.current_receipt_original)?;
             let payload=core.payload(stored)?;let signature=sign(&payload)?;
-            let signed=hash_domain_frames(b"serverware.policyShadowPublicationReconciliationReceipt/v1",&[&payload,signature.as_bytes()]);
+            let signed=hash_domain_frames(b"catchplate.policyShadowPublicationReconciliationReceipt/v1",&[&payload,signature.as_bytes()]);
             let receipt=Receipt::from_custody(State::Published,*publication_revision,predecessor_generation_sha256.clone(),
                 Some(prepared.successor_generation_sha256.clone()),Some(prepared.successor_generation_sha256.clone()),
                 Some(prepared.first_ingress_sequence),Some(prepared.last_ingress_sequence),current.ledger_event_ordinal,
@@ -353,7 +353,7 @@ impl Proposal {
     }
     fn verify_artifact(&self,admission:&Admission,native:&RoleKey)->Result<(),ServiceError>{
         let core=&self.prepared.core;
-        require(self.api_version=="serverware.nativePublicationProposal/v1"
+        require(self.api_version=="catchplate.nativePublicationProposal/v1"
             && self.completed_at_boottime_nanos>=self.prepared.prepared_at_boottime_nanos
             && self.completed_at_boottime_nanos<core.request.binding().operation_deadline_boottime_nanos)?;
         if let Some(stored)=&self.stored{

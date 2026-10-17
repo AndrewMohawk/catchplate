@@ -5,10 +5,10 @@ and unexecuted. No admitted counter initialization, receipt-bound delivery,
 migration or production invariant is established. Keep startup and production
 gates closed; a missing global baseline denies every participating operation.
 
-The components are `serverware/authority_audit_capacity.py` (pure
+The components are `catchplate/authority_audit_capacity.py` (pure
 query composition, mutation finalization and independent validation),
-`serverware/authority_audit_trace.py` (separate exact framework trace accounting), and
-`serverware/authority_store/audit_capacity_sql.py` (an independent pre-DML SQL
+`catchplate/authority_audit_trace.py` (separate exact framework trace accounting), and
+`catchplate/authority_store/audit_capacity_sql.py` (an independent pre-DML SQL
 assertion renderer). They are connected to the common typed planner, measured
 payload admission, reservation/completion adapters, SQL executor and source
 function/ACL inventory. The SQL assertion takes `(text,jsonb,jsonb,bigint)`;
@@ -77,7 +77,7 @@ fit.
 
 Use a new, source-owned aggregate identity, distinct from both old scalars:
 kind `metadata-audit-outbox-global-capacity-v1`, partition domain
-`serverware.metadataAuditOutboxCapacityPartition/v1`, frame `global`. The
+`catchplate.metadataAuditOutboxCapacityPartition/v1`, frame `global`. The
 existing generic aggregate row/state envelope can hold it, but its semantics
 are separately closed:
 

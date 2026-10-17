@@ -38,8 +38,8 @@ else:
     sys.path[:0] = [str(_SCRIPT.parent.parent), str(_SCRIPT)]
 
 import native_pilot_authority_io as io
-from serverware import authority_static_credential_assignment_issuer as issuer
-from serverware import native_shadow_nitro_originals as originals
+from catchplate import authority_static_credential_assignment_issuer as issuer
+from catchplate import native_shadow_nitro_originals as originals
 
 
 class _Parser(argparse.ArgumentParser):

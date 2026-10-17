@@ -10,14 +10,14 @@ repeat SQL or deliver a token.
 ## Explicit parent and closed roles
 
 The signed and payload parent schemas explicitly advance to
-`serverware.signedControlPlaneEnrollmentBootstrap/v16` and
-`serverware.controlPlaneEnrollmentBootstrap/v16`. The new required parent field
+`catchplate.signedControlPlaneEnrollmentBootstrap/v16` and
+`catchplate.controlPlaneEnrollmentBootstrap/v16`. The new required parent field
 `oidcSessionActivationCompletionRecovery` is nullable. Versions v2–v15 retain
 their exact old shapes and produce `completion_recovery=None`; a current source
 revision does not silently enable a new recovery path.
 
 The non-null nested object has exactly `schema`, `activation` and `consume`.
-Its schema is `serverware.controlPlaneOidcSessionActivationCompletionRecovery/v1`.
+Its schema is `catchplate.controlPlaneOidcSessionActivationCompletionRecovery/v1`.
 Each role is null or has exactly:
 
 ```text
@@ -25,9 +25,9 @@ schema, endpoint, packetDigest, authorizationDigest, currentPending
 ```
 
 At least one role must be non-null. The activation role schema is
-`serverware.controlPlaneOidcSessionActivationCompletionRecoveryScope/v1`; the
+`catchplate.controlPlaneOidcSessionActivationCompletionRecoveryScope/v1`; the
 consume role is
-`serverware.controlPlaneOidcSessionActivationConsumeCompletionRecoveryScope/v1`.
+`catchplate.controlPlaneOidcSessionActivationConsumeCompletionRecoveryScope/v1`.
 Any non-null recovery configuration requires the actual parent
 `oidcSessionActivationPlanning` configuration and its independently admitted
 historical planner original, including when only consume recovery is enabled.
@@ -35,8 +35,8 @@ No posted profile, alternate protocol or fallback is accepted.
 
 | Root-selected role | Fixed existing public protocol | Endpoint path |
 | --- | --- | --- |
-| activation | authorization dispatch / launch v2 | `/run/serverware/oidc-session-activation/completion.sock` |
-| consume | release-hints dispatch / launch v3 | `/run/serverware/oidc-session-activation-delivery-execution/completion.sock` |
+| activation | authorization dispatch / launch v2 | `/run/catchplate/oidc-session-activation/completion.sock` |
+| consume | release-hints dispatch / launch v3 | `/run/catchplate/oidc-session-activation-delivery-execution/completion.sock` |
 
 Each endpoint uses the genuine existing closed fields `socketPath`,
 `requestTimeoutSeconds`, `listenerUid`, `listenerGid`. Timeout is an exact integer

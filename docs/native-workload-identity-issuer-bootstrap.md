@@ -37,7 +37,7 @@ select the issuer profile nor replace its independent grant.
 
 [`workload-identity-issuer-bootstrap.v2.schema.json`](../schemas/workload-identity-issuer-bootstrap.v2.schema.json)
 describes the public envelope. The exact canonical payload is signed under the
-`serverware.workloadIdentityIssuerBootstrap/v2` domain followed by NUL. Actual
+`catchplate.workloadIdentityIssuerBootstrap/v2` domain followed by NUL. Actual
 verification also checks signatures, source revision, byte counts and digests,
 key separation, live intervals and fixed launch/resource commitments.
 

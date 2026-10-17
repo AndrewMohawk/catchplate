@@ -16,11 +16,11 @@ from scripts import operator_runtime_readonly_bridge as bridge
 
 class RuntimeReadonlyBridgeTests(unittest.TestCase):
     def test_public_origin_defaults_old_and_uses_exact_admitted_environment_for_headers(self):
-        for configured, expected in ((None, "https://serverware-demo.example.com"),
-                ("https://serverware-demo.example.com", "https://serverware-demo.example.com"),
-                ("https://serverware.example.com", "https://serverware.example.com")):
+        for configured, expected in ((None, "https://catchplate-demo.example.com"),
+                ("https://catchplate-demo.example.com", "https://catchplate-demo.example.com"),
+                ("https://catchplate.example.com", "https://catchplate.example.com")):
             with self.subTest(origin=configured), patch.dict(os.environ, {} if configured is None else
-                    {"SERVERWARE_PUBLIC_URL": configured}, clear=True):
+                    {"CATCHPLATE_PUBLIC_URL": configured}, clear=True):
                 self.assertEqual(bridge.public_origin(), expected)
                 result, connection, _ = self.fake_get()
                 self.assertTrue(result["ok"])
@@ -31,13 +31,13 @@ class RuntimeReadonlyBridgeTests(unittest.TestCase):
                 self.assertNotIn("TEST-ONLY-ADMIN", json.dumps(result))
 
     def test_unrecognized_public_origin_refuses_before_token_and_socket_access(self):
-        invalid = ("", "http://serverware.example.com", "https://serverware.example.com/",
-            "https://serverware.example.com:443", "https://serverware.example.com.evil.invalid",
-            "https://user@serverware.example.com", "https://serverware.example.com?x=1",
-            " https://serverware.example.com", "https://SERVERWARE.example.com")
+        invalid = ("", "http://catchplate.example.com", "https://catchplate.example.com/",
+            "https://catchplate.example.com:443", "https://catchplate.example.com.evil.invalid",
+            "https://user@catchplate.example.com", "https://catchplate.example.com?x=1",
+            " https://catchplate.example.com", "https://CATCHPLATE.example.com")
         with patch.object(bridge.os, "open") as opened, patch.object(bridge.http.client, "HTTPConnection") as connected:
             for origin in invalid:
-                with self.subTest(origin=origin), patch.dict(os.environ, {"SERVERWARE_PUBLIC_URL": origin}, clear=True):
+                with self.subTest(origin=origin), patch.dict(os.environ, {"CATCHPLATE_PUBLIC_URL": origin}, clear=True):
                     with self.assertRaises(ValueError):
                         bridge.get({"op": "get", "path": "/api/operator-demo/catalog"})
             opened.assert_not_called()
@@ -46,10 +46,10 @@ class RuntimeReadonlyBridgeTests(unittest.TestCase):
     def test_main_refuses_unrecognized_origin_before_source_or_get_dispatch(self):
         for origin in (None, "https://unreviewed.invalid"):
             output = io.StringIO()
-            environment = {"SERVERWARE_OPERATOR_DEMO": "1", "SERVERWARE_ADMIN_TOKEN_FILE": bridge.TOKEN_FILE,
-                "SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED": "1"}
+            environment = {"CATCHPLATE_OPERATOR_DEMO": "1", "CATCHPLATE_ADMIN_TOKEN_FILE": bridge.TOKEN_FILE,
+                "CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED": "1"}
             if origin is not None:
-                environment["SERVERWARE_PUBLIC_URL"] = origin
+                environment["CATCHPLATE_PUBLIC_URL"] = origin
             with self.subTest(origin=origin), patch.dict(os.environ, environment, clear=True), \
                     patch.object(bridge.sys, "argv", ["bridge", '{"op":"source"}']), \
                     patch.object(bridge.sys, "stdout", output), patch.object(bridge.signal, "signal"), \
@@ -69,7 +69,7 @@ class RuntimeReadonlyBridgeTests(unittest.TestCase):
         return {"op": "get", "path": bridge.X_CONFIGURATION, "managed_x_unconfigured": True}
 
     def x_unconfigured(self):
-        return {"schema": "serverware.operatorXConfiguration/v1", "state": "unconfigured", "revision": 81,
+        return {"schema": "catchplate.operatorXConfiguration/v1", "state": "unconfigured", "revision": 81,
             "policy_hash": "sha256:" + "a" * 64,
             "redirect_uri": bridge.CANONICAL_PUBLIC + "/api/oauth/callback/x", "permission_preset": "x_text_post_v1",
             "scopes": ["offline.access", "tweet.read", "tweet.write", "users.read"],
@@ -113,7 +113,7 @@ class RuntimeReadonlyBridgeTests(unittest.TestCase):
                 bridge.get_path({"op": "get", "path": bridge.GOOGLE_CONFIGURATION})
 
     def test_exact_opt_in_allows_only_discovery_on_enabled_managed_deployment(self):
-        with patch.dict(os.environ, {"SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED": "1"}, clear=True):
+        with patch.dict(os.environ, {"CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED": "1"}, clear=True):
             for path in bridge.PATHS | {bridge.GOOGLE_CONFIGURATION}:
                 self.assertEqual(bridge.get_path({"op": "get", "path": path,
                     "managed_google_unconfigured": True}), path)
@@ -125,10 +125,10 @@ class RuntimeReadonlyBridgeTests(unittest.TestCase):
         command = {"op": "get", "path": bridge.GOOGLE_CONFIGURATION, "managed_google_unconfigured": True}
         for flag in (None, "0", "true", "01", "1 ", ""):
             with self.subTest(flag=flag), patch.dict(os.environ, {} if flag is None else
-                    {"SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED": flag}, clear=True):
+                    {"CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED": flag}, clear=True):
                 with self.assertRaises(ValueError):
                     bridge.get_path(command)
-        with patch.dict(os.environ, {"SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED": "1"}, clear=True):
+        with patch.dict(os.environ, {"CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED": "1"}, clear=True):
             for flag in (False, 0, 1, "1", "true", None, []):
                 with self.subTest(flag=flag), self.assertRaises(ValueError):
                     bridge.get_path({**command, "managed_google_unconfigured": flag})
@@ -138,13 +138,13 @@ class RuntimeReadonlyBridgeTests(unittest.TestCase):
         paths = [bridge.GOOGLE_CONFIGURATION + suffix for suffix in
             ("/", "/cancel", "/11111111-1111-4111-8111-111111111111", "?x=1", "#fragment")]
         paths += ["/api/operator-demo/oauth/google/start", "/api/oauth/start", "/ca.pem",
-            "https://serverware-demo.example.com" + bridge.GOOGLE_CONFIGURATION,
+            "https://catchplate-demo.example.com" + bridge.GOOGLE_CONFIGURATION,
             "/api/operator-demo/oauth/google/configuration/%76%32", "//api/operator-demo/catalog", "", None, []]
         commands = [{**valid, "path": path} for path in paths]
         commands += [{**valid, "op": op} for op in ("post", "POST", "source", True, None)]
         commands += [{**valid, "headers": {}}, {**valid, "body": ""}, {**valid, "method": "GET"},
             {**valid, "timeout": 1}, {"op": "get"}, [], None]
-        with patch.dict(os.environ, {"SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED": "1"}, clear=True), \
+        with patch.dict(os.environ, {"CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED": "1"}, clear=True), \
                 patch.object(bridge.os, "open", side_effect=AssertionError("token access forbidden")) as opened, \
                 patch.object(bridge.http.client, "HTTPConnection", side_effect=AssertionError("socket access forbidden")) as connected:
             for command in commands:
@@ -155,7 +155,7 @@ class RuntimeReadonlyBridgeTests(unittest.TestCase):
 
     def test_public_discovery_screening_keeps_private_field_and_token_guards(self):
         token = "TEST-ONLY-ADMIN-CANARY-DO-NOT-EXPORT-123456789"
-        public = {"schema": "serverware.operatorGoogleConfiguration/v2", "state": "unconfigured",
+        public = {"schema": "catchplate.operatorGoogleConfiguration/v2", "state": "unconfigured",
             "operation": None, "revision": 13, "readiness": {"pair_ready": True, "consent_ready": False},
             "redirect_uri": bridge.PUBLIC + "/api/oauth/callback/google"}
         bridge.public_json(json.dumps(public).encode(), token)
@@ -169,13 +169,13 @@ class RuntimeReadonlyBridgeTests(unittest.TestCase):
 
     def test_x_disabled_route_requires_exact_command_and_actual_off_selection(self):
         for flag in (None, "0"):
-            with patch.dict(os.environ, {} if flag is None else {"SERVERWARE_OPERATOR_MANAGED_X_ENABLED": flag}, clear=True):
+            with patch.dict(os.environ, {} if flag is None else {"CATCHPLATE_OPERATOR_MANAGED_X_ENABLED": flag}, clear=True):
                 self.assertEqual(bridge.get_path(self.x_command()), bridge.X_CONFIGURATION)
                 with self.assertRaises(ValueError):
                     bridge.get_path({"op": "get", "path": bridge.X_CONFIGURATION})
         for flag in ("1", "", "false", "00", "0 ", "true"):
             with self.subTest(flag=flag), patch.dict(os.environ,
-                    {"SERVERWARE_OPERATOR_MANAGED_X_ENABLED": flag}, clear=True):
+                    {"CATCHPLATE_OPERATOR_MANAGED_X_ENABLED": flag}, clear=True):
                 with self.assertRaises(ValueError):
                     bridge.get_path(self.x_command())
 
@@ -187,7 +187,7 @@ class RuntimeReadonlyBridgeTests(unittest.TestCase):
             "/api/operator-demo/oauth/x/configuration/%76%31"}]
         commands += [{**self.x_command(), "op": "post"}, {**self.x_command(), "body": ""},
             {**self.x_command(), "managed_google_unconfigured": True}]
-        with patch.dict(os.environ, {"SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED": "1"}, clear=True), \
+        with patch.dict(os.environ, {"CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED": "1"}, clear=True), \
                 patch.object(bridge.os, "open", side_effect=AssertionError("token access forbidden")) as opened, \
                 patch.object(bridge.http.client, "HTTPConnection", side_effect=AssertionError("socket access forbidden")) as connected:
             for command in commands:
@@ -243,7 +243,7 @@ class RuntimeReadonlyBridgeTests(unittest.TestCase):
                     self.fake_get(body=body)
 
     def test_existing_json_routes_still_require_200_and_do_not_accept_disabled_body(self):
-        with patch.dict(os.environ, {"SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED": "1"}, clear=True):
+        with patch.dict(os.environ, {"CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED": "1"}, clear=True):
             for path in (bridge.PATHS - {"/"}) | {bridge.GOOGLE_CONFIGURATION}:
                 command = {"op": "get", "path": path, "managed_google_unconfigured": True}
                 with self.subTest(path=path):
@@ -253,14 +253,14 @@ class RuntimeReadonlyBridgeTests(unittest.TestCase):
                         self.fake_get(command=command)
 
     def test_x_enabled_profile_is_explicit_exact_and_refuses_contradictions_before_io(self):
-        environment = {"SERVERWARE_PUBLIC_URL": bridge.CANONICAL_PUBLIC, "SERVERWARE_OPERATOR_MANAGED_X_ENABLED": "1"}
+        environment = {"CATCHPLATE_PUBLIC_URL": bridge.CANONICAL_PUBLIC, "CATCHPLATE_OPERATOR_MANAGED_X_ENABLED": "1"}
         command = self.x_enabled_command()
         with patch.dict(os.environ, environment, clear=True):
             self.assertEqual(bridge.get_path(command), bridge.X_CONFIGURATION)
-        environments = [{**environment, "SERVERWARE_OPERATOR_MANAGED_X_ENABLED": flag}
+        environments = [{**environment, "CATCHPLATE_OPERATOR_MANAGED_X_ENABLED": flag}
             for flag in ("0", "", "true", "01", "1 ")]
-        environments += [{"SERVERWARE_PUBLIC_URL": bridge.CANONICAL_PUBLIC},
-            {"SERVERWARE_OPERATOR_MANAGED_X_ENABLED": "1"}, {**environment, "SERVERWARE_PUBLIC_URL": bridge.PUBLIC}]
+        environments += [{"CATCHPLATE_PUBLIC_URL": bridge.CANONICAL_PUBLIC},
+            {"CATCHPLATE_OPERATOR_MANAGED_X_ENABLED": "1"}, {**environment, "CATCHPLATE_PUBLIC_URL": bridge.PUBLIC}]
         commands = [{**command, "managed_x_unconfigured": value} for value in (False, 1, "true", None)]
         commands += [{**command, "path": path} for path in bridge.PATHS | {bridge.GOOGLE_CONFIGURATION,
             bridge.X_CONFIGURATION + "/", bridge.X_CONFIGURATION + "?x=1", "/api/operator-demo/oauth/x/start"}]
@@ -279,8 +279,8 @@ class RuntimeReadonlyBridgeTests(unittest.TestCase):
 
     def test_x_enabled_exact_unconfigured_200_preserves_original_bytes_and_private_token_boundary(self):
         body = json.dumps(self.x_unconfigured(), indent=2).encode()
-        with patch.dict(os.environ, {"SERVERWARE_PUBLIC_URL": bridge.CANONICAL_PUBLIC,
-                "SERVERWARE_OPERATOR_MANAGED_X_ENABLED": "1"}, clear=True):
+        with patch.dict(os.environ, {"CATCHPLATE_PUBLIC_URL": bridge.CANONICAL_PUBLIC,
+                "CATCHPLATE_OPERATOR_MANAGED_X_ENABLED": "1"}, clear=True):
             result, connection, response = self.fake_get(command=self.x_enabled_command(), status=200, body=body)
         self.assertEqual(result["status"], 200)
         self.assertEqual(base64.b64decode(result["body_base64"]), body)
@@ -307,8 +307,8 @@ class RuntimeReadonlyBridgeTests(unittest.TestCase):
         bodies += [b'{}', b'[]', b'{"detail":"X configuration is not supported by this deployment"}',
             raw.replace(b'"unconfigured"', b'"configured", "state":"unconfigured"'),
             raw.replace(b'"configuration": null', b'"configuration":{"client_secret":"private-canary"},"configuration":null')]
-        with patch.dict(os.environ, {"SERVERWARE_PUBLIC_URL": bridge.CANONICAL_PUBLIC,
-                "SERVERWARE_OPERATOR_MANAGED_X_ENABLED": "1"}, clear=True):
+        with patch.dict(os.environ, {"CATCHPLATE_PUBLIC_URL": bridge.CANONICAL_PUBLIC,
+                "CATCHPLATE_OPERATOR_MANAGED_X_ENABLED": "1"}, clear=True):
             for body in bodies:
                 with self.subTest(size=len(body)), self.assertRaises(ValueError):
                     self.fake_get(command=self.x_enabled_command(), status=200, body=body)
@@ -319,8 +319,8 @@ class RuntimeReadonlyBridgeTests(unittest.TestCase):
 
     def test_x_enabled_keeps_status_headers_bounds_and_redaction_fail_closed(self):
         body = json.dumps(self.x_unconfigured()).encode()
-        with patch.dict(os.environ, {"SERVERWARE_PUBLIC_URL": bridge.CANONICAL_PUBLIC,
-                "SERVERWARE_OPERATOR_MANAGED_X_ENABLED": "1"}, clear=True):
+        with patch.dict(os.environ, {"CATCHPLATE_PUBLIC_URL": bridge.CANONICAL_PUBLIC,
+                "CATCHPLATE_OPERATOR_MANAGED_X_ENABLED": "1"}, clear=True):
             for status in (201, 204, 302, 404, 503):
                 with self.subTest(status=status), self.assertRaises(ValueError):
                     self.fake_get(command=self.x_enabled_command(), status=status, body=body)

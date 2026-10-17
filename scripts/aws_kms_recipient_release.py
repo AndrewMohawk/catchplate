@@ -83,9 +83,9 @@ def load_materials(path: str | None) -> dict[str, Any]:
     if path:
         raw = Path(path).read_text(encoding="utf-8")
     else:
-        raw = os.getenv("SERVERWARE_AWS_KMS_MATERIALS_JSON", "")
+        raw = os.getenv("CATCHPLATE_AWS_KMS_MATERIALS_JSON", "")
     if not raw.strip():
-        raise SystemExit("--materials-file or SERVERWARE_AWS_KMS_MATERIALS_JSON is required")
+        raise SystemExit("--materials-file or CATCHPLATE_AWS_KMS_MATERIALS_JSON is required")
     parsed = json.loads(raw)
     if not isinstance(parsed, dict):
         raise SystemExit("AWS KMS materials config must be a JSON object")
@@ -169,7 +169,7 @@ def attestation_document_from_request(payload: dict[str, Any]) -> tuple[bytes, s
 
 
 def validate_request(payload: dict[str, Any]) -> None:
-    if payload.get("apiVersion") != "serverware.nitroKmsReleaseRequest/v1":
+    if payload.get("apiVersion") != "catchplate.nitroKmsReleaseRequest/v1":
         raise SystemExit("unexpected apiVersion")
     if payload.get("kind") != "NitroKmsMaterialRelease":
         raise SystemExit("unexpected kind")
@@ -296,9 +296,9 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command")
     release_parser = subparsers.add_parser("release")
     release_parser.add_argument("--materials-file", default=None)
-    release_parser.add_argument("--aws-binary", default=os.getenv("SERVERWARE_AWS_CLI", "aws"))
+    release_parser.add_argument("--aws-binary", default=os.getenv("CATCHPLATE_AWS_CLI", "aws"))
     release_parser.add_argument("--region", default=os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION"))
-    release_parser.add_argument("--timeout", type=float, default=float(os.getenv("SERVERWARE_AWS_KMS_TIMEOUT_SECONDS", "30")))
+    release_parser.add_argument("--timeout", type=float, default=float(os.getenv("CATCHPLATE_AWS_KMS_TIMEOUT_SECONDS", "30")))
     args = parser.parse_args()
     if args.command != "release":
         raise SystemExit("usage: aws_kms_recipient_release.py release [--materials-file path]")

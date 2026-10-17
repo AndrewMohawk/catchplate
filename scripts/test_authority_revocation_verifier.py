@@ -23,10 +23,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract as authority
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_verifier as verifier
-from serverware import authority_revocation_retention as retention
+from catchplate import authority_contract as authority
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_verifier as verifier
+from catchplate import authority_revocation_retention as retention
 import test_authority_revocation_configuration as configuration_oracle
 import test_authority_revocation_capability_producer as signer_oracle
 import test_authority_revocation_handoff as handoff_oracle
@@ -36,9 +36,9 @@ import test_authority_revocation_plan as oracle
 import test_authority_revocation_retention as record_oracle
 
 
-CONFIG_SCHEMA = "serverware.policyAuthorityServiceConfiguration/v6"
-GENERATION_SCHEMA = "serverware.authorityGenerationLaunchContext/v4"
-VERIFIER_SESSION = "serverware.policyAuthorityVerifierSession/v2"
+CONFIG_SCHEMA = "catchplate.policyAuthorityServiceConfiguration/v6"
+GENERATION_SCHEMA = "catchplate.authorityGenerationLaunchContext/v4"
+VERIFIER_SESSION = "catchplate.policyAuthorityVerifierSession/v2"
 GENERATION_FIELDS = ("schema", "sequence", "digest", "predecessorDigest",
     "minimumRollbackSequence", "operationManifestDigest", "configurationPayloadBindings", "configurationBindingDigest", "roleBindingDigests")
 IDENTITY_FIELDS = ("sessionIdentityDigest", "measurementDigest", "attestationReceiptDigest")

@@ -39,7 +39,7 @@ class Fixture(google.Fixture):
     _request = consent.Fixture._request
 
     def http(self):
-        from serverware import app, oauth
+        from catchplate import app, oauth
         self.app, self.oauth, self.cookie = app, oauth, None
 
     def fields(self, application, **changes):
@@ -94,7 +94,7 @@ def signed_bundle():
     f = Fixture()
     application = f.application()
     core = f.core()
-    result = f.bundle(application, credential_input="replace_exact", placeholder="Bearer SERVERWARE_DUMMY")
+    result = f.bundle(application, credential_input="replace_exact", placeholder="Bearer CATCHPLATE_DUMMY")
     rule = result["access_rule"]
     assert rule["route_id"] == "operator." + rule["id"]
     assert rule["operation_bundle"] == "gmail_read_v1" and rule["age_policy"] == {"mode": "unrestricted"}
@@ -108,7 +108,7 @@ def signed_bundle():
     assert route["match"] == {"scheme": "https", "host": "gmail.googleapis.com", "port": 443,
         "methods": ["GET"], "paths": ["/gmail/v1/users/me/messages", "/gmail/v1/users/me/messages/{message_id}"]}
     assert route["credentialRef"] == f.record["id"] and route["principals"] == [application["principal_id"]]
-    assert route["credentialHeader"] == {"mode": "replaceExact", "expectedValue": "Bearer SERVERWARE_DUMMY"}
+    assert route["credentialHeader"] == {"mode": "replaceExact", "expectedValue": "Bearer CATCHPLATE_DUMMY"}
     assert "jit" not in route
     cfg = route["adapter"]["config"]
     assert route["adapter"]["type"] == "gmail.read.v1"
@@ -198,7 +198,7 @@ def recent_bundle():
 
     # The Python prototype cannot prove fresh age evidence, including when its
     # response hooks are invoked directly. It must not act as an age bypass.
-    from serverware import adapters
+    from catchplate import adapters
     compiled = f.bundles.compile_policy_bundle(raw, verify_signature=True, validate_schema=True)
     policy = next(row for row in compiled.routes if row.id == rule["route_id"])
     adapter = adapters.get_adapter("gmail.read.v1")
@@ -279,13 +279,13 @@ def refused_bindings():
             route_id=rule["route_id"], credential_id=f.record["id"],
             core_credential=f.core(), profile=f.profile)["id"] == f.record["id"]
         conn.rollback()
-        from serverware import operator_catalog_gmail
+        from catchplate import operator_catalog_gmail
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("UPDATE operator_catalog_oauth_profile SET binding_digest=?", ("sha256:" + "0" * 64,))
         google.refused(lambda: operator_catalog_gmail.capabilities(conn), f.schema.CatalogIntegrityError)
         conn.rollback()
         conn.execute("BEGIN")
-        with patch.dict(os.environ, {"SERVERWARE_NATIVE_ENABLED": "1"}):
+        with patch.dict(os.environ, {"CATCHPLATE_NATIVE_ENABLED": "1"}):
             google.refused(lambda: operator_catalog_gmail.capabilities(conn), f.profiles.OperatorGoogleProfileError)
         conn.rollback()
     assert f.snapshot() == before
@@ -299,7 +299,7 @@ def refused_bindings():
 def disabled_capability():
     config, db, store, bundles, schema, inputs, mutations = workspace.workspace()
     before = workspace.snapshot(db, catalog=True), config.POLICY_BUNDLE_PATH.read_bytes()
-    from serverware import operator_catalog_gmail
+    from catchplate import operator_catalog_gmail
     with closing(db.connect()) as conn:
         google.refused(lambda: operator_catalog_gmail.capabilities(conn), schema.CatalogIntegrityError)
         conn.execute("BEGIN")
@@ -382,7 +382,7 @@ class OperatorCatalogGmailTests(unittest.TestCase):
         environment = dict(self.environment)
         if operation == "disabled-capability":
             environment = {key: value for key, value in environment.items()
-                if not key.startswith("SERVERWARE_GOOGLE_OAUTH_") and key != "SERVERWARE_OPERATOR_GOOGLE_PROFILE"}
+                if not key.startswith("CATCHPLATE_GOOGLE_OAUTH_") and key != "CATCHPLATE_OPERATOR_GOOGLE_PROFILE"}
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation],
             cwd=ROOT, env=environment, capture_output=True, text=True, timeout=90)
         self.assertEqual(result.returncode, 0, "\n".join(result.stderr.splitlines()[-35:]))
@@ -418,8 +418,8 @@ class OperatorCatalogGmailTests(unittest.TestCase):
 
 class GmailAgePolicyContractTests(unittest.TestCase):
     def test_strict_age_input_and_persisted_shape(self):
-        from serverware import operator_catalog_gmail as gmail, operator_catalog_inputs as inputs
-        from serverware.operator_catalog_schema import CatalogIntegrityError
+        from catchplate import operator_catalog_gmail as gmail, operator_catalog_inputs as inputs
+        from catchplate.operator_catalog_schema import CatalogIntegrityError
         fields = {"expected_revision": 1, "expected_policy_hash": "sha256:" + "0" * 64,
             "name": "Gmail age fixture", "application_id": "00000000-0000-4000-8000-000000000001",
             "credential_id": "00000000-0000-4000-8000-000000000002", "operation_bundle": "gmail_read_v1"}
@@ -453,7 +453,7 @@ class GmailAgePolicyContractTests(unittest.TestCase):
                     gmail.validate_shape({**record, "age_policy": policy})
 
     def test_unrestricted_route_bytes_match_pre_change_fingerprints(self):
-        from serverware import operator_catalog_gmail as gmail
+        from catchplate import operator_catalog_gmail as gmail
         credential = {"id": "credential:test", "provider_subject": "subject:test", "oauth_client_id": "client:test"}
         original = {"operation_bundle": gmail.BUNDLE, "age_policy": {"mode": "unrestricted"}, "route_id": "route:test"}
         # Captured from both retained profiles before adding the new age mode.

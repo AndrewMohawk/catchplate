@@ -13,13 +13,13 @@ SECRET = "synthetic-environment-canary-not-for-output"
 
 def service(name):
     environment = {"SYNTHETIC_PRIVATE_VALUE": SECRET}
-    if name == "serverware":
+    if name == "catchplate":
         environment.update(review.NOTIFICATION_ENV)
         environment[review.EXPECTED_DIGEST] = "sha256:" + review.OLD_SHA
     if name == "edge":
         environment["NGINX_ENVSUBST_FILTER"] = "^TRAEFIK_IPV4$"
     expected = dict(environment)
-    if name == "serverware": expected[review.EXPECTED_DIGEST] = "sha256:" + review.NEW_SHA
+    if name == "catchplate": expected[review.EXPECTED_DIGEST] = "sha256:" + review.NEW_SHA
     if name == "edge": expected["NGINX_ENVSUBST_FILTER"] = "^TRAEFIK_IPV4$$"
     image = {"Id": "sha256:" + "a" * 64, "Config": {"Env": [], "Labels": {}, "User": "10001:10001",
         "Cmd": ["fixed-process"], "Entrypoint": [], "WorkingDir": "/app"}}
@@ -31,7 +31,7 @@ def service(name):
         "logging": {"driver": "local", "options": {"max-size": "1m"}},
         "healthcheck": {"test": ["CMD", "fixed-health"], "interval": "10s", "timeout": "2s", "start_period": "5s", "retries": 3},
         "volumes": []}
-    dependency = {"serverware": "demo-upstream", "decision-gate-rs": "serverware"}.get(name)
+    dependency = {"catchplate": "demo-upstream", "decision-gate-rs": "catchplate"}.get(name)
     if dependency: proposed["depends_on"] = {dependency: {"condition": "service_healthy", "required": True}}
     config = {"User": "10001:10001", "Env": [key + "=" + value for key, value in environment.items()],
         "Cmd": ["fixed-process"], "Entrypoint": [], "WorkingDir": "/app", "Labels": {},
@@ -46,7 +46,7 @@ def service(name):
         "NetworkSettings": {"Ports": {}, "Networks": {"synthetic_sandbox": {"IPAddress": "172.16.249.19",
             "IPAMConfig": {"IPv4Address": "172.16.249.19"}, "Aliases": [name]}}}}
     mounts = {
-        "serverware": [("/app", review.OLD_SOURCE, review.NEW_SOURCE, True),
+        "catchplate": [("/app", review.OLD_SOURCE, review.NEW_SOURCE, True),
             ("/notification-custody", review.CUSTODY, review.CUSTODY, False)],
         "decision-gate-rs": [(review.BINARY_TARGET, review.OLD_BINARY, review.NEW_BINARY, True)],
         "edge": [("/etc/nginx/templates/nginx.conf.template", "/retained/nginx.conf.template",
@@ -100,12 +100,12 @@ class DeploymentReviewTests(unittest.TestCase):
                 self.compare(name, (proposed, live, image))
             self.assertNotIn(SECRET, str(caught.exception))
             self.assertNotIn("changed-secret-value", str(caught.exception))
-        proposed, live, image = service("serverware")
-        proposed["environment"]["SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED"] = "0"
-        with self.assertRaises(review.Refused): self.compare("serverware", (proposed, live, image))
+        proposed, live, image = service("catchplate")
+        proposed["environment"]["CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED"] = "0"
+        with self.assertRaises(review.Refused): self.compare("catchplate", (proposed, live, image))
 
     def test_wrong_source_binary_or_partial_pair_is_refused(self):
-        for name, change in (("serverware", "source"), ("serverware", "digest"), ("decision-gate-rs", "source")):
+        for name, change in (("catchplate", "source"), ("catchplate", "digest"), ("decision-gate-rs", "source")):
             inputs = service(name)
             if change == "source": inputs[0]["volumes"][0]["source"] = "/unreviewed/artifact"
             else: inputs[0]["environment"][review.EXPECTED_DIGEST] = "sha256:" + review.OLD_SHA
@@ -113,7 +113,7 @@ class DeploymentReviewTests(unittest.TestCase):
 
     def test_bounds_dns_hosts_auth_and_mount_drift_refused(self):
         for field in ("cpus", "dns", "extra_hosts", "labels", "network_address", "dependency", "mount", "sysctls", "healthcheck"):
-            proposed, live, image = service("serverware")
+            proposed, live, image = service("catchplate")
             if field == "cpus": proposed["cpus"] = 2
             elif field == "dns": proposed["dns"] = ["8.8.8.8"]
             elif field == "extra_hosts": proposed["extra_hosts"] = {"decision-gate-rs": "172.16.249.34"}
@@ -123,7 +123,7 @@ class DeploymentReviewTests(unittest.TestCase):
             elif field == "mount": proposed["volumes"][1]["read_only"] = True
             elif field == "sysctls": proposed["sysctls"] = {"net.ipv4.ip_forward": "1"}
             else: proposed["healthcheck"]["retries"] = 4
-            with self.subTest(field=field), self.assertRaises(review.Refused): self.compare("serverware", (proposed, live, image))
+            with self.subTest(field=field), self.assertRaises(review.Refused): self.compare("catchplate", (proposed, live, image))
 
     def test_only_empty_fixed_external_overlay_attachment_allows_allocated_ipam(self):
         proposed, live, image = service("decision-gate-rs")

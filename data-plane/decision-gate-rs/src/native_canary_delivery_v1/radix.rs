@@ -37,7 +37,7 @@ fn mutation_kind(operation:Operation,table:&str,kind:&str)->bool {
 /// The source revision is admitted by the separately rooted full cold config;
 /// callers cannot select dependencies, templates, grants or work ceilings.
 pub(crate) fn handler_commitment(operation:Operation,source:&str)->Result<String,String>{
-    let handler=format!("serverware_policy_authority_policy_canary_delivery_{}",operation.phase());
+    let handler=format!("catchplate_policy_authority_policy_canary_delivery_{}",operation.phase());
     let writes=TABLES.iter().copied().filter(|t|writable(operation,t)).collect::<Vec<_>>();
     let reads=TABLES.iter().copied().filter(|t|!writable(operation,t)).collect::<Vec<_>>();
     let framework_preconditions=["policy_authority_authorization_dependency_manifests","policy_authority_fence_heads","policy_authority_query_dependency_manifests"];
@@ -49,17 +49,17 @@ pub(crate) fn handler_commitment(operation:Operation,source:&str)->Result<String
     let mut all_writes=writes.clone();all_writes.extend(framework_writes);all_writes.sort();all_writes.dedup();
     let mut templates=Vec::new();
     for table in &writes {for kind in ["INSERT","UPDATE"] {if mutation_kind(operation,table,kind){
-        let mut template=json!({"schema":"serverware.policyAuthorityMutationTemplate/v1","operation":operation.label(),"table":table,"mutation":kind,
+        let mut template=json!({"schema":"catchplate.policyAuthorityMutationTemplate/v1","operation":operation.label(),"table":table,"mutation":kind,
             "before":if kind=="INSERT"{"absent"}else{"present"},"after":"present","predicate":"exact-primary-key-and-full-row-cas-v1","cardinality":1});
-        template["templateId"]=tree("serverware.policyAuthorityMutationTemplate/v1",&[&ascii(&template)?]).into();templates.push(template);
+        template["templateId"]=tree("catchplate.policyAuthorityMutationTemplate/v1",&[&ascii(&template)?]).into();templates.push(template);
     }}}
-    let transition=tree("serverware.policyAuthorityTransitionProgram/v1",&[&ascii(&json!({"operation":operation.label(),"handler":handler}))?]);
+    let transition=tree("catchplate.policyAuthorityTransitionProgram/v1",&[&ascii(&json!({"operation":operation.label(),"handler":handler}))?]);
     let stem=operation.label().replace('.',"_").replace('-',"_");
-    let suffix=hex::encode(Sha256::digest(operation.label().as_bytes()));let prefix="serverware_policy_authority_execute_";
+    let suffix=hex::encode(Sha256::digest(operation.label().as_bytes()));let prefix="catchplate_policy_authority_execute_";
     let tail=format!("_{}_v9",&suffix[..12]);
     let executor=format!("{prefix}{}{tail}",&stem[..stem.len().min(63-prefix.len()-tail.len())]);
     let value=json!({"sourceRevision":source,"operation":operation.label(),"handler":handler,
-        "transitionProgramId":format!("serverware.policyAuthorityTransition/{}/{}/v1",operation.label(),&transition[7..23]),"planningMode":"typed-pure-transition",
+        "transitionProgramId":format!("catchplate.policyAuthorityTransition/{}/{}/v1",operation.label(),&transition[7..23]),"planningMode":"typed-pure-transition",
         "businessReads":reads,"businessWrites":writes,"businessReadBeforeWrite":writes,"authorizationReads":[],
         "frameworkPreconditions":framework_preconditions,"frameworkWrites":framework_writes,"frameworkReadBeforeWrite":framework_read_before_write,
         "mutationTemplates":templates,"executorFunction":executor,"executorIdentityArguments":["text","text","text","text","text"],
@@ -68,7 +68,7 @@ pub(crate) fn handler_commitment(operation:Operation,source:&str)->Result<String
         "auditCapacityCounterSlotsReplaced":0,"auditCapacityAddsAggregateRoot":true,
         "maximumBusinessQueryRows":48,"maximumBusinessMutations":24,"maximumBusinessWorkUnits":8192,
         "maximumQueryRows":49,"maximumMutations":25,"maximumWorkUnits":8194,"externalEvidenceTypes":[],"opaqueValueKinds":[]});
-    Ok(tree("serverware.policyAuthorityHandlerContract/v1",&[&ascii(&value)?]))
+    Ok(tree("catchplate.policyAuthorityHandlerContract/v1",&[&ascii(&value)?]))
 }
 fn sql(value:&Value)->Result<Vec<u8>,String> {
     fn write(v:&Value,out:&mut Vec<u8>,depth:usize)->Result<(),String> {
@@ -88,11 +88,11 @@ fn tree(domain:&str,frames:&[&[u8]])->String {
     let mut hash=Sha256::new();hash.update((domain.len() as u64).to_be_bytes());hash.update(domain.as_bytes());
     for frame in frames{hash.update((frame.len() as u64).to_be_bytes());hash.update(frame);}format!("sha256:{}",hex::encode(hash.finalize()))
 }
-fn node(depth:usize,children:&Value)->Result<String,String>{Ok(tree("serverware.policyAuthorityAuthenticatedNode/v1",&[depth.to_string().as_bytes(),&sql(children)?]))}
+fn node(depth:usize,children:&Value)->Result<String,String>{Ok(tree("catchplate.policyAuthorityAuthenticatedNode/v1",&[depth.to_string().as_bytes(),&sql(children)?]))}
 fn leaf(table:&str,path:&str,key:&Value,row:&Value,empty:&str)->Result<(Value,String),String>{
     if row.is_null(){return Ok((Value::Null,empty.into()));}
-    let row_digest=tree("serverware.policyAuthorityAuthenticatedRow/v1",&[table.as_bytes(),&sql(row)?]);
-    let leaf=tree("serverware.policyAuthorityAuthenticatedLeaf/v1",&[table.as_bytes(),format!("sha256:{path}").as_bytes(),&sql(key)?,row_digest.as_bytes()]);
+    let row_digest=tree("catchplate.policyAuthorityAuthenticatedRow/v1",&[table.as_bytes(),&sql(row)?]);
+    let leaf=tree("catchplate.policyAuthorityAuthenticatedLeaf/v1",&[table.as_bytes(),format!("sha256:{path}").as_bytes(),&sql(key)?,row_digest.as_bytes()]);
     Ok((row_digest.into(),leaf))
 }
 fn roots(value:&Value,empty:&str)->Result<BTreeMap<String,Value>,String>{
@@ -115,10 +115,10 @@ fn nodes(value:&Value,depth:usize)->Result<u64,String>{
 pub(crate) fn verify(operation:Operation,plan:&Value)->Result<(),String>{
     let transition=&plan["rootTransition"];
     exact(transition,&["schema","profile","businessBeforeRoots","authorizationBeforeRoots","businessAfterRoots","authorizationAfterRoots","metrics"])?;
-    require(transition["schema"]=="serverware.policyAuthorityPrimaryRootTransition/v1"
-        && transition["profile"]=="serverware.policyAuthorityPrimaryRootTransitionProfile/v2"
+    require(transition["schema"]=="catchplate.policyAuthorityPrimaryRootTransition/v1"
+        && transition["profile"]=="catchplate.policyAuthorityPrimaryRootTransitionProfile/v2"
         && transition["authorizationBeforeRoots"]==json!([]) && transition["authorizationAfterRoots"]==json!([]),"delivery root profile/classes")?;
-    let empty_leaf=tree("serverware.policyAuthorityAuthenticatedEmptyLeaf/v1",&[b"64"]);
+    let empty_leaf=tree("catchplate.policyAuthorityAuthenticatedEmptyLeaf/v1",&[b"64"]);
     let mut empty=empty_leaf.clone();for depth in (0..64).rev(){empty=node(depth,&json!(vec![empty;16]))?;}
     let before=roots(&transition["businessBeforeRoots"],&empty)?;
     require(before.keys().map(String::as_str).eq(TABLES),"delivery complete source-owned root inventory")?;
@@ -138,7 +138,7 @@ pub(crate) fn verify(operation:Operation,plan:&Value)->Result<(),String>{
         require((is_present && row["row"].is_object()) || (!is_present && row["row"].is_null()),"delivery selected row shape")?;
         require(row["contractSelector"].is_null()||row["contractSelector"].is_string(),"delivery selector shape")?;
         if is_present { for column in key_columns(table)? {require(row["key"][*column]==row["row"][*column],"delivery full-row key")?;}*present.entry(table.into()).or_default()+=1; }
-        let digest=framed("serverware.policyAuthorityBusinessKey/v1",&[table.as_bytes(),&ascii(&row["key"])?]);
+        let digest=framed("catchplate.policyAuthorityBusinessKey/v1",&[table.as_bytes(),&ascii(&row["key"])?]);
         require(row["keyDigest"]==digest && rows.insert((table.to_owned(),digest),row).is_none(),"delivery repeated/incorrect selected key")?;
     }
     for(table,count)in present{require(count<=number(&before[&table],"leafCount")?,"delivery membership exceeds count")?;}
@@ -148,11 +148,11 @@ pub(crate) fn verify(operation:Operation,plan:&Value)->Result<(),String>{
         let table=text(proof,"table")?;let address=(table.to_owned(),text(proof,"keyDigest")?.to_owned());
         let row=rows.get(&address).ok_or("delivery unselected proof")?;
         let root=before.get(table).ok_or("delivery unknown proof root")?;
-        require(proof["schema"]=="serverware.policyAuthorityRadixMultiproof/v3" && proof["key"]==row["key"]
+        require(proof["schema"]=="catchplate.policyAuthorityRadixMultiproof/v3" && proof["key"]==row["key"]
             && proof["present"]==row["present"] && proof["rootRevision"]==root["rootRevision"] && proof["rootDigest"]==root["rootDigest"],"delivery proof source join")?;
         let mut unsigned=proof.clone();unsigned.as_object_mut().ok_or("delivery proof object")?.remove("proofDigest");
-        require(proof["proofDigest"]==framed("serverware.policyAuthorityRadixMultiproof/v3",&[&ascii(&unsigned)?]),"delivery proof digest")?;
-        let key_digest=tree("serverware.policyAuthorityAuthenticatedKey/v1",&[table.as_bytes(),&sql(&row["key"])?]);let path=key_digest[7..].to_owned();
+        require(proof["proofDigest"]==framed("catchplate.policyAuthorityRadixMultiproof/v3",&[&ascii(&unsigned)?]),"delivery proof digest")?;
+        let key_digest=tree("catchplate.policyAuthorityAuthenticatedKey/v1",&[table.as_bytes(),&sql(&row["key"])?]);let path=key_digest[7..].to_owned();
         require(paths.insert(address,path.clone()).is_none() && unique_paths.insert((table.to_owned(),path.clone())),"delivery repeated proof/path")?;
         let(row_digest,mut parent)=leaf(table,&path,&row["key"],&row["row"],&empty_leaf)?;
         require(proof["rowDigest"]==row_digest && proof["leafDigest"]==parent,"delivery authenticated leaf")?;
@@ -176,9 +176,9 @@ pub(crate) fn verify(operation:Operation,plan:&Value)->Result<(),String>{
         let old=rows.get(&address).ok_or("delivery unselected mutation")?;let operation_label=text(change,"operation")?;
         require(writable(operation,table) && seen.insert(address.clone()) && change["key"]==old["key"]
             && mutation_kind(operation,table,operation_label),"delivery mutation scope")?;
-        let template=json!({"schema":"serverware.policyAuthorityMutationTemplate/v1","operation":operation.label(),"table":table,"mutation":operation_label,
+        let template=json!({"schema":"catchplate.policyAuthorityMutationTemplate/v1","operation":operation.label(),"table":table,"mutation":operation_label,
             "before":if operation_label=="INSERT"{"absent"}else{"present"},"after":"present","predicate":"exact-primary-key-and-full-row-cas-v1","cardinality":1});
-        require(change["templateId"]==tree("serverware.policyAuthorityMutationTemplate/v1",&[&ascii(&template)?]),"delivery exact mutation template")?;
+        require(change["templateId"]==tree("catchplate.policyAuthorityMutationTemplate/v1",&[&ascii(&template)?]),"delivery exact mutation template")?;
         require(if operation_label=="INSERT"{old["present"]==false && change["expectedRow"].is_null()}else{old["present"]==true && change["expectedRow"]==old["row"]},"delivery original full-row CAS")?;
         require(change["row"].is_object(),"delivery after row")?;
         for column in key_columns(table)?{require(change["key"][*column]==change["row"][*column],"delivery after key")?;}

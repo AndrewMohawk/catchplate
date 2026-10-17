@@ -16,10 +16,10 @@ from cryptography.exceptions import InvalidSignature
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import custody_generation_grants as g
-from serverware import custody_generation_initial_state as state
-from serverware import custody_spool_inputs as spool
-from serverware import native_pilot_ordinary_initial_profile as initial
+from catchplate import custody_generation_grants as g
+from catchplate import custody_generation_initial_state as state
+from catchplate import custody_spool_inputs as spool
+from catchplate import native_pilot_ordinary_initial_profile as initial
 from test_native_pilot_ordinary_generations import context
 from test_native_pilot_adopted_services import target_fixture
 from test_native_pilot_ordinary_keys import canonical, encoded, sha
@@ -36,7 +36,7 @@ def delivery_fixture(role):
 
 
 def signed(f, role, payload):
-    return g.canonical({"apiVersion": "serverware.policyCustodyGuestDelivery/v1", "payload": payload,
+    return g.canonical({"apiVersion": "catchplate.policyCustodyGuestDelivery/v1", "payload": payload,
         "signatureBase64url": encoded(f["delivery_keys"][role].sign(g.c9.DOMAIN + g.canonical(payload)))})
 
 
@@ -104,7 +104,7 @@ class AdoptedInputControls(unittest.TestCase):
         row = next(iter(record["directories"].values()))["identity"]
         guest.update(serviceRole=g.ROLES[0], uid=row["uid"], gid=row["gid"], issuedAtBoottimeNs="1200")
         self.assertEqual(initial.runtime_manifest(canonical(f["wrapper"]), runtime=f["header"], guest=guest), f["wrapper"]["history"])
-        old = dict(f["header"], apiVersion="serverware.policyCustodyServiceRuntimeConfig/v8")
+        old = dict(f["header"], apiVersion="catchplate.policyCustodyServiceRuntimeConfig/v8")
         with self.assertRaises(ValueError): initial.runtime_manifest(canonical(f["wrapper"]), runtime=old, guest=guest)
 
 

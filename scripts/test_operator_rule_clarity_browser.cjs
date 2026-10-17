@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const {mkdtemp, stat} = require('node:fs/promises');
 const {join} = require('node:path');
 const {fixture, ready, view, openRestrictions, credential, application, rule, IDS, UPSTREAM} = require('./test_operator_catalog_browser.cjs');
-const {buildCurlCommand} = require('../serverware/operator_demo_web/app.js');
+const {buildCurlCommand} = require('../catchplate/operator_demo_web/app.js');
 let artifacts;
 const supplied = (changes = {}) => ({credentials: [credential()], applications: [application()],
   responseModes: ['projected_json', 'unfiltered_json'], ...changes});
@@ -100,7 +100,7 @@ const tests = [
     assert.equal(await page.locator('#client-template-title').innerText(), 'cURL connection template');
     assert((await page.locator('#client-template-warning').innerText()).includes('no request body or query parameter values'));
     const expected = buildCurlCommand({proxyUrl: 'https://proxy.example.test', upstreamUrl: UPSTREAM + '/v1/status', method: 'POST',
-      caPath: './serverware-ca.pem', allowedHeaders: ['accept', 'user-agent'], credentialInput: 'insert', credential: credential()});
+      caPath: './catchplate-ca.pem', allowedHeaders: ['accept', 'user-agent'], credentialInput: 'insert', credential: credential()});
     assert.equal(await page.locator('#client-command').innerText(), expected);
     const guidance = await page.locator('#client-guidance').innerText();
     for (const text of ['connection template', 'no request body or query parameter values', 'fields: model', 'names allowed: limit', 'no empty/204 responses']) assert(guidance.includes(text));
@@ -120,7 +120,7 @@ async function main() {
     'usage: test_operator_rule_clarity_browser.cjs [--from-group 3]');
   const firstGroup = args.length === 0 ? 1 : 3;
   const selected = tests.slice(firstGroup - 1);
-  const artifactRoot = '/srv/catchplate-fast/projects/serverware-operator-artifacts';
+  const artifactRoot = '/srv/catchplate-fast/projects/catchplate-operator-artifacts';
   assert((await stat(artifactRoot)).isDirectory());
   artifacts = await mkdtemp(join(artifactRoot, 'rule-clarity-synthetic-'));
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');

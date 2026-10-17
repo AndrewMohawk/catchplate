@@ -1,6 +1,6 @@
 # Live activation permission and cold caller composition
 
-[`control_plane_oidc_session_activation_execution.py`](../serverware/control_plane_oidc_session_activation_execution.py)
+[`control_plane_oidc_session_activation_execution.py`](../catchplate/control_plane_oidc_session_activation_execution.py)
 uses the actual control-plane owner and its distinct root-enrolled activation
 caller key. Its fixed [post-permission planning continuation](control-plane-oidc-session-activation-planning.md)
 obtains genuine planner originals before signing. Its separate fixed

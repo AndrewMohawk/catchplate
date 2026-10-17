@@ -27,12 +27,12 @@ from scripts import check_operator_x_post as base
 from scripts.check_operator_demo import CheckFailure, SHA256, require, token_file
 from scripts.check_operator_key_replacement import authority_projection
 
-SCHEMA = "serverware.privateXQuotaCheck/v1"
-PROVIDER_SCHEMA = "serverware.privateXQuotaProvider/v1"
+SCHEMA = "catchplate.privateXQuotaCheck/v1"
+PROVIDER_SCHEMA = "catchplate.privateXQuotaProvider/v1"
 DAY_MS = 86_400_000
 PHASES = ("node:a_first", "python:b_first", "go:a_first", "node:b_refreshed",
     "python:a_exhausted", "go:b_exhausted", "node:alias_exhausted")
-QUOTA_DESCRIPTOR = {"schema": "serverware.operatorXPostAttemptQuota/v1", "field": "daily_post_attempt_limit",
+QUOTA_DESCRIPTOR = {"schema": "catchplate.operatorXPostAttemptQuota/v1", "field": "daily_post_attempt_limit",
     "period": "utc_day", "scope": "verified_x_account", "unit": "posting_attempt", "minimum": 1,
     "maximum": 1000000000}
 RESERVED, CLAIMED = "operator_x.quota.reserved", "operator_x.quota.claimed"
@@ -159,7 +159,7 @@ def validate_quota_events(events, starts, *, subject, day):
             "quota durable receipt shape differs")
         binding = value["binding"]
         require(type(binding) is dict and set(binding) == BINDING_FIELDS and digest(binding) == value["binding_digest"]
-            and value["schema"] == "serverware.operatorXPostingQuota" + ("Claim/v1" if claimed else "Reservation/v1")
+            and value["schema"] == "catchplate.operatorXPostingQuota" + ("Claim/v1" if claimed else "Reservation/v1")
             and type(value["utc_day"]) is int and value["utc_day"] == day and value["bucket_key"] == bucket
             and type(value["reservation_id"]) is str and base.UUID.fullmatch(value["reservation_id"])
             and type(value["expires_at_epoch_ms"]) is int
@@ -270,7 +270,7 @@ class XQuotaCheck(base.XPostCheck):
     def retained_restart(self, pinned, provider):
         from scripts import operator_x_post_fixture_network as network
         self.current_phase = "retained_restart"
-        request = network.quota_checkpoint({"schema": "serverware.privateXQuotaRestartRequest/v1",
+        request = network.quota_checkpoint({"schema": "catchplate.privateXQuotaRestartRequest/v1",
             "run_id": self.run_id, "phase": "after_three", "policy_hash": self.policy_hash,
             "credential_id": self.credential_id, "application_ids": [a["id"] for a, _ in self.apps],
             "initial_access_expires_at_epoch_ms": provider["initialAccessExpiresAtEpochMs"]})
@@ -291,7 +291,7 @@ class XQuotaCheck(base.XPostCheck):
             if ack is not None:
                 break
             time.sleep(min(0.1, self.timeout()))
-        exact(ack, {"schema": "serverware.privateXQuotaRestartAck/v1", "request_sha256": digest(request),
+        exact(ack, {"schema": "catchplate.privateXQuotaRestartAck/v1", "request_sha256": digest(request),
             "status": "retained_restarted"}, "quota restart acknowledgement differs")
         require(network.read_quota_checkpoint() == request, "quota restart request changed")
         self.wait_catalog_loaded("retained_restart")
@@ -598,7 +598,7 @@ def validate_success_result(value):
         "operation": "tweets.write", "utc_day": value["utcDay"]}), "quota account-day key differs")
     ack = value["restart"]
     require(type(ack) is dict and set(ack) == {"schema", "request_sha256", "status"}
-        and ack["schema"] == "serverware.privateXQuotaRestartAck/v1" and ack["status"] == "retained_restarted"
+        and ack["schema"] == "catchplate.privateXQuotaRestartAck/v1" and ack["status"] == "retained_restarted"
         and type(ack["request_sha256"]) is str and SHA256.fullmatch(ack["request_sha256"]), "quota actual retained restart ACK missing")
     counts = value["namedAuditInventory"]
     require(type(counts) is dict and all(type(v) is int and 0 <= v <= 1000 for v in counts.values())

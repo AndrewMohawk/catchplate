@@ -105,12 +105,12 @@ fn x_post_shared_vectors_and_original_bytes() {
 fn x_post_closed_policy_schema_and_oauth_identity() {
     validate_policy_capabilities(&policy()).unwrap(); validate_route(&route()).unwrap();
     validate_route_response_release_mode(&route()).unwrap();
-    for version in ["serverware.policy/v1",policy_route_authority::BUNDLE] {
+    for version in ["catchplate.policy/v1",policy_route_authority::BUNDLE] {
         let mut raw=policy(); raw["apiVersion"]=json!(version); raw["kind"]=json!("PolicyBundle");
         raw["metadata"]=json!({"id":"x-post-test","sequence":1,"rollbackEpoch":1});
         if version==policy_route_authority::BUNDLE {
             let pin=format!("sha256:{}","0".repeat(64));
-            raw["routeAuthority"]=json!({"apiVersion":"serverware.compiledRouteAuthority/v1","genericOperations":[],
+            raw["routeAuthority"]=json!({"apiVersion":"catchplate.compiledRouteAuthority/v1","genericOperations":[],
                 "mappingSha256":pin,"routeAuthorityRootSha256":pin,"operationAuthorityRootSha256":pin});
         }
         validate_policy_schema(&raw).unwrap();
@@ -216,17 +216,17 @@ fn x_post_signed_v2_authority_is_write() {
     let pin=|value:&Value| sha256_prefixed(policy_route_authority::canonical(value).unwrap().as_bytes());
     let mut raw=policy(); raw["apiVersion"]=json!(policy_route_authority::BUNDLE);
     let operations=json!([{"operationName":OPERATION,"operation":"write","requestAuthorityClass":"write"}]);
-    let profile=json!({"apiVersion":"serverware.compiledRouteAuthority/v1","routeSha256":sha256_prefixed(b"route:test"),
+    let profile=json!({"apiVersion":"catchplate.compiledRouteAuthority/v1","routeSha256":sha256_prefixed(b"route:test"),
         "signedRouteSha256":pin(&raw["routes"][0]),"adapterType":ADAPTER,"operations":operations,
         "signedPrincipalsSha256":pin(&raw["principals"]),"signedCredentialsSha256":pin(&raw["credentials"]),
         "signedDefaultsSha256":pin(&raw["defaults"]),"principalSha256s":[sha256_prefixed(b"agent:test")]});
     let profile_pin=pin(&profile); let profiles=json!([{"routeId":"route:test","compiledSemanticProfileSha256":profile_pin,"profile":profile}]);
     let entries=json!([{"routeSha256":profile["routeSha256"],"compiledSemanticProfileSha256":profile_pin,
         "operationName":OPERATION,"operation":"write","requestAuthorityClass":"write"}]);
-    raw["routeAuthority"]=json!({"apiVersion":"serverware.compiledRouteAuthority/v1","genericOperations":[],
-        "mappingSha256":pin(&json!({"apiVersion":"serverware.compiledRouteAuthority/v1","profiles":profiles})),
-        "routeAuthorityRootSha256":pin(&json!({"apiVersion":"serverware.compiledRouteAuthorityRoutes/v1","profiles":profiles})),
-        "operationAuthorityRootSha256":pin(&json!({"apiVersion":"serverware.compiledRouteAuthorityOperations/v1","operations":entries}))});
+    raw["routeAuthority"]=json!({"apiVersion":"catchplate.compiledRouteAuthority/v1","genericOperations":[],
+        "mappingSha256":pin(&json!({"apiVersion":"catchplate.compiledRouteAuthority/v1","profiles":profiles})),
+        "routeAuthorityRootSha256":pin(&json!({"apiVersion":"catchplate.compiledRouteAuthorityRoutes/v1","profiles":profiles})),
+        "operationAuthorityRootSha256":pin(&json!({"apiVersion":"catchplate.compiledRouteAuthorityOperations/v1","operations":entries}))});
     let held=snapshot(); let compiled=policy_route_authority::admit(&raw,&held.routes).unwrap().unwrap();
     assert!(compiled.binding(&held.principals[0],&held.routes[0],&json!({"operation":OPERATION})).is_ok());
     raw["routeAuthority"]["genericOperations"]=json!([{"routeId":"route:test","operationName":OPERATION,"operation":"read"}]);

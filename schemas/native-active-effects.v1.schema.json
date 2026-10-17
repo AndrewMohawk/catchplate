@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-active-effects.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-active-effects.v1.schema.json",
   "$ref": "#/$defs/bridgeSelection",
   "description": "Closed required ordinary-request effect successor. Schema is not authority: actual independently assigned keys, signed full originals, genuine generation/opening, stored core, retained cleanup permit and three durable service transitions are mandatory. Unchanged 8 MiB whole-message/128 stored objects/32 MiB aggregate limits; original deadlines never renew. Old profiles unchanged.",
   "$defs": {
@@ -70,7 +70,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeSpoolServices/v3"
+          "const": "catchplate.nativeSpoolServices/v3"
         },
         "headGrantOriginal": {
           "type": "string",
@@ -173,7 +173,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.nativeShadowDispatchBarrierServiceAssignment/v1"
+              "const": "catchplate.nativeShadowDispatchBarrierServiceAssignment/v1"
             },
             "purpose": {
               "const": "native-dispatch-barrier"
@@ -252,7 +252,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.nativeShadowActiveEffectBarrierServiceAssignment/v1"
+              "const": "catchplate.nativeShadowActiveEffectBarrierServiceAssignment/v1"
             },
             "purpose": {
               "const": "native-active-effect-barrier"
@@ -331,7 +331,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.nativeShadowActiveEffectCommitServiceAssignment/v1"
+              "const": "catchplate.nativeShadowActiveEffectCommitServiceAssignment/v1"
             },
             "purpose": {
               "const": "native-active-effect-commit"
@@ -425,7 +425,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeSpoolHeadGrant/v3"
+          "const": "catchplate.nativeSpoolHeadGrant/v3"
         },
         "purpose": {
           "const": "native-shared-spool-head"
@@ -503,7 +503,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeSpoolCurrentGrant/v3"
+          "const": "catchplate.nativeSpoolCurrentGrant/v3"
         },
         "purpose": {
           "const": "native-spool-current-signature"
@@ -566,7 +566,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeActiveEffectCleanupGrant/v1"
+          "const": "catchplate.nativeActiveEffectCleanupGrant/v1"
         },
         "purpose": {
           "const": "native-active-effect-cleanup"
@@ -640,7 +640,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeLedgerSpoolRetrievalGrant/v3"
+          "const": "catchplate.nativeLedgerSpoolRetrievalGrant/v3"
         },
         "purpose": {
           "const": "native-ledger-spool-retrieval"
@@ -727,7 +727,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowDispatchBarrierGuestLaunch/v1"
+          "const": "catchplate.nativeShadowDispatchBarrierGuestLaunch/v1"
         },
         "keyAdmission": {
           "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
@@ -747,7 +747,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowActiveEffectBarrierGuestLaunch/v1"
+          "const": "catchplate.nativeShadowActiveEffectBarrierGuestLaunch/v1"
         },
         "keyAdmission": {
           "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
@@ -767,7 +767,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowActiveEffectCommitGuestLaunch/v1"
+          "const": "catchplate.nativeShadowActiveEffectCommitGuestLaunch/v1"
         },
         "keyAdmission": {
           "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
@@ -787,7 +787,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowRetrievalGuestLaunch/v4"
+          "const": "catchplate.nativeShadowRetrievalGuestLaunch/v4"
         },
         "keyAdmission": {
           "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
@@ -807,7 +807,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeProofBridgeLaunch/v5"
+          "const": "catchplate.nativeProofBridgeLaunch/v5"
         },
         "keyAdmission": {
           "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
@@ -878,7 +878,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.policyCustodyProductionDispatch/v4"
+          "const": "catchplate.policyCustodyProductionDispatch/v4"
         },
         "operation": {
           "enum": [
@@ -941,7 +941,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.policyCustodyProductionDispatch/v4"
+          "const": "catchplate.policyCustodyProductionDispatch/v4"
         },
         "kind": {
           "enum": [
@@ -986,7 +986,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.policyCustodyProductionDispatch/v4"
+          "const": "catchplate.policyCustodyProductionDispatch/v4"
         },
         "kind": {
           "const": "active-effect-permit"
@@ -1034,7 +1034,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.policyCustodyProductionDispatch/v4"
+          "const": "catchplate.policyCustodyProductionDispatch/v4"
         },
         "kind": {
           "const": "active-effect-permit"
@@ -1266,7 +1266,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeActiveEffectAllocation/v1"
+          "const": "catchplate.nativeActiveEffectAllocation/v1"
         },
         "authorityEpoch": {
           "$ref": "#/$defs/epoch"
@@ -1345,7 +1345,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeActiveEffectCore/v1"
+          "const": "catchplate.nativeActiveEffectCore/v1"
         },
         "request": {
           "$ref": "#/$defs/dispatch"
@@ -1414,7 +1414,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeActiveEffectStorage/v1"
+          "const": "catchplate.nativeActiveEffectStorage/v1"
         },
         "guest": {
           "$ref": "#/$defs/guest"
@@ -1510,7 +1510,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeActiveEffectCleanupCommand/v1"
+          "const": "catchplate.nativeActiveEffectCleanupCommand/v1"
         },
         "completion": {
           "$ref": "#/$defs/completion"

@@ -231,7 +231,7 @@ cbor2==5.9.0 \
     --hash=sha256:fb7afe77f8d269e42d7c4b515c6fd14f1ccc0625379fb6829b269f493d16eddd \
     --hash=sha256:fbb06f34aa645b4deca66643bba3d400d20c15312d1fe88d429be60c1ab50f27 \
     --hash=sha256:fbdcf4d74acbeb7672e6413e81cd2c1ced1a4a8cf949484ac54e9af5265c3c72
-    # via -r /tmp/serverware-requirements.proxy-test.in
+    # via -r /tmp/catchplate-requirements.proxy-test.in
 certifi==2026.7.22 \
     --hash=sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775 \
     --hash=sha256:741e2c3b351ddf169a738da9f2c048608ff7f2c5cc02f1ebc6b118bb090d5d55
@@ -392,7 +392,7 @@ cryptography==44.0.3 \
 fastapi==0.136.1 \
     --hash=sha256:7af665ad7acfa0a3baf8983d393b6b471b9da10ede59c60045f49fbc89a0fa7f \
     --hash=sha256:a6e9d7eeada96c93a4d69cb03836b44fa34e2854accb7244a1ece36cd4781c3f
-    # via -r /tmp/serverware-requirements.proxy-test.in
+    # via -r /tmp/catchplate-requirements.proxy-test.in
 flask==3.1.0 \
     --hash=sha256:5f873c5184c897c8d9d1b05df1e3d01b14910ce69607a117bd3277098a5836ac \
     --hash=sha256:d667207822eb83f1c4b50949b1623c8fc8d51f2341d65f72e1a1815397551136
@@ -485,7 +485,7 @@ jinja2==3.1.6 \
 jsonschema==4.23.0 \
     --hash=sha256:d71497fef26351a33265337fa77ffeb82423f3ea21283cd9467bb03999266bc4 \
     --hash=sha256:fbadb6f8b144a8f8cf9f0b89ba94501d143e50411a1278633f56a7acf7fd5566
-    # via -r /tmp/serverware-requirements.proxy-test.in
+    # via -r /tmp/catchplate-requirements.proxy-test.in
 jsonschema-specifications==2025.9.1 \
     --hash=sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe \
     --hash=sha256:b540987f239e745613c7a9176f3edb72b832a4ac465cf02712288397832b5e8d
@@ -593,7 +593,7 @@ markupsafe==3.0.3 \
     #   werkzeug
 mitmproxy==11.0.2 \
     --hash=sha256:95db7b57b21320a0c76e59e1d6644daaa431291cdf89419608301424651199b4
-    # via -r /tmp/serverware-requirements.proxy-test.in
+    # via -r /tmp/catchplate-requirements.proxy-test.in
 mitmproxy-rs==0.10.7 \
     --hash=sha256:0959a540766403222464472b64122ac8ccbca66b5f019154496b98e62482277f \
     --hash=sha256:5a95503f57c1d991641690d6e0a9a3e4df484832bed1da1e81b6cf53acf18f75 \
@@ -674,7 +674,7 @@ passlib==1.7.4 \
 psycopg==3.2.3 \
     --hash=sha256:644d3973fe26908c73d4be746074f6e5224b03c1101d302d9a53bf565ad64907 \
     --hash=sha256:a5764f67c27bec8bfac85764d23c534af2c27b893550377e37ce59c12aac47a2
-    # via -r /tmp/serverware-requirements.proxy-test.in
+    # via -r /tmp/catchplate-requirements.proxy-test.in
 psycopg-binary==3.2.3 \
     --hash=sha256:0463a11b1cace5a6aeffaf167920707b912b8986a9c7920341c75e3686277920 \
     --hash=sha256:05a1bdce30356e70a05428928717765f4a9229999421013f41338d9680d03a63 \
@@ -920,7 +920,7 @@ python-dotenv==1.2.2 \
 python-multipart==0.0.31 \
     --hash=sha256:8408153d68a9773291fc1da39a8b85a50044bddbabd2dd72e9229776b7b15e28 \
     --hash=sha256:fc631183bb13e56db3158a4909908dfb2e23565286744e798241e63750e5d680
-    # via -r /tmp/serverware-requirements.proxy-test.in
+    # via -r /tmp/catchplate-requirements.proxy-test.in
 pyyaml==6.0.3 \
     --hash=sha256:00c4bdeba853cc34e7dd471f16b4114f4162dc03e6b7afcc2128711f0eca823c \
     --hash=sha256:0150219816b6a1fa26fb4699fb7daa9caf09eb1999f3b70fb6e786805e80375a \
@@ -1240,7 +1240,7 @@ urwid==2.6.16 \
 uvicorn==0.34.0 \
     --hash=sha256:023dc038422502fa28a09c7a30bf2b6991512da7dcdb8fd35fe57cfc154126f4 \
     --hash=sha256:404051050cd7e905de2c9a7e61790943440b3416f49cb409f965d9dcd0fa73e9
-    # via -r /tmp/serverware-requirements.proxy-test.in
+    # via -r /tmp/catchplate-requirements.proxy-test.in
 uvloop==0.22.1 \
     --hash=sha256:017bd46f9e7b78e81606329d07141d3da446f8798c6baeec124260e22c262772 \
     --hash=sha256:0530a5fbad9c9e4ee3f2b33b148c6a64d47bbad8000ea63704fa8260f4cf728e \

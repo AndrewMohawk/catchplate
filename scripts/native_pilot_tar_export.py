@@ -245,7 +245,7 @@ def materialize(archive: Path, destination: Path) -> dict:
                 os.close(root)
         finally:
             os.close(fd)
-    return {"apiVersion": "serverware.nativePilotRawRuntimeMaterialization/v1",
+    return {"apiVersion": "catchplate.nativePilotRawRuntimeMaterialization/v1",
             "archiveSha256": digest, "archiveBytes": before.st_size,
             "entryCount": len(records), "regularBytes": total,
             "hostOwnership": "caller-owned staging; archive UID/GID not installed",

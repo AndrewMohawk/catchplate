@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/release-completion-result-signing-request.v1.schema.json",
-  "title": "Serverware Release Completion Result Signing Request v1",
+  "$id": "https://catchplate.invalid/schemas/release-completion-result-signing-request.v1.schema.json",
+  "title": "Catchplate Release Completion Result Signing Request v1",
   "$comment": "Closed, language-neutral handoff of the exact non-actionable final-v1 result core to an external HSM, KMS, or TEE signer. Structural validation does not recompute deterministic digests or canonical bytes, authenticate the embedded public-Nitro result, establish caller-pinned provider/key/SPKI/role-registry trust, accept a signature, or authorize an action. The native verifier must require exact deterministic request identity before finalization.",
   "type": "object",
   "additionalProperties": false,
@@ -25,7 +25,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.releaseCompletionResultSigningRequest/v1"
+      "const": "catchplate.releaseCompletionResultSigningRequest/v1"
     },
     "kind": {
       "const": "ReleaseCompletionResultSigningRequest"
@@ -38,7 +38,7 @@
     "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"},
     "globalRoleRegistrySha256": {"$ref": "#/$defs/sha256"},
     "resultCore": {
-      "$ref": "https://serverware.invalid/schemas/release-completion-verification.v1.schema.json#/$defs/resultCore"
+      "$ref": "https://catchplate.invalid/schemas/release-completion-verification.v1.schema.json#/$defs/resultCore"
     },
     "resultSha256": {"$ref": "#/$defs/sha256"},
     "signingBytesBase64url": {

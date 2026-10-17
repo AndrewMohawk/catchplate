@@ -24,8 +24,8 @@ sys.path.insert(0, str(_SCRIPT))
 sys.path.insert(0, str(_SCRIPT.parent.parent))
 
 import native_pilot_authority_io as io
-from serverware import native_pilot_closure_authority as authority
-from serverware import native_shadow_nitro_originals as originals
+from catchplate import native_pilot_closure_authority as authority
+from catchplate import native_shadow_nitro_originals as originals
 
 p = authority.p
 

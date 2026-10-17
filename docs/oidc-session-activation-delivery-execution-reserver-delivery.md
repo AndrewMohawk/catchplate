@@ -9,9 +9,9 @@ empty supplementary groups, and admits only control-plane peer `65532:65532`.
 ## Fixed originals and descriptors
 
 The listener is
-`/run/serverware/oidc-session-activation-delivery-execution/reserver.sock`, under
+`/run/catchplate/oidc-session-activation-delivery-execution/reserver.sock`, under
 the socket-activation name
-`serverware-oidc-session-activation-delivery-execution-reserver`. Its pathname
+`catchplate-oidc-session-activation-delivery-execution-reserver`. Its pathname
 must be owned by `65499:65532`, mode `0660`; root creates the kernel listener.
 Kernel listener peer `0:0` denotes socket-activation provenance, not the UID of
 the process serving a request.
@@ -32,17 +32,17 @@ the process serving a request.
 | 209 | Existing reservation journal directory | Not a byte original |
 
 The six root trust files are below
-`/run/serverware/oidc-session-activation-delivery-execution-reserver-trust/`:
+`/run/catchplate/oidc-session-activation-delivery-execution-reserver-trust/`:
 `root-public-key.pem`, `bootstrap.json`, `custody.json`, `planner-bootstrap.json`,
 `planner-history-custody.json`, `receiving-history-custody.json`.
 The four private paths use the fixed prefix
-`/run/secrets/serverware-oidc-session-activation-delivery-execution-reserver-`
+`/run/secrets/catchplate-oidc-session-activation-delivery-execution-reserver-`
 and suffixes `execution-bundle-key`, `historical-bundle-key`, `delivery-key`,
 `computation-key`. The actual AES bytes must match the independently admitted
 purpose pins; this is not permission to generate replacement keys.
 
 The journal directory is
-`/var/lib/serverware/oidc-session-activation-delivery-execution-reservations`,
+`/var/lib/catchplate/oidc-session-activation-delivery-execution-reservations`,
 owned by `65499:65499`, mode `0700`. Its no-follow path and descriptor must match
 the signed device/inode pins. Opening it does not create, reset or adopt a
 journal checkpoint. No grant signer, planner signer, journal encryption key,

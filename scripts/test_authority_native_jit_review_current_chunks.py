@@ -17,8 +17,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_native_jit_review_current_chunks as source
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_native_jit_review_current_chunks as source
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
 
 QUERIES = (
@@ -92,7 +92,7 @@ class NativeJitReviewCurrentChunkControls(unittest.TestCase):
                     sql, params = source.chunk_query(operation, query(slot, operation), ordinal=0, work=meter())
                     self.assertEqual(params, (value,))
                     self.assertIs(type(params[0]), int if slot == 4 else str)
-                    self.assertIn(f"FROM serverware_metadata.{table} AS target", sql)
+                    self.assertIn(f"FROM catchplate_metadata.{table} AS target", sql)
                     self.assertIn(f"WHERE target.{column} IS NOT DISTINCT FROM %s LIMIT 2", sql)
                     self.assertIn("AS MATERIALIZED", sql)
                     self.assertIn("pg_catalog.to_jsonb(target)", sql)

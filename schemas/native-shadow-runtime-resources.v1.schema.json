@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-runtime-resources.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-runtime-resources.v1.schema.json",
   "title": "Explicit runtime attestation verifier originals",
   "$ref": "#/$defs/configuration",
   "$defs": {
@@ -9,7 +9,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","profile","policyFd","policySha256","trustRootsFd","trustRootsSha256","signingKeyFd"],
       "properties": {
-        "apiVersion":{"const":"serverware.nativeShadowRuntimeResources/v1"},
+        "apiVersion":{"const":"catchplate.nativeShadowRuntimeResources/v1"},
         "profile":{"const":"trusted-host-local"},
         "policyFd":{"$ref":"#/$defs/fd"},
         "policySha256":{"$ref":"native-shadow-workers.v1.schema.json#/$defs/sha256"},

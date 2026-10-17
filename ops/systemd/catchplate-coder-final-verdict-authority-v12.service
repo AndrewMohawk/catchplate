@@ -1,0 +1,46 @@
+[Unit]
+Description=Catchplate Coder v12 final-verdict authority
+PartOf=catchplate-coder-v12.target
+After=local-fs.target catchplate-coder-runtime-v12.service catchplate-coder-final-verdict-authority-v12.socket catchplate-coder-receipt-authority-v12.service
+Requires=catchplate-coder-runtime-v12.service catchplate-coder-final-verdict-authority-v12.socket catchplate-coder-receipt-authority-v12.service
+Before=catchplate-coder-controller-v12.service
+RequiresMountsFor=/var/lib/catchplate/coder-controller-v12
+
+[Service]
+Type=notify
+User=catchplate-coder-verdict
+Group=catchplate-coder-verdict
+SupplementaryGroups=catchplate-coder-verdict-api catchplate-coder-receipt-api
+UMask=0077
+LoadCredentialEncrypted=final-verdict-authority-key:@RELEASE_ROOT@/credentials/final-verdict-authority-key.cred
+Sockets=catchplate-coder-final-verdict-authority-v12.socket
+Environment=CATCHPLATE_FINAL_VERDICT_AUTHORITY_CONFIG=@RELEASE_ROOT@/config/final-verdict-authority-v12.conf
+ExecStart=@RELEASE_ROOT@/bin/catchplate-coder-final-verdict-authority-v12
+ExecStop=/bin/kill -TERM $MAINPID
+Restart=on-failure
+RestartSec=2s
+TimeoutStartSec=30s
+TimeoutStopSec=45s
+KillMode=control-group
+SendSIGKILL=yes
+FinalKillSignal=SIGKILL
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+ReadWritePaths=/run/catchplate/coder/v12/final-verdict-authority /var/lib/catchplate/coder-controller-v12/final-verdict-authority
+
+[Install]
+WantedBy=catchplate-coder-v12.target

@@ -15,7 +15,7 @@ pub(in crate::policy_shadow::policy_custody::services) struct Sample {
 impl Sample {
     pub(in crate::policy_shadow::policy_custody::services) fn interval_at(&self,at:u64)->Result<(i64,i64),ShadowError> {
         let sample=decimal(&self.sampled_at_boottime_ns)?;
-        require(self.api_version=="serverware.nativeShadowTrustedTimeSample/v1"
+        require(self.api_version=="catchplate.nativeShadowTrustedTimeSample/v1"
             && self.purpose=="native-shadow-trusted-time-sample" && at>=sample
             && at<decimal(&self.lifetime_deadline_boottime_ns)?
             && self.maximum_clock_rate_error_ppm<=10_000

@@ -33,7 +33,7 @@ CONNECT, DENIED = "data_plane.connect.established", "data_plane.connect.denied"
 LEASE = "data_plane.credential_lease.issued"
 REJECTED = "data_plane.credential_lease.rejected"
 SUCCESS = b'{"pages":2,"messages_read":2,"more_pages":false}\n'
-DENIAL = b"Gmail list failed; inspect Serverware audit records and the saved permission (no automatic retry)\n"
+DENIAL = b"Gmail list failed; inspect Catchplate audit records and the saved permission (no automatic retry)\n"
 
 
 def provider_documents():
@@ -160,7 +160,7 @@ def grant_failure_rows(wire):
             "resource_id": uid(4), "application_id": uid(2), "credential_id": CREDENTIAL,
             "revision": 5, "policy_sequence": 2, "policy_hash": SCOPE[2]}}
     failure = {"id": sha(701), "event_hash": sha(701), "created_at": "2026-10-11T22:05:51+00:00",
-        "event_type": checker.RELOAD_FAILED, "event": {"component": "serverware-decision-gate-rs",
+        "event_type": checker.RELOAD_FAILED, "event": {"component": "catchplate-decision-gate-rs",
             "active_policy_hash": GRANT["previous_policy_hash"], "error": "policy_reload_failed",
             "error_sha256": "sha256:35819006a1b3c481018dbc9e8bd0d1753fe7cf725ae7c248a5f47d1f36186b93"}}
     reload = {"id": sha(702), "event_hash": sha(702), "created_at": "2026-10-11T22:05:52+00:00",
@@ -184,7 +184,7 @@ def success_result(wire):
     expiry = receiver.EPOCH_MS + 90_000
     stages = (("fresh", 0, 0, 0), ("connected", 1, 0, 0), ("first", 1, 0, 4),
               ("expired", 1, 0, 4), ("refreshed", 1, 1, 8))
-    return {"schema": "serverware.privateGmailSdkCheck/v1", "ok": True, "syntheticOnly": True,
+    return {"schema": "catchplate.privateGmailSdkCheck/v1", "ok": True, "syntheticOnly": True,
         "actualExampleEntrypoint": True, "auditChainVerified": True, "separateOuterInnerTrust": True,
         "catalogUnchangedAcrossRefresh": True, "realGoogleVerified": False, "browserUiVerified": False,
         "productionReady": False, "hardwareVerified": False, "publicDnsVerified": False,
@@ -255,7 +255,7 @@ class GmailSdkCheckerTests(unittest.TestCase):
             row["requestHeaders"][name] = value
             # Recompute the altered record's public commitment: rejection must
             # bind the exact supported wire, not merely detect a stale hash.
-            public = {"schema": "serverware.privateGmailSdkRequest/v1", "method": "GET",
+            public = {"schema": "catchplate.privateGmailSdkRequest/v1", "method": "GET",
                 "authority": "gmail.googleapis.com", "path": row["path"], "rawQuery": row["rawQuery"],
                 "headers": row["requestHeaders"], "bodySha256": receiver.digest(b""), "bodyBytes": 0}
             row["requestCommitment"] = receiver.digest(receiver.encoded(public))
@@ -571,15 +571,15 @@ class GmailSdkCheckerTests(unittest.TestCase):
         with patch.dict(os.environ, {"HTTPS_PROXY": "secret-canary", "GOOGLE_APPLICATION_CREDENTIALS": "secret-canary",
                 "SSL_CERT_FILE": "secret-canary", "GODEBUG": "secret-canary"}):
             normal = checker.client_environment(uid(2), "a" * 43, "first")
-        self.assertEqual(normal, {"LANG": "C.UTF-8", "SERVERWARE_PROXY_URL": "https://proxy.operator-basic.example.test:8443",
-            "SERVERWARE_APP_ID": uid(2), "SERVERWARE_PROXY_TOKEN": "a" * 43,
-            "SERVERWARE_CA_FILE": "/client-trust/inner-ca.pem", "SERVERWARE_PROXY_CA_FILE": "/client-trust/outer-ca.pem"})
+        self.assertEqual(normal, {"LANG": "C.UTF-8", "CATCHPLATE_PROXY_URL": "https://proxy.operator-basic.example.test:8443",
+            "CATCHPLATE_APP_ID": uid(2), "CATCHPLATE_PROXY_TOKEN": "a" * 43,
+            "CATCHPLATE_CA_FILE": "/client-trust/inner-ca.pem", "CATCHPLATE_PROXY_CA_FILE": "/client-trust/outer-ca.pem"})
         self.assertNotIn("secret-canary", str(normal))
         outer = checker.client_environment(uid(2), "a" * 43, "wrong_outer_ca")
         inner = checker.client_environment(uid(2), "a" * 43, "wrong_inner_ca")
-        self.assertEqual((outer["SERVERWARE_CA_FILE"], outer["SERVERWARE_PROXY_CA_FILE"]),
+        self.assertEqual((outer["CATCHPLATE_CA_FILE"], outer["CATCHPLATE_PROXY_CA_FILE"]),
             ("/client-trust/outer-ca.pem", "/client-trust/inner-ca.pem"))
-        self.assertEqual((inner["SERVERWARE_CA_FILE"], inner["SERVERWARE_PROXY_CA_FILE"]),
+        self.assertEqual((inner["CATCHPLATE_CA_FILE"], inner["CATCHPLATE_PROXY_CA_FILE"]),
             ("/client-trust/outer-ca.pem", "/client-trust/combined-ca.pem"))
 
     def test_closed_success_receipt_rejects_changed_claims_counts_pins_and_evidence(self):

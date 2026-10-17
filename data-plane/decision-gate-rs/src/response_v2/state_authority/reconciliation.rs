@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 pub const READINESS_API_VERSION: &str =
-    "serverware.responseV2.stateAuthorityReadiness/v1";
+    "catchplate.responseV2.stateAuthorityReadiness/v1";
 pub const READINESS_KIND: &str =
-    "ServerwareResponseV2StateAuthorityReadiness";
+    "CatchplateResponseV2StateAuthorityReadiness";
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

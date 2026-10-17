@@ -97,7 +97,7 @@ def load_pinned_nitro_verifier(module_input: Any) -> types.ModuleType:
     actual = "sha256:" + hashlib.sha256(raw).hexdigest()
     if actual != expected:
         raise RuntimeError("pinned Nitro verifier module SHA-256 mismatch")
-    module_name = "serverware_pinned_verify_nitro_tee"
+    module_name = "catchplate_pinned_verify_nitro_tee"
     module = types.ModuleType(module_name)
     module.__file__ = path_raw
     module.__package__ = ""
@@ -113,20 +113,20 @@ def load_pinned_nitro_verifier(module_input: Any) -> types.ModuleType:
 nitro: types.ModuleType
 
 
-REQUEST_VERSION = "serverware.responseObservationV2AttestationVerifyRequest/v2"
-RESULT_VERSION = "serverware.responseObservationV2AttestationVerifyResult/v2"
+REQUEST_VERSION = "catchplate.responseObservationV2AttestationVerifyRequest/v2"
+RESULT_VERSION = "catchplate.responseObservationV2AttestationVerifyResult/v2"
 EXPECTATIONS_VERSION = (
-    "serverware.responseObservationV2NitroVerifierExpectations/v1"
+    "catchplate.responseObservationV2NitroVerifierExpectations/v1"
 )
 FRESH_ATTESTATION_VERSION = (
-    "serverware.responseObservationFreshResponseAttestation/v1"
+    "catchplate.responseObservationFreshResponseAttestation/v1"
 )
 FRESH_ATTESTATION_SIGNATURE_DOMAIN = (
-    b"serverware.response-v2/fresh-hardware-proof/v1\0"
+    b"catchplate.response-v2/fresh-hardware-proof/v1\0"
 )
-NITRO_EVIDENCE_FORMAT = "serverware.teeEvidence.nitroDocumentBundle.cbor/v1"
-REPORT_DATA_DOMAIN = b"serverware.response-v2/fresh-tee-report-data/v1"
-NITRO_USER_DATA_PREFIX = b"serverware.response-v2/nitro-user-data/v1\0"
+NITRO_EVIDENCE_FORMAT = "catchplate.teeEvidence.nitroDocumentBundle.cbor/v1"
+REPORT_DATA_DOMAIN = b"catchplate.response-v2/fresh-tee-report-data/v1"
+NITRO_USER_DATA_PREFIX = b"catchplate.response-v2/nitro-user-data/v1\0"
 MAX_REQUEST_BYTES = 256 * 1024
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 SHA384_RE = re.compile(r"^sha384:[0-9a-f]{96}$")

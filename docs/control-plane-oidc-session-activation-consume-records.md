@@ -35,7 +35,7 @@ One separate logical consume claim has at most seventeen physical files:
 
 The fixed slot identity frames both the finalization locator and the genuine
 activation authorization identity under
-`serverware.controlPlaneOidcSessionActivationConsumeSlot/v1`. A separate
+`catchplate.controlPlaneOidcSessionActivationConsumeSlot/v1`. A separate
 finalization-target index rejects a second claim even if the authorization
 changes. The caller derives that authorization digest from its actual signed
 original, not a selected future plan. Neither source revision, clock nor token

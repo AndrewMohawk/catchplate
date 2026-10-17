@@ -123,7 +123,7 @@ then exposed the shared image builder missing from both inventories. Commit
 The complete focused pass above ran once after that correction.
 
 Exact source archives, commands, harnesses, logs and checksums are retained at
-`codex-offload/serverware/engineering-builds/bd69e925-supervisor-executable-Qj6hRl/`.
+`codex-offload/catchplate/engineering-builds/bd69e925-supervisor-executable-Qj6hRl/`.
 The tested Git archive SHA-256 is
 `cc1534255c99a846d90fd1b2b66b8bd7e641d778e0e57c663b3ff95cf5ca0ed9`.
 

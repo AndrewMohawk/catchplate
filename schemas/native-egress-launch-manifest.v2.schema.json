@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-egress-launch-manifest.v2.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-egress-launch-manifest.v2.schema.json",
   "title": "Explicit native new-execution launch association v2",
   "description": "Exact four-field canonical sorted compact ASCII JSON using the ensure_ascii codec, including DEL escaping, with no LF and at most 4096 original bytes. This artifact is selected only by the separately admitted native-egress-new-execution-v1 cold profile and a v4 egress grant. Schema validity or digest equality is not current filesystem/ELF/launcher custody, child creation, a start permit or runtime success. The old launch-manifest/v1 executable/argv/environment contract remains strict and is never synthesized for this profile.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "profile", "executionManifestSha256", "launcherBinarySha256"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeEgressLaunchManifest/v2"},
+    "apiVersion": {"const": "catchplate.nativeEgressLaunchManifest/v2"},
     "profile": {"const": "native-egress-new-execution-v1"},
     "executionManifestSha256": {
       "$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/digest",

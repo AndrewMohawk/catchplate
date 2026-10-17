@@ -19,14 +19,14 @@ from uuid import UUID
 
 from requests.adapters import HTTPAdapter
 
-PLACEHOLDER = "serverware-x-post-placeholder-v1"  # Public, never a provider token.
+PLACEHOLDER = "catchplate-x-post-placeholder-v1"  # Public, never a provider token.
 BASE_URL = "https://api.x.com"
 PINS = {"xdk": "0.10.6", "requests": "2.34.2", "urllib3": "2.8.0",
     "certifi": "2026.7.22", "pydantic": "2.13.4", "requests-oauthlib": "2.0.0"}
 FAILURE = "X post preparation failed; no post was attempted by this invocation."
 UNKNOWN = "X post outcome unknown. Do not replay; check the operator audit and X before any new action."
-REQUIRED_ENV = ("SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID", "SERVERWARE_PROXY_TOKEN",
-    "SERVERWARE_CA_FILE", "SERVERWARE_X_POST_TEXT", "SERVERWARE_X_POST_CONFIRM")
+REQUIRED_ENV = ("CATCHPLATE_PROXY_URL", "CATCHPLATE_APP_ID", "CATCHPLATE_PROXY_TOKEN",
+    "CATCHPLATE_CA_FILE", "CATCHPLATE_X_POST_TEXT", "CATCHPLATE_X_POST_CONFIRM")
 MAX_CONFIG_BYTES = 64 * 1024
 
 
@@ -72,13 +72,13 @@ def configuration_environment(config_file, env):
             or value.get("credential_input") != "replace_exact"
             or value.get("response_mode") != "x_post_json_v1"):
         raise ValueError("Invalid X posting configuration scope")
-    selected = {key: env[key] for key in ("SERVERWARE_X_POST_TEXT", "SERVERWARE_X_POST_CONFIRM") if key in env}
-    for field, key in (("application_id", "SERVERWARE_APP_ID"), ("proxy_url", "SERVERWARE_PROXY_URL"),
-            ("proxy_password", "SERVERWARE_PROXY_TOKEN")):
+    selected = {key: env[key] for key in ("CATCHPLATE_X_POST_TEXT", "CATCHPLATE_X_POST_CONFIRM") if key in env}
+    for field, key in (("application_id", "CATCHPLATE_APP_ID"), ("proxy_url", "CATCHPLATE_PROXY_URL"),
+            ("proxy_password", "CATCHPLATE_PROXY_TOKEN")):
         if type(value.get(field)) is not str:
             raise ValueError("Invalid connection value")
         selected[key] = value[field]
-    for field, key in (("ca_file", "SERVERWARE_CA_FILE"), ("proxy_ca_file", "SERVERWARE_PROXY_CA_FILE")):
+    for field, key in (("ca_file", "CATCHPLATE_CA_FILE"), ("proxy_ca_file", "CATCHPLATE_PROXY_CA_FILE")):
         item = value.get(field)
         if field == "proxy_ca_file" and item is None:
             continue
@@ -105,10 +105,10 @@ def text_input(value):
 
 
 def settings(env):
-    if env.get("SERVERWARE_X_POST_CONFIRM") != "post-once":
+    if env.get("CATCHPLATE_X_POST_CONFIRM") != "post-once":
         raise ValueError("Explicit single-post confirmation is required")
-    text = text_input(env.get("SERVERWARE_X_POST_TEXT"))
-    endpoint = env.get("SERVERWARE_PROXY_URL", "")
+    text = text_input(env.get("CATCHPLATE_X_POST_TEXT"))
+    endpoint = env.get("CATCHPLATE_PROXY_URL", "")
     parts = urlsplit(endpoint)
     if (not endpoint.isascii() or any(ord(c) < 33 or c == "\\" for c in endpoint)
             or parts.scheme != "https" or not parts.hostname or parts.username is not None
@@ -116,12 +116,12 @@ def settings(env):
             or "?" in endpoint or "#" in endpoint
             or parts.port is not None and not 1 <= parts.port <= 65535):
         raise ValueError("An explicit credential-free HTTPS proxy is required")
-    app_id, token = env.get("SERVERWARE_APP_ID", ""), env.get("SERVERWARE_PROXY_TOKEN", "")
+    app_id, token = env.get("CATCHPLATE_APP_ID", ""), env.get("CATCHPLATE_PROXY_TOKEN", "")
     if (str(UUID(app_id)) != app_id or not 1 <= len(token) <= 8192
             or not all(33 <= ord(c) <= 126 for c in token)):
-        raise ValueError("A Serverware application login is required")
-    for key in ("SERVERWARE_CA_FILE", "SERVERWARE_PROXY_CA_FILE"):
-        if key == "SERVERWARE_CA_FILE" or key in env:
+        raise ValueError("A Catchplate application login is required")
+    for key in ("CATCHPLATE_CA_FILE", "CATCHPLATE_PROXY_CA_FILE"):
+        if key == "CATCHPLATE_CA_FILE" or key in env:
             value = env.get(key, "")
             if not value or not Path(value).is_absolute():
                 raise ValueError("Explicit absolute CA files are required")
@@ -132,8 +132,8 @@ def settings(env):
 def child_environment(env):
     settings(env)
     child = {key: env[key] for key in REQUIRED_ENV}
-    if "SERVERWARE_PROXY_CA_FILE" in env:
-        child["SERVERWARE_PROXY_CA_FILE"] = env["SERVERWARE_PROXY_CA_FILE"]
+    if "CATCHPLATE_PROXY_CA_FILE" in env:
+        child["CATCHPLATE_PROXY_CA_FILE"] = env["CATCHPLATE_PROXY_CA_FILE"]
     return child
 
 
@@ -169,7 +169,7 @@ def proxy_context(extra=None):
 def request_ca_bundle(path):
     import certifi
     extra = public_ca(path)
-    with tempfile.TemporaryDirectory(prefix="serverware-x-post-ca-") as directory:
+    with tempfile.TemporaryDirectory(prefix="catchplate-x-post-ca-") as directory:
         combined = Path(directory) / "ca.pem"
         with combined.open("xb") as stream:
             os.chmod(combined, 0o600)
@@ -227,8 +227,8 @@ class SinglePostAdapter(HTTPAdapter):
 def configured_client(env):
     from xdk import Client
     text, proxy = settings(env)
-    outer = proxy_context(env.get("SERVERWARE_PROXY_CA_FILE"))
-    with request_ca_bundle(env["SERVERWARE_CA_FILE"]) as bundle:
+    outer = proxy_context(env.get("CATCHPLATE_PROXY_CA_FILE"))
+    with request_ca_bundle(env["CATCHPLATE_CA_FILE"]) as bundle:
         client = Client(base_url=BASE_URL, access_token=PLACEHOLDER)
         try:
             client.session.trust_env = False
@@ -291,9 +291,9 @@ def launch(env):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Create one explicitly confirmed text-only post through Serverware.")
+    parser = argparse.ArgumentParser(description="Create one explicitly confirmed text-only post through Catchplate.")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--config", metavar="PATH", help="Private client JSON downloaded from Serverware")
+    parser.add_argument("--config", metavar="PATH", help="Private client JSON downloaded from Catchplate")
     args = parser.parse_args(argv)
     logging.disable(logging.CRITICAL)
     completed = False

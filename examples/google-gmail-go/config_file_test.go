@@ -20,10 +20,10 @@ func recipeForTest(schema, language string) map[string]any {
 		"access_rule_id":            "22222222-2222-4222-8222-222222222222",
 		"token_expires_at_epoch_ms": configTestNow.Add(time.Hour).UnixMilli(),
 		"environment": map[string]any{
-			"LANG": "ignored-locale", "SERVERWARE_PROXY_URL": "https://proxy.example:443",
-			"SERVERWARE_APP_ID":      "11111111-1111-4111-8111-111111111111",
-			"SERVERWARE_PROXY_TOKEN": strings.Repeat("A", 43), // Public synthetic token.
-			"SERVERWARE_CA_FILE":     "./serverware-ca.pem", "SERVERWARE_PROXY_CA_FILE": "certs/proxy.pem",
+			"LANG": "ignored-locale", "CATCHPLATE_PROXY_URL": "https://proxy.example:443",
+			"CATCHPLATE_APP_ID":      "11111111-1111-4111-8111-111111111111",
+			"CATCHPLATE_PROXY_TOKEN": strings.Repeat("A", 43), // Public synthetic token.
+			"CATCHPLATE_CA_FILE":     "./catchplate-ca.pem", "CATCHPLATE_PROXY_CA_FILE": "certs/proxy.pem",
 			"GOOGLE_APPLICATION_CREDENTIALS": "do-not-read", "GOOGLE_API_USE_CLIENT_CERTIFICATE": "true",
 			"HTTPS_PROXY": "do-not-use", "SSL_CERT_FILE": "do-not-use", "PATH": "do-not-use",
 			"LD_PRELOAD": "do-not-use", "UNKNOWN_DATA": map[string]any{"inert": true},
@@ -34,11 +34,11 @@ func recipeForTest(schema, language string) map[string]any {
 func wrapperForTest(recipe map[string]any) map[string]any {
 	env := recipe["environment"].(map[string]any)
 	return map[string]any{
-		"client_recipe": recipe, "application_id": env["SERVERWARE_APP_ID"],
-		"access_rule_id": recipe["access_rule_id"], "proxy_url": env["SERVERWARE_PROXY_URL"],
-		"proxy_authentication": "basic_and_bearer_v1", "proxy_username": env["SERVERWARE_APP_ID"],
-		"proxy_password": env["SERVERWARE_PROXY_TOKEN"], "token_expires_at_epoch_ms": recipe["token_expires_at_epoch_ms"],
-		"ca_file": env["SERVERWARE_CA_FILE"], "proxy_ca_file": env["SERVERWARE_PROXY_CA_FILE"],
+		"client_recipe": recipe, "application_id": env["CATCHPLATE_APP_ID"],
+		"access_rule_id": recipe["access_rule_id"], "proxy_url": env["CATCHPLATE_PROXY_URL"],
+		"proxy_authentication": "basic_and_bearer_v1", "proxy_username": env["CATCHPLATE_APP_ID"],
+		"proxy_password": env["CATCHPLATE_PROXY_TOKEN"], "token_expires_at_epoch_ms": recipe["token_expires_at_epoch_ms"],
+		"ca_file": env["CATCHPLATE_CA_FILE"], "proxy_ca_file": env["CATCHPLATE_PROXY_CA_FILE"],
 		"operation_bundle": "gmail_read_v1", "methods": []string{"GET"},
 		"upstream_url": "https://gmail.googleapis.com/gmail/v1/users/me/messages",
 	}
@@ -58,7 +58,7 @@ func writeConfiguration(t *testing.T, value any) string {
 }
 
 func TestDownloadedConfigurationAcceptsCommonRecipe(t *testing.T) {
-	for _, schema := range []string{"serverware.gmailSdkClient/v1", "serverware.gmailSdkClient/v2"} {
+	for _, schema := range []string{"catchplate.gmailSdkClient/v1", "catchplate.gmailSdkClient/v2"} {
 		for _, language := range []string{"go", "node", "python"} {
 			for _, wrapped := range []bool{false, true} {
 				t.Run(schema+"/"+language+"/"+map[bool]string{false: "direct", true: "download"}[wrapped], func(t *testing.T) {
@@ -72,8 +72,8 @@ func TestDownloadedConfigurationAcceptsCommonRecipe(t *testing.T) {
 					if err != nil {
 						t.Fatal("valid synthetic recipe was refused", err)
 					}
-					if getenv("LANG") != "C.UTF-8" || getenv("SERVERWARE_CA_FILE") != filepath.Join(filepath.Dir(path), "serverware-ca.pem") ||
-						getenv("SERVERWARE_PROXY_CA_FILE") != filepath.Join(filepath.Dir(path), "certs", "proxy.pem") {
+					if getenv("LANG") != "C.UTF-8" || getenv("CATCHPLATE_CA_FILE") != filepath.Join(filepath.Dir(path), "catchplate-ca.pem") ||
+						getenv("CATCHPLATE_PROXY_CA_FILE") != filepath.Join(filepath.Dir(path), "certs", "proxy.pem") {
 						t.Fatal("connection paths or fixed locale do not match")
 					}
 					for _, key := range []string{"GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_API_USE_CLIENT_CERTIFICATE", "HTTPS_PROXY", "SSL_CERT_FILE", "PATH", "LD_PRELOAD", "UNKNOWN_DATA"} {
@@ -88,43 +88,43 @@ func TestDownloadedConfigurationAcceptsCommonRecipe(t *testing.T) {
 }
 
 func TestDownloadedConfigurationCAPaths(t *testing.T) {
-	recipe := recipeForTest("serverware.gmailSdkClient/v2", "python")
+	recipe := recipeForTest("catchplate.gmailSdkClient/v2", "python")
 	env := recipe["environment"].(map[string]any)
 	absoluteCA := filepath.Join(t.TempDir(), "absolute-ca.pem")
-	env["SERVERWARE_CA_FILE"] = absoluteCA
-	delete(env, "SERVERWARE_PROXY_CA_FILE")
+	env["CATCHPLATE_CA_FILE"] = absoluteCA
+	delete(env, "CATCHPLATE_PROXY_CA_FILE")
 	wrapped := wrapperForTest(recipe)
 	wrapped["proxy_ca_file"] = nil // The actual download uses null when absent.
 	path := writeConfiguration(t, wrapped)
 	getenv, err := configurationEnvironment([]string{"--config", path}, func(string) string { return "ambient-must-not-be-used" }, configTestNow)
-	if err != nil || getenv("SERVERWARE_CA_FILE") != absoluteCA || getenv("SERVERWARE_PROXY_CA_FILE") != "" {
+	if err != nil || getenv("CATCHPLATE_CA_FILE") != absoluteCA || getenv("CATCHPLATE_PROXY_CA_FILE") != "" {
 		t.Fatal("absolute CA or missing optional proxy CA did not remain explicit")
 	}
 }
 
 func TestDownloadedConfigurationRejectsRecipeErrors(t *testing.T) {
 	cases := map[string]func(map[string]any){
-		"schema":     func(r map[string]any) { r["schema"] = "serverware.gmailSdkClient/v3" },
+		"schema":     func(r map[string]any) { r["schema"] = "catchplate.gmailSdkClient/v3" },
 		"rule":       func(r map[string]any) { r["access_rule_id"] = "not-a-uuid" },
 		"expiry":     func(r map[string]any) { r["token_expires_at_epoch_ms"] = configTestNow.UnixMilli() },
 		"large":      func(r map[string]any) { r["token_expires_at_epoch_ms"] = int64(9007199254740992) },
 		"fractional": func(r map[string]any) { r["token_expires_at_epoch_ms"] = 1800000000000.5 },
-		"app":        func(r map[string]any) { r["environment"].(map[string]any)["SERVERWARE_APP_ID"] = "not-a-uuid" },
-		"token":      func(r map[string]any) { delete(r["environment"].(map[string]any), "SERVERWARE_PROXY_TOKEN") },
-		"bad-token":  func(r map[string]any) { r["environment"].(map[string]any)["SERVERWARE_PROXY_TOKEN"] = "not-a-token" },
+		"app":        func(r map[string]any) { r["environment"].(map[string]any)["CATCHPLATE_APP_ID"] = "not-a-uuid" },
+		"token":      func(r map[string]any) { delete(r["environment"].(map[string]any), "CATCHPLATE_PROXY_TOKEN") },
+		"bad-token":  func(r map[string]any) { r["environment"].(map[string]any)["CATCHPLATE_PROXY_TOKEN"] = "not-a-token" },
 		"proxy": func(r map[string]any) {
-			r["environment"].(map[string]any)["SERVERWARE_PROXY_URL"] = "http://proxy.example"
+			r["environment"].(map[string]any)["CATCHPLATE_PROXY_URL"] = "http://proxy.example"
 		},
-		"ca":         func(r map[string]any) { r["environment"].(map[string]any)["SERVERWARE_CA_FILE"] = "" },
-		"ca-control": func(r map[string]any) { r["environment"].(map[string]any)["SERVERWARE_CA_FILE"] = "ca\n.pem" },
+		"ca":         func(r map[string]any) { r["environment"].(map[string]any)["CATCHPLATE_CA_FILE"] = "" },
+		"ca-control": func(r map[string]any) { r["environment"].(map[string]any)["CATCHPLATE_CA_FILE"] = "ca\n.pem" },
 		"ca-limit": func(r map[string]any) {
-			r["environment"].(map[string]any)["SERVERWARE_CA_FILE"] = strings.Repeat("x", 513)
+			r["environment"].(map[string]any)["CATCHPLATE_CA_FILE"] = strings.Repeat("x", 513)
 		},
-		"outer-ca": func(r map[string]any) { r["environment"].(map[string]any)["SERVERWARE_PROXY_CA_FILE"] = "ca\x00.pem" },
+		"outer-ca": func(r map[string]any) { r["environment"].(map[string]any)["CATCHPLATE_PROXY_CA_FILE"] = "ca\x00.pem" },
 	}
 	for name, modify := range cases {
 		t.Run(name, func(t *testing.T) {
-			recipe := recipeForTest("serverware.gmailSdkClient/v1", "go")
+			recipe := recipeForTest("catchplate.gmailSdkClient/v1", "go")
 			modify(recipe)
 			if _, err := downloadedEnvironment(writeConfiguration(t, recipe), configTestNow); err == nil {
 				t.Fatal("invalid configuration was accepted")
@@ -142,11 +142,11 @@ func TestDownloadedConfigurationRejectsConflictingWrapper(t *testing.T) {
 		"proxy_password": "different", "token_expires_at_epoch_ms": configTestNow.Add(2 * time.Hour).UnixMilli(),
 		"ca_file": "different.pem", "proxy_ca_file": "different.pem", "operation_bundle": "other",
 		"upstream_url": "https://gmail.googleapis.com/gmail/v1/users/other/messages", "methods": []string{"GET", "POST"},
-		"schema": "serverware.gmailSdkClient/v1", "client_recipe": nil,
+		"schema": "catchplate.gmailSdkClient/v1", "client_recipe": nil,
 	}
 	for key, value := range cases {
 		t.Run(key, func(t *testing.T) {
-			wrapped := wrapperForTest(recipeForTest("serverware.gmailSdkClient/v2", "node"))
+			wrapped := wrapperForTest(recipeForTest("catchplate.gmailSdkClient/v2", "node"))
 			wrapped[key] = value
 			if _, err := downloadedEnvironment(writeConfiguration(t, wrapped), configTestNow); err == nil {
 				t.Fatal("conflicting private download was accepted")
@@ -154,7 +154,7 @@ func TestDownloadedConfigurationRejectsConflictingWrapper(t *testing.T) {
 		})
 	}
 	for _, methods := range [][]string{nil, {}, {"POST"}, {"GET", "GET"}} {
-		wrapped := wrapperForTest(recipeForTest("serverware.gmailSdkClient/v1", "go"))
+		wrapped := wrapperForTest(recipeForTest("catchplate.gmailSdkClient/v1", "go"))
 		wrapped["methods"] = methods
 		if _, err := downloadedEnvironment(writeConfiguration(t, wrapped), configTestNow); err == nil {
 			t.Fatal("non-exact GET permission was accepted")
@@ -173,7 +173,7 @@ func TestDownloadedConfigurationRequiresBoundedRegularJSON(t *testing.T) {
 			t.Fatal("invalid JSON file was accepted")
 		}
 	}
-	valid := writeConfiguration(t, recipeForTest("serverware.gmailSdkClient/v1", "go"))
+	valid := writeConfiguration(t, recipeForTest("catchplate.gmailSdkClient/v1", "go"))
 	link := filepath.Join(directory, "symlink.json")
 	if err := os.Symlink(valid, link); err != nil {
 		t.Fatal("could not make synthetic symlink")
@@ -190,7 +190,7 @@ func TestConfigurationArgumentsPreserveEnvironmentDefault(t *testing.T) {
 	if err != nil || getenv("ANY") != "original-ANY" {
 		t.Fatal("default environment behavior changed")
 	}
-	for _, args := range [][]string{{"--config"}, {"--config", ""}, {"other"}, {"--config", "file", "extra"}, {"--serverware-child"}, {"--serverware-child", "--config", "file"}} {
+	for _, args := range [][]string{{"--config"}, {"--config", ""}, {"other"}, {"--config", "file", "extra"}, {"--catchplate-child"}, {"--catchplate-child", "--config", "file"}} {
 		if _, err := configurationEnvironment(args, os.Getenv, configTestNow); err == nil {
 			t.Fatal("unsupported arguments were accepted")
 		}
@@ -212,14 +212,14 @@ func TestConfigurationReplacesSDKProcessEnvironment(t *testing.T) {
 	if err := os.Setenv("GOOGLE_API_USE_CLIENT_CERTIFICATE", "true"); err != nil {
 		t.Fatal("could not set synthetic ambient environment")
 	}
-	recipe := recipeForTest("serverware.gmailSdkClient/v1", "go")
-	delete(recipe["environment"].(map[string]any), "SERVERWARE_PROXY_CA_FILE")
+	recipe := recipeForTest("catchplate.gmailSdkClient/v1", "go")
+	delete(recipe["environment"].(map[string]any), "CATCHPLATE_PROXY_CA_FILE")
 	getenv, err := downloadedEnvironment(writeConfiguration(t, recipe), configTestNow)
 	if err != nil || replaceConfigurationEnvironment(getenv) != nil {
 		t.Fatal("could not select configuration environment")
 	}
 	want := map[string]string{}
-	for _, key := range []string{"LANG", "SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID", "SERVERWARE_PROXY_TOKEN", "SERVERWARE_CA_FILE"} {
+	for _, key := range []string{"LANG", "CATCHPLATE_PROXY_URL", "CATCHPLATE_APP_ID", "CATCHPLATE_PROXY_TOKEN", "CATCHPLATE_CA_FILE"} {
 		want[key] = getenv(key)
 	}
 	actual := map[string]string{}
@@ -236,16 +236,16 @@ func TestConfigurationReplacesSDKProcessEnvironment(t *testing.T) {
 }
 
 func TestOptionalAgePolicyPreservesLegacyAndRestrictedHints(t *testing.T) {
-	legacy := recipeForTest("serverware.gmailSdkClient/v1", "go")
-	legacy["environment"].(map[string]any)["SERVERWARE_GMAIL_MAX_AGE_DAYS"] = "9"
+	legacy := recipeForTest("catchplate.gmailSdkClient/v1", "go")
+	legacy["environment"].(map[string]any)["CATCHPLATE_GMAIL_MAX_AGE_DAYS"] = "9"
 	for _, value := range []map[string]any{legacy, wrapperForTest(legacy)} {
 		getenv, err := downloadedEnvironment(writeConfiguration(t, value), configTestNow)
-		if err != nil || getenv("SERVERWARE_GMAIL_MAX_AGE_DAYS") != "" {
+		if err != nil || getenv("CATCHPLATE_GMAIL_MAX_AGE_DAYS") != "" {
 			t.Fatal("absent top-level age policy inherited a nested recipe hint")
 		}
 	}
 	for _, days := range []int{1, 7, 3650} {
-		wrapped := wrapperForTest(recipeForTest("serverware.gmailSdkClient/v2", "python"))
+		wrapped := wrapperForTest(recipeForTest("catchplate.gmailSdkClient/v2", "python"))
 		wrapped["query_mode"] = "orderedFormV1"
 		wrapped["age_policy"] = map[string]any{"mode": "recent_internal_date_v1", "max_age_days": days}
 		getenv, err := downloadedEnvironment(writeConfiguration(t, wrapped), configTestNow)
@@ -270,7 +270,7 @@ func TestOptionalAgePolicyPreservesLegacyAndRestrictedHints(t *testing.T) {
 			t.Fatal("legacy unrestricted policy changed")
 		}
 	}
-	wrapped := wrapperForTest(recipeForTest("serverware.gmailSdkClient/v2", "python"))
+	wrapped := wrapperForTest(recipeForTest("catchplate.gmailSdkClient/v2", "python"))
 	wrapped["age_policy"] = map[string]any{"mode": "recent_internal_date_v1", "max_age_days": 7}
 	if _, err := downloadedEnvironment(writeConfiguration(t, wrapped), configTestNow); err == nil {
 		t.Fatal("recent policy without ordered query mode accepted")

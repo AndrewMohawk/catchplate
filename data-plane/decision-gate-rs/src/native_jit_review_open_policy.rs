@@ -14,7 +14,7 @@ use std::{collections::BTreeSet, sync::Mutex};
 const MAX_POLICY: usize = 512 * 1024;
 const MAX_CONFIGURATION: usize = 640 * 1024;
 const MAX_INTERVAL: u64 = 86_400_000_000_000;
-const ASSIGNMENT_SCHEMA: &str = "serverware.nativeJitReviewOpeningAssignment/v1";
+const ASSIGNMENT_SCHEMA: &str = "catchplate.nativeJitReviewOpeningAssignment/v1";
 const POLICY_FIELDS: &[&str] = &["schema", "sourceContractDigest", "deploymentId",
     "operationMaxSeconds", "attemptCapacity", "trustRoots", "assignmentAuthorizer",
     "target", "authorizerKey", "commitOwnerKey", "nativeOrigin", "portalOrigin"];
@@ -122,7 +122,7 @@ fn target(value: &Value) -> Result<(), String> {
 
 fn trust(value: &Value) -> Result<(), String> {
     fields(value, &["apiVersion", "awsNitroRootCertificatesPem", "awsNitroCrlsDerBase64url", "nitroCertificateProfile"])?;
-    require(value["apiVersion"] == "serverware.nativeJitReviewOpeningNativeTrustRoots/v1"
+    require(value["apiVersion"] == "catchplate.nativeJitReviewOpeningNativeTrustRoots/v1"
         && value["awsNitroCrlsDerBase64url"] == json!([]) && canonical_ascii_bytes(value)?.len() <= 128 * 1024)?;
     let roots = value["awsNitroRootCertificatesPem"].as_array()
         .filter(|values| !values.is_empty() && values.len() <= 16).ok_or("opening trust roots")?;
@@ -172,12 +172,12 @@ impl Configuration {
     pub fn validate(&self) -> Result<(), String> {
         let policy = self.policy();
         fields(policy, POLICY_FIELDS)?;
-        require(self.api_version == "serverware.nativeJitReviewOpeningStartup/v1"
+        require(self.api_version == "catchplate.nativeJitReviewOpeningStartup/v1"
             && current::digest(&self.control_plane_configuration_digest)
             && (1024..u32::MAX).contains(&self.browser_vsock_port)
             && canonical_ascii_bytes(self)?.len() <= MAX_CONFIGURATION
             && canonical_ascii_bytes(policy)?.len() <= MAX_POLICY
-            && policy["schema"] == "serverware.nativeJitReviewOpeningPolicy/v1"
+            && policy["schema"] == "catchplate.nativeJitReviewOpeningPolicy/v1"
             && current::digest(SOURCE_CONTRACT_DIGEST) && policy["sourceContractDigest"] == SOURCE_CONTRACT_DIGEST
             && deployment(self.deployment_id()))?;
         integer(&policy["operationMaxSeconds"], 1, 30)?;
@@ -204,7 +204,7 @@ impl Configuration {
     pub(super) fn broker_configuration(&self, assignment_original: &str) -> Result<Value, String> {
         self.validate()?;
         assignment_document(assignment_original.as_bytes())?;
-        let value = json!({"apiVersion":"serverware.nativeJitReviewOpenConfiguration/v1",
+        let value = json!({"apiVersion":"catchplate.nativeJitReviewOpenConfiguration/v1",
             "sourceContractDigest":self.policy()["sourceContractDigest"],
             "controlPlaneConfigurationDigest":self.control_plane_configuration_digest,
             "policy":self.policy(), "assignmentOriginal":assignment_original});

@@ -21,8 +21,8 @@ CHECKER = "/app/scripts/check_operator_guided.py"
 BROWSER_DRIVER = "scripts/check_operator_guided_browser.cjs"
 CHECKER_SECONDS, CHECKER_OUTER_SECONDS, PRECHECK_SECONDS = 180, 190, 75
 KEEPER_SECONDS, EDGE_SECONDS = network.KEEPER_SECONDS, network.EDGE_SECONDS
-RUNTIME_SERVICES = {"network", "provider", "serverware", "decision-gate-rs", "edge", "check"}
-LEAVES = (".operator-publication.lock", ".serverware-operator-demo.json",
+RUNTIME_SERVICES = {"network", "provider", "catchplate", "decision-gate-rs", "edge", "check"}
+LEAVES = (".operator-publication.lock", ".catchplate-operator-demo.json",
     "mitmproxy/mitmproxy-ca-cert.pem", "mitmproxy/mitmproxy-ca.pem")
 
 
@@ -35,12 +35,12 @@ def build(source, binary, initializer, root, *, expected_binary_sha256,
         base.require(isinstance(hosted_provision, Path) and hosted_provision.is_absolute()
             and ".." not in hosted_provision.parts, "exact hosted provision path required")
     curl_sha256 = basic.CURL_SHA256 if hosted_profile is None else hosted_profile["curl"]["sha256"]
-    base.require(root.parent == base.SCRATCH and re.fullmatch(r"serverware-guided-private\.[A-Za-z0-9]{6,32}", root.name),
+    base.require(root.parent == base.SCRATCH and re.fullmatch(r"catchplate-guided-private\.[A-Za-z0-9]{6,32}", root.name),
         "fresh guided NVMe fixture root required")
-    template = root.with_name("serverware-proxy-basic-private." + root.name.split(".", 1)[1])
+    template = root.with_name("catchplate-proxy-basic-private." + root.name.split(".", 1)[1])
     config = basic.build(source, binary, initializer, template, "172.16.249.48/28",
         expected_binary_sha256=expected_binary_sha256)
-    config["name"] = "serverware-guided-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
+    config["name"] = "catchplate-guided-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
     config.pop("networks")
     services, runtime = config["services"], root / "runtime"
     for service in services.values():
@@ -71,14 +71,14 @@ def build(source, binary, initializer, root, *, expected_binary_sha256,
             "raise SystemExit(0 if stat.S_ISREG(s.st_mode) and stat.S_IMODE(s.st_mode)==0o400 "
             "and s.st_uid==s.st_gid==10001 and s.st_nlink==1 and 0<s.st_size<=1024 else 1)"],
             "interval": "2s", "timeout": "3s", "retries": 10, "start_period": "3s"}}
-    app, gate = services["serverware"], services["decision-gate-rs"]
+    app, gate = services["catchplate"], services["decision-gate-rs"]
     app["depends_on"] = {"provider": {"condition": "service_healthy"}}
-    app["environment"].update(SERVERWARE_PUBLIC_URL=CONTROL_ORIGIN, SERVERWARE_DECISION_GATE_BASE="http://127.0.0.1:9091",
-        SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED="1")
+    app["environment"].update(CATCHPLATE_PUBLIC_URL=CONTROL_ORIGIN, CATCHPLATE_DECISION_GATE_BASE="http://127.0.0.1:9091",
+        CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED="1")
     for service in (app, gate):
-        service["environment"].update(SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS='["127.0.0.2/32"]',
-            SERVERWARE_OPERATOR_DEMO_PROXY_URL=PROXY_URL)
-    gate["environment"].update(SERVERWARE_DECISION_GATE_HOST="127.0.0.1", SERVERWARE_DECISION_GATE_MANAGEMENT_HOST="127.0.0.1")
+        service["environment"].update(CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS='["127.0.0.2/32"]',
+            CATCHPLATE_OPERATOR_DEMO_PROXY_URL=PROXY_URL)
+    gate["environment"].update(CATCHPLATE_DECISION_GATE_HOST="127.0.0.1", CATCHPLATE_DECISION_GATE_MANAGEMENT_HOST="127.0.0.1")
     gate["healthcheck"] = base.health("http://127.0.0.1:9091/healthz", start=20)
     gate["volumes"] = [mount for mount in gate["volumes"] if mount["target"] != "/data"] + [
         base.bind(runtime / "app-data/gate-runtime", "/data"),

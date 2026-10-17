@@ -36,22 +36,22 @@ sys.path.insert(0, str(ROOT))
 from fastapi import FastAPI, HTTPException
 
 import test_jit_denial_api as route_units
-from serverware import authority_transition_core as core
-from serverware import authority_transition_native_jit_pending as pending
-from serverware import authority_transition_quota as quota
-from serverware.db_common import loads
+from catchplate import authority_transition_core as core
+from catchplate import authority_transition_native_jit_pending as pending
+from catchplate import authority_transition_quota as quota
+from catchplate.db_common import loads
 
 ID, REVIEW = route_units.ID, route_units.REVIEW
 ERROR = "Native decisions require protected continuation authority"
 NATIVE = ("native-jit:" + "a" * 64, "native-jit:malformed", "native-jit", "native-jit-other",
     "NATIVE-JIT:malformed", " \t\r\nNaTiVe-JiT:malformed", "\u2003native-jit:malformed")
 PATHS = ("approve", "webauthn/options", "deny", "deny/webauthn/options")
-DB_TREE = ast.parse((ROOT / "serverware/db.py").read_text())
+DB_TREE = ast.parse((ROOT / "catchplate/db.py").read_text())
 
 
 def native_row():
     """Actual storage projection and native references, with public synthetic inputs."""
-    policy = {"schema": "serverware.jitApproverPolicy/v1", "allowAnyApproverId": False,
+    policy = {"schema": "catchplate.jitApproverPolicy/v1", "allowAnyApproverId": False,
         "allowedApproverIds": [route_units.ACTOR], "requiredRoles": ["approver", "finance"],
         "requireWebAuthn": True, "threshold": 2,
         "credentialPolicy": deepcopy(route_units.ARGUMENTS["approver_credential_policy"])}
@@ -62,7 +62,7 @@ def native_row():
         "operation_digest": None, "pending_ttl_seconds": 300,
         "grant_ttl_seconds": 30, "grant_max_uses": 1, "approver_policy": policy,
         "approver_policy_digest": core.framed_digest(
-            "serverware.jitApproverPolicy/v1", core.canonical_bytes(policy))}
+            "catchplate.jitApproverPolicy/v1", core.canonical_bytes(policy))}
     now = datetime(2099, 1, 1, tzinfo=timezone.utc)
     values = [{"ciphertext_base64url": pending.reference(approval_id=ID,
         parent_digest=route_units.DIGEST, pair_digest="sha256:" + "d" * 64, value_kind=kind),
@@ -96,7 +96,7 @@ class MetadataStore:
                 raise AssertionError("metadata source constant roster changed")
             self.ns[name] = ast.literal_eval(matches[0].value)
         route_units.select(DB_TREE, {"approval_public_summary", "row_to_approval_public",
-            "get_approval_request_metadata"}, self.ns, "serverware/db.py")
+            "get_approval_request_metadata"}, self.ns, "catchplate/db.py")
 
     def close(self):
         self.connection.close()
@@ -304,7 +304,7 @@ class NativeDecisionHTTPTests(unittest.IsolatedAsyncioTestCase):
                 fixture.db.get_approval_request.assert_not_called()
                 fixture.db.issue_approval_review_receipt.assert_not_called()
                 if path.endswith("options"):
-                    self.assertEqual(result["serverware"]["operation"], "jit.deny" if path.startswith("deny") else "jit.decide")
+                    self.assertEqual(result["catchplate"]["operation"], "jit.deny" if path.startswith("deny") else "jit.decide")
                     fixture.db.issue_policy_authority_webauthn_challenge.assert_called_once()
                     fixture.db.approve_request.assert_not_called()
                     fixture.db.deny_request.assert_not_called()

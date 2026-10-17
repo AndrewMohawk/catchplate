@@ -26,8 +26,8 @@ import time
 
 ROOT = "/run/probe/prepared-static-component"
 MOUNT = "/run/probe"
-MARKER = "serverware_prepared_static_component=1"
-SCHEMA = "serverware.preparedStaticKernelComponent/v1"
+MARKER = "catchplate_prepared_static_component=1"
+SCHEMA = "catchplate.preparedStaticKernelComponent/v1"
 READ = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
 CONTENT = {
     "late/config.txt": b"synthetic late configuration, not an authority receipt\n",
@@ -56,7 +56,7 @@ def admit(root):
             and sys.dont_write_bytecode and threading.active_count() == 1)
     require(bounded_text("/proc/cmdline", 16384).split().count(MARKER) == 1)
     require(set(os.listdir("/sys/class/net")) == {"lo"})
-    require(not any(name.startswith("SERVERWARE_") for name in os.environ))
+    require(not any(name.startswith("CATCHPLATE_") for name in os.environ))
     require(Path(MOUNT).resolve().as_posix() == MOUNT
             and not os.path.lexists(root))
     mount = os.stat(MOUNT, follow_symlinks=False)
@@ -348,8 +348,8 @@ def main(argv=None):
     try:
         source = admit(args.root)
         sys.path.insert(0, str(source))
-        from serverware import authority_local_artifact_measure as measure
-        from serverware import authority_local_install as local
+        from catchplate import authority_local_artifact_measure as measure
+        from catchplate import authority_local_install as local
         result["stage"] = "fresh-fixture"
         mkdir(args.root)
         result["outputsRetained"] = True

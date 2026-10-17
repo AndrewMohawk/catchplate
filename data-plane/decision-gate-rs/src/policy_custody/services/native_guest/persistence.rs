@@ -19,13 +19,13 @@ use std::os::fd::OwnedFd;
 #[path="persistence_invocations.rs"] mod invocations;
 #[path="persistence_completed.rs"] mod completed;
 pub(in crate::policy_shadow::policy_custody) use store::Head as PersistenceHead;
-const GRANT_DOMAIN:&str="serverware.nativeShadowPersistenceServiceAssignment.signature/v1";
-const COMPLETED_GRANT_DOMAIN:&str="serverware.nativeShadowPersistenceServiceAssignment.signature/v2";
-const PUBLICATION_GRANT_DOMAIN:&str="serverware.nativeShadowPersistenceServiceAssignment.signature/v3";
-const ADOPTION_GRANT_DOMAIN:&str="serverware.nativeShadowPersistenceServiceAssignment.signature/v4";
+const GRANT_DOMAIN:&str="catchplate.nativeShadowPersistenceServiceAssignment.signature/v1";
+const COMPLETED_GRANT_DOMAIN:&str="catchplate.nativeShadowPersistenceServiceAssignment.signature/v2";
+const PUBLICATION_GRANT_DOMAIN:&str="catchplate.nativeShadowPersistenceServiceAssignment.signature/v3";
+const ADOPTION_GRANT_DOMAIN:&str="catchplate.nativeShadowPersistenceServiceAssignment.signature/v4";
 pub(in crate::policy_shadow::policy_custody::services) const MAX_ADOPTION_GRANT:usize=3*1024*1024;
 use services::publication_adoption::Authorization as Adoption;
-pub(in crate::policy_shadow::policy_custody) const COMMIT_DOMAIN:&str="serverware.nativeShadowPersistenceCommit.signature/v1";
+pub(in crate::policy_shadow::policy_custody) const COMMIT_DOMAIN:&str="catchplate.nativeShadowPersistenceCommit.signature/v1";
 #[derive(Clone,Copy,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="kebab-case")]
 enum Permission {StoreDispatchOriginal,VerifyPersistence,VerifyCompletedInvocation,VerifyPublicationInvocation}
@@ -47,11 +47,11 @@ impl Configuration {
     pub(in crate::policy_shadow::policy_custody::services) fn validate_shape(&self)->Result<(),ShadowError>{
         let p=&self.payload;
         let permissions=match p.api_version.as_str() {
-            "serverware.nativeShadowPersistenceServiceAssignment/v1"=>matches!(p.permissions.as_slice(),
+            "catchplate.nativeShadowPersistenceServiceAssignment/v1"=>matches!(p.permissions.as_slice(),
                 [Permission::VerifyPersistence]|[Permission::StoreDispatchOriginal,Permission::VerifyPersistence]),
-            "serverware.nativeShadowPersistenceServiceAssignment/v2"=>p.permissions==[
+            "catchplate.nativeShadowPersistenceServiceAssignment/v2"=>p.permissions==[
                 Permission::StoreDispatchOriginal,Permission::VerifyPersistence,Permission::VerifyCompletedInvocation],
-            "serverware.nativeShadowPersistenceServiceAssignment/v3"|"serverware.nativeShadowPersistenceServiceAssignment/v4"=>p.permissions==[
+            "catchplate.nativeShadowPersistenceServiceAssignment/v3"|"catchplate.nativeShadowPersistenceServiceAssignment/v4"=>p.permissions==[
                 Permission::StoreDispatchOriginal,Permission::VerifyPersistence,Permission::VerifyCompletedInvocation,Permission::VerifyPublicationInvocation],
             _=>false,
         };
@@ -65,7 +65,7 @@ impl Configuration {
     pub(in crate::policy_shadow::policy_custody::services) fn expected_peer(&self)->&services::ExpectedPeerCredentialV3{&self.payload.expected_peer}
     pub(in crate::policy_shadow::policy_custody::services) fn guest_uid(&self)->u32{self.payload.guest.uid}
     pub(in crate::policy_shadow::policy_custody::services) fn adoption_selected(&self)->bool {
-        self.payload.api_version=="serverware.nativeShadowPersistenceServiceAssignment/v4"
+        self.payload.api_version=="catchplate.nativeShadowPersistenceServiceAssignment/v4"
     }
     fn verify(&self,keys:&AdmittedKeys,scope:&scope::Scope,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
         self.validate_shape()?;keys.check(trust,time)?;require(keys.result.is_some())?;
@@ -84,9 +84,9 @@ impl Configuration {
             &binding.key_id,&binding.key_spki_sha256)?;
         require(ed25519_public_key_material_sha256(&key)==binding.key_material_sha256)?;
         let domain=match p.api_version.as_str() {
-            "serverware.nativeShadowPersistenceServiceAssignment/v4"=>ADOPTION_GRANT_DOMAIN,
-            "serverware.nativeShadowPersistenceServiceAssignment/v3"=>PUBLICATION_GRANT_DOMAIN,
-            "serverware.nativeShadowPersistenceServiceAssignment/v2"=>COMPLETED_GRANT_DOMAIN,_=>GRANT_DOMAIN};
+            "catchplate.nativeShadowPersistenceServiceAssignment/v4"=>ADOPTION_GRANT_DOMAIN,
+            "catchplate.nativeShadowPersistenceServiceAssignment/v3"=>PUBLICATION_GRANT_DOMAIN,
+            "catchplate.nativeShadowPersistenceServiceAssignment/v2"=>COMPLETED_GRANT_DOMAIN,_=>GRANT_DOMAIN};
         key.verify_strict(&signature_preimage(domain,&canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
             .map_err(|_|ShadowError::SignatureInvalid)?;
         scope.check(keys)?;
@@ -188,20 +188,20 @@ fn dispatch_original(request_encoded:&str,reply_encoded:&str,scope:&scope::Scope
         && reply.api_version==request.api_version && reply.endpoint==request.endpoint && reply.request_sha256==request.request_sha256
         && reply.replay_id_sha256==request.replay_id_sha256 && reply.completed_at_boottime_nanos>=binding.opened_at_boottime_nanos
         && reply.completed_at_boottime_nanos<request.deadline_boottime_nanos && reply.completed_at_boottime_nanos<=guest::now()?
-        && reply.result_sha256==hash_domain_frames(b"serverware.policyCustodyProductionAuthorityEndpointResponse/v4",&[&canonical_json_bytes(&reply.result)?]))?;
+        && reply.result_sha256==hash_domain_frames(b"catchplate.policyCustodyProductionAuthorityEndpointResponse/v4",&[&canonical_json_bytes(&reply.result)?]))?;
     let key=assigned_key(keys,trust,authority_role_for_custody_signer(role),&reply.authority_key_id,&reply.authority_key_spki_sha256,
         role.signature_domain())?;
     let signature=URL_SAFE_NO_PAD.decode(&reply.signature_base64).map_err(fail)?;
     require(URL_SAFE_NO_PAD.encode(&signature)==reply.signature_base64)?;
     let signature=Signature::from_slice(&signature).map_err(fail)?;
-    key.verify_strict(&domain_separated_signature_preimage(b"serverware.policyCustodyProductionAuthorityEndpointSignature/v4",
+    key.verify_strict(&domain_separated_signature_preimage(b"catchplate.policyCustodyProductionAuthorityEndpointSignature/v4",
         &reply.signature_payload().map_err(fail)?).map_err(fail)?,&signature).map_err(|_|ShadowError::SignatureInvalid)?;
     let ResultBody::Dispatch(response)=&reply.result else{return Err(ShadowError::BindingDrift);};
     if let Body::FinishCommitRequest{computation,service_transitions}=&request.request {
         require(role==PolicyShadowCustodySignerRole::LedgerAppend && response.result==computation.result
             && response.service_transitions==*service_transitions
             && computation.result_sha256==Sha256Digest::compute(&canonical_json_bytes(&computation.result)?)
-            && computation.api_version=="serverware.nativeShadowCommitRequestComputation/v1"
+            && computation.api_version=="catchplate.nativeShadowCommitRequestComputation/v1"
             && binding.opened_at_boottime_nanos<=computation.computed_at_boottime_nanos
             && computation.computed_at_boottime_nanos<request.deadline_boottime_nanos)?;
         let sig=URL_SAFE_NO_PAD.decode(&computation.signature_base64url).map_err(fail)?;
@@ -273,8 +273,8 @@ pub(in crate::policy_shadow::policy_custody) fn verify_publication_final(
     require(services::publication_client::selected(&core.request)
         && core.request==core.snapshot.request && core.native_grant_sha256==core.snapshot.native_grant_sha256
         && core.signing_key_id==*id && core.signing_key_spki_sha256==*spki
-        && core.api_version=="serverware.nativePublicationCore/v1"
-        && proposal.api_version=="serverware.nativePublicationProposal/v1"
+        && core.api_version=="catchplate.nativePublicationCore/v1"
+        && proposal.api_version=="catchplate.nativePublicationProposal/v1"
         && binding.opened_at_boottime_nanos<=core.snapshot.observed_at_boottime_nanos
         && core.snapshot.observed_at_boottime_nanos<=proposal.prepared.prepared_at_boottime_nanos
         && proposal.prepared.prepared_at_boottime_nanos<=proposal.completed_at_boottime_nanos
@@ -339,7 +339,7 @@ pub(crate) struct Service {original:services::guest_original::Original,configura
 impl Service {
     fn require_selected_final(&self,request:&Request)->Result<(),ShadowError>{
         if matches!(request.request,Body::FinishNativePublication{..}) {
-            require(matches!(self.configuration.payload.api_version.as_str(),"serverware.nativeShadowPersistenceServiceAssignment/v3"|"serverware.nativeShadowPersistenceServiceAssignment/v4")
+            require(matches!(self.configuration.payload.api_version.as_str(),"catchplate.nativeShadowPersistenceServiceAssignment/v3"|"catchplate.nativeShadowPersistenceServiceAssignment/v4")
                 && self.configuration.payload.permissions.contains(&Permission::VerifyPublicationInvocation))?;
         }
         Ok(())
@@ -350,7 +350,7 @@ impl Service {
         let mut receipt_originals:BTreeMap<Sha256Digest,Vec<u8>>=BTreeMap::new();
         for commit in self.store.originals() {
             let p=&commit.payload;
-            require(p.api_version=="serverware.nativeShadowPersistenceCommit/v1" && p.guest==keys.association.binding()
+            require(p.api_version=="catchplate.nativeShadowPersistenceCommit/v1" && p.guest==keys.association.binding()
                 && p.proof_scope_sha256==*self.scope.binding())?;
             let key=assigned_key(keys,trust,AuthorityRole::CustodyStoreResponse,&p.signing_key_id,&p.signing_key_spki_sha256,
                 authority_role_signature_domain(AuthorityRole::CustodyStoreResponse))?;
@@ -395,7 +395,7 @@ impl Service {
         // record. Distinct admitted invocations persist their own exact pair.
         let (sequence,previous_head_sha256)=self.store.next()?;
         let local=keys.keys.get(&AuthorityRole::CustodyStoreResponse).ok_or(ShadowError::SignerBindingMismatch)?;
-        let payload=CommitPayload{api_version:"serverware.nativeShadowPersistenceCommit/v1".into(),guest:keys.association.binding(),
+        let payload=CommitPayload{api_version:"catchplate.nativeShadowPersistenceCommit/v1".into(),guest:keys.association.binding(),
             proof_scope_sha256:self.scope.binding().clone(),sequence,previous_head_sha256,request_original_sha256:Sha256Digest::compute(&raw),
             request_original_base64url:request_encoded.into(),reply_original_base64url:reply_encoded.into(),
             original_deadline_boottime_nanos:original.deadline_boottime_nanos,stored_at_boottime_nanos:0,receipt,signing_key_id:local.binding.key_id.clone(),
@@ -462,13 +462,13 @@ impl Service {
             };
             check()?;self.check(keys,trust,time)?;
             let local=keys.keys.get(&AuthorityRole::CustodyStoreResponse).ok_or(ShadowError::SignerBindingMismatch)?;
-            let result_sha256=hash_domain_frames(b"serverware.policyCustodyProductionAuthorityEndpointResponse/v4",&[&canonical_json_bytes(&result)?]);
+            let result_sha256=hash_domain_frames(b"catchplate.policyCustodyProductionAuthorityEndpointResponse/v4",&[&canonical_json_bytes(&result)?]);
             let mut reply=Reply{api_version:PRODUCTION_AUTHORITY_ENDPOINT_PROTOCOL_VERSION.into(),endpoint:request.endpoint,
                 request_sha256:request.request_sha256.clone(),replay_id_sha256:request.replay_id_sha256.clone(),completed_at_boottime_nanos:guest::now()?,
                 authority_key_id:local.binding.key_id.clone(),authority_key_spki_sha256:local.binding.key_spki_sha256.clone(),result,result_sha256,signature_base64:String::new()};
             require(reply.completed_at_boottime_nanos<request.deadline_boottime_nanos)?;
             reply.signature_base64=URL_SAFE_NO_PAD.encode(local.key.sign(&domain_separated_signature_preimage(
-                b"serverware.policyCustodyProductionAuthorityEndpointSignature/v4",&reply.signature_payload().map_err(fail)?).map_err(fail)?).to_bytes());
+                b"catchplate.policyCustodyProductionAuthorityEndpointSignature/v4",&reply.signature_payload().map_err(fail)?).map_err(fail)?).to_bytes());
             let raw=services::common::encode_canonical_frame(&reply).map_err(fail)?;
             loop {
                 check()?;self.check(keys,trust,time)?;require(guest::now()?<request.deadline_boottime_nanos)?;

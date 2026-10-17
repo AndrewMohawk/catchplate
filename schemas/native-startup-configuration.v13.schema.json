@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v13.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-startup-configuration.v13.schema.json",
   "title": "Explicit measured staged-pending retirement startup",
   "$comment": "Exact v12 retained owners plus required measuredPendingRetirement. This selection neither grants retirement nor creates historical identity, holder drains or independent KMS authority. Original encrypted service-token admission and seven-role preparation remain required. Earlier profiles do not infer this purpose from targets, missing files or environment.",
   "type": "object",
@@ -29,7 +29,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.nativeStartupConfiguration/v13"
+      "const": "catchplate.nativeStartupConfiguration/v13"
     },
     "gate": {
       "$ref": "native-startup-configuration.v12.schema.json#/properties/gate"

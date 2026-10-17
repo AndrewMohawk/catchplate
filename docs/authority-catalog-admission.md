@@ -32,7 +32,7 @@ and root tables cannot use it to describe the entire source schema. This is
 visible in PostgreSQL 16's [view definition](https://github.com/postgres/postgres/blob/REL_16_STABLE/src/backend/catalog/information_schema.sql#L624-L734).
 
 The shared schema producer now uses a fixed, parameterized
-[`pg_catalog` query](../serverware/authority_store/postgres_column_manifest.py)
+[`pg_catalog` query](../catchplate/authority_store/postgres_column_manifest.py)
 for those column fields. It reads system metadata, not business rows, and does
 not widen the reader's relation privileges or change roles. Source table owner,
 ACL, constraint, index, trigger, function and namespace checks are retained.

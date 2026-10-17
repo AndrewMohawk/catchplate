@@ -22,8 +22,8 @@ const MAX_JSON_DEPTH: usize = 16;
 const MAX_JSON_NODES: usize = 16_384;
 const MAX_COUNT: u64 = (1u64 << 31) - 1;
 const RUNTIME_PATH: &str = "native-postgres/runtime-result.json";
-const REPORT_SCHEMA: &str = "serverware.nativePostgresFixtureResult/v1";
-const RUNTIME_SCHEMA: &str = "serverware.nativePostgresRuntimeResult/v1";
+const REPORT_SCHEMA: &str = "catchplate.nativePostgresFixtureResult/v1";
+const RUNTIME_SCHEMA: &str = "catchplate.nativePostgresRuntimeResult/v1";
 const COUNT_FIELDS: [&str; 17] = ["expected", "started", "stopped", "passed",
     "failed", "errored", "skipped", "expectedFailures", "unexpectedSuccesses",
     "incomplete", "notRun", "subtestsPassed", "subtestsFailed", "subtestsErrored",

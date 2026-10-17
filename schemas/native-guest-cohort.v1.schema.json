@@ -1,16 +1,16 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-guest-cohort.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-guest-cohort.v1.schema.json",
   "title": "Fixed native guest cohort cold configuration",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "executable", "configuration", "deliveries"],
   "properties": {
-    "apiVersion": { "const": "serverware.nativeGuestCohort/v1" },
+    "apiVersion": { "const": "catchplate.nativeGuestCohort/v1" },
     "executable": {
       "allOf": [
         { "$ref": "#/$defs/artifact" },
-        { "properties": { "path": { "const": "/usr/local/bin/serverware-response-v2-guest-role" } } }
+        { "properties": { "path": { "const": "/usr/local/bin/catchplate-response-v2-guest-role" } } }
       ]
     },
     "configuration": { "$ref": "#/$defs/artifact" },

@@ -21,15 +21,15 @@ from uuid import UUID
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from serverware import ecr_image_artifact as artifact
-from serverware import ecr_image_custody as custody
-from serverware import ecr_sdk_protocol as protocol
+from catchplate import ecr_image_artifact as artifact
+from catchplate import ecr_image_custody as custody
+from catchplate import ecr_sdk_protocol as protocol
 
-_spec = importlib.util.spec_from_file_location("serverware_common_client", ROOT / "examples/common-apps/request.py")
+_spec = importlib.util.spec_from_file_location("catchplate_common_client", ROOT / "examples/common-apps/request.py")
 common = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(common)
 
-SCHEMA = "serverware.awsEcrPublicationClient/v1"
+SCHEMA = "catchplate.awsEcrPublicationClient/v1"
 CONTROL_PATH = "/v1/ecr/publications"
 PART_BYTES = 4 * 1024 * 1024
 CONTROL_RESPONSE_BYTES = 256 * 1024
@@ -41,7 +41,7 @@ CLIENT_ACCESS = "AKIAIOSFODNN7EXAMPLE"
 CLIENT_SECRET = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
 STATES = {"staging", "awaiting_review", "approved", "active", "suspended", "published", "denied", "expired", "failed", "uncertain"}
 SCOPE_FIELDS = ("registry_id", "region", "repository_name", "image_tag")
-FAILURE = ("ECR client stopped. Inspect the selected publication and Serverware audit log. "
+FAILURE = ("ECR client stopped. Inspect the selected publication and Catchplate audit log. "
     "A write may have an unknown outcome; nothing was retried. Do not blindly repeat staging, activation or publication.")
 
 
@@ -176,7 +176,7 @@ class Control:
 
 
 def publication(value, config, identifier=None, image=None):
-    require(type(value) is dict and value.get("schema") == "serverware.ecrPublication/v1"
+    require(type(value) is dict and value.get("schema") == "catchplate.ecrPublication/v1"
         and value.get("assurance") == "host-trusted" and value.get("status") in STATES)
     uuid(value.get("id"))
     require(identifier is None or value["id"] == identifier)
@@ -224,7 +224,7 @@ def open_stage(path):
 
         marker = common.strict_json(reader(directory, "stage.json", 4096).read(4097))
         require(type(marker) is dict and set(marker) == {"schema", "artifactSha256", "manifestDigest", "unsigned"}
-            and marker["schema"] == "serverware.ecrArtifactStage/v1" and marker["unsigned"] is True)
+            and marker["schema"] == "catchplate.ecrArtifactStage/v1" and marker["unsigned"] is True)
         manifest = reader(directory, "manifest.json", artifact.MAX_MANIFEST_BYTES).read(artifact.MAX_MANIFEST_BYTES + 1)
         description = artifact.parse_manifest(manifest)
         require(description.manifest.digest == marker["manifestDigest"]
@@ -272,7 +272,7 @@ def sdk_client(config, identifier):
             retries={"mode": "standard", "total_max_attempts": 1}, connect_timeout=10, read_timeout=30,
             max_pool_connections=1, proxies={"https": config["_proxy_url"]},
             proxies_config={"proxy_ca_bundle": outer_ca(config), "proxy_use_forwarding_for_https": False},
-            user_agent_extra="ServerwarePublication/" + identifier, ignore_configured_endpoint_urls=True,
+            user_agent_extra="CatchplatePublication/" + identifier, ignore_configured_endpoint_urls=True,
             use_dualstack_endpoint=False, use_fips_endpoint=False))
     try:
         yield client

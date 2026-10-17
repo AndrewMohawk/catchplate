@@ -51,7 +51,7 @@ class Fixture(cleanup_tests.Fixture):
         self.checked_responses[check] = True
         if self.reply == "timeout":
             raise TimeoutError("synthetic refresh response unavailable")
-        from serverware.http_client import HttpResponse
+        from catchplate.http_client import HttpResponse
         status, body, raw_headers = self.reply
         return HttpResponse(status=status, body=body, raw_headers=raw_headers,
             headers={name.lower(): value for name, value in raw_headers})
@@ -125,7 +125,7 @@ def definite():
             event = json.loads(row["event_json"])
             assert row["id"] == "operator-google-refresh-rejected:" + outcome["work_id"]
             assert row["actor_type"] == "system"
-            assert event["schema"] == "serverware.operatorGoogleRefreshRejected/v1"
+            assert event["schema"] == "catchplate.operatorGoogleRefreshRejected/v1"
             assert event["work_id"] == outcome["work_id"] and event["http_status"] == status
             assert event["error_code"] == code and event["credential_id"] == core["id"]
             assert event["credential_generation"] == core["credential_version"]
@@ -409,7 +409,7 @@ class OperatorGoogleRefreshRejectionTests(unittest.TestCase):
     def worker(self, operation, *, fresh=None):
         environment = dict(self.environment)
         if fresh is not None:
-            environment["SERVERWARE_DATA_DIR"] = str(self.directory.parent / fresh)
+            environment["CATCHPLATE_DATA_DIR"] = str(self.directory.parent / fresh)
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation],
             cwd=ROOT, env=environment, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, "\n".join(result.stderr.splitlines()[-45:]))

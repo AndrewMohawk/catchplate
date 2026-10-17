@@ -304,23 +304,23 @@ pub use response_observation_v2_api::{
     V2_VERIFY_ARCHIVE_OPERATION,
 };
 
-pub const PROTOCOL_API_VERSION: &str = "serverware.custodyProtocol/v1";
+pub const PROTOCOL_API_VERSION: &str = "catchplate.custodyProtocol/v1";
 pub const POLICY_SHADOW_CUSTODY_SOCKET_ENV: &str =
-    "SERVERWARE_POLICY_SHADOW_CUSTODY_SOCKET";
+    "CATCHPLATE_POLICY_SHADOW_CUSTODY_SOCKET";
 pub const POLICY_SHADOW_CUSTODY_DEFAULT_SOCKET: &str =
-    "/run/serverware/policy-shadow-custody.sock";
+    "/run/catchplate/policy-shadow-custody.sock";
 pub const POLICY_SHADOW_CUSTODY_CONTROL_SOCKET_ENV: &str =
-    "SERVERWARE_POLICY_SHADOW_CUSTODY_CONTROL_SOCKET";
+    "CATCHPLATE_POLICY_SHADOW_CUSTODY_CONTROL_SOCKET";
 pub const POLICY_SHADOW_CUSTODY_DEFAULT_CONTROL_SOCKET: &str =
-    "/run/serverware/policy-shadow-custody-control.sock";
+    "/run/catchplate/policy-shadow-custody-control.sock";
 pub const POLICY_SHADOW_CUSTODY_ENDPOINT_CONFIG_CREDENTIAL_ENV: &str =
-    "SERVERWARE_POLICY_SHADOW_CUSTODY_ENDPOINT_CONFIG_CREDENTIAL";
+    "CATCHPLATE_POLICY_SHADOW_CUSTODY_ENDPOINT_CONFIG_CREDENTIAL";
 pub const POLICY_SHADOW_CUSTODY_DEFAULT_ENDPOINT_CONFIG_CREDENTIAL: &str =
     "policy-custody-endpoints-v3.json";
 pub const POLICY_SHADOW_CUSTODY_STARTUP_DEADLINE_BOOTTIME_NANOS_ENV:
     &str =
-    "SERVERWARE_POLICY_SHADOW_CUSTODY_STARTUP_DEADLINE_BOOTTIME_NANOS";
-pub const RESPONSE_STATEMENT_API_VERSION: &str = "serverware.proxyResponseStatement/v2";
+    "CATCHPLATE_POLICY_SHADOW_CUSTODY_STARTUP_DEADLINE_BOOTTIME_NANOS";
+pub const RESPONSE_STATEMENT_API_VERSION: &str = "catchplate.proxyResponseStatement/v2";
 pub const HELLO_OPERATION: &str = "hello/v1";
 pub const RESPONSE_PROOF_SIGN_OPERATION: &str = "responseProof.sign/v2";
 pub const NATIVE_RESPONSE_PROOF_SIGN_OPERATION: &str = "nativeResponseProof.sign/v1";
@@ -328,12 +328,12 @@ pub const NATIVE_STREAMING_RESPONSE_PROOF_SIGN_OPERATION: &str = "nativeStreamin
 pub const NATIVE_RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION: &str = "nativeResponseObservationProof.sign/v1";
 pub const STREAMING_RESPONSE_PROOF_SIGN_OPERATION: &str = "streamingResponseProof.sign/v1";
 pub const STREAMING_RESPONSE_STATEMENT_API_VERSION: &str =
-    "serverware.streamingResponseStatement/v1";
+    "catchplate.streamingResponseStatement/v1";
 pub const RESPONSE_OBSERVATION_PROOF_RESERVE_OPERATION: &str =
     "responseObservationProof.reserve/v1";
 pub const RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION: &str = "responseObservationProof.sign/v1";
 pub const RESPONSE_OBSERVATION_STATEMENT_API_VERSION: &str =
-    "serverware.responseObservationStatement/v1";
+    "catchplate.responseObservationStatement/v1";
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub const IO_DEADLINE: Duration = Duration::from_secs(2);
 pub const MAX_CONCURRENT_CONNECTIONS: usize = 32;
@@ -364,11 +364,11 @@ const MAX_ATTEMPT_STATEMENT_BINDINGS: usize = MAX_REQUESTS_PER_BOOT;
 const MAX_ATTEMPT_LEDGER_RECORD_BYTES: usize = 1024;
 const MAX_ATTEMPT_LEDGER_MANIFEST_BYTES: usize = 1024;
 const RESPONSE_OBSERVATION_RESERVATION_LEDGER_DOMAIN: &str =
-    "serverware.responseObservationNonceReservation/v1";
+    "catchplate.responseObservationNonceReservation/v1";
 const OBSERVATION_STATEMENT_RETENTION_MARGIN_SECONDS: u64 = 1;
 const ATTEMPT_LEDGER_DIRECTORY_MODE: u32 = 0o700;
 const ATTEMPT_LEDGER_FILE_MODE: u32 = 0o600;
-const ATTEMPT_LEDGER_API_VERSION: &str = "serverware.custodyAttemptLedger/v2";
+const ATTEMPT_LEDGER_API_VERSION: &str = "catchplate.custodyAttemptLedger/v2";
 const ATTEMPT_LEDGER_MANIFEST_FILE: &str = "manifest.json";
 const ATTEMPT_LEDGER_LOCK_FILE: &str = "ledger.lock";
 const RESPONSE_OBSERVATION_NONCE_EXPIRY_BYTES: usize = 4;
@@ -376,29 +376,29 @@ const RESPONSE_OBSERVATION_NONCE_RANDOM_BYTES: usize = 28;
 pub const RESPONSE_OBSERVATION_NONCE_CLIENT_LIFETIME_SECONDS: u64 = 300;
 pub const RESPONSE_OBSERVATION_NONCE_MAX_LIFETIME_SECONDS: u64 = 330;
 const MAX_RELEASE_AUTHORIZATION_LIFETIME_MS: u64 = 300_000;
-const AUTHORIZATION_RECEIPT_API_VERSION: &str = "serverware.controlPlaneAuthorizationReceipt/v1";
-const RELEASE_AUTHORIZATION_BINDING_V2: &str = "serverware.releaseAuthorizationBinding/v2";
-const RELEASE_AUTHORIZATION_DISPATCH_V1: &str = "serverware.releaseAuthorizationDispatch/v1";
-const RELEASE_AUTHORIZATION_DISPATCH_V2: &str = "serverware.releaseAuthorizationDispatch/v2";
-const RELEASE_AUTHORIZATION_RESPONSE_V1: &str = "serverware.releaseAuthorization/v1";
-const RELEASE_AUTHORIZATION_RESPONSE_V2: &str = "serverware.releaseAuthorization/v2";
-pub const NATIVE_RELEASE_AUTHORIZATION_BINDING_V1: &str = "serverware.nativeReleaseAuthorizationBinding/v1";
-pub const NATIVE_RELEASE_AUTHORIZATION_BINDING_V2: &str = "serverware.nativeReleaseAuthorizationBinding/v2";
-pub const NATIVE_RELEASE_AUTHORIZATION_RESERVE_V1: &str = "serverware.nativeReleaseAuthorizationReserve/v1";
-pub const NATIVE_RELEASE_AUTHORIZATION_RESERVE_V2: &str = "serverware.nativeReleaseAuthorizationReserve/v2";
-pub const NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V1: &str = "serverware.nativeReleaseAuthorizationDispatch/v1";
-pub const NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V2: &str = "serverware.nativeReleaseAuthorizationDispatch/v2";
-pub const NATIVE_RELEASE_AUTHORIZATION_COMPLETE_V1: &str = "serverware.nativeReleaseAuthorizationComplete/v1";
-pub const NATIVE_RELEASE_AUTHORIZATION_COMPLETE_V2: &str = "serverware.nativeReleaseAuthorizationComplete/v2";
-pub const NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V1: &str = "serverware.nativeReleaseAuthorizationResponse/v1";
-pub const NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V2: &str = "serverware.nativeReleaseAuthorizationResponse/v2";
+const AUTHORIZATION_RECEIPT_API_VERSION: &str = "catchplate.controlPlaneAuthorizationReceipt/v1";
+const RELEASE_AUTHORIZATION_BINDING_V2: &str = "catchplate.releaseAuthorizationBinding/v2";
+const RELEASE_AUTHORIZATION_DISPATCH_V1: &str = "catchplate.releaseAuthorizationDispatch/v1";
+const RELEASE_AUTHORIZATION_DISPATCH_V2: &str = "catchplate.releaseAuthorizationDispatch/v2";
+const RELEASE_AUTHORIZATION_RESPONSE_V1: &str = "catchplate.releaseAuthorization/v1";
+const RELEASE_AUTHORIZATION_RESPONSE_V2: &str = "catchplate.releaseAuthorization/v2";
+pub const NATIVE_RELEASE_AUTHORIZATION_BINDING_V1: &str = "catchplate.nativeReleaseAuthorizationBinding/v1";
+pub const NATIVE_RELEASE_AUTHORIZATION_BINDING_V2: &str = "catchplate.nativeReleaseAuthorizationBinding/v2";
+pub const NATIVE_RELEASE_AUTHORIZATION_RESERVE_V1: &str = "catchplate.nativeReleaseAuthorizationReserve/v1";
+pub const NATIVE_RELEASE_AUTHORIZATION_RESERVE_V2: &str = "catchplate.nativeReleaseAuthorizationReserve/v2";
+pub const NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V1: &str = "catchplate.nativeReleaseAuthorizationDispatch/v1";
+pub const NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V2: &str = "catchplate.nativeReleaseAuthorizationDispatch/v2";
+pub const NATIVE_RELEASE_AUTHORIZATION_COMPLETE_V1: &str = "catchplate.nativeReleaseAuthorizationComplete/v1";
+pub const NATIVE_RELEASE_AUTHORIZATION_COMPLETE_V2: &str = "catchplate.nativeReleaseAuthorizationComplete/v2";
+pub const NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V1: &str = "catchplate.nativeReleaseAuthorizationResponse/v1";
+pub const NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V2: &str = "catchplate.nativeReleaseAuthorizationResponse/v2";
 const RELEASE_AUTHORIZATION_DISPATCH_PATH: &str = "/api/data-plane/release-authorizations/dispatch";
 const CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV: &str =
-    "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY";
+    "CATCHPLATE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY";
 const CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_ENV: &str =
-    "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID";
+    "CATCHPLATE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID";
 const CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_FILE_ENV: &str =
-    "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID_FILE";
+    "CATCHPLATE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID_FILE";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtocolError {
@@ -1352,9 +1352,9 @@ enum LedgerClaimReplayPolicy {
     RejectObservationNonce,
 }
 
-const NATIVE_PROOF_BOOT_DOMAIN: &[u8] = b"serverware/native-proof-custody-boot/v1\0";
+const NATIVE_PROOF_BOOT_DOMAIN: &[u8] = b"catchplate/native-proof-custody-boot/v1\0";
 const NATIVE_RESPONSE_ATTESTATION_CHALLENGE_DOMAIN: &[u8] =
-    b"serverware/native-response-attestation-challenge/v1\0";
+    b"catchplate/native-response-attestation-challenge/v1\0";
 
 enum CustodySigningBackend {
     Development(SigningKey),
@@ -1600,7 +1600,7 @@ impl CustodyRuntime {
         };
         self.verify_native_live()?;
         let evidence = serde_json::json!({
-            "apiVersion": "serverware.nativeResponseProofKeyEvidence/v1",
+            "apiVersion": "catchplate.nativeResponseProofKeyEvidence/v1",
             "attestationDocumentB64": general_purpose::URL_SAFE_NO_PAD.encode(quote.document()),
             "responseProofPublicKey": general_purpose::URL_SAFE_NO_PAD.encode(quote.public_key()),
         });
@@ -1715,7 +1715,7 @@ impl CustodyRuntime {
             return Err(native_proof_error("fresh native quotation does not retain its exact key/scope/challenge".to_owned()));
         }
         let evidence = serde_json::json!({
-            "apiVersion": "serverware.nativeResponseProofKeyEvidence/v1",
+            "apiVersion": "catchplate.nativeResponseProofKeyEvidence/v1",
             "attestationDocumentB64": general_purpose::URL_SAFE_NO_PAD.encode(fresh.document()),
             "responseProofPublicKey": general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key()),
         });
@@ -1765,7 +1765,7 @@ impl CustodyRuntime {
         statement.validate(now()?).map_err(native_proof_error)?;owner.verify_live(deadline).map_err(native_proof_error)?;
         identity.verify_live(deadline).map_err(native_proof_error)?;self.verify_native_process()?;
         Ok(serde_json::json!({"statement":statement,"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
-            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence":{"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1",
                 "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document()),
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key())}}))
     }
@@ -1809,7 +1809,7 @@ impl CustodyRuntime {
         self.verify_native_process()?;
         Ok(serde_json::json!({"statement":statement,
             "signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
-            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence":{"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1",
                 "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document()),
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key())}}))
     }
@@ -1850,7 +1850,7 @@ impl CustodyRuntime {
         owner.verify_live(deadline).map_err(native_proof_error)?; identity.verify_live(deadline).map_err(native_proof_error)?;
         self.verify_native_process()?;
         Ok(serde_json::json!({"statement":statement,"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
-            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence":{"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1",
                 "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document()),
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key())}}))
     }
@@ -1906,7 +1906,7 @@ impl CustodyRuntime {
         identity.verify_live(deadline).map_err(native_proof_error)?;
         Ok(serde_json::json!({"statement":statement,
             "signature":format!("ed25519:{}", general_purpose::URL_SAFE_NO_PAD.encode(signature)),
-            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence":{"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1",
                 "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document()),
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key())}}))
     }
@@ -1956,7 +1956,7 @@ impl CustodyRuntime {
         Ok(native_target_dispatch_v1::NativeCaptureEnvelope {statement:statement.clone(),
             signature:format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
             native_key_evidence:native_target_dispatch_v1::NativeKeyEvidence {
-                api_version:"serverware.nativeResponseProofKeyEvidence/v1".to_owned(),
+                api_version:"catchplate.nativeResponseProofKeyEvidence/v1".to_owned(),
                 attestation_document_b64:general_purpose::URL_SAFE_NO_PAD.encode(fresh.document()),
                 response_proof_public_key:general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key())}})
     }
@@ -2004,7 +2004,7 @@ impl CustodyRuntime {
         Ok(native_staging_v1::NativeEvidence {statement:statement.clone(),
             signature:format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
             native_key_evidence:native_target_dispatch_v1::NativeKeyEvidence {
-                api_version:"serverware.nativeResponseProofKeyEvidence/v1".into(),
+                api_version:"catchplate.nativeResponseProofKeyEvidence/v1".into(),
                 attestation_document_b64:general_purpose::URL_SAFE_NO_PAD.encode(fresh.document()),
                 response_proof_public_key:general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key())}})
     }
@@ -2048,7 +2048,7 @@ impl CustodyRuntime {
         statement.validate(now()?).map_err(native_proof_error)?;
         owner.verify_live(deadline).map_err(native_proof_error)?; identity.verify_live(deadline).map_err(native_proof_error)?;
         Ok(serde_json::json!({"statement":statement.0,"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
-            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence":{"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1",
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key()),
                 "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document())}}))
     }
@@ -2094,7 +2094,7 @@ impl CustodyRuntime {
         owner.verify_live(deadline).map_err(native_proof_error)?;
         identity.verify_browser_ingress(prepared.ingress(), deadline).map_err(native_proof_error)?;
         Ok(serde_json::json!({"statement":statement.0,"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
-            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence":{"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1",
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key()),
                 "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document())}}))
     }
@@ -2140,7 +2140,7 @@ impl CustodyRuntime {
         owner.verify_live(deadline).map_err(native_proof_error)?;
         identity.verify_browser_ingress(prepared.ingress(), deadline).map_err(native_proof_error)?;
         Ok(serde_json::json!({"statement":statement.0,"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
-            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence":{"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1",
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key()),
                 "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document())}}))
     }
@@ -2187,7 +2187,7 @@ impl CustodyRuntime {
         owner.verify_live(deadline).map_err(native_proof_error)?;
         identity.verify_browser_ingress(prepared.ingress(), deadline).map_err(native_proof_error)?;
         Ok(serde_json::json!({"statement":statement.value(),"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
-            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence":{"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1",
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key()),
                 "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document())}}))
     }
@@ -2233,7 +2233,7 @@ impl CustodyRuntime {
         owner.verify_live(deadline).map_err(native_proof_error)?;
         identity.verify_browser_ingress(prepared.ingress(), deadline).map_err(native_proof_error)?;
         Ok(serde_json::json!({"statement":statement.value(),"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
-            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence":{"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1",
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key()),
                 "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document())}}))
     }
@@ -2279,7 +2279,7 @@ impl CustodyRuntime {
         owner.verify_live(deadline).map_err(native_proof_error)?;
         identity.verify_browser_ingress(prepared.ingress(), deadline).map_err(native_proof_error)?;
         Ok(serde_json::json!({"statement":statement.0,"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
-            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence":{"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1",
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key()),
                 "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document())}}))
     }
@@ -2323,7 +2323,7 @@ impl CustodyRuntime {
         owner.verify_live(deadline).map_err(native_proof_error)?;
         identity.verify_browser_ingress(prepared.ingress(), deadline).map_err(native_proof_error)?;
         Ok(serde_json::json!({"statement":statement.0,"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
-            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence":{"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1",
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key()),
                 "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document())}}))
     }
@@ -2367,7 +2367,7 @@ impl CustodyRuntime {
         statement.validate(now()?).map_err(native_proof_error)?;
         owner.verify_live(deadline).map_err(native_proof_error)?; identity.verify_live(deadline).map_err(native_proof_error)?;
         Ok(serde_json::json!({"statement":statement.0,"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
-            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence":{"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1",
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key()),
                 "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document())}}))
     }
@@ -2411,7 +2411,7 @@ impl CustodyRuntime {
         statement.validate(now()?).map_err(native_proof_error)?;
         owner.verify_live(deadline).map_err(native_proof_error)?; identity.verify_live(deadline).map_err(native_proof_error)?;
         Ok(serde_json::json!({"statement":statement.0,"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
-            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence":{"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1",
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key()),
                 "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document())}}))
     }
@@ -2453,7 +2453,7 @@ impl CustodyRuntime {
         statement.validate(now()?).map_err(native_proof_error)?;
         owner.verify_live(deadline).map_err(native_proof_error)?; identity.verify_live(deadline).map_err(native_proof_error)?;
         Ok(serde_json::json!({"statement":statement.0,"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
-            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence":{"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1",
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key()),
                 "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document())}}))
     }
@@ -2493,7 +2493,7 @@ impl CustodyRuntime {
         statement.validate(now()?).map_err(native_proof_error)?;
         owner.verify_live(deadline).map_err(native_proof_error)?; identity.verify_live(deadline).map_err(native_proof_error)?;
         Ok(serde_json::json!({"statement":statement,"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
-            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence":{"apiVersion":"catchplate.nativeResponseProofKeyEvidence/v1",
             "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document()),"responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key())}}))
     }
 
@@ -2800,7 +2800,7 @@ impl CustodyRuntime {
         if request.api_version != PROTOCOL_API_VERSION {
             return Err(ProtocolError::new(
                 "unsupported_api_version",
-                "apiVersion must be serverware.custodyProtocol/v1",
+                "apiVersion must be catchplate.custodyProtocol/v1",
             ));
         }
 
@@ -4985,7 +4985,7 @@ fn validate_response_statement_inner(
 ) -> Result<(), ProtocolError> {
     if statement.api_version != profile.statement(StatementKind::Buffered) {
         return Err(invalid_statement(
-            "apiVersion must be serverware.proxyResponseStatement/v2",
+            "apiVersion must be catchplate.proxyResponseStatement/v2",
         ));
     }
     let now = now_epoch_ms / 1000;
@@ -5202,7 +5202,7 @@ fn validate_response_observation_statement_profile_at(
 ) -> Result<(), ProtocolError> {
     if statement.api_version != profile.statement(StatementKind::Observation) {
         return Err(invalid_statement(
-            "apiVersion must be serverware.responseObservationStatement/v1",
+            "apiVersion must be catchplate.responseObservationStatement/v1",
         ));
     }
     if statement.policy.completion_state != PolicyCompletionState::SameActive {
@@ -5283,7 +5283,7 @@ fn validate_response_observation_statement_profile_at(
     validate_emitted_response(&statement.emitted_response)?;
     validate_server_instance(&statement.server_instance)?;
     if statement.tls_channel_binding.binding_type != "tls-exporter"
-        || statement.tls_channel_binding.label != "EXPORTER-Serverware-Response-Observation-v1"
+        || statement.tls_channel_binding.label != "EXPORTER-Catchplate-Response-Observation-v1"
     {
         return Err(invalid_statement(
             "tls_channel_binding must use the response-observation TLS exporter domain",
@@ -5782,7 +5782,7 @@ fn validate_streaming_response_statement_profile_at(
 ) -> Result<(), ProtocolError> {
     if statement.api_version != profile.statement(StatementKind::Streaming) {
         return Err(invalid_statement(
-            "apiVersion must be serverware.streamingResponseStatement/v1",
+            "apiVersion must be catchplate.streamingResponseStatement/v1",
         ));
     }
     let now = now_epoch_ms / 1000;
@@ -5873,7 +5873,7 @@ fn validate_streaming_response_statement_profile_at(
     }
     validate_streaming_server_instance(&statement.server_instance)?;
     if statement.tls_channel_binding.binding_type != "tls-exporter"
-        || statement.tls_channel_binding.exporter_label != "EXPORTER-Serverware-Proxy-Stream-v1"
+        || statement.tls_channel_binding.exporter_label != "EXPORTER-Catchplate-Proxy-Stream-v1"
     {
         return Err(invalid_statement(
             "tls_channel_binding must use the streaming TLS exporter domain",
@@ -6042,7 +6042,7 @@ fn validate_streaming_released_response(
     let headers = &released.selected_wire_headers;
     if headers.connection != "close"
         || headers.content_type != released.content_type
-        || headers.trailer != "X-Serverware-Stream-Proof-B64, X-Serverware-Stream-Proof-SHA256"
+        || headers.trailer != "X-Catchplate-Stream-Proof-B64, X-Catchplate-Stream-Proof-SHA256"
         || headers.transfer_encoding != "chunked"
     {
         return Err(invalid_statement(
@@ -6060,8 +6060,8 @@ fn validate_streaming_released_response(
         || released.completion != "normal-eof"
         || released.trailer_names
             != [
-                "X-Serverware-Stream-Proof-B64".to_string(),
-                "X-Serverware-Stream-Proof-SHA256".to_string(),
+                "X-Catchplate-Stream-Proof-B64".to_string(),
+                "X-Catchplate-Stream-Proof-SHA256".to_string(),
             ]
     {
         return Err(invalid_statement(
@@ -6993,7 +6993,7 @@ fn validate_control_plane_authorization_receipt_profile(
     }
     let signed_statement: SignedResponseStatement = decode_canonical_json(&statement_bytes)
         .map_err(|error| invalid_statement(format!("signed dispatch statement: {error}")))?;
-    if signed_statement.version != "serverware.responseSignature/v3"
+    if signed_statement.version != "catchplate.responseSignature/v3"
         || signed_statement.nonce.as_deref() != Some(request.nonce.as_str())
         || signed_statement.request.method != request.method
         || signed_statement.request.path != request.path
@@ -7165,11 +7165,11 @@ fn validate_raw_policy_headers(
 fn validate_selected_headers(statement: &ProxyResponseStatement) -> Result<(), ProtocolError> {
     const REQUIRED_HEADERS: [&str; 6] = [
         "content-length",
-        "x-serverware-client-request-digest",
-        "x-serverware-policy-hash",
-        "x-serverware-request-digest",
-        "x-serverware-operation-digest",
-        "x-serverware-response-body-sha256",
+        "x-catchplate-client-request-digest",
+        "x-catchplate-policy-hash",
+        "x-catchplate-request-digest",
+        "x-catchplate-operation-digest",
+        "x-catchplate-response-body-sha256",
     ];
     for required in REQUIRED_HEADERS {
         if !statement.response.selected_headers.contains_key(required) {
@@ -7207,14 +7207,14 @@ fn validate_selected_headers(statement: &ProxyResponseStatement) -> Result<(), P
     }
     for (header, expected) in [
         (
-            "x-serverware-client-request-digest",
+            "x-catchplate-client-request-digest",
             &statement.client_request_digest,
         ),
-        ("x-serverware-request-digest", &statement.request_digest),
-        ("x-serverware-operation-digest", &statement.operation_digest),
-        ("x-serverware-policy-hash", &statement.policy_digest),
+        ("x-catchplate-request-digest", &statement.request_digest),
+        ("x-catchplate-operation-digest", &statement.operation_digest),
+        ("x-catchplate-policy-hash", &statement.policy_digest),
         (
-            "x-serverware-response-body-sha256",
+            "x-catchplate-response-body-sha256",
             &statement.response.body_digest,
         ),
     ] {
@@ -7317,7 +7317,7 @@ fn validate_signed_response_headers(
                     )
             });
         if !valid_name
-            || header.name.starts_with("x-serverware-response-")
+            || header.name.starts_with("x-catchplate-response-")
             || [
                 "authorization",
                 "cookie",
@@ -7616,7 +7616,7 @@ mod tests {
         identity_signature[0] = 1;
         assert!(weak_key
             .verify_strict(
-                b"serverware custody hostile strict-verification vector",
+                b"catchplate custody hostile strict-verification vector",
                 &Signature::from_bytes(&identity_signature),
             )
             .is_err());
@@ -7665,7 +7665,7 @@ mod tests {
             .expect("clock")
             .as_nanos();
         let directory = env::temp_dir().join(format!(
-            "serverware-ledger-{label}-{}-{unique}",
+            "catchplate-ledger-{label}-{}-{unique}",
             std::process::id()
         ));
         fs::create_dir(&directory).expect("create ledger fixture directory");
@@ -7744,23 +7744,23 @@ mod tests {
         selected_headers.insert("content-length".to_string(), "17".to_string());
         selected_headers.insert("content-type".to_string(), "application/json".to_string());
         selected_headers.insert(
-            "x-serverware-client-request-digest".to_string(),
+            "x-catchplate-client-request-digest".to_string(),
             client_request_digest.clone(),
         );
         selected_headers.insert(
-            "x-serverware-operation-digest".to_string(),
+            "x-catchplate-operation-digest".to_string(),
             operation_digest.clone(),
         );
         selected_headers.insert(
-            "x-serverware-policy-hash".to_string(),
+            "x-catchplate-policy-hash".to_string(),
             policy_digest.clone(),
         );
         selected_headers.insert(
-            "x-serverware-request-digest".to_string(),
+            "x-catchplate-request-digest".to_string(),
             request_digest.clone(),
         );
         selected_headers.insert(
-            "x-serverware-response-body-sha256".to_string(),
+            "x-catchplate-response-body-sha256".to_string(),
             body_digest.clone(),
         );
         let selected_headers_digest =
@@ -7785,7 +7785,7 @@ mod tests {
             })
             .expect("canonical upstream response"),
         );
-        let instance_id = "spiffe://dev.serverware/decision-gate/test".to_string();
+        let instance_id = "spiffe://dev.catchplate/decision-gate/test".to_string();
         let dispatch_started_at_epoch_ms = issued_at_unix * 1000;
         let dispatch_expires_at_epoch_ms = dispatch_started_at_epoch_ms + 30_000;
         let reservation_expires_at_epoch_ms = dispatch_started_at_epoch_ms + 30_000;
@@ -7805,7 +7805,7 @@ mod tests {
             dispatch_expires_at_epoch_ms,
         };
         let dispatch_body = canonical_json_bytes(&json!({
-            "apiVersion":"serverware.releaseAuthorization/v1",
+            "apiVersion":"catchplate.releaseAuthorization/v1",
             "ok":true,
             "authorized":true,
             "state":"dispatching",
@@ -7841,7 +7841,7 @@ mod tests {
                 .expect("canonical response headers"),
         );
         let signed_response_statement = SignedResponseStatement {
-            version: "serverware.responseSignature/v3".to_string(),
+            version: "catchplate.responseSignature/v3".to_string(),
             issued_at_ms: dispatch_started_at_epoch_ms,
             request: SignedResponseRequest {
                 method: "POST".to_string(),
@@ -7866,7 +7866,7 @@ mod tests {
             canonical_json_bytes(&signed_response_statement).expect("signed response statement");
         let signed_response_signature = response_signing_key.sign(&signed_response_statement);
         let dispatch_request_body = canonical_json_bytes(&DispatchRequestBody {
-            api_version: "serverware.releaseAuthorizationDispatch/v1".to_string(),
+            api_version: "catchplate.releaseAuthorizationDispatch/v1".to_string(),
             attempt_id: release_authority.attempt_id.clone(),
             binding_digest: release_authority.consumption_identity_digest.clone(),
             durable_policy: None,
@@ -8072,7 +8072,7 @@ mod tests {
             "constraint_id":"durable:custody-test",
             "type":"traversalBudget",
         })];
-        let actor_id = "spiffe://serverware/data-plane/custody-test".to_string();
+        let actor_id = "spiffe://catchplate/data-plane/custody-test".to_string();
         let claim_digest = sha256_prefixed(
             &canonical_json_ensure_ascii_bytes(&claims).expect("canonical durable claims"),
         );
@@ -8187,7 +8187,7 @@ mod tests {
         let selected_wire_headers = StreamingWireHeaders {
             connection: "close".to_string(),
             content_type: content_type.clone(),
-            trailer: "X-Serverware-Stream-Proof-B64, X-Serverware-Stream-Proof-SHA256".to_string(),
+            trailer: "X-Catchplate-Stream-Proof-B64, X-Catchplate-Stream-Proof-SHA256".to_string(),
             transfer_encoding: "chunked".to_string(),
         };
         let selected_wire_headers_digest = sha256_prefixed(
@@ -8235,8 +8235,8 @@ mod tests {
                 framing: "http1.1-chunked-trailers".to_string(),
                 completion: "normal-eof".to_string(),
                 trailer_names: vec![
-                    "X-Serverware-Stream-Proof-B64".to_string(),
-                    "X-Serverware-Stream-Proof-SHA256".to_string(),
+                    "X-Catchplate-Stream-Proof-B64".to_string(),
+                    "X-Catchplate-Stream-Proof-SHA256".to_string(),
                 ],
             },
             policy_digest: buffered.policy_digest.clone(),
@@ -8246,7 +8246,7 @@ mod tests {
             server_instance: buffered.server_instance.clone(),
             tls_channel_binding: StreamingTlsChannelBinding {
                 binding_type: "tls-exporter".to_string(),
-                exporter_label: "EXPORTER-Serverware-Proxy-Stream-v1".to_string(),
+                exporter_label: "EXPORTER-Catchplate-Proxy-Stream-v1".to_string(),
                 value: buffered.tls_channel_binding.value.clone(),
             },
         };
@@ -8363,7 +8363,7 @@ mod tests {
             server_instance: buffered.server_instance,
             tls_channel_binding: ResponseObservationTlsChannelBinding {
                 binding_type: "tls-exporter".to_string(),
-                label: "EXPORTER-Serverware-Response-Observation-v1".to_string(),
+                label: "EXPORTER-Catchplate-Response-Observation-v1".to_string(),
                 value: general_purpose::URL_SAFE_NO_PAD.encode([31u8; 32]),
             },
             observation_authority: ObservationAuthority {
@@ -8564,7 +8564,7 @@ mod tests {
             custody_calendar_window_bounds(&quota.window_kind, dispatch_started_at_epoch_ms)
                 .expect("calendar bounds");
         let response_body = canonical_json_bytes(&json!({
-            "apiVersion":"serverware.releaseAuthorization/v1",
+            "apiVersion":"catchplate.releaseAuthorization/v1",
             "ok":true,
             "authorized":true,
             "state":"dispatching",
@@ -8965,7 +8965,7 @@ mod tests {
             .expect("clock")
             .as_nanos();
         let path = env::temp_dir().join(format!(
-            "serverware-custody-response-key-{}-{unique}.pem",
+            "catchplate-custody-response-key-{}-{unique}.pem",
             std::process::id()
         ));
 
@@ -9001,11 +9001,11 @@ mod tests {
             .expect("clock")
             .as_nanos();
         let public_key_path = env::temp_dir().join(format!(
-            "serverware-control-plane-response-key-{}-{unique}.pem",
+            "catchplate-control-plane-response-key-{}-{unique}.pem",
             std::process::id()
         ));
         let key_id_path = env::temp_dir().join(format!(
-            "serverware-control-plane-response-key-id-{}-{unique}",
+            "catchplate-control-plane-response-key-id-{}-{unique}",
             std::process::id()
         ));
         let verifying_key = pinned_control_plane_response_verifying_key();
@@ -9073,11 +9073,11 @@ mod tests {
             .expect("clock")
             .as_nanos();
         let public_key_path = env::temp_dir().join(format!(
-            "serverware-control-plane-response-key-format-{}-{unique}.pem",
+            "catchplate-control-plane-response-key-format-{}-{unique}.pem",
             std::process::id()
         ));
         let key_id_path = env::temp_dir().join(format!(
-            "serverware-control-plane-response-key-id-format-{}-{unique}",
+            "catchplate-control-plane-response-key-id-format-{}-{unique}",
             std::process::id()
         ));
         let verifying_key = pinned_control_plane_response_verifying_key();
@@ -9263,7 +9263,7 @@ mod tests {
 
         let mut wrong_exporter_domain = valid.clone();
         wrong_exporter_domain.tls_channel_binding.exporter_label =
-            "EXPORTER-Serverware-Proxy-v2".to_string();
+            "EXPORTER-Catchplate-Proxy-v2".to_string();
         assert!(
             validate_test_streaming_statement(&wrong_exporter_domain, &authorization_binding,)
                 .expect_err("buffered exporter replay")
@@ -9981,7 +9981,7 @@ mod tests {
         for (field, replacement) in [
             (
                 "actorId",
-                Value::String("spiffe://serverware/data-plane/substituted".to_string()),
+                Value::String("spiffe://catchplate/data-plane/substituted".to_string()),
             ),
             ("attemptId", Value::String(digest(90))),
             ("claimDigest", Value::String(digest(91))),
@@ -10390,7 +10390,7 @@ mod tests {
                         .release_authority
                         .request_digest = substituted.request_digest.clone();
                     substituted.response.selected_headers.insert(
-                        "x-serverware-request-digest".to_string(),
+                        "x-catchplate-request-digest".to_string(),
                         substituted.request_digest.clone(),
                     );
                 }
@@ -10403,7 +10403,7 @@ mod tests {
                         .release_authority
                         .operation_digest = substituted.operation_digest.clone();
                     substituted.response.selected_headers.insert(
-                        "x-serverware-operation-digest".to_string(),
+                        "x-catchplate-operation-digest".to_string(),
                         substituted.operation_digest.clone(),
                     );
                 }
@@ -10534,7 +10534,7 @@ mod tests {
     #[test]
     fn custody_signing_rejects_legacy_or_inconsistent_v2_authority() {
         let mut legacy = statement();
-        legacy.api_version = "serverware.proxyResponseStatement/v1".to_string();
+        legacy.api_version = "catchplate.proxyResponseStatement/v1".to_string();
         assert!(validate_test_statement(&legacy)
             .expect_err("legacy statement must not reach signing")
             .message
@@ -11274,7 +11274,7 @@ mod tests {
             sha256_prefixed(
                 &canonical_json_bytes(&json!({
                     "client_nonce":observation.client_nonce.clone(),
-                    "contract":"serverware.responseObservationStatement/v1",
+                    "contract":"catchplate.responseObservationStatement/v1",
                 }))
                 .expect("canonical nonce-only observation commitment")
             )
@@ -11809,7 +11809,7 @@ mod tests {
         mismatched_headers
             .response
             .selected_headers
-            .insert("x-serverware-policy-hash".to_string(), digest(99));
+            .insert("x-catchplate-policy-hash".to_string(), digest(99));
         mismatched_headers.response.selected_headers_digest = sha256_prefixed(
             &canonical_json_bytes(&mismatched_headers.response.selected_headers)
                 .expect("canonical headers"),

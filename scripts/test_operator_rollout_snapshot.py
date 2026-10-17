@@ -19,7 +19,7 @@ import operator_rollout_snapshot as observer
 def initialize_ecr(connection):
     """Run only the actual owner DDL on disposable SQLite; no app initialization."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from serverware import operator_ecr_publications as owner, operator_publication
+    from catchplate import operator_ecr_publications as owner, operator_publication
     previous_factory = connection.row_factory
     connection.row_factory = sqlite3.Row
     try:
@@ -38,8 +38,8 @@ def populate(connection, *, without_rowid=True):
         "CREATE TABLE audit_events(id TEXT PRIMARY KEY,value TEXT);"
         "INSERT INTO audit_events VALUES('before','synthetic audit');"
         "CREATE TABLE metadata_audit_outbox(id TEXT PRIMARY KEY);"
-        "CREATE TABLE serverware_store_migrations(migration TEXT PRIMARY KEY,version BIGINT,applied_at TEXT);"
-        "INSERT INTO serverware_store_migrations VALUES('schema',1,'2026-01-01T00:00:00+00:00');")
+        "CREATE TABLE catchplate_store_migrations(migration TEXT PRIMARY KEY,version BIGINT,applied_at TEXT);"
+        "INSERT INTO catchplate_store_migrations VALUES('schema',1,'2026-01-01T00:00:00+00:00');")
     for table in sorted(observer.NOTIFICATIONS | {"operator_upstream_setups"}):
         connection.execute('CREATE TABLE "' + table + '" (id TEXT PRIMARY KEY,value TEXT)'
             + (' WITHOUT ROWID' if without_rowid else ''))
@@ -111,13 +111,13 @@ class DatabaseTests(unittest.TestCase):
 
     def test_timestamp_only_migration_change_is_explicitly_reported(self):
         before, after = self.pair()
-        after.execute("UPDATE serverware_store_migrations SET applied_at='2026-01-02T00:00:00+00:00'")
+        after.execute("UPDATE catchplate_store_migrations SET applied_at='2026-01-02T00:00:00+00:00'")
         after.commit()
         self.assertTrue(observer.compare_databases(before, after)['migration_timestamps']['timestamp_only_change'])
 
     def test_migration_version_change_is_not_a_timestamp_exception(self):
         before, after = self.pair()
-        after.execute('UPDATE serverware_store_migrations SET version=2')
+        after.execute('UPDATE catchplate_store_migrations SET version=2')
         after.commit()
         with self.assertRaises(observer.SnapshotError) as raised:
             observer.compare_databases(before, after)
@@ -294,7 +294,7 @@ class EcrInitializationTests(unittest.TestCase):
                 observer.compare_databases(before, after, ecr_initialization=True)
         before, after = self.pair()
         initialize_ecr(after)
-        after.execute("UPDATE serverware_store_migrations SET applied_at='2026-01-02T00:00:00+00:00'")
+        after.execute("UPDATE catchplate_store_migrations SET applied_at='2026-01-02T00:00:00+00:00'")
         after.commit()
         self.assertTrue(observer.compare_databases(before, after,
             ecr_initialization=True)['migration_timestamps']['timestamp_only_change'])
@@ -360,7 +360,7 @@ class EcrInitializationTests(unittest.TestCase):
         shutil.copytree(self.custody, after_custody)
         result = observer.compare(before_root, after_root, before_custody, after_custody,
             before, after, ecr_initialization=True)
-        self.assertEqual(result['schema'], 'serverware.operatorRolloutComparison/v5')
+        self.assertEqual(result['schema'], 'catchplate.operatorRolloutComparison/v5')
         self.assertEqual(result['ecr_artifact_directory_added'], observer.ECR_DIRECTORY)
         self.assertTrue(result['non_sqlite_files_and_custody_preserved'])
         self.assertEqual(result['prior_audit_count'], result['current_audit_count'])
@@ -403,7 +403,7 @@ class ManagedTransitionTests(unittest.TestCase):
             connection.execute('CREATE TABLE proxy_token_verifiers (id TEXT PRIMARY KEY, verifier BLOB, expires_at BIGINT)')
             connection.execute("INSERT INTO proxy_token_verifiers VALUES('retained',X'070809',123456789)")
         self.put(self.persistent / observer.POLICY, self.policy)
-        for name, raw in (('.operator-publication.lock', b''), ('.serverware-operator-demo.json', b'synthetic marker'),
+        for name, raw in (('.operator-publication.lock', b''), ('.catchplate-operator-demo.json', b'synthetic marker'),
                 ('policy-high-water.json', b'synthetic high water'), ('mitmproxy-ca-original.pem', b'synthetic original CA')):
             self.put(self.persistent / 'app-data' / name, raw)
         self.serial = 0
@@ -413,7 +413,7 @@ class ManagedTransitionTests(unittest.TestCase):
             managed_unconfigured=True, provider_custody_root=self.provider)
 
     def public(self):
-        return {'schema': 'serverware.operatorGoogleGateConfiguration/v1', 'operation': None,
+        return {'schema': 'catchplate.operatorGoogleGateConfiguration/v1', 'operation': None,
             'profile_binding': None, 'profile_binding_digest': None, 'effective_settings': self.settings,
             'effective_settings_digest': 'sha256:' + observer.digest(self.settings)}
 
@@ -477,9 +477,9 @@ class ManagedTransitionTests(unittest.TestCase):
         before, copies = self.first()
         with sqlite3.connect(self.database) as connection:
             connection.execute("INSERT INTO audit_events VALUES('after','new startup audit')")
-            connection.execute("UPDATE serverware_store_migrations SET applied_at='2026-01-02T00:00:00+00:00'")
+            connection.execute("UPDATE catchplate_store_migrations SET applied_at='2026-01-02T00:00:00+00:00'")
         first = self.compare(before, copies)
-        self.assertEqual(first['schema'], 'serverware.operatorRolloutComparison/v2')
+        self.assertEqual(first['schema'], 'catchplate.operatorRolloutComparison/v2')
         self.assertEqual(first['derived_gate_files_added'], sorted(observer.GATE_MEMBERS))
         self.assertEqual(first['managed_unconfigured']['effective_settings_digest'], 'sha256:' + observer.digest(self.settings))
         self.assertTrue(first['provider_custody_empty'])
@@ -632,7 +632,7 @@ class ManagedTransitionTests(unittest.TestCase):
     def test_all_original_authority_and_provider_identities_remain_pinned(self):
         before, copies = self.first()
         after = self.receipt()
-        names = ('app-data/master.key', 'app-data/.operator-publication.lock', 'app-data/.serverware-operator-demo.json',
+        names = ('app-data/master.key', 'app-data/.operator-publication.lock', 'app-data/.catchplate-operator-demo.json',
             'app-data/mitmproxy-ca-original.pem', 'app-data/policy-high-water.json', observer.POLICY, observer.DB_MAIN)
         for name in names:
             changed = deepcopy(after)
@@ -792,7 +792,7 @@ class ManagedXTransitionTests(unittest.TestCase):
             provider_custody_root=self.provider, managed_x_unconfigured=True, x_custody_root=self.x_custody)
 
     def x_public(self):
-        return {**self.public(), 'schema': 'serverware.operatorXGateConfiguration/v1'}
+        return {**self.public(), 'schema': 'catchplate.operatorXGateConfiguration/v1'}
 
     def publish_x(self, raw=None):
         self.put(self.persistent / observer.GATE_X,
@@ -814,11 +814,11 @@ class ManagedXTransitionTests(unittest.TestCase):
 
     def test_first_x_adds_only_one_manifest_and_retained_restart_adds_nothing(self):
         before, copies = self.receipt(), self.copies()
-        self.assertEqual(before['schema'], 'serverware.operatorRolloutInventory/v3')
+        self.assertEqual(before['schema'], 'catchplate.operatorRolloutInventory/v3')
         self.assertEqual(observer.gate_members(before), observer.GATE_MEMBERS)
         self.publish_x()
         result = self.compare(before, copies)
-        self.assertEqual(result['schema'], 'serverware.operatorRolloutComparison/v3')
+        self.assertEqual(result['schema'], 'catchplate.operatorRolloutComparison/v3')
         self.assertEqual(result['derived_gate_files_added'], [observer.GATE_X])
         self.assertTrue(result['managed_x_unconfigured'] and result['x_custody_empty']
             and result['x_custody_live_identity_preserved'])
@@ -860,7 +860,7 @@ class ManagedXTransitionTests(unittest.TestCase):
     def test_x_manifest_matches_exact_sql_settings_not_caller_supplied_identity(self):
         before, copies = self.receipt(), self.copies()
         cases = []
-        for key, value in (('schema', 'serverware.operatorGoogleGateConfiguration/v1'), ('operation', {}),
+        for key, value in (('schema', 'catchplate.operatorGoogleGateConfiguration/v1'), ('operation', {}),
                 ('profile_binding', {}), ('profile_binding_digest', 'sha256:' + '1' * 64),
                 ('effective_settings_digest', 'sha256:' + '2' * 64), ('extra', 'synthetic-forbidden')):
             changed = self.x_public(); changed[key] = value

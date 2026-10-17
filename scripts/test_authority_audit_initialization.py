@@ -22,11 +22,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_audit_initialization as initialization
-from serverware import authority_contract
-from serverware import authority_transition_core as core
-from serverware.authority_audit_inventory import AuditInventoryObservation
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_audit_initialization as initialization
+from catchplate import authority_contract
+from catchplate import authority_transition_core as core
+from catchplate.authority_audit_inventory import AuditInventoryObservation
 from test_authority_audit_inventory import InventoryTree, outbox_row, wire_digest, wire_json
 from test_authority_radix_mutation import IndependentTree, refresh_proof_digest
 
@@ -35,20 +35,20 @@ AGGREGATE = "policy_authority_bounded_aggregate_states"
 OUTBOX = "metadata_audit_outbox"
 KIND = "metadata-audit-outbox-global-capacity-v1"
 MAX_INTEGER = 2**63 - 1
-PARTITION = wire_digest("serverware.metadataAuditOutboxCapacityPartition/v1", b"global")
+PARTITION = wire_digest("catchplate.metadataAuditOutboxCapacityPartition/v1", b"global")
 IDENTITY = KIND + ":" + PARTITION
 KEY = {"aggregate_id": IDENTITY}
-EMPTY_EXPIRY = wire_digest("serverware.policyAuthorityAggregateExpiryIndex/v1", b"[]")
+EMPTY_EXPIRY = wire_digest("catchplate.policyAuthorityAggregateExpiryIndex/v1", b"[]")
 TIME_NS = 1_000_000_000
-SCHEMA = "serverware.metadataAuditCapacityInitializationPreparation/v1"
-PROFILE = "serverware.metadataAuditCapacityInitializationProfile/v1"
-INSERT_TEMPLATE = "serverware.metadataAuditCapacityInitializationInsert/v1"
-INVENTORY_SCHEMA = "serverware.metadataAuditOutboxInventoryObservation/v2"
+SCHEMA = "catchplate.metadataAuditCapacityInitializationPreparation/v1"
+PROFILE = "catchplate.metadataAuditCapacityInitializationProfile/v1"
+INSERT_TEMPLATE = "catchplate.metadataAuditCapacityInitializationInsert/v1"
+INVENTORY_SCHEMA = "catchplate.metadataAuditOutboxInventoryObservation/v2"
 
 
 def initial_row(outstanding, timestamp=TIME_NS):
     state = {
-        "schema": "serverware.policyAuthorityAggregateState/v1",
+        "schema": "catchplate.policyAuthorityAggregateState/v1",
         "aggregateId": IDENTITY, "aggregateKind": KIND, "partitionDigest": PARTITION,
         "revision": 1, "liveCount": outstanding, "activeCount": outstanding,
         "capacityLimit": 100_000, "reservedUnits": {}, "committedUnits": {},
@@ -62,7 +62,7 @@ def initial_row(outstanding, timestamp=TIME_NS):
         "next_sequence": 0, "minimum_expiry_epoch_ns": None,
         "expiry_index_root_digest": EMPTY_EXPIRY, "work_page_id": None,
         "state_json": wire_json(state).decode("ascii"),
-        "state_digest": wire_digest("serverware.policyAuthorityAggregateState/v1", wire_json(state)),
+        "state_digest": wire_digest("catchplate.policyAuthorityAggregateState/v1", wire_json(state)),
         "updated_at_epoch_ns": timestamp, "source_revision": authority_contract.SOURCE_REVISION,
     }
 
@@ -79,7 +79,7 @@ def absence(tree, key=None):
 def business_selected(table, key, row):
     return {
         "table": table, "key": copy.deepcopy(key),
-        "keyDigest": wire_digest("serverware.policyAuthorityBusinessKey/v1",
+        "keyDigest": wire_digest("catchplate.policyAuthorityBusinessKey/v1",
             table.encode("ascii"), wire_json(key)),
         "present": row is not None, "row": copy.deepcopy(row), "contractSelector": None,
     }
@@ -155,7 +155,7 @@ class AuditCapacityInitializationTests(unittest.TestCase):
             "inventoryDigest": wire_digest(INVENTORY_SCHEMA, wire_json(inventory)),
             "tableContracts": contracts, "beforeRoots": before_roots, "afterRoots": after_roots,
             "aggregateAbsence": missing, "counterRow": row,
-            "counterRowDigest": wire_digest("serverware.metadataAuditCapacityInitialRow/v1", wire_json(row)),
+            "counterRowDigest": wire_digest("catchplate.metadataAuditCapacityInitialRow/v1", wire_json(row)),
             "prospectiveMutation": mutation, "radixMetrics": metrics, "installationPermitted": False,
         }
 
@@ -408,7 +408,7 @@ class AuditCapacityInitializationTests(unittest.TestCase):
         expected = {**row, "revision": 2, "live_count": 3, "active_count": 3,
             "next_sequence": 1, "updated_at_epoch_ns": 2_000_000_000,
             "state_json": wire_json(state).decode("ascii"),
-            "state_digest": wire_digest("serverware.policyAuthorityAggregateState/v1", wire_json(state))}
+            "state_digest": wire_digest("catchplate.policyAuthorityAggregateState/v1", wire_json(state))}
         self.assertEqual(result[1]["row"], expected)
         # The prospective initialization label does not become a source-owned
         # runtime mutation template by passing this pure consumer check.

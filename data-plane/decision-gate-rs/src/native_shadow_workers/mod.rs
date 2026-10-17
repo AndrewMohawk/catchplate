@@ -16,7 +16,7 @@ use serde::{Serialize,Deserialize};
 use std::{path::PathBuf,os::fd::AsRawFd,sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}}};
 use wire::{require,now};
 pub const UID:u32=64988;
-pub const EXECUTABLE:&str="/usr/local/bin/serverware-native-shadow-worker";
+pub const EXECUTABLE:&str="/usr/local/bin/catchplate-native-shadow-worker";
 
 #[derive(Debug,Clone,Copy,Eq,PartialEq,Serialize,Deserialize)]
 #[serde(rename_all="lowercase")]
@@ -27,9 +27,9 @@ impl Purpose {
     fn input(self,value:&serde_json::Value)->Result<(),String> {
         let api=value.get("apiVersion").and_then(|v|v.as_str());let operation=value.get("operation").and_then(|v|v.as_str());
         require(match self {
-            Self::Runtime=>api==Some("serverware.policyShadowRuntimeAttestationVerificationRequest/v1") && operation==Some("verify-generation-runtime"),
-            Self::Webauthn=>api==Some("serverware.policyActivationWebAuthnVerificationRequest/v1") && operation==Some("resolve-and-verify-assertion-by-digest"),
-            Self::Publication=>api==Some("serverware.policyShadowGenerationPublicationHandoff/v1") && matches!(operation,Some("prepare-or-recover"|"commit")),
+            Self::Runtime=>api==Some("catchplate.policyShadowRuntimeAttestationVerificationRequest/v1") && operation==Some("verify-generation-runtime"),
+            Self::Webauthn=>api==Some("catchplate.policyActivationWebAuthnVerificationRequest/v1") && operation==Some("resolve-and-verify-assertion-by-digest"),
+            Self::Publication=>api==Some("catchplate.policyShadowGenerationPublicationHandoff/v1") && matches!(operation,Some("prepare-or-recover"|"commit")),
         })
     }
 }
@@ -58,11 +58,11 @@ pub enum Configuration {Legacy(LegacyConfiguration),Publication(PublicationConfi
 impl Configuration {
     pub fn validate(&self)->Result<(),String> {
         let executable=match self {
-            Self::Legacy(v)=>{require(v.api_version=="serverware.nativeShadowWorkers/v1")?;&v.executable},
-            Self::Publication(v)=>{require(v.api_version=="serverware.nativeShadowWorkers/v2"
+            Self::Legacy(v)=>{require(v.api_version=="catchplate.nativeShadowWorkers/v1")?;&v.executable},
+            Self::Publication(v)=>{require(v.api_version=="catchplate.nativeShadowWorkers/v2"
                 && !v.resources.runtime_verification_required())?;v.resources.validate()?;&v.executable},
             Self::Runtime(v)=>{
-                require(v.api_version=="serverware.nativeShadowWorkers/v3")?;v.runtime_resources.validate()?;
+                require(v.api_version=="catchplate.nativeShadowWorkers/v3")?;v.runtime_resources.validate()?;
                 if let Some(publication)=&v.publication_resources {
                     publication.validate()?;
                     require(v.runtime_resources.inherited_fds().iter().all(|fd| !publication.inherited_fds().contains(fd)))?;
@@ -154,7 +154,7 @@ impl Prepared {
         };
         let worker=image::Image::open(&executable.path,&executable.sha256)?;
         if resources.is_some() {
-            require(publication.path==std::path::Path::new("/usr/local/bin/serverware-native-publication-handoff"))?;
+            require(publication.path==std::path::Path::new("/usr/local/bin/catchplate-native-publication-handoff"))?;
         }
         let runtime_path=runtime.path.to_str().ok_or("runtime path not UTF8")?.to_owned();
         let publication_path=publication.path.to_str().ok_or("publication path not UTF8")?.to_owned();
@@ -167,19 +167,19 @@ impl Prepared {
         require(entropy.iter().any(|v|*v!=0))?;
         let nonce=base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(entropy);
         let bootstrap=if let Some(webauthn)=&webauthn_image {
-            let bootstrap=wire::Bootstrap {api_version:"serverware.nativeShadowWorkerBootstrap/v1".into(),channel_nonce:nonce.clone(),
+            let bootstrap=wire::Bootstrap {api_version:"catchplate.nativeShadowWorkerBootstrap/v1".into(),channel_nonce:nonce.clone(),
                 deadline_boottime_ns:prepared.deadline(),executable_sha256:[runtime_image.sealed.sha256().to_owned(),
                     webauthn.sealed.sha256().to_owned(),publication_image.sealed.sha256().to_owned()],
                 executable_path:[runtime_path,webauthn_path.ok_or("WebAuthn command path absent")?,publication_path]};
             match (runtime_resources.as_ref(),resources.as_ref()) {
             (Some(runtime),publication)=>wire::WorkerBootstrap::Runtime(wire::RuntimeBootstrap {
-                api_version:"serverware.nativeShadowWorkerBootstrap/v3".into(),worker:bootstrap,
+                api_version:"catchplate.nativeShadowWorkerBootstrap/v3".into(),worker:bootstrap,
                 runtime_resources_sha256:runtime.bootstrap.sha256().to_owned(),
                 publication_resources_sha256:publication.map(|value|value.bootstrap.sha256().to_owned()),
             }),
             (None,None)=>wire::WorkerBootstrap::Legacy(bootstrap),
             (None,Some(value))=>wire::WorkerBootstrap::Publication(wire::PublicationBootstrap {
-                api_version:"serverware.nativeShadowWorkerBootstrap/v2".into(),worker:bootstrap,
+                api_version:"catchplate.nativeShadowWorkerBootstrap/v2".into(),worker:bootstrap,
                 publication_resources_sha256:value.bootstrap.sha256().to_owned(),
             }),
             }
@@ -187,7 +187,7 @@ impl Prepared {
             let runtime=runtime_resources.as_ref().ok_or("native-only runtime resources absent")?;
             let publication=resources.as_ref().ok_or("native-only publication resources absent")?;
             wire::WorkerBootstrap::NativeActivation(wire::NativeActivationBootstrap {
-                api_version:"serverware.nativeShadowWorkerBootstrap/v4".into(),channel_nonce:nonce.clone(),
+                api_version:"catchplate.nativeShadowWorkerBootstrap/v4".into(),channel_nonce:nonce.clone(),
                 deadline_boottime_ns:prepared.deadline(),
                 executable_sha256:[runtime_image.sealed.sha256().to_owned(),publication_image.sealed.sha256().to_owned()],
                 executable_path:[runtime_path,publication_path],
@@ -205,7 +205,7 @@ impl Prepared {
         transport::wait(core.process.channel.as_raw_fd(),libc::POLLIN,&core.process.pidfd,core.deadline)?;
         let packet=transport::receive(core.process.channel.as_raw_fd(),0)?;core.process.authenticate(&packet)?;
         let initialized:wire::Initialized=wire::decode(&packet.bytes)?;
-        require(initialized.api_version=="serverware.nativeShadowWorkerInitialized/v1" && initialized.channel_nonce==core.nonce
+        require(initialized.api_version=="catchplate.nativeShadowWorkerInitialized/v1" && initialized.channel_nonce==core.nonce
             && initialized.bootstrap_sha256==core.bootstrap.sha256())?;
         prepared.check()?;core.cohort.require_shadow_preparation(prepared)?;
         Ok(Self {core})
@@ -242,7 +242,7 @@ impl Owner {
             let bytes=wire::encode(input)?;require(!bytes.is_empty() && bytes.len()<=wire::MAX_INPUT)?;
             let original=image::Sealed::new(&bytes,false)?;
             *sequence=sequence.checked_add(1).ok_or("shadow command sequence exhausted")?;
-            let request=wire::Request {api_version:"serverware.nativeShadowWorkerRequest/v1".into(),sequence:*sequence,purpose,
+            let request=wire::Request {api_version:"catchplate.nativeShadowWorkerRequest/v1".into(),sequence:*sequence,purpose,
                 input_sha256:original.sha256().to_owned(),input_bytes:original.length(),deadline_boottime_ns:deadline,
                 channel_nonce:self.core.nonce.clone(),bootstrap_sha256:self.core.bootstrap.sha256().to_owned()};
             transport::wait(self.core.process.channel.as_raw_fd(),libc::POLLOUT,&self.core.process.pidfd,deadline)?;
@@ -251,7 +251,7 @@ impl Owner {
             transport::wait(self.core.process.channel.as_raw_fd(),libc::POLLIN,&self.core.process.pidfd,deadline)?;
             let packet=transport::receive(self.core.process.channel.as_raw_fd(),1)?;self.core.process.authenticate(&packet)?;
             let response:wire::Response=wire::decode(&packet.bytes)?;
-            require(response.api_version=="serverware.nativeShadowWorkerResponse/v1" && response.request==request
+            require(response.api_version=="catchplate.nativeShadowWorkerResponse/v1" && response.request==request
                 && response.result.status=="process-exited-zero" && response.result.output_bytes>0
                 && response.result.output_bytes<=purpose.maximum() as u64)?;
             let output=image::Sealed::receive(std::fs::File::from(packet.descriptor.ok_or("shadow output original absent")?),UID,

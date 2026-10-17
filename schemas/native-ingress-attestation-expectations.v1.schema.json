@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-ingress-attestation-expectations.v1.schema.json",
-  "title": "Serverware native ingress attestation expectations v1",
+  "$id": "https://catchplate.invalid/schemas/native-ingress-attestation-expectations.v1.schema.json",
+  "title": "Catchplate native ingress attestation expectations v1",
   "description": "Closed independently supplied expectations for the offline native ingress verifier. Schema conformance establishes shape only, not pin provenance, current release or policy authority, nonce freshness, Nitro or TLS verification, CA installation permission or service readiness. The runtime retains a separately pinned original of at most 16384 bytes and performs canonicalization, cross-field and cryptographic checks.",
   "type": "object",
   "additionalProperties": false,
@@ -12,7 +12,7 @@
     "serverInstanceId"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeIngressAttestationExpectations/v1"},
+    "apiVersion": {"const": "catchplate.nativeIngressAttestationExpectations/v1"},
     "releaseRecordSha256": {"$ref": "#/$defs/nonzeroSha256"},
     "policyHash": {"$ref": "#/$defs/nonzeroSha256"},
     "configurationSha256": {"$ref": "#/$defs/nonzeroSha256"},

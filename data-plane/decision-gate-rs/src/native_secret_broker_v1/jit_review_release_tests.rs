@@ -47,21 +47,21 @@ fn oracle_framed(domain: &str, values: &[&[u8]]) -> String {
 fn request(operation: &str, public: &RawMap) -> Vec<u8> {
     let (handler, adapter) = match operation {
         "release.reserve" => ("reserve_release_authorization_v2",
-            "serverware.policyAuthorityPlanningAdapter/reserve_release_authorization_v2/v1"),
+            "catchplate.policyAuthorityPlanningAdapter/reserve_release_authorization_v2/v1"),
         "jit.request" => ("ensure_jit_approval_request",
-            "serverware.policyAuthorityPlanningAdapter/ensure_jit_approval_request/v1"),
+            "catchplate.policyAuthorityPlanningAdapter/ensure_jit_approval_request/v1"),
         _ => panic!("unknown test operation"),
     };
-    let mut intent = raw_map(&json!({"schema":"serverware.policyAuthorityBusinessIntent/v2",
+    let mut intent = raw_map(&json!({"schema":"catchplate.policyAuthorityBusinessIntent/v2",
         "operation":operation, "planningAdapterId":adapter}));
     intent.insert("arguments".into(), assemble(public));
     let mut arguments = public.clone(); arguments.insert("businessIntent".into(), assemble(&intent));
-    let mut auth = raw_map(&json!({"schema":"serverware.policyAuthorityV9Authorization/v1",
+    let mut auth = raw_map(&json!({"schema":"catchplate.policyAuthorityV9Authorization/v1",
         "operation":operation, "handler":handler, "operationManifestDigest":MANIFEST}));
     auth.insert("arguments".into(), assemble(&arguments));
-    let digest = oracle_framed("serverware.policyAuthorityV9Request/v1", &[&assemble(&auth)]);
-    let id = oracle_framed("serverware.policyAuthorityOperation/v2", &[operation.as_bytes(), digest.as_bytes()]);
-    auth.insert("schema".into(), encoded(&json!("serverware.policyAuthorityV9Request/v1")));
+    let digest = oracle_framed("catchplate.policyAuthorityV9Request/v1", &[&assemble(&auth)]);
+    let id = oracle_framed("catchplate.policyAuthorityOperation/v2", &[operation.as_bytes(), digest.as_bytes()]);
+    auth.insert("schema".into(), encoded(&json!("catchplate.policyAuthorityV9Request/v1")));
     auth.insert("requestDigest".into(), encoded(&json!(digest)));
     auth.insert("operationId".into(), encoded(&json!(id))); assemble(&auth)
 }
@@ -98,7 +98,7 @@ fn fixture(changes: &[(&str, &[u8])]) -> Fixture {
         documents.insert(field.into(), child_public.remove(field).unwrap());
     }
     let documents = Value::Object(documents);
-    child_public.insert("schema".into(), json!("serverware.jitRequestCommitments/v2"));
+    child_public.insert("schema".into(), json!("catchplate.jitRequestCommitments/v2"));
     child_public.insert("original_arguments_digest".into(), json!(sha(&encoded(&child_original))));
     child_public.insert("url_commitment".into(), json!(sha(documents["url"].as_str().unwrap().as_bytes())));
     child_public.insert("canonical_request_digest".into(), json!(sha(&encoded(&documents["canonical_request"]))));
@@ -124,12 +124,12 @@ fn fixture(changes: &[(&str, &[u8])]) -> Fixture {
         assert!(parent_original.contains_key(*field)); parent_original.insert((*field).into(), value.to_vec());
     }
     let mut parent_public = parent_original.clone();
-    parent_public.insert("schema".into(), encoded(&json!("serverware.releaseReserveCommitments/v1")));
+    parent_public.insert("schema".into(), encoded(&json!("catchplate.releaseReserveCommitments/v1")));
     parent_public.insert("original_arguments_digest".into(), encoded(&json!(sha(&assemble(&parent_original)))));
     parent_public.insert("jit_approval_request".into(), encoded(&child_public));
     let child = request("jit.request", &raw_map(&child_public));
     let parent = request("release.reserve", &parent_public);
-    let mut envelope = raw_map(&json!({"schema":"serverware.policyAuthorityPrivateReleaseWriterInput/v1",
+    let mut envelope = raw_map(&json!({"schema":"catchplate.policyAuthorityPrivateReleaseWriterInput/v1",
         "handler":"reserve_release_authorization_v2", "operationManifestDigest":MANIFEST,
         "privateDocuments":documents}));
     envelope.insert("arguments".into(), assemble(&parent_public));
@@ -137,16 +137,16 @@ fn fixture(changes: &[(&str, &[u8])]) -> Fixture {
     let mut identity = serde_json::Map::new();
     for field in IDENTITY { identity.insert((*field).into(), json!(sha(field.as_bytes()))); }
     let boot = [b'b'; 32];
-    let mut holder = b"serverware/credential-currentness-holder/v1\0".to_vec();
+    let mut holder = b"catchplate/credential-currentness-holder/v1\0".to_vec();
     holder.extend(boot); holder.extend(hex::decode(identity["keyId"].as_str().unwrap().strip_prefix("sha256:").unwrap()).unwrap());
     identity.insert("bootId".into(), json!(URL_SAFE_NO_PAD.encode(boot)));
     identity.insert("holderId".into(), json!(sha(&holder)));
     identity.insert("policyHash".into(), child_original["policy_hash"].clone());
-    let config = json!({"apiVersion":"serverware.nativeJitReviewConfiguration/v1",
+    let config = json!({"apiVersion":"catchplate.nativeJitReviewConfiguration/v1",
         "sourceContractDigest":MANIFEST, "controlPlaneConfigurationDigest":sha(b"synthetic configuration"),
         "deploymentId":"synthetic-offline", "instanceId":"spiffe://synthetic.invalid/native",
         "secretKekId":"attested-memory-kek:0123456789abcdef01234567", "attemptCapacity":16, "identity":identity});
-    let mut command = raw_map(&json!({"apiVersion":"serverware.nativeJitReviewChannel/v1",
+    let mut command = raw_map(&json!({"apiVersion":"catchplate.nativeJitReviewChannel/v1",
         "phase":"seal-release-pair", "challenge":URL_SAFE_NO_PAD.encode([b'c';32]),
         "issuedAtEpochNs":WALL, "sealExpiresAtEpochNs":WALL+20_000_000_000u64,
         "documentExpiresAtEpochNs":WALL+120_000_000_000u64, "deadlineBoottimeNs":BOOT+25_000_000_000u64}));
@@ -157,12 +157,12 @@ fn fixture(changes: &[(&str, &[u8])]) -> Fixture {
     let parent_fields = split(&parent);
     let parent_digest: Value = serde_json::from_slice(&parent_fields["requestDigest"]).unwrap();
     let parent_operation: Value = serde_json::from_slice(&parent_fields["operationId"]).unwrap();
-    let scope = json!({"schema":"serverware.nativeJitReviewScope/v2", "publicRequest":child_value,
+    let scope = json!({"schema":"catchplate.nativeJitReviewScope/v2", "publicRequest":child_value,
         "parentRequestSha256":sha(&parent), "sourceContractDigest":MANIFEST,
         "controlPlaneConfigurationDigest":config["controlPlaneConfigurationDigest"],
         "ownerScopeDigest":sha(&encoded(&config)), "issuedAtEpochNs":WALL,
         "sealExpiresAtEpochNs":WALL+20_000_000_000u64, "documentExpiresAtEpochNs":WALL+120_000_000_000u64});
-    let canonical_payload = encoded(&json!({"schema":"serverware.jitCanonicalReviewPayload/v1",
+    let canonical_payload = encoded(&json!({"schema":"catchplate.jitCanonicalReviewPayload/v1",
         "url":documents["url"], "canonical_request":documents["canonical_request"]}));
     let display = encoded(&documents["redacted_display"]);
     let mut items = Vec::new();
@@ -173,7 +173,7 @@ fn fixture(changes: &[(&str, &[u8])]) -> Fixture {
             "wrappedKeyNonce":URL_SAFE.encode([0u8;12]), "wrappedKey":URL_SAFE.encode([0u8;48]),
             "ciphertextNonce":URL_SAFE.encode([0u8;12]), "ciphertext":URL_SAFE.encode(vec![0u8;plaintext.len()+16])}));
     }
-    let pair = json!({"schema":"serverware.nativeJitReviewPair/v2", "scope":scope,
+    let pair = json!({"schema":"catchplate.nativeJitReviewPair/v2", "scope":scope,
         "keyId":config["secretKekId"], "items":items});
     let mut bindings = config["identity"].as_object().unwrap().clone();
     for field in ["sourceContractDigest", "controlPlaneConfigurationDigest", "deploymentId", "instanceId", "secretKekId"] {
@@ -187,7 +187,7 @@ fn fixture(changes: &[(&str, &[u8])]) -> Fixture {
         ("parentOperationId", parent_operation), ("challenge", json!(URL_SAFE_NO_PAD.encode([b'c';32]))),
         ("issuedAtEpochNs", json!(WALL)), ("expiresAtEpochNs", scope["sealExpiresAtEpochNs"].clone()),
         ("documentExpiresAtEpochNs", scope["documentExpiresAtEpochNs"].clone())] { bindings.insert(field.into(), value); }
-    let response = json!({"apiVersion":"serverware.nativeJitReviewChannel/v1", "phase":"prepared-release-pair",
+    let response = json!({"apiVersion":"catchplate.nativeJitReviewChannel/v1", "phase":"prepared-release-pair",
         "operation":"release.reserve", "pair":pair, "statementBindings":bindings});
     Fixture { config, runtime, parent, child, command, response }
 }
@@ -262,7 +262,7 @@ fn release_public_parent_numbers_retain_exact_original_bytes_in_all_three_json_r
 fn release_parent_child_request_and_private_original_substitutions_fail_closed() {
     let f = fixture(&[]);
     for (field, value) in [("operation", json!("jit.request")), ("handler", json!("ensure_jit_approval_request")),
-        ("schema", json!("serverware.policyAuthorityV9Authorization/v1")),
+        ("schema", json!("catchplate.policyAuthorityV9Authorization/v1")),
         ("operationManifestDigest", json!(sha(b"other manifest"))),
         ("requestDigest", json!(CHILD_DIGEST)), ("operationId", json!(CHILD_OPERATION))] {
         let parent = replace(&f.parent, field, &encoded(&value));
@@ -336,7 +336,7 @@ fn release_command_response_scope_and_binding_field_sets_are_closed_and_profile_
     }
     let mut extra = command_fields.clone(); extra.insert("verified".into(), b"true".to_vec());
     assert!(check(&f, &assemble(&extra), &f.response).is_err());
-    for (field, value) in [("phase", "seal-pair"), ("apiVersion", "serverware.nativeJitReviewChannel/v2")] {
+    for (field, value) in [("phase", "seal-pair"), ("apiVersion", "catchplate.nativeJitReviewChannel/v2")] {
         assert!(check(&f, &replace(&f.command, field, &encoded(&json!(value))), &f.response).is_err());
     }
     for path in [vec![], vec!["pair"], vec!["pair", "scope"], vec!["statementBindings"]] {
@@ -355,8 +355,8 @@ fn release_command_response_scope_and_binding_field_sets_are_closed_and_profile_
         let mut changed = f.response.clone(); changed[field] = json!(value);
         assert!(check(&f, &f.command, &changed).is_err());
     }
-    for (path, schema) in [("pair", "serverware.nativeJitReviewPair/v1"),
-        ("scope", "serverware.nativeJitReviewScope/v1")] {
+    for (path, schema) in [("pair", "catchplate.nativeJitReviewPair/v1"),
+        ("scope", "catchplate.nativeJitReviewScope/v1")] {
         let mut changed = f.response.clone();
         if path == "pair" { changed["pair"]["schema"] = json!(schema); }
         else { changed["pair"]["scope"]["schema"] = json!(schema); }

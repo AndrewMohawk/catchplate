@@ -25,7 +25,7 @@ SECRET = "synthetic-private-dataplane-token-canary"
 
 def fixture(mode="drop_ack", *, wall=None):
     now = time.time() if wall is None else wall
-    arm = {"schema": "serverware.privateXQuotaFaultArm/v1", "mode": mode,
+    arm = {"schema": "catchplate.privateXQuotaFaultArm/v1", "mode": mode,
         "principal_id": "agent:operator-demo:" + APP_ID, "route_id": "operator." + RULE_ID,
         "body_sha256": "sha256:" + "1" * 64}
     wire = {"apiVersion": relay.QUOTA_VERSION, "principalId": arm["principal_id"],
@@ -33,18 +33,18 @@ def fixture(mode="drop_ack", *, wall=None):
         "operatorXQuota": {"attemptNonce": "sha256:" + "3" * 64,
             "expiresAtEpochMs": int(now * 1000) + 4500,
             "canonicalRequest": {"request": {"body_sha256": arm["body_sha256"]}}}}
-    reservation = {"schema": "serverware.operatorXPostingQuotaReservation/v1",
+    reservation = {"schema": "catchplate.operatorXPostingQuotaReservation/v1",
         "reservation_id": RESERVATION_ID, "bucket_key": "sha256:" + "4" * 64,
         "utc_day": 22000, "expires_at_epoch_ms": wire["operatorXQuota"]["expiresAtEpochMs"],
         "binding_digest": "sha256:" + "5" * 64}
-    lease = {"apiVersion": "serverware.operatorXQuotaCredentialLeaseResponse/v1",
+    lease = {"apiVersion": "catchplate.operatorXQuotaCredentialLeaseResponse/v1",
         "requestBindingSha256": relay.digest(relay.encoded(wire)), "reservation": reservation,
         "credentialLease": {"synthetic_encrypted_payload": "encrypted-canary"}}
-    claim = {"apiVersion": "serverware.operatorXQuotaClaimRequest/v1", "leaseRequest": wire,
+    claim = {"apiVersion": "catchplate.operatorXQuotaClaimRequest/v1", "leaseRequest": wire,
         "reservationId": RESERVATION_ID}
-    ack = {"apiVersion": "serverware.operatorXQuotaClaimResponse/v1",
+    ack = {"apiVersion": "catchplate.operatorXQuotaClaimResponse/v1",
         "requestBindingSha256": relay.digest(relay.encoded(wire)),
-        "claim": {**reservation, "schema": "serverware.operatorXPostingQuotaClaim/v1",
+        "claim": {**reservation, "schema": "catchplate.operatorXPostingQuotaClaim/v1",
             "claimed_at_epoch_ms": int(now * 1000)}}
     return arm, wire, lease, claim, ack
 
@@ -52,11 +52,11 @@ def fixture(mode="drop_ack", *, wall=None):
 def reply(value, status=200):
     body = relay.encoded(value)
     fields = {"content-type": "application/json", "content-length": str(len(body)),
-        "x-serverware-response-body-sha256": relay.digest(body),
-        "x-serverware-response-key-id": "sha256:" + "6" * 64,
-        "x-serverware-response-statement-sha256": "sha256:" + "7" * 64,
-        "x-serverware-response-statement-b64": "synthetic-statement",
-        "x-serverware-response-signature": "ed25519:" + "a" * 86}
+        "x-catchplate-response-body-sha256": relay.digest(body),
+        "x-catchplate-response-key-id": "sha256:" + "6" * 64,
+        "x-catchplate-response-statement-sha256": "sha256:" + "7" * 64,
+        "x-catchplate-response-statement-b64": "synthetic-statement",
+        "x-catchplate-response-signature": "ed25519:" + "a" * 86}
     raw = (f"HTTP/1.1 {status} Synthetic\r\n" + "".join(f"{k}: {v}\r\n" for k, v in fields.items())
         + "\r\n").encode() + body
     return raw, status, fields, body
@@ -64,11 +64,11 @@ def reply(value, status=200):
 
 def request(path, value=None):
     body = b"" if value is None else relay.encoded(value)
-    fields = {"host": "127.0.0.1:3001" if path in {relay.ARM, relay.STATUS, relay.RELEASE} else "serverware:3000"}
+    fields = {"host": "127.0.0.1:3001" if path in {relay.ARM, relay.STATUS, relay.RELEASE} else "catchplate:3000"}
     if value is not None:
         fields.update({"content-type": "application/json", "content-length": str(len(body))})
     if path in {relay.LEASE, relay.CLAIM, relay.AUDIT}:
-        fields.update({"x-serverware-data-plane-token": SECRET, "x-serverware-response-nonce": "n" * 43})
+        fields.update({"x-catchplate-data-plane-token": SECRET, "x-catchplate-response-nonce": "n" * 43})
     first = ("GET " if value is None else "POST ") + path + " HTTP/1.1"
     raw = (first + "\r\n" + "".join(f"{k}: {v}\r\n" for k, v in fields.items()) + "\r\n").encode() + body
     return raw, first.encode(), fields, body
@@ -84,7 +84,7 @@ def bound(state, data):
 
 def release(state):
     status = state.status()
-    return {"schema": "serverware.privateXQuotaFaultRelease/v1", "arm_sha256": status["arm_sha256"],
+    return {"schema": "catchplate.privateXQuotaFaultRelease/v1", "arm_sha256": status["arm_sha256"],
         "claim_sha256": status["claim_sha256"], "revoked_rule_id": RULE_ID,
         "policy_hash": "sha256:" + "8" * 64, "loaded_policy_hash": "sha256:" + "8" * 64}
 
@@ -132,7 +132,7 @@ class Pure(unittest.TestCase):
             other = relay.CONTROL if listener == relay.DATA else relay.DATA
             with self.assertRaises(ValueError): relay.admit(first, fields, body, other)
             # Correcting Host cannot move a route across the listener boundary.
-            host = "serverware:3000" if other == relay.DATA else "127.0.0.1:3001"
+            host = "catchplate:3000" if other == relay.DATA else "127.0.0.1:3001"
             with self.assertRaises(ValueError): relay.admit(first, {**fields, "host": host}, body, other)
         for path in ("/attestation", "/attestation?nonce=x", "/attestation?nonce=decision-gate-policy-trust-01-1",
                 "/attestation?nonce=decision-gate-policy-trust-1-1&extra=1", "/healthz", "/api/operator-demo"):
@@ -140,11 +140,11 @@ class Pure(unittest.TestCase):
             with self.assertRaises(ValueError): relay.admit(first, fields, body)
         _, first, fields, body = request("/attestation?nonce=decision-gate-policy-trust-1-1")
         for change in ({"content-length": "1"}, {"content-length": "00"}, {"content-type": "application/json"},
-                {"x-serverware-data-plane-token": SECRET}, {"x-serverware-response-nonce": "n" * 43}):
+                {"x-catchplate-data-plane-token": SECRET}, {"x-catchplate-response-nonce": "n" * 43}):
             with self.assertRaises(ValueError): relay.admit(first, {**fields, **change}, body)
         for path in (relay.AUDIT, relay.LEASE, relay.CLAIM):
             _, first, fields, body = request(path, {})
-            for key in ("x-serverware-data-plane-token", "x-serverware-response-nonce"):
+            for key in ("x-catchplate-data-plane-token", "x-catchplate-response-nonce"):
                 missing = dict(fields); del missing[key]
                 with self.assertRaises(ValueError): relay.admit(first, missing, body)
 
@@ -240,7 +240,7 @@ class Pure(unittest.TestCase):
             if change == "reservation": value["reservation"]["reservation_id"] = "invalid"
             if change == "expiry": value["reservation"]["expires_at_epoch_ms"] += 1
             raw, status, fields, body = reply(value)
-            if change == "signature": del fields["x-serverware-response-signature"]
+            if change == "signature": del fields["x-catchplate-response-signature"]
             with self.assertRaises(ValueError): state.response(relay.LEASE, raw, status, fields, body, time.monotonic() + 3)
 
     def test_drop_exact_ack_once_and_public_only(self):

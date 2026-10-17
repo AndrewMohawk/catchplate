@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-enrollment-bootstrap-setup.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-enrollment-bootstrap-setup.v1.schema.json",
   "title": "Independently signed native enrollment bootstrap setup v1",
-  "description": "Closed canonical sorted compact ensure_ascii JSON plus exactly one LF, at most 32768 bytes and depth4. Ed25519 signs domain ASCII(serverware/native-enrollment-bootstrap-setup/v1) plus NUL plus canonical setup JSON without LF. Shape does not establish signature validity, current runtime policy, protected reservation/token ownership, namespace ownership, installation or enrollment permission. The setup is a public selected association; actual reservation, durable claims and final native receiving remain mandatory separate gates.",
+  "description": "Closed canonical sorted compact ensure_ascii JSON plus exactly one LF, at most 32768 bytes and depth4. Ed25519 signs domain ASCII(catchplate/native-enrollment-bootstrap-setup/v1) plus NUL plus canonical setup JSON without LF. Shape does not establish signature validity, current runtime policy, protected reservation/token ownership, namespace ownership, installation or enrollment permission. The setup is a public selected association; actual reservation, durable claims and final native receiving remain mandatory separate gates.",
   "type": "object", "additionalProperties": false,
   "required": ["apiVersion", "setup", "signatureBase64url"],
   "properties": {
-    "apiVersion": {"const": "serverware.signedNativeEnrollmentBootstrapSetup/v1"},
+    "apiVersion": {"const": "catchplate.signedNativeEnrollmentBootstrapSetup/v1"},
     "setup": {"$ref": "#/$defs/setup"},
     "signatureBase64url": {"type": "string", "minLength": 86, "maxLength": 86, "pattern": "^[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])"}
   },
@@ -15,7 +15,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "purpose", "authorizerKeyId", "setupId", "delegationSha256", "targetRequestSha256", "releaseRecordSha256", "policyHash", "configurationSha256", "runtimeCaCertificateSha256", "runtimeCaSpkiSha256", "policyRequirementsSha256", "targetPrincipalId", "targetNonce", "controlPlaneOrigin", "proxy", "caInstall", "kubernetes", "networkOwner", "notBeforeUnixSeconds", "expiresAtUnixSeconds"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeEnrollmentBootstrapSetup/v1"},
+        "apiVersion": {"const": "catchplate.nativeEnrollmentBootstrapSetup/v1"},
         "purpose": {"const": "native-enrollment-bootstrap-setup"},
         "authorizerKeyId": {"$ref": "#/$defs/sha256", "description": "Actual setup-authorizer DER SPKI digest, distinct from the delegation, runtime CA, caller issuer/key and target issuer/key roles. Actual policy and response key separation is enforced by the cold owner; this field is not the independent exact-PEM input pin."},
         "setupId": {"type": "string", "minLength": 43, "maxLength": 43, "pattern": "^(?!A{43}(?![\\s\\S]))[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048](?![\\s\\S])"},

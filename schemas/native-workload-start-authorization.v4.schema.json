@@ -1,11 +1,11 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://serverware.invalid/schemas/native-workload-start-authorization.v4.schema.json",
+  "$id":"https://catchplate.invalid/schemas/native-workload-start-authorization.v4.schema.json",
   "title":"Separate native application adapter start permission v4",
   "description":"Closed canonical ASCII/no-LF <=32768 bytes. Ed25519 signs exact payload schema plus NUL plus canonical payload. Explicitly selected v4 retains v3 retirement/outcome requirements and adds actual immutable applicationProxy settings hash. This grants only the source-fixed one-child/one-CONNECT profile, never provider authorization, retry, restart or weaker legacy fallback.",
   "type":"object","additionalProperties":false,"required":["schema","payload","signature"],
   "properties":{
-    "schema":{"const":"serverware.signedNativeWorkloadStartAuthorization/v4"},
+    "schema":{"const":"catchplate.signedNativeWorkloadStartAuthorization/v4"},
     "signature":{"$ref":"native-workload-start-authorization.v3.schema.json#/properties/signature"},
     "payload":{"$ref":"#/$defs/payload"}
   },
@@ -13,7 +13,7 @@
     "type":"object","additionalProperties":false,
     "required":["schema","sourceRevision","purpose","trustMode","creationMode","authorizationId","egressAuthorizationSha256","attachmentAuthorizationSha256","launchManifestSha256","executionManifestSha256","launcherBinarySha256","machineIdSha256","networkOwner","isolation","resources","containment","capability","journal","issuedAtEpochNs","startBeforeEpochNs","stopAtEpochNs","cleanupBeforeEpochNs","applicationProxySha256"],
     "properties":{
-      "schema":{"const":"serverware.nativeWorkloadStartAuthorization/v4"},
+      "schema":{"const":"catchplate.nativeWorkloadStartAuthorization/v4"},
       "sourceRevision":{"$ref":"native-workload-start-authorization.v3.schema.json#/$defs/payload/properties/sourceRevision"},
       "purpose":{"const":"native-workload-start"},"trustMode":{"const":"trusted-host-local"},"creationMode":{"const":"new-execution-child-v1"},
       "authorizationId":{"$ref":"native-workload-start-authorization.v2.schema.json#/$defs/identifier"},

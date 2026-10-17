@@ -3,11 +3,11 @@
 use super::*;
 
 pub(in crate::policy_shadow::policy_custody::services) const PATH:&str=
-    "/run/serverware-shadow-driver-lifecycle/listener.sock";
+    "/run/catchplate-shadow-driver-lifecycle/listener.sock";
 pub(in crate::policy_shadow::policy_custody::services) const DIRECTORY:&str=
-    "/run/serverware-shadow-driver-lifecycle";
+    "/run/catchplate-shadow-driver-lifecycle";
 pub(in crate::policy_shadow::policy_custody::services) const API:&str=
-    "serverware.nativeShadowDriverLifecycleExchange/v1";
+    "catchplate.nativeShadowDriverLifecycleExchange/v1";
 pub(in crate::policy_shadow::policy_custody::services) const MAX_FRAME:usize=65536;
 pub(super) const MAX_PROCESSES:usize=16;
 pub(super) const MAX_DESCRIPTORS:usize=256;
@@ -29,16 +29,16 @@ pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) stru
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) constructed_admission_authority:Option<ConstructedAuthority>}
 impl Configuration {
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn facade_selected(&self)->bool{
-        matches!(self.api_version.as_str(),"serverware.nativeShadowDriverLifecyclePolicy/v2"|"serverware.nativeShadowDriverLifecyclePolicy/v3")
+        matches!(self.api_version.as_str(),"catchplate.nativeShadowDriverLifecyclePolicy/v2"|"catchplate.nativeShadowDriverLifecyclePolicy/v3")
     }
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn constructed_selected(&self)->bool{
-        self.api_version=="serverware.nativeShadowDriverLifecyclePolicy/v3"
+        self.api_version=="catchplate.nativeShadowDriverLifecyclePolicy/v3"
     }
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn validate(&self,startup:u64,lifetime:u64)->Result<(),ShadowError>{
-        require(matches!(self.api_version.as_str(),"serverware.nativeShadowDriverLifecyclePolicy/v1"|"serverware.nativeShadowDriverLifecyclePolicy/v2"|"serverware.nativeShadowDriverLifecyclePolicy/v3")
+        require(matches!(self.api_version.as_str(),"catchplate.nativeShadowDriverLifecyclePolicy/v1"|"catchplate.nativeShadowDriverLifecyclePolicy/v2"|"catchplate.nativeShadowDriverLifecyclePolicy/v3")
             && self.constructed_selected()==self.constructed_admission_authority.is_some()
-            && self.gate.uid==serverware_decision_gate::native_serving_privileges::UID
-            && self.gate.gid==serverware_decision_gate::native_serving_privileges::GID
+            && self.gate.uid==catchplate_decision_gate::native_serving_privileges::UID
+            && self.gate.gid==catchplate_decision_gate::native_serving_privileges::GID
             && self.gate.executable_sha256!=Sha256Digest::compute(&[])
             && self.cleanup_reserve_nanos>=1_000_000 && self.cleanup_reserve_nanos<=5_000_000_000
             && startup<lifetime.checked_sub(self.cleanup_reserve_nanos).ok_or(ShadowError::BindingDrift)?)?;
@@ -69,7 +69,7 @@ impl ConstructedAuthority {
 }
 
 pub(in crate::policy_shadow::policy_custody::services) const CONSTRUCTED_DOMAIN:&str=
-    "serverware.nativeShadowConstructedDriverAdmission.signature/v1";
+    "catchplate.nativeShadowConstructedDriverAdmission.signature/v1";
 #[derive(Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(in crate::policy_shadow::policy_custody::services) struct ConstructedPayload {
@@ -105,7 +105,7 @@ pub(in crate::policy_shadow::policy_custody::services) struct ConstructedAdmissi
     pub(in crate::policy_shadow::policy_custody::services) signature:CanonicalEd25519Signature,
 }
 pub(in crate::policy_shadow::policy_custody::services) const BOOTSTRAP_ADMISSION_DOMAIN:&str=
-    "serverware.nativeShadowBootstrapDriverAdmission.signature/v1";
+    "catchplate.nativeShadowBootstrapDriverAdmission.signature/v1";
 #[derive(Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(in crate::policy_shadow::policy_custody::services) struct BootstrapAdmissionPayload {

@@ -1,6 +1,6 @@
 # Reconciled completion: protected RECOVERY exchange
 
-`serverware/control_plane_oidc_session_activation_completion_recovery_retained_exchange.py`
+`catchplate/control_plane_oidc_session_activation_completion_recovery_retained_exchange.py`
 connects one fresh `retained-release` actor to the independently authorized
 RECOVERY/checkpoint-one worker. It accepts only the actual source-owned
 `completion_recovery_delivery._DeliveryAttempt`, not a posted subject, request,

@@ -19,11 +19,11 @@ from cryptography.exceptions import InvalidSignature
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_genesis_endpoint_profile as endpoints
-from serverware import native_pilot_genesis_key_profile as key_profile
-from serverware import native_pilot_genesis_native_service_authority as authority
-from serverware import native_pilot_publication_cold_binding as binding
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_genesis_endpoint_profile as endpoints
+from catchplate import native_pilot_genesis_key_profile as key_profile
+from catchplate import native_pilot_genesis_native_service_authority as authority
+from catchplate import native_pilot_publication_cold_binding as binding
 import test_native_pilot_genesis_key_authority as key_tests
 import test_native_pilot_genesis_ordinary_runtime as ordinary_tests
 
@@ -35,9 +35,9 @@ def labelled(value):
 
 
 def independent_signed(operation, payload, key):
-    domain = {"publication": b"serverware.nativePublicationGenesisAssignment.signature/v1",
-        "retrieval": b"serverware.nativePublicationGenesisRetrievalGrant.signature/v1"}[operation]
-    message = b"serverware.signedEnvelope/v1\0" + domain + b"\0serverware.canonicalJson/ascii-integer-v1\0" + g.canonical(payload)
+    domain = {"publication": b"catchplate.nativePublicationGenesisAssignment.signature/v1",
+        "retrieval": b"catchplate.nativePublicationGenesisRetrievalGrant.signature/v1"}[operation]
+    message = b"catchplate.signedEnvelope/v1\0" + domain + b"\0catchplate.canonicalJson/ascii-integer-v1\0" + g.canonical(payload)
     return g.canonical({"payload": payload, "signature": p.encoded(key.sign(message))})
 
 
@@ -71,7 +71,7 @@ def fixture():
     resources = endpoints.resources(resources_raw)
     directory = resources["services"][authority.ENDPOINTS[1]]["directories"]["ledger-spool-store"]["identity"]
     proof_raw = scope["proofScopeOriginal"].encode("ascii")
-    genesis_raw = g.canonical({"apiVersion": "serverware.nativeLedgerSpoolStoreGenesis/v1", "guest": guest,
+    genesis_raw = g.canonical({"apiVersion": "catchplate.nativeLedgerSpoolStoreGenesis/v1", "guest": guest,
         "proofScopeSha256": p.sha(proof_raw)})
     store = {"apiVersion": endpoints.STORE_API, "resourcesSha256": p.sha(resources_raw), "deliverySha256": p.sha(delivery_raw),
         "proofScopeSha256": p.sha(proof_raw), "genesisOriginal": genesis_raw.decode("ascii"),
@@ -129,7 +129,7 @@ class GenesisNativeServiceAuthorityTests(unittest.TestCase):
         self.assertLessEqual(prepared["epochLimit"], self.f["prepared"]["epochLimit"])
 
     def test_closed_input_profiles_forbid_hot_selector_future_hash_and_unsigned_prior(self):
-        for change in ({"apiVersion": "serverware.nativePilotNativeServiceAuthorityInput/v1"},
+        for change in ({"apiVersion": "catchplate.nativePilotNativeServiceAuthorityInput/v1"},
                 {"futureRetrievalGrantSha256": labelled("future-grant")}, {"operation": "persistence"}):
             self.refused("publication", {**self.f["publication"], **change})
         changed = copy.deepcopy(self.f["retrieval"]); del changed["nativePublicationOriginal"]

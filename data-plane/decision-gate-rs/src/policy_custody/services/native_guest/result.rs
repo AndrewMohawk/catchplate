@@ -1,6 +1,6 @@
 //! Independent admission signature; no conversion to a settlement attestation.
 use super::*;
-const DOMAIN:&str="serverware.nativeShadowKeyAdmissionResult.signature/v1";
+const DOMAIN:&str="catchplate.nativeShadowKeyAdmissionResult.signature/v1";
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Payload {
@@ -26,14 +26,14 @@ impl VerifiedResult {
         let evidence=owner.evidence.as_ref().ok_or(ShadowError::CustodyUnavailable)?;
         let statement=&evidence.statement;
         let domain=if let Some(configuration)=&owner.production {
-            require(self.wire.api_version=="serverware.nativeShadowBridgeContextVerifierResult/v1"
-                && p.api_version=="serverware.nativeShadowBridgeContextResult/v1" && p.purpose=="native-shadow-context-and-production-admission"
+            require(self.wire.api_version=="catchplate.nativeShadowBridgeContextVerifierResult/v1"
+                && p.api_version=="catchplate.nativeShadowBridgeContextResult/v1" && p.purpose=="native-shadow-context-and-production-admission"
                 && p.production_configuration_binding_sha256.as_ref()==Some(configuration.production_configuration_binding_sha256())
                 && p.production_configuration_binding_sha256==statement.production_configuration_binding_sha256)?;
-            "serverware.nativeShadowBridgeContextResult.signature/v1"
+            "catchplate.nativeShadowBridgeContextResult.signature/v1"
         }else{
-            require(self.wire.api_version=="serverware.nativeShadowKeyAdmissionVerifierResult/v1"
-                && p.api_version=="serverware.nativeShadowKeyAdmissionResult/v1" && p.purpose=="native-shadow-key-admission"
+            require(self.wire.api_version=="catchplate.nativeShadowKeyAdmissionVerifierResult/v1"
+                && p.api_version=="catchplate.nativeShadowKeyAdmissionResult/v1" && p.purpose=="native-shadow-key-admission"
                 && p.production_configuration_binding_sha256.is_none() && statement.production_configuration_binding_sha256.is_none())?;DOMAIN
         };
         require(p.statement_sha256==Sha256Digest::compute(&canonical_json_bytes(statement)?)
@@ -90,8 +90,8 @@ pub(super) fn verify_remote(raw:&[u8],evidence:&super::remote::RemoteEvidence,au
     let wire:Wire=serde_json::from_slice(raw).map_err(fail)?;
     require(canonical_json_bytes(&wire)?==raw)?;
     let value=VerifiedResult{wire,original:raw.to_vec()};let p=&value.wire.payload;
-    require(value.wire.api_version=="serverware.nativeShadowBridgeContextVerifierResult/v1"
-        && p.api_version=="serverware.nativeShadowBridgeContextResult/v1" && p.purpose=="native-shadow-context-and-production-admission")?;
+    require(value.wire.api_version=="catchplate.nativeShadowBridgeContextVerifierResult/v1"
+        && p.api_version=="catchplate.nativeShadowBridgeContextResult/v1" && p.purpose=="native-shadow-context-and-production-admission")?;
     evidence.require_context_result(&p.statement_sha256,&p.quote_sha256,&p.native_context_sha256,
         &p.admission_authorization_sha256,&p.key_authorization_sha256,&p.full_key_set_root_sha256,&p.local_key_set_root_sha256,
         p.production_configuration_binding_sha256.as_ref())?;
@@ -104,7 +104,7 @@ pub(super) fn verify_remote(raw:&[u8],evidence:&super::remote::RemoteEvidence,au
     require(p.signing_key_id==b.key_id && p.signing_key_spki_sha256==b.key_spki_sha256)?;
     let key=trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(AuthorityRole::CustodyAttestationVerifier),&b.key_id,&b.key_spki_sha256)?;
     require(ed25519_public_key_material_sha256(&key)==b.key_material_sha256)?;
-    key.verify_strict(&signature_preimage("serverware.nativeShadowBridgeContextResult.signature/v1",&canonical_json_bytes(p)?),
+    key.verify_strict(&signature_preimage("catchplate.nativeShadowBridgeContextResult.signature/v1",&canonical_json_bytes(p)?),
         &Signature::from_bytes(&value.wire.signature.decode()?)).map_err(|_|ShadowError::SignatureInvalid)?;
     require(trust.current_checkpoint()?==checkpoint)
 }

@@ -19,15 +19,15 @@ from cryptography.exceptions import InvalidSignature
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_ordinary_delivery_profile as delivery
-from serverware import native_pilot_ordinary_generation_profile as generation
-from serverware import native_pilot_ordinary_initial_profile as initial
-from serverware import native_pilot_ordinary_install as installation
-from serverware import native_pilot_ordinary_publication_authority as publication
-from serverware import native_pilot_ordinary_runtime_profile as runtime
-from serverware import native_pilot_ordinary_transition_profile as transition
-from serverware import native_pilot_service_authority as service
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_ordinary_delivery_profile as delivery
+from catchplate import native_pilot_ordinary_generation_profile as generation
+from catchplate import native_pilot_ordinary_initial_profile as initial
+from catchplate import native_pilot_ordinary_install as installation
+from catchplate import native_pilot_ordinary_publication_authority as publication
+from catchplate import native_pilot_ordinary_runtime_profile as runtime
+from catchplate import native_pilot_ordinary_transition_profile as transition
+from catchplate import native_pilot_service_authority as service
 from test_native_pilot_ordinary_commissioning import fixture as old_fixture, private, peer
 from test_native_pilot_ordinary_generations import scope_fixture, result as generation_result, root_pin
 from test_native_pilot_ordinary_initial import checkpoint, sign_anchor, DOMAINS
@@ -39,9 +39,9 @@ FAILURES = (ValueError, KeyError, TypeError, InvalidSignature)
 
 def fixture():
     f = old_fixture()
-    f["launch"]["apiVersion"] = "serverware.custodyFiveServiceLaunch/v7"
+    f["launch"]["apiVersion"] = "catchplate.custodyFiveServiceLaunch/v7"
     f["preparation"]["configurationSha256"] = sha(canonical(f["launch"]))
-    f["resources"].update(apiVersion="serverware.custodyFiveServiceInitialResources/v2",
+    f["resources"].update(apiVersion="catchplate.custodyFiveServiceInitialResources/v2",
         preparationSha256=sha(canonical(f["preparation"])))
     for index in (0, 3):
         role = ROLES[index]
@@ -100,7 +100,7 @@ def fixture():
         f["delivery_inputs"][role] = delivery.build(role, launch_raw=canonical(f["launch"]),
             configuration_raw=canonical(cold), runtime_raw=f["runtimes"][role], payload_raw=canonical(payload), activation=activation, adopted=True)
         signature = f["delivery_keys"][role].sign(g.c9.DOMAIN + canonical(payload))
-        f["deliveries"][role] = canonical({"apiVersion": "serverware.policyCustodyGuestDelivery/v1", "payload": payload,
+        f["deliveries"][role] = canonical({"apiVersion": "catchplate.policyCustodyGuestDelivery/v1", "payload": payload,
             "signatureBase64url": encoded(signature)})
     return f
 
@@ -152,7 +152,7 @@ class AdoptedOrdinaryControls(unittest.TestCase):
         for role in ROLES:
             header = runtime.validate_runtime(role, f["runtimes"][role], adopted=True)["runtime"]
             if role in initial.ADOPTED_ROLES:
-                self.assertEqual(header["apiVersion"], "serverware.policyCustodyServiceRuntimeConfig/v12")
+                self.assertEqual(header["apiVersion"], "catchplate.policyCustodyServiceRuntimeConfig/v12")
                 self.assertEqual(header["publicationAdmission"], {"grantFdName": "publication-grant"})
                 with self.assertRaises(FAILURES): runtime.validate_runtime(role, f["runtimes"][role])
             else:
@@ -191,8 +191,8 @@ class AdoptedOrdinaryControls(unittest.TestCase):
 
     def test_publication_signature_domain_is_exact_and_not_legacy(self):
         payload = {"apiVersion": publication.GRANT_API, "testOnly": "synthetic framing control"}
-        raw = canonical(payload); domain = b"serverware.nativePublicationServiceGrant.signature/v2"
-        expected = b"serverware-signature-v1\0" + len(domain).to_bytes(8, "big") + domain + len(raw).to_bytes(8, "big") + raw
+        raw = canonical(payload); domain = b"catchplate.nativePublicationServiceGrant.signature/v2"
+        expected = b"catchplate-signature-v1\0" + len(domain).to_bytes(8, "big") + domain + len(raw).to_bytes(8, "big") + raw
         self.assertEqual(publication.message(payload), expected)
         with self.assertRaises(FAILURES): publication.message({"u64Only": 1 << 63})
 

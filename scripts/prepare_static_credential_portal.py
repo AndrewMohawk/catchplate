@@ -3,7 +3,7 @@
 
 Use python3 -I -B as root with --purpose creation|rotation, --input-fd and its
 independently approved --input-sha256. The canonical input has exactly:
-apiVersion=serverware.staticCredentialPortalSelectorInput/v1, purpose,
+apiVersion=catchplate.staticCredentialPortalSelectorInput/v1, purpose,
 authorityRoot={fd,sha256,spkiSha256}, authorityConfiguration={fd,sha256},
 controlPlaneConfigurationDigest, and
 inheritedDescriptors={selector,authorityRoot,authorityConfiguration}.
@@ -45,15 +45,15 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 import native_pilot_authority_io as io
-from serverware import authority_contract as contract
-from serverware import authority_request_commitment as commitment
-from serverware import authority_policy_canary_policy as configuration
-from serverware import authority_credential_currentness as currentness
-from serverware import control_plane_static_credential as creation
-from serverware import control_plane_static_credential_rotation as rotation
-from serverware import oauth_application_owner as originals
+from catchplate import authority_contract as contract
+from catchplate import authority_request_commitment as commitment
+from catchplate import authority_policy_canary_policy as configuration
+from catchplate import authority_credential_currentness as currentness
+from catchplate import control_plane_static_credential as creation
+from catchplate import control_plane_static_credential_rotation as rotation
+from catchplate import oauth_application_owner as originals
 
-INPUT_SCHEMA = "serverware.staticCredentialPortalSelectorInput/v1"
+INPUT_SCHEMA = "catchplate.staticCredentialPortalSelectorInput/v1"
 PURPOSES = ("creation", "rotation")
 MAX_INPUT = MAX_OUTPUT = 16384
 MAX_ROOT = 4096

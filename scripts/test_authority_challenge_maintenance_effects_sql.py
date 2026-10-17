@@ -6,10 +6,10 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_contract as authority
-from serverware import authority_index_projection as projection
-from serverware.authority_store import challenge_maintenance_effects_sql as effects
-from serverware.authority_store import mutation_sql
+from catchplate import authority_contract as authority
+from catchplate import authority_index_projection as projection
+from catchplate.authority_store import challenge_maintenance_effects_sql as effects
+from catchplate.authority_store import mutation_sql
 
 
 class ChallengeMaintenanceEffectsSourceTests(unittest.TestCase):
@@ -42,7 +42,7 @@ class ChallengeMaintenanceEffectsSourceTests(unittest.TestCase):
         sql = effects.row_body_sql('"fixture"')
         for template in authority.operation_spec(effects.OPERATION)["mutationTemplates"]:
             self.assertIn(template["templateId"], sql)
-        self.assertIn("serverware.policyAuthorityBusinessKey/v1", sql)
+        self.assertIn("catchplate.policyAuthorityBusinessKey/v1", sql)
         self.assertIn("mutation->'expectedRow'->'id' IS DISTINCT FROM mutation->'key'->'id'", sql)
         self.assertIn("cme_phase_ordinal IN (0, 4)", sql)
         self.assertIn("mutation->'expectedRow'->'used_at' IS DISTINCT FROM 'null'", sql)
@@ -52,7 +52,7 @@ class ChallengeMaintenanceEffectsSourceTests(unittest.TestCase):
     def test_original_canonical_bytes_and_primary_descriptors_bracket_real_effect(self):
         sql = effects.row_body_sql('"fixture"')
         self.assertLess(sql.index("NOT BETWEEN 2 AND 4194304"), sql.index("cme_mutation_json::"))
-        self.assertEqual(sql.count("serverware_policy_authority_wire_walk("), 2)
+        self.assertEqual(sql.count("catchplate_policy_authority_wire_walk("), 2)
         self.assertIn("cme_canonical COLLATE \"C\" IS DISTINCT FROM cme_mutation_json", sql)
         before = sql.index("cme_actual_primary IS DISTINCT FROM cme_primary_before")
         effect = sql.index(mutation_sql.apply_mutation_sql('"fixture"'))

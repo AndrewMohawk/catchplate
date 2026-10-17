@@ -6,8 +6,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_policy as policy
-from serverware import authority_query_read_work as measured
+from catchplate import authority_challenge_policy as policy
+from catchplate import authority_query_read_work as measured
 
 
 BOUNDS = {
@@ -32,7 +32,7 @@ def meter(**limits):
 class ChallengePolicyTests(unittest.TestCase):
     def test_exact_bounds_and_detached_policy(self):
         self.assertEqual(policy.FIELD, "webauthnChallengeMaintenance")
-        self.assertEqual(policy.SCHEMA, "serverware.policyAuthorityChallengeMaintenancePolicy/v1")
+        self.assertEqual(policy.SCHEMA, "catchplate.policyAuthorityChallengeMaintenancePolicy/v1")
         for field, (low, high) in BOUNDS.items():
             for boundary in (low, high):
                 with self.subTest(field=field, boundary=boundary):
@@ -70,7 +70,7 @@ class ChallengePolicyTests(unittest.TestCase):
         class String(str):
             pass
         invalid = [None, [], Dictionary(selected()), {},
-            dict(selected(), schema="serverware.policyAuthorityChallengeMaintenancePolicy/v2"),
+            dict(selected(), schema="catchplate.policyAuthorityChallengeMaintenancePolicy/v2"),
             dict(selected(), schema=String(policy.SCHEMA)),
             dict(selected(), schema=policy.SCHEMA + "x"),
             dict(selected(), expiresAtUnixNanos=1)]

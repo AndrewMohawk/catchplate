@@ -22,14 +22,14 @@ from cryptography.exceptions import InvalidSignature
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
 
-from serverware import native_pilot_bridge_authorization_profile as authorizations
-from serverware import native_pilot_bridge_commissioning_policy as policy
-from serverware import native_pilot_bridge_delivery_profile as delivery
-from serverware import native_pilot_bridge_launch_profile as launch_profile
-from serverware import native_pilot_launch_publication as publication
-from serverware import native_pilot_phase_execution as execution
-from serverware import native_pilot_supervisor as supervisor
-from serverware import native_pilot_supervisor_policy as outer_policy
+from catchplate import native_pilot_bridge_authorization_profile as authorizations
+from catchplate import native_pilot_bridge_commissioning_policy as policy
+from catchplate import native_pilot_bridge_delivery_profile as delivery
+from catchplate import native_pilot_bridge_launch_profile as launch_profile
+from catchplate import native_pilot_launch_publication as publication
+from catchplate import native_pilot_phase_execution as execution
+from catchplate import native_pilot_supervisor as supervisor
+from catchplate import native_pilot_supervisor_policy as outer_policy
 from test_native_pilot_bridge_authorizations import clocks, public_keys, SERVICES
 from test_native_pilot_bridge_launches import fixture as launch_fixture, CLOCK
 from test_native_pilot_closure_set import canonical, sha, synthetic
@@ -58,7 +58,7 @@ def _fixture():
     for row in operational["histories"]:
         raw = histories[row["serviceRole"]]
         credentials.append({"name": row["manifestCredential"], "original": {
-            "path": "/etc/serverware/synthetic-" + row["manifestCredential"], "sha256": sha(raw)},
+            "path": "/etc/catchplate/synthetic-" + row["manifestCredential"], "sha256": sha(raw)},
             "length": len(raw), "signing": None})
     keys = {row["role"]: row for row in public_keys()}
     for field, discriminator in (("parentSignerEndpoints", "signerRole"), ("proofEndpoints", "endpointKind")):
@@ -67,7 +67,7 @@ def _fixture():
             row.update(authorityKeyId=key["keyId"], authorityKeySpkiSha256=key["keySpkiSha256"])
             raw = authorizations.p.decoded(key["publicKeyBase64url"], size=32)
             credentials.append({"name": row["authorityBindingCredential"], "original": {
-                "path": "/etc/serverware/synthetic-" + row["authorityBindingCredential"], "sha256": sha(raw)},
+                "path": "/etc/catchplate/synthetic-" + row["authorityBindingCredential"], "sha256": sha(raw)},
                 "length": 32, "signing": None})
     journal = next(row for row in json.loads(source["activationOriginal"]) if row["name"] == "production-journal")
     operational["journalDirectoryIdentity"] = {"mountId": 17, "deviceMajor": os.major(journal["device"]),
@@ -75,10 +75,10 @@ def _fixture():
     runtime_raw = canonical(operational)
     source["runtimeOriginal"] = runtime_raw.decode("ascii")
     payload = signed_delivery["payload"]
-    payload.update(credentials=credentials, runtimeConfig={"path": "/etc/serverware/native-pilot-inputs/bridge-runtime.json",
+    payload.update(credentials=credentials, runtimeConfig={"path": "/etc/catchplate/native-pilot-inputs/bridge-runtime.json",
         "sha256": sha(runtime_raw)})
     signed_delivery["signatureBase64url"] = encoded(key_fixture("bridge-c9")[0].sign(
-        b"serverware.policyCustodyGuestDelivery.signature/v1\0" + canonical(payload)))
+        b"catchplate.policyCustodyGuestDelivery.signature/v1\0" + canonical(payload)))
     delivery_raw = canonical(signed_delivery)
     source["payloadOriginal"] = canonical(payload).decode("ascii")
     interval = {"issuedAtUnixNanos": NOW - 100_000_000, "expiresAtUnixNanos": NOW + 100_000_000}
@@ -115,18 +115,18 @@ def delivery_options(f):
     configuration = json.loads(source["ownerConfigurationOriginal"])
     window = json.loads(source["windowOriginal"])["payload"]
     runtime_raw = source["runtimeOriginal"].encode("ascii")
-    outgoing = {"apiVersion": "serverware.nativeShadowDriverOutgoingInputs/v1",
+    outgoing = {"apiVersion": "catchplate.nativeShadowDriverOutgoingInputs/v1",
         "driverConfigurationSha256": sha(source["ownerConfigurationOriginal"].encode("ascii")),
         "driverWindowSha256": sha(source["windowOriginal"].encode("ascii")),
         "driverObservationSha256": sha(source["observationOriginal"].encode("ascii")),
         "invocationId": window["invocationId"], "deliveryConfiguration": configuration["deliveryConfiguration"],
-        "runtime": {"path": "/etc/serverware/native-pilot-inputs/bridge-runtime.json", "sha256": sha(runtime_raw)},
-        "bridgeLaunchVersion": "serverware.nativeProofBridgeLaunch/v7"}
+        "runtime": {"path": "/etc/catchplate/native-pilot-inputs/bridge-runtime.json", "sha256": sha(runtime_raw)},
+        "bridgeLaunchVersion": "catchplate.nativeProofBridgeLaunch/v7"}
     outgoing_raw = canonical(outgoing)
-    bundle = canonical({"apiVersion": "serverware.nativePilotBridgeRuntimeBundle/v1",
+    bundle = canonical({"apiVersion": "catchplate.nativePilotBridgeRuntimeBundle/v1",
         "driverControlSha256": sha(common["control_original"]), "driverObservationOriginal": source["observationOriginal"],
         "runtimeOriginal": source["runtimeOriginal"], "outgoingOriginal": outgoing_raw.decode("ascii")})
-    installed = {"apiVersion": "serverware.nativePilotBridgeRuntimeInstallation/v1", "bundleSha256": sha(bundle),
+    installed = {"apiVersion": "catchplate.nativePilotBridgeRuntimeInstallation/v1", "bundleSha256": sha(bundle),
         "configurationSha256": outgoing["driverConfigurationSha256"], "windowSha256": outgoing["driverWindowSha256"],
         "observationSha256": outgoing["driverObservationSha256"], "invocationId": window["invocationId"],
         "startupDeadlineBoottimeNs": window["startupDeadlineBoottimeNs"],
@@ -189,11 +189,11 @@ class BridgeCommissioningControls(unittest.TestCase):
     def test_c9_binds_exact_public_metadata_bytes_and_signed_result_not_semantic_hashes(self):
         f = fixture(); options = delivery_options(f)
         self.assertEqual(options["runtime_result"]["pins"]["bridge-outgoing"]["path"],
-            "/etc/serverware/native-shadow-driver-outgoing.json")
+            "/etc/catchplate/native-shadow-driver-outgoing.json")
         raw = delivery.build(**options)
         self.assertEqual(raw, f["common"]["delivery_input_raw"])
         reported = result(f["common"]["delivery_raw"])
-        reported["pin"] = {"path": "/etc/serverware/native-pilot-inputs/native-delivery-bridge.json", "sha256": reported["sha256"]}
+        reported["pin"] = {"path": "/etc/catchplate/native-pilot-inputs/native-delivery-bridge.json", "sha256": reported["sha256"]}
         self.assertEqual(delivery.checked_result(raw, reported, **options), f["common"]["delivery_raw"])
         payload = json.loads(json.loads(raw)["payloadOriginal"])
         self.assertEqual(payload["credentials"], f["common"]["fragment"]["deliveryCredentials"])
@@ -275,11 +275,11 @@ class BridgeCommissioningControls(unittest.TestCase):
         checked = publication.prepare_bridge_bundle(raw, **options)
         self.assertEqual(len(checked["pins"]), 9)
         self.assertNotIn("bridge-runtime", checked["prepared"])
-        self.assertEqual(json.loads(checked["prepared"]["native-bridge-keys"])["apiVersion"], "serverware.nativeShadowRoleKeys/v2")
-        self.assertEqual(json.loads(checked["prepared"]["native-launch-bridge"])["apiVersion"], "serverware.nativeProofBridgeLaunch/v7")
+        self.assertEqual(json.loads(checked["prepared"]["native-bridge-keys"])["apiVersion"], "catchplate.nativeShadowRoleKeys/v2")
+        self.assertEqual(json.loads(checked["prepared"]["native-launch-bridge"])["apiVersion"], "catchplate.nativeProofBridgeLaunch/v7")
         value = json.loads(raw)
         self.assertEqual(value["serviceGrant"]["sha256"], sha(f["service_grant_raw"]))
-        reported = {"apiVersion": "serverware.nativePilotLaunchInstallation/v1", "role": "bridge", "bundleSha256": sha(raw),
+        reported = {"apiVersion": "catchplate.nativePilotLaunchInstallation/v1", "role": "bridge", "bundleSha256": sha(raw),
             "startupDeadlineBoottimeNs": checked["window"]["startupDeadlineBoottimeNs"],
             "lifetimeDeadlineBoottimeNs": checked["window"]["lifetimeDeadlineBoottimeNs"],
             "launch": checked["launch"], "pins": checked["pins"]}

@@ -142,7 +142,7 @@ class NpmExampleRun(GmailSdkRun):
             require(len(actual) == len(service["volumes"]) and actual == {
                 (mount["source"], mount["target"], mount["read_only"]) for mount in service["volumes"]})
             require(row["State"]["Status"] == ("created" if name == "check" else "running"))
-            if name in {"network", "npm-registry", "serverware", "decision-gate-rs"}:
+            if name in {"network", "npm-registry", "catchplate", "decision-gate-rs"}:
                 require(row["State"].get("Health", {}).get("Status") == "healthy")
             if name in {"network", "npm-registry", "edge"}:
                 started = datetime.datetime.fromisoformat(row["State"]["StartedAt"].replace("Z", "+00:00"))
@@ -171,7 +171,7 @@ class NpmExampleRun(GmailSdkRun):
         for directory in (args.job_root, args.evidence):
             info = directory.stat()
             require(info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700 and not list(directory.iterdir()))
-        self.save("run.claim.json", {"schema": "serverware.privateNpmExampleRunClaim/v1",
+        self.save("run.claim.json", {"schema": "catchplate.privateNpmExampleRunClaim/v1",
             "sourceCommit": args.commit, "jobRoot": str(args.job_root)})
         phase, success, armed, clean = "inputs", False, False, False
         errors, failure = [], None
@@ -225,7 +225,7 @@ class NpmExampleRun(GmailSdkRun):
             self.command(phase, compose + ["up", "-d", "--no-build", "--pull", "never", "--wait", "--wait-timeout", "15", "network"], 20)
             phase = "baseline"
             self.command(phase, compose + ["up", "-d", "--no-build", "--pull", "never", "--wait",
-                "--wait-timeout", "45", "npm-registry", "serverware", "decision-gate-rs"], 50)
+                "--wait-timeout", "45", "npm-registry", "catchplate", "decision-gate-rs"], 50)
             phase = "basic-pki"
             self.command(phase, compose + ["--profile", "basic-pki", "run", "--rm", "--no-deps", "--pull", "never", "basic-pki"], 25)
             phase = "edge"
@@ -236,7 +236,7 @@ class NpmExampleRun(GmailSdkRun):
             checker = self.inspect_runtime(config, image_ids, recipe, keeper_anchor=keeper_anchor)
             phase = "running-binary"
             actual = self.command(phase, compose + ["exec", "-T", "decision-gate-rs", "python", "-B", "-c",
-                "import hashlib; print(hashlib.sha256(open('/usr/local/bin/serverware-decision-gate','rb').read()).hexdigest())"], 10).decode().strip()
+                "import hashlib; print(hashlib.sha256(open('/usr/local/bin/catchplate-decision-gate','rb').read()).hexdigest())"], 10).decode().strip()
             require(actual == args.expected_binary_sha256)
             self.command("network-proof", compose + ["exec", "-T", "npm-registry", "python", "-B", "-c",
                 "from scripts.operator_npm_metadata_fixture_network import assert_isolated_network; assert_isolated_network()"], 5)
@@ -263,7 +263,7 @@ class NpmExampleRun(GmailSdkRun):
         finally:
             if armed:
                 clean, errors = self.cleanup()
-            self.save("terminal.json", {"schema": "serverware.privateNpmExampleRun/v1", "phase": phase,
+            self.save("terminal.json", {"schema": "catchplate.privateNpmExampleRun/v1", "phase": phase,
                 "success": success, "cleanup": clean, "cleanupErrors": errors,
                 "elapsedSeconds": round(time.monotonic() - begun, 3), "syntheticOnly": True,
                 "productionReady": False, "realNpmVerified": False,

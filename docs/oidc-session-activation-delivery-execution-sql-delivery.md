@@ -10,8 +10,8 @@ SQL profile is widened. The private service admits control-plane peer
 ## Fixed originals and resources
 
 The listener is
-`/run/serverware/oidc-session-activation-delivery-execution/sql.sock`, activated
-under the exact name `serverware-oidc-session-activation-delivery-execution-sql`.
+`/run/catchplate/oidc-session-activation-delivery-execution/sql.sock`, activated
+under the exact name `catchplate-oidc-session-activation-delivery-execution-sql`.
 Its nonblocking AF_UNIX stream listener and pathname must match the signed
 device/inode pins. The path is `65498:65532`, mode `0660`; kernel peer `0:0`
 reflects the root-created socket, not an assertion that requests run as root.
@@ -31,23 +31,23 @@ reflects the root-created socket, not an assertion that requests run as root.
 | 208 | Existing SQL attempt journal directory | Not a byte original |
 
 The six trust files live below
-`/run/serverware/oidc-session-activation-delivery-execution-sql-trust/`:
+`/run/catchplate/oidc-session-activation-delivery-execution-sql-trust/`:
 `root-public-key.pem`, `bootstrap.json`, `custody.json`, `planner-bootstrap.json`,
 `planner-history-custody.json`, `receiving-history-custody.json`.
 The AES paths use the prefix
-`/run/secrets/serverware-oidc-session-activation-delivery-execution-sql-`
+`/run/secrets/catchplate-oidc-session-activation-delivery-execution-sql-`
 with suffixes `execution-bundle-key`, `historical-bundle-key`, `delivery-key`.
 All are actual independently pinned bytes, not newly generated replacements.
 No signing key or current-root state-service socket is delivered.
 
 The fixed attempt directory is
-`/var/lib/serverware/oidc-session-activation-delivery-execution-sql-attempts`,
+`/var/lib/catchplate/oidc-session-activation-delivery-execution-sql-attempts`,
 mode `0700`, owner/group `65498:65498`. No-follow descriptor and pathname checks
 join its actual device/inode to the signed scope; they do not create, reset or
 adopt an attempt checkpoint. Actual journal recovery is a startup responsibility.
 
 Five TLS originals live below
-`/run/serverware/oidc-session-activation-delivery-execution-sql-tls/`:
+`/run/catchplate/oidc-session-activation-delivery-execution-sql-tls/`:
 
 | Purpose | Filename | Ceiling | Owner and mode |
 | --- | --- | --- | --- |

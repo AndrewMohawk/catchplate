@@ -1,0 +1,13 @@
+# Optional account-wide X posting-attempt limits for the ordinary instance.
+# Requires the reviewed managed-X + curated-gate layers and matching new app
+# and gate artifacts. This does not configure OAuth or create/change a grant.
+# Rehearse the additive quota-store migration on a retained copy before use.
+# Keep ingress closed until both services and their paired readiness pass.
+services:
+  catchplate:
+    environment:
+      CATCHPLATE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED: "1"
+
+  decision-gate-rs:
+    environment:
+      CATCHPLATE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED: "1"

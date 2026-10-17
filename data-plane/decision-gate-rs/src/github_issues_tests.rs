@@ -44,7 +44,7 @@ fn snapshot(bundle: &str) -> Arc<Snapshot> {
     snapshot.routes = vec![route(bundle)];
     snapshot.credentials.insert(CREDENTIAL.into(), Credential {
         provider:"operator-demo".into(), provider_subject:Some("synthetic-github".into()),
-        injection:json!({"type":"bearer","header":"Authorization","__serverwareCredentialType":"static"}),
+        injection:json!({"type":"bearer","header":"Authorization","__catchplateCredentialType":"static"}),
     });
     Arc::new(snapshot)
 }

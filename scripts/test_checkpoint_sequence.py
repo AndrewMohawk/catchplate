@@ -32,9 +32,9 @@ class CheckpointSequenceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.provider = "local-sequence-contract-test"
         self.environment = patch.dict(os.environ, {
-            "SERVERWARE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT": "1",
-            "SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER": self.provider,
-            "SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID": self.key_info["log_id"],
+            "CATCHPLATE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT": "1",
+            "CATCHPLATE_TRANSPARENCY_EXPECTED_PROVIDER": self.provider,
+            "CATCHPLATE_TRANSPARENCY_EXPECTED_LOG_ID": self.key_info["log_id"],
         })
         self.environment.start()
         self.addCleanup(self.environment.stop)
@@ -219,7 +219,7 @@ class CheckpointSequenceTests(unittest.TestCase):
         response["receipt"]["payload"]["log_id"] = self.other_info["log_id"]
         response["receipt"]["public_key_pem"] = self.other_info["public_key_pem"]
         response["receipt"]["signature"] = adapter.sign_receipt(self.other_key, response["receipt"]["payload"])
-        with self.assertRaisesRegex(SystemExit, "did not match SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID"):
+        with self.assertRaisesRegex(SystemExit, "did not match CATCHPLATE_TRANSPARENCY_EXPECTED_LOG_ID"):
             self.normalize(response)
         with self.assertRaisesRegex(ValueError, "not the independently trusted log key"):
             self.verify(response)
@@ -227,7 +227,7 @@ class CheckpointSequenceTests(unittest.TestCase):
         response["provider"] = "another-provider"
         response["receipt"]["payload"]["provider"] = response["provider"]
         self.sign_changed_payload(response)
-        with self.assertRaisesRegex(SystemExit, "did not match SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER"):
+        with self.assertRaisesRegex(SystemExit, "did not match CATCHPLATE_TRANSPARENCY_EXPECTED_PROVIDER"):
             self.normalize(response)
         with self.assertRaisesRegex(ValueError, "not the trusted provider"):
             self.verify(response)
@@ -265,7 +265,7 @@ class CheckpointSequenceTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "opaque checkpoint receipts are unsupported"):
                 adapter.normalized_response(response, self.checkpoint, self.publication["request_digest"], require_verifiable_receipt=False)
             verify.assert_not_called()
-        with patch.dict(os.environ, {"SERVERWARE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT": "0"}):
+        with patch.dict(os.environ, {"CATCHPLATE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT": "0"}):
             with patch.object(adapter.urllib.request, "urlopen") as post, patch.object(adapter, "load_private_key") as key, patch.object(adapter, "sign_receipt") as sign, patch.object(Path, "mkdir") as mkdir:
                 for operation in (
                     lambda: adapter.checkpoint_http(self.checkpoint, "https://unused.invalid/checkpoint"),

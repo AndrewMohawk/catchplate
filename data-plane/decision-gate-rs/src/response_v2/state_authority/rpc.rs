@@ -32,9 +32,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 const NESTED_AUTHORITY_SIGNING_DOMAIN: &str =
-    "serverware.responseV2.nestedAuthorityArtifact.signature/v1";
+    "catchplate.responseV2.nestedAuthorityArtifact.signature/v1";
 const RELEASE_PREPARATION_MUTATION_RECEIPT_SIGNING_DOMAIN: &[u8] =
-    b"serverware.responseV2.releasePreparationMutationReceipt.signature/v1";
+    b"catchplate.responseV2.releasePreparationMutationReceipt.signature/v1";
 const FINAL_AUTHORITY_ARTIFACTS: [AuthorityArtifactType; 10] = [
     AuthorityArtifactType::ReleasePreparationReceipt,
     AuthorityArtifactType::CredentialUse,

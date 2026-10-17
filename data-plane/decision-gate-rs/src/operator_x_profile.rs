@@ -6,7 +6,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
 pub(super) const CAPABILITY: &str = "operator-x-oauth-v1";
 const PATH: &str = "/data/operator-x-configuration.json";
-const SCHEMA: &str = "serverware.operatorXGateConfiguration/v1";
+const SCHEMA: &str = "catchplate.operatorXGateConfiguration/v1";
 const MAX_BYTES: u64 = 32_768;
 
 fn refused() -> String { "operator X public configuration refused".to_owned() }
@@ -20,18 +20,18 @@ fn selected(flag: Option<&str>, operator: bool, external: bool) -> Result<bool, 
 }
 
 pub(super) fn from_environment(operator: bool) -> Result<bool, String> {
-    let raw = env::var_os("SERVERWARE_OPERATOR_MANAGED_X_ENABLED");
+    let raw = env::var_os("CATCHPLATE_OPERATOR_MANAGED_X_ENABLED");
     let flag = raw.as_ref().map(|value| value.to_str().ok_or_else(refused)).transpose()?;
     let external = env::vars_os().any(|(name, _)| {
         let name = name.to_string_lossy();
-        name.starts_with("SERVERWARE_X_OAUTH_") || name.starts_with("SERVERWARE_TWITTER_OAUTH_")
-            || name == "SERVERWARE_OPERATOR_X_PROFILE"
+        name.starts_with("CATCHPLATE_X_OAUTH_") || name.starts_with("CATCHPLATE_TWITTER_OAUTH_")
+            || name == "CATCHPLATE_OPERATOR_X_PROFILE"
     });
     selected(flag, operator, external)
 }
 
 pub(super) fn gate_capability() -> Value {
-    json!({"schema":"serverware.operatorXPostGate/v1","adapter":x_post::ADAPTER,"operation":"tweets.write"})
+    json!({"schema":"catchplate.operatorXPostGate/v1","adapter":x_post::ADAPTER,"operation":"tweets.write"})
 }
 
 #[derive(Clone)]
@@ -54,7 +54,7 @@ impl Profile {
                 .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}"))) {
             return Err(refused());
         }
-        let expected = json!({"schema":"serverware.operatorXOAuthProfile/v1","profile":CAPABILITY,
+        let expected = json!({"schema":"catchplate.operatorXOAuthProfile/v1","profile":CAPABILITY,
             "provider_id":"x","client_id":client,"redirect_uri":redirect,
             "client_auth_method":"client_secret_basic","permission_preset":"x_text_post_v1",
             "scopes":x_post::SCOPES,"api_origins":["https://api.x.com"],

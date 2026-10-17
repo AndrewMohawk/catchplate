@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/response-v2-guest-public-artifacts.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/response-v2-guest-public-artifacts.v1.schema.json",
   "title": "Guest public signed generation artifact layout",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion"],
   "properties": {
-    "apiVersion": {"const": "serverware.responseV2.guestPublicArtifacts/v1"}
+    "apiVersion": {"const": "catchplate.responseV2.guestPublicArtifacts/v1"}
   },
-  "$comment": "Explicit guestPublicArtifacts in the signed-delivery-bound cold custody configuration. Omission preserves the host paths; explicit null is rejected. The fixed native cohort requires this profile. Structural shape grants no generation or readiness authority. Root preparation requires all seven genuine independently admitted role delivery owners from one configuration, generation, trust checkpoint, boot and original startup window. It creates /run/serverware-response-v2-public fresh as root:65519 mode0711, then seven closed role-name children as each signed role UID:65519 mode0750. Only the existing signed generation activation context, role readiness artifacts and router topology attestation use these paths and retain exact0440 and signature checks. Private state, role-key inputs, private bootstrap readiness and raw CAS remain outside this tree. Existing directories are not reused, repaired or removed. Held directory identity checks survive the actual gate privilege drop without directory-read permission; layout preparation is not provisioning or independent readiness."
+  "$comment": "Explicit guestPublicArtifacts in the signed-delivery-bound cold custody configuration. Omission preserves the host paths; explicit null is rejected. The fixed native cohort requires this profile. Structural shape grants no generation or readiness authority. Root preparation requires all seven genuine independently admitted role delivery owners from one configuration, generation, trust checkpoint, boot and original startup window. It creates /run/catchplate-response-v2-public fresh as root:65519 mode0711, then seven closed role-name children as each signed role UID:65519 mode0750. Only the existing signed generation activation context, role readiness artifacts and router topology attestation use these paths and retain exact0440 and signature checks. Private state, role-key inputs, private bootstrap readiness and raw CAS remain outside this tree. Existing directories are not reused, repaired or removed. Held directory identity checks survive the actual gate privilege drop without directory-read permission; layout preparation is not provisioning or independent readiness."
 }

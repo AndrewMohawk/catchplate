@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/rbac-witness-recovery.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/rbac-witness-recovery.v1.schema.json",
   "title": "Independent RBAC known-commit recovery originals (data only)",
   "description": "Shape only. Actual current signed permission, genuine cold owner, exclusive witness lock and exact protected committed originals remain mandatory. No execution permission, absence proof, deadline renewal or namespace migration is supplied.",
   "oneOf": [{"$ref": "#/$defs/enrollmentEnvelope"}, {"$ref": "#/$defs/startup"}, {"$ref": "#/$defs/authorizationEnvelope"}, {"$ref": "#/$defs/observation"}],
@@ -13,7 +13,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "enrollmentId", "databaseId", "deploymentId", "configurationDigests", "metadataClusterId", "metadataDatabase", "witnessClusterId", "metadataFaultDomain", "witnessFaultDomain", "reader", "writer", "initialState", "issuedAtEpochNs", "expiresAtEpochNs", "maximumRecords", "endpoint", "tlsRootSha256", "recoveryPublicKeyBase64Url"],
       "properties": {
-        "schema": {"const": "serverware.rbacWitnessEnrollment/v2"},
+        "schema": {"const": "catchplate.rbacWitnessEnrollment/v2"},
         "sourceRevision": {"$ref": "#/$defs/identity"}, "enrollmentId": {"$ref": "#/$defs/identity"},
         "databaseId": {"$ref": "#/$defs/digest"}, "deploymentId": {"$ref": "#/$defs/identity"},
         "configurationDigests": {"$ref": "rbac-witness.v1.schema.json#/$defs/enrollment/properties/configurationDigests"},
@@ -32,13 +32,13 @@
     },
     "enrollmentEnvelope": {
       "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
-      "properties": {"schema": {"const": "serverware.signedRbacWitnessEnrollment/v2"}, "payload": {"$ref": "#/$defs/enrollment"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}}
+      "properties": {"schema": {"const": "catchplate.signedRbacWitnessEnrollment/v2"}, "payload": {"$ref": "#/$defs/enrollment"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}}
     },
     "authorization": {
       "type": "object", "additionalProperties": false,
       "required": ["schema", "purpose", "recoveryId", "sourceRevision", "configurationDigest", "enrollmentSha256", "databaseId", "deploymentId", "intentSha256", "requestSha256", "capabilityId", "planSha256", "beforeHeadSha256", "afterHeadSha256", "writerReceiptSha256", "resultSha256", "issuedAtEpochNs", "expiresAtEpochNs"],
       "properties": {
-        "schema": {"const": "serverware.rbacWitnessRecoveryAuthorization/v1"}, "purpose": {"const": "complete-known-commit"},
+        "schema": {"const": "catchplate.rbacWitnessRecoveryAuthorization/v1"}, "purpose": {"const": "complete-known-commit"},
         "recoveryId": {"$ref": "#/$defs/digest"}, "sourceRevision": {"$ref": "#/$defs/identity"}, "configurationDigest": {"$ref": "#/$defs/digest"},
         "enrollmentSha256": {"$ref": "#/$defs/digest"}, "databaseId": {"$ref": "#/$defs/digest"}, "deploymentId": {"$ref": "#/$defs/identity"},
         "intentSha256": {"$ref": "#/$defs/digest"}, "requestSha256": {"$ref": "#/$defs/digest"}, "capabilityId": {"$ref": "#/$defs/digest"},
@@ -49,13 +49,13 @@
     },
     "authorizationEnvelope": {
       "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
-      "properties": {"schema": {"const": "serverware.signedRbacWitnessRecoveryAuthorization/v1"}, "payload": {"$ref": "#/$defs/authorization"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}}
+      "properties": {"schema": {"const": "catchplate.signedRbacWitnessRecoveryAuthorization/v1"}, "payload": {"$ref": "#/$defs/authorization"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}}
     },
     "startup": {
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "configurationDigest", "root", "enrollment", "tlsRoot", "clientCertificate", "clientKey", "recoveryAuthorization"],
       "properties": {
-        "schema": {"const": "serverware.rbacWitnessStartup/v2"}, "sourceRevision": {"$ref": "#/$defs/identity"}, "configurationDigest": {"$ref": "#/$defs/digest"},
+        "schema": {"const": "catchplate.rbacWitnessStartup/v2"}, "sourceRevision": {"$ref": "#/$defs/identity"}, "configurationDigest": {"$ref": "#/$defs/digest"},
         "root": {"$ref": "rbac-witness.v1.schema.json#/$defs/original"}, "enrollment": {"$ref": "#/$defs/enrollmentEnvelope"},
         "tlsRoot": {"$ref": "rbac-witness.v1.schema.json#/$defs/original"}, "clientCertificate": {"$ref": "rbac-witness.v1.schema.json#/$defs/original"},
         "clientKey": {"$ref": "rbac-witness.v1.schema.json#/$defs/original"},
@@ -66,7 +66,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "okForAction", "status", "enrollmentSha256", "authorizationSha256", "intentSha256", "completionSha256", "headSha256"],
       "properties": {
-        "schema": {"const": "serverware.rbacWitnessRecoveryObservation/v1"}, "okForAction": {"const": false},
+        "schema": {"const": "catchplate.rbacWitnessRecoveryObservation/v1"}, "okForAction": {"const": false},
         "status": {"enum": ["observed-complete", "recovered-known-commit"]},
         "enrollmentSha256": {"$ref": "#/$defs/digest"}, "authorizationSha256": {"$ref": "#/$defs/digest"},
         "intentSha256": {"$ref": "#/$defs/digest"}, "completionSha256": {"$ref": "#/$defs/digest"}, "headSha256": {"$ref": "#/$defs/digest"}

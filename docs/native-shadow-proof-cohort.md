@@ -9,7 +9,7 @@ five ordinary custody services are a different cohort and are not produced here.
 ## Actual order and authority
 
 The fixed order is Retrieval, Persistence, TrustedTime,
-GenerationInstallEnvelope, Bridge. `serverware-native-shadow-proof-cohort`
+GenerationInstallEnvelope, Bridge. `catchplate-native-shadow-proof-cohort`
 accepts no arguments, an empty environment, and only inherited FD3 besides
 stdio. FD3 is the actual private root-peer seqpacket channel. It admits the
 protected fixed configuration and independently signed precreation, arms the
@@ -29,7 +29,7 @@ still measure the strict final nondumpable peer after exec/drop.
 The existing independently provisioned C9 delivery authority signs a separate
 release only after approving the actual observation and all five protected
 launch/image originals. The closed authoring functions are in
-`serverware/native_shadow_proof_cohort_assignment.py`; they generate no key and
+`catchplate/native_shadow_proof_cohort_assignment.py`; they generate no key and
 do not authenticate caller JSON as a kernel observation. The actual Rust owner
 compares the release with its retained children and originals again. All five
 grants, C9 inventories, peers, images and original windows are admitted before
@@ -37,8 +37,8 @@ the first gate send. A partial gate-send failure cancels the whole cohort; it is
 not an atomic readiness result and is never automatically retried.
 
 The precreation and release signature preimages are respectively
-`serverware.nativeShadowProofCohortPrecreation.signature/v1`, NUL, canonical
-payload, and `serverware.nativeShadowProofCohortRelease.signature/v1`, NUL,
+`catchplate.nativeShadowProofCohortPrecreation.signature/v1`, NUL, canonical
+payload, and `catchplate.nativeShadowProofCohortRelease.signature/v1`, NUL,
 canonical payload. These are distinct from service grants, role possession,
 trusted time, verifier, dispatch and generation effect authority. The source
 requires the same actual boot/time namespace, invocation, issued time, original
@@ -100,12 +100,12 @@ protected root-owned files with mode0400, one link and no symlink ancestors.
 The fixed operator executable is root0555. The static guest executable and
 runtime-image contracts remain unchanged. Required fixed paths are:
 
-- `/etc/serverware/native-shadow-proof-cohort-control.json`: closed control4,
+- `/etc/catchplate/native-shadow-proof-cohort-control.json`: closed control4,
   independently pins the cohort executable and exact configuration/precreation.
-- `/etc/serverware/native-shadow-proof-cohort.json`: closed configuration8,
+- `/etc/catchplate/native-shadow-proof-cohort.json`: closed configuration8,
   with five separate cold C9 configurations and the guest executable SHA.
-- `/etc/serverware/native-shadow-proof-cohort-precreation.json`: signed window9.
-- `/opt/serverware/serverware-native-shadow-proof-cohort`: actual static binary.
+- `/etc/catchplate/native-shadow-proof-cohort-precreation.json`: signed window9.
+- `/opt/catchplate/catchplate-native-shadow-proof-cohort`: actual static binary.
 - Existing fixed guest executable, launch placeholder and immutable-image
   placeholder used by the real parked-child owner.
 

@@ -1,5 +1,5 @@
 {
-  "apiVersion": "serverware.policy/v1",
+  "apiVersion": "catchplate.policy/v1",
   "credentials": [
     {
       "id": "cred-demo-bearer",
@@ -63,7 +63,7 @@
   },
   "kind": "PolicyBundle",
   "metadata": {
-    "id": "serverware-demo",
+    "id": "catchplate-demo",
     "rollbackEpoch": 1,
     "sequence": 1
   },
@@ -71,7 +71,7 @@
     {
       "id": "agent:demo",
       "requiredHeaders": {
-        "X-Serverware-Agent": "demo-agent"
+        "X-Catchplate-Agent": "demo-agent"
       },
       "sourceCidrs": [
         "10.0.0.0/8",
@@ -99,7 +99,7 @@
         "tokenSha256": "sha256:3090fe11968c40de6ed9bc566716c95fc75a38e605f3962c945e5eac68997c55"
       },
       "requiredHeaders": {
-        "X-Serverware-Agent": "demo-token-agent"
+        "X-Catchplate-Agent": "demo-token-agent"
       },
       "sourceCidrs": [
         "10.0.0.0/8",
@@ -127,7 +127,7 @@
         "tokenSha256": "sha256:d0430fab894d3fcb10593c576e8f854f0292aa4f8bf956d05e713c7901498eaf"
       },
       "requiredHeaders": {
-        "X-Serverware-Agent": "demo-bound-agent"
+        "X-Catchplate-Agent": "demo-bound-agent"
       },
       "sourceCidrs": [
         "0.0.0.0/0",

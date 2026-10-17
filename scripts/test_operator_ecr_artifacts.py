@@ -14,8 +14,8 @@ from unittest.mock import patch
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import ecr_image_artifact as image
-from serverware import operator_ecr_artifacts as store
+from catchplate import ecr_image_artifact as image
+from catchplate import operator_ecr_artifacts as store
 
 
 def digest(raw):
@@ -39,7 +39,7 @@ class Cancelled(BaseException):
 
 class ArtifactStoreTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="serverware-ecr-upload-test-",
+        self.temp = tempfile.TemporaryDirectory(prefix="catchplate-ecr-upload-test-",
             dir="/srv/catchplate-fast/tmp")
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
@@ -88,7 +88,7 @@ class ArtifactStoreTests(unittest.TestCase):
                 self.assertEqual(set(path.name for path in stage_path.iterdir()),
                     {"manifest.json", "blobs", "artifact.json", "stage.json"})
                 marker = json.loads((stage_path / "stage.json").read_bytes())
-                self.assertEqual(marker, {"schema": "serverware.ecrArtifactStage/v1",
+                self.assertEqual(marker, {"schema": "catchplate.ecrArtifactStage/v1",
                     "artifactSha256": commitment, "manifestDigest": digest(manifest), "unsigned": True})
                 for path in (stage_path, *stage_path.rglob("*")):
                     info = path.lstat()

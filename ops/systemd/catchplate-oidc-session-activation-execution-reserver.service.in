@@ -1,0 +1,78 @@
+# Unrendered and uninstalled. Independently provision the complete release,
+# root/role/custody originals, three private keys and checkpointed journal.
+# State v5 admission and state-socket ACL access for UID 65505 are separate
+# prerequisites. This bind mount neither supplies an ACL nor widens a purpose.
+[Unit]
+Description=Catchplate dedicated OIDC activation execution reserver (trusted-host-local)
+BindsTo=catchplate-oidc-session-activation-execution-reserver.socket
+After=local-fs.target catchplate-oidc-session-activation-execution-reserver.socket
+RequiresMountsFor=@ACTIVATION_RESERVER_RELEASE_ROOT@ @ACTIVATION_RESERVER_TRUST_DIR@ @ACTIVATION_RESERVER_COMPUTATION_KEY@ @ACTIVATION_RESERVER_BUNDLE_KEY@ @ACTIVATION_RESERVER_DELIVERY_KEY@ @ACTIVATION_RESERVER_JOURNAL_DIR@
+AssertPathIsDirectory=@ACTIVATION_RESERVER_RELEASE_ROOT@
+AssertPathIsDirectory=@ACTIVATION_RESERVER_TRUST_DIR@
+AssertPathIsDirectory=@ACTIVATION_RESERVER_JOURNAL_DIR@
+AssertPathExists=@ACTIVATION_RESERVER_TRUST_DIR@/root-public-key.pem
+AssertPathExists=@ACTIVATION_RESERVER_TRUST_DIR@/bootstrap.json
+AssertPathExists=@ACTIVATION_RESERVER_TRUST_DIR@/custody.json
+AssertPathExists=@ACTIVATION_RESERVER_COMPUTATION_KEY@
+AssertPathExists=@ACTIVATION_RESERVER_BUNDLE_KEY@
+AssertPathExists=@ACTIVATION_RESERVER_DELIVERY_KEY@
+StartLimitIntervalSec=infinity
+StartLimitBurst=1
+
+[Service]
+Type=exec
+# Root delivery permanently drops to 65505:65505 with no supplementary groups.
+# Exactly eight inherited descriptors 198..205; one accepted request per launch.
+# Type=exec is not cryptographic readiness or successful reservation delivery.
+User=root
+Group=root
+RootDirectory=@ACTIVATION_RESERVER_RELEASE_ROOT@
+MountAPIVFS=yes
+WorkingDirectory=/app
+BindReadOnlyPaths=@ACTIVATION_RESERVER_TRUST_DIR@:/run/catchplate/oidc-session-activation-execution-reserver-trust
+BindReadOnlyPaths=@ACTIVATION_RESERVER_COMPUTATION_KEY@:/run/secrets/catchplate-oidc-session-activation-execution-computation-key
+BindReadOnlyPaths=@ACTIVATION_RESERVER_BUNDLE_KEY@:/run/secrets/catchplate-oidc-session-activation-bundle-key
+BindReadOnlyPaths=@ACTIVATION_RESERVER_DELIVERY_KEY@:/run/secrets/catchplate-oidc-session-activation-delivery-key
+BindReadOnlyPaths=/run/catchplate/oidc-session-activation-execution:/run/catchplate/oidc-session-activation-execution
+BindReadOnlyPaths=/run/catchplate/current-root:/run/catchplate/current-root
+BindPaths=@ACTIVATION_RESERVER_JOURNAL_DIR@:/var/lib/catchplate/oidc-session-activation-execution-reservations
+ReadWritePaths=/var/lib/catchplate/oidc-session-activation-execution-reservations
+Sockets=catchplate-oidc-session-activation-execution-reserver.socket
+NonBlocking=yes
+Environment=LD_LIBRARY_PATH=/runtime/python/lib
+ExecStart=/runtime/python/bin/python3 -I /runtime/authority-bootstrap/oidc_session_activation_execution_reserver_launcher.py --root-delivery
+Restart=no
+RuntimeMaxSec=300s
+TimeoutStartSec=35s
+# Cooperative TERM/cgroup escalation is not a hard kernel syscall watchdog.
+TimeoutStopSec=35s
+KillSignal=SIGTERM
+KillMode=control-group
+SendSIGKILL=yes
+OOMPolicy=stop
+UMask=0077
+LimitCORE=0
+LimitNOFILE=1024
+TasksMax=32
+MemoryMax=512M
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SETGID CAP_SETUID
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+KeyringMode=private
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+SystemCallArchitectures=native

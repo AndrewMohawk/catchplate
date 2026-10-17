@@ -22,8 +22,8 @@ from cryptography.exceptions import InvalidSignature
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import native_pilot_closure_set as closure_set
-from serverware import native_pilot_native_delivery_profile as profile
+from catchplate import native_pilot_closure_set as closure_set
+from catchplate import native_pilot_native_delivery_profile as profile
 from test_native_pilot_closure_set import (EXPECTED_SCOPE_ROOTS, EXPECTED_SCOPE_VALUES,
     MANIFEST_FIELDS, canonical, frame, scope_fixture, sha, synthetic)
 from test_native_pilot_generation_scope import (ASSIGNMENT_DOMAIN, NOW, encoded,
@@ -36,8 +36,8 @@ INPUT_FIELDS = ("apiVersion", "role", "configurationOriginal", "ownerConfigurati
     "windowOriginal", "observationOriginal", "runtimeOriginal", "payloadOriginal", "activationOriginal")
 WINDOW_FIELDS = ("bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode", "issuedAtBoottimeNs",
     "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId")
-PRECREATION_DOMAIN = b"serverware.nativeShadowProofCohortPrecreation.signature/v1\0"
-DELIVERY_DOMAIN = b"serverware.policyCustodyGuestDelivery.signature/v1\0"
+PRECREATION_DOMAIN = b"catchplate.nativeShadowProofCohortPrecreation.signature/v1\0"
+DELIVERY_DOMAIN = b"catchplate.policyCustodyGuestDelivery.signature/v1\0"
 ACTIVATION = {
     "generationInstall": (("shadow-generation-install-listener", stat.S_IFSOCK),
         ("generation-install-journal", stat.S_IFDIR)),
@@ -72,10 +72,10 @@ def bind_set(f, selected):
     binding = json.loads(measured["configurationBindingOriginal"])
     binding.update(assignmentPayloadSha256=envelope["payloadSha256"],
         nativeClosureSet=copy.deepcopy(envelope["payload"]["nativeClosureSet"]))
-    binding_sha = frame("serverware.policyShadowProductionCustodyConfiguration/v2", binding)
+    binding_sha = frame("catchplate.policyShadowProductionCustodyConfiguration/v2", binding)
     proof = scope_fixture(envelope)
     proof["production_configuration_binding_sha256"] = binding_sha
-    proof["binding_sha256"] = frame("serverware.policyShadowProductionCustodyProofScope/v2",
+    proof["binding_sha256"] = frame("catchplate.policyShadowProductionCustodyProofScope/v2",
         [proof[name] for name in EXPECTED_SCOPE_VALUES + EXPECTED_SCOPE_ROOTS])
     measured.update(configurationBindingOriginal=canonical(binding).decode("ascii"),
         configurationBindingSha256=binding_sha, proofScopeOriginal=canonical(proof).decode("ascii"))
@@ -83,7 +83,7 @@ def bind_set(f, selected):
 
 
 def refresh_window(f):
-    signed = {"apiVersion": "serverware.nativeShadowProofCohortPrecreation/v1", "payload": f["window"],
+    signed = {"apiVersion": "catchplate.nativeShadowProofCohortPrecreation/v1", "payload": f["window"],
         "signatureBase64url": encoded(f["key"].sign(PRECREATION_DOMAIN + canonical(f["window"])))}
     f["window_raw"] = canonical(signed)
     f["observed"]["precreationSha256"] = sha(f["window_raw"])
@@ -97,21 +97,21 @@ def fixture():
         "measured": existing["measured"], "recipe_originals": existing["recipe_originals"],
         "boot": (encoded(b"0123456789abcdef"), 4, 5), "now_boottime_ns": 2_000_000_000}
     for index, role in enumerate(ALL_ROLES):
-        cold = {"apiVersion": "serverware.policyCustodyGuestConfiguration/v1", "authority": authority,
+        cold = {"apiVersion": "catchplate.policyCustodyGuestConfiguration/v1", "authority": authority,
             "serviceRole": "production-bridge", "uid": 62000 + index, "gid": 62000 + index}
         f["cold"][role] = canonical(cold).decode("ascii")
         if role not in ROLES:
             continue
-        runtime = canonical({"apiVersion": "serverware.nativePilotEndpointRuntime/v1", "role": role})
+        runtime = canonical({"apiVersion": "catchplate.nativePilotEndpointRuntime/v1", "role": role})
         signing = cold_key("credential/" + role)[1]
         f["fragment"][role] = {"runtimeOriginal": runtime.decode("ascii"),
-            "runtimeConfig": {"path": "/etc/serverware/native-pilot-inputs/native-runtime-" + role + ".json",
+            "runtimeConfig": {"path": "/etc/catchplate/native-pilot-inputs/native-runtime-" + role + ".json",
                 "sha256": sha(runtime)}, "credentials": [
                 {"name": "synthetic-public-policy", "original": {
-                    "path": "/etc/serverware/synthetic-" + role + "-policy.json", "sha256": synthetic(role + "/policy")},
+                    "path": "/etc/catchplate/synthetic-" + role + "-policy.json", "sha256": synthetic(role + "/policy")},
                     "length": 128, "signing": None},
                 {"name": "synthetic-private-seed-metadata", "original": {
-                    "path": "/etc/serverware/synthetic-" + role + "-seed", "sha256": synthetic(role + "/seed")},
+                    "path": "/etc/catchplate/synthetic-" + role + "-seed", "sha256": synthetic(role + "/seed")},
                     "length": 32, "signing": signing}]}
         f["activations"][role] = [{"name": name, "fd": ordinal, "device": 7,
             "inode": 1000 + index * 10 + ordinal, "mode": kind | (0o700 if kind == stat.S_IFDIR else 0o600),
@@ -128,24 +128,24 @@ def fixture():
         "windowSha256": synthetic("native-delivery/driver-window"),
         "observationSha256": sha(existing["driver_observation_original"]),
         "supervisorExecutableSha256": synthetic("native-delivery/supervisor")}
-    f["config"] = {"apiVersion": "serverware.nativeShadowProofCohortConfiguration/v7", "authority": authority,
+    f["config"] = {"apiVersion": "catchplate.nativeShadowProofCohortConfiguration/v7", "authority": authority,
         "executableSha256": synthetic("native-delivery/endpoint-executable"), "externalDriver": external,
         "cleanup": {"authority": cold_key("cleanup")[1], "scopeId": synthetic("cleanup-scope"),
             "genesisSha256": synthetic("cleanup-genesis"),
             "journal": {"device": 7, "inode": 9, "mode": stat.S_IFDIR | 0o700, "uid": 0, "gid": 0}},
-        **{role + "Configuration": {"path": "/etc/serverware/native-pilot-inputs/native-cold-" + role + ".json",
+        **{role + "Configuration": {"path": "/etc/catchplate/native-pilot-inputs/native-cold-" + role + ".json",
             "sha256": sha(raw.encode("ascii"))} for role, raw in f["cold"].items()}}
     f["owner_configuration_raw"] = canonical(f["config"])
     f["window"] = {"configurationSha256": sha(f["owner_configuration_raw"]), "authorityKeyId": authority["keyId"],
         "bootIdBase64url": f["boot"][0], "timeNamespaceDevice": 4, "timeNamespaceInode": 5,
         "issuedAtBoottimeNs": "1000000000", "startupDeadlineBoottimeNs": "20000000000",
         "lifetimeDeadlineBoottimeNs": "60000000000", "invocationId": "1" * 32}
-    f["observed"] = {"apiVersion": "serverware.nativeShadowProofCohortOriginals/v6",
+    f["observed"] = {"apiVersion": "catchplate.nativeShadowProofCohortOriginals/v6",
         "configurationSha256": sha(f["owner_configuration_raw"]), "invocationId": "1" * 32,
         **{role: {"processId": 100 + index, "startTimeTicks": 200 + index,
             "executable": {"device": 7, "inode": 500 + index, "length": 4096,
                 "sha256": f["config"]["executableSha256"]}} for index, role in enumerate(ALL_ROLES)},
-        "externalDriver": {"apiVersion": "serverware.nativeShadowEndpointDriverOriginal/v1",
+        "externalDriver": {"apiVersion": "catchplate.nativeShadowEndpointDriverOriginal/v1",
             "bindingSha256": synthetic("native-delivery/external-binding"),
             **{name: external[name] for name in ("configurationSha256", "windowSha256", "observationSha256")},
             "supervisor": {"processId": 42, "startTimeTicks": 99, "pidfdDevice": 0, "pidfdInode": 77},
@@ -164,10 +164,10 @@ def arguments(f, role):
 
 def result_for(f, role, input_raw, *, payload=None, key=None):
     selected = json.loads(json.loads(input_raw)["payloadOriginal"]) if payload is None else payload
-    raw = canonical({"apiVersion": "serverware.policyCustodyGuestDelivery/v1", "payload": selected,
+    raw = canonical({"apiVersion": "catchplate.policyCustodyGuestDelivery/v1", "payload": selected,
         "signatureBase64url": encoded((key or f["key"]).sign(DELIVERY_DOMAIN + canonical(selected)))})
     return {"original": raw.decode("ascii"), "sha256": sha(raw),
-        "pin": {"path": "/etc/serverware/native-pilot-inputs/native-delivery-" + role + ".json", "sha256": sha(raw)}}
+        "pin": {"path": "/etc/catchplate/native-pilot-inputs/native-delivery-" + role + ".json", "sha256": sha(raw)}}
 
 
 class NativeDeliveryControls(unittest.TestCase):
@@ -200,7 +200,7 @@ class NativeDeliveryControls(unittest.TestCase):
     def test_runtime_pin_marker_and_role_cannot_be_substituted(self):
         for change in ("path", "hash", "role", "extra", "newline", "null"):
             selected = copy.deepcopy(self.f["fragment"]); row = selected[ROLES[0]]
-            if change == "path": row["runtimeConfig"]["path"] = "/etc/serverware/unselected.json"
+            if change == "path": row["runtimeConfig"]["path"] = "/etc/catchplate/unselected.json"
             elif change == "hash": row["runtimeConfig"]["sha256"] = synthetic("wrong-runtime")
             else:
                 marker = json.loads(row["runtimeOriginal"])
@@ -230,7 +230,7 @@ class NativeDeliveryControls(unittest.TestCase):
             with self.subTest(role=role):
                 raw = profile.build(role, **arguments(self.f, role)); value = json.loads(raw)
                 self.assertEqual(set(value), set(INPUT_FIELDS)); self.assertEqual(len(value), 9)
-                self.assertEqual(value["apiVersion"], "serverware.nativePilotDeliverySigningInput/v1")
+                self.assertEqual(value["apiVersion"], "catchplate.nativePilotDeliverySigningInput/v1")
                 self.assertEqual(value["role"], role)
                 for field in ("ownerConfigurationOriginal", "windowOriginal", "observationOriginal"):
                     source = {"ownerConfigurationOriginal": "owner_configuration_raw", "windowOriginal": "window_raw",
@@ -316,7 +316,7 @@ class NativeDeliveryControls(unittest.TestCase):
             result = result_for(self.f, role, raw)
             if change == "hash": result["sha256"] = synthetic("wrong-result-hash")
             elif change == "pin-hash": result["pin"]["sha256"] = synthetic("wrong-pin-hash")
-            elif change == "pin-path": result["pin"]["path"] = "/etc/serverware/unselected.json"
+            elif change == "pin-path": result["pin"]["path"] = "/etc/catchplate/unselected.json"
             else: result["approved"] = True
             with self.subTest(change=change), self.assertRaises(ValueError): profile.checked_result(role, raw, result)
         with self.assertRaises(ValueError): profile.checked_result(ROLES[1], raw, result_for(self.f, role, raw))
@@ -358,7 +358,7 @@ class NativeDeliveryControls(unittest.TestCase):
             else:
                 proof = json.loads(args["measured"]["proofScopeOriginal"])
                 proof["execution_closure_set_root_sha256"] = synthetic("wrong-proof-set")
-                proof["binding_sha256"] = frame("serverware.policyShadowProductionCustodyProofScope/v2",
+                proof["binding_sha256"] = frame("catchplate.policyShadowProductionCustodyProofScope/v2",
                     [proof[name] for name in EXPECTED_SCOPE_VALUES + EXPECTED_SCOPE_ROOTS])
                 args["measured"]["proofScopeOriginal"] = canonical(proof).decode("ascii")
             expected = InvalidSignature if change == "assignment-signature" else ValueError

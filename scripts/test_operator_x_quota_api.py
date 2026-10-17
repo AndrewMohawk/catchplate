@@ -26,12 +26,12 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-import serverware
+import catchplate
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationError, model_validator
-from serverware import credential_lease_profiles as profiles, operator_x_quota_api as api
-from serverware.response_identity import validate_response_nonce
+from catchplate import credential_lease_profiles as profiles, operator_x_quota_api as api
+from catchplate.response_identity import validate_response_nonce
 
 
 def offline(event, _args):
@@ -66,7 +66,7 @@ def wire():
 
 
 def actual_app():
-    tree = ast.parse((ROOT / "serverware/app.py").read_text())
+    tree = ast.parse((ROOT / "catchplate/app.py").read_text())
     names = {"CredentialLeaseReleaseQuotaClaim", "CredentialLeaseDurablePolicyClaim", "CredentialLeaseReleaseAuthorization",
         "CredentialLeaseRequestAuthority", "CredentialLeaseRequest", "CredentialCurrentnessDispatchPin",
         "NativeCurrentCredentialLeaseRequest", "CredentialLeaseWireRequest", "OperatorXQuotaClaimRequest",
@@ -76,7 +76,7 @@ def actual_app():
     names.add("bounded_control_plane_request_middleware")
     nodes = [n for n in tree.body if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in names]
     assert len(nodes) == len(names)
-    module = ModuleType("serverware.app")
+    module = ModuleType("catchplate.app")
     module.__dict__.update({"__builtins__": __builtins__, "Any": Any, "Literal": Literal,
         "BaseModel": BaseModel, "ConfigDict": ConfigDict, "Field": Field, "RootModel": RootModel,
         "ValidationError": ValidationError, "model_validator": model_validator, "lease_profiles": profiles,
@@ -89,7 +89,7 @@ def actual_app():
         "_CREDENTIAL_LEASE_ORIGINAL_SCOPE_KEY": "inert-original", "SECRET_LEASE_TTL_SECONDS": 5.0})
     selected = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), *nodes], type_ignores=[])
     with modules(app=module):
-        exec(compile(ast.fix_missing_locations(selected), str(ROOT / "serverware/app.py"), "exec"), module.__dict__)
+        exec(compile(ast.fix_missing_locations(selected), str(ROOT / "catchplate/app.py"), "exec"), module.__dict__)
         for value in tuple(module.__dict__.values()):
             if isinstance(value, type) and issubclass(value, BaseModel) and value is not BaseModel:
                 value.model_rebuild(_types_namespace=module.__dict__)
@@ -100,8 +100,8 @@ def actual_app():
 def modules(**values):
     with ExitStack() as stack:
         for name, value in values.items():
-            stack.enter_context(patch.dict(sys.modules, {"serverware." + name: value}))
-            stack.enter_context(patch.object(serverware, name, value, create=True))
+            stack.enter_context(patch.dict(sys.modules, {"catchplate." + name: value}))
+            stack.enter_context(patch.object(catchplate, name, value, create=True))
         yield
 
 
@@ -112,11 +112,11 @@ def request(body=b"", *, authenticated=True, nonce=NONCE, query=b"", duplicate_n
         return {"type": "http.request", "body": body, "more_body": False}
     headers = [(b"content-type", b"application/json")]
     if authenticated:
-        headers.append((b"x-serverware-data-plane-token", TOKEN.encode()))
+        headers.append((b"x-catchplate-data-plane-token", TOKEN.encode()))
     if nonce is not None:
-        headers.append((b"x-serverware-response-nonce", nonce.encode()))
+        headers.append((b"x-catchplate-response-nonce", nonce.encode()))
     if duplicate_nonce:
-        headers.append((b"x-serverware-response-nonce", ("C" * 43).encode()))
+        headers.append((b"x-catchplate-response-nonce", ("C" * 43).encode()))
     return Request({"type": "http", "method": "POST", "scheme": "https", "path": api.CLAIM_PATH,
         "query_string": query, "headers": headers}, receive), reads
 
@@ -157,12 +157,12 @@ class QuotaApiControls(unittest.TestCase):
     def test_actual_models_separate_native_and_legacy_profiles(self):
         model = self.app.CredentialLeaseRequest.model_validate(wire())
         self.assertEqual(self.app._credential_lease_request_binding_sha256(model), api.digest(wire()))
-        legacy = {**wire(), "apiVersion": "serverware.credentialLeaseRequest/v3"}
+        legacy = {**wire(), "apiVersion": "catchplate.credentialLeaseRequest/v3"}
         with self.assertRaises(ValidationError):
             self.app.CredentialLeaseRequest.model_validate(legacy)
         del legacy["operatorXQuota"]
         self.assertEqual(self.app.CredentialLeaseRequest.model_validate(legacy).api_version, legacy["apiVersion"])
-        for version in ("serverware.credentialLeaseRequest/v4", profiles.NATIVE_REQUEST_V1,
+        for version in ("catchplate.credentialLeaseRequest/v4", profiles.NATIVE_REQUEST_V1,
                 profiles.POLICY_AWARE_REQUEST_V1, profiles.BROKER_REQUEST_V1):
             with self.assertRaises(ValidationError):
                 self.app.CredentialLeaseRequest.model_validate({**wire(), "apiVersion": version})
@@ -183,10 +183,10 @@ class QuotaApiControls(unittest.TestCase):
             self.assertIn(caught.exception.status_code, (413, 422))
 
     def test_actual_outer_middleware_admits_exact_machine_post_before_parser(self):
-        tree = ast.parse((ROOT / "serverware/operator_demo.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/operator_demo.py").read_text())
         node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "request_allowed")
-        ordinary = ModuleType("serverware.operator_demo")
-        exec(compile(ast.Module(body=[node], type_ignores=[]), str(ROOT / "serverware/operator_demo.py"), "exec"), ordinary.__dict__)
+        ordinary = ModuleType("catchplate.operator_demo")
+        exec(compile(ast.Module(body=[node], type_ignores=[]), str(ROOT / "catchplate/operator_demo.py"), "exec"), ordinary.__dict__)
         ordinary.active = lambda: True
         with modules(operator_demo=ordinary, development_sandbox=SimpleNamespace(active=lambda: False),
                 operator_catalog_oauth_profile=SimpleNamespace(selected=lambda: False)):
@@ -289,10 +289,10 @@ class QuotaApiControls(unittest.TestCase):
 
     def test_metadata_refresh_exclusions_are_inert(self):
         for version, purpose, adapter, constraints in (
-                ("serverware.credentialLeaseRequest/v3", "dispatchSecret", "x.post.v1", [{"type": "rateLimit"}]),
+                ("catchplate.credentialLeaseRequest/v3", "dispatchSecret", "x.post.v1", [{"type": "rateLimit"}]),
                 (profiles.NATIVE_REQUEST_V1, "generationMetadata", "x.post.v1", [{"type": "rateLimit"}]),
-                ("serverware.credentialLeaseRequest/v3", "generationMetadata", "x.post.v1", []),
-                ("serverware.credentialLeaseRequest/v3", "generationMetadata", "generic.rest", [{"type": "rateLimit"}])):
+                ("catchplate.credentialLeaseRequest/v3", "generationMetadata", "x.post.v1", []),
+                ("catchplate.credentialLeaseRequest/v3", "generationMetadata", "generic.rest", [{"type": "rateLimit"}])):
             with modules(db=ModuleType("db"), operator_x_refresh=ModuleType("refresh")):
                 api.prepare_metadata(SimpleNamespace(api_version=version, purpose=purpose),
                     SimpleNamespace(adapter_type=adapter, constraints=constraints), original_deadline=1.0)
@@ -329,7 +329,7 @@ class QuotaApiControls(unittest.TestCase):
                 operator_x_quota=storage, operator_catalog_x_oauth=SimpleNamespace(require_lease_binding=lambda *a, **k: None)), \
                 patch.object(api, "require_route", return_value=api.UNCONTROLLED), \
                 patch.object(api.time, "monotonic", return_value=100.0):
-            payload = SimpleNamespace(api_version="serverware.credentialLeaseRequest/v3", purpose="generationMetadata",
+            payload = SimpleNamespace(api_version="catchplate.credentialLeaseRequest/v3", purpose="generationMetadata",
                 credential_id=ID, principal_id="app", route_id="route", policy_hash=H)
             route = SimpleNamespace(adapter_type="x.post.v1", constraints=[{"type": "rateLimit"}])
             api.prepare_metadata(payload, route, original_deadline=105.0)
@@ -342,14 +342,14 @@ class QuotaApiControls(unittest.TestCase):
     def test_unmanaged_limited_metadata_does_not_enter_ordinary_quota_owner(self):
         with modules(db=SimpleNamespace(get_credential=lambda *a, **k: {"metadata": {}}),
                 operator_x_refresh=SimpleNamespace(selected=lambda _: False)):
-            api.prepare_metadata(SimpleNamespace(api_version="serverware.credentialLeaseRequest/v3", purpose="generationMetadata",
+            api.prepare_metadata(SimpleNamespace(api_version="catchplate.credentialLeaseRequest/v3", purpose="generationMetadata",
                 credential_id=ID), SimpleNamespace(adapter_type="x.post.v1", constraints=[{"type": "rateLimit"}]),
                 original_deadline=1.0)
 
     def test_actual_lease_source_reserves_before_secret_and_checks_after_audit(self):
-        tree = ast.parse((ROOT / "serverware/app.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/app.py").read_text())
         function = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "data_plane_credential_leases")
-        source = ast.get_source_segment((ROOT / "serverware/app.py").read_text(), function)
+        source = ast.get_source_segment((ROOT / "catchplate/app.py").read_text(), function)
         self.assertLess(source.index("quota_opening.reserve()"), source.index("with credential_snapshot("))
         self.assertLess(source.index('"issued",'), source.index("quota_opening.check()"))
         self.assertIn("db.get_credential(payload.credential_id, include_secret=False)\n                if quota_opening is not None", source)

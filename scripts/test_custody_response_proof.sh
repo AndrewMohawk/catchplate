@@ -3,23 +3,23 @@ set -euo pipefail
 
 TMP_DIR="${TMP_DIR:-.tmp}"
 if [[ -z "${COMPOSE_PROJECT_NAME:-}" ]]; then
-  COMPOSE_PROJECT_NAME="serverware-custody-$(date +%s)-$$-$(openssl rand -hex 6)"
+  COMPOSE_PROJECT_NAME="catchplate-custody-$(date +%s)-$$-$(openssl rand -hex 6)"
 fi
 if [[ ! "$COMPOSE_PROJECT_NAME" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
   echo "COMPOSE_PROJECT_NAME is not a valid disposable Compose project name: $COMPOSE_PROJECT_NAME" >&2
   exit 64
 fi
 export COMPOSE_PROJECT_NAME
-export SERVERWARE_CONTROL_PLANE_HOST_PORT=0
-export SERVERWARE_AUDIT_ANCHOR_HOST_PORT=0
-export SERVERWARE_DECISION_GATE_PROXY_HOST_PORT=0
-export SERVERWARE_DECISION_GATE_DIRECT_HOST_PORT=0
-export SERVERWARE_DECISION_GATE_MANAGEMENT_HOST_PORT=0
-export SERVERWARE_DECISION_GATE_DEV_IMAGE="${COMPOSE_PROJECT_NAME}-decision-gate-rs:dev"
+export CATCHPLATE_CONTROL_PLANE_HOST_PORT=0
+export CATCHPLATE_AUDIT_ANCHOR_HOST_PORT=0
+export CATCHPLATE_DECISION_GATE_PROXY_HOST_PORT=0
+export CATCHPLATE_DECISION_GATE_DIRECT_HOST_PORT=0
+export CATCHPLATE_DECISION_GATE_MANAGEMENT_HOST_PORT=0
+export CATCHPLATE_DECISION_GATE_DEV_IMAGE="${COMPOSE_PROJECT_NAME}-decision-gate-rs:dev"
 
 COMPOSE=(docker compose -p "$COMPOSE_PROJECT_NAME" --profile custody -f docker-compose.yml -f docker-compose.custody.yml)
 LOCAL_COMPOSE=(docker compose -p "$COMPOSE_PROJECT_NAME" -f docker-compose.yml)
-SOCKET_PATH=/run/serverware-custody/custody.sock
+SOCKET_PATH=/run/catchplate-custody/custody.sock
 GATE_IMAGE=""
 CLIENT_IMAGE=""
 CLIENT_NETWORK=""
@@ -44,7 +44,7 @@ acquire_project_lock() {
     echo "unable to derive custody lifecycle project lock identity" >&2
     return 1
   fi
-  lock_dir="/tmp/serverware-custody-project-$project_digest.lock"
+  lock_dir="/tmp/catchplate-custody-project-$project_digest.lock"
   lock_token="$(openssl rand -hex 32)"
   PROJECT_LOCK_DIR="$lock_dir"
   PROJECT_LOCK_TOKEN="$lock_token"
@@ -146,7 +146,7 @@ model = json.loads(
 )
 assert model.get("name") == project, (model.get("name"), project)
 expected = {
-    "serverware": {3000: 1},
+    "catchplate": {3000: 1},
     "audit-anchor": {9100: 1},
     # Compose normalizes the two ordinary 9090 aliases into one binding when both
     # published ports are overridden to the same ephemeral value.
@@ -215,7 +215,7 @@ PY
 }
 
 refresh_base_urls() {
-  CONTROL_BASE="$(discover_loopback_url serverware 3000)" || return 1
+  CONTROL_BASE="$(discover_loopback_url catchplate 3000)" || return 1
   ANCHOR_BASE="$(discover_loopback_url audit-anchor 9100)" || return 1
 }
 
@@ -230,17 +230,17 @@ prepare_gate_images() {
   PROJECT_IMAGES_BUILT=1
   "${COMPOSE[@]}" build decision-gate-rs
   GATE_IMAGE="$(
-    docker image inspect --format '{{.Id}}' "$SERVERWARE_DECISION_GATE_DEV_IMAGE"
+    docker image inspect --format '{{.Id}}' "$CATCHPLATE_DECISION_GATE_DEV_IMAGE"
   )"
   binary_digest="$(
     docker run --rm --entrypoint sha256sum "$GATE_IMAGE" \
-      /usr/local/bin/serverware-decision-gate | awk '{print $1}'
+      /usr/local/bin/catchplate-decision-gate | awk '{print $1}'
   )"
   if [[ ! "$binary_digest" =~ ^[0-9a-f]{64}$ ]]; then
     echo "failed to measure the disposable decision-gate executable" >&2
     return 1
   fi
-  export SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST="sha256:$binary_digest"
+  export CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST="sha256:$binary_digest"
 }
 
 assert_shared_gate_image_identity() {
@@ -258,7 +258,7 @@ assert_shared_gate_image_identity() {
   python3 - \
     "$custody_container" \
     "$gate_container" \
-    "$SERVERWARE_DECISION_GATE_DEV_IMAGE" \
+    "$CATCHPLATE_DECISION_GATE_DEV_IMAGE" \
     "$GATE_IMAGE" \
     "$phase" <<'PY'
 import json
@@ -345,8 +345,8 @@ assert "10003" not in ((container.get("HostConfig") or {}).get("GroupAdd") or []
 environment = {
     item.split("=", 1)[0] for item in ((container.get("Config") or {}).get("Env") or [])
 }
-assert "SERVERWARE_RESPONSE_PROOF_CUSTODY_SOCKET" not in environment, environment
-assert "SERVERWARE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID" not in environment, environment
+assert "CATCHPLATE_RESPONSE_PROOF_CUSTODY_SOCKET" not in environment, environment
+assert "CATCHPLATE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID" not in environment, environment
 PY
   then
     return 1
@@ -540,15 +540,15 @@ wait_for_demo_upstream() {
 assert_project_absent "immediately before startup" 1 || exit 65
 PROJECT_MUTATED=1
 "${LOCAL_COMPOSE[@]}" up -d --build --force-recreate \
-  serverware audit-anchor grant-store demo-upstream
+  catchplate audit-anchor grant-store demo-upstream
 refresh_base_urls
-BASE="$CONTROL_BASE" ./scripts/wait_for_serverware.sh
+BASE="$CONTROL_BASE" ./scripts/wait_for_catchplate.sh
 wait_for_demo_upstream
 demo_upstream_container="$("${LOCAL_COMPOSE[@]}" ps -q demo-upstream)"
 docker cp "$demo_upstream_container:/data/demo-upstream/ca.pem" "$UPSTREAM_CA"
 chmod 0644 "$UPSTREAM_CA"
 curl -fsS \
-  -H "X-Serverware-Admin-Token: ${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}" \
+  -H "X-Catchplate-Admin-Token: ${CATCHPLATE_ADMIN_TOKEN:-dev-admin-token}" \
   -X POST "$CONTROL_BASE/api/demo/seed" >/dev/null
 curl -fsS "$CONTROL_BASE/attestation?nonce=custody-proof-client-control-plane-key" \
   | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["response_signing_public_key_pem"])' \
@@ -568,7 +568,7 @@ run_proof() {
     -v "$COLLECTOR_KEY:/proof/collector-key.pem:ro" \
     -v "$CONTROL_PLANE_RESPONSE_KEY:/proof/control-plane-response-signing.pub.pem:ro" \
     -v "$output_directory:/proof/output" \
-    --entrypoint /usr/local/bin/serverware-proof-client \
+    --entrypoint /usr/local/bin/catchplate-proof-client \
     "$GATE_IMAGE" \
     --proxy decision-gate-rs:9090 \
     --url https://demo-upstream:8443/echo \
@@ -577,8 +577,8 @@ run_proof() {
     --collector-key /proof/collector-key.pem \
     --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
     --expected-principal-id agent:demo \
-    --proxy-header "X-Serverware-Agent: demo-agent" \
-    --header "X-Serverware-Agent: demo-agent" \
+    --proxy-header "X-Catchplate-Agent: demo-agent" \
+    --header "X-Catchplate-Agent: demo-agent" \
     > "$summary_path"
 }
 
@@ -601,7 +601,7 @@ run_stream_proof() {
     -v "$COLLECTOR_KEY:/proof/collector-key.pem:ro" \
     -v "$CONTROL_PLANE_RESPONSE_KEY:/proof/control-plane-response-signing.pub.pem:ro" \
     -v "$output_directory:/proof/output" \
-    --entrypoint /usr/local/bin/serverware-proof-client \
+    --entrypoint /usr/local/bin/catchplate-proof-client \
     "$GATE_IMAGE" \
     --stream \
     --proxy decision-gate-rs:9090 \
@@ -612,8 +612,8 @@ run_stream_proof() {
     --collector-key /proof/collector-key.pem \
     --control-plane-response-key /proof/control-plane-response-signing.pub.pem \
     --expected-principal-id agent:demo \
-    --proxy-header "X-Serverware-Agent: demo-agent" \
-    --header "X-Serverware-Agent: demo-agent" \
+    --proxy-header "X-Catchplate-Agent: demo-agent" \
+    --header "X-Catchplate-Agent: demo-agent" \
     --max-stream-bytes 1048576 \
     > "$summary_path"
 }
@@ -638,10 +638,10 @@ run_failed_raw_proof() {
     -o /proof/body.json \
     -w '%{http_code}' \
     --proxy http://decision-gate-rs:9090 \
-    --proxy-header "X-Serverware-Agent: demo-agent" \
+    --proxy-header "X-Catchplate-Agent: demo-agent" \
     --cacert /proof/decision-gate-ca-cert.pem \
-    -H "X-Serverware-Agent: demo-agent" \
-    -H "X-Serverware-Proof-Nonce: $nonce" \
+    -H "X-Catchplate-Agent: demo-agent" \
+    -H "X-Catchplate-Proof-Nonce: $nonce" \
     https://demo-upstream:8443/echo
 }
 
@@ -665,10 +665,10 @@ run_failed_raw_stream_proof() {
     -o /proof/body.json \
     -w '%{http_code}' \
     --proxy http://decision-gate-rs:9090 \
-    --proxy-header "X-Serverware-Agent: demo-agent" \
+    --proxy-header "X-Catchplate-Agent: demo-agent" \
     --cacert /proof/decision-gate-ca-cert.pem \
-    -H "X-Serverware-Agent: demo-agent" \
-    -H "X-Serverware-Stream-Proof-Nonce: $nonce" \
+    -H "X-Catchplate-Agent: demo-agent" \
+    -H "X-Catchplate-Stream-Proof-Nonce: $nonce" \
     'https://demo-upstream:8443/stream-bytes?chunks=2&chunkSize=16'
 }
 
@@ -687,23 +687,23 @@ assert body == b'{"error":"response_proof_unavailable"}', body
 assert json.loads(body) == {"error": "response_proof_unavailable"}
 headers = open(headers_path, "rb").read().lower()
 for forbidden in (
-    b"x-serverware-response-proof-b64:",
-    b"x-serverware-response-proof-sha256:",
-    b"x-serverware-response-key-id:",
-    b"x-serverware-client-request-digest:",
-    b"x-serverware-policy-hash:",
-    b"x-serverware-request-digest:",
-    b"x-serverware-operation-digest:",
-    b"x-serverware-response-body-sha256:",
+    b"x-catchplate-response-proof-b64:",
+    b"x-catchplate-response-proof-sha256:",
+    b"x-catchplate-response-key-id:",
+    b"x-catchplate-client-request-digest:",
+    b"x-catchplate-policy-hash:",
+    b"x-catchplate-request-digest:",
+    b"x-catchplate-operation-digest:",
+    b"x-catchplate-response-body-sha256:",
 ):
     assert forbidden not in headers, (forbidden, headers)
 PY
 }
 
 CLIENT_NETWORK="$("${LOCAL_COMPOSE[@]}" config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["networks"]["default"]["name"])')"
-CLIENT_IMAGE="$("${LOCAL_COMPOSE[@]}" images -q serverware)"
+CLIENT_IMAGE="$("${LOCAL_COMPOSE[@]}" images -q catchplate)"
 if [[ -z "$CLIENT_IMAGE" ]]; then
-  echo "serverware client image is unavailable" >&2
+  echo "catchplate client image is unavailable" >&2
   exit 1
 fi
 
@@ -717,16 +717,16 @@ COMPOSE_PROJECT_NAME="$COMPOSE_PROJECT_NAME" \
   COMPOSE_PROFILES=custody \
   BASE="$CONTROL_BASE" \
   DECISION_GATE_BASE="$GATE_BASE" \
-  SERVERWARE_RELEASE_ANCHOR_BASE="$ANCHOR_BASE" \
+  CATCHPLATE_RELEASE_ANCHOR_BASE="$ANCHOR_BASE" \
   python3 scripts/generate_release_provenance.py > "$PROVENANCE_SUMMARY"
 
 COMPOSE_PROJECT_NAME="$COMPOSE_PROJECT_NAME" \
   COMPOSE_FILE="docker-compose.yml:docker-compose.custody.yml" \
   COMPOSE_PROFILES=custody \
-  SERVERWARE_HARDENING_SERVICES=custody-runtime \
+  CATCHPLATE_HARDENING_SERVICES=custody-runtime \
   ./scripts/test_container_hardening.sh >/dev/null
-SERVERWARE_APPARMOR_DRY_RUN=1 \
-  SERVERWARE_APPARMOR_SERVICES=decision-gate-rs,custody-runtime \
+CATCHPLATE_APPARMOR_DRY_RUN=1 \
+  CATCHPLATE_APPARMOR_SERVICES=decision-gate-rs,custody-runtime \
   ./scripts/test_apparmor_runtime.sh >/dev/null
 
 if [[ -z "$custody_container" ]]; then
@@ -759,7 +759,7 @@ if [[ "$(docker exec "$gate_container" id -u):$(docker exec "$gate_container" id
   echo "decision gate custody socket identity or supplemental group mismatch" >&2
   exit 1
 fi
-if [[ "$(docker exec "$gate_container" stat -c '%u:%g:%a:%F' /run/serverware-custody)" != "10002:10003:710:directory" ]] \
+if [[ "$(docker exec "$gate_container" stat -c '%u:%g:%a:%F' /run/catchplate-custody)" != "10002:10003:710:directory" ]] \
   || [[ "$(docker exec "$gate_container" stat -c '%u:%g:%a:%F' "$SOCKET_PATH")" != "10002:10003:660:socket" ]]; then
   echo "decision gate sees an unexpected custody socket ownership or mode" >&2
   exit 1
@@ -775,11 +775,11 @@ def mount(container, target):
     return next(item for item in container["Mounts"] if item["Destination"] == target)
 
 assert mount(custody, "/custody-trust")["RW"] is False, custody["Mounts"]
-assert mount(custody, "/var/lib/serverware-custody")["RW"] is True, custody["Mounts"]
-assert mount(gate, "/run/serverware-custody")["RW"] is False, gate["Mounts"]
+assert mount(custody, "/var/lib/catchplate-custody")["RW"] is True, custody["Mounts"]
+assert mount(gate, "/run/catchplate-custody")["RW"] is False, gate["Mounts"]
 assert "10003" in gate["HostConfig"]["GroupAdd"], gate["HostConfig"]
 assert all(
-    item["Destination"] != "/run/serverware/response-signing-private"
+    item["Destination"] != "/run/catchplate/response-signing-private"
     for container in (custody, gate)
     for item in container["Mounts"]
 ), (custody["Mounts"], gate["Mounts"])
@@ -822,7 +822,7 @@ assert summary["ok"] is True, summary
 signature = proof["server_signature"]
 assert signature["key_id"] == attestation["response_proof_signing_key_id"], (signature, attestation)
 assert signature["public_key_pem"] == attestation["response_proof_signing_public_key_pem"], (signature, attestation)
-assert proof["server_statement"]["apiVersion"] == "serverware.proxyResponseStatement/v2", proof
+assert proof["server_statement"]["apiVersion"] == "catchplate.proxyResponseStatement/v2", proof
 PY
 run_stream_proof "$STREAMING_PROOF" "$STREAMING_BODY" "$STREAMING_SUMMARY"
 python3 - \
@@ -852,8 +852,8 @@ assert summary["ok"] is True and summary["stream_verified"] is True, summary
 assert summary["proof_sha256"] == proof_digest, (summary, proof_digest)
 assert summary["body_sha256"] == body_digest, (summary, body_digest)
 assert summary["body_bytes"] == len(body) == 32, (summary, len(body))
-assert proof["apiVersion"] == "serverware.streamingProxyResponseProof/v1", proof
-assert statement["apiVersion"] == "serverware.streamingResponseStatement/v1", statement
+assert proof["apiVersion"] == "catchplate.streamingProxyResponseProof/v1", proof
+assert statement["apiVersion"] == "catchplate.streamingResponseStatement/v1", statement
 assert capture["runtime_proof_sha256"].startswith("sha256:"), capture
 assert signature["key_id"] == attestation["response_proof_signing_key_id"], (signature, attestation)
 assert signature["public_key_pem"] == attestation["response_proof_signing_public_key_pem"], (signature, attestation)
@@ -866,11 +866,11 @@ assert released["body_bytes"] == len(body), (released, len(body))
 assert released["framing"] == "http1.1-chunked-trailers", released
 assert released["completion"] == "normal-eof", released
 assert released["trailer_names"] == [
-    "X-Serverware-Stream-Proof-B64",
-    "X-Serverware-Stream-Proof-SHA256",
+    "X-Catchplate-Stream-Proof-B64",
+    "X-Catchplate-Stream-Proof-SHA256",
 ], released
 PY
-docker exec "$custody_container" cat /var/lib/serverware-custody/manifest.json \
+docker exec "$custody_container" cat /var/lib/catchplate-custody/manifest.json \
   > "$LEDGER_BEFORE_RESTART"
 
 "${COMPOSE[@]}" stop custody-runtime >/dev/null
@@ -912,7 +912,7 @@ PY
 "${COMPOSE[@]}" up -d --no-build --force-recreate custody-runtime >/dev/null
 custody_container="$(wait_for_custody_socket)"
 assert_shared_gate_image_identity "custody restart"
-docker exec "$custody_container" cat /var/lib/serverware-custody/manifest.json \
+docker exec "$custody_container" cat /var/lib/catchplate-custody/manifest.json \
   > "$LEDGER_AFTER_RESTART"
 python3 - "$LEDGER_BEFORE_RESTART" "$LEDGER_AFTER_RESTART" <<'PY'
 import json

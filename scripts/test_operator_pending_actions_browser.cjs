@@ -11,12 +11,12 @@ const {tmpdir} = require('node:os');
 const {capability, approval, CAP, LIST, NOW, ID, OTHER, PRIVATE, INJECTED} = require('./test_operator_pending_actions_ui.cjs');
 const ROOT = resolve(__dirname, '..'), ORIGIN = 'https://pending-actions.example.test';
 const CATALOG = '/api/operator-demo/catalog', X = '/api/operator-demo/oauth/x/configuration/v1';
-const ASSETS = join(ROOT, 'serverware/operator_demo_web');
+const ASSETS = join(ROOT, 'catchplate/operator_demo_web');
 function latch() { let release; const promise = new Promise(resolve => { release = resolve; }); return {promise, release}; }
 async function hashes() {
   const files = (await readdir(ASSETS)).filter(name => /\.(js|css|html)$/.test(name)).sort();
-  const paths = ['serverware/operator_demo_portal.py', 'scripts/test_operator_pending_actions_ui.cjs',
-    'scripts/test_operator_pending_actions_browser.cjs', ...files.map(name => 'serverware/operator_demo_web/' + name)];
+  const paths = ['catchplate/operator_demo_portal.py', 'scripts/test_operator_pending_actions_ui.cjs',
+    'scripts/test_operator_pending_actions_browser.cjs', ...files.map(name => 'catchplate/operator_demo_web/' + name)];
   return Object.fromEntries(await Promise.all(paths.map(async name => [name,
     createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')])));
 }
@@ -33,7 +33,7 @@ spec = importlib.util.spec_from_file_location('public_renderer_only', pathlib.Pa
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 print(module.render())
-`, join(ROOT, 'serverware/operator_demo_portal.py')], {encoding: 'utf8', timeout: 10000,
+`, join(ROOT, 'catchplate/operator_demo_portal.py')], {encoding: 'utf8', timeout: 10000,
     maxBuffer: 2 * 1024 * 1024, env: {PATH: '/usr/bin:/bin', LANG: 'C.UTF-8'}});
 }
 async function ready(page) {
@@ -136,7 +136,7 @@ const tests = [
       await page.locator('#load-error').waitFor({state: 'visible'});
       assert.equal(count(state, CAP), 0); assert.equal(count(state, LIST), 0);
       await page.locator('nav a[href="#pending-actions"]').click(); await ready(page);
-      assert.equal(await page.title(), 'Pending actions - Serverware operator workspace');
+      assert.equal(await page.title(), 'Pending actions - Catchplate operator workspace');
       assert.equal(await page.locator('#pending-actions-list [data-pending-approval-id]').count(), 1);
       assert(await page.locator('#load-error').isVisible());
       await page.locator('[data-pending-select="' + ID + '"]').click();
@@ -215,7 +215,7 @@ const tests = [
     });
   }],
   ['held decisions stay held and all-true synthetic capability still has no wired review', async (browser, html, artifacts) => {
-    const key = 'serverware.approvalDecisionUncertain.' + ID;
+    const key = 'catchplate.approvalDecisionUncertain.' + ID;
     return fixture(browser, html, artifacts, 'held-decision', {path: '/approvals/' + ID, rows: [approval()], storage: [[key, ID]],
       capability: capability({can_open_native_review: true, can_decide: true, reason: null})}, async (page, state) => {
       await ready(page); assert((await selected(page).innerText()).includes('submitted decision needs status recovery'));
@@ -261,7 +261,7 @@ async function runSuite(browser, {onlyGroups = null} = {}) {
     new Set(selectedGroups).size === selectedGroups.length && selectedGroups.every(index =>
       Number.isInteger(index) && index >= 0 && index < tests.length), 'exact nonempty group selection');
   const before = await hashes(), html = renderDocument();
-  const artifactDirectory = await mkdtemp(join(tmpdir(), 'serverware-pending-actions-browser-'));
+  const artifactDirectory = await mkdtemp(join(tmpdir(), 'catchplate-pending-actions-browser-'));
   const groups = []; let activeGroup = null, failure;
   try {
     for (const index of selectedGroups) {

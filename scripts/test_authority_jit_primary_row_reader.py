@@ -16,7 +16,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_jit_primary_row_reader as source
+from catchplate import authority_jit_primary_row_reader as source
 from test_authority_jit_primary_rows import fixture, meter
 from test_authority_jit_primary_chunks import native
 from test_authority_primary_original_reader import Cursor as ProofCursor
@@ -58,7 +58,7 @@ class Cursor(ProofCursor):
             return result
         if self.pending is not None:
             raise AssertionError("synthetic chunk result was not consumed")
-        table = re.search(r"FROM serverware_metadata\.([a-z_]+) AS target", sql).group(1)
+        table = re.search(r"FROM catchplate_metadata\.([a-z_]+) AS target", sql).group(1)
         column = re.search(r"WHERE target\.([a-z_]+) IS NOT DISTINCT FROM %s", sql).group(1)
         if type(parameters) is not tuple or len(parameters) != 1 or "LIMIT 2" not in sql:
             raise AssertionError("chunk query changed its exact PK/sentinel shape")
@@ -279,7 +279,7 @@ class JitPrimaryRowReaderControls(unittest.TestCase):
                 reader(cursor, owner=owner, trace=trace, work=work, acquisition=collector)
             self.assertEqual(len(cursor.calls), calls)
         parsed = ast.parse((Path(__file__).resolve().parents[1]
-            / "serverware/authority_jit_primary_row_reader.py").read_text())
+            / "catchplate/authority_jit_primary_row_reader.py").read_text())
         calls = {node.func.id if isinstance(node.func, ast.Name) else node.func.attr
             for node in ast.walk(parsed) if isinstance(node, ast.Call)
             and isinstance(node.func, (ast.Name, ast.Attribute))}

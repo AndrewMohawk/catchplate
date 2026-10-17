@@ -47,7 +47,7 @@ action-time currentness gate.
 
 ## Private source interfaces
 
-[`authority_registration_execution_sql_admission._admit_on_configuration`](../serverware/authority_registration_execution_sql_admission.py)
+[`authority_registration_execution_sql_admission._admit_on_configuration`](../catchplate/authority_registration_execution_sql_admission.py)
 accepts the original inventories, configuration digest/payload, generation and
 runtime role identities, the three original caller/grant/current-root
 enrollments, root key, independently expected pending sequence/head/fence,
@@ -55,7 +55,7 @@ original epoch/monotonic deadlines and existing work budget. It returns private
 same-call issuer arguments and live-window guards, not a publicly accepted
 admission token. It performs no database operation or signing.
 
-[`authority_registration_execution_sql._execute_on_configuration`](../serverware/authority_registration_execution_sql.py)
+[`authority_registration_execution_sql._execute_on_configuration`](../catchplate/authority_registration_execution_sql.py)
 accepts those same original inputs plus the actual `SuccessorExecutionIssuer`
 and `SuccessorExecutionExecutor`. It checks the retained process/configuration
 and actual attempt-owner readiness, invokes the issuer, and passes only that

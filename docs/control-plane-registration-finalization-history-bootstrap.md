@@ -7,7 +7,7 @@ material and current finalization v4 configuration. The complete signed parent,
 including both histories and every encoded enrollment, still has one 4 MiB cap.
 Oversize originals fail; there is no new descriptor, private key or allowance.
 
-The nested `serverware.controlPlaneRegistrationFinalizationHistory/v1` object
+The nested `catchplate.controlPlaneRegistrationFinalizationHistory/v1` object
 contains exactly `schema` and `finalizations`. Each sorted, unique member contains
 `configurationDigest`, `plannerAttestationReceiptDigest` and
 `registrationFinalization`, the existing exact nested v4 scope. It has no root,

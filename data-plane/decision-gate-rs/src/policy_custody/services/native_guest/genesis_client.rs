@@ -12,7 +12,7 @@ use std::os::unix::fs::MetadataExt;
 use std::mem::{size_of,zeroed};
 use std::path::{Path,PathBuf};
 
-pub(super) const INSPECTION_API:&str="serverware.nativePublicationGenesisInspection/v1";
+pub(super) const INSPECTION_API:&str="catchplate.nativePublicationGenesisInspection/v1";
 const MAX_IPC:usize=4096;
 const RESULT_SLOT:usize=2;
 fn directory_name(slot:usize)->String {format!("publication-genesis-ordinary-directory-{slot}")}
@@ -319,7 +319,7 @@ impl ResultChannel {
         packet::same_process(original.pidfd.as_fd(),self.session.expected.pid)?;
         let expected=self.sent_handoff.lock().map_err(fail)?.clone().ok_or(ShadowError::BindingDrift)?;
         let acknowledgment:HandoffAcknowledgment=exact(&original.bytes)?;
-        require(acknowledgment.api_version=="serverware.nativePublicationGenesisHandoffAck/v1"
+        require(acknowledgment.api_version=="catchplate.nativePublicationGenesisHandoffAck/v1"
             && acknowledgment.handoff_sha256==expected)?;
         // The parent keeps progressing until this exact post-ACK inspection
         // reply is committed. Once it releases its bundle, no further remote

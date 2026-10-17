@@ -22,16 +22,16 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_complete_query as complete
-from serverware import authority_complete_query_batch as batch
-from serverware import authority_contract
-from serverware import authority_index_contract as counted
-from serverware import authority_index_join as joined
-from serverware import authority_index_projection as projection
-from serverware import authority_primary_contract as primary_contract
-from serverware import authority_radix_mutation as primary
-from serverware.authority_query_read_work import (
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_complete_query as complete
+from catchplate import authority_complete_query_batch as batch
+from catchplate import authority_contract
+from catchplate import authority_index_contract as counted
+from catchplate import authority_index_join as joined
+from catchplate import authority_index_projection as projection
+from catchplate import authority_primary_contract as primary_contract
+from catchplate import authority_radix_mutation as primary
+from catchplate.authority_query_read_work import (
     QueryReadValidationLimits, _ValidationWork,
 )
 import test_authority_complete_query as declaration_oracle
@@ -640,7 +640,7 @@ class CompleteQueryBatchTests(unittest.TestCase):
             ownership_nodes + envelope_nodes + primary_values["json_nodes"]
             + sum(item["primary"]["json_nodes"] for item in query_values))
         self.assertGreater(sum(item["primary"]["hash_work"] for item in query_values), 6 * 66)
-        manifest = join_oracle.framed("serverware.policyAuthorityIndexProjectionManifest/v1",
+        manifest = join_oracle.framed("catchplate.policyAuthorityIndexProjectionManifest/v1",
             join_oracle.utf8_json([join_oracle.descriptor(name) for name in ALL_INDEX_IDS]))
         self.assertEqual(result.projection_manifest_digest, manifest)
 

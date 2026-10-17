@@ -11,7 +11,7 @@ Rust 1.88 Cargo checking; this is not linking, runtime or production evidence.
 
 | Original | Explicit contract |
 | --- | --- |
-| Assignment/v2 | Existing ten-field signed envelope, with API and signature domain `serverware.policyShadowAssignment/v2`; the native payload adds required `nativeClosureSet` |
+| Assignment/v2 | Existing ten-field signed envelope, with API and signature domain `catchplate.policyShadowAssignment/v2`; the native payload adds required `nativeClosureSet` |
 | `nativeClosureSet` | Exactly `setRootSha256` and `seccompSetRootSha256`, independently authorized by the assignment signature |
 | Closure/v3 | Exactly `apiVersion`, `manifest`, `authorization`, `closureSet`; embeds the complete fixed eleven-member set and the selected guest's manifest |
 | Closure authorization/v3 | Purpose `shadow-custody-closure-set-member`, profile `native-multi-guest-closure-set-v1`; adds `guestRole`, both common roots and `leafSha256` |
@@ -32,19 +32,19 @@ embedded set; the standalone set helper's larger bound does not enlarge intake.
 ## Existing authority commands, explicit successor inputs
 
 `scripts/authority/sign_native_pilot_assignment.py` consumes exact
-`serverware.nativePilotAssignmentAuthorityInput/v1` fields `apiVersion`,
+`catchplate.nativePilotAssignmentAuthorityInput/v1` fields `apiVersion`,
 `trustOriginal`, `trustSha256`, `payloadOriginal`, and `closureSetOriginal`.
 The independently pinned trust original selects the matching existing assignment
 key. All payload decisions, timestamps and complete manifests are supplied;
 the issuer neither chooses authority nor creates provenance.
 
 `scripts/authority/sign_native_pilot_closure.py` retains its legacy bridge input.
-Explicit `serverware.nativePilotClosureAuthorityInput/v2` additionally supplies
+Explicit `catchplate.nativePilotClosureAuthorityInput/v2` additionally supplies
 `guestRole` and `closureSetOriginal`; `controlOriginal` is present only for the
 bridge. Endpoint configuration/window/observation originals come from the actual
 cohort. Issuance follows actual guest observation and signed C9 delivery, before
 launch installation. The signed member domain is
-`serverware.nativeCustodyClosureAssignment.signature/v3`.
+`catchplate.nativeCustodyClosureAssignment.signature/v3`.
 
 Both commands take only `--input-fd` and `--authority-key-fd` under `python3 -I -B`:
 a complete approved public original and a distinct, already provisioned protected
@@ -60,11 +60,11 @@ and bound filesystem/cryptographic stalls.
 the whole set and bridge membership, then uses the actual owned bootstrap
 observation. Configuration binding/v2 preserves all 24 old fields and adds
 `nativeClosureSet` as field 25, under
-`serverware.policyShadowProductionCustodyConfiguration/v2`.
+`catchplate.policyShadowProductionCustodyConfiguration/v2`.
 
 Shared proof scope/v2 preserves the fourteen old fields and adds exactly:
 
-- `api_version`: `serverware.policyShadowProductionCustodyProofScope/v2`
+- `api_version`: `catchplate.policyShadowProductionCustodyProofScope/v2`
 - `execution_closure_set_root_sha256`
 - `structurally_verified_seccomp_set_root_sha256`
 
@@ -72,7 +72,7 @@ Its framed `/v2` digest appends the two common roots to the old eleven-value
 tuple. Its canonical authority receipt is the eight-element array
 `[domain/v2, scopeBinding, bridgeManifest, bridgePolicy, setRoot, seccompSetRoot,
 signerRole, receiptSha256]`, with domain
-`serverware.policyShadowAssignmentBoundCustodyReceipt/v2`.
+`catchplate.policyShadowAssignmentBoundCustodyReceipt/v2`.
 
 Retrieval, persistence, spool, opening and checkpoint paths use this transcript.
 Python service intake requires the exact assignment payload bound by the actual
@@ -82,13 +82,13 @@ from hashes. Native membership admission remains mandatory.
 
 ## Independently configured activation pins
 
-`serverware/app.py` selects the successor activation-receipt transcript only with
+`catchplate/app.py` selects the successor activation-receipt transcript only with
 all three independent settings:
 
 ```text
-SERVERWARE_POLICY_SHADOW_ACTIVATION_PROOF_SCOPE_VERSION=v2
-SERVERWARE_POLICY_SHADOW_ACTIVATION_EXECUTION_CLOSURE_SET_ROOT_SHA256
-SERVERWARE_POLICY_SHADOW_ACTIVATION_SECCOMP_SET_ROOT_SHA256
+CATCHPLATE_POLICY_SHADOW_ACTIVATION_PROOF_SCOPE_VERSION=v2
+CATCHPLATE_POLICY_SHADOW_ACTIVATION_EXECUTION_CLOSURE_SET_ROOT_SHA256
+CATCHPLATE_POLICY_SHADOW_ACTIVATION_SECCOMP_SET_ROOT_SHA256
 ```
 
 Both roots must be explicit nonzero `sha256:` digests. Existing public-key,

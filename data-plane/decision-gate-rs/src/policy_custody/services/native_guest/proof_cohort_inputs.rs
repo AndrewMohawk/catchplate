@@ -6,13 +6,13 @@ use std::fs::File;
 use std::io::Write;
 use std::os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd};
 use std::os::unix::fs::{FileExt,MetadataExt};
-const PRECREATE_DOMAIN:&[u8]=b"serverware.nativeShadowProofCohortPrecreation.signature/v1\0";
-const RELEASE_DOMAIN:&[u8]=b"serverware.nativeShadowProofCohortRelease.signature/v1\0";
-const SIX_RELEASE_DOMAIN:&[u8]=b"serverware.nativeShadowProofCohortRelease.signature/v2\0";
-const SEVEN_RELEASE_DOMAIN:&[u8]=b"serverware.nativeShadowProofCohortRelease.signature/v3\0";
-const EIGHT_RELEASE_DOMAIN:&[u8]=b"serverware.nativeShadowProofCohortRelease.signature/v4\0";
-const ELEVEN_RELEASE_DOMAIN:&[u8]=b"serverware.nativeShadowProofCohortRelease.signature/v5\0";
-const SOURCE:&str="/opt/serverware/native-shadow-custody-guest.elf";
+const PRECREATE_DOMAIN:&[u8]=b"catchplate.nativeShadowProofCohortPrecreation.signature/v1\0";
+const RELEASE_DOMAIN:&[u8]=b"catchplate.nativeShadowProofCohortRelease.signature/v1\0";
+const SIX_RELEASE_DOMAIN:&[u8]=b"catchplate.nativeShadowProofCohortRelease.signature/v2\0";
+const SEVEN_RELEASE_DOMAIN:&[u8]=b"catchplate.nativeShadowProofCohortRelease.signature/v3\0";
+const EIGHT_RELEASE_DOMAIN:&[u8]=b"catchplate.nativeShadowProofCohortRelease.signature/v4\0";
+const ELEVEN_RELEASE_DOMAIN:&[u8]=b"catchplate.nativeShadowProofCohortRelease.signature/v5\0";
+const SOURCE:&str="/opt/catchplate/native-shadow-custody-guest.elf";
 const MAX_EXECUTABLE:usize=64*1024*1024;
 const SEALS:i32=libc::F_SEAL_WRITE|libc::F_SEAL_GROW|libc::F_SEAL_SHRINK|libc::F_SEAL_SEAL;
 
@@ -108,20 +108,20 @@ impl Admission {
         require(config.bridge_configuration.is_some()!=endpoint_only
             && config.external_driver.is_some()==endpoint_only
             && config.publication_reconciliation_configuration.is_some()==adopted)?;
-        let effects=config.api_version=="serverware.nativeShadowProofCohortConfiguration/v6" || endpoint_only;
+        let effects=config.api_version=="catchplate.nativeShadowProofCohortConfiguration/v6" || endpoint_only;
         require([&config.dispatch_barrier_configuration,&config.active_effect_barrier_configuration,
             &config.active_effect_commit_configuration].iter().all(|pin|pin.is_some()==effects))?;
         require(match (config.api_version.as_str(),&config.cleanup,&config.commit_request_configuration,&config.ingress_admission_configuration,&config.terminal_append_configuration) {
-            ("serverware.nativeShadowProofCohortConfiguration/v1",None,None,None,None)=>true,
-            ("serverware.nativeShadowProofCohortConfiguration/v2",Some(value),None,None,None)=>{
+            ("catchplate.nativeShadowProofCohortConfiguration/v1",None,None,None,None)=>true,
+            ("catchplate.nativeShadowProofCohortConfiguration/v2",Some(value),None,None,None)=>{
                 value.validate(&config.authority.public_key_base64url)?;true},
-            ("serverware.nativeShadowProofCohortConfiguration/v3",Some(value),Some(_),None,None)=>{
+            ("catchplate.nativeShadowProofCohortConfiguration/v3",Some(value),Some(_),None,None)=>{
                 value.validate(&config.authority.public_key_base64url)?;true},
-            ("serverware.nativeShadowProofCohortConfiguration/v4",Some(value),Some(_),Some(_),None)=>{
+            ("catchplate.nativeShadowProofCohortConfiguration/v4",Some(value),Some(_),Some(_),None)=>{
                 value.validate(&config.authority.public_key_base64url)?;true},
-            ("serverware.nativeShadowProofCohortConfiguration/v5",Some(value),Some(_),Some(_),Some(_))=>{
+            ("catchplate.nativeShadowProofCohortConfiguration/v5",Some(value),Some(_),Some(_),Some(_))=>{
                 value.validate(&config.authority.public_key_base64url)?;true},
-            ("serverware.nativeShadowProofCohortConfiguration/v6",Some(value),Some(_),Some(_),Some(_))=>{
+            ("catchplate.nativeShadowProofCohortConfiguration/v6",Some(value),Some(_),Some(_),Some(_))=>{
                 value.validate(&config.authority.public_key_base64url)?;true},
             (external_driver::CONFIG_API|adoption::CONFIG_API,Some(value),Some(_),Some(_),Some(_))=>{
                 value.validate(&config.authority.public_key_base64url)?;true},
@@ -143,7 +143,7 @@ impl Admission {
         let mut identities=vec![(0,0);count];
         for (i,original) in cold.iter().enumerate() {
             let c:super::super::super::super::Configuration=exact(&original.read(65536).map_err(fail)?)?;
-            require(c.api_version=="serverware.policyCustodyGuestConfiguration/v1"
+            require(c.api_version=="catchplate.policyCustodyGuestConfiguration/v1"
                 && c.service_role==super::super::super::super::Role::ProductionBridge
                 && c.authority.key_id==config.authority.key_id && c.authority.public_key_base64url==config.authority.public_key_base64url
                 && c.uid>0 && c.gid>0 && c.uid!=u32::MAX && c.gid!=u32::MAX
@@ -157,7 +157,7 @@ impl Admission {
         let precreation=Original::proof_cohort_precreation().map_err(fail)?;
         let precreation_bytes=precreation.read(32768).map_err(fail)?.to_vec();
         let signed:Precreation=exact(&precreation_bytes)?;
-        require(signed.api_version=="serverware.nativeShadowProofCohortPrecreation/v1")?;
+        require(signed.api_version=="catchplate.nativeShadowProofCohortPrecreation/v1")?;
         verify(&key,PRECREATE_DOMAIN,&signed.payload,&signed.signature_base64url)?;
         let w=&signed.payload;let domain=process.domain();
         let boot=URL_SAFE_NO_PAD.decode(&w.boot_id_base64url).map_err(fail)?;
@@ -185,10 +185,10 @@ impl Admission {
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn check_startup(&self)->Result<(),ShadowError> {self.check()?;require(now()?<self.startup)}
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn lifetime(&self)->u64 {self.lifetime}
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn issued(&self)->u64 {self.issued}
-    pub(super) fn six(&self)->bool {matches!(self.config.api_version.as_str(),"serverware.nativeShadowProofCohortConfiguration/v3"|"serverware.nativeShadowProofCohortConfiguration/v4"|"serverware.nativeShadowProofCohortConfiguration/v5"|"serverware.nativeShadowProofCohortConfiguration/v6")}
-    pub(super) fn seven(&self)->bool {matches!(self.config.api_version.as_str(),"serverware.nativeShadowProofCohortConfiguration/v4"|"serverware.nativeShadowProofCohortConfiguration/v5"|"serverware.nativeShadowProofCohortConfiguration/v6")}
-    pub(super) fn eight(&self)->bool {matches!(self.config.api_version.as_str(),"serverware.nativeShadowProofCohortConfiguration/v5"|"serverware.nativeShadowProofCohortConfiguration/v6")}
-    pub(super) fn eleven(&self)->bool {self.config.api_version=="serverware.nativeShadowProofCohortConfiguration/v6"}
+    pub(super) fn six(&self)->bool {matches!(self.config.api_version.as_str(),"catchplate.nativeShadowProofCohortConfiguration/v3"|"catchplate.nativeShadowProofCohortConfiguration/v4"|"catchplate.nativeShadowProofCohortConfiguration/v5"|"catchplate.nativeShadowProofCohortConfiguration/v6")}
+    pub(super) fn seven(&self)->bool {matches!(self.config.api_version.as_str(),"catchplate.nativeShadowProofCohortConfiguration/v4"|"catchplate.nativeShadowProofCohortConfiguration/v5"|"catchplate.nativeShadowProofCohortConfiguration/v6")}
+    pub(super) fn eight(&self)->bool {matches!(self.config.api_version.as_str(),"catchplate.nativeShadowProofCohortConfiguration/v5"|"catchplate.nativeShadowProofCohortConfiguration/v6")}
+    pub(super) fn eleven(&self)->bool {self.config.api_version=="catchplate.nativeShadowProofCohortConfiguration/v6"}
     pub(super) fn endpoint_only(&self)->bool {self.config.api_version==external_driver::CONFIG_API || self.adoption_selected()}
     pub(super) fn adoption_selected(&self)->bool {self.config.api_version==adoption::CONFIG_API}
     pub(super) fn external_driver(&self)->Option<&external_driver::Configuration> {self.config.external_driver.as_ref()}
@@ -198,7 +198,7 @@ impl Admission {
     pub(super) fn require_driver_delivery_configuration(&self,raw:&[u8])->Result<(),ShadowError> {
         self.check_startup()?;require(self.endpoint_only() && !raw.is_empty() && raw.len()<=65536)?;
         let c:super::super::super::super::Configuration=exact(raw)?;
-        require(c.api_version=="serverware.policyCustodyGuestConfiguration/v1"
+        require(c.api_version=="catchplate.policyCustodyGuestConfiguration/v1"
             && c.service_role==super::super::super::super::Role::ProductionBridge
             && c.authority.key_id==self.config.authority.key_id
             && c.authority.public_key_base64url==self.config.authority.public_key_base64url
@@ -237,7 +237,7 @@ impl Admission {
         let release:Release=exact(bytes)?;
         verify(&self.key,if self.adoption_selected(){adoption::RELEASE_DOMAIN}else if endpoint_only{external_driver::RELEASE_DOMAIN}else if self.eleven(){ELEVEN_RELEASE_DOMAIN}else if self.eight(){EIGHT_RELEASE_DOMAIN}else if self.seven(){SEVEN_RELEASE_DOMAIN}else if self.six(){SIX_RELEASE_DOMAIN}else{RELEASE_DOMAIN},&release.payload,&release.signature_base64url)?;
         let p=release.payload;
-        require(p.api_version==(if self.adoption_selected(){adoption::RELEASE_API}else if endpoint_only{external_driver::RELEASE_API}else if self.eleven(){"serverware.nativeShadowProofCohortRelease/v5"}else if self.eight(){"serverware.nativeShadowProofCohortRelease/v4"}else if self.seven(){"serverware.nativeShadowProofCohortRelease/v3"}else if self.six(){"serverware.nativeShadowProofCohortRelease/v2"}else{"serverware.nativeShadowProofCohortRelease/v1"})
+        require(p.api_version==(if self.adoption_selected(){adoption::RELEASE_API}else if endpoint_only{external_driver::RELEASE_API}else if self.eleven(){"catchplate.nativeShadowProofCohortRelease/v5"}else if self.eight(){"catchplate.nativeShadowProofCohortRelease/v4"}else if self.seven(){"catchplate.nativeShadowProofCohortRelease/v3"}else if self.six(){"catchplate.nativeShadowProofCohortRelease/v2"}else{"catchplate.nativeShadowProofCohortRelease/v1"})
             && p.bridge.is_some()!=endpoint_only && p.external_driver_sha256.as_ref()==external_driver_sha256
             && p.commit_request.is_some()==(self.six()||endpoint_only)
             && p.ingress_admission.is_some()==(self.seven()||endpoint_only)
@@ -295,7 +295,7 @@ impl Executable {
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn create_pinned(sha256:&Sha256Digest)->Result<Self,ShadowError> {
         let source=Original::open(std::path::Path::new(SOURCE),0,0,MAX_EXECUTABLE,sha256.clone()).map_err(fail)?;
         let bytes=source.read(MAX_EXECUTABLE).map_err(fail)?;
-        serverware_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&bytes).map_err(fail)?;
+        catchplate_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&bytes).map_err(fail)?;
         let raw=unsafe{libc::syscall(libc::SYS_memfd_create,c"native-shadow-proof-cohort-executable".as_ptr(),
             libc::MFD_CLOEXEC|libc::MFD_ALLOW_SEALING)};
         require(raw>=0)?;let mut file=unsafe{File::from_raw_fd(raw as i32)};

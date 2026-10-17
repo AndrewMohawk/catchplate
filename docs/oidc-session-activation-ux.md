@@ -1,7 +1,7 @@
 # OIDC session activation: explicit, truthful portal status
 
 This is a source-only correction to the existing **Verify passkey** login flow
-in [app.py](../serverware/app.py). It is not the protected registration F08
+in [app.py](../catchplate/app.py). It is not the protected registration F08
 workflow, a new production activation endpoint, or evidence that deployment and
 verification gates passed. No browser, build or runtime verification was run.
 

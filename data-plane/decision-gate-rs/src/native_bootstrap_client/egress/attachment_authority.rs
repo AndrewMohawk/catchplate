@@ -6,15 +6,15 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ed25519_dalek::Signature;
 use serde::Serialize;
 use serde_json::{Map, Value};
-use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
+use catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 
 const MAX_BYTES: usize = 32 * 1024;
 const MAX_KEY_BYTES: usize = 16 * 1024;
-const SCHEMA: &str = "serverware.nativeNetworkAttachmentAuthorization/v1";
-const ENVELOPE: &str = "serverware.signedNativeNetworkAttachmentAuthorization/v1";
+const SCHEMA: &str = "catchplate.nativeNetworkAttachmentAuthorization/v1";
+const ENVELOPE: &str = "catchplate.signedNativeNetworkAttachmentAuthorization/v1";
 const PROFILE: &str = "rtnetlink-veth-bridge-static-v1";
 const MAX_EPOCH_MS: u64 = 9_223_372_036_854;
 

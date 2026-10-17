@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const RESPONSE_OBSERVATION_V2_API_VERSION: &str =
-    "serverware.responseObservationCustody/v2";
+    "catchplate.responseObservationCustody/v2";
 pub const RESPONSE_OBSERVATION_V2_MAX_CONTROL_BYTES: usize = 256 * 1024;
 pub const RESPONSE_OBSERVATION_V2_MAX_ATTESTATION_EVIDENCE_BYTES: usize =
     128 * 1024;
@@ -45,61 +45,61 @@ pub const V2_RESOLVE_EXACT_REPLAY_OPERATION: &str =
 pub const V2_SETTLE_ATTEMPT_OPERATION: &str =
     "responseObservationV2.settleAttempt/v1";
 pub const V2_DURABLE_REPLAY_RECORD_VERSION: &str =
-    "serverware.responseObservationDurableReplay/v1";
+    "catchplate.responseObservationDurableReplay/v1";
 pub const V2_CROSS_BOOT_RECOVERY_AUTHORIZATION_VERSION: &str =
-    "serverware.responseObservationRecoveryAuthorization/v1";
+    "catchplate.responseObservationRecoveryAuthorization/v1";
 pub const V2_CROSS_BOOT_RECOVERY_OUTCOME_VERSION: &str =
-    "serverware.responseObservationRecoveryOutcome/v1";
+    "catchplate.responseObservationRecoveryOutcome/v1";
 pub const V2_RELEASE_AUTHORIZATION_CONSUME_OUTCOME_VERSION: &str =
-    "serverware.publicReleaseAuthorizationConsumeOutcome/v1";
+    "catchplate.publicReleaseAuthorizationConsumeOutcome/v1";
 pub const V2_RELEASE_REQUEST_COMMITMENT_VERSION: &str =
-    "serverware.publicReleaseRequestCommitment/v1";
+    "catchplate.publicReleaseRequestCommitment/v1";
 pub const V2_FRESH_RESPONSE_ATTESTATION_VERSION: &str =
-    "serverware.responseObservationFreshResponseAttestation/v1";
+    "catchplate.responseObservationFreshResponseAttestation/v1";
 pub const V2_FRESH_RESPONSE_ATTESTATION_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/fresh-hardware-proof/v1\0";
+    b"catchplate.response-v2/fresh-hardware-proof/v1\0";
 pub const V2_MONOTONIC_DEADLINE_VERSION: &str =
-    "serverware.responseObservationMonotonicDeadline/v1";
+    "catchplate.responseObservationMonotonicDeadline/v1";
 pub const V2_RETRIEVAL_EVIDENCE_BINDING_VERSION: &str =
-    "serverware.responseObservationRetrievalEvidenceBinding/v1";
+    "catchplate.responseObservationRetrievalEvidenceBinding/v1";
 pub const V2_CANONICAL_FINAL_ENVELOPE_VERSION: &str =
-    "serverware.responseObservationV2FinalEnvelope/v1";
+    "catchplate.responseObservationV2FinalEnvelope/v1";
 pub const V2_DURABLE_REPLAY_RECORD_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/durable-replay-record/v1\0";
+    b"catchplate.response-v2/durable-replay-record/v1\0";
 pub const V2_RECOVERY_OUTCOME_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/recovery-resolution/v1\0";
+    b"catchplate.response-v2/recovery-resolution/v1\0";
 pub const V2_OUTCOME_UNKNOWN_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.outcome-unknown/v1\0";
+    b"catchplate.outcome-unknown/v1\0";
 pub const V2_PUBLIC_RELEASE_AUTHORIZATION_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.public-release-authorization/v1\0";
+    b"catchplate.public-release-authorization/v1\0";
 pub const V2_RELEASE_CONSUMPTION_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.public-release-consume-outcome/v1\0";
+    b"catchplate.public-release-consume-outcome/v1\0";
 pub const V2_IMMUTABLE_RESPONSE_INSPECTION_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/immutable-response-inspection/v1\0";
+    b"catchplate.response-v2/immutable-response-inspection/v1\0";
 pub const V2_FINAL_ENVELOPE_VERIFICATION_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/final-envelope-verification/v1\0";
+    b"catchplate.response-v2/final-envelope-verification/v1\0";
 pub const V2_EXACT_RELEASE_CONSUMPTION_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/exact-release-consumption/v2\0";
+    b"catchplate.response-v2/exact-release-consumption/v2\0";
 pub const V2_EXACT_RELEASE_PREPARATION_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/exact-release-preparation/v1\0";
+    b"catchplate.response-v2/exact-release-preparation/v1\0";
 pub const V2_EXACT_REPLAY_RESOLUTION_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/exact-replay-resolution/v1\0";
+    b"catchplate.response-v2/exact-replay-resolution/v1\0";
 pub const V2_DURABLE_SETTLEMENT_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.response-v2/durable-settlement/v1\0";
+    b"catchplate.response-v2/durable-settlement/v1\0";
 pub const V2_DURABLE_SETTLEMENT_VERSION: &str =
-    "serverware.responseObservationDurableSettlement/v1";
+    "catchplate.responseObservationDurableSettlement/v1";
 pub const V2_EXACT_REPLAY_RESOLUTION_VERSION: &str =
-    "serverware.responseObservationV2ExactReplayResolution/v1";
+    "catchplate.responseObservationV2ExactReplayResolution/v1";
 pub const V2_IMMUTABLE_RESPONSE_INSPECTION_VERSION: &str =
-    "serverware.responseObservationV2ImmutableInspection/v1";
+    "catchplate.responseObservationV2ImmutableInspection/v1";
 pub const V2_FINAL_ENVELOPE_VERIFICATION_VERSION: &str =
-    "serverware.responseObservationV2FinalEnvelopeVerification/v1";
+    "catchplate.responseObservationV2FinalEnvelopeVerification/v1";
 pub const V2_EXACT_RELEASE_AUTHORIZATION_VERSION: &str =
-    "serverware.responseObservationV2ExactReleaseAuthorization/v2";
+    "catchplate.responseObservationV2ExactReleaseAuthorization/v2";
 pub const V2_EXACT_RELEASE_CONSUMPTION_VERSION: &str =
-    "serverware.responseObservationV2ExactReleaseConsumption/v2";
+    "catchplate.responseObservationV2ExactReleaseConsumption/v2";
 pub const V2_EXACT_RELEASE_PREPARATION_VERSION: &str =
-    "serverware.responseObservationV2ExactReleasePreparation/v1";
+    "catchplate.responseObservationV2ExactReleasePreparation/v1";
 
 pub const RESPONSE_OBSERVATION_V2_CAPABILITIES: [&str; 18] = [
     V2_HELLO_OPERATION,
@@ -1013,17 +1013,17 @@ pub struct V2FreshResponseAttestationV1 {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 pub enum V2FreshAttestationEvidenceFormat {
-    #[serde(rename = "serverware.trustedHostEvidence.measurementBundle.json/v1")]
+    #[serde(rename = "catchplate.trustedHostEvidence.measurementBundle.json/v1")]
     TrustedHostMeasurementBundleJsonV1,
-    #[serde(rename = "serverware.teeEvidence.eatCoseBundle.cbor/v1")]
+    #[serde(rename = "catchplate.teeEvidence.eatCoseBundle.cbor/v1")]
     EatCoseBundleCborV1,
-    #[serde(rename = "serverware.teeEvidence.sevSnpBundle.cbor/v1")]
+    #[serde(rename = "catchplate.teeEvidence.sevSnpBundle.cbor/v1")]
     SevSnpBundleCborV1,
-    #[serde(rename = "serverware.teeEvidence.tdxQuoteBundle.cbor/v1")]
+    #[serde(rename = "catchplate.teeEvidence.tdxQuoteBundle.cbor/v1")]
     TdxQuoteBundleCborV1,
-    #[serde(rename = "serverware.teeEvidence.nitroDocumentBundle.cbor/v1")]
+    #[serde(rename = "catchplate.teeEvidence.nitroDocumentBundle.cbor/v1")]
     NitroDocumentBundleCborV1,
-    #[serde(rename = "serverware.teeEvidence.ccaTokenBundle.cbor/v1")]
+    #[serde(rename = "catchplate.teeEvidence.ccaTokenBundle.cbor/v1")]
     CcaTokenBundleCborV1,
 }
 
@@ -1497,7 +1497,7 @@ pub struct V2ReleaseCasExpectationV1 {
 }
 
 pub const V2_PUBLIC_RELEASE_AUTHORIZATION_VERSION: &str =
-    "serverware.publicReleaseAuthorization/v1";
+    "catchplate.publicReleaseAuthorization/v1";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2221,7 +2221,7 @@ pub fn response_observation_v2_transition_evidence_sha256(
         _ => return None,
     };
     response_observation_v2_canonical_binding_sha256(
-        b"serverware.response-v2/transition-evidence/v1",
+        b"catchplate.response-v2/transition-evidence/v1",
         &serde_json::json!({
             "requestSha256":request_sha256,
             "operation":request.operation(),
@@ -2328,7 +2328,7 @@ pub fn response_observation_v2_lifecycle_state_sha256(
     let mut hasher = Sha256::new();
     append_lifecycle_hash_frame(
         &mut hasher,
-        b"serverware.response-v2/lifecycle-state/v2",
+        b"catchplate.response-v2/lifecycle-state/v2",
     );
     for value in [
         request.operation().as_bytes(),
@@ -2412,7 +2412,7 @@ pub fn response_observation_v2_release_consume_binding_sha256(
     consume: &V2ReleaseAuthorizationConsumeCasV1,
 ) -> Option<String> {
     response_observation_v2_canonical_binding_sha256(
-        b"serverware.public-release-consume-binding/v1",
+        b"catchplate.public-release-consume-binding/v1",
         consume,
     )
 }
@@ -2421,7 +2421,7 @@ pub fn response_observation_v2_release_request_commitment_sha256(
     commitment: &V2ReleaseRequestCommitmentV1,
 ) -> Option<String> {
     response_observation_v2_canonical_binding_sha256(
-        b"serverware.public-release-request-commitment/v1",
+        b"catchplate.public-release-request-commitment/v1",
         commitment,
     )
 }
@@ -2430,7 +2430,7 @@ pub fn response_observation_v2_retrieval_evidence_sha256(
     binding: &V2RetrievalEvidenceBindingV1,
 ) -> Option<String> {
     response_observation_v2_canonical_binding_sha256(
-        b"serverware.response-v2/retrieval-evidence/v1",
+        b"catchplate.response-v2/retrieval-evidence/v1",
         binding,
     )
 }
@@ -3047,7 +3047,7 @@ pub fn response_observation_v2_stable_resume_id_sha256(
     let generation_bytes = generation.to_be_bytes();
     append_lifecycle_hash_frame(
         &mut hasher,
-        b"serverware.response-v2/stable-resume/v1",
+        b"catchplate.response-v2/stable-resume/v1",
     );
     for value in [
         generation_id.as_bytes(),

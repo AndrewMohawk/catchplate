@@ -315,7 +315,7 @@ pub(super) fn project(snapshot: &Snapshot, principal_id: &str, deadline: u64) ->
     for route in selected_routes { routes.push(route_value(snapshot, route, &mut work)?); }
     for value in [&snapshot.hash, &snapshot.policy_id, &snapshot.compiled_behavior_sha256,
         &snapshot.policy_signing_key_id] { work.text(value)?; }
-    let public = json!({"apiVersion":"serverware.nativeEnrollmentPolicyRequirements/v1",
+    let public = json!({"apiVersion":"catchplate.nativeEnrollmentPolicyRequirements/v1",
         "policy":{"hash":snapshot.hash, "id":snapshot.policy_id,
             "sequence":snapshot.policy_sequence, "rollbackEpoch":snapshot.rollback_epoch,
             "trustGeneration":snapshot.trust_generation,

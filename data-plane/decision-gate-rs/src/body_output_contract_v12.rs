@@ -10,13 +10,13 @@ use super::{canonical_bytes, sha256_bytes, Digest, PlanProtocolError, PlanResult
 use serde::Serialize;
 use std::collections::BTreeSet;
 
-pub const CONTROL_DIRECTORY: &str = ".serverware-controller-output-v12";
+pub const CONTROL_DIRECTORY: &str = ".catchplate-controller-output-v12";
 pub const STDOUT_NAME: &str = "stdout.bin";
 pub const STDERR_NAME: &str = "stderr.bin";
 pub const MANIFEST_NAME: &str = "manifest.json";
 pub const TERMINAL_NAME: &str = "terminal.json";
-const CONTROL_PREFIX: &str = ".serverware-controller-";
-const MANIFEST_SCHEMA: &str = "serverware.controllerBodyOutputs/v12";
+const CONTROL_PREFIX: &str = ".catchplate-controller-";
+const MANIFEST_SCHEMA: &str = "catchplate.controllerBodyOutputs/v12";
 const MAX_PATHS: usize = 256;
 const MAX_PATH_BYTES: usize = 4096;
 const MAX_COMPONENT_BYTES: usize = 255;

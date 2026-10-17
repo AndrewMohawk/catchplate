@@ -1,6 +1,6 @@
 # Registration execution handoff admission
 
-[`authority_registration_execution_handoff.py`](../serverware/authority_registration_execution_handoff.py)
+[`authority_registration_execution_handoff.py`](../catchplate/authority_registration_execution_handoff.py)
 provides private original-input helpers for control-plane SQL and
 completion caller. It performs no network exchange, SQL, signing, storage or
 automatic retry and creates no work allowance. The source is unbuilt and
@@ -9,7 +9,7 @@ unexecuted; no public caller or production acceptance gate is activated.
 ## Original scope before a send
 
 `_admit_sql_on_configuration` takes the same keyword inputs as
-[`authority_registration_execution_sql_admission._admit_on_configuration`](../serverware/authority_registration_execution_sql_admission.py):
+[`authority_registration_execution_sql_admission._admit_on_configuration`](../catchplate/authority_registration_execution_sql_admission.py):
 
 - Grant raw10: caller authorization, signed planning request3, signed planning
   response4, complete before-vector and signed grant.

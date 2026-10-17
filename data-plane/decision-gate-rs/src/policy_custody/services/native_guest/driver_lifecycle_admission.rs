@@ -29,7 +29,7 @@ impl Owner {
         let after:Vec<_>=census::descendants(self.parent.original.process_id)?.into_iter().map(|v|v.original).collect();
         require(before==after && before.iter().any(|v|v==&driver.original))?;
         driver.check()?;descriptors.check()?;
-        let raw=canonical_json_bytes(&Observation{api_version:"serverware.nativeShadowDriverLifecycleObservation/v1".into(),
+        let raw=canonical_json_bytes(&Observation{api_version:"catchplate.nativeShadowDriverLifecycleObservation/v1".into(),
             configuration_sha256:self.configuration_sha256.clone(),window_sha256:self.window_sha256.clone(),
             bootstrap_observation_sha256:Sha256Digest::compute(&canonical_json_bytes(observation)?),
             scope_sha256:Sha256Digest::compute(scope),phase:"constructed-driver-subtree".into(),
@@ -45,13 +45,13 @@ impl Owner {
         scope:&[u8])->Result<(Vec<u8>,Option<OwnedFd>),ShadowError>{
         self.check()?;require(self.configuration.constructed_selected() && self.bound && self.listening && now()?<self.startup)?;
         let command:Command=exact(raw)?;
-        require(command.api_version=="serverware.nativeShadowConstructedDriverControl/v1")?;
+        require(command.api_version=="catchplate.nativeShadowConstructedDriverControl/v1")?;
         if command.operation=="export" {
             require(command.original.is_none() && !self.constructed_exported && self.constructed_admission.is_none())?;
             self.constructed_exported=true; // no second export after any attempt
             let census=self.capture_constructed(child,observation,scope)?;
             let (notice,_,file)=self.facade.as_ref().ok_or(ShadowError::BindingDrift)?.constructed_public()?;
-            let reply=canonical_json_bytes(&serde_json::json!({"apiVersion":"serverware.nativeShadowConstructedDriverExport/v1",
+            let reply=canonical_json_bytes(&serde_json::json!({"apiVersion":"catchplate.nativeShadowConstructedDriverExport/v1",
                 "censusOriginal":String::from_utf8(census).map_err(fail)?,
                 "publicAdmissionNoticeOriginal":String::from_utf8(notice).map_err(fail)?}))?;
             require(reply.len()<=wire::MAX_FRAME)?;return Ok((reply,Some(file)));
@@ -69,7 +69,7 @@ impl Owner {
         let early:wire::BootstrapAdmission=exact(grant.bootstrap_admission_original.as_bytes())?;let e=&early.payload;
         authority.key()?.verify_strict(&signature_preimage(wire::BOOTSTRAP_ADMISSION_DOMAIN,&canonical_json_bytes(e)?),
             &ed25519_dalek::Signature::from_bytes(&early.signature.decode()?)).map_err(|_|ShadowError::SignatureInvalid)?;
-        require(e.api_version=="serverware.nativeShadowBootstrapDriverAdmission/v1" && e.purpose=="native-driver-bootstrap-admission"
+        require(e.api_version=="catchplate.nativeShadowBootstrapDriverAdmission/v1" && e.purpose=="native-driver-bootstrap-admission"
             && e.configuration_sha256==self.configuration_sha256 && e.window_sha256==self.window_sha256
             && e.bootstrap_observation_original.as_bytes()==canonical_json_bytes(observation)? && e.parent==self.parent.original
             && e.parent_executable_sha256==self.executable_sha256 && e.pid_namespace_sha256==self.pid_namespace_sha256
@@ -91,7 +91,7 @@ impl Owner {
         let key_payload=authorization.get("authorization").and_then(|v|v.get("payload")).ok_or(ShadowError::BindingDrift)?;
         let digest=|value:&serde_json::Value,name:&str|->Result<Sha256Digest,ShadowError>{
             serde_json::from_value(value.get(name).ok_or(ShadowError::BindingDrift)?.clone()).map_err(fail)};
-        require(p.api_version=="serverware.nativeShadowConstructedDriverAdmission/v1" && p.purpose=="constructed-native-driver-admission"
+        require(p.api_version=="catchplate.nativeShadowConstructedDriverAdmission/v1" && p.purpose=="constructed-native-driver-admission"
             && p.configuration_sha256==self.configuration_sha256 && p.window_sha256==self.window_sha256
             && p.bootstrap_observation_sha256==Sha256Digest::compute(&canonical_json_bytes(observation)?)
             && p.phase_scope_sha256==Sha256Digest::compute(scope)
@@ -110,7 +110,7 @@ impl Owner {
         validate_freshness(p.issued_at_unix_nanos,p.expires_at_unix_nanos,p.issued_at_unix_nanos,MAX_ENVELOPE_AGE_NANOS)?;
         require(p.issued_at_unix_nanos>=key_payload.get("issuedAtUnixNanos").and_then(serde_json::Value::as_i64).ok_or(ShadowError::BindingDrift)?
             && p.expires_at_unix_nanos<=key_payload.get("expiresAtUnixNanos").and_then(serde_json::Value::as_i64).ok_or(ShadowError::BindingDrift)?)?;
-        let reply=canonical_json_bytes(&serde_json::json!({"apiVersion":"serverware.nativeShadowConstructedDriverRetained/v1",
+        let reply=canonical_json_bytes(&serde_json::json!({"apiVersion":"catchplate.nativeShadowConstructedDriverRetained/v1",
             "admissionSha256":Sha256Digest::compute(original.as_bytes()),"censusSha256":p.census_sha256}))?;
         self.constructed_admission=Some(original.into_bytes());self.check_constructed()?;Ok((reply,None))
     }

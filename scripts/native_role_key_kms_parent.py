@@ -20,7 +20,7 @@ import cbor2
 from scripts.aws_kms_recipient_release import (
     attested_recipient_public_key, reject_secret_fields, run_aws_kms_decrypt,
 )
-from serverware import native_role_key_contract as contract
+from catchplate import native_role_key_contract as contract
 
 
 def configuration(path):
@@ -47,7 +47,7 @@ def configuration(path):
     contract.closed(value, {"apiVersion", "enclaveCid", "port", "kmsKeyId", "ciphertextBlob",
         "encryptionContext", "region", "configurationSha256", "deliveryInventorySha256",
         "provisionerConfigurationSha256", "helperImageSha256"})
-    contract.require(value["apiVersion"] == "serverware.nativeRoleKeyKmsParent/v1")
+    contract.require(value["apiVersion"] == "catchplate.nativeRoleKeyKmsParent/v1")
     contract.integer(value["enclaveCid"], 4, 2**32 - 2)
     contract.integer(value["port"], 1024, 2**32 - 2)
     contract.text(value["kmsKeyId"], 2048)
@@ -55,7 +55,7 @@ def configuration(path):
         contract.sha(value[field])
     context = value["encryptionContext"]
     contract.require(type(context) is dict and 1 <= len(context) <= 32
-        and len(contract.canonical(context)) <= 8192 and context.get("serverwarePurpose") == "guest-role-keys/v1")
+        and len(contract.canonical(context)) <= 8192 and context.get("catchplatePurpose") == "guest-role-keys/v1")
     for key, item in context.items():
         contract.text(key, 1024)
         contract.text(item, 1024)

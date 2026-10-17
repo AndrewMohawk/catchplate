@@ -46,47 +46,47 @@ def require(value):
 
 
 def child_environment():
-    return {key: value for key, value in os.environ.items() if not key.startswith("SERVERWARE_")}
+    return {key: value for key, value in os.environ.items() if not key.startswith("CATCHPLATE_")}
 
 
 def selected_environment(source, directory, *, create):
-    """Select real development admission before importing any serverware code."""
+    """Select real development admission before importing any catchplate code."""
     source, directory = Path(source), Path(directory)
     require(str(source) in {"/app", "/previous-app"} and source.is_dir()
         and directory.is_absolute() and directory.is_relative_to("/tmp")
         and directory.parent.is_dir() and directory.exists() != create)
-    require(not any(name == "serverware" or name.startswith("serverware.") for name in sys.modules))
+    require(not any(name == "catchplate" or name.startswith("catchplate.") for name in sys.modules))
     custody = directory.with_name(directory.name + ".x-custody")
     if create:
         custody.mkdir(mode=0o700)
     require(custody.is_dir() and not custody.is_symlink()
         and stat.S_IMODE(custody.stat().st_mode) == 0o700 and not list(custody.iterdir()))
     for key in tuple(os.environ):
-        if key.startswith("SERVERWARE_"):
+        if key.startswith("CATCHPLATE_"):
             del os.environ[key]
     sys.path[:0] = [str(source / "scripts"), str(source)]
     import test_operator_workspace_store as workspace
     require(Path(workspace.__file__).resolve().is_relative_to(source))
     os.environ.update(workspace.common._ENVIRONMENT)
-    os.environ.update(SERVERWARE_DATA_DIR=str(directory), SERVERWARE_OPERATOR_MANAGED_X_ENABLED="1",
-        SERVERWARE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED="1", SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED="1",
-        SERVERWARE_PUBLIC_URL="https://console.example.com", SERVERWARE_OPERATOR_X_CUSTODY_DIR=str(custody))
+    os.environ.update(CATCHPLATE_DATA_DIR=str(directory), CATCHPLATE_OPERATOR_MANAGED_X_ENABLED="1",
+        CATCHPLATE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED="1", CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED="1",
+        CATCHPLATE_PUBLIC_URL="https://console.example.com", CATCHPLATE_OPERATOR_X_CUSTODY_DIR=str(custody))
     return workspace, custody
 
 
 def require_source(source, custody):
     require(not list(custody.iterdir()))
     require(all(Path(module.__file__).resolve().is_relative_to(source)
-        for name, module in tuple(sys.modules.items()) if name == "serverware" or name.startswith("serverware.")))
+        for name, module in tuple(sys.modules.items()) if name == "catchplate" or name.startswith("catchplate.")))
 
 
 def backend():
-    from serverware import operator_demo
+    from catchplate import operator_demo
     operator_demo.activate()
-    from serverware.control_plane_startup import validate_control_plane_startup
+    from catchplate.control_plane_startup import validate_control_plane_startup
     validate_control_plane_startup()
-    from serverware import config, db, operator_demo_store, policy_bundle
-    from serverware import operator_catalog_schema, operator_catalog_inputs, operator_catalog_mutations
+    from catchplate import config, db, operator_demo_store, policy_bundle
+    from catchplate import operator_catalog_schema, operator_catalog_inputs, operator_catalog_mutations
     return config, db, operator_demo_store, policy_bundle, operator_catalog_schema, operator_catalog_inputs, operator_catalog_mutations
 
 
@@ -98,7 +98,7 @@ def seed(directory):
     rule = workspace.create_rule(db, store, schema, inputs, mutations,
         application["id"], credential["id"])["access_rule"]
     historical.upstream_fixture()
-    from serverware import operator_x_quota as quota, operator_publication as publication
+    from catchplate import operator_x_quota as quota, operator_publication as publication
     with publication.exclusive(), closing(db.connect()) as conn, conn:
         conn.execute("BEGIN IMMEDIATE")
         quota.require_ready(conn)  # Real admitted, initialized old-source store.
@@ -149,14 +149,14 @@ def source_refusal(directory):
     changed = deepcopy(pinned)
     relative = next(iter(changed["target"]["sourceFiles"]))
     changed["target"]["sourceFiles"][relative] = "sha256:" + "0" * 64
-    require(not any(name == "serverware" or name.startswith("serverware.") for name in sys.modules))
+    require(not any(name == "catchplate" or name.startswith("catchplate.") for name in sys.modules))
     try:
         migration.source(changed, Path(directory))
     except migration.Refused:
         pass
     else:
         raise AssertionError("changed source accepted")
-    require(not any(name == "serverware" or name.startswith("serverware.") for name in sys.modules))
+    require(not any(name == "catchplate" or name.startswith("catchplate.") for name in sys.modules))
     print('{"changedSourceRefusedBeforeImport":true}')
 
 
@@ -167,7 +167,7 @@ class QuotaMigrationTests(historical.MigrationTests):
     def setUpClass(cls):
         os.umask(0o077)
         for key in tuple(os.environ):
-            if key.startswith("SERVERWARE_"):
+            if key.startswith("CATCHPLATE_"):
                 del os.environ[key]
         cls.pinned = migration.pins(TRANSITION)  # Missing/unreviewed pins fail; never skip or replace them.
         require(cls.pinned["oldCommit"].startswith("a3899a95")
@@ -213,7 +213,7 @@ class QuotaMigrationTests(historical.MigrationTests):
     def db(self):
         with closing(sqlite3.connect(self.directory / migration.DATABASE)) as conn, conn:
             conn.row_factory = sqlite3.Row
-            from serverware.authority_store.metadata_schema import configure_sqlite_metadata_connection
+            from catchplate.authority_store.metadata_schema import configure_sqlite_metadata_connection
             configure_sqlite_metadata_connection(conn)
             yield conn
 
@@ -323,10 +323,10 @@ class QuotaMigrationTests(historical.MigrationTests):
             self.child("--cold-start", self.directory, expected=b'{"candidateColdStart":true,"xCustodyEmpty":true}\n')
             finished = datetime.now(timezone.utc)
             after = self.logical()
-            rows = after["rows"]["serverware_store_migrations"]
+            rows = after["rows"]["catchplate_store_migrations"]
             name_index, time_index = rows["columns"].index("migration"), rows["columns"].index("applied_at")
             selected = [row for row in rows["values"] if row[name_index] == ["str", "policy_candidate_authority"]]
-            prior = [row for row in before["rows"]["serverware_store_migrations"]["values"]
+            prior = [row for row in before["rows"]["catchplate_store_migrations"]["values"]
                 if row[name_index] == ["str", "policy_candidate_authority"]]
             self.assertEqual((len(selected), len(prior)), (1, 1))
             observed = datetime.fromisoformat(selected[0][time_index][1])

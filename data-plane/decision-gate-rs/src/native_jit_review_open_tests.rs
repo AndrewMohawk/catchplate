@@ -6,8 +6,8 @@ use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::{pkcs8::EncodePublicKey, Signer, SigningKey};
 use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
 
-const AUTHORIZATION: &str = "serverware.nativeJitReviewOpeningAuthorization/v1";
-const ACK: &str = "serverware.nativeJitReviewOpeningCommitAcknowledgment/v1";
+const AUTHORIZATION: &str = "catchplate.nativeJitReviewOpeningAuthorization/v1";
+const ACK: &str = "catchplate.nativeJitReviewOpeningCommitAcknowledgment/v1";
 
 fn pin(label: &str) -> String { sha(label.as_bytes()) }
 fn literal(value: &Value) -> String {
@@ -27,7 +27,7 @@ fn envelope(payload: &Value, key: &SigningKey, domain: &str) -> String {
     let mut preimage = domain.as_bytes().to_vec(); preimage.push(0);
     preimage.extend(canonical_ascii_bytes(payload).unwrap());
     literal(&json!({"schema":payload["schema"].as_str().unwrap()
-        .replacen("serverware.native","serverware.signedNative",1),
+        .replacen("catchplate.native","catchplate.signedNative",1),
         "payload":payload,"signatureBase64Url":URL_SAFE_NO_PAD.encode(key.sign(&preimage).to_bytes())}))
 }
 fn private_attempt() -> Attempt {
@@ -96,16 +96,16 @@ fn cold_configuration() -> Value {
             "PCR2":format!("sha384:{}","3".repeat(96))},"expectedEif":format!("sha384:{}","1".repeat(96)),
         "maxAgeSeconds":60,"futureSkewSeconds":2,"instanceId":"spiffe://synthetic.test/gate",
         "secretKekId":format!("attested-memory-kek:{}","4".repeat(24))});
-    json!({"apiVersion":"serverware.nativeJitReviewOpeningStartup/v1","controlPlaneConfigurationDigest":pin("configuration"),
+    json!({"apiVersion":"catchplate.nativeJitReviewOpeningStartup/v1","controlPlaneConfigurationDigest":pin("configuration"),
         "instanceId":target["instanceId"],"secretKekId":target["secretKekId"],"browserVsockPort":9203,
-        "nativeJitReviewOpeningPolicy":{"schema":"serverware.nativeJitReviewOpeningPolicy/v1",
+        "nativeJitReviewOpeningPolicy":{"schema":"catchplate.nativeJitReviewOpeningPolicy/v1",
             "sourceContractDigest":SOURCE_CONTRACT_DIGEST,"deploymentId":"synthetic-opening",
             "operationMaxSeconds":10,"attemptCapacity":4,"target":target,
             "authorizerKey":keys["authorizerKey"],"commitOwnerKey":keys["commitOwnerKey"],
             "assignmentAuthorizer":{"publicKeyPem":pem,"publicKeyPemSha256":sha(pem.as_bytes()),
                 "publicKeySpkiSha256":sha(der.as_bytes())},
             "nativeOrigin":"https://native.synthetic.test","portalOrigin":"https://portal.synthetic.test",
-            "trustRoots":{"apiVersion":"serverware.nativeJitReviewOpeningNativeTrustRoots/v1",
+            "trustRoots":{"apiVersion":"catchplate.nativeJitReviewOpeningNativeTrustRoots/v1",
                 "awsNitroRootCertificatesPem":[ca],"awsNitroCrlsDerBase64url":[],
                 "nitroCertificateProfile":{"profileId":"aws-nitro-attestation-pki-native-v1",
                     "allowedLeafExtendedKeyUsageOids":[]}}}})
@@ -149,7 +149,7 @@ fn local_grant_signature_is_exact_key_domain_purpose_and_original() {
     assert_eq!(wire::authority(&signed, &policy, false, 120).unwrap(), grant);
     assert!(wire::authority(&signed, &policy, true, 120).is_err());
     for (key, domain) in [(&commit_key,AUTHORIZATION),(&grant_key,ACK),
-        (&grant_key,"serverware.nativeStaticCredentialAuthorization/v1")] {
+        (&grant_key,"catchplate.nativeStaticCredentialAuthorization/v1")] {
         assert!(wire::authority(&envelope(&grant,key,domain), &policy, false, 120).is_err());
     }
     let mut tampered: Value = serde_json::from_str(&signed).unwrap();
@@ -268,10 +268,10 @@ fn cold_opening_schema_and_current_manifest_are_closed_and_not_sealing() {
     let good = cold_configuration(); assert!(valid_configuration(&good));
     let config: Configuration = serde_json::from_value(good.clone()).unwrap();
     assert_eq!(config.browser_vsock_port(),9203); assert_eq!(config.deployment_id(),"synthetic-opening");
-    for version in ["serverware.nativeJitReviewConfiguration/v2","serverware.nativeStaticCredentialConfiguration/v1"] {
+    for version in ["catchplate.nativeJitReviewConfiguration/v2","catchplate.nativeStaticCredentialConfiguration/v1"] {
         let mut bad = good.clone(); bad["apiVersion"] = json!(version); assert!(!valid_configuration(&bad));
     }
-    for value in [json!("serverware.nativeJitReviewCustodyAuthorityPolicy/v1"),json!(null)] {
+    for value in [json!("catchplate.nativeJitReviewCustodyAuthorityPolicy/v1"),json!(null)] {
         let mut bad = good.clone(); bad["nativeJitReviewOpeningPolicy"]["schema"] = value;
         assert!(!valid_configuration(&bad));
     }
@@ -309,7 +309,7 @@ fn cold_policy_rejects_bad_bounds_key_aliases_targets_trust_and_origins() {
     let mut bad = good.clone(); bad["nativeJitReviewOpeningPolicy"]["target"]["expectedEif"] = json!(format!("sha384:{}","9".repeat(96)));
     assert!(!valid_configuration(&bad));
     let mut bad = good.clone(); bad["instanceId"] = json!("spiffe://another.test/gate"); assert!(!valid_configuration(&bad));
-    let mut bad = good.clone(); bad["nativeJitReviewOpeningPolicy"]["trustRoots"]["apiVersion"] = json!("serverware.nativeJitReviewNativeTrustRoots/v1");
+    let mut bad = good.clone(); bad["nativeJitReviewOpeningPolicy"]["trustRoots"]["apiVersion"] = json!("catchplate.nativeJitReviewNativeTrustRoots/v1");
     assert!(!valid_configuration(&bad));
     let mut bad = good.clone(); bad["nativeJitReviewOpeningPolicy"]["trustRoots"]["awsNitroRootCertificatesPem"] = json!([]);
     assert!(!valid_configuration(&bad));

@@ -51,7 +51,7 @@ def arguments(provider):
 
 class OperationTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="serverware-mcp-engine-")
+        temporary = tempfile.TemporaryDirectory(prefix="catchplate-mcp-engine-")
         self.addCleanup(temporary.cleanup)
         self.directory = Path(temporary.name)
         self.configs, self.values = {}, {}
@@ -101,7 +101,7 @@ class OperationTests(unittest.TestCase):
                     self.assertIsNone(prepared._body)
                 else:
                     self.assertIsInstance(json.loads(prepared._body), dict)
-        self.assertNotIn("serverware.db", sys.modules)
+        self.assertNotIn("catchplate.db", sys.modules)
 
     def test_action_requires_operator_enablement_and_exact_confirmation(self):
         alias = "slack_post_message"

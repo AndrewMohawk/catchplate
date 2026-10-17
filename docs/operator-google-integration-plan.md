@@ -144,14 +144,14 @@ of `goal.md`. R96 remains terminal: no restart, new enrollment, real provider
 contact, configuration change or native authority is authorized by this plan.
 
 The journey is connect Google once, choose an application, allow its operations,
-then use the ordinary proxy client. Serverware refreshes access automatically.
+then use the ordinary proxy client. Catchplate refreshes access automatically.
 Applications never receive provider tokens. Account consent, application-token
 rotation and access-rule publication remain separate operations.
 
 ## Explicit development boundary
 
 Add an opt-in `operator-google-v1` capability to the operator-development profile,
-not a blanket removal of the `SERVERWARE_GOOGLE_*` prohibition. Admit only a
+not a blanket removal of the `CATCHPLATE_GOOGLE_*` prohibition. Admit only a
 configured Google client, private client-secret file, exact HTTPS callback,
 fixed provider endpoints, bounded permission presets and pinned API origins.
 Persist the client/callback binding; reject silent application changes on restart.
@@ -166,7 +166,7 @@ protected combinations fail closed before provider contact, not by silently
 switching to immediate development activation.
 
 The current cold-profile source selects only the exact
-`SERVERWARE_OPERATOR_GOOGLE_PROFILE=operator-google-v1` opt-in. Its initial
+`CATCHPLATE_OPERATOR_GOOGLE_PROFILE=operator-google-v1` opt-in. Its initial
 permission preset is `gmail_readonly`, with canonical scopes `email`,
 `https://www.googleapis.com/auth/gmail.readonly`, and `openid`, and the API origin
 `https://gmail.googleapis.com` must already be in the deployment allowlist.
@@ -594,7 +594,7 @@ make an environment-only change appear valid.
 
 The working source now provides an explicit
 [reviewed first-Google setup transition](operator-google-setup.md), with an
-[optional deployment layer](../docker/serverware-operator-demo/GOOGLE-SETUP.md).
+[optional deployment layer](../docker/catchplate-operator-demo/GOOGLE-SETUP.md).
 Preparation leaves Google disabled; a controlled restart validates and applies
 only the exact reviewed public configuration. These additions do not establish
 a real-provider deployment or account consent. Their focused verification status
@@ -605,6 +605,6 @@ the public HTTPS-proxy connection. Current workload identity uses proxy Bearer
 authentication; standard Requests proxy-URL credentials generate Basic instead.
 A supported Requests integration must keep proxy credentials out of upstream
 headers. For the public HTTPS proxy it must also keep outer public/system trust
-separate from inner Serverware CA trust. An HTTP-loopback fixture cannot prove
+separate from inner Catchplate CA trust. An HTTP-loopback fixture cannot prove
 that second TLS layer, and a hand-crafted cURL success does not prove stock SDK
 configuration. Managed app-identity renewal remains separate from Google refresh.

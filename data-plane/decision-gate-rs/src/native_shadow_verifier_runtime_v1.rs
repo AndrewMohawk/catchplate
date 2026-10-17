@@ -14,20 +14,20 @@ use serde_json::Value;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use sha2::{Digest, Sha256};
 
-pub(crate) const IMAGE_PATH: &str = "/opt/serverware/native-shadow-verifier-runtime.squashfs";
+pub(crate) const IMAGE_PATH: &str = "/opt/catchplate/native-shadow-verifier-runtime.squashfs";
 pub(crate) const INTERPRETER_PATH: &str = "/usr/local/bin/python3.11";
-pub(crate) const ENTRYPOINT_PATH: &str = "/opt/serverware/scripts/verify_native_shadow_custody.py";
-pub(crate) const TIME_IMAGE_PATH: &str = "/opt/serverware/native-shadow-time-issuer-runtime.squashfs";
-pub(crate) const TIME_ENTRYPOINT_PATH: &str = "/opt/serverware/scripts/issue_native_shadow_guest_time.py";
-pub(crate) const ORIGIN_IMAGE_PATH: &str = "/opt/serverware/native-generation-origin-issuer-runtime.squashfs";
-pub(crate) const ORIGIN_ENTRYPOINT_PATH: &str = "/opt/serverware/scripts/issue_native_generation_origin.py";
+pub(crate) const ENTRYPOINT_PATH: &str = "/opt/catchplate/scripts/verify_native_shadow_custody.py";
+pub(crate) const TIME_IMAGE_PATH: &str = "/opt/catchplate/native-shadow-time-issuer-runtime.squashfs";
+pub(crate) const TIME_ENTRYPOINT_PATH: &str = "/opt/catchplate/scripts/issue_native_shadow_guest_time.py";
+pub(crate) const ORIGIN_IMAGE_PATH: &str = "/opt/catchplate/native-generation-origin-issuer-runtime.squashfs";
+pub(crate) const ORIGIN_ENTRYPOINT_PATH: &str = "/opt/catchplate/scripts/issue_native_generation_origin.py";
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Profile { Verifier, TimeIssuer, OriginIssuer, Setup(setup_issuer::Role) }
 impl Profile {
     fn configuration_path(self) -> &'static str {
-        match self { Self::Verifier => "/etc/serverware/native-shadow-nitro-verifier.json",
-            Self::TimeIssuer => "/etc/serverware/native-shadow-guest-time-issuer.json",
-            Self::OriginIssuer => "/etc/serverware/native-generation-origin-issuer.json",
+        match self { Self::Verifier => "/etc/catchplate/native-shadow-nitro-verifier.json",
+            Self::TimeIssuer => "/etc/catchplate/native-shadow-guest-time-issuer.json",
+            Self::OriginIssuer => "/etc/catchplate/native-generation-origin-issuer.json",
             Self::Setup(role) => role.configuration_path() }
     }
     pub(crate) fn entrypoint(self) -> &'static str {
@@ -88,13 +88,13 @@ struct Policy { uid: u32, gid: u32, issued: u64, deadline: u64, purpose:Option<R
 fn policy(value: &Value, origin: &Origin) -> Result<Policy, String> {
     let fields = value.as_object().ok_or("verifier policy is not an object")?;
     let (purpose,scope,expected):(_,_,&[&str])=match value["apiVersion"].as_str() {
-        Some("serverware.nativeShadowNitroVerifierConfiguration/v1")=>(ResultPurpose::Production,"expectedStatement",
+        Some("catchplate.nativeShadowNitroVerifierConfiguration/v1")=>(ResultPurpose::Production,"expectedStatement",
             &["apiVersion","uid","gid","operation","authorization","expectedStatement","authorityKeys",
                 "trustCheckpoint","nitro","collateralRevocation","expectedAttestation","maximumResultAgeNanos"]),
-        Some("serverware.nativeShadowNitroVerifierConfiguration/v2")=>(ResultPurpose::KeyAdmission,"expectedScope",
+        Some("catchplate.nativeShadowNitroVerifierConfiguration/v2")=>(ResultPurpose::KeyAdmission,"expectedScope",
             &["apiVersion","uid","gid","operation","authorization","expectedScope","authorityKeys",
                 "trustCheckpoint","nitro","collateralRevocation","expectedAttestation","maximumResultAgeNanos","admissionAuthorization"]),
-        Some("serverware.nativeShadowNitroVerifierConfiguration/v3")=>(ResultPurpose::BridgeAdmission,"expectedScope",
+        Some("catchplate.nativeShadowNitroVerifierConfiguration/v3")=>(ResultPurpose::BridgeAdmission,"expectedScope",
             &["apiVersion","uid","gid","operation","authorization","expectedScope","authorityKeys",
                 "trustCheckpoint","nitro","collateralRevocation","expectedAttestation","maximumResultAgeNanos","admissionAuthorization"]),
         _=>return Err("verifier original policy purpose differs".into()),
@@ -136,7 +136,7 @@ impl RuntimeAdmission {
         let origin = Origin::capture()?;
         let launch = Original::open("native-shadow-verifier-launch.json", 16384)?;
         let selected: Launch = serde_json::from_value(document(&launch.bytes, 16384)?).map_err(|_| "verifier launch is not closed")?;
-        ensure(selected.api_version == "serverware.nativeShadowVerifierLaunch/v1"
+        ensure(selected.api_version == "catchplate.nativeShadowVerifierLaunch/v1"
             && selected.runtime_image.profile == "sealed-memfd-squashfs-v1"
             && selected.runtime_image.image_path == IMAGE_PATH, "verifier image purpose selection differs")?;
         for pin in [&selected.verifier_configuration_sha256, &selected.runtime_image.image_sha256,
@@ -188,9 +188,9 @@ impl RuntimeAdmission {
     }
     pub(crate) fn evidence_api(&self)->Result<&'static str,String> {
         Ok(match self.result_purpose()? {
-            ResultPurpose::Production=>"serverware.nativeShadowRoleKeyEvidence/v1",
-            ResultPurpose::KeyAdmission=>"serverware.nativeShadowKeyAdmissionEvidence/v1",
-            ResultPurpose::BridgeAdmission=>"serverware.nativeShadowBridgeAdmissionEvidence/v1",
+            ResultPurpose::Production=>"catchplate.nativeShadowRoleKeyEvidence/v1",
+            ResultPurpose::KeyAdmission=>"catchplate.nativeShadowKeyAdmissionEvidence/v1",
+            ResultPurpose::BridgeAdmission=>"catchplate.nativeShadowBridgeAdmissionEvidence/v1",
         })
     }
     pub(crate) fn prepare(self) -> Result<PreparedRuntime, String> {

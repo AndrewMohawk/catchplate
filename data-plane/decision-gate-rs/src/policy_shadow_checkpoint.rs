@@ -2,7 +2,7 @@
 use super::*;
 use base64::Engine as _;
 
-pub(crate) const PROFILE:&str="serverware.nativeCustodyCheckpointObservation/v1";
+pub(crate) const PROFILE:&str="catchplate.nativeCustodyCheckpointObservation/v1";
 pub(crate) struct Checkpoint {record:Value}
 pub(crate) fn remaining_window(assignment:&VerifiedAssignment,load:&VerifiedLoadReceipt,
     generation:&ShadowGenerationIdentity,time:&dyn TrustedTime)->Result<u64,ShadowError> {
@@ -50,12 +50,12 @@ impl Checkpoint {
             Ok((*role,ProductionCustodyKeyBinding{role:*role,key_id:b.key_id.clone(),key_spki_sha256:b.key_spki_sha256.clone(),key_material_sha256:b.key_material_sha256.clone()}))
         }).collect::<Result<BTreeMap<_,_>,ShadowError>>()?;
         let authority=&a.custody_authority;
-        let scope=hash_domain_frames(b"serverware.policyShadowProductionCustodyProofScope/v1",&[&canonical_json_bytes(&(
+        let scope=hash_domain_frames(b"catchplate.policyShadowProductionCustodyProofScope/v1",&[&canonical_json_bytes(&(
             &a.assignment_id,assignment.payload_sha256(),a.assignment_revision,&authority.authority_id,
             &authority.storage_realm_sha256,&authority.retrieval_namespace_sha256,
             &a.authority_key_independence.independence_root_sha256,configuration,production_custody_key_set_root(&bindings)?,
             &authority.execution_closure_manifest_sha256,&authority.structurally_verified_seccomp_policy_sha256))?]);
-        let bound=canonical_json_bytes(&("serverware.policyShadowAssignmentBoundCustodyReceipt/v1",scope,
+        let bound=canonical_json_bytes(&("catchplate.policyShadowAssignmentBoundCustodyReceipt/v1",scope,
             &authority.execution_closure_manifest_sha256,&authority.structurally_verified_seccomp_policy_sha256,
             signer,Sha256Digest::compute(&receipt.canonical_signature_payload()?)))?;
         key.verify_strict(&signature_preimage(signer.signature_domain(),&bound),&Signature::from_bytes(&receipt.signature.decode()?))

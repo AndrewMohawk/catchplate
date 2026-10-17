@@ -1,6 +1,6 @@
 # Historical evidence-planning history
 
-[`authority_webauthn_evidence_plan_history._admit_history_on_work`](../serverware/authority_webauthn_evidence_plan_history.py)
+[`authority_webauthn_evidence_plan_history._admit_history_on_work`](../catchplate/authority_webauthn_evidence_plan_history.py)
 is a private continuation after the original
 [verifier-signed request](historical-evidence-planning-request.md) and
 [planner-signed response](historical-evidence-planning-response.md) have actually

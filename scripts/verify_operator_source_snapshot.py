@@ -15,7 +15,7 @@ import subprocess
 
 
 def source_root(repo, commit, source_directory=None):
-    root = repo.parent / ("serverware-operator-artifacts/source-" + commit) if source_directory is None else Path(source_directory)
+    root = repo.parent / ("catchplate-operator-artifacts/source-" + commit) if source_directory is None else Path(source_directory)
     if source_directory is not None and (type(source_directory) is not str or
             len(source_directory) > 4096 or str(root) != source_directory):
         raise ValueError("exact source directory required")

@@ -9,9 +9,9 @@ supplementary groups; the only service caller peer is `65532:65532`.
 ## Exact resources
 
 The fixed listener is
-`/run/serverware/oidc-session-activation-delivery-execution/authorizer.sock`,
+`/run/catchplate/oidc-session-activation-delivery-execution/authorizer.sock`,
 activated under the exact name
-`serverware-oidc-session-activation-delivery-execution-authorizer`. Its filesystem
+`catchplate-oidc-session-activation-delivery-execution-authorizer`. Its filesystem
 owner/group/mode must be `65500:65532`, `0660`; its kernel listener was created by
 root. A client observing kernel peer `0:0` is checking that socket-activation
 provenance, not attesting that the serving process executes as UID `65500`.
@@ -33,12 +33,12 @@ Eleven descriptors survive the privilege drop:
 | 208 | Consume-grant Ed25519 signer PEM | 4096 bytes |
 
 The six public trust files live below the fixed root-protected directory
-`/run/serverware/oidc-session-activation-delivery-execution-authorizer-trust/`:
+`/run/catchplate/oidc-session-activation-delivery-execution-authorizer-trust/`:
 `root-public-key.pem`, `bootstrap.json`, `custody.json`, `planner-bootstrap.json`,
 `planner-history-custody.json`, `receiving-history-custody.json`.
 
 Private paths share the fixed prefix
-`/run/secrets/serverware-oidc-session-activation-delivery-execution-authorizer-`
+`/run/secrets/catchplate-oidc-session-activation-delivery-execution-authorizer-`
 with suffixes `execution-bundle-key`, `historical-bundle-key`, `delivery-key` and
 `signing-key`. These source-fixed receiver paths must hold the actual root-pinned
 bytes for each purpose; they do not request newly generated AES keys. No planner

@@ -19,7 +19,7 @@ digits. Numeric fields are integers, not floats or numeric strings.
 
 | Field | Contract |
 | --- | --- |
-| `apiVersion` | Exactly `serverware.nativeResponseObservationV2Config/v1`. |
+| `apiVersion` | Exactly `catchplate.nativeResponseObservationV2Config/v1`. |
 | `socketPath` | Absolute, non-NUL Unix-domain socket path fitting the platform's `sockaddr_un.sun_path`. |
 | `expectedUid` | Unsigned 32-bit custody UID, different from the caller's actual effective UID. The later connection must authenticate this UID. |
 | `startupTimeoutMs` | Integer 1–30,000. Actual startup uses the shorter of entry time plus this interval and the original caller's absolute `CLOCK_BOOTTIME` deadline. |
@@ -50,7 +50,7 @@ not a shell command or a claimed verification result.
 
 | Field | Contract |
 | --- | --- |
-| `apiVersion` | Exactly `serverware.responseObservationV2PinnedTeeVerifier/v1`. |
+| `apiVersion` | Exactly `catchplate.responseObservationV2PinnedTeeVerifier/v1`. |
 | `executable` | Required absolute normalized path to the independently pinned verifier executable; at most 4,096 path bytes. |
 | `executableSha256` | Required SHA-256 digest of that executable. |
 | `arguments` | Optional array, default `[]`; any nonempty array is rejected. `null` is not an array. |
@@ -89,8 +89,8 @@ generation. Array ordering does not replace the canonical role-map hash.
 [`ReleaseTransparencyTrustPinV2`](../data-plane/decision-gate-rs/src/response_v2/transparency_contract.rs)
 and the existing
 [`releaseTransparencyTrustPin` JSON definition](../schemas/response-v2-release-transparency-proof.v2.schema.json).
-Its version is `serverware.responseV2.releaseTransparencyTrustPin/v2`, kind is
-`ServerwareResponseV2ReleaseTransparencyTrustPin`, and `schemaVersion` is the
+Its version is `catchplate.responseV2.releaseTransparencyTrustPin/v2`, kind is
+`CatchplateResponseV2ReleaseTransparencyTrustPin`, and `schemaVersion` is the
 string `"2"`. Include `revokedAtEpochMs: null` when not revoked, as specified by
 that JSON schema; the existing Rust optional field also accepts omission as
 `None`. The existing validator checks the log SPKI/digest, positive

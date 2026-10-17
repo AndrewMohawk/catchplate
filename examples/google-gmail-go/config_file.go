@@ -20,11 +20,11 @@ type gmailSDKRecipe struct {
 	AccessRuleID   string `json:"access_rule_id"`
 	TokenExpiresAt int64  `json:"token_expires_at_epoch_ms"`
 	Environment    struct {
-		ProxyURL    string `json:"SERVERWARE_PROXY_URL"`
-		AppID       string `json:"SERVERWARE_APP_ID"`
-		ProxyToken  string `json:"SERVERWARE_PROXY_TOKEN"`
-		CAFile      string `json:"SERVERWARE_CA_FILE"`
-		ProxyCAFile string `json:"SERVERWARE_PROXY_CA_FILE"`
+		ProxyURL    string `json:"CATCHPLATE_PROXY_URL"`
+		AppID       string `json:"CATCHPLATE_APP_ID"`
+		ProxyToken  string `json:"CATCHPLATE_PROXY_TOKEN"`
+		CAFile      string `json:"CATCHPLATE_CA_FILE"`
+		ProxyCAFile string `json:"CATCHPLATE_PROXY_CA_FILE"`
 	} `json:"environment"`
 }
 
@@ -119,7 +119,7 @@ func downloadedEnvironment(path string, now time.Time) (func(string) string, err
 	}
 	var recipe gmailSDKRecipe
 	if json.Unmarshal(recipeBytes, &recipe) != nil ||
-		(recipe.Schema != "serverware.gmailSdkClient/v1" && recipe.Schema != "serverware.gmailSdkClient/v2") {
+		(recipe.Schema != "catchplate.gmailSdkClient/v1" && recipe.Schema != "catchplate.gmailSdkClient/v2") {
 		return nil, errors.New("private configuration requires a Gmail SDK client v1 or v2 recipe")
 	}
 	if !uuidPattern.MatchString(recipe.AccessRuleID) {
@@ -154,12 +154,12 @@ func downloadedEnvironment(path string, now time.Time) (func(string) string, err
 		return filepath.Join(filepath.Dir(absolute), value)
 	}
 	values := map[string]string{
-		"LANG": "C.UTF-8", "SERVERWARE_PROXY_URL": env.ProxyURL, "SERVERWARE_APP_ID": env.AppID,
-		"SERVERWARE_PROXY_TOKEN": env.ProxyToken, "SERVERWARE_CA_FILE": resolveCA(env.CAFile),
-		"SERVERWARE_PROXY_CA_FILE": resolveCA(env.ProxyCAFile),
+		"LANG": "C.UTF-8", "CATCHPLATE_PROXY_URL": env.ProxyURL, "CATCHPLATE_APP_ID": env.AppID,
+		"CATCHPLATE_PROXY_TOKEN": env.ProxyToken, "CATCHPLATE_CA_FILE": resolveCA(env.CAFile),
+		"CATCHPLATE_PROXY_CA_FILE": resolveCA(env.ProxyCAFile),
 	}
 	if ageDays > 0 {
-		values["SERVERWARE_GMAIL_MAX_AGE_DAYS"] = strconv.Itoa(ageDays)
+		values["CATCHPLATE_GMAIL_MAX_AGE_DAYS"] = strconv.Itoa(ageDays)
 	}
 	// Never fall back to ambient values, including an absent optional proxy CA.
 	selected := func(key string) string { return values[key] }
@@ -184,8 +184,8 @@ func validCAPath(value string) bool {
 // The Google SDK reads process environment before honoring WithHTTPClient.
 // Only the --config CLI path replaces it; normal environment-based use is kept.
 func replaceConfigurationEnvironment(getenv func(string) string) error {
-	keys := []string{"LANG", "SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID", "SERVERWARE_PROXY_TOKEN",
-		"SERVERWARE_CA_FILE", "SERVERWARE_PROXY_CA_FILE", "SERVERWARE_GMAIL_MAX_AGE_DAYS"}
+	keys := []string{"LANG", "CATCHPLATE_PROXY_URL", "CATCHPLATE_APP_ID", "CATCHPLATE_PROXY_TOKEN",
+		"CATCHPLATE_CA_FILE", "CATCHPLATE_PROXY_CA_FILE", "CATCHPLATE_GMAIL_MAX_AGE_DAYS"}
 	values := make([]string, len(keys))
 	for i, key := range keys {
 		values[i] = getenv(key)

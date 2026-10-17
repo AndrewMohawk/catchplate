@@ -1,7 +1,7 @@
 # Public release-grant acquisition configuration
 
-Explicit `serverware.signedControlPlaneEnrollmentBootstrap/v12` and payload
-`serverware.controlPlaneEnrollmentBootstrap/v12` add one nullable field,
+Explicit `catchplate.signedControlPlaneEnrollmentBootstrap/v12` and payload
+`catchplate.controlPlaneEnrollmentBootstrap/v12` add one nullable field,
 `oidcSessionActivationReleaseGrantAcquisition`. All v2–v11 shapes stay closed
 and unchanged. The parent cap remains 4 MiB and the older fixed-original
 `release_client` and direct-input `release_handoff` behaviors are unchanged.
@@ -14,12 +14,12 @@ No issuer/root private key is delivered to the application.
 ## Closed endpoint
 
 The nested schema is
-`serverware.controlPlaneOidcSessionActivationReleaseGrantAcquisition/v1`.
+`catchplate.controlPlaneOidcSessionActivationReleaseGrantAcquisition/v1`.
 Its object has exactly `schema` and `endpoint`. The latter has exactly:
 
 | Field | Required value |
 | --- | --- |
-| `path` | `/run/serverware/oidc-session-activation-token-release/grants.sock` |
+| `path` | `/run/catchplate/oidc-session-activation-token-release/grants.sock` |
 | `timeoutSeconds` | Exact integer from 1 through 30 |
 | `peerUid` | Exact integer `0` |
 | `peerGid` | Exact integer `0` |

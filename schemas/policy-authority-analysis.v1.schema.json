@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-authority-analysis.v1.schema.json",
-  "title": "Serverware Policy Authority Analysis v1",
+  "$id": "https://catchplate.invalid/schemas/policy-authority-analysis.v1.schema.json",
+  "title": "Catchplate Policy Authority Analysis v1",
   "$comment": "A separately signed compiler analysis of every active-to-candidate authority expansion. Native verification pins signingKeyId, signingKeySpkiSha256, and resolved public-key material to the assignment's compiler-analysis binding, joins the exact assignment and compiled snapshots, recomputes every semantic expansion cell, and rejects any expansion not represented by a positive, bounded constrained-pilot cell. Observation verifiers derive the complete applicable set and its root from this signed analysis plus the signed active/candidate evaluations; evaluators cannot select or omit cells. Request/decision expansion cells require positive request coverage even when active enforcement legitimately does not dispatch; response-field exposure, response-validation relaxation, and response-filter reduction cells additionally require comparable exact response evidence.",
   "type": "object",
   "additionalProperties": false,
@@ -18,10 +18,10 @@
     "signature"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.policyAuthorityAnalysis/v1"},
+    "apiVersion": {"const": "catchplate.policyAuthorityAnalysis/v1"},
     "kind": {"const": "PolicyAuthorityAnalysis"},
-    "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
-    "signatureDomain": {"const": "serverware.policyAuthorityAnalysis/v1"},
+    "canonicalProfile": {"const": "catchplate.canonicalJson/ascii-integer-v1"},
+    "signatureDomain": {"const": "catchplate.policyAuthorityAnalysis/v1"},
     "payload": {"$ref": "#/$defs/payload"},
     "payloadSha256": {"$ref": "#/$defs/sha256"},
     "signatureAlgorithm": {"const": "Ed25519"},
@@ -152,8 +152,8 @@
         "expectedSigningKeyMaterialSha256": {"$ref": "#/$defs/sha256"},
         "countUnit": {"const": "covered-ingress"},
         "minimumCountPerUnit": {"const": 1},
-        "leafDomain": {"const": "serverware.policyShadowTerminalReceiptLeaf/v1"},
-        "rootDomain": {"const": "serverware.policyShadowTerminalReceiptRoot/v1"},
+        "leafDomain": {"const": "catchplate.policyShadowTerminalReceiptLeaf/v1"},
+        "rootDomain": {"const": "catchplate.policyShadowTerminalReceiptRoot/v1"},
         "requirementRootSha256": {"$ref": "#/$defs/sha256"}
       },
       "$comment": "The expected signer fields exactly match the assignment custody-terminal-append authority binding. requirementRootSha256 commits this complete canonical requirement."
@@ -181,8 +181,8 @@
         "expectedSigningKeyMaterialSha256": {"$ref": "#/$defs/sha256"},
         "countUnit": {"const": "covered-member"},
         "minimumCountPerUnit": {"const": 1},
-        "leafDomain": {"const": "serverware.policyShadowPublicationReceiptLeaf/v1"},
-        "rootDomain": {"const": "serverware.policyShadowPublicationReceiptRoot/v1"},
+        "leafDomain": {"const": "catchplate.policyShadowPublicationReceiptLeaf/v1"},
+        "rootDomain": {"const": "catchplate.policyShadowPublicationReceiptRoot/v1"},
         "requirementRootSha256": {"$ref": "#/$defs/sha256"}
       },
       "$comment": "The expected signer fields exactly match the assignment custody-publication-reconciliation authority binding. At least one verified published-state reconciliation receipt per covered member is required before readiness."

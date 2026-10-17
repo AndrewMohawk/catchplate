@@ -55,7 +55,7 @@ finite receiver profile over an existing producer, not full pilot acceptance.
    300 seconds. No endpoint refreshes it. Independently provisioned trust roots,
    verifier executable, client certificate/private key and collector remain
    operator prerequisites; the bundle supplies no private material or new trust.
-4. The existing `serverware-proof-client` native buffered invocation uses this
+4. The existing `catchplate-proof-client` native buffered invocation uses this
    exact attempt nonce via `--nonce` and the exact expectations original/pin.
    Its URL and empty GET must match the independently reviewed `clientRequest`;
    all other native transport/input flags retain their original admission.
@@ -94,7 +94,7 @@ readback. It never calls the proxy itself or turns browser parsing into proof.
 All four POST routes are under `/api/setup/native-runtime`. `options` and
 `lookup` take exact `{apiVersion,sessionId}`; `prepare` adds `assertion`;
 `complete` adds `captureOriginalBase64url`. The API version is
-`serverware.setupNativeRuntimeRequest/v1`. Request cap is 768 KiB, decoded
+`catchplate.setupNativeRuntimeRequest/v1`. Request cap is 768 KiB, decoded
 capture cap 512 KiB and response cap 128 KiB. The [closed schema](../schemas/setup-native-runtime.v1.schema.json)
 defines the actual attempt, policy, scope, bundle and result fields.
 

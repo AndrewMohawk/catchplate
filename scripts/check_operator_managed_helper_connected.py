@@ -45,7 +45,7 @@ from scripts.check_operator_ordinary_client import CONNECT, LEASE, RELEASE, RELO
 from scripts.check_operator_proxy_basic import BASIC, ProxyBasicCheck, certificate_blocks, parsed_response, require_ca_pair
 from scripts.operator_ordinary_client_fixture import DUMMY_AUTHORIZATION, FIXTURE_PATH, QUERY_KEYS, REQUEST_BODY
 
-PROXY = "https://serverware-gmail-proxy.example.com"
+PROXY = "https://catchplate-gmail-proxy.example.com"
 RENEWED = "operator_catalog.application.token_renewed"
 LOCK_SHA = "465a7fad6e1bc86bcefe947e41a4e478be306bc37893161fe4986da5304c869b"
 VERSIONS = {"certifi": "2026.7.22", "cffi": "2.1.0", "charset-normalizer": "3.5.2",
@@ -76,7 +76,7 @@ def setup_from_catalog(application):
         and enrollment["audience"] == PROXY + managed.PUBLIC_PATH
         and enrollment["token_lifetime_seconds"] == 3600 and enrollment["overlap_seconds"] == 300,
         "public workload enrollment differs")
-    return {"schema": "serverware.managedClientSetup/v1", "application_id": application["id"],
+    return {"schema": "catchplate.managedClientSetup/v1", "application_id": application["id"],
         "enrollment_id": enrollment["enrollment_id"], "audience": enrollment["audience"],
         "public_key_fingerprint": enrollment["public_key_fingerprint"], "token_generation": application["token_generation"],
         "token_expires_at_epoch_ms": application["token_expires_at_epoch_ms"],
@@ -129,12 +129,12 @@ def validate_receipt(state, lease, setup, previous, pending=None):
         and state["setup"] == setup and state["current"] == {
             "token": lease.token, "generation": lease.generation, "expires_at_epoch_ms": lease.expires_at_epoch_ms,
             "pool_refresh_by_epoch_ms": lease.pool_refresh_by_epoch_ms}, "helper did not install a definitive receipt")
-    request = {"schema": "serverware.workloadTokenRenewal/v1", "audience": setup["audience"],
+    request = {"schema": "catchplate.workloadTokenRenewal/v1", "audience": setup["audience"],
         "application_id": setup["application_id"], "enrollment_id": setup["enrollment_id"],
         "expected_token_generation": setup["token_generation"], "operation_id": receipt["operation_id"],
         "issued_at_epoch_ms": receipt["issued_at_epoch_ms"], "expires_at_epoch_ms": receipt["issued_at_epoch_ms"] + 60_000,
         "token_sha256": digest(lease.token.encode("ascii")), "token_expires_at_epoch_ms": lease.expires_at_epoch_ms}
-    signing = b"serverware.workload-token-renewal/v1\x00POST /v1/workload/renew\x00" + canonical(request)
+    signing = b"catchplate.workload-token-renewal/v1\x00POST /v1/workload/renew\x00" + canonical(request)
     require(receipt["application_id"] == setup["application_id"] and receipt["enrollment_id"] == setup["enrollment_id"]
         and receipt["previous_generation"] == setup["token_generation"] == 1
         and receipt["token_generation"] == lease.generation == 2 and receipt["token_sha256"] == request["token_sha256"]
@@ -390,7 +390,7 @@ class ManagedHelperCheck(ProxyBasicCheck):
             "dispatch/reopen changed catalog authority or provider count")
         audit = self.verify_audit(baseline, after)
         require(authority_projection(self.catalog()) == authority_projection(after), "audit observation changed authority")
-        return {"schema": "serverware.operatorManagedHelperConnected/v1", "ok": True, "syntheticOnly": True,
+        return {"schema": "catchplate.operatorManagedHelperConnected/v1", "ok": True, "syntheticOnly": True,
             "productionReady": False, "realProviderVerified": False, "publicOriginVerified": False,
             "dataPlaneBinaryDigest": self.args.expected_binary_sha256, "defaultHelperHttpsTransport": True,
             "injectedTransport": False, "injectedClock": False, "resolverPatched": False,

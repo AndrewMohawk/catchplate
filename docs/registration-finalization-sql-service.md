@@ -1,7 +1,7 @@
 # Cold finalization SQL worker contract
 
 The dedicated `registration-finalization-sql` profile admits only the fixed
-`webauthn.registration.finalize` purpose. Its [root-signed bootstrap](../serverware/registration_finalization_sql_bootstrap.py)
+`webauthn.registration.finalize` purpose. Its [root-signed bootstrap](../catchplate/registration_finalization_sql_bootstrap.py)
 binds the original configuration, purpose enrollments, current pending scope,
 attempt-journal checkpoint and two restricted database TLS identities before
 the worker can select resources. This is source-only, unbuilt, unexecuted and
@@ -16,14 +16,14 @@ is supplied by a bootstrap signature.
 | Worker UID/GID | `65509:65509`, no supplementary groups |
 | Request peer | `65532:65532` |
 | Root/bootstrap/listener/journal descriptors | `198`, `199`, `200`, `201` |
-| Listener | `/run/serverware/registration-finalization/sql.sock` |
-| TLS directory | `/run/serverware/registration-finalization-sql-tls` |
+| Listener | `/run/catchplate/registration-finalization/sql.sock` |
+| TLS directory | `/run/catchplate/registration-finalization-sql-tls` |
 | Authority signing keys | None |
 
 The bootstrap uses separate schema/domain
-`serverware.signedRegistrationFinalizationSqlBootstrap/v1`, payload
-`serverware.registrationFinalizationSqlBootstrap/v1`, and launch
-`serverware.registrationFinalizationSqlLaunch/v1`. Evidence-worker originals
+`catchplate.signedRegistrationFinalizationSqlBootstrap/v1`, payload
+`catchplate.registrationFinalizationSqlBootstrap/v1`, and launch
+`catchplate.registrationFinalizationSqlLaunch/v1`. Evidence-worker originals
 are not a fallback for these closed finalization schemas.
 
 The exact launch fields bind process mode, service/peer identities, the four
@@ -119,7 +119,7 @@ database/generation identities, runtime pin, pending/checkpoint tuples,
 data, never an accepted successful-admission token. The eighth SQL tuple field
 is the required catalog pin; no seven-field fallback exists.
 
-The [entrypoint](../serverware/registration_finalization_sql_entrypoint.py)
+The [entrypoint](../catchplate/registration_finalization_sql_entrypoint.py)
 owns protected delivery; the dedicated startup retains one accepted connection,
 one pre-body work/window and an inherited absolute deadline. Invalid peers or
 frames do not authorize another attempt. The [actual SQL composition](registration-finalization-sql.md)
@@ -134,9 +134,9 @@ activation; no failure grants an automatic retry.
 
 ## Cold process and one request
 
-The [isolated launcher](../serverware/registration_finalization_sql_launcher.py),
-[startup owner](../serverware/registration_finalization_sql_startup.py) and
-[runner](../serverware/registration_finalization_sql_runner.py) retain the fixed
+The [isolated launcher](../catchplate/registration_finalization_sql_launcher.py),
+[startup owner](../catchplate/registration_finalization_sql_startup.py) and
+[runner](../catchplate/registration_finalization_sql_runner.py) retain the fixed
 process identity, literal environment, sealed descriptors, protected TLS paths
 and actual attempt-journal/SQL owners. The sole request work allowance and
 live window open **before peer, frame or body reading**. Its `1..30` second
@@ -158,7 +158,7 @@ terminal lifecycle failures are not converted into a verified outcome; a
 missing response does not establish noncommit or permit retry.
 
 The [private caller](control-plane-finalization-sql.md) remains distinct from
-public activation. The [socket](../ops/systemd/serverware-registration-finalization-sql.socket)
-and [service template](../ops/systemd/serverware-registration-finalization-sql.service.in)
+public activation. The [socket](../ops/systemd/catchplate-registration-finalization-sql.socket)
+and [service template](../ops/systemd/catchplate-registration-finalization-sql.service.in)
 are uninstalled source packaging, with no automatic process restart or
 provisioning supplied by these files.

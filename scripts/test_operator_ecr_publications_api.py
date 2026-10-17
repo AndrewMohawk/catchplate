@@ -67,8 +67,8 @@ class Client:
 class Fixture:
     def __init__(self):
         self.config, self.db, self.store, _, self.schema, self.inputs, self.mutations = workspace.workspace()
-        from serverware import app, operator_catalog_ecr as ecr, operator_ecr_publications_api as api
-        from serverware import ecr_image_artifact as artifact
+        from catchplate import app, operator_catalog_ecr as ecr, operator_ecr_publications_api as api
+        from catchplate import ecr_image_artifact as artifact
         self.app, self.api = app, api
         self.stack = []
         for name in ("loaded_policy_hash", "loaded_gate_status"):
@@ -119,12 +119,12 @@ class Fixture:
 
     def headers(self, *, admin=False, application=None):
         if admin:
-            return {"x-serverware-admin-token": ADMIN_TOKEN, "origin": self.config.PUBLIC_URL.rstrip("/")}
+            return {"x-catchplate-admin-token": ADMIN_TOKEN, "origin": self.config.PUBLIC_URL.rstrip("/")}
         application = application or self.primary
-        return {"x-serverware-data-plane-token": MACHINE_TOKEN,
-            "x-serverware-principal-id": application["principal_id"],
-            "x-serverware-client-token-sha256": application["token_sha256"],
-            "x-serverware-policy-hash": self.policy}
+        return {"x-catchplate-data-plane-token": MACHINE_TOKEN,
+            "x-catchplate-principal-id": application["principal_id"],
+            "x-catchplate-client-token-sha256": application["token_sha256"],
+            "x-catchplate-policy-hash": self.policy}
 
     async def call(self, client, method, path, body=None, *, expected=200, headers=None, binary=False):
         selected = self.headers() if headers is None else dict(headers)
@@ -218,7 +218,7 @@ async def lifecycle(f, client):
 async def admission_controls(f, client):
     from fastapi import HTTPException
     from starlette.requests import Request
-    from serverware import operator_demo, auth
+    from catchplate import operator_demo, auth
     api = f.api
     identifier = str(uuid.uuid4())
     paths = [api.CLIENT, api.CLIENT + "/" + identifier + "/manifest",
@@ -233,7 +233,7 @@ async def admission_controls(f, client):
     assert operator_demo.request_allowed("GET", api.ADMIN)
     assert operator_demo.request_allowed("GET", api.CLIENT + "/" + identifier)
     # Authentication precedes body consumption even through the real classifier.
-    for extra, expected in (({}, 401), ({"x-serverware-data-plane-token": "wrong"}, 401)):
+    for extra, expected in (({}, 401), ({"x-catchplate-data-plane-token": "wrong"}, 401)):
         reads = []
         async def receive():
             reads.append(True)
@@ -251,9 +251,9 @@ async def admission_controls(f, client):
             raise AssertionError("unauthenticated ECR create admitted")
         assert not reads
     for key, value, expected in (("authorization", "Bearer x", 401), ("origin", f.config.PUBLIC_URL, 401),
-            ("cookie", "admin=x", 401), ("x-serverware-principal-id", "unknown", 409),
-            ("x-serverware-client-token-sha256", "sha256:" + "0" * 64, 409),
-            ("x-serverware-policy-hash", "sha256:" + "0" * 64, 409)):
+            ("cookie", "admin=x", 401), ("x-catchplate-principal-id", "unknown", 409),
+            ("x-catchplate-client-token-sha256", "sha256:" + "0" * 64, 409),
+            ("x-catchplate-policy-hash", "sha256:" + "0" * 64, 409)):
         await f.call(client, "POST", api.CLIENT, f.create_body,
             headers={**f.headers(), key: value}, expected=expected)
     for body in ({**f.create_body, "extra": True}, {key: value for key, value in f.create_body.items()
@@ -266,7 +266,7 @@ async def admission_controls(f, client):
             ("content-length", "16385", 413), ("content-length", "1", 400)):
         await f.call(client, "POST", api.CLIENT, f.create_body,
             headers={**f.headers(), key: value}, expected=expected)
-    duplicate = list(f.headers().items()) + [("content-type", "application/json"), ("x-serverware-policy-hash", f.policy)]
+    duplicate = list(f.headers().items()) + [("content-type", "application/json"), ("x-catchplate-policy-hash", f.policy)]
     result = await client.post(api.CLIENT, content=encoded(f.create_body), headers=duplicate)
     assert result.status_code == 400
     for raw in (b'{"application_id":1,"application_id":2}', b'{"x":NaN}'):
@@ -281,7 +281,7 @@ async def admission_controls(f, client):
             "?before=" + identifier + "&extra=1", "?before=" + identifier.replace("-", "%2d"), "?limit=100"):
         await f.call(client, "GET", api.ADMIN + query, headers=f.headers(admin=True), expected=400)
     await f.call(client, "POST", api.ADMIN + "/" + identifier + "/review", {},
-        headers={"x-serverware-admin-token": ADMIN_TOKEN, "origin": "https://other.test"}, expected=403)
+        headers={"x-catchplate-admin-token": ADMIN_TOKEN, "origin": "https://other.test"}, expected=403)
     request = Request({"type": "http", "method": "POST", "path": api.ADMIN,
         "query_string": b"", "headers": [(b"origin", f.config.PUBLIC_URL.encode())]})
     for identity in (auth.AdminIdentity("wrong-admin", frozenset({"admin"}), "admin-token-header"),
@@ -309,7 +309,7 @@ async def admission_controls(f, client):
     current_hash = f.store.get_policy_high_water()["policy_hash"]
     assert current_hash != f.policy
     await f.call(client, "POST", api.CLIENT, {**f.create_body, "expected_policy_hash": current_hash},
-        headers={**f.headers(), "x-serverware-policy-hash": current_hash}, expected=409)
+        headers={**f.headers(), "x-catchplate-policy-hash": current_hash}, expected=409)
 
 
 async def worker(name):
@@ -327,11 +327,11 @@ class EcrPublicationApiTests(unittest.TestCase):
         workspace.common.OperatorDemoPersistenceTests.setUp(self)
         root = Path(self.scratch.name) / "artifacts"
         root.mkdir(mode=0o700)
-        self.environment.update(SERVERWARE_ECR_ARTIFACT_ROOT=str(root),
-            SERVERWARE_PUBLIC_URL="https://console.example.com", SERVERWARE_ADMIN_TOKEN=ADMIN_TOKEN,
-            SERVERWARE_DATA_PLANE_INSTANCE_ID="synthetic-ecr-api-gate",
-            SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN=MACHINE_TOKEN,
-            SERVERWARE_OPERATOR_DEMO_UPSTREAMS='["https://api.example.com","https://api.ecr.us-east-1.amazonaws.com"]')
+        self.environment.update(CATCHPLATE_ECR_ARTIFACT_ROOT=str(root),
+            CATCHPLATE_PUBLIC_URL="https://console.example.com", CATCHPLATE_ADMIN_TOKEN=ADMIN_TOKEN,
+            CATCHPLATE_DATA_PLANE_INSTANCE_ID="synthetic-ecr-api-gate",
+            CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN=MACHINE_TOKEN,
+            CATCHPLATE_OPERATOR_DEMO_UPSTREAMS='["https://api.example.com","https://api.ecr.us-east-1.amazonaws.com"]')
 
     def check(self, name):
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", name],

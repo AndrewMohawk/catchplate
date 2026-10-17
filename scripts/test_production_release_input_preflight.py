@@ -165,7 +165,7 @@ def env_text(values: dict[str, str]) -> str:
 def main() -> None:
     if (
         production_release_input_preflight.REPRODUCIBILITY_API_VERSION
-        != "serverware.reproducibleBuildVerification/v3"
+        != "catchplate.reproducibleBuildVerification/v3"
     ):
         raise AssertionError("production preflight is not using the canonical reproducibility v3 contract")
 
@@ -174,13 +174,13 @@ def main() -> None:
         repo = tmp / "repo"
         repo.mkdir()
         run(["git", "init", "-q"], repo)
-        run(["git", "config", "user.email", "test@serverware.invalid"], repo)
-        run(["git", "config", "user.name", "Serverware Test"], repo)
+        run(["git", "config", "user.email", "test@catchplate.invalid"], repo)
+        run(["git", "config", "user.name", "Catchplate Test"], repo)
         env_file = repo / "production.env"
         valid_env = {
             key: value
             for key, value in test_production_readiness.good_env().items()
-            if key.startswith("SERVERWARE_")
+            if key.startswith("CATCHPLATE_")
         }
         env_file.write_text(env_text(valid_env), encoding="utf-8")
         broker = repo / "broker.bin"
@@ -212,9 +212,9 @@ def main() -> None:
             "--kms-spec",
             str(spec),
             "--registry-prefix",
-            "registry.serverware.test/team/serverware",
+            "registry.catchplate.test/team/catchplate",
             "--deploy-command",
-            "deploy-serverware --immutable",
+            "deploy-catchplate --immutable",
             "--policy-bundle",
             str(security["policy_bundle"]),
             "--policy-trusted-public-key",
@@ -246,11 +246,11 @@ def main() -> None:
         if "check_internal_service_auth" not in checks:
             raise AssertionError(f"preflight omitted internal service authentication checks: {checks}")
         serialized = out.read_text(encoding="utf-8")
-        if "deploy-serverware" in serialized or str(broker) in serialized or "111122223333" in serialized:
+        if "deploy-catchplate" in serialized or str(broker) in serialized or "111122223333" in serialized:
             raise AssertionError("preflight evidence exposed sensitive release input")
 
         legacy_reproducibility = json.loads(security["reproducibility_report"].read_text(encoding="utf-8"))
-        legacy_reproducibility["apiVersion"] = "serverware.reproducibleBuildVerification/v1"
+        legacy_reproducibility["apiVersion"] = "catchplate.reproducibleBuildVerification/v1"
         signed_report(
             tmp,
             name="reproducible-build-verification",
@@ -258,7 +258,7 @@ def main() -> None:
             report=legacy_reproducibility,
         )
         rejected_legacy = invoke(*base_args)
-        expected_legacy_error = "not a successful serverware.reproducibleBuildVerification/v3 artifact"
+        expected_legacy_error = "not a successful catchplate.reproducibleBuildVerification/v3 artifact"
         if rejected_legacy.returncode == 0 or expected_legacy_error not in detail(rejected_legacy):
             raise AssertionError(f"legacy reproducibility v1 evidence was accepted: {detail(rejected_legacy)}")
         security, _ = release_security_fixture(tmp)
@@ -293,7 +293,7 @@ def main() -> None:
         (repo / "dirty.txt").unlink()
 
         placeholder_env = dict(valid_env)
-        placeholder_env["SERVERWARE_PUBLIC_URL"] = "https://serverware.example"
+        placeholder_env["CATCHPLATE_PUBLIC_URL"] = "https://catchplate.example"
         env_file.write_text(env_text(placeholder_env), encoding="utf-8")
         placeholder = invoke(*base_args)
         if placeholder.returncode == 0 or "placeholder" not in detail(placeholder):
@@ -309,13 +309,13 @@ def main() -> None:
         broker.chmod(0o600)
 
         bad_registry = list(base_args)
-        bad_registry[bad_registry.index("registry.serverware.test/team/serverware")] = "registry.example/team"
+        bad_registry[bad_registry.index("registry.catchplate.test/team/catchplate")] = "registry.example/team"
         rejected_registry = invoke(*bad_registry)
         if rejected_registry.returncode == 0 or "placeholder" not in detail(rejected_registry):
             raise AssertionError(f"placeholder registry was accepted: {detail(rejected_registry)}")
 
         noop = list(base_args)
-        noop[noop.index("deploy-serverware --immutable")] = "true"
+        noop[noop.index("deploy-catchplate --immutable")] = "true"
         rejected_noop = invoke(*noop)
         if rejected_noop.returncode == 0 or "no-op or placeholder" not in detail(rejected_noop):
             raise AssertionError(f"no-op deploy command was accepted: {detail(rejected_noop)}")

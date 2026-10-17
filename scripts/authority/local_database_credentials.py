@@ -19,7 +19,7 @@ Generates a distinct P256 CA/server/client key set and genuine certificates.
 Writes root0400 staging originals, verify-full DSNs, scoped cert-auth HBA/server
 fragments and public issuance/inventory records without replacement. No keys or
 DSNs are printed. No password, role, schema, grant, network or database is changed.
-The runtime paths are /run/serverware/database-tls/PURPOSE/{ca.pem,certificate.pem,
+The runtime paths are /run/catchplate/database-tls/PURPOSE/{ca.pem,certificate.pem,
 private-key.pem}; later installation must genuinely make private keys readable
 only by their intended owner in root-protected traversable directories.
 
@@ -47,11 +47,11 @@ def main(argv=None):
     owner = None
     try:
         selected = arguments(argv)
-        if os.environ.get("SERVERWARE_PROCESS_MODE") != "metadata-bootstrap" or os.environ.get("SERVERWARE_RELEASE_CHANNEL") != "dev":
+        if os.environ.get("CATCHPLATE_PROCESS_MODE") != "metadata-bootstrap" or os.environ.get("CATCHPLATE_RELEASE_CHANNEL") != "dev":
             raise ValueError("explicit offline development mode required")
-        from serverware import config
+        from catchplate import config
         if config.PRODUCTION_IMAGE: raise ValueError("production refused")
-        from serverware.authority_local_database_credentials import LocalDatabaseCredentialIssuer
+        from catchplate.authority_local_database_credentials import LocalDatabaseCredentialIssuer
         def cancel(_signo, _frame): raise KeyboardInterrupt()
         for signo in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP): signal.signal(signo, cancel)
         owner = LocalDatabaseCredentialIssuer(**selected)

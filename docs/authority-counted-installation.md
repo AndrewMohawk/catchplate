@@ -8,7 +8,7 @@ install anything on a running database, or establish independent root authority.
 ## Installation boundary
 
 The real `db._install_policy_candidate_authority_guards` calls
-[`prepare_counted_store`](../serverware/authority_store/counted_installation.py)
+[`prepare_counted_store`](../catchplate/authority_store/counted_installation.py)
 inside its existing offline-bootstrap transaction. The pristine expected-schema
 replay uses that same installer. The three dedicated counted tables and eleven
 helper functions have PostgreSQL-only schema/permission inventories; SQLite's

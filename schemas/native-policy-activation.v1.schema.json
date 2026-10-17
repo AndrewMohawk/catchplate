@@ -1,6 +1,6 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://serverware.invalid/schemas/native-policy-activation.v1.schema.json",
+  "$id":"https://catchplate.invalid/schemas/native-policy-activation.v1.schema.json",
   "title":"Native READY and independently approved protected activation",
   "$comment":"Data grammar only. No schema, PREPARE response, copied row or HTTP status is authority. The native effect requires the actual independently verified planner/executor/witness transition and persistent effect hold. Full canonical frames remain <=8 MiB; original strings are ASCII JSON without LF, not base64 except authorityConfigurationOriginal. No automatic retry or expiry unlock.",
   "anyOf":[{"$ref":"#/$defs/authorityPolicy"},{"$ref":"#/$defs/intent"},{"$ref":"#/$defs/prepared"},{"$ref":"#/$defs/ready"},{"$ref":"#/$defs/effectHold"},{"$ref":"#/$defs/runtimeResponse"},{"$ref":"#/$defs/httpRequest"},{"$ref":"#/$defs/requestLocator"}],
@@ -26,7 +26,7 @@
     "authorityPolicy":{
       "type":"object","additionalProperties":false,"required":["schema","deploymentId","issuedAtEpochNs","expiresAtEpochNs","maximumActivationNanos","canaries","publicationKeys"],
       "properties":{
-        "schema":{"const":"serverware.policyCanaryNativeActivationAuthorityPolicy/v1"},
+        "schema":{"const":"catchplate.policyCanaryNativeActivationAuthorityPolicy/v1"},
         "deploymentId":{"type":"string","pattern":"^[A-Za-z0-9._-]{1,128}$"},
         "issuedAtEpochNs":{"$ref":"#/$defs/epoch"},"expiresAtEpochNs":{"$ref":"#/$defs/epoch"},
         "maximumActivationNanos":{"type":"integer","minimum":1000000000,"maximum":300000000000},
@@ -43,7 +43,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","activationId","replayId","canaryId","readinessRequestId","readinessResultSha256","readinessCoreSha256","readyStateSha256","generationPublicationEnvelopeSha256","generationId","publicationBefore","publicationAfter","trustCheckpoint","issuedAtUnixNanos","expiresAtUnixNanos"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativePolicyActivationIntent/v1"},"activationId":{"$ref":"#/$defs/uuid"},"replayId":{"$ref":"#/$defs/uuid"},
+        "apiVersion":{"const":"catchplate.nativePolicyActivationIntent/v1"},"activationId":{"$ref":"#/$defs/uuid"},"replayId":{"$ref":"#/$defs/uuid"},
         "canaryId":{"$ref":"#/$defs/canaryId"},"readinessRequestId":{"$ref":"#/$defs/uuid"},
         "readinessResultSha256":{"$ref":"#/$defs/digest"},"readinessCoreSha256":{"$ref":"#/$defs/digest"},"readyStateSha256":{"$ref":"#/$defs/digest"},
         "generationPublicationEnvelopeSha256":{"$ref":"#/$defs/digest"},"generationId":{"$ref":"#/$defs/digest"},
@@ -55,7 +55,7 @@
     "ready":{
       "type":"object","additionalProperties":false,"required":["apiVersion","canaryId","assignmentSha256","previousRevision","previousStateSha256","revision","readinessCoreSha256","readinessResultSha256","expiresAtUnixNanos"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativePolicyReadyState/v1"},"canaryId":{"$ref":"#/$defs/canaryId"},"assignmentSha256":{"$ref":"#/$defs/digest"},
+        "apiVersion":{"const":"catchplate.nativePolicyReadyState/v1"},"canaryId":{"$ref":"#/$defs/canaryId"},"assignmentSha256":{"$ref":"#/$defs/digest"},
         "previousRevision":{"$ref":"#/$defs/epoch"},"previousStateSha256":{"$ref":"#/$defs/digest"},"revision":{"$ref":"#/$defs/epoch"},
         "readinessCoreSha256":{"$ref":"#/$defs/digest"},"readinessResultSha256":{"$ref":"#/$defs/digest"},"expiresAtUnixNanos":{"$ref":"#/$defs/epoch"}
       },"description":"Protected native sidecar, never a Fleet-signed revision. Legacy sealing predecessor stays immutable; native head advances separately."
@@ -64,7 +64,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","activationId","replayId","canaryId","assignmentSha256","assignmentPayloadSha256","assignmentRevision","authorityKeyIndependenceSha256","generationId","generationPublicationEnvelopeSha256","readyStateSha256","readinessRequestId","readinessResultSha256","readinessCoreSha256","publicationBefore","publicationAfter","trustCheckpoint","approvalOriginal","readinessOriginal","readyOriginal","controlPlaneConfigurationSha256","activationPolicySha256","issuedAtUnixNanos","expiresAtUnixNanos"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativePolicyActivationPrepared/v1"},"activationId":{"$ref":"#/$defs/uuid"},"replayId":{"$ref":"#/$defs/uuid"},"canaryId":{"$ref":"#/$defs/canaryId"},
+        "apiVersion":{"const":"catchplate.nativePolicyActivationPrepared/v1"},"activationId":{"$ref":"#/$defs/uuid"},"replayId":{"$ref":"#/$defs/uuid"},"canaryId":{"$ref":"#/$defs/canaryId"},
         "assignmentSha256":{"$ref":"#/$defs/digest"},"assignmentPayloadSha256":{"$ref":"#/$defs/digest"},"assignmentRevision":{"$ref":"#/$defs/epoch"},"authorityKeyIndependenceSha256":{"$ref":"#/$defs/digest"},
         "generationId":{"$ref":"#/$defs/digest"},"generationPublicationEnvelopeSha256":{"$ref":"#/$defs/digest"},"readyStateSha256":{"$ref":"#/$defs/digest"},"readinessRequestId":{"$ref":"#/$defs/uuid"},
         "readinessResultSha256":{"$ref":"#/$defs/digest"},"readinessCoreSha256":{"$ref":"#/$defs/digest"},"publicationBefore":{"$ref":"#/$defs/before"},"publicationAfter":{"$ref":"#/$defs/after"},
@@ -104,7 +104,7 @@
       "type":"object","additionalProperties":false,
       "required":["schema","requestId","operation","configurationDigest","requestDigest","issuedAtEpochNs","deadlineMonotonicNs","fence","result","resultDigest","commitReceiptDigest","witnessCommitDigest","attestationReceiptDigest","attestationConsumptionReceipt","attestationConsumptionReceiptDigest","signature","authorityConfigurationOriginal","activationOriginals"],
       "properties":{
-        "schema":{"const":"serverware.policyAuthorityNativeActivationRuntimeResponse/v1"},"requestId":{"$ref":"#/$defs/digest"},"operation":{"const":"native-policy-activation.consume"},
+        "schema":{"const":"catchplate.policyAuthorityNativeActivationRuntimeResponse/v1"},"requestId":{"$ref":"#/$defs/digest"},"operation":{"const":"native-policy-activation.consume"},
         "configurationDigest":{"$ref":"#/$defs/digest"},"requestDigest":{"$ref":"#/$defs/digest"},"issuedAtEpochNs":{"$ref":"#/$defs/epoch"},"deadlineMonotonicNs":{"$ref":"#/$defs/epoch"},"fence":{"$ref":"#/$defs/epoch"},
         "result":{"$ref":"#/$defs/result"},"resultDigest":{"$ref":"#/$defs/digest"},"commitReceiptDigest":{"$ref":"#/$defs/digest"},"witnessCommitDigest":{"$ref":"#/$defs/digest"},"attestationReceiptDigest":{"$ref":"#/$defs/digest"},
         "attestationConsumptionReceipt":{"$ref":"policy-canary-durable-delivery.v1.schema.json#/$defs/runtimeResponse/properties/attestationConsumptionReceipt"},
@@ -117,13 +117,13 @@
     "phase":{"enum":["request","decide","publish","record-inclusion","finalize"]},
     "mfa":{
       "type":"object","additionalProperties":false,"required":["nativePolicyActivationProfile","assertion"],
-      "properties":{"nativePolicyActivationProfile":{"const":"serverware.nativePolicyActivationHttp/v1"},"assertion":{"$ref":"control-plane-publication-approval.v1.schema.json#/$defs/assertion"}}
+      "properties":{"nativePolicyActivationProfile":{"const":"catchplate.nativePolicyActivationHttp/v1"},"assertion":{"$ref":"control-plane-publication-approval.v1.schema.json#/$defs/assertion"}}
     },
     "requestLocator":{
       "type":"object","additionalProperties":false,
       "required":["apiVersion","actorId","activationId","readinessRequestId","approvalId","argumentsSha256","requestDigest","okForAction","automaticRetryAllowed"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativePolicyActivationLocator/v1"},"actorId":{"type":"string","minLength":6,"maxLength":512,"pattern":"^oidc:[^\\u0000-\\u0020\\u007f]+$"},
+        "apiVersion":{"const":"catchplate.nativePolicyActivationLocator/v1"},"actorId":{"type":"string","minLength":6,"maxLength":512,"pattern":"^oidc:[^\\u0000-\\u0020\\u007f]+$"},
         "activationId":{"$ref":"#/$defs/uuid"},"readinessRequestId":{"$ref":"#/$defs/uuid"},"approvalId":{"$ref":"#/$defs/approvalId"},
         "argumentsSha256":{"$ref":"#/$defs/digest"},"requestDigest":{"$ref":"#/$defs/digest"},"okForAction":{"const":false},"automaticRetryAllowed":{"const":false}
       },
@@ -132,17 +132,17 @@
     "httpRequest":{
       "oneOf":[
         {"type":"object","additionalProperties":false,"required":["apiVersion","phase","readinessRequestId","generationPublicationEnvelopeSha256"],"properties":{
-          "apiVersion":{"const":"serverware.nativePolicyActivationHttp/v1"},"phase":{"const":"request"},"readinessRequestId":{"$ref":"#/$defs/uuid"},"generationPublicationEnvelopeSha256":{"$ref":"#/$defs/digest"}}},
+          "apiVersion":{"const":"catchplate.nativePolicyActivationHttp/v1"},"phase":{"const":"request"},"readinessRequestId":{"$ref":"#/$defs/uuid"},"generationPublicationEnvelopeSha256":{"$ref":"#/$defs/digest"}}},
         {"type":"object","additionalProperties":false,"required":["apiVersion","phase","approvalId"],"properties":{
-          "apiVersion":{"const":"serverware.nativePolicyActivationHttp/v1"},"phase":{"enum":["decide","publish","finalize"]},"approvalId":{"$ref":"#/$defs/approvalId"}}},
+          "apiVersion":{"const":"catchplate.nativePolicyActivationHttp/v1"},"phase":{"enum":["decide","publish","finalize"]},"approvalId":{"$ref":"#/$defs/approvalId"}}},
         {"type":"object","additionalProperties":false,"required":["apiVersion","phase","approvalId","nativeRequest","publicationOriginal"],"properties":{
-          "apiVersion":{"const":"serverware.nativePolicyActivationHttp/v1"},"phase":{"const":"record-inclusion"},"approvalId":{"$ref":"#/$defs/approvalId"},"nativeRequest":{"$ref":"#/$defs/nativeRequest"},"publicationOriginal":{"$ref":"#/$defs/original","maxLength":32768}}},
+          "apiVersion":{"const":"catchplate.nativePolicyActivationHttp/v1"},"phase":{"const":"record-inclusion"},"approvalId":{"$ref":"#/$defs/approvalId"},"nativeRequest":{"$ref":"#/$defs/nativeRequest"},"publicationOriginal":{"$ref":"#/$defs/original","maxLength":32768}}},
         {"type":"object","additionalProperties":false,"required":["apiVersion","approvalId"],"properties":{
-          "apiVersion":{"const":"serverware.nativePolicyActivationHttp/v1"},"approvalId":{"$ref":"#/$defs/approvalId"}}},
+          "apiVersion":{"const":"catchplate.nativePolicyActivationHttp/v1"},"approvalId":{"$ref":"#/$defs/approvalId"}}},
         {"type":"object","additionalProperties":false,"required":["apiVersion","phase","argumentsOriginal"],"properties":{
-          "apiVersion":{"const":"serverware.nativePolicyActivationHttp/v1"},"phase":{"$ref":"#/$defs/phase"},"argumentsOriginal":{"$ref":"#/$defs/wholeOriginal"}}},
+          "apiVersion":{"const":"catchplate.nativePolicyActivationHttp/v1"},"phase":{"$ref":"#/$defs/phase"},"argumentsOriginal":{"$ref":"#/$defs/wholeOriginal"}}},
         {"type":"object","additionalProperties":false,"required":["apiVersion","phase","argumentsOriginal","mfa"],"properties":{
-          "apiVersion":{"const":"serverware.nativePolicyActivationHttp/v1"},"phase":{"enum":["request","decide","publish"]},"argumentsOriginal":{"$ref":"#/$defs/wholeOriginal"},"mfa":{"$ref":"#/$defs/mfa"}}}
+          "apiVersion":{"const":"catchplate.nativePolicyActivationHttp/v1"},"phase":{"enum":["request","decide","publish"]},"argumentsOriginal":{"$ref":"#/$defs/wholeOriginal"},"mfa":{"$ref":"#/$defs/mfa"}}}
       ],"description":"POST only, exact JSON Content-Type/Content-Length, no query. /draft is data only; /request-locator takes phase=request and exact argumentsOriginal to derive a non-authoritative deterministic approval locator without a write or challenge. /options creates the genuine phase-bound hardware challenge. /request, /decide and /publish require fresh actual hardware. /publish performs protected consume then exactly one native contact, not a replayable preparation export. Receipt record-inclusion and finalize are separate audit-gated protected operations. /lookup is nonactionable and never contacts native."
     }
   }

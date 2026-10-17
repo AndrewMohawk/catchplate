@@ -34,7 +34,7 @@ Kubernetes ownership or isolation against a privileged host.
 The existing [CA reservation](native-install-reservation.md) supplies the useful
 reserve → durable claim → effect/readback → complete pattern. Its purpose,
 domains, token and journal records are CA-specific. The legacy
-`serverware/enrollment.py::_nftables_firewall` emits a create-only table script,
+`catchplate/enrollment.py::_nftables_firewall` emits a create-only table script,
 but its environment-supplied namespace comparison and table/chain/comment
 readback are not the native ownership or exact rule-expression checks required
 here. Do not execute that script as the new installer or reinterpret its receipt.
@@ -85,7 +85,7 @@ durable claim must precede firewall mutation. Full start/lifecycle permission
 still requires a future contract, not today's `HostOwner` or CA `InstallGuard`.
 
 The exact five-field [pre-exec launch manifest](../schemas/native-egress-launch-manifest.v1.schema.json)
-is `apiVersion: serverware.nativeEgressLaunchManifest/v1`,
+is `apiVersion: catchplate.nativeEgressLaunchManifest/v1`,
 `profile: native-egress-create-new-workload-v1`, `executable: {path, sha256}`,
 `argv: [executable.path]`, and `environment: {}`. Its exact sorted compact
 `ensure_ascii` original has no newline and is bounded to 4 KiB; the native owner

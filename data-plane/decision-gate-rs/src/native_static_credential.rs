@@ -1,11 +1,11 @@
 //! Native-only static intake. Public candidate/proof responses are not writer
 //! receipts. The portal must independently authorize and commit the candidate.
 use super::*;
-use serverware_decision_gate::native_static_credential_v1::{Configuration, Prepared, Reply};
-use serverware_decision_gate::native_static_credential_browser_v1::{self as browser_wire, Accepted, Kind};
-use serverware_decision_gate::native_oauth_exchange_v1::BrowserTls;
-use serverware_decision_gate::native_secret_broker_v1 as broker;
-use serverware_decision_gate::enclave_vsock_v1::VsockShutdownV1;
+use catchplate_decision_gate::native_static_credential_v1::{Configuration, Prepared, Reply};
+use catchplate_decision_gate::native_static_credential_browser_v1::{self as browser_wire, Accepted, Kind};
+use catchplate_decision_gate::native_oauth_exchange_v1::BrowserTls;
+use catchplate_decision_gate::native_secret_broker_v1 as broker;
+use catchplate_decision_gate::enclave_vsock_v1::VsockShutdownV1;
 
 pub(super) struct Owner {
     config: Configuration, ingress: Arc<BrowserTls>,
@@ -57,14 +57,14 @@ fn browser(state: &GateState, owner: &mut Owner, mut request: Accepted) -> Resul
             Reply::Retained { candidate, browser_nonce } if matches!(request.kind(), Kind::Intake) => {
                 let cookie = browser_wire::cookie(candidate["credentialId"].as_str().ok_or("static candidate ID absent")?,
                     &browser_nonce, candidate["expiresAtEpochNs"].as_u64().ok_or("static candidate expiry absent")?)?;
-                let body = serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&json!({
-                    "apiVersion":"serverware.nativeStaticCredentialCandidateResponse/v1", "candidate":candidate}))?;
+                let body = catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&json!({
+                    "apiVersion":"catchplate.nativeStaticCredentialCandidateResponse/v1", "candidate":candidate}))?;
                 request.respond("application/json", &body, Some(&cookie), "default-src 'none'; frame-ancestors 'none'")
             },
             Reply::Prepared(prepared) if matches!(request.kind(), Kind::Prepare) => {
                 let public = prepared.wire(evidence(state, &prepared, deadline)?)?;
-                let body = serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&json!({
-                    "apiVersion":"serverware.nativeStaticCredentialPreparationResponse/v1",
+                let body = catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&json!({
+                    "apiVersion":"catchplate.nativeStaticCredentialPreparationResponse/v1",
                     "argumentsOriginal":public["argumentsOriginal"], "evidence":public["evidence"]}))?;
                 request.respond("application/json", &body, None, "default-src 'none'; frame-ancestors 'none'")
             },

@@ -14,13 +14,13 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_frontier_reader as frontier
-from serverware import authority_index_projection as projection
-from serverware import authority_index_reader as reader
-from serverware import authority_query_read_work as measured
-from serverware import authority_transition_core as core
-from serverware.authority_index_contract import CountedNode
-from serverware.authority_index_heads import CapturedIndexHead
+from catchplate import authority_challenge_frontier_reader as frontier
+from catchplate import authority_index_projection as projection
+from catchplate import authority_index_reader as reader
+from catchplate import authority_query_read_work as measured
+from catchplate import authority_transition_core as core
+from catchplate.authority_index_contract import CountedNode
+from catchplate.authority_index_heads import CapturedIndexHead
 
 
 class Trace:

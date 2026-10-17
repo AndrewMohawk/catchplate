@@ -27,8 +27,8 @@ arguments. Two separate functions extend the closed EXECUTE inventory:
 
 | Function | Arguments | Result |
 | --- | --- | --- |
-| `serverware_policy_authority_load_revocation_issuance` | Six `text` arguments: three identities and three configured issuer pins | Eight closed row projections |
-| `serverware_policy_authority_issue_revocation_capability` | Eight `text` arguments: two original transports, record digest, two key fingerprints and three configured issuer pins | Exact capability ID, digest and record digest |
+| `catchplate_policy_authority_load_revocation_issuance` | Six `text` arguments: three identities and three configured issuer pins | Eight closed row projections |
+| `catchplate_policy_authority_issue_revocation_capability` | Eight `text` arguments: two original transports, record digest, two key fingerprints and three configured issuer pins | Exact capability ID, digest and record digest |
 
 The issuer receives no direct table or sequence privileges. The schema sealer,
 owner catalog checks and source-contract hash bind the combined exact function
@@ -85,7 +85,7 @@ the driver and process own that trust boundary.
 
 ## Configured owner and original transport
 
-[`RevocationCapabilityIssuer`](../serverware/authority_revocation_issuance.py)
+[`RevocationCapabilityIssuer`](../catchplate/authority_revocation_issuance.py)
 owns one exact configuration snapshot: planner, verifier and witness public
 keys; planner/verifier identities; issuer session and current admission pins;
 configuration, witness and generation commitments. The existing verifier key

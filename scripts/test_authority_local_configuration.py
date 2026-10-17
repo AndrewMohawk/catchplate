@@ -19,10 +19,10 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from scripts.authority import local_configuration as cli
-from serverware import authority_local_configuration as local
-from serverware import authority_historical_archive as history
+from catchplate import authority_local_configuration as local
+from catchplate import authority_historical_archive as history
 from scripts.test_authority_local_database_credentials import fixture as certificate_fixture
-from serverware.authority_local_database_credentials import issuance
+from catchplate.authority_local_database_credentials import issuance
 
 PIN = "sha256:" + "1" * 64
 SEED = b"C" * 32
@@ -44,10 +44,10 @@ def fixture():
     for name in sorted(local.launcher.PROCESS_MODES):
         original = local.spec.canonical_json_bytes(dict(schema="synthetic.staticRole/v1", role=name))
         role_originals[name] = original.decode("ascii")
-        environment = ["SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD"]
+        environment = ["CATCHPLATE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD"]
         if name in local.spec.RUNTIME_EVIDENCE_ROLES:
             environment.append(local.spec.RUNTIME_EVIDENCE_NAME)
-        mutable = [] if name != "witness" else [dict(name="witness-state", runtimePath="/var/lib/serverware/witness",
+        mutable = [] if name != "witness" else [dict(name="witness-state", runtimePath="/var/lib/catchplate/witness",
             atomicRecordProtocol="append-canonical-record-fdatasync-renameat2-noreplace-fsyncdir-v1",
             quotaBytes=1024*1024, singletonLeaseRequired=True, networkAllowed=False)]
         roles.append(dict(path="roles/"+name+".json", sha256=local.sha(original), role=name,
@@ -88,7 +88,7 @@ def fixture():
         packageVersions=packages, launchNonceDigest=PIN, queryManifestDigest=local.primary.source_query_manifest_digest(),
         generationSequence=0, generationBindingDigest=local.spec.configuration_generation_binding_digest(generation),
         generationPredecessorDigest=None, generationMinimumRollbackSequence=0,
-        credentialReleaseTrust=dict(schema="serverware.trustedHostLocalCredentialReleaseTrust/v1",
+        credentialReleaseTrust=dict(schema="catchplate.trustedHostLocalCredentialReleaseTrust/v1",
             trustMode="trusted-host-local", maximumReceiptAgeNs=1000),
         replayWitness=dict(socketPath=local.launcher.ROLE_SOCKET_PATHS["witness"], serviceUid=65523, serviceGid=65523,
             requestTimeoutSeconds=1, identityDigest=PIN, signingPublicKeyBase64Url=keys["witness"]),
@@ -172,7 +172,7 @@ def historical_configuration(selected, payload, root):
 
 class LocalConfigurationControls(unittest.TestCase):
     def test_fresh_signing_rejects_v1_but_historical_preparation_keeps_originals(self):
-        from serverware import authority_local_database_credentials as credentials
+        from catchplate import authority_local_database_credentials as credentials
         selected, _, _ = fixture()
         local._require_current_database_issuances(selected)
         original = local.document(selected["databaseIssuanceOriginals"]["planner"].encode("ascii"), local.io.MAX_PUBLIC)
@@ -511,7 +511,7 @@ class IssuedConfigurationCustodyControls(unittest.TestCase):
         self._take(issued).check()
 
     def test_selected_pilot_template_retains_checks_and_closes_public_owner(self):
-        path = os.environ.get("SERVERWARE_TEST_PILOT_CONFIGURATION_TEMPLATE")
+        path = os.environ.get("CATCHPLATE_TEST_PILOT_CONFIGURATION_TEMPLATE")
         if path is None:
             self.skipTest("explicit selected template path required for integration source control")
         tree = ast.parse(Path(path).read_text(encoding="utf-8"))

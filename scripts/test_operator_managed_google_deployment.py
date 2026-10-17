@@ -15,25 +15,25 @@ import unittest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-STACK = ROOT / "docker/serverware-operator-demo"
+STACK = ROOT / "docker/catchplate-operator-demo"
 CANDIDATE = STACK / "docker-compose.managed-google-candidate.yml"
 BINARY_SHA256 = "333ff7a3db00ab2bf03644fc965aed9b691bdd6ddc4ec651273e6d0c36f053e0"
-BINARY = "/srv/catchplate-fast/projects/serverware-operator-artifacts/sha256-" + BINARY_SHA256 + "/serverware-decision-gate"
+BINARY = "/srv/catchplate-fast/projects/catchplate-operator-artifacts/sha256-" + BINARY_SHA256 + "/catchplate-decision-gate"
 SOURCE = "${OPERATOR_MANAGED_SOURCE:?Set the reviewed immutable managed source directory}"
 PROVIDER = "${OPERATOR_MANAGED_PROVIDER_CUSTODY_DIR:?Set the reviewed empty app-only provider custody directory}"
 ENVIRONMENT = {
-    "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST": "sha256:" + BINARY_SHA256,
-    "SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED": "1",
-    "SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR": "/provider-custody",
-    "SERVERWARE_PROCESS_MODE": "serverware-control-plane",
-    "SERVERWARE_METADATA_STORE_BACKEND": "sqlite",
-    "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite",
-    "SERVERWARE_GRANT_STORE_BACKEND": "sqlite",
-    "SERVERWARE_RELEASE_CHANNEL": "dev",
-    "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
-    "SERVERWARE_KEY_RELEASE_REQUIRED": "0",
-    "SERVERWARE_DEV_AUTHENTICATOR": "0",
-    "SERVERWARE_DEV_DEMO_SEED": "0",
+    "CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST": "sha256:" + BINARY_SHA256,
+    "CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED": "1",
+    "CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR": "/provider-custody",
+    "CATCHPLATE_PROCESS_MODE": "catchplate-control-plane",
+    "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_AUDIT_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_GRANT_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_RELEASE_CHANNEL": "dev",
+    "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
+    "CATCHPLATE_KEY_RELEASE_REQUIRED": "0",
+    "CATCHPLATE_DEV_AUTHENTICATOR": "0",
+    "CATCHPLATE_DEV_DEMO_SEED": "0",
 }
 
 
@@ -61,10 +61,10 @@ def bind(source, target, readonly):
 
 def expected():
     return {"services": {
-        "serverware": {"environment": dict(ENVIRONMENT), "volumes": [
+        "catchplate": {"environment": dict(ENVIRONMENT), "volumes": [
             bind(SOURCE, "/app", True), bind(PROVIDER, "/provider-custody", False)]},
-        "decision-gate-rs": {"environment": {"SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED": "1"},
-            "volumes": [bind(BINARY, "/usr/local/bin/serverware-decision-gate", True)]},
+        "decision-gate-rs": {"environment": {"CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED": "1"},
+            "volumes": [bind(BINARY, "/usr/local/bin/catchplate-decision-gate", True)]},
     }}
 
 
@@ -87,8 +87,8 @@ class ManagedDeploymentTests(unittest.TestCase):
     def test_accepted_layer_matches_managed_contract_with_exact_deployed_source(self):
         accepted = yaml.load((STACK / "docker-compose.accepted-source.yml").read_text(), Loader=ClosedLoader)
         wanted = expected()
-        wanted["services"]["serverware"]["volumes"][0]["source"] = (
-            "/srv/catchplate-fast/projects/serverware-operator-artifacts/"
+        wanted["services"]["catchplate"]["volumes"][0]["source"] = (
+            "/srv/catchplate-fast/projects/catchplate-operator-artifacts/"
             "source-9222b4c090d77aa983d3c01be34e0a2ba79f8e6c"
         )
         self.assertEqual(accepted, wanted)
@@ -101,47 +101,47 @@ class ManagedDeploymentTests(unittest.TestCase):
             and ast.unparse(node.func.value) == "app['environment']"]
         self.assertEqual(len(updates), 1)
         fixture = ast.literal_eval(updates[0].args[0])
-        actual = self.candidate["services"]["serverware"]["environment"]
+        actual = self.candidate["services"]["catchplate"]["environment"]
         self.assertEqual({key: actual[key] for key in fixture}, fixture)
-        self.assertEqual(actual["SERVERWARE_RELEASE_CHANNEL"], "dev")
+        self.assertEqual(actual["CATCHPLATE_RELEASE_CHANNEL"], "dev")
 
     def test_source_required_without_default_and_binary_pair_literal(self):
-        app, gate = (self.candidate["services"][name] for name in ("serverware", "decision-gate-rs"))
+        app, gate = (self.candidate["services"][name] for name in ("catchplate", "decision-gate-rs"))
         self.assertEqual(app["volumes"][0], bind(SOURCE, "/app", True))
         self.assertRegex(SOURCE, r"^\$\{OPERATOR_MANAGED_SOURCE:\?[^}]+\}$")
-        self.assertEqual(gate["volumes"], [bind(BINARY, "/usr/local/bin/serverware-decision-gate", True)])
-        self.assertEqual(app["environment"]["SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST"], "sha256:" + BINARY_SHA256)
+        self.assertEqual(gate["volumes"], [bind(BINARY, "/usr/local/bin/catchplate-decision-gate", True)])
+        self.assertEqual(app["environment"]["CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST"], "sha256:" + BINARY_SHA256)
         self.assertNotIn("${", BINARY)
 
     def test_provider_custody_is_required_app_only_and_not_auto_created(self):
-        app, gate = (self.candidate["services"][name] for name in ("serverware", "decision-gate-rs"))
+        app, gate = (self.candidate["services"][name] for name in ("catchplate", "decision-gate-rs"))
         self.assertEqual(app["volumes"][1], bind(PROVIDER, "/provider-custody", False))
         self.assertRegex(PROVIDER, r"^\$\{OPERATOR_MANAGED_PROVIDER_CUSTODY_DIR:\?[^}]+\}$")
-        self.assertNotIn("SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR", gate["environment"])
+        self.assertNotIn("CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR", gate["environment"])
         self.assertNotIn("/provider-custody", {item["target"] for item in gate["volumes"]})
         self.assertIn("existing EMPTY app-owned 0700 directory", self.raw)
         self.assertIn("including bind aliases", self.raw)
 
     def test_no_legacy_google_profile_credential_seed_or_destination_change(self):
         base = yaml.safe_load((STACK / "docker-compose.yml").read_text())
-        for name in ("serverware", "decision-gate-rs"):
+        for name in ("catchplate", "decision-gate-rs"):
             effective = {**base["services"][name]["environment"], **self.candidate["services"][name]["environment"]}
-            self.assertNotIn("SERVERWARE_OPERATOR_GOOGLE_PROFILE", effective)
-            self.assertFalse(any(key.startswith("SERVERWARE_GOOGLE_") for key in effective))
-            self.assertNotIn("SERVERWARE_OPERATOR_DEMO_UPSTREAMS", self.candidate["services"][name]["environment"])
+            self.assertNotIn("CATCHPLATE_OPERATOR_GOOGLE_PROFILE", effective)
+            self.assertFalse(any(key.startswith("CATCHPLATE_GOOGLE_") for key in effective))
+            self.assertNotIn("CATCHPLATE_OPERATOR_DEMO_UPSTREAMS", self.candidate["services"][name]["environment"])
         self.assertNotIn("managed-prepare", self.candidate["services"])
-        self.assertEqual(self.candidate["services"]["serverware"]["environment"]["SERVERWARE_DEV_DEMO_SEED"], "0")
+        self.assertEqual(self.candidate["services"]["catchplate"]["environment"]["CATCHPLATE_DEV_DEMO_SEED"], "0")
 
     def test_existing_curated_layer_replaces_gate_data_without_provider_exposure(self):
         curated = yaml.safe_load((STACK / "docker-compose.curated-gate.yml").read_text())
         self.assertEqual(set(curated), {"services"})
-        self.assertEqual(set(curated["services"]), {"serverware", "decision-gate-rs"})
-        self.assertEqual(curated["services"]["serverware"], {"environment": {"SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED": "1"}})
+        self.assertEqual(set(curated["services"]), {"catchplate", "decision-gate-rs"})
+        self.assertEqual(curated["services"]["catchplate"], {"environment": {"CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED": "1"}})
         gate = curated["services"]["decision-gate-rs"]
         self.assertEqual(set(gate), {"volumes"})
         mounts = {item["target"]: item for item in gate["volumes"]}
         self.assertEqual(len(mounts), len(gate["volumes"]))
-        self.assertEqual(set(mounts), {"/data", "/data/.operator-publication.lock", "/data/.serverware-operator-demo.json",
+        self.assertEqual(set(mounts), {"/data", "/data/.operator-publication.lock", "/data/.catchplate-operator-demo.json",
             "/data/mitmproxy/mitmproxy-ca-cert.pem", "/data/mitmproxy/mitmproxy-ca.pem"})
         self.assertTrue(mounts["/data"]["source"].endswith("/app-data/gate-runtime"))
         for mount in mounts.values():
@@ -152,8 +152,8 @@ class ManagedDeploymentTests(unittest.TestCase):
         # Source-node inspection avoids interpreting Compose's !reset extension.
         notification = yaml.compose((STACK / "docker-compose.notifications.yml").read_text())
         services = dict(notification.value)[next(node for node, _ in notification.value if node.value == "services")]
-        self.assertEqual([key.value for key, _ in services.value], ["serverware"])
-        self.assertNotIn("SERVERWARE_OPERATOR_NOTIFICATIONS_", self.raw)
+        self.assertEqual([key.value for key, _ in services.value], ["catchplate"])
+        self.assertNotIn("CATCHPLATE_OPERATOR_NOTIFICATIONS_", self.raw)
         for name in ("edge", "demo-upstream"):
             self.assertNotIn(name, self.candidate["services"])
         self.assertNotIn("/notification-custody", {item["target"] for service in self.candidate["services"].values()
@@ -163,13 +163,13 @@ class ManagedDeploymentTests(unittest.TestCase):
         mutations = []
         for key in ("networks", "image", "command", "ports", "healthcheck"):
             changed = deepcopy(self.candidate)
-            changed["services"]["serverware"][key] = "unreviewed"
+            changed["services"]["catchplate"][key] = "unreviewed"
             mutations.append(changed)
         changed = deepcopy(self.candidate)
         changed["services"]["decision-gate-rs"]["volumes"].append(bind(PROVIDER, "/provider-custody", True))
         mutations.append(changed)
         changed = deepcopy(self.candidate)
-        changed["services"]["serverware"]["environment"]["SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED"] = "0"
+        changed["services"]["catchplate"]["environment"]["CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED"] = "0"
         mutations.append(changed)
         for candidate in mutations:
             with self.assertRaisesRegex(ValueError, "^managed candidate layer differs$"):

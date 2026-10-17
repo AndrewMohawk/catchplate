@@ -3,7 +3,7 @@
 use super::*;
 
 pub(super) fn no_dispatch(outcome: &PolicyOutcome) -> Value {
-    json!({"domain":"serverware.policyShadowNoDispatch/v1","outcome":outcome})
+    json!({"domain":"catchplate.policyShadowNoDispatch/v1","outcome":outcome})
 }
 
 pub(super) fn response_constraints(route: &Route) -> Result<Value, String> {
@@ -11,7 +11,7 @@ pub(super) fn response_constraints(route: &Route) -> Result<Value, String> {
         .map(|value|policy_route_authority::canonical(value).map(|bytes|sha256_prefixed(bytes.as_bytes())))
         .collect::<Result<std::collections::BTreeSet<_>,_>>()?;
     Ok(json!({
-        "domain":"serverware.policyShadowNativeResponseConstraints/v1",
+        "domain":"catchplate.policyShadowNativeResponseConstraints/v1",
         "routeSha256":sha256_prefixed(route.id.as_bytes()),
         "adapterTypeSha256":sha256_prefixed(route.adapter_type.as_bytes()),
         "adapterConfigSha256":sha256_prefixed(policy_route_authority::canonical(&route.adapter_config)?.as_bytes()),
@@ -29,7 +29,7 @@ pub(super) fn dispatch(request: &DecisionRequest, forwarded: &BTreeMap<String,St
     let body_length = request.forwarded_body_length
         .unwrap_or(u64::try_from(request.body.len()).map_err(|_|"dispatch body length overflow")?);
     Ok(json!({
-        "domain":"serverware.policyShadowCredentialFreeDispatch/v1",
+        "domain":"catchplate.policyShadowCredentialFreeDispatch/v1",
         "principalSha256":sha256_prefixed(principal.id.as_bytes()),
         "routeSha256":sha256_prefixed(route.id.as_bytes()),
         "request":{

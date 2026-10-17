@@ -15,7 +15,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_recovery_terminal_transition as transition
+from catchplate import authority_recovery_terminal_transition as transition
 from test_authority_radix_mutation import IndependentTree
 from test_authority_radix_proof import sql_digest, sql_json
 import test_authority_recovery_terminal as original
@@ -78,7 +78,7 @@ class RecoveryTerminalTransitionControls(unittest.TestCase):
             for field in ("expectedRow", "row"):
                 image = None if challenge is None else challenge[field]
                 digest = None if image is None else sql_digest(
-                    "serverware.policyAuthorityAuthenticatedRow/v1",
+                    "catchplate.policyAuthorityAuthenticatedRow/v1",
                     terminal.retention.CHALLENGE_TABLE.encode(), sql_json(image))
                 projected.append(None if image is None else transition.projection.project_row(item.index_id,
                     image, primary_key_digest=challenge["keyDigest"], primary_row_digest=digest))
@@ -103,7 +103,7 @@ class RecoveryTerminalTransitionControls(unittest.TestCase):
             self.assertEqual(ceremony["candidate_json"], '{"unchanged":true}')
             self.assertEqual(challenge["used_at"], used or original.NOW.isoformat())
             self.assertEqual(challenge["retention_recovery_row_digest"], sql_digest(
-                "serverware.policyAuthorityAuthenticatedRow/v1", terminal.CEREMONIES.encode(), sql_json(ceremony)))
+                "catchplate.policyAuthorityAuthenticatedRow/v1", terminal.CEREMONIES.encode(), sql_json(ceremony)))
             self.assert_actual_roots_and_changes(trees, result)
 
     def test_four_prune_relative_phases_actual_deletion_and_unchanged_profiles(self):

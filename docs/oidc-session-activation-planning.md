@@ -6,11 +6,11 @@ actual transition and captures indexed write evidence. It does not sign a plan,
 execute SQL writes, activate a session, deliver a cookie or enable a public
 activation route.
 Implementation is
-[authority_oidc_session_activation_planning.py](../serverware/authority_oidc_session_activation_planning.py).
+[authority_oidc_session_activation_planning.py](../catchplate/authority_oidc_session_activation_planning.py).
 No build, database, test or runtime verification was performed for this batch.
 The real successor registry now declares this operation's fixed acquisition
 factory and an explicit configured planning factory, constructing the actual
-[`OidcSessionActivationPlanOwner`](../serverware/authority_oidc_session_activation_plan_owner.py).
+[`OidcSessionActivationPlanOwner`](../catchplate/authority_oidc_session_activation_plan_owner.py).
 The existing module-level closure guard remains; no stub or bypass was added.
 This closes the seven-operation successor source inventory, not an import,
 runtime, cold-admission or provisioning verification claim.

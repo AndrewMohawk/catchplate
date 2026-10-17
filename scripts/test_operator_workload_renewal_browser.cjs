@@ -19,7 +19,7 @@ const KEY = '12'.repeat(32);
 const FINGERPRINT = 'sha256:' + createHash('sha256').update(Buffer.from(KEY, 'hex')).digest('hex');
 const PRIVATE = 'synthetic-provider-private-never-render';
 const clone = value => JSON.parse(JSON.stringify(value));
-const capability = () => ({schema: 'serverware.workloadTokenRenewal/v1', enroll_path: ENROLL, cancel_path: CANCEL,
+const capability = () => ({schema: 'catchplate.workloadTokenRenewal/v1', enroll_path: ENROLL, cancel_path: CANCEL,
   path: '/v1/workload/renew', audience: PROXY + '/v1/workload/renew', overlap_seconds: 300,
   token_lifetime_seconds: {min: 3600, max: 86400, default: 3600},
   enrollment_lifetime_seconds: {min: 86400, max: 7776000, default: 2592000}, single_writer: true});
@@ -85,7 +85,7 @@ async function fixture(browser, options, exercise) {
       } catch (error) { state.errors.push('renewal fixture: ' + error.message); await route.abort(); }
     });
     await page.reload({waitUntil: 'networkidle'}); await ready(page); await view(page, 'applications');
-    assert.equal(await page.title(), 'Clients - Serverware operator workspace');
+    assert.equal(await page.title(), 'Clients - Catchplate operator workspace');
     assert.equal(new URL(page.url()).origin, ORIGIN);
     await exercise(page, state);
     assert.deepEqual(state.posts, [], 'no unrelated catalog writes'); assert(reads > 0); await noPrivateMaterial(page);
@@ -108,7 +108,7 @@ async function cancel(page) {
   await page.waitForFunction(() => document.querySelector('#application-renewal-status').textContent.startsWith('Renewal enrollment cancelled.'));
 }
 async function runSuite(browser, {fromGroup = 1} = {}) {
-  const artifacts = await mkdtemp('/tmp/serverware-renewal-ui-'); const screenshots = []; let groups = 0;
+  const artifacts = await mkdtemp('/tmp/catchplate-renewal-ui-'); const screenshots = []; let groups = 0;
   console.log(JSON.stringify({artifactDirectory: artifacts, scope: 'synthetic renewal browser fixture'}));
   const capture = async (page, name) => {
     const path = join(artifacts, name + '.png');
@@ -127,10 +127,10 @@ async function runSuite(browser, {fromGroup = 1} = {}) {
       await page.locator('#application-renewal details > summary').click();
       const displayed = JSON.parse(await page.locator('#application-renewal-setup').textContent());
       const downloadEvent = page.waitForEvent('download'); await page.locator('#application-renewal-download').click();
-      const download = await downloadEvent; assert.equal(download.suggestedFilename(), 'serverware-managed-client.json');
+      const download = await downloadEvent; assert.equal(download.suggestedFilename(), 'catchplate-managed-client.json');
       const filename = join(artifacts, download.suggestedFilename()); await download.saveAs(filename);
       const downloaded = JSON.parse(await readFile(filename, 'utf8')); assert.deepEqual(downloaded, displayed);
-      assert.deepEqual(downloaded, {schema: 'serverware.managedClientSetup/v1', application_id: IDS.application,
+      assert.deepEqual(downloaded, {schema: 'catchplate.managedClientSetup/v1', application_id: IDS.application,
         enrollment_id: ENROLLMENT, audience: PROXY + '/v1/workload/renew', public_key_fingerprint: FINGERPRINT,
         token_generation: 1, token_expires_at_epoch_ms: NOW + 86400000,
         enrollment_expires_at_epoch_ms: NOW + 30 * 86400000, token_lifetime_seconds: 3600, overlap_seconds: 300});

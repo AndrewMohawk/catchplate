@@ -81,7 +81,7 @@ verified `2bfe5e38` proxy executable. An actual internal browser made 13 read-on
 GETs and exercised **Review destination settings** without preparing a change.
 Its desktop/mobile screenshots and unchanged-state checks passed. The retained
 allowlist remains fixture-only; no live destination change was prepared or
-activated. See the [paired rollout evidence and limits](../docker/serverware-operator-demo/README.md#current-notification-enabled-deployment).
+activated. See the [paired rollout evidence and limits](../docker/catchplate-operator-demo/README.md#current-notification-enabled-deployment).
 
 - **8/8 connected groups** use real application ASGI handlers, retained SQLite,
   encryption, signing, publication and fresh-process cold startup. They cover
@@ -103,7 +103,7 @@ The connected and Google suites ran in separate bounded, network-none containers
 using cached application image `ec14a558a42e483a834860521e399b461a2df880fcba495e7127b0d8d2a51e01`,
 with exit 0, no OOM and unchanged source hashes. Retained local logs, process
 states and source hashes are under
-`../serverware-operator-workspace-evidence/upstream-setup.CVVfT8/` relative to the
+`../catchplate-operator-workspace-evidence/upstream-setup.CVVfT8/` relative to the
 checkout. Browser screenshots are under `/tmp/serverware-upstreams-browser-vA61Mo/`.
 
 The rollout does not authorize or establish a live destination change. The
@@ -113,7 +113,7 @@ acceptance remain separate. Matching running app/gate and retained policy were
 verified, but activation of a different origin list and actual provider traffic
 remain untested on this live deployment.
 
-Use the [retained-state maintenance procedure](../docker/serverware-operator-demo/README.md#approval-and-state-preservation-gate),
+Use the [retained-state maintenance procedure](../docker/catchplate-operator-demo/README.md#approval-and-state-preservation-gate),
 preserving the separate notification custody directory with its corresponding
 database whenever a destination has been saved there. Historical rollout scripts
 contain old pins and must not be rerun as current deployment instructions.

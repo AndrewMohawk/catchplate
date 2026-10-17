@@ -4,7 +4,7 @@
 //! waiting nor output creates a new lifetime or a second connection allowance.
 
 use super::NativeRuntimeLifetimeV1;
-use serverware_decision_gate::enclave_vsock_v1::{VsockListenerV1, VsockStreamV1};
+use catchplate_decision_gate::enclave_vsock_v1::{VsockListenerV1, VsockStreamV1};
 use std::{io, time::Duration};
 
 pub(super) const PORT: u32 = 9101;

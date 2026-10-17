@@ -37,13 +37,13 @@ use crate::native_serving_privileges;
 use zeroize::Zeroizing;
 
 const MAX_FRAME: usize = 8 * 1024 * 1024;
-const CHANNEL: &str = "serverware.nativeSecretBrokerChannel/v1";
-const KMS_REQUEST: &str = "serverware.nativeBrokerKmsRecipientRequest/v1";
-const KMS_RESPONSE: &str = "serverware.nativeBrokerKmsRecipientCiphertext/v1";
-const GATE_DOMAIN: &[u8] = b"serverware/native-broker-gate-ciphertext/v1\0";
+const CHANNEL: &str = "catchplate.nativeSecretBrokerChannel/v1";
+const KMS_REQUEST: &str = "catchplate.nativeBrokerKmsRecipientRequest/v1";
+const KMS_RESPONSE: &str = "catchplate.nativeBrokerKmsRecipientCiphertext/v1";
+const GATE_DOMAIN: &[u8] = b"catchplate/native-broker-gate-ciphertext/v1\0";
 const INTERPRETER_PATH: &str = "/usr/local/bin/python3.11";
-const HELPER_PATH: &str = "/opt/serverware/serverware/native_secret_broker_helper.py";
-const IMAGE_PATH: &str = "/opt/serverware/native-broker-runtime.squashfs";
+const HELPER_PATH: &str = "/opt/catchplate/catchplate/native_secret_broker_helper.py";
+const IMAGE_PATH: &str = "/opt/catchplate/native-broker-runtime.squashfs";
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -109,7 +109,7 @@ fn fields(value: &Value, names: &[&str]) -> Result<(), String> {
 
 impl Configuration {
     pub fn validate(&self) -> Result<(), String> {
-        ensure(self.api_version == "serverware.nativeSecretBrokerConfiguration/v1"
+        ensure(self.api_version == "catchplate.nativeSecretBrokerConfiguration/v1"
             && self.kms_parent_port > 1023 && self.kms_parent_port != u32::MAX
             && !self.kms_key_id.is_empty() && self.kms_key_id.len() <= 2048
             && !self.kms_key_id.chars().any(char::is_control), "native broker configuration profile differs")?;
@@ -142,7 +142,7 @@ impl PendingBroker {
         ensure(deadline > current && deadline - current <= 86_400_000_000_000,
             "native broker lifetime must fit original 24-hour ceiling")?;
         let mut process = process::Process::spawn(&config, deadline)?;
-        let channel = if historical_configuration.is_some() { "serverware.nativeSecretBrokerChannel/v2" } else { CHANNEL };
+        let channel = if historical_configuration.is_some() { "catchplate.nativeSecretBrokerChannel/v2" } else { CHANNEL };
         let mut initialize = json!({"apiVersion":channel,"phase":"initialize",
             "deadlineBoottimeNs":deadline,"kekSha256":config.kek_sha256,"secretKekId":config.secret_kek_id});
         if let Some(original) = historical_configuration {
@@ -339,14 +339,14 @@ impl Owner {
             let mut nonce = [0u8; 32]; let mut operation = [0u8; 32];
             SystemRandom::new().fill(&mut nonce).map_err(|_| "native broker operation entropy unavailable")?;
             SystemRandom::new().fill(&mut operation).map_err(|_| "native broker operation entropy unavailable")?;
-            let request = canonical_ascii_bytes(&json!({"apiVersion":"serverware.nativeBrokerOpenCredential/v1",
+            let request = canonical_ascii_bytes(&json!({"apiVersion":"catchplate.nativeBrokerOpenCredential/v1",
                 "operationId":hex::encode(operation),"gateRecipientPublicKey":encoded(&public),
                 "gateRecipientNonce":encoded(&nonce),"deadlineBoottimeNs":deadline,"leaseBinding":work.binding,
                 "encryptedCredential":work.row,"metadata":work.metadata,"storageMetadata":work.storage_metadata}))?;
             let expected = sha(&request);
             let response = document(&self.process.exchange(&request, deadline)?, MAX_FRAME)?;
             fields(&response, &["apiVersion","requestSha256","recipientPublicKey","serverEphemeralPublicKey","aeadNonce","ciphertext"])?;
-            ensure(response["apiVersion"] == "serverware.nativeBrokerGateCiphertext/v1"
+            ensure(response["apiVersion"] == "catchplate.nativeBrokerGateCiphertext/v1"
                 && response["requestSha256"] == expected && response["recipientPublicKey"] == encoded(&public),
                 "native broker gate ciphertext owner binding differs")?;
             let peer: [u8; 32] = decoded(&response["serverEphemeralPublicKey"], 32, Some(32))?.try_into().unwrap();

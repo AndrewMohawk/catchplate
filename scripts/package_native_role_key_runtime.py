@@ -24,7 +24,7 @@ from package_native_broker_runtime import (
 
 ROOT = Path("/role-key-runtime")
 OUTPUT = Path("/role-key-output")
-HELPER = Path("/opt/serverware/serverware/native_role_key_provisioner.py")
+HELPER = Path("/opt/catchplate/catchplate/native_role_key_provisioner.py")
 
 
 def main():
@@ -49,14 +49,14 @@ def main():
     require(len(backends) == 1, "role-key runtime requires the pinned CFFI extension")
     closure.add(backends[0], SITE / backends[0].name)
     for name in ("__init__.py", "native_kms_cms.py", "native_role_key_contract.py", "native_role_key_provisioner.py"):
-        closure.add(SOURCE / "serverware" / name, SITE / "serverware" / name)
-    closure.add(SOURCE / "serverware/native_role_key_provisioner.py", HELPER)
+        closure.add(SOURCE / "catchplate" / name, SITE / "catchplate" / name)
+    closure.add(SOURCE / "catchplate/native_role_key_provisioner.py", HELPER)
     closure.libraries()
     inventory = closure.finish()
     # Executes only in a later explicitly authorized build, never during the
     # source-only implementation. No outside modules or helper entrypoint run.
     subprocess.run(["/usr/sbin/chroot", str(ROOT), str(INTERPRETER), "-I", "-B", "-c",
-        "import cryptography,cffi,pycparser; import serverware.native_role_key_provisioner; "
+        "import cryptography,cffi,pycparser; import catchplate.native_role_key_provisioner; "
         "import sys; assert sys.prefix == '/usr/local'; assert cryptography.__version__ == '50.0.0'"],
         env=ENV, check=True, timeout=30)
     image = OUTPUT / "native-role-key-provisioner-runtime.squashfs"
@@ -69,10 +69,10 @@ def main():
     with image.open("rb") as stream:
         image_hash = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
     helper_image = {"profile": "sealed-memfd-squashfs-v1",
-        "imagePath": "/opt/serverware/native-role-key-provisioner-runtime.squashfs",
+        "imagePath": "/opt/catchplate/native-role-key-provisioner-runtime.squashfs",
         "imageSha256": image_hash, "interpreterSha256": closure.files[str(INTERPRETER)]["sha256"],
         "helperSha256": closure.files[str(HELPER)]["sha256"]}
-    manifest = {"apiVersion": "serverware.nativeRoleKeyProvisionerRuntimeBuild/v1",
+    manifest = {"apiVersion": "catchplate.nativeRoleKeyProvisionerRuntimeBuild/v1",
         "helperImage": helper_image,
         "sourceManifestSha256": sha(original(Path("/source-contract/source-manifest.json"))),
         "sourceDateEpoch": epoch, "imageBytes": image.stat().st_size,

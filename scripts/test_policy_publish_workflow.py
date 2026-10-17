@@ -46,8 +46,8 @@ def verify_principal_identity_cardinality(policy_bundle: Any) -> None:
     class DuplicateCaseHeaders:
         def multi_items(self) -> list[tuple[str, str]]:
             return [
-                ("X-Serverware-Agent", "demo-agent"),
-                ("x-serverware-agent", "demo-agent"),
+                ("X-Catchplate-Agent", "demo-agent"),
+                ("x-catchplate-agent", "demo-agent"),
             ]
 
     reordered = candidate_bundle(policy_bundle, 1)
@@ -56,7 +56,7 @@ def verify_principal_identity_cardinality(policy_bundle: Any) -> None:
     reordered_snapshot = policy_bundle.compile_policy_bundle(reordered)
     identified = reordered_snapshot.identify_principal(
         "127.0.0.1",
-        {"X-Serverware-Agent": "demo-agent"},
+        {"X-Catchplate-Agent": "demo-agent"},
     )
     if identified is None or identified.id != "agent:demo":
         raise AssertionError(
@@ -65,7 +65,7 @@ def verify_principal_identity_cardinality(policy_bundle: Any) -> None:
     if (
         reordered_snapshot.identify_principal(
             "127.0.0.1",
-            {"X-Serverware-Agent": "no-match"},
+            {"X-Catchplate-Agent": "no-match"},
         )
         is not None
     ):
@@ -83,7 +83,7 @@ def verify_principal_identity_cardinality(policy_bundle: Any) -> None:
     if (
         reordered_snapshot.identify_principal(
             "127.0.0.1",
-            {"X-Serverware-Agent": "demo-agent"},
+            {"X-Catchplate-Agent": "demo-agent"},
             {"verified": True, "unexpected": "evidence"},
         )
         is not None
@@ -359,7 +359,7 @@ def verify_checked_in_demo_policy(policy_bundle: Any) -> None:
         raw,
         validate_schema=True,
     )
-    if snapshot.raw["metadata"]["id"] != "serverware-demo":
+    if snapshot.raw["metadata"]["id"] != "catchplate-demo":
         raise AssertionError("checked-in demo policy identity changed")
 
 
@@ -462,7 +462,7 @@ def expect_http_error(label: str, func: Any, expected_status: int, expected_deta
 
 
 def expect_policy_error(label: str, func: Any, expected_detail: str) -> str:
-    from serverware.policy_bundle import PolicyBundleError
+    from catchplate.policy_bundle import PolicyBundleError
 
     try:
         func()
@@ -534,11 +534,11 @@ def multiprocess_publish_worker(
     start: Any,
     results: Any,
 ) -> None:
-    os.environ["SERVERWARE_DATA_DIR"] = data_dir
-    os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-    os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
-    os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-    from serverware import policy_bundle
+    os.environ["CATCHPLATE_DATA_DIR"] = data_dir
+    os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+    os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
+    os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+    from catchplate import policy_bundle
 
     start.wait()
     try:
@@ -556,11 +556,11 @@ def multiprocess_migration_worker(
     start: Any,
     results: Any,
 ) -> None:
-    os.environ["SERVERWARE_DATA_DIR"] = data_dir
-    os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-    os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
-    os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-    from serverware import db
+    os.environ["CATCHPLATE_DATA_DIR"] = data_dir
+    os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+    os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
+    os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+    from catchplate import db
 
     start.wait()
     try:
@@ -955,17 +955,17 @@ def verify_secure_policy_paths(
         "does not match trusted public key",
     )
     previous_revocations = os.environ.get(
-        "SERVERWARE_POLICY_REVOKED_SIGNING_KEY_IDS"
+        "CATCHPLATE_POLICY_REVOKED_SIGNING_KEY_IDS"
     )
-    os.environ["SERVERWARE_POLICY_REVOKED_SIGNING_KEY_IDS"] = current_key_id
+    os.environ["CATCHPLATE_POLICY_REVOKED_SIGNING_KEY_IDS"] = current_key_id
     policy_bundle._SNAPSHOT_CACHE = None
     if policy_bundle.get_policy_snapshot() is not None:
         raise AssertionError("revoked signing key reused the policy cache")
     if previous_revocations is None:
-        os.environ.pop("SERVERWARE_POLICY_REVOKED_SIGNING_KEY_IDS", None)
+        os.environ.pop("CATCHPLATE_POLICY_REVOKED_SIGNING_KEY_IDS", None)
     else:
         os.environ[
-            "SERVERWARE_POLICY_REVOKED_SIGNING_KEY_IDS"
+            "CATCHPLATE_POLICY_REVOKED_SIGNING_KEY_IDS"
         ] = previous_revocations
     restored = policy_bundle.get_policy_snapshot()
     if restored is None or restored.hash != baseline.hash:
@@ -1331,21 +1331,21 @@ def verify_policy_file_identity_and_rollback(
 
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        os.environ["SERVERWARE_DATA_DIR"] = tmp
-        os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
-        os.environ["SERVERWARE_DEV_AUTHENTICATOR"] = "1"
-        os.environ["SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED"] = "1"
-        os.environ["SERVERWARE_POLICY_PUBLISH_DRY_RUN_REQUIRED"] = "1"
-        os.environ["SERVERWARE_PUBLIC_URL"] = "http://localhost:3000"
-        os.environ["SERVERWARE_WEBAUTHN_ORIGIN"] = "http://localhost:3000"
+        os.environ["CATCHPLATE_DATA_DIR"] = tmp
+        os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
+        os.environ["CATCHPLATE_DEV_AUTHENTICATOR"] = "1"
+        os.environ["CATCHPLATE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED"] = "1"
+        os.environ["CATCHPLATE_POLICY_PUBLISH_DRY_RUN_REQUIRED"] = "1"
+        os.environ["CATCHPLATE_PUBLIC_URL"] = "http://localhost:3000"
+        os.environ["CATCHPLATE_WEBAUTHN_ORIGIN"] = "http://localhost:3000"
 
-        from serverware import app as app_module
-        from serverware import db, policy_bundle, webauthn
-        from serverware.attestation import attestation_document, canonical_json, sha256_prefixed, verify_attestation_quote
-        from serverware.auth import AdminIdentity
+        from catchplate import app as app_module
+        from catchplate import db, policy_bundle, webauthn
+        from catchplate.attestation import attestation_document, canonical_json, sha256_prefixed, verify_attestation_quote
+        from catchplate.auth import AdminIdentity
 
         db.init_db()
         db.upsert_credential_with_id(
@@ -1493,7 +1493,7 @@ def main() -> None:
             )
 
         changed_id = candidate_bundle(policy_bundle, 3)
-        changed_id["metadata"]["id"] = "serverware-other"
+        changed_id["metadata"]["id"] = "catchplate-other"
         changed_id_snapshot = policy_bundle.compile_policy_bundle(
             policy_bundle.sign_policy_bundle(changed_id),
             verify_signature=True,

@@ -1,6 +1,6 @@
 # Consume-only execution grant wire
 
-[`authority_oidc_session_activation_delivery_execution_grant.py`](../serverware/authority_oidc_session_activation_delivery_execution_grant.py)
+[`authority_oidc_session_activation_delivery_execution_grant.py`](../catchplate/authority_oidc_session_activation_delivery_execution_grant.py)
 defines a separate, closed grant format for
 `oidc.session.activation-delivery.consume`. It does not add consumption to the
 generic seven-operation grant or replay inventory. This source is unbuilt and
@@ -10,11 +10,11 @@ proof of enrolled-role admission.
 ## Original commitments and bounds
 
 The envelope schema is
-`serverware.signedOidcSessionActivationDeliveryExecutionGrant/v1`; its payload
-schema is `serverware.oidcSessionActivationDeliveryExecutionGrant/v1`.
+`catchplate.signedOidcSessionActivationDeliveryExecutionGrant/v1`; its payload
+schema is `catchplate.oidcSessionActivationDeliveryExecutionGrant/v1`.
 The separate signature and signed-original identity domains are respectively
-`serverware.oidcSessionActivationDeliveryExecutionGrantSignature/v1` and
-`serverware.oidcSessionActivationDeliveryExecutionGrantIdentity/v1`.
+`catchplate.oidcSessionActivationDeliveryExecutionGrantSignature/v1` and
+`catchplate.oidcSessionActivationDeliveryExecutionGrantIdentity/v1`.
 
 The exact 23 payload fields commit source revision, consume operation, grant
 and current-root enrollment identities, configuration/database/generation,

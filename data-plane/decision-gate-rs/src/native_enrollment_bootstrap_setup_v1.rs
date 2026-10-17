@@ -17,10 +17,10 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use url::{Host, Url};
 
-const ENVELOPE_VERSION: &str = "serverware.signedNativeEnrollmentBootstrapSetup/v1";
-const PAYLOAD_VERSION: &str = "serverware.nativeEnrollmentBootstrapSetup/v1";
+const ENVELOPE_VERSION: &str = "catchplate.signedNativeEnrollmentBootstrapSetup/v1";
+const PAYLOAD_VERSION: &str = "catchplate.nativeEnrollmentBootstrapSetup/v1";
 const PURPOSE: &str = "native-enrollment-bootstrap-setup";
-const DOMAIN: &[u8] = b"serverware/native-enrollment-bootstrap-setup/v1\0";
+const DOMAIN: &[u8] = b"catchplate/native-enrollment-bootstrap-setup/v1\0";
 const MAX_SETUP_BYTES: usize = 32 * 1024;
 const MAX_REQUIREMENTS_BYTES: usize = 64 * 1024;
 const MAX_SECONDS: u64 = 9_223_372_036;

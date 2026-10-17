@@ -56,7 +56,7 @@ pub fn run()->Result<(),String> {
     bootstrap.check()?;identity.check()?;
     if let Some(resources)=&publication {resources.check()?;}
     if let Some(resources)=&runtime {resources.check()?;}
-    let initialized=wire::Initialized {api_version:"serverware.nativeShadowWorkerInitialized/v1".into(),
+    let initialized=wire::Initialized {api_version:"catchplate.nativeShadowWorkerInitialized/v1".into(),
         channel_nonce:nonce.to_owned(),bootstrap_sha256:bootstrap.sha256().to_owned()};
     ipc::wait(channel.as_raw_fd(),libc::POLLOUT,&parent_pidfd,deadline)?;
     ipc::send(channel.as_raw_fd(),&wire::encode(&initialized)?,None)?;
@@ -100,7 +100,7 @@ pub fn run()->Result<(),String> {
         ipc::prove_owned_process(&parent_pidfd,&packet.sender,parent).map_err(|_|"shadow original parent changed during command")?;
         let output=Sealed::new(&output,false)?;
         let result=wire::ResultWire {status:"process-exited-zero".into(),output_sha256:output.sha256().to_owned(),output_bytes:output.length()};
-        let response=wire::Response {api_version:"serverware.nativeShadowWorkerResponse/v1".into(),request,result};
+        let response=wire::Response {api_version:"catchplate.nativeShadowWorkerResponse/v1".into(),request,result};
         ipc::wait(channel.as_raw_fd(),libc::POLLOUT,&parent_pidfd,response.request.deadline_boottime_ns)?;
         if let Some(resources)=&publication {resources.check()?;}
         if let Some(resources)=&runtime {resources.check()?;}

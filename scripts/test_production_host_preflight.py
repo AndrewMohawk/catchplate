@@ -37,16 +37,16 @@ import run_production_readiness  # noqa: E402
 import verify_production_policy_identity  # noqa: E402
 
 CODER_PREFLIGHT_DOCKER_EXECUTABLE_ENV = (
-    "SERVERWARE_CODER_PREFLIGHT_DOCKER_EXECUTABLE"
+    "CATCHPLATE_CODER_PREFLIGHT_DOCKER_EXECUTABLE"
 )
 CODER_PREFLIGHT_COMPOSE_PLUGIN_EXECUTABLE_ENV = (
-    "SERVERWARE_CODER_PREFLIGHT_COMPOSE_PLUGIN_EXECUTABLE"
+    "CATCHPLATE_CODER_PREFLIGHT_COMPOSE_PLUGIN_EXECUTABLE"
 )
 CODER_PREFLIGHT_DOCKER_UNIX_SOCKET_ENV = (
-    "SERVERWARE_CODER_PREFLIGHT_DOCKER_UNIX_SOCKET"
+    "CATCHPLATE_CODER_PREFLIGHT_DOCKER_UNIX_SOCKET"
 )
 CODER_PREFLIGHT_DOCKER_DAEMON_ID_ENV = (
-    "SERVERWARE_CODER_PREFLIGHT_DOCKER_DAEMON_ID"
+    "CATCHPLATE_CODER_PREFLIGHT_DOCKER_DAEMON_ID"
 )
 
 
@@ -107,7 +107,7 @@ def public_key_spki_id(path: Path) -> str:
 
 
 def write_env(path: Path, env: dict[str, str]) -> None:
-    production_env = {key: value for key, value in env.items() if key.startswith("SERVERWARE_")}
+    production_env = {key: value for key, value in env.items() if key.startswith("CATCHPLATE_")}
     path.write_text("\n".join(f"{key}={shlex.quote(value)}" for key, value in sorted(production_env.items())) + "\n", encoding="utf-8")
     path.chmod(0o600)
 
@@ -115,14 +115,14 @@ def write_env(path: Path, env: dict[str, str]) -> None:
 def set_production_images(env: dict[str, str], images_env: Path) -> None:
     images = images_env.read_text(encoding="utf-8").split("=", 1)[1].strip().split(",")
     by_name = {image.rsplit("/", 1)[-1].split("@", 1)[0]: image for image in images}
-    env["SERVERWARE_PRODUCTION_IMAGES"] = ",".join(images)
-    env["SERVERWARE_CONTROL_PLANE_IMAGE"] = by_name["control"]
-    env["SERVERWARE_DECISION_GATE_IMAGE"] = by_name["decision-gate"]
+    env["CATCHPLATE_PRODUCTION_IMAGES"] = ",".join(images)
+    env["CATCHPLATE_CONTROL_PLANE_IMAGE"] = by_name["control"]
+    env["CATCHPLATE_DECISION_GATE_IMAGE"] = by_name["decision-gate"]
 
 
 def set_release_artifacts(env: dict[str, str], paths: dict[str, Path]) -> None:
-    env["SERVERWARE_RELEASE_PROVENANCE_FILE"] = str(paths["provenance"].resolve())
-    env["SERVERWARE_IMAGE_SIGNATURES_FILE"] = str(paths["image_signatures"].resolve())
+    env["CATCHPLATE_RELEASE_PROVENANCE_FILE"] = str(paths["provenance"].resolve())
+    env["CATCHPLATE_IMAGE_SIGNATURES_FILE"] = str(paths["image_signatures"].resolve())
 
 
 def coder_preflight_toolchain() -> tuple[Path, Path, str, str]:
@@ -182,11 +182,11 @@ def coder_preflight_toolchain() -> tuple[Path, Path, str, str]:
 
 def fixture_release_env(paths: dict[str, Path]) -> dict[str, str]:
     env = test_production_readiness.good_env()
-    env["SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND"] = (
-        "/opt/serverware/bin/response-v2-tee-verify"
+    env["CATCHPLATE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND"] = (
+        "/opt/catchplate/bin/response-v2-tee-verify"
     )
     env.update(test_production_handoff.fixture_release_trust_env(paths))
-    env["SERVERWARE_COMPLETION_VERIFICATION_MODE"] = "readiness"
+    env["CATCHPLATE_COMPLETION_VERIFICATION_MODE"] = "readiness"
     fixture_dir = paths["build"].parent.resolve()
     production_python_path = fixture_dir / "production-python"
     production_python_path.write_bytes(Path(sys.executable).resolve().read_bytes())
@@ -215,7 +215,7 @@ def fixture_release_env(paths: dict[str, Path]) -> dict[str, str]:
     env[run_production_readiness.DOCKER_UNIX_SOCKET_ENV] = docker_socket
     env[run_production_readiness.DOCKER_DAEMON_ID_ENV] = docker_daemon_id
     env[run_production_readiness.DOCKER_COMPOSE_PROJECT_NAME_ENV] = (
-        "serverware-production"
+        "catchplate-production"
     )
     env[production_host_preflight.ATTESTATION_EXECUTABLE_DIGEST_MANIFEST_ENV] = json.dumps(
         {
@@ -239,12 +239,12 @@ def write_kms_materials(path: Path, *, mode: int = 0o600) -> None:
                 "broker-kek": {
                     "key_id": "arn:aws:kms:us-east-1:111122223333:key/broker",
                     "ciphertext_blob_b64": base64.b64encode(b"broker-ciphertext").decode("ascii"),
-                    "encryption_context": {"material": "broker-kek", "service": "serverware"},
+                    "encryption_context": {"material": "broker-kek", "service": "catchplate"},
                 },
                 "decision-gate-ca": {
                     "key_id": "arn:aws:kms:us-east-1:111122223333:key/ca",
                     "ciphertext_blob_b64": base64.b64encode(b"ca-ciphertext").decode("ascii"),
-                    "encryption_context": {"material": "decision-gate-ca", "service": "serverware"},
+                    "encryption_context": {"material": "decision-gate-ca", "service": "catchplate"},
                 },
             },
             sort_keys=True,
@@ -265,7 +265,7 @@ def verify_runtime_trust_materials(tmp: Path) -> None:
     helper_dir.mkdir()
     now = datetime.now(timezone.utc)
     ca_key = ec.generate_private_key(ec.SECP256R1())
-    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Serverware test CA")])
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Catchplate test CA")])
     ca_cert = (
         x509.CertificateBuilder()
         .subject_name(ca_name)
@@ -278,7 +278,7 @@ def verify_runtime_trust_materials(tmp: Path) -> None:
         .sign(ca_key, hashes.SHA256())
     )
     server_key = ec.generate_private_key(ec.SECP256R1())
-    server_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "serverware")])
+    server_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "catchplate")])
     server_cert = (
         x509.CertificateBuilder()
         .subject_name(server_name)
@@ -287,18 +287,18 @@ def verify_runtime_trust_materials(tmp: Path) -> None:
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - timedelta(minutes=1))
         .not_valid_after(now + timedelta(hours=1))
-        .add_extension(x509.SubjectAlternativeName([x509.DNSName("serverware")]), critical=False)
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName("catchplate")]), critical=False)
         .sign(ca_key, hashes.SHA256())
     )
-    (tls_dir / "serverware.crt").write_bytes(server_cert.public_bytes(serialization.Encoding.PEM))
-    (tls_dir / "serverware.key").write_bytes(
+    (tls_dir / "catchplate.crt").write_bytes(server_cert.public_bytes(serialization.Encoding.PEM))
+    (tls_dir / "catchplate.key").write_bytes(
         server_key.private_bytes(
             serialization.Encoding.PEM,
             serialization.PrivateFormat.PKCS8,
             serialization.NoEncryption(),
         )
     )
-    (tls_dir / "serverware.key").chmod(0o600)
+    (tls_dir / "catchplate.key").chmod(0o600)
     (tls_dir / "ca.pem").write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
     anchor_key = ec.generate_private_key(ec.SECP256R1())
     anchor_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "audit-anchor")])
@@ -329,7 +329,7 @@ def verify_runtime_trust_materials(tmp: Path) -> None:
         "response-proof-attest",
         "lease-recipient-verify",
         "control-plane-attestation-verify",
-        "serverware-proof-client",
+        "catchplate-proof-client",
     ):
         helper = helper_dir / name
         helper.write_bytes(b"test helper\n")
@@ -338,11 +338,11 @@ def verify_runtime_trust_materials(tmp: Path) -> None:
     tee_verifier = helper_dir / "response-v2-tee-verify"
     tee_verifier.write_bytes(fixture_static_amd64_elf())
     tee_verifier.chmod(0o755)
-    tee_verifier_setting = "SERVERWARE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND"
-    env[tee_verifier_setting] = "/opt/serverware/bin/response-v2-tee-verify"
-    env["SERVERWARE_CONTROL_PLANE_TLS_DIR"] = str(tls_dir)
-    env["SERVERWARE_AUDIT_ANCHOR_TLS_DIR"] = str(anchor_tls_dir)
-    env["SERVERWARE_ATTESTATION_HELPER_DIR"] = str(helper_dir)
+    tee_verifier_setting = "CATCHPLATE_RESPONSE_OBSERVATION_V2_TEE_VERIFY_COMMAND"
+    env[tee_verifier_setting] = "/opt/catchplate/bin/response-v2-tee-verify"
+    env["CATCHPLATE_CONTROL_PLANE_TLS_DIR"] = str(tls_dir)
+    env["CATCHPLATE_AUDIT_ANCHOR_TLS_DIR"] = str(anchor_tls_dir)
+    env["CATCHPLATE_ATTESTATION_HELPER_DIR"] = str(helper_dir)
     proof_ca = tmp / "proxy-ca.pem"
     proof_ca.write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
     collector_private = Ed25519PrivateKey.generate()
@@ -378,13 +378,13 @@ def verify_runtime_trust_materials(tmp: Path) -> None:
             serialization.PublicFormat.SubjectPublicKeyInfo,
         )
     )
-    env["SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND"] = "/opt/serverware/bin/serverware-proof-client"
-    env["SERVERWARE_PROXY_PROOF_CA_BUNDLE"] = str(proof_ca)
-    env["SERVERWARE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY"] = str(collector_private_path)
-    env["SERVERWARE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY"] = str(collector_public_path)
-    env["SERVERWARE_PROXY_PROOF_VERIFIER_PUBLIC_KEY"] = str(verifier_public_path)
-    env["SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID"] = sha256_prefixed(collector_public_der)
-    env["SERVERWARE_PROXY_PROOF_VERIFIER_KEY_ID"] = sha256_prefixed(verifier_public_der)
+    env["CATCHPLATE_PROXY_PROOF_COLLECTOR_COMMAND"] = "/opt/catchplate/bin/catchplate-proof-client"
+    env["CATCHPLATE_PROXY_PROOF_CA_BUNDLE"] = str(proof_ca)
+    env["CATCHPLATE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY"] = str(collector_private_path)
+    env["CATCHPLATE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY"] = str(collector_public_path)
+    env["CATCHPLATE_PROXY_PROOF_VERIFIER_PUBLIC_KEY"] = str(verifier_public_path)
+    env["CATCHPLATE_PROXY_PROOF_COLLECTOR_KEY_ID"] = sha256_prefixed(collector_public_der)
+    env["CATCHPLATE_PROXY_PROOF_VERIFIER_KEY_ID"] = sha256_prefixed(verifier_public_der)
     production_python = tmp / "production-python"
     production_python.write_bytes(Path(sys.executable).resolve().read_bytes())
     production_python.chmod(0o755)
@@ -420,7 +420,7 @@ def verify_runtime_trust_materials(tmp: Path) -> None:
     status, failures = production_host_preflight.runtime_trust_materials_check(env, skip_host_check=False)
     if failures or status.get("ok") is not True:
         raise AssertionError(f"valid runtime trust materials failed: {status} {failures}")
-    if status.get("proof_collector_key_id") != env["SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID"]:
+    if status.get("proof_collector_key_id") != env["CATCHPLATE_PROXY_PROOF_COLLECTOR_KEY_ID"]:
         raise AssertionError(f"response-proof collector key was not bound: {status}")
     executable_digests = status.get("executable_digests") or []
     if (
@@ -439,7 +439,7 @@ def verify_runtime_trust_materials(tmp: Path) -> None:
             f"Docker absolute path was incorrectly constrained to the helper directory: {docker_report}"
         )
 
-    for command in ("", "/opt/serverware/bin/response-v2-tee-verify --skip-checks"):
+    for command in ("", "/opt/catchplate/bin/response-v2-tee-verify --skip-checks"):
         _, failures = production_host_preflight.runtime_trust_materials_check(
             {**env, tee_verifier_setting: command}, skip_host_check=False
         )
@@ -465,7 +465,7 @@ def verify_runtime_trust_materials(tmp: Path) -> None:
         tee_verifier.write_bytes(static_verifier)
 
     missing_manifest = dict(executable_digest_manifest)
-    missing_manifest.pop("SERVERWARE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE")
+    missing_manifest.pop("CATCHPLATE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE")
     missing_manifest_env = {
         **env,
         production_host_preflight.ATTESTATION_EXECUTABLE_DIGEST_MANIFEST_ENV: json.dumps(
@@ -482,7 +482,7 @@ def verify_runtime_trust_materials(tmp: Path) -> None:
     extra_manifest_env = {
         **env,
         production_host_preflight.ATTESTATION_EXECUTABLE_DIGEST_MANIFEST_ENV: json.dumps(
-            {**executable_digest_manifest, "SERVERWARE_UNEXPECTED_HELPER_COMMAND": sha256_prefixed(b"extra")},
+            {**executable_digest_manifest, "CATCHPLATE_UNEXPECTED_HELPER_COMMAND": sha256_prefixed(b"extra")},
             sort_keys=True,
             separators=(",", ":"),
         ),
@@ -495,7 +495,7 @@ def verify_runtime_trust_materials(tmp: Path) -> None:
         raise AssertionError(f"open executable digest manifest was accepted: {extra_manifest_failures}")
 
     invalid_manifest = dict(executable_digest_manifest)
-    invalid_manifest["SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE"] = "sha256:INVALID"
+    invalid_manifest["CATCHPLATE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE"] = "sha256:INVALID"
     invalid_manifest_env = {
         **env,
         production_host_preflight.ATTESTATION_EXECUTABLE_DIGEST_MANIFEST_ENV: json.dumps(
@@ -522,7 +522,7 @@ def verify_runtime_trust_materials(tmp: Path) -> None:
     changed_helper.write_bytes(original_helper_bytes)
     changed_helper.chmod(0o755)
 
-    changed_collector = helper_dir / "serverware-proof-client"
+    changed_collector = helper_dir / "catchplate-proof-client"
     original_collector_bytes = changed_collector.read_bytes()
     changed_collector.write_bytes(b"changed collector bytes\n")
     changed_collector.chmod(0o755)
@@ -571,13 +571,13 @@ def verify_runtime_trust_materials(tmp: Path) -> None:
     symlink_helper_dir = tmp / "helpers-link"
     symlink_helper_dir.symlink_to(helper_dir, target_is_directory=True)
     _, symlink_directory_failures = production_host_preflight.runtime_trust_materials_check(
-        {**env, "SERVERWARE_ATTESTATION_HELPER_DIR": str(symlink_helper_dir)},
+        {**env, "CATCHPLATE_ATTESTATION_HELPER_DIR": str(symlink_helper_dir)},
         skip_host_check=False,
     )
     if not any("non-symlink directories" in failure for failure in symlink_directory_failures):
         raise AssertionError(f"symlink helper directory was accepted: {symlink_directory_failures}")
 
-    mismatched_proof_env = {**env, "SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID": "sha256:" + "0" * 64}
+    mismatched_proof_env = {**env, "CATCHPLATE_PROXY_PROOF_COLLECTOR_KEY_ID": "sha256:" + "0" * 64}
     _, proof_key_failures = production_host_preflight.runtime_trust_materials_check(
         mismatched_proof_env,
         skip_host_check=False,
@@ -599,11 +599,11 @@ def verify_runtime_trust_materials(tmp: Path) -> None:
         .not_valid_after(now + timedelta(hours=1))
         .sign(ca_key, hashes.SHA256())
     )
-    (tls_dir / "serverware.crt").write_bytes(missing_san_cert.public_bytes(serialization.Encoding.PEM))
+    (tls_dir / "catchplate.crt").write_bytes(missing_san_cert.public_bytes(serialization.Encoding.PEM))
     _, san_failures = production_host_preflight.runtime_trust_materials_check(env, skip_host_check=False)
-    if not any("DNS SAN serverware" in failure for failure in san_failures):
+    if not any("DNS SAN catchplate" in failure for failure in san_failures):
         raise AssertionError(f"certificate without the internal DNS SAN was accepted: {san_failures}")
-    (tls_dir / "serverware.crt").write_bytes(server_cert.public_bytes(serialization.Encoding.PEM))
+    (tls_dir / "catchplate.crt").write_bytes(server_cert.public_bytes(serialization.Encoding.PEM))
     original_ca = tls_dir / "ca.pem"
     replacement_ca = tls_dir / "ca-real.pem"
     original_ca.replace(replacement_ca)
@@ -628,7 +628,7 @@ def run_preflight(paths: dict[str, Path], *extra: str, allow_test_bypass: bool =
         reproduced_images = []
         for image in build["images"]:
             item = {"service": image["service"], "image_id": image["image_id"]}
-            if image["service"] == "serverware-decision-gate":
+            if image["service"] == "catchplate-decision-gate":
                 item["rust_binary_sha256"] = image["binary_digest"]
             reproduced_images.append(item)
         security, _ = test_production_release_input_preflight.release_security_fixture(
@@ -650,7 +650,7 @@ def run_preflight(paths: dict[str, Path], *extra: str, allow_test_bypass: bool =
         paths["bench"].write_text(json.dumps(bench, sort_keys=True) + "\n", encoding="utf-8")
     env = os.environ.copy()
     if allow_test_bypass:
-        env["SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS"] = "1"
+        env["CATCHPLATE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS"] = "1"
     return subprocess.run(
         [
             sys.executable,
@@ -725,8 +725,8 @@ def verify_oauth_secret_mounts(tmp: Path) -> None:
     google.chmod(0o600)
     x_secret.chmod(0o400)
     env = {
-        "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE": str(google),
-        "SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE": str(x_secret),
+        "CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE": str(google),
+        "CATCHPLATE_X_OAUTH_CLIENT_SECRET_FILE": str(x_secret),
     }
     original_uid = production_host_preflight.CONTROL_PLANE_RUNTIME_UID
     if original_uid != 65532:
@@ -780,10 +780,10 @@ def verify_response_signing_key_custody(tmp: Path) -> None:
     public_path.chmod(0o644)
     key_id_path.chmod(0o644)
     env = {
-        "SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE": str(private_path),
-        "SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY": str(public_path),
-        "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY": str(public_path),
-        "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID": key_id,
+        "CATCHPLATE_RESPONSE_SIGNING_PRIVATE_KEY_FILE": str(private_path),
+        "CATCHPLATE_RESPONSE_SIGNING_PUBLIC_KEY": str(public_path),
+        "CATCHPLATE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY": str(public_path),
+        "CATCHPLATE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID": key_id,
     }
 
     status, failures = production_host_preflight.response_signing_key_custody_check(
@@ -796,13 +796,13 @@ def verify_response_signing_key_custody(tmp: Path) -> None:
 
     fifo_path = tmp / "response-signing-private.fifo"
     os.mkfifo(fifo_path, 0o600)
-    fifo_env = {**env, "SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE": str(fifo_path)}
+    fifo_env = {**env, "CATCHPLATE_RESPONSE_SIGNING_PRIVATE_KEY_FILE": str(fifo_path)}
     fifo_probe_code = (
         "import json,os,sys; "
         "from pathlib import Path; "
         "sys.path.insert(0,'scripts'); "
         "import production_host_preflight; "
-        "from serverware.response_identity import "
+        "from catchplate.response_identity import "
         "ResponseIdentityPublicationError,validate_response_signing_key_custody; "
         f"env=json.loads({json.dumps(json.dumps(fifo_env))}); "
         "status,failures=production_host_preflight.response_signing_key_custody_check("
@@ -846,7 +846,7 @@ def verify_response_signing_key_custody(tmp: Path) -> None:
 
     symlink = tmp / "response-signing-private-symlink.pem"
     symlink.symlink_to(private_path)
-    symlink_env = {**env, "SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE": str(symlink)}
+    symlink_env = {**env, "CATCHPLATE_RESPONSE_SIGNING_PRIVATE_KEY_FILE": str(symlink)}
     _, symlink_failures = production_host_preflight.response_signing_key_custody_check(
         symlink_env,
         skip_host_check=False,
@@ -912,7 +912,7 @@ def verify_response_signing_key_custody(tmp: Path) -> None:
             "-c",
             (
                 "from pathlib import Path; "
-                "from serverware.response_identity import validate_response_signing_key_custody; "
+                "from catchplate.response_identity import validate_response_signing_key_custody; "
                 f"validate_response_signing_key_custody(Path({str(private_path)!r}),"
                 f"Path({str(public_path)!r}),Path({str(key_id_path)!r}))"
             ),
@@ -1056,8 +1056,8 @@ def verify_preflight_script_descriptor_race(tmp: Path) -> None:
 def verify_launcher_authentication_precedes_env_parse(tmp: Path) -> None:
     env_path = tmp / "production-readiness.env"
     env_path.write_text(
-        "SERVERWARE_COMPLETION_VERIFICATION_MODE=readiness\n"
-        "SERVERWARE_FINAL_LAUNCHER_CONTRACT=descriptor-sealed-bootstrap-v3\n",
+        "CATCHPLATE_COMPLETION_VERIFICATION_MODE=readiness\n"
+        "CATCHPLATE_FINAL_LAUNCHER_CONTRACT=descriptor-sealed-bootstrap-v3\n",
         encoding="ascii",
     )
     env_path.chmod(0o600)
@@ -1068,8 +1068,8 @@ def verify_launcher_authentication_precedes_env_parse(tmp: Path) -> None:
         nonlocal parser_reached
         parser_reached = True
         return {
-            "SERVERWARE_COMPLETION_VERIFICATION_MODE": "readiness",
-            "SERVERWARE_FINAL_LAUNCHER_CONTRACT": (
+            "CATCHPLATE_COMPLETION_VERIFICATION_MODE": "readiness",
+            "CATCHPLATE_FINAL_LAUNCHER_CONTRACT": (
                 "descriptor-sealed-bootstrap-v3"
             ),
         }
@@ -1139,7 +1139,7 @@ def verify_launcher_import_and_alias_boundary() -> None:
             )
     retained_origins = (
         "/proc/self/fd/201/run_production_readiness.py",
-        "/proc/self/fd/202/serverware/module.py",
+        "/proc/self/fd/202/catchplate/module.py",
     )
     if not all(
         production_host_preflight._is_retained_import_origin(
@@ -1188,8 +1188,8 @@ def verify_launcher_import_and_alias_boundary() -> None:
 def verify_nonce_rollback_assurance_argv_binding(tmp: Path) -> None:
     env_path = tmp / "nonce-production-readiness.env"
     env_path.write_text(
-        "SERVERWARE_COMPLETION_VERIFICATION_MODE=readiness\n"
-        "SERVERWARE_FINAL_LAUNCHER_CONTRACT=descriptor-sealed-bootstrap-v3\n",
+        "CATCHPLATE_COMPLETION_VERIFICATION_MODE=readiness\n"
+        "CATCHPLATE_FINAL_LAUNCHER_CONTRACT=descriptor-sealed-bootstrap-v3\n",
         encoding="ascii",
     )
     env_path.chmod(0o600)
@@ -1230,7 +1230,7 @@ def verify_nonce_rollback_assurance_argv_binding(tmp: Path) -> None:
     boot_id_sha256 = "sha256:" + "f" * 64
     manifest_sha256 = "sha256:" + "0" * 64
     request = {
-        "apiVersion": "serverware.launchAuthorizationRequest/v2",
+        "apiVersion": "catchplate.launchAuthorizationRequest/v2",
         "launcherNonce": launcher_nonce,
         "bootIdSha256": boot_id_sha256,
         "manifestSha256": manifest_sha256,
@@ -1302,7 +1302,7 @@ def verify_nonce_rollback_assurance_argv_binding(tmp: Path) -> None:
         "changedUnixNanos": 1,
     }
     receipt = {
-        "apiVersion": "serverware.bootstrapReceipt/v3",
+        "apiVersion": "catchplate.bootstrapReceipt/v3",
         "kind": "ProductionBootstrapReceipt",
         "launchId": launcher_nonce,
         "sha256": "sha256:" + "3" * 64,
@@ -1312,7 +1312,7 @@ def verify_nonce_rollback_assurance_argv_binding(tmp: Path) -> None:
             "request": request,
             "requestSha256": "sha256:" + "5" * 64,
             "envelope": {
-                "apiVersion": "serverware.launchAuthorization/v2",
+                "apiVersion": "catchplate.launchAuthorization/v2",
                 "kind": "ProductionLaunchAuthorization",
                 "statement": {
                     "authorityKeyId": role_values["launchAuthority"],
@@ -1335,12 +1335,12 @@ def verify_nonce_rollback_assurance_argv_binding(tmp: Path) -> None:
         "launchAuthorityKeyId": role_values["launchAuthority"],
         "launchAuthorityRootSha256": "sha256:" + "7" * 64,
         "launcher": {
-            "path": "/opt/serverware/launchers/fixture/launcher",
+            "path": "/opt/catchplate/launchers/fixture/launcher",
             "sha256": "sha256:" + "8" * 64,
             "metadata": dict(summary_metadata),
         },
         "manifest": {
-            "path": "/etc/serverware/production-launch.json",
+            "path": "/etc/catchplate/production-launch.json",
             "sha256": manifest_sha256,
             "metadata": dict(summary_metadata),
         },
@@ -1350,7 +1350,7 @@ def verify_nonce_rollback_assurance_argv_binding(tmp: Path) -> None:
             ),
             "contractSha256": expected_contract_sha256,
             "pinsFile": {
-                "path": "/etc/serverware/nonce-pins.json",
+                "path": "/etc/catchplate/nonce-pins.json",
                 "sha256": expected_pins_sha256,
                 "metadata": dict(summary_metadata),
             },
@@ -1426,8 +1426,8 @@ def verify_nonce_rollback_assurance_argv_binding(tmp: Path) -> None:
         return expected_summary
 
     run_production_readiness.load_env_bytes = lambda _data, _path: {
-        "SERVERWARE_COMPLETION_VERIFICATION_MODE": "readiness",
-        "SERVERWARE_FINAL_LAUNCHER_CONTRACT": (
+        "CATCHPLATE_COMPLETION_VERIFICATION_MODE": "readiness",
+        "CATCHPLATE_FINAL_LAUNCHER_CONTRACT": (
             "descriptor-sealed-bootstrap-v3"
         ),
     }
@@ -1757,7 +1757,7 @@ def verify_nonce_rollback_assurance_argv_binding(tmp: Path) -> None:
                         "request": {
                             **request,
                             "launchAttemptJournalDomain": (
-                                "serverware.wrongAttemptJournal/v1"
+                                "catchplate.wrongAttemptJournal/v1"
                             ),
                         },
                     },
@@ -1887,8 +1887,8 @@ def verify_nonce_rollback_assurance_argv_binding(tmp: Path) -> None:
 def verify_readiness_only_authority_boundary(tmp: Path) -> None:
     final_env_path = tmp / "final-mode.env"
     final_env_path.write_text(
-        "SERVERWARE_COMPLETION_VERIFICATION_MODE=final\n"
-        "SERVERWARE_FINAL_LAUNCHER_CONTRACT=descriptor-sealed-bootstrap-v3\n",
+        "CATCHPLATE_COMPLETION_VERIFICATION_MODE=final\n"
+        "CATCHPLATE_FINAL_LAUNCHER_CONTRACT=descriptor-sealed-bootstrap-v3\n",
         encoding="ascii",
     )
     final_env_path.chmod(0o600)
@@ -1926,7 +1926,7 @@ def verify_readiness_only_authority_boundary(tmp: Path) -> None:
             )
         except ValueError as exc:
             if (
-                "requires SERVERWARE_COMPLETION_VERIFICATION_MODE=readiness"
+                "requires CATCHPLATE_COMPLETION_VERIFICATION_MODE=readiness"
                 not in str(exc)
             ):
                 raise
@@ -2066,7 +2066,7 @@ def main() -> None:
                 expected_digest=env[run_production_readiness.DOCKER_COMPOSE_PLUGIN_SHA256_ENV],
                 cwd=ROOT,
                 env=run_production_readiness.docker_subprocess_environment(
-                    {name: value for name, value in os.environ.items() if not name.startswith("SERVERWARE_")},
+                    {name: value for name, value in os.environ.items() if not name.startswith("CATCHPLATE_")},
                     Path(env[run_production_readiness.DOCKER_UNIX_SOCKET_ENV]),
                 ),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, text=True,
@@ -2081,7 +2081,7 @@ def main() -> None:
             )
         compose_images = compose_summary.get("images", {})
         if set(compose_images) != {
-            "serverware",
+            "catchplate",
             "audit-anchor",
             "policy-authority-runtime",
             "policy-authority-verifier",
@@ -2108,13 +2108,13 @@ def main() -> None:
                 "production custody is not bound to the immutable decision-gate image"
             )
         if set(compose_images.values()) != {
-            env["SERVERWARE_CONTROL_PLANE_IMAGE"],
-            env["SERVERWARE_DECISION_GATE_IMAGE"],
+            env["CATCHPLATE_CONTROL_PLANE_IMAGE"],
+            env["CATCHPLATE_DECISION_GATE_IMAGE"],
         }:
             raise AssertionError(f"production Compose proof did not bind immutable images: {compose_summary}")
         for service, image in compose_images.items():
-            control_image = service in {"serverware", "audit-anchor"} or service.startswith("policy-authority-")
-            expected_image = env["SERVERWARE_CONTROL_PLANE_IMAGE" if control_image else "SERVERWARE_DECISION_GATE_IMAGE"]
+            control_image = service in {"catchplate", "audit-anchor"} or service.startswith("policy-authority-")
+            expected_image = env["CATCHPLATE_CONTROL_PLANE_IMAGE" if control_image else "CATCHPLATE_DECISION_GATE_IMAGE"]
             if image != expected_image:
                 raise AssertionError(f"production service uses the wrong image family: {service}")
         rendered_model = json.loads(compose_canonical)
@@ -2123,8 +2123,8 @@ def main() -> None:
         for label, mutate, expected_error in (
             ("missing authority service", lambda model: model["services"].pop("policy-authority-issuer"), "services must be exactly"),
             ("extra service", lambda model: model["services"].__setitem__("unreviewed-service", {}), "services must be exactly"),
-            ("wrong authority image", lambda model: model["services"]["policy-authority-issuer"].__setitem__("image", env["SERVERWARE_DECISION_GATE_IMAGE"]), "does not use its immutable published image"),
-            ("wrong custody image", lambda model: model["services"]["response-v2-state-authority"].__setitem__("image", env["SERVERWARE_CONTROL_PLANE_IMAGE"]), "does not use its immutable published image"),
+            ("wrong authority image", lambda model: model["services"]["policy-authority-issuer"].__setitem__("image", env["CATCHPLATE_DECISION_GATE_IMAGE"]), "does not use its immutable published image"),
+            ("wrong custody image", lambda model: model["services"]["response-v2-state-authority"].__setitem__("image", env["CATCHPLATE_CONTROL_PLANE_IMAGE"]), "does not use its immutable published image"),
             ("build override", lambda model: model["services"]["policy-authority-executor"].__setitem__("build", {"context": "."}), "must not contain a build directive"),
         ):
             candidate = copy.deepcopy(rendered_model)
@@ -2142,7 +2142,7 @@ def main() -> None:
                 else:
                     raise AssertionError(f"production Compose accepted {label}")
         expected_images = generate_release_provenance.merge_production_images_env.validate_production_images(
-            env["SERVERWARE_PRODUCTION_IMAGES"]
+            env["CATCHPLATE_PRODUCTION_IMAGES"]
         )
         measured_commands: list[list[str]] = []
         original_measured_command = run_production_readiness.run_measured_command
@@ -2185,7 +2185,7 @@ def main() -> None:
             != compose_status.get("runtime_model_sha256")
             or set(runtime_model.get("services") or {})
             != set(run_production_readiness.FINAL_SERVICE_USERS)
-            or (runtime_model["services"]["serverware"]).get("compose_user")
+            or (runtime_model["services"]["catchplate"]).get("compose_user")
             != "65532:65532"
         ):
             raise AssertionError(
@@ -2297,8 +2297,8 @@ def main() -> None:
 
         launcher_readiness_security_env = {
             **env,
-            "SERVERWARE_COMPLETION_VERIFICATION_MODE": "readiness",
-            "SERVERWARE_FINAL_LAUNCHER_CONTRACT": (
+            "CATCHPLATE_COMPLETION_VERIFICATION_MODE": "readiness",
+            "CATCHPLATE_FINAL_LAUNCHER_CONTRACT": (
                 "descriptor-sealed-bootstrap-v3"
             ),
             run_production_readiness.POLICY_TRUST_ROOT_ENV: str(paths["policy_key"]),
@@ -2424,7 +2424,7 @@ def main() -> None:
         materials["debug-material"] = {
             "key_id": "arn:aws:kms:us-east-1:111122223333:key/debug",
             "ciphertext_blob_b64": base64.b64encode(b"debug-ciphertext").decode("ascii"),
-            "encryption_context": {"material": "debug-material", "service": "serverware"},
+            "encryption_context": {"material": "debug-material", "service": "catchplate"},
         }
         paths["kms_materials"].write_text(json.dumps(materials, sort_keys=True) + "\n", encoding="utf-8")
         paths["kms_materials"].chmod(0o600)
@@ -2438,7 +2438,7 @@ def main() -> None:
         paths["kms_materials"] = tmp / "kms-materials.json"
         env = fixture_release_env(paths)
         set_release_artifacts(env, paths)
-        env["SERVERWARE_PRODUCTION_IMAGES"] = "registry.prod.serverware.dev/serverware/control@sha256:" + "c" * 64
+        env["CATCHPLATE_PRODUCTION_IMAGES"] = "registry.prod.catchplate.dev/catchplate/control@sha256:" + "c" * 64
         write_env(paths["env"], env)
         write_kms_materials(paths["kms_materials"])
         rejected = run_preflight(paths)

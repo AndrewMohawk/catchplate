@@ -16,7 +16,7 @@ from test_authority_revocation_planning_source import assigned, call, calls, def
 class RevocationWriterAckExpectationSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.text, cls.tree = source("serverware/authority_revocation_writer_ack_expectation.py", 64 * 1024)
+        cls.text, cls.tree = source("catchplate/authority_revocation_writer_ack_expectation.py", 64 * 1024)
         cls.worker = definition(cls.tree, "_expected_ack_request_and_freshness_on_work")
         cls.compatibility = definition(cls.tree, "_expected_ack_request_on_work")
 
@@ -60,10 +60,10 @@ class RevocationWriterAckExpectationSourceTests(unittest.TestCase):
         imports = [(node.module, [(item.name, item.asname) for item in node.names])
             for node in self.tree.body if isinstance(node, ast.ImportFrom)]
         self.assertEqual(imports, [("__future__", [("annotations", None)]),
-            ("serverware", [("authority_contract", "authority")]),
-            ("serverware", [("authority_revocation_retention", "retention")]),
-            ("serverware", [("authority_revocation_writer_acknowledgment", "acknowledgment")]),
-            ("serverware", [("authority_revocation_writer_commitment", "commitment")])])
+            ("catchplate", [("authority_contract", "authority")]),
+            ("catchplate", [("authority_revocation_retention", "retention")]),
+            ("catchplate", [("authority_revocation_writer_acknowledgment", "acknowledgment")]),
+            ("catchplate", [("authority_revocation_writer_commitment", "commitment")])])
         self.assertFalse(any(isinstance(node, ast.Import) for node in ast.walk(self.tree)))
         self.assertEqual([node.name for node in self.tree.body if isinstance(node, ast.FunctionDef)],
                          ["_expected_ack_request_and_freshness_on_work", "_expected_ack_request_on_work"])
@@ -108,7 +108,7 @@ class RevocationWriterAckExpectationSourceTests(unittest.TestCase):
             maximum_age_ns=maximum_age_ns, maximum_clock_skew_ns=maximum_clock_skew_ns, work=work)''')
         self.assertIs(assigned(self.worker, "received"), receiver)
         self.assertLess(identities.end_lineno, receiver.lineno)
-        _, controls = source("serverware/authority_revocation_writer_commitment.py", 64 * 1024)
+        _, controls = source("catchplate/authority_revocation_writer_commitment.py", 64 * 1024)
         current = definition(controls, "_current")
         skew, = [node for node in current.body if isinstance(node, ast.If)]
         self.shape(skew.test, "skew != authority.VERIFIER_MAX_CLOCK_SKEW_NS")
@@ -147,7 +147,7 @@ class RevocationWriterAckExpectationSourceTests(unittest.TestCase):
         # the signed historical clocks carried in its closed fifteen fields.
         self.assertNotIn("now_epoch_ns", [item.arg for item in replay.keywords])
         self.assertNotIn("now_monotonic_ns", [item.arg for item in replay.keywords])
-        _, plan_source = source("serverware/authority_revocation_plan.py", 256 * 1024)
+        _, plan_source = source("catchplate/authority_revocation_plan.py", 256 * 1024)
         fields = {item.value for item in assigned(plan_source, "_VERIFICATION_INPUTS").args[0].elts}
         self.assertEqual(fields - {"envelope"}, {
             "expected_request", "expected_planner_identity", "planner_public_key",
@@ -156,9 +156,9 @@ class RevocationWriterAckExpectationSourceTests(unittest.TestCase):
             "deadline_epoch_ns", "deadline_monotonic_ns", "now_epoch_ns", "now_monotonic_ns",
             "database_now", "maximum_assertion_age_ns", "maximum_plan_age_ns", "maximum_clock_skew_ns",
             "expected_before", "expected_approver_policy_digest"})
-        _, wire = source("serverware/authority_revocation_wire.py", 64 * 1024)
+        _, wire = source("catchplate/authority_revocation_wire.py", 64 * 1024)
         self.shape(assigned(wire, "_EXPECTATIONS"), 'plan._VERIFICATION_INPUTS - {"envelope"}')
-        _, action = source("serverware/authority_revocation_writer_action.py", 64 * 1024)
+        _, action = source("catchplate/authority_revocation_writer_action.py", 64 * 1024)
         self.shape(assigned(action, "_EXTERNAL_FIELDS"), '''retention.wire._EXPECTATIONS - {
             "planner_public_key", "verifier_public_key", "expected_planner_identity", "expected_verifier_identity"}''')
 
@@ -187,7 +187,7 @@ class RevocationWriterAckExpectationSourceTests(unittest.TestCase):
         replay = call(self.worker, "retention._verify_record_on_work")
         self.assertEqual([replay.lineno, request.lineno, loop.lineno, closed.lineno, returned.lineno],
             sorted([replay.lineno, request.lineno, loop.lineno, closed.lineno, returned.lineno]))
-        _, ack = source("serverware/authority_revocation_writer_acknowledgment.py", 64 * 1024)
+        _, ack = source("catchplate/authority_revocation_writer_acknowledgment.py", 64 * 1024)
         expected = {item.value for item in assigned(ack, "REQUEST_FIELDS").args[0].elts}
         self.assertEqual({item.value for item in request.keys} | {
             "exact_intent_bytes_digest", "exact_intent_byte_count", "exact_relay_bytes_digest",
@@ -196,15 +196,15 @@ class RevocationWriterAckExpectationSourceTests(unittest.TestCase):
         self.assertEqual(len(expected), 19)
 
     def test_genuine_workers_remain_linked_without_database_clock_signing_or_allowance_substitutes(self):
-        _, controls = source("serverware/authority_revocation_writer_commitment.py", 64 * 1024)
+        _, controls = source("catchplate/authority_revocation_writer_commitment.py", 64 * 1024)
         receiver = definition(controls, "_verify_commitments_on_work")
         self.assertEqual(len(calls(receiver, "capability._signature")), 2)
         self.assertEqual(len(calls(receiver, "_bind_intent")), 1)
-        _, retained = source("serverware/authority_revocation_retention.py", 64 * 1024)
+        _, retained = source("catchplate/authority_revocation_retention.py", 64 * 1024)
         replay = definition(retained, "_verify_record_on_work")
         actual = call(replay, "plan._verify_signed_revocation_plan_on_work")
         self.assertEqual([item.value.id for item in actual.keywords if item.arg == "work"], ["work"])
-        _, record_type = source("serverware/authority_revocation_plan.py", 256 * 1024)
+        _, record_type = source("catchplate/authority_revocation_plan.py", 256 * 1024)
         signed = definition(record_type, "_verify_signed_revocation_plan_on_work")
         self.assertTrue(calls(signed, "_verify_on_ledger"))
         for forbidden in ("_ValidationWork", "QueryReadValidationLimits", "psycopg.connect",

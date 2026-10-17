@@ -18,8 +18,8 @@ from cryptography.exceptions import InvalidSignature
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_plan as plan
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_challenge_plan as plan
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 from test_authority_challenge_plan_request import fixture as request_fixture
 from test_authority_challenge_snapshot import component_owner
 

@@ -23,19 +23,19 @@ to the original receipt expiry. The configured request timeout is 0.05–30 seco
 
 ## Fixed delivery and cold admission
 
-[Root delivery](../serverware/registration_evidence_signer_entrypoint.py) starts
+[Root delivery](../catchplate/registration_evidence_signer_entrypoint.py) starts
 as root with exactly one descriptor above stdio: systemd's activated stream FD 3,
-named `serverware-registration-evidence`. It requires the actual current
+named `catchplate-registration-evidence`. It requires the actual current
 `LISTEN_PID`, one listener, the fixed Unix socket path, and a listening stream.
 The final original inventory is exactly:
 
 | FD | Original retained material | Fixed source or endpoint |
 | --- | --- | --- |
-| 198 | Independent root public key, sealed, at most 16 KiB | `/run/serverware/registration-evidence-trust/root-public-key.pem` |
-| 199 | Original signed bootstrap, sealed, at most 4 MiB | `/run/serverware/registration-evidence-trust/bootstrap.json` |
-| 200 | Nonblocking activated Unix stream listener | `/run/serverware/registration-evidence/signer.sock` |
-| 201 | Dedicated evidence private key, sealed, at most 4096 bytes | `/run/secrets/serverware-registration-evidence-signing-key` |
-| 202 | Existing replay-directory handle | `/var/lib/serverware/registration-evidence-replay` |
+| 198 | Independent root public key, sealed, at most 16 KiB | `/run/catchplate/registration-evidence-trust/root-public-key.pem` |
+| 199 | Original signed bootstrap, sealed, at most 4 MiB | `/run/catchplate/registration-evidence-trust/bootstrap.json` |
+| 200 | Nonblocking activated Unix stream listener | `/run/catchplate/registration-evidence/signer.sock` |
+| 201 | Dedicated evidence private key, sealed, at most 4096 bytes | `/run/secrets/catchplate-registration-evidence-signing-key` |
+| 202 | Existing replay-directory handle | `/var/lib/catchplate/registration-evidence-replay` |
 
 Slots are reserved without overwriting occupied descriptors. Files and their
 ancestors are checked without following symlinks; original material is stable,
@@ -48,8 +48,8 @@ Delivery drops every supplementary group and all root IDs/capabilities to
 `65517:65517`. The socket is `65517:65532`, mode `0660`, and the actual service
 accepts only peer UID/GID `65532:65532` before request bytes. Unknown inherited
 descriptors are fatal. A rebuilt environment exposes only the two signer FD
-names (`SERVERWARE_REGISTRATION_SIGNER_ROOT_PUBLIC_KEY_FD=198` and
-`SERVERWARE_REGISTRATION_SIGNER_BOOTSTRAP_FD=199`), the fixed process mode
+names (`CATCHPLATE_REGISTRATION_SIGNER_ROOT_PUBLIC_KEY_FD=198` and
+`CATCHPLATE_REGISTRATION_SIGNER_BOOTSTRAP_FD=199`), the fixed process mode
 `webauthn-registration-evidence-signer`, and fixed interpreter environment.
 There is no ambient key, DSN, root-path or generic authority-role fallback.
 
@@ -64,7 +64,7 @@ The fixed isolated launcher is
 `/runtime/authority-bootstrap/registration_evidence_signer_launcher.py`.
 Its only modes are `--root-delivery` and `--run`; it supplies only the fixed
 `/vendor` dependencies and `/app` package location to the isolated interpreter.
-[Cold startup](../serverware/registration_evidence_signer_startup.py) independently
+[Cold startup](../catchplate/registration_evidence_signer_startup.py) independently
 re-admits the bootstrap and original receipt, joins the actual unencrypted PKCS8
 Ed25519 key to the dedicated configured public key, and retains descriptor,
 environment, PID, listener and receipt continuity. It does not mutate the borrowed
@@ -79,8 +79,8 @@ namespace, TTL, deletion, reset or automatic retry makes a consumed grant reusab
 A failed request may already have consumed its grant. Hostile-host rollback
 resistance still requires independently provisioned protection.
 
-The [socket template](../ops/systemd/serverware-registration-evidence.socket) and
-[service template](../ops/systemd/serverware-registration-evidence.service.in)
+The [socket template](../ops/systemd/catchplate-registration-evidence.socket) and
+[service template](../ops/systemd/catchplate-registration-evidence.service.in)
 require an approved complete image export at `@SIGNER_RELEASE_ROOT@`, not a
 checkout. Separate `@SIGNER_TRUST_DIR@`, `@SIGNER_KEY_FILE@` and
 `@SIGNER_REPLAY_DIR@` bindings supply the fixed destinations above; the activated

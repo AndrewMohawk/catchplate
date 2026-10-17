@@ -1,7 +1,7 @@
 # Bounded native ingress client
 
 Status: source-only, unbuilt and unexecuted. The Linux/amd64
-`serverware-native-ingress-client` composes the existing startup and session
+`catchplate-native-ingress-client` composes the existing startup and session
 verifiers with one fixed-endpoint TLS 1.3/mTLS exchange. It verifies startup
 evidence before trusting its single CA in a private connection configuration,
 then verifies fresh evidence on that actual connection. It never installs a
@@ -23,7 +23,7 @@ same-session trust verification before publication, not a new CONNECT capability
 The only arguments are the two required pairs, in either order:
 
 ```text
-serverware-native-ingress-client --configuration /absolute/client.json \
+catchplate-native-ingress-client --configuration /absolute/client.json \
   --configuration-sha256 sha256:<independently-pinned-lowercase-digest>
 ```
 
@@ -40,7 +40,7 @@ each require exactly nine fields; the version selects one session-input form:
 
 | Field | Contract |
 | --- | --- |
-| `apiVersion` | `serverware.nativeIngressClient/v1` or `serverware.nativeIngressClient/v2`. |
+| `apiVersion` | `catchplate.nativeIngressClient/v1` or `catchplate.nativeIngressClient/v2`. |
 | `endpoint` | Canonical literal `SocketAddr`, with a nonzero port. |
 | `timeoutMilliseconds` | Integer from 100 through 30000. |
 | `startupEvidence` | Pinned original startup public-identity line. |
@@ -61,7 +61,7 @@ are not hostile-host isolation or independent storage provenance.
 
 V1 remains unchanged: `sessionExpectations` contains the caller's challenge.
 V2 instead pins [session scope v1](../schemas/native-ingress-session-scope.v1.schema.json),
-an exact 12-field object: `apiVersion: serverware.nativeIngressSessionScope/v1`,
+an exact 12-field object: `apiVersion: catchplate.nativeIngressSessionScope/v1`,
 `releaseRecordSha256`, `policyHash`, `configurationSha256`,
 `clientTrustBundleSha256`, `expectedPcrs`, `expectedEif`, `expectedModuleId`,
 `maxAgeSeconds`, `futureSkewSeconds`, `ingressHost` and `serverInstanceId`.
@@ -158,7 +158,7 @@ fields; v2 retains them and adds `challengeSource: "client-csprng"` (ten fields)
 
 | Field | Meaning |
 | --- | --- |
-| `apiVersion` | `serverware.nativeIngressClientCapture/v1` or `serverware.nativeIngressClientCapture/v2`, matching configuration. |
+| `apiVersion` | `catchplate.nativeIngressClientCapture/v1` or `catchplate.nativeIngressClientCapture/v2`, matching configuration. |
 | `resultScope` | `local-fixed-endpoint-session-and-quote-only` |
 | `okForAction` | `false` |
 | `configurationSha256` | Hash of the exact top-level configuration original. |
@@ -168,8 +168,8 @@ fields; v2 retains them and adds `challengeSource: "client-csprng"` (ten fields)
 | `startupVerification` | Unchanged 18-field v1 local startup quote verdict. |
 | `sessionVerification` | Eight-field session verdict v1 or v2, matching configuration. |
 
-V2 uses `serverware.nativeIngressSessionVerification/v2`; its nested
-`quoteVerification` uses `serverware.nativeIngressAttestationVerification/v2`
+V2 uses `catchplate.nativeIngressSessionVerification/v2`; its nested
+`quoteVerification` uses `catchplate.nativeIngressAttestationVerification/v2`
 and replaces only `expectationsSha256` with `sessionScopeSha256`, the hash of
 the exact pinned nonce-free scope original. The actual challenge appears in
 the session verdict and session evidence, not inside that scope hash. V1's
@@ -200,8 +200,8 @@ The [static packaging recipe](../data-plane/decision-gate-rs/Dockerfile.producti
 uses the existing pinned offline Cargo/vendor/musl inputs without new
 dependencies or an image entrypoint change. It requires no ELF interpreter or
 dynamic `NEEDED` entries and at most 64 MiB. Target
-`native-ingress-client-artifact` exports `/serverware-native-ingress-client`;
-the runtime copy is `/usr/local/libexec/serverware-native-ingress-client`,
+`native-ingress-client-artifact` exports `/catchplate-native-ingress-client`;
+the runtime copy is `/usr/local/libexec/catchplate-native-ingress-client`,
 root-owned and mode 0555. No artifact has been built or independently admitted
 by this source slice.
 

@@ -16,10 +16,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TREE = "serverware_policy_authority_canonical_json"
-WIRE = "serverware_policy_authority_wire_json"
+TREE = "catchplate_policy_authority_canonical_json"
+WIRE = "catchplate_policy_authority_wire_json"
 CALL = re.compile(r"\b(" + TREE + "|" + WIRE + r")\s*\(")
-PREFIX = "serverware_policy_authority_"
+PREFIX = "catchplate_policy_authority_"
 WIRE_COUNTS = {
     PREFIX + "issue_capability": 2,
     PREFIX + "issue_writer_capability": 3,
@@ -42,13 +42,13 @@ TREE_ARGUMENTS = {
     ),
 }
 MIXED_TREE_DOMAINS = (
-    "serverware.policyAuthorityAuthenticatedKey/v1",
-    "serverware.policyAuthorityAuthenticatedKey/v1",
-    "serverware.policyAuthorityAuthenticatedRow/v1",
-    "serverware.policyAuthorityAuthenticatedLeaf/v1",
-    "serverware.policyAuthorityAuthenticatedLeaf/v1",  # stored leaf key_json comparison
-    "serverware.policyAuthorityAuthenticatedNode/v1",
-    "serverware.policyAuthorityAuthenticatedKey/v1",
+    "catchplate.policyAuthorityAuthenticatedKey/v1",
+    "catchplate.policyAuthorityAuthenticatedKey/v1",
+    "catchplate.policyAuthorityAuthenticatedRow/v1",
+    "catchplate.policyAuthorityAuthenticatedLeaf/v1",
+    "catchplate.policyAuthorityAuthenticatedLeaf/v1",  # stored leaf key_json comparison
+    "catchplate.policyAuthorityAuthenticatedNode/v1",
+    "catchplate.policyAuthorityAuthenticatedKey/v1",
 )
 # SHA-256 of the exact original source lines, including indentation/newlines,
 # from CREATE OR REPLACE FUNCTION through its closing dollar-quote delimiter.
@@ -66,14 +66,14 @@ APPROVED_ROLLING_EMPTY_APPLY_SQL_SHA256 = "3ccce1ed53fb88e5e87f89e311fbe6aeaedb1
 
 
 def database_source() -> str:
-    path = ROOT / "serverware/db.py"
+    path = ROOT / "catchplate/db.py"
     if path.stat().st_size > 16 * 1024 * 1024:
         raise AssertionError("database source exceeded the bounded source fixture")
     return path.read_text(encoding="utf-8")
 
 
 def shared_tree_source() -> str:
-    path = ROOT / "serverware/authority_store/primary_tree_sql.py"
+    path = ROOT / "catchplate/authority_store/primary_tree_sql.py"
     if path.stat().st_size > 128 * 1024:
         raise AssertionError("shared tree source exceeded its bounded fixture")
     return path.read_text(encoding="utf-8")
@@ -95,7 +95,7 @@ def serializer_sql_literals(source: str) -> dict[str, str]:
         header = re.search(
             r"(?m)^ +CREATE OR REPLACE FUNCTION\s+"
             r"(?:\{guard_namespace\}\.\s*)?"
-            r"(?P<name>serverware_[a-z0-9_]+|\{qualified_function\})\s*\(", literal,
+            r"(?P<name>catchplate_[a-z0-9_]+|\{qualified_function\})\s*\(", literal,
         )
         if header is None:
             raise AssertionError("serializer use is outside a classified SQL function literal")
@@ -145,7 +145,7 @@ def assert_partition(source: str, shared_source: str | None = None) -> dict[str,
             arguments.append(argument.group(1))
             if name == PREFIX + "apply_verified":
                 preceding = re.findall(
-                    r"serverware_policy_authority_(?:framed|domain)_digest\(\s*'([^']+)'", sql[:call.start()],
+                    r"catchplate_policy_authority_(?:framed|domain)_digest\(\s*'([^']+)'", sql[:call.start()],
                 )
                 domains.append(preceding[-1] if preceding else None)
         if tuple(arguments) != TREE_ARGUMENTS.get(name, ()):
@@ -214,7 +214,7 @@ class AuthorityWireJsonSourceTests(unittest.TestCase):
     def test_mixed_tree_domain_change_is_detected_without_changing_counts(self) -> None:
         source = database_source()
         assert_partition(source)
-        old = "'serverware.policyAuthorityAuthenticatedRow/v1',\n                                            manifest_entry.table_name,"
+        old = "'catchplate.policyAuthorityAuthenticatedRow/v1',\n                                            manifest_entry.table_name,"
         self.assertEqual(source.count(old), 1)
         changed = source.replace(old, old.replace("AuthenticatedRow", "BusinessRow"))
         with self.assertRaisesRegex(AssertionError, "mixed router tree digest domains changed"):

@@ -7,7 +7,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware.authority_store import challenge_execution_sql as sql
+from catchplate.authority_store import challenge_execution_sql as sql
 
 
 def pins(label):
@@ -16,7 +16,7 @@ def pins(label):
 
 
 def rendered():
-    return sql.functions_sql('"serverware_metadata"', owner_role="source_owner",
+    return sql.functions_sql('"catchplate_metadata"', owner_role="source_owner",
         issuer_pins=pins("issuer"), executor_pins=pins("executor"))
 
 
@@ -36,13 +36,13 @@ class MaintenanceFunctionControls(unittest.TestCase):
         source = rendered().split("CREATE OR REPLACE FUNCTION")[1]
         self.assertIn(sql.custody.STEP_TABLE, source)
         self.assertIn("already sealed", source)
-        self.assertNotIn("INSERT INTO \"serverware_metadata\"." + sql.custody.CUSTODY_TABLE, source)
-        self.assertNotIn("UPDATE \"serverware_metadata\".webauthn_challenges", source)
+        self.assertNotIn("INSERT INTO \"catchplate_metadata\"." + sql.custody.CUSTODY_TABLE, source)
+        self.assertNotIn("UPDATE \"catchplate_metadata\".webauthn_challenges", source)
 
     def test_seal_checks_complete_raw_steps_before_header_insert(self):
         source = rendered().split("CREATE OR REPLACE FUNCTION")[2]
         self.assertLess(source.index("stored raw stream is incomplete"), source.index(
-            "INSERT INTO \"serverware_metadata\"." + sql.custody.CUSTODY_TABLE))
+            "INSERT INTO \"catchplate_metadata\"." + sql.custody.CUSTODY_TABLE))
         self.assertIn("LIMIT 1549 FOR UPDATE", source)
         self.assertIn("cxg_step.step_ordinal IS DISTINCT FROM cxg_seen", source)
         self.assertIn("issuer_identity_digest IS DISTINCT FROM cxg_issuer_identity", source)
@@ -58,13 +58,13 @@ class MaintenanceFunctionControls(unittest.TestCase):
         self.assertIn("challenge maintenance primary after differs", source)
         self.assertIn("challenge maintenance phase before differs", source)
         self.assertIn("challenge maintenance phase after differs", source)
-        marker_insert = 'INSERT INTO "serverware_metadata".' + sql.authority.CURRENT_ROOT_COMMIT_MARKER_TABLE
+        marker_insert = 'INSERT INTO "catchplate_metadata".' + sql.authority.CURRENT_ROOT_COMMIT_MARKER_TABLE
         self.assertLess(source.index("stored raw stream is incomplete"), source.index(marker_insert))
         self.assertNotIn("COMMIT;", source)
         self.assertNotIn("EXCEPTION WHEN", source)
 
     def test_validation_prefix_is_shared_without_a_replay_insert(self):
-        namespace = '"serverware_metadata"'
+        namespace = '"catchplate_metadata"'
         validation = sql.custody.validation_body_sql(namespace)
         self.assertIn(validation, sql.custody.step_body_sql(namespace))
         self.assertIn(validation, sql._steps(namespace, apply=False))
@@ -81,7 +81,7 @@ class MaintenanceFunctionControls(unittest.TestCase):
             dict(owner_role="bad;role", issuer_pins=pins("issuer"), executor_pins=pins("executor")),
         ):
             with self.assertRaises(ValueError):
-                sql.functions_sql('"serverware_metadata"', **arguments)
+                sql.functions_sql('"catchplate_metadata"', **arguments)
 
 
 if __name__ == "__main__":

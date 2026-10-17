@@ -20,9 +20,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_genesis_jobs as jobs
-from serverware import native_pilot_genesis_job_publication as publication
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_genesis_jobs as jobs
+from catchplate import native_pilot_genesis_job_publication as publication
 import test_native_pilot_genesis_ordinary_initial as initial_tests
 import test_native_pilot_genesis_ordinary_runtime as ordinary_tests
 from test_native_pilot_generation_scope import NOW
@@ -45,7 +45,7 @@ def static_records(cold_raw, clocks):
     value = jobs.binding.input_document(cold_raw)
     selected = p.document(value["closureSetOriginal"].encode("ascii"), jobs.sets.MAX_BYTES)
     envelope = g.document(value["assignmentOriginal"].encode("ascii"), g.MAX_BYTES)
-    closure_input = g.canonical({"apiVersion": "serverware.nativePilotClosureSetPreparation/v3",
+    closure_input = g.canonical({"apiVersion": "catchplate.nativePilotClosureSetPreparation/v3",
         "setApiVersion": jobs.sets.GENESIS_BOOTSTRAP_API, "members": selected["members"]})
     assignment_input = g.canonical({"apiVersion": jobs.assignment.GENESIS_BOOTSTRAP_INPUT_API,
         "setApiVersion": jobs.sets.GENESIS_BOOTSTRAP_API, "trustOriginal": value["trustOriginal"],
@@ -79,15 +79,15 @@ def fixture():
     # exact C9 bytes under the fixture's existing deterministic C9 authority.
     for role, value in values.items():
         payload = g.document(value["payloadOriginal"].encode("ascii"), jobs.ordinary.MAX_DELIVERY)
-        payload["runtimeConfig"]["path"] = "/etc/serverware/custody-" + role + "-runtime.json"
+        payload["runtimeConfig"]["path"] = "/etc/catchplate/custody-" + role + "-runtime.json"
         for row in payload["credentials"]:
             suffix = {"authority-history": "initial-history", "peer-inspection-policy": "peer-inspection"}.get(row["name"])
             if suffix:
-                row["original"]["path"] = "/etc/serverware/custody-" + role + "-" + suffix + ".json"
+                row["original"]["path"] = "/etc/catchplate/custody-" + role + "-" + suffix + ".json"
         value["payloadOriginal"] = g.canonical(payload).decode("ascii")
         key = Ed25519PrivateKey.from_private_bytes(hashlib.sha256(("SYNTHETIC C9 / " + role).encode()).digest())
-        deliveries[role] = g.canonical({"apiVersion": "serverware.policyCustodyGuestDelivery/v1", "payload": payload,
-            "signatureBase64url": p.encoded(key.sign(b"serverware.policyCustodyGuestDelivery.signature/v1\0" + g.canonical(payload)))})
+        deliveries[role] = g.canonical({"apiVersion": "catchplate.policyCustodyGuestDelivery/v1", "payload": payload,
+            "signatureBase64url": p.encoded(key.sign(b"catchplate.policyCustodyGuestDelivery.signature/v1\0" + g.canonical(payload)))})
     cold_raw = source["grants"][jobs.ORDINARY[0]]["coldBindingInputOriginal"].encode("ascii")
     records = static_records(cold_raw, clocks)
     parent = original["parent"]
@@ -153,7 +153,7 @@ class GenesisJobTests(unittest.TestCase):
         self.assertGreater(assigned["epochLimit"], NOW)
         self.assertEqual(self.prepare("cold-binding")["nativeContext"]["outputOriginal"], records["cold-binding"]["result"])
         value = p.document(records["assignment"]["input"], jobs.assignment.MAX_INPUT)
-        value["apiVersion"] = "serverware.nativePilotAssignmentAuthorityInput/v2"
+        value["apiVersion"] = "catchplate.nativePilotAssignmentAuthorityInput/v2"
         with self.assertRaises(ValueError): self.prepare("assignment", g.canonical(value))
 
     def test_framed_but_invalid_public_assignment_refuses_before_private_loader(self):
@@ -227,13 +227,13 @@ class GenesisJobTests(unittest.TestCase):
             plan = self.plan("install-ordinary-" + role)
             rows = plan["files"]
             self.assertEqual(tuple(row["path"] for row in rows), tuple(
-                "/etc/serverware/custody-" + role + "-" + suffix + ".json" for suffix in publication.SUFFIXES))
+                "/etc/catchplate/custody-" + role + "-" + suffix + ".json" for suffix in publication.SUFFIXES))
             cold = self.f["source"]["f"]["cold"][role]
             self.assertEqual(tuple((row["uid"], row["gid"], row["mode"]) for row in rows),
                 ((0, 0, 0o400), (cold["uid"], cold["gid"], 0o400), (cold["uid"], cold["gid"], 0o400),
                     (0, 0, 0o400), (0, 0, 0o400)))
             self.assertEqual(plan["launchPin"], {"path": rows[-1]["path"], "sha256": p.sha(rows[-1]["raw"])})
-            self.assertEqual(g.document(rows[-1]["raw"], 65536)["apiVersion"], "serverware.custodyOrdinaryServiceGuestLaunch/v7")
+            self.assertEqual(g.document(rows[-1]["raw"], 65536)["apiVersion"], "catchplate.custodyOrdinaryServiceGuestLaunch/v7")
             records = copy.deepcopy(self.f["records"])
             value = g.document(records["ordinary-grant-" + role]["result"], g.MAX_BYTES)
             value["signatureBase64url"] = p.encoded(bytes(64))

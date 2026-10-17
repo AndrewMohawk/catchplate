@@ -38,7 +38,7 @@ pub(super) struct Bootstrap {
 }
 impl Bootstrap {
     pub(super) fn validate(&self) -> Result<(), String> {
-        require(self.api_version == "serverware.nativeShadowWorkerBootstrap/v1")?;
+        require(self.api_version == "catchplate.nativeShadowWorkerBootstrap/v1")?;
         validate_bootstrap(&self.channel_nonce,self.deadline_boottime_ns,&self.executable_sha256,&self.executable_path)
     }
 }
@@ -119,18 +119,18 @@ impl WorkerBootstrap {
     pub(super) fn validate(&self)->Result<(),String> {
         if let Some(worker)=self.worker() {worker.validate()?;}
         if let Self::Publication(v)=self {
-            require(v.api_version=="serverware.nativeShadowWorkerBootstrap/v2" && hash(&v.publication_resources_sha256))?;
+            require(v.api_version=="catchplate.nativeShadowWorkerBootstrap/v2" && hash(&v.publication_resources_sha256))?;
         }
         if let Self::Runtime(v)=self {
-            require(v.api_version=="serverware.nativeShadowWorkerBootstrap/v3" && hash(&v.runtime_resources_sha256)
+            require(v.api_version=="catchplate.nativeShadowWorkerBootstrap/v3" && hash(&v.runtime_resources_sha256)
                 && v.publication_resources_sha256.as_ref().is_none_or(|pin|hash(pin)))?;
         }
         if let Self::NativeActivation(v)=self {
-            require(v.api_version=="serverware.nativeShadowWorkerBootstrap/v4"
+            require(v.api_version=="catchplate.nativeShadowWorkerBootstrap/v4"
                 && hash(&v.runtime_resources_sha256) && hash(&v.publication_resources_sha256))?;
             validate_bootstrap(&v.channel_nonce,v.deadline_boottime_ns,&v.executable_sha256,&v.executable_path)?;
             require(v.executable_path[0]==super::runtime_resources::EXECUTABLE
-                && v.executable_path[1]=="/usr/local/bin/serverware-native-publication-handoff")?;
+                && v.executable_path[1]=="/usr/local/bin/catchplate-native-publication-handoff")?;
         }
         Ok(())
     }
@@ -154,7 +154,7 @@ pub(super) struct Response { pub(super) api_version: String, pub(super) request:
 pub(super) struct Initialized { pub(super) api_version: String, pub(super) channel_nonce: String, pub(super) bootstrap_sha256: String }
 
 pub(super) fn input(request: &Request, file: std::fs::File, expected_uid: u32) -> Result<image::Sealed, String> {
-    require(request.api_version == "serverware.nativeShadowWorkerRequest/v1" && request.sequence > 0
+    require(request.api_version == "catchplate.nativeShadowWorkerRequest/v1" && request.sequence > 0
         && hash(&request.input_sha256) && hash(&request.bootstrap_sha256)
         && request.input_bytes > 0 && request.input_bytes <= MAX_INPUT as u64)?;
     image::Sealed::receive(file, expected_uid, request.input_bytes, &request.input_sha256, false)

@@ -38,17 +38,17 @@ is UID/GID 65501, peer 65532, process
 | 204–206 | Consume signer, independent journal key, journal directory |
 | 207–208 | Independent consume-execution bundle key, execution store directory |
 
-The listener path is `/run/serverware/oidc-session-activation/delivery-planner.sock`;
-the journal path is `/var/lib/serverware/oidc-session-activation-delivery-planner`.
+The listener path is `/run/catchplate/oidc-session-activation/delivery-planner.sock`;
+the journal path is `/var/lib/catchplate/oidc-session-activation-delivery-planner`.
 The execution store path is
-`/var/lib/serverware/oidc-session-activation-delivery-execution`; its key path is
-`/run/secrets/serverware-oidc-session-activation-delivery-execution-bundle-key`.
+`/var/lib/catchplate/oidc-session-activation-delivery-execution`; its key path is
+`/run/secrets/catchplate-oidc-session-activation-delivery-execution-bundle-key`.
 The closed v2 launch requires all eleven FDs and independently pins export-store
 device/inode, fixed path, record count and quota (at most 1,024 records / 8 GiB).
 Both private directories are owned by UID/GID 65501, mode `0700`; neither is
 created or repaired by admission.
 Strict verifier DB/TLS identity and byte/digest pins use the fixed
-`/run/serverware/oidc-session-activation-delivery-planner-tls/` paths. Database ID
+`/run/catchplate/oidc-session-activation-delivery-planner-tls/` paths. Database ID
 is an independent root assertion; it is not inferred from a DSN database name.
 The state endpoint is the existing fixed state socket with root-created kernel
 peer 0:0. Socket permissions/provisioning remain independent.

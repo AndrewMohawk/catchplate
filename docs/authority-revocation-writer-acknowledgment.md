@@ -14,7 +14,7 @@ the original ACK with the measured writer key. Historical recovery is absent.
 
 ## What is signed
 
-The closed `serverware.policyAuthorityRevocationWriterAcknowledgment/v1` envelope
+The closed `catchplate.policyAuthorityRevocationWriterAcknowledgment/v1` envelope
 has exactly seven fields:
 
 | Field | Binding |
@@ -36,7 +36,7 @@ capability, witness verdict or terminal execution state is invented.
 
 The signature covers the ASCII digest produced by framing canonical unsigned
 JSON under the ACK schema domain. The identity has its own
-`serverware.policyAuthorityRevocationWriterAcknowledgmentIdentity/v1` domain.
+`catchplate.policyAuthorityRevocationWriterAcknowledgmentIdentity/v1` domain.
 Key or configuration rotation does not create a new global identity namespace.
 Wire size is at most 16 KiB, with 256 JSON nodes and depth two. These are local
 ceilings, not a promise of fitting the remaining cumulative request allowance.

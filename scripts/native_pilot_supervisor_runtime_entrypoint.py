@@ -206,7 +206,7 @@ def main():
     ):
         raise SystemExit("native pilot supervisor runtime invocation refused")
     # Namespace packages combine only the fixed source-selected script trees;
-    # the unchanged shared serverware package remains under /app.
+    # the unchanged shared catchplate package remains under /app.
     sys.path[:0] = list(IMPORT_ROOTS)
     selected_cli = {LIFECYCLE_MODE: LIFECYCLE_CLI, PROVIDER_MODE: PROVIDER_CLI,
         DECISION_MODE: DECISION_CLI, STARTUP_MODE: STARTUP_CLI,

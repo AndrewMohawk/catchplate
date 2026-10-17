@@ -153,7 +153,7 @@ def publish_bundle(
             }
         )
     raw = {
-        "apiVersion": "serverware.webauthnTrust/v1",
+        "apiVersion": "catchplate.webauthnTrust/v1",
         "kind": "WebAuthnTrustBundle",
         "metadata": {
             "id": "test-fido-roots",
@@ -173,27 +173,27 @@ def publish_bundle(
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        os.environ["SERVERWARE_DATA_DIR"] = str(tmp_path / "data")
-        os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
-        os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-        os.environ.pop("SERVERWARE_METADATA_STORE_POSTGRES_DSN", None)
-        os.environ.pop("SERVERWARE_GRANT_STORE_POSTGRES_DSN", None)
-        os.environ.pop("SERVERWARE_AUDIT_STORE_POSTGRES_DSN", None)
-        os.environ["SERVERWARE_RELEASE_CHANNEL"] = "test"
-        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
-        os.environ["SERVERWARE_WEBAUTHN_TRUST_BUNDLE"] = str(tmp_path / "data" / "webauthn-trust-bundle.json")
-        os.environ["SERVERWARE_WEBAUTHN_TRUST_BUNDLE_STATE"] = str(tmp_path / "data" / "webauthn-trust-bundle-state.json")
-        os.environ["SERVERWARE_WEBAUTHN_TRUST_SIGNING_KEY"] = str(tmp_path / "data" / "webauthn-trust-signing-ed25519.pem")
-        os.environ["SERVERWARE_WEBAUTHN_TRUST_SIGNING_PUBLIC_KEY"] = str(tmp_path / "data" / "webauthn-trust-signing-ed25519.pub.pem")
-        os.environ["SERVERWARE_PUBLIC_URL"] = "http://localhost:3000"
-        os.environ["SERVERWARE_WEBAUTHN_ORIGIN"] = "http://localhost:3000"
-        os.environ["SERVERWARE_ADMIN_USER"] = "user:test"
+        os.environ["CATCHPLATE_DATA_DIR"] = str(tmp_path / "data")
+        os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
+        os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+        os.environ.pop("CATCHPLATE_METADATA_STORE_POSTGRES_DSN", None)
+        os.environ.pop("CATCHPLATE_GRANT_STORE_POSTGRES_DSN", None)
+        os.environ.pop("CATCHPLATE_AUDIT_STORE_POSTGRES_DSN", None)
+        os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "test"
+        os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
+        os.environ["CATCHPLATE_WEBAUTHN_TRUST_BUNDLE"] = str(tmp_path / "data" / "webauthn-trust-bundle.json")
+        os.environ["CATCHPLATE_WEBAUTHN_TRUST_BUNDLE_STATE"] = str(tmp_path / "data" / "webauthn-trust-bundle-state.json")
+        os.environ["CATCHPLATE_WEBAUTHN_TRUST_SIGNING_KEY"] = str(tmp_path / "data" / "webauthn-trust-signing-ed25519.pem")
+        os.environ["CATCHPLATE_WEBAUTHN_TRUST_SIGNING_PUBLIC_KEY"] = str(tmp_path / "data" / "webauthn-trust-signing-ed25519.pub.pem")
+        os.environ["CATCHPLATE_PUBLIC_URL"] = "http://localhost:3000"
+        os.environ["CATCHPLATE_WEBAUTHN_ORIGIN"] = "http://localhost:3000"
+        os.environ["CATCHPLATE_ADMIN_USER"] = "user:test"
 
         from fastapi import Request
-        from serverware import app as app_module
-        from serverware import auth, db, webauthn, webauthn_trust
-        from serverware.auth import AdminIdentity
+        from catchplate import app as app_module
+        from catchplate import auth, db, webauthn, webauthn_trust
+        from catchplate.auth import AdminIdentity
 
         db.init_db()
         with db.connect() as conn:
@@ -536,12 +536,12 @@ def main() -> None:
             "server": ("localhost", 3000),
             "headers": [
                 (b"host", b"localhost:3000"),
-                (b"x-serverware-admin-token", auth.admin_token().encode("ascii")),
+                (b"x-catchplate-admin-token", auth.admin_token().encode("ascii")),
             ],
         })
         withdrawal_identity = auth.require_admin(
             withdrawal_request,
-            x_serverware_admin_token=withdrawal_request.headers.get("X-Serverware-Admin-Token"),
+            x_catchplate_admin_token=withdrawal_request.headers.get("X-Catchplate-Admin-Token"),
         )
         withdrawal_options_path = "/api/control-plane/mutations/webauthn/options"
         withdrawal_options_request = Request({
@@ -562,7 +562,7 @@ def main() -> None:
                 request=withdrawal_options_request,
                 identity=auth.require_admin(
                     withdrawal_options_request,
-                    x_serverware_admin_token=withdrawal_options_request.headers.get("X-Serverware-Admin-Token"),
+                    x_catchplate_admin_token=withdrawal_options_request.headers.get("X-Catchplate-Admin-Token"),
                 ),
             )
             withdrawal_auth_data = (

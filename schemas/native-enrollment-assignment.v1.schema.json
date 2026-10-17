@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-enrollment-assignment.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-enrollment-assignment.v1.schema.json",
   "title": "Independently signed exact native enrollment assignment v1",
   "description": "Canonical compact sorted UTF-8 JSON plus exactly one LF; envelope at most 16384 bytes. The independent authorizer approves an exact packet digest and scope, not a generic signer or runtime success. Runtime must verify the Ed25519 signature using its independently pinned public PEM, join exact packet originals, enforce a current positive interval at most 300 seconds, and retain a single nonrenewing processing window at most 30 seconds. Schema shape alone establishes none of those properties. No root intake, native policy semantics, durable nonce claim, TLS acquisition, installation or production admission is provided by this contract.",
   "type": "object",
@@ -12,7 +12,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.signedNativeEnrollmentAssignment/v1"
+      "const": "catchplate.signedNativeEnrollmentAssignment/v1"
     },
     "assignment": {
       "$ref": "#/$defs/assignment"
@@ -22,7 +22,7 @@
       "minLength": 86,
       "maxLength": 86,
       "pattern": "^[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])",
-      "description": "Canonical unpadded URL-safe base64 of the 64-byte Ed25519 signature over the fixed NUL-terminated serverware/native-enrollment-assignment/v1 domain followed by canonical compact sorted UTF-8 JSON assignment bytes (without LF)."
+      "description": "Canonical unpadded URL-safe base64 of the 64-byte Ed25519 signature over the fixed NUL-terminated catchplate/native-enrollment-assignment/v1 domain followed by canonical compact sorted UTF-8 JSON assignment bytes (without LF)."
     }
   },
   "$defs": {
@@ -55,7 +55,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeEnrollmentAssignment/v1"
+          "const": "catchplate.nativeEnrollmentAssignment/v1"
         },
         "authorizerKeyId": {
           "$ref": "#/$defs/sha256"

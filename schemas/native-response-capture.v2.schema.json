@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-response-capture.v2.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-response-capture.v2.schema.json",
   "title": "Native wide-principal response capture v2",
   "description": "Local evidence only. Collector signs exact canonical artifact with collector_signature omitted, including original runtime proof and independently invoked verifier result. Shape never supplies authority or proof of actual response capture.",
   "type": "object",
@@ -19,10 +19,10 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.nativeResponseCapture/v2"
+      "const": "catchplate.nativeResponseCapture/v2"
     },
     "kind": {
-      "const": "ServerwareNativeResponseCapture"
+      "const": "CatchplateNativeResponseCapture"
     },
     "resultScope": {
       "const": "local-capture-and-native-quote-only"
@@ -80,7 +80,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeResponseAttestationVerification/v2"
+          "const": "catchplate.nativeResponseAttestationVerification/v2"
         },
         "ok": {
           "const": true
@@ -96,9 +96,9 @@
         },
         "statementApiVersion": {
           "enum": [
-            "serverware.nativeProxyResponseStatement/v1",
-            "serverware.nativeStreamingResponseStatement/v1",
-            "serverware.nativeResponseObservationStatement/v1"
+            "catchplate.nativeProxyResponseStatement/v1",
+            "catchplate.nativeStreamingResponseStatement/v1",
+            "catchplate.nativeResponseObservationStatement/v1"
           ]
         },
         "serverStatementSha256": {

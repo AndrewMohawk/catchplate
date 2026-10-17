@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/public-webauthn-revocation-http.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/public-webauthn-revocation-http.v1.schema.json",
   "title": "Explicit public WebAuthn revocation HTTP request profiles",
   "description": "Closed request shapes only, not permission. Actual HTTP authentication, CSRF, cold v23 enrollment, original options, policy, optional assertion and distinct-person approval remain required. Each admitted original is at most 65536 UTF-8 bytes. Required nullable fields must be explicitly present. A local digest never permits retry.",
   "oneOf": [
@@ -23,40 +23,40 @@
     "options": {
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "reason", "approvalId", "credentialRecordId"],
-      "properties": {"apiVersion": {"const": "serverware.publicWebAuthnRevocationOptionsRequest/v1"},
+      "properties": {"apiVersion": {"const": "catchplate.publicWebAuthnRevocationOptionsRequest/v1"},
         "reason": {"$ref": "#/$defs/reason"}, "approvalId": {"$ref": "#/$defs/optionalApproval"},
         "credentialRecordId": {"$ref": "#/$defs/optionalCredential"}}
     },
     "execute": {
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "localDigest", "reason", "mfa"],
-      "properties": {"apiVersion": {"const": "serverware.publicWebAuthnRevocationExecuteRequest/v1"},
+      "properties": {"apiVersion": {"const": "catchplate.publicWebAuthnRevocationExecuteRequest/v1"},
         "localDigest": {"$ref": "#/$defs/digest"}, "reason": {"$ref": "#/$defs/reason"}, "mfa": {"$ref": "#/$defs/mfa"}}
     },
     "recover": {
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "localDigest"],
-      "properties": {"apiVersion": {"const": "serverware.publicWebAuthnRevocationRecoveryRequest/v1"},
+      "properties": {"apiVersion": {"const": "catchplate.publicWebAuthnRevocationRecoveryRequest/v1"},
         "localDigest": {"$ref": "#/$defs/digest"}}
     },
     "context": {
       "type": "object", "additionalProperties": false,
       "description": "Read-only current self/admin target and independently admitted policy inspection. No challenge or effect is issued.",
       "required": ["apiVersion", "recordId"],
-      "properties": {"apiVersion": {"const": "serverware.publicWebAuthnRevocationContextRequest/v1"},
+      "properties": {"apiVersion": {"const": "catchplate.publicWebAuthnRevocationContextRequest/v1"},
         "recordId": {"$ref": "#/$defs/optionalCredential"}}
     },
     "lookup": {
       "type": "object", "additionalProperties": false,
       "description": "Read-only protected options-to-attempt association lookup by its current requester or an admin. Missing association remains unknown and never grants retry.",
       "required": ["apiVersion", "optionsLocalDigest"],
-      "properties": {"apiVersion": {"const": "serverware.publicWebAuthnRevocationLookupRequest/v1"},
+      "properties": {"apiVersion": {"const": "catchplate.publicWebAuthnRevocationLookupRequest/v1"},
         "optionsLocalDigest": {"$ref": "#/$defs/digest"}}
     },
     "approvalOptions": {
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "action", "resourceId", "reason", "approvalId", "credentialRecordId"],
-      "properties": {"apiVersion": {"const": "serverware.publicWebAuthnRevocationApprovalOptionsRequest/v1"},
+      "properties": {"apiVersion": {"const": "catchplate.publicWebAuthnRevocationApprovalOptionsRequest/v1"},
         "action": {"const": "webauthn.credential.revoke"}, "resourceId": {"$ref": "#/$defs/text"},
         "reason": {"$ref": "#/$defs/reason"}, "approvalId": {"$ref": "#/$defs/optionalApproval"},
         "credentialRecordId": {"$ref": "#/$defs/optionalCredential"}}
@@ -64,7 +64,7 @@
     "approvalSubmit": {
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "localDigest", "mfa"],
-      "properties": {"apiVersion": {"const": "serverware.publicWebAuthnRevocationApprovalSubmitRequest/v1"},
+      "properties": {"apiVersion": {"const": "catchplate.publicWebAuthnRevocationApprovalSubmitRequest/v1"},
         "localDigest": {"$ref": "#/$defs/digest"}, "mfa": {"$ref": "#/$defs/mfa"}}
     }
   }

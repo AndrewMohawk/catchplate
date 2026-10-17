@@ -24,57 +24,57 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 pub(super) const PRODUCTION_DISPATCH_PROTOCOL_VERSION: &str =
-    "serverware.policyCustodyProductionDispatch/v4";
+    "catchplate.policyCustodyProductionDispatch/v4";
 pub(super) const PRODUCTION_GENERATION_PROTOCOL_VERSION: &str =
-    "serverware.policyCustodyProductionGeneration/v4";
+    "catchplate.policyCustodyProductionGeneration/v4";
 pub(super) const MAX_PRODUCTION_DISPATCH_ARTIFACT_BYTES: usize =
     8 * 1024 * 1024;
 pub(super) const MAX_PRODUCTION_DISPATCH_RECEIPTS: usize = 5;
 
 const ARTIFACT_DOMAIN: &[u8] =
-    b"serverware.policyCustodyProductionArtifact/v4";
+    b"catchplate.policyCustodyProductionArtifact/v4";
 const ARTIFACT_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyProductionArtifactSignature/v4";
+    b"catchplate.policyCustodyProductionArtifactSignature/v4";
 const ARTIFACT_SIGNED_RECEIPT_DOMAIN: &[u8] =
-    b"serverware.policyCustodyProductionArtifactSignedReceipt/v4";
+    b"catchplate.policyCustodyProductionArtifactSignedReceipt/v4";
 const SEALED_REFERENCE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyProductionSealedReference/v4";
+    b"catchplate.policyCustodyProductionSealedReference/v4";
 const DISPATCH_BINDING_DOMAIN: &[u8] =
-    b"serverware.policyCustodyProductionDispatchBinding/v4";
+    b"catchplate.policyCustodyProductionDispatchBinding/v4";
 const DISPATCH_REQUEST_DOMAIN: &[u8] =
-    b"serverware.policyCustodyProductionDispatchRequest/v4";
+    b"catchplate.policyCustodyProductionDispatchRequest/v4";
 pub(super) const SERVICE_TRANSITION_DOMAIN: &[u8] =
-    b"serverware.policyCustodyProductionServiceTransition/v4";
+    b"catchplate.policyCustodyProductionServiceTransition/v4";
 pub(super) const SERVICE_TRANSITION_RECEIPT_DOMAIN: &[u8] =
-    b"serverware.policyCustodyProductionServiceTransitionReceipt/v4";
+    b"catchplate.policyCustodyProductionServiceTransitionReceipt/v4";
 const DISPATCH_RESPONSE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyProductionDispatchResponse/v4";
+    b"catchplate.policyCustodyProductionDispatchResponse/v4";
 const GENERATION_REQUEST_DOMAIN: &[u8] =
-    b"serverware.policyCustodyProductionGenerationRequest/v4";
+    b"catchplate.policyCustodyProductionGenerationRequest/v4";
 const GENERATION_RESPONSE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyProductionGenerationResponse/v4";
+    b"catchplate.policyCustodyProductionGenerationResponse/v4";
 pub(super) const GENERATION_SERVICE_TRANSITION_DOMAIN: &[u8] =
-    b"serverware.policyCustodyProductionGenerationServiceTransition/v4";
+    b"catchplate.policyCustodyProductionGenerationServiceTransition/v4";
 pub(super) const GENERATION_SERVICE_TRANSITION_RECEIPT_DOMAIN: &[u8] =
-    b"serverware.policyCustodyProductionGenerationServiceTransitionReceipt/v4";
+    b"catchplate.policyCustodyProductionGenerationServiceTransitionReceipt/v4";
 
 pub(super) const PRODUCTION_RPC_PROTOCOL_VERSION: &str =
-    "serverware.policyCustodyProductionRpc/v4";
+    "catchplate.policyCustodyProductionRpc/v4";
 pub(super) const PRODUCTION_AUTHORITY_ENDPOINT_PROTOCOL_VERSION: &str =
-    "serverware.policyCustodyProductionAuthorityEndpoint/v4";
+    "catchplate.policyCustodyProductionAuthorityEndpoint/v4";
 pub(super) const MAX_PRODUCTION_RPC_PAYLOAD_BYTES: usize =
     MAX_PRODUCTION_DISPATCH_ARTIFACT_BYTES;
 
 const ACTIVATION_TRANSACTION_DOMAIN: &[u8] =
-    b"serverware.policyActivationAtomicConsumption/v1";
+    b"catchplate.policyActivationAtomicConsumption/v1";
 const MAX_ACTIVATION_ASSERTIONS: usize = 64;
 
 const PRODUCTION_RPC_REQUEST_DOMAIN: &[u8] =
-    b"serverware.policyCustodyProductionRpcRequest/v4";
+    b"catchplate.policyCustodyProductionRpcRequest/v4";
 const PRODUCTION_RPC_RESPONSE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyProductionRpcResponse/v4";
+    b"catchplate.policyCustodyProductionRpcResponse/v4";
 const PRODUCTION_RPC_REJECTION_DOMAIN: &[u8] =
-    b"serverware.policyCustodyProductionRpcRejection/v4";
+    b"catchplate.policyCustodyProductionRpcRejection/v4";
 
 #[derive(
     Debug,
@@ -546,7 +546,7 @@ impl ProductionDispatchBindingV4 {
         cleanup_deadline_boottime_nanos: u64,
     ) -> Result<Self, &'static str> {
         let replay_id_sha256 = hash_domain_frames(
-            b"serverware.policyCustodyProductionReplay/v4",
+            b"catchplate.policyCustodyProductionReplay/v4",
             &[&canonical_json_bytes(&(
                 operation,
                 &operation_id_sha256,
@@ -1575,7 +1575,7 @@ impl SignedProductionServiceTransitionV4 {
         require_digest(&predecessor_head_sha256)?;
         require_digest(&result_sha256)?;
         let resulting_head_sha256 = hash_domain_frames(
-            b"serverware.policyCustodyProductionServiceHead/v4",
+            b"catchplate.policyCustodyProductionServiceHead/v4",
             &[&canonical_json_bytes(&(
                 service_role,
                 &authority_epoch,
@@ -2353,7 +2353,7 @@ impl SignedProductionGenerationServiceTransitionV4 {
         require_digest(&predecessor_head_sha256)?;
         require_digest(&result_binding_sha256)?;
         let resulting_head_sha256 = hash_domain_frames(
-            b"serverware.policyCustodyProductionGenerationServiceHead/v4",
+            b"catchplate.policyCustodyProductionGenerationServiceHead/v4",
             &[&canonical_json_bytes(&(
                 service_role,
                 &authority_epoch,
@@ -2426,7 +2426,7 @@ pub(super) fn generation_service_result_binding_sha256(
         ProductionGenerationTransitionV4::Recover
         | ProductionGenerationTransitionV4::Prepare => Ok(
             hash_domain_frames(
-                b"serverware.policyCustodyProductionGenerationPrepareIntent/v4",
+                b"catchplate.policyCustodyProductionGenerationPrepareIntent/v4",
                 &[&canonical_json_bytes(&(
                     request.transition(),
                     request.transition_id_sha256(),
@@ -2554,7 +2554,7 @@ impl ProductionGenerationPreparationResultWireV4 {
             HistoricalServiceRoleV3::CurrentSignatureAuthority,
         )?;
         let durable_intent_receipt_sha256 = hash_domain_frames(
-            b"serverware.policyCustodyProductionGenerationDurableIntent/v4",
+            b"catchplate.policyCustodyProductionGenerationDurableIntent/v4",
             &[&canonical_json_bytes(&(
                 request.transition_id_sha256(),
                 request.request_sha256()?,
@@ -3553,7 +3553,7 @@ pub(super) fn production_dispatch_protocol_set_sha256(
         PolicyCustodyOperation::ConsumeAndPublishActivation,
     ];
     Ok(hash_domain_frames(
-        b"serverware.policyCustodyProductionProtocolSet/v4",
+        b"catchplate.policyCustodyProductionProtocolSet/v4",
         &[&canonical_json_bytes(&(
             PRODUCTION_DISPATCH_PROTOCOL_VERSION,
             PRODUCTION_GENERATION_PROTOCOL_VERSION,

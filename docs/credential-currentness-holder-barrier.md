@@ -8,7 +8,7 @@ holders before secret release and requires their explicit drain acknowledgements
 
 ## Explicit cold selection and original evidence
 
-`serverware.nativeStartupConfiguration/v4` adds required `credentialCurrentness`
+`catchplate.nativeStartupConfiguration/v4` adds required `credentialCurrentness`
 with exactly `profile: "measured-holder-barrier-v1"` and `deploymentId` to the
 existing v3 shape. The original configuration digest is part of the actual
 native role-4 key scope. Versions 1–3 remain unchanged; no environment switch,
@@ -32,7 +32,7 @@ acknowledgements and barrier membership refuse a different current custody
 configuration; changing configuration does not migrate or rejoin old holders.
 This internal provenance pin does not change the native statement or lease wire.
 
-`serverware.nativeCredentialCurrentnessStatement/v1` has exactly 18 fields.
+`catchplate.nativeCredentialCurrentnessStatement/v1` has exactly 18 fields.
 Its Ed25519 signature covers its schema, one NUL byte, and sorted compact
 Python-compatible ASCII JSON (including escaping DEL), without a trailing LF.
 The evidence envelope has only `statement`, `signature` (`ed25519:` plus
@@ -56,7 +56,7 @@ Each actual writer result is verified through the existing custody/authority
 receipt path and compared with its protected original rows. HTTP replies retain
 the existing nonce-bound control-plane response proof.
 
-The additive `serverware.nativeCurrentCredentialLeaseRequest/v1` wraps the
+The additive `catchplate.nativeCurrentCredentialLeaseRequest/v1` wraps the
 unchanged native inner request as `leaseRequest`, plus `currentness`:
 
 - Metadata uses null. Its response context contains only credential version,
@@ -66,7 +66,7 @@ unchanged native inner request as `leaseRequest`, plus `currentness`:
   and any original release authority. Verification uses the exact registered
   native key, so a holder ID cannot authorize a different recipient by itself.
 
-`serverware.nativeCurrentCredentialLeaseEnvelope/v1` similarly wraps the actual
+`catchplate.nativeCurrentCredentialLeaseEnvelope/v1` similarly wraps the actual
 existing encrypted envelope. Metadata may return a newly refreshed version;
 the gate must register that version before requesting its secret. Secret replies
 echo the exact signed currentness pin. Existing inner AAD/encryption and old

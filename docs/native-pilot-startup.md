@@ -37,10 +37,10 @@ prove that an application request or a production ceremony succeeded.
 ## Protected inputs
 
 The startup configuration is canonical
-`serverware.nativePilotStartupConfiguration/v1`. It pins the supervisor inventory,
+`catchplate.nativePilotStartupConfiguration/v1`. It pins the supervisor inventory,
 an invocation digest, boot/time namespace, original monotonic and wall-clock
 bounds, and the device/inode of an initially empty root-owned `0700` directory:
-`/etc/serverware/native-pilot-startup`. Abstract socket names are derived only
+`/etc/catchplate/native-pilot-startup`. Abstract socket names are derived only
 from the invocation digest; no arbitrary command or socket path is accepted.
 
 The launcher exclusively creates `observation.json`. After checking its actual
@@ -62,13 +62,13 @@ On the authorized target, `scripts/prepare_native_pilot_resource_roots.py
 roots plus both new handoff directories. Adding `--create` creates only missing
 fixed directories after preflight; it never empties, repairs or replaces an
 existing leaf. Inspection alone does not create anything. The shared
-`/etc/serverware` directory may contain unrelated protected state.
+`/etc/catchplate` directory may contain unrelated protected state.
 
 The startup-only publisher exposes final filenames only after complete writes,
 fsync and readback; existing names cannot be overwritten or retried. The launcher
 validates full originals and their hashes before passing them on; it does not
 author or rewrite them. The decision receiver still needs its separate
-initially empty `/etc/serverware/native-pilot-current-head-decisions` directory
+initially empty `/etc/catchplate/native-pilot-current-head-decisions` directory
 and the [fresh-decision backend](native-pilot-approval-provider.md).
 
 Each role's actual original lifetime must fit inside admission, and admission

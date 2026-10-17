@@ -37,13 +37,13 @@ def prohibit_network(event, args):
 # Before SDK import, including urllib3's optional IPv6 feature probe.
 sys.addaudithook(prohibit_network)
 
-from serverware import aws_ecr_signing as signing
-from serverware import ecr_image_artifact as artifact
-from serverware import ecr_image_custody as custody
-from serverware import ecr_publication_plan as planner
-from serverware import ecr_sdk_protocol as protocol
+from catchplate import aws_ecr_signing as signing
+from catchplate import ecr_image_artifact as artifact
+from catchplate import ecr_image_custody as custody
+from catchplate import ecr_publication_plan as planner
+from catchplate import ecr_sdk_protocol as protocol
 
-REGION, REGISTRY, REPOSITORY = "us-east-1", "123456789012", "serverware-fixture"
+REGION, REGISTRY, REPOSITORY = "us-east-1", "123456789012", "catchplate-fixture"
 ENDPOINT = "https://api.ecr.us-east-1.amazonaws.com/"
 TARGET_PREFIX = "AmazonEC2ContainerRegistry_V20150921."
 # Public inert examples, not AWS credentials. Provider-side tuple is deliberately

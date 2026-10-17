@@ -35,11 +35,11 @@ def b64d(value: str) -> bytes:
 
 
 def key_path() -> Path:
-    return Path(os.getenv("SERVERWARE_COSIGN_FIXTURE_KEY", str(ROOT / ".tmp" / "cosign-fixture-ed25519.pem")))
+    return Path(os.getenv("CATCHPLATE_COSIGN_FIXTURE_KEY", str(ROOT / ".tmp" / "cosign-fixture-ed25519.pem")))
 
 
 def log_path() -> Path:
-    return Path(os.getenv("SERVERWARE_COSIGN_FIXTURE_LOG", str(ROOT / ".tmp" / "cosign-fixture-rekor.jsonl")))
+    return Path(os.getenv("CATCHPLATE_COSIGN_FIXTURE_LOG", str(ROOT / ".tmp" / "cosign-fixture-rekor.jsonl")))
 
 
 def load_key() -> Ed25519PrivateKey:
@@ -153,7 +153,7 @@ def sign_blob(args: list[str]) -> None:
     info = public_key_info(key)
     signature = "cosign-fixture-ed25519:" + b64e(key.sign(statement_bytes))
     tlog_entries: list[dict[str, Any]] = []
-    if not os.getenv("SERVERWARE_COSIGN_FIXTURE_NO_TRANSPARENCY"):
+    if not os.getenv("CATCHPLATE_COSIGN_FIXTURE_NO_TRANSPARENCY"):
         tlog_entries.append(
             append_log(
                 {
@@ -182,7 +182,7 @@ def sign_blob(args: list[str]) -> None:
 
 
 def verify_blob(args: list[str]) -> None:
-    if os.getenv("SERVERWARE_COSIGN_FIXTURE_VERIFY_FAIL"):
+    if os.getenv("CATCHPLATE_COSIGN_FIXTURE_VERIFY_FAIL"):
         raise SystemExit("forced cosign fixture verify failure")
     bundle_path = option_value(args, "--bundle")
     if not bundle_path:

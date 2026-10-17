@@ -417,7 +417,7 @@ pub fn execute_bounded_docker_http_v12_with_cancellation(
         let sent_worker = Arc::clone(&sent);
         let cancelled_worker = Arc::clone(&cancelled);
         let upload = std::thread::Builder::new()
-            .name("serverware-private-dind-http-upload-v12".to_owned())
+            .name("catchplate-private-dind-http-upload-v12".to_owned())
             .spawn(move || -> Result<()> {
                 let outcome = (|| -> Result<()> {
                     write_all_deadline_counted(
@@ -1201,7 +1201,7 @@ fn relay_authorized_exchange_inner_v12(
     let upload_daemon_cancel = daemon.try_clone()?;
     let upload_client_cancel = client.try_clone()?;
     let upload = std::thread::Builder::new()
-        .name("serverware-docker-upload-v12".to_owned())
+        .name("catchplate-docker-upload-v12".to_owned())
         .spawn(move || -> Result<u64> {
             let result = (|| -> Result<u64> {
                 write_all_deadline_counted(

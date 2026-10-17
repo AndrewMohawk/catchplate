@@ -15,8 +15,8 @@ import threading
 import unittest
 from unittest import mock
 
-from serverware import authority_jit_compound_configuration as source
-from serverware.authority_query_read_work import QueryReadWorkError
+from catchplate import authority_jit_compound_configuration as source
+from catchplate.authority_query_read_work import QueryReadWorkError
 from test_authority_jit_original_configuration import Fixture as PageFixture, digest, work
 from test_authority_jit_original_authorization import WINDOW, EPOCH, MONOTONIC, clocks
 
@@ -51,7 +51,7 @@ class Fixture(PageFixture):
 
 class JitCompoundConfigurationControls(unittest.TestCase):
     def test_actual_inert_producer_joins_read_identity_policy_and_retained_page_owner(self):
-        from serverware.authority_jit_compound_production import _JitCompoundProducer
+        from catchplate.authority_jit_compound_production import _JitCompoundProducer
 
         fixture = Fixture()
         caller, meter = fixture.caller(), work()

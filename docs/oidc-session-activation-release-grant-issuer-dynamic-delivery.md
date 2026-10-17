@@ -9,7 +9,7 @@ or establish runtime readiness, successful token delivery or a current session.
 
 The isolated dynamic launcher accepts only `--root-delivery`. Its protected
 public trust directory is
-`/run/serverware/oidc-session-activation-release-grant-issuer-dynamic-trust`,
+`/run/catchplate/oidc-session-activation-release-grant-issuer-dynamic-trust`,
 with six root-owned, single-link, mode `0444` files:
 
 - `root-public-key.pem`
@@ -27,10 +27,10 @@ accepted on the staging channel.
 
 Two activated sockets are selected by distinct names, in either FD order:
 
-- Existing `serverware-oidc-session-activation-release-grant-issuer`, at
-  `/run/serverware/oidc-session-activation-token-release/grants.sock`.
-- New `serverware-oidc-session-activation-release-grant-issuer-bootstrap`, at
-  `/run/serverware/oidc-session-activation-token-release/grant-issuer-bootstrap.sock`.
+- Existing `catchplate-oidc-session-activation-release-grant-issuer`, at
+  `/run/catchplate/oidc-session-activation-token-release/grants.sock`.
+- New `catchplate-oidc-session-activation-release-grant-issuer-bootstrap`, at
+  `/run/catchplate/oidc-session-activation-token-release/grant-issuer-bootstrap.sock`.
 
 The new staging pathname is root:65494, mode `0660`; its only accepted issuer
 peer is UID/GID 65494. The existing public grant listener remains

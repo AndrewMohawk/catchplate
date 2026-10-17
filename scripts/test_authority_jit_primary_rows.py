@@ -13,8 +13,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_jit_primary_rows as source
-from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
+from catchplate import authority_jit_primary_rows as source
+from catchplate.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
 from test_authority_jit_assertion_planning import originals
 from test_authority_jit_primary_chunks import row as source_row, frames, native
 from test_authority_radix_mutation import IndependentTree

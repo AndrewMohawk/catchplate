@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.authority import local_trust_commit as cli
 from scripts.test_authority_local_install import plan as untrusted_plan
 from scripts.test_authority_local_trust import fixture as initial_fixture
-from serverware import authority_local_trust_commit as local
+from catchplate import authority_local_trust_commit as local
 
 PIN = "sha256:" + "1" * 64
 NOW = "2026-10-01T00:00:03Z"
@@ -42,7 +42,7 @@ def chain():
     plan = untrusted_plan(local=True)
     identity = dict(device=1, inode=2, generation=3, mode=plan["destination"]["directoryMode"], uid=0, gid=0)
     raw = local.spec.canonical_json_bytes(dict(completedAt="2026-10-01T00:00:02Z", generationDirectoryIdentity=identity))
-    source = local.spec.domain_digest("serverware.authorityProvisioningSourceIdentity/v1", local.spec.canonical_json_bytes(plan["sourceRoot"]))
+    source = local.spec.domain_digest("catchplate.authorityProvisioningSourceIdentity/v1", local.spec.canonical_json_bytes(plan["sourceRoot"]))
     first = dict(schema=local.contract.PROVISIONING_STATE_SCHEMA, stateId=PIN, revision=0, status="Prepared",
         requestId="install-0", transitionId="first-generation", packageDigest=plan["packageDigest"],
         generationDigest=plan["generationDigest"], planDigest=local.contract.provisioning_plan_digest(plan),
@@ -56,9 +56,9 @@ def chain():
         if index:
             value.update(revision=index, status=("Published", "Receipted")[index-1], previousStateDigest=states[-1]["recordDigest"],
                 publishedAt="2026-10-01T00:00:01Z", publishedIdentityDigest=local.spec.domain_digest(
-                    "serverware.authorityProvisionedGenerationIdentity/v1", local.spec.canonical_json_bytes(identity)))
+                    "catchplate.authorityProvisionedGenerationIdentity/v1", local.spec.canonical_json_bytes(identity)))
         if index == 2:
-            value.update(terminalAt=NOW, terminalReceiptDigest=local.spec.domain_digest("serverware.authorityExactTerminalReceiptBytes/v1", raw),
+            value.update(terminalAt=NOW, terminalReceiptDigest=local.spec.domain_digest("catchplate.authorityExactTerminalReceiptBytes/v1", raw),
                 terminalReceiptBytesBase64Url=local.spec.strict_base64url_encode(raw))
         value["recordDigest"] = local.spec.domain_digest(local.contract.PROVISIONING_STATE_DIGEST_DOMAIN, local.spec.canonical_json_bytes(value))
         states.append(value)

@@ -4,9 +4,9 @@ use super::{config::{CustodyServiceRole as Role, TRUSTED_HOST_SHARED_UDS_GID as 
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-pub(crate) const DIRECTORY: &str = "/run/serverware-response-v2-public";
-const LEAF: &str = "serverware-response-v2-public";
-const PROFILE: &str = "serverware.responseV2.guestPublicArtifacts/v1";
+pub(crate) const DIRECTORY: &str = "/run/catchplate-response-v2-public";
+const LEAF: &str = "catchplate-response-v2-public";
+const PROFILE: &str = "catchplate.responseV2.guestPublicArtifacts/v1";
 fn fail(message: &str) -> V2RuntimeError {
     V2RuntimeError::new("guest_public_artifacts_refused", message)
 }
@@ -256,21 +256,21 @@ mod tests {
             guest_public_artifacts: Option<Profile>,
         }
         assert!(serde_json::from_str::<Cold>("{}").unwrap().guest_public_artifacts.is_none());
-        let valid = r#"{"guestPublicArtifacts":{"apiVersion":"serverware.responseV2.guestPublicArtifacts/v1"}}"#;
+        let valid = r#"{"guestPublicArtifacts":{"apiVersion":"catchplate.responseV2.guestPublicArtifacts/v1"}}"#;
         assert_eq!(serde_json::from_str::<Cold>(valid).unwrap().guest_public_artifacts.unwrap().api_version, PROFILE);
         for rejected in [r#"{"guestPublicArtifacts":null}"#,
             r#"{"guestPublicArtifacts":{}}"#,
-            r#"{"guestPublicArtifacts":{"apiVersion":"serverware.responseV2.guestPublicArtifacts/v1","path":"/run/custom"}}"#] {
+            r#"{"guestPublicArtifacts":{"apiVersion":"catchplate.responseV2.guestPublicArtifacts/v1","path":"/run/custom"}}"#] {
             assert!(serde_json::from_str::<Cold>(rejected).is_err());
         }
     }
 
     #[test]
     fn public_tree_cannot_be_a_private_input() {
-        for path in [DIRECTORY, "/run/serverware-response-v2-public/state-authority/seed"] {
+        for path in [DIRECTORY, "/run/catchplate-response-v2-public/state-authority/seed"] {
             assert!(require_private_path(Path::new(path)).is_err());
         }
-        assert!(require_private_path(Path::new("/run/serverware-response-v2-public-private/seed")).is_ok());
-        assert!(require_private_path(Path::new("/run/serverware-private/seed")).is_ok());
+        assert!(require_private_path(Path::new("/run/catchplate-response-v2-public-private/seed")).is_ok());
+        assert!(require_private_path(Path::new("/run/catchplate-private/seed")).is_ok());
     }
 }

@@ -79,7 +79,7 @@ pub(super) fn extract(request:&Dispatch,result:&DispatchResult,scope:&scope::Sco
             let wire:IngressCustodyAdmissionWire=decode(artifact,ArtifactKind::IngressCustodyAdmission)?;
             match wire {
                 IngressCustodyAdmissionWire::NativeAssigned(wire)=>{
-                    require(wire.api_version=="serverware.nativeIngressCustodyAdmission/v1"
+                    require(wire.api_version=="catchplate.nativeIngressCustodyAdmission/v1"
                         && wire.sampling_commitment.context.request_binding_sha256==*request_binding_sha256
                         && wire.opening_spill_receipt.request_binding_sha256==*request_binding_sha256
                         && wire.opening_spill_receipt.event_phase==ShadowSpoolPhase::IngressOpen)?;

@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_authority_prepared_static_kernel as base
 
 ROOT, MARKER, READ = base.ROOT, base.MARKER, base.READ
-SCHEMA = "serverware.contentCatalogKernelComponent/v1"
+SCHEMA = "catchplate.contentCatalogKernelComponent/v1"
 CATALOG = "content-catalog.json"
 CONTENT = {"empty": b"", "payload": b"C" * (2 * 1024 * 1024),
            "changed": b"D" * (2 * 1024 * 1024)}
@@ -57,7 +57,7 @@ def child_admit(identity):
             and threading.active_count() == 1)
     require(base.bounded_text("/proc/cmdline", 16384).split().count(MARKER) == 1
             and set(os.listdir("/sys/class/net")) == {"lo"}
-            and not any(name.startswith("SERVERWARE_") for name in os.environ))
+            and not any(name.startswith("CATCHPLATE_") for name in os.environ))
     require(Path(ROOT).resolve().as_posix() == ROOT)
     mount, root = os.stat(base.MOUNT, follow_symlinks=False), os.stat(ROOT, follow_symlinks=False)
     require(stat.S_ISDIR(mount.st_mode) and mount.st_uid == mount.st_gid == 0
@@ -163,7 +163,7 @@ def parent(args, source, local, measure, deadline):
     require(counts == {"empty": 1, "payload": 3})
     rows.sort(key=lambda row: (row["fsVerityDigest"], row["size"]))
     require(len({(row["fsVerityDigest"], row["size"]) for row in rows}) == 2)
-    raw = measure.spec.canonical_json_bytes(dict(schema="serverware.sealedContentCatalog/v1", entries=rows))
+    raw = measure.spec.canonical_json_bytes(dict(schema="catchplate.sealedContentCatalog/v1", entries=rows))
     base.write_fixture(Path(ROOT) / CATALOG, raw, local, verity=False)
     try: fd = os.open(Path(ROOT) / "payload", os.O_WRONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
     except OSError as error: require(error.errno in (errno.EPERM, errno.EACCES))
@@ -211,8 +211,8 @@ def main():
             require(args.pin is args.identity is args.deadline is None)
             source = base.admit(args.root)  # Unchanged strict absent-root parent gate.
         sys.path.insert(0, str(source))
-        from serverware import authority_local_artifact_measure as measure
-        from serverware import authority_local_install as local
+        from catchplate import authority_local_artifact_measure as measure
+        from catchplate import authority_local_install as local
         if args.worker: report["worker"] = worker(args, local, measure, deadline)
         else: report.update(parent(args, source, local, measure, deadline))
         report.update(ok=True, kernel=os.uname().release, filesystem="ext4", fsVerityAlgorithm="sha256")

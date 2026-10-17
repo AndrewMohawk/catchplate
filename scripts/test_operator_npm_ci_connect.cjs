@@ -20,7 +20,7 @@ const {pathToFileURL} = require('node:url');
 const ROOT = path.resolve(__dirname, '..');
 const EXAMPLE = path.join(ROOT, 'examples/npm-registry');
 const HOST = 'proxy.operator-basic.example.test';
-const PACKAGES = ['serverware-fixture-publish', '@serverware-fixture/publish'];
+const PACKAGES = ['catchplate-fixture-publish', '@catchplate-fixture/publish'];
 const NAMES = new Set(['host', 'proxy-authorization', 'proxy-connection', 'connection',
   'user-agent', 'content-length', 'transfer-encoding', 'content-encoding']);
 const RESPONSE = 'HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n';
@@ -101,7 +101,7 @@ async function run() {
   const manifest = file(path.join(projectPath, 'package.json'), 65536);
   const lock = file(path.join(projectPath, 'package-lock.json'), 4 * 1024 * 1024);
   const parsed = JSON.parse(manifest), locked = JSON.parse(lock);
-  assert.deepEqual(parsed, {name: 'serverware-fixture-consumer', version: '1.0.0', private: true,
+  assert.deepEqual(parsed, {name: 'catchplate-fixture-consumer', version: '1.0.0', private: true,
     dependencies: {[PACKAGES[0]]: '1.0.2'}});
   assert.deepEqual(Object.keys(locked.packages).sort(), ['', ...PACKAGES.map(name => 'node_modules/' + name)].sort());
   for (const [name, version] of [[PACKAGES[0], '1.0.2'], [PACKAGES[1], '3.0.0']]) {
@@ -110,7 +110,7 @@ async function run() {
     assert.equal(entry.resolved, 'https://registry.npmjs.org/' + name + '/-/' + name.split('/').at(-1) + '-' + version + '.tgz');
     assert.deepEqual(entry.dependencies || {}, name === PACKAGES[0] ? {[PACKAGES[1]]: '3.0.0'} : {});
   }
-  temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'serverware-npm-ci-connect-'));
+  temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'catchplate-npm-ci-connect-'));
   assert.equal(fs.statSync(temporary).mode & 0o777, 0o700);
   const paths = {root: temporary, project: path.join(temporary, 'project'), cache: path.join(temporary, 'cache'),
     trust: path.join(temporary, 'trust.pem'), npmrc: path.join(temporary, 'user.npmrc'),
@@ -143,10 +143,10 @@ async function run() {
   });
   server.on('tlsClientError', () => { fault('tls_client_error'); });
   await new Promise((accept, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', accept); });
-  const config = core.configuration({SERVERWARE_PROXY_URL: 'https://' + HOST + ':' + server.address().port,
-    SERVERWARE_APP_ID: '00000000-0000-4000-8000-000000000001', SERVERWARE_PROXY_TOKEN: 'A'.repeat(43),
-    SERVERWARE_CA_FILE: caPath, SERVERWARE_NPM_PACKAGE: PACKAGES[0], SERVERWARE_NPM_VERSION: '1.0.2',
-    SERVERWARE_NPM_PROJECT: projectPath, SERVERWARE_NPM_OUTPUT: paths.project}, 'ci');
+  const config = core.configuration({CATCHPLATE_PROXY_URL: 'https://' + HOST + ':' + server.address().port,
+    CATCHPLATE_APP_ID: '00000000-0000-4000-8000-000000000001', CATCHPLATE_PROXY_TOKEN: 'A'.repeat(43),
+    CATCHPLATE_CA_FILE: caPath, CATCHPLATE_NPM_PACKAGE: PACKAGES[0], CATCHPLATE_NPM_VERSION: '1.0.2',
+    CATCHPLATE_NPM_PROJECT: projectPath, CATCHPLATE_NPM_OUTPUT: paths.project}, 'ci');
   core.reviewedProject(config, manifest, lock);
   write(paths.npmrc, core.npmConfiguration(config));
   stage = 'stock_ci';
@@ -175,7 +175,7 @@ async function run() {
   stage = 'result_source';
   assert(file(path.join(projectPath, 'package.json'), 65536).equals(manifest));
   assert(file(path.join(projectPath, 'package-lock.json'), 4 * 1024 * 1024).equals(lock));
-  return {schema: 'serverware.privateNpmCiConnectProbe/v1', ok: true, syntheticOnly: true,
+  return {schema: 'catchplate.privateNpmCiConnectProbe/v1', ok: true, syntheticOnly: true,
     proxyAcceptance: false, stockNpmVersion: '11.8.0', nodeVersion: process.version, versions,
     inputManifestSha256: digest(manifest), inputLockSha256: digest(lock), sourcePreserved: true,
     fixedResponseStatus: 400, npmDiagnostic: diagnostic, connections, requests: heads};
@@ -183,10 +183,10 @@ async function run() {
 async function main() {
   let receipt;
   timer = setTimeout(() => {expired = true; stop();}, 25000);
-  emergency = setTimeout(() => {process.stdout.write(JSON.stringify({schema: 'serverware.privateNpmCiConnectProbe/v1',
+  emergency = setTimeout(() => {process.stdout.write(JSON.stringify({schema: 'catchplate.privateNpmCiConnectProbe/v1',
     ok: false, syntheticOnly: true, proxyAcceptance: false, stage: 'deadline', cleanup: false}) + '\n'); process.exit(1);}, 28000);
   try { receipt = await run(); }
-  catch { receipt = {schema: 'serverware.privateNpmCiConnectProbe/v1', ok: false, syntheticOnly: true,
+  catch { receipt = {schema: 'catchplate.privateNpmCiConnectProbe/v1', ok: false, syntheticOnly: true,
     proxyAcceptance: false, stage, connections, requests: heads, npmDiagnostic,
     probeState: {expired, childClosed, fatal, fatalCause}}; }
   finally {

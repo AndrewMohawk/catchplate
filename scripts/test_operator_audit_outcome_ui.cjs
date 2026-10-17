@@ -13,14 +13,14 @@ function marker(upstreamDispatch = 'response_received', mayHaveCommitted = true)
 }
 function record(event = {}, event_type = TYPE, id = 'synthetic-audit-event') {
   return {id, event_type, created_at: '2026-10-11T12:00:00Z', actor_type: 'data_plane',
-    event: {component: 'serverware-decision-gate-rs', outcome: 'blocked', method: 'POST',
+    event: {component: 'catchplate-decision-gate-rs', outcome: 'blocked', method: 'POST',
       attempt_id: '11111111-1111-4111-8111-111111111111', upstream_status: 201, ...event}};
 }
 function run() {
   let effects = 0;
   const forbid = () => { effects++; throw new Error('No effects permitted'); };
   const context = vm.createContext({fetch: forbid, setTimeout: forbid, document: {createElement: forbid}});
-  vm.runInContext(readFileSync(resolve(__dirname, '../serverware/operator_demo_web/workspace_proxy_audit.js'), 'utf8'), context, {timeout: 1000});
+  vm.runInContext(readFileSync(resolve(__dirname, '../catchplate/operator_demo_web/workspace_proxy_audit.js'), 'utf8'), context, {timeout: 1000});
   const present = vm.runInContext('auditProviderOutcome', context);
   const unknown = value => { const result = present(value); assert.equal(result.kind, 'unknown'); assert.equal(result.warning, false); assert.equal(result.text, UNKNOWN); };
   const tests = [

@@ -1,24 +1,24 @@
 services:
-  serverware:
+  catchplate:
     security_opt:
-      - apparmor=serverware-docker
+      - apparmor=catchplate-docker
 
   audit-anchor:
     security_opt:
-      - apparmor=serverware-docker
+      - apparmor=catchplate-docker
 
   grant-store:
     security_opt:
-      - apparmor=serverware-docker
+      - apparmor=catchplate-docker
 
   demo-upstream:
     security_opt:
-      - apparmor=serverware-docker
+      - apparmor=catchplate-docker
 
   decision-gate-rs:
     security_opt:
-      - apparmor=serverware-docker
+      - apparmor=catchplate-docker
 
   custody-runtime:
     security_opt:
-      - apparmor=serverware-docker
+      - apparmor=catchplate-docker

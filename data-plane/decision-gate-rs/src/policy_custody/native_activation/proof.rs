@@ -2,10 +2,10 @@
 //! purpose never accepts Fleet READY or a caller-selected verification key.
 use super::*;
 #[path="completion.rs"] mod completion;
-const CONFIG:&str="serverware.policyAuthorityServiceConfiguration/v6";
-const SIGNED_CONFIG:&str="serverware.signedPolicyAuthorityServiceConfiguration/v6";
+const CONFIG:&str="catchplate.policyAuthorityServiceConfiguration/v6";
+const SIGNED_CONFIG:&str="catchplate.signedPolicyAuthorityServiceConfiguration/v6";
 pub(super) const OPERATION:&str="native-policy-activation.consume";
-pub(super) const HANDLER:&str="serverware_policy_authority_native_policy_activation_consume";
+pub(super) const HANDLER:&str="catchplate_policy_authority_native_policy_activation_consume";
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(crate) struct AuthorityConfiguration{
@@ -40,7 +40,7 @@ pub(super) fn signed(value:&Value,public:&str,schema:&str)->Result<(),ShadowErro
 impl Authority{
     pub(crate) fn admit(raw:&[u8])->Result<Self,ShadowError>{
         let configuration:AuthorityConfiguration=serde_json::from_value(document(raw,8*1024*1024)?).map_err(fail)?;
-        require(configuration.api_version=="serverware.nativePolicyActivationAuthority/v1")?;
+        require(configuration.api_version=="catchplate.nativePolicyActivationAuthority/v1")?;
         let root=key(&configuration.root_public_key_base64url)?;
         require(public_spki(&root)==configuration.root_spki_sha256)?;
         let configuration_original=decode(&configuration.configuration_original_base64url,3*1024*1024)?;
@@ -70,7 +70,7 @@ impl Authority{
         verify_assignment_authority_key_material(assignment,trust)?;
         let policy=&self.payload["policyCanaryNativeActivationPolicy"];
         exact(policy,&["schema","deploymentId","issuedAtEpochNs","expiresAtEpochNs","maximumActivationNanos","canaries","publicationKeys"])?;
-        require(policy["schema"]=="serverware.policyCanaryNativeActivationAuthorityPolicy/v1")?;
+        require(policy["schema"]=="catchplate.policyCanaryNativeActivationAuthorityPolicy/v1")?;
         validate_trusted_freshness(integer(policy,"issuedAtEpochNs")?,integer(policy,"expiresAtEpochNs")?,time,86_400_000_000_000)?;
         require((1_000_000_000..=300_000_000_000).contains(&integer(policy,"maximumActivationNanos")?))?;
         let canaries=policy["canaries"].as_array().ok_or(ShadowError::BindingDrift)?;
@@ -105,7 +105,7 @@ pub(super) fn verify(request:&Request,authority:&Authority,assignment:&VerifiedA
         "authorityKeyIndependenceSha256","generationId","generationPublicationEnvelopeSha256","readyStateSha256","readinessRequestId",
         "readinessResultSha256","readinessCoreSha256","publicationBefore","publicationAfter","trustCheckpoint","approvalOriginal",
         "readinessOriginal","readyOriginal","controlPlaneConfigurationSha256","activationPolicySha256","issuedAtUnixNanos","expiresAtUnixNanos"])?;
-    require(prepared["apiVersion"]=="serverware.nativePolicyActivationPrepared/v1" && prepared["activationId"]==request.request_id
+    require(prepared["apiVersion"]=="catchplate.nativePolicyActivationPrepared/v1" && prepared["activationId"]==request.request_id
         && prepared["replayId"]==request.replay_id && digest_field(&prepared,"assignmentSha256")?==*assignment.envelope_sha256()
         && digest_field(&prepared,"assignmentPayloadSha256")?==*assignment.payload_sha256()
         && integer(&prepared,"assignmentRevision")? as u64==assignment.payload().assignment_revision
@@ -124,7 +124,7 @@ pub(super) fn verify(request:&Request,authority:&Authority,assignment:&VerifiedA
             item["canaryId"]==prepared["canaryId"] && item["assignmentSha256"]==prepared["assignmentSha256"]))?;
     let readiness=document(text(&prepared,"readinessOriginal")?.as_bytes(),MAX_PREPARED)?;
     exact(&readiness,&["apiVersion","recordSha256","coverage","core","coreSha256","okForAction","activationApprovalConsumed","automaticRetryAllowed"])?;
-    require(readiness["apiVersion"]=="serverware.nativePolicyReadinessResult/v1"
+    require(readiness["apiVersion"]=="catchplate.nativePolicyReadinessResult/v1"
         && readiness["coverage"]=="complete-native-fleet-readiness-derived" && readiness["okForAction"]==false
         && readiness["activationApprovalConsumed"]==false && readiness["automaticRetryAllowed"]==false
         && digest_field(&prepared,"readinessResultSha256")?==Sha256Digest::compute(&canonical_json_bytes(&readiness)?)
@@ -135,7 +135,7 @@ pub(super) fn verify(request:&Request,authority:&Authority,assignment:&VerifiedA
         "designatedReadyRevision","policyIdentity","compilerAnalysisSha256","compilerAnalysisPayloadSha256","authorityAnalysis","pilotRestrictions",
         "fleet","memberEvidence","memberEvidenceRootSha256","aggregateCounters","readinessThresholds","calculatedRates",
         "responseValidationObligationsRootSha256","trustCheckpoint","currentPublication","readinessPolicySha256","issuedAtUnixNanos","expiresAtUnixNanos"])?;
-    require(core["apiVersion"]=="serverware.nativePolicyReadinessCore/v1" && core["canaryId"]==prepared["canaryId"]
+    require(core["apiVersion"]=="catchplate.nativePolicyReadinessCore/v1" && core["canaryId"]==prepared["canaryId"]
         && core["assignmentSha256"]==prepared["assignmentSha256"] && core["assignmentPayloadSha256"]==prepared["assignmentPayloadSha256"]
         && canonical_json_bytes(&assignment.payload().fleet)?==canonical_json_bytes(&core["fleet"])?
         && canonical_json_bytes(&assignment.payload().policy_identity)?==canonical_json_bytes(&core["policyIdentity"])?

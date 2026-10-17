@@ -12,7 +12,7 @@ is not observed token delivery, worker readiness or production acceptance.
 The fixed POST action is
 `/api/auth/session/activation/consume/completion/recovery/retained-release`;
 its options route adds `/options`. The [fresh actor](control-plane-oidc-session-activation-completion-recovery-actor.md)
-uses `serverware.oidcSessionActivationCompletionRecoveryRetainedDeliveryIntent/v1`
+uses `catchplate.oidcSessionActivationCompletionRecoveryRetainedDeliveryIntent/v1`
 and the distinct `retained-release` purpose. Preparation-only approval, closed
 actors and prior LIVE permissions cannot authorize this action.
 
@@ -35,7 +35,7 @@ signing, setup, proof request, completion exchange or SQL execution occurs here.
 
 ## Policy claim, opaque retention and independent admission
 
-The [acquisition coordinator](../serverware/control_plane_oidc_session_activation_completion_recovery_retained_acquisition.py)
+The [acquisition coordinator](../catchplate/control_plane_oidc_session_activation_completion_recovery_retained_acquisition.py)
 uses independently configured recovery issuer endpoint, policy, custody and
 enrollment originals. It re-admits the policy and joins its expected release,
 evidence, proof scope and caller to the actual retained originals before contact.
@@ -71,7 +71,7 @@ and staged original, binds the actual resources, and continues through same-PID
 privilege drop into the finite worker. No private signer or AES key is delivered
 to the public caller.
 
-The [protected exchange](../serverware/control_plane_oidc_session_activation_completion_recovery_retained_exchange.py)
+The [protected exchange](../catchplate/control_plane_oidc_session_activation_completion_recovery_retained_exchange.py)
 re-admits the genuine originals under fixed RECOVERY/checkpoint-one authority.
 The protected endpoint comes from that policy, not the issuer endpoint or a LIVE
 pin. Before the sole socket exchange it durably claims the **same global client
@@ -91,7 +91,7 @@ fixed nonsecret response and one cookie, then requires normal actor and context
 cleanup before `.finish()`. The signed ASGI send boundary retains the original
 resource/receiver guards and checks the exact body and cookie again.
 
-Success uses `serverware.oidcSessionActivationCompletionRecoveryRetainedDeliveryResponse/v1`,
+Success uses `catchplate.oidcSessionActivationCompletionRecoveryRetainedDeliveryResponse/v1`,
 purpose `retained-release`, status `recovered`, session state `active`, and no
 automatic retry. No token or permission DTO crosses the HTTP coordinator.
 Pre-send failure preserves the existing cookie. After headers start there is no

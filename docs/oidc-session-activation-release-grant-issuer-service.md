@@ -55,7 +55,7 @@ replace original grant admission by the receiving caller.
 ## Explicit launch-v2 staging
 
 The unchanged signed bootstrap envelope can select the closed nested
-`serverware.oidcSessionActivationReleaseGrantIssuerLaunch/v2` launch. It adds
+`catchplate.oidcSessionActivationReleaseGrantIssuerLaunch/v2` launch. It adds
 only `deliveryEndpoint`: fixed `bootstrap.sock` under the existing release
 socket directory, integer timeout 1–30 seconds no greater than the original
 issuer request timeout, and root peer UID/GID 0. The immutable admitted

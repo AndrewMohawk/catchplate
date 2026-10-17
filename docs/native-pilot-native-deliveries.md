@@ -54,7 +54,7 @@ CommitRequest and Spool owners; a caller-authored observation does not create
 resource authority. No new listener, journal, key or process is allocated here.
 
 The pure builder emits the existing nine-field
-`serverware.nativePilotDeliverySigningInput/v1`. The separate existing C9 issuer
+`catchplate.nativePilotDeliverySigningInput/v1`. The separate existing C9 issuer
 performs signing. Before the next decision, the returned original must match
 the complete approved payload, fixed delivery publication path and actual cold
 authority signature. A reply, digest or syntactically valid result alone is
@@ -119,7 +119,7 @@ lock were unchanged; no native rebuild, cloud or paid action ran.
 Durable evidence is retained at:
 
 ```text
-/home/catchplate/codex-offload/serverware/engineering-builds/fb339c26-native-deliveries-e3ALOo/
+/home/catchplate/codex-offload/catchplate/engineering-builds/fb339c26-native-deliveries-e3ALOo/
 ```
 
 The directory contains the frozen source archive and commit, exact runner/check

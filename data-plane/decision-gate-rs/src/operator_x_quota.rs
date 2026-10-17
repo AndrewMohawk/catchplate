@@ -3,13 +3,13 @@
 //! a reusable credential cache entry nor native release authority is a permit.
 use super::*;
 
-const FLAG: &str = "SERVERWARE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED";
-const REQUEST: &str = "serverware.operatorXQuotaCredentialLeaseRequest/v1";
-const RESPONSE: &str = "serverware.operatorXQuotaCredentialLeaseResponse/v1";
-const CLAIM_REQUEST: &str = "serverware.operatorXQuotaClaimRequest/v1";
-const CLAIM_RESPONSE: &str = "serverware.operatorXQuotaClaimResponse/v1";
-const RESERVATION: &str = "serverware.operatorXPostingQuotaReservation/v1";
-const CLAIM: &str = "serverware.operatorXPostingQuotaClaim/v1";
+const FLAG: &str = "CATCHPLATE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED";
+const REQUEST: &str = "catchplate.operatorXQuotaCredentialLeaseRequest/v1";
+const RESPONSE: &str = "catchplate.operatorXQuotaCredentialLeaseResponse/v1";
+const CLAIM_REQUEST: &str = "catchplate.operatorXQuotaClaimRequest/v1";
+const CLAIM_RESPONSE: &str = "catchplate.operatorXQuotaClaimResponse/v1";
+const RESERVATION: &str = "catchplate.operatorXPostingQuotaReservation/v1";
+const CLAIM: &str = "catchplate.operatorXPostingQuotaClaim/v1";
 const DAY_MS: u128 = 86_400_000;
 const ERROR: &str = "operator_x_post_attempt_quota_unavailable";
 fn refused() -> String {
@@ -116,7 +116,7 @@ pub(super) fn capability(state: &GateState) -> Value {
     {
         return Value::Null;
     }
-    json!({"schema":"serverware.operatorXPostAttemptQuota/v1","field":"daily_post_attempt_limit",
+    json!({"schema":"catchplate.operatorXPostAttemptQuota/v1","field":"daily_post_attempt_limit",
         "period":"utc_day","scope":"verified_x_account","unit":"posting_attempt","minimum":1,"maximum":1_000_000_000})
 }
 
@@ -818,13 +818,13 @@ fn exchange(
         .credential_lease_client
         .post(url.clone())
         .header(
-            "X-Serverware-Data-Plane-Token",
+            "X-Catchplate-Data-Plane-Token",
             state
                 .credential_lease_token
                 .as_deref()
                 .ok_or_else(refused)?,
         )
-        .header("X-Serverware-Response-Nonce", nonce)
+        .header("X-Catchplate-Response-Nonce", nonce)
         .json(wire)
         .timeout(remaining.min(CREDENTIAL_LEASE_REQUEST_TIMEOUT))
         .send()

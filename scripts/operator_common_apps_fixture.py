@@ -29,16 +29,16 @@ TOKEN = "synthetic-common-apps-credential-not-a-real-provider-token"
 MODEL, CHANNEL = "fixture-model", "123456789012345678"
 SPECS = {
     "openai": {"host": PROVIDERS[0], "path": "/v1/responses", "operation": "responses_text_v1",
-        "header": "Authorization", "placeholder": "Bearer serverware-openai-placeholder-v1",
+        "header": "Authorization", "placeholder": "Bearer catchplate-openai-placeholder-v1",
         "injected": "Bearer " + TOKEN, "body": {"model": MODEL, "input": "Hi",
             "max_output_tokens": 16, "stream": False, "store": False}},
     "anthropic": {"host": PROVIDERS[1], "path": "/v1/messages", "operation": "messages_text_v1",
-        "header": "x-api-key", "placeholder": "serverware-anthropic-placeholder-v1", "injected": TOKEN,
+        "header": "x-api-key", "placeholder": "catchplate-anthropic-placeholder-v1", "injected": TOKEN,
         "body": {"model": MODEL, "messages": [{"role": "user", "content": "Hi"}],
             "max_tokens": 16, "stream": False}},
     "discord": {"host": PROVIDERS[2], "path": "/api/v10/channels/" + CHANNEL + "/messages",
         "operation": "create_message", "header": "Authorization",
-        "placeholder": "Bot serverware-discord-placeholder-v1", "injected": "Bot " + TOKEN,
+        "placeholder": "Bot catchplate-discord-placeholder-v1", "injected": "Bot " + TOKEN,
         "body": {"content": "Deployment completed.", "allowed_mentions": {"parse": []}}},
 }
 PAGE = "01234567-89ab-cdef-0123-456789abcdef"
@@ -48,27 +48,27 @@ SDK_SPECS = {
     "anthropic": {**SPECS["anthropic"], "scope": {"model": MODEL, "max_output_tokens": 16},
         "request_headers": {"anthropic-version": "2023-06-01"}},
     "gemini": {"host": "generativelanguage.googleapis.com", "path": "/v1beta/models/" + MODEL + ":generateContent",
-        "operation": "generate_text_v1", "header": "x-goog-api-key", "placeholder": "serverware-gemini-placeholder-v1",
+        "operation": "generate_text_v1", "header": "x-goog-api-key", "placeholder": "catchplate-gemini-placeholder-v1",
         "injected": TOKEN, "scope": {"model": MODEL, "max_output_tokens": 16},
         "body": {"contents": [{"role": "user", "parts": [{"text": "Hi"}]}], "generationConfig": {"maxOutputTokens": 16}}},
     "openrouter": {"host": "openrouter.ai", "path": "/api/v1/chat/completions", "operation": "chat_text_v1",
-        "header": "Authorization", "placeholder": "Bearer serverware-openrouter-placeholder-v1", "injected": "Bearer " + TOKEN,
+        "header": "Authorization", "placeholder": "Bearer catchplate-openrouter-placeholder-v1", "injected": "Bearer " + TOKEN,
         "scope": {"model": "vendor/" + MODEL, "max_output_tokens": 16},
         "body": {"model": "vendor/" + MODEL, "messages": [{"role": "user", "content": "Hi"}], "max_tokens": 16, "stream": False}},
     "slack": {"host": "slack.com", "path": "/api/chat.postMessage", "operation": "post_message",
-        "header": "Authorization", "placeholder": "Bearer serverware-slack-placeholder-v1", "injected": "Bearer " + TOKEN,
+        "header": "Authorization", "placeholder": "Bearer catchplate-slack-placeholder-v1", "injected": "Bearer " + TOKEN,
         "scope": {"channel": "C0123456789"}, "body": {"channel": "C0123456789", "text": "Deployment completed.",
             "unfurl_links": False, "unfurl_media": False}},
     "notion": {"host": "api.notion.com", "path": "/v1/blocks/" + PAGE + "/children", "operation": "block_children", "method": "GET",
-        "header": "Authorization", "placeholder": "Bearer serverware-notion-placeholder-v1", "injected": "Bearer " + TOKEN,
+        "header": "Authorization", "placeholder": "Bearer catchplate-notion-placeholder-v1", "injected": "Bearer " + TOKEN,
         "scope": {"block_id": PAGE}, "body": None, "request_headers": {"Notion-Version": "2026-03-11"},
         "query": {"page_size": "1", "start_cursor": "11111111-2222-4333-8444-555555555555"}},
     "stripe": {"host": "api.stripe.com", "path": "/v1/customers", "operation": "customers", "method": "GET",
-        "header": "Authorization", "placeholder": "Bearer serverware-stripe-placeholder-v1", "injected": "Bearer " + TOKEN,
+        "header": "Authorization", "placeholder": "Bearer catchplate-stripe-placeholder-v1", "injected": "Bearer " + TOKEN,
         "scope": {}, "body": None, "query": {"limit": "1", "starting_after": "cus_fixture_start"}},
     "cloudflare": {"host": "api.cloudflare.com", "path": "/client/v4/zones/" + ZONE + "/dns_records",
         "operation": "dns_records_sdk_v1", "method": "GET", "header": "Authorization",
-        "placeholder": "Bearer serverware-cloudflare-placeholder-v1", "injected": "Bearer " + TOKEN,
+        "placeholder": "Bearer catchplate-cloudflare-placeholder-v1", "injected": "Bearer " + TOKEN,
         "scope": {"zone_id": ZONE}, "body": None, "query": {"page": "1", "per_page": "1"},
         "sdk_headers": {"api-version": "2026-10-15"}},
 }
@@ -215,8 +215,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def sdk_request(self):
         """Validate what the actual SDK sent, without rewriting its transport."""
-        from serverware.operator_common_apps_ai import PRESETS as AI_PRESETS
-        from serverware.operator_common_apps_services import PRESETS as SERVICE_PRESETS
+        from catchplate.operator_common_apps_ai import PRESETS as AI_PRESETS
+        from catchplate.operator_common_apps_services import PRESETS as SERVICE_PRESETS
 
         self.server.total += 1
         target = urlsplit(self.path)
@@ -258,7 +258,7 @@ class Handler(BaseHTTPRequestHandler):
                 value = json.loads(raw, object_pairs_hook=pairs,
                     parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite JSON")))
                 assert encoded(value) == encoded(spec["body"])
-            assert "serverware-" + name + "-placeholder-v1" not in str(fields)
+            assert "catchplate-" + name + "-placeholder-v1" not in str(fields)
             row.update(accepted=True, authStyle=spec["header"], bodySha256="sha256:" + hashlib.sha256(raw).hexdigest(),
                 method=self.command, path=target.path, query=dict(query), rawQuery=target.query, headerNames=sorted(headers),
                 userAgent=headers.get("user-agent"), retryCount=headers.get("x-stainless-retry-count"))
@@ -276,7 +276,7 @@ def serve(*, mcp_smoke=False, sdk_smoke=False):
     with HTTPServer((isolated.FIXTURE_IP, 443), Handler) as server:
         server.total, server.attempts, server.timeout = 0, [], 0.5
         server.sdk_smoke = sdk_smoke
-        server.user_agent = "serverware-common-apps-example/1.0" if mcp_smoke else "serverware-common-apps-fixture/1"
+        server.user_agent = "catchplate-common-apps-example/1.0" if mcp_smoke else "catchplate-common-apps-fixture/1"
         server.socket = context.wrap_socket(server.socket, server_side=True)
         until = time.monotonic() + 290
         while time.monotonic() < until:

@@ -12,8 +12,8 @@ nor turns its key custody into present-caller permission.
 ## Explicit parent v4
 
 The original root-signed envelope uses
-`serverware.signedControlPlaneEnrollmentBootstrap/v4`; its payload uses
-`serverware.controlPlaneEnrollmentBootstrap/v4`. It retains every parent v3
+`catchplate.signedControlPlaneEnrollmentBootstrap/v4`; its payload uses
+`catchplate.controlPlaneEnrollmentBootstrap/v4`. It retains every parent v3
 field and adds required `registrationFinalization`, either null, the exact
 six-field v1 object below, or the explicit nested v2/v3/v4 extensions described next.
 The complete canonical original remains bounded to
@@ -21,31 +21,31 @@ The complete canonical original remains bounded to
 
 | Nested field | Fixed contract |
 | --- | --- |
-| `schema` | `serverware.controlPlaneRegistrationFinalization/v1` |
+| `schema` | `catchplate.controlPlaneRegistrationFinalization/v1` |
 | `finalizationCallerPrivateKeyFd` | Integer `204` |
 | `currentRootEnrollment` | Original `{base64Url, byteCount}`, at most 128 KiB |
 | `grantEnrollment` | Original `{base64Url, byteCount}`, at most 16 KiB |
 | `authorizationEnrollment` | Original finalization-purpose `{base64Url, byteCount}`, at most 16 KiB |
 | `authorizerEndpoint` | Exact `socketPath`, `requestTimeoutSeconds`, `listenerUid`, `listenerGid` |
 
-The endpoint is `/run/serverware/registration-finalization-authorizer.sock`,
+The endpoint is `/run/catchplate/registration-finalization-authorizer.sock`,
 timeout integer 1–30 seconds, and listener peer `0:0`. This pins a root-activated
 listener, not a signing process identity or an installed/running service. There
 is no hostname, environment override, alternate endpoint or evidence-authorizer
 fallback.
 
-The [parent bootstrap](../serverware/control_plane_enrollment_bootstrap.py)
+The [parent bootstrap](../catchplate/control_plane_enrollment_bootstrap.py)
 provides `_produce_v4_on_work` for an independently authorized provisioner and
 admits v4 through its existing `_admit_on_work`. The producer receives the actual
 root key pair, complete configuration/generation/runtime identities and explicit
 nested originals; it does not generate keys, open descriptors or provision files.
-The [nested admission](../serverware/control_plane_registration_finalization_bootstrap.py)
+The [nested admission](../catchplate/control_plane_registration_finalization_bootstrap.py)
 genuinely checks the finalization-specific root delegation and original
 current-root/grant enrollment, configuration, generation and audience bindings.
 Its planner and operation keys come from the actual finalization transition
 configuration, never the registration evidence-admission policy.
 
-The stdlib-only [early descriptor projection](../serverware/authority_fd_entrypoint.py)
+The stdlib-only [early descriptor projection](../catchplate/authority_fd_entrypoint.py)
 now accepts each closed nested v1/v2/v3/v4 shape and its source-fixed endpoints;
 the older v1-only projection would have rejected v2 before child startup. All
 four profiles still select the same FD204. This delivery check authenticates
@@ -60,14 +60,14 @@ an absent v4 field nor an older profile implicitly enables finalization.
 
 ## Opt-in reservation scope
 
-Nested `serverware.controlPlaneRegistrationFinalization/v2` retains the six
+Nested `catchplate.controlPlaneRegistrationFinalization/v2` retains the six
 fields above and requires exactly `reserverEndpoint` and `statePredecessor`.
 The complete parent v4 root signature authenticates these fields; no newer
 parent schema, new key, descriptor or environment variable is needed. Nested
 v1 remains grant-only and cannot silently acquire reservation authority.
 
 `reserverEndpoint` uses the same closed endpoint shape with fixed path
-`/run/serverware/registration-finalization/reserver.sock`, integer timeout
+`/run/catchplate/registration-finalization/reserver.sock`, integer timeout
 1–30 seconds and listener peer `0:0`. `statePredecessor` is exactly
 `{sequence, headDigest, nextFence}`. Genuine current-root enrollment admission
 binds its capacity and generation. A genesis sequence requires the original
@@ -85,9 +85,9 @@ and [public permission flow](public-registration-finalization-reservation.md).
 
 ## Opt-in SQL/current-pending configuration
 
-Nested `serverware.controlPlaneRegistrationFinalization/v3` retains the exact
+Nested `catchplate.controlPlaneRegistrationFinalization/v3` retains the exact
 eight v2 fields and adds only `sqlEndpoint` and `currentPending`. Its SQL
-endpoint is `/run/serverware/registration-finalization/sql.sock`, with the same
+endpoint is `/run/catchplate/registration-finalization/sql.sock`, with the same
 closed endpoint fields, integer timeout 1–30 seconds and root listener `0:0`.
 `currentPending` is the exact independently root-signed
 `{sequence, headDigest, fence}`. The sequence and fence are positive; the head
@@ -111,12 +111,12 @@ See the [pending-scope boundary](control-plane-finalization-reservation.md#opt-i
 
 ## Opt-in completion caller configuration
 
-Nested `serverware.controlPlaneRegistrationFinalization/v4` retains all ten
+Nested `catchplate.controlPlaneRegistrationFinalization/v4` retains all ten
 v3 fields and adds exactly three fields, for a closed thirteen-field object:
 
 | Added field | Fixed contract |
 | --- | --- |
-| `completionEndpoint` | The same four-field endpoint shape; `/run/serverware/registration-finalization/completion.sock`, integer timeout 1–30 seconds, listener peer `0:0` |
+| `completionEndpoint` | The same four-field endpoint shape; `/run/catchplate/registration-finalization/completion.sock`, integer timeout 1–30 seconds, listener peer `0:0` |
 | `completionPacketDigest` | Independently root-pinned canonical lowercase `sha256:` digest selecting the original custody packet requested from the completion service |
 | `completionAuthorizationDigest` | Independently root-pinned canonical lowercase `sha256:` identity of the original finalization caller authorization |
 
@@ -153,15 +153,15 @@ durable outcome association remain separate from cold configuration admission.
 
 ## Actual key delivery and lifetime
 
-The root [descriptor entrypoint](../serverware/authority_fd_entrypoint.py) reads
-only `/run/secrets/serverware-registration-finalization-caller-key` for this
+The root [descriptor entrypoint](../catchplate/authority_fd_entrypoint.py) reads
+only `/run/secrets/catchplate-registration-finalization-caller-key` for this
 purpose: root-owned mode `0400`, bounded to 4096 bytes, through its existing
 no-symlink source/sealed-descriptor path. It delivers the original at FD204 only
 for an active v4 profile. The independently signed runtime descriptor inventory
 must already include that slot; delivery does not invent an inventory entry.
 There is no new environment variable or generic-launcher fallback.
 
-The actual [cold owner](../serverware/control_plane_enrollment_startup.py)
+The actual [cold owner](../catchplate/control_plane_enrollment_startup.py)
 requires control-plane UID/GID `65532:65532`, the original admitted bootstrap,
 and the same custody owner. It loads the sealed unencrypted PKCS8 Ed25519 key
 and verifies its real public-key pair against the admitted finalization caller.

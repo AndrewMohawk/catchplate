@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-proof-cohort.v2.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-proof-cohort.v2.schema.json",
   "$ref": "#/$defs/configuration",
   "$defs": {
     "configuration": {
@@ -19,7 +19,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowProofCohortConfiguration/v2"
+          "const": "catchplate.nativeShadowProofCohortConfiguration/v2"
         },
         "authority": {
           "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/authority"
@@ -113,7 +113,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowProofCohortCleanupGenesis/v1"
+          "const": "catchplate.nativeShadowProofCohortCleanupGenesis/v1"
         },
         "scopeId": {
           "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
@@ -141,7 +141,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowProofCohortCleanup/v1"
+          "const": "catchplate.nativeShadowProofCohortCleanup/v1"
         },
         "purpose": {
           "const": "terminate-owned-proof-cohort"
@@ -190,7 +190,7 @@
           "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/signature"
         }
       },
-      "description": "Ed25519 over ASCII serverware.nativeShadowProofCohortCleanup.signature/v1, NUL, complete canonical ASCII payload. Actual retained original boot/window/scope required. Original requested time <= now < deadline <= lifetime-250ms and deadline-requested <=30s; no renewal. Whole authorization <=32768 bytes."
+      "description": "Ed25519 over ASCII catchplate.nativeShadowProofCohortCleanup.signature/v1, NUL, complete canonical ASCII payload. Actual retained original boot/window/scope required. Original requested time <= now < deadline <= lifetime-250ms and deadline-requested <=30s; no renewal. Whole authorization <=32768 bytes."
     },
     "childTerminal": {
       "type": "object",
@@ -258,7 +258,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowProofCohortTerminal/v1"
+          "const": "catchplate.nativeShadowProofCohortTerminal/v1"
         },
         "authorizationSha256": {
           "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
@@ -322,7 +322,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowProofCohortCleanupRecord/v1"
+          "const": "catchplate.nativeShadowProofCohortCleanupRecord/v1"
         },
         "sequence": {
           "enum": [
@@ -354,7 +354,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowProofCohortCleanupResult/v1"
+          "const": "catchplate.nativeShadowProofCohortCleanupResult/v1"
         },
         "authorizationSha256": {
           "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"

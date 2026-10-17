@@ -8,30 +8,30 @@
 
 use crate::release_profile_v1::ReleaseProfile;
 
-pub const REQUEST_UNCONTROLLED: &str = "serverware.nativeCredentialLeaseRequest/v1";
-pub const REQUEST_CONTROLLED: &str = "serverware.nativeCredentialLeaseRequest/v2";
-pub const REQUEST_AUTHORITY: &str = "serverware.nativeCredentialLeaseRequestAuthority/v1";
-pub const RELEASE_ORDINARY: &str = "serverware.nativeCredentialLeaseReleaseAuthorization/v1";
-pub const RELEASE_DURABLE: &str = "serverware.nativeCredentialLeaseReleaseAuthorization/v2";
-pub const ENVELOPE_UNCONTROLLED: &str = "serverware.nativeCredentialLeaseEnvelope/v1";
-pub const ENVELOPE_CONTROLLED: &str = "serverware.nativeCredentialLeaseEnvelope/v2";
-pub const SET_UNCONTROLLED: &str = "serverware.nativeCredentialLeaseSet/v1";
-pub const SET_CONTROLLED: &str = "serverware.nativeCredentialLeaseSet/v2";
+pub const REQUEST_UNCONTROLLED: &str = "catchplate.nativeCredentialLeaseRequest/v1";
+pub const REQUEST_CONTROLLED: &str = "catchplate.nativeCredentialLeaseRequest/v2";
+pub const REQUEST_AUTHORITY: &str = "catchplate.nativeCredentialLeaseRequestAuthority/v1";
+pub const RELEASE_ORDINARY: &str = "catchplate.nativeCredentialLeaseReleaseAuthorization/v1";
+pub const RELEASE_DURABLE: &str = "catchplate.nativeCredentialLeaseReleaseAuthorization/v2";
+pub const ENVELOPE_UNCONTROLLED: &str = "catchplate.nativeCredentialLeaseEnvelope/v1";
+pub const ENVELOPE_CONTROLLED: &str = "catchplate.nativeCredentialLeaseEnvelope/v2";
+pub const SET_UNCONTROLLED: &str = "catchplate.nativeCredentialLeaseSet/v1";
+pub const SET_CONTROLLED: &str = "catchplate.nativeCredentialLeaseSet/v2";
 
-pub const POLICY_AWARE_REQUEST_UNCONTROLLED: &str = "serverware.policyAwareCredentialLeaseRequest/v1";
-pub const POLICY_AWARE_REQUEST_CONTROLLED: &str = "serverware.policyAwareCredentialLeaseRequest/v2";
-pub const POLICY_AWARE_REQUEST_AUTHORITY: &str = "serverware.policyAwareCredentialLeaseRequestAuthority/v1";
-pub const POLICY_AWARE_RELEASE_ORDINARY: &str = "serverware.policyAwareCredentialLeaseReleaseAuthorization/v1";
-pub const POLICY_AWARE_RELEASE_DURABLE: &str = "serverware.policyAwareCredentialLeaseReleaseAuthorization/v2";
-pub const POLICY_AWARE_ENVELOPE_UNCONTROLLED: &str = "serverware.policyAwareCredentialLeaseEnvelope/v1";
-pub const POLICY_AWARE_ENVELOPE_CONTROLLED: &str = "serverware.policyAwareCredentialLeaseEnvelope/v2";
-pub const POLICY_AWARE_SET_UNCONTROLLED: &str = "serverware.policyAwareCredentialLeaseSet/v1";
-pub const POLICY_AWARE_SET_CONTROLLED: &str = "serverware.policyAwareCredentialLeaseSet/v2";
+pub const POLICY_AWARE_REQUEST_UNCONTROLLED: &str = "catchplate.policyAwareCredentialLeaseRequest/v1";
+pub const POLICY_AWARE_REQUEST_CONTROLLED: &str = "catchplate.policyAwareCredentialLeaseRequest/v2";
+pub const POLICY_AWARE_REQUEST_AUTHORITY: &str = "catchplate.policyAwareCredentialLeaseRequestAuthority/v1";
+pub const POLICY_AWARE_RELEASE_ORDINARY: &str = "catchplate.policyAwareCredentialLeaseReleaseAuthorization/v1";
+pub const POLICY_AWARE_RELEASE_DURABLE: &str = "catchplate.policyAwareCredentialLeaseReleaseAuthorization/v2";
+pub const POLICY_AWARE_ENVELOPE_UNCONTROLLED: &str = "catchplate.policyAwareCredentialLeaseEnvelope/v1";
+pub const POLICY_AWARE_ENVELOPE_CONTROLLED: &str = "catchplate.policyAwareCredentialLeaseEnvelope/v2";
+pub const POLICY_AWARE_SET_UNCONTROLLED: &str = "catchplate.policyAwareCredentialLeaseSet/v1";
+pub const POLICY_AWARE_SET_CONTROLLED: &str = "catchplate.policyAwareCredentialLeaseSet/v2";
 
 pub fn request_version(bound: bool, profile: ReleaseProfile) -> &'static str {
     match (profile, bound) {
-        (ReleaseProfile::Legacy, false) => "serverware.credentialLeaseRequest/v3",
-        (ReleaseProfile::Legacy, true) => "serverware.credentialLeaseRequest/v4",
+        (ReleaseProfile::Legacy, false) => "catchplate.credentialLeaseRequest/v3",
+        (ReleaseProfile::Legacy, true) => "catchplate.credentialLeaseRequest/v4",
         (ReleaseProfile::PolicyAware, false) => POLICY_AWARE_REQUEST_UNCONTROLLED,
         (ReleaseProfile::PolicyAware, true) => POLICY_AWARE_REQUEST_CONTROLLED,
         (ReleaseProfile::Native, false) => REQUEST_UNCONTROLLED,
@@ -41,7 +41,7 @@ pub fn request_version(bound: bool, profile: ReleaseProfile) -> &'static str {
 
 pub fn authority_version(profile: ReleaseProfile) -> &'static str {
     match profile {
-        ReleaseProfile::Legacy => "serverware.credentialLeaseRequestAuthority/v1",
+        ReleaseProfile::Legacy => "catchplate.credentialLeaseRequestAuthority/v1",
         ReleaseProfile::PolicyAware => POLICY_AWARE_REQUEST_AUTHORITY,
         ReleaseProfile::Native => REQUEST_AUTHORITY,
     }
@@ -49,8 +49,8 @@ pub fn authority_version(profile: ReleaseProfile) -> &'static str {
 
 pub fn release_version(durable: bool, profile: ReleaseProfile) -> &'static str {
     match (profile, durable) {
-        (ReleaseProfile::Legacy, false) => "serverware.credentialLeaseReleaseAuthorization/v1",
-        (ReleaseProfile::Legacy, true) => "serverware.credentialLeaseReleaseAuthorization/v2",
+        (ReleaseProfile::Legacy, false) => "catchplate.credentialLeaseReleaseAuthorization/v1",
+        (ReleaseProfile::Legacy, true) => "catchplate.credentialLeaseReleaseAuthorization/v2",
         (ReleaseProfile::PolicyAware, false) => POLICY_AWARE_RELEASE_ORDINARY,
         (ReleaseProfile::PolicyAware, true) => POLICY_AWARE_RELEASE_DURABLE,
         (ReleaseProfile::Native, false) => RELEASE_ORDINARY,
@@ -60,8 +60,8 @@ pub fn release_version(durable: bool, profile: ReleaseProfile) -> &'static str {
 
 pub fn envelope_version(bound: bool, profile: ReleaseProfile) -> &'static str {
     match (profile, bound) {
-        (ReleaseProfile::Legacy, false) => "serverware.credentialLeaseEnvelope/v2",
-        (ReleaseProfile::Legacy, true) => "serverware.credentialLeaseEnvelope/v3",
+        (ReleaseProfile::Legacy, false) => "catchplate.credentialLeaseEnvelope/v2",
+        (ReleaseProfile::Legacy, true) => "catchplate.credentialLeaseEnvelope/v3",
         (ReleaseProfile::PolicyAware, false) => POLICY_AWARE_ENVELOPE_UNCONTROLLED,
         (ReleaseProfile::PolicyAware, true) => POLICY_AWARE_ENVELOPE_CONTROLLED,
         (ReleaseProfile::Native, false) => ENVELOPE_UNCONTROLLED,
@@ -71,8 +71,8 @@ pub fn envelope_version(bound: bool, profile: ReleaseProfile) -> &'static str {
 
 pub fn set_version(bound: bool, profile: ReleaseProfile) -> &'static str {
     match (profile, bound) {
-        (ReleaseProfile::Legacy, false) => "serverware.credentialLeaseSet/v3",
-        (ReleaseProfile::Legacy, true) => "serverware.credentialLeaseSet/v4",
+        (ReleaseProfile::Legacy, false) => "catchplate.credentialLeaseSet/v3",
+        (ReleaseProfile::Legacy, true) => "catchplate.credentialLeaseSet/v4",
         (ReleaseProfile::PolicyAware, false) => POLICY_AWARE_SET_UNCONTROLLED,
         (ReleaseProfile::PolicyAware, true) => POLICY_AWARE_SET_CONTROLLED,
         (ReleaseProfile::Native, false) => SET_UNCONTROLLED,

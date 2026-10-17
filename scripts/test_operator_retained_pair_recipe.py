@@ -24,7 +24,7 @@ import prepare_operator_retained_pair_fixture as selected
 
 FILES = {name.replace(".", "/") + ".py": format(index, "064x")
     for index, name in enumerate(selected.IMPORTS, 1)}
-JOB = Path("/srv/catchplate-fast/tmp/serverware-proxy-basic-private.recipe2026")
+JOB = Path("/srv/catchplate-fast/tmp/catchplate-proxy-basic-private.recipe2026")
 EVIDENCE = selected.EVIDENCE_ROOT / "private-retained-pair.recipe2026"
 SUBNET = "172.30.249.112/28"
 
@@ -228,7 +228,7 @@ class RetainedPairRecipeTests(unittest.TestCase):
         # credential, application database or checker execution is performed.
         with tempfile.TemporaryDirectory(prefix="retained-recipe-pure-") as directory:
             root = Path(directory)
-            job = root / "serverware-proxy-basic-private.roundtrip2026"
+            job = root / "catchplate-proxy-basic-private.roundtrip2026"
             evidence = root / "private-retained-pair.roundtrip2026"
             job.mkdir(mode=0o700)
             evidence.mkdir(mode=0o700)

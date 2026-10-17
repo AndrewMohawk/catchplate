@@ -9,7 +9,7 @@
 //! only through the crate-private atomic custody transaction.
 //!
 //! Canonical JSON profile:
-//! `serverware.canonicalJson/ascii-integer-v1`. Values MUST contain only JSON
+//! `catchplate.canonicalJson/ascii-integer-v1`. Values MUST contain only JSON
 //! null, booleans, signed 64-bit integers, ASCII strings, arrays, and objects
 //! with ASCII keys. Object keys are ordered by their raw ASCII bytes. Strings
 //! use JSON escapes for quote, backslash, and U+0000..U+001f, with the shortest
@@ -145,33 +145,33 @@ pub(crate) use policy_custody::{
 };
 
 pub(crate) const POLICY_SHADOW_SCHEMA_VERSION: u32 = 1;
-pub(crate) const CANONICAL_PROFILE: &str = "serverware.canonicalJson/ascii-integer-v1";
+pub(crate) const CANONICAL_PROFILE: &str = "catchplate.canonicalJson/ascii-integer-v1";
 pub(crate) const SIGNATURE_ALGORITHM: &str = "Ed25519";
-pub(crate) const SIGNED_ENVELOPE_DOMAIN: &[u8] = b"serverware.signedEnvelope/v1";
+pub(crate) const SIGNED_ENVELOPE_DOMAIN: &[u8] = b"catchplate.signedEnvelope/v1";
 pub(crate) const REQUEST_COMMITMENT_DOMAIN_TEXT: &str =
-    "serverware.policyShadowRequestCommitment/v1";
+    "catchplate.policyShadowRequestCommitment/v1";
 pub(crate) const REQUEST_COMMITMENT_DOMAIN: &[u8] = REQUEST_COMMITMENT_DOMAIN_TEXT.as_bytes();
-pub(crate) const MERKLE_LEAF_DOMAIN: &[u8] = b"serverware.policyShadowMerkleLeaf/v1";
-pub(crate) const MERKLE_NODE_DOMAIN: &[u8] = b"serverware.policyShadowMerkleNode/v1";
-pub(crate) const MERKLE_EMPTY_DOMAIN: &[u8] = b"serverware.policyShadowMerkleEmpty/v1";
-pub(crate) const READINESS_CORE_DOMAIN: &[u8] = b"serverware.policyReadinessCore/v2";
-pub(crate) const ASSIGNMENT_DOMAIN: &str = "serverware.policyShadowAssignment/v1";
-pub(crate) const NATIVE_SET_ASSIGNMENT_DOMAIN: &str = "serverware.policyShadowAssignment/v2";
-pub(crate) const LOAD_RECEIPT_DOMAIN: &str = "serverware.policyShadowLoadReceipt/v1";
+pub(crate) const MERKLE_LEAF_DOMAIN: &[u8] = b"catchplate.policyShadowMerkleLeaf/v1";
+pub(crate) const MERKLE_NODE_DOMAIN: &[u8] = b"catchplate.policyShadowMerkleNode/v1";
+pub(crate) const MERKLE_EMPTY_DOMAIN: &[u8] = b"catchplate.policyShadowMerkleEmpty/v1";
+pub(crate) const READINESS_CORE_DOMAIN: &[u8] = b"catchplate.policyReadinessCore/v2";
+pub(crate) const ASSIGNMENT_DOMAIN: &str = "catchplate.policyShadowAssignment/v1";
+pub(crate) const NATIVE_SET_ASSIGNMENT_DOMAIN: &str = "catchplate.policyShadowAssignment/v2";
+pub(crate) const LOAD_RECEIPT_DOMAIN: &str = "catchplate.policyShadowLoadReceipt/v1";
 pub(crate) const INGRESS_EVIDENCE_DOMAIN: &str =
-    "serverware.policyShadowIngressEvidence/v1";
+    "catchplate.policyShadowIngressEvidence/v1";
 pub(crate) const ACTIVE_DECISION_DOMAIN: &str =
-    "serverware.policyShadowActiveDecision/v1";
-pub(crate) const OBSERVATION_DOMAIN: &str = "serverware.policyShadowObservation/v1";
-pub(crate) const CHECKPOINT_DOMAIN: &str = "serverware.policyShadowCheckpoint/v1";
-pub(crate) const HEARTBEAT_DOMAIN: &str = "serverware.policyShadowHeartbeat/v1";
+    "catchplate.policyShadowActiveDecision/v1";
+pub(crate) const OBSERVATION_DOMAIN: &str = "catchplate.policyShadowObservation/v1";
+pub(crate) const CHECKPOINT_DOMAIN: &str = "catchplate.policyShadowCheckpoint/v1";
+pub(crate) const HEARTBEAT_DOMAIN: &str = "catchplate.policyShadowHeartbeat/v1";
 pub(crate) const WINDOW_CLOSURE_DOMAIN: &str =
-    "serverware.policyShadowWindowClosure/v1";
+    "catchplate.policyShadowWindowClosure/v1";
 pub(crate) const ACTIVATION_APPROVAL_DOMAIN: &str =
-    "serverware.policyActivationApproval/v2";
+    "catchplate.policyActivationApproval/v2";
 pub(crate) const POLICY_AUTHORITY_ANALYSIS_DOMAIN: &str =
-    "serverware.policyAuthorityAnalysis/v1";
-pub(crate) const READINESS_DOMAIN: &str = "serverware.policyActivationReadiness/v2";
+    "catchplate.policyAuthorityAnalysis/v1";
+pub(crate) const READINESS_DOMAIN: &str = "catchplate.policyActivationReadiness/v2";
 
 const MAX_SIGNED_INTEGER: u64 = i64::MAX as u64;
 const MAX_ENVELOPE_AGE_NANOS: i64 = 24 * 60 * 60 * 1_000_000_000;
@@ -707,32 +707,32 @@ impl PolicyShadowCustodySignerRole {
     pub(crate) fn signature_domain(self) -> &'static str {
         match self {
             Self::IngressAdmission => {
-                "serverware.policyShadowIngressAdmission/v1"
+                "catchplate.policyShadowIngressAdmission/v1"
             }
             Self::UnavailableIngress => {
-                "serverware.policyShadowUnavailableIngress/v1"
+                "catchplate.policyShadowUnavailableIngress/v1"
             }
             Self::DispatchBarrier => {
-                "serverware.policyShadowDispatchBarrier/v1"
+                "catchplate.policyShadowDispatchBarrier/v1"
             }
             Self::ActiveEffectBarrier => {
-                "serverware.policyShadowActiveEffectBarrier/v1"
+                "catchplate.policyShadowActiveEffectBarrier/v1"
             }
             Self::ActiveEffectCommit => {
-                "serverware.policyShadowActiveEffectCommit/v1"
+                "catchplate.policyShadowActiveEffectCommit/v1"
             }
             Self::TerminalAppend => {
-                "serverware.policyShadowTerminalAppend/v1"
+                "catchplate.policyShadowTerminalAppend/v1"
             }
-            Self::LedgerAppend => "serverware.policyShadowLedgerAppend/v1",
+            Self::LedgerAppend => "catchplate.policyShadowLedgerAppend/v1",
             Self::SpoolCompaction => {
-                "serverware.policyShadowSpoolCompaction/v1"
+                "catchplate.policyShadowSpoolCompaction/v1"
             }
             Self::PublicationReconciliation => {
-                "serverware.policyShadowPublicationReconciliation/v1"
+                "catchplate.policyShadowPublicationReconciliation/v1"
             }
             Self::ActivationPublication => {
-                "serverware.policyActivationPublication/v1"
+                "catchplate.policyActivationPublication/v1"
             }
         }
     }
@@ -847,9 +847,9 @@ impl ProductionCustodyProofScope {
     ) -> Result<Vec<u8>, ShadowError> {
         match (self.api_version, &self.execution_closure_set_root_sha256,
             &self.structurally_verified_seccomp_set_root_sha256) {
-            (Some("serverware.policyShadowProductionCustodyProofScope/v2"), Some(set_root), Some(seccomp_root)) =>
+            (Some("catchplate.policyShadowProductionCustodyProofScope/v2"), Some(set_root), Some(seccomp_root)) =>
                 return canonical_json_bytes(&(
-                "serverware.policyShadowAssignmentBoundCustodyReceipt/v2",
+                "catchplate.policyShadowAssignmentBoundCustodyReceipt/v2",
                 &self.binding_sha256, &self.execution_closure_manifest_sha256,
                 &self.structurally_verified_seccomp_policy_sha256, set_root, seccomp_root,
                 role, Sha256Digest::compute(canonical_receipt_payload),
@@ -858,7 +858,7 @@ impl ProductionCustodyProofScope {
             _ => return Err(ShadowError::BindingDrift),
         }
         canonical_json_bytes(&(
-            "serverware.policyShadowAssignmentBoundCustodyReceipt/v1",
+            "catchplate.policyShadowAssignmentBoundCustodyReceipt/v1",
             &self.binding_sha256,
             &self.execution_closure_manifest_sha256,
             &self.structurally_verified_seccomp_policy_sha256,
@@ -2251,7 +2251,7 @@ impl StructurallyVerifiedCustodySeccompPolicy {
             }
         }
         let exact_instruction_stream_sha256 = hash_domain_frames(
-            b"serverware.policyShadowCustodySeccompInstructions/v1",
+            b"catchplate.policyShadowCustodySeccompInstructions/v1",
             &[&canonical_json_bytes(&self.instructions)?],
         );
         let raw_bpf_sha256 =
@@ -2259,7 +2259,7 @@ impl StructurallyVerifiedCustodySeccompPolicy {
                 &self.instructions,
             ));
         let exact_argument_semantics_sha256 = hash_domain_frames(
-            b"serverware.policyShadowCustodySeccompSemantics/v1",
+            b"catchplate.policyShadowCustodySeccompSemantics/v1",
             &[&canonical_json_bytes(&(
                 self.architecture,
                 self.default_action,
@@ -2269,7 +2269,7 @@ impl StructurallyVerifiedCustodySeccompPolicy {
             ))?],
         );
         let structurally_verified_policy_sha256 = hash_domain_frames(
-            b"serverware.policyShadowCustodySeccompPolicy/v2",
+            b"catchplate.policyShadowCustodySeccompPolicy/v2",
             &[&canonical_json_bytes(&(
                 &exact_instruction_stream_sha256,
                 &raw_bpf_sha256,
@@ -2493,7 +2493,7 @@ pub(in crate::policy_shadow) struct ProductionCustodyBuildProvenance {
 impl ProductionCustodyBuildProvenance {
     fn validate(&self) -> Result<(), ShadowError> {
         let expected = hash_domain_frames(
-            b"serverware.policyShadowCustodyBuildProvenance/v1",
+            b"catchplate.policyShadowCustodyBuildProvenance/v1",
             &[&canonical_json_bytes(&(
                 &self.source_tree_sha256,
                 &self.dependency_lock_sha256,
@@ -2678,7 +2678,7 @@ impl ProductionCustodyExecutionClosureManifest {
                     u64::try_from(index + 1)
                         .map_err(|_| ShadowError::CounterOverflow)?,
                     hash_domain_frames(
-                        b"serverware.policyShadowCustodyClosureArtifact/v1",
+                        b"catchplate.policyShadowCustodyClosureArtifact/v1",
                         &[&canonical_json_bytes(artifact)?],
                     ),
                 ))
@@ -2686,7 +2686,7 @@ impl ProductionCustodyExecutionClosureManifest {
             .collect::<Result<Vec<_>, ShadowError>>()?;
         let artifact_set_root_sha256 = merkle_root(&artifact_leaves)?;
         let manifest_sha256 = hash_domain_frames(
-            b"serverware.policyShadowCustodyExecutionClosure/v1",
+            b"catchplate.policyShadowCustodyExecutionClosure/v1",
             &[&canonical_json_bytes(&(
                 &self.build_provenance,
                 &self.executable_image,
@@ -3071,7 +3071,7 @@ impl AuthorityKeyIndependence {
             return Err(ShadowError::MerkleRootMismatch);
         }
         let expected_independence_root = hash_domain_frames(
-            b"serverware.policyAuthorityKeyIndependence/v1",
+            b"catchplate.policyAuthorityKeyIndependence/v1",
             &[&canonical_json_bytes(&(
                 &self.bindings,
                 &self.key_id_set_root_sha256,
@@ -3237,7 +3237,7 @@ fn fleet_member_authority_scope(
     member: &FleetMember,
 ) -> Result<Sha256Digest, ShadowError> {
     Ok(hash_domain_frames(
-        b"serverware.policyAuthorityFleetMemberScope/v1",
+        b"catchplate.policyAuthorityFleetMemberScope/v1",
         &[&canonical_json_bytes(&(
             &member.instance_id,
             &member.spiffe_id,
@@ -3255,7 +3255,7 @@ fn authority_role_signature_domain(role: AuthorityRole) -> &'static str {
         AuthorityRole::ActivationReadiness => READINESS_DOMAIN,
         AuthorityRole::ActivationApproval => ACTIVATION_APPROVAL_DOMAIN,
         AuthorityRole::FleetTeeAttestation => {
-            "serverware.runtimeAttestation/v1"
+            "catchplate.runtimeAttestation/v1"
         }
         AuthorityRole::FleetIngress => INGRESS_EVIDENCE_DOMAIN,
         AuthorityRole::FleetActiveDecision => ACTIVE_DECISION_DOMAIN,
@@ -3301,28 +3301,28 @@ fn authority_role_signature_domain(role: AuthorityRole) -> &'static str {
                 .signature_domain()
         }
         AuthorityRole::CustodyResultEnvelope => {
-            "serverware.policyShadowCustodyResultEnvelope/v1"
+            "catchplate.policyShadowCustodyResultEnvelope/v1"
         }
         AuthorityRole::CustodyStoreResponse => {
-            "serverware.policyShadowCustodyStoreResponse/v1"
+            "catchplate.policyShadowCustodyStoreResponse/v1"
         }
         AuthorityRole::CustodySignerResponse => {
-            "serverware.policyShadowCustodySignerResponse/v1"
+            "catchplate.policyShadowCustodySignerResponse/v1"
         }
         AuthorityRole::CustodyRetrievalResponse => {
-            "serverware.policyShadowCustodyRetrievalResponse/v1"
+            "catchplate.policyShadowCustodyRetrievalResponse/v1"
         }
         AuthorityRole::CustodyTrustedTimeResponse => {
-            "serverware.policyShadowCustodyTrustedTimeResponse/v1"
+            "catchplate.policyShadowCustodyTrustedTimeResponse/v1"
         }
         AuthorityRole::CustodyProviderResponse => {
-            "serverware.policyShadowCustodyProviderResponse/v1"
+            "catchplate.policyShadowCustodyProviderResponse/v1"
         }
         AuthorityRole::CustodyAttestationVerifier => {
-            "serverware.policyShadowCustodyAttestationVerifier/v1"
+            "catchplate.policyShadowCustodyAttestationVerifier/v1"
         }
         AuthorityRole::CustodySupervisorCapability => {
-            "serverware.policyShadowCustodySupervisorCapability/v1"
+            "catchplate.policyShadowCustodySupervisorCapability/v1"
         }
     }
 }
@@ -3338,7 +3338,7 @@ fn ed25519_public_key_material_sha256(
     der.extend_from_slice(ED25519_SPKI_PREFIX);
     der.extend_from_slice(key.as_bytes());
     hash_domain_frames(
-        b"serverware.policyAuthorityPublicKeyMaterial/v1",
+        b"catchplate.policyAuthorityPublicKeyMaterial/v1",
         &[b"ed25519", der.as_slice()],
     )
 }
@@ -4615,7 +4615,7 @@ impl ShadowGenerationIdentity {
 
     fn recompute_id(&self) -> Result<Sha256Digest, ShadowError> {
         Ok(hash_domain_frames(
-            b"serverware.policyShadowGeneration/v1",
+            b"catchplate.policyShadowGeneration/v1",
             &[
                 &canonical_json_bytes(&serde_json::json!([
                     self.generation_epoch,
@@ -5312,7 +5312,7 @@ impl PublicationReconciliationReceiptWire {
         };
         let canonical_payload = receipt.canonical_payload()?;
         let expected_signed_receipt = hash_domain_frames(
-            b"serverware.policyShadowPublicationReconciliationReceipt/v1",
+            b"catchplate.policyShadowPublicationReconciliationReceipt/v1",
             &[
                 canonical_payload.as_slice(),
                 receipt.signature.0.as_bytes(),
@@ -5640,7 +5640,7 @@ impl ActiveEffectPreparation {
             "active_effect_preparation.ingress_sequence",
         )?;
         let effect_id_sha256 = hash_domain_frames(
-            b"serverware.policyShadowActiveEffectPreparation/v1",
+            b"catchplate.policyShadowActiveEffectPreparation/v1",
             &[&canonical_json_bytes(&(
                 &generation_id,
                 ingress_sequence,
@@ -5760,7 +5760,7 @@ impl ActiveEffectBarrierReceiptWire {
         };
         let canonical_payload = wire.canonical_payload()?;
         let expected = hash_domain_frames(
-            b"serverware.policyShadowActiveEffectBarrierReceipt/v1",
+            b"catchplate.policyShadowActiveEffectBarrierReceipt/v1",
             &[
                 canonical_payload.as_slice(),
                 wire.signature.0.as_bytes(),
@@ -5975,7 +5975,7 @@ impl ActiveEffectCommitReceiptWire {
         };
         let canonical_payload = wire.canonical_payload()?;
         let expected = hash_domain_frames(
-            b"serverware.policyShadowActiveEffectCommitReceipt/v1",
+            b"catchplate.policyShadowActiveEffectCommitReceipt/v1",
             &[
                 canonical_payload.as_slice(),
                 wire.signature.0.as_bytes(),
@@ -6711,7 +6711,7 @@ impl CustodyTeeAttestationVerifierResultWire {
 
     fn canonical_payload(&self) -> Result<Vec<u8>, ShadowError> {
         canonical_json_bytes(&(
-            "serverware.policyShadowCustodyTeeAttestationResult/v1",
+            "catchplate.policyShadowCustodyTeeAttestationResult/v1",
             &(
                 self.platform,
                 &self.quote_sha256,
@@ -6838,7 +6838,7 @@ impl CustodyTrustedHostVerifierResultWire {
 
     fn canonical_payload(&self) -> Result<Vec<u8>, ShadowError> {
         canonical_json_bytes(&serde_json::json!([
-            "serverware.policyShadowCustodyTrustedHostResult/v1",
+            "catchplate.policyShadowCustodyTrustedHostResult/v1",
             &self.host_evidence_sha256,
             &self.host_evidence_profile_sha256,
             &self.host_evidence_policy_sha256,
@@ -6926,7 +6926,7 @@ fn production_custody_key_set_root(
                 u64::try_from(index + 1)
                     .map_err(|_| ShadowError::CounterOverflow)?,
                 hash_domain_frames(
-                    b"serverware.policyShadowCustodyAssertedKey/v1",
+                    b"catchplate.policyShadowCustodyAssertedKey/v1",
                     &[&canonical_json_bytes(&(
                         binding.role,
                         &binding.key_id,
@@ -6942,7 +6942,7 @@ fn production_custody_key_set_root(
 
 pub(in crate::policy_shadow) const
     PRODUCTION_CUSTODY_DISPATCH_CONTRACT_VERSION: &str =
-    "serverware.policyShadowCustodyDispatch/v2";
+    "catchplate.policyShadowCustodyDispatch/v2";
 pub(in crate::policy_shadow) const
     MAX_PRODUCTION_CUSTODY_DISPATCH_REQUEST_BYTES: u64 =
     8 * 1024 * 1024;
@@ -7022,7 +7022,7 @@ fn production_custody_operation_coverage_root(
         PolicyShadowCustodyOperation::ConsumeAndPublishActivation,
     ];
     Ok(hash_domain_frames(
-        b"serverware.policyShadowCustodyOperationCoverage/v1",
+        b"catchplate.policyShadowCustodyOperationCoverage/v1",
         &[&canonical_json_bytes(&operations)?],
     ))
 }
@@ -7076,7 +7076,7 @@ impl ProductionCustodyKernelDriverIdentity {
             "custody.driver.verified_at_boottime_nanos",
         )?;
         let identity_sha256 = hash_domain_frames(
-            b"serverware.policyShadowCustodyKernelDriverIdentity/v1",
+            b"catchplate.policyShadowCustodyKernelDriverIdentity/v1",
             &[&canonical_json_bytes(&(
                 &driver_instance_sha256,
                 &driver_executable_sha256,
@@ -7169,7 +7169,7 @@ impl ProductionCustodyStableReaperIdentity {
         driver: &ProductionCustodyKernelDriverIdentity,
     ) -> Result<(), ShadowError> {
         let expected = hash_domain_frames(
-            b"serverware.policyShadowCustodyStableReaper/v1",
+            b"catchplate.policyShadowCustodyStableReaper/v1",
             &[&canonical_json_bytes(&(
                 &self.reaper_instance_sha256,
                 &self.reaper_executable_sha256,
@@ -7570,8 +7570,8 @@ impl ProductionCustodyConfiguration {
                 &asserted_custody_key_set_root_sha256,
         };
         let production_configuration_binding_sha256 = hash_domain_frames(
-            if payload.native_closure_set.is_some() { b"serverware.policyShadowProductionCustodyConfiguration/v2" }
-                else { b"serverware.policyShadowProductionCustodyConfiguration/v1" },
+            if payload.native_closure_set.is_some() { b"catchplate.policyShadowProductionCustodyConfiguration/v2" }
+                else { b"catchplate.policyShadowProductionCustodyConfiguration/v1" },
             &[&canonical_json_bytes(&configuration_binding)?],
         );
         let mut proof_scope_values = serde_json::to_value(&(
@@ -7595,12 +7595,12 @@ impl ProductionCustodyConfiguration {
             values.push(serde_json::to_value(&commitment.seccomp_set_root_sha256).map_err(|_| ShadowError::BindingDrift)?);
         }
         let proof_scope_binding_sha256 = hash_domain_frames(
-            if payload.native_closure_set.is_some() { b"serverware.policyShadowProductionCustodyProofScope/v2" }
-                else { b"serverware.policyShadowProductionCustodyProofScope/v1" },
+            if payload.native_closure_set.is_some() { b"catchplate.policyShadowProductionCustodyProofScope/v2" }
+                else { b"catchplate.policyShadowProductionCustodyProofScope/v1" },
             &[&canonical_json_bytes(&proof_scope_values)?],
         );
         let proof_scope = ProductionCustodyProofScope {
-            api_version: payload.native_closure_set.as_ref().map(|_| "serverware.policyShadowProductionCustodyProofScope/v2"),
+            api_version: payload.native_closure_set.as_ref().map(|_| "catchplate.policyShadowProductionCustodyProofScope/v2"),
             assignment_id: payload.assignment_id.clone(),
             assignment_payload_sha256:
                 assignment.payload_sha256().clone(),
@@ -8778,7 +8778,7 @@ impl ProductionCustodyDispatchManifest {
 
     fn recompute_sha256(&self) -> Result<Sha256Digest, ShadowError> {
         Ok(hash_domain_frames(
-            b"serverware.policyShadowCustodyDispatchManifest/v1",
+            b"catchplate.policyShadowCustodyDispatchManifest/v1",
             &[&canonical_json_bytes(&(
                 PRODUCTION_CUSTODY_DISPATCH_CONTRACT_VERSION,
                 &self.operation_coverage_root_sha256,
@@ -9168,7 +9168,7 @@ fn production_custody_five_service_receipts_root(
     current_signature_receipt_sha256: &Sha256Digest,
 ) -> Result<Sha256Digest, ShadowError> {
     Ok(hash_domain_frames(
-        b"serverware.policyShadowCustodyFiveServiceSettlement/v1",
+        b"catchplate.policyShadowCustodyFiveServiceSettlement/v1",
         &[&canonical_json_bytes(&(
             durable_recovery_store_receipt_sha256,
             cleanup_authorization_receipt_sha256,
@@ -9236,7 +9236,7 @@ impl ProductionCustodyGenerationTransitionPreparation {
             .retained_descriptor_manifest_sha256
             .clone();
         let transition_id_sha256 = hash_domain_frames(
-            b"serverware.policyShadowCustodyGenerationTransition/v1",
+            b"catchplate.policyShadowCustodyGenerationTransition/v1",
             &[&canonical_json_bytes(&(
                 &previous_configuration_binding_sha256,
                 successor.production_configuration_binding_sha256(),
@@ -9337,7 +9337,7 @@ impl ProductionCustodyGenerationTransitionPreparation {
 
     fn receipt_sha256(&self) -> Result<Sha256Digest, ShadowError> {
         Ok(hash_domain_frames(
-            b"serverware.policyShadowCustodyGenerationPreparationReceipt/v1",
+            b"catchplate.policyShadowCustodyGenerationPreparationReceipt/v1",
             &[&canonical_json_bytes(&(
                 &self.transition_id_sha256,
                 &self.five_service_preparation_receipts_root_sha256,
@@ -9431,7 +9431,7 @@ impl ProductionCustodyGenerationInstallReceiptPayload {
                     .five_service_preparation_receipts_root_sha256
             || self.durable_commit_receipt_sha256
                 != hash_domain_frames(
-                    b"serverware.policyShadowCustodyGenerationCommit/v1",
+                    b"catchplate.policyShadowCustodyGenerationCommit/v1",
                     &[&canonical_json_bytes(&(
                         &preparation.transition_id_sha256,
                         preparation.receipt_sha256()?,
@@ -9456,11 +9456,11 @@ impl ProductionCustodyGenerationInstallReceiptPayload {
 
 impl EnvelopePayload for ProductionCustodyGenerationInstallReceiptPayload {
     const API_VERSION: &'static str =
-        "serverware.policyShadowCustodyGenerationInstall/v1";
+        "catchplate.policyShadowCustodyGenerationInstall/v1";
     const KIND: &'static str =
         "ProductionPolicyShadowCustodyGenerationInstall";
     const SIGNATURE_DOMAIN: &'static str =
-        "serverware.policyShadowCustodyResultEnvelope/v1";
+        "catchplate.policyShadowCustodyResultEnvelope/v1";
 
     fn issued_at_unix_nanos(&self) -> i64 {
         self.issued_at_unix_nanos
@@ -9616,7 +9616,7 @@ impl ProductionCustodyTerminalCleanupReceiptPayload {
         five_service_receipts_root_sha256: &Sha256Digest,
     ) -> Result<Sha256Digest, ShadowError> {
         Ok(hash_domain_frames(
-            b"serverware.policyShadowCustodyResultDisposition/v1",
+            b"catchplate.policyShadowCustodyResultDisposition/v1",
             &[&canonical_json_bytes(&(
                 operation_id_sha256,
                 operation,
@@ -9755,11 +9755,11 @@ impl ProductionCustodyTerminalCleanupReceiptPayload {
 
 impl EnvelopePayload for ProductionCustodyTerminalCleanupReceiptPayload {
     const API_VERSION: &'static str =
-        "serverware.policyShadowCustodyTerminalCleanup/v1";
+        "catchplate.policyShadowCustodyTerminalCleanup/v1";
     const KIND: &'static str =
         "ProductionPolicyShadowCustodyTerminalCleanup";
     const SIGNATURE_DOMAIN: &'static str =
-        "serverware.policyShadowCustodyResultEnvelope/v1";
+        "catchplate.policyShadowCustodyResultEnvelope/v1";
 
     fn issued_at_unix_nanos(&self) -> i64 {
         self.issued_at_unix_nanos
@@ -10499,7 +10499,7 @@ fn open_verified_custody_call(
 ) -> Result<PolicyShadowCustodyCallContext, ShadowError> {
     let opened_at_boottime_nanos = production_now_boottime_nanos()?;
     let operation_id_sha256 = hash_domain_frames(
-        b"serverware.policyShadowVerifiedCustodyRpc/v2",
+        b"catchplate.policyShadowVerifiedCustodyRpc/v2",
         &[
             binding.as_str().as_bytes(),
             &opened_at_boottime_nanos.to_be_bytes(),
@@ -10786,7 +10786,7 @@ impl PolicyShadowCustodyRpcSupervisor
             configuration.cleanup_reserve_nanos,
         )?;
         let termination_fence_sha256 = hash_domain_frames(
-            b"serverware.policyShadowCustodyTerminationFence/v2",
+            b"catchplate.policyShadowCustodyTerminationFence/v2",
             &[
                 configuration
                     .supervisor_instance_sha256
@@ -10797,7 +10797,7 @@ impl PolicyShadowCustodyRpcSupervisor
             ],
         );
         let durable_request_sha256 = hash_domain_frames(
-            b"serverware.policyShadowCustodyDurableRequest/v1",
+            b"catchplate.policyShadowCustodyDurableRequest/v1",
             &[
                 configuration_binding_sha256.as_str().as_bytes(),
                 operation_id_sha256.as_str().as_bytes(),
@@ -11527,7 +11527,7 @@ impl SpoolAppendReservationReceiptWire {
         };
         let canonical_payload = receipt.canonical_signature_payload()?;
         let expected_signed_receipt = hash_domain_frames(
-            b"serverware.policyShadowSpoolAppendReservationReceipt/v1",
+            b"catchplate.policyShadowSpoolAppendReservationReceipt/v1",
             &[
                 canonical_payload.as_slice(),
                 receipt.signature.0.as_bytes(),
@@ -11744,7 +11744,7 @@ impl PreparedGenerationPublication {
             || self.last_ingress_sequence < self.first_ingress_sequence
             || self.last_ingress_sequence == u64::MAX
             || self.persisted_sequence_range_sha256 != hash_domain_frames(
-                b"serverware.policyShadowPersistedSequenceRange/v1",
+                b"catchplate.policyShadowPersistedSequenceRange/v1",
                 &[&canonical_json_bytes(&(
                     successor.generation_id(), self.first_ingress_sequence,
                     self.last_ingress_sequence, &successor.ingress_range_predecessor_head_sha256,
@@ -11777,7 +11777,7 @@ impl PreparedGenerationPublication {
             return Err(ShadowError::NonContiguousIngressSequence);
         }
         let expected_range = hash_domain_frames(
-            b"serverware.policyShadowPersistedSequenceRange/v1",
+            b"catchplate.policyShadowPersistedSequenceRange/v1",
             &[&canonical_json_bytes(&(
                 &successor.generation_id,
                 first_ingress_sequence,
@@ -11993,7 +11993,7 @@ impl SignedUnavailableGenerationReceipt {
             return Err(ShadowError::GenerationIdentityMismatch);
         }
         let record_sha256 = hash_domain_frames(
-            b"serverware.policyShadowUnavailableGenerationRecord/v1",
+            b"catchplate.policyShadowUnavailableGenerationRecord/v1",
             &[&canonical_json_bytes(&(
                 &request_binding_sha256,
                 &request_commitment_sha256,
@@ -12011,7 +12011,7 @@ impl SignedUnavailableGenerationReceipt {
             ))?],
         );
         let expected_resulting_head = hash_domain_frames(
-            b"serverware.policyShadowUnavailableGenerationHead/v1",
+            b"catchplate.policyShadowUnavailableGenerationHead/v1",
             &[&canonical_json_bytes(&(
                 predecessor_event_ordinal,
                 &predecessor_head_sha256,
@@ -12025,7 +12025,7 @@ impl SignedUnavailableGenerationReceipt {
         let signature = CanonicalEd25519Signature(signature);
         signature.decode()?;
         let expected_signed_receipt = hash_domain_frames(
-            b"serverware.policyShadowUnavailableGenerationReceipt/v1",
+            b"catchplate.policyShadowUnavailableGenerationReceipt/v1",
             &[&canonical_json_bytes(&(
                 &record_sha256,
                 &resulting_head_sha256,
@@ -12603,7 +12603,7 @@ impl SignedShadowSpillReceipt {
             return Err(ShadowError::TrustedTimeUnavailable);
         }
         let record_sha256 = hash_domain_frames(
-            b"serverware.policyShadowSpoolRecord/v1",
+            b"catchplate.policyShadowSpoolRecord/v1",
             &[&canonical_json_bytes(&(
                 &event.generation_id,
                 event.ingress_sequence,
@@ -12624,7 +12624,7 @@ impl SignedShadowSpillReceipt {
             ))?],
         );
         let expected_resulting_head = hash_domain_frames(
-            b"serverware.policyShadowSpoolHead/v1",
+            b"catchplate.policyShadowSpoolHead/v1",
             &[&canonical_json_bytes(&(
                 predecessor_event_ordinal,
                 &predecessor_head_sha256,
@@ -12638,7 +12638,7 @@ impl SignedShadowSpillReceipt {
         let signature = CanonicalEd25519Signature(signature);
         signature.decode()?;
         let expected_signed_receipt = hash_domain_frames(
-            b"serverware.policyShadowSpillReceipt/v1",
+            b"catchplate.policyShadowSpillReceipt/v1",
             &[&canonical_json_bytes(&(
                 &record_sha256,
                 &resulting_head_sha256,
@@ -13062,7 +13062,7 @@ impl AuthenticatedSpoolCompactionReceipt {
         let signature = CanonicalEd25519Signature(signature);
         signature.decode()?;
         let expected_signed_receipt = hash_domain_frames(
-            b"serverware.policyShadowSpoolCompactionReceipt/v1",
+            b"catchplate.policyShadowSpoolCompactionReceipt/v1",
             &[&canonical_json_bytes(&serde_json::json!([
                 &request.generation_id,
                 &request.old_spool_head_sha256,
@@ -13644,7 +13644,7 @@ fn canonical_ingress_admission_event_bytes(
     sampling: &CustodySamplingAuthorizationWire,
 ) -> Result<Vec<u8>, ShadowError> {
     canonical_json_bytes(&(
-        "serverware.policyShadowIngressAdmissionEvent/v1",
+        "catchplate.policyShadowIngressAdmissionEvent/v1",
         generation,
         observed_at_unix_nanos,
         sampling,
@@ -14301,7 +14301,7 @@ impl ActivePolicyPlan {
     ) -> Result<Sha256Digest, ShadowError> {
         self.validate()?;
         Ok(hash_domain_frames(
-            b"serverware.activeEffectIntents/v1",
+            b"catchplate.activeEffectIntents/v1",
             &[&canonical_json_bytes(&self.effect_intents)?],
         ))
     }
@@ -14310,7 +14310,7 @@ impl ActivePolicyPlan {
         self.validate()?;
         let canonical = canonical_json_bytes(self)?;
         Ok(hash_domain_frames(
-            b"serverware.activePolicyPlan/v1",
+            b"catchplate.activePolicyPlan/v1",
             &[canonical.as_slice()],
         ))
     }
@@ -14448,7 +14448,7 @@ impl CandidatePolicyPlan {
         self.validate()?;
         let canonical = canonical_json_bytes(self)?;
         Ok(hash_domain_frames(
-            b"serverware.candidatePolicyPlan/v1",
+            b"catchplate.candidatePolicyPlan/v1",
             &[canonical.as_slice()],
         ))
     }
@@ -14753,7 +14753,7 @@ impl SemanticExpansionCell {
             return Err(ShadowError::ExpansionCellMismatch);
         }
         let expected = hash_domain_frames(
-            b"serverware.policySemanticExpansionCell/v1",
+            b"catchplate.policySemanticExpansionCell/v1",
             &[&canonical_json_bytes(&(
                 &self.route_sha256,
                 self.operation,
@@ -15319,7 +15319,7 @@ fn active_finalization_binding_sha256(
     pure_active_evaluation: &EvaluationSummary,
 ) -> Result<Sha256Digest, ShadowError> {
     Ok(hash_domain_frames(
-        b"serverware.policyShadowActiveFinalizationBinding/v1",
+        b"catchplate.policyShadowActiveFinalizationBinding/v1",
         &[&canonical_json_bytes(&serde_json::json!([
             assignment_sha256,
             assignment_payload_sha256,
@@ -15819,7 +15819,7 @@ impl ResponseComparison {
                         != *response_commitment
                     || self.response_proof_sha256
                         != hash_domain_frames(
-                            b"serverware.policyShadowAuthenticatedResponseProof/v1",
+                            b"catchplate.policyShadowAuthenticatedResponseProof/v1",
                             &[&canonical_json_bytes(&(
                                 response_commitment,
                                 receipt,
@@ -15840,7 +15840,7 @@ impl ResponseComparison {
                     "response_comparison.physical_response_header_count",
                 )?;
                 let expected_response_commitment = hash_domain_frames(
-                    b"serverware.policyShadowExactResponse/v1",
+                    b"catchplate.policyShadowExactResponse/v1",
                     &[&canonical_json_bytes(&(
                         status,
                         body_bytes,
@@ -16654,7 +16654,7 @@ impl CustodyEvidenceBinding {
             return Err(ShadowError::ObservationShapeMismatch);
         }
         let expected = hash_domain_frames(
-            b"serverware.policyShadowCustodyEvidenceBinding/v1",
+            b"catchplate.policyShadowCustodyEvidenceBinding/v1",
             &[&canonical_json_bytes(&serde_json::json!([
                 &self.admitted_ingress_receipt_sha256,
                 &self.unavailable_ingress_receipt_sha256,
@@ -17715,7 +17715,7 @@ fn verify_response_obligation(
                 == Some(exact_response_commitment_sha256)
             && applied_obligations_root_sha256
                 == &hash_domain_frames(
-                    b"serverware.policyShadowAppliedResponseObligations/v1",
+                    b"catchplate.policyShadowAppliedResponseObligations/v1",
                     &[
                         obligation_root_sha256.as_str().as_bytes(),
                         active_constraints_root_sha256.as_str().as_bytes(),
@@ -17784,7 +17784,7 @@ fn verify_response_obligation(
                 == ResponseComparisonClass::NotApplicableActiveNotDispatched
             && *not_applicable_sha256
                 == hash_domain_frames(
-                    b"serverware.policyShadowResponseObligationNotApplicable/v1",
+                    b"catchplate.policyShadowResponseObligationNotApplicable/v1",
                     &[&canonical_json_bytes(&(
                         route_sha256,
                         obligation_root_sha256,
@@ -17864,11 +17864,11 @@ fn verify_semantic_expansion_binding(
         match (derived_expansion.cells.as_slice(), pilot_membership) {
             (cells, Some(membership)) if !cells.is_empty() => {
                 let principal_leaf = hash_domain_frames(
-                    b"serverware.policyPilotPrincipalLeaf/v1",
+                    b"catchplate.policyPilotPrincipalLeaf/v1",
                     &[facts.principal_commitment.as_str().as_bytes()],
                 );
                 let route_leaf = hash_domain_frames(
-                    b"serverware.policyPilotRouteLeaf/v1",
+                    b"catchplate.policyPilotRouteLeaf/v1",
                     &[facts.route_sha256.as_str().as_bytes()],
                 );
                 let principal_root =
@@ -17916,7 +17916,7 @@ fn verify_membership_root(
         let left_bytes = left.raw_bytes()?;
         let right_bytes = right.raw_bytes()?;
         node = hash_domain_frames(
-            b"serverware.policyPilotMembershipNode/v1",
+            b"catchplate.policyPilotMembershipNode/v1",
             &[left_bytes.as_slice(), right_bytes.as_slice()],
         );
     }
@@ -20342,7 +20342,7 @@ fn verify_checkpoint_seal(
                 .raw_bytes()?;
             let sealed_at = sealed_at_unix_nanos.to_be_bytes();
             let expected_seal = hash_domain_frames(
-                b"serverware.policyShadowCheckpointSeal/v1",
+                b"catchplate.policyShadowCheckpointSeal/v1",
                 &[
                     observation_root.as_slice(),
                     ingress_root.as_slice(),
@@ -20521,7 +20521,7 @@ impl ReceiptEvidenceRequirement {
             return Err(ShadowError::PolicyAuthorityAnalysisMismatch);
         }
         let expected = hash_domain_frames(
-            b"serverware.policyShadowReceiptEvidenceRequirement/v1",
+            b"catchplate.policyShadowReceiptEvidenceRequirement/v1",
             &[&canonical_json_bytes(&(
                 self.receipt_class,
                 self.signer_role,
@@ -20555,18 +20555,18 @@ impl CustodyReceiptEvidenceRequirements {
             ReceiptEvidenceClass::Terminal,
             PolicyShadowCustodySignerRole::TerminalAppend,
             ReceiptCountUnit::CoveredIngress,
-            "serverware.policyShadowTerminalReceiptLeaf/v1",
-            "serverware.policyShadowTerminalReceiptRoot/v1",
+            "catchplate.policyShadowTerminalReceiptLeaf/v1",
+            "catchplate.policyShadowTerminalReceiptRoot/v1",
         )?;
         self.publication.validate(
             ReceiptEvidenceClass::Publication,
             PolicyShadowCustodySignerRole::PublicationReconciliation,
             ReceiptCountUnit::CoveredMember,
-            "serverware.policyShadowPublicationReceiptLeaf/v1",
-            "serverware.policyShadowPublicationReceiptRoot/v1",
+            "catchplate.policyShadowPublicationReceiptLeaf/v1",
+            "catchplate.policyShadowPublicationReceiptRoot/v1",
         )?;
         let expected = hash_domain_frames(
-            b"serverware.policyShadowCustodyReceiptEvidenceRequirements/v1",
+            b"catchplate.policyShadowCustodyReceiptEvidenceRequirements/v1",
             &[
                 self.terminal
                     .requirement_root_sha256
@@ -20632,7 +20632,7 @@ impl EnvelopePayload for PolicyAuthorityAnalysisPayload {
             .validate_against_policy(&self.policy_identity)?;
         self.custody_receipt_evidence_requirements.validate()?;
         let requirements_sha256 = hash_domain_frames(
-            b"serverware.policyShadowCustodyReceiptEvidenceRequirementsPayload/v1",
+            b"catchplate.policyShadowCustodyReceiptEvidenceRequirementsPayload/v1",
             &[&canonical_json_bytes(
                 &self.custody_receipt_evidence_requirements,
             )?],
@@ -21028,7 +21028,7 @@ impl ReadinessCore {
     }
 
     fn validate_intrinsic(&self) -> Result<(), ShadowError> {
-        if self.core_version != "serverware.policyReadinessCore/v2" {
+        if self.core_version != "catchplate.policyReadinessCore/v2" {
             return Err(ShadowError::ReadinessUnsafe);
         }
         validate_positive(self.readiness_revision, "readiness_revision")?;
@@ -21226,7 +21226,7 @@ pub(crate) struct WebAuthnAssertionEvidence {
 impl WebAuthnAssertionEvidence {
     fn recompute_evidence_sha256(&self) -> Result<Sha256Digest, ShadowError> {
         Ok(hash_domain_frames(
-            b"serverware.policyActivationWebAuthnAssertion/v1",
+            b"catchplate.policyActivationWebAuthnAssertion/v1",
             &[&canonical_json_bytes(&(
                 &self.principal_id,
                 &self.credential_id,
@@ -21354,7 +21354,7 @@ impl EnvelopePayload for PolicyActivationReadinessPayload {
             || self.readiness_revision != self.readiness_core.readiness_revision
             || self.issued_at_unix_nanos != self.readiness_core.issued_at_unix_nanos
             || self.expires_at_unix_nanos != self.readiness_core.expires_at_unix_nanos
-            || self.readiness_core.core_version != "serverware.policyReadinessCore/v2"
+            || self.readiness_core.core_version != "catchplate.policyReadinessCore/v2"
         {
             return Err(ShadowError::ReadinessUnsafe);
         }
@@ -21789,7 +21789,7 @@ impl VerifiedActivationReadiness {
         // exclusive mutation only after those reads are complete so activation
         // never re-enters the custody supervisor while publication is live.
         let operation_id_sha256 = hash_domain_frames(
-            b"serverware.policyActivationPublicationRpc/v2",
+            b"catchplate.policyActivationPublicationRpc/v2",
             &[expected_transaction_sha256.as_str().as_bytes()],
         );
         let context = custody.open_bound_call(
@@ -21941,7 +21941,7 @@ impl ActivationPublicationTransaction {
             return Err(ShadowError::ActivationConsumptionBindingMismatch);
         }
         let transaction_sha256 = hash_domain_frames(
-            b"serverware.policyActivationAtomicConsumption/v1",
+            b"catchplate.policyActivationAtomicConsumption/v1",
             &[&canonical_json_bytes(&(
                 &activation_request_sha256,
                 &activation_request_id,
@@ -22102,7 +22102,7 @@ impl ActivationPublicationReceiptWire {
         };
         let canonical_payload = wire.canonical_payload()?;
         let expected = hash_domain_frames(
-            b"serverware.policyActivationPublicationReceipt/v1",
+            b"catchplate.policyActivationPublicationReceipt/v1",
             &[
                 canonical_payload.as_slice(),
                 wire.signature.0.as_bytes(),
@@ -22780,7 +22780,7 @@ fn verify_readiness_evidence_root(core: &ReadinessCore) -> Result<(), ShadowErro
         .raw_bytes()?;
     let trust_checkpoint = canonical_json_bytes(&core.trust_checkpoint)?;
     let expected = hash_domain_frames(
-        b"serverware.policyReadinessEvidenceRoot/v2",
+        b"catchplate.policyReadinessEvidenceRoot/v2",
         &[
             assignment_payload_digest.as_slice(),
             authority_key_independence.as_slice(),
@@ -24403,7 +24403,7 @@ pub(crate) mod terminal_receipt_fixture {
         let predecessor = Sha256Digest::compute(b"local terminal component predecessor");
         let observed_at = 1_000_000_i64;
         let record_digest = hash_domain_frames(
-            b"serverware.policyShadowSpoolRecord/v1",
+            b"catchplate.policyShadowSpoolRecord/v1",
             &[&canonical_json_bytes(&(
                 &event.generation_id,
                 event.ingress_sequence,
@@ -24424,7 +24424,7 @@ pub(crate) mod terminal_receipt_fixture {
             ))?],
         );
         let resulting_head = hash_domain_frames(
-            b"serverware.policyShadowSpoolHead/v1",
+            b"catchplate.policyShadowSpoolHead/v1",
             &[&canonical_json_bytes(&(0_u64, &predecessor, 1_u64, &record_digest))?],
         );
         let mut wire = SignedShadowSpillReceipt {
@@ -24459,7 +24459,7 @@ pub(crate) mod terminal_receipt_fixture {
         // Refresh the outer receipt digest even for the bad-signature case:
         // its oracle must be actual Ed25519 verification, not digest parsing.
         wire.signed_receipt_sha256 = hash_domain_frames(
-            b"serverware.policyShadowSpillReceipt/v1",
+            b"catchplate.policyShadowSpillReceipt/v1",
             &[&canonical_json_bytes(&(
                 &record_digest,
                 &wire.resulting_head_sha256,
@@ -24551,7 +24551,7 @@ pub(crate) mod custody_response_fixture {
     pub(crate) fn preparation(generation: &ShadowGenerationIdentity) -> PreparedGenerationPublication {
         PreparedGenerationPublication::from_custody(
             None, generation, 1, 4, 0, Sha256Digest::compute(b"ledger"),
-            hash_domain_frames(b"serverware.policyShadowPersistedSequenceRange/v1", &[&canonical_json_bytes(&(
+            hash_domain_frames(b"catchplate.policyShadowPersistedSequenceRange/v1", &[&canonical_json_bytes(&(
                 generation.generation_id(), 1_u64, 4_u64, &generation.ingress_range_predecessor_head_sha256,
             )).unwrap()]),
             Sha256Digest::compute(b"spool"), Sha256Digest::compute(b"prepared"),
@@ -24640,7 +24640,7 @@ pub(crate) mod custody_response_fixture {
         };
         let payload = wire.canonical_payload().unwrap();
         wire.signature = authority.sign(&payload);
-        wire.signed_receipt_sha256 = hash_domain_frames(b"serverware.policyShadowPublicationReconciliationReceipt/v1",
+        wire.signed_receipt_sha256 = hash_domain_frames(b"catchplate.policyShadowPublicationReconciliationReceipt/v1",
             &[&payload, wire.signature.0.as_bytes()]);
         verify_publication_reconciliation_receipt(wire, authority.expected(), &authority, &authority, &authority, 100).unwrap()
     }
@@ -24661,16 +24661,16 @@ pub(crate) mod custody_response_fixture {
             signing_key_id: authority.key_id.clone(), signing_key_spki_sha256: authority.key_spki.clone(),
             signature: CanonicalEd25519Signature(String::new()), signed_receipt_sha256: Sha256Digest::compute(b"unsigned"),
         };
-        let record = hash_domain_frames(b"serverware.policyShadowUnavailableGenerationRecord/v1", &[&canonical_json_bytes(&(
+        let record = hash_domain_frames(b"catchplate.policyShadowUnavailableGenerationRecord/v1", &[&canonical_json_bytes(&(
             &wire.request_binding_sha256, &wire.request_commitment_sha256, &wire.generation_id, wire.generation_install_state,
             wire.reason, wire.event_ordinal, wire.predecessor_event_ordinal, &wire.predecessor_head_sha256,
             wire.trusted_observed_at_unix_nanos, &wire.trusted_time_checkpoint_sha256, &wire.persistence_receipt_sha256,
             &wire.retrieval_id_sha256, &wire.retrieval_proof_sha256,
         ))?]);
-        wire.resulting_head_sha256 = hash_domain_frames(b"serverware.policyShadowUnavailableGenerationHead/v1",
+        wire.resulting_head_sha256 = hash_domain_frames(b"catchplate.policyShadowUnavailableGenerationHead/v1",
             &[&canonical_json_bytes(&(wire.predecessor_event_ordinal, &wire.predecessor_head_sha256, wire.event_ordinal, &record))?]);
         wire.signature = authority.sign(&wire.canonical_signature_payload()?);
-        wire.signed_receipt_sha256 = hash_domain_frames(b"serverware.policyShadowUnavailableGenerationReceipt/v1", &[&canonical_json_bytes(&(
+        wire.signed_receipt_sha256 = hash_domain_frames(b"catchplate.policyShadowUnavailableGenerationReceipt/v1", &[&canonical_json_bytes(&(
             &record, &wire.resulting_head_sha256, &wire.signing_key_id, &wire.signing_key_spki_sha256, &wire.signature,
         ))?]);
         verify(wire, &authority)
@@ -25040,7 +25040,7 @@ pub(crate) mod credential_effect_receipt_fixture {
         // Even signature-negative controls refresh the outer digest so they
         // must reach actual signature verification, not a stale-hash guard.
         wire.signed_receipt_sha256 = hash_domain_frames(
-            b"serverware.policyShadowActiveEffectBarrierReceipt/v1",
+            b"catchplate.policyShadowActiveEffectBarrierReceipt/v1",
             &[payload.as_slice(), wire.signature.0.as_bytes()],
         );
         let expected_key = authority.expected_key_id();
@@ -25097,7 +25097,7 @@ pub(crate) mod credential_effect_receipt_fixture {
         let payload = wire.canonical_payload()?;
         wire.signature = authority.sign_and_store(&payload);
         wire.signed_receipt_sha256 = hash_domain_frames(
-            b"serverware.policyShadowActiveEffectCommitReceipt/v1",
+            b"catchplate.policyShadowActiveEffectCommitReceipt/v1",
             &[payload.as_slice(), wire.signature.0.as_bytes()],
         );
         let expected_key = authority.expected_key_id();

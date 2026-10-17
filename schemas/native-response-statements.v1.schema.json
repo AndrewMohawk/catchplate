@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-response-statements.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-response-statements.v1.schema.json",
   "title": "Native response statements with explicit wide principal profile",
   "description": "Shape only. Native signing operations and independently pinned expectations select these new APIs. Legacy fields and signatures are never relabeled. Full receipt/binding, state/path, nonce, signature, TLS, role-4, current policy and lifetime checks remain mandatory runtime duties. Only principal text is widened; route, credential, actor, grant and other identities retain their legacy bounds.",
   "oneOf": [
@@ -36,10 +36,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeControlPlaneAuthorizationReceipt/v1"
+          "const": "catchplate.nativeControlPlaneAuthorizationReceipt/v1"
         },
         "kind": {
-          "const": "ServerwareNativeControlPlaneAuthorizationReceipt"
+          "const": "CatchplateNativeControlPlaneAuthorizationReceipt"
         },
         "principal_id": {
           "$ref": "#/$defs/principal"
@@ -72,10 +72,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeControlPlaneAuthorizationReceipt/v1"
+          "const": "catchplate.nativeControlPlaneAuthorizationReceipt/v1"
         },
         "kind": {
-          "const": "ServerwareNativeControlPlaneAuthorizationReceipt"
+          "const": "CatchplateNativeControlPlaneAuthorizationReceipt"
         },
         "principal_id": {
           "$ref": "#/$defs/principal"
@@ -115,7 +115,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeResponseAuthorizationCommitment/v1"
+          "const": "catchplate.nativeResponseAuthorizationCommitment/v1"
         },
         "attempt_id": {
           "$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"
@@ -347,7 +347,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeProxyResponseStatement/v1"
+          "const": "catchplate.nativeProxyResponseStatement/v1"
         },
         "issued_at_unix": {
           "$ref": "streaming-response-proof.v1.schema.json#/$defs/positiveUint64"
@@ -429,7 +429,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeStreamingResponseStatement/v1"
+          "const": "catchplate.nativeStreamingResponseStatement/v1"
         },
         "issued_at_unix": {
           "$ref": "streaming-response-proof.v1.schema.json#/$defs/positiveUint64"
@@ -519,7 +519,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeResponseObservationStatement/v1"
+          "const": "catchplate.nativeResponseObservationStatement/v1"
         },
         "issued_at_unix": {
           "$ref": "response-observation-proof.v1.schema.json#/$defs/positiveUint64"

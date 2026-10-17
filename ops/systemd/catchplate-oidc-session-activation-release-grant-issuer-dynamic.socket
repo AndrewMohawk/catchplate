@@ -1,0 +1,23 @@
+# Alternate to the static issuer listener, never installed alongside it.
+# Recreating this socket invalidates independently signed resource identities.
+[Unit]
+Description=Catchplate dynamically staged release-grant issuer request socket
+Before=catchplate-oidc-session-activation-release-grant-issuer-dynamic.service
+After=systemd-tmpfiles-setup.service
+Conflicts=catchplate-oidc-session-activation-release-grant-issuer.socket catchplate-oidc-session-activation-release-grant-issuer.service
+
+[Socket]
+ListenStream=/run/catchplate/oidc-session-activation-token-release/grants.sock
+FileDescriptorName=catchplate-oidc-session-activation-release-grant-issuer
+SocketUser=65496
+SocketGroup=65532
+SocketMode=0660
+DirectoryMode=0755
+Backlog=1
+Accept=no
+FlushPending=yes
+RemoveOnStop=yes
+Service=catchplate-oidc-session-activation-release-grant-issuer-dynamic.service
+
+[Install]
+WantedBy=sockets.target

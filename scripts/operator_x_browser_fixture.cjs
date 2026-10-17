@@ -9,14 +9,14 @@ const GRANT = '/api/operator-demo/access-rules/x-username';
 const APP = '/api/operator-demo/applications';
 const BUNDLE = 'x_username_read_v1';
 const USERNAME = 'example_user';
-const DUMMY = 'serverware-x-placeholder-v1';
+const DUMMY = 'catchplate-x-placeholder-v1';
 const PRIVATE = 'synthetic-X-provider-bearer-NEVER-RENDER';
 const PRIVATE_ERROR = 'synthetic-private-storage-error-NEVER-RENDER';
 const APP_TOKEN = 'synthetic_application_' + IDS.application.replaceAll('-', '') + '_generation_1';
 const BASIC = 'basic_and_bearer_v1';
 const clone = value => JSON.parse(JSON.stringify(value));
 // Independent closed server descriptor: never call the production UI helpers.
-const capability = (allowed = true) => ({schema: 'serverware.operatorXAppRead/v1',
+const capability = (allowed = true) => ({schema: 'catchplate.operatorXAppRead/v1',
   connection_type: 'x_app_bearer_v1', create_credential_path: CREATE, create_rule_path: GRANT,
   api_origin: API, destination_allowed: allowed, operation_bundles: [BUNDLE],
   sdk_auth_token: DUMMY, placeholder: 'Bearer ' + DUMMY,
@@ -34,7 +34,7 @@ const options = changes => ({credentials: [xCredential()], applications: [applic
 
 function catalog(state) {
   const result = publicCatalog(state);
-  result.capabilities.application_proxy_authentication = {schema: 'serverware.operatorProxyAuthentication/v1',
+  result.capabilities.application_proxy_authentication = {schema: 'catchplate.operatorProxyAuthentication/v1',
     modes: ['bearer', BASIC], path: '/api/operator-demo/applications/proxy-authentication'};
   // The backend advertises the paired X implementation only after fresh gate
   // health identifies the exact current policy. A saved, not-yet-loaded rule

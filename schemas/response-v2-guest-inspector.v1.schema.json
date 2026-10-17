@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/response-v2-guest-inspector.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/response-v2-guest-inspector.v1.schema.json",
   "title": "Private same-guest response custody process inspection",
   "$comment": "Closed data grammar only, not a verdict, quote, release permission or readiness. Canonical UTF8 sorted JSON without LF: bootstrap <=16384 bytes, IPC <=4096 bytes. Actual descriptors, parent/child ownership, signed cold config/delivery, kernel boot, capabilities, finite original deadlines, local context equality and sequences are independently enforced by the source owners. No public RPC or caller-selected PID/path target.",
   "oneOf": [
@@ -19,7 +19,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "configurationPath", "configurationSha256", "deliveryPath", "deliverySha256", "gateLifetimeDeadlineBoottimeNs", "channelNonce"],
       "properties": {
-        "apiVersion": {"const": "serverware.responseV2.guestInspectorBootstrap/v1"},
+        "apiVersion": {"const": "catchplate.responseV2.guestInspectorBootstrap/v1"},
         "configurationPath": {"$ref": "#/$defs/path"},
         "configurationSha256": {"$ref": "#/$defs/sha"},
         "deliveryPath": {"$ref": "#/$defs/path"},
@@ -33,7 +33,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "channelNonce", "requestSequence", "phase", "frameSha256", "operation", "sessionId", "sequence", "deadlineBoottimeNs"],
       "properties": {
-        "apiVersion": {"const": "serverware.responseV2.guestInspectorRequest/v1"},
+        "apiVersion": {"const": "catchplate.responseV2.guestInspectorRequest/v1"},
         "channelNonce": {"$ref": "#/$defs/nonce"},
         "requestSequence": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
         "phase": {"enum": ["connection", "packet"]},
@@ -69,7 +69,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "request", "measurement"],
       "properties": {
-        "apiVersion": {"const": "serverware.responseV2.guestInspectorResult/v1"},
+        "apiVersion": {"const": "catchplate.responseV2.guestInspectorResult/v1"},
         "request": {"$ref": "#/$defs/request"},
         "measurement": {"$ref": "#/$defs/measurement"}
       }
@@ -78,7 +78,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "channelNonce", "bootstrapSha256"],
       "properties": {
-        "apiVersion": {"const": "serverware.responseV2.guestInspectorInitialized/v1"},
+        "apiVersion": {"const": "catchplate.responseV2.guestInspectorInitialized/v1"},
         "channelNonce": {"$ref": "#/$defs/nonce"},
         "bootstrapSha256": {"$ref": "#/$defs/sha"}
       },

@@ -42,7 +42,7 @@ def main(argv=None):
         print(USAGE, end=""); return 0
     owner = None
     try:
-        from serverware.authority_local_registration_enrollment import LocalRegistrationEnrollment
+        from catchplate.authority_local_registration_enrollment import LocalRegistrationEnrollment
         owner = LocalRegistrationEnrollment(**arguments(argv))
         owner.publish(); owner.close(); return 0
     except BaseException:

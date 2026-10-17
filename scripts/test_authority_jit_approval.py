@@ -33,30 +33,30 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 # Import-only offline validator mode; never start an app or adopt live state.
-os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
-os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
-from serverware import authority_approver_policy as policies
-from serverware import authority_contract as contract
-from serverware import authority_query_reads as reads
-from serverware import authority_rbac_currentness as rbac
-from serverware import authority_service as service
-from serverware import authority_transition_core as core
-from serverware import authority_transition_jit_approval as jit
-from serverware import authority_webauthn_assertion as verifier
-from serverware import authority_webauthn_bindings
-from serverware import config
-from serverware.authority_primary_contract import PRIMARY_KEY_COLUMNS
-from serverware.authority_store import authorization_records
-from serverware.authority_store.metadata_schema_source import metadata_base_schema_source
-from serverware.authority_store.v9_schema_source import authority_v9_schema_source
-from serverware.authority_store.mutation_sql import apply_mutation_sql, closed_record_sql
-from serverware.authority_store.primary_tree_sql import framed_digest_function_sql
-from serverware.authority_store.webauthn_challenge_sql import challenge_original_sql
-from serverware.authority_store.webauthn_trust_sql import (
+os.environ["CATCHPLATE_PROCESS_MODE"] = "metadata-bootstrap"
+os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
+from catchplate import authority_approver_policy as policies
+from catchplate import authority_contract as contract
+from catchplate import authority_query_reads as reads
+from catchplate import authority_rbac_currentness as rbac
+from catchplate import authority_service as service
+from catchplate import authority_transition_core as core
+from catchplate import authority_transition_jit_approval as jit
+from catchplate import authority_webauthn_assertion as verifier
+from catchplate import authority_webauthn_bindings
+from catchplate import config
+from catchplate.authority_primary_contract import PRIMARY_KEY_COLUMNS
+from catchplate.authority_store import authorization_records
+from catchplate.authority_store.metadata_schema_source import metadata_base_schema_source
+from catchplate.authority_store.v9_schema_source import authority_v9_schema_source
+from catchplate.authority_store.mutation_sql import apply_mutation_sql, closed_record_sql
+from catchplate.authority_store.primary_tree_sql import framed_digest_function_sql
+from catchplate.authority_store.webauthn_challenge_sql import challenge_original_sql
+from catchplate.authority_store.webauthn_trust_sql import (
     locked_webauthn_trust_projection, webauthn_credential_policy_sql,
 )
-from serverware.authority_store.jit_prior_decision_sql import assert_prior_jit_decisions_sql
-from serverware.authority_store.webauthn_receipt_history import (
+from catchplate.authority_store.jit_prior_decision_sql import assert_prior_jit_decisions_sql
+from catchplate.authority_store.webauthn_receipt_history import (
     retain_webauthn_receipt_sql, assert_webauthn_receipt_history_sql,
 )
 from scripts import authority_revocation_trust_fixture as trust
@@ -97,7 +97,7 @@ def row(table, **values):
 def selected(table, value=None, key=None):
     key = key if key is not None else {name: value[name] for name in PRIMARY_KEY_COLUMNS[table]}
     return dict(table=table, key=key, keyDigest=framed(
-        "serverware.policyAuthorityBusinessKey/v1", table.encode(), canonical(key)),
+        "catchplate.policyAuthorityBusinessKey/v1", table.encode(), canonical(key)),
         present=value is not None, row=copy.deepcopy(value), contractSelector=None)
 
 
@@ -107,7 +107,7 @@ def actual_credential_projection(binding, policy_digest, high_water_digest):
     Selection/root custody is synthetic; this does not substitute a verifier.
     Keeping the original expression protects the production framing contract.
     """
-    tree = ast.parse((ROOT / "serverware/authority_service.py").read_text())
+    tree = ast.parse((ROOT / "catchplate/authority_service.py").read_text())
     owner = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "AuthorityProcess")
     method = next(n for n in owner.body if isinstance(n, ast.FunctionDef) and n.name == "_read_webauthn_authority")
     expressions = [n.value for n in ast.walk(method) if isinstance(n, ast.Assign)
@@ -124,7 +124,7 @@ def actual_credential_projection(binding, policy_digest, high_water_digest):
 
 def fresh_assertion_cas_sql(namespace):
     """The entire actual executor CAS guard, not a transplanted predicate."""
-    tree = optional._read("serverware/authority_store/executor_v9.py")
+    tree = optional._read("catchplate/authority_store/executor_v9.py")
     function = optional._one([node for node in tree.body if isinstance(node, ast.FunctionDef)
         and node.name == "install_authority_v9_executor"])
     template = optional._one([optional._template(node) for node in ast.walk(function)
@@ -156,11 +156,11 @@ class Fixture:
         self.data.update(trust.trust_rows())
         self.high = self.data["webauthn_trust_publication_high_water"][0]
         self.publication = self.data["webauthn_trust_publications"][0]
-        self.trust_digest = framed("serverware.webauthnTrustHighWater/v1",
+        self.trust_digest = framed("catchplate.webauthnTrustHighWater/v1",
             canonical(trust.trust_high_water_document(self.high)))
         self.actors = ("oidc:synthetic-a", "oidc:synthetic-b")
         self.keys = [ec.generate_private_key(ec.SECP256R1()) for _ in self.actors]
-        self.policy = {"schema": "serverware.jitApproverPolicy/v1", "requiredRoles": ["admin"],
+        self.policy = {"schema": "catchplate.jitApproverPolicy/v1", "requiredRoles": ["admin"],
             "roleMatch": "any", "allowedApproverIds": list(self.actors), "allowAnyApproverId": False,
             "requireWebAuthn": True, "threshold": threshold, "credentialPolicy": {
                 "allowedCredentialRecordIds": [], "allowedAuthenticatorClasses": ["hardware"],
@@ -232,8 +232,8 @@ class Fixture:
             authority_policy_hash=self.policy_hash, authority_route_id="route", require_approver_webauthn=True,
             approval_threshold=self.policy["threshold"], approver_credential_policy=self.policy["credentialPolicy"])
         request = service._controlled_writer_request_digest("jit.decide", args)
-        operation_id = framed("serverware.policyAuthorityOperation/v2", b"jit.decide", request.encode())
-        payload = {"schema": "serverware.policyAuthorityWebAuthnChallenge/v1", "operationId": operation_id,
+        operation_id = framed("catchplate.policyAuthorityOperation/v2", b"jit.decide", request.encode())
+        payload = {"schema": "catchplate.policyAuthorityWebAuthnChallenge/v1", "operationId": operation_id,
             "rpId": config.WEBAUTHN_RP_ID, "origin": config.WEBAUTHN_ORIGIN,
             "issuedAtEpochNs": self.now - 1_000_000_000, "expiresAtEpochNs": self.now + 25_000_000_000,
             "credentialId": credential["credential_id"]}
@@ -245,9 +245,9 @@ class Fixture:
         self.data["webauthn_challenges"].append(challenge)
         original_challenge = {key: challenge[key] for key in jit.CHALLENGE_FIELDS}
         public_challenge = {**payload, "challengeId": challenge["id"], "challenge": challenge["challenge"],
-            "challengeRowDigest": framed("serverware.policyAuthorityWebAuthnChallengeRow/v1", canonical(original_challenge))}
+            "challengeRowDigest": framed("catchplate.policyAuthorityWebAuthnChallengeRow/v1", canonical(original_challenge))}
         binding = {key: credential[key] for key in jit.CREDENTIAL_FIELDS}
-        policy_digest = framed("serverware.policyAuthorityCredentialPolicy/v1",
+        policy_digest = framed("catchplate.policyAuthorityCredentialPolicy/v1",
             canonical(trust.credential_policy_document(binding, self.high)))
         public_credential = actual_credential_projection(binding, policy_digest, self.trust_digest)
         client = canonical({"type": "webauthn.get", "challenge": challenge["challenge"],
@@ -402,7 +402,7 @@ class JitApprovalPureTests(unittest.TestCase):
         self.assertTrue({"approval_grants", "approval_request_decisions", AGGREGATE} <= inserted)
         self.assertFalse(fixture.data[HISTORY])
         self.assertFalse(fixture.data[AGGREGATE])
-        domain = b"serverware.policyAuthorityWebAuthnCredentialBinding/v1"
+        domain = b"catchplate.policyAuthorityWebAuthnCredentialBinding/v1"
         original = canonical({key: signed["credential"][key] for key in jit.CREDENTIAL_FIELDS})
         self.assertEqual(signed["receipt"]["credentialBindingDigest"], sha(
             len(domain).to_bytes(8, "big") + domain + len(original).to_bytes(8, "big") + original))
@@ -471,7 +471,7 @@ class JitApprovalPureTests(unittest.TestCase):
         self.assertEqual(kinds("webauthn.credential.revoke"), {"UPDATE"})
         guard = fresh_assertion_cas_sql('"component"')
         self.assertIn(challenge_original_sql(), guard)
-        self.assertIn("serverware_policy_authority_framed_digest", guard)
+        self.assertIn("catchplate_policy_authority_framed_digest", guard)
         self.assertIn("authority v9 WebAuthn CAS mutations are incomplete", guard)
 
 
@@ -565,7 +565,7 @@ class JitApprovalPostgresTests(unittest.TestCase):
             status="reserved", reserved_at_epoch_ns=fixture.now, reserved_transaction_id=1,
             result_digest=None, commit_receipt_digest=None, committed_at_epoch_ns=None,
             failure_digest=None, failed_at_epoch_ns=None,
-            expected_result_digest=framed("serverware.policyAuthorityControlledWriterResult/v2", canonical(result)))
+            expected_result_digest=framed("catchplate.policyAuthorityControlledWriterResult/v2", canonical(result)))
         return value
 
     def commit(self, fixture, signed, *, selected_override=None, before_apply=None, after_complete=None):
@@ -605,7 +605,7 @@ class JitApprovalPostgresTests(unittest.TestCase):
         return signed
 
     def grant_reason(self, fixture):
-        from serverware import db
+        from catchplate import db
         grant = self.db.execute("SELECT * FROM approval_grants").fetchone()
         return db._release_grant_authority_reason(db.PostgresMetadataConnection(self.db), grant,
             now_epoch_ms=fixture.now // 1_000_000 + 1, required_approver_roles={"admin"},
@@ -613,8 +613,8 @@ class JitApprovalPostgresTests(unittest.TestCase):
             approval_threshold=fixture.policy["threshold"], approver_credential_policy=fixture.policy["credentialPolicy"])
 
     def complete(self, cap, result, when):
-        result_digest = framed("serverware.policyAuthorityControlledWriterResult/v2", canonical(result))
-        receipt = {"schema": "serverware.policyAuthorityWriterCommitReceipt/v2",
+        result_digest = framed("catchplate.policyAuthorityControlledWriterResult/v2", canonical(result))
+        receipt = {"schema": "catchplate.policyAuthorityWriterCommitReceipt/v2",
             "capabilityId": cap["capability_id"], "envelopeId": cap["envelope_id"],
             "plannerTransactionId": cap["planner_transaction_id"],
             "authorizationProjectionDigest": cap["authorization_projection_digest"],
@@ -641,7 +641,7 @@ class JitApprovalPostgresTests(unittest.TestCase):
             (result_digest, digest, when, cap["capability_id"]))
 
     def test_cold_approval_production_sql_immediate_fk_and_actual_grant_consumer(self):
-        from serverware import db
+        from catchplate import db
         fixture = Fixture()
         signed = fixture.sign()
         self.seed(fixture)

@@ -1,4 +1,4 @@
-#!/opt/serverware/node/bin/node
+#!/opt/catchplate/node/bin/node
 "use strict";
 
 const crypto = require("crypto");
@@ -9,10 +9,10 @@ const { spawn } = require("child_process");
 const MAX_INPUT_BYTES = 2 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const PROCESS_TIMEOUT_MS = 30000;
-const INPUT_VERSION = "serverware.npmOneUseRequest/v2";
-const RESULT_VERSION = "serverware.npmOneUseResult/v2";
-const NPM_CLI = "/opt/serverware/npm/bin/npm-cli.js";
-const NODE = "/opt/serverware/node/bin/node";
+const INPUT_VERSION = "catchplate.npmOneUseRequest/v2";
+const RESULT_VERSION = "catchplate.npmOneUseResult/v2";
+const NPM_CLI = "/opt/catchplate/npm/bin/npm-cli.js";
+const NODE = "/opt/catchplate/node/bin/node";
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
 const TOKEN = /^[0-9a-f]{64}$/;
 
@@ -144,7 +144,7 @@ function parseInput(raw) {
     throw new Error("tarball bytes are invalid");
   }
   const operationPayload = {
-    apiVersion: "serverware.npmOperationInput/v1",
+    apiVersion: "catchplate.npmOperationInput/v1",
     caPem: value.caPem,
     operation: value.operation,
     packageTarballBase64: value.packageTarballBase64,
@@ -214,7 +214,7 @@ async function run() {
     LANG: "C",
     LC_ALL: "C",
     NO_PROXY: "",
-    PATH: "/opt/serverware/node/bin",
+    PATH: "/opt/catchplate/node/bin",
     TMPDIR: tmp,
     npm_config_audit: "false",
     npm_config_cache: cache,

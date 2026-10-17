@@ -1,6 +1,6 @@
 # Activation SQL raw8/raw4 transport
 
-[authority_oidc_session_activation_sql_transport.py](../serverware/authority_oidc_session_activation_sql_transport.py)
+[authority_oidc_session_activation_sql_transport.py](../catchplate/authority_oidc_session_activation_sql_transport.py)
 defines a separate fixed wire purpose for the
 [genuine activation SQL bridge](oidc-session-activation-sql.md), not semantic
 admission or permission from framing.
@@ -8,7 +8,7 @@ admission or permission from framing.
 | Fixed profile | Value |
 | --- | --- |
 | Request / response magic | `SWOASQ01` / `SWOASR01` |
-| Unix stream path | `/run/serverware/oidc-session-activation-execution/sql.sock` |
+| Unix stream path | `/run/catchplate/oidc-session-activation-execution/sql.sock` |
 | Service UID/GID | `65504:65504` |
 | Accepted request peer | `65532:65532`, admitted by the service before body read |
 | Client's listener peer | `0:0`, for the root-created inherited listener |

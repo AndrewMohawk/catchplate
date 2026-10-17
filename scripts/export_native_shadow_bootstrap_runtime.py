@@ -31,7 +31,7 @@ from build_production_images import canonical_json
 
 def runtime_original() -> bytes:
     return canonical_json({
-        "apiVersion": "serverware.nativeShadowDriverBootstrapRuntime/v1",
+        "apiVersion": "catchplate.nativeShadowDriverBootstrapRuntime/v1",
         "purpose": "measure-final-driver-before-operational-admission",
     }).encode("ascii")
 
@@ -49,9 +49,9 @@ def export(output: Path) -> dict[str, object]:
     finally:
         os.close(descriptor)
     return {
-        "apiVersion": "serverware.nativeShadowBootstrapRuntimeExport/v1",
+        "apiVersion": "catchplate.nativeShadowBootstrapRuntimeExport/v1",
         "profile": "bootstrap-only",
-        "runtimeProfile": "serverware.nativeShadowDriverBootstrapRuntime/v1",
+        "runtimeProfile": "catchplate.nativeShadowDriverBootstrapRuntime/v1",
         "file": "runtime.json",
         "sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
         "bytes": len(raw),

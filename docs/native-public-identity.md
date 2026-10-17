@@ -34,7 +34,7 @@ The top-level fields are:
 
 | Field | Value |
 | --- | --- |
-| `apiVersion` | `serverware.nativeIngressPublicEvidence/v1` |
+| `apiVersion` | `catchplate.nativeIngressPublicEvidence/v1` |
 | `evidenceScope` | `unverified-startup-public-material` |
 | `okForAction` | `false` |
 | `ingress` | The actual public TLS configuration below. |
@@ -82,7 +82,7 @@ actual prepared native owners
 The exported nonce is the **launch nonce**, not a challenge obtained from a
 client/verifier exchange. The object has no live TLS exporter, exact client
 request/response binding, nonce reservation, latest witness state or one-use
-acceptance. It is not `serverware.productionAttestation/v2`, an enrollment
+acceptance. It is not `catchplate.productionAttestation/v2`, an enrollment
 packet, the native response-capture artifact or a success token accepted by
 those consumers. No automatic enrollment or existing-verifier compatibility
 is claimed.
@@ -107,7 +107,7 @@ enclave/KMS Recipient custody, trusted time, current off-host
 witness/CAS/revocation state and one-use challenge handling remain required.
 Stored verification and completion do not themselves authorize an action.
 
-The [enrollment flow](portal-oauth-agent-guide.md#teach-agents-to-use-serverware)
+The [enrollment flow](portal-oauth-agent-guide.md#teach-agents-to-use-catchplate)
 separately authenticates exact packet bytes, principal, challenge, validity,
 measurements and signature before scoped CA retrieval. Direct CA installation
 from this stdout object would bypass that requirement. The only supported

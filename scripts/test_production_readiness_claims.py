@@ -65,7 +65,7 @@ def fixture(debug: bool = False, materials: list[str] | None = None) -> tuple[di
     policy_info = key_info(policy_key)
     bundle = sign_policy_bundle(
         {
-            "apiVersion": "serverware.policy/v1",
+            "apiVersion": "catchplate.policy/v1",
             "kind": "PolicyBundle",
             "metadata": {
                 "id": "readiness-test",

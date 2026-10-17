@@ -1,5 +1,5 @@
 {
-  "apiVersion": "serverware.productionReadinessLaunch/v3",
+  "apiVersion": "catchplate.productionReadinessLaunch/v3",
   "authorization": {
     "authorizationScope": "trusted-host-readiness",
     "deploymentAudience": "production.us-east-1:primary",
@@ -11,7 +11,7 @@
       "signingKeyId": "sha256:<launch-witness-ed25519-spki-64-lowercase-hex>",
       "signingPublicKeySpkiDerBase64url": "<canonical-base64url-launch-witness-Ed25519-SPKI-DER>",
       "storeAssurance": {
-        "apiVersion": "serverware.launchAuthorityWitnessStoreAssurance/v1",
+        "apiVersion": "catchplate.launchAuthorityWitnessStoreAssurance/v1",
         "kind": "LaunchAuthorityWitnessStoreAssurance",
         "statement": {
           "assuranceIssuerKeyId": "sha256:<witness-store-assurance-issuer-spki-64-lowercase-hex>",
@@ -34,19 +34,19 @@
     "rollbackEpoch": 0
   },
   "composeFile": {
-    "path": "/opt/serverware/releases/<source-digest>/docker-compose.production.yml",
+    "path": "/opt/catchplate/releases/<source-digest>/docker-compose.production.yml",
     "sha256": "sha256:<64-lowercase-hex>"
   },
   "globalRoleRegistry": {
-    "apiVersion": "serverware.productionLaunchGlobalRoleRegistryBinding/v1",
-    "canonicalProfile": "serverware.canonicalJson/integer-string-bool-null-array-object-nfc-v1",
+    "apiVersion": "catchplate.productionLaunchGlobalRoleRegistryBinding/v1",
+    "canonicalProfile": "catchplate.canonicalJson/integer-string-bool-null-array-object-nfc-v1",
     "claimScope": "roles-present-in-native-launch-contract",
     "pinsFile": {
-      "path": "/etc/serverware/production-launch-global-role-registry.json",
+      "path": "/etc/catchplate/production-launch-global-role-registry.json",
       "sha256": "sha256:<exact-canonical-registry-file-including-final-lf-64-lowercase-hex>"
     },
     "registry": {
-      "apiVersion": "serverware.productionLaunchGlobalRoleRegistry/v1",
+      "apiVersion": "catchplate.productionLaunchGlobalRoleRegistry/v1",
       "claimScope": "roles-present-in-native-launch-contract",
       "roles": {
         "launchAuthority": "sha256:<launch-authority-spki-64-lowercase-hex>",
@@ -77,93 +77,93 @@
   },
   "inputs": {
     "bench": {
-      "path": "/opt/serverware/releases/<source-digest>/evidence/decision-gate-rs-bench.json",
+      "path": "/opt/catchplate/releases/<source-digest>/evidence/decision-gate-rs-bench.json",
       "sha256": "sha256:<64-lowercase-hex>"
     },
     "imageSignatures": {
-      "path": "/opt/serverware/releases/<source-digest>/evidence/image-signatures.json",
+      "path": "/opt/catchplate/releases/<source-digest>/evidence/image-signatures.json",
       "sha256": "sha256:<64-lowercase-hex>"
     },
     "imageSignaturesSummary": {
-      "path": "/opt/serverware/releases/<source-digest>/evidence/image-signatures-summary.json",
+      "path": "/opt/catchplate/releases/<source-digest>/evidence/image-signatures-summary.json",
       "sha256": "sha256:<64-lowercase-hex>"
     },
     "kmsMaterials": {
-      "path": "/opt/serverware/releases/<source-digest>/evidence/kms-materials.json",
+      "path": "/opt/catchplate/releases/<source-digest>/evidence/kms-materials.json",
       "sha256": "sha256:<64-lowercase-hex>"
     },
     "policyActivationSignature": {
-      "path": "/opt/serverware/releases/<source-digest>/evidence/policy-activation-verification.sig.json",
+      "path": "/opt/catchplate/releases/<source-digest>/evidence/policy-activation-verification.sig.json",
       "sha256": "sha256:<64-lowercase-hex>"
     },
     "policyActivationTrustedPublicKey": {
-      "path": "/opt/serverware/releases/<source-digest>/trust/policy-activation.pub.pem",
+      "path": "/opt/catchplate/releases/<source-digest>/trust/policy-activation.pub.pem",
       "sha256": "sha256:<64-lowercase-hex>"
     },
     "policyActivationVerification": {
-      "path": "/opt/serverware/releases/<source-digest>/evidence/policy-activation-verification.json",
+      "path": "/opt/catchplate/releases/<source-digest>/evidence/policy-activation-verification.json",
       "sha256": "sha256:<64-lowercase-hex>"
     },
     "policyBundle": {
-      "path": "/opt/serverware/releases/<source-digest>/policy/production-policy-bundle.json",
+      "path": "/opt/catchplate/releases/<source-digest>/policy/production-policy-bundle.json",
       "sha256": "sha256:<64-lowercase-hex>"
     },
     "policyIdentityVerification": {
-      "path": "/opt/serverware/releases/<source-digest>/evidence/production-policy-identity.json",
+      "path": "/opt/catchplate/releases/<source-digest>/evidence/production-policy-identity.json",
       "sha256": "sha256:<64-lowercase-hex>"
     },
     "policyTrustedPublicKey": {
-      "path": "/opt/serverware/releases/<source-digest>/trust/policy-identity.pub.pem",
+      "path": "/opt/catchplate/releases/<source-digest>/trust/policy-identity.pub.pem",
       "sha256": "sha256:<64-lowercase-hex>"
     },
     "productionImagesBuild": {
-      "path": "/opt/serverware/releases/<source-digest>/evidence/production-images-build.json",
+      "path": "/opt/catchplate/releases/<source-digest>/evidence/production-images-build.json",
       "sha256": "sha256:<64-lowercase-hex>"
     },
     "productionImagesEnv": {
-      "path": "/opt/serverware/releases/<source-digest>/evidence/production-images.env",
+      "path": "/opt/catchplate/releases/<source-digest>/evidence/production-images.env",
       "sha256": "sha256:<64-lowercase-hex>"
     },
     "productionImagesPublished": {
-      "path": "/opt/serverware/releases/<source-digest>/evidence/production-images-published.json",
+      "path": "/opt/catchplate/releases/<source-digest>/evidence/production-images-published.json",
       "sha256": "sha256:<64-lowercase-hex>"
     },
     "releaseProvenance": {
-      "path": "/opt/serverware/releases/<source-digest>/evidence/release-provenance.json",
+      "path": "/opt/catchplate/releases/<source-digest>/evidence/release-provenance.json",
       "sha256": "sha256:<64-lowercase-hex>"
     },
     "releaseProvenanceSummary": {
-      "path": "/opt/serverware/releases/<source-digest>/evidence/release-provenance-summary.json",
+      "path": "/opt/catchplate/releases/<source-digest>/evidence/release-provenance-summary.json",
       "sha256": "sha256:<64-lowercase-hex>"
     },
     "reproducibleBuildSignature": {
-      "path": "/opt/serverware/releases/<source-digest>/evidence/reproducible-build-verification.sig.json",
+      "path": "/opt/catchplate/releases/<source-digest>/evidence/reproducible-build-verification.sig.json",
       "sha256": "sha256:<64-lowercase-hex>"
     },
     "reproducibleBuildTrustedPublicKey": {
-      "path": "/opt/serverware/releases/<source-digest>/trust/reproducible-build.pub.pem",
+      "path": "/opt/catchplate/releases/<source-digest>/trust/reproducible-build.pub.pem",
       "sha256": "sha256:<64-lowercase-hex>"
     },
     "reproducibleBuildVerification": {
-      "path": "/opt/serverware/releases/<source-digest>/evidence/reproducible-build-verification.json",
+      "path": "/opt/catchplate/releases/<source-digest>/evidence/reproducible-build-verification.json",
       "sha256": "sha256:<64-lowercase-hex>"
     }
   },
   "kind": "ProductionReadinessLaunch",
   "launchAttemptJournal": {
-    "apiVersion": "serverware.launchAuthorizationAttemptJournal/v1",
+    "apiVersion": "catchplate.launchAuthorizationAttemptJournal/v1",
     "consistencyScope": "trusted-host-readiness-availability-and-consistency-only",
-    "domain": "serverware.launchAuthorizationAttemptJournal/v1",
-    "lockPath": "/var/lib/serverware/production-proof/launch-authorization-attempt.v1.lock",
+    "domain": "catchplate.launchAuthorizationAttemptJournal/v1",
+    "lockPath": "/var/lib/catchplate/production-proof/launch-authorization-attempt.v1.lock",
     "maxBytes": 65536,
-    "path": "/var/lib/serverware/production-proof/launch-authorization-attempt.v1.json",
+    "path": "/var/lib/catchplate/production-proof/launch-authorization-attempt.v1.json",
     "rollbackAuthority": "external-monotonic-witness"
   },
   "nonceRollbackAssurance": {
-    "apiVersion": "serverware.productionNonceRollbackAssuranceBinding/v1",
-    "canonicalProfile": "serverware.canonicalJson/integer-string-bool-null-array-object-nfc-v1",
+    "apiVersion": "catchplate.productionNonceRollbackAssuranceBinding/v1",
+    "canonicalProfile": "catchplate.canonicalJson/integer-string-bool-null-array-object-nfc-v1",
     "contract": {
-      "apiVersion": "serverware.productionNonceRollbackAssurancePins/v1",
+      "apiVersion": "catchplate.productionNonceRollbackAssurancePins/v1",
       "independentVerifierPins": {
         "expectedNonceAuthorityAssuranceIssuerSpkiSha256": "sha256:<independently-approved-assurance-issuer-spki-64-lowercase-hex>",
         "expectedNonceAuthorityAssuranceSha256": "sha256:<independently-approved-assurance-contract-64-lowercase-hex>"
@@ -171,7 +171,7 @@
       "publicConfigPins": {
         "nonceAuthorityAssurance": {
           "administrativeDomainSha256": "sha256:<nonce-authority-administrative-domain-64-lowercase-hex>",
-          "apiVersion": "serverware.nonceAuthorityAssurance/v1",
+          "apiVersion": "catchplate.nonceAuthorityAssurance/v1",
           "assuranceEvidenceSha256": "sha256:<nonce-authority-assurance-evidence-64-lowercase-hex>",
           "assuranceEvidenceType": "linearizableCasOperatorAttestation",
           "assuranceLevel": "productionRollbackProtected",
@@ -203,57 +203,57 @@
     "contractSha256": "sha256:<canonical-contract-without-final-lf-64-lowercase-hex>",
     "enforcement": "native-launcher-measured",
     "pinsFile": {
-      "path": "/etc/serverware/nonce-rollback-assurance-pins.json",
+      "path": "/etc/catchplate/nonce-rollback-assurance-pins.json",
       "sha256": "sha256:<canonical-pin-file-including-final-lf-64-lowercase-hex>"
     },
     "purpose": "readiness-only"
   },
   "outputs": {
-    "claimsFile": "/var/lib/serverware/production-proof/production-readiness-claims.json",
-    "completionProofOut": "/var/lib/serverware/production-proof/serverware-completion-proof.json",
-    "configOut": "/var/lib/serverware/production-proof/production-readiness-config.json",
-    "nitroEvidenceOut": "/var/lib/serverware/production-proof/nitro-kms-evidence.json",
-    "productionHostPreflight": "/var/lib/serverware/production-proof/production-host-preflight.json",
-    "proxyProofSummaryOut": "/var/lib/serverware/production-proof/proxy-response-proof-summary.json",
-    "readinessOut": "/var/lib/serverware/production-proof/production-readiness.json"
+    "claimsFile": "/var/lib/catchplate/production-proof/production-readiness-claims.json",
+    "completionProofOut": "/var/lib/catchplate/production-proof/catchplate-completion-proof.json",
+    "configOut": "/var/lib/catchplate/production-proof/production-readiness-config.json",
+    "nitroEvidenceOut": "/var/lib/catchplate/production-proof/nitro-kms-evidence.json",
+    "productionHostPreflight": "/var/lib/catchplate/production-proof/production-host-preflight.json",
+    "proxyProofSummaryOut": "/var/lib/catchplate/production-proof/proxy-response-proof-summary.json",
+    "readinessOut": "/var/lib/catchplate/production-proof/production-readiness.json"
   },
   "productionEnv": {
-    "path": "/etc/serverware/production-readiness.env",
+    "path": "/etc/catchplate/production-readiness.env",
     "sha256": "sha256:<64-lowercase-hex>"
   },
   "python": {
     "importRoots": [
       {
-        "path": "/opt/serverware/releases/<source-digest>",
-        "sha256": "sha256:<serverware-import-root-v1-tree-digest>"
+        "path": "/opt/catchplate/releases/<source-digest>",
+        "sha256": "sha256:<catchplate-import-root-v1-tree-digest>"
       },
       {
-        "path": "/opt/serverware/releases/<source-digest>/runtime/python/lib/python3.11",
-        "sha256": "sha256:<serverware-import-root-v1-tree-digest>"
+        "path": "/opt/catchplate/releases/<source-digest>/runtime/python/lib/python3.11",
+        "sha256": "sha256:<catchplate-import-root-v1-tree-digest>"
       },
       {
-        "path": "/opt/serverware/releases/<source-digest>/runtime/python/lib/python3.11/lib-dynload",
-        "sha256": "sha256:<serverware-import-root-v1-tree-digest>"
+        "path": "/opt/catchplate/releases/<source-digest>/runtime/python/lib/python3.11/lib-dynload",
+        "sha256": "sha256:<catchplate-import-root-v1-tree-digest>"
       },
       {
-        "path": "/opt/serverware/releases/<source-digest>/vendor",
-        "sha256": "sha256:<serverware-import-root-v1-tree-digest>"
+        "path": "/opt/catchplate/releases/<source-digest>/vendor",
+        "sha256": "sha256:<catchplate-import-root-v1-tree-digest>"
       }
     ],
-    "path": "/opt/serverware/releases/<source-digest>/runtime/python/bin/python3",
+    "path": "/opt/catchplate/releases/<source-digest>/runtime/python/bin/python3",
     "sha256": "sha256:<64-lowercase-hex>"
   },
-  "releaseRoot": "/opt/serverware/releases/<source-digest>",
+  "releaseRoot": "/opt/catchplate/releases/<source-digest>",
   "scripts": {
     "preflight": {
-      "path": "/opt/serverware/releases/<source-digest>/scripts/production_host_preflight.py",
+      "path": "/opt/catchplate/releases/<source-digest>/scripts/production_host_preflight.py",
       "sha256": "sha256:<64-lowercase-hex>"
     },
     "runner": {
-      "path": "/opt/serverware/releases/<source-digest>/scripts/run_production_readiness.py",
+      "path": "/opt/catchplate/releases/<source-digest>/scripts/run_production_readiness.py",
       "sha256": "sha256:<64-lowercase-hex>"
     }
   },
   "sourceTreeDigest": "sha256:<source-digest>",
-  "stateDirectory": "/var/lib/serverware/production-proof"
+  "stateDirectory": "/var/lib/catchplate/production-proof"
 }

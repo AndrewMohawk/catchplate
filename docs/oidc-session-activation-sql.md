@@ -1,7 +1,7 @@
 # Activation original admission and protected SQL
 
 This is source composition, not deployment or exercised database evidence.
-[authority_oidc_session_activation_sql.py](../serverware/authority_oidc_session_activation_sql.py)
+[authority_oidc_session_activation_sql.py](../catchplate/authority_oidc_session_activation_sql.py)
 connects genuine activation pending admission to the actual
 `SuccessorExecutionIssuer.issue`, then the IDs-only
 `SuccessorExecutionExecutor.execute`. It never invokes the legacy session helper

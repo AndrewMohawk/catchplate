@@ -84,7 +84,7 @@ class GmailJobFixtureTests(unittest.TestCase):
 
     def test_exact_ordinary_query_vectors_and_two_page_response_shapes(self):
         self.assertEqual(list(fixture.TARGETS), ["list_page_1", "list_page_2", "message_full", "message_metadata"])
-        first = "maxResults=1&labelIds=INBOX&labelIds=UNREAD&q=subject%3AServerware+fixture&prettyPrint=false"
+        first = "maxResults=1&labelIds=INBOX&labelIds=UNREAD&q=subject%3ACatchplate+fixture&prettyPrint=false"
         self.assertEqual(fixture.TARGETS["list_page_1"]["raw_query"], first)
         self.assertEqual(fixture.TARGETS["list_page_2"]["raw_query"], first + "&pageToken=fixture-page-2%2B%2F%3D")
         self.assertEqual(fixture.TARGETS["message_metadata"]["raw_query"],

@@ -23,7 +23,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
-from serverware import native_pilot_current_head_state as storage
+from catchplate import native_pilot_current_head_state as storage
 from scripts.test_native_pilot_current_head_worker_profile import fixture, composed
 
 profile, p = storage.profile, storage.p

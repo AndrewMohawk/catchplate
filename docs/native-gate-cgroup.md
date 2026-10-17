@@ -1,7 +1,7 @@
 # Explicit native gate cgroup
 
 Native startup v14 retains every v13 owner and requires the closed
-`gateCgroup: {"apiVersion":"serverware.nativeGateCgroup/v1"}` profile.
+`gateCgroup: {"apiVersion":"catchplate.nativeGateCgroup/v1"}` profile.
 The fixed image selector is `--gate-cgroup-v14`; its gate selector is
 `--native-gate-cgroup-startup-v14`. The four original configuration/launch
 artifact flags and optional public-identity flag are unchanged. Default startup
@@ -22,7 +22,7 @@ descriptor, deadline or generic control operation.
    refuse child-bind roots, overmounts, shared propagation, duplicate cgroup2
    mounts and missing kernel/filesystem support. No placeholder file or
    successful-check DTO substitutes for the actual filesystem and mount IDs.
-2. Create the fresh root-owned `serverware-native-gate` leaf. Refuse any
+2. Create the fresh root-owned `catchplate-native-gate` leaf. Refuse any
    preexisting leaf; do not adopt, chown, delegate, reset or reuse it. Retain
    actual root/leaf/control/namespace originals. The gate remains at the
    unified hierarchy root while the inspector, seven-role cohort, boot-key
@@ -47,9 +47,9 @@ preventing the state authority's existing death-and-empty observation.
 
 ## Independent process binding
 
-The exact actual proc record is `b"0::/serverware-native-gate\n"`. Its cgroup ID
+The exact actual proc record is `b"0::/catchplate-native-gate\n"`. Its cgroup ID
 for `Reserve.owner_cgroup_id` is the concrete relative path
-`serverware-native-gate`, not the SHA digest. The independently provisioned
+`catchplate-native-gate`, not the SHA digest. The independently provisioned
 response client assignment must separately pin `SHA256` of those complete raw
 bytes, including LF. `native_gate_cgroup::proc_cgroup_sha256()` provides the
 source-fixed data recipe, not an accepted measurement or assignment signature.

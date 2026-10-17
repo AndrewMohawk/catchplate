@@ -286,11 +286,11 @@ pub(super) fn run() -> Result<(), String> {
             &config.expected_target_request_sha256, sent.delegation_original(),
             sent.setup_original(), sent.target_request_original())?;
         let mut capture = json!({
-            "apiVersion":if application.is_some() { "serverware.nativeBootstrapClientCapture/v9" }
-                else if outcome { "serverware.nativeBootstrapClientCapture/v8" }
-                else if retirement { "serverware.nativeBootstrapClientCapture/v7" }
-                else if combined { "serverware.nativeBootstrapClientCapture/v6" }
-                else { "serverware.nativeBootstrapClientCapture/v5" },
+            "apiVersion":if application.is_some() { "catchplate.nativeBootstrapClientCapture/v9" }
+                else if outcome { "catchplate.nativeBootstrapClientCapture/v8" }
+                else if retirement { "catchplate.nativeBootstrapClientCapture/v7" }
+                else if combined { "catchplate.nativeBootstrapClientCapture/v6" }
+                else { "catchplate.nativeBootstrapClientCapture/v5" },
             "resultScope":if application.is_some() { "local-fixed-endpoint-bootstrap-application-proxy-observation" }
                 else if outcome { "local-fixed-endpoint-bootstrap-execution-outcome-observation" }
                 else if retirement { "local-fixed-endpoint-bootstrap-execution-retirement-observation" }
@@ -361,7 +361,7 @@ pub(super) fn run() -> Result<(), String> {
         // Reserve output capacity before the separate durable creation claim.
         // Neither this diagnostic nor the later observation authorizes effects.
         let mut capture = json!({
-            "apiVersion":"serverware.nativeBootstrapClientCapture/v3",
+            "apiVersion":"catchplate.nativeBootstrapClientCapture/v3",
             "resultScope":"local-fixed-endpoint-bootstrap-and-egress-observation",
             "okForAction":false,
             "configurationSha256":super::sha256_prefixed(&configuration_raw),
@@ -373,7 +373,7 @@ pub(super) fn run() -> Result<(), String> {
             "egress":null,
         });
         let observation_capacity = if attachment.is_some() {
-            capture["apiVersion"] = json!("serverware.nativeBootstrapClientCapture/v4");
+            capture["apiVersion"] = json!("catchplate.nativeBootstrapClientCapture/v4");
             capture["resultScope"] = json!("local-fixed-endpoint-bootstrap-and-network-attachment-observation");
             capture["attachment"] = json!(null);
             16 * 1024
@@ -389,7 +389,7 @@ pub(super) fn run() -> Result<(), String> {
             .map_err(|_| "encode native egress creation observation")?;
         let fields = observation.as_object_mut().ok_or("native egress observation shape differs")?;
         ensure(fields.len() == 4, "native egress creation observation field count differs")?;
-        fields.insert("apiVersion".to_owned(), json!("serverware.nativeEgressObservation/v1"));
+        fields.insert("apiVersion".to_owned(), json!("catchplate.nativeEgressObservation/v1"));
         fields.insert("resultScope".to_owned(), json!("local-authorized-egress-observed-before-owner-teardown"));
         fields.insert("okForAction".to_owned(), json!(false));
         fields.insert("status".to_owned(), json!(if installed.created() {
@@ -441,8 +441,8 @@ pub(super) fn run() -> Result<(), String> {
         // This is output data only. The installation continuation retains the
         // genuine proof and original connection; the diagnostic grants nothing.
         let mut capture = json!({
-            "apiVersion":if setup_installation_observation.is_some() { "serverware.nativeBootstrapClientCapture/v10" }
-                else { "serverware.nativeBootstrapClientCapture/v2" },
+            "apiVersion":if setup_installation_observation.is_some() { "catchplate.nativeBootstrapClientCapture/v10" }
+                else { "catchplate.nativeBootstrapClientCapture/v2" },
             "resultScope":if setup_installation_observation.is_some() { "local-authenticated-setup-ca-readback" }
                 else { "local-fixed-endpoint-bootstrap-and-host-installation" },
             "okForAction":false,
@@ -466,7 +466,7 @@ pub(super) fn run() -> Result<(), String> {
         sent.setup_original(), sent.target_request_original())?;
     connection.check()?;
     let result = json!({
-        "apiVersion":"serverware.nativeBootstrapClientCapture/v1",
+        "apiVersion":"catchplate.nativeBootstrapClientCapture/v1",
         "resultScope":"local-fixed-endpoint-bootstrap-originals-only",
         "okForAction":false,
         "configurationSha256":super::sha256_prefixed(&configuration_raw),

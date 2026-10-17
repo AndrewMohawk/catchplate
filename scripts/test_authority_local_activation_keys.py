@@ -25,9 +25,9 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from scripts import test_authority_local_keys as fixtures
 from scripts.authority import local_activation_keys as cli
-from serverware import authority_local_activation_keys as local
+from catchplate import authority_local_activation_keys as local
 
-SANDBOX = "SERVERWARE_TEST_LOCAL_ACTIVATION_KEYS_SANDBOX"
+SANDBOX = "CATCHPLATE_TEST_LOCAL_ACTIVATION_KEYS_SANDBOX"
 canonical = local.trust.spec.canonical_json_bytes
 
 

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-workers.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-workers.v1.schema.json",
   "title": "Explicit prestarted native pinned shadow commands",
   "$ref": "#/$defs/configuration",
   "$defs": {
@@ -12,10 +12,10 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","executable"],
       "properties": {
-        "apiVersion":{"const":"serverware.nativeShadowWorkers/v1"},
+        "apiVersion":{"const":"catchplate.nativeShadowWorkers/v1"},
         "executable": {
           "type":"object","additionalProperties":false,"required":["path","sha256"],
-          "properties":{"path":{"const":"/usr/local/bin/serverware-native-shadow-worker"},"sha256":{"$ref":"#/$defs/sha256"}}
+          "properties":{"path":{"const":"/usr/local/bin/catchplate-native-shadow-worker"},"sha256":{"$ref":"#/$defs/sha256"}}
         }
       }
     },
@@ -23,7 +23,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","trustManifest","runtimeVerifier","webauthnVerifier","publicationHandoff","custodyConfig","startupActiveAuthorization","workers"],
       "properties": {
-        "apiVersion":{"const":"serverware.nativeShadowConfiguration/v2"},
+        "apiVersion":{"const":"catchplate.nativeShadowConfiguration/v2"},
         "trustManifest":{"$ref":"#/$defs/artifact"},
         "runtimeVerifier":{"$ref":"#/$defs/command"},
         "webauthnVerifier":{"$ref":"#/$defs/command"},
@@ -46,7 +46,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","channelNonce","deadlineBoottimeNs","executableSha256","executablePath"],
       "properties": {
-        "apiVersion":{"const":"serverware.nativeShadowWorkerBootstrap/v1"},
+        "apiVersion":{"const":"catchplate.nativeShadowWorkerBootstrap/v1"},
         "channelNonce":{"$ref":"#/$defs/nonce"},"deadlineBoottimeNs":{"$ref":"#/$defs/uint64"},
         "executableSha256":{"type":"array","minItems":3,"maxItems":3,"items":{"$ref":"#/$defs/sha256"}},
         "executablePath":{"type":"array","minItems":3,"maxItems":3,"items":{"$ref":"#/$defs/path"}}
@@ -55,13 +55,13 @@
     },
     "initialized": {
       "type":"object","additionalProperties":false,"required":["apiVersion","channelNonce","bootstrapSha256"],
-      "properties":{"apiVersion":{"const":"serverware.nativeShadowWorkerInitialized/v1"},"channelNonce":{"$ref":"#/$defs/nonce"},"bootstrapSha256":{"$ref":"#/$defs/sha256"}}
+      "properties":{"apiVersion":{"const":"catchplate.nativeShadowWorkerInitialized/v1"},"channelNonce":{"$ref":"#/$defs/nonce"},"bootstrapSha256":{"$ref":"#/$defs/sha256"}}
     },
     "request": {
       "type":"object","additionalProperties":false,
       "required":["apiVersion","sequence","purpose","inputSha256","inputBytes","deadlineBoottimeNs","channelNonce","bootstrapSha256"],
       "properties": {
-        "apiVersion":{"const":"serverware.nativeShadowWorkerRequest/v1"},"sequence":{"$ref":"#/$defs/uint64"},
+        "apiVersion":{"const":"catchplate.nativeShadowWorkerRequest/v1"},"sequence":{"$ref":"#/$defs/uint64"},
         "purpose":{"enum":["runtime","webauthn","publication"]},
         "inputSha256":{"$ref":"#/$defs/sha256"},"inputBytes":{"type":"integer","minimum":1,"maximum":33554432},
         "deadlineBoottimeNs":{"$ref":"#/$defs/uint64"},"channelNonce":{"$ref":"#/$defs/nonce"},"bootstrapSha256":{"$ref":"#/$defs/sha256"}
@@ -71,7 +71,7 @@
     "response": {
       "type":"object","additionalProperties":false,"required":["apiVersion","request","result"],
       "properties": {
-        "apiVersion":{"const":"serverware.nativeShadowWorkerResponse/v1"},"request":{"$ref":"#/$defs/request"},
+        "apiVersion":{"const":"catchplate.nativeShadowWorkerResponse/v1"},"request":{"$ref":"#/$defs/request"},
         "result": {
           "type":"object","additionalProperties":false,"required":["status","outputSha256","outputBytes"],
           "properties":{"status":{"const":"process-exited-zero"},"outputSha256":{"$ref":"#/$defs/sha256"},"outputBytes":{"type":"integer","minimum":1,"maximum":2097152}}

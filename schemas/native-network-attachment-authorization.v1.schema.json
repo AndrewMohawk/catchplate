@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-network-attachment-authorization.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-network-attachment-authorization.v1.schema.json",
   "title": "Native static network attachment authorization v1",
   "description": "Exact canonical sorted compact ensure_ascii JSON (including escaped DEL), no LF, at most 32768 bytes and depth 6. Ed25519 signs the payload schema ASCII, NUL, and exact canonical payload. Signed constraints are not actual host/child ownership, a durable claim, network readback, reachability, workload start or recovery permission. Actual parent admission requires the exact signed egress v3 grant with manual-dual-stack-no-autoconfiguration-v1 before child creation.",
   "type": "object", "additionalProperties": false,
   "required": ["schema", "payload", "signature"],
   "properties": {
-    "schema": {"const": "serverware.signedNativeNetworkAttachmentAuthorization/v1"},
+    "schema": {"const": "catchplate.signedNativeNetworkAttachmentAuthorization/v1"},
     "payload": {"$ref": "#/$defs/payload"},
     "signature": {"$ref": "native-egress-installation-authorization.v1.schema.json#/properties/signature"}
   },
@@ -70,7 +70,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "purpose", "trustMode", "authorizationId", "egressAuthorizationSha256", "launchManifestSha256", "setupSha256", "delegationSha256", "targetRequestSha256", "policyRequirementsSha256", "releaseRecordSha256", "policyHash", "configurationSha256", "runtimeCaCertificateSha256", "runtimeCaSpkiSha256", "ingressLeafCertificateSha256", "clientTrustBundleSha256", "clientChallengeSha256", "targetSpkiSha256", "machineIdSha256", "targetPrincipalId", "targetNonce", "networkOwner", "bridge", "attachment", "capability", "journal", "issuedAtEpochNs", "expiresAtEpochNs"],
       "properties": {
-        "schema": {"const": "serverware.nativeNetworkAttachmentAuthorization/v1"},
+        "schema": {"const": "catchplate.nativeNetworkAttachmentAuthorization/v1"},
         "sourceRevision": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/payload/properties/sourceRevision"},
         "purpose": {"const": "native-network-attachment"}, "trustMode": {"const": "trusted-host-local"},
         "authorizationId": {"$ref": "#/$defs/identifier"},

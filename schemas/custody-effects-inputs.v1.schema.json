@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/custody-effects-inputs.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/custody-effects-inputs.v1.schema.json",
   "$ref": "#/$defs/configuration",
   "$comment": "Explicit effects successor over actual five-service resource ownership. Runtime8 is selected only for DRS, CleanupAuthorizationConsumer and CurrentSignatureAuthority. Cleanup has no dispatch/HMAC resource. Data shapes are not signing, currentness or effect permission.",
   "$defs": {
@@ -63,7 +63,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.custodyFiveServiceLaunch/v6"
+          "const": "catchplate.custodyFiveServiceLaunch/v6"
         },
         "bootIdBase64url": {
           "type": "string",
@@ -121,7 +121,7 @@
           }
         }
       },
-      "description": "Fixed protected /etc/serverware/custody-effects-five.json, read only by FiveServiceLaunch.start_effects. Always independently inspected. Original actual boot/startup/lifetime/invocation; no renewed window."
+      "description": "Fixed protected /etc/catchplate/custody-effects-five.json, read only by FiveServiceLaunch.start_effects. Always independently inspected. Original actual boot/startup/lifetime/invocation; no renewed window."
     },
     "guestLaunch": {
       "type": "object",
@@ -134,7 +134,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.custodyOrdinaryServiceGuestLaunch/v6"
+          "const": "catchplate.custodyOrdinaryServiceGuestLaunch/v6"
         },
         "deliveryConfiguration": {
           "$ref": "#/$defs/pin"

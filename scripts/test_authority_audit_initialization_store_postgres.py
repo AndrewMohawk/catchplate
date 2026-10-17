@@ -39,16 +39,16 @@ from psycopg.pq import TransactionStatus
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.native_postgres_results import run_native_fixture
+from catchplate.native_postgres_results import run_native_fixture
 
-from serverware import authority_audit_initialization_admission as admission
-from serverware import authority_audit_initialization_postgres as reader
-from serverware import authority_audit_initialization_store as store
-from serverware import authority_contract
-from serverware.authority_store.audit_initialization_store_sql import (
+from catchplate import authority_audit_initialization_admission as admission
+from catchplate import authority_audit_initialization_postgres as reader
+from catchplate import authority_audit_initialization_store as store
+from catchplate import authority_contract
+from catchplate.authority_store.audit_initialization_store_sql import (
     audit_initialization_store_ddl, audit_initialization_store_grants,
 )
-from serverware.authority_store import initialization_store_access as access
+from catchplate.authority_store import initialization_store_access as access
 import test_authority_audit_initialization_admission as admission_fixture
 import test_authority_audit_initialization_postgres as metadata_fixture
 from test_authority_audit_inventory import outbox_row
@@ -62,9 +62,9 @@ DISPOSABLE_CLUSTER_ACKNOWLEDGED = False
 ENROLLMENTS = "initialization_enrollments"
 CANDIDATES = "initialization_candidates"
 WRONG_DIGEST = "sha256:" + "f" * 64
-ENROLLMENT_SCHEMA = "serverware.metadataAuditInitializationStoreEnrollment/v1"
-REQUEST_SCHEMA = "serverware.metadataAuditInitializationStoreRequest/v1"
-CANDIDATE_SCHEMA = "serverware.metadataAuditInitializationStoredCandidate/v1"
+ENROLLMENT_SCHEMA = "catchplate.metadataAuditInitializationStoreEnrollment/v1"
+REQUEST_SCHEMA = "catchplate.metadataAuditInitializationStoreRequest/v1"
+CANDIDATE_SCHEMA = "catchplate.metadataAuditInitializationStoredCandidate/v1"
 
 
 def store_limits(**changes):
@@ -1028,7 +1028,7 @@ class LocalInitializationRepresentationTests(unittest.TestCase):
 class AuditInitializationStoreSourceTests(unittest.TestCase):
     def test_source_preflight_owned_transaction_commit_and_fixed_consumers_are_bound(self):
         """Supplemental source order, not crash/acknowledgment-loss execution."""
-        path = ROOT / "serverware/authority_audit_initialization_store.py"
+        path = ROOT / "catchplate/authority_audit_initialization_store.py"
         self.assertLessEqual(path.stat().st_size, 64 * 1024)
         parsed = ast.parse(path.read_text(encoding="utf-8"))
         functions = {node.name: node for node in parsed.body if isinstance(node, ast.FunctionDef)}

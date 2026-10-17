@@ -1,0 +1,18 @@
+[Unit]
+Description=Catchplate policy-custody ready TrustedHostNoTee services
+Requires=catchplate-policy-custody-sockets.target
+BindsTo=catchplate-policy-custody@durable-recovery-store.service
+BindsTo=catchplate-policy-custody@cleanup-authorization-consumer.service
+BindsTo=catchplate-policy-custody@recovery-target-provider.service
+BindsTo=catchplate-policy-custody@current-signature-authority.service
+BindsTo=catchplate-policy-custody@bounded-cleanup-helper.service
+After=local-fs.target
+After=catchplate-policy-custody-sockets.target
+After=catchplate-policy-custody@durable-recovery-store.service
+After=catchplate-policy-custody@cleanup-authorization-consumer.service
+After=catchplate-policy-custody@recovery-target-provider.service
+After=catchplate-policy-custody@current-signature-authority.service
+After=catchplate-policy-custody@bounded-cleanup-helper.service
+
+# The trusted root launcher starts this target only after it has measured the
+# live operation driver and atomically installed the matching config generation.

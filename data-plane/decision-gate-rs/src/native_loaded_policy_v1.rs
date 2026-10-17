@@ -4,9 +4,9 @@ use sha2::{Digest, Sha256};
 use crate::native_currentness_v1 as scalar;
 
 pub const PATH: &str = "/v1/native-loaded-policy";
-pub const REQUEST: &str = "serverware.nativeLoadedPolicyRequest/v1";
-pub const STATEMENT: &str = "serverware.nativeLoadedPolicyStatement/v1";
-pub const QUOTE_DOMAIN: &[u8] = b"serverware/native-loaded-policy-attestation/v1\0";
+pub const REQUEST: &str = "catchplate.nativeLoadedPolicyRequest/v1";
+pub const STATEMENT: &str = "catchplate.nativeLoadedPolicyStatement/v1";
+pub const QUOTE_DOMAIN: &[u8] = b"catchplate/native-loaded-policy-attestation/v1\0";
 pub const MAX_REQUEST: usize = 4096;
 pub const MAX_EVIDENCE: usize = 128 * 1024;
 

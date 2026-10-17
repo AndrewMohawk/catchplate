@@ -14,7 +14,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import webauthn_credential_trust as core
+from catchplate import webauthn_credential_trust as core
 
 
 ROOT_SHA = "sha256:" + "a" * 64
@@ -339,8 +339,8 @@ class CredentialTrustSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         repository = Path(__file__).resolve().parents[1]
-        cls.web = ast.parse((repository / "serverware/webauthn.py").read_text())
-        cls.app = ast.parse((repository / "serverware/app.py").read_text())
+        cls.web = ast.parse((repository / "catchplate/webauthn.py").read_text())
+        cls.app = ast.parse((repository / "catchplate/app.py").read_text())
 
     def function(self, tree, name):
         matches = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name]

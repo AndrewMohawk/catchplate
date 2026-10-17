@@ -121,10 +121,10 @@ pub(crate) fn handle(original: &[u8], policy_original: &[u8], roots_original: &[
     let request: Request = serde_json::from_value(request_value).map_err(|_| "runtime request fields differ")?;
     let policy: Policy = serde_json::from_value(parse_original(policy_original, MAX_POLICY)?)
         .map_err(|_| "runtime policy fields differ")?;
-    ensure(policy.api_version == "serverware.nativeShadowRuntimeAttestationPolicy/v1"
+    ensure(policy.api_version == "catchplate.nativeShadowRuntimeAttestationPolicy/v1"
         && sha(policy_original) == authority.policy_sha256
         && policy.trust_roots_sha256 == Sha256Digest::compute(roots_original)
-        && request.api_version == "serverware.policyShadowRuntimeAttestationVerificationRequest/v1"
+        && request.api_version == "catchplate.policyShadowRuntimeAttestationVerificationRequest/v1"
         && request.operation == "verify-generation-runtime"
         && request.attestation_policy_sha256 == pin(authority.policy_sha256)?
         && request.verifier_executable_sha256 == pin(authority.verifier_executable_sha256)?
@@ -143,7 +143,7 @@ pub(crate) fn handle(original: &[u8], policy_original: &[u8], roots_original: &[
         && binding.request_id != binding.replay_id && binding.request_id != binding.management_handoff_id
         && binding.replay_id != binding.management_handoff_id
         && binding.management_handoff_sha256 == domain_digest(
-            b"serverware.policyShadowGenerationManagementHandoff/v1",
+            b"catchplate.policyShadowGenerationManagementHandoff/v1",
             &(&binding.request_id, &binding.replay_id, &binding.management_handoff_id,
                 &binding.request_sha256, &request.runtime_identity_sha256))?,
         "runtime management request binding differs")?;

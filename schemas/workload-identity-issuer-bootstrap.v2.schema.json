@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/workload-identity-issuer-bootstrap.v2.schema.json",
+  "$id": "https://catchplate.invalid/schemas/workload-identity-issuer-bootstrap.v2.schema.json",
   "title": "Root-signed native workload identity issuer cold bootstrap v2",
   "description": "Closed canonical signed public original, at most 131072 bytes. Ed25519 signs the payload-schema ASCII bytes, NUL and canonical payload. Runtime signature, source revision, exact-byte digest, key separation, interval, descriptor and custody checks remain mandatory; schema validation is not launch or issuance authority. Native v2 is distinct from strict legacy v1.",
   "type": "object", "additionalProperties": false,
   "required": ["schema", "payload", "signature"],
   "properties": {
-    "schema": {"const": "serverware.signedWorkloadIdentityIssuerBootstrap/v2"},
+    "schema": {"const": "catchplate.signedWorkloadIdentityIssuerBootstrap/v2"},
     "payload": {"$ref": "#/$defs/payload"},
     "signature": {"type": "string", "minLength": 94, "maxLength": 94, "pattern": "^ed25519:[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])"}
   },
@@ -78,7 +78,7 @@
         "rootPublicKeyFd": {"const": 198}, "bootstrapFd": {"const": 199},
         "listenerFd": {"const": 200}, "caPrivateKeyFd": {"const": 201}, "journalFd": {"const": 202},
         "inheritedFileDescriptors": {"const": [198, 199, 200, 201, 202]},
-        "listenerPath": {"const": "/run/serverware/workload-identity-issuer/issuer.sock"},
+        "listenerPath": {"const": "/run/catchplate/workload-identity-issuer/issuer.sock"},
         "listenerDevice": {"$ref": "#/$defs/positive"}, "listenerInode": {"$ref": "#/$defs/positive"},
         "listenerPathDevice": {"$ref": "#/$defs/positive"}, "listenerPathInode": {"$ref": "#/$defs/positive"},
         "listenerUid": {"const": 65492}, "listenerGid": {"const": 65532}, "listenerMode": {"const": 432},
@@ -90,7 +90,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "purpose", "trustMode", "serviceUid", "serviceGid", "processMode", "configurationDigest", "journalNamespace", "issuerCertificate", "authorizationKey", "policyHash", "caPrivateKey", "journal", "launch", "issuedAtEpochNs", "expiresAtEpochNs", "nativeEnrollment"],
       "properties": {
-        "schema": {"const": "serverware.workloadIdentityIssuerBootstrap/v2"},
+        "schema": {"const": "catchplate.workloadIdentityIssuerBootstrap/v2"},
         "sourceRevision": {"type": "string", "minLength": 1, "maxLength": 128, "description": "Must equal the running verifier's exact compiled authority source revision; not an operator-selected compatibility range."},
         "purpose": {"const": "native-workload-identity-issuance"}, "trustMode": {"const": "trusted-host-local"},
         "serviceUid": {"const": 65492}, "serviceGid": {"const": 65492},

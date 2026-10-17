@@ -27,13 +27,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from serverware import authority_local_registration_enrollment as local
+from catchplate import authority_local_registration_enrollment as local
 from scripts.test_authority_local_configuration import sealed
 from scripts.test_authority_local_registration_enrollment import fixture, work
 
 
 ERRORS = (ValueError, InvalidSignature)
-SANDBOX = "SERVERWARE_TEST_LOCAL_REGISTRATION_ENROLLMENT_SANDBOX"
+SANDBOX = "CATCHPLATE_TEST_LOCAL_REGISTRATION_ENROLLMENT_SANDBOX"
 
 
 def _resign_fractional_configuration(selected, root):
@@ -103,13 +103,13 @@ class EnrollmentCustodyControls(unittest.TestCase):
                 or os.getresgid() != (0, 0, 0) or not sys.flags.isolated
                 or not sys.flags.dont_write_bytecode):
             self.skipTest("requires explicit disposable-/run root -I -B sandbox with CAP_CHOWN")
-        environment = mock.patch.dict(os.environ, {"SERVERWARE_RELEASE_CHANNEL": "dev",
-            "SERVERWARE_PROCESS_MODE": "metadata-bootstrap"})
+        environment = mock.patch.dict(os.environ, {"CATCHPLATE_RELEASE_CHANNEL": "dev",
+            "CATCHPLATE_PROCESS_MODE": "metadata-bootstrap"})
         environment.start()
         self.addCleanup(environment.stop)
         self.inputs = set()
         self.owners = []
-        self.parent = Path("/run/serverware")
+        self.parent = Path("/run/catchplate")
         self.created_parent = not self.parent.exists()
         if self.created_parent:
             self.parent.mkdir(mode=0o755)

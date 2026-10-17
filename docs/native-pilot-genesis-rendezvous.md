@@ -10,7 +10,7 @@ owner is not a solution.
 ## Selected executable flow
 
 The new `--run-native-genesis-rendezvous` mode requires independently approved
-`serverware.nativePilotGenesisListenerConfiguration/v2`. The three existing
+`catchplate.nativePilotGenesisListenerConfiguration/v2`. The three existing
 cold modes retain their previous grammar. The new mode performs these steps
 under the original BOOTTIME and UNIX deadlines:
 
@@ -48,8 +48,8 @@ protected descriptor/SHA-256 pairs: `--request-fd/--request-sha256`,
 Descriptors are independently provisioned originals, not secrets in command
 arguments. The only destinations are:
 
-- `/etc/serverware/native-genesis-authority/listener-execution.input.json`
-- `/etc/serverware/native-genesis-authority/listener-execution.approval.json`
+- `/etc/catchplate/native-genesis-authority/listener-execution.input.json`
+- `/etc/catchplate/native-genesis-authority/listener-execution.approval.json`
 
 Both names must be absent and their protected parent must already exist. The
 installer creates root-owned mode-0400 files, reads them back and retains actual
@@ -105,7 +105,7 @@ does not approve that candidate or create a strict-source package.
 
 Exact source archives, both preflight outcomes, all three raw exports, complete
 observation logs and checksums are retained at
-`codex-offload/serverware/engineering-builds/fc466a0c-genesis-rendezvous-omGm4r/`
+`codex-offload/catchplate/engineering-builds/fc466a0c-genesis-rendezvous-omGm4r/`
 under the operator's home directory. Full source checkpoints remain **36/46**,
 independent production acceptance **0/6**.
 

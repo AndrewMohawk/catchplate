@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-bootstrap-client.v8.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-bootstrap-client.v8.schema.json",
   "title": "Explicit native execution, retirement and durable outcome bootstrap client v8",
   "description": "Closed independently pinned 22-field configuration, at most 16384 bytes. Explicit v8 requires independently signed start authorization v3 with journal.outcomeProfile durable-terminal-retirement-v1, separate genuine egress/start/optional CA owners, actual terminal cleanup and retirement, and write-once outcome publication before stdout. Installation must be present: null selects execution-only; an object selects the existing immutable in-image CA trust path. Old profiles are not widened. Schema acceptance grants no action or retry authority.",
   "type": "object", "additionalProperties": false,
   "required": ["apiVersion", "endpoint", "timeoutMilliseconds", "startupEvidence", "startupExpectations", "sessionScope", "trustRoots", "clientCertificate", "clientPrivateKey", "callerIssuer", "delegationAuthorizer", "setupAuthorizer", "request", "clientChallengeBase64url", "expectedCallerPrincipal", "expectedTargetPrincipal", "expectedTargetNonce", "expectedTargetRequestSha256", "installation", "egress", "attachment", "execution"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeBootstrapClient/v8"},
+    "apiVersion": {"const": "catchplate.nativeBootstrapClient/v8"},
     "endpoint": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/endpoint"},
     "timeoutMilliseconds": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/timeoutMilliseconds"},
     "startupEvidence": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/startupEvidence"},

@@ -15,7 +15,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import native_pilot_peer_preparation as profile
+from catchplate import native_pilot_peer_preparation as profile
 
 
 def canonical(value):
@@ -34,7 +34,7 @@ def fixture(kind="ordinary-services"):
             targetExecutable=dict(device=8, inode=71000 + index, length=8192,
                 sha256=sha(("SYNTHETIC target " + role).encode("ascii"))),
             cgroup=dict(pathSha256=sha(b"/SYNTHETIC/retained-peer"), mountId=31, inode=81000))
-    return dict(apiVersion="serverware.nativePilotPeerPreparation/v1", profile="retain-observed-cgroup",
+    return dict(apiVersion="catchplate.nativePilotPeerPreparation/v1", profile="retain-observed-cgroup",
         ownerKind=kind, phase="executing-gate" if kind == "gate" else "parked-pre-exec",
         configurationSha256=sha(b"SYNTHETIC cold configuration"),
         sourceOriginalSha256=sha(b"SYNTHETIC owner source original"),
@@ -83,7 +83,7 @@ class PeerPreparationControls(unittest.TestCase):
                 profile.require_same_cgroup(expected, actual)
 
     def test_phase_version_and_final_claims_are_not_observations(self):
-        for name, new in (("apiVersion", "serverware.nativePilotPeerPreparation/v2"),
+        for name, new in (("apiVersion", "catchplate.nativePilotPeerPreparation/v2"),
                 ("profile", "allow-migration"), ("phase", "executing-gate"),
                 ("ownerKind", "caller-supplied")):
             value = fixture(); value[name] = new; self.rejected(value)

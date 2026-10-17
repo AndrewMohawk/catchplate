@@ -33,9 +33,9 @@ const MAX_CLIENT_CERTIFICATES: usize = 8;
 const MAX_ROOTS: usize = 32;
 const MAX_ROOT_BYTES: usize = 64 * 1024;
 const MAX_ROOT_SET_BYTES: usize = 1024 * 1024;
-const ROOT_SET_DOMAIN: &[u8] = b"serverware/mutual-tls-client-trust/v1\0";
-const REQUEST_DOMAIN: &[u8] = b"serverware/native-enrollment-key-binding/v1\0";
-const SIGNATURE_DOMAIN: &[u8] = b"serverware/native-enrollment-packet-signature/v1\0";
+const ROOT_SET_DOMAIN: &[u8] = b"catchplate/mutual-tls-client-trust/v1\0";
+const REQUEST_DOMAIN: &[u8] = b"catchplate/native-enrollment-key-binding/v1\0";
+const SIGNATURE_DOMAIN: &[u8] = b"catchplate/native-enrollment-packet-signature/v1\0";
 
 /// A single genuine assignment is moved into one generated-key attempt.
 /// Borrowed originals/session cannot be replaced while this owner is retained.

@@ -1,6 +1,6 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://serverware.invalid/schemas/native-shadow-proof-cohort.v3.schema.json",
+  "$id":"https://catchplate.invalid/schemas/native-shadow-proof-cohort.v3.schema.json",
   "$ref":"#/$defs/configuration",
   "$defs":{
     "sha":{"$ref":"native-shadow-proof-cohort.v1.schema.json#/$defs/sha"},
@@ -15,7 +15,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","authority","executableSha256","retrievalConfiguration","persistenceConfiguration","trustedTimeConfiguration","generationInstallConfiguration","bridgeConfiguration","commitRequestConfiguration","cleanup"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeShadowProofCohortConfiguration/v3"},
+        "apiVersion":{"const":"catchplate.nativeShadowProofCohortConfiguration/v3"},
         "authority":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/authority"},
         "executableSha256":{"$ref":"#/$defs/sha"},
         "retrievalConfiguration":{"$ref":"#/$defs/pin"},"persistenceConfiguration":{"$ref":"#/$defs/pin"},
@@ -31,7 +31,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","configurationSha256","precreationSha256","invocationId","retrieval","persistence","trustedTime","generationInstall","bridge","commitRequest"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeShadowProofCohortOriginals/v2"},
+        "apiVersion":{"const":"catchplate.nativeShadowProofCohortOriginals/v2"},
         "configurationSha256":{"$ref":"#/$defs/sha"},"precreationSha256":{"$ref":"#/$defs/sha"},"invocationId":{"$ref":"#/$defs/invocation"},
         "retrieval":{"$ref":"#/$defs/childOriginal"},"persistence":{"$ref":"#/$defs/childOriginal"},
         "trustedTime":{"$ref":"#/$defs/childOriginal"},"generationInstall":{"$ref":"#/$defs/childOriginal"},
@@ -43,7 +43,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","configurationSha256","precreationSha256","observationSha256","invocationId","retrieval","persistence","trustedTime","generationInstall","bridge","commitRequest","signingKeyId"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeShadowProofCohortRelease/v2"},
+        "apiVersion":{"const":"catchplate.nativeShadowProofCohortRelease/v2"},
         "configurationSha256":{"$ref":"#/$defs/sha"},"precreationSha256":{"$ref":"#/$defs/sha"},
         "observationSha256":{"$ref":"#/$defs/sha"},"invocationId":{"$ref":"#/$defs/invocation"},
         "retrieval":{"$ref":"#/$defs/roleRelease"},"persistence":{"$ref":"#/$defs/roleRelease"},
@@ -54,13 +54,13 @@
     "release":{
       "type":"object","additionalProperties":false,"required":["payload","signatureBase64url"],
       "properties":{"payload":{"$ref":"#/$defs/releasePayload"},"signatureBase64url":{"$ref":"#/$defs/signature"}},
-      "description":"Independent existing C9 key signs ASCII serverware.nativeShadowProofCohortRelease.signature/v2, NUL, full canonical payload. One original root-authenticated seqpacket <=32768 bytes and <=128 total SCM_RIGHTS. Six fixed role inventories, each in original C9 FD6..69 order, joined before any child release. No automatic retry or readiness claim."
+      "description":"Independent existing C9 key signs ASCII catchplate.nativeShadowProofCohortRelease.signature/v2, NUL, full canonical payload. One original root-authenticated seqpacket <=32768 bytes and <=128 total SCM_RIGHTS. Six fixed role inventories, each in original C9 FD6..69 order, joined before any child release. No automatic retry or readiness claim."
     },
     "payload":{
       "type":"object","additionalProperties":false,
       "required":["apiVersion","purpose","configurationSha256","precreationSha256","observationSha256","releaseSha256","invocationId","operationIdSha256","requestedAtBoottimeNs","deadlineBoottimeNs","signingKeyId"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeShadowProofCohortCleanup/v2"},"purpose":{"const":"terminate-owned-proof-cohort"},
+        "apiVersion":{"const":"catchplate.nativeShadowProofCohortCleanup/v2"},"purpose":{"const":"terminate-owned-proof-cohort"},
         "configurationSha256":{"$ref":"#/$defs/sha"},"precreationSha256":{"$ref":"#/$defs/sha"},
         "observationSha256":{"$ref":"#/$defs/sha"},"releaseSha256":{"$ref":"#/$defs/sha"},"invocationId":{"$ref":"#/$defs/invocation"},
         "operationIdSha256":{"$ref":"#/$defs/sha"},"requestedAtBoottimeNs":{"$ref":"#/$defs/ns"},
@@ -70,13 +70,13 @@
     "authorization":{
       "type":"object","additionalProperties":false,"required":["payload","signatureBase64url"],
       "properties":{"payload":{"$ref":"#/$defs/payload"},"signatureBase64url":{"$ref":"#/$defs/signature"}},
-      "description":"Distinct cleanup key signs ASCII serverware.nativeShadowProofCohortCleanup.signature/v2, NUL, full canonical payload. Actual original boot/lifetime, requested <= now < deadline <= lifetime-250ms and deadline-requested <=30s. Never borrows five-child cleanup/v1."
+      "description":"Distinct cleanup key signs ASCII catchplate.nativeShadowProofCohortCleanup.signature/v2, NUL, full canonical payload. Actual original boot/lifetime, requested <= now < deadline <= lifetime-250ms and deadline-requested <=30s. Never borrows five-child cleanup/v1."
     },
     "terminal":{
       "type":"object","additionalProperties":false,
       "required":["apiVersion","authorizationSha256","configurationSha256","precreationSha256","observationSha256","releaseSha256","invocationId","completedAtBoottimeNs","children"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeShadowProofCohortTerminal/v2"},"authorizationSha256":{"$ref":"#/$defs/sha"},
+        "apiVersion":{"const":"catchplate.nativeShadowProofCohortTerminal/v2"},"authorizationSha256":{"$ref":"#/$defs/sha"},
         "configurationSha256":{"$ref":"#/$defs/sha"},"precreationSha256":{"$ref":"#/$defs/sha"},
         "observationSha256":{"$ref":"#/$defs/sha"},"releaseSha256":{"$ref":"#/$defs/sha"},
         "invocationId":{"$ref":"#/$defs/invocation"},"completedAtBoottimeNs":{"$ref":"#/$defs/ns"},
@@ -95,7 +95,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","authorizationSha256","intentRecordSha256","terminalOriginal","terminalRecordSha256"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeShadowProofCohortCleanupResult/v2"},"authorizationSha256":{"$ref":"#/$defs/sha"},
+        "apiVersion":{"const":"catchplate.nativeShadowProofCohortCleanupResult/v2"},"authorizationSha256":{"$ref":"#/$defs/sha"},
         "intentRecordSha256":{"$ref":"#/$defs/sha"},"terminalRecordSha256":{"$ref":"#/$defs/sha"},
         "terminalOriginal":{"type":"string","minLength":1,"maxLength":32256,"pattern":"^[\\u0000-\\u007f]+$"}
       },

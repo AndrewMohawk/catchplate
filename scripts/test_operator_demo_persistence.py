@@ -25,18 +25,18 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 _ENVIRONMENT = {
-    "SERVERWARE_OPERATOR_DEMO": "1",
-    "SERVERWARE_RELEASE_CHANNEL": "dev",
-    "SERVERWARE_PROCESS_MODE": "serverware-control-plane",
-    "SERVERWARE_METADATA_STORE_BACKEND": "sqlite",
-    "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite",
-    "SERVERWARE_GRANT_STORE_BACKEND": "sqlite",
-    "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
-    "SERVERWARE_KEY_RELEASE_REQUIRED": "0",
-    "SERVERWARE_DEV_AUTHENTICATOR": "0",
-    "SERVERWARE_DEV_DEMO_SEED": "0",
-    "SERVERWARE_OPERATOR_DEMO_UPSTREAMS": '["https://api.example.com"]',
-    "SERVERWARE_OPERATOR_DEMO_PROXY_URL": "https://proxy.example.com",
+    "CATCHPLATE_OPERATOR_DEMO": "1",
+    "CATCHPLATE_RELEASE_CHANNEL": "dev",
+    "CATCHPLATE_PROCESS_MODE": "catchplate-control-plane",
+    "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_AUDIT_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_GRANT_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
+    "CATCHPLATE_KEY_RELEASE_REQUIRED": "0",
+    "CATCHPLATE_DEV_AUTHENTICATOR": "0",
+    "CATCHPLATE_DEV_DEMO_SEED": "0",
+    "CATCHPLATE_OPERATOR_DEMO_UPSTREAMS": '["https://api.example.com"]',
+    "CATCHPLATE_OPERATOR_DEMO_PROXY_URL": "https://proxy.example.com",
     "PYTHONDONTWRITEBYTECODE": "1",
 }
 _PROVIDER_SECRET = "synthetic-operator-persistence-provider-secret"
@@ -58,9 +58,9 @@ _NOW = 1000
 
 
 def backend(*, initialize=True):
-    from serverware import operator_demo
+    from catchplate import operator_demo
     operator_demo.activate()
-    from serverware import config, db, operator_demo_store, policy_bundle
+    from catchplate import config, db, operator_demo_store, policy_bundle
     assert operator_demo.active()
     if initialize:
         db.init_db()
@@ -93,7 +93,7 @@ def verify_empty_policy(signed, initial_hash):
     assert route["id"] == "operator.empty" and "credentialRef" not in route
     assert route["principals"] == ["agent:operator-demo:empty"]
     assert route["match"] == {"scheme": "https", "host": "api.example.com", "port": 443,
-        "methods": ["GET"], "paths": ["/__serverware_operator_demo_unconfigured__"]}
+        "methods": ["GET"], "paths": ["/__catchplate_operator_demo_unconfigured__"]}
     assert route["adapter"]["type"] == "generic.rest"
     adapter = route["adapter"]["config"]
     assert adapter["credentialMode"] == "none"
@@ -334,13 +334,13 @@ def worker(operation):
 
 class OperatorDemoPersistenceTests(unittest.TestCase):
     def setUp(self):
-        self.scratch = tempfile.TemporaryDirectory(prefix="serverware-operator-persistence-",
+        self.scratch = tempfile.TemporaryDirectory(prefix="catchplate-operator-persistence-",
             dir=os.getenv("TMPDIR", "/srv/catchplate-fast/tmp"))
         self.addCleanup(self.scratch.cleanup)
         self.directory = Path(self.scratch.name) / "data"
         self.environment = {key: value for key, value in os.environ.items()
-                            if not key.startswith("SERVERWARE_")}
-        self.environment.update(_ENVIRONMENT, SERVERWARE_DATA_DIR=str(self.directory))
+                            if not key.startswith("CATCHPLATE_")}
+        self.environment.update(_ENVIRONMENT, CATCHPLATE_DATA_DIR=str(self.directory))
 
     def command(self, operation):
         return [sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation]
@@ -389,7 +389,7 @@ class OperatorDemoPersistenceTests(unittest.TestCase):
         self.run_worker("crash", expected_code=_CRASH_EXIT)
         before_restart = json.loads((self.directory / "policy-bundle.json").read_bytes())
         self.assertEqual(before_restart["metadata"]["sequence"], 1)
-        with closing(sqlite3.connect((self.directory / "serverware.sqlite3").as_uri() + "?mode=ro", uri=True)) as connection:
+        with closing(sqlite3.connect((self.directory / "catchplate.sqlite3").as_uri() + "?mode=ro", uri=True)) as connection:
             committed = connection.execute("SELECT sequence,policy_hash FROM operator_demo_policy").fetchone()
             self.assertEqual(committed[0], 2)
             self.assertNotEqual(committed[1], initial["policy_hash"])

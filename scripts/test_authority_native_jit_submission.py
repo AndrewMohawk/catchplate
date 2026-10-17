@@ -33,8 +33,8 @@ def no_external_effects(event, _arguments):
 
 
 if __name__ == "__main__":
-    os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
-    os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
+    os.environ["CATCHPLATE_PROCESS_MODE"] = "metadata-bootstrap"
+    os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
     sys.addaudithook(no_external_effects)
 
 import psycopg
@@ -42,13 +42,13 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from scripts import test_authority_native_jit_review_custody as crypto
 from scripts import test_authority_release_private_input as legacy
-from serverware import authority_contract as contract
-from serverware import authority_native_jit_review_custody as custody
-from serverware import authority_native_jit_submission as submission
-from serverware import authority_planner as planner
-from serverware import authority_primary_contract as primary
-from serverware import authority_service as service
-from serverware import native_jit_review_material as material
+from catchplate import authority_contract as contract
+from catchplate import authority_native_jit_review_custody as custody
+from catchplate import authority_native_jit_submission as submission
+from catchplate import authority_planner as planner
+from catchplate import authority_primary_contract as primary
+from catchplate import authority_service as service
+from catchplate import native_jit_review_material as material
 
 NOW, MONO, SECOND = crypto.NOW, crypto.MONO, crypto.SECOND
 PIN = "sha256:" + "a" * 64
@@ -62,7 +62,7 @@ def canonical(value):
 
 
 def original_channel(fixture):
-    return {"schema": "serverware.nativeJitPendingSubmission/v1",
+    return {"schema": "catchplate.nativeJitPendingSubmission/v1",
         "runtimeOriginal": canonical(fixture.runtime).decode("ascii"),
         "parentOriginal": canonical(fixture.parent).decode("ascii"),
         "childOriginal": canonical(fixture.child).decode("ascii"),
@@ -73,7 +73,7 @@ def original_channel(fixture):
 def planner_request(fixture, channel=None, *, typed=None, deadline=20):
     typed = copy.deepcopy(fixture.parent if typed is None else typed)
     return {"schema": planner.PLANNER_REQUEST_SCHEMA,
-        "plannerTransactionId": planner.framed_digest("serverware.policyAuthorityPlannerTransaction/v1",
+        "plannerTransactionId": planner.framed_digest("catchplate.policyAuthorityPlannerTransaction/v1",
             typed["operationId"].encode("ascii"), typed["requestDigest"].encode("ascii"), PIN.encode("ascii")),
         "operation": typed["operation"], "operationId": typed["operationId"],
         "requestDigest": typed["requestDigest"], "capabilityId": PIN,
@@ -99,11 +99,11 @@ def extended_configuration(fixture):
         "socketPath": "/synthetic-never-opened.sock", "requestTimeoutSeconds": 1,
         "serviceUid": 1000, "serviceGid": 1000}
     fixture.configuration["webauthn"] = {"maximumChallengeAgeNs": 30 * SECOND}
-    fixture.configuration_digest = crypto.framed("serverware.policyAuthorityServiceConfiguration/v6",
+    fixture.configuration_digest = crypto.framed("catchplate.policyAuthorityServiceConfiguration/v6",
         canonical(fixture.configuration))
     fixture.assignment_payload["controlPlaneConfigurationDigest"] = fixture.configuration_digest
     fixture.assignment_original = fixture.sign_assignment()
-    broker = {"apiVersion": "serverware.nativeJitReviewConfiguration/v1",
+    broker = {"apiVersion": "catchplate.nativeJitReviewConfiguration/v1",
         "sourceContractDigest": contract.OPERATION_MANIFEST_DIGEST,
         "controlPlaneConfigurationDigest": fixture.configuration_digest,
         "deploymentId": fixture.policy["deploymentId"], "instanceId": fixture.target["instanceId"],

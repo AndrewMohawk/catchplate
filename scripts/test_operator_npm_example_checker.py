@@ -38,8 +38,8 @@ def digest(raw):
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
-UNSCOPED, SCOPED = "serverware-fixture-publish", "@serverware-fixture/publish"
-FORBIDDEN = "serverware-fixture-forbidden"
+UNSCOPED, SCOPED = "catchplate-fixture-publish", "@catchplate-fixture/publish"
+FORBIDDEN = "catchplate-fixture-forbidden"
 CORGI = "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*"
 CREDENTIAL, POLICY = uid(1), sha(900)
 START, RELEASE = "data_plane.credential.release_started", "data_plane.response.released"
@@ -123,7 +123,7 @@ def stored_record(spec):
 
 
 def installation_files():
-    project = {"name": "serverware-fixture-consumer", "version": "1.0.0", "private": True,
+    project = {"name": "catchplate-fixture-consumer", "version": "1.0.0", "private": True,
         "dependencies": {UNSCOPED: "1.0.2"}}
     lock = {"name": project["name"], "version": "1.0.0", "lockfileVersion": 3,
         "packages": {"": {"name": project["name"], "version": "1.0.0", "dependencies": project["dependencies"]}}}
@@ -146,7 +146,7 @@ def installation_files():
 
 def installation(spec, directory=None):
     files = installation_files()
-    return {"directory": directory or "/tmp/serverware-npm-install-fixture1/" + spec["case"],
+    return {"directory": directory or "/tmp/catchplate-npm-install-fixture1/" + spec["case"],
         "lockSha256": hashlib.sha256(files["package-lock.json"]).hexdigest(),
         "fileSha256": {name: hashlib.sha256(raw).hexdigest() for name, raw in sorted(files.items())},
         "sourcePreserved": True, "ciLockUnchanged": spec["operation"] == "ci"}
@@ -166,7 +166,7 @@ def client_receipt(spec):
 
 
 def diagnostic(**changes):
-    return {"schema": "serverware.npmExampleDiagnostic/v1", "launcherStage": "worker_process",
+    return {"schema": "catchplate.npmExampleDiagnostic/v1", "launcherStage": "worker_process",
         "workerStage": "npm_process", "processRole": "npm", "exitCode": 1,
         "signal": None, "systemCode": None, "npmCode": "E503", **changes}
 
@@ -178,7 +178,7 @@ def phase_evidence(value, phase):
 def summary(spec):
     if not spec["success"]:
         value = {"ok": False, "operation": spec["operation"],
-            "error": "npm example failed; check configuration, permissions and Serverware audit logs."}
+            "error": "npm example failed; check configuration, permissions and Catchplate audit logs."}
         if spec["operation"] == "publish":
             value["warning"] = "Publication may be unconfirmed. Inspect registry metadata and audit evidence; do not automatically retry."
         elif spec["case"] in INSTALL_PHASES:
@@ -198,9 +198,9 @@ def summary(spec):
 
 def install_requests(phase):
     metadata = (("GET", "/" + UNSCOPED, "metadata", UNSCOPED, None),
-        ("GET", "/@serverware-fixture%2fpublish", "metadata", SCOPED, None))
-    downloads = (("GET", "/serverware-fixture-publish/-/serverware-fixture-publish-1.0.2.tgz", "tarball", UNSCOPED, "1.0.2"),
-        ("GET", "/@serverware-fixture/publish/-/publish-3.0.0.tgz", "tarball", SCOPED, "3.0.0"),
+        ("GET", "/@catchplate-fixture%2fpublish", "metadata", SCOPED, None))
+    downloads = (("GET", "/catchplate-fixture-publish/-/catchplate-fixture-publish-1.0.2.tgz", "tarball", UNSCOPED, "1.0.2"),
+        ("GET", "/@catchplate-fixture/publish/-/publish-3.0.0.tgz", "tarball", SCOPED, "3.0.0"),
         ("POST", AUDIT_PATH, "audit", None, None))
     return (() if phase == "ci_published" else metadata) + downloads
 
@@ -236,8 +236,8 @@ def packument(package, stored):
     version = "1.0.0"
     content = (package + "@" + version + ": synthetic bytes, no tarball served").encode()
     versions = {version: {"name": package, "version": version, "description": "Complete synthetic metadata \u2603",
-        "main": "index.js", "license": "MIT", "dependencies": {"serverware-fixture-dependency": "^1.0.0"},
-        "optionalDependencies": {"serverware-fixture-optional": "2.0.0"}, "engines": {"node": ">=20"},
+        "main": "index.js", "license": "MIT", "dependencies": {"catchplate-fixture-dependency": "^1.0.0"},
+        "optionalDependencies": {"catchplate-fixture-optional": "2.0.0"}, "engines": {"node": ">=20"},
         "fixtureExtra": {"preserved": [True, None, 7]}, "dist": {
             "tarball": "https://registry.npmjs.org/" + package + "/-/metadata-1.0.0.tgz",
             "integrity": "sha512-" + base64.b64encode(hashlib.sha512(content).digest()).decode(),
@@ -318,7 +318,7 @@ def observation(completed=PHASES):
             "requestBodySha256": digest(body), "requestBodyBytes": len(body), "operation": operation,
             "status": status, "responseContentType": content_type,
             "responseBodySha256": digest(response), "responseBodyBytes": len(response), "allParsedHeadersValidated": True})
-    return {"schema": "serverware.privateNpmExampleObservations/v1", "syntheticOnly": True,
+    return {"schema": "catchplate.privateNpmExampleObservations/v1", "syntheticOnly": True,
         "total": len(rows), "attempts": rows, "stored": stored}
 
 
@@ -466,7 +466,7 @@ def success_result():
     mutations += [("operator_catalog.access_rule.npm_" + (name if name in {"metadata", "install"} else "publish") + "_created",
         rule, sha(3010 + index)) for index, (name, rule) in enumerate(rules.items())]
     mutations.append(("operator_catalog.application.revoked", apps["scoped"], sha(902)))
-    return {"schema": "serverware.privateNpmExampleCheck/v1", "ok": True, "syntheticOnly": True,
+    return {"schema": "catchplate.privateNpmExampleCheck/v1", "ok": True, "syntheticOnly": True,
         "actualExampleEntrypoint": True, "auditChainVerified": True, "stockClientTransports": True,
         "allParsedUpstreamHeadersValidated": True, "distinctOuterInnerCAs": True, "trustMode": "additiveSharedNodeRoots",
         "productionReady": False, "realNpmVerified": False, "npmInstallVerified": True, "publicDnsVerified": False,
@@ -516,26 +516,26 @@ class NpmExampleCheckerTests(unittest.TestCase):
         with patch.dict(os.environ, {"HOME": "/secret-canary", "NPM_TOKEN": "secret-canary", "NODE_OPTIONS": "secret-canary",
                 "HTTPS_PROXY": "secret-canary", "NODE_TLS_REJECT_UNAUTHORIZED": "0"}):
             for spec in SPECS:
-                expected = {"LANG": "C.UTF-8", "SERVERWARE_PROXY_URL": "https://proxy.operator-basic.example.test:8443",
-                    "SERVERWARE_APP_ID": uid(2), "SERVERWARE_PROXY_TOKEN": "a" * 43, "SERVERWARE_NPM_PACKAGE": spec["package"],
-                    "SERVERWARE_CA_FILE": "/client-trust/inner-ca.pem", "SERVERWARE_PROXY_CA_FILE": "/client-trust/outer-ca.pem"}
+                expected = {"LANG": "C.UTF-8", "CATCHPLATE_PROXY_URL": "https://proxy.operator-basic.example.test:8443",
+                    "CATCHPLATE_APP_ID": uid(2), "CATCHPLATE_PROXY_TOKEN": "a" * 43, "CATCHPLATE_NPM_PACKAGE": spec["package"],
+                    "CATCHPLATE_CA_FILE": "/client-trust/inner-ca.pem", "CATCHPLATE_PROXY_CA_FILE": "/client-trust/outer-ca.pem"}
                 if spec["operation"] != "view":
-                    expected["SERVERWARE_NPM_VERSION"] = spec["version"]
+                    expected["CATCHPLATE_NPM_VERSION"] = spec["version"]
                 if spec["operation"] == "publish":
-                    expected.update(SERVERWARE_NPM_TAG="fixture", SERVERWARE_NPM_TARBALL="/client-packages/" + spec["case"] + ".tgz",
-                        SERVERWARE_NPM_TARBALL_SHA256=hashlib.sha256(archive(spec)).hexdigest(), SERVERWARE_NPM_PUBLISH_CONFIRM="publish-publicly")
+                    expected.update(CATCHPLATE_NPM_TAG="fixture", CATCHPLATE_NPM_TARBALL="/client-packages/" + spec["case"] + ".tgz",
+                        CATCHPLATE_NPM_TARBALL_SHA256=hashlib.sha256(archive(spec)).hexdigest(), CATCHPLATE_NPM_PUBLISH_CONFIRM="publish-publicly")
                 if spec["case"] == "wrong_outer_ca":
-                    del expected["SERVERWARE_PROXY_CA_FILE"]
+                    del expected["CATCHPLATE_PROXY_CA_FILE"]
                 elif spec["case"] == "wrong_inner_ca":
-                    expected["SERVERWARE_CA_FILE"] = "/client-trust/outer-ca.pem"
+                    expected["CATCHPLATE_CA_FILE"] = "/client-trust/outer-ca.pem"
                 elif spec["case"] == "missing_confirmation":
-                    del expected["SERVERWARE_NPM_PUBLISH_CONFIRM"]
+                    del expected["CATCHPLATE_NPM_PUBLISH_CONFIRM"]
                 elif spec["case"] == "wrong_tarball_hash":
-                    expected["SERVERWARE_NPM_TARBALL_SHA256"] = "0" * 64
+                    expected["CATCHPLATE_NPM_TARBALL_SHA256"] = "0" * 64
                 paths = {}
                 if spec["case"] in INSTALL_PHASES:
                     paths = {"project": Path("/tmp/original-project"), "output": Path(installation(spec)["directory"])}
-                    expected.update(SERVERWARE_NPM_PROJECT=str(paths["project"]), SERVERWARE_NPM_OUTPUT=str(paths["output"]))
+                    expected.update(CATCHPLATE_NPM_PROJECT=str(paths["project"]), CATCHPLATE_NPM_OUTPUT=str(paths["output"]))
                 actual = checker.client_environment(spec, uid(2), "a" * 43, **paths)
                 self.assertEqual(actual, expected)
                 self.assertNotIn("secret-canary", str(actual))
@@ -714,7 +714,7 @@ class NpmExampleCheckerTests(unittest.TestCase):
         changes = (lambda d: d.update(total=True), lambda d: d.update(total=11), lambda d: d["attempts"].pop(),
             lambda d: d["attempts"].append(deepcopy(d["attempts"][0])), lambda d: d.update(secret="secret-canary"),
             lambda d: d["attempts"][0].update(accepted=1), lambda d: d["attempts"][0].update(ordinal=True),
-            lambda d: d["attempts"][1].update(rawTarget="/@serverware-fixture%2Fpublish"),
+            lambda d: d["attempts"][1].update(rawTarget="/@catchplate-fixture%2Fpublish"),
             lambda d: d["attempts"][0].update(requestBodyBytes=1), lambda d: d["attempts"][0].update(responseBodySha256=sha(999)),
             lambda d: d["attempts"][0]["requestHeaders"].update(accept="*/*"),
             lambda d: d["attempts"][2]["requestHeaders"].update({"npm-command": "view"}),
@@ -940,7 +940,7 @@ class NpmExampleCheckerTests(unittest.TestCase):
                 out_bytes = b"secret-canary"
             elif failure in {"diagnostic", "early-diagnostic", "invalid-diagnostic"}:
                 public_failure = {"ok": False, "operation": "install",
-                    "error": "npm example failed; check configuration, permissions and Serverware audit logs."}
+                    "error": "npm example failed; check configuration, permissions and Catchplate audit logs."}
                 if failure != "early-diagnostic":
                     public_failure.update(installationDirectory=installed["directory"], warning=
                         "Partial installation retained. Inspect it and audit logs; choose a new output directory for a deliberate retry.")
@@ -950,7 +950,7 @@ class NpmExampleCheckerTests(unittest.TestCase):
             pending = {out: [out_bytes, b""] if out_bytes else [b""], err: [err_bytes, b""] if err_bytes else [b""]}
             child = SimpleNamespace(stdout=out, stderr=err, wait=lambda **_: code, poll=lambda: code,
                 kill=lambda: self.fail("completed inert child must not be killed"))
-            environment = {"SERVERWARE_NPM_PROJECT": "/tmp/original-project", "SERVERWARE_NPM_OUTPUT": installed["directory"]}
+            environment = {"CATCHPLATE_NPM_PROJECT": "/tmp/original-project", "CATCHPLATE_NPM_OUTPUT": installed["directory"]}
             with patch.object(checker.subprocess, "Popen", return_value=child) as launch, \
                     patch.object(checker.selectors, "DefaultSelector", Selected), \
                     patch.object(checker.os, "read", side_effect=lambda stream, _: pending[stream].pop(0)), \
@@ -1093,7 +1093,7 @@ class NpmInstallationReadbackTests(unittest.TestCase):
         guard = ExitStack(); self.addCleanup(guard.close)
         for target in ("socket.socket", "socket.create_connection", "socket.getaddrinfo", "subprocess.Popen", "subprocess.run"):
             guard.enter_context(patch(target, side_effect=AssertionError("installation byte test attempted network/process I/O")))
-        self.temporary = tempfile.TemporaryDirectory(prefix="serverware-npm-install-", dir="/tmp")
+        self.temporary = tempfile.TemporaryDirectory(prefix="catchplate-npm-install-", dir="/tmp")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 

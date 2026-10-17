@@ -1,4 +1,4 @@
-"""Two read-only Alchemy calls through an explicit, verified Serverware proxy."""
+"""Two read-only Alchemy calls through an explicit, verified Catchplate proxy."""
 import argparse
 from contextlib import contextmanager
 from importlib.metadata import version
@@ -20,12 +20,12 @@ from uuid import UUID
 import requests
 from requests.adapters import HTTPAdapter
 
-PLACEHOLDER = "serverware-alchemy-placeholder-v1"  # Public, not a provider key.
+PLACEHOLDER = "catchplate-alchemy-placeholder-v1"  # Public, not a provider key.
 CHAINS = {"eth-mainnet": 1, "eth-sepolia": 11155111}
 PINS = {"web3": "7.15.0", "requests": "2.34.2", "urllib3": "2.8.0",
     "certifi": "2026.7.22", "pydantic": "2.13.4"}
-REQUIRED_ENV = ("SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID", "SERVERWARE_PROXY_TOKEN",
-    "SERVERWARE_CA_FILE", "SERVERWARE_ALCHEMY_CHAIN")
+REQUIRED_ENV = ("CATCHPLATE_PROXY_URL", "CATCHPLATE_APP_ID", "CATCHPLATE_PROXY_TOKEN",
+    "CATCHPLATE_CA_FILE", "CATCHPLATE_ALCHEMY_CHAIN")
 MAX_RESPONSE_BYTES = 65536
 FAILURE = "Alchemy chain status failed; check configuration, proxy health and the operator audit log."
 MAX_CONFIG_BYTES = 64 * 1024
@@ -75,13 +75,13 @@ def configuration_environment(config_file):
             or value.get("credential_input") != "replace_exact"
             or value.get("response_mode") != "alchemy_rpc_read_json_v1"):
         raise ValueError("Invalid Alchemy configuration scope")
-    selected = {"SERVERWARE_ALCHEMY_CHAIN": chain}
-    for field, key in (("application_id", "SERVERWARE_APP_ID"), ("proxy_url", "SERVERWARE_PROXY_URL"),
-            ("proxy_password", "SERVERWARE_PROXY_TOKEN")):
+    selected = {"CATCHPLATE_ALCHEMY_CHAIN": chain}
+    for field, key in (("application_id", "CATCHPLATE_APP_ID"), ("proxy_url", "CATCHPLATE_PROXY_URL"),
+            ("proxy_password", "CATCHPLATE_PROXY_TOKEN")):
         if type(value.get(field)) is not str:
             raise ValueError("Invalid connection value")
         selected[key] = value[field]
-    for field, key in (("ca_file", "SERVERWARE_CA_FILE"), ("proxy_ca_file", "SERVERWARE_PROXY_CA_FILE")):
+    for field, key in (("ca_file", "CATCHPLATE_CA_FILE"), ("proxy_ca_file", "CATCHPLATE_PROXY_CA_FILE")):
         item = value.get(field)
         if field == "proxy_ca_file" and item is None:
             continue
@@ -93,10 +93,10 @@ def configuration_environment(config_file):
 
 
 def settings(env):
-    chain = env.get("SERVERWARE_ALCHEMY_CHAIN", "")
+    chain = env.get("CATCHPLATE_ALCHEMY_CHAIN", "")
     if chain not in CHAINS:
         raise ValueError("An explicit supported chain is required")
-    proxy = env.get("SERVERWARE_PROXY_URL", "")
+    proxy = env.get("CATCHPLATE_PROXY_URL", "")
     parts = urlsplit(proxy)
     if (not 1 <= len(proxy) <= 2048 or not proxy.isascii()
             or any(ord(c) < 33 or ord(c) > 126 or c == "\\" for c in proxy)
@@ -107,12 +107,12 @@ def settings(env):
             or parts.port is not None and not 1 <= parts.port <= 65535
             or parts.netloc != parts.hostname + (":" + str(parts.port) if parts.port is not None else "")):
         raise ValueError("An explicit credential-free HTTPS proxy origin is required")
-    application, token = env.get("SERVERWARE_APP_ID", ""), env.get("SERVERWARE_PROXY_TOKEN", "")
+    application, token = env.get("CATCHPLATE_APP_ID", ""), env.get("CATCHPLATE_PROXY_TOKEN", "")
     if (str(UUID(application)) != application or not 1 <= len(token) <= 8192
             or not all(33 <= ord(c) <= 126 for c in token)):
-        raise ValueError("An explicit Serverware Basic proxy login is required")
-    for key in ("SERVERWARE_CA_FILE", "SERVERWARE_PROXY_CA_FILE"):
-        if key == "SERVERWARE_CA_FILE" or key in env:
+        raise ValueError("An explicit Catchplate Basic proxy login is required")
+    for key in ("CATCHPLATE_CA_FILE", "CATCHPLATE_PROXY_CA_FILE"):
+        if key == "CATCHPLATE_CA_FILE" or key in env:
             value = env.get(key, "")
             if not value or not Path(value).is_absolute():
                 raise ValueError("CA inputs must be explicit absolute files")
@@ -124,8 +124,8 @@ def settings(env):
 def child_environment(env):
     settings(env)
     selected = {name: env[name] for name in REQUIRED_ENV}
-    if "SERVERWARE_PROXY_CA_FILE" in env:
-        selected["SERVERWARE_PROXY_CA_FILE"] = env["SERVERWARE_PROXY_CA_FILE"]
+    if "CATCHPLATE_PROXY_CA_FILE" in env:
+        selected["CATCHPLATE_PROXY_CA_FILE"] = env["CATCHPLATE_PROXY_CA_FILE"]
     return selected
 
 
@@ -161,7 +161,7 @@ def proxy_context(extra=None):
 def request_ca_bundle(path):
     import certifi
     extra = public_ca(path)
-    with tempfile.TemporaryDirectory(prefix="serverware-alchemy-ca-") as directory:
+    with tempfile.TemporaryDirectory(prefix="catchplate-alchemy-ca-") as directory:
         combined = Path(directory) / "ca.pem"
         with combined.open("xb") as stream:
             os.chmod(combined, 0o600)
@@ -224,8 +224,8 @@ class BoundedAdapter(HTTPAdapter):
 def configured_client(env):
     from web3 import HTTPProvider, Web3
     _, endpoint, proxy = settings(env)
-    outer = proxy_context(env.get("SERVERWARE_PROXY_CA_FILE"))
-    with request_ca_bundle(env["SERVERWARE_CA_FILE"]) as bundle, requests.Session() as session:
+    outer = proxy_context(env.get("CATCHPLATE_PROXY_CA_FILE"))
+    with request_ca_bundle(env["CATCHPLATE_CA_FILE"]) as bundle, requests.Session() as session:
         session.trust_env = False  # No netrc, ambient proxy, bypass or CA discovery.
         session.max_redirects = 0
         session.proxies = {"https": proxy}
@@ -269,13 +269,13 @@ def launch(env):
         timeout=60, check=False)
     if result.returncode != 0 or len(result.stdout) > 4096:
         raise ValueError("Child failed")
-    return summary(json.loads(result.stdout), child["SERVERWARE_ALCHEMY_CHAIN"])
+    return summary(json.loads(result.stdout), child["CATCHPLATE_ALCHEMY_CHAIN"])
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Read permitted Alchemy chain status using web3.py.")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--config", metavar="PATH", help="Private client JSON downloaded from Serverware")
+    parser.add_argument("--config", metavar="PATH", help="Private client JSON downloaded from Catchplate")
     args = parser.parse_args(argv)
     logging.disable(logging.CRITICAL)
     try:

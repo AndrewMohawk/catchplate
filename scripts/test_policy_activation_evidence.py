@@ -34,9 +34,9 @@ BASELINE_HASH = "sha256:" + "1" * 64
 STAGE_PAYLOAD_DIGEST = "sha256:" + "2" * 64
 ACTIVATION_PAYLOAD_DIGEST = "sha256:" + "3" * 64
 ROUTE_ID = "payments.read"
-POLICY_ID = "serverware-production"
+POLICY_ID = "catchplate-production"
 CANARY_ID = "policy-canary-42-candidate"
-DATA_PLANE_ACTOR = "spiffe://prod.serverware.internal/decision-gate/instance-01"
+DATA_PLANE_ACTOR = "spiffe://prod.catchplate.internal/decision-gate/instance-01"
 BEARER_EXPIRY_EPOCH_MS = 1784077200000
 
 
@@ -69,7 +69,7 @@ def candidate_document(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     key_info = key_info or signing_key_info()
     bundle = {
-        "apiVersion": "serverware.policy/v1",
+        "apiVersion": "catchplate.policy/v1",
         "kind": "PolicyBundle",
         "metadata": {
             "id": POLICY_ID,
@@ -88,7 +88,7 @@ def candidate_document(
             {
                 "id": "agent:payments",
                 "sourceCidrs": ["10.20.0.0/16"],
-                "requiredHeaders": {"X-Serverware-Agent": "payments-agent-prod-01"},
+                "requiredHeaders": {"X-Catchplate-Agent": "payments-agent-prod-01"},
                 "proxyAuthorization": {
                     "scheme": "Bearer",
                     "tokenId": "payments-prod-token-20260714",
@@ -196,7 +196,7 @@ def data_plane_event(
     operation_digest: str,
 ) -> dict[str, Any]:
     return {
-        "component": "serverware-decision-gate-rs",
+        "component": "catchplate-decision-gate-rs",
         "method": "GET" if action == "allow" else "DELETE",
         "url": {
             "scheme": "https",
@@ -295,7 +295,7 @@ def audit_export(
     filters = {field: None for field in verifier.AUDIT_FILTER_FIELDS}
     filters["start"] = TIMES["staged"]
     header = {
-        "kind": "serverware.auditExport.v1",
+        "kind": "catchplate.auditExport.v1",
         "generated_at": TIMES["generated"],
         "backend": backend,
         "filters": filters,
@@ -317,11 +317,11 @@ def audit_export(
     return {
         "header": header,
         "events": [
-            {"kind": "serverware.auditEvent.v1", "export_index": index, "event": record}
+            {"kind": "catchplate.auditEvent.v1", "export_index": index, "event": record}
             for index, record in enumerate(newest_first)
         ],
         "footer": {
-            "kind": "serverware.auditExportEnd.v1",
+            "kind": "catchplate.auditExportEnd.v1",
             "count": count,
             "complete": True,
             "chain_head": head,
@@ -366,7 +366,7 @@ def evidence_document(
             "candidate_policy_hash": candidate_hash,
             "candidate_sequence": 42,
             "candidate_rollback_epoch": 7,
-            "canary_bundle_path": "/var/lib/serverware/policy-canary-bundle.json",
+            "canary_bundle_path": "/var/lib/catchplate/policy-canary-bundle.json",
             "diff": diff,
             "dry_run": dry_run,
             "control_plane_mfa": {"verified": True, "method": "webauthn"},
@@ -638,7 +638,7 @@ def main() -> None:
         valid,
         "wrong data-plane audit actor",
         inputs=verification_inputs(
-            expected_actor="spiffe://prod.serverware.internal/decision-gate/instance-02"
+            expected_actor="spiffe://prod.catchplate.internal/decision-gate/instance-02"
         ),
     )
     expect_failure(
@@ -695,7 +695,7 @@ def main() -> None:
         "actor_type": "data-plane",
         "actor_id": DATA_PLANE_ACTOR,
         "event": {
-            "component": "serverware-decision-gate-rs",
+            "component": "catchplate-decision-gate-rs",
             "method": "CONNECT",
             "outcome": "established",
             "action": "allow",

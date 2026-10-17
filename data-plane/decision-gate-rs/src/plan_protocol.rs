@@ -19,9 +19,9 @@ pub mod body_observer_contract_v12;
 pub type Digest = [u8; 32];
 pub type PlanResult<T> = Result<T, PlanProtocolError>;
 
-pub const PLAN_PROTOCOL_VERSION: &str = "serverware/controller-plan/v12";
+pub const PLAN_PROTOCOL_VERSION: &str = "catchplate/controller-plan/v12";
 pub const PLAN_PROXY_PROTOCOL_VERSION: &str =
-    "serverware/controller-lane-proxy/v12";
+    "catchplate/controller-lane-proxy/v12";
 pub const PLAN_SEQUENCE_LANES: [LogicalLane; 5] = [
     LogicalLane::Build,
     LogicalLane::Unit,
@@ -35,7 +35,7 @@ pub const MAX_ARGUMENTS: usize = 256;
 pub const MAX_ENDPOINTS: usize = 64;
 pub const MAX_OCI_OBJECTS: usize = 512;
 pub const MAX_SERVICES: usize = 64;
-pub const RUNNER_PRIVATE_DATA_PATH_V12: &str = "/var/lib/serverware-runner";
+pub const RUNNER_PRIVATE_DATA_PATH_V12: &str = "/var/lib/catchplate-runner";
 
 #[derive(Debug)]
 pub enum PlanProtocolError {
@@ -678,7 +678,7 @@ pub struct ServiceInstanceV12 {
 
 impl ServiceInstanceV12 {
     pub fn validate(&self) -> PlanResult<()> {
-        if self.version != "serverware/service-instance/v12"
+        if self.version != "catchplate/service-instance/v12"
             || self.service_id == [0; 32]
             || self.owner_namespace_sha256 == [0; 32]
             || self.instance_sha256 == [0; 32]
@@ -1170,9 +1170,9 @@ impl LogicalLaneContract {
             let mib = 1024 * 1024;
             if self.prepare.artifacts.is_none()
                 || runner.image.platform != "linux/amd64"
-                || runner.mount_policy.source_destination != "/opt/serverware/src"
-                || runner.mount_policy.artifact_destination != "/opt/serverware/artifacts"
-                || runner.mount_policy.output_destination != "/opt/serverware/output"
+                || runner.mount_policy.source_destination != "/opt/catchplate/src"
+                || runner.mount_policy.artifact_destination != "/opt/catchplate/artifacts"
+                || runner.mount_policy.output_destination != "/opt/catchplate/output"
                 || bounds.user_uid != 10001 || bounds.user_gid != 10001
                 || bounds.memory_bytes < 4096 * mib
                 || bounds.pids < 128 || bounds.open_files < 1024
@@ -1700,8 +1700,8 @@ fn forbidden_environment_name(name: &str) -> bool {
             | "CONTAINERD_ADDRESS"
             | "KUBECONFIG"
             | "SSH_AUTH_SOCK"
-            | "SERVERWARE_CONTROLLER_PLAN_CAPABILITY"
-            | "SERVERWARE_CONTROLLER_LANE_PROXY_FD"
+            | "CATCHPLATE_CONTROLLER_PLAN_CAPABILITY"
+            | "CATCHPLATE_CONTROLLER_LANE_PROXY_FD"
     ) || name.ends_with("_TOKEN")
         || name.ends_with("_PASSWORD")
         || name.ends_with("_SECRET")
@@ -1886,9 +1886,9 @@ mod runner_execution_bounds_tests {
             static_courier_sha256: Some([2; 32]),
             executable_closure_sha256: vec![[1; 32], [2; 32]],
             mount_policy: RunnerMountPolicy {
-                source_destination: "/opt/serverware/src".into(),
-                artifact_destination: "/opt/serverware/artifacts".into(),
-                output_destination: "/opt/serverware/output".into(),
+                source_destination: "/opt/catchplate/src".into(),
+                artifact_destination: "/opt/catchplate/artifacts".into(),
+                output_destination: "/opt/catchplate/output".into(),
                 source_read_only: true,
                 artifacts_read_only: true,
                 root_filesystem_read_only: true,
@@ -2049,17 +2049,17 @@ mod runner_execution_bounds_tests {
 
     #[test]
     fn runner_mounts_cannot_cover_or_enter_private_data_scratch() {
-        assert_eq!(RUNNER_PRIVATE_DATA_PATH_V12, "/var/lib/serverware-runner");
+        assert_eq!(RUNNER_PRIVATE_DATA_PATH_V12, "/var/lib/catchplate-runner");
         for field in [
             "sourceDestination", "artifactDestination", "outputDestination",
         ] {
             for path in [
-                "/var", "/var/lib", "/var/lib/serverware-runner",
-                "/var/lib/serverware-runner/pgdata",
-                "/var//lib/serverware-runner",
-                "/var/./lib/serverware-runner",
-                "/var/lib/serverware-runner//pgdata",
-                "/var/lib/serverware-runner/./pgdata",
+                "/var", "/var/lib", "/var/lib/catchplate-runner",
+                "/var/lib/catchplate-runner/pgdata",
+                "/var//lib/catchplate-runner",
+                "/var/./lib/catchplate-runner",
+                "/var/lib/catchplate-runner//pgdata",
+                "/var/lib/catchplate-runner/./pgdata",
                 "/var//lib/", "/var/./lib", "/",
             ] {
                 let mut value = serde_json::to_value(runner().mount_policy)
@@ -2073,7 +2073,7 @@ mod runner_execution_bounds_tests {
             let mut sibling = serde_json::to_value(runner().mount_policy)
                 .unwrap();
             sibling[field] = serde_json::json!(
-                "/var/lib/serverware-runner-sibling"
+                "/var/lib/catchplate-runner-sibling"
             );
             serde_json::from_value::<RunnerMountPolicy>(sibling)
                 .unwrap()
@@ -2083,7 +2083,7 @@ mod runner_execution_bounds_tests {
         assert!(paths_overlap("/", RUNNER_PRIVATE_DATA_PATH_V12));
         assert!(paths_overlap(RUNNER_PRIVATE_DATA_PATH_V12, "/"));
         assert!(!paths_overlap(
-            "/var/lib/serverware-runner-sibling",
+            "/var/lib/catchplate-runner-sibling",
             RUNNER_PRIVATE_DATA_PATH_V12,
         ));
         assert!(!paths_overlap("/opt/source", "/opt/artifacts"));

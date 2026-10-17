@@ -84,93 +84,93 @@ MAX_SERVICE_CHALLENGE_FRAME_BYTES = 16 * 1024
 MAX_SERVICE_EXECUTABLE_BYTES = 256 * 1024 * 1024
 FD_OPERATION_TIMEOUT_SECONDS = 30.0
 
-DESCRIPTOR_VERSION = "serverware.attestationNonceServiceDescriptor/v2"
+DESCRIPTOR_VERSION = "catchplate.attestationNonceServiceDescriptor/v2"
 IMMUTABLE_CONFIG_VERSION = (
-    "serverware.signedAttestationNonceImmutableReleaseConfig/v1"
+    "catchplate.signedAttestationNonceImmutableReleaseConfig/v1"
 )
 IMMUTABLE_CONFIG_PAYLOAD_VERSION = (
-    "serverware.attestationNonceImmutableReleaseConfigPayload/v1"
+    "catchplate.attestationNonceImmutableReleaseConfigPayload/v1"
 )
-STORE_IDENTITY_VERSION = "serverware.attestationNonceStoreIdentity/v2"
+STORE_IDENTITY_VERSION = "catchplate.attestationNonceStoreIdentity/v2"
 NONCE_AUTHORITY_ASSURANCE_VERSION = (
-    "serverware.nonceAuthorityAssurance/v1"
+    "catchplate.nonceAuthorityAssurance/v1"
 )
-NONCE_AUTHORITY_STATE_VERSION = "serverware.nonceAuthorityState/v1"
+NONCE_AUTHORITY_STATE_VERSION = "catchplate.nonceAuthorityState/v1"
 NONCE_AUTHORITY_HIGH_WATER_INPUT_VERSION = (
-    "serverware.nonceAuthorityHighWaterCommitment/v1"
+    "catchplate.nonceAuthorityHighWaterCommitment/v1"
 )
-RESERVE_REQUEST_VERSION = "serverware.attestationNonceReserveRequest/v2"
-RESERVE_RESPONSE_VERSION = "serverware.attestationNonceReserveResponse/v2"
-CONSUME_REQUEST_VERSION = "serverware.attestationNonceConsumeRequest/v3"
+RESERVE_REQUEST_VERSION = "catchplate.attestationNonceReserveRequest/v2"
+RESERVE_RESPONSE_VERSION = "catchplate.attestationNonceReserveResponse/v2"
+CONSUME_REQUEST_VERSION = "catchplate.attestationNonceConsumeRequest/v3"
 CONSUME_ONCE_REQUEST_VERSION = (
-    "serverware.attestationNonceConsumeOnceRequest/v3"
+    "catchplate.attestationNonceConsumeOnceRequest/v3"
 )
-CONSUMPTION_VERSION = "serverware.publicAttestationNonceConsumption/v1"
+CONSUMPTION_VERSION = "catchplate.publicAttestationNonceConsumption/v1"
 RECEIPT_PAYLOAD_VERSION = (
-    "serverware.attestationNonceConsumptionReceiptPayload/v2"
+    "catchplate.attestationNonceConsumptionReceiptPayload/v2"
 )
 SIGNED_RECEIPT_VERSION = (
-    "serverware.signedAttestationNonceConsumptionReceipt/v2"
+    "catchplate.signedAttestationNonceConsumptionReceipt/v2"
 )
-CONSUME_RESPONSE_VERSION = "serverware.attestationNonceConsumeResponse/v2"
+CONSUME_RESPONSE_VERSION = "catchplate.attestationNonceConsumeResponse/v2"
 STATUS_REQUEST_VERSION = (
-    "serverware.attestationNonceTransactionStatusRequest/v1"
+    "catchplate.attestationNonceTransactionStatusRequest/v1"
 )
 STATUS_RESPONSE_VERSION = (
-    "serverware.attestationNonceTransactionStatusResponse/v1"
+    "catchplate.attestationNonceTransactionStatusResponse/v1"
 )
 STATUS_EVIDENCE_VERSION = (
-    "serverware.attestationNonceTransactionStatusEvidence/v1"
+    "catchplate.attestationNonceTransactionStatusEvidence/v1"
 )
 SIGNED_STATUS_EVIDENCE_VERSION = (
-    "serverware.signedAttestationNonceTransactionStatusEvidence/v1"
+    "catchplate.signedAttestationNonceTransactionStatusEvidence/v1"
 )
-ERROR_RESPONSE_VERSION = "serverware.attestationNonceServiceError/v1"
+ERROR_RESPONSE_VERSION = "catchplate.attestationNonceServiceError/v1"
 SERVICE_CHALLENGE_VERSION = (
-    "serverware.publicAttestationServiceChannelChallenge/v1"
+    "catchplate.publicAttestationServiceChannelChallenge/v1"
 )
 SERVICE_CHALLENGE_RESPONSE_VERSION = (
-    "serverware.publicAttestationServiceChannelChallengeResponse/v1"
+    "catchplate.publicAttestationServiceChannelChallengeResponse/v1"
 )
-SERVICE_PROTOCOL_VERSION = "serverware.attestationNonceService/v2"
+SERVICE_PROTOCOL_VERSION = "catchplate.attestationNonceService/v2"
 
-SIGNER_REQUEST_VERSION = "serverware.attestationNonceSignerRequest/v2"
-SIGNER_RESPONSE_VERSION = "serverware.attestationNonceSignerResponse/v2"
+SIGNER_REQUEST_VERSION = "catchplate.attestationNonceSignerRequest/v2"
+SIGNER_RESPONSE_VERSION = "catchplate.attestationNonceSignerResponse/v2"
 SIGNER_CHANNEL_OPEN_VERSION = (
-    "serverware.attestationNonceSignerChannelOpen/v1"
+    "catchplate.attestationNonceSignerChannelOpen/v1"
 )
 SIGNER_CHANNEL_POLICY_VERSION = (
-    "serverware.attestationNonceSignerChannelPolicy/v1"
+    "catchplate.attestationNonceSignerChannelPolicy/v1"
 )
 SIGNER_CHANNEL_BINDING_VERSION = (
-    "serverware.attestationNonceSignerChannelBinding/v1"
+    "catchplate.attestationNonceSignerChannelBinding/v1"
 )
 
 NONCE_RECEIPT_DOMAIN = (
-    b"serverware.attestationNonceConsumptionReceipt/v2\x00Ed25519\x00"
+    b"catchplate.attestationNonceConsumptionReceipt/v2\x00Ed25519\x00"
 )
 NONCE_STATUS_EVIDENCE_DOMAIN = (
-    b"serverware.attestationNonceTransactionStatusEvidence/v1\x00"
+    b"catchplate.attestationNonceTransactionStatusEvidence/v1\x00"
     b"Ed25519\x00"
 )
 SIGNER_PROTOCOL_DOMAIN = (
-    b"serverware.attestationNonceSignerRequest/v2\x00"
+    b"catchplate.attestationNonceSignerRequest/v2\x00"
 )
 SIGNER_CHANNEL_OPEN_DOMAIN = (
-    b"serverware.attestationNonceSignerChannelOpen/v1\x00Ed25519\x00"
+    b"catchplate.attestationNonceSignerChannelOpen/v1\x00Ed25519\x00"
 )
 CONSUME_REQUEST_DIGEST_DOMAIN = (
-    b"serverware.attestationNonceConsumeRequestDigest/v3\x00"
+    b"catchplate.attestationNonceConsumeRequestDigest/v3\x00"
 )
 IMMUTABLE_CONFIG_DOMAIN = (
-    b"serverware.attestationNonceImmutableReleaseConfig/v1\x00"
+    b"catchplate.attestationNonceImmutableReleaseConfig/v1\x00"
     b"Ed25519\x00"
 )
 NONCE_AUTHORITY_GENESIS_DOMAIN = (
-    b"serverware.nonceAuthorityGenesisCommitment/v1\x00"
+    b"catchplate.nonceAuthorityGenesisCommitment/v1\x00"
 )
 NONCE_AUTHORITY_HIGH_WATER_DOMAIN = (
-    b"serverware.nonceAuthorityHighWaterCommitment/v1\x00"
+    b"catchplate.nonceAuthorityHighWaterCommitment/v1\x00"
 )
 
 SHA256_RE = re.compile(r"\Asha256:[0-9a-f]{64}\Z")
@@ -869,7 +869,7 @@ def reference_nonce_authority_assurance(
         "administrativeDomainSha256": sha256_json(
             {
                 "apiVersion":
-                "serverware.referenceNonceAuthorityAdministrativeDomain/v1",
+                "catchplate.referenceNonceAuthorityAdministrativeDomain/v1",
                 "deploymentId": identity["deploymentId"],
                 "serviceId": identity["serviceId"],
             }

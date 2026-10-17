@@ -24,10 +24,10 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_query_reads as reads
-from serverware import authority_transition_webauthn as candidate
-from serverware import authority_transition_core as core
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_query_reads as reads
+from catchplate import authority_transition_webauthn as candidate
+from catchplate import authority_transition_core as core
 import test_authority_complete_read_write as composition_oracle
 import test_authority_revocation_query_program as recipe_oracle
 import test_webauthn_revoke_transition as counter_oracle
@@ -59,7 +59,7 @@ def framed(domain, *frames):
 
 
 def business_key_digest(table, key):
-    return framed("serverware.policyAuthorityBusinessKey/v1", table.encode("ascii"), wire(key))
+    return framed("catchplate.policyAuthorityBusinessKey/v1", table.encode("ascii"), wire(key))
 
 
 def observation_record(document, ordered_rows, *, resolved=None):
@@ -85,7 +85,7 @@ def observation_record(document, ordered_rows, *, resolved=None):
 def source_selection(document, read):
     """Independent complete order, point key, or sole resolved publication row."""
     table = document["table"]
-    if document["schema"] == "serverware.policyAuthorityCompleteIndexQuery/v1":
+    if document["schema"] == "catchplate.policyAuthorityCompleteIndexQuery/v1":
         info = read.joins[document["role"]]
         selected = {item["keyDigest"]: item for item in info.selected}
         return document, [selected[leaf.primary_key_digest]["key"] for leaf in info.index.matches(info.interval)]
@@ -104,7 +104,7 @@ def source_selection(document, read):
 
 
 def resolved_program(program, documents):
-    return tuple(query if document["schema"] == "serverware.policyAuthorityCompleteIndexQuery/v1" else
+    return tuple(query if document["schema"] == "catchplate.policyAuthorityCompleteIndexQuery/v1" else
         replace(query, predicates=tuple(core.QueryPredicate(item["column"], item["operator"],
             copy.deepcopy(item["value"])) for item in document["predicates"]))
         for query, document in zip(program, documents))
@@ -122,7 +122,7 @@ def credential(identifier):
 
 def assertion_challenge(signer):
     """Exact legacy challenge-row fields; a coherent row is not signed evidence."""
-    operation_id = framed("serverware.policyAuthorityOperation/v2",
+    operation_id = framed("catchplate.policyAuthorityOperation/v2",
         OPERATION.encode("ascii"), REQUEST_DIGEST.encode("ascii"))
     payload = {"operationId": operation_id, "credentialId": signer["credential_id"],
         "rpId": "unit.example", "origin": "https://unit.example"}
@@ -188,7 +188,7 @@ class RevocationObservationFixture:
                 "id": recipe_oracle.audit_identity(self.request_digest, None),
                 "event_type": "webauthn.credential_revoked", "actor_type": "admin", "actor_id": ACTOR_ID,
                 "event_json": event.decode("ascii"),
-                "event_digest": framed("serverware.metadataAuditOutboxEvent/v1", event),
+                "event_digest": framed("catchplate.metadataAuditOutboxEvent/v1", event),
                 "storage_format_version": 2, "status": "pending", "claim_id": None, "claimed_at": None,
                 "attempts": 0, "audited_at": None, "audit_event_hash": None, "last_error": None,
                 "created_at": "1970-01-01T00:00:01.000007+00:00",
@@ -220,7 +220,7 @@ class RevocationObservationFixture:
             table = document["table"]
             resolved, keys = source_selection(document, read)
             resolved_documents.append(resolved)
-            if document["schema"] != "serverware.policyAuthorityCompleteIndexQuery/v1" and document["absentKey"] is not None:
+            if document["schema"] != "catchplate.policyAuthorityCompleteIndexQuery/v1" and document["absentKey"] is not None:
                 key = keys[0]
                 if tuple(sorted(key)) != read.trees[table].columns:
                     raise AssertionError("point declaration does not bind the full source primary key")

@@ -25,7 +25,7 @@ from package_native_broker_runtime import (
 
 ROOT = Path("/shadow-verifier-runtime")
 OUTPUT = Path("/shadow-verifier-output")
-ENTRYPOINT = Path("/opt/serverware/scripts/verify_native_shadow_custody.py")
+ENTRYPOINT = Path("/opt/catchplate/scripts/verify_native_shadow_custody.py")
 PACKAGES = {**CRYPTO_PACKAGES, "cbor2": "5.9.0"}
 
 
@@ -56,7 +56,7 @@ def main():
     for name in ("__init__.py", "native_shadow_nitro_profile.py", "native_shadow_nitro_originals.py",
                  "native_shadow_nitro_verifier.py", "native_shadow_key_admission_profile.py", "native_shadow_key_admission_verifier.py",
                  "native_shadow_bridge_admission_profile.py", "native_shadow_bridge_admission_verifier.py"):
-        closure.add(SOURCE / "serverware" / name, SITE / "serverware" / name)
+        closure.add(SOURCE / "catchplate" / name, SITE / "catchplate" / name)
     # scripts is deliberately a namespace package, as in the admitted source.
     # No other scripts or authority/store modules enter its isolated search path.
     closure.add(SOURCE / "scripts/verify_nitro_tee.py", SITE / "scripts/verify_nitro_tee.py")
@@ -68,10 +68,10 @@ def main():
     # Nitro dependency. It neither invokes run() nor verifies any real evidence.
     subprocess.run(["/usr/sbin/chroot", str(ROOT), str(INTERPRETER), "-I", "-B", "-c",
         "import cbor2,cffi,pycparser,cryptography; import _cbor2,_cffi_backend; "
-        "import scripts.verify_nitro_tee; import serverware.native_shadow_nitro_profile; "
-        "import serverware.native_shadow_nitro_originals; import serverware.native_shadow_nitro_verifier; "
-        "import serverware.native_shadow_key_admission_profile; import serverware.native_shadow_key_admission_verifier; "
-        "import serverware.native_shadow_bridge_admission_profile; import serverware.native_shadow_bridge_admission_verifier; "
+        "import scripts.verify_nitro_tee; import catchplate.native_shadow_nitro_profile; "
+        "import catchplate.native_shadow_nitro_originals; import catchplate.native_shadow_nitro_verifier; "
+        "import catchplate.native_shadow_key_admission_profile; import catchplate.native_shadow_key_admission_verifier; "
+        "import catchplate.native_shadow_bridge_admission_profile; import catchplate.native_shadow_bridge_admission_verifier; "
         "import sys; from importlib.metadata import version; assert sys.prefix == '/usr/local'; "
         "assert cryptography.__version__ == '50.0.0'; assert version('cbor2') == '5.9.0'"],
         env=ENV, check=True, timeout=30)
@@ -85,10 +85,10 @@ def main():
     with image.open("rb") as stream:
         image_hash = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
     runtime_image = {"profile": "sealed-memfd-squashfs-v1",
-        "imagePath": "/opt/serverware/native-shadow-verifier-runtime.squashfs",
+        "imagePath": "/opt/catchplate/native-shadow-verifier-runtime.squashfs",
         "imageSha256": image_hash, "interpreterSha256": closure.files[str(INTERPRETER)]["sha256"],
         "entrypointSha256": closure.files[str(ENTRYPOINT)]["sha256"]}
-    manifest = {"apiVersion": "serverware.nativeShadowVerifierRuntimeBuild/v1",
+    manifest = {"apiVersion": "catchplate.nativeShadowVerifierRuntimeBuild/v1",
         "purpose": "external-shadow-nitro-verifier-v1", "runtimeImage": runtime_image,
         "sourceManifestSha256": sha(original(Path("/source-contract/source-manifest.json"))),
         "sourceDateEpoch": epoch, "imageBytes": image.stat().st_size,

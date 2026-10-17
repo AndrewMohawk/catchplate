@@ -14,7 +14,7 @@ const {setTimeout: pause} = require('node:timers/promises');
 const ROOT = resolve(__dirname, '..');
 const ORIGIN = 'https://console.example.com';
 const PREFIX = '/api/operator-demo/notifications';
-const STORAGE = 'serverware.operator.notifications.operation.v1';
+const STORAGE = 'catchplate.operator.notifications.operation.v1';
 const SLOTS = ['action_required.slack', 'action_required.webhook', 'audit_log.slack', 'audit_log.webhook'];
 const URLS = {
   'action_required.slack': 'https://hooks.slack.com/services/SYNTHETIC/ACTION/CONNECTED_PRIVATE_ACTION_SLACK',
@@ -124,7 +124,7 @@ function inspectContainer(args) {
   assert.equal(value.HostConfig.MemorySwap, value.HostConfig.Memory);
   assert(value.HostConfig.NanoCpus > 0 && value.HostConfig.NanoCpus <= 1000000000);
   assert(value.HostConfig.PidsLimit > 0 && value.HostConfig.PidsLimit <= 128);
-  assert(['serverware', '10001', '10001:10001'].includes(value.Config.User));
+  assert(['catchplate', '10001', '10001:10001'].includes(value.Config.User));
   assert.equal(value.Config.Healthcheck?.Test?.[0], 'NONE', 'disable image healthcheck to prevent unrelated HTTP calls');
   const binds = value.Mounts.filter(item => item.Type === 'bind');
   assert.equal(binds.length, 1); assert.equal(binds[0].Destination, '/app'); assert.equal(binds[0].Source, ROOT); assert.equal(binds[0].RW, false);
@@ -283,7 +283,7 @@ async function story(args, bridge, browser, evidence) {
       assert(body.length <= (method === 'POST' ? 16384 : 0));
       routeStage = 'browser_headers';
       const browserHeaders = await request.allHeaders();
-      assert(!browserHeaders.authorization && !browserHeaders['x-serverware-admin-token'] && !browserHeaders.cookie,
+      assert(!browserHeaders.authorization && !browserHeaders['x-catchplate-admin-token'] && !browserHeaders.cookie,
         'administrator transport credential must not enter browser');
       const headers = Object.entries(browserHeaders).filter(([key]) => ['origin', 'content-type', 'content-length', 'accept', 'referer'].includes(key));
       if (method === 'POST') {
@@ -325,7 +325,7 @@ async function story(args, bridge, browser, evidence) {
         const data = JSON.parse(raw.toString());
         if (path === PREFIX) {
           routeStage = 'notification_status_contract';
-          assert.equal(data.schema, 'serverware.operatorNotifications/v1'); assert.equal(data.available, true);
+          assert.equal(data.schema, 'catchplate.operatorNotifications/v1'); assert.equal(data.available, true);
           assert.deepEqual(data.capabilities.native_hardware, NATIVE_OFF);
           assert.equal(data.capabilities.action_required.source_available, false);
           assert.equal(data.capabilities.audit_log.source_available, true);
@@ -333,7 +333,7 @@ async function story(args, bridge, browser, evidence) {
           state.notifications = data;
         } else if (path.startsWith(PREFIX + '/')) {
           routeStage = 'notification_receipt_contract';
-          assert.equal(data.schema, 'serverware.operatorNotificationOperation/v1');
+          assert.equal(data.schema, 'catchplate.operatorNotificationOperation/v1');
           state.receipts.set(data.operation_id, data);
         } else if (path === '/api/operator-demo/applications') {
           routeStage = 'application_receipt_contract';
@@ -469,7 +469,7 @@ async function main() {
   assert.equal(sourceDigest(), args.source);
   const container = inspectContainer(args);
   artifacts = await mkdtemp(join(args.artifactRoot, 'notifications-connected-'));
-  const evidence = {schema: 'serverware.notificationConnectedBrowserAcceptance/v1', container, source_sha256: args.source,
+  const evidence = {schema: 'catchplate.notificationConnectedBrowserAcceptance/v1', container, source_sha256: args.source,
     boundary: 'Host Chromium via byte-preserving stdin ASGI transport, actual full-app lifespan, isolated SQLite and verified synthetic TLS; not TCP ingress, deployed delivery or native action acceptance.'};
   let bridge, browser, timeout;
   try {

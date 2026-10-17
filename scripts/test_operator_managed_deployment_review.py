@@ -32,9 +32,9 @@ def rich_compiler_join():
             'scripts/test_operator_catalog_header_replacement.py',
             'scripts/test_operator_catalog_mutation_receipts.py',
             'scripts/test_operator_catalog_timing.py',
-            'scripts/test_operator_npm_publish_breadcrumbs.py', 'serverware/app.py',
-            'serverware/operator_catalog_api.py', 'serverware/operator_catalog_mutations.py',
-            'serverware/operator_catalog_timing.py'],
+            'scripts/test_operator_npm_publish_breadcrumbs.py', 'catchplate/app.py',
+            'catchplate/operator_catalog_api.py', 'catchplate/operator_catalog_mutations.py',
+            'catchplate/operator_catalog_timing.py'],
         'archiveSha256': 'dd87e896b23be7c1698b1f242986692c22a1e32e889235870656e9a4d1e1ceb5',
         'binaryBuildCommit': 'b55f3024a0a2e696a462df723dae9a8a1fdded6a',
         'binaryBuildTree': '47359a0e049d1d9a731568e9de05264f93bf9b6f',
@@ -57,7 +57,7 @@ def rich_compiler_join():
         'retainedRustTestCommit': 'b55f3024a0a2e696a462df723dae9a8a1fdded6a',
         'retainedRustTestCount': 116,
         'retainedRustTestReceiptSha256': 'fc98d3de725e82c22faa26fb6bd71d3853b2394717cdc977f4f8e73d401fdd88',
-        'schema': 'serverware.pythonSnapshotCompilerEquality/v1',
+        'schema': 'catchplate.pythonSnapshotCompilerEquality/v1',
         'sourceCommit': '3724110941888e753bc194459e14170bc2a28916',
         'sourceManifestSha256': 'c11de979a8b8091940fdf22538e9844acff6bc5accc2b2980f4305afb5fe9228',
         'sourceTree': '23e2f96a8c0e9b9fbfbc25b272b1e42ccffe2f1e',
@@ -92,7 +92,7 @@ def documents():
             State={'Running': True, 'Health': {'Status': 'healthy'}, 'Pid': index, 'StartedAt': 'synthetic-start'})
         live['Config']['Labels'].update({'com.docker.compose.project': legacy.PROJECT,
             'com.docker.compose.service': name, 'com.docker.compose.oneoff': 'False'})
-        address = {'demo-upstream': '172.16.249.18', 'serverware': '172.16.249.19',
+        address = {'demo-upstream': '172.16.249.18', 'catchplate': '172.16.249.19',
             'decision-gate-rs': '172.16.249.20', 'edge': '172.16.249.21'}[name]
         proposed['networks'] = {'sandbox': {'ipv4_address': address}}
         live['NetworkSettings']['Networks'] = {legacy.MODEL_NETWORKS['sandbox']['name']:
@@ -111,19 +111,19 @@ def documents():
         proposed['labels'] = labels
         live['Config']['Labels'].update(labels)
         environment = legacy.envmap(live['Config']['Env'])
-        if name == 'serverware':
+        if name == 'catchplate':
             environment[legacy.EXPECTED_DIGEST] = 'sha256:' + review.OLD_SHA
             proposed['environment'][legacy.EXPECTED_DIGEST] = 'sha256:' + review.NEW_SHA
             proposed['environment'].update(review.APP_MANAGED_ENV)
             proposed['volumes'][0]['source'] = review.NEW_SOURCE
             live['Mounts'][0]['Source'] = review.OLD_SOURCE
             retained = [mount('/data', review.APP_DATA, False),
-                mount('/run/secrets/serverware', review.DATA_ROOT / 'service-secrets')]
+                mount('/run/secrets/catchplate', review.DATA_ROOT / 'service-secrets')]
             proposed['volumes'].extend(retained)
             live['Mounts'].extend(engine_mount(value) for value in retained)
             proposed['volumes'].append(mount('/provider-custody', review.PROVIDER_CUSTODY, False))
         elif name == 'decision-gate-rs':
-            proposed['environment']['SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED'] = '1'
+            proposed['environment']['CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED'] = '1'
             proposed['volumes'][0]['source'] = review.NEW_BINARY
             live['Mounts'][0]['Source'] = review.OLD_BINARY
             live['Mounts'].append(engine_mount(mount('/data', review.APP_DATA)))
@@ -139,7 +139,7 @@ def documents():
 
 def deployed(documents_value):
     model, observed, images = deepcopy(documents_value)
-    for name in ('serverware', 'decision-gate-rs'):
+    for name in ('catchplate', 'decision-gate-rs'):
         proposed, live = model['services'][name], observed[name]
         live['Mounts'] = [engine_mount(value) for value in proposed['volumes']]
         live['Config']['Env'] = [key + '=' + value for key, value in proposed['environment'].items()]
@@ -149,11 +149,11 @@ def deployed(documents_value):
 def retained_documents():
     """Start from the original managed candidate, not an invented new baseline."""
     model, observed, images = deployed(documents())
-    for name, target, source in (('serverware', '/app', review.RETAINED_SOURCE),
+    for name, target, source in (('catchplate', '/app', review.RETAINED_SOURCE),
             ('decision-gate-rs', legacy.BINARY_TARGET, legacy.ARTIFACTS + 'sha256-'
-                + SYNTHETIC_CANDIDATE['binary_sha256'] + '/serverware-decision-gate')):
+                + SYNTHETIC_CANDIDATE['binary_sha256'] + '/catchplate-decision-gate')):
         next(row for row in model['services'][name]['volumes'] if row['target'] == target)['source'] = source
-    model['services']['serverware']['environment'][legacy.EXPECTED_DIGEST] = 'sha256:' + SYNTHETIC_CANDIDATE['binary_sha256']
+    model['services']['catchplate']['environment'][legacy.EXPECTED_DIGEST] = 'sha256:' + SYNTHETIC_CANDIDATE['binary_sha256']
     return model, observed, images
 
 
@@ -207,13 +207,13 @@ class ManagedDeploymentReviewTests(unittest.TestCase):
 
     def test_exact_reviewed_transition_and_deployed_match_without_input_mutation(self):
         self.assertEqual(review.APP_MANAGED_ENV, {
-            'SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED': '1',
-            'SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR': '/provider-custody',
-            'SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED': '1',
-            'SERVERWARE_PROCESS_MODE': 'serverware-control-plane', 'SERVERWARE_RELEASE_CHANNEL': 'dev',
-            'SERVERWARE_METADATA_STORE_BACKEND': 'sqlite', 'SERVERWARE_AUDIT_STORE_BACKEND': 'sqlite',
-            'SERVERWARE_GRANT_STORE_BACKEND': 'sqlite', 'SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED': '0',
-            'SERVERWARE_KEY_RELEASE_REQUIRED': '0', 'SERVERWARE_DEV_AUTHENTICATOR': '0', 'SERVERWARE_DEV_DEMO_SEED': '0'})
+            'CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED': '1',
+            'CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR': '/provider-custody',
+            'CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED': '1',
+            'CATCHPLATE_PROCESS_MODE': 'catchplate-control-plane', 'CATCHPLATE_RELEASE_CHANNEL': 'dev',
+            'CATCHPLATE_METADATA_STORE_BACKEND': 'sqlite', 'CATCHPLATE_AUDIT_STORE_BACKEND': 'sqlite',
+            'CATCHPLATE_GRANT_STORE_BACKEND': 'sqlite', 'CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED': '0',
+            'CATCHPLATE_KEY_RELEASE_REQUIRED': '0', 'CATCHPLATE_DEV_AUTHENTICATOR': '0', 'CATCHPLATE_DEV_DEMO_SEED': '0'})
         value = documents()
         before = deepcopy(value)
         result = self.compare(value)
@@ -252,7 +252,7 @@ class ManagedDeploymentReviewTests(unittest.TestCase):
         for field in review.APP_MANAGED_ENV:
             for mode in ('missing', 'changed'):
                 value = documents()
-                env = value[0]['services']['serverware']['environment']
+                env = value[0]['services']['catchplate']['environment']
                 if mode == 'missing':
                     env.pop(field)
                 else:
@@ -265,16 +265,16 @@ class ManagedDeploymentReviewTests(unittest.TestCase):
             with self.subTest(service=name):
                 self.refused(value)
         value = documents()
-        value[0]['services']['decision-gate-rs']['environment'].pop('SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED')
+        value[0]['services']['decision-gate-rs']['environment'].pop('CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED')
         self.refused(value)
         value = documents()
-        value[0]['services']['serverware']['environment']['SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED'] = '0'
+        value[0]['services']['catchplate']['environment']['CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED'] = '0'
         self.refused(value)
 
     def test_retained_development_defaults_must_already_match_exactly(self):
-        for field in ('SERVERWARE_RELEASE_CHANNEL', 'SERVERWARE_METADATA_STORE_BACKEND', 'SERVERWARE_DEV_DEMO_SEED'):
+        for field in ('CATCHPLATE_RELEASE_CHANNEL', 'CATCHPLATE_METADATA_STORE_BACKEND', 'CATCHPLATE_DEV_DEMO_SEED'):
             value = documents()
-            env = value[1]['serverware']['Config']['Env']
+            env = value[1]['catchplate']['Config']['Env']
             env.append(field + '=' + review.APP_MANAGED_ENV[field])
             with self.subTest(field=field):
                 self.assertTrue(self.compare(value)['ok'])
@@ -282,7 +282,7 @@ class ManagedDeploymentReviewTests(unittest.TestCase):
                 self.refused(value)
 
     def test_original_and_candidate_source_binary_pins_are_not_optional(self):
-        for name, target in (('serverware', '/app'), ('decision-gate-rs', legacy.BINARY_TARGET)):
+        for name, target in (('catchplate', '/app'), ('decision-gate-rs', legacy.BINARY_TARGET)):
             for side in ('candidate', 'retained'):
                 value = documents()
                 rows = value[0]['services'][name]['volumes'] if side == 'candidate' else value[1][name]['Mounts']
@@ -291,16 +291,16 @@ class ManagedDeploymentReviewTests(unittest.TestCase):
                 with self.subTest(service=name, side=side):
                     self.refused(value)
         value = documents()
-        value[0]['services']['serverware']['environment'][legacy.EXPECTED_DIGEST] = 'sha256:' + review.OLD_SHA
+        value[0]['services']['catchplate']['environment'][legacy.EXPECTED_DIGEST] = 'sha256:' + review.OLD_SHA
         self.refused(value)
         value = documents()
-        value[1]['serverware']['Config']['Env'].append(legacy.EXPECTED_DIGEST + '=duplicate')
+        value[1]['catchplate']['Config']['Env'].append(legacy.EXPECTED_DIGEST + '=duplicate')
         self.refused(value)
 
     def test_provider_mount_is_exact_app_only_not_auto_created_or_propagated(self):
         for change in ('missing', 'source', 'readonly', 'create', 'propagation', 'duplicate', 'gate-exposure'):
             value = documents()
-            mounts = value[0]['services']['serverware']['volumes']
+            mounts = value[0]['services']['catchplate']['volumes']
             provider = next(row for row in mounts if row['target'] == '/provider-custody')
             if change == 'missing': mounts.remove(provider)
             elif change == 'source': provider['source'] = str(review.APP_DATA)
@@ -318,7 +318,7 @@ class ManagedDeploymentReviewTests(unittest.TestCase):
             if phase == 'deployed':
                 value = deployed(value)
             expected = self.compare(value, phase=phase)
-            provider = next(row for row in value[0]['services']['serverware']['volumes']
+            provider = next(row for row in value[0]['services']['catchplate']['volumes']
                 if row['target'] == '/provider-custody')
             provider.pop('read_only')
             self.assertEqual(provider, {'type': 'bind', 'source': str(review.PROVIDER_CUSTODY),
@@ -347,7 +347,7 @@ class ManagedDeploymentReviewTests(unittest.TestCase):
                 value = documents()
                 if phase == 'deployed':
                     value = deployed(value)
-                provider = next(row for row in value[0]['services']['serverware']['volumes']
+                provider = next(row for row in value[0]['services']['catchplate']['volumes']
                     if row['target'] == '/provider-custody')
                 provider.pop('read_only')
                 change(provider)
@@ -401,7 +401,7 @@ class ManagedDeploymentReviewTests(unittest.TestCase):
             lambda model: model.update({'x-unreviewed': {}}),
             lambda model: model['x-isolated'].update(read_only=False),
             lambda model: model['services'].update(provider={}),
-            lambda model: model['services']['serverware']['networks']['sandbox'].update(ipv4_address='172.16.249.22'),
+            lambda model: model['services']['catchplate']['networks']['sandbox'].update(ipv4_address='172.16.249.22'),
             lambda model: model['services']['decision-gate-rs']['networks']['outbound'].update(ipv4_address='172.16.249.35'),
         )
         for index, change in enumerate(changes):
@@ -421,7 +421,7 @@ class ManagedDeploymentReviewTests(unittest.TestCase):
         self.refused(value)
 
     def test_postdeployment_verification_accepts_no_partial_upgrade_or_additional_delta(self):
-        for name in ('serverware', 'decision-gate-rs', 'edge', 'demo-upstream'):
+        for name in ('catchplate', 'decision-gate-rs', 'edge', 'demo-upstream'):
             for side in ('model', 'engine'):
                 value = deployed(documents())
                 if side == 'model': value[0]['services'][name]['environment']['UNREVIEWED_VALUE'] = CANARY
@@ -481,7 +481,7 @@ class RetainedDeploymentReviewTests(unittest.TestCase):
         selected = review.selection('retained')
         self.assertEqual(selected['transition'], (review.NEW_SOURCE, review.RETAINED_SOURCE,
             review.NEW_SHA, SYNTHETIC_CANDIDATE['binary_sha256'], review.NEW_BINARY,
-            legacy.ARTIFACTS + 'sha256-' + SYNTHETIC_CANDIDATE['binary_sha256'] + '/serverware-decision-gate'))
+            legacy.ARTIFACTS + 'sha256-' + SYNTHETIC_CANDIDATE['binary_sha256'] + '/catchplate-decision-gate'))
         self.assertEqual(selected['source_manifest_sha256'], 'c11de979a8b8091940fdf22538e9844acff6bc5accc2b2980f4305afb5fe9228')
         self.assertEqual(selected['source_files'], 4952)
         self.assertEqual(selected['compiler_source_commit'], 'b55f3024a0a2e696a462df723dae9a8a1fdded6a')
@@ -511,7 +511,7 @@ class RetainedDeploymentReviewTests(unittest.TestCase):
                 self.refused(retained_documents(), transition_mode=mode)
 
     def test_retained_mode_requires_both_previous_and_next_exact_source_binary_pairs(self):
-        for name, target in (('serverware', '/app'), ('decision-gate-rs', legacy.BINARY_TARGET)):
+        for name, target in (('catchplate', '/app'), ('decision-gate-rs', legacy.BINARY_TARGET)):
             for side in ('candidate', 'baseline'):
                 value = retained_documents()
                 rows = value[0]['services'][name]['volumes'] if side == 'candidate' else value[1][name]['Mounts']
@@ -522,9 +522,9 @@ class RetainedDeploymentReviewTests(unittest.TestCase):
         for side in ('candidate', 'baseline'):
             value = retained_documents()
             if side == 'candidate':
-                value[0]['services']['serverware']['environment'][legacy.EXPECTED_DIGEST] = 'sha256:' + review.NEW_SHA
+                value[0]['services']['catchplate']['environment'][legacy.EXPECTED_DIGEST] = 'sha256:' + review.NEW_SHA
             else:
-                env = value[1]['serverware']['Config']['Env']
+                env = value[1]['catchplate']['Config']['Env']
                 env[:] = [field if not field.startswith(legacy.EXPECTED_DIGEST + '=')
                     else legacy.EXPECTED_DIGEST + '=sha256:' + review.OLD_SHA for field in env]
             with self.subTest(digest_side=side):
@@ -538,9 +538,9 @@ class RetainedDeploymentReviewTests(unittest.TestCase):
                     if phase == 'deployed':
                         value = deployed(value)
                     if side == 'candidate':
-                        value[0]['services']['serverware']['environment'].pop(field)
+                        value[0]['services']['catchplate']['environment'].pop(field)
                     else:
-                        env = value[1]['serverware']['Config']['Env']
+                        env = value[1]['catchplate']['Config']['Env']
                         env[:] = [row for row in env if not row.startswith(field + '=')]
                     with self.subTest(phase=phase, field=field, side=side):
                         self.refused(value, phase=phase, transition_mode='retained')
@@ -549,16 +549,16 @@ class RetainedDeploymentReviewTests(unittest.TestCase):
                 value[0]['services'][name]['environment']['UNREVIEWED_VALUE'] = CANARY
                 with self.subTest(phase=phase, service=name):
                     self.refused(value, phase=phase, transition_mode='retained')
-            for key in ('SERVERWARE_GOOGLE_CLIENT_ID', 'SERVERWARE_OPERATOR_GOOGLE_PROFILE'):
+            for key in ('CATCHPLATE_GOOGLE_CLIENT_ID', 'CATCHPLATE_OPERATOR_GOOGLE_PROFILE'):
                 value = retained_documents() if phase == 'proposed' else deployed(retained_documents())
-                value[0]['services']['serverware']['environment'][key] = CANARY
-                value[1]['serverware']['Config']['Env'].append(key + '=' + CANARY)
+                value[0]['services']['catchplate']['environment'][key] = CANARY
+                value[1]['catchplate']['Config']['Env'].append(key + '=' + CANARY)
                 with self.subTest(phase=phase, external_profile=key):
                     self.refused(value, phase=phase, transition_mode='retained')
 
     def test_retained_provider_ca_lock_and_highwater_mounts_have_no_new_exception(self):
-        targets = [('serverware', '/data'), ('serverware', '/provider-custody'),
-            ('serverware', '/notification-custody'), ('decision-gate-rs', '/data'), ('decision-gate-rs', '/gate-data')]
+        targets = [('catchplate', '/data'), ('catchplate', '/provider-custody'),
+            ('catchplate', '/notification-custody'), ('decision-gate-rs', '/data'), ('decision-gate-rs', '/gate-data')]
         targets.extend(('decision-gate-rs', '/data/' + leaf) for leaf in review.LEAVES)
         for name, target in targets:
             for side in ('candidate', 'baseline'):
@@ -576,7 +576,7 @@ class RetainedDeploymentReviewTests(unittest.TestCase):
                         self.refused(value, transition_mode='retained')
         self.refused(retained_documents(), transition_mode='retained', provider=review.APP_DATA)
         value = retained_documents()
-        next(row for row in value[0]['services']['serverware']['volumes']
+        next(row for row in value[0]['services']['catchplate']['volumes']
             if row['target'] == '/provider-custody').pop('read_only')
         self.assertTrue(self.compare(value, transition_mode='retained')['ok'])
 
@@ -593,7 +593,7 @@ class RetainedDeploymentReviewTests(unittest.TestCase):
         for mutate in (lambda model: model['networks']['sandbox'].update(internal=False),
                 lambda model: model['services'].update(provider={}),
                 lambda model: model['services']['edge']['environment'].update(NGINX_ENVSUBST_FILTER='.*'),
-                lambda model: model['services']['serverware']['environment'].update(SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED='0')):
+                lambda model: model['services']['catchplate']['environment'].update(CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED='0')):
             value = retained_documents()
             mutate(value[0])
             self.refused(value, transition_mode='retained')
@@ -648,9 +648,9 @@ class RetainedDeploymentReviewTests(unittest.TestCase):
                 {**joined, 'retainedRustTestCommit': joined['sourceCommit']},
                 {**joined, 'sourceCommit': joined['binaryBuildCommit']},
                 {**joined, 'binaryBuildTree': joined['sourceTree']},
-                {**joined, 'externalCompilerInputs': [*joined['externalCompilerInputs'], 'serverware/app.py']},
+                {**joined, 'externalCompilerInputs': [*joined['externalCompilerInputs'], 'catchplate/app.py']},
                 {**joined, 'allowedSourceChanges': [*joined['allowedSourceChanges'], 'data-plane/decision-gate-rs/src/main.rs']},
-                {**joined, 'schema': 'serverware.pythonSnapshotCompilerEquality/v2'},
+                {**joined, 'schema': 'catchplate.pythonSnapshotCompilerEquality/v2'},
             ))
             for index, changed in enumerate(controls):
                 receipt.return_value = changed

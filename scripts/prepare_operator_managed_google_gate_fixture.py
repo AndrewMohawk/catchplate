@@ -36,7 +36,7 @@ def canonical_digest(value):
 
 def public_profile():
     """Independent, fixed synthetic profile oracle; imports no application code."""
-    return {"schema": "serverware.operatorGoogleProfile/v1", "profile": "operator-google-v1",
+    return {"schema": "catchplate.operatorGoogleProfile/v1", "profile": "operator-google-v1",
         "provider_id": "google", "client_id": CLIENT_ID,
         "redirect_uri": base.ORIGIN + "/api/oauth/callback/google", "permission_preset": "gmail_readonly",
         "scopes": ["email", "https://www.googleapis.com/auth/gmail.readonly", "openid"], "api_origins": [GMAIL],
@@ -58,14 +58,14 @@ def expected_manifest(fixture_cidr, receipt=None):
             "readOnlyRecovery", "operation", "providerCalls"} and receipt["ok"] is True
             and receipt["syntheticOnly"] is True and receipt["readOnlyRecovery"] is False
             and type(receipt["providerCalls"]) is int and receipt["providerCalls"] == 0
-            and receipt["schema"] == "serverware.managedGoogleFixturePrepare/v1", "original synthetic Prepare receipt required")
+            and receipt["schema"] == "catchplate.managedGoogleFixturePrepare/v1", "original synthetic Prepare receipt required")
         item = receipt["operation"]
         keys = {"schema", "operation_id", "client_id", "old_settings", "target_settings", "expected_settings_digest",
             "public_url", "redirect_uri", "profile_binding", "profile_binding_digest", "reviewed_revision",
             "staged_revision", "policy_hash", "created_at", "setup_contract", "custody_ref", "secret_present",
             "status", "revision", "completed_at", "activation_receipt"}
-        base.require(type(item) is dict and set(item) == keys and item["schema"] == "serverware.operatorGoogleManagedSetup/v2"
-            and item["setup_contract"] == "serverware.operatorGoogleManagedSetupBinding/v2"
+        base.require(type(item) is dict and set(item) == keys and item["schema"] == "catchplate.operatorGoogleManagedSetup/v2"
+            and item["setup_contract"] == "catchplate.operatorGoogleManagedSetupBinding/v2"
             and item["old_settings"] == old and item["target_settings"] == target
             and item["expected_settings_digest"] == canonical_digest(old)
             and item["client_id"] == CLIENT_ID and item["public_url"] == base.ORIGIN
@@ -89,7 +89,7 @@ def expected_manifest(fixture_cidr, receipt=None):
         operation = {"operation_id": item["operation_id"], "owner_id": reference["owner_id"], "config_version": 1}
         profile = public_profile()
     settings = old if receipt is None else target
-    return {"schema": "serverware.operatorGoogleGateConfiguration/v1", "operation": operation,
+    return {"schema": "catchplate.operatorGoogleGateConfiguration/v1", "operation": operation,
         "profile_binding": profile, "profile_binding_digest": None if profile is None else canonical_digest(profile),
         "effective_settings": settings, "effective_settings_digest": canonical_digest(settings)}
 
@@ -100,8 +100,8 @@ def identity(manifest):
 
 def build(source, binary, initializer, root, subnet, *, expected_binary_sha256):
     base.require(root.parent == base.SCRATCH and re.fullmatch(
-        r"serverware-managed-google-gate-private\.[A-Za-z0-9]{6,32}", root.name), "fresh managed fixture root required")
-    template = root.with_name("serverware-curated-gate-private." + root.name.split(".", 1)[1])
+        r"catchplate-managed-google-gate-private\.[A-Za-z0-9]{6,32}", root.name), "fresh managed fixture root required")
+    template = root.with_name("catchplate-curated-gate-private." + root.name.split(".", 1)[1])
     config = curated.build(source, binary, initializer, template, subnet,
         expected_binary_sha256=expected_binary_sha256)
     for service in config["services"].values():
@@ -109,18 +109,18 @@ def build(source, binary, initializer, root, subnet, *, expected_binary_sha256):
             path = Path(mount["source"])
             if path.is_relative_to(template):
                 mount["source"] = str(root / path.relative_to(template))
-    config["name"] = "serverware-managed-google-gate-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
+    config["name"] = "catchplate-managed-google-gate-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
     services = config["services"]
-    app = services["serverware"]
+    app = services["catchplate"]
     app["environment"].update({
-        "SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED": "1",
-        "SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR": "/provider-custody",
-        "SERVERWARE_PROCESS_MODE": "serverware-control-plane", "SERVERWARE_METADATA_STORE_BACKEND": "sqlite",
-        "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite", "SERVERWARE_GRANT_STORE_BACKEND": "sqlite",
-        "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0", "SERVERWARE_KEY_RELEASE_REQUIRED": "0",
-        "SERVERWARE_DEV_AUTHENTICATOR": "0", "SERVERWARE_DEV_DEMO_SEED": "0"})
+        "CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED": "1",
+        "CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR": "/provider-custody",
+        "CATCHPLATE_PROCESS_MODE": "catchplate-control-plane", "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite",
+        "CATCHPLATE_AUDIT_STORE_BACKEND": "sqlite", "CATCHPLATE_GRANT_STORE_BACKEND": "sqlite",
+        "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0", "CATCHPLATE_KEY_RELEASE_REQUIRED": "0",
+        "CATCHPLATE_DEV_AUTHENTICATOR": "0", "CATCHPLATE_DEV_DEMO_SEED": "0"})
     app["volumes"].append(base.bind(root / "provider-custody", "/provider-custody", False))
-    services["decision-gate-rs"]["environment"]["SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED"] = "1"
+    services["decision-gate-rs"]["environment"]["CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED"] = "1"
 
     prepare = deepcopy(app)
     for key in ("networks", "dns", "healthcheck", "depends_on", "command"):
@@ -154,15 +154,15 @@ def prepare(args):
     base.fresh_root(args.job_root, must_exist=args.write)
     sources = basic.source_inventory(args.source, args.source_manifest, args.expected_source_manifest_sha256,
         args.expected_source_commit)
-    base.require({PREPARER, PREPARE, CHECKER, OBSERVER, "serverware/operator_google_managed_config.py",
-        "serverware/operator_google_gate_configuration.py", "serverware/operator_google_managed_readiness.py"}
+    base.require({PREPARER, PREPARE, CHECKER, OBSERVER, "catchplate/operator_google_managed_config.py",
+        "catchplate/operator_google_gate_configuration.py", "catchplate/operator_google_managed_readiness.py"}
         <= sources.keys(), "managed fixture source missing")
     for path, expected in ((args.binary, args.expected_binary_sha256), (args.initializer, base.INITIALIZER_SHA256)):
         base.require(path.resolve() == path and path.is_file() and not path.is_symlink()
             and base.digest(path) == expected, "actual executable or unchanged initializer differs")
     basic.dependency_inventory()
     compose = json.dumps(config, indent=2, sort_keys=True) + "\n"
-    receipt = {"schema": "serverware.privateManagedGoogleGatePreparation/v1", "project": config["name"],
+    receipt = {"schema": "catchplate.privateManagedGoogleGatePreparation/v1", "project": config["name"],
         "jobRoot": str(args.job_root), "source": str(args.source), "sourceCommit": args.expected_source_commit,
         "sourceManifest": str(args.source_manifest), "sourceManifestSha256": args.expected_source_manifest_sha256,
         "sourceFiles": len(sources), "binary": str(args.binary), "binarySha256": args.expected_binary_sha256,

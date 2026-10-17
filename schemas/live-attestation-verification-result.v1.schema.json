@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/live-attestation-verification-result.v1.schema.json",
-  "title": "Serverware non-actionable live attestation verification result v1",
+  "$id": "https://catchplate.invalid/schemas/live-attestation-verification-result.v1.schema.json",
+  "title": "Catchplate non-actionable live attestation verification result v1",
   "$comment": "This result is historical verification evidence only. It is never an action capability or credential-release authorization.",
   "type": "object",
   "additionalProperties": false,
@@ -19,7 +19,7 @@
       "type": "null"
     },
     "apiVersion": {
-      "const": "serverware.liveAttestationVerificationResult/v1"
+      "const": "catchplate.liveAttestationVerificationResult/v1"
     },
     "evidence": {
       "type": "object",
@@ -178,7 +178,7 @@
       "const": "manifest-v6-promoted-oci-nitro-eif"
     },
     "canonicalProfile": {
-      "const": "serverware.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
+      "const": "catchplate.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
     },
     "pcrs": {
       "type": "object",
@@ -236,7 +236,7 @@
         "rollbackEpoch"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.finalCompletionIdentity/v3"},
+        "apiVersion": {"const": "catchplate.finalCompletionIdentity/v3"},
         "challengeNonceSha256": {"$ref": "#/$defs/sha256"},
         "coreDigests": {"$ref": "#/$defs/completionCoreDigests"},
         "pipeline": {"$ref": "#/$defs/pipeline"},
@@ -346,7 +346,7 @@
         "stateSha256"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.monotonicReleaseWitnessState/v2"},
+        "apiVersion": {"const": "catchplate.monotonicReleaseWitnessState/v2"},
         "challengeConsumptionSha256": {"$ref": "#/$defs/sha256"},
         "checkpointSha256": {"$ref": "#/$defs/sha256"},
         "logId": {"$ref": "#/$defs/sha256"},
@@ -411,7 +411,7 @@
         "rollbackResistanceBoundary"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.publicNitroStateCommit/v1"},
+        "apiVersion": {"const": "catchplate.publicNitroStateCommit/v1"},
         "status": {"const": "redemption-verified-non-actionable"},
         "actionable": {"const": false},
         "redemptionVerified": {"const": true},
@@ -507,7 +507,7 @@
       ],
       "properties": {
         "actionAuthorization": {"type": "null"},
-        "apiVersion": {"const": "serverware.publicNitroVerificationResult/v2"},
+        "apiVersion": {"const": "catchplate.publicNitroVerificationResult/v2"},
         "attestationRequestSha256": {"$ref": "#/$defs/sha256"},
         "buildWatchdogReceiptFileSha256": {"$ref": "#/$defs/sha256"},
         "candidateManifestFileSha256": {"$ref": "#/$defs/sha256"},
@@ -564,7 +564,7 @@
       }
     },
     "publicNitroResultSigningEnvelopeCore": {
-      "$comment": "Signature input is ASCII domain serverware.publicNitroLiveVerificationResultEnvelope/v1 NUL signatureAlgorithm=Ed25519 NUL followed by canonical JSON for this exact object.",
+      "$comment": "Signature input is ASCII domain catchplate.publicNitroLiveVerificationResultEnvelope/v1 NUL signatureAlgorithm=Ed25519 NUL followed by canonical JSON for this exact object.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -577,7 +577,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.publicNitroLiveVerificationResultEnvelope/v1"
+          "const": "catchplate.publicNitroLiveVerificationResultEnvelope/v1"
         },
         "provider": {"$ref": "#/$defs/publicNitroProvider"},
         "result": {"$ref": "#/$defs/publicNitroResult"},
@@ -608,7 +608,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.publicNitroLiveVerificationResultSigningRequest/v1"
+          "const": "catchplate.publicNitroLiveVerificationResultSigningRequest/v1"
         },
         "envelopeCore": {
           "$ref": "#/$defs/publicNitroResultSigningEnvelopeCore"
@@ -651,7 +651,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.publicNitroLiveVerificationResultEnvelope/v1"
+          "const": "catchplate.publicNitroLiveVerificationResultEnvelope/v1"
         },
         "provider": {"$ref": "#/$defs/publicNitroProvider"},
         "result": {"$ref": "#/$defs/publicNitroResult"},
@@ -684,7 +684,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.publicNitroLiveVerificationResultSigningResponse/v1"
+          "const": "catchplate.publicNitroLiveVerificationResultSigningResponse/v1"
         },
         "envelope": {
           "$ref": "#/$defs/publicNitroResultSignedEnvelope"
@@ -721,7 +721,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.publicNitroLiveVerificationResultRecoveryRequest/v1"
+          "const": "catchplate.publicNitroLiveVerificationResultRecoveryRequest/v1"
         },
         "operation": {
           "const": "recover-public-nitro-live-verification-result"
@@ -761,7 +761,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.publicNitroLiveVerificationResultStatusRequest/v1"
+          "const": "catchplate.publicNitroLiveVerificationResultStatusRequest/v1"
         },
         "operation": {
           "const": "status-public-nitro-live-verification-result"
@@ -810,7 +810,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nonceAuthorityVerifierState/v1"
+          "const": "catchplate.nonceAuthorityVerifierState/v1"
         },
         "assuranceSha256": {"$ref": "#/$defs/sha256"},
         "authorityEpoch": {"$ref": "#/$defs/positiveU64"},

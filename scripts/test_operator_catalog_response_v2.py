@@ -72,7 +72,7 @@ def create_rule(db, store, schema, inputs, mutations, application, credential, *
 
 def input_contract():
     from pydantic import ValidationError
-    from serverware.operator_catalog_inputs import RuleInput
+    from catchplate.operator_catalog_inputs import RuleInput
     base = modes.rule_values()
     for fields in ({}, {"response_fields": []}):
         model = RuleInput(**base, response_mode=MODE, **fields)
@@ -91,7 +91,7 @@ def input_contract():
 
 
 def persisted_profile():
-    from serverware import operator_catalog_policy as policy
+    from catchplate import operator_catalog_policy as policy
     config, db, store, bundles, schema, inputs, mutations = workspace.workspace()
     credential = workspace.create_credential(db, store, schema, inputs, mutations)["credential"]
     application = workspace.create_application(db, store, schema, inputs, mutations)["application"]
@@ -155,7 +155,7 @@ def old_retention():
     workspace.migrate(db, schema)
     assert config.POLICY_BUNDLE_PATH.read_bytes() == original_bytes
     assert store.get_policy_high_water() == original_hash
-    from serverware import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
+    from catchplate import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
     old = workspace.catalog(db, schema)
     assert all("response_mode" not in rule for rule in old["access_rules"])
     application, credential = old["applications"][0], old["credentials"][0]

@@ -22,7 +22,7 @@ DIGEST = hashlib.sha256(AUTHORIZATION).hexdigest()
 WORKLOAD_TOKEN = b"W" * 43
 USERNAME = b"12345678-1234-4234-8234-123456789abc"
 BASIC_VALUE = base64.b64encode(USERNAME + b":" + WORKLOAD_TOKEN)
-USER_AGENT = b"serverware-test-run/operator-check-" + b"a" * 32
+USER_AGENT = b"catchplate-test-run/operator-check-" + b"a" * 32
 ACCEPTS = (b"application/json", b"application/json;q=0.9",
            b"application/json;q=0.8", b"application/json;q=0.7")
 
@@ -90,7 +90,7 @@ class ProxyBasicFixtureTests(unittest.TestCase):
         wrong = {
             b"host": (b"demo-upstream", b"DEMO-UPSTREAM:8443", b"demo-upstream:8443.", b"other:8443"),
             b"accept": (b"*/*", b"application/json;q=1.0", b"application/json;q=0.6", b"application/json, text/plain"),
-            b"user-agent": (b"serverware-test-run", USER_AGENT[:-1], USER_AGENT + b"a",
+            b"user-agent": (b"catchplate-test-run", USER_AGENT[:-1], USER_AGENT + b"a",
                             USER_AGENT[:-32] + b"A" * 32, USER_AGENT + b" extra"),
             b"connection": (b"Close", b"keep-alive, upgrade", b"upgrade", b""),
             b"accept-encoding": (b"Identity", b"gzip", b"identity, gzip", b""),

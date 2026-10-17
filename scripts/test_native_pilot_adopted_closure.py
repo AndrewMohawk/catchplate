@@ -23,9 +23,9 @@ from cryptography.exceptions import InvalidSignature
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_closure_authority as authority
-from serverware import native_pilot_closure_set as sets
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_closure_authority as authority
+from catchplate import native_pilot_closure_set as sets
 from test_native_pilot_key_authorizations import fixture as old_fixture, clocks
 from test_native_pilot_closure_set import (MANIFEST_FIELDS, EXPECTED_SCOPE_VALUES, EXPECTED_SCOPE_ROOTS,
     canonical, frame, manifest_fixture, scope_fixture, sha, synthetic)
@@ -33,7 +33,7 @@ from test_native_pilot_generation_scope import ASSIGNMENT_DOMAIN, NOW, encoded, 
 from test_native_pilot_native_deliveries import WINDOW_FIELDS, refresh_window, result_for
 
 ROLE = "publicationReconciliation"
-DOMAIN = "serverware.nativeCustodyClosureAssignment.signature/v5"
+DOMAIN = "catchplate.nativeCustodyClosureAssignment.signature/v5"
 
 
 def fixture():
@@ -41,9 +41,9 @@ def fixture():
     f = old_fixture()
     cold = {**json.loads(f["cold"]["trustedTime"]), "uid": 62010, "gid": 62010}
     f["cold"][ROLE] = canonical(cold).decode("ascii")
-    runtime = canonical({"apiVersion": "serverware.nativePilotEndpointRuntime/v1", "role": ROLE})
+    runtime = canonical({"apiVersion": "catchplate.nativePilotEndpointRuntime/v1", "role": ROLE})
     f["fragment"][ROLE] = {"runtimeOriginal": runtime.decode("ascii"),
-        "runtimeConfig": {"path": "/etc/serverware/native-pilot-inputs/native-runtime-" + ROLE + ".json",
+        "runtimeConfig": {"path": "/etc/catchplate/native-pilot-inputs/native-runtime-" + ROLE + ".json",
             "sha256": sha(runtime)}, "credentials": copy.deepcopy(f["fragment"]["trustedTime"]["credentials"])}
     f["activations"][ROLE] = [{"name": "publication-reconciliation-listener", "fd": 6,
         "device": 7, "inode": 8110, "mode": stat.S_IFSOCK | 0o777, "uid": 0, "gid": 0}]
@@ -62,20 +62,20 @@ def fixture():
     f["recipe_originals"].update(assignmentOriginal=canonical(envelope).decode("ascii"), closureSetOriginal=set_raw.decode("ascii"))
     binding = json.loads(f["measured"]["configurationBindingOriginal"])
     binding.update(assignmentPayloadSha256=envelope["payloadSha256"], nativeClosureSet=copy.deepcopy(envelope["payload"]["nativeClosureSet"]))
-    binding_sha = frame("serverware.policyShadowProductionCustodyConfiguration/v2", binding)
+    binding_sha = frame("catchplate.policyShadowProductionCustodyConfiguration/v2", binding)
     proof = scope_fixture(envelope)
     proof["production_configuration_binding_sha256"] = binding_sha
-    proof["binding_sha256"] = frame("serverware.policyShadowProductionCustodyProofScope/v2",
+    proof["binding_sha256"] = frame("catchplate.policyShadowProductionCustodyProofScope/v2",
         [proof[name] for name in EXPECTED_SCOPE_VALUES + EXPECTED_SCOPE_ROOTS])
     f["measured"].update(configurationBindingOriginal=canonical(binding).decode("ascii"),
         configurationBindingSha256=binding_sha, proofScopeOriginal=canonical(proof).decode("ascii"))
     f["measured"]["production"]["expectedConfigurationBindingSha256"] = binding_sha
-    f["config"]["apiVersion"] = "serverware.nativeShadowProofCohortConfiguration/v8"
-    f["config"][ROLE + "Configuration"] = {"path": "/etc/serverware/native-pilot-inputs/native-cold-" + ROLE + ".json",
+    f["config"]["apiVersion"] = "catchplate.nativeShadowProofCohortConfiguration/v8"
+    f["config"][ROLE + "Configuration"] = {"path": "/etc/catchplate/native-pilot-inputs/native-cold-" + ROLE + ".json",
         "sha256": sha(f["cold"][ROLE].encode("ascii"))}
     f["owner_configuration_raw"] = canonical(f["config"])
     f["window"]["configurationSha256"] = sha(f["owner_configuration_raw"])
-    f["observed"].update(apiVersion="serverware.nativeShadowProofCohortOriginals/v7",
+    f["observed"].update(apiVersion="catchplate.nativeShadowProofCohortOriginals/v7",
         configurationSha256=sha(f["owner_configuration_raw"]))
     f["observed"][ROLE] = {"processId": 110, "startTimeTicks": 210,
         "executable": {"device": 7, "inode": 510, "length": 4096, "sha256": f["config"]["executableSha256"]}}
@@ -90,7 +90,7 @@ def fixture():
             **{name: cold[name] for name in ("serviceRole", "uid", "gid")},
             **{name: f["window"][name] for name in WINDOW_FIELDS}, "runtimeConfig": row["runtimeConfig"],
             "credentials": row["credentials"], "activation": f["activations"][role]}
-        value = {"apiVersion": "serverware.nativePilotDeliverySigningInput/v2", "role": role,
+        value = {"apiVersion": "catchplate.nativePilotDeliverySigningInput/v2", "role": role,
             "configurationOriginal": f["cold"][role], "ownerConfigurationOriginal": f["owner_configuration_raw"].decode("ascii"),
             "windowOriginal": f["window_raw"].decode("ascii"), "observationOriginal": f["observation_raw"].decode("ascii"),
             "runtimeOriginal": row["runtimeOriginal"], "payloadOriginal": canonical(payload).decode("ascii"),
@@ -110,7 +110,7 @@ def input_for(f, role=ROLE):
     trust = json.loads(f["recipe_originals"]["trustOriginal"])
     manifest = next(row["manifest"] for row in selected["members"] if row["role"] == role)
     key = key_fixture("custody-supervisor-capability")[1]
-    payload = {"apiVersion": "serverware.nativeCustodyClosureAssignment/v5",
+    payload = {"apiVersion": "catchplate.nativeCustodyClosureAssignment/v5",
         "purpose": "shadow-custody-closure-set-member", "profile": "native-multi-guest-closure-set-v2",
         "assignmentId": envelope["payload"]["assignmentId"], "assignmentPayloadSha256": envelope["payloadSha256"],
         "assignmentRevision": envelope["payload"]["assignmentRevision"], "manifestSha256": manifest["manifestSha256"],
@@ -119,7 +119,7 @@ def input_for(f, role=ROLE):
         "issuedAtUnixNanos": NOW - 500_000_000, "expiresAtUnixNanos": NOW + 500_000_000,
         "signingKeyId": key["keyId"], "signingKeySpkiSha256": key["keySpkiSha256"], "guestRole": role,
         **{name: selected[name] for name in ("setRootSha256", "seccompSetRootSha256")},
-        "leafSha256": frame("serverware.nativeCustodyExecutionClosureSetLeaf/v2", [role, manifest])}
+        "leafSha256": frame("catchplate.nativeCustodyExecutionClosureSetLeaf/v2", [role, manifest])}
     return {"apiVersion": authority.ADOPTED_API, "guestRole": role,
         "deliveryInputOriginal": f["delivery_inputs"][role].decode("ascii"),
         "configurationOriginal": source["ownerConfigurationOriginal"],
@@ -131,11 +131,11 @@ def input_for(f, role=ROLE):
 
 def signed(value, *, domain=DOMAIN):
     payload = json.loads(value["payloadOriginal"])
-    raw = g.canonical({"apiVersion": "serverware.nativeCustodyClosure/v5",
+    raw = g.canonical({"apiVersion": "catchplate.nativeCustodyClosure/v5",
         "manifest": json.loads(value["manifestOriginal"]), "closureSet": json.loads(value["closureSetOriginal"]),
         "authorization": {"payload": payload, "signature": encoded(key_fixture("custody-supervisor-capability")[0].sign(
-            b"serverware.signedEnvelope/v1\0" + domain.encode("ascii")
-            + b"\0serverware.canonicalJson/ascii-integer-v1\0" + g.canonical(payload)))}})
+            b"catchplate.signedEnvelope/v1\0" + domain.encode("ascii")
+            + b"\0catchplate.canonicalJson/ascii-integer-v1\0" + g.canonical(payload)))}})
     return raw, {"original": raw.decode("ascii"), "sha256": sha(raw)}
 
 
@@ -160,7 +160,7 @@ class AdoptedClosureControls(unittest.TestCase):
 
     def test_old_profiles_extra_fields_and_bridge_are_not_upgraded(self):
         value = input_for(self.f)
-        for change in ({"apiVersion": "serverware.nativePilotClosureAuthorityInput/v2"},
+        for change in ({"apiVersion": "catchplate.nativePilotClosureAuthorityInput/v2"},
                 {"guestRole": "bridge"}, {"controlOriginal": "{}"}, {"deliveryInputOriginal": None}):
             with self.subTest(change=change), self.assertRaises(ValueError): self.prepare({**value, **change})
 
@@ -172,7 +172,7 @@ class AdoptedClosureControls(unittest.TestCase):
         delivery["signatureBase64url"] = encoded(bytes(64)); bad["deliveryOriginal"] = canonical(delivery).decode("ascii")
         with self.assertRaises(InvalidSignature): self.prepare(bad)
         bad = copy.deepcopy(value); source = json.loads(bad["deliveryInputOriginal"])
-        source["apiVersion"] = "serverware.nativePilotDeliverySigningInput/v1"
+        source["apiVersion"] = "catchplate.nativePilotDeliverySigningInput/v1"
         bad["deliveryInputOriginal"] = canonical(source).decode("ascii")
         with self.assertRaises(ValueError): self.prepare(bad)
 
@@ -181,7 +181,7 @@ class AdoptedClosureControls(unittest.TestCase):
         old = old_fixture()["recipe_originals"]["closureSetOriginal"]
         with self.assertRaises(ValueError): self.prepare({**value, "closureSetOriginal": old})
         for field, replacement in (("guestRole", "persistence"), ("profile", "native-multi-guest-closure-set-v1"),
-                ("apiVersion", "serverware.nativeCustodyClosureAssignment/v3"), ("leafSha256", synthetic("other-leaf"))):
+                ("apiVersion", "catchplate.nativeCustodyClosureAssignment/v3"), ("leafSha256", synthetic("other-leaf"))):
             changed = copy.deepcopy(value); payload = json.loads(changed["payloadOriginal"])
             payload[field] = replacement; changed["payloadOriginal"] = canonical(payload).decode("ascii")
             _, result = signed(changed)
@@ -190,7 +190,7 @@ class AdoptedClosureControls(unittest.TestCase):
 
     def test_native_signature_domain_and_result_pin_are_exact(self):
         value = input_for(self.f)
-        _, result = signed(value, domain="serverware.nativeCustodyClosureAssignment.signature/v3")
+        _, result = signed(value, domain="catchplate.nativeCustodyClosureAssignment.signature/v3")
         with self.assertRaises(InvalidSignature): authority.checked_result(canonical(value), result, **clocks(self.f))
         _, result = signed(value); result["sha256"] = synthetic("other-result")
         with self.assertRaises(ValueError): authority.checked_result(canonical(value), result, **clocks(self.f))
@@ -210,9 +210,9 @@ class AdoptedClosureControls(unittest.TestCase):
         inode = (1 << 63) + 123
         f["boot"] = (f["boot"][0], f["boot"][1], inode)
         f["window"]["timeNamespaceInode"] = inode
-        window = {"apiVersion": "serverware.nativeShadowProofCohortPrecreation/v1", "payload": f["window"],
+        window = {"apiVersion": "catchplate.nativeShadowProofCohortPrecreation/v1", "payload": f["window"],
             "signatureBase64url": encoded(f["key"].sign(
-                b"serverware.nativeShadowProofCohortPrecreation.signature/v1\0" + g.canonical(f["window"])))}
+                b"catchplate.nativeShadowProofCohortPrecreation.signature/v1\0" + g.canonical(f["window"])))}
         f["window_raw"] = g.canonical(window)
         f["observed"]["precreationSha256"] = sha(f["window_raw"])
         f["observation_raw"] = canonical(f["observed"])
@@ -220,8 +220,8 @@ class AdoptedClosureControls(unittest.TestCase):
         payload["timeNamespaceInode"] = inode
         source.update(windowOriginal=f["window_raw"].decode("ascii"), observationOriginal=f["observation_raw"].decode("ascii"),
             payloadOriginal=g.canonical(payload).decode("ascii"))
-        raw = g.canonical({"apiVersion": "serverware.policyCustodyGuestDelivery/v1", "payload": payload,
-            "signatureBase64url": encoded(f["key"].sign(b"serverware.policyCustodyGuestDelivery.signature/v1\0" + g.canonical(payload)))})
+        raw = g.canonical({"apiVersion": "catchplate.policyCustodyGuestDelivery/v1", "payload": payload,
+            "signatureBase64url": encoded(f["key"].sign(b"catchplate.policyCustodyGuestDelivery.signature/v1\0" + g.canonical(payload)))})
         f["delivery_inputs"][ROLE], f["deliveries"][ROLE] = canonical(source), raw
         f["guests"][ROLE].update(timeNamespaceInode=inode, deliverySha256=sha(raw))
         # These source reader fixtures can preserve u64 values, but native

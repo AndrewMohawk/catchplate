@@ -9,14 +9,14 @@ use crate::policy_shadow::{AuthorityRole, CanonicalEd25519Signature, Publication
     PublicationReconciliationState, PolicyShadowCustodySignerRole as Role, hash_domain_frames, signature_preimage};
 use ed25519_dalek::Signer;
 
-pub(super) const API: &str = "serverware.nativePublicationGenesis/v1";
-pub(super) const PREPARED_DOMAIN: &str = "serverware.nativePublicationGenesisPreparation.signature/v1";
-pub(super) const COMPLETION_DOMAIN: &str = "serverware.nativePublicationGenesisCompletion.signature/v1";
-pub(super) const STORAGE_DOMAIN: &str = "serverware.nativePublicationGenesisStorage.signature/v1";
-pub(super) const STORAGE_API: &str = "serverware.nativePublicationGenesisStorage/v1";
+pub(super) const API: &str = "catchplate.nativePublicationGenesis/v1";
+pub(super) const PREPARED_DOMAIN: &str = "catchplate.nativePublicationGenesisPreparation.signature/v1";
+pub(super) const COMPLETION_DOMAIN: &str = "catchplate.nativePublicationGenesisCompletion.signature/v1";
+pub(super) const STORAGE_DOMAIN: &str = "catchplate.nativePublicationGenesisStorage.signature/v1";
+pub(super) const STORAGE_API: &str = "catchplate.nativePublicationGenesisStorage/v1";
 pub(super) const MAX_ORIGINAL: usize = 512 * 1024;
-const GENESIS_DOMAIN: &[u8] = b"serverware.nativePublicationGenesisEvidence.signature/v1";
-const WITNESS_DOMAIN: &[u8] = b"serverware.nativePublicationGenesisWitness.signature/v1";
+const GENESIS_DOMAIN: &[u8] = b"catchplate.nativePublicationGenesisEvidence.signature/v1";
+const WITNESS_DOMAIN: &[u8] = b"catchplate.nativePublicationGenesisWitness.signature/v1";
 pub(super) fn invalid() -> ServiceError { ServiceError::Invalid("cold publication original differs") }
 pub(super) fn require(ok: bool) -> Result<(), ServiceError> { if ok { Ok(()) } else { Err(invalid()) } }
 fn original<T: serde::de::DeserializeOwned + Serialize>(raw: &str) -> Result<T, ServiceError> {
@@ -49,7 +49,7 @@ pub(super) struct Scope {
 impl Scope {
     pub(super) fn validate(&self) -> Result<(), ServiceError> {
         let boot = URL_SAFE_NO_PAD.decode(&self.boot_id_base64url).map_err(|_| invalid())?;
-        require(self.api_version == "serverware.nativePublicationGenesisScope/v1"
+        require(self.api_version == "catchplate.nativePublicationGenesisScope/v1"
             && self.commissioning_id_sha256 != Sha256Digest::compute(&[])
             && self.assignment_revision > 0 && self.initial_publication_revision > 0
             && boot.len() == 16 && boot.iter().any(|b| *b != 0) && URL_SAFE_NO_PAD.encode(&boot) == self.boot_id_base64url
@@ -90,7 +90,7 @@ pub(super) struct InitialState {
 impl InitialState {
     pub(super) fn new(scope: &Scope) -> Result<Self, ServiceError> {
         scope.validate()?;
-        Ok(Self { api_version: "serverware.nativePublicationInitialState/v1".into(), scope_sha256: sha(scope)?,
+        Ok(Self { api_version: "catchplate.nativePublicationInitialState/v1".into(), scope_sha256: sha(scope)?,
             publication_revision: scope.initial_publication_revision, state: PublicationReconciliationState::Uninstalled,
             ledger_event_ordinal: 0, predecessor_generation_sha256: None, committed_generation_sha256: None,
             published_generation_sha256: None, first_ingress_sequence: None, last_ingress_sequence: None,
@@ -99,8 +99,8 @@ impl InitialState {
     pub(super) fn original(scope: &Scope) -> Result<String, ServiceError> { text(&Self::new(scope)?) }
     pub(super) fn roots(&self) -> Result<(Sha256Digest, Sha256Digest), ServiceError> {
         let raw = encode_canonical_frame(self)?;
-        Ok((hash_domain_frames(b"serverware.nativeInitialPolicyLedger/v1", &[&raw]),
-            hash_domain_frames(b"serverware.nativeInitialPolicySpool/v1", &[&raw])))
+        Ok((hash_domain_frames(b"catchplate.nativeInitialPolicyLedger/v1", &[&raw]),
+            hash_domain_frames(b"catchplate.nativeInitialPolicySpool/v1", &[&raw])))
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,27 +141,27 @@ pub(super) struct Core {
 impl Core {
     pub(super) fn new(scope: &Scope, genesis: GenesisEvidence, native: &RoleKey, now: i64, checkpoint: Sha256Digest)
         -> Result<Self, ServiceError> {
-        let value = Self { api_version: "serverware.nativeInitialPublicationCore/v1".into(),
+        let value = Self { api_version: "catchplate.nativeInitialPublicationCore/v1".into(),
             native_grant_sha256: native.grant_sha256.clone(), genesis, observed_at_unix_nanos: now,
             trust_checkpoint_sha256: checkpoint, signing_key_id: native.key_id.clone(), signing_key_spki_sha256: native.key_spki_sha256.clone() };
         value.validate(scope, native)?; Ok(value)
     }
     pub(super) fn validate(&self, scope: &Scope, native: &RoleKey) -> Result<(), ServiceError> {
         scope.validate()?;
-        require(self.api_version == "serverware.nativeInitialPublicationCore/v1" && native.role == AuthorityRole::CustodyPublicationReconciliation
+        require(self.api_version == "catchplate.nativeInitialPublicationCore/v1" && native.role == AuthorityRole::CustodyPublicationReconciliation
             && self.native_grant_sha256 == native.grant_sha256 && self.genesis.scope == *scope
             && self.genesis.genesis_original == InitialState::original(scope)?
             && self.signing_key_id == native.key_id && self.signing_key_spki_sha256 == native.key_spki_sha256
             && self.observed_at_unix_nanos > 0 && self.trust_checkpoint_sha256 != Sha256Digest::compute(&[]))
     }
     pub(super) fn identity(&self) -> Result<Sha256Digest, ServiceError> {
-        Ok(hash_domain_frames(b"serverware.nativeInitialPublicationCore/v1", &[&encode_canonical_frame(self)?]))
+        Ok(hash_domain_frames(b"catchplate.nativeInitialPublicationCore/v1", &[&encode_canonical_frame(self)?]))
     }
     pub(super) fn retrieval_id(&self, namespace: &Sha256Digest) -> Result<Sha256Digest, ServiceError> {
-        Ok(hash_domain_frames(b"serverware.nativeInitialPublicationRetrievalId/v1", &[namespace.as_str().as_bytes(), self.identity()?.as_str().as_bytes()]))
+        Ok(hash_domain_frames(b"catchplate.nativeInitialPublicationRetrievalId/v1", &[namespace.as_str().as_bytes(), self.identity()?.as_str().as_bytes()]))
     }
     pub(super) fn retrieval_proof(&self, scope: &[u8], id: &Sha256Digest) -> Result<Sha256Digest, ServiceError> {
-        Ok(hash_domain_frames(b"serverware.nativeInitialPublicationRetrievalProof/v1", &[scope, id.as_str().as_bytes(), &encode_canonical_frame(self)?]))
+        Ok(hash_domain_frames(b"catchplate.nativeInitialPublicationRetrievalProof/v1", &[scope, id.as_str().as_bytes(), &encode_canonical_frame(self)?]))
     }
     pub(super) fn payload(&self, stored: &Stored) -> Result<Vec<u8>, ServiceError> {
         let s = &self.genesis.scope; let (ledger, spool) = InitialState::new(s)?.roots()?;
@@ -210,7 +210,7 @@ fn stored_verify_key(stored: &Stored, prepared: &Prepared, scope: &Scope, retrie
 }
 pub(super) fn final_receipt(core: &Core, stored: &Stored, sign: impl FnOnce(&[u8]) -> Result<String, ServiceError>) -> Result<String, ServiceError> {
     let payload = core.payload(stored)?; let signature = sign(&payload)?;
-    let signed = hash_domain_frames(b"serverware.policyShadowPublicationReconciliationReceipt/v1", &[&payload, signature.as_bytes()]);
+    let signed = hash_domain_frames(b"catchplate.policyShadowPublicationReconciliationReceipt/v1", &[&payload, signature.as_bytes()]);
     let s = &core.genesis.scope; let (ledger, spool) = InitialState::new(s)?.roots()?;
     let receipt = Receipt::from_custody(PublicationReconciliationState::Uninstalled, s.initial_publication_revision,
         None, None, None, None, None, 0, ledger, spool, None, core.observed_at_unix_nanos, core.trust_checkpoint_sha256.clone(),
@@ -239,7 +239,7 @@ impl Completion {
     }
     fn verify_receipt(&self, scope: &Scope, native: &RoleKey) -> Result<(), ServiceError> {
         scope.live(self.completed_at_boottime_nanos)?;
-        require(self.api_version == "serverware.nativePublicationGenesisCompletion/v1"
+        require(self.api_version == "catchplate.nativePublicationGenesisCompletion/v1"
             && self.stored.payload.stored_at_boottime_nanos <= self.completed_at_boottime_nanos)?;
         let receipt: Receipt = original(&self.receipt_original)?;
         receipt.validate_deserialized_invariants().map_err(|_| invalid())?;
@@ -269,7 +269,7 @@ impl Witness {
     pub(super) fn verify(&self, scope: &Scope, completion: &Completion, predecessor: &Sha256Digest,
         epoch: &AuthorityEpochRefV3, key: &VerifyingKey) -> Result<(), ServiceError> {
         scope.live(self.completed_at_boottime_nanos)?;
-        require(self.api_version == "serverware.nativePublicationGenesisWitness/v1" && self.scope_sha256 == sha(scope)?
+        require(self.api_version == "catchplate.nativePublicationGenesisWitness/v1" && self.scope_sha256 == sha(scope)?
             && self.commissioning_id_sha256 == scope.commissioning_id_sha256 && self.completion_sha256 == sha(completion)?
             && &self.predecessor_evidence_sha256 == predecessor && self.authority_epoch == *epoch
             && self.grant_sha256 != Sha256Digest::compute(&[]) && completion.completed_at_boottime_nanos <= self.completed_at_boottime_nanos)?;
@@ -277,7 +277,7 @@ impl Witness {
     }
     pub(super) fn sign(scope: &Scope, completion: &Completion, predecessor: Sha256Digest, grant_sha256: Sha256Digest,
         epoch: AuthorityEpochRefV3, now: u64, key: &SigningKey) -> Result<Self, ServiceError> {
-        let mut value = Self { api_version: "serverware.nativePublicationGenesisWitness/v1".into(), scope_sha256: sha(scope)?,
+        let mut value = Self { api_version: "catchplate.nativePublicationGenesisWitness/v1".into(), scope_sha256: sha(scope)?,
             commissioning_id_sha256: scope.commissioning_id_sha256.clone(), completion_sha256: sha(completion)?,
             predecessor_evidence_sha256: predecessor, grant_sha256, authority_epoch: epoch,
             completed_at_boottime_nanos: now, signature_base64url: String::new() };

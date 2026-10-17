@@ -7,7 +7,7 @@ acceptance. It creates no new work allowance or clock and accepts no prior
 successful verification object as authority.
 
 The implementation is
-[authority_oidc_session_activation_reads.py](../serverware/authority_oidc_session_activation_reads.py),
+[authority_oidc_session_activation_reads.py](../catchplate/authority_oidc_session_activation_reads.py),
 using the existing primary-radix and counted-index proof machinery.
 
 ## Fixed read inventory
@@ -38,7 +38,7 @@ Seven complete ranges must genuinely prove empty:
 | `pending_trust_publications` | Global pending trust publications |
 
 The six new fixed profiles in
-[authority_index_projection.py](../serverware/authority_index_projection.py)
+[authority_index_projection.py](../catchplate/authority_index_projection.py)
 include every matching row, including expired, revoked or consumed rows. They
 do not weaken the actual delivery table's five unique constraints by checking
 only live rows. Existing profile definitions and the older revoke,

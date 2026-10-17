@@ -82,7 +82,7 @@ Corrected source `e8e6333a290da5ea4ffab9f105f5d18072818a40` passed all
 regression, plus two-file grammar and both inventories. The other 27 controls
 passed in the first batch and their source was unchanged; they were not rerun.
 Both frozen archives, harnesses and logs are retained at
-`codex-offload/serverware/engineering-builds/e8e6333a-genesis-assembly-zEYKOM/`.
+`codex-offload/catchplate/engineering-builds/e8e6333a-genesis-assembly-zEYKOM/`.
 Each run used one CPU, an empty environment and a private network namespace.
 Native sources and dependency/build inputs were unchanged. Native compilation
 and full runtime-artifact builds were not repeated; previous runtime artifacts

@@ -7,7 +7,7 @@ const {resolve} = require('node:path');
 const vm = require('node:vm');
 
 const NOW = 1800000000000;
-const REVIEW = 'https://serverware.example.com/pilot-prelaunch/action-status/' + 'a'.repeat(64) + '/' + 'b'.repeat(64);
+const REVIEW = 'https://catchplate.example.com/pilot-prelaunch/action-status/' + 'a'.repeat(64) + '/' + 'b'.repeat(64);
 const PHASES = ['prepare_available', 'security_key_available', 'confirmation_available', 'waiting', 'preparing',
   'preparing_confirmation', 'action_in_progress', 'response_captured', 'cancelled', 'expired'];
 const ACTION_PHASES = PHASES.slice(0, 3);
@@ -25,7 +25,7 @@ const context = vm.createContext({Date: Clock, URL, operatorError: message => Ob
   setTimeout: (callback, delay) => { const id = ++timerId; timers.set(id, {callback, delay}); return id; },
   clearTimeout: id => timers.delete(id),
   fetch: () => { networkCalls++; throw new Error('No network permitted'); }});
-const source = readFileSync(resolve(__dirname, '../serverware/operator_demo_web/workspace_notifications.js'), 'utf8');
+const source = readFileSync(resolve(__dirname, '../catchplate/operator_demo_web/workspace_notifications.js'), 'utf8');
 vm.runInContext(source, context, {timeout: 1000});
 const api = vm.runInContext('({valid:notificationNativeValid, present:notificationNativePresentation, project:projectNotificationStatus, render:createNotificationNativeObservation, delivery:notificationDeliveryMessage, presets:notificationAuditPresets, selectPreset:notificationPresetSelection, filterProblem:notificationFilterProblem, filterMessage:notificationFilterMessage})', context);
 const PRESETS = {
@@ -58,7 +58,7 @@ function native(state = 'not_configured', changes = {}) {
 }
 function status(value = native()) {
   const events = ['native_pilot.confirmation_available', 'native_pilot.prepare_available', 'native_pilot.security_key_available'];
-  return {schema: 'serverware.operatorNotifications/v1', available: true,
+  return {schema: 'catchplate.operatorNotifications/v1', available: true,
     slots: ['action_required.slack', 'action_required.webhook', 'audit_log.slack', 'audit_log.webhook'].map(slot => ({slot,
       channel: slot.split('.')[0], adapter: slot.split('.')[1], revision: 0, label: '', enabled: false, secret_present: false,
       event_types: [], max_attempts: 1, last_delivery: null})),
@@ -82,8 +82,8 @@ function delivery(changes = {}) {
 const tests = [
   ['audit presets have a fixed supported roster and are not action-source presets', () => {
     assert.deepEqual(plain(api.presets).map(item => item.id), Object.keys(PRESETS));
-    const eventSource = readFileSync(resolve(__dirname, '../serverware/operator_notification_events.py'), 'utf8');
-    const ecrSource = readFileSync(resolve(__dirname, '../serverware/operator_notification_ecr.py'), 'utf8');
+    const eventSource = readFileSync(resolve(__dirname, '../catchplate/operator_notification_events.py'), 'utf8');
+    const ecrSource = readFileSync(resolve(__dirname, '../catchplate/operator_notification_ecr.py'), 'utf8');
     assert(Object.isFrozen(api.presets));
     for (const preset of api.presets) {
       assert(Object.isFrozen(preset)); assert(Object.isFrozen(preset.events));
@@ -310,7 +310,7 @@ const tests = [
   }],
   ['native review locator and expiry have exact closed grammars', () => {
     for (const url of [null, '/#notifications', REVIEW.replace('https:', 'http:'), REVIEW + '?token=forbidden', REVIEW + '#prepare',
-      REVIEW.replace('serverware.example.com', 'other.example.test'), REVIEW.replace('/action-status/', '/prepare/'),
+      REVIEW.replace('catchplate.example.com', 'other.example.test'), REVIEW.replace('/action-status/', '/prepare/'),
       REVIEW.replace('a'.repeat(64), 'a'.repeat(63)), REVIEW.replace('b'.repeat(64), 'B'.repeat(64))])
       reject(item => { item.last_observation.review_url = url; });
     for (const expiry of ['0', '01', '-1', '1.5', '1e18', '9223372036854775808', '99999999999999999999', 1800000000000000000])

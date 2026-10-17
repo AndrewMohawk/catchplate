@@ -51,13 +51,13 @@ def calls(tree, spelling):
 class RevocationIssuerSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.source, cls.tree = read("serverware/authority_revocation_issuance.py")
+        cls.source, cls.tree = read("catchplate/authority_revocation_issuance.py")
         cls.owner = definition(cls.tree, "RevocationCapabilityIssuer")
-        cls.db_source, cls.db = read("serverware/db.py", 16 * 1024 * 1024)
-        cls.cap_source, cls.cap = read("serverware/authority_revocation_capability.py")
-        cls.persistence_source, cls.persistence = read("serverware/authority_revocation_persistence.py")
-        cls.store_source, cls.store = read("serverware/authority_store/revocation_retention.py")
-        cls.issuance_source, cls.issuance = read("serverware/authority_store/revocation_capability.py")
+        cls.db_source, cls.db = read("catchplate/db.py", 16 * 1024 * 1024)
+        cls.cap_source, cls.cap = read("catchplate/authority_revocation_capability.py")
+        cls.persistence_source, cls.persistence = read("catchplate/authority_revocation_persistence.py")
+        cls.store_source, cls.store = read("catchplate/authority_store/revocation_retention.py")
+        cls.issuance_source, cls.issuance = read("catchplate/authority_store/revocation_capability.py")
 
     def assert_shape(self, actual, expression):
         self.assertEqual(ast.dump(actual), ast.dump(ast.parse("(" + expression.strip() + ")", mode="eval").body))
@@ -68,10 +68,10 @@ class RevocationIssuerSourceTests(unittest.TestCase):
         self.assertEqual(imports, [("__future__", (("annotations", None),)),
             ("dataclasses", (("dataclass", None),)),
             ("cryptography.hazmat.primitives.asymmetric.ed25519", (("Ed25519PublicKey", None),)),
-            ("serverware", (("authority_revocation_capability", "capability"),)),
-            ("serverware", (("authority_revocation_invocation", "invocation"),)),
-            ("serverware", (("authority_revocation_persistence", "persistence"),)),
-            ("serverware.authority_store", (("revocation_capability", "issuance"),))])
+            ("catchplate", (("authority_revocation_capability", "capability"),)),
+            ("catchplate", (("authority_revocation_invocation", "invocation"),)),
+            ("catchplate", (("authority_revocation_persistence", "persistence"),)),
+            ("catchplate.authority_store", (("revocation_capability", "issuance"),))])
         self.assertEqual([tuple((alias.name, alias.asname) for alias in node.names)
             for node in self.tree.body if isinstance(node, ast.Import)], [(('time', None),)])
         self.assert_shape(self.owner.decorator_list[0],
@@ -119,7 +119,7 @@ class RevocationIssuerSourceTests(unittest.TestCase):
         self.assert_shape(assignment(self.tree, "_CALL_INPUTS").value, "capability.wire._EXPECTATIONS - _CONFIGURED")
         self.assert_shape(assignment(self.tree, "_CONFIGURED").value, """frozenset({
             "planner_public_key", "verifier_public_key", "expected_planner_identity", "expected_verifier_identity"})""")
-        _, plan = read("serverware/authority_revocation_plan.py")
+        _, plan = read("catchplate/authority_revocation_plan.py")
         inventory = assignment(plan, "_VERIFICATION_INPUTS").value.args[0]
         self.assertEqual({item.value for item in inventory.elts} - {"envelope", "planner_public_key", "verifier_public_key",
             "expected_planner_identity", "expected_verifier_identity"}, HISTORICAL_FIELDS)
@@ -211,7 +211,7 @@ class RevocationIssuerSourceTests(unittest.TestCase):
         opener = definition(issue, "open_issuer")
         self.assertEqual(len(opener.body), 2)
         self.assertIsInstance(opener.body[0], ast.ImportFrom)
-        self.assertEqual((opener.body[0].module, tuple(alias.name for alias in opener.body[0].names)), ("serverware", ("db",)))
+        self.assertEqual((opener.body[0].module, tuple(alias.name for alias in opener.body[0].names)), ("catchplate", ("db",)))
         self.assert_shape(opener.body[1].value,
             "db._policy_authority_capability_issuer_pg_connect_raw(database_pins=configuration[11])")
         run = calls(issue, "_run_on_configuration")
@@ -222,7 +222,7 @@ class RevocationIssuerSourceTests(unittest.TestCase):
         self.assertFalse(calls(issue, "open_issuer"))
         self.assertLess(assignment(issue, "configuration").lineno, opener.lineno)
         self.assertNotIn("dsn", ast.get_source_segment(self.source, issue).lower().split("return _run_on_configuration", 1)[1])
-        for module in ("serverware/authority_service.py", "serverware/authority_store/executor_v9.py"):
+        for module in ("catchplate/authority_service.py", "catchplate/authority_store/executor_v9.py"):
             source, _tree = read(module, 2 * 1024 * 1024)
             self.assertNotIn("RevocationCapabilityIssuer", source)
             self.assertNotIn("authority_revocation_issuance", source)
@@ -238,7 +238,7 @@ class RevocationIssuerSourceTests(unittest.TestCase):
         self.assertEqual(statements[0].args[0].value,
             "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ WRITE NOT DEFERRABLE")
         self.assertEqual(statements[1].args[0].value,
-            "SET search_path TO serverware_metadata, pg_catalog, pg_temp")
+            "SET search_path TO catchplate_metadata, pg_catalog, pg_temp")
         source = ast.get_source_segment(self.db_source, connector)
         for clause in ("transaction_isolation", "transaction_read_only", "transaction_deferrable",
                 '"serializable"', '"off"'):
@@ -362,7 +362,7 @@ class RevocationIssuerSourceTests(unittest.TestCase):
         self.assertEqual(len(opener.body), 2)
         self.assertIsInstance(opener.body[0], ast.ImportFrom)
         self.assertEqual((opener.body[0].module, tuple(alias.name for alias in opener.body[0].names)),
-            ("serverware", ("db",)))
+            ("catchplate", ("db",)))
         self.assert_shape(opener.body[1].value,
             "db._policy_authority_capability_issuer_pg_connect_raw(database_pins=configuration[11])")
         delegated = calls(method, "_issue_invocation_on_configuration")
@@ -374,7 +374,7 @@ class RevocationIssuerSourceTests(unittest.TestCase):
         self.assertIs(method.body[-1].value, delegated[0])
         for forbidden in ("open_issuer", "self.issue", "_run_on_configuration", "issuance._issue_on_connection"):
             self.assertFalse(calls(method, forbidden))
-        _source, service = read("serverware/authority_service.py", 2 * 1024 * 1024)
+        _source, service = read("catchplate/authority_service.py", 2 * 1024 * 1024)
         process = definition(service, "AuthorityProcess")
         private = definition(process, "_issue_revocation_invocation_bytes")
         invoked = calls(private, "issuer.issue_authenticated")
@@ -385,7 +385,7 @@ class RevocationIssuerSourceTests(unittest.TestCase):
                 definition(definition(service, "AuthorityServer"), "_serve_connection")):
             for name in ("issue_authenticated", "_issue_revocation_invocation_bytes", "_revocation_capability_issuer"):
                 self.assertNotIn(name, ast.unparse(dispatcher))
-        source, _tree = read("serverware/authority_store/executor_v9.py", 2 * 1024 * 1024)
+        source, _tree = read("catchplate/authority_store/executor_v9.py", 2 * 1024 * 1024)
         self.assertNotIn("RevocationCapabilityIssuer", source)
         self.assertNotIn("authority_revocation_issuance", source)
         self.assertNotIn("issue_authenticated", source)

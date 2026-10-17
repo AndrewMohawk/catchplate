@@ -22,10 +22,10 @@ import test_operator_publication as coordination
 import test_operator_workspace_store as workspace
 
 ROOT = Path(__file__).resolve().parents[1]
-FLAG = "SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED"
+FLAG = "CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED"
 DIRECTORY = "gate-runtime"
 FILENAME = "policy-bundle.json"
-PLACEHOLDERS = (".operator-publication.lock", ".serverware-operator-demo.json")
+PLACEHOLDERS = (".operator-publication.lock", ".catchplate-operator-demo.json")
 CA_PLACEHOLDERS = ("mitmproxy-ca-cert.pem", "mitmproxy-ca.pem")
 
 
@@ -92,7 +92,7 @@ def disabled():
     rule(f, credential, application)
     workspace.verify_signed(f.config, f.db, f.store, f.bundles)
     assert not paths(f)[0].exists() and not f.provider_calls
-    from serverware import operator_gate_publication as gate
+    from catchplate import operator_gate_publication as gate
     for value in ("", "0", "1", "true", " 1", "01", "2"):
         with patch.dict(os.environ, {FLAG: value}):
             if value in {"", "0"}:
@@ -310,7 +310,7 @@ def unsafe_leaf():
 
 def ownership_and_shared_lock():
     f = google.Fixture()
-    from serverware import operator_gate_publication as gate
+    from catchplate import operator_gate_publication as gate
     publication = f.store.operator_publication
     directory, target = paths(f)
     raw = target.read_bytes()
@@ -350,7 +350,7 @@ def ownership_and_shared_lock():
 class OperatorGatePublicationTests(unittest.TestCase):
     def setUp(self):
         google.OperatorGoogleSetupTests.setUp(self)
-        self.environment.update({FLAG: "1", "SERVERWARE_DECISION_GATE_BASE": ""})
+        self.environment.update({FLAG: "1", "CATCHPLATE_DECISION_GATE_BASE": ""})
 
     def worker(self, name, **changes):
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", name],

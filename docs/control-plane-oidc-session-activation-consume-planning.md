@@ -1,6 +1,6 @@
 # Same-call consume planning and retained export
 
-[`control_plane_oidc_session_activation_consume_planning.py`](../serverware/control_plane_oidc_session_activation_consume_planning.py)
+[`control_plane_oidc_session_activation_consume_planning.py`](../catchplate/control_plane_oidc_session_activation_consume_planning.py)
 connects an actually acknowledged activation completion to the isolated
 consume planner's prepare and exact retained-export paths. It is source-only,
 unbuilt, unexecuted and unprovisioned. No consume authorization/grant, reserve,

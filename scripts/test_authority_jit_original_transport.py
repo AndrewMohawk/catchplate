@@ -11,7 +11,7 @@ import time
 import unittest
 from unittest import mock
 
-from serverware import authority_jit_original_transport as transport
+from catchplate import authority_jit_original_transport as transport
 
 
 def request_header(tag, control, body):

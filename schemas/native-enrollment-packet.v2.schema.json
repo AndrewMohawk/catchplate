@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-enrollment-packet.v2.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-enrollment-packet.v2.schema.json",
   "title": "Native enrollment packet v2 original container",
   "description": "Exactly seven flat fields, canonical sorted compact ensure_ascii JSON plus exactly one LF, at most524288 bytes. Each component is canonical unpadded base64url preserving exact original bytes. This unsigned container and its SDK decoder do not authenticate any component, accept a signature, install trust or grant permission. No legacy runtimeManifestDigest alias, native quote verdict or successful Python DTO is accepted as authority.",
   "type": "object", "additionalProperties": false,
   "required": ["apiVersion", "purpose", "delegationBase64url", "setupAuthorizationBase64url", "targetRequestBase64url", "targetIssuerCertificateDerBase64url", "policyRequirementsBase64url"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeEnrollmentPacket/v2"},
+    "apiVersion": {"const": "catchplate.nativeEnrollmentPacket/v2"},
     "purpose": {"const": "workload-bootstrap"},
     "delegationBase64url": {"$ref": "#/$defs/original32KiB", "description": "Exact signed .240 delegation original, including its one LF; max32768 decoded bytes."},
     "setupAuthorizationBase64url": {"$ref": "#/$defs/original32KiB", "description": "Exact independently signed setup original, including its one LF; max32768 decoded bytes."},

@@ -30,9 +30,9 @@ def no_effects(event, _arguments):
 sys.addaudithook(no_effects)
 
 from fastapi import FastAPI  # noqa: E402
-from serverware import auth, operator_catalog_api as api  # noqa: E402
-from serverware import operator_catalog_mutations as mutations  # noqa: E402
-from serverware.operator_github_app import GitHubAppUnavailable  # noqa: E402
+from catchplate import auth, operator_catalog_api as api  # noqa: E402
+from catchplate import operator_catalog_mutations as mutations  # noqa: E402
+from catchplate.operator_github_app import GitHubAppUnavailable  # noqa: E402
 
 ADMIN = "synthetic-catalog-projection-admin-private-canary"
 SECRET = "synthetic-catalog-projection-secret-private-canary"
@@ -61,7 +61,7 @@ class CatalogProjectionTests(unittest.IsolatedAsyncioTestCase):
         path = CATALOG if method == "GET" else POST
         fields = [(b"host", b"console.example.com"), *headers]
         if authenticate:
-            fields.append((b"x-serverware-admin-token", ADMIN.encode()))
+            fields.append((b"x-catchplate-admin-token", ADMIN.encode()))
         if method == "POST":
             raw = json.dumps(payload if payload is not None else {
                 "expected_revision": 1, "expected_policy_hash": "sha256:" + "1" * 64,
@@ -177,12 +177,12 @@ class CatalogProjectionTests(unittest.IsolatedAsyncioTestCase):
             "name": SECRET + "\n", "auth_type": "bearer", "secret": "", SECRET: SECRET}
         self.assertEqual(await self.request(method="POST", payload=payload),
             (422, {"detail": "invalid operator catalog input"}))
-        self.assertEqual(self.response_headers[b"x-serverware-error-code"], b"invalid_input")
-        self.assertEqual(self.response_headers[b"x-serverware-error-fields"], b"name,secret")
+        self.assertEqual(self.response_headers[b"x-catchplate-error-code"], b"invalid_input")
+        self.assertEqual(self.response_headers[b"x-catchplate-error-fields"], b"name,secret")
         self.worker.assert_not_awaited()
         self.assertEqual(await self.request(method="POST", payload=payload, authenticate=False),
             (401, {"detail": "administrator authentication required"}))
-        self.assertNotIn(b"x-serverware-error-code", self.response_headers)
+        self.assertNotIn(b"x-catchplate-error-code", self.response_headers)
         self.worker.assert_not_awaited()
 
     async def test_closed_codes_keep_old_status_body_and_unknown_outcome(self):
@@ -198,8 +198,8 @@ class CatalogProjectionTests(unittest.IsolatedAsyncioTestCase):
                 self.worker.side_effect = exception(SECRET)
                 self.assertEqual(await self.request(method="POST"),
                     (409, {"detail": "operator catalog or policy changed; refresh before trying again"}))
-                self.assertEqual(self.response_headers[b"x-serverware-error-code"], code.encode())
-                self.assertNotIn(b"x-serverware-error-fields", self.response_headers)
+                self.assertEqual(self.response_headers[b"x-catchplate-error-code"], code.encode())
+                self.assertNotIn(b"x-catchplate-error-fields", self.response_headers)
         for error, status, code in (
                 (ValueError(SECRET), 422, "unsupported_policy"),
                 (mutations.CatalogNotFound(SECRET), 404, "resource_not_found"),
@@ -209,17 +209,17 @@ class CatalogProjectionTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(code=code):
                 self.worker.side_effect = error
                 self.assertEqual((await self.request(method="POST"))[0], status)
-                self.assertEqual(self.response_headers[b"x-serverware-error-code"], code.encode())
+                self.assertEqual(self.response_headers[b"x-catchplate-error-code"], code.encode())
         self.worker.side_effect = None
         self.worker.return_value = {"not_serializable": object()}
         self.assertEqual(await self.request(method="POST"),
             (503, {"detail": "operator catalog result unavailable; inspect saved status before retrying"}))
-        self.assertEqual(self.response_headers[b"x-serverware-error-code"], b"mutation_outcome_unknown")
+        self.assertEqual(self.response_headers[b"x-catchplate-error-code"], b"mutation_outcome_unknown")
 
     def test_error_header_allowlist_status_and_field_bounds(self):
         from fastapi import HTTPException
         from pydantic import ValidationError
-        from serverware.operator_catalog_inputs import CommonAppRuleInput
+        from catchplate.operator_catalog_inputs import CommonAppRuleInput
 
         error = ValidationError.from_exception_data("Synthetic", [
             {"type": "string_type", "loc": ("scope", SECRET), "input": SECRET},
@@ -230,13 +230,13 @@ class CatalogProjectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(api._validation_fields(error, CommonAppRuleInput), ("scope",))
         with self.assertRaises(HTTPException) as caught:
             api._reject(422, "fixed", code="invalid_input", fields=(*api._ERROR_FIELDS, SECRET))
-        names = caught.exception.headers["X-Serverware-Error-Fields"].split(",")
+        names = caught.exception.headers["X-Catchplate-Error-Fields"].split(",")
         self.assertEqual(names, sorted(api._ERROR_FIELDS)[:8])
         for status, code in ((422, SECRET), (503, "invalid_input")):
             with self.assertRaises(HTTPException) as caught:
                 api._reject(status, "fixed", code=code, fields=(SECRET, "name"))
-            self.assertNotIn("X-Serverware-Error-Code", caught.exception.headers)
-            self.assertNotIn("X-Serverware-Error-Fields", caught.exception.headers)
+            self.assertNotIn("X-Catchplate-Error-Code", caught.exception.headers)
+            self.assertNotIn("X-Catchplate-Error-Fields", caught.exception.headers)
 
     def test_typed_refusals_originate_at_real_pre_write_guards(self):
         identifier = "fixture-resource"

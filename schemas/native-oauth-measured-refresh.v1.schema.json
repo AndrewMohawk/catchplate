@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-oauth-measured-refresh.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-oauth-measured-refresh.v1.schema.json",
   "title": "Measured due-refresh authority, encrypted application custody and exact operation originals",
   "$comment": "Data-only closed projections. Code additionally authenticates independently selected roots, complete measured assignment, original signatures/NSM evidence, UTF-8 byte bounds, exact hashes, current SQL heads, irreversible slots and real owner deadlines. No schema validates successful provider issuance or permission from a caller verdict. Operation is selected out of band inside the actual writer; HTTP selects one explicit fixed operation. Canonical Python-ASCII originals have no LF.",
   "oneOf": [{"$ref":"#/$defs/policy"},{"$ref":"#/$defs/configuration"},{"$ref":"#/$defs/applicationMaterial"},{"$ref":"#/$defs/startup"},{"$ref":"#/$defs/httpRequest"},{"$ref":"#/$defs/httpResponse"},{"$ref":"#/$defs/evidence"}],
@@ -23,7 +23,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","enrollmentSha256","clientMaterialSha256","providerId","clientId","redirectUri","secretKekId","nonce","ciphertext"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeOAuthApplicationMaterial/v1"},"enrollmentSha256":{"$ref":"#/$defs/digest"},
+        "apiVersion":{"const":"catchplate.nativeOAuthApplicationMaterial/v1"},"enrollmentSha256":{"$ref":"#/$defs/digest"},
         "clientMaterialSha256":{"$ref":"#/$defs/digest"},"providerId":{"$ref":"#/$defs/provider"},
         "clientId":{"$ref":"oauth-application-enrollment.v1.schema.json#/$defs/clientId"},
         "redirectUri":{"$ref":"oauth-application-enrollment.v1.schema.json#/$defs/redirect"},
@@ -35,7 +35,7 @@
       "type":"object","additionalProperties":false,
       "required":["schema","sourceRevision","configurationDigest","authorityRootFd","authorityRootSha256","applications"],
       "properties":{
-        "schema":{"const":"serverware.oauthApplicationStartup/v2"},"sourceRevision":{"$ref":"oauth-application-enrollment.v1.schema.json#/$defs/revision"},
+        "schema":{"const":"catchplate.oauthApplicationStartup/v2"},"sourceRevision":{"$ref":"oauth-application-enrollment.v1.schema.json#/$defs/revision"},
         "configurationDigest":{"$ref":"#/$defs/digest"},
         "authorityRootFd":{"oneOf":[{"type":"null"},{"$ref":"oauth-application-enrollment.v1.schema.json#/$defs/descriptor"}]},
         "authorityRootSha256":{"$ref":"#/$defs/nullableDigest"},
@@ -53,7 +53,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","sourceRevision","authorityRootPublicKey","authorityRootSpkiSha256","controlPlaneConfigurationDigest","deploymentId","instanceId","limits","applications","recoveryTargets"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeOAuthRefreshConfiguration/v1"},"sourceRevision":{"$ref":"oauth-application-enrollment.v1.schema.json#/$defs/revision"},
+        "apiVersion":{"const":"catchplate.nativeOAuthRefreshConfiguration/v1"},"sourceRevision":{"$ref":"oauth-application-enrollment.v1.schema.json#/$defs/revision"},
         "authorityRootPublicKey":{"$ref":"#/$defs/bytes32"},"authorityRootSpkiSha256":{"$ref":"#/$defs/digest"},
         "controlPlaneConfigurationDigest":{"$ref":"#/$defs/digest"},"deploymentId":{"$ref":"oauth-application-enrollment.v1.schema.json#/$defs/identifier"},
         "instanceId":{"$ref":"#/$defs/instance"},"limits":{"$ref":"#/$defs/nativeLimits"},
@@ -79,7 +79,7 @@
       "type":"object","additionalProperties":false,
       "required":["schema","enrollmentRootPublicKeyBase64Url","enrollmentRootSpkiSha256","controlPlaneConfigurationDigest","deploymentId","dueWithinSeconds","operationMaxSeconds","revocationCapacity","recoveryMaxSeconds","trustRoots","assignments"],
       "properties":{
-        "schema":{"const":"serverware.oauthMeasuredRefreshAuthorityPolicy/v1"},"enrollmentRootPublicKeyBase64Url":{"$ref":"#/$defs/bytes32"},
+        "schema":{"const":"catchplate.oauthMeasuredRefreshAuthorityPolicy/v1"},"enrollmentRootPublicKeyBase64Url":{"$ref":"#/$defs/bytes32"},
         "enrollmentRootSpkiSha256":{"$ref":"#/$defs/digest"},"controlPlaneConfigurationDigest":{"$ref":"#/$defs/digest"},"deploymentId":{"$ref":"oauth-application-enrollment.v1.schema.json#/$defs/identifier"},
         "dueWithinSeconds":{"type":"integer","minimum":1,"maximum":300},"operationMaxSeconds":{"type":"integer","minimum":1,"maximum":30},"revocationCapacity":{"type":"integer","minimum":1,"maximum":64},
         "recoveryMaxSeconds":{"type":"integer","minimum":1,"maximum":30},"trustRoots":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/trustRoots"},
@@ -90,7 +90,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","phase","holderId","bootId","keyId","controlPlaneResponseSigningKeyId","deploymentId","instanceId","providerId","enrollmentSha256","credentialId","credentialVersion","refreshId","inputSha256","challenge","policyHash","dataPlaneBinarySha256","issuedAtEpochNs","expiresAtEpochNs"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeOAuthRefreshStatement/v1"},"phase":{"enum":["inspect","claim","capture","commit","recover"]},
+        "apiVersion":{"const":"catchplate.nativeOAuthRefreshStatement/v1"},"phase":{"enum":["inspect","claim","capture","commit","recover"]},
         "holderId":{"$ref":"#/$defs/digest"},"bootId":{"$ref":"#/$defs/bytes32"},"keyId":{"$ref":"#/$defs/digest"},"controlPlaneResponseSigningKeyId":{"$ref":"#/$defs/digest"},
         "deploymentId":{"$ref":"oauth-application-enrollment.v1.schema.json#/$defs/identifier"},"instanceId":{"$ref":"#/$defs/instance"},"providerId":{"$ref":"#/$defs/provider"},
         "enrollmentSha256":{"$ref":"#/$defs/digest"},"credentialId":{"$ref":"#/$defs/uuid"},"credentialVersion":{"type":"integer","minimum":0,"maximum":9223372036854775806},
@@ -114,7 +114,7 @@
     "recoverRequest":{"type":"object","additionalProperties":false,"required":["expectedVersion","custodyRowSha256","captureInputSha256","ownerNonceSha256","issuedAtEpochNs","expiresAtEpochNs","limits"],"properties":{"expectedVersion":{"$ref":"#/$defs/version"},"custodyRowSha256":{"$ref":"#/$defs/digest"},"captureInputSha256":{"$ref":"#/$defs/digest"},"ownerNonceSha256":{"$ref":"#/$defs/digest"},"issuedAtEpochNs":{"$ref":"#/$defs/epoch"},"expiresAtEpochNs":{"$ref":"#/$defs/epoch"},"limits":{"$ref":"#/$defs/limits"}}},
     "arguments":{"type":"object","additionalProperties":false,"required":["credential_id","enrollment_original","control_plane_configuration_digest","assignment_original","request","evidence"],"properties":{"credential_id":{"$ref":"#/$defs/uuid"},"enrollment_original":{"$ref":"#/$defs/enrollmentOriginal"},"control_plane_configuration_digest":{"$ref":"#/$defs/digest"},"assignment_original":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/assignment"}]},"request":{"oneOf":[{"$ref":"#/$defs/inspectRequest"},{"$ref":"#/$defs/claimRequest"},{"$ref":"#/$defs/captureRequest"},{"$ref":"#/$defs/commitRequest"},{"$ref":"#/$defs/recoverRequest"}]},"evidence":{"$ref":"#/$defs/evidence"}}},
     "operation":{"enum":["oauth.measured-refresh.inspect","oauth.measured-refresh.claim","oauth.measured-refresh.capture","oauth.measured-refresh.commit","oauth.measured-refresh.recover"]},
-    "httpRequest":{"type":"object","additionalProperties":false,"required":["apiVersion","operation","arguments"],"properties":{"apiVersion":{"const":"serverware.nativeOAuthRefreshRequest/v1"},"operation":{"$ref":"#/$defs/operation"},"arguments":{"$ref":"#/$defs/arguments"}},"$comment":"Runtime additionally requires operation=request shape=evidence phase, inspect null assignment, and exact non-inspect independently admitted assignment; caller-selected operation cannot change the source-fixed kernel."},
-    "httpResponse":{"type":"object","additionalProperties":false,"required":["apiVersion","requestOriginal","responseOriginal","currentnessBarrierSha256"],"properties":{"apiVersion":{"const":"serverware.nativeOAuthRefreshResponse/v1"},"requestOriginal":{"$ref":"#/$defs/encoded","maxLength":4194304},"responseOriginal":{"$ref":"#/$defs/encoded","maxLength":8388608},"currentnessBarrierSha256":{"$ref":"#/$defs/nullableDigest"}},"$comment":"Combined original <=8MiB. Inner response is the exact verifier-signed serverware.policyAuthorityMeasuredRefreshRuntimeResponse/v1 including actual root-signed configuration original, request/result/definite-commit bindings. Barrier SHA is data only until the actual claim atomically consumes its protected root."}
+    "httpRequest":{"type":"object","additionalProperties":false,"required":["apiVersion","operation","arguments"],"properties":{"apiVersion":{"const":"catchplate.nativeOAuthRefreshRequest/v1"},"operation":{"$ref":"#/$defs/operation"},"arguments":{"$ref":"#/$defs/arguments"}},"$comment":"Runtime additionally requires operation=request shape=evidence phase, inspect null assignment, and exact non-inspect independently admitted assignment; caller-selected operation cannot change the source-fixed kernel."},
+    "httpResponse":{"type":"object","additionalProperties":false,"required":["apiVersion","requestOriginal","responseOriginal","currentnessBarrierSha256"],"properties":{"apiVersion":{"const":"catchplate.nativeOAuthRefreshResponse/v1"},"requestOriginal":{"$ref":"#/$defs/encoded","maxLength":4194304},"responseOriginal":{"$ref":"#/$defs/encoded","maxLength":8388608},"currentnessBarrierSha256":{"$ref":"#/$defs/nullableDigest"}},"$comment":"Combined original <=8MiB. Inner response is the exact verifier-signed catchplate.policyAuthorityMeasuredRefreshRuntimeResponse/v1 including actual root-signed configuration original, request/result/definite-commit bindings. Barrier SHA is data only until the actual claim atomically consumes its protected root."}
   }
 }

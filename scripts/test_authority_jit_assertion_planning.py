@@ -19,10 +19,10 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_retention as retention
-from serverware import authority_jit_assertion_acquisition as acquisition
-from serverware import authority_jit_assertion_planning as source
-from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
+from catchplate import authority_challenge_retention as retention
+from catchplate import authority_jit_assertion_acquisition as acquisition
+from catchplate import authority_jit_assertion_planning as source
+from catchplate.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
 from test_authority_jit_assertion_receipt import fixture
 from test_authority_radix_mutation import IndependentTree
 from test_authority_primary_original_reader import Cursor
@@ -73,7 +73,7 @@ def originals():
         "challenge_id": challenge["id"], "credential_record_id": values["credential"]["id"],
         "trust_publication_id": trust["id"], "decision": "approve", "assertion": values["assertion"]}
     args["businessIntent"] = acquisition.authority.synthesize_business_intent(acquisition.OPERATION, args)
-    request = {"schema": "serverware.policyAuthorityV9Request/v1", "operation": acquisition.OPERATION,
+    request = {"schema": "catchplate.policyAuthorityV9Request/v1", "operation": acquisition.OPERATION,
         "operationId": digest("0"), "requestDigest": digest("0"), "handler": acquisition.receipt.HANDLER,
         "operationManifestDigest": acquisition.authority.OPERATION_MANIFEST_DIGEST, "arguments": args}
     request["requestDigest"] = acquisition.commitment._typed_request_digest(request, work=work())
@@ -134,7 +134,7 @@ class JitAssertionPlanningControls(unittest.TestCase):
                 guard(owner).check()
 
     def test_real_memberships_precede_es256_derived_absence_and_inline_effects(self):
-        from serverware import authority_planner as planner
+        from catchplate import authority_planner as planner
 
         values, request, trees, business, authorization = originals()
         meter = work()
@@ -203,7 +203,7 @@ class JitAssertionPlanningControls(unittest.TestCase):
                 assertion_policy={**configuration()["assertion_policy"], "rp_id": "different.invalid"}, work=work())
 
     def test_private_trace_scope_does_not_widen_default_or_other_successors(self):
-        from serverware import authority_planner as planner
+        from catchplate import authority_planner as planner
         key = {"profile": acquisition.heads.READ_PROFILE,
             "indexIds": list(acquisition.heads.required_index_ids(acquisition.OPERATION, include_write_heads=True)),
             "rowLimit": 13}

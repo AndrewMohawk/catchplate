@@ -107,7 +107,7 @@ impl Authority {
     fn acknowledgement(&self, request: &IncomingRequest, corruption: Option<&str>) -> Vec<u8> {
         assert_eq!(request.method, "POST");
         assert_eq!(request.target, "/api/data-plane/audit");
-        assert_eq!(request.headers.get("x-serverware-data-plane-token").map(String::as_str), Some(SERVICE_TOKEN));
+        assert_eq!(request.headers.get("x-catchplate-data-plane-token").map(String::as_str), Some(SERVICE_TOKEN));
         assert_eq!(request.body, body());
         let mut snapshot = self.current().snapshot.clone();
         if corruption == Some("context") {

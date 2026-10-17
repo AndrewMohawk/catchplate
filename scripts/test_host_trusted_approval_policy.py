@@ -25,9 +25,9 @@ import test_npm_publish as publish
 import test_x_app_read as x_read
 import test_x_post as x_post
 from jsonschema import Draft202012Validator
-from serverware import host_trusted_approval_policy as approval, policy_bundle as pb, policy_engine as engine
+from catchplate import host_trusted_approval_policy as approval, policy_bundle as pb, policy_engine as engine
 
-MARKER = {"type": "hostTrustedApproval", "schema": "serverware.hostTrustedApprovalPolicy/v1",
+MARKER = {"type": "hostTrustedApproval", "schema": "catchplate.hostTrustedApprovalPolicy/v1",
     "pendingTtlSeconds": 300, "approvalTtlSeconds": 60}
 PROVIDERS = {
     "generic": generic.bundle, "github": github.document, "gmail": gmail.document,
@@ -76,7 +76,7 @@ class HostTrustedApprovalPolicyTests(unittest.TestCase):
         bad = [{**MARKER, name: value} for name, values in {
             "pendingTtlSeconds": (29, 3601, True, 30.5, "300"),
             "approvalTtlSeconds": (0, 301, False, 1.5, "60"),
-            "schema": ("serverware.hostTrustedApprovalPolicy/v2",),
+            "schema": ("catchplate.hostTrustedApprovalPolicy/v2",),
             "id": ("not-allowed",), "phase": ("request",), "extra": (True,),
         }.items() for value in values]
         bad += [{key: value for key, value in MARKER.items() if key != missing} for missing in MARKER]
@@ -133,7 +133,7 @@ class HostTrustedApprovalPolicyTests(unittest.TestCase):
 
     def test_python_forwarding_denies_before_credentials_or_leases(self):
         snapshot = compile_policy(with_approval(fixture.document))
-        flow = fixture.request(headers=[(b"X-Serverware-Agent", b"fixture")])
+        flow = fixture.request(headers=[(b"X-Catchplate-Agent", b"fixture")])
         forbidden = AssertionError("unsupported Python approval path touched external authority")
         with patch.object(engine, "get_policy_snapshot", return_value=snapshot), \
                 patch.object(engine.db, "get_credential", side_effect=forbidden), \

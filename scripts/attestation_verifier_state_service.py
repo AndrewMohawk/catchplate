@@ -51,196 +51,196 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 
 
-SIGNED_STATE_VERSION = "serverware.signedNonceAuthorityVerifierState/v1"
-STATE_VERSION = "serverware.nonceAuthorityVerifierState/v1"
+SIGNED_STATE_VERSION = "catchplate.signedNonceAuthorityVerifierState/v1"
+STATE_VERSION = "catchplate.nonceAuthorityVerifierState/v1"
 AUTHORIZATION_VERSION = (
-    "serverware.nonceAuthorityVerifierStatePreparedAuthorization/v3"
+    "catchplate.nonceAuthorityVerifierStatePreparedAuthorization/v3"
 )
 COMMIT_RECEIPT_VERSION = (
-    "serverware.nonceAuthorityVerifierStateCommitReceipt/v3"
+    "catchplate.nonceAuthorityVerifierStateCommitReceipt/v3"
 )
-NONCE_AUTHORITY_STATE_VERSION = "serverware.nonceAuthorityState/v1"
+NONCE_AUTHORITY_STATE_VERSION = "catchplate.nonceAuthorityState/v1"
 HIGH_WATER_PREIMAGE_VERSION = (
-    "serverware.nonceAuthorityHighWaterCommitment/v1"
+    "catchplate.nonceAuthorityHighWaterCommitment/v1"
 )
 READ_REQUEST_VERSION = (
-    "serverware.nonceAuthorityVerifierStateReadRequest/v2"
+    "catchplate.nonceAuthorityVerifierStateReadRequest/v2"
 )
 READ_RESPONSE_VERSION = (
-    "serverware.nonceAuthorityVerifierStateReadResponse/v3"
+    "catchplate.nonceAuthorityVerifierStateReadResponse/v3"
 )
 PREPARE_REQUEST_VERSION = (
-    "serverware.attestationVerifierStatePrepareRequest/v4"
+    "catchplate.attestationVerifierStatePrepareRequest/v4"
 )
 PREPARE_RESPONSE_VERSION = (
-    "serverware.attestationVerifierStatePrepareResponse/v4"
+    "catchplate.attestationVerifierStatePrepareResponse/v4"
 )
 PREPARED_OPERATION_VERSION = (
-    "serverware.attestationVerifierStatePreparedOperation/v1"
+    "catchplate.attestationVerifierStatePreparedOperation/v1"
 )
 REQUEST_BINDING_VERSION = (
-    "serverware.attestationVerifierStateRequestBinding/v1"
+    "catchplate.attestationVerifierStateRequestBinding/v1"
 )
 RECOVERY_BINDING_VERSION = (
-    "serverware.attestationVerifierStateRecoveryBinding/v1"
+    "catchplate.attestationVerifierStateRecoveryBinding/v1"
 )
 RECOVERY_IDENTITY_VERSION = (
-    "serverware.attestationVerifierStateRecoveryIdentity/v1"
+    "catchplate.attestationVerifierStateRecoveryIdentity/v1"
 )
 SUCCESSOR_INTENT_VERSION = (
-    "serverware.attestationVerifierStateSuccessorIntent/v1"
+    "catchplate.attestationVerifierStateSuccessorIntent/v1"
 )
 MARK_CONSUMPTION_REQUEST_VERSION = (
-    "serverware.attestationVerifierStateMarkConsumptionRequest/v1"
+    "catchplate.attestationVerifierStateMarkConsumptionRequest/v1"
 )
 MARK_CONSUMPTION_RESPONSE_VERSION = (
-    "serverware.attestationVerifierStateMarkConsumptionResponse/v1"
+    "catchplate.attestationVerifierStateMarkConsumptionResponse/v1"
 )
 ATTACH_NONCE_STATUS_REQUEST_VERSION = (
-    "serverware.attestationVerifierStateAttachNonceStatusRequest/v1"
+    "catchplate.attestationVerifierStateAttachNonceStatusRequest/v1"
 )
 ATTACH_NONCE_STATUS_RESPONSE_VERSION = (
-    "serverware.attestationVerifierStateAttachNonceStatusResponse/v1"
+    "catchplate.attestationVerifierStateAttachNonceStatusResponse/v1"
 )
 COMMIT_REQUEST_VERSION = (
-    "serverware.attestationVerifierStateCommitRequest/v3"
+    "catchplate.attestationVerifierStateCommitRequest/v3"
 )
 RECOVERY_REQUEST_VERSION = (
-    "serverware.attestationVerifierStateRecoveryRequest/v3"
+    "catchplate.attestationVerifierStateRecoveryRequest/v3"
 )
 RECOVERY_RESPONSE_VERSION = (
-    "serverware.attestationVerifierStateRecoveryResponse/v3"
+    "catchplate.attestationVerifierStateRecoveryResponse/v3"
 )
 RECOVERY_LOOKUP_REQUEST_VERSION = (
-    "serverware.attestationVerifierStateRecoveryLookupRequest/v1"
+    "catchplate.attestationVerifierStateRecoveryLookupRequest/v1"
 )
 RECOVERY_LOOKUP_RESPONSE_VERSION = (
-    "serverware.attestationVerifierStateRecoveryLookupResponse/v1"
+    "catchplate.attestationVerifierStateRecoveryLookupResponse/v1"
 )
 ISSUE_CHALLENGE_REQUEST_VERSION = (
-    "serverware.attestationVerifierStateIssueChallengeRequest/v1"
+    "catchplate.attestationVerifierStateIssueChallengeRequest/v1"
 )
 ISSUE_CHALLENGE_RESPONSE_VERSION = (
-    "serverware.attestationVerifierStateIssueChallengeResponse/v1"
+    "catchplate.attestationVerifierStateIssueChallengeResponse/v1"
 )
 RECOVER_CHALLENGE_REQUEST_VERSION = (
-    "serverware.attestationVerifierStateRecoverChallengeRequest/v1"
+    "catchplate.attestationVerifierStateRecoverChallengeRequest/v1"
 )
 RECOVER_CHALLENGE_RESPONSE_VERSION = (
-    "serverware.attestationVerifierStateRecoverChallengeResponse/v1"
+    "catchplate.attestationVerifierStateRecoverChallengeResponse/v1"
 )
 ABORT_REQUEST_VERSION = (
-    "serverware.attestationVerifierStateAbortRequest/v1"
+    "catchplate.attestationVerifierStateAbortRequest/v1"
 )
 ABORT_RESPONSE_VERSION = (
-    "serverware.attestationVerifierStateAbortResponse/v1"
+    "catchplate.attestationVerifierStateAbortResponse/v1"
 )
 EXTERNAL_STORE_REQUEST_VERSION = (
-    "serverware.externalVerifierStateStoreRequest/v3"
+    "catchplate.externalVerifierStateStoreRequest/v3"
 )
 EXTERNAL_STORE_RESPONSE_VERSION = (
-    "serverware.externalVerifierStateStoreResponse/v3"
+    "catchplate.externalVerifierStateStoreResponse/v3"
 )
-REMOTE_SIGN_REQUEST_VERSION = "serverware.remoteEd25519SignRequest/v1"
-REMOTE_SIGN_RESPONSE_VERSION = "serverware.remoteEd25519SignResponse/v1"
+REMOTE_SIGN_REQUEST_VERSION = "catchplate.remoteEd25519SignRequest/v1"
+REMOTE_SIGN_RESPONSE_VERSION = "catchplate.remoteEd25519SignResponse/v1"
 STORE_COMMIT_PROOF_VERSION = (
-    "serverware.verifierStateStoreCommitProof/v3"
+    "catchplate.verifierStateStoreCommitProof/v3"
 )
 SIGNED_STORE_COMMIT_PROOF_VERSION = (
-    "serverware.signedVerifierStateStoreCommitProof/v3"
+    "catchplate.signedVerifierStateStoreCommitProof/v3"
 )
 STORE_COMMIT_CANDIDATE_VERSION = (
-    "serverware.verifierStateStoreCommitCandidate/v2"
+    "catchplate.verifierStateStoreCommitCandidate/v2"
 )
 SIGNED_NONCE_RECEIPT_VERSION = (
-    "serverware.signedAttestationNonceConsumptionReceipt/v2"
+    "catchplate.signedAttestationNonceConsumptionReceipt/v2"
 )
 NONCE_RECEIPT_PAYLOAD_VERSION = (
-    "serverware.attestationNonceConsumptionReceiptPayload/v2"
+    "catchplate.attestationNonceConsumptionReceiptPayload/v2"
 )
 NONCE_CONSUMPTION_VERSION = (
-    "serverware.publicAttestationNonceConsumption/v1"
+    "catchplate.publicAttestationNonceConsumption/v1"
 )
 NONCE_CONSUME_ONCE_REQUEST_VERSION = (
-    "serverware.attestationNonceConsumeOnceRequest/v3"
+    "catchplate.attestationNonceConsumeOnceRequest/v3"
 )
 SIGNED_NONCE_STATUS_EVIDENCE_VERSION = (
-    "serverware.signedAttestationNonceTransactionStatusEvidence/v1"
+    "catchplate.signedAttestationNonceTransactionStatusEvidence/v1"
 )
 NONCE_STATUS_EVIDENCE_VERSION = (
-    "serverware.attestationNonceTransactionStatusEvidence/v1"
+    "catchplate.attestationNonceTransactionStatusEvidence/v1"
 )
 ROLE_SEPARATION_EVIDENCE_VERSION = (
-    "serverware.verifierStateRoleSeparationEvidence/v1"
+    "catchplate.verifierStateRoleSeparationEvidence/v1"
 )
 SIGNED_ROLE_SEPARATION_EVIDENCE_VERSION = (
-    "serverware.signedVerifierStateRoleSeparationEvidence/v1"
+    "catchplate.signedVerifierStateRoleSeparationEvidence/v1"
 )
 STORE_ASSURANCE_EVIDENCE_VERSION = (
-    "serverware.verifierStateStoreAssuranceEvidence/v1"
+    "catchplate.verifierStateStoreAssuranceEvidence/v1"
 )
 SIGNED_STORE_ASSURANCE_EVIDENCE_VERSION = (
-    "serverware.signedVerifierStateStoreAssuranceEvidence/v1"
+    "catchplate.signedVerifierStateStoreAssuranceEvidence/v1"
 )
 SIGNED_NONCE_AUTHORITY_ASSURANCE_EVIDENCE_VERSION = (
-    "serverware.signedNonceAuthorityAssuranceEvidence/v1"
+    "catchplate.signedNonceAuthorityAssuranceEvidence/v1"
 )
 NONCE_AUTHORITY_ASSURANCE_EVIDENCE_VERSION = (
-    "serverware.nonceAuthorityAssuranceEvidence/v1"
+    "catchplate.nonceAuthorityAssuranceEvidence/v1"
 )
 SERVICE_CONFIG_VERSION = (
-    "serverware.attestationVerifierStateServiceConfiguration/v3"
+    "catchplate.attestationVerifierStateServiceConfiguration/v3"
 )
 
-STATE_DOMAIN = b"serverware.nonceAuthorityVerifierState/v1\x00Ed25519\x00"
+STATE_DOMAIN = b"catchplate.nonceAuthorityVerifierState/v1\x00Ed25519\x00"
 AUTHORIZATION_DOMAIN = (
-    b"serverware.nonceAuthorityVerifierStatePreparedAuthorization/v3\x00"
+    b"catchplate.nonceAuthorityVerifierStatePreparedAuthorization/v3\x00"
     b"Ed25519\x00"
 )
 COMMIT_RECEIPT_DOMAIN = (
-    b"serverware.nonceAuthorityVerifierStateCommitReceipt/v3\x00"
+    b"catchplate.nonceAuthorityVerifierStateCommitReceipt/v3\x00"
     b"Ed25519\x00"
 )
-GENESIS_DOMAIN = b"serverware.nonceAuthorityGenesisCommitment/v1\x00"
+GENESIS_DOMAIN = b"catchplate.nonceAuthorityGenesisCommitment/v1\x00"
 HIGH_WATER_DOMAIN = (
-    b"serverware.nonceAuthorityHighWaterCommitment/v1\x00"
+    b"catchplate.nonceAuthorityHighWaterCommitment/v1\x00"
 )
 STATE_HEAD_DOMAIN = (
-    b"serverware.nonceAuthorityVerifierStateHead/v1\x00"
+    b"catchplate.nonceAuthorityVerifierStateHead/v1\x00"
 )
 STORE_COMMIT_PROOF_DOMAIN = (
-    b"serverware.verifierStateStoreCommitProof/v3\x00Ed25519\x00"
+    b"catchplate.verifierStateStoreCommitProof/v3\x00Ed25519\x00"
 )
 NONCE_STATUS_EVIDENCE_DOMAIN = (
-    b"serverware.attestationNonceTransactionStatusEvidence/v1\x00"
+    b"catchplate.attestationNonceTransactionStatusEvidence/v1\x00"
     b"Ed25519\x00"
 )
 NONCE_RECEIPT_DOMAIN = (
-    b"serverware.attestationNonceConsumptionReceipt/v2\x00Ed25519\x00"
+    b"catchplate.attestationNonceConsumptionReceipt/v2\x00Ed25519\x00"
 )
 NONCE_CONSUME_REQUEST_DIGEST_DOMAIN = (
-    b"serverware.attestationNonceConsumeRequestDigest/v3\x00"
+    b"catchplate.attestationNonceConsumeRequestDigest/v3\x00"
 )
 RECOVERY_KEY_DOMAIN = (
-    b"serverware.attestationVerifierStateRecoveryKey/v1\x00"
+    b"catchplate.attestationVerifierStateRecoveryKey/v1\x00"
 )
 OPERATION_ID_DOMAIN = (
-    b"serverware.attestationVerifierStateOperationId/v1\x00"
+    b"catchplate.attestationVerifierStateOperationId/v1\x00"
 )
 CHALLENGE_VALUE_DOMAIN = (
-    b"serverware.attestationVerifierStateChallengeValue/v1\x00"
+    b"catchplate.attestationVerifierStateChallengeValue/v1\x00"
 )
 REQUEST_BINDING_DOMAIN = (
-    b"serverware.attestationVerifierStateRequestBinding/v1\x00"
+    b"catchplate.attestationVerifierStateRequestBinding/v1\x00"
 )
 ROLE_SEPARATION_EVIDENCE_DOMAIN = (
-    b"serverware.verifierStateRoleSeparationEvidence/v1\x00Ed25519\x00"
+    b"catchplate.verifierStateRoleSeparationEvidence/v1\x00Ed25519\x00"
 )
 STORE_ASSURANCE_EVIDENCE_DOMAIN = (
-    b"serverware.verifierStateStoreAssuranceEvidence/v1\x00Ed25519\x00"
+    b"catchplate.verifierStateStoreAssuranceEvidence/v1\x00Ed25519\x00"
 )
 NONCE_AUTHORITY_ASSURANCE_EVIDENCE_DOMAIN = (
-    b"serverware.nonceAuthorityAssuranceEvidence/v1\x00Ed25519\x00"
+    b"catchplate.nonceAuthorityAssuranceEvidence/v1\x00Ed25519\x00"
 )
 
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}\Z", re.ASCII)
@@ -621,7 +621,7 @@ def validate_assurance(
         "nonce authority rollback protection",
     )
     require(
-        assurance["apiVersion"] == "serverware.nonceAuthorityAssurance/v1"
+        assurance["apiVersion"] == "catchplate.nonceAuthorityAssurance/v1"
         and sha256_json(assurance) == require_sha256(expected_sha256, "assurance digest")
         and require_sha256(assurance["administrativeDomainSha256"], "authority administrative domain")
         and require_sha256(assurance["authorityIdentitySha256"], "authority identity")
@@ -5181,7 +5181,7 @@ class VerifierStateService:
             and challenge_issue["nonActionable"] is True
             and challenge_issue["status"] == "issued"
             and producer_invocation["apiVersion"]
-            == "serverware.publicAttestationProducerInvocation/v1"
+            == "catchplate.publicAttestationProducerInvocation/v1"
             and producer_invocation["callerNonceSha256"]
             == recovery_identity["callerNonceSha256"]
             and producer_invocation["expiresAtUnix"]

@@ -7,12 +7,12 @@
 const {createHash, randomBytes} = require('node:crypto');
 const APP = 'e55a00276cfea38d01ebea858177de182773a228c336a117aad41fdd3c84088a';
 const COMMIT = 'a30c645ef06711a4acf605c3f01f4b129d10b0f6';
-const PUBLIC = 'https://serverware-demo.example.com', PREFIX = '/api/operator-demo/';
+const PUBLIC = 'https://catchplate-demo.example.com', PREFIX = '/api/operator-demo/';
 const COLLECTIONS = ['credentials', 'applications', 'access_rules'];
 const KINDS = ['credential', 'application', 'rule'], ROUTES = ['credentials', 'applications', 'access-rules'];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const TOKEN = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
-const DUMMY = 'Bearer SERVERWARE_BROWSER_SYNTHETIC_DUMMY';
+const DUMMY = 'Bearer CATCHPLATE_BROWSER_SYNTHETIC_DUMMY';
 const SCRIPTS = ['workspace_core.js', 'workspace_github.js', 'workspace_npm.js', 'workspace_npm_publish.js', 'workspace_x.js',
   'workspace_alchemy.js', 'workspace_aws.js', 'workspace_google.js', 'workspace_google_reauthorization.js', 'workspace_resources.js',
   'workspace_applications.js', 'workspace_gmail_sdk.js', 'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_notifications.js',
@@ -23,7 +23,7 @@ const sha = value => createHash('sha256').update(value).digest('hex');
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ?
   Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
 const serial = value => JSON.stringify(stable(value));
-const resourceName = (run, index) => 'serverware-browser-' + run + '-' + KINDS[index];
+const resourceName = (run, index) => 'catchplate-browser-' + run + '-' + KINDS[index];
 const loaded = catalog => catalog?.policy?.activation === 'active' && catalog.policy.loaded_policy_hash === catalog.policy.policy_hash;
 function parameters(args) {
   need(args.length === 3 && args[0] === APP && args[1] === COMMIT && typeof args[2] === 'string' &&
@@ -46,7 +46,7 @@ function scriptRoster(portal) {
 }
 function requestAdmission(url, method, headers, body, expectedRoute) {
   need(typeof url === 'string' && (url === PUBLIC + '/' || url.startsWith(PUBLIC + PREFIX)), 'browser_origin_refused');
-  need(!['authorization', 'proxy-authorization', 'x-serverware-admin-token', 'cookie', 'transfer-encoding'].some(key => headers[key]),
+  need(!['authorization', 'proxy-authorization', 'x-catchplate-admin-token', 'cookie', 'transfer-encoding'].some(key => headers[key]),
     'browser_private_header_refused');
   const path = url.slice(PUBLIC.length);
   if (method === 'GET') need(['/', PREFIX + 'catalog'].includes(path) && !body?.length, 'browser_get_refused');
@@ -147,15 +147,15 @@ async function run(args) {
   const fs = require('node:fs'), path = require('node:path'), {execFile} = require('node:child_process');
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
   const {app, commit, output} = selected, root = path.resolve(__dirname, '..');
-  const source = path.join(path.dirname(root), 'serverware-operator-artifacts/source-' + commit);
+  const source = path.join(path.dirname(root), 'catchplate-operator-artifacts/source-' + commit);
   need(path.resolve(output) === output && fs.realpathSync(path.dirname(output)) === path.dirname(output), 'private_output_path_refused');
   const parent = fs.statSync(path.dirname(output));
   need(parent.isDirectory() && parent.uid === process.geteuid() && (parent.mode & 0o777) === 0o700, 'private_output_parent_refused');
   process.umask(0o077); fs.mkdirSync(output, {mode: 0o700});
   const runId = randomBytes(16).toString('hex'), owned = Object.fromEntries(COLLECTIONS.map(key => [key, null]));
-  const secret = 'serverware-browser-synthetic-key-' + runId;
+  const secret = 'catchplate-browser-synthetic-key-' + runId;
   const bridgeCode = fs.readFileSync(path.join(__dirname, 'operator_runtime_creation_bridge.py'), 'utf8');
-  const receipt = {schema: 'serverware.operatorRuntimeCreationBrowser/v1', ok: false, runId, appContainerId: app, sourceCommit: commit,
+  const receipt = {schema: 'catchplate.operatorRuntimeCreationBrowser/v1', ok: false, runId, appContainerId: app, sourceCommit: commit,
     boundary: 'Actual internal app UI creation and normal local revocation only. No external SSO, proxy or provider request; no history deletion.',
     driverSha256: sha(fs.readFileSync(__filename)), bridgeSha256: sha(bridgeCode), consumedAssets: [], mutations: [],
     resourceIds: owned, tokenWrittenToEvidence: false, browserTransactionVerified: false, resourcesRevoked: false,
@@ -195,8 +195,8 @@ async function run(args) {
       '"project":{{json (index .Config.Labels "com.docker.compose.project")}},"service":{{json (index .Config.Labels "com.docker.compose.service")}},"mounts":[' +
       '{{range .Mounts}}{{if eq .Destination "/app"}}{"source":{{json .Source}},"rw":{{json .RW}},"type":{{json .Type}}}{{end}}{{end}}]}';
     const actual = JSON.parse(await command('/usr/bin/docker', ['inspect', '--format', format, app]));
-    need(actual.id === app && actual.running === true && actual.health === 'healthy' && actual.project === 'serverware-operator-demo' &&
-      actual.service === 'serverware' && serial(actual.mounts) === serial([{source, rw: false, type: 'bind'}]), 'runtime_identity_changed');
+    need(actual.id === app && actual.running === true && actual.health === 'healthy' && actual.project === 'catchplate-operator-demo' &&
+      actual.service === 'catchplate' && serial(actual.mounts) === serial([{source, rw: false, type: 'bind'}]), 'runtime_identity_changed');
   }
   function documentBytes() {
     need(fs.realpathSync(source) === source && (fs.statSync(source).mode & 0o777) === 0o555, 'source_root_refused');
@@ -207,8 +207,8 @@ async function run(args) {
         info.size > 0 && info.size <= 2 * 1024 * 1024, 'consumed_asset_refused');
       const bytes = fs.readFileSync(file); observations.push({path: relative, sha256: sha(bytes)}); return bytes.toString('utf8');
     }
-    const names = scriptRoster(read('serverware/operator_demo_portal.py'));
-    const asset = name => read('serverware/operator_demo_web/' + name);
+    const names = scriptRoster(read('catchplate/operator_demo_portal.py'));
+    const asset = name => read('catchplate/operator_demo_web/' + name);
     let html = asset('index.html'); const scripts = names.map(asset).join('\n'), css = asset('style.css');
     need(!/<\/script/i.test(scripts) && !/<\/style/i.test(css), 'raw_asset_terminator');
     for (const [marker, value] of [['__OPERATOR_DEMO_STYLE__', css], ['__OPERATOR_DEMO_SCRIPT__', "(() => {\n'use strict';\n" + scripts + '\n})();\n']]) {
@@ -219,7 +219,7 @@ async function run(args) {
     return Buffer.from(html);
   }
   function catalog(value) {
-    need(value?.schema === 'serverware.operatorCatalog/v1' && value.mode === 'operator-development' && value.productionReady === false &&
+    need(value?.schema === 'catchplate.operatorCatalog/v1' && value.mode === 'operator-development' && value.productionReady === false &&
       value.hardwareVerified === false && Number.isSafeInteger(value.revision) && /^sha256:[a-f0-9]{64}$/.test(value.policy?.policy_hash || '') &&
       value.allowed_upstreams?.includes('https://demo-upstream:8443') && COLLECTIONS.every(key => Array.isArray(value[key])), 'catalog_refused');
     for (const key of COLLECTIONS) need(new Set(value[key].map(row => row.id)).size === value[key].length, 'duplicate_catalog_id');
@@ -340,7 +340,7 @@ async function run(args) {
     await identity(); expectedHtml = documentBytes(); original = await readCatalog();
     need(loaded(original), 'baseline_policy_not_loaded'); receipt.initialRevision = original.revision; receipt.initialPolicy = original.policy;
     receipt.initialCounts = Object.fromEntries(COLLECTIONS.map(key => [key, original[key].length]));
-    journal('baseline-resource-commitments.json', {schema: 'serverware.operatorBrowserBaselineRows/v1', runId, sourceCommit: commit,
+    journal('baseline-resource-commitments.json', {schema: 'catchplate.operatorBrowserBaselineRows/v1', runId, sourceCommit: commit,
       revision: original.revision, policy: original.policy,
       canonicalization: 'SHA256 of UTF-8 compact JSON with recursively sorted object keys; array order retained',
       rows: Object.fromEntries(COLLECTIONS.map(key => [key, original[key].map(row => ({id: row.id, sha256: sha(serial(row))}))]))});

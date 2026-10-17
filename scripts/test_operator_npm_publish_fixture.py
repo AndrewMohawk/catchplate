@@ -30,9 +30,9 @@ from scripts import check_operator_npm_publish as check
 
 SOURCE, BINARY, INITIALIZER, NODE, NPM = map(Path,
     ("/synthetic/source", "/synthetic/gate", "/synthetic/init.py", "/synthetic/node", "/synthetic/npm"))
-ROOT = recipe.base.SCRATCH / "serverware-npm-publish-private.Source01"
+ROOT = recipe.base.SCRATCH / "catchplate-npm-publish-private.Source01"
 SHA = "a" * 64
-PACKAGES = ("serverware-fixture-publish", "@serverware-fixture/publish")
+PACKAGES = ("catchplate-fixture-publish", "@catchplate-fixture/publish")
 TAG = "fixture"
 ARRIVALS = (("prerequisite", "GET"), ("unscoped", "GET"), ("unscoped", "PUT"),
     ("scoped", "GET"), ("scoped", "PUT"), ("outside_window", "GET"))
@@ -108,7 +108,7 @@ class NpmPublishFixtureTests(unittest.TestCase):
 
     def test_exact_network_none_recipe_and_private_mounts(self):
         config = build(); services = config["services"]
-        shared = {"serverware", "decision-gate-rs", "npm-registry", "edge", "check"}
+        shared = {"catchplate", "decision-gate-rs", "npm-registry", "edge", "check"}
         self.assertEqual(set(config), {"name", "services"})
         self.assertEqual(set(services), shared | {"initialize", "npm-pki", "basic-pki", "network"})
         recipe.validate(config, SOURCE, BINARY, INITIALIZER, ROOT, NODE, NPM, expected_binary_sha256=SHA)
@@ -126,19 +126,19 @@ class NpmPublishFixtureTests(unittest.TestCase):
             self.assertEqual(len(service["volumes"]), len({row["target"] for row in service["volumes"]}))
             for row in service["volumes"]:
                 self.assertEqual(row["bind"], {"create_host_path": False})
-                self.assertNotIn("serverware-npm-metadata-private.", row["source"])
+                self.assertNotIn("catchplate-npm-metadata-private.", row["source"])
         check = {row["target"]: row for row in services["check"]["volumes"]}
         self.assertEqual({target for target, row in check.items() if not row["read_only"]}, {"/client-work"})
         self.assertEqual(check["/client-packages"]["source"], str(ROOT / "runtime/upstream-data/npm/packages"))
-        for forbidden in ("/data", "/npm-state", "/run/secrets/serverware", "/var/run/docker.sock"):
+        for forbidden in ("/data", "/npm-state", "/run/secrets/catchplate", "/var/run/docker.sock"):
             self.assertNotIn(forbidden, check)
         mounts = {row["target"]: row for row in services["npm-registry"]["volumes"]}
         self.assertEqual({target for target, row in mounts.items() if not row["read_only"]}, {"/npm-state"})
         self.assertEqual(mounts["/npm-state"]["source"], str(ROOT / "runtime/upstream-data/npm-publish-state"))
-        for name in ("serverware", "decision-gate-rs"):
+        for name in ("catchplate", "decision-gate-rs"):
             env = services[name]["environment"]
-            self.assertEqual(json.loads(env["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"]), ["https://registry.npmjs.org"])
-            self.assertNotIn("SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS", env)
+            self.assertEqual(json.loads(env["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"]), ["https://registry.npmjs.org"])
+            self.assertNotIn("CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS", env)
         self.assertEqual(services["network"]["cap_add"], ["NET_ADMIN", "SETUID", "SETGID"])
         self.assertEqual(services["network"]["user"], "0:0")
         self.assertEqual(services["check"]["command"][-2:], ["--timeout-seconds", "180"])
@@ -147,7 +147,7 @@ class NpmPublishFixtureTests(unittest.TestCase):
         changes = [lambda s: s["check"].update(network_mode="host"),
             lambda s: s["npm-registry"].update(ports=["443:443"]),
             lambda s: s["check"].update(privileged=True),
-            lambda s: s["serverware"]["environment"].update(SERVERWARE_OPERATOR_DEMO_UPSTREAMS='["https://real.invalid"]'),
+            lambda s: s["catchplate"]["environment"].update(CATCHPLATE_OPERATOR_DEMO_UPSTREAMS='["https://real.invalid"]'),
             lambda s: s["check"]["volumes"].append(recipe.bind(Path("/private"), "/data")),
             lambda s: s["npm-registry"]["volumes"][-1].update(read_only=True),
             lambda s: s["check"].update(command=["npm", "publish"]),
@@ -158,8 +158,8 @@ class NpmPublishFixtureTests(unittest.TestCase):
             value = build(); change(value["services"])
             with self.subTest(index=index), self.assertRaises(ValueError):
                 recipe.validate(value, SOURCE, BINARY, INITIALIZER, ROOT, NODE, NPM, expected_binary_sha256=SHA)
-        for root in (Path("/tmp/serverware-npm-publish-private.Source01"), ROOT.parent,
-                ROOT.with_name("serverware-npm-metadata-private.Source01"), ROOT.with_name("serverware-npm-publish-private.short")):
+        for root in (Path("/tmp/catchplate-npm-publish-private.Source01"), ROOT.parent,
+                ROOT.with_name("catchplate-npm-metadata-private.Source01"), ROOT.with_name("catchplate-npm-publish-private.short")):
             with self.assertRaises(ValueError):
                 recipe.build(SOURCE, BINARY, INITIALIZER, root, NODE, NPM, expected_binary_sha256=SHA)
 
@@ -282,7 +282,7 @@ class NpmPublishFixtureTests(unittest.TestCase):
 
     def checker(self):
         server, saved = self.sequence()
-        observed = {"schema": "serverware.privateNpmPublishObservations/v1", "syntheticOnly": True,
+        observed = {"schema": "catchplate.privateNpmPublishObservations/v1", "syntheticOnly": True,
             "total": server.total, "attempts": deepcopy(server.attempts), "stored": deepcopy(server.stored)}
         instance = object.__new__(check.NpmPublishCheck)
         instance.credential_id = "synthetic-credential"
@@ -655,7 +655,7 @@ class NpmPublishFixtureTests(unittest.TestCase):
             window = check.closed_window(datetime(2026, 10, 10, hour, 59, 59, tzinfo=timezone.utc))
             self.assertEqual(window, {"start": "18:00", "end": "19:00"} if hour < 12 else {"start": "06:00", "end": "07:00"})
         with self.assertRaises(check.CheckFailure): check.closed_window(datetime(2026, 10, 10))
-        failure = {"schema": "serverware.privateNpmPublishClient/v1", "phase": "unscoped", "npmVersion": "11.8.0",
+        failure = {"schema": "catchplate.privateNpmPublishClient/v1", "phase": "unscoped", "npmVersion": "11.8.0",
             "pacoteVersion": "21.0.4", "registryFetchVersion": "19.1.1", "strictSSL": True,
             "extraCaPreservesDefaultRoots": True, "configuredRetries": 0, "isolatedCache": True,
             "requestRewrite": False, "force": False, "dryRun": False, "provenance": False, "ok": False,
@@ -674,7 +674,7 @@ class NpmPublishFixtureTests(unittest.TestCase):
         self.assertNotIn("E403", str(check.ClientFailure("unscoped", failure)))
 
     def test_positive_client_e400_is_closed_failure_diagnostic_not_a_publication_receipt(self):
-        failure = {"schema": "serverware.privateNpmPublishClient/v1", "phase": "scoped", "npmVersion": "11.8.0",
+        failure = {"schema": "catchplate.privateNpmPublishClient/v1", "phase": "scoped", "npmVersion": "11.8.0",
             "pacoteVersion": "21.0.4", "registryFetchVersion": "19.1.1", "strictSSL": True,
             "extraCaPreservesDefaultRoots": True, "configuredRetries": 0, "isolatedCache": True,
             "requestRewrite": False, "force": False, "dryRun": False, "provenance": False, "ok": False,
@@ -710,7 +710,7 @@ class NpmPublishFixtureTests(unittest.TestCase):
                 error = kind(canary + registry.TOKEN + registry.PLACEHOLDER)
                 record = registry.refusal_observation(5, "scoped", "PUT", "PUT", stage, error)
                 self.assertEqual(set(record), fields)
-                self.assertEqual(record, {"schema": "serverware.privateNpmPublishRefusal/v1", "ordinal": 5,
+                self.assertEqual(record, {"schema": "catchplate.privateNpmPublishRefusal/v1", "ordinal": 5,
                     "expectedCase": "scoped", "expectedMethod": "PUT", "actualMethod": "PUT",
                     "stage": stage, "errorClass": kind.__name__})
                 output = io.StringIO()
@@ -773,7 +773,7 @@ class NpmPublishFixtureTests(unittest.TestCase):
                 self.assertEqual((server.total, server.attempts), (5, [{"ordinal": 5, "accepted": False}]))
                 self.assertEqual(server.stored, [prior])
                 self.assertEqual(save.call_count, 1 if stage == "storage" else 0)
-                self.assertEqual(json.loads(output.getvalue()), {"schema": "serverware.privateNpmPublishRefusal/v1",
+                self.assertEqual(json.loads(output.getvalue()), {"schema": "catchplate.privateNpmPublishRefusal/v1",
                     "ordinal": 5, "expectedCase": "scoped", "expectedMethod": "PUT", "actualMethod": "PUT",
                     "stage": stage, "errorClass": "OSError" if stage == "storage" else "ValueError"})
                 self.assertNotIn(canary, output.getvalue())
@@ -838,7 +838,7 @@ class NpmPublishFixtureTests(unittest.TestCase):
         self.assertEqual(server.stored, [stored])
         self.assertIs(server.attempts[-1]["accepted"], False)
         for method, path in (("POST", "/-/npm/v1/security/audits"), ("PUT", "/other"),
-                ("GET", "/@serverware-fixture/publish"), ("GET", "/serverware-fixture-publish?x=1")):
+                ("GET", "/@catchplate-fixture/publish"), ("GET", "/catchplate-fixture-publish?x=1")):
             fresh = SimpleNamespace(total=0, attempts=[], stored=[])
             self.assertEqual(receiver(fresh, method, spec["package"], path=path)[0], 400)
             self.assertEqual((fresh.total, fresh.attempts), (1, [{"ordinal": 1, "accepted": False}]))
@@ -857,7 +857,7 @@ class NpmPublishFixtureTests(unittest.TestCase):
                 "'--access=public'", "'--tag=fixture'", "'--ignore-scripts=true'", "'--provenance=false'",
                 "'--force=false'", "'--dry-run=false'", "'--workspaces=false'", "'--globalconfig', '/dev/null'",
                 "'strict-ssl=true'", "'fetch-retries=0'", "timeout: 15000", "maxBuffer: 262144",
-                "NODE_EXTRA_CA_CERTS: extraCa", "HOME: clientHome", "SERVERWARE_PROXY_TOKEN: input.token",
+                "NODE_EXTRA_CA_CERTS: extraCa", "HOME: clientHome", "CATCHPLATE_PROXY_TOKEN: input.token",
                 "requestRewrite: false", "configuredRetries: 0"):
             self.assertIn(expected, job)
         self.assertEqual(job.count("spawnSync('/node'"), 1)
@@ -866,7 +866,7 @@ class NpmPublishFixtureTests(unittest.TestCase):
             self.assertNotIn(bypass, job)
         tree = ast.parse((Path(__file__).parent / "operator_npm_publish_fixture.py").read_text())
         imports = [node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
-        self.assertFalse(any(name and name.startswith("serverware") for name in imports))
+        self.assertFalse(any(name and name.startswith("catchplate") for name in imports))
         self.assertIn(b"93.184.216.34 registry.npmjs.org\n", network.HOSTS)
         self.assertEqual(network.RESOLV, b"nameserver 127.0.0.1\noptions attempts:1 timeout:1\n")
 
@@ -904,7 +904,7 @@ class NpmPublishFixtureTests(unittest.TestCase):
             value = check.failure_audit_observation(instance)
         self.assertEqual(instance.deadline, deadline)
         self.assertEqual(set(value), {"schema", "healthReads", "queueState", "counters", "auditRead", "durableEventCount"})
-        self.assertEqual(value["schema"], "serverware.privateNpmPublishFailureAudit/v1")
+        self.assertEqual(value["schema"], "catchplate.privateNpmPublishFailureAudit/v1")
         self.assertIs(type(value["healthReads"]), int)
         self.assertTrue(0 <= value["healthReads"] <= 4)
         self.assertEqual(value["healthReads"], calls["health"])
@@ -986,7 +986,7 @@ class NpmPublishFixtureTests(unittest.TestCase):
         instance.catalog = lambda: {"revision": 1, **dict.fromkeys(check.COLLECTIONS, []),
             "limits": {key: {"retained": 0} for key in check.COLLECTIONS},
             "policy": {"policy_hash": "sha256:" + SHA}, "capabilities": {"npm_publish": {
-                "schema": "serverware.operatorNpmPublish/v1", "destination_allowed": True,
+                "schema": "catchplate.operatorNpmPublish/v1", "destination_allowed": True,
                 "read_metadata_included": True, "operation_bundles": ["npm_publish_v1"], "registry_origin": registry.ORIGIN}}}
         instance.observe = lambda: {"total": 0}
         def mutate(path, payload, **kwargs):
@@ -1085,7 +1085,7 @@ const output = input.cases.map(item => {
   if (imports?.length !== 3) throw new Error('VM imports changed');
   const source = input.source.replace(/^import .* from 'node:(?:fs|crypto|child_process)';\n/gm, '');
   const phase = item.phase ?? 'outside_window', payload = Buffer.from('synthetic tarball bytes');
-  const packageName = phase === 'scoped' ? '@serverware-fixture/publish' : 'serverware-fixture-publish';
+  const packageName = phase === 'scoped' ? '@catchplate-fixture/publish' : 'catchplate-fixture-publish';
   const version = '5.0.0', hash = (algorithm, encoding = 'hex') => crypto.createHash(algorithm).update(payload).digest(encoding);
   const command = { phase, package: packageName, version, applicationId: 'a1111111-1111-4111-8111-111111111111',
     token: 'a'.repeat(43), runId: 'operator-check-' + 'a'.repeat(32), tarballSha256: 'sha256:' + hash('sha256') };
@@ -1120,7 +1120,7 @@ class NpmPublishClientDiagnosticTests(unittest.TestCase):
     """Actual JS execution under pure VM seams; not stock-client acceptance."""
 
     def evaluate(self, mode, cases):
-        node = os.environ.get("SERVERWARE_NPM_DIAGNOSTIC_NODE") or shutil.which("node")
+        node = os.environ.get("CATCHPLATE_NPM_DIAGNOSTIC_NODE") or shutil.which("node")
         self.assertTrue(node and Path(node).is_absolute(), "provide an absolute diagnostic Node executable; tests never skip")
         source = (Path(__file__).parent / "operator_npm_publish_job.mjs").read_text()
         completed = subprocess.run([node, "--max-old-space-size=64", "-e", _NODE_DIAGNOSTIC_VM],

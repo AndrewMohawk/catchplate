@@ -1,6 +1,6 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://serverware.invalid/schemas/native-shadow-retrieval-client.v1.schema.json",
+  "$id":"https://catchplate.invalid/schemas/native-shadow-retrieval-client.v1.schema.json",
   "$ref":"#/$defs/launch",
   "$defs":{
     "sha":{"$ref":"native-shadow-role-keys.v1.schema.json#/$defs/sha256"},
@@ -8,7 +8,7 @@
     "launch":{
       "type":"object","additionalProperties":false,"required":["apiVersion","keyAdmission"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeShadowRetrievalBridgeLaunch/v1"},
+        "apiVersion":{"const":"catchplate.nativeShadowRetrievalBridgeLaunch/v1"},
         "keyAdmission":{"$ref":"native-shadow-guest-admission.v1.schema.json#/$defs/launch"}
       },
       "description":"Explicit fixed native guest/parent selection only. Exact signed C9 production-bridge runtime supplies the existing Retrieval endpoint peer14, fixed server path, public key pins and activation socket name. Requires additional signed activation retrieval-peer-directory. No unverified peer, key, deadline or ready field."
@@ -17,7 +17,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","sequence","phase","frameSha256","deadlineBoottimeNs"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeShadowRetrievalClientInspection/v1"},
+        "apiVersion":{"const":"catchplate.nativeShadowRetrievalClientInspection/v1"},
         "sequence":{"type":"integer","minimum":1,"maximum":18446744073709551615},
         "phase":{"enum":["connection","before-send","after-receive","after-verify"]},
         "frameSha256":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/sha"}]},
@@ -34,7 +34,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","requestSha256","processIdentitySha256"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeShadowRetrievalClientInspection/v1"},
+        "apiVersion":{"const":"catchplate.nativeShadowRetrievalClientInspection/v1"},
         "requestSha256":{"$ref":"#/$defs/sha"},
         "processIdentitySha256":{"$ref":"#/$defs/sha"}
       },

@@ -21,9 +21,9 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
 
-from serverware import native_pilot_ordinary_transition_profile as profile
-from serverware import native_pilot_service_authority as authority
-from serverware import native_pilot_native_service_profile as native
+from catchplate import native_pilot_ordinary_transition_profile as profile
+from catchplate import native_pilot_service_authority as authority
+from catchplate import native_pilot_native_service_profile as native
 from test_native_pilot_ordinary_generations import context, build as generation_input, result as generation_result
 from test_native_pilot_ordinary_commissioning import private
 from test_native_pilot_ordinary_initial import refresh_hashes
@@ -38,7 +38,7 @@ REFERENCE_FIELDS = ("apiVersion", "authorityRole", "authorityEpochSequence", "au
 
 
 def fragment():
-    return {"apiVersion": "serverware.nativePilotOrdinaryTransitionPolicy/v1",
+    return {"apiVersion": "catchplate.nativePilotOrdinaryTransitionPolicy/v1",
         "dispatch": {role: {"initialHeadSha256": labelled("authorized-start/dispatch/" + role)} for role in (DRS, CURRENT)},
         "spool": {role: {"initialTransitionHeadSha256": labelled("authorized-start/spool/" + role)} for role in (DRS, CLEANUP, CURRENT)},
         "regularAppendCapacity": 8}
@@ -77,7 +77,7 @@ class OrdinaryTransitionControls(unittest.TestCase):
         self.assertEqual(checked, value)
         checked["dispatch"][DRS]["initialHeadSha256"] = labelled("different")
         self.assertNotEqual(checked, value)
-        for changed in (value | {"apiVersion": "serverware.nativePilotOrdinaryTransitionPolicy/v2"},
+        for changed in (value | {"apiVersion": "catchplate.nativePilotOrdinaryTransitionPolicy/v2"},
                 value | {"futureReceipt": {}}, {name: item for name, item in value.items() if name != "spool"}):
             with self.assertRaises(ValueError):
                 profile.validate_policy(changed)
@@ -105,7 +105,7 @@ class OrdinaryTransitionControls(unittest.TestCase):
         f, items = ordinary_fixture()
         for role, item in items.items():
             epoch = json.loads(f["histories"][role])["history"]["firstRetainedEpoch"]["retainedEpoch"]
-            expected = {"apiVersion": "serverware.policyCustodyAuthorityHistory/v3", "authorityRole": epoch["authorityRole"],
+            expected = {"apiVersion": "catchplate.policyCustodyAuthorityHistory/v3", "authorityRole": epoch["authorityRole"],
                 "authorityEpochSequence": epoch["authorityEpochSequence"], "authorityEpochSha256": epoch["epochSha256"],
                 "checkpointSequence": epoch["checkpointSequence"], "checkpointSha256": epoch["checkpointSha256"],
                 "checkpointAuthorityKeyId": epoch["checkpointAuthority"]["keyId"],
@@ -155,7 +155,7 @@ class OrdinaryTransitionControls(unittest.TestCase):
         value = profile._head_payload(selected, items, payloads, keys)
         epoch, public = profile.epoch_reference(items[CLEANUP]["history_raw"], runtime=items[CLEANUP]["header"], guest=items[CLEANUP]["guest"])
         self.assertEqual(set(value), set(authority.HEAD_FIELDS))
-        self.assertEqual(value["apiVersion"], "serverware.nativeSpoolHeadGrant/v3")
+        self.assertEqual(value["apiVersion"], "catchplate.nativeSpoolHeadGrant/v3")
         self.assertEqual(value["scope"], payloads["ingress"]["scope"])
         self.assertEqual(value["completion"], {"terminal": keys["terminal"], "regularAppendCapacity": 8})
         self.assertEqual(value["effects"]["cleanupAuthorityEpoch"], epoch)
@@ -166,12 +166,12 @@ class OrdinaryTransitionControls(unittest.TestCase):
 
     def test_exact_signature_frames_remain_distinct_existing_domains(self):
         raw = canonical({"syntheticFramingOnly": True, "counter": (1 << 64) - 1})
-        domains = {"head": b"serverware.nativeSpoolHeadGrant.signature/v3",
-            "cleanup": b"serverware.nativeActiveEffectCleanupGrant.signature/v1",
-            "current": b"serverware.nativeSpoolCurrentGrant.signature/v3"}
+        domains = {"head": b"catchplate.nativeSpoolHeadGrant.signature/v3",
+            "cleanup": b"catchplate.nativeActiveEffectCleanupGrant.signature/v1",
+            "current": b"catchplate.nativeSpoolCurrentGrant.signature/v3"}
         key = private("pure-transition-framing")
         for operation, domain in domains.items():
-            expected = b"serverware-signature-v1\0" + len(domain).to_bytes(8, "big") + domain + len(raw).to_bytes(8, "big") + raw
+            expected = b"catchplate-signature-v1\0" + len(domain).to_bytes(8, "big") + domain + len(raw).to_bytes(8, "big") + raw
             self.assertEqual(authority._message(operation, raw), expected)
             signature = key.sign(expected)
             key.public_key().verify(signature, authority._message(operation, raw))

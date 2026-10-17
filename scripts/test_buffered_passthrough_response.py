@@ -22,8 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from mitmproxy import http
-from serverware import adapters, policy_engine
-from serverware.policy_bundle import PolicyBundleError, compile_policy_bundle
+from catchplate import adapters, policy_engine
+from catchplate.policy_bundle import PolicyBundleError, compile_policy_bundle
 
 
 def normalized_json(value):
@@ -48,12 +48,12 @@ def projected():
 
 
 def bundle(response=None):
-    return {"apiVersion": "serverware.policy/v1", "kind": "PolicyBundle",
+    return {"apiVersion": "catchplate.policy/v1", "kind": "PolicyBundle",
         "metadata": {"id": "buffered-json-test", "sequence": 1, "rollbackEpoch": 1},
         "defaults": {"action": "deny", "failMode": "closed", "unknownHosts": "block",
             "unknownPaths": "block", "validationFailure": "block"},
         "principals": [{"id": "agent:buffered-fixture", "sourceCidrs": ["127.0.0.1/32"],
-            "requiredHeaders": {"X-Serverware-Agent": "buffered-fixture"}}],
+            "requiredHeaders": {"X-Catchplate-Agent": "buffered-fixture"}}],
         "credentials": [{"id": "credential:buffered-fixture", "credentialType": "static",
             "provider": "fixture", "providerSubject": "fixture-subject",
             "injection": {"type": "bearer", "header": "Authorization"}}],
@@ -91,7 +91,7 @@ def flow(body, *, status=200, fields=None):
     response.headers = http.Headers(fields)
     response.raw_content = body
     return SimpleNamespace(response=response, request=SimpleNamespace(method="GET"),
-        metadata={"serverware_operation": {"operation": "fixture.read"}})
+        metadata={"catchplate_operation": {"operation": "fixture.read"}})
 
 
 class BufferedPassthroughResponseTests(unittest.TestCase):

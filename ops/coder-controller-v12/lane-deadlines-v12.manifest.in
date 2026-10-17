@@ -1,5 +1,5 @@
 document_version=12
-profile_id=serverware-coder-five-lane-v12
+profile_id=catchplate-coder-five-lane-v12
 lane.build.deadline_ms=@BUILD_DEADLINE_MS@
 lane.unit.deadline_ms=@UNIT_DEADLINE_MS@
 lane.integration.deadline_ms=@INTEGRATION_DEADLINE_MS@

@@ -21,10 +21,10 @@ except ModuleNotFoundError:
     import operator_catalog_feature_checks as features
 
 
-SOURCE = Path("/srv/catchplate-fast/projects/serverware-operator-workspace")
-BINARY = Path("/srv/catchplate-fast/projects/serverware-operator-artifacts/sha256-" + fixture.BINARY_SHA256 + "/serverware-decision-gate")
-INITIALIZER = Path("/srv/catchplate-fast/projects/serverware-operator-audit-integration/scripts/private_operator_audit/initialize.py")
-ROOT = fixture.SCRATCH / "serverware-catalog-private.Review01"
+SOURCE = Path("/srv/catchplate-fast/projects/catchplate-operator-workspace")
+BINARY = Path("/srv/catchplate-fast/projects/catchplate-operator-artifacts/sha256-" + fixture.BINARY_SHA256 + "/catchplate-decision-gate")
+INITIALIZER = Path("/srv/catchplate-fast/projects/catchplate-operator-audit-integration/scripts/private_operator_audit/initialize.py")
+ROOT = fixture.SCRATCH / "catchplate-catalog-private.Review01"
 
 
 class ConfigTests(unittest.TestCase):
@@ -35,8 +35,8 @@ class ConfigTests(unittest.TestCase):
         fixture.validate(value, SOURCE, BINARY, INITIALIZER, ROOT)
 
     def test_exact_internal_services_and_addresses(self):
-        self.assertEqual(set(self.config["services"]), {"initialize", "serverware", "demo-upstream", "decision-gate-rs"})
-        self.assertEqual(self.config["services"]["serverware"]["networks"]["fixture"]["ipv4_address"], "172.16.249.51")
+        self.assertEqual(set(self.config["services"]), {"initialize", "catchplate", "demo-upstream", "decision-gate-rs"})
+        self.assertEqual(self.config["services"]["catchplate"]["networks"]["fixture"]["ipv4_address"], "172.16.249.51")
         self.assertEqual(self.config["services"]["decision-gate-rs"]["networks"]["fixture"]["ipv4_address"], "172.16.249.52")
         self.assertEqual(self.config["services"]["initialize"]["network_mode"], "none")
         self.assertTrue(self.config["networks"]["fixture"]["internal"])
@@ -72,24 +72,24 @@ class ConfigTests(unittest.TestCase):
             self.check(config)
 
     def test_live_mount_and_writable_source_refused(self):
-        for volume in (fixture.bind(Path("/srv/catchplate-fast/homelab_data/serverware-operator-demo"), "/data"),
+        for volume in (fixture.bind(Path("/srv/catchplate-fast/homelab_data/catchplate-operator-demo"), "/data"),
                        fixture.bind(SOURCE, "/app", False)):
             config = deepcopy(self.config)
-            config["services"]["serverware"]["volumes"].append(volume)
+            config["services"]["catchplate"]["volumes"].append(volume)
             with self.assertRaises(ValueError):
                 self.check(config)
 
     def test_control_destination_image_and_relay_refused(self):
         config = deepcopy(self.config)
-        config["services"]["decision-gate-rs"]["environment"]["SERVERWARE_CONTROL_PLANE_AUDIT_URL"] = "http://elsewhere/audit"
+        config["services"]["decision-gate-rs"]["environment"]["CATCHPLATE_CONTROL_PLANE_AUDIT_URL"] = "http://elsewhere/audit"
         with self.assertRaises(ValueError):
             self.check(config)
         config = deepcopy(self.config)
-        config["services"]["serverware"]["image"] = "unreviewed:latest"
+        config["services"]["catchplate"]["image"] = "unreviewed:latest"
         with self.assertRaises(ValueError):
             self.check(config)
         config = deepcopy(self.config)
-        config["services"]["serverware"]["command"] = ["python", "relay.py"]
+        config["services"]["catchplate"]["command"] = ["python", "relay.py"]
         with self.assertRaises(ValueError):
             self.check(config)
 
@@ -380,7 +380,7 @@ class FeatureTests(unittest.TestCase):
             # Exercise the real call site's target, not merely the pure helper.
             self.assertTrue(path.startswith("/echo?catalogProof="))
             self.assertEqual(path.count("&expectedAuthorizationSha256=sha256%3A"), 1)
-            if supplied != "Bearer serverware-placeholder-operator-check-test":
+            if supplied != "Bearer catchplate-placeholder-operator-check-test":
                 code = "credential_existing_header_missing" if supplied is None else "credential_existing_header_mismatch"
                 return 403, {"allowed": False, "action": "deny", "payload": {"error": code}}, b"{}"
             value.dispatches += 1

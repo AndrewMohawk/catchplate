@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-import serverware_source_tree
+import catchplate_source_tree
 import verify_reproducible_builds as verifier
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -104,13 +104,13 @@ def write_rootfs(
     duplicate_launcher: bool = False,
 ) -> None:
     actions: list[tuple[str, tuple[Any, ...]]] = []
-    if service == "serverware-control":
+    if service == "catchplate-control":
         actions.extend(
             [
                 ("directory", ("app",)),
-                ("directory", ("app/serverware",)),
-                ("file", ("app/serverware/app.py", b"print('serverware')\n", 0o644, {})),
-                ("symlink", ("app/current", "serverware")),
+                ("directory", ("app/catchplate",)),
+                ("file", ("app/catchplate/app.py", b"print('catchplate')\n", 0o644, {})),
+                ("symlink", ("app/current", "catchplate")),
             ]
         )
     else:
@@ -129,7 +129,7 @@ def write_rootfs(
                         {"security.capability": "cap_net_bind_service=ep"},
                     ),
                 ),
-                ("hardlink", ("usr/local/bin/serverware-decision-gate-copy", verifier.RUST_BINARY_PATH)),
+                ("hardlink", ("usr/local/bin/catchplate-decision-gate-copy", verifier.RUST_BINARY_PATH)),
             ]
         )
         if launcher is not None:
@@ -183,14 +183,14 @@ def build_artifact(
 ) -> dict[str, Any]:
     images = [
         {
-            "service": "serverware-control",
-            "tag": "serverware/control:production-local",
+            "service": "catchplate-control",
+            "tag": "catchplate/control:production-local",
             "dockerfile": "Dockerfile.production",
             "image_id": digest("a"),
         },
         {
-            "service": "serverware-decision-gate",
-            "tag": "serverware/decision-gate:production-local",
+            "service": "catchplate-decision-gate",
+            "tag": "catchplate/decision-gate:production-local",
             "dockerfile": "data-plane/decision-gate-rs/Dockerfile.production",
             "image_id": gate_image_id,
             "binary_digest": binary_digest,
@@ -301,7 +301,7 @@ def assert_success(
     parsed = load_and_compare(left, right, source_digest, trusted_builders)
     if parsed.get("ok") is not True or parsed.get("reproducible") is not True:
         raise AssertionError(f"matching clean-build manifests were rejected: {parsed}")
-    if parsed.get("apiVersion") != "serverware.reproducibleBuildVerification/v3":
+    if parsed.get("apiVersion") != "catchplate.reproducibleBuildVerification/v3":
         raise AssertionError(f"success result used the wrong verification contract: {parsed.get('apiVersion')}")
     scope = parsed.get("scope") or {}
     if scope.get("hardware_proof") is not False or scope.get("independent_execution_proven") is not True:
@@ -325,7 +325,7 @@ def assert_success(
     images = parsed.get("images") or []
     if {image.get("service") for image in images} != set(verifier.EXPECTED_SERVICES):
         raise AssertionError(f"success result did not bind both production images: {images}")
-    gate = next(image for image in images if image["service"] == "serverware-decision-gate")
+    gate = next(image for image in images if image["service"] == "catchplate-decision-gate")
     if gate.get("rust_binary_sha256") != verifier.sha256_bytes(b"same-rust-binary"):
         raise AssertionError(f"success result did not bind the extracted Rust binary: {gate}")
     if gate.get("launcher_binary_sha256") != verifier.sha256_bytes(b"same-static-launcher"):
@@ -349,7 +349,7 @@ def assert_forged_content_rejected(
     signing_key: Ed25519PrivateKey,
 ) -> None:
     forged = copy.deepcopy(base)
-    gate = next(image for image in forged["images"] if image["service"] == "serverware-decision-gate")
+    gate = next(image for image in forged["images"] if image["service"] == "catchplate-decision-gate")
     binary_entry = next(entry for entry in gate["content"]["entries"] if entry["path"] == verifier.RUST_BINARY_PATH)
     binary_entry["sha256"] = digest("9")
     gate["declared_rust_binary_sha256"] = digest("9")
@@ -376,7 +376,7 @@ def assert_forged_launcher_rejected(
     signing_key: Ed25519PrivateKey,
 ) -> None:
     forged = copy.deepcopy(base)
-    gate = next(image for image in forged["images"] if image["service"] == "serverware-decision-gate")
+    gate = next(image for image in forged["images"] if image["service"] == "catchplate-decision-gate")
     launcher_entry = next(
         entry for entry in gate["content"]["entries"] if entry["path"] == verifier.LAUNCHER_BINARY_PATH
     )
@@ -409,7 +409,7 @@ def assert_forged_launch_authority_rejected(
         replacement = digest(str(index))
         forged["source"][field] = replacement
         gate = next(
-            image for image in forged["images"] if image["service"] == "serverware-decision-gate"
+            image for image in forged["images"] if image["service"] == "catchplate-decision-gate"
         )
         gate[field] = replacement
         resign_execution_manifest(forged, builder_id, signing_key)
@@ -462,7 +462,7 @@ def assert_forged_image_id_rejected(
     signing_key: Ed25519PrivateKey,
 ) -> None:
     forged = copy.deepcopy(base)
-    gate = next(image for image in forged["images"] if image["service"] == "serverware-decision-gate")
+    gate = next(image for image in forged["images"] if image["service"] == "catchplate-decision-gate")
     gate["image_id"] = digest("8")
     resign_execution_manifest(forged, builder_id, signing_key)
     verifier.validate_manifest(forged)
@@ -507,7 +507,7 @@ def assert_schema_forgery_rejected(base: dict[str, Any]) -> None:
 
     missing_launcher = copy.deepcopy(base)
     gate = next(
-        image for image in missing_launcher["images"] if image["service"] == "serverware-decision-gate"
+        image for image in missing_launcher["images"] if image["service"] == "catchplate-decision-gate"
     )
     gate.pop("launcher_binary_sha256")
     refresh_evidence_digest(missing_launcher)
@@ -515,7 +515,7 @@ def assert_schema_forgery_rejected(base: dict[str, Any]) -> None:
 
     missing_authority = copy.deepcopy(base)
     gate = next(
-        image for image in missing_authority["images"] if image["service"] == "serverware-decision-gate"
+        image for image in missing_authority["images"] if image["service"] == "catchplate-decision-gate"
     )
     gate.pop("launch_authority_key_id")
     refresh_evidence_digest(missing_authority)
@@ -523,7 +523,7 @@ def assert_schema_forgery_rejected(base: dict[str, Any]) -> None:
 
     mismatched_authority = copy.deepcopy(base)
     gate = next(
-        image for image in mismatched_authority["images"] if image["service"] == "serverware-decision-gate"
+        image for image in mismatched_authority["images"] if image["service"] == "catchplate-decision-gate"
     )
     gate["launch_authority_root_sha256"] = digest("9")
     refresh_evidence_digest(mismatched_authority)
@@ -853,10 +853,10 @@ def assert_replayed_execution_nonce_rejected(
 
 def main() -> None:
     expected_versions = {
-        "build": "serverware.productionImagesBuild/v2",
-        "manifest": "serverware.reproducibleBuildManifest/v3",
-        "verification": "serverware.reproducibleBuildVerification/v3",
-        "execution": "serverware.buildExecutionStatement/v1",
+        "build": "catchplate.productionImagesBuild/v2",
+        "manifest": "catchplate.reproducibleBuildManifest/v3",
+        "verification": "catchplate.reproducibleBuildVerification/v3",
+        "execution": "catchplate.buildExecutionStatement/v1",
     }
     actual_versions = {
         "build": verifier.BUILD_API_VERSION,
@@ -870,13 +870,13 @@ def main() -> None:
     binary_digest = verifier.sha256_bytes(binary)
     launcher = b"same-static-launcher"
     launcher_digest = verifier.sha256_bytes(launcher)
-    source_digest = serverware_source_tree.source_tree_digest(ROOT)
+    source_digest = catchplate_source_tree.source_tree_digest(ROOT)
     left_builder = "builder.example/alpha"
     right_builder = "builder.example/bravo"
     left_key = Ed25519PrivateKey.generate()
     right_key = Ed25519PrivateKey.generate()
     attacker_key = Ed25519PrivateKey.generate()
-    with tempfile.TemporaryDirectory(prefix="serverware-reproducibility-test-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="catchplate-reproducibility-test-") as temp_dir:
         temp = Path(temp_dir)
         left_public_key = temp / "left-builder.pub.pem"
         right_public_key = temp / "right-builder.pub.pem"
@@ -991,7 +991,7 @@ def main() -> None:
             invalid_gate_archive = temp / f"{fixture_name}-launcher-gate.tar"
             write_rootfs(
                 invalid_gate_archive,
-                "serverware-decision-gate",
+                "catchplate-decision-gate",
                 binary=binary,
                 launcher=fixture_launcher,
                 launcher_kind=fixture_kind,
@@ -1001,7 +1001,7 @@ def main() -> None:
                 runtime_marker=b"invalid-runtime-hosts\n",
             )
             invalid_archives = dict(right_archives)
-            invalid_archives["serverware-decision-gate"] = invalid_gate_archive
+            invalid_archives["catchplate-decision-gate"] = invalid_gate_archive
             assert_capture_rejected(
                 right_build,
                 invalid_archives,
@@ -1036,14 +1036,14 @@ def main() -> None:
         verifier.validate_manifest(left_manifest)
         verifier.validate_manifest(right_manifest)
         for manifest in (left_manifest, right_manifest):
-            if manifest.get("apiVersion") != "serverware.reproducibleBuildManifest/v3":
+            if manifest.get("apiVersion") != "catchplate.reproducibleBuildManifest/v3":
                 raise AssertionError(f"capture manifest used the wrong contract: {manifest.get('apiVersion')}")
             if (
                 manifest.get("build_execution", {}).get("statement", {}).get("apiVersion")
-                != "serverware.buildExecutionStatement/v1"
+                != "catchplate.buildExecutionStatement/v1"
             ):
                 raise AssertionError(f"capture manifest omitted the execution statement: {manifest}")
-            gate = next(image for image in manifest["images"] if image["service"] == "serverware-decision-gate")
+            gate = next(image for image in manifest["images"] if image["service"] == "catchplate-decision-gate")
             if gate.get("launcher_binary_sha256") != launcher_digest:
                 raise AssertionError(f"signed capture manifest omitted the launcher binary digest: {gate}")
             for field, expected in (

@@ -9,7 +9,7 @@ use std::io::Read;
 use std::os::fd::{AsFd,AsRawFd,OwnedFd};
 const MAX:usize=32768;
 const ROLES:[&str;2]=["publicationGenesisRetrieval","publicationGenesis"];
-const DOMAIN:&str="serverware.nativePublicationGenesisEndpointRelease.signature/v1";
+const DOMAIN:&str="catchplate.nativePublicationGenesisEndpointRelease.signature/v1";
 const ACTIVATION:[&[&str];2]=[&["retrieval-listener","retrieval-objects","ledger-spool-store","ledger-spool-lock"],&["publication-reconciliation-listener"]];
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -55,7 +55,7 @@ impl Owner{
         let admission=Admission::open()?;let watchdog=Watchdog::arm_genesis(&admission)?;
         let configuration=Original::publication_genesis_endpoints().map_err(fail)?;
         let raw=configuration.read(MAX).map_err(fail)?.to_vec();let config:Configuration=exact(&raw)?;
-        require(config.api_version=="serverware.nativePublicationGenesisEndpoints/v1"
+        require(config.api_version=="catchplate.nativePublicationGenesisEndpoints/v1"
             && config.parent_configuration_sha256==admission.configuration_sha()
             && config.parent_precreation_sha256==admission.precreation_sha()
             && config.services.len()==2 && ROLES.iter().all(|role|config.services.contains_key(*role)))?;
@@ -67,11 +67,11 @@ impl Owner{
         let mut executable=Vec::new();
         std::io::Read::take(std::fs::File::open("/proc/self/exe").map_err(fail)?,64*1024*1024+1)
             .read_to_end(&mut executable).map_err(fail)?;
-        require(executable.len()<=64*1024*1024 && start.api_version=="serverware.nativePublicationGenesisEndpointControl/v1"
+        require(executable.len()<=64*1024*1024 && start.api_version=="catchplate.nativePublicationGenesisEndpointControl/v1"
             && start.configuration_sha256==Sha256Digest::compute(&raw)
             && start.controller_executable_sha256==Sha256Digest::compute(&executable))?;
-        let launch_target=Target::open("/etc/serverware/native-shadow-guest-launch.json")?;
-        let image_target=Target::open("/opt/serverware/native-shadow-custody-runtime.squashfs")?;
+        let launch_target=Target::open("/etc/catchplate/native-shadow-guest-launch.json")?;
+        let image_target=Target::open("/opt/catchplate/native-shadow-custody-runtime.squashfs")?;
         let mut executables=Vec::new();
         for role in ROLES{executables.push(Executable::create_pinned(&config.services[role].executable_sha256)?);}
         process::isolate_mounts()?;
@@ -116,7 +116,7 @@ impl Owner{
             services.insert((*role).into(),ChildObservation{process_id,start_time_ticks,pidfd_device:stat.st_dev,
                 pidfd_inode:stat.st_ino,executable:self.executables[index].observation()?});
         }
-        self.observation=canonical_json_bytes(&Observation{api_version:"serverware.nativePublicationGenesisEndpointObservation/v1",
+        self.observation=canonical_json_bytes(&Observation{api_version:"catchplate.nativePublicationGenesisEndpointObservation/v1",
             configuration_sha256:Sha256Digest::compute(&self.raw),parent_configuration_sha256:self.admission.configuration_sha(),
             parent_precreation_sha256:self.admission.precreation_sha(),invocation_id:self.admission.invocation().into(),services})?;
         loop{self.check(true)?;
@@ -129,12 +129,12 @@ impl Owner{
     fn status(&self,api:&str)->Status{Status{api_version:api.into(),configuration_sha256:Sha256Digest::compute(&self.raw),
         observation_sha256:Sha256Digest::compute(&self.observation),release_sha256:self.release.as_ref().map(|v|Sha256Digest::compute(v))}}
     fn stop(&self,packet:&retrieval_peer::Packet)->Result<(),ShadowError>{
-        require(packet.rights.is_empty() && canonical_json_bytes(&self.status("serverware.nativePublicationGenesisEndpointsStop/v1"))?==packet.bytes)
+        require(packet.rights.is_empty() && canonical_json_bytes(&self.status("catchplate.nativePublicationGenesisEndpointsStop/v1"))?==packet.bytes)
     }
     fn release(&mut self,packet:retrieval_peer::Packet)->Result<(),ShadowError>{
         require(self.release.is_none() && packet.rights.len()==5)?;self.release=Some(packet.bytes);
         let signed:Release=exact(self.release.as_ref().ok_or(ShadowError::BindingDrift)?)?;let p=&signed.payload;
-        require(signed.api_version=="serverware.nativePublicationGenesisEndpointRelease/v1"
+        require(signed.api_version=="catchplate.nativePublicationGenesisEndpointRelease/v1"
             && p.configuration_sha256==Sha256Digest::compute(&self.raw)
             && p.parent_configuration_sha256==self.admission.configuration_sha() && p.parent_precreation_sha256==self.admission.precreation_sha()
             && p.observation_sha256==Sha256Digest::compute(&self.observation) && p.invocation_id==self.admission.invocation()
@@ -188,7 +188,7 @@ impl Owner{
                 .ok_or(ShadowError::BindingDrift)).collect::<Result<Vec<_>,_>>()?;
             self.children[index].release_pair(p.launch.descriptor(),p.image_original.descriptor(),p.remote.as_fd(),&ordered)?;
         }
-        self.send("serverware.nativePublicationGenesisEndpointsReleased/v1",true)
+        self.send("catchplate.nativePublicationGenesisEndpointsReleased/v1",true)
     }
     fn send(&self,api:&str,live:bool)->Result<(),ShadowError>{
         let raw=canonical_json_bytes(&self.status(api))?;
@@ -222,6 +222,6 @@ pub(super) fn run(output:genesis_controller::Output)->!{
     let mut owner=match Owner::prepare(control){Ok(value)=>value,Err(_)=>unsafe{libc::_exit(1)}};
     let result=owner.operate();
     if owner.close().is_err(){let _retained=std::mem::ManuallyDrop::new((owner,output,result));loop{unsafe{libc::pause();}}}
-    let result=result.and_then(|()|owner.send("serverware.nativePublicationGenesisEndpointsStopped/v1",false));
+    let result=result.and_then(|()|owner.send("catchplate.nativePublicationGenesisEndpointsStopped/v1",false));
     let status=if result.is_ok(){0}else{1};drop(owner);drop(output);unsafe{libc::_exit(status)}
 }

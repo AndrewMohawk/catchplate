@@ -3,7 +3,7 @@
 //! unchanged child service/key/NSM/journal admission confer all authority.
 use super::*;
 use crate::policy_shadow::policy_custody::services::guest;
-use serverware_decision_gate::native_policy_activation_transport::ChannelVersion;
+use catchplate_decision_gate::native_policy_activation_transport::ChannelVersion;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 #[path = "activation_receiver_install.rs"]
 mod install;
@@ -113,7 +113,7 @@ impl Completed {
         // final unchanged startup recheck, not merely through the last write.
         let (launch_sha256, installed, installation_timer) = match completion {
             Completion::Legacy(completion) => {
-                require(completion.api_version == "serverware.nativeShadowActivationReceiverCompletion/v1"
+                require(completion.api_version == "catchplate.nativeShadowActivationReceiverCompletion/v1"
                     && completion.observation_sha256 == *observation_sha)?;
                 (completion.launch_sha256, None, None)
             }
@@ -157,7 +157,7 @@ impl Completed {
             time_namespace_inode: p.time_namespace_inode, issued_at_boottime_ns: p.issued_at_boottime_ns.clone(),
             startup_deadline_boottime_ns: p.startup_deadline_boottime_ns.clone(),
             lifetime_deadline_boottime_ns: p.lifetime_deadline_boottime_ns.clone(), invocation_id: p.invocation_id.clone() };
-        require(service.payload.api_version == "serverware.nativeShadowActivationServiceAssignment/v2"
+        require(service.payload.api_version == "catchplate.nativeShadowActivationServiceAssignment/v2"
             && service.payload.purpose == "native-policy-activation-publication" && service.payload.guest == binding)?;
         service.signature.decode()?;
         cold.require_delivery(&files.payload)?; files.check_preparation().map_err(fail)?;

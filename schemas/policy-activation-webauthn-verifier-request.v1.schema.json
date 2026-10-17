@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-activation-webauthn-verifier-request.v1.schema.json",
-  "title": "Serverware Policy Activation WebAuthn Verifier Request v1",
+  "$id": "https://catchplate.invalid/schemas/policy-activation-webauthn-verifier-request.v1.schema.json",
+  "title": "Catchplate Policy Activation WebAuthn Verifier Request v1",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "operation", "assertionEvidenceSha256", "readinessCoreChallengeSha256", "verificationPolicySha256", "verifierExecutableSha256"],
   "properties": {
-    "apiVersion": {"const": "serverware.policyActivationWebAuthnVerificationRequest/v1"},
+    "apiVersion": {"const": "catchplate.policyActivationWebAuthnVerificationRequest/v1"},
     "operation": {"const": "resolve-and-verify-assertion-by-digest"},
     "assertionEvidenceSha256": {"$ref": "#/$defs/sha256"},
     "readinessCoreChallengeSha256": {"$ref": "#/$defs/sha256"},

@@ -75,25 +75,25 @@ use super::super::state_authority::topology::{
 };
 
 const PROVIDER_GENERATION_SIGNATURE_DOMAIN_NAME: &str =
-    "serverware.responseV2.providerGeneration.signature/v1";
+    "catchplate.responseV2.providerGeneration.signature/v1";
 const PROVIDER_GENERATION_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.responseV2.providerGeneration.signature/v1";
+    b"catchplate.responseV2.providerGeneration.signature/v1";
 const TOPOLOGY_MANIFEST_API_VERSION: &str =
-    "serverware.responseV2.topologyManifest/v1";
+    "catchplate.responseV2.topologyManifest/v1";
 const TOPOLOGY_MANIFEST_KIND: &str =
-    "ServerwareResponseV2TopologyManifest";
+    "CatchplateResponseV2TopologyManifest";
 const TOPOLOGY_MANIFEST_SIGNATURE_DOMAIN_NAME: &str =
-    "serverware.responseV2.topologyManifest.signature/v1";
+    "catchplate.responseV2.topologyManifest.signature/v1";
 const TOPOLOGY_MANIFEST_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.responseV2.topologyManifest.signature/v1";
+    b"catchplate.responseV2.topologyManifest.signature/v1";
 const TEE_VERIFICATION_REQUEST_API_VERSION: &str =
-    "serverware.responseObservationV2AttestationVerifyRequest/v2";
+    "catchplate.responseObservationV2AttestationVerifyRequest/v2";
 const TEE_VERIFICATION_RESULT_API_VERSION: &str =
-    "serverware.responseObservationV2AttestationVerifyResult/v2";
+    "catchplate.responseObservationV2AttestationVerifyResult/v2";
 const TEE_GENERATION_REPORT_DOMAIN: &[u8] =
-    b"serverware.response-v2/tee-generation-report/v1\0";
+    b"catchplate.response-v2/tee-generation-report/v1\0";
 const NITRO_EVIDENCE_FORMAT: &str =
-    "serverware.teeEvidence.nitroDocumentBundle.cbor/v1";
+    "catchplate.teeEvidence.nitroDocumentBundle.cbor/v1";
 const LOCAL_TEE_TOPOLOGY_PROFILE: &str =
     "local-single-node-1-of-1";
 #[cfg(target_os = "linux")]
@@ -481,7 +481,7 @@ fn sealed_authenticated_generation_verifier_snapshot(
     command: &PinnedGenerationVerifierCommand,
 ) -> Result<File, String> {
     let bytes = read_authenticated_generation_verifier_bytes(command)?;
-    let name = CString::new("serverware-tee-generation-verifier")
+    let name = CString::new("catchplate-tee-generation-verifier")
         .expect("static memfd name contains no NUL");
     let fd = unsafe {
         libc::memfd_create(
@@ -911,27 +911,27 @@ fn contains_integer_negative_zero(input: &[u8]) -> bool {
 }
 
 const ROLE_MANIFEST_API_VERSION: &str =
-    "serverware.responseV2.roleManifest/v1";
-const ROLE_MANIFEST_KIND: &str = "ServerwareResponseV2RoleManifest";
+    "catchplate.responseV2.roleManifest/v1";
+const ROLE_MANIFEST_KIND: &str = "CatchplateResponseV2RoleManifest";
 const ROLE_MANIFEST_SIGNATURE_DOMAIN_NAME: &str =
-    "serverware.responseV2.roleManifest.signature/v1";
+    "catchplate.responseV2.roleManifest.signature/v1";
 const ROLE_MANIFEST_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.responseV2.roleManifest.signature/v1";
+    b"catchplate.responseV2.roleManifest.signature/v1";
 const KEY_MANIFEST_API_VERSION: &str =
-    "serverware.responseV2.keyManifest/v1";
-const KEY_MANIFEST_KIND: &str = "ServerwareResponseV2KeyManifest";
+    "catchplate.responseV2.keyManifest/v1";
+const KEY_MANIFEST_KIND: &str = "CatchplateResponseV2KeyManifest";
 const KEY_MANIFEST_SIGNATURE_DOMAIN_NAME: &str =
-    "serverware.responseV2.keyManifest.signature/v1";
+    "catchplate.responseV2.keyManifest.signature/v1";
 const KEY_MANIFEST_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.responseV2.keyManifest.signature/v1";
+    b"catchplate.responseV2.keyManifest.signature/v1";
 const BOOTSTRAP_READINESS_API_VERSION: &str =
-    "serverware.responseV2.generationBootstrapReadiness/v1";
+    "catchplate.responseV2.generationBootstrapReadiness/v1";
 const GENERATION_ACTIVATION_CONTEXT_API_VERSION: &str =
-    "serverware.responseV2.generationActivationContext/v2";
+    "catchplate.responseV2.generationActivationContext/v2";
 const GENERATION_ACTIVATION_CONTEXT_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.responseV2.generationActivationContext.signature/v2";
+    b"catchplate.responseV2.generationActivationContext.signature/v2";
 const GENERATION_ACTIVATION_TIMEOUT_ENV: &str =
-    "SERVERWARE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS";
+    "CATCHPLATE_RESPONSE_V2_GENERATION_ACTIVATION_TIMEOUT_MS";
 const DEFAULT_GENERATION_ACTIVATION_TIMEOUT_MS: u64 = 120_000;
 const MAX_GENERATION_ACTIVATION_TIMEOUT_MS: u64 = 600_000;
 const MAX_BOOTSTRAP_CREDENTIAL_BYTES: u64 = 4 * 1024 * 1024;
@@ -2822,7 +2822,7 @@ pub(crate) fn logical_role_key_root_sha256(
     let mut hasher = Sha256::new();
     frame(
         &mut hasher,
-        b"serverware.response-v2/logical-role-key-root/v1",
+        b"catchplate.response-v2/logical-role-key-root/v1",
     );
     frame(&mut hasher, service_role.as_str().as_bytes());
     for role in roles {
@@ -2842,7 +2842,7 @@ pub(crate) fn role_identity_root_sha256(
     let mut hasher = Sha256::new();
     frame(
         &mut hasher,
-        b"serverware.response-v2/role-identity-root/v2",
+        b"catchplate.response-v2/role-identity-root/v2",
     );
     for service_role in CustodyServiceRole::ALL {
         frame(&mut hasher, service_role.as_str().as_bytes());

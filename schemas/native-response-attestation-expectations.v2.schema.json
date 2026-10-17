@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-response-attestation-expectations.v2.schema.json",
-  "title": "Serverware native response attestation expectations v2",
+  "$id": "https://catchplate.invalid/schemas/native-response-attestation-expectations.v2.schema.json",
+  "title": "Catchplate native response attestation expectations v2",
   "description": "Independently pinned, closed 17-field opt-in to native-principal response statements. At most 16 KiB of original JSON. Shape is not signature, Nitro, HTTP, policy or action authority. Runtime rejects duplicate keys and checks canonical base64url, byte bounds, complete PCR pins and expectedEif equality to PCR0. V1 remains old-family-only and rejects statementProfile; v2 never falls back to an old family.",
   "type": "object",
   "additionalProperties": false,
@@ -13,8 +13,8 @@
     "controlPlaneResponseSigningKeyId", "nonce"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeResponseAttestationExpectations/v2"},
-    "statementProfile": {"const": "serverware.nativeResponseStatements/v1"},
+    "apiVersion": {"const": "catchplate.nativeResponseAttestationExpectations/v2"},
+    "statementProfile": {"const": "catchplate.nativeResponseStatements/v1"},
     "releaseRecordSha256": {"$ref": "#/$defs/sha256"},
     "policyHash": {"$ref": "#/$defs/sha256"},
     "configurationSha256": {"$ref": "#/$defs/sha256"},

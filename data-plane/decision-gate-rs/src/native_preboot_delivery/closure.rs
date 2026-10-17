@@ -6,11 +6,11 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use zeroize::Zeroizing;
 
-const ROOT: &str = "/run/serverware-preboot";
-const INVENTORY: &str = "/run/serverware-role-key-provisioning/inventory.enc.json";
-const RESPONSE: &str = "/run/serverware-preboot/response-v2.json";
-const ROLE_EXECUTABLE: &str = "/usr/local/bin/serverware-response-v2-guest-role";
-const WORKER: &str = "/usr/local/bin/serverware-native-shadow-worker";
+const ROOT: &str = "/run/catchplate-preboot";
+const INVENTORY: &str = "/run/catchplate-role-key-provisioning/inventory.enc.json";
+const RESPONSE: &str = "/run/catchplate-preboot/response-v2.json";
+const ROLE_EXECUTABLE: &str = "/usr/local/bin/catchplate-response-v2-guest-role";
+const WORKER: &str = "/usr/local/bin/catchplate-native-shadow-worker";
 const ROLES: [&str; 7] = ["custody-router", "state-authority", "credential-transport",
     "policy-proof-verifier", "immutable-artifact-ledger", "release-attestor-publisher", "cleanup-watchdog"];
 
@@ -41,7 +41,7 @@ fn array<'a>(value: &'a Value, name: &str, maximum: usize) -> Result<&'a [Value]
 }
 fn canonical(raw: &[u8], maximum: usize) -> Result<Value, String> {
     let value = json::parse(raw, maximum)?;
-    ensure(serverware_decision_gate::canonical_json_bytes(&value)
+    ensure(catchplate_decision_gate::canonical_json_bytes(&value)
         .map_err(|_| "preboot canonical original unavailable")? == raw,
         "preboot guest original is not canonical")?;
     Ok(value)
@@ -53,7 +53,7 @@ fn image(value: &Value, path_field: &str, hash_field: &str) -> Result<(), String
     let path = text(value, path_field)?;
     let leaf = path.strip_prefix("/usr/local/bin/")
         .or_else(|| path.strip_prefix("/usr/local/libexec/"));
-    ensure(leaf.is_some_and(|v| !v.is_empty() && v.len() <= 255 && v.starts_with("serverware-")
+    ensure(leaf.is_some_and(|v| !v.is_empty() && v.len() <= 255 && v.starts_with("catchplate-")
         && v.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.')))
         && pin(text(value, hash_field)?), "preboot executable must remain a pinned image reference")?;
     if let Some(arguments) = value.get("arguments") {
@@ -142,13 +142,13 @@ pub(super) fn validate(configuration: &[u8], launch: &[u8], artifacts: &BTreeMap
     if profile == Profile::RotationV25 {
         ensure(n.get("measuredStaticCredential").is_none(), "rotation delivery excludes creation profile")?;
         exact(&n["measuredStaticCredentialRotation"], "apiVersion",
-            "serverware.nativeStaticCredentialRotationConfiguration/v1")?;
+            "catchplate.nativeStaticCredentialRotationConfiguration/v1")?;
         exact(&n["measuredStaticCredentialRotation"]["staticCredentialRotationPolicy"], "schema",
-            "serverware.staticCredentialRotationAuthorityPolicy/v1")?;
+            "catchplate.staticCredentialRotationAuthorityPolicy/v1")?;
         exact(&n["measuredStaticCredentialRotation"]["staticCredentialRotationPolicy"], "nativeCustodyPurpose",
-            "serverware.nativeStaticCredentialRotationStatement/v1")?;
+            "catchplate.nativeStaticCredentialRotationStatement/v1")?;
     }
-    exact(&l, "apiVersion", "serverware.nativeStartupLaunch/v1")?;
+    exact(&l, "apiVersion", "catchplate.nativeStartupLaunch/v1")?;
     ensure(text(&l, "configurationSha256")? == digest(configuration), "preboot launch does not bind literal N")?;
     for field in ["credentialLeaseToken", "grantConsumeToken", "rateLimitConsumeToken",
         "releaseAuthorizationToken", "managementToken", "auditToken"] {
@@ -162,7 +162,7 @@ pub(super) fn validate(configuration: &[u8], launch: &[u8], artifacts: &BTreeMap
     b.directory(format!("{ROOT}/roles"), 0o755, 0, 0)?;
     b.directory(format!("{ROOT}/deliveries"), 0o700, 0, 0)?;
     b.directory(format!("{ROOT}/identity"), 0o755, 0, 0)?;
-    b.directory("/run/serverware-role-key-provisioning".into(), 0o700, 0, 0)?;
+    b.directory("/run/catchplate-role-key-provisioning".into(), 0o700, 0, 0)?;
     b.directory(format!("{ROOT}/attempt-ledger"), 0o700, 65534, 65534)?;
     exact(&n["native"], "attemptLedgerDirectory", &format!("{ROOT}/attempt-ledger"))?;
     b.bytes("configuration", &format!("{ROOT}/configuration.json"), configuration, MAX_FILE, 0, 0)?;
@@ -171,14 +171,14 @@ pub(super) fn validate(configuration: &[u8], launch: &[u8], artifacts: &BTreeMap
 
     let shadow = &n["shadow"];
     ensure(matches!(shadow.get("apiVersion").and_then(Value::as_str),
-        None | Some("serverware.nativeShadowConfiguration/v2")) && shadow.get("nativeActivation").is_none(),
+        None | Some("catchplate.nativeShadowConfiguration/v2")) && shadow.get("nativeActivation").is_none(),
         "preboot delivery excludes inherited publication and activation descriptors")?;
     for (field, label) in [("trustManifest", "shadow-trust"), ("custodyConfig", "shadow-custody"),
         ("startupActiveAuthorization", "shadow-startup")] {
         let raw = b.raw_artifact(label, &shadow[field], &format!("{ROOT}/{label}.json"), MAX_FILE, 0, 0)?;
         if field == "custodyConfig" {
             let value = json::parse(raw, MAX_FILE)?;
-            ensure(!text(&value, "apiVersion").unwrap_or("").starts_with("serverware.nativeShadowCustodyLifecycleReceiver/"),
+            ensure(!text(&value, "apiVersion").unwrap_or("").starts_with("catchplate.nativeShadowCustodyLifecycleReceiver/"),
                 "preboot delivery cannot synthesize a host custody channel")?;
         }
     }
@@ -190,16 +190,16 @@ pub(super) fn validate(configuration: &[u8], launch: &[u8], artifacts: &BTreeMap
     }
     if let Some(workers) = shadow.get("workers") {
         fields(workers, &["apiVersion", "executable"])?;
-        exact(workers, "apiVersion", "serverware.nativeShadowWorkers/v1")?;
+        exact(workers, "apiVersion", "catchplate.nativeShadowWorkers/v1")?;
         exact(&workers["executable"], "path", WORKER)?;
         image(&workers["executable"], "path", "sha256")?;
     }
 
     let inspector = &n["guestInspector"];
     let cohort = &n["guestCohort"];
-    exact(inspector, "apiVersion", "serverware.nativeGuestInspector/v1")?;
-    exact(cohort, "apiVersion", "serverware.nativeGuestCohort/v1")?;
-    exact(&inspector["executable"], "path", "/usr/local/bin/serverware-response-v2-guest-inspector")?;
+    exact(inspector, "apiVersion", "catchplate.nativeGuestInspector/v1")?;
+    exact(cohort, "apiVersion", "catchplate.nativeGuestCohort/v1")?;
+    exact(&inspector["executable"], "path", "/usr/local/bin/catchplate-response-v2-guest-inspector")?;
     exact(&cohort["executable"], "path", ROLE_EXECUTABLE)?;
     image(&inspector["executable"], "path", "sha256")?;
     image(&cohort["executable"], "path", "sha256")?;
@@ -209,8 +209,8 @@ pub(super) fn validate(configuration: &[u8], launch: &[u8], artifacts: &BTreeMap
     ensure(response.get("providerRouter").is_none_or(Value::is_null),
         "preboot guest closure cannot provision ambient provider-router files")?;
     ensure(response.get("guestDeliveryAuthority").is_some_and(Value::is_object)
-        && response["guestListener"]["apiVersion"] == "serverware.responseV2.guestListener/v1"
-        && response["guestPublicArtifacts"]["apiVersion"] == "serverware.responseV2.guestPublicArtifacts/v1",
+        && response["guestListener"]["apiVersion"] == "catchplate.responseV2.guestListener/v1"
+        && response["guestPublicArtifacts"]["apiVersion"] == "catchplate.responseV2.guestPublicArtifacts/v1",
         "preboot requires explicit guest originals and public-artifact owner")?;
     b.verifier(&n["responseObservationV2"]["teeVerifier"], "response-verifier")?;
     b.verifier(&response["teeHardwareGenerationVerifier"], "generation-verifier")?;
@@ -235,7 +235,7 @@ pub(super) fn validate(configuration: &[u8], launch: &[u8], artifacts: &BTreeMap
         }
         b.directory(format!("{base}/sockets"), 0o755, uid, 65519)?;
         exact(process, "stateDirectory", &format!("{base}/state"))?;
-        let socket = if role == "custody-router" { "/run/serverware-response-v2-guest/transaction.sock".to_owned() }
+        let socket = if role == "custody-router" { "/run/catchplate-response-v2-guest/transaction.sock".to_owned() }
             else { format!("{base}/sockets/service.sock") };
         exact(process, "socketPath", &socket)?;
         exact(process, "readinessSocketPath", &if role == "custody-router" {
@@ -248,7 +248,7 @@ pub(super) fn validate(configuration: &[u8], launch: &[u8], artifacts: &BTreeMap
         let raw = b.raw_artifact(&label, &reference, &format!("{ROOT}/deliveries/{role}.json"), 65536, 0, 0)?;
         let envelope = canonical(raw, 65536)?;
         fields(&envelope, &["apiVersion", "payload", "signatureBase64url"])?;
-        exact(&envelope, "apiVersion", "serverware.responseV2.guestCredentialDelivery/v1")?;
+        exact(&envelope, "apiVersion", "catchplate.responseV2.guestCredentialDelivery/v1")?;
         let payload = &envelope["payload"];
         ensure(payload["configurationSha256"] == digest(response_raw)
             && payload["serviceRole"] == role && payload["generationId"] == response["custodyTopology"]["generationId"]
@@ -321,10 +321,10 @@ pub(super) fn validate(configuration: &[u8], launch: &[u8], artifacts: &BTreeMap
         }
     }
     let provisioner = &n["guestRoleKeyProvisioner"];
-    exact(provisioner, "apiVersion", "serverware.nativeGuestRoleKeyProvisioner/v1")?;
+    exact(provisioner, "apiVersion", "catchplate.nativeGuestRoleKeyProvisioner/v1")?;
     let encrypted = b.artifact("role-inventory", &provisioner["encryptedInventory"], INVENTORY, 32768, 0, 0)?;
     fields(&encrypted, &["apiVersion", "inventorySha256", "nonce", "ciphertext"])?;
-    exact(&encrypted, "apiVersion", "serverware.nativeGuestRoleKeyCiphertext/v1")?;
+    exact(&encrypted, "apiVersion", "catchplate.nativeGuestRoleKeyCiphertext/v1")?;
     ensure(b.used.len() == artifacts.len(), "preboot contains artifacts outside the complete source closure")?;
     b.plan.files.sort_by(|a, z| a.path.cmp(&z.path));
     b.plan.directories.sort_by(|a, z| a.path.cmp(&z.path));

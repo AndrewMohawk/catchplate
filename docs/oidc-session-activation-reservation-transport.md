@@ -1,6 +1,6 @@
 # Activation reservation original transport
 
-[The fixed transport](../serverware/authority_oidc_session_activation_reservation_transport.py)
+[The fixed transport](../catchplate/authority_oidc_session_activation_reservation_transport.py)
 carries five immutable request originals and three response originals. It uses
 the existing deadline/Unix-peer I/O primitives; framing is not semantic admission,
 present-purpose permission, private custody or action-time currentness. This is
@@ -32,7 +32,7 @@ EOF reject changed counts, trailing data and truncated inventories.
 ## Fixed endpoint and lifetime
 
 Request/response magic is `SWOARQ01` / `SWOARR01`. The only endpoint is
-`/run/serverware/oidc-session-activation-execution/reserver.sock`.
+`/run/catchplate/oidc-session-activation-execution/reserver.sock`.
 Its configuration is the exact tuple `(path, integer_timeout_1_to_30, 0, 0)`:
 the client expects the kernel peer identity of the original root-created
 inherited listener, not the worker's later UID/GID `65505`. The serving owner

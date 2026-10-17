@@ -7,24 +7,24 @@ listener, socket ACL or journal. This is source-only, unbuilt and unexecuted.
 
 ## Independently signed profile
 
-[`current_root_state_bootstrap.py`](../serverware/current_root_state_bootstrap.py)
+[`current_root_state_bootstrap.py`](../catchplate/current_root_state_bootstrap.py)
 adds these closed schemas:
 
-- `serverware.signedCurrentRootStateBootstrap/v8`;
-- `serverware.currentRootStateBootstrap/v8`;
-- `serverware.currentRootStateLaunch/v8`.
+- `catchplate.signedCurrentRootStateBootstrap/v8`;
+- `catchplate.currentRootStateBootstrap/v8`;
+- `catchplate.currentRootStateLaunch/v8`.
 
 The v8 launch is exactly v7 plus `deliveryReservePeerUid` and
 `deliveryReservePeerGid`, both fixed to **65499**. The actual state service
 remains UID/GID 65516 with its existing five descriptors 198–202 and
-`/run/serverware/current-root/state.sock`. The root-signed original enrollment,
+`/run/catchplate/current-root/state.sock`. The root-signed original enrollment,
 independently supplied journal checkpoint, runtime closure, listener/path and
 journal identity pins, original launch interval and false hardware/witness
 flags retain their existing genuine admission. No descriptor or byte/work cap
 is increased. The producer and verifier derive the exact v8 envelope/payload
 domain from the v8 launch; adding these fields to v1–v7 is rejected.
 
-[`current_root_state_startup.py`](../serverware/current_root_state_startup.py)
+[`current_root_state_startup.py`](../catchplate/current_root_state_startup.py)
 selects `CurrentRootDecisionService._with_delivery_reserver(owner=...,
 timeout_seconds=...)` only after genuine v8 original admission. That factory
 holds the actual durable decision owner and an exact source-fixed 13-element
@@ -34,7 +34,7 @@ unchanged; v7 alone does not authorize the new reserver.
 
 ## Signed action before history or publication
 
-[`authority_current_root_service.py`](../serverware/authority_current_root_service.py)
+[`authority_current_root_service.py`](../catchplate/authority_current_root_service.py)
 checks actual Unix peer credentials before reading the request prefix and
 checks the fixed purpose before reading the body. Peer 65499 can use only the
 existing reserve framing. It reaches the exact class method:
@@ -59,7 +59,7 @@ activation planner at 65507 remains activation-head-only.
 ## Actual state transition and first-exact ACK
 
 The unchanged
-[`CurrentRootDecisionOwner`](../serverware/authority_current_root_decisions.py)
+[`CurrentRootDecisionOwner`](../catchplate/authority_current_root_decisions.py)
 is the only state transition and receipt signer on this path. For a new
 reservation, under its real lock and process/readiness guards it requires:
 

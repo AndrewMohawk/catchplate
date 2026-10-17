@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::Write;
 use std::os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd,OwnedFd};
 use std::os::unix::fs::{FileExt,MetadataExt};
-const STATE:&str="serverware.nativePolicyActivationState/v1";
+const STATE:&str="catchplate.nativePolicyActivationState/v1";
 const CURRENT:&[u8]=b"publication.json\0";
 const NEXT:&[u8]=b"publication.next\0";
 const RECEIPT:&[u8]=b"activation-receipt.json\0";

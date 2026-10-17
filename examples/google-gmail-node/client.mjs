@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { rootCertificates } from 'node:tls';
 import { pathToFileURL } from 'node:url';
 
-export const PUBLIC_GMAIL_DUMMY = 'serverware-gmail-placeholder-v1';
+export const PUBLIC_GMAIL_DUMMY = 'catchplate-gmail-placeholder-v1';
 export const GMAIL_ORIGIN = 'https://gmail.googleapis.com';
 export const FAILURE = 'Gmail example failed; check configuration, permissions and service audit logs.';
 const LIST_PATH = '/gmail/v1/users/me/messages';
@@ -35,7 +35,7 @@ export function sampleQuery(agePolicy, now = Date.now()) {
   const days = agePolicyDays(agePolicy);
   if (!days) return null;
   requireValue(Number.isSafeInteger(now) && now > 0);
-  // Client convenience only. Serverware verifies internalDate independently.
+  // Client convenience only. Catchplate verifies internalDate independently.
   return 'after:' + Math.ceil((now - days * 86400000) / 1000);
 }
 
@@ -51,7 +51,7 @@ export function configuration(env) {
   // Debugging hooks can log request options, including proxy credentials.
   for (const name of ['DEBUG', 'NODE_DEBUG', 'NODE_DEBUG_NATIVE', 'NODE_OPTIONS',
     'GOOGLE_SDK_NODE_LOGGING', 'GOOGLE_APPLICATION_CREDENTIALS']) requireValue(!env[name]);
-  const proxyUrl = required(env, 'SERVERWARE_PROXY_URL');
+  const proxyUrl = required(env, 'CATCHPLATE_PROXY_URL');
   const proxy = new URL(proxyUrl);
   requireValue(proxy.protocol === 'https:' && !proxy.username && !proxy.password
     && proxy.pathname === '/' && !proxy.search && !proxy.hash
@@ -59,17 +59,17 @@ export function configuration(env) {
     && proxy.hostname.length <= 253 && proxy.hostname.includes('.')
     && proxy.hostname.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))
     && !proxyUrl.includes('\\') && !/:[/]?$/.test(proxyUrl));
-  const applicationId = required(env, 'SERVERWARE_APP_ID', 36);
+  const applicationId = required(env, 'CATCHPLATE_APP_ID', 36);
   requireValue(UUID.test(applicationId));
-  const token = required(env, 'SERVERWARE_PROXY_TOKEN', 43);
+  const token = required(env, 'CATCHPLATE_PROXY_TOKEN', 43);
   requireValue(/^[A-Za-z0-9_-]{43}$/.test(token)
     && Buffer.from(token, 'base64url').length === 32
     && Buffer.from(token, 'base64url').toString('base64url') === token);
   const config = { proxyUrl, applicationId, token,
-    caFile: required(env, 'SERVERWARE_CA_FILE'),
-    proxyCaFile: env.SERVERWARE_PROXY_CA_FILE ? required(env, 'SERVERWARE_PROXY_CA_FILE') : null };
-  if (env.SERVERWARE_GMAIL_MAX_AGE_DAYS !== undefined) {
-    const value = env.SERVERWARE_GMAIL_MAX_AGE_DAYS;
+    caFile: required(env, 'CATCHPLATE_CA_FILE'),
+    proxyCaFile: env.CATCHPLATE_PROXY_CA_FILE ? required(env, 'CATCHPLATE_PROXY_CA_FILE') : null };
+  if (env.CATCHPLATE_GMAIL_MAX_AGE_DAYS !== undefined) {
+    const value = env.CATCHPLATE_GMAIL_MAX_AGE_DAYS;
     requireValue(typeof value === 'string' && /^[1-9][0-9]{0,3}$/.test(value) && Number(value) <= 3650);
     config.agePolicy = { mode: 'recent_internal_date_v1', max_age_days: Number(value) };
   }
@@ -103,7 +103,7 @@ export function loadClientConfig(path, env, now = Date.now()) {
     requireValue(object(value) && object(value.client_recipe));
     agePolicyDays(value.age_policy);
     const recipe = value.client_recipe;
-    requireValue(['serverware.gmailSdkClient/v1', 'serverware.gmailSdkClient/v2'].includes(recipe.schema)
+    requireValue(['catchplate.gmailSdkClient/v1', 'catchplate.gmailSdkClient/v2'].includes(recipe.schema)
       && object(recipe.environment));
     requireValue(value.operation_bundle === 'gmail_read_v1'
       && value.upstream_url === GMAIL_ORIGIN + LIST_PATH
@@ -117,22 +117,22 @@ export function loadClientConfig(path, env, now = Date.now()) {
     const connection = recipe.environment;
     requireValue(recipe.access_rule_id === value.access_rule_id
       && recipe.token_expires_at_epoch_ms === value.token_expires_at_epoch_ms
-      && connection.SERVERWARE_APP_ID === value.application_id
-      && connection.SERVERWARE_PROXY_URL === value.proxy_url
-      && connection.SERVERWARE_PROXY_TOKEN === value.proxy_password
-      && connection.SERVERWARE_CA_FILE === value.ca_file
-      && (connection.SERVERWARE_PROXY_CA_FILE ?? null) === (value.proxy_ca_file ?? null));
+      && connection.CATCHPLATE_APP_ID === value.application_id
+      && connection.CATCHPLATE_PROXY_URL === value.proxy_url
+      && connection.CATCHPLATE_PROXY_TOKEN === value.proxy_password
+      && connection.CATCHPLATE_CA_FILE === value.ca_file
+      && (connection.CATCHPLATE_PROXY_CA_FILE ?? null) === (value.proxy_ca_file ?? null));
     const caPath = value => resolve(dirname(filename), required({ path: value }, 'path'));
     // Language, entrypoint, commands and arbitrary environment entries are inert.
     // Import only validated connection values and the explicit public age hint.
     // Clear absent outer CA/age hints from the caller.
     const config = configuration({ ...env,
-      SERVERWARE_PROXY_URL: value.proxy_url,
-      SERVERWARE_APP_ID: value.application_id,
-      SERVERWARE_PROXY_TOKEN: value.proxy_password,
-      SERVERWARE_CA_FILE: caPath(value.ca_file),
-      SERVERWARE_GMAIL_MAX_AGE_DAYS: undefined,
-      SERVERWARE_PROXY_CA_FILE: value.proxy_ca_file === undefined || value.proxy_ca_file === null
+      CATCHPLATE_PROXY_URL: value.proxy_url,
+      CATCHPLATE_APP_ID: value.application_id,
+      CATCHPLATE_PROXY_TOKEN: value.proxy_password,
+      CATCHPLATE_CA_FILE: caPath(value.ca_file),
+      CATCHPLATE_GMAIL_MAX_AGE_DAYS: undefined,
+      CATCHPLATE_PROXY_CA_FILE: value.proxy_ca_file === undefined || value.proxy_ca_file === null
         ? undefined : caPath(value.proxy_ca_file),
     });
     if (value.age_policy !== undefined) config.agePolicy = { ...value.age_policy };
@@ -198,7 +198,7 @@ export function createTransport(config, { ProxyAgent, request, readFile = readFi
       signal, maxRedirections: 0, headersTimeout: TIMEOUT_MS, bodyTimeout: TIMEOUT_MS,
     });
     try {
-      // The Serverware Gmail response envelope is uncompressed JSON. Refuse
+      // The Catchplate Gmail response envelope is uncompressed JSON. Refuse
       // redirects or another representation instead of following or decoding it.
       requireValue(response.statusCode < 300 || response.statusCode >= 400);
       requireValue(!response.headers['content-encoding'] || response.headers['content-encoding'] === 'identity');
@@ -226,7 +226,7 @@ export function createTransport(config, { ProxyAgent, request, readFile = readFi
 export function createClient(config, { gmail, auth, ...transportDependencies }) {
   const transport = createTransport(config, transportDependencies);
   try {
-    // A constant dummy, not ADC or a Google token: Serverware owns real OAuth
+    // A constant dummy, not ADC or a Google token: Catchplate owns real OAuth
     // credentials and refresh. No refresh token/handler exists in this client.
     const oauth = new auth.OAuth2();
     oauth.setCredentials({ access_token: PUBLIC_GMAIL_DUMMY });

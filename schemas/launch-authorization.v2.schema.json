@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/launch-authorization.v2.schema.json",
-  "title": "Serverware Production Launch Authorization v2",
+  "$id": "https://catchplate.invalid/schemas/launch-authorization.v2.schema.json",
+  "title": "Catchplate Production Launch Authorization v2",
   "$comment": "This time-bounded capability covers trusted-host readiness only. It is idempotent for one operation/request binding and makes no unsupported one-use redemption or secure TEE time claim.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "kind", "statement", "signature"],
   "properties": {
-    "apiVersion": {"const": "serverware.launchAuthorization/v2"},
+    "apiVersion": {"const": "catchplate.launchAuthorization/v2"},
     "kind": {"const": "ProductionLaunchAuthorization"},
     "statement": {"$ref": "#/$defs/statement"},
     "signature": {"$ref": "#/$defs/signature"}
@@ -69,7 +69,7 @@
       "required": ["apiVersion", "kind", "statement", "signature"],
       "properties": {
         "apiVersion": {
-          "const": "serverware.launchAuthorityWitnessTransition/v1"
+          "const": "catchplate.launchAuthorityWitnessTransition/v1"
         },
         "kind": {"const": "LaunchAuthorityWitnessTransition"},
         "statement": {"$ref": "#/$defs/monotonicWitnessStatement"},

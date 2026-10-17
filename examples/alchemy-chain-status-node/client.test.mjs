@@ -9,25 +9,25 @@ import { certificate, childEnvironment, configuration, DEADLINE_MS, failure, loa
 import { agentOptions, boundedDispatcher, createSdk, installTransport, perform, PUBLIC_ALCHEMY_DUMMY,
   REQUEST_TIMEOUT_MS, RESPONSE_LIMIT, sdkSettings } from './request.mjs';
 
-const ENV = { SERVERWARE_PROXY_URL: 'https://proxy.example.test:8443',
-  SERVERWARE_APP_ID: '11111111-2222-4333-8444-555555555555',
-  SERVERWARE_PROXY_TOKEN: 'synthetic_app_token', SERVERWARE_CA_FILE: '/synthetic/inner.pem',
-  SERVERWARE_ALCHEMY_CHAIN: 'eth-mainnet' };
+const ENV = { CATCHPLATE_PROXY_URL: 'https://proxy.example.test:8443',
+  CATCHPLATE_APP_ID: '11111111-2222-4333-8444-555555555555',
+  CATCHPLATE_PROXY_TOKEN: 'synthetic_app_token', CATCHPLATE_CA_FILE: '/synthetic/inner.pem',
+  CATCHPLATE_ALCHEMY_CHAIN: 'eth-mainnet' };
 const PEM = Buffer.from(rootCertificates[0]);
 const SUCCESS = { ok: true, operation: 'chain-status', chain: 'eth-mainnet', chainId: '0x1', blockNumber: '0x123' };
 const NOW = 1_791_996_000_000;
-const downloaded = () => ({ application_id: ENV.SERVERWARE_APP_ID,
-  access_rule_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', proxy_url: ENV.SERVERWARE_PROXY_URL,
-  proxy_authentication: 'basic_and_bearer_v1', proxy_username: ENV.SERVERWARE_APP_ID,
+const downloaded = () => ({ application_id: ENV.CATCHPLATE_APP_ID,
+  access_rule_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', proxy_url: ENV.CATCHPLATE_PROXY_URL,
+  proxy_authentication: 'basic_and_bearer_v1', proxy_username: ENV.CATCHPLATE_APP_ID,
   proxy_password: 'downloaded_synthetic_token', token_expires_at_epoch_ms: NOW + 60000,
-  ca_file: './serverware-ca.pem', proxy_ca_file: null, chain: 'eth-mainnet',
+  ca_file: './catchplate-ca.pem', proxy_ca_file: null, chain: 'eth-mainnet',
   upstream_url: 'https://eth-mainnet.g.alchemy.com/v2', methods: ['POST'],
   operation_bundle: 'alchemy_chain_status_read_v1', rpc_methods: ['eth_chainId', 'eth_blockNumber'],
   credential_input: 'replace_exact', response_mode: 'alchemy_rpc_read_json_v1' });
 function configFile(t) {
-  const directory = mkdtempSync(join(tmpdir(), 'serverware-alchemy-config-'));
+  const directory = mkdtempSync(join(tmpdir(), 'catchplate-alchemy-config-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const path = join(directory, 'serverware-client.private.json');
+  const path = join(directory, 'catchplate-client.private.json');
   return { directory, path, write(value) { writeFileSync(path, JSON.stringify(value), { mode: 0o600 }); return path; } };
 }
 
@@ -36,11 +36,11 @@ test('downloaded config imports only connection and exact chain; relative CA pat
   value.request_body = { method: 'eth_sendRawTransaction', params: ['never-import'] };
   value.request_headers = { Authorization: 'never-import' };
   value.client_recipe = { command: 'never-execute', environment: { NODE_OPTIONS: 'never-import' } };
-  const ambient = { ...ENV, SERVERWARE_ALCHEMY_CHAIN: 'eth-sepolia', SERVERWARE_PROXY_CA_FILE: '/stale.pem' };
+  const ambient = { ...ENV, CATCHPLATE_ALCHEMY_CHAIN: 'eth-sepolia', CATCHPLATE_PROXY_CA_FILE: '/stale.pem' };
   const config = loadClientConfig(file.write(value), ambient, NOW);
   assert.deepEqual(config, { proxyUrl: value.proxy_url, applicationId: value.application_id,
-    token: value.proxy_password, chain: 'eth-mainnet', caFile: join(file.directory, 'serverware-ca.pem'), proxyCaFile: null });
-  assert.equal(ambient.SERVERWARE_PROXY_CA_FILE, '/stale.pem');
+    token: value.proxy_password, chain: 'eth-mainnet', caFile: join(file.directory, 'catchplate-ca.pem'), proxyCaFile: null });
+  assert.equal(ambient.CATCHPLATE_PROXY_CA_FILE, '/stale.pem');
   value.proxy_ca_file = './outer.pem';
   assert.equal(loadClientConfig(file.write(value), {}, NOW).proxyCaFile, join(file.directory, 'outer.pem'));
   delete value.proxy_ca_file;
@@ -87,8 +87,8 @@ test('config CLI preserves environment invocation and feeds only fixed settings 
   const file = configFile(t), value = { ...downloaded(), token_expires_at_epoch_ms: Date.now() + 60000 };
   let calls = 0;
   assert.deepEqual(run({}, { configPath: file.write(value), readFile: () => PEM, spawn(command, args, options) {
-    calls++; assert.equal(options.env.SERVERWARE_ALCHEMY_CHAIN, 'eth-mainnet');
-    assert.equal(options.env.SERVERWARE_PROXY_TOKEN, value.proxy_password);
+    calls++; assert.equal(options.env.CATCHPLATE_ALCHEMY_CHAIN, 'eth-mainnet');
+    assert.equal(options.env.CATCHPLATE_PROXY_TOKEN, value.proxy_password);
     assert.equal(args.length, 1); assert.ok(args[0].endsWith('/request.mjs'));
     return { status: 0, signal: null, stdout: JSON.stringify(SUCCESS) };
   } }), SUCCESS);
@@ -97,15 +97,15 @@ test('config CLI preserves environment invocation and feeds only fixed settings 
 
 test('only two fixed chains and an HTTPS credential-free proxy are configured', () => {
   assert.equal(configuration(ENV).chain, 'eth-mainnet');
-  assert.equal(configuration({ ...ENV, SERVERWARE_ALCHEMY_CHAIN: 'eth-sepolia' }).chain, 'eth-sepolia');
+  assert.equal(configuration({ ...ENV, CATCHPLATE_ALCHEMY_CHAIN: 'eth-sepolia' }).chain, 'eth-sepolia');
   for (const patch of [
-    { SERVERWARE_ALCHEMY_CHAIN: 'arbitrary' }, { SERVERWARE_ALCHEMY_CHAIN: 'eth-mainnet/key' },
-    { SERVERWARE_PROXY_URL: 'http://proxy.example.test' },
-    { SERVERWARE_PROXY_URL: 'https://user:secret@proxy.example.test' },
-    { SERVERWARE_PROXY_URL: 'https://proxy.example.test/path' },
-    { SERVERWARE_PROXY_URL: 'https://proxy.example.test/?key=value' },
-    { SERVERWARE_APP_ID: 'not-an-app-id' }, { SERVERWARE_PROXY_TOKEN: 'token\r\nvalue' },
-    { SERVERWARE_CA_FILE: 'relative.pem' }, { NODE_OPTIONS: '--inspect' },
+    { CATCHPLATE_ALCHEMY_CHAIN: 'arbitrary' }, { CATCHPLATE_ALCHEMY_CHAIN: 'eth-mainnet/key' },
+    { CATCHPLATE_PROXY_URL: 'http://proxy.example.test' },
+    { CATCHPLATE_PROXY_URL: 'https://user:secret@proxy.example.test' },
+    { CATCHPLATE_PROXY_URL: 'https://proxy.example.test/path' },
+    { CATCHPLATE_PROXY_URL: 'https://proxy.example.test/?key=value' },
+    { CATCHPLATE_APP_ID: 'not-an-app-id' }, { CATCHPLATE_PROXY_TOKEN: 'token\r\nvalue' },
+    { CATCHPLATE_CA_FILE: 'relative.pem' }, { NODE_OPTIONS: '--inspect' },
     { NODE_DEBUG: 'https' }, { NODE_DEBUG_NATIVE: '*' }, { NODE_TLS_REJECT_UNAUTHORIZED: '0' },
   ]) assert.throws(() => configuration({ ...ENV, ...patch }));
 });
@@ -114,9 +114,9 @@ test('child environment is an allowlist, never a proxy URL or provider secret', 
   const ambient = { ...ENV, HTTPS_PROXY: 'http://bad', NO_PROXY: '*', HOME: '/ambient',
     ALCHEMY_API_KEY: 'provider_secret_canary', NODE_EXTRA_CA_CERTS: '/ambient.pem' };
   assert.deepEqual(childEnvironment(configuration(ambient)), ENV);
-  const outer = childEnvironment(configuration({ ...ambient, SERVERWARE_PROXY_CA_FILE: '/synthetic/outer.pem' }));
+  const outer = childEnvironment(configuration({ ...ambient, CATCHPLATE_PROXY_CA_FILE: '/synthetic/outer.pem' }));
   assert.equal(outer.NODE_EXTRA_CA_CERTS, '/synthetic/outer.pem');
-  assert.equal(outer.SERVERWARE_PROXY_CA_FILE, '/synthetic/outer.pem');
+  assert.equal(outer.CATCHPLATE_PROXY_CA_FILE, '/synthetic/outer.pem');
   assert.equal(JSON.stringify(outer).includes('provider_secret_canary'), false);
   assert.equal(JSON.stringify(outer).includes('@proxy'), false);
 });
@@ -133,7 +133,7 @@ test('SDK settings require an explicit dispatcher and keyless one-attempt transp
   assert.equal(options.fetchOptions.dispatcher, dispatcher);
   assert.equal(options.fetchOptions.redirect, 'error');
   assert.deepEqual(options.fetchOptions.headers, {
-    Authorization: 'Bearer serverware-alchemy-placeholder-v1', Accept: 'application/json',
+    Authorization: 'Bearer catchplate-alchemy-placeholder-v1', Accept: 'application/json',
     'Accept-Encoding': 'identity',
   });
   assert.equal(options.fetchOptions.headers.Authorization, 'Bearer ' + PUBLIC_ALCHEMY_DUMMY);
@@ -150,13 +150,13 @@ test('SDK settings require an explicit dispatcher and keyless one-attempt transp
 });
 
 test('agent routes only via Basic CONNECT with explicit separate TLS roots', () => {
-  const config = configuration({ ...ENV, SERVERWARE_PROXY_CA_FILE: '/synthetic/outer.pem' });
+  const config = configuration({ ...ENV, CATCHPLATE_PROXY_CA_FILE: '/synthetic/outer.pem' });
   const inner = Buffer.from(PEM), outer = Buffer.from(PEM);
   const paths = [];
   const options = agentOptions(config, (path) => { paths.push(path); return path === config.caFile ? inner : outer; });
   assert.deepEqual(paths, ['/synthetic/inner.pem', '/synthetic/outer.pem']);
-  assert.equal(options.uri, ENV.SERVERWARE_PROXY_URL);
-  assert.equal(options.token, 'Basic ' + Buffer.from(ENV.SERVERWARE_APP_ID + ':' + ENV.SERVERWARE_PROXY_TOKEN).toString('base64'));
+  assert.equal(options.uri, ENV.CATCHPLATE_PROXY_URL);
+  assert.equal(options.token, 'Basic ' + Buffer.from(ENV.CATCHPLATE_APP_ID + ':' + ENV.CATCHPLATE_PROXY_TOKEN).toString('base64'));
   assert.deepEqual(options.requestTls, { ca: inner, rejectUnauthorized: true,
     servername: 'eth-mainnet.g.alchemy.com', allowH2: false, maxCachedSessions: 0 });
   assert.deepEqual(options.proxyTls, { ca: [...rootCertificates, outer], rejectUnauthorized: true,
@@ -182,7 +182,7 @@ test('dedicated supported ProxyAgent is destroyed without changing global dispat
   }
   const transport = installTransport(configuration(ENV), { ProxyAgent, interceptors, readCertificate: () => PEM });
   assert.ok(transport.agent instanceof ProxyAgent);
-  assert.equal(transport.agent.options.uri, ENV.SERVERWARE_PROXY_URL);
+  assert.equal(transport.agent.options.uri, ENV.CATCHPLATE_PROXY_URL);
   assert.equal(transport.dispatcher, dispatcher);
   await transport.close();
   assert.equal(destroyed, 1);
@@ -239,7 +239,7 @@ test('launcher runs one bounded child without inherited options or credential ar
   assert.equal(command, process.execPath);
   assert.equal(args.length, 1);
   assert.ok(args[0].endsWith('/request.mjs'));
-  assert.equal(JSON.stringify(args).includes(ENV.SERVERWARE_PROXY_TOKEN), false);
+  assert.equal(JSON.stringify(args).includes(ENV.CATCHPLATE_PROXY_TOKEN), false);
   assert.deepEqual(options.env, ENV);
   assert.equal(options.timeout, DEADLINE_MS);
   assert.equal(options.killSignal, 'SIGKILL');

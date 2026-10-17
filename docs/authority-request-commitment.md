@@ -11,7 +11,7 @@ operation-ID computation, not planner activation. Importing those workers from
 guard correctly rejects the four missing WebAuthn kernels. That coupling made
 the standalone verifier and its isolated fixtures unreachable.
 
-The shared [`authority_request_commitment`](../serverware/authority_request_commitment.py)
+The shared [`authority_request_commitment`](../catchplate/authority_request_commitment.py)
 module owns the existing request,
 business-intent, authorization-argument, canonicalization and framing bodies.
 The planner re-exports those names and keeps its public `typed_request_digest`

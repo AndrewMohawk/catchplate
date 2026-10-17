@@ -4,11 +4,11 @@ endif
 ifneq ($(filter command line environment environment override,$(origin .SHELLFLAGS)),)
 $(error Coder Makefile rejects externally supplied .SHELLFLAGS)
 endif
-ifneq ($(filter command line override,$(origin SERVERWARE_CONTROLLER_ARTIFACT_ROOT)),)
-$(error Coder Makefile rejects command-line SERVERWARE_CONTROLLER_ARTIFACT_ROOT)
+ifneq ($(filter command line override,$(origin CATCHPLATE_CONTROLLER_ARTIFACT_ROOT)),)
+$(error Coder Makefile rejects command-line CATCHPLATE_CONTROLLER_ARTIFACT_ROOT)
 endif
-ifneq ($(filter command line override,$(origin SERVERWARE_CONTROLLER_DOCKER_PROXY_SOCKET)),)
-$(error Coder Makefile rejects command-line SERVERWARE_CONTROLLER_DOCKER_PROXY_SOCKET)
+ifneq ($(filter command line override,$(origin CATCHPLATE_CONTROLLER_DOCKER_PROXY_SOCKET)),)
+$(error Coder Makefile rejects command-line CATCHPLATE_CONTROLLER_DOCKER_PROXY_SOCKET)
 endif
 SHELL := /bin/sh
 .SHELLFLAGS := -eu -c
@@ -57,10 +57,10 @@ SHELL := /bin/sh
 # capability-scoped proxy/listener FDs. Build performs exact signed operations;
 # no-build lanes import exact build outputs into fresh private daemons.
 
-override CODER_V12_CLIENT := /opt/serverware/coder-controller-v12/current/bin/serverware-coder-controller-client-v12
-override CODER_V12_PHASE_DRIVER := /opt/serverware/coder-controller-v12/current/bin/serverware-coder-plan-executor-v12
-override CODER_V12_WORKFLOW := serverware-coder-five-lane-v12
-override CODER_V12_DEADLINE_PROFILE := serverware-coder-five-lane-v12
+override CODER_V12_CLIENT := /opt/catchplate/coder-controller-v12/current/bin/catchplate-coder-controller-client-v12
+override CODER_V12_PHASE_DRIVER := /opt/catchplate/coder-controller-v12/current/bin/catchplate-coder-plan-executor-v12
+override CODER_V12_WORKFLOW := catchplate-coder-five-lane-v12
+override CODER_V12_DEADLINE_PROFILE := catchplate-coder-five-lane-v12
 override CODER_CONTROLLER_V12_INSTALLER := scripts/install_coder_controller_v12.sh
 CODER_CONTROLLER_V12_SIGNED_BUNDLE_ROOT ?=
 CODER_CONTROLLER_V12_PINNED_RELEASE_SIGNER_PUBLIC_KEY ?=
@@ -68,7 +68,7 @@ CODER_CONTROLLER_V12_BUNDLE_MANIFEST_SHA256 ?=
 CODER_CONTROLLER_V12_RELEASE_ID ?=
 CODER_CONTROLLER_V12_CLIENT_GROUP ?=
 CODER_CONTROLLER_V12_DEPLOYMENT_PROFILE ?= local-trusted-host
-CODER_CONTROLLER_V12_EXTERNAL_WITNESS_SOCKET ?= /run/serverware/coder/v12/external-witness/control.sock
+CODER_CONTROLLER_V12_EXTERNAL_WITNESS_SOCKET ?= /run/catchplate/coder/v12/external-witness/control.sock
 CODER_CONTROLLER_V12_PRIVATE_DIND_OUTPUT_ROOT ?=
 CODER_CONTROLLER_V12_DOCKERD ?=
 CODER_CONTROLLER_V12_CONTAINERD ?=
@@ -138,31 +138,31 @@ coder-v12-sequential:
 		--deadline-profile="$(CODER_V12_DEADLINE_PROFILE)"
 
 coder-v12-build:
-	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_V12_BUILD_DEADLINE_MS)' \
+	@CATCHPLATE_CONTROLLER_DEADLINE_MS='$(CODER_V12_BUILD_DEADLINE_MS)' \
 		exec "$(CODER_V12_CLIENT)" submit-fixed-v12 \
 			--workflow="$(CODER_V12_WORKFLOW)" --lane=build \
 			--deadline-profile="$(CODER_V12_DEADLINE_PROFILE)"
 
 coder-v12-unit-no-build:
-	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_V12_UNIT_DEADLINE_MS)' \
+	@CATCHPLATE_CONTROLLER_DEADLINE_MS='$(CODER_V12_UNIT_DEADLINE_MS)' \
 		exec "$(CODER_V12_CLIENT)" submit-fixed-v12 \
 			--workflow="$(CODER_V12_WORKFLOW)" --lane=unit \
 			--deadline-profile="$(CODER_V12_DEADLINE_PROFILE)"
 
 coder-v12-integration-no-build:
-	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_V12_INTEGRATION_DEADLINE_MS)' \
+	@CATCHPLATE_CONTROLLER_DEADLINE_MS='$(CODER_V12_INTEGRATION_DEADLINE_MS)' \
 		exec "$(CODER_V12_CLIENT)" submit-fixed-v12 \
 			--workflow="$(CODER_V12_WORKFLOW)" --lane=integration \
 			--deadline-profile="$(CODER_V12_DEADLINE_PROFILE)"
 
 coder-v12-e2e-no-build:
-	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_V12_E2E_DEADLINE_MS)' \
+	@CATCHPLATE_CONTROLLER_DEADLINE_MS='$(CODER_V12_E2E_DEADLINE_MS)' \
 		exec "$(CODER_V12_CLIENT)" submit-fixed-v12 \
 			--workflow="$(CODER_V12_WORKFLOW)" --lane=e2e \
 			--deadline-profile="$(CODER_V12_DEADLINE_PROFILE)"
 
 coder-v12-attestation-no-build:
-	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_V12_ATTESTATION_DEADLINE_MS)' \
+	@CATCHPLATE_CONTROLLER_DEADLINE_MS='$(CODER_V12_ATTESTATION_DEADLINE_MS)' \
 		exec "$(CODER_V12_CLIENT)" submit-fixed-v12 \
 			--workflow="$(CODER_V12_WORKFLOW)" --lane=attestation \
 			--deadline-profile="$(CODER_V12_DEADLINE_PROFILE)"
@@ -173,15 +173,15 @@ coder-v12-attestation-no-build:
 
 define _CODER_V12_RUN_PHASE
 	@set -eu; \
-		capability_fd="$${SERVERWARE_CODER_V12_PHASE_CAPABILITY_FD:-}"; \
+		capability_fd="$${CATCHPLATE_CODER_V12_PHASE_CAPABILITY_FD:-}"; \
 		case "$$capability_fd" in ""|*[!0-9]*) \
 			echo "controller-v12 phase capability FD is required" >&2; exit 2 ;; \
 		esac; \
 		test "$$capability_fd" -gt 2; \
 		test -r "/proc/self/fd/$$capability_fd"; \
-		config=/opt/serverware/coder-controller-v12/current/config/plan-executor-v12.conf; \
+		config=/opt/catchplate/coder-controller-v12/current/config/plan-executor-v12.conf; \
 		config_sha256="$$(sha256sum "$$config" | awk '{print $$1}')"; \
-		SERVERWARE_CODER_PLAN_EXECUTOR_CONFIG_SHA256="$$config_sha256" \
+		CATCHPLATE_CODER_PLAN_EXECUTOR_CONFIG_SHA256="$$config_sha256" \
 		exec "$(CODER_V12_PHASE_DRIVER)" --config "$$config" \
 			run-fixed-phase-v12 \
 			--capability-fd="$$capability_fd" \
@@ -222,27 +222,27 @@ CODER_TRUSTED_E2E_DEADLINE_MS ?= 2700000
 CODER_TRUSTED_ATTESTATION_DEADLINE_MS ?= 900000
 
 coder-trusted-build:
-	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_BUILD_DEADLINE_MS)' exec /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=build --plan=serverware-build-v1
+	@CATCHPLATE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_BUILD_DEADLINE_MS)' exec /usr/local/libexec/catchplate-coder-controller-client submit-fixed-v11 --operation=build --plan=catchplate-build-v1
 
 coder-trusted-unit-no-build:
-	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_UNIT_DEADLINE_MS)' exec /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=serverware-unit-no-build-v1
+	@CATCHPLATE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_UNIT_DEADLINE_MS)' exec /usr/local/libexec/catchplate-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=catchplate-unit-no-build-v1
 
 coder-trusted-integration-no-build:
-	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_INTEGRATION_DEADLINE_MS)' exec /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=serverware-integration-no-build-v1
+	@CATCHPLATE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_INTEGRATION_DEADLINE_MS)' exec /usr/local/libexec/catchplate-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=catchplate-integration-no-build-v1
 
 coder-trusted-e2e-no-build:
-	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_E2E_DEADLINE_MS)' exec /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=serverware-e2e-no-build-v1
+	@CATCHPLATE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_E2E_DEADLINE_MS)' exec /usr/local/libexec/catchplate-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=catchplate-e2e-no-build-v1
 
 coder-trusted-attestation-no-build:
-	@SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_ATTESTATION_DEADLINE_MS)' exec /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=serverware-attestation-no-build-v1
+	@CATCHPLATE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_ATTESTATION_DEADLINE_MS)' exec /usr/local/libexec/catchplate-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=catchplate-attestation-no-build-v1
 
 coder-trusted-sequential:
 	@set -eu; \
-	SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_BUILD_DEADLINE_MS)' /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=build --plan=serverware-build-v1; \
-	SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_UNIT_DEADLINE_MS)' /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=serverware-unit-no-build-v1; \
-	SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_INTEGRATION_DEADLINE_MS)' /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=serverware-integration-no-build-v1; \
-	SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_E2E_DEADLINE_MS)' /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=serverware-e2e-no-build-v1; \
-	SERVERWARE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_ATTESTATION_DEADLINE_MS)' exec /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=serverware-attestation-no-build-v1
+	CATCHPLATE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_BUILD_DEADLINE_MS)' /usr/local/libexec/catchplate-coder-controller-client submit-fixed-v11 --operation=build --plan=catchplate-build-v1; \
+	CATCHPLATE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_UNIT_DEADLINE_MS)' /usr/local/libexec/catchplate-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=catchplate-unit-no-build-v1; \
+	CATCHPLATE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_INTEGRATION_DEADLINE_MS)' /usr/local/libexec/catchplate-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=catchplate-integration-no-build-v1; \
+	CATCHPLATE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_E2E_DEADLINE_MS)' /usr/local/libexec/catchplate-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=catchplate-e2e-no-build-v1; \
+	CATCHPLATE_CONTROLLER_DEADLINE_MS='$(CODER_TRUSTED_ATTESTATION_DEADLINE_MS)' exec /usr/local/libexec/catchplate-coder-controller-client submit-fixed-v11 --operation=runNoBuild --plan=catchplate-attestation-no-build-v1
 
 coder-controller-build-execute:
 	@exec $(MAKE) --no-print-directory coder-build-all
@@ -308,7 +308,7 @@ CONSOLIDATED_APPARMOR_PROFILE ?=
 CONSOLIDATED_SECCOMP_PROFILE ?=
 CONSOLIDATED_BUILD_WATCHDOG_CLIENT ?=
 CONSOLIDATED_BUILD_WATCHDOG_CLIENT_SHA256 ?=
-override CONSOLIDATED_BUILD_WATCHDOG_SOCKET := /run/serverware-build-watchdog/control.sock
+override CONSOLIDATED_BUILD_WATCHDOG_SOCKET := /run/catchplate-build-watchdog/control.sock
 CONSOLIDATED_BUILD_WATCHDOG_CONTRACT ?=
 CONSOLIDATED_BUILD_WATCHDOG_CONTRACT_SHA256 ?=
 CONSOLIDATED_BUILD_WATCHDOG_PUBLIC_KEY ?=
@@ -350,10 +350,10 @@ PRODUCTION_READINESS_ENV ?= ops/production-readiness.env
 PRODUCTION_READINESS_PREFLIGHT ?= 1
 POLICY_CUSTODY_RENDER_MANIFEST ?=
 POLICY_CUSTODY_RENDER_OUTPUT ?=
-POLICY_CUSTODY_SOCKET_ROOT ?= /run/serverware/policy-custody
-POLICY_CUSTODY_RUNTIME_CONFIG_ROOT ?= /run/serverware/policy-custody/runtime/current
+POLICY_CUSTODY_SOCKET_ROOT ?= /run/catchplate/policy-custody
+POLICY_CUSTODY_RUNTIME_CONFIG_ROOT ?= /run/catchplate/policy-custody/runtime/current
 POLICY_CUSTODY_DRIVER_GROUP ?= swpc-driver
-PRODUCTION_COMPLETION_PROOF_OUT ?= .tmp/serverware-completion-proof.json
+PRODUCTION_COMPLETION_PROOF_OUT ?= .tmp/catchplate-completion-proof.json
 PRODUCTION_COMPLETION_VERIFICATION_MODE ?= readiness
 PRODUCTION_HARDWARE_ASSURANCE ?=
 PRODUCTION_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY ?=
@@ -394,7 +394,7 @@ REPRODUCIBLE_BUILD_VERIFICATION_TRUSTED_PUBLIC_KEY ?=
 PRODUCTION_IMAGE_REGISTRY_PREFIX ?=
 PRODUCTION_IMAGE_TAG ?= production-candidate
 AWS_KMS_MATERIALS_SPEC ?= ops/aws-kms-materials.spec.json
-AWS_KMS_MATERIALS_OUT ?= /etc/serverware/kms-materials.json
+AWS_KMS_MATERIALS_OUT ?= /etc/catchplate/kms-materials.json
 RELEASE_PROVENANCE_SUMMARY_FILE ?= .tmp/release-provenance-summary.json
 RELEASE_PROVENANCE_FILE ?= .tmp/release-provenance.json
 RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY ?=
@@ -412,14 +412,14 @@ PRODUCTION_DEPLOYMENT_AUDIENCE ?=
 PRODUCTION_DEPLOYMENT_IDENTITY_SHA256 ?=
 PRODUCTION_RELEASE_SEQUENCE ?=
 PRODUCTION_ROLLBACK_EPOCH ?=
-PRODUCTION_STATE_DIRECTORY ?= /var/lib/serverware/production-proof
-PRODUCTION_LAUNCH_MANIFEST ?= /etc/serverware/production-release-launch.json
+PRODUCTION_STATE_DIRECTORY ?= /var/lib/catchplate/production-proof
+PRODUCTION_LAUNCH_MANIFEST ?= /etc/catchplate/production-release-launch.json
 override PRODUCTION_READINESS_EXPECTED_OUTPUTS := \
 	$(PRODUCTION_STATE_DIRECTORY)/production-readiness-config.json \
 	$(PRODUCTION_STATE_DIRECTORY)/production-readiness-claims.json \
 	$(PRODUCTION_STATE_DIRECTORY)/nitro-kms-evidence.json \
 	$(PRODUCTION_STATE_DIRECTORY)/production-readiness.json \
-	$(PRODUCTION_STATE_DIRECTORY)/serverware-completion-proof.json \
+	$(PRODUCTION_STATE_DIRECTORY)/catchplate-completion-proof.json \
 	$(PRODUCTION_STATE_DIRECTORY)/proxy-response-proof-summary.json \
 	$(PRODUCTION_STATE_DIRECTORY)/production-host-preflight.json
 override PRODUCTION_READINESS_INVOCATION_RECEIPT := $(PRODUCTION_STATE_DIRECTORY)/run-production-readiness-final.receipt
@@ -428,7 +428,7 @@ override PRODUCTION_READINESS_INVOCATION_LOCK := $(PRODUCTION_STATE_DIRECTORY)/r
 # Public-key material and digests are intentionally unset: production operators
 # must supply independently authenticated values for each manifest generation.
 PRODUCTION_EXPECTED_LAUNCH_AUTHORITY_KEY_ID ?=
-PRODUCTION_GLOBAL_ROLE_REGISTRY ?= /etc/serverware/production-launch-global-role-registry.json
+PRODUCTION_GLOBAL_ROLE_REGISTRY ?= /etc/catchplate/production-launch-global-role-registry.json
 PRODUCTION_EXPECTED_GLOBAL_ROLE_REGISTRY_PINS_SHA256 ?=
 PRODUCTION_LAUNCH_AUTHORITY_WITNESS_SIGNING_PUBLIC_KEY_SPKI_BASE64URL ?=
 PRODUCTION_EXPECTED_LAUNCH_AUTHORITY_WITNESS_KEY_ID ?=
@@ -438,14 +438,14 @@ PRODUCTION_LAUNCH_AUTHORITY_WITNESS_STORE_ASSURANCE_SHA256 ?=
 PRODUCTION_LAUNCH_AUTHORITY_WITNESS_STORE_ASSURANCE ?=
 PRODUCTION_LAUNCH_AUTHORITY_WITNESS_STORE_ASSURANCE_ISSUER_PUBLIC_KEY_SPKI_BASE64URL ?=
 PRODUCTION_EXPECTED_LAUNCH_AUTHORITY_WITNESS_STORE_ASSURANCE_ISSUER_KEY_ID ?=
-PRODUCTION_NONCE_ROLLBACK_ASSURANCE_PINS ?= /etc/serverware/nonce-rollback-assurance-pins.json
+PRODUCTION_NONCE_ROLLBACK_ASSURANCE_PINS ?= /etc/catchplate/nonce-rollback-assurance-pins.json
 PRODUCTION_EXPECTED_NONCE_ROLLBACK_ASSURANCE_PINS_SHA256 ?=
-PRODUCTION_LAUNCH_PIPELINE_METADATA ?= /etc/serverware/production-release-launch.pipeline-metadata.json
-PRODUCTION_LAUNCH_PIPELINE_METADATA_SHA256_FILE ?= /etc/serverware/production-release-launch.pipeline-metadata.sha256
-PRODUCTION_SYSTEMD_UNIT_OUT ?= /etc/systemd/system/serverware-production-release-proof.service
-PRODUCTION_SYSTEMD_UNIT_NAME ?= serverware-production-release-proof.service
+PRODUCTION_LAUNCH_PIPELINE_METADATA ?= /etc/catchplate/production-release-launch.pipeline-metadata.json
+PRODUCTION_LAUNCH_PIPELINE_METADATA_SHA256_FILE ?= /etc/catchplate/production-release-launch.pipeline-metadata.sha256
+PRODUCTION_SYSTEMD_UNIT_OUT ?= /etc/systemd/system/catchplate-production-release-proof.service
+PRODUCTION_SYSTEMD_UNIT_NAME ?= catchplate-production-release-proof.service
 PRODUCTION_LAUNCHER_BUILD_DIRECTORY ?= .tmp/production-launcher-artifact
-PRODUCTION_LAUNCHER_BUILD_PATH ?= $(PRODUCTION_LAUNCHER_BUILD_DIRECTORY)/serverware-production-launcher
+PRODUCTION_LAUNCHER_BUILD_PATH ?= $(PRODUCTION_LAUNCHER_BUILD_DIRECTORY)/catchplate-production-launcher
 PRODUCTION_LAUNCHER_INSTALL_PATH_FILE ?= .tmp/production-launcher-install-path
 PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY ?= .tmp/production-python-runtime-artifact
 PRODUCTION_RELEASE_PYTHON ?= $(PRODUCTION_RELEASE_ROOT)/runtime/python/bin/python3
@@ -498,14 +498,14 @@ PRODUCTION_AGENT_VERIFIER_NONCE_SHA256 ?=
 PRODUCTION_AGENT_TRUST_PROFILE_SHA256 ?=
 PRODUCTION_AGENT_ENROLLMENT_VERIFICATION_OUT ?= .tmp/production-agent-enrollment-verification.json
 PRODUCTION_LAUNCHER_ADVERSARIAL_BUILDER ?=
-override CODER_COMPOSE_PROJECT_NAME := serverware-coder-ci
-SERVERWARE_CONTROLLER_ARTIFACT_ROOT ?= $(abspath ../.serverware-coder-artifacts)
-SERVERWARE_CONTROLLER_DOCKER_PROXY_SOCKET ?= /run/serverware/controller-docker-proxy.sock
-override CODER_REPO_TMP_DIR := $(abspath $(SERVERWARE_CONTROLLER_ARTIFACT_ROOT))
+override CODER_COMPOSE_PROJECT_NAME := catchplate-coder-ci
+CATCHPLATE_CONTROLLER_ARTIFACT_ROOT ?= $(abspath ../.catchplate-coder-artifacts)
+CATCHPLATE_CONTROLLER_DOCKER_PROXY_SOCKET ?= /run/catchplate/controller-docker-proxy.sock
+override CODER_REPO_TMP_DIR := $(abspath $(CATCHPLATE_CONTROLLER_ARTIFACT_ROOT))
 override CODER_OUTPUT_DIR := $(CODER_REPO_TMP_DIR)/coder-ci
 override CODER_DOCKER_CONFIG_DIR := $(CODER_REPO_TMP_DIR)/coder-docker-config
 override CODER_BUILDX_CONFIG_DIR := $(CODER_REPO_TMP_DIR)/coder-buildx-config
-override CODER_DOCKER_HOST := unix://$(SERVERWARE_CONTROLLER_DOCKER_PROXY_SOCKET)
+override CODER_DOCKER_HOST := unix://$(CATCHPLATE_CONTROLLER_DOCKER_PROXY_SOCKET)
 override CODER_CONTROLLER_STATIC_TARGET := x86_64-unknown-linux-musl
 override CODER_CONTROLLER_STATIC_ROOT := $(CODER_REPO_TMP_DIR)/controller-static-v11
 
@@ -517,25 +517,25 @@ coder-controller-static-assets:
 		CARGO_TARGET_DIR="$(CODER_CONTROLLER_STATIC_ROOT)/cargo-target" \
 			cargo build --locked --release --target "$(CODER_CONTROLLER_STATIC_TARGET)" \
 				--manifest-path data-plane/decision-gate-rs/Cargo.toml \
-					--bin serverware-coder-controller \
-					--bin serverware-coder-controller-client \
-					--bin serverware-coder-docker-proxy \
-					--bin serverware-coder-controller-launcher \
-					--bin serverware-coder-plan; \
-			for binary in serverware-coder-controller serverware-coder-controller-client serverware-coder-docker-proxy serverware-coder-controller-launcher serverware-coder-plan; do \
+					--bin catchplate-coder-controller \
+					--bin catchplate-coder-controller-client \
+					--bin catchplate-coder-docker-proxy \
+					--bin catchplate-coder-controller-launcher \
+					--bin catchplate-coder-plan; \
+			for binary in catchplate-coder-controller catchplate-coder-controller-client catchplate-coder-docker-proxy catchplate-coder-controller-launcher catchplate-coder-plan; do \
 			install -m 0500 \
 				"$(CODER_CONTROLLER_STATIC_ROOT)/cargo-target/$(CODER_CONTROLLER_STATIC_TARGET)/release/$$binary" \
 				"$(CODER_CONTROLLER_STATIC_ROOT)/bin/$$binary"; \
 		done; \
 		for plan in build-v1 unit-no-build-v1 integration-no-build-v1 e2e-no-build-v1 attestation-no-build-v1; do \
 			install -m 0500 \
-				"$(CODER_CONTROLLER_STATIC_ROOT)/bin/serverware-coder-plan" \
+				"$(CODER_CONTROLLER_STATIC_ROOT)/bin/catchplate-coder-plan" \
 				"$(CODER_CONTROLLER_STATIC_ROOT)/plans/$$plan"; \
 		done; \
 		sha256sum "$(CODER_CONTROLLER_STATIC_ROOT)"/bin/* "$(CODER_CONTROLLER_STATIC_ROOT)"/plans/* \
 			> "$(CODER_CONTROLLER_STATIC_ROOT)/SHA256SUMS"
-override CODER_DAEMON_DISPOSABLE_LABEL := com.serverware.coder-ci.disposable=true
-override CODER_DAEMON_NETWORK_LABEL := com.serverware.coder-ci.network=workspace-shared
+override CODER_DAEMON_DISPOSABLE_LABEL := com.catchplate.coder-ci.disposable=true
+override CODER_DAEMON_NETWORK_LABEL := com.catchplate.coder-ci.network=workspace-shared
 override CODER_DAEMON_ID_FILE := $(CODER_OUTPUT_DIR)/daemon-id.txt
 override CODER_PLATFORM := linux/amd64
 override CODER_BUILDKIT_IMAGE := moby/buildkit:buildx-stable-1@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec
@@ -561,8 +561,8 @@ override CODER_BLOCKED_PREREQUISITE_TESTS_FILE := $(CODER_OUTPUT_DIR)/test-inven
 override CODER_EXCLUDED_TESTS_FILE := $(CODER_OUTPUT_DIR)/test-inventory.excluded.txt
 override CODER_CHANGED_EXCLUDED_TESTS_FILE := $(CODER_OUTPUT_DIR)/test-inventory.changed-excluded.txt
 override CODER_CHANGED_BLOCKED_PREREQUISITE_TESTS_FILE := $(CODER_OUTPUT_DIR)/test-inventory.changed-blocked-prerequisite.txt
-override CODER_OWNER_LABEL_KEY := com.serverware.coder-ci.owner
-override CODER_RESOURCE_LABEL_KEY := com.serverware.coder-ci.resource
+override CODER_OWNER_LABEL_KEY := com.catchplate.coder-ci.owner
+override CODER_RESOURCE_LABEL_KEY := com.catchplate.coder-ci.resource
 # The Docker names below are host-global, so every UID locks the same
 # root-owned directory inode without creating or truncating a lock file.
 override CODER_LOCK_DIRECTORY := /run/lock
@@ -571,22 +571,22 @@ override CODER_COMPOSE_LIMITS_FILE := $(CODER_OUTPUT_DIR)/compose-limits.yaml
 override CODER_COMPOSE_IMAGE_OVERRIDE_FILE := $(CODER_OUTPUT_DIR)/compose-image-override.yaml
 override CODER_BUILDER_NAME_PREFIX := sw-coder-
 override CODER_BUILDER_BINDING_FILE := $(CODER_OUTPUT_DIR)/buildx-builder-binding.tsv
-override CODER_BUILD_SERVICES := serverware decision-gate-rs
-override CODER_RUNTIME_SERVICES := grant-store audit-anchor demo-upstream serverware decision-gate-rs
-override CODER_SHARED_PYTHON_IMAGE := $(CODER_COMPOSE_PROJECT_NAME)-serverware
+override CODER_BUILD_SERVICES := catchplate decision-gate-rs
+override CODER_RUNTIME_SERVICES := grant-store audit-anchor demo-upstream catchplate decision-gate-rs
+override CODER_SHARED_PYTHON_IMAGE := $(CODER_COMPOSE_PROJECT_NAME)-catchplate
 override CODER_AUDIT_ANCHOR_IMAGE := $(CODER_COMPOSE_PROJECT_NAME)-audit-anchor
 override CODER_DEMO_UPSTREAM_IMAGE := $(CODER_COMPOSE_PROJECT_NAME)-demo-upstream
 override CODER_DECISION_GATE_IMAGE := $(CODER_COMPOSE_PROJECT_NAME)-decision-gate-rs
 override CODER_RUST_TEST_IMAGE := $(CODER_COMPOSE_PROJECT_NAME)-decision-gate-rs-tests
 override CODER_RUST_TEST_CONTAINER := $(CODER_COMPOSE_PROJECT_NAME)-rust-unit-tests
-override CODER_RUST_TEST_CONTAINER_LABEL := com.serverware.coder-ci.resource=rust-unit-tests
+override CODER_RUST_TEST_CONTAINER_LABEL := com.catchplate.coder-ci.resource=rust-unit-tests
 override CODER_PROXY_TEST_IMAGE := $(CODER_COMPOSE_PROJECT_NAME)-proxy-tests
 override CODER_PROXY_TEST_CONTAINER := $(CODER_COMPOSE_PROJECT_NAME)-proxy-tests
-override CODER_PROXY_TEST_CONTAINER_LABEL := com.serverware.coder-ci.resource=proxy-tests
+override CODER_PROXY_TEST_CONTAINER_LABEL := com.catchplate.coder-ci.resource=proxy-tests
 override CODER_PRODUCTION_HOST_PREFLIGHT_IMAGE := $(CODER_COMPOSE_PROJECT_NAME)-production-host-preflight
 override CODER_PRODUCTION_HOST_PREFLIGHT_IMAGE_BINDING_FILE := $(CODER_OUTPUT_DIR)/production-host-preflight-image-binding.txt
 override CODER_PRODUCTION_HOST_PREFLIGHT_CONTAINER := $(CODER_COMPOSE_PROJECT_NAME)-production-host-preflight
-override CODER_PRODUCTION_HOST_PREFLIGHT_CONTAINER_LABEL := com.serverware.coder-ci.resource=production-host-preflight
+override CODER_PRODUCTION_HOST_PREFLIGHT_CONTAINER_LABEL := com.catchplate.coder-ci.resource=production-host-preflight
 override CODER_PRODUCTION_HOST_PREFLIGHT_TEST_SCRIPT := scripts/test_production_host_preflight.py
 override CODER_IMAGE_PYTHON_INTERPRETER := /usr/local/bin/python3.11
 override CODER_PYTHON_TEST_ARGV_BINDING_FILE := $(CODER_OUTPUT_DIR)/python-test-argv-bindings.tsv
@@ -595,22 +595,22 @@ override CODER_LAUNCHER_ADVERSARIAL_IMAGE_ID_FILE := $(CODER_OUTPUT_DIR)/launche
 override CODER_LAUNCHER_ADVERSARIAL_IMAGE_BINDING_FILE := $(CODER_OUTPUT_DIR)/launcher-adversarial-image-binding.txt
 override CODER_LAUNCHER_ADVERSARIAL_CONTEXT_MANIFEST_FILE := $(CODER_OUTPUT_DIR)/launcher-adversarial-build-inputs.json
 override CODER_LAUNCHER_ADVERSARIAL_CONTAINER := $(CODER_COMPOSE_PROJECT_NAME)-launcher-adversarial
-override CODER_LAUNCHER_ADVERSARIAL_CONTAINER_LABEL := com.serverware.coder-ci.resource=launcher-adversarial
+override CODER_LAUNCHER_ADVERSARIAL_CONTAINER_LABEL := com.catchplate.coder-ci.resource=launcher-adversarial
 override CODER_LAUNCHER_ADVERSARIAL_TEST_SCRIPT := scripts/test_production_launcher_adversarial.py
 override CODER_LAUNCHER_ADVERSARIAL_RUST_SLIM_BASE := rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89
 override CODER_LAUNCHER_ADVERSARIAL_RUST_ALPINE_BASE := rust:1.88-alpine3.22@sha256:64eba3726734dcfe89e0a62a0485007a3ab7c7372ce5b38c621d8812f70215f0
 override CODER_LAUNCHER_ADVERSARIAL_PYTHON_SLIM_BASE := python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c
 override CODER_ISOLATED_TEST_CONTAINER := $(CODER_COMPOSE_PROJECT_NAME)-isolated-test
-override CODER_ISOLATED_TEST_CONTAINER_LABEL := com.serverware.coder-ci.resource=isolated-test
+override CODER_ISOLATED_TEST_CONTAINER_LABEL := com.catchplate.coder-ci.resource=isolated-test
 override CODER_DECISION_GATE_MEASURE_CONTAINER := $(CODER_COMPOSE_PROJECT_NAME)-decision-gate-measure
-override CODER_DECISION_GATE_MEASURE_CONTAINER_LABEL := com.serverware.coder-ci.resource=decision-gate-measure
+override CODER_DECISION_GATE_MEASURE_CONTAINER_LABEL := com.catchplate.coder-ci.resource=decision-gate-measure
 override CODER_DECISION_GATE_MEASURE_IMAGE_ID_FILE := $(CODER_OUTPUT_DIR)/decision-gate-measure-image-id.txt
 override CODER_POSTGRES_IMAGE := postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
 override CODER_RUNTIME_IMAGE_BINDINGS := \
 	grant-store=$(CODER_POSTGRES_IMAGE) \
 	audit-anchor=$(CODER_AUDIT_ANCHOR_IMAGE) \
 	demo-upstream=$(CODER_DEMO_UPSTREAM_IMAGE) \
-	serverware=$(CODER_SHARED_PYTHON_IMAGE) \
+	catchplate=$(CODER_SHARED_PYTHON_IMAGE) \
 	decision-gate-rs=$(CODER_DECISION_GATE_IMAGE)
 override CODER_TEST_SCRIPTS := \
 	scripts/test_http_client.py \
@@ -989,33 +989,33 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 # Include package imports, imported independent oracles, and db.py, which the
 # existing native helper reads as source without importing its runtime facade.
 override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
-	serverware/authority_local_artifact_measure.py \
-	serverware/authority_local_content_catalog.py \
-	serverware/authority_local_artifact_witness.py \
-	serverware/authority_local_trust.py \
-	serverware/authority_local_configuration.py \
-	serverware/authority_local_limits.py \
-	serverware/authority_local_runtime_trust.py \
-	serverware/authority_local_rbac_bootstrap.py \
-	serverware/authority_local_launch_authorization.py \
-	serverware/authority_local_cohort.py \
-	serverware/authority_local_retained_rbac.py \
-	serverware/authority_local_retained_metadata.py \
-	serverware/authority_local_trust_commit.py \
-	serverware/authority_local_enrollment_configuration.py \
-	serverware/authority_local_enrollment_attestation.py \
-	serverware/authority_local_successor_enrollment.py \
-	serverware/authority_local_registration_context.py \
-	serverware/authority_local_registration_enrollment.py \
-	serverware/authority_local_database_credentials.py \
-	serverware/authority_local_keys.py \
-	serverware/authority_local_activation_keys.py \
-	serverware/authority_local_provenance.py \
-	serverware/authority_local_closure.py \
-	serverware/authority_local_composition.py \
-	serverware/authority_local_audit_inclusion.py \
-	serverware/authority_local_audit_reader.py \
-	serverware/authority_transition_policy_genesis.py \
+	catchplate/authority_local_artifact_measure.py \
+	catchplate/authority_local_content_catalog.py \
+	catchplate/authority_local_artifact_witness.py \
+	catchplate/authority_local_trust.py \
+	catchplate/authority_local_configuration.py \
+	catchplate/authority_local_limits.py \
+	catchplate/authority_local_runtime_trust.py \
+	catchplate/authority_local_rbac_bootstrap.py \
+	catchplate/authority_local_launch_authorization.py \
+	catchplate/authority_local_cohort.py \
+	catchplate/authority_local_retained_rbac.py \
+	catchplate/authority_local_retained_metadata.py \
+	catchplate/authority_local_trust_commit.py \
+	catchplate/authority_local_enrollment_configuration.py \
+	catchplate/authority_local_enrollment_attestation.py \
+	catchplate/authority_local_successor_enrollment.py \
+	catchplate/authority_local_registration_context.py \
+	catchplate/authority_local_registration_enrollment.py \
+	catchplate/authority_local_database_credentials.py \
+	catchplate/authority_local_keys.py \
+	catchplate/authority_local_activation_keys.py \
+	catchplate/authority_local_provenance.py \
+	catchplate/authority_local_closure.py \
+	catchplate/authority_local_composition.py \
+	catchplate/authority_local_audit_inclusion.py \
+	catchplate/authority_local_audit_reader.py \
+	catchplate/authority_transition_policy_genesis.py \
 	scripts/authority/local_artifact_witness.py \
 	scripts/authority/local_trust.py \
 	scripts/authority/local_configuration.py \
@@ -1086,435 +1086,435 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_webauthn_revocation_work.py \
 	scripts/test_webauthn_revoke_transition.py \
 	scripts/test_webauthn_trust_projection_postgres.py \
-	serverware/__init__.py \
-	serverware/audit_outbox_contract.py \
-	serverware/authority_audit_capacity.py \
-	serverware/authority_audit_initialization.py \
-	serverware/authority_audit_inventory.py \
-	serverware/authority_audit_trace.py \
-	serverware/authority_complete_query.py \
-	serverware/authority_complete_query_batch.py \
-	serverware/authority_complete_read_write.py \
-	serverware/authority_contract.py \
-	serverware/authority_counted_root_transition.py \
-	serverware/authority_index_contract.py \
-	serverware/authority_index_frontier.py \
-	serverware/authority_index_heads.py \
-	serverware/authority_index_join.py \
-	serverware/authority_index_mutation.py \
-	serverware/authority_index_mutation_reader.py \
-	serverware/authority_indexed_mutation.py \
-	serverware/authority_index_projection.py \
-	serverware/authority_index_range.py \
-	serverware/authority_index_reader.py \
-	serverware/authority_index_trace.py \
-	serverware/authority_primary_contract.py \
-	serverware/authority_query_read_work.py \
-	serverware/authority_query_reads.py \
-	serverware/authority_radix_mutation.py \
-	serverware/authority_radix_proof.py \
-	serverware/authority_request_commitment.py \
-	serverware/authority_revocation_bundle_contract.py \
-	serverware/authority_revocation_capability.py \
-	serverware/authority_revocation_capability_production.py \
-	serverware/authority_revocation_configuration.py \
-	serverware/authority_revocation_roots.py \
-	serverware/authority_revocation_root_reader.py \
-	serverware/authority_revocation_observed.py \
-	serverware/authority_revocation_handoff.py \
-	serverware/authority_revocation_verifier.py \
-	serverware/authority_revocation_planning.py \
-	serverware/authority_revocation_planning_request.py \
-	serverware/authority_revocation_planning_transport.py \
-	serverware/authority_revocation_planning_client.py \
-	serverware/authority_revocation_planning_receiver.py \
-	serverware/authority_revocation_planner_custody_transport.py \
-	serverware/authority_revocation_planner_custody_client.py \
-	serverware/authority_revocation_planner_custody_receiver.py \
-	serverware/authority_revocation_custody_read.py \
-	serverware/authority_revocation_custody_read_client.py \
-	serverware/authority_revocation_custody_read_transport.py \
-	serverware/authority_revocation_planner_configuration.py \
-	serverware/authority_revocation_invocation.py \
-	serverware/authority_revocation_issuance.py \
-	serverware/authority_revocation_persistence.py \
-	serverware/authority_revocation_writer_connection.py \
-	serverware/authority_revocation_writer_configuration.py \
-	serverware/authority_revocation_writer_action.py \
-	serverware/authority_revocation_writer_commitment.py \
-	serverware/authority_revocation_writer_composition.py \
-	serverware/authority_revocation_writer_signer.py \
-	serverware/authority_revocation_writer_acknowledgment.py \
-	serverware/authority_revocation_writer_transport.py \
-	serverware/authority_revocation_writer_ack_expectation.py \
-	serverware/authority_revocation_writer_client.py \
-	serverware/authority_revocation_writer_producers.py \
-	serverware/authority_revocation_plan.py \
-	serverware/authority_revocation_plan_contract.py \
-	serverware/authority_revocation_plan_production.py \
-	serverware/authority_revocation_proof_bundle.py \
-	serverware/authority_revocation_read_write.py \
-	serverware/authority_revocation_retention.py \
-	serverware/authority_revocation_semantics.py \
-	serverware/authority_revocation_wire.py \
-	serverware/authority_revocation_write_trace.py \
-	serverware/authority_root_transition.py \
-	serverware/authority_store/__init__.py \
-	serverware/authority_store/audit_capacity_sql.py \
-	serverware/authority_store/authorization_records.py \
-	serverware/authority_store/completed_v9_schema_source.py \
-	serverware/authority_store/counted_hash_sql.py \
-	serverware/authority_store/counted_installation.py \
-	serverware/authority_store/counted_projection_sql.py \
-	serverware/authority_store/counted_store_sql.py \
-	serverware/authority_store/counted_path_sql.py \
-	serverware/authority_store/counted_maintenance_sql.py \
-	serverware/authority_store/metadata_schema_source.py \
-	serverware/authority_store/mutation_sql.py \
-	serverware/authority_store/planner_connection.py \
-	serverware/authority_store/planner_read_sql.py \
-	serverware/authority_store/planner_writer_sql.py \
-	serverware/authority_store/postgres_trigger_manifest.py \
-	serverware/authority_store/primary_tree_sql.py \
-	serverware/authority_store/revocation_capability.py \
-	serverware/authority_store/revocation_capability_sql.py \
-	serverware/authority_store/revocation_counted_sql.py \
-	serverware/authority_store/revocation_execution.py \
-	serverware/authority_store/revocation_writer_request.py \
-	serverware/authority_store/revocation_writer_acknowledgment.py \
-	serverware/authority_store/revocation_custody_read.py \
-	serverware/authority_store/revocation_retained_sql.py \
-	serverware/authority_store/revocation_retention.py \
-	serverware/authority_store/webauthn_evidence_retention.py \
-	serverware/authority_store/webauthn_transition_retention.py \
-	serverware/authority_store/recovery_invalidation_retention.py \
-	serverware/authority_store/webauthn_evidence_entrypoints.py \
-	serverware/authority_store/root_transition_sql.py \
-	serverware/authority_store/schema.py \
-	serverware/authority_store/v9_schema_source.py \
-	serverware/authority_store/verifier_read_sql.py \
-	serverware/authority_store/webauthn_trust_sql.py \
-	serverware/authority_store/wire_json_sql.py \
-	serverware/authority_transition_core.py \
-	serverware/authority_successor_programs.py \
-	serverware/authority_webauthn_transition_planning.py \
-	serverware/authority_webauthn_transition_inputs.py \
-	serverware/authority_webauthn_registration_replay.py \
-	serverware/authority_webauthn_stage_replay.py \
-	serverware/authority_webauthn_completion_replay.py \
-	serverware/authority_webauthn_complete_proofs.py \
-	serverware/authority_webauthn_completion_proofs.py \
-	serverware/authority_webauthn_transition_proof_contract.py \
-	serverware/authority_webauthn_transition_proof_wire.py \
-	serverware/authority_webauthn_transition_proof.py \
-	serverware/authority_webauthn_transition_proof_production.py \
-	serverware/authority_webauthn_transition_plan_contract.py \
-	serverware/authority_webauthn_transition_plan_context.py \
-	serverware/authority_webauthn_transition_plan.py \
-	serverware/authority_webauthn_transition_plan_owner.py \
-	serverware/authority_webauthn_transition_policy.py \
-	serverware/authority_webauthn_transition_configuration.py \
-	serverware/authority_webauthn_transition_plan_admission.py \
-	serverware/authority_webauthn_transition_plan_verifier.py \
-	serverware/authority_webauthn_transition_service.py \
-	serverware/authority_webauthn_transition_roots_contract.py \
-	serverware/authority_webauthn_transition_roots.py \
-	serverware/authority_webauthn_transition_root_reader.py \
-	serverware/authority_webauthn_transition_root_configuration.py \
-	serverware/authority_webauthn_transition_exchange_configuration.py \
-	serverware/authority_webauthn_transition_request.py \
-	serverware/authority_webauthn_transition_response.py \
-	serverware/authority_webauthn_transition_transport.py \
-	serverware/authority_webauthn_transition_live.py \
-	serverware/authority_webauthn_transition_actions.py \
-	serverware/authority_webauthn_transition_retention.py \
-	serverware/authority_recovery_invalidation_retention.py \
-	serverware/authority_recovery_invalidation_execution_replay.py \
-	serverware/authority_recovery_invalidation_persistence.py \
-	serverware/authority_recovery_invalidation_service.py \
-	serverware/authority_webauthn_transition_persistence.py \
-	serverware/authority_webauthn_transition_writer_configuration.py \
-	serverware/authority_webauthn_transition_custody_wire.py \
-	serverware/authority_webauthn_transition_custody_intent.py \
-	serverware/authority_webauthn_transition_custody_relay.py \
-	serverware/authority_webauthn_transition_custody_configuration.py \
-	serverware/authority_webauthn_transition_custody_transport.py \
-	serverware/authority_webauthn_transition_custody_persistence.py \
-	serverware/authority_webauthn_transition_custody_actions.py \
-	serverware/authority_webauthn_transition_custody_service.py \
-	serverware/authority_webauthn_transition_custody_read_request.py \
-	serverware/authority_webauthn_transition_custody_read_transport.py \
-	serverware/authority_webauthn_transition_custody_read_actions.py \
-	serverware/authority_webauthn_transition_custody_read_service.py \
-	serverware/authority_transition_policy.py \
-	serverware/authority_oidc_session_activation.py \
-	serverware/authority_oidc_session_activation_reads.py \
-	serverware/authority_oidc_session_activation_planning.py \
-	serverware/authority_oidc_session_activation_plan_contract.py \
-	serverware/authority_oidc_session_activation_plan.py \
-	serverware/authority_oidc_session_activation_state.py \
-	serverware/authority_current_root_head.py \
-	serverware/authority_oidc_session_activation_writes.py \
-	serverware/authority_oidc_session_activation_journal.py \
-	serverware/authority_oidc_session_activation_plan_owner.py \
-	serverware/authority_oidc_session_activation_execution_bundle.py \
-	serverware/authority_oidc_session_activation_execution_replay.py \
-	serverware/authority_oidc_session_activation_execution_expectations.py \
-	serverware/authority_oidc_session_activation_execution_history.py \
-	serverware/authority_oidc_session_activation_history_exchange.py \
-	serverware/oidc_session_activation_history_custody_bootstrap.py \
-	serverware/oidc_session_activation_history_bridge_replay.py \
-	serverware/authority_oidc_session_activation_history_custody.py \
-	serverware/authority_oidc_session_activation_completion_admission.py \
-	serverware/authority_oidc_session_activation_completion.py \
-	serverware/authority_oidc_session_activation_completion_recovery.py \
-	serverware/authority_oidc_session_activation_execution_custody.py \
-	serverware/oidc_session_activation_execution_custody_bootstrap.py \
-	serverware/authority_oidc_session_activation_execution_authorization.py \
-	serverware/authority_oidc_session_activation_execution_grant_production.py \
-	serverware/oidc_session_activation_execution_authorizer_bootstrap.py \
-	serverware/authority_oidc_session_activation_execution_authorizer_transport.py \
-	serverware/oidc_session_activation_execution_authorizer_startup.py \
-	serverware/oidc_session_activation_execution_authorizer_entrypoint.py \
-	serverware/oidc_session_activation_execution_authorizer_launcher.py \
-	serverware/oidc_session_activation_execution_authorizer_runner.py \
-	serverware/authority_oidc_session_activation_reservation.py \
-	serverware/authority_oidc_session_activation_pending_admission.py \
-	serverware/authority_oidc_session_activation_reservation_records.py \
-	serverware/authority_oidc_session_activation_reservation_delivery.py \
-	serverware/authority_oidc_session_activation_reservation_transport.py \
-	serverware/oidc_session_activation_execution_reserver_bootstrap.py \
-	serverware/oidc_session_activation_execution_reserver_startup.py \
-	serverware/oidc_session_activation_execution_reserver_entrypoint.py \
-	serverware/oidc_session_activation_execution_reserver_launcher.py \
-	serverware/oidc_session_activation_execution_reserver_runner.py \
-	serverware/authority_oidc_session_activation_sql.py \
-	serverware/authority_oidc_session_activation_sql_transport.py \
-	serverware/oidc_session_activation_execution_sql_bootstrap.py \
-	serverware/oidc_session_activation_execution_sql_startup.py \
-	serverware/oidc_session_activation_execution_sql_entrypoint.py \
-	serverware/oidc_session_activation_execution_sql_launcher.py \
-	serverware/oidc_session_activation_execution_sql_runner.py \
-	serverware/oidc_session_activation_completion_bootstrap.py \
-	serverware/oidc_session_activation_completion_startup.py \
-	serverware/oidc_session_activation_completion_entrypoint.py \
-	serverware/oidc_session_activation_completion_launcher.py \
-	serverware/oidc_session_activation_completion_runner.py \
-	serverware/authority_oidc_session_activation_completion_transport.py \
-	serverware/authority_oidc_session_activation_completion_response.py \
-	serverware/oidc_session_activation_release_custody_bootstrap.py \
-	serverware/oidc_session_activation_release_retained_authority.py \
-	serverware/oidc_session_activation_release_intent.py \
-	serverware/oidc_session_activation_release_intent_enrollment.py \
-	serverware/authority_oidc_session_activation_release_intent.py \
-	serverware/authority_oidc_session_activation_release_committed_inputs.py \
-	serverware/authority_oidc_session_activation_release_committed_target.py \
-	serverware/authority_oidc_session_activation_release_committed.py \
-	serverware/oidc_session_activation_release_proof.py \
-	serverware/oidc_session_activation_release_proof_enrollment.py \
-	serverware/authority_oidc_session_activation_release_proof.py \
-	serverware/authority_oidc_session_activation_release_proof_production.py \
-	serverware/oidc_session_activation_release_proof_bootstrap.py \
-	serverware/oidc_session_activation_release_proof_input_issuer_policy.py \
-	serverware/oidc_session_activation_release_proof_input_production.py \
-	serverware/oidc_session_activation_release_proof_input_issuer_bootstrap.py \
-	serverware/oidc_session_activation_release_proof_input_issuer_entrypoint.py \
-	serverware/oidc_session_activation_release_proof_input_issuer_launcher.py \
-	serverware/oidc_session_activation_release_proof_input_issuer_startup.py \
-	serverware/oidc_session_activation_release_proof_input_issuer_runner.py \
-	serverware/authority_oidc_session_activation_release_proof_input_transport.py \
-	serverware/authority_oidc_session_activation_release_proof_input_delivery_transport.py \
-	serverware/oidc_session_activation_release_proof_input_delivery_admission.py \
-	serverware/oidc_session_activation_release_proof_dynamic_entrypoint.py \
-	serverware/oidc_session_activation_release_proof_dynamic_launcher.py \
-	serverware/oidc_session_activation_release_proof_entrypoint.py \
-	serverware/oidc_session_activation_release_proof_startup.py \
-	serverware/oidc_session_activation_release_proof_launcher.py \
-	serverware/oidc_session_activation_release_proof_runner.py \
-	serverware/authority_oidc_session_activation_release_proof_transport.py \
-	serverware/oidc_session_activation_release_outcome.py \
-	serverware/oidc_session_activation_release_outcome_authorization.py \
-	serverware/authority_oidc_session_activation_release_outcome_store.py \
-	serverware/oidc_session_activation_release_recovery_authorization.py \
-	serverware/authority_oidc_session_activation_release_recovery.py \
-	serverware/oidc_session_activation_release_bootstrap.py \
-	serverware/oidc_session_activation_release_resources.py \
-	serverware/oidc_session_activation_release_startup.py \
-	serverware/oidc_session_activation_release_connection.py \
-	serverware/oidc_session_activation_release_transport.py \
-	serverware/oidc_session_activation_release_client_authorization.py \
-	serverware/control_plane_oidc_session_activation_release_bootstrap.py \
-	serverware/control_plane_oidc_session_activation_release_client.py \
-	serverware/control_plane_oidc_session_activation_release_attempt.py \
-	serverware/control_plane_oidc_session_activation_execution_bootstrap.py \
-	serverware/control_plane_oidc_session_activation_planning_bootstrap.py \
-	serverware/control_plane_oidc_session_activation_planning.py \
-	serverware/control_plane_oidc_session_activation_dispatch_attempt.py \
-	serverware/control_plane_oidc_session_activation_records.py \
-	serverware/control_plane_oidc_session_activation_dispatch.py \
-	serverware/control_plane_oidc_session_activation_completion.py \
-	serverware/control_plane_oidc_session_activation_consume_bootstrap.py \
-	serverware/control_plane_oidc_session_activation_consume_execution_bootstrap.py \
-	serverware/control_plane_oidc_session_activation_consume_authorization.py \
-	serverware/control_plane_oidc_session_activation_consume_dispatch.py \
-	serverware/control_plane_oidc_session_activation_consume_completion.py \
-	serverware/control_plane_oidc_session_activation_release_intent_bootstrap.py \
-	serverware/control_plane_oidc_session_activation_release_intent.py \
-	serverware/control_plane_oidc_session_activation_release_proof_bootstrap.py \
-	serverware/control_plane_oidc_session_activation_release_proof_acquisition_bootstrap.py \
-	serverware/control_plane_oidc_session_activation_release_proof.py \
-	serverware/control_plane_oidc_session_activation_release_handoff_bootstrap.py \
-	serverware/control_plane_oidc_session_activation_release_handoff.py \
-	serverware/oidc_session_activation_release_grant_issuer_policy.py \
-	serverware/oidc_session_activation_release_recovery_issuer_policy.py \
-	serverware/oidc_session_activation_release_recovery_issuer_bootstrap.py \
-	serverware/oidc_session_activation_release_recovery_issuer_entrypoint.py \
-	serverware/oidc_session_activation_release_recovery_issuer_startup.py \
-	serverware/oidc_session_activation_release_recovery_issuer_launcher.py \
-	serverware/oidc_session_activation_release_recovery_issuer_runner.py \
-	serverware/authority_oidc_session_activation_release_recovery_grant_transport.py \
-	serverware/control_plane_oidc_session_activation_release_recovery_grant_acquisition.py \
-	serverware/control_plane_oidc_session_activation_release_recovery_grant_acquisition_bootstrap.py \
-	serverware/control_plane_oidc_session_activation_recovery_records.py \
-	serverware/control_plane_oidc_session_activation_recovery_acquisition.py \
-	serverware/control_plane_oidc_session_activation_recovery_exchange.py \
-	serverware/control_plane_oidc_session_activation_recovery_delivery.py \
-	serverware/control_plane_oidc_session_activation_recovery_http.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_bootstrap.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_selection.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_consume_selection.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_intent_selection.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_history.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_actor.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_controls.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_records.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_exchange.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_http.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_intent_inputs.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_intent.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_proof.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_release.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_release_http.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_delivery.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_delivery_exchange.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_delivery_response.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_delivery_http.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_retained_acquisition.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_retained_exchange.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_consume.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_consume_inputs.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_consume_planning.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_consume_authorization.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_consume_dispatch.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_consume_completion.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_consume_response.py \
-	serverware/control_plane_oidc_session_activation_completion_recovery_consume_http.py \
-	serverware/control_plane_oidc_session_activation_approval.py \
-	serverware/portal_session_activation.py \
-	serverware/portal_session_activation_authorization.py \
-	serverware/portal_session_activation_confirmation.py \
-	serverware/portal_session_activation_confirmation_routes.py \
-	serverware/control_plane_registration_history_bootstrap.py \
-	serverware/control_plane_registration_history.py \
-	serverware/control_plane_registration_finalization_history_bootstrap.py \
-	serverware/control_plane_registration_finalization_history.py \
-	serverware/control_plane_registration_finalization_permission.py \
-	serverware/control_plane_oidc_session_activation_history_bootstrap.py \
-	serverware/control_plane_oidc_session_activation_history.py \
-	serverware/control_plane_oidc_session_activation_consume_history.py \
-	serverware/oidc_session_activation_release_grant_issuer_dynamic_authorization.py \
-	serverware/authority_oidc_session_activation_release_grant_input_delivery_transport.py \
-	serverware/oidc_session_activation_release_grant_issuer_dynamic_entrypoint.py \
-	serverware/oidc_session_activation_release_grant_issuer_dynamic_launcher.py \
-	serverware/authority_oidc_session_activation_release_grant_production.py \
-	serverware/authority_oidc_session_activation_release_recovery_grant_production.py \
-	serverware/authority_oidc_session_activation_release_grant_transport.py \
-	serverware/oidc_session_activation_release_grant_issuer_bootstrap.py \
-	serverware/oidc_session_activation_release_grant_issuer_entrypoint.py \
-	serverware/oidc_session_activation_release_grant_issuer_startup.py \
-	serverware/oidc_session_activation_release_grant_issuer_launcher.py \
-	serverware/oidc_session_activation_release_grant_issuer_runner.py \
-	serverware/workload_identity_issuance_authorization.py \
-	serverware/native_workload_identity_issuance_authorization.py \
-	serverware/native_workload_identity_originals.py \
-	serverware/native_ca_installation_authorization.py \
-	serverware/native_egress_installation_authorization.py \
-	serverware/native_network_attachment_authorization.py \
-	serverware/native_workload_start_authorization.py \
-	serverware/workload_identity_trust_authorization.py \
-	serverware/native_workload_identity_trust_authorization.py \
+	catchplate/__init__.py \
+	catchplate/audit_outbox_contract.py \
+	catchplate/authority_audit_capacity.py \
+	catchplate/authority_audit_initialization.py \
+	catchplate/authority_audit_inventory.py \
+	catchplate/authority_audit_trace.py \
+	catchplate/authority_complete_query.py \
+	catchplate/authority_complete_query_batch.py \
+	catchplate/authority_complete_read_write.py \
+	catchplate/authority_contract.py \
+	catchplate/authority_counted_root_transition.py \
+	catchplate/authority_index_contract.py \
+	catchplate/authority_index_frontier.py \
+	catchplate/authority_index_heads.py \
+	catchplate/authority_index_join.py \
+	catchplate/authority_index_mutation.py \
+	catchplate/authority_index_mutation_reader.py \
+	catchplate/authority_indexed_mutation.py \
+	catchplate/authority_index_projection.py \
+	catchplate/authority_index_range.py \
+	catchplate/authority_index_reader.py \
+	catchplate/authority_index_trace.py \
+	catchplate/authority_primary_contract.py \
+	catchplate/authority_query_read_work.py \
+	catchplate/authority_query_reads.py \
+	catchplate/authority_radix_mutation.py \
+	catchplate/authority_radix_proof.py \
+	catchplate/authority_request_commitment.py \
+	catchplate/authority_revocation_bundle_contract.py \
+	catchplate/authority_revocation_capability.py \
+	catchplate/authority_revocation_capability_production.py \
+	catchplate/authority_revocation_configuration.py \
+	catchplate/authority_revocation_roots.py \
+	catchplate/authority_revocation_root_reader.py \
+	catchplate/authority_revocation_observed.py \
+	catchplate/authority_revocation_handoff.py \
+	catchplate/authority_revocation_verifier.py \
+	catchplate/authority_revocation_planning.py \
+	catchplate/authority_revocation_planning_request.py \
+	catchplate/authority_revocation_planning_transport.py \
+	catchplate/authority_revocation_planning_client.py \
+	catchplate/authority_revocation_planning_receiver.py \
+	catchplate/authority_revocation_planner_custody_transport.py \
+	catchplate/authority_revocation_planner_custody_client.py \
+	catchplate/authority_revocation_planner_custody_receiver.py \
+	catchplate/authority_revocation_custody_read.py \
+	catchplate/authority_revocation_custody_read_client.py \
+	catchplate/authority_revocation_custody_read_transport.py \
+	catchplate/authority_revocation_planner_configuration.py \
+	catchplate/authority_revocation_invocation.py \
+	catchplate/authority_revocation_issuance.py \
+	catchplate/authority_revocation_persistence.py \
+	catchplate/authority_revocation_writer_connection.py \
+	catchplate/authority_revocation_writer_configuration.py \
+	catchplate/authority_revocation_writer_action.py \
+	catchplate/authority_revocation_writer_commitment.py \
+	catchplate/authority_revocation_writer_composition.py \
+	catchplate/authority_revocation_writer_signer.py \
+	catchplate/authority_revocation_writer_acknowledgment.py \
+	catchplate/authority_revocation_writer_transport.py \
+	catchplate/authority_revocation_writer_ack_expectation.py \
+	catchplate/authority_revocation_writer_client.py \
+	catchplate/authority_revocation_writer_producers.py \
+	catchplate/authority_revocation_plan.py \
+	catchplate/authority_revocation_plan_contract.py \
+	catchplate/authority_revocation_plan_production.py \
+	catchplate/authority_revocation_proof_bundle.py \
+	catchplate/authority_revocation_read_write.py \
+	catchplate/authority_revocation_retention.py \
+	catchplate/authority_revocation_semantics.py \
+	catchplate/authority_revocation_wire.py \
+	catchplate/authority_revocation_write_trace.py \
+	catchplate/authority_root_transition.py \
+	catchplate/authority_store/__init__.py \
+	catchplate/authority_store/audit_capacity_sql.py \
+	catchplate/authority_store/authorization_records.py \
+	catchplate/authority_store/completed_v9_schema_source.py \
+	catchplate/authority_store/counted_hash_sql.py \
+	catchplate/authority_store/counted_installation.py \
+	catchplate/authority_store/counted_projection_sql.py \
+	catchplate/authority_store/counted_store_sql.py \
+	catchplate/authority_store/counted_path_sql.py \
+	catchplate/authority_store/counted_maintenance_sql.py \
+	catchplate/authority_store/metadata_schema_source.py \
+	catchplate/authority_store/mutation_sql.py \
+	catchplate/authority_store/planner_connection.py \
+	catchplate/authority_store/planner_read_sql.py \
+	catchplate/authority_store/planner_writer_sql.py \
+	catchplate/authority_store/postgres_trigger_manifest.py \
+	catchplate/authority_store/primary_tree_sql.py \
+	catchplate/authority_store/revocation_capability.py \
+	catchplate/authority_store/revocation_capability_sql.py \
+	catchplate/authority_store/revocation_counted_sql.py \
+	catchplate/authority_store/revocation_execution.py \
+	catchplate/authority_store/revocation_writer_request.py \
+	catchplate/authority_store/revocation_writer_acknowledgment.py \
+	catchplate/authority_store/revocation_custody_read.py \
+	catchplate/authority_store/revocation_retained_sql.py \
+	catchplate/authority_store/revocation_retention.py \
+	catchplate/authority_store/webauthn_evidence_retention.py \
+	catchplate/authority_store/webauthn_transition_retention.py \
+	catchplate/authority_store/recovery_invalidation_retention.py \
+	catchplate/authority_store/webauthn_evidence_entrypoints.py \
+	catchplate/authority_store/root_transition_sql.py \
+	catchplate/authority_store/schema.py \
+	catchplate/authority_store/v9_schema_source.py \
+	catchplate/authority_store/verifier_read_sql.py \
+	catchplate/authority_store/webauthn_trust_sql.py \
+	catchplate/authority_store/wire_json_sql.py \
+	catchplate/authority_transition_core.py \
+	catchplate/authority_successor_programs.py \
+	catchplate/authority_webauthn_transition_planning.py \
+	catchplate/authority_webauthn_transition_inputs.py \
+	catchplate/authority_webauthn_registration_replay.py \
+	catchplate/authority_webauthn_stage_replay.py \
+	catchplate/authority_webauthn_completion_replay.py \
+	catchplate/authority_webauthn_complete_proofs.py \
+	catchplate/authority_webauthn_completion_proofs.py \
+	catchplate/authority_webauthn_transition_proof_contract.py \
+	catchplate/authority_webauthn_transition_proof_wire.py \
+	catchplate/authority_webauthn_transition_proof.py \
+	catchplate/authority_webauthn_transition_proof_production.py \
+	catchplate/authority_webauthn_transition_plan_contract.py \
+	catchplate/authority_webauthn_transition_plan_context.py \
+	catchplate/authority_webauthn_transition_plan.py \
+	catchplate/authority_webauthn_transition_plan_owner.py \
+	catchplate/authority_webauthn_transition_policy.py \
+	catchplate/authority_webauthn_transition_configuration.py \
+	catchplate/authority_webauthn_transition_plan_admission.py \
+	catchplate/authority_webauthn_transition_plan_verifier.py \
+	catchplate/authority_webauthn_transition_service.py \
+	catchplate/authority_webauthn_transition_roots_contract.py \
+	catchplate/authority_webauthn_transition_roots.py \
+	catchplate/authority_webauthn_transition_root_reader.py \
+	catchplate/authority_webauthn_transition_root_configuration.py \
+	catchplate/authority_webauthn_transition_exchange_configuration.py \
+	catchplate/authority_webauthn_transition_request.py \
+	catchplate/authority_webauthn_transition_response.py \
+	catchplate/authority_webauthn_transition_transport.py \
+	catchplate/authority_webauthn_transition_live.py \
+	catchplate/authority_webauthn_transition_actions.py \
+	catchplate/authority_webauthn_transition_retention.py \
+	catchplate/authority_recovery_invalidation_retention.py \
+	catchplate/authority_recovery_invalidation_execution_replay.py \
+	catchplate/authority_recovery_invalidation_persistence.py \
+	catchplate/authority_recovery_invalidation_service.py \
+	catchplate/authority_webauthn_transition_persistence.py \
+	catchplate/authority_webauthn_transition_writer_configuration.py \
+	catchplate/authority_webauthn_transition_custody_wire.py \
+	catchplate/authority_webauthn_transition_custody_intent.py \
+	catchplate/authority_webauthn_transition_custody_relay.py \
+	catchplate/authority_webauthn_transition_custody_configuration.py \
+	catchplate/authority_webauthn_transition_custody_transport.py \
+	catchplate/authority_webauthn_transition_custody_persistence.py \
+	catchplate/authority_webauthn_transition_custody_actions.py \
+	catchplate/authority_webauthn_transition_custody_service.py \
+	catchplate/authority_webauthn_transition_custody_read_request.py \
+	catchplate/authority_webauthn_transition_custody_read_transport.py \
+	catchplate/authority_webauthn_transition_custody_read_actions.py \
+	catchplate/authority_webauthn_transition_custody_read_service.py \
+	catchplate/authority_transition_policy.py \
+	catchplate/authority_oidc_session_activation.py \
+	catchplate/authority_oidc_session_activation_reads.py \
+	catchplate/authority_oidc_session_activation_planning.py \
+	catchplate/authority_oidc_session_activation_plan_contract.py \
+	catchplate/authority_oidc_session_activation_plan.py \
+	catchplate/authority_oidc_session_activation_state.py \
+	catchplate/authority_current_root_head.py \
+	catchplate/authority_oidc_session_activation_writes.py \
+	catchplate/authority_oidc_session_activation_journal.py \
+	catchplate/authority_oidc_session_activation_plan_owner.py \
+	catchplate/authority_oidc_session_activation_execution_bundle.py \
+	catchplate/authority_oidc_session_activation_execution_replay.py \
+	catchplate/authority_oidc_session_activation_execution_expectations.py \
+	catchplate/authority_oidc_session_activation_execution_history.py \
+	catchplate/authority_oidc_session_activation_history_exchange.py \
+	catchplate/oidc_session_activation_history_custody_bootstrap.py \
+	catchplate/oidc_session_activation_history_bridge_replay.py \
+	catchplate/authority_oidc_session_activation_history_custody.py \
+	catchplate/authority_oidc_session_activation_completion_admission.py \
+	catchplate/authority_oidc_session_activation_completion.py \
+	catchplate/authority_oidc_session_activation_completion_recovery.py \
+	catchplate/authority_oidc_session_activation_execution_custody.py \
+	catchplate/oidc_session_activation_execution_custody_bootstrap.py \
+	catchplate/authority_oidc_session_activation_execution_authorization.py \
+	catchplate/authority_oidc_session_activation_execution_grant_production.py \
+	catchplate/oidc_session_activation_execution_authorizer_bootstrap.py \
+	catchplate/authority_oidc_session_activation_execution_authorizer_transport.py \
+	catchplate/oidc_session_activation_execution_authorizer_startup.py \
+	catchplate/oidc_session_activation_execution_authorizer_entrypoint.py \
+	catchplate/oidc_session_activation_execution_authorizer_launcher.py \
+	catchplate/oidc_session_activation_execution_authorizer_runner.py \
+	catchplate/authority_oidc_session_activation_reservation.py \
+	catchplate/authority_oidc_session_activation_pending_admission.py \
+	catchplate/authority_oidc_session_activation_reservation_records.py \
+	catchplate/authority_oidc_session_activation_reservation_delivery.py \
+	catchplate/authority_oidc_session_activation_reservation_transport.py \
+	catchplate/oidc_session_activation_execution_reserver_bootstrap.py \
+	catchplate/oidc_session_activation_execution_reserver_startup.py \
+	catchplate/oidc_session_activation_execution_reserver_entrypoint.py \
+	catchplate/oidc_session_activation_execution_reserver_launcher.py \
+	catchplate/oidc_session_activation_execution_reserver_runner.py \
+	catchplate/authority_oidc_session_activation_sql.py \
+	catchplate/authority_oidc_session_activation_sql_transport.py \
+	catchplate/oidc_session_activation_execution_sql_bootstrap.py \
+	catchplate/oidc_session_activation_execution_sql_startup.py \
+	catchplate/oidc_session_activation_execution_sql_entrypoint.py \
+	catchplate/oidc_session_activation_execution_sql_launcher.py \
+	catchplate/oidc_session_activation_execution_sql_runner.py \
+	catchplate/oidc_session_activation_completion_bootstrap.py \
+	catchplate/oidc_session_activation_completion_startup.py \
+	catchplate/oidc_session_activation_completion_entrypoint.py \
+	catchplate/oidc_session_activation_completion_launcher.py \
+	catchplate/oidc_session_activation_completion_runner.py \
+	catchplate/authority_oidc_session_activation_completion_transport.py \
+	catchplate/authority_oidc_session_activation_completion_response.py \
+	catchplate/oidc_session_activation_release_custody_bootstrap.py \
+	catchplate/oidc_session_activation_release_retained_authority.py \
+	catchplate/oidc_session_activation_release_intent.py \
+	catchplate/oidc_session_activation_release_intent_enrollment.py \
+	catchplate/authority_oidc_session_activation_release_intent.py \
+	catchplate/authority_oidc_session_activation_release_committed_inputs.py \
+	catchplate/authority_oidc_session_activation_release_committed_target.py \
+	catchplate/authority_oidc_session_activation_release_committed.py \
+	catchplate/oidc_session_activation_release_proof.py \
+	catchplate/oidc_session_activation_release_proof_enrollment.py \
+	catchplate/authority_oidc_session_activation_release_proof.py \
+	catchplate/authority_oidc_session_activation_release_proof_production.py \
+	catchplate/oidc_session_activation_release_proof_bootstrap.py \
+	catchplate/oidc_session_activation_release_proof_input_issuer_policy.py \
+	catchplate/oidc_session_activation_release_proof_input_production.py \
+	catchplate/oidc_session_activation_release_proof_input_issuer_bootstrap.py \
+	catchplate/oidc_session_activation_release_proof_input_issuer_entrypoint.py \
+	catchplate/oidc_session_activation_release_proof_input_issuer_launcher.py \
+	catchplate/oidc_session_activation_release_proof_input_issuer_startup.py \
+	catchplate/oidc_session_activation_release_proof_input_issuer_runner.py \
+	catchplate/authority_oidc_session_activation_release_proof_input_transport.py \
+	catchplate/authority_oidc_session_activation_release_proof_input_delivery_transport.py \
+	catchplate/oidc_session_activation_release_proof_input_delivery_admission.py \
+	catchplate/oidc_session_activation_release_proof_dynamic_entrypoint.py \
+	catchplate/oidc_session_activation_release_proof_dynamic_launcher.py \
+	catchplate/oidc_session_activation_release_proof_entrypoint.py \
+	catchplate/oidc_session_activation_release_proof_startup.py \
+	catchplate/oidc_session_activation_release_proof_launcher.py \
+	catchplate/oidc_session_activation_release_proof_runner.py \
+	catchplate/authority_oidc_session_activation_release_proof_transport.py \
+	catchplate/oidc_session_activation_release_outcome.py \
+	catchplate/oidc_session_activation_release_outcome_authorization.py \
+	catchplate/authority_oidc_session_activation_release_outcome_store.py \
+	catchplate/oidc_session_activation_release_recovery_authorization.py \
+	catchplate/authority_oidc_session_activation_release_recovery.py \
+	catchplate/oidc_session_activation_release_bootstrap.py \
+	catchplate/oidc_session_activation_release_resources.py \
+	catchplate/oidc_session_activation_release_startup.py \
+	catchplate/oidc_session_activation_release_connection.py \
+	catchplate/oidc_session_activation_release_transport.py \
+	catchplate/oidc_session_activation_release_client_authorization.py \
+	catchplate/control_plane_oidc_session_activation_release_bootstrap.py \
+	catchplate/control_plane_oidc_session_activation_release_client.py \
+	catchplate/control_plane_oidc_session_activation_release_attempt.py \
+	catchplate/control_plane_oidc_session_activation_execution_bootstrap.py \
+	catchplate/control_plane_oidc_session_activation_planning_bootstrap.py \
+	catchplate/control_plane_oidc_session_activation_planning.py \
+	catchplate/control_plane_oidc_session_activation_dispatch_attempt.py \
+	catchplate/control_plane_oidc_session_activation_records.py \
+	catchplate/control_plane_oidc_session_activation_dispatch.py \
+	catchplate/control_plane_oidc_session_activation_completion.py \
+	catchplate/control_plane_oidc_session_activation_consume_bootstrap.py \
+	catchplate/control_plane_oidc_session_activation_consume_execution_bootstrap.py \
+	catchplate/control_plane_oidc_session_activation_consume_authorization.py \
+	catchplate/control_plane_oidc_session_activation_consume_dispatch.py \
+	catchplate/control_plane_oidc_session_activation_consume_completion.py \
+	catchplate/control_plane_oidc_session_activation_release_intent_bootstrap.py \
+	catchplate/control_plane_oidc_session_activation_release_intent.py \
+	catchplate/control_plane_oidc_session_activation_release_proof_bootstrap.py \
+	catchplate/control_plane_oidc_session_activation_release_proof_acquisition_bootstrap.py \
+	catchplate/control_plane_oidc_session_activation_release_proof.py \
+	catchplate/control_plane_oidc_session_activation_release_handoff_bootstrap.py \
+	catchplate/control_plane_oidc_session_activation_release_handoff.py \
+	catchplate/oidc_session_activation_release_grant_issuer_policy.py \
+	catchplate/oidc_session_activation_release_recovery_issuer_policy.py \
+	catchplate/oidc_session_activation_release_recovery_issuer_bootstrap.py \
+	catchplate/oidc_session_activation_release_recovery_issuer_entrypoint.py \
+	catchplate/oidc_session_activation_release_recovery_issuer_startup.py \
+	catchplate/oidc_session_activation_release_recovery_issuer_launcher.py \
+	catchplate/oidc_session_activation_release_recovery_issuer_runner.py \
+	catchplate/authority_oidc_session_activation_release_recovery_grant_transport.py \
+	catchplate/control_plane_oidc_session_activation_release_recovery_grant_acquisition.py \
+	catchplate/control_plane_oidc_session_activation_release_recovery_grant_acquisition_bootstrap.py \
+	catchplate/control_plane_oidc_session_activation_recovery_records.py \
+	catchplate/control_plane_oidc_session_activation_recovery_acquisition.py \
+	catchplate/control_plane_oidc_session_activation_recovery_exchange.py \
+	catchplate/control_plane_oidc_session_activation_recovery_delivery.py \
+	catchplate/control_plane_oidc_session_activation_recovery_http.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_bootstrap.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_selection.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_consume_selection.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_intent_selection.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_history.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_actor.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_controls.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_records.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_exchange.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_http.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_intent_inputs.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_intent.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_proof.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_release.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_release_http.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_delivery.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_delivery_exchange.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_delivery_response.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_delivery_http.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_retained_acquisition.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_retained_exchange.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_consume.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_consume_inputs.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_consume_planning.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_consume_authorization.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_consume_dispatch.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_consume_completion.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_consume_response.py \
+	catchplate/control_plane_oidc_session_activation_completion_recovery_consume_http.py \
+	catchplate/control_plane_oidc_session_activation_approval.py \
+	catchplate/portal_session_activation.py \
+	catchplate/portal_session_activation_authorization.py \
+	catchplate/portal_session_activation_confirmation.py \
+	catchplate/portal_session_activation_confirmation_routes.py \
+	catchplate/control_plane_registration_history_bootstrap.py \
+	catchplate/control_plane_registration_history.py \
+	catchplate/control_plane_registration_finalization_history_bootstrap.py \
+	catchplate/control_plane_registration_finalization_history.py \
+	catchplate/control_plane_registration_finalization_permission.py \
+	catchplate/control_plane_oidc_session_activation_history_bootstrap.py \
+	catchplate/control_plane_oidc_session_activation_history.py \
+	catchplate/control_plane_oidc_session_activation_consume_history.py \
+	catchplate/oidc_session_activation_release_grant_issuer_dynamic_authorization.py \
+	catchplate/authority_oidc_session_activation_release_grant_input_delivery_transport.py \
+	catchplate/oidc_session_activation_release_grant_issuer_dynamic_entrypoint.py \
+	catchplate/oidc_session_activation_release_grant_issuer_dynamic_launcher.py \
+	catchplate/authority_oidc_session_activation_release_grant_production.py \
+	catchplate/authority_oidc_session_activation_release_recovery_grant_production.py \
+	catchplate/authority_oidc_session_activation_release_grant_transport.py \
+	catchplate/oidc_session_activation_release_grant_issuer_bootstrap.py \
+	catchplate/oidc_session_activation_release_grant_issuer_entrypoint.py \
+	catchplate/oidc_session_activation_release_grant_issuer_startup.py \
+	catchplate/oidc_session_activation_release_grant_issuer_launcher.py \
+	catchplate/oidc_session_activation_release_grant_issuer_runner.py \
+	catchplate/workload_identity_issuance_authorization.py \
+	catchplate/native_workload_identity_issuance_authorization.py \
+	catchplate/native_workload_identity_originals.py \
+	catchplate/native_ca_installation_authorization.py \
+	catchplate/native_egress_installation_authorization.py \
+	catchplate/native_network_attachment_authorization.py \
+	catchplate/native_workload_start_authorization.py \
+	catchplate/workload_identity_trust_authorization.py \
+	catchplate/native_workload_identity_trust_authorization.py \
 	scripts/authority/authorize_native_workload_identity_trust.py \
-	serverware/native_enrollment_assignment.py \
-	serverware/native_enrollment_bootstrap_delegation.py \
-	serverware/native_enrollment_bootstrap_setup.py \
-	serverware/workload_identity_trust_publication.py \
+	catchplate/native_enrollment_assignment.py \
+	catchplate/native_enrollment_bootstrap_delegation.py \
+	catchplate/native_enrollment_bootstrap_setup.py \
+	catchplate/workload_identity_trust_publication.py \
 	scripts/publish_workload_identity_trust.py \
-	serverware/workload_identity_issuer_bootstrap.py \
-	serverware/workload_identity_issuer_entrypoint.py \
-	serverware/workload_identity_issuer_startup.py \
-	serverware/workload_identity_issuer_launcher.py \
-	serverware/workload_identity_issuer_service.py \
-	serverware/workload_identity_issuer_transport.py \
-	serverware/workload_identity_issuer_journal.py \
-	serverware/control_plane_workload_identity_bootstrap.py \
-	serverware/control_plane_workload_identity_startup.py \
-	serverware/control_plane_workload_identity_client.py \
-	serverware/control_plane_workload_identity_approval.py \
-	serverware/control_plane_approval_verification.py \
-	serverware/control_plane_admin_token_publication.py \
-	serverware/control_plane_admin_token_resolution.py \
-	serverware/authority_publication_approval.py \
-	serverware/authority_transition_publication_approval.py \
-	serverware/control_plane_publication_authorization.py \
-	serverware/authority_policy_file_approval.py \
-	serverware/authority_transition_policy_file_approval.py \
-	serverware/control_plane_policy_file_publication.py \
-	serverware/control_plane_policy_loaded.py \
-	serverware/control_plane_native_loaded_trust.py \
-	serverware/control_plane_setup_native_policy.py \
-	serverware/authority_store/policy_file_genesis_sql.py \
-	serverware/control_plane_policy_file_genesis.py \
-	serverware/control_plane_policy_genesis_bootstrap.py \
-	serverware/control_plane_policy_genesis_maintenance.py \
-	serverware/control_plane_policy_genesis_runner.py \
-	serverware/portal_policy_genesis.py \
-	serverware/control_plane_policy_file_authority.py \
-	serverware/authority_store/policy_file_read_sql.py \
-	serverware/oauth_application_owner.py \
-	serverware/authority_oauth_activation.py \
-	serverware/authority_oauth_activation_policy.py \
-	serverware/authority_oauth_inventory.py \
-	serverware/authority_transition_oauth_activation.py \
-	serverware/control_plane_oauth_activation.py \
-	serverware/authority_oauth_exchange.py \
-	serverware/authority_oauth_revocation.py \
-	serverware/authority_oauth_revocation_policy.py \
-	serverware/authority_transition_oauth_revocation.py \
-	serverware/control_plane_oauth_revocation.py \
-	serverware/authority_oauth_refresh.py \
-	serverware/authority_oauth_refresh_policy.py \
-	serverware/authority_oauth_measured_refresh.py \
-	serverware/authority_oauth_measured_refresh_policy.py \
-	serverware/authority_transition_oauth_measured_refresh.py \
-	serverware/control_plane_oauth_measured_refresh.py \
-	serverware/authority_transition_oauth_refresh.py \
-	serverware/control_plane_oauth_refresh.py \
-	serverware/authority_credential_currentness.py \
-	serverware/authority_static_credential_provenance.py \
-	serverware/static_credential_provenance_values.py \
-	serverware/authority_credential_currentness_policy.py \
-	serverware/authority_credential_currentness_assignment.py \
-	serverware/control_plane_credential_currentness_assignment.py \
-	serverware/authority_transition_credential_currentness.py \
-	serverware/control_plane_credential_currentness.py \
-	serverware/credential_currentness_rows.py \
-	serverware/credential_ciphertext.py \
-	serverware/control_plane_broker_startup.py \
+	catchplate/workload_identity_issuer_bootstrap.py \
+	catchplate/workload_identity_issuer_entrypoint.py \
+	catchplate/workload_identity_issuer_startup.py \
+	catchplate/workload_identity_issuer_launcher.py \
+	catchplate/workload_identity_issuer_service.py \
+	catchplate/workload_identity_issuer_transport.py \
+	catchplate/workload_identity_issuer_journal.py \
+	catchplate/control_plane_workload_identity_bootstrap.py \
+	catchplate/control_plane_workload_identity_startup.py \
+	catchplate/control_plane_workload_identity_client.py \
+	catchplate/control_plane_workload_identity_approval.py \
+	catchplate/control_plane_approval_verification.py \
+	catchplate/control_plane_admin_token_publication.py \
+	catchplate/control_plane_admin_token_resolution.py \
+	catchplate/authority_publication_approval.py \
+	catchplate/authority_transition_publication_approval.py \
+	catchplate/control_plane_publication_authorization.py \
+	catchplate/authority_policy_file_approval.py \
+	catchplate/authority_transition_policy_file_approval.py \
+	catchplate/control_plane_policy_file_publication.py \
+	catchplate/control_plane_policy_loaded.py \
+	catchplate/control_plane_native_loaded_trust.py \
+	catchplate/control_plane_setup_native_policy.py \
+	catchplate/authority_store/policy_file_genesis_sql.py \
+	catchplate/control_plane_policy_file_genesis.py \
+	catchplate/control_plane_policy_genesis_bootstrap.py \
+	catchplate/control_plane_policy_genesis_maintenance.py \
+	catchplate/control_plane_policy_genesis_runner.py \
+	catchplate/portal_policy_genesis.py \
+	catchplate/control_plane_policy_file_authority.py \
+	catchplate/authority_store/policy_file_read_sql.py \
+	catchplate/oauth_application_owner.py \
+	catchplate/authority_oauth_activation.py \
+	catchplate/authority_oauth_activation_policy.py \
+	catchplate/authority_oauth_inventory.py \
+	catchplate/authority_transition_oauth_activation.py \
+	catchplate/control_plane_oauth_activation.py \
+	catchplate/authority_oauth_exchange.py \
+	catchplate/authority_oauth_revocation.py \
+	catchplate/authority_oauth_revocation_policy.py \
+	catchplate/authority_transition_oauth_revocation.py \
+	catchplate/control_plane_oauth_revocation.py \
+	catchplate/authority_oauth_refresh.py \
+	catchplate/authority_oauth_refresh_policy.py \
+	catchplate/authority_oauth_measured_refresh.py \
+	catchplate/authority_oauth_measured_refresh_policy.py \
+	catchplate/authority_transition_oauth_measured_refresh.py \
+	catchplate/control_plane_oauth_measured_refresh.py \
+	catchplate/authority_transition_oauth_refresh.py \
+	catchplate/control_plane_oauth_refresh.py \
+	catchplate/authority_credential_currentness.py \
+	catchplate/authority_static_credential_provenance.py \
+	catchplate/static_credential_provenance_values.py \
+	catchplate/authority_credential_currentness_policy.py \
+	catchplate/authority_credential_currentness_assignment.py \
+	catchplate/control_plane_credential_currentness_assignment.py \
+	catchplate/authority_transition_credential_currentness.py \
+	catchplate/control_plane_credential_currentness.py \
+	catchplate/credential_currentness_rows.py \
+	catchplate/credential_ciphertext.py \
+	catchplate/control_plane_broker_startup.py \
 	scripts/authority/sign_control_plane_broker_startup.py \
 	scripts/package_native_broker_runtime.py \
-	serverware/native_role_key_contract.py \
-	serverware/native_role_key_provisioner.py \
+	catchplate/native_role_key_contract.py \
+	catchplate/native_role_key_provisioner.py \
 	scripts/native_role_key_kms_parent.py \
 	scripts/package_native_role_key_runtime.py \
 	scripts/package_native_shadow_key_runtime.py \
@@ -1640,353 +1640,353 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/run_native_pilot_authority_coordinator.py \
 	scripts/export_native_shadow_bootstrap_runtime.py \
 	scripts/install_workload_sidecar_unit.py \
-	ops/native-setup-issuers/serverware-setup-native-final.conf \
-	ops/native-setup-issuers/serverware-setup-native-final.service \
-	ops/native-setup-issuers/serverware-setup-native-hardware.conf \
-	ops/native-setup-issuers/serverware-setup-native-hardware.service \
-	ops/native-setup-issuers/serverware-setup-native-proxy.conf \
-	ops/native-setup-issuers/serverware-setup-native-proxy.service \
+	ops/native-setup-issuers/catchplate-setup-native-final.conf \
+	ops/native-setup-issuers/catchplate-setup-native-final.service \
+	ops/native-setup-issuers/catchplate-setup-native-hardware.conf \
+	ops/native-setup-issuers/catchplate-setup-native-hardware.service \
+	ops/native-setup-issuers/catchplate-setup-native-proxy.conf \
+	ops/native-setup-issuers/catchplate-setup-native-proxy.service \
 	scripts/prepare_native_role_keys.py \
 	scripts/seal_native_service_tokens.py \
 	scripts/sign_native_guest_credential_delivery.py \
-	serverware/data_plane_audit_authority.py \
-	serverware/data_plane_audit_store.py \
-	serverware/authority_rbac_currentness.py \
-	serverware/authority_current_root_revocation_head.py \
-	serverware/authority_public_revocation_approval.py \
-	serverware/authority_public_revocation_approval_owner.py \
-	serverware/authority_public_revocation_caller_authorization.py \
-	serverware/authority_public_revocation_caller_signing.py \
-	serverware/authority_public_revocation_execution.py \
-	serverware/authority_public_revocation_preparation.py \
-	serverware/authority_public_revocation_recovery_authorization.py \
-	serverware/authority_public_revocation_request.py \
-	serverware/authority_public_revocation_service.py \
-	serverware/authority_public_revocation_terminal.py \
-	serverware/authority_public_revocation_terminal_bootstrap.py \
-	serverware/authority_public_revocation_transport.py \
-	serverware/authority_public_webauthn_revocation.py \
-	serverware/authority_public_webauthn_revocation_kernel.py \
-	serverware/authority_rbac_recovery.py \
-	serverware/authority_store/rbac_recovery_sql.py \
-	serverware/authority_transition_public_revocation_approval.py \
-	serverware/control_plane_public_revocation.py \
-	serverware/control_plane_public_revocation_approval.py \
-	serverware/control_plane_public_revocation_bootstrap.py \
-	serverware/control_plane_public_revocation_execution.py \
-	serverware/control_plane_public_revocation_records.py \
-	serverware/control_plane_public_revocation_lookup.py \
-	serverware/portal_public_revocation.py \
-	serverware/control_plane_rbac_recovery.py \
-	serverware/authority_rbac_witness.py \
-	serverware/control_plane_rbac_currentness.py \
-	serverware/authority_store/rbac_witness_sql.py \
-	serverware/control_plane_data_plane_audit.py \
-	serverware/native_kms_cms.py \
-	serverware/native_secret_broker_helper.py \
-	serverware/native_jit_review_owner.py \
-	serverware/native_jit_review_material.py \
-	serverware/authority_native_jit_review_assignment.py \
-	serverware/authority_native_jit_review_custody.py \
-	serverware/authority_jit_private_request.py \
-	serverware/authority_jit_request.py \
-	serverware/authority_approver_policy.py \
-	serverware/authority_challenge_id.py \
-	serverware/rbac.py \
-	serverware/native_oauth_refresh.py \
-	serverware/native_oauth_refresh_owner.py \
-	serverware/native_oauth_refresh_receipts.py \
-	serverware/native_oauth_refresh_tls.py \
-	serverware/native_oauth_exchange.py \
-	serverware/authority_oauth_measured_exchange.py \
-	serverware/authority_oauth_measured_setup.py \
-	serverware/authority_oauth_measured_setup_policy.py \
-	serverware/authority_oauth_setup.py \
-	serverware/authority_setup_cancel.py \
-	serverware/authority_transition_setup_cancel.py \
-	serverware/control_plane_setup_cancel.py \
-	serverware/authority_setup_create.py \
-	serverware/authority_transition_setup_create.py \
-	serverware/control_plane_setup_create.py \
-	serverware/authority_setup_bind_credential.py \
-	serverware/authority_transition_setup_bind_credential.py \
-	serverware/control_plane_setup_bind_credential.py \
-	serverware/authority_static_credential_create.py \
-	serverware/authority_static_credential_rotate.py \
-	serverware/authority_static_credential_rotation_custody.py \
-	serverware/authority_static_credential_rotation_approval.py \
-	serverware/authority_transition_static_credential_rotate.py \
-	serverware/authority_transition_static_credential_rotation_approval.py \
-	serverware/native_static_credential.py \
-	serverware/native_static_credential_rotation.py \
-	serverware/native_static_credential_rotation_owner.py \
-	serverware/authority_static_credential_approval.py \
-	serverware/authority_static_credential_custody.py \
-	serverware/authority_static_credential_assignment.py \
-	serverware/authority_static_credential_assignment_issuer.py \
-	serverware/authority_transition_static_credential_create.py \
-	serverware/authority_transition_static_credential_approval.py \
-	serverware/native_static_credential_owner.py \
-	serverware/control_plane_static_credential.py \
-	serverware/portal_static_credential.py \
-	serverware/control_plane_static_credential_rotation.py \
-	serverware/control_plane_static_credential_provenance.py \
-	serverware/portal_static_credential_rotation.py \
-	serverware/authority_transition_oauth_setup.py \
-	serverware/authority_transition_oauth_setup_rows.py \
-	serverware/authority_oauth_measured_exchange_policy.py \
-	serverware/authority_transition_oauth_measured_exchange.py \
-	serverware/native_oauth_exchange_receipts.py \
-	serverware/native_oauth_exchange_tls.py \
-	serverware/native_oauth_exchange_owner.py \
-	serverware/native_oauth_setup.py \
-	serverware/native_oauth_setup_rows.py \
-	serverware/native_oauth_setup_receipts.py \
-	serverware/native_oauth_setup_tls.py \
-	serverware/native_oauth_setup_owner.py \
-	serverware/native_oauth_reconnect.py \
-	serverware/native_oauth_reconnect_owner.py \
-	serverware/native_oauth_reconnect_receipts.py \
-	serverware/native_oauth_reconnect_rows.py \
-	serverware/native_oauth_reconnect_tls.py \
-	serverware/native_secret_broker_history.py \
-	serverware/native_oauth_succession.py \
-	serverware/native_oauth_succession_rows.py \
-	serverware/native_oauth_succession_materials.py \
-	serverware/native_oauth_succession_receipts.py \
-	serverware/native_oauth_succession_tls.py \
-	serverware/native_oauth_succession_owner.py \
-	serverware/authority_oauth_provider_retirement.py \
-	serverware/authority_oauth_measured_capture_retirement.py \
-	serverware/authority_oauth_measured_capture_retirement_policy.py \
-	serverware/authority_transition_oauth_measured_capture_retirement.py \
-	serverware/control_plane_oauth_measured_capture_retirement.py \
-	serverware/native_oauth_capture_retirement.py \
-	serverware/oauth_retirement_values.py \
-	serverware/oauth_retirement_policy_values.py \
-	serverware/oauth_pending_retirement_values.py \
-	serverware/oauth_capture_retirement_policy.py \
-	serverware/oauth_pending_retirement_policy.py \
-	serverware/native_oauth_capture_retirement_owner.py \
-	serverware/native_oauth_capture_retirement_receipts.py \
-	serverware/authority_oauth_reconnect.py \
-	serverware/authority_oauth_reconnect_policy.py \
-	serverware/authority_transition_oauth_reconnect.py \
-	serverware/authority_transition_oauth_reconnect_rows.py \
-	serverware/control_plane_oauth_reconnect.py \
-	serverware/oauth_reconnect_owner.py \
-	serverware/portal_oauth_reconnect.py \
-	serverware/authority_oauth_retirement_succession.py \
-	serverware/authority_oauth_retirement_succession_approvals.py \
-	serverware/authority_oauth_retirement_succession_catalog.py \
-	serverware/authority_oauth_retirement_succession_contacts.py \
-	serverware/authority_oauth_retirement_succession_current.py \
-	serverware/authority_oauth_retirement_succession_fresh.py \
-	serverware/authority_oauth_retirement_succession_inventory.py \
-	serverware/authority_oauth_retirement_succession_lineages.py \
-	serverware/authority_oauth_retirement_succession_materials.py \
-	serverware/authority_oauth_retirement_succession_policy.py \
-	serverware/authority_oauth_retirement_succession_queries.py \
-	serverware/authority_oauth_retirement_succession_records.py \
-	serverware/authority_oauth_retirement_succession_retire.py \
-	serverware/authority_oauth_retirement_succession_snapshots.py \
-	serverware/authority_transition_oauth_retirement_succession.py \
-	serverware/control_plane_oauth_succession.py \
-	serverware/control_plane_oauth_succession_ceremony.py \
-	serverware/oauth_retirement_succession_owner.py \
-	serverware/portal_oauth_succession.py \
+	catchplate/data_plane_audit_authority.py \
+	catchplate/data_plane_audit_store.py \
+	catchplate/authority_rbac_currentness.py \
+	catchplate/authority_current_root_revocation_head.py \
+	catchplate/authority_public_revocation_approval.py \
+	catchplate/authority_public_revocation_approval_owner.py \
+	catchplate/authority_public_revocation_caller_authorization.py \
+	catchplate/authority_public_revocation_caller_signing.py \
+	catchplate/authority_public_revocation_execution.py \
+	catchplate/authority_public_revocation_preparation.py \
+	catchplate/authority_public_revocation_recovery_authorization.py \
+	catchplate/authority_public_revocation_request.py \
+	catchplate/authority_public_revocation_service.py \
+	catchplate/authority_public_revocation_terminal.py \
+	catchplate/authority_public_revocation_terminal_bootstrap.py \
+	catchplate/authority_public_revocation_transport.py \
+	catchplate/authority_public_webauthn_revocation.py \
+	catchplate/authority_public_webauthn_revocation_kernel.py \
+	catchplate/authority_rbac_recovery.py \
+	catchplate/authority_store/rbac_recovery_sql.py \
+	catchplate/authority_transition_public_revocation_approval.py \
+	catchplate/control_plane_public_revocation.py \
+	catchplate/control_plane_public_revocation_approval.py \
+	catchplate/control_plane_public_revocation_bootstrap.py \
+	catchplate/control_plane_public_revocation_execution.py \
+	catchplate/control_plane_public_revocation_records.py \
+	catchplate/control_plane_public_revocation_lookup.py \
+	catchplate/portal_public_revocation.py \
+	catchplate/control_plane_rbac_recovery.py \
+	catchplate/authority_rbac_witness.py \
+	catchplate/control_plane_rbac_currentness.py \
+	catchplate/authority_store/rbac_witness_sql.py \
+	catchplate/control_plane_data_plane_audit.py \
+	catchplate/native_kms_cms.py \
+	catchplate/native_secret_broker_helper.py \
+	catchplate/native_jit_review_owner.py \
+	catchplate/native_jit_review_material.py \
+	catchplate/authority_native_jit_review_assignment.py \
+	catchplate/authority_native_jit_review_custody.py \
+	catchplate/authority_jit_private_request.py \
+	catchplate/authority_jit_request.py \
+	catchplate/authority_approver_policy.py \
+	catchplate/authority_challenge_id.py \
+	catchplate/rbac.py \
+	catchplate/native_oauth_refresh.py \
+	catchplate/native_oauth_refresh_owner.py \
+	catchplate/native_oauth_refresh_receipts.py \
+	catchplate/native_oauth_refresh_tls.py \
+	catchplate/native_oauth_exchange.py \
+	catchplate/authority_oauth_measured_exchange.py \
+	catchplate/authority_oauth_measured_setup.py \
+	catchplate/authority_oauth_measured_setup_policy.py \
+	catchplate/authority_oauth_setup.py \
+	catchplate/authority_setup_cancel.py \
+	catchplate/authority_transition_setup_cancel.py \
+	catchplate/control_plane_setup_cancel.py \
+	catchplate/authority_setup_create.py \
+	catchplate/authority_transition_setup_create.py \
+	catchplate/control_plane_setup_create.py \
+	catchplate/authority_setup_bind_credential.py \
+	catchplate/authority_transition_setup_bind_credential.py \
+	catchplate/control_plane_setup_bind_credential.py \
+	catchplate/authority_static_credential_create.py \
+	catchplate/authority_static_credential_rotate.py \
+	catchplate/authority_static_credential_rotation_custody.py \
+	catchplate/authority_static_credential_rotation_approval.py \
+	catchplate/authority_transition_static_credential_rotate.py \
+	catchplate/authority_transition_static_credential_rotation_approval.py \
+	catchplate/native_static_credential.py \
+	catchplate/native_static_credential_rotation.py \
+	catchplate/native_static_credential_rotation_owner.py \
+	catchplate/authority_static_credential_approval.py \
+	catchplate/authority_static_credential_custody.py \
+	catchplate/authority_static_credential_assignment.py \
+	catchplate/authority_static_credential_assignment_issuer.py \
+	catchplate/authority_transition_static_credential_create.py \
+	catchplate/authority_transition_static_credential_approval.py \
+	catchplate/native_static_credential_owner.py \
+	catchplate/control_plane_static_credential.py \
+	catchplate/portal_static_credential.py \
+	catchplate/control_plane_static_credential_rotation.py \
+	catchplate/control_plane_static_credential_provenance.py \
+	catchplate/portal_static_credential_rotation.py \
+	catchplate/authority_transition_oauth_setup.py \
+	catchplate/authority_transition_oauth_setup_rows.py \
+	catchplate/authority_oauth_measured_exchange_policy.py \
+	catchplate/authority_transition_oauth_measured_exchange.py \
+	catchplate/native_oauth_exchange_receipts.py \
+	catchplate/native_oauth_exchange_tls.py \
+	catchplate/native_oauth_exchange_owner.py \
+	catchplate/native_oauth_setup.py \
+	catchplate/native_oauth_setup_rows.py \
+	catchplate/native_oauth_setup_receipts.py \
+	catchplate/native_oauth_setup_tls.py \
+	catchplate/native_oauth_setup_owner.py \
+	catchplate/native_oauth_reconnect.py \
+	catchplate/native_oauth_reconnect_owner.py \
+	catchplate/native_oauth_reconnect_receipts.py \
+	catchplate/native_oauth_reconnect_rows.py \
+	catchplate/native_oauth_reconnect_tls.py \
+	catchplate/native_secret_broker_history.py \
+	catchplate/native_oauth_succession.py \
+	catchplate/native_oauth_succession_rows.py \
+	catchplate/native_oauth_succession_materials.py \
+	catchplate/native_oauth_succession_receipts.py \
+	catchplate/native_oauth_succession_tls.py \
+	catchplate/native_oauth_succession_owner.py \
+	catchplate/authority_oauth_provider_retirement.py \
+	catchplate/authority_oauth_measured_capture_retirement.py \
+	catchplate/authority_oauth_measured_capture_retirement_policy.py \
+	catchplate/authority_transition_oauth_measured_capture_retirement.py \
+	catchplate/control_plane_oauth_measured_capture_retirement.py \
+	catchplate/native_oauth_capture_retirement.py \
+	catchplate/oauth_retirement_values.py \
+	catchplate/oauth_retirement_policy_values.py \
+	catchplate/oauth_pending_retirement_values.py \
+	catchplate/oauth_capture_retirement_policy.py \
+	catchplate/oauth_pending_retirement_policy.py \
+	catchplate/native_oauth_capture_retirement_owner.py \
+	catchplate/native_oauth_capture_retirement_receipts.py \
+	catchplate/authority_oauth_reconnect.py \
+	catchplate/authority_oauth_reconnect_policy.py \
+	catchplate/authority_transition_oauth_reconnect.py \
+	catchplate/authority_transition_oauth_reconnect_rows.py \
+	catchplate/control_plane_oauth_reconnect.py \
+	catchplate/oauth_reconnect_owner.py \
+	catchplate/portal_oauth_reconnect.py \
+	catchplate/authority_oauth_retirement_succession.py \
+	catchplate/authority_oauth_retirement_succession_approvals.py \
+	catchplate/authority_oauth_retirement_succession_catalog.py \
+	catchplate/authority_oauth_retirement_succession_contacts.py \
+	catchplate/authority_oauth_retirement_succession_current.py \
+	catchplate/authority_oauth_retirement_succession_fresh.py \
+	catchplate/authority_oauth_retirement_succession_inventory.py \
+	catchplate/authority_oauth_retirement_succession_lineages.py \
+	catchplate/authority_oauth_retirement_succession_materials.py \
+	catchplate/authority_oauth_retirement_succession_policy.py \
+	catchplate/authority_oauth_retirement_succession_queries.py \
+	catchplate/authority_oauth_retirement_succession_records.py \
+	catchplate/authority_oauth_retirement_succession_retire.py \
+	catchplate/authority_oauth_retirement_succession_snapshots.py \
+	catchplate/authority_transition_oauth_retirement_succession.py \
+	catchplate/control_plane_oauth_succession.py \
+	catchplate/control_plane_oauth_succession_ceremony.py \
+	catchplate/oauth_retirement_succession_owner.py \
+	catchplate/portal_oauth_succession.py \
 	scripts/test_oauth_retirement_succession_contract.py \
-	serverware/authority_oauth_measured_cleanup_policy.py \
-	serverware/authority_oauth_measured_cleanup.py \
-	serverware/authority_transition_oauth_measured_cleanup.py \
-	serverware/control_plane_oauth_measured_cleanup.py \
-	serverware/authority_oauth_family_query_group.py \
-	serverware/authority_oauth_measured_pending_originals.py \
-	serverware/authority_oauth_measured_pending_retirement.py \
-	serverware/authority_oauth_measured_pending_retirement_policy.py \
-	serverware/authority_transition_oauth_measured_pending_retirement.py \
-	serverware/control_plane_oauth_measured_pending_retirement.py \
+	catchplate/authority_oauth_measured_cleanup_policy.py \
+	catchplate/authority_oauth_measured_cleanup.py \
+	catchplate/authority_transition_oauth_measured_cleanup.py \
+	catchplate/control_plane_oauth_measured_cleanup.py \
+	catchplate/authority_oauth_family_query_group.py \
+	catchplate/authority_oauth_measured_pending_originals.py \
+	catchplate/authority_oauth_measured_pending_retirement.py \
+	catchplate/authority_oauth_measured_pending_retirement_policy.py \
+	catchplate/authority_transition_oauth_measured_pending_retirement.py \
+	catchplate/control_plane_oauth_measured_pending_retirement.py \
 	scripts/authority/check_oauth_family_query_group.py \
-	serverware/native_oauth_cleanup_owner.py \
-	serverware/native_oauth_cleanup_receipts.py \
-	serverware/native_oauth_cleanup.py \
-	serverware/native_oauth_pending_retirement_owner.py \
-	serverware/native_oauth_pending_retirement_receipts.py \
-	serverware/native_oauth_pending_retirement.py \
-	serverware/control_plane_oauth_measured_exchange.py \
-	serverware/portal_oauth_measured_consent.py \
-	serverware/control_plane_oauth_setup.py \
-	serverware/portal_oauth_setup.py \
-	serverware/authority_policy_candidate.py \
-	serverware/authority_setup_policy.py \
-	serverware/authority_setup_native_enrollment.py \
-	serverware/authority_setup_native_enrollment_policy.py \
-	serverware/authority_transition_setup_native_enrollment.py \
-	serverware/control_plane_setup_native_enrollment.py \
-	serverware/authority_setup_native_ca.py \
-	serverware/authority_transition_setup_native_ca.py \
-	serverware/control_plane_setup_native_ca.py \
-	serverware/authority_setup_native_canary.py \
-	serverware/authority_transition_setup_native_canary.py \
-	serverware/control_plane_setup_native_canary.py \
-	serverware/authority_setup_native_runtime.py \
-	serverware/authority_setup_native_runtime_policy.py \
-	serverware/authority_setup_native_runtime_receipt.py \
-	serverware/authority_setup_native_runtime_capture.py \
-	serverware/authority_transition_setup_native_runtime.py \
-	serverware/control_plane_setup_native_runtime.py \
-	serverware/authority_setup_policy_admission.py \
-	serverware/authority_transition_setup_policy.py \
-	serverware/control_plane_setup_policy.py \
-	serverware/portal_setup_policy.py \
-	serverware/portal_setup_native.py \
-	serverware/portal_setup_native_enrollment.py \
-	serverware/portal_setup_native_ca.py \
-	serverware/portal_setup_native_canary.py \
-	serverware/portal_setup_native_runtime.py \
-	serverware/native_setup_runtime_collector.py \
-	serverware/authority_policy_candidate_evidence.py \
-	serverware/authority_policy_canary_native_opening.py \
-	serverware/authority_policy_canary_native_runtime.py \
-	serverware/authority_policy_canary_native_observation_originals.py \
-	serverware/authority_policy_canary_native_request_commitment.py \
-	serverware/authority_transition_policy_canary_native_detail.py \
-	serverware/authority_policy_canary_native_observation_semantics.py \
-	serverware/authority_policy_canary_native_comparison.py \
-	serverware/authority_policy_canary_native_pilot.py \
-	serverware/native_pilot_inventory_publication.py \
+	catchplate/native_oauth_cleanup_owner.py \
+	catchplate/native_oauth_cleanup_receipts.py \
+	catchplate/native_oauth_cleanup.py \
+	catchplate/native_oauth_pending_retirement_owner.py \
+	catchplate/native_oauth_pending_retirement_receipts.py \
+	catchplate/native_oauth_pending_retirement.py \
+	catchplate/control_plane_oauth_measured_exchange.py \
+	catchplate/portal_oauth_measured_consent.py \
+	catchplate/control_plane_oauth_setup.py \
+	catchplate/portal_oauth_setup.py \
+	catchplate/authority_policy_candidate.py \
+	catchplate/authority_setup_policy.py \
+	catchplate/authority_setup_native_enrollment.py \
+	catchplate/authority_setup_native_enrollment_policy.py \
+	catchplate/authority_transition_setup_native_enrollment.py \
+	catchplate/control_plane_setup_native_enrollment.py \
+	catchplate/authority_setup_native_ca.py \
+	catchplate/authority_transition_setup_native_ca.py \
+	catchplate/control_plane_setup_native_ca.py \
+	catchplate/authority_setup_native_canary.py \
+	catchplate/authority_transition_setup_native_canary.py \
+	catchplate/control_plane_setup_native_canary.py \
+	catchplate/authority_setup_native_runtime.py \
+	catchplate/authority_setup_native_runtime_policy.py \
+	catchplate/authority_setup_native_runtime_receipt.py \
+	catchplate/authority_setup_native_runtime_capture.py \
+	catchplate/authority_transition_setup_native_runtime.py \
+	catchplate/control_plane_setup_native_runtime.py \
+	catchplate/authority_setup_policy_admission.py \
+	catchplate/authority_transition_setup_policy.py \
+	catchplate/control_plane_setup_policy.py \
+	catchplate/portal_setup_policy.py \
+	catchplate/portal_setup_native.py \
+	catchplate/portal_setup_native_enrollment.py \
+	catchplate/portal_setup_native_ca.py \
+	catchplate/portal_setup_native_canary.py \
+	catchplate/portal_setup_native_runtime.py \
+	catchplate/native_setup_runtime_collector.py \
+	catchplate/authority_policy_candidate_evidence.py \
+	catchplate/authority_policy_canary_native_opening.py \
+	catchplate/authority_policy_canary_native_runtime.py \
+	catchplate/authority_policy_canary_native_observation_originals.py \
+	catchplate/authority_policy_canary_native_request_commitment.py \
+	catchplate/authority_transition_policy_canary_native_detail.py \
+	catchplate/authority_policy_canary_native_observation_semantics.py \
+	catchplate/authority_policy_canary_native_comparison.py \
+	catchplate/authority_policy_canary_native_pilot.py \
+	catchplate/native_pilot_inventory_publication.py \
 	scripts/authority/publish_native_pilot_inventory.py \
 	scripts/authority/recover_native_policy_activation.py \
-	serverware/policy_route_authority.py \
-	serverware/authority_transition_policy_canary_route_authority.py \
-	serverware/authority_policy_canary_native_checkpoint.py \
-	serverware/authority_policy_canary_native_cumulative.py \
-	serverware/authority_transition_policy_canary_native_cumulative.py \
-	serverware/authority_policy_canary_heartbeat_policy.py \
-	serverware/authority_policy_canary_finalization_policy.py \
-	serverware/authority_policy_canary_native_final_cumulative.py \
-	serverware/authority_transition_policy_canary_native_finalization.py \
-	serverware/authority_policy_canary_native_readiness.py \
-	serverware/authority_policy_canary_native_readiness_counters.py \
-	serverware/authority_transition_policy_canary_native_readiness.py \
-	serverware/authority_transition_policy_canary_native_heartbeat.py \
-	serverware/authority_transition_policy_canary_native_checkpoint.py \
-	serverware/authority_transition_policy_canary_native_runtime.py \
-	serverware/authority_transition_policy_canary_native_opening.py \
-	serverware/authority_policy_candidate_inventory.py \
-	serverware/authority_policy_candidate_policy.py \
-	serverware/authority_transition_policy_candidate.py \
-	serverware/authority_transition_policy_candidate_claim.py \
-	serverware/authority_transition_policy_candidate_context.py \
-	serverware/authority_transition_policy_candidate_publication.py \
-	serverware/authority_transition_policy_candidate_trust.py \
-	serverware/control_plane_policy_candidate.py \
-	serverware/control_plane_policy_candidate_recovery.py \
-	serverware/authority_policy_canary.py \
-	serverware/authority_policy_canary_delivery.py \
-	serverware/authority_policy_canary_delivery_policy.py \
-	serverware/authority_policy_canary_delivery_completion.py \
-	serverware/authority_transition_policy_canary_delivery.py \
-	serverware/control_plane_policy_canary_delivery.py \
-	serverware/authority_policy_canary_evidence.py \
-	serverware/authority_policy_canary_policy.py \
-	serverware/authority_policy_canary_tables.py \
-	serverware/authority_transition_policy_canary.py \
-	serverware/authority_transition_policy_canary_active.py \
-	serverware/authority_transition_policy_canary_compiler.py \
-	serverware/authority_transition_policy_canary_current.py \
-	serverware/authority_transition_policy_canary_custody.py \
-	serverware/authority_transition_policy_canary_handoff.py \
-	serverware/authority_transition_policy_canary_lifecycle.py \
-	serverware/authority_transition_policy_canary_membership.py \
-	serverware/authority_transition_policy_canary_reads.py \
-	serverware/authority_transition_policy_canary_shadow.py \
-	serverware/authority_transition_policy_canary_state.py \
-	serverware/control_plane_policy_canary.py \
-	serverware/control_plane_policy_canary_startup.py \
-	serverware/portal_policy_candidate.py \
-	serverware/native_service_tokens.py \
-	serverware/response_v2_guest_delivery.py \
+	catchplate/policy_route_authority.py \
+	catchplate/authority_transition_policy_canary_route_authority.py \
+	catchplate/authority_policy_canary_native_checkpoint.py \
+	catchplate/authority_policy_canary_native_cumulative.py \
+	catchplate/authority_transition_policy_canary_native_cumulative.py \
+	catchplate/authority_policy_canary_heartbeat_policy.py \
+	catchplate/authority_policy_canary_finalization_policy.py \
+	catchplate/authority_policy_canary_native_final_cumulative.py \
+	catchplate/authority_transition_policy_canary_native_finalization.py \
+	catchplate/authority_policy_canary_native_readiness.py \
+	catchplate/authority_policy_canary_native_readiness_counters.py \
+	catchplate/authority_transition_policy_canary_native_readiness.py \
+	catchplate/authority_transition_policy_canary_native_heartbeat.py \
+	catchplate/authority_transition_policy_canary_native_checkpoint.py \
+	catchplate/authority_transition_policy_canary_native_runtime.py \
+	catchplate/authority_transition_policy_canary_native_opening.py \
+	catchplate/authority_policy_candidate_inventory.py \
+	catchplate/authority_policy_candidate_policy.py \
+	catchplate/authority_transition_policy_candidate.py \
+	catchplate/authority_transition_policy_candidate_claim.py \
+	catchplate/authority_transition_policy_candidate_context.py \
+	catchplate/authority_transition_policy_candidate_publication.py \
+	catchplate/authority_transition_policy_candidate_trust.py \
+	catchplate/control_plane_policy_candidate.py \
+	catchplate/control_plane_policy_candidate_recovery.py \
+	catchplate/authority_policy_canary.py \
+	catchplate/authority_policy_canary_delivery.py \
+	catchplate/authority_policy_canary_delivery_policy.py \
+	catchplate/authority_policy_canary_delivery_completion.py \
+	catchplate/authority_transition_policy_canary_delivery.py \
+	catchplate/control_plane_policy_canary_delivery.py \
+	catchplate/authority_policy_canary_evidence.py \
+	catchplate/authority_policy_canary_policy.py \
+	catchplate/authority_policy_canary_tables.py \
+	catchplate/authority_transition_policy_canary.py \
+	catchplate/authority_transition_policy_canary_active.py \
+	catchplate/authority_transition_policy_canary_compiler.py \
+	catchplate/authority_transition_policy_canary_current.py \
+	catchplate/authority_transition_policy_canary_custody.py \
+	catchplate/authority_transition_policy_canary_handoff.py \
+	catchplate/authority_transition_policy_canary_lifecycle.py \
+	catchplate/authority_transition_policy_canary_membership.py \
+	catchplate/authority_transition_policy_canary_reads.py \
+	catchplate/authority_transition_policy_canary_shadow.py \
+	catchplate/authority_transition_policy_canary_state.py \
+	catchplate/control_plane_policy_canary.py \
+	catchplate/control_plane_policy_canary_startup.py \
+	catchplate/portal_policy_candidate.py \
+	catchplate/native_service_tokens.py \
+	catchplate/response_v2_guest_delivery.py \
 	scripts/native_broker_kms_parent.py \
 	scripts/native_broker_history_kms_parent.py \
-	serverware/authority_oauth_family_retirement.py \
-	serverware/authority_oauth_refresh_cleanup.py \
-	serverware/authority_oauth_refresh_cleanup_policy.py \
-	serverware/authority_transition_oauth_refresh_cleanup.py \
-	serverware/control_plane_oauth_refresh_cleanup.py \
+	catchplate/authority_oauth_family_retirement.py \
+	catchplate/authority_oauth_refresh_cleanup.py \
+	catchplate/authority_oauth_refresh_cleanup_policy.py \
+	catchplate/authority_transition_oauth_refresh_cleanup.py \
+	catchplate/control_plane_oauth_refresh_cleanup.py \
 	scripts/verify_nitro_tee.py \
-	serverware/native_shadow_nitro_profile.py \
-	serverware/native_shadow_nitro_originals.py \
-	serverware/native_shadow_nitro_verifier.py \
-	serverware/native_shadow_key_admission_profile.py \
-	serverware/native_shadow_key_admission_verifier.py \
-	serverware/native_shadow_bridge_admission_profile.py \
-	serverware/native_shadow_bridge_admission_verifier.py \
-	serverware/native_shadow_retrieval_artifacts.py \
-	serverware/native_shadow_retrieval_store.py \
-	serverware/native_shadow_guest_delivery.py \
-	serverware/custody_generation_grants.py \
-	serverware/custody_generation_originals.py \
-	serverware/custody_generation_inputs.py \
-	serverware/custody_commitment_inputs.py \
-	serverware/custody_generation_launch.py \
-	serverware/custody_generation_business.py \
-	serverware/native_shadow_persistence_artifacts.py \
-	serverware/native_shadow_persistence_inputs.py \
-	serverware/native_shadow_generation_install_inputs.py \
-	serverware/native_shadow_proof_cohort_assignment.py \
-	serverware/native_shadow_proof_cohort_control.py \
-	serverware/native_shadow_endpoint_driver.py \
-	serverware/native_pilot_launch.py \
-	serverware/native_pilot_endpoint_inputs.py \
-	serverware/native_pilot_operator.py \
-	serverware/native_pilot_operator_channel.py \
-	serverware/native_pilot_public_inputs.py \
-	serverware/native_pilot_publication.py \
-	serverware/native_pilot_scope_authority.py \
-	serverware/native_pilot_driver_authority.py \
-	serverware/native_pilot_window_authority.py \
-	serverware/native_pilot_closure_authority.py \
-	serverware/native_pilot_assignment.py \
-	serverware/native_pilot_genesis_parent_authority.py \
-	serverware/native_pilot_genesis_parent_control.py \
-	serverware/native_pilot_genesis_parent_control_io.py \
-	serverware/native_pilot_genesis_coordinator_peer.py \
-	serverware/native_pilot_genesis_ordinary_initial_profile.py \
-	serverware/native_pilot_genesis_ordinary_initial_authority.py \
-	serverware/native_pilot_genesis_ordinary_control.py \
-	serverware/native_pilot_genesis_ordinary_control_process.py \
-	serverware/native_pilot_genesis_ordinary_retirement.py \
-	serverware/native_pilot_genesis_ordinary_resources.py \
-	serverware/native_pilot_genesis_ordinary_runtime.py \
-	serverware/native_pilot_genesis_ordinary_authority.py \
-	serverware/native_pilot_genesis_endpoint_profile.py \
-	serverware/native_pilot_genesis_endpoint_process.py \
-	serverware/native_pilot_genesis_endpoint_resources.py \
-	serverware/native_pilot_genesis_endpoint_control.py \
-	serverware/native_pilot_genesis_endpoint_release_authority.py \
-	serverware/native_pilot_genesis_delivery_authority.py \
-	serverware/native_pilot_genesis_coordinator_runtime.py \
-	serverware/native_pilot_genesis_key_profile.py \
-	serverware/native_pilot_genesis_key_authority.py \
-	serverware/native_pilot_genesis_closure_authority.py \
-	serverware/native_pilot_genesis_native_service_authority.py \
-	serverware/native_pilot_genesis_encrypted_authority.py \
-	serverware/native_pilot_genesis_verifier_authority.py \
-	serverware/native_pilot_genesis_launch_profile.py \
-	serverware/native_pilot_genesis_coordinator_assembly.py \
-	serverware/native_pilot_genesis_coordinator_resources.py \
-	serverware/native_pilot_genesis_coordinator_control.py \
-	serverware/native_pilot_genesis_jobs.py \
-	serverware/native_pilot_genesis_job_publication.py \
-	serverware/native_pilot_genesis_launch_install.py \
-	serverware/native_pilot_genesis_publication.py \
-	serverware/native_pilot_genesis_execution_protocol.py \
-	serverware/native_pilot_genesis_execution.py \
-	serverware/native_pilot_genesis_authority_channel.py \
-	serverware/native_pilot_genesis_authority.py \
-	serverware/native_pilot_genesis_core_profile.py \
-	serverware/native_pilot_genesis_core.py \
+	catchplate/native_shadow_nitro_profile.py \
+	catchplate/native_shadow_nitro_originals.py \
+	catchplate/native_shadow_nitro_verifier.py \
+	catchplate/native_shadow_key_admission_profile.py \
+	catchplate/native_shadow_key_admission_verifier.py \
+	catchplate/native_shadow_bridge_admission_profile.py \
+	catchplate/native_shadow_bridge_admission_verifier.py \
+	catchplate/native_shadow_retrieval_artifacts.py \
+	catchplate/native_shadow_retrieval_store.py \
+	catchplate/native_shadow_guest_delivery.py \
+	catchplate/custody_generation_grants.py \
+	catchplate/custody_generation_originals.py \
+	catchplate/custody_generation_inputs.py \
+	catchplate/custody_commitment_inputs.py \
+	catchplate/custody_generation_launch.py \
+	catchplate/custody_generation_business.py \
+	catchplate/native_shadow_persistence_artifacts.py \
+	catchplate/native_shadow_persistence_inputs.py \
+	catchplate/native_shadow_generation_install_inputs.py \
+	catchplate/native_shadow_proof_cohort_assignment.py \
+	catchplate/native_shadow_proof_cohort_control.py \
+	catchplate/native_shadow_endpoint_driver.py \
+	catchplate/native_pilot_launch.py \
+	catchplate/native_pilot_endpoint_inputs.py \
+	catchplate/native_pilot_operator.py \
+	catchplate/native_pilot_operator_channel.py \
+	catchplate/native_pilot_public_inputs.py \
+	catchplate/native_pilot_publication.py \
+	catchplate/native_pilot_scope_authority.py \
+	catchplate/native_pilot_driver_authority.py \
+	catchplate/native_pilot_window_authority.py \
+	catchplate/native_pilot_closure_authority.py \
+	catchplate/native_pilot_assignment.py \
+	catchplate/native_pilot_genesis_parent_authority.py \
+	catchplate/native_pilot_genesis_parent_control.py \
+	catchplate/native_pilot_genesis_parent_control_io.py \
+	catchplate/native_pilot_genesis_coordinator_peer.py \
+	catchplate/native_pilot_genesis_ordinary_initial_profile.py \
+	catchplate/native_pilot_genesis_ordinary_initial_authority.py \
+	catchplate/native_pilot_genesis_ordinary_control.py \
+	catchplate/native_pilot_genesis_ordinary_control_process.py \
+	catchplate/native_pilot_genesis_ordinary_retirement.py \
+	catchplate/native_pilot_genesis_ordinary_resources.py \
+	catchplate/native_pilot_genesis_ordinary_runtime.py \
+	catchplate/native_pilot_genesis_ordinary_authority.py \
+	catchplate/native_pilot_genesis_endpoint_profile.py \
+	catchplate/native_pilot_genesis_endpoint_process.py \
+	catchplate/native_pilot_genesis_endpoint_resources.py \
+	catchplate/native_pilot_genesis_endpoint_control.py \
+	catchplate/native_pilot_genesis_endpoint_release_authority.py \
+	catchplate/native_pilot_genesis_delivery_authority.py \
+	catchplate/native_pilot_genesis_coordinator_runtime.py \
+	catchplate/native_pilot_genesis_key_profile.py \
+	catchplate/native_pilot_genesis_key_authority.py \
+	catchplate/native_pilot_genesis_closure_authority.py \
+	catchplate/native_pilot_genesis_native_service_authority.py \
+	catchplate/native_pilot_genesis_encrypted_authority.py \
+	catchplate/native_pilot_genesis_verifier_authority.py \
+	catchplate/native_pilot_genesis_launch_profile.py \
+	catchplate/native_pilot_genesis_coordinator_assembly.py \
+	catchplate/native_pilot_genesis_coordinator_resources.py \
+	catchplate/native_pilot_genesis_coordinator_control.py \
+	catchplate/native_pilot_genesis_jobs.py \
+	catchplate/native_pilot_genesis_job_publication.py \
+	catchplate/native_pilot_genesis_launch_install.py \
+	catchplate/native_pilot_genesis_publication.py \
+	catchplate/native_pilot_genesis_execution_protocol.py \
+	catchplate/native_pilot_genesis_execution.py \
+	catchplate/native_pilot_genesis_authority_channel.py \
+	catchplate/native_pilot_genesis_authority.py \
+	catchplate/native_pilot_genesis_core_profile.py \
+	catchplate/native_pilot_genesis_core.py \
 	scripts/test_native_pilot_adopted_closure.py \
 	scripts/test_native_pilot_adopted_cohort_authority.py \
 	scripts/test_native_pilot_adopted_delivery.py \
@@ -2013,25 +2013,25 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_adopted_completion.py \
 	scripts/test_native_pilot_lifecycle_completion_wire.py \
 	scripts/test_native_pilot_lifecycle.py \
-	serverware/native_pilot_lifecycle_approval_wire.py \
-	serverware/native_pilot_lifecycle_inputs.py \
-	serverware/native_pilot_genesis_inputs.py \
-	serverware/native_pilot_genesis_foundation_inputs.py \
-	serverware/native_pilot_genesis_ordinary_inputs.py \
-	serverware/native_pilot_genesis_native_inputs.py \
-	serverware/native_pilot_genesis_owner_inputs.py \
-	serverware/native_pilot_adopted_inputs.py \
-	serverware/native_pilot_adopted_input_context.py \
-	serverware/native_pilot_adopted_foundation_inputs.py \
-	serverware/native_pilot_adopted_handoff_inputs.py \
-	serverware/native_pilot_adopted_endpoint_plan.py \
-	serverware/native_pilot_adopted_endpoint_publication.py \
+	catchplate/native_pilot_lifecycle_approval_wire.py \
+	catchplate/native_pilot_lifecycle_inputs.py \
+	catchplate/native_pilot_genesis_inputs.py \
+	catchplate/native_pilot_genesis_foundation_inputs.py \
+	catchplate/native_pilot_genesis_ordinary_inputs.py \
+	catchplate/native_pilot_genesis_native_inputs.py \
+	catchplate/native_pilot_genesis_owner_inputs.py \
+	catchplate/native_pilot_adopted_inputs.py \
+	catchplate/native_pilot_adopted_input_context.py \
+	catchplate/native_pilot_adopted_foundation_inputs.py \
+	catchplate/native_pilot_adopted_handoff_inputs.py \
+	catchplate/native_pilot_adopted_endpoint_plan.py \
+	catchplate/native_pilot_adopted_endpoint_publication.py \
 	scripts/test_native_pilot_adopted_endpoint_plan.py \
 	scripts/test_native_pilot_adopted_endpoint_publication.py \
-	serverware/native_pilot_adopted_ordinary_inputs.py \
-	serverware/native_pilot_adopted_native_inputs.py \
-	serverware/native_pilot_adopted_bridge_inputs.py \
-	serverware/native_pilot_adopted_constructed_inputs.py \
+	catchplate/native_pilot_adopted_ordinary_inputs.py \
+	catchplate/native_pilot_adopted_native_inputs.py \
+	catchplate/native_pilot_adopted_bridge_inputs.py \
+	catchplate/native_pilot_adopted_constructed_inputs.py \
 	scripts/test_native_pilot_adopted_inputs.py \
 	scripts/test_native_pilot_adopted_ordinary_inputs.py \
 	scripts/test_native_pilot_adopted_native_inputs.py \
@@ -2045,34 +2045,34 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_adopted_interactive.py \
 	scripts/run_native_pilot_lifecycle.py \
 	scripts/run_native_pilot_approval_provider.py \
-	serverware/native_pilot_startup.py \
-	serverware/native_pilot_startup_child.py \
-	serverware/native_pilot_startup_profile.py \
+	catchplate/native_pilot_startup.py \
+	catchplate/native_pilot_startup_child.py \
+	catchplate/native_pilot_startup_profile.py \
 	scripts/run_native_pilot_startup.py \
 	scripts/run_native_pilot_startup_child.py \
 	scripts/test_native_pilot_startup.py \
 	scripts/test_native_pilot_startup_child.py \
 	scripts/test_native_pilot_startup_profile.py \
 	scripts/test_native_pilot_startup_entrypoint.py \
-	serverware/native_pilot_startup_provisioning.py \
-	serverware/native_pilot_startup_provisioning_profile.py \
+	catchplate/native_pilot_startup_provisioning.py \
+	catchplate/native_pilot_startup_provisioning_profile.py \
 	scripts/run_native_pilot_startup_provisioning.py \
 	scripts/test_native_pilot_startup_provisioning.py \
 	scripts/test_native_pilot_startup_provisioning_profile.py \
 	scripts/test_native_pilot_startup_provisioning_entrypoint.py \
-	serverware/native_pilot_current_head_decision_service.py \
-	serverware/native_pilot_current_head_decision_service_profile.py \
+	catchplate/native_pilot_current_head_decision_service.py \
+	catchplate/native_pilot_current_head_decision_service_profile.py \
 	scripts/run_native_pilot_current_head_decisions.py \
-	serverware/native_pilot_current_head_state.py \
-	serverware/native_pilot_initial_state_profile.py \
-	serverware/native_pilot_initial_state_installation.py \
-	serverware/native_pilot_current_head_worker_process.py \
+	catchplate/native_pilot_current_head_state.py \
+	catchplate/native_pilot_initial_state_profile.py \
+	catchplate/native_pilot_initial_state_installation.py \
+	catchplate/native_pilot_current_head_worker_process.py \
 	scripts/test_native_pilot_initial_state_profile.py \
 	scripts/test_native_pilot_initial_state_installation.py \
 	scripts/test_native_pilot_initial_state_commit.py \
 	scripts/test_native_pilot_current_head_worker_process.py \
-	serverware/native_pilot_current_head_worker.py \
-	serverware/native_pilot_current_head_worker_profile.py \
+	catchplate/native_pilot_current_head_worker.py \
+	catchplate/native_pilot_current_head_worker_profile.py \
 	scripts/run_native_pilot_current_head_worker.py \
 	scripts/test_native_pilot_current_head_state.py \
 	scripts/test_native_pilot_current_head_worker.py \
@@ -2097,25 +2097,25 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_adopted_bridge.py \
 	scripts/test_native_pilot_adopted_endpoints.py \
 	scripts/test_native_pilot_adopted_ordinary.py \
-	serverware/custody_publication_inputs.py \
-	serverware/native_pilot_adopted_endpoint_authority.py \
-	serverware/native_pilot_ordinary_delivery_profile.py \
-	serverware/native_pilot_ordinary_publication_authority.py \
-	serverware/native_pilot_adopted_cohort_authority.py \
-	serverware/native_pilot_adopted_commands.py \
-	serverware/native_pilot_adopted_delivery.py \
-	serverware/native_pilot_adopted_launch_profile.py \
-	serverware/native_pilot_adopted_ordinary.py \
-	serverware/native_pilot_adopted_service_authority.py \
-	serverware/native_shadow_publication_inputs.py \
-	serverware/native_pilot_genesis_core_channel.py \
-	serverware/native_pilot_publication_adoption_profile.py \
-	serverware/native_pilot_publication_adoption_authority.py \
-	serverware/native_pilot_publication_cold_binding.py \
-	serverware/policy_shadow_assignment_fields.py \
-	serverware/policy_candidate_artifact_issuer.py \
-	serverware/policy_shadow_assignment_issuer.py \
-	serverware/policy_bundle_issuer.py \
+	catchplate/custody_publication_inputs.py \
+	catchplate/native_pilot_adopted_endpoint_authority.py \
+	catchplate/native_pilot_ordinary_delivery_profile.py \
+	catchplate/native_pilot_ordinary_publication_authority.py \
+	catchplate/native_pilot_adopted_cohort_authority.py \
+	catchplate/native_pilot_adopted_commands.py \
+	catchplate/native_pilot_adopted_delivery.py \
+	catchplate/native_pilot_adopted_launch_profile.py \
+	catchplate/native_pilot_adopted_ordinary.py \
+	catchplate/native_pilot_adopted_service_authority.py \
+	catchplate/native_shadow_publication_inputs.py \
+	catchplate/native_pilot_genesis_core_channel.py \
+	catchplate/native_pilot_publication_adoption_profile.py \
+	catchplate/native_pilot_publication_adoption_authority.py \
+	catchplate/native_pilot_publication_cold_binding.py \
+	catchplate/policy_shadow_assignment_fields.py \
+	catchplate/policy_candidate_artifact_issuer.py \
+	catchplate/policy_shadow_assignment_issuer.py \
+	catchplate/policy_bundle_issuer.py \
 	scripts/authority/sign_policy_candidate_artifact.py \
 	scripts/authority/sign_policy_shadow_assignment.py \
 	scripts/authority/sign_currentness_assignment.py \
@@ -2123,435 +2123,435 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/authority/sign_measured_audit_assignment.py \
 	scripts/authority/sign_native_configuration_delivery.py \
 	scripts/authority/sign_policy_bundle.py \
-	serverware/native_pilot_closure_set.py \
-	serverware/native_pilot_measured_configuration.py \
-	serverware/native_pilot_delivery_authority.py \
-	serverware/native_pilot_service_authority.py \
-	serverware/native_pilot_ordinary_key_profile.py \
-	serverware/native_pilot_ordinary_key_authority.py \
-	serverware/native_pilot_ordinary_initial_profile.py \
-	serverware/native_pilot_ordinary_runtime_profile.py \
-	serverware/native_pilot_ordinary_generation_profile.py \
-	serverware/native_pilot_ordinary_runtime_recipe.py \
-	serverware/native_pilot_ordinary_install.py \
-	serverware/native_pilot_ordinary_initial_authority.py \
-	serverware/custody_generation_initial_state.py \
-	serverware/custody_generation_measurements.py \
-	serverware/native_pilot_publication_profiles.py \
-	serverware/native_pilot_precreation_install.py \
-	serverware/native_pilot_bridge_install.py \
-	serverware/native_pilot_bridge_runtime.py \
-	serverware/native_pilot_bridge_authority.py \
-	serverware/native_pilot_bridge_key_profile.py \
-	serverware/native_pilot_bridge_preparation.py \
-	serverware/native_pilot_bridge_runtime_policy.py \
-	serverware/native_pilot_bridge_runtime_profile.py \
-	serverware/native_pilot_bridge_commissioning_policy.py \
-	serverware/native_pilot_bridge_delivery_profile.py \
-	serverware/native_pilot_bridge_authorization_profile.py \
-	serverware/native_pilot_bridge_launch_profile.py \
-	serverware/native_pilot_bridge_launch_publication.py \
-	serverware/native_pilot_helper_bootstrap_profile.py \
-	serverware/native_pilot_service_handshakes.py \
-	serverware/native_pilot_initial_requests.py \
-	serverware/native_pilot_initial_requests_profile.py \
-	serverware/native_pilot_peer_owners.py \
-	serverware/native_pilot_peer_preparation.py \
-	serverware/native_pilot_peer_resources.py \
-	serverware/native_pilot_current_head_profile.py \
-	serverware/native_pilot_current_head_authority.py \
-	serverware/native_pilot_generation_install_authority.py \
-	serverware/native_pilot_native_service_authority.py \
-	serverware/native_pilot_native_service_profile.py \
-	serverware/native_pilot_ordinary_transition_profile.py \
-	serverware/native_pilot_launch_authorization_profile.py \
-	serverware/native_pilot_endpoint_launch_profile.py \
-	serverware/native_pilot_service_material.py \
-	serverware/native_pilot_launch_publication.py \
-	serverware/native_pilot_coordinator_process.py \
-	serverware/native_pilot_adopted_intake.py \
-	serverware/native_pilot_genesis_handoff_listener.py \
-	serverware/native_pilot_genesis_receiver_observation.py \
-	serverware/native_pilot_genesis_rendezvous_profile.py \
-	serverware/native_pilot_genesis_rendezvous_install.py \
-	serverware/native_pilot_genesis_job_install.py \
-	serverware/native_pilot_genesis_installer_process.py \
-	serverware/native_pilot_genesis_process.py \
-	serverware/native_pilot_lifecycle.py \
-	serverware/native_pilot_adopted_phase_profile.py \
-	serverware/native_pilot_adopted_phase_execution.py \
-	serverware/native_pilot_adopted_publication.py \
-	serverware/native_pilot_adopted_ordinary_install.py \
-	serverware/native_pilot_adopted_supervisor.py \
-	serverware/native_pilot_adopted_supervisor_policy.py \
-	serverware/native_pilot_coordinator_channel.py \
-	serverware/native_pilot_phase_execution.py \
-	serverware/native_pilot_authority_channel.py \
-	serverware/native_pilot_approval_install.py \
-	serverware/native_pilot_approval_transcript.py \
-	serverware/native_pilot_approval_policy.py \
-	serverware/native_pilot_approval_current_heads.py \
-	serverware/native_pilot_approval_provider.py \
-	serverware/native_pilot_bootstrap_install.py \
-	serverware/native_pilot_supervisor.py \
-	serverware/native_pilot_supervisor_approval_channel.py \
-	serverware/native_pilot_supervisor_process.py \
-	serverware/native_pilot_supervisor_policy.py \
-	serverware/native_pilot_supervisor_initial_history.py \
-	serverware/native_pilot_supervisor_helper_initial_profile.py \
-	serverware/native_pilot_supervisor_current_head_profile.py \
-	serverware/native_pilot_supervisor_current_heads.py \
-	serverware/native_pilot_supervisor_bridge_runtime.py \
-	serverware/native_pilot_supervisor_bridge_commissioning.py \
-	serverware/native_pilot_supervisor_continuation.py \
-	serverware/native_pilot_supervisor_continuation_policy.py \
-	serverware/native_pilot_interactive.py \
-	serverware/native_pilot_release_profile.py \
-	serverware/native_pilot_continuation_profile.py \
-	serverware/native_pilot_phase_two_publication.py \
-	serverware/native_pilot_supervisor_ordinary_deliveries.py \
-	serverware/native_pilot_supervisor_ordinary_generations.py \
-	serverware/native_pilot_supervisor_native_deliveries.py \
-	serverware/native_pilot_native_delivery_profile.py \
-	serverware/native_pilot_key_authority.py \
-	serverware/native_pilot_encrypted_authority.py \
-	serverware/native_pilot_verifier_authority.py \
-	serverware/native_pilot_key_profile.py serverware/native_pilot_runtime_evidence.py \
-	serverware/native_pilot_supervisor_key_authorizations.py \
-	serverware/native_pilot_supervisor_native_services.py \
-	serverware/native_pilot_supervisor_ordinary_transitions.py \
-	serverware/native_pilot_supervisor_launch_authorizations.py \
-	serverware/native_pilot_supervisor_endpoint_launches.py \
-	serverware/native_pilot_supervisor_service_material.py \
-	serverware/native_pilot_supervisor_precreation.py \
-	serverware/native_pilot_supervisor_endpoint_policy.py \
-	serverware/native_pilot_supervisor_endpoint_inputs.py \
-	serverware/native_pilot_supervisor_endpoint_deliveries.py \
-	serverware/native_pilot_service_inputs.py \
+	catchplate/native_pilot_closure_set.py \
+	catchplate/native_pilot_measured_configuration.py \
+	catchplate/native_pilot_delivery_authority.py \
+	catchplate/native_pilot_service_authority.py \
+	catchplate/native_pilot_ordinary_key_profile.py \
+	catchplate/native_pilot_ordinary_key_authority.py \
+	catchplate/native_pilot_ordinary_initial_profile.py \
+	catchplate/native_pilot_ordinary_runtime_profile.py \
+	catchplate/native_pilot_ordinary_generation_profile.py \
+	catchplate/native_pilot_ordinary_runtime_recipe.py \
+	catchplate/native_pilot_ordinary_install.py \
+	catchplate/native_pilot_ordinary_initial_authority.py \
+	catchplate/custody_generation_initial_state.py \
+	catchplate/custody_generation_measurements.py \
+	catchplate/native_pilot_publication_profiles.py \
+	catchplate/native_pilot_precreation_install.py \
+	catchplate/native_pilot_bridge_install.py \
+	catchplate/native_pilot_bridge_runtime.py \
+	catchplate/native_pilot_bridge_authority.py \
+	catchplate/native_pilot_bridge_key_profile.py \
+	catchplate/native_pilot_bridge_preparation.py \
+	catchplate/native_pilot_bridge_runtime_policy.py \
+	catchplate/native_pilot_bridge_runtime_profile.py \
+	catchplate/native_pilot_bridge_commissioning_policy.py \
+	catchplate/native_pilot_bridge_delivery_profile.py \
+	catchplate/native_pilot_bridge_authorization_profile.py \
+	catchplate/native_pilot_bridge_launch_profile.py \
+	catchplate/native_pilot_bridge_launch_publication.py \
+	catchplate/native_pilot_helper_bootstrap_profile.py \
+	catchplate/native_pilot_service_handshakes.py \
+	catchplate/native_pilot_initial_requests.py \
+	catchplate/native_pilot_initial_requests_profile.py \
+	catchplate/native_pilot_peer_owners.py \
+	catchplate/native_pilot_peer_preparation.py \
+	catchplate/native_pilot_peer_resources.py \
+	catchplate/native_pilot_current_head_profile.py \
+	catchplate/native_pilot_current_head_authority.py \
+	catchplate/native_pilot_generation_install_authority.py \
+	catchplate/native_pilot_native_service_authority.py \
+	catchplate/native_pilot_native_service_profile.py \
+	catchplate/native_pilot_ordinary_transition_profile.py \
+	catchplate/native_pilot_launch_authorization_profile.py \
+	catchplate/native_pilot_endpoint_launch_profile.py \
+	catchplate/native_pilot_service_material.py \
+	catchplate/native_pilot_launch_publication.py \
+	catchplate/native_pilot_coordinator_process.py \
+	catchplate/native_pilot_adopted_intake.py \
+	catchplate/native_pilot_genesis_handoff_listener.py \
+	catchplate/native_pilot_genesis_receiver_observation.py \
+	catchplate/native_pilot_genesis_rendezvous_profile.py \
+	catchplate/native_pilot_genesis_rendezvous_install.py \
+	catchplate/native_pilot_genesis_job_install.py \
+	catchplate/native_pilot_genesis_installer_process.py \
+	catchplate/native_pilot_genesis_process.py \
+	catchplate/native_pilot_lifecycle.py \
+	catchplate/native_pilot_adopted_phase_profile.py \
+	catchplate/native_pilot_adopted_phase_execution.py \
+	catchplate/native_pilot_adopted_publication.py \
+	catchplate/native_pilot_adopted_ordinary_install.py \
+	catchplate/native_pilot_adopted_supervisor.py \
+	catchplate/native_pilot_adopted_supervisor_policy.py \
+	catchplate/native_pilot_coordinator_channel.py \
+	catchplate/native_pilot_phase_execution.py \
+	catchplate/native_pilot_authority_channel.py \
+	catchplate/native_pilot_approval_install.py \
+	catchplate/native_pilot_approval_transcript.py \
+	catchplate/native_pilot_approval_policy.py \
+	catchplate/native_pilot_approval_current_heads.py \
+	catchplate/native_pilot_approval_provider.py \
+	catchplate/native_pilot_bootstrap_install.py \
+	catchplate/native_pilot_supervisor.py \
+	catchplate/native_pilot_supervisor_approval_channel.py \
+	catchplate/native_pilot_supervisor_process.py \
+	catchplate/native_pilot_supervisor_policy.py \
+	catchplate/native_pilot_supervisor_initial_history.py \
+	catchplate/native_pilot_supervisor_helper_initial_profile.py \
+	catchplate/native_pilot_supervisor_current_head_profile.py \
+	catchplate/native_pilot_supervisor_current_heads.py \
+	catchplate/native_pilot_supervisor_bridge_runtime.py \
+	catchplate/native_pilot_supervisor_bridge_commissioning.py \
+	catchplate/native_pilot_supervisor_continuation.py \
+	catchplate/native_pilot_supervisor_continuation_policy.py \
+	catchplate/native_pilot_interactive.py \
+	catchplate/native_pilot_release_profile.py \
+	catchplate/native_pilot_continuation_profile.py \
+	catchplate/native_pilot_phase_two_publication.py \
+	catchplate/native_pilot_supervisor_ordinary_deliveries.py \
+	catchplate/native_pilot_supervisor_ordinary_generations.py \
+	catchplate/native_pilot_supervisor_native_deliveries.py \
+	catchplate/native_pilot_native_delivery_profile.py \
+	catchplate/native_pilot_key_authority.py \
+	catchplate/native_pilot_encrypted_authority.py \
+	catchplate/native_pilot_verifier_authority.py \
+	catchplate/native_pilot_key_profile.py catchplate/native_pilot_runtime_evidence.py \
+	catchplate/native_pilot_supervisor_key_authorizations.py \
+	catchplate/native_pilot_supervisor_native_services.py \
+	catchplate/native_pilot_supervisor_ordinary_transitions.py \
+	catchplate/native_pilot_supervisor_launch_authorizations.py \
+	catchplate/native_pilot_supervisor_endpoint_launches.py \
+	catchplate/native_pilot_supervisor_service_material.py \
+	catchplate/native_pilot_supervisor_precreation.py \
+	catchplate/native_pilot_supervisor_endpoint_policy.py \
+	catchplate/native_pilot_supervisor_endpoint_inputs.py \
+	catchplate/native_pilot_supervisor_endpoint_deliveries.py \
+	catchplate/native_pilot_service_inputs.py \
 	scripts/run_native_pilot.py \
-	serverware/native_shadow_proof_cohort_cleanup.py \
-	serverware/native_shadow_driver_bootstrap.py \
-	serverware/native_shadow_constructed_driver.py \
-	serverware/authority_setup_native_final.py \
-	serverware/authority_setup_native_final_policy.py \
-	serverware/authority_transition_setup_native_final.py \
-	serverware/control_plane_setup_native_final.py \
-	serverware/native_setup_final_authority.py \
-	serverware/portal_setup_native_final.py \
+	catchplate/native_shadow_proof_cohort_cleanup.py \
+	catchplate/native_shadow_driver_bootstrap.py \
+	catchplate/native_shadow_constructed_driver.py \
+	catchplate/authority_setup_native_final.py \
+	catchplate/authority_setup_native_final_policy.py \
+	catchplate/authority_transition_setup_native_final.py \
+	catchplate/control_plane_setup_native_final.py \
+	catchplate/native_setup_final_authority.py \
+	catchplate/portal_setup_native_final.py \
 	scripts/issue_native_setup_final.py \
-	serverware/native_shadow_driver_inputs.py \
-	serverware/native_shadow_driver_outgoing.py \
-	serverware/native_shadow_driver_resources.py \
-	serverware/native_policy_activation_inputs.py \
-	serverware/native_activation_receiver_profile.py \
-	serverware/native_activation_receiver_installation.py \
-	serverware/native_activation_receiver_issuer.py \
-	serverware/native_policy_activation_recovery.py \
-	serverware/native_shadow_trusted_time_inputs.py \
-	serverware/authority_native_activation_completion.py \
-	serverware/authority_native_activation_hold.py \
-	serverware/authority_native_activation_publication.py \
-	serverware/authority_native_activation_schema.py \
-	serverware/authority_policy_native_activation.py \
-	serverware/authority_transition_policy_native_activation.py \
-	serverware/authority_transition_policy_native_activation_settlement.py \
-	serverware/authority_transition_policy_native_activation_state.py \
-	serverware/control_plane_native_policy_activation.py \
-	serverware/portal_native_policy_activation.py \
-	serverware/native_shadow_retrieval_activation.py \
-	serverware/native_shadow_retrieval_pair_assignment.py \
+	catchplate/native_shadow_driver_inputs.py \
+	catchplate/native_shadow_driver_outgoing.py \
+	catchplate/native_shadow_driver_resources.py \
+	catchplate/native_policy_activation_inputs.py \
+	catchplate/native_activation_receiver_profile.py \
+	catchplate/native_activation_receiver_installation.py \
+	catchplate/native_activation_receiver_issuer.py \
+	catchplate/native_policy_activation_recovery.py \
+	catchplate/native_shadow_trusted_time_inputs.py \
+	catchplate/authority_native_activation_completion.py \
+	catchplate/authority_native_activation_hold.py \
+	catchplate/authority_native_activation_publication.py \
+	catchplate/authority_native_activation_schema.py \
+	catchplate/authority_policy_native_activation.py \
+	catchplate/authority_transition_policy_native_activation.py \
+	catchplate/authority_transition_policy_native_activation_settlement.py \
+	catchplate/authority_transition_policy_native_activation_state.py \
+	catchplate/control_plane_native_policy_activation.py \
+	catchplate/portal_native_policy_activation.py \
+	catchplate/native_shadow_retrieval_activation.py \
+	catchplate/native_shadow_retrieval_pair_assignment.py \
 	scripts/install_native_shadow_retrieval_store.py \
-	serverware/native_shadow_time_profile.py \
-	serverware/native_shadow_time_originals.py \
-	serverware/native_shadow_time_issuer.py \
+	catchplate/native_shadow_time_profile.py \
+	catchplate/native_shadow_time_originals.py \
+	catchplate/native_shadow_time_issuer.py \
 	scripts/issue_native_shadow_guest_time.py \
-	serverware/custody_spool_inputs.py \
-	serverware/native_generation_origin_profile.py \
-	serverware/native_generation_origin_originals.py \
-	serverware/native_generation_origin_issuer.py \
-	serverware/native_generation_origin_relay.py \
-	serverware/native_shadow_spool_inputs.py \
-	serverware/native_shadow_spool_artifacts.py \
+	catchplate/custody_spool_inputs.py \
+	catchplate/native_generation_origin_profile.py \
+	catchplate/native_generation_origin_originals.py \
+	catchplate/native_generation_origin_issuer.py \
+	catchplate/native_generation_origin_relay.py \
+	catchplate/native_shadow_spool_inputs.py \
+	catchplate/native_shadow_spool_artifacts.py \
 	scripts/verify_native_setup_hardware.py \
 	scripts/verify_native_setup_proxy.py \
-	serverware/authority_setup_native_hardware.py \
-	serverware/authority_setup_native_hardware_policy.py \
-	serverware/authority_transition_setup_native_hardware.py \
-	serverware/control_plane_setup_native_hardware.py \
-	serverware/native_setup_independent_originals.py \
-	serverware/native_setup_independent_verifier.py \
-	serverware/portal_setup_native_hardware.py \
+	catchplate/authority_setup_native_hardware.py \
+	catchplate/authority_setup_native_hardware_policy.py \
+	catchplate/authority_transition_setup_native_hardware.py \
+	catchplate/control_plane_setup_native_hardware.py \
+	catchplate/native_setup_independent_originals.py \
+	catchplate/native_setup_independent_verifier.py \
+	catchplate/portal_setup_native_hardware.py \
 	scripts/issue_native_generation_origin.py \
 	scripts/package_native_generation_origin_runtime.py \
 	scripts/verify_native_shadow_custody.py \
-	serverware/native_shadow_key_contract.py \
-	serverware/native_shadow_key_helper.py \
-	serverware/native_shadow_commitment_artifacts.py \
+	catchplate/native_shadow_key_contract.py \
+	catchplate/native_shadow_key_helper.py \
+	catchplate/native_shadow_commitment_artifacts.py \
 	scripts/native_shadow_key_kms_parent.py \
 	scripts/encrypt_native_shadow_local_keys.py \
-	serverware/oauth_refresh_material.py \
-	serverware/authority_oauth_exchange_policy.py \
-	serverware/authority_transition_oauth_exchange.py \
-	serverware/control_plane_oauth_exchange.py \
-	serverware/oauth_exchange_material.py \
-	serverware/portal_oauth_consent.py \
-	serverware/portal_oauth_activation.py \
-	serverware/oauth_read_projections.py \
-	serverware/portal_admin_token_publication.py \
-	serverware/control_plane_workload_identity_routes.py \
-	serverware/portal_workload_issuance.py \
-	serverware_agent_trust/workload_identity_submission.py \
-	serverware_agent_trust/native_workload_identity_submission.py \
-	serverware_agent_trust/native_workload_identity_provisioning.py \
-	serverware_agent_trust/native_bootstrap_capture.py \
-	serverware_agent_trust/_workload_operator_http.py \
-	serverware_agent_trust/workload_identity_originals.py \
-	serverware_agent_trust/workload_identity_bootstrap_originals.py \
-	serverware_agent_trust/workload_identity_bootstrap.py \
-	serverware_agent_trust/native_enrollment_packet.py \
-	serverware_agent_trust/_workload_signed_packet.py \
-	serverware/control_plane_oidc_session_activation_release_grant_acquisition_bootstrap.py \
-	serverware/control_plane_oidc_session_activation_release_grant_acquisition.py \
-	serverware/oidc_session_activation_release_grant_delivery_admission.py \
-	serverware/oidc_session_activation_release_recovery_grant_admission.py \
-	serverware/authority_oidc_session_activation_release_grant_delivery_transport.py \
-	serverware/oidc_session_activation_release_dynamic_entrypoint.py \
-	serverware/oidc_session_activation_release_dynamic_launcher.py \
-	serverware/oidc_session_activation_release_recovery_delivery_admission.py \
-	serverware/authority_oidc_session_activation_release_recovery_delivery_transport.py \
-	serverware/oidc_session_activation_release_recovery_dynamic_entrypoint.py \
-	serverware/oidc_session_activation_release_recovery_dynamic_launcher.py \
-	serverware/oidc_session_activation_consume_input_issuer_policy.py \
-	serverware/oidc_session_activation_consume_input_bridge_policy.py \
-	serverware/authority_oidc_session_activation_consume_input_production.py \
-	serverware/authority_oidc_session_activation_consume_input_transport.py \
-	serverware/oidc_session_activation_consume_input_admission.py \
-	serverware/control_plane_oidc_session_activation_consume_input_request.py \
-	serverware/oidc_session_activation_consume_input_issuer_bootstrap.py \
-	serverware/oidc_session_activation_consume_input_issuer_entrypoint.py \
-	serverware/oidc_session_activation_consume_input_issuer_launcher.py \
-	serverware/oidc_session_activation_consume_input_issuer_startup.py \
-	serverware/oidc_session_activation_consume_input_issuer_runner.py \
-	serverware/control_plane_oidc_session_activation_consume_input_acquisition_bootstrap.py \
-	serverware/control_plane_oidc_session_activation_consume_input_acquisition.py \
-	serverware/oidc_session_activation_consume_input_delivery_admission.py \
-	serverware/authority_oidc_session_activation_consume_input_delivery_transport.py \
-	serverware/oidc_session_activation_consume_dynamic_entrypoint.py \
-	serverware/oidc_session_activation_consume_dynamic_launcher.py \
-	serverware/oidc_session_activation_http_contract.py \
-	serverware/control_plane_oidc_session_activation_http.py \
-	serverware/control_plane_oidc_session_activation_delivery.py \
-	serverware/control_plane_oidc_session_activation_routes.py \
-	serverware/oidc_session_activation_recovery_http_contract.py \
-	serverware/control_plane_oidc_session_activation_recovery_selection.py \
-	serverware/control_plane_oidc_session_activation_recovery_history.py \
-	serverware/control_plane_oidc_session_activation_recovery_actor.py \
-	serverware/control_plane_oidc_session_activation_recovery_routes.py \
-	serverware/control_plane_oidc_session_activation_consume_planning.py \
-	serverware/control_plane_oidc_session_activation_consume_records.py \
-	serverware/authority_oidc_session_activation_completion_dispatch_transport.py \
-	serverware/authority_oidc_session_activation_delivery_completion_dispatch_transport.py \
-	serverware/authority_oidc_session_activation_delivery_completion_release_transport.py \
-	serverware/authority_oidc_session_activation_release_hints.py \
-	serverware/authority_oidc_session_activation_caller_transport.py \
-	serverware/control_plane_oidc_session_activation_permission.py \
-	serverware/control_plane_oidc_session_activation_execution.py \
-	serverware/control_plane_oidc_session_activation_permission_http.py \
-	serverware/control_plane_oidc_session_activation_permission_routes.py \
-	serverware/authority_oidc_session_activation_release_response.py \
-	serverware/oidc_session_activation_release_entrypoint.py \
-	serverware/oidc_session_activation_release_launcher.py \
-	serverware/oidc_session_activation_release_runner.py \
-	serverware/oidc_session_activation_release_service.py \
-	serverware/authority_oidc_session_activation_release_custody.py \
-	serverware/authority_oidc_session_activation_delivery_reads.py \
-	serverware/authority_transition_oidc_session_activation_delivery.py \
-	serverware/authority_oidc_session_activation_delivery_writes.py \
-	serverware/authority_oidc_session_activation_delivery_planning.py \
-	serverware/authority_oidc_session_activation_delivery_plan_contract.py \
-	serverware/authority_oidc_session_activation_delivery_plan.py \
-	serverware/authority_oidc_session_activation_delivery_plan_owner.py \
-	serverware/authority_oidc_session_activation_delivery_journal.py \
-	serverware/authority_oidc_session_activation_delivery_retained.py \
-	serverware/authority_oidc_session_activation_delivery_execution_bundle.py \
-	serverware/authority_oidc_session_activation_delivery_execution_store.py \
-	serverware/authority_oidc_session_activation_delivery_execution_export.py \
-	serverware/authority_oidc_session_activation_delivery_execution_enrollment.py \
-	serverware/authority_oidc_session_activation_delivery_execution_expectations.py \
-	serverware/authority_oidc_session_activation_delivery_execution_authorization.py \
-	serverware/oidc_session_activation_delivery_execution_custody_bootstrap.py \
-	serverware/authority_oidc_session_activation_delivery_execution_custody.py \
-	serverware/authority_oidc_session_activation_delivery_execution_replay.py \
-	serverware/authority_oidc_session_activation_delivery_execution_grant.py \
-	serverware/authority_oidc_session_activation_delivery_execution_grant_admission.py \
-	serverware/authority_oidc_session_activation_delivery_execution_grant_production.py \
-	serverware/authority_oidc_session_activation_delivery_execution_grant_verification.py \
-	serverware/oidc_session_activation_delivery_execution_authorizer_bootstrap.py \
-	serverware/authority_oidc_session_activation_delivery_execution_authorizer_transport.py \
-	serverware/oidc_session_activation_delivery_execution_authorizer_startup.py \
-	serverware/oidc_session_activation_delivery_execution_authorizer_entrypoint.py \
-	serverware/oidc_session_activation_delivery_execution_authorizer_launcher.py \
-	serverware/oidc_session_activation_delivery_execution_authorizer_runner.py \
-	serverware/authority_oidc_session_activation_delivery_computation.py \
-	serverware/authority_oidc_session_activation_delivery_reservation.py \
-	serverware/authority_oidc_session_activation_delivery_reservation_records.py \
-	serverware/authority_oidc_session_activation_delivery_reservation_delivery.py \
-	serverware/authority_oidc_session_activation_delivery_reservation_transport.py \
-	serverware/authority_oidc_session_activation_delivery_pending_admission.py \
-	serverware/oidc_session_activation_delivery_execution_reserver_bootstrap.py \
-	serverware/oidc_session_activation_delivery_execution_reserver_startup.py \
-	serverware/oidc_session_activation_delivery_execution_reserver_entrypoint.py \
-	serverware/oidc_session_activation_delivery_execution_reserver_launcher.py \
-	serverware/oidc_session_activation_delivery_execution_reserver_runner.py \
-	serverware/oidc_session_activation_delivery_execution_sql_bootstrap.py \
-	serverware/authority_oidc_session_activation_delivery_execution_packet.py \
-	serverware/authority_oidc_session_activation_delivery_sql.py \
-	serverware/authority_oidc_session_activation_delivery_sql_transport.py \
-	serverware/oidc_session_activation_delivery_execution_sql_entrypoint.py \
-	serverware/oidc_session_activation_delivery_execution_sql_launcher.py \
-	serverware/oidc_session_activation_delivery_execution_sql_runner.py \
-	serverware/oidc_session_activation_delivery_execution_sql_startup.py \
-	serverware/authority_oidc_session_activation_delivery_plan_history.py \
-	serverware/authority_oidc_session_activation_delivery_execution_history.py \
-	serverware/authority_oidc_session_activation_delivery_history_exchange.py \
-	serverware/authority_oidc_session_activation_delivery_recovery_packet.py \
-	serverware/oidc_session_activation_delivery_completion_custody_bootstrap.py \
-	serverware/authority_oidc_session_activation_delivery_completion_custody.py \
-	serverware/authority_oidc_session_activation_delivery_completion_admission.py \
-	serverware/authority_oidc_session_activation_delivery_completion.py \
-	serverware/authority_oidc_session_activation_delivery_completion_recovery.py \
-	serverware/oidc_session_activation_delivery_completion_bootstrap.py \
-	serverware/oidc_session_activation_delivery_completion_entrypoint.py \
-	serverware/oidc_session_activation_delivery_completion_startup.py \
-	serverware/oidc_session_activation_delivery_completion_launcher.py \
-	serverware/oidc_session_activation_delivery_completion_runner.py \
-	serverware/authority_oidc_session_activation_delivery_completion_transport.py \
-	serverware/authority_oidc_session_activation_delivery_completion_response.py \
-	serverware/oidc_session_activation_delivery_planner_bootstrap.py \
-	serverware/oidc_session_activation_delivery_planner_entrypoint.py \
-	serverware/oidc_session_activation_delivery_planner_launcher.py \
-	serverware/oidc_session_activation_delivery_planner_runner.py \
-	serverware/authority_oidc_session_activation_delivery_planner_service.py \
-	serverware/authority_oidc_session_activation_delivery_planner_transport.py \
-	serverware/authority_oidc_session_activation_delivery_cold_planning.py \
-	serverware/authority_oidc_session_activation_delivery_provenance.py \
-	serverware/authority_oidc_session_activation_delivery_state.py \
-	serverware/authority_current_root_delivery_head.py \
-	serverware/authority_successor_execution_window.py \
-	serverware/authority_oidc_session_activation_execution_store.py \
-	serverware/authority_oidc_execution_store_core.py \
-	serverware/authority_oidc_session_activation_execution_export.py \
-	serverware/authority_oidc_session_activation_cold_planning.py \
-	serverware/authority_oidc_session_activation_planner_transport.py \
-	serverware/authority_oidc_session_activation_planner_service.py \
-	serverware/oidc_session_activation_planner_bootstrap.py \
-	serverware/oidc_session_activation_planner_entrypoint.py \
-	serverware/oidc_session_activation_planner_launcher.py \
-	serverware/oidc_session_activation_planner_runner.py \
-	serverware/authority_oidc_session_activation_request_issuance.py \
-	serverware/authority_oidc_session_activation_request_issuance_transport.py \
-	serverware/authority_oidc_session_activation_request_staging_transport.py \
-	serverware/control_plane_oidc_session_activation_request_issuance.py \
-	serverware/control_plane_oidc_session_activation_request_dispatch.py \
-	serverware/control_plane_enrollment_request_bootstrap.py \
-	serverware/oidc_session_activation_consume_input_resources.py \
-	serverware/control_plane_oidc_session_activation_request_issuance_bootstrap.py \
-	serverware/oidc_session_activation_request_dynamic_entrypoint.py \
-	serverware/oidc_session_activation_request_dynamic_launcher.py \
-	serverware/oidc_session_activation_execution_dynamic_entrypoint.py \
-	serverware/authority_oidc_session_activation_execution_issuance_transport.py \
-	serverware/authority_oidc_session_activation_execution_request_issuance.py \
-	serverware/authority_oidc_session_activation_consume_execution_request_issuance.py \
-	serverware/oidc_session_activation_execution_dynamic_launcher.py \
-	serverware/oidc_session_activation_follow_on_originals.py \
-	serverware/oidc_session_activation_consume_input_issuer_sealed_launcher.py \
-	serverware/oidc_session_activation_consume_dynamic_sealed_launcher.py \
-	serverware/oidc_session_activation_release_proof_input_issuer_sealed_launcher.py \
-	serverware/oidc_session_activation_release_proof_dynamic_sealed_launcher.py \
-	serverware/oidc_session_activation_release_grant_issuer_sealed_launcher.py \
-	serverware/oidc_session_activation_release_dynamic_sealed_launcher.py \
-	serverware/authority_registration_current_root_head.py \
-	serverware/authority_registration_request_issuance.py \
-	serverware/registration_dynamic_entrypoint.py \
-	serverware/registration_execution_authorizer_dynamic_launcher.py \
-	serverware/registration_execution_reserver_dynamic_launcher.py \
-	serverware/registration_execution_sql_dynamic_launcher.py \
-	serverware/registration_execution_completion_dynamic_launcher.py \
-	serverware/registration_finalization_authorizer_dynamic_launcher.py \
-	serverware/registration_finalization_reserver_dynamic_launcher.py \
-	serverware/registration_finalization_sql_dynamic_launcher.py \
-	serverware/registration_finalization_completion_dynamic_launcher.py \
-	serverware/oidc_session_activation_request_issuance_policy.py \
-	serverware/oidc_session_activation_request_issuer_launcher.py \
-	serverware/oidc_session_activation_request_issuer_startup.py \
-	serverware/authority_transition_oidc_session_activation.py \
-	serverware/oidc_session_activation_delivery.py \
-	serverware/authority_transition_webauthn.py \
-	serverware/authority_transition_webauthn_registration.py \
-	serverware/authority_transition_webauthn_registration_admission.py \
-	serverware/authority_transition_webauthn_installation_admission.py \
-	serverware/authority_transition_webauthn_completion.py \
-	serverware/authority_transition_webauthn_trust_stage.py \
-	serverware/authority_transport.py \
-	serverware/authority_webauthn_assertion.py \
-	serverware/authority_webauthn_evidence.py \
-	serverware/authority_webauthn_evidence_acquisition.py \
-	serverware/authority_webauthn_evidence_roots.py \
-	serverware/authority_webauthn_evidence_root_reader.py \
-	serverware/authority_webauthn_evidence_root_configuration.py \
-	serverware/authority_webauthn_evidence_computation.py \
-	serverware/authority_webauthn_evidence_custody_configuration.py \
-	serverware/authority_webauthn_evidence_custody_actions.py \
-	serverware/authority_webauthn_evidence_custody_transport.py \
-	serverware/authority_webauthn_evidence_custody_read_request.py \
-	serverware/authority_webauthn_evidence_custody_read_actions.py \
-	serverware/authority_webauthn_evidence_custody_read_transport.py \
-	serverware/authority_webauthn_evidence_custody_wire.py \
-	serverware/authority_webauthn_evidence_custody_intent.py \
-	serverware/authority_webauthn_evidence_custody_relay.py \
-	serverware/authority_webauthn_evidence_custody_persistence.py \
-	serverware/authority_webauthn_evidence_kernel.py \
-	serverware/authority_webauthn_evidence_planning.py \
-	serverware/authority_webauthn_evidence_policy.py \
-	serverware/authority_webauthn_evidence_configuration.py \
-	serverware/authority_webauthn_evidence_input_wire.py \
-	serverware/authority_webauthn_evidence_replay.py \
-	serverware/authority_webauthn_evidence_plan.py \
-	serverware/authority_webauthn_evidence_plan_request.py \
-	serverware/authority_webauthn_evidence_plan_response.py \
-	serverware/authority_webauthn_evidence_plan_transport.py \
-	serverware/authority_webauthn_evidence_plan_live.py \
-	serverware/authority_webauthn_evidence_plan_actions.py \
-	serverware/authority_webauthn_evidence_plan_admission.py \
-	serverware/authority_webauthn_evidence_plan_clock.py \
-	serverware/authority_webauthn_evidence_plan_configuration.py \
-	serverware/authority_webauthn_evidence_plan_context.py \
-	serverware/authority_webauthn_evidence_plan_contract.py \
-	serverware/authority_webauthn_evidence_plan_owner.py \
-	serverware/authority_webauthn_evidence_plan_persistence.py \
-	serverware/authority_webauthn_evidence_plan_production.py \
-	serverware/authority_webauthn_evidence_plan_reads.py \
-	serverware/authority_webauthn_evidence_plan_retention.py \
-	serverware/authority_webauthn_evidence_plan_verifier.py \
-	serverware/authority_webauthn_evidence_plan_verifier_configuration.py \
-	serverware/authority_webauthn_evidence_plan_writer_configuration.py \
-	serverware/authority_webauthn_evidence_proofs.py \
-	serverware/authority_webauthn_registration_inputs.py \
-	serverware/authority_webauthn_installation_inputs.py \
-	serverware/authority_webauthn_registration_production.py \
-	serverware/authority_webauthn_registration_admission.py \
-	serverware/authority_webauthn_installation_admission.py \
-	serverware/authority_webauthn_trust_candidate.py \
-	serverware/authority_webauthn_installation_production.py \
-	serverware/authority_webauthn_trust.py \
-	serverware/webauthn_attestation_core.py \
-	serverware/webauthn_credential_trust.py \
-	serverware/webauthn_trust.py \
-	serverware/webauthn_trust_core.py \
+	catchplate/oauth_refresh_material.py \
+	catchplate/authority_oauth_exchange_policy.py \
+	catchplate/authority_transition_oauth_exchange.py \
+	catchplate/control_plane_oauth_exchange.py \
+	catchplate/oauth_exchange_material.py \
+	catchplate/portal_oauth_consent.py \
+	catchplate/portal_oauth_activation.py \
+	catchplate/oauth_read_projections.py \
+	catchplate/portal_admin_token_publication.py \
+	catchplate/control_plane_workload_identity_routes.py \
+	catchplate/portal_workload_issuance.py \
+	catchplate_agent_trust/workload_identity_submission.py \
+	catchplate_agent_trust/native_workload_identity_submission.py \
+	catchplate_agent_trust/native_workload_identity_provisioning.py \
+	catchplate_agent_trust/native_bootstrap_capture.py \
+	catchplate_agent_trust/_workload_operator_http.py \
+	catchplate_agent_trust/workload_identity_originals.py \
+	catchplate_agent_trust/workload_identity_bootstrap_originals.py \
+	catchplate_agent_trust/workload_identity_bootstrap.py \
+	catchplate_agent_trust/native_enrollment_packet.py \
+	catchplate_agent_trust/_workload_signed_packet.py \
+	catchplate/control_plane_oidc_session_activation_release_grant_acquisition_bootstrap.py \
+	catchplate/control_plane_oidc_session_activation_release_grant_acquisition.py \
+	catchplate/oidc_session_activation_release_grant_delivery_admission.py \
+	catchplate/oidc_session_activation_release_recovery_grant_admission.py \
+	catchplate/authority_oidc_session_activation_release_grant_delivery_transport.py \
+	catchplate/oidc_session_activation_release_dynamic_entrypoint.py \
+	catchplate/oidc_session_activation_release_dynamic_launcher.py \
+	catchplate/oidc_session_activation_release_recovery_delivery_admission.py \
+	catchplate/authority_oidc_session_activation_release_recovery_delivery_transport.py \
+	catchplate/oidc_session_activation_release_recovery_dynamic_entrypoint.py \
+	catchplate/oidc_session_activation_release_recovery_dynamic_launcher.py \
+	catchplate/oidc_session_activation_consume_input_issuer_policy.py \
+	catchplate/oidc_session_activation_consume_input_bridge_policy.py \
+	catchplate/authority_oidc_session_activation_consume_input_production.py \
+	catchplate/authority_oidc_session_activation_consume_input_transport.py \
+	catchplate/oidc_session_activation_consume_input_admission.py \
+	catchplate/control_plane_oidc_session_activation_consume_input_request.py \
+	catchplate/oidc_session_activation_consume_input_issuer_bootstrap.py \
+	catchplate/oidc_session_activation_consume_input_issuer_entrypoint.py \
+	catchplate/oidc_session_activation_consume_input_issuer_launcher.py \
+	catchplate/oidc_session_activation_consume_input_issuer_startup.py \
+	catchplate/oidc_session_activation_consume_input_issuer_runner.py \
+	catchplate/control_plane_oidc_session_activation_consume_input_acquisition_bootstrap.py \
+	catchplate/control_plane_oidc_session_activation_consume_input_acquisition.py \
+	catchplate/oidc_session_activation_consume_input_delivery_admission.py \
+	catchplate/authority_oidc_session_activation_consume_input_delivery_transport.py \
+	catchplate/oidc_session_activation_consume_dynamic_entrypoint.py \
+	catchplate/oidc_session_activation_consume_dynamic_launcher.py \
+	catchplate/oidc_session_activation_http_contract.py \
+	catchplate/control_plane_oidc_session_activation_http.py \
+	catchplate/control_plane_oidc_session_activation_delivery.py \
+	catchplate/control_plane_oidc_session_activation_routes.py \
+	catchplate/oidc_session_activation_recovery_http_contract.py \
+	catchplate/control_plane_oidc_session_activation_recovery_selection.py \
+	catchplate/control_plane_oidc_session_activation_recovery_history.py \
+	catchplate/control_plane_oidc_session_activation_recovery_actor.py \
+	catchplate/control_plane_oidc_session_activation_recovery_routes.py \
+	catchplate/control_plane_oidc_session_activation_consume_planning.py \
+	catchplate/control_plane_oidc_session_activation_consume_records.py \
+	catchplate/authority_oidc_session_activation_completion_dispatch_transport.py \
+	catchplate/authority_oidc_session_activation_delivery_completion_dispatch_transport.py \
+	catchplate/authority_oidc_session_activation_delivery_completion_release_transport.py \
+	catchplate/authority_oidc_session_activation_release_hints.py \
+	catchplate/authority_oidc_session_activation_caller_transport.py \
+	catchplate/control_plane_oidc_session_activation_permission.py \
+	catchplate/control_plane_oidc_session_activation_execution.py \
+	catchplate/control_plane_oidc_session_activation_permission_http.py \
+	catchplate/control_plane_oidc_session_activation_permission_routes.py \
+	catchplate/authority_oidc_session_activation_release_response.py \
+	catchplate/oidc_session_activation_release_entrypoint.py \
+	catchplate/oidc_session_activation_release_launcher.py \
+	catchplate/oidc_session_activation_release_runner.py \
+	catchplate/oidc_session_activation_release_service.py \
+	catchplate/authority_oidc_session_activation_release_custody.py \
+	catchplate/authority_oidc_session_activation_delivery_reads.py \
+	catchplate/authority_transition_oidc_session_activation_delivery.py \
+	catchplate/authority_oidc_session_activation_delivery_writes.py \
+	catchplate/authority_oidc_session_activation_delivery_planning.py \
+	catchplate/authority_oidc_session_activation_delivery_plan_contract.py \
+	catchplate/authority_oidc_session_activation_delivery_plan.py \
+	catchplate/authority_oidc_session_activation_delivery_plan_owner.py \
+	catchplate/authority_oidc_session_activation_delivery_journal.py \
+	catchplate/authority_oidc_session_activation_delivery_retained.py \
+	catchplate/authority_oidc_session_activation_delivery_execution_bundle.py \
+	catchplate/authority_oidc_session_activation_delivery_execution_store.py \
+	catchplate/authority_oidc_session_activation_delivery_execution_export.py \
+	catchplate/authority_oidc_session_activation_delivery_execution_enrollment.py \
+	catchplate/authority_oidc_session_activation_delivery_execution_expectations.py \
+	catchplate/authority_oidc_session_activation_delivery_execution_authorization.py \
+	catchplate/oidc_session_activation_delivery_execution_custody_bootstrap.py \
+	catchplate/authority_oidc_session_activation_delivery_execution_custody.py \
+	catchplate/authority_oidc_session_activation_delivery_execution_replay.py \
+	catchplate/authority_oidc_session_activation_delivery_execution_grant.py \
+	catchplate/authority_oidc_session_activation_delivery_execution_grant_admission.py \
+	catchplate/authority_oidc_session_activation_delivery_execution_grant_production.py \
+	catchplate/authority_oidc_session_activation_delivery_execution_grant_verification.py \
+	catchplate/oidc_session_activation_delivery_execution_authorizer_bootstrap.py \
+	catchplate/authority_oidc_session_activation_delivery_execution_authorizer_transport.py \
+	catchplate/oidc_session_activation_delivery_execution_authorizer_startup.py \
+	catchplate/oidc_session_activation_delivery_execution_authorizer_entrypoint.py \
+	catchplate/oidc_session_activation_delivery_execution_authorizer_launcher.py \
+	catchplate/oidc_session_activation_delivery_execution_authorizer_runner.py \
+	catchplate/authority_oidc_session_activation_delivery_computation.py \
+	catchplate/authority_oidc_session_activation_delivery_reservation.py \
+	catchplate/authority_oidc_session_activation_delivery_reservation_records.py \
+	catchplate/authority_oidc_session_activation_delivery_reservation_delivery.py \
+	catchplate/authority_oidc_session_activation_delivery_reservation_transport.py \
+	catchplate/authority_oidc_session_activation_delivery_pending_admission.py \
+	catchplate/oidc_session_activation_delivery_execution_reserver_bootstrap.py \
+	catchplate/oidc_session_activation_delivery_execution_reserver_startup.py \
+	catchplate/oidc_session_activation_delivery_execution_reserver_entrypoint.py \
+	catchplate/oidc_session_activation_delivery_execution_reserver_launcher.py \
+	catchplate/oidc_session_activation_delivery_execution_reserver_runner.py \
+	catchplate/oidc_session_activation_delivery_execution_sql_bootstrap.py \
+	catchplate/authority_oidc_session_activation_delivery_execution_packet.py \
+	catchplate/authority_oidc_session_activation_delivery_sql.py \
+	catchplate/authority_oidc_session_activation_delivery_sql_transport.py \
+	catchplate/oidc_session_activation_delivery_execution_sql_entrypoint.py \
+	catchplate/oidc_session_activation_delivery_execution_sql_launcher.py \
+	catchplate/oidc_session_activation_delivery_execution_sql_runner.py \
+	catchplate/oidc_session_activation_delivery_execution_sql_startup.py \
+	catchplate/authority_oidc_session_activation_delivery_plan_history.py \
+	catchplate/authority_oidc_session_activation_delivery_execution_history.py \
+	catchplate/authority_oidc_session_activation_delivery_history_exchange.py \
+	catchplate/authority_oidc_session_activation_delivery_recovery_packet.py \
+	catchplate/oidc_session_activation_delivery_completion_custody_bootstrap.py \
+	catchplate/authority_oidc_session_activation_delivery_completion_custody.py \
+	catchplate/authority_oidc_session_activation_delivery_completion_admission.py \
+	catchplate/authority_oidc_session_activation_delivery_completion.py \
+	catchplate/authority_oidc_session_activation_delivery_completion_recovery.py \
+	catchplate/oidc_session_activation_delivery_completion_bootstrap.py \
+	catchplate/oidc_session_activation_delivery_completion_entrypoint.py \
+	catchplate/oidc_session_activation_delivery_completion_startup.py \
+	catchplate/oidc_session_activation_delivery_completion_launcher.py \
+	catchplate/oidc_session_activation_delivery_completion_runner.py \
+	catchplate/authority_oidc_session_activation_delivery_completion_transport.py \
+	catchplate/authority_oidc_session_activation_delivery_completion_response.py \
+	catchplate/oidc_session_activation_delivery_planner_bootstrap.py \
+	catchplate/oidc_session_activation_delivery_planner_entrypoint.py \
+	catchplate/oidc_session_activation_delivery_planner_launcher.py \
+	catchplate/oidc_session_activation_delivery_planner_runner.py \
+	catchplate/authority_oidc_session_activation_delivery_planner_service.py \
+	catchplate/authority_oidc_session_activation_delivery_planner_transport.py \
+	catchplate/authority_oidc_session_activation_delivery_cold_planning.py \
+	catchplate/authority_oidc_session_activation_delivery_provenance.py \
+	catchplate/authority_oidc_session_activation_delivery_state.py \
+	catchplate/authority_current_root_delivery_head.py \
+	catchplate/authority_successor_execution_window.py \
+	catchplate/authority_oidc_session_activation_execution_store.py \
+	catchplate/authority_oidc_execution_store_core.py \
+	catchplate/authority_oidc_session_activation_execution_export.py \
+	catchplate/authority_oidc_session_activation_cold_planning.py \
+	catchplate/authority_oidc_session_activation_planner_transport.py \
+	catchplate/authority_oidc_session_activation_planner_service.py \
+	catchplate/oidc_session_activation_planner_bootstrap.py \
+	catchplate/oidc_session_activation_planner_entrypoint.py \
+	catchplate/oidc_session_activation_planner_launcher.py \
+	catchplate/oidc_session_activation_planner_runner.py \
+	catchplate/authority_oidc_session_activation_request_issuance.py \
+	catchplate/authority_oidc_session_activation_request_issuance_transport.py \
+	catchplate/authority_oidc_session_activation_request_staging_transport.py \
+	catchplate/control_plane_oidc_session_activation_request_issuance.py \
+	catchplate/control_plane_oidc_session_activation_request_dispatch.py \
+	catchplate/control_plane_enrollment_request_bootstrap.py \
+	catchplate/oidc_session_activation_consume_input_resources.py \
+	catchplate/control_plane_oidc_session_activation_request_issuance_bootstrap.py \
+	catchplate/oidc_session_activation_request_dynamic_entrypoint.py \
+	catchplate/oidc_session_activation_request_dynamic_launcher.py \
+	catchplate/oidc_session_activation_execution_dynamic_entrypoint.py \
+	catchplate/authority_oidc_session_activation_execution_issuance_transport.py \
+	catchplate/authority_oidc_session_activation_execution_request_issuance.py \
+	catchplate/authority_oidc_session_activation_consume_execution_request_issuance.py \
+	catchplate/oidc_session_activation_execution_dynamic_launcher.py \
+	catchplate/oidc_session_activation_follow_on_originals.py \
+	catchplate/oidc_session_activation_consume_input_issuer_sealed_launcher.py \
+	catchplate/oidc_session_activation_consume_dynamic_sealed_launcher.py \
+	catchplate/oidc_session_activation_release_proof_input_issuer_sealed_launcher.py \
+	catchplate/oidc_session_activation_release_proof_dynamic_sealed_launcher.py \
+	catchplate/oidc_session_activation_release_grant_issuer_sealed_launcher.py \
+	catchplate/oidc_session_activation_release_dynamic_sealed_launcher.py \
+	catchplate/authority_registration_current_root_head.py \
+	catchplate/authority_registration_request_issuance.py \
+	catchplate/registration_dynamic_entrypoint.py \
+	catchplate/registration_execution_authorizer_dynamic_launcher.py \
+	catchplate/registration_execution_reserver_dynamic_launcher.py \
+	catchplate/registration_execution_sql_dynamic_launcher.py \
+	catchplate/registration_execution_completion_dynamic_launcher.py \
+	catchplate/registration_finalization_authorizer_dynamic_launcher.py \
+	catchplate/registration_finalization_reserver_dynamic_launcher.py \
+	catchplate/registration_finalization_sql_dynamic_launcher.py \
+	catchplate/registration_finalization_completion_dynamic_launcher.py \
+	catchplate/oidc_session_activation_request_issuance_policy.py \
+	catchplate/oidc_session_activation_request_issuer_launcher.py \
+	catchplate/oidc_session_activation_request_issuer_startup.py \
+	catchplate/authority_transition_oidc_session_activation.py \
+	catchplate/oidc_session_activation_delivery.py \
+	catchplate/authority_transition_webauthn.py \
+	catchplate/authority_transition_webauthn_registration.py \
+	catchplate/authority_transition_webauthn_registration_admission.py \
+	catchplate/authority_transition_webauthn_installation_admission.py \
+	catchplate/authority_transition_webauthn_completion.py \
+	catchplate/authority_transition_webauthn_trust_stage.py \
+	catchplate/authority_transport.py \
+	catchplate/authority_webauthn_assertion.py \
+	catchplate/authority_webauthn_evidence.py \
+	catchplate/authority_webauthn_evidence_acquisition.py \
+	catchplate/authority_webauthn_evidence_roots.py \
+	catchplate/authority_webauthn_evidence_root_reader.py \
+	catchplate/authority_webauthn_evidence_root_configuration.py \
+	catchplate/authority_webauthn_evidence_computation.py \
+	catchplate/authority_webauthn_evidence_custody_configuration.py \
+	catchplate/authority_webauthn_evidence_custody_actions.py \
+	catchplate/authority_webauthn_evidence_custody_transport.py \
+	catchplate/authority_webauthn_evidence_custody_read_request.py \
+	catchplate/authority_webauthn_evidence_custody_read_actions.py \
+	catchplate/authority_webauthn_evidence_custody_read_transport.py \
+	catchplate/authority_webauthn_evidence_custody_wire.py \
+	catchplate/authority_webauthn_evidence_custody_intent.py \
+	catchplate/authority_webauthn_evidence_custody_relay.py \
+	catchplate/authority_webauthn_evidence_custody_persistence.py \
+	catchplate/authority_webauthn_evidence_kernel.py \
+	catchplate/authority_webauthn_evidence_planning.py \
+	catchplate/authority_webauthn_evidence_policy.py \
+	catchplate/authority_webauthn_evidence_configuration.py \
+	catchplate/authority_webauthn_evidence_input_wire.py \
+	catchplate/authority_webauthn_evidence_replay.py \
+	catchplate/authority_webauthn_evidence_plan.py \
+	catchplate/authority_webauthn_evidence_plan_request.py \
+	catchplate/authority_webauthn_evidence_plan_response.py \
+	catchplate/authority_webauthn_evidence_plan_transport.py \
+	catchplate/authority_webauthn_evidence_plan_live.py \
+	catchplate/authority_webauthn_evidence_plan_actions.py \
+	catchplate/authority_webauthn_evidence_plan_admission.py \
+	catchplate/authority_webauthn_evidence_plan_clock.py \
+	catchplate/authority_webauthn_evidence_plan_configuration.py \
+	catchplate/authority_webauthn_evidence_plan_context.py \
+	catchplate/authority_webauthn_evidence_plan_contract.py \
+	catchplate/authority_webauthn_evidence_plan_owner.py \
+	catchplate/authority_webauthn_evidence_plan_persistence.py \
+	catchplate/authority_webauthn_evidence_plan_production.py \
+	catchplate/authority_webauthn_evidence_plan_reads.py \
+	catchplate/authority_webauthn_evidence_plan_retention.py \
+	catchplate/authority_webauthn_evidence_plan_verifier.py \
+	catchplate/authority_webauthn_evidence_plan_verifier_configuration.py \
+	catchplate/authority_webauthn_evidence_plan_writer_configuration.py \
+	catchplate/authority_webauthn_evidence_proofs.py \
+	catchplate/authority_webauthn_registration_inputs.py \
+	catchplate/authority_webauthn_installation_inputs.py \
+	catchplate/authority_webauthn_registration_production.py \
+	catchplate/authority_webauthn_registration_admission.py \
+	catchplate/authority_webauthn_installation_admission.py \
+	catchplate/authority_webauthn_trust_candidate.py \
+	catchplate/authority_webauthn_installation_production.py \
+	catchplate/authority_webauthn_trust.py \
+	catchplate/webauthn_attestation_core.py \
+	catchplate/webauthn_credential_trust.py \
+	catchplate/webauthn_trust.py \
+	catchplate/webauthn_trust_core.py \
 	schemas/webauthn-trust-bundle.v1.schema.json \
-	serverware/db.py \
-	serverware/native_postgres_inventory.py \
-	serverware/native_postgres_results.py
+	catchplate/db.py \
+	catchplate/native_postgres_inventory.py \
+	catchplate/native_postgres_results.py
 CODER_TIMEOUT ?= timeout
 CODER_BUILD_TIMEOUT ?= 3600s
 CODER_RUST_TEST_BUILD_TIMEOUT ?= 7200s
@@ -2585,7 +2585,7 @@ override CODER_SERVICE_CPUS := 4
 override CODER_SERVICE_MEMORY := 2g
 override CODER_SERVICE_PIDS := 512
 override CODER_SERVICE_TMPFS_SIZE := 32m
-override CODER_SERVERWARE_TMPFS_SIZE := 64m
+override CODER_CATCHPLATE_TMPFS_SIZE := 64m
 override CODER_GRANT_STORE_RUN_TMPFS_SIZE := 8m
 override CODER_BUILDKIT_CPUS := 8
 override CODER_BUILDKIT_MEMORY := 16g
@@ -2596,15 +2596,15 @@ override CODER_TASK_IMAGE_TAGS := $(CODER_SHARED_PYTHON_IMAGE) $(CODER_AUDIT_ANC
 override CODER_HOST_TOOL_NAMES := basename bash cat chmod cmp curl dirname docker env flock git grep id ln make mkdir openssl python3 readlink rm sed seq sh sha256sum sleep sort stat tail tar timeout uniq
 override CODER_DOCKER_ENV = env -i PATH="/usr/local/bin:/usr/bin:/bin" HOME="$${HOME:?}" XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR:-/run/user/$$(id -u)}" DOCKER_CONFIG="$(CODER_DOCKER_CONFIG_DIR)" DOCKER_HOST="$(CODER_DOCKER_HOST)" BUILDX_CONFIG="$(CODER_BUILDX_CONFIG_DIR)"
 override CODER_DOCKER = $(CODER_DOCKER_ENV) docker
-override CODER_COMPOSE_ENV = $(CODER_DOCKER_ENV) COMPOSE_PROJECT_NAME="$(CODER_COMPOSE_PROJECT_NAME)" COMPOSE_PARALLEL_LIMIT=1 SERVERWARE_DECISION_GATE_DEV_IMAGE="$(CODER_DECISION_GATE_IMAGE)"
+override CODER_COMPOSE_ENV = $(CODER_DOCKER_ENV) COMPOSE_PROJECT_NAME="$(CODER_COMPOSE_PROJECT_NAME)" COMPOSE_PARALLEL_LIMIT=1 CATCHPLATE_DECISION_GATE_DEV_IMAGE="$(CODER_DECISION_GATE_IMAGE)"
 override CODER_PREP_COMPOSE = $(CODER_COMPOSE_ENV) docker compose --ansi never --project-directory "$(CODER_FROZEN_SOURCE_DIR)" --file "$(CODER_FROZEN_SOURCE_DIR)/docker-compose.yml" --file "$(CODER_COMPOSE_LIMITS_FILE)"
 override CODER_COMPOSE = $(CODER_COMPOSE_ENV) docker compose --ansi never --project-directory "$(CODER_FROZEN_SOURCE_DIR)" --file "$(CODER_FROZEN_SOURCE_DIR)/docker-compose.yml" --file "$(CODER_COMPOSE_LIMITS_FILE)" --file "$(CODER_COMPOSE_DIGEST_OVERRIDE_FILE)" --file "$(CODER_COMPOSE_IMAGE_OVERRIDE_FILE)"
 override CODER_TEST_COMPOSE = $(CODER_COMPOSE_ENV) docker compose --ansi never --project-directory "$(CODER_FROZEN_SOURCE_DIR)" --file "$(CODER_OUTPUT_DIR)/compose-config.yaml"
 
 define CODER_MUTATION_GUARD_FUNCTIONS
 coder_require_mutation_daemon() { \
-	test "$(CODER_DOCKER_HOST)" = "unix://$(SERVERWARE_CONTROLLER_DOCKER_PROXY_SOCKET)" || return 2; \
-	test "$(SERVERWARE_CONTROLLER_DOCKER_PROXY_SOCKET)" = "/run/serverware/controller-docker-proxy.sock" || return 2; \
+	test "$(CODER_DOCKER_HOST)" = "unix://$(CATCHPLATE_CONTROLLER_DOCKER_PROXY_SOCKET)" || return 2; \
+	test "$(CATCHPLATE_CONTROLLER_DOCKER_PROXY_SOCKET)" = "/run/catchplate/controller-docker-proxy.sock" || return 2; \
 	test -d "$(CODER_DOCKER_CONFIG_DIR)" && test ! -L "$(CODER_DOCKER_CONFIG_DIR)" || return 2; \
 	test "$$(stat -Lc '%u:%a:%F' "$(CODER_DOCKER_CONFIG_DIR)")" = "$$(id -u):700:directory" || return 2; \
 	test -d "$(CODER_BUILDX_CONFIG_DIR)" && test ! -L "$(CODER_BUILDX_CONFIG_DIR)" || return 2; \
@@ -2808,7 +2808,7 @@ coder_write_host_identity() { \
 	test "$${#recipe_shell_digest}" -eq 64 || return 2; \
 	case "$$recipe_shell_digest" in *[!0-9a-f]*) return 2 ;; esac; \
 	{ \
-		printf 'schema\tserverware.coder-ci.hostToolDaemonIdentity/v1\n'; \
+		printf 'schema\tcatchplate.coder-ci.hostToolDaemonIdentity/v1\n'; \
 		printf 'recipe-shell\t%s\t%s\tsha256:%s\t%s\n' \
 			"$(SHELL)" "$$recipe_shell_realpath" "$$recipe_shell_digest" "$(.SHELLFLAGS)"; \
 		for tool_name in $(CODER_HOST_TOOL_NAMES); do \
@@ -2858,8 +2858,8 @@ _coder-require-clean:
 
 _coder-require-disposable-daemon: _coder-require-clean
 	@set -eu; \
-		test "$(CODER_DOCKER_HOST)" = "unix://$(SERVERWARE_CONTROLLER_DOCKER_PROXY_SOCKET)"; \
-		test "$(SERVERWARE_CONTROLLER_DOCKER_PROXY_SOCKET)" = "/run/serverware/controller-docker-proxy.sock"; \
+		test "$(CODER_DOCKER_HOST)" = "unix://$(CATCHPLATE_CONTROLLER_DOCKER_PROXY_SOCKET)"; \
+		test "$(CATCHPLATE_CONTROLLER_DOCKER_PROXY_SOCKET)" = "/run/catchplate/controller-docker-proxy.sock"; \
 		test "$(CODER_PLATFORM)" = "linux/amd64"; \
 		if test ! -e "$(CODER_REPO_TMP_DIR)" && test ! -L "$(CODER_REPO_TMP_DIR)"; then \
 			(umask 077 && mkdir "$(CODER_REPO_TMP_DIR)"); \
@@ -2891,7 +2891,7 @@ _coder-require-disposable-daemon: _coder-require-clean
 				$(CODER_DOCKER) info --format '{{range .Labels}}{{println .}}{{end}}' \
 		)"; \
 		printf '%s\n' "$$daemon_labels" | grep -Fx "$(CODER_DAEMON_DISPOSABLE_LABEL)" >/dev/null || { \
-			echo "Docker daemon is not labeled as a disposable Serverware Coder daemon" >&2; \
+			echo "Docker daemon is not labeled as a disposable Catchplate Coder daemon" >&2; \
 			exit 2; \
 		}; \
 		printf '%s\n' "$$daemon_labels" | grep -Fx "$(CODER_DAEMON_NETWORK_LABEL)" >/dev/null || { \
@@ -3304,7 +3304,7 @@ _coder-cleanup: _coder-require-lock
 						recovered_builder_owner="$$( \
 							$(CODER_TIMEOUT) --kill-after="$(CODER_KILL_AFTER)" "$(CODER_INSPECT_TIMEOUT)" \
 								$(CODER_DOCKER) container inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$$recovered_builder_ids" \
-								| grep -Fx "SERVERWARE_CODER_OWNER_TOKEN=$$run_owner_token" \
+								| grep -Fx "CATCHPLATE_CODER_OWNER_TOKEN=$$run_owner_token" \
 						)" || recovered_builder_owner=""; \
 						recovered_builder_volume="$$( \
 							$(CODER_TIMEOUT) --kill-after="$(CODER_KILL_AFTER)" "$(CODER_INSPECT_TIMEOUT)" \
@@ -3313,7 +3313,7 @@ _coder-cleanup: _coder-require-lock
 									"$$recovered_builder_ids" \
 						)" || recovered_builder_volume=""; \
 						if test "$$recovered_builder_label" = "$$builder_name" && \
-							test "$$recovered_builder_owner" = "SERVERWARE_CODER_OWNER_TOKEN=$$run_owner_token" && \
+							test "$$recovered_builder_owner" = "CATCHPLATE_CODER_OWNER_TOKEN=$$run_owner_token" && \
 							test "$$recovered_builder_volume" = "$$builder_state_volume"; then \
 							builder_container_id="$$recovered_builder_ids"; \
 							printf 'buildkit-container\t%s\tbuildx-builder\t%s\t%s\n' \
@@ -3341,7 +3341,7 @@ _coder-cleanup: _coder-require-lock
 					current_builder_owner="$$( \
 						$(CODER_TIMEOUT) --kill-after="$(CODER_KILL_AFTER)" "$(CODER_INSPECT_TIMEOUT)" \
 							$(CODER_DOCKER) container inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$$current_builder_id" \
-							| grep -Fx "SERVERWARE_CODER_OWNER_TOKEN=$$run_owner_token" \
+							| grep -Fx "CATCHPLATE_CODER_OWNER_TOKEN=$$run_owner_token" \
 					)" || current_builder_owner=""; \
 					current_builder_volume="$$( \
 						$(CODER_TIMEOUT) --kill-after="$(CODER_KILL_AFTER)" "$(CODER_INSPECT_TIMEOUT)" \
@@ -3350,7 +3350,7 @@ _coder-cleanup: _coder-require-lock
 								"$$current_builder_id" \
 					)" || current_builder_volume=""; \
 					if test "$$current_builder_label" != "$$builder_name" || \
-						test "$$current_builder_owner" != "SERVERWARE_CODER_OWNER_TOKEN=$$run_owner_token" || \
+						test "$$current_builder_owner" != "CATCHPLATE_CODER_OWNER_TOKEN=$$run_owner_token" || \
 						test "$$current_builder_volume" != "$$builder_state_volume"; then \
 						echo "refusing to remove a BuildKit container without matching builder and owner identities" >&2; \
 						status=1; \
@@ -3531,7 +3531,7 @@ _coder-cleanup: _coder-require-lock
 				)" || recovery_volume_identity=""; \
 				recovery_volume_resource="$$(printf '%s\n' "$$recovery_volume_identity" | sed 's/^[^|]*|\\([^|]*\\)|.*$$/\\1/')"; \
 				case "$$recovery_volume_resource" in \
-					serverware-data|serverware-audit-anchors|serverware-grant-store|serverware-custody-socket|serverware-custody-trust|serverware-custody-state|serverware-response-signing-private) ;; \
+					catchplate-data|catchplate-audit-anchors|catchplate-grant-store|catchplate-custody-socket|catchplate-custody-trust|catchplate-custody-state|catchplate-response-signing-private) ;; \
 					*) echo "refusing unsafe partial Compose volume recovery" >&2; status=1; continue ;; \
 				esac; \
 				if test "$$recovery_volume_identity" != "$$recovery_volume|$$recovery_volume_resource|$$run_owner_token" || \
@@ -3571,7 +3571,7 @@ _coder-cleanup: _coder-require-lock
 					volume) \
 						test "$$resource_label" != buildkit-state || continue; \
 						case "$$resource_label" in \
-							serverware-data|serverware-audit-anchors|serverware-grant-store|serverware-custody-socket|serverware-custody-trust|serverware-custody-state|serverware-response-signing-private) ;; \
+							catchplate-data|catchplate-audit-anchors|catchplate-grant-store|catchplate-custody-socket|catchplate-custody-trust|catchplate-custody-state|catchplate-response-signing-private) ;; \
 							*) echo "refusing undeclared volume ownership record" >&2; status=1; continue ;; \
 						esac; \
 						test "$$resource_name" = "$(CODER_COMPOSE_PROJECT_NAME)_$$resource_label" || { status=1; continue; }; \
@@ -4016,16 +4016,16 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				'      options:' \
 				'        max-size: "32m"' \
 				'        max-file: "1"' \
-				'  serverware:' \
+				'  catchplate:' \
 				"    cpus: \"$(CODER_SERVICE_CPUS)\"" \
 					"    mem_limit: $(CODER_SERVICE_MEMORY)" \
 					"    memswap_limit: $(CODER_SERVICE_MEMORY)" \
 					"    pids_limit: $(CODER_SERVICE_PIDS)" \
 					'    tmpfs: !override' \
-					"      - /tmp:rw,noexec,nosuid,nodev,size=$(CODER_SERVERWARE_TMPFS_SIZE)" \
+					"      - /tmp:rw,noexec,nosuid,nodev,size=$(CODER_CATCHPLATE_TMPFS_SIZE)" \
 					'    labels:' \
 				"      $(CODER_OWNER_LABEL_KEY): \"$$run_owner_token\"" \
-				"      $(CODER_RESOURCE_LABEL_KEY): serverware" \
+				"      $(CODER_RESOURCE_LABEL_KEY): catchplate" \
 				'    logging:' \
 				'      driver: local' \
 				'      options:' \
@@ -4052,34 +4052,34 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				"      $(CODER_OWNER_LABEL_KEY): \"$$run_owner_token\"" \
 				"      $(CODER_RESOURCE_LABEL_KEY): compose-default-network" \
 				'volumes:' \
-				'  serverware-data:' \
+				'  catchplate-data:' \
 				'    labels:' \
 				"      $(CODER_OWNER_LABEL_KEY): \"$$run_owner_token\"" \
-				"      $(CODER_RESOURCE_LABEL_KEY): serverware-data" \
-				'  serverware-audit-anchors:' \
+				"      $(CODER_RESOURCE_LABEL_KEY): catchplate-data" \
+				'  catchplate-audit-anchors:' \
 				'    labels:' \
 				"      $(CODER_OWNER_LABEL_KEY): \"$$run_owner_token\"" \
-				"      $(CODER_RESOURCE_LABEL_KEY): serverware-audit-anchors" \
-				'  serverware-grant-store:' \
+				"      $(CODER_RESOURCE_LABEL_KEY): catchplate-audit-anchors" \
+				'  catchplate-grant-store:' \
 				'    labels:' \
 				"      $(CODER_OWNER_LABEL_KEY): \"$$run_owner_token\"" \
-				"      $(CODER_RESOURCE_LABEL_KEY): serverware-grant-store" \
-				'  serverware-custody-socket:' \
+				"      $(CODER_RESOURCE_LABEL_KEY): catchplate-grant-store" \
+				'  catchplate-custody-socket:' \
 				'    labels:' \
 				"      $(CODER_OWNER_LABEL_KEY): \"$$run_owner_token\"" \
-				"      $(CODER_RESOURCE_LABEL_KEY): serverware-custody-socket" \
-				'  serverware-custody-trust:' \
+				"      $(CODER_RESOURCE_LABEL_KEY): catchplate-custody-socket" \
+				'  catchplate-custody-trust:' \
 				'    labels:' \
 				"      $(CODER_OWNER_LABEL_KEY): \"$$run_owner_token\"" \
-				"      $(CODER_RESOURCE_LABEL_KEY): serverware-custody-trust" \
-				'  serverware-custody-state:' \
+				"      $(CODER_RESOURCE_LABEL_KEY): catchplate-custody-trust" \
+				'  catchplate-custody-state:' \
 				'    labels:' \
 				"      $(CODER_OWNER_LABEL_KEY): \"$$run_owner_token\"" \
-				"      $(CODER_RESOURCE_LABEL_KEY): serverware-custody-state" \
-				'  serverware-response-signing-private:' \
+				"      $(CODER_RESOURCE_LABEL_KEY): catchplate-custody-state" \
+				'  catchplate-response-signing-private:' \
 				'    labels:' \
 				"      $(CODER_OWNER_LABEL_KEY): \"$$run_owner_token\"" \
-				"      $(CODER_RESOURCE_LABEL_KEY): serverware-response-signing-private"; \
+				"      $(CODER_RESOURCE_LABEL_KEY): catchplate-response-signing-private"; \
 		} > "$(CODER_COMPOSE_LIMITS_FILE)"; \
 		rm -f \
 			"$(CODER_OUTPUT_DIR)/build-commit.txt" \
@@ -4204,37 +4204,37 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 		frozen_source_digest="$$(source_tree_digest)"; \
 			for required_source_file in \
 				Makefile \
-				serverware/alchemy_rpc_read.py \
-				serverware/operator_catalog_alchemy.py \
+				catchplate/alchemy_rpc_read.py \
+				catchplate/operator_catalog_alchemy.py \
 				schemas/adapters/alchemy.rpc_read.v1.schema.json \
 				scripts/fixtures/alchemy_rpc_read_v1.json \
-				serverware/authority_local_artifact_measure.py \
-				serverware/authority_local_content_catalog.py \
-				serverware/authority_local_artifact_witness.py \
-				serverware/authority_local_trust.py \
-				serverware/authority_local_configuration.py \
-				serverware/authority_local_limits.py \
-				serverware/authority_local_runtime_trust.py \
-				serverware/authority_local_rbac_bootstrap.py \
-				serverware/authority_local_launch_authorization.py \
-				serverware/authority_local_cohort.py \
-				serverware/authority_local_retained_rbac.py \
-				serverware/authority_local_retained_metadata.py \
-				serverware/authority_local_trust_commit.py \
-				serverware/authority_local_enrollment_configuration.py \
-				serverware/authority_local_enrollment_attestation.py \
-				serverware/authority_local_successor_enrollment.py \
-				serverware/authority_local_registration_context.py \
-				serverware/authority_local_registration_enrollment.py \
-				serverware/authority_local_database_credentials.py \
-				serverware/authority_local_keys.py \
-				serverware/authority_local_activation_keys.py \
-				serverware/authority_local_provenance.py \
-				serverware/authority_local_closure.py \
-				serverware/authority_local_composition.py \
-				serverware/authority_local_audit_inclusion.py \
-				serverware/authority_local_audit_reader.py \
-				serverware/authority_transition_policy_genesis.py \
+				catchplate/authority_local_artifact_measure.py \
+				catchplate/authority_local_content_catalog.py \
+				catchplate/authority_local_artifact_witness.py \
+				catchplate/authority_local_trust.py \
+				catchplate/authority_local_configuration.py \
+				catchplate/authority_local_limits.py \
+				catchplate/authority_local_runtime_trust.py \
+				catchplate/authority_local_rbac_bootstrap.py \
+				catchplate/authority_local_launch_authorization.py \
+				catchplate/authority_local_cohort.py \
+				catchplate/authority_local_retained_rbac.py \
+				catchplate/authority_local_retained_metadata.py \
+				catchplate/authority_local_trust_commit.py \
+				catchplate/authority_local_enrollment_configuration.py \
+				catchplate/authority_local_enrollment_attestation.py \
+				catchplate/authority_local_successor_enrollment.py \
+				catchplate/authority_local_registration_context.py \
+				catchplate/authority_local_registration_enrollment.py \
+				catchplate/authority_local_database_credentials.py \
+				catchplate/authority_local_keys.py \
+				catchplate/authority_local_activation_keys.py \
+				catchplate/authority_local_provenance.py \
+				catchplate/authority_local_closure.py \
+				catchplate/authority_local_composition.py \
+				catchplate/authority_local_audit_inclusion.py \
+				catchplate/authority_local_audit_reader.py \
+				catchplate/authority_transition_policy_genesis.py \
 				scripts/authority/local_artifact_witness.py \
 				scripts/authority/local_trust.py \
 				scripts/authority/local_configuration.py \
@@ -4262,459 +4262,459 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				requirements.lock \
 				requirements.browser.lock \
 				requirements.proxy-test.lock \
-				serverware_agent_trust/requirements.lock \
-				serverware_agent_trust/workload_identity_provisioning.py \
-				serverware_agent_trust/workload_identity_submission.py \
-				serverware_agent_trust/native_workload_identity_submission.py \
-				serverware_agent_trust/native_workload_identity_provisioning.py \
-				serverware_agent_trust/native_bootstrap_capture.py \
-				serverware_agent_trust/_workload_operator_http.py \
-				serverware/authority_counted_root_transition.py \
-				serverware/authority_store/counted_installation.py \
-				serverware/authority_complete_query_batch.py \
-				serverware/authority_complete_acquisition.py \
-				serverware/authority_index_heads.py \
-				serverware/authority_index_trace.py \
-				serverware/authority_complete_read_write.py \
-				serverware/authority_revocation_read_write.py \
-				serverware/authority_revocation_proof_bundle.py \
-				serverware/authority_revocation_bundle_contract.py \
-				serverware/authority_revocation_semantics.py \
-				serverware/authority_revocation_plan_contract.py \
-				serverware/authority_revocation_plan.py \
-				serverware/authority_revocation_plan_production.py \
-				serverware/authority_revocation_wire.py \
-				serverware/authority_revocation_retention.py \
-				serverware/authority_revocation_capability.py \
-				serverware/authority_revocation_capability_production.py \
-				serverware/authority_revocation_configuration.py \
-				serverware/authority_revocation_roots.py \
-				serverware/authority_revocation_root_reader.py \
-				serverware/authority_revocation_observed.py \
-				serverware/authority_revocation_handoff.py \
-				serverware/authority_revocation_verifier.py \
-				serverware/authority_revocation_planning.py \
-				serverware/authority_revocation_planning_request.py \
-				serverware/authority_revocation_planning_transport.py \
-				serverware/authority_revocation_planning_client.py \
-				serverware/authority_revocation_planning_receiver.py \
-				serverware/authority_revocation_planner_custody_transport.py \
-				serverware/authority_revocation_planner_custody_client.py \
-				serverware/authority_revocation_planner_custody_receiver.py \
-				serverware/authority_revocation_custody_read.py \
-				serverware/authority_revocation_custody_read_client.py \
-				serverware/authority_revocation_custody_read_transport.py \
-				serverware/authority_revocation_planner_configuration.py \
-				serverware/authority_transport.py \
-				serverware/authority_revocation_invocation.py \
-				serverware/authority_revocation_issuance.py \
-				serverware/authority_revocation_persistence.py \
-				serverware/authority_revocation_writer_connection.py \
-				serverware/authority_revocation_writer_configuration.py \
-				serverware/authority_revocation_writer_action.py \
-				serverware/authority_revocation_writer_commitment.py \
-				serverware/authority_revocation_writer_composition.py \
-				serverware/authority_revocation_writer_signer.py \
-				serverware/authority_revocation_writer_acknowledgment.py \
-				serverware/authority_revocation_writer_transport.py \
-				serverware/authority_revocation_writer_ack_expectation.py \
-				serverware/authority_revocation_writer_client.py \
-				serverware/authority_revocation_writer_producers.py \
-				serverware/authority_revocation_coordinator.py \
-				serverware/authority_store/planner_connection.py \
-				serverware/authority_store/planner_read_sql.py \
-				serverware/authority_store/authorization_records.py \
-				serverware/authority_store/revocation_capability.py \
-				serverware/authority_store/revocation_capability_sql.py \
-				serverware/authority_store/revocation_retention.py \
-				serverware/authority_store/webauthn_evidence_retention.py \
-				serverware/authority_store/webauthn_transition_retention.py \
-				serverware/authority_store/recovery_invalidation_retention.py \
-				serverware/authority_store/webauthn_evidence_entrypoints.py \
-				serverware/authority_store/revocation_counted_sql.py \
-				serverware/authority_store/revocation_execution.py \
-				serverware/authority_store/revocation_writer_request.py \
-				serverware/authority_store/revocation_writer_acknowledgment.py \
-				serverware/authority_store/revocation_custody_read.py \
-				serverware/authority_store/revocation_retained_sql.py \
-				serverware/authority_store/executor_v9.py \
-				serverware/authority_revocation_write_trace.py \
-				serverware/authority_webauthn_trust.py \
-				serverware/authority_request_commitment.py \
-				serverware/authority_planner.py \
-				serverware/authority_successor_programs.py \
-				serverware/authority_webauthn_transition_planning.py \
-				serverware/authority_webauthn_transition_inputs.py \
-				serverware/authority_webauthn_registration_replay.py \
-				serverware/authority_webauthn_stage_replay.py \
-				serverware/authority_webauthn_completion_replay.py \
-				serverware/authority_webauthn_complete_proofs.py \
-				serverware/authority_webauthn_completion_proofs.py \
-				serverware/authority_webauthn_transition_proof_contract.py \
-				serverware/authority_webauthn_transition_proof_wire.py \
-				serverware/authority_webauthn_transition_proof.py \
-				serverware/authority_webauthn_transition_proof_production.py \
-				serverware/authority_webauthn_transition_plan_contract.py \
-				serverware/authority_webauthn_transition_plan_context.py \
-				serverware/authority_webauthn_transition_plan.py \
-				serverware/authority_webauthn_transition_plan_owner.py \
-				serverware/authority_webauthn_transition_policy.py \
-				serverware/authority_webauthn_transition_configuration.py \
-				serverware/authority_webauthn_transition_plan_admission.py \
-				serverware/authority_webauthn_transition_plan_verifier.py \
-				serverware/authority_webauthn_transition_service.py \
-				serverware/authority_webauthn_transition_roots_contract.py \
-				serverware/authority_webauthn_transition_roots.py \
-				serverware/authority_webauthn_transition_root_reader.py \
-				serverware/authority_webauthn_transition_root_configuration.py \
-				serverware/authority_webauthn_transition_exchange_configuration.py \
-				serverware/authority_webauthn_transition_request.py \
-				serverware/authority_webauthn_transition_response.py \
-				serverware/authority_webauthn_transition_transport.py \
-				serverware/authority_webauthn_transition_live.py \
-				serverware/authority_webauthn_transition_actions.py \
-				serverware/authority_webauthn_transition_retention.py \
-				serverware/authority_recovery_invalidation_retention.py \
-				serverware/authority_recovery_invalidation_execution_replay.py \
-				serverware/authority_recovery_invalidation_persistence.py \
-				serverware/authority_recovery_invalidation_service.py \
-				serverware/authority_webauthn_transition_persistence.py \
-				serverware/authority_webauthn_transition_writer_configuration.py \
-				serverware/authority_webauthn_transition_custody_wire.py \
-				serverware/authority_webauthn_transition_custody_intent.py \
-				serverware/authority_webauthn_transition_custody_relay.py \
-				serverware/authority_webauthn_transition_custody_configuration.py \
-				serverware/authority_webauthn_transition_custody_transport.py \
-				serverware/authority_webauthn_transition_custody_persistence.py \
-				serverware/authority_webauthn_transition_custody_actions.py \
-				serverware/authority_webauthn_transition_custody_service.py \
-				serverware/authority_webauthn_transition_custody_read_request.py \
-				serverware/authority_webauthn_transition_custody_read_transport.py \
-				serverware/authority_webauthn_transition_custody_read_actions.py \
-				serverware/authority_webauthn_transition_custody_read_service.py \
-				serverware/authority_webauthn_assertion.py \
-				serverware/authority_webauthn_evidence.py \
-				serverware/authority_webauthn_evidence_acquisition.py \
-				serverware/authority_webauthn_evidence_roots.py \
-				serverware/authority_webauthn_evidence_root_reader.py \
-				serverware/authority_webauthn_evidence_root_configuration.py \
-				serverware/authority_webauthn_evidence_computation.py \
-				serverware/authority_webauthn_evidence_custody_configuration.py \
-				serverware/authority_webauthn_evidence_custody_actions.py \
-				serverware/authority_webauthn_evidence_custody_transport.py \
-				serverware/authority_webauthn_evidence_custody_read_request.py \
-				serverware/authority_webauthn_evidence_custody_read_actions.py \
-				serverware/authority_webauthn_evidence_custody_read_transport.py \
-				serverware/authority_webauthn_evidence_custody_wire.py \
-				serverware/authority_webauthn_evidence_custody_intent.py \
-				serverware/authority_webauthn_evidence_custody_relay.py \
-				serverware/authority_webauthn_evidence_custody_persistence.py \
-				serverware/authority_webauthn_evidence_kernel.py \
-				serverware/authority_webauthn_evidence_planning.py \
-				serverware/authority_webauthn_evidence_policy.py \
-				serverware/authority_webauthn_evidence_configuration.py \
-				serverware/authority_webauthn_evidence_input_wire.py \
-				serverware/authority_webauthn_evidence_replay.py \
-				serverware/authority_webauthn_evidence_plan.py \
-				serverware/authority_webauthn_evidence_plan_request.py \
-				serverware/authority_webauthn_evidence_plan_response.py \
-				serverware/authority_webauthn_evidence_plan_transport.py \
-				serverware/authority_webauthn_evidence_plan_live.py \
-				serverware/authority_webauthn_evidence_plan_actions.py \
-				serverware/authority_webauthn_evidence_plan_admission.py \
-				serverware/authority_webauthn_evidence_plan_clock.py \
-				serverware/authority_webauthn_evidence_plan_configuration.py \
-				serverware/authority_webauthn_evidence_plan_context.py \
-				serverware/authority_webauthn_evidence_plan_contract.py \
-				serverware/authority_webauthn_evidence_plan_owner.py \
-				serverware/authority_webauthn_evidence_plan_persistence.py \
-				serverware/authority_webauthn_evidence_plan_production.py \
-				serverware/authority_webauthn_evidence_plan_reads.py \
-				serverware/authority_webauthn_evidence_plan_retention.py \
-				serverware/authority_webauthn_evidence_plan_verifier.py \
-				serverware/authority_webauthn_evidence_plan_verifier_configuration.py \
-				serverware/authority_webauthn_evidence_plan_writer_configuration.py \
-				serverware/authority_webauthn_evidence_proofs.py \
-				serverware/authority_webauthn_registration_inputs.py \
-				serverware/authority_webauthn_installation_inputs.py \
-				serverware/authority_webauthn_registration_production.py \
-				serverware/authority_webauthn_registration_admission.py \
-				serverware/authority_webauthn_installation_admission.py \
-				serverware/authority_webauthn_trust_candidate.py \
-				serverware/authority_webauthn_installation_production.py \
-				serverware/webauthn_attestation_core.py \
-				serverware/webauthn_credential_trust.py \
-				serverware/webauthn_trust.py \
-				serverware/webauthn_trust_core.py \
+				catchplate_agent_trust/requirements.lock \
+				catchplate_agent_trust/workload_identity_provisioning.py \
+				catchplate_agent_trust/workload_identity_submission.py \
+				catchplate_agent_trust/native_workload_identity_submission.py \
+				catchplate_agent_trust/native_workload_identity_provisioning.py \
+				catchplate_agent_trust/native_bootstrap_capture.py \
+				catchplate_agent_trust/_workload_operator_http.py \
+				catchplate/authority_counted_root_transition.py \
+				catchplate/authority_store/counted_installation.py \
+				catchplate/authority_complete_query_batch.py \
+				catchplate/authority_complete_acquisition.py \
+				catchplate/authority_index_heads.py \
+				catchplate/authority_index_trace.py \
+				catchplate/authority_complete_read_write.py \
+				catchplate/authority_revocation_read_write.py \
+				catchplate/authority_revocation_proof_bundle.py \
+				catchplate/authority_revocation_bundle_contract.py \
+				catchplate/authority_revocation_semantics.py \
+				catchplate/authority_revocation_plan_contract.py \
+				catchplate/authority_revocation_plan.py \
+				catchplate/authority_revocation_plan_production.py \
+				catchplate/authority_revocation_wire.py \
+				catchplate/authority_revocation_retention.py \
+				catchplate/authority_revocation_capability.py \
+				catchplate/authority_revocation_capability_production.py \
+				catchplate/authority_revocation_configuration.py \
+				catchplate/authority_revocation_roots.py \
+				catchplate/authority_revocation_root_reader.py \
+				catchplate/authority_revocation_observed.py \
+				catchplate/authority_revocation_handoff.py \
+				catchplate/authority_revocation_verifier.py \
+				catchplate/authority_revocation_planning.py \
+				catchplate/authority_revocation_planning_request.py \
+				catchplate/authority_revocation_planning_transport.py \
+				catchplate/authority_revocation_planning_client.py \
+				catchplate/authority_revocation_planning_receiver.py \
+				catchplate/authority_revocation_planner_custody_transport.py \
+				catchplate/authority_revocation_planner_custody_client.py \
+				catchplate/authority_revocation_planner_custody_receiver.py \
+				catchplate/authority_revocation_custody_read.py \
+				catchplate/authority_revocation_custody_read_client.py \
+				catchplate/authority_revocation_custody_read_transport.py \
+				catchplate/authority_revocation_planner_configuration.py \
+				catchplate/authority_transport.py \
+				catchplate/authority_revocation_invocation.py \
+				catchplate/authority_revocation_issuance.py \
+				catchplate/authority_revocation_persistence.py \
+				catchplate/authority_revocation_writer_connection.py \
+				catchplate/authority_revocation_writer_configuration.py \
+				catchplate/authority_revocation_writer_action.py \
+				catchplate/authority_revocation_writer_commitment.py \
+				catchplate/authority_revocation_writer_composition.py \
+				catchplate/authority_revocation_writer_signer.py \
+				catchplate/authority_revocation_writer_acknowledgment.py \
+				catchplate/authority_revocation_writer_transport.py \
+				catchplate/authority_revocation_writer_ack_expectation.py \
+				catchplate/authority_revocation_writer_client.py \
+				catchplate/authority_revocation_writer_producers.py \
+				catchplate/authority_revocation_coordinator.py \
+				catchplate/authority_store/planner_connection.py \
+				catchplate/authority_store/planner_read_sql.py \
+				catchplate/authority_store/authorization_records.py \
+				catchplate/authority_store/revocation_capability.py \
+				catchplate/authority_store/revocation_capability_sql.py \
+				catchplate/authority_store/revocation_retention.py \
+				catchplate/authority_store/webauthn_evidence_retention.py \
+				catchplate/authority_store/webauthn_transition_retention.py \
+				catchplate/authority_store/recovery_invalidation_retention.py \
+				catchplate/authority_store/webauthn_evidence_entrypoints.py \
+				catchplate/authority_store/revocation_counted_sql.py \
+				catchplate/authority_store/revocation_execution.py \
+				catchplate/authority_store/revocation_writer_request.py \
+				catchplate/authority_store/revocation_writer_acknowledgment.py \
+				catchplate/authority_store/revocation_custody_read.py \
+				catchplate/authority_store/revocation_retained_sql.py \
+				catchplate/authority_store/executor_v9.py \
+				catchplate/authority_revocation_write_trace.py \
+				catchplate/authority_webauthn_trust.py \
+				catchplate/authority_request_commitment.py \
+				catchplate/authority_planner.py \
+				catchplate/authority_successor_programs.py \
+				catchplate/authority_webauthn_transition_planning.py \
+				catchplate/authority_webauthn_transition_inputs.py \
+				catchplate/authority_webauthn_registration_replay.py \
+				catchplate/authority_webauthn_stage_replay.py \
+				catchplate/authority_webauthn_completion_replay.py \
+				catchplate/authority_webauthn_complete_proofs.py \
+				catchplate/authority_webauthn_completion_proofs.py \
+				catchplate/authority_webauthn_transition_proof_contract.py \
+				catchplate/authority_webauthn_transition_proof_wire.py \
+				catchplate/authority_webauthn_transition_proof.py \
+				catchplate/authority_webauthn_transition_proof_production.py \
+				catchplate/authority_webauthn_transition_plan_contract.py \
+				catchplate/authority_webauthn_transition_plan_context.py \
+				catchplate/authority_webauthn_transition_plan.py \
+				catchplate/authority_webauthn_transition_plan_owner.py \
+				catchplate/authority_webauthn_transition_policy.py \
+				catchplate/authority_webauthn_transition_configuration.py \
+				catchplate/authority_webauthn_transition_plan_admission.py \
+				catchplate/authority_webauthn_transition_plan_verifier.py \
+				catchplate/authority_webauthn_transition_service.py \
+				catchplate/authority_webauthn_transition_roots_contract.py \
+				catchplate/authority_webauthn_transition_roots.py \
+				catchplate/authority_webauthn_transition_root_reader.py \
+				catchplate/authority_webauthn_transition_root_configuration.py \
+				catchplate/authority_webauthn_transition_exchange_configuration.py \
+				catchplate/authority_webauthn_transition_request.py \
+				catchplate/authority_webauthn_transition_response.py \
+				catchplate/authority_webauthn_transition_transport.py \
+				catchplate/authority_webauthn_transition_live.py \
+				catchplate/authority_webauthn_transition_actions.py \
+				catchplate/authority_webauthn_transition_retention.py \
+				catchplate/authority_recovery_invalidation_retention.py \
+				catchplate/authority_recovery_invalidation_execution_replay.py \
+				catchplate/authority_recovery_invalidation_persistence.py \
+				catchplate/authority_recovery_invalidation_service.py \
+				catchplate/authority_webauthn_transition_persistence.py \
+				catchplate/authority_webauthn_transition_writer_configuration.py \
+				catchplate/authority_webauthn_transition_custody_wire.py \
+				catchplate/authority_webauthn_transition_custody_intent.py \
+				catchplate/authority_webauthn_transition_custody_relay.py \
+				catchplate/authority_webauthn_transition_custody_configuration.py \
+				catchplate/authority_webauthn_transition_custody_transport.py \
+				catchplate/authority_webauthn_transition_custody_persistence.py \
+				catchplate/authority_webauthn_transition_custody_actions.py \
+				catchplate/authority_webauthn_transition_custody_service.py \
+				catchplate/authority_webauthn_transition_custody_read_request.py \
+				catchplate/authority_webauthn_transition_custody_read_transport.py \
+				catchplate/authority_webauthn_transition_custody_read_actions.py \
+				catchplate/authority_webauthn_transition_custody_read_service.py \
+				catchplate/authority_webauthn_assertion.py \
+				catchplate/authority_webauthn_evidence.py \
+				catchplate/authority_webauthn_evidence_acquisition.py \
+				catchplate/authority_webauthn_evidence_roots.py \
+				catchplate/authority_webauthn_evidence_root_reader.py \
+				catchplate/authority_webauthn_evidence_root_configuration.py \
+				catchplate/authority_webauthn_evidence_computation.py \
+				catchplate/authority_webauthn_evidence_custody_configuration.py \
+				catchplate/authority_webauthn_evidence_custody_actions.py \
+				catchplate/authority_webauthn_evidence_custody_transport.py \
+				catchplate/authority_webauthn_evidence_custody_read_request.py \
+				catchplate/authority_webauthn_evidence_custody_read_actions.py \
+				catchplate/authority_webauthn_evidence_custody_read_transport.py \
+				catchplate/authority_webauthn_evidence_custody_wire.py \
+				catchplate/authority_webauthn_evidence_custody_intent.py \
+				catchplate/authority_webauthn_evidence_custody_relay.py \
+				catchplate/authority_webauthn_evidence_custody_persistence.py \
+				catchplate/authority_webauthn_evidence_kernel.py \
+				catchplate/authority_webauthn_evidence_planning.py \
+				catchplate/authority_webauthn_evidence_policy.py \
+				catchplate/authority_webauthn_evidence_configuration.py \
+				catchplate/authority_webauthn_evidence_input_wire.py \
+				catchplate/authority_webauthn_evidence_replay.py \
+				catchplate/authority_webauthn_evidence_plan.py \
+				catchplate/authority_webauthn_evidence_plan_request.py \
+				catchplate/authority_webauthn_evidence_plan_response.py \
+				catchplate/authority_webauthn_evidence_plan_transport.py \
+				catchplate/authority_webauthn_evidence_plan_live.py \
+				catchplate/authority_webauthn_evidence_plan_actions.py \
+				catchplate/authority_webauthn_evidence_plan_admission.py \
+				catchplate/authority_webauthn_evidence_plan_clock.py \
+				catchplate/authority_webauthn_evidence_plan_configuration.py \
+				catchplate/authority_webauthn_evidence_plan_context.py \
+				catchplate/authority_webauthn_evidence_plan_contract.py \
+				catchplate/authority_webauthn_evidence_plan_owner.py \
+				catchplate/authority_webauthn_evidence_plan_persistence.py \
+				catchplate/authority_webauthn_evidence_plan_production.py \
+				catchplate/authority_webauthn_evidence_plan_reads.py \
+				catchplate/authority_webauthn_evidence_plan_retention.py \
+				catchplate/authority_webauthn_evidence_plan_verifier.py \
+				catchplate/authority_webauthn_evidence_plan_verifier_configuration.py \
+				catchplate/authority_webauthn_evidence_plan_writer_configuration.py \
+				catchplate/authority_webauthn_evidence_proofs.py \
+				catchplate/authority_webauthn_registration_inputs.py \
+				catchplate/authority_webauthn_installation_inputs.py \
+				catchplate/authority_webauthn_registration_production.py \
+				catchplate/authority_webauthn_registration_admission.py \
+				catchplate/authority_webauthn_installation_admission.py \
+				catchplate/authority_webauthn_trust_candidate.py \
+				catchplate/authority_webauthn_installation_production.py \
+				catchplate/webauthn_attestation_core.py \
+				catchplate/webauthn_credential_trust.py \
+				catchplate/webauthn_trust.py \
+				catchplate/webauthn_trust_core.py \
 				schemas/webauthn-trust-bundle.v1.schema.json \
-				serverware/authority_oidc_session_activation.py \
-				serverware/authority_oidc_session_activation_reads.py \
-				serverware/authority_oidc_session_activation_planning.py \
-				serverware/authority_oidc_session_activation_plan_contract.py \
-				serverware/authority_oidc_session_activation_plan.py \
-				serverware/authority_oidc_session_activation_state.py \
-				serverware/authority_current_root_head.py \
-				serverware/authority_oidc_session_activation_writes.py \
-				serverware/authority_oidc_session_activation_journal.py \
-				serverware/authority_oidc_session_activation_plan_owner.py \
-				serverware/authority_oidc_session_activation_execution_bundle.py \
-				serverware/authority_oidc_session_activation_execution_replay.py \
-				serverware/authority_oidc_session_activation_execution_expectations.py \
-				serverware/authority_oidc_session_activation_execution_history.py \
-				serverware/authority_oidc_session_activation_history_exchange.py \
-				serverware/oidc_session_activation_history_custody_bootstrap.py \
-				serverware/oidc_session_activation_history_bridge_replay.py \
-				serverware/authority_oidc_session_activation_history_custody.py \
-				serverware/authority_oidc_session_activation_completion_admission.py \
-				serverware/authority_oidc_session_activation_completion.py \
-				serverware/authority_oidc_session_activation_completion_recovery.py \
-				serverware/authority_oidc_session_activation_execution_custody.py \
-				serverware/oidc_session_activation_execution_custody_bootstrap.py \
-				serverware/authority_oidc_session_activation_execution_authorization.py \
-				serverware/authority_oidc_session_activation_execution_grant_production.py \
-				serverware/oidc_session_activation_execution_authorizer_bootstrap.py \
-				serverware/authority_oidc_session_activation_execution_authorizer_transport.py \
-				serverware/oidc_session_activation_execution_authorizer_startup.py \
-				serverware/oidc_session_activation_execution_authorizer_entrypoint.py \
-				serverware/oidc_session_activation_execution_authorizer_launcher.py \
-				serverware/oidc_session_activation_execution_authorizer_runner.py \
-				serverware/authority_oidc_session_activation_reservation.py \
-				serverware/authority_oidc_session_activation_pending_admission.py \
-				serverware/authority_oidc_session_activation_reservation_records.py \
-				serverware/authority_oidc_session_activation_reservation_delivery.py \
-				serverware/authority_oidc_session_activation_reservation_transport.py \
-				serverware/oidc_session_activation_execution_reserver_bootstrap.py \
-				serverware/oidc_session_activation_execution_reserver_startup.py \
-				serverware/oidc_session_activation_execution_reserver_entrypoint.py \
-				serverware/oidc_session_activation_execution_reserver_launcher.py \
-				serverware/oidc_session_activation_execution_reserver_runner.py \
-				serverware/authority_oidc_session_activation_sql.py \
-				serverware/authority_oidc_session_activation_sql_transport.py \
-				serverware/oidc_session_activation_execution_sql_bootstrap.py \
-				serverware/oidc_session_activation_execution_sql_startup.py \
-				serverware/oidc_session_activation_execution_sql_entrypoint.py \
-				serverware/oidc_session_activation_execution_sql_launcher.py \
-				serverware/oidc_session_activation_execution_sql_runner.py \
-				serverware/oidc_session_activation_completion_bootstrap.py \
-				serverware/oidc_session_activation_completion_startup.py \
-				serverware/oidc_session_activation_completion_entrypoint.py \
-				serverware/oidc_session_activation_completion_launcher.py \
-				serverware/oidc_session_activation_completion_runner.py \
-				serverware/authority_oidc_session_activation_completion_transport.py \
-				serverware/authority_oidc_session_activation_completion_response.py \
-				serverware/oidc_session_activation_release_custody_bootstrap.py \
-				serverware/oidc_session_activation_release_retained_authority.py \
-				serverware/oidc_session_activation_release_intent.py \
-				serverware/oidc_session_activation_release_intent_enrollment.py \
-				serverware/authority_oidc_session_activation_release_intent.py \
-				serverware/authority_oidc_session_activation_release_committed_inputs.py \
-				serverware/authority_oidc_session_activation_release_committed_target.py \
-				serverware/authority_oidc_session_activation_release_committed.py \
-				serverware/oidc_session_activation_release_proof.py \
-				serverware/oidc_session_activation_release_proof_enrollment.py \
-				serverware/authority_oidc_session_activation_release_proof.py \
-				serverware/authority_oidc_session_activation_release_proof_production.py \
-				serverware/oidc_session_activation_release_proof_bootstrap.py \
-				serverware/oidc_session_activation_release_proof_input_issuer_policy.py \
-				serverware/oidc_session_activation_release_proof_input_production.py \
-				serverware/oidc_session_activation_release_proof_input_issuer_bootstrap.py \
-				serverware/oidc_session_activation_release_proof_input_issuer_entrypoint.py \
-				serverware/oidc_session_activation_release_proof_input_issuer_launcher.py \
-				serverware/oidc_session_activation_release_proof_input_issuer_startup.py \
-				serverware/oidc_session_activation_release_proof_input_issuer_runner.py \
-				serverware/authority_oidc_session_activation_release_proof_input_transport.py \
-				serverware/authority_oidc_session_activation_release_proof_input_delivery_transport.py \
-				serverware/oidc_session_activation_release_proof_input_delivery_admission.py \
-				serverware/oidc_session_activation_release_proof_dynamic_entrypoint.py \
-				serverware/oidc_session_activation_release_proof_dynamic_launcher.py \
-				serverware/oidc_session_activation_release_proof_entrypoint.py \
-				serverware/oidc_session_activation_release_proof_startup.py \
-				serverware/oidc_session_activation_release_proof_launcher.py \
-				serverware/oidc_session_activation_release_proof_runner.py \
-				serverware/authority_oidc_session_activation_release_proof_transport.py \
-				serverware/oidc_session_activation_release_outcome.py \
-				serverware/oidc_session_activation_release_outcome_authorization.py \
-				serverware/authority_oidc_session_activation_release_outcome_store.py \
-				serverware/oidc_session_activation_release_recovery_authorization.py \
-				serverware/authority_oidc_session_activation_release_recovery.py \
-				serverware/oidc_session_activation_release_bootstrap.py \
-				serverware/oidc_session_activation_release_resources.py \
-				serverware/oidc_session_activation_release_startup.py \
-				serverware/oidc_session_activation_release_connection.py \
-				serverware/oidc_session_activation_release_transport.py \
-				serverware/oidc_session_activation_release_client_authorization.py \
-				serverware/control_plane_oidc_session_activation_release_bootstrap.py \
-				serverware/control_plane_oidc_session_activation_release_client.py \
-				serverware/control_plane_oidc_session_activation_release_attempt.py \
-				serverware/control_plane_oidc_session_activation_execution_bootstrap.py \
-				serverware/control_plane_oidc_session_activation_planning_bootstrap.py \
-				serverware/control_plane_oidc_session_activation_planning.py \
-				serverware/control_plane_oidc_session_activation_dispatch_attempt.py \
-				serverware/control_plane_oidc_session_activation_records.py \
-				serverware/control_plane_oidc_session_activation_dispatch.py \
-				serverware/control_plane_oidc_session_activation_completion.py \
-				serverware/control_plane_oidc_session_activation_consume_bootstrap.py \
-				serverware/control_plane_oidc_session_activation_consume_execution_bootstrap.py \
-				serverware/control_plane_oidc_session_activation_consume_authorization.py \
-				serverware/control_plane_oidc_session_activation_consume_dispatch.py \
-				serverware/control_plane_oidc_session_activation_consume_completion.py \
-				serverware/control_plane_oidc_session_activation_release_intent_bootstrap.py \
-				serverware/control_plane_oidc_session_activation_release_intent.py \
-				serverware/control_plane_oidc_session_activation_release_proof_bootstrap.py \
-				serverware/control_plane_oidc_session_activation_release_proof_acquisition_bootstrap.py \
-				serverware/control_plane_oidc_session_activation_release_proof.py \
-				serverware/control_plane_oidc_session_activation_release_handoff_bootstrap.py \
-				serverware/control_plane_oidc_session_activation_release_handoff.py \
-				serverware/oidc_session_activation_release_grant_issuer_policy.py \
-				serverware/oidc_session_activation_release_recovery_issuer_policy.py \
-				serverware/oidc_session_activation_release_recovery_issuer_bootstrap.py \
-				serverware/oidc_session_activation_release_recovery_issuer_entrypoint.py \
-				serverware/oidc_session_activation_release_recovery_issuer_startup.py \
-				serverware/oidc_session_activation_release_recovery_issuer_launcher.py \
-				serverware/oidc_session_activation_release_recovery_issuer_runner.py \
-				serverware/authority_oidc_session_activation_release_recovery_grant_transport.py \
-				serverware/control_plane_oidc_session_activation_release_recovery_grant_acquisition.py \
-				serverware/control_plane_oidc_session_activation_release_recovery_grant_acquisition_bootstrap.py \
-				serverware/control_plane_oidc_session_activation_recovery_records.py \
-				serverware/control_plane_oidc_session_activation_recovery_acquisition.py \
-				serverware/control_plane_oidc_session_activation_recovery_exchange.py \
-				serverware/control_plane_oidc_session_activation_recovery_delivery.py \
-				serverware/control_plane_oidc_session_activation_recovery_http.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_bootstrap.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_selection.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_consume_selection.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_intent_selection.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_history.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_actor.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_controls.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_records.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_exchange.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_http.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_intent_inputs.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_intent.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_proof.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_release.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_release_http.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_delivery.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_delivery_exchange.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_delivery_response.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_delivery_http.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_retained_acquisition.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_retained_exchange.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_consume.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_consume_inputs.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_consume_planning.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_consume_authorization.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_consume_dispatch.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_consume_completion.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_consume_response.py \
-				serverware/control_plane_oidc_session_activation_completion_recovery_consume_http.py \
-				serverware/control_plane_oidc_session_activation_approval.py \
-				serverware/portal_session_activation.py \
-				serverware/portal_session_activation_authorization.py \
-				serverware/portal_session_activation_confirmation.py \
-				serverware/portal_session_activation_confirmation_routes.py \
-				serverware/control_plane_registration_history_bootstrap.py \
-				serverware/control_plane_registration_history.py \
-				serverware/control_plane_registration_finalization_history_bootstrap.py \
-				serverware/control_plane_registration_finalization_history.py \
-				serverware/control_plane_registration_finalization_permission.py \
-				serverware/control_plane_oidc_session_activation_history_bootstrap.py \
-				serverware/control_plane_oidc_session_activation_history.py \
-				serverware/control_plane_oidc_session_activation_consume_history.py \
-				serverware/oidc_session_activation_release_grant_issuer_dynamic_authorization.py \
-				serverware/authority_oidc_session_activation_release_grant_input_delivery_transport.py \
-				serverware/oidc_session_activation_release_grant_issuer_dynamic_entrypoint.py \
-				serverware/oidc_session_activation_release_grant_issuer_dynamic_launcher.py \
-				serverware/authority_oidc_session_activation_release_grant_production.py \
-				serverware/authority_oidc_session_activation_release_recovery_grant_production.py \
-				serverware/authority_oidc_session_activation_release_grant_transport.py \
-				serverware/oidc_session_activation_release_grant_issuer_bootstrap.py \
-				serverware/oidc_session_activation_release_grant_issuer_entrypoint.py \
-				serverware/oidc_session_activation_release_grant_issuer_startup.py \
-				serverware/oidc_session_activation_release_grant_issuer_launcher.py \
-				serverware/oidc_session_activation_release_grant_issuer_runner.py \
-				serverware/workload_identity_issuance_authorization.py \
-				serverware/native_workload_identity_issuance_authorization.py \
-				serverware/native_workload_identity_originals.py \
-				serverware/native_ca_installation_authorization.py \
-				serverware/native_egress_installation_authorization.py \
-				serverware/native_network_attachment_authorization.py \
-				serverware/native_workload_start_authorization.py \
-				serverware/workload_identity_trust_authorization.py \
-				serverware/native_workload_identity_trust_authorization.py \
+				catchplate/authority_oidc_session_activation.py \
+				catchplate/authority_oidc_session_activation_reads.py \
+				catchplate/authority_oidc_session_activation_planning.py \
+				catchplate/authority_oidc_session_activation_plan_contract.py \
+				catchplate/authority_oidc_session_activation_plan.py \
+				catchplate/authority_oidc_session_activation_state.py \
+				catchplate/authority_current_root_head.py \
+				catchplate/authority_oidc_session_activation_writes.py \
+				catchplate/authority_oidc_session_activation_journal.py \
+				catchplate/authority_oidc_session_activation_plan_owner.py \
+				catchplate/authority_oidc_session_activation_execution_bundle.py \
+				catchplate/authority_oidc_session_activation_execution_replay.py \
+				catchplate/authority_oidc_session_activation_execution_expectations.py \
+				catchplate/authority_oidc_session_activation_execution_history.py \
+				catchplate/authority_oidc_session_activation_history_exchange.py \
+				catchplate/oidc_session_activation_history_custody_bootstrap.py \
+				catchplate/oidc_session_activation_history_bridge_replay.py \
+				catchplate/authority_oidc_session_activation_history_custody.py \
+				catchplate/authority_oidc_session_activation_completion_admission.py \
+				catchplate/authority_oidc_session_activation_completion.py \
+				catchplate/authority_oidc_session_activation_completion_recovery.py \
+				catchplate/authority_oidc_session_activation_execution_custody.py \
+				catchplate/oidc_session_activation_execution_custody_bootstrap.py \
+				catchplate/authority_oidc_session_activation_execution_authorization.py \
+				catchplate/authority_oidc_session_activation_execution_grant_production.py \
+				catchplate/oidc_session_activation_execution_authorizer_bootstrap.py \
+				catchplate/authority_oidc_session_activation_execution_authorizer_transport.py \
+				catchplate/oidc_session_activation_execution_authorizer_startup.py \
+				catchplate/oidc_session_activation_execution_authorizer_entrypoint.py \
+				catchplate/oidc_session_activation_execution_authorizer_launcher.py \
+				catchplate/oidc_session_activation_execution_authorizer_runner.py \
+				catchplate/authority_oidc_session_activation_reservation.py \
+				catchplate/authority_oidc_session_activation_pending_admission.py \
+				catchplate/authority_oidc_session_activation_reservation_records.py \
+				catchplate/authority_oidc_session_activation_reservation_delivery.py \
+				catchplate/authority_oidc_session_activation_reservation_transport.py \
+				catchplate/oidc_session_activation_execution_reserver_bootstrap.py \
+				catchplate/oidc_session_activation_execution_reserver_startup.py \
+				catchplate/oidc_session_activation_execution_reserver_entrypoint.py \
+				catchplate/oidc_session_activation_execution_reserver_launcher.py \
+				catchplate/oidc_session_activation_execution_reserver_runner.py \
+				catchplate/authority_oidc_session_activation_sql.py \
+				catchplate/authority_oidc_session_activation_sql_transport.py \
+				catchplate/oidc_session_activation_execution_sql_bootstrap.py \
+				catchplate/oidc_session_activation_execution_sql_startup.py \
+				catchplate/oidc_session_activation_execution_sql_entrypoint.py \
+				catchplate/oidc_session_activation_execution_sql_launcher.py \
+				catchplate/oidc_session_activation_execution_sql_runner.py \
+				catchplate/oidc_session_activation_completion_bootstrap.py \
+				catchplate/oidc_session_activation_completion_startup.py \
+				catchplate/oidc_session_activation_completion_entrypoint.py \
+				catchplate/oidc_session_activation_completion_launcher.py \
+				catchplate/oidc_session_activation_completion_runner.py \
+				catchplate/authority_oidc_session_activation_completion_transport.py \
+				catchplate/authority_oidc_session_activation_completion_response.py \
+				catchplate/oidc_session_activation_release_custody_bootstrap.py \
+				catchplate/oidc_session_activation_release_retained_authority.py \
+				catchplate/oidc_session_activation_release_intent.py \
+				catchplate/oidc_session_activation_release_intent_enrollment.py \
+				catchplate/authority_oidc_session_activation_release_intent.py \
+				catchplate/authority_oidc_session_activation_release_committed_inputs.py \
+				catchplate/authority_oidc_session_activation_release_committed_target.py \
+				catchplate/authority_oidc_session_activation_release_committed.py \
+				catchplate/oidc_session_activation_release_proof.py \
+				catchplate/oidc_session_activation_release_proof_enrollment.py \
+				catchplate/authority_oidc_session_activation_release_proof.py \
+				catchplate/authority_oidc_session_activation_release_proof_production.py \
+				catchplate/oidc_session_activation_release_proof_bootstrap.py \
+				catchplate/oidc_session_activation_release_proof_input_issuer_policy.py \
+				catchplate/oidc_session_activation_release_proof_input_production.py \
+				catchplate/oidc_session_activation_release_proof_input_issuer_bootstrap.py \
+				catchplate/oidc_session_activation_release_proof_input_issuer_entrypoint.py \
+				catchplate/oidc_session_activation_release_proof_input_issuer_launcher.py \
+				catchplate/oidc_session_activation_release_proof_input_issuer_startup.py \
+				catchplate/oidc_session_activation_release_proof_input_issuer_runner.py \
+				catchplate/authority_oidc_session_activation_release_proof_input_transport.py \
+				catchplate/authority_oidc_session_activation_release_proof_input_delivery_transport.py \
+				catchplate/oidc_session_activation_release_proof_input_delivery_admission.py \
+				catchplate/oidc_session_activation_release_proof_dynamic_entrypoint.py \
+				catchplate/oidc_session_activation_release_proof_dynamic_launcher.py \
+				catchplate/oidc_session_activation_release_proof_entrypoint.py \
+				catchplate/oidc_session_activation_release_proof_startup.py \
+				catchplate/oidc_session_activation_release_proof_launcher.py \
+				catchplate/oidc_session_activation_release_proof_runner.py \
+				catchplate/authority_oidc_session_activation_release_proof_transport.py \
+				catchplate/oidc_session_activation_release_outcome.py \
+				catchplate/oidc_session_activation_release_outcome_authorization.py \
+				catchplate/authority_oidc_session_activation_release_outcome_store.py \
+				catchplate/oidc_session_activation_release_recovery_authorization.py \
+				catchplate/authority_oidc_session_activation_release_recovery.py \
+				catchplate/oidc_session_activation_release_bootstrap.py \
+				catchplate/oidc_session_activation_release_resources.py \
+				catchplate/oidc_session_activation_release_startup.py \
+				catchplate/oidc_session_activation_release_connection.py \
+				catchplate/oidc_session_activation_release_transport.py \
+				catchplate/oidc_session_activation_release_client_authorization.py \
+				catchplate/control_plane_oidc_session_activation_release_bootstrap.py \
+				catchplate/control_plane_oidc_session_activation_release_client.py \
+				catchplate/control_plane_oidc_session_activation_release_attempt.py \
+				catchplate/control_plane_oidc_session_activation_execution_bootstrap.py \
+				catchplate/control_plane_oidc_session_activation_planning_bootstrap.py \
+				catchplate/control_plane_oidc_session_activation_planning.py \
+				catchplate/control_plane_oidc_session_activation_dispatch_attempt.py \
+				catchplate/control_plane_oidc_session_activation_records.py \
+				catchplate/control_plane_oidc_session_activation_dispatch.py \
+				catchplate/control_plane_oidc_session_activation_completion.py \
+				catchplate/control_plane_oidc_session_activation_consume_bootstrap.py \
+				catchplate/control_plane_oidc_session_activation_consume_execution_bootstrap.py \
+				catchplate/control_plane_oidc_session_activation_consume_authorization.py \
+				catchplate/control_plane_oidc_session_activation_consume_dispatch.py \
+				catchplate/control_plane_oidc_session_activation_consume_completion.py \
+				catchplate/control_plane_oidc_session_activation_release_intent_bootstrap.py \
+				catchplate/control_plane_oidc_session_activation_release_intent.py \
+				catchplate/control_plane_oidc_session_activation_release_proof_bootstrap.py \
+				catchplate/control_plane_oidc_session_activation_release_proof_acquisition_bootstrap.py \
+				catchplate/control_plane_oidc_session_activation_release_proof.py \
+				catchplate/control_plane_oidc_session_activation_release_handoff_bootstrap.py \
+				catchplate/control_plane_oidc_session_activation_release_handoff.py \
+				catchplate/oidc_session_activation_release_grant_issuer_policy.py \
+				catchplate/oidc_session_activation_release_recovery_issuer_policy.py \
+				catchplate/oidc_session_activation_release_recovery_issuer_bootstrap.py \
+				catchplate/oidc_session_activation_release_recovery_issuer_entrypoint.py \
+				catchplate/oidc_session_activation_release_recovery_issuer_startup.py \
+				catchplate/oidc_session_activation_release_recovery_issuer_launcher.py \
+				catchplate/oidc_session_activation_release_recovery_issuer_runner.py \
+				catchplate/authority_oidc_session_activation_release_recovery_grant_transport.py \
+				catchplate/control_plane_oidc_session_activation_release_recovery_grant_acquisition.py \
+				catchplate/control_plane_oidc_session_activation_release_recovery_grant_acquisition_bootstrap.py \
+				catchplate/control_plane_oidc_session_activation_recovery_records.py \
+				catchplate/control_plane_oidc_session_activation_recovery_acquisition.py \
+				catchplate/control_plane_oidc_session_activation_recovery_exchange.py \
+				catchplate/control_plane_oidc_session_activation_recovery_delivery.py \
+				catchplate/control_plane_oidc_session_activation_recovery_http.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_bootstrap.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_selection.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_consume_selection.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_intent_selection.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_history.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_actor.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_controls.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_records.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_exchange.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_http.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_intent_inputs.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_intent.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_proof.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_release.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_release_http.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_delivery.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_delivery_exchange.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_delivery_response.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_delivery_http.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_retained_acquisition.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_retained_exchange.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_consume.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_consume_inputs.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_consume_planning.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_consume_authorization.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_consume_dispatch.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_consume_completion.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_consume_response.py \
+				catchplate/control_plane_oidc_session_activation_completion_recovery_consume_http.py \
+				catchplate/control_plane_oidc_session_activation_approval.py \
+				catchplate/portal_session_activation.py \
+				catchplate/portal_session_activation_authorization.py \
+				catchplate/portal_session_activation_confirmation.py \
+				catchplate/portal_session_activation_confirmation_routes.py \
+				catchplate/control_plane_registration_history_bootstrap.py \
+				catchplate/control_plane_registration_history.py \
+				catchplate/control_plane_registration_finalization_history_bootstrap.py \
+				catchplate/control_plane_registration_finalization_history.py \
+				catchplate/control_plane_registration_finalization_permission.py \
+				catchplate/control_plane_oidc_session_activation_history_bootstrap.py \
+				catchplate/control_plane_oidc_session_activation_history.py \
+				catchplate/control_plane_oidc_session_activation_consume_history.py \
+				catchplate/oidc_session_activation_release_grant_issuer_dynamic_authorization.py \
+				catchplate/authority_oidc_session_activation_release_grant_input_delivery_transport.py \
+				catchplate/oidc_session_activation_release_grant_issuer_dynamic_entrypoint.py \
+				catchplate/oidc_session_activation_release_grant_issuer_dynamic_launcher.py \
+				catchplate/authority_oidc_session_activation_release_grant_production.py \
+				catchplate/authority_oidc_session_activation_release_recovery_grant_production.py \
+				catchplate/authority_oidc_session_activation_release_grant_transport.py \
+				catchplate/oidc_session_activation_release_grant_issuer_bootstrap.py \
+				catchplate/oidc_session_activation_release_grant_issuer_entrypoint.py \
+				catchplate/oidc_session_activation_release_grant_issuer_startup.py \
+				catchplate/oidc_session_activation_release_grant_issuer_launcher.py \
+				catchplate/oidc_session_activation_release_grant_issuer_runner.py \
+				catchplate/workload_identity_issuance_authorization.py \
+				catchplate/native_workload_identity_issuance_authorization.py \
+				catchplate/native_workload_identity_originals.py \
+				catchplate/native_ca_installation_authorization.py \
+				catchplate/native_egress_installation_authorization.py \
+				catchplate/native_network_attachment_authorization.py \
+				catchplate/native_workload_start_authorization.py \
+				catchplate/workload_identity_trust_authorization.py \
+				catchplate/native_workload_identity_trust_authorization.py \
 				scripts/authority/authorize_native_workload_identity_trust.py \
-				serverware/native_enrollment_assignment.py \
-				serverware/native_enrollment_bootstrap_delegation.py \
-				serverware/native_enrollment_bootstrap_setup.py \
-				serverware/workload_identity_trust_publication.py \
+				catchplate/native_enrollment_assignment.py \
+				catchplate/native_enrollment_bootstrap_delegation.py \
+				catchplate/native_enrollment_bootstrap_setup.py \
+				catchplate/workload_identity_trust_publication.py \
 				scripts/publish_workload_identity_trust.py \
-				serverware/workload_identity_issuer_bootstrap.py \
-				serverware/workload_identity_issuer_entrypoint.py \
-				serverware/workload_identity_issuer_startup.py \
-				serverware/workload_identity_issuer_launcher.py \
-				serverware/workload_identity_issuer_service.py \
-				serverware/workload_identity_issuer_transport.py \
-				serverware/workload_identity_issuer_journal.py \
-				serverware/control_plane_workload_identity_bootstrap.py \
-				serverware/control_plane_workload_identity_startup.py \
-				serverware/control_plane_workload_identity_client.py \
-				serverware/control_plane_workload_identity_approval.py \
-				serverware/control_plane_approval_verification.py \
-				serverware/control_plane_admin_token_publication.py \
-				serverware/control_plane_admin_token_resolution.py \
-				serverware/authority_publication_approval.py \
-				serverware/authority_transition_publication_approval.py \
-				serverware/control_plane_publication_authorization.py \
-				serverware/authority_policy_file_approval.py \
-				serverware/authority_transition_policy_file_approval.py \
-				serverware/control_plane_policy_file_publication.py \
-				serverware/control_plane_policy_loaded.py \
-				serverware/control_plane_native_loaded_trust.py \
-				serverware/control_plane_setup_native_policy.py \
-				serverware/authority_store/policy_file_genesis_sql.py \
-				serverware/control_plane_policy_file_genesis.py \
-				serverware/control_plane_policy_genesis_bootstrap.py \
-				serverware/control_plane_policy_genesis_maintenance.py \
-				serverware/control_plane_policy_genesis_runner.py \
-				serverware/portal_policy_genesis.py \
-				serverware/control_plane_policy_file_authority.py \
-				serverware/authority_store/policy_file_read_sql.py \
-				serverware/oauth_application_owner.py \
-				serverware/authority_oauth_activation.py \
-				serverware/authority_oauth_activation_policy.py \
-				serverware/authority_oauth_inventory.py \
-				serverware/authority_transition_oauth_activation.py \
-				serverware/control_plane_oauth_activation.py \
-				serverware/authority_oauth_exchange.py \
-				serverware/authority_oauth_revocation.py \
-				serverware/authority_oauth_revocation_policy.py \
-				serverware/authority_transition_oauth_revocation.py \
-				serverware/control_plane_oauth_revocation.py \
-				serverware/authority_oauth_refresh.py \
-				serverware/authority_oauth_refresh_policy.py \
-				serverware/authority_oauth_measured_refresh.py \
-				serverware/authority_oauth_measured_refresh_policy.py \
-				serverware/authority_transition_oauth_measured_refresh.py \
-				serverware/control_plane_oauth_measured_refresh.py \
-				serverware/authority_transition_oauth_refresh.py \
-				serverware/control_plane_oauth_refresh.py \
-				serverware/authority_credential_currentness.py \
-				serverware/authority_static_credential_provenance.py \
-				serverware/static_credential_provenance_values.py \
-				serverware/authority_credential_currentness_policy.py \
-				serverware/authority_credential_currentness_assignment.py \
-				serverware/control_plane_credential_currentness_assignment.py \
-				serverware/authority_transition_credential_currentness.py \
-				serverware/control_plane_credential_currentness.py \
-				serverware/credential_currentness_rows.py \
-				serverware/credential_ciphertext.py \
-				serverware/control_plane_broker_startup.py \
+				catchplate/workload_identity_issuer_bootstrap.py \
+				catchplate/workload_identity_issuer_entrypoint.py \
+				catchplate/workload_identity_issuer_startup.py \
+				catchplate/workload_identity_issuer_launcher.py \
+				catchplate/workload_identity_issuer_service.py \
+				catchplate/workload_identity_issuer_transport.py \
+				catchplate/workload_identity_issuer_journal.py \
+				catchplate/control_plane_workload_identity_bootstrap.py \
+				catchplate/control_plane_workload_identity_startup.py \
+				catchplate/control_plane_workload_identity_client.py \
+				catchplate/control_plane_workload_identity_approval.py \
+				catchplate/control_plane_approval_verification.py \
+				catchplate/control_plane_admin_token_publication.py \
+				catchplate/control_plane_admin_token_resolution.py \
+				catchplate/authority_publication_approval.py \
+				catchplate/authority_transition_publication_approval.py \
+				catchplate/control_plane_publication_authorization.py \
+				catchplate/authority_policy_file_approval.py \
+				catchplate/authority_transition_policy_file_approval.py \
+				catchplate/control_plane_policy_file_publication.py \
+				catchplate/control_plane_policy_loaded.py \
+				catchplate/control_plane_native_loaded_trust.py \
+				catchplate/control_plane_setup_native_policy.py \
+				catchplate/authority_store/policy_file_genesis_sql.py \
+				catchplate/control_plane_policy_file_genesis.py \
+				catchplate/control_plane_policy_genesis_bootstrap.py \
+				catchplate/control_plane_policy_genesis_maintenance.py \
+				catchplate/control_plane_policy_genesis_runner.py \
+				catchplate/portal_policy_genesis.py \
+				catchplate/control_plane_policy_file_authority.py \
+				catchplate/authority_store/policy_file_read_sql.py \
+				catchplate/oauth_application_owner.py \
+				catchplate/authority_oauth_activation.py \
+				catchplate/authority_oauth_activation_policy.py \
+				catchplate/authority_oauth_inventory.py \
+				catchplate/authority_transition_oauth_activation.py \
+				catchplate/control_plane_oauth_activation.py \
+				catchplate/authority_oauth_exchange.py \
+				catchplate/authority_oauth_revocation.py \
+				catchplate/authority_oauth_revocation_policy.py \
+				catchplate/authority_transition_oauth_revocation.py \
+				catchplate/control_plane_oauth_revocation.py \
+				catchplate/authority_oauth_refresh.py \
+				catchplate/authority_oauth_refresh_policy.py \
+				catchplate/authority_oauth_measured_refresh.py \
+				catchplate/authority_oauth_measured_refresh_policy.py \
+				catchplate/authority_transition_oauth_measured_refresh.py \
+				catchplate/control_plane_oauth_measured_refresh.py \
+				catchplate/authority_transition_oauth_refresh.py \
+				catchplate/control_plane_oauth_refresh.py \
+				catchplate/authority_credential_currentness.py \
+				catchplate/authority_static_credential_provenance.py \
+				catchplate/static_credential_provenance_values.py \
+				catchplate/authority_credential_currentness_policy.py \
+				catchplate/authority_credential_currentness_assignment.py \
+				catchplate/control_plane_credential_currentness_assignment.py \
+				catchplate/authority_transition_credential_currentness.py \
+				catchplate/control_plane_credential_currentness.py \
+				catchplate/credential_currentness_rows.py \
+				catchplate/credential_ciphertext.py \
+				catchplate/control_plane_broker_startup.py \
 				scripts/authority/sign_control_plane_broker_startup.py \
 				scripts/package_native_broker_runtime.py \
-				serverware/native_role_key_contract.py \
-				serverware/native_role_key_provisioner.py \
+				catchplate/native_role_key_contract.py \
+				catchplate/native_role_key_provisioner.py \
 				scripts/native_role_key_kms_parent.py \
 				scripts/package_native_role_key_runtime.py \
 				scripts/package_native_shadow_key_runtime.py \
@@ -4843,344 +4843,344 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/prepare_native_role_keys.py \
 				scripts/seal_native_service_tokens.py \
 				scripts/sign_native_guest_credential_delivery.py \
-				serverware/data_plane_audit_authority.py \
-				serverware/data_plane_audit_store.py \
-				serverware/authority_rbac_currentness.py \
-				serverware/authority_current_root_revocation_head.py \
-				serverware/authority_public_revocation_approval.py \
-				serverware/authority_public_revocation_approval_owner.py \
-				serverware/authority_public_revocation_caller_authorization.py \
-				serverware/authority_public_revocation_caller_signing.py \
-				serverware/authority_public_revocation_execution.py \
-				serverware/authority_public_revocation_preparation.py \
-				serverware/authority_public_revocation_recovery_authorization.py \
-				serverware/authority_public_revocation_request.py \
-				serverware/authority_public_revocation_service.py \
-				serverware/authority_public_revocation_terminal.py \
-				serverware/authority_public_revocation_terminal_bootstrap.py \
-				serverware/authority_public_revocation_transport.py \
-				serverware/authority_public_webauthn_revocation.py \
-				serverware/authority_public_webauthn_revocation_kernel.py \
-				serverware/authority_rbac_recovery.py \
-				serverware/authority_store/rbac_recovery_sql.py \
-				serverware/authority_transition_public_revocation_approval.py \
-				serverware/control_plane_public_revocation.py \
-				serverware/control_plane_public_revocation_approval.py \
-				serverware/control_plane_public_revocation_bootstrap.py \
-				serverware/control_plane_public_revocation_execution.py \
-				serverware/control_plane_public_revocation_records.py \
-				serverware/control_plane_public_revocation_lookup.py \
-				serverware/portal_public_revocation.py \
-				serverware/control_plane_rbac_recovery.py \
-				serverware/authority_rbac_witness.py \
-				serverware/control_plane_rbac_currentness.py \
-				serverware/authority_store/rbac_witness_sql.py \
-				serverware/control_plane_data_plane_audit.py \
-				serverware/native_kms_cms.py \
-				serverware/native_secret_broker_helper.py \
-				serverware/native_jit_review_owner.py \
-				serverware/native_jit_review_material.py \
-				serverware/authority_native_jit_review_assignment.py \
-				serverware/authority_native_jit_review_custody.py \
-				serverware/authority_jit_private_request.py \
-				serverware/authority_jit_request.py \
-				serverware/authority_approver_policy.py \
-				serverware/authority_challenge_id.py \
-				serverware/rbac.py \
-				serverware/native_oauth_refresh.py \
-				serverware/native_oauth_refresh_owner.py \
-				serverware/native_oauth_refresh_receipts.py \
-				serverware/native_oauth_refresh_tls.py \
-				serverware/native_oauth_exchange.py \
-				serverware/authority_oauth_measured_exchange.py \
-				serverware/authority_oauth_measured_setup.py \
-				serverware/authority_oauth_measured_setup_policy.py \
-				serverware/authority_oauth_setup.py \
-				serverware/authority_setup_cancel.py \
-				serverware/authority_transition_setup_cancel.py \
-				serverware/control_plane_setup_cancel.py \
-				serverware/authority_setup_create.py \
-				serverware/authority_transition_setup_create.py \
-				serverware/control_plane_setup_create.py \
-				serverware/authority_setup_bind_credential.py \
-				serverware/authority_transition_setup_bind_credential.py \
-				serverware/control_plane_setup_bind_credential.py \
-				serverware/authority_static_credential_create.py \
-				serverware/authority_static_credential_rotate.py \
-				serverware/authority_static_credential_rotation_custody.py \
-				serverware/authority_static_credential_rotation_approval.py \
-				serverware/authority_transition_static_credential_rotate.py \
-				serverware/authority_transition_static_credential_rotation_approval.py \
-				serverware/native_static_credential.py \
-				serverware/native_static_credential_rotation.py \
-				serverware/native_static_credential_rotation_owner.py \
-				serverware/authority_static_credential_approval.py \
-				serverware/authority_static_credential_custody.py \
-				serverware/authority_static_credential_assignment.py \
-				serverware/authority_static_credential_assignment_issuer.py \
-				serverware/authority_transition_static_credential_create.py \
-				serverware/authority_transition_static_credential_approval.py \
-				serverware/native_static_credential_owner.py \
-				serverware/control_plane_static_credential.py \
-				serverware/portal_static_credential.py \
-				serverware/control_plane_static_credential_rotation.py \
-				serverware/control_plane_static_credential_provenance.py \
-				serverware/portal_static_credential_rotation.py \
-				serverware/authority_transition_oauth_setup.py \
-				serverware/authority_transition_oauth_setup_rows.py \
-				serverware/authority_oauth_measured_exchange_policy.py \
-				serverware/authority_transition_oauth_measured_exchange.py \
-				serverware/native_oauth_exchange_receipts.py \
-				serverware/native_oauth_exchange_tls.py \
-				serverware/native_oauth_exchange_owner.py \
-				serverware/native_oauth_setup.py \
-				serverware/native_oauth_setup_rows.py \
-				serverware/native_oauth_setup_receipts.py \
-				serverware/native_oauth_setup_tls.py \
-				serverware/native_oauth_setup_owner.py \
-				serverware/native_oauth_reconnect.py \
-				serverware/native_oauth_reconnect_owner.py \
-				serverware/native_oauth_reconnect_receipts.py \
-				serverware/native_oauth_reconnect_rows.py \
-				serverware/native_oauth_reconnect_tls.py \
-				serverware/native_secret_broker_history.py \
-				serverware/native_oauth_succession.py \
-				serverware/native_oauth_succession_rows.py \
-				serverware/native_oauth_succession_materials.py \
-				serverware/native_oauth_succession_receipts.py \
-				serverware/native_oauth_succession_tls.py \
-				serverware/native_oauth_succession_owner.py \
-				serverware/authority_oauth_provider_retirement.py \
-				serverware/authority_oauth_measured_capture_retirement.py \
-				serverware/authority_oauth_measured_capture_retirement_policy.py \
-				serverware/authority_transition_oauth_measured_capture_retirement.py \
-				serverware/control_plane_oauth_measured_capture_retirement.py \
-				serverware/native_oauth_capture_retirement.py \
-				serverware/oauth_retirement_values.py \
-				serverware/oauth_retirement_policy_values.py \
-				serverware/oauth_pending_retirement_values.py \
-				serverware/oauth_capture_retirement_policy.py \
-				serverware/oauth_pending_retirement_policy.py \
-				serverware/native_oauth_capture_retirement_owner.py \
-				serverware/native_oauth_capture_retirement_receipts.py \
-				serverware/authority_oauth_reconnect.py \
-				serverware/authority_oauth_reconnect_policy.py \
-				serverware/authority_transition_oauth_reconnect.py \
-				serverware/authority_transition_oauth_reconnect_rows.py \
-				serverware/control_plane_oauth_reconnect.py \
-				serverware/oauth_reconnect_owner.py \
-				serverware/portal_oauth_reconnect.py \
-				serverware/authority_oauth_retirement_succession.py \
-				serverware/authority_oauth_retirement_succession_approvals.py \
-				serverware/authority_oauth_retirement_succession_catalog.py \
-				serverware/authority_oauth_retirement_succession_contacts.py \
-				serverware/authority_oauth_retirement_succession_current.py \
-				serverware/authority_oauth_retirement_succession_fresh.py \
-				serverware/authority_oauth_retirement_succession_inventory.py \
-				serverware/authority_oauth_retirement_succession_lineages.py \
-				serverware/authority_oauth_retirement_succession_materials.py \
-				serverware/authority_oauth_retirement_succession_policy.py \
-				serverware/authority_oauth_retirement_succession_queries.py \
-				serverware/authority_oauth_retirement_succession_records.py \
-				serverware/authority_oauth_retirement_succession_retire.py \
-				serverware/authority_oauth_retirement_succession_snapshots.py \
-				serverware/authority_transition_oauth_retirement_succession.py \
-				serverware/control_plane_oauth_succession.py \
-				serverware/control_plane_oauth_succession_ceremony.py \
-				serverware/oauth_retirement_succession_owner.py \
-				serverware/portal_oauth_succession.py \
+				catchplate/data_plane_audit_authority.py \
+				catchplate/data_plane_audit_store.py \
+				catchplate/authority_rbac_currentness.py \
+				catchplate/authority_current_root_revocation_head.py \
+				catchplate/authority_public_revocation_approval.py \
+				catchplate/authority_public_revocation_approval_owner.py \
+				catchplate/authority_public_revocation_caller_authorization.py \
+				catchplate/authority_public_revocation_caller_signing.py \
+				catchplate/authority_public_revocation_execution.py \
+				catchplate/authority_public_revocation_preparation.py \
+				catchplate/authority_public_revocation_recovery_authorization.py \
+				catchplate/authority_public_revocation_request.py \
+				catchplate/authority_public_revocation_service.py \
+				catchplate/authority_public_revocation_terminal.py \
+				catchplate/authority_public_revocation_terminal_bootstrap.py \
+				catchplate/authority_public_revocation_transport.py \
+				catchplate/authority_public_webauthn_revocation.py \
+				catchplate/authority_public_webauthn_revocation_kernel.py \
+				catchplate/authority_rbac_recovery.py \
+				catchplate/authority_store/rbac_recovery_sql.py \
+				catchplate/authority_transition_public_revocation_approval.py \
+				catchplate/control_plane_public_revocation.py \
+				catchplate/control_plane_public_revocation_approval.py \
+				catchplate/control_plane_public_revocation_bootstrap.py \
+				catchplate/control_plane_public_revocation_execution.py \
+				catchplate/control_plane_public_revocation_records.py \
+				catchplate/control_plane_public_revocation_lookup.py \
+				catchplate/portal_public_revocation.py \
+				catchplate/control_plane_rbac_recovery.py \
+				catchplate/authority_rbac_witness.py \
+				catchplate/control_plane_rbac_currentness.py \
+				catchplate/authority_store/rbac_witness_sql.py \
+				catchplate/control_plane_data_plane_audit.py \
+				catchplate/native_kms_cms.py \
+				catchplate/native_secret_broker_helper.py \
+				catchplate/native_jit_review_owner.py \
+				catchplate/native_jit_review_material.py \
+				catchplate/authority_native_jit_review_assignment.py \
+				catchplate/authority_native_jit_review_custody.py \
+				catchplate/authority_jit_private_request.py \
+				catchplate/authority_jit_request.py \
+				catchplate/authority_approver_policy.py \
+				catchplate/authority_challenge_id.py \
+				catchplate/rbac.py \
+				catchplate/native_oauth_refresh.py \
+				catchplate/native_oauth_refresh_owner.py \
+				catchplate/native_oauth_refresh_receipts.py \
+				catchplate/native_oauth_refresh_tls.py \
+				catchplate/native_oauth_exchange.py \
+				catchplate/authority_oauth_measured_exchange.py \
+				catchplate/authority_oauth_measured_setup.py \
+				catchplate/authority_oauth_measured_setup_policy.py \
+				catchplate/authority_oauth_setup.py \
+				catchplate/authority_setup_cancel.py \
+				catchplate/authority_transition_setup_cancel.py \
+				catchplate/control_plane_setup_cancel.py \
+				catchplate/authority_setup_create.py \
+				catchplate/authority_transition_setup_create.py \
+				catchplate/control_plane_setup_create.py \
+				catchplate/authority_setup_bind_credential.py \
+				catchplate/authority_transition_setup_bind_credential.py \
+				catchplate/control_plane_setup_bind_credential.py \
+				catchplate/authority_static_credential_create.py \
+				catchplate/authority_static_credential_rotate.py \
+				catchplate/authority_static_credential_rotation_custody.py \
+				catchplate/authority_static_credential_rotation_approval.py \
+				catchplate/authority_transition_static_credential_rotate.py \
+				catchplate/authority_transition_static_credential_rotation_approval.py \
+				catchplate/native_static_credential.py \
+				catchplate/native_static_credential_rotation.py \
+				catchplate/native_static_credential_rotation_owner.py \
+				catchplate/authority_static_credential_approval.py \
+				catchplate/authority_static_credential_custody.py \
+				catchplate/authority_static_credential_assignment.py \
+				catchplate/authority_static_credential_assignment_issuer.py \
+				catchplate/authority_transition_static_credential_create.py \
+				catchplate/authority_transition_static_credential_approval.py \
+				catchplate/native_static_credential_owner.py \
+				catchplate/control_plane_static_credential.py \
+				catchplate/portal_static_credential.py \
+				catchplate/control_plane_static_credential_rotation.py \
+				catchplate/control_plane_static_credential_provenance.py \
+				catchplate/portal_static_credential_rotation.py \
+				catchplate/authority_transition_oauth_setup.py \
+				catchplate/authority_transition_oauth_setup_rows.py \
+				catchplate/authority_oauth_measured_exchange_policy.py \
+				catchplate/authority_transition_oauth_measured_exchange.py \
+				catchplate/native_oauth_exchange_receipts.py \
+				catchplate/native_oauth_exchange_tls.py \
+				catchplate/native_oauth_exchange_owner.py \
+				catchplate/native_oauth_setup.py \
+				catchplate/native_oauth_setup_rows.py \
+				catchplate/native_oauth_setup_receipts.py \
+				catchplate/native_oauth_setup_tls.py \
+				catchplate/native_oauth_setup_owner.py \
+				catchplate/native_oauth_reconnect.py \
+				catchplate/native_oauth_reconnect_owner.py \
+				catchplate/native_oauth_reconnect_receipts.py \
+				catchplate/native_oauth_reconnect_rows.py \
+				catchplate/native_oauth_reconnect_tls.py \
+				catchplate/native_secret_broker_history.py \
+				catchplate/native_oauth_succession.py \
+				catchplate/native_oauth_succession_rows.py \
+				catchplate/native_oauth_succession_materials.py \
+				catchplate/native_oauth_succession_receipts.py \
+				catchplate/native_oauth_succession_tls.py \
+				catchplate/native_oauth_succession_owner.py \
+				catchplate/authority_oauth_provider_retirement.py \
+				catchplate/authority_oauth_measured_capture_retirement.py \
+				catchplate/authority_oauth_measured_capture_retirement_policy.py \
+				catchplate/authority_transition_oauth_measured_capture_retirement.py \
+				catchplate/control_plane_oauth_measured_capture_retirement.py \
+				catchplate/native_oauth_capture_retirement.py \
+				catchplate/oauth_retirement_values.py \
+				catchplate/oauth_retirement_policy_values.py \
+				catchplate/oauth_pending_retirement_values.py \
+				catchplate/oauth_capture_retirement_policy.py \
+				catchplate/oauth_pending_retirement_policy.py \
+				catchplate/native_oauth_capture_retirement_owner.py \
+				catchplate/native_oauth_capture_retirement_receipts.py \
+				catchplate/authority_oauth_reconnect.py \
+				catchplate/authority_oauth_reconnect_policy.py \
+				catchplate/authority_transition_oauth_reconnect.py \
+				catchplate/authority_transition_oauth_reconnect_rows.py \
+				catchplate/control_plane_oauth_reconnect.py \
+				catchplate/oauth_reconnect_owner.py \
+				catchplate/portal_oauth_reconnect.py \
+				catchplate/authority_oauth_retirement_succession.py \
+				catchplate/authority_oauth_retirement_succession_approvals.py \
+				catchplate/authority_oauth_retirement_succession_catalog.py \
+				catchplate/authority_oauth_retirement_succession_contacts.py \
+				catchplate/authority_oauth_retirement_succession_current.py \
+				catchplate/authority_oauth_retirement_succession_fresh.py \
+				catchplate/authority_oauth_retirement_succession_inventory.py \
+				catchplate/authority_oauth_retirement_succession_lineages.py \
+				catchplate/authority_oauth_retirement_succession_materials.py \
+				catchplate/authority_oauth_retirement_succession_policy.py \
+				catchplate/authority_oauth_retirement_succession_queries.py \
+				catchplate/authority_oauth_retirement_succession_records.py \
+				catchplate/authority_oauth_retirement_succession_retire.py \
+				catchplate/authority_oauth_retirement_succession_snapshots.py \
+				catchplate/authority_transition_oauth_retirement_succession.py \
+				catchplate/control_plane_oauth_succession.py \
+				catchplate/control_plane_oauth_succession_ceremony.py \
+				catchplate/oauth_retirement_succession_owner.py \
+				catchplate/portal_oauth_succession.py \
 				scripts/test_oauth_retirement_succession_contract.py \
-				serverware/authority_oauth_measured_cleanup_policy.py \
-				serverware/authority_oauth_measured_cleanup.py \
-				serverware/authority_transition_oauth_measured_cleanup.py \
-				serverware/control_plane_oauth_measured_cleanup.py \
-				serverware/authority_oauth_family_query_group.py \
-				serverware/authority_oauth_measured_pending_originals.py \
-				serverware/authority_oauth_measured_pending_retirement.py \
-				serverware/authority_oauth_measured_pending_retirement_policy.py \
-				serverware/authority_transition_oauth_measured_pending_retirement.py \
-				serverware/control_plane_oauth_measured_pending_retirement.py \
+				catchplate/authority_oauth_measured_cleanup_policy.py \
+				catchplate/authority_oauth_measured_cleanup.py \
+				catchplate/authority_transition_oauth_measured_cleanup.py \
+				catchplate/control_plane_oauth_measured_cleanup.py \
+				catchplate/authority_oauth_family_query_group.py \
+				catchplate/authority_oauth_measured_pending_originals.py \
+				catchplate/authority_oauth_measured_pending_retirement.py \
+				catchplate/authority_oauth_measured_pending_retirement_policy.py \
+				catchplate/authority_transition_oauth_measured_pending_retirement.py \
+				catchplate/control_plane_oauth_measured_pending_retirement.py \
 				scripts/authority/check_oauth_family_query_group.py \
-				serverware/native_oauth_cleanup_owner.py \
-				serverware/native_oauth_cleanup_receipts.py \
-				serverware/native_oauth_cleanup.py \
-				serverware/native_oauth_pending_retirement_owner.py \
-				serverware/native_oauth_pending_retirement_receipts.py \
-				serverware/native_oauth_pending_retirement.py \
-				serverware/control_plane_oauth_measured_exchange.py \
-				serverware/portal_oauth_measured_consent.py \
-				serverware/control_plane_oauth_setup.py \
-				serverware/portal_oauth_setup.py \
-				serverware/authority_policy_candidate.py \
-				serverware/authority_setup_policy.py \
-				serverware/authority_setup_native_enrollment.py \
-				serverware/authority_setup_native_enrollment_policy.py \
-				serverware/authority_transition_setup_native_enrollment.py \
-				serverware/control_plane_setup_native_enrollment.py \
-				serverware/authority_setup_native_ca.py \
-				serverware/authority_transition_setup_native_ca.py \
-				serverware/control_plane_setup_native_ca.py \
-				serverware/authority_setup_native_canary.py \
-				serverware/authority_transition_setup_native_canary.py \
-				serverware/control_plane_setup_native_canary.py \
-				serverware/authority_setup_native_runtime.py \
-				serverware/authority_setup_native_runtime_policy.py \
-				serverware/authority_setup_native_runtime_receipt.py \
-				serverware/authority_setup_native_runtime_capture.py \
-				serverware/authority_transition_setup_native_runtime.py \
-				serverware/control_plane_setup_native_runtime.py \
-				serverware/authority_setup_policy_admission.py \
-				serverware/authority_transition_setup_policy.py \
-				serverware/control_plane_setup_policy.py \
-				serverware/portal_setup_policy.py \
-				serverware/portal_setup_native.py \
-				serverware/portal_setup_native_enrollment.py \
-				serverware/portal_setup_native_ca.py \
-				serverware/portal_setup_native_canary.py \
-				serverware/portal_setup_native_runtime.py \
-				serverware/native_setup_runtime_collector.py \
-				serverware/authority_policy_candidate_evidence.py \
-				serverware/authority_policy_canary_native_opening.py \
-				serverware/authority_policy_canary_native_runtime.py \
-				serverware/authority_policy_canary_native_observation_originals.py \
-				serverware/authority_policy_canary_native_request_commitment.py \
-				serverware/authority_transition_policy_canary_native_detail.py \
-				serverware/authority_policy_canary_native_observation_semantics.py \
-				serverware/authority_policy_canary_native_comparison.py \
-				serverware/authority_policy_canary_native_pilot.py \
-				serverware/native_pilot_inventory_publication.py \
+				catchplate/native_oauth_cleanup_owner.py \
+				catchplate/native_oauth_cleanup_receipts.py \
+				catchplate/native_oauth_cleanup.py \
+				catchplate/native_oauth_pending_retirement_owner.py \
+				catchplate/native_oauth_pending_retirement_receipts.py \
+				catchplate/native_oauth_pending_retirement.py \
+				catchplate/control_plane_oauth_measured_exchange.py \
+				catchplate/portal_oauth_measured_consent.py \
+				catchplate/control_plane_oauth_setup.py \
+				catchplate/portal_oauth_setup.py \
+				catchplate/authority_policy_candidate.py \
+				catchplate/authority_setup_policy.py \
+				catchplate/authority_setup_native_enrollment.py \
+				catchplate/authority_setup_native_enrollment_policy.py \
+				catchplate/authority_transition_setup_native_enrollment.py \
+				catchplate/control_plane_setup_native_enrollment.py \
+				catchplate/authority_setup_native_ca.py \
+				catchplate/authority_transition_setup_native_ca.py \
+				catchplate/control_plane_setup_native_ca.py \
+				catchplate/authority_setup_native_canary.py \
+				catchplate/authority_transition_setup_native_canary.py \
+				catchplate/control_plane_setup_native_canary.py \
+				catchplate/authority_setup_native_runtime.py \
+				catchplate/authority_setup_native_runtime_policy.py \
+				catchplate/authority_setup_native_runtime_receipt.py \
+				catchplate/authority_setup_native_runtime_capture.py \
+				catchplate/authority_transition_setup_native_runtime.py \
+				catchplate/control_plane_setup_native_runtime.py \
+				catchplate/authority_setup_policy_admission.py \
+				catchplate/authority_transition_setup_policy.py \
+				catchplate/control_plane_setup_policy.py \
+				catchplate/portal_setup_policy.py \
+				catchplate/portal_setup_native.py \
+				catchplate/portal_setup_native_enrollment.py \
+				catchplate/portal_setup_native_ca.py \
+				catchplate/portal_setup_native_canary.py \
+				catchplate/portal_setup_native_runtime.py \
+				catchplate/native_setup_runtime_collector.py \
+				catchplate/authority_policy_candidate_evidence.py \
+				catchplate/authority_policy_canary_native_opening.py \
+				catchplate/authority_policy_canary_native_runtime.py \
+				catchplate/authority_policy_canary_native_observation_originals.py \
+				catchplate/authority_policy_canary_native_request_commitment.py \
+				catchplate/authority_transition_policy_canary_native_detail.py \
+				catchplate/authority_policy_canary_native_observation_semantics.py \
+				catchplate/authority_policy_canary_native_comparison.py \
+				catchplate/authority_policy_canary_native_pilot.py \
+				catchplate/native_pilot_inventory_publication.py \
 				scripts/authority/publish_native_pilot_inventory.py \
 				scripts/authority/recover_native_policy_activation.py \
-				serverware/policy_route_authority.py \
-				serverware/authority_transition_policy_canary_route_authority.py \
-				serverware/authority_policy_canary_native_checkpoint.py \
-				serverware/authority_policy_canary_native_cumulative.py \
-				serverware/authority_transition_policy_canary_native_cumulative.py \
-				serverware/authority_policy_canary_heartbeat_policy.py \
-				serverware/authority_policy_canary_finalization_policy.py \
-				serverware/authority_policy_canary_native_final_cumulative.py \
-				serverware/authority_transition_policy_canary_native_finalization.py \
-				serverware/authority_policy_canary_native_readiness.py \
-				serverware/authority_policy_canary_native_readiness_counters.py \
-				serverware/authority_transition_policy_canary_native_readiness.py \
-				serverware/authority_transition_policy_canary_native_heartbeat.py \
-				serverware/authority_transition_policy_canary_native_checkpoint.py \
-				serverware/authority_transition_policy_canary_native_runtime.py \
-				serverware/authority_transition_policy_canary_native_opening.py \
-				serverware/authority_policy_candidate_inventory.py \
-				serverware/authority_policy_candidate_policy.py \
-				serverware/authority_transition_policy_candidate.py \
-				serverware/authority_transition_policy_candidate_claim.py \
-				serverware/authority_transition_policy_candidate_context.py \
-				serverware/authority_transition_policy_candidate_publication.py \
-				serverware/authority_transition_policy_candidate_trust.py \
-				serverware/control_plane_policy_candidate.py \
-				serverware/control_plane_policy_candidate_recovery.py \
-				serverware/authority_policy_canary.py \
-				serverware/authority_policy_canary_delivery.py \
-				serverware/authority_policy_canary_delivery_policy.py \
-				serverware/authority_policy_canary_delivery_completion.py \
-				serverware/authority_transition_policy_canary_delivery.py \
-				serverware/control_plane_policy_canary_delivery.py \
-				serverware/authority_policy_canary_evidence.py \
-				serverware/authority_policy_canary_policy.py \
-				serverware/authority_policy_canary_tables.py \
-				serverware/authority_transition_policy_canary.py \
-				serverware/authority_transition_policy_canary_active.py \
-				serverware/authority_transition_policy_canary_compiler.py \
-				serverware/authority_transition_policy_canary_current.py \
-				serverware/authority_transition_policy_canary_custody.py \
-				serverware/authority_transition_policy_canary_handoff.py \
-				serverware/authority_transition_policy_canary_lifecycle.py \
-				serverware/authority_transition_policy_canary_membership.py \
-				serverware/authority_transition_policy_canary_reads.py \
-				serverware/authority_transition_policy_canary_shadow.py \
-				serverware/authority_transition_policy_canary_state.py \
-				serverware/control_plane_policy_canary.py \
-				serverware/control_plane_policy_canary_startup.py \
-				serverware/portal_policy_candidate.py \
-				serverware/native_service_tokens.py \
-				serverware/response_v2_guest_delivery.py \
+				catchplate/policy_route_authority.py \
+				catchplate/authority_transition_policy_canary_route_authority.py \
+				catchplate/authority_policy_canary_native_checkpoint.py \
+				catchplate/authority_policy_canary_native_cumulative.py \
+				catchplate/authority_transition_policy_canary_native_cumulative.py \
+				catchplate/authority_policy_canary_heartbeat_policy.py \
+				catchplate/authority_policy_canary_finalization_policy.py \
+				catchplate/authority_policy_canary_native_final_cumulative.py \
+				catchplate/authority_transition_policy_canary_native_finalization.py \
+				catchplate/authority_policy_canary_native_readiness.py \
+				catchplate/authority_policy_canary_native_readiness_counters.py \
+				catchplate/authority_transition_policy_canary_native_readiness.py \
+				catchplate/authority_transition_policy_canary_native_heartbeat.py \
+				catchplate/authority_transition_policy_canary_native_checkpoint.py \
+				catchplate/authority_transition_policy_canary_native_runtime.py \
+				catchplate/authority_transition_policy_canary_native_opening.py \
+				catchplate/authority_policy_candidate_inventory.py \
+				catchplate/authority_policy_candidate_policy.py \
+				catchplate/authority_transition_policy_candidate.py \
+				catchplate/authority_transition_policy_candidate_claim.py \
+				catchplate/authority_transition_policy_candidate_context.py \
+				catchplate/authority_transition_policy_candidate_publication.py \
+				catchplate/authority_transition_policy_candidate_trust.py \
+				catchplate/control_plane_policy_candidate.py \
+				catchplate/control_plane_policy_candidate_recovery.py \
+				catchplate/authority_policy_canary.py \
+				catchplate/authority_policy_canary_delivery.py \
+				catchplate/authority_policy_canary_delivery_policy.py \
+				catchplate/authority_policy_canary_delivery_completion.py \
+				catchplate/authority_transition_policy_canary_delivery.py \
+				catchplate/control_plane_policy_canary_delivery.py \
+				catchplate/authority_policy_canary_evidence.py \
+				catchplate/authority_policy_canary_policy.py \
+				catchplate/authority_policy_canary_tables.py \
+				catchplate/authority_transition_policy_canary.py \
+				catchplate/authority_transition_policy_canary_active.py \
+				catchplate/authority_transition_policy_canary_compiler.py \
+				catchplate/authority_transition_policy_canary_current.py \
+				catchplate/authority_transition_policy_canary_custody.py \
+				catchplate/authority_transition_policy_canary_handoff.py \
+				catchplate/authority_transition_policy_canary_lifecycle.py \
+				catchplate/authority_transition_policy_canary_membership.py \
+				catchplate/authority_transition_policy_canary_reads.py \
+				catchplate/authority_transition_policy_canary_shadow.py \
+				catchplate/authority_transition_policy_canary_state.py \
+				catchplate/control_plane_policy_canary.py \
+				catchplate/control_plane_policy_canary_startup.py \
+				catchplate/portal_policy_candidate.py \
+				catchplate/native_service_tokens.py \
+				catchplate/response_v2_guest_delivery.py \
 				scripts/native_broker_kms_parent.py \
 				scripts/native_broker_history_kms_parent.py \
-				serverware/authority_oauth_family_retirement.py \
-				serverware/authority_oauth_refresh_cleanup.py \
-				serverware/authority_oauth_refresh_cleanup_policy.py \
-				serverware/authority_transition_oauth_refresh_cleanup.py \
-				serverware/control_plane_oauth_refresh_cleanup.py \
+				catchplate/authority_oauth_family_retirement.py \
+				catchplate/authority_oauth_refresh_cleanup.py \
+				catchplate/authority_oauth_refresh_cleanup_policy.py \
+				catchplate/authority_transition_oauth_refresh_cleanup.py \
+				catchplate/control_plane_oauth_refresh_cleanup.py \
 				scripts/verify_nitro_tee.py \
-				serverware/native_shadow_nitro_profile.py \
-				serverware/native_shadow_nitro_originals.py \
-				serverware/native_shadow_nitro_verifier.py \
-				serverware/native_shadow_key_admission_profile.py \
-				serverware/native_shadow_key_admission_verifier.py \
-				serverware/native_shadow_bridge_admission_profile.py \
-				serverware/native_shadow_bridge_admission_verifier.py \
-				serverware/native_shadow_retrieval_artifacts.py \
-				serverware/native_shadow_retrieval_store.py \
-				serverware/native_shadow_guest_delivery.py \
-				serverware/custody_generation_grants.py \
-				serverware/custody_generation_originals.py \
-				serverware/custody_generation_inputs.py \
-				serverware/custody_commitment_inputs.py \
-				serverware/custody_generation_launch.py \
-				serverware/custody_generation_business.py \
-				serverware/native_shadow_persistence_artifacts.py \
-				serverware/native_shadow_persistence_inputs.py \
-				serverware/native_shadow_generation_install_inputs.py \
-				serverware/native_shadow_proof_cohort_assignment.py \
-				serverware/native_shadow_proof_cohort_control.py \
-				serverware/native_shadow_endpoint_driver.py \
-				serverware/native_pilot_launch.py \
-				serverware/native_pilot_endpoint_inputs.py \
-				serverware/native_pilot_operator.py \
-				serverware/native_pilot_operator_channel.py \
-				serverware/native_pilot_public_inputs.py \
-				serverware/native_pilot_publication.py \
-				serverware/native_pilot_scope_authority.py \
-				serverware/native_pilot_driver_authority.py \
-				serverware/native_pilot_window_authority.py \
-				serverware/native_pilot_closure_authority.py \
-				serverware/native_pilot_assignment.py \
-				serverware/native_pilot_genesis_parent_authority.py \
-				serverware/native_pilot_genesis_parent_control.py \
-				serverware/native_pilot_genesis_parent_control_io.py \
-				serverware/native_pilot_genesis_coordinator_peer.py \
-				serverware/native_pilot_genesis_ordinary_initial_profile.py \
-				serverware/native_pilot_genesis_ordinary_initial_authority.py \
-				serverware/native_pilot_genesis_ordinary_control.py \
-				serverware/native_pilot_genesis_ordinary_control_process.py \
-				serverware/native_pilot_genesis_ordinary_retirement.py \
-				serverware/native_pilot_genesis_ordinary_resources.py \
-				serverware/native_pilot_genesis_ordinary_runtime.py \
-				serverware/native_pilot_genesis_ordinary_authority.py \
-				serverware/native_pilot_genesis_endpoint_profile.py \
-				serverware/native_pilot_genesis_endpoint_process.py \
-				serverware/native_pilot_genesis_endpoint_resources.py \
-				serverware/native_pilot_genesis_endpoint_control.py \
-				serverware/native_pilot_genesis_endpoint_release_authority.py \
-				serverware/native_pilot_genesis_delivery_authority.py \
-				serverware/native_pilot_genesis_coordinator_runtime.py \
-				serverware/native_pilot_genesis_key_profile.py \
-				serverware/native_pilot_genesis_key_authority.py \
-				serverware/native_pilot_genesis_closure_authority.py \
-				serverware/native_pilot_genesis_native_service_authority.py \
-				serverware/native_pilot_genesis_encrypted_authority.py \
-				serverware/native_pilot_genesis_verifier_authority.py \
-				serverware/native_pilot_genesis_launch_profile.py \
-				serverware/native_pilot_genesis_coordinator_assembly.py \
-				serverware/native_pilot_genesis_coordinator_resources.py \
-				serverware/native_pilot_genesis_coordinator_control.py \
-				serverware/native_pilot_genesis_jobs.py \
-				serverware/native_pilot_genesis_job_publication.py \
-				serverware/native_pilot_genesis_launch_install.py \
-				serverware/native_pilot_genesis_publication.py \
-				serverware/native_pilot_genesis_execution_protocol.py \
-				serverware/native_pilot_genesis_execution.py \
-				serverware/native_pilot_genesis_authority_channel.py \
-				serverware/native_pilot_genesis_authority.py \
-				serverware/native_pilot_genesis_core_profile.py \
-				serverware/native_pilot_genesis_core.py \
+				catchplate/native_shadow_nitro_profile.py \
+				catchplate/native_shadow_nitro_originals.py \
+				catchplate/native_shadow_nitro_verifier.py \
+				catchplate/native_shadow_key_admission_profile.py \
+				catchplate/native_shadow_key_admission_verifier.py \
+				catchplate/native_shadow_bridge_admission_profile.py \
+				catchplate/native_shadow_bridge_admission_verifier.py \
+				catchplate/native_shadow_retrieval_artifacts.py \
+				catchplate/native_shadow_retrieval_store.py \
+				catchplate/native_shadow_guest_delivery.py \
+				catchplate/custody_generation_grants.py \
+				catchplate/custody_generation_originals.py \
+				catchplate/custody_generation_inputs.py \
+				catchplate/custody_commitment_inputs.py \
+				catchplate/custody_generation_launch.py \
+				catchplate/custody_generation_business.py \
+				catchplate/native_shadow_persistence_artifacts.py \
+				catchplate/native_shadow_persistence_inputs.py \
+				catchplate/native_shadow_generation_install_inputs.py \
+				catchplate/native_shadow_proof_cohort_assignment.py \
+				catchplate/native_shadow_proof_cohort_control.py \
+				catchplate/native_shadow_endpoint_driver.py \
+				catchplate/native_pilot_launch.py \
+				catchplate/native_pilot_endpoint_inputs.py \
+				catchplate/native_pilot_operator.py \
+				catchplate/native_pilot_operator_channel.py \
+				catchplate/native_pilot_public_inputs.py \
+				catchplate/native_pilot_publication.py \
+				catchplate/native_pilot_scope_authority.py \
+				catchplate/native_pilot_driver_authority.py \
+				catchplate/native_pilot_window_authority.py \
+				catchplate/native_pilot_closure_authority.py \
+				catchplate/native_pilot_assignment.py \
+				catchplate/native_pilot_genesis_parent_authority.py \
+				catchplate/native_pilot_genesis_parent_control.py \
+				catchplate/native_pilot_genesis_parent_control_io.py \
+				catchplate/native_pilot_genesis_coordinator_peer.py \
+				catchplate/native_pilot_genesis_ordinary_initial_profile.py \
+				catchplate/native_pilot_genesis_ordinary_initial_authority.py \
+				catchplate/native_pilot_genesis_ordinary_control.py \
+				catchplate/native_pilot_genesis_ordinary_control_process.py \
+				catchplate/native_pilot_genesis_ordinary_retirement.py \
+				catchplate/native_pilot_genesis_ordinary_resources.py \
+				catchplate/native_pilot_genesis_ordinary_runtime.py \
+				catchplate/native_pilot_genesis_ordinary_authority.py \
+				catchplate/native_pilot_genesis_endpoint_profile.py \
+				catchplate/native_pilot_genesis_endpoint_process.py \
+				catchplate/native_pilot_genesis_endpoint_resources.py \
+				catchplate/native_pilot_genesis_endpoint_control.py \
+				catchplate/native_pilot_genesis_endpoint_release_authority.py \
+				catchplate/native_pilot_genesis_delivery_authority.py \
+				catchplate/native_pilot_genesis_coordinator_runtime.py \
+				catchplate/native_pilot_genesis_key_profile.py \
+				catchplate/native_pilot_genesis_key_authority.py \
+				catchplate/native_pilot_genesis_closure_authority.py \
+				catchplate/native_pilot_genesis_native_service_authority.py \
+				catchplate/native_pilot_genesis_encrypted_authority.py \
+				catchplate/native_pilot_genesis_verifier_authority.py \
+				catchplate/native_pilot_genesis_launch_profile.py \
+				catchplate/native_pilot_genesis_coordinator_assembly.py \
+				catchplate/native_pilot_genesis_coordinator_resources.py \
+				catchplate/native_pilot_genesis_coordinator_control.py \
+				catchplate/native_pilot_genesis_jobs.py \
+				catchplate/native_pilot_genesis_job_publication.py \
+				catchplate/native_pilot_genesis_launch_install.py \
+				catchplate/native_pilot_genesis_publication.py \
+				catchplate/native_pilot_genesis_execution_protocol.py \
+				catchplate/native_pilot_genesis_execution.py \
+				catchplate/native_pilot_genesis_authority_channel.py \
+				catchplate/native_pilot_genesis_authority.py \
+				catchplate/native_pilot_genesis_core_profile.py \
+				catchplate/native_pilot_genesis_core.py \
 				scripts/test_native_pilot_adopted_closure.py \
 				scripts/test_native_pilot_adopted_cohort_authority.py \
 				scripts/test_native_pilot_adopted_delivery.py \
@@ -5207,25 +5207,25 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_adopted_completion.py \
 				scripts/test_native_pilot_lifecycle_completion_wire.py \
 				scripts/test_native_pilot_lifecycle.py \
-				serverware/native_pilot_lifecycle_approval_wire.py \
-				serverware/native_pilot_lifecycle_inputs.py \
-				serverware/native_pilot_genesis_inputs.py \
-				serverware/native_pilot_genesis_foundation_inputs.py \
-				serverware/native_pilot_genesis_ordinary_inputs.py \
-				serverware/native_pilot_genesis_native_inputs.py \
-				serverware/native_pilot_genesis_owner_inputs.py \
-				serverware/native_pilot_adopted_inputs.py \
-				serverware/native_pilot_adopted_input_context.py \
-				serverware/native_pilot_adopted_foundation_inputs.py \
-				serverware/native_pilot_adopted_handoff_inputs.py \
-				serverware/native_pilot_adopted_endpoint_plan.py \
-				serverware/native_pilot_adopted_endpoint_publication.py \
+				catchplate/native_pilot_lifecycle_approval_wire.py \
+				catchplate/native_pilot_lifecycle_inputs.py \
+				catchplate/native_pilot_genesis_inputs.py \
+				catchplate/native_pilot_genesis_foundation_inputs.py \
+				catchplate/native_pilot_genesis_ordinary_inputs.py \
+				catchplate/native_pilot_genesis_native_inputs.py \
+				catchplate/native_pilot_genesis_owner_inputs.py \
+				catchplate/native_pilot_adopted_inputs.py \
+				catchplate/native_pilot_adopted_input_context.py \
+				catchplate/native_pilot_adopted_foundation_inputs.py \
+				catchplate/native_pilot_adopted_handoff_inputs.py \
+				catchplate/native_pilot_adopted_endpoint_plan.py \
+				catchplate/native_pilot_adopted_endpoint_publication.py \
 				scripts/test_native_pilot_adopted_endpoint_plan.py \
 				scripts/test_native_pilot_adopted_endpoint_publication.py \
-				serverware/native_pilot_adopted_ordinary_inputs.py \
-				serverware/native_pilot_adopted_native_inputs.py \
-				serverware/native_pilot_adopted_bridge_inputs.py \
-				serverware/native_pilot_adopted_constructed_inputs.py \
+				catchplate/native_pilot_adopted_ordinary_inputs.py \
+				catchplate/native_pilot_adopted_native_inputs.py \
+				catchplate/native_pilot_adopted_bridge_inputs.py \
+				catchplate/native_pilot_adopted_constructed_inputs.py \
 				scripts/test_native_pilot_adopted_inputs.py \
 				scripts/test_native_pilot_adopted_ordinary_inputs.py \
 				scripts/test_native_pilot_adopted_native_inputs.py \
@@ -5239,34 +5239,34 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_adopted_interactive.py \
 				scripts/run_native_pilot_lifecycle.py \
 				scripts/run_native_pilot_approval_provider.py \
-				serverware/native_pilot_startup.py \
-				serverware/native_pilot_startup_child.py \
-				serverware/native_pilot_startup_profile.py \
+				catchplate/native_pilot_startup.py \
+				catchplate/native_pilot_startup_child.py \
+				catchplate/native_pilot_startup_profile.py \
 				scripts/run_native_pilot_startup.py \
 				scripts/run_native_pilot_startup_child.py \
 				scripts/test_native_pilot_startup.py \
 				scripts/test_native_pilot_startup_child.py \
 				scripts/test_native_pilot_startup_profile.py \
 				scripts/test_native_pilot_startup_entrypoint.py \
-				serverware/native_pilot_startup_provisioning.py \
-				serverware/native_pilot_startup_provisioning_profile.py \
+				catchplate/native_pilot_startup_provisioning.py \
+				catchplate/native_pilot_startup_provisioning_profile.py \
 				scripts/run_native_pilot_startup_provisioning.py \
 				scripts/test_native_pilot_startup_provisioning.py \
 				scripts/test_native_pilot_startup_provisioning_profile.py \
 				scripts/test_native_pilot_startup_provisioning_entrypoint.py \
-				serverware/native_pilot_current_head_decision_service.py \
-				serverware/native_pilot_current_head_decision_service_profile.py \
+				catchplate/native_pilot_current_head_decision_service.py \
+				catchplate/native_pilot_current_head_decision_service_profile.py \
 				scripts/run_native_pilot_current_head_decisions.py \
-				serverware/native_pilot_current_head_state.py \
-				serverware/native_pilot_initial_state_profile.py \
-				serverware/native_pilot_initial_state_installation.py \
-				serverware/native_pilot_current_head_worker_process.py \
+				catchplate/native_pilot_current_head_state.py \
+				catchplate/native_pilot_initial_state_profile.py \
+				catchplate/native_pilot_initial_state_installation.py \
+				catchplate/native_pilot_current_head_worker_process.py \
 				scripts/test_native_pilot_initial_state_profile.py \
 				scripts/test_native_pilot_initial_state_installation.py \
 				scripts/test_native_pilot_initial_state_commit.py \
 				scripts/test_native_pilot_current_head_worker_process.py \
-				serverware/native_pilot_current_head_worker.py \
-				serverware/native_pilot_current_head_worker_profile.py \
+				catchplate/native_pilot_current_head_worker.py \
+				catchplate/native_pilot_current_head_worker_profile.py \
 				scripts/run_native_pilot_current_head_worker.py \
 				scripts/test_native_pilot_current_head_state.py \
 				scripts/test_native_pilot_current_head_worker.py \
@@ -5291,25 +5291,25 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_adopted_bridge.py \
 				scripts/test_native_pilot_adopted_endpoints.py \
 				scripts/test_native_pilot_adopted_ordinary.py \
-				serverware/custody_publication_inputs.py \
-				serverware/native_pilot_adopted_endpoint_authority.py \
-				serverware/native_pilot_ordinary_delivery_profile.py \
-				serverware/native_pilot_ordinary_publication_authority.py \
-				serverware/native_pilot_adopted_cohort_authority.py \
-				serverware/native_pilot_adopted_commands.py \
-				serverware/native_pilot_adopted_delivery.py \
-				serverware/native_pilot_adopted_launch_profile.py \
-				serverware/native_pilot_adopted_ordinary.py \
-				serverware/native_pilot_adopted_service_authority.py \
-				serverware/native_shadow_publication_inputs.py \
-				serverware/native_pilot_genesis_core_channel.py \
-				serverware/native_pilot_publication_adoption_profile.py \
-				serverware/native_pilot_publication_adoption_authority.py \
-				serverware/native_pilot_publication_cold_binding.py \
-				serverware/policy_shadow_assignment_fields.py \
-				serverware/policy_candidate_artifact_issuer.py \
-				serverware/policy_shadow_assignment_issuer.py \
-				serverware/policy_bundle_issuer.py \
+				catchplate/custody_publication_inputs.py \
+				catchplate/native_pilot_adopted_endpoint_authority.py \
+				catchplate/native_pilot_ordinary_delivery_profile.py \
+				catchplate/native_pilot_ordinary_publication_authority.py \
+				catchplate/native_pilot_adopted_cohort_authority.py \
+				catchplate/native_pilot_adopted_commands.py \
+				catchplate/native_pilot_adopted_delivery.py \
+				catchplate/native_pilot_adopted_launch_profile.py \
+				catchplate/native_pilot_adopted_ordinary.py \
+				catchplate/native_pilot_adopted_service_authority.py \
+				catchplate/native_shadow_publication_inputs.py \
+				catchplate/native_pilot_genesis_core_channel.py \
+				catchplate/native_pilot_publication_adoption_profile.py \
+				catchplate/native_pilot_publication_adoption_authority.py \
+				catchplate/native_pilot_publication_cold_binding.py \
+				catchplate/policy_shadow_assignment_fields.py \
+				catchplate/policy_candidate_artifact_issuer.py \
+				catchplate/policy_shadow_assignment_issuer.py \
+				catchplate/policy_bundle_issuer.py \
 				scripts/authority/sign_policy_candidate_artifact.py \
 				scripts/authority/sign_policy_shadow_assignment.py \
 				scripts/authority/sign_currentness_assignment.py \
@@ -5317,374 +5317,374 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/authority/sign_measured_audit_assignment.py \
 				scripts/authority/sign_native_configuration_delivery.py \
 				scripts/authority/sign_policy_bundle.py \
-				serverware/native_pilot_closure_set.py \
-				serverware/native_pilot_measured_configuration.py \
-				serverware/native_pilot_delivery_authority.py \
-				serverware/native_pilot_service_authority.py \
-				serverware/native_pilot_ordinary_key_profile.py \
-				serverware/native_pilot_ordinary_key_authority.py \
-				serverware/native_pilot_ordinary_initial_profile.py \
-				serverware/native_pilot_ordinary_runtime_profile.py \
-				serverware/native_pilot_ordinary_generation_profile.py \
-				serverware/native_pilot_ordinary_runtime_recipe.py \
-				serverware/native_pilot_ordinary_install.py \
-				serverware/native_pilot_ordinary_initial_authority.py \
-				serverware/custody_generation_initial_state.py \
-				serverware/custody_generation_measurements.py \
-				serverware/native_pilot_publication_profiles.py \
-				serverware/native_pilot_precreation_install.py \
-				serverware/native_pilot_bridge_install.py \
-				serverware/native_pilot_bridge_runtime.py \
-				serverware/native_pilot_bridge_authority.py \
-				serverware/native_pilot_bridge_key_profile.py \
-				serverware/native_pilot_bridge_preparation.py \
-				serverware/native_pilot_bridge_runtime_policy.py \
-				serverware/native_pilot_bridge_runtime_profile.py \
-				serverware/native_pilot_bridge_commissioning_policy.py \
-				serverware/native_pilot_bridge_delivery_profile.py \
-				serverware/native_pilot_bridge_authorization_profile.py \
-				serverware/native_pilot_bridge_launch_profile.py \
-				serverware/native_pilot_bridge_launch_publication.py \
-				serverware/native_pilot_helper_bootstrap_profile.py \
-				serverware/native_pilot_service_handshakes.py \
-				serverware/native_pilot_initial_requests.py \
-				serverware/native_pilot_initial_requests_profile.py \
-				serverware/native_pilot_peer_owners.py \
-				serverware/native_pilot_peer_preparation.py \
-				serverware/native_pilot_peer_resources.py \
-				serverware/native_pilot_current_head_profile.py \
-				serverware/native_pilot_current_head_authority.py \
-				serverware/native_pilot_generation_install_authority.py \
-				serverware/native_pilot_native_service_authority.py \
-				serverware/native_pilot_native_service_profile.py \
-				serverware/native_pilot_ordinary_transition_profile.py \
-				serverware/native_pilot_launch_authorization_profile.py \
-				serverware/native_pilot_endpoint_launch_profile.py \
-				serverware/native_pilot_service_material.py \
-				serverware/native_pilot_launch_publication.py \
-				serverware/native_pilot_coordinator_process.py \
-				serverware/native_pilot_adopted_intake.py \
-				serverware/native_pilot_genesis_handoff_listener.py \
-				serverware/native_pilot_genesis_receiver_observation.py \
-				serverware/native_pilot_genesis_rendezvous_profile.py \
-				serverware/native_pilot_genesis_rendezvous_install.py \
-				serverware/native_pilot_genesis_job_install.py \
-				serverware/native_pilot_genesis_installer_process.py \
-				serverware/native_pilot_genesis_process.py \
-				serverware/native_pilot_lifecycle.py \
-				serverware/native_pilot_adopted_phase_profile.py \
-				serverware/native_pilot_adopted_phase_execution.py \
-				serverware/native_pilot_adopted_publication.py \
-				serverware/native_pilot_adopted_ordinary_install.py \
-				serverware/native_pilot_adopted_supervisor.py \
-				serverware/native_pilot_adopted_supervisor_policy.py \
-				serverware/native_pilot_coordinator_channel.py \
-				serverware/native_pilot_phase_execution.py \
-				serverware/native_pilot_authority_channel.py \
-				serverware/native_pilot_approval_install.py \
-				serverware/native_pilot_approval_transcript.py \
-				serverware/native_pilot_approval_policy.py \
-				serverware/native_pilot_approval_current_heads.py \
-				serverware/native_pilot_approval_provider.py \
-				serverware/native_pilot_bootstrap_install.py \
-				serverware/native_pilot_supervisor.py \
-				serverware/native_pilot_supervisor_approval_channel.py \
-				serverware/native_pilot_supervisor_process.py \
-				serverware/native_pilot_supervisor_policy.py \
-				serverware/native_pilot_supervisor_initial_history.py \
-				serverware/native_pilot_supervisor_helper_initial_profile.py \
-				serverware/native_pilot_supervisor_current_head_profile.py \
-				serverware/native_pilot_supervisor_current_heads.py \
-				serverware/native_pilot_supervisor_bridge_runtime.py \
-				serverware/native_pilot_supervisor_bridge_commissioning.py \
-				serverware/native_pilot_supervisor_continuation.py \
-				serverware/native_pilot_supervisor_continuation_policy.py \
-				serverware/native_pilot_interactive.py \
-				serverware/native_pilot_release_profile.py \
-				serverware/native_pilot_continuation_profile.py \
-				serverware/native_pilot_phase_two_publication.py \
-				serverware/native_pilot_supervisor_ordinary_deliveries.py \
-				serverware/native_pilot_supervisor_ordinary_generations.py \
-				serverware/native_pilot_supervisor_native_deliveries.py \
-				serverware/native_pilot_native_delivery_profile.py \
-				serverware/native_pilot_key_authority.py \
-				serverware/native_pilot_encrypted_authority.py \
-				serverware/native_pilot_verifier_authority.py \
-				serverware/native_pilot_key_profile.py serverware/native_pilot_runtime_evidence.py \
-				serverware/native_pilot_supervisor_key_authorizations.py \
-				serverware/native_pilot_supervisor_native_services.py \
-				serverware/native_pilot_supervisor_ordinary_transitions.py \
-				serverware/native_pilot_supervisor_launch_authorizations.py \
-				serverware/native_pilot_supervisor_endpoint_launches.py \
-				serverware/native_pilot_supervisor_service_material.py \
-				serverware/native_pilot_supervisor_precreation.py \
-				serverware/native_pilot_supervisor_endpoint_policy.py \
-				serverware/native_pilot_supervisor_endpoint_inputs.py \
-				serverware/native_pilot_supervisor_endpoint_deliveries.py \
-				serverware/native_pilot_service_inputs.py \
+				catchplate/native_pilot_closure_set.py \
+				catchplate/native_pilot_measured_configuration.py \
+				catchplate/native_pilot_delivery_authority.py \
+				catchplate/native_pilot_service_authority.py \
+				catchplate/native_pilot_ordinary_key_profile.py \
+				catchplate/native_pilot_ordinary_key_authority.py \
+				catchplate/native_pilot_ordinary_initial_profile.py \
+				catchplate/native_pilot_ordinary_runtime_profile.py \
+				catchplate/native_pilot_ordinary_generation_profile.py \
+				catchplate/native_pilot_ordinary_runtime_recipe.py \
+				catchplate/native_pilot_ordinary_install.py \
+				catchplate/native_pilot_ordinary_initial_authority.py \
+				catchplate/custody_generation_initial_state.py \
+				catchplate/custody_generation_measurements.py \
+				catchplate/native_pilot_publication_profiles.py \
+				catchplate/native_pilot_precreation_install.py \
+				catchplate/native_pilot_bridge_install.py \
+				catchplate/native_pilot_bridge_runtime.py \
+				catchplate/native_pilot_bridge_authority.py \
+				catchplate/native_pilot_bridge_key_profile.py \
+				catchplate/native_pilot_bridge_preparation.py \
+				catchplate/native_pilot_bridge_runtime_policy.py \
+				catchplate/native_pilot_bridge_runtime_profile.py \
+				catchplate/native_pilot_bridge_commissioning_policy.py \
+				catchplate/native_pilot_bridge_delivery_profile.py \
+				catchplate/native_pilot_bridge_authorization_profile.py \
+				catchplate/native_pilot_bridge_launch_profile.py \
+				catchplate/native_pilot_bridge_launch_publication.py \
+				catchplate/native_pilot_helper_bootstrap_profile.py \
+				catchplate/native_pilot_service_handshakes.py \
+				catchplate/native_pilot_initial_requests.py \
+				catchplate/native_pilot_initial_requests_profile.py \
+				catchplate/native_pilot_peer_owners.py \
+				catchplate/native_pilot_peer_preparation.py \
+				catchplate/native_pilot_peer_resources.py \
+				catchplate/native_pilot_current_head_profile.py \
+				catchplate/native_pilot_current_head_authority.py \
+				catchplate/native_pilot_generation_install_authority.py \
+				catchplate/native_pilot_native_service_authority.py \
+				catchplate/native_pilot_native_service_profile.py \
+				catchplate/native_pilot_ordinary_transition_profile.py \
+				catchplate/native_pilot_launch_authorization_profile.py \
+				catchplate/native_pilot_endpoint_launch_profile.py \
+				catchplate/native_pilot_service_material.py \
+				catchplate/native_pilot_launch_publication.py \
+				catchplate/native_pilot_coordinator_process.py \
+				catchplate/native_pilot_adopted_intake.py \
+				catchplate/native_pilot_genesis_handoff_listener.py \
+				catchplate/native_pilot_genesis_receiver_observation.py \
+				catchplate/native_pilot_genesis_rendezvous_profile.py \
+				catchplate/native_pilot_genesis_rendezvous_install.py \
+				catchplate/native_pilot_genesis_job_install.py \
+				catchplate/native_pilot_genesis_installer_process.py \
+				catchplate/native_pilot_genesis_process.py \
+				catchplate/native_pilot_lifecycle.py \
+				catchplate/native_pilot_adopted_phase_profile.py \
+				catchplate/native_pilot_adopted_phase_execution.py \
+				catchplate/native_pilot_adopted_publication.py \
+				catchplate/native_pilot_adopted_ordinary_install.py \
+				catchplate/native_pilot_adopted_supervisor.py \
+				catchplate/native_pilot_adopted_supervisor_policy.py \
+				catchplate/native_pilot_coordinator_channel.py \
+				catchplate/native_pilot_phase_execution.py \
+				catchplate/native_pilot_authority_channel.py \
+				catchplate/native_pilot_approval_install.py \
+				catchplate/native_pilot_approval_transcript.py \
+				catchplate/native_pilot_approval_policy.py \
+				catchplate/native_pilot_approval_current_heads.py \
+				catchplate/native_pilot_approval_provider.py \
+				catchplate/native_pilot_bootstrap_install.py \
+				catchplate/native_pilot_supervisor.py \
+				catchplate/native_pilot_supervisor_approval_channel.py \
+				catchplate/native_pilot_supervisor_process.py \
+				catchplate/native_pilot_supervisor_policy.py \
+				catchplate/native_pilot_supervisor_initial_history.py \
+				catchplate/native_pilot_supervisor_helper_initial_profile.py \
+				catchplate/native_pilot_supervisor_current_head_profile.py \
+				catchplate/native_pilot_supervisor_current_heads.py \
+				catchplate/native_pilot_supervisor_bridge_runtime.py \
+				catchplate/native_pilot_supervisor_bridge_commissioning.py \
+				catchplate/native_pilot_supervisor_continuation.py \
+				catchplate/native_pilot_supervisor_continuation_policy.py \
+				catchplate/native_pilot_interactive.py \
+				catchplate/native_pilot_release_profile.py \
+				catchplate/native_pilot_continuation_profile.py \
+				catchplate/native_pilot_phase_two_publication.py \
+				catchplate/native_pilot_supervisor_ordinary_deliveries.py \
+				catchplate/native_pilot_supervisor_ordinary_generations.py \
+				catchplate/native_pilot_supervisor_native_deliveries.py \
+				catchplate/native_pilot_native_delivery_profile.py \
+				catchplate/native_pilot_key_authority.py \
+				catchplate/native_pilot_encrypted_authority.py \
+				catchplate/native_pilot_verifier_authority.py \
+				catchplate/native_pilot_key_profile.py catchplate/native_pilot_runtime_evidence.py \
+				catchplate/native_pilot_supervisor_key_authorizations.py \
+				catchplate/native_pilot_supervisor_native_services.py \
+				catchplate/native_pilot_supervisor_ordinary_transitions.py \
+				catchplate/native_pilot_supervisor_launch_authorizations.py \
+				catchplate/native_pilot_supervisor_endpoint_launches.py \
+				catchplate/native_pilot_supervisor_service_material.py \
+				catchplate/native_pilot_supervisor_precreation.py \
+				catchplate/native_pilot_supervisor_endpoint_policy.py \
+				catchplate/native_pilot_supervisor_endpoint_inputs.py \
+				catchplate/native_pilot_supervisor_endpoint_deliveries.py \
+				catchplate/native_pilot_service_inputs.py \
 				scripts/run_native_pilot.py \
-				serverware/native_shadow_proof_cohort_cleanup.py \
-				serverware/native_shadow_driver_bootstrap.py \
-				serverware/native_shadow_constructed_driver.py \
-				serverware/authority_setup_native_final.py \
-				serverware/authority_setup_native_final_policy.py \
-				serverware/authority_transition_setup_native_final.py \
-				serverware/control_plane_setup_native_final.py \
-				serverware/native_setup_final_authority.py \
-				serverware/portal_setup_native_final.py \
+				catchplate/native_shadow_proof_cohort_cleanup.py \
+				catchplate/native_shadow_driver_bootstrap.py \
+				catchplate/native_shadow_constructed_driver.py \
+				catchplate/authority_setup_native_final.py \
+				catchplate/authority_setup_native_final_policy.py \
+				catchplate/authority_transition_setup_native_final.py \
+				catchplate/control_plane_setup_native_final.py \
+				catchplate/native_setup_final_authority.py \
+				catchplate/portal_setup_native_final.py \
 				scripts/issue_native_setup_final.py \
-				serverware/native_shadow_driver_inputs.py \
-				serverware/native_shadow_driver_outgoing.py \
-				serverware/native_shadow_driver_resources.py \
-				serverware/native_policy_activation_inputs.py \
-				serverware/native_activation_receiver_profile.py \
-				serverware/native_activation_receiver_installation.py \
-				serverware/native_activation_receiver_issuer.py \
-				serverware/native_policy_activation_recovery.py \
-				serverware/native_shadow_trusted_time_inputs.py \
-				serverware/authority_native_activation_completion.py \
-				serverware/authority_native_activation_hold.py \
-				serverware/authority_native_activation_publication.py \
-				serverware/authority_native_activation_schema.py \
-				serverware/authority_policy_native_activation.py \
-				serverware/authority_transition_policy_native_activation.py \
-				serverware/authority_transition_policy_native_activation_settlement.py \
-				serverware/authority_transition_policy_native_activation_state.py \
-				serverware/control_plane_native_policy_activation.py \
-				serverware/portal_native_policy_activation.py \
-				serverware/native_shadow_retrieval_activation.py \
-				serverware/native_shadow_retrieval_pair_assignment.py \
+				catchplate/native_shadow_driver_inputs.py \
+				catchplate/native_shadow_driver_outgoing.py \
+				catchplate/native_shadow_driver_resources.py \
+				catchplate/native_policy_activation_inputs.py \
+				catchplate/native_activation_receiver_profile.py \
+				catchplate/native_activation_receiver_installation.py \
+				catchplate/native_activation_receiver_issuer.py \
+				catchplate/native_policy_activation_recovery.py \
+				catchplate/native_shadow_trusted_time_inputs.py \
+				catchplate/authority_native_activation_completion.py \
+				catchplate/authority_native_activation_hold.py \
+				catchplate/authority_native_activation_publication.py \
+				catchplate/authority_native_activation_schema.py \
+				catchplate/authority_policy_native_activation.py \
+				catchplate/authority_transition_policy_native_activation.py \
+				catchplate/authority_transition_policy_native_activation_settlement.py \
+				catchplate/authority_transition_policy_native_activation_state.py \
+				catchplate/control_plane_native_policy_activation.py \
+				catchplate/portal_native_policy_activation.py \
+				catchplate/native_shadow_retrieval_activation.py \
+				catchplate/native_shadow_retrieval_pair_assignment.py \
 				scripts/install_native_shadow_retrieval_store.py \
-				serverware/native_shadow_time_profile.py \
-				serverware/native_shadow_time_originals.py \
-				serverware/native_shadow_time_issuer.py \
+				catchplate/native_shadow_time_profile.py \
+				catchplate/native_shadow_time_originals.py \
+				catchplate/native_shadow_time_issuer.py \
 				scripts/issue_native_shadow_guest_time.py \
-				serverware/custody_spool_inputs.py \
-				serverware/native_generation_origin_profile.py \
-				serverware/native_generation_origin_originals.py \
-				serverware/native_generation_origin_issuer.py \
-				serverware/native_generation_origin_relay.py \
-				serverware/native_shadow_spool_inputs.py \
-				serverware/native_shadow_spool_artifacts.py \
+				catchplate/custody_spool_inputs.py \
+				catchplate/native_generation_origin_profile.py \
+				catchplate/native_generation_origin_originals.py \
+				catchplate/native_generation_origin_issuer.py \
+				catchplate/native_generation_origin_relay.py \
+				catchplate/native_shadow_spool_inputs.py \
+				catchplate/native_shadow_spool_artifacts.py \
 				scripts/verify_native_setup_hardware.py \
 				scripts/verify_native_setup_proxy.py \
-				serverware/authority_setup_native_hardware.py \
-				serverware/authority_setup_native_hardware_policy.py \
-				serverware/authority_transition_setup_native_hardware.py \
-				serverware/control_plane_setup_native_hardware.py \
-				serverware/native_setup_independent_originals.py \
-				serverware/native_setup_independent_verifier.py \
-				serverware/portal_setup_native_hardware.py \
+				catchplate/authority_setup_native_hardware.py \
+				catchplate/authority_setup_native_hardware_policy.py \
+				catchplate/authority_transition_setup_native_hardware.py \
+				catchplate/control_plane_setup_native_hardware.py \
+				catchplate/native_setup_independent_originals.py \
+				catchplate/native_setup_independent_verifier.py \
+				catchplate/portal_setup_native_hardware.py \
 				scripts/issue_native_generation_origin.py \
 				scripts/package_native_generation_origin_runtime.py \
 				scripts/verify_native_shadow_custody.py \
-				serverware/native_shadow_key_contract.py \
-				serverware/native_shadow_key_helper.py \
-				serverware/native_shadow_commitment_artifacts.py \
+				catchplate/native_shadow_key_contract.py \
+				catchplate/native_shadow_key_helper.py \
+				catchplate/native_shadow_commitment_artifacts.py \
 				scripts/native_shadow_key_kms_parent.py \
 				scripts/encrypt_native_shadow_local_keys.py \
-				serverware/oauth_refresh_material.py \
-				serverware/authority_oauth_exchange_policy.py \
-				serverware/authority_transition_oauth_exchange.py \
-				serverware/control_plane_oauth_exchange.py \
-				serverware/oauth_exchange_material.py \
-				serverware/portal_oauth_consent.py \
-				serverware/portal_oauth_activation.py \
-				serverware/oauth_read_projections.py \
-				serverware/portal_admin_token_publication.py \
-				serverware/control_plane_workload_identity_routes.py \
-				serverware/portal_workload_issuance.py \
-				serverware_agent_trust/workload_identity_originals.py \
-				serverware_agent_trust/workload_identity_bootstrap_originals.py \
-				serverware_agent_trust/workload_identity_bootstrap.py \
-				serverware_agent_trust/native_enrollment_packet.py \
-				serverware_agent_trust/_workload_signed_packet.py \
-				serverware/control_plane_oidc_session_activation_release_grant_acquisition_bootstrap.py \
-				serverware/control_plane_oidc_session_activation_release_grant_acquisition.py \
-				serverware/oidc_session_activation_release_grant_delivery_admission.py \
-				serverware/oidc_session_activation_release_recovery_grant_admission.py \
-				serverware/authority_oidc_session_activation_release_grant_delivery_transport.py \
-				serverware/oidc_session_activation_release_dynamic_entrypoint.py \
-				serverware/oidc_session_activation_release_dynamic_launcher.py \
-				serverware/oidc_session_activation_release_recovery_delivery_admission.py \
-				serverware/authority_oidc_session_activation_release_recovery_delivery_transport.py \
-				serverware/oidc_session_activation_release_recovery_dynamic_entrypoint.py \
-				serverware/oidc_session_activation_release_recovery_dynamic_launcher.py \
-				serverware/oidc_session_activation_consume_input_issuer_policy.py \
-				serverware/oidc_session_activation_consume_input_bridge_policy.py \
-				serverware/authority_oidc_session_activation_consume_input_production.py \
-				serverware/authority_oidc_session_activation_consume_input_transport.py \
-				serverware/oidc_session_activation_consume_input_admission.py \
-				serverware/control_plane_oidc_session_activation_consume_input_request.py \
-				serverware/oidc_session_activation_consume_input_issuer_bootstrap.py \
-				serverware/oidc_session_activation_consume_input_issuer_entrypoint.py \
-				serverware/oidc_session_activation_consume_input_issuer_launcher.py \
-				serverware/oidc_session_activation_consume_input_issuer_startup.py \
-				serverware/oidc_session_activation_consume_input_issuer_runner.py \
-				serverware/control_plane_oidc_session_activation_consume_input_acquisition_bootstrap.py \
-				serverware/control_plane_oidc_session_activation_consume_input_acquisition.py \
-				serverware/oidc_session_activation_consume_input_delivery_admission.py \
-				serverware/authority_oidc_session_activation_consume_input_delivery_transport.py \
-				serverware/oidc_session_activation_consume_dynamic_entrypoint.py \
-				serverware/oidc_session_activation_consume_dynamic_launcher.py \
-				serverware/oidc_session_activation_http_contract.py \
-				serverware/control_plane_oidc_session_activation_http.py \
-				serverware/control_plane_oidc_session_activation_delivery.py \
-				serverware/control_plane_oidc_session_activation_routes.py \
-				serverware/oidc_session_activation_recovery_http_contract.py \
-				serverware/control_plane_oidc_session_activation_recovery_selection.py \
-				serverware/control_plane_oidc_session_activation_recovery_history.py \
-				serverware/control_plane_oidc_session_activation_recovery_actor.py \
-				serverware/control_plane_oidc_session_activation_recovery_routes.py \
-				serverware/control_plane_oidc_session_activation_consume_planning.py \
-				serverware/control_plane_oidc_session_activation_consume_records.py \
-				serverware/authority_oidc_session_activation_completion_dispatch_transport.py \
-				serverware/authority_oidc_session_activation_delivery_completion_dispatch_transport.py \
-				serverware/authority_oidc_session_activation_delivery_completion_release_transport.py \
-				serverware/authority_oidc_session_activation_release_hints.py \
-				serverware/authority_oidc_session_activation_caller_transport.py \
-				serverware/control_plane_oidc_session_activation_permission.py \
-				serverware/control_plane_oidc_session_activation_execution.py \
-				serverware/control_plane_oidc_session_activation_permission_http.py \
-				serverware/control_plane_oidc_session_activation_permission_routes.py \
-				serverware/authority_oidc_session_activation_release_response.py \
-				serverware/oidc_session_activation_release_entrypoint.py \
-				serverware/oidc_session_activation_release_launcher.py \
-				serverware/oidc_session_activation_release_runner.py \
-				serverware/oidc_session_activation_release_service.py \
-				serverware/authority_oidc_session_activation_release_custody.py \
-				serverware/authority_oidc_session_activation_delivery_reads.py \
-				serverware/authority_transition_oidc_session_activation_delivery.py \
-				serverware/authority_oidc_session_activation_delivery_writes.py \
-				serverware/authority_oidc_session_activation_delivery_planning.py \
-				serverware/authority_oidc_session_activation_delivery_plan_contract.py \
-				serverware/authority_oidc_session_activation_delivery_plan.py \
-				serverware/authority_oidc_session_activation_delivery_plan_owner.py \
-				serverware/authority_oidc_session_activation_delivery_journal.py \
-				serverware/authority_oidc_session_activation_delivery_retained.py \
-				serverware/authority_oidc_session_activation_delivery_execution_bundle.py \
-				serverware/authority_oidc_session_activation_delivery_execution_store.py \
-				serverware/authority_oidc_session_activation_delivery_execution_export.py \
-				serverware/authority_oidc_session_activation_delivery_execution_enrollment.py \
-				serverware/authority_oidc_session_activation_delivery_execution_expectations.py \
-				serverware/authority_oidc_session_activation_delivery_execution_authorization.py \
-				serverware/oidc_session_activation_delivery_execution_custody_bootstrap.py \
-				serverware/authority_oidc_session_activation_delivery_execution_custody.py \
-				serverware/authority_oidc_session_activation_delivery_execution_replay.py \
-				serverware/authority_oidc_session_activation_delivery_execution_grant.py \
-				serverware/authority_oidc_session_activation_delivery_execution_grant_admission.py \
-				serverware/authority_oidc_session_activation_delivery_execution_grant_production.py \
-				serverware/authority_oidc_session_activation_delivery_execution_grant_verification.py \
-				serverware/oidc_session_activation_delivery_execution_authorizer_bootstrap.py \
-				serverware/authority_oidc_session_activation_delivery_execution_authorizer_transport.py \
-				serverware/oidc_session_activation_delivery_execution_authorizer_startup.py \
-				serverware/oidc_session_activation_delivery_execution_authorizer_entrypoint.py \
-				serverware/oidc_session_activation_delivery_execution_authorizer_launcher.py \
-				serverware/oidc_session_activation_delivery_execution_authorizer_runner.py \
-				serverware/authority_oidc_session_activation_delivery_computation.py \
-				serverware/authority_oidc_session_activation_delivery_reservation.py \
-				serverware/authority_oidc_session_activation_delivery_reservation_records.py \
-				serverware/authority_oidc_session_activation_delivery_reservation_delivery.py \
-				serverware/authority_oidc_session_activation_delivery_reservation_transport.py \
-				serverware/authority_oidc_session_activation_delivery_pending_admission.py \
-				serverware/oidc_session_activation_delivery_execution_reserver_bootstrap.py \
-				serverware/oidc_session_activation_delivery_execution_reserver_startup.py \
-				serverware/oidc_session_activation_delivery_execution_reserver_entrypoint.py \
-				serverware/oidc_session_activation_delivery_execution_reserver_launcher.py \
-				serverware/oidc_session_activation_delivery_execution_reserver_runner.py \
-				serverware/oidc_session_activation_delivery_execution_sql_bootstrap.py \
-				serverware/authority_oidc_session_activation_delivery_execution_packet.py \
-				serverware/authority_oidc_session_activation_delivery_sql.py \
-				serverware/authority_oidc_session_activation_delivery_sql_transport.py \
-				serverware/oidc_session_activation_delivery_execution_sql_entrypoint.py \
-				serverware/oidc_session_activation_delivery_execution_sql_launcher.py \
-				serverware/oidc_session_activation_delivery_execution_sql_runner.py \
-				serverware/oidc_session_activation_delivery_execution_sql_startup.py \
-				serverware/authority_oidc_session_activation_delivery_plan_history.py \
-				serverware/authority_oidc_session_activation_delivery_execution_history.py \
-				serverware/authority_oidc_session_activation_delivery_history_exchange.py \
-				serverware/authority_oidc_session_activation_delivery_recovery_packet.py \
-				serverware/oidc_session_activation_delivery_completion_custody_bootstrap.py \
-				serverware/authority_oidc_session_activation_delivery_completion_custody.py \
-				serverware/authority_oidc_session_activation_delivery_completion_admission.py \
-				serverware/authority_oidc_session_activation_delivery_completion.py \
-				serverware/authority_oidc_session_activation_delivery_completion_recovery.py \
-				serverware/oidc_session_activation_delivery_completion_bootstrap.py \
-				serverware/oidc_session_activation_delivery_completion_entrypoint.py \
-				serverware/oidc_session_activation_delivery_completion_startup.py \
-				serverware/oidc_session_activation_delivery_completion_launcher.py \
-				serverware/oidc_session_activation_delivery_completion_runner.py \
-				serverware/authority_oidc_session_activation_delivery_completion_transport.py \
-				serverware/authority_oidc_session_activation_delivery_completion_response.py \
-				serverware/oidc_session_activation_delivery_planner_bootstrap.py \
-				serverware/oidc_session_activation_delivery_planner_entrypoint.py \
-				serverware/oidc_session_activation_delivery_planner_launcher.py \
-				serverware/oidc_session_activation_delivery_planner_runner.py \
-				serverware/authority_oidc_session_activation_delivery_planner_service.py \
-				serverware/authority_oidc_session_activation_delivery_planner_transport.py \
-				serverware/authority_oidc_session_activation_delivery_cold_planning.py \
-				serverware/authority_oidc_session_activation_delivery_provenance.py \
-				serverware/authority_oidc_session_activation_delivery_state.py \
-				serverware/authority_current_root_delivery_head.py \
-				serverware/authority_successor_execution_window.py \
-				serverware/authority_oidc_session_activation_execution_store.py \
-				serverware/authority_oidc_execution_store_core.py \
-				serverware/authority_oidc_session_activation_execution_export.py \
-				serverware/authority_oidc_session_activation_cold_planning.py \
-				serverware/authority_oidc_session_activation_planner_transport.py \
-				serverware/authority_oidc_session_activation_planner_service.py \
-				serverware/oidc_session_activation_planner_bootstrap.py \
-				serverware/oidc_session_activation_planner_entrypoint.py \
-				serverware/oidc_session_activation_planner_launcher.py \
-				serverware/oidc_session_activation_planner_runner.py \
-				serverware/authority_oidc_session_activation_request_issuance.py \
-				serverware/authority_oidc_session_activation_request_issuance_transport.py \
-				serverware/authority_oidc_session_activation_request_staging_transport.py \
-				serverware/control_plane_oidc_session_activation_request_issuance.py \
-				serverware/control_plane_oidc_session_activation_request_dispatch.py \
-				serverware/control_plane_enrollment_request_bootstrap.py \
-				serverware/oidc_session_activation_consume_input_resources.py \
-				serverware/control_plane_oidc_session_activation_request_issuance_bootstrap.py \
-				serverware/oidc_session_activation_request_dynamic_entrypoint.py \
-				serverware/oidc_session_activation_request_dynamic_launcher.py \
-				serverware/oidc_session_activation_execution_dynamic_entrypoint.py \
-				serverware/authority_oidc_session_activation_execution_issuance_transport.py \
-				serverware/authority_oidc_session_activation_execution_request_issuance.py \
-				serverware/authority_oidc_session_activation_consume_execution_request_issuance.py \
-				serverware/oidc_session_activation_execution_dynamic_launcher.py \
-				serverware/oidc_session_activation_follow_on_originals.py \
-				serverware/oidc_session_activation_consume_input_issuer_sealed_launcher.py \
-				serverware/oidc_session_activation_consume_dynamic_sealed_launcher.py \
-				serverware/oidc_session_activation_release_proof_input_issuer_sealed_launcher.py \
-				serverware/oidc_session_activation_release_proof_dynamic_sealed_launcher.py \
-				serverware/oidc_session_activation_release_grant_issuer_sealed_launcher.py \
-				serverware/oidc_session_activation_release_dynamic_sealed_launcher.py \
-				serverware/authority_registration_current_root_head.py \
-				serverware/authority_registration_request_issuance.py \
-				serverware/registration_dynamic_entrypoint.py \
-				serverware/registration_execution_authorizer_dynamic_launcher.py \
-				serverware/registration_execution_reserver_dynamic_launcher.py \
-				serverware/registration_execution_sql_dynamic_launcher.py \
-				serverware/registration_execution_completion_dynamic_launcher.py \
-				serverware/registration_finalization_authorizer_dynamic_launcher.py \
-				serverware/registration_finalization_reserver_dynamic_launcher.py \
-				serverware/registration_finalization_sql_dynamic_launcher.py \
-				serverware/registration_finalization_completion_dynamic_launcher.py \
-				serverware/oidc_session_activation_request_issuance_policy.py \
-				serverware/oidc_session_activation_request_issuer_launcher.py \
-				serverware/oidc_session_activation_request_issuer_startup.py \
-				serverware/authority_transition_oidc_session_activation.py \
-				serverware/oidc_session_activation_delivery.py \
-				serverware/authority_transition_webauthn.py \
-				serverware/authority_transition_webauthn_registration.py \
-				serverware/authority_transition_webauthn_registration_admission.py \
-				serverware/authority_transition_webauthn_installation_admission.py \
-				serverware/authority_transition_webauthn_completion.py \
-				serverware/authority_transition_webauthn_trust_stage.py \
+				catchplate/oauth_refresh_material.py \
+				catchplate/authority_oauth_exchange_policy.py \
+				catchplate/authority_transition_oauth_exchange.py \
+				catchplate/control_plane_oauth_exchange.py \
+				catchplate/oauth_exchange_material.py \
+				catchplate/portal_oauth_consent.py \
+				catchplate/portal_oauth_activation.py \
+				catchplate/oauth_read_projections.py \
+				catchplate/portal_admin_token_publication.py \
+				catchplate/control_plane_workload_identity_routes.py \
+				catchplate/portal_workload_issuance.py \
+				catchplate_agent_trust/workload_identity_originals.py \
+				catchplate_agent_trust/workload_identity_bootstrap_originals.py \
+				catchplate_agent_trust/workload_identity_bootstrap.py \
+				catchplate_agent_trust/native_enrollment_packet.py \
+				catchplate_agent_trust/_workload_signed_packet.py \
+				catchplate/control_plane_oidc_session_activation_release_grant_acquisition_bootstrap.py \
+				catchplate/control_plane_oidc_session_activation_release_grant_acquisition.py \
+				catchplate/oidc_session_activation_release_grant_delivery_admission.py \
+				catchplate/oidc_session_activation_release_recovery_grant_admission.py \
+				catchplate/authority_oidc_session_activation_release_grant_delivery_transport.py \
+				catchplate/oidc_session_activation_release_dynamic_entrypoint.py \
+				catchplate/oidc_session_activation_release_dynamic_launcher.py \
+				catchplate/oidc_session_activation_release_recovery_delivery_admission.py \
+				catchplate/authority_oidc_session_activation_release_recovery_delivery_transport.py \
+				catchplate/oidc_session_activation_release_recovery_dynamic_entrypoint.py \
+				catchplate/oidc_session_activation_release_recovery_dynamic_launcher.py \
+				catchplate/oidc_session_activation_consume_input_issuer_policy.py \
+				catchplate/oidc_session_activation_consume_input_bridge_policy.py \
+				catchplate/authority_oidc_session_activation_consume_input_production.py \
+				catchplate/authority_oidc_session_activation_consume_input_transport.py \
+				catchplate/oidc_session_activation_consume_input_admission.py \
+				catchplate/control_plane_oidc_session_activation_consume_input_request.py \
+				catchplate/oidc_session_activation_consume_input_issuer_bootstrap.py \
+				catchplate/oidc_session_activation_consume_input_issuer_entrypoint.py \
+				catchplate/oidc_session_activation_consume_input_issuer_launcher.py \
+				catchplate/oidc_session_activation_consume_input_issuer_startup.py \
+				catchplate/oidc_session_activation_consume_input_issuer_runner.py \
+				catchplate/control_plane_oidc_session_activation_consume_input_acquisition_bootstrap.py \
+				catchplate/control_plane_oidc_session_activation_consume_input_acquisition.py \
+				catchplate/oidc_session_activation_consume_input_delivery_admission.py \
+				catchplate/authority_oidc_session_activation_consume_input_delivery_transport.py \
+				catchplate/oidc_session_activation_consume_dynamic_entrypoint.py \
+				catchplate/oidc_session_activation_consume_dynamic_launcher.py \
+				catchplate/oidc_session_activation_http_contract.py \
+				catchplate/control_plane_oidc_session_activation_http.py \
+				catchplate/control_plane_oidc_session_activation_delivery.py \
+				catchplate/control_plane_oidc_session_activation_routes.py \
+				catchplate/oidc_session_activation_recovery_http_contract.py \
+				catchplate/control_plane_oidc_session_activation_recovery_selection.py \
+				catchplate/control_plane_oidc_session_activation_recovery_history.py \
+				catchplate/control_plane_oidc_session_activation_recovery_actor.py \
+				catchplate/control_plane_oidc_session_activation_recovery_routes.py \
+				catchplate/control_plane_oidc_session_activation_consume_planning.py \
+				catchplate/control_plane_oidc_session_activation_consume_records.py \
+				catchplate/authority_oidc_session_activation_completion_dispatch_transport.py \
+				catchplate/authority_oidc_session_activation_delivery_completion_dispatch_transport.py \
+				catchplate/authority_oidc_session_activation_delivery_completion_release_transport.py \
+				catchplate/authority_oidc_session_activation_release_hints.py \
+				catchplate/authority_oidc_session_activation_caller_transport.py \
+				catchplate/control_plane_oidc_session_activation_permission.py \
+				catchplate/control_plane_oidc_session_activation_execution.py \
+				catchplate/control_plane_oidc_session_activation_permission_http.py \
+				catchplate/control_plane_oidc_session_activation_permission_routes.py \
+				catchplate/authority_oidc_session_activation_release_response.py \
+				catchplate/oidc_session_activation_release_entrypoint.py \
+				catchplate/oidc_session_activation_release_launcher.py \
+				catchplate/oidc_session_activation_release_runner.py \
+				catchplate/oidc_session_activation_release_service.py \
+				catchplate/authority_oidc_session_activation_release_custody.py \
+				catchplate/authority_oidc_session_activation_delivery_reads.py \
+				catchplate/authority_transition_oidc_session_activation_delivery.py \
+				catchplate/authority_oidc_session_activation_delivery_writes.py \
+				catchplate/authority_oidc_session_activation_delivery_planning.py \
+				catchplate/authority_oidc_session_activation_delivery_plan_contract.py \
+				catchplate/authority_oidc_session_activation_delivery_plan.py \
+				catchplate/authority_oidc_session_activation_delivery_plan_owner.py \
+				catchplate/authority_oidc_session_activation_delivery_journal.py \
+				catchplate/authority_oidc_session_activation_delivery_retained.py \
+				catchplate/authority_oidc_session_activation_delivery_execution_bundle.py \
+				catchplate/authority_oidc_session_activation_delivery_execution_store.py \
+				catchplate/authority_oidc_session_activation_delivery_execution_export.py \
+				catchplate/authority_oidc_session_activation_delivery_execution_enrollment.py \
+				catchplate/authority_oidc_session_activation_delivery_execution_expectations.py \
+				catchplate/authority_oidc_session_activation_delivery_execution_authorization.py \
+				catchplate/oidc_session_activation_delivery_execution_custody_bootstrap.py \
+				catchplate/authority_oidc_session_activation_delivery_execution_custody.py \
+				catchplate/authority_oidc_session_activation_delivery_execution_replay.py \
+				catchplate/authority_oidc_session_activation_delivery_execution_grant.py \
+				catchplate/authority_oidc_session_activation_delivery_execution_grant_admission.py \
+				catchplate/authority_oidc_session_activation_delivery_execution_grant_production.py \
+				catchplate/authority_oidc_session_activation_delivery_execution_grant_verification.py \
+				catchplate/oidc_session_activation_delivery_execution_authorizer_bootstrap.py \
+				catchplate/authority_oidc_session_activation_delivery_execution_authorizer_transport.py \
+				catchplate/oidc_session_activation_delivery_execution_authorizer_startup.py \
+				catchplate/oidc_session_activation_delivery_execution_authorizer_entrypoint.py \
+				catchplate/oidc_session_activation_delivery_execution_authorizer_launcher.py \
+				catchplate/oidc_session_activation_delivery_execution_authorizer_runner.py \
+				catchplate/authority_oidc_session_activation_delivery_computation.py \
+				catchplate/authority_oidc_session_activation_delivery_reservation.py \
+				catchplate/authority_oidc_session_activation_delivery_reservation_records.py \
+				catchplate/authority_oidc_session_activation_delivery_reservation_delivery.py \
+				catchplate/authority_oidc_session_activation_delivery_reservation_transport.py \
+				catchplate/authority_oidc_session_activation_delivery_pending_admission.py \
+				catchplate/oidc_session_activation_delivery_execution_reserver_bootstrap.py \
+				catchplate/oidc_session_activation_delivery_execution_reserver_startup.py \
+				catchplate/oidc_session_activation_delivery_execution_reserver_entrypoint.py \
+				catchplate/oidc_session_activation_delivery_execution_reserver_launcher.py \
+				catchplate/oidc_session_activation_delivery_execution_reserver_runner.py \
+				catchplate/oidc_session_activation_delivery_execution_sql_bootstrap.py \
+				catchplate/authority_oidc_session_activation_delivery_execution_packet.py \
+				catchplate/authority_oidc_session_activation_delivery_sql.py \
+				catchplate/authority_oidc_session_activation_delivery_sql_transport.py \
+				catchplate/oidc_session_activation_delivery_execution_sql_entrypoint.py \
+				catchplate/oidc_session_activation_delivery_execution_sql_launcher.py \
+				catchplate/oidc_session_activation_delivery_execution_sql_runner.py \
+				catchplate/oidc_session_activation_delivery_execution_sql_startup.py \
+				catchplate/authority_oidc_session_activation_delivery_plan_history.py \
+				catchplate/authority_oidc_session_activation_delivery_execution_history.py \
+				catchplate/authority_oidc_session_activation_delivery_history_exchange.py \
+				catchplate/authority_oidc_session_activation_delivery_recovery_packet.py \
+				catchplate/oidc_session_activation_delivery_completion_custody_bootstrap.py \
+				catchplate/authority_oidc_session_activation_delivery_completion_custody.py \
+				catchplate/authority_oidc_session_activation_delivery_completion_admission.py \
+				catchplate/authority_oidc_session_activation_delivery_completion.py \
+				catchplate/authority_oidc_session_activation_delivery_completion_recovery.py \
+				catchplate/oidc_session_activation_delivery_completion_bootstrap.py \
+				catchplate/oidc_session_activation_delivery_completion_entrypoint.py \
+				catchplate/oidc_session_activation_delivery_completion_startup.py \
+				catchplate/oidc_session_activation_delivery_completion_launcher.py \
+				catchplate/oidc_session_activation_delivery_completion_runner.py \
+				catchplate/authority_oidc_session_activation_delivery_completion_transport.py \
+				catchplate/authority_oidc_session_activation_delivery_completion_response.py \
+				catchplate/oidc_session_activation_delivery_planner_bootstrap.py \
+				catchplate/oidc_session_activation_delivery_planner_entrypoint.py \
+				catchplate/oidc_session_activation_delivery_planner_launcher.py \
+				catchplate/oidc_session_activation_delivery_planner_runner.py \
+				catchplate/authority_oidc_session_activation_delivery_planner_service.py \
+				catchplate/authority_oidc_session_activation_delivery_planner_transport.py \
+				catchplate/authority_oidc_session_activation_delivery_cold_planning.py \
+				catchplate/authority_oidc_session_activation_delivery_provenance.py \
+				catchplate/authority_oidc_session_activation_delivery_state.py \
+				catchplate/authority_current_root_delivery_head.py \
+				catchplate/authority_successor_execution_window.py \
+				catchplate/authority_oidc_session_activation_execution_store.py \
+				catchplate/authority_oidc_execution_store_core.py \
+				catchplate/authority_oidc_session_activation_execution_export.py \
+				catchplate/authority_oidc_session_activation_cold_planning.py \
+				catchplate/authority_oidc_session_activation_planner_transport.py \
+				catchplate/authority_oidc_session_activation_planner_service.py \
+				catchplate/oidc_session_activation_planner_bootstrap.py \
+				catchplate/oidc_session_activation_planner_entrypoint.py \
+				catchplate/oidc_session_activation_planner_launcher.py \
+				catchplate/oidc_session_activation_planner_runner.py \
+				catchplate/authority_oidc_session_activation_request_issuance.py \
+				catchplate/authority_oidc_session_activation_request_issuance_transport.py \
+				catchplate/authority_oidc_session_activation_request_staging_transport.py \
+				catchplate/control_plane_oidc_session_activation_request_issuance.py \
+				catchplate/control_plane_oidc_session_activation_request_dispatch.py \
+				catchplate/control_plane_enrollment_request_bootstrap.py \
+				catchplate/oidc_session_activation_consume_input_resources.py \
+				catchplate/control_plane_oidc_session_activation_request_issuance_bootstrap.py \
+				catchplate/oidc_session_activation_request_dynamic_entrypoint.py \
+				catchplate/oidc_session_activation_request_dynamic_launcher.py \
+				catchplate/oidc_session_activation_execution_dynamic_entrypoint.py \
+				catchplate/authority_oidc_session_activation_execution_issuance_transport.py \
+				catchplate/authority_oidc_session_activation_execution_request_issuance.py \
+				catchplate/authority_oidc_session_activation_consume_execution_request_issuance.py \
+				catchplate/oidc_session_activation_execution_dynamic_launcher.py \
+				catchplate/oidc_session_activation_follow_on_originals.py \
+				catchplate/oidc_session_activation_consume_input_issuer_sealed_launcher.py \
+				catchplate/oidc_session_activation_consume_dynamic_sealed_launcher.py \
+				catchplate/oidc_session_activation_release_proof_input_issuer_sealed_launcher.py \
+				catchplate/oidc_session_activation_release_proof_dynamic_sealed_launcher.py \
+				catchplate/oidc_session_activation_release_grant_issuer_sealed_launcher.py \
+				catchplate/oidc_session_activation_release_dynamic_sealed_launcher.py \
+				catchplate/authority_registration_current_root_head.py \
+				catchplate/authority_registration_request_issuance.py \
+				catchplate/registration_dynamic_entrypoint.py \
+				catchplate/registration_execution_authorizer_dynamic_launcher.py \
+				catchplate/registration_execution_reserver_dynamic_launcher.py \
+				catchplate/registration_execution_sql_dynamic_launcher.py \
+				catchplate/registration_execution_completion_dynamic_launcher.py \
+				catchplate/registration_finalization_authorizer_dynamic_launcher.py \
+				catchplate/registration_finalization_reserver_dynamic_launcher.py \
+				catchplate/registration_finalization_sql_dynamic_launcher.py \
+				catchplate/registration_finalization_completion_dynamic_launcher.py \
+				catchplate/oidc_session_activation_request_issuance_policy.py \
+				catchplate/oidc_session_activation_request_issuer_launcher.py \
+				catchplate/oidc_session_activation_request_issuer_startup.py \
+				catchplate/authority_transition_oidc_session_activation.py \
+				catchplate/oidc_session_activation_delivery.py \
+				catchplate/authority_transition_webauthn.py \
+				catchplate/authority_transition_webauthn_registration.py \
+				catchplate/authority_transition_webauthn_registration_admission.py \
+				catchplate/authority_transition_webauthn_installation_admission.py \
+				catchplate/authority_transition_webauthn_completion.py \
+				catchplate/authority_transition_webauthn_trust_stage.py \
 				scripts/authority_revocation_observation_fixture.py \
 				scripts/authority_revocation_semantics_fixture.py \
 				scripts/authority_revocation_trust_fixture.py \
-				serverware/authority_index_frontier.py \
+				catchplate/authority_index_frontier.py \
 				data-plane/decision-gate-rs/Dockerfile \
 				data-plane/decision-gate-rs/Dockerfile.production \
 				data-plane/decision-gate-rs/Cargo.lock \
@@ -5770,7 +5770,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_listener.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_public_artifacts.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/peer_measurement.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-response-v2-guest-inspector.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-response-v2-guest-inspector.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector/mod.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector/wire.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector/confinement.rs \
@@ -5778,7 +5778,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector_parent.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector_parent_image.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector_parent_process.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-response-v2-guest-role.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-response-v2-guest-role.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_role/mod.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_role/privileges.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_cohort.rs \
@@ -5807,20 +5807,20 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/response_v2/state_authority/postgres/sequence_originals.rs \
 				data-plane/decision-gate-rs/src/response_v2/state_authority/postgres/staged_originals.rs \
 				data-plane/decision-gate-rs/src/native_target_dispatch.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-worker.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-native-runtime-attestation-verifier.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-native-publication-handoff.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-verifier.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-time-issuer.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-guest-supervisor.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-native-activation-relay.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-proof-cohort.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-native-publication-genesis-controller.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-native-publication-adoption-validator.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-verifier-transport.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-retrieval-pair.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-policy-shadow-custody-guest.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-export-custody-seccomp.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-native-shadow-worker.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-native-runtime-attestation-verifier.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-native-publication-handoff.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-native-shadow-verifier.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-native-shadow-time-issuer.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-native-shadow-guest-supervisor.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-native-activation-relay.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-native-shadow-proof-cohort.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-native-publication-genesis-controller.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-native-publication-adoption-validator.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-native-shadow-verifier-transport.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-native-shadow-retrieval-pair.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-policy-shadow-custody-guest.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-export-custody-seccomp.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_seccomp_export.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/mod.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/parent.rs \
@@ -5860,13 +5860,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_generation_origin_v1.rs \
 				data-plane/decision-gate-rs/src/native_setup_hardware.rs \
 				data-plane/decision-gate-rs/src/native_setup_hardware_v1.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-native-generation-origin-issuer.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-native-setup-hardware.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-native-setup-proxy.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-native-setup-final.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-setup-native-hardware.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-setup-native-proxy.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-setup-native-final.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-native-generation-origin-issuer.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-native-setup-hardware.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-native-setup-proxy.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-native-setup-final.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-setup-native-hardware.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-setup-native-proxy.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-setup-native-final.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1/origin_issuer.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/origin_issuer.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_native_ingress.rs \
@@ -6036,8 +6036,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/proof_client_policy_expectations_v1.rs \
 				data-plane/decision-gate-rs/src/native_approver_policy_v1.rs \
 				data-plane/decision-gate-rs/src/native_lease_profile_v1.rs \
-				serverware/release_authorization_profiles.py \
-				serverware/credential_lease_profiles.py \
+				catchplate/release_authorization_profiles.py \
+				catchplate/credential_lease_profiles.py \
 				scripts/verify_native_lease_recipient.py \
 				data-plane/decision-gate-rs/src/native_target_principal_preflight.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_authorizer.rs \
@@ -6106,8 +6106,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/wire.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/workload.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/reservation.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-native-bootstrap-client.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-workload-sidecar.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-native-bootstrap-client.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-workload-sidecar.rs \
 				data-plane/decision-gate-rs/src/workload_sidecar/mod.rs \
 				data-plane/decision-gate-rs/src/workload_sidecar/config.rs \
 				data-plane/decision-gate-rs/src/workload_sidecar/lifetime.rs \
@@ -6115,16 +6115,16 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/workload_sidecar/server.rs \
 				data-plane/decision-gate-rs/src/workload_sidecar/upstream.rs \
 				data-plane/decision-gate-rs/src/native_verifier/ingress_service.rs \
-				data-plane/decision-gate-rs/src/bin/serverware-native-enclave-entrypoint.rs \
+				data-plane/decision-gate-rs/src/bin/catchplate-native-enclave-entrypoint.rs \
 				data-plane/decision-gate-rs/coder-test-runner.sh \
-				ops/systemd/serverware-launch-authority-relay.service \
-				ops/systemd/serverware-launch-authority-relay.socket \
-				ops/native-setup-issuers/serverware-setup-native-hardware.conf \
-				ops/native-setup-issuers/serverware-setup-native-hardware.service \
-				ops/native-setup-issuers/serverware-setup-native-proxy.conf \
-				ops/native-setup-issuers/serverware-setup-native-proxy.service \
-				ops/native-setup-issuers/serverware-setup-native-final.conf \
-				ops/native-setup-issuers/serverware-setup-native-final.service \
+				ops/systemd/catchplate-launch-authority-relay.service \
+				ops/systemd/catchplate-launch-authority-relay.socket \
+				ops/native-setup-issuers/catchplate-setup-native-hardware.conf \
+				ops/native-setup-issuers/catchplate-setup-native-hardware.service \
+				ops/native-setup-issuers/catchplate-setup-native-proxy.conf \
+				ops/native-setup-issuers/catchplate-setup-native-proxy.service \
+				ops/native-setup-issuers/catchplate-setup-native-final.conf \
+				ops/native-setup-issuers/catchplate-setup-native-final.service \
 				schemas/production-launch-manifest.v3.schema.json \
 				schemas/native-ingress-client.v3.schema.json \
 				schemas/native-ingress-session-evidence.v2.schema.json \
@@ -6775,7 +6775,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 					--driver-opt "memory-swap=$(CODER_BUILDKIT_MEMORY)" \
 					--driver-opt "cpu-period=100000" \
 						--driver-opt "cpu-quota=$$((100000 * $(CODER_BUILDKIT_CPUS)))" \
-						--driver-opt "env.SERVERWARE_CODER_OWNER_TOKEN=$$run_owner_token" \
+						--driver-opt "env.CATCHPLATE_CODER_OWNER_TOKEN=$$run_owner_token" \
 						--driver-opt env.BUILDKIT_STEP_LOG_MAX_SIZE=33554432 \
 						--driver-opt env.BUILDKIT_STEP_LOG_MAX_SPEED=1048576 \
 					> "$(CODER_OUTPUT_DIR)/builder.log" 2>&1 || builder_create_status=$$?; \
@@ -6804,7 +6804,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				}; \
 				$(CODER_TIMEOUT) --kill-after="$(CODER_KILL_AFTER)" "$(CODER_INSPECT_TIMEOUT)" \
 					$(CODER_DOCKER) container inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$$builder_container_id" \
-					| grep -Fx "SERVERWARE_CODER_OWNER_TOKEN=$$run_owner_token" >/dev/null || { \
+					| grep -Fx "CATCHPLATE_CODER_OWNER_TOKEN=$$run_owner_token" >/dev/null || { \
 							echo "Buildx container does not expose the run owner token" >&2; \
 							exit 2; \
 						}; \
@@ -6906,7 +6906,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				printf '%s\n' "building application services once; log: $(CODER_OUTPUT_DIR)/build.log"; \
 			for build_service in $(CODER_BUILD_SERVICES); do \
 				case "$$build_service" in \
-					serverware) built_image="$(CODER_SHARED_PYTHON_IMAGE)" ;; \
+					catchplate) built_image="$(CODER_SHARED_PYTHON_IMAGE)" ;; \
 					decision-gate-rs) built_image="$(CODER_DECISION_GATE_IMAGE)" ;; \
 					*) echo "unexpected Coder build service: $$build_service" >&2; exit 2 ;; \
 				esac; \
@@ -7054,7 +7054,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 						$(CODER_DOCKER) container inspect \
 							--format '{{range .Config.Env}}{{println .}}{{end}}' \
 							"$$current_launcher_builder_container_id" \
-						| grep -Fx "SERVERWARE_CODER_OWNER_TOKEN=$$run_owner_token" >/dev/null || { \
+						| grep -Fx "CATCHPLATE_CODER_OWNER_TOKEN=$$run_owner_token" >/dev/null || { \
 							echo "launcher preparation builder owner identity changed" >&2; \
 							return 1; \
 						}; \
@@ -7376,7 +7376,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 							--label "$(CODER_DECISION_GATE_MEASURE_CONTAINER_LABEL)" \
 						--label "$(CODER_OWNER_LABEL_KEY)=$$run_owner_token" \
 						--platform "$(CODER_PLATFORM)" \
-							--entrypoint /usr/local/bin/serverware-decision-gate \
+							--entrypoint /usr/local/bin/catchplate-decision-gate \
 							"$$decision_gate_image_id" --help \
 				)" || measurement_create_status=$$?; \
 					if test -z "$$measurement_container_id" && \
@@ -7445,15 +7445,15 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				test "$$measurement_create_status" -eq 0 || exit "$$measurement_create_status"; \
 			coder_mutate "$(CODER_INSPECT_TIMEOUT)" \
 				$(CODER_DOCKER) cp \
-					"$$measurement_container_id:/usr/local/bin/serverware-decision-gate" \
-					"$(CODER_OUTPUT_DIR)/serverware-decision-gate.measured"; \
+					"$$measurement_container_id:/usr/local/bin/catchplate-decision-gate" \
+					"$(CODER_OUTPUT_DIR)/catchplate-decision-gate.measured"; \
 				coder_mutate "$(CODER_CLEANUP_TIMEOUT)" \
 					$(CODER_DOCKER) rm -f "$$measurement_container_id" \
 					>> "$(CODER_OUTPUT_DIR)/cleanup.log" 2>&1; \
 				rm -f "$$decision_gate_measure_cid"; \
-			decision_gate_binary_digest_line="$$(sha256sum "$(CODER_OUTPUT_DIR)/serverware-decision-gate.measured")"; \
+			decision_gate_binary_digest_line="$$(sha256sum "$(CODER_OUTPUT_DIR)/catchplate-decision-gate.measured")"; \
 			decision_gate_binary_digest="sha256:$${decision_gate_binary_digest_line%% *}"; \
-			rm -f "$(CODER_OUTPUT_DIR)/serverware-decision-gate.measured"; \
+			rm -f "$(CODER_OUTPUT_DIR)/catchplate-decision-gate.measured"; \
 			case "$$decision_gate_binary_digest" in sha256:*) ;; *) echo "measured decision-gate binary digest is not canonical" >&2; exit 2 ;; esac; \
 			decision_gate_binary_hex="$${decision_gate_binary_digest#sha256:}"; \
 			test "$${#decision_gate_binary_hex}" -eq 64; \
@@ -7463,9 +7463,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 			{ \
 				printf '%s\n' \
 					'services:' \
-					'  serverware:' \
+					'  catchplate:' \
 					'    environment:' \
-					"      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: \"$$decision_gate_binary_digest\""; \
+					"      CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST: \"$$decision_gate_binary_digest\""; \
 			} > "$(CODER_COMPOSE_DIGEST_OVERRIDE_FILE)"; \
 			compose_override_digest_line="$$(sha256sum "$(CODER_COMPOSE_DIGEST_OVERRIDE_FILE)")"; \
 			printf '%s\n' "$${compose_override_digest_line%% *}" \
@@ -7490,7 +7490,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 					'  demo-upstream:' \
 					"    image: \"$$shared_python_id\"" \
 					'    pull_policy: never' \
-					'  serverware:' \
+					'  catchplate:' \
 					"    image: \"$$shared_python_id\"" \
 					'    pull_policy: never' \
 					'  decision-gate-rs:' \
@@ -7534,7 +7534,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 			exit 2; \
 		}; \
 			test "$$(grep -Ec 'size=$(CODER_SERVICE_TMPFS_SIZE)(,|$$)' "$(CODER_OUTPUT_DIR)/compose-config.yaml")" -eq 4 && \
-				test "$$(grep -Ec 'size=$(CODER_SERVERWARE_TMPFS_SIZE)(,|$$)' "$(CODER_OUTPUT_DIR)/compose-config.yaml")" -eq 1 && \
+				test "$$(grep -Ec 'size=$(CODER_CATCHPLATE_TMPFS_SIZE)(,|$$)' "$(CODER_OUTPUT_DIR)/compose-config.yaml")" -eq 1 && \
 				test "$$(grep -Ec 'size=$(CODER_GRANT_STORE_RUN_TMPFS_SIZE)(,|$$)' "$(CODER_OUTPUT_DIR)/compose-config.yaml")" -eq 1 || { \
 				echo "resolved Compose configuration does not contain the exact six Coder tmpfs bounds" >&2; \
 				exit 2; \
@@ -7604,7 +7604,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 			grant-store "$(CODER_POSTGRES_IMAGE)" "$$grant_store_image_id" \
 			audit-anchor "$(CODER_AUDIT_ANCHOR_IMAGE)" "$$shared_python_id" \
 			demo-upstream "$(CODER_DEMO_UPSTREAM_IMAGE)" "$$shared_python_id" \
-			serverware "$(CODER_SHARED_PYTHON_IMAGE)" "$$shared_python_id" \
+			catchplate "$(CODER_SHARED_PYTHON_IMAGE)" "$$shared_python_id" \
 			decision-gate-rs "$(CODER_DECISION_GATE_IMAGE)" "$$decision_gate_image_id" \
 			> "$(CODER_OUTPUT_DIR)/runtime-image-bindings.txt"; \
 			printf '%s %s\n' "$(CODER_RUST_TEST_IMAGE)" "$$rust_test_image_id" \
@@ -7654,7 +7654,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 			printf '%s\n' "$$shared_python_id" "$$decision_gate_image_id" "$$rust_test_image_id" "$$proxy_test_image_id" "$$production_host_preflight_image_id" "$$launcher_adversarial_image_id" \
 				| LC_ALL=C sort -u > "$(CODER_OUTPUT_DIR)/task-image-ids.txt"; \
 			{ \
-				printf 'schema\tserverware.coder-ci.batch-coverage.v2\n'; \
+				printf 'schema\tcatchplate.coder-ci.batch-coverage.v2\n'; \
 				printf 'classification\tuntrusted-capacity-diagnostics-not-attestation\n'; \
 				printf 'boundary\tcooperative-trusted-orchestrator\texclusive-disposable-dind-required\n'; \
 				printf 'boundary\thostile-source-containment\tfalse\n'; \
@@ -7677,7 +7677,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				printf 'build-input\tlauncher-adversarial-harness\t%s\t%s\n' "$$(cat "$(CODER_OUTPUT_DIR)/launcher-adversarial-script-sha256.txt")" "$(CODER_LAUNCHER_ADVERSARIAL_TEST_SCRIPT)"; \
 				printf 'build-input\tlauncher-adversarial-context\t%s\tlauncher-adversarial-build-inputs.json\n' "$$(sha256sum "$(CODER_LAUNCHER_ADVERSARIAL_CONTEXT_MANIFEST_FILE)" | sed 's/ .*//')"; \
 				printf 'build-input\te2e-host-script\t%s\tscripts/e2e.sh\n' "$$(cat "$(CODER_OUTPUT_DIR)/e2e-script-sha256.txt")"; \
-				for e2e_child in scripts/install_verified_ca.sh scripts/wait_for_serverware.sh scripts/wait_for_demo_upstream.sh scripts/wait_for_decision_gate.sh; do \
+				for e2e_child in scripts/install_verified_ca.sh scripts/wait_for_catchplate.sh scripts/wait_for_demo_upstream.sh scripts/wait_for_decision_gate.sh; do \
 					printf 'build-input\te2e-host-child\t%s\t%s\n' "$$(frozen_file_digest "$$e2e_child")" "$$e2e_child"; \
 				done; \
 				printf 'build-input\ttest-inventory-git\t%s\ttest-inventory.git.txt\n' "$$(sha256sum "$(CODER_OUTPUT_DIR)/test-inventory.git.txt" | sed 's/ .*//')"; \
@@ -7694,7 +7694,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				printf 'build-input\tproduction-python-lock\t%s\trequirements.lock\n' "$$(frozen_file_digest requirements.lock)"; \
 				printf 'build-input\tbrowser-python-lock\t%s\trequirements.browser.lock\n' "$$(frozen_file_digest requirements.browser.lock)"; \
 				printf 'build-input\tproxy-python-lock\t%s\trequirements.proxy-test.lock\n' "$$(frozen_file_digest requirements.proxy-test.lock)"; \
-				printf 'build-input\tclean-room-python-lock\t%s\tserverware_agent_trust/requirements.lock\n' "$$(frozen_file_digest serverware_agent_trust/requirements.lock)"; \
+				printf 'build-input\tclean-room-python-lock\t%s\tcatchplate_agent_trust/requirements.lock\n' "$$(frozen_file_digest catchplate_agent_trust/requirements.lock)"; \
 				printf 'build-input\tconsolidated-oci-entrypoint\t%s\tscripts/oci_lane_entrypoint.py\n' "$$(frozen_file_digest scripts/oci_lane_entrypoint.py)"; \
 				printf 'build-input\tsame-journey-verifier\t%s\tscripts/verify_agent_trust_same_journey.py\n' "$$(frozen_file_digest scripts/verify_agent_trust_same_journey.py)"; \
 				printf 'build-input\trust-lock\t%s\tdata-plane/decision-gate-rs/Cargo.lock\n' "$$(frozen_file_digest data-plane/decision-gate-rs/Cargo.lock)"; \
@@ -7702,7 +7702,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				printf 'build-input\tcredential-policy-examples\t%s\tpolicies/credential-limits.examples.json\n' "$$(frozen_file_digest policies/credential-limits.examples.json)"; \
 				printf 'built-artifact\tproduction-python-image\t%s\t%s\n' "$(CODER_SHARED_PYTHON_IMAGE)" "$$shared_python_id"; \
 				printf 'built-artifact\tdecision-gate-runtime-image\t%s\t%s\n' "$(CODER_DECISION_GATE_IMAGE)" "$$decision_gate_image_id"; \
-				printf 'built-artifact\tdecision-gate-runtime-binary\t%s\t/usr/local/bin/serverware-decision-gate\n' "$$decision_gate_binary_digest"; \
+				printf 'built-artifact\tdecision-gate-runtime-binary\t%s\t/usr/local/bin/catchplate-decision-gate\n' "$$decision_gate_binary_digest"; \
 				printf 'built-artifact\trust-test-runtime-image\t%s\t%s\n' "$(CODER_RUST_TEST_IMAGE)" "$$rust_test_image_id"; \
 				printf 'built-artifact\tproxy-test-runtime-image\t%s\t%s\n' "$(CODER_PROXY_TEST_IMAGE)" "$$proxy_test_image_id"; \
 				printf 'built-artifact\tproduction-host-preflight-runtime-image\t%s\t%s\n' "$(CODER_PRODUCTION_HOST_PREFLIGHT_IMAGE)" "$$production_host_preflight_image_id"; \
@@ -8124,8 +8124,8 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 					"owner_label=$(CODER_OWNER_LABEL_KEY)" \
 					"resource_label=$(CODER_RESOURCE_LABEL_KEY)" \
 					'export DOCKER_CONFIG DOCKER_HOST BUILDX_CONFIG' \
-					'compose_file=$${SERVERWARE_CODER_COMPOSE_FILE:?}' \
-				'project_directory=$${SERVERWARE_CODER_PROJECT_DIRECTORY:?}' \
+					'compose_file=$${CATCHPLATE_CODER_COMPOSE_FILE:?}' \
+				'project_directory=$${CATCHPLATE_CODER_PROJECT_DIRECTORY:?}' \
 				'case "$$real_docker" in /*) ;; *) echo "invalid real Docker path" >&2; exit 2 ;; esac' \
 				'test -f "$$real_docker" && test ! -L "$$real_docker" && test -x "$$real_docker"' \
 				'test "$$(readlink -f "$$real_docker")" = "$$real_docker"' \
@@ -8166,16 +8166,16 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 				'shift' \
 				'case "$${1-}" in' \
 				'  stop)' \
-				'    test "$$#" -eq 2 && test "$${2-}" = serverware' \
+				'    test "$$#" -eq 2 && test "$${2-}" = catchplate' \
 				'    guard_daemon' \
-				'    guard_service serverware' \
-				'    exec "$$real_docker" compose --ansi never --project-directory "$$project_directory" --file "$$compose_file" stop serverware' \
+				'    guard_service catchplate' \
+				'    exec "$$real_docker" compose --ansi never --project-directory "$$project_directory" --file "$$compose_file" stop catchplate' \
 				'    ;;' \
 				'  start)' \
-				'    test "$$#" -eq 2 && test "$${2-}" = serverware' \
+				'    test "$$#" -eq 2 && test "$${2-}" = catchplate' \
 				'    guard_daemon' \
-				'    guard_service serverware' \
-				'    exec "$$real_docker" compose --ansi never --project-directory "$$project_directory" --file "$$compose_file" start serverware' \
+				'    guard_service catchplate' \
+				'    exec "$$real_docker" compose --ansi never --project-directory "$$project_directory" --file "$$compose_file" start catchplate' \
 				'    ;;' \
 				'  exec)' \
 				'    test "$$#" -ge 4 && test "$${2-}" = -T' \
@@ -8188,21 +8188,21 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 				'        guard_service "$$service"' \
 				'        exec "$$real_docker" compose --ansi never --project-directory "$$project_directory" --file "$$compose_file" exec -T "$$service" "$$executable" "$$@"' \
 				'        ;;' \
-				'      serverware:python)' \
+				'      catchplate:python)' \
 				'        test "$$#" -eq 11' \
 				'        test "$${5-}" = scripts/verify_attestation.py' \
 				'        test "$${6-}" = --base && test "$${7-}" = http://localhost:3000' \
 				'        test "$${8-}" = --admin-token && test "$${9-}" = dev-admin-token' \
-				'        test "$${10-}" = --ca-out && test "$${11-}" = /tmp/serverware-verified-ca.pem' \
+				'        test "$${10-}" = --ca-out && test "$${11-}" = /tmp/catchplate-verified-ca.pem' \
 				'        guard_daemon' \
-				'        guard_service serverware' \
-				'        exec "$$real_docker" compose --ansi never --project-directory "$$project_directory" --file "$$compose_file" exec -T serverware python scripts/verify_attestation.py --base http://localhost:3000 --admin-token dev-admin-token --ca-out /tmp/serverware-verified-ca.pem' \
+				'        guard_service catchplate' \
+				'        exec "$$real_docker" compose --ansi never --project-directory "$$project_directory" --file "$$compose_file" exec -T catchplate python scripts/verify_attestation.py --base http://localhost:3000 --admin-token dev-admin-token --ca-out /tmp/catchplate-verified-ca.pem' \
 				'        ;;' \
-				'      serverware:cat)' \
-				'        test "$$#" -eq 5 && test "$${5-}" = /tmp/serverware-verified-ca.pem' \
+				'      catchplate:cat)' \
+				'        test "$$#" -eq 5 && test "$${5-}" = /tmp/catchplate-verified-ca.pem' \
 				'        guard_daemon' \
-				'        guard_service serverware' \
-				'        exec "$$real_docker" compose --ansi never --project-directory "$$project_directory" --file "$$compose_file" exec -T serverware cat /tmp/serverware-verified-ca.pem' \
+				'        guard_service catchplate' \
+				'        exec "$$real_docker" compose --ansi never --project-directory "$$project_directory" --file "$$compose_file" exec -T catchplate cat /tmp/catchplate-verified-ca.pem' \
 				'        ;;' \
 				'      *) exit 2 ;;' \
 				'    esac' \
@@ -8227,7 +8227,7 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 		for reviewed_host_script in \
 			scripts/e2e.sh \
 			scripts/install_verified_ca.sh \
-			scripts/wait_for_serverware.sh \
+			scripts/wait_for_catchplate.sh \
 			scripts/wait_for_demo_upstream.sh \
 			scripts/wait_for_decision_gate.sh; do \
 			if grep -En '(/usr/(local/)?bin/docker|/var/run/docker\.sock|unix:///var/run/docker\.sock)' \
@@ -8265,7 +8265,7 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 			: > "$(CODER_OUTPUT_DIR)/compose.log"; \
 			: > "$(CODER_OUTPUT_DIR)/rust-unit-tests.log"; \
 			{ \
-				printf 'schema\tserverware.coder-ci.batch-coverage-results.v2\n'; \
+				printf 'schema\tcatchplate.coder-ci.batch-coverage-results.v2\n'; \
 			} > "$(CODER_OUTPUT_DIR)/batch-coverage-results.tsv"; \
 			else \
 				test -f "$(CODER_OUTPUT_DIR)/batch-coverage-results.tsv" && \
@@ -8291,7 +8291,7 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 			test -n "$$decision_gate_binary_digest" && \
 				test -z "$$(sed -n '2p' "$(CODER_DECISION_GATE_BINARY_DIGEST_FILE)")"; \
 			grep -Fx \
-				"      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: \"$$decision_gate_binary_digest\"" \
+				"      CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST: \"$$decision_gate_binary_digest\"" \
 				"$(CODER_COMPOSE_DIGEST_OVERRIDE_FILE)" >/dev/null || { \
 					echo "the Compose override is not bound to the measured decision-gate digest" >&2; \
 					exit 2; \
@@ -8441,7 +8441,7 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 			"production-python-lock|requirements.lock" \
 			"browser-python-lock|requirements.browser.lock" \
 			"proxy-python-lock|requirements.proxy-test.lock" \
-			"clean-room-python-lock|serverware_agent_trust/requirements.lock" \
+			"clean-room-python-lock|catchplate_agent_trust/requirements.lock" \
 			"consolidated-oci-entrypoint|scripts/oci_lane_entrypoint.py" \
 			"same-journey-verifier|scripts/verify_agent_trust_same_journey.py"; do \
 			frozen_source_label="$${frozen_source_binding%%|*}"; \
@@ -8466,7 +8466,7 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 			}; \
 		for required_test_file in \
 			docker-compose.yml \
-			scripts/wait_for_serverware.sh \
+			scripts/wait_for_catchplate.sh \
 			scripts/wait_for_demo_upstream.sh \
 			scripts/wait_for_decision_gate.sh \
 			scripts/install_verified_ca.sh \
@@ -9014,12 +9014,12 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 									--mount "type=bind,src=$(CODER_FROZEN_SOURCE_DIR)/ops,dst=/app/ops,readonly" \
 									--mount "type=bind,src=$(CODER_FROZEN_SOURCE_DIR)/production-dependencies,dst=/app/production-dependencies,readonly" \
 								--env HOME=/tmp \
-								--env TMPDIR=/run/serverware-test-tmp \
-								--env SERVERWARE_DATA_DIR=/data \
+								--env TMPDIR=/run/catchplate-test-tmp \
+								--env CATCHPLATE_DATA_DIR=/data \
 									--tmpfs "/tmp:rw,noexec,nosuid,nodev,size=$(CODER_ISOLATED_TEST_TMPFS_SIZE),mode=0700,uid=10001,gid=10001" \
 									--tmpfs "/data:rw,noexec,nosuid,nodev,size=$(CODER_ISOLATED_TEST_TMPFS_SIZE),mode=0700,uid=10001,gid=10001" \
 									--tmpfs "/app/.tmp:rw,exec,nosuid,nodev,size=$(CODER_ISOLATED_TEST_TMPFS_SIZE),mode=0700,uid=10001,gid=10001" \
-									--tmpfs "/run/serverware-test-tmp:rw,exec,nosuid,nodev,size=$(CODER_ISOLATED_TEST_TMPFS_SIZE),mode=0700,uid=10001,gid=10001" \
+									--tmpfs "/run/catchplate-test-tmp:rw,exec,nosuid,nodev,size=$(CODER_ISOLATED_TEST_TMPFS_SIZE),mode=0700,uid=10001,gid=10001" \
 							--user 10001:10001 \
 							--workdir /app \
 							--hostname isolated-tests \
@@ -9052,14 +9052,14 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 									--memory "$(CODER_ISOLATED_TEST_MEMORY)" \
 									--memory-swap "$(CODER_ISOLATED_TEST_MEMORY)" \
 									--cpus "$(CODER_ISOLATED_TEST_CPUS)" \
-									--mount "type=bind,src=$$recorded_docker_path,dst=/opt/serverware/host-tools/docker,readonly" \
-									--mount "type=bind,src=$$recorded_compose_plugin_path,dst=/opt/serverware/host-tools/docker-compose,readonly" \
+									--mount "type=bind,src=$$recorded_docker_path,dst=/opt/catchplate/host-tools/docker,readonly" \
+									--mount "type=bind,src=$$recorded_compose_plugin_path,dst=/opt/catchplate/host-tools/docker-compose,readonly" \
 									--env HOME=/tmp \
 									--env TMPDIR=/tmp \
-									--env SERVERWARE_CODER_PREFLIGHT_DOCKER_EXECUTABLE=/opt/serverware/host-tools/docker \
-									--env SERVERWARE_CODER_PREFLIGHT_COMPOSE_PLUGIN_EXECUTABLE=/opt/serverware/host-tools/docker-compose \
-									--env SERVERWARE_CODER_PREFLIGHT_DOCKER_UNIX_SOCKET=/run/serverware-no-docker.sock \
-									--env "SERVERWARE_CODER_PREFLIGHT_DOCKER_DAEMON_ID=$$(cat "$(CODER_DAEMON_ID_FILE)")" \
+									--env CATCHPLATE_CODER_PREFLIGHT_DOCKER_EXECUTABLE=/opt/catchplate/host-tools/docker \
+									--env CATCHPLATE_CODER_PREFLIGHT_COMPOSE_PLUGIN_EXECUTABLE=/opt/catchplate/host-tools/docker-compose \
+									--env CATCHPLATE_CODER_PREFLIGHT_DOCKER_UNIX_SOCKET=/run/catchplate-no-docker.sock \
+									--env "CATCHPLATE_CODER_PREFLIGHT_DOCKER_DAEMON_ID=$$(cat "$(CODER_DAEMON_ID_FILE)")" \
 									--tmpfs "/tmp:rw,exec,nosuid,nodev,size=$(CODER_ISOLATED_TEST_TMPFS_SIZE),mode=0700,uid=10001,gid=10001" \
 									--user 10001:10001 \
 									--workdir /app \
@@ -9191,8 +9191,8 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 							"$$isolated_test_container_id" \
 						| LC_ALL=C sort > "$$preflight_bind_mounts"; \
 					printf '%s\n' \
-						"/opt/serverware/host-tools/docker=$$recorded_docker_path:false" \
-						"/opt/serverware/host-tools/docker-compose=$$recorded_compose_plugin_path:false" \
+						"/opt/catchplate/host-tools/docker=$$recorded_docker_path:false" \
+						"/opt/catchplate/host-tools/docker-compose=$$recorded_compose_plugin_path:false" \
 						| LC_ALL=C sort > "$$preflight_expected_bind_mounts"; \
 					cmp "$$preflight_expected_bind_mounts" "$$preflight_bind_mounts" || { \
 						echo "production-host-preflight immutable host-tool mount contract drifted" >&2; \
@@ -9250,17 +9250,17 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 			production_test_image_id=""; \
 			production_binding_count=0; \
 			while read -r runtime_service runtime_image runtime_image_id runtime_extra; do \
-				if test "$$runtime_service" = serverware; then \
+				if test "$$runtime_service" = catchplate; then \
 					production_binding_count=$$((production_binding_count + 1)); \
 					test -z "$${runtime_extra:-}" && test "$$runtime_image" = "$(CODER_SHARED_PYTHON_IMAGE)" || { \
-						echo "frozen serverware runtime image binding is malformed" >&2; \
+						echo "frozen catchplate runtime image binding is malformed" >&2; \
 						exit 2; \
 					}; \
 					production_test_image_id="$$runtime_image_id"; \
 				fi; \
 			done < "$(CODER_OUTPUT_DIR)/runtime-image-bindings.txt"; \
 			test "$$production_binding_count" -eq 1 && test -n "$$production_test_image_id" || { \
-				echo "frozen runtime bindings do not contain exactly one serverware image ID" >&2; \
+				echo "frozen runtime bindings do not contain exactly one catchplate image ID" >&2; \
 				exit 2; \
 			}; \
 			current_python_argv_bindings="$(CODER_OUTPUT_DIR)/python-test-argv-bindings.current.tsv"; \
@@ -9393,9 +9393,9 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 				--memory "$(CODER_RUST_TEST_MEMORY)" \
 					--memory-swap "$(CODER_RUST_TEST_MEMORY)" \
 					--cpus "$(CODER_RUST_TEST_CPUS)" \
-					--env TMPDIR=/run/serverware-test-tmp \
+					--env TMPDIR=/run/catchplate-test-tmp \
 					--tmpfs "/tmp:rw,noexec,nosuid,nodev,size=$(CODER_RUST_TEST_TMPFS_SIZE),mode=1777" \
-					--tmpfs "/run/serverware-test-tmp:rw,exec,nosuid,nodev,size=$(CODER_RUST_TEST_TMPFS_SIZE),mode=0700,uid=65532,gid=65532" \
+					--tmpfs "/run/catchplate-test-tmp:rw,exec,nosuid,nodev,size=$(CODER_RUST_TEST_TMPFS_SIZE),mode=0700,uid=65532,gid=65532" \
 					--user 65532:65532 \
 				--workdir /tmp \
 				--hostname rust-unit-tests \
@@ -9497,12 +9497,12 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 				printf '%s\n' "$$network_record" >> "$(CODER_RESOURCE_OWNERSHIP_FILE)"; \
 			fi; \
 			for volume_suffix in \
-				serverware-data \
-				serverware-audit-anchors \
-				serverware-grant-store \
-				serverware-custody-socket \
-				serverware-custody-trust \
-				serverware-response-signing-private; do \
+				catchplate-data \
+				catchplate-audit-anchors \
+				catchplate-grant-store \
+				catchplate-custody-socket \
+				catchplate-custody-trust \
+				catchplate-response-signing-private; do \
 				compose_volume="$(CODER_COMPOSE_PROJECT_NAME)_$$volume_suffix"; \
 				volume_identity="$$( \
 					$(CODER_TIMEOUT) --kill-after="$(CODER_KILL_AFTER)" "$(CODER_INSPECT_TIMEOUT)" \
@@ -9595,7 +9595,7 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 					volume) \
 						test "$$storage_resource" != buildkit-state || continue; \
 						case "$$storage_resource" in \
-							serverware-data|serverware-audit-anchors|serverware-grant-store|serverware-custody-socket|serverware-custody-trust|serverware-custody-state|serverware-response-signing-private) ;; \
+							catchplate-data|catchplate-audit-anchors|catchplate-grant-store|catchplate-custody-socket|catchplate-custody-trust|catchplate-custody-state|catchplate-response-signing-private) ;; \
 							*) echo "refusing undeclared Compose volume record" >&2; exit 2 ;; \
 						esac; \
 						test "$$storage_name" = "$(CODER_COMPOSE_PROJECT_NAME)_$$storage_resource" || exit 2; \
@@ -9639,13 +9639,13 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 				exit 2; \
 			fi; \
 			for volume_suffix in \
-				serverware-data \
-				serverware-audit-anchors \
-				serverware-grant-store \
-				serverware-custody-socket \
-				serverware-custody-trust \
-				serverware-custody-state \
-				serverware-response-signing-private; do \
+				catchplate-data \
+				catchplate-audit-anchors \
+				catchplate-grant-store \
+				catchplate-custody-socket \
+				catchplate-custody-trust \
+				catchplate-custody-state \
+				catchplate-response-signing-private; do \
 				compose_volume="$(CODER_COMPOSE_PROJECT_NAME)_$$volume_suffix"; \
 				if $(CODER_TIMEOUT) --kill-after="$(CODER_KILL_AFTER)" "$(CODER_INSPECT_TIMEOUT)" \
 					$(CODER_DOCKER) volume inspect "$$compose_volume" >/dev/null 2>&1; then \
@@ -9718,7 +9718,7 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 					)"; \
 					created_volume_resource="$$(printf '%s\n' "$$created_volume_identity" | sed 's/^[^|]*|\\([^|]*\\)|.*$$/\\1/')"; \
 					case "$$created_volume_resource" in \
-						serverware-data|serverware-audit-anchors|serverware-grant-store|serverware-custody-socket|serverware-custody-trust|serverware-custody-state|serverware-response-signing-private) ;; \
+						catchplate-data|catchplate-audit-anchors|catchplate-grant-store|catchplate-custody-socket|catchplate-custody-trust|catchplate-custody-state|catchplate-response-signing-private) ;; \
 						*) echo "refusing unexpected volume in partial Compose creation" >&2; exit 2 ;; \
 					esac; \
 					test "$$created_volume_identity" = "$$created_volume|$$created_volume_resource|$$run_owner_token" && \
@@ -9805,9 +9805,9 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 				echo "grant-store did not become healthy within $(CODER_GRANT_STORE_HEALTH_RETRIES) seconds" >&2; \
 				exit 2; \
 			}; \
-			printf '%s\n' "starting audit-anchor, demo-upstream, and serverware from prebuilt images"; \
+			printf '%s\n' "starting audit-anchor, demo-upstream, and catchplate from prebuilt images"; \
 			coder_mutate "$(CODER_START_TIMEOUT)" \
-				$(CODER_TEST_COMPOSE) start audit-anchor demo-upstream serverware \
+				$(CODER_TEST_COMPOSE) start audit-anchor demo-upstream catchplate \
 				>> "$(CODER_OUTPUT_DIR)/startup.log" 2>&1; \
 			verify_frozen_source; \
 		$(CODER_TIMEOUT) --kill-after="$(CODER_KILL_AFTER)" "$(CODER_START_TIMEOUT)" \
@@ -9816,10 +9816,10 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 				HOME="$${HOME:-/tmp}" \
 				XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR:-/run/user/$$(id -u)}" \
 				COMPOSE_PROJECT_NAME="$(CODER_COMPOSE_PROJECT_NAME)" \
-				SERVERWARE_CODER_COMPOSE_FILE="$(CODER_OUTPUT_DIR)/compose-config.yaml" \
-				SERVERWARE_CODER_PROJECT_DIRECTORY="$(CODER_FROZEN_SOURCE_DIR)" \
+				CATCHPLATE_CODER_COMPOSE_FILE="$(CODER_OUTPUT_DIR)/compose-config.yaml" \
+				CATCHPLATE_CODER_PROJECT_DIRECTORY="$(CODER_FROZEN_SOURCE_DIR)" \
 				BASE=http://localhost:3000 \
-				sh -c 'cd "$$1" && exec ./scripts/wait_for_serverware.sh' \
+				sh -c 'cd "$$1" && exec ./scripts/wait_for_catchplate.sh' \
 				sh "$(CODER_FROZEN_SOURCE_DIR)"; \
 		verify_frozen_source; \
 		$(CODER_TIMEOUT) --kill-after="$(CODER_KILL_AFTER)" "$(CODER_START_TIMEOUT)" \
@@ -9828,12 +9828,12 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 				HOME="$${HOME:-/tmp}" \
 				XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR:-/run/user/$$(id -u)}" \
 				COMPOSE_PROJECT_NAME="$(CODER_COMPOSE_PROJECT_NAME)" \
-				SERVERWARE_CODER_COMPOSE_FILE="$(CODER_OUTPUT_DIR)/compose-config.yaml" \
-				SERVERWARE_CODER_PROJECT_DIRECTORY="$(CODER_FROZEN_SOURCE_DIR)" \
+				CATCHPLATE_CODER_COMPOSE_FILE="$(CODER_OUTPUT_DIR)/compose-config.yaml" \
+				CATCHPLATE_CODER_PROJECT_DIRECTORY="$(CODER_FROZEN_SOURCE_DIR)" \
 					sh -c 'cd "$$1" && exec ./scripts/wait_for_demo_upstream.sh' \
 					sh "$(CODER_FROZEN_SOURCE_DIR)"; \
 			verify_frozen_source; \
-			printf '%s\n' "starting decision-gate only after serverware is ready"; \
+			printf '%s\n' "starting decision-gate only after catchplate is ready"; \
 			coder_mutate "$(CODER_START_TIMEOUT)" \
 				$(CODER_TEST_COMPOSE) start decision-gate-rs \
 				>> "$(CODER_OUTPUT_DIR)/startup.log" 2>&1; \
@@ -9843,8 +9843,8 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 				HOME="$${HOME:-/tmp}" \
 				XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR:-/run/user/$$(id -u)}" \
 				COMPOSE_PROJECT_NAME="$(CODER_COMPOSE_PROJECT_NAME)" \
-				SERVERWARE_CODER_COMPOSE_FILE="$(CODER_OUTPUT_DIR)/compose-config.yaml" \
-				SERVERWARE_CODER_PROJECT_DIRECTORY="$(CODER_FROZEN_SOURCE_DIR)" \
+				CATCHPLATE_CODER_COMPOSE_FILE="$(CODER_OUTPUT_DIR)/compose-config.yaml" \
+				CATCHPLATE_CODER_PROJECT_DIRECTORY="$(CODER_FROZEN_SOURCE_DIR)" \
 				DECISION_GATE_BASE=http://localhost:9091 \
 				sh -c 'cd "$$1" && exec ./scripts/wait_for_decision_gate.sh' \
 				sh "$(CODER_FROZEN_SOURCE_DIR)"; \
@@ -9861,7 +9861,7 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 			printf '%s\n' "running $$test_path without a build; log: $$test_log"; \
 			status=0; \
 			coder_mutate "$(CODER_PER_TEST_TIMEOUT)" \
-				$(CODER_TEST_COMPOSE) exec -T serverware python "$$test_path" \
+				$(CODER_TEST_COMPOSE) exec -T catchplate python "$$test_path" \
 				> "$$test_log" 2>&1 || status=$$?; \
 				if test "$$status" -ne 0; then \
 					tail -n 200 "$$test_log" >&2 || true; \
@@ -9890,13 +9890,13 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 				HOME="$${HOME:-/tmp}" \
 				XDG_RUNTIME_DIR="$${XDG_RUNTIME_DIR:-/run/user/$$(id -u)}" \
 				COMPOSE_PROJECT_NAME="$(CODER_COMPOSE_PROJECT_NAME)" \
-				SERVERWARE_CODER_COMPOSE_FILE="$(CODER_OUTPUT_DIR)/compose-config.yaml" \
-				SERVERWARE_CODER_PROJECT_DIRECTORY="$(CODER_FROZEN_SOURCE_DIR)" \
+				CATCHPLATE_CODER_COMPOSE_FILE="$(CODER_OUTPUT_DIR)/compose-config.yaml" \
+				CATCHPLATE_CODER_PROJECT_DIRECTORY="$(CODER_FROZEN_SOURCE_DIR)" \
 				BASE=http://localhost:3000 \
 				PROXY=http://localhost:8080 \
 				DECISION_GATE_BASE=http://localhost:9091 \
-				SERVERWARE_ADMIN_TOKEN=dev-admin-token \
-				SERVERWARE_START_DECISION_GATE=0 \
+				CATCHPLATE_ADMIN_TOKEN=dev-admin-token \
+				CATCHPLATE_START_DECISION_GATE=0 \
 				TMP_DIR="$(CODER_OUTPUT_DIR)/e2e" \
 				sh -c 'cd "$$1" && exec ./scripts/e2e.sh' \
 				sh "$(CODER_FROZEN_SOURCE_DIR)" \
@@ -9938,7 +9938,7 @@ _coder-test-no-build-locked: _coder-require-lock _coder-require-clean
 				printf 'excluded\t%s\n' "$$test_path"; \
 			done < "$(CODER_EXCLUDED_TESTS_FILE)" \
 				>> "$(CODER_OUTPUT_DIR)/batch-coverage-results.tsv"; \
-		printf 'schema\tserverware.coder-ci.batch-coverage-results.v2\n' \
+		printf 'schema\tcatchplate.coder-ci.batch-coverage-results.v2\n' \
 			> "$(CODER_OUTPUT_DIR)/batch-coverage-results.expected.tsv"; \
 		coverage_tab="$$(printf '\t')"; \
 		while IFS="$$coverage_tab" read -r record disposition test_id runner detail; do \
@@ -10060,45 +10060,45 @@ _coder-ci-locked: _coder-require-lock _coder-require-clean
 		rm -f "$(CODER_PARENT_CLEANUP_MARKER_FILE)"
 
 up:
-	docker compose up -d --build serverware demo-upstream audit-anchor
+	docker compose up -d --build catchplate demo-upstream audit-anchor
 
 down:
 	docker compose down
 
 logs:
-	docker compose logs -f serverware demo-upstream audit-anchor
+	docker compose logs -f catchplate demo-upstream audit-anchor
 
 e2e:
-	docker compose up -d --build serverware demo-upstream
+	docker compose up -d --build catchplate demo-upstream
 	docker compose build decision-gate-rs
-	SERVERWARE_HARDENING_SERVICES=serverware,audit-anchor,grant-store,demo-upstream ./scripts/test_container_hardening.sh
-	SERVERWARE_APPARMOR_DRY_RUN=1 ./scripts/test_apparmor_runtime.sh
-	docker compose exec -T serverware python scripts/test_webauthn_attestation.py
-	docker compose exec -T serverware python scripts/test_credential_lease_delivery.py
+	CATCHPLATE_HARDENING_SERVICES=catchplate,audit-anchor,grant-store,demo-upstream ./scripts/test_container_hardening.sh
+	CATCHPLATE_APPARMOR_DRY_RUN=1 ./scripts/test_apparmor_runtime.sh
+	docker compose exec -T catchplate python scripts/test_webauthn_attestation.py
+	docker compose exec -T catchplate python scripts/test_credential_lease_delivery.py
 	./scripts/e2e.sh
 	./scripts/test_key_release_gate.py
 
 bench:
-	docker compose up -d --build serverware demo-upstream
+	docker compose up -d --build catchplate demo-upstream
 	mkdir -p .tmp
-	./scripts/wait_for_serverware.sh
-	curl -fsS -H "X-Serverware-Admin-Token: $${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}" -X POST http://localhost:3000/api/demo/seed >/dev/null
-	SERVERWARE_CA_OUT=.tmp/serverware-ca.pem SERVERWARE_VERIFY_OUT=.tmp/attestation-verify.json ./scripts/install_verified_ca.sh >/dev/null
+	./scripts/wait_for_catchplate.sh
+	curl -fsS -H "X-Catchplate-Admin-Token: $${CATCHPLATE_ADMIN_TOKEN:-dev-admin-token}" -X POST http://localhost:3000/api/demo/seed >/dev/null
+	CATCHPLATE_CA_OUT=.tmp/catchplate-ca.pem CATCHPLATE_VERIFY_OUT=.tmp/attestation-verify.json ./scripts/install_verified_ca.sh >/dev/null
 	docker compose up -d --force-recreate decision-gate-rs
 	./scripts/wait_for_decision_gate.sh
 	python3 scripts/bench.py
 
 bench-gate-rs:
-	docker compose up -d --build serverware demo-upstream
+	docker compose up -d --build catchplate demo-upstream
 	mkdir -p .tmp
-	./scripts/wait_for_serverware.sh
-	curl -fsS -H "X-Serverware-Admin-Token: $${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}" -X POST http://localhost:3000/api/demo/seed >/dev/null
+	./scripts/wait_for_catchplate.sh
+	curl -fsS -H "X-Catchplate-Admin-Token: $${CATCHPLATE_ADMIN_TOKEN:-dev-admin-token}" -X POST http://localhost:3000/api/demo/seed >/dev/null
 	./scripts/wait_for_demo_upstream.sh
 	./scripts/wait_for_decision_gate_ca.sh
-	SERVERWARE_CA_OUT=.tmp/serverware-ca.pem SERVERWARE_VERIFY_OUT=.tmp/attestation-verify.json ./scripts/install_verified_ca.sh >/dev/null
+	CATCHPLATE_CA_OUT=.tmp/catchplate-ca.pem CATCHPLATE_VERIFY_OUT=.tmp/attestation-verify.json ./scripts/install_verified_ca.sh >/dev/null
 	docker compose up -d --build decision-gate-rs
 		./scripts/test_container_hardening.sh
-		SERVERWARE_APPARMOR_DRY_RUN=1 ./scripts/test_apparmor_runtime.sh
+		CATCHPLATE_APPARMOR_DRY_RUN=1 ./scripts/test_apparmor_runtime.sh
 		./scripts/test_decision_gate_signature.sh
 		./scripts/wait_for_decision_gate.sh
 		./scripts/test_decision_gate_trust_root.sh
@@ -10118,88 +10118,88 @@ bench-gate-rs:
 	$(TEST_PYTHON_RUN) scripts/generate_release_provenance.py > .tmp/release-provenance-summary.json
 	cat .tmp/release-provenance-summary.json
 				./scripts/test_response_proof_capture.sh
-					COMPOSE_PROJECT_NAME="serverware-custody-$$(date +%s)-$$$$-$$(openssl rand -hex 6)" ./scripts/test_custody_response_proof.sh
-	docker compose exec -T serverware python scripts/test_webauthn_attestation.py
+					COMPOSE_PROJECT_NAME="catchplate-custody-$$(date +%s)-$$$$-$$(openssl rand -hex 6)" ./scripts/test_custody_response_proof.sh
+	docker compose exec -T catchplate python scripts/test_webauthn_attestation.py
 	$(TEST_PYTHON_RUN) scripts/verify_decision_gate_attestation.py
 	$(TEST_PYTHON_RUN) scripts/test_key_release_gate.py
-	docker compose exec -T -e SERVERWARE_TEE_QUOTE_PROVIDER=external-command -e SERVERWARE_TEE_PLATFORM=fixture-tee -e "SERVERWARE_TEE_QUOTE_COMMAND=python scripts/external_tee_provider.py quote" -e "SERVERWARE_TEE_QUOTE_VERIFY_COMMAND=python scripts/external_tee_provider.py verify" -e "SERVERWARE_KEY_RELEASE_COMMAND=python scripts/external_tee_provider.py release" serverware python scripts/test_external_tee_provider.py
-	docker compose exec -T serverware python scripts/test_nitro_tee_provider.py
+	docker compose exec -T -e CATCHPLATE_TEE_QUOTE_PROVIDER=external-command -e CATCHPLATE_TEE_PLATFORM=fixture-tee -e "CATCHPLATE_TEE_QUOTE_COMMAND=python scripts/external_tee_provider.py quote" -e "CATCHPLATE_TEE_QUOTE_VERIFY_COMMAND=python scripts/external_tee_provider.py verify" -e "CATCHPLATE_KEY_RELEASE_COMMAND=python scripts/external_tee_provider.py release" catchplate python scripts/test_external_tee_provider.py
+	docker compose exec -T catchplate python scripts/test_nitro_tee_provider.py
 		./scripts/test_decision_gate_approval_publish.sh
 		./scripts/test_decision_gate_audit.sh
 		./scripts/test_control_plane_audit_store.sh
 		./scripts/test_control_plane_metadata_store.sh
-		docker compose exec -T serverware python scripts/test_ca_install_sessions.py
-		docker compose exec -T serverware python scripts/test_control_plane_csrf.py
-			docker compose exec -T serverware python scripts/test_control_plane_oidc.py
+		docker compose exec -T catchplate python scripts/test_ca_install_sessions.py
+		docker compose exec -T catchplate python scripts/test_control_plane_csrf.py
+			docker compose exec -T catchplate python scripts/test_control_plane_oidc.py
 			$(TEST_PYTHON_RUN) scripts/test_http_client.py
 			$(TEST_PYTHON_RUN) scripts/test_oauth_credentials.py --compose-contract-only
-			docker compose exec -T serverware python scripts/test_oauth_credentials.py
-			docker compose exec -T serverware python scripts/test_oauth_http_flow.py
+			docker compose exec -T catchplate python scripts/test_oauth_credentials.py
+			docker compose exec -T catchplate python scripts/test_oauth_http_flow.py
 			$(MAKE) verify-portal-browser-oauth
-		docker compose exec -T serverware python scripts/test_credential_lease_delivery.py
-		docker compose exec -T serverware python scripts/test_control_plane_mutation_mfa.py
-		docker compose exec -T serverware python scripts/test_control_plane_two_person.py
-		docker compose exec -T serverware python scripts/test_control_plane_rbac_audit.py
-		docker compose exec -T serverware python scripts/test_break_glass_grants.py
-		docker compose exec -T serverware python scripts/test_approval_denial_reason.py
-		docker compose exec -T serverware python scripts/test_approval_review.py
-		docker compose exec -T serverware python scripts/test_webauthn_recovery.py
-		docker compose exec -T serverware python scripts/test_policy_publish_workflow.py
-		docker compose exec -T serverware python scripts/test_policy_canary_workflow.py
-		docker compose exec -T serverware python scripts/test_audit_search.py
-		docker compose exec -T serverware python scripts/test_audit_export.py
+		docker compose exec -T catchplate python scripts/test_credential_lease_delivery.py
+		docker compose exec -T catchplate python scripts/test_control_plane_mutation_mfa.py
+		docker compose exec -T catchplate python scripts/test_control_plane_two_person.py
+		docker compose exec -T catchplate python scripts/test_control_plane_rbac_audit.py
+		docker compose exec -T catchplate python scripts/test_break_glass_grants.py
+		docker compose exec -T catchplate python scripts/test_approval_denial_reason.py
+		docker compose exec -T catchplate python scripts/test_approval_review.py
+		docker compose exec -T catchplate python scripts/test_webauthn_recovery.py
+		docker compose exec -T catchplate python scripts/test_policy_publish_workflow.py
+		docker compose exec -T catchplate python scripts/test_policy_canary_workflow.py
+		docker compose exec -T catchplate python scripts/test_audit_search.py
+		docker compose exec -T catchplate python scripts/test_audit_export.py
 		$(TEST_PYTHON_RUN) scripts/test_agent_enrollment.py
 		$(TEST_PYTHON_RUN) scripts/test_transparency_checkpoint.py
 		$(TEST_PYTHON_RUN) scripts/test_nitro_nsm_attest.py
-		docker compose exec -T serverware python scripts/test_aws_kms_recipient_release.py
-		docker compose exec -T serverware python scripts/test_aws_nitro_kms_unseal.py
-		docker compose exec -T serverware python scripts/test_prepare_aws_kms_materials.py
+		docker compose exec -T catchplate python scripts/test_aws_kms_recipient_release.py
+		docker compose exec -T catchplate python scripts/test_aws_nitro_kms_unseal.py
+		docker compose exec -T catchplate python scripts/test_prepare_aws_kms_materials.py
 		$(TEST_PYTHON_RUN) scripts/test_production_readiness_claims.py
 		$(TEST_PYTHON_RUN) scripts/test_production_readiness.py
 		$(MAKE) verify-production-readiness-runner
 		$(MAKE) verify-release-completion
-		docker compose exec -T serverware python scripts/test_portal_agent_enrollment_ui.py
+		docker compose exec -T catchplate python scripts/test_portal_agent_enrollment_ui.py
 		BASE=http://localhost:3000 AUDIT_ANCHOR_BASE=http://localhost:9100 \
-			SERVERWARE_ADMIN_TOKEN=dev-admin-token \
-			SERVERWARE_AUDIT_ANCHOR_TOKEN=dev-audit-anchor-token \
+			CATCHPLATE_ADMIN_TOKEN=dev-admin-token \
+			CATCHPLATE_AUDIT_ANCHOR_TOKEN=dev-audit-anchor-token \
 			./scripts/test_audit_anchor.sh
 	docker compose exec -T \
 		-e DECISION_GATE_BASE=http://decision-gate-rs:9091 \
 		-e PROXY=http://decision-gate-rs:9090 \
 		-e BASE=http://localhost:3000 \
-		serverware python scripts/bench_decision_gate.py --self-test > .tmp/decision-gate-rs-bench.json
+		catchplate python scripts/bench_decision_gate.py --self-test > .tmp/decision-gate-rs-bench.json
 	cat .tmp/decision-gate-rs-bench.json
 	BASE=http://localhost:3000 DECISION_GATE_BASE=http://localhost:9091 \
 		DECISION_GATE_HOST=localhost DECISION_GATE_PORT=9090 \
-		SERVERWARE_ADMIN_TOKEN=dev-admin-token \
-		SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN=dev-rust-management-token \
+		CATCHPLATE_ADMIN_TOKEN=dev-admin-token \
+		CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN=dev-rust-management-token \
 		./scripts/test_decision_gate_shared_rate_limits.sh
-	env -u SERVERWARE_PRODUCTION_IMAGES \
-		-u SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY \
-		-u SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY \
-		-u SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER \
-		-u SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID \
-		-u SERVERWARE_COSIGN_CERT_IDENTITY \
-		-u SERVERWARE_COSIGN_CERT_OIDC_ISSUER \
-		-u SERVERWARE_COSIGN_KEY_ID \
-		-u SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID \
-		-u SERVERWARE_COSIGN_REKOR_URL \
-		-u SERVERWARE_COSIGN_SIGN_EXTRA_ARGS \
-		-u SERVERWARE_COSIGN_VERIFY_EXTRA_ARGS \
-		-u SERVERWARE_COSIGN_TLOG_UPLOAD \
-		-u SERVERWARE_COSIGN_FIXTURE_NO_TRANSPARENCY \
-		-u SERVERWARE_COSIGN_FIXTURE_VERIFY_FAIL \
-		-u SERVERWARE_COSIGN_WORKLOAD_IDENTITY \
-		SERVERWARE_IMAGE_SIGNATURE_PROVIDER=sigstore-command \
-		SERVERWARE_IMAGE_SIGN_COMMAND="python3 scripts/cosign_sigstore.py sign" \
-		SERVERWARE_IMAGE_VERIFY_COMMAND="python3 scripts/cosign_sigstore.py verify" \
-		SERVERWARE_COSIGN_BINARY="python3 scripts/cosign_fixture.py" \
-		SERVERWARE_COSIGN_FIXTURE_KEY=.tmp/cosign-fixture-ed25519.pem \
-		SERVERWARE_COSIGN_FIXTURE_LOG=.tmp/cosign-fixture-rekor.jsonl \
-		SERVERWARE_COSIGN_KEY=.tmp/cosign-fixture-ed25519.pem \
-		SERVERWARE_COSIGN_YES=1 \
-		SERVERWARE_RELEASE_ANCHOR_CA_BUNDLE= \
-		SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY=1 \
+	env -u CATCHPLATE_PRODUCTION_IMAGES \
+		-u CATCHPLATE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY \
+		-u CATCHPLATE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY \
+		-u CATCHPLATE_TRANSPARENCY_EXPECTED_PROVIDER \
+		-u CATCHPLATE_TRANSPARENCY_EXPECTED_LOG_ID \
+		-u CATCHPLATE_COSIGN_CERT_IDENTITY \
+		-u CATCHPLATE_COSIGN_CERT_OIDC_ISSUER \
+		-u CATCHPLATE_COSIGN_KEY_ID \
+		-u CATCHPLATE_COSIGN_EXPECTED_REKOR_LOG_ID \
+		-u CATCHPLATE_COSIGN_REKOR_URL \
+		-u CATCHPLATE_COSIGN_SIGN_EXTRA_ARGS \
+		-u CATCHPLATE_COSIGN_VERIFY_EXTRA_ARGS \
+		-u CATCHPLATE_COSIGN_TLOG_UPLOAD \
+		-u CATCHPLATE_COSIGN_FIXTURE_NO_TRANSPARENCY \
+		-u CATCHPLATE_COSIGN_FIXTURE_VERIFY_FAIL \
+		-u CATCHPLATE_COSIGN_WORKLOAD_IDENTITY \
+		CATCHPLATE_IMAGE_SIGNATURE_PROVIDER=sigstore-command \
+		CATCHPLATE_IMAGE_SIGN_COMMAND="python3 scripts/cosign_sigstore.py sign" \
+		CATCHPLATE_IMAGE_VERIFY_COMMAND="python3 scripts/cosign_sigstore.py verify" \
+		CATCHPLATE_COSIGN_BINARY="python3 scripts/cosign_fixture.py" \
+		CATCHPLATE_COSIGN_FIXTURE_KEY=.tmp/cosign-fixture-ed25519.pem \
+		CATCHPLATE_COSIGN_FIXTURE_LOG=.tmp/cosign-fixture-rekor.jsonl \
+		CATCHPLATE_COSIGN_KEY=.tmp/cosign-fixture-ed25519.pem \
+		CATCHPLATE_COSIGN_YES=1 \
+		CATCHPLATE_RELEASE_ANCHOR_CA_BUNDLE= \
+		CATCHPLATE_REQUIRE_SIGSTORE_TRANSPARENCY=1 \
 		$(TEST_PYTHON_RUN) scripts/sign_release_images.py \
 			--base http://localhost:3000 \
 			--gate http://localhost:9090 \
@@ -10209,13 +10209,13 @@ bench-gate-rs:
 	cat .tmp/image-signatures-summary.json
 
 decision-gate-bench-evidence:
-	docker compose up -d --build serverware demo-upstream
+	docker compose up -d --build catchplate demo-upstream
 	mkdir -p .tmp
-	./scripts/wait_for_serverware.sh
-	curl -fsS -H "X-Serverware-Admin-Token: $${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}" -X POST http://localhost:3000/api/demo/seed >/dev/null
+	./scripts/wait_for_catchplate.sh
+	curl -fsS -H "X-Catchplate-Admin-Token: $${CATCHPLATE_ADMIN_TOKEN:-dev-admin-token}" -X POST http://localhost:3000/api/demo/seed >/dev/null
 	./scripts/wait_for_demo_upstream.sh
 	./scripts/wait_for_decision_gate_ca.sh
-	SERVERWARE_CA_OUT=.tmp/serverware-ca.pem SERVERWARE_VERIFY_OUT=.tmp/attestation-verify.json ./scripts/install_verified_ca.sh >/dev/null
+	CATCHPLATE_CA_OUT=.tmp/catchplate-ca.pem CATCHPLATE_VERIFY_OUT=.tmp/attestation-verify.json ./scripts/install_verified_ca.sh >/dev/null
 	docker compose up -d --build decision-gate-rs
 	./scripts/wait_for_decision_gate.sh
 	rm -f "$(DECISION_GATE_BENCH_FILE)"
@@ -10223,7 +10223,7 @@ decision-gate-bench-evidence:
 		-e DECISION_GATE_BASE=http://decision-gate-rs:9091 \
 		-e PROXY=http://decision-gate-rs:9090 \
 		-e BASE=http://localhost:3000 \
-		serverware python scripts/bench_decision_gate.py --self-test > "$(DECISION_GATE_BENCH_FILE)"
+		catchplate python scripts/bench_decision_gate.py --self-test > "$(DECISION_GATE_BENCH_FILE)"
 	cat "$(DECISION_GATE_BENCH_FILE)"
 
 release-provenance:
@@ -10245,11 +10245,11 @@ production-release-provenance:
 	cat "$(RELEASE_PROVENANCE_SUMMARY_FILE)"
 
 image-signatures: release-provenance
-	SERVERWARE_IMAGE_SIGNATURE_PROVIDER="$${SERVERWARE_IMAGE_SIGNATURE_PROVIDER:-sigstore-command}" \
-	SERVERWARE_IMAGE_SIGN_COMMAND="$${SERVERWARE_IMAGE_SIGN_COMMAND:-python3 scripts/cosign_sigstore.py sign}" \
-	SERVERWARE_IMAGE_VERIFY_COMMAND="$${SERVERWARE_IMAGE_VERIFY_COMMAND:-python3 scripts/cosign_sigstore.py verify}" \
-	SERVERWARE_COSIGN_BINARY="$${SERVERWARE_COSIGN_BINARY:-python3 scripts/cosign_fixture.py}" \
-	SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY="$${SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY:-1}" \
+	CATCHPLATE_IMAGE_SIGNATURE_PROVIDER="$${CATCHPLATE_IMAGE_SIGNATURE_PROVIDER:-sigstore-command}" \
+	CATCHPLATE_IMAGE_SIGN_COMMAND="$${CATCHPLATE_IMAGE_SIGN_COMMAND:-python3 scripts/cosign_sigstore.py sign}" \
+	CATCHPLATE_IMAGE_VERIFY_COMMAND="$${CATCHPLATE_IMAGE_VERIFY_COMMAND:-python3 scripts/cosign_sigstore.py verify}" \
+	CATCHPLATE_COSIGN_BINARY="$${CATCHPLATE_COSIGN_BINARY:-python3 scripts/cosign_fixture.py}" \
+	CATCHPLATE_REQUIRE_SIGSTORE_TRANSPARENCY="$${CATCHPLATE_REQUIRE_SIGSTORE_TRANSPARENCY:-1}" \
 	python3 scripts/sign_release_images.py \
 		--provenance "$(RELEASE_PROVENANCE_FILE)" \
 		--out "$(IMAGE_SIGNATURES_FILE)" > "$(IMAGE_SIGNATURES_SUMMARY_FILE)"
@@ -10366,8 +10366,8 @@ _verify-consolidated-source-snapshot-locked:
 # lane or compatibility probe is permitted in this phase.
 _build-consolidated-test-artifacts-locked:
 	@set -eu; \
-		test -n "$${SERVERWARE_BUILD_WATCHDOG_LEASE_ID:-}" || { echo "external build-watchdog lease is missing" >&2; exit 2; }; \
-		test -n "$${SERVERWARE_BUILD_WATCHDOG_CAPABILITY_FD:-}" || { echo "external build-watchdog capability FD is missing" >&2; exit 2; }
+		test -n "$${CATCHPLATE_BUILD_WATCHDOG_LEASE_ID:-}" || { echo "external build-watchdog lease is missing" >&2; exit 2; }; \
+		test -n "$${CATCHPLATE_BUILD_WATCHDOG_CAPABILITY_FD:-}" || { echo "external build-watchdog capability FD is missing" >&2; exit 2; }
 	PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 "$(CONSOLIDATED_BUILD_PYTHON)" -I "$(AGENT_TRUST_SAME_JOURNEY_VERIFIER)" reset-outputs \
 		--source-root "$(CURDIR)" \
 		--path "$(CONSOLIDATED_OUTPUT_ROOT)"
@@ -10402,8 +10402,8 @@ _build-consolidated-test-artifacts-locked:
 		--expected-public-key-raw-sha256 "$(CONSOLIDATED_BUILD_WATCHDOG_PUBLIC_KEY_RAW_SHA256)" \
 		--expected-challenge-sha256 "$(CONSOLIDATED_BUILD_WATCHDOG_CHALLENGE_SHA256)" \
 		--expected-capability-sha256 "$(CONSOLIDATED_BUILD_WATCHDOG_CAPABILITY_SHA256)" \
-		--lease-id "$$SERVERWARE_BUILD_WATCHDOG_LEASE_ID" \
-		--lease-capability-fd "$$SERVERWARE_BUILD_WATCHDOG_CAPABILITY_FD" \
+		--lease-id "$$CATCHPLATE_BUILD_WATCHDOG_LEASE_ID" \
+		--lease-capability-fd "$$CATCHPLATE_BUILD_WATCHDOG_CAPABILITY_FD" \
 		--plan "$(CONSOLIDATED_OCI_BUILD_PLAN)" \
 		--source-snapshot "$(CONSOLIDATED_SOURCE_SNAPSHOT)" \
 		--source-input-manifest "$(CONSOLIDATED_SOURCE_INPUT_MANIFEST)" \
@@ -10568,7 +10568,7 @@ build-native-pilot-artifacts:
 		--public-inputs-sha256 "$(NATIVE_PILOT_PUBLIC_INPUTS_SHA256)"
 
 publish-production-images:
-	@if [ -z "$(PRODUCTION_IMAGE_REGISTRY_PREFIX)" ]; then echo "PRODUCTION_IMAGE_REGISTRY_PREFIX is required, for example registry.prod.serverware.dev/serverware" >&2; exit 2; fi
+	@if [ -z "$(PRODUCTION_IMAGE_REGISTRY_PREFIX)" ]; then echo "PRODUCTION_IMAGE_REGISTRY_PREFIX is required, for example registry.prod.catchplate.dev/catchplate" >&2; exit 2; fi
 	@set -eu; python3 -c 'import json,sys; document=json.load(open(sys.argv[1], encoding="utf-8")); [print(item["image_id"]) for item in document["images"]]' "$(PRODUCTION_IMAGES_BUILD_FILE)" | while IFS= read -r image; do test "$$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$$image")" = "$(PRODUCTION_PLATFORM)" || { echo "refusing to publish a non-$(PRODUCTION_PLATFORM) image: $$image" >&2; exit 2; }; done
 	python3 scripts/publish_production_images.py \
 		--build-file "$(PRODUCTION_IMAGES_BUILD_FILE)" \
@@ -10645,10 +10645,10 @@ verify-policy-custody-host-ready:
 			'current-signature-authority:swpc-signature' \
 			'bounded-cleanup-helper:swpc-cleanup'; do \
 			role=$${binding%%:*}; account=$${binding#*:}; \
-			service="serverware-policy-custody@$$role.service"; \
-			socket="serverware-policy-custody@$$role.socket"; \
+			service="catchplate-policy-custody@$$role.service"; \
+			socket="catchplate-policy-custody@$$role.socket"; \
 			path="$$root/$$role.sock"; \
-			config="$$resolved_config_root/serverware-policy-custody-$$role.json"; \
+			config="$$resolved_config_root/catchplate-policy-custody-$$role.json"; \
 			test -f "$$config" && test ! -L "$$config"; \
 			test "$$(stat -Lc '%U:%G:%a' "$$config")" = root:root:400; \
 			systemctl is-active --quiet "$$socket"; \
@@ -10666,8 +10666,8 @@ verify-policy-custody-host-ready:
 			case "$$tasks_max" in ''|infinity|*[!0-9]*) exit 2 ;; esac; \
 			test "$$memory_max" -gt 0 && test "$$tasks_max" -gt 0; \
 		done; \
-		systemctl is-active --quiet serverware-policy-custody-sockets.target; \
-		systemctl is-active --quiet serverware-policy-custody.target
+		systemctl is-active --quiet catchplate-policy-custody-sockets.target; \
+		systemctl is-active --quiet catchplate-policy-custody.target
 
 # Run on the production Linux host before Compose is allowed to create the
 # decision gate. The key remains root-owned but is group-readable by the
@@ -10675,12 +10675,12 @@ verify-policy-custody-host-ready:
 verify-production-proxy-ingress-materials:
 	@test "$$(id -u)" = 0 || { echo "verify-production-proxy-ingress-materials must run as root on the production Linux host" >&2; exit 2; }
 	@set -eu; \
-		test "$(SERVERWARE_PROXY_INGRESS_MODE)" = mtls; \
-		for path in "$(SERVERWARE_PROXY_TLS_CERT_FILE)" "$(SERVERWARE_PROXY_CLIENT_CA_BUNDLE_FILE)"; do \
+		test "$(CATCHPLATE_PROXY_INGRESS_MODE)" = mtls; \
+		for path in "$(CATCHPLATE_PROXY_TLS_CERT_FILE)" "$(CATCHPLATE_PROXY_CLIENT_CA_BUNDLE_FILE)"; do \
 			test -n "$$path" && test -f "$$path" && test ! -L "$$path"; \
 			test "$$(stat -Lc '%u:%g:%a' "$$path")" = 0:0:444; \
 		done; \
-		key="$(SERVERWARE_PROXY_TLS_KEY_FILE)"; \
+		key="$(CATCHPLATE_PROXY_TLS_KEY_FILE)"; \
 		test -n "$$key" && test -f "$$key" && test ! -L "$$key"; \
 		test "$$(stat -Lc '%u:%g:%a' "$$key")" = 0:65532:440
 
@@ -10711,7 +10711,7 @@ deploy-production:
 	@if [ -z "$(PRODUCTION_DEPLOY_COMMAND)" ]; then echo "PRODUCTION_DEPLOY_COMMAND is required and must deploy the published digest-pinned images to the production host" >&2; exit 2; fi
 	@test -x "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)/runtime/python/bin/python3" || { echo "build-production-python-runtime must produce the release runtime artifact before deployment" >&2; exit 2; }
 	@test -d "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)/vendor" || { echo "production Python runtime artifact is missing vendor" >&2; exit 2; }
-	SERVERWARE_PRODUCTION_PYTHON_RUNTIME_ARTIFACT="$(abspath $(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY))" $(PRODUCTION_DEPLOY_COMMAND)
+	CATCHPLATE_PRODUCTION_PYTHON_RUNTIME_ARTIFACT="$(abspath $(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY))" $(PRODUCTION_DEPLOY_COMMAND)
 
 build-production-python-runtime: verify-production-dependency-cache
 	@test -n "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)" && test "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)" != / || { echo "PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY is unsafe" >&2; exit 2; }
@@ -10733,7 +10733,7 @@ build-production-launcher: verify-production-dependency-cache
 install-production-launcher:
 	@test "$$(id -u)" = 0 || { echo "install-production-launcher must run as root on the production host" >&2; exit 2; }
 	@test -x "$(PRODUCTION_LAUNCHER_BUILD_PATH)" || { echo "build-production-launcher must produce $(PRODUCTION_LAUNCHER_BUILD_PATH) first" >&2; exit 2; }
-	@set -eu; set -- $$(sha256sum "$(PRODUCTION_LAUNCHER_BUILD_PATH)"); digest="$$1"; expected=$$(python3 -c 'import json,sys; document=json.load(open(sys.argv[1], encoding="utf-8")); matches=[item.get("launcher_binary_digest") for item in document.get("images", []) if item.get("service") == "serverware-decision-gate"]; len(matches) == 1 or sys.exit("production build must contain exactly one decision-gate launcher digest"); print(matches[0])' "$(PRODUCTION_IMAGES_BUILD_FILE)"); test "sha256:$$digest" = "$$expected" || { echo "production launcher artifact does not match the independently reproducible production image" >&2; exit 2; }; destination="/opt/serverware/launchers/sha256-$$digest/serverware-production-launcher"; install -d -o root -g root -m 0755 "$${destination%/*}"; install -o root -g root -m 0500 "$(PRODUCTION_LAUNCHER_BUILD_PATH)" "$$destination"; mkdir -p "$$(dirname "$(PRODUCTION_LAUNCHER_INSTALL_PATH_FILE)")"; printf '%s\n' "$$destination" > "$(PRODUCTION_LAUNCHER_INSTALL_PATH_FILE)"; chmod 0600 "$(PRODUCTION_LAUNCHER_INSTALL_PATH_FILE)"
+	@set -eu; set -- $$(sha256sum "$(PRODUCTION_LAUNCHER_BUILD_PATH)"); digest="$$1"; expected=$$(python3 -c 'import json,sys; document=json.load(open(sys.argv[1], encoding="utf-8")); matches=[item.get("launcher_binary_digest") for item in document.get("images", []) if item.get("service") == "catchplate-decision-gate"]; len(matches) == 1 or sys.exit("production build must contain exactly one decision-gate launcher digest"); print(matches[0])' "$(PRODUCTION_IMAGES_BUILD_FILE)"); test "sha256:$$digest" = "$$expected" || { echo "production launcher artifact does not match the independently reproducible production image" >&2; exit 2; }; destination="/opt/catchplate/launchers/sha256-$$digest/catchplate-production-launcher"; install -d -o root -g root -m 0755 "$${destination%/*}"; install -o root -g root -m 0500 "$(PRODUCTION_LAUNCHER_BUILD_PATH)" "$$destination"; mkdir -p "$$(dirname "$(PRODUCTION_LAUNCHER_INSTALL_PATH_FILE)")"; printf '%s\n' "$$destination" > "$(PRODUCTION_LAUNCHER_INSTALL_PATH_FILE)"; chmod 0600 "$(PRODUCTION_LAUNCHER_INSTALL_PATH_FILE)"
 
 # This is a direct frozen-verifier lane. It is intentionally independent of
 # run-production-readiness-final, the readiness systemd unit, and all coder-* targets.
@@ -10780,7 +10780,7 @@ _production-final-v1-input-preflight:
 		require_file "the frozen public-Nitro verifier" "$(PRODUCTION_RELEASE_ROOT)/scripts/verify_nitro_tee.py"; \
 		require_file "the frozen Sigstore JSON helper" "$(PRODUCTION_RELEASE_ROOT)/scripts/sigstore_json.py"; \
 		require_file "the frozen exact latency helper" "$(PRODUCTION_RELEASE_ROOT)/scripts/exact_latency.py"; \
-		test "$(PRODUCTION_STATE_DIRECTORY)" = "/var/lib/serverware/production-proof" || fail "PRODUCTION_STATE_DIRECTORY must remain the fixed durable final-proof directory /var/lib/serverware/production-proof"; \
+		test "$(PRODUCTION_STATE_DIRECTORY)" = "/var/lib/catchplate/production-proof" || fail "PRODUCTION_STATE_DIRECTORY must remain the fixed durable final-proof directory /var/lib/catchplate/production-proof"; \
 		require_file "PRODUCTION_FINAL_V1_PUBLIC_NITRO_EVIDENCE_BUNDLE" "$(PRODUCTION_FINAL_V1_PUBLIC_NITRO_EVIDENCE_BUNDLE)"; \
 		require_file "PRODUCTION_FINAL_V1_PUBLIC_NITRO_EXPECTATIONS" "$(PRODUCTION_FINAL_V1_PUBLIC_NITRO_EXPECTATIONS)"; \
 		require_file "PRODUCTION_FINAL_V1_PUBLIC_NITRO_TRUST_ROOTS" "$(PRODUCTION_FINAL_V1_PUBLIC_NITRO_TRUST_ROOTS)"; \
@@ -10925,7 +10925,7 @@ finalize-production-final-v1: _production-final-v1-input-preflight
 generate-production-launch-manifest:
 	@test "$$(id -u)" = 0 || { echo "generate-production-launch-manifest must run as root on the production host" >&2; exit 2; }
 	@test -n "$(PRODUCTION_RELEASE_ROOT)" || { echo "PRODUCTION_RELEASE_ROOT is required" >&2; exit 2; }
-	@test "$(PRODUCTION_STATE_DIRECTORY)" = /var/lib/serverware/production-proof || { echo "PRODUCTION_STATE_DIRECTORY must be the fixed native launch locator /var/lib/serverware/production-proof" >&2; exit 2; }
+	@test "$(PRODUCTION_STATE_DIRECTORY)" = /var/lib/catchplate/production-proof || { echo "PRODUCTION_STATE_DIRECTORY must be the fixed native launch locator /var/lib/catchplate/production-proof" >&2; exit 2; }
 	@printf '%s' "$(PRODUCTION_SOURCE_TREE_DIGEST)" | grep -Eq '^sha256:[0-9a-f]{64}$$' || { echo "PRODUCTION_SOURCE_TREE_DIGEST must be sha256:<64 lowercase hex>" >&2; exit 2; }
 	@printf '%s' "$(PRODUCTION_DEPLOYMENT_AUDIENCE)" | grep -Eq '^[a-z0-9][a-z0-9._:-]{0,127}$$' || { echo "PRODUCTION_DEPLOYMENT_AUDIENCE is invalid" >&2; exit 2; }
 	@printf '%s' "$(PRODUCTION_DEPLOYMENT_IDENTITY_SHA256)" | grep -Eq '^sha256:[0-9a-f]{64}$$' || { echo "PRODUCTION_DEPLOYMENT_IDENTITY_SHA256 must be sha256:<64 lowercase hex>" >&2; exit 2; }
@@ -10933,7 +10933,7 @@ generate-production-launch-manifest:
 	@printf '%s' "$(PRODUCTION_ROLLBACK_EPOCH)" | grep -Eq '^(0|[1-9][0-9]*)$$' || { echo "PRODUCTION_ROLLBACK_EPOCH must be a nonnegative integer" >&2; exit 2; }
 	@printf '%s' "$(PRODUCTION_EXPECTED_LAUNCH_AUTHORITY_KEY_ID)" | grep -Eq '^sha256:[0-9a-f]{64}$$' || { echo "PRODUCTION_EXPECTED_LAUNCH_AUTHORITY_KEY_ID is required and must be an independently supplied sha256:<64 lowercase hex> key ID" >&2; exit 2; }
 	@test -n "$(PRODUCTION_GLOBAL_ROLE_REGISTRY)" || { echo "PRODUCTION_GLOBAL_ROLE_REGISTRY is required" >&2; exit 2; }
-	@case "$(PRODUCTION_GLOBAL_ROLE_REGISTRY)" in /etc/serverware/*) ;; *) echo "PRODUCTION_GLOBAL_ROLE_REGISTRY must be below /etc/serverware" >&2; exit 2 ;; esac
+	@case "$(PRODUCTION_GLOBAL_ROLE_REGISTRY)" in /etc/catchplate/*) ;; *) echo "PRODUCTION_GLOBAL_ROLE_REGISTRY must be below /etc/catchplate" >&2; exit 2 ;; esac
 	@test -f "$(PRODUCTION_GLOBAL_ROLE_REGISTRY)" && test ! -L "$(PRODUCTION_GLOBAL_ROLE_REGISTRY)" || { echo "PRODUCTION_GLOBAL_ROLE_REGISTRY must be a non-symlink regular file" >&2; exit 2; }
 	@printf '%s' "$(PRODUCTION_EXPECTED_GLOBAL_ROLE_REGISTRY_PINS_SHA256)" | grep -Eq '^sha256:[0-9a-f]{64}$$' || { echo "PRODUCTION_EXPECTED_GLOBAL_ROLE_REGISTRY_PINS_SHA256 is required and must be the independently pinned registry file digest as sha256:<64 lowercase hex>" >&2; exit 2; }
 	@printf '%s' "$(PRODUCTION_LAUNCH_AUTHORITY_WITNESS_SIGNING_PUBLIC_KEY_SPKI_BASE64URL)" | grep -Eq '^[A-Za-z0-9_-]+$$' || { echo "PRODUCTION_LAUNCH_AUTHORITY_WITNESS_SIGNING_PUBLIC_KEY_SPKI_BASE64URL is required and must be canonical unpadded base64url" >&2; exit 2; }
@@ -10948,7 +10948,7 @@ generate-production-launch-manifest:
 	@printf '%s' "$(PRODUCTION_LAUNCH_AUTHORITY_WITNESS_STORE_ASSURANCE_ISSUER_PUBLIC_KEY_SPKI_BASE64URL)" | grep -Eq '^[A-Za-z0-9_-]+$$' || { echo "PRODUCTION_LAUNCH_AUTHORITY_WITNESS_STORE_ASSURANCE_ISSUER_PUBLIC_KEY_SPKI_BASE64URL is required and must be canonical unpadded base64url" >&2; exit 2; }
 	@printf '%s' "$(PRODUCTION_EXPECTED_LAUNCH_AUTHORITY_WITNESS_STORE_ASSURANCE_ISSUER_KEY_ID)" | grep -Eq '^sha256:[0-9a-f]{64}$$' || { echo "PRODUCTION_EXPECTED_LAUNCH_AUTHORITY_WITNESS_STORE_ASSURANCE_ISSUER_KEY_ID is required and must be an independently supplied sha256:<64 lowercase hex> key ID" >&2; exit 2; }
 	@test -n "$(PRODUCTION_NONCE_ROLLBACK_ASSURANCE_PINS)" || { echo "PRODUCTION_NONCE_ROLLBACK_ASSURANCE_PINS is required" >&2; exit 2; }
-	@case "$(PRODUCTION_NONCE_ROLLBACK_ASSURANCE_PINS)" in /etc/serverware/*) ;; *) echo "PRODUCTION_NONCE_ROLLBACK_ASSURANCE_PINS must be below /etc/serverware" >&2; exit 2 ;; esac
+	@case "$(PRODUCTION_NONCE_ROLLBACK_ASSURANCE_PINS)" in /etc/catchplate/*) ;; *) echo "PRODUCTION_NONCE_ROLLBACK_ASSURANCE_PINS must be below /etc/catchplate" >&2; exit 2 ;; esac
 	@test -f "$(PRODUCTION_NONCE_ROLLBACK_ASSURANCE_PINS)" && test ! -L "$(PRODUCTION_NONCE_ROLLBACK_ASSURANCE_PINS)" || { echo "PRODUCTION_NONCE_ROLLBACK_ASSURANCE_PINS must be a non-symlink regular file" >&2; exit 2; }
 	@printf '%s' "$(PRODUCTION_EXPECTED_NONCE_ROLLBACK_ASSURANCE_PINS_SHA256)" | grep -Eq '^sha256:[0-9a-f]{64}$$' || { echo "PRODUCTION_EXPECTED_NONCE_ROLLBACK_ASSURANCE_PINS_SHA256 must be an independently supplied sha256:<64 lowercase hex> digest" >&2; exit 2; }
 	@case "$(PRODUCTION_LAUNCH_PIPELINE_METADATA)" in /*) ;; *) echo "PRODUCTION_LAUNCH_PIPELINE_METADATA must be absolute" >&2; exit 2 ;; esac
@@ -10961,7 +10961,7 @@ generate-production-launch-manifest:
 	@test -d "$(PRODUCTION_RELEASE_PYTHON_VENDOR)" || { echo "production release Python vendor root is missing: $(PRODUCTION_RELEASE_PYTHON_VENDOR)" >&2; exit 2; }
 	@set -eu; \
 		launcher_path=$$(cat "$(PRODUCTION_LAUNCHER_INSTALL_PATH_FILE)"); \
-		install -d -o root -g root -m 0700 "$(PRODUCTION_STATE_DIRECTORY)" /run/serverware; \
+		install -d -o root -g root -m 0700 "$(PRODUCTION_STATE_DIRECTORY)" /run/catchplate; \
 		if test -e "$(PRODUCTION_LAUNCH_PIPELINE_METADATA_SHA256_FILE)" || test -L "$(PRODUCTION_LAUNCH_PIPELINE_METADATA_SHA256_FILE)"; then \
 			test -f "$(PRODUCTION_LAUNCH_PIPELINE_METADATA_SHA256_FILE)" && \
 				test ! -L "$(PRODUCTION_LAUNCH_PIPELINE_METADATA_SHA256_FILE)" && \
@@ -10996,7 +10996,7 @@ generate-production-launch-manifest:
 		--nonce-rollback-assurance-pins "$(PRODUCTION_NONCE_ROLLBACK_ASSURANCE_PINS)" \
 		--expected-nonce-rollback-assurance-pins-sha256 "$(PRODUCTION_EXPECTED_NONCE_ROLLBACK_ASSURANCE_PINS_SHA256)" \
 		--pipeline-metadata-out "$(PRODUCTION_LAUNCH_PIPELINE_METADATA)" \
-		--production-env "/etc/serverware/production-readiness.env" \
+		--production-env "/etc/catchplate/production-readiness.env" \
 		--python "$(PRODUCTION_RELEASE_PYTHON)" \
 		--python-import-root "$(PRODUCTION_RELEASE_ROOT)" \
 		--python-import-root "$(PRODUCTION_RELEASE_PYTHON_STDLIB)" \
@@ -11027,7 +11027,7 @@ generate-production-launch-manifest:
 		--claims-file "$(PRODUCTION_STATE_DIRECTORY)/production-readiness-claims.json" \
 		--nitro-evidence-out "$(PRODUCTION_STATE_DIRECTORY)/nitro-kms-evidence.json" \
 		--readiness-out "$(PRODUCTION_STATE_DIRECTORY)/production-readiness.json" \
-		--completion-proof-out "$(PRODUCTION_STATE_DIRECTORY)/serverware-completion-proof.json" \
+		--completion-proof-out "$(PRODUCTION_STATE_DIRECTORY)/catchplate-completion-proof.json" \
 		--proxy-proof-summary-out "$(PRODUCTION_STATE_DIRECTORY)/proxy-response-proof-summary.json" \
 		--production-host-preflight "$(PRODUCTION_STATE_DIRECTORY)/production-host-preflight.json" \
 		--print-sha256; \
@@ -11051,9 +11051,9 @@ run-production-readiness-final:
 		unit="$(PRODUCTION_SYSTEMD_UNIT_NAME)"; \
 		receipt="$(PRODUCTION_READINESS_INVOCATION_RECEIPT)"; \
 		invocation_lock="$(PRODUCTION_READINESS_INVOCATION_LOCK)"; \
-		test "$$state_directory" = "/var/lib/serverware/production-proof" || fail "production readiness state directory is not the fixed trusted locator"; \
-		test "$$unit" = "serverware-production-release-proof.service" || fail "production readiness unit name is not the fixed audited service"; \
-		for directory in /var /var/lib /var/lib/serverware "$$state_directory"; do \
+		test "$$state_directory" = "/var/lib/catchplate/production-proof" || fail "production readiness state directory is not the fixed trusted locator"; \
+		test "$$unit" = "catchplate-production-release-proof.service" || fail "production readiness unit name is not the fixed audited service"; \
+		for directory in /var /var/lib /var/lib/catchplate "$$state_directory"; do \
 			test -d "$$directory" && test ! -L "$$directory" || fail "production readiness state path contains a non-directory or symlink: $$directory"; \
 		done; \
 		test -d "$$state_directory" && test ! -L "$$state_directory" || fail "production readiness state directory must be a non-symlink directory"; \
@@ -11136,7 +11136,7 @@ run-production-readiness-final:
 			output_sha256="sha256:$${output_digest_line%% *}"; \
 			output_identity_after=$$(stat -Lc '%d:%i:%u:%g:%a:%h:%s:%Y:%Z:%F' "$$output"); \
 			test "$$output_identity_before" = "$$output_identity_after" || fail "readiness output changed while establishing invocation identity: $$output"; \
-			if test "$$output" = "$$state_directory/serverware-completion-proof.json"; then \
+			if test "$$output" = "$$state_directory/catchplate-completion-proof.json"; then \
 				completion_proof_identity="$$output_identity_before"; \
 				completion_proof_sha256="$$output_sha256"; \
 			fi; \
@@ -11147,7 +11147,7 @@ run-production-readiness-final:
 		trap '/usr/bin/rm -f -- "$${receipt_tmp}"' EXIT HUP INT TERM; \
 		umask 077; \
 		{ \
-			printf 'apiVersion=serverware.productionReadinessInvocationReceipt/v1\n'; \
+			printf 'apiVersion=catchplate.productionReadinessInvocationReceipt/v1\n'; \
 			printf 'unit=%s\n' "$$unit"; \
 			printf 'invocationId=%s\n' "$$invocation_id"; \
 			printf 'conditionResult=yes\n'; \
@@ -11161,7 +11161,7 @@ run-production-readiness-final:
 			printf 'manifestPath=%s\n' "$$manifest"; \
 			printf 'manifestIdentity=%s\n' "$$manifest_identity_before"; \
 			printf 'manifestSha256=%s\n' "$$manifest_sha256"; \
-			printf 'completionProofPath=%s\n' "$$state_directory/serverware-completion-proof.json"; \
+			printf 'completionProofPath=%s\n' "$$state_directory/catchplate-completion-proof.json"; \
 			printf 'completionProofIdentity=%s\n' "$$completion_proof_identity"; \
 			printf 'completionProofSha256=%s\n' "$$completion_proof_sha256"; \
 			for output in $(PRODUCTION_READINESS_EXPECTED_OUTPUTS); do \
@@ -11189,7 +11189,7 @@ run-production-readiness-final:
 # There is deliberately no aggregate target that builds, publishes, signs,
 # deploys, and then calls its own output production proof. See docs/release-stages.md.
 production-source-capture:
-	python3 -c 'import json; from scripts.serverware_source_tree import production_source_contract; print(json.dumps(production_source_contract(), sort_keys=True))'
+	python3 -c 'import json; from scripts.catchplate_source_tree import production_source_contract; print(json.dumps(production_source_contract(), sort_keys=True))'
 
 production-release-build:
 	@test ! -e "$(PRODUCTION_IMAGES_BUILD_FILE)" || { echo "release build record already exists; use a fresh release workspace" >&2; exit 2; }
@@ -11261,7 +11261,7 @@ install-apparmor:
 	./scripts/install_apparmor_profile.sh
 
 verify-apparmor-contract:
-	SERVERWARE_APPARMOR_DRY_RUN=1 ./scripts/test_apparmor_runtime.sh
+	CATCHPLATE_APPARMOR_DRY_RUN=1 ./scripts/test_apparmor_runtime.sh
 
 verify-apparmor-runtime:
 	./scripts/test_apparmor_runtime.sh
@@ -11302,7 +11302,7 @@ verify-production-launch-assets: verify-production-python-runtime
 	}
 	python3 -I scripts/test_production_launcher_adversarial.py \
 		--builder "$(PRODUCTION_LAUNCHER_ADVERSARIAL_BUILDER)"
-	cargo test --locked --manifest-path data-plane/decision-gate-rs/Cargo.toml --bin serverware-production-launcher
+	cargo test --locked --manifest-path data-plane/decision-gate-rs/Cargo.toml --bin catchplate-production-launcher
 
 verify-launch-authorization:
 	$(CRYPTO_SCHEMA_PYTHON_RUN) scripts/test_launch_authorization.py
@@ -11326,7 +11326,7 @@ verify-credential-injection-name-binding:
 # unrelated native executables before applying the test-name filter.
 .PHONY: verify-proxy-json-media-parameters
 verify-proxy-json-media-parameters:
-	cargo test --locked --release --manifest-path data-plane/decision-gate-rs/Cargo.toml --bin serverware-decision-gate json_media_parameters -- --test-threads=1
+	cargo test --locked --release --manifest-path data-plane/decision-gate-rs/Cargo.toml --bin catchplate-decision-gate json_media_parameters -- --test-threads=1
 
 # Offline byte/copy/CLI components only; no provider, approval or proxy admission.
 .PHONY: verify-ecr-image-preparation
@@ -11415,7 +11415,7 @@ verify-onboarding-evidence-tooling:
 	PYTHONDONTWRITEBYTECODE=1 $(TEST_PYTHON_RUN) -m unittest scripts.test_onboarding_evidence -v
 
 verify-custody-response-proof:
-	COMPOSE_PROJECT_NAME="$${COMPOSE_PROJECT_NAME:-serverware-custody-$$(date +%s)-$$$$-$$(openssl rand -hex 6)}" ./scripts/test_custody_response_proof.sh
+	COMPOSE_PROJECT_NAME="$${COMPOSE_PROJECT_NAME:-catchplate-custody-$$(date +%s)-$$$$-$$(openssl rand -hex 6)}" ./scripts/test_custody_response_proof.sh
 
 verify-reproducible-builds:
 	python3 scripts/test_reproducible_builds.py
@@ -11434,30 +11434,30 @@ verify-provider-policy-parity:
 # The prepared external runner owns this disposable Unix-socket test cluster.
 # This target neither starts a server nor falls back to a production DSN.
 verify-webauthn-trust-projection:
-	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
-	python3 scripts/test_webauthn_trust_projection_postgres.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN"
-	python3 scripts/test_postgres_trigger_manifest.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN"
+	test -n "$${CATCHPLATE_TEST_POSTGRES_DSN:-}"
+	python3 scripts/test_webauthn_trust_projection_postgres.py --postgres-dsn "$$CATCHPLATE_TEST_POSTGRES_DSN"
+	python3 scripts/test_postgres_trigger_manifest.py --postgres-dsn "$$CATCHPLATE_TEST_POSTGRES_DSN"
 
 # No build, network or cluster startup; synthetic signatures are not hardware.
 verify-authority-webauthn-receipts:
-	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 scripts/test_authority_webauthn_receipt_domains.py
-	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 scripts/test_authority_executor_optional_evidence.py
+	CATCHPLATE_PROCESS_MODE=metadata-bootstrap CATCHPLATE_RELEASE_CHANNEL=dev python3 scripts/test_authority_webauthn_receipt_domains.py
+	CATCHPLATE_PROCESS_MODE=metadata-bootstrap CATCHPLATE_RELEASE_CHANNEL=dev python3 scripts/test_authority_executor_optional_evidence.py
 
 # The caller owns a disposable local Unix-socket cluster. This runs the actual
 # shared writer predicate, not full authority admission or native commissioning.
 verify-authority-webauthn-receipts-postgres:
-	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
-	test "$${SERVERWARE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
-	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 scripts/test_authority_webauthn_receipt_domains.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN"
+	test -n "$${CATCHPLATE_TEST_POSTGRES_DSN:-}"
+	test "$${CATCHPLATE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
+	CATCHPLATE_PROCESS_MODE=metadata-bootstrap CATCHPLATE_RELEASE_CHANNEL=dev python3 scripts/test_authority_webauthn_receipt_domains.py --postgres-dsn "$$CATCHPLATE_TEST_POSTGRES_DSN"
 
 # Actual request/kernel and signed synthetic assertion controls; no pilot,
 # provider traffic, build or database startup is performed by these targets.
 verify-authority-jit-request:
-	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_jit_request.py
+	CATCHPLATE_PROCESS_MODE=metadata-bootstrap CATCHPLATE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_jit_request.py
 
 # Commitment-only ingress and retention refusals, not native custody admission.
 verify-authority-jit-private-request:
-	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_jit_private_request.py
+	CATCHPLATE_PROCESS_MODE=metadata-bootstrap CATCHPLATE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_jit_private_request.py
 
 # Metadata-only history and private material components; no native admission,
 # review authorization, broker launch, provider access or database startup.
@@ -11465,23 +11465,23 @@ verify-approval-history-metadata:
 	python3 -B scripts/test_approval_history_metadata.py
 
 verify-native-jit-review-material:
-	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_native_jit_review_material.py
+	CATCHPLATE_PROCESS_MODE=metadata-bootstrap CATCHPLATE_RELEASE_CHANNEL=dev python3 -B scripts/test_native_jit_review_material.py
 
 verify-native-jit-review-owner:
-	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_native_jit_review_owner.py
+	CATCHPLATE_PROCESS_MODE=metadata-bootstrap CATCHPLATE_RELEASE_CHANNEL=dev python3 -B scripts/test_native_jit_review_owner.py
 
 # Synthetic cryptography and signed configuration checks only. Service loading
 # deliberately refuses before runtime admission; neither target starts native custody.
 verify-authority-native-jit-review-custody:
-	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_native_jit_review_custody.py
+	CATCHPLATE_PROCESS_MODE=metadata-bootstrap CATCHPLATE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_native_jit_review_custody.py
 
 verify-authority-native-jit-review-registration:
-	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_native_jit_review_registration.py
+	CATCHPLATE_PROCESS_MODE=metadata-bootstrap CATCHPLATE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_native_jit_review_registration.py
 
 # Literal historical storage validation only, not current reviewer admission
 # or permission to decrypt, disclose, approve or continue the pending request.
 verify-native-jit-retained-history:
-	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_native_jit_retained_history.py
+	CATCHPLATE_PROCESS_MODE=metadata-bootstrap CATCHPLATE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_native_jit_retained_history.py
 
 # No image build, native startup, database or provider effects. The package
 # probe imports only the explicit staged broker roster, not the source tree.
@@ -11501,11 +11501,11 @@ verify-native-jit-rust-fixture:
 # Requires the emitted fixture and an isolated cached/vendored Rust toolchain.
 # This compiles library tests only; it is not a proxy release build or pilot.
 verify-native-jit-rust-contract:
-	test -n "$${SERVERWARE_TEST_JIT_RUST_FIXTURE:-}" && test -f "$${SERVERWARE_TEST_JIT_RUST_FIXTURE}"
+	test -n "$${CATCHPLATE_TEST_JIT_RUST_FIXTURE:-}" && test -f "$${CATCHPLATE_TEST_JIT_RUST_FIXTURE}"
 	cargo test --release --frozen --offline --manifest-path data-plane/decision-gate-rs/Cargo.toml --lib native_secret_broker_v1::jit_review:: -- --test-threads=1
 
 verify-static-credential-provenance-values:
-	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -I -B scripts/test_static_credential_provenance_values.py
+	CATCHPLATE_PROCESS_MODE=metadata-bootstrap CATCHPLATE_RELEASE_CHANNEL=dev python3 -I -B scripts/test_static_credential_provenance_values.py
 
 # Offline configuration oracles only: no live smoke authorization or I/O.
 verify-operator-live-smoke-config:
@@ -11514,103 +11514,103 @@ verify-operator-live-smoke-config:
 verify-authority-jit-approval:
 	python3 scripts/test_authority_approver_policy.py
 	python3 -I -B scripts/test_authority_webauthn_reader_projection.py
-	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 scripts/test_authority_jit_approval.py
-	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_webauthn_revoke_transition.py
-	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_webauthn_revocation_work.py
+	CATCHPLATE_PROCESS_MODE=metadata-bootstrap CATCHPLATE_RELEASE_CHANNEL=dev python3 scripts/test_authority_jit_approval.py
+	CATCHPLATE_PROCESS_MODE=metadata-bootstrap CATCHPLATE_RELEASE_CHANNEL=dev python3 -B scripts/test_webauthn_revoke_transition.py
+	CATCHPLATE_PROCESS_MODE=metadata-bootstrap CATCHPLATE_RELEASE_CHANNEL=dev python3 -B scripts/test_webauthn_revocation_work.py
 
 # Caller-owned disposable private Unix-socket database only. This joins the
 # kernel and production SQL fragments, not installed full-writer admission.
 verify-authority-jit-approval-postgres:
-	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
-	test "$${SERVERWARE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
-	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev SERVERWARE_METADATA_STORE_BACKEND=postgres SERVERWARE_METADATA_STORE_POSTGRES_DSN="$$SERVERWARE_TEST_POSTGRES_DSN" SERVERWARE_GRANT_STORE_BACKEND=postgres SERVERWARE_GRANT_STORE_POSTGRES_DSN="$$SERVERWARE_TEST_POSTGRES_DSN" python3 scripts/test_authority_jit_approval.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN"
+	test -n "$${CATCHPLATE_TEST_POSTGRES_DSN:-}"
+	test "$${CATCHPLATE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
+	CATCHPLATE_PROCESS_MODE=metadata-bootstrap CATCHPLATE_RELEASE_CHANNEL=dev CATCHPLATE_METADATA_STORE_BACKEND=postgres CATCHPLATE_METADATA_STORE_POSTGRES_DSN="$$CATCHPLATE_TEST_POSTGRES_DSN" CATCHPLATE_GRANT_STORE_BACKEND=postgres CATCHPLATE_GRANT_STORE_POSTGRES_DSN="$$CATCHPLATE_TEST_POSTGRES_DSN" python3 scripts/test_authority_jit_approval.py --postgres-dsn "$$CATCHPLATE_TEST_POSTGRES_DSN"
 
 # Denial model/route units plus genuine synthetic-crypto/kernel components.
 # No ordinary SQLite approval owner, hardware admission or service startup.
 .PHONY: verify-authority-jit-denial verify-authority-jit-denial-postgres
 verify-authority-jit-denial:
 	python3 -B scripts/test_jit_denial_api.py
-	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_jit_denial.py
+	CATCHPLATE_PROCESS_MODE=metadata-bootstrap CATCHPLATE_RELEASE_CHANNEL=dev python3 -B scripts/test_authority_jit_denial.py
 
 # Caller-owned disposable Unix-socket PostgreSQL only; no cluster startup here.
 verify-authority-jit-denial-postgres:
-	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
-	test "$${SERVERWARE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
-	SERVERWARE_PROCESS_MODE=metadata-bootstrap SERVERWARE_RELEASE_CHANNEL=dev SERVERWARE_METADATA_STORE_BACKEND=postgres SERVERWARE_METADATA_STORE_POSTGRES_DSN="$$SERVERWARE_TEST_POSTGRES_DSN" SERVERWARE_GRANT_STORE_BACKEND=postgres SERVERWARE_GRANT_STORE_POSTGRES_DSN="$$SERVERWARE_TEST_POSTGRES_DSN" python3 -B scripts/test_authority_jit_denial.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN"
+	test -n "$${CATCHPLATE_TEST_POSTGRES_DSN:-}"
+	test "$${CATCHPLATE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
+	CATCHPLATE_PROCESS_MODE=metadata-bootstrap CATCHPLATE_RELEASE_CHANNEL=dev CATCHPLATE_METADATA_STORE_BACKEND=postgres CATCHPLATE_METADATA_STORE_POSTGRES_DSN="$$CATCHPLATE_TEST_POSTGRES_DSN" CATCHPLATE_GRANT_STORE_BACKEND=postgres CATCHPLATE_GRANT_STORE_POSTGRES_DSN="$$CATCHPLATE_TEST_POSTGRES_DSN" python3 -B scripts/test_authority_jit_denial.py --postgres-dsn "$$CATCHPLATE_TEST_POSTGRES_DSN"
 
 # Component entrypoint only; not prepared native-controller coverage.
 # Changed-excluded-test admission must continue to refuse an unprepared lane.
 verify-authority-row-mutations:
-	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
-	python3 scripts/test_authority_mutation_postgres.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN"
+	test -n "$${CATCHPLATE_TEST_POSTGRES_DSN:-}"
+	python3 scripts/test_authority_mutation_postgres.py --postgres-dsn "$$CATCHPLATE_TEST_POSTGRES_DSN"
 
 # Unexecuted component entrypoint, not approved native-controller coverage.
 # All fixture role/schema/database-ACL changes remain in rolled-back transactions.
 verify-authority-verifier-read:
-	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
-	test "$${SERVERWARE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
-	python3 scripts/test_authority_verifier_read_postgres.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN" --disposable-cluster
+	test -n "$${CATCHPLATE_TEST_POSTGRES_DSN:-}"
+	test "$${CATCHPLATE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
+	python3 scripts/test_authority_verifier_read_postgres.py --postgres-dsn "$$CATCHPLATE_TEST_POSTGRES_DSN" --disposable-cluster
 
 # Catalog-only component fixture; no production DDL or TLS-admission claim.
 # The prepared external runner owns the disposable, rolled-back test cluster.
 verify-authority-planner-writer:
-	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
-	test "$${SERVERWARE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
-	python3 scripts/test_authority_planner_writer_postgres.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN" --disposable-cluster
+	test -n "$${CATCHPLATE_TEST_POSTGRES_DSN:-}"
+	test "$${CATCHPLATE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
+	python3 scripts/test_authority_planner_writer_postgres.py --postgres-dsn "$$CATCHPLATE_TEST_POSTGRES_DSN" --disposable-cluster
 
 # Catalog-only component fixture, not TLS or full bootstrap admission coverage.
 .PHONY: verify-authority-planner-readonly
 verify-authority-planner-readonly:
-	test -n "$${SERVERWARE_TEST_POSTGRES_DSN:-}"
-	test "$${SERVERWARE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
-	python3 scripts/test_authority_planner_readonly_postgres.py --postgres-dsn "$$SERVERWARE_TEST_POSTGRES_DSN" --disposable-cluster
+	test -n "$${CATCHPLATE_TEST_POSTGRES_DSN:-}"
+	test "$${CATCHPLATE_TEST_POSTGRES_DISPOSABLE:-}" = "1"
+	python3 scripts/test_authority_planner_readonly_postgres.py --postgres-dsn "$$CATCHPLATE_TEST_POSTGRES_DSN" --disposable-cluster
 
 verify-nitro-nsm-attest:
 	python3 scripts/test_nitro_nsm_attest.py
 
 verify-aws-kms-recipient-release:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_aws_kms_recipient_release.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_aws_kms_recipient_release.py
 
 verify-aws-nitro-kms-unseal:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_aws_nitro_kms_unseal.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_aws_nitro_kms_unseal.py
 
 verify-prepare-aws-kms-materials:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_prepare_aws_kms_materials.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_prepare_aws_kms_materials.py
 
 verify-ca-install-sessions:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_ca_install_sessions.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_ca_install_sessions.py
 
 verify-control-plane-csrf:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_control_plane_csrf.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_control_plane_csrf.py
 
 verify-control-plane-oidc:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_control_plane_oidc.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_control_plane_oidc.py
 
 verify-webauthn-recovery:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_webauthn_recovery.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_webauthn_recovery.py
 
 verify-oauth-credentials:
-	docker compose up -d --build serverware
+	docker compose up -d --build catchplate
 	python3 scripts/test_http_client.py
 	python3 scripts/test_oauth_credentials.py --compose-contract-only
-	docker compose exec -T serverware python scripts/test_oauth_credentials.py
-	docker compose exec -T serverware python scripts/test_oauth_http_flow.py
+	docker compose exec -T catchplate python scripts/test_oauth_credentials.py
+	docker compose exec -T catchplate python scripts/test_oauth_http_flow.py
 	$(MAKE) verify-portal-browser-oauth
 
 verify-credential-lease-delivery:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_credential_lease_delivery.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_credential_lease_delivery.py
 
 verify-control-plane-mutation-mfa:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_control_plane_mutation_mfa.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_control_plane_mutation_mfa.py
 
 # Source/synthetic controls require Node, not the Python-only isolated inventory.
 verify-portal-static-credential-replacement:
@@ -11627,68 +11627,68 @@ verify-portal-registration-capture:
 # container on success or failure; the selected dependency image must be local.
 verify-local-activation-keys:
 	@set -eu; \
-		key_test_image="$${SERVERWARE_ACTIVATION_KEY_TEST_IMAGE:?set a local sha256 image ID}"; \
+		key_test_image="$${CATCHPLATE_ACTIVATION_KEY_TEST_IMAGE:?set a local sha256 image ID}"; \
 		printf '%s\n' "$$key_test_image" | LC_ALL=C grep -Eq '^sha256:[0-9a-f]{64}$$'; \
 		timeout 60s docker run --pull never \
-			--name "serverware-activation-key-check-$$$$" \
+			--name "catchplate-activation-key-check-$$$$" \
 			--network none --read-only --cap-drop ALL \
 			--security-opt no-new-privileges --user 0:0 \
 			--cpus 1 --memory 768m --memory-swap 768m --pids-limit 64 --ulimit core=0 \
 			--tmpfs /run:rw,noexec,nosuid,size=16m,mode=755 \
-			--env TMPDIR=/run --env SERVERWARE_TEST_LOCAL_ACTIVATION_KEYS_SANDBOX=1 \
+			--env TMPDIR=/run --env CATCHPLATE_TEST_LOCAL_ACTIVATION_KEYS_SANDBOX=1 \
 			--workdir /source --mount "type=bind,src=$(CURDIR),dst=/source,readonly" \
 			--entrypoint /usr/local/bin/python3 "$$key_test_image" \
 			-I -B /source/scripts/test_authority_local_activation_keys.py
 
 verify-control-plane-two-person:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_control_plane_two_person.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_control_plane_two_person.py
 
 verify-control-plane-rbac-audit:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_control_plane_rbac_audit.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_control_plane_rbac_audit.py
 
 verify-break-glass-grants:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_break_glass_grants.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_break_glass_grants.py
 
 verify-approval-denial-reason:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_approval_denial_reason.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_approval_denial_reason.py
 
 verify-approval-review:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_approval_review.py
-	docker compose exec -T serverware python scripts/test_portal_agent_enrollment_ui.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_approval_review.py
+	docker compose exec -T catchplate python scripts/test_portal_agent_enrollment_ui.py
 
 verify-policy-publish-workflow:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_policy_publish_workflow.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_policy_publish_workflow.py
 
 verify-policy-canary-workflow:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_policy_canary_workflow.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_policy_canary_workflow.py
 
 verify-audit-search:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_audit_search.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_audit_search.py
 
 verify-audit-export:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_audit_export.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_audit_export.py
 
 verify-agent-enrollment:
-	docker compose up -d --build serverware
+	docker compose up -d --build catchplate
 	$(TEST_PYTHON_RUN) scripts/test_agent_enrollment.py
-	docker compose exec -T serverware python scripts/test_portal_agent_enrollment_ui.py
-	docker compose exec -T serverware python scripts/test_setup_verify.py
+	docker compose exec -T catchplate python scripts/test_portal_agent_enrollment_ui.py
+	docker compose exec -T catchplate python scripts/test_setup_verify.py
 
 verify-setup-session-api:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_setup_receipts.py
-	docker compose exec -T serverware python scripts/test_setup_receipt_api.py
-	docker compose exec -T serverware python scripts/test_setup_session_api.py
-	docker compose exec -T serverware python scripts/test_setup_sessions.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_setup_receipts.py
+	docker compose exec -T catchplate python scripts/test_setup_receipt_api.py
+	docker compose exec -T catchplate python scripts/test_setup_session_api.py
+	docker compose exec -T catchplate python scripts/test_setup_sessions.py
 
 verify-production-images-no-shell:
 	python3 scripts/test_production_images_no_shell.py
@@ -11766,29 +11766,29 @@ collect-nitro-kms-evidence:
 	fi
 
 verify-nitro-kms-evidence:
-	docker compose up -d --build serverware
-	docker compose exec -T serverware python scripts/test_nitro_kms_evidence.py
+	docker compose up -d --build catchplate
+	docker compose exec -T catchplate python scripts/test_nitro_kms_evidence.py
 
 verify-nitro-tee:
-	docker compose up -d --build serverware
-	./scripts/wait_for_serverware.sh
-	docker compose exec -T serverware python scripts/test_nitro_tee_provider.py
+	docker compose up -d --build catchplate
+	./scripts/wait_for_catchplate.sh
+	docker compose exec -T catchplate python scripts/test_nitro_tee_provider.py
 
 verify-decision-gate-attestation:
 	python3 scripts/verify_decision_gate_attestation.py
 
 verify-codebase-attestation:
-	SERVERWARE_COSIGN_BINARY="$${SERVERWARE_COSIGN_BINARY:-python3 scripts/cosign_fixture.py}" \
+	CATCHPLATE_COSIGN_BINARY="$${CATCHPLATE_COSIGN_BINARY:-python3 scripts/cosign_fixture.py}" \
 	python3 scripts/verify_codebase_attestation.py \
-		--admin-token "$${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}" \
-		--release-signing-trusted-key "$${SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY:-.tmp/release-signing-ed25519.pem}" \
-		--image-signing-trusted-key "$${SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY:-.tmp/cosign-fixture-ed25519.pem}"
+		--admin-token "$${CATCHPLATE_ADMIN_TOKEN:-dev-admin-token}" \
+		--release-signing-trusted-key "$${CATCHPLATE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY:-.tmp/release-signing-ed25519.pem}" \
+		--image-signing-trusted-key "$${CATCHPLATE_SIGSTORE_TRUSTED_PUBLIC_KEY:-.tmp/cosign-fixture-ed25519.pem}"
 
 install-ca:
-	docker compose up -d --build serverware demo-upstream
-	./scripts/wait_for_serverware.sh
-	curl -fsS -H "X-Serverware-Admin-Token: $${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}" -X POST "http://localhost:$${SERVERWARE_CONTROL_PLANE_HOST_PORT:-3000}/api/demo/seed" >/dev/null
-	SERVERWARE_CA_OUT=.tmp/serverware-ca.pem SERVERWARE_VERIFY_OUT=.tmp/attestation-verify.json ./scripts/install_verified_ca.sh
+	docker compose up -d --build catchplate demo-upstream
+	./scripts/wait_for_catchplate.sh
+	curl -fsS -H "X-Catchplate-Admin-Token: $${CATCHPLATE_ADMIN_TOKEN:-dev-admin-token}" -X POST "http://localhost:$${CATCHPLATE_CONTROL_PLANE_HOST_PORT:-3000}/api/demo/seed" >/dev/null
+	CATCHPLATE_CA_OUT=.tmp/catchplate-ca.pem CATCHPLATE_VERIFY_OUT=.tmp/attestation-verify.json ./scripts/install_verified_ca.sh
 	docker compose up -d --force-recreate decision-gate-rs
 	./scripts/wait_for_decision_gate.sh
 

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-policy-activation-recovery.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-policy-activation-recovery.v1.schema.json",
   "title": "Retained native publication recovery data",
   "$comment": "Data grammar only. Export copies existing original files under the actual journal lock. Neither these pins, copied files nor schema validation authenticate a publication, complete Setup, unlock a held effect, or authorize a retry. Protected record-inclusion and finalization remain the only settlement consumers.",
   "oneOf": [{"$ref": "#/$defs/selection"}, {"$ref": "#/$defs/handoff"}],
@@ -10,7 +10,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "activationId", "preparedSha256", "initialStateSha256", "journal"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativePolicyActivationRecoverySelection/v1"},
+        "apiVersion": {"const": "catchplate.nativePolicyActivationRecoverySelection/v1"},
         "activationId": {"$ref": "native-policy-activation.v1.schema.json#/$defs/uuid"},
         "preparedSha256": {"$ref": "#/$defs/digest"},
         "initialStateSha256": {"$ref": "#/$defs/digest"},

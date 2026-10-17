@@ -37,20 +37,20 @@ before importing the application or HTTP runtime. Shutdown closes these owners
 in reverse order, including exceptional startup. Configuration validation
 requires the actual admitted owner, not a PID environment marker or lazy setup.
 
-`SERVERWARE_CONTROL_PLANE_WORKLOAD_IDENTITY_BOOTSTRAP_FD` names one root-owned,
+`CATCHPLATE_CONTROL_PLANE_WORKLOAD_IDENTITY_BOOTSTRAP_FD` names one root-owned,
 sealed public bootstrap descriptor already in the original runtime-admitted
 inventory. Paths, private keys and a second descriptor-inventory scan are not
 alternatives. Production requires a root-signed bootstrap; `issuer: null` is the
 explicit disabled profile. Only genuinely unconfigured development may have no
 owner. Mentioning an invalid or empty setting does not opt out.
 
-The signed payload domain is `serverware.controlPlaneWorkloadIdentityBootstrap/v1`,
-paired with `serverware.signedControlPlaneWorkloadIdentityBootstrap/v1`. Its
+The signed payload domain is `catchplate.controlPlaneWorkloadIdentityBootstrap/v1`,
+paired with `catchplate.signedControlPlaneWorkloadIdentityBootstrap/v1`. Its
 runtime-root signature independently selects the issuer root and exact worker
 bootstrap originals. Those nested originals are genuinely admitted, not trusted
 because their JSON has expected fields. The bootstrap is capped at 256 KiB.
 
-The fixed endpoint is `/run/serverware/workload-identity-issuer/issuer.sock`.
+The fixed endpoint is `/run/catchplate/workload-identity-issuer/issuer.sock`.
 Connected server credentials are independently pinned to UID/GID **0:0**, the
 root-created systemd listener profile. That is distinct from the socket path's
 **65492:65532** ownership, worker identity **65492:65492**, and accepted caller
@@ -94,7 +94,7 @@ closes the remaining protected provider/filesystem side-effect workflows.
 Both remain source-only; connected approval code is not evidence that an action
 has passed runtime acceptance.
 
-The closed request has schema `serverware.workloadIdentityIssuanceRequest/v1`
+The closed request has schema `catchplate.workloadIdentityIssuanceRequest/v1`
 and three members, `authorization`, `packet` and `request`. Each contains exactly
 `base64Url`, `byteCount` and `bytesDigest` for one original; digests use the
 `sha256:` prefix. The issue route additionally requires `mfa` containing

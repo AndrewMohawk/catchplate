@@ -9,8 +9,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from serverware import native_static_credential as creation
-from serverware import native_static_credential_rotation as rotation
+from catchplate import native_static_credential as creation
+from catchplate import native_static_credential_rotation as rotation
 
 
 class RotationMaterial(unittest.TestCase):
@@ -94,9 +94,9 @@ class RetainedRotationOwner(unittest.TestCase):
     """Local owner state machine only; the channel is explicitly synthetic."""
     def prepared(self, *, lose_reply=False):
         from scripts.test_authority_static_rotation import fixture, C, H, B
-        from serverware import authority_static_credential_rotate as profile
-        from serverware import native_static_credential_rotation_owner as native
-        from serverware.native_oauth_refresh_owner import IDENTITY_FIELDS
+        from catchplate import authority_static_credential_rotate as profile
+        from catchplate import native_static_credential_rotation_owner as native
+        from catchplate.native_oauth_refresh_owner import IDENTITY_FIELDS
 
         f = fixture()
         boot = 100_000_000_000
@@ -120,8 +120,8 @@ class RetainedRotationOwner(unittest.TestCase):
             def require_owner_configuration(self): self.channel.check()
 
         self.addCleanup(patch.stopall)
-        patch("serverware.native_static_credential_owner.time.time_ns", return_value=f["now"]).start()
-        patch("serverware.native_static_credential_owner.time.clock_gettime_ns", return_value=boot).start()
+        patch("catchplate.native_static_credential_owner.time.time_ns", return_value=f["now"]).start()
+        patch("catchplate.native_static_credential_owner.time.clock_gettime_ns", return_value=boot).start()
         config = {"apiVersion": native.CONFIG, "controlPlaneConfigurationDigest": f["cfg"],
             profile.FIELD: {"schema": profile.SCHEMA, "credentialPolicy": f["policy"],
                 "operationMaxSeconds": 30, "maximumArgumentBytes": profile.MAX_ARGUMENT_BYTES,

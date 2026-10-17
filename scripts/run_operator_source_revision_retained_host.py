@@ -25,8 +25,8 @@ import subprocess
 import sys
 import time
 
-ROOT = Path('/srv/catchplate-archive/homelab_data/serverware-source350-release.6kZhpc9d')
-CAPTURE = Path('/srv/catchplate-archive/homelab_data/serverware-pending-actions-release.FHXB1YSb/capture')
+ROOT = Path('/srv/catchplate-archive/homelab_data/catchplate-source350-release.6kZhpc9d')
+CAPTURE = Path('/srv/catchplate-archive/homelab_data/catchplate-pending-actions-release.FHXB1YSb/capture')
 COMMIT = 'cb326c64de920aa3eeca692b6b9b8e411a8a0cd1'
 SOURCE = ROOT / ('source-' + COMMIT)
 WORK = ROOT / 'copy'
@@ -36,9 +36,9 @@ STARTUP_ENVIRONMENT = ROOT / 'startup-runtime.env'
 IMAGE = 'sha256:ec14a558a42e483a834860521e399b461a2df880fcba495e7127b0d8d2a51e01'
 BINARY_SHA = 'e30fe08b97815970aaa08c0317d74ccf96e525a0c3a9957a0b351c69e12f6626'
 ROLES = ('prepare', 'recover', 'plan', 'apply', 'freeze', 'startup1', 'observe1', 'startup2', 'observe2', 'result')
-LABEL_KEY = 'serverware.source-revision-retained'
+LABEL_KEY = 'catchplate.source-revision-retained'
 LABEL = '6kZhpc9d'
-SCHEMA = 'serverware.sourceRevisionRetainedHost/v1'
+SCHEMA = 'catchplate.sourceRevisionRetainedHost/v1'
 ENV = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'GOMAXPROCS': '2'}
 DOCKER = ['/usr/bin/docker', '--host', 'unix:///var/run/docker.sock']
 MAX_FILE_BYTES = 64 * 1024**2
@@ -115,7 +115,7 @@ def startup_environment_bytes(captured):
          and captured.endswith(b'\n') and b'\r' not in captured)
     values = environment(captured.decode('utf-8').splitlines())
     replacements = {'PYTHONDONTWRITEBYTECODE': '1',
-        'SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST': 'sha256:' + BINARY_SHA}
+        'CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST': 'sha256:' + BINARY_SHA}
     need(set(replacements) <= set(values))
     derived = ''.join(name + '=' + replacements.get(name, value) + '\n'
         for name, value in values.items()).encode('utf-8')
@@ -170,12 +170,12 @@ def plan(role, inputs_sha256):
         mounts += [(WORK / ('candidate/' + leaf), '/' + leaf + '-custody', not role.startswith('startup'))
             for leaf in ('provider', 'notification', 'x')]
         if role.startswith('startup'):
-            mounts += [(WORK / 'candidate/persistent/service-secrets', '/run/secrets/serverware', True),
+            mounts += [(WORK / 'candidate/persistent/service-secrets', '/run/secrets/catchplate', True),
                 (WORK / 'candidate/persistent/upstream-data/demo-upstream', '/demo-upstream', True),
                 (WORK / 'startup.env', '/startup.env', True)]
         if role == 'recover':
             mounts.append((WORK / 'recovery/persistent/app-data', '/recovery-data', False))
-    name = 'serverware-source350-6kzhpc9d-' + role
+    name = 'catchplate-source350-6kzhpc9d-' + role
     command = [*DOCKER, 'create', '--name', name, '--label', LABEL_KEY + '=' + LABEL,
         '--pull', 'never', '--network', 'none', '--read-only', '--no-healthcheck', '--ipc', 'private',
         '--cgroupns', 'private', '--user', '0:0' if privileged else '10001:10001', '--cap-drop', 'ALL',
@@ -439,7 +439,7 @@ def main():
     os.umask(0o077)
     pinned(Path(__file__).resolve(), args.helper_sha256)
     cfg = json.loads(pinned(ROOT / 'inputs.json', args.inputs_sha256))
-    need(type(cfg) is dict and cfg['schema'] == 'serverware.sourceRevisionRetainedInputs/v1'
+    need(type(cfg) is dict and cfg['schema'] == 'catchplate.sourceRevisionRetainedInputs/v1'
          and cfg['candidateCommit'] == COMMIT and cfg['normalBinarySha256'] == BINARY_SHA)
     # These two reviewed files are separate from the frozen application source.
     helpers = load('operator_source_revision_retained', RUNNER / 'operator_source_revision_retained.py',

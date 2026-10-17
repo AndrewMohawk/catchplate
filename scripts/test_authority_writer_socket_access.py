@@ -17,8 +17,8 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import authority_fd_entrypoint as entrypoint
-from serverware import authority_launcher as launcher
+from catchplate import authority_fd_entrypoint as entrypoint
+from catchplate import authority_launcher as launcher
 
 
 class WriterSocketAccessTests(unittest.TestCase):
@@ -36,7 +36,7 @@ class WriterSocketAccessTests(unittest.TestCase):
         self.assertEqual(entrypoint.ROLE_SUPPLEMENTARY_GIDS,
                          {"control-plane": (65530, 65524), **expected})
 
-    @unittest.skipUnless(os.environ.get("SERVERWARE_ISOLATED_SOCKET_FIXTURE") == "1",
+    @unittest.skipUnless(os.environ.get("CATCHPLATE_ISOLATED_SOCKET_FIXTURE") == "1",
                          "requires explicitly selected disposable root container")
     def test_real_dac_after_actual_role_drops(self):
         self.assertEqual((os.getuid(), os.getgid()), (0, 0))

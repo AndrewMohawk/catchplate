@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-enrollment-setup-authorizer.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-enrollment-setup-authorizer.v1.schema.json",
   "title": "Independent native enrollment setup public authorizer v1",
   "description": "Only nativeStartupConfiguration/v3 carries this exact enrollmentSetupAuthorizer object, alongside mandatory existing enrollmentAuthorizer and enrollmentProxyEndpoint. v1/v2 remain closed and reject this addition. This is a separate dedicated Ed25519 key/purpose, not implicit delegation-key installation rights; cold admission must independently pin its public PEM and separate it from actual delegation, policy, response, CA, issuer and caller/target key roles. No private key, pathname, environment fallback or per-request root choice. Schema shape alone is not admission or installation permission.",
   "type": "object", "additionalProperties": false,
   "required": ["apiVersion", "publicKeyPem", "publicKeyPemSha256"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeEnrollmentSetupAuthorizer/v1"},
+    "apiVersion": {"const": "catchplate.nativeEnrollmentSetupAuthorizer/v1"},
     "publicKeyPem": {"type": "string", "minLength": 1, "maxLength": 16384, "description": "Exact canonical public-only Ed25519 SPKI PEM bytes including final LF, at most16384 bytes. Runtime genuinely parses/re-encodes and rejects weak keys; this is not a path or embedded private key."},
     "publicKeyPemSha256": {"type": "string", "minLength": 71, "maxLength": 71, "pattern": "^sha256:(?!0{64})[0-9a-f]{64}(?![\\s\\S])", "description": "Independent SHA-256 of exact PEM original; distinct from setup authorizerKeyId, which hashes actual DER SPKI. Matching self-declared bytes is not enclosing cold-configuration authority."}
   }

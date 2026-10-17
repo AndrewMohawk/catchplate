@@ -159,7 +159,7 @@ public protocol or remove the independent authority requirements below.
 
 Source `.84` adds optional purpose-specific policy to signed service
 configuration v2: `webauthnEvidenceAdmission`, schema
-`serverware.policyAuthorityWebAuthnEvidenceAdmissionPolicy/v1`. Its closed
+`catchplate.policyAuthorityWebAuthnEvidenceAdmissionPolicy/v1`. Its closed
 `registration` and `installation` slots pin an explicit canonical raw Ed25519
 public key and matching SPKI digest, signer identity, and bounded age/skew.
 Registration RP/origin must equal the existing WebAuthn configuration;

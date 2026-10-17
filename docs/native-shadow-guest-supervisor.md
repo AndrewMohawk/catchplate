@@ -4,7 +4,7 @@ Source implementation only. No build, kernel, Nitro, KMS, transport, custody-ser
 
 ## Exact parent entry and ownership
 
-`serverware-native-shadow-guest-supervisor` is a separate fixed root-only, single-threaded Linux amd64 executable. It accepts no arguments or environment. It opens the SAME root:root0400 protected `/etc/serverware/native-shadow-guest-launch.json` (closed `nativeShadowGuestLaunch/v1`), retains its exact original, and independently runs the existing signed C9 configuration/delivery admission against its own PIDFD/start/boot/time-namespace. The child repeats that admission against its own genuine process and private parent connection. No process identity or ready DTO crosses exec.
+`catchplate-native-shadow-guest-supervisor` is a separate fixed root-only, single-threaded Linux amd64 executable. It accepts no arguments or environment. It opens the SAME root:root0400 protected `/etc/catchplate/native-shadow-guest-launch.json` (closed `nativeShadowGuestLaunch/v1`), retains its exact original, and independently runs the existing signed C9 configuration/delivery admission against its own PIDFD/start/boot/time-namespace. The child repeats that admission against its own genuine process and private parent connection. No process identity or ready DTO crosses exec.
 
 Parent entry permits only stdio and the signed contiguous activation slots6..69. FD3/4/5 and every other inherited descriptor must be absent before opening configuration files. Each activation remains the exact independently signed directory/socket device/inode/mode/UID/GID, with duplicate names/identities refused. Credentials are retained and checked as originals but their contents are not read by this parent. The original guest performs its final-role credential acquisition.
 
@@ -26,15 +26,15 @@ Image inventory is exactly:
 
 | Fixed path | Content/protection |
 | --- | --- |
-| `/usr/local/bin/serverware-policy-shadow-custody-guest` | Actual static guest, root0555, <=64MiB |
-| `/opt/serverware/native-shadow-custody/seccomp.bpf` | Exact public policy, root0444, <=32KiB |
-| `/opt/serverware/native-shadow-custody/runtime.json` | Credential-free public role runtime config, root0444, <=4MiB |
-| `/opt/serverware/native-shadow-custody/Cargo.lock` | Admitted source lock, root0444, <=4MiB |
-| `/opt/serverware/native-shadow-custody/build-recipe.json` | Independently pinned public recipe, root0444, <=4MiB |
-| `/opt/serverware/native-shadow-custody/provenance.json` | Independently pinned public provenance original, root0444, <=4MiB |
+| `/usr/local/bin/catchplate-policy-shadow-custody-guest` | Actual static guest, root0555, <=64MiB |
+| `/opt/catchplate/native-shadow-custody/seccomp.bpf` | Exact public policy, root0444, <=32KiB |
+| `/opt/catchplate/native-shadow-custody/runtime.json` | Credential-free public role runtime config, root0444, <=4MiB |
+| `/opt/catchplate/native-shadow-custody/Cargo.lock` | Admitted source lock, root0444, <=4MiB |
+| `/opt/catchplate/native-shadow-custody/build-recipe.json` | Independently pinned public recipe, root0444, <=4MiB |
+| `/opt/catchplate/native-shadow-custody/provenance.json` | Independently pinned public provenance original, root0444, <=4MiB |
 | `/proc` | Empty root0555 mount target; real guest procfs comes from the guest owner |
 
-The producer emits `native-shadow-custody-runtime.squashfs` and a public build inventory with exact image/executable/input/source/file hashes and `releaseAuthority:false`. No assignment, deployment authority, attestation, key set or signature is manufactured. Provenance must describe independently pinned pre-image inputs, not require its own resulting image hash; assign/sign the final closure only after the image exists. Install the image at `/opt/serverware/native-shadow-custody-runtime.squashfs` through independent protected provisioning.
+The producer emits `native-shadow-custody-runtime.squashfs` and a public build inventory with exact image/executable/input/source/file hashes and `releaseAuthority:false`. No assignment, deployment authority, attestation, key set or signature is manufactured. Provenance must describe independently pinned pre-image inputs, not require its own resulting image hash; assign/sign the final closure only after the image exists. Install the image at `/opt/catchplate/native-shadow-custody-runtime.squashfs` through independent protected provisioning.
 
 ## Still required
 

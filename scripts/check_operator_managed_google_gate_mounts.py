@@ -21,13 +21,13 @@ from scripts import check_operator_curated_gate as curated
 from scripts import prepare_operator_managed_google_gate_fixture as fixture
 
 base, basic = fixture.base, fixture.basic
-SCHEMA = "serverware.privateManagedGoogleGateMountObservation/v1"
+SCHEMA = "catchplate.privateManagedGoogleGateMountObservation/v1"
 
 # These are checked, exact additions to the pinned existing probe, not a
 # replacement mount oracle. A changed upstream anchor refuses source assembly.
 MANAGED_PROBE = r'''
 def managed_configuration(root):
-    need(os.environ.get("SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED") == "1")
+    need(os.environ.get("CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED") == "1")
     path = root / "operator-google-configuration.json"
     prior = identity(path)
     need(prior["mode"] == 0o600 and 0 < prior["size"] <= 32768)
@@ -48,7 +48,7 @@ def managed_configuration(root):
     identity_value = {key: manifest[key] for key in ("operation", "profile_binding_digest", "effective_settings_digest")}
     provider = None
     if mode == "app":
-        need(os.environ.get("SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR") == "/provider-custody")
+        need(os.environ.get("CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR") == "/provider-custody")
         provider = {"directory": directory("/provider-custody"), "key_present": manifest["operation"] is not None}
         need(provider["directory"] != directory("/data") and provider["directory"] != directory(root))
         need(set(os.listdir("/provider-custody")) == ({"provider-key.json"} if provider["key_present"] else set()))
@@ -57,7 +57,7 @@ def managed_configuration(root):
             need(key["mode"] == 0o600 and 0 < key["size"] <= 4096)
             provider["key_metadata"] = key  # Stat only; never read or hash key bytes.
     else:
-        need("SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR" not in os.environ)
+        need("CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR" not in os.environ)
         for path in ("/provider-custody", "/managed-work", "/data/provider-custody", "/data/provider-key.json"):
             try: os.lstat(path)
             except FileNotFoundError: pass
@@ -88,7 +88,7 @@ def probe_source():
 
 
 def observation_receipt(receipt, expected, policy, revision, binary_sha, phase):
-    base.require(receipt.get("schema") == "serverware.managedGoogleFixtureObservation/v1"
+    base.require(receipt.get("schema") == "catchplate.managedGoogleFixtureObservation/v1"
         and receipt.get("ok") is True and receipt.get("syntheticOnly") is True and receipt.get("readOnly") is True
         and receipt.get("phase") == phase and receipt.get("managedGoogle") == fixture.identity(expected)
         and receipt.get("catalogRevision") == revision and receipt.get("policyHash") == policy["policy_hash"]
@@ -109,20 +109,20 @@ def verify_transition(before, after, client):
         "managed activation changed during ordinary policy reloads")
     # Reuse the entire original two-reload/actual-client transition oracle.
     # Only its schema/phase wrapper is translated; no measured field is changed.
-    legacy_before = {**before, "schema": "serverware.privateCuratedGateObservation/v1"}
+    legacy_before = {**before, "schema": "catchplate.privateCuratedGateObservation/v1"}
     return curated.verify_transition(legacy_before, after, client)
 
 
 def run(args):
     root = args.job_root
     base.require(root.resolve() == root and root.parent == base.SCRATCH and re.fullmatch(
-        r"serverware-managed-google-gate-private\.[A-Za-z0-9]{6,32}", root.name), "exact managed fixture root required")
+        r"catchplate-managed-google-gate-private\.[A-Za-z0-9]{6,32}", root.name), "exact managed fixture root required")
     base.require((args.phase == "after") == bool(args.before_receipt and args.client_receipt)
         and (args.phase == "after" or not (args.before_receipt or args.client_receipt))
         and bool(args.observation_receipt) == (args.phase != "after")
         and bool(args.prepare_receipt) == (args.phase != "unconfigured"), "exact observation phase receipts required")
     prep = basic.pinned_json(root / "preparation.json", args.expected_preparation_sha256)
-    base.require(prep.get("schema") == "serverware.privateManagedGoogleGatePreparation/v1"
+    base.require(prep.get("schema") == "catchplate.privateManagedGoogleGatePreparation/v1"
         and prep["jobRoot"] == str(root), "managed preparation differs")
     source, binary, initializer = (Path(prep[name]) for name in ("source", "binary", "initializer"))
     sources = basic.source_inventory(source, Path(prep["sourceManifest"]), prep["sourceManifestSha256"], prep["sourceCommit"])
@@ -139,7 +139,7 @@ def run(args):
     receipt = None if args.phase == "unconfigured" else curated.document(args.prepare_receipt, 32768)
     manifest = fixture.expected_manifest(fixture_cidr, receipt)
     identities, observations = {}, {}
-    for mode, identifier, service in (("app", args.app_container_id, "serverware"), ("gate", args.gate_container_id, "decision-gate-rs")):
+    for mode, identifier, service in (("app", args.app_container_id, "catchplate"), ("gate", args.gate_container_id, "decision-gate-rs")):
         identities[mode] = curated.inspect(identifier, service, config)
         observations[mode] = curated.command(["/usr/bin/docker", "exec", "-i", "--user", "10001:10001", identifier,
             "python", "-I", "-B", "-", mode, prep["binarySha256"], json.dumps(manifest, sort_keys=True)], probe_source())
@@ -151,7 +151,7 @@ def run(args):
         and app["managed"]["manifest_sha256"] == gate["managed"]["manifest_sha256"]
         and app["managed"]["manifest_metadata"] == gate["managed"]["manifest_metadata"]
         and gate["managed"]["provider_custody"] is None, "original leaves/manifest/policy/private mount relation differs")
-    for mode, identifier, service in (("app", args.app_container_id, "serverware"), ("gate", args.gate_container_id, "decision-gate-rs")):
+    for mode, identifier, service in (("app", args.app_container_id, "catchplate"), ("gate", args.gate_container_id, "decision-gate-rs")):
         base.require(curated.inspect(identifier, service, config) == identities[mode], "runtime changed while observed")
     result = {"ok": True, "schema": SCHEMA, "phase": args.phase,
         "preparation_sha256": args.expected_preparation_sha256, "binary_sha256": prep["binarySha256"],

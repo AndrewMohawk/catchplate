@@ -3,8 +3,8 @@
 
 use super::gate_state_init::GateStateInputs;
 use super::{validate_configured_internal_service_tokens, MAX_INTERNAL_SERVICE_TOKEN_FILE_BYTES};
-use serverware_decision_gate::enclave_runtime_identity_v1::EnclaveRuntimeIdentityV1;
-use serverware_decision_gate::native_secret_broker_v1::{Owner,
+use catchplate_decision_gate::enclave_runtime_identity_v1::EnclaveRuntimeIdentityV1;
+use catchplate_decision_gate::native_secret_broker_v1::{Owner,
     service_tokens::{Binding, Envelope, Tokens}};
 
 pub(super) enum Source {
@@ -16,7 +16,7 @@ pub(super) enum Source {
 
 fn binding(inputs: &GateStateInputs, binary: &str, policy: &str) -> Result<Binding, String> {
     Ok(Binding {
-        api_version: "serverware.nativeServiceTokensBinding/v1".to_owned(),
+        api_version: "catchplate.nativeServiceTokensBinding/v1".to_owned(),
         instance_id: inputs.server_instance_id.as_ref()
             .ok_or("native service tokens require the actual instance")?.clone(),
         data_plane_binary_digest: binary.to_owned(),

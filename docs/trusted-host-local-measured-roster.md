@@ -14,7 +14,7 @@ dependency-name association, not the dynamic loader's future resolution.
 
 Only after those checks does it read the independently supplied
 `closure-verifier` key and sign
-`serverware.authorityTrustedHostLocalMeasuredRosterReceipt/v1` under a distinct
+`catchplate.authorityTrustedHostLocalMeasuredRosterReceipt/v1` under a distinct
 signature domain. The receipt remains detached from the tree it measures. Its
 assurance is explicitly `measured-roster-at-issuance`:
 

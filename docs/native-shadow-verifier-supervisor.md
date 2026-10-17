@@ -1,6 +1,6 @@
 # External native-shadow verifier supervisor
 
-The source-fixed `serverware-native-shadow-verifier` process joins the
+The source-fixed `catchplate-native-shadow-verifier` process joins the
 [retained runtime root](native-shadow-verifier-root.md), original input custody,
 [confined child](native-shadow-verifier-child.md), kernel deadline signal and
 terminal-result handoff. It is external to the claimant enclave. This is
@@ -14,8 +14,8 @@ there is no reusable launch, cancellation, restart or retry API.
 
 | Input | Required original |
 | --- | --- |
-| Protected launch | Root-owned named `/etc/serverware/native-shadow-verifier-launch.json`, pinning the separate runtime image and exact verifier configuration |
-| Protected configuration | Root-owned named `/etc/serverware/native-shadow-nitro-verifier.json`; its existing authorization, independent keys, boot/time namespace and original interval remain authoritative |
+| Protected launch | Root-owned named `/etc/catchplate/native-shadow-verifier-launch.json`, pinning the separate runtime image and exact verifier configuration |
+| Protected configuration | Root-owned named `/etc/catchplate/native-shadow-nitro-verifier.json`; its existing authorization, independent keys, boot/time namespace and original interval remain authoritative |
 | Inherited FD4 | Fully sealed, zero-link, final-UID/GID-owned `0600` regular original containing exactly 32 verifier-seed bytes |
 | Inherited FD5 | A distinct fully sealed original with the same ownership/mode constraints, containing at most 128 KiB of evidence |
 | Inherited FD1 | Write-only pipe to the external public-result transport caller |
@@ -94,7 +94,7 @@ The existing admitted offline static Rust stage includes this binary and
 checks absence of ELF interpreter/shared-library dependencies plus a 64 MiB
 size ceiling. The separate scratch target
 `native-shadow-verifier-supervisor-artifact` exports only
-`/serverware-native-shadow-verifier`. The independently packaged
+`/catchplate-native-shadow-verifier`. The independently packaged
 [Python runtime](native-shadow-verifier-runtime.md) remains another artifact;
 neither is copied into the claimant enclave's default image.
 

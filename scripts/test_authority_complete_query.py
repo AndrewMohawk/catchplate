@@ -24,12 +24,12 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_complete_query as complete
-from serverware import authority_contract
-from serverware import authority_index_projection as projection
-from serverware import authority_query_reads as reads
-from serverware import authority_transition_core as core
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_complete_query as complete
+from catchplate import authority_contract
+from catchplate import authority_index_projection as projection
+from catchplate import authority_query_reads as reads
+from catchplate import authority_transition_core as core
 import test_authority_index_join as index_oracle
 
 
@@ -95,8 +95,8 @@ def complete_document(role, *, values=None, cutoff_us=CUTOFF_US):
     values = arguments() if values is None else values
     _, table, index_id, hint = next(row for row in ROLE_SPECS if row[0] == role)
     return {
-        "schema": "serverware.policyAuthorityCompleteIndexQuery/v1", "operation": OPERATION, "role": role,
-        "queryId": f"serverware.policyAuthorityQuery/{OPERATION}/{role}/{table}/v1",
+        "schema": "catchplate.policyAuthorityCompleteIndexQuery/v1", "operation": OPERATION, "role": role,
+        "queryId": f"catchplate.policyAuthorityQuery/{OPERATION}/{role}/{table}/v1",
         "table": table, "indexId": index_id,
         "projectionDigest": index_oracle.expected_profile(index_id).projection_digest,
         "selector": selector_for(role, record_id=values["record_id"], cutoff_us=cutoff_us),
@@ -118,9 +118,9 @@ def expected_role_manifest():
         if role == "pending_trust_publications":
             sources = {"status": {"constant": "pending"}}
         documents.append({
-            "schema": "serverware.policyAuthorityCompleteIndexQueryRole/v1",
-            "querySchema": "serverware.policyAuthorityCompleteIndexQuery/v1", "operation": OPERATION,
-            "role": role, "queryId": f"serverware.policyAuthorityQuery/{OPERATION}/{role}/{table}/v1",
+            "schema": "catchplate.policyAuthorityCompleteIndexQueryRole/v1",
+            "querySchema": "catchplate.policyAuthorityCompleteIndexQuery/v1", "operation": OPERATION,
+            "role": role, "queryId": f"catchplate.policyAuthorityQuery/{OPERATION}/{role}/{table}/v1",
             "table": table, "indexId": index_id,
             "projectionDigest": index_oracle.expected_profile(index_id).projection_digest,
             "selectorSources": sources, "requiredSource": {"arguments.source": "explicit"},
@@ -134,7 +134,7 @@ def expected_role_manifest():
 
 
 def legacy_query(name="exact", **changes):
-    options = dict(query_id=f"serverware.policyAuthorityQuery/{OPERATION}/{name}/webauthn_credentials/v1",
+    options = dict(query_id=f"catchplate.policyAuthorityQuery/{OPERATION}/{name}/webauthn_credentials/v1",
         table="webauthn_credentials", predicates=(core.QueryPredicate("id", "eq", "credential-雪"),),
         order_by=(), maximum_rows=1, absent_key={"id": "credential-雪"})
     options.update(changes)
@@ -144,7 +144,7 @@ def legacy_query(name="exact", **changes):
 def legacy_document(query):
     # This literal stays the old closed v1 shape, with no complete-index fields.
     return {
-        "schema": "serverware.policyAuthorityQueryProgram/v1", "queryId": query.query_id,
+        "schema": "catchplate.policyAuthorityQueryProgram/v1", "queryId": query.query_id,
         "table": query.table,
         "predicates": [{"column": item.column, "operator": item.operator, "value": item.value}
                        for item in query.predicates],
@@ -168,7 +168,7 @@ def forged(value, **changes):
 def selected(table, identifier, row):
     key = {"id": identifier}
     return {"table": table, "key": key,
-            "keyDigest": framed("serverware.policyAuthorityBusinessKey/v1", table.encode("ascii"), canonical(key)),
+            "keyDigest": framed("catchplate.policyAuthorityBusinessKey/v1", table.encode("ascii"), canonical(key)),
             "present": row is not None, "row": copy.deepcopy(row), "contractSelector": None}
 
 
@@ -191,7 +191,7 @@ class CompleteQueryTests(unittest.TestCase):
                 self.assertEqual((query.operation, query.role, query.table, query.index_id),
                                  (OPERATION, role, table, index_id))
                 self.assertEqual(query.query_id,
-                    f"serverware.policyAuthorityQuery/{OPERATION}/{role}/{table}/v1")
+                    f"catchplate.policyAuthorityQuery/{OPERATION}/{role}/{table}/v1")
                 self.assertEqual(query.selector(), selector_for(role))
                 self.assertEqual(query.selector_items, tuple(sorted(selector_for(role).items())))
                 self.assertEqual(query.maximum_rows, 1 if hint is None else max(1, len(self.arguments[hint])))
@@ -224,8 +224,8 @@ class CompleteQueryTests(unittest.TestCase):
         self.assertEqual(empty.lower, empty.upper)
 
     def test_complete_contract_and_role_manifest_have_independent_exact_wire_shapes(self):
-        self.assertEqual(complete.QUERY_SCHEMA, "serverware.policyAuthorityCompleteIndexQuery/v1")
-        self.assertEqual(complete.ROLE_SCHEMA, "serverware.policyAuthorityCompleteIndexQueryRole/v1")
+        self.assertEqual(complete.QUERY_SCHEMA, "catchplate.policyAuthorityCompleteIndexQuery/v1")
+        self.assertEqual(complete.ROLE_SCHEMA, "catchplate.policyAuthorityCompleteIndexQueryRole/v1")
         self.assertEqual(complete.PROOF_PRIMITIVE, "authenticated-complete-index-range")
         self.assertEqual(complete.ROLES, ROLES)
         for query in self.program():
@@ -258,7 +258,7 @@ class CompleteQueryTests(unittest.TestCase):
                         completeIndexQueryRoles=expected_role_manifest())
         def handler_digest(value):
             hasher = hashlib.sha256()
-            for frame in (b"serverware.policyAuthorityHandlerContract/v1", canonical(value)):
+            for frame in (b"catchplate.policyAuthorityHandlerContract/v1", canonical(value)):
                 hasher.update(len(frame).to_bytes(8, "big"))
                 hasher.update(frame)
             return "sha256:" + hasher.hexdigest()
@@ -478,7 +478,7 @@ class CompleteQueryTests(unittest.TestCase):
         for query in old:
             with self.subTest(primitive=query.proof_primitive):
                 self.assertEqual(canonical(query.contract_value()), canonical(legacy_document(query)))
-                self.assertEqual(query.contract_value()["schema"], "serverware.policyAuthorityQueryProgram/v1")
+                self.assertEqual(query.contract_value()["schema"], "catchplate.policyAuthorityQueryProgram/v1")
                 self.assertNotIn("selector", query.contract_value())
                 self.assertNotIn("indexId", query.contract_value())
         self.assertEqual(reads.snapshot_queries(OPERATION, old[:2]), old[:2])
@@ -601,8 +601,8 @@ class CompleteQueryTests(unittest.TestCase):
     def test_planner_source_rebinds_owned_roles_and_rejects_whole_inventory_before_business_io(self):
         # Supplemental source linkage, not execution/import of the blocked
         # planner. Its earlier database-clock read remains outside this claim.
-        text = (ROOT / "serverware/authority_planner.py").read_text(encoding="utf-8")
-        module = ast.parse(text, filename="serverware/authority_planner.py")
+        text = (ROOT / "catchplate/authority_planner.py").read_text(encoding="utf-8")
+        module = ast.parse(text, filename="catchplate/authority_planner.py")
         reader, = [node for node in module.body if isinstance(node, ast.FunctionDef)
                    and node.name == "_read_bounded_transition_rows"]
         def calls(node, name):

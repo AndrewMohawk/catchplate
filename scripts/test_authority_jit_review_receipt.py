@@ -27,14 +27,14 @@ def no_external_effects(event, _arguments):
 
 
 if __name__ == "__main__":
-    os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
-    os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
+    os.environ["CATCHPLATE_PROCESS_MODE"] = "metadata-bootstrap"
+    os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
     sys.addaudithook(no_external_effects)
 
 from scripts import test_authority_audit_capacity as fixtures
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_transition_core as core
-from serverware import authority_transition_quota as quota
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_transition_core as core
+from catchplate import authority_transition_quota as quota
 
 NOW = datetime(2026, 10, 13, 12, 0, 0, 123456, tzinfo=timezone.utc)
 REQUEST = fixtures.framed("synthetic-jit-review-receipt", b"request")

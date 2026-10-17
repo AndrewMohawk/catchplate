@@ -29,7 +29,7 @@ pub(super) fn admit(raw: &[u8], configuration: &Configuration)
     let scope = &configuration.scope;
     scope.live(boottime_now_nanos().map_err(|_| invalid())?)?;
     let handoff: Handoff = decode_canonical_frame(raw)?;
-    require(handoff.api_version == "serverware.nativePublicationGenesisHandoff/v1"
+    require(handoff.api_version == "catchplate.nativePublicationGenesisHandoff/v1"
         && handoff.commissioning_id_sha256 == scope.commissioning_id_sha256
         && handoff.scope_sha256 == sha(scope)?
         && !handoff.bundle_original.is_empty() && handoff.bundle_original.is_ascii()
@@ -104,7 +104,7 @@ pub(super) fn admit(raw: &[u8], configuration: &Configuration)
     scope.live(now)?;
     require(bundle.current.completed_at_boottime_nanos <= now)?;
     let ack = encode_canonical_frame(&Acknowledgment {
-        api_version: "serverware.nativePublicationGenesisHandoffAck/v1".into(),
+        api_version: "catchplate.nativePublicationGenesisHandoffAck/v1".into(),
         handoff_sha256: Sha256Digest::compute(raw),
     })?;
     require(ack.len() <= MAX_SERVICE_FRAME_BYTES)?;

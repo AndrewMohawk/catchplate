@@ -3,15 +3,15 @@ from __future__ import annotations
 from types import MappingProxyType
 from typing import Final, Mapping
 
-from serverware import authority_contract
-from serverware import authority_audit_capacity as audit_capacity
+from catchplate import authority_contract
+from catchplate import authority_audit_capacity as audit_capacity
 
 
 PHASE2_STORE_SPEC_SCHEMA: Final[str] = (
-    "serverware.policyAuthorityPhase2StoreSpec/v1"
+    "catchplate.policyAuthorityPhase2StoreSpec/v1"
 )
 PHASE2_BACKFILL_RECEIPT_SCHEMA: Final[str] = (
-    "serverware.policyAuthorityPhase2BackfillReceipt/v1"
+    "catchplate.policyAuthorityPhase2BackfillReceipt/v1"
 )
 PHASE2_BACKFILL_MODE: Final[str] = (
     "offline-serializable-signed-exact"
@@ -93,7 +93,7 @@ AGGREGATE_BACKFILLS: Final[
                 "liveStates": ("pending", "claimed"),
                 "groupKey": (),
                 "expiryColumn": None,
-                "capacitySource": "serverware.audit_outbox_contract.MAX_PENDING",
+                "capacitySource": "catchplate.audit_outbox_contract.MAX_PENDING",
                 "capacityLimit": audit_capacity.MAX_PENDING,
                 "aggregateId": audit_capacity.AGGREGATE_ID,
                 "partitionDigest": audit_capacity.PARTITION_DIGEST,
@@ -223,7 +223,7 @@ EXTERNAL_EVIDENCE_STATEMENT_SCHEMAS: Final[
         "decision-gate-publication-chain/v1": MappingProxyType(
             {
                 "schema": (
-                    "serverware."
+                    "catchplate."
                     "policyAuthorityDecisionGatePublicationChain/v1"
                 ),
                 "requiredFields":
@@ -231,20 +231,20 @@ EXTERNAL_EVIDENCE_STATEMENT_SCHEMAS: Final[
                 "bindingFields":
                     DECISION_GATE_PUBLICATION_BINDING_FIELDS,
                 "bindingDigestDomain": (
-                    "serverware."
+                    "catchplate."
                     "policyAuthorityDecisionGatePublicationBinding/v1"
                 ),
                 "rustEnvelopeDomains": (
                     (
-                        "serverware."
+                        "catchplate."
                         "policyShadowGenerationPublication/v2"
                     ),
                     (
-                        "serverware."
+                        "catchplate."
                         "policyActivationPublicationReceipt/v1"
                     ),
                     (
-                        "serverware."
+                        "catchplate."
                         "policyShadowRuntimeAttestationVerification/v2"
                     ),
                 ),
@@ -271,7 +271,7 @@ EXTERNAL_EVIDENCE_STATEMENT_SCHEMAS: Final[
         "webauthn-hardware-authorization/v1": MappingProxyType(
             {
                 "schema":
-                    "serverware.policyAuthorityPhysicalWebAuthn/v1",
+                    "catchplate.policyAuthorityPhysicalWebAuthn/v1",
                 "bindingFields": (
                     "operation",
                     "operationId",
@@ -322,7 +322,7 @@ PRIMITIVE_CONTRACTS: Final[
                     "canonical partition digest"
                 ),
                 "stateDigestDomain":
-                    "serverware.policyAuthorityAggregateState/v1",
+                    "catchplate.policyAuthorityAggregateState/v1",
                 "stateMaterialFields": (
                     "schema",
                     "aggregateId",
@@ -384,11 +384,11 @@ PRIMITIVE_CONTRACTS: Final[
             {
                 "table": "policy_authority_exact_pages",
                 "pageDigestDomain":
-                    "serverware.policyAuthorityExactPage/v1",
+                    "catchplate.policyAuthorityExactPage/v1",
                 "rowsDigestDomain":
-                    "serverware.policyAuthorityExactPageRows/v1",
+                    "catchplate.policyAuthorityExactPageRows/v1",
                 "proofDigestDomain":
-                    "serverware.policyAuthorityExactPageProof/v1",
+                    "catchplate.policyAuthorityExactPageProof/v1",
                 "rowFields": ("key", "keyDigest", "rowDigest"),
                 "proofRule": (
                     "the signed receipt binds relation root and revision, "
@@ -401,7 +401,7 @@ PRIMITIVE_CONTRACTS: Final[
             {
                 "table": "policy_authority_work_pages",
                 "itemsDigestDomain":
-                    "serverware.policyAuthorityWorkPageItems/v1",
+                    "catchplate.policyAuthorityWorkPageItems/v1",
                 "itemFields": (
                     "mutationOrdinal",
                     "table",
@@ -426,7 +426,7 @@ PRIMITIVE_CONTRACTS: Final[
             {
                 "table": "policy_authority_tombstones",
                 "sourceRowDigestDomain":
-                    "serverware.policyAuthorityDeletedRow/v1",
+                    "catchplate.policyAuthorityDeletedRow/v1",
                 "mutationRule": (
                     "the tombstone INSERT and exact full-row CAS DELETE are "
                     "one SERIALIZABLE mutation plan"

@@ -115,7 +115,7 @@ The retained controller peer capture was independently reviewed. These checks
 do not establish runtime correctness beyond their stated scope.
 
 Both exact source archives, commands, harnesses, logs and checksums are retained
-at `codex-offload/serverware/engineering-builds/9f0e182f-genesis-ordinary-9aB7JF/`.
+at `codex-offload/catchplate/engineering-builds/9f0e182f-genesis-ordinary-9aB7JF/`.
 No image rebuild, cloud resource or paid test was used.
 
 The native publication and retrieval grant originals still require their own

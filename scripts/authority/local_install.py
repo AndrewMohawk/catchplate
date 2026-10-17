@@ -58,8 +58,8 @@ def main(argv=None):
         selected = arguments(argv)
     except (ValueError, TypeError):
         print("local installation refused: use --help", file=sys.stderr); return 2
-    from serverware.authority_local_install import LocalAuthorityInstaller
-    from serverware.authority_artifact_spec import canonical_json_bytes
+    from catchplate.authority_local_install import LocalAuthorityInstaller
+    from catchplate.authority_artifact_spec import canonical_json_bytes
     owner = None
     def cancelled(signo, frame):
         raise KeyboardInterrupt()

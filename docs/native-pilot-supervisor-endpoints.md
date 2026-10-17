@@ -7,7 +7,7 @@ This is not a launched pilot, production approval or verified hardware custody.
 
 ## Independently selected policy
 
-`serverware.nativePilotSupervisorCommissioningPolicy/v3` has the existing
+`catchplate.nativePilotSupervisorCommissioningPolicy/v3` has the existing
 measured/v2 nine fields plus `endpointPreparation` and `endpointDeliveries`.
 Its purpose is `initial-driver-bootstrap-precreation-and-endpoint-commissioning`.
 Legacy v1/v2 policies retain their original fields, purposes and behavior.
@@ -16,7 +16,7 @@ The preparation fragment is exact four fields:
 
 | Field | Meaning |
 | --- | --- |
-| `apiVersion` | `serverware.nativePilotSupervisorEndpointPolicy/v2` |
+| `apiVersion` | `catchplate.nativePilotSupervisorEndpointPolicy/v2` |
 | `initialization` | Exactly `fresh-ledger` |
 | `objectDirectory` | Independently selected existing empty root:root0700 directory under protected ancestors |
 | `peerExpectations` | Separate `cgroupPathSha256`, `securityLabelSha256` and `configurationGenerationSha256` pins |
@@ -48,7 +48,7 @@ signed assignment. The composer constructs only the explicit empty
 After complete validation and fixed-destination preflight, the existing installer
 prepares the actual empty directory as 0555. The composer retains its real
 identity and publishes four originals exclusively at fixed paths beneath
-`/etc/serverware/native-pilot-inputs/`: `endpoint-peer.json`,
+`/etc/catchplate/native-pilot-inputs/`: `endpoint-peer.json`,
 `endpoint-proof-scope.json`, `endpoint-retrieval-manifest.json` and
 `endpoint-assignment.json`. Its seven-field input joins those pins to the actual
 cold configurations, directory and measured production settings.

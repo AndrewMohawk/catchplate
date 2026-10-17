@@ -23,8 +23,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import test_native_pilot_genesis_closure_schema as closure_fixtures
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_genesis_parent_authority as authority
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_genesis_parent_authority as authority
 
 p = authority.p
 
@@ -36,8 +36,8 @@ def selected_key(seed):
 
 
 def independently_signed(api, domain, payload, key):
-    preimage = (b"serverware.signedEnvelope/v1\0" + domain.encode("ascii")
-        + b"\0serverware.canonicalJson/ascii-integer-v1\0" + g.canonical(payload))
+    preimage = (b"catchplate.signedEnvelope/v1\0" + domain.encode("ascii")
+        + b"\0catchplate.canonicalJson/ascii-integer-v1\0" + g.canonical(payload))
     return g.canonical({"apiVersion": api, "payload": payload, "signatureBase64url": p.encoded(key.sign(preimage))})
 
 
@@ -51,7 +51,7 @@ def fixture():
     release_key, release_authority = selected_key(2)
     _, delivery_authority = selected_key(3)
     closure = closure_fixtures.fixture("publicationGenesisCoordinator")
-    cold = {"apiVersion": "serverware.policyCustodyGuestConfiguration/v1", "authority": delivery_authority,
+    cold = {"apiVersion": "catchplate.policyCustodyGuestConfiguration/v1", "authority": delivery_authority,
         "serviceRole": "production-bridge", "uid": 64001, "gid": 64001}
     cold_raw = g.canonical(cold)
     configuration = {"apiVersion": authority.CONFIGURATION_API, "precreationAuthority": pre_authority,
@@ -76,13 +76,13 @@ def fixture():
     guest.update({name: window[name] for name in authority.WINDOW_FIELDS[2:]})
     guest["configurationSha256"] = p.sha(cold_raw)
     closure_raw = g.canonical(closure)
-    inner = {"apiVersion": "serverware.nativeShadowGuestLaunch/v1",
+    inner = {"apiVersion": "catchplate.nativeShadowGuestLaunch/v1",
         **{name: pin(name) for name in authority.LAUNCH_PINS}}
     inner["deliveryConfiguration"] = configuration["deliveryConfiguration"]
     inner["delivery"] = pin("delivery", guest["deliverySha256"])
     inner["closure"] = pin("closure", p.sha(closure_raw))
-    inner["verifierTransport"]["path"] = "/etc/serverware/native-pilot-inputs/native-publicationGenesisCoordinator-verifier.json"
-    launch_raw = g.canonical({"apiVersion": "serverware.nativeShadowPublicationGenesisCoordinatorGuestLaunch/v2", "keyAdmission": inner})
+    inner["verifierTransport"]["path"] = "/etc/catchplate/native-pilot-inputs/native-publicationGenesisCoordinator-verifier.json"
+    launch_raw = g.canonical({"apiVersion": "catchplate.nativeShadowPublicationGenesisCoordinatorGuestLaunch/v2", "keyAdmission": inner})
     release_payload = {"configurationSha256": p.sha(configuration_raw), "precreationSha256": p.sha(precreation_raw),
         "observationSha256": p.sha(observation_raw), "invocationId": window["invocationId"],
         "launch": pin("launch", p.sha(launch_raw)), "image": pin("image", closure["manifest"]["imageSha256"]),
@@ -188,8 +188,8 @@ class GenesisParentAuthorityTests(unittest.TestCase):
             payload[name]["sha256"] = p.sha(b"other")
             value["payloadOriginal"] = g.canonical(payload).decode("ascii")
             with self.assertRaises(ValueError): self.prepare(value)
-        for field, api in (("launchOriginal", "serverware.nativeShadowPublicationGenesisCoordinatorGuestLaunch/v1"),
-                ("closureOriginal", "serverware.nativeCustodyClosure/v4")):
+        for field, api in (("launchOriginal", "catchplate.nativeShadowPublicationGenesisCoordinatorGuestLaunch/v1"),
+                ("closureOriginal", "catchplate.nativeCustodyClosure/v4")):
             value = copy.deepcopy(self.f["release_input"])
             doc = g.document(value[field].encode("ascii"), authority.MAX_CLOSURE); doc["apiVersion"] = api
             value[field] = g.canonical(doc).decode("ascii")

@@ -12,8 +12,8 @@ import json
 import unittest
 
 import ordinary_client_compat_fixtures as fx
-from serverware import policy_bundle as pb
-from serverware.response_header_compat import (
+from catchplate import policy_bundle as pb
+from catchplate.response_header_compat import (
     HeaderCompatibilityError, RESPONSE_MODE, TRANSPORT_HEADERS,
     inspect_physical_headers,
 )
@@ -42,7 +42,7 @@ class ResponseHeaderCompatibilityTests(unittest.TestCase):
     def flow(self, fields, body=b' {"ok": true}\n', status=200, route=None, guarded=True):
         route = self.route if route is None else route
         flow = fx.response_flow(body, status=status, fields=fields)
-        flow.metadata["serverware_route"] = route
+        flow.metadata["catchplate_route"] = route
         if guarded:
             guard = self.engine._ResponseCredentialGuard()
             guard.add_text_encodings(SECRET)
@@ -119,7 +119,7 @@ class ResponseHeaderCompatibilityTests(unittest.TestCase):
             if "-" in name:
                 self.assert_refused([(raw.replace(b"-", b"_"), b"x")], "response_metadata_reserved_header")
         for name in (b"Authorization", b"Proxy-Authorization", b"proxy_authorization", b"Cookie",
-                b"Set-Cookie", b"set_cookie", b"X-Serverware-Any", b"x_serverware_any", b"X-Serverware_Any"):
+                b"Set-Cookie", b"set_cookie", b"X-Catchplate-Any", b"x_catchplate_any", b"X-Catchplate_Any"):
             self.assert_refused([(name, b"synthetic")], "response_metadata_reserved_header")
         with self.assertRaises(HeaderCompatibilityError) as raised:
             inspect_physical_headers([(b"ETag", b"one"), (b"etag", b"two")], listed_names={"etag"})
@@ -144,7 +144,7 @@ class ResponseHeaderCompatibilityTests(unittest.TestCase):
         value["routes"][0]["constraints"].append(other)
         for schema in (False, True):
             with self.assertRaises(pb.PolicyBundleError):compile_route(value, schema=schema)
-        for name in ("x_serverware_token", "proxy_connection", "n" * 129):
+        for name in ("x_catchplate_token", "proxy_connection", "n" * 129):
             value = document(); envelope = value["routes"][0]["constraints"][0]
             envelope["allowedResponseHeaderNames"] = [name]
             envelope["responseHeaderRules"] = [{"name": name, "required": False,

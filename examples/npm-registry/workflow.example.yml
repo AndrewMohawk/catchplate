@@ -1,19 +1,19 @@
 # INACTIVE SAMPLE: review before copying into .github/workflows/.
 # Keep the example directory and reviewed package-lock.json in the checkout.
-# Only the final read step receives Serverware configuration/secrets.
-name: Read npm metadata through Serverware
+# Only the final read step receives Catchplate configuration/secrets.
+name: Read npm metadata through Catchplate
 on:
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: serverware-npm-metadata-example
+  group: catchplate-npm-metadata-example
   cancel-in-progress: false
 jobs:
   read-metadata:
     if: github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-24.04
-    environment: serverware-demo
+    environment: catchplate-demo
     timeout-minutes: 5
     defaults:
       run:
@@ -36,33 +36,33 @@ jobs:
       - name: Read one explicitly permitted package
         timeout-minutes: 1
         env:
-          SERVERWARE_PROXY_URL: ${{ vars.SERVERWARE_PROXY_URL }}
-          SERVERWARE_APP_ID: ${{ vars.SERVERWARE_APP_ID }}
-          SERVERWARE_PROXY_TOKEN: ${{ secrets.SERVERWARE_PROXY_TOKEN }}
-          SERVERWARE_NPM_PACKAGE: ${{ vars.SERVERWARE_NPM_PACKAGE }}
-          TRUSTED_SERVERWARE_CA_PEM: ${{ secrets.SERVERWARE_CA_PEM }}
-          TRUSTED_PROXY_CA_PEM: ${{ secrets.SERVERWARE_PROXY_CA_PEM }}
+          CATCHPLATE_PROXY_URL: ${{ vars.CATCHPLATE_PROXY_URL }}
+          CATCHPLATE_APP_ID: ${{ vars.CATCHPLATE_APP_ID }}
+          CATCHPLATE_PROXY_TOKEN: ${{ secrets.CATCHPLATE_PROXY_TOKEN }}
+          CATCHPLATE_NPM_PACKAGE: ${{ vars.CATCHPLATE_NPM_PACKAGE }}
+          TRUSTED_CATCHPLATE_CA_PEM: ${{ secrets.CATCHPLATE_CA_PEM }}
+          TRUSTED_PROXY_CA_PEM: ${{ secrets.CATCHPLATE_PROXY_CA_PEM }}
         run: |
           set -euo pipefail
           umask 077
           test "$(node --version)" = v25.5.0
-          ca_dir=$(mktemp -d -- "$RUNNER_TEMP/serverware-npm-ca.XXXXXXXX")
-          trap 'rm -f -- "$ca_dir/serverware-ca.pem" "$ca_dir/proxy-ca.pem"; rmdir -- "$ca_dir"' EXIT
-          export SERVERWARE_CA_FILE="$ca_dir/serverware-ca.pem"
-          unset SERVERWARE_PROXY_CA_FILE
+          ca_dir=$(mktemp -d -- "$RUNNER_TEMP/catchplate-npm-ca.XXXXXXXX")
+          trap 'rm -f -- "$ca_dir/catchplate-ca.pem" "$ca_dir/proxy-ca.pem"; rmdir -- "$ca_dir"' EXIT
+          export CATCHPLATE_CA_FILE="$ca_dir/catchplate-ca.pem"
+          unset CATCHPLATE_PROXY_CA_FILE
           if [[ -n "$TRUSTED_PROXY_CA_PEM" ]]; then
-            export SERVERWARE_PROXY_CA_FILE="$ca_dir/proxy-ca.pem"
+            export CATCHPLATE_PROXY_CA_FILE="$ca_dir/proxy-ca.pem"
           fi
           node --input-type=module <<'NODE'
           import { writeFileSync } from 'node:fs';
           for (const [path, pem] of [
-            [process.env.SERVERWARE_CA_FILE, process.env.TRUSTED_SERVERWARE_CA_PEM],
-            [process.env.SERVERWARE_PROXY_CA_FILE, process.env.TRUSTED_PROXY_CA_PEM],
+            [process.env.CATCHPLATE_CA_FILE, process.env.TRUSTED_CATCHPLATE_CA_PEM],
+            [process.env.CATCHPLATE_PROXY_CA_FILE, process.env.TRUSTED_PROXY_CA_PEM],
           ]) {
             if (!path) continue;
             if (!pem || Buffer.byteLength(pem) > 262144) throw new Error('Explicit trusted CA input required');
             writeFileSync(path, pem, { mode: 0o600, flag: 'wx' });
           }
           NODE
-          unset TRUSTED_SERVERWARE_CA_PEM TRUSTED_PROXY_CA_PEM
+          unset TRUSTED_CATCHPLATE_CA_PEM TRUSTED_PROXY_CA_PEM
           timeout --signal=TERM --kill-after=5s 30s node client.mjs view

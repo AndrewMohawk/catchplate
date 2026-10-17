@@ -12,7 +12,7 @@ const hash = n => 'sha256:' + n.toString(16).padStart(64, '0');
 const copy = value => JSON.parse(JSON.stringify(value));
 const SCOPE = {registry_id: '123456789012', region: 'us-east-1', repository_name: 'team/service', image_tag: 'release-1'};
 const HEADERS = ['amz-sdk-invocation-id', 'amz-sdk-request', 'authorization', 'user-agent', 'x-amz-date', 'x-amz-target'];
-const CAPABILITY = {schema: 'serverware.operatorEcrPublication/v1', connection_type: 'aws_sigv4_v1',
+const CAPABILITY = {schema: 'catchplate.operatorEcrPublication/v1', connection_type: 'aws_sigv4_v1',
   create_rule_path: '/api/operator-demo/access-rules/aws-ecr-publication', operation_bundles: ['aws_ecr_publish_v1'],
   approval_mode: 'host_review_v1', publication_approval_required: true, credential_input: 'aws_ecr_signing_v1',
   response_mode: 'aws_ecr_publication_json_v1', route_scope: 'one_per_client_region', max_request_bytes: 16777216, max_response_bytes: 26214400,
@@ -28,34 +28,34 @@ const rule = () => ({id: IDS[2], name: 'Publish release image', status: 'active'
   publication_approval_required: true, approval_mode: 'host_review_v1', upstream_url: 'https://api.ecr.us-east-1.amazonaws.com/',
   methods: ['POST'], request_fields: [], response_fields: [], query_keys: [], allowed_headers: HEADERS,
   response_mode: 'aws_ecr_publication_json_v1', credential_input: 'aws_ecr_signing_v1', enforcement: 'active'});
-const catalog = () => ({schema: 'serverware.operatorCatalog/v1', mode: 'operator-development', productionReady: false, hardwareVerified: false,
+const catalog = () => ({schema: 'catchplate.operatorCatalog/v1', mode: 'operator-development', productionReady: false, hardwareVerified: false,
   revision: 1, policy: {policy_hash: hash(1), loaded_policy_hash: hash(1), sequence: 1, activation: 'active'},
   proxy_url: 'https://proxy.example.test', allowed_upstreams: ['https://api.ecr.us-east-1.amazonaws.com'],
   credentials: [credential()], applications: [application()], access_rules: [rule()],
   limits: Object.fromEntries(['credentials', 'applications', 'access_rules'].map(key => [key, {active: 1, retained: 1, active_max: 32, retained_max: 1024}])),
   capabilities: {credential_types: ['bearer', 'header'], response_modes: ['unfiltered_json_or_empty_v2'], credential_input_modes: ['insert', 'replace_exact'],
     request_body_modes: ['preserve_json_v1'], token_lifetime_seconds: {min: 3600, max: 7776000, default: 2592000}, oauth: false,
-    aws_credentials: {schema: 'serverware.operatorAwsCredentials/v1', connection_type: 'aws_sigv4_v1',
+    aws_credentials: {schema: 'catchplate.operatorAwsCredentials/v1', connection_type: 'aws_sigv4_v1',
       create_path: '/api/operator-demo/credentials/aws-sigv4', replace_path: '/api/operator-demo/credentials/aws-sigv4/replace',
       revoke_path: '/api/operator-demo/credentials/revoke', credential_kinds: ['long_term', 'session'], signing_available: false, automatic_renewal: false},
-    application_proxy_authentication: {schema: 'serverware.operatorProxyAuthentication/v1', path: '/api/operator-demo/applications/proxy-authentication',
+    application_proxy_authentication: {schema: 'catchplate.operatorProxyAuthentication/v1', path: '/api/operator-demo/applications/proxy-authentication',
       modes: ['bearer', 'basic_and_bearer_v1']}, ecr_publication: CAPABILITY}});
-const artifact = () => ({schema: 'serverware.ecrVerifiedImage/v1',
+const artifact = () => ({schema: 'catchplate.ecrVerifiedImage/v1',
   manifest: {media_type: 'application/vnd.oci.image.manifest.v1+json', digest: hash(10), size: 500},
   config: {media_type: 'application/vnd.oci.image.config.v1+json', digest: hash(11), size: 20},
   layers: [{media_type: 'application/vnd.oci.image.layer.v1.tar+gzip', digest: hash(12), size: 1024}],
   blobs: [{digest: hash(11), size: 20}, {digest: hash(12), size: 1024}], total_blob_bytes: 1044});
-const publication = (patch = {}) => ({schema: 'serverware.ecrPublication/v1', id: IDS[3], status: 'awaiting_review', assurance: 'host-trusted',
+const publication = (patch = {}) => ({schema: 'catchplate.ecrPublication/v1', id: IDS[3], status: 'awaiting_review', assurance: 'host-trusted',
   application_id: IDS[1], access_rule_id: IDS[2], principal_id: application().principal_id, route_id: rule().route_id, credential_id: IDS[0],
   credential_generation: 1, policy_hash: hash(1), scope: SCOPE, manifest_digest: hash(10), artifact_sha256: hash(13), artifact: artifact(),
   created_at_epoch_ms: NOW, expires_at_epoch_ms: NOW + 3600000, revision: 1, child: null, progress: null,
   artifacts_retired: false, artifact_retirement_status: 'available', artifacts_retired_at_epoch_ms: null,
   reviewer_id: null, decision_note: null, terminal_reason: null, ...patch});
 function load() {
-  const files = JSON.parse(execFileSync('python3', ['-B', '-c', 'import json; from serverware.operator_demo_portal import SCRIPT_FILES; print(json.dumps(SCRIPT_FILES))'],
+  const files = JSON.parse(execFileSync('python3', ['-B', '-c', 'import json; from catchplate.operator_demo_portal import SCRIPT_FILES; print(json.dumps(SCRIPT_FILES))'],
     {cwd: ROOT, encoding: 'utf8', timeout: 5000}));
   const context = vm.createContext({module: {exports: {}}, URL, Date: class extends Date {static now() {return NOW;} }});
-  for (const file of files) vm.runInContext(readFileSync(resolve(ROOT, 'serverware/operator_demo_web', file), 'utf8'), context, {timeout: 1000, filename: file});
+  for (const file of files) vm.runInContext(readFileSync(resolve(ROOT, 'catchplate/operator_demo_web', file), 'utf8'), context, {timeout: 1000, filename: file});
   return context;
 }
 function main() {
@@ -68,8 +68,8 @@ def deny_runtime(event, args):
     if event.startswith(('socket.', 'subprocess.')) or event in {'os.system', 'os.fork', 'os.posix_spawn'}:
         raise AssertionError('descriptor attempted runtime I/O')
 sys.addaudithook(deny_runtime)
-from serverware import operator_catalog_ecr as ecr
-assert 'serverware.app' not in sys.modules and 'serverware.config' not in sys.modules
+from catchplate import operator_catalog_ecr as ecr
+assert 'catchplate.app' not in sys.modules and 'catchplate.config' not in sys.modules
 ecr._available = lambda policy_hash: True
 print(json.dumps(ecr.capability('sha256:' + '0' * 64)))
 `], {cwd: ROOT, encoding: 'utf8', timeout: 5000, maxBuffer: 16384}));
@@ -89,8 +89,8 @@ print(json.dumps(ecr.capability('sha256:' + '0' * 64)))
   assert.equal(api.ecrAvailable({...projected, allowed_upstreams: []}, key, grant), false);
   const unavailable = catalog(); unavailable.capabilities.ecr_publication = null;
   assert(api.projectCatalog(unavailable), 'retained typed permissions remain readable when readiness is unavailable');
-  const config = copy(api.ecrClientConfig(projected, client, grant, 'synthetic-client-token', './serverware-ca.pem'));
-  assert.equal(config.schema, 'serverware.awsEcrPublicationClient/v1'); assert.equal(config.control_api_url, 'https://proxy.example.test/v1/ecr/publications');
+  const config = copy(api.ecrClientConfig(projected, client, grant, 'synthetic-client-token', './catchplate-ca.pem'));
+  assert.equal(config.schema, 'catchplate.awsEcrPublicationClient/v1'); assert.equal(config.control_api_url, 'https://proxy.example.test/v1/ecr/publications');
   assert.equal(config.expected_policy_hash, hash(1)); assert.equal(config.proxy_password, 'synthetic-client-token');
   for (const field of ['secret_access_key', 'access_key_id', 'session_token', 'publication_id', 'selected_publication_id', 'execute_write']) assert(!Object.hasOwn(config, field));
   assert.throws(() => api.ecrClientConfig(projected, {...client, proxy_authentication: 'bearer'}, grant, 'synthetic', './ca.pem'));

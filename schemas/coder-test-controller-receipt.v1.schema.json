@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/coder-test-controller-receipt.v1.schema.json",
-  "title": "Serverware Controller Receipt Contract v11",
+  "$id": "https://catchplate.invalid/schemas/coder-test-controller-receipt.v1.schema.json",
+  "title": "Catchplate Controller Receipt Contract v11",
   "description": "Closed, authenticated, content-addressed controller receipt. PASS exists only after current final authorization, clean destruction, an independent terminal seal, and atomic single-consumer pipeline commit. Every other accepted outcome is terminal and permanently non-passing.",
   "type": "object",
   "additionalProperties": false,
@@ -276,7 +276,7 @@
           "const": "11"
         },
         "magic": {
-          "const": "SERVERWARE-RECEIPT"
+          "const": "CATCHPLATE-RECEIPT"
         },
         "transport": {
           "const": "ROOT_OWNED_PEERCRED_SEQPACKET"
@@ -356,48 +356,48 @@
     },
     "signatureDomain": {
       "enum": [
-        "serverware/pipeline-plan/v11",
-        "serverware/plan-config/v11",
-        "serverware/plan-root-checkpoint/v11",
-        "serverware/authority-snapshot/v11",
-        "serverware/request-build/v11",
-        "serverware/request-unit/v11",
-        "serverware/request-integration/v11",
-        "serverware/request-e2e/v11",
-        "serverware/request-attestation/v11",
-        "serverware/predecessor-reference/v11",
-        "serverware/build-closure/v11",
-        "serverware/state-cas-quorum/v11",
-        "serverware/state-quorum-membership-checkpoint/v11",
-        "serverware/state-quorum-epoch-floor/v11",
-        "serverware/immutable-store-availability/v11",
-        "serverware/state-witness-anti-equivocation/v11",
-        "serverware/state-witness-admin-statement/v11",
-        "serverware/state-witness-global-admin-log-checkpoint/v11",
-        "serverware/reservation-commit/v11",
-        "serverware/lane-finalization/v11",
-        "serverware/host-attestation/v11",
-        "serverware/source-observation/v11",
-        "serverware/coverage-observation/v11",
-        "serverware/stage-record/v11",
-        "serverware/artifact-manifest/v11",
-        "serverware/resource-journal/v11",
-        "serverware/lifecycle-journal/v11",
-        "serverware/no-build-monitor/v11",
-        "serverware/no-build-start/v11",
-        "serverware/no-build-end/v11",
-        "serverware/attestation-freshness/v11",
-        "serverware/post-quote-attestation-verdict/v11",
-        "serverware/cleanup-inventory/v11",
-        "serverware/destroy-monitor/v11",
-        "serverware/post-destroy-monitor/v11",
-        "serverware/containment/v11",
-        "serverware/credential-revocation/v11",
-        "serverware/terminal-seal/v11",
-        "serverware/final-trust-observation/v11",
-        "serverware/receipt-authentication/v11",
-        "serverware/final-verdict/v11",
-        "serverware/execution-manifest/v11"
+        "catchplate/pipeline-plan/v11",
+        "catchplate/plan-config/v11",
+        "catchplate/plan-root-checkpoint/v11",
+        "catchplate/authority-snapshot/v11",
+        "catchplate/request-build/v11",
+        "catchplate/request-unit/v11",
+        "catchplate/request-integration/v11",
+        "catchplate/request-e2e/v11",
+        "catchplate/request-attestation/v11",
+        "catchplate/predecessor-reference/v11",
+        "catchplate/build-closure/v11",
+        "catchplate/state-cas-quorum/v11",
+        "catchplate/state-quorum-membership-checkpoint/v11",
+        "catchplate/state-quorum-epoch-floor/v11",
+        "catchplate/immutable-store-availability/v11",
+        "catchplate/state-witness-anti-equivocation/v11",
+        "catchplate/state-witness-admin-statement/v11",
+        "catchplate/state-witness-global-admin-log-checkpoint/v11",
+        "catchplate/reservation-commit/v11",
+        "catchplate/lane-finalization/v11",
+        "catchplate/host-attestation/v11",
+        "catchplate/source-observation/v11",
+        "catchplate/coverage-observation/v11",
+        "catchplate/stage-record/v11",
+        "catchplate/artifact-manifest/v11",
+        "catchplate/resource-journal/v11",
+        "catchplate/lifecycle-journal/v11",
+        "catchplate/no-build-monitor/v11",
+        "catchplate/no-build-start/v11",
+        "catchplate/no-build-end/v11",
+        "catchplate/attestation-freshness/v11",
+        "catchplate/post-quote-attestation-verdict/v11",
+        "catchplate/cleanup-inventory/v11",
+        "catchplate/destroy-monitor/v11",
+        "catchplate/post-destroy-monitor/v11",
+        "catchplate/containment/v11",
+        "catchplate/credential-revocation/v11",
+        "catchplate/terminal-seal/v11",
+        "catchplate/final-trust-observation/v11",
+        "catchplate/receipt-authentication/v11",
+        "catchplate/final-verdict/v11",
+        "catchplate/execution-manifest/v11"
       ]
     },
     "keyLeaf": {
@@ -707,7 +707,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/immutable-store-availability/v11"
+          "const": "catchplate/immutable-store-availability/v11"
         },
         "payload": {
           "$ref": "#/$defs/immutableAvailabilityCommitmentPayload"
@@ -724,7 +724,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/immutable-store-availability/v11"
+                  "const": "catchplate/immutable-store-availability/v11"
                 },
                 "signerRole": {
                   "const": "immutableStore"
@@ -757,7 +757,7 @@
               "const": "build"
             },
             "planStageLabel": {
-              "const": "serverware-build-v1"
+              "const": "catchplate-build-v1"
             }
           }
         },
@@ -781,7 +781,7 @@
               "const": "unit"
             },
             "planStageLabel": {
-              "const": "serverware-unit-no-build-v1"
+              "const": "catchplate-unit-no-build-v1"
             }
           }
         },
@@ -805,7 +805,7 @@
               "const": "integration"
             },
             "planStageLabel": {
-              "const": "serverware-integration-no-build-v1"
+              "const": "catchplate-integration-no-build-v1"
             }
           }
         },
@@ -829,7 +829,7 @@
               "const": "e2e"
             },
             "planStageLabel": {
-              "const": "serverware-e2e-no-build-v1"
+              "const": "catchplate-e2e-no-build-v1"
             }
           }
         },
@@ -853,7 +853,7 @@
               "const": "attestation"
             },
             "planStageLabel": {
-              "const": "serverware-attestation-no-build-v1"
+              "const": "catchplate-attestation-no-build-v1"
             }
           }
         }
@@ -975,7 +975,7 @@
           "const": 11
         },
         "requestSchemaId": {
-          "const": "https://serverware.invalid/schemas/coder-test-controller-request.v1.schema.json"
+          "const": "https://catchplate.invalid/schemas/coder-test-controller-request.v1.schema.json"
         },
         "requestSchemaSha256": {
           "$ref": "#/$defs/sha256"
@@ -1460,7 +1460,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/state-quorum-epoch-floor/v11"
+          "const": "catchplate/state-quorum-epoch-floor/v11"
         },
         "payload": {
           "$ref": "#/$defs/membershipEpochFloorPayload"
@@ -1477,7 +1477,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/state-quorum-epoch-floor/v11"
+                  "const": "catchplate/state-quorum-epoch-floor/v11"
                 },
                 "signerRole": {
                   "const": "stateEpochFloor"
@@ -1583,7 +1583,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/state-quorum-membership-checkpoint/v11"
+          "const": "catchplate/state-quorum-membership-checkpoint/v11"
         },
         "payload": {
           "$ref": "#/$defs/quorumMembershipCheckpointPayload"
@@ -1600,7 +1600,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/state-quorum-membership-checkpoint/v11"
+                  "const": "catchplate/state-quorum-membership-checkpoint/v11"
                 },
                 "signerRole": {
                   "const": "stateQuorumMembership"
@@ -1787,7 +1787,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/state-cas-quorum/v11"
+                  "const": "catchplate/state-cas-quorum/v11"
                 },
                 "signerRole": {
                   "const": "stateQuorum"
@@ -2136,7 +2136,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/state-witness-admin-statement/v11"
+          "const": "catchplate/state-witness-admin-statement/v11"
         },
         "payload": {
           "$ref": "#/$defs/adminLogStatementPayload"
@@ -2153,7 +2153,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/state-witness-admin-statement/v11"
+                  "const": "catchplate/state-witness-admin-statement/v11"
                 },
                 "signerRole": {
                   "const": "stateWitnessAdmin"
@@ -2239,7 +2239,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/state-witness-global-admin-log-checkpoint/v11"
+          "const": "catchplate/state-witness-global-admin-log-checkpoint/v11"
         },
         "payload": {
           "$ref": "#/$defs/globalAdminLogCheckpointPayload"
@@ -2256,7 +2256,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/state-witness-global-admin-log-checkpoint/v11"
+                  "const": "catchplate/state-witness-global-admin-log-checkpoint/v11"
                 },
                 "signerRole": {
                   "const": "stateWitnessAdmin"
@@ -2557,7 +2557,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/state-witness-anti-equivocation/v11"
+          "const": "catchplate/state-witness-anti-equivocation/v11"
         },
         "payload": {
           "$ref": "#/$defs/antiEquivocationResultPayload"
@@ -2574,7 +2574,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/state-witness-anti-equivocation/v11"
+                  "const": "catchplate/state-witness-anti-equivocation/v11"
                 },
                 "signerRole": {
                   "const": "stateWitness"
@@ -2731,7 +2731,7 @@
                       "const": "attestation"
                     },
                     "planStageLabel": {
-                      "const": "serverware-attestation-no-build-v1"
+                      "const": "catchplate-attestation-no-build-v1"
                     }
                   }
                 }
@@ -3005,13 +3005,13 @@
         },
         "objectDomain": {
           "enum": [
-            "serverware/source-manifest-page/v11",
-            "serverware/coverage-page/v11",
-            "serverware/no-build-event-page/v11",
-            "serverware/mapped-input-page/v11",
-            "serverware/interpreter-provenance-page/v11",
-            "serverware/executable-vma-page/v11",
-            "serverware/resource-inventory-page/v11"
+            "catchplate/source-manifest-page/v11",
+            "catchplate/coverage-page/v11",
+            "catchplate/no-build-event-page/v11",
+            "catchplate/mapped-input-page/v11",
+            "catchplate/interpreter-provenance-page/v11",
+            "catchplate/executable-vma-page/v11",
+            "catchplate/resource-inventory-page/v11"
           ]
         },
         "subjectBindingSha256": {
@@ -6748,7 +6748,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/no-build-start/v11"
+          "const": "catchplate/no-build-start/v11"
         },
         "payload": {
           "$ref": "#/$defs/auditSessionAnchorPayload"
@@ -6765,7 +6765,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/no-build-start/v11"
+                  "const": "catchplate/no-build-start/v11"
                 },
                 "signerRole": {
                   "const": "noBuildMonitor"
@@ -6787,7 +6787,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/no-build-end/v11"
+          "const": "catchplate/no-build-end/v11"
         },
         "payload": {
           "$ref": "#/$defs/auditSessionAnchorPayload"
@@ -6804,7 +6804,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/no-build-end/v11"
+                  "const": "catchplate/no-build-end/v11"
                 },
                 "signerRole": {
                   "const": "noBuildMonitor"
@@ -8576,7 +8576,7 @@
           "then": {
             "properties": {
               "domain": {
-                "const": "serverware/execution-manifest/v11"
+                "const": "catchplate/execution-manifest/v11"
               },
               "payload": {
                 "$ref": "#/$defs/executionManifestPayload"
@@ -8584,7 +8584,7 @@
               "signature": {
                 "properties": {
                   "domain": {
-                    "const": "serverware/execution-manifest/v11"
+                    "const": "catchplate/execution-manifest/v11"
                   },
                   "signerRole": {
                     "const": "launchAuthorizer"
@@ -8608,7 +8608,7 @@
           "then": {
             "properties": {
               "domain": {
-                "const": "serverware/host-attestation/v11"
+                "const": "catchplate/host-attestation/v11"
               },
               "payload": {
                 "$ref": "#/$defs/hostAttestationPayload"
@@ -8616,7 +8616,7 @@
               "signature": {
                 "properties": {
                   "domain": {
-                    "const": "serverware/host-attestation/v11"
+                    "const": "catchplate/host-attestation/v11"
                   },
                   "signerRole": {
                     "const": "hostAttestation"
@@ -8640,7 +8640,7 @@
           "then": {
             "properties": {
               "domain": {
-                "const": "serverware/credential-revocation/v11"
+                "const": "catchplate/credential-revocation/v11"
               },
               "payload": {
                 "$ref": "#/$defs/credentialRevocationPayload"
@@ -8648,7 +8648,7 @@
               "signature": {
                 "properties": {
                   "domain": {
-                    "const": "serverware/credential-revocation/v11"
+                    "const": "catchplate/credential-revocation/v11"
                   },
                   "signerRole": {
                     "const": "credentialRevoker"
@@ -8672,7 +8672,7 @@
           "then": {
             "properties": {
               "domain": {
-                "const": "serverware/source-observation/v11"
+                "const": "catchplate/source-observation/v11"
               },
               "payload": {
                 "$ref": "#/$defs/sourceObservationPayload"
@@ -8680,7 +8680,7 @@
               "signature": {
                 "properties": {
                   "domain": {
-                    "const": "serverware/source-observation/v11"
+                    "const": "catchplate/source-observation/v11"
                   },
                   "signerRole": {
                     "const": "sourceObserver"
@@ -8704,7 +8704,7 @@
           "then": {
             "properties": {
               "domain": {
-                "const": "serverware/coverage-observation/v11"
+                "const": "catchplate/coverage-observation/v11"
               },
               "payload": {
                 "$ref": "#/$defs/coverageObservationPayload"
@@ -8712,7 +8712,7 @@
               "signature": {
                 "properties": {
                   "domain": {
-                    "const": "serverware/coverage-observation/v11"
+                    "const": "catchplate/coverage-observation/v11"
                   },
                   "signerRole": {
                     "const": "coverageObserver"
@@ -8736,7 +8736,7 @@
           "then": {
             "properties": {
               "domain": {
-                "const": "serverware/stage-record/v11"
+                "const": "catchplate/stage-record/v11"
               },
               "payload": {
                 "$ref": "#/$defs/stageRecordPayload"
@@ -8744,7 +8744,7 @@
               "signature": {
                 "properties": {
                   "domain": {
-                    "const": "serverware/stage-record/v11"
+                    "const": "catchplate/stage-record/v11"
                   },
                   "signerRole": {
                     "const": "stageRecord"
@@ -8768,7 +8768,7 @@
           "then": {
             "properties": {
               "domain": {
-                "const": "serverware/artifact-manifest/v11"
+                "const": "catchplate/artifact-manifest/v11"
               },
               "payload": {
                 "$ref": "#/$defs/artifactManifestPayload"
@@ -8776,7 +8776,7 @@
               "signature": {
                 "properties": {
                   "domain": {
-                    "const": "serverware/artifact-manifest/v11"
+                    "const": "catchplate/artifact-manifest/v11"
                   },
                   "signerRole": {
                     "const": "artifactManifest"
@@ -8800,7 +8800,7 @@
           "then": {
             "properties": {
               "domain": {
-                "const": "serverware/resource-journal/v11"
+                "const": "catchplate/resource-journal/v11"
               },
               "payload": {
                 "$ref": "#/$defs/resourceJournalPayload"
@@ -8808,7 +8808,7 @@
               "signature": {
                 "properties": {
                   "domain": {
-                    "const": "serverware/resource-journal/v11"
+                    "const": "catchplate/resource-journal/v11"
                   },
                   "signerRole": {
                     "const": "resourceJournal"
@@ -8832,7 +8832,7 @@
           "then": {
             "properties": {
               "domain": {
-                "const": "serverware/lifecycle-journal/v11"
+                "const": "catchplate/lifecycle-journal/v11"
               },
               "payload": {
                 "$ref": "#/$defs/lifecycleJournalPayload"
@@ -8840,7 +8840,7 @@
               "signature": {
                 "properties": {
                   "domain": {
-                    "const": "serverware/lifecycle-journal/v11"
+                    "const": "catchplate/lifecycle-journal/v11"
                   },
                   "signerRole": {
                     "const": "lifecycleJournal"
@@ -8864,7 +8864,7 @@
           "then": {
             "properties": {
               "domain": {
-                "const": "serverware/no-build-monitor/v11"
+                "const": "catchplate/no-build-monitor/v11"
               },
               "payload": {
                 "$ref": "#/$defs/noBuildMonitorPayload"
@@ -8872,7 +8872,7 @@
               "signature": {
                 "properties": {
                   "domain": {
-                    "const": "serverware/no-build-monitor/v11"
+                    "const": "catchplate/no-build-monitor/v11"
                   },
                   "signerRole": {
                     "const": "noBuildMonitor"
@@ -8896,7 +8896,7 @@
           "then": {
             "properties": {
               "domain": {
-                "const": "serverware/attestation-freshness/v11"
+                "const": "catchplate/attestation-freshness/v11"
               },
               "payload": {
                 "$ref": "#/$defs/trustedFreshnessPayload"
@@ -8904,7 +8904,7 @@
               "signature": {
                 "properties": {
                   "domain": {
-                    "const": "serverware/attestation-freshness/v11"
+                    "const": "catchplate/attestation-freshness/v11"
                   },
                   "signerRole": {
                     "const": "trustedTime"
@@ -8928,7 +8928,7 @@
           "then": {
             "properties": {
               "domain": {
-                "const": "serverware/post-quote-attestation-verdict/v11"
+                "const": "catchplate/post-quote-attestation-verdict/v11"
               },
               "payload": {
                 "$ref": "#/$defs/postQuoteAttestationVerdictPayload"
@@ -8936,7 +8936,7 @@
               "signature": {
                 "properties": {
                   "domain": {
-                    "const": "serverware/post-quote-attestation-verdict/v11"
+                    "const": "catchplate/post-quote-attestation-verdict/v11"
                   },
                   "signerRole": {
                     "const": "attestationVerifier"
@@ -8960,7 +8960,7 @@
           "then": {
             "properties": {
               "domain": {
-                "const": "serverware/cleanup-inventory/v11"
+                "const": "catchplate/cleanup-inventory/v11"
               },
               "payload": {
                 "$ref": "#/$defs/cleanupInventoryPayload"
@@ -8968,7 +8968,7 @@
               "signature": {
                 "properties": {
                   "domain": {
-                    "const": "serverware/cleanup-inventory/v11"
+                    "const": "catchplate/cleanup-inventory/v11"
                   },
                   "signerRole": {
                     "const": "cleanupInventory"
@@ -8992,7 +8992,7 @@
           "then": {
             "properties": {
               "domain": {
-                "const": "serverware/destroy-monitor/v11"
+                "const": "catchplate/destroy-monitor/v11"
               },
               "payload": {
                 "$ref": "#/$defs/cleanupMonitorPayload"
@@ -9000,7 +9000,7 @@
               "signature": {
                 "properties": {
                   "domain": {
-                    "const": "serverware/destroy-monitor/v11"
+                    "const": "catchplate/destroy-monitor/v11"
                   },
                   "signerRole": {
                     "const": "destroyMonitor"
@@ -9024,7 +9024,7 @@
           "then": {
             "properties": {
               "domain": {
-                "const": "serverware/post-destroy-monitor/v11"
+                "const": "catchplate/post-destroy-monitor/v11"
               },
               "payload": {
                 "$ref": "#/$defs/cleanupMonitorPayload"
@@ -9032,7 +9032,7 @@
               "signature": {
                 "properties": {
                   "domain": {
-                    "const": "serverware/post-destroy-monitor/v11"
+                    "const": "catchplate/post-destroy-monitor/v11"
                   },
                   "signerRole": {
                     "const": "postDestroyMonitor"
@@ -9056,7 +9056,7 @@
           "then": {
             "properties": {
               "domain": {
-                "const": "serverware/containment/v11"
+                "const": "catchplate/containment/v11"
               },
               "payload": {
                 "$ref": "#/$defs/containmentPayload"
@@ -9064,7 +9064,7 @@
               "signature": {
                 "properties": {
                   "domain": {
-                    "const": "serverware/containment/v11"
+                    "const": "catchplate/containment/v11"
                   },
                   "signerRole": {
                     "const": "containment"
@@ -9088,7 +9088,7 @@
           "then": {
             "properties": {
               "domain": {
-                "const": "serverware/terminal-seal/v11"
+                "const": "catchplate/terminal-seal/v11"
               },
               "payload": {
                 "$ref": "#/$defs/terminalSealPayload"
@@ -9096,7 +9096,7 @@
               "signature": {
                 "properties": {
                   "domain": {
-                    "const": "serverware/terminal-seal/v11"
+                    "const": "catchplate/terminal-seal/v11"
                   },
                   "signerRole": {
                     "const": "terminalSeal"
@@ -9417,7 +9417,7 @@
               "const": "COVERAGE_OBSERVATION"
             },
             "objectDomain": {
-              "const": "serverware/coverage-observation/v11"
+              "const": "catchplate/coverage-observation/v11"
             },
             "resolvedObject": {
               "properties": {
@@ -9493,7 +9493,7 @@
               "const": "TRUSTED_FRESHNESS"
             },
             "objectDomain": {
-              "const": "serverware/attestation-freshness/v11"
+              "const": "catchplate/attestation-freshness/v11"
             },
             "resolvedObject": {
               "properties": {
@@ -9521,7 +9521,7 @@
               "const": "POST_QUOTE_ATTESTATION_VERDICT"
             },
             "objectDomain": {
-              "const": "serverware/post-quote-attestation-verdict/v11"
+              "const": "catchplate/post-quote-attestation-verdict/v11"
             },
             "resolvedObject": {
               "properties": {
@@ -9546,7 +9546,7 @@
                           "const": "attestation"
                         },
                         "planStageLabel": {
-                          "const": "serverware-attestation-no-build-v1"
+                          "const": "catchplate-attestation-no-build-v1"
                         }
                       }
                     }
@@ -10126,7 +10126,7 @@
                           "const": "attestation"
                         },
                         "planStageLabel": {
-                          "const": "serverware-attestation-no-build-v1"
+                          "const": "catchplate-attestation-no-build-v1"
                         }
                       }
                     }
@@ -10780,7 +10780,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/final-trust-observation/v11"
+          "const": "catchplate/final-trust-observation/v11"
         },
         "payload": {
           "$ref": "#/$defs/finalTrustObservationPayload"
@@ -10797,7 +10797,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/final-trust-observation/v11"
+                  "const": "catchplate/final-trust-observation/v11"
                 },
                 "signerRole": {
                   "const": "trustedTime"
@@ -10861,7 +10861,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/receipt-authentication/v11"
+          "const": "catchplate/receipt-authentication/v11"
         },
         "payload": {
           "$ref": "#/$defs/receiptAuthenticationPayload"
@@ -10878,7 +10878,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/receipt-authentication/v11"
+                  "const": "catchplate/receipt-authentication/v11"
                 },
                 "signerRole": {
                   "const": "controllerReceipt"
@@ -11018,7 +11018,7 @@
       ],
       "properties": {
         "domain": {
-          "const": "serverware/final-verdict/v11"
+          "const": "catchplate/final-verdict/v11"
         },
         "payload": {
           "$ref": "#/$defs/finalVerdictPayload"
@@ -11035,7 +11035,7 @@
               "type": "object",
               "properties": {
                 "domain": {
-                  "const": "serverware/final-verdict/v11"
+                  "const": "catchplate/final-verdict/v11"
                 },
                 "signerRole": {
                   "const": "finalVerdictCheckpoint"
@@ -11049,7 +11049,7 @@
   },
   "x-canonical-v11": {
     "versioning": "This schema defines contractVersion 11 only. Every key leaf, signature, envelope, request projection, receipt projection, typed object, reference, Merkle domain, and length projection uses the v11 primitives and domains below. Every other version or domain is rejected; there is no compatibility mode.",
-    "primitive": "JCS means RFC 8785 canonical JSON encoded as UTF-8. LEN_BYTES(P) is the exact unsigned count of octets in byte string P before JSON or base64url representation; it is range-checked as a schema u64. LEN64BE(part) is the exactly 8-byte unsigned big-endian length of part and is used only to frame arbitrary LF11 parts. D20(value) is the exactly 20 ASCII bytes of a schema u64 after canonical validation and is the sole encoding of LEN_BYTES(P), an exact canonical byte length, or any other schema u64 inside a digest preimage. LF11(tag,parts...) = UTF8('serverware/controller/v11/') || LEN64BE(UTF8(tag)) || UTF8(tag) ||, for each part in order, LEN64BE(part) || part. H11(tag,parts...) is lowercase hexadecimal SHA-256(LF11(tag,parts...)). HEX consumes exactly 64 lowercase hexadecimal characters as 32 bytes. No implicit coercion is permitted.",
+    "primitive": "JCS means RFC 8785 canonical JSON encoded as UTF-8. LEN_BYTES(P) is the exact unsigned count of octets in byte string P before JSON or base64url representation; it is range-checked as a schema u64. LEN64BE(part) is the exactly 8-byte unsigned big-endian length of part and is used only to frame arbitrary LF11 parts. D20(value) is the exactly 20 ASCII bytes of a schema u64 after canonical validation and is the sole encoding of LEN_BYTES(P), an exact canonical byte length, or any other schema u64 inside a digest preimage. LF11(tag,parts...) = UTF8('catchplate/controller/v11/') || LEN64BE(UTF8(tag)) || UTF8(tag) ||, for each part in order, LEN64BE(part) || part. H11(tag,parts...) is lowercase hexadecimal SHA-256(LF11(tag,parts...)). HEX consumes exactly 64 lowercase hexadecimal characters as 32 bytes. No implicit coercion is permitted.",
     "u64": "All u64 fields are 20 ASCII digits, zero padded. Parse without floating point and reject values lexicographically greater than 18446744073709551615.",
     "keyLeaf": "keyLeafSha256 = H11('key-leaf',UTF8('11'),UTF8(role),UTF8(principalId),UTF8(keyId),UTF8(algorithm),HEX(spkiDerSha256),HEX(physicalPrivateKeyIdentitySha256),HEX(trustRootSha256),D20(trustRevision),UTF8(validFrom),UTF8(validUntil)). This formula is identical to the request schema and is the sole key identity for signature verification and role authorization. physicalPrivateKeyIdentitySha256 is resolved from independently verified hardware, HSM, enclave, or equivalent key-origin attestation and cannot be asserted by the signer.",
     "merkle": "For tree domain D, the empty root is H11('merkle-empty',UTF8(D)); Merkle leaf = H11('merkle-leaf',UTF8(D),HEX(leafSha256)); internal node = H11('merkle-node',UTF8(D),HEX(left),HEX(right)). Starting with the leaf, LEFT computes node(sibling,current) and RIGHT computes node(current,sibling). The final value equals rootSha256. leafOrdinal, treeSize, path length, and directions describe the same complete binary promotion algorithm; no duplicate-last convention is permitted.",
@@ -11074,7 +11074,7 @@
     "noBuildProjectionRoots": "Resolve the complete INTERPRETER_PROVENANCE set in original leafOrdinal order. Scripts are exactly leaves with provenanceKind SCRIPT or BYTECODE. For their contiguous zero-based projection ordinal i, scriptProjectionLeaf[i] = H11('no-build/script-projection',D20(i),D20(source leafOrdinal),HEX(source leafSha256),HEX(canonicalPath.canonicalPathUtf8Sha256),HEX(contentSha256),HEX(eventSubjectSha256)); observedScriptRootSha256 = M11('NO_BUILD_SCRIPTS_V11',ordered scriptProjectionLeaf) and observedScriptCount equals the projection length. Modules are exactly leaves with provenanceKind NATIVE_LIBRARY, DYNAMIC_LOADER, RUNTIME_MODULE, RUNTIME_PACKAGE, JIT_SOURCE, or MAPPED_EXECUTABLE_INPUT. moduleProjectionLeaf and observedModuleRootSha256 use the identical fields and H11('no-build/module-projection',...) / M11('NO_BUILD_MODULES_V11',...). No leaf may occur in the wrong projection, be omitted, or occur twice. startAuditAnchorSha256 = E11(startAnchor.domain,startAnchor.payloadSha256,startAnchor.signature) and endAuditAnchorSha256 = E11(endAnchor.domain,endAnchor.payloadSha256,endAnchor.signature); both signed payloads equal the event index session, subject, boot, configuration, exact first/last ordinal and predecessor/successor head. The index pages resolve every event between those anchors exactly once.",
     "executableVmaUniverse": "Every mapping with any executable permission is represented. Kernel maps/events determine backingKind, filesystemReachability, jitProduced, memfdBacked, writeToExecuteTransitionObserved, and deletionEventSha256; leaf claims must equal those observations. Exact predicates are: JIT iff jitProduced=true or backingKind=JIT; MEMFD iff not JIT and (memfdBacked=true or backingKind=MEMFD); RW_TO_RX iff neither prior predicate and writeToExecuteTransitionObserved=true; DELETED_FILE iff no prior predicate and backingKind=FILESYSTEM and filesystemReachability=DELETED with a real deletion event; FILE_BACKED iff no prior predicate and backingKind=FILESYSTEM and filesystemReachability=PRESENT; ANONYMOUS iff no prior predicate and backingKind=ANONYMOUS with NOT_APPLICABLE reachability. Classification precedence/ordinal is JIT 0, MEMFD 1, RW_TO_RX 2, DELETED_FILE 3, FILE_BACKED 4, ANONYMOUS 5; exactly one predicate succeeds. Initial protection supports NONE/R/W/X/RW/RX/WX/RWX and final executable protection supports X/RX/WX/RWX. unsafeWritableExecutable is true for final WX or RWX or any simultaneous writable+executable interval, irrespective of class. unsafeRwxRootSha256=M11('UNSAFE_RWX_VMAS_V11',ordered unsafe leaf digests); PASS requires its canonical empty root, unsafeRwxCount zero, every leaf unsafeWritableExecutable=false, and no unobserved transition. All class/kernel/monitor/provenance roots use exact paged-set leaf digests; class counts sum to the universe and unmatched/unknown values are zero.",
     "attestationReplayEngine": "The verifier resolves one independently pinned replay-engine record and one platform-specific adapter before quote parsing. Exact mapping is AMD_SEV_SNP->AMD_SEV_SNP_V11, INTEL_TDX->INTEL_TDX_V11, AWS_NITRO->AWS_NITRO_V11, ARM_CCA->ARM_CCA_V11. nativeReplayResult platformAdapterId/platformAdapterSha256 equal that platform's external adapter pin and all replay-engine implementation/image/measurement/policy/trust/non-revocation fields equal the engine pin. replayEngineIdentitySha256=H11('attestation/replay-engine',HEX(replayEngineImplementationSha256),HEX(replayEngineImageSha256),HEX(replayEngineMeasurementSha256),HEX(replayEnginePolicySha256),UTF8(platform),UTF8(platformAdapterId),HEX(platformAdapterSha256),HEX(replayEngineTrustRootSha256),D20(replayEngineTrustRevision),HEX(replayEngineNonRevocationRootSha256),D20(replayEngineNonRevocationRevision)). replayEngineVerifiedAt lies inside request/freshness intervals and no later than replayedAt. Request, quote, runtime, policy object, store, snapshot, or delegated verifier cannot select or substitute the engine or adapter.",
-    "trustedFreshnessJoin": "trustedFreshnessSha256 equals trustedFreshnessReference.objectSha256, which is recomputed exactly as H11('typed-signed-object',UTF8('TRUSTED_FRESHNESS'),UTF8('11'),UTF8('serverware/attestation-freshness/v11'),D20(canonicalByteLength),JCS(resolvedObject)). resolvedObject is the closed trusted-freshness signed envelope; its E11 digest, payload digest, signature, subject, challenge, binding, interval, and trusted-time key are independently verified. postQuoteAttestationVerdict.payload.trustedFreshnessSha256 and trustedTimeObservationSha256 both equal this same objectSha256. No digest-only, unresolved, differently typed, or differently versioned freshness object authorizes PASS.",
+    "trustedFreshnessJoin": "trustedFreshnessSha256 equals trustedFreshnessReference.objectSha256, which is recomputed exactly as H11('typed-signed-object',UTF8('TRUSTED_FRESHNESS'),UTF8('11'),UTF8('catchplate/attestation-freshness/v11'),D20(canonicalByteLength),JCS(resolvedObject)). resolvedObject is the closed trusted-freshness signed envelope; its E11 digest, payload digest, signature, subject, challenge, binding, interval, and trusted-time key are independently verified. postQuoteAttestationVerdict.payload.trustedFreshnessSha256 and trustedTimeObservationSha256 both equal this same objectSha256. No digest-only, unresolved, differently typed, or differently versioned freshness object authorizes PASS.",
     "attestationExactByteObject": "This is the sole exact-byte attestation object formula. For r, require r.contentAddress = 'sha256:' || r.exactBytesSha256 and r.objectSha256 = H11('attestation-exact-byte-object',UTF8(r.referenceVersion),UTF8(r.objectType),UTF8(r.platform),UTF8(r.mediaType),D20(r.exactByteLength),HEX(r.exactBytesSha256),UTF8(r.contentAddress),HEX(r.subjectBindingSha256),HEX(r.platformRootSha256),HEX(r.storeLeafSha256)). No proof, store root/revision, retrieval transcript, availability commitment, attestationPolicySha256, or objectSha256 is in this preimage. Each r also satisfies immutableStore with contentDigestSha256 = r.exactBytesSha256. Its directional store proof is the persistence proof; its retrieval proof must return the same address, exact length, digest, store identity/root/revision, and availability commitment before replay. For ATTESTATION_POLICY only, attestationPolicySha256 is separately recomputed as H11('attestation/prepublished-policy-bytes',D20(LEN_BYTES(exact retrieved bytes)),exact retrieved bytes), and exactByteLength equals LEN_BYTES(exact retrieved bytes); the signed post-quote verdict binds that value. Exact-byte caps are PLATFORM_QUOTE 1048576, PLATFORM_REPORT 8388608, PLATFORM_ENDORSEMENT 8388608, PLATFORM_CERTIFICATE_CHAIN 8388608, PLATFORM_CRL 8388608, ATTESTATION_POLICY 4194304, and TCB_COLLATERAL 16777216.",
     "attestation": "Let P be the exact prepublished policy byte string resolved from the independently pinned policy catalog before request acceptance. requestAttestationPolicySha256 = H11('attestation/prepublished-policy-bytes',D20(LEN_BYTES(P)),P) and equals both accepted request plan/config attestationPolicySha256 fields. LEN_BYTES(P) is the exact unsigned octet count, not a character count or encoded length. The request carries no object/store reference for P. Every post-quote exact-byte reference uses attestationExactByteObject and immutableStore; no alternate object formula exists. The ATTESTATION_POLICY reference retrieves exact bytes P, requires exactByteLength = LEN_BYTES(P), recomputes its attestationPolicySha256 with the same formula, and nativeReplayResult.attestationPolicySha256 equals that value and the accepted request value. Let N be the exact 32 bytes decoded from the resolved accepted request requestEnvelope.payload.attestationChallenge.challengeNonceBase64url. challengeNonceSha256 = H11('attestation/challenge-nonce',N). preQuoteMeasuredRuntimeSubjectSha256 = H11('attestation/pre-quote-measured-runtime-subject',UTF8(challengeId),HEX(challengeNonceSha256),HEX(preExecutionChallengeSubjectSha256),HEX(sourceIdentitySha256),HEX(runtimeImageSha256),UTF8(runtimeInstanceId),HEX(runtimeMeasurementSha256),HEX(hostMeasurementSha256),HEX(workspaceHostRuntimeLineageSha256),HEX(expectedMeasurementRegisterRootSha256),HEX(requestAttestationPolicySha256),HEX(trustedFreshnessPolicySha256)). This preimage contains no quote, report, endorsement, certificate, CRL, collateral, immutable-store, retrieval, or post-quote-verdict reference. platformQuote.reportDataSha256 = H11('attestation/quote-report-data',HEX(preQuoteMeasuredRuntimeSubjectSha256)). attestationChainRootSha256 = M11('ATTESTATION_EXACT_OBJECTS_V11',[quoteReference.objectSha256,reportReference.objectSha256,endorsementReference.objectSha256,certificateChainReference.objectSha256,crlReference.objectSha256,attestationPolicyReference.objectSha256,tcbCollateralReference.objectSha256] in that exact order). The replay result reproduces all seven object digests and this root, retrieves all exact bytes, parses the report, verifies quote signature and report-data binding, validates endorsement and certificate path, applies the exact CRL and revocation time, validates TCB collateral/status, evaluates P, checks challenge/freshness/measurements/platform root, and rejects trailing, substituted, unavailable, or unparsed bytes. challengeUnconsumedStateSha256 = H11('attestation/challenge/unconsumed',HEX(challengeConsumptionKeySha256)); challengeConsumedStateSha256 = H11('attestation/challenge/consumed',HEX(challengeConsumptionKeySha256),HEX(requestEnvelopeSha256),JCS(stage),UTF8(transactionId),UTF8(batchId)). The exact ATTESTATION_CHALLENGE_CONSUME CAS uses those predecessor/successor states and the same acceptance transaction/batch as pipelineStartCas. The signed freshness interval is contained by the request interval: request.notBefore <= freshness.notBefore <= freshness.expiresAt <= request.expiresAt. For PASS, challenge-consume committedAt, quoteCreatedAt, freshness.observedAt, nativeReplayResult.revocationCheckedAt, nativeReplayResult.replayedAt, postQuoteAttestationVerdict.trustedTimeObservedAt, and verifiedAt all lie inside both intervals; trustedTimeObservedAt equals freshness.observedAt and trustedTimeObservationSha256 equals trustedFreshness objectSha256. No challenge state, freshness signature, quote, replay, or verdict created after request.expiresAt can authorize PASS.",
     "executableVmaSentinels": "When filesystemReachability is not DELETED, deletionEventSha256=H11('vma/not-applicable',UTF8('deletionEventSha256')); when memfdBacked=false, memfdNameSha256 uses its same named sentinel; when jitProduced=false, jitSourceSha256 uses its named sentinel; when writeToExecuteTransitionObserved=false, wxTransitionSha256 uses its named sentinel. Filesystem identity fields are nonzero only for FILESYSTEM backing and zero otherwise. MEMFD, JIT, ANONYMOUS, FILESYSTEM/PRESENT, and FILESYSTEM/DELETED combinations outside the exact precedence predicates reject rather than falling through.",
@@ -11086,10 +11086,10 @@
     "receiptCycle": "receiptBodySha256 = H11('receipt/body',JCS(receiptBody)); receiptAuthenticationEnvelopeSha256 = E11(receiptAuthenticationEnvelope.domain,receiptAuthenticationEnvelope.payloadSha256,receiptAuthenticationEnvelope.signature); finalVerdictEnvelopeSha256 = E11(finalVerdictEnvelope.domain,finalVerdictEnvelope.payloadSha256,finalVerdictEnvelope.signature); receiptEnvelopeSha256 = H11('receipt/root',UTF8('11'),HEX(receiptBodySha256),HEX(receiptAuthenticationEnvelopeSha256),HEX(finalVerdictEnvelopeSha256)). For every non-PASS receipt, finalVerdictEnvelope.payload.verdict equals receiptBody.verdict byte-for-byte and is exactly one of FAIL, UNKNOWN, or REJECTED; a different non-PASS classification is rejected before root acceptance. `receipt/root` is not a signed-envelope projection; E11 is the sole projection for the two signed envelopes. Each digest is outside its own preimage.",
     "digestDag": "Native verification computes fixed-width root-length shapes first; then execution evidence -> event subject -> event digest -> event head -> paged leaf -> page leaf root -> PAGE_BYTES/content digest -> header.objectSha256 -> store leaf/availability -> page retrieval transcript -> INDEX_BYTES/index digest -> index retrieval transcript -> receipt evidence roots/body -> receipt authentication -> final verdict -> receiptEnvelopeSha256 -> receiptPreAllocationFrame. Request order is unsigned payload -> request signature/envelope -> requestEnvelopeSha256 -> request pre-allocation frame, with length derived from fixed-width placeholders. A retrieval transcript contains only a strictly earlier predecessor digest. No digest, length, frame, page, index, event, availability commitment, or replay identity occurs in its own preimage; any dependency outside this order rejects.",
     "receiptLength": "receiptCanonicalBytes and finalVerdictEnvelope.payload.receiptCanonicalBytes are equal. Compute them as LEN_BYTES(JCS(complete root after replacing root receiptEnvelopeSha256, receiptBodySha256, receiptAuthenticationEnvelopeSha256, and finalVerdictEnvelopeSha256 with 64 ASCII zeroes, replacing both receiptCanonicalBytes fields with 20 ASCII zeroes, and replacing finalVerdictEnvelope.signature.signatureBase64url with 86 ASCII 'A' characters)). All replacements preserve final widths, so the result equals the actual canonical receipt byte length without a fixed point. receiptPreAllocationFrame.declaredCanonicalReceiptBytes equals this value and its receiptEnvelopeSha256 equals the root field.",
-    "receiptPreAllocationFrame": "declaredReceiptBodyBytes=LEN_BYTES(JCS(receiptBody)). frameSha256=H11('receipt-pre-allocation-frame',UTF8(frameVersion),UTF8(magic),UTF8(transport),D20(fixedHeaderBytes),D20(declaredCanonicalReceiptBytes),D20(maximumCanonicalReceiptBytes),D20(declaredReceiptBodyBytes),D20(maximumReceiptBodyBytes),D20(streamChunkBytes),D20(maximumStreamChunkCount),D20(maximumAggregateReceivedBytes),UTF8(frameDeadline),HEX(receiptEnvelopeSha256),HEX(frameNonceSha256)). Exact 256-byte network-order layout is: 0..23 ASCII SERVERWARE-RECEIPT plus six zero bytes; 24..25 uint16be version 11; 26..27 transport id 1; 28..31 uint32be header length 256; 32..39 declared canonical receipt bytes; 40..47 maximum canonical bytes; 48..55 declared receipt-body bytes; 56..63 maximum body bytes; 64..71 chunk bytes; 72..79 maximum chunks; 80..87 maximum aggregate received bytes; 88..119 receipt-envelope digest; 120..151 nonce digest; 152..183 frame digest; 184..215 canonical frameDeadline UTF-8 plus zero padding; 216..255 zero. finalVerdict issuedAt <= trusted frameReceivedAt <= frameDeadline <= issuedAt+30 seconds. The receiver checks peer credentials, fixed bytes, deadline, digest, and all limits from this packet before any receipt-body read, allocation, decompression, JCS parse, or signature work. The receipt root contains the frame, while receiptEnvelopeSha256 is independently derived only from body/auth/final digests, so no cycle exists."
+    "receiptPreAllocationFrame": "declaredReceiptBodyBytes=LEN_BYTES(JCS(receiptBody)). frameSha256=H11('receipt-pre-allocation-frame',UTF8(frameVersion),UTF8(magic),UTF8(transport),D20(fixedHeaderBytes),D20(declaredCanonicalReceiptBytes),D20(maximumCanonicalReceiptBytes),D20(declaredReceiptBodyBytes),D20(maximumReceiptBodyBytes),D20(streamChunkBytes),D20(maximumStreamChunkCount),D20(maximumAggregateReceivedBytes),UTF8(frameDeadline),HEX(receiptEnvelopeSha256),HEX(frameNonceSha256)). Exact 256-byte network-order layout is: 0..23 ASCII CATCHPLATE-RECEIPT plus six zero bytes; 24..25 uint16be version 11; 26..27 transport id 1; 28..31 uint32be header length 256; 32..39 declared canonical receipt bytes; 40..47 maximum canonical bytes; 48..55 declared receipt-body bytes; 56..63 maximum body bytes; 64..71 chunk bytes; 72..79 maximum chunks; 80..87 maximum aggregate received bytes; 88..119 receipt-envelope digest; 120..151 nonce digest; 152..183 frame digest; 184..215 canonical frameDeadline UTF-8 plus zero padding; 216..255 zero. finalVerdict issuedAt <= trusted frameReceivedAt <= frameDeadline <= issuedAt+30 seconds. The receiver checks peer credentials, fixed bytes, deadline, digest, and all limits from this packet before any receipt-body read, allocation, decompression, JCS parse, or signature work. The receipt root contains the frame, while receiptEnvelopeSha256 is independently derived only from body/auth/final digests, so no cycle exists."
   },
   "x-mandatory-external-trust-inputs-v11": {
-    "requestSchemaPin": "Immutable verifier configuration pins requestSchemaId https://serverware.invalid/schemas/coder-test-controller-request.v1.schema.json, its exact canonical schema-byte SHA-256, contractVersion 11, REQUEST_ENVELOPE_V11 digest projection, and ROOT_ZERO_PLACEHOLDERS_V11 length projection. A receipt or request cannot select this pin.",
+    "requestSchemaPin": "Immutable verifier configuration pins requestSchemaId https://catchplate.invalid/schemas/coder-test-controller-request.v1.schema.json, its exact canonical schema-byte SHA-256, contractVersion 11, REQUEST_ENVELOPE_V11 digest projection, and ROOT_ZERO_PLACEHOLDERS_V11 length projection. A receipt or request cannot select this pin.",
     "authoritySnapshotCheckpointPin": "Before any delegated role, immutable root-owned configuration supplies the authority-snapshot checkpoint root/revision/signer principal/key leaf/SPKI/non-revocation root/revision/validity. The snapshot, plan, repository, environment, and delegated signatures cannot select it.",
     "planRootCheckpointPin": "A mechanically distinct immutable plan checkpoint pin supplies plan root/revision/signer/key/SPKI/non-revocation/validity. Authority snapshot compromise cannot mint or control plan authority.",
     "finalCheckpointPin": "The final-verdict key is verified at final issuance against an independently pinned current root outside finalVerdictPayload. The final payload cannot self-authorize its signer. No signature may be created after the final trusted-time/revocation observation.",
@@ -11103,9 +11103,9 @@
     "trustedTimeAndRevocation": "Final authorization consumes one externally atomic trusted-time and global revocation-head observation. That observation is outside the final checkpoint payload preimage and is re-read when verifying a receipt for authorization of new work."
   },
   "x-native-verification-v11": [
-    "The accepted v11 request bytes and receipt stage tuple reproduce the exact /usr/local/libexec/serverware-coder-controller-client submit-fixed-v11 --operation=<operation> --plan=<plan> mapping with those three arguments in order: build + serverware-build-v1 -> (0,build,build,serverware-build-v1); runNoBuild + serverware-unit-no-build-v1 -> (1,runNoBuild,unit,serverware-unit-no-build-v1); runNoBuild + serverware-integration-no-build-v1 -> (2,runNoBuild,integration,serverware-integration-no-build-v1); runNoBuild + serverware-e2e-no-build-v1 -> (3,runNoBuild,e2e,serverware-e2e-no-build-v1); runNoBuild + serverware-attestation-no-build-v1 -> (4,runNoBuild,attestation,serverware-attestation-no-build-v1). Operation alone cannot select a no-build stage. Reject every alias, alternate path, plan, suffix, tuple, order, or additional argument.",
+    "The accepted v11 request bytes and receipt stage tuple reproduce the exact /usr/local/libexec/catchplate-coder-controller-client submit-fixed-v11 --operation=<operation> --plan=<plan> mapping with those three arguments in order: build + catchplate-build-v1 -> (0,build,build,catchplate-build-v1); runNoBuild + catchplate-unit-no-build-v1 -> (1,runNoBuild,unit,catchplate-unit-no-build-v1); runNoBuild + catchplate-integration-no-build-v1 -> (2,runNoBuild,integration,catchplate-integration-no-build-v1); runNoBuild + catchplate-e2e-no-build-v1 -> (3,runNoBuild,e2e,catchplate-e2e-no-build-v1); runNoBuild + catchplate-attestation-no-build-v1 -> (4,runNoBuild,attestation,catchplate-attestation-no-build-v1). Operation alone cannot select a no-build stage. Reject every alias, alternate path, plan, suffix, tuple, order, or additional argument.",
     "Authority independence is mechanical across requester, planConfiguration, authoritySnapshotCheckpoint, controllerGeneration, sourceObserver, coverageObserver, controllerReceipt, resourceJournal, lifecycleJournal, destroyMonitor, postDestroyMonitor, terminalSeal, noBuildMonitor, attestationVerifier, stateQuorum, stateQuorumMembership, stateEpochFloor, immutableStore, stateWitnessAdmin, finalVerdictCheckpoint, and launchAuthorizer. For each pair compare role, principalId, keyId, keyLeafSha256, SPKI DER digest, physicalPrivateKeyIdentitySha256, trust root, and independently resolved physical private-key identity; equality or shared control rejects.",
-    "Every executionManifestReference resolves as EXECUTION_MANIFEST to a closed executionManifestPayload signed by launchAuthorizer under serverware/execution-manifest/v11. Its binding, exact operation/plan/stage tuple, plan/config/policy roots, source/runtime, execution mode, interpreter/provenance identity, canonical executable path, device major/minor, inode, mount ID, file generation, mode, size, content, open-descriptor identity, closure proof, argv, environment, cwd, ancestry, command digest, nonce, and validity match the executed stage, StageRecord, successful EXEC event, and PROCESS_START event exactly.",
+    "Every executionManifestReference resolves as EXECUTION_MANIFEST to a closed executionManifestPayload signed by launchAuthorizer under catchplate/execution-manifest/v11. Its binding, exact operation/plan/stage tuple, plan/config/policy roots, source/runtime, execution mode, interpreter/provenance identity, canonical executable path, device major/minor, inode, mount ID, file generation, mode, size, content, open-descriptor identity, closure proof, argv, environment, cwd, ancestry, command digest, nonce, and validity match the executed stage, StageRecord, successful EXEC event, and PROCESS_START event exactly.",
     "Every mapped-input page is accepted only as a MAPPED_INPUTS_PAGE with setKind MAPPED_INPUTS. Every interpreter/module provenance page is accepted only as an INTERPRETER_PROVENANCE_PAGE with setKind INTERPRETER_PROVENANCE. Each index reference MUST resolve to the corresponding closed pagedSetIndex; pages and leaves have contiguous zero-based ordinals, exact counts, exact canonical paths, source archive identity, exact retrieved content identities, and the prescribed roots. Every provenance content object is INTERPRETER_PROVENANCE_BYTES under the current immutable-store pin; its directional inclusion and retrieval proofs reproduce its exact address, length, digest, root, and revision. INTERPRETER, JIT, and DYNAMIC_LOADER events require a nonempty interpreter provenance index whose COMPLETE reconciliation is exact against kernel mapped-file maps, import hooks, custom loaders, zipimport directory entries, memfd maps, and JIT maps. Every native library, loader, runtime module or package, script, bytecode object, JIT source, and mapped executable input exactly joins the event subject, process, interpreter, loader, filesystem/archive/memfd/JIT identity, and positive predecessor artifact or runtime image closure proof. Omission, extra entries, duplicate identity, remote or generated executable input, closure mismatch, unresolved bytes, or unknown provenance denies PASS.",
     "For every immutable predecessor, page, paged index, provenance-content, and attestation object, recompute immutableStore, directional inclusion, signed availability, exact chunk hashes/root, returned concatenated bytes, and retrievalTranscriptSha256. Collect every proof reachable from the resolved request and receipt under one retrievalScopeSha256/retrievalLedgerId. Require zero-based contiguous globalRetrievalOrdinal, exact predecessor transcript, exact globalCumulativeBytes continuity, checked addition of returned lengths, transportTranscriptSha256 equality, one 67108864-byte cap, and chronological availability/retrieval/frame deadlines. A missing prior proof, alternate ledger, reset cumulative counter, digest-only chunk without matching returned bytes, late retrieval, or partial stream rejects.",
     "Every state quorum member resolves from exactly one quorumMembershipLeaf under STATE_QUORUM_MEMBERSHIP_V11. Recompute it from the current signed checkpoint's membership root/epoch and member-set root, store/cluster, member ID, positive weight, complete stateQuorum key leaf including SPKI and physicalPrivateKeyIdentitySha256, trust/non-revocation, and validity. Verify the directional proof. Authorization leaf, membership leaf, proof leaf, member signature identity, and role are byte-for-byte equal. Member IDs, key IDs, key leaves, membership leaves, proof ordinals, SPKI digests, and independently resolved physical private-key identities are each pairwise unique; metadata aliases, alternate SPKIs for one physical key, proof reuse, and role substitution reject.",
@@ -11123,7 +11123,7 @@
     "Acceptance atomically consumes replay, allocation reservation, continuity, and single-consumer pipeline tip under one transactionId/batchId with monotonic term/index/fence. For the attestation stage it also consumes the exact challenge key under ATTESTATION_CHALLENGE_CONSUME in that same transaction/batch before expiry; every other stage carries NOT_APPLICABLE. All acceptance casOperation objects name the same request, requester key, requestId, nonce, reservation, lane, allocation revision, pipeline, stage, owner, and PENDING_NONCONSUMABLE verdict. The reservation transitions exactly once RESERVED -> LANE_FINALIZED -> TERMINATED/COMMITTED or RESERVED -> TERMINATED. Delayed evidence cannot target a reused reservation, challenge, lane sequence, request key/requestId, nonce, or pipeline tip.",
     "CAS field mapping is exact: replayConsumeCas is REPLAY_CONSUME; attestationChallengeConsumption.challengeConsumeCas is ATTESTATION_CHALLENGE_CONSUME only for the exact attestation stage; allocationReserveCas is ALLOCATION_RESERVE; continuityAdvanceCas is CONTINUITY_ADVANCE; pipelineStartCas is PIPELINE_START_STAGE; laneFinalizationCas is RESERVATION_LANE_FINALIZE; pre-lane termination is RESERVATION_TERMINATE; execution lane terminal is LANE_TERMINATE or TERMINAL_COMMIT; and pipeline terminal is PIPELINE_PASS_STAGE only for PASS otherwise PIPELINE_TERMINATE. Challenge consume and the other acceptance proofs share the exact atomic transaction/batch. Final lane and pipeline CAS proofs share one fresh transactionId/batchId, strictly later monotonic term/index/fence, exact reservation and tip owner, and the final verdict committed by the final object root.",
     "A stage is attempted once. Failure, unknown, abandonment, primary authorization failure, seal failure, pipeline commit failure, or primary receipt-authentication failure permanently commits PIPELINE_TERMINATE. Only EXECUTION_PASS may commit PIPELINE_PASS_STAGE. A new attempt uses a new pipelineId.",
-    "Resolve every signedObjectReference and immutablePageReference with objectVersion/referenceVersion 11, v11 domain, exact length/digest/subject, closed resolved schema, immutable-store leaf proof where applicable, and transitive joins. The field/type/domain/role table uses only the corresponding serverware/<type>/v11 domain. coverageObservation always uses coverageObservationReference; passCoverageReference further requires coverageResult PASS. Non-passing executionEvidence and earlyExecutionFailureEvidence may carry null or a fully resolved coverageObservationReference, preserving partial, FAIL, or UNKNOWN coverage without admitting another object type.",
+    "Resolve every signedObjectReference and immutablePageReference with objectVersion/referenceVersion 11, v11 domain, exact length/digest/subject, closed resolved schema, immutable-store leaf proof where applicable, and transitive joins. The field/type/domain/role table uses only the corresponding catchplate/<type>/v11 domain. coverageObservation always uses coverageObservationReference; passCoverageReference further requires coverageResult PASS. Non-passing executionEvidence and earlyExecutionFailureEvidence may carry null or a fully resolved coverageObservationReference, preserving partial, FAIL, or UNKNOWN coverage without admitting another object type.",
     "Externally paged sets carry at most 1024 pages of at most 1048576 canonical bytes and at most 256 leaves per page, permitting 262144 leaves without embedding content. Resolve SOURCE_MANIFEST_PAGE, COVERAGE_PAGE, NO_BUILD_EVENT_PAGE, MAPPED_INPUT_PAGE, INTERPRETER_PROVENANCE_PAGE, EXECUTABLE_VMA_PAGE, and RESOURCE_INVENTORY_PAGE only to their matching closed pages/setKind/domain. Every PAGED_SET_INDEX resolves to one closed pagedSetIndex with exact identity, binding, baseline, source, lineage, length, digest, address, signed availability, chronological bounded retrieval, store proof, page count, and leaf count. Per-leaf bytes remain separate immutable objects under the same aggregate cap. Receipt bytes stay <=67108864 and resolved bytes are never duplicated.",
     "Coverage PASS reconstructs closed changed-test, exclusion, inventory, result, and artifact leaves; page and index roots; baseline commit/tree/archive to source commit/tree/archive diff; policy/inventory roots; and changed-test result coverage. Opaque roots alone never pass.",
     "For no-build PASS, eventIndex is exactly NO_BUILD_EVENTS, eventCount and allowedCount are equal and nonzero, every event classification is ALLOWED, and every executable, interpreter, script, module, mapped input, loader, JIT source, executable VMA, and allowed output has a positive predecessor-artifact or runtime-image closure proof. Resolve the complete EXECUTABLE_VMA_UNIVERSE; reconstruct kernel start/end maps and all executable mapping/transition events; require exact all/class/provenance roots and counts, zero unmatched/unknown values, and coverage of file-backed, deleted, anonymous, memfd, JIT, and RW-to-RX mappings. Remote/generated input, missing VMA/provenance, unknown classification, loss, gap, restart, truncation, incomplete channel coverage, or empty/skipped execution denies PASS.",

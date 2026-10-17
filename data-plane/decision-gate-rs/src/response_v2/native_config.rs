@@ -1,6 +1,6 @@
 //! Closed configuration data for explicit native response-v2 startup.
 //!
-//! JSON fields: apiVersion (serverware.nativeResponseObservationV2Config/v1),
+//! JSON fields: apiVersion (catchplate.nativeResponseObservationV2Config/v1),
 //! socketPath, expectedUid, startupTimeoutMs, signerKeySha256,
 //! roleIdentityRootSha256, proofPinsRootSha256, teeVerifier,
 //! transparencyTrustPin, roleKeys (an array), generationId,
@@ -31,7 +31,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-const VERSION: &str = "serverware.nativeResponseObservationV2Config/v1";
+const VERSION: &str = "catchplate.nativeResponseObservationV2Config/v1";
 const MAX_ROLES: usize = 256;
 const MAX_OPERATIONS_PER_ROLE: usize = 256;
 const MAX_ROLE_TEXT_BYTES: usize = 1024 * 1024;
@@ -43,7 +43,7 @@ const MAX_IDENTIFIER_BYTES: usize = 256;
 pub(super) struct NativeResponseObservationV2ConfigV1 {
     api_version: String,
     #[serde(default, deserialize_with = "guest_profile")]
-    guest_listener: Option<serverware_decision_gate::GuestResponseV2ListenerProfile>,
+    guest_listener: Option<catchplate_decision_gate::GuestResponseV2ListenerProfile>,
     #[serde(default, deserialize_with = "staging_profile")]
     native_staging: Option<NativeStagingProfile>,
     socket_path: PathBuf,
@@ -72,9 +72,9 @@ impl NativeResponseObservationV2ConfigV1 {
     pub(super) fn into_config(self, allow_guest: bool) -> Result<ResponseObservationV2ClientConfig, String> {
         let selected = match self.api_version.as_str() {
             VERSION => self.guest_listener.is_none() && self.native_staging.is_none(),
-            "serverware.nativeResponseObservationV2Config/v2" => allow_guest && self.guest_listener.is_some() && self.native_staging.is_none(),
-            "serverware.nativeResponseObservationV2Config/v3" => allow_guest && self.guest_listener.is_some()
-                && self.native_staging.as_ref().is_some_and(|value|value.api_version=="serverware.responseV2.nativeStaging/v1"),
+            "catchplate.nativeResponseObservationV2Config/v2" => allow_guest && self.guest_listener.is_some() && self.native_staging.is_none(),
+            "catchplate.nativeResponseObservationV2Config/v3" => allow_guest && self.guest_listener.is_some()
+                && self.native_staging.as_ref().is_some_and(|value|value.api_version=="catchplate.responseV2.nativeStaging/v1"),
             _ => false,
         };
         if !selected
@@ -168,9 +168,9 @@ impl NativeResponseObservationV2ConfigV1 {
 }
 
 fn guest_profile<'de, D: serde::Deserializer<'de>>(deserializer: D)
-    -> Result<Option<serverware_decision_gate::GuestResponseV2ListenerProfile>, D::Error> {
+    -> Result<Option<catchplate_decision_gate::GuestResponseV2ListenerProfile>, D::Error> {
     // Absence selects old v1; explicit null never widens that closed profile.
-    serverware_decision_gate::GuestResponseV2ListenerProfile::deserialize(deserializer).map(Some)
+    catchplate_decision_gate::GuestResponseV2ListenerProfile::deserialize(deserializer).map(Some)
 }
 
 #[derive(Deserialize)]

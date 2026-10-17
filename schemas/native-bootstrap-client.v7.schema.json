@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-bootstrap-client.v7.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-bootstrap-client.v7.schema.json",
   "title": "Explicit native execution and owned-resource retirement bootstrap client v7",
   "description": "Closed independently pinned configuration, at most 16384 bytes: the original 18 fields plus required egress, attachment and execution objects and a required installation field that is either null or the existing installation object. Explicit v7 selects start authorization v2 and owned-resource retirement. Null installation selects execution manifest v1; an installation object selects manifest v2 with immutable in-image application trust. All older profiles remain unchanged. Actual same-session proof, independent installation/start/network grants, retained originals, one-use claims and terminal cleanup remain mandatory. Schema acceptance is neither installation nor execution permission.",
   "type": "object", "additionalProperties": false,
   "required": ["apiVersion", "endpoint", "timeoutMilliseconds", "startupEvidence", "startupExpectations", "sessionScope", "trustRoots", "clientCertificate", "clientPrivateKey", "callerIssuer", "delegationAuthorizer", "setupAuthorizer", "request", "clientChallengeBase64url", "expectedCallerPrincipal", "expectedTargetPrincipal", "expectedTargetNonce", "expectedTargetRequestSha256", "installation", "egress", "attachment", "execution"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeBootstrapClient/v7"},
+    "apiVersion": {"const": "catchplate.nativeBootstrapClient/v7"},
     "endpoint": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/endpoint"},
     "timeoutMilliseconds": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/timeoutMilliseconds"},
     "startupEvidence": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/startupEvidence"},

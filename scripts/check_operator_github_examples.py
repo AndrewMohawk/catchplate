@@ -32,7 +32,7 @@ from scripts.check_operator_key_replacement import authority_projection
 from scripts.check_operator_ordinary_client import BLOCK, CONNECT, DENIED, LEASE, RELEASE, RELOAD, START, digest
 from scripts import operator_github_examples_fixture as fixture
 
-SCHEMA = "serverware.privateGithubExamplesCheck/v1"
+SCHEMA = "catchplate.privateGithubExamplesCheck/v1"
 PHASES = ("wrong_app", "wrong_repo", "read")
 COMMANDS = {
     "node": ("/node", "/app/examples/github-issues-node/client.mjs"),
@@ -59,13 +59,13 @@ def expected_output(client):
 
 def client_environment(client, application, token, *, wrong_repo=False):
     require(client in fixture.CLIENTS, "unknown example client")
-    env = {"LANG": "C.UTF-8", "SERVERWARE_PROXY_URL": "https://proxy.operator-basic.example.test:8443",
-        "SERVERWARE_APP_ID": application, "SERVERWARE_PROXY_TOKEN": token,
-        "SERVERWARE_GITHUB_OWNER": fixture.OWNER,
-        "SERVERWARE_GITHUB_REPO": "other-repo" if wrong_repo else fixture.REPO,
-        "SERVERWARE_CA_FILE": "/client-trust/requests-ca.pem" if client == "python" else "/client-trust/inner-ca.pem"}
+    env = {"LANG": "C.UTF-8", "CATCHPLATE_PROXY_URL": "https://proxy.operator-basic.example.test:8443",
+        "CATCHPLATE_APP_ID": application, "CATCHPLATE_PROXY_TOKEN": token,
+        "CATCHPLATE_GITHUB_OWNER": fixture.OWNER,
+        "CATCHPLATE_GITHUB_REPO": "other-repo" if wrong_repo else fixture.REPO,
+        "CATCHPLATE_CA_FILE": "/client-trust/requests-ca.pem" if client == "python" else "/client-trust/inner-ca.pem"}
     if client != "python":
-        env["SERVERWARE_PROXY_CA_FILE"] = "/client-trust/outer-ca.pem"
+        env["CATCHPLATE_PROXY_CA_FILE"] = "/client-trust/outer-ca.pem"
     return env
 
 

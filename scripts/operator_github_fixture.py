@@ -23,15 +23,15 @@ import time
 
 from scripts.operator_github_fixture_network import FIXTURE_IP, assert_isolated_network, prepare_network_files
 
-OWNER, REPO = "serverware-fixture", "operator-demo"
+OWNER, REPO = "catchplate-fixture", "operator-demo"
 ORIGIN = "https://api.github.com"
 BASE = f"/repos/{OWNER}/{REPO}/issues"
-TOKEN = "ghp_serverware_synthetic_only_8a4671d8096a47f488aad7ee207489ab"
+TOKEN = "ghp_catchplate_synthetic_only_8a4671d8096a47f488aad7ee207489ab"
 QUERY1 = "per_page=1&state=open&labels=fixture%2Ctriaged&page=1"
 QUERY2 = "per_page=1&state=open&labels=fixture%2Ctriaged&page=2"
 ISSUE_BODY = '{"title":"Synthetic fixture issue","body":"Fixture body ☃","labels":["fixture"]}'.encode()
 COMMENT_BODY = b'{"body":"Synthetic fixture comment"}'
-SCHEMA = "serverware.privateGithubObservations/v1"
+SCHEMA = "catchplate.privateGithubObservations/v1"
 MAX_ATTEMPTS = 24
 
 
@@ -69,7 +69,7 @@ SPECS = {
     "cross_repo_link": spec("GET", BASE + "?per_page=1&labels=fixture-cross-repo&page=1", 200, [issue(11)],
         link=f'<{ORIGIN}/repos/other-owner/other-repo/issues?page=2>; rel="next"'),
     "cross_origin_link": spec("GET", BASE + "?per_page=1&labels=fixture-cross-origin&page=1", 200, [issue(11)],
-        link='<https://outside.invalid/repos/serverware-fixture/operator-demo/issues?page=2>; rel="next"'),
+        link='<https://outside.invalid/repos/catchplate-fixture/operator-demo/issues?page=2>; rel="next"'),
 }
 RELEASE_CASES = tuple(SPECS)[:9]
 BLOCK_CASES = tuple(SPECS)[9:]
@@ -89,7 +89,7 @@ def setup(root, marker):
     require(root == Path("/upstream-data/github") and not root.exists()
         and root.parent.is_dir() and root.parent.stat().st_uid == os.geteuid() == 10001)
     assert_isolated_network(attached=False)
-    require(json.loads(marker.read_bytes()) == {"schema": "serverware.privateOperatorAuditFixture/v1", "syntheticOnly": True})
+    require(json.loads(marker.read_bytes()) == {"schema": "catchplate.privateOperatorAuditFixture/v1", "syntheticOnly": True})
     now = datetime.now(timezone.utc)
     key, leaf_key = ec.generate_private_key(ec.SECP256R1()), ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Private synthetic GitHub fixture CA")])
@@ -170,7 +170,7 @@ class Handler(BaseHTTPRequestHandler):
             require(headers.get("host") == "api.github.com"
                 and hmac.compare_digest(headers.get("authorization", ""), "Bearer " + TOKEN)
                 and headers.get("accept") == "application/vnd.github.v3+json"
-                and re.fullmatch(r"serverware-test-run/operator-check-[0-9a-f]{32} octokit-rest\.js/22\.0\.1 octokit-core\.js/7\.0\.8 (?:Node\.js/25|Node\.js/25\.5\.0 \(linux; x64\))", headers.get("user-agent", ""))
+                and re.fullmatch(r"catchplate-test-run/operator-check-[0-9a-f]{32} octokit-rest\.js/22\.0\.1 octokit-core\.js/7\.0\.8 (?:Node\.js/25|Node\.js/25\.5\.0 \(linux; x64\))", headers.get("user-agent", ""))
                 and headers.get("accept-language") == "*" and headers.get("sec-fetch-mode") == "cors"
                 and headers.get("x-github-api-version", "2022-11-28") == "2022-11-28"
                 and headers.get("connection", "close") in {"close", "keep-alive"})

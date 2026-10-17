@@ -19,9 +19,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_audit_trace as trace
-from serverware import authority_contract
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_audit_trace as trace
+from catchplate import authority_contract
 from test_authority_global_audit_capacity import fixture, outbox_row
 
 
@@ -47,14 +47,14 @@ def wire_digest(domain, *frames):
     return "sha256:" + digest.hexdigest()
 
 
-PARTITION = wire_digest("serverware.metadataAuditOutboxCapacityPartition/v1", b"global")
+PARTITION = wire_digest("catchplate.metadataAuditOutboxCapacityPartition/v1", b"global")
 IDENTITY = "metadata-audit-outbox-global-capacity-v1:" + PARTITION
 KEY = {"aggregate_id": IDENTITY}
 
 
 def independent_tree_key(key=KEY):
     # Persisted tree framing includes the domain length, unlike the wire digest.
-    domain = b"serverware.policyAuthorityAuthenticatedKey/v1"
+    domain = b"catchplate.policyAuthorityAuthenticatedKey/v1"
     digest = hashlib.sha256()
     for frame in (domain, TABLE.encode("ascii"), canonical(key)):
         digest.update(len(frame).to_bytes(8, "big"))
@@ -230,7 +230,7 @@ class AuditTraceTests(unittest.TestCase):
 
     def test_wire_key_hash_or_other_leaf_does_not_substitute_for_tree_key(self):
         wrong_digests = (
-            wire_digest("serverware.policyAuthorityAuthenticatedKey/v1", TABLE.encode("ascii"), canonical(KEY)),
+            wire_digest("catchplate.policyAuthorityAuthenticatedKey/v1", TABLE.encode("ascii"), canonical(KEY)),
             independent_tree_key({"aggregate_id": IDENTITY + "-other"}),
         )
         for digest in wrong_digests:

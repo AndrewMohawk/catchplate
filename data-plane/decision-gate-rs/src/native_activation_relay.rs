@@ -29,7 +29,7 @@ struct Configuration {
 }
 impl Configuration {
     fn validate(&self) -> Result<u64, String> {
-        require(self.api_version == "serverware.nativeActivationRelay/v1"
+        require(self.api_version == "catchplate.nativeActivationRelay/v1"
             && self.caller_enclave_cid > 3 && self.caller_enclave_cid < u32::MAX
             && self.service_enclave_cid > 3 && self.service_enclave_cid < u32::MAX
             && self.caller_enclave_cid != self.service_enclave_cid)?;

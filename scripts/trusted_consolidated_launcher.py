@@ -38,24 +38,24 @@ LEASE_RE = re.compile(r"^[0-9a-f]{64}$")
 RUNTIME_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@+-]{11,255}$")
 LANE_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,63}$")
 ENV_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
-PROMOTION_RECEIPT_VERSION = "serverware.verificationPromotionReceipt/v4"
-PROMOTION_ACCEPTANCE_VERSION = "serverware.verificationPromotionAcceptance/v2"
-BUILD_MANIFEST_VERSION = "serverware.consolidatedTestArtifacts/v6"
-TRUSTED_RUNTIME_VERSION = "serverware.trustedLauncherRuntime/v4"
-WATCHDOG_PROTOCOL_VERSION = "serverware.ociVerificationWatchdog/v4"
+PROMOTION_RECEIPT_VERSION = "catchplate.verificationPromotionReceipt/v4"
+PROMOTION_ACCEPTANCE_VERSION = "catchplate.verificationPromotionAcceptance/v2"
+BUILD_MANIFEST_VERSION = "catchplate.consolidatedTestArtifacts/v6"
+TRUSTED_RUNTIME_VERSION = "catchplate.trustedLauncherRuntime/v4"
+WATCHDOG_PROTOCOL_VERSION = "catchplate.ociVerificationWatchdog/v4"
 SOURCE_SELECTION_MODEL = (
     "signed-raw-git-index-tree-worktree-status-plus-approved-untracked/v3"
 )
 PROMOTION_SIGNATURE_DOMAIN = (
-    b"serverware.verificationPromotionReceipt/v4\x00Ed25519\x00"
+    b"catchplate.verificationPromotionReceipt/v4\x00Ed25519\x00"
 )
-CONTROL_MESSAGE_DOMAIN = b"serverware.ociWatchdogMessage/v4\x00"
-DAEMON_EVIDENCE_DOMAIN = b"serverware.ociDaemonEvidence/v1\x00"
+CONTROL_MESSAGE_DOMAIN = b"catchplate.ociWatchdogMessage/v4\x00"
+DAEMON_EVIDENCE_DOMAIN = b"catchplate.ociDaemonEvidence/v1\x00"
 RUNTIME_EVIDENCE_SIGNATURE_DOMAIN = (
-    b"serverware.ociRuntimeEvidence/v2\x00Ed25519\x00"
+    b"catchplate.ociRuntimeEvidence/v2\x00Ed25519\x00"
 )
 CAPABILITY_ATTESTATION_SIGNATURE_DOMAIN = (
-    b"serverware.dependencyCapabilityAttestation/v1\x00Ed25519\x00"
+    b"catchplate.dependencyCapabilityAttestation/v1\x00Ed25519\x00"
 )
 ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
 ED25519_FIELD = 2**255 - 19
@@ -66,9 +66,9 @@ ED25519_D = (
 ED25519_SQRT_M1 = pow(2, (ED25519_FIELD - 1) // 4, ED25519_FIELD)
 ED25519_IDENTITY = (0, 1, 1, 0)
 REQUIRED_MOUNT_OPTIONS = frozenset({"nodev", "nosuid", "ro"})
-WATCHDOG_SOCKET_PATH = Path("/run/serverware-watchdog/control.sock")
+WATCHDOG_SOCKET_PATH = Path("/run/catchplate-watchdog/control.sock")
 DAEMON_SOCKET_PATH = Path(
-    "/run/serverware-verification-daemon/containerd.sock"
+    "/run/catchplate-verification-daemon/containerd.sock"
 )
 BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
 PYTHON_CAPABILITY_PROBES = [
@@ -105,21 +105,21 @@ BASE_ENVIRONMENT = {
     "PYTHONNOUSERSITE": "1",
     "TMPDIR": "/work/tmp",
     "TZ": "UTC",
-    "XDG_RUNTIME_DIR": "/run/serverware-runtime",
+    "XDG_RUNTIME_DIR": "/run/catchplate-runtime",
 }
 PORTAL_DYNAMIC_ENVIRONMENT = [
-    "SERVERWARE_ATTEMPT",
-    "SERVERWARE_LANE",
-    "SERVERWARE_LEASE_ID",
-    "SERVERWARE_MANIFEST_SHA256",
-    "SERVERWARE_NPM_COMPANION_IMAGE_ID",
-    "SERVERWARE_NPM_ENTRYPOINT_SHA256",
-    "SERVERWARE_NPM_NODE_SHA256",
-    "SERVERWARE_NPM_PACKAGE_SHA256",
-    "SERVERWARE_ONE_USE_NONCE",
-    "SERVERWARE_PROMOTION_RECEIPT_SHA256",
-    "SERVERWARE_WATCHDOG_ENDPOINT",
-    "SERVERWARE_WATCHDOG_TLS_SPKI_SHA256",
+    "CATCHPLATE_ATTEMPT",
+    "CATCHPLATE_LANE",
+    "CATCHPLATE_LEASE_ID",
+    "CATCHPLATE_MANIFEST_SHA256",
+    "CATCHPLATE_NPM_COMPANION_IMAGE_ID",
+    "CATCHPLATE_NPM_ENTRYPOINT_SHA256",
+    "CATCHPLATE_NPM_NODE_SHA256",
+    "CATCHPLATE_NPM_PACKAGE_SHA256",
+    "CATCHPLATE_ONE_USE_NONCE",
+    "CATCHPLATE_PROMOTION_RECEIPT_SHA256",
+    "CATCHPLATE_WATCHDOG_ENDPOINT",
+    "CATCHPLATE_WATCHDOG_TLS_SPKI_SHA256",
 ]
 RESOURCE_KINDS = frozenset({"container", "network", "snapshot", "task"})
 LANE_SOURCE_CONTRACTS = {
@@ -128,7 +128,7 @@ LANE_SOURCE_CONTRACTS = {
             "scripts/oci_lane_entrypoint.py",
             "scripts/test_approval_review.py",
         ],
-        "prefixes": ["serverware/", "serverware_agent_trust/"],
+        "prefixes": ["catchplate/", "catchplate_agent_trust/"],
     },
     "browser-python-compatibility": {
         "exact": ["scripts/oci_lane_entrypoint.py"],
@@ -144,21 +144,21 @@ LANE_SOURCE_CONTRACTS = {
             "scripts/test_agent_trust_clean_room.py",
             "scripts/verify_offline_artifact_manifest.py",
         ],
-        "prefixes": ["serverware_agent_trust/"],
+        "prefixes": ["catchplate_agent_trust/"],
     },
     "credential-constraints": {
         "exact": [
             "scripts/oci_lane_entrypoint.py",
             "scripts/test_credential_constraints.py",
         ],
-        "prefixes": ["serverware/", "serverware_agent_trust/"],
+        "prefixes": ["catchplate/", "catchplate_agent_trust/"],
     },
     "credential-constraints-proxy": {
         "exact": [
             "scripts/oci_lane_entrypoint.py",
             "scripts/test_credential_constraints.py",
         ],
-        "prefixes": ["serverware/", "serverware_agent_trust/"],
+        "prefixes": ["catchplate/", "catchplate_agent_trust/"],
     },
     "host-python-compatibility": {
         "exact": ["scripts/oci_lane_entrypoint.py"],
@@ -169,14 +169,14 @@ LANE_SOURCE_CONTRACTS = {
             "scripts/oci_lane_entrypoint.py",
             "scripts/test_internal_service_auth.py",
         ],
-        "prefixes": ["serverware/", "serverware_agent_trust/"],
+        "prefixes": ["catchplate/", "catchplate_agent_trust/"],
     },
     "jit-transaction-sqlite-full": {
         "exact": [
             "scripts/oci_lane_entrypoint.py",
             "scripts/test_jit_transaction_state.py",
         ],
-        "prefixes": ["serverware/", "serverware_agent_trust/"],
+        "prefixes": ["catchplate/", "catchplate_agent_trust/"],
     },
     "onboarding-evidence": {
         "exact": [
@@ -184,7 +184,7 @@ LANE_SOURCE_CONTRACTS = {
             "scripts/test_onboarding_evidence.py",
             "scripts/verify_onboarding_evidence.py",
         ],
-        "prefixes": ["serverware/", "serverware_agent_trust/"],
+        "prefixes": ["catchplate/", "catchplate_agent_trust/"],
     },
     "portal-browser-oauth": {
         "exact": [
@@ -194,8 +194,8 @@ LANE_SOURCE_CONTRACTS = {
         ],
         "prefixes": [
             "data-plane/decision-gate-rs/",
-            "serverware/",
-            "serverware_agent_trust/",
+            "catchplate/",
+            "catchplate_agent_trust/",
         ],
     },
     "proxy-python-compatibility": {
@@ -211,7 +211,7 @@ LANE_SOURCE_CONTRACTS = {
             "scripts/oci_lane_entrypoint.py",
             "scripts/test_webauthn_attestation.py",
         ],
-        "prefixes": ["serverware/", "serverware_agent_trust/"],
+        "prefixes": ["catchplate/", "catchplate_agent_trust/"],
     },
 }
 DEPENDENCY_CAPABILITIES = {
@@ -1159,7 +1159,7 @@ def _validate_clean_room_contract(value: Any) -> dict[str, Any]:
             "wheelhouseManifestPayloadSha256",
         }
         or value.get("apiVersion")
-        != "serverware.cleanRoomExpectedDerivation/v1"
+        != "catchplate.cleanRoomExpectedDerivation/v1"
     ):
         raise LauncherError("clean-room semantic contract is invalid")
     payload = dict(value)
@@ -1246,7 +1246,7 @@ def _validate_image(value: Any, *, role: str) -> dict[str, Any]:
     if (
         not isinstance(catalog, dict)
         or catalog.get("apiVersion")
-        != "serverware.dependencyCapabilityCatalog/v2"
+        != "catchplate.dependencyCapabilityCatalog/v2"
         or value["capabilityCatalogSha256"]
         != catalog.get("catalogSha256")
     ):
@@ -1567,7 +1567,7 @@ def _validate_boot_cleanup_contract(value: Any) -> dict[str, Any]:
             "serviceUnit",
         }
         or value.get("apiVersion")
-        != "serverware.ociWatchdogBootCleanup/v1"
+        != "catchplate.ociWatchdogBootCleanup/v1"
         or value.get("absenceObservations") != 3
         or value.get("cleanupTriggers")
         != [
@@ -1585,7 +1585,7 @@ def _validate_boot_cleanup_contract(value: Any) -> dict[str, Any]:
         or value.get("resourceSelection")
         != "exact-kind-id-pairs-and-complete-label-set"
         or value.get("serviceUnit")
-        != "serverware-verification-watchdog.service"
+        != "catchplate-verification-watchdog.service"
         or value.get("powerLossBoundary")
         != "cleanup-resumes-after-host-power-and-storage-return"
         or value.get("leaseState")
@@ -1593,7 +1593,7 @@ def _validate_boot_cleanup_contract(value: Any) -> dict[str, Any]:
             "fsyncBeforeLaunch": True,
             "mode": 0o600,
             "owner": "root",
-            "path": "/var/lib/serverware-watchdog/leases",
+            "path": "/var/lib/catchplate-watchdog/leases",
         }
     ):
         raise LauncherError("watchdog boot-cleanup contract is invalid")
@@ -1632,9 +1632,9 @@ def _validate_receipt_watchdog(value: Any) -> dict[str, Any]:
             "url",
         }
         or endpoint.get("networkRole") != "portal-npm-private"
-        or endpoint.get("protocol") != "serverware.npmOneUse/v2"
+        or endpoint.get("protocol") != "catchplate.npmOneUse/v2"
         or endpoint.get("url")
-        != "https://watchdog.serverware.internal/v1/npm-publish-one-use"
+        != "https://watchdog.catchplate.internal/v1/npm-publish-one-use"
     ):
         raise LauncherError("receipt watchdog lane endpoint is invalid")
     _required_digest(
@@ -1669,7 +1669,7 @@ def _validate_receipt_watchdog(value: Any) -> dict[str, Any]:
         label="watchdog runtime-evidence public key",
     )
     service = value["serviceIdentity"]
-    unit = "serverware-verification-watchdog.service"
+    unit = "catchplate-verification-watchdog.service"
     if (
         not isinstance(service, dict)
         or set(service)
@@ -1744,7 +1744,7 @@ def _validate_receipt_daemon(
             "socket",
         }
         or value.get("serviceUnit")
-        != "serverware-verification-daemon.service"
+        != "catchplate-verification-daemon.service"
         or value.get("runtime") != "containerd-oci-task-v2"
         or type(value.get("pid")) is not int
         or value["pid"] <= 1
@@ -1806,8 +1806,8 @@ def _expected_process(lane: str) -> dict[str, Any]:
             "cwd": "/work",
             "dynamicEnvironment": [],
             "entrypoint": [
-                "/opt/serverware/node/bin/node",
-                "/opt/serverware/src/scripts/npm_publish_companion.js",
+                "/opt/catchplate/node/bin/node",
+                "/opt/catchplate/src/scripts/npm_publish_companion.js",
             ],
             "environment": {
                 "CI": "true",
@@ -1816,7 +1816,7 @@ def _expected_process(lane: str) -> dict[str, Any]:
                 "LC_ALL": "C",
                 "NO_PROXY": "",
                 "TMPDIR": "/work/tmp",
-                "XDG_RUNTIME_DIR": "/run/serverware-runtime",
+                "XDG_RUNTIME_DIR": "/run/catchplate-runtime",
                 "npm_config_audit": "false",
                 "npm_config_fund": "false",
                 "npm_config_update_notifier": "false",
@@ -1825,13 +1825,13 @@ def _expected_process(lane: str) -> dict[str, Any]:
             "uid": 65532,
         }
     if lane == "rust-decision-gate-tests":
-        entrypoint = ["/opt/serverware/bin/serverware-decision-gate-tests"]
+        entrypoint = ["/opt/catchplate/bin/catchplate-decision-gate-tests"]
         argv = ["--test-threads=1"]
     else:
         entrypoint = [
-            "/opt/serverware/python/bin/python3",
+            "/opt/catchplate/python/bin/python3",
             "-I",
-            "/opt/serverware/src/scripts/oci_lane_entrypoint.py",
+            "/opt/catchplate/src/scripts/oci_lane_entrypoint.py",
         ]
         argv = ["--role", lane]
     return {
@@ -1959,7 +1959,7 @@ def _validate_isolation(value: Any, *, lane: str) -> dict[str, Any]:
         or value.get("tmpfs")
         != [
             {
-                "destination": "/run/serverware-runtime",
+                "destination": "/run/catchplate-runtime",
                 "gid": 65532,
                 "mode": 0o700,
                 "options": ["nodev", "noexec", "nosuid", "strictatime"],
@@ -2091,7 +2091,7 @@ def _validate_source_evidence(value: Any) -> dict[str, Any]:
             "untrackedApproval",
         }
         or value.get("apiVersion")
-        != "serverware.sourceEvidenceIdentity/v1"
+        != "catchplate.sourceEvidenceIdentity/v1"
     ):
         raise LauncherError("raw source evidence binding is invalid")
     git = value["gitInventory"]
@@ -2223,7 +2223,7 @@ def _validate_image_capability_attestation(
             not isinstance(policy, dict)
             or set(policy) != {"apiVersion", "invocations"}
             or policy.get("apiVersion")
-            != "serverware.executableArgvPolicy/v1"
+            != "catchplate.executableArgvPolicy/v1"
             or not isinstance(policy.get("invocations"), list)
             or not policy["invocations"]
             or policy["invocations"]
@@ -2321,7 +2321,7 @@ def _validate_image_capability_attestation(
         or set(document)
         != {"apiVersion", "payload", "payloadSha256", "signature"}
         or document.get("apiVersion")
-        != "serverware.dependencyCapabilityAttestation/v1"
+        != "catchplate.dependencyCapabilityAttestation/v1"
         or not isinstance(document.get("payload"), dict)
         or document.get("payloadSha256")
         != _sha256(_canonical_json(document["payload"]))
@@ -2339,9 +2339,9 @@ def _validate_image_capability_attestation(
             "roles",
         }
         or payload.get("apiVersion")
-        != "serverware.dependencyCapabilityAttestation/v1"
+        != "catchplate.dependencyCapabilityAttestation/v1"
         or payload.get("bundleApiVersion")
-        != "serverware.ociDependencyBundle/v5"
+        != "catchplate.ociDependencyBundle/v5"
         or payload.get("roles") != expected_roles
         or not isinstance(payload.get("bindings"), dict)
         or list(payload["bindings"]) != expected_roles
@@ -2765,14 +2765,14 @@ def _validate_manifest(
         != "exact-kind-id-pairs-and-complete-label-set"
         or watchdog.get("resourceLabelNames")
         != [
-            "org.serverware.attempt",
-            "org.serverware.kind",
-            "org.serverware.lane",
-            "org.serverware.lane-sequence",
-            "org.serverware.lease",
-            "org.serverware.manifest",
-            "org.serverware.promotion-receipt",
-            "org.serverware.role",
+            "org.catchplate.attempt",
+            "org.catchplate.kind",
+            "org.catchplate.lane",
+            "org.catchplate.lane-sequence",
+            "org.catchplate.lease",
+            "org.catchplate.manifest",
+            "org.catchplate.promotion-receipt",
+            "org.catchplate.role",
         ]
     ):
         raise LauncherError("watchdog Manifest v6 contract is invalid")
@@ -3179,7 +3179,7 @@ def _authenticate_watchdog(
             or service.get("uid") != peer_uid
             or service.get("gid") != peer_gid
             or service.get("unit")
-            != "serverware-verification-watchdog.service"
+            != "catchplate-verification-watchdog.service"
         ):
             raise LauncherError("live watchdog peer differs from the receipt")
         if not hasattr(os, "pidfd_open"):
@@ -3218,7 +3218,7 @@ def _authenticate_watchdog(
             or _pid_start_time(peer_pid) != service["pidStartTime"]
             or _cgroup_identity(peer_pid) != service["cgroup"]
             or not service["cgroup"]["path"].endswith(
-                "/serverware-verification-watchdog.service"
+                "/catchplate-verification-watchdog.service"
             )
         ):
             raise LauncherError("live watchdog boot/cgroup identity changed")
@@ -3560,14 +3560,14 @@ def _resource_labels(
     attempt: int,
 ) -> dict[str, str]:
     return {
-        "org.serverware.attempt": str(attempt),
-        "org.serverware.kind": kind,
-        "org.serverware.lane": lane,
-        "org.serverware.lane-sequence": str(lane_sequence),
-        "org.serverware.lease": lease_id,
-        "org.serverware.manifest": manifest_sha256,
-        "org.serverware.promotion-receipt": receipt_sha256,
-        "org.serverware.role": role,
+        "org.catchplate.attempt": str(attempt),
+        "org.catchplate.kind": kind,
+        "org.catchplate.lane": lane,
+        "org.catchplate.lane-sequence": str(lane_sequence),
+        "org.catchplate.lease": lease_id,
+        "org.catchplate.manifest": manifest_sha256,
+        "org.catchplate.promotion-receipt": receipt_sha256,
+        "org.catchplate.role": role,
     }
 
 
@@ -3728,7 +3728,7 @@ def _validate_portal_operations(
             or operation.get("leaseId") != lease_id
             or operation.get("manifestSha256") != manifest["manifestSha256"]
             or operation.get("promotionReceiptSha256") != receipt_sha256
-            or operation.get("protocol") != "serverware.npmOneUse/v2"
+            or operation.get("protocol") != "catchplate.npmOneUse/v2"
             or operation.get("companionInputProtocol")
             != "one-canonical-json-frame-on-stdin-no-generic-command"
             or operation.get("companionProcess")
@@ -3950,7 +3950,7 @@ def _validate_runtime_evidence(
         not isinstance(value, dict)
         or set(value)
         != {"apiVersion", "payload", "payloadSha256", "signature"}
-        or value.get("apiVersion") != "serverware.ociRuntimeEvidence/v2"
+        or value.get("apiVersion") != "catchplate.ociRuntimeEvidence/v2"
         or not isinstance(value.get("payload"), dict)
         or value.get("payloadSha256")
         != _sha256(_canonical_json(value["payload"]))
@@ -4160,12 +4160,12 @@ def _validate_clean_room_result(
         (
             "attestation-verify-offline",
             [
-                "/opt/serverware/clean-room/installed/bin/serverware-attestation",
+                "/opt/catchplate/clean-room/installed/bin/catchplate-attestation",
                 "--base",
                 "http://127.0.0.1:1",
                 "--enrollment-packet",
                 (
-                    "/opt/serverware/clean-room/fixtures/"
+                    "/opt/catchplate/clean-room/fixtures/"
                     "rejected-enrollment-packet.json"
                 ),
                 "--ca-out",
@@ -4176,12 +4176,12 @@ def _validate_clean_room_result(
         (
             "enrollment-install-offline",
             [
-                "/opt/serverware/clean-room/installed/bin/serverware-enrollment",
+                "/opt/catchplate/clean-room/installed/bin/catchplate-enrollment",
                 "--base",
                 "http://127.0.0.1:1",
                 "--verify-packet",
                 (
-                    "/opt/serverware/clean-room/fixtures/"
+                    "/opt/catchplate/clean-room/fixtures/"
                     "rejected-enrollment-packet.json"
                 ),
             ],
@@ -4190,9 +4190,9 @@ def _validate_clean_room_result(
         (
             "evidence-verify-offline",
             [
-                "/opt/serverware/clean-room/installed/bin/serverware-evidence",
+                "/opt/catchplate/clean-room/installed/bin/catchplate-evidence",
                 "--root",
-                "/opt/serverware/clean-room/fixtures",
+                "/opt/catchplate/clean-room/fixtures",
                 "verify",
                 "--manifest",
                 "onboarding-evidence.json",
@@ -4216,7 +4216,7 @@ def _validate_clean_room_result(
             "wheelhouseManifestPayloadSha256",
         }
         or value.get("apiVersion")
-        != "serverware.agentTrustCleanRoomResult/v5"
+        != "catchplate.agentTrustCleanRoomResult/v5"
         or not isinstance(value.get("exerciseScenarios"), list)
         or [item.get("scenario") for item in value["exerciseScenarios"]]
         != [item[0] for item in expected_scenarios]
@@ -4288,7 +4288,7 @@ def _validate_clean_room_result(
                 "clean-room scenario differs from its promoted derivation"
             )
     emitted = (
-        b"SERVERWARE_CLEAN_ROOM_RESULT="
+        b"CATCHPLATE_CLEAN_ROOM_RESULT="
         + _canonical_json(value)
         + b"\n"
     )
@@ -4416,30 +4416,30 @@ def _validate_lane_result(
     if lane == "portal-browser-oauth":
         endpoint = receipt_watchdog["laneEndpoint"]
         dynamic = payload["dynamicEnvironment"]
-        one_use_nonce = dynamic.get("SERVERWARE_ONE_USE_NONCE")
+        one_use_nonce = dynamic.get("CATCHPLATE_ONE_USE_NONCE")
         npm_image = manifest["images"]["npm-publish-companion"]
         npm_tools = npm_image["fixedToolIdentities"]
         if (
             dynamic
             != {
-                "SERVERWARE_ATTEMPT": "0",
-                "SERVERWARE_LANE": lane,
-                "SERVERWARE_LEASE_ID": lease_id,
-                "SERVERWARE_MANIFEST_SHA256": manifest["manifestSha256"],
-                "SERVERWARE_NPM_COMPANION_IMAGE_ID": npm_image[
+                "CATCHPLATE_ATTEMPT": "0",
+                "CATCHPLATE_LANE": lane,
+                "CATCHPLATE_LEASE_ID": lease_id,
+                "CATCHPLATE_MANIFEST_SHA256": manifest["manifestSha256"],
+                "CATCHPLATE_NPM_COMPANION_IMAGE_ID": npm_image[
                     "containerdImageId"
                 ],
-                "SERVERWARE_NPM_ENTRYPOINT_SHA256": npm_tools[
+                "CATCHPLATE_NPM_ENTRYPOINT_SHA256": npm_tools[
                     "npmEntrypoint"
                 ]["sha256"],
-                "SERVERWARE_NPM_NODE_SHA256": npm_tools["node"]["sha256"],
-                "SERVERWARE_NPM_PACKAGE_SHA256": npm_tools[
+                "CATCHPLATE_NPM_NODE_SHA256": npm_tools["node"]["sha256"],
+                "CATCHPLATE_NPM_PACKAGE_SHA256": npm_tools[
                     "npmPackageManifest"
                 ]["sha256"],
-                "SERVERWARE_ONE_USE_NONCE": one_use_nonce,
-                "SERVERWARE_PROMOTION_RECEIPT_SHA256": receipt_sha256,
-                "SERVERWARE_WATCHDOG_ENDPOINT": endpoint["url"],
-                "SERVERWARE_WATCHDOG_TLS_SPKI_SHA256": (
+                "CATCHPLATE_ONE_USE_NONCE": one_use_nonce,
+                "CATCHPLATE_PROMOTION_RECEIPT_SHA256": receipt_sha256,
+                "CATCHPLATE_WATCHDOG_ENDPOINT": endpoint["url"],
+                "CATCHPLATE_WATCHDOG_TLS_SPKI_SHA256": (
                     endpoint["tlsSpkiSha256"]
                 ),
             }

@@ -25,13 +25,13 @@ def no_network(event, _args):
 
 sys.addaudithook(no_network)
 from pydantic import ValidationError
-from serverware import operator_catalog_x_oauth as account
-from serverware import operator_catalog_x_post as post
-from serverware import operator_catalog_inputs as inputs
-from serverware import operator_catalog_schema as schema
-from serverware import operator_catalog_policy as policy
-from serverware import operator_x_oauth_profile as profiles
-from serverware import x_post
+from catchplate import operator_catalog_x_oauth as account
+from catchplate import operator_catalog_x_post as post
+from catchplate import operator_catalog_inputs as inputs
+from catchplate import operator_catalog_schema as schema
+from catchplate import operator_catalog_policy as policy
+from catchplate import operator_x_oauth_profile as profiles
+from catchplate import x_post
 
 IDS = [str(uuid.UUID(int=value)) for value in range(1, 9)]
 STAMP = "2026-10-12T12:00:00+00:00"
@@ -40,7 +40,7 @@ HASH = "sha256:" + "a" * 64
 
 def fixture():
     profile = profiles.build_profile(client_id="synthetic-public-x-client", public_origin="https://console.example.com")
-    binding = {"schema": "serverware.operatorXAccountBinding/v1", "owner_id": IDS[0],
+    binding = {"schema": "catchplate.operatorXAccountBinding/v1", "owner_id": IDS[0],
         "configuration_operation_id": IDS[1], "config_version": 1,
         "profile_binding_digest": profile.binding_digest, "intent_id": IDS[2]}
     metadata = {"oauth": True, "provider": "x.oauth2", "provider_id": "x",
@@ -177,7 +177,7 @@ class XCatalogComponents(unittest.TestCase):
             self.refused(schema.rule_credential_header, changed, record)
 
     def test_render_and_actual_compiler_retain_exact_oauth_post_profile(self):
-        from serverware import policy_bundle
+        from catchplate import policy_bundle
         _, _, _, record, _ = fixture()
         value = rule()
         application = {"id": IDS[4], "name": "Synthetic client", "status": "active", "ordinal": 1,
@@ -190,7 +190,7 @@ class XCatalogComponents(unittest.TestCase):
         x_post.validate_route(route)
         self.assertEqual(document["credentials"], [account.credential_policy(record)])
         self.assertEqual(document["routes"][0]["adapter"]["config"]["credentialBinding"], account.route_binding(record))
-        self.assertEqual(route.credential_header, {"mode": "replaceExact", "expectedValue": "Bearer serverware-x-post-placeholder-v1"})
+        self.assertEqual(route.credential_header, {"mode": "replaceExact", "expectedValue": "Bearer catchplate-x-post-placeholder-v1"})
         self.assertEqual(route.constraints, (x_post.response_envelope(value["route_id"] + ".envelope"),))
         self.assertFalse(any(row["type"] == "rateLimit" for row in document["routes"][0]["constraints"]))
 
@@ -227,7 +227,7 @@ class XCatalogComponents(unittest.TestCase):
         self.refused(post.validate_route_coexistence, [first, second], [credential])
 
     def test_limited_rule_renders_exact_existing_shared_utc_account_constraint(self):
-        from serverware import policy_bundle
+        from catchplate import policy_bundle
         _, _, _, credential, _ = fixture()
         value = {**rule(), "daily_post_attempt_limit": 2}
         application = {"id": IDS[4], "name": "Synthetic client", "status": "active", "ordinal": 1,
@@ -243,8 +243,8 @@ class XCatalogComponents(unittest.TestCase):
         x_post.validate_route(route)
 
     def test_optional_quota_capability_is_closed_and_detached(self):
-        from serverware import operator_demo
-        expected = {"schema": "serverware.operatorXPostAttemptQuota/v1", "field": "daily_post_attempt_limit",
+        from catchplate import operator_demo
+        expected = {"schema": "catchplate.operatorXPostAttemptQuota/v1", "field": "daily_post_attempt_limit",
             "period": "utc_day", "scope": "verified_x_account", "unit": "posting_attempt",
             "minimum": 1, "maximum": 1_000_000_000}
         self.assertTrue(post.quota_descriptor_matches(expected))
@@ -262,20 +262,20 @@ class XCatalogComponents(unittest.TestCase):
 
     def test_capability_has_no_quota_or_standalone_activation_claim(self):
         capability = account.capability()
-        self.assertEqual(capability, {"schema": "serverware.operatorXOAuth/v1",
+        self.assertEqual(capability, {"schema": "catchplate.operatorXOAuth/v1",
             "connection_type": "x_user_oauth_v1", "auth_type": "x_oauth", "permission_preset": "x_text_post_v1",
             "start_path": "/api/operator-demo/oauth/x/start",
             "operation_path_prefix": "/api/operator-demo/oauth/x/operations/",
             "disconnect_review_path_template": "/api/operator-demo/oauth/x/accounts/{credential_id}/disconnect-review",
             "disconnect_path": "/api/operator-demo/oauth/x/disconnect", "source_pair_required": True,
             "automatic_refresh": True, "daily_quota_available": False})
-        exact = {"schema": "serverware.operatorXPostGate/v1", "adapter": "x.post.v1", "operation": "tweets.write"}
+        exact = {"schema": "catchplate.operatorXPostGate/v1", "adapter": "x.post.v1", "operation": "tweets.write"}
         self.assertTrue(post.gate_descriptor_matches(exact))
         for value in (None, {}, {**exact, "extra": True}, {**exact, "adapter": "x.v2"}):
             self.assertFalse(post.gate_descriptor_matches(value))
 
     def test_unavailable_or_stale_observation_refuses_before_mutation(self):
-        from serverware import operator_x_readiness
+        from catchplate import operator_x_readiness
         good = {"ready": True, "policy_hash": HASH, "loaded_policy_hash": HASH, "managed_x": {}}
         for value in ({**good, "ready": False}, {**good, "policy_hash": "sha256:" + "b" * 64},
                 {**good, "loaded_policy_hash": None}):

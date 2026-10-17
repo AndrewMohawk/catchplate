@@ -22,10 +22,10 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from serverware import aws_credential_boundary, github_app_boundary as boundary
+from catchplate import aws_credential_boundary, github_app_boundary as boundary
 
 ROOT = Path(__file__).resolve().parents[1]
-SECRET = '{"schema":"serverware.githubAppCredential/v1","private_key_pem":"synthetic-private-canary"}'
+SECRET = '{"schema":"catchplate.githubAppCredential/v1","private_key_pem":"synthetic-private-canary"}'
 ORDINARY = {"id": "synthetic-id", "credential_version": 3, "kind": "bearer", "metadata": {}}
 MARKERS = ({"connection_type": "github_app_v1"}, {"github_app": {}}, {"github_app": None},
     {"connection_type": "other", "github_app": "malformed"})
@@ -51,7 +51,7 @@ def runtime(public, private=None):
         "json": json, "time": time, "_credential_cache": {}, "_credential_lock": threading.Lock(),
         "SECRET_LEASE_TTL_SECONDS": 30, "start_runtime_workers": Mock(), "_inc": Mock(),
         "_claim_release_controlled_credential": Mock(), "ReleaseAuthorizationClientError": RuntimeError}
-    return functions("serverware/runtime.py", {"get_credential", "get_control_plane_credential",
+    return functions("catchplate/runtime.py", {"get_credential", "get_control_plane_credential",
         "_project_credential_for_data_plane", "invalidate_secret_leases"}, namespace)
 
 
@@ -60,7 +60,7 @@ class StoreRefused(RuntimeError):
 
 
 def database_functions():
-    return functions("serverware/db.py", {"_refuse_generic_aws_credential", "_refuse_generic_github_app_credential",
+    return functions("catchplate/db.py", {"_refuse_generic_aws_credential", "_refuse_generic_github_app_credential",
         "_refuse_retained_operator_aws_identity", "create_credential", "upsert_credential_with_id",
         "update_credential", "update_credential_secret_if_version", "delete_credential"}, {
         "MetadataStoreError": StoreRefused, "metadata_uses_postgres": lambda: False,
@@ -70,7 +70,7 @@ def database_functions():
 def broker_command(secret, *, public=None, storage=None):
     """Genuine local envelope cryptography; all owner and policy identities synthetic."""
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    from serverware import native_secret_broker_helper as native
+    from catchplate import native_secret_broker_helper as native
     credential, version = "synthetic-github-app", 3
     kek, dek, nonce, wrap_nonce = AESGCM.generate_key(256), AESGCM.generate_key(256), b"a" * 12, b"b" * 12
     key = AESGCM(kek)
@@ -78,9 +78,9 @@ def broker_command(secret, *, public=None, storage=None):
     row = {"credentialId": credential, "credentialVersion": version,
         "secretKekId": "synthetic-app-kek", "secretUpdatedAt": "2026-01-01T00:00:00Z",
         "encryptedDek": "v1:" + encode(wrap_nonce) + ":" + encode(key.encrypt(wrap_nonce, dek,
-            f"serverware:dek:{credential}:v{version}".encode())),
+            f"catchplate:dek:{credential}:v{version}".encode())),
         "secretNonce": "v1:" + encode(nonce), "secretCiphertext": "v1:" + encode(AESGCM(dek).encrypt(
-            nonce, secret.encode(), f"serverware:secret:{credential}:v{version}".encode()))}
+            nonce, secret.encode(), f"catchplate:secret:{credential}:v{version}".encode()))}
     public = {} if public is None else public
     storage = {} if storage is None else storage
     now = time.time_ns() // 1_000_000
@@ -164,7 +164,7 @@ class GitHubAppSecretBoundaryTests(unittest.TestCase):
             value = {**ORDINARY, "metadata": MARKERS[0] if marked else {}, "secret": SECRET}
             public = {key: item for key, item in value.items() if key != "secret"}
             get = Mock(side_effect=lambda _id, include_secret=False: value if include_secret else public)
-            ns = functions("serverware/policies.py", {"inject_credential", "_secret_for_injection"}, {
+            ns = functions("catchplate/policies.py", {"inject_credential", "_secret_for_injection"}, {
                 "db": SimpleNamespace(get_credential=get), "github_app_boundary": boundary, "json": json,
                 "SECRET_FIELD_PATH_RE": re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")})
             flow = SimpleNamespace(request=SimpleNamespace(headers={}, query={}))
@@ -173,7 +173,7 @@ class GitHubAppSecretBoundaryTests(unittest.TestCase):
             self.assertEqual(result, "GitHub App credentials require the dedicated lease owner")
             self.assertEqual(flow.request.headers, {})
             self.assertEqual(get.call_count, 1 if marked else 2)
-            engine = functions("serverware/policy_engine.py", {"_inject_credential"}, {
+            engine = functions("catchplate/policy_engine.py", {"_inject_credential"}, {
                 "github_app_boundary": boundary, "aws_credential_boundary": aws_credential_boundary})
             with self.assertRaisesRegex(ValueError, "^GitHub App credentials cannot use generic secret injection$"):
                 engine["_inject_credential"](flow, object(), value)
@@ -203,7 +203,7 @@ class GitHubAppSecretBoundaryTests(unittest.TestCase):
             with self.assertRaises(StoreRefused):
                 ns["_refuse_retained_operator_aws_identity"](conn, "id")
             ns["_refuse_retained_operator_aws_identity"](conn, "different-id")
-        tree = ast.parse((ROOT / "serverware/db.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/db.py").read_text())
         # Wiring coverage: all generic retained-row mutation paths consult the real roster guard.
         for name in ("upsert_credential_with_id", "update_credential", "update_credential_secret_if_version", "delete_credential"):
             node = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name)
@@ -240,7 +240,7 @@ class GitHubAppSecretBoundaryTests(unittest.TestCase):
             owner.channel.send.assert_not_called()
 
     def test_dedicated_revoke_never_opens_private_key_and_package_keeps_leaf_only(self):
-        tree = ast.parse((ROOT / "serverware/db.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/db.py").read_text())
         node = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
             and node.name == "delete_operator_github_app_credential")
         calls = {ast.unparse(call.func) for call in ast.walk(node) if isinstance(call, ast.Call)}
@@ -249,7 +249,7 @@ class GitHubAppSecretBoundaryTests(unittest.TestCase):
         self.assertFalse(calls & {"decrypt_secret_envelope", "row_to_credential", "operator_github_app.validate_stored"})
         source = (ROOT / "scripts/package_native_broker_runtime.py").read_text()
         self.assertIn('"github_app_boundary.py"', source)
-        leaf = ast.parse((ROOT / "serverware/github_app_boundary.py").read_text())
+        leaf = ast.parse((ROOT / "catchplate/github_app_boundary.py").read_text())
         imports = {node.module for node in leaf.body if isinstance(node, ast.ImportFrom)}
         imports.update(alias.name for node in leaf.body if isinstance(node, ast.Import) for alias in node.names)
         self.assertEqual(imports, {"__future__", "json", "re"})

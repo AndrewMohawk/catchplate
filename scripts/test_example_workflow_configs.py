@@ -56,11 +56,11 @@ def configuration(directory):
     elif directory == "google-gmail-node":
         value.update(upstream_url="https://gmail.googleapis.com/gmail/v1/users/me/messages",
             query_mode="orderedFormV1", age_policy={"mode": "recent_internal_date_v1", "max_age_days": 1})
-        value["client_recipe"].update(schema="serverware.gmailSdkClient/v2", access_rule_id=rule,
+        value["client_recipe"].update(schema="catchplate.gmailSdkClient/v2", access_rule_id=rule,
             token_expires_at_epoch_ms=value["token_expires_at_epoch_ms"], environment={
-                "SERVERWARE_APP_ID": app, "SERVERWARE_PROXY_URL": value["proxy_url"],
-                "SERVERWARE_PROXY_TOKEN": SECRET, "SERVERWARE_CA_FILE": value["ca_file"],
-                "SERVERWARE_PROXY_CA_FILE": None, "NODE_OPTIONS": "never-execute"})
+                "CATCHPLATE_APP_ID": app, "CATCHPLATE_PROXY_URL": value["proxy_url"],
+                "CATCHPLATE_PROXY_TOKEN": SECRET, "CATCHPLATE_CA_FILE": value["ca_file"],
+                "CATCHPLATE_PROXY_CA_FILE": None, "NODE_OPTIONS": "never-execute"})
     elif directory == "x-username-node":
         value.update(upstream_url="https://api.x.com/2/users/by/username/fixture_user",
             username="fixture_user", response_mode="x_app_read_json_v1")
@@ -99,18 +99,18 @@ class WorkflowConfigurationTests(unittest.TestCase):
             "import {parseArguments} from './client.mjs';\n"
             "if (!process.exitCode) {\n"
             f" const selected = parseArguments({json.dumps(arguments)});\n"
-            " if (selected.configPath !== join(process.env.SERVERWARE_CI_PRIVATE_DIR, 'client.private.json')) throw new Error('Fixed path lost');\n"
+            " if (selected.configPath !== join(process.env.CATCHPLATE_CI_PRIVATE_DIR, 'client.private.json')) throw new Error('Fixed path lost');\n"
             " if (selected.operation !== undefined && selected.operation !== 'list') throw new Error('Write invocation refused');\n"
             " process.stdout.write('validated-read-config\\n');\n}\n")
         return subprocess.run([NODE, "--input-type=module"], input=program, text=True, capture_output=True,
             timeout=8, cwd=ROOT / "examples" / name, env={"PATH": os.defpath,
-                "SERVERWARE_CI_PRIVATE_DIR": str(directory), "SERVERWARE_CLIENT_CONFIG_JSON": json.dumps(value),
-                "SERVERWARE_CA_PEM": CA if ca is None else ca, "SERVERWARE_PROXY_CA_PEM": CA if extra else ""})
+                "CATCHPLATE_CI_PRIVATE_DIR": str(directory), "CATCHPLATE_CLIENT_CONFIG_JSON": json.dumps(value),
+                "CATCHPLATE_CA_PEM": CA if ca is None else ca, "CATCHPLATE_PROXY_CA_PEM": CA if extra else ""})
 
     def test_exact_blocks_validate_downloads_keep_scope_and_use_private_fixed_paths(self):
         for name in EXAMPLES:
             for extra in (False, True):
-                with self.subTest(example=name, outer_ca=extra), tempfile.TemporaryDirectory(prefix="serverware-workflow-") as temporary:
+                with self.subTest(example=name, outer_ca=extra), tempfile.TemporaryDirectory(prefix="catchplate-workflow-") as temporary:
                     directory = Path(temporary)
                     value = configuration(name)
                     result = self.run_block(name, value, directory, extra=extra)
@@ -119,14 +119,14 @@ class WorkflowConfigurationTests(unittest.TestCase):
                     self.assertEqual(result.stderr, "")
                     loaded = json.loads((directory / "client.private.json").read_text())
                     expected = json.loads(json.dumps(value))
-                    expected.update(ca_file="serverware-ca.pem", proxy_ca_file="proxy-ca.pem" if extra else None)
+                    expected.update(ca_file="catchplate-ca.pem", proxy_ca_file="proxy-ca.pem" if extra else None)
                     if name == "github-issues-node":
                         expected["client_recipe"]["proxy_ca_file"] = expected["proxy_ca_file"]
                     if name == "google-gmail-node":
-                        expected["client_recipe"]["environment"].update(SERVERWARE_CA_FILE=expected["ca_file"],
-                            SERVERWARE_PROXY_CA_FILE=expected["proxy_ca_file"])
+                        expected["client_recipe"]["environment"].update(CATCHPLATE_CA_FILE=expected["ca_file"],
+                            CATCHPLATE_PROXY_CA_FILE=expected["proxy_ca_file"])
                     self.assertEqual(loaded, expected)
-                    names = {"client.private.json", "serverware-ca.pem"} | ({"proxy-ca.pem"} if extra else set())
+                    names = {"client.private.json", "catchplate-ca.pem"} | ({"proxy-ca.pem"} if extra else set())
                     self.assertEqual({path.name for path in directory.iterdir()}, names)
                     self.assertTrue(all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in directory.iterdir()))
                     self.assertNotIn(SECRET, result.stdout + result.stderr)
@@ -134,7 +134,7 @@ class WorkflowConfigurationTests(unittest.TestCase):
     def test_bad_downloads_and_cas_refuse_without_secret_output(self):
         for name in EXAMPLES:
             for invalid in ("expiry", "bundle", "ca"):
-                with self.subTest(example=name, invalid=invalid), tempfile.TemporaryDirectory(prefix="serverware-workflow-") as temporary:
+                with self.subTest(example=name, invalid=invalid), tempfile.TemporaryDirectory(prefix="catchplate-workflow-") as temporary:
                     value = configuration(name)
                     if invalid == "expiry":
                         value["token_expires_at_epoch_ms"] = 1
@@ -156,11 +156,11 @@ class WorkflowConfigurationTests(unittest.TestCase):
                 self.assertIn("permissions:\n  contents: read\n", source)
                 self.assertIn("persist-credentials: false", source)
                 self.assertLess(source.index("run: npm ci --ignore-scripts --no-audit --no-fund"),
-                    source.index("secrets.SERVERWARE_CLIENT_CONFIG_JSON"))
+                    source.index("secrets.CATCHPLATE_CLIENT_CONFIG_JSON"))
                 self.assertIn("trap cleanup EXIT", source)
                 self.assertIn("if: always()", source)
-                self.assertNotIn("secrets.SERVERWARE_PROXY_TOKEN", source)
-                self.assertNotIn("vars.SERVERWARE_", source)
+                self.assertNotIn("secrets.CATCHPLATE_PROXY_TOKEN", source)
+                self.assertNotIn("vars.CATCHPLATE_", source)
                 self.assertNotIn("pull_request", source)
                 self.assertNotIn("upload-artifact", source)
                 self.assertNotIn("create-issue", source)
@@ -174,14 +174,14 @@ class WorkflowConfigurationTests(unittest.TestCase):
 
     def test_cleanup_removes_only_fixed_files_in_its_owned_directory(self):
         for name in EXAMPLES:
-            with self.subTest(example=name), tempfile.TemporaryDirectory(prefix="serverware-workflow-cleanup-") as temporary:
+            with self.subTest(example=name), tempfile.TemporaryDirectory(prefix="catchplate-workflow-cleanup-") as temporary:
                 source = (ROOT / "examples" / name / "workflow.example.yml").read_text()
                 cleanup = textwrap.dedent(re.findall(r"^        run: \|\n((?:^          .*\n|^\n)+)", source, re.M)[-1])
-                prefix = re.search(r'"\$RUNNER_TEMP"/(serverware-[a-z]+-read\.)\?{8}', cleanup).group(1)
+                prefix = re.search(r'"\$RUNNER_TEMP"/(catchplate-[a-z]+-read\.)\?{8}', cleanup).group(1)
                 directory = Path(tempfile.mkdtemp(prefix=prefix, dir=temporary))
-                for filename in ("client.private.json", "serverware-ca.pem", "proxy-ca.pem", "response.private.json"):
+                for filename in ("client.private.json", "catchplate-ca.pem", "proxy-ca.pem", "response.private.json"):
                     (directory / filename).write_text("synthetic private file")
-                environment = {"PATH": os.defpath, "RUNNER_TEMP": temporary, "SERVERWARE_CI_PRIVATE_DIR": str(directory)}
+                environment = {"PATH": os.defpath, "RUNNER_TEMP": temporary, "CATCHPLATE_CI_PRIVATE_DIR": str(directory)}
                 cleaned = subprocess.run(["bash"], input=cleanup, text=True, capture_output=True,
                     env=environment, timeout=5, check=False)
                 self.assertEqual(cleaned.returncode, 0, cleaned.stderr)
@@ -191,7 +191,7 @@ class WorkflowConfigurationTests(unittest.TestCase):
                 retained = other / "client.private.json"
                 retained.write_text("must remain")
                 refused = subprocess.run(["bash"], input=cleanup, text=True, capture_output=True,
-                    env={**environment, "SERVERWARE_CI_PRIVATE_DIR": str(other)}, timeout=5, check=False)
+                    env={**environment, "CATCHPLATE_CI_PRIVATE_DIR": str(other)}, timeout=5, check=False)
                 self.assertEqual(refused.returncode, 1)
                 self.assertEqual(retained.read_text(), "must remain")
 

@@ -17,7 +17,7 @@ mod reap;
 pub(super) use reap::ReapedWorker;
 
 pub(super) const CREDENTIAL: &str = "peer-inspection-policy";
-const POLICY: &str = "serverware.custodyOrdinaryPeerInspection/v1";
+const POLICY: &str = "catchplate.custodyOrdinaryPeerInspection/v1";
 fn require(value: bool) -> Result<(), ServiceRunnerError> {
     if value { Ok(()) } else { Err(fail("ordinary inspection refused")) }
 }
@@ -271,7 +271,7 @@ pub(super) fn final_role_listening(delivery:&PreparedGuestServiceDelivery, worke
     #[derive(Serialize)] #[serde(rename_all="camelCase")]
     struct Notice<'a> {api_version:&'static str,delivery_sha256:&'a Sha256Digest,
         service_role:Role,invocation_id:&'a str,phase:&'static str}
-    let notice=Notice{api_version:"serverware.custodyOrdinaryListening/v1",delivery_sha256:&delivery.owner.delivery_sha256,
+    let notice=Notice{api_version:"catchplate.custodyOrdinaryListening/v1",delivery_sha256:&delivery.owner.delivery_sha256,
         service_role:delivery.owner.payload.service_role,invocation_id:&delivery.owner.payload.invocation_id,phase:"final-role-listening"};
     let bytes=canonical_json_bytes(&notice).map_err(|_|fail("ordinary listening notice encoding failed"))?;
     delivery.owner.parent.send(&bytes,delivery.owner.startup)?;

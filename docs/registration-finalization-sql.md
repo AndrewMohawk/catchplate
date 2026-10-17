@@ -12,7 +12,7 @@ unbuilt and unexecuted; production acceptance remains
 
 ## Inputs and independent authority
 
-[`authority_registration_finalization_sql._execute_on_configuration`](../serverware/authority_registration_finalization_sql.py)
+[`authority_registration_finalization_sql._execute_on_configuration`](../catchplate/authority_registration_finalization_sql.py)
 accepts the independently admitted configuration/generation/runtime identities,
 three original finalization-caller/grant/current-root enrollments, root public
 key, current pending sequence/head/fence, one existing `live_window`, required
@@ -24,7 +24,7 @@ key, current pending sequence/head/fence, one existing `live_window`, required
 | Finalization raw10 | Dedicated authorization, custody/planning raw7, complete before-vector, finalization execution grant |
 | Reservation raw3 | Signed reserve request, computation snapshot, signed state acknowledgment |
 
-The actual [original-admission module](../serverware/authority_registration_finalization_sql_admission.py)
+The actual [original-admission module](../catchplate/authority_registration_finalization_sql_admission.py)
 authenticates the dedicated authorization, custody, complete plan/grant/vector
 and reservation/pending commitments. Its private same-call arguments and live
 checker are not accepted as external proof objects. The composition also fixes

@@ -21,15 +21,15 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_complete_acquisition as acquisition
-from serverware import authority_complete_query as complete
-from serverware import authority_complete_query_batch as batch
-from serverware import authority_index_heads as heads
-from serverware import authority_index_join as joined
-from serverware import authority_index_reader as reader
-from serverware import authority_query_staging as staging
-from serverware import authority_radix_mutation as primary
-from serverware.authority_query_read_work import (
+from catchplate import authority_complete_acquisition as acquisition
+from catchplate import authority_complete_query as complete
+from catchplate import authority_complete_query_batch as batch
+from catchplate import authority_index_heads as heads
+from catchplate import authority_index_join as joined
+from catchplate import authority_index_reader as reader
+from catchplate import authority_query_staging as staging
+from catchplate import authority_radix_mutation as primary
+from catchplate.authority_query_read_work import (
     _ValidationWork, QueryReadValidationLimits, QueryReadWorkError,
 )
 import test_authority_complete_query as declaration_oracle
@@ -212,26 +212,26 @@ class Cursor:
     def execute(self, sql, parameters):
         self.calls.append((sql, copy.deepcopy(parameters)))
         self.parameters = parameters
-        if f"FROM serverware_metadata.{head_oracle.TABLE} AS head " in sql:
+        if f"FROM catchplate_metadata.{head_oracle.TABLE} AS head " in sql:
             self.kind, self.table, self.target = "head", head_oracle.TABLE, self.head
             self.target.execute(sql, parameters)
-        elif f'FROM "serverware_metadata"."{range_oracle.LEAVES}" AS leaf ' in sql:
+        elif f'FROM "catchplate_metadata"."{range_oracle.LEAVES}" AS leaf ' in sql:
             self.kind, self.table, self.target = "leaf", range_oracle.LEAVES, self.range[parameters[0]]
             self.target.execute(sql, parameters)
-        elif f'FROM "serverware_metadata"."{range_oracle.NODES}" AS node ' in sql:
+        elif f'FROM "catchplate_metadata"."{range_oracle.NODES}" AS node ' in sql:
             self.kind, self.table, self.target = "node", range_oracle.NODES, self.range[parameters[-2]]
             self.target.execute(sql, parameters)
         else:
             self.kind, self.target = "primary", None
             tables = {query.table for query in self.fixture.queries}
-            matches = [table for table in tables if f"FROM serverware_metadata.{table} AS target " in sql]
+            matches = [table for table in tables if f"FROM catchplate_metadata.{table} AS target " in sql]
             if len(matches) != 1 or type(parameters) is not tuple or len(parameters) != 2 or parameters[1] != 2:
                 raise AssertionError("unexpected primary SQL or sentinel")
             self.table = matches[0]
             expected = ("SELECT CASE WHEN pg_catalog.octet_length(pg_catalog.to_jsonb(target)::pg_catalog.text) "
                 "<= 1048576 THEN pg_catalog.to_jsonb(target) "
                 "ELSE NULL END AS row_value "
-                f"FROM serverware_metadata.{self.table} AS target WHERE target.id = %s LIMIT %s")
+                f"FROM catchplate_metadata.{self.table} AS target WHERE target.id = %s LIMIT %s")
             if sql != expected:
                 raise AssertionError("primary lookup is not the exact full-row source-key SELECT")
         return self

@@ -1,6 +1,6 @@
 # Dedicated consume custody issuance
 
-[`authority_oidc_session_activation_delivery_execution_packet.py`](../serverware/authority_oidc_session_activation_delivery_execution_packet.py)
+[`authority_oidc_session_activation_delivery_execution_packet.py`](../catchplate/authority_oidc_session_activation_delivery_execution_packet.py)
 connects genuine [current pending admission](oidc-session-activation-delivery-pending-admission.md)
 to the actual protected successor issuer. It does not accept a successful
 candidate, returned effects, caller packet or pluggable verifier as authority.

@@ -1,6 +1,6 @@
 # Consume-grant original admission
 
-The private [shared admission module](../serverware/authority_oidc_session_activation_delivery_execution_grant_admission.py)
+The private [shared admission module](../catchplate/authority_oidc_session_activation_delivery_execution_grant_admission.py)
 connects the actual consume-only caller authorization, dedicated root delegation
 and independent receiving custodian to the grant producer and verifier. It is
 not a public permission endpoint, signing service or accepted proof-result format.

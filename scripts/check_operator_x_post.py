@@ -41,9 +41,9 @@ PREFIX = "/api/operator-demo/oauth/x"
 CONFIGURATION = PREFIX + "/configuration/v1"
 CALLBACK = "/api/oauth/callback/x"
 PROXY = "https://proxy.operator-basic.example.test:8443"
-CONTROL = "https://serverware-x.example.com"
+CONTROL = "https://catchplate-x.example.com"
 SCOPES = ["offline.access", "tweet.read", "tweet.write", "users.read"]
-DESCRIPTOR = {"schema": "serverware.operatorXPostGate/v1", "adapter": "x.post.v1", "operation": "tweets.write"}
+DESCRIPTOR = {"schema": "catchplate.operatorXPostGate/v1", "adapter": "x.post.v1", "operation": "tweets.write"}
 LEASE_REJECT = "data_plane.credential_lease.rejected"
 CONNECT_DENIED = "data_plane.connect.denied"
 RELOAD = "data_plane.policy.reloaded"
@@ -188,19 +188,19 @@ def client_environment(phase, application, token):
         outer = inner
     elif selected == "wrong_inner_ca":
         inner = outer
-    return {"LANG": "C.UTF-8", "SERVERWARE_PROXY_URL": PROXY,
-        "SERVERWARE_APP_ID": application, "SERVERWARE_PROXY_TOKEN": token,
-        "SERVERWARE_CA_FILE": inner, "SERVERWARE_PROXY_CA_FILE": outer,
-        "SERVERWARE_X_POST_TEXT": profiles.post_text("reflection" if selected == "reflected" else "success"),
-        "SERVERWARE_X_POST_CONFIRM": "post-once"}
+    return {"LANG": "C.UTF-8", "CATCHPLATE_PROXY_URL": PROXY,
+        "CATCHPLATE_APP_ID": application, "CATCHPLATE_PROXY_TOKEN": token,
+        "CATCHPLATE_CA_FILE": inner, "CATCHPLATE_PROXY_CA_FILE": outer,
+        "CATCHPLATE_X_POST_TEXT": profiles.post_text("reflection" if selected == "reflected" else "success"),
+        "CATCHPLATE_X_POST_CONFIRM": "post-once"}
 
 
 def run_example(phase, environment, seconds):
     """Fixed entrypoint, clean environment, retained child identity until cleanup."""
     client, _ = profiles.split_phase(phase)
     require(type(seconds) in (int, float) and 0 < seconds <= 35
-        and set(environment) == {"LANG", "SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID", "SERVERWARE_PROXY_TOKEN",
-            "SERVERWARE_CA_FILE", "SERVERWARE_PROXY_CA_FILE", "SERVERWARE_X_POST_TEXT", "SERVERWARE_X_POST_CONFIRM"},
+        and set(environment) == {"LANG", "CATCHPLATE_PROXY_URL", "CATCHPLATE_APP_ID", "CATCHPLATE_PROXY_TOKEN",
+            "CATCHPLATE_CA_FILE", "CATCHPLATE_PROXY_CA_FILE", "CATCHPLATE_X_POST_TEXT", "CATCHPLATE_X_POST_CONFIRM"},
         "bounded X SDK invocation required")
     deadline = time.monotonic() + seconds
     process = subprocess.Popen(profiles.COMMANDS[client], stdin=subprocess.DEVNULL,
@@ -294,7 +294,7 @@ def require_refresh_projection(before, after, credential_id):
 def consent_target(value, client_id):
     require(type(value) is dict and set(value) == {"schema", "operation_id", "status", "authorization_url",
         "state", "expires_at_epoch_ms", "profile_binding_digest"}
-        and value["schema"] == "serverware.operatorXConsent/v1" and value["status"] == "consent_pending"
+        and value["schema"] == "catchplate.operatorXConsent/v1" and value["status"] == "consent_pending"
         and type(value["state"]) is str and NONCE.fullmatch(value["state"])
         and UUID.fullmatch(value["operation_id"]) and SHA256.fullmatch(value["profile_binding_digest"])
         and type(value["expires_at_epoch_ms"]) is int and value["expires_at_epoch_ms"] > time.time_ns() // 1_000_000,
@@ -316,7 +316,7 @@ def consent_target(value, client_id):
 def consent_cookie(headers, state):
     cookies = [value for name, value in headers if name.lower() == "set-cookie"]
     require(len(cookies) == 1, "one X browser cookie required")
-    value = SimpleCookie(cookies[0]); name = "__Host-serverware-x-oauth-" + state
+    value = SimpleCookie(cookies[0]); name = "__Host-catchplate-x-oauth-" + state
     require(set(value) == {name} and NONCE.fullmatch(value[name].value)
         and value[name]["secure"] and value[name]["httponly"] and value[name]["path"] == "/"
         and value[name]["samesite"].lower() == "lax" and not value[name]["domain"], "X browser binding differs")
@@ -328,7 +328,7 @@ def callback_target(headers, state):
     require(len(locations) == 1 and len(locations[0]) <= 8192, "one bounded X callback redirect required")
     parsed = urlsplit(locations[0]); pairs = parse_qsl(parsed.query, strict_parsing=True, max_num_fields=3)
     query = dict(pairs)
-    require((parsed.scheme, parsed.netloc, parsed.path, parsed.fragment) == ("https", "serverware-x.example.com", CALLBACK, "")
+    require((parsed.scheme, parsed.netloc, parsed.path, parsed.fragment) == ("https", "catchplate-x.example.com", CALLBACK, "")
         and len(pairs) == len(query) and set(query) == {"code", "state"} and query["state"] == state
         and type(query["code"]) is str and 1 <= len(query["code"]) <= 1024, "X callback binding differs")
     return parsed.path + "?" + parsed.query, query["code"]
@@ -498,7 +498,7 @@ class XPostCheck(OperatorCatalogCheck):
         dependency_bytes = self.pins[args.dependencies_file][1][1]
         require(HEX.fullmatch(args.expected_dependencies_sha256)
             and hashlib.sha256(dependency_bytes).hexdigest() == args.expected_dependencies_sha256
-            and json.loads(dependency_bytes)["schema"] == "serverware.privateXPostDependencies/v1",
+            and json.loads(dependency_bytes)["schema"] == "catchplate.privateXPostDependencies/v1",
             "runner dependency inventory pin differs")
         roots = [self.pins[Path("/client-trust/" + name + "-ca.pem")][1][1] for name in ("inner", "outer")]
         require(roots[0] != roots[1] and all(b"BEGIN CERTIFICATE" in raw and b"PRIVATE KEY" not in raw for raw in roots),
@@ -522,7 +522,7 @@ class XPostCheck(OperatorCatalogCheck):
 
     def catalog(self):
         value = self.control_json("/api/operator-demo/catalog", authenticated=True)
-        require(value.get("schema") == "serverware.operatorCatalog/v1" and value.get("mode") == "operator-development"
+        require(value.get("schema") == "catchplate.operatorCatalog/v1" and value.get("mode") == "operator-development"
             and value.get("productionReady") is False and value.get("hardwareVerified") is False
             and value.get("allowed_upstreams") == [profiles.ORIGIN]
             and type(value.get("revision")) is int and value["revision"] >= 1
@@ -543,7 +543,7 @@ class XPostCheck(OperatorCatalogCheck):
         headers = {"Connection": "close", "Host": endpoint.host}
         if authenticated:
             require(endpoint is self.control, "admin token destination differs")
-            headers["X-Serverware-Admin-Token"] = self.admin_token
+            headers["X-Catchplate-Admin-Token"] = self.admin_token
         if cookie is not None:
             require(endpoint is self.control, "browser cookie destination differs")
             headers["Cookie"] = cookie
@@ -616,7 +616,7 @@ class XPostCheck(OperatorCatalogCheck):
             configured = self.catalog()
             capability = configured["capabilities"].get("x_oauth")
             loaded = self.health().get("policy_shadow", {}).get("managed_x", {})
-            if (type(capability) is dict and capability.get("schema") == "serverware.operatorXOAuth/v1"
+            if (type(capability) is dict and capability.get("schema") == "catchplate.operatorXOAuth/v1"
                     and capability.get("automatic_refresh") is True
                     and loaded.get("profile_binding_digest") == result["profile_binding_digest"]
                     and type(loaded.get("operation")) is dict
@@ -648,7 +648,7 @@ class XPostCheck(OperatorCatalogCheck):
         require(status == 200 and b"<h1>X account connected</h1>" in raw,
             "X actual callback did not confirm adoption; never replay")
         operation = self.lifecycle_json(PREFIX + "/operations/" + self.consent_id)
-        require(set(operation) == OPERATION_KEYS and operation["schema"] == "serverware.operatorXAccountOperation/v1"
+        require(set(operation) == OPERATION_KEYS and operation["schema"] == "catchplate.operatorXAccountOperation/v1"
             and operation["operation_id"] == self.consent_id and operation["kind"] == "consent"
             and operation["status"] == "connected" and operation["reason"] is None
             and type(operation["credential_id"]) is str and UUID.fullmatch(operation["credential_id"]),
@@ -730,7 +730,7 @@ class XPostCheck(OperatorCatalogCheck):
         expected_applications = [{**item, "active_rule_count": 0, "access_status": "unassigned"}
             if item["id"] == app["id"] else item for item in pinned["applications"]]
         review = self.lifecycle_json(PREFIX + "/accounts/" + self.credential_id + "/disconnect-review")
-        require(review.get("schema") == "serverware.operatorXDisconnectReview/v1"
+        require(review.get("schema") == "catchplate.operatorXDisconnectReview/v1"
             and review.get("affected_credential_ids") == [self.credential_id]
             and review.get("affected_rule_ids") == [rule["id"]] and review.get("expected_credential_generation") == 2
             and review.get("expected_revision") == pinned["revision"]

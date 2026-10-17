@@ -17,7 +17,7 @@ const CATALOG = ORIGIN + '/api/operator-demo/catalog';
 const CREATE = '/api/operator-demo/applications';
 const CHANGE = CREATE + '/proxy-authentication';
 const BASIC = 'basic_and_bearer_v1';
-const CAPABILITY = {schema: 'serverware.operatorProxyAuthentication/v1', modes: ['bearer', BASIC], path: CHANGE};
+const CAPABILITY = {schema: 'catchplate.operatorProxyAuthentication/v1', modes: ['bearer', BASIC], path: CHANGE};
 const PRIVATE = 'synthetic-provider-private-NEVER-RENDER';
 const RAW_ERROR = 'synthetic-private-backend-error-NEVER-RENDER';
 const DUMMY = "Bearer DUMMY-'literal'-$value";
@@ -33,9 +33,9 @@ const supplied = (changes = {}) => ({credentials: [credential({secret: PRIVATE})
 const card = (page, id = IDS.application) => page.locator('#applications-list [data-resource-id="' + id + '"]');
 const action = (page, id = IDS.application) => card(page, id).locator('[data-action="change-proxy-authentication"]');
 const INPUTS = ['scripts/test_operator_proxy_auth_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
-  'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
+  'scripts/test_operator_ordinary_modes_browser.cjs', 'catchplate/operator_demo_portal.py',
   ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js', 'workspace_resources.js', 'workspace_applications.js',
-    'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_google.js'].map(name => 'serverware/operator_demo_web/' + name)];
+    'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_google.js'].map(name => 'catchplate/operator_demo_web/' + name)];
 let artifacts;
 let contexts = 0;
 async function hashes() { return Object.fromEntries(await Promise.all(INPUTS.map(async name =>
@@ -187,8 +187,8 @@ const values = (args, flag) => args.flatMap((value, index) => value === flag ? [
 function checkCommand(command, basic, id = IDS.application) {
   const args = argsFor(command);
   assert.equal(args.includes('--proxy-basic'), basic);
-  assert.deepEqual(values(args, '--proxy-user'), basic ? [id + ':$SERVERWARE_PROXY_TOKEN'] : []);
-  assert.deepEqual(values(args, '--proxy-header'), basic ? [] : ['Proxy-Authorization: Bearer $SERVERWARE_PROXY_TOKEN']);
+  assert.deepEqual(values(args, '--proxy-user'), basic ? [id + ':$CATCHPLATE_PROXY_TOKEN'] : []);
+  assert.deepEqual(values(args, '--proxy-header'), basic ? [] : ['Proxy-Authorization: Bearer $CATCHPLATE_PROXY_TOKEN']);
   assert(!values(args, '--header').some(value => /^proxy-authorization:/i.test(value)));
   assert(!args.includes('--insecure') && !args.includes('--proxy-insecure'));
   for (const value of [PRIVATE, token(id)]) assert(!command.includes(value));
@@ -196,8 +196,8 @@ function checkCommand(command, basic, id = IDS.application) {
 }
 function projectionChecks() {
   const source = ['workspace_core.js', 'workspace_github.js']
-    .map(name => readFileSync(join(ROOT, 'serverware/operator_demo_web', name), 'utf8')).join('\n');
-  const {buildCurlCommand, clientCredentialInput, credentialHeaderTarget} = require('../serverware/operator_demo_web/app.js');
+    .map(name => readFileSync(join(ROOT, 'catchplate/operator_demo_web', name), 'utf8')).join('\n');
+  const {buildCurlCommand, clientCredentialInput, credentialHeaderTarget} = require('../catchplate/operator_demo_web/app.js');
   const project = (capability, application = app()) => {
     const state = {...supplied({applications: [application]}), revision: 1, sequence: 1, active: digest(1), loaded: digest(1),
       responseModes: ['projected_json'], proxyCapability: capability};
@@ -394,7 +394,7 @@ async function main() {
   const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
   console.log(JSON.stringify({phase: 'selection', groups: tests.length, pureGroups: 1, names: tests.map(([name]) => name)}));
   console.log(JSON.stringify(projectionChecks()));
-  const artifactRoot = '/srv/catchplate-fast/projects/serverware-operator-artifacts';
+  const artifactRoot = '/srv/catchplate-fast/projects/catchplate-operator-artifacts';
   assert((await stat(artifactRoot)).isDirectory()); artifacts = await mkdtemp(join(artifactRoot, 'proxy-auth-browser-synthetic-'));
   console.log(JSON.stringify({screenshotDirectory: artifacts}));
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');

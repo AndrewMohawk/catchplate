@@ -23,12 +23,12 @@ pub(super) fn shape(raw: &[u8], role: Role) -> Result<(), String> {
         && value["payload"]["measuredHost"] == false && value["payload"]["proxyReady"] == false,
         "Setup result shape/scope differs")?;
     if role == Role::Final {
-        ensure(value["payload"]["apiVersion"] == "serverware.setupNativeFinalReceipt/v1"
+        ensure(value["payload"]["apiVersion"] == "catchplate.setupNativeFinalReceipt/v1"
             && value["payload"]["purpose"] == "native-setup-final-authorization"
             && value["payload"]["resultScope"] == "enclave-hardware-and-proxy-only"
             && value["payload"]["hostAssociationTrust"] == "trusted-host-local", "Setup final purpose differs")?;
     } else {
-        ensure(value["payload"]["apiVersion"] == "serverware.setupNativeIndependentVerification/v1"
+        ensure(value["payload"]["apiVersion"] == "catchplate.setupNativeIndependentVerification/v1"
             && value["payload"]["purpose"] == role.name()
             && value["payload"]["resultScope"] == "enclave-hardware-and-proxy-only"
             && value["payload"]["finalSetup"] == false, "Setup verifier purpose differs")?;

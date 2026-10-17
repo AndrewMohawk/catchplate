@@ -365,7 +365,7 @@ def docker_command(phase: str, candidate: Path, name: str) -> list[str]:
 
 
 def run_container(phase: str, candidate: Path) -> dict[str, Any]:
-    name = "serverware-dependency-" + phase + "-" + os.urandom(8).hex()
+    name = "catchplate-dependency-" + phase + "-" + os.urandom(8).hex()
     command = docker_command(phase, candidate, name)
     (candidate / "work" / (phase + "-invocation.json")).write_bytes(canonical_json(
         {"phase": phase, "container_name": name, "command": command}
@@ -431,7 +431,7 @@ def prepare(*, expected_commit: str, existing_cache: Path, snapshot_id: str, out
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
         raise ValueError("builder image lacks an immutable configuration digest")
     output.mkdir(mode=0o700)
-    report: dict[str, Any] = {"apiVersion": "serverware.dependencySnapshotCandidate/v1", "ok": False,
+    report: dict[str, Any] = {"apiVersion": "catchplate.dependencySnapshotCandidate/v1", "ok": False,
         "published": False, "reviewed_pins_installed": False, "production_release_authority": False,
         "scope": "local-engineering-preparation-only", "source": source,
         "carried_forward_source_directory": str(existing_cache.resolve()),

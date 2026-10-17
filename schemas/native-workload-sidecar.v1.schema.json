@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-workload-sidecar.v1.schema.json",
-  "title": "Serverware native workload local CONNECT sidecar v1",
+  "$id": "https://catchplate.invalid/schemas/native-workload-sidecar.v1.schema.json",
+  "title": "Catchplate native workload local CONNECT sidecar v1",
   "description": "Closed independently supplied cold configuration. Runtime verifies held originals, the existing workload network namespace, caller UID/GID, boot, absolute lifetime and fresh upstream native proofs. Shape alone establishes neither namespace isolation, egress enforcement, enrollment, deployment nor production readiness. No hot replacement or automatic renewal is authorized.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "profile", "workloadId", "listenPort", "localTokenSha256", "allowedDestinations", "namespace", "issuedAtEpochNs", "expiresAtEpochNs", "maximumConnections", "maximumConnectionSeconds", "headerTimeoutMilliseconds", "maximumTunnelBytes", "upstream"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeWorkloadSidecar/v1"},
+    "apiVersion": {"const": "catchplate.nativeWorkloadSidecar/v1"},
     "profile": {"const": "native-attested-local-connect-v1"},
     "workloadId": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(?![\\s\\S])"},
     "listenPort": {"type": "integer", "minimum": 1024, "maximum": 65535},

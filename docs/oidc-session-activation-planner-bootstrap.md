@@ -2,7 +2,7 @@
 
 This is source-only cold configuration and snapshot admission for
 `oidc.session.activate`, not permission to activate a browser session. The
-[bootstrap module](../serverware/oidc_session_activation_planner_bootstrap.py)
+[bootstrap module](../catchplate/oidc_session_activation_planner_bootstrap.py)
 authenticates an independent root's original signed configuration, dedicated
 planner identity, policy, resources, complete-root-vector bytes and enrolled
 current-state observation scope. It reads no
@@ -20,8 +20,8 @@ verification token.
 
 The exact three-field envelope is `schema`, `payload`, `signatureBase64Url`.
 Its schema and root-signature domain are
-`serverware.signedOidcSessionActivationPlannerBootstrap/v3`; the closed payload
-uses `serverware.oidcSessionActivationPlannerBootstrap/v3`. The original is at
+`catchplate.signedOidcSessionActivationPlannerBootstrap/v3`; the closed payload
+uses `catchplate.oidcSessionActivationPlannerBootstrap/v3`. The original is at
 most 4 MiB. Admission verifies the actual Ed25519 root signature and canonical
 original bytes before selecting private resources. V3 is mandatory: v1 lacks
 the required state pins, and v2 lacks the bundle-key and execution-store scope.
@@ -65,7 +65,7 @@ signed database endpoint by a trusted provisioner assertion. The signature
 alone does not establish database provenance or equate unrelated digest domains.
 
 `stateEndpoint` is exactly `socketPath`, `requestTimeoutSeconds`, `listenerUid`
-and `listenerGid`: `/run/serverware/current-root/state.sock`, integer 1–30
+and `listenerGid`: `/run/catchplate/current-root/state.sock`, integer 1–30
 seconds, and root-created kernel listener peer `0:0`. It enables only the
 separate [head observation](authority-current-root-head.md) exchange. The state
 service's v4 profile admits planner UID 65507 for this purpose; independent
@@ -85,7 +85,7 @@ manifest parameter, so this bootstrap does not claim an extra catalog-pin gate.
 
 ## Fixed cold resources
 
-`serverware.oidcSessionActivationPlannerLaunch/v3` fixes process mode
+`catchplate.oidcSessionActivationPlannerLaunch/v3` fixes process mode
 `oidc-session-activation-planner`, service UID/GID 65507 and request-peer UID/GID
 65532. The inherited descriptor inventory is exactly nine; the original seven
 numbers and purposes remain unchanged:
@@ -102,8 +102,8 @@ numbers and purposes remain unchanged:
 | 205 | Separate raw execution-bundle key |
 | 206 | Execution-bundle store directory |
 
-The listener is `/run/serverware/oidc-session-activation/planner.sock`; the
-journal is `/var/lib/serverware/oidc-session-activation-planner`. Signed launch
+The listener is `/run/catchplate/oidc-session-activation/planner.sock`; the
+journal is `/var/lib/catchplate/oidc-session-activation-planner`. Signed launch
 fields include exact listener socket/path device/inode, journal device/inode,
 `journalMaximumRecords` (1–1024), `journalQuotaBytes` (1 byte–8 GiB), and request
 timeout (integer 1–30 seconds). Actual ownership, modes, descriptor sealing,
@@ -112,7 +112,7 @@ checks; this document does not provision them.
 
 V3 additionally requires `bundleKeyFd` = 205, `executionStoreDirectoryFd` = 206
 and `executionStoreDirectoryPath` =
-`/var/lib/serverware/oidc-session-activation-execution-bundles`. The signed
+`/var/lib/catchplate/oidc-session-activation-execution-bundles`. The signed
 `executionStoreDirectoryDevice` is an unsigned 64-bit integer and
 `executionStoreDirectoryInode` is a positive unsigned 64-bit integer, matching
 the existing journal/store binding grammar. Their pair must differ from the
@@ -126,7 +126,7 @@ No directory is created and no bundle key is provisioned by this bootstrap.
 
 `tlsFiles` is exactly `ca`, `clientCertificate`, `clientKey`, each with
 `{byteCount, bytesDigest}`. Their fixed directory is
-`/run/serverware/oidc-session-activation-planner-tls`, with filenames `ca.pem`,
+`/run/catchplate/oidc-session-activation-planner-tls`, with filenames `ca.pem`,
 `client.crt`, `client.key`. Public originals are 2–65536 bytes; the private key
 is 2–16384 bytes. Private originals never enter the bootstrap or public plan.
 

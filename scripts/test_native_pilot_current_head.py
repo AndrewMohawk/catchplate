@@ -21,16 +21,16 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
 
-from serverware import native_pilot_current_head_profile as profile
+from catchplate import native_pilot_current_head_profile as profile
 from test_native_pilot_generation_scope import fixture as scope_fixture, key_fixture
 from test_native_pilot_ordinary_initial import (fixture as initial_fixture, checkpoint,
     sign_anchor, signature_preimage, DOMAINS)
 from test_native_pilot_ordinary_keys import canonical, encoded, framed, labelled, sha
 
-HEAD_DOMAIN = b"serverware.policyCustodyTrustedHostCurrentHeadAttestation/v3"
-REQUEST_DOMAIN = b"serverware.policyCustodyEndpointRequest/v3"
-HANDSHAKE_DOMAIN = b"serverware.policyCustodyTrustedHostServiceHandshakeRequest/v3"
-WINDOW_DOMAIN = b"serverware.nativeShadowDriverBootstrapWindow.signature/v1\0"
+HEAD_DOMAIN = b"catchplate.policyCustodyTrustedHostCurrentHeadAttestation/v3"
+REQUEST_DOMAIN = b"catchplate.policyCustodyEndpointRequest/v3"
+HANDSHAKE_DOMAIN = b"catchplate.policyCustodyTrustedHostServiceHandshakeRequest/v3"
+WINDOW_DOMAIN = b"catchplate.nativeShadowDriverBootstrapWindow.signature/v1\0"
 
 
 @lru_cache(maxsize=1)
@@ -73,9 +73,9 @@ def fixture():
     sign_anchor(wrapper["history"], f["keys"])
     f["window"].update(configurationSha256=sha(configuration_raw()),
         signingKeyId=configuration["bootstrapAuthority"]["keyId"])
-    signed_window = {"apiVersion": "serverware.nativeShadowDriverBootstrapWindow/v1", "payload": f["window"],
+    signed_window = {"apiVersion": "catchplate.nativeShadowDriverBootstrapWindow/v1", "payload": f["window"],
         "signatureBase64url": encoded(key_fixture("window")[0].sign(WINDOW_DOMAIN + canonical(f["window"])))}
-    request = {"apiVersion": "serverware.policyCustodyProtocol/v3", "endpointRole": "settlement-store",
+    request = {"apiVersion": "catchplate.policyCustodyProtocol/v3", "endpointRole": "settlement-store",
         "requestEntropyBase64": encoded(bytes(range(32))), "requestedAtBoottimeNanos": 1190,
         "deadline": {"domain": copy.deepcopy(payload["validFromBoottime"]["domain"]), "absoluteBoottimeNanos": 4000},
         "operation": {"operation": "current-endpoint-trust", "body": {"accepted_floor": {
@@ -83,7 +83,7 @@ def fixture():
             "consumeCursor": {"sequenceHighWater": 0, "expectedNextSequence": 1,
                 "expectedPredecessorReceiptSha256": labelled("SYNTHETIC cursor anchor NOT a real receipt")}}}}}
     refresh_request(request)
-    value = {"apiVersion": "serverware.nativePilotCurrentHeadAuthorityInput/v1", "serviceRole": f["state"]["serviceRole"],
+    value = {"apiVersion": "catchplate.nativePilotCurrentHeadAuthorityInput/v1", "serviceRole": f["state"]["serviceRole"],
         "driverConfigurationOriginal": configuration_raw().decode("ascii"),
         "driverWindowOriginal": canonical(signed_window).decode("ascii"),
         "launchOriginal": canonical(f["launch"]).decode("ascii"),
@@ -96,7 +96,7 @@ def fixture():
             "initialHistorySha256": sha(canonical(wrapper)), "checkpointSha256": wrapper["initialCheckpoint"]["checkpointSha256"],
             "requestSha256": framed(REQUEST_DOMAIN, (canonical(request),)), "requestNonceSha256": request["requestNonceSha256"],
             "issuedAtBoottimeNanos": 1200}}
-    statement = {"apiVersion": "serverware.policyCustodyProtocol/v3", "endpointRole": "settlement-store",
+    statement = {"apiVersion": "catchplate.policyCustodyProtocol/v3", "endpointRole": "settlement-store",
         "requestNonceSha256": request["requestNonceSha256"], "requestSha256": value["currentness"]["requestSha256"],
         "checkpointSequence": 1, "checkpointSha256": wrapper["initialCheckpoint"]["checkpointSha256"],
         "endpointGeneration": payload["exactEndpointGeneration"],
@@ -142,7 +142,7 @@ class CurrentHeadControls(unittest.TestCase):
         binding = {"signedCurrentHead": signed, "exactAttestationSha256": sha(canonical(signed))}
         self.assertEqual(profile.binding(signed), binding)
         self.assertNotEqual(binding["exactAttestationSha256"], signed["attestationSha256"])
-        handshake = ["serverware.policyCustodyTrustedHostService/v4", value["serviceRole"],
+        handshake = ["catchplate.policyCustodyTrustedHostService/v4", value["serviceRole"],
             labelled("SYNTHETIC handshake ID"), labelled("SYNTHETIC handshake nonce"),
             labelled("SYNTHETIC client process"), labelled("SYNTHETIC client generation"),
             statement["deadline"], binding, 0, 0]

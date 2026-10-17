@@ -25,7 +25,7 @@ independently provisioned and admitted. This same-UID arrangement is not an OS
 isolation guarantee between the two processes or protection from hostile root.
 
 The fixed endpoint is
-`/run/serverware/oidc-session-activation-delivery-execution/completion.sock`.
+`/run/catchplate/oidc-session-activation-delivery-execution/completion.sock`.
 The actual inherited listener has kernel identity **0:0**, separately from its
 pathname ownership and the server's dropped identity. Neither a pathname nor a
 root peer substitutes for authenticating the original signed response.

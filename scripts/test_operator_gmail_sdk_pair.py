@@ -114,7 +114,7 @@ def success_result(docs, wire):
     # dependent inventory with independently sized literal paired expectations.
     value = old.success_result(wire)
     del value["goExampleSha256"]
-    value.update(schema="serverware.privateGmailSdkCheck/v2", providerAttempts=16,
+    value.update(schema="catchplate.privateGmailSdkCheck/v2", providerAttempts=16,
         nodeExampleSha256=NODE_PIN, sdkDependenciesSha256="a" * 64,
         exampleSourceSha256={name: "b" * 64 for name in (
             "examples/google-gmail-node/client.mjs", "examples/google-gmail-node/package.json",
@@ -176,7 +176,7 @@ class PairedGmailTests(unittest.TestCase):
         self.assertEqual([r["case"] for r in final["gmailSdk"]["attempts"]], list(EXPECTED_CASES) * 2)
         for mutate in (lambda v: v["gmailSdk"]["attempts"][4].update(tokenGeneration=2),
                 lambda v: v["gmailSdk"]["attempts"][8].update(timestampEpochMs=receiver.EPOCH_MS + 89999),
-                lambda v: v["gmailSdk"].update(schema="serverware.privateGmailSdkObservations/v1"),
+                lambda v: v["gmailSdk"].update(schema="catchplate.privateGmailSdkObservations/v1"),
                 lambda v: v["tokenLifetimes"].update(authorizationCodeExchangeSeconds=120),
                 lambda v: v["counts"]["google"].update(refresh_exchanges=2)):
             bad = deepcopy(final); mutate(bad)
@@ -201,7 +201,7 @@ class PairedGmailTests(unittest.TestCase):
             self.assertEqual(row["requestHeaders"], expected_headers)
             self.assertNotIn("content-length", row["requestHeaders"])
             path, query = target("python", index).split("?", 1)
-            public = {"schema": "serverware.privateGmailSdkRequest/v1", "method": "GET",
+            public = {"schema": "catchplate.privateGmailSdkRequest/v1", "method": "GET",
                 "authority": "gmail.googleapis.com", "path": path, "rawQuery": query,
                 "headers": expected_headers, "bodySha256": receiver.digest(b""), "bodyBytes": 0}
             self.assertEqual(row["requestCommitment"], receiver.digest(receiver.encoded(public)))
@@ -288,8 +288,8 @@ class PairedGmailTests(unittest.TestCase):
                     ("/example-python/bin/python", "-I", "-B", "/app/examples/google-gmail-python/gmail.py"))
                 self.assertEqual(launch.call_args.kwargs, {"command": expected_command})
                 environment = launch.call_args.args[0]
-                self.assertEqual(set(environment), {"LANG", "SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID",
-                    "SERVERWARE_PROXY_TOKEN", "SERVERWARE_CA_FILE", "SERVERWARE_PROXY_CA_FILE"})
+                self.assertEqual(set(environment), {"LANG", "CATCHPLATE_PROXY_URL", "CATCHPLATE_APP_ID",
+                    "CATCHPLATE_PROXY_TOKEN", "CATCHPLATE_CA_FILE", "CATCHPLATE_PROXY_CA_FILE"})
                 self.assertEqual(environment, check.client_environment(old.uid(2), "a" * 43, stage))
                 with self.assertRaises(check.CheckFailure):
                     check.validate_client_result(phase, 1, b"", b"arbitrary failure", sdk_pair=True)
@@ -412,7 +412,7 @@ class PairedGmailTests(unittest.TestCase):
                 lambda v: v.update(goExampleSha256="c" * 64), lambda v: v["negativeControls"][0].update(providerAttemptsAfter=17),
                 lambda v: v["requests"][4].update(generation=2), lambda v: v["namedAuditInventory"].update({old.CONNECT: 17}),
                 lambda v: v["providerObservations"][2]["cases"].reverse(),
-                lambda v: v.update(schema="serverware.privateGmailSdkCheck/v1")):
+                lambda v: v.update(schema="catchplate.privateGmailSdkCheck/v1")):
             bad = deepcopy(value); change(bad)
             with self.assertRaises(check.CheckFailure): check.validate_success_result(bad)
 

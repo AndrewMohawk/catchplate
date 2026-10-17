@@ -13,7 +13,7 @@ from fastapi import HTTPException, Response
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from serverware import auth
+from catchplate import auth
 
 
 ADMIN_TOKEN = "csrf-test-admin-token-32-bytes-minimum"
@@ -53,10 +53,10 @@ def expect_csrf_failure(name: str, request: Any) -> None:
 
 
 def main() -> None:
-    os.environ["SERVERWARE_ADMIN_TOKEN"] = ADMIN_TOKEN
+    os.environ["CATCHPLATE_ADMIN_TOKEN"] = ADMIN_TOKEN
     auth.admin_token.cache_clear()
 
-    cookie_auth = {"serverware_admin": ADMIN_TOKEN}
+    cookie_auth = {"catchplate_admin": ADMIN_TOKEN}
     csrf_cookie = {**cookie_auth, auth.CSRF_COOKIE_NAME: "csrf-token"}
     csrf_header = {auth.CSRF_HEADER_NAME: "csrf-token"}
 
@@ -70,7 +70,7 @@ def main() -> None:
         fake_request(
             method="POST",
             path="/api/routes",
-            headers={"X-Serverware-Admin-Token": ADMIN_TOKEN},
+            headers={"X-Catchplate-Admin-Token": ADMIN_TOKEN},
             cookies=cookie_auth,
         ),
     )
@@ -105,7 +105,7 @@ def main() -> None:
     response = Response()
     token = auth.issue_csrf_cookie(response, fake_request(method="GET", path="/api/csrf"), token="fixed-csrf")
     set_cookie = response.headers.get("set-cookie", "")
-    if token != "fixed-csrf" or "serverware_csrf=fixed-csrf" not in set_cookie or "SameSite=strict" not in set_cookie:
+    if token != "fixed-csrf" or "catchplate_csrf=fixed-csrf" not in set_cookie or "SameSite=strict" not in set_cookie:
         raise AssertionError(f"CSRF cookie was not issued with strict double-submit settings: {set_cookie}")
 
     print(json.dumps({"control_plane_csrf": "pass", "ok": True}, sort_keys=True))

@@ -15,7 +15,7 @@ public activation and frozen verification remain outstanding.
 
 ## Original plans to complete vectors
 
-[`authority_current_root_plan_replay._replay_on_work`](../serverware/authority_current_root_plan_replay.py)
+[`authority_current_root_plan_replay._replay_on_work`](../catchplate/authority_current_root_plan_replay.py)
 takes `operation`, exact `originals`, independently admitted `expectations`,
 actual `planner_public_key`/`operation_public_key`, `before_vector_bytes` and
 the caller's existing `work`. It accepts all six source successor operations:
@@ -43,7 +43,7 @@ separate fields, not invented identities for the other families.
 
 ## Dedicated computation snapshot and reserve producer
 
-[`authority_current_root_computation._produce_reserve_on_work`](../serverware/authority_current_root_computation.py)
+[`authority_current_root_computation._produce_reserve_on_work`](../catchplate/authority_current_root_computation.py)
 invokes that real replay itself. Additional inputs are original root enrollment,
 independently admitted root/computation keys, `capability_digest`, predecessor
 sequence/head, fence and absolute deadline, with an optional inherited transport
@@ -51,7 +51,7 @@ deadline. No precomputed replay carrier substitutes.
 
 It returns `CurrentRootComputation(request_bytes, snapshot_bytes)`: a signed
 reserve control plus canonical
-`serverware.policyAuthorityCurrentRootComputationSnapshot/v1`. This new snapshot
+`catchplate.policyAuthorityCurrentRootComputationSnapshot/v1`. This new snapshot
 is **not** the existing revocation Snapshot/v4. Its 20 fields bind enrollment,
 database/generation/measurement, typed operation/request, complete vectors,
 actual result, retention/plan identities, ordered original-byte hashes/counts
@@ -75,7 +75,7 @@ supply public activation or independently admitted cold postcommit ownership.
 
 ## Complete SQL observation, not enrollment
 
-[`authority_store.current_root_observation._observe_on_work(connection, *, work)`](../serverware/authority_store/current_root_observation.py)
+[`authority_store.current_root_observation._observe_on_work(connection, *, work)`](../catchplate/authority_store/current_root_observation.py)
 returns canonical complete-vector bytes from the caller's already admitted raw
 PostgreSQL 16 SERIALIZABLE transaction. It opens/closes one cursor, not a new
 connection or transaction. Two bounded SELECTs read every source primary root
@@ -92,7 +92,7 @@ admission remain the configured caller's responsibility; hostile database/driver
 behavior and independent latest-head authority are not solved by these checks.
 Unsigned SQL observations do not enroll a database or prove currentness.
 
-[`CurrentRootReader`](../serverware/authority_current_root_reader.py) is the
+[`CurrentRootReader`](../catchplate/authority_current_root_reader.py) is the
 implemented private connection owner. Its constructor holds `dsn`,
 `connect_timeout_seconds`, `database_role`, TLS client DN/serial and issuer DN,
 and `query_manifest_digest`. `read(*, work)` joins the real source manifest,
@@ -106,7 +106,7 @@ signature admission nor a cold-start/service route or currentness authority.
 
 `policy_authority_current_root_commit_markers` is the exact 18-scalar-field
 framework table defined by
-[`CURRENT_ROOT_COMMIT_MARKER_CONTRACT`](../serverware/authority_contract.py).
+[`CURRENT_ROOT_COMMIT_MARKER_CONTRACT`](../catchplate/authority_contract.py).
 It binds pending/predecessor/fence, database/enrollment/generation,
 operation/request/capability, computation snapshot, vectors and result. Pending
 decision is the primary key; pending request and enrollment-scoped fence,

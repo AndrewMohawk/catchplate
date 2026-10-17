@@ -24,7 +24,7 @@ signature and fresh NSM quote. It derives loaded policy/route, binary and key/bo
 identity from those owners. Supplied Setup association hashes are commitments,
 not locally verified host measurements. The signed statement is schema ASCII,
 NUL, full canonical ASCII statement. Its derived NSM nonce is SHA256 of fixed
-`serverware/native-setup-hardware-attestation/v1` + NUL + nonce32 + statement
+`catchplate/native-setup-hardware-attestation/v1` + NUL + nonce32 + statement
 SHA256 + signature64. The original role-4 user data and key binding remain intact;
 user data is explicitly limited to 512 bytes. Legacy full JSON user-data is not
 reused: [AWS's NSM documentation](https://github.com/aws/aws-nitro-enclaves-nsm-api/blob/main/docs/attestation_process.md) contains 1024/512-byte descriptions, so this
@@ -57,7 +57,7 @@ claimant enclave. Each requires isolated Python 3.11 (`-I -B`), the exact pinned
 module closure and cryptography/Nitro dependencies, permanent separately assigned
 UID/GID, empty groups/capabilities, nondumpability and no-new-privileges. FD3 must
 be the actual root-owned0400 named configuration original under protected
-`/etc/serverware`: `setup-native-hardware-verifier.json` or
+`/etc/catchplate`: `setup-native-hardware-verifier.json` or
 `setup-native-proxy-verifier.json`. FD4 is its independently provisioned exact32
 byte seed in a fully sealed0600 zero-link memfd, and FD5 is a distinct sealed0600
 canonical public verifier request, at most4MiB. No seed file or argv/environment
@@ -68,7 +68,7 @@ the seed copy is cleared. Existing generic verifier/signature purposes are not
 used as authority for these services.
 
 Configuration exact9: `apiVersion` =
-`serverware.setupNativeIndependentVerifierConfiguration/v1`, `role` = one fixed
+`catchplate.setupNativeIndependentVerifierConfiguration/v1`, `role` = one fixed
 entrypoint purpose, `uid`, `gid`, `operation`, `authorityRootPublicKeyPem`,
 `authorityConfigurationOriginal`, `authorityConfigurationSha256`,
 `controlPlaneConfigurationDigest`. `operation` is original bootIdBase64url,
@@ -86,7 +86,7 @@ FD5 is exactly the retained `inputsOriginal` object plus `attempt_original` and
 `evidence_original`, serialized canonically. The UI downloads those exact bytes
 as `verifierRequestOriginal`; it never creates a signature or supplies trust.
 Both fixed producers emit a canonical no-LF envelope2, payload19, <=16KiB.
-Signature preimage is `serverware/setup-native-independent-verification/v1`, NUL,
+Signature preimage is `catchplate/setup-native-independent-verification/v1`, NUL,
 the fixed verifier role, NUL, full canonical payload. Their private seeds must
 match the separately pinned public material before the only signing call.
 
@@ -94,14 +94,14 @@ match the separately pinned public material before the only signing call.
 
 All four fixed POST routes are under `/api/setup/native-hardware`. Schema:
 [`setup-native-hardware.v1.schema.json`](../schemas/setup-native-hardware.v1.schema.json).
-Options/lookup request2 is apiVersion `serverware.setupNativeHardwareRequest/v1`
+Options/lookup request2 is apiVersion `catchplate.setupNativeHardwareRequest/v1`
 and sessionId. Prepare adds the assertion; complete adds exact canonical
 evidenceOriginal/hardwareReceiptOriginal/proxyReceiptOriginal strings. Raw HTTP
 request bound128KiB; response bound4MiB. Existing OIDC requester roles, CSRF and
 fresh purpose-bound hardware checks apply. A conservative aggregate bundle bound
 is checked before reservation, including both nested-original escaping levels;
 individual maximum field sizes do not imply simultaneous aggregate admission.
-Options serverware6 uses purpose
+Options catchplate6 uses purpose
 `setup.native-hardware.prepare`, not an older Setup ceremony.
 
 Prepare201 returns `independent-verification-required`, public hardware5 and

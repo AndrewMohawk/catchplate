@@ -28,13 +28,13 @@ pub(crate) fn verify(evidence: &Value, expected: Scope<'_>, roots_original: &[u8
     exact(evidence, &["apiVersion", "purpose", "evidenceScope", "okForAction", "bootId", "keyId",
         "publicKeyPem", "controlPlaneResponseSigningKeyId", "scope", "caCertificateDerBase64url",
         "nativeKeyEvidence", "quoteNonceBase64url", "quoteUserDataBase64url"])?;
-    ensure(text(evidence, "apiVersion")? == "serverware.nativeResponseProofPublicIdentity/v1"
+    ensure(text(evidence, "apiVersion")? == "catchplate.nativeResponseProofPublicIdentity/v1"
         && text(evidence, "purpose")? == "postboot-static-assignment-inputs"
         && text(evidence, "evidenceScope")? == "unverified-startup-role4-public-material"
         && evidence["okForAction"] == Value::Bool(false), "runtime original evidence profile differs")?;
     let native = &evidence["nativeKeyEvidence"];
     exact(native, &["apiVersion", "attestationDocumentB64", "responseProofPublicKey"])?;
-    ensure(text(native, "apiVersion")? == "serverware.nativeResponseProofKeyEvidence/v1",
+    ensure(text(native, "apiVersion")? == "catchplate.nativeResponseProofKeyEvidence/v1",
         "runtime native key evidence profile differs")?;
     let key: [u8; 32] = fixed_b64(text(native, "responseProofPublicKey")?)?;
     let actual = VerifyingKey::from_bytes(&key).map_err(|_| "runtime quoted key invalid")?;
@@ -64,9 +64,9 @@ pub(crate) fn verify(evidence: &Value, expected: Scope<'_>, roots_original: &[u8
         "runtime public CA/SPKI differs from quoted scope")?;
     let cp = parse_digest::<32>(text(evidence, "controlPlaneResponseSigningKeyId")?, "sha256:", true)?;
     let mut custody = Sha256::new();
-    custody.update(b"serverware/native-proof-custody-boot/v1\0");
+    custody.update(b"catchplate/native-proof-custody-boot/v1\0");
     custody.update(boot); custody.update(digest(spki.as_bytes())); custody.update(cp);
-    let mut binding = b"serverware/enclave-runtime-key-binding/v1\0".to_vec(); binding.push(4);
+    let mut binding = b"catchplate/enclave-runtime-key-binding/v1\0".to_vec(); binding.push(4);
     for field in ["releaseRecordSha256", "policyHash", "configurationSha256",
         "caCertificateSha256", "caPublicKeySpkiSha256"] {
         binding.extend_from_slice(&parse_digest::<32>(text(scope, field)?, "sha256:", true)?);

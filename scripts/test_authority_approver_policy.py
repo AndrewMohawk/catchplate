@@ -11,7 +11,7 @@ from types import MappingProxyType
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import authority_approver_policy as policy_binding
+from catchplate import authority_approver_policy as policy_binding
 
 
 def canonical(value):
@@ -26,7 +26,7 @@ def domain_digest(domain, value):
 
 
 def fixture():
-    return {"schema": "serverware.jitApproverPolicy/v1",
+    return {"schema": "catchplate.jitApproverPolicy/v1",
         "requiredRoles": ["admin", "approver"], "roleMatch": "any",
         "allowedApproverIds": ["oidc:alpha", "oidc:beta"],
         "allowAnyApproverId": False, "requireWebAuthn": True, "threshold": 2,
@@ -49,7 +49,7 @@ def arguments(policy):
 
 
 def expected_material(policy):
-    return {"schema": "serverware.authorityApproverPolicyBinding/v1",
+    return {"schema": "catchplate.authorityApproverPolicyBinding/v1",
         "requiredApproverRoles": policy["requiredRoles"],
         "allowedApproverIds": policy["allowedApproverIds"],
         "allowAnyApproverId": policy["allowAnyApproverId"],
@@ -69,14 +69,14 @@ class ApproverPolicyProjectionTests(unittest.TestCase):
         original = copy.deepcopy(policy)
         expected = expected_material(policy)
         self.assertEqual(policy_binding.material(arguments(policy)), expected)
-        authority_digest = domain_digest("serverware.authorityApproverPolicyBinding/v1", expected)
-        jit_digest = domain_digest("serverware.jitApproverPolicy/v1", policy)
+        authority_digest = domain_digest("catchplate.authorityApproverPolicyBinding/v1", expected)
+        jit_digest = domain_digest("catchplate.jitApproverPolicy/v1", policy)
         self.assertEqual(policy_binding.digest(arguments(policy)), authority_digest)
         self.assertEqual(policy_binding.from_jit_policy(policy), authority_digest)
         self.assertNotEqual(authority_digest, jit_digest)
-        self.assertNotEqual(authority_digest, domain_digest("serverware.jitApproverPolicy/v1", expected))
+        self.assertNotEqual(authority_digest, domain_digest("catchplate.jitApproverPolicy/v1", expected))
         self.assertNotEqual(authority_digest,
-            domain_digest("serverware.authorityApproverPolicyBinding/v1", policy))
+            domain_digest("catchplate.authorityApproverPolicyBinding/v1", policy))
         self.assertEqual(policy, original)
 
     def test_all_aliases_keep_exact_precedence(self):
@@ -117,7 +117,7 @@ class ApproverPolicyProjectionTests(unittest.TestCase):
         expected = expected_material(policy)
         self.assertEqual(policy_binding.material(arguments(policy)), expected)
         self.assertEqual(policy_binding.from_jit_policy(policy),
-            domain_digest("serverware.authorityApproverPolicyBinding/v1", expected))
+            domain_digest("catchplate.authorityApproverPolicyBinding/v1", expected))
         exact_empty = policy_binding.material({**arguments(policy), "allowed_approver_ids": []})
         self.assertIs(exact_empty["allowAnyApproverId"], False)
         self.assertNotEqual(policy_binding.digest({**arguments(policy), "allowed_approver_ids": []}),
@@ -162,7 +162,7 @@ class ApproverPolicyProjectionTests(unittest.TestCase):
 
     def test_noncanonical_top_level_policy_is_not_normalized(self):
         policy = fixture()
-        for name, value in (("schema", "serverware.authorityApproverPolicyBinding/v1"),
+        for name, value in (("schema", "catchplate.authorityApproverPolicyBinding/v1"),
                 ("roleMatch", "all"), ("roleMatch", None), ("requireWebAuthn", False),
                 ("requireWebAuthn", 1), ("allowAnyApproverId", 0), ("threshold", True),
                 ("threshold", 1.0), ("threshold", 0), ("threshold", 17),

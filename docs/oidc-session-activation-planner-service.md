@@ -11,7 +11,7 @@ the root entrypoint, launcher and uninstalled systemd templates.
 ## Closed wire
 
 `authority_oidc_session_activation_planner_transport.py` fixes the endpoint to
-`/run/serverware/oidc-session-activation/planner.sock`, an integer timeout of
+`/run/catchplate/oidc-session-activation/planner.sock`, an integer timeout of
 1–30 seconds and root-activated listener peer `0:0`. Every client exchange
 requires an inherited absolute monotonic deadline. The service admits peer
 `65532:65532` before reading a frame or body.

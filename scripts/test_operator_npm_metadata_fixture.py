@@ -13,7 +13,7 @@ from scripts import operator_npm_metadata_fixture_network as network
 from scripts import prepare_operator_npm_metadata_fixture as recipe
 
 SOURCE, BINARY, INITIALIZER, NODE, NPM = map(Path, ("/synthetic/source", "/synthetic/gate", "/synthetic/init.py", "/synthetic/node", "/synthetic/npm"))
-ROOT = recipe.base.SCRATCH / "serverware-npm-metadata-private.Source01"
+ROOT = recipe.base.SCRATCH / "catchplate-npm-metadata-private.Source01"
 SCOPE = ("principal-fixture", "route-fixture", "sha256:" + "a" * 64)
 CREDENTIAL = "credential-fixture"
 
@@ -73,7 +73,7 @@ class NpmMetadataFixtureTests(unittest.TestCase):
 
     def test_network_none_topology_and_mounts(self):
         config = build(); services = config["services"]
-        attached = {"serverware", "decision-gate-rs", "npm-registry", "edge", "check"}
+        attached = {"catchplate", "decision-gate-rs", "npm-registry", "edge", "check"}
         self.assertEqual(set(config), {"name", "services"})
         self.assertEqual(set(services), attached | {"initialize", "npm-pki", "basic-pki", "network"})
         recipe.validate(config, SOURCE, BINARY, INITIALIZER, ROOT, NODE, NPM, expected_binary_sha256="a" * 64)
@@ -124,7 +124,7 @@ class NpmMetadataFixtureTests(unittest.TestCase):
         self.assertEqual(registry.SPECS[4]["status"], 404)
         self.assertNotEqual(json.loads(registry.SPECS[5]["body"])["name"], registry.SPECS[5]["package"])
         self.assertIn(registry.TOKEN.encode(), registry.SPECS[6]["body"])
-        self.assertEqual(registry.path(registry.PACKAGES[1]), "/@serverware-fixture%2fmetadata")
+        self.assertEqual(registry.path(registry.PACKAGES[1]), "/@catchplate-fixture%2fmetadata")
 
     def test_all_parsed_headers_and_no_secret_observations(self):
         for spec in registry.SPECS:
@@ -193,7 +193,7 @@ class NpmMetadataFixtureTests(unittest.TestCase):
             self.assertNotIn(bypass, job)
 
     def test_failure_diagnostics_are_closed_fixed_fields_not_raw_errors(self):
-        failure = {"schema": "serverware.privateNpmMetadataClient/v1", "phase": "wrong_app", "client": "npm",
+        failure = {"schema": "catchplate.privateNpmMetadataClient/v1", "phase": "wrong_app", "client": "npm",
             "npmVersion": "11.8.0", "pacoteVersion": "21.0.4", "registryFetchVersion": "19.1.1",
             "strictSSL": True, "extraCaPreservesDefaultRoots": True, "configuredRetries": 0,
             "isolatedCache": True, "requestRewrite": False, "ok": False,

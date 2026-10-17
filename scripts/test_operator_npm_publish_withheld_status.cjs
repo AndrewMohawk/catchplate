@@ -149,7 +149,7 @@ async function runCase(status, expectedPuts) {
   const directory = path.join(temporary, 'status-' + status);
   fs.mkdirSync(directory, {mode: 0o700});
   for (const name of ['package', 'cache', 'publications']) fs.mkdirSync(path.join(directory, name), {mode: 0o700});
-  const name = 'serverware-local-status-' + status;
+  const name = 'catchplate-local-status-' + status;
   const spec = {name, version: '1.0.0', readme: Buffer.from('Synthetic local publication status proof only.\n')};
   spec.manifest = Buffer.from(JSON.stringify({name, version: spec.version,
     description: 'Synthetic local publication status proof', license: 'UNLICENSED', files: ['README.md']}) + '\n');
@@ -185,7 +185,7 @@ async function runCase(status, expectedPuts) {
       receipts.push({ordinal, method: 'PUT', path: '/' + name, ...commitment,
         persistedBeforeResponse: true, responseStatus: status});
       response.writeHead(status, {'Content-Type': 'application/json', 'Cache-Control': 'no-store'});
-      response.end(JSON.stringify({error: 'serverware_response_withheld',
+      response.end(JSON.stringify({error: 'catchplate_response_withheld',
         reason: 'Synthetic publication occurred; response withheld; do not retry'}));
     } catch (_) {
       invalid++;
@@ -233,17 +233,17 @@ async function main() {
       for (const server of servers) { server.closeAllConnections(); server.close(); }
     }, Math.max(1, deadline - Date.now()));
     stage = 'private-workspace';
-    temporary = fs.mkdtempSync('/tmp/serverware-npm-status-');
+    temporary = fs.mkdtempSync('/tmp/catchplate-npm-status-');
     assert.equal(fs.statSync(temporary).mode & 0o777, 0o700);
     cases.push(await runCase(409, 1));
     cases.push(await runCase(502, 3));
     assert(!timedOut);
-    process.stdout.write(JSON.stringify({schema: 'serverware.stockNpmWithheldStatusProof/v1', ok: true,
+    process.stdout.write(JSON.stringify({schema: 'catchplate.stockNpmWithheldStatusProof/v1', ok: true,
       syntheticOnly: true, network: 'loopback-only', actualProxyAcceptance: false,
       npmVersion: '11.8.0', libnpmpublishVersion: '11.1.3', makeFetchHappenVersion: '15.0.3',
       nodeVersion: process.version, cases}) + '\n');
   } catch (_) {
-    process.stderr.write(JSON.stringify({schema: 'serverware.stockNpmWithheldStatusProof/v1', ok: false,
+    process.stderr.write(JSON.stringify({schema: 'catchplate.stockNpmWithheldStatusProof/v1', ok: false,
       syntheticOnly: true, stage, error: 'bounded stock npm status proof failed', completedCases: cases.length}) + '\n');
     process.exitCode = 1;
   } finally {

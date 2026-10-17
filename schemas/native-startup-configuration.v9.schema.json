@@ -1,12 +1,12 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://serverware.invalid/schemas/native-startup-configuration.v9.schema.json",
+  "$id":"https://catchplate.invalid/schemas/native-startup-configuration.v9.schema.json",
   "title":"Native initial OAuth browser custody with genuine v8 inspector",
   "$comment":"Explicit --native-measured-issuance-startup-v9 only. Exact v8 plus required measuredIssuance, not config-driven selection. Browser HTTPS is a separately owned generated leaf/listener; workload mTLS remains mandatory and unchanged. The actual Pending encrypted-service owner and original native lifecycle remain retained. Browser trust, origin and opaque parent relay provisioning are independent prerequisites, not asserted by this data schema.",
   "type":"object","additionalProperties":false,
   "required":["apiVersion","gate","native","shadow","responseObservationV2","policy","enrollmentAuthorizer","enrollmentSetupAuthorizer","enrollmentProxyEndpoint","credentialCurrentness","secretBroker","measuredAudit","encryptedServiceTokens","measuredRefresh","guestInspector","measuredIssuance"],
   "properties":{
-    "apiVersion":{"const":"serverware.nativeStartupConfiguration/v9"},
+    "apiVersion":{"const":"catchplate.nativeStartupConfiguration/v9"},
     "gate":{"$ref":"native-startup-configuration.v8.schema.json#/properties/gate"},
     "native":{"$ref":"native-startup-configuration.v8.schema.json#/properties/native"},
     "shadow":{"$ref":"native-startup-configuration.v8.schema.json#/properties/shadow"},

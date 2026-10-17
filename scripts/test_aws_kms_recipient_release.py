@@ -75,7 +75,7 @@ def kms_request() -> dict[str, Any]:
         "tee": tee,
     }
     payload = {
-        "apiVersion": "serverware.nitroKmsReleaseRequest/v1",
+        "apiVersion": "catchplate.nitroKmsReleaseRequest/v1",
         "kind": "NitroKmsMaterialRelease",
         "provider": "aws-nitro-enclaves",
         "tee_platform": "aws-nitro",
@@ -108,10 +108,10 @@ import sys
 if "--recipient" not in sys.argv or "--ciphertext-blob" not in sys.argv:
     raise SystemExit("missing recipient or ciphertext blob")
 response = {
-    "KeyId": "arn:aws:kms:us-east-1:111122223333:key/serverware",
+    "KeyId": "arn:aws:kms:us-east-1:111122223333:key/catchplate",
     "CiphertextForRecipient": "cmVjaXBpZW50LWNpcGhlcnRleHQ=",
 }
-if os.getenv("SERVERWARE_FAKE_AWS_PLAINTEXT"):
+if os.getenv("CATCHPLATE_FAKE_AWS_PLAINTEXT"):
     response["Plaintext"] = "must-not-be-accepted"
 print(json.dumps(response, sort_keys=True))
 """,
@@ -122,7 +122,7 @@ print(json.dumps(response, sort_keys=True))
 
 def run_adapter(payload: dict[str, Any], materials_file: Path, aws_binary: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[bytes]:
     run_env = os.environ.copy()
-    run_env.pop("SERVERWARE_FAKE_AWS_PLAINTEXT", None)
+    run_env.pop("CATCHPLATE_FAKE_AWS_PLAINTEXT", None)
     if env:
         run_env.update(env)
     return subprocess.run(
@@ -167,9 +167,9 @@ def main() -> None:
             canonical_json(
                 {
                     "decision-gate-ca": {
-                        "key_id": "arn:aws:kms:us-east-1:111122223333:key/serverware",
+                        "key_id": "arn:aws:kms:us-east-1:111122223333:key/catchplate",
                         "ciphertext_blob_b64": b64e(b"kms-encrypted-dek"),
-                        "encryption_context": {"service": "serverware", "material": "decision-gate-ca"},
+                        "encryption_context": {"service": "catchplate", "material": "decision-gate-ca"},
                     }
                 }
             ),
@@ -200,7 +200,7 @@ def main() -> None:
             raise AssertionError(f"AWS KMS adapter did not bind the attested recipient key: {output}")
         if output.get("ciphertext_blob_sha256") != sha256_prefixed(b"kms-encrypted-dek"):
             raise AssertionError(f"AWS KMS adapter did not bind the input ciphertext digest: {output}")
-        if output.get("encryption_context_sha256") != sha256_prefixed(canonical_json({"material": "decision-gate-ca", "service": "serverware"}).encode("utf-8")):
+        if output.get("encryption_context_sha256") != sha256_prefixed(canonical_json({"material": "decision-gate-ca", "service": "catchplate"}).encode("utf-8")):
             raise AssertionError(f"AWS KMS adapter did not bind the encryption context digest: {output}")
 
         invalid_materials = tmp / "invalid-materials.json"
@@ -208,9 +208,9 @@ def main() -> None:
             canonical_json(
                 {
                     "decision-gate-ca": {
-                        "key_id": "arn:aws:kms:us-east-1:111122223333:key/serverware",
+                        "key_id": "arn:aws:kms:us-east-1:111122223333:key/catchplate",
                         "ciphertext_blob_b64": "not-valid-@@@@",
-                        "encryption_context": {"service": "serverware", "material": "decision-gate-ca"},
+                        "encryption_context": {"service": "catchplate", "material": "decision-gate-ca"},
                     }
                 }
             ),
@@ -241,7 +241,7 @@ def main() -> None:
         )
         expect_failure(wrong_recipient, materials_file, aws, "recipient public key digest mismatch")
 
-        expect_failure(payload, materials_file, aws, "plaintext material", {"SERVERWARE_FAKE_AWS_PLAINTEXT": "1"})
+        expect_failure(payload, materials_file, aws, "plaintext material", {"CATCHPLATE_FAKE_AWS_PLAINTEXT": "1"})
 
     print(canonical_json({"aws_kms_recipient_release": "pass", "ok": True}))
 

@@ -7,10 +7,10 @@ const {resolve} = require('node:path');
 const vm = require('node:vm');
 const ROOT = resolve(__dirname, '..');
 const SOURCE = ['workspace_core.js', 'workspace_upstreams.js'].map(name =>
-  readFileSync(resolve(ROOT, 'serverware/operator_demo_web', name), 'utf8')).join('\n');
-const HTML = readFileSync(resolve(ROOT, 'serverware/operator_demo_web/index.html'), 'utf8');
+  readFileSync(resolve(ROOT, 'catchplate/operator_demo_web', name), 'utf8')).join('\n');
+const HTML = readFileSync(resolve(ROOT, 'catchplate/operator_demo_web/index.html'), 'utf8');
 const PATH = '/api/operator-demo/proxy/upstreams';
-const STORAGE = 'serverware.operator.upstreams.operation.v1';
+const STORAGE = 'catchplate.operator.upstreams.operation.v1';
 const ID = '11111111-1111-4111-8111-111111111111';
 const OTHER = '22222222-2222-4222-8222-222222222222';
 const FIXTURE = 'https://demo-upstream:8443';
@@ -20,17 +20,17 @@ const digest = value => 'sha256:' + value.repeat(64);
 const clone = value => JSON.parse(JSON.stringify(value));
 const OLD = {allowed_upstreams: [FIXTURE], fixture_cidrs: ['127.0.0.1/32']};
 const TARGET = {...OLD, allowed_upstreams: [FIXTURE, NPM]};
-const review = (changes = {}) => ({schema: 'serverware.operatorUpstreamSetupReview/v1',
+const review = (changes = {}) => ({schema: 'catchplate.operatorUpstreamSetupReview/v1',
   expected_revision: 7, expected_policy_hash: digest('a'), expected_settings_digest: digest('b'), old_settings: clone(OLD),
   protected_origins: [{origin: FIXTURE, reasons: ['fixture', 'retained_policy']}], fixed_first_origin: FIXTURE,
   eligible: true, pending_operation_id: null, blocked_reason: null, cold_restart_required: true, ...changes});
-const receipt = (changes = {}) => ({schema: 'serverware.operatorUpstreamSetup/v1', operation_id: ID, status: 'pending',
+const receipt = (changes = {}) => ({schema: 'catchplate.operatorUpstreamSetup/v1', operation_id: ID, status: 'pending',
   old_settings: clone(OLD), target_settings: clone(TARGET), expected_settings_digest: digest('b'), target_settings_digest: digest('c'),
   reviewed_revision: 7, staged_revision: 8, policy_hash: digest('a'), created_at: '2026-10-10T12:00:00+00:00',
   revision: 8, completed_at: null, activation_receipt: null, ...changes});
 function completed(status, changes = {}) {
   const value = receipt({status, revision: 9, completed_at: '2026-10-10T12:01:00+00:00', ...changes});
-  if (status === 'activated') value.activation_receipt = {schema: 'serverware.operatorUpstreamSetupActivation/v1',
+  if (status === 'activated') value.activation_receipt = {schema: 'catchplate.operatorUpstreamSetupActivation/v1',
     operation_id: value.operation_id, activated_revision: value.revision, policy_hash: value.policy_hash,
     settings_digest: value.target_settings_digest, activated_at: value.completed_at};
   return value;
@@ -140,7 +140,7 @@ const tests = [
     assert.match(HTML, /Use 1–32 unique canonical HTTPS origins/);
   }],
   ['Google destination addition obeys the same 32-origin bound', () => {
-    vm.runInContext(readFileSync(resolve(ROOT, 'serverware/operator_demo_web/workspace_google_configuration.js'), 'utf8'), pure.value, {timeout: 1000});
+    vm.runInContext(readFileSync(resolve(ROOT, 'catchplate/operator_demo_web/workspace_google_configuration.js'), 'utf8'), pure.value, {timeout: 1000});
     const origins = Array.from({length: 31}, (_, index) => `https://service-${index}.example.com`);
     const gmail = 'https://gmail.googleapis.com';
     const target = {allowed_upstreams: [...origins, gmail], fixture_cidrs: []};
@@ -232,10 +232,10 @@ const tests = [
       revokeObjectURL(value) { assert.equal(value, 'blob:synthetic'); calls.push('revoke'); }},
       document: {createElement(name) { assert.equal(name, 'a'); return anchor; }, body: {append(value) { assert.equal(value, anchor); calls.push('append'); }}},
       setTimeout(callback, milliseconds) { assert.equal(milliseconds, 1000); callback(); }});
-    const value = {schema: 'serverware.operatorActivationHandoff/v1'};
+    const value = {schema: 'catchplate.operatorActivationHandoff/v1'};
     download.run('downloadActivationHandoff(input)', value);
     assert.deepEqual(JSON.parse(await blob.text()), value); assert.equal(blob.type, 'application/json');
-    assert.equal(anchor.download, 'serverware-activation-handoff.public.json'); assert.equal(anchor.href, 'blob:synthetic');
+    assert.equal(anchor.download, 'catchplate-activation-handoff.public.json'); assert.equal(anchor.href, 'blob:synthetic');
     assert.deepEqual(calls, ['append', 'click', 'remove', 'revoke']);
   }],
   ['stale catalog or blocked browser storage prevents any POST', async () => {

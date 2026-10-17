@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-aware-response-statements.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/policy-aware-response-statements.v1.schema.json",
   "title": "Policy-aware ordinary response statements v1",
   "description": "Closed data shapes only. The actual ordinary cold owner and independent receiver select PolicyAware before effects. No Native1024 principal widening or legacy version relabeling. Exact signatures, receipts, canonical commitments, request/response/TLS, current policy and original lifetimes remain runtime duties. Reused native-schema components below contain only unchanged ordinary structures, never a native statement or receipt version.",
   "oneOf": [{"$ref": "#/$defs/buffered"}, {"$ref": "#/$defs/streaming"}, {"$ref": "#/$defs/observation"}],
@@ -12,8 +12,8 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "kind", "principal_id", "route_id", "release_authority", "request", "response"],
       "properties": {
-        "apiVersion": {"const": "serverware.policyAwareControlPlaneAuthorizationReceipt/v1"},
-        "kind": {"const": "ServerwarePolicyAwareControlPlaneAuthorizationReceipt"},
+        "apiVersion": {"const": "catchplate.policyAwareControlPlaneAuthorizationReceipt/v1"},
+        "kind": {"const": "CatchplatePolicyAwareControlPlaneAuthorizationReceipt"},
         "principal_id": {"$ref": "#/$defs/bufferedIdentity"},
         "route_id": {"$ref": "#/$defs/bufferedIdentity"},
         "release_authority": {"$ref": "native-response-runtime-proof.v1.schema.json#/$defs/bufferedReleaseAuthority"},
@@ -25,8 +25,8 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "kind", "principal_id", "route_id", "release_authority", "request", "response"],
       "properties": {
-        "apiVersion": {"const": "serverware.policyAwareControlPlaneAuthorizationReceipt/v1"},
-        "kind": {"const": "ServerwarePolicyAwareControlPlaneAuthorizationReceipt"},
+        "apiVersion": {"const": "catchplate.policyAwareControlPlaneAuthorizationReceipt/v1"},
+        "kind": {"const": "CatchplatePolicyAwareControlPlaneAuthorizationReceipt"},
         "principal_id": {"$ref": "#/$defs/identifier"},
         "route_id": {"$ref": "#/$defs/identifier"},
         "release_authority": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/releaseAuthority"},
@@ -38,7 +38,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "attempt_id", "flow_id", "principal_id", "route_id", "credential_id", "credential_version", "policy_hash", "request_digest", "operation_digest", "operation_context_digest", "require_jit_grant", "approver_policy_sha256", "shared_quotas"],
       "properties": {
-        "apiVersion": {"const": "serverware.policyAwareResponseAuthorizationCommitment/v1"},
+        "apiVersion": {"const": "catchplate.policyAwareResponseAuthorizationCommitment/v1"},
         "attempt_id": {"$ref": "#/$defs/sha256"}, "flow_id": {"$ref": "#/$defs/sha256"},
         "principal_id": {"$ref": "#/$defs/identifier"}, "route_id": {"$ref": "#/$defs/identifier"},
         "credential_id": {"anyOf": [{"const": ""}, {"$ref": "#/$defs/identifier"}]},
@@ -81,7 +81,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "issued_at_unix", "client_nonce", "principal_id", "route_id", "request_digest", "operation_digest", "runtime_manifest_digest", "data_plane_binary_digest", "release_digest", "client_request_digest", "release_authority", "control_plane_authorization_receipt", "upstream_response", "response", "policy_digest", "server_instance", "tls_channel_binding"],
       "properties": {
-        "apiVersion": {"const": "serverware.policyAwareProxyResponseStatement/v1"},
+        "apiVersion": {"const": "catchplate.policyAwareProxyResponseStatement/v1"},
         "issued_at_unix": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/positiveUint64"},
         "client_nonce": {"$ref": "native-response-runtime-proof.v1.schema.json#/$defs/bufferedNonce"},
         "principal_id": {"$ref": "#/$defs/bufferedIdentity"}, "route_id": {"$ref": "#/$defs/bufferedIdentity"},
@@ -101,7 +101,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "issued_at_unix", "client_nonce", "principal_id", "route_id", "request_digest", "operation_digest", "runtime_manifest_digest", "data_plane_binary_digest", "release_digest", "client_request_digest", "release_authority", "authorization_binding_validation", "control_plane_authorization_receipt", "control_plane_authorization_receipt_sha256", "upstream_response", "released_response", "policy_digest", "server_instance", "tls_channel_binding"],
       "properties": {
-        "apiVersion": {"const": "serverware.policyAwareStreamingResponseStatement/v1"},
+        "apiVersion": {"const": "catchplate.policyAwareStreamingResponseStatement/v1"},
         "issued_at_unix": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/positiveUint64"},
         "client_nonce": {"$ref": "streaming-response-proof.v1.schema.json#/$defs/nonce"},
         "principal_id": {"$ref": "#/$defs/identifier"}, "route_id": {"$ref": "#/$defs/identifier"},
@@ -123,7 +123,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "issued_at_unix", "observation_id", "client_nonce", "request", "policy", "principal_id", "route_id", "request_digest", "operation_digest", "credential", "authorization", "response_path", "upstream_attempt", "upstream_observation", "emitted_response", "runtime_manifest_digest", "data_plane_binary_digest", "release_digest", "server_instance", "tls_channel_binding", "observation_authority"],
       "properties": {
-        "apiVersion": {"const": "serverware.policyAwareResponseObservationStatement/v1"},
+        "apiVersion": {"const": "catchplate.policyAwareResponseObservationStatement/v1"},
         "issued_at_unix": {"$ref": "response-observation-proof.v1.schema.json#/$defs/positiveUint64"},
         "observation_id": {"$ref": "#/$defs/sha256"},
         "client_nonce": {"$ref": "response-observation-proof.v1.schema.json#/$defs/nonce32"},

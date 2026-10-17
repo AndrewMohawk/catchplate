@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-oauth-succession-runtime.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-oauth-succession-runtime.v1.schema.json",
   "title": "Native succession private replies and public navigation observations",
   "$comment": "Data grammar only. Actual sealed helper, native proof, full signed writer originals, independent assignment, retained browser TLS and one-use effect owners are mandatory. The COMPLETE canonical private message including encoded originals is <=8MiB. No reply is authority to repeat a provider contact.",
   "oneOf": [{"$ref": "#/$defs/prepared"}, {"$ref": "#/$defs/redirect"}, {"$ref": "#/$defs/terminal"}, {"$ref": "#/$defs/tlsEvent"}, {"$ref": "#/$defs/tlsReply"}],
@@ -12,7 +12,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "phase", "operation", "arguments", "issuedAtEpochNs", "expiresAtEpochNs"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeOAuthSuccessionChannel/v1"}, "phase": {"const": "prepared"},
+        "apiVersion": {"const": "catchplate.nativeOAuthSuccessionChannel/v1"}, "phase": {"const": "prepared"},
         "operation": {"enum": ["oauth.measured-succession.inspect", "oauth.measured-succession.material-claim", "oauth.measured-succession.contact", "oauth.measured-succession.finish", "oauth.measured-succession.prepare", "oauth.measured-succession.claim", "oauth.measured-succession.capture", "oauth.measured-succession.stage", "oauth.measured-succession.cancel", "oauth.measured-succession.recover"]},
         "arguments": {"$ref": "#/$defs/preparedArguments"},
         "issuedAtEpochNs": {"$ref": "#/$defs/epoch"}, "expiresAtEpochNs": {"$ref": "#/$defs/epoch"}
@@ -40,7 +40,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "exchangeId", "location"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeOAuthSuccessionAuthorizationRedirect/v1"},
+        "apiVersion": {"const": "catchplate.nativeOAuthSuccessionAuthorizationRedirect/v1"},
         "exchangeId": {"$ref": "#/$defs/uuid"}, "location": {"type": "string", "minLength": 1, "maxLength": 16384}
       },
       "$comment": "Public exact3 after accepted historical closure and one definite fresh PREPARE. Fixed HTTPS provider authorization paths only. Private reply also retains cookieName/cookieValue/expiresAtEpochNs under the actual browser TLS owner; the public JSON never contains private cookie values."
@@ -49,7 +49,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "exchangeId", "status"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeOAuthSuccessionTerminalObservation/v1"},
+        "apiVersion": {"const": "catchplate.nativeOAuthSuccessionTerminalObservation/v1"},
         "exchangeId": {"$ref": "#/$defs/uuid"}, "status": {"enum": ["retirement-rejected", "retirement-unknown"]}
       },
       "$comment": "A definite signed FINISH observation before PKCE. It does not claim retirement completion, reopen a scope, activate a credential or permit a retry. Lost responses use separate observation-only recovery."
@@ -58,7 +58,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "providerId", "purpose", "sequence", "ciphertext", "read"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeOAuthSuccessionTls/v1"},
+        "apiVersion": {"const": "catchplate.nativeOAuthSuccessionTls/v1"},
         "providerId": {"enum": ["google", "x"]}, "purpose": {"enum": ["retirement", "token", "identity"]},
         "sequence": {"type": "integer", "minimum": 1, "maximum": 512},
         "ciphertext": {"$ref": "#/$defs/ciphertext"}, "read": {"type": "boolean"}
@@ -69,7 +69,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "sequence", "ciphertext", "eof"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeOAuthSuccessionTls/v1"},
+        "apiVersion": {"const": "catchplate.nativeOAuthSuccessionTls/v1"},
         "sequence": {"type": "integer", "minimum": 1, "maximum": 512},
         "ciphertext": {"$ref": "#/$defs/ciphertext"}, "eof": {"type": "boolean"}
       }

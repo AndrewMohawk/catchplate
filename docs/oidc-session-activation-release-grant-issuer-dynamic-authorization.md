@@ -1,6 +1,6 @@
 # Independent dynamic grant-issuer authorization
 
-[The original-only module](../serverware/oidc_session_activation_release_grant_issuer_dynamic_authorization.py)
+[The original-only module](../catchplate/oidc_session_activation_release_grant_issuer_dynamic_authorization.py)
 admits a freshly issued proof bootstrap against independently provisioned cold
 authority, then derives the existing exact grant-issuer policy and launch
 originals. It does not widen either existing schema, read private key bytes,
@@ -10,9 +10,9 @@ staging and signed configuration do not prove readiness, replay or delivery.
 ## Independent signed input
 
 The closed signed schema is
-`serverware.signedOidcSessionActivationReleaseGrantIssuerDynamicAuthorization/v1`,
+`catchplate.signedOidcSessionActivationReleaseGrantIssuerDynamicAuthorization/v1`,
 with payload schema
-`serverware.oidcSessionActivationReleaseGrantIssuerDynamicAuthorization/v1`.
+`catchplate.oidcSessionActivationReleaseGrantIssuerDynamicAuthorization/v1`.
 Purpose is `stage-oidc-session-activation-release-grant-issuer`; source revision
 and `trusted-host-local` trust mode are fixed. The payload has exactly:
 
@@ -38,7 +38,7 @@ schemas and six inherited descriptors remain unchanged.
 `intake` is exactly `{path, peerUid, peerGid, requestTimeoutSeconds,
 listenerSocketDevice, listenerSocketInode, listenerPathDevice,
 listenerPathInode}`. Its fixed path is
-`/run/serverware/oidc-session-activation-token-release/grant-issuer-bootstrap.sock`,
+`/run/catchplate/oidc-session-activation-token-release/grant-issuer-bootstrap.sock`,
 with peer 65494:65494. Timeout is an exact integer from 1 to 30 seconds and
 cannot exceed the signed issuer request timeout. These are independent pins;
 the receiving root owner must observe matching resources before use.

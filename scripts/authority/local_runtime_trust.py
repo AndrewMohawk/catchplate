@@ -51,7 +51,7 @@ def main(argv=None):
         print(USAGE, end=""); return 0
     try:
         selected = arguments(argv)
-        from serverware.authority_local_runtime_trust import LocalRuntimeTrustIssuer
+        from catchplate.authority_local_runtime_trust import LocalRuntimeTrustIssuer
         LocalRuntimeTrustIssuer(**selected).publish()
         return 0
     except BaseException:

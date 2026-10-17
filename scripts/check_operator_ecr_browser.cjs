@@ -10,8 +10,8 @@ const ORIGIN = 'https://ecr-ui.example.test', PREFIX = '/api/operator-demo/ecr-p
 const PUBLISHED = '66666666-6666-4666-8666-666666666666', UNCERTAIN = '77777777-7777-4777-8777-777777777777';
 async function main() {
   assert.equal(process.argv.length, 2, 'intercepted smoke accepts no target');
-  const directory = mkdtempSync('/tmp/serverware-ecr-ui-'), raw = catalog(), requests = [], errors = [];
-  const html = execFileSync('python3', ['-B', '-c', 'from serverware.operator_demo_portal import render; print(render())'],
+  const directory = mkdtempSync('/tmp/catchplate-ecr-ui-'), raw = catalog(), requests = [], errors = [];
+  const html = execFileSync('python3', ['-B', '-c', 'from catchplate.operator_demo_portal import render; print(render())'],
     {cwd: ROOT, encoding: 'utf8', timeout: 5000, maxBuffer: 2 * 1024 * 1024});
   raw.applications = []; raw.access_rules = []; raw.credentials[0].active_rule_count = 0;
   const records = new Map(); const token = 'synthetic-ecr-client-token-not-real';
@@ -32,7 +32,7 @@ async function main() {
         return reply(raw);
       }
       if (request.method() === 'GET' && path === '/api/operator-demo/oauth/x/configuration/v1') return reply({}, 404);
-      if (request.method() === 'GET' && path === '/api/approvals/capabilities') return reply({schema: 'serverware.approvalCapabilities/v1', can_list: true,
+      if (request.method() === 'GET' && path === '/api/approvals/capabilities') return reply({schema: 'catchplate.approvalCapabilities/v1', can_list: true,
         can_open_native_review: false, can_decide: false, reason: 'protected_review_unavailable'});
       if (request.method() === 'GET' && path === '/api/approvals') return reply([]);
       if (path === PREFIX && request.method() === 'GET') {
@@ -96,7 +96,7 @@ async function main() {
     await page.locator('#connect-grant').click(); await page.locator('#connect-setup-slot').waitFor({state: 'visible'});
     const downloadEvent = page.waitForEvent('download'); await page.locator('#download-config').click();
     const download = await downloadEvent, config = JSON.parse(readFileSync(await download.path(), 'utf8'));
-    assert.equal(config.schema, 'serverware.awsEcrPublicationClient/v1'); assert.equal(config.proxy_password, token);
+    assert.equal(config.schema, 'catchplate.awsEcrPublicationClient/v1'); assert.equal(config.proxy_password, token);
     assert.equal(config.control_api_url, 'https://proxy.example.test/v1/ecr/publications'); assert.equal(config.expected_policy_hash, hash(2));
     assert(!Object.hasOwn(config, 'publication_id')); assert(!JSON.stringify(config).includes('secret_access_key'));
     await page.locator('nav a[href="#pending-actions"]').click();
@@ -109,7 +109,7 @@ async function main() {
     for (const text of ['Release CI', 'Release AWS credentials', SCOPE.repository_name, SCOPE.image_tag, hash(10), '2 unique blob(s)', '1,044 bytes'])
       assert((await selected.innerText()).includes(text));
     assert(!(await selected.innerText()).includes('identical HTTP retry'));
-    assert.equal(await page.title(), 'Pending actions - Serverware operator workspace');
+    assert.equal(await page.title(), 'Pending actions - Catchplate operator workspace');
     await page.screenshot({path: join(directory, 'ecr-review-desktop.png'), fullPage: true});
     await page.setViewportSize({width: 390, height: 844});
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));

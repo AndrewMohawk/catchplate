@@ -6,7 +6,7 @@ packet within that evidence. `native_bootstrap_capture.extract_packet` connects
 these representations without promoting the diagnostic to authority.
 
 The extractor explicitly accepts nine closed
-`serverware.nativeBootstrapClientCapture` profiles. Each retains the same nine
+`catchplate.nativeBootstrapClientCapture` profiles. Each retains the same nine
 base fields and permits only the children shown here, never additional fields.
 Only v7/v8 explicitly permit a null installation child:
 

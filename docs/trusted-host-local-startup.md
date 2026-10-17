@@ -51,7 +51,7 @@ The closed plan names the role, original clock bounds, protected credential and
 exchange directories, retained installed files/directories, existing mutable
 witness state where required, and the selected generation/artifact/operation
 digests. It is not an arbitrary command runner. Use the exact schema defined by
-[the parent implementation](../serverware/authority_local_startup.py).
+[the parent implementation](../catchplate/authority_local_startup.py).
 
 The root-only exchange contains the actual `observation.json`. Its independently
 authorized producer supplies only the fixed `manifest.json`, `certificate.json`

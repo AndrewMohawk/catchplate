@@ -18,9 +18,9 @@ from cryptography.exceptions import InvalidSignature
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import native_pilot_service_material as material
-from serverware import native_pilot_publication_profiles as publication
-from serverware import native_pilot_native_service_profile as services
+from catchplate import native_pilot_service_material as material
+from catchplate import native_pilot_publication_profiles as publication
+from catchplate import native_pilot_native_service_profile as services
 from test_native_pilot_endpoint_launches import (fixture, pair, service_fixture, service_policy,
     policy_fragment as launch_policy, clocks)
 from test_native_pilot_closure_set import canonical, sha, synthetic
@@ -28,7 +28,7 @@ from test_native_pilot_generation_scope import encoded
 
 SLOTS = {"native-persistence-configuration": 512 * 1024, "native-persistence-genesis": 16384,
     "native-persistence-journal": 1024, "native-generation-install-genesis": 512 * 1024}
-POLICY = {"apiVersion": "serverware.nativePilotServiceMaterialPolicy/v1", "initialization": "fresh-persistence-and-generation"}
+POLICY = {"apiVersion": "catchplate.nativePilotServiceMaterialPolicy/v1", "initialization": "fresh-persistence-and-generation"}
 
 
 class ServiceMaterialControls(unittest.TestCase):
@@ -39,7 +39,7 @@ class ServiceMaterialControls(unittest.TestCase):
         cls.persistence = json.loads(cls.service["inputOriginal"])
         # This is explicitly a grammar/projection fixture, not a signed
         # generation history or permission to initialize a real journal.
-        cls.generation = {"genesisOriginal": canonical({"apiVersion": "serverware.nativeGenerationCoordinatorGenesis/v1",
+        cls.generation = {"genesisOriginal": canonical({"apiVersion": "catchplate.nativeGenerationCoordinatorGenesis/v1",
             "guest": cls.f["guests"]["generationInstall"], "assignmentPayloadSha256": synthetic("projection-only-assignment"),
             "servicesSha256": synthetic("projection-only-five-services")}).decode("ascii"), "recordOriginals": []}
 
@@ -61,7 +61,7 @@ class ServiceMaterialControls(unittest.TestCase):
         self.assertEqual(projected["generationJournal"]["records"], [])
         for purpose, maximum in SLOTS.items():
             self.assertEqual(publication.PROFILES[purpose][2], maximum)
-            self.assertEqual(pins[purpose], {"path": "/etc/serverware/native-pilot-inputs/" + purpose + ".json",
+            self.assertEqual(pins[purpose], {"path": "/etc/catchplate/native-pilot-inputs/" + purpose + ".json",
                 "sha256": sha(prepared[purpose])})
             publication.shape(purpose, prepared[purpose])
 
@@ -111,7 +111,7 @@ class ServiceMaterialControls(unittest.TestCase):
         self.assertEqual(material.shape("native-persistence-configuration", raw), json.loads(raw))
         for change in ("api", "extra", "scope", "clock", "signature", "key-count"):
             value = json.loads(raw)
-            if change == "api": value["apiVersion"] = "serverware.nativeShadowNitroVerifierConfiguration/v1"
+            if change == "api": value["apiVersion"] = "catchplate.nativeShadowNitroVerifierConfiguration/v1"
             elif change == "extra": value["publicationPath"] = "/etc/arbitrary.json"
             elif change == "scope": value["expectedScope"] = None
             elif change == "clock": value["operation"]["deadlineBoottimeNs"] = value["operation"]["issuedAtBoottimeNs"]
@@ -121,7 +121,7 @@ class ServiceMaterialControls(unittest.TestCase):
                 material.shape("native-persistence-configuration", canonical(value))
 
     def test_bundle_requires_both_complete_authenticated_services_and_fixed_versions(self):
-        pins = {role: {"path": "/etc/serverware/native-pilot-inputs/native-launch-" + role + ".json",
+        pins = {role: {"path": "/etc/catchplate/native-pilot-inputs/native-launch-" + role + ".json",
             "sha256": synthetic("uninstalled-launch/" + role)} for role in material.ROLES}
         contexts = {"persistence": {name: self.service[name] for name in ("inputOriginal", "grantOriginal")},
             "generationInstall": {"inputOriginal": b"{}", "grantOriginal": b"{}"}}
@@ -140,7 +140,7 @@ class ServiceMaterialControls(unittest.TestCase):
         context = {"window": self.f["window"], "pins": pins, "material": projected}
         raw = canonical({"syntheticProjectionOnly": True})
         result = material._result(raw, context)
-        self.assertEqual(result, {"apiVersion": "serverware.nativePilotServiceMaterialInstallation/v1",
+        self.assertEqual(result, {"apiVersion": "catchplate.nativePilotServiceMaterialInstallation/v1",
             "bundleSha256": sha(raw), "startupDeadlineBoottimeNs": self.f["window"]["startupDeadlineBoottimeNs"],
             "lifetimeDeadlineBoottimeNs": self.f["window"]["lifetimeDeadlineBoottimeNs"], "material": projected, "pins": pins})
 

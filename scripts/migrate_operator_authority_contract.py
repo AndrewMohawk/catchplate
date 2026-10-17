@@ -32,27 +32,27 @@ X_QUOTA_PIN_FILE = ROOT / "scripts/operator_authority_contract_migration_x_quota
 # Independently derived fixed transition; never a caller-selected pin artifact.
 X_QUOTA_PIN_SHA256 = "sha256:ea376f5dce618b3888f5418a48bd160de8d01b83779e525db48ac6529bb46582"
 TRANSITIONS = ("historical", "jit-denial-quota-v1")
-SCHEMA = "serverware.operatorAuthorityContractMigrationPlan/v1"
-RECEIPT_SCHEMA = "serverware.operatorAuthorityContractMigrationReceipt/v1"
-MARKER = ".serverware-operator-demo.json"
-MARKER_BYTES = b'{"schema": "serverware.operatorDemo/v1", "syntheticOnly": false}\n'
-DATABASE = "serverware.sqlite3"
+SCHEMA = "catchplate.operatorAuthorityContractMigrationPlan/v1"
+RECEIPT_SCHEMA = "catchplate.operatorAuthorityContractMigrationReceipt/v1"
+MARKER = ".catchplate-operator-demo.json"
+MARKER_BYTES = b'{"schema": "catchplate.operatorDemo/v1", "syntheticOnly": false}\n'
+DATABASE = "catchplate.sqlite3"
 WITNESS = "webauthn-recovery-witness.sqlite3"
 CONTRACT_TABLE = "policy_authority_schema_contracts"
 PUBLIC_FILES = {"policy-signing-ed25519.pub.pem": {0o644},
     "decision-gate-ca-cert.pem": {0o444}, "mitmproxy/mitmproxy-ca-cert.pem": {0o644}}
-EMPTY_MOUNTPOINTS = frozenset({"gate-runtime/.operator-publication.lock", "gate-runtime/.serverware-operator-demo.json",
+EMPTY_MOUNTPOINTS = frozenset({"gate-runtime/.operator-publication.lock", "gate-runtime/.catchplate-operator-demo.json",
     "gate-runtime/mitmproxy/mitmproxy-ca-cert.pem", "gate-runtime/mitmproxy/mitmproxy-ca.pem"})
 MAX_FILE = 256 * 1024 * 1024
 MAX_PLAN = 16 * 1024 * 1024
 MAX_ROWS = 1_000_000
-ENVIRONMENT = {"SERVERWARE_OPERATOR_DEMO": "1", "SERVERWARE_RELEASE_CHANNEL": "dev",
-    "SERVERWARE_PROCESS_MODE": "serverware-control-plane", "SERVERWARE_METADATA_STORE_BACKEND": "sqlite",
-    "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite", "SERVERWARE_GRANT_STORE_BACKEND": "sqlite",
-    "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0", "SERVERWARE_KEY_RELEASE_REQUIRED": "0",
-    "SERVERWARE_DEV_AUTHENTICATOR": "0", "SERVERWARE_DEV_DEMO_SEED": "0",
-    "SERVERWARE_OPERATOR_DEMO_UPSTREAMS": '["https://api.example.com"]',
-    "SERVERWARE_OPERATOR_DEMO_PROXY_URL": "https://proxy.example.com"}
+ENVIRONMENT = {"CATCHPLATE_OPERATOR_DEMO": "1", "CATCHPLATE_RELEASE_CHANNEL": "dev",
+    "CATCHPLATE_PROCESS_MODE": "catchplate-control-plane", "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_AUDIT_STORE_BACKEND": "sqlite", "CATCHPLATE_GRANT_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0", "CATCHPLATE_KEY_RELEASE_REQUIRED": "0",
+    "CATCHPLATE_DEV_AUTHENTICATOR": "0", "CATCHPLATE_DEV_DEMO_SEED": "0",
+    "CATCHPLATE_OPERATOR_DEMO_UPSTREAMS": '["https://api.example.com"]',
+    "CATCHPLATE_OPERATOR_DEMO_PROXY_URL": "https://proxy.example.com"}
 
 
 class Refused(ValueError):
@@ -131,15 +131,15 @@ def pins(transition="historical"):
     raw = path.read_bytes()
     require(sha(raw) == expected)
     value = strict_json(raw)
-    require(value["schema"] == "serverware.operatorAuthorityContractMigrationPins/v1")
+    require(value["schema"] == "catchplate.operatorAuthorityContractMigrationPins/v1")
     transition_binding(value, transition)
     return value
 
 
 def source(pinned, directory):
-    expected = {**ENVIRONMENT, "SERVERWARE_DATA_DIR": str(directory)}
+    expected = {**ENVIRONMENT, "CATCHPLATE_DATA_DIR": str(directory)}
     require(all(name in expected and value == expected[name]
-        for name, value in os.environ.items() if name.startswith("SERVERWARE_")))
+        for name, value in os.environ.items() if name.startswith("CATCHPLATE_")))
     for name, value in expected.items():
         os.environ[name] = value
     for relative, digest in pinned["target"]["sourceFiles"].items():
@@ -147,10 +147,10 @@ def source(pinned, directory):
         require(not path.is_symlink() and path.is_file() and path.resolve().is_relative_to(ROOT)
             and sha(path.read_bytes()) == digest)
     require(pinned["old"]["sourceDdlSha256"] == pinned["target"]["sourceDdlSha256"])
-    require(not any(name == "serverware" or name.startswith("serverware.") for name in sys.modules))
+    require(not any(name == "catchplate" or name.startswith("catchplate.") for name in sys.modules))
     sys.path.insert(0, str(ROOT))
-    from serverware import db, operator_catalog_schema
-    from serverware.authority_store import metadata_schema_source
+    from catchplate import db, operator_catalog_schema
+    from catchplate.authority_store import metadata_schema_source
     require(db._policy_candidate_authority_source_contract_digest() == pinned["target"]["sourceContractDigest"])
     return db, operator_catalog_schema, metadata_schema_source.metadata_schema_source()
 
@@ -260,7 +260,7 @@ def witness(directory, pinned):
 
 def inspect(conn, pinned, helpers, *, expected_digest):
     db, catalog, ddl = helpers
-    from serverware.authority_store.metadata_schema import configure_sqlite_metadata_connection
+    from catchplate.authority_store.metadata_schema import configure_sqlite_metadata_connection
     configure_sqlite_metadata_connection(conn)
     schema = objects(conn)
     tables = sorted(row[0] for row in conn.execute("SELECT name FROM sqlite_schema WHERE type='table'"))
@@ -277,17 +277,17 @@ def inspect(conn, pinned, helpers, *, expected_digest):
     require(len(rows) == 1)
     contract = dict(rows[0])
     require(contract["schema_version"] == 9 and contract["source_revision"] == pinned["target"]["sourceRevision"]
-        and contract["contract_id"] == "serverware.policyCandidateAuthoritySchema/v9"
+        and contract["contract_id"] == "catchplate.policyCandidateAuthoritySchema/v9"
         and contract["source_contract_digest"] == expected_digest
         and contract["structural_manifest_json"] == manifest
         and contract["structural_manifest_digest"] == digest and contract["offline_migration_receipt_digest"] is None)
-    require(conn.execute("SELECT version FROM serverware_store_migrations WHERE migration='policy_candidate_authority'").fetchall()[0][0] == 9)
+    require(conn.execute("SELECT version FROM catchplate_store_migrations WHERE migration='policy_candidate_authority'").fetchall()[0][0] == 9)
     for name in pinned["target"]["emptyTables"]:
         require(conn.execute('SELECT 1 FROM "' + name + '" LIMIT 1').fetchone() is None)
     require(catalog.active(conn))
     catalog.read_catalog(conn)
     if optional:
-        from serverware import operator_upstream_setup
+        from catchplate import operator_upstream_setup
         operator_upstream_setup._rows(conn)
     return {"contract": contract, "rows": row_commitments(conn, tables, normalize_contract=True),
         "sqliteObjectsSha256": sha(canonical(schema))}
@@ -341,7 +341,7 @@ def apply(directory, pinned, helpers, reviewed, expected_plan_sha256, backup, *,
                     before = inspect(conn, pinned, helpers, expected_digest=pinned["old"]["sourceContractDigest"])
                     require(all(before[key] == reviewed[key] for key in before))
                     db = helpers[0]
-                    trigger = db._policy_candidate_authority_object_name("serverware", CONTRACT_TABLE, "immutable", "update")
+                    trigger = db._policy_candidate_authority_object_name("catchplate", CONTRACT_TABLE, "immutable", "update")
                     trigger_rows = conn.execute("SELECT sql FROM sqlite_schema WHERE type='trigger' AND name=? AND tbl_name=?",
                         (trigger, CONTRACT_TABLE)).fetchall()
                     require(len(trigger_rows) == 1)

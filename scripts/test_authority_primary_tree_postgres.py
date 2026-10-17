@@ -32,15 +32,15 @@ from psycopg.types.json import Jsonb
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.native_postgres_results import run_native_fixture
+from catchplate.native_postgres_results import run_native_fixture
 
-from serverware import authority_audit_initialization as initialization
-from serverware import authority_radix_proof as radix
-from serverware.authority_primary_contract import source_query_manifest_digest
-from serverware.authority_radix_mutation import PrimaryRoot
-from serverware.authority_store.metadata_schema_source import metadata_base_schema_source
-from serverware.authority_store.v9_schema_source import authority_v9_schema_source
-from serverware.authority_store import primary_tree_sql
+from catchplate import authority_audit_initialization as initialization
+from catchplate import authority_radix_proof as radix
+from catchplate.authority_primary_contract import source_query_manifest_digest
+from catchplate.authority_radix_mutation import PrimaryRoot
+from catchplate.authority_store.metadata_schema_source import metadata_base_schema_source
+from catchplate.authority_store.v9_schema_source import authority_v9_schema_source
+from catchplate.authority_store import primary_tree_sql
 from test_authority_audit_initialization import AGGREGATE, KEY, OUTBOX, aggregate_tree, absence, initial_row
 from test_authority_audit_inventory import InventoryTree, outbox_row
 from test_authority_radix_proof import sql_digest, sql_json, wire_digest, wire_json
@@ -54,7 +54,7 @@ LEAVES = "policy_authority_authenticated_leaves"
 HISTORY = "policy_authority_authenticated_root_revisions"
 BASE_TABLES = (OUTBOX, ROOTS, NODES, LEAVES, HISTORY)
 ALL_TABLES = (*BASE_TABLES, AGGREGATE)
-TRIGGER_FUNCTION = "serverware_policy_authority_authenticated_trigger"
+TRIGGER_FUNCTION = "catchplate_policy_authority_authenticated_trigger"
 MANIFEST = source_query_manifest_digest()
 
 
@@ -188,7 +188,7 @@ class AuthorityPrimaryTreePostgresTests(unittest.TestCase):
         self.assertTrue(all(0 < row[3] <= tree.root.root_revision for row in actual_nodes))
         expected_leaves = {}
         for key_bytes in tree.rows:
-            address = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1", table.encode("ascii"), key_bytes)
+            address = sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1", table.encode("ascii"), key_bytes)
             expected_leaves[address] = (key_bytes.decode("utf-8"), *tree.leaves[address])
         actual_leaves = self.connection.execute(sql.SQL(
             "SELECT key_digest,key_json,row_digest,leaf_digest,root_revision FROM {} WHERE table_name=%s"
@@ -218,9 +218,9 @@ class AuthorityPrimaryTreePostgresTests(unittest.TestCase):
             "SELECT mutation_operation,mutation_key_digest,mutation_row_digest FROM {} "
             "WHERE table_name=%s ORDER BY root_revision DESC LIMIT 1"
         ).format(self.object(HISTORY)), (table,)).fetchone()
-        expected_key = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1",
+        expected_key = sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1",
                                   table.encode("ascii"), sql_json(key))
-        expected_row = None if row is None else sql_digest("serverware.policyAuthorityAuthenticatedRow/v1",
+        expected_row = None if row is None else sql_digest("catchplate.policyAuthorityAuthenticatedRow/v1",
                                                           table.encode("ascii"), sql_json(row))
         self.assertEqual(actual, (operation, expected_key, expected_row))
 
@@ -249,7 +249,7 @@ class AuthorityPrimaryTreePostgresTests(unittest.TestCase):
         state.update(aggregateId=aggregate_row["aggregate_id"],
                      aggregateKind=aggregate_row["aggregate_kind"])
         aggregate_row["state_json"] = wire_json(state).decode("ascii")
-        aggregate_row["state_digest"] = wire_digest("serverware.policyAuthorityAggregateState/v1", wire_json(state))
+        aggregate_row["state_digest"] = wire_digest("catchplate.policyAuthorityAggregateState/v1", wire_json(state))
         self.assertEqual(self.insert(AGGREGATE, aggregate_row), aggregate_row)
         outbox, aggregate = InventoryTree(rows), aggregate_tree([aggregate_row])
         self.assert_tree(outbox)
@@ -260,7 +260,7 @@ class AuthorityPrimaryTreePostgresTests(unittest.TestCase):
         # Different first nibbles give exactly 127 outbox parents, so the
         # 16-parent schedule necessarily contains a physical cross-table batch.
         missing = next((f"absent-{index:02d}" for index in range(256)
-            if sql_digest("serverware.policyAuthorityAuthenticatedKey/v1",
+            if sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1",
                 OUTBOX.encode("ascii"), sql_json({"id": f"absent-{index:02d}"}))[7] != first_nibble), None)
         self.assertIsNotNone(missing)
         records = [first, outbox.record(missing)]
@@ -293,7 +293,7 @@ class AuthorityPrimaryTreePostgresTests(unittest.TestCase):
         for depth in (0, 1, 32, 63, 64):
             actual = self.connection.execute(sql.SQL(
                 "SELECT {}(%s)"
-            ).format(self.object("serverware_policy_authority_authenticated_empty")), (depth,)).fetchone()[0]
+            ).format(self.object("catchplate_policy_authority_authenticated_empty")), (depth,)).fetchone()[0]
             self.assertEqual(actual, independent.empty[depth])
 
     def test_real_trigger_insert_update_delete_roots_leaves_and_history(self) -> None:
@@ -431,7 +431,7 @@ class AuthorityPrimaryTreePostgresTests(unittest.TestCase):
                           for proof in expected for level in proof["siblings"]})
         expected_batches = [parents[offset:offset + 16] for offset in range(0, len(parents), 16)]
         node_reads = [key for table, key in trace.entries if table == NODES]
-        self.assertEqual(node_reads, [{"profile": "serverware.policyAuthorityRadixReadBatch/v1",
+        self.assertEqual(node_reads, [{"profile": "catchplate.policyAuthorityRadixReadBatch/v1",
             "parents": [{"tableName": table, "depth": depth, "pathPrefix": prefix}
                         for table, depth, prefix in batch]} for batch in expected_batches])
         self.assertTrue(any(len({parent["tableName"] for parent in key["parents"]}) == 2
@@ -449,7 +449,7 @@ class AuthorityPrimaryTreePostgresTests(unittest.TestCase):
     def test_batched_native_reader_rejects_bounded_projection_and_stale_node_revision(self) -> None:
         selected, roots, expected = self.batch_fixture()
         self.assertEqual(self.read_batch(selected, roots), expected)
-        path = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1",
+        path = sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1",
                           OUTBOX.encode("ascii"), sql_json(selected[0]["key"]))[7:]
         revision = self.stored_root(OUTBOX).root_revision
         before = self.snapshot()

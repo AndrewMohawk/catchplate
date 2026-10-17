@@ -36,7 +36,7 @@ fn snapshot() -> Arc<Snapshot> {
     let mut value = (*test_snapshot(1)).clone(); value.routes = vec![route()];
     value.credentials.insert(CREDENTIAL.into(), Credential {provider:"operator-demo".into(),
         provider_subject:Some("synthetic-x-subject".into()),
-        injection:json!({"type":"bearer","header":"Authorization","__serverwareCredentialType":"static"})});
+        injection:json!({"type":"bearer","header":"Authorization","__catchplateCredentialType":"static"})});
     Arc::new(value)
 }
 
@@ -108,12 +108,12 @@ fn x_app_read_closed_contract_and_startup_v1_v2_schema_compile() {
     let embedded=closed_embedded_policy_schema().unwrap();
     assert_eq!(embedded["$defs"]["adapter_x_app_read_v1__root"]["properties"]["username"]["$ref"],
         "#/$defs/adapter_x_app_read_v1__username");
-    for version in ["serverware.policy/v1",policy_route_authority::BUNDLE] {
+    for version in ["catchplate.policy/v1",policy_route_authority::BUNDLE] {
         let mut raw=policy(); raw["apiVersion"]=json!(version); raw["kind"]=json!("PolicyBundle");
         raw["metadata"]=json!({"id":"x-read-startup","sequence":1,"rollbackEpoch":1});
         if version==policy_route_authority::BUNDLE {
             let pin=format!("sha256:{}","0".repeat(64));
-            raw["routeAuthority"]=json!({"apiVersion":"serverware.compiledRouteAuthority/v1","genericOperations":[],
+            raw["routeAuthority"]=json!({"apiVersion":"catchplate.compiledRouteAuthority/v1","genericOperations":[],
                 "mappingSha256":pin,"routeAuthorityRootSha256":pin,"operationAuthorityRootSha256":pin});
         }
         validate_policy_schema(&raw).expect("actual startup compiler must resolve the new schema");
@@ -150,7 +150,7 @@ fn x_app_read_signed_v2_authority_is_exact_read() {
     let pin=|value:&Value| sha256_prefixed(policy_route_authority::canonical(value).unwrap().as_bytes());
     let mut raw=policy(); raw["apiVersion"]=json!(policy_route_authority::BUNDLE);
     let operations=json!([{"operationName":OPERATION,"operation":"read","requestAuthorityClass":"read"}]);
-    let profile=json!({"apiVersion":"serverware.compiledRouteAuthority/v1",
+    let profile=json!({"apiVersion":"catchplate.compiledRouteAuthority/v1",
         "routeSha256":sha256_prefixed(b"route:test"),"signedRouteSha256":pin(&raw["routes"][0]),
         "adapterType":ADAPTER,"operations":operations,"signedPrincipalsSha256":pin(&raw["principals"]),
         "signedCredentialsSha256":pin(&raw["credentials"]),"signedDefaultsSha256":pin(&raw["defaults"]),
@@ -159,10 +159,10 @@ fn x_app_read_signed_v2_authority_is_exact_read() {
     let profiles=json!([{"routeId":"route:test","compiledSemanticProfileSha256":profile_pin,"profile":profile}]);
     let entries=json!([{"routeSha256":profile["routeSha256"],"compiledSemanticProfileSha256":profile_pin,
         "operationName":OPERATION,"operation":"read","requestAuthorityClass":"read"}]);
-    raw["routeAuthority"]=json!({"apiVersion":"serverware.compiledRouteAuthority/v1","genericOperations":[],
-        "mappingSha256":pin(&json!({"apiVersion":"serverware.compiledRouteAuthority/v1","profiles":profiles})),
-        "routeAuthorityRootSha256":pin(&json!({"apiVersion":"serverware.compiledRouteAuthorityRoutes/v1","profiles":profiles})),
-        "operationAuthorityRootSha256":pin(&json!({"apiVersion":"serverware.compiledRouteAuthorityOperations/v1","operations":entries}))});
+    raw["routeAuthority"]=json!({"apiVersion":"catchplate.compiledRouteAuthority/v1","genericOperations":[],
+        "mappingSha256":pin(&json!({"apiVersion":"catchplate.compiledRouteAuthority/v1","profiles":profiles})),
+        "routeAuthorityRootSha256":pin(&json!({"apiVersion":"catchplate.compiledRouteAuthorityRoutes/v1","profiles":profiles})),
+        "operationAuthorityRootSha256":pin(&json!({"apiVersion":"catchplate.compiledRouteAuthorityOperations/v1","operations":entries}))});
     let snapshot=snapshot(); let compiled=policy_route_authority::admit(&raw,&snapshot.routes).unwrap().unwrap();
     assert!(compiled.binding(&snapshot.principals[0],&snapshot.routes[0],&vectors()["operation"]).is_ok());
     assert!(compiled.binding(&snapshot.principals[0],&snapshot.routes[0],&json!({"operation":"tweets.write"})).is_err());
@@ -374,7 +374,7 @@ fn x_app_read_canonical_discard_replacement_and_original_empty_body_binding() {
 
 #[test]
 fn x_app_read_health_marker_is_exact_compiled_support_not_provider_readiness() {
-    let expected=json!({"schema":"serverware.operatorXAppReadGate/v1","adapter":"x.app_read.v1","operation":"x.username.read"});
+    let expected=json!({"schema":"catchplate.operatorXAppReadGate/v1","adapter":"x.app_read.v1","operation":"x.username.read"});
     assert_eq!(gate_capability(),expected);
     // The real health producer advertises support even when no X rule exists.
     let snapshot=test_snapshot(1); let state=test_gate_state(Arc::clone(&snapshot));

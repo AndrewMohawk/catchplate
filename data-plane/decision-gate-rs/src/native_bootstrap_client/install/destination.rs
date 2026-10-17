@@ -14,7 +14,7 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::sync::Arc;
 
-const RECOVERY_NAME: &str = ".serverware-native-ca-install";
+const RECOVERY_NAME: &str = ".catchplate-native-ca-install";
 const LOCK_NAME: &str = "destination.lock";
 const MAX_PEM: usize = 64 * 1024;
 const MAX_DER: usize = 16 * 1024;
@@ -428,7 +428,7 @@ impl Destination {
         recovery_capacity(&self.recovery.file, if self.replace_existing { 2 } else { 1 },
             raw.len() + old_length, &self.guard)?;
         let mut hash = Sha256::new();
-        hash.update(b"serverware/native-install-destination-operation/v1\0");
+        hash.update(b"catchplate/native-install-destination-operation/v1\0");
         hash.update((self.destination.len() as u64).to_be_bytes());
         hash.update(self.destination.as_bytes());
         hash.update(self.uid.to_be_bytes());

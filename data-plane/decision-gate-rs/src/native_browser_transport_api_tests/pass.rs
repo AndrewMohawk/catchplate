@@ -1,7 +1,7 @@
-use serverware_decision_gate::enclave_vsock_v1::{VsockShutdownV1, VsockStreamV1};
-use serverware_decision_gate::native_oauth_exchange_v1::BrowserTls;
-use serverware_decision_gate::native_static_credential_browser_v1 as creation;
-use serverware_decision_gate::native_static_credential_rotation_browser_v1 as rotation;
+use catchplate_decision_gate::enclave_vsock_v1::{VsockShutdownV1, VsockStreamV1};
+use catchplate_decision_gate::native_oauth_exchange_v1::BrowserTls;
+use catchplate_decision_gate::native_static_credential_browser_v1 as creation;
+use catchplate_decision_gate::native_static_credential_rotation_browser_v1 as rotation;
 use std::sync::Arc;
 fn signatures() {
     let _: fn(VsockStreamV1, Arc<BrowserTls>, u64) -> Result<creation::Accepted, String> = creation::Accepted::accept;

@@ -1,7 +1,7 @@
 # Native Persistence launch inputs
 
 This source connects the fixed fresh resource producer to the explicit
-`serverware.nativeShadowPersistenceGuestLaunch/v2` receiver. It does not launch
+`catchplate.nativeShadowPersistenceGuestLaunch/v2` receiver. It does not launch
 anything during authoring, provision keys, establish deployment acceptance, or
 replace the separate operational Store/Verify grant. Existing v1 is unchanged.
 
@@ -18,8 +18,8 @@ do not attest future identity. Native inspectors verify the eventual real peer.
 The producer opens protected root-owned parent directories, creates only a
 fresh fixed listener and journal, and holds the exclusive actual empty named
 lock. Parents must already exist; existing listener/journal refuses. Paths are
-`/run/serverware-shadow-persistence/listener.sock` and
-`/var/lib/serverware/native-shadow-persistence/journal`. Both fixed parent leaves
+`/run/catchplate-shadow-persistence/listener.sock` and
+`/var/lib/catchplate/native-shadow-persistence/journal`. Both fixed parent leaves
 are root:root 0711. Journal is assigned role-owned 0700, lock 0600, genesis 0400;
 listener path is assigned service UID/peer GID 0660. Socket is nonblocking
 SEQPACKET with credential/PIDFD delivery, not listening yet.

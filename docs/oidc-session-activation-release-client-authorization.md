@@ -7,10 +7,10 @@ socket. A root-selected outcome identity is not proof of durable retention,
 latest-state currentness or successful token delivery.
 
 The purpose is `receive-oidc-session-activation-token-release`. Signed/payload
-schemas are `serverware.signedOidcSessionActivationReleaseClientAuthorization/v1`
-and `serverware.oidcSessionActivationReleaseClientAuthorization/v1`, with distinct
+schemas are `catchplate.signedOidcSessionActivationReleaseClientAuthorization/v1`
+and `catchplate.oidcSessionActivationReleaseClientAuthorization/v1`, with distinct
 `ReleaseClientAuthorizationIdentity/v1` and `ReleaseClientServerBootstrapIdentity/v1`
-domains under `serverware.oidcSessionActivation`. No generic purpose is widened.
+domains under `catchplate.oidcSessionActivation`. No generic purpose is widened.
 
 The closed independent scope has seventeen fields:
 
@@ -30,7 +30,7 @@ authenticated checkpoint-one and recovery outcome. Live admission does not claim
 that its expected outcome already exists.
 
 The endpoint is exactly `{path, timeoutSeconds, peerUid, peerGid}`. Its path is
-`/run/serverware/oidc-session-activation-token-release/release.sock`; timeout is an
+`/run/catchplate/oidc-session-activation-token-release/release.sock`; timeout is an
 integer from 1 through 30 seconds, no greater than the actual signed server launch
 timeout. Connect-side peer pins remain 0:0 for the existing root-created listener,
 distinct from the fixed client UID/GID 65532 named by this root authorization.

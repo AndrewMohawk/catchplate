@@ -26,14 +26,14 @@ struct EffectsSelection {
 }
 pub(in crate::policy_shadow) fn require_runtime(runtime:&serde_json::Value)->Result<(),ShadowError>{
     match runtime.get("apiVersion").and_then(serde_json::Value::as_str) {
-        Some("serverware.policyCustodyProductionRpcRuntime/v5"|"serverware.policyCustodyProductionRpcRuntime/v6"
-            |"serverware.policyCustodyProductionRpcRuntime/v7"|"serverware.policyCustodyProductionRpcRuntime/v8")=>Ok(()),
-        Some("serverware.policyCustodyProductionRpcRuntime/v9"|"serverware.policyCustodyProductionRpcRuntime/v10"
-            |"serverware.policyCustodyProductionRpcRuntime/v11"|"serverware.policyCustodyProductionRpcRuntime/v12"
-            |"serverware.policyCustodyProductionRpcRuntime/v13"|super::native_terminal::ADOPTION_RUNTIME)=>{
+        Some("catchplate.policyCustodyProductionRpcRuntime/v5"|"catchplate.policyCustodyProductionRpcRuntime/v6"
+            |"catchplate.policyCustodyProductionRpcRuntime/v7"|"catchplate.policyCustodyProductionRpcRuntime/v8")=>Ok(()),
+        Some("catchplate.policyCustodyProductionRpcRuntime/v9"|"catchplate.policyCustodyProductionRpcRuntime/v10"
+            |"catchplate.policyCustodyProductionRpcRuntime/v11"|"catchplate.policyCustodyProductionRpcRuntime/v12"
+            |"catchplate.policyCustodyProductionRpcRuntime/v13"|super::native_terminal::ADOPTION_RUNTIME)=>{
             if matches!(runtime.get("apiVersion").and_then(serde_json::Value::as_str),
-                Some("serverware.policyCustodyProductionRpcRuntime/v10"|"serverware.policyCustodyProductionRpcRuntime/v11"
-                    |"serverware.policyCustodyProductionRpcRuntime/v12"|"serverware.policyCustodyProductionRpcRuntime/v13"|super::native_terminal::ADOPTION_RUNTIME)) {
+                Some("catchplate.policyCustodyProductionRpcRuntime/v10"|"catchplate.policyCustodyProductionRpcRuntime/v11"
+                    |"catchplate.policyCustodyProductionRpcRuntime/v12"|"catchplate.policyCustodyProductionRpcRuntime/v13"|super::native_terminal::ADOPTION_RUNTIME)) {
                 super::services::production::validate_initial_history_runtime(&canonical_json_bytes(runtime)?)
                     .map_err(|_|ShadowError::BindingDrift)?;
             } else {
@@ -44,11 +44,11 @@ pub(in crate::policy_shadow) fn require_runtime(runtime:&serde_json::Value)->Res
             // this exact successor, never a cleanup-less v3 projection.
             let value:EffectsSelection=serde_json::from_value(runtime.get("spool").ok_or(ShadowError::BindingDrift)?.clone())
                 .map_err(|_|ShadowError::BindingDrift)?;
-            ensure(value.api_version=="serverware.nativeSpoolServices/v3" && value.origin_fd_name=="generation-origin")?;
+            ensure(value.api_version=="catchplate.nativeSpoolServices/v3" && value.origin_fd_name=="generation-origin")?;
             for (raw,maximum,version) in [
-                (value.head_grant_original.as_str(),65536,"serverware.nativeSpoolHeadGrant/v3"),
-                (value.current_grant_original.as_str(),131072,"serverware.nativeSpoolCurrentGrant/v3"),
-                (value.cleanup_grant_original.as_str(),131072,"serverware.nativeActiveEffectCleanupGrant/v1")] {
+                (value.head_grant_original.as_str(),65536,"catchplate.nativeSpoolHeadGrant/v3"),
+                (value.current_grant_original.as_str(),131072,"catchplate.nativeSpoolCurrentGrant/v3"),
+                (value.cleanup_grant_original.as_str(),131072,"catchplate.nativeActiveEffectCleanupGrant/v1")] {
                 ensure(raw.is_ascii() && !raw.is_empty() && raw.len()<=maximum)?;
                 let grant:serde_json::Value=exact(raw.as_bytes())?;
                 let object=grant.as_object().ok_or(ShadowError::BindingDrift)?;
@@ -156,9 +156,9 @@ impl Factory {
         let guest=closure.guest().clone();
         let phase:serde_json::Value=exact(original(&public,"phaseScopeOriginal")?)?;
         let payload=phase.get("payload").ok_or(ShadowError::BindingDrift)?;
-        ensure(payload.get("apiVersion").and_then(serde_json::Value::as_str)==Some("serverware.nativeShadowDriverScope/v4"))?;
+        ensure(payload.get("apiVersion").and_then(serde_json::Value::as_str)==Some("catchplate.nativeShadowDriverScope/v4"))?;
         let operation=payload.get("operation").ok_or(ShadowError::BindingDrift)?;
-        ensure(operation.get("apiVersion").and_then(serde_json::Value::as_str)==Some("serverware.nativeShadowDriverOperation/v1"))?;
+        ensure(operation.get("apiVersion").and_then(serde_json::Value::as_str)==Some("catchplate.nativeShadowDriverOperation/v1"))?;
         let settings:Settings=serde_json::from_value(operation.get("production").ok_or(ShadowError::BindingDrift)?.clone())
             .map_err(|_|ShadowError::BindingDrift)?;
         let observed:serde_json::Value=exact(original(&public,"bootstrapObservationOriginal")?)?;
@@ -182,7 +182,7 @@ impl Factory {
         let parent=census.get("parent").ok_or(ShadowError::BindingDrift)?;
         let start=parent.get("startTimeTicks").and_then(serde_json::Value::as_u64).ok_or(ShadowError::BindingDrift)?;
         let mut reaper=ProductionCustodyStableReaperIdentity{
-            reaper_instance_sha256:hash_domain_frames(b"serverware.nativeShadowStableParentInstance/v1",
+            reaper_instance_sha256:hash_domain_frames(b"catchplate.nativeShadowStableParentInstance/v1",
                 &[&canonical_json_bytes(&(parent,&instance))?]),
             reaper_executable_sha256:digest(&census,"parentExecutableSha256")?,supervisor_instance_sha256:instance,
             supervisor_boot_id_sha256:boot,kernel_driver_identity_sha256:driver.identity_sha256().clone(),
@@ -191,7 +191,7 @@ impl Factory {
             // Complete operational coverage is REQUIRED by retained, separately.
             retained_descriptor_set_sha256:driver.retained_descriptor_manifest_sha256.clone(),ownership_epoch:start,
             independent_restart_forbidden:true,identity_sha256:Sha256Digest::compute(&[])};
-        reaper.identity_sha256=hash_domain_frames(b"serverware.policyShadowCustodyStableReaper/v1",&[&canonical_json_bytes(&(
+        reaper.identity_sha256=hash_domain_frames(b"catchplate.policyShadowCustodyStableReaper/v1",&[&canonical_json_bytes(&(
             &reaper.reaper_instance_sha256,&reaper.reaper_executable_sha256,&reaper.supervisor_instance_sha256,
             &reaper.supervisor_boot_id_sha256,&reaper.kernel_driver_identity_sha256,reaper.subreaper_process_start_time_ticks,
             &reaper.pidfd_namespace_sha256,&reaper.retained_descriptor_set_sha256,reaper.ownership_epoch,reaper.independent_restart_forbidden))?]);
@@ -221,7 +221,7 @@ impl Factory {
             ensure(pins.get(role)==Some(&serde_json::to_value(Sha256Digest::compute(raw)).map_err(|_|ShadowError::BindingDrift)?))?;
             let grant:serde_json::Value=exact(raw)?;
             let payload=grant.get("payload").ok_or(ShadowError::BindingDrift)?;
-            ensure(payload.get("apiVersion").and_then(serde_json::Value::as_str)==Some("serverware.custodyServiceGenerationGrant/v1")
+            ensure(payload.get("apiVersion").and_then(serde_json::Value::as_str)==Some("catchplate.custodyServiceGenerationGrant/v1")
                 && payload.get("purpose").and_then(serde_json::Value::as_str)==Some("cold-service-generation-admission")
                 && payload.get("serviceRole").and_then(serde_json::Value::as_str)==Some(role.as_str()))?;
             let scope:GenerationScope=exact(&canonical_json_bytes(payload.get("scope").ok_or(ShadowError::BindingDrift)?)?)?;

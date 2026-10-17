@@ -14,7 +14,7 @@ const {spawn} = require('node:child_process');
 const {createHash} = require('node:crypto');
 const {gzipSync, gunzipSync} = require('node:zlib');
 const NPM = path.resolve(__dirname, '../examples/npm-registry/node_modules/npm');
-const TOP = 'serverware-protocol-top', LEAF = '@serverware-protocol/leaf', VERSION = '1.0.0';
+const TOP = 'catchplate-protocol-top', LEAF = '@catchplate-protocol/leaf', VERSION = '1.0.0';
 const BULK = '/-/npm/v1/security/advisories/bulk';
 const TOKEN = 'synthetic-install-protocol-token-not-a-provider-credential';
 const LIMIT = 65536, children = new Set(), wire = [], phases = [], sourcePins = {};
@@ -25,8 +25,8 @@ let temporary, server, registry, active = 'setup', invalid = 0, timer, timedOut 
 const packages = [
   {name: TOP, metadataPath: '/' + TOP, tarballPath: '/' + TOP + '/-/' + TOP + '-1.0.0.tgz',
     manifest: {name: TOP, version: VERSION, main: 'index.cjs', dependencies: {[LEAF]: VERSION}},
-    code: "'use strict';\nmodule.exports = 'top:' + require('@serverware-protocol/leaf');\n"},
-  {name: LEAF, metadataPath: '/@serverware-protocol%2fleaf', tarballPath: '/@serverware-protocol/leaf/-/leaf-1.0.0.tgz',
+    code: "'use strict';\nmodule.exports = 'top:' + require('@catchplate-protocol/leaf');\n"},
+  {name: LEAF, metadataPath: '/@catchplate-protocol%2fleaf', tarballPath: '/@catchplate-protocol/leaf/-/leaf-1.0.0.tgz',
     manifest: {name: LEAF, version: VERSION, main: 'index.cjs'},
     code: "'use strict';\nmodule.exports = 'synthetic-leaf-v1';\n"},
 ];
@@ -190,7 +190,7 @@ async function phase(name, project, config) {
     assert.equal(observations.filter(item => item.kind === 'metadata' && item.package === pkg.name).length, name === 'ci' ? 0 : 1);
   }
   installed(project);
-  const consumption = await child(['-e', "require('node:assert/strict').equal(require('serverware-protocol-top'), 'top:synthetic-leaf-v1'); process.stdout.write('fixed-export-ok\\n');"], project);
+  const consumption = await child(['-e', "require('node:assert/strict').equal(require('catchplate-protocol-top'), 'top:synthetic-leaf-v1'); process.stdout.write('fixed-export-ok\\n');"], project);
   assert.equal(consumption.code, 0); assert.equal(consumption.stdout, 'fixed-export-ok\n'); assert.equal(consumption.stderr, '');
   if (name === 'audit-negative') {
     assert.equal(summary.audited, 0); assert(!Object.hasOwn(summary, 'audit') || summary.audit === null);
@@ -206,7 +206,7 @@ async function phase(name, project, config) {
 async function main() {
   try {
     preflight(); timer = setTimeout(() => { timedOut = true; killChildren(); server?.closeAllConnections(); }, 60000);
-    temporary = fs.mkdtempSync('/tmp/serverware-npm-install-'); assert.equal(fs.statSync(temporary).mode & 0o777, 0o700);
+    temporary = fs.mkdtempSync('/tmp/catchplate-npm-install-'); assert.equal(fs.statSync(temporary).mode & 0o777, 0o700);
     for (const pkg of packages) {
       pkg.manifestBytes = JSON.stringify(pkg.manifest) + '\n';
       pkg.tarball = archive([['package.json', pkg.manifestBytes], ['index.cjs', pkg.code]]);
@@ -215,26 +215,26 @@ async function main() {
     await startRegistry();
     const config = path.join(temporary, 'user.npmrc');
     write(config, 'registry=' + registry + '\n//' + new URL(registry).host + '/:_authToken=' + TOKEN + '\n');
-    const manifest = JSON.stringify({name: 'serverware-protocol-consumer', private: true, version: VERSION,
+    const manifest = JSON.stringify({name: 'catchplate-protocol-consumer', private: true, version: VERSION,
       dependencies: {[TOP]: VERSION}}) + '\n';
     const project = path.join(temporary, 'project'); fs.mkdirSync(project, {mode: 0o700}); write(path.join(project, 'package.json'), manifest);
     phases.push(await phase('install', project, config));
     const lock = fs.readFileSync(path.join(project, 'package-lock.json'));
-    write(path.join(project, 'node_modules/.serverware-ci-sentinel'), 'owned ci removal marker\n');
+    write(path.join(project, 'node_modules/.catchplate-ci-sentinel'), 'owned ci removal marker\n');
     phases.push(await phase('ci', project, config));
-    assert(!fs.existsSync(path.join(project, 'node_modules/.serverware-ci-sentinel')));
+    assert(!fs.existsSync(path.join(project, 'node_modules/.catchplate-ci-sentinel')));
     assert.deepEqual(fs.readFileSync(path.join(project, 'package-lock.json')), lock);
     assert.equal(fs.readFileSync(path.join(project, 'package.json'), 'utf8'), manifest);
     const negative = path.join(temporary, 'negative'); fs.mkdirSync(negative, {mode: 0o700}); write(path.join(negative, 'package.json'), manifest);
     phases.push(await phase('audit-negative', negative, config)); assert(!timedOut && invalid === 0);
-    process.stdout.write(JSON.stringify({schema: 'serverware.stockNpmInstallProtocolProof/v1', ok: true,
+    process.stdout.write(JSON.stringify({schema: 'catchplate.stockNpmInstallProtocolProof/v1', ok: true,
       syntheticOnly: true, network: 'loopback-only', actualProxyAcceptance: false, publicationAcceptance: false,
       nodeVersion: process.version, sourcePins, lockSha256BeforeCi: hash(lock),
       lockSha256AfterCi: hash(fs.readFileSync(path.join(project, 'package-lock.json'))),
       ciRemovedOldNodeModules: true, packages: packages.map(pkg => ({name: pkg.name, version: VERSION,
         tarballSha256: hash(pkg.tarball), integrity: pkg.integrity, manifestSha256: hash(pkg.manifestBytes), codeSha256: hash(pkg.code)})), phases}) + '\n');
   } catch (_) {
-    process.stderr.write(JSON.stringify({schema: 'serverware.stockNpmInstallProtocolProof/v1', ok: false,
+    process.stderr.write(JSON.stringify({schema: 'catchplate.stockNpmInstallProtocolProof/v1', ok: false,
       syntheticOnly: true, phase: active, error: 'bounded stock npm protocol proof failed',
       completedPhases: phases.length, arrivals: wire.length, refused: invalid}) + '\n'); process.exitCode = 1;
   } finally {

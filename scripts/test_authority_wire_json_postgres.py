@@ -23,9 +23,9 @@ from psycopg import sql
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.native_postgres_results import run_native_fixture
+from catchplate.native_postgres_results import run_native_fixture
 
-from serverware.authority_store.wire_json_sql import (
+from catchplate.authority_store.wire_json_sql import (
     WIRE_JSON_FUNCTION_NAMES,
     WIRE_JSON_MAX_BYTES,
     WIRE_JSON_MAX_DEPTH,
@@ -60,7 +60,7 @@ class AuthorityWireJsonPostgresTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.schema = "serverware_wire_json_" + uuid.uuid4().hex
+        cls.schema = "catchplate_wire_json_" + uuid.uuid4().hex
         cls.namespace = '"' + cls.schema + '"'
         with cls.connection() as connection:
             if connection.execute("SELECT inet_server_addr(), getdatabaseencoding()").fetchone() != (None, "UTF8"):
@@ -80,7 +80,7 @@ class AuthorityWireJsonPostgresTests(unittest.TestCase):
     def render_raw(self, raw: str) -> str:
         with self.connection() as connection:
             return connection.execute(
-                f"SELECT {self.namespace}.serverware_policy_authority_wire_json(%s::jsonb)", (raw,)
+                f"SELECT {self.namespace}.catchplate_policy_authority_wire_json(%s::jsonb)", (raw,)
             ).fetchone()[0]
 
     def assert_oracle(self, value: object) -> None:
@@ -92,7 +92,7 @@ class AuthorityWireJsonPostgresTests(unittest.TestCase):
              maximum_bytes: int, render: bool) -> tuple:
         with self.connection() as connection:
             return connection.execute(
-                f"SELECT * FROM {self.namespace}.serverware_policy_authority_wire_walk(%s::jsonb,%s,%s,%s,%s)",
+                f"SELECT * FROM {self.namespace}.catchplate_policy_authority_wire_walk(%s::jsonb,%s,%s,%s,%s)",
                 (oracle(value), depth, maximum_nodes, maximum_bytes, render),
             ).fetchone()
 
@@ -161,12 +161,12 @@ class AuthorityWireJsonPostgresTests(unittest.TestCase):
         with self.connection() as connection:
             with self.assertRaises(psycopg.DataError):
                 connection.execute(
-                    f"SELECT {self.namespace}.serverware_policy_authority_wire_json(convert_from(%s,'UTF8')::jsonb)",
+                    f"SELECT {self.namespace}.catchplate_policy_authority_wire_json(convert_from(%s,'UTF8')::jsonb)",
                     (b'"\xff"',),
                 )
             # STRICT preserves SQL absence instead of relabeling it JSON null.
             self.assertIsNone(connection.execute(
-                f"SELECT {self.namespace}.serverware_policy_authority_wire_json(NULL::jsonb)"
+                f"SELECT {self.namespace}.catchplate_policy_authority_wire_json(NULL::jsonb)"
             ).fetchone()[0])
         self.assertEqual(self.render_raw("null"), "null")
 
@@ -176,13 +176,13 @@ class AuthorityWireJsonPostgresTests(unittest.TestCase):
             for render in (False, True):
                 with self.connection() as connection:
                     actual = connection.execute(
-                        f"SELECT * FROM {self.namespace}.serverware_policy_authority_wire_string(%s,%s,%s)",
+                        f"SELECT * FROM {self.namespace}.catchplate_policy_authority_wire_string(%s,%s,%s)",
                         (value, render, len(expected)),
                     ).fetchone()
                     self.assertEqual(actual, (expected if render else None, len(expected)))
                     with self.assertRaisesRegex(psycopg.errors.RaiseException, "byte bound exceeded"):
                         connection.execute(
-                            f"SELECT * FROM {self.namespace}.serverware_policy_authority_wire_string(%s,%s,%s)",
+                            f"SELECT * FROM {self.namespace}.catchplate_policy_authority_wire_string(%s,%s,%s)",
                             (value, render, len(expected) - 1),
                         )
 
@@ -225,8 +225,8 @@ class AuthorityWireJsonPostgresTests(unittest.TestCase):
         row = {**key, "label": "🙂\x7f", "sign_count": 2}
         with self.connection() as connection:
             tree, wire = connection.execute(
-                f"SELECT {self.namespace}.serverware_policy_authority_canonical_json(%s::jsonb), "
-                f"{self.namespace}.serverware_policy_authority_wire_json(%s::jsonb)",
+                f"SELECT {self.namespace}.catchplate_policy_authority_canonical_json(%s::jsonb), "
+                f"{self.namespace}.catchplate_policy_authority_wire_json(%s::jsonb)",
                 (oracle(row), oracle(row)),
             ).fetchone()
             self.assertEqual(tree, json.dumps(row, ensure_ascii=False, allow_nan=False,
@@ -234,13 +234,13 @@ class AuthorityWireJsonPostgresTests(unittest.TestCase):
             self.assertEqual(wire, oracle(row))
             self.assertNotEqual(tree, wire)
             actual = connection.execute(
-                f"SELECT {self.namespace}.serverware_policy_authority_domain_digest("
-                "'serverware.policyAuthorityAuthorizationRow/v1','webauthn_credentials',"
-                f"{self.namespace}.serverware_policy_authority_wire_json(%s::jsonb),'present',"
-                f"{self.namespace}.serverware_policy_authority_wire_json(%s::jsonb))",
+                f"SELECT {self.namespace}.catchplate_policy_authority_domain_digest("
+                "'catchplate.policyAuthorityAuthorizationRow/v1','webauthn_credentials',"
+                f"{self.namespace}.catchplate_policy_authority_wire_json(%s::jsonb),'present',"
+                f"{self.namespace}.catchplate_policy_authority_wire_json(%s::jsonb))",
                 (oracle(key), oracle(row)),
             ).fetchone()[0]
-        self.assertEqual(actual, digest("serverware.policyAuthorityAuthorizationRow/v1", b"webauthn_credentials",
+        self.assertEqual(actual, digest("catchplate.policyAuthorityAuthorizationRow/v1", b"webauthn_credentials",
                                         oracle(key).encode("ascii"), b"present", oracle(row).encode("ascii")))
 
     def test_installed_helper_inventory_modes_and_renderer_namespace_are_closed(self) -> None:
@@ -261,7 +261,7 @@ class AuthorityWireJsonPostgresTests(unittest.TestCase):
                 wire_json_function_sql(namespace)
         rendered = wire_json_function_sql(self.namespace)
         self.assertNotIn("GRANT", rendered)
-        self.assertNotIn("serverware_policy_authority_canonical_json(", rendered)
+        self.assertNotIn("catchplate_policy_authority_canonical_json(", rendered)
 
 
 if __name__ == "__main__":

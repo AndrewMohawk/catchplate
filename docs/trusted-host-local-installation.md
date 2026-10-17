@@ -48,9 +48,9 @@ Freezing the staging root before renaming would prevent that operation.
 ## Prepared-static local installation
 
 The source now implements an explicit second installation mode. Configuration
-`serverware.authorityTrustedHostLocalInstallation/v2` selects local plan
-`serverware.authorityTrustedHostLocalProvisioningPlan/v3` and local receipt
-`serverware.authorityTrustedHostLocalProvisioningReceipt/v2`. The original
+`catchplate.authorityTrustedHostLocalInstallation/v2` selects local plan
+`catchplate.authorityTrustedHostLocalProvisioningPlan/v3` and local receipt
+`catchplate.authorityTrustedHostLocalProvisioningReceipt/v2`. The original
 configuration v1, local plan v2 and local receipt v1 retain their full-copy
 behavior and wire formats. Native/production provisioning is not admitted by
 the new local mode; command-line descriptors and the installation result shape
@@ -134,7 +134,7 @@ No shared filesystem feature, mount option or immutable flag was changed.
 The subsequent [isolated KVM guest](trusted-host-local-storage.md) successfully
 provides a task-dedicated fs-verity/immutable-capable filesystem without host-root
 access. Its read-only second boot also verifies persistence. That storage probe
-did not install a Serverware authority. Installation needs separate guest
+did not install a Catchplate authority. Installation needs separate guest
 integration and scoped installer identities. Do not enable
 features on a shared homelab filesystem or grant a general privileged container
 just to pass commissioning. Filesystem support alone is not signed-package

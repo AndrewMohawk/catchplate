@@ -11,21 +11,21 @@ use super::super::production_dispatch::{ClosedProductionDispatchRequestV4 as Dis
     ClosedProductionDispatchResponseV4,SignedProductionServiceTransitionV4 as Transition};
 use crate::policy_shadow::PolicyShadowCustodySignerRole as Signer;
 #[path="active_effect_client.rs"] mod effect;
-pub(super) const RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v7";
-pub(super) const COMPLETION_RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v8";
-pub(super) const EFFECTS_RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v9";
-pub(super) const INITIAL_HISTORY_RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v10";
-pub(super) const HELPER_INITIAL_RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v11";
+pub(super) const RUNTIME:&str="catchplate.policyCustodyProductionRpcRuntime/v7";
+pub(super) const COMPLETION_RUNTIME:&str="catchplate.policyCustodyProductionRpcRuntime/v8";
+pub(super) const EFFECTS_RUNTIME:&str="catchplate.policyCustodyProductionRpcRuntime/v9";
+pub(super) const INITIAL_HISTORY_RUNTIME:&str="catchplate.policyCustodyProductionRpcRuntime/v10";
+pub(super) const HELPER_INITIAL_RUNTIME:&str="catchplate.policyCustodyProductionRpcRuntime/v11";
 pub(super) const ORIGIN_FD:&str="generation-origin";
 #[derive(Debug,Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(super) struct Selection {api_version:String,head_grant_original:String,current_grant_original:String,origin_fd_name:String,
     #[serde(default,skip_serializing_if="Option::is_none")] cleanup_grant_original:Option<String>}
 impl Selection {
-    pub(super) fn completion_selected(&self)->bool{matches!(self.api_version.as_str(),"serverware.nativeSpoolServices/v2"|"serverware.nativeSpoolServices/v3")}
-    pub(super) fn effects_selected(&self)->bool{self.api_version=="serverware.nativeSpoolServices/v3"}
+    pub(super) fn completion_selected(&self)->bool{matches!(self.api_version.as_str(),"catchplate.nativeSpoolServices/v2"|"catchplate.nativeSpoolServices/v3")}
+    pub(super) fn effects_selected(&self)->bool{self.api_version=="catchplate.nativeSpoolServices/v3"}
     pub(super) fn validate(&self)->Result<(),ServiceError>{
-        require(matches!(self.api_version.as_str(),"serverware.nativeSpoolServices/v1"|"serverware.nativeSpoolServices/v2"|"serverware.nativeSpoolServices/v3")
+        require(matches!(self.api_version.as_str(),"catchplate.nativeSpoolServices/v1"|"catchplate.nativeSpoolServices/v2"|"catchplate.nativeSpoolServices/v3")
             && self.effects_selected()==self.cleanup_grant_original.is_some()
             && self.cleanup_grant_original.as_ref().is_none_or(|v|v.is_ascii() && !v.is_empty() && v.len()<=131072)
             && self.origin_fd_name==ORIGIN_FD

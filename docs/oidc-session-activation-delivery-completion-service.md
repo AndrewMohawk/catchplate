@@ -52,7 +52,7 @@ verification.
 ## One root-selected exchange, one bounded lifetime
 
 The listener is
-`/run/serverware/oidc-session-activation-delivery-execution/completion.sock`.
+`/run/catchplate/oidc-session-activation-delivery-execution/completion.sock`.
 Launch v1 retains owner/group 65497:65497, mode 0660 and only peer
 65497:65497: a separately root-admitted, same-purpose private receiving process
 can use the actual custody-aware response client. Distinct root-signed launch

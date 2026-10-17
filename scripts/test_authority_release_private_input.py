@@ -32,17 +32,17 @@ def no_external_effects(event, _arguments):
 
 
 if __name__ == "__main__":
-    os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
-    os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
+    os.environ["CATCHPLATE_PROCESS_MODE"] = "metadata-bootstrap"
+    os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
     sys.addaudithook(no_external_effects)
 
-from serverware import authority_contract as contract
-from serverware import authority_planner as planner
-from serverware import authority_release_private_input as privacy
-from serverware import authority_request_commitment as commitment
-from serverware import authority_service as service
-from serverware import db
-from serverware.authority_store import authority_dispatch, executor_v9
+from catchplate import authority_contract as contract
+from catchplate import authority_planner as planner
+from catchplate import authority_release_private_input as privacy
+from catchplate import authority_request_commitment as commitment
+from catchplate import authority_service as service
+from catchplate import db
+from catchplate.authority_store import authority_dispatch, executor_v9
 
 
 OPERATIONS = ("release.reserve", "release.v1.reserve")
@@ -79,7 +79,7 @@ def values(operation, private=_ABSENT, *, require_jit=False):
 def request(operation, arguments):
     typed = service._synthesize_business_arguments(operation, arguments)
     digest = service._controlled_writer_request_digest(operation, arguments)
-    return {"schema": "serverware.policyAuthorityV9Request/v1", "operation": operation,
+    return {"schema": "catchplate.policyAuthorityV9Request/v1", "operation": operation,
         "handler": contract.operation_spec(operation)["handler"],
         "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST,
         "arguments": typed, "requestDigest": digest,
@@ -180,7 +180,7 @@ class ReleasePrivateInputTests(unittest.TestCase):
                         with self.assertRaises(BoundaryReached):
                             handler(**original)
                         dispatch.assert_called_once_with(operation, {
-                            "schema": "serverware.policyAuthorityControlledWriterInput/v1",
+                            "schema": "catchplate.policyAuthorityControlledWriterInput/v1",
                             "handler": contract.operation_spec(operation)["handler"],
                             "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST, "arguments": expected})
                         connect.assert_not_called()
@@ -195,7 +195,7 @@ class ReleasePrivateInputTests(unittest.TestCase):
                     for wrapped in (False, True):
                         authorization = {"fixture": "original explicit authorization, not admitted"}
                         envelope = ({"input": arguments, "webauthnAuthorization": authorization} if wrapped else {
-                            "schema": "serverware.policyAuthorityControlledWriterInput/v1", "handler": handler,
+                            "schema": "catchplate.policyAuthorityControlledWriterInput/v1", "handler": handler,
                             "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST, "arguments": arguments})
                         before = canonical(envelope)
                         call = lambda: service._extract_v9_runtime_input(operation, handler, envelope)

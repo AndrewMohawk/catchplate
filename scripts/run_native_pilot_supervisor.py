@@ -79,7 +79,7 @@ class _SelfRuntime:
     """Retain the independently pinned running package before reading keys."""
 
     def __init__(self):
-        from serverware.native_pilot_coordinator_process import _Runtime
+        from catchplate.native_pilot_coordinator_process import _Runtime
         self._runtime = _Runtime()
         self._fd = self._identity = self._raw = self._source = None
         self._pid = os.getpid()
@@ -88,7 +88,7 @@ class _SelfRuntime:
     def admit(self, fd, digest):
         from scripts import native_pilot_runtime_artifacts as artifact
         from scripts.authority import native_pilot_authority_io as io
-        from serverware import native_shadow_nitro_profile as p
+        from catchplate import native_shadow_nitro_profile as p
         _require(self._fd is None and not self._closed and self._pid == os.getpid())
         self._identity = io._input(fd, artifact.MAX_MANIFEST_BYTES)
         self._fd = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 3)
@@ -103,7 +103,7 @@ class _SelfRuntime:
     def require_inventory_sources(self, selected):
         from scripts import native_pilot_runtime_artifacts as artifact
         from scripts.authority import native_pilot_authority_io as io
-        from serverware import native_shadow_nitro_profile as p
+        from catchplate import native_shadow_nitro_profile as p
         self.check()
         for role in ("conductor", "authority"):
             raw = io.read_public(selected[role + "_inventory_fd"], artifact.MAX_MANIFEST_BYTES)
@@ -134,7 +134,7 @@ def _stop(_signum, _frame):
 
 
 def _result(status, phase, completed, interactive_result=None):
-    value = {"apiVersion": "serverware.nativePilotSupervisorResult/v1", "status": status,
+    value = {"apiVersion": "catchplate.nativePilotSupervisorResult/v1", "status": status,
         "phase": phase, "jobsCompleted": completed, "pilotAcceptanceVerified": False,
         "productionReleaseEligible": False}
     if status == "stopped-cleanup-complete" and interactive_result is not None:
@@ -158,22 +158,22 @@ def main():
         _require(sys.flags.isolated == 1 and sys.flags.dont_write_bytecode == 1
             and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0))
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from serverware import native_shadow_nitro_profile as p
-        from serverware.native_pilot_measured_configuration import MeasuredConfigurationRecipe
-        from serverware.native_pilot_phase_execution import KEY_PURPOSES
-        from serverware.native_pilot_supervisor import CommissioningSupervisor, SUPPORTED_JOBS, _LATE_JOBS, require_complete_coverage
-        from serverware.native_pilot_supervisor_approval_channel import ApprovalChannel
-        from serverware.native_pilot_supervisor_policy import SupervisorPolicy
-        from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess
-        from serverware.native_pilot_coordinator_process import ProcessPreparationError
+        from catchplate import native_shadow_nitro_profile as p
+        from catchplate.native_pilot_measured_configuration import MeasuredConfigurationRecipe
+        from catchplate.native_pilot_phase_execution import KEY_PURPOSES
+        from catchplate.native_pilot_supervisor import CommissioningSupervisor, SUPPORTED_JOBS, _LATE_JOBS, require_complete_coverage
+        from catchplate.native_pilot_supervisor_approval_channel import ApprovalChannel
+        from catchplate.native_pilot_supervisor_policy import SupervisorPolicy
+        from catchplate.native_pilot_supervisor_process import AuthorityCoordinatorProcess
+        from catchplate.native_pilot_coordinator_process import ProcessPreparationError
 
         adopted = len(sys.argv) > 1 and sys.argv[1] == "--run-adopted-native-pilot"
         if adopted:
-            from serverware.native_pilot_adopted_phase_profile import KEY_PURPOSES
-            from serverware.native_pilot_adopted_supervisor import (
+            from catchplate.native_pilot_adopted_phase_profile import KEY_PURPOSES
+            from catchplate.native_pilot_adopted_supervisor import (
                 AdoptedCommissioningSupervisor as CommissioningSupervisor, SUPPORTED_JOBS,
                 SupervisorError as AdoptedSupervisorError, require_complete_coverage)
-            from serverware.native_pilot_adopted_supervisor_policy import (
+            from catchplate.native_pilot_adopted_supervisor_policy import (
                 AdoptedSupervisorPolicy as SupervisorPolicy, PolicyError as AdoptedPolicyError)
         selected = _arguments(sys.argv[1:], KEY_PURPOSES, adopted=adopted)
         runtime = _SelfRuntime()  # Keep partial descriptor admission reachable.

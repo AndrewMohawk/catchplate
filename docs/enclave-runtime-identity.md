@@ -45,7 +45,7 @@ host/SPIFFE authorization, supplied validity times or a CRL/revocation policy.
 The client-root commitment preserves caller order and original DER bytes:
 
 ```text
-SHA256("serverware/mutual-tls-client-trust/v1\0"
+SHA256("catchplate/mutual-tls-client-trust/v1\0"
        || root_count:u32BE || (DER_length:u64BE || DER)* )
 ```
 
@@ -67,7 +67,7 @@ device before generating the CA and admits only a positive CA interval of at
 most 24 hours. It does not import a private key or manufacture a host fallback.
 
 The native NSM `user_data` is a fixed binary original: the NUL-terminated
-domain `serverware/enclave-runtime-key-binding/v1`, one role byte, then seven
+domain `catchplate/enclave-runtime-key-binding/v1`, one role byte, then seven
 32-byte SHA-256-sized fields in this order:
 
 1. Supplied release-record commitment.
@@ -84,7 +84,7 @@ zero for role `1`. Role `3`, produced by `quote_mutual_tls_ingress`, quotes the
 actual fresh outer leaf SPKI and uses this seventh field:
 
 ```text
-SHA256("serverware/native-tls13-mandatory-client-auth/v1\0"
+SHA256("catchplate/native-tls13-mandatory-client-auth/v1\0"
        || SHA256(actual_leaf_DER) || client_trust_sha256)
 ```
 
@@ -132,7 +132,7 @@ only this exact three-field `recipientAttestation` evidence object:
 
 | Field | Original value |
 | --- | --- |
-| `apiVersion` | `serverware.nativeCredentialRecipientEvidence/v1` |
+| `apiVersion` | `catchplate.nativeCredentialRecipientEvidence/v1` |
 | `attestationDocumentB64` | Original NSM document, URL-safe base64 without padding |
 | `recipientPublicKey` | Actual raw 32-byte X25519 public key, in the same encoding |
 
@@ -179,7 +179,7 @@ configuration commitments from the unverified quote, nor accept an override
 clock or substitute defaults for missing pinned configuration.
 
 The expectations file is at most 16 KiB with schema
-`serverware.nativeCredentialRecipientExpectations/v1`. Its closed fields pin
+`catchplate.nativeCredentialRecipientExpectations/v1`. Its closed fields pin
 release record, policy, configuration, CA certificate/SPKI and binary digests;
 the complete expected locked-PCR inventory, EIF equal to PCR `0`, module ID,
 maximum age of 1..300 seconds and future skew of 0..30 seconds. The inventory
@@ -187,7 +187,7 @@ has 3..32 entries at indices `0`..`31`, includes nonzero PCRs `0`/`1`/`2`, and
 must exactly match the document's keys and values. Additional reserved zero
 values are permitted only when explicitly pinned; no reported PCR is ignored.
 The separate trust file is at most 1 MiB with schema
-`serverware.nativeCredentialRecipientTrustRoots/v1`. It retains the fixed
+`catchplate.nativeCredentialRecipientTrustRoots/v1`. It retains the fixed
 root-certificate, CRL and certificate-profile fields, but this native profile
 requires an **empty** `awsNitroCrlsDerBase64url` list and certificate profile
 `aws-nitro-attestation-pki-native-v1`. Original file digests are checked before
@@ -266,7 +266,7 @@ In the [gate](../data-plane/decision-gate-rs/src/main.rs),
 `materialize_native_proxy_ingress` derives the configuration and evidence roots
 from the same quoted owner. Its distinct `native-mtls-v1` metadata is not an
 accepted environment mode or external-verifier profile. The chain commitment
-uses SHA-256 over `serverware/native-tls-server-chain/v1` plus NUL, a `u32BE`
+uses SHA-256 over `catchplate/native-tls-server-chain/v1` plus NUL, a `u32BE`
 count and each `u64BE` length plus original DER, in chain order. Leaf/SPKI hashes
 remain raw SHA-256; the client-root commitment is the framed digest above.
 `serve_native_vsock_proxy` consumes the prepared `NativeTlsGateV1` through the

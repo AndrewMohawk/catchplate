@@ -26,7 +26,7 @@ successful observation or signing callback is not accepted instead.
 
 ## First completion
 
-[`authority_oidc_session_activation_completion_recovery`](../serverware/authority_oidc_session_activation_completion_recovery.py)
+[`authority_oidc_session_activation_completion_recovery`](../catchplate/authority_oidc_session_activation_completion_recovery.py)
 holds the actual completion delivery owner's recovery lock across lookup,
 protected packet retrieval, production, retention and exchange. Before I/O it
 reauthenticates historical custody and narrows the supplied processing window
@@ -34,7 +34,7 @@ to that role's fresh launch ceiling without changing its opening samples.
 Enrolled completion policy can only narrow the same window further.
 
 When there is no retained completion,
-[`authority_oidc_session_activation_completion`](../serverware/authority_oidc_session_activation_completion.py)
+[`authority_oidc_session_activation_completion`](../catchplate/authority_oidc_session_activation_completion.py)
 authenticates the original packet identity and matches its enrollments to the
 independent originals. It checks the actual completion private/public-key pair
 against the root-authenticated state enrollment. The genuine

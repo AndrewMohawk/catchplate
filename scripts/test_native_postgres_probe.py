@@ -15,8 +15,8 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import native_postgres_probe as subject
-from serverware.native_postgres_profile import NativePostgresProfileError
+from catchplate import native_postgres_probe as subject
+from catchplate.native_postgres_profile import NativePostgresProfileError
 
 
 class OperationalError(Exception):
@@ -25,18 +25,18 @@ class OperationalError(Exception):
 
 def good_values() -> list[bytes | None]:
     settings = {
-        "listen_addresses": "", "unix_socket_directories": "/run/serverware-native-postgres",
+        "listen_addresses": "", "unix_socket_directories": "/run/catchplate-native-postgres",
         "unix_socket_permissions": "0700", "port": "5432", "ssl": "off",
         "fsync": "on", "full_page_writes": "on", "synchronous_commit": "on",
         "log_destination": "stderr", "logging_collector": "off", "max_connections": "32",
         "shared_buffers": "8192", "work_mem": "4096", "maintenance_work_mem": "32768",
         "max_wal_size": "256", "min_wal_size": "80", "temp_file_limit": "131072",
         "jit": "off", "restart_after_crash": "off",
-        "data_directory": "/var/lib/serverware-runner/native-postgres/pgdata",
+        "data_directory": "/var/lib/catchplate-runner/native-postgres/pgdata",
         "data_checksums": "on", "block_size": "8192",
     }
-    return [b"160006", b"UTF8", b"UTF8", b"postgres", b"serverware_fixture_admin",
-            b"serverware_fixture_admin", b"t", None, b"f", b"7423456789012345678",
+    return [b"160006", b"UTF8", b"UTF8", b"postgres", b"catchplate_fixture_admin",
+            b"catchplate_fixture_admin", b"t", None, b"f", b"7423456789012345678",
             json.dumps(settings).encode("ascii")]
 
 
@@ -199,7 +199,7 @@ class NativePostgresProbeTests(unittest.TestCase):
             self.assertEqual(result, subject.NativePostgresProbe(160006, "7423456789012345678"))
             self.assertEqual(harness.queries, [subject.READINESS_SQL.encode("ascii")])
             self.assertEqual(harness.connections, [subject.CONNECTION_INFO])
-            self.assertIn(b"host=/run/serverware-native-postgres port=5432", harness.connections[0])
+            self.assertIn(b"host=/run/catchplate-native-postgres port=5432", harness.connections[0])
             self.assertIn(b"password='' passfile=/dev/null", harness.connections[0])
             self.assertEqual(harness.events.count("result"), 2)
             self.assertEqual(harness.events[-1], "finish")

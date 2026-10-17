@@ -29,7 +29,7 @@ def _stop(_signum, _frame):
 
 
 def _result(status, phase, interactive_result=None, completion=None):
-    value = {"apiVersion": "serverware.nativePilotAuthorityCoordinatorResult/v1", "status": status,
+    value = {"apiVersion": "catchplate.nativePilotAuthorityCoordinatorResult/v1", "status": status,
         "phase": phase, "pilotAcceptanceVerified": False, "productionReleaseEligible": False}
     if status == "stopped-cleanup-complete" and interactive_result is not None:
         value["interactiveResult"] = interactive_result
@@ -37,7 +37,7 @@ def _result(status, phase, interactive_result=None, completion=None):
         if status != "stopped-cleanup-complete" or phase != "shutdown":
             return False
         value.update(completion)
-        value["apiVersion"] = "serverware.nativePilotAuthorityCoordinatorResult/v2"
+        value["apiVersion"] = "catchplate.nativePilotAuthorityCoordinatorResult/v2"
     raw = json.dumps(value,
         sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
     try:
@@ -69,7 +69,7 @@ def main():
             _result("not-started", "open")
             return 1
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from serverware.native_pilot_genesis_authority import main as cold_main
+        from catchplate.native_pilot_genesis_authority import main as cold_main
         return cold_main(sys.argv[1:])
     owner = executor = channel = None
     phase, failed, adopted = "open", False, False
@@ -93,16 +93,16 @@ def main():
         parser.add_argument("--authority-key", required=True, action="append")
         args = parser.parse_args()
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from serverware import native_shadow_nitro_profile as p
-        from serverware.native_pilot_authority_channel import ApprovalChannel
-        from serverware.native_pilot_coordinator_process import ConductorProcess, ProcessPreparationError
-        from serverware.native_pilot_operator_channel import STAGES
-        from serverware.native_pilot_phase_execution import KEY_PURPOSES, PhaseExecution
+        from catchplate import native_shadow_nitro_profile as p
+        from catchplate.native_pilot_authority_channel import ApprovalChannel
+        from catchplate.native_pilot_coordinator_process import ConductorProcess, ProcessPreparationError
+        from catchplate.native_pilot_operator_channel import STAGES
+        from catchplate.native_pilot_phase_execution import KEY_PURPOSES, PhaseExecution
 
         adopted = args.run_adopted_native_pilot
         if adopted:
-            from serverware.native_pilot_adopted_phase_profile import KEY_PURPOSES
-            from serverware.native_pilot_adopted_phase_execution import AdoptedPhaseExecution, require_complete_coverage
+            from catchplate.native_pilot_adopted_phase_profile import KEY_PURPOSES
+            from catchplate.native_pilot_adopted_phase_execution import AdoptedPhaseExecution, require_complete_coverage
             p.require(args.intake_configuration_fd is not None and args.intake_configuration_sha256 is not None
                 and args.intake_configuration_fd != args.runtime_inventory_fd)
             p.digest(args.intake_configuration_sha256)

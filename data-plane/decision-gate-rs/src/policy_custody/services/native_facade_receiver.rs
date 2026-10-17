@@ -54,7 +54,7 @@ pub(super) fn connect(owner:&Arc<Owner>)->Result<Retained,String>{
         let mut channel=owner.channel.try_lock().map_err(refused)?;let startup=channel.startup;
         let raw=channel.exchange("facade-description",startup)?;channel.failed=true;
         let description:wire::FacadeDescription=exact(&raw)?;
-        require(description.api_version=="serverware.nativeShadowDriverFacadeDescription/v1"
+        require(description.api_version=="catchplate.nativeShadowDriverFacadeDescription/v1"
             && description.process_id>1 && description.start_time_ticks>0 && description.uid>0 && description.gid>0
             && description.uid!=native_serving_privileges::UID && description.listener_inode>0)?;
         channel.failed=false;channel.live(startup)?;(description,startup)
@@ -80,13 +80,13 @@ pub(super) fn connect(owner:&Arc<Owner>)->Result<Retained,String>{
         let mut channel=owner.channel.try_lock().map_err(refused)?;
         let (raw,mut rights)=channel.exchange_rights("facade-originals",startup,None)?;channel.failed=true;
         require(rights.len()==1)?;let notice:wire::AdmissionNotice=exact(&raw)?;
-        require(notice.api_version=="serverware.nativeShadowDriverPublicAdmissionNotice/v1"
+        require(notice.api_version=="catchplate.nativeShadowDriverPublicAdmissionNotice/v1"
             && notice.observation_sha256==channel.configuration.bootstrap_observation_sha256
             && notice.scope_sha256==description.scope_sha256)?;
         let file=std::fs::File::from(rights.pop().ok_or_else(||refused(()))?);
         let bytes=wire::read_public(&file,&notice,description.uid,description.gid).map_err(refused)?;
         let originals:wire::PublicAdmission=exact(&bytes)?;
-        require(originals.api_version=="serverware.nativeShadowDriverPublicAdmission/v1"
+        require(originals.api_version=="catchplate.nativeShadowDriverPublicAdmission/v1"
             && Sha256Digest::compute(originals.bootstrap_observation_original.as_bytes())==notice.observation_sha256
             && Sha256Digest::compute(originals.phase_scope_original.as_bytes())==notice.scope_sha256)?;
         channel.failed=false;channel.live(startup)?;(file,notice)

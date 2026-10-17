@@ -114,7 +114,7 @@ class OAuthProviderSimulator:
         *,
         host: str = "127.0.0.1",
         port: int = 0,
-        redirect_base_url: str = "https://serverware.test",
+        redirect_base_url: str = "https://catchplate.test",
         authorization_token_ttl_seconds: int = 1,
         refresh_token_ttl_seconds: int = 300,
     ) -> None:
@@ -379,7 +379,7 @@ class OAuthProviderSimulator:
         now = dt.datetime.now(dt.timezone.utc)
         ca_key = ec.generate_private_key(ec.SECP256R1())
         ca_name = x509.Name(
-            [x509.NameAttribute(NameOID.COMMON_NAME, "Serverware OAuth Test CA")]
+            [x509.NameAttribute(NameOID.COMMON_NAME, "Catchplate OAuth Test CA")]
         )
         ca_cert = (
             x509.CertificateBuilder()
@@ -418,9 +418,9 @@ class OAuthProviderSimulator:
         )
         server_key = ec.generate_private_key(ec.SECP256R1())
         server_name = x509.Name(
-            [x509.NameAttribute(NameOID.COMMON_NAME, "serverware.test")]
+            [x509.NameAttribute(NameOID.COMMON_NAME, "catchplate.test")]
         )
-        dns_names = {"localhost", "serverware.test"}
+        dns_names = {"localhost", "catchplate.test"}
         ip_addresses = {ipaddress.ip_address("127.0.0.1")}
         for hostname in (self.host, self.redirect_hostname):
             try:
@@ -1431,7 +1431,7 @@ def main() -> None:
     )
     parser.add_argument("--work-dir", type=Path)
     parser.add_argument("--port", type=int, default=0)
-    parser.add_argument("--redirect-base-url", default="https://serverware.test")
+    parser.add_argument("--redirect-base-url", default="https://catchplate.test")
     args = parser.parse_args()
     temporary = tempfile.TemporaryDirectory() if args.work_dir is None else None
     work_dir = args.work_dir or Path(temporary.name)

@@ -7,14 +7,19 @@ repository or a local checkout. Its relative page links do not depend on the
 separate GitHub Wiki, which has not been published. Wiki availability must not
 block reading or using the guide.
 
-The [GitHub Wiki](https://github.com/AndrewMohawk/serverware/wiki) remains an
+The [GitHub Wiki](https://github.com/AndrewMohawk/catchplate/wiki) remains an
 optional publication target for the reviewed `docs/wiki/` source. Publishing the
 application repository does **not** publish its Wiki:
-GitHub stores Wiki pages in a separate `serverware.wiki.git` repository. Its
+GitHub stores Wiki pages in a separate `catchplate.wiki.git` repository. Its
 default branch supplies the live pages; the initial page must be created on
 GitHub before cloning. See [GitHub's publishing instructions](https://docs.github.com/en/communities/documenting-your-project-with-wikis/adding-or-editing-wiki-pages#adding-or-editing-wiki-pages-locally).
 
 ## Resolve the recorded publication blocker
+
+The checks below were made against the pre-rename Serverware Wiki. The repository
+is now Catchplate; its rename does not prove Wiki initialization or publication.
+Use the current remote above only after resolving access, and retain the old
+failures as historical observations. See [rename status](catchplate-rename.md).
 
 The [publication handoff](project-completion.md#current-checkpoint--october-13-access-continuation-and-operator-guide)
 records an enabled Wiki whose authenticated Git repository returned
@@ -71,7 +76,7 @@ wiki_git -C "$wiki_source" fetch origin main
 test "$wiki_source_commit" = "$(git -C "$wiki_source" rev-parse origin/main)"
 wiki_publish_dir=$(mktemp -d /srv/catchplate-fast/tmp/serverware-wiki-publish.XXXXXXXX)
 wiki_checkout="$wiki_publish_dir/wiki"
-wiki_git clone https://github.com/AndrewMohawk/serverware.wiki.git "$wiki_checkout"
+wiki_git clone https://github.com/AndrewMohawk/catchplate.wiki.git "$wiki_checkout"
 wiki_branch=$(git -C "$wiki_checkout" branch --show-current)
 wiki_base_commit=$(git -C "$wiki_checkout" rev-parse HEAD)
 test -n "$wiki_branch"
@@ -124,7 +129,7 @@ const rendered = pages.map(page => {
     /\]\(([A-Za-z0-9_-]+\.md)(#[^\s)]*)?\)/g,
     (_match, target, fragment = '') => {
       if (!known.has(target)) throw new Error('Unknown guide page: ' + target);
-      return '](https://github.com/AndrewMohawk/serverware/wiki/' +
+      return '](https://github.com/AndrewMohawk/catchplate/wiki/' +
         target.slice(0, -3) + fragment + ')';
     }
   );

@@ -27,14 +27,14 @@ from starlette.responses import HTMLResponse, JSONResponse
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = tempfile.TemporaryDirectory(prefix="native-review-portal-test-")
-os.environ["SERVERWARE_DATA_DIR"] = DATA.name
-os.environ["SERVERWARE_PROCESS_MODE"] = "serverware-control-plane"
-os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
+os.environ["CATCHPLATE_DATA_DIR"] = DATA.name
+os.environ["CATCHPLATE_PROCESS_MODE"] = "catchplate-control-plane"
+os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
 
-from serverware import auth, db, webauthn
-from serverware import control_plane_native_jit_review as http
-from serverware import authority_native_jit_review_open_contract as wire
-from serverware import portal_native_jit_review as portal
+from catchplate import auth, db, webauthn
+from catchplate import control_plane_native_jit_review as http
+from catchplate import authority_native_jit_review_open_contract as wire
+from catchplate import portal_native_jit_review as portal
 
 PORTAL = "https://portal.example.test"
 NATIVE = "https://native.example.test"
@@ -77,7 +77,7 @@ class PublicOriginals:
         common = {name: digest(name) for name in ("sourceContractDigest",
             "controlPlaneConfigurationDigest", "openingAssignmentSha256", "ownerScopeDigest",
             "browserNonceCommitment")}
-        challenge = {"schema": "serverware.nativeJitReviewOpeningChallenge/v1",
+        challenge = {"schema": "catchplate.nativeJitReviewOpeningChallenge/v1",
             "reviewId": REVIEW, "approvalRequestId": APPROVAL, **common, "identity": identity,
             "nativeOrigin": NATIVE, "portalOrigin": PORTAL, "recipientPublicKey": b64(b"r" * 32),
             "challenge": b64(b"c" * 32), "issuedAtEpochNs": NOW, "expiresAtEpochNs": NOW + 20 * SECOND}
@@ -94,20 +94,20 @@ class PublicOriginals:
             **{key: digest(self.grant[name]) for key, name in (
                 ("parentOriginalSha256", "parentOriginal"), ("childOriginalSha256", "childOriginal"),
                 ("pairSha256", "pairOriginal"), ("sealProofSha256", "evidenceOriginal"))}}
-        authorization = {"schema": "serverware.nativeJitReviewOpeningAuthorization/v1",
+        authorization = {"schema": "catchplate.nativeJitReviewOpeningAuthorization/v1",
             "operation": "jit.review-open.authorize", "requestDigest": digest("authorize request"),
             "scope": scope, "currentRootVectorDigest": digest("current root vector"),
             "currentRootHeadDigest": digest("current head"), "currentRootSequence": 7,
             "issuedAtEpochNs": NOW, "expiresAtEpochNs": NOW + 18 * SECOND}
         self.authorization = self.authority(authorization)
         self.grant["authorizationOriginal"] = self.authorization
-        preparation = {"schema": "serverware.nativeJitReviewOpeningPreparation/v1",
+        preparation = {"schema": "catchplate.nativeJitReviewOpeningPreparation/v1",
             "operation": "nativeJitReviewOpen.prepare/v1", "authorizationSha256": digest(self.authorization),
             "scope": scope, "identity": identity, "reviewDigest": digest("synthetic private review digest"),
-            "reviewFormat": "serverware.nativeJitImmutableReview/v1", "preparedAtEpochNs": NOW,
+            "reviewFormat": "catchplate.nativeJitImmutableReview/v1", "preparedAtEpochNs": NOW,
             "expiresAtEpochNs": NOW + 16 * SECOND}
         self.preparation = self.native(preparation)
-        acknowledgment = {"schema": "serverware.nativeJitReviewOpeningCommitAcknowledgment/v1",
+        acknowledgment = {"schema": "catchplate.nativeJitReviewOpeningCommitAcknowledgment/v1",
             "operation": "jit.review-open.receipt.issue", "requestDigest": digest("receipt request"),
             "authorizationSha256": digest(self.authorization), "preparationSha256": digest(self.preparation),
             "scope": scope, "reviewDigest": preparation["reviewDigest"], "receiptId": RECEIPT,
@@ -119,13 +119,13 @@ class PublicOriginals:
     @staticmethod
     def native(statement):
         return canonical({"statement": statement, "signature": "ed25519:" + b64(b"s" * 64),
-            "nativeKeyEvidence": {"apiVersion": "serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence": {"apiVersion": "catchplate.nativeResponseProofKeyEvidence/v1",
                 "responseProofPublicKey": b64(b"k" * 32), "attestationDocumentB64": b64(b"synthetic-not-attestation")},
             "assignmentOriginal": canonical({"synthetic": "not an admitted assignment"})})
 
     @staticmethod
     def authority(payload):
-        return canonical({"schema": payload["schema"].replace("serverware.native", "serverware.signedNative", 1),
+        return canonical({"schema": payload["schema"].replace("catchplate.native", "catchplate.signedNative", 1),
             "payload": payload, "signatureBase64Url": b64(b"a" * 64)})
 
     def body(self, phase):
@@ -158,7 +158,7 @@ class SyntheticService:
         return self.invoke("receipt", arguments)
 
 
-APP_SOURCE = ast.parse((ROOT / "serverware/app.py").read_text())
+APP_SOURCE = ast.parse((ROOT / "catchplate/app.py").read_text())
 SELECTED = {"csrf_middleware", "bounded_control_plane_request_middleware", "native_approval_review_page",
     "native_approval_review_handoff", "approval_capabilities", "_control_plane_security_headers"}
 
@@ -180,8 +180,8 @@ def actual_routes():
 
 class NativeReviewPortalHTTPTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        from serverware import native_jit_review_open_service as service
-        from serverware import development_sandbox, operator_demo
+        from catchplate import native_jit_review_open_service as service
+        from catchplate import development_sandbox, operator_demo
         self.service = service
         self.unconfigured_selected = service.selected
         self.values, self.clock = PublicOriginals(), [NOW, 100 * SECOND]
@@ -222,10 +222,10 @@ class NativeReviewPortalHTTPTests(unittest.IsolatedAsyncioTestCase):
         path = "/api/approvals/capabilities" if capability else http.PAGE if method in {"GET", "HEAD"} else http.PREFIX + "/" + phase
         raw = canonical(self.values.body(phase)).encode() if raw is None and method == "POST" else raw or b""
         fields = [(b"host", b"portal.example.test"),
-            (b"cookie", ("serverware_oidc_session=" + TOKEN + "; serverware_csrf=" + CSRF).encode())]
+            (b"cookie", ("catchplate_oidc_session=" + TOKEN + "; catchplate_csrf=" + CSRF).encode())]
         if method == "POST":
             fields += [(b"origin", PORTAL.encode()), (b"content-type", b"application/json"),
-                (b"x-serverware-csrf-token", CSRF.encode()), (b"content-length", str(len(raw)).encode())]
+                (b"x-catchplate-csrf-token", CSRF.encode()), (b"content-length", str(len(raw)).encode())]
         scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": method,
             "scheme": "https", "path": path, "raw_path": path.encode(), "root_path": "", "query_string": b"",
             "headers": fields, "server": ("portal.example.test", 443), "client": ("127.0.0.1", 12345)}
@@ -306,17 +306,17 @@ class NativeReviewPortalHTTPTests(unittest.IsolatedAsyncioTestCase):
         mutations = [lambda s: s.update(scheme="http"), lambda s: s.update(query_string=b"native=1"),
             lambda s: s.update(root_path="/proxy"), lambda s: s.update(raw_path=s["raw_path"].replace(b"authorize", b"%61uthorize")),
             lambda s: s["headers"].append((b"authorization", b"Bearer private-plaintext-canary")),
-            lambda s: s["headers"].append((b"x-serverware-admin-token", b"private-plaintext-canary")),
+            lambda s: s["headers"].append((b"x-catchplate-admin-token", b"private-plaintext-canary")),
             lambda s: s["headers"].append((b"host", b"portal.example.test")),
             lambda s: s["headers"].append((b"origin", PORTAL.encode())),
-            lambda s: s["headers"].append((b"cookie", b"serverware_csrf=other")),
+            lambda s: s["headers"].append((b"cookie", b"catchplate_csrf=other")),
             lambda s: s["headers"].append((b"sec-fetch-site", b"cross-site")),
-            lambda s: s["headers"].append((b"x-serverware-csrf-token", CSRF.encode())),
+            lambda s: s["headers"].append((b"x-catchplate-csrf-token", CSRF.encode())),
             lambda s: s["headers"].__setitem__(2, (b"origin", b"https://wrong.example.test")),
-            lambda s: s["headers"].__setitem__(4, (b"x-serverware-csrf-token", b"wrong")),
+            lambda s: s["headers"].__setitem__(4, (b"x-catchplate-csrf-token", b"wrong")),
             lambda s: s["headers"].__delitem__(4),
-            lambda s: s["headers"].__setitem__(1, (b"cookie", ("serverware_oidc_session=" + TOKEN + "; serverware_csrf=x; serverware_csrf=y").encode())),
-            lambda s: s["headers"].__setitem__(1, (b"cookie", b"serverware_admin=private-plaintext-canary"))]
+            lambda s: s["headers"].__setitem__(1, (b"cookie", ("catchplate_oidc_session=" + TOKEN + "; catchplate_csrf=x; catchplate_csrf=y").encode())),
+            lambda s: s["headers"].__setitem__(1, (b"cookie", b"catchplate_admin=private-plaintext-canary"))]
         for index, mutation in enumerate(mutations):
             with self.subTest(case=index):
                 self.assertEqual((await self.request(change=mutation))[0], 503)
@@ -430,7 +430,7 @@ class NativeReviewPortalHTTPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.reads, [])
         code, body = await self.request(method="GET", capability=True)
         self.assertEqual(code, 200)
-        self.assertEqual(json.loads(body), {"schema": "serverware.approvalCapabilities/v1", "can_list": True,
+        self.assertEqual(json.loads(body), {"schema": "catchplate.approvalCapabilities/v1", "can_list": True,
             "can_open_native_review": False, "can_decide": False, "reason": "protected_review_unavailable"})
         self.selection.side_effect = None
         self.selection.return_value = self.owner

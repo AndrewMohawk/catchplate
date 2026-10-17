@@ -8,7 +8,7 @@ the actual local assembly. It is not a production release shortcut.
 
 [`local_composition.py`](../scripts/authority/local_composition.py) signs the
 explicit local predicate
-`serverware.authorityTrustedHostLocalSourceRuntimeComposition/v1`. Native and
+`catchplate.authorityTrustedHostLocalSourceRuntimeComposition/v1`. Native and
 external/TEE package profiles refuse it. The existing clean-build-report
 observer remains available with its original, different contract.
 
@@ -24,7 +24,7 @@ original two-clock bounds and current purpose-authorized provenance key. It:
 4. Requires an exact canonical composition-input declaration, then signs the
    existing detached provenance reference using the explicit local predicate.
 
-The declaration is `serverware.authorityTrustedHostLocalCompositionInputs/v1`.
+The declaration is `catchplate.authorityTrustedHostLocalCompositionInputs/v1`.
 The `input_manifest()` formatter produces its unsigned selection from source and
 runtime object identities before the tree is frozen. It has no final artifact
 tree digest or self-hash, and is not evidence on its own. The issuer independently

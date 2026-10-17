@@ -36,13 +36,13 @@ The two first-class journeys are:
   choose automatic insertion or an exact dummy authentication value to replace,
   then copy client configuration. No response-field list should be mandatory.
 - **Use a connected account:** choose Google, consent to a supported permission
-  preset, select the app, then use its normal API client. Refresh is Serverware's
+  preset, select the app, then use its normal API client. Refresh is Catchplate's
   responsibility. The account owner should not manage refresh tokens, expiry
   arithmetic or token endpoints.
 
 Provider application setup is an administrator task performed once per
 deployment. Account consent is a separate task for each account owner. An app's
-Serverware identity, provider authentication and an optional dummy value are
+Catchplate identity, provider authentication and an optional dummy value are
 three different things; the UI must not call all three a "credential".
 
 Default to **no optional content filtering** for new rules, with the supported
@@ -71,7 +71,7 @@ guided UI is an incremental implementation, not the final provider-preset UI.
 
 Use **Credentials**, **Clients**, and **Permissions** as the resource navigation.
 Credentials are provider accounts and keys (including GitHub App installations);
-clients are the scripts, agents and CI jobs using Serverware. The underlying
+clients are the scripts, agents and CI jobs using Catchplate. The underlying
 application IDs and security ownership do not change with the UI labels.
 
 Lead with the **Set up access** action, not a duplicate navigation section, then
@@ -186,7 +186,7 @@ deployment alongside the subsequently tested activity display. See
 [current activity and live verification](operator-account-activity-verification.md).
 
 Evidence: `google-connect.FN6xrL/browser.log`; screenshots:
-`serverware-operator-artifacts/google-browser-synthetic-epbCb7` beneath projects.
+`catchplate-operator-artifacts/google-browser-synthetic-epbCb7` beneath projects.
 Connect SHA-256:
 `a306c455c554a31ae7d2415133e7b2ae575193ea07fefdf9ecd4a57aaef21fe5`;
 test SHA-256:
@@ -204,7 +204,7 @@ the same focused checks passed again with unchanged production UI code.
 The resource-script SHA-256 at that earlier checkpoint was
 `08338a6e1652e9077ca389619a3d82aec909fd4504f3ad435c4e2a9e748d3446`.
 Evidence is `google-cards.P18BigAf/browser.log`; screenshots are in
-`serverware-operator-artifacts/google-browser-synthetic-lQbkfL` under the projects
+`catchplate-operator-artifacts/google-browser-synthetic-lQbkfL` under the projects
 directory. Inputs were unchanged during each run; both bounded browser scopes
 terminated and their empty scratch directories were removed. These intercepted
 fixtures make no provider, proxy or live application requests. They do not
@@ -227,7 +227,7 @@ restrictions is a separate, deliberate action, not a prerequisite to storing
 a key. Copying a normal client's configuration should be the final step, not
 an invitation to understand internal policy JSON.
 
-Changing an app's permission, rotating its Serverware token, replacing a static
+Changing an app's permission, rotating its Catchplate token, replacing a static
 provider key, reconnecting an OAuth account and disconnecting that account are
 distinct actions. Show affected apps before shared-account changes. Restarting
 the console must not require reconnecting accounts or repeating setup; a changed
@@ -285,7 +285,7 @@ explanation when unavailable, not extra token-endpoint fields in each account
 form.
 
 Unattended use has two lifecycles: provider access-token refresh and the app's
-own Serverware identity. A long-running job needs a supported way to renew or
+own Catchplate identity. A long-running job needs a supported way to renew or
 rotate the latter before its finite expiry; automatic Google refresh alone is
 not indefinite job access. Manually managed client tokens retain an explicit
 30-day default and a 90-day maximum, with manual rotation. The earlier backlog
@@ -335,7 +335,7 @@ do not establish deployment; use the linked release records.
   value, and applicable header name, not an endpoint or response schema. The
   existing encrypted credential database remains the only secret store.
 - **Clients (application identities):** the identity used by one client or job to authenticate to
-  Serverware. Creation and rotation return a client token once; only its verifier
+  Catchplate. Creation and rotation return a client token once; only its verifier
   is persisted. Lifetime is explicit and finite. Provider-token refresh and
   client-token rotation are independent operations.
 - **Access rules:** references to an application and credential, the approved
@@ -413,7 +413,7 @@ The two basic onboarding paths are:
    different injection location or perform arbitrary body/query/byte substitution.
    Additional placements need an explicit supported contract, not a misleading
    form option.
-   The workload's Serverware identity is separate from the placeholder and must
+   The workload's Catchplate identity is separate from the placeholder and must
    never be forwarded to the provider.
 2. **Connect Google:** administrator setup supplies the OAuth application once;
    the account owner consents to the chosen permissions. Applications use the
@@ -438,7 +438,7 @@ work. None of these criteria may silently broaden existing saved rules.
   configuration, operation sequence and completion condition. For example,
   polling Gmail lists through pagination and reading returned messages across
   token expiry is a specific job; "Google works" is not. Attachments, history,
-  stock SDK support and Serverware running the job are separate promises, not
+  stock SDK support and Catchplate running the job are separate promises, not
   implications of a Read Gmail label. The client remains responsible for the
   job unless an executor is explicitly implemented.
 - **No response configuration means useful responses.** The default must retain
@@ -647,7 +647,7 @@ its own explicitly authorized job and is not established by those checks.
 
 Account connectivity/refresh health, application-token validity and actual rule
 activation must be three separately visible states. A healthy Google grant does
-not renew an expired Serverware application token. A temporary refresh failure
+not renew an expired Catchplate application token. A temporary refresh failure
 must not be labeled lost consent without provider evidence. Existing Google
 disconnect/reconnect and native ownership boundaries remain explicit; do not
 work around them with a pasted refresh token or a hidden legacy fallback.

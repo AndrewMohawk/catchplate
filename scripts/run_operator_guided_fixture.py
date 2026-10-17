@@ -101,7 +101,7 @@ class GuidedRun(XPostRun):
 
     def browser_preflight(self):
         self.browser_unit = self.project + "-browser.service"
-        require(re.fullmatch(r"serverware-guided-private-[0-9a-f]{12}-browser\.service", self.browser_unit))
+        require(re.fullmatch(r"catchplate-guided-private-[0-9a-f]{12}-browser\.service", self.browser_unit))
         require(not self.browser_units("browser-unit-before"), "guided browser unit already exists")
         rows = self.command("browser-unit-files-before", ["systemctl", "--user", "list-unit-files",
             "--no-legend", "--no-pager", self.browser_unit, "default.target"], 3).decode("ascii")
@@ -183,7 +183,7 @@ class GuidedRun(XPostRun):
             (args.source, args.job_root), (args.source, args.evidence), (args.job_root, args.evidence))))
         for path in (args.job_root, args.evidence):
             require(path.stat().st_uid == os.getuid() and stat.S_IMODE(path.stat().st_mode) == 0o700 and not list(path.iterdir()))
-        self.save("run.claim.json", {"schema": "serverware.privateGuidedRunClaim/v1", "sourceCommit": args.commit,
+        self.save("run.claim.json", {"schema": "catchplate.privateGuidedRunClaim/v1", "sourceCommit": args.commit,
             "jobRoot": str(args.job_root)})
         phase, success, armed, clean = "inputs", False, False, False
         failure, errors, begun = None, [], time.monotonic()
@@ -239,7 +239,7 @@ class GuidedRun(XPostRun):
                 "--pull", "never", "--no-deps", "check"], 10)
             phase = "runtime-inspection"
             identities = self.inspect_runtime(config, image_ids, keeper_anchor=keeper_anchor)
-            app = self.public_view(identities["serverware"], "app", "before", initial=True)
+            app = self.public_view(identities["catchplate"], "app", "before", initial=True)
             gate = self.public_view(identities["decision-gate-rs"], "gate", "before", initial=True)
             require(app == gate == self.initial_view, "guided original curated publication differs")
             self.command("network-proof", ["docker", "exec", identities["provider"], "python", "-B", "-c",
@@ -263,7 +263,7 @@ class GuidedRun(XPostRun):
             require(state["Status"] == "exited" and state["ExitCode"] == 0 and not state["OOMKilled"]
                 and not self.browser_units("browser-unit-after"), "guided checker or browser remains")
             phase = "immutable-inputs"
-            final_app = self.public_view(identities["serverware"], "app", "after", initial=False)
+            final_app = self.public_view(identities["catchplate"], "app", "after", initial=False)
             final_gate = self.public_view(identities["decision-gate-rs"], "gate", "after", initial=False)
             require(final_app == final_gate and all(final_app[key] == app[key] for key in ("leaves", "export_directory")))
             require(final_app["policy"]["policy_hash"] == result["checker"]["policyHash"])
@@ -277,7 +277,7 @@ class GuidedRun(XPostRun):
         finally:
             if armed:
                 clean, errors = self.cleanup()
-            self.save("terminal.json", {"schema": "serverware.privateGuidedRun/v1", "phase": phase,
+            self.save("terminal.json", {"schema": "catchplate.privateGuidedRun/v1", "phase": phase,
                 "success": success, "cleanup": clean, "cleanupErrors": errors,
                 "elapsedSeconds": round(time.monotonic() - begun, 3), "syntheticOnly": True,
                 "realProviderVerified": False, "productionReady": False,

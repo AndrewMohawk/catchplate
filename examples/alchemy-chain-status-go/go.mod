@@ -1,4 +1,4 @@
-module serverware.example/alchemy-chain-status-go
+module catchplate.example/alchemy-chain-status-go
 
 go 1.25.0
 

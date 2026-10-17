@@ -1,6 +1,6 @@
 # Private first-exact activation export
 
-[`authority_oidc_session_activation_execution_export._export_on_work`](../serverware/authority_oidc_session_activation_execution_export.py)
+[`authority_oidc_session_activation_execution_export._export_on_work`](../catchplate/authority_oidc_session_activation_execution_export.py)
 composes the actual configured plan owner, original journal and
 [execution-bundle store](oidc-session-activation-execution-store.md). It returns
 only the first exact durable ciphertext. This is source-only implementation,

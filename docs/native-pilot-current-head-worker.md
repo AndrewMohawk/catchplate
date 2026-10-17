@@ -39,7 +39,7 @@ Complete Input3 validation and the existing approval installer checks still run.
 ## State updates and publication
 
 The fixed state directory is
-`/etc/serverware/native-pilot-current-head-state`, root-owned `0700`.
+`/etc/catchplate/native-pilot-current-head-state`, root-owned `0700`.
 The separate state-update command accepts a protected, independently pinned
 authorization original. Initial state can be installed only into the explicitly
 selected empty directory. Later updates require the exact prior state digest

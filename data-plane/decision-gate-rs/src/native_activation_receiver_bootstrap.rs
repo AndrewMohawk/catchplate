@@ -7,10 +7,10 @@ use sha2::{Digest, Sha256};
 use std::{ffi::CString, fs::File, io, os::fd::{AsRawFd, FromRawFd, OwnedFd}, os::unix::fs::{FileExt, MetadataExt}};
 
 const PORT: u32 = 9103;
-const COLD: &str = "/etc/serverware/native-shadow-activation-receiver.json";
-const DELIVERY: &str = "/etc/serverware/native-activation-delivery.json";
-const JOURNAL: &str = "/var/lib/serverware/native-activation";
-const SUPERVISOR: &str = "/opt/serverware/serverware-native-shadow-guest-supervisor";
+const COLD: &str = "/etc/catchplate/native-shadow-activation-receiver.json";
+const DELIVERY: &str = "/etc/catchplate/native-activation-delivery.json";
+const JOURNAL: &str = "/var/lib/catchplate/native-activation";
+const SUPERVISOR: &str = "/opt/catchplate/catchplate-native-shadow-guest-supervisor";
 const MAX_COMPLETION: usize = 1024 * 1024;
 fn require(ok: bool) -> Result<(), String> { if ok { Ok(()) } else { Err("activation bootstrap original or framing differs".into()) } }
 fn err(_: impl std::fmt::Display) -> String { "activation bootstrap acquisition or IO failed; no retry".into() }
@@ -71,9 +71,9 @@ impl Resources {
         let cold = Public::open(COLD)?; let delivery = Public::open(DELIVERY)?;
         let c: Cold = serde_json::from_slice(&cold.bytes).map_err(err)?;
         let d: Delivery = serde_json::from_slice(&delivery.bytes).map_err(err)?;
-        require(c.api_version == "serverware.nativeShadowActivationReceiverConfiguration/v2"
+        require(c.api_version == "catchplate.nativeShadowActivationReceiverConfiguration/v2"
             && c.delivery_configuration.path == DELIVERY && c.delivery_configuration.sha256 == sha(&delivery.bytes)
-            && c.installation_authority == d.authority && d.api_version == "serverware.policyCustodyGuestConfiguration/v1"
+            && c.installation_authority == d.authority && d.api_version == "catchplate.policyCustodyGuestConfiguration/v1"
             && d.service_role == "production-bridge" && d.uid > 0 && d.gid > 0)?;
         let journal = fixed(JOURNAL, true)?; let ji = identity(&journal)?;
         require(ji.mode == libc::S_IFDIR | 0o700 && ji.uid == d.uid && ji.gid == d.gid)?;
@@ -139,7 +139,7 @@ impl Child {
             good &= unsafe { libc::syscall(libc::SYS_rt_sigprocmask, libc::SIG_SETMASK, &mask, std::ptr::null::<u8>(), 8usize) } == 0;
             good &= unsafe { libc::chdir(c"/".as_ptr()) } == 0;
             if good {
-                let argv = [c"serverware-native-shadow-guest-supervisor".as_ptr(), c"--activation-receiver".as_ptr(), std::ptr::null()];
+                let argv = [c"catchplate-native-shadow-guest-supervisor".as_ptr(), c"--activation-receiver".as_ptr(), std::ptr::null()];
                 let env: [*const libc::c_char; 1] = [std::ptr::null()];
                 unsafe { libc::syscall(libc::SYS_execveat, executable.as_raw_fd(), c"".as_ptr(), argv.as_ptr(), env.as_ptr(), libc::AT_EMPTY_PATH); }
             }
@@ -240,7 +240,7 @@ pub fn run() -> Result<(), String> {
     let count = u32::from_be_bytes(header) as usize; require(count > 0 && count <= 8192)?;
     let mut observation = vec![0; count]; pipe_exact(reader.as_raw_fd(), &mut observation, &resources, &mut child, &transport, u64::MAX)?;
     let observed: serde_json::Value = serde_json::from_slice(&observation).map_err(err)?;
-    require(canonical(&observed)? == observation && observed["apiVersion"] == "serverware.nativeShadowActivationReceiverObservation/v1"
+    require(canonical(&observed)? == observation && observed["apiVersion"] == "catchplate.nativeShadowActivationReceiverObservation/v1"
         && observed["okForAction"] == false && observed["processId"].as_i64() == Some(child.pid as i64)
         && observed["configurationSha256"] == sha(&resources.cold.bytes)
         && observed["deliveryConfigurationSha256"] == sha(&resources.delivery.bytes))?;
@@ -258,7 +258,7 @@ pub fn run() -> Result<(), String> {
     let mut completion = vec![0; length]; receive_exact(&mut transport, &mut completion, &resources, &mut child, deadline)?;
     require(receive(&mut transport, &mut [0], &resources, &mut child, deadline)? == 0)?;
     let value: serde_json::Value = serde_json::from_slice(&completion).map_err(err)?;
-    require(canonical(&value)? == completion && value["apiVersion"] == "serverware.nativeShadowActivationReceiverCompletion/v2"
+    require(canonical(&value)? == completion && value["apiVersion"] == "catchplate.nativeShadowActivationReceiverCompletion/v2"
         && value["installation"]["payload"]["observationSha256"] == sha(&observation))?;
     let mut frame = header.to_vec(); frame.extend_from_slice(&completion); let mut offset = 0;
     while offset < frame.len() { live(&resources, &mut child, &transport, deadline)?;

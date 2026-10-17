@@ -41,7 +41,7 @@ portal flows are not new production evidence.
 ## Explicit routes
 
 All four routes are POSTs using the existing closed 64 KiB
-`serverware.oidcSessionActivationRecoveryRequest/v1` carrier. An options request
+`catchplate.oidcSessionActivationRecoveryRequest/v1` carrier. An options request
 contains only schema, purpose and local digest; the action additionally allows
 the existing MFA object. There is no browser-selected profile, packet, target,
 pending state, root grant or signed control.

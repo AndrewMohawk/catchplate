@@ -7,36 +7,36 @@ import test from 'node:test';
 import { configuration, createSdk, failure, installTransport, loadClientConfig, oneLookupInterceptor, parseArguments,
   perform, proxyOptions, PUBLIC_X_DUMMY, X_ORIGIN } from './client.mjs';
 
-const env = () => ({ SERVERWARE_PROXY_URL: 'https://proxy.example.test',
-  SERVERWARE_APP_ID: '11111111-2222-4333-8444-555555555555',
-  SERVERWARE_PROXY_TOKEN: 'synthetic_app_token', SERVERWARE_CA_FILE: '/trusted/inner.pem',
-  SERVERWARE_X_USERNAME: 'fixture_user' });
+const env = () => ({ CATCHPLATE_PROXY_URL: 'https://proxy.example.test',
+  CATCHPLATE_APP_ID: '11111111-2222-4333-8444-555555555555',
+  CATCHPLATE_PROXY_TOKEN: 'synthetic_app_token', CATCHPLATE_CA_FILE: '/trusted/inner.pem',
+  CATCHPLATE_X_USERNAME: 'fixture_user' });
 const pem = (value) => Buffer.from('-----BEGIN CERTIFICATE-----\n' + value + '\n-----END CERTIFICATE-----');
 const request = () => ({ origin: X_ORIGIN, path: '/2/users/by/username/fixture_user', method: 'GET', body: null });
 const NOW = 1_791_996_000_000;
-const downloaded = () => ({ application_id: env().SERVERWARE_APP_ID,
-  access_rule_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', proxy_url: env().SERVERWARE_PROXY_URL,
-  proxy_authentication: 'basic_and_bearer_v1', proxy_username: env().SERVERWARE_APP_ID,
+const downloaded = () => ({ application_id: env().CATCHPLATE_APP_ID,
+  access_rule_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', proxy_url: env().CATCHPLATE_PROXY_URL,
+  proxy_authentication: 'basic_and_bearer_v1', proxy_username: env().CATCHPLATE_APP_ID,
   proxy_password: 'downloaded_synthetic_token', token_expires_at_epoch_ms: NOW + 60000,
-  ca_file: './serverware-ca.pem', username: 'saved_user',
+  ca_file: './catchplate-ca.pem', username: 'saved_user',
   upstream_url: X_ORIGIN + '/2/users/by/username/saved_user', methods: ['GET'],
   operation_bundle: 'x_username_read_v1', credential_input: 'replace_exact', response_mode: 'x_app_read_json_v1' });
 function configFile(t) {
-  const directory = mkdtempSync(join(tmpdir(), 'serverware-x-read-config-'));
+  const directory = mkdtempSync(join(tmpdir(), 'catchplate-x-read-config-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const path = join(directory, 'serverware-client.private.json');
+  const path = join(directory, 'catchplate-client.private.json');
   return { directory, path, write(value) { writeFileSync(path, JSON.stringify(value), { mode: 0o600 }); return path; } };
 }
 
 test('downloaded config imports only connection and exact username, resolving CA paths beside JSON', t => {
   const file = configFile(t), value = downloaded();
   value.request_headers = { Authorization: 'never-import' }; value.request_body = 'never-import';
-  value.client_recipe = { command: 'never-execute', environment: { SERVERWARE_X_USERNAME: 'other' } };
-  const ambient = { ...env(), SERVERWARE_PROXY_CA_FILE: '/stale.pem' };
+  value.client_recipe = { command: 'never-execute', environment: { CATCHPLATE_X_USERNAME: 'other' } };
+  const ambient = { ...env(), CATCHPLATE_PROXY_CA_FILE: '/stale.pem' };
   assert.deepEqual(loadClientConfig(file.write(value), ambient, NOW), {
     proxyUrl: value.proxy_url, applicationId: value.application_id, token: value.proxy_password,
-    username: 'saved_user', caFile: join(file.directory, 'serverware-ca.pem'), proxyCaFile: null });
-  assert.equal(ambient.SERVERWARE_PROXY_CA_FILE, '/stale.pem');
+    username: 'saved_user', caFile: join(file.directory, 'catchplate-ca.pem'), proxyCaFile: null });
+  assert.equal(ambient.CATCHPLATE_PROXY_CA_FILE, '/stale.pem');
   value.proxy_ca_file = './outer.pem';
   assert.equal(loadClientConfig(file.write(value), {}, NOW).proxyCaFile, join(file.directory, 'outer.pem'));
   value.proxy_ca_file = null;
@@ -82,14 +82,14 @@ test('config CLI preserves environment invocation and admits no operation or ext
 
 test('exact lowercase username and explicit HTTPS proxy only', () => {
   for (const patch of [
-    { SERVERWARE_PROXY_URL: 'http://proxy.example.test' },
-    { SERVERWARE_PROXY_URL: 'https://user:password@proxy.example.test' },
-    { SERVERWARE_PROXY_URL: 'https://proxy.example.test/path' },
-    { SERVERWARE_PROXY_URL: 'https://proxy.example.test?query=1' },
-    { SERVERWARE_X_USERNAME: 'Uppercase' }, { SERVERWARE_X_USERNAME: 'bad/name' },
-    { SERVERWARE_X_USERNAME: 'a'.repeat(16) }, { SERVERWARE_X_USERNAME: '' },
-    { SERVERWARE_PROXY_TOKEN: 'secret\nvalue' }, { SERVERWARE_APP_ID: 'bad' },
-    { SERVERWARE_CA_FILE: '' }, { NODE_TLS_REJECT_UNAUTHORIZED: '0' }, { NODE_OPTIONS: '--require other.js' },
+    { CATCHPLATE_PROXY_URL: 'http://proxy.example.test' },
+    { CATCHPLATE_PROXY_URL: 'https://user:password@proxy.example.test' },
+    { CATCHPLATE_PROXY_URL: 'https://proxy.example.test/path' },
+    { CATCHPLATE_PROXY_URL: 'https://proxy.example.test?query=1' },
+    { CATCHPLATE_X_USERNAME: 'Uppercase' }, { CATCHPLATE_X_USERNAME: 'bad/name' },
+    { CATCHPLATE_X_USERNAME: 'a'.repeat(16) }, { CATCHPLATE_X_USERNAME: '' },
+    { CATCHPLATE_PROXY_TOKEN: 'secret\nvalue' }, { CATCHPLATE_APP_ID: 'bad' },
+    { CATCHPLATE_CA_FILE: '' }, { NODE_TLS_REJECT_UNAUTHORIZED: '0' }, { NODE_OPTIONS: '--require other.js' },
   ]) assert.throws(() => configuration({ ...env(), ...patch }));
   const config = configuration({ ...env(), X_API_BEARER_TOKEN: 'must_not_use',
     HTTPS_PROXY: 'http://bypass.invalid', NO_PROXY: '*' });
@@ -99,7 +99,7 @@ test('exact lowercase username and explicit HTTPS proxy only', () => {
 });
 
 test('application identity is outer Basic; inner and outer trust stay separate', () => {
-  const config = configuration({ ...env(), SERVERWARE_PROXY_CA_FILE: '/trusted/outer.pem' });
+  const config = configuration({ ...env(), CATCHPLATE_PROXY_CA_FILE: '/trusted/outer.pem' });
   const options = proxyOptions(config, pem);
   assert.equal(options.token, 'Basic ' + Buffer.from(config.applicationId + ':' + config.token).toString('base64'));
   assert.deepEqual(options.requestTls, { ca: pem('/trusted/inner.pem'), rejectUnauthorized: true });
@@ -113,7 +113,7 @@ test('stock SDK gets dummy, fixed origin, explicit retry false and timeout', () 
   class Client { constructor(options) { actual = options; } }
   createSdk(Client);
   assert.deepEqual(actual, { baseUrl: X_ORIGIN, bearerToken: PUBLIC_X_DUMMY, retry: false, timeout: 30000 });
-  assert.equal(JSON.stringify(actual).includes(env().SERVERWARE_PROXY_TOKEN), false);
+  assert.equal(JSON.stringify(actual).includes(env().CATCHPLATE_PROXY_TOKEN), false);
 });
 
 test('guard passes request untouched once and rejects redirect/repeat dispatches', () => {

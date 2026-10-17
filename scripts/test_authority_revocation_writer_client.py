@@ -25,12 +25,12 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract as authority
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_retention as retention
-from serverware import authority_revocation_writer_ack_expectation as expectation
-from serverware import authority_revocation_writer_acknowledgment as acknowledgment
-from serverware import authority_revocation_writer_client as client
+from catchplate import authority_contract as authority
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_retention as retention
+from catchplate import authority_revocation_writer_ack_expectation as expectation
+from catchplate import authority_revocation_writer_acknowledgment as acknowledgment
+from catchplate import authority_revocation_writer_client as client
 import test_authority_revocation_plan as oracle
 import test_authority_revocation_persistence as codec_oracle
 import test_authority_revocation_retention as record_oracle
@@ -301,7 +301,7 @@ class RevocationWriterClientTests(unittest.TestCase):
                 fixture.plan.payload["webauthnEvidence"]["verifierSignatureBase64url"] = oracle.encoded(bytes(64))
                 fixture.plan.payload["webauthnEvidence"]["verifierSignatureDigest"] = oracle.sha(bytes(64))
                 fixture.plan.payload["authorizationProjection"]["assertionEvidenceDigest"] = oracle.framed(
-                    "serverware.policyAuthorityWebAuthnAssertionEvidence/v1", oracle.wire(fixture.plan.payload["webauthnEvidence"]))
+                    "catchplate.policyAuthorityWebAuthnAssertionEvidence/v1", oracle.wire(fixture.plan.payload["webauthnEvidence"]))
             fixture.plan.rehash()
             fixture.action.arguments["envelope_bytes"] = oracle.wire(fixture.plan.envelope)
             fixture.rebuild()

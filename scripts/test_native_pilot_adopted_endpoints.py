@@ -19,15 +19,15 @@ from cryptography.exceptions import InvalidSignature
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
-from serverware import native_pilot_adopted_commands as commands
-from serverware import native_pilot_adopted_launch_profile as launch
-from serverware import native_pilot_encrypted_authority as encrypted
-from serverware import native_pilot_generation_install_authority as generation
-from serverware import native_pilot_key_profile as keys
-from serverware import native_pilot_launch_publication as publication
-from serverware import native_pilot_native_service_authority as authority
-from serverware import native_pilot_native_service_profile as profile
-from serverware import native_pilot_verifier_authority as verifier
+from catchplate import native_pilot_adopted_commands as commands
+from catchplate import native_pilot_adopted_launch_profile as launch
+from catchplate import native_pilot_encrypted_authority as encrypted
+from catchplate import native_pilot_generation_install_authority as generation
+from catchplate import native_pilot_key_profile as keys
+from catchplate import native_pilot_launch_publication as publication
+from catchplate import native_pilot_native_service_authority as authority
+from catchplate import native_pilot_native_service_profile as profile
+from catchplate import native_pilot_verifier_authority as verifier
 from test_native_pilot_adopted_closure import fixture, input_for as closure_input, signed as signed_closure
 from test_native_pilot_closure_set import canonical, sha, synthetic
 from test_native_pilot_generation_scope import NOW, encoded, key_fixture, signed_message
@@ -58,7 +58,7 @@ def peer(f):
         result["cgroupMountId"].to_bytes(8, "big"), result["cgroupInode"].to_bytes(8, "big"),
         result["securityLabelSha256"].encode("ascii"), result["configurationGenerationSha256"].encode("ascii")]
     result["processIdentitySha256"] = "sha256:" + hashlib.sha256(
-        b"serverware.policyCustodyPeerProcessIdentity/v4\0" + b"".join(len(part).to_bytes(8, "big") + part for part in parts)).hexdigest()
+        b"catchplate.policyCustodyPeerProcessIdentity/v4\0" + b"".join(len(part).to_bytes(8, "big") + part for part in parts)).hexdigest()
     return result
 
 
@@ -66,7 +66,7 @@ def chain():
     f = fixture()
     credentials = copy.deepcopy(json.loads(f["deliveries"][ROLE])["payload"]["credentials"])
     credentials.append({"name": "shadow-encrypted-role-inventory", "original": {
-        "path": "/etc/serverware/synthetic-trusted-time-ciphertext.json", "sha256": transport(ROLE)["encryptedInventorySha256"]},
+        "path": "/etc/catchplate/synthetic-trusted-time-ciphertext.json", "sha256": transport(ROLE)["encryptedInventorySha256"]},
         "length": 256, "signing": None})
     set_credentials(f, ROLE, credentials)
     first = build(f, "role-keys", ROLE, adopted=True)
@@ -80,11 +80,11 @@ def chain():
     guest = admitted["expectedScope"]["guest"]
     operation = {name: guest[name] for name in ("bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode", "issuedAtBoottimeNs")}
     operation["deadlineBoottimeNs"] = guest["startupDeadlineBoottimeNs"]
-    config = {"apiVersion": "serverware.nativeShadowNitroVerifierConfiguration/v2", "operation": operation,
+    config = {"apiVersion": "catchplate.nativeShadowNitroVerifierConfiguration/v2", "operation": operation,
         **settings["verifierSettings"][ROLE], **admitted}
     trust = json.loads(f["recipe_originals"]["trustOriginal"])
     timing = settings["trustedTime"]
-    bootstrap = {"apiVersion": "serverware.nativeShadowGuestTimeBootstrap/v1", "guest": guest,
+    bootstrap = {"apiVersion": "catchplate.nativeShadowGuestTimeBootstrap/v1", "guest": guest,
         "signingKeyId": trust["timeKey"]["keyId"], **timing}
     delivery = json.loads(f["delivery_inputs"][ROLE])
     peer_raw = canonical(peer(f))
@@ -112,7 +112,7 @@ def chain():
     authorizations["encrypted-delivery"] = {"inputOriginal": canonical(encrypted_input).decode("ascii"), "original": encrypted_raw.decode("ascii")}
     verifier_input = {"apiVersion": verifier.ADOPTED_API, "role": ROLE, **pair, **interval, "parentPort": 11443}
     verifier_context = verifier.prepare_input(ROLE, canonical(verifier_input), **clocks(f))
-    verifier_raw = canonical({"apiVersion": "serverware.nativeShadowVerifierTransport/v1",
+    verifier_raw = canonical({"apiVersion": "catchplate.nativeShadowVerifierTransport/v1",
         "authorization": json.loads(signed(verifier_context["payload"], verifier_context["domain"]))})
     authorizations["verifier-transport"] = {"inputOriginal": canonical(verifier_input).decode("ascii"), "original": verifier_raw.decode("ascii")}
     launch_input = {"apiVersion": launch.ALL_API, "role": ROLE, "pair": pair, "authorizations": authorizations,
@@ -126,7 +126,7 @@ class AdoptedEndpointControls(unittest.TestCase):
 
     def test_trusted_time_complete_signed_public_chain_keeps_native_domain(self):
         f, source, context, grant, _ = self.chain
-        self.assertEqual(context["payload"]["apiVersion"], "serverware.nativeShadowTrustedTimeServiceAssignment/v1")
+        self.assertEqual(context["payload"]["apiVersion"], "catchplate.nativeShadowTrustedTimeServiceAssignment/v1")
         self.assertEqual(context["domain"], authority.PROFILES[ROLE][2])
         self.assertEqual(profile.checked_adopted_result(ROLE, canonical(source),
             {"original": grant.decode("ascii"), "sha256": sha(grant)}, **clocks(f)), grant)
@@ -138,15 +138,15 @@ class AdoptedEndpointControls(unittest.TestCase):
         bundle = json.loads(result["bundleOriginal"])
         self.assertEqual(bundle["apiVersion"], launch.BUNDLE_API)
         self.assertEqual(bundle["serviceGrant"]["sha256"], sha(grant))
-        self.assertEqual(json.loads(bundle["originals"]["closure"])["apiVersion"], "serverware.nativeCustodyClosure/v5")
+        self.assertEqual(json.loads(bundle["originals"]["closure"])["apiVersion"], "catchplate.nativeCustodyClosure/v5")
         self.assertEqual(json.loads(result["prepared"]["native-launch-trustedTime"])["apiVersion"],
-            "serverware.nativeShadowTrustedTimeGuestLaunch/v1")
+            "catchplate.nativeShadowTrustedTimeGuestLaunch/v1")
         self.assertEqual(len(result["prepared"]), 10)
 
     def test_legacy_and_mixed_source_versions_refuse_before_key_loading(self):
         f, source, _, _, value = self.chain
-        for version in ("serverware.nativePilotNativeServiceAuthorityInput/v1", authority.HISTORY_INPUT_API,
-                "serverware.nativePilotNativeServiceAuthorityInput/v6"):
+        for version in ("catchplate.nativePilotNativeServiceAuthorityInput/v1", authority.HISTORY_INPUT_API,
+                "catchplate.nativePilotNativeServiceAuthorityInput/v6"):
             with self.subTest(version=version), self.assertRaises(ValueError):
                 commands.prepare_input(ROLE, "grant", canonical({**source, "apiVersion": version}), **clocks(f))
         with self.assertRaises(ValueError): launch.input_document(ROLE, canonical({**value, "apiVersion": launch.API}))
@@ -182,7 +182,7 @@ class AdoptedEndpointControls(unittest.TestCase):
         self.assertEqual(launch.ROLES, ("retrieval", "persistence", "publicationReconciliation"))
         for role in launch.ALL_ROLES:
             api, field, operation = publication.ADOPTED_LAUNCHES[role]
-            inner = {"apiVersion": "serverware.nativeShadowGuestLaunch/v1"}
+            inner = {"apiVersion": "catchplate.nativeShadowGuestLaunch/v1"}
             paths = publication.ADOPTED_DESTINATIONS
             for name, purpose in (("deliveryConfiguration", "native-cold-" + role), ("delivery", "native-delivery-" + role)):
                 inner[name] = {"path": paths[purpose], "sha256": synthetic(purpose)}
@@ -190,7 +190,7 @@ class AdoptedEndpointControls(unittest.TestCase):
                 purpose = "native-" + role + "-" + suffix
                 inner[name] = {"path": paths[purpose], "sha256": synthetic(purpose)}
             purpose = "native-generation-install-grant" if operation is None else "native-service-" + operation
-            value = {"apiVersion": "serverware." + api, "keyAdmission": inner,
+            value = {"apiVersion": "catchplate." + api, "keyAdmission": inner,
                 field: {"path": paths[purpose], "sha256": synthetic(purpose)}}
             self.assertEqual(publication.shape_adopted("native-launch-" + role, canonical(value)), value)
         self.assertNotIn("publicationReconciliation", publication.LAUNCHES)

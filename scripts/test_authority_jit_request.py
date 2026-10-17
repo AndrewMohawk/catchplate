@@ -38,18 +38,18 @@ if __name__ == "__main__":
     sys.addaudithook(no_network)
     # Offline import-only validator mode, never application startup. Importing
     # these fixture helpers must preserve the caller suite's selected mode.
-    os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
-    os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
+    os.environ["CATCHPLATE_PROCESS_MODE"] = "metadata-bootstrap"
+    os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from serverware import authority_contract as contract
-from serverware import authority_jit_request as ingress
-from serverware import authority_service as service
-from serverware import authority_transition_core as core
-from serverware import authority_transition_quota as quota
-from serverware import db
-from serverware.authority_store import authority_dispatch
+from catchplate import authority_contract as contract
+from catchplate import authority_jit_request as ingress
+from catchplate import authority_service as service
+from catchplate import authority_transition_core as core
+from catchplate import authority_transition_quota as quota
+from catchplate import db
+from catchplate.authority_store import authority_dispatch
 
 NOW = datetime(2026, 10, 11, 12, 0, tzinfo=timezone.utc)
 PUBLIC_FIELDS = frozenset({"route_id", "method", "url", "principal_id",
@@ -76,14 +76,14 @@ def framed(domain, value):
 
 def identity(request_digest, purpose):
     raw = hashlib.sha256(canonical({
-        "schema": "serverware.policyAuthorityDeterministicIdentity/v1",
+        "schema": "catchplate.policyAuthorityDeterministicIdentity/v1",
         "operation": "jit.request", "requestDigest": request_digest,
         "purpose": purpose})).digest()
     return str(uuid.UUID(bytes=raw[:16], version=5))
 
 
 def policy():
-    return {"schema": "serverware.jitApproverPolicy/v1",
+    return {"schema": "catchplate.jitApproverPolicy/v1",
         "requiredRoles": ["approver"], "roleMatch": "any",
         "allowedApproverIds": ["oidc:alpha", "oidc:beta"],
         "allowAnyApproverId": False, "requireWebAuthn": True, "threshold": 2,
@@ -174,11 +174,11 @@ class JitRequestIngressTests(unittest.TestCase):
         operation, document = dispatch_input(values)
         self.assertEqual(operation, "jit.request")
         self.assertEqual(set(document), {"schema", "handler", "operationManifestDigest", "arguments", "privateDocuments"})
-        self.assertEqual(document["schema"], "serverware.policyAuthorityPrivateJitWriterInput/v2")
+        self.assertEqual(document["schema"], "catchplate.policyAuthorityPrivateJitWriterInput/v2")
         self.assertEqual(document["handler"], "ensure_jit_approval_request")
         self.assertEqual(document["operationManifestDigest"], contract.OPERATION_MANIFEST_DIGEST)
         self.assertEqual(set(inspect.signature(db.ensure_jit_approval_request).parameters), PUBLIC_FIELDS)
-        self.assertEqual(document["arguments"]["schema"], "serverware.jitRequestCommitments/v2")
+        self.assertEqual(document["arguments"]["schema"], "catchplate.jitRequestCommitments/v2")
         self.assertEqual(set(document["privateDocuments"]), {"url", "canonical_request", "redacted_display"})
         raw = {key: copy.deepcopy(value) for key, value in document["arguments"].items()
             if key in PUBLIC_FIELDS}
@@ -220,7 +220,7 @@ class JitRequestIngressTests(unittest.TestCase):
             redacted_display_digest=sha(canonical(raw["redacted_display"])),
             canonical_request_opaque_id=identity(digest, "jit-canonical-request"),
             redacted_display_opaque_id=identity(digest, "jit-redacted-display"),
-            approver_policy=expected_policy, approver_policy_digest=framed("serverware.jitApproverPolicy/v1", expected_policy))
+            approver_policy=expected_policy, approver_policy_digest=framed("catchplate.jitApproverPolicy/v1", expected_policy))
         self.assertEqual(projected, expected)
         self.assertNotEqual(projected["canonical_request_opaque_id"], projected["redacted_display_opaque_id"])
         changed_raw = copy.deepcopy(raw)
@@ -237,10 +237,10 @@ class JitRequestIngressTests(unittest.TestCase):
     def test_original_authorization_bytes_and_intent_are_not_rewritten(self):
         raw, value, digest = arguments()
         original = copy.deepcopy(value)
-        envelope = {"schema": "serverware.policyAuthorityV9Authorization/v1", "operation": "jit.request",
+        envelope = {"schema": "catchplate.policyAuthorityV9Authorization/v1", "operation": "jit.request",
             "handler": "ensure_jit_approval_request", "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST,
             "arguments": value}
-        self.assertEqual(digest, framed("serverware.policyAuthorityV9Request/v1", envelope))
+        self.assertEqual(digest, framed("catchplate.policyAuthorityV9Request/v1", envelope))
         signer = Ed25519PrivateKey.generate()
         signature = signer.sign(canonical(envelope))
         projected = self.normalize(value, digest)
@@ -398,29 +398,29 @@ class HeldRequestRows:
             ("jit-canonical-request", "approval-secret-json/v1", "canonical_request_digest", canonical_expiry),
             ("jit-redacted-display", "approval-review-json/v1", "redacted_display_digest", display_expiry),
         ):
-            binding = framed("serverware.policyAuthorityJitOpaqueValueBinding/v1", {
-                "schema": "serverware.policyAuthorityJitOpaqueValueBinding/v1", "valueKind": kind,
+            binding = framed("catchplate.policyAuthorityJitOpaqueValueBinding/v1", {
+                "schema": "catchplate.policyAuthorityJitOpaqueValueBinding/v1", "valueKind": kind,
                 "approvalRequestId": self.item, "requestDigest": normalized["request_digest"],
                 "plaintextDigest": normalized[field]})
             # The statement's explicit fixture label avoids inventing native
             # evidence. The actual consumer checks all retained row digests.
             statement = {"fixture": "synthetic admitted row, not verifier execution", "bindingDigest": binding}
             signature = base64.urlsafe_b64encode(b"synthetic-not-verified-signature" * 2).decode().rstrip("=")
-            signature_digest = core.framed_digest("serverware.policyAuthorityExternalEvidenceSignature/v1",
+            signature_digest = core.framed_digest("catchplate.policyAuthorityExternalEvidenceSignature/v1",
                 b"Ed25519", signature.encode())
             receipt_material = {
-                "schema": "serverware.policyAuthorityExternalEvidenceReceipt/v1",
+                "schema": "catchplate.policyAuthorityExternalEvidenceReceipt/v1",
                 "bindingDigest": binding, "evidenceType": "key-custody-seal/v1",
                 "expiresAtEpochNs": self.EPOCH_NS + 3600 * 1_000_000_000,
                 "signatureAlgorithm": "Ed25519", "signatureDigest": signature_digest,
                 "sourceRevision": contract.SOURCE_REVISION,
-                "statementDigest": framed("serverware.policyAuthorityExternalEvidenceStatement/v1", statement),
+                "statementDigest": framed("catchplate.policyAuthorityExternalEvidenceStatement/v1", statement),
                 "verifiedAtEpochNs": self.EPOCH_NS,
                 "verifierAttestationReceiptDigest": sha(b"synthetic unattested selection"),
                 "verifierIdentityDigest": sha(b"synthetic verifier identity"),
                 "verifierMeasurementDigest": sha(b"synthetic verifier measurement"),
             }
-            evidence_digest = framed("serverware.policyAuthorityExternalEvidenceReceipt/v1", receipt_material)
+            evidence_digest = framed("catchplate.policyAuthorityExternalEvidenceReceipt/v1", receipt_material)
             evidence = {
                 "evidence_digest": evidence_digest, "evidence_type": "key-custody-seal/v1",
                 "binding_digest": binding, "statement_json": canonical(statement).decode(),
@@ -439,7 +439,7 @@ class HeldRequestRows:
                 "opaque_id": identity(self.digest, purpose), "value_kind": kind, "binding_digest": binding,
                 "algorithm": "synthetic-no-custody", "key_id": "synthetic-unadmitted-key",
                 "ciphertext_base64url": ciphertext,
-                "ciphertext_digest": core.framed_digest("serverware.policyAuthorityOpaqueCiphertext/v1",
+                "ciphertext_digest": core.framed_digest("catchplate.policyAuthorityOpaqueCiphertext/v1",
                     b"synthetic-no-custody", b"synthetic-unadmitted-key", ciphertext.encode()),
                 "producer_evidence_digest": evidence_digest, "created_at_epoch_ns": self.EPOCH_NS,
                 "expires_at_epoch_ns": expiry, "status": "active", "consumed_at_epoch_ns": None,
@@ -457,7 +457,7 @@ class HeldRequestRows:
             "updated_at_epoch_ns": self.EPOCH_NS, "source_revision": contract.SOURCE_REVISION}
         state = core._aggregate_state_material(aggregate, reserved_units={}, committed_units={})
         aggregate.update(state_json=canonical(state).decode(), state_digest=framed(
-            "serverware.policyAuthorityAggregateState/v1", state))
+            "catchplate.policyAuthorityAggregateState/v1", state))
         self.add(self.AGGREGATE, {"aggregate_id": aggregate_id}, aggregate)
         self.add("approval_requests", {"id": self.item}, None)
         self.add("routes", {"id": normalized["route_id"]}, None)
@@ -465,7 +465,7 @@ class HeldRequestRows:
 
     def add(self, table, key, row):
         self.rows.append({"table": table, "key": key, "keyDigest": core.framed_digest(
-            "serverware.policyAuthorityBusinessKey/v1", table.encode(), canonical(key)),
+            "catchplate.policyAuthorityBusinessKey/v1", table.encode(), canonical(key)),
             "present": row is not None, "row": row, "contractSelector": None})
 
     def context(self, now=NOW):
@@ -503,8 +503,8 @@ class JitPendingProjectionTests(unittest.TestCase):
         # Independent old row/key grammar: no production projection or key
         # helper supplies the expected bytes.
         raw = public_arguments()
-        policy_digest = framed("serverware.jitApproverPolicy/v1", policy())
-        pending_key = framed("serverware.jitPendingApproval/v2", {
+        policy_digest = framed("catchplate.jitApproverPolicy/v1", policy())
+        pending_key = framed("catchplate.jitPendingApproval/v2", {
             "routeId": raw["route_id"], "method": "PUT",
             "urlCommitment": sha(raw["url"].encode("utf-8")),
             "principalId": raw["principal_id"], "credentialId": raw["credential_id"],
@@ -704,7 +704,7 @@ class JitRequestExpiryTests(unittest.TestCase):
                 event = json.loads(audit["event_json"])
                 event["expiresAt"] = bad
                 audit.update(event_json=canonical(event).decode(), event_digest=framed(
-                    "serverware.metadataAuditOutboxEvent/v1", event))
+                    "catchplate.metadataAuditOutboxEvent/v1", event))
                 before = copy.deepcopy(fixture.rows)
                 with self.assertRaises(core.TransitionKernelError):
                     fixture.transition(NOW + timedelta(seconds=1))

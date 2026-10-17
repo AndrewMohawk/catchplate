@@ -70,7 +70,7 @@ pub(crate) fn claim(config:&Config,value:&VerifiedRequest,claim:&wire::SignedCla
 pub(crate) fn reserve_pair(config:&Config,current:&VerifiedRequest,request:&wire::PolicyRequest)->Result<(),V2RuntimeError> {
     claim(config,current,&request.claim,&request.reserve_result)?;
     let reserved=admit(config,request.reserve_request.clone())?;
-    if request.api_version!="serverware.responseV2.nativeStagingPolicy/v1"||reserved.phase()!="RESERVE"
+    if request.api_version!="catchplate.responseV2.nativeStagingPolicy/v1"||reserved.phase()!="RESERVE"
         ||request.reserve_result.original_sha256!=reserved.original_sha256()
         ||reserved.original().owner!=current.original().owner||reserved.original().session_sha256!=current.original().session_sha256
         ||reserved.original().gate_key_id!=current.original().gate_key_id||reserved.deadline()!=current.deadline()

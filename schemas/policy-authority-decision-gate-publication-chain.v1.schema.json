@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-authority-decision-gate-publication-chain.v1.schema.json",
-  "title": "Serverware Policy Authority Decision Gate Publication Chain v1",
+  "$id": "https://catchplate.invalid/schemas/policy-authority-decision-gate-publication-chain.v1.schema.json",
+  "title": "Catchplate Policy Authority Decision Gate Publication Chain v1",
   "$comment": "Exact external-evidence statement consumed by the authority transition kernel. runtimeTeeEvidenceDigest binds startup evidence bytes; runtimeTeeMeasurementDigest independently binds the measured TEE identity.",
   "type": "object",
   "additionalProperties": false,
@@ -20,7 +20,7 @@
     "runtimeAttestationVerifierEnvelope", "runtimeAttestationVerifierEnvelopeDigest", "evidenceChainDigest"
   ],
   "properties": {
-    "schema": {"const": "serverware.policyAuthorityDecisionGatePublicationChain/v1"},
+    "schema": {"const": "catchplate.policyAuthorityDecisionGatePublicationChain/v1"},
     "publicationRequestId": {"type": "string", "minLength": 1, "maxLength": 256}, "replayId": {"type": "string", "minLength": 1, "maxLength": 256},
     "generationId": {"$ref": "#/$defs/sha256"}, "predecessorGenerationDigest": {"$ref": "#/$defs/sha256"}, "generationEpoch": {"$ref": "#/$defs/positiveI64"}, "generationTombstoneEpoch": {"$ref": "#/$defs/positiveI64"},
     "assignmentEnvelopeDigest": {"$ref": "#/$defs/sha256"}, "assignmentPayloadDigest": {"$ref": "#/$defs/sha256"}, "assignmentRevision": {"$ref": "#/$defs/positiveI64"},

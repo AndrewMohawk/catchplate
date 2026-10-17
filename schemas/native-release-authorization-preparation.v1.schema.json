@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-release-authorization-preparation.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-release-authorization-preparation.v1.schema.json",
   "title": "Native release authorization preparation v1",
   "description": "Exact read-only preparation body, authenticated by the existing responseSignature/v3 contract over this body and its original timestamp. Shape is not authority. Runtime joins actual principal/route/policy/request/operation, verifies the independent CP key and original deadline, and compares approverPolicySha256 to SHA256 of compact sorted ensure_ascii=True JSON of approverPolicy including null. No new time allowance. Null is allowed only for a genuinely non-JIT route. The native normalized policy is at most 64 KiB after ASCII escaping.",
   "type": "object",
@@ -10,7 +10,7 @@
     "operationDigest", "approverPolicy", "approverPolicySha256"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeReleaseAuthorizationPreparation/v1"},
+    "apiVersion": {"const": "catchplate.nativeReleaseAuthorizationPreparation/v1"},
     "principalId": {
       "description": "Native principal: runtime additionally requires trim-stable UTF-8 of at most 1024 bytes, with no control characters.",
       "type": "string", "minLength": 1, "maxLength": 1024,
@@ -48,7 +48,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "requiredRoles", "roleMatch", "allowedApproverIds", "allowAnyApproverId", "requireWebAuthn", "threshold", "credentialPolicy"],
       "properties": {
-        "schema": {"const": "serverware.jitApproverPolicy/v1"},
+        "schema": {"const": "catchplate.jitApproverPolicy/v1"},
         "requiredRoles": {
           "type": "array", "maxItems": 8, "uniqueItems": true,
           "items": {"enum": ["admin", "approver", "attestation_operator", "attestation_reviewer", "auditor", "credential_owner", "policy_author", "policy_publisher"]}

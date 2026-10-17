@@ -11,10 +11,10 @@ use super::body_output_contract_v12::stream_byte_limit;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
-pub const SOCKET_PATH: &str = "/run/serverware/coder/v12/runtime-observer/control.sock";
-pub const LAUNCH_VERSION: &str = "serverware.controllerBodyObserverLaunch/v12";
-pub const READY_VERSION: &str = "serverware.controllerBodyObserverReady/v12";
-pub const TERMINAL_VERSION: &str = "serverware.controllerBodyObserverTerminal/v12";
+pub const SOCKET_PATH: &str = "/run/catchplate/coder/v12/runtime-observer/control.sock";
+pub const LAUNCH_VERSION: &str = "catchplate.controllerBodyObserverLaunch/v12";
+pub const READY_VERSION: &str = "catchplate.controllerBodyObserverReady/v12";
+pub const TERMINAL_VERSION: &str = "catchplate.controllerBodyObserverTerminal/v12";
 pub const MAX_LAUNCH_BYTES: usize = MAX_CONTEXT_BYTES_V12;
 pub const MAX_CONTROL_BYTES: usize = 4096;
 pub const FD_ROLES: [&str; 9] = ["pidfd", "proc", "exe", "userns", "mntns",

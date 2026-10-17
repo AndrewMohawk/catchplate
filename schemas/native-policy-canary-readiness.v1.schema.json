@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-policy-canary-readiness.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-policy-canary-readiness.v1.schema.json",
   "title": "Native complete-fleet readiness derivation prerequisite",
   "$comment": "Closed request <=16 KiB; policy <=8 KiB; full result <=256 KiB. Structural schema is never authority. Actual signed configuration, complete protected populations, current finalization/detail purposes, all real final original seals and semantic facts are required. Not a legacy Fleet READY envelope or activation permission.",
   "oneOf": [
@@ -28,7 +28,7 @@
       ],
       "properties": {
         "schema": {
-          "const": "serverware.policyCanaryNativeReadinessAuthorityPolicy/v1"
+          "const": "catchplate.policyCanaryNativeReadinessAuthorityPolicy/v1"
         },
         "deploymentId": {
           "type": "string",
@@ -90,7 +90,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativePolicyReadinessRequest/v1"
+          "const": "catchplate.nativePolicyReadinessRequest/v1"
         },
         "canary_id": {
           "type": "string",
@@ -318,7 +318,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativePolicyReadinessCore/v1"
+          "const": "catchplate.nativePolicyReadinessCore/v1"
         },
         "canaryId": {
           "type": "string"
@@ -444,7 +444,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativePolicyReadinessResult/v1"
+          "const": "catchplate.nativePolicyReadinessResult/v1"
         },
         "recordSha256": {
           "type": "string",

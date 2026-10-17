@@ -10,7 +10,7 @@ the private proof worker has completed its later proof request.
 ## Independent policy
 
 `oidc_session_activation_release_proof_input_issuer_policy.py` admits the closed
-root-signed `serverware.signedOidcSessionActivationReleaseProofInputIssuerPolicy/v1`
+root-signed `catchplate.signedOidcSessionActivationReleaseProofInputIssuerPolicy/v1`
 envelope. Its legacy payload contains `schema`, `sourceRevision`, `purpose`, `trustMode`,
 `completionBootstrapDigest`, `proofEnrollmentDigest`, `intentEnrollmentDigest`,
 `proofScope`, `callerId`, `proofLaunch`, `issuedAtEpochNs`, and `expiresAtEpochNs`.
@@ -29,7 +29,7 @@ the old activation launch or delivery expiry. The output is explicit proof
 bootstrap v2 with the exact same current original; legacy v1 is not relabeled.
 
 The completion identity frames the exact signed original using
-`serverware.oidcSessionActivationReleaseProofInputCompletionBootstrapIdentity/v1`.
+`catchplate.oidcSessionActivationReleaseProofInputCompletionBootstrapIdentity/v1`.
 Both enrollment identities retain their existing enrollment domains. All three
 originals are independently authenticated, not merely compared to these hashes.
 The completion original pins the packet, pending head, database, generation,
@@ -68,7 +68,7 @@ The public wire uses `SWOPIQ01` / `SWOPIR01`, with raw4 request:
 
 The raw1 response is the exact proof bootstrap, which already embeds release
 custody. The fixed root listener is
-`/run/serverware/oidc-session-activation-release-proof-inputs/grants.sock`;
+`/run/catchplate/oidc-session-activation-release-proof-inputs/grants.sock`;
 only caller UID/GID `65532` is accepted. The caller's remaining capacity narrows
 the 48 MiB bootstrap ceiling before response-body allocation. Opaque returned
 bytes are durably retained before semantic admission; framing itself admits no
@@ -90,9 +90,9 @@ encoding. Default read/write paths remain unchanged.
 The staging wire is distinct: `SWOPDQ01` / `SWOPDR01`, raw2
 `(stage-oidc-session-activation-release-proof-inputs, proofBootstrap)`, with ACK
 `(staged, framedBootstrapIdentity)`. It fixes issuer UID/GID `65494`, root peer
-`0:0`, and `/run/serverware/oidc-session-activation-token-release/proof-bootstrap.sock`.
+`0:0`, and `/run/catchplate/oidc-session-activation-token-release/proof-bootstrap.sock`.
 The bootstrap identity uses
-`serverware.oidcSessionActivationReleaseProofInputDeliveryBootstrapIdentity/v1`.
+`catchplate.oidcSessionActivationReleaseProofInputDeliveryBootstrapIdentity/v1`.
 Length/cap/peer checks precede body allocation. The sender requires the actual
 issuer-owned delivery channel, preserves its exact descriptor inventory and
 matches the returned identity to the staged original before normal close.

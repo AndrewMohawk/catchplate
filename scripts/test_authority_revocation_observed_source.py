@@ -60,8 +60,8 @@ def assigned(tree, name):
 class RevocationObservedSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.helper_source, cls.helper = read("serverware/authority_revocation_observed.py")
-        cls.planner_source, cls.planner = read("serverware/authority_planner.py", 2 * 1024 * 1024)
+        cls.helper_source, cls.helper = read("catchplate/authority_revocation_observed.py")
+        cls.planner_source, cls.planner = read("catchplate/authority_planner.py", 2 * 1024 * 1024)
         cls.program = definition(cls.planner, "TypedTransitionPlanningProgram")
 
     def shape(self, actual, expected):
@@ -82,7 +82,7 @@ class RevocationObservedSourceTests(unittest.TestCase):
         imports = {(node.module, item.name) for node in self.helper.body
             if isinstance(node, ast.ImportFrom) for item in node.names}
         self.assertEqual(imports, {("__future__", "annotations"), *(
-            ("serverware", name) for name in (
+            ("catchplate", name) for name in (
                 "authority_complete_query", "authority_complete_query_batch", "authority_contract",
                 "authority_index_contract", "authority_index_heads", "authority_index_projection",
                 "authority_query_reads", "authority_revocation_plan",

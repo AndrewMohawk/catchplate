@@ -18,7 +18,7 @@ use ed25519_dalek::Signature;
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::{json, Map, Value};
-use serverware_decision_gate::native_response_profile_v1 as response_profile;
+use catchplate_decision_gate::native_response_profile_v1 as response_profile;
 use sha2::{Digest, Sha256};
 use std::ffi::CString;
 use std::fmt;
@@ -38,8 +38,8 @@ const MAX_TRUST_BYTES: usize = 1024 * 1024;
 const MAX_INPUT_BYTES: usize = 512 * 1024;
 const MAX_STATEMENT_BYTES: usize = 256 * 1024;
 const MAX_OUTPUT_BYTES: usize = 4096;
-const CHALLENGE_DOMAIN: &[u8] = b"serverware/native-response-attestation-challenge/v1\0";
-const BOOT_DOMAIN: &[u8] = b"serverware/native-proof-custody-boot/v1\0";
+const CHALLENGE_DOMAIN: &[u8] = b"catchplate/native-response-attestation-challenge/v1\0";
+const BOOT_DOMAIN: &[u8] = b"catchplate/native-proof-custody-boot/v1\0";
 
 pub(super) struct NativeVerifierConfigV1 {
     pub(super) executable: PathBuf,
@@ -352,7 +352,7 @@ fn b64(value: &str, minimum: usize, maximum: usize) -> Result<Vec<u8>, String> {
 
 fn validate_expectations(expected: &Value) -> Result<(Vec<u8>, bool), String> {
     let native_principal_profile = match text(expected, "apiVersion")? {
-        "serverware.nativeResponseAttestationExpectations/v1" => false,
+        "catchplate.nativeResponseAttestationExpectations/v1" => false,
         response_profile::NATIVE_EXPECTATIONS => true,
         _ => return Err("native verifier expectations version mismatch".to_owned()),
     };
@@ -407,7 +407,7 @@ fn validate_trust(trust: &Value) -> Result<(), String> {
         "nitroCertificateProfile"], "native verifier trust roots")?;
     let roots = trust.get("awsNitroRootCertificatesPem").and_then(Value::as_array)
         .ok_or("native verifier trust root inventory is invalid")?;
-    if text(trust, "apiVersion")? != "serverware.nativeResponseAttestationTrustRoots/v1"
+    if text(trust, "apiVersion")? != "catchplate.nativeResponseAttestationTrustRoots/v1"
         || !(1..=16).contains(&roots.len())
         || roots.iter().any(|value| value.as_str().is_none_or(|pem| pem.is_empty() || pem.len() > 64 * 1024 || !pem.is_ascii()))
         || trust.get("awsNitroCrlsDerBase64url") != Some(&json!([])) {
@@ -438,9 +438,9 @@ fn expected_verdict(proof: &Value, expected: &Value, nonce: &[u8], native_princi
     object(proof, &["apiVersion", "kind", "server_statement", "server_statement_sha256",
         "server_signature", "native_attestation"], "native proof envelope")?;
     let envelope_version = if native_principal_profile { response_profile::NATIVE_ENVELOPE }
-        else { "serverware.nativeResponseRuntimeProof/v1" };
+        else { "catchplate.nativeResponseRuntimeProof/v1" };
     if text(proof, "apiVersion")? != envelope_version
-        || text(proof, "kind")? != "ServerwareNativeResponseRuntimeProof" {
+        || text(proof, "kind")? != "CatchplateNativeResponseRuntimeProof" {
         return Err("native proof envelope discriminator mismatch".to_owned());
     }
     let statement = proof.get("server_statement").ok_or("native statement absent")?;
@@ -448,8 +448,8 @@ fn expected_verdict(proof: &Value, expected: &Value, nonce: &[u8], native_princi
     let families = if native_principal_profile {
         [response_profile::NATIVE_BUFFERED, response_profile::NATIVE_STREAMING, response_profile::NATIVE_OBSERVATION]
     } else {
-        ["serverware.proxyResponseStatement/v2", "serverware.streamingResponseStatement/v1",
-            "serverware.responseObservationStatement/v1"]
+        ["catchplate.proxyResponseStatement/v2", "catchplate.streamingResponseStatement/v1",
+            "catchplate.responseObservationStatement/v1"]
     };
     if !families.contains(&version)
         || (version != families[0] && nonce.len() != 32)
@@ -485,7 +485,7 @@ fn expected_verdict(proof: &Value, expected: &Value, nonce: &[u8], native_princi
     let evidence = proof.get("native_attestation").ok_or("native attestation absent")?;
     object(evidence, &["apiVersion", "attestationDocumentB64", "responseProofPublicKey"], "native attestation")?;
     let evidence_key = b64(text(evidence, "responseProofPublicKey")?, 32, 32)?;
-    if text(evidence, "apiVersion")? != "serverware.nativeResponseProofKeyEvidence/v1"
+    if text(evidence, "apiVersion")? != "catchplate.nativeResponseProofKeyEvidence/v1"
         || evidence_key.as_slice() != key.as_bytes().as_slice() {
         return Err("native original quote public key differs from actual signature key".to_owned());
     }
@@ -507,7 +507,7 @@ fn expected_verdict(proof: &Value, expected: &Value, nonce: &[u8], native_princi
     fresh(statement_issued, epoch_seconds()?, expected)?;
     Ok(json!({
         "apiVersion":if native_principal_profile { response_profile::NATIVE_VERDICT }
-            else { "serverware.nativeResponseAttestationVerification/v1" }, "ok":true, "debug":false,
+            else { "catchplate.nativeResponseAttestationVerification/v1" }, "ok":true, "debug":false,
         "resultScope":"local-signature-and-native-quote-only", "okForAction":false,
         "statementApiVersion":version, "serverStatementSha256":statement_digest,
         "signatureSha256":super::sha256_prefixed(&signature), "clientNonce":text(expected,"nonce")?,
@@ -657,7 +657,7 @@ fn validate_static_elf(bytes: &[u8], deadline: Instant) -> Result<(), String> {
 
 fn seal_executable(bytes: &[u8], deadline: Instant) -> Result<File, String> {
     live(deadline)?;
-    let descriptor = unsafe { libc::memfd_create(c"serverware-native-response-verifier".as_ptr(),
+    let descriptor = unsafe { libc::memfd_create(c"catchplate-native-response-verifier".as_ptr(),
         libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
     if descriptor < 0 { return Err("create native verifier sealed snapshot".to_owned()); }
     let mut file = unsafe { File::from_raw_fd(descriptor) };

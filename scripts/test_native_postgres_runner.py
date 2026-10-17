@@ -22,25 +22,25 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import native_postgres_inventory as inventory
-from serverware import native_postgres_profile as profile
-from serverware import native_postgres_process as processes
+from catchplate import native_postgres_inventory as inventory
+from catchplate import native_postgres_profile as profile
+from catchplate import native_postgres_process as processes
 
 
 # Independent source-contract oracles, not copies returned by the producer.
 EXPECTED_SETTINGS = {
-    "listen_addresses": "", "unix_socket_directories": "/run/serverware-native-postgres",
+    "listen_addresses": "", "unix_socket_directories": "/run/catchplate-native-postgres",
     "unix_socket_permissions": "0700", "port": "5432", "ssl": "off",
     "fsync": "on", "full_page_writes": "on", "synchronous_commit": "on",
     "log_destination": "stderr", "logging_collector": "off", "max_connections": "32",
     "shared_buffers": "8192", "work_mem": "4096", "maintenance_work_mem": "32768",
     "max_wal_size": "256", "min_wal_size": "80", "temp_file_limit": "131072",
     "jit": "off", "restart_after_crash": "off",
-    "data_directory": "/var/lib/serverware-runner/native-postgres/pgdata",
+    "data_directory": "/var/lib/catchplate-runner/native-postgres/pgdata",
     "data_checksums": "on", "block_size": "8192",
 }
 EXPECTED_POSTGRES_SETTINGS = (
-    "listen_addresses=", "unix_socket_directories=/run/serverware-native-postgres",
+    "listen_addresses=", "unix_socket_directories=/run/catchplate-native-postgres",
     "unix_socket_permissions=0700", "port=5432", "ssl=off", "fsync=on",
     "full_page_writes=on", "synchronous_commit=on", "log_destination=stderr",
     "logging_collector=off", "max_connections=32", "shared_buffers=64MB",
@@ -50,19 +50,19 @@ EXPECTED_POSTGRES_SETTINGS = (
 
 
 def readiness_row():
-    return (160004, "UTF8", "UTF8", "postgres", "serverware_fixture_admin",
-            "serverware_fixture_admin", True, None, False, "987654321", dict(EXPECTED_SETTINGS))
+    return (160004, "UTF8", "UTF8", "postgres", "catchplate_fixture_admin",
+            "catchplate_fixture_admin", True, None, False, "987654321", dict(EXPECTED_SETTINGS))
 
 
 class NativePostgresProfileTests(unittest.TestCase):
     def test_fixed_paths_identity_and_deadline_budget_preserve_all_ten_suite_limits(self):
         self.assertEqual((profile.PG_BINDIR, profile.PRIVATE_ROOT, profile.NATIVE_ROOT,
                           profile.PGDATA, profile.SOCKET_ROOT, profile.OUTPUT_ROOT), (
-            "/opt/serverware/postgresql-16/bin", "/var/lib/serverware-runner",
-            "/var/lib/serverware-runner/native-postgres",
-            "/var/lib/serverware-runner/native-postgres/pgdata",
-            "/run/serverware-native-postgres", "/opt/serverware/output/native-postgres"))
-        self.assertEqual((profile.USER, profile.UID, profile.GID), ("serverware_fixture_admin", 10001, 10001))
+            "/opt/catchplate/postgresql-16/bin", "/var/lib/catchplate-runner",
+            "/var/lib/catchplate-runner/native-postgres",
+            "/var/lib/catchplate-runner/native-postgres/pgdata",
+            "/run/catchplate-native-postgres", "/opt/catchplate/output/native-postgres"))
+        self.assertEqual((profile.USER, profile.UID, profile.GID), ("catchplate_fixture_admin", 10001, 10001))
         self.assertEqual((profile.TOTAL_SECONDS, profile.INIT_SECONDS, profile.STARTUP_SECONDS,
                           profile.SHUTDOWN_SECONDS), (5700, 120, 60, 60))
         self.assertEqual(tuple(suite.timeout_seconds for suite in inventory.SUITES),
@@ -73,26 +73,26 @@ class NativePostgresProfileTests(unittest.TestCase):
 
     def test_exact_initdb_vector_has_no_shell_no_sync_or_external_wal_override(self):
         self.assertEqual(profile.initdb_argv(), (
-            "/opt/serverware/postgresql-16/bin/initdb",
-            "--pgdata=/var/lib/serverware-runner/native-postgres/pgdata",
-            "--username=serverware_fixture_admin", "--encoding=UTF8", "--locale=C",
+            "/opt/catchplate/postgresql-16/bin/initdb",
+            "--pgdata=/var/lib/catchplate-runner/native-postgres/pgdata",
+            "--username=catchplate_fixture_admin", "--encoding=UTF8", "--locale=C",
             "--locale-provider=libc", "--auth-local=trust", "--auth-host=reject",
             "--data-checksums", "--no-instructions", "--no-clean"))
         self.assertIs(type(profile.initdb_argv()), tuple)
 
     def test_exact_foreground_postmaster_vector_and_explicit_resource_settings(self):
         expected = (
-            "/opt/serverware/postgresql-16/bin/postgres", "-D",
-            "/var/lib/serverware-runner/native-postgres/pgdata",
+            "/opt/catchplate/postgresql-16/bin/postgres", "-D",
+            "/var/lib/catchplate-runner/native-postgres/pgdata",
         ) + tuple(part for setting in EXPECTED_POSTGRES_SETTINGS for part in ("-c", setting))
         self.assertEqual(profile.postgres_argv(), expected)
         self.assertIs(type(profile.postgres_argv()), tuple)
 
     def test_environment_is_fresh_closed_and_ignores_host_pg_python_and_loader_overrides(self):
         expected = {
-            "PATH": "/opt/serverware/postgresql-16/bin:/usr/local/bin:/usr/bin:/bin",
-            "HOME": "/var/lib/serverware-runner/native-postgres", "LANG": "C",
-            "LC_ALL": "C", "TZ": "UTC", "PYTHONPATH": "/opt/serverware/src",
+            "PATH": "/opt/catchplate/postgresql-16/bin:/usr/local/bin:/usr/bin:/bin",
+            "HOME": "/var/lib/catchplate-runner/native-postgres", "LANG": "C",
+            "LC_ALL": "C", "TZ": "UTC", "PYTHONPATH": "/opt/catchplate/src",
             "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1", "PYTHONUNBUFFERED": "1",
         }
         with mock.patch.dict(os.environ, {"PGHOST": "remote.invalid", "PGDATA": "/caller",
@@ -291,8 +291,8 @@ class ProcessHarness:
                 ("time.monotonic", lambda: self.now),
                 ("time.sleep", self.sleep),
                 ("signal.pidfd_send_signal", self.send_signal)):
-            self.stack.enter_context(mock.patch("serverware.native_postgres_process." + target, value))
-        self.stack.enter_context(mock.patch("serverware.native_postgres_process.os.kill",
+            self.stack.enter_context(mock.patch("catchplate.native_postgres_process." + target, value))
+        self.stack.enter_context(mock.patch("catchplate.native_postgres_process.os.kill",
                                            side_effect=AssertionError("numeric PID signaling is forbidden")))
         self.supervisor = processes.ProcessSet()
         return self

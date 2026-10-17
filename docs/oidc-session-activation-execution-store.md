@@ -1,6 +1,6 @@
 # Activation execution-bundle store
 
-[`ActivationExecutionBundleStore`](../serverware/authority_oidc_session_activation_execution_store.py)
+[`ActivationExecutionBundleStore`](../catchplate/authority_oidc_session_activation_execution_store.py)
 retains the first exact encrypted execution bundle in a separate, independently
 provisioned private directory. This is source-only implementation: unbuilt,
 unexecuted and unprovisioned. Storage integrity is not plan authentication,
@@ -8,7 +8,7 @@ currentness, permission, protected SQL execution or session activation.
 
 ## Shared mechanics, fixed formats
 
-The neutral private [storage engine](../serverware/authority_oidc_execution_store_core.py)
+The neutral private [storage engine](../catchplate/authority_oidc_execution_store_core.py)
 now serves exactly two fixed wrapper classes: `ActivationExecutionBundleStore`
 and [consume-specific `DeliveryExecutionBundleStore`](oidc-session-activation-delivery-execution-store.md).
 The activation constructor, read/append/close and private snapshot signatures,
@@ -54,7 +54,7 @@ provisioned limits apply before publication.
 
 The stable basename is `execution-` followed by the hex part of the framed
 canonical-context digest under
-`serverware.oidcSessionActivationExecutionStoreSlot/v1`. There is no supplied
+`catchplate.oidcSessionActivationExecutionStoreSlot/v1`. There is no supplied
 path, latest-record lookup or heuristic association.
 
 ## First bytes, recovery and uncertainty

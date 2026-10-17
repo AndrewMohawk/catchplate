@@ -12,8 +12,8 @@ import json
 import unittest
 from unittest import mock
 
-from serverware import authority_challenge_counts as counts
-from serverware import authority_challenge_replay as replay
+from catchplate import authority_challenge_counts as counts
+from catchplate import authority_challenge_replay as replay
 from test_authority_challenge_manifest import context
 
 

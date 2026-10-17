@@ -55,17 +55,17 @@ def expect_provider_failure(mode: str, payload: dict[str, Any], env: dict[str, s
         raise AssertionError(f"{mode} failed with wrong error, expected {expected!r}: {detail}")
 
 
-def run_serverware_integration(env: dict[str, str]) -> dict[str, Any]:
+def run_catchplate_integration(env: dict[str, str]) -> dict[str, Any]:
     code = r'''
 import json
 import os
 from pathlib import Path
-from serverware.policy_bundle import write_policy_bundle
-from serverware.ca_material import ensure_mitm_ca_material
-from serverware.db import get_policy_high_water, init_db
+from catchplate.policy_bundle import write_policy_bundle
+from catchplate.ca_material import ensure_mitm_ca_material
+from catchplate.db import get_policy_high_water, init_db
 
 init_db()
-policy_source = Path(os.environ["SERVERWARE_POLICY_BUNDLE_SOURCE"])
+policy_source = Path(os.environ["CATCHPLATE_POLICY_BUNDLE_SOURCE"])
 bundle = json.loads(policy_source.read_text())
 high_water = get_policy_high_water()
 if high_water:
@@ -77,8 +77,8 @@ if high_water:
 snapshot = write_policy_bundle(bundle, enforce_high_water=True)
 ensure_mitm_ca_material()
 
-from serverware.attestation import attestation_document, verify_attestation_quote
-from serverware.key_release import release_material
+from catchplate.attestation import attestation_document, verify_attestation_quote
+from catchplate.key_release import release_material
 
 attestation = attestation_document("nitro-integration-test")
 claims = verify_attestation_quote(attestation)
@@ -121,28 +121,28 @@ print(json.dumps({
     )
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", errors="replace") + result.stdout.decode("utf-8", errors="replace")
-        raise AssertionError(f"Serverware Nitro integration failed: {detail}")
+        raise AssertionError(f"Catchplate Nitro integration failed: {detail}")
     data = json.loads(result.stdout.decode("utf-8"))
     if not isinstance(data, dict):
-        raise AssertionError("Serverware Nitro integration did not return a JSON object")
+        raise AssertionError("Catchplate Nitro integration did not return a JSON object")
     return data
 
 
 def main() -> None:
-    data_dir = Path(os.getenv("SERVERWARE_DATA_DIR", "/data"))
+    data_dir = Path(os.getenv("CATCHPLATE_DATA_DIR", "/data"))
     fixture_dir = data_dir / "nitro-fixture"
     root_cert = fixture_dir / "root.cert.pem"
     base_env = os.environ.copy()
     base_env.update(
         {
-            "SERVERWARE_NITRO_FIXTURE": "1",
-            "SERVERWARE_NITRO_FIXTURE_DIR": str(fixture_dir),
-            "SERVERWARE_NITRO_ROOT_CERT": str(root_cert),
-            "SERVERWARE_NITRO_EXPECTED_PCRS": canonical_json(FIXTURE_PCRS),
-            "SERVERWARE_NITRO_ALLOW_DEBUG": "0",
-            "SERVERWARE_NITRO_ALLOW_DEBUG_RELEASE": "0",
-            "SERVERWARE_NITRO_REQUIRE_KMS_COMMAND": "1",
-            "SERVERWARE_NITRO_KMS_RELEASE_COMMAND": f"{sys.executable} scripts/nitro_kms_fixture.py release",
+            "CATCHPLATE_NITRO_FIXTURE": "1",
+            "CATCHPLATE_NITRO_FIXTURE_DIR": str(fixture_dir),
+            "CATCHPLATE_NITRO_ROOT_CERT": str(root_cert),
+            "CATCHPLATE_NITRO_EXPECTED_PCRS": canonical_json(FIXTURE_PCRS),
+            "CATCHPLATE_NITRO_ALLOW_DEBUG": "0",
+            "CATCHPLATE_NITRO_ALLOW_DEBUG_RELEASE": "0",
+            "CATCHPLATE_NITRO_REQUIRE_KMS_COMMAND": "1",
+            "CATCHPLATE_NITRO_KMS_RELEASE_COMMAND": f"{sys.executable} scripts/nitro_kms_fixture.py release",
         }
     )
     claims = {
@@ -246,7 +246,7 @@ def main() -> None:
     )
 
     extra_allowed_env = dict(base_env)
-    extra_allowed_env["SERVERWARE_NITRO_ALLOWED_MATERIALS"] = "broker-kek,decision-gate-ca,debug-material"
+    extra_allowed_env["CATCHPLATE_NITRO_ALLOWED_MATERIALS"] = "broker-kek,decision-gate-ca,debug-material"
     expect_provider_failure(
         "release",
         {
@@ -268,8 +268,8 @@ def main() -> None:
     )
 
     attestation_command_env = dict(base_env)
-    attestation_command_env.pop("SERVERWARE_NITRO_FIXTURE", None)
-    attestation_command_env["SERVERWARE_NITRO_ATTESTATION_COMMAND"] = f"{sys.executable} scripts/nitro_attestation_fixture.py attest"
+    attestation_command_env.pop("CATCHPLATE_NITRO_FIXTURE", None)
+    attestation_command_env["CATCHPLATE_NITRO_ATTESTATION_COMMAND"] = f"{sys.executable} scripts/nitro_attestation_fixture.py attest"
     command_quote = run_provider("quote", {"claims": claims}, attestation_command_env)
     if command_quote.get("provider") != "aws-nitro-enclaves":
         raise AssertionError(f"Nitro attestation command quote had wrong provider: {command_quote}")
@@ -278,33 +278,33 @@ def main() -> None:
     if command_tee.get("verified") is not True or command_tee.get("pcrs") != FIXTURE_PCRS:
         raise AssertionError(f"Nitro attestation command quote was not verified: {command_verified}")
 
-    integration_data_dir = fixture_dir / "serverware-integration"
+    integration_data_dir = fixture_dir / "catchplate-integration"
     shutil.rmtree(integration_data_dir, ignore_errors=True)
     integration_data_dir.mkdir(parents=True, exist_ok=True)
     integration_env = dict(attestation_command_env)
     integration_env.update(
         {
-            "SERVERWARE_DATA_DIR": str(integration_data_dir.resolve()),
-            "SERVERWARE_METADATA_STORE_BACKEND": "sqlite",
-            "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite",
-            "SERVERWARE_GRANT_STORE_BACKEND": "sqlite",
-            "SERVERWARE_TEE_QUOTE_PROVIDER": "aws-nitro-enclaves",
-            "SERVERWARE_TEE_PLATFORM": "aws-nitro",
-            "SERVERWARE_TEE_QUOTE_COMMAND": f"{sys.executable} scripts/aws_nitro_tee_provider.py quote",
-            "SERVERWARE_TEE_QUOTE_VERIFY_COMMAND": f"{sys.executable} scripts/aws_nitro_tee_provider.py verify",
-            "SERVERWARE_KEY_RELEASE_COMMAND": f"{sys.executable} scripts/aws_nitro_tee_provider.py release",
-            "SERVERWARE_POLICY_BUNDLE_SOURCE": str(Path("policies/demo.policy.json").resolve()),
-            "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST": claims["data_plane_binary_digest"],
+            "CATCHPLATE_DATA_DIR": str(integration_data_dir.resolve()),
+            "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite",
+            "CATCHPLATE_AUDIT_STORE_BACKEND": "sqlite",
+            "CATCHPLATE_GRANT_STORE_BACKEND": "sqlite",
+            "CATCHPLATE_TEE_QUOTE_PROVIDER": "aws-nitro-enclaves",
+            "CATCHPLATE_TEE_PLATFORM": "aws-nitro",
+            "CATCHPLATE_TEE_QUOTE_COMMAND": f"{sys.executable} scripts/aws_nitro_tee_provider.py quote",
+            "CATCHPLATE_TEE_QUOTE_VERIFY_COMMAND": f"{sys.executable} scripts/aws_nitro_tee_provider.py verify",
+            "CATCHPLATE_KEY_RELEASE_COMMAND": f"{sys.executable} scripts/aws_nitro_tee_provider.py release",
+            "CATCHPLATE_POLICY_BUNDLE_SOURCE": str(Path("policies/demo.policy.json").resolve()),
+            "CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST": claims["data_plane_binary_digest"],
         }
     )
-    integration = run_serverware_integration(integration_env)
+    integration = run_catchplate_integration(integration_env)
     if integration.get("external_release_provider") != "aws-nitro-kms-policy":
-        raise AssertionError(f"Serverware key release did not use Nitro release policy: {integration}")
+        raise AssertionError(f"Catchplate key release did not use Nitro release policy: {integration}")
     if integration.get("kms_release_provider") != "fixture-kms-hsm":
-        raise AssertionError(f"Serverware key release did not invoke Nitro KMS/HSM fixture: {integration}")
+        raise AssertionError(f"Catchplate key release did not invoke Nitro KMS/HSM fixture: {integration}")
 
     bad_attestation_digest_env = dict(attestation_command_env)
-    bad_attestation_digest_env["SERVERWARE_NITRO_ATTESTATION_FIXTURE_BAD_DIGEST"] = "1"
+    bad_attestation_digest_env["CATCHPLATE_NITRO_ATTESTATION_FIXTURE_BAD_DIGEST"] = "1"
     expect_provider_failure(
         "quote",
         {"claims": claims},
@@ -313,7 +313,7 @@ def main() -> None:
     )
 
     bad_attestation_doc_env = dict(attestation_command_env)
-    bad_attestation_doc_env["SERVERWARE_NITRO_ATTESTATION_FIXTURE_BAD_DOCUMENT"] = "1"
+    bad_attestation_doc_env["CATCHPLATE_NITRO_ATTESTATION_FIXTURE_BAD_DOCUMENT"] = "1"
     expect_provider_failure("quote", {"claims": claims}, bad_attestation_doc_env, "user_data does not bind")
 
     tampered_quote = json.loads(json.dumps(quote))
@@ -323,11 +323,11 @@ def main() -> None:
     mismatch_env = dict(base_env)
     mismatch_pcrs = dict(FIXTURE_PCRS)
     mismatch_pcrs["0"] = "99" * 48
-    mismatch_env["SERVERWARE_NITRO_EXPECTED_PCRS"] = canonical_json(mismatch_pcrs)
+    mismatch_env["CATCHPLATE_NITRO_EXPECTED_PCRS"] = canonical_json(mismatch_pcrs)
     expect_provider_failure("verify", {"quote": quote}, mismatch_env, "PCR0 does not match")
 
     no_kms_env = dict(base_env)
-    no_kms_env.pop("SERVERWARE_NITRO_KMS_RELEASE_COMMAND", None)
+    no_kms_env.pop("CATCHPLATE_NITRO_KMS_RELEASE_COMMAND", None)
     expect_provider_failure(
         "release",
         {
@@ -345,11 +345,11 @@ def main() -> None:
             },
         },
         no_kms_env,
-        "SERVERWARE_NITRO_KMS_RELEASE_COMMAND is required",
+        "CATCHPLATE_NITRO_KMS_RELEASE_COMMAND is required",
     )
 
     denied_kms_env = dict(base_env)
-    denied_kms_env["SERVERWARE_NITRO_KMS_FIXTURE_DENY"] = "1"
+    denied_kms_env["CATCHPLATE_NITRO_KMS_FIXTURE_DENY"] = "1"
     expect_provider_failure(
         "release",
         {
@@ -371,7 +371,7 @@ def main() -> None:
     )
 
     bad_digest_kms_env = dict(base_env)
-    bad_digest_kms_env["SERVERWARE_NITRO_KMS_FIXTURE_BAD_DIGEST"] = "1"
+    bad_digest_kms_env["CATCHPLATE_NITRO_KMS_FIXTURE_BAD_DIGEST"] = "1"
     expect_provider_failure(
         "release",
         {
@@ -393,7 +393,7 @@ def main() -> None:
     )
 
     secret_kms_env = dict(base_env)
-    secret_kms_env["SERVERWARE_NITRO_KMS_FIXTURE_SECRET_RESPONSE"] = "1"
+    secret_kms_env["CATCHPLATE_NITRO_KMS_FIXTURE_SECRET_RESPONSE"] = "1"
     expect_provider_failure(
         "release",
         {
@@ -415,7 +415,7 @@ def main() -> None:
     )
 
     debug_env = dict(base_env)
-    debug_env["SERVERWARE_NITRO_FIXTURE_DEBUG"] = "1"
+    debug_env["CATCHPLATE_NITRO_FIXTURE_DEBUG"] = "1"
     expect_provider_failure("quote", {"claims": claims}, debug_env, "debug PCRs are not accepted")
 
     print(
@@ -429,7 +429,7 @@ def main() -> None:
                 "root_sha256": tee.get("root_sha256"),
                 "release_provider": release.get("provider"),
                 "kms_provider": kms_release.get("provider"),
-                "serverware_integration": integration.get("quote_provider"),
+                "catchplate_integration": integration.get("quote_provider"),
                 "attestation_command": "pass",
             },
             sort_keys=True,

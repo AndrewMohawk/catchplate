@@ -49,7 +49,7 @@ cleanup succeeded. All private service/helper containers were removed; all
 remaining-container, helper and network listings were empty. Private recovery
 copies and evidence remain retained.
 
-Evidence is in `../serverware-operator-workspace-evidence/npm-retained-372.8WNw8TNL/`:
+Evidence is in `../catchplate-operator-workspace-evidence/npm-retained-372.8WNw8TNL/`:
 the two pre-gate publication observations, pair observations, stopped inspections,
 preservation comparisons and cold-process identity join. Result SHA-256:
 `912491b78f58d279d47231bbc0d21aa80ee297f2da121a84d95697686c1560cb`.
@@ -144,7 +144,7 @@ Both were subsequently healthy and passed the complete pair checks.
 ## Evidence, corrections and cleanup
 
 Private receipts are retained beside the checkout at
-`../serverware-operator-workspace-evidence/managed-retained.qBkamJ3p/`:
+`../catchplate-operator-workspace-evidence/managed-retained.qBkamJ3p/`:
 `source-verification.json`, `compiled-source-join.json`, both `*-pair.json`
 observations, `retained-google-configuration.json`, both `*-preservation.json`
 comparisons and stopped-state archive/inventory sets. The comparisons intentionally
@@ -169,7 +169,7 @@ evidence remain available. The live demo, edge, fixture and waiting native pilot
 were not changed.
 
 Live deployment must still follow the
-[maintenance and preservation gate](../docker/serverware-operator-demo/README.md#approval-and-state-preservation-gate),
+[maintenance and preservation gate](../docker/catchplate-operator-demo/README.md#approval-and-state-preservation-gate),
 including current configuration review, a fresh backup, strict startup ordering,
 retained-state checks and protected-route/browser verification. This rehearsal
 does not authorize Google consent, real destinations, new tokens or native Start.

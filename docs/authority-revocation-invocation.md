@@ -21,12 +21,12 @@ witness and retained planner evidence against those claims before storage.
 ## Closed wire contract
 
 The outer document preserves the existing eleven-field
-`serverware.policyAuthorityInternalEnvelope/v3` schema and signing domain. Its
+`catchplate.policyAuthorityInternalEnvelope/v3` schema and signing domain. Its
 new fixed purpose is `issue-revocation-capability`; the legacy service purpose
 allowlists do not accept it. This is not a widening of legacy admission.
 
 The closed payload is
-`serverware.policyAuthorityRevocationIssuanceInvocation/v1`. It binds the source
+`catchplate.policyAuthorityRevocationIssuanceInvocation/v1`. It binds the source
 revision, generation sequence/digest, execution-envelope ID, accepted preliminary
 witness receipt digest, original capability and witness-request transports with
 exact byte counts, and fifteen historical expectations. Role keys, signer

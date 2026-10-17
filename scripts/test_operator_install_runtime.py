@@ -24,11 +24,11 @@ import sys
 import time
 
 SOURCE = Path(__file__).resolve().parents[1]
-CLI = SOURCE / "scripts/serverware_standalone.py"
+CLI = SOURCE / "scripts/catchplate_standalone.py"
 IMAGE = "sha256:28b5ed4743d4ff6b98950799214550994466f68210c4377fb26be22434b89408"
 REVISION = "133b967f0542d961385c5a9b2971028f53158453"
 PROBE_IMAGE = "sha256:ec14a558a42e483a834860521e399b461a2df880fcba495e7127b0d8d2a51e01"
-CONSOLE, PROXY = "console.install.serverware.example", "proxy.install.serverware.example"
+CONSOLE, PROXY = "console.install.catchplate.example", "proxy.install.catchplate.example"
 SUBNETS = {"control": "172.16.249.64/28", "outbound": "172.16.249.80/28"}
 
 
@@ -153,7 +153,7 @@ def probe():
     status, body = request("/api/operator-demo/catalog")
     require(status == 200, "authenticated catalog unavailable")
     catalog = json.loads(body)
-    require(catalog.get("schema") == "serverware.operatorCatalog/v1"
+    require(catalog.get("schema") == "catchplate.operatorCatalog/v1"
         and catalog.get("allowed_upstreams") == ["https://api.openai.com"], "fresh catalog profile differs")
     require(all(catalog.get(name) == [] for name in ("credentials", "applications", "access_rules")), "fresh installation was not empty")
     policy = catalog["policy"]
@@ -197,7 +197,7 @@ class Baseline:
         for row in rows:
             labels = row["Config"]["Labels"]
             role = labels["com.docker.compose.service"]
-            require(role in {"serverware", "decision-gate-rs", "edge"} and role not in result, "unexpected service role")
+            require(role in {"catchplate", "decision-gate-rs", "edge"} and role not in result, "unexpected service role")
             require(not row["HostConfig"].get("PortBindings"), "test installation published a host port")
             result[role] = {"id": row["Id"], "image": row["Image"], "startedAt": row["State"]["StartedAt"],
                 "networks": {key: value["IPAddress"] for key, value in row["NetworkSettings"]["Networks"].items()}}
@@ -208,10 +208,10 @@ class Baseline:
         require(self.job.is_absolute() and self.job.resolve() == self.job and stat.S_IMODE(self.job.stat().st_mode) == 0o700,
             "job must be an exact private directory")
         require(not list(self.job.iterdir()), "start refuses a previously used job")
-        host_files = ["scripts/serverware_standalone.py", *["scripts/operator_install/" + name + ".py"
+        host_files = ["scripts/catchplate_standalone.py", *["scripts/operator_install/" + name + ".py"
             for name in ("bootstrap", "lifecycle", "config", "process", "state", "compose", "tls")]]
         host_hashes = {name: digest((SOURCE / name).read_bytes()) for name in host_files}
-        write(self.job / "start.claim.json", {"schema": "serverware.standaloneBaselineClaim/v1",
+        write(self.job / "start.claim.json", {"schema": "catchplate.standaloneBaselineClaim/v1",
             "imageRevision": REVISION, "hostInstallerFiles": host_hashes})
         (self.job / "tmp").mkdir(mode=0o700)
         os.environ["TMPDIR"] = str(self.job / "tmp")
@@ -233,9 +233,9 @@ class Baseline:
         key.chmod(0o600)
         password = secrets.token_urlsafe(32)
         write(self.job / "console.password", password.encode())
-        project = "serverware-install-" + secrets.token_hex(5)
+        project = "catchplate-install-" + secrets.token_hex(5)
         state = self.job / "state"
-        configuration = {"schema": "serverware.standaloneInstall/v1", "project_name": project, "state_dir": str(state),
+        configuration = {"schema": "catchplate.standaloneInstall/v1", "project_name": project, "state_dir": str(state),
             "console_origin": "https://" + CONSOLE, "proxy_origin": "https://" + PROXY,
             "allowed_upstreams": ["https://api.openai.com"], "tls_certificate": str(certificate), "tls_private_key": str(key),
             "paired_image": self.image, "publish_address": None, "network_subnets": SUBNETS}
@@ -255,7 +255,7 @@ class Baseline:
         self.phase = "empty-instance-probe"
         result = run(["docker", "run", "--rm", "--pull", "never", "--network", outbound, "--read-only", "--user", "10001:10001",
             "--cpus", "1", "--memory", "128m", "--pids-limit", "32", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-            "--label", "io.serverware.acceptance=" + manifest["instance_id"], "--mount", "type=bind,src=" + str(SOURCE) + ",dst=" + str(SOURCE) + ",readonly",
+            "--label", "io.catchplate.acceptance=" + manifest["instance_id"], "--mount", "type=bind,src=" + str(SOURCE) + ",dst=" + str(SOURCE) + ",readonly",
             "--entrypoint", "python", "-i", PROBE_IMAGE, "-B", str(Path(__file__).resolve()), "--probe"],
             data=json.dumps({"edge_ip": edge_ip, "certificate": certificate.read_text(), "password": password}).encode(), timeout=40)
         write(self.job / "probe.stderr", result.stderr)
@@ -267,7 +267,7 @@ class Baseline:
         public.mkdir(mode=0o755)
         public.chmod(0o755)
         write(public / "outer.crt", certificate.read_bytes(), mode=0o644)
-        receipt = {"schema": "serverware.standaloneBaselineReady/v1", "sourceRevision": REVISION, "pairedImage": self.image,
+        receipt = {"schema": "catchplate.standaloneBaselineReady/v1", "sourceRevision": REVISION, "pairedImage": self.image,
             "dataPlaneBinaryDigest": manifest["artifact"]["dataPlaneBinaryDigest"],
             "hostInstallerFiles": host_hashes,
             "project": project, "instanceId": manifest["instance_id"], "stateDir": str(state), "services": services,
@@ -298,7 +298,7 @@ class Baseline:
             services = self.inspect(project)
             result = run(["docker", "run", "--rm", "--pull", "never", "--network", project + "_outbound", "--read-only", "--user", "10001:10001",
                 "--cpus", "1", "--memory", "128m", "--pids-limit", "32", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-                "--label", "io.serverware.acceptance=" + ready["instanceId"],
+                "--label", "io.catchplate.acceptance=" + ready["instanceId"],
                 "--mount", "type=bind,src=" + str(SOURCE) + ",dst=" + str(SOURCE) + ",readonly",
                 "--mount", "type=bind,src=" + str(private) + ",dst=/private",
                 "--entrypoint", "python", "-i", PROBE_IMAGE, "-B", str(Path(__file__).resolve()), "--probe"],
@@ -340,7 +340,7 @@ class Baseline:
         replacement = self.cli("replace-tls", "--state-dir", state, "--certificate", certificate, "--private-key", key)
         require(replacement["status"] == "ready" and replacement["tls"]["verified_hostnames"] == 2, "replacement dual-host TLS proof differs")
         after_tls = self.inspect(project)
-        require(all(after_tls[name] == pair_before[name] for name in ("serverware", "decision-gate-rs")), "TLS replacement restarted the app or gate")
+        require(all(after_tls[name] == pair_before[name] for name in ("catchplate", "decision-gate-rs")), "TLS replacement restarted the app or gate")
         require(after_tls["edge"]["id"] == pair_before["edge"]["id"] and after_tls["edge"]["startedAt"] != pair_before["edge"]["startedAt"], "TLS replacement did not restart only the original edge")
         require(call_probe("read") == created, "TLS replacement changed catalog, policy or public CA")
         require({name: digest((state / name).read_bytes()) for name in protected} == hashes
@@ -349,17 +349,17 @@ class Baseline:
         # Remove only this verified, stopped project's exact resources. Keep all files.
         for row in self.inspect(project).values():
             actual = json.loads(docker("inspect", row["id"]))[0]
-            require(not actual["State"]["Running"] and actual["Config"]["Labels"]["io.serverware.installation"] == ready["instanceId"], "cleanup ownership/state differs")
+            require(not actual["State"]["Running"] and actual["Config"]["Labels"]["io.catchplate.installation"] == ready["instanceId"], "cleanup ownership/state differs")
             docker("rm", row["id"])
         networks = docker("network", "ls", "--quiet", "--no-trunc", "--filter", "label=com.docker.compose.project=" + project).decode().split()
         require(len(networks) == 2, "cleanup network count differs")
         for identifier in networks:
             row = json.loads(docker("network", "inspect", identifier))[0]
-            require(row["Labels"]["io.serverware.installation"] == ready["instanceId"] and not row["Containers"], "cleanup network ownership differs")
+            require(row["Labels"]["io.catchplate.installation"] == ready["instanceId"] and not row["Containers"], "cleanup network ownership differs")
             docker("network", "rm", identifier)
         require(not docker("ps", "--all", "--quiet", "--filter", "label=com.docker.compose.project=" + project).strip()
             and not docker("network", "ls", "--quiet", "--filter", "label=com.docker.compose.project=" + project).strip(), "owned resources remain")
-        receipt = {"schema": "serverware.standaloneBaselineVerified/v1", "project": project, "instanceId": ready["instanceId"],
+        receipt = {"schema": "catchplate.standaloneBaselineVerified/v1", "project": project, "instanceId": ready["instanceId"],
             "syntheticWrites": 3, "catalogRevision": 4, "policyHash": created["catalog"]["policy"]["policy_hash"],
             "idempotentStartSeconds": idempotent_seconds, "restartSeconds": restart_seconds,
             "dualSniTlsReplacement": True, "retainedKeysAndCaUnchanged": True, "ownedRemaining": 0,

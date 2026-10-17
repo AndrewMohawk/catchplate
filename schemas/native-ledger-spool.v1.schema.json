@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-ledger-spool.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-ledger-spool.v1.schema.json",
   "$ref": "#/$defs/bridgeSelection",
   "description": "Explicit native first-ingress and acyclic LedgerAppend storage successor. Complete machine envelopes retain the existing 8 MiB limit; core and prepared originals each <=512 KiB. All semantic signatures, independent role/currentness checks, original lifetimes, actual FD ownership and fs-verity persistence are mandatory in source. No JSON validates installation or durable success.",
   "$defs": {
@@ -144,7 +144,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeLedgerSpoolStoreGenesis/v1"
+          "const": "catchplate.nativeLedgerSpoolStoreGenesis/v1"
         },
         "guest": {
           "$ref": "#/$defs/guest"
@@ -165,7 +165,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeSpoolServices/v1"
+          "const": "catchplate.nativeSpoolServices/v1"
         },
         "headGrantOriginal": {
           "type": "string",
@@ -209,8 +209,8 @@
       "properties": {
         "apiVersion": {
           "enum": [
-            "serverware.nativeShadowIngressServiceAssignment/v1",
-            "serverware.nativeShadowLedgerSpoolServiceAssignment/v1"
+            "catchplate.nativeShadowIngressServiceAssignment/v1",
+            "catchplate.nativeShadowLedgerSpoolServiceAssignment/v1"
           ]
         },
         "purpose": {
@@ -279,7 +279,7 @@
         {
           "properties": {
             "apiVersion": {
-              "const": "serverware.nativeShadowIngressServiceAssignment/v1"
+              "const": "catchplate.nativeShadowIngressServiceAssignment/v1"
             },
             "purpose": {
               "const": "native-first-ingress"
@@ -292,7 +292,7 @@
         {
           "properties": {
             "apiVersion": {
-              "const": "serverware.nativeShadowLedgerSpoolServiceAssignment/v1"
+              "const": "catchplate.nativeShadowLedgerSpoolServiceAssignment/v1"
             },
             "purpose": {
               "const": "native-ledger-spool-and-sampling"
@@ -345,7 +345,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeLedgerSpoolRetrievalGrant/v1"
+          "const": "catchplate.nativeLedgerSpoolRetrievalGrant/v1"
         },
         "purpose": {
           "const": "native-ledger-spool-retrieval"
@@ -438,7 +438,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeSpoolHeadGrant/v1"
+          "const": "catchplate.nativeSpoolHeadGrant/v1"
         },
         "purpose": {
           "const": "native-shared-spool-head"
@@ -494,7 +494,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeSpoolCurrentGrant/v1"
+          "const": "catchplate.nativeSpoolCurrentGrant/v1"
         },
         "purpose": {
           "const": "native-spool-current-signature"
@@ -567,7 +567,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowIngressGuestLaunch/v1"
+          "const": "catchplate.nativeShadowIngressGuestLaunch/v1"
         },
         "keyAdmission": {
           "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
@@ -587,7 +587,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowCommitRequestGuestLaunch/v2"
+          "const": "catchplate.nativeShadowCommitRequestGuestLaunch/v2"
         },
         "keyAdmission": {
           "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
@@ -607,7 +607,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowRetrievalGuestLaunch/v2"
+          "const": "catchplate.nativeShadowRetrievalGuestLaunch/v2"
         },
         "keyAdmission": {
           "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
@@ -621,7 +621,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "purpose", "guest", "assignmentPayloadSha256", "keyAuthorizationSha256", "requestCommitment", "trustCheckpointId", "revocationGeneration", "revocationRootSha256", "issuedAtUnixNanos", "expiresAtUnixNanos", "signingKeyId", "signingKeySpkiSha256"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeShadowRequestCommitmentAssignment/v2"},
+        "apiVersion": {"const": "catchplate.nativeShadowRequestCommitmentAssignment/v2"},
         "purpose": {"const": "native-shadow-request-and-ingress-commitments"},
         "guest": {"$ref": "#/$defs/guest"},
         "assignmentPayloadSha256": {"$ref": "#/$defs/sha"},
@@ -644,7 +644,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "deliveryConfiguration", "delivery", "peerInspectionCredential"],
       "properties": {
-        "apiVersion": {"const": "serverware.custodyOrdinaryServiceGuestLaunch/v5"},
+        "apiVersion": {"const": "catchplate.custodyOrdinaryServiceGuestLaunch/v5"},
         "deliveryConfiguration": {"$ref": "#/$defs/pin"}, "delivery": {"$ref": "#/$defs/pin"},
         "peerInspectionCredential": {"const": "peer-inspection-policy"}
       }
@@ -653,7 +653,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId", "services"],
       "properties": {
-        "apiVersion": {"const": "serverware.custodyFiveServiceLaunch/v5"},
+        "apiVersion": {"const": "catchplate.custodyFiveServiceLaunch/v5"},
         "bootIdBase64url": {"$ref": "native-shadow-role-keys.v1.schema.json#/$defs/bytes32"},
         "timeNamespaceDevice": {"$ref": "#/$defs/u64"}, "timeNamespaceInode": {"$ref": "#/$defs/u64"},
         "startupDeadlineBoottimeNs": {"$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/ns"},
@@ -661,7 +661,7 @@
         "invocationId": {"type": "string", "pattern": "^[0-9a-f]{32}$", "not": {"const": "00000000000000000000000000000000"}},
         "services": {"$ref": "custody-commitment-inputs.v1.schema.json#/$defs/services"}
       },
-      "description": "Fixed /etc/serverware/custody-spool-five.json, read only by FiveServiceLaunch.start_spool. Only DurableRecoveryStore and CurrentSignatureAuthority select service runtime/v7; all five retain original real inspected sessions and lifetime."
+      "description": "Fixed /etc/catchplate/custody-spool-five.json, read only by FiveServiceLaunch.start_spool. Only DurableRecoveryStore and CurrentSignatureAuthority select service runtime/v7; all five retain original real inspected sessions and lifetime."
     },
     "bridgeLaunch": {
       "type": "object",
@@ -673,7 +673,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeProofBridgeLaunch/v3"
+          "const": "catchplate.nativeProofBridgeLaunch/v3"
         },
         "keyAdmission": {
           "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"

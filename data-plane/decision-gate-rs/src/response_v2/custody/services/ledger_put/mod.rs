@@ -21,7 +21,7 @@ use crate::response_observation_v2_api::{ExactByteObjectDescriptor, ExactObjectM
 use wire::original;
 pub(crate) use wire::{PutResult, StorageReceipt};
 
-const PROFILE: &str = "serverware.responseV2.ledgerRawPersistence/v1";
+const PROFILE: &str = "catchplate.responseV2.ledgerRawPersistence/v1";
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Profile { api_version:String }

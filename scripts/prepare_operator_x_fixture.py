@@ -27,12 +27,12 @@ NETWORK_HELPER = "scripts/operator_x_fixture_network.py"
 
 
 def build(source, binary, initializer, root, node, sdk, *, expected_binary_sha256):
-    require(root.parent == base.SCRATCH and re.fullmatch(r"serverware-x-private\.[A-Za-z0-9]{6,32}", root.name),
+    require(root.parent == base.SCRATCH and re.fullmatch(r"catchplate-x-private\.[A-Za-z0-9]{6,32}", root.name),
         "fresh private X NVMe root required")
-    template = root.with_name("serverware-github-private." + root.name.split(".", 1)[1])
+    template = root.with_name("catchplate-github-private." + root.name.split(".", 1)[1])
     config = inherited.build(source, binary, initializer, template, node, sdk,
         expected_binary_sha256=expected_binary_sha256)
-    config["name"] = "serverware-x-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
+    config["name"] = "catchplate-x-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
     services, runtime = config["services"], root / "runtime"
     # Only known inherited private paths are rewritten; arbitrary strings and
     # production environment values are never recursively substituted.
@@ -62,10 +62,10 @@ def build(source, binary, initializer, root, node, sdk, *, expected_binary_sha25
         "r=o.open('https://api.x.com/_fixture/observations',timeout=2); raise SystemExit(0 if r.status==200 else 1)"]
     services["network"]["command"] = ["python", "-B", "-m", "scripts.operator_x_fixture_network", "network"]
     services["edge"]["command"] = ["-m", "scripts.operator_x_fixture_network", "edge"]
-    services["serverware"]["depends_on"] = {"x": {"condition": "service_healthy"}}
-    for name in ("serverware", "decision-gate-rs"):
-        services[name]["environment"]["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.x.com"]'
-    services["decision-gate-rs"]["environment"]["SERVERWARE_UPSTREAM_CA_BUNDLE"] = "/x-public/ca.pem"
+    services["catchplate"]["depends_on"] = {"x": {"condition": "service_healthy"}}
+    for name in ("catchplate", "decision-gate-rs"):
+        services[name]["environment"]["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.x.com"]'
+    services["decision-gate-rs"]["environment"]["CATCHPLATE_UPSTREAM_CA_BUNDLE"] = "/x-public/ca.pem"
     check = services["check"]
     check["command"][0] = "/app/" + CHECKER
     position = check["command"].index("--upstream-ca-file") + 1
@@ -73,7 +73,7 @@ def build(source, binary, initializer, root, node, sdk, *, expected_binary_sha25
     check["volumes"] = [mount for mount in check["volumes"]
         if mount["target"] not in {"/sdk/node_modules", "/client-trust/requests-ca.pem"}]
     check["volumes"].append(bind(sdk / "node_modules", "/app/examples/x-username-node/node_modules"))
-    require(set(services) == {"initialize", "x-pki", "basic-pki", "network", "x", "serverware",
+    require(set(services) == {"initialize", "x-pki", "basic-pki", "network", "x", "catchplate",
         "decision-gate-rs", "edge", "check"}, "X fixture service roster differs")
     return config
 
@@ -99,13 +99,13 @@ def prepare(args):
     require(digest(args.sdk_root / "package-lock.json") == LOCK_SHA256, "exact acquired X SDK lock differs")
     manifest = basic.pinned_json(args.sdk_manifest, args.expected_sdk_manifest_sha256)
     observed = basic.inventory(args.sdk_root / "node_modules", limit=8192, byte_limit=64 * 1024**2)
-    require(manifest == {"schema": "serverware.privateXDependencies/v1", "packageLockSha256": LOCK_SHA256,
+    require(manifest == {"schema": "catchplate.privateXDependencies/v1", "packageLockSha256": LOCK_SHA256,
         "files": observed}, "externally pinned full X SDK payload differs")
     for package, version in (("@xdevplatform/xdk", "0.6.6"), ("undici", "8.11.2")):
         value = json.loads((args.sdk_root / "node_modules" / package / "package.json").read_text())
         require(value.get("name") == package and value.get("version") == version, "X SDK package identity differs")
     compose = json.dumps(config, indent=2, sort_keys=True) + "\n"
-    receipt = {"schema": "serverware.privateXPreparation/v1", "project": config["name"],
+    receipt = {"schema": "catchplate.privateXPreparation/v1", "project": config["name"],
         "jobRoot": str(args.job_root), "source": str(args.source), "sourceCommit": args.expected_source_commit,
         "sourceManifestSha256": args.expected_source_manifest_sha256, "sourceSha256": sources,
         "binary": str(args.binary), "binarySha256": args.expected_binary_sha256,

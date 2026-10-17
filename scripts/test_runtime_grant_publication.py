@@ -40,7 +40,7 @@ def no_external_io(event, _arguments):
 
 def actual_approve_body(namespace):
     """Compile the unchanged route and guard, not FastAPI dependency wiring."""
-    source = ROOT / "serverware/app.py"
+    source = ROOT / "catchplate/app.py"
     names = {"approve", "_assert_legacy_approval_decision_allowed"}
     nodes = [node for node in ast.parse(source.read_text()).body
              if isinstance(node, ast.FunctionDef) and node.name in names]
@@ -94,11 +94,11 @@ class RuntimeGrantPublicationTests(unittest.TestCase):
         directory = cls.stack.enter_context(tempfile.TemporaryDirectory(
             prefix="runtime-grant-publication-"))
         environment = {key: value for key, value in os.environ.items()
-                       if not key.startswith("SERVERWARE_")}
-        environment.update(SERVERWARE_PROCESS_MODE="serverware-control-plane",
-            SERVERWARE_RELEASE_CHANNEL="dev", SERVERWARE_DATA_DIR=directory)
+                       if not key.startswith("CATCHPLATE_")}
+        environment.update(CATCHPLATE_PROCESS_MODE="catchplate-control-plane",
+            CATCHPLATE_RELEASE_CHANNEL="dev", CATCHPLATE_DATA_DIR=directory)
         cls.stack.enter_context(patch.dict(os.environ, environment, clear=True))
-        from serverware import runtime
+        from catchplate import runtime
         cls.runtime = runtime
 
     def setUp(self):
@@ -228,7 +228,7 @@ class RuntimeGrantPublicationTests(unittest.TestCase):
         self.assertEqual(request.full_url, "https://synthetic-gate.invalid/v1/grants")
         self.assertEqual(request.get_method(), "POST")
         self.assertEqual(dict((name.lower(), value) for name, value in request.header_items()),
-            {"content-type": "application/json", "x-serverware-data-plane-token": TOKEN})
+            {"content-type": "application/json", "x-catchplate-data-plane-token": TOKEN})
         expected = {"grantId": "approval:synthetic-approval", "approvalId": "synthetic-approval",
             "principalId": "agent:synthetic", "routeId": "route:synthetic",
             "credentialRef": "credential:synthetic", "credentialVersion": 7,

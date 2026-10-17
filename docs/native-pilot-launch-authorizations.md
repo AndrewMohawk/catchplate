@@ -29,11 +29,11 @@ encrypted inventory and contain no plaintext role-key slots.
 
 ## Explicit independent policy
 
-`serverware.nativePilotSupervisorCommissioningPolicy/v11` adds only the literal
+`catchplate.nativePilotSupervisorCommissioningPolicy/v11` adds only the literal
 `nativeLaunchAuthorizationsOriginal` to v10's eighteen fields. Its purpose is
 `initial-driver-bootstrap-precreation-endpoints-generations-and-native-launch-authorizations`.
 The outer 4 MiB bound remains. The nested fragment is bounded to 256 KiB and
-has exactly `apiVersion` (`serverware.nativePilotLaunchAuthorizationPolicy/v1`)
+has exactly `apiVersion` (`catchplate.nativePilotLaunchAuthorizationPolicy/v1`)
 and `endpoints` with ten closed role rows.
 
 Each row has `closure`, `encryptedDelivery` and `verifierTransport`; CommitRequest
@@ -107,7 +107,7 @@ The 85,381,120-byte source archive has SHA256
 `a1431778999a818236b9094c585c3549c0bbb97b18cbfc328643df28ae2d0f75`.
 Archive, source revision, exact harness/command, log, structured result and
 verified checksums are retained outside disposable scratch at
-`codex-offload/serverware/engineering-builds/02640a81-launch-authorizations-MJTwfT/`.
+`codex-offload/catchplate/engineering-builds/02640a81-launch-authorizations-MJTwfT/`.
 Native source, schemas and dependency lock are unchanged from the previously
 compiled `03d4075d`; no native/artifact rebuild was repeated. The reused runtime
 is still an unpublished engineering candidate. No cloud or paid action ran.

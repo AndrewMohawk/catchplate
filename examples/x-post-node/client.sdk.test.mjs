@@ -19,10 +19,10 @@ const { MockAgent, getGlobalDispatcher, setGlobalDispatcher } = await import(pat
 assert.equal(dependencies('undici/package.json').version, '8.11.2');
 // The SDK export map does not expose package.json; version is independently
 // checked through its exact generated wire User-Agent below.
-const ENV = { SERVERWARE_PROXY_URL: 'https://proxy.example.test',
-  SERVERWARE_APP_ID: '11111111-2222-4333-8444-555555555555',
-  SERVERWARE_PROXY_TOKEN: 'synthetic_app_token', SERVERWARE_CA_FILE: '/synthetic/inner.pem',
-  SERVERWARE_X_POST_TEXT: 'Keep Unicode 🙂 and\n\ttabs\r unchanged.', SERVERWARE_X_POST_CONFIRM: 'post-once' };
+const ENV = { CATCHPLATE_PROXY_URL: 'https://proxy.example.test',
+  CATCHPLATE_APP_ID: '11111111-2222-4333-8444-555555555555',
+  CATCHPLATE_PROXY_TOKEN: 'synthetic_app_token', CATCHPLATE_CA_FILE: '/synthetic/inner.pem',
+  CATCHPLATE_X_POST_TEXT: 'Keep Unicode 🙂 and\n\ttabs\r unchanged.', CATCHPLATE_X_POST_CONFIRM: 'post-once' };
 const HEADERS = { authorization: 'Bearer ' + PUBLIC_X_DUMMY, accept: 'application/json',
   'content-type': 'application/json', 'user-agent': 'xdk-typescript/0.6.6',
   'accept-language': '*', 'sec-fetch-mode': 'cors' };
@@ -62,12 +62,12 @@ test('stock posts.create serializes exact text-only JSON and user-context dummy 
   assert.deepEqual(await perform(f.config, f.sdk, f.state), { status: 201, id: '1234567890' });
   f.mock.assertNoPendingInterceptors(); assert.equal(f.calls.length, 1); assert.equal(f.state.httpStatus, 201);
   assert.equal(f.bodies.length, 1);
-  for (const value of [ENV.SERVERWARE_APP_ID, ENV.SERVERWARE_PROXY_TOKEN, 'proxy-authorization'])
+  for (const value of [ENV.CATCHPLATE_APP_ID, ENV.CATCHPLATE_PROXY_TOKEN, 'proxy-authorization'])
     assert(!JSON.stringify(f.calls[0].headers).includes(value));
 });
 
 test('stock SDK preserves a text longer than 280 codepoints without a client length rewrite', { timeout: 5000 }, async t => {
-  const f = await fixture(t, 201, { data: { id: '123' } }, {}, { ...ENV, SERVERWARE_X_POST_TEXT: 'x'.repeat(1000) });
+  const f = await fixture(t, 201, { data: { id: '123' } }, {}, { ...ENV, CATCHPLATE_X_POST_TEXT: 'x'.repeat(1000) });
   await perform(f.config, f.sdk, f.state); f.mock.assertNoPendingInterceptors(); assert.equal(f.calls.length, 1);
 });
 

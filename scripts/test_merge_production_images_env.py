@@ -17,8 +17,8 @@ def digest(char: str) -> str:
 def images_value() -> str:
     return ",".join(
         [
-            "registry.prod.serverware.dev/serverware/control@" + digest("a"),
-            "registry.prod.serverware.dev/serverware/decision-gate@" + digest("b"),
+            "registry.prod.catchplate.dev/catchplate/control@" + digest("a"),
+            "registry.prod.catchplate.dev/catchplate/decision-gate@" + digest("b"),
         ]
     )
 
@@ -38,9 +38,9 @@ def detail(result: subprocess.CompletedProcess[bytes]) -> str:
 
 
 def write_images_env(path: Path, value: str | None = None, *, extra: bool = False) -> None:
-    lines = ["SERVERWARE_PRODUCTION_IMAGES=" + (value if value is not None else images_value())]
+    lines = ["CATCHPLATE_PRODUCTION_IMAGES=" + (value if value is not None else images_value())]
     if extra:
-        lines.append("SERVERWARE_ADMIN_TOKEN=should-not-be-here")
+        lines.append("CATCHPLATE_ADMIN_TOKEN=should-not-be-here")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -54,8 +54,8 @@ def main() -> None:
             "\n".join(
                 [
                     "# production values",
-                    "SERVERWARE_ADMIN_TOKEN=prod-admin-token-32-byte-secret-value",
-                    "SERVERWARE_PRODUCTION_IMAGE_NO_SHELL_REQUIRED=1",
+                    "CATCHPLATE_ADMIN_TOKEN=prod-admin-token-32-byte-secret-value",
+                    "CATCHPLATE_PRODUCTION_IMAGE_NO_SHELL_REQUIRED=1",
                 ]
             )
             + "\n",
@@ -70,7 +70,7 @@ def main() -> None:
         summary = json.loads(dry_run.stdout.decode("utf-8"))
         if summary.get("changed") is not True or summary.get("production_images_count") != 2:
             raise AssertionError(f"dry-run summary did not describe the merge: {summary}")
-        if "SERVERWARE_PRODUCTION_IMAGES" in env.read_text(encoding="utf-8"):
+        if "CATCHPLATE_PRODUCTION_IMAGES" in env.read_text(encoding="utf-8"):
             raise AssertionError("dry-run modified the target env file")
 
         merged = run_script("--images-env", str(images_env), "--env-file", str(env))
@@ -79,13 +79,13 @@ def main() -> None:
         if "prod-admin-token-32-byte-secret-value" in detail(merged):
             raise AssertionError("merge leaked a target env secret")
         merged_text = env.read_text(encoding="utf-8")
-        if "SERVERWARE_ADMIN_TOKEN=prod-admin-token-32-byte-secret-value" not in merged_text:
+        if "CATCHPLATE_ADMIN_TOKEN=prod-admin-token-32-byte-secret-value" not in merged_text:
             raise AssertionError("merge did not preserve existing env values")
-        if "SERVERWARE_PRODUCTION_IMAGES=" + images_value() not in merged_text:
+        if "CATCHPLATE_PRODUCTION_IMAGES=" + images_value() not in merged_text:
             raise AssertionError(f"merge did not append production images: {merged_text}")
-        if "SERVERWARE_CONTROL_PLANE_IMAGE=registry.prod.serverware.dev/serverware/control@" + digest("a") not in merged_text:
+        if "CATCHPLATE_CONTROL_PLANE_IMAGE=registry.prod.catchplate.dev/catchplate/control@" + digest("a") not in merged_text:
             raise AssertionError(f"merge did not bind the control-plane service image: {merged_text}")
-        if "SERVERWARE_DECISION_GATE_IMAGE=registry.prod.serverware.dev/serverware/decision-gate@" + digest("b") not in merged_text:
+        if "CATCHPLATE_DECISION_GATE_IMAGE=registry.prod.catchplate.dev/catchplate/decision-gate@" + digest("b") not in merged_text:
             raise AssertionError(f"merge did not bind the decision-gate service image: {merged_text}")
 
     with tempfile.TemporaryDirectory() as tmp_raw:
@@ -93,21 +93,21 @@ def main() -> None:
         images_env = tmp / "production-images.env"
         env = tmp / "production-readiness.env"
         write_images_env(images_env)
-        old = "registry.prod.serverware.dev/serverware/control@" + digest("c")
-        env.write_text("export SERVERWARE_PRODUCTION_IMAGES=" + old + "\nSERVERWARE_ADMIN_TOKEN=secret\n", encoding="utf-8")
+        old = "registry.prod.catchplate.dev/catchplate/control@" + digest("c")
+        env.write_text("export CATCHPLATE_PRODUCTION_IMAGES=" + old + "\nCATCHPLATE_ADMIN_TOKEN=secret\n", encoding="utf-8")
         replaced = run_script("--images-env", str(images_env), "--env-file", str(env))
         if replaced.returncode != 0:
             raise AssertionError(f"replace merge failed: {detail(replaced)}")
         replaced_text = env.read_text(encoding="utf-8")
-        if old in replaced_text or replaced_text.count("SERVERWARE_PRODUCTION_IMAGES=") != 1:
+        if old in replaced_text or replaced_text.count("CATCHPLATE_PRODUCTION_IMAGES=") != 1:
             raise AssertionError(f"merge did not replace the existing image refs cleanly: {replaced_text}")
 
     with tempfile.TemporaryDirectory() as tmp_raw:
         tmp = Path(tmp_raw)
         images_env = tmp / "production-images.env"
         env = tmp / "production-readiness.env"
-        write_images_env(images_env, "registry.prod.serverware.dev/serverware/control:latest")
-        env.write_text("SERVERWARE_ADMIN_TOKEN=secret\n", encoding="utf-8")
+        write_images_env(images_env, "registry.prod.catchplate.dev/catchplate/control:latest")
+        env.write_text("CATCHPLATE_ADMIN_TOKEN=secret\n", encoding="utf-8")
         rejected = run_script("--images-env", str(images_env), "--env-file", str(env))
         if rejected.returncode == 0 or "@sha256" not in detail(rejected):
             raise AssertionError(f"merge accepted a mutable image ref: {detail(rejected)}")
@@ -117,9 +117,9 @@ def main() -> None:
         images_env = tmp / "production-images.env"
         env = tmp / "production-readiness.env"
         write_images_env(images_env, extra=True)
-        env.write_text("SERVERWARE_ADMIN_TOKEN=secret\n", encoding="utf-8")
+        env.write_text("CATCHPLATE_ADMIN_TOKEN=secret\n", encoding="utf-8")
         rejected = run_script("--images-env", str(images_env), "--env-file", str(env))
-        if rejected.returncode == 0 or "must contain only SERVERWARE_PRODUCTION_IMAGES" not in detail(rejected):
+        if rejected.returncode == 0 or "must contain only CATCHPLATE_PRODUCTION_IMAGES" not in detail(rejected):
             raise AssertionError(f"merge accepted extra fragment keys: {detail(rejected)}")
 
     with tempfile.TemporaryDirectory() as tmp_raw:
@@ -128,15 +128,15 @@ def main() -> None:
         env = tmp / "production-readiness.env"
         write_images_env(images_env)
         env.write_text(
-            "SERVERWARE_PRODUCTION_IMAGES=registry.prod.serverware.dev/serverware/control@"
+            "CATCHPLATE_PRODUCTION_IMAGES=registry.prod.catchplate.dev/catchplate/control@"
             + digest("c")
-            + "\nSERVERWARE_PRODUCTION_IMAGES=registry.prod.serverware.dev/serverware/decision-gate@"
+            + "\nCATCHPLATE_PRODUCTION_IMAGES=registry.prod.catchplate.dev/catchplate/decision-gate@"
             + digest("d")
             + "\n",
             encoding="utf-8",
         )
         rejected = run_script("--images-env", str(images_env), "--env-file", str(env))
-        if rejected.returncode == 0 or "duplicate environment key SERVERWARE_PRODUCTION_IMAGES" not in detail(rejected):
+        if rejected.returncode == 0 or "duplicate environment key CATCHPLATE_PRODUCTION_IMAGES" not in detail(rejected):
             raise AssertionError(f"merge accepted duplicate target keys: {detail(rejected)}")
 
     print(json.dumps({"ok": True, "merge_production_images_env": "pass"}, sort_keys=True))

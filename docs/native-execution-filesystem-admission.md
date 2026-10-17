@@ -8,7 +8,7 @@ child.
 
 ## Closed original and authority boundary
 
-`serverware.nativeExecutionManifest/v1`, profile `native-elf-erofs-v1`, has
+`catchplate.nativeExecutionManifest/v1`, profile `native-elf-erofs-v1`, has
 exactly eight fields: `apiVersion`, `profile`, `rootfs`, `entry`, `argv`,
 `environment`, `cwd`, and `loaderPolicy`. The original is canonical ASCII JSON
 without a trailing LF, at most 32 KiB, selected by an independent SHA-256 pin.

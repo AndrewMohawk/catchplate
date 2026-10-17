@@ -16,7 +16,7 @@ continuation and its durable effect claims.
 
 The public HTTP 428 object contains only `detail`, with nine fields:
 
-- `schema: serverware.oidcSessionActivationApprovalRequired/v1`
+- `schema: catchplate.oidcSessionActivationApprovalRequired/v1`
 - `error: control_plane_approval_required`
 - `approvalId`, `action`, `resourceId`, `payloadDigest`
 - `dispatchState: approval-required`

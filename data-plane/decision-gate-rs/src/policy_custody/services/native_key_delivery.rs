@@ -1,13 +1,13 @@
 //! Same C9/closure owner: ciphertext original -> real KMS recipient -> assigned
 //! local key owners. No file materialization, key export or readiness claim.
 use super::*;
-use serverware_decision_gate::{enclave_runtime_identity_v1::CredentialRecipientV1,
+use catchplate_decision_gate::{enclave_runtime_identity_v1::CredentialRecipientV1,
     native_secret_broker_v1::shadow_key_delivery::{self as mechanism,PreparedShadowKeyHelper}};
 use ring::{aead,hkdf};
 use zeroize::Zeroize;
 const CREDENTIAL:&str="shadow-encrypted-role-inventory";
-const DOMAIN:&str="serverware.nativeShadowEncryptedKeyDelivery.signature/v1";
-const EXTENDED_DOMAIN:&str="serverware.nativeShadowEncryptedKeyDelivery.signature/v2";
+const DOMAIN:&str="catchplate.nativeShadowEncryptedKeyDelivery.signature/v1";
+const EXTENDED_DOMAIN:&str="catchplate.nativeShadowEncryptedKeyDelivery.signature/v2";
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Payload {
@@ -43,18 +43,18 @@ impl NativeShadowEncryptedKeysConfiguration {
         super::verify(key_configuration,assignment,association,checkpoint,trust,time)?;
         let authorization=self.authorization();let p=&authorization.payload;let a=assignment.payload();let k=&key_configuration.authorization.payload;
         match self {
-            Self::Legacy(v)=>require(v.api_version=="serverware.nativeShadowEncryptedKeyDelivery/v1"
-                && p.api_version=="serverware.nativeShadowEncryptedKeyDeliveryAssignment/v1" && p.purpose=="kms-recipient-shadow-local-keys"
-                && p.transport.api_version=="serverware.nativeShadowKeyKmsTransport/v1")?,
+            Self::Legacy(v)=>require(v.api_version=="catchplate.nativeShadowEncryptedKeyDelivery/v1"
+                && p.api_version=="catchplate.nativeShadowEncryptedKeyDeliveryAssignment/v1" && p.purpose=="kms-recipient-shadow-local-keys"
+                && p.transport.api_version=="catchplate.nativeShadowKeyKmsTransport/v1")?,
             Self::Commitment(v)=>{
-                require(v.api_version=="serverware.nativeShadowEncryptedKeyDelivery/v2"
-                    && p.api_version=="serverware.nativeShadowEncryptedKeyDeliveryAssignment/v2"
+                require(v.api_version=="catchplate.nativeShadowEncryptedKeyDelivery/v2"
+                    && p.api_version=="catchplate.nativeShadowEncryptedKeyDeliveryAssignment/v2"
                     && p.purpose=="kms-recipient-shadow-local-keys-and-request-commitment"
-                    && p.transport.api_version=="serverware.nativeShadowKeyKmsTransport/v2")?;
+                    && p.transport.api_version=="catchplate.nativeShadowKeyKmsTransport/v2")?;
                 v.request_commitment.verify(key_configuration,assignment,association,checkpoint,trust,time)?;
             }
         }
-        require(key_configuration.api_version=="serverware.nativeShadowRoleKeys/v2"
+        require(key_configuration.api_version=="catchplate.nativeShadowRoleKeys/v2"
             && p.assignment_id==a.assignment_id&&p.assignment_payload_sha256==*assignment.payload_sha256()
             && p.assignment_revision==a.assignment_revision&&p.key_authorization_sha256==Sha256Digest::compute(&canonical_json_bytes(&key_configuration.authorization)?)
             && p.guest==association.binding()&&p.full_key_set_root_sha256==k.full_key_set_root_sha256
@@ -95,7 +95,7 @@ impl PreparedNativeCustodyKeys {
         let owner=association.owner.native_continuation.as_ref().ok_or(ShadowError::BindingDrift)?;
         owner.check_startup()?;let checkpoint=trust.current_checkpoint()?;
         let k=&configuration.authorization.payload;let p=&encrypted.authorization().payload;
-        require(configuration.api_version=="serverware.nativeShadowRoleKeys/v2"
+        require(configuration.api_version=="catchplate.nativeShadowRoleKeys/v2"
             && k.trust_checkpoint_id==checkpoint.checkpoint_id && k.revocation_generation==checkpoint.revocation_generation
             && k.revocation_root_sha256==checkpoint.revocation_root_sha256
             && p.trust_checkpoint_id==checkpoint.checkpoint_id && p.revocation_generation==checkpoint.revocation_generation
@@ -112,7 +112,7 @@ impl PreparedNativeCustodyKeys {
         delivery:&PreparedGuestServiceDelivery)->Result<Self,ShadowError> {
         let association=delivery.closure_association().map_err(fail)?;association.check_preparation().map_err(fail)?;
         let checkpoint=trust.current_checkpoint()?;let k=&configuration.authorization.payload;let p=&encrypted.authorization().payload;
-        require(configuration.api_version=="serverware.nativeShadowRoleKeys/v2"
+        require(configuration.api_version=="catchplate.nativeShadowRoleKeys/v2"
             && k.trust_checkpoint_id==checkpoint.checkpoint_id&&k.revocation_generation==checkpoint.revocation_generation
             && k.revocation_root_sha256==checkpoint.revocation_root_sha256
             && p.trust_checkpoint_id==checkpoint.checkpoint_id&&p.revocation_generation==checkpoint.revocation_generation
@@ -192,13 +192,13 @@ impl Prepared {
         }
         let p=&self.configuration.authorization().payload;
         let extended=self.configuration.commitment().is_some();
-        let mut inventory=serde_json::json!({"apiVersion":if extended{"serverware.nativeShadowLocalKeyInventory/v2"}else{"serverware.nativeShadowLocalKeyInventory/v1"},
+        let mut inventory=serde_json::json!({"apiVersion":if extended{"catchplate.nativeShadowLocalKeyInventory/v2"}else{"catchplate.nativeShadowLocalKeyInventory/v1"},
             "fullKeySetRootSha256":p.full_key_set_root_sha256,"localKeySetRootSha256":p.local_key_set_root_sha256,"localKeys":public_keys});
         if let Some(authorization)=self.configuration.commitment() {
             inventory["requestCommitment"]=serde_json::to_value(authorization.descriptor()).map_err(fail)?;
         }
         let inventory_sha=Sha256Digest::compute(&canonical_json_bytes(&inventory)?);
-        let binding=mechanism::Binding{api_version:if extended{"serverware.nativeShadowKeyDeliveryBinding/v2".into()}else{"serverware.nativeShadowKeyDeliveryBinding/v1".into()},
+        let binding=mechanism::Binding{api_version:if extended{"catchplate.nativeShadowKeyDeliveryBinding/v2".into()}else{"catchplate.nativeShadowKeyDeliveryBinding/v1".into()},
             guest:serde_json::to_value(association.binding()).map_err(fail)?,key_authorization_sha256:p.key_authorization_sha256.as_str().into(),
             delivery_authorization_sha256:Sha256Digest::compute(&canonical_json_bytes(self.configuration.authorization())?).as_str().into(),
             inventory,challenge_base64url:p.challenge_base64url.clone(),execution_closure_manifest_sha256:closure.manifest_sha256().as_str().into(),
@@ -231,7 +231,7 @@ impl Prepared {
         let (seeds,commitment)=if let Some(authorization)=self.configuration.commitment() {
             let document:CommitmentSeeds=serde_json::from_slice(plaintext).map_err(fail)?;
             let canonical=Zeroizing::new(canonical_json_bytes(&document)?);
-            require(canonical.as_slice()==plaintext && document.api_version=="serverware.nativeShadowLocalKeySeeds/v2"
+            require(canonical.as_slice()==plaintext && document.api_version=="catchplate.nativeShadowLocalKeySeeds/v2"
                 && document.inventory_sha256==inventory_sha && document.seeds.len()==public_keys.len())?;
             let d=authorization.descriptor();let supplied=&document.request_commitment;
             require(supplied.key_id==d.key_id && supplied.key_epoch==d.key_epoch)?;
@@ -244,7 +244,7 @@ impl Prepared {
         } else {
             let document:Seeds=serde_json::from_slice(plaintext).map_err(fail)?;
             let canonical=Zeroizing::new(canonical_json_bytes(&document)?);
-            require(canonical.as_slice()==plaintext && document.api_version=="serverware.nativeShadowLocalKeySeeds/v1"
+            require(canonical.as_slice()==plaintext && document.api_version=="catchplate.nativeShadowLocalKeySeeds/v1"
                 && document.inventory_sha256==inventory_sha && document.seeds.len()==public_keys.len())?;
             (document.seeds,None)
         };

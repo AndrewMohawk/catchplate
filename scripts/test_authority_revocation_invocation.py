@@ -20,13 +20,13 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_invocation as invocation
-from serverware import authority_revocation_issuance as configured
-from serverware import authority_revocation_retention as retention
-from serverware.authority_store import planner_connection as admission
-from serverware.authority_store import revocation_capability as issuance
+from catchplate import authority_contract
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_invocation as invocation
+from catchplate import authority_revocation_issuance as configured
+from catchplate import authority_revocation_retention as retention
+from catchplate.authority_store import planner_connection as admission
+from catchplate.authority_store import revocation_capability as issuance
 import test_authority_revocation_capability as capability_oracle
 import test_authority_revocation_capability_producer as signer_oracle
 import test_authority_revocation_issuer as issuer_oracle
@@ -35,8 +35,8 @@ import test_authority_revocation_plan as oracle
 import test_authority_revocation_wire as wire_oracle
 
 
-OUTER_SCHEMA = "serverware.policyAuthorityInternalEnvelope/v3"
-PAYLOAD_SCHEMA = "serverware.policyAuthorityRevocationIssuanceInvocation/v1"
+OUTER_SCHEMA = "catchplate.policyAuthorityInternalEnvelope/v3"
+PAYLOAD_SCHEMA = "catchplate.policyAuthorityRevocationIssuanceInvocation/v1"
 PURPOSE = "issue-revocation-capability"
 HISTORICAL_PAIRS = (
     ("expectedRequest", "expected_request"), ("expectedCapabilityId", "expected_capability_id"),
@@ -241,7 +241,7 @@ class RevocationInvocationTests(unittest.TestCase):
                 ("expected_generation_digest", oracle.sha(b"other generation"))):
             with self.subTest(field=field), self.assertRaises(ValueError):
                 self.verify(fixture, **{field: value})
-        for field, value in (("purpose", "issue-capability"), ("schema", "serverware.policyAuthorityInternalEnvelope/v4")):
+        for field, value in (("purpose", "issue-capability"), ("schema", "catchplate.policyAuthorityInternalEnvelope/v4")):
             changed = InvocationFixture()
             changed.envelope[field] = value
             changed.resign()

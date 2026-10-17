@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 const MAX_STREAM_BYTES: usize = 16 * 1024 * 1024;
-const RESPONSE_HEAD: &[u8] = b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: serverware-readiness\r\n\r\n";
+const RESPONSE_HEAD: &[u8] = b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: catchplate-readiness\r\n\r\n";
 
 pub(crate) struct ReadinessUpgradeReceiptV12 {
     pub client_stream_sha256: Digest,
@@ -36,7 +36,7 @@ pub(crate) fn request_head(target: &str) -> Result<Vec<u8>> {
         ));
     }
     Ok(format!(
-        "POST {target} HTTP/1.1\r\nHost: docker\r\nConnection: Upgrade\r\nUpgrade: serverware-readiness\r\nContent-Length: 0\r\n\r\n",
+        "POST {target} HTTP/1.1\r\nHost: docker\r\nConnection: Upgrade\r\nUpgrade: catchplate-readiness\r\nContent-Length: 0\r\n\r\n",
     ).into_bytes())
 }
 
@@ -69,7 +69,7 @@ pub(crate) fn execute(
     let emitted_server = Arc::clone(&server_original);
     let worker_cancelled = Arc::clone(&cancelled);
     let worker = std::thread::Builder::new()
-        .name("serverware-readiness-upgrade-v12".to_owned())
+        .name("catchplate-readiness-upgrade-v12".to_owned())
         .spawn(move || -> Result<Digest> {
             let mut failure = FailureSignal {
                 cancelled: Arc::clone(&worker_cancelled),

@@ -14,12 +14,12 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from scripts.test_authority_local_configuration import fixture as configuration_fixture
-from serverware import authority_artifact_spec as spec
-from serverware import authority_contract as authority
-from serverware import authority_local_configuration as configuration
-from serverware import authority_local_trust as trust_codec
-from serverware import authority_local_trust_commit as trust_commit
-from serverware.authority_local_artifacts import sha
+from catchplate import authority_artifact_spec as spec
+from catchplate import authority_contract as authority
+from catchplate import authority_local_configuration as configuration
+from catchplate import authority_local_trust as trust_codec
+from catchplate import authority_local_trust_commit as trust_commit
+from catchplate.authority_local_artifacts import sha
 
 canonical = spec.canonical_json_bytes
 encoded = spec.strict_base64url_encode
@@ -121,22 +121,22 @@ def build_package(*, now_datetime=None):
         return dict(schema=schema, payload=body, signerKeyId=trust_codec.key_id(purpose), algorithm="Ed25519",
             signatureBase64Url=encoded(private[purpose].sign(spec._signature_message(domain, body))))
 
-    snapshot_body = dict(schema="serverware.authorityStableSnapshotReceiptPayload/v1", rootIdentity=root_identity,
+    snapshot_body = dict(schema="catchplate.authorityStableSnapshotReceiptPayload/v1", rootIdentity=root_identity,
         snapshotKind="content-addressed-cas", readOnly=True, treeAlgorithm="canonical-path-tree-sha256-v1",
         treeDigest=tree_digest, treeEntryCount=len(files), totalBytes=total,
-        enumeratedTreeDigest=spec.domain_digest("serverware.authorityEnumeratedTree/v1", canonical(files)),
+        enumeratedTreeDigest=spec.domain_digest("catchplate.authorityEnumeratedTree/v1", canonical(files)),
         createdAt=start, expiresAt=end)
-    snapshot_body["receiptId"] = spec.domain_digest("serverware.authorityStableSnapshotReceiptId/v1", canonical(snapshot_body))
-    snapshot = signed(spec.SNAPSHOT_RECEIPT_SCHEMA, "serverware.authorityStableSnapshotReceiptSignature/v1",
+    snapshot_body["receiptId"] = spec.domain_digest("catchplate.authorityStableSnapshotReceiptId/v1", canonical(snapshot_body))
+    snapshot = signed(spec.SNAPSHOT_RECEIPT_SCHEMA, "catchplate.authorityStableSnapshotReceiptSignature/v1",
         snapshot_body, "stable-snapshot-verifier")
-    closure_body = dict(schema="serverware.authorityTrustedHostLocalMeasuredRosterPayload/v1",
+    closure_body = dict(schema="catchplate.authorityTrustedHostLocalMeasuredRosterPayload/v1",
         snapshotReceiptDigest=spec.snapshot_receipt_digest(snapshot), treeDigest=tree_digest,
         treeEntryCount=len(files), totalBytes=total, pythonImportClosure=imports, nativeClosure=native,
         stageZero=stage, assurance=dict(spec.LOCAL_CLOSURE_CLAIMS), createdAt=start, expiresAt=end)
-    closure_body["receiptId"] = spec.domain_digest("serverware.authorityTrustedHostLocalMeasuredRosterId/v1", canonical(closure_body))
+    closure_body["receiptId"] = spec.domain_digest("catchplate.authorityTrustedHostLocalMeasuredRosterId/v1", canonical(closure_body))
     closure = signed(spec.LOCAL_CLOSURE_RECEIPT_SCHEMA, spec.LOCAL_CLOSURE_SIGNATURE_DOMAIN, closure_body, "closure-verifier")
     source_commit = sha(b"synthetic-history-source")
-    provenance = dict(provenance_reference, predicateType="serverware.authorityTrustedHostLocalMeasuredArtifacts/v1",
+    provenance = dict(provenance_reference, predicateType="catchplate.authorityTrustedHostLocalMeasuredArtifacts/v1",
         mediaType="application/json", builderId="synthetic-history-contract-fixture",
         sourceRevision=authority.SOURCE_REVISION, sourceCommitDigest=source_commit,
         sourceTreeDigest=tree_digest, ociRootDigest=manifest_ref["sha256"])
@@ -147,14 +147,14 @@ def build_package(*, now_datetime=None):
         sourceRevision=authority.SOURCE_REVISION, sourceCommitDigest=source_commit, trustMode=generation["trustMode"],
         sourceTree=dict(algorithm="canonical-path-tree-sha256-v1", digest=tree_digest, entryCount=len(files),
             snapshotKind="content-addressed-cas", readOnly=True, snapshotIdentityDigest=spec.domain_digest(
-                "serverware.authoritySnapshotRootIdentity/v1", canonical(root_identity))),
+                "catchplate.authoritySnapshotRootIdentity/v1", canonical(root_identity))),
         stableSnapshotReceipt=snapshot, closureReceipt=closure, files=files, pythonImportClosure=imports,
         nativeClosure=native, schemas=[], migrations=[], configurations=[service_reference], roleManifests=roles,
         sbom=sbom, provenance=provenance, ociImage=oci, stageZero=stage, operationManifest=operation)
     spec.validate_artifact_bundle(bundle)
     generation.update(schema=spec.GENERATION_STATEMENT_SCHEMA, artifactBundleDigest=spec.artifact_bundle_digest(bundle),
         stageZeroDigest=stage["sha256"], stageZeroContract=stage["interfaceSchema"],
-        roleSetDigest=spec.domain_digest("serverware.authorityRoleSet/v1", canonical(roles)),
+        roleSetDigest=spec.domain_digest("catchplate.authorityRoleSet/v1", canonical(roles)),
         snapshotReceiptDigest=spec.snapshot_receipt_digest(snapshot), closureReceiptDigest=spec.closure_receipt_digest(closure),
         provenanceStatementDigest=provenance["statementDigest"], sourceTreeDigest=tree_digest,
         ociManifestDigest=manifest_ref["sha256"], migrationReceiptDigests=[],
@@ -165,12 +165,12 @@ def build_package(*, now_datetime=None):
     spec.validate_generation_core(generation)
     core_digest = spec.domain_digest(spec.GENERATION_CORE_DIGEST_DOMAIN, canonical(generation))
     leaf = spec.domain_digest(spec.WITNESS_LEAF_DIGEST_DOMAIN, core_digest.encode("ascii"))
-    checkpoint_body = dict(schema="serverware.authorityWitnessCheckpointPayload/v1", identity=witness["identity"],
+    checkpoint_body = dict(schema="catchplate.authorityWitnessCheckpointPayload/v1", identity=witness["identity"],
         sequence=0, previousCheckpointDigest=witness["currentCheckpointDigest"], previousRootDigest=witness["currentRootDigest"],
         previousTreeSize=0, treeSize=1, generationCoreDigest=core_digest, leafDigest=leaf,
         rootDigest=spec.domain_digest(spec.WITNESS_CHAIN_ROOT_DOMAIN, witness["currentRootDigest"].encode("ascii"), b"1", leaf.encode("ascii")),
         issuedAt=start, coLocated=True, hardwareBacked=False)
-    generation["witnessCheckpoint"] = signed("serverware.signedAuthorityWitnessCheckpoint/v1",
+    generation["witnessCheckpoint"] = signed("catchplate.signedAuthorityWitnessCheckpoint/v1",
         spec.WITNESS_CHECKPOINT_SIGNATURE_DOMAIN, checkpoint_body, "witness-checkpoint")
     requests, signatures = [], []
     for purpose in ("artifact-bundle", "generation"):

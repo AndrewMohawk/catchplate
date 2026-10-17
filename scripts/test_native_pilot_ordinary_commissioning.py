@@ -22,12 +22,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import custody_generation_grants as generation
-from serverware import native_pilot_ordinary_install as installer
-from serverware import native_pilot_ordinary_runtime_profile as runtime
-from serverware import native_pilot_supervisor_ordinary_deliveries as composer
-from serverware import native_pilot_supervisor_policy as policy
-from serverware import native_pilot_publication as publication
+from catchplate import custody_generation_grants as generation
+from catchplate import native_pilot_ordinary_install as installer
+from catchplate import native_pilot_ordinary_runtime_profile as runtime
+from catchplate import native_pilot_supervisor_ordinary_deliveries as composer
+from catchplate import native_pilot_supervisor_policy as policy
+from catchplate import native_pilot_publication as publication
 from test_native_pilot_ordinary_initial import DOMAINS, checkpoint, fixture as initial_fixture, sign_anchor
 from test_native_pilot_ordinary_keys import PROCESS_DOMAIN, ROLES, canonical, encoded, framed, labelled, sha
 from test_native_pilot_endpoint_commissioning import peer
@@ -89,20 +89,20 @@ def fixture():
             checkpointAuthority=pubs["checkpoint"], serviceSigningKey=pubs["service"], endpointProcessIdentity=identity,
             endpointProcessIdentitySha256=identity["identitySha256"], durableEpochHeadSha256=roots["durableEpochHeadSha256"])
         sign_anchor(history, keys[role])
-        histories[role] = canonical({"apiVersion": "serverware.custodyOrdinaryInitialHistory/v1",
+        histories[role] = canonical({"apiVersion": "catchplate.custodyOrdinaryInitialHistory/v1",
             "initialState": state, "initialCheckpoint": signed, "history": history})
         approved[role] = {"authorities": pubs, "endpointRole": endpoint_role,
             **{name: state[name] for name in ("endpointGeneration", "serviceGeneration", "operationGeneration", "durableEpoch",
                 "deploymentGenerationSha256")}, "revocationGenerationHighWater": payload["revocationGenerationHighWater"],
             "revocationRootSha256": payload["revocationRootSha256"],
             "validity": "observed-initial-resources-through-original-lifetime"}
-    initial_policy = {"apiVersion": "serverware.nativePilotSupervisorOrdinaryInitialPolicy/v1", "services": approved}
+    initial_policy = {"apiVersion": "catchplate.nativePilotSupervisorOrdinaryInitialPolicy/v1", "services": approved}
     rows = {}
     for index, role in enumerate(ROLES):
         credentials = []
         def credential(name, public, signing=False):
             raw = base64.urlsafe_b64decode(public["publicKeySpkiBase64"] + "==")[-32:]
-            credentials.append({"name": name, "original": {"path": "/etc/serverware/test-" + role + "-" + name,
+            credentials.append({"name": name, "original": {"path": "/etc/catchplate/test-" + role + "-" + name,
                 "sha256": labelled("synthetic-private-original/" + role) if signing else sha(raw)}, "length": 32,
                 "signing": {"publicKeyBase64url": encoded(raw), "keyId": public["keyId"]} if signing else None})
             return name
@@ -139,7 +139,7 @@ def fixture():
             "authorityHistoryRootKeySpkiSha256": publics[role]["root"]["keySpkiSha256"]},
             "service": service, "credentials": credentials}
     f.update(histories=histories, initial_policy=initial_policy, delivery_keys=delivery_keys,
-        fragment={"apiVersion": "serverware.nativePilotOrdinaryRuntimePolicy/v1", "services": rows})
+        fragment={"apiVersion": "catchplate.nativePilotOrdinaryRuntimePolicy/v1", "services": rows})
     return f
 
 
@@ -218,7 +218,7 @@ class OrdinaryCommissioningControls(unittest.TestCase):
             items = {item["kind"]: item for item in records if item["role"] == role}
             self.assertEqual(set(items), {"runtime", "history", "inspection"})
             for kind, suffix in (("runtime", "runtime"), ("history", "initial-history"), ("inspection", "peer-inspection")):
-                self.assertEqual(items[kind]["path"], "/etc/serverware/custody-" + role + "-" + suffix + ".json")
+                self.assertEqual(items[kind]["path"], "/etc/catchplate/custody-" + role + "-" + suffix + ".json")
             self.assertEqual(items["runtime"]["raw"], built[role])
             self.assertEqual(items["history"]["raw"], f["histories"][role])
             self.assertEqual((items["runtime"]["uid"], items["runtime"]["gid"]), (0, 0))
@@ -278,12 +278,12 @@ class OrdinaryCommissioningControls(unittest.TestCase):
                     "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId")},
                 "issuedAtBoottimeNs": "1200", "runtimeConfig": {"path": installer.RUNTIME_PATHS[role], "sha256": sha(built[role])},
                 "credentials": credentials, "activation": activation}
-            input_value = {"apiVersion": "serverware.nativePilotServiceAuthorityInput/v1", "operation": "delivery",
+            input_value = {"apiVersion": "catchplate.nativePilotServiceAuthorityInput/v1", "operation": "delivery",
                 "serviceRole": role, "launchOriginal": canonical(f["launch"]).decode("ascii"),
                 "payloadOriginal": canonical(payload).decode("ascii"), "configurationOriginal": canonical(cold).decode("ascii"),
                 "configurationSha256": sha(canonical(cold)), "runtimeOriginal": built[role].decode("ascii"), "activation": activation}
-            signature = f["delivery_keys"][role].sign(b"serverware.policyCustodyGuestDelivery.signature/v1\0" + canonical(payload))
-            envelope = {"apiVersion": "serverware.policyCustodyGuestDelivery/v1", "payload": payload,
+            signature = f["delivery_keys"][role].sign(b"catchplate.policyCustodyGuestDelivery.signature/v1\0" + canonical(payload))
+            envelope = {"apiVersion": "catchplate.policyCustodyGuestDelivery/v1", "payload": payload,
                 "signatureBase64url": encoded(signature)}
             raw = canonical(envelope)
             result = {"original": raw.decode("ascii"), "sha256": sha(raw),

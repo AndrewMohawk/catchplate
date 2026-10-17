@@ -18,9 +18,9 @@ from cryptography.exceptions import InvalidSignature
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import native_pilot_endpoint_launch_profile as profile
-from serverware import native_pilot_launch_publication as launch
-from serverware import native_pilot_native_service_profile as services
+from catchplate import native_pilot_endpoint_launch_profile as profile
+from catchplate import native_pilot_launch_publication as launch
+from catchplate import native_pilot_native_service_profile as services
 from test_native_pilot_launch_authorizations import (fixture, policy_fragment as late_policy,
     pair, expected, signed, ROLES, clocks)
 from test_native_pilot_native_services import fixture as service_policy
@@ -36,7 +36,7 @@ SERVICE_MAP = {role: role for role in ROLES} | {
 
 
 def policy_fragment():
-    return {"apiVersion": "serverware.nativePilotEndpointLaunchPolicy/v1", "endpoints": {
+    return {"apiVersion": "catchplate.nativePilotEndpointLaunchPolicy/v1", "endpoints": {
         role: {"parentPort": 10444, "maximumBracketNanos": "1000000", "timestampErrorNanos": 1000,
             "maximumClockRateErrorPpm": 10} for role in ROLES}}
 
@@ -54,7 +54,7 @@ def peer_original(f):
     pieces += [bytes.fromhex(value["executableSha256"][7:]), value["cgroupPathSha256"].encode("ascii"),
         value["cgroupMountId"].to_bytes(8, "big"), value["cgroupInode"].to_bytes(8, "big"),
         value["securityLabelSha256"].encode("ascii"), value["configurationGenerationSha256"].encode("ascii")]
-    value["processIdentitySha256"] = sha(b"serverware.policyCustodyPeerProcessIdentity/v4\0"
+    value["processIdentitySha256"] = sha(b"catchplate.policyCustodyPeerProcessIdentity/v4\0"
         + b"".join(len(part).to_bytes(8, "big") + part for part in pieces))
     return canonical(value)
 
@@ -72,25 +72,25 @@ def service_fixture(f, role, pair_context, settings, selected):
         expectedPeer=json.loads(peer_raw))
     if role == "trustedTime":
         trust = json.loads(f["recipe_originals"]["trustOriginal"])
-        bootstrap = canonical({"apiVersion": "serverware.nativeShadowGuestTimeBootstrap/v1", "guest": key["guest"],
+        bootstrap = canonical({"apiVersion": "catchplate.nativeShadowGuestTimeBootstrap/v1", "guest": key["guest"],
             "signingKeyId": trust["timeKey"]["keyId"], **selected["endpoints"][role]})
         value["bootstrapOriginal"] = bootstrap.decode("ascii")
-        payload = {**common, "apiVersion": "serverware.nativeShadowTrustedTimeServiceAssignment/v1",
+        payload = {**common, "apiVersion": "catchplate.nativeShadowTrustedTimeServiceAssignment/v1",
             "purpose": "native-shadow-trusted-time-response", "clockBootstrapSha256": sha(bootstrap)}
-        domain = "serverware.nativeShadowTrustedTimeServiceAssignment.signature/v1"
+        domain = "catchplate.nativeShadowTrustedTimeServiceAssignment.signature/v1"
     else:
         if role != "persistence":
             raise AssertionError("only two complete service fixtures are provided")
         proof_raw = f["measured"]["proofScopeOriginal"].encode("ascii")
-        genesis = canonical({"apiVersion": "serverware.nativeShadowPersistenceGenesis/v1",
+        genesis = canonical({"apiVersion": "catchplate.nativeShadowPersistenceGenesis/v1",
             "proofScopeSha256": json.loads(proof_raw)["binding_sha256"], "guest": key["guest"]})
         journal = {"genesisSha256": sha(genesis), "headSequence": 0, "headSha256": sha(genesis)}
         value.update(proofScopeOriginal=proof_raw.decode("ascii"), genesisOriginal=genesis.decode("ascii"),
             journalOriginal=canonical(journal).decode("ascii"), permissions=["store-dispatch-original", "verify-persistence"])
-        payload = {**common, "apiVersion": "serverware.nativeShadowPersistenceServiceAssignment/v1",
+        payload = {**common, "apiVersion": "catchplate.nativeShadowPersistenceServiceAssignment/v1",
             "purpose": "native-shadow-receipt-persistence", "proofScopeOriginalBase64url": encoded(proof_raw),
             "journal": journal, "permissions": list(value["permissions"])}
-        domain = "serverware.nativeShadowPersistenceServiceAssignment.signature/v1"
+        domain = "catchplate.nativeShadowPersistenceServiceAssignment.signature/v1"
     grant = canonical({"payload": payload, "signature": encoded(key_fixture("custody-supervisor-capability")[0].sign(
         signed_message(domain, payload)))})
     return {"inputOriginal": canonical(value), "grantOriginal": grant, "commitRequestOriginal": None}
@@ -163,10 +163,10 @@ class EndpointLaunchControls(unittest.TestCase):
                 self.assertEqual(len(context["prepared"]), 10)
                 self.assertEqual(tuple(context["prepared"]), ("native-runtime-" + role,
                     *("native-" + role + "-" + suffix for suffix in COMPONENTS.values()), "native-launch-" + role))
-                pins = {purpose: {"path": "/etc/serverware/native-pilot-inputs/" + purpose + ".json", "sha256": sha(value)}
+                pins = {purpose: {"path": "/etc/catchplate/native-pilot-inputs/" + purpose + ".json", "sha256": sha(value)}
                     for purpose, value in context["prepared"].items()}
                 self.assertEqual(context["pins"], pins)
-                result = {"apiVersion": "serverware.nativePilotLaunchInstallation/v1", "role": role,
+                result = {"apiVersion": "catchplate.nativePilotLaunchInstallation/v1", "role": role,
                     "bundleSha256": sha(raw), "startupDeadlineBoottimeNs": self.f["window"]["startupDeadlineBoottimeNs"],
                     "lifetimeDeadlineBoottimeNs": self.f["window"]["lifetimeDeadlineBoottimeNs"],
                     "launch": pins["native-launch-" + role], "pins": pins}
@@ -189,13 +189,13 @@ class EndpointLaunchControls(unittest.TestCase):
                 {"grantOriginal": grant}, service_input)
             value = json.loads(raw)
             self.assertEqual(len(value), 9)
-            self.assertEqual(value["serviceGrant"], {"path": "/etc/serverware/native-pilot-inputs/"
+            self.assertEqual(value["serviceGrant"], {"path": "/etc/catchplate/native-pilot-inputs/"
                 + ("native-generation-install-grant" if role == "generationInstall" else "native-service-" + SERVICE_MAP[role])
                 + ".json", "sha256": sha(grant)})
-            self.assertEqual(json.loads(value["originals"]["keys"]), {"apiVersion": "serverware.nativeShadowRoleKeys/v2",
+            self.assertEqual(json.loads(value["originals"]["keys"]), {"apiVersion": "catchplate.nativeShadowRoleKeys/v2",
                 "authorization": json.loads(self.pairs[role]["roleKeyOriginal"])})
             for name, suffix in COMPONENTS.items():
-                self.assertEqual(value["keyAdmission"][name], {"path": "/etc/serverware/native-pilot-inputs/native-"
+                self.assertEqual(value["keyAdmission"][name], {"path": "/etc/catchplate/native-pilot-inputs/native-"
                     + role + "-" + suffix + ".json", "sha256": sha(value["originals"][name].encode("ascii"))})
 
     def test_trusted_time_uses_original_grant_bound_bootstrap_without_replacement(self):
@@ -234,7 +234,7 @@ class EndpointLaunchControls(unittest.TestCase):
         with self.assertRaises(InvalidSignature):
             services.checked_result("persistence", input_raw,
                 {"original": wrong.decode("ascii"), "sha256": sha(wrong)}, **clocks(self.f))
-        value["apiVersion"] = "serverware.nativePilotNativeServiceAuthorityInput/v1"
+        value["apiVersion"] = "catchplate.nativePilotNativeServiceAuthorityInput/v1"
         with self.assertRaises(ValueError):
             services.prepare_input("persistence", canonical(value), **clocks(self.f))
         value["apiVersion"] = services.authority.COMPLETED_PERSISTENCE_INPUT_API
@@ -262,8 +262,8 @@ class EndpointLaunchControls(unittest.TestCase):
         raw = self.bundle("trustedTime")
         for target in ("runtimeOriginal", "ownerConfigurationSha256", "windowSha256", "serviceGrant", "keys"):
             value = json.loads(raw)
-            if target == "runtimeOriginal": value[target] = canonical({"apiVersion": "serverware.nativePilotEndpointRuntime/v1", "role": "persistence"}).decode("ascii")
-            elif target == "serviceGrant": value[target]["path"] = "/etc/serverware/native-pilot-inputs/native-service-persistence.json"
+            if target == "runtimeOriginal": value[target] = canonical({"apiVersion": "catchplate.nativePilotEndpointRuntime/v1", "role": "persistence"}).decode("ascii")
+            elif target == "serviceGrant": value[target]["path"] = "/etc/catchplate/native-pilot-inputs/native-service-persistence.json"
             elif target == "keys": value["keyAdmission"][target]["sha256"] = synthetic("substituted-key-wrapper")
             else: value[target] = synthetic("different-" + target)
             with self.assertRaises(ValueError): launch.prepare_endpoint_bundle(canonical(value), **self.options("trustedTime"))

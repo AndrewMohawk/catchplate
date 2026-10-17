@@ -70,7 +70,7 @@ def command_words(name: str, default: str = "") -> list[str]:
 
 
 def cosign_binary() -> list[str]:
-    return command_words("SERVERWARE_COSIGN_BINARY", "cosign")
+    return command_words("CATCHPLATE_COSIGN_BINARY", "cosign")
 
 
 def run(command: list[str], *, input_bytes: bytes | None = None) -> subprocess.CompletedProcess[bytes]:
@@ -81,7 +81,7 @@ def run(command: list[str], *, input_bytes: bytes | None = None) -> subprocess.C
         stderr=subprocess.PIPE,
         cwd=ROOT,
         check=False,
-        timeout=float(os.getenv("SERVERWARE_COSIGN_TIMEOUT_SECONDS", "120")),
+        timeout=float(os.getenv("CATCHPLATE_COSIGN_TIMEOUT_SECONDS", "120")),
     )
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", errors="replace") or result.stdout.decode("utf-8", errors="replace")
@@ -94,11 +94,11 @@ def require_cosign_v3() -> None:
     version_output = result.stdout.decode("utf-8", errors="replace")
     match = re.search(r"(?:^|[^0-9])v?(\d+)\.\d+\.\d+", version_output)
     if not match or int(match.group(1)) != 3:
-        raise SystemExit("SERVERWARE_COSIGN_BINARY must be pinned to Cosign major version 3")
+        raise SystemExit("CATCHPLATE_COSIGN_BINARY must be pinned to Cosign major version 3")
 
 
 def validate_statement_request(request: dict[str, Any]) -> None:
-    if request.get("apiVersion") not in {"serverware.sigstoreSignRequest/v1", "serverware.sigstoreVerifyRequest/v1"}:
+    if request.get("apiVersion") not in {"catchplate.sigstoreSignRequest/v1", "catchplate.sigstoreVerifyRequest/v1"}:
         raise SystemExit("unsupported request apiVersion")
     statement = request.get("statement")
     if not isinstance(statement, dict):
@@ -184,9 +184,9 @@ def transparency_from_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
                 ),
             )
         )
-    expected_log_id = os.getenv("SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID", "").strip()
+    expected_log_id = os.getenv("CATCHPLATE_COSIGN_EXPECTED_REKOR_LOG_ID", "").strip()
     if expected_log_id and normalized_log_id != normalize_log_id(expected_log_id):
-        raise SystemExit("cosign transparency log ID does not match SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID")
+        raise SystemExit("cosign transparency log ID does not match CATCHPLATE_COSIGN_EXPECTED_REKOR_LOG_ID")
     return {
         "log_id": normalized_log_id,
         "entry_uuid": entry_uuid,
@@ -215,15 +215,15 @@ def bundle_public_key_id(bundle: dict[str, Any]) -> str | None:
 
 
 def key_provider(bundle: dict[str, Any]) -> dict[str, Any]:
-    key_ref = os.getenv("SERVERWARE_COSIGN_KEY", "").strip()
-    cert_identity = os.getenv("SERVERWARE_COSIGN_CERT_IDENTITY", "").strip()
-    cert_issuer = os.getenv("SERVERWARE_COSIGN_CERT_OIDC_ISSUER", "").strip()
-    explicit_key_id = os.getenv("SERVERWARE_COSIGN_KEY_ID", "").strip()
+    key_ref = os.getenv("CATCHPLATE_COSIGN_KEY", "").strip()
+    cert_identity = os.getenv("CATCHPLATE_COSIGN_CERT_IDENTITY", "").strip()
+    cert_issuer = os.getenv("CATCHPLATE_COSIGN_CERT_OIDC_ISSUER", "").strip()
+    explicit_key_id = os.getenv("CATCHPLATE_COSIGN_KEY_ID", "").strip()
     embedded_key_id = bundle_public_key_id(bundle)
     if explicit_key_id:
         key_id = explicit_key_id
         if embedded_key_id and embedded_key_id != key_id:
-            raise SystemExit("SERVERWARE_COSIGN_KEY_ID does not match the cosign bundle public key")
+            raise SystemExit("CATCHPLATE_COSIGN_KEY_ID does not match the cosign bundle public key")
     elif embedded_key_id:
         key_id = embedded_key_id
     elif key_ref:
@@ -236,14 +236,14 @@ def key_provider(bundle: dict[str, Any]) -> dict[str, Any]:
         "type": "cosign-key" if key_ref else "sigstore-keyless",
         "key_ref": key_ref or "sigstore-keyless",
         "key_id": key_id,
-        "workload_identity": cert_identity or os.getenv("SERVERWARE_COSIGN_WORKLOAD_IDENTITY", "sigstore-keyless"),
+        "workload_identity": cert_identity or os.getenv("CATCHPLATE_COSIGN_WORKLOAD_IDENTITY", "sigstore-keyless"),
         "oidc_issuer": cert_issuer or None,
     }
 
 
 def cosign_common_args() -> list[str]:
     args: list[str] = []
-    rekor_url = os.getenv("SERVERWARE_COSIGN_REKOR_URL", "").strip()
+    rekor_url = os.getenv("CATCHPLATE_COSIGN_REKOR_URL", "").strip()
     if rekor_url:
         args.extend(["--rekor-url", rekor_url])
     return args
@@ -255,7 +255,7 @@ def sign() -> None:
     require_cosign_v3()
     tmp_root = ROOT / ".tmp"
     tmp_root.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="serverware-cosign-", dir=str(tmp_root.resolve())) as tmp:
+    with tempfile.TemporaryDirectory(prefix="catchplate-cosign-", dir=str(tmp_root.resolve())) as tmp:
         paths = artifact_paths(Path(tmp), request)
         write_statement(paths["statement"], request["statement"])
         command = [
@@ -264,18 +264,18 @@ def sign() -> None:
             "--bundle",
             str(paths["bundle"]),
         ]
-        if env_bool("SERVERWARE_COSIGN_NEW_BUNDLE_FORMAT", True):
+        if env_bool("CATCHPLATE_COSIGN_NEW_BUNDLE_FORMAT", True):
             command.append("--new-bundle-format")
-        key_ref = os.getenv("SERVERWARE_COSIGN_KEY", "").strip()
+        key_ref = os.getenv("CATCHPLATE_COSIGN_KEY", "").strip()
         if key_ref:
             command.extend(["--key", key_ref])
-        if env_bool("SERVERWARE_COSIGN_YES", True):
+        if env_bool("CATCHPLATE_COSIGN_YES", True):
             command.append("--yes")
-        tlog_upload = os.getenv("SERVERWARE_COSIGN_TLOG_UPLOAD", "").strip()
+        tlog_upload = os.getenv("CATCHPLATE_COSIGN_TLOG_UPLOAD", "").strip()
         if tlog_upload:
             command.append(f"--tlog-upload={tlog_upload}")
         command.extend(cosign_common_args())
-        command.extend(command_words("SERVERWARE_COSIGN_SIGN_EXTRA_ARGS"))
+        command.extend(command_words("CATCHPLATE_COSIGN_SIGN_EXTRA_ARGS"))
         command.append(str(paths["statement"]))
         run(command)
         bundle = load_bundle(paths["bundle"])
@@ -316,7 +316,7 @@ def verify() -> None:
     transparency = transparency_from_bundle(bundle)
     tmp_root = ROOT / ".tmp"
     tmp_root.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="serverware-cosign-", dir=str(tmp_root.resolve())) as tmp:
+    with tempfile.TemporaryDirectory(prefix="catchplate-cosign-", dir=str(tmp_root.resolve())) as tmp:
         paths = artifact_paths(Path(tmp), request)
         write_statement(paths["statement"], request["statement"])
         paths["bundle"].write_text(json.dumps(bundle, sort_keys=True) + "\n", encoding="utf-8")
@@ -326,18 +326,18 @@ def verify() -> None:
             "--bundle",
             str(paths["bundle"]),
         ]
-        key_ref = os.getenv("SERVERWARE_COSIGN_KEY", "").strip()
+        key_ref = os.getenv("CATCHPLATE_COSIGN_KEY", "").strip()
         if key_ref:
             command.extend(["--key", key_ref])
         else:
-            cert_identity = os.getenv("SERVERWARE_COSIGN_CERT_IDENTITY", "").strip()
-            cert_issuer = os.getenv("SERVERWARE_COSIGN_CERT_OIDC_ISSUER", "").strip()
+            cert_identity = os.getenv("CATCHPLATE_COSIGN_CERT_IDENTITY", "").strip()
+            cert_issuer = os.getenv("CATCHPLATE_COSIGN_CERT_OIDC_ISSUER", "").strip()
             if cert_identity:
                 command.extend(["--certificate-identity", cert_identity])
             if cert_issuer:
                 command.extend(["--certificate-oidc-issuer", cert_issuer])
         command.extend(cosign_common_args())
-        command.extend(command_words("SERVERWARE_COSIGN_VERIFY_EXTRA_ARGS"))
+        command.extend(command_words("CATCHPLATE_COSIGN_VERIFY_EXTRA_ARGS"))
         command.append(str(paths["statement"]))
         run(command)
     print(

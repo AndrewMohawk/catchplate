@@ -21,7 +21,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_local_retained_metadata as subject
+from catchplate import authority_local_retained_metadata as subject
 
 
 def pin(label):
@@ -233,7 +233,7 @@ class RetainedMetadataReaderControls(unittest.TestCase):
         self.assertFalse(calls & {"issue", "publish", "provision", "sign", "execute", "commit"})
         make = (Path(subject.__file__).resolve().parents[1] / "Makefile").read_text()
         self.assertEqual(make.count("scripts/test_authority_local_retained_metadata.py"), 1)
-        self.assertEqual(make.count("serverware/authority_local_retained_metadata.py"), 2)
+        self.assertEqual(make.count("catchplate/authority_local_retained_metadata.py"), 2)
 
 
 if __name__ == "__main__":

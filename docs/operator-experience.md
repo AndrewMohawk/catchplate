@@ -4,11 +4,11 @@
 
 **Let applications use APIs without giving them the provider's keys.**
 
-An application authenticates to Serverware with its own scoped identity.
-Serverware checks what that application may do, attaches the authorized provider
+An application authenticates to Catchplate with its own scoped identity.
+Catchplate checks what that application may do, attaches the authorized provider
 credential, and returns only a response allowed by the configured policy. The
 provider credential stays out of the calling application's configuration.
-The application still needs its Serverware identity; this is not a claim that
+The application still needs its Catchplate identity; this is not a claim that
 every client is secretless.
 
 The interface should follow the operator's task, not the internal arrangement
@@ -23,7 +23,7 @@ of brokers, compilers, authorities, leases, and receipts.
 2. **Set allowed actions.** Choose the application, API operations, constraints,
    and any required approval. Explain the proposed access in plain language;
    keep exact policy details available for review. Deny everything not allowed.
-3. **Give app access.** Provision the application's scoped Serverware identity
+3. **Give app access.** Provision the application's scoped Catchplate identity
    and provide verified connection instructions. Test an allowed request and a
    denied request before enabling real credentials. Never hand the provider's
    key to the application.
@@ -42,7 +42,7 @@ isolated synthetic upstream. It is already configured, retains its test data
 across reloads and restarts, and does not connect real provider accounts.
 
 - **Overview** explains the product in one sentence, shows the application to
-  Serverware to API flow, and offers one primary **Run demo** action. Results
+  Catchplate to API flow, and offers one primary **Run demo** action. Results
   explain the observed behavior rather than only reporting a test count.
 - **Proxy setup** makes the actual proxy connection settings, listener scope,
   client configuration, and downloadable public CA certificate easy to find.
@@ -98,7 +98,7 @@ client configuration must preserve its synthetic-only destination restrictions.
 | --- | --- |
 | Allowed request | The actual TLS proxy forwarded an allowed request with the synthetic credential, removed tested caller-sensitive headers, and returned the permitted response fields. |
 | Unauthorized requests blocked | The tested identity, destination, credential-header collision, path, and method denials behaved as expected. Relevant upstream counters confirm tested requests did not reach their destinations. |
-| Unsafe response blocked | The synthetic upstream reflected its credential, and Serverware refused to release that response. This happens after upstream dispatch; it does not undo an upstream action. |
+| Unsafe response blocked | The synthetic upstream reflected its credential, and Catchplate refused to release that response. This happens after upstream dispatch; it does not undo an upstream action. |
 | Activity recorded | Persisted audit events correlate with the demo request and blocked response, without the tested credential material appearing in those events. |
 
 An outcome is successful only when the corresponding real checks have

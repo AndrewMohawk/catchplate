@@ -12,7 +12,7 @@ surface is thirteen metadata tables and five invoker functions. Revision `.65`
 added SELECT/INSERT for immutable writer request custody; `.67` adds only
 SELECT/INSERT for its immutable acknowledgment child. The
 immutable inventory in
-[`planner_writer_sql.py`](../serverware/authority_store/planner_writer_sql.py)
+[`planner_writer_sql.py`](../catchplate/authority_store/planner_writer_sql.py)
 now supplies both schema grants and a fixed catalog-admission query. Existing
 audit-capacity imports retain their names through aliases to this inventory.
 

@@ -9,7 +9,7 @@ private historical keys.
 
 | Item | Original-byte contract |
 | --- | --- |
-| Endpoint | `/run/serverware/oidc-session-activation/completion.sock`; expected root listener peer `0:0`. |
+| Endpoint | `/run/catchplate/oidc-session-activation/completion.sock`; expected root listener peer `0:0`. |
 | Request | `SWOACM02`; raw2 is `complete-oidc-session-activation` and the exact signed caller authorization original, 2 bytes to 64 KiB. |
 | Acknowledged response | `SWOACR01`; raw4 is `acknowledged`, completion-request digest, original signed complete control (up to 256 KiB), original state ACK (up to 16 KiB). |
 | Uncertain response | `SWOACR01`; `uncertain` followed by three empty frames. |

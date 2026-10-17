@@ -64,7 +64,7 @@ fn npm_route(publish: bool) -> Route {
 
 fn fixture(routes: Vec<Route>, operator: bool) -> (GateState, Arc<Snapshot>) {
     let mut snapshot = (*test_snapshot(1)).clone();
-    snapshot.policy_id = "serverware-operator-demo".into();
+    snapshot.policy_id = "catchplate-operator-demo".into();
     snapshot.principals[0].proxy_authorization = Some(ProxyAuthorizationPolicy::BearerToken {
         token_sha256: sha256_prefixed(TOKEN.as_bytes()), source_cidrs: vec![],
         expires_at_ms: Some(now_epoch_ms() + 60_000), basic_transport: None, managed_renewal: None,
@@ -72,7 +72,7 @@ fn fixture(routes: Vec<Route>, operator: bool) -> (GateState, Arc<Snapshot>) {
     snapshot.routes = routes;
     snapshot.credentials.insert(CREDENTIAL.into(), Credential {
         provider: "operator-demo".into(), provider_subject: Some(SUBJECT.into()),
-        injection: json!({"type":"bearer","header":"Authorization","__serverwareCredentialType":"static"}),
+        injection: json!({"type":"bearer","header":"Authorization","__catchplateCredentialType":"static"}),
     });
     let snapshot = Arc::new(snapshot);
     let mut state = test_gate_state(Arc::clone(&snapshot));
@@ -305,8 +305,8 @@ fn ordinary_x_semantic_denial_precedes_generation_metadata() {
     let mut changed = (*snapshot).clone();
     changed.credentials.insert(CREDENTIAL.into(), Credential { provider:"x".into(),
         provider_subject:Some("synthetic-x-account".into()),injection:json!({"type":"bearer","header":"Authorization",
-            "field":"access_token","__serverwareCredentialType":"oauth2","__serverwareOAuthClientId":"synthetic-x-app",
-            "__serverwareGrantedScopes":["users.read"]}) });
+            "field":"access_token","__catchplateCredentialType":"oauth2","__catchplateOAuthClientId":"synthetic-x-app",
+            "__catchplateGrantedScopes":["users.read"]}) });
     let snapshot = Arc::new(changed);
     *state.snapshot.write().unwrap() = Arc::clone(&snapshot);
     let mut req = request("GET", "/2/users/me", "");

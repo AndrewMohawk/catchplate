@@ -1,7 +1,7 @@
 //! Retained native canary TLS/signature owner. Durable operations are fixed
 //! phases; only an actual completed claim can reach the single intake contact.
 use super::*;
-use serverware_decision_gate::{native_canary_evidence_v1 as wire,
+use catchplate_decision_gate::{native_canary_evidence_v1 as wire,
     enclave_runtime_identity_v1::NativeCanaryHttpClient};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ring::rand::{SecureRandom, SystemRandom};
@@ -69,7 +69,7 @@ impl Owner {
         let statement = wire::Statement {
             api_version: wire::SCHEMA.into(), operation: operation.label().into(), request_id: batch.request_id().to_owned(),
             deployment_id: self.deployment.clone(), instance_id: self.instance.clone(),
-            holder_id: serverware_decision_gate::native_currentness_v1::holder_id(&signer.boot_id, &signer.key_id)?,
+            holder_id: catchplate_decision_gate::native_currentness_v1::holder_id(&signer.boot_id, &signer.key_id)?,
             boot_id: signer.boot_id.clone(), key_id: signer.key_id.clone(),
             control_plane_response_signing_key_id: signer.control_plane_response_signing_key_id.clone(),
             policy_hash: snapshot.hash.clone(), data_plane_binary_sha256: binary,
@@ -108,11 +108,11 @@ impl Owner {
     }
     pub(super) fn endpoint(&self, operation: wire::Operation) -> &str { self.client.endpoint(operation) }
 
-    pub(super) fn delivery(&mut self,state:&GateState,authority:&serverware_decision_gate::native_canary_delivery_v1::Authority,
-        operation:serverware_decision_gate::native_canary_delivery_v1::Operation,base:&serverware_decision_gate::native_canary_delivery_v1::Sender,
+    pub(super) fn delivery(&mut self,state:&GateState,authority:&catchplate_decision_gate::native_canary_delivery_v1::Authority,
+        operation:catchplate_decision_gate::native_canary_delivery_v1::Operation,base:&catchplate_decision_gate::native_canary_delivery_v1::Sender,
         request:Value,assignment:&str,original_expires:u64,deadline:u64)
-        ->Result<serverware_decision_gate::native_canary_delivery_v1::Completion,String>{
-        use serverware_decision_gate::native_canary_delivery_v1 as delivery;
+        ->Result<catchplate_decision_gate::native_canary_delivery_v1::Completion,String>{
+        use catchplate_decision_gate::native_canary_delivery_v1 as delivery;
         self.check(state)?;authority.check()?;
         let snapshot=current_snapshot(state);
         if !snapshot_is_active(state,&snapshot) || base.policy_hash!=snapshot.hash || base.data_plane_binary_sha256!=current_binary_digest()? {
@@ -142,14 +142,14 @@ impl Owner {
         if !snapshot_is_active(state,&snapshot){return Err("delivery policy changed during contact".into());}
         delivery::Completion::verify(authority,&signed,&raw)
     }
-    pub(super) fn intake_once(&mut self,state:&GateState,completion:serverware_decision_gate::native_canary_delivery_v1::Completion,
+    pub(super) fn intake_once(&mut self,state:&GateState,completion:catchplate_decision_gate::native_canary_delivery_v1::Completion,
         original:&wire::SignedEvidence)->Result<Vec<u8>,String>{
         self.check(state)?;
         let response=self.client.intake_once(completion,original)?;
         self.check(state)?;Ok(response)
     }
-    pub(super) fn recovery_sender(&self,state:&GateState,binding:&serverware_decision_gate::native_canary_delivery_v1::CanaryBinding,
-        deadline:u64)->Result<serverware_decision_gate::native_canary_delivery_v1::Sender,String>{
+    pub(super) fn recovery_sender(&self,state:&GateState,binding:&catchplate_decision_gate::native_canary_delivery_v1::CanaryBinding,
+        deadline:u64)->Result<catchplate_decision_gate::native_canary_delivery_v1::Sender,String>{
         self.check(state)?;let snapshot=current_snapshot(state);
         let ResponseProofSigner::Custody(signer)=&state.response_proof_signer else{return Err("recovery native signer absent".into());};
         signer.transport.require_native()?;
@@ -157,8 +157,8 @@ impl Owner {
         let mut guard=state.mitm_authority.as_ref().ok_or("recovery native identity absent")?.lock().map_err(|_|"recovery native identity poisoned")?;
         let MitmAuthority::Native(identity)=&mut *guard else{return Err("recovery imported identity refused".into());};
         self.client.check(identity,deadline)?;let tls=self.client.tls();
-        Ok(serverware_decision_gate::native_canary_delivery_v1::Sender{deployment_id:self.deployment.clone(),instance_id:self.instance.clone(),
-            holder_id:serverware_decision_gate::native_currentness_v1::holder_id(&signer.boot_id,&signer.key_id)?,boot_id:signer.boot_id.clone(),key_id:signer.key_id.clone(),
+        Ok(catchplate_decision_gate::native_canary_delivery_v1::Sender{deployment_id:self.deployment.clone(),instance_id:self.instance.clone(),
+            holder_id:catchplate_decision_gate::native_currentness_v1::holder_id(&signer.boot_id,&signer.key_id)?,boot_id:signer.boot_id.clone(),key_id:signer.key_id.clone(),
             control_plane_response_signing_key_id:signer.control_plane_response_signing_key_id.clone(),policy_hash:snapshot.hash.clone(),data_plane_binary_sha256:state.binary_digest.clone(),
             canary_id:binding.canary_id.clone(),canary_assignment_sha256:binding.canary_assignment_sha256.clone(),canary_boot_id:binding.canary_boot_id.clone(),
             workload_uri:tls.workload_uri().into(),client_certificate_sha256:tls.certificate_sha256().into(),client_spki_sha256:tls.spki_sha256().into()})

@@ -1,0 +1,14 @@
+{
+  "schema": "catchplate.standaloneInstall/v1",
+  "project_name": "catchplate-standalone",
+  "state_dir": "/var/lib/catchplate-standalone",
+  "console_origin": "https://catchplate.example.com",
+  "proxy_origin": "https://proxy.example.com",
+  "allowed_upstreams": [
+    "https://api.github.com"
+  ],
+  "tls_certificate": "/etc/catchplate/tls/fullchain.pem",
+  "tls_private_key": "/etc/catchplate/tls/privkey.pem",
+  "admin_username": "admin",
+  "publish_address": "0.0.0.0:443"
+}

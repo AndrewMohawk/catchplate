@@ -3,7 +3,7 @@
 Status: source implementation and authored fixtures only; unexecuted. This
 does not resolve any of the four [authority-transition startup gaps](authority-transition-startup-blocker.md).
 
-`serverware/webauthn_credential_trust.py` contains the classification shared by
+`catchplate/webauthn_credential_trust.py` contains the classification shared by
 the actual `webauthn.credential_trust_status` boundary and trust-withdrawal
 enumeration. The pure core accepts immutable credential facts and one explicit
 root/development-policy context. It performs no database, filesystem, cache,

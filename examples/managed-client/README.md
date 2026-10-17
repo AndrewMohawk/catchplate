@@ -1,6 +1,6 @@
 # Managed workload client (Python)
 
-This standalone Linux example keeps a workload's Serverware proxy login renewed
+This standalone Linux example keeps a workload's Catchplate proxy login renewed
 under an explicit, finite administrator enrollment. It does not receive a real
 provider credential, extend its enrollment, acquire new permissions, or provide
 native/hardware-backed authority. The ordinary renewal feature is deployed;
@@ -10,7 +10,7 @@ successful GitHub request. No existing client was automatically enrolled.
 
 `managed_client.py` uses only the Python standard library and `cryptography`.
 `github_read_loop.py` adds unmodified `requests` for repeated read-only GitHub
-issues-list calls. Neither imports private Serverware server modules.
+issues-list calls. Neither imports private Catchplate server modules.
 
 ## Enroll once
 
@@ -51,7 +51,7 @@ The closed public setup document is:
 
 ```json
 {
-  "schema": "serverware.managedClientSetup/v1",
+  "schema": "catchplate.managedClientSetup/v1",
   "application_id": "11111111-1111-4111-8111-111111111111",
   "enrollment_id": "22222222-2222-4222-8222-222222222222",
   "audience": "https://your-proxy-host/v1/workload/renew",
@@ -74,16 +74,16 @@ unless those backups are designed to hold credentials.
 ## Run a worker
 
 For the example below, enable **Basic proxy authentication** on this application,
-save a GitHub PAT or GitHub App connection on Serverware, and grant only the
+save a GitHub PAT or GitHub App connection on Catchplate, and grant only the
 **GitHub issues: read** preset for the exact repository. Download the proxy's
 interception CA. A GitHub App's private key and installation tokens stay on the
-server. The public `token serverware-github-placeholder-v1` request header is
+server. The public `token catchplate-github-placeholder-v1` request header is
 replaced by the proxy after permission checks; never supply a real GitHub token.
 
 ```bash
 .venv/bin/python -B github_read_loop.py \
   --state-dir /absolute/private/workload \
-  --ca-file /absolute/public/serverware-ca.pem \
+  --ca-file /absolute/public/catchplate-ca.pem \
   --owner your-owner --repo your-repository --interval 30
 ```
 
@@ -201,7 +201,7 @@ this example and does not claim to run it. Missing/mismatched real dependencies
 fail the ordinary suite instead of skipping or substituting Requests.
 
 The wire-parity test also needs the repository's server dependencies available;
-only that test imports `serverware.operator_workload_renewal`. Other tests use
+only that test imports `catchplate.operator_workload_renewal`. Other tests use
 real temporary disk journals and fake HTTP to exercise crash/restart, exact
 replay, private permissions, single-writer locking, response refusal, expiry,
 overlap and stock Requests pool handoff. They make no network/provider requests.

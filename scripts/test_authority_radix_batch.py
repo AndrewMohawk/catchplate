@@ -20,9 +20,9 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_audit_trace as audit_trace
-from serverware import authority_contract
-from serverware import authority_radix_proof as radix
+from catchplate import authority_audit_trace as audit_trace
+from catchplate import authority_contract
+from catchplate import authority_radix_proof as radix
 import test_authority_radix_proof as oracle
 import test_authority_radix_mutation as generic_oracle
 
@@ -30,8 +30,8 @@ import test_authority_radix_mutation as generic_oracle
 LEAVES = "policy_authority_authenticated_leaves"
 NODES = "policy_authority_authenticated_tree_nodes"
 AGGREGATE = "policy_authority_bounded_aggregate_states"
-PROFILE = "serverware.policyAuthorityRadixReadBatch/v1"
-PARTITION = oracle.wire_digest("serverware.metadataAuditOutboxCapacityPartition/v1", b"global")
+PROFILE = "catchplate.policyAuthorityRadixReadBatch/v1"
+PARTITION = oracle.wire_digest("catchplate.metadataAuditOutboxCapacityPartition/v1", b"global")
 COUNTER_ID = "metadata-audit-outbox-global-capacity-v1:" + PARTITION
 COUNTER_KEY = {"aggregate_id": COUNTER_ID}
 
@@ -49,7 +49,7 @@ def expected_proofs(trees, selected):
 def parent_identities(selected):
     parents = set()
     for row in selected:
-        path = oracle.sql_digest("serverware.policyAuthorityAuthenticatedKey/v1",
+        path = oracle.sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1",
                                  row["table"].encode("utf-8"), oracle.sql_json(row["key"]))[7:]
         parents.update((row["table"], depth + 1, path[:depth]) for depth in range(64))
     return tuple(sorted(parents))
@@ -58,7 +58,7 @@ def parent_identities(selected):
 class StoredTreeCursor:
     """Closed SQL responder, including hostile transport controls when explicit."""
 
-    def __init__(self, *trees, namespace="serverware_metadata", change=None, reverse=False):
+    def __init__(self, *trees, namespace="catchplate_metadata", change=None, reverse=False):
         self.namespace = namespace
         self.change = change
         self.reverse = reverse
@@ -77,7 +77,7 @@ class StoredTreeCursor:
             else:
                 for row in tree.rows.values():
                     key = tree.key(row)
-                    digest = oracle.sql_digest("serverware.policyAuthorityAuthenticatedKey/v1",
+                    digest = oracle.sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1",
                                                tree.table.encode("utf-8"), oracle.sql_json(key))
                     row_digest, leaf_digest = tree.leaves[digest]
                     self.leaves[(tree.table, digest)] = {
@@ -432,7 +432,7 @@ class AuthorityRadixBatchTests(unittest.TestCase):
             self.assertIn("node.path_prefix = requested.path_prefix", statement)
 
     def test_explicit_valid_namespaces_keep_full_proof_bytes_and_bounded_reads(self):
-        for namespace in ("serverware_metadata", "batch_fixture_a9", "a" * 63, "select"):
+        for namespace in ("catchplate_metadata", "batch_fixture_a9", "a" * 63, "select"):
             with self.subTest(namespace=namespace):
                 result, cursor, trace = self.derive(
                     rows=(self.rows[0],), namespace=namespace,
@@ -469,7 +469,7 @@ class AuthorityRadixBatchTests(unittest.TestCase):
             {"tableName": "first", "depth": 2, "pathPrefix": "a"},
         ]}
         changes = [
-            {**valid, "profile": "serverware.policyAuthorityRadixReadBatch/v999"},
+            {**valid, "profile": "catchplate.policyAuthorityRadixReadBatch/v999"},
             {**valid, "extra": 1}, {**valid, "parents": []},
             {**valid, "parents": tuple(valid["parents"])},
             {**valid, "parents": list(reversed(valid["parents"]))},
@@ -527,7 +527,7 @@ class AuthorityRadixBatchTests(unittest.TestCase):
         self.assertEqual(business_proofs, expected_proofs((self.tree, aggregate), business))
         self.assertEqual(trace.budget.framework_entries, 68)  # New root, scan, row,65proof reads.
         self.assertEqual(trace.budget.business_entries, len(cursor.calls) - 65)
-        digest = oracle.sql_digest("serverware.policyAuthorityAuthenticatedKey/v1",
+        digest = oracle.sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1",
                                    AGGREGATE.encode("ascii"), oracle.sql_json(COUNTER_KEY))
         expected_counter_trace = [(LEAVES, {"tableName": AGGREGATE, "keyDigest": digest})] + [
             (NODES, {"tableName": AGGREGATE, "depth": depth + 1, "pathPrefix": digest[7:7 + depth]})
@@ -537,7 +537,7 @@ class AuthorityRadixBatchTests(unittest.TestCase):
         self.assertTrue(any((AGGREGATE, 1, "") in radix.validate_batch_trace_key(key) for key in batches))
 
     def test_even_valid_batch_cannot_interrupt_reserved_counter_proof_block(self):
-        digest = oracle.sql_digest("serverware.policyAuthorityAuthenticatedKey/v1",
+        digest = oracle.sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1",
                                    AGGREGATE.encode("ascii"), oracle.sql_json(COUNTER_KEY))
         budget = audit_trace.AuditTraceBudget("webauthn.credential.revoke")
         budget.append({"access": "read", "table": LEAVES,
@@ -549,7 +549,7 @@ class AuthorityRadixBatchTests(unittest.TestCase):
     def test_planner_source_splits_exact_counter_and_keeps_global_singleton_before_business_batch(self):
         # Inspect source only: no extracted code execution, fake registry, or
         # import of the presently blocked planner is used.
-        tree = ast.parse((ROOT / "serverware/authority_planner.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/authority_planner.py").read_text())
         functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
                      and node.name == "_derive_multiproofs"]
         self.assertEqual(len(functions), 1)

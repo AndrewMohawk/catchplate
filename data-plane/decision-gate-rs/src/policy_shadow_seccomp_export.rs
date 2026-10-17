@@ -12,7 +12,7 @@ use std::path::{Component, Path};
 
 const MAX_POLICY_BYTES: usize = 4 * 1024 * 1024;
 const MAX_BPF_BYTES: usize = 32768;
-const USAGE: &str = "usage: serverware-export-custody-seccomp --policy /absolute/policy.json --output /absolute/new/seccomp.bpf";
+const USAGE: &str = "usage: catchplate-export-custody-seccomp --policy /absolute/policy.json --output /absolute/new/seccomp.bpf";
 
 // Resolve every directory without following symlinks and retain the parent for
 // the final openat. The caller must supply existing directories; none are made.

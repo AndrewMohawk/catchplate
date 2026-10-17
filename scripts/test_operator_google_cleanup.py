@@ -36,8 +36,8 @@ TABLES = (*workspace.LEGACY_TABLES, *workspace.CATALOG_TABLES,
 class Fixture(consent_tests.Fixture):
     def __init__(self):
         super().__init__()
-        from serverware import operator_google_cleanup as cleanup
-        from serverware import operator_google_cleanup_store as cleanup_store
+        from catchplate import operator_google_cleanup as cleanup
+        from catchplate import operator_google_cleanup_store as cleanup_store
         self.cleanup, self.cleanup_store = cleanup, cleanup_store
         self.history, self.reservations, self.transport_checks = [], [], []
         self.revocations = 0

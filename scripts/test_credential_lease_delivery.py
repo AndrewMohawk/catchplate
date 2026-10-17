@@ -28,7 +28,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from serverware.response_identity import response_headers_binding  # noqa: E402
+from catchplate.response_identity import response_headers_binding  # noqa: E402
 
 ADMIN_TOKEN = "credential-lease-test-admin-token"
 DATA_PLANE_TOKEN = "credential-lease-test-data-plane-token"
@@ -54,11 +54,11 @@ UPDATED_METADATA = {
 }
 LEASE_PATH = "/api/data-plane/credential-leases"
 RESPONSE_SIGNATURE_HEADERS = {
-    "x-serverware-response-key-id",
-    "x-serverware-response-body-sha256",
-    "x-serverware-response-statement-sha256",
-    "x-serverware-response-statement-b64",
-    "x-serverware-response-signature",
+    "x-catchplate-response-key-id",
+    "x-catchplate-response-body-sha256",
+    "x-catchplate-response-statement-sha256",
+    "x-catchplate-response-statement-b64",
+    "x-catchplate-response-signature",
 }
 AAD_FIELDS = (
     "apiVersion",
@@ -132,19 +132,19 @@ def sha256_prefixed(value: bytes) -> str:
 def recipient_attestation_verifier() -> None:
     try:
         for name in (
-            "SERVERWARE_ADMIN_TOKEN",
-            "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
-            "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
-            "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN",
-            "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
-            "SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN",
-            "SERVERWARE_METADATA_STORE_POSTGRES_DSN",
+            "CATCHPLATE_ADMIN_TOKEN",
+            "CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
+            "CATCHPLATE_DATA_PLANE_AUDIT_TOKEN",
+            "CATCHPLATE_DATA_PLANE_GRANT_CONSUME_TOKEN",
+            "CATCHPLATE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
+            "CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN",
+            "CATCHPLATE_METADATA_STORE_POSTGRES_DSN",
         ):
             if os.getenv(name):
                 raise ValueError(f"verifier inherited sensitive environment variable {name}")
         request = json.load(sys.stdin)
         evidence = request["recipientAttestation"]
-        if evidence.get("format") != "serverware.testRecipientAttestation/v1":
+        if evidence.get("format") != "catchplate.testRecipientAttestation/v1":
             raise ValueError("unexpected recipient attestation format")
         for field in (
             "purpose",
@@ -206,7 +206,7 @@ def master_key_unseal_fixture() -> None:
     print(
         json.dumps(
             {
-                "apiVersion": "serverware.unsealedMaterial/v1",
+                "apiVersion": "catchplate.unsealedMaterial/v1",
                 "kind": "UnsealedMaterial",
                 "ok": True,
                 "material": "broker-kek",
@@ -329,26 +329,26 @@ def verify_response_signature(
         raise AssertionError(f"signed response headers are missing: {sorted(missing)}")
 
     parsed = urlsplit(target)
-    statement_bytes = b64d(response.headers["x-serverware-response-statement-b64"])
+    statement_bytes = b64d(response.headers["x-catchplate-response-statement-b64"])
     statement = json.loads(statement_bytes)
     if canonical_json_bytes(statement) != statement_bytes:
         raise AssertionError("response signature statement is not canonical JSON")
-    if response.headers["x-serverware-response-key-id"] != key_id:
+    if response.headers["x-catchplate-response-key-id"] != key_id:
         raise AssertionError("response key header does not match the attested key")
     if statement.get("response_signing_key_id") != key_id:
         raise AssertionError("response statement does not bind the attested key")
-    if response.headers["x-serverware-response-body-sha256"] != sha256_prefixed(response.body):
+    if response.headers["x-catchplate-response-body-sha256"] != sha256_prefixed(response.body):
         raise AssertionError("response body digest header mismatch")
     if statement.get("body_sha256") != sha256_prefixed(response.body):
         raise AssertionError("response statement body digest mismatch")
-    if response.headers["x-serverware-response-statement-sha256"] != sha256_prefixed(statement_bytes):
+    if response.headers["x-catchplate-response-statement-sha256"] != sha256_prefixed(statement_bytes):
         raise AssertionError("response statement digest header mismatch")
-    if statement.get("version") != "serverware.responseSignature/v3":
+    if statement.get("version") != "catchplate.responseSignature/v3":
         raise AssertionError(f"unexpected response signature version: {statement}")
     authenticated_headers = [
         (name, value)
         for name, value in response.raw_headers
-        if not name.lower().startswith(b"x-serverware-response-")
+        if not name.lower().startswith(b"x-catchplate-response-")
     ]
     headers_digest, header_count = response_headers_binding(
         authenticated_headers
@@ -373,7 +373,7 @@ def verify_response_signature(
     if (statement.get("context") or {}).get("policy_bundle_digest") != policy_hash:
         raise AssertionError(f"response statement policy binding mismatch: {statement}")
 
-    signature = response.headers["x-serverware-response-signature"]
+    signature = response.headers["x-catchplate-response-signature"]
     if not signature.startswith("ed25519:"):
         raise AssertionError("response signature does not use Ed25519")
     public_key.verify(b64d(signature.split(":", 1)[1]), statement_bytes)
@@ -381,7 +381,7 @@ def verify_response_signature(
 
 
 def recipient_nonce(label: str) -> bytes:
-    nonce = hashlib.sha256(f"serverware:credential-lease-test:{label}".encode("ascii")).digest()
+    nonce = hashlib.sha256(f"catchplate:credential-lease-test:{label}".encode("ascii")).digest()
     if len(nonce) != 32:
         raise AssertionError("recipient nonce must be 32 bytes")
     return nonce
@@ -397,7 +397,7 @@ def recipient_attestation(
     request_authority_sha256: str | None,
 ) -> dict[str, str]:
     evidence = {
-        "format": "serverware.testRecipientAttestation/v1",
+        "format": "catchplate.testRecipientAttestation/v1",
         "purpose": purpose,
         "requestBindingSha256": request_binding_sha256,
         "recipientKeyId": key_id,
@@ -451,7 +451,7 @@ def credential_request_authority(
     reservation_expires_at_epoch_ms: int,
 ) -> dict[str, Any]:
     return {
-        "apiVersion": "serverware.credentialLeaseRequestAuthority/v1",
+        "apiVersion": "catchplate.credentialLeaseRequestAuthority/v1",
         "attemptId": attempt_id,
         "reservationId": reservation_id,
         "bindingDigest": binding_digest,
@@ -477,9 +477,9 @@ def lease_payload(
     nonce = recipient_nonce(label)
     payload = {
         "apiVersion": (
-            "serverware.credentialLeaseRequest/v4"
+            "catchplate.credentialLeaseRequest/v4"
             if request_authority is not None
-            else "serverware.credentialLeaseRequest/v3"
+            else "catchplate.credentialLeaseRequest/v3"
         ),
         "purpose": purpose,
         "principalId": PRINCIPAL_ID,
@@ -524,16 +524,16 @@ def decrypt_lease(
 ) -> dict[str, Any]:
     request_bound = (
         request_payload["apiVersion"]
-        == "serverware.credentialLeaseRequest/v4"
+        == "catchplate.credentialLeaseRequest/v4"
     )
     aad_fields = V4_AAD_FIELDS if request_bound else AAD_FIELDS
     expected_fields = set(aad_fields).union(ENCRYPTED_FIELDS)
     if set(envelope) != expected_fields:
         raise AssertionError(f"credential lease envelope fields changed: {sorted(envelope)}")
     expected_envelope_version = (
-        "serverware.credentialLeaseEnvelope/v3"
+        "catchplate.credentialLeaseEnvelope/v3"
         if request_bound
-        else "serverware.credentialLeaseEnvelope/v2"
+        else "catchplate.credentialLeaseEnvelope/v2"
     )
     if envelope["apiVersion"] != expected_envelope_version:
         raise AssertionError(f"unexpected credential lease envelope version: {envelope}")
@@ -558,16 +558,16 @@ def decrypt_lease(
         algorithm=hashes.SHA256(),
         length=32,
         salt=recipient_nonce_raw,
-        info=b"serverware:credential-lease-envelope:v2\0" + hashlib.sha256(aad_bytes).digest(),
+        info=b"catchplate:credential-lease-envelope:v2\0" + hashlib.sha256(aad_bytes).digest(),
     ).derive(shared_secret)
     plaintext_bytes = AESGCM(envelope_key).decrypt(aead_nonce, ciphertext, aad_bytes)
     plaintext = json.loads(plaintext_bytes)
     if canonical_json_bytes(plaintext) != plaintext_bytes:
         raise AssertionError("credential lease plaintext is not canonical JSON")
     expected_set_version = (
-        "serverware.credentialLeaseSet/v4"
+        "catchplate.credentialLeaseSet/v4"
         if request_bound
-        else "serverware.credentialLeaseSet/v3"
+        else "catchplate.credentialLeaseSet/v3"
     )
     if plaintext.get("apiVersion") != expected_set_version:
         raise AssertionError(f"unexpected credential lease plaintext version: {plaintext}")
@@ -655,7 +655,7 @@ def assert_python_v4_golden(app_module: Any) -> None:
     reservation_id = sha256_prefixed(
         canonical_json_bytes(
             {
-                "apiVersion": "serverware.releaseReservationIdentity/v1",
+                "apiVersion": "catchplate.releaseReservationIdentity/v1",
                 "attemptId": attempt_id,
                 "bindingDigest": binding_digest,
             }
@@ -674,7 +674,7 @@ def assert_python_v4_golden(app_module: Any) -> None:
         reservation_expires_at_epoch_ms=4_102_444_800_000,
     )
     expected_authority_json = (
-        b'{"apiVersion":"serverware.credentialLeaseRequestAuthority/v1",'
+        b'{"apiVersion":"catchplate.credentialLeaseRequestAuthority/v1",'
         b'"attemptId":"' + attempt_id.encode("ascii") + b'",'
         b'"bindingDigest":"' + binding_digest.encode("ascii") + b'",'
         b'"operationContext":{"account":"acct:golden",'
@@ -689,7 +689,7 @@ def assert_python_v4_golden(app_module: Any) -> None:
             "credential lease v4 golden authority bytes drifted"
         )
     payload = {
-        "apiVersion": "serverware.credentialLeaseRequest/v4",
+        "apiVersion": "catchplate.credentialLeaseRequest/v4",
         "purpose": "dispatchSecret",
         "principalId": "agent:golden",
         "routeId": "gmail.messages",
@@ -708,7 +708,7 @@ def assert_python_v4_golden(app_module: Any) -> None:
     model = app_module.CredentialLeaseRequest.model_validate(payload)
     authority_sha256 = sha256_prefixed(canonical_json_bytes(authority))
     expected_request_binding_json = (
-        b'{"apiVersion":"serverware.credentialLeaseRequest/v4",'
+        b'{"apiVersion":"catchplate.credentialLeaseRequest/v4",'
         b'"credentialId":"credential:golden",'
         b'"dataPlaneBinaryDigest":"sha256:' + b"8" * 64 + b'",'
         b'"expectedCredentialVersion":7,'
@@ -740,7 +740,7 @@ def assert_python_v4_golden(app_module: Any) -> None:
             "Python credential lease v4 golden digest fixture drifted"
         )
     aad = {
-        "apiVersion": "serverware.credentialLeaseEnvelope/v3",
+        "apiVersion": "catchplate.credentialLeaseEnvelope/v3",
         "algorithm": "X25519-HKDF-SHA256-AES-256-GCM",
         "purpose": "dispatchSecret",
         "requestBindingSha256": request_binding_sha256,
@@ -757,7 +757,7 @@ def assert_python_v4_golden(app_module: Any) -> None:
     }
     expected_aad_json = (
         b'{"algorithm":"X25519-HKDF-SHA256-AES-256-GCM",'
-        b'"apiVersion":"serverware.credentialLeaseEnvelope/v3",'
+        b'"apiVersion":"catchplate.credentialLeaseEnvelope/v3",'
         b'"credentialId":"credential:golden",'
         b'"dataPlaneBinaryDigest":"sha256:' + b"8" * 64 + b'",'
         b'"expiresAtEpochMs":4102444800000,'
@@ -779,12 +779,12 @@ def assert_python_v4_golden(app_module: Any) -> None:
             "credential lease v4 golden AAD bytes drifted"
         )
     hkdf_info = (
-        b"serverware:credential-lease-envelope:v2\0"
+        b"catchplate:credential-lease-envelope:v2\0"
         + hashlib.sha256(expected_aad_json).digest()
     )
     if (
         not hkdf_info.startswith(
-            b"serverware:credential-lease-envelope:v2\0"
+            b"catchplate:credential-lease-envelope:v2\0"
         )
         or len(hkdf_info) != 72
     ):
@@ -799,40 +799,40 @@ def main() -> None:
         )
         os.environ.update(
             {
-                "SERVERWARE_DATA_DIR": tmp,
-                "SERVERWARE_ADMIN_TOKEN": ADMIN_TOKEN,
-                "SERVERWARE_DATA_PLANE_INSTANCE_ID": "spiffe://test.serverware/decision-gate/credential-lease",
-                "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN": DATA_PLANE_TOKEN,
-                "SERVERWARE_DEV_AUTHENTICATOR": "1",
-                "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST": DATA_PLANE_BINARY_DIGEST,
-                "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED": "1",
-                "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND": verifier_command,
-                "SERVERWARE_KEY_RELEASE_REQUIRED": "1",
-                "SERVERWARE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST": "1",
-                "SERVERWARE_SECRET_LEASE_TTL_SECONDS": "5",
-                "SERVERWARE_METADATA_STORE_BACKEND": "sqlite",
-                "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite",
-                "SERVERWARE_GRANT_STORE_BACKEND": "sqlite",
-                "SERVERWARE_AUDIT_ANCHOR_URL": "",
-                "SERVERWARE_DECISION_GATE_BASE": "",
-                "SERVERWARE_RELEASE_PROVENANCE": str(data_dir / "release-provenance.json"),
-                "SERVERWARE_IMAGE_SIGNATURES": str(data_dir / "image-signatures.json"),
+                "CATCHPLATE_DATA_DIR": tmp,
+                "CATCHPLATE_ADMIN_TOKEN": ADMIN_TOKEN,
+                "CATCHPLATE_DATA_PLANE_INSTANCE_ID": "spiffe://test.catchplate/decision-gate/credential-lease",
+                "CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN": DATA_PLANE_TOKEN,
+                "CATCHPLATE_DEV_AUTHENTICATOR": "1",
+                "CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST": DATA_PLANE_BINARY_DIGEST,
+                "CATCHPLATE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED": "1",
+                "CATCHPLATE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND": verifier_command,
+                "CATCHPLATE_KEY_RELEASE_REQUIRED": "1",
+                "CATCHPLATE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST": "1",
+                "CATCHPLATE_SECRET_LEASE_TTL_SECONDS": "5",
+                "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite",
+                "CATCHPLATE_AUDIT_STORE_BACKEND": "sqlite",
+                "CATCHPLATE_GRANT_STORE_BACKEND": "sqlite",
+                "CATCHPLATE_AUDIT_ANCHOR_URL": "",
+                "CATCHPLATE_DECISION_GATE_BASE": "",
+                "CATCHPLATE_RELEASE_PROVENANCE": str(data_dir / "release-provenance.json"),
+                "CATCHPLATE_IMAGE_SIGNATURES": str(data_dir / "image-signatures.json"),
             }
         )
         for name in (
-            "SERVERWARE_MASTER_KEY",
-            "SERVERWARE_METADATA_STORE_POSTGRES_DSN",
-            "SERVERWARE_AUDIT_STORE_POSTGRES_DSN",
-            "SERVERWARE_GRANT_STORE_POSTGRES_DSN",
+            "CATCHPLATE_MASTER_KEY",
+            "CATCHPLATE_METADATA_STORE_POSTGRES_DSN",
+            "CATCHPLATE_AUDIT_STORE_POSTGRES_DSN",
+            "CATCHPLATE_GRANT_STORE_POSTGRES_DSN",
         ):
             os.environ.pop(name, None)
 
-        from serverware import app as app_module
-        from serverware import db, key_release, policy_bundle, runtime
-        from serverware.auth import AdminIdentity
-        from serverware.attestation import runtime_manifest, verify_attestation_quote
-        from serverware.ca_material import ensure_mitm_ca_material
-        from serverware.constraints import shared_durable_budget_claims
+        from catchplate import app as app_module
+        from catchplate import db, key_release, policy_bundle, runtime
+        from catchplate.auth import AdminIdentity
+        from catchplate.attestation import runtime_manifest, verify_attestation_quote
+        from catchplate.ca_material import ensure_mitm_ca_material
+        from catchplate.constraints import shared_durable_budget_claims
 
         assert_python_v4_golden(app_module)
         binding_metadata = app_module._credential_lease_public_metadata(
@@ -960,7 +960,7 @@ def main() -> None:
                 replay_conn.execute("DELETE FROM credential_lease_replay_state")
         finally:
             db.CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES = original_replay_max
-        if runtime_manifest().get("credential_lease_protocol") != "serverware.credentialLeaseEnvelope/v2":
+        if runtime_manifest().get("credential_lease_protocol") != "catchplate.credentialLeaseEnvelope/v2":
             raise AssertionError("attested credential lease protocol drifted from envelope v2")
 
         original_registration_release_channel = app_module.RELEASE_CHANNEL
@@ -990,7 +990,7 @@ def main() -> None:
                 ),
                 registration_identity,
             )
-            if (enrollment_options.get("serverware") or {}).get("authorizationMode") != "bootstrap-token":
+            if (enrollment_options.get("catchplate") or {}).get("authorizationMode") != "bootstrap-token":
                 raise AssertionError(f"first WebAuthn enrollment was not bootstrap-bound: {enrollment_options}")
         finally:
             app_module.RELEASE_CHANNEL = original_registration_release_channel
@@ -1002,8 +1002,8 @@ def main() -> None:
             "/api/credentials",
             payload={"padding": "x" * (2 * 1024 * 1024)},
             headers={
-                "X-Serverware-Admin-Token": ADMIN_TOKEN,
-                "X-Serverware-Response-Nonce": "oversized-control-plane-request",
+                "X-Catchplate-Admin-Token": ADMIN_TOKEN,
+                "X-Catchplate-Response-Nonce": "oversized-control-plane-request",
             },
         )
         assert_status(
@@ -1088,8 +1088,8 @@ def main() -> None:
             "POST",
             "/api/demo/seed",
             headers={
-                "X-Serverware-Admin-Token": ADMIN_TOKEN,
-                "X-Serverware-Response-Nonce": seed_nonce,
+                "X-Catchplate-Admin-Token": ADMIN_TOKEN,
+                "X-Catchplate-Response-Nonce": seed_nonce,
             },
         )
         assert_status(seed_response, 200, "demo seed")
@@ -1112,8 +1112,8 @@ def main() -> None:
             "POST",
             "/api/demo/seed",
             headers={
-                "X-Serverware-Admin-Token": ADMIN_TOKEN,
-                "X-Serverware-Response-Nonce": restart_seed_nonce,
+                "X-Catchplate-Admin-Token": ADMIN_TOKEN,
+                "X-Catchplate-Response-Nonce": restart_seed_nonce,
             },
         )
         assert_status(restarted_seed, 200, "demo seed after policy-file loss")
@@ -1207,7 +1207,7 @@ def main() -> None:
             app_module.app,
             "GET",
             attestation_target,
-            headers={"X-Serverware-Response-Nonce": attestation_nonce},
+            headers={"X-Catchplate-Response-Nonce": attestation_nonce},
         )
         assert_status(attestation_response, 200, "attestation")
         attestation = attestation_response.json()
@@ -1273,8 +1273,8 @@ def main() -> None:
                 LEASE_PATH,
                 payload=payload,
                 headers={
-                    "X-Serverware-Data-Plane-Token": token,
-                    "X-Serverware-Response-Nonce": response_nonce,
+                    "X-Catchplate-Data-Plane-Token": token,
+                    "X-Catchplate-Response-Nonce": response_nonce,
                 },
             )
             verify_response_signature(
@@ -1294,7 +1294,7 @@ def main() -> None:
         initial_payload = lease_payload(recipient_public_key_raw, snapshot.hash, "initial")
         if (
             initial_payload["apiVersion"]
-            != "serverware.credentialLeaseRequest/v3"
+            != "catchplate.credentialLeaseRequest/v3"
             or "requestAuthority" in initial_payload
             or "releaseAuthorization" in initial_payload
             or "requestAuthoritySha256"
@@ -1364,7 +1364,7 @@ def main() -> None:
         )
         if (
             dispatch_payload["apiVersion"]
-            != "serverware.credentialLeaseRequest/v3"
+            != "catchplate.credentialLeaseRequest/v3"
             or "requestAuthority" in dispatch_payload
             or "releaseAuthorization" in dispatch_payload
         ):
@@ -1500,7 +1500,7 @@ def main() -> None:
                 shared_quotas=[atomic_quota],
                 require_jit_grant=False,
                 reservation_ttl_seconds=60,
-                actor_id="spiffe://test.serverware/decision-gate/credential-lease",
+                actor_id="spiffe://test.catchplate/decision-gate/credential-lease",
             )
         )
         runtime.validate_reserve_release_authorization_response(
@@ -1670,7 +1670,7 @@ def main() -> None:
                     require_jit_grant=False,
                     reservation_ttl_seconds=60,
                     actor_id=(
-                        "spiffe://test.serverware/decision-gate/"
+                        "spiffe://test.catchplate/decision-gate/"
                         "credential-lease"
                     ),
                 )
@@ -1911,7 +1911,7 @@ def main() -> None:
                         require_jit_grant=False,
                         reservation_ttl_seconds=60,
                         actor_id=(
-                            "spiffe://test.serverware/decision-gate/"
+                            "spiffe://test.catchplate/decision-gate/"
                             "credential-lease"
                         ),
                     )
@@ -2016,7 +2016,7 @@ def main() -> None:
         durable_request_digest = "sha256:" + "3" * 64
         durable_operation_digest = "sha256:" + "4" * 64
         durable_actor = (
-            "spiffe://test.serverware/decision-gate/credential-lease"
+            "spiffe://test.catchplate/decision-gate/credential-lease"
         )
         durable_claims = shared_durable_budget_claims(
             durable_route,
@@ -2053,7 +2053,7 @@ def main() -> None:
         durable_state = durable_reserved["durable_policy"]
         durable_release_authorization = {
             "apiVersion": (
-                "serverware.credentialLeaseReleaseAuthorization/v2"
+                "catchplate.credentialLeaseReleaseAuthorization/v2"
             ),
             "kind": "atomicReservation",
             "state": "reserved",
@@ -2118,7 +2118,7 @@ def main() -> None:
             {
                 **durable_release_authorization,
                 "apiVersion": (
-                    "serverware.credentialLeaseReleaseAuthorization/v1"
+                    "catchplate.credentialLeaseReleaseAuthorization/v1"
                 ),
             },
             {
@@ -2219,7 +2219,7 @@ def main() -> None:
             reservation_expires_at_epoch_ms=jit_expires_at_epoch_ms,
         )
         jit_release_authorization = {
-            "apiVersion": "serverware.credentialLeaseReleaseAuthorization/v1",
+            "apiVersion": "catchplate.credentialLeaseReleaseAuthorization/v1",
             "kind": "jitGrant",
             "state": "reserved",
             "attemptId": jit_attempt_id,
@@ -2807,11 +2807,11 @@ def main() -> None:
         db.delete_credential(CREDENTIAL_ID)
         runtime.invalidate_secret_leases(CREDENTIAL_ID)
 
-        from serverware import crypto
+        from catchplate import crypto
 
         original_release_channel = crypto.RELEASE_CHANNEL
         original_unseal_command = crypto.MASTER_KEY_UNSEAL_COMMAND
-        original_env_master_key = os.environ.get("SERVERWARE_MASTER_KEY")
+        original_env_master_key = os.environ.get("CATCHPLATE_MASTER_KEY")
         crypto.RELEASE_CHANNEL = "prod"
         crypto.MASTER_KEY_UNSEAL_COMMAND = (
             f"{shlex.quote(sys.executable)} {shlex.quote(str(Path(__file__).resolve()))} --master-key-unseal-fixture"
@@ -2824,7 +2824,7 @@ def main() -> None:
             unsealed = crypto._unseal_master_key(fake_release)
             if unsealed != b"0123456789abcdef0123456789abcdef":
                 raise AssertionError("production unseal command did not return the expected in-memory broker KEK")
-            os.environ["SERVERWARE_MASTER_KEY"] = "11" * 32
+            os.environ["CATCHPLATE_MASTER_KEY"] = "11" * 32
             crypto.load_master_key.cache_clear()
             try:
                 crypto.load_master_key()
@@ -2832,8 +2832,8 @@ def main() -> None:
                 if "forbidden in production" not in str(exc):
                     raise AssertionError(f"production environment master key failed incorrectly: {exc}") from exc
             else:
-                raise AssertionError("production accepted SERVERWARE_MASTER_KEY")
-            os.environ.pop("SERVERWARE_MASTER_KEY", None)
+                raise AssertionError("production accepted CATCHPLATE_MASTER_KEY")
+            os.environ.pop("CATCHPLATE_MASTER_KEY", None)
             crypto.load_master_key.cache_clear()
             try:
                 crypto.load_master_key()
@@ -2846,9 +2846,9 @@ def main() -> None:
             crypto.RELEASE_CHANNEL = original_release_channel
             crypto.MASTER_KEY_UNSEAL_COMMAND = original_unseal_command
             if original_env_master_key is None:
-                os.environ.pop("SERVERWARE_MASTER_KEY", None)
+                os.environ.pop("CATCHPLATE_MASTER_KEY", None)
             else:
-                os.environ["SERVERWARE_MASTER_KEY"] = original_env_master_key
+                os.environ["CATCHPLATE_MASTER_KEY"] = original_env_master_key
             crypto.load_master_key.cache_clear()
 
         audit_nonce = "credential-lease-audit-response"
@@ -2858,8 +2858,8 @@ def main() -> None:
             "GET",
             audit_target,
             headers={
-                "X-Serverware-Admin-Token": ADMIN_TOKEN,
-                "X-Serverware-Response-Nonce": audit_nonce,
+                "X-Catchplate-Admin-Token": ADMIN_TOKEN,
+                "X-Catchplate-Response-Nonce": audit_nonce,
             },
         )
         assert_status(audit_response, 200, "credential lease audit output")
@@ -2906,7 +2906,7 @@ def main() -> None:
             )
         for item in lease_audits:
             event = item["event"]
-            if item.get("actor_id") != "spiffe://test.serverware/decision-gate/credential-lease":
+            if item.get("actor_id") != "spiffe://test.catchplate/decision-gate/credential-lease":
                 raise AssertionError(f"credential lease audit actor was not server-derived: {item}")
             if "recipient_nonce" in event or not str(event.get("recipient_nonce_sha256", "")).startswith("sha256:"):
                 raise AssertionError(f"credential lease audit did not hash the recipient nonce: {item}")

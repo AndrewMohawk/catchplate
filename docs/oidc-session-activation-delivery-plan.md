@@ -4,7 +4,7 @@ Source implementation only: unbuilt and unexecuted. This is the private plan
 for `oidc.session.activation-delivery.consume`, not an execution grant, SQL
 commit, durable retained record or plaintext-token release.
 
-[`authority_oidc_session_activation_delivery_plan.py`](../serverware/authority_oidc_session_activation_delivery_plan.py)
+[`authority_oidc_session_activation_delivery_plan.py`](../catchplate/authority_oidc_session_activation_delivery_plan.py)
 provides `_produce_on_work`, `_verify_full_on_work` and `_verify_on_work`.
 The producer returns only canonical signed envelope bytes. The full receiver
 returns this call's genuine replay facts and current guard; the smaller
@@ -59,7 +59,7 @@ separately proves current membership, old-token possession, current policy and
 the three real effects: delivery update, audit insertion and audit-capacity
 update. A historical ACK cannot replace those current proofs.
 
-The distinct [plan contract](../serverware/authority_oidc_session_activation_delivery_plan_contract.py)
+The distinct [plan contract](../catchplate/authority_oidc_session_activation_delivery_plan_contract.py)
 has a closed 22-field payload and a 16 KiB envelope cap. Separate domains commit
 the original read/write proof, independent context, private-original digest/count
 projection, and the genuine indexed transition including effects, after-roots

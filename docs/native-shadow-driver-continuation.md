@@ -18,9 +18,9 @@ current independently verified assignment/checkpoint. Nothing is removed from a
 signature or relabeled as approved from a locally computed hash.
 
 The manifest uses existing `hash_domain_frames` with domain
-`serverware.nativeCustodyExecutionClosure/v2` over the same ordered construction
+`catchplate.nativeCustodyExecutionClosure/v2` over the same ordered construction
 tuple excluding its own digest. Closure authorization uses existing
-`signature_preimage` with `serverware.nativeCustodyClosureAssignment.signature/v2`.
+`signature_preimage` with `catchplate.nativeCustodyClosureAssignment.signature/v2`.
 The real assigned `CustodySupervisorCapability` key, material/SPKI independence,
 current trust, revocation and full validity interval remain mandatory.
 

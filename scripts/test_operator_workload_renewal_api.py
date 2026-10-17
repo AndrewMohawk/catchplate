@@ -22,10 +22,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
-from serverware import operator_demo, operator_workload_renewal as wire
-from serverware import operator_workload_renewal_api as api
-from serverware.operator_catalog_mutations import CatalogNotFound
-from serverware.operator_catalog_schema import CatalogConflict, CatalogIntegrityError
+from catchplate import operator_demo, operator_workload_renewal as wire
+from catchplate import operator_workload_renewal_api as api
+from catchplate.operator_catalog_mutations import CatalogNotFound
+from catchplate.operator_catalog_schema import CatalogConflict, CatalogIntegrityError
 
 
 def offline(event, _args):
@@ -74,7 +74,7 @@ def request(body=None, *, method="POST", path=wire.INTERNAL_PATH, raw_path=None,
 
 
 def middleware():
-    tree = ast.parse((ROOT / "serverware/app.py").read_text())
+    tree = ast.parse((ROOT / "catchplate/app.py").read_text())
     names = {"bounded_control_plane_request_middleware", "_operator_catalog_body_is_route_owned"}
     nodes = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names
         or isinstance(node, ast.Assign) and any(isinstance(name, ast.Name) and
@@ -221,7 +221,7 @@ class RenewalApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(effect.await_count, 1)
 
     async def test_exact_machine_middleware_bypass_before_generic_buffering(self):
-        from serverware import development_sandbox
+        from catchplate import development_sandbox
         namespace = middleware()
         next_handler = AsyncMock(return_value="route-owned")
         item, reads = request(stalled=True, chunks=[])
@@ -241,7 +241,7 @@ class RenewalApiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(operator_demo.request_allowed(method, path))
 
     async def test_admin_endpoints_keep_existing_dependency_and_same_origin_owner(self):
-        tree = ast.parse((ROOT / "serverware/operator_catalog_api.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/operator_catalog_api.py").read_text())
         routes = [node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)
             and node.name in {"enroll_workload_renewal", "cancel_workload_renewal"}]
         self.assertEqual(len(routes), 2)
@@ -257,7 +257,7 @@ class RenewalApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(calls["_payload"], calls["_blocking"])
 
     async def test_machine_refusal_does_not_drain_unrelated_audit_outbox(self):
-        tree = ast.parse((ROOT / "serverware/app.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/app.py").read_text())
         node = next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)
             and node.name == "csrf_middleware")
         guards = [node for node in ast.walk(node) if isinstance(node, ast.If)

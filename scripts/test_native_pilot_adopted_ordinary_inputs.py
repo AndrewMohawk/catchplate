@@ -20,11 +20,11 @@ from cryptography.exceptions import InvalidSignature
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
 
-from serverware import native_pilot_adopted_ordinary_inputs as compiler
-from serverware import native_pilot_adopted_publication as adopted_paths
-from serverware import native_pilot_closure_set as sets
-from serverware import native_pilot_ordinary_install as public_install
-from serverware import native_pilot_publication as paths
+from catchplate import native_pilot_adopted_ordinary_inputs as compiler
+from catchplate import native_pilot_adopted_publication as adopted_paths
+from catchplate import native_pilot_closure_set as sets
+from catchplate import native_pilot_ordinary_install as public_install
+from catchplate import native_pilot_publication as paths
 from test_native_pilot_adopted_current_head import fixture as ordinary_fixture
 from test_native_pilot_adopted_cohort_authority import release_fixture
 from test_native_pilot_closure_set import EXPECTED_SCOPE_VALUES, EXPECTED_SCOPE_ROOTS, manifest_fixture, scope_fixture
@@ -65,10 +65,10 @@ def scope_arguments():
     # Recompute the measured binding and derived dispatch receipt, not a tag.
     binding["dispatcherProtocolSetSha256"] = labelled("protocol-set")
     args["measured"]["production"]["dispatcherProtocolSetSha256"] = labelled("protocol-set")
-    binding_sha = framed(b"serverware.policyShadowProductionCustodyConfiguration/v2", (canonical(binding),))
+    binding_sha = framed(b"catchplate.policyShadowProductionCustodyConfiguration/v2", (canonical(binding),))
     proof = scope_fixture(envelope)
     proof["production_configuration_binding_sha256"] = binding_sha
-    proof["binding_sha256"] = framed(b"serverware.policyShadowProductionCustodyProofScope/v2",
+    proof["binding_sha256"] = framed(b"catchplate.policyShadowProductionCustodyProofScope/v2",
         (canonical([proof[name] for name in EXPECTED_SCOPE_VALUES + EXPECTED_SCOPE_ROOTS]),))
     args["measured"].update(configurationBindingOriginal=canonical(binding).decode("ascii"),
         configurationBindingSha256=binding_sha, proofScopeOriginal=canonical(proof).decode("ascii"))
@@ -76,8 +76,8 @@ def scope_arguments():
     recipe = args["driver_generation_recipe"]
     production = args["measured"]["production"]
     authority = key_fixture("custody-result-envelope")[1]
-    recipe["dispatchManifestSha256"] = framed(b"serverware.policyShadowCustodyDispatchManifest/v1", (canonical([
-        "serverware.policyShadowCustodyDispatch/v2", recipe["operationCoverageRootSha256"],
+    recipe["dispatchManifestSha256"] = framed(b"catchplate.policyShadowCustodyDispatchManifest/v1", (canonical([
+        "catchplate.policyShadowCustodyDispatch/v2", recipe["operationCoverageRootSha256"],
         production["dispatcherProtocolSetSha256"], recipe["kernelDriverIdentitySha256"],
         recipe["stableReaperIdentity"]["identitySha256"], binding["workerExecutableSha256"],
         production["signerBackendSha256"], production["persistenceBackendSha256"], production["retrievalBackendSha256"],
@@ -126,7 +126,7 @@ def fixture():
     observations["bootstrap-admission"] = dict(bootstrapObservationOriginal=canonical(bootstrap).decode("ascii"))
     observations["endpoint-inputs"] = payload
     clocks = dict(boot=args["boot"], now_boottime_ns=1400, now_unix_ns=NOW)
-    supervisor = dict(apiVersion="serverware.nativePilotAdoptedSupervisorObservation/v1")
+    supervisor = dict(apiVersion="catchplate.nativePilotAdoptedSupervisorObservation/v1")
     remaining = tuple(role for role in compiler.initial.HELPER_ENDPOINT_ROLES
         if role != json.loads(f["histories"][g.ROLES[-1]])["initialCheckpoint"]["payload"]["endpointRole"])
     wrappers = [(role, None, json.loads(f["histories"][role])) for role in g.ROLES]
@@ -290,7 +290,7 @@ class AdoptedOrdinaryInputControls(unittest.TestCase):
         records, observations = copy.deepcopy(f["records"]), copy.deepcopy(f["observations"])
         first = json.loads(records["install-precreation"]["input"])
         launch = json.loads(first["ordinaryLaunchOriginal"])
-        launch["apiVersion"] = "serverware.custodyFiveServiceLaunch/v6"
+        launch["apiVersion"] = "catchplate.custodyFiveServiceLaunch/v6"
         first["ordinaryLaunchOriginal"] = canonical(launch).decode("ascii")
         records["install-precreation"]["input"] = canonical(first)
         # Rejoin the public source hashes so this is not merely a stale hash.

@@ -30,10 +30,10 @@ DEPLOYMENT_AUDIENCE_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,127}$", re.ASCII)
 UNSIGNED_INTEGER_RE = re.compile(r"^(?:0|[1-9][0-9]*)$", re.ASCII)
 JSON_SAFE_INTEGER_MAX = 9_007_199_254_740_991
 BENCH_P99_TARGET_MS = 20.0
-EXPECTED_TRANSPARENCY_PROVIDER_ENV_KEY = "SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER"
-EXPECTED_TRANSPARENCY_LOG_ID_ENV_KEY = "SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID"
-EXPECTED_SIGSTORE_KEY_ID_ENV_KEY = "SERVERWARE_COSIGN_KEY_ID"
-EXPECTED_REKOR_LOG_ID_ENV_KEY = "SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID"
+EXPECTED_TRANSPARENCY_PROVIDER_ENV_KEY = "CATCHPLATE_TRANSPARENCY_EXPECTED_PROVIDER"
+EXPECTED_TRANSPARENCY_LOG_ID_ENV_KEY = "CATCHPLATE_TRANSPARENCY_EXPECTED_LOG_ID"
+EXPECTED_SIGSTORE_KEY_ID_ENV_KEY = "CATCHPLATE_COSIGN_KEY_ID"
+EXPECTED_REKOR_LOG_ID_ENV_KEY = "CATCHPLATE_COSIGN_EXPECTED_REKOR_LOG_ID"
 
 
 def canonical_json(value: Any) -> str:
@@ -178,8 +178,8 @@ def release_trust_from_config(configured: dict[str, str]) -> dict[str, str]:
     ).strip()
     if not provider or provider != expected_provider:
         raise ValueError(
-            "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER must match "
-            "SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER"
+            "CATCHPLATE_EXTERNAL_CHECKPOINT_PROVIDER must match "
+            "CATCHPLATE_TRANSPARENCY_EXPECTED_PROVIDER"
         )
     expected_external_log_id = require_sha256(
         configured.get(EXPECTED_TRANSPARENCY_LOG_ID_ENV_KEY),
@@ -214,15 +214,15 @@ def release_trust_from_config(configured: dict[str, str]) -> dict[str, str]:
         "external checkpoint trust root",
     )
     if sigstore_id != expected_sigstore_key_id:
-        raise ValueError("Sigstore trust root does not match SERVERWARE_COSIGN_KEY_ID")
+        raise ValueError("Sigstore trust root does not match CATCHPLATE_COSIGN_KEY_ID")
     if rekor_id != expected_rekor_log_id:
         raise ValueError(
-            "Rekor trust root does not match SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID"
+            "Rekor trust root does not match CATCHPLATE_COSIGN_EXPECTED_REKOR_LOG_ID"
         )
     if external_id != expected_external_log_id:
         raise ValueError(
             "external checkpoint trust root does not match "
-            "SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID"
+            "CATCHPLATE_TRANSPARENCY_EXPECTED_LOG_ID"
         )
     role_ids = {release_id, sigstore_id, rekor_id, external_id}
     if len(role_ids) != 4:
@@ -308,7 +308,7 @@ def verify_production_images_build(
         if not service:
             raise ValueError("production image entry is missing service")
         if (
-            service not in {"serverware-control", "serverware-decision-gate"}
+            service not in {"catchplate-control", "catchplate-decision-gate"}
             or service in seen_services
         ):
             raise ValueError(
@@ -318,21 +318,21 @@ def verify_production_images_build(
         image_id = require_sha256(image.get("image_id"), f"{service} image_id")
         binary_digest = None
         launcher_binary_digest = None
-        if service == "serverware-decision-gate":
+        if service == "catchplate-decision-gate":
             binary_digest = require_sha256(
                 image.get("binary_digest"),
-                "serverware-decision-gate production image binary digest",
+                "catchplate-decision-gate production image binary digest",
             )
             launcher_binary_digest = require_sha256(
                 image.get("launcher_binary_digest"),
-                "serverware production launcher binary digest",
+                "catchplate production launcher binary digest",
             )
             image_launch_authority = launch_authority_binding(
-                image, "serverware decision-gate production image"
+                image, "catchplate decision-gate production image"
             )
             if image_launch_authority != expected_launch_authority:
                 raise ValueError(
-                    "serverware decision-gate launch-authority binding does not match build metadata"
+                    "catchplate decision-gate launch-authority binding does not match build metadata"
                 )
         normalized_images.append(
             {
@@ -348,12 +348,12 @@ def verify_production_images_build(
                 ),
                 **(
                     image_launch_authority
-                    if service == "serverware-decision-gate"
+                    if service == "catchplate-decision-gate"
                     else {}
                 ),
             }
         )
-    if seen_services != {"serverware-control", "serverware-decision-gate"}:
+    if seen_services != {"catchplate-control", "catchplate-decision-gate"}:
         raise ValueError("production image build service set is incomplete")
     return {
         "path": str(path),
@@ -516,7 +516,7 @@ def verify_release_provenance_document(
     source_tree_digest = require_sha256(
         source_tree.get("digest"), "release provenance source tree digest"
     )
-    if provenance.get("source") != "serverware-digest-pinned-production-release":
+    if provenance.get("source") != "catchplate-digest-pinned-production-release":
         raise ValueError(
             "release provenance was not generated in digest-pinned production mode"
         )
@@ -549,8 +549,8 @@ def verify_release_provenance_document(
         provenance.get("images") if isinstance(provenance.get("images"), dict) else {}
     )
     decision_gate = (
-        images.get("serverware-decision-gate")
-        if isinstance(images.get("serverware-decision-gate"), dict)
+        images.get("catchplate-decision-gate")
+        if isinstance(images.get("catchplate-decision-gate"), dict)
         else {}
     )
     launcher_binary_digest = require_sha256(
@@ -1066,7 +1066,7 @@ def production_commands(
         (build.get("metadata") or {}).get("source_tree_digest") or ""
     )
     require_sha256(source_tree_digest, "production image source tree digest")
-    release_root = f"/opt/serverware/releases/{source_tree_digest.replace(':', '-', 1)}"
+    release_root = f"/opt/catchplate/releases/{source_tree_digest.replace(':', '-', 1)}"
     launch_variables = production_launch_variables(
         deployment_audience=deployment_audience,
         deployment_identity_sha256=deployment_identity_sha256,
@@ -1185,7 +1185,7 @@ def production_commands(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate a redacted production handoff manifest from local Serverware release evidence."
+        description="Generate a redacted production handoff manifest from local Catchplate release evidence."
     )
     parser.add_argument(
         "--production-images-build", default=".tmp/production-images-build.json"
@@ -1208,7 +1208,7 @@ def main() -> None:
         "--kms-materials-spec", default="ops/aws-kms-materials.spec.json"
     )
     parser.add_argument(
-        "--kms-materials-out", default="/etc/serverware/kms-materials.json"
+        "--kms-materials-out", default="/etc/catchplate/kms-materials.json"
     )
     parser.add_argument(
         "--registry-prefix", default=os.getenv("PRODUCTION_IMAGE_REGISTRY_PREFIX", "")
@@ -1252,7 +1252,7 @@ def main() -> None:
             (
                 item.get("binary_digest")
                 for item in production_images["images"]
-                if item.get("service") == "serverware-decision-gate"
+                if item.get("service") == "catchplate-decision-gate"
             ),
             None,
         )
@@ -1273,7 +1273,7 @@ def main() -> None:
             (
                 item.get("launcher_binary_digest")
                 for item in production_images["images"]
-                if item.get("service") == "serverware-decision-gate"
+                if item.get("service") == "catchplate-decision-gate"
             ),
             None,
         )
@@ -1363,7 +1363,7 @@ def main() -> None:
         remaining.append("run make prepare-production-final-v1 on the verifier host, retain its exact request, and obtain the independent final authority's matching signed response")
         remaining.append("run make production-release-proof on the verifier host to consume those retained inputs and emit the final result; legacy systemd readiness cannot substitute for final-v1")
         result = {
-            "apiVersion": "serverware.productionHandoff/v2",
+            "apiVersion": "catchplate.productionHandoff/v2",
             "kind": "ProductionHandoff",
             "ok": True,
             "generated_at_unix": int(time.time()),

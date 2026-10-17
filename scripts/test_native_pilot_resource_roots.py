@@ -25,41 +25,41 @@ import prepare_native_pilot_resource_roots as roots
 
 
 LEGACY_LEAVES = (
-    "/run/serverware-custody-business", "/run/serverware-shadow-retrieval",
-    "/run/serverware-shadow-persistence", "/run/serverware-shadow-trusted-time",
-    "/run/serverware-shadow-generation-install", "/run/serverware-shadow-commit-request",
-    "/run/serverware-shadow-ingress-admission", "/run/serverware-shadow-terminal-append",
-    "/run/serverware-shadow-dispatch-barrier", "/run/serverware-shadow-active-effect-barrier",
-    "/run/serverware-shadow-active-effect-commit", "/run/serverware-native-pilot-bridge",
-    "/var/lib/serverware/custody-business", "/var/lib/serverware/native-ledger-spool",
-    "/var/lib/serverware/native-shadow-persistence", "/var/lib/serverware/native-shadow-generation-install",
-    "/var/lib/serverware/native-pilot-bridge",
-) + tuple("/var/lib/serverware/custody-generation/" + role for role in (
+    "/run/catchplate-custody-business", "/run/catchplate-shadow-retrieval",
+    "/run/catchplate-shadow-persistence", "/run/catchplate-shadow-trusted-time",
+    "/run/catchplate-shadow-generation-install", "/run/catchplate-shadow-commit-request",
+    "/run/catchplate-shadow-ingress-admission", "/run/catchplate-shadow-terminal-append",
+    "/run/catchplate-shadow-dispatch-barrier", "/run/catchplate-shadow-active-effect-barrier",
+    "/run/catchplate-shadow-active-effect-commit", "/run/catchplate-native-pilot-bridge",
+    "/var/lib/catchplate/custody-business", "/var/lib/catchplate/native-ledger-spool",
+    "/var/lib/catchplate/native-shadow-persistence", "/var/lib/catchplate/native-shadow-generation-install",
+    "/var/lib/catchplate/native-pilot-bridge",
+) + tuple("/var/lib/catchplate/custody-generation/" + role for role in (
     "durable-recovery-store", "cleanup-authorization-consumer", "recovery-target-provider",
     "current-signature-authority", "bounded-cleanup-helper"))
 ADDITIONS = {
-    "/run/serverware-custody-genesis": 0o711,
-    "/var/lib/serverware/custody-genesis": 0o711,
-    "/var/lib/serverware/publication-genesis-endpoints": 0o711,
-    "/run/serverware-shadow-publication-reconciliation": 0o711,
-    "/run/serverware/native-pilot-core-handoff": 0o700,
+    "/run/catchplate-custody-genesis": 0o711,
+    "/var/lib/catchplate/custody-genesis": 0o711,
+    "/var/lib/catchplate/publication-genesis-endpoints": 0o711,
+    "/run/catchplate-shadow-publication-reconciliation": 0o711,
+    "/run/catchplate/native-pilot-core-handoff": 0o700,
 }
-OPERATIONAL_OBJECTS = "/var/lib/serverware/native-pilot-retrieval-objects"
+OPERATIONAL_OBJECTS = "/var/lib/catchplate/native-pilot-retrieval-objects"
 STARTUP_DIRECTORIES = (
-    "/etc/serverware/native-pilot-startup",
-    "/etc/serverware/native-pilot-current-head-decisions",
+    "/etc/catchplate/native-pilot-startup",
+    "/etc/catchplate/native-pilot-current-head-decisions",
 )
 
 
 class InventoryControls(unittest.TestCase):
     def test_legacy_inventory_and_report_unchanged(self):
         shared, leaves, modes = roots.selection("legacy")
-        self.assertEqual(shared, ("/var/lib/serverware", "/var/lib/serverware/custody-generation"))
+        self.assertEqual(shared, ("/var/lib/catchplate", "/var/lib/catchplate/custody-generation"))
         self.assertEqual(leaves, LEGACY_LEAVES)
         self.assertEqual(modes, dict.fromkeys(LEGACY_LEAVES, 0o711))
         self.assertEqual(roots.TARGETS, shared + leaves)
         self.assertEqual(roots.initial_report("legacy", False), {
-            "apiVersion": "serverware.nativePilotResourceRoots/v1", "operation": "inspect", "result": "refused",
+            "apiVersion": "catchplate.nativePilotResourceRoots/v1", "operation": "inspect", "result": "refused",
             "directories": [{"path": path, "kind": "resource-parent" if path in leaves else "shared-container",
                 "state": "not-inspected"} for path in shared + leaves],
             "releaseAuthority": False, "liveReady": False, "runtimeResourcesCreated": False,
@@ -67,7 +67,7 @@ class InventoryControls(unittest.TestCase):
 
     def test_adopted_inventory_modes_parent_order_and_report(self):
         shared, leaves, modes = roots.selection("adopted-cold")
-        self.assertEqual(shared, roots.SHARED + ("/run/serverware",))
+        self.assertEqual(shared, roots.SHARED + ("/run/catchplate",))
         self.assertEqual(leaves, LEGACY_LEAVES + tuple(ADDITIONS))
         self.assertEqual(modes, {**dict.fromkeys(LEGACY_LEAVES, 0o711), **ADDITIONS})
         seen = set(roots.ANCHORS)
@@ -77,7 +77,7 @@ class InventoryControls(unittest.TestCase):
             seen.add(path)
         report = roots.initial_report("adopted-cold", False)
         self.assertEqual(report, {
-            "apiVersion": "serverware.nativePilotResourceRoots/v2", "profile": "adopted-cold",
+            "apiVersion": "catchplate.nativePilotResourceRoots/v2", "profile": "adopted-cold",
             "operation": "inspect", "result": "refused",
             "directories": [{"path": path, "kind": "resource-parent" if path in leaves else "shared-container",
                 "state": "not-inspected"} for path in shared + leaves],
@@ -112,12 +112,12 @@ class InventoryControls(unittest.TestCase):
     def test_startup_is_explicit_exact_operational_extension(self):
         shared, leaves, modes = roots.selection("commissioning-startup")
         old_shared, old_leaves, old_modes = roots.selection("adopted-operational")
-        self.assertEqual(shared, old_shared + ("/etc/serverware",))
+        self.assertEqual(shared, old_shared + ("/etc/catchplate",))
         self.assertEqual(leaves, old_leaves + STARTUP_DIRECTORIES)
         self.assertEqual(modes, old_modes | dict.fromkeys(STARTUP_DIRECTORIES, 0o700))
         self.assertEqual(roots.STARTUP_DIRECTORIES, STARTUP_DIRECTORIES)
         report = roots.initial_report("commissioning-startup", False)
-        self.assertEqual(report["apiVersion"], "serverware.nativePilotResourceRoots/v2")
+        self.assertEqual(report["apiVersion"], "catchplate.nativePilotResourceRoots/v2")
         self.assertEqual(report["profile"], "commissioning-startup")
         self.assertEqual(report["operation"], "inspect")
         rows = {row["path"]: row for row in report["directories"]}
@@ -135,7 +135,7 @@ class InventoryControls(unittest.TestCase):
 
 @contextmanager
 def sandbox(profile="adopted-cold"):
-    with tempfile.TemporaryDirectory(prefix="serverware-root-controls-") as directory:
+    with tempfile.TemporaryDirectory(prefix="catchplate-root-controls-") as directory:
         tree = Path(directory)
         for path in (tree / "run", tree / "var", tree / "var/lib"):
             path.mkdir()
@@ -169,7 +169,7 @@ class FilesystemControls(unittest.TestCase):
     def test_decision_profile_adds_only_empty_state_root_without_seeding_authority(self):
         shared, leaves, modes = roots.selection("commissioning-decisions")
         old_shared, old_leaves, old_modes = roots.selection("commissioning-startup")
-        path = "/etc/serverware/native-pilot-current-head-state"
+        path = "/etc/catchplate/native-pilot-current-head-state"
         self.assertEqual(shared, old_shared)
         self.assertEqual(leaves, old_leaves + (path,))
         self.assertEqual(modes, old_modes | {path: 0o700})
@@ -187,13 +187,13 @@ class FilesystemControls(unittest.TestCase):
     def test_decision_state_populated_or_wrong_mode_is_not_reset(self):
         for fault in ("populated", "mode"):
             with self.subTest(fault=fault), sandbox("commissioning-decisions") as (tree, owner, _):
-                leaf = tree / "etc/serverware/native-pilot-current-head-state"
+                leaf = tree / "etc/catchplate/native-pilot-current-head-state"
                 leaf.mkdir(parents=True); leaf.parent.chmod(0o700)
                 leaf.chmod(0o755 if fault == "mode" else 0o700)
                 if fault == "populated": (leaf / "current.json").write_bytes(b"preserve")
                 with self.assertRaises(roots.Refused): owner.inspect()
                 if fault == "populated": self.assertEqual((leaf / "current.json").read_bytes(), b"preserve")
-                self.assertFalse((tree / "var/lib/serverware").exists())
+                self.assertFalse((tree / "var/lib/catchplate").exists())
 
     def test_default_cli_is_legacy_inspection_only(self):
         with sandbox("legacy") as (tree, _, _):
@@ -201,18 +201,18 @@ class FilesystemControls(unittest.TestCase):
             with patch.object(sys, "argv", ["prepare_native_pilot_resource_roots.py"]), redirect_stdout(output):
                 self.assertEqual(roots.main(), 1)
             report = json.loads(output.getvalue())
-            self.assertEqual(report["apiVersion"], "serverware.nativePilotResourceRoots/v1")
+            self.assertEqual(report["apiVersion"], "catchplate.nativePilotResourceRoots/v1")
             self.assertNotIn("profile", report)
             self.assertEqual(report["operation"], "inspect")
             self.assertEqual(report["result"], "parents-missing")
-            self.assertFalse((tree / "var/lib/serverware").exists())
+            self.assertFalse((tree / "var/lib/catchplate").exists())
             self.assertEqual(tuple((tree / "run").iterdir()), ())
 
     def test_adopted_inspect_then_explicit_create_exact_empty_modes(self):
         with sandbox() as (tree, owner, report):
             owner.inspect()
             self.assertTrue(all(row["state"] == "missing" for row in report["directories"]))
-            self.assertFalse((tree / "run/serverware").exists())
+            self.assertFalse((tree / "run/catchplate").exists())
             owner.create_missing()
             owner.check_populations()
             self.assertEqual(set(owner.nodes), set(roots.ANCHORS + owner.targets))
@@ -227,7 +227,7 @@ class FilesystemControls(unittest.TestCase):
     def test_legacy_create_does_not_select_any_adopted_path(self):
         with sandbox("legacy") as (tree, owner, _):
             owner.inspect(); owner.create_missing()
-            for path in ("/run/serverware",) + tuple(ADDITIONS):
+            for path in ("/run/catchplate",) + tuple(ADDITIONS):
                 self.assertFalse((tree / path.lstrip("/")).exists())
 
     def test_operational_inspect_and_explicit_create_empty_auxiliary_directory(self):
@@ -242,7 +242,7 @@ class FilesystemControls(unittest.TestCase):
             self.assertEqual((info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)), (0, 0, 0o700))
             self.assertEqual(report["directories"][-1]["mode"], "0700")
             self.assertEqual(report["directories"][-1]["expectedMode"], "0700")
-            self.assertEqual(tuple((tree / "run/serverware/native-pilot-core-handoff").iterdir()), ())
+            self.assertEqual(tuple((tree / "run/catchplate/native-pilot-core-handoff").iterdir()), ())
 
     def test_cold_create_does_not_create_operational_objects(self):
         with sandbox("adopted-cold") as (tree, owner, _):
@@ -251,7 +251,7 @@ class FilesystemControls(unittest.TestCase):
 
     def test_startup_inspection_then_create_exact_empty_leaves_preserves_shared_state(self):
         with sandbox("commissioning-startup") as (tree, owner, report):
-            shared = tree / "etc/serverware"
+            shared = tree / "etc/catchplate"
             shared.mkdir(); shared.chmod(0o700)
             marker = shared / "unrelated"
             marker.write_bytes(b"preserve")
@@ -290,8 +290,8 @@ class FilesystemControls(unittest.TestCase):
                             "resource-parent-mode-differs" if fault == "mode" else "resource-parent-not-empty")
                         if fault == "populated": self.assertEqual((leaf / "existing").read_bytes(), b"preserve")
                         self.assertEqual(stat.S_IMODE(leaf.stat().st_mode), 0o755 if fault == "mode" else 0o700)
-                    self.assertFalse((tree / "var/lib/serverware").exists())
-                    self.assertFalse((tree / "run/serverware").exists())
+                    self.assertFalse((tree / "var/lib/catchplate").exists())
+                    self.assertFalse((tree / "run/catchplate").exists())
 
     def test_operational_wrong_mode_refuses_before_creation_without_repair(self):
         with sandbox("adopted-operational") as (tree, owner, _):
@@ -300,7 +300,7 @@ class FilesystemControls(unittest.TestCase):
             with self.assertRaises(roots.Refused) as caught:
                 owner.inspect()
             self.assertEqual(caught.exception.code, "resource-parent-mode-differs")
-            self.assertFalse((tree / "run/serverware").exists())
+            self.assertFalse((tree / "run/catchplate").exists())
             self.assertEqual(stat.S_IMODE(leaf.stat().st_mode), 0o555)
 
     def test_operational_populated_directory_refuses_before_creation(self):
@@ -312,7 +312,7 @@ class FilesystemControls(unittest.TestCase):
             with self.assertRaises(roots.Refused) as caught:
                 owner.inspect()
             self.assertEqual(caught.exception.code, "resource-parent-not-empty")
-            self.assertFalse((tree / "run/serverware").exists())
+            self.assertFalse((tree / "run/catchplate").exists())
             self.assertEqual(marker.read_bytes(), b"preserve")
 
     def test_operational_symlink_refuses_without_mutation(self):
@@ -324,13 +324,13 @@ class FilesystemControls(unittest.TestCase):
             leaf.symlink_to(target, target_is_directory=True)
             with self.assertRaises(OSError):
                 owner.inspect()
-            self.assertFalse((tree / "run/serverware").exists())
+            self.assertFalse((tree / "run/catchplate").exists())
             self.assertEqual(tuple(target.iterdir()), ())
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o700)
 
     def test_wrong_handoff_mode_refuses_before_first_creation(self):
         with sandbox() as (tree, _, _):
-            leaf = tree / "run/serverware/native-pilot-core-handoff"
+            leaf = tree / "run/catchplate/native-pilot-core-handoff"
             leaf.mkdir(parents=True); leaf.chmod(0o711)
             output = io.StringIO()
             with patch.object(sys, "argv", ["prepare_native_pilot_resource_roots.py",
@@ -339,34 +339,34 @@ class FilesystemControls(unittest.TestCase):
             report = json.loads(output.getvalue())
             self.assertEqual(report["error"]["code"], "resource-parent-mode-differs")
             self.assertEqual(report["profile"], "adopted-cold")
-            self.assertFalse((tree / "var/lib/serverware").exists())
+            self.assertFalse((tree / "var/lib/catchplate").exists())
             self.assertEqual(stat.S_IMODE(leaf.stat().st_mode), 0o711)
 
     def test_populated_last_parent_refuses_before_first_creation(self):
         with sandbox() as (tree, owner, _):
-            leaf = tree / "run/serverware/native-pilot-core-handoff"
+            leaf = tree / "run/catchplate/native-pilot-core-handoff"
             leaf.mkdir(parents=True); leaf.chmod(0o700)
             marker = leaf / "existing"
             marker.write_bytes(b"preserve")
             with self.assertRaises(roots.Refused) as caught:
                 owner.inspect()
             self.assertEqual(caught.exception.code, "resource-parent-not-empty")
-            self.assertFalse((tree / "var/lib/serverware").exists())
+            self.assertFalse((tree / "var/lib/catchplate").exists())
             self.assertEqual(marker.read_bytes(), b"preserve")
 
     def test_symlink_parent_refuses_without_target_mutation(self):
         with sandbox() as (tree, owner, _):
             target = tree / "elsewhere"
             target.mkdir(); target.chmod(0o711)
-            (tree / "run/serverware-custody-genesis").symlink_to(target, target_is_directory=True)
+            (tree / "run/catchplate-custody-genesis").symlink_to(target, target_is_directory=True)
             with self.assertRaises(OSError):
                 owner.inspect()
-            self.assertFalse((tree / "var/lib/serverware").exists())
+            self.assertFalse((tree / "var/lib/catchplate").exists())
             self.assertEqual(tuple(target.iterdir()), ())
 
     def test_shared_ancestor_preserves_unrelated_entries_and_protected_mode(self):
         with sandbox() as (tree, owner, _):
-            shared = tree / "run/serverware"
+            shared = tree / "run/catchplate"
             shared.mkdir(); shared.chmod(0o700)
             marker = shared / "unrelated"
             marker.write_bytes(b"preserve")
@@ -377,7 +377,7 @@ class FilesystemControls(unittest.TestCase):
     def test_retained_name_replacement_refuses(self):
         with sandbox() as (tree, owner, _):
             owner.inspect(); owner.create_missing()
-            leaf = tree / "run/serverware-custody-genesis"
+            leaf = tree / "run/catchplate-custody-genesis"
             held = tree / "run/retained-old-directory"
             leaf.rename(held); leaf.mkdir(); leaf.chmod(0o711)
             with self.assertRaises(roots.Refused) as caught:
@@ -388,11 +388,11 @@ class FilesystemControls(unittest.TestCase):
     def test_concurrent_creation_refuses_without_adopting_or_repair(self):
         with sandbox() as (tree, owner, _):
             owner.inspect()
-            unexpected = tree / "var/lib/serverware"
+            unexpected = tree / "var/lib/catchplate"
             unexpected.mkdir(); unexpected.chmod(0o700)
             with self.assertRaises(FileExistsError):
                 owner.create_missing()
-            self.assertNotIn("/var/lib/serverware", owner.nodes)
+            self.assertNotIn("/var/lib/catchplate", owner.nodes)
             self.assertEqual(stat.S_IMODE(unexpected.stat().st_mode), 0o700)
             self.assertEqual(tuple(unexpected.iterdir()), ())
 
@@ -402,8 +402,8 @@ class FilesystemControls(unittest.TestCase):
             with patch.object(roots.os, "fsync", side_effect=OSError(errno.EIO, "synthetic fsync failure")):
                 with self.assertRaises(OSError):
                     owner.create_missing()
-            self.assertTrue((tree / "var/lib/serverware").is_dir())
-            self.assertFalse((tree / "var/lib/serverware/custody-generation").exists())
+            self.assertTrue((tree / "var/lib/catchplate").is_dir())
+            self.assertFalse((tree / "var/lib/catchplate/custody-generation").exists())
             self.assertEqual(report["directories"][0]["state"], "created-unconfirmed")
 
 

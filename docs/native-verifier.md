@@ -1,7 +1,7 @@
 # Standalone native response verifier
 
 Status: source-only, unbuilt and unexecuted. The Rust
-[entrypoint](../data-plane/decision-gate-rs/src/bin/serverware-native-response-verifier.rs)
+[entrypoint](../data-plane/decision-gate-rs/src/bin/catchplate-native-response-verifier.rs)
 and [verification modules](../data-plane/decision-gate-rs/src/native_verifier/mod.rs)
 implement an offline verifier of the original native response envelope, not an
 interpreter launcher or an adapter that trusts copied verification claims. The
@@ -15,14 +15,14 @@ The executable accepts exactly these four required options, with no duplicates,
 additional arguments or environment configuration:
 
 ```text
-serverware-native-response-verifier \
+catchplate-native-response-verifier \
   --expectations /approved/response-expectations.json \
   --expectations-sha256 sha256:<exact-original-digest> \
   --trust-roots /approved/native-trust-roots.json \
   --trust-roots-sha256 sha256:<exact-original-digest>
 ```
 
-Standard input is one original `serverware.nativeResponseRuntimeProof/v1`
+Standard input is one original `catchplate.nativeResponseRuntimeProof/v1`
 envelope, bounded to 512 KiB. Its six fields are `apiVersion`, `kind`,
 `server_statement`, `server_statement_sha256`, `server_signature` and
 `native_attestation`; the latter carries only the original quote and public key
@@ -51,7 +51,7 @@ acceptance deadline, sealed executable, bounded process I/O and cleanup rules.
 ## Verification scope
 
 The pinned expectations use
-`serverware.nativeResponseAttestationExpectations/v1`: release, policy,
+`catchplate.nativeResponseAttestationExpectations/v1`: release, policy,
 configuration, runtime CA certificate/SPKI and binary digests; complete PCR
 inventory, EIF, module identity and freshness bounds; and the independently
 expected boot, proof-key ID, control-plane response-key ID and client nonce.
@@ -59,7 +59,7 @@ The PCR inventory contains 3–32 canonical `PCR0`–`PCR31` entries, including
 nonzero PCR0/1/2; additional explicitly pinned zero values are permitted.
 `expectedEif` must equal PCR0. Module identity is bounded printable ASCII.
 
-Trust originals use `serverware.nativeResponseAttestationTrustRoots/v1`, with
+Trust originals use `catchplate.nativeResponseAttestationTrustRoots/v1`, with
 1–16 distinct certificates and the fixed
 `aws-nitro-attestation-pki-native-v1` profile. Its CRL inventory must be empty:
 successful verification makes no vendor-CRL revocation assertion. Independent
@@ -110,7 +110,7 @@ rejected. These are intentional acceptance restrictions, not a general-purpose
 X.509 or arbitrary Nitro-client compatibility claim.
 
 The exact 19-field result remains
-`serverware.nativeResponseAttestationVerification/v1`, with
+`catchplate.nativeResponseAttestationVerification/v1`, with
 `resultScope=local-signature-and-native-quote-only`, `okForAction=false` and
 `debug=false`. It reports the verified signature/statement/quote identities and
 expected scope. It is a local process result, not a signed verifier envelope,
@@ -121,7 +121,7 @@ proof client's job; this verifier does not replace them.
 ## Static packaging and remaining validation
 
 [Dockerfile.production](../data-plane/decision-gate-rs/Dockerfile.production)
-builds `serverware-native-response-verifier` in the existing digest-pinned
+builds `catchplate-native-response-verifier` in the existing digest-pinned
 Rust 1.88 / Alpine 3.22 stage using the reviewed vendored Cargo and musl inputs,
 offline networking and `cargo --frozen`. No dependency, feature or Cargo
 manifest change is needed. The recipe rejects an ELF interpreter, dynamic
@@ -129,9 +129,9 @@ manifest change is needed. The recipe rejects an ELF interpreter, dynamic
 independent Linux/x86-64 ELF and exact-digest checks still apply.
 
 The scratch export target is `native-response-verifier-artifact`, containing
-`/serverware-native-response-verifier`. The production image installs that
+`/catchplate-native-response-verifier`. The production image installs that
 static-stage binary root-owned, mode 0555, at
-`/usr/local/libexec/serverware-native-response-verifier`. The ordinary glibc
+`/usr/local/libexec/catchplate-native-response-verifier`. The ordinary glibc
 build output is not the static artifact. Neither installation nor a local build
 constitutes independent executable admission or source/dependency freeze.
 

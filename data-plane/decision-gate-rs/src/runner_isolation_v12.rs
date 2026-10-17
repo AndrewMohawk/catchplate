@@ -638,7 +638,7 @@ mod tests {
     use super::*;
 
     const ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    const CGROUP_PARENT: &str = "/serverware/generation/containers";
+    const CGROUP_PARENT: &str = "/catchplate/generation/containers";
 
     fn bounds() -> RunnerExecutionBoundsV12 {
         RunnerExecutionBoundsV12 {
@@ -655,7 +655,7 @@ mod tests {
         let host = execution_host_config_v12(&bounds(), vec![
             format!("/owned/launch:{CONTEXT_DIRECTORY}:ro"),
             "/owned/output:/opt/results:rw".into(),
-            "/owned/source:/opt/serverware/src:ro".into(),
+            "/owned/source:/opt/catchplate/src:ro".into(),
         ], "none", CGROUP_PARENT).unwrap();
         let expected = json!({
             "User": "10001:10001", "Image": "sealed@sha256:abcd",
@@ -701,7 +701,7 @@ mod tests {
             },
             "Mounts": [
                 {"Type": "bind", "Source": "/owned/launch", "Destination": CONTEXT_DIRECTORY, "Mode": "ro", "RW": false, "Propagation": "rprivate"},
-                {"Type": "bind", "Source": "/owned/source", "Destination": "/opt/serverware/src", "Mode": "ro", "RW": false, "Propagation": "rprivate"},
+                {"Type": "bind", "Source": "/owned/source", "Destination": "/opt/catchplate/src", "Mode": "ro", "RW": false, "Propagation": "rprivate"},
                 {"Type": "bind", "Source": "/owned/output", "Destination": "/opt/results", "Mode": "rw", "RW": true, "Propagation": "rprivate"}
             ]
         });
@@ -849,7 +849,7 @@ mod tests {
     #[test]
     fn bind_and_network_input_language_is_closed() {
         let (_, observed) = fixture();
-        let valid = vec![format!("/owned/launch:{CONTEXT_DIRECTORY}:ro"), "/owned/output:/opt/results:rw".into(), "/owned/source:/opt/serverware/src:ro".into()];
+        let valid = vec![format!("/owned/launch:{CONTEXT_DIRECTORY}:ro"), "/owned/output:/opt/results:rw".into(), "/owned/source:/opt/catchplate/src:ro".into()];
         for mode in ["host", "bridge", "container:other", "swv12-net-ABC", ""] {
             assert!(execution_host_config_v12(&bounds(), valid.clone(), mode, CGROUP_PARENT).is_err());
         }

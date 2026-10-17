@@ -14,7 +14,7 @@ their signatures, history, keys or policy:
 
 The legacy `SWCPR001` prepared-record frame commits the family, purpose/operation selector,
 source token, lengths and every original byte. Its SHA-256 identity uses
-`serverware.controlPlaneCustodyPreparedRecord/v1`. Originals are bounded to
+`catchplate.controlPlaneCustodyPreparedRecord/v1`. Originals are bounded to
 64 MiB in aggregate, with each of the first two controls at most 4 MiB; an
 encoded record is at most 64 MiB + 323 bytes. Decoding an old
 source token preserves bytes, not compatibility or replay authority.
@@ -79,7 +79,7 @@ deduplication across new controls or source revisions.
 ## Registration execution-grant retention
 
 The independent
-[`control_plane_registration_execution_records.py`](../serverware/control_plane_registration_execution_records.py)
+[`control_plane_registration_execution_records.py`](../catchplate/control_plane_registration_execution_records.py)
 codec preserves ten originals: caller authorization, planning request3,
 planning response4, complete before-vector and signed grant. Its fixed family
 is `registration-execution`, with selector
@@ -88,7 +88,7 @@ source-token length, the original ASCII source token, ten big-endian eight-byte
 lengths and the exact bodies. Per-object and planning-group limits also apply;
 the complete bodies are bounded to 64 MiB and the header to 346 bytes.
 The local content identity uses the separate
-`serverware.controlPlaneRegistrationExecutionGrantRecord/v1` domain. The old
+`catchplate.controlPlaneRegistrationExecutionGrantRecord/v1` domain. The old
 `SWCPR001` bytes, hashes and five profiles are unchanged.
 
 `CustodyJournal.append_registration_execution_grant(originals)` returns only
@@ -124,7 +124,7 @@ or authoritative under the current source.
 The [signer-exchange profile](control-plane-registration-execution.md#standalone-signer-exchange-retention)
 retains a different raw10 inventory: exact signer request8/response2, not caller
 authorization/planning/vector/grant. Its source-specific local ID uses
-`serverware.controlPlaneRegistrationSignerExchangeRecord/v1`; a grant record
+`catchplate.controlPlaneRegistrationSignerExchangeRecord/v1`; a grant record
 cannot be reinterpreted as this signer record.
 
 Genuine prepare-and-retain preserves both inventories from the same call.
@@ -140,7 +140,7 @@ reserves, before publication:
          -> preparation returns the existing grant ID (HTTP 202 localDigest)
 ```
 
-The [association codec](../serverware/control_plane_registration_associations.py)
+The [association codec](../catchplate/control_plane_registration_associations.py)
 uses `SWCPL001`, a two-byte source length, the original ASCII source token, then
 the grant and signer SHA-256 digests as two raw 32-byte fields and exact EOF.
 The marker is at most 330 bytes. The filename uses the grant digest's hex only.
@@ -180,10 +180,10 @@ authorization, custody raw7, before-vector and grant. This is not the older
 [preparation-only raw7](public-registration-finalization.md), and cannot
 retroactively authorize that older plan.
 
-The [finalization record codec](../serverware/control_plane_registration_finalization_records.py)
+The [finalization record codec](../catchplate/control_plane_registration_finalization_records.py)
 uses magic `SWCPF001`, family `registration-finalization`, selector
 `webauthn.registration.finalize` and local identity domain
-`serverware.controlPlaneRegistrationFinalizationGrantRecord/v1`. Its frame has
+`catchplate.controlPlaneRegistrationFinalizationGrantRecord/v1`. Its frame has
 the two-byte source length, original ASCII source, ten eight-byte big-endian
 lengths and exact bodies. Per-object, raw7-group and combined 64 MiB limits are
 checked before slicing or joining bodies; the maximum header is 346 bytes.
@@ -202,7 +202,7 @@ existing evidence grant + signer originals + their association (reread)
   -> return actual finalization grant local ID
 ```
 
-The [finalization association codec](../serverware/control_plane_registration_finalization_associations.py)
+The [finalization association codec](../catchplate/control_plane_registration_finalization_associations.py)
 uses `SWCPM001`, a two-byte source length, source ASCII and three raw32 local
 digests: finalization grant, evidence grant and signer exchange. Its maximum
 is 362 bytes. The three identities must be distinct and share the original
@@ -238,9 +238,9 @@ originals first; storage performs only bounded carrier and local association
 checks. It requires the actual completed finalization grant/evidence/signer
 chain and rereads both markers and all three original records.
 
-The distinct [codec](../serverware/control_plane_registration_finalization_reservation_records.py)
+The distinct [codec](../catchplate/control_plane_registration_finalization_reservation_records.py)
 uses magic `SWCPV001` and identity domain
-`serverware.controlPlaneRegistrationFinalizationReservationRecord/v1`. Its
+`catchplate.controlPlaneRegistrationFinalizationReservationRecord/v1`. Its
 frame binds the retained original source token and finalization-grant raw32
 local digest, then three u64 lengths and exact bodies. Caps are the actual
 finalization reserve transport's 256 KiB request, 16 KiB snapshot and 16 KiB
@@ -301,11 +301,11 @@ The journal and cold custody client expose separate fixed-purpose methods:
   `digest`. Even an empty result requires rereading the complete original chain;
   any present claim/outcome also requires the original reservation.
 
-The [separate codec](../serverware/control_plane_registration_finalization_outcome_records.py)
+The [separate codec](../catchplate/control_plane_registration_finalization_outcome_records.py)
 uses `SWCPX001`, kind index `0` for `sql-claimed` (empty raw0) and `1` for
 `sql-outcome` (raw4). Content identities use distinct
-`serverware.controlPlaneRegistrationFinalizationSqlClaimRecord/v1` and
-`serverware.controlPlaneRegistrationFinalizationSqlOutcomeRecord/v1` domains.
+`catchplate.controlPlaneRegistrationFinalizationSqlClaimRecord/v1` and
+`catchplate.controlPlaneRegistrationFinalizationSqlOutcomeRecord/v1` domains.
 The frame retains the original source token and finalization-grant raw32 digest,
 then fixed-count u64 lengths and exact bodies/EOF. The SQL outcome profile
 accepts the actual finalization SQL carrier: `observed-commit` with two locators and an
@@ -317,8 +317,8 @@ as are all older evidence-outcome formats.
 
 New kind indices `2` (`completion-outcome`) and `3` (`completion-reconciled`)
 use distinct identity domains
-`serverware.controlPlaneRegistrationFinalizationCompletionOutcomeRecord/v1` and
-`serverware.controlPlaneRegistrationFinalizationCompletionReconciliationRecord/v1`.
+`catchplate.controlPlaneRegistrationFinalizationCompletionOutcomeRecord/v1` and
+`catchplate.controlPlaneRegistrationFinalizationCompletionReconciliationRecord/v1`.
 Both use the actual finalization-completion transport's bounded raw4 carrier:
 `acknowledged` with a content ID and original completion/state bytes, or
 `uncertain` with all three other bodies empty. Reconciliation allows only

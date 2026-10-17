@@ -4,8 +4,8 @@
 
 use super::*;
 use super::native_enrollment_admission::AdmissionClock;
-use serverware_decision_gate::native_ingress_challenge_v1::EXPORTER_LABEL;
-use serverware_decision_gate::native_principal_preflight_v1 as wire;
+use catchplate_decision_gate::native_ingress_challenge_v1::EXPORTER_LABEL;
+use catchplate_decision_gate::native_principal_preflight_v1 as wire;
 use std::sync::RwLockReadGuard;
 use zeroize::Zeroizing;
 
@@ -202,7 +202,7 @@ pub(super) fn admit<'a>(state: &'a GateState, head: &'a RequestHead,
     if let Some(until) = native_enrollment_admission::principal_expiry(principal) { clock.restrict_until(until)?; }
     let request_binding = request_binding(head, stream, challenge)?;
     let statement = custody_canonical_json_bytes(&json!({
-        "apiVersion":"serverware.nativePrincipalPreflight/v1", "principalId":principal.id,
+        "apiVersion":"catchplate.nativePrincipalPreflight/v1", "principalId":principal.id,
         "identityPolicySha256":principal.identity_policy_digest(), "policySha256":snapshot.hash,
         "clientCertificateSha256":trusted.certificate_sha256, "clientSpkiSha256":trusted.spki_sha256,
         "sourceAddress":source, "requestBindingSha256":sha256_digest_text(&request_binding),

@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-egress-installation-authorization.v3.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-egress-installation-authorization.v3.schema.json",
   "title": "Native egress creation with fixed child network controls v3",
   "description": "Exact canonical sorted compact ensure_ascii JSON, including escaped DEL, with no LF, at most 32768 bytes and depth 6. Ed25519 signs the v3 payload schema ASCII, NUL, and exact canonical payload. Versions 1 and 2 are not upgraded by adding fields. The separate durable precreation claim authorizes fixed child-only manual network controls; no schema or signed grant alone is a durable claim, current proof, workload start or network attachment.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "payload", "signature"],
   "properties": {
-    "schema": {"const": "serverware.signedNativeEgressInstallationAuthorization/v3"},
+    "schema": {"const": "catchplate.signedNativeEgressInstallationAuthorization/v3"},
     "payload": {"$ref": "#/$defs/payload"},
     "signature": {"$ref": "native-egress-installation-authorization.v1.schema.json#/properties/signature"}
   },
@@ -24,7 +24,7 @@
       "additionalProperties": false,
       "required": ["schema", "sourceRevision", "purpose", "trustMode", "authorizationId", "setupSha256", "delegationSha256", "targetRequestSha256", "policyRequirementsSha256", "releaseRecordSha256", "policyHash", "configurationSha256", "runtimeCaCertificateSha256", "runtimeCaSpkiSha256", "ingressLeafCertificateSha256", "clientTrustBundleSha256", "clientChallengeSha256", "targetPrincipalId", "targetNonce", "targetSpkiSha256", "proxy", "networkOwner", "machineIdSha256", "workload", "ruleset", "capability", "journal", "creationJournal", "childNetworkPolicy", "issuedAtEpochNs", "expiresAtEpochNs"],
       "properties": {
-        "schema": {"const": "serverware.nativeEgressInstallationAuthorization/v3"},
+        "schema": {"const": "catchplate.nativeEgressInstallationAuthorization/v3"},
         "sourceRevision": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/payload/properties/sourceRevision"},
         "purpose": {"const": "native-egress-installation"},
         "trustMode": {"const": "trusted-host-local"},

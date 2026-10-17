@@ -62,7 +62,7 @@ state, completed-activation provenance, possession and indexed effects. The
 method never queries the database, signs a replacement, refreshes expired
 authority or interprets missing retention as permission to regenerate.
 
-Public verification and the [private consume exporter](../serverware/authority_oidc_session_activation_delivery_execution_export.py)
+Public verification and the [private consume exporter](../catchplate/authority_oidc_session_activation_delivery_execution_export.py)
 now share `_verify_retained_locked`, under the actual owner's nonblocking lock
 and unchanged configuration. This private path returns the exact retained bytes
 and same-call full replay only to the ongoing owner operation; no caller-supplied

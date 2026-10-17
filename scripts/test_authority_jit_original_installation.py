@@ -10,10 +10,10 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_contract as contract
-from serverware import db
-from serverware.authority_store import jit_original_pages as pages
-from serverware.authority_store import planner_writer_sql, schema
+from catchplate import authority_contract as contract
+from catchplate import db
+from catchplate.authority_store import jit_original_pages as pages
+from catchplate.authority_store import planner_writer_sql, schema
 
 
 SOURCES = (
@@ -25,7 +25,7 @@ SOURCES = (
 
 
 class ConnectionDouble:
-    def __init__(self, *, namespace="serverware_metadata", transaction=True, nonempty=None):
+    def __init__(self, *, namespace="catchplate_metadata", transaction=True, nonempty=None):
         self.namespace, self.in_transaction, self.nonempty = namespace, transaction, nonempty
         self.statements, self.result = [], None
 
@@ -56,7 +56,7 @@ class JitOriginalInstallationControls(unittest.TestCase):
 
     def test_exact_contract_roles_and_no_business_or_sqlite_admission(self):
         table = contract.JIT_ORIGINAL_PAGE_TABLE
-        self.assertEqual(pages.TABLE, "serverware_metadata." + table)
+        self.assertEqual(pages.TABLE, "catchplate_metadata." + table)
         self.assertEqual(pages.COLUMNS, contract.JIT_ORIGINAL_PAGE_COLUMNS)
         self.assertEqual(len(pages.COLUMNS), 13)
         self.assertEqual(pages._KEY_FIELDS, contract.JIT_ORIGINAL_PAGE_CONTRACT["primaryKey"])
@@ -76,10 +76,10 @@ class JitOriginalInstallationControls(unittest.TestCase):
         self.assertIs(contract.JIT_ORIGINAL_PAGE_CONTRACT["publicExecutionEnabled"], False)
         triggers, _functions = schema._policy_candidate_authority_required_guard_names(postgres=True)
         for suffix in (("canonical", "insert"), ("immutable",)):
-            self.assertIn(db._policy_candidate_authority_object_name("serverware", table, *suffix), triggers)
+            self.assertIn(db._policy_candidate_authority_object_name("catchplate", table, *suffix), triggers)
 
     def test_ddl_is_source_exact_and_namespace_bounded(self):
-        for namespace in ('"serverware_metadata"', '"serverware_candidate_authority_expected_v9"'):
+        for namespace in ('"catchplate_metadata"', '"catchplate_candidate_authority_expected_v9"'):
             ddl = db._policy_authority_jit_original_page_ddl(namespace)
             self.assertEqual(ddl, pages.installation_sql().replace(pages.TABLE,
                 namespace + '."' + contract.JIT_ORIGINAL_PAGE_TABLE + '"'))
@@ -88,7 +88,7 @@ class JitOriginalInstallationControls(unittest.TestCase):
             db._policy_authority_jit_original_page_ddl('"other"')
         with patch.object(pages, "COLUMNS", pages.COLUMNS[:-1]):
             with self.assertRaises(db.PolicyCandidateAuthorityError):
-                db._policy_authority_jit_original_page_ddl('"serverware_metadata"')
+                db._policy_authority_jit_original_page_ddl('"catchplate_metadata"')
 
     def test_every_source_is_locked_before_any_empty_check_or_creation(self):
         conn = ConnectionDouble()
@@ -97,9 +97,9 @@ class JitOriginalInstallationControls(unittest.TestCase):
         self.assertEqual(len(statements), 2 + 2 * len(SOURCES))
         for position, table in enumerate(SOURCES, 1):
             self.assertEqual(statements[position],
-                f'LOCK TABLE ONLY "serverware_metadata"."{table}" IN SHARE ROW EXCLUSIVE MODE')
+                f'LOCK TABLE ONLY "catchplate_metadata"."{table}" IN SHARE ROW EXCLUSIVE MODE')
             self.assertEqual(statements[len(SOURCES) + position],
-                f'SELECT 1 AS present FROM ONLY "serverware_metadata"."{table}" LIMIT 1')
+                f'SELECT 1 AS present FROM ONLY "catchplate_metadata"."{table}" LIMIT 1')
         self.assertIn("CREATE TABLE IF NOT EXISTS", statements[-1])
 
     def test_nonempty_source_old_version_or_wrong_transaction_cannot_create(self):
@@ -122,7 +122,7 @@ class JitOriginalInstallationControls(unittest.TestCase):
             self.install(ConnectionDouble(), exists=True,
                 validator=db.PolicyCandidateAuthorityError("recorded source differs"))
         with self.assertRaises(db.PolicyCandidateAuthorityError):
-            self.install(ConnectionDouble(namespace="serverware_candidate_authority_expected_v9"), exists=True)
+            self.install(ConnectionDouble(namespace="catchplate_candidate_authority_expected_v9"), exists=True)
 
     def test_schema_contract_digest_binds_actual_jit_ddl(self):
         original = schema._policy_candidate_authority_source_contract_digest()

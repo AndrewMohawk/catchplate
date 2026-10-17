@@ -19,17 +19,17 @@ case "$scope" in
 esac
 test "$(id -u)" -eq 0 || fail "offline v12 state quarantine requires UID 0"
 
-state_root=/var/lib/serverware/coder-controller-v12
+state_root=/var/lib/catchplate/coder-controller-v12
 quarantine_root=$state_root/offline-quarantine-v12
 dind_root=$state_root/dind
-socket_root=/run/serverware/coder/v12/dind
+socket_root=/run/catchplate/coder/v12/dind
 netns_root=/run/netns
-cgroup_root=/sys/fs/cgroup/system.slice/serverware-coder-lifecycle-privileged-v12.service
+cgroup_root=/sys/fs/cgroup/system.slice/catchplate-coder-lifecycle-privileged-v12.service
 max_entries=8192
 max_depth=12
 audit_count=0
 
-for protected in /var/lib/serverware "$state_root" "$quarantine_root"
+for protected in /var/lib/catchplate "$state_root" "$quarantine_root"
 do
     test ! -L "$protected" || fail "protected path is a symlink: $protected"
 done
@@ -38,30 +38,30 @@ test "$(stat -c '%u:%F' "$state_root")" = "0:directory" \
     || fail "controller v12 state root is not a root-owned directory"
 
 for unit in \
-    serverware-coder-v12.target \
-    serverware-coder-controller-v12.socket \
-    serverware-coder-controller-v12.service \
-    serverware-coder-plan-executor-v12.socket \
-    serverware-coder-plan-executor-v12.service \
-    serverware-coder-docker-proxy-v12.socket \
-    serverware-coder-docker-proxy-v12.service \
-    serverware-coder-lifecycle-v12.socket \
-    serverware-coder-lifecycle-v12.service \
-    serverware-coder-lifecycle-privileged-v12.socket \
-    serverware-coder-lifecycle-privileged-v12.service \
-    serverware-coder-private-dind-reconcile-v12.service \
-    serverware-coder-readiness-v12.service
+    catchplate-coder-v12.target \
+    catchplate-coder-controller-v12.socket \
+    catchplate-coder-controller-v12.service \
+    catchplate-coder-plan-executor-v12.socket \
+    catchplate-coder-plan-executor-v12.service \
+    catchplate-coder-docker-proxy-v12.socket \
+    catchplate-coder-docker-proxy-v12.service \
+    catchplate-coder-lifecycle-v12.socket \
+    catchplate-coder-lifecycle-v12.service \
+    catchplate-coder-lifecycle-privileged-v12.socket \
+    catchplate-coder-lifecycle-privileged-v12.service \
+    catchplate-coder-private-dind-reconcile-v12.service \
+    catchplate-coder-readiness-v12.service
 do
     systemctl is-active --quiet "$unit" \
         && fail "v12 service must be inactive before offline quarantine: $unit"
 done
 
 for socket in \
-    /run/serverware/coder/v12/controller/control.sock \
-    /run/serverware/coder/v12/plan-executor/control.sock \
-    /run/serverware/coder/v12/docker-proxy/control.sock \
-    /run/serverware/coder/v12/lifecycle/control.sock \
-    /run/serverware/coder/v12/lifecycle-privileged/control.sock
+    /run/catchplate/coder/v12/controller/control.sock \
+    /run/catchplate/coder/v12/plan-executor/control.sock \
+    /run/catchplate/coder/v12/docker-proxy/control.sock \
+    /run/catchplate/coder/v12/lifecycle/control.sock \
+    /run/catchplate/coder/v12/lifecycle-privileged/control.sock
 do
     test ! -e "$socket" && test ! -L "$socket" \
         || fail "v12 control socket or stale path remains: $socket"
@@ -81,7 +81,7 @@ require_empty_directory() {
 
 require_empty_directory "$dind_root"
 require_empty_directory "$socket_root"
-for netns in "$netns_root"/serverware-coder-v12-*
+for netns in "$netns_root"/catchplate-coder-v12-*
 do
     test -e "$netns" || test -L "$netns" || continue
     fail "owned network namespace remains: $netns"
@@ -110,7 +110,7 @@ if test -e "$cgroup_root" || test -L "$cgroup_root"; then
         esac
     done < "$cgroup_root/cgroup.events"
     test "$cgroup_empty_seen" = yes || fail "private DinD aggregate populated state is absent"
-    for child in "$cgroup_root"/serverware-coder-v12-*
+    for child in "$cgroup_root"/catchplate-coder-v12-*
     do
         test -e "$child" || test -L "$child" || continue
         fail "owned private DinD child cgroup remains: $child"
@@ -189,7 +189,7 @@ install -d -o root -g root -m 0700 "$destination"
 manifest=$destination/quarantine-v12.manifest
 {
     printf '%s\n' \
-        "version=serverware/offline-state-quarantine/v12" \
+        "version=catchplate/offline-state-quarantine/v12" \
         "disposition=QUARANTINED_NOT_MIGRATED" \
         "scope=$scope" \
         "maximum_entries=$max_entries" \

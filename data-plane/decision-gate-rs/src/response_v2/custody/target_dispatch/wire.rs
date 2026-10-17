@@ -6,13 +6,13 @@ use crate::response_observation_v2_api::{ExactByteObjectDescriptor, V2OperationB
 pub use super::super::protocol::{SignedAttemptStateObservationV1, SignedStateMutationReceiptV1};
 use super::super::super::state_authority::rpc::{RawObjectReference, SignedAuthorityArtifact};
 
-pub const ORIGINAL: &str = "serverware.responseV2.targetDispatchOriginal/v1";
-pub const PERMIT: &str = "serverware.responseV2.targetDispatchPermit/v1";
-pub const PERMIT_DOMAIN: &[u8] = b"serverware.responseV2.targetDispatchPermit/v1\0";
-pub const PERSIST: &str = "serverware.responseV2.capturePersist/v1";
-pub const NATIVE_STATEMENT: &str = "serverware.nativeTargetDispatchStatement/v1";
-pub const NATIVE_DOMAIN: &[u8] = b"serverware.nativeTargetDispatchStatement/v1\0";
-pub const QUOTE_DOMAIN: &[u8] = b"serverware/native-target-dispatch-attestation/v1\0";
+pub const ORIGINAL: &str = "catchplate.responseV2.targetDispatchOriginal/v1";
+pub const PERMIT: &str = "catchplate.responseV2.targetDispatchPermit/v1";
+pub const PERMIT_DOMAIN: &[u8] = b"catchplate.responseV2.targetDispatchPermit/v1\0";
+pub const PERSIST: &str = "catchplate.responseV2.capturePersist/v1";
+pub const NATIVE_STATEMENT: &str = "catchplate.nativeTargetDispatchStatement/v1";
+pub const NATIVE_DOMAIN: &[u8] = b"catchplate.nativeTargetDispatchStatement/v1\0";
+pub const QUOTE_DOMAIN: &[u8] = b"catchplate/native-target-dispatch-attestation/v1\0";
 pub const MAX_RAW_BYTES: u64 = 34_603_008;
 pub const STATE_RECEIPT_DOMAIN:&[u8]=super::super::attestation::STATE_MUTATION_RECEIPT_SIGNATURE_DOMAIN;
 pub const STATE_OBSERVATION_DOMAIN:&[u8]=super::super::attestation::STATE_AUTHORITY_RESULT_SIGNATURE_DOMAIN;

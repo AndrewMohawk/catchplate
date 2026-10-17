@@ -105,7 +105,7 @@ class Fixture:
 
 def successful(*, header=False, identical=False, shared=False):
     f = Fixture(header=header, shared=shared)
-    from serverware import runtime
+    from catchplate import runtime
     before, core, catalog = f.snapshot(), f.core(), f.catalog()
     if header:
         assert json.loads(core["metadata"])["injection_name"] == "X-Api-Key"
@@ -242,7 +242,7 @@ def audit_rollback():
             "WHEN NEW.event_type='operator_catalog.credential.key_replaced' "
             "BEGIN SELECT RAISE(ABORT,'synthetic key replacement audit refusal'); END")
     before = f.snapshot()
-    from serverware import runtime
+    from catchplate import runtime
     with patch.object(runtime, "invalidate_secret_leases", side_effect=AssertionError("precommit cache eviction")) as eviction:
         refused(f.replace, sqlite3.IntegrityError)
     assert eviction.call_count == 0 and f.snapshot() == before
@@ -285,7 +285,7 @@ def concurrent_single_winner():
 
 def helper_ownership():
     f = Fixture()
-    from serverware import operator_demo
+    from catchplate import operator_demo
     helper, publication = f.db.replace_operator_static_credential_secret_if_version, f.store.operator_publication
     before = f.snapshot()
     arguments = {"expected_version": 1, "secret": NEW}
@@ -354,7 +354,7 @@ def header_binding_integrity():
     variants.append(({**metadata, "injection_prefix": "undeclared"}, record))
     variants.append((metadata, {**record, "header_name": "X-Different"}))
     variants += [({**metadata, "injection_name": value}, {**record, "header_name": value})
-        for value in ("Authorization", "Host", "X-Serverware-Test", "X Bad", "")]
+        for value in ("Authorization", "Host", "X-Catchplate-Test", "X Bad", "")]
     for changed_metadata, changed_record in variants:
         with f.store.operator_publication.exclusive(), closing(f.db.connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -389,7 +389,7 @@ def header_binding_integrity():
 
 def postcommit_cache_failure():
     f = Fixture()
-    from serverware import runtime
+    from catchplate import runtime
     before = f.snapshot()
     with patch.object(runtime, "invalidate_secret_leases", side_effect=RuntimeError("synthetic local cache failure")) as eviction:
         result = f.replace()
@@ -442,7 +442,7 @@ def create_for_restart():
 def reopen():
     # A separate interpreter opens exactly the previous child's persisted state.
     config, db, store, bundles = workspace.common.backend(initialize=False)
-    from serverware import operator_catalog_schema as schema
+    from catchplate import operator_catalog_schema as schema
     before = workspace.snapshot(db, catalog=True), config.POLICY_BUNDLE_PATH.read_bytes()
     store.initialize()
     assert (workspace.snapshot(db, catalog=True), config.POLICY_BUNDLE_PATH.read_bytes()) == before
@@ -488,12 +488,12 @@ class OperatorCredentialReplacementTests(unittest.TestCase):
         secret_file = Path(self.scratch.name) / "google-client-secret"
         secret_file.write_text(google.CLIENT_SECRET + "\n", encoding="utf-8")
         secret_file.chmod(0o600)
-        self.environment.update(SERVERWARE_OPERATOR_GOOGLE_PROFILE="operator-google-v1",
-            SERVERWARE_OPERATOR_DEMO_UPSTREAMS='["https://api.example.com","https://gmail.googleapis.com"]',
-            SERVERWARE_PUBLIC_URL="https://control.example.com",
-            SERVERWARE_GOOGLE_OAUTH_CLIENT_ID="123-fixture.apps.googleusercontent.com",
-            SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI="https://control.example.com/api/oauth/callback/google",
-            SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE=str(secret_file))
+        self.environment.update(CATCHPLATE_OPERATOR_GOOGLE_PROFILE="operator-google-v1",
+            CATCHPLATE_OPERATOR_DEMO_UPSTREAMS='["https://api.example.com","https://gmail.googleapis.com"]',
+            CATCHPLATE_PUBLIC_URL="https://control.example.com",
+            CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID="123-fixture.apps.googleusercontent.com",
+            CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI="https://control.example.com/api/oauth/callback/google",
+            CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE=str(secret_file))
         self.run_worker("google")
 
     def test_replacement_persists_across_fresh_process_restart(self):
@@ -508,7 +508,7 @@ if __name__ == "__main__":
         try:
             # Health alone is stubbed: it is unrelated to storage and must not
             # contact a gate. Publication, encryption and all CAS guards are real.
-            from serverware import operator_demo_store
+            from catchplate import operator_demo_store
             with patch.object(operator_demo_store, "loaded_policy_hash", return_value=None):
                 result = OPERATIONS[sys.argv[2]]()
             print(json.dumps(result, sort_keys=True))

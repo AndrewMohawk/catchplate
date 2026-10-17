@@ -23,7 +23,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from serverware import operator_notification_pilot_source as source
+from catchplate import operator_notification_pilot_source as source
 
 NOW_NS = 2_000_000_000_123_456_789
 SELECTION = "sha256:" + "1" * 64
@@ -45,7 +45,7 @@ def status_payload(phase="security_key_available", *, now_ns=NOW_NS):
     available = phase in source.AVAILABLE_PHASES
     setup = str(now_ns + 120_000_000_007)
     expiry = setup if phase == "prepare_available" else str(now_ns + 30_000_000_003)
-    status = {"schema": "serverware.pilotActionStatus/v1", "attemptSha256": ATTEMPT,
+    status = {"schema": "catchplate.pilotActionStatus/v1", "attemptSha256": ATTEMPT,
         "readinessSha256": READINESS, "phase": phase, "actionAvailable": available,
         "attemptNumber": 0 if phase == "prepare_available" else 1,
         "sourceSha256": READINESS if phase == "prepare_available" else "sha256:" + "4" * 64,
@@ -63,7 +63,7 @@ def status_payload(phase="security_key_available", *, now_ns=NOW_NS):
 
 
 def relay_envelope(status=None, *, state="observed"):
-    return {"schema": "serverware.pilotObservationRelay/v1", "selectionSha256": SELECTION,
+    return {"schema": "catchplate.pilotObservationRelay/v1", "selectionSha256": SELECTION,
         "state": state, "observation": status_payload() if state == "observed" and status is None else status}
 
 
@@ -74,7 +74,7 @@ def http_response(envelope):
 
 
 def config_json(path):
-    return canonical({"schema": "serverware.operatorPilotNotificationSource/v1",
+    return canonical({"schema": "catchplate.operatorPilotNotificationSource/v1",
         "socketPath": str(path), "relayUid": 1000, "selectionSha256": SELECTION,
         "attemptSha256": ATTEMPT, "nativeOrigin": source.NATIVE_ORIGIN})
 
@@ -87,14 +87,14 @@ def inert_config():
 
 def action_payload(status=None):
     status = status_payload() if status is None else status
-    record = {"schema": "serverware.nativePilotNotificationObservation/v1",
+    record = {"schema": "catchplate.nativePilotNotificationObservation/v1",
         "selection_sha256": SELECTION, "observation": status}
     binding = {"selection_sha256": SELECTION, "native_event_id": status["eventId"]}
     event_id = "sha256:" + hashlib.sha256(canonical(binding).encode("ascii")).hexdigest()
     summary = {"prepare_available": "Prepare the native pilot",
         "security_key_available": "Use your security key for the native pilot",
         "confirmation_available": "Confirm the native pilot action"}[status["phase"]]
-    return {"schema": "serverware.operatorNotification/v1", "channel": "action_required",
+    return {"schema": "catchplate.operatorNotification/v1", "channel": "action_required",
         "source": {"event_id": event_id, "event_hash": "sha256:" + "5" * 64,
             "event_type": "native_pilot.phase_observed", "created_at": "2026-10-10T12:00:00+00:00"},
         "summary": summary, "review_path": status["reviewPath"], "details": {"native_pilot": record}}
@@ -108,8 +108,8 @@ class PureTests(unittest.TestCase):
         return source._observation(self.config, relay_envelope(status, **kwargs))
 
     def test_import_is_inert_and_absent_configuration_has_no_io(self):
-        for module in ("serverware.db", "serverware.config", "serverware.app", "serverware.crypto",
-                "serverware.operator_demo", "serverware.operator_notification_store"):
+        for module in ("catchplate.db", "catchplate.config", "catchplate.app", "catchplate.crypto",
+                "catchplate.operator_demo", "catchplate.operator_notification_store"):
             self.assertNotIn(module, sys.modules)
         with patch.object(source.os, "open", side_effect=AssertionError("no filesystem")), \
                 patch.object(source.socket, "socket", side_effect=AssertionError("no sockets")):
@@ -174,7 +174,7 @@ class PureTests(unittest.TestCase):
                 self.assertFalse(summary["action_available"])
                 self.assertEqual(summary["phase"], phase)
                 with self.assertRaises(source.SourceError):
-                    source.validate_record({"schema": "serverware.nativePilotNotificationObservation/v1",
+                    source.validate_record({"schema": "catchplate.nativePilotNotificationObservation/v1",
                         "selection_sha256": SELECTION, "observation": status_payload(phase)})
         for state in ("waiting", "unavailable"):
             observation = self.observation(state=state)

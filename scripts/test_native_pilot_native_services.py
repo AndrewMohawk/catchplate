@@ -22,8 +22,8 @@ from cryptography.x509.oid import NameOID
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import native_pilot_native_service_profile as profile
-from serverware import native_pilot_generation_install_authority as installation
+from catchplate import native_pilot_native_service_profile as profile
+from catchplate import native_pilot_generation_install_authority as installation
 from test_native_pilot_closure_set import canonical, frame, sha, synthetic
 from test_native_pilot_generation_scope import NOW, key_fixture, trust_key
 from test_native_pilot_history_grants import common, generation_payload
@@ -50,16 +50,16 @@ def fixture():
         "awsNitroRootCertificatesPem": [certificate_raw], "nitroCertificateProfile": {
             "profileId": "aws-nitro-attestation-pki-native-v1", "allowedLeafExtendedKeyUsageOids": []},
         "maxAgeSeconds": 30, "futureSkewSeconds": 1}
-    revocation = {"apiVersion": "serverware.nativeShadowNitroApplicationRevocation/v1",
+    revocation = {"apiVersion": "catchplate.nativeShadowNitroApplicationRevocation/v1",
         "profile": "application-denial-inventory-no-vendor-crl-v1", "generation": 1,
         "issuedAtUnixNanos": NOW - 1_000_000_000, "expiresAtUnixNanos": NOW + 1_000_000_000,
         "deniedCertificateSha256s": []}
     row = {"uid": 63000, "gid": 63000, "nitro": nitro, "collateralRevocation": revocation,
         "expectedAttestation": {"platform": "aws-nitro-enclave", "expectedMeasurementSha256": synthetic("unexecuted-expected-measurement"),
             "endorsementRootSha256": sha(certificate.public_bytes(serialization.Encoding.DER)),
-            "collateralPolicySha256": frame("serverware.nativeShadowNitroCollateralPolicy/v1", nitro),
+            "collateralPolicySha256": frame("catchplate.nativeShadowNitroCollateralPolicy/v1", nitro),
             "revocationSourceSha256": sha(canonical(revocation))}, "maximumResultAgeNanos": 30_000_000_000}
-    return {"apiVersion": "serverware.nativePilotNativeServicePolicy/v1",
+    return {"apiVersion": "catchplate.nativePilotNativeServicePolicy/v1",
         "verifierSettings": {role: copy.deepcopy(row) | {"uid": 63000 + i, "gid": 63000 + i} for i, role in enumerate(ROLES)},
         "operationWindows": {operation: {"issuedAtUnixNanos": NOW - 500_000_000,
             "expiresAtUnixNanos": NOW + 500_000_000} for operation in OPERATIONS},
@@ -109,7 +109,7 @@ class NativeServicePolicyTests(unittest.TestCase):
             value = copy.deepcopy(base); value[field][key] = {}
             with self.assertRaises(ValueError):
                 profile.validate_policy(value)
-        for api in (None, "serverware.nativePilotNativeServicePolicy/v2"):
+        for api in (None, "catchplate.nativePilotNativeServicePolicy/v2"):
             value = copy.deepcopy(base); value["apiVersion"] = api
             with self.assertRaises(ValueError):
                 profile.validate_policy(value)

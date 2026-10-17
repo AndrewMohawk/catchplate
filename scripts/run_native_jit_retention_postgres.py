@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRATCH = Path("/scratch/native-jit-storage")
 TEST = "scripts/test_authority_native_jit_retention_postgres.py"
 FIXED_READS = ("scripts/run_native_jit_retention_postgres.py", TEST,
-    "serverware/db.py", "serverware/authority_store/executor_v9.py")
+    "catchplate/db.py", "catchplate/authority_store/executor_v9.py")
 sys.path.insert(0, str(ROOT))
 sys.dont_write_bytecode = True
 sys.pycache_prefix = "/scratch/unused-pycache"
@@ -56,7 +56,7 @@ def fixture_child():
     code = 1
     try:
         sys.argv = [str(ROOT / TEST), "--postgres-dsn",
-            "host=/scratch/native-jit-storage/socket port=5432 dbname=postgres user=serverware_fixture_admin"]
+            "host=/scratch/native-jit-storage/socket port=5432 dbname=postgres user=catchplate_fixture_admin"]
         runpy.run_path(sys.argv[0], run_name="__main__")
     except SystemExit as error:
         code = error.code if isinstance(error.code, int) else int(error.code is not None)
@@ -70,7 +70,7 @@ def fixture_child():
         # separate before/after pin, not a fabricated compile observation.
         missing = sorted(imported - set(compiled) - {FIXED_READS[0]})
         passed = code == 0 and before == after and compiled == rehashed and not conflicting and not missing
-        print(json.dumps({"schema": "serverware.nativeJitStorageComponentSource/v1", "passed": passed,
+        print(json.dumps({"schema": "catchplate.nativeJitStorageComponentSource/v1", "passed": passed,
             "testExitCode": code, "fixedSourcesBefore": before, "fixedSourcesAfter": after,
             "actualCompiledPython": compiled, "sourceUnchanged": compiled == rehashed,
             "conflictingCompilations": conflicting, "unobservedImports": missing}, sort_keys=True), flush=True)
@@ -84,13 +84,13 @@ def require(condition, message):
 
 def run():
     from scripts.run_ordinary_regression import require_offline_network
-    from serverware.native_postgres_process import ProcessSet
+    from catchplate.native_postgres_process import ProcessSet
     import psycopg
 
     require_offline_network()
     require(ROOT == Path("/app") and Path.cwd() == ROOT, "source mount differs")
     require(os.getuid() == os.geteuid() == 10001 and os.getgid() == os.getegid() == 10001,
-        "fixture must run as the cached image's unprivileged serverware identity")
+        "fixture must run as the cached image's unprivileged catchplate identity")
     require(os.statvfs(ROOT).f_flag & os.ST_RDONLY, "source mount is not read-only")
     require(any(line.split()[4] == "/scratch" and " - tmpfs " in line
         for line in Path("/proc/self/mountinfo").read_text().splitlines()), "scratch is not isolated tmpfs")
@@ -112,9 +112,9 @@ def run():
     before = source_pins()
     environment = {"PATH": str(bindir) + ":/usr/local/bin:/usr/bin:/bin", "LANG": "C", "LC_ALL": "C",
         "TZ": "UTC", "TMPDIR": str(SCRATCH), "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1",
-        "PYTHONUNBUFFERED": "1", "SERVERWARE_DATA_DIR": str(SCRATCH / "app-data"),
-        "SERVERWARE_PROCESS_MODE": "metadata-bootstrap", "SERVERWARE_RELEASE_CHANNEL": "dev"}
-    init_command = (str(bindir / "initdb"), "--pgdata=" + str(data), "--username=serverware_fixture_admin",
+        "PYTHONUNBUFFERED": "1", "CATCHPLATE_DATA_DIR": str(SCRATCH / "app-data"),
+        "CATCHPLATE_PROCESS_MODE": "metadata-bootstrap", "CATCHPLATE_RELEASE_CHANNEL": "dev"}
+    init_command = (str(bindir / "initdb"), "--pgdata=" + str(data), "--username=catchplate_fixture_admin",
         "--encoding=UTF8", "--locale=C", "--auth-local=trust", "--auth-host=reject", "--data-checksums",
         "--no-instructions", "--no-clean")
     settings = {"listen_addresses": "", "unix_socket_directories": str(socket), "unix_socket_permissions": "0700",
@@ -141,7 +141,7 @@ def run():
             require(not processes.cancelled and server.returncode is None and not server.overflow and not server.lost,
                 "isolated postmaster failed before readiness")
             try:
-                connection = psycopg.connect(host=str(socket), port=5432, dbname="postgres", user="serverware_fixture_admin",
+                connection = psycopg.connect(host=str(socket), port=5432, dbname="postgres", user="catchplate_fixture_admin",
                     connect_timeout=1, passfile="/dev/null", sslmode="disable", gssencmode="disable",
                     options="-cstatement_timeout=1000", autocommit=True)
             except psycopg.OperationalError:
@@ -175,7 +175,7 @@ def run():
                 signal.signal(number, handler)
         after = source_pins()
         passed = passed and normal_stop and before == after and all(item.returncode is not None for item in processes.children)
-        print(json.dumps({"schema": "serverware.nativeJitStorageIsolatedPostgres/v1", "passed": passed,
+        print(json.dumps({"schema": "catchplate.nativeJitStorageIsolatedPostgres/v1", "passed": passed,
             "elapsedSeconds": round(time.monotonic() - began, 3), "error": error,
             "postgresVersion": bindir.parent.name, "normalPostmasterStop": normal_stop,
             "fixedSourcesUnchanged": before == after, "externalContainerDestructionRequired": True,

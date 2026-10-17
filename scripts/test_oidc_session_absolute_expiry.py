@@ -26,7 +26,7 @@ from starlette.responses import Response
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCES = {name: (ROOT / "serverware" / name).read_text() for name in (
+SOURCES = {name: (ROOT / "catchplate" / name).read_text() for name in (
     "config.py", "db.py", "db_common.py", "rbac.py", "operator_oidc.py", "app.py",
     "authority_store/metadata_schema_source.py", "authority_transition_oidc_session_activation.py",
     "authority_transition_oidc_session_activation_delivery.py",

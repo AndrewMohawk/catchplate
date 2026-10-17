@@ -15,15 +15,15 @@ const PEM = '-----BEGIN PRIVATE KEY-----\nSYNTHETIC_PRIVATE_KEY_NEVER_RENDER\n--
 const PAT = 'synthetic_github_PAT_NEVER_RENDER';
 const NAME = 'Fixture GitHub App';
 const REPLACE = '/api/operator-demo/credentials/github-app/replace-key';
-const REPLACEMENT = {schema: 'serverware.operatorGithubAppKeyReplacement/v1', path: REPLACE};
+const REPLACEMENT = {schema: 'catchplate.operatorGithubAppKeyReplacement/v1', path: REPLACE};
 // Independent literal API fixtures; no production descriptor/receipt generator.
 function capability(app = true, allowed = true) {
-  return {schema: app ? 'serverware.operatorGithubApp/v1' : 'serverware.operatorGithub/v1',
+  return {schema: app ? 'catchplate.operatorGithubApp/v1' : 'catchplate.operatorGithub/v1',
     connection_type: app ? 'github_app_v1' : 'github_token_v1',
     create_credential_path: '/api/operator-demo/credentials/' + (app ? 'github-app' : 'github-token'),
     create_rule_path: '/api/operator-demo/access-rules/github', api_origin: ORIGIN,
-    destination_allowed: allowed, operation_bundles: [READ, WRITE], sdk_auth_token: 'serverware-github-placeholder-v1',
-    placeholder: 'token serverware-github-placeholder-v1', query_mode: 'githubRestV1',
+    destination_allowed: allowed, operation_bundles: [READ, WRITE], sdk_auth_token: 'catchplate-github-placeholder-v1',
+    placeholder: 'token catchplate-github-placeholder-v1', query_mode: 'githubRestV1',
     response_mode: 'unfiltered_json_or_empty_v2', source_pair_required: true};
 }
 function binding(changes = {}) {
@@ -42,7 +42,7 @@ function githubRule(permission = READ, changes = {}) {
     request_fields: [], response_fields: [], request_body_mode: 'preserve_json_v1',
     query_keys: ['assignee', 'creator', 'direction', 'labels', 'mentioned', 'milestone', 'page', 'per_page', 'since', 'sort', 'state'],
     allowed_headers: ['accept', 'accept-language', 'sec-fetch-mode', 'user-agent', 'x-github-api-version'],
-    credential_input: 'replace_exact', placeholder: 'token serverware-github-placeholder-v1',
+    credential_input: 'replace_exact', placeholder: 'token catchplate-github-placeholder-v1',
     query_mode: 'githubRestV1', response_mode: 'unfiltered_json_or_empty_v2', ...changes});
 }
 function catalog({credentials = [appCredential()], rules = [], app = capability(), pat = capability(false), allowed = [ORIGIN], replacement = null} = {}) {
@@ -52,9 +52,9 @@ function catalog({credentials = [appCredential()], rules = [], app = capability(
     credentialInputModes: ['insert', 'replace_exact']});
   value.capabilities.github = pat; value.capabilities.github_app = app;
   value.capabilities.github_app_key_replacement = replacement;
-  value.capabilities.application_proxy_authentication = {schema: 'serverware.operatorProxyAuthentication/v1',
+  value.capabilities.application_proxy_authentication = {schema: 'catchplate.operatorProxyAuthentication/v1',
     modes: ['bearer', 'basic_and_bearer_v1'], path: '/api/operator-demo/applications/proxy-authentication'};
-  value.capabilities.static_key_replacement = {schema: 'serverware.operatorStaticKeyReplacement/v1',
+  value.capabilities.static_key_replacement = {schema: 'catchplate.operatorStaticKeyReplacement/v1',
     path: '/api/operator-demo/credentials/replace-key', credential_types: ['bearer', 'header']};
   return value;
 }
@@ -180,7 +180,7 @@ const tests = [
       assert.deepEqual(clone(plain.run('githubAppCapabilityDescriptor(input)', allowed)), capability(true, allowed));
       assert.deepEqual(project(catalog({app: capability(true, allowed)})).capabilities.github_app, capability(true, allowed));
     }
-    const mutations = [{schema: 'serverware.operatorGithub/v1'}, {connection_type: 'github_token_v1'},
+    const mutations = [{schema: 'catchplate.operatorGithub/v1'}, {connection_type: 'github_token_v1'},
       {create_credential_path: '/api/operator-demo/credentials/github-token'}, {create_rule_path: '/arbitrary'},
       {api_origin: 'https://other.example.test'}, {destination_allowed: 1}, {operation_bundles: [READ]},
       {sdk_auth_token: PEM}, {placeholder: 'Bearer dummy'}, {query_mode: 'orderedFormV1'},
@@ -390,7 +390,7 @@ const tests = [
     f.release(); await pending;
     assert.equal(f.raw.credentials[0].credential_generation, 2); assert.equal(f.workspace.state.uncertain, false);
     assert.deepEqual({apps: f.raw.applications, rules: f.raw.access_rules, policy: f.raw.policy, binding: f.raw.credentials[0].github_app}, before);
-    assert.match(f.node('github-app-replace-status').textContent, /replacement saved in Serverware/);
+    assert.match(f.node('github-app-replace-status').textContent, /replacement saved in Catchplate/);
     assert.match(f.node('github-app-replace-status').textContent, /Delete the old private key separately in GitHub/); f.clean();
   }],
   ['replacement cancellation navigation invalid input and shared holds clear without writes', async () => {

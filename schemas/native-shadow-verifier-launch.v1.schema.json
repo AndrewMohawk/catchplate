@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-verifier-launch.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-verifier-launch.v1.schema.json",
   "title": "Protected external native-shadow verifier runtime launch",
   "description": "Canonical ASCII JSON without a trailing newline, independently installed at the source-fixed root-owned 0400 launch path. This object selects runtime custody only; it does not issue verifier policy, keys, nonce, or a new operation interval.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "runtimeImage", "verifierConfigurationSha256"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeShadowVerifierLaunch/v1"},
+    "apiVersion": {"const": "catchplate.nativeShadowVerifierLaunch/v1"},
     "runtimeImage": {"$ref": "#/$defs/runtimeImage"},
     "verifierConfigurationSha256": {"$ref": "#/$defs/sha256"}
   },
@@ -23,7 +23,7 @@
       "required": ["profile", "imagePath", "imageSha256", "interpreterSha256", "entrypointSha256"],
       "properties": {
         "profile": {"const": "sealed-memfd-squashfs-v1"},
-        "imagePath": {"const": "/opt/serverware/native-shadow-verifier-runtime.squashfs"},
+        "imagePath": {"const": "/opt/catchplate/native-shadow-verifier-runtime.squashfs"},
         "imageSha256": {"$ref": "#/$defs/sha256"},
         "interpreterSha256": {"$ref": "#/$defs/sha256"},
         "entrypointSha256": {"$ref": "#/$defs/sha256"}

@@ -95,7 +95,7 @@ def main(argv=None):
         return 0
     owner = None
     try:
-        from serverware.authority_local_cohort import LocalCohortIssuer, LocalCohortError, io
+        from catchplate.authority_local_cohort import LocalCohortIssuer, LocalCohortError, io
         try:
             owner = LocalCohortIssuer.open(**arguments(argv))
             owner.publish()

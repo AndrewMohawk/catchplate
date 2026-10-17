@@ -17,8 +17,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_jit_primary_chunks as source
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_jit_primary_chunks as source
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
 
 QUERIES = (
@@ -84,7 +84,7 @@ class JitPrimaryChunkControls(unittest.TestCase):
                 work = meter()
                 sql, parameters = source.chunk_query(query(slot), ordinal=0, work=work)
                 self.assertEqual(parameters, (value,))
-                self.assertIn(f"FROM serverware_metadata.{table} AS target", sql)
+                self.assertIn(f"FROM catchplate_metadata.{table} AS target", sql)
                 self.assertIn(f"WHERE target.{column} IS NOT DISTINCT FROM %s LIMIT 2", sql)
                 self.assertIn("AS MATERIALIZED", sql)
                 self.assertIn("pg_catalog.convert_to", sql)

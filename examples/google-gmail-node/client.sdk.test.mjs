@@ -8,10 +8,10 @@ import { gmail, auth } from '@googleapis/gmail';
 import { MockAgent, ProxyAgent, request } from 'undici';
 import { configuration, createClient, perform } from './client.mjs';
 
-const env = { SERVERWARE_PROXY_URL: 'https://proxy.example:443',
-  SERVERWARE_APP_ID: '11111111-2222-4333-8444-555555555555',
-  SERVERWARE_PROXY_TOKEN: Buffer.alloc(32, 7).toString('base64url'),
-  SERVERWARE_CA_FILE: '/inner.pem', SERVERWARE_PROXY_CA_FILE: '/outer.pem' };
+const env = { CATCHPLATE_PROXY_URL: 'https://proxy.example:443',
+  CATCHPLATE_APP_ID: '11111111-2222-4333-8444-555555555555',
+  CATCHPLATE_PROXY_TOKEN: Buffer.alloc(32, 7).toString('base64url'),
+  CATCHPLATE_CA_FILE: '/inner.pem', CATCHPLATE_PROXY_CA_FILE: '/outer.pem' };
 const readFile = path => Buffer.from('-----BEGIN CERTIFICATE-----\nsynthetic-' + path);
 const LIST = '/gmail/v1/users/me/messages?maxResults=5&labelIds=INBOX';
 const DETAIL = id => '/gmail/v1/users/me/messages/' + id + '?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date';
@@ -55,11 +55,11 @@ test('real SDK ordered queries, preserved headers, pagination and returned-ID me
     assert.deepEqual(requests.map(row => new URL(row.url).pathname + new URL(row.url).search), replies.map(row => row[0]));
     for (const { options } of requests) {
       assert.deepEqual(options.headers, {
-        accept: 'application/json', 'accept-encoding': 'gzip', authorization: 'Bearer serverware-gmail-placeholder-v1',
+        accept: 'application/json', 'accept-encoding': 'gzip', authorization: 'Bearer catchplate-gmail-placeholder-v1',
         'user-agent': 'google-api-nodejs-client/9.2.0 (gzip)',
         'x-goog-api-client': 'gdcl/9.2.0 gl-node/' + process.versions.node,
       });
-      assert.ok(!JSON.stringify(options.headers).includes(env.SERVERWARE_PROXY_TOKEN));
+      assert.ok(!JSON.stringify(options.headers).includes(env.CATCHPLATE_PROXY_TOKEN));
       assert.equal(options.maxRedirections, 0);
       assert.equal(options.dispatcher, client.proxy);
     }

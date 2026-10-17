@@ -18,19 +18,19 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_retention as retention
-from serverware import authority_revocation_persistence as coordinator
-from serverware import authority_revocation_wire as reader
-from serverware.authority_store import planner_connection as admission
+from catchplate import authority_contract
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_retention as retention
+from catchplate import authority_revocation_persistence as coordinator
+from catchplate import authority_revocation_wire as reader
+from catchplate.authority_store import planner_connection as admission
 import test_authority_revocation_plan as oracle
 import test_authority_revocation_wire as wire_oracle
 
 
-CONTEXT_SCHEMA = "serverware.policyAuthorityRevocationEvaluationContext/v1"
-RECORD_SCHEMA = "serverware.policyAuthorityRevocationRetainedPlan/v1"
-WRITER_DATABASE_IDENTITY = ("serverware_policy_authority_planner_writer",
+CONTEXT_SCHEMA = "catchplate.policyAuthorityRevocationEvaluationContext/v1"
+RECORD_SCHEMA = "catchplate.policyAuthorityRevocationRetainedPlan/v1"
+WRITER_DATABASE_IDENTITY = ("catchplate_policy_authority_planner_writer",
     "CN=synthetic-writer", "23", "CN=synthetic-writer-issuer")
 
 

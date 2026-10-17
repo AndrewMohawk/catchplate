@@ -32,15 +32,15 @@ if __name__ == "__main__":
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from scripts import test_authority_jit_request as original
-from serverware import authority_contract as contract
-from serverware import authority_jit_private_request as private
-from serverware import authority_planner as planner
-from serverware import authority_request_commitment as commitment
-from serverware import authority_service as service
-from serverware import authority_transition_core as core
-from serverware import authority_transition_quota as quota
-from serverware import db
-from serverware.authority_store import authority_dispatch, executor_v9
+from catchplate import authority_contract as contract
+from catchplate import authority_jit_private_request as private
+from catchplate import authority_planner as planner
+from catchplate import authority_request_commitment as commitment
+from catchplate import authority_service as service
+from catchplate import authority_transition_core as core
+from catchplate import authority_transition_quota as quota
+from catchplate import db
+from catchplate.authority_store import authority_dispatch, executor_v9
 
 
 PRIVATE_FIELDS = {"url", "canonical_request", "redacted_display"}
@@ -79,12 +79,12 @@ def extracted(envelope=None):
 
 def typed_request(arguments):
     typed = service._synthesize_business_arguments("jit.request", arguments)
-    authorization = {"schema": "serverware.policyAuthorityV9Authorization/v1",
+    authorization = {"schema": "catchplate.policyAuthorityV9Authorization/v1",
         "operation": "jit.request", "handler": "ensure_jit_approval_request",
         "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST,
         "arguments": typed}
-    digest = original.framed("serverware.policyAuthorityV9Request/v1", authorization)
-    return {"schema": "serverware.policyAuthorityV9Request/v1", "operation": "jit.request",
+    digest = original.framed("catchplate.policyAuthorityV9Request/v1", authorization)
+    return {"schema": "catchplate.policyAuthorityV9Request/v1", "operation": "jit.request",
         "handler": "ensure_jit_approval_request", "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST,
         "arguments": typed, "requestDigest": digest,
         "operationId": commitment.operation_id("jit.request", digest)}
@@ -112,12 +112,12 @@ class PrivateJitIngressTests(unittest.TestCase):
         _operation, envelope = original.dispatch_input(values)
         raw = authority_dispatch._authority_marshal_value(values)
         expected = {key: copy.deepcopy(value) for key, value in raw.items() if key not in PRIVATE_FIELDS}
-        expected.update(schema="serverware.jitRequestCommitments/v2",
+        expected.update(schema="catchplate.jitRequestCommitments/v2",
             url_commitment=original.sha(raw["url"].encode("utf-8")),
             canonical_request_digest=original.sha(original.canonical(raw["canonical_request"])),
             redacted_display_digest=original.sha(original.canonical(raw["redacted_display"])),
             original_arguments_digest=original.sha(original.canonical(raw)))
-        self.assertEqual(envelope, {"schema": "serverware.policyAuthorityPrivateJitWriterInput/v2",
+        self.assertEqual(envelope, {"schema": "catchplate.policyAuthorityPrivateJitWriterInput/v2",
             "handler": "ensure_jit_approval_request", "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST,
             "arguments": expected, "privateDocuments": {key: raw[key] for key in PRIVATE_FIELDS}})
         self.assertEqual(set(expected), PUBLIC_FIELDS)
@@ -142,7 +142,7 @@ class PrivateJitIngressTests(unittest.TestCase):
         self.assertEqual(service._controlled_writer_request_digest("jit.request", public), digest)
         self.assertEqual(planner.typed_request_digest(request), digest)
         self.assertEqual(request["arguments"]["businessIntent"]["arguments"], public)
-        authorization = {"schema": "serverware.policyAuthorityV9Authorization/v1",
+        authorization = {"schema": "catchplate.policyAuthorityV9Authorization/v1",
             "operation": request["operation"], "handler": request["handler"],
             "operationManifestDigest": request["operationManifestDigest"], "arguments": request["arguments"]}
         wire = self.assert_no_private(authorization)
@@ -316,7 +316,7 @@ class PrivateJitIngressTests(unittest.TestCase):
         self.assertLess(source.index("_extract_v9_runtime_input("), source.index("_synthesize_business_arguments("))
         self.assertLess(source.index("_extract_v9_runtime_input("), source.index("authorization_material ="))
         raw = raw_arguments()
-        legacy = {"schema": "serverware.policyAuthorityControlledWriterInput/v1",
+        legacy = {"schema": "catchplate.policyAuthorityControlledWriterInput/v1",
             "handler": "ensure_jit_approval_request", "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST,
             "arguments": raw}
         self.assert_runtime_refused(legacy)

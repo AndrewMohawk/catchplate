@@ -11,7 +11,7 @@ not successful provider execution or an accepted pilot.
 
 The enclave entrypoint selector is `--measured-reconnect-v17`; it forwards to
 the actual gate's `--native-measured-reconnect-startup-v17` mode. The closed
-`serverware.nativeStartupConfiguration/v17` retains the 22-field v16 layout
+`catchplate.nativeStartupConfiguration/v17` retains the 22-field v16 layout
 and every non-browser owner, replacing `measuredSetup` with
 `measuredReconnect`. Enrollment's separate Setup authorizer remains present.
 Older selectors/decoders and the default encrypted-v6 selector are unchanged;
@@ -45,7 +45,7 @@ a second provider contact.
 
 `native_oauth_reconnect_owner.Owner(broker, message)` receives only the actual
 measured broker owner. Its closed configure message selects
-`serverware.nativeOAuthReconnectExchangeConfiguration/v1` and the previously
+`catchplate.nativeOAuthReconnectExchangeConfiguration/v1` and the previously
 frozen configuration18, including exact `reconnectLimits` (7 affected lineages,
 64 retained histories, 3600-second maximum grant). It verifies the retained
 independently signed authority configuration and separate roots. No browser
@@ -87,7 +87,7 @@ or treat an acquired historical row as current permission.
 
 ## Private dispatcher contract
 
-The channel is `serverware.nativeOAuthReconnectChannel/v1`. Messages are closed:
+The channel is `catchplate.nativeOAuthReconnectChannel/v1`. Messages are closed:
 
 The complete message, including envelope and base64 overhead, must fit the
 existing 8 MiB frame. Nominal intent/original bounds are not permission to
@@ -136,7 +136,7 @@ one token contact. Exact TLS response bytes and minimal issued material are
 sealed and must receive a definite CAPTURE receipt before identity processing.
 
 Only source-fixed Google/X token and identity hosts/paths are reachable through
-`serverware.nativeOAuthReconnectTls/v1`. MemoryBIO TLS retains certificate,
+`catchplate.nativeOAuthReconnectTls/v1`. MemoryBIO TLS retains certificate,
 hostname and configured-root verification inside the measured helper; the
 parent sees ciphertext only. The fixed reader preserves bounded framing and
 refuses redirects. No arbitrary URL, ambient trust or host token plaintext is

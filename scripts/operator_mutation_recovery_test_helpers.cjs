@@ -2,7 +2,7 @@
 const assert = require('node:assert/strict');
 // Independent literal oracle. No production helper is imported by privacy
 // assertions, and no other browser-storage key/value is exempted.
-const MUTATION_REVIEW_KEY = 'serverware.operator.mutation.review.v1';
+const MUTATION_REVIEW_KEY = 'catchplate.operator.mutation.review.v1';
 const MUTATION_REVIEW_VALUE = 'required';
 function mutationReviewStorage() {
   const values = new Map();

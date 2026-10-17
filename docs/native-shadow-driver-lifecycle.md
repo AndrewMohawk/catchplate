@@ -17,7 +17,7 @@ after, the original lifetime. Startup must finish before that cutoff.
 
 The original parent becomes a subreaper before its actual driver clone exists,
 refuses preexisting descendants, and creates one fresh protected fixed listener
-at `/run/serverware-shadow-driver-lifecycle/listener.sock`. Existing path residue
+at `/run/catchplate-shadow-driver-lifecycle/listener.sock`. Existing path residue
 is a refusal, not an automatic adoption or deletion. Recovery/removal remains
 an explicit operator action after proving all retained owners have exited.
 Root owns inspection and signal capabilities; this is trusted host machinery,

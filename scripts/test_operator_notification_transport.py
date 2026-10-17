@@ -23,7 +23,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from serverware import operator_notification_transport as t
+from catchplate import operator_notification_transport as t
 
 SECRET = "synthetic-URL-path-canary-never-public"
 URL = "https://receiver.example.test/" + SECRET + "?token=synthetic-query-canary"
@@ -31,7 +31,7 @@ SLACK = "https://hooks.slack.com/services/T123/B456/synthetic_slack_canary"
 
 
 def payload() -> dict:
-    return {"schema": "serverware.operatorNotification/v1", "channel": "audit_log",
+    return {"schema": "catchplate.operatorNotification/v1", "channel": "audit_log",
         "source": {"event_id": "1", "event_hash": "a" * 64,
             "event_type": "credential.created", "created_at": "2026-10-10T00:00:00Z"},
         "summary": "Synthetic test, no action required", "review_path": "/#audit",
@@ -368,7 +368,7 @@ class TlsTests(unittest.TestCase):
         from cryptography.hazmat.primitives import hashes, serialization
         from cryptography.hazmat.primitives.asymmetric import rsa
         from cryptography.x509.oid import NameOID
-        cls.temp = tempfile.TemporaryDirectory(prefix="serverware-notification-tls-")
+        cls.temp = tempfile.TemporaryDirectory(prefix="catchplate-notification-tls-")
         cls.root = Path(cls.temp.name)
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "synthetic notification fixture")])

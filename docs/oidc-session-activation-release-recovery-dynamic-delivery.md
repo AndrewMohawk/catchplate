@@ -13,7 +13,7 @@ ledger or renewed processing allowance is available.
 ## Independent originals and listeners
 
 The protected root-owned trust directory is
-`/run/serverware/oidc-session-activation-release-recovery-dynamic-trust`.
+`/run/catchplate/oidc-session-activation-release-recovery-dynamic-trust`.
 Its five regular, single-link, root-owned mode 0444 files are:
 
 - `root-public-key.pem` (16 KiB maximum).
@@ -30,8 +30,8 @@ Exactly two systemd descriptors arrive at 3/4 in either name order:
 
 | Descriptor name | Fixed pathname | Path ownership/mode |
 | --- | --- | --- |
-| `serverware-oidc-session-activation-release-recovery-bootstrap` | `/run/serverware/oidc-session-activation-token-release/recovery-bootstrap.sock` | root:65532, 0660 |
-| `serverware-oidc-session-activation-token-release` | `/run/serverware/oidc-session-activation-token-release/release.sock` | 65502:65532, 0660 |
+| `catchplate-oidc-session-activation-release-recovery-bootstrap` | `/run/catchplate/oidc-session-activation-token-release/recovery-bootstrap.sock` | root:65532, 0660 |
+| `catchplate-oidc-session-activation-token-release` | `/run/catchplate/oidc-session-activation-token-release/release.sock` | 65502:65532, 0660 |
 
 Both are root-created listeners. The first accepted staging peer must be kernel
 UID/GID 65532 before bytes are read. There is one accepted request and no alternate
@@ -90,9 +90,9 @@ The original cumulative work charges still apply independently.
 ## Opt-in packaging boundary
 
 Three new uninstalled units form this path:
-`serverware-oidc-session-activation-release-recovery-bootstrap.socket`,
-`serverware-oidc-session-activation-release-recovery-dynamic.socket` and
-`serverware-oidc-session-activation-release-recovery-dynamic.service.in`.
+`catchplate-oidc-session-activation-release-recovery-bootstrap.socket`,
+`catchplate-oidc-session-activation-release-recovery-dynamic.socket` and
+`catchplate-oidc-session-activation-release-recovery-dynamic.service.in`.
 They conflict with the static and LIVE release service/socket owners; there is
 never a second owner of `release.sock`. The service template binds the five-file
 trust directory, existing key and outcome base read-only. Its substitutions are

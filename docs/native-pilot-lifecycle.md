@@ -19,7 +19,7 @@ an approved installation or live pilot.
 
 ## Ownership and ordering
 
-`serverware.native_pilot_lifecycle` exposes a staged owner for an independently
+`catchplate.native_pilot_lifecycle` exposes a staged owner for an independently
 operated caller. Late inputs are supplied only after their actual predecessors
 exist; no future receiver PID, core or successful child result is fabricated.
 
@@ -64,7 +64,7 @@ The entrypoint admits that installed runtime before selecting exactly one of:
 
 There is no arbitrary module, executable or destination argument. Cold job
 destinations come only from the existing catalogue under
-`/etc/serverware/native-genesis-authority`. Input and approval names must be
+`/etc/catchplate/native-genesis-authority`. Input and approval names must be
 absent; no parent creation, overwrite, rollback or deletion is performed.
 The parent creates seals only for literal public observations, not approvals.
 
@@ -215,11 +215,11 @@ plus policy/action selection and literal predecessor clock reductions. No
 validator is mocked; no test proves a complete protected ceremony or application
 result. Native and runtime-artifact builds were not repeated.
 Source/harness/log evidence is at
-`codex-offload/serverware/engineering-builds/aa4547c5-lifecycle-inputs-iZure4/`
+`codex-offload/catchplate/engineering-builds/aa4547c5-lifecycle-inputs-iZure4/`
 under the operator's home directory.
 
 A metadata-only check on 2026-10-01 found no installed runtime roots,
-`/etc/serverware`, `/opt/serverware`, or any of the 30 adopted-cold resource
+`/etc/catchplate`, `/opt/catchplate`, or any of the 30 adopted-cold resource
 parents in the canonical host namespace. This does not inspect a remote guest
 or establish cloud resource absence. Kernel verity feature markers are present,
 but actual backing-store and protected-runtime acceptance remain unverified.
@@ -234,7 +234,7 @@ exchanges and both completion receipts, plus skip/repeat/premature/legacy refusa
 controls. Payloads are explicitly synthetic: this is not native receipt
 admission, genuine commissioning, independent approval or an executed business
 flow. Exact source, bounded harness and logs are retained under
-`codex-offload/serverware/engineering-builds/0a10a3a2-completion-transport-JnCBzd/`
+`codex-offload/catchplate/engineering-builds/0a10a3a2-completion-transport-JnCBzd/`
 in the operator's home directory. No runtime package rebuild or cloud action ran.
 
 The preceding `.414` source `90e10cbb` passes all **119 checks in twelve focused suites** in
@@ -253,7 +253,7 @@ All three historical `.414` Python exports built and passed exact-source observa
 156.890 seconds, with identical source manifests and no retry. They contain
 6,206 / 6,216 / 6,225 entries respectively. The exact source archive, focused
 log, export archives, observation logs and checksums are retained at
-`codex-offload/serverware/engineering-builds/90e10cbb-connected-lifecycle-FdUpzn/`
+`codex-offload/catchplate/engineering-builds/90e10cbb-connected-lifecycle-FdUpzn/`
 under the operator's home directory. These remain engineering-only exports,
 not approved packages or installed runtimes. The `.415` supervisor-only refresh
 above supersedes that supervisor export, not the conductor/authority snapshots.

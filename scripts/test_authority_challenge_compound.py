@@ -12,11 +12,11 @@ import json
 import unittest
 from unittest import mock
 
-from serverware import authority_challenge_compound as compound
-from serverware import authority_contract as contract
-from serverware import authority_challenge_chain as chain_module
-from serverware import authority_index_reader as reader
-from serverware.authority_query_read_work import (
+from catchplate import authority_challenge_compound as compound
+from catchplate import authority_contract as contract
+from catchplate import authority_challenge_chain as chain_module
+from catchplate import authority_index_reader as reader
+from catchplate.authority_query_read_work import (
     MAX_HASHES, MAX_INPUT_BYTES, MAX_JSON_NODES,
     QueryReadValidationLimits, _ValidationWork,
 )
@@ -178,7 +178,7 @@ class ChallengeCompoundTests(unittest.TestCase):
     def test_source_schedule_reports_all_actual_work_and_acquisition_totals(self):
         self.assertEqual(compound.PHASES, PHASES)
         binding = compound.schedule_binding()
-        self.assertEqual(binding["schema"], "serverware.policyAuthorityChallengeCompoundSchedule/v2")
+        self.assertEqual(binding["schema"], "catchplate.policyAuthorityChallengeCompoundSchedule/v2")
         self.assertEqual(binding["sourceRevision"], contract.SOURCE_REVISION)
         self.assertEqual(binding["passes"], 1)
         self.assertEqual(binding["stageLimits"], {

@@ -55,13 +55,13 @@ have started, a failure cannot emit replacement headers. `_discard_scope` and
 the send wrapper erase the terminal's response and private continuation refs.
 
 Success uses
-`serverware.oidcSessionActivationCompletionRecoveryDeliveryResponse/v1`, purpose
+`catchplate.oidcSessionActivationCompletionRecoveryDeliveryResponse/v1`, purpose
 `release`, status `released`, session state `active`, and no automatic retry.
 The same schema/purpose identifies rejected-before-dispatch responses (400 by
 default, or an explicit source-selected error status) and fixed outcome-unknown
 503 responses without claiming current-session success.
 The distinct retained action uses
-`serverware.oidcSessionActivationCompletionRecoveryRetainedDeliveryResponse/v1`,
+`catchplate.oidcSessionActivationCompletionRecoveryRetainedDeliveryResponse/v1`,
 purpose `retained-release`, and success status `recovered`. Its own options/action
 routes use the same strict original grammar, Origin/CSRF and fresh WebAuthn/approval
 checks, selecting literal startup methods rather than accepting a profile field.

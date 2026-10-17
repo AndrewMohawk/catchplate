@@ -20,7 +20,7 @@ fn record(line: &str) -> Value {
     assert_eq!(fields, BTreeSet::from([
         "schema", "ordinal", "stage", "error_code", "scope_sha256", "policy_sha256",
     ]));
-    assert_eq!(value["schema"], "serverware.operatorStaticPreparationFailure/v1");
+    assert_eq!(value["schema"], "catchplate.operatorStaticPreparationFailure/v1");
     assert!((1..=64).contains(&value["ordinal"].as_u64().unwrap()));
     assert!(is_sha256_digest(value["scope_sha256"].as_str().unwrap()));
     assert!(value["policy_sha256"].is_null()

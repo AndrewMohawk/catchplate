@@ -9,8 +9,8 @@ No successful material object is accepted as authority input.
 ## Exact independent policy
 
 The signed and payload schemas are
-`serverware.signedOidcSessionActivationConsumeInputIssuerPolicy/v1` and
-`serverware.oidcSessionActivationConsumeInputIssuerPolicy/v1`. The purpose is
+`catchplate.signedOidcSessionActivationConsumeInputIssuerPolicy/v1` and
+`catchplate.oidcSessionActivationConsumeInputIssuerPolicy/v1`. The purpose is
 `issue-oidc-session-activation-consume-inputs`, with the actual source revision
 and `trusted-host-local` trust mode. The closed payload has ten fields:
 
@@ -21,9 +21,9 @@ and `trusted-host-local` trust mode. The closed payload has ten fields:
 
 `activationPlannerBootstrapDigest` is the framed identity of the full, separate
 original, under
-`serverware.oidcSessionActivationConsumeInputIssuerActivationPlannerBootstrapIdentity/v1`.
+`catchplate.oidcSessionActivationConsumeInputIssuerActivationPlannerBootstrapIdentity/v1`.
 The policy never embeds that original. Its own identity uses
-`serverware.oidcSessionActivationConsumeInputIssuerPolicyIdentity/v1`.
+`catchplate.oidcSessionActivationConsumeInputIssuerPolicyIdentity/v1`.
 Policy bytes are capped at 64 KiB, 512 nodes and depth six; the activation
 bootstrap retains its actual 4 MiB cap. Original and retained decoded bytes are
 bounded by the existing 64 MiB aggregate, with work charged before native work.

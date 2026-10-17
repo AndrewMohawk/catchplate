@@ -27,11 +27,11 @@ import (
 
 const (
 	xHost            = "api.x.com"
-	dummyToken       = "serverware-x-post-placeholder-v1" // Public, never a provider credential.
+	dummyToken       = "catchplate-x-post-placeholder-v1" // Public, never a provider credential.
 	maxTextBytes     = 16384
 	maxBodyBytes     = 32768
 	maxResponseBytes = 65536
-	unknownOutcome   = "X post outcome is unknown and it may already exist; inspect Serverware audit records and the X account before any further action; do not retry automatically"
+	unknownOutcome   = "X post outcome is unknown and it may already exist; inspect Catchplate audit records and the X account before any further action; do not retry automatically"
 )
 
 // An outcome error means invocation began, not that the provider rejected a
@@ -83,18 +83,18 @@ func postBody(text string) ([]byte, error) {
 
 func readConfig(getenv func(string) string) (config, error) {
 	if getenv("SSL_CERT_FILE") != "" || getenv("SSL_CERT_DIR") != "" {
-		return config{}, errors.New("unset SSL_CERT_FILE and SSL_CERT_DIR; use the explicit Serverware CA inputs")
+		return config{}, errors.New("unset SSL_CERT_FILE and SSL_CERT_DIR; use the explicit Catchplate CA inputs")
 	}
-	if getenv("SERVERWARE_X_POST_CONFIRM") != "post-once" {
+	if getenv("CATCHPLATE_X_POST_CONFIRM") != "post-once" {
 		return config{}, errors.New("single-post confirmation is required; no post attempted")
 	}
-	c := config{appID: getenv("SERVERWARE_APP_ID"), proxyToken: getenv("SERVERWARE_PROXY_TOKEN"),
-		caFile: getenv("SERVERWARE_CA_FILE"), proxyCAFile: getenv("SERVERWARE_PROXY_CA_FILE"),
-		text: getenv("SERVERWARE_X_POST_TEXT")}
-	p, err := url.Parse(getenv("SERVERWARE_PROXY_URL"))
+	c := config{appID: getenv("CATCHPLATE_APP_ID"), proxyToken: getenv("CATCHPLATE_PROXY_TOKEN"),
+		caFile: getenv("CATCHPLATE_CA_FILE"), proxyCAFile: getenv("CATCHPLATE_PROXY_CA_FILE"),
+		text: getenv("CATCHPLATE_X_POST_TEXT")}
+	p, err := url.Parse(getenv("CATCHPLATE_PROXY_URL"))
 	if err != nil || p.Scheme != "https" || p.Opaque != "" || p.User != nil || p.Host == "" ||
 		p.RawQuery != "" || p.ForceQuery || p.Fragment != "" || (p.Path != "" && p.Path != "/") || p.RawPath != "" {
-		return config{}, errors.New("SERVERWARE_PROXY_URL must be an HTTPS origin without credentials, query, or fragment")
+		return config{}, errors.New("CATCHPLATE_PROXY_URL must be an HTTPS origin without credentials, query, or fragment")
 	}
 	host := p.Hostname()
 	if host == xHost || net.ParseIP(host) != nil || len(host) > 253 || !strings.Contains(host, ".") {
@@ -116,10 +116,10 @@ func readConfig(getenv func(string) string) (config, error) {
 	decoded, err := base64.RawURLEncoding.DecodeString(c.proxyToken)
 	if !uuidPattern.MatchString(c.appID) || err != nil || len(decoded) != 32 ||
 		base64.RawURLEncoding.EncodeToString(decoded) != c.proxyToken {
-		return config{}, errors.New("set the saved application UUID and its issued SERVERWARE_PROXY_TOKEN")
+		return config{}, errors.New("set the saved application UUID and its issued CATCHPLATE_PROXY_TOKEN")
 	}
 	if c.caFile == "" {
-		return config{}, errors.New("set SERVERWARE_CA_FILE")
+		return config{}, errors.New("set CATCHPLATE_CA_FILE")
 	}
 	c.body, err = postBody(c.text)
 	if err != nil {
@@ -146,7 +146,7 @@ func readCAFile(path string) ([]byte, error) {
 func clientTLS(proxyHost string, proxyRoots *x509.CertPool, innerPEM []byte) (*tls.Config, error) {
 	innerRoots := x509.NewCertPool()
 	if proxyRoots == nil || !innerRoots.AppendCertsFromPEM(innerPEM) {
-		return nil, errors.New("configured Serverware CA file is not a PEM certificate bundle")
+		return nil, errors.New("configured Catchplate CA file is not a PEM certificate bundle")
 	}
 	outerRoots := proxyRoots.Clone()
 	combined := outerRoots.Clone()

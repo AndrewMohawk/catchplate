@@ -23,9 +23,9 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-import serverware
-from serverware import operator_google_managed_readiness as readiness
-from serverware import operator_publication as publication
+import catchplate
+from catchplate import operator_google_managed_readiness as readiness
+from catchplate import operator_publication as publication
 
 POLICY = "sha256:" + "1" * 64
 BINARY = "sha256:" + "2" * 64
@@ -48,9 +48,9 @@ def health():
 def owners(**modules):
     """Explicit inert import seams; no configured owner is executed."""
     with ExitStack() as stack:
-        stack.enter_context(patch.dict(sys.modules, {"serverware." + name: value for name, value in modules.items()}))
+        stack.enter_context(patch.dict(sys.modules, {"catchplate." + name: value for name, value in modules.items()}))
         for name, value in modules.items():
-            stack.enter_context(patch.object(serverware, name, value, create=True))
+            stack.enter_context(patch.object(catchplate, name, value, create=True))
         yield
 
 
@@ -69,7 +69,7 @@ class ReadinessTests(unittest.TestCase):
         return result, reader, snapshots
 
     def test_x_feature_is_bound_to_the_same_managed_gate_observation(self):
-        descriptor = {"schema": "serverware.operatorXAppReadGate/v1",
+        descriptor = {"schema": "catchplate.operatorXAppReadGate/v1",
             "adapter": "x.app_read.v1", "operation": "x.username.read"}
         received = {**health(), "operator_x_app_read": descriptor}
         result, reader, snapshots = self.observe(received, require_x=True)
@@ -86,7 +86,7 @@ class ReadinessTests(unittest.TestCase):
         self.assertFalse(self.observe(received, after=after, require_x=True)[0]["ready"])
 
     def test_missing_or_malformed_x_feature_does_not_change_legacy_readiness(self):
-        descriptor = {"schema": "serverware.operatorXAppReadGate/v1",
+        descriptor = {"schema": "catchplate.operatorXAppReadGate/v1",
             "adapter": "x.app_read.v1", "operation": "x.username.read"}
         for marker in (None, {}, True, {**descriptor, "extra": True},
                 {**descriptor, "schema": "old"}, {**descriptor, "operation": "x.write"},
@@ -100,7 +100,7 @@ class ReadinessTests(unittest.TestCase):
         self.assertFalse(self.observe(health(), require_x=True)[0]["ready"])
 
     def test_alchemy_feature_joins_the_same_health_policy_binary_and_identity(self):
-        descriptor = {"schema": "serverware.operatorAlchemyRpcReadGate/v1",
+        descriptor = {"schema": "catchplate.operatorAlchemyRpcReadGate/v1",
             "adapter": "alchemy.rpc_read.v1", "operation": "alchemy.rpc.read"}
         received = {**health(), "operator_alchemy_rpc_read": descriptor}
         result, reader, snapshots = self.observe(received, require_alchemy=True)
@@ -123,9 +123,9 @@ class ReadinessTests(unittest.TestCase):
             self.assertEqual(snapshots.call_count, 2)
 
     def test_missing_or_malformed_alchemy_descriptor_never_uses_other_capability(self):
-        descriptor = {"schema": "serverware.operatorAlchemyRpcReadGate/v1",
+        descriptor = {"schema": "catchplate.operatorAlchemyRpcReadGate/v1",
             "adapter": "alchemy.rpc_read.v1", "operation": "alchemy.rpc.read"}
-        x_descriptor = {"schema": "serverware.operatorXAppReadGate/v1",
+        x_descriptor = {"schema": "catchplate.operatorXAppReadGate/v1",
             "adapter": "x.app_read.v1", "operation": "x.username.read"}
         for marker in (None, {}, True, {**descriptor, "extra": True}, x_descriptor,
                 {**descriptor, "schema": "old"}, {**descriptor, "operation": "alchemy.rpc.write"},
@@ -141,7 +141,7 @@ class ReadinessTests(unittest.TestCase):
         self.assertFalse(self.observe(health(), require_alchemy=True)[0]["ready"])
 
     def test_alchemy_pending_or_changed_pair_is_not_a_cached_capability(self):
-        descriptor = {"schema": "serverware.operatorAlchemyRpcReadGate/v1",
+        descriptor = {"schema": "catchplate.operatorAlchemyRpcReadGate/v1",
             "adapter": "alchemy.rpc_read.v1", "operation": "alchemy.rpc.read"}
         received = {**health(), "operator_alchemy_rpc_read": descriptor}
         self.assertTrue(self.observe(received, require_alchemy=True)[0]["ready"])
@@ -249,7 +249,7 @@ class ReadinessTests(unittest.TestCase):
 class ReaderTests(unittest.TestCase):
     def setUp(self):
         names = {"_health_object", "loaded_gate_status", "loaded_policy_hash"}
-        tree = ast.parse((ROOT / "serverware/operator_demo_store.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/operator_demo_store.py").read_text())
         selected = ast.Module(body=[node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names],
             type_ignores=[])
         self.assertEqual({node.name for node in selected.body}, names)

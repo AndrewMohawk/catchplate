@@ -21,12 +21,12 @@ from cryptography.hazmat.primitives import serialization
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import native_pilot_runtime_evidence as evidence
+from catchplate import native_pilot_runtime_evidence as evidence
 from test_native_pilot_closure_set import canonical, merkle_fixture, sha, synthetic
 from test_native_pilot_generation_scope import NOW, encoded, fixture as scope_fixture, key_fixture, signed_message
 
-ASSIGNMENT_DOMAIN = "serverware.policyShadowAssignment/v2"
-RECEIPT_DOMAIN = "serverware.policyRuntimeAttestation/v2"
+ASSIGNMENT_DOMAIN = "catchplate.policyShadowAssignment/v2"
+RECEIPT_DOMAIN = "catchplate.policyRuntimeAttestation/v2"
 MEMBER_KEYS = ("teeAttestation", "ingressSigning", "activeDecisionSigning", "shadowSigning")
 RUNTIME_FIELDS = ("instanceId", "spiffeId", "bootIdSha256", "teePlatform", "teeEvidenceSha256",
     "teeMeasurementSha256", "teeAttestationKeyId", "teeAttestationKeySpkiSha256", "ingressSigningKeyId",
@@ -37,7 +37,7 @@ RUNTIME_FIELDS = ("instanceId", "spiffeId", "bootIdSha256", "teePlatform", "teeE
 def signed(payload, *, domain, kind, label):
     key, public = key_fixture(label)
     return {"apiVersion": domain, "kind": kind,
-        "canonicalProfile": "serverware.canonicalJson/ascii-integer-v1", "signatureDomain": domain,
+        "canonicalProfile": "catchplate.canonicalJson/ascii-integer-v1", "signatureDomain": domain,
         "payload": payload, "payloadSha256": sha(canonical(payload)), "signatureAlgorithm": "Ed25519",
         "signingKeyId": public["keyId"], "signingKeySpkiSha256": public["keySpkiSha256"],
         "signature": encoded(key.sign(signed_message(domain, payload)))}
@@ -89,7 +89,7 @@ def fixture(*, assignment_original=None):
             "keySpkiSha256": public["keySpkiSha256"], "publicKeyPem": key.public_key().public_bytes(
                 serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode("ascii"),
             "notBeforeUnixNanos": NOW - 20_000_000_000, "notAfterUnixNanos": NOW + 90_000_000_000})
-    trust = {"apiVersion": "serverware.policyShadowGenerationTrust/v1", "trustClass": "production-pinned",
+    trust = {"apiVersion": "catchplate.policyShadowGenerationTrust/v1", "trustClass": "production-pinned",
         "selfSigned": False, "manifestRevision": 1, "issuedAtUnixNanos": NOW - 10_000_000_000,
         "expiresAtUnixNanos": NOW + 60_000_000_000, "revocationGeneration": 1,
         "revocationRootSha256": synthetic("runtime-evidence-revocation"),
@@ -105,7 +105,7 @@ def fixture(*, assignment_original=None):
         trust[name] = synthetic("unused-purpose/" + name)
     member = members[1]
     record = {"fleetId": fleet["fleetId"], "membershipRevision": 7, "memberOrdinal": 2,
-        "memberId": sha(b"serverware.policyShadowFleetMember/v1\0" + canonical(member)),
+        "memberId": sha(b"catchplate.policyShadowFleetMember/v1\0" + canonical(member)),
         **{name: member[name] for name in ("instanceId", "bootIdSha256", "spiffeId", "teePlatform", "teeMeasurementSha256")},
         "teeEvidenceSha256": synthetic("signed-startup-evidence-reference-not-a-quote"),
         "roleKeysDigest": synthetic("signed-existing-startup-role-keys-digest")}
@@ -157,7 +157,7 @@ class RuntimeEvidenceTests(unittest.TestCase):
             self.refused(f)
         f = copy.deepcopy(base)
         envelope = json.loads(f["fragment"]["receiptOriginal"])
-        envelope["signatureDomain"] = "serverware.policyShadowRuntimeAttestationVerification/v2"
+        envelope["signatureDomain"] = "catchplate.policyShadowRuntimeAttestationVerification/v2"
         f["fragment"]["receiptOriginal"] = canonical(envelope).decode("ascii")
         self.refused(f)
         f = copy.deepcopy(base); f["fragment"]["issuer"]["keyId"] = key_fixture("assignment")[1]["keyId"]
@@ -166,7 +166,7 @@ class RuntimeEvidenceTests(unittest.TestCase):
     def test_assignment_signature_payload_hash_and_version(self):
         base = fixture()
         for field, value in (("signature", encoded(bytes(64))), ("payloadSha256", synthetic("changed-payload")),
-                ("apiVersion", "serverware.policyShadowAssignment/v1")):
+                ("apiVersion", "catchplate.policyShadowAssignment/v1")):
             f = copy.deepcopy(base); envelope = json.loads(f["arguments"]["assignment_original"])
             envelope[field] = value; f["arguments"]["assignment_original"] = canonical(envelope)
             self.refused(f)
@@ -206,7 +206,7 @@ class RuntimeEvidenceTests(unittest.TestCase):
         for path in ("spiffe://example.test/runtime/a%2Fb", "spiffe://a-b.example.test/runtime/a:b"):
             f = copy.deepcopy(base); member = f["assignment"]["fleet"]["members"][1]
             member["spiffeId"] = path; f["receipt"]["record"].update(spiffeId=path,
-                memberId=sha(b"serverware.policyShadowFleetMember/v1\0" + canonical(member)))
+                memberId=sha(b"catchplate.policyShadowFleetMember/v1\0" + canonical(member)))
             store_assignment(f, rehash=True); store_receipt(f)
             self.assertEqual(derive(f)["spiffeId"], path)
         for path in ("spiffe://EXAMPLE.test/runtime/a", "spiffe://example.test/runtime/..",
@@ -236,7 +236,7 @@ class RuntimeEvidenceTests(unittest.TestCase):
             self.refused(f)
         f = copy.deepcopy(base)
         f["fragment"]["receiptOriginal"] = canonical({"apiVersion":
-            "serverware.policyShadowRuntimeAttestationHandoff/v2", "receipt": json.loads(f["fragment"]["receiptOriginal"])}).decode("ascii")
+            "catchplate.policyShadowRuntimeAttestationHandoff/v2", "receipt": json.loads(f["fragment"]["receiptOriginal"])}).decode("ascii")
         self.refused(f)
 
 

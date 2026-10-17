@@ -1,0 +1,129 @@
+"""Enclave-only validation of exact controlled-writer refresh originals.
+
+The public configuration root is admitted before the helper sees a response.
+An observed payload, server TLS certificate, or claimed commit is not a receipt.
+This module has no signing key and exports no generic verifier RPC.
+"""
+from __future__ import annotations
+
+import hashlib
+import time
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from catchplate import native_oauth_refresh as m
+
+CONFIG = "catchplate.policyAuthorityServiceConfiguration/v6"
+SIGNED_CONFIG = "catchplate.signedPolicyAuthorityServiceConfiguration/v6"
+REQUEST = "catchplate.policyAuthorityRuntimeRequest/v2"
+RESPONSE = "catchplate.policyAuthorityMeasuredRefreshRuntimeResponse/v1"
+INPUT = "catchplate.policyAuthorityControlledWriterInput/v1"
+RESULT = "catchplate.policyAuthorityControlledWriterResult/v2"
+POLICY = "catchplate.oauthMeasuredRefreshAuthorityPolicy/v1"
+REQUEST_FIELDS = frozenset({"schema", "requestId", "operation", "input", "configurationDigest",
+    "operationManifestDigest", "startedMonotonicNs", "deadlineMonotonicNs"})
+RESPONSE_FIELDS = frozenset({"schema", "requestId", "operation", "configurationDigest", "requestDigest",
+    "issuedAtEpochNs", "deadlineMonotonicNs", "fence", "result", "resultDigest", "commitReceiptDigest",
+    "witnessCommitDigest", "attestationReceiptDigest", "attestationConsumptionReceipt",
+    "attestationConsumptionReceiptDigest", "authorityConfigurationOriginal", "signature"})
+
+
+def domain(name, *frames):
+    value = hashlib.sha256(name.encode("ascii") + b"\0")
+    for frame in frames:
+        value.update(len(frame).to_bytes(8, "big")); value.update(frame)
+    return "sha256:" + value.hexdigest()
+
+
+def spki(key):
+    return m.sha(key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo))
+
+
+class Receipts:
+    def __init__(self, config):
+        self.config = config
+        self.root = Ed25519PublicKey.from_public_bytes(m.decoded(config["authorityRootPublicKey"], 32, 32))
+        m.require(spki(self.root) == config["authorityRootSpkiSha256"])
+        self.retained_configuration = None
+
+    def verify(self, originals, expected, *, started, expires):
+        m.require(type(originals) is dict and set(originals) == {"requestOriginal", "responseOriginal", "currentnessBarrierSha256"})
+        request_raw = m.decoded(originals["requestOriginal"], 3 * 1024 * 1024)
+        response_raw = m.decoded(originals["responseOriginal"], 6 * 1024 * 1024)
+        request = m.document(request_raw, 3 * 1024 * 1024)
+        response = m.document(response_raw, 6 * 1024 * 1024)
+        m.require(set(request) == REQUEST_FIELDS and request["schema"] == REQUEST
+            and set(response) == RESPONSE_FIELDS and response["schema"] == RESPONSE)
+        arguments = request["input"]["arguments"]
+        m.require(type(arguments) is dict and set(arguments) == set(expected) | {"evidence"}
+            and {name: value for name, value in arguments.items() if name != "evidence"} == expected)
+        proof = arguments["evidence"]["statement"]
+        m.require(proof["inputSha256"] == m.sha(m.canonical(expected))
+            and proof["credentialId"] == expected["credential_id"]
+            and proof["enrollmentSha256"] == m.sha(m.decoded(expected["enrollment_original"], 32768)))
+        configuration_raw = m.decoded(response["authorityConfigurationOriginal"], 1024 * 1024)
+        configuration = m.document(configuration_raw, 1024 * 1024, exact=False)
+        m.require(set(configuration) == {"schema", "payload", "signature"} and configuration["schema"] == SIGNED_CONFIG)
+        payload = configuration["payload"]
+        self.root.verify(m.decoded(configuration["signature"], 64, 64), domain(SIGNED_CONFIG, m.canonical(payload)).encode("ascii"))
+        m.require(payload["schema"] == CONFIG and payload["sourceRevision"] == self.config["sourceRevision"])
+        policy = payload["oauthMeasuredRefreshPolicy"]
+        m.require(policy["schema"] == POLICY and policy["deploymentId"] == self.config["deploymentId"]
+            and policy["controlPlaneConfigurationDigest"] == self.config["controlPlaneConfigurationDigest"]
+            and {name: policy[name] for name in self.config["limits"]} == self.config["limits"])
+        assignment = [entry for entry in policy["assignments"] if entry["holderId"] == self.config["identity"]["holderId"]
+            and entry["enrollmentSha256"] == proof["enrollmentSha256"]]
+        m.require(len(assignment) == 1)
+        assignment = assignment[0]
+        identity = self.config["identity"]
+        m.require(all(assignment[name] == identity[name] for name in identity)
+            and assignment["instanceId"] == self.config["instanceId"]
+            and expected["credential_id"] in assignment["credentialIds"])
+        application = self.config["applications"][assignment["providerId"]]
+        m.require(assignment["secretKekId"] == application["material"]["secretKekId"]
+            and assignment["applicationMaterialSha256"] == m.sha(m.canonical(application["material"]))
+            and assignment["providerTlsRootSha256"] == m.sha(application["tlsRootsPem"].encode("ascii"))
+            and assignment["enrollmentSha256"] == m.sha(m.decoded(application["enrollmentOriginal"], 32768))
+            and expected["enrollment_original"] == application["enrollmentOriginal"])
+        enrollment = m.document(m.decoded(application["enrollmentOriginal"], 32768), 32768, exact=False)
+        enrollment_key = Ed25519PublicKey.from_public_bytes(m.decoded(policy["enrollmentRootPublicKeyBase64Url"], 32, 32))
+        m.require(spki(enrollment_key) == policy["enrollmentRootSpkiSha256"] and spki(enrollment_key) != spki(self.root))
+        enrollment_key.verify(m.decoded(enrollment["signatureBase64Url"], 64, 64),
+            b"catchplate.oauthApplicationEnrollment/v1\0" + m.canonical(enrollment["payload"]))
+        m.require(enrollment["payload"]["configurationDigest"] == self.config["controlPlaneConfigurationDigest"]
+            and enrollment["payload"]["deploymentId"] == self.config["deploymentId"])
+        verifier = payload["roles"]["verifier"]
+        signer = Ed25519PublicKey.from_public_bytes(m.decoded(verifier["signingPublicKeyBase64Url"], 32, 32))
+        m.require(spki(signer) == verifier["signingSpkiDigest"] == verifier["responseSigningSpkiDigest"]
+            and spki(signer) not in {spki(self.root), spki(enrollment_key), identity["keyId"]})
+        unsigned = {name: value for name, value in response.items() if name != "signature"}
+        signer.verify(m.decoded(response["signature"], 64, 64), domain(RESPONSE, m.canonical(unsigned)).encode("ascii"))
+        operation = "oauth.measured-refresh." + proof["phase"]
+        body = request["input"]
+        m.require(type(body) is dict and set(body) == {"schema", "handler", "operationManifestDigest", "arguments"}
+            and body["schema"] == INPUT and body["handler"] == "catchplate_policy_authority_" + operation.replace(".", "_").replace("-", "_")
+            and body["arguments"] == arguments and body["operationManifestDigest"] == request["operationManifestDigest"])
+        m.digest(request["operationManifestDigest"])
+        m.require(operation in payload["roles"]["planner"]["enabledOperations"]
+            and request["operation"] == response["operation"] == operation
+            and request["configurationDigest"] == response["configurationDigest"] == domain(CONFIG, m.canonical(payload))
+            and response["requestId"] == request["requestId"]
+            and response["requestDigest"] == domain(REQUEST, request_raw)
+            and response["deadlineMonotonicNs"] == request["deadlineMonotonicNs"]
+            and 0 < request["deadlineMonotonicNs"] - request["startedMonotonicNs"] <= 30_000_000_000
+            and started <= response["issuedAtEpochNs"] < expires and started <= time.time_ns() < expires
+            and type(response["fence"]) is int and response["fence"] > 0
+            and response["resultDigest"] == domain(RESULT, m.canonical(response["result"])))
+        for name in ("requestId", "commitReceiptDigest", "witnessCommitDigest", "attestationReceiptDigest"):
+            m.digest(response[name])
+        consumption = response["attestationConsumptionReceipt"]
+        m.require(type(consumption) is dict and response["attestationConsumptionReceiptDigest"] == domain(consumption["schema"], m.canonical(consumption)))
+        result = response["result"]
+        m.require(type(result) is dict and set(result) == {"ok", "operation", "requestDigest", "auditEventDigest", "idempotentReplay", "payload"}
+            and result["ok"] is True and result["idempotentReplay"] is False and result["operation"] == operation)
+        m.digest(result["requestDigest"]); m.digest(result["auditEventDigest"])
+        # All phases of one owner use the exact admitted authority original;
+        # a separately fresh recovery owner may admit a newer current config.
+        if self.retained_configuration is None:
+            self.retained_configuration = configuration_raw
+        m.require(configuration_raw == self.retained_configuration)
+        return result, assignment, originals["currentnessBarrierSha256"], enrollment["payload"]

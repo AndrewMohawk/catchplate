@@ -15,9 +15,9 @@ use std::collections::BTreeSet;
 use std::mem;
 
 const READINESS_FIXTURE_VERSION: &str =
-    "serverware/controller-readiness-fixture/v12";
+    "catchplate/controller-readiness-fixture/v12";
 const READINESS_PROTOCOL_VERSION: &str =
-    "serverware/controller-readiness/v12";
+    "catchplate/controller-readiness/v12";
 const MAX_FIXTURE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PROBE_RESULT_BYTES: usize = 8 * 1024 * 1024;
 type ReadinessError = PlanProtocolError;
@@ -275,7 +275,7 @@ impl SignedReadinessFixtureV12 {
         let signature = Signature::from_bytes(&signature_bytes);
         let mut signed = Vec::with_capacity(96);
         signed.extend_from_slice(
-            b"serverware/controller-readiness-fixture-signature/v12\0",
+            b"catchplate/controller-readiness-fixture-signature/v12\0",
         );
         signed.extend_from_slice(&self.fixture_sha256);
         trust
@@ -300,7 +300,7 @@ pub struct PinnedReadinessTrustV12 {
 }
 
 impl PinnedReadinessTrustV12 {
-    pub const VERSION: &'static str = "serverware/readiness-trust/v12";
+    pub const VERSION: &'static str = "catchplate/readiness-trust/v12";
 
     pub fn verify_binding(
         &self,

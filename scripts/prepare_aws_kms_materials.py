@@ -187,10 +187,10 @@ def write_json_private(path: Path, value: dict[str, Any], *, allow_overwrite: bo
 def main() -> None:
     parser = argparse.ArgumentParser(description="Prepare AWS KMS ciphertext material config for Nitro Recipient release.")
     parser.add_argument("--spec", required=True, help="JSON spec mapping material names to key_id, plaintext_path, and optional encryption_context.")
-    parser.add_argument("--out", default="/etc/serverware/kms-materials.json")
-    parser.add_argument("--aws-binary", default=os.getenv("SERVERWARE_AWS_CLI", "aws"))
+    parser.add_argument("--out", default="/etc/catchplate/kms-materials.json")
+    parser.add_argument("--aws-binary", default=os.getenv("CATCHPLATE_AWS_CLI", "aws"))
     parser.add_argument("--region", default=os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION"))
-    parser.add_argument("--timeout", type=float, default=float(os.getenv("SERVERWARE_AWS_KMS_TIMEOUT_SECONDS", "30")))
+    parser.add_argument("--timeout", type=float, default=float(os.getenv("CATCHPLATE_AWS_KMS_TIMEOUT_SECONDS", "30")))
     parser.add_argument("--allow-overwrite", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

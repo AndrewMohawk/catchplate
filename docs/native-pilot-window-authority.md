@@ -1,7 +1,7 @@
 # Pre-start driver window authority
 
 `scripts/authority/sign_native_pilot_window.py` issues the existing
-`serverware.nativeShadowDriverBootstrapWindow/v1` original for the fixed driver
+`catchplate.nativeShadowDriverBootstrapWindow/v1` original for the fixed driver
 configuration v4 / lifecycle v3. It supplies the previously missing issuer;
 it does not approve its own inputs, generate a key, install files, launch a
 driver, or establish a running pilot.
@@ -16,7 +16,7 @@ existing SHA256 of the raw 32-byte Ed25519 public key, not a new SPKI domain.
 The input is canonical ASCII JSON with no trailing LF, at most 1 MiB, and
 exactly four fields:
 
-- `apiVersion`: `serverware.nativePilotDriverWindowAuthorityInput/v1`.
+- `apiVersion`: `catchplate.nativePilotDriverWindowAuthorityInput/v1`.
 - `configurationOriginal`: literal approved driver configuration v4, at most
   65536 bytes, including lifecycle v3, image pins and the fixed key transport.
 - `deliveryConfigurationOriginal`: literal existing production-bridge C9 cold
@@ -43,7 +43,7 @@ not an automatic retry or refreshed timestamp.
 The output is the existing exact three-field envelope (`apiVersion`, `payload`,
 `signatureBase64url`), canonical ASCII without LF and at most 32768 bytes.
 The unchanged signing bytes are
-`serverware.nativeShadowDriverBootstrapWindow.signature/v1`, NUL, and the exact
+`catchplate.nativeShadowDriverBootstrapWindow.signature/v1`, NUL, and the exact
 canonical payload. The producer verifies its output signature and repeats the
 original-domain/deadline checks before returning it.
 

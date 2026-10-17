@@ -28,14 +28,14 @@ from scripts.check_operator_demo import Endpoint, require, token_file
 
 
 CREDENTIAL = "50124150-373d-4665-bcf2-225e9ea03a20"  # Public catalog ID, not a secret. gitleaks:allow
-CREDENTIAL_NAME = "serverware-live-smoke-757edf125b7444028059274a46ec7fd9-credential"
+CREDENTIAL_NAME = "catchplate-live-smoke-757edf125b7444028059274a46ec7fd9-credential"
 BINARY = "sha256:811082ac5e87f9ec05b9252cc53c180e965e563799b07235976c1654e6672d6e"
-ORIGIN = "https://serverware.example.com"
+ORIGIN = "https://catchplate.example.com"
 ORIGINS = ["https://demo-upstream:8443", "https://api.github.com", "https://registry.npmjs.org", "https://gmail.googleapis.com"]
 ROOT = Path("/data/.public-proxy-check")
 CA = Path("/data/mitmproxy/mitmproxy-ca-cert.pem")
 BODY = b'{"public_proxy_smoke":true}'
-DUMMY = "Bearer SERVERWARE_PUBLIC_PROXY_DUMMY"
+DUMMY = "Bearer CATCHPLATE_PUBLIC_PROXY_DUMMY"
 RESULT_FIELDS = set("schema ok mode run_id application_id credential_id rule_id policy_hash ca_sha256 peer connect_status http_status proxy_tls_verify_result response_body_sha256 response_body_bytes request_digest operation_digest".split())
 
 
@@ -103,7 +103,7 @@ class Control(smoke.LiveSmoke):
         self.control_ca = self.management_ca = None
         self.upstream_ca = ssl.create_default_context(cafile="/demo-upstream/ca.pem")
         self.expected_upstreams = ORIGINS
-        self.admin_token = token_file(Path("/run/secrets/serverware/admin.token"))
+        self.admin_token = token_file(Path("/run/secrets/catchplate/admin.token"))
         self.credential = self.client_token = self.wrong_token = None
         self.issued_tokens, self.observations, self.mutations = [], [], []
         self.policy_hash = None
@@ -146,12 +146,12 @@ class Control(smoke.LiveSmoke):
         return resource, issued, current
 
     def authorization_hash(self):
-        expected = {"SERVERWARE_OPERATOR_DEMO": "1", "SERVERWARE_RELEASE_CHANNEL": "dev",
-            "SERVERWARE_PROCESS_MODE": "serverware-control-plane", "SERVERWARE_KEY_RELEASE_REQUIRED": "0",
-            "SERVERWARE_METADATA_STORE_BACKEND": "sqlite", "SERVERWARE_DATA_DIR": "/data"}
+        expected = {"CATCHPLATE_OPERATOR_DEMO": "1", "CATCHPLATE_RELEASE_CHANNEL": "dev",
+            "CATCHPLATE_PROCESS_MODE": "catchplate-control-plane", "CATCHPLATE_KEY_RELEASE_REQUIRED": "0",
+            "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite", "CATCHPLATE_DATA_DIR": "/data"}
         require(all(os.environ.get(key) == value for key, value in expected.items())
-                and not os.environ.get("SERVERWARE_MASTER_KEY") and not os.environ.get("SERVERWARE_MASTER_KEY_UNSEAL_COMMAND"), "existing development custody required")
-        key, database = Path("/data/master.key"), Path("/data/serverware.sqlite3")
+                and not os.environ.get("CATCHPLATE_MASTER_KEY") and not os.environ.get("CATCHPLATE_MASTER_KEY_UNSEAL_COMMAND"), "existing development custody required")
+        key, database = Path("/data/master.key"), Path("/data/catchplate.sqlite3")
         require(len(read(key, maximum=32)) == 32 and database.resolve(strict=True) == database
                 and stat.S_ISREG(database.lstat().st_mode) and database.lstat().st_nlink == 1
                 and CA.parent.resolve(strict=True) == CA.parent, "existing custody missing")
@@ -160,11 +160,11 @@ class Control(smoke.LiveSmoke):
         # Google read snapshot before config/db import, without runtime startup.
         # This borrows the existing SH lock and WAL-aware mode=ro transaction;
         # SQLite may coordinate sidecars, but no business state is initialized.
-        from serverware import operator_google_managed_config as managed
+        from catchplate import operator_google_managed_config as managed
         require(managed.enabled(), "retained managed profile required")
         managed.bootstrap()
         require(managed.selected() is False, "Google must remain unconfigured")
-        from serverware import db
+        from catchplate import db
         core = db.get_credential(CREDENTIAL, include_secret=True)
         require(core is not None and core["id"] == CREDENTIAL and core["name"] == CREDENTIAL_NAME
                 and core["credential_version"] == 1 and core["lifecycle_status"] == "active"
@@ -207,7 +207,7 @@ class Control(smoke.LiveSmoke):
         smoke.require_rule_contract(new_rule(current, rule["id"]), values)
         preserve(before, current, app["id"], rule["id"])
         require(self.counts() == counts, "unexpected upstream contact during preparation")
-        config = {"schema": "serverware.publicProxySmoke/v1", "run_id": self.run_id,
+        config = {"schema": "catchplate.publicProxySmoke/v1", "run_id": self.run_id,
             "application_id": app["id"], "client_token": token, "credential_id": CREDENTIAL, "rule_id": rule["id"],
             "policy_hash": current["policy"]["policy_hash"], "authorization_sha256": authorization_hash,
             "ca_pem": ca, "ca_sha256": smoke.sha(ca.encode("ascii"))}
@@ -265,7 +265,7 @@ class Control(smoke.LiveSmoke):
 
 
 def join_result(config, result, events, arrivals):
-    require(type(result) is dict and set(result) == RESULT_FIELDS and result["schema"] == "serverware.publicProxySmokeResult/v1"
+    require(type(result) is dict and set(result) == RESULT_FIELDS and result["schema"] == "catchplate.publicProxySmokeResult/v1"
             and result["ok"] is True and result["peer"] == "203.0.113.10" and result["proxy_tls_verify_result"] == 0
             and all(result[key] == config[key] for key in ("run_id", "application_id", "credential_id", "rule_id", "policy_hash", "ca_sha256")), "client evidence differs")
     if result["mode"] == "revoked":

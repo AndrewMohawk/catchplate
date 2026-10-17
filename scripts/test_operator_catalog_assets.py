@@ -9,9 +9,9 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import operator_demo_portal
+from catchplate import operator_demo_portal
 
-ASSETS = ROOT / 'serverware/operator_demo_web'
+ASSETS = ROOT / 'catchplate/operator_demo_web'
 
 
 class Elements(HTMLParser):
@@ -84,8 +84,8 @@ class OperatorCatalogAssets(unittest.TestCase):
         self.assertEqual(reads.count('workspace_upstreams.js'), 1)
         self.assertLess(reads.index('workspace_upstreams.js'), reads.index('app.js'))
         self.assertNotIn('__OPERATOR_DEMO_', document)
-        self.assertNotIn('serverware.app', sys.modules)
-        self.assertNotIn('serverware.config', sys.modules)
+        self.assertNotIn('catchplate.app', sys.modules)
+        self.assertNotIn('catchplate.config', sys.modules)
 
     def test_unique_ids_and_separate_navigation_targets(self):
         items = self.elements()
@@ -104,7 +104,7 @@ class OperatorCatalogAssets(unittest.TestCase):
         self.assertEqual(tag, 'a')
         self.assertIsNone(form)
         self.assertEqual(attrs, {'id': 'client-mcp-guide',
-            'href': 'https://github.com/AndrewMohawk/serverware/blob/main/examples/mcp/README.md',
+            'href': 'https://github.com/AndrewMohawk/catchplate/blob/main/examples/mcp/README.md',
             'target': '_blank', 'rel': 'noopener noreferrer'})
         self.assertLess(document.index('id="download-config"'), document.index('id="client-mcp-help"'))
         self.assertLess(document.index('id="client-mcp-help"'), document.index('id="client-examples"'))
@@ -128,7 +128,7 @@ class OperatorCatalogAssets(unittest.TestCase):
         for previous in ('Explore synthetic demo', 'Connect a real service',
                 'Separate operator-development profile', 'My test API key'):
             self.assertNotIn(previous, document)
-        self.assertIn('Your Serverware instance', document)
+        self.assertIn('Your Catchplate instance', document)
         self.assertIn('Development deployment', document)
         self.assertIn('not hardware-verified or production-ready', document)
         self.assertEqual(index['overview-diagnostics'][0], 'details')
@@ -224,7 +224,7 @@ class OperatorCatalogAssets(unittest.TestCase):
         self.assertFalse(any(name.startswith('connect-npm-publish-') and
             attrs.get('type') == 'checkbox' for name, (_, attrs, _) in index.items()))
         source = (ASSETS / 'workspace_npm_publish.js').read_text()
-        self.assertIn('serverware.operatorNpmPublish/v1', source)
+        self.assertIn('catchplate.operatorNpmPublish/v1', source)
         self.assertIn('metadata at any time', source)
         for forbidden in ('fetch(', 'sessionStorage', 'localStorage', '/api/operator-demo/notifications'):
             self.assertNotIn(forbidden, source)
@@ -243,7 +243,7 @@ class OperatorCatalogAssets(unittest.TestCase):
     def test_ca_and_uncertainty_controls_have_explicit_boundaries(self):
         index = {attrs['id']: (tag, attrs) for tag, attrs, _ in self.elements() if 'id' in attrs}
         self.assertEqual(index['ca-download'][1]['href'], '/ca.pem')
-        self.assertEqual(index['ca-download'][1]['download'], 'serverware-ca.pem')
+        self.assertEqual(index['ca-download'][1]['download'], 'catchplate-ca.pem')
         self.assertIn('hidden', index['mutation-review'][1])
         self.assertIn('disabled', index['mutation-review-confirm'][1])
         self.assertIn('disabled', index['credential-google-connect'][1])
@@ -257,14 +257,14 @@ class OperatorCatalogAssets(unittest.TestCase):
             if name not in {'workspace_core.js', 'workspace_google_reauthorization.js', 'workspace_google_configuration.js', 'workspace_x_configuration.js', 'workspace_x_accounts.js', 'workspace_notifications.js', 'workspace_upstreams.js', 'workspace_pending_actions.js'}:
                 self.assertFalse('sessionStorage' in source, name + ' must not persist client state')
         core = scripts['workspace_core.js']
-        self.assertIn("const key = 'serverware.operator.mutation.review.v1', value = 'required';", core)
+        self.assertIn("const key = 'catchplate.operator.mutation.review.v1', value = 'required';", core)
         self.assertEqual(re.findall(r'sessionStorage\.setItem\(([^)]*)\)', core), ['key, value'])
         self.assertEqual(re.findall(r'sessionStorage\.removeItem\(([^)]*)\)', core), ['key'])
         self.assertNotIn('sessionStorage.clear', core)
         self.assertLess(core.index('if (!recovery.retain())'),
                         core.index("const pending = api('/api/operator-demo/' + path"))
         pending_actions = scripts['workspace_pending_actions.js']
-        self.assertIn("sessionStorage.getItem('serverware.approvalDecisionUncertain.' + id)", pending_actions)
+        self.assertIn("sessionStorage.getItem('catchplate.approvalDecisionUncertain.' + id)", pending_actions)
         for mutation in ('sessionStorage.setItem', 'sessionStorage.removeItem', 'sessionStorage.clear'):
             self.assertNotIn(mutation, pending_actions, 'metadata queue must not change decision recovery state')
         # Reauthorization retains only a public operation UUID for lost-response
@@ -282,7 +282,7 @@ class OperatorCatalogAssets(unittest.TestCase):
         self.assertIn("const selected = {operation_id: discovery.operation.operation_id, kind: 'prepare'};", configuration)
         self.assertIn('const priorRaw = retainedRaw;', configuration)
         self.assertIn('if (priorRaw !== null) sessionStorage.setItem(googleConfigurationKey, priorRaw);', configuration)
-        self.assertIn("googleConfigurationKey = 'serverware.operator.google.configuration.operation.v2'", configuration)
+        self.assertIn("googleConfigurationKey = 'catchplate.operator.google.configuration.operation.v2'", configuration)
         self.assertIn("upstreamObject(value, ['operation_id', 'kind']) && upstreamUUID(value.operation_id)", configuration)
         self.assertIn("['prepare', 'cancel'].includes(value.kind)", configuration)
         self.assertIn('if (!retain({operation_id: payload.operation_id, kind}))', configuration)
@@ -297,7 +297,7 @@ class OperatorCatalogAssets(unittest.TestCase):
                               ('getItem', 'xConfigurationKey'), ('removeItem', 'xConfigurationKey'),
                               ('getItem', 'xConfigurationKey')])
             self.assertEqual(len(re.findall(r'\bsessionStorage\b', source)), 5)
-            self.assertIn("xConfigurationKey = 'serverware.operator.x.configuration.operation.v1'", source)
+            self.assertIn("xConfigurationKey = 'catchplate.operator.x.configuration.operation.v1'", source)
             self.assertIn('if (saved !== null) { if (!upstreamUUID(saved)) throw new Error(); operationId = saved; }', source)
             self.assertEqual(re.findall(r'\bretain\(([^()]*)\)', source),
                              ['id', 'payload.operation_id'])
@@ -336,7 +336,7 @@ class OperatorCatalogAssets(unittest.TestCase):
             self.assertEqual(len(re.findall(r'\bsessionStorage\b', source)), len(accesses))
             self.assertTrue(all(method in {'getItem', 'setItem', 'removeItem'} and
                                 arguments.split(',')[0] == 'xAccountStorageKey' for method, arguments in accesses))
-            self.assertIn("xAccountStorageKey = 'serverware.operator.x.account.operation.v1'", source)
+            self.assertIn("xAccountStorageKey = 'catchplate.operator.x.account.operation.v1'", source)
             self.assertIn('if (!upstreamUUID(saved)) throw new Error(); operationId = saved;', source)
             self.assertIn('callbackIds.length !== 1 || !upstreamUUID(callbackIds[0])', source)
             self.assertIn('operationId = callbackIds[0];', source)
@@ -360,7 +360,7 @@ class OperatorCatalogAssets(unittest.TestCase):
         notifications = scripts['workspace_notifications.js']
         self.assertEqual(re.findall(r'sessionStorage\.setItem\(([^)]*)\)', notifications),
                          ['notificationOperationKey, JSON.stringify(nextReference'])
-        self.assertIn("notificationOperationKey = 'serverware.operator.notifications.operation.v1'", notifications)
+        self.assertIn("notificationOperationKey = 'catchplate.operator.notifications.operation.v1'", notifications)
         self.assertIn("notificationObject(value, ['operation_id', 'kind', 'slot', 'expected_revision'])", notifications)
         reference = re.search(r'const nextReference = \{([^}]+)\};', notifications)
         self.assertIsNotNone(reference)
@@ -371,7 +371,7 @@ class OperatorCatalogAssets(unittest.TestCase):
         self.assertLess(notifications.index('sessionStorage.setItem(notificationOperationKey'),
                         notifications.index("const response = request(prefix +"))
         upstreams = scripts['workspace_upstreams.js']
-        self.assertIn("upstreamOperationKey = 'serverware.operator.upstreams.operation.v1'", upstreams)
+        self.assertIn("upstreamOperationKey = 'catchplate.operator.upstreams.operation.v1'", upstreams)
         self.assertIn("upstreamObject(value, ['operation_id', 'kind'])", upstreams)
         self.assertIn("if (!retain({operation_id: body.operation_id, kind}))", upstreams)
         self.assertIn("request(upstreamSetupPath + '/' + reference.operation_id)", upstreams)

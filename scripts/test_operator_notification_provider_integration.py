@@ -34,8 +34,8 @@ def no_network(event, _arguments):
 
 
 def prove(db, kind, expected_details, secrets):
-    from serverware import operator_notification_events as events
-    from serverware import operator_notification_store as store
+    from catchplate import operator_notification_events as events
+    from catchplate import operator_notification_store as store
     assert store.ACTION_SOURCE_AVAILABLE is False
     assert kind in events.AUDIT_EVENT_TYPES and kind not in events.ACTION_EVENT_TYPES
     with closing(db.connect()) as conn:
@@ -145,7 +145,7 @@ class ProviderNotificationIntegrationTests(unittest.TestCase):
         directory = Path(self.scratch.name) / "x-custody"
         directory.mkdir(mode=0o700)
         self.environment.update({xconfig.FLAG: "1", xconfig.KEY_DIRECTORY: str(directory),
-            "SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED": "1"})
+            "CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED": "1"})
 
     def worker(self, name):
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", name],

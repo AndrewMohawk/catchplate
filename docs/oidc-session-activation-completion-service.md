@@ -7,7 +7,7 @@ acceptance or evidence that these resources have been provisioned.
 
 ## Admission and ownership
 
-[`oidc_session_activation_completion_startup.py`](../serverware/oidc_session_activation_completion_startup.py)
+[`oidc_session_activation_completion_startup.py`](../catchplate/oidc_session_activation_completion_startup.py)
 exports `initialize_from_environment()`, `require_started()` and `close()`.
 Only genuine initialization creates its private owner; `serve_once()` returns
 `False` while idle and `True` after its one accepted exchange. An accepted
@@ -22,9 +22,9 @@ descriptors are:
 | --- | --- |
 | 198 | Root public key |
 | 199 | Signed completion bootstrap with embedded historical custody |
-| 200 | `/run/serverware/oidc-session-activation/completion.sock` listener |
+| 200 | `/run/catchplate/oidc-session-activation/completion.sock` listener |
 | 201 | Enrolled completion signing key |
-| 202 | `/var/lib/serverware/oidc-session-activation-completions` journal |
+| 202 | `/var/lib/catchplate/oidc-session-activation-completions` journal |
 | 203 | Independently pinned bundle AES key |
 | 204 | Independently pinned delivery AES key |
 

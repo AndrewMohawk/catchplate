@@ -12,12 +12,12 @@ const {join, resolve} = require('node:path');
 const {runInNewContext} = require('node:vm');
 const {fixture: baseFixture, ready, view, credential, application, rule, IDS, NOW} = require('./test_operator_catalog_browser.cjs');
 const {publicCatalog, google} = require('./test_operator_ordinary_modes_browser.cjs');
-const pure = require('../serverware/operator_demo_web/workspace_google_reauthorization.js');
+const pure = require('../catchplate/operator_demo_web/workspace_google_reauthorization.js');
 const ROOT = resolve(__dirname, '..');
 const ORIGIN = 'https://operator-catalog.example.test';
 const CATALOG = ORIGIN + '/api/operator-demo/catalog';
 const PATH = '/api/operator-demo/oauth/google/reauthorize';
-const STORAGE = 'serverware.googleReauthorization.operation';
+const STORAGE = 'catchplate.googleReauthorization.operation';
 const OPERATION = '77777777-7777-4777-8777-777777777777';
 const ORIGINAL = '88888888-8888-4888-8888-888888888888';
 const OTHER = '99999999-9999-4999-8999-999999999999';
@@ -27,9 +27,9 @@ const INITIAL_OPERATION = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const SCOPES = ['email', 'https://www.googleapis.com/auth/gmail.readonly', 'openid'];
 const PRIVATE = ['synthetic-provider-secret-NEVER-PERSIST', 'synthetic-refresh-token-NEVER-PERSIST', 'synthetic-provider-error-NEVER-DISPLAY'];
 const STATE = 'synthetic-reauthorization-state-' + 'a'.repeat(43);
-const CAPABILITY = {schema: 'serverware.operatorGoogleReauthorizationCapability/v1', path: PATH,
+const CAPABILITY = {schema: 'catchplate.operatorGoogleReauthorizationCapability/v1', path: PATH,
   status_path_prefix: PATH + '/', review_path_suffix: '/review', preserves_assignments: true, existing_account_only: true};
-const GOOGLE_CAPABILITY = {schema: 'serverware.operatorGoogleCapability/v1', profile: 'operator-google-v1', provider_id: 'google',
+const GOOGLE_CAPABILITY = {schema: 'catchplate.operatorGoogleCapability/v1', profile: 'operator-google-v1', provider_id: 'google',
   permission_preset: 'gmail_readonly', scopes: SCOPES, api_origins: ['https://gmail.googleapis.com'],
   authorization_origin: 'https://accounts.google.com', authorization_path: '/o/oauth2/v2/auth',
   redirect_uri: ORIGIN + '/api/oauth/callback/google', start_path: '/api/operator-demo/oauth/google/start',
@@ -48,7 +48,7 @@ const supplied = (options = {}) => ({credentials: [account(), account({id: OTHER
 function review(state, changes = {}) {
   const key = state.credentials.find(item => item.id === IDS.credential);
   const assigned = state.rules.filter(item => item.credential_id === key.id && item.status === 'active');
-  return {schema: 'serverware.operatorGoogleReauthorizationReview/v1', credential_id: key.id, name: key.name,
+  return {schema: 'catchplate.operatorGoogleReauthorizationReview/v1', credential_id: key.id, name: key.name,
     provider_id: 'google', provider_subject: key.provider_subject, provider_account: key.provider_account,
     oauth_client_id: key.oauth_client_id, scopes: [...SCOPES], original_oauth_intent_id: ORIGINAL,
     expected_revision: state.revision, expected_policy_hash: state.active, expected_credential_generation: 7,
@@ -56,7 +56,7 @@ function review(state, changes = {}) {
     eligible: true, ...changes};
 }
 function operation(reviewed, changes = {}) {
-  return {schema: 'serverware.operatorGoogleReauthorization/v1', operation_id: OPERATION, credential_id: reviewed.credential_id,
+  return {schema: 'catchplate.operatorGoogleReauthorization/v1', operation_id: OPERATION, credential_id: reviewed.credential_id,
     name: reviewed.name, provider_id: 'google', provider_account: reviewed.provider_account, scopes: [...SCOPES],
     status: 'awaiting_consent', reason: null, created_at: new Date(NOW).toISOString(), expires_at_epoch: NOW / 1000 + 600,
     expected_revision: reviewed.expected_revision, expected_policy_hash: reviewed.expected_policy_hash,
@@ -65,7 +65,7 @@ function operation(reviewed, changes = {}) {
 }
 function adopted(reviewed, changes = {}) {
   const item = operation(reviewed, {status: 'adopted'});
-  item.receipt = {schema: 'serverware.operatorGoogleReauthorizationReceipt/v1', operation_id: item.operation_id,
+  item.receipt = {schema: 'catchplate.operatorGoogleReauthorizationReceipt/v1', operation_id: item.operation_id,
     credential_id: item.credential_id, previous_credential_generation: reviewed.expected_credential_generation,
     credential_generation: reviewed.expected_credential_generation + 1, original_oauth_intent_id: reviewed.original_oauth_intent_id,
     revision: reviewed.expected_revision, policy_hash: reviewed.expected_policy_hash, affected_rule_ids: [...reviewed.affected_rule_ids],
@@ -81,9 +81,9 @@ function startReceipt(item) {
     scopes: [...SCOPES], operatorGoogleReauthorization: clone(item)};
 }
 const INPUTS = ['scripts/test_operator_google_reauthorization_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
-  'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
+  'scripts/test_operator_ordinary_modes_browser.cjs', 'catchplate/operator_demo_portal.py',
   ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js', 'workspace_google.js', 'workspace_google_reauthorization.js',
-    'workspace_resources.js', 'workspace_applications.js', 'workspace_proxy_audit.js', 'workspace_connect.js'].map(name => 'serverware/operator_demo_web/' + name)];
+    'workspace_resources.js', 'workspace_applications.js', 'workspace_proxy_audit.js', 'workspace_connect.js'].map(name => 'catchplate/operator_demo_web/' + name)];
 let artifacts;
 let activeGroup = 0;
 const checkpointStates = new WeakMap();
@@ -136,7 +136,7 @@ async function fixture(browser, options, exercise) {
         assert.equal(route.request().url(), ORIGIN + GOOGLE_CAPABILITY.intents_path);
         assert.equal(route.request().method(), 'GET'); assert(!route.request().postDataBuffer()?.length);
         assert(++observed.oldConsentReads <= 12); oldArrived(); await oldGate;
-        await answer(route, {apiVersion: 'serverware.operatorGoogleConsent/v1', intents: observed.initialIntents, limits: {active: 32, retained: 1024},
+        await answer(route, {apiVersion: 'catchplate.operatorGoogleConsent/v1', intents: observed.initialIntents, limits: {active: 32, retained: 1024},
           productionReady: false, protectedActivationSupported: false});
       } catch (_) { state.errors.push('old consent observation boundary refused'); await route.abort(); }
     });
@@ -188,7 +188,7 @@ async function fixture(browser, options, exercise) {
     async function landing(id = observed.current?.operation_id || OPERATION, extra = '', initial = false) {
       const target = ORIGIN + '/?' + (initial ? 'operator_google_intent=' : 'operator_google_reauthorization=') +
         id + extra + (initial ? '#connect' : '#credentials');
-      const document = execFileSync('python3', ['-B', '-c', 'from serverware.operator_demo_portal import render; print(render())'],
+      const document = execFileSync('python3', ['-B', '-c', 'from catchplate.operator_demo_portal import render; print(render())'],
         {cwd: ROOT, encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024});
       await controls.context.route(target.split('#')[0], async route => {
         assert(++observed.returns <= 2); assert.equal(route.request().url(), target.split('#')[0]);
@@ -311,7 +311,7 @@ function pureChecks() {
   // Actual shared coordinator, without network or a browser. A second owner
   // releasing its observation must never clear another owner's active hold.
   const core = ['workspace_core.js', 'workspace_github.js']
-    .map(name => readFileSync(join(ROOT, 'serverware/operator_demo_web', name), 'utf8')).join('\n');
+    .map(name => readFileSync(join(ROOT, 'catchplate/operator_demo_web', name), 'utf8')).join('\n');
   const workspace = runInNewContext(core + '\ncreateOperatorWorkspace()', {
     document: {getElementById: () => ({addEventListener() {}, querySelectorAll: () => []})},
     window: {addEventListener() {}}, clearTimeout, setTimeout,
@@ -541,7 +541,7 @@ function selection(argv) {
 async function main() {
   const selected = selection(process.argv.slice(2)); const before = await hashes();
   if (selected.pure) console.log(JSON.stringify(pureChecks()));
-  const artifactRoot = '/srv/catchplate-fast/projects/serverware-operator-artifacts';
+  const artifactRoot = '/srv/catchplate-fast/projects/catchplate-operator-artifacts';
   assert((await stat(artifactRoot)).isDirectory()); artifacts = await mkdtemp(join(artifactRoot, 'google-reauthorization-synthetic-'));
   console.log(JSON.stringify({phase: 'prepared', sourceHashes: before, artifacts, selection: selected,
     renderedGroups: tests.length - selected.from + 1, scope: 'synthetic intercepted UI; no provider, callback, adoption or dispatch acceptance'}));

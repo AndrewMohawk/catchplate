@@ -174,37 +174,37 @@ validate_absolute_socket "$external_witness_socket"
 getent group "$client_group" >/dev/null \
     || fail "client group does not exist: $client_group"
 
-install_root=/opt/serverware/coder-controller-v12
+install_root=/opt/catchplate/coder-controller-v12
 releases_root=$install_root/releases
 current_link=$install_root/current
-state_root=/var/lib/serverware/coder-controller-v12
+state_root=/var/lib/catchplate/coder-controller-v12
 staging_parent=$state_root/install-staging
-trust_root=/etc/serverware/coder-controller-v12/trust
+trust_root=/etc/catchplate/coder-controller-v12/trust
 systemd_root=/etc/systemd/system
-target_unit=serverware-coder-v12.target
+target_unit=catchplate-coder-v12.target
 
 for protected_path in \
-    /opt/serverware "$install_root" "$releases_root" \
-    /var/lib/serverware "$state_root" "$staging_parent" \
-    /etc/serverware /etc/serverware/coder-controller-v12 "$trust_root" "$systemd_root"
+    /opt/catchplate "$install_root" "$releases_root" \
+    /var/lib/catchplate "$state_root" "$staging_parent" \
+    /etc/catchplate /etc/catchplate/coder-controller-v12 "$trust_root" "$systemd_root"
 do
     test ! -L "$protected_path" || fail "protected path is a symlink: $protected_path"
 done
 
 install -d -o root -g root -m 0755 /run/lock
-exec 9>/run/lock/serverware-coder-controller-v12.install.lock
+exec 9>/run/lock/catchplate-coder-controller-v12.install.lock
 flock --exclusive --nonblock 9 \
     || fail "another controller-v12 install or rollback transaction is active"
-chmod 0600 /run/lock/serverware-coder-controller-v12.install.lock
+chmod 0600 /run/lock/catchplate-coder-controller-v12.install.lock
 
-install -d -o root -g root -m 0755 /var/lib/serverware
+install -d -o root -g root -m 0755 /var/lib/catchplate
 install -d -o root -g root -m 0711 "$state_root"
 install -d -o root -g root -m 0700 "$staging_parent"
 install -d -o root -g root -m 0755 \
-    /opt/serverware "$install_root" "$releases_root" \
-    /etc/serverware /etc/serverware/coder-controller-v12 "$trust_root"
+    /opt/catchplate "$install_root" "$releases_root" \
+    /etc/catchplate /etc/catchplate/coder-controller-v12 "$trust_root"
 
-if test "${SERVERWARE_V12_VERIFIED_SNAPSHOT:-0}" != 1; then
+if test "${CATCHPLATE_V12_VERIFIED_SNAPSHOT:-0}" != 1; then
     test -d "$input_bundle_root" && test ! -L "$input_bundle_root" \
         || fail "signed bundle root must be a non-symlink directory"
     input_bundle_root=$(CDPATH= cd -- "$input_bundle_root" && pwd -P)
@@ -240,10 +240,10 @@ if test "${SERVERWARE_V12_VERIFIED_SNAPSHOT:-0}" != 1; then
     chmod -R a-w "$bundle_snapshot"
     chattr -R +i "$bundle_snapshot" \
         || fail "bundle snapshot filesystem does not support immutable release staging"
-    export SERVERWARE_V12_VERIFIED_SNAPSHOT=1
-    export SERVERWARE_V12_BUNDLE_SNAPSHOT=$bundle_snapshot
-    export SERVERWARE_V12_PINNED_SIGNER_SNAPSHOT=$pinned_signer_snapshot
-    export SERVERWARE_V12_BOOTSTRAP_TRANSACTION=$bootstrap_transaction
+    export CATCHPLATE_V12_VERIFIED_SNAPSHOT=1
+    export CATCHPLATE_V12_BUNDLE_SNAPSHOT=$bundle_snapshot
+    export CATCHPLATE_V12_PINNED_SIGNER_SNAPSHOT=$pinned_signer_snapshot
+    export CATCHPLATE_V12_BOOTSTRAP_TRANSACTION=$bootstrap_transaction
     trap - EXIT HUP INT TERM
     exec /bin/sh "$signed_installer" \
         "$input_bundle_root" "$input_pinned_signer" \
@@ -251,9 +251,9 @@ if test "${SERVERWARE_V12_VERIFIED_SNAPSHOT:-0}" != 1; then
         "$client_group" "$deployment_profile" "$external_witness_socket"
 fi
 
-asset_root=${SERVERWARE_V12_BUNDLE_SNAPSHOT:-}
-pinned_signer=${SERVERWARE_V12_PINNED_SIGNER_SNAPSHOT:-}
-transaction_root=${SERVERWARE_V12_BOOTSTRAP_TRANSACTION:-}
+asset_root=${CATCHPLATE_V12_BUNDLE_SNAPSHOT:-}
+pinned_signer=${CATCHPLATE_V12_PINNED_SIGNER_SNAPSHOT:-}
+transaction_root=${CATCHPLATE_V12_BOOTSTRAP_TRANSACTION:-}
 case "$asset_root" in "$staging_parent"/*/bundle) ;; *) fail "invalid verified bundle snapshot" ;; esac
 case "$pinned_signer" in "$staging_parent"/*/pinned-release-signer.pem) ;; *) fail "invalid signer snapshot" ;; esac
 case "$transaction_root" in "$staging_parent"/*) ;; *) fail "invalid bootstrap transaction" ;; esac
@@ -288,32 +288,32 @@ require_asset() {
 }
 
 units="
-serverware-coder-runtime-v12.service
-serverware-coder-controller-v12.socket
-serverware-coder-plan-executor-v12.socket
-serverware-coder-docker-proxy-v12.socket
-serverware-coder-lifecycle-v12.socket
-serverware-coder-trust-generation-v12.socket
-serverware-coder-external-witness-v12.socket
-serverware-coder-final-settlement-v12.socket
-serverware-coder-receipt-authority-v12.socket
-serverware-coder-final-verdict-authority-v12.socket
-serverware-coder-lifecycle-privileged-v12.socket
-serverware-coder-log-custody-authority-v12.socket
-serverware-coder-private-dind-reconcile-v12.service
-serverware-coder-lifecycle-privileged-v12.service
-serverware-coder-lifecycle-v12.service
-serverware-coder-trust-generation-v12.service
-serverware-coder-external-witness-v12.service
-serverware-coder-final-settlement-v12.service
-serverware-coder-log-custody-authority-v12.service
-serverware-coder-receipt-authority-v12.service
-serverware-coder-final-verdict-authority-v12.service
-serverware-coder-docker-proxy-v12.service
-serverware-coder-plan-executor-v12.service
-serverware-coder-controller-v12.service
-serverware-coder-readiness-v12.service
-serverware-coder-v12.target
+catchplate-coder-runtime-v12.service
+catchplate-coder-controller-v12.socket
+catchplate-coder-plan-executor-v12.socket
+catchplate-coder-docker-proxy-v12.socket
+catchplate-coder-lifecycle-v12.socket
+catchplate-coder-trust-generation-v12.socket
+catchplate-coder-external-witness-v12.socket
+catchplate-coder-final-settlement-v12.socket
+catchplate-coder-receipt-authority-v12.socket
+catchplate-coder-final-verdict-authority-v12.socket
+catchplate-coder-lifecycle-privileged-v12.socket
+catchplate-coder-log-custody-authority-v12.socket
+catchplate-coder-private-dind-reconcile-v12.service
+catchplate-coder-lifecycle-privileged-v12.service
+catchplate-coder-lifecycle-v12.service
+catchplate-coder-trust-generation-v12.service
+catchplate-coder-external-witness-v12.service
+catchplate-coder-final-settlement-v12.service
+catchplate-coder-log-custody-authority-v12.service
+catchplate-coder-receipt-authority-v12.service
+catchplate-coder-final-verdict-authority-v12.service
+catchplate-coder-docker-proxy-v12.service
+catchplate-coder-plan-executor-v12.service
+catchplate-coder-controller-v12.service
+catchplate-coder-readiness-v12.service
+catchplate-coder-v12.target
 "
 
 provisioning_config_inputs="
@@ -352,16 +352,16 @@ trusted-host-v12.profile
 "
 
 required_assets="
-bin/serverware-coder-controller-v12
-bin/serverware-coder-controller-client-v12
-bin/serverware-coder-plan-executor-v12
-bin/serverware-coder-docker-proxy-v12
-bin/serverware-coder-receipt-authority-v12
-bin/serverware-coder-local-trust-authority-v12
-bin/serverware-coder-log-custody-authority-v12
-bin/serverware-coder-final-verdict-authority-v12
-bin/serverware-coder-lifecycle-v12
-bin/serverware-coder-lifecycle-privileged-v12
+bin/catchplate-coder-controller-v12
+bin/catchplate-coder-controller-client-v12
+bin/catchplate-coder-plan-executor-v12
+bin/catchplate-coder-docker-proxy-v12
+bin/catchplate-coder-receipt-authority-v12
+bin/catchplate-coder-local-trust-authority-v12
+bin/catchplate-coder-log-custody-authority-v12
+bin/catchplate-coder-final-verdict-authority-v12
+bin/catchplate-coder-lifecycle-v12
+bin/catchplate-coder-lifecycle-privileged-v12
 bin/dockerd-v12
 bin/containerd-v12
 bin/containerd-shim-runc-v2-v12
@@ -725,7 +725,7 @@ test "$(sed -n '1p' "$asset_root/source/native-point-snapshot.sha256")" = \
     || fail "native snapshot digest file is not exact"
 
 deadline_profile_id=$(document_value "$deadline_doc" profile_id)
-test "$deadline_profile_id" = serverware-coder-five-lane-v12 \
+test "$deadline_profile_id" = catchplate-coder-five-lane-v12 \
     || fail "unexpected lane deadline profile"
 build_deadline_ms=$(document_value "$deadline_doc" lane.build.deadline_ms)
 unit_deadline_ms=$(document_value "$deadline_doc" lane.unit.deadline_ms)
@@ -838,7 +838,7 @@ runner_oci_digest=$(read_oci_digest "$asset_root/runner/runner.oci.digest")
 browser_oci_digest=$(read_oci_digest "$asset_root/runner/browser.oci.digest")
 buildkit_oci_digest=$(read_oci_digest "$asset_root/runner/buildkit.oci.digest")
 
-test "$(document_value "$log_genesis_doc" log_id)" = serverware-coder-controller-v12 \
+test "$(document_value "$log_genesis_doc" log_id)" = catchplate-coder-controller-v12 \
     || fail "log-custody genesis has the wrong log ID"
 test "$(document_value "$log_genesis_doc" genesis_kind)" = binary-fixed-empty-root-v12 \
     || fail "log-custody genesis does not match the local authority implementation"
@@ -855,7 +855,7 @@ test "$(document_value "$log_genesis_doc" integrity_mode)" = UserspaceDigestOnly
     || fail "local log-custody genesis must not claim a stronger integrity mode"
 
 test "$(document_value "$docker_artifact_binding_doc" binding_id)" = \
-    serverware-coder-docker-artifacts-v12 \
+    catchplate-coder-docker-artifacts-v12 \
     || fail "unexpected Docker artifact binding ID"
 test "$(document_value "$docker_artifact_binding_doc" docker_api_request_schema_version)" = 12 \
     && test "$(document_value "$docker_artifact_binding_doc" docker_lane_capability_schema_version)" = 12 \
@@ -871,9 +871,9 @@ test "$(document_value "$docker_artifact_binding_doc" host_docker_socket_exposed
     && test "$(document_value "$docker_artifact_binding_doc" legacy_v11_lease_allowed)" = false \
     || fail "Docker artifact binding enables a forbidden host/global/v11 fallback"
 test "$(document_value "$docker_artifact_binding_doc" private_dind_lifecycle_contract)" = \
-    serverware/private-dind-lifecycle/v12 \
+    catchplate/private-dind-lifecycle/v12 \
     && test "$(document_value "$docker_artifact_binding_doc" lane_proxy_contract)" = \
-        serverware/controller-lane-proxy/v12 \
+        catchplate/controller-lane-proxy/v12 \
     || fail "Docker artifact binding does not select the v12 private-DinD contracts"
 require_document_digest "$docker_artifact_binding_doc" docker_api_request_schema_sha256 \
     "$asset_root/schemas/coder-docker-api-request.v12.schema.json"
@@ -931,7 +931,7 @@ fixture_set_id=$(document_value \
     "$asset_root/fixtures/readiness-fixtures-v12.manifest" fixture_set_id)
 require_sha256 "$fixture_set_id" "readiness fixture_set_id"
 for readiness_binding in \
-    fixture_set_digest_contract=serverware/readiness-assets-digest/v12 \
+    fixture_set_digest_contract=catchplate/readiness-assets-digest/v12 \
     role.docker_101=upgrade-client-stream \
     role.docker_half_close=upgrade-server-stream \
     role.build_pinned_pull=build-pinned-pull-contract \
@@ -1003,7 +1003,7 @@ done
 derived_fixture_set_id=$(sha_file "$readiness_descriptor")
 test "$derived_fixture_set_id" = "$fixture_set_id" \
     || fail "readiness fixture_set_id is not the exact readiness asset digest"
-teardown_contract='{"version":"serverware/readiness-teardown-contract/v12","dockerTopLevelObjectCountScope":"private-daemon-top-level-api:containers,images,nondefault-networks,volumes","dockerInternalStorageAbsenceProof":"generation-state-root-absent;internal-layers-snapshots-build-cache-not-individually-counted","requireExactSignedFixture":true,"requireDurableTerminalReceipt":true,"requireDockerAuthorityEstablished":true,"requireZeroContainers":true,"requireZeroImages":true,"requireZeroNetworks":true,"requireZeroVolumes":true,"requireZeroMounts":true,"requireZeroCgroupProcesses":true,"requireStateRootAbsent":true}'
+teardown_contract='{"version":"catchplate/readiness-teardown-contract/v12","dockerTopLevelObjectCountScope":"private-daemon-top-level-api:containers,images,nondefault-networks,volumes","dockerInternalStorageAbsenceProof":"generation-state-root-absent;internal-layers-snapshots-build-cache-not-individually-counted","requireExactSignedFixture":true,"requireDurableTerminalReceipt":true,"requireDockerAuthorityEstablished":true,"requireZeroContainers":true,"requireZeroImages":true,"requireZeroNetworks":true,"requireZeroVolumes":true,"requireZeroMounts":true,"requireZeroCgroupProcesses":true,"requireStateRootAbsent":true}'
 test "$(wc -c < "$asset_root/fixtures/teardown.fixture" | tr -d ' ')" = \
     "${#teardown_contract}" \
     && test "$(cat "$asset_root/fixtures/teardown.fixture")" = \
@@ -1174,38 +1174,38 @@ ensure_user() {
     fi
 }
 
-ensure_group serverware-coder-controller "$controller_gid"
-ensure_group serverware-coder-executor "$executor_gid"
-ensure_group serverware-coder-docker "$docker_proxy_gid"
-ensure_group serverware-coder-receipt "$receipt_authority_gid"
-ensure_group serverware-coder-log "$log_custody_gid"
-ensure_group serverware-coder-verdict "$final_verdict_authority_gid"
-ensure_group serverware-coder-trust "$trust_generation_authority_gid"
-ensure_group serverware-coder-witness "$external_witness_authority_gid"
-ensure_group serverware-coder-settlement "$final_settlement_authority_gid"
-ensure_group serverware-coder-lifecycle "$lifecycle_gid"
-ensure_group serverware-coder-executor-api "$executor_api_gid"
-ensure_group serverware-coder-docker-api "$docker_api_gid"
-ensure_group serverware-coder-receipt-api "$receipt_api_gid"
-ensure_group serverware-coder-log-api "$log_api_gid"
-ensure_group serverware-coder-verdict-api "$verdict_api_gid"
-ensure_group serverware-coder-trust-api "$trust_api_gid"
-ensure_group serverware-coder-witness-api "$witness_api_gid"
-ensure_group serverware-coder-settlement-api "$settlement_api_gid"
-ensure_group serverware-coder-lifecycle-api "$lifecycle_api_gid"
-ensure_group serverware-coder-lifecycle-privileged-api "$lifecycle_privileged_api_gid"
-ensure_group serverware-coder-cas "$cas_gid"
+ensure_group catchplate-coder-controller "$controller_gid"
+ensure_group catchplate-coder-executor "$executor_gid"
+ensure_group catchplate-coder-docker "$docker_proxy_gid"
+ensure_group catchplate-coder-receipt "$receipt_authority_gid"
+ensure_group catchplate-coder-log "$log_custody_gid"
+ensure_group catchplate-coder-verdict "$final_verdict_authority_gid"
+ensure_group catchplate-coder-trust "$trust_generation_authority_gid"
+ensure_group catchplate-coder-witness "$external_witness_authority_gid"
+ensure_group catchplate-coder-settlement "$final_settlement_authority_gid"
+ensure_group catchplate-coder-lifecycle "$lifecycle_gid"
+ensure_group catchplate-coder-executor-api "$executor_api_gid"
+ensure_group catchplate-coder-docker-api "$docker_api_gid"
+ensure_group catchplate-coder-receipt-api "$receipt_api_gid"
+ensure_group catchplate-coder-log-api "$log_api_gid"
+ensure_group catchplate-coder-verdict-api "$verdict_api_gid"
+ensure_group catchplate-coder-trust-api "$trust_api_gid"
+ensure_group catchplate-coder-witness-api "$witness_api_gid"
+ensure_group catchplate-coder-settlement-api "$settlement_api_gid"
+ensure_group catchplate-coder-lifecycle-api "$lifecycle_api_gid"
+ensure_group catchplate-coder-lifecycle-privileged-api "$lifecycle_privileged_api_gid"
+ensure_group catchplate-coder-cas "$cas_gid"
 
-ensure_user serverware-coder-controller "$controller_uid" serverware-coder-controller
-ensure_user serverware-coder-executor "$executor_uid" serverware-coder-executor
-ensure_user serverware-coder-docker "$docker_proxy_uid" serverware-coder-docker
-ensure_user serverware-coder-receipt "$receipt_authority_uid" serverware-coder-receipt
-ensure_user serverware-coder-log "$log_custody_uid" serverware-coder-log
-ensure_user serverware-coder-verdict "$final_verdict_authority_uid" serverware-coder-verdict
-ensure_user serverware-coder-trust "$trust_generation_authority_uid" serverware-coder-trust
-ensure_user serverware-coder-witness "$external_witness_authority_uid" serverware-coder-witness
-ensure_user serverware-coder-settlement "$final_settlement_authority_uid" serverware-coder-settlement
-ensure_user serverware-coder-lifecycle "$lifecycle_uid" serverware-coder-lifecycle
+ensure_user catchplate-coder-controller "$controller_uid" catchplate-coder-controller
+ensure_user catchplate-coder-executor "$executor_uid" catchplate-coder-executor
+ensure_user catchplate-coder-docker "$docker_proxy_uid" catchplate-coder-docker
+ensure_user catchplate-coder-receipt "$receipt_authority_uid" catchplate-coder-receipt
+ensure_user catchplate-coder-log "$log_custody_uid" catchplate-coder-log
+ensure_user catchplate-coder-verdict "$final_verdict_authority_uid" catchplate-coder-verdict
+ensure_user catchplate-coder-trust "$trust_generation_authority_uid" catchplate-coder-trust
+ensure_user catchplate-coder-witness "$external_witness_authority_uid" catchplate-coder-witness
+ensure_user catchplate-coder-settlement "$final_settlement_authority_uid" catchplate-coder-settlement
+ensure_user catchplate-coder-lifecycle "$lifecycle_uid" catchplate-coder-lifecycle
 
 grep -F "\"executor_uid\": $executor_uid" \
     "$asset_root/config/plan-executor-v12.conf" >/dev/null \
@@ -1229,63 +1229,63 @@ set_exact_group_members() {
         || fail "managed group membership is not exact: $group"
 }
 
-set_exact_group_members serverware-coder-executor-api \
-    serverware-coder-controller,serverware-coder-executor
-set_exact_group_members serverware-coder-docker-api \
-    serverware-coder-controller,serverware-coder-executor,serverware-coder-docker
-set_exact_group_members serverware-coder-receipt-api \
-    serverware-coder-controller,serverware-coder-receipt,serverware-coder-verdict
-set_exact_group_members serverware-coder-log-api \
-    serverware-coder-receipt,serverware-coder-log
-set_exact_group_members serverware-coder-verdict-api \
-    serverware-coder-controller,serverware-coder-verdict
-set_exact_group_members serverware-coder-trust-api \
-    serverware-coder-controller,serverware-coder-receipt,serverware-coder-trust
-set_exact_group_members serverware-coder-witness-api \
-    serverware-coder-controller,serverware-coder-receipt,serverware-coder-witness
-set_exact_group_members serverware-coder-settlement-api \
-    serverware-coder-receipt,serverware-coder-settlement
-set_exact_group_members serverware-coder-lifecycle-api \
-    serverware-coder-controller,serverware-coder-executor,serverware-coder-docker,serverware-coder-lifecycle
-set_exact_group_members serverware-coder-lifecycle-privileged-api \
-    serverware-coder-lifecycle
-set_exact_group_members serverware-coder-cas \
-    serverware-coder-controller,serverware-coder-executor
+set_exact_group_members catchplate-coder-executor-api \
+    catchplate-coder-controller,catchplate-coder-executor
+set_exact_group_members catchplate-coder-docker-api \
+    catchplate-coder-controller,catchplate-coder-executor,catchplate-coder-docker
+set_exact_group_members catchplate-coder-receipt-api \
+    catchplate-coder-controller,catchplate-coder-receipt,catchplate-coder-verdict
+set_exact_group_members catchplate-coder-log-api \
+    catchplate-coder-receipt,catchplate-coder-log
+set_exact_group_members catchplate-coder-verdict-api \
+    catchplate-coder-controller,catchplate-coder-verdict
+set_exact_group_members catchplate-coder-trust-api \
+    catchplate-coder-controller,catchplate-coder-receipt,catchplate-coder-trust
+set_exact_group_members catchplate-coder-witness-api \
+    catchplate-coder-controller,catchplate-coder-receipt,catchplate-coder-witness
+set_exact_group_members catchplate-coder-settlement-api \
+    catchplate-coder-receipt,catchplate-coder-settlement
+set_exact_group_members catchplate-coder-lifecycle-api \
+    catchplate-coder-controller,catchplate-coder-executor,catchplate-coder-docker,catchplate-coder-lifecycle
+set_exact_group_members catchplate-coder-lifecycle-privileged-api \
+    catchplate-coder-lifecycle
+set_exact_group_members catchplate-coder-cas \
+    catchplate-coder-controller,catchplate-coder-executor
 
-install -d -o root -g root -m 0755 /var/lib/serverware
+install -d -o root -g root -m 0755 /var/lib/catchplate
 install -d -o root -g root -m 0711 "$state_root"
-install -d -o serverware-coder-controller -g serverware-coder-controller -m 0700 \
+install -d -o catchplate-coder-controller -g catchplate-coder-controller -m 0700 \
     "$state_root/controller"
-install -d -o serverware-coder-executor -g serverware-coder-executor -m 0700 \
+install -d -o catchplate-coder-executor -g catchplate-coder-executor -m 0700 \
     "$state_root/executor"
 install -d -o root -g root -m 0555 \
     "$state_root/executor/operation-ledger"
-install -d -o serverware-coder-docker -g serverware-coder-docker -m 0700 \
+install -d -o catchplate-coder-docker -g catchplate-coder-docker -m 0700 \
     "$state_root/docker-proxy"
-install -d -o serverware-coder-receipt -g serverware-coder-receipt -m 0700 \
+install -d -o catchplate-coder-receipt -g catchplate-coder-receipt -m 0700 \
     "$state_root/receipt-authority"
-install -d -o serverware-coder-log -g serverware-coder-log -m 0700 \
+install -d -o catchplate-coder-log -g catchplate-coder-log -m 0700 \
     "$state_root/log-custody"
-install -d -o serverware-coder-verdict -g serverware-coder-verdict -m 0700 \
+install -d -o catchplate-coder-verdict -g catchplate-coder-verdict -m 0700 \
     "$state_root/final-verdict-authority"
-install -d -o serverware-coder-trust -g serverware-coder-trust -m 0700 \
+install -d -o catchplate-coder-trust -g catchplate-coder-trust -m 0700 \
     "$state_root/trust-generation"
-install -d -o serverware-coder-witness -g serverware-coder-witness -m 0700 \
+install -d -o catchplate-coder-witness -g catchplate-coder-witness -m 0700 \
     "$state_root/external-witness"
-install -d -o serverware-coder-settlement -g serverware-coder-settlement -m 0700 \
+install -d -o catchplate-coder-settlement -g catchplate-coder-settlement -m 0700 \
     "$state_root/final-settlement"
-install -d -o serverware-coder-lifecycle -g serverware-coder-lifecycle -m 0700 \
+install -d -o catchplate-coder-lifecycle -g catchplate-coder-lifecycle -m 0700 \
     "$state_root/lifecycle"
 install -d -o root -g root -m 0700 \
     "$state_root/lifecycle-privileged" \
     "$state_root/lifecycle-privileged/terminal-destruction-receipts" \
     "$state_root/dind"
-install -d -o serverware-coder-executor -g serverware-coder-executor -m 0700 \
+install -d -o catchplate-coder-executor -g catchplate-coder-executor -m 0700 \
     "$state_root/cas" "$state_root/cas/source" \
     "$state_root/cas/artifact" "$state_root/cas/oci"
-install -d -o serverware-coder-executor -g serverware-coder-executor -m 0700 \
-    "$state_root/cas/source/.serverware-cas-publication-journal-v12" \
-    "$state_root/cas/artifact/.serverware-cas-publication-journal-v12"
+install -d -o catchplate-coder-executor -g catchplate-coder-executor -m 0700 \
+    "$state_root/cas/source/.catchplate-cas-publication-journal-v12" \
+    "$state_root/cas/artifact/.catchplate-cas-publication-journal-v12"
 
 stage=$transaction_root/release
 unit_stage=$transaction_root/systemd
@@ -1303,16 +1303,16 @@ install -d -o root -g root -m 0555 \
     "$stage/provisioning/ops/systemd"
 
 for binary in \
-    serverware-coder-controller-v12 \
-    serverware-coder-controller-client-v12 \
-    serverware-coder-plan-executor-v12 \
-    serverware-coder-docker-proxy-v12 \
-    serverware-coder-receipt-authority-v12 \
-    serverware-coder-local-trust-authority-v12 \
-    serverware-coder-log-custody-authority-v12 \
-    serverware-coder-final-verdict-authority-v12 \
-    serverware-coder-lifecycle-v12 \
-    serverware-coder-lifecycle-privileged-v12 \
+    catchplate-coder-controller-v12 \
+    catchplate-coder-controller-client-v12 \
+    catchplate-coder-plan-executor-v12 \
+    catchplate-coder-docker-proxy-v12 \
+    catchplate-coder-receipt-authority-v12 \
+    catchplate-coder-local-trust-authority-v12 \
+    catchplate-coder-log-custody-authority-v12 \
+    catchplate-coder-final-verdict-authority-v12 \
+    catchplate-coder-lifecycle-v12 \
+    catchplate-coder-lifecycle-privileged-v12 \
     dockerd-v12 \
     containerd-v12 \
     containerd-shim-runc-v2-v12 \
@@ -1532,14 +1532,14 @@ render_template "$template_root/controller-v12.conf.in" "$stage/config/controlle
     RELEASE_ROOT "$release_root" CLIENT_GROUP "$client_group" \
     DEPLOYMENT_PROFILE "$deployment_profile" CLEANUP_RESERVE_MS "$cleanup_reserve_ms"
 render_template "$template_root/docker-proxy-v12.conf.in" "$stage/config/docker-proxy-v12.conf" \
-    RELEASE_ROOT "$release_root" EXECUTOR_GROUP serverware-coder-docker-api \
+    RELEASE_ROOT "$release_root" EXECUTOR_GROUP catchplate-coder-docker-api \
     CONTROLLER_UID "$controller_uid" EXECUTOR_UID "$executor_uid" \
     DOCKER_API_GID "$docker_api_gid"
 render_template "$template_root/log-custody-authority-v12.conf.in" "$stage/config/log-custody-authority-v12.json" \
     RELEASE_ROOT "$release_root" LOG_AUTHORITY_UID "$log_custody_uid" \
     RECEIPT_AUTHORITY_UID "$receipt_authority_uid"
 render_template "$template_root/lifecycle-v12.conf.in" "$stage/config/lifecycle-v12.conf" \
-    RELEASE_ROOT "$release_root" LIFECYCLE_GROUP serverware-coder-lifecycle-api \
+    RELEASE_ROOT "$release_root" LIFECYCLE_GROUP catchplate-coder-lifecycle-api \
     EXECUTOR_UID "$executor_uid" DOCKER_PROXY_UID "$docker_proxy_uid" \
     CLEANUP_RESERVE_MS "$cleanup_reserve_ms"
 render_template "$template_root/lifecycle-privileged-v12.conf.in" "$stage/config/lifecycle-privileged-v12.conf" \
@@ -1588,11 +1588,11 @@ do
         "$(sha_file "$stage/config/plan-executor-v12.conf")"
 done
 for readiness_enforced_unit in \
-    serverware-coder-plan-executor-v12.service \
-    serverware-coder-readiness-v12.service
+    catchplate-coder-plan-executor-v12.service \
+    catchplate-coder-readiness-v12.service
 do
     grep -Fx \
-        "Environment=SERVERWARE_CODER_REQUIRE_PER_INVOCATION_READINESS_V12=1" \
+        "Environment=CATCHPLATE_CODER_REQUIRE_PER_INVOCATION_READINESS_V12=1" \
         "$stage/systemd/$readiness_enforced_unit" >/dev/null \
         || fail "rendered systemd unit does not enforce per-invocation readiness: $readiness_enforced_unit"
 done
@@ -1686,16 +1686,16 @@ render_template "$template_root/release-manifest-v12.in" "$computed_release_mani
     CLEANUP_RESERVE_MS "$cleanup_reserve_ms" \
     REQUEST_SCHEMA_SHA256 "$(sha_file "$stage/schemas/coder-test-controller-request.v1.schema.json")" \
     RECEIPT_SCHEMA_SHA256 "$(sha_file "$stage/schemas/coder-test-controller-receipt.v12.schema.json")" \
-    CONTROLLER_BINARY_SHA256 "$(sha_file "$stage/bin/serverware-coder-controller-v12")" \
-    CLIENT_BINARY_SHA256 "$(sha_file "$stage/bin/serverware-coder-controller-client-v12")" \
-    EXECUTOR_BINARY_SHA256 "$(sha_file "$stage/bin/serverware-coder-plan-executor-v12")" \
-    DOCKER_PROXY_BINARY_SHA256 "$(sha_file "$stage/bin/serverware-coder-docker-proxy-v12")" \
-    RECEIPT_AUTHORITY_BINARY_SHA256 "$(sha_file "$stage/bin/serverware-coder-receipt-authority-v12")" \
-    LOCAL_TRUST_AUTHORITY_BINARY_SHA256 "$(sha_file "$stage/bin/serverware-coder-local-trust-authority-v12")" \
-    LOG_CUSTODY_AUTHORITY_BINARY_SHA256 "$(sha_file "$stage/bin/serverware-coder-log-custody-authority-v12")" \
-    FINAL_VERDICT_AUTHORITY_BINARY_SHA256 "$(sha_file "$stage/bin/serverware-coder-final-verdict-authority-v12")" \
-    LIFECYCLE_BINARY_SHA256 "$(sha_file "$stage/bin/serverware-coder-lifecycle-v12")" \
-    LIFECYCLE_PRIVILEGED_BINARY_SHA256 "$(sha_file "$stage/bin/serverware-coder-lifecycle-privileged-v12")" \
+    CONTROLLER_BINARY_SHA256 "$(sha_file "$stage/bin/catchplate-coder-controller-v12")" \
+    CLIENT_BINARY_SHA256 "$(sha_file "$stage/bin/catchplate-coder-controller-client-v12")" \
+    EXECUTOR_BINARY_SHA256 "$(sha_file "$stage/bin/catchplate-coder-plan-executor-v12")" \
+    DOCKER_PROXY_BINARY_SHA256 "$(sha_file "$stage/bin/catchplate-coder-docker-proxy-v12")" \
+    RECEIPT_AUTHORITY_BINARY_SHA256 "$(sha_file "$stage/bin/catchplate-coder-receipt-authority-v12")" \
+    LOCAL_TRUST_AUTHORITY_BINARY_SHA256 "$(sha_file "$stage/bin/catchplate-coder-local-trust-authority-v12")" \
+    LOG_CUSTODY_AUTHORITY_BINARY_SHA256 "$(sha_file "$stage/bin/catchplate-coder-log-custody-authority-v12")" \
+    FINAL_VERDICT_AUTHORITY_BINARY_SHA256 "$(sha_file "$stage/bin/catchplate-coder-final-verdict-authority-v12")" \
+    LIFECYCLE_BINARY_SHA256 "$(sha_file "$stage/bin/catchplate-coder-lifecycle-v12")" \
+    LIFECYCLE_PRIVILEGED_BINARY_SHA256 "$(sha_file "$stage/bin/catchplate-coder-lifecycle-privileged-v12")" \
     RUNNER_OCI_SHA256 "$(sha_file "$stage/runner/runner.oci.tar")" RUNNER_OCI_DIGEST "$runner_oci_digest" \
     BROWSER_OCI_SHA256 "$(sha_file "$stage/runner/browser.oci.tar")" BROWSER_OCI_DIGEST "$browser_oci_digest" \
     BUILDKIT_OCI_SHA256 "$(sha_file "$stage/runner/buildkit.oci.tar")" BUILDKIT_OCI_DIGEST "$buildkit_oci_digest" \
@@ -1859,20 +1859,20 @@ systemctl is-enabled --quiet "$target_unit" && current_was_enabled=1 || true
 
 stop_units_bounded() {
     timeout --signal=KILL 45s systemctl stop \
-        serverware-coder-controller-v12.service \
-        serverware-coder-plan-executor-v12.service \
-        serverware-coder-docker-proxy-v12.service \
-        serverware-coder-lifecycle-v12.service >/dev/null 2>&1 || true
-    if systemctl is-active --quiet serverware-coder-private-dind-reconcile-v12.service; then
+        catchplate-coder-controller-v12.service \
+        catchplate-coder-plan-executor-v12.service \
+        catchplate-coder-docker-proxy-v12.service \
+        catchplate-coder-lifecycle-v12.service >/dev/null 2>&1 || true
+    if systemctl is-active --quiet catchplate-coder-private-dind-reconcile-v12.service; then
         timeout --signal=KILL 210s systemctl stop \
-            serverware-coder-private-dind-reconcile-v12.service >/dev/null 2>&1 \
+            catchplate-coder-private-dind-reconcile-v12.service >/dev/null 2>&1 \
             || fail "private DinD reconciliation did not produce bounded terminal cleanup"
     fi
     timeout --signal=KILL 45s systemctl stop "$target_unit" $units >/dev/null 2>&1 || true
     for unit in $units
     do
         case "$unit" in
-        serverware-coder-private-dind-reconcile-v12.service) ;;
+        catchplate-coder-private-dind-reconcile-v12.service) ;;
         *.service)
             systemctl kill --kill-who=all --signal=KILL "$unit" >/dev/null 2>&1 || true
             ;;
@@ -1912,10 +1912,10 @@ rollback_install() {
     status=$?
     test "$rollback_required" -eq 1 || exit "$status"
     reconcile_load_state=$(systemctl show --property=LoadState --value \
-        serverware-coder-private-dind-reconcile-v12.service 2>/dev/null || true)
+        catchplate-coder-private-dind-reconcile-v12.service 2>/dev/null || true)
     if test "$reconcile_load_state" = loaded \
         && ! timeout --signal=KILL 210s systemctl stop \
-            serverware-coder-private-dind-reconcile-v12.service >/dev/null 2>&1
+            catchplate-coder-private-dind-reconcile-v12.service >/dev/null 2>&1
     then
         trap - EXIT HUP INT TERM
         echo "failed release could not complete signed private DinD cleanup; refusing automatic service restoration" >&2
@@ -1925,7 +1925,7 @@ rollback_install() {
     for unit in $units
     do
         case "$unit" in
-        serverware-coder-private-dind-reconcile-v12.service) ;;
+        catchplate-coder-private-dind-reconcile-v12.service) ;;
         *.service)
             systemctl kill --kill-who=all --signal=KILL "$unit" >/dev/null 2>&1 || true
             ;;
@@ -1998,31 +1998,31 @@ systemctl daemon-reload
 systemctl start "$target_unit"
 
 for unit in \
-    serverware-coder-runtime-v12.service \
-    serverware-coder-controller-v12.socket \
-    serverware-coder-plan-executor-v12.socket \
-    serverware-coder-docker-proxy-v12.socket \
-    serverware-coder-lifecycle-v12.socket \
-    serverware-coder-trust-generation-v12.socket \
-    serverware-coder-external-witness-v12.socket \
-    serverware-coder-final-settlement-v12.socket \
-    serverware-coder-receipt-authority-v12.socket \
-    serverware-coder-final-verdict-authority-v12.socket \
-    serverware-coder-lifecycle-privileged-v12.socket \
-    serverware-coder-log-custody-authority-v12.socket \
-    serverware-coder-private-dind-reconcile-v12.service \
-    serverware-coder-lifecycle-privileged-v12.service \
-    serverware-coder-lifecycle-v12.service \
-    serverware-coder-trust-generation-v12.service \
-    serverware-coder-external-witness-v12.service \
-    serverware-coder-final-settlement-v12.service \
-    serverware-coder-log-custody-authority-v12.service \
-    serverware-coder-receipt-authority-v12.service \
-    serverware-coder-final-verdict-authority-v12.service \
-    serverware-coder-docker-proxy-v12.service \
-    serverware-coder-plan-executor-v12.service \
-    serverware-coder-controller-v12.service \
-    serverware-coder-readiness-v12.service
+    catchplate-coder-runtime-v12.service \
+    catchplate-coder-controller-v12.socket \
+    catchplate-coder-plan-executor-v12.socket \
+    catchplate-coder-docker-proxy-v12.socket \
+    catchplate-coder-lifecycle-v12.socket \
+    catchplate-coder-trust-generation-v12.socket \
+    catchplate-coder-external-witness-v12.socket \
+    catchplate-coder-final-settlement-v12.socket \
+    catchplate-coder-receipt-authority-v12.socket \
+    catchplate-coder-final-verdict-authority-v12.socket \
+    catchplate-coder-lifecycle-privileged-v12.socket \
+    catchplate-coder-log-custody-authority-v12.socket \
+    catchplate-coder-private-dind-reconcile-v12.service \
+    catchplate-coder-lifecycle-privileged-v12.service \
+    catchplate-coder-lifecycle-v12.service \
+    catchplate-coder-trust-generation-v12.service \
+    catchplate-coder-external-witness-v12.service \
+    catchplate-coder-final-settlement-v12.service \
+    catchplate-coder-log-custody-authority-v12.service \
+    catchplate-coder-receipt-authority-v12.service \
+    catchplate-coder-final-verdict-authority-v12.service \
+    catchplate-coder-docker-proxy-v12.service \
+    catchplate-coder-plan-executor-v12.service \
+    catchplate-coder-controller-v12.service \
+    catchplate-coder-readiness-v12.service
 do
     systemctl is-active --quiet "$unit" \
         || fail "required v12 unit is not active after readiness: $unit"

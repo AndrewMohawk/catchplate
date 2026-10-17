@@ -19,7 +19,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_revocation_planning_transport as transport
+from catchplate import authority_revocation_planning_transport as transport
 import test_authority_revocation_writer_transport as os_oracle
 
 
@@ -66,7 +66,7 @@ def receive(connection, *, deadline_ns=DEADLINE):
 
 class RevocationPlanningTransportTests(unittest.TestCase):
     def test_literal_distinct_frames_preserve_fragmented_opaque_originals_and_shared_io(self):
-        self.assertEqual(transport.TRANSFER_SCHEMA, "serverware.policyAuthorityRevocationPlanningTransfer/v1")
+        self.assertEqual(transport.TRANSFER_SCHEMA, "catchplate.policyAuthorityRevocationPlanningTransfer/v1")
         self.assertEqual((transport.REQUEST_MAGIC, transport.RESPONSE_MAGIC), (REQUEST_MAGIC, RESPONSE_MAGIC))
         self.assertEqual((transport._REQUEST_LIMITS, transport._RESPONSE_LIMITS), (REQUEST_LIMITS, RESPONSE_LIMITS))
         self.assertEqual((transport.MAX_REQUEST_BYTES, transport.MAX_RESPONSE_BYTES), (TOTAL_LIMIT, TOTAL_LIMIT))

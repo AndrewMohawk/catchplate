@@ -4,8 +4,8 @@ use super::*;
 use crate::policy_shadow::{ObservedAuthorityBinding, OperationClass, Sha256Digest};
 use std::collections::{BTreeMap, BTreeSet};
 
-const PROFILE: &str = "serverware.compiledRouteAuthority/v1";
-pub(crate) const BUNDLE: &str = "serverware.policy/v2";
+const PROFILE: &str = "catchplate.compiledRouteAuthority/v1";
+pub(crate) const BUNDLE: &str = "catchplate.policy/v2";
 const MAX_ROUTES: usize = 128;
 const MAX_OPERATIONS: usize = 128;
 const MAX_BYTES: usize = 512 * 1024;
@@ -36,7 +36,7 @@ pub(crate) fn canonical(value: &Value) -> Result<String, String> {
             },
         })
     }
-    Ok(format!("serverware.policyTypedCanonical/v1\0{}",
+    Ok(format!("catchplate.policyTypedCanonical/v1\0{}",
         canonical_json_ensure_ascii(&transcript(value)?).replace('\u{007f}', "\\u007f")))
 }
 
@@ -80,7 +80,7 @@ fn builtin(kind: &str, name: &str) -> Result<&'static str, String> {
 }
 
 pub(crate) fn admit(raw: &Value, compiled_routes: &[Route]) -> Result<Option<Arc<Compiled>>, String> {
-    if raw["apiVersion"] == "serverware.policy/v1" {
+    if raw["apiVersion"] == "catchplate.policy/v1" {
         if raw.get("routeAuthority").is_some() { return Err("v1 has no route authority profile".into()); }
         return Ok(None);
     }
@@ -175,8 +175,8 @@ pub(crate) fn admit(raw: &Value, compiled_routes: &[Route]) -> Result<Option<Arc
     let mapping = json!({"apiVersion":PROFILE,"profiles":profiles});
     if canonical(&mapping)?.len() > MAX_BYTES { return Err("classifier mapping capacity exceeded".into()); }
     let value = Compiled { mapping_sha256:digest(&mapping)?,
-        route_root:digest(&json!({"apiVersion":"serverware.compiledRouteAuthorityRoutes/v1","profiles":profiles}))?,
-        operation_root:digest(&json!({"apiVersion":"serverware.compiledRouteAuthorityOperations/v1","operations":entries}))?, mapping };
+        route_root:digest(&json!({"apiVersion":"catchplate.compiledRouteAuthorityRoutes/v1","profiles":profiles}))?,
+        operation_root:digest(&json!({"apiVersion":"catchplate.compiledRouteAuthorityOperations/v1","operations":entries}))?, mapping };
     if held["mappingSha256"] != value.mapping_sha256 || held["routeAuthorityRootSha256"] != value.route_root
         || held["operationAuthorityRootSha256"] != value.operation_root {
         return Err("signed classifier pins differ from exact compilation".into());

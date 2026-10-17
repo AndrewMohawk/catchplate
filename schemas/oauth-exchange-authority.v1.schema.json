@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/oauth-exchange-authority.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/oauth-exchange-authority.v1.schema.json",
   "title": "Enrolled OAuth one-shot exchange data contracts, not authority",
   "oneOf": [{"$ref": "#/$defs/policy"}, {"$ref": "#/$defs/arguments"}, {"$ref": "#/$defs/result"}],
   "$defs": {
@@ -19,7 +19,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "enrollmentRootPublicKeyBase64Url", "enrollmentRootSpkiSha256", "controlPlaneConfigurationDigest", "deploymentId", "pendingCapacity", "revocationCapacity"],
       "properties": {
-        "schema": {"const": "serverware.oauthExchangeAuthorityPolicy/v1"},
+        "schema": {"const": "catchplate.oauthExchangeAuthorityPolicy/v1"},
         "enrollmentRootPublicKeyBase64Url": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
         "enrollmentRootSpkiSha256": {"$ref": "#/$defs/digest"},
         "controlPlaneConfigurationDigest": {"$ref": "#/$defs/digest"},

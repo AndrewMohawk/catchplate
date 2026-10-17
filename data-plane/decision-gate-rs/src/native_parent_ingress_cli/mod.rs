@@ -15,7 +15,7 @@ mod originals;
 
 use config::{ConfigurationV1, MAX_CONFIGURATION_BYTES};
 use originals::{ArtifactV1, HeldOriginal};
-use serverware_decision_gate::enclave_parent_ingress_v1::serve_parent_ingress_v1;
+use catchplate_decision_gate::enclave_parent_ingress_v1::serve_parent_ingress_v1;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};

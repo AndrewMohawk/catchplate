@@ -6,9 +6,9 @@ use super::*;
 mod state;
 pub(super) use state::State;
 
-const API: &str = "serverware.policyCustodyProductionAttemptStart/v1";
-const START_DOMAIN: &[u8] = b"serverware.policyCustodyProductionAttemptStart/v1";
-const COMPLETE_DOMAIN: &[u8] = b"serverware.policyCustodyProductionAttemptComplete/v1";
+const API: &str = "catchplate.policyCustodyProductionAttemptStart/v1";
+const START_DOMAIN: &[u8] = b"catchplate.policyCustodyProductionAttemptStart/v1";
+const COMPLETE_DOMAIN: &[u8] = b"catchplate.policyCustodyProductionAttemptComplete/v1";
 
 /// Derived indexes only: the durable originals remain the authority. Replay IDs
 /// include request content, so operation and fence must also be indexed. Rebuild

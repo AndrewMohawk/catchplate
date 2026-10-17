@@ -28,8 +28,8 @@ import time
 
 MAX_ORIGINAL = 3 * 1024 * 1024
 MAX_PAYLOAD = 2 * 1024 * 1024
-SIGNED_SCHEMA = "serverware.signedMeasuredAuditAuthorityPolicy/v1"
-POLICY_SCHEMA = "serverware.measuredAuditAuthorityPolicy/v1"
+SIGNED_SCHEMA = "catchplate.signedMeasuredAuditAuthorityPolicy/v1"
+POLICY_SCHEMA = "catchplate.measuredAuditAuthorityPolicy/v1"
 
 
 def require(condition):

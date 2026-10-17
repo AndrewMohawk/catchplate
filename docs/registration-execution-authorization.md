@@ -25,7 +25,7 @@ registration, revocation or transition privileges.
 
 ## Root-delegated caller and fixed scope
 
-[`authority_registration_execution_authorization`](../serverware/authority_registration_execution_authorization.py)
+[`authority_registration_execution_authorization`](../catchplate/authority_registration_execution_authorization.py)
 admits and produces the dedicated authorization enrollment. Genuine original
 current-root and successor-grant enrollments supply the database, generation,
 enrollment identities and intended grant-authorizer audience. The independent
@@ -42,10 +42,10 @@ not establish measurement provenance, private-key protection or an actual
 user/session admission.
 
 The enrollment envelope is
-`serverware.signedPolicyAuthorityRegistrationExecutionAuthorizationEnrollment/v1`.
+`catchplate.signedPolicyAuthorityRegistrationExecutionAuthorizationEnrollment/v1`.
 Its closed payload has 14 fields; original enrollment bytes are bounded to
 16 KiB. The request envelope is
-`serverware.signedPolicyAuthorityRegistrationExecutionAuthorization/v1`, with
+`catchplate.signedPolicyAuthorityRegistrationExecutionAuthorization/v1`, with
 exactly `schema`, `payload` and `signatureBase64Url`. Its closed 18-field payload
 binds the same scope, authorization-enrollment identity, typed request digest,
 operation identity, fresh nonzero 32-byte authorization ID and original issue/
@@ -55,7 +55,7 @@ arbitrary operation list or a caller-selected successful execution result.
 ## Actual originals through plan and grant production
 
 The private
-[`authority_registration_execution_issuance._produce_on_configuration`](../serverware/authority_registration_execution_issuance.py)
+[`authority_registration_execution_issuance._produce_on_configuration`](../catchplate/authority_registration_execution_issuance.py)
 composition starts with original raw8 registration source-exchange frames and
 raw2 signed evidence output. It reconstructs the actual typed evidence request
 through the genuine original-input path before signing caller authorization.
@@ -79,7 +79,7 @@ that permission. The return value is original signed authorization bytes, not
 an accepted request object or a successful-execution result.
 
 The private
-[`authority_registration_execution_grant_production._produce_on_work`](../serverware/authority_registration_execution_grant_production.py)
+[`authority_registration_execution_grant_production._produce_on_work`](../catchplate/authority_registration_execution_grant_production.py)
 authenticates the original authorization, then genuinely replays the original
 raw3 plan. It joins the resulting typed request digest and operation identity
 to that authorization **before successor-grant signing**. It does not change

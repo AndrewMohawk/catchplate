@@ -5,9 +5,9 @@ use super::common::AuthenticatedInheritedSeqpacket;
 use super::super::protocol::{ProtocolBoottimeDeadline, require_nonzero_digest};
 use crate::policy_shadow::hash_domain_frames;
 
-pub(super) const RUNTIME: &str = "serverware.policyCustodyServiceRuntimeConfig/v9";
-pub(super) const API: &str = "serverware.policyCustodyCleanupHelperInitialBootstrap/v1";
-const SEAL_API: &str = "serverware.policyCustodyCleanupHelperInitialSeal/v1";
+pub(super) const RUNTIME: &str = "catchplate.policyCustodyServiceRuntimeConfig/v9";
+pub(super) const API: &str = "catchplate.policyCustodyCleanupHelperInitialBootstrap/v1";
+const SEAL_API: &str = "catchplate.policyCustodyCleanupHelperInitialSeal/v1";
 pub(super) const ROLES: [PolicyCustodyEndpointRole; 4] = [
     PolicyCustodyEndpointRole::SettlementStore, PolicyCustodyEndpointRole::FenceAuthority,
     PolicyCustodyEndpointRole::CgroupExecutor, PolicyCustodyEndpointRole::TerminationLedger,
@@ -244,7 +244,7 @@ mod tests {
             value.shared_configuration_sha256,value.service_configuration_sha256,
             value.initial_endpoint_history_sha256,value.deadline])).unwrap();
         let mut hash = Sha256::new();
-        hash.update(b"serverware.policyCustodyCleanupHelperInitialBootstrap/v1\0");
+        hash.update(b"catchplate.policyCustodyCleanupHelperInitialBootstrap/v1\0");
         hash.update((raw.len() as u64).to_be_bytes()); hash.update(&raw);
         assert_eq!(value.expected_digest().unwrap().as_str(), format!("sha256:{}",hex::encode(hash.finalize())));
         let mut changed = value.clone(); changed.operation_generation += 1;

@@ -22,10 +22,10 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
 
-from serverware import native_pilot_launch_authorization_profile as profile
-from serverware import native_pilot_encrypted_authority as encrypted
-from serverware import native_pilot_verifier_authority as verifier
-from serverware import native_pilot_closure_authority as closure
+from catchplate import native_pilot_launch_authorization_profile as profile
+from catchplate import native_pilot_encrypted_authority as encrypted
+from catchplate import native_pilot_verifier_authority as verifier
+from catchplate import native_pilot_closure_authority as closure
 from test_native_pilot_key_authorizations import (ROLES, public_keys, fixture as key_fixture_input,
     build as key_input, expected_payload as key_payload, signed_result as key_result, clocks, key_root)
 from test_native_pilot_native_deliveries import bind_set, result_for
@@ -35,26 +35,26 @@ from test_native_pilot_closure_set import canonical, sha, synthetic, frame
 EXPECTED_JOBS = tuple((operation, role) for role in ROLES for operation in
     (("closure", "request-commitment", "encrypted-delivery", "verifier-transport") if role == "commitRequest"
      else ("closure", "encrypted-delivery", "verifier-transport")))
-DOMAINS = {"closure": "serverware.nativeCustodyClosureAssignment.signature/v3",
-    "request-commitment": "serverware.nativeShadowRequestCommitmentAssignment.signature/v2",
-    "verifier-transport": "serverware.nativeShadowVerifierTransport.signature/v1"}
+DOMAINS = {"closure": "catchplate.nativeCustodyClosureAssignment.signature/v3",
+    "request-commitment": "catchplate.nativeShadowRequestCommitmentAssignment.signature/v2",
+    "verifier-transport": "catchplate.nativeShadowVerifierTransport.signature/v1"}
 
 
 def transport(role):
     extended = role == "commitRequest"
-    return {"apiVersion": "serverware.nativeShadowKeyKmsTransport/v" + ("2" if extended else "1"),
+    return {"apiVersion": "catchplate.nativeShadowKeyKmsTransport/v" + ("2" if extended else "1"),
         "kmsParentPort": 10443, "kmsKeyId": "synthetic-only-not-a-provisioned-kms-key",
         "ciphertextBlobSha256": synthetic("unprovisioned-kms-ciphertext/" + role),
-        "encryptionContext": {"serverwarePurpose": "native-shadow-local-role-keys-and-request-commitment/v2"
+        "encryptionContext": {"catchplatePurpose": "native-shadow-local-role-keys-and-request-commitment/v2"
             if extended else "native-shadow-local-role-keys/v1"}, "kekSha256": synthetic("unprovisioned-kek/" + role),
-        "helperImage": {"profile": "sealed-memfd-squashfs-v1", "imagePath": "/opt/serverware/native-shadow-key-delivery-runtime.squashfs",
+        "helperImage": {"profile": "sealed-memfd-squashfs-v1", "imagePath": "/opt/catchplate/native-shadow-key-delivery-runtime.squashfs",
             **{name: synthetic("synthetic-key-helper/" + name) for name in ("imageSha256", "interpreterSha256", "helperSha256")}},
         "encryptedInventorySha256": synthetic("unprovisioned-encrypted-inventory/" + role)}
 
 
 def policy_fragment():
     interval = {"issuedAtUnixNanos": NOW - 500_000_000, "expiresAtUnixNanos": NOW + 500_000_000}
-    value = {"apiVersion": "serverware.nativePilotLaunchAuthorizationPolicy/v1", "endpoints": {}}
+    value = {"apiVersion": "catchplate.nativePilotLaunchAuthorizationPolicy/v1", "endpoints": {}}
     for role in ROLES:
         value["endpoints"][role] = {"closure": dict(interval),
             "encryptedDelivery": dict(interval, transportOriginal=canonical(transport(role)).decode("ascii")),
@@ -85,7 +85,7 @@ def fixture():
     for role in ROLES:
         credentials = copy.deepcopy(json.loads(f["deliveries"][role])["payload"]["credentials"])
         credentials.append({"name": "shadow-encrypted-role-inventory", "original": {
-            "path": "/etc/serverware/synthetic-ciphertext-" + role + ".json",
+            "path": "/etc/catchplate/synthetic-ciphertext-" + role + ".json",
             "sha256": transport(role)["encryptedInventorySha256"]}, "length": 256, "signing": None})
         set_credentials(f, role, credentials)
     return f
@@ -112,32 +112,32 @@ def expected(f, selected, pair_value, operation, role):
     if operation != "closure":
         common["keyAuthorizationSha256"] = sha(pair_value["roleKeyOriginal"].encode("ascii"))
     if operation == "request-commitment":
-        return {**common, "apiVersion": "serverware.nativeShadowRequestCommitmentAssignment/v2",
+        return {**common, "apiVersion": "catchplate.nativeShadowRequestCommitmentAssignment/v2",
             "purpose": "native-shadow-request-and-ingress-commitments",
             "requestCommitment": json.loads(row[field]["requestCommitmentOriginal"])}
     common.update(assignmentId=key["assignmentId"], assignmentRevision=key["assignmentRevision"])
     if operation == "closure":
         selected_set = json.loads(f["recipe_originals"]["closureSetOriginal"])
         manifest = next(member["manifest"] for member in selected_set["members"] if member["role"] == role)
-        return {**common, "apiVersion": "serverware.nativeCustodyClosureAssignment/v3",
+        return {**common, "apiVersion": "catchplate.nativeCustodyClosureAssignment/v3",
             "purpose": "shadow-custody-closure-set-member", "profile": "native-multi-guest-closure-set-v1",
             "manifestSha256": manifest["manifestSha256"], "guestRole": role,
             **{name: selected_set[name] for name in ("setRootSha256", "seccompSetRootSha256")},
-            "leafSha256": frame("serverware.nativeCustodyExecutionClosureSetLeaf/v1", [role, manifest])}
+            "leafSha256": frame("catchplate.nativeCustodyExecutionClosureSetLeaf/v1", [role, manifest])}
     common.update(fullKeySetRootSha256=key["fullKeySetRootSha256"], challengeBase64url=key["challengeBase64url"])
     if operation == "verifier-transport":
         public = public_keys()[-2]
-        return {**common, "apiVersion": "serverware.nativeShadowVerifierTransportAssignment/v1",
+        return {**common, "apiVersion": "catchplate.nativeShadowVerifierTransportAssignment/v1",
             "purpose": "public-shadow-nitro-verification", "parentPort": row[field]["parentPort"],
             **{"verifier" + name[0].upper() + name[1:]: public[name]
                 for name in ("keyId", "keySpkiSha256", "keyMaterialSha256")}}
-    return {**common, "apiVersion": "serverware.nativeShadowEncryptedKeyDeliveryAssignment/v" + ("2" if role == "commitRequest" else "1"),
+    return {**common, "apiVersion": "catchplate.nativeShadowEncryptedKeyDeliveryAssignment/v" + ("2" if role == "commitRequest" else "1"),
         "purpose": "kms-recipient-shadow-local-keys-and-request-commitment" if role == "commitRequest" else "kms-recipient-shadow-local-keys",
         "localKeySetRootSha256": admitted["localKeySetRootSha256"], "transport": json.loads(row[field]["transportOriginal"])}
 
 
 def signed(f, operation, role, payload, *, prior=None, key=None, domain=None):
-    domain = domain or ("serverware.nativeShadowEncryptedKeyDelivery.signature/v" + ("2" if role == "commitRequest" else "1")
+    domain = domain or ("catchplate.nativeShadowEncryptedKeyDelivery.signature/v" + ("2" if role == "commitRequest" else "1")
         if operation == "encrypted-delivery" else DOMAINS[operation])
     signature = encoded((key or key_fixture("custody-supervisor-capability")[0]).sign(signed_message(domain, payload)))
     authorization = {"payload": payload, "signature": signature}
@@ -145,11 +145,11 @@ def signed(f, operation, role, payload, *, prior=None, key=None, domain=None):
         value = authorization
     elif operation == "closure":
         selected = json.loads(f["recipe_originals"]["closureSetOriginal"])
-        value = {"apiVersion": "serverware.nativeCustodyClosure/v3", "closureSet": selected,
+        value = {"apiVersion": "catchplate.nativeCustodyClosure/v3", "closureSet": selected,
             "manifest": next(member["manifest"] for member in selected["members"] if member["role"] == role), "authorization": authorization}
     else:
-        value = {"apiVersion": "serverware.nativeShadowVerifierTransport/v1" if operation == "verifier-transport"
-            else "serverware.nativeShadowEncryptedKeyDelivery/v" + ("2" if role == "commitRequest" else "1"), "authorization": authorization}
+        value = {"apiVersion": "catchplate.nativeShadowVerifierTransport/v1" if operation == "verifier-transport"
+            else "catchplate.nativeShadowEncryptedKeyDelivery/v" + ("2" if role == "commitRequest" else "1"), "authorization": authorization}
         if operation == "encrypted-delivery" and role == "commitRequest":
             value["requestCommitment"] = json.loads(prior)
     raw = canonical(value)
@@ -228,7 +228,7 @@ class LaunchAuthorizationControls(unittest.TestCase):
         f = {name: value if name == "key" else copy.deepcopy(value) for name, value in self.f.items()}
         credentials = copy.deepcopy(json.loads(f["deliveries"]["retrieval"])["payload"]["credentials"])
         credentials.append({"name": "shadow-key-custody-ledger-append", "original": {
-            "path": "/etc/serverware/synthetic-forbidden-plaintext", "sha256": synthetic("not-real-key")}, "length": 32, "signing": None})
+            "path": "/etc/catchplate/synthetic-forbidden-plaintext", "sha256": synthetic("not-real-key")}, "length": 32, "signing": None})
         set_credentials(f, "retrieval", credentials)
         with self.assertRaises(ValueError):
             profile.build("encrypted-delivery", "retrieval", fragment=self.selected, pair_context=pair(f, "retrieval"),
@@ -263,7 +263,7 @@ class LaunchAuthorizationControls(unittest.TestCase):
                 prior = json.loads(value["requestCommitmentOriginal"])
                 if change == "unsigned": prior.pop("signature")
                 elif change == "signature": prior["signature"] = encoded(bytes(64))
-                else: prior["payload"]["apiVersion"] = "serverware.nativeShadowRequestCommitmentAssignment/v1"
+                else: prior["payload"]["apiVersion"] = "catchplate.nativeShadowRequestCommitmentAssignment/v1"
                 value["requestCommitmentOriginal"] = canonical(prior).decode("ascii")
             with self.subTest(change=change), self.assertRaises((ValueError, InvalidSignature)):
                 encrypted.prepare_input("delivery", "commitRequest", canonical(value), **clocks(self.f))
@@ -281,7 +281,7 @@ class LaunchAuthorizationControls(unittest.TestCase):
             for key in (self.f["key"], key_fixture("custody-attestation-verifier")[0]):
                 _, wrong = signed(self.f, operation, role, payload, key=key)
                 with self.assertRaises(InvalidSignature): profile.checked_result(operation, role, raw, wrong, **clocks(self.f))
-            _, wrong = signed(self.f, operation, role, payload, domain="serverware.synthetic-wrong-domain/v1")
+            _, wrong = signed(self.f, operation, role, payload, domain="catchplate.synthetic-wrong-domain/v1")
             with self.assertRaises(InvalidSignature): profile.checked_result(operation, role, raw, wrong, **clocks(self.f))
             for wrong in (result | {"sha256": synthetic("bad-result")}, result | {"approved": True}):
                 with self.assertRaises(ValueError): profile.checked_result(operation, role, raw, wrong, **clocks(self.f))

@@ -1,6 +1,6 @@
 # Historical registration completion admission
 
-[`authority_registration_completion_history._verify_on_configuration`](../serverware/authority_registration_completion_history.py)
+[`authority_registration_completion_history._verify_on_configuration`](../catchplate/authority_registration_completion_history.py)
 authenticates a completed registration-evidence operation from the complete
 original exchange, even after its original execution controls expire. It
 returns authenticated completion/state originals and their actual content IDs,

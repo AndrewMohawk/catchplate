@@ -19,13 +19,13 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract  # noqa: E402
-from serverware import authority_jit_request  # noqa: E402
-from serverware import authority_successor_programs  # noqa: E402
-from serverware import authority_transition_core as core  # noqa: E402
-from serverware import authority_transition_policy  # noqa: E402
-from serverware import authority_transition_quota  # noqa: E402
-from serverware import authority_transition_registry  # noqa: E402
+from catchplate import authority_contract  # noqa: E402
+from catchplate import authority_jit_request  # noqa: E402
+from catchplate import authority_successor_programs  # noqa: E402
+from catchplate import authority_transition_core as core  # noqa: E402
+from catchplate import authority_transition_policy  # noqa: E402
+from catchplate import authority_transition_quota  # noqa: E402
+from catchplate import authority_transition_registry  # noqa: E402
 
 
 _CHALLENGE_OPERATIONS = frozenset(
@@ -68,12 +68,12 @@ class AuthorityTransitionRegistryTests(unittest.TestCase):
             ),
         ):
             return runpy.run_path(
-                str(ROOT / "serverware" / "authority_transition_registry.py")
+                str(ROOT / "catchplate" / "authority_transition_registry.py")
             )
 
     def test_actual_complete_source_partition_is_accepted(self) -> None:
         # Do not replace any registry, operation or kernel for this positive.
-        loaded = runpy.run_path(str(ROOT / "serverware" / "authority_transition_registry.py"))
+        loaded = runpy.run_path(str(ROOT / "catchplate" / "authority_transition_registry.py"))
         self.assertEqual(loaded["INTENTIONALLY_DISABLED_OPERATIONS"], _DISABLED_OPERATIONS)
         self.assertEqual(loaded["WEBAUTHN_CHALLENGE_OPERATIONS"], _CHALLENGE_OPERATIONS)
         self.assertEqual(set(loaded["KERNELS"]), {
@@ -115,7 +115,7 @@ class AuthorityTransitionRegistryTests(unittest.TestCase):
                     with patch.object(authority_successor_programs, "PROGRAMS", changed):
                         with self.assertRaisesRegex(RuntimeError,
                                 rf"invalid successor program {operation}=\[{diagnostic}\]"):
-                            runpy.run_path(str(ROOT / "serverware" / "authority_transition_registry.py"))
+                            runpy.run_path(str(ROOT / "catchplate" / "authority_transition_registry.py"))
 
     def test_existing_successor_cannot_be_relabelled_as_component_only(self) -> None:
         operation = "oidc.session.activate"
@@ -126,7 +126,7 @@ class AuthorityTransitionRegistryTests(unittest.TestCase):
         with patch.object(authority_successor_programs, "PROGRAMS", changed):
             with self.assertRaisesRegex(RuntimeError,
                     rf"invalid successor program {operation}=\[result-kind, kernel-factory, plan-factory\]"):
-                runpy.run_path(str(ROOT / "serverware" / "authority_transition_registry.py"))
+                runpy.run_path(str(ROOT / "catchplate" / "authority_transition_registry.py"))
 
     def test_missing_kernels_are_named_in_sorted_order(self) -> None:
         kernels = self._kernels()
@@ -261,7 +261,7 @@ class JitRequestDependencyContractTests(unittest.TestCase):
     """Real contract/kernel checks; no synthetic registry or admitted transition."""
 
     def _arguments(self) -> dict:
-        policy = {"schema": "serverware.jitApproverPolicy/v1", "requireWebAuthn": True,
+        policy = {"schema": "catchplate.jitApproverPolicy/v1", "requireWebAuthn": True,
                   "threshold": 1, "requiredRoles": ["approver"], "roleMatch": "any",
                   "allowedApproverIds": ["reviewer"], "allowAnyApproverId": False,
                   "credentialPolicy": {

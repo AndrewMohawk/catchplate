@@ -44,11 +44,11 @@ class ManagedHelperOracleTests(unittest.TestCase):
         self.setup = check.setup_from_catalog(self.app)
         issued = NOW + 1000
         self.lease = check.managed.TokenLease(NEW, 2, issued + 3_600_000, issued + 10 + 300_000)
-        self.request = {"schema": "serverware.workloadTokenRenewal/v1", "audience": self.setup["audience"],
+        self.request = {"schema": "catchplate.workloadTokenRenewal/v1", "audience": self.setup["audience"],
             "application_id": APP, "enrollment_id": ENROLL, "expected_token_generation": 1,
             "operation_id": OP, "issued_at_epoch_ms": issued, "expires_at_epoch_ms": issued + 60_000,
             "token_sha256": check.digest(NEW.encode()), "token_expires_at_epoch_ms": self.lease.expires_at_epoch_ms}
-        signing = b"serverware.workload-token-renewal/v1\x00POST /v1/workload/renew\x00" + check.canonical(self.request)
+        signing = b"catchplate.workload-token-renewal/v1\x00POST /v1/workload/renew\x00" + check.canonical(self.request)
         self.receipt = {"operation_id": OP, "request_sha256": check.digest(signing), "application_id": APP,
             "enrollment_id": ENROLL, "previous_generation": 1, "token_generation": 2,
             "token_sha256": self.request["token_sha256"], "issued_at_epoch_ms": issued, "rotated_at_epoch_ms": issued + 10,

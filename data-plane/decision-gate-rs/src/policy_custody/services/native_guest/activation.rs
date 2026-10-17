@@ -4,11 +4,11 @@ use super::*;
 use crate::policy_shadow::native_activation as operation;
 use crate::policy_shadow::policy_custody::services as services;
 use services::guest::native_guest as guest;
-use serverware_decision_gate::native_policy_activation_transport::ChannelVersion;
+use catchplate_decision_gate::native_policy_activation_transport::ChannelVersion;
 use std::os::fd::{AsFd,AsRawFd,OwnedFd};
 use ed25519_dalek::Signer;
-const DOMAIN:&str="serverware.nativeShadowActivationServiceAssignment.signature/v1";
-const DOMAIN_V2:&str="serverware.nativeShadowActivationServiceAssignment.signature/v2";
+const DOMAIN:&str="catchplate.nativeShadowActivationServiceAssignment.signature/v1";
+const DOMAIN_V2:&str="catchplate.nativeShadowActivationServiceAssignment.signature/v2";
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Payload {
@@ -23,8 +23,8 @@ struct Payload {
 struct Configuration {payload:Payload,signature:CanonicalEd25519Signature}
 impl Configuration {
     fn version(&self)->Result<ChannelVersion,ShadowError>{match self.payload.api_version.as_str(){
-        "serverware.nativeShadowActivationServiceAssignment/v1"=>Ok(ChannelVersion::UnixV1),
-        "serverware.nativeShadowActivationServiceAssignment/v2"=>Ok(ChannelVersion::VsockV2),
+        "catchplate.nativeShadowActivationServiceAssignment/v1"=>Ok(ChannelVersion::UnixV1),
+        "catchplate.nativeShadowActivationServiceAssignment/v2"=>Ok(ChannelVersion::VsockV2),
         _=>Err(ShadowError::BindingDrift),
     }}
     fn verify(&self,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
@@ -78,7 +78,7 @@ impl Prepared {
         require(Arc::ptr_eq(&keys.association.owner,&delivery.owner))?;
         keys.association.check_startup().map_err(fail)?;self.configuration.verify(keys,trust,time)?;
         let journal=operation::store::Journal::open(self.journal,&self.configuration.payload.initial_state_sha256)?;
-        let channel=serverware_decision_gate::native_policy_activation_transport::ServiceChannel::from_delivery_version(
+        let channel=catchplate_decision_gate::native_policy_activation_transport::ServiceChannel::from_delivery_version(
             self.channel,self.configuration.version()?).map_err(fail)?;
         let value=Service{original:self.original,configuration:self.configuration,authority_original:self.authority_original,
             authority:self.authority,channel,journal};
@@ -87,7 +87,7 @@ impl Prepared {
 }
 pub(crate) struct Service {
     original:services::guest_original::Original,configuration:Configuration,authority_original:services::guest_original::Original,
-    authority:operation::Authority,channel:serverware_decision_gate::native_policy_activation_transport::ServiceChannel,
+    authority:operation::Authority,channel:catchplate_decision_gate::native_policy_activation_transport::ServiceChannel,
     journal:operation::store::Journal,
 }
 impl Service {

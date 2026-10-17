@@ -32,14 +32,14 @@ sys.path.insert(0, str(ROOT))
 
 
 def configure_sqlite(data_dir: str) -> None:
-    os.environ["SERVERWARE_DATA_DIR"] = data_dir
-    os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-    os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
-    os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-    os.environ["SERVERWARE_RELEASE_CHANNEL"] = "test"
-    os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
-    os.environ["SERVERWARE_DATA_PLANE_INSTANCE_ID"] = "jit-transaction-test"
-    os.environ["SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"] = "jit-release-test-token"
+    os.environ["CATCHPLATE_DATA_DIR"] = data_dir
+    os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+    os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
+    os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+    os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "test"
+    os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
+    os.environ["CATCHPLATE_DATA_PLANE_INSTANCE_ID"] = "jit-transaction-test"
+    os.environ["CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"] = "jit-release-test-token"
 
 
 def postgres_schema_dsn(base_dsn: str, schema: str) -> str:
@@ -51,21 +51,21 @@ def postgres_schema_dsn(base_dsn: str, schema: str) -> str:
 def configure_postgres(base_dsn: str, data_dir: str) -> tuple[str, str]:
     import psycopg
 
-    schema = f"serverware_jit_test_{uuid.uuid4().hex}"
+    schema = f"catchplate_jit_test_{uuid.uuid4().hex}"
     with psycopg.connect(base_dsn, autocommit=True) as conn:
         conn.execute(f'CREATE SCHEMA "{schema}"')
     dsn = postgres_schema_dsn(base_dsn, schema)
-    os.environ["SERVERWARE_DATA_DIR"] = data_dir
-    os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "postgres"
-    os.environ["SERVERWARE_METADATA_STORE_POSTGRES_DSN"] = dsn
-    os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "postgres"
-    os.environ["SERVERWARE_GRANT_STORE_POSTGRES_DSN"] = dsn
-    os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "postgres"
-    os.environ["SERVERWARE_AUDIT_STORE_POSTGRES_DSN"] = dsn
-    os.environ["SERVERWARE_RELEASE_CHANNEL"] = "test"
-    os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
-    os.environ["SERVERWARE_DATA_PLANE_INSTANCE_ID"] = "jit-transaction-test"
-    os.environ["SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"] = "jit-release-test-token"
+    os.environ["CATCHPLATE_DATA_DIR"] = data_dir
+    os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "postgres"
+    os.environ["CATCHPLATE_METADATA_STORE_POSTGRES_DSN"] = dsn
+    os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "postgres"
+    os.environ["CATCHPLATE_GRANT_STORE_POSTGRES_DSN"] = dsn
+    os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "postgres"
+    os.environ["CATCHPLATE_AUDIT_STORE_POSTGRES_DSN"] = dsn
+    os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "test"
+    os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
+    os.environ["CATCHPLATE_DATA_PLANE_INSTANCE_ID"] = "jit-transaction-test"
+    os.environ["CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"] = "jit-release-test-token"
     return schema, dsn
 
 
@@ -80,19 +80,19 @@ def exercise_postgres_catalog_schema_isolation(db: Any, base_dsn: str) -> None:
     import psycopg
 
     suffix = uuid.uuid4().hex
-    table_name = f"serverware_catalog_shadow_{suffix}"
-    function_name = f"serverware_catalog_shadow_guard_{suffix}"
+    table_name = f"catchplate_catalog_shadow_{suffix}"
+    function_name = f"catchplate_catalog_shadow_guard_{suffix}"
     trigger_names = (
-        "serverware_audit_storage_epoch_guard",
-        "serverware_metadata_audit_storage_epoch_guard",
-        "serverware_rate_counter_storage_epoch_guard",
-        "serverware_quota_storage_epoch_guard",
+        "catchplate_audit_storage_epoch_guard",
+        "catchplate_metadata_audit_storage_epoch_guard",
+        "catchplate_rate_counter_storage_epoch_guard",
+        "catchplate_quota_storage_epoch_guard",
     )
     with psycopg.connect(base_dsn, autocommit=True) as admin:
         admin.execute(
             f'''
             CREATE TABLE public."{table_name}" (
-                value TEXT CONSTRAINT serverware_audit_events_event_json_size
+                value TEXT CONSTRAINT catchplate_audit_events_event_json_size
                     CHECK (octet_length(value) <= 8388608)
             );
             CREATE FUNCTION public."{function_name}"()
@@ -140,7 +140,7 @@ def exercise_postgres_audit_lock_namespace(db: Any, base_dsn: str) -> None:
     import psycopg
     from psycopg.rows import dict_row
 
-    schemas = [f"serverware_lock_test_{uuid.uuid4().hex}" for _ in range(2)]
+    schemas = [f"catchplate_lock_test_{uuid.uuid4().hex}" for _ in range(2)]
     with psycopg.connect(base_dsn, autocommit=True) as admin:
         for schema in schemas:
             admin.execute(f'CREATE SCHEMA "{schema}"')
@@ -200,7 +200,7 @@ def exercise_postgres_rolling_audit_lock_compatibility(
             "SELECT pg_advisory_xact_lock(%s)", (db._AUDIT_CHAIN_LOCK_KEY,)
         )
         previous = old_conn.execute(
-            "SELECT event_hash FROM serverware_audit_events "
+            "SELECT event_hash FROM catchplate_audit_events "
             "ORDER BY sequence DESC LIMIT 1"
         ).fetchone()
         old_prev_hash = previous["event_hash"] if previous else None
@@ -239,7 +239,7 @@ def exercise_postgres_rolling_audit_lock_compatibility(
                     "new writer bypassed the legacy fixed audit-chain lock"
                 )
             old_conn.execute(
-                "INSERT INTO serverware_audit_events "
+                "INSERT INTO catchplate_audit_events "
                 "(id, event_type, actor_type, actor_id, event_json, "
                 "prev_event_hash, event_hash, created_at) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
@@ -264,7 +264,7 @@ def exercise_postgres_rolling_audit_lock_compatibility(
         )
     with psycopg.connect(dsn, row_factory=dict_row) as check:
         rows = check.execute(
-            "SELECT id, prev_event_hash, event_hash FROM serverware_audit_events "
+            "SELECT id, prev_event_hash, event_hash FROM catchplate_audit_events "
             "WHERE id IN (%s, %s) ORDER BY sequence ASC",
             (old_event_id, new_event_id),
         ).fetchall()
@@ -281,7 +281,7 @@ def exercise_postgres_inflight_legacy_migration_barrier(
     import psycopg
     from psycopg.rows import dict_row
 
-    schema = f"serverware_inflight_legacy_{uuid.uuid4().hex}"
+    schema = f"catchplate_inflight_legacy_{uuid.uuid4().hex}"
     dsn = postgres_schema_dsn(base_dsn, schema)
     keyring = db.load_bound_secret_keyring()
     with psycopg.connect(base_dsn, autocommit=True) as admin:
@@ -291,7 +291,7 @@ def exercise_postgres_inflight_legacy_migration_barrier(
             with setup.transaction():
                 setup.execute(
                     """
-                    CREATE TABLE serverware_audit_events (
+                    CREATE TABLE catchplate_audit_events (
                         sequence BIGSERIAL PRIMARY KEY,
                         id TEXT NOT NULL UNIQUE,
                         event_type TEXT NOT NULL,
@@ -304,21 +304,21 @@ def exercise_postgres_inflight_legacy_migration_barrier(
                         event_hash TEXT NOT NULL UNIQUE,
                         created_at TEXT NOT NULL
                     );
-                    CREATE TABLE serverware_store_migrations (
+                    CREATE TABLE catchplate_store_migrations (
                         migration TEXT PRIMARY KEY,
                         version BIGINT NOT NULL,
                         applied_at TEXT NOT NULL
                     );
-                    CREATE FUNCTION serverware_audit_storage_epoch_guard()
+                    CREATE FUNCTION catchplate_audit_storage_epoch_guard()
                     RETURNS trigger LANGUAGE plpgsql AS $$
                     BEGIN
                         RETURN NEW;
                     END;
                     $$;
-                    CREATE TRIGGER serverware_audit_storage_epoch_guard
-                        BEFORE INSERT OR UPDATE ON serverware_audit_events
+                    CREATE TRIGGER catchplate_audit_storage_epoch_guard
+                        BEFORE INSERT OR UPDATE ON catchplate_audit_events
                         FOR EACH ROW EXECUTE FUNCTION
-                            serverware_audit_storage_epoch_guard();
+                            catchplate_audit_storage_epoch_guard();
                     CREATE TABLE metadata_audit_outbox (
                         id TEXT PRIMARY KEY,
                         event_type TEXT NOT NULL,
@@ -359,7 +359,7 @@ def exercise_postgres_inflight_legacy_migration_barrier(
         )
         with psycopg.connect(dsn, row_factory=dict_row) as legacy:
             legacy.execute(
-                "INSERT INTO serverware_audit_events "
+                "INSERT INTO catchplate_audit_events "
                 "(id, event_type, actor_type, actor_id, event_json, "
                 "prev_event_hash, event_hash, created_at) "
                 "VALUES (%s, 'rate_limit.denied', 'test', "
@@ -395,12 +395,12 @@ def exercise_postgres_inflight_legacy_migration_barrier(
         with psycopg.connect(dsn, row_factory=dict_row) as check:
             audit_row = check.execute(
                 "SELECT event_json, encrypted_canonical_event_json, "
-                "storage_format_version, event_hash FROM serverware_audit_events "
+                "storage_format_version, event_hash FROM catchplate_audit_events "
                 "WHERE id = %s",
                 (audit_event_id,),
             ).fetchone()
             audit_gate = check.execute(
-                "SELECT version FROM serverware_store_migrations "
+                "SELECT version FROM catchplate_store_migrations "
                 "WHERE migration = %s",
                 (db._AUDIT_STORAGE_REDACTION_MIGRATION,),
             ).fetchone()
@@ -454,7 +454,7 @@ def exercise_postgres_inflight_legacy_migration_barrier(
                 (counter_key,),
             ).fetchone()
             metadata_gate = check.execute(
-                "SELECT version FROM serverware_store_migrations "
+                "SELECT version FROM catchplate_store_migrations "
                 "WHERE migration = %s",
                 (db._METADATA_STORAGE_REDACTION_MIGRATION,),
             ).fetchone()
@@ -480,7 +480,7 @@ def exercise_postgres_audit_migration_faults(db: Any, base_dsn: str) -> None:
     keyring = db.load_bound_secret_keyring()
 
     def run_case(label: str, fault: str) -> None:
-        schema = f"serverware_audit_fault_{uuid.uuid4().hex}"
+        schema = f"catchplate_audit_fault_{uuid.uuid4().hex}"
         dsn = postgres_schema_dsn(base_dsn, schema)
         with psycopg.connect(base_dsn, autocommit=True) as admin:
             admin.execute(f'CREATE SCHEMA "{schema}"')
@@ -489,7 +489,7 @@ def exercise_postgres_audit_migration_faults(db: Any, base_dsn: str) -> None:
                 with conn.transaction():
                     conn.execute(
                         """
-                        CREATE TABLE serverware_audit_events (
+                        CREATE TABLE catchplate_audit_events (
                             sequence BIGSERIAL PRIMARY KEY,
                             id TEXT NOT NULL UNIQUE,
                             event_type TEXT NOT NULL,
@@ -502,20 +502,20 @@ def exercise_postgres_audit_migration_faults(db: Any, base_dsn: str) -> None:
                             event_hash TEXT NOT NULL UNIQUE,
                             created_at TEXT NOT NULL
                         );
-                        CREATE TABLE serverware_store_migrations (
+                        CREATE TABLE catchplate_store_migrations (
                             migration TEXT PRIMARY KEY,
                             version BIGINT NOT NULL,
                             applied_at TEXT NOT NULL
                         );
-                        CREATE FUNCTION serverware_fault_audit_guard()
+                        CREATE FUNCTION catchplate_fault_audit_guard()
                         RETURNS trigger LANGUAGE plpgsql AS $$
                         BEGIN
                             RETURN NEW;
                         END;
                         $$;
-                        CREATE TRIGGER serverware_audit_storage_epoch_guard
-                            BEFORE INSERT OR UPDATE ON serverware_audit_events
-                            FOR EACH ROW EXECUTE FUNCTION serverware_fault_audit_guard();
+                        CREATE TRIGGER catchplate_audit_storage_epoch_guard
+                            BEFORE INSERT OR UPDATE ON catchplate_audit_events
+                            FOR EACH ROW EXECUTE FUNCTION catchplate_fault_audit_guard();
                         """
                     )
                     created_at = "2026-07-15T00:00:00+00:00"
@@ -544,14 +544,14 @@ def exercise_postgres_audit_migration_faults(db: Any, base_dsn: str) -> None:
                     if fault == "invalid_tail":
                         tail_hash = "sha256:" + "0" * 64
                     conn.execute(
-                        "INSERT INTO serverware_audit_events (id, event_type, "
+                        "INSERT INTO catchplate_audit_events (id, event_type, "
                         "actor_type, actor_id, event_json, prev_event_hash, event_hash, "
                         "created_at) VALUES (%s, 'rate_limit.denied', 'test', "
                         "'test:postgres:fault', %s, NULL, %s, %s)",
                         (f"{label}:legacy", legacy_json, first_hash, created_at),
                     )
                     conn.execute(
-                        "INSERT INTO serverware_audit_events (id, event_type, "
+                        "INSERT INTO catchplate_audit_events (id, event_type, "
                         "actor_type, actor_id, event_json, prev_event_hash, event_hash, "
                         "created_at) VALUES (%s, 'test.tail', 'test', "
                         "'test:postgres:fault', %s, %s, %s, %s)",
@@ -576,20 +576,20 @@ def exercise_postgres_audit_migration_faults(db: Any, base_dsn: str) -> None:
                             row["event_hash"],
                         )
                         for row in check.execute(
-                            "SELECT * FROM serverware_audit_events ORDER BY sequence ASC"
+                            "SELECT * FROM catchplate_audit_events ORDER BY sequence ASC"
                         ).fetchall()
                     ]
                     markers = int(
                         check.execute(
                             "SELECT COUNT(*)::bigint AS count FROM "
-                            "serverware_audit_events WHERE event_type = "
+                            "catchplate_audit_events WHERE event_type = "
                             "'audit.storage_redacted'"
                         ).fetchone()["count"]
                     )
                     gates = int(
                         check.execute(
                             "SELECT COUNT(*)::bigint AS count FROM "
-                            "serverware_store_migrations"
+                            "catchplate_store_migrations"
                         ).fetchone()["count"]
                     )
                     return rows, markers, gates
@@ -790,7 +790,7 @@ def exercise_bound_secret_key_rotation(crypto: Any) -> None:
         crypto, "load_master_key", return_value=new_key
     ), patch.dict(
         os.environ,
-        {"SERVERWARE_HISTORICAL_MASTER_KEYS": historical_env},
+        {"CATCHPLATE_HISTORICAL_MASTER_KEYS": historical_env},
         clear=False,
     ):
         try:
@@ -824,8 +824,8 @@ def exercise_bound_secret_key_rotation(crypto: Any) -> None:
             ), patch.dict(
                 os.environ,
                 {
-                    "SERVERWARE_HISTORICAL_MASTER_KEYS": "",
-                    "SERVERWARE_HISTORICAL_MASTER_KEYRING_FILE": str(path),
+                    "CATCHPLATE_HISTORICAL_MASTER_KEYS": "",
+                    "CATCHPLATE_HISTORICAL_MASTER_KEYRING_FILE": str(path),
                 },
                 clear=False,
             ):
@@ -878,7 +878,7 @@ def exercise_bound_secret_key_rotation(crypto: Any) -> None:
         )
         expect_receipt_rejected(
             "future-version.json",
-            {**receipt, "version": "serverware.boundSecretHistoricalKeyring/v2"},
+            {**receipt, "version": "catchplate.boundSecretHistoricalKeyring/v2"},
             "binding is invalid",
         )
 
@@ -1082,8 +1082,8 @@ def exercise_pre_policy_rate_limit_storage(
         "max_count": 1,
         "audit": False,
     }
-    original_required = os.environ.get("SERVERWARE_KEY_RELEASE_REQUIRED")
-    os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "1"
+    original_required = os.environ.get("CATCHPLATE_KEY_RELEASE_REQUIRED")
+    os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "1"
     try:
         with patch.object(
             crypto,
@@ -1133,13 +1133,13 @@ def exercise_pre_policy_rate_limit_storage(
         db.clear_rate_limit_counters((kwargs["route_id"],))
     finally:
         if original_required is None:
-            os.environ.pop("SERVERWARE_KEY_RELEASE_REQUIRED", None)
+            os.environ.pop("CATCHPLATE_KEY_RELEASE_REQUIRED", None)
         else:
-            os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = original_required
+            os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = original_required
 
 
 def exercise_policy_high_water(db: Any, backend: str) -> None:
-    policy_id = f"serverware-{backend}"
+    policy_id = f"catchplate-{backend}"
 
     def digest(value: str) -> str:
         return "sha256:" + value * 64
@@ -1222,7 +1222,7 @@ def advance_active_policy_hash(db: Any, policy_hash: str) -> dict[str, Any]:
     current = db.get_policy_high_water()
     if current is None:
         return db.advance_policy_high_water(
-            policy_id="serverware-test",
+            policy_id="catchplate-test",
             sequence=1,
             rollback_epoch=1,
             policy_hash=policy_hash,
@@ -1542,7 +1542,7 @@ def exercise_release_lock_order(db: Any, backend: str) -> None:
     policy_hash = _release_lock_digest(
         f"{backend}:release-lock-order-policy"
     )
-    actor_id = "spiffe://test.serverware/decision-gate/release-lock-order"
+    actor_id = "spiffe://test.catchplate/decision-gate/release-lock-order"
     advance_active_policy_hash(db, policy_hash)
 
     def material(
@@ -3561,7 +3561,7 @@ def release_reserve_kwargs(
         "require_jit_grant": require_jit_grant,
         "reservation_ttl_seconds": 5,
         "now_epoch_ms": now_epoch_ms,
-        "actor_id": "spiffe://test.serverware/decision-gate/atomic",
+        "actor_id": "spiffe://test.catchplate/decision-gate/atomic",
     }
 
 
@@ -3992,7 +3992,7 @@ def exercise_release_authority_lifecycle(db: Any, backend: str) -> None:
             attempt_id=fixture["reserve_kwargs"]["attempt_id"],
             binding_digest=fixture["reservation"]["binding_digest"],
             dispatch_ttl_seconds=5,
-            actor_id="spiffe://test.serverware/decision-gate/authority",
+            actor_id="spiffe://test.catchplate/decision-gate/authority",
             required_approver_roles={"approver"},
         )
         _assert_dispatch_authority_cancelled(
@@ -4005,7 +4005,7 @@ def exercise_release_authority_lifecycle(db: Any, backend: str) -> None:
 
 def operation_commitment(operation: str) -> dict[str, Any]:
     return {
-        "type": "serverware.operation_commitment",
+        "type": "catchplate.operation_commitment",
         "version": 1,
         "algorithm": "sha256",
         "digest": operation_digest(operation),
@@ -4036,7 +4036,7 @@ def inject_legacy_rate_limit_audit_head(
         with db._audit_pg_connect() as conn:
             with conn.transaction():
                 row = conn.execute(
-                    "SELECT * FROM serverware_audit_events WHERE id = %s",
+                    "SELECT * FROM catchplate_audit_events WHERE id = %s",
                     (stored["id"],),
                 ).fetchone()
                 old_head = db._audit_hash(
@@ -4049,7 +4049,7 @@ def inject_legacy_rate_limit_audit_head(
                     created_at=row["created_at"],
                 )
                 conn.execute(
-                    "UPDATE serverware_audit_events SET event_json = %s, "
+                    "UPDATE catchplate_audit_events SET event_json = %s, "
                     "storage_format_version = NULL, event_hash = %s WHERE id = %s",
                     (event_json, old_head, stored["id"]),
                 )
@@ -4098,7 +4098,7 @@ def exercise_sqlite_audit_redaction_abort(db: Any) -> None:
                 event_hash TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
-            CREATE TABLE serverware_store_migrations (
+            CREATE TABLE catchplate_store_migrations (
                 migration TEXT PRIMARY KEY,
                 version BIGINT NOT NULL,
                 applied_at TEXT NOT NULL
@@ -4314,7 +4314,7 @@ def exercise_legacy_writer_storage_guards(
             with db._audit_pg_connect() as conn:
                 with conn.transaction():
                     conn.execute(
-                        "INSERT INTO serverware_audit_events (id, event_type, "
+                        "INSERT INTO catchplate_audit_events (id, event_type, "
                         "actor_type, actor_id, event_json, prev_event_hash, event_hash, "
                         "created_at) VALUES (%s, 'rate_limit.denied', 'legacy', "
                         "'legacy', %s, NULL, %s, %s)",
@@ -4367,7 +4367,7 @@ def exercise_legacy_writer_storage_guards(
             with db._audit_pg_connect() as conn:
                 with conn.transaction():
                     conn.execute(
-                        "UPDATE serverware_audit_events SET event_json = %s "
+                        "UPDATE catchplate_audit_events SET event_json = %s "
                         "WHERE id = %s",
                         (event_json, existing_audit_id),
                     )
@@ -4571,7 +4571,7 @@ def exercise_operation_storage_commitments(db: Any, backend: str) -> None:
     legacy_audit = f"legacy.{backend}.audit.plaintext"
     with db.connect() as conn:
         conn.execute(
-            "DELETE FROM serverware_store_migrations WHERE migration IN (?, ?)",
+            "DELETE FROM catchplate_store_migrations WHERE migration IN (?, ?)",
             (
                 db._AUDIT_STORAGE_REDACTION_MIGRATION,
                 db._METADATA_STORAGE_REDACTION_MIGRATION,
@@ -4581,7 +4581,7 @@ def exercise_operation_storage_commitments(db: Any, backend: str) -> None:
         with db._audit_pg_connect() as conn:
             with conn.transaction():
                 conn.execute(
-                    "DELETE FROM serverware_store_migrations WHERE migration = %s",
+                    "DELETE FROM catchplate_store_migrations WHERE migration = %s",
                     (db._AUDIT_STORAGE_REDACTION_MIGRATION,),
                 )
     with db.connect() as conn:
@@ -4672,13 +4672,13 @@ def exercise_operation_storage_commitments(db: Any, backend: str) -> None:
     if backend == "postgres":
         with db._audit_pg_connect() as conn:
             old_audit_row = conn.execute(
-                "SELECT prev_event_hash FROM serverware_audit_events WHERE id = %s",
+                "SELECT prev_event_hash FROM catchplate_audit_events WHERE id = %s",
                 (legacy_audit_event_id,),
             ).fetchone()
             old_prefix_hashes = {
                 str(row["id"]): str(row["event_hash"])
                 for row in conn.execute(
-                    "SELECT id, event_hash FROM serverware_audit_events "
+                    "SELECT id, event_hash FROM catchplate_audit_events "
                     "ORDER BY sequence ASC"
                 ).fetchall()
             }
@@ -4757,25 +4757,25 @@ def exercise_operation_storage_commitments(db: Any, backend: str) -> None:
             "SELECT event_json FROM metadata_audit_outbox WHERE id = ?", (outbox_id,)
         ).fetchone()
         metadata_gate = conn.execute(
-            "SELECT version FROM serverware_store_migrations WHERE migration = ?",
+            "SELECT version FROM catchplate_store_migrations WHERE migration = ?",
             (db._METADATA_STORAGE_REDACTION_MIGRATION,),
         ).fetchone()
     if backend == "postgres":
         with db._audit_pg_connect() as conn:
             migrated_audit_row = conn.execute(
                 "SELECT event_json, encrypted_canonical_event_json, prev_event_hash, "
-                "event_hash, storage_format_version FROM serverware_audit_events "
+                "event_hash, storage_format_version FROM catchplate_audit_events "
                 "WHERE id = %s",
                 (legacy_audit_event_id,),
             ).fetchone()
             audit_gate = conn.execute(
-                "SELECT version FROM serverware_store_migrations WHERE migration = %s",
+                "SELECT version FROM catchplate_store_migrations WHERE migration = %s",
                 (db._AUDIT_STORAGE_REDACTION_MIGRATION,),
             ).fetchone()
             migrated_prefix_hashes = {
                 str(row["id"]): str(row["event_hash"])
                 for row in conn.execute(
-                    "SELECT id, event_hash FROM serverware_audit_events "
+                    "SELECT id, event_hash FROM catchplate_audit_events "
                     "ORDER BY sequence ASC LIMIT %s",
                     (pre_migration_count,),
                 ).fetchall()
@@ -4788,7 +4788,7 @@ def exercise_operation_storage_commitments(db: Any, backend: str) -> None:
                 (legacy_audit_event_id,),
             ).fetchone()
             audit_gate = conn.execute(
-                "SELECT version FROM serverware_store_migrations WHERE migration = ?",
+                "SELECT version FROM catchplate_store_migrations WHERE migration = ?",
                 (db._AUDIT_STORAGE_REDACTION_MIGRATION,),
             ).fetchone()
             migrated_prefix_hashes = {
@@ -4941,7 +4941,7 @@ def exercise_operation_storage_commitments(db: Any, backend: str) -> None:
             with db._audit_pg_connect() as conn:
                 with conn.transaction():
                     conn.execute(
-                        "UPDATE serverware_audit_events SET event_json = %s, "
+                        "UPDATE catchplate_audit_events SET event_json = %s, "
                         "encrypted_canonical_event_json = %s WHERE id = %s",
                         (
                             event_json,
@@ -5127,7 +5127,7 @@ def exercise_operation_storage_commitments(db: Any, backend: str) -> None:
     chain_before_future_gate = db.verify_audit_chain()
     with db.connect() as conn:
         conn.execute(
-            "UPDATE serverware_store_migrations SET version = ? WHERE migration = ?",
+            "UPDATE catchplate_store_migrations SET version = ? WHERE migration = ?",
             (
                 db._STORAGE_REDACTION_MIGRATION_VERSION + 1,
                 db._AUDIT_STORAGE_REDACTION_MIGRATION,
@@ -5154,7 +5154,7 @@ def exercise_operation_storage_commitments(db: Any, backend: str) -> None:
         raise AssertionError("future audit migration gate version was accepted")
     with db.connect() as conn:
         conn.execute(
-            "UPDATE serverware_store_migrations SET version = ? WHERE migration = ?",
+            "UPDATE catchplate_store_migrations SET version = ? WHERE migration = ?",
             (
                 db._STORAGE_REDACTION_MIGRATION_VERSION,
                 db._AUDIT_STORAGE_REDACTION_MIGRATION,
@@ -5182,7 +5182,7 @@ def exercise_transactional_bound_storage_rewrap(
             with db._audit_pg_connect() as conn:
                 audit_rows = conn.execute(
                     "SELECT id, encrypted_canonical_event_json FROM "
-                    "serverware_audit_events WHERE "
+                    "catchplate_audit_events WHERE "
                     "encrypted_canonical_event_json IS NOT NULL ORDER BY sequence"
                 ).fetchall()
         else:
@@ -5203,7 +5203,7 @@ def exercise_transactional_bound_storage_rewrap(
                 "ORDER BY attempt_id, counter_key"
             ).fetchall()
             gates = conn.execute(
-                "SELECT migration, version FROM serverware_store_migrations "
+                "SELECT migration, version FROM catchplate_store_migrations "
                 "WHERE migration LIKE ? OR migration LIKE ? ORDER BY migration",
                 (
                     db._AUDIT_BOUND_KEY_GATE_PREFIX + "%",
@@ -5314,7 +5314,7 @@ def exercise_release_credential_issuance_claim(db: Any, backend: str) -> None:
     def request_authority_sha256(claim: dict[str, Any]) -> str:
         authority = {
             "apiVersion": (
-                "serverware.credentialLeaseRequestAuthority/v1"
+                "catchplate.credentialLeaseRequestAuthority/v1"
             ),
             "attemptId": claim["attempt_id"],
             "reservationId": claim["reservation_id"],
@@ -6180,7 +6180,7 @@ def exercise_atomic_release_authorization(db: Any, backend: str) -> None:
     cancelled = db.cancel_release_authorization_if_present(
         attempt_id=cancel_kwargs["attempt_id"],
         binding_digest=reserved["binding_digest"],
-        actor_id="spiffe://test.serverware/decision-gate/atomic",
+        actor_id="spiffe://test.catchplate/decision-gate/atomic",
     )
     if cancelled.get("state") != "cancelled":
         raise AssertionError(f"pre-dispatch cancellation was not refunded: {cancelled}")
@@ -6309,13 +6309,13 @@ def exercise_atomic_release_authorization(db: Any, backend: str) -> None:
         attempt_id=commit_attempt,
         binding_digest=committed_reservation["binding_digest"],
         dispatch_ttl_seconds=5,
-        actor_id="spiffe://test.serverware/decision-gate/atomic",
+        actor_id="spiffe://test.catchplate/decision-gate/atomic",
     )
     committed = db.complete_release_authorization(
         attempt_id=commit_attempt,
         binding_digest=committed_reservation["binding_digest"],
         outcome="forwarded",
-        actor_id="spiffe://test.serverware/decision-gate/atomic",
+        actor_id="spiffe://test.catchplate/decision-gate/atomic",
     )
     committed_replay = db.complete_release_authorization(
         attempt_id=commit_attempt,
@@ -6946,7 +6946,7 @@ def exercise_control_plane_jit_approval(app_module: Any, db: Any, backend: str) 
         submitted_operation_digest: str | None = None,
     ) -> dict[str, Any]:
         return {
-            "apiVersion": "serverware.releaseAuthorizationReserve/v1",
+            "apiVersion": "catchplate.releaseAuthorizationReserve/v1",
             "attemptId": attempt_id,
             "flowId": attempt_id,
             "principalId": principal_id,
@@ -7525,8 +7525,8 @@ def exercise_internal_header_boundary(
         pretty_url="https://upstream.invalid/resource",
         headers={
             "accept": "application/json",
-            "X-Serverware-Data-Plane-Token": "service-secret",
-            "X-Serverware-Debug-Only": "mutable-outside-digest",
+            "X-Catchplate-Data-Plane-Token": "service-secret",
+            "X-Catchplate-Debug-Only": "mutable-outside-digest",
         },
         raw_content=b"",
     )
@@ -7559,7 +7559,7 @@ def exercise_internal_header_boundary(
 
     principal = SimpleNamespace(required_headers={})
     policy_engine._strip_identity_headers(flow, principal)
-    if any(str(name).lower().startswith("x-serverware-") for name in request.headers):
+    if any(str(name).lower().startswith("x-catchplate-") for name in request.headers):
         raise AssertionError(f"internal headers survived upstream stripping: {request.headers}")
 
     bundle = demo_policy_bundle()
@@ -7567,7 +7567,7 @@ def exercise_internal_header_boundary(
         route for route in bundle["routes"] if route["adapter"]["type"] == "generic.rest"
     )
     generic_route["adapter"]["config"]["request"]["allowedHeaders"].append(
-        "X-Serverware-Debug-Only"
+        "X-Catchplate-Debug-Only"
     )
     try:
         compile_policy_bundle(bundle, validate_schema=False)
@@ -7575,7 +7575,7 @@ def exercise_internal_header_boundary(
         if "credential or internal headers" not in str(exc):
             raise AssertionError(f"internal allowedHeaders failed for the wrong reason: {exc}") from exc
     else:
-        raise AssertionError("generic allowedHeaders accepted an internal Serverware header")
+        raise AssertionError("generic allowedHeaders accepted an internal Catchplate header")
 
 
 def exercise_physical_header_preflight(policy_engine: Any) -> None:
@@ -7867,7 +7867,7 @@ def _run_proxy_transaction(
     request = SimpleNamespace(
         method="POST",
         pretty_url=request_url,
-        headers={"accept": "application/json", "X-Serverware-Debug-Only": "strip-me"},
+        headers={"accept": "application/json", "X-Catchplate-Debug-Only": "strip-me"},
         raw_content=b"",
     )
     request.get_content = lambda strict=True: request.raw_content
@@ -8012,7 +8012,7 @@ def _run_proxy_transaction(
             )
             result.update(
                 {
-                    "api_version": "serverware.releaseAuthorization/v2",
+                    "api_version": "catchplate.releaseAuthorization/v2",
                     "durable_policy": {
                         "state": "reserved",
                         "attempt_id": expected.attempt_id,
@@ -8047,7 +8047,7 @@ def _run_proxy_transaction(
     ) -> dict[str, Any]:
         events.append("complete:not_forwarded")
         flow.metadata["observed_cleanup_identity"] = expected
-        lifecycle = flow.metadata.get("serverware_release_authorization")
+        lifecycle = flow.metadata.get("catchplate_release_authorization")
         if not isinstance(lifecycle, dict):
             return {
                 "authorized": False,
@@ -8095,7 +8095,7 @@ def _run_proxy_transaction(
         if durable_policy is not None:
             result.update(
                 {
-                    "api_version": "serverware.releaseAuthorization/v2",
+                    "api_version": "catchplate.releaseAuthorization/v2",
                     "durable_policy": {
                         "state": "aborted",
                         "attempt_id": expected.attempt_id,
@@ -8320,7 +8320,7 @@ def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_
         or "reserve" in local_compatibility_events
         or local_compatibility_events.count("local_commit_non_refundable") != 1
         or local_compatibility_flow.metadata.get(
-            "serverware_local_rate_limit_mode"
+            "catchplate_local_rate_limit_mode"
         )
         != "conservative_non_refundable"
     ):
@@ -8411,15 +8411,15 @@ def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_
     ]
     if ordered != sorted(ordered) or events[-1] != "dispatch":
         raise AssertionError(f"proxy lifecycle ordering is unsafe: {events}")
-    if allowed.attempt_id != flow.metadata.get("serverware_release_attempt_id"):
+    if allowed.attempt_id != flow.metadata.get("catchplate_release_attempt_id"):
         raise AssertionError("RequestEvaluation and flow metadata lost attempt correlation")
-    lifecycle = flow.metadata.get("serverware_release_authorization") or {}
+    lifecycle = flow.metadata.get("catchplate_release_authorization") or {}
     if lifecycle.get("attempt_id") != lifecycle.get("flow_id"):
         raise AssertionError(f"attempt and flow IDs diverged: {lifecycle}")
     if any(name in events for name in ("legacy_authorization_call", "legacy_quota_call")):
         raise AssertionError(f"atomic mode used a legacy authorization path: {events}")
-    if any(str(name).lower().startswith("x-serverware-") for name in flow.request.headers):
-        raise AssertionError(f"proxy forwarded an internal Serverware header: {flow.request.headers}")
+    if any(str(name).lower().startswith("x-catchplate-") for name in flow.request.headers):
+        raise AssertionError(f"proxy forwarded an internal Catchplate header: {flow.request.headers}")
 
     rewritten, rewritten_events, rewritten_flow, _ = _run_proxy_transaction(
         policy_engine,
@@ -8546,7 +8546,7 @@ def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_
             "observed_cleanup_identity"
         )
         expected_guard = transport_flow.metadata.get(
-            "serverware_release_authorization_guard"
+            "catchplate_release_authorization_guard"
         )
         if (
             transport_failure.decision.allowed
@@ -8557,8 +8557,8 @@ def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_
             or expected_guard is None
             or cleanup_identity is not expected_guard.expected
             or cleanup_identity.attempt_id
-            != transport_flow.metadata.get("serverware_release_attempt_id")
-            and transport_flow.metadata.get("serverware_release_attempt_id")
+            != transport_flow.metadata.get("catchplate_release_attempt_id")
+            and transport_flow.metadata.get("catchplate_release_attempt_id")
             is not None
             or cleanup_identity.binding_digest
             != expected_guard.expected.binding_digest
@@ -8639,7 +8639,7 @@ def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_
             or audit_events.count("complete:not_forwarded") != 1
             or "dispatch" in audit_events
             or audit_flow.metadata.get(
-                "serverware_audit_delivery_uncertain"
+                "catchplate_audit_delivery_uncertain"
             )
             is not True
             or audit_events.index("reserve") > audit_events.index(
@@ -8698,7 +8698,7 @@ def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_
         != "request_audit_delivery_failed"
         or local_events.count("complete:not_forwarded") != 1
         or local_events.count("local_commit_non_refundable") != 1
-        or local_flow.metadata.get("serverware_local_rate_limit_mode")
+        or local_flow.metadata.get("catchplate_local_rate_limit_mode")
         != "conservative_non_refundable"
     ):
         raise AssertionError(
@@ -8736,7 +8736,7 @@ def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_
         or "reserve" in cancel_events
         or "credential_read" in cancel_events
         or any(event.startswith("complete:") for event in cancel_events)
-        or cancel_flow.metadata.get("serverware_release_state") is not None
+        or cancel_flow.metadata.get("catchplate_release_state") is not None
     ):
         raise AssertionError(
             f"rewrite denial mutated release state before final request validity: {cancel_events}"
@@ -8790,7 +8790,7 @@ def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_
                 f"{jit_mode} {ambiguity_events}"
             )
         if (
-            ambiguity_flow.metadata.get("serverware_release_state")
+            ambiguity_flow.metadata.get("catchplate_release_state")
             != "committed_indeterminate"
         ):
             raise AssertionError(
@@ -8843,7 +8843,7 @@ def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_
         raise AssertionError(f"forwarded response completion failed: {response_completion}")
     if response_events.index("complete:forwarded") > response_events.index("response_policy"):
         raise AssertionError(f"response policy ran before forwarded completion: {response_events}")
-    if response_flow.metadata.get("serverware_release_state") != "committed":
+    if response_flow.metadata.get("catchplate_release_state") != "committed":
         raise AssertionError("forwarded completion state was not retained")
 
     _, contradictory_events, _, contradictory_completion = _run_proxy_transaction(
@@ -8915,7 +8915,7 @@ def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_
             f"{mismatch_events}"
         )
     if (
-        mismatch_flow.metadata.get("serverware_release_state") is not None
+        mismatch_flow.metadata.get("catchplate_release_state") is not None
         or "authorization"
         in {
             str(name).lower()
@@ -9009,7 +9009,7 @@ def exercise_release_client_single_attempt_guard_contract(runtime: Any) -> None:
         ).hexdigest()
 
     reserve_payload = {
-        "apiVersion": "serverware.releaseAuthorizationReserve/v1",
+        "apiVersion": "catchplate.releaseAuthorizationReserve/v1",
         "attemptId": attempt_id,
         "flowId": attempt_id,
         "principalId": "agent:test",
@@ -9043,7 +9043,7 @@ def exercise_release_client_single_attempt_guard_contract(runtime: Any) -> None:
             raise urllib.error.URLError("response lost")
         return SimpleNamespace(
             value={
-                "apiVersion": "serverware.releaseAuthorization/v1",
+                "apiVersion": "catchplate.releaseAuthorization/v1",
                 "ok": True,
                 "authorized": True,
                 "state": "reserved",
@@ -9099,7 +9099,7 @@ def exercise_release_client_single_attempt_guard_contract(runtime: Any) -> None:
         datetime(2025, 1, 2, tzinfo=timezone.utc).timestamp() * 1000
     )
     calendar_response = {
-        "apiVersion": "serverware.releaseAuthorization/v1",
+        "apiVersion": "catchplate.releaseAuthorization/v1",
         "ok": True,
         "authorized": True,
         "state": "reserved",
@@ -9313,7 +9313,7 @@ def exercise_release_client_single_attempt_guard_contract(runtime: Any) -> None:
         )
 
     valid_raw_reserve_response = {
-        "apiVersion": "serverware.releaseAuthorization/v1",
+        "apiVersion": "catchplate.releaseAuthorization/v1",
         "ok": True,
         "authorized": True,
         "state": "reserved",
@@ -9423,7 +9423,7 @@ def exercise_python_v2_release_coordinator(
     runtime: Any,
     credential_policy_type: Any,
 ) -> None:
-    actor_id = runtime.DATA_PLANE_INSTANCE_ID or "serverware-python-mitm"
+    actor_id = runtime.DATA_PLANE_INSTANCE_ID or "catchplate-python-mitm"
     policy_hash = _release_lock_digest("python-v2-release-policy")
     credential_id = "credential:python-v2-release"
     operation_context = {
@@ -9657,7 +9657,7 @@ def exercise_python_v2_release_coordinator(
         ]
         or not isinstance(applicable_release, dict)
         or applicable_release.get("apiVersion")
-        != "serverware.credentialLeaseReleaseAuthorization/v2"
+        != "catchplate.credentialLeaseReleaseAuthorization/v2"
     ):
         raise AssertionError(
             "applicable durable route did not enter the atomic v2 lifecycle"
@@ -9801,7 +9801,7 @@ def exercise_python_v2_release_coordinator(
             f"python-v2-release:{label}:attempt"
         )
         canonical_request = {
-            "apiVersion": "serverware.pythonV2Fixture/v1",
+            "apiVersion": "catchplate.pythonV2Fixture/v1",
             "label": label,
             "operation": operation_context,
         }
@@ -10104,7 +10104,7 @@ def exercise_python_v2_release_coordinator(
             request_authority is None
             or release_authorization is None
             or release_authorization.get("apiVersion")
-            != "serverware.credentialLeaseReleaseAuthorization/v2"
+            != "catchplate.credentialLeaseReleaseAuthorization/v2"
             or release_authorization.get("durablePolicy")
             != {
                 "reservationId": reserved["durable_policy"][
@@ -10517,7 +10517,7 @@ def exercise_python_v2_release_coordinator(
             "completion_outcome": None,
             "retry_after_seconds": 0,
             "quotas": [],
-            "api_version": "serverware.releaseAuthorization/v1",
+            "api_version": "catchplate.releaseAuthorization/v1",
         }
         decision_authority = runtime.credential_lease_request_authority(
             decision_expected,
@@ -10571,7 +10571,7 @@ def exercise_python_v2_release_coordinator(
         if downgraded_release is None:
             raise AssertionError("v2 downgrade fixture lacked release authority")
         downgraded_release["apiVersion"] = (
-            "serverware.credentialLeaseReleaseAuthorization/v1"
+            "catchplate.credentialLeaseReleaseAuthorization/v1"
         )
         assert_raises(
             runtime.ReleaseAuthorizationClientError,
@@ -10828,7 +10828,7 @@ def exercise_proxy_discard_header_jit_transaction(
     def reserve_via_control_plane(**kwargs: Any) -> dict[str, Any]:
         expected = kwargs["guard"].expected
         payload = {
-            "apiVersion": "serverware.releaseAuthorizationReserve/v1",
+            "apiVersion": "catchplate.releaseAuthorizationReserve/v1",
             "attemptId": expected.attempt_id,
             "flowId": expected.flow_id,
             "principalId": expected.principal_id,
@@ -10936,7 +10936,7 @@ def exercise_proxy_discard_header_jit_transaction(
 
         def forward(self, provider_flow: Any) -> None:
             if (
-                provider_flow.metadata.get("serverware_release_state")
+                provider_flow.metadata.get("catchplate_release_state")
                 != "dispatching"
             ):
                 raise AssertionError(
@@ -11132,7 +11132,7 @@ def exercise_proxy_discard_header_jit_transaction(
                 denied.decision.allowed
                 or denied.decision.status_code != status_code
                 or denied.decision.payload.get("error") != error
-                or denied_flow.metadata.get("serverware_release_state") is not None
+                or denied_flow.metadata.get("catchplate_release_state") is not None
                 or "authorization"
                 in {
                     str(name).lower()
@@ -11400,7 +11400,7 @@ def exercise_proxy_discard_header_jit_transaction(
         if (
             pending.decision.allowed
             or pending.decision.status_code != 428
-            or pending.decision.payload.get("error") != "serverware_approval_required"
+            or pending.decision.payload.get("error") != "catchplate_approval_required"
         ):
             raise AssertionError(f"atomic proxy did not create a retry approval: {pending.decision}")
         if pending.decision.payload.get("approval_url") != (
@@ -11458,7 +11458,7 @@ def exercise_proxy_discard_header_jit_transaction(
         post_commit_loss = policy_engine.evaluate_request(post_commit_loss_flow)
         reserve_call.side_effect = reserve_via_control_plane
         post_commit_guard = post_commit_loss_flow.metadata.get(
-            "serverware_release_authorization_guard"
+            "catchplate_release_authorization_guard"
         )
         post_commit_attempt_id = (
             post_commit_guard.expected.attempt_id
@@ -11525,7 +11525,7 @@ def exercise_proxy_discard_header_jit_transaction(
                 "approved retry was not discarded and credential-injected exactly: "
                 f"{forwarded_flow.request.headers}"
             )
-        lifecycle = forwarded_flow.metadata.get("serverware_release_authorization") or {}
+        lifecycle = forwarded_flow.metadata.get("catchplate_release_authorization") or {}
         if (
             lifecycle.get("attempt_id") != lifecycle.get("flow_id")
             or lifecycle.get("approval_request_id")
@@ -11538,7 +11538,7 @@ def exercise_proxy_discard_header_jit_transaction(
         dispatched = policy_engine.dispatch_release_authorization(forwarded_flow)
         if (
             not dispatched.allowed
-            or forwarded_flow.metadata.get("serverware_release_state")
+            or forwarded_flow.metadata.get("catchplate_release_state")
             != "dispatch_authorized"
         ):
             raise AssertionError(f"atomic proxy dispatch failed: {dispatched}")
@@ -11548,7 +11548,7 @@ def exercise_proxy_discard_header_jit_transaction(
             forwarded_flow,
             "forwarded",
         )
-        if not completed.allowed or forwarded_flow.metadata.get("serverware_release_state") != "committed":
+        if not completed.allowed or forwarded_flow.metadata.get("catchplate_release_state") != "committed":
             raise AssertionError(f"atomic proxy completion failed: {completed}")
 
         rejected_body = b'{"name":"package","version":"1.2.4"}'
@@ -11688,7 +11688,7 @@ def exercise_compiled_v2_reserve_fixtures(
     ) -> dict[str, Any]:
         attempt_id = f"attempt:{backend}:{route.id}:{uuid.uuid4()}"
         payload = {
-            "apiVersion": "serverware.releaseAuthorizationReserve/v1",
+            "apiVersion": "catchplate.releaseAuthorizationReserve/v1",
             "attemptId": attempt_id,
             "flowId": attempt_id,
             "principalId": principal.id,
@@ -11762,7 +11762,7 @@ def exercise_compiled_v2_reserve_fixtures(
             "npm-command": "publish",
             "npm-session": "compiled-v2-session",
             "user-agent": "npm/11.8.0 node/v24.4.1",
-            "x-serverware-agent": "demo-agent",
+            "x-catchplate-agent": "demo-agent",
         },
         npm_body,
     )
@@ -11876,7 +11876,7 @@ def exercise_compiled_v2_reserve_fixtures(
         {
             "accept": "application/json",
             "x-client-retry": "attempt-1",
-            "x-serverware-agent": "demo-agent",
+            "x-catchplate-agent": "demo-agent",
         },
         b"",
     )
@@ -11955,7 +11955,7 @@ def exercise_compiled_v2_reserve_fixtures(
         dispatched = app_module.data_plane_release_authorization_dispatch(
             app_module.DataPlaneReleaseAuthorizationDispatch.model_validate(
                 {
-                    "apiVersion": "serverware.releaseAuthorizationDispatch/v1",
+                    "apiVersion": "catchplate.releaseAuthorizationDispatch/v1",
                     "attemptId": generic_reserve["attemptId"],
                     "bindingDigest": generic_reserve["bindingDigest"],
                 }
@@ -11965,7 +11965,7 @@ def exercise_compiled_v2_reserve_fixtures(
         completed = app_module.data_plane_release_authorization_complete(
             app_module.DataPlaneReleaseAuthorizationComplete.model_validate(
                 {
-                    "apiVersion": "serverware.releaseAuthorizationComplete/v1",
+                    "apiVersion": "catchplate.releaseAuthorizationComplete/v1",
                     "attemptId": generic_reserve["attemptId"],
                     "bindingDigest": generic_reserve["bindingDigest"],
                     "outcome": "forwarded",
@@ -11997,7 +11997,7 @@ def exercise_compiled_v2_reserve_fixtures(
         absent_cleanup = app_module.data_plane_release_authorization_complete(
             app_module.DataPlaneReleaseAuthorizationComplete.model_validate(
                 {
-                    "apiVersion": "serverware.releaseAuthorizationComplete/v1",
+                    "apiVersion": "catchplate.releaseAuthorizationComplete/v1",
                     "attemptId": absent_attempt,
                     "bindingDigest": absent_binding,
                     "outcome": "not_forwarded",
@@ -12010,7 +12010,7 @@ def exercise_compiled_v2_reserve_fixtures(
                 app_module.DataPlaneReleaseAuthorizationComplete.model_validate(
                     {
                         "apiVersion": (
-                            "serverware.releaseAuthorizationComplete/v1"
+                            "catchplate.releaseAuthorizationComplete/v1"
                         ),
                         "attemptId": generic_reserve["attemptId"],
                         "bindingDigest": absent_binding,
@@ -12168,10 +12168,10 @@ def main() -> None:
                 sys.modules["mitmproxy"] = mitmproxy_module
                 sys.modules["mitmproxy.http"] = http_module
 
-            from serverware import app as app_module
-            from serverware import crypto, db, grants, policy_engine
-            from serverware.crypto import load_master_key
-            from serverware.policy_bundle import (
+            from catchplate import app as app_module
+            from catchplate import crypto, db, grants, policy_engine
+            from catchplate.crypto import load_master_key
+            from catchplate.policy_bundle import (
                 CredentialPolicy,
                 PolicyBundleError,
                 compile_policy_bundle,

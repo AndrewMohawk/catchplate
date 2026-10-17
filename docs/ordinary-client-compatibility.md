@@ -2,7 +2,7 @@
 
 This is an additive source contract, not a deployment or acceptance receipt.
 Implementation began separately from the static-acceptance candidate in the
-`serverware/ordinary-client-compat` worktree at `0717103b`. The existing static
+`catchplate/ordinary-client-compat` worktree at `0717103b`. The existing static
 fixture does not establish acceptance of these new modes.
 See the [verification record](ordinary-client-verification.md) for exact tested
 snapshots, retained failures and the remaining user-facing acceptance boundary.
@@ -85,7 +85,7 @@ and its audit event, where each is available:
 | Field | Meaning |
 | --- | --- |
 | `upstreamDispatch` | `response_received` means provider response headers arrived; `attempted` means a send was attempted without an accepted response. Neither proves application-level completion. |
-| `providerOutcome` | `unknown`: Serverware has not established the operation's completion. |
+| `providerOutcome` | `unknown`: Catchplate has not established the operation's completion. |
 | `providerOperationMayHaveCommitted` | True for potential writes; false only for a recognized read. False is not a promise that retrying will succeed. |
 | `retryProviderRequest` | False: no automatic request replay is authorized. |
 
@@ -208,7 +208,7 @@ Admission of upstream metadata and release to the client are distinct:
   output headers; this is not an unrestricted HTTP-header passthrough.
 - Protocol/transport headers retain singleton and dedicated framing/encoding
   checks. Authorization, proxy authorization, Cookie, Set-Cookie and
-  `X-Serverware-*` are refused, not generically discarded. Version 2 checks
+  `X-Catchplate-*` are refused, not generically discarded. Version 2 checks
   lowercase/underscore-to-hyphen aliases for these reserved names; transport
   aliases are also refused. This classifier does not normalize the raw evidence
   or the exact names used by policy predicates.
@@ -288,7 +288,7 @@ infer it from a missing field or general proxy readiness:
 
 ```json
 {
-  "schema": "serverware.operatorProxyAuthentication/v1",
+  "schema": "catchplate.operatorProxyAuthentication/v1",
   "modes": ["bearer", "basic_and_bearer_v1"],
   "path": "/api/operator-demo/applications/proxy-authentication"
 }

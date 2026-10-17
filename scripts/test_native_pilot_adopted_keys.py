@@ -8,13 +8,13 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import native_pilot_key_profile as keys
-from serverware import native_pilot_encrypted_authority as encrypted
-from serverware import native_pilot_verifier_authority as verifier
-from serverware import native_pilot_adopted_commands as commands
-from serverware import native_pilot_peer_preparation as peers
-from serverware import native_shadow_proof_cohort_assignment as cohort
-from serverware import native_shadow_proof_cohort_cleanup as cleanup
+from catchplate import native_pilot_key_profile as keys
+from catchplate import native_pilot_encrypted_authority as encrypted
+from catchplate import native_pilot_verifier_authority as verifier
+from catchplate import native_pilot_adopted_commands as commands
+from catchplate import native_pilot_peer_preparation as peers
+from catchplate import native_shadow_proof_cohort_assignment as cohort
+from catchplate import native_shadow_proof_cohort_cleanup as cleanup
 from test_native_pilot_adopted_closure import fixture
 from test_native_pilot_key_authorizations import build, clocks, expected_payload, signed_result
 from test_native_pilot_launch_authorizations import transport, set_credentials
@@ -77,9 +77,9 @@ class AdoptedKeyControls(unittest.TestCase):
     def test_verifier_successor_keeps_native_output(self):
         raw = canonical(paired_input(verifier.ADOPTED_API, pair(self.f)) | {"parentPort": 11443})
         context = verifier.prepare_input(ROLE, raw, **clocks(self.f))
-        self.assertEqual(context["payload"]["apiVersion"], "serverware.nativeShadowVerifierTransportAssignment/v1")
+        self.assertEqual(context["payload"]["apiVersion"], "catchplate.nativeShadowVerifierTransportAssignment/v1")
         seed = key_fixture("custody-supervisor-capability")[0]
-        result = canonical({"apiVersion": "serverware.nativeShadowVerifierTransport/v1", "authorization": {
+        result = canonical({"apiVersion": "catchplate.nativeShadowVerifierTransport/v1", "authorization": {
             "payload": context["payload"], "signature": encoded(seed.sign(signed_message(verifier.DOMAIN, context["payload"])))}})
         self.assertEqual(verifier.checked_result(ROLE, raw, {"original": result.decode("ascii"), "sha256": sha(result)}, **clocks(self.f)), result)
         legacy = json.loads(raw); legacy["apiVersion"] = verifier.API
@@ -89,7 +89,7 @@ class AdoptedKeyControls(unittest.TestCase):
     def test_encrypted_successor_authenticates_c9_ciphertext_pin(self):
         credentials = copy.deepcopy(json.loads(self.f["deliveries"][ROLE])["payload"]["credentials"])
         credentials.append({"name": "shadow-encrypted-role-inventory", "original": {
-            "path": "/etc/serverware/synthetic-publication-ciphertext.json",
+            "path": "/etc/catchplate/synthetic-publication-ciphertext.json",
             "sha256": transport(ROLE)["encryptedInventorySha256"]}, "length": 256, "signing": None})
         set_credentials(self.f, ROLE, credentials)
         value = paired_input(encrypted.ADOPTED_API, pair(self.f)) | {
@@ -112,8 +112,8 @@ class AdoptedKeyControls(unittest.TestCase):
         config = cohort.configuration(self.f["owner_configuration_raw"])
         self.assertEqual(cohort.roles(config), cohort.ENDPOINT_ROLES + (ROLE,))
         self.assertNotIn("bridge", cohort.roles(config))
-        self.assertEqual(cohort.release_domain(config), b"serverware.nativeShadowProofCohortRelease.signature/v7\0")
-        self.assertEqual(cleanup._api("Terminal", config), "serverware.nativeShadowProofCohortTerminal/v7")
+        self.assertEqual(cohort.release_domain(config), b"catchplate.nativeShadowProofCohortRelease.signature/v7\0")
+        self.assertEqual(cleanup._api("Terminal", config), "catchplate.nativeShadowProofCohortTerminal/v7")
         changed = copy.deepcopy(config); del changed[ROLE + "Configuration"]
         with self.assertRaises(ValueError):
             cohort.configuration(canonical(changed))

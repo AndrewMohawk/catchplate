@@ -30,7 +30,7 @@ class OperatorDemoRevocationRuntimeTests(unittest.TestCase):
     def request(self, method, path, *, body=None, auth=True, origin=None, extra_headers=None):
         headers = {"Connection": "close"}
         if auth:
-            headers["X-Serverware-Admin-Token"] = self.admin
+            headers["X-Catchplate-Admin-Token"] = self.admin
         if origin is not None:
             headers["Origin"] = origin
         if body is not None:
@@ -56,7 +56,7 @@ class OperatorDemoRevocationRuntimeTests(unittest.TestCase):
             client.close()
 
     def connection(self, *, readonly=False):
-        path = self.directory / "data" / "serverware.sqlite3"
+        path = self.directory / "data" / "catchplate.sqlite3"
         return sqlite3.connect(path.as_uri() + ("?mode=ro" if readonly else "?mode=rw"), uri=True)
 
     def snapshot(self):
@@ -83,7 +83,7 @@ class OperatorDemoRevocationRuntimeTests(unittest.TestCase):
             before = self.snapshot()
             rejected = [
                 ({"auth": False}, reviewed, 401),
-                ({"extra_headers": {"X-Serverware-Admin-Token": "synthetic-wrong-admin-token"}}, reviewed, 401),
+                ({"extra_headers": {"X-Catchplate-Admin-Token": "synthetic-wrong-admin-token"}}, reviewed, 401),
                 ({"origin": None}, reviewed, 403),
                 ({"origin": "https://foreign.example.com"}, reviewed, 403),
                 ({"origin": self.origin + "/"}, reviewed, 403),

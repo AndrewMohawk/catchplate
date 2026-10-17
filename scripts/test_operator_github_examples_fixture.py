@@ -52,12 +52,12 @@ class ReceiverTests(unittest.TestCase):
         seen = set()
         for client, queries in expected.items():
             for page, query in enumerate(queries, 1):
-                target = "/repos/serverware-fixture/operator-demo/issues?" + query
+                target = "/repos/catchplate-fixture/operator-demo/issues?" + query
                 self.assertEqual(receiver.classify("GET", target), (client, page))
                 seen.add(target)
                 for method, bad in (("POST", target), ("GET", target + "&extra=1"),
                         ("GET", target.replace("operator-demo", "other-repo")),
-                        ("GET", target.replace("/repos/serverware-fixture/operator-demo", "/repositories/1729"))):
+                        ("GET", target.replace("/repos/catchplate-fixture/operator-demo", "/repositories/1729"))):
                     with self.assertRaises(ValueError):
                         receiver.classify(method, bad)
         self.assertEqual(len(seen), 6)
@@ -74,7 +74,7 @@ class ReceiverTests(unittest.TestCase):
                         ("Accept-Encoding", "gzip"), ("User-Agent", "duplicate")):
                     with self.assertRaises(ValueError):
                         receiver.validated_headers(client, fields(client) + [(name, value)])
-                for authorization in ("token serverware-github-placeholder-v1", "Bearer wrong", ""):
+                for authorization in ("token catchplate-github-placeholder-v1", "Bearer wrong", ""):
                     changed = [(n, authorization if n == "Authorization" else v) for n, v in fields(client)]
                     with self.assertRaises(ValueError):
                         receiver.validated_headers(client, changed)
@@ -209,7 +209,7 @@ class CheckerTests(unittest.TestCase):
         expected = {"v": 3, "principal": "principal", "client_ip": "127.0.0.1", "route_id": "route",
             "credential_ref": "credential", "credential_version": "1", "policy_hash": "sha256:" + "a" * 64,
             "request": {"method": "GET", "scheme": "https", "authority": "api.github.com",
-                "path": "/repos/serverware-fixture/operator-demo/issues",
+                "path": "/repos/catchplate-fixture/operator-demo/issues",
                 "query": [["page", "1"], ["per_page", "100"], ["state", "open"]],
                 "query_wire": "page=1&per_page=100&state=open", "query_mode": "githubRestV1",
                 "headers": {"host": "api.github.com", "accept": "application/vnd.github.squirrel-girl-preview",
@@ -231,16 +231,16 @@ class CheckerTests(unittest.TestCase):
                 self.assertNotIn("GITHUB_TOKEN", env)
                 self.assertNotIn("HTTPS_PROXY", env)
                 self.assertNotIn(receiver.TOKEN, env.values())
-                self.assertEqual(env["SERVERWARE_PROXY_TOKEN"], "application-secret")
-                self.assertEqual(env["SERVERWARE_PROXY_URL"], "https://proxy.operator-basic.example.test:8443")
+                self.assertEqual(env["CATCHPLATE_PROXY_TOKEN"], "application-secret")
+                self.assertEqual(env["CATCHPLATE_PROXY_URL"], "https://proxy.operator-basic.example.test:8443")
                 if client == "python":
-                    self.assertNotIn("SERVERWARE_PROXY_CA_FILE", env)
-                    self.assertEqual(env["SERVERWARE_CA_FILE"], "/client-trust/requests-ca.pem")
+                    self.assertNotIn("CATCHPLATE_PROXY_CA_FILE", env)
+                    self.assertEqual(env["CATCHPLATE_CA_FILE"], "/client-trust/requests-ca.pem")
                 else:
-                    self.assertEqual(env["SERVERWARE_PROXY_CA_FILE"], "/client-trust/outer-ca.pem")
-                    self.assertEqual(env["SERVERWARE_CA_FILE"], "/client-trust/inner-ca.pem")
+                    self.assertEqual(env["CATCHPLATE_PROXY_CA_FILE"], "/client-trust/outer-ca.pem")
+                    self.assertEqual(env["CATCHPLATE_CA_FILE"], "/client-trust/inner-ca.pem")
                 wrong = checker.client_environment(client, "app", "application-secret", wrong_repo=True)
-                self.assertEqual({k for k in env if env[k] != wrong[k]}, {"SERVERWARE_GITHUB_REPO"})
+                self.assertEqual({k for k in env if env[k] != wrong[k]}, {"CATCHPLATE_GITHUB_REPO"})
 
     def test_exact_success_outputs(self):
         self.assertEqual(checker.expected_output("node"), {"ok": True, "operation": "list", "issueCount": 2,

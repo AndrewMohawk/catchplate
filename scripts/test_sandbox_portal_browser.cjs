@@ -10,7 +10,7 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const root = path.resolve(__dirname, '..');
 const origin = 'https://sandbox-ui.example.test';
 const html = execFileSync(process.env.PYTHON || 'python3', ['-B', '-c',
-  'from serverware.sandbox_portal import render; print(render())'], {cwd: root, encoding: 'utf8'});
+  'from catchplate.sandbox_portal import render; print(render())'], {cwd: root, encoding: 'utf8'});
 const policy = JSON.parse(readFileSync(path.join(root, 'policies/demo.policy.json'), 'utf8'));
 const checkNames = [
   'synthetic_profile_and_exact_rust_build',
@@ -36,7 +36,7 @@ function defaultResponse(url, state) {
   switch (url.pathname) {
     case '/api/auth/status': return json({authenticated: true, userId: 'sandbox-test-operator',
       authMethod: 'sandbox-header', developmentSandbox: true, roles: ['admin']});
-    case '/api/sandbox/status': return json({schema: 'serverware.developmentSandbox/v1',
+    case '/api/sandbox/status': return json({schema: 'catchplate.developmentSandbox/v1',
       mode: 'synthetic-development', syntheticOnly: true, productionReady: false, hardwareVerified: false,
       persistent: true, allowedUpstreams: ['demo-upstream'], commissioningRequired: false});
     case '/api/bootstrap': return json({credentials: [{id: 'cred-demo-bearer', name: 'Demo bearer token',
@@ -122,7 +122,7 @@ for (const hash of ['#constructor', '#toString']) {
     fixture(browser, {hash}, async page => {
       await ready(page);
       assert.equal(new URL(page.url()).hash, '#overview');
-      assert.equal(await page.title(), 'Overview - Serverware');
+      assert.equal(await page.title(), 'Overview - Catchplate');
       assert(await page.locator('#overview').isVisible());
       assert.equal(await page.locator('.page:visible').count(), 1);
       assert.equal(await page.locator('nav [aria-current="page"]').getAttribute('href'), '#overview');
@@ -284,11 +284,11 @@ tests.push(['Python example omits implicit Accept-Encoding without weakening TLS
     ' exec(compile(source,"<rendered-client>","exec"), {})\n' +
     'print(json.dumps({"wire":b"".join(wire).decode("ascii"), "ca":trust.call_args.kwargs.get("cafile"), "tlsVerification":context.verify_mode==ssl.CERT_REQUIRED, "hostnameVerification":context.check_hostname}))'],
   {input: python, encoding: 'utf8'}));
-  assert.equal(result.ca, './serverware-ca.pem');
+  assert.equal(result.ca, './catchplate-ca.pem');
   assert.equal(result.tlsVerification, true);
   assert.equal(result.hostnameVerification, true);
   assert.equal(result.wire, 'GET /echo HTTP/1.1\r\nHost: demo-upstream:8443\r\n' +
-    'X-Serverware-Agent: demo-agent\r\nConnection: close\r\n\r\n');
+    'X-Catchplate-Agent: demo-agent\r\nConnection: close\r\n\r\n');
 })]);
 
 tests.push(['empty filtered audit page still allows searching older events', browser => fixture(browser, {

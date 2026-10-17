@@ -53,7 +53,7 @@ class SnapshotTests(unittest.TestCase):
         self.base = Path(self.temporary.name).resolve()
         self.repo = self.base / "canonical" / "repo"
         (self.repo / "scripts").mkdir(parents=True)
-        self.default = self.repo.parent / ("serverware-operator-artifacts/source-" + COMMIT)
+        self.default = self.repo.parent / ("catchplate-operator-artifacts/source-" + COMMIT)
         self.explicit = self.base / "other-volume" / ("source-" + COMMIT)
         create_tree(self.default)
         create_tree(self.explicit)

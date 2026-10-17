@@ -24,11 +24,11 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware.authority_store.webauthn_receipt_binding import receipt_evidence_binding_sql
-SCHEMA = "serverware_optional_evidence_component"
+from catchplate.authority_store.webauthn_receipt_binding import receipt_evidence_binding_sql
+SCHEMA = "catchplate_optional_evidence_component"
 NAMESPACE = '"' + SCHEMA + '"'
 TABLE = "policy_authority_webauthn_assertion_evidence"
-DOMAIN = "serverware.policyAuthorityWebAuthnAssertionEvidence/v1"
+DOMAIN = "catchplate.policyAuthorityWebAuthnAssertionEvidence/v1"
 # Whitespace-normalized ORIGINAL committed executor excerpts, before the fix.
 # Optional term: lines1598..1679; complete monolithic IF:1456..1689.
 OLD_TERM_SHA256 = "f6406fbbbd11223df9d46ac093990a3a32877aa10b0008153bd0007d178fab1d"
@@ -75,7 +75,7 @@ def _normalized_sha(value):
 
 
 def _guard_parts(*, namespace=NAMESPACE):
-    tree = _read("serverware/authority_store/executor_v9.py")
+    tree = _read("catchplate/authority_store/executor_v9.py")
     function = _one([node for node in tree.body if type(node) is ast.FunctionDef
         and node.name == "install_authority_v9_executor"])
     template = _one([_template(node) for node in ast.walk(function)
@@ -118,7 +118,7 @@ def _integer(node):
 
 
 def _actual_helpers(*, namespace=NAMESPACE):
-    tree = _read("serverware/authority_store/wire_json_sql.py")
+    tree = _read("catchplate/authority_store/wire_json_sql.py")
     substitutions = {"namespace": namespace}
     for node in tree.body:
         if type(node) is ast.Assign and len(node.targets) == 1 and type(node.targets[0]) is ast.Name:
@@ -127,13 +127,13 @@ def _actual_helpers(*, namespace=NAMESPACE):
                 substitutions[name] = _integer(node.value)
     wire = _one([node for node in ast.walk(tree) if type(node) is ast.JoinedStr])
     wire_sql = _template(wire, substitutions)
-    tree = _read("serverware/db.py")
+    tree = _read("catchplate/db.py")
     maximum = _one([_integer(node.value) for node in tree.body if type(node) is ast.Assign
         and len(node.targets) == 1 and type(node.targets[0]) is ast.Name
         and node.targets[0].id == "_POLICY_AUTHORITY_VERIFIER_RESPONSE_MAX_BYTES"])
     digest = _one([node for node in ast.walk(tree) if type(node) is ast.JoinedStr
         and any(type(part) is ast.Constant and type(part.value) is str
-            and "serverware_policy_authority_domain_digest(\n                    digest_domain text" in part.value
+            and "catchplate_policy_authority_domain_digest(\n                    digest_domain text" in part.value
             for part in node.values)])
     digest_sql = _template(digest, {"guard_namespace": namespace,
         "_POLICY_AUTHORITY_VERIFIER_RESPONSE_MAX_BYTES": maximum})
@@ -141,7 +141,7 @@ def _actual_helpers(*, namespace=NAMESPACE):
 
 
 def _actual_table():
-    tree = _read("serverware/authority_store/v9_schema_source.py")
+    tree = _read("catchplate/authority_store/v9_schema_source.py")
     function = _one([node for node in tree.body if type(node) is ast.FunctionDef
         and node.name == "authority_v9_schema_source"])
     # The enclosing source applies two numeric placeholder replacements to
@@ -242,9 +242,9 @@ BEGIN
     IF pg_catalog.current_setting('server_version_num')::integer / 10000 NOT IN (16, 17)
         OR pg_catalog.getdatabaseencoding() <> 'UTF8' OR pg_catalog.inet_server_addr() IS NOT NULL
     THEN RAISE EXCEPTION 'component requires PostgreSQL16/17 UTF8 over a Unix socket'; END IF;
-    IF {NAMESPACE}.serverware_policy_authority_domain_digest({_quote(DOMAIN)}, {_quote(evidence_json)})
+    IF {NAMESPACE}.catchplate_policy_authority_domain_digest({_quote(DOMAIN)}, {_quote(evidence_json)})
             <> {actual_digest}
-        OR {NAMESPACE}.serverware_policy_authority_wire_json({_quote(evidence_json)}::jsonb)
+        OR {NAMESPACE}.catchplate_policy_authority_wire_json({_quote(evidence_json)}::jsonb)
             <> {_quote(evidence_json)}
     THEN RAISE EXCEPTION 'actual helper does not match independent fixture bytes'; END IF;
     PERFORM {NAMESPACE}.exercise_guard(NULL, FALSE, FALSE);
@@ -276,14 +276,14 @@ $component_checks$;
 
 class OptionalEvidenceSourceControls(unittest.TestCase):
     def test_mutation_template_lookup_disambiguates_the_executor_local(self):
-        tree = _read("serverware/authority_store/executor_v9.py")
+        tree = _read("catchplate/authority_store/executor_v9.py")
         installer = _one([node for node in tree.body if type(node) is ast.FunctionDef
             and node.name == "install_authority_v9_executor"])
         template = _one([_template(node) for node in ast.walk(installer)
             if type(node) is ast.JoinedStr and any(type(part) is ast.Constant
-                and type(part.value) is str and "AS $serverware_execute_v9$" in part.value
+                and type(part.value) is str and "AS $catchplate_execute_v9$" in part.value
                 for part in node.values)])
-        self.assertRegex(template, r"AS \$serverware_execute_v9\$\s+<<executor_state>>\s+DECLARE")
+        self.assertRegex(template, r"AS \$catchplate_execute_v9\$\s+<<executor_state>>\s+DECLARE")
         lookup = _one(re.findall(
             r"FROM \{namespace\}\.\s+policy_authority_operation_mutation_templates\s+"
             r"AS template\s+WHERE template\.operation = capability\.operation.*?"

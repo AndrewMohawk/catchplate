@@ -23,10 +23,10 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import test_native_pilot_genesis_parent_authority as parents
 import test_native_pilot_ordinary_initial as ordinary
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_genesis_ordinary_initial_authority as authority
-from serverware import native_pilot_genesis_ordinary_initial_profile as profile
-from serverware import native_pilot_ordinary_key_profile as key
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_genesis_ordinary_initial_authority as authority
+from catchplate import native_pilot_genesis_ordinary_initial_profile as profile
+from catchplate import native_pilot_ordinary_key_profile as key
 
 p = g.p
 
@@ -149,10 +149,10 @@ class ColdOrdinaryInitialTests(unittest.TestCase):
             self.assertEqual(self.prepare(value)["deadline"], 5_000_000_000)
 
     def test_hot_versions_and_extra_service_or_directories_refuse(self):
-        mutations = (("launchOriginal", "serverware.custodyFiveServiceLaunch/v6"),
-            ("preparationOriginal", "serverware.custodyFiveServicePreparation/v1"),
-            ("resourcesOriginal", "serverware.custodyFiveServiceInitialResources/v1"),
-            ("initialStateOriginal", "serverware.custodyOrdinaryInitialState/v1"))
+        mutations = (("launchOriginal", "catchplate.custodyFiveServiceLaunch/v6"),
+            ("preparationOriginal", "catchplate.custodyFiveServicePreparation/v1"),
+            ("resourcesOriginal", "catchplate.custodyFiveServiceInitialResources/v1"),
+            ("initialStateOriginal", "catchplate.custodyOrdinaryInitialState/v1"))
         for field, api in mutations:
             value = g.document(self.row["inputs"]["checkpoint"], authority.MAX_INPUT)
             nested = g.document(value[field].encode("ascii"), 65536); nested["apiVersion"] = api
@@ -161,7 +161,7 @@ class ColdOrdinaryInitialTests(unittest.TestCase):
         state = copy.deepcopy(self.row["state"])
         state["directories"]["generation-journal"] = state["directories"]["journal"]
         with self.assertRaises(ValueError): profile.validate_state(state)
-        wrapper = copy.deepcopy(self.row["wrapper"]); wrapper["apiVersion"] = "serverware.custodyOrdinaryInitialHistory/v1"
+        wrapper = copy.deepcopy(self.row["wrapper"]); wrapper["apiVersion"] = "catchplate.custodyOrdinaryInitialHistory/v1"
         with self.assertRaises(ValueError): profile.manifest(g.canonical(wrapper), role=profile.ROLES[0], root_pin=self.row["root_pin"])
 
     def test_changed_process_resources_parent_or_state_original_refuses(self):

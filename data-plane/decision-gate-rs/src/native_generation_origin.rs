@@ -1,7 +1,7 @@
 //! Actual management caller for the retained generation, not a supplied
 //! generation decoder or an alias for an old Fleet load receipt.
 use super::*;
-use serverware_decision_gate::native_generation_origin_v1 as wire;
+use catchplate_decision_gate::native_generation_origin_v1 as wire;
 pub(super) struct Prepared {statement:wire::Statement}
 impl Prepared{pub(super) fn statement(&self)->&wire::Statement{&self.statement}}
 fn observe(state:&GateState,raw:&[u8])->Result<Value,String>{

@@ -23,7 +23,7 @@ from scripts import prepare_operator_catalog_fixture as base
 
 CLIENT_IMAGE = "sha256:b2ce90db12b1df24e9d405fcd1e48d50ebad0039e523d30fde8fb1fb64fafafa"
 CURL_SHA256 = "0ca2b923679ab186f6512c7512e131a1c5c1b43d4cb5d55933998405b39e85bf"
-DEPENDENCIES = Path("/srv/catchplate-fast/projects/serverware-operator-workspace-evidence/requests-dependencies.6BgfNK0L")
+DEPENDENCIES = Path("/srv/catchplate-fast/projects/catchplate-operator-workspace-evidence/requests-dependencies.6BgfNK0L")
 DEPENDENCY_MANIFEST_SHA256 = "d932320e6f32eeca7f496abea639c1a80cf5afd0ba3642011e2a41cee3a70059"
 PROXY_HOST = "proxy.operator-basic.example.test"
 CHECKER = "scripts/check_operator_proxy_basic.py"
@@ -35,8 +35,8 @@ def build(source, binary, initializer, root, subnet, *, expected_binary_sha256):
     """Pure, single-purpose Compose builder; no imports of runtime application code."""
     binary_sha = base.validated_binary_sha256(expected_binary_sha256)
     base.require(root.parent == base.SCRATCH and re.fullmatch(
-        r"serverware-proxy-basic-private\.[A-Za-z0-9]{6,32}", root.name), "fresh Basic NVMe root required")
-    template = root.with_name("serverware-catalog-private." + root.name.split(".", 1)[1])
+        r"catchplate-proxy-basic-private\.[A-Za-z0-9]{6,32}", root.name), "fresh Basic NVMe root required")
+    template = root.with_name("catchplate-catalog-private." + root.name.split(".", 1)[1])
     config = base.build(source, binary, initializer, template, subnet, expected_binary_sha256=binary_sha)
     runtime = root / "runtime"
     for service in config["services"].values():
@@ -44,7 +44,7 @@ def build(source, binary, initializer, root, subnet, *, expected_binary_sha256):
             path = Path(mount["source"])
             if path.is_relative_to(template):
                 mount["source"] = str(root / path.relative_to(template))
-    config["name"] = "serverware-proxy-basic-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
+    config["name"] = "catchplate-proxy-basic-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
     services = config["services"]
     network = ipaddress.ip_network(subnet, strict=True)
     gate_ip, edge_ip, client_ip = (str(network.network_address + value) for value in (4, 5, 6))
@@ -76,7 +76,7 @@ def build(source, binary, initializer, root, subnet, *, expected_binary_sha256):
         "networks": {"fixture": {"ipv4_address": client_ip}},
         "environment": {"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": "/app:/client-dependencies/site-packages"},
         "entrypoint": ["/usr/bin/python3.10", "-B"], "command": ["/app/" + CHECKER,
-            "--control-base", "http://serverware:3000", "--management-base", "http://" + gate_ip + ":9091",
+            "--control-base", "http://catchplate:3000", "--management-base", "http://" + gate_ip + ":9091",
             "--proxy-url", "https://" + PROXY_HOST + ":8443", "--operator-origin", base.ORIGIN,
             "--expected-binary-sha256", "sha256:" + binary_sha,
             "--ca-file", "/client-trust/inner-ca.pem", "--proxy-ca-file", "/client-trust/outer-ca.pem",
@@ -136,7 +136,7 @@ def source_inventory(source, manifest_path, manifest_sha, commit):
     base.require(isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit), "explicit source commit required")
     manifest = pinned_json(manifest_path, manifest_sha)
     base.require(isinstance(manifest, dict) and set(manifest) == {"schema", "sourceCommit", "files"}
-        and manifest["schema"] == "serverware.privateProxyBasicSource/v1" and manifest["sourceCommit"] == commit,
+        and manifest["schema"] == "catchplate.privateProxyBasicSource/v1" and manifest["sourceCommit"] == commit,
         "source archive provenance differs")
     expected = manifest["files"]
     base.require(isinstance(expected, dict) and 0 < len(expected) <= 16384, "bounded full source inventory required")
@@ -156,7 +156,7 @@ def dependency_inventory():
     manifest = pinned_json(DEPENDENCIES / "manifest.json", DEPENDENCY_MANIFEST_SHA256)
     observed = inventory(DEPENDENCIES, limit=2048, byte_limit=8 * 1024**2)
     observed.pop("manifest.json")
-    base.require(manifest.get("schema") == "serverware.syntheticRequestsDependencies/v1"
+    base.require(manifest.get("schema") == "catchplate.syntheticRequestsDependencies/v1"
         and manifest.get("moduleSubdirectory") == "site-packages" and len(manifest.get("files", [])) == 143,
         "retained client dependency shape differs")
     expected = {row["path"]: {"size": row["size"], "sha256": row["sha256"]} for row in manifest["files"]}
@@ -174,7 +174,7 @@ def prepare(args):
             and base.digest(path) == expected, "reviewed executable or initializer differs")
     dependency_inventory()
     compose = json.dumps(config, indent=2, sort_keys=True) + "\n"
-    manifest = {"schema": "serverware.privateProxyBasicPreparation/v1", "project": config["name"],
+    manifest = {"schema": "catchplate.privateProxyBasicPreparation/v1", "project": config["name"],
         "jobRoot": str(args.job_root), "source": str(args.source), "sourceCommit": args.expected_source_commit,
         "sourceManifest": str(args.source_manifest), "sourceManifestSha256": args.expected_source_manifest_sha256,
         "sourceSha256": sources, "sourceKind": "detached-archive", "binary": str(args.binary),

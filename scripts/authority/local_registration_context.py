@@ -13,7 +13,7 @@ Development-only root metadata-bootstrap producer. No arbitrary paths, hooks,
 SQL, new keys, hardware registration or automatic head selection.
 
 Before cold bootstrap, --prepare-directory creates ONLY absent fixed
-/run/serverware/registration-contexts root:65532 0750 and requests/ 65532:65532
+/run/catchplate/registration-contexts root:65532 0750 and requests/ 65532:65532
 0700. Its canonical {path,device,inode} output must be pinned in explicitly
 selected execution/v4 and finalization/v5 nested bootstraps. Existing parent
 v4 and existing independently signed enrollments remain required. The actual
@@ -28,7 +28,7 @@ approval wrapper remains within the existing 32 MiB protected-public limit.
 It independently selects the current predecessor or pending scope; a request,
 receipt, local locator or signature history alone grants no such authority.
 
-Protected approval exact fields: schema=serverware.authorityTrustedHostLocalRegistrationContextApproval/v1,
+Protected approval exact fields: schema=catchplate.authorityTrustedHostLocalRegistrationContextApproval/v1,
 directory, requestOriginal, requestSha256, scope, issuedAtMonotonicNs,
 issuedAtUnixNanos. Scope is {sequence,headDigest,nextFence} for reserve, or
 {sequence,headDigest,fence} for execute. The latter uses the SAME two original
@@ -71,7 +71,7 @@ def main(argv=None):
     def cancelled(_number, _frame): raise KeyboardInterrupt()
     for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP): signal.signal(number, cancelled)
     try:
-        from serverware import authority_local_registration_context as context
+        from catchplate import authority_local_registration_context as context
         if argv == ["--prepare-directory"]:
             result = context.prepare_directory()
         else:

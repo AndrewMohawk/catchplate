@@ -13,10 +13,10 @@ use std::os::unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt};
 use std::path::Path;
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 
-pub const GUEST_RESPONSE_V2_SOCKET: &str = "/run/serverware-response-v2-guest/transaction.sock";
-const DIRECTORY: &str = "/run/serverware-response-v2-guest";
-const PROFILE: &str = "serverware.responseV2.guestListener/v1";
-const HANDOFF: &str = "serverware.responseV2.guestListenerHandoff/v1";
+pub const GUEST_RESPONSE_V2_SOCKET: &str = "/run/catchplate-response-v2-guest/transaction.sock";
+const DIRECTORY: &str = "/run/catchplate-response-v2-guest";
+const PROFILE: &str = "catchplate.responseV2.guestListener/v1";
+const HANDOFF: &str = "catchplate.responseV2.guestListenerHandoff/v1";
 const GATE_ID: u32 = 65534;
 const MAX_HANDOFF: u64 = 16 * 1024;
 const SEALS: i32 = libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
@@ -169,7 +169,7 @@ fn socket_check(fd: RawFd, listening: bool) -> Result<(), V2RuntimeError> {
 fn seal(value: &Handoff) -> Result<File, V2RuntimeError> {
     let bytes = crate::canonical_json_bytes(value).map_err(|_| fail("encode guest listener handoff"))?;
     require(!bytes.is_empty() && bytes.len() as u64 <= MAX_HANDOFF, "handoff exceeds bound")?;
-    let raw = unsafe { libc::syscall(libc::SYS_memfd_create, b"serverware-guest-listener\0".as_ptr(),
+    let raw = unsafe { libc::syscall(libc::SYS_memfd_create, b"catchplate-guest-listener\0".as_ptr(),
         libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) as i32 };
     if raw < 0 { return Err(fail("create handoff memfd")); }
     let mut file = unsafe { File::from_raw_fd(raw) };

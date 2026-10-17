@@ -24,8 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import native_pilot_authority_io as io
-from serverware import native_shadow_nitro_originals as originals
-from serverware import policy_candidate_artifact_issuer as issuer
+from catchplate import native_shadow_nitro_originals as originals
+from catchplate import policy_candidate_artifact_issuer as issuer
 
 
 class _Parser(argparse.ArgumentParser):

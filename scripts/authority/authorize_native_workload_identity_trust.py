@@ -20,11 +20,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from serverware import authority_successor_execution_window as windows
-from serverware import native_workload_identity_trust_authorization as authorization
-from serverware import workload_identity_issuer_bootstrap as shared
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
-from serverware_agent_trust import _workload_tls as tls
+from catchplate import authority_successor_execution_window as windows
+from catchplate import native_workload_identity_trust_authorization as authorization
+from catchplate import workload_identity_issuer_bootstrap as shared
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate_agent_trust import _workload_tls as tls
 
 
 def _require(value):

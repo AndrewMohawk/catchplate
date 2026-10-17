@@ -20,8 +20,8 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_radix_mutation as radix_mutation
-from serverware.authority_radix_mutation import (
+from catchplate import authority_radix_mutation as radix_mutation
+from catchplate.authority_radix_mutation import (
     PrimaryRadixBatchResult,
     PrimaryRadixLimits,
     PrimaryRadixMembershipResult,
@@ -44,16 +44,16 @@ class IndependentTree:
         self.rows = {sql_json(self.key(row)): copy.deepcopy(row) for row in rows}
         if len(self.rows) != len(rows):
             raise AssertionError("fixture duplicate key")
-        self.empty = {64: sql_digest("serverware.policyAuthorityAuthenticatedEmptyLeaf/v1", b"64")}
+        self.empty = {64: sql_digest("catchplate.policyAuthorityAuthenticatedEmptyLeaf/v1", b"64")}
         for depth in range(63, -1, -1):
-            self.empty[depth] = sql_digest("serverware.policyAuthorityAuthenticatedNode/v1",
+            self.empty[depth] = sql_digest("catchplate.policyAuthorityAuthenticatedNode/v1",
                                            str(depth).encode(), sql_json([self.empty[depth + 1]] * 16))
         self.leaves, self.nodes = {}, {}
         for row in self.rows.values():
             key = self.key(row)
-            tree_key = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1", table.encode(), sql_json(key))
-            row_digest = sql_digest("serverware.policyAuthorityAuthenticatedRow/v1", table.encode(), sql_json(row))
-            leaf = sql_digest("serverware.policyAuthorityAuthenticatedLeaf/v1", table.encode(),
+            tree_key = sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1", table.encode(), sql_json(key))
+            row_digest = sql_digest("catchplate.policyAuthorityAuthenticatedRow/v1", table.encode(), sql_json(row))
+            leaf = sql_digest("catchplate.policyAuthorityAuthenticatedLeaf/v1", table.encode(),
                               tree_key.encode(), sql_json(key), row_digest.encode())
             self.leaves[tree_key] = (row_digest, leaf)
             self.nodes[(64, tree_key[7:])] = leaf
@@ -62,7 +62,7 @@ class IndependentTree:
             for prefix in prefixes:
                 children = [self.nodes.get((depth + 1, prefix + format(index, "x")), self.empty[depth + 1])
                             for index in range(16)]
-                self.nodes[(depth, prefix)] = sql_digest("serverware.policyAuthorityAuthenticatedNode/v1",
+                self.nodes[(depth, prefix)] = sql_digest("catchplate.policyAuthorityAuthenticatedNode/v1",
                                                        str(depth).encode(), sql_json(children))
         self.root = PrimaryRoot(table, len(rows) if revision is None else revision,
                                 self.nodes.get((0, ""), self.empty[0]), len(rows))
@@ -76,14 +76,14 @@ class IndependentTree:
     def selected(self, key: dict) -> dict:
         row = self.rows.get(sql_json(key))
         return {"table": self.table, "key": copy.deepcopy(key),
-                "keyDigest": wire_digest("serverware.policyAuthorityBusinessKey/v1", self.table.encode(), wire_json(key)),
+                "keyDigest": wire_digest("catchplate.policyAuthorityBusinessKey/v1", self.table.encode(), wire_json(key)),
                 "present": row is not None, "row": copy.deepcopy(row), "contractSelector": None}
 
     def proof(self, selected: dict) -> dict:
-        tree_key = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1", self.table.encode(), sql_json(selected["key"]))
+        tree_key = sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1", self.table.encode(), sql_json(selected["key"]))
         path = tree_key[7:]
         row_digest, leaf = self.leaves.get(tree_key, (None, self.empty[64]))
-        proof = {"schema": "serverware.policyAuthorityRadixMultiproof/v3", "table": self.table,
+        proof = {"schema": "catchplate.policyAuthorityRadixMultiproof/v3", "table": self.table,
                  "key": copy.deepcopy(selected["key"]), "keyDigest": selected["keyDigest"],
                  "present": selected["present"], "rowDigest": row_digest, "leafDigest": leaf,
                  "rootRevision": self.root.root_revision, "rootDigest": self.root.root_digest,
@@ -96,7 +96,7 @@ class IndependentTree:
 
 
 def refresh_proof_digest(proof: dict) -> None:
-    proof["proofDigest"] = wire_digest("serverware.policyAuthorityRadixMultiproof/v3",
+    proof["proofDigest"] = wire_digest("catchplate.policyAuthorityRadixMultiproof/v3",
                                       wire_json({key: value for key, value in proof.items() if key != "proofDigest"}))
 
 
@@ -158,7 +158,7 @@ class AuthorityRadixMutationTests(unittest.TestCase):
         shared = None
         for index in range(513):
             identifier = f"shared-{index}"
-            path = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1", b"items", sql_json({"id": identifier}))[7:]
+            path = sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1", b"items", sql_json({"id": identifier}))[7:]
             group = groups.setdefault(path[:2], [])
             group.append(identifier)
             if len(group) == 3:
@@ -293,7 +293,7 @@ class AuthorityRadixMutationTests(unittest.TestCase):
 
     def test_business_address_cannot_be_replaced_by_tree_address(self) -> None:
         selected = copy.deepcopy(self.selected)
-        selected["keyDigest"] = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1", b"items", sql_json(selected["key"]))
+        selected["keyDigest"] = sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1", b"items", sql_json(selected["key"]))
         args = batch(self.tree, (selected,), (change(selected, "UPDATE", self.mutation["row"]),))
         with self.assertRaisesRegex(PrimaryRadixMutationError, "before proof reconstruction"):
             evaluate_primary_radix_batch(**args)
@@ -438,9 +438,9 @@ class AuthorityRadixMutationTests(unittest.TestCase):
         by_address = {(proof["table"], proof["keyDigest"]): proof for proof in observed.before_proofs}
         present = observed.selected_rows[0]
         self.assertEqual(by_address[(present["table"], present["keyDigest"])]["rowDigest"],
-                         sql_digest("serverware.policyAuthorityAuthenticatedRow/v1", b"items", sql_json(present["row"])))
+                         sql_digest("catchplate.policyAuthorityAuthenticatedRow/v1", b"items", sql_json(present["row"])))
         self.assertEqual(present["keyDigest"], wire_digest(
-            "serverware.policyAuthorityBusinessKey/v1", b"items", wire_json(present["key"])))
+            "catchplate.policyAuthorityBusinessKey/v1", b"items", wire_json(present["key"])))
         selected[0]["row"]["value"]["nested"].append("caller change")
         arguments["before_proofs"][0]["siblings"][0]["childDigests"][0] = "sha256:" + "0" * 64
         self.assertEqual(observed.selected_rows, pristine["selected_rows"])

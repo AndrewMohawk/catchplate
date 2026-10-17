@@ -2,7 +2,7 @@
 
 # Connected X accounts
 
-This implementation belongs to the ordinary, persistent Serverware workspace;
+This implementation belongs to the ordinary, persistent Catchplate workspace;
 it is not a second demo or an alternative approval authority. It is feature
 gated and **not deployed or accepted against real X**. The running deployment
 remains the pair recorded in [project completion](project-completion.md).
@@ -83,7 +83,7 @@ against a late refresh response.
 
 The fresh-process reopen preserves the key, signed policy, schema and all other
 retained cells. Its sole allowed database change is the `applied_at` startup
-stamp on the `policy_candidate_authority` row of `serverware_store_migrations`,
+stamp on the `policy_candidate_authority` row of `catchplate_store_migrations`,
 proven within the actual startup interval. Earlier namespace and overly strict
 reopen-oracle failures remain retained; `interpretation-correction.md` explains
 why the first failure was a reopen, not a failure before consent. The namespace
@@ -120,7 +120,7 @@ executed in the connected checkpoint below. Deployment, shared daily quota and
 real-X acceptance remain open.
 
 Evidence is retained under
-`serverware-operator-workspace-evidence/x-accounts-connected.hWXZjH`
+`catchplate-operator-workspace-evidence/x-accounts-connected.hWXZjH`
 (`joined-05-result.json`, joined logs, and `ordinary-regression/`), alongside
 `x-ordinary-rust-r2.evutcaLq/attempt-result.json`, the independent source join,
 the earlier failed

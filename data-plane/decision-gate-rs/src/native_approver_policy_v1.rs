@@ -110,7 +110,7 @@ pub fn require_policy(value: &Value, require_jit: bool) -> Result<(), String> {
         "schema", "requiredRoles", "roleMatch", "allowedApproverIds",
         "allowAnyApproverId", "requireWebAuthn", "threshold", "credentialPolicy",
     ])?;
-    require(policy["schema"].as_str() == Some("serverware.jitApproverPolicy/v1")
+    require(policy["schema"].as_str() == Some("catchplate.jitApproverPolicy/v1")
         && policy["roleMatch"].as_str() == Some("any")
         && policy["requireWebAuthn"].as_bool() == Some(true))?;
     for role in text_set(&policy["requiredRoles"], 64)? {

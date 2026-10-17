@@ -1,6 +1,6 @@
 # Finalization execution-grant production
 
-[`authority_registration_finalization_grant_production.py`](../serverware/authority_registration_finalization_grant_production.py)
+[`authority_registration_finalization_grant_production.py`](../catchplate/authority_registration_finalization_grant_production.py)
 composes original finalization authorization, genuine custody raw7 and a
 complete before-vector with the existing real successor grant producer. It is
 source-only, unbuilt and unexecuted. Its output is one original signed execution

@@ -1,6 +1,6 @@
 # Initial independent commissioning policy
 
-`serverware.native_pilot_supervisor_policy.SupervisorPolicy` admits one complete
+`catchplate.native_pilot_supervisor_policy.SupervisorPolicy` admits one complete
 independently selected policy and implements the first `driver-bootstrap`
 decision. The separate precreation composer implements the next two jobs. This
 is not a complete decision service, a runnable pilot supervisor, or
@@ -44,7 +44,7 @@ retry/reset path.
 
 There are exactly eight top-level fields:
 
-- `apiVersion`: `serverware.nativePilotSupervisorCommissioningPolicy/v1`.
+- `apiVersion`: `catchplate.nativePilotSupervisorCommissioningPolicy/v1`.
 - `purpose`: `initial-driver-bootstrap-and-endpoint-precreation`.
 - `source`: the existing exact five runtime source fields: `revision`,
   `source_tree_digest`, `source_manifest_digest`, `source_archive_digest`,
@@ -57,7 +57,7 @@ There are exactly eight top-level fields:
   SHA256 of the actual raw 32-byte Ed25519 public key. This is a capability
   inventory, not approval of all purposes or jobs.
 - `precreation`: the separate closed
-  `serverware.nativePilotSupervisorPrecreationPolicy/v1` fragment.
+  `catchplate.nativePilotSupervisorPrecreationPolicy/v1` fragment.
 
 The precreation fragment contains only its exact API, C9 authority, endpoint
 and cohort executable pins, existing cleanup authority/journal/genesis binding,
@@ -103,7 +103,7 @@ DriverBootstrap, or replace the native receiving owner's actual live checks.
 
 The resulting complete input uses the existing driver-authority input schema.
 The resulting approval is the existing exact eight-field
-`serverware.nativePilotAuthorityJobApproval/v1`, bound to that complete input
+`catchplate.nativePilotAuthorityJobApproval/v1`, bound to that complete input
 hash, phase, job, conductor request and original deadline. No signature or
 approval file is produced by this module: the separate spine owns the actual
 protected installer and reply. A later observed signature must still be
@@ -128,7 +128,7 @@ At v4 the coordinator expanded to 57 exact key selectors; v1–v3 kept their old
 current v11–v13 inventory of 108 selectors. No legacy policy is silently
 upgraded or given new signing authority.
 
-The new fragment is `serverware.nativePilotSupervisorOrdinaryInitialPolicy/v1`
+The new fragment is `catchplate.nativePilotSupervisorOrdinaryInitialPolicy/v1`
 with exactly `apiVersion` and five-role `services`. Each role selects three
 separate public authorities, a protocol endpoint role, four positive generation
 counters, deployment digest, revocation generation/root and the closed validity
@@ -157,7 +157,7 @@ v4's authorization. See
 Policy/v5 has the twelve v4 fields plus `ordinaryDeliveriesOriginal`, with purpose
 `initial-driver-bootstrap-precreation-endpoints-and-ordinary-deliveries`.
 The added value is the complete canonical ASCII original of
-`serverware.nativePilotOrdinaryRuntimePolicy/v1`, not a template or an arbitrary
+`catchplate.nativePilotOrdinaryRuntimePolicy/v1`, not a template or an arbitrary
 runtime document. The outer policy retains its 4 MiB limit and the exact 57-key
 inventory. Each ordinary-delivery selector must equal the selected cold C9
 authority. Earlier versions keep their exact fields and scopes; v4 does not
@@ -188,7 +188,7 @@ Policy/v6 retains v5's thirteen fields and adds exactly
 `ordinaryGenerationsOriginal`, with purpose
 `initial-driver-bootstrap-precreation-endpoints-and-ordinary-generations`.
 The literal canonical ASCII original is an exact three-field
-`serverware.nativePilotOrdinaryGenerationPolicy/v1`: API version and positive
+`catchplate.nativePilotOrdinaryGenerationPolicy/v1`: API version and positive
 i64 `installationIssuedAtUnixNanos` / `installationExpiresAtUnixNanos`, in order.
 It selects no future receipt, driver, descriptor, runtime or signature facts.
 
@@ -301,7 +301,7 @@ See [contracts and limits](native-pilot-ordinary-transitions.md).
 Policy/v11 adds only `nativeLaunchAuthorizationsOriginal` to the eighteen v10
 fields, with purpose
 `initial-driver-bootstrap-precreation-endpoints-generations-and-native-launch-authorizations`.
-The literal `serverware.nativePilotLaunchAuthorizationPolicy/v1` has exactly
+The literal `catchplate.nativePilotLaunchAuthorizationPolicy/v1` has exactly
 `apiVersion` and ten `endpoints` rows. Each row selects a closure interval,
 encrypted-delivery transport original and interval, and verifier port/interval.
 CommitRequest additionally selects its provisioner's public secret descriptor
@@ -328,7 +328,7 @@ Policy/v12 adds only `endpointLaunchesOriginal` to v11's nineteen fields. Its
 purpose is `initial-driver-bootstrap-precreation-endpoints-generations-and-endpoint-launches`.
 The same 108 signing selectors remain; no new key or signer is introduced.
 The outer 4 MiB bound remains. The 16 KiB fragment
-`serverware.nativePilotEndpointLaunchPolicy/v1` has exactly `apiVersion` and
+`catchplate.nativePilotEndpointLaunchPolicy/v1` has exactly `apiVersion` and
 `endpoints`, with ten closed role rows selecting `parentPort`,
 `maximumBracketNanos`, `timestampErrorNanos` and `maximumClockRateErrorPpm`.
 These are unsigned time-bootstrap settings, not observations or trusted time.
@@ -350,7 +350,7 @@ Its 108 signing selectors and outer 4 MiB bound are unchanged. The canonical
 ASCII fragment is bounded to 4 KiB and has exactly:
 
 ```json
-{"apiVersion":"serverware.nativePilotServiceMaterialPolicy/v1","initialization":"fresh-persistence-and-generation"}
+{"apiVersion":"catchplate.nativePilotServiceMaterialPolicy/v1","initialization":"fresh-persistence-and-generation"}
 ```
 
 `service_material_policy(process=..., request=...)` returns a checked copy only

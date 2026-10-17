@@ -225,7 +225,7 @@ class SyntheticProvider:
         return wire
 
     def observe_durable(self, phase):
-        from serverware import operator_x_account_store as durable
+        from catchplate import operator_x_account_store as durable
         self.fixture.store.operator_publication.assert_not_held()
         with closing(self.fixture.db.connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -294,8 +294,8 @@ class SyntheticHealth:
                 require((method, path, headers) == ("GET", "/healthz", {"Connection": "close"})
                     and not entry["requested"], "fixed health request")
                 entry["requested"] = True
-                from serverware import operator_google_gate_configuration as producer
-                from serverware import operator_x_gate_configuration as x_producer
+                from catchplate import operator_google_gate_configuration as producer
+                from catchplate import operator_x_gate_configuration as x_producer
                 with fixture.store.operator_publication.exclusive(), closing(fixture.db.connect()) as conn:
                     conn.execute("PRAGMA query_only=ON")
                     conn.execute("BEGIN")
@@ -304,7 +304,7 @@ class SyntheticHealth:
                     policy = conn.execute("SELECT policy_hash FROM operator_demo_policy WHERE singleton=1").fetchone()[0]
                 self.raw = encoded({"ok": True, "policy_hash": policy, "data_plane_binary_digest": BINARY,
                     "policy_shadow": {"managed_google": identity, "managed_x": x_identity},
-                    "operator_x_post": {"schema": "serverware.operatorXPostGate/v1",
+                    "operator_x_post": {"schema": "catchplate.operatorXPostGate/v1",
                         "adapter": "x.post.v1", "operation": "tweets.write"}})
 
             def getresponse(self):
@@ -415,7 +415,7 @@ class Story:
 
     async def catalog(self):
         value, _ = await self.request("GET", CATALOG)
-        require(value["schema"] == "serverware.operatorCatalog/v1", "actual catalog schema")
+        require(value["schema"] == "catchplate.operatorCatalog/v1", "actual catalog schema")
         return value
 
     async def review(self):
@@ -453,7 +453,7 @@ class Story:
         require(len(cookies) == 1 and all(word in cookies[0].lower()
             for word in ("secure", "httponly", "samesite=lax")), "browser nonce cookie attributes")
         parsed_cookie = SimpleCookie(cookies[0])
-        name = "__Host-serverware-x-oauth-" + self.started["state"]
+        name = "__Host-catchplate-x-oauth-" + self.started["state"]
         require(set(parsed_cookie) == {name} and parsed_cookie[name]["path"] == "/", "cookie state/path binding")
         nonce = parsed_cookie[name].value
         require(len(nonce) == 43, "browser nonce size")
@@ -570,7 +570,7 @@ class Story:
 
 
 async def full_lifecycle(story):
-    from serverware import operator_x_refresh as refresh
+    from catchplate import operator_x_refresh as refresh
     credential = await story.connected()
     await story.grant(credential)
     initial, initial_secret = story.core(credential)
@@ -616,7 +616,7 @@ async def callback_controls(story):
         await story.request("GET", target, expected=409, authenticate=False,
             cookie=cookie, json_response=False)
         require(story.snapshot() == before and not story.provider.calls, "invalid callback mutated or dispatched")
-    from serverware import operator_x_accounts as service
+    from catchplate import operator_x_accounts as service
     try:
         await asyncio.to_thread(service.status, story.started["operation_id"], "other-synthetic-administrator")
     except service.AccountNotFound:
@@ -635,7 +635,7 @@ async def callback_controls(story):
 
 
 async def retained_uncertainty(story):
-    from serverware import operator_x_account_store as durable
+    from catchplate import operator_x_account_store as durable
     await story.configure()
     await story.begin()
     story.transport.armed = True
@@ -679,8 +679,8 @@ async def retained_uncertainty(story):
 
 
 async def refresh_disconnect_race(story):
-    from serverware import operator_x_refresh as refresh
-    from serverware import operator_x_account_store as durable
+    from catchplate import operator_x_refresh as refresh
+    from catchplate import operator_x_account_store as durable
     credential = await story.connected()
     await story.grant(credential)
     entered, release = threading.Event(), threading.Event()
@@ -736,15 +736,15 @@ STORIES = {"lifecycle": full_lifecycle, "callbacks": callback_controls,
 
 def retained_checkpoint():
     """Read-only persisted bytes/identity, before and after actual cold startup."""
-    directory = Path(os.environ["SERVERWARE_DATA_DIR"])
-    database = directory / "serverware.sqlite3"
+    directory = Path(os.environ["CATCHPLATE_DATA_DIR"])
+    database = directory / "catchplate.sqlite3"
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as conn:
         # Existing startup reinstalls real guard triggers. iterdump() does not
         # order those sqlite_master entries; compare the complete statement
         # multiset, retaining every schema/data byte and duplicate statement.
         logical = tuple(sorted(conn.iterdump()))
     private_clean("\n".join(logical).encode())
-    key = Path(os.environ["SERVERWARE_OPERATOR_X_CUSTODY_DIR"]) / "provider-key.json"
+    key = Path(os.environ["CATCHPLATE_OPERATOR_X_CUSTODY_DIR"]) / "provider-key.json"
     evidence = configuration_fixture.key_evidence(key)
     return {"database_logical_sha256": hashlib.sha256(encoded(logical)).hexdigest(),
         "policy_sha256": hashlib.sha256((directory / "policy-bundle.json").read_bytes()).hexdigest(),
@@ -753,7 +753,7 @@ def retained_checkpoint():
 
 def retained_row_digests():
     """Failure diagnostics retain cell hashes, never values or SQL text."""
-    database = Path(os.environ["SERVERWARE_DATA_DIR"]) / "serverware.sqlite3"
+    database = Path(os.environ["CATCHPLATE_DATA_DIR"]) / "catchplate.sqlite3"
     result = {"schema": {}, "tables": {}}
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as conn:
         conn.execute("BEGIN")
@@ -778,9 +778,9 @@ def retained_row_digests():
 
 
 def retained_startup_bookkeeping():
-    database = Path(os.environ["SERVERWARE_DATA_DIR"]) / "serverware.sqlite3"
+    database = Path(os.environ["CATCHPLATE_DATA_DIR"]) / "catchplate.sqlite3"
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as conn:
-        rows = conn.execute("SELECT migration,version,applied_at FROM serverware_store_migrations "
+        rows = conn.execute("SELECT migration,version,applied_at FROM catchplate_store_migrations "
             "WHERE migration=?", ("policy_candidate_authority",)).fetchall()
     require(len(rows) == 1, "exact retained startup migration")
     return rows[0]
@@ -829,7 +829,7 @@ def require_cold_retention(expected, checkpoint, before, after, old, new, interv
         and checkpoint["policy_sha256"] == expected["policy_sha256"]
         and checkpoint["key_identity"] == expected["key_identity"], "retained key and policy exact")
     changes = changed_retained_rows(before, after)
-    require(changes == {"schema_objects": [], "tables": {"serverware_store_migrations": {
+    require(changes == {"schema_objects": [], "tables": {"catchplate_store_migrations": {
         "inserted": 0, "deleted": 0, "updated": 1, "changed_columns": ["applied_at"]}}},
         "only exact startup bookkeeping cell may change")
     require(old[0] == new[0] == "policy_candidate_authority"
@@ -842,7 +842,7 @@ def require_cold_retention(expected, checkpoint, before, after, old, new, interv
         and old_at < interval[0] <= new_at <= interval[1], "actual startup bookkeeping wall interval")
     def row_digest(row):
         return tuple(hashlib.sha256(encoded((type(value).__name__, value))).hexdigest() for value in row)
-    previous, current = before["tables"]["serverware_store_migrations"], after["tables"]["serverware_store_migrations"]
+    previous, current = before["tables"]["catchplate_store_migrations"], after["tables"]["catchplate_store_migrations"]
     require(previous["columns"] == current["columns"] == ["migration", "version", "applied_at"]
         and previous["primary"] == current["primary"] == [0], "exact migration table projection")
     old_row, new_row = row_digest(old), row_digest(new)
@@ -856,7 +856,7 @@ def require_cold_retention(expected, checkpoint, before, after, old, new, interv
         "raw logical hashes retain the bookkeeping change")
     return {"database_logical_before_sha256": expected["database_logical_sha256"],
         "database_logical_after_sha256": checkpoint["database_logical_sha256"],
-        "bookkeeping_update": {"table": "serverware_store_migrations", "primary_key": "policy_candidate_authority",
+        "bookkeeping_update": {"table": "catchplate_store_migrations", "primary_key": "policy_candidate_authority",
             "column": "applied_at", "rows": 1, "within_actual_startup_interval": True},
         "all_other_retained_cells_and_schema_exact": True}
 
@@ -873,7 +873,7 @@ async def run_story(mode, expected=None):
         prior_bookkeeping = retained_startup_bookkeeping()
         startup_started = datetime.now(timezone.utc)
     story = Story()
-    from serverware import operator_x_transport as transport
+    from catchplate import operator_x_transport as transport
     started = False
     try:
         with ExitStack() as patches:
@@ -919,10 +919,10 @@ async def run_story(mode, expected=None):
 class OperatorXLifecycleConnectedTests(unittest.TestCase):
     def setUp(self):
         configuration_fixture.OperatorXConfigurationConnectedTests.setUp(self)
-        self.environment.update(SERVERWARE_OPERATOR_DEMO_UPSTREAMS=json.dumps(
+        self.environment.update(CATCHPLATE_OPERATOR_DEMO_UPSTREAMS=json.dumps(
             ["https://api.example.com", "https://api.x.com", "https://demo-upstream:8443"]),
-            SERVERWARE_DECISION_GATE_BASE="http://127.0.0.1:9091",
-            SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST=BINARY)
+            CATCHPLATE_DECISION_GATE_BASE="http://127.0.0.1:9091",
+            CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST=BINARY)
 
     def run_story(self, mode, expected=None):
         process = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", mode],

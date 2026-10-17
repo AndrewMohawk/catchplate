@@ -119,12 +119,12 @@ class Story:
         require(headers.get("cache-control") == "no-store", "public API cache boundary")
         value = strict_json(raw)
         if path == PREFIX and method == "GET":
-            require(value["schema"] == "serverware.operatorGoogleConfiguration/v2", "discovery schema")
+            require(value["schema"] == "catchplate.operatorGoogleConfiguration/v2", "discovery schema")
             require(value["readiness"]["consent_ready"] is False, "no serving claim before restart")
             self.discovery = value
         elif path.startswith(PREFIX) and (method == "POST" or path != PREFIX):
-            require(value["schema"] == "serverware.operatorGoogleManagedSetup/v2"
-                and value["setup_contract"] == "serverware.operatorGoogleManagedSetupBinding/v2"
+            require(value["schema"] == "catchplate.operatorGoogleManagedSetup/v2"
+                and value["setup_contract"] == "catchplate.operatorGoogleManagedSetupBinding/v2"
                 and value["activation_receipt"] is None, "exact inactive v2 receipt")
             require(value["operation_id"] == self.posts[0]["operation_id"], "exact operation receipt")
             if method == "POST" and path == PREFIX:
@@ -147,7 +147,7 @@ class Story:
         require(ref["config_version"] == 1 and ref["key_source"] == "operator-provider-key-v1" and value["secret_present"], "exact dedicated custody")
         owner = f.setup._admit_managed_owner(ref["owner_id"])
         binding = f.custody.bind_google(owner, config_version=1, public_profile=value["profile_binding"])
-        directory = f.keys.admit_directory(os.environ["SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR"], data_directory=f.config.DATA_DIR)
+        directory = f.keys.admit_directory(os.environ["CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR"], data_directory=f.config.DATA_DIR)
         key = f.keys.read_existing_pinned(directory, ref["owner_id"])
         try:
             with closing(f.db.connect()) as conn:
@@ -192,8 +192,8 @@ async def serve(args):
     owner = unittest.TestCase()
     fixtures.ManagedGoogleConfigurationTests.setUp(owner)
     owner.scratch._finalizer.detach()  # Lifespan's legacy daemon threads lack stop hooks.
-    owner.environment.update(SERVERWARE_PUBLIC_URL=ORIGIN, SERVERWARE_ADMIN_TOKEN=ADMIN,
-        SERVERWARE_ADMIN_USER=fixtures.ACTOR, SERVERWARE_ADMIN_ROLES="admin")
+    owner.environment.update(CATCHPLATE_PUBLIC_URL=ORIGIN, CATCHPLATE_ADMIN_TOKEN=ADMIN,
+        CATCHPLATE_ADMIN_USER=fixtures.ACTOR, CATCHPLATE_ADMIN_ROLES="admin")
     for name in tuple(owner.environment):
         if name.lower() in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}:
             owner.environment.pop(name)

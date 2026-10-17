@@ -13,7 +13,7 @@ pub(crate) const MODE: &str = "githubRestV1";
 pub(crate) const CONTENT_TYPE_POLICY: &str = "githubJsonUtf8V1";
 pub(crate) const READ: &str = "github_issues_read_v1";
 pub(crate) const WRITE: &str = "github_issues_write_v1";
-pub(crate) const PLACEHOLDER: &str = "token serverware-github-placeholder-v1";
+pub(crate) const PLACEHOLDER: &str = "token catchplate-github-placeholder-v1";
 pub(crate) const HEADERS: &[&str] = &[
     "accept",
     "accept-language",

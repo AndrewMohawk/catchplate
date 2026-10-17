@@ -1,5 +1,5 @@
 manifest_version=12
-workflow_id=serverware-coder-five-lane-v12
+workflow_id=catchplate-coder-five-lane-v12
 request_contract_version=12
 receipt_contract_version=12
 source_mode=controller-cas-point-snapshot
@@ -10,7 +10,7 @@ oci_mode=controller-cas
 host_docker_socket_exposed=false
 failure_transition=Destroying
 lane_count=5
-deadline_profile_id=serverware-coder-five-lane-v12
+deadline_profile_id=catchplate-coder-five-lane-v12
 deadline_profile=@RELEASE_ROOT@/policy/lane-deadlines-v12.manifest
 cleanup_reserve_ms=@CLEANUP_RESERVE_MS@
 
@@ -91,9 +91,9 @@ post_build.destroy=build-dind
 post_build.verify=source-artifact-oci-manifest
 post_build.no_build_dind=fresh-private-import-only
 post_build.import_source=controller-oci-cas-exact-digest-only
-private_dind.lifecycle_contract=serverware/private-dind-lifecycle/v12
+private_dind.lifecycle_contract=catchplate/private-dind-lifecycle/v12
 private_dind.root_owned_resources=dockerd,netns,nftables,mounts,cgroups,ownership-ledger
 private_dind.startup_destroy_nonterminal=true
 private_dind.terminal_destruction_receipt=required-signed-v12
 readiness_fixture_manifest=@RELEASE_ROOT@/fixtures/readiness-fixtures-v12.manifest
-docker_proxy_contract=serverware/controller-lane-proxy/v12
+docker_proxy_contract=catchplate/controller-lane-proxy/v12

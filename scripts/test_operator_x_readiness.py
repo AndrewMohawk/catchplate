@@ -14,8 +14,8 @@ from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-import serverware
-from serverware import operator_publication as publication, operator_x_readiness as readiness
+import catchplate
+from catchplate import operator_publication as publication, operator_x_readiness as readiness
 
 POLICY = "sha256:" + "1" * 64
 BINARY = "sha256:" + "2" * 64
@@ -23,8 +23,8 @@ IDENTITY = {"operation": {"operation_id": "11111111-2222-4333-8444-555555555555"
     "owner_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "config_version": 1},
     "profile_binding_digest": "sha256:" + "3" * 64,
     "effective_settings_digest": "sha256:" + "4" * 64}
-DESCRIPTOR = {"schema": "serverware.operatorXPostGate/v1", "adapter": "x.post.v1", "operation": "tweets.write"}
-QUOTA_DESCRIPTOR = {"schema": "serverware.operatorXPostAttemptQuota/v1", "field": "daily_post_attempt_limit",
+DESCRIPTOR = {"schema": "catchplate.operatorXPostGate/v1", "adapter": "x.post.v1", "operation": "tweets.write"}
+QUOTA_DESCRIPTOR = {"schema": "catchplate.operatorXPostAttemptQuota/v1", "field": "daily_post_attempt_limit",
     "period": "utc_day", "scope": "verified_x_account", "unit": "posting_attempt",
     "minimum": 1, "maximum": 1_000_000_000}
 
@@ -32,9 +32,9 @@ QUOTA_DESCRIPTOR = {"schema": "serverware.operatorXPostAttemptQuota/v1", "field"
 @contextmanager
 def owners(**modules):
     with ExitStack() as stack:
-        stack.enter_context(patch.dict(sys.modules, {"serverware." + name: value for name, value in modules.items()}))
+        stack.enter_context(patch.dict(sys.modules, {"catchplate." + name: value for name, value in modules.items()}))
         for name, value in modules.items():
-            stack.enter_context(patch.object(serverware, name, value, create=True))
+            stack.enter_context(patch.object(catchplate, name, value, create=True))
         yield
 
 
@@ -205,7 +205,7 @@ class ReadinessTests(unittest.TestCase):
             readiness.require_quota_start(connection, observation)
         local.assert_called_once_with(connection, query_only=False)
         require_ready.assert_called_once_with(connection)
-        from serverware.operator_catalog_schema import CatalogConflict
+        from catchplate.operator_catalog_schema import CatalogConflict
         for changed in ({**observation, "daily_quota_available": False},
                 {**observation, "daily_quota_available": 1}, {**observation, "extra": False},
                 {**observation, "loaded_policy_hash": "sha256:" + "9" * 64}):

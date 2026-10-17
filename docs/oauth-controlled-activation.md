@@ -41,18 +41,18 @@ force. The approver must be a different actor from the requester.
 
 1. `GET /api/oauth/pending/{id}/activation-original` performs SELECT-only
    inspection under the actual cold owner. Its eight fields are `apiVersion`
-   (`serverware.oauthActivationOriginal/v1`), `action`, `resourceId`,
+   (`catchplate.oauthActivationOriginal/v1`), `action`, `resourceId`,
    `payloadDigest`, `request`, `review`, `requesterId` and `expiresAt`. This is
    review data, not an activation permit. It neither expires nor rewrites rows.
 2. `POST /api/control-plane/mutations/webauthn/options` accepts the explicit
-   `apiVersion: serverware.oauthActivationApprovalOptions/v1`,
+   `apiVersion: catchplate.oauthActivationApprovalOptions/v1`,
    `action: credential.oauth.activate`, exact `resourceId`, `payloadDigest` and
    `request`, plus optional `approvalId`. With no approval ID, only the pending
    requester can obtain request options. With an ID, the actual stored requester
    selects activation options; a distinct actor selects decision options.
 3. The requester submits the resulting genuine assertion to
    `POST /api/oauth/pending/{id}/activate`. MFA is exactly
-   `oauthActivationProfile: serverware.oauthActivationApprovalOptions/v1` and
+   `oauthActivationProfile: catchplate.oauthActivationApprovalOptions/v1` and
    `assertion`. A definite approval request returns the existing 428
    `control_plane_approval_required` response with its approval ID. This is an
    explicit continuation, not activation success or automatic resend authority.
@@ -66,7 +66,7 @@ force. The approver must be a different actor from the requester.
    assertion and `approvalId`. Non-null `setupSessionId` or `setupRevision` is
    refused by this profile.
 
-Options return only `publicKey` and `serverware`. The latter is the closed
+Options return only `publicKey` and `catchplate`. The latter is the closed
 seven-field `schema`, `operation`, `operationId`, `challengeId`,
 `credentialRecordId`, `payloadDigest`, `expiresAt` projection. The authority
 challenge is opaque; it is not the old generic options hash. Assertions are

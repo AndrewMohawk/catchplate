@@ -5,8 +5,8 @@ use super::super::production_dispatch::{ClosedProductionDispatchRequestV4 as Req
     ClosedProductionDispatchResultV4 as ResultBody,ProductionArtifactKindV4 as ArtifactKind,
     CanonicalProductionArtifactV4 as Artifact};
 use crate::policy_shadow::{ProtectedRequestFacts,RequestCommitment,RuntimeIdentity};
-pub(super) const DOMAIN:&[u8]=b"serverware.nativeShadowCommitRequestComputation.signature/v1";
-pub(super) const API:&str="serverware.custodyCommitRequestTransition/v1";
+pub(super) const DOMAIN:&[u8]=b"catchplate.nativeShadowCommitRequestComputation.signature/v1";
+pub(super) const API:&str="catchplate.custodyCommitRequestTransition/v1";
 pub(super) fn invalid()->ServiceError {ServiceError::Invalid("native request commitment original differs")}
 fn require(v:bool)->Result<(),ServiceError>{if v{Ok(())}else{Err(invalid())}}
 pub(super) fn sha<T:Serialize>(v:&T)->Result<Sha256Digest,ServiceError>{Ok(Sha256Digest::compute(&encode_canonical_frame(v)?))}
@@ -63,7 +63,7 @@ impl Computation {
     }
     pub(super) fn verify(&self,scope:&Scope,grant:&Sha256Digest,key:&VerifyingKey)->Result<(),ServiceError>{
         let (_,context)=scope.request(&self.request)?;let binding=self.request.binding();
-        require(self.api_version=="serverware.nativeShadowCommitRequestComputation/v1"
+        require(self.api_version=="catchplate.nativeShadowCommitRequestComputation/v1"
             && &self.native_grant_sha256==grant && self.result_sha256==sha(&self.result)?
             && binding.opened_at_boottime_nanos<=self.computed_at_boottime_nanos
             && self.computed_at_boottime_nanos<binding.operation_deadline_boottime_nanos)?;
@@ -83,7 +83,7 @@ impl Computation {
         key:&SigningKey)->Result<Self,ServiceError>{
         use ed25519_dalek::Signer;
         let result=ResultBody::Artifact(Artifact::from_serializable(ArtifactKind::RequestCommitment,commitment).map_err(|_|invalid())?);
-        let mut value=Self{api_version:"serverware.nativeShadowCommitRequestComputation/v1".into(),native_grant_sha256:grant,
+        let mut value=Self{api_version:"catchplate.nativeShadowCommitRequestComputation/v1".into(),native_grant_sha256:grant,
             request,result_sha256:sha(&result)?,result,computed_at_boottime_nanos:now,signature_base64url:String::new()};
         value.signature_base64url=URL_SAFE_NO_PAD.encode(key.sign(&value.preimage()?).to_bytes());Ok(value)
     }

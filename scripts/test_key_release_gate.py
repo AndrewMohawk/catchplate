@@ -10,14 +10,14 @@ from typing import Any
 
 
 BASE = os.getenv("BASE", "http://localhost:3000").rstrip("/")
-ADMIN_TOKEN = os.getenv("SERVERWARE_ADMIN_TOKEN", "dev-admin-token")
+ADMIN_TOKEN = os.getenv("CATCHPLATE_ADMIN_TOKEN", "dev-admin-token")
 
 
 def request_json(path: str, *, payload: dict[str, Any] | None = None, token: str | None = ADMIN_TOKEN) -> tuple[int, dict[str, Any]]:
     data = None if payload is None else json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
     headers = {}
     if token:
-        headers["X-Serverware-Admin-Token"] = token
+        headers["X-Catchplate-Admin-Token"] = token
     if payload is not None:
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(f"{BASE}{path}", data=data, headers=headers, method="GET" if payload is None else "POST")

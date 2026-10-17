@@ -46,7 +46,7 @@ fn mode(config: &Value) -> Result<&str, String> {
 }
 
 pub(crate) fn gate_capability() -> Value {
-    json!({"schema":"serverware.operatorNpmInstallGate/v1","adapter":ADAPTER,
+    json!({"schema":"catchplate.operatorNpmInstallGate/v1","adapter":ADAPTER,
         "modes":["metadata","tarball","audit"]})
 }
 

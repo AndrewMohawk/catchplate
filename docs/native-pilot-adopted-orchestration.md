@@ -9,7 +9,7 @@ Source remains **36/46**; independent production acceptance remains **0/6**.
 ## Actual custody handoff
 
 The cold process creates the fixed root-protected UNIX sequence-packet listener
-at `/run/serverware/native-pilot-core-handoff/core.sock`. It reports its actual
+at `/run/catchplate/native-pilot-core-handoff/core.sock`. It reports its actual
 process/start identity and socket observation over the protected approval channel.
 The independent operator uses that observation to approve and launch the actual
 receiver, then approves the existing cold execution/v2 configuration naming that
@@ -41,7 +41,7 @@ The legacy catalogue and its approvals remain separate. The adopted catalogue
 contains **176 jobs and 123 key purposes**; the legacy profile remains 164/113.
 Executable handler coverage is checked before child startup. The adopted path
 uses OperatorRequest/Reply v2, AuthorityJobRequest/Reply v2 and Approval v2 under
-`/etc/serverware/native-pilot-adopted-authority`. Request2 and Approval2 carry the
+`/etc/catchplate/native-pilot-adopted-authority`. Request2 and Approval2 carry the
 original UNIX expiry as a canonical decimal string. The independently approved
 intake configuration carries the original signed-integer expiry. Each owner
 checks the original BOOTTIME and UNIX ceilings while waiting and performing I/O.
@@ -92,7 +92,7 @@ authority parser. These results do not prove the actual protected listener,
 fs-verity core transfer, complete native validation/signing or operational cohort.
 
 The exact source archive, harness, logs and checksums are retained at
-`codex-offload/serverware/engineering-builds/b384291b-adopted-orchestration-MSsjda/`
+`codex-offload/catchplate/engineering-builds/b384291b-adopted-orchestration-MSsjda/`
 under the operator's home directory. No native/dependency source changed, so no
 unchanged native or artifact build was repeated. No cloud or paid action occurred.
 

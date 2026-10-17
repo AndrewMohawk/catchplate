@@ -4,8 +4,8 @@ use std::{ffi::CString, fs::File, io::{Read, Write}, os::fd::{AsRawFd, FromRawFd
     os::unix::fs::{FileExt, MetadataExt}, path::Path};
 use sha2::{Digest, Sha256};
 
-pub(super) const EXECUTABLE: &str = "/usr/local/bin/serverware-response-v2-guest-inspector";
-const GUEST_ROLE: &str = "/usr/local/bin/serverware-response-v2-guest-role";
+pub(super) const EXECUTABLE: &str = "/usr/local/bin/catchplate-response-v2-guest-inspector";
+const GUEST_ROLE: &str = "/usr/local/bin/catchplate-response-v2-guest-role";
 const MAX_IMAGE: usize = 64 * 1024 * 1024;
 const SEALS: i32 = libc::F_SEAL_SEAL | libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK;
 type Identity = (u64, u64, u64, u32, u32, u32, u64);
@@ -33,7 +33,7 @@ impl Sealed {
     pub(super) fn new(bytes: &[u8], executable: bool) -> Result<Self, String> {
         let maximum = if executable { MAX_IMAGE } else { 16 * 1024 };
         if bytes.is_empty() || bytes.len() > maximum { return Err("inspector sealed original exceeds bound".into()); }
-        let fd = unsafe { libc::syscall(libc::SYS_memfd_create, b"serverware-inspector-original\0".as_ptr(),
+        let fd = unsafe { libc::syscall(libc::SYS_memfd_create, b"catchplate-inspector-original\0".as_ptr(),
             libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
         if fd < 0 { return Err("inspector sealed original creation failed".into()); }
         let mut file = unsafe { File::from_raw_fd(fd as i32) };

@@ -16,7 +16,7 @@ from test_authority_revocation_planning_source import assigned, call, calls, def
 class RevocationWriterTransportSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        _, cls.service = source("serverware/authority_service.py", 2 * 1024 * 1024)
+        _, cls.service = source("catchplate/authority_service.py", 2 * 1024 * 1024)
         cls.server = definition(cls.service, "AuthorityServer")
         cls.process = definition(cls.service, "AuthorityProcess")
         cls.served = definition(cls.server, "_serve_connection")
@@ -152,7 +152,7 @@ class RevocationWriterTransportSourceTests(unittest.TestCase):
         composed = call(self.adapter, "authority_revocation_writer_composition._persist_commitments_on_configuration")
         self.assertLess(mapped.lineno, composed.lineno)
         self.shape(keywords(composed)["work"], "work")
-        _, worker = source("serverware/authority_revocation_writer_composition.py", 64 * 1024)
+        _, worker = source("catchplate/authority_revocation_writer_composition.py", 64 * 1024)
         actual = definition(worker, "_persist_commitments_on_configuration")
         verified = call(actual, "commitment._verify_commitments_on_work")
         policy = call(actual, "action._assert_policy_on_work")
@@ -160,7 +160,7 @@ class RevocationWriterTransportSourceTests(unittest.TestCase):
         self.assertLess(verified.lineno, policy.lineno)
         self.assertLess(policy.lineno, persisted.lineno)
         self.assertFalse(calls(actual, "_ValidationWork"))
-        _, registry = source("serverware/authority_transition_registry.py")
+        _, registry = source("catchplate/authority_transition_registry.py")
         self.shape(assigned(registry, "_CLOSURE_ERRORS"), "_registry_closure_errors()")
         guard, = [node for node in registry.body if isinstance(node, ast.If)]
         self.shape(guard.test, "_CLOSURE_ERRORS")
@@ -175,7 +175,7 @@ class RevocationWriterTransportSourceTests(unittest.TestCase):
         self.assertFalse(calls(handle, "self._serve_revocation_writer"))
         self.assertFalse(calls(handle, "self._persist_and_reserve_revocation_commitments"))
         self.shape(assigned(self.service, "MAX_MESSAGE_BYTES"), "authority_contract.MAX_RESULT_BYTES")
-        _, legacy = source("serverware/authority_transport.py", 64 * 1024)
+        _, legacy = source("catchplate/authority_transport.py", 64 * 1024)
         receive = definition(legacy, "_recv_revocation_invocation_bytes")
         send = definition(legacy, "_socket_request_revocation_bytes")
         self.shape(keywords(call(receive, "_recv_message_bytes"))["maximum_bytes"],
@@ -191,7 +191,7 @@ class RevocationWriterTransportSourceTests(unittest.TestCase):
         self.shape(writes[1], "writer_transport._send_exact_until(connection, encoded, deadline_ns=deadline_ns)")
         self.assertEqual(len(calls(self.served, "_send_message_until")), 2)
         self.assertFalse(calls(self.served, "_send_message"))
-        text, transfer = source("serverware/authority_revocation_writer_transport.py", 64 * 1024)
+        text, transfer = source("catchplate/authority_revocation_writer_transport.py", 64 * 1024)
         for imported in (node for node in transfer.body if isinstance(node, (ast.Import, ast.ImportFrom))):
             for forbidden in ("authority_service", "authority_transition_registry", "psycopg", "import db"):
                 self.assertNotIn(forbidden, ast.unparse(imported))

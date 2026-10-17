@@ -42,7 +42,7 @@ def main(argv=None):
         return 0
     try:
         selected = arguments(argv)
-        from serverware.authority_local_snapshot import LocalSnapshotIssuer
+        from catchplate.authority_local_snapshot import LocalSnapshotIssuer
         LocalSnapshotIssuer(**selected).publish()
         return 0
     except BaseException:

@@ -8,8 +8,8 @@ token release, or completion of the public protected handoff.
 ## Independently provisioned originals
 
 `oidc_session_activation_release_proof_bootstrap.py` admits the runtime-root
-signature in `serverware.signedOidcSessionActivationReleaseProofBootstrap/v1`,
-whose payload is `serverware.oidcSessionActivationReleaseProofBootstrap/v1` and
+signature in `catchplate.signedOidcSessionActivationReleaseProofBootstrap/v1`,
+whose payload is `catchplate.oidcSessionActivationReleaseProofBootstrap/v1` and
 whose purpose is `launch-oidc-session-activation-release-proof`.
 
 Its closed payload contains `schema`, `sourceRevision`, `purpose`, `role`,
@@ -55,8 +55,8 @@ is admitted later by the genuine producer, once, with the complete originals.
 ## Exact cold resources
 
 The isolated launcher accepts only `--root-delivery`. It begins as root with
-one systemd-activated listener named `serverware-oidc-session-activation-release-proof`.
-The socket path is `/run/serverware/oidc-session-activation-token-release/proof.sock`,
+one systemd-activated listener named `catchplate-oidc-session-activation-release-proof`.
+The socket path is `/run/catchplate/oidc-session-activation-token-release/proof.sock`,
 owned by `65497:65532`, mode `0660`. The one fixed peer is UID/GID `65532`.
 
 | FD | Source-fixed resource |
@@ -69,7 +69,7 @@ owned by `65497:65532`, mode `0660`. The one fixed peer is UID/GID `65532`.
 | 203 | Sealed raw32 historical-bundle key |
 | 204 | Sealed raw32 delivery-history key |
 
-The signed launch schema is `serverware.oidcSessionActivationReleaseProofLaunch/v1`.
+The signed launch schema is `catchplate.oidcSessionActivationReleaseProofLaunch/v1`.
 It pins role, process mode, service and peer IDs; `rootPublicKeyFd`, `bootstrapFd`,
 `listenerFd`, `signingKeyFd`, `executionBundleKeyFd`, `historicalBundleKeyFd`,
 `deliveryKeyFd`; exact `inheritedFileDescriptors`; `listenerPath` and
@@ -79,9 +79,9 @@ private key. The delivery-history key is required by the genuine historical
 custody; this worker does not call the token-opening API.
 
 Public files are fixed under
-`/run/serverware/oidc-session-activation-release-proof-trust/` as
+`/run/catchplate/oidc-session-activation-release-proof-trust/` as
 `root-public-key.pem` and `bootstrap.json`. Private files are fixed under
-`/run/secrets/` with prefix `serverware-oidc-session-activation-release-proof-`
+`/run/secrets/` with prefix `catchplate-oidc-session-activation-release-proof-`
 and suffixes `signing-key`, `execution-bundle-key`, `historical-bundle-key`, and
 `delivery-key`. Private originals require root ownership and mode `0400`.
 Protected ancestors, no-follow opens, file identity and exact admitted sizes
@@ -91,7 +91,7 @@ original inventory is bounded to 64 MiB, so individual maxima are not additive
 permissions to allocate every maximum simultaneously.
 
 The two read-only readers retain the existing five source-fixed TLS paths under
-`/run/serverware/oidc-session-activation-delivery-completion-tls/`: `ca.pem`,
+`/run/catchplate/oidc-session-activation-delivery-completion-tls/`: `ca.pem`,
 `custody.crt`, `custody.key`, `commit.crt`, `commit.key`. Public files require
 root-owned mode `0444`; the two private TLS originals require root:65497 mode
 `0440`. Each file's actual size, bytes digest, inode and unchanged pathname are

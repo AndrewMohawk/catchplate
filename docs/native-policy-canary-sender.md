@@ -12,7 +12,7 @@ NSM, TLS, provider or cloud execution accompanied this source change.
 requires the actual generated CA, permanent native serving owner, creator PID
 and original CA/BOOTTIME interval. It generates a separate P256 client key and
 CA-signed leaf, with exactly ClientAuth EKU and the one source-derived SAN URI
-`spiffe://serverware.policy-canary/{deploymentId}/{instanceId}`. Components are
+`spiffe://catchplate.policy-canary/{deploymentId}/{instanceId}`. Components are
 ASCII `[A-Za-z0-9._-]{1,128}`. There is no imported certificate/private key,
 audit URI alias, caller certificate DTO or key export. The retained opaque
 `NativeCanaryTlsIdentity` rechecks the actual serving owner; the runtime joins
@@ -64,7 +64,7 @@ The signed statement has the receiver's exact 22 fields. Its preimage is
 `schemaASCII || NUL || fullCanonicalStatementASCII`, including Python-compatible
 DEL escaping. This deliberately differs from audit's digest preimage.
 The fresh NSM nonce is
-`SHA256("serverware/canary-evidence-intake-attestation/v1" || NUL || nonce32 || SHA256(statementASCII) || signature64)`.
+`SHA256("catchplate/canary-evidence-intake-attestation/v1" || NUL || nonce32 || SHA256(statementASCII) || signature64)`.
 The original role-4 key/scope/boot bindings remain unchanged. Signature text
 is `ed25519:` followed by canonical unpadded base64url64.
 

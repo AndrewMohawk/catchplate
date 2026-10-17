@@ -125,7 +125,7 @@ Source checkpoints remain 36/46 and independent production acceptance remains
 ## Verification
 
 Exact source `d6443f6c2cf6685829cd4663330db9aabec5affb` passes
-`cargo check --offline --locked --frozen -j1 --bin serverware-decision-gate`
+`cargo check --offline --locked --frozen -j1 --bin catchplate-decision-gate`
 under the pinned Rust 1.88 image, with one CPU, 8 GiB memory and no network.
 Cargo reports 1 minute 5 seconds, with 312 library and 2,496 binary warnings
 including duplicates. This is a compilation check, not a release build or
@@ -136,7 +136,7 @@ image was absent. The exact image was restored, and source review corrected
 the post-ACK inspection and post-write expiry checks before the assembled run.
 No compiler errors occurred in that run. Both source archives, the missing-image
 result, image-pull log, exact harness and compiler logs are retained at
-`codex-offload/serverware/engineering-builds/d6443f6c-genesis-FcAp86/`.
+`codex-offload/catchplate/engineering-builds/d6443f6c-genesis-FcAp86/`.
 
 Five documents pass 437 local file targets; anchors and external links are not
 checked. Actual native guests, journals, immutable stores, parent handoff and

@@ -19,7 +19,7 @@ completion. Other revocation purposes and protected denial remain separate.
 ## Explicit admission and unchanged old profiles
 
 The new measured authorization is
-`serverware.publicWebAuthnRevocationAuthorization/v1`. It carries the actual
+`catchplate.publicWebAuthnRevocationAuthorization/v1`. It carries the actual
 authenticated actor, independently enrolled current mutation policy, exact
 payload commitment, optional real assertion, and optional separately approved
 row original. Its plan, planner response, signed plan and snapshot use explicit
@@ -71,7 +71,7 @@ Cold selection is additive, never inferred from an HTTP body:
   65520, 65521 and 65522. Existing state profiles remain unchanged.
 - Each actual measured verifier/issuer/executor explicitly selects the
   `--public-webauthn-revocation` cold entrypoint flag and its additional rooted
-  credential `serverware-authority-{role}-public-revocation`. The entrypoint
+  credential `catchplate-authority-{role}-public-revocation`. The entrypoint
   retains its sealed original at FD 212; an ambient environment flag cannot
   select it. The stage-zero credential manifest must explicitly include that
   original. Old launch credential sets remain unchanged when not selected.
@@ -86,12 +86,12 @@ Cold selection is additive, never inferred from an HTTP body:
 - Terminal SQL access uses dedicated existing least-privilege successor
   issue/execute/recover/commit roles, each with its own root-pinned TLS originals.
   It never reuses the old authority service's differently privileged DSN.
-  TLS files are fixed below `/run/serverware/public-revocation-tls/`:
+  TLS files are fixed below `/run/catchplate/public-revocation-tls/`:
   `ca.pem`, and `issue`, `execute`, `recover`, `commit` `.crt`/`.key` pairs as
   required by that role. The verifier adds no SQL credential. Endpoint, DNS/IP,
   role, TLS identity and query/structure manifests are independently admitted.
 - Executor journals are preprovisioned service-owned 0700 directories at
-  `/var/lib/serverware/authority-public-revocation/attempts` and `completion`.
+  `/var/lib/catchplate/authority-public-revocation/attempts` and `completion`.
   Protected ancestors, exact named/held device and inode, independent original
   sequence/head checkpoints, and capacity are retained. Startup does not create,
   repair or enroll a journal from its own observed head. No record is deleted.

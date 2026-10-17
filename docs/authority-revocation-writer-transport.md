@@ -1,6 +1,6 @@
 # Detached writer transfer
 
-Source `.68` adds `serverware.policyAuthorityRevocationWriterTransfer/v1`: a
+Source `.68` adds `catchplate.policyAuthorityRevocationWriterTransfer/v1`: a
 fixed binary transfer for the private planner-to-writer path. The writer-only
 server branch passes five original byte strings to the existing measured
 [writer composition](authority-revocation-writer-composition.md) and sends the

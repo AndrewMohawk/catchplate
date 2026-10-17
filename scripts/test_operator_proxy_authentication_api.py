@@ -149,7 +149,7 @@ class OperatorProxyAuthenticationApiTests(unittest.TestCase):
             missing = {key: value for key, value in payload.items() if key != "proxy_authentication"}
             cases = [
                 ({"auth": False}, payload, 401),
-                ({"headers": [("X-Serverware-Admin-Token", "synthetic-wrong")]}, payload, 401),
+                ({"headers": [("X-Catchplate-Admin-Token", "synthetic-wrong")]}, payload, 401),
                 ({"origin": None}, payload, 403),
                 ({"origin": "https://foreign.example.com"}, payload, 403),
                 ({"headers": [("Origin", self.origin)]}, payload, 403),

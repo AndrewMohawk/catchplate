@@ -110,7 +110,7 @@ impl SelectedService {
     fn check_endpoint_runtime(&self,raw:&[u8])->Result<(),ShadowError>{
         let role=self.endpoint_runtime_role().ok_or(ShadowError::BindingDrift)?;
         let value:EndpointRuntime=exact(raw)?;
-        require(value.api_version=="serverware.nativePilotEndpointRuntime/v1" && value.role==role)
+        require(value.api_version=="catchplate.nativePilotEndpointRuntime/v1" && value.role==role)
     }
     fn closure_set_role(&self)->Option<&'static str>{
         use NativeVerifierTransportRole as Role;
@@ -159,97 +159,97 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
         Selection::KeyAdmission(value)=>(value,SelectedService::None),
         Selection::Retrieval(value)=>{
             match value.api_version.as_str(){
-                "serverware.nativeShadowRetrievalGuestLaunch/v1"=>(value.key_admission,SelectedService::Retrieval(value.retrieval)),
-                "serverware.nativeShadowRetrievalGuestLaunch/v2"=>(value.key_admission,SelectedService::LedgerRetrieval(value.retrieval)),
-                "serverware.nativeShadowRetrievalGuestLaunch/v3"=>(value.key_admission,SelectedService::CompletionRetrieval(value.retrieval)),
-                "serverware.nativeShadowRetrievalGuestLaunch/v4"=>(value.key_admission,SelectedService::EffectRetrieval(value.retrieval)),
-                "serverware.nativeShadowRetrievalGuestLaunch/v5"=>(value.key_admission,SelectedService::PublicationRetrieval(value.retrieval)),
-                "serverware.nativeShadowRetrievalGuestLaunch/v6"=>(value.key_admission,SelectedService::AdoptedPublicationRetrieval(value.retrieval)),
-                "serverware.nativeShadowPublicationGenesisRetrievalGuestLaunch/v1"=>(value.key_admission,SelectedService::PublicationGenesisRetrieval(value.retrieval)),
+                "catchplate.nativeShadowRetrievalGuestLaunch/v1"=>(value.key_admission,SelectedService::Retrieval(value.retrieval)),
+                "catchplate.nativeShadowRetrievalGuestLaunch/v2"=>(value.key_admission,SelectedService::LedgerRetrieval(value.retrieval)),
+                "catchplate.nativeShadowRetrievalGuestLaunch/v3"=>(value.key_admission,SelectedService::CompletionRetrieval(value.retrieval)),
+                "catchplate.nativeShadowRetrievalGuestLaunch/v4"=>(value.key_admission,SelectedService::EffectRetrieval(value.retrieval)),
+                "catchplate.nativeShadowRetrievalGuestLaunch/v5"=>(value.key_admission,SelectedService::PublicationRetrieval(value.retrieval)),
+                "catchplate.nativeShadowRetrievalGuestLaunch/v6"=>(value.key_admission,SelectedService::AdoptedPublicationRetrieval(value.retrieval)),
+                "catchplate.nativeShadowPublicationGenesisRetrievalGuestLaunch/v1"=>(value.key_admission,SelectedService::PublicationGenesisRetrieval(value.retrieval)),
                 _=>return Err(ShadowError::BindingDrift),
             }
         }
         Selection::RetrievalBridge(value)=>{
             let service=match value.api_version.as_str(){
-                "serverware.nativeShadowRetrievalBridgeLaunch/v1"=>SelectedService::RetrievalBridge,
-                "serverware.nativeShadowPublicationGenesisCoordinatorGuestLaunch/v1"=>SelectedService::PublicationGenesisCoordinator(false),
-                "serverware.nativeShadowPublicationGenesisCoordinatorGuestLaunch/v2"=>SelectedService::PublicationGenesisCoordinator(true),
+                "catchplate.nativeShadowRetrievalBridgeLaunch/v1"=>SelectedService::RetrievalBridge,
+                "catchplate.nativeShadowPublicationGenesisCoordinatorGuestLaunch/v1"=>SelectedService::PublicationGenesisCoordinator(false),
+                "catchplate.nativeShadowPublicationGenesisCoordinatorGuestLaunch/v2"=>SelectedService::PublicationGenesisCoordinator(true),
                 _=>return Err(ShadowError::BindingDrift),
             };
             (value.key_admission,service)
         }
         Selection::Activation(value)=>{
-            require(value.api_version=="serverware.nativeShadowActivationGuestLaunch/v1")?;
+            require(value.api_version=="catchplate.nativeShadowActivationGuestLaunch/v1")?;
             (value.key_admission,SelectedService::Activation(value.activation))
         }
         Selection::Persistence(value)=>{
             match value.api_version.as_str() {
-                "serverware.nativeShadowPersistenceGuestLaunch/v1"=>(value.key_admission,SelectedService::Persistence(value.persistence)),
-                "serverware.nativeShadowPersistenceGuestLaunch/v2"=>(value.key_admission,SelectedService::PersistenceLocked(value.persistence)),
-                "serverware.nativeShadowPersistenceGuestLaunch/v3"=>(value.key_admission,SelectedService::AdoptedPersistence(value.persistence)),
+                "catchplate.nativeShadowPersistenceGuestLaunch/v1"=>(value.key_admission,SelectedService::Persistence(value.persistence)),
+                "catchplate.nativeShadowPersistenceGuestLaunch/v2"=>(value.key_admission,SelectedService::PersistenceLocked(value.persistence)),
+                "catchplate.nativeShadowPersistenceGuestLaunch/v3"=>(value.key_admission,SelectedService::AdoptedPersistence(value.persistence)),
                 _=>return Err(ShadowError::BindingDrift),
             }
         }
         Selection::TrustedTime(value)=>{
-            if value.api_version=="serverware.nativeProofBridgeLaunch/v1" {
+            if value.api_version=="catchplate.nativeProofBridgeLaunch/v1" {
                 (value.key_admission,SelectedService::ProofBridge(value.trusted_time))
-            } else if value.api_version=="serverware.nativeProofBridgeLaunch/v2" {
+            } else if value.api_version=="catchplate.nativeProofBridgeLaunch/v2" {
                 (value.key_admission,SelectedService::CommitmentBridge(value.trusted_time))
-            } else if value.api_version=="serverware.nativeProofBridgeLaunch/v3" {
+            } else if value.api_version=="catchplate.nativeProofBridgeLaunch/v3" {
                 (value.key_admission,SelectedService::SpoolBridge(value.trusted_time))
-            } else if value.api_version=="serverware.nativeProofBridgeLaunch/v4" {
+            } else if value.api_version=="catchplate.nativeProofBridgeLaunch/v4" {
                 (value.key_admission,SelectedService::TerminalBridge(value.trusted_time))
-            } else if value.api_version=="serverware.nativeProofBridgeLaunch/v5" {
+            } else if value.api_version=="catchplate.nativeProofBridgeLaunch/v5" {
                 (value.key_admission,SelectedService::ActiveEffectBridge(value.trusted_time))
-            } else if value.api_version=="serverware.nativeProofBridgeLaunch/v6" {
+            } else if value.api_version=="catchplate.nativeProofBridgeLaunch/v6" {
                 (value.key_admission,SelectedService::InitialHistoryBridge(value.trusted_time,false,false))
-            } else if value.api_version=="serverware.nativeProofBridgeLaunch/v7" {
+            } else if value.api_version=="catchplate.nativeProofBridgeLaunch/v7" {
                 (value.key_admission,SelectedService::InitialHistoryBridge(value.trusted_time,true,false))
-            } else if value.api_version=="serverware.nativeProofBridgeLaunch/v8" {
+            } else if value.api_version=="catchplate.nativeProofBridgeLaunch/v8" {
                 (value.key_admission,SelectedService::InitialHistoryBridge(value.trusted_time,true,true))
-            } else if value.api_version=="serverware.nativeProofBridgeLaunch/v9" {
+            } else if value.api_version=="catchplate.nativeProofBridgeLaunch/v9" {
                 (value.key_admission,SelectedService::PublicationBridge(value.trusted_time,false))
-            } else if value.api_version=="serverware.nativeProofBridgeLaunch/v10" {
+            } else if value.api_version=="catchplate.nativeProofBridgeLaunch/v10" {
                 (value.key_admission,SelectedService::PublicationBridge(value.trusted_time,true))
             } else {
-                require(value.api_version=="serverware.nativeShadowTrustedTimeGuestLaunch/v1")?;
+                require(value.api_version=="catchplate.nativeShadowTrustedTimeGuestLaunch/v1")?;
                 (value.key_admission,SelectedService::TrustedTime(value.trusted_time))
             }
         }
         Selection::Generation(value)=>{
-            require(value.api_version=="serverware.nativeShadowGenerationGuestLaunch/v1")?;
+            require(value.api_version=="catchplate.nativeShadowGenerationGuestLaunch/v1")?;
             (value.key_admission,SelectedService::Generation(value.generation))
         }
         Selection::CommitRequest(value)=>{
             match value.api_version.as_str(){
-                "serverware.nativeShadowCommitRequestGuestLaunch/v1"=>(value.key_admission,SelectedService::CommitRequest(value.commit_request)),
-                "serverware.nativeShadowCommitRequestGuestLaunch/v2"=>(value.key_admission,SelectedService::LedgerSpool(value.commit_request)),
-                "serverware.nativeShadowCommitRequestGuestLaunch/v3"=>(value.key_admission,SelectedService::CompletionLedgerSpool(value.commit_request)),
+                "catchplate.nativeShadowCommitRequestGuestLaunch/v1"=>(value.key_admission,SelectedService::CommitRequest(value.commit_request)),
+                "catchplate.nativeShadowCommitRequestGuestLaunch/v2"=>(value.key_admission,SelectedService::LedgerSpool(value.commit_request)),
+                "catchplate.nativeShadowCommitRequestGuestLaunch/v3"=>(value.key_admission,SelectedService::CompletionLedgerSpool(value.commit_request)),
                 _=>return Err(ShadowError::BindingDrift),
             }
         }
         Selection::Ingress(value)=>{
-            require(value.api_version=="serverware.nativeShadowIngressGuestLaunch/v1")?;
+            require(value.api_version=="catchplate.nativeShadowIngressGuestLaunch/v1")?;
             (value.key_admission,SelectedService::Ingress(value.ingress))
         }
         Selection::TerminalSpool(value)=>{
-            require(value.api_version=="serverware.nativeShadowTerminalSpoolGuestLaunch/v1")?;
+            require(value.api_version=="catchplate.nativeShadowTerminalSpoolGuestLaunch/v1")?;
             (value.key_admission,SelectedService::TerminalSpool(value.terminal_spool))
         }
-        Selection::DispatchBarrier(value)=>{require(value.api_version=="serverware.nativeShadowDispatchBarrierGuestLaunch/v1")?;
+        Selection::DispatchBarrier(value)=>{require(value.api_version=="catchplate.nativeShadowDispatchBarrierGuestLaunch/v1")?;
             (value.key_admission,SelectedService::DispatchSpool(value.dispatch_barrier))}
-        Selection::ActiveEffectBarrier(value)=>{require(value.api_version=="serverware.nativeShadowActiveEffectBarrierGuestLaunch/v1")?;
+        Selection::ActiveEffectBarrier(value)=>{require(value.api_version=="catchplate.nativeShadowActiveEffectBarrierGuestLaunch/v1")?;
             (value.key_admission,SelectedService::ActiveEffectBarrier(value.active_effect_barrier))}
-        Selection::ActiveEffectCommit(value)=>{require(value.api_version=="serverware.nativeShadowActiveEffectCommitGuestLaunch/v1")?;
+        Selection::ActiveEffectCommit(value)=>{require(value.api_version=="catchplate.nativeShadowActiveEffectCommitGuestLaunch/v1")?;
             (value.key_admission,SelectedService::ActiveEffectCommit(value.active_effect_commit))}
         Selection::Publication(value)=>match value.api_version.as_str(){
-            "serverware.nativeShadowPublicationGuestLaunch/v1"=>(value.key_admission,SelectedService::Publication(value.publication)),
-            "serverware.nativeShadowPublicationGuestLaunch/v2"=>(value.key_admission,SelectedService::AdoptedPublication(value.publication)),
-            "serverware.nativeShadowPublicationGenesisGuestLaunch/v1"=>(value.key_admission,SelectedService::PublicationGenesis(value.publication)),
+            "catchplate.nativeShadowPublicationGuestLaunch/v1"=>(value.key_admission,SelectedService::Publication(value.publication)),
+            "catchplate.nativeShadowPublicationGuestLaunch/v2"=>(value.key_admission,SelectedService::AdoptedPublication(value.publication)),
+            "catchplate.nativeShadowPublicationGenesisGuestLaunch/v1"=>(value.key_admission,SelectedService::PublicationGenesis(value.publication)),
             _=>return Err(ShadowError::BindingDrift),
         }
     };
-    require(launch.api_version=="serverware.nativeShadowGuestLaunch/v1")?;
+    require(launch.api_version=="catchplate.nativeShadowGuestLaunch/v1")?;
     Ok((launch,service))
 }
 pub(in crate::policy_shadow::policy_custody::services) struct AdmittedGuest {

@@ -74,7 +74,7 @@ def release_receipt(recipient_ciphertext: bytes, recipient_public_key_der: bytes
         "recipient_public_key_algorithm": "RSAES_OAEP_SHA_256",
         "recipient_public_key_bits": 2048,
         "attestation_document_sha256": attestation_digest,
-        "key_provider": {"type": "aws-kms", "key_id": "arn:aws:kms:us-east-1:111122223333:key/serverware"},
+        "key_provider": {"type": "aws-kms", "key_id": "arn:aws:kms:us-east-1:111122223333:key/catchplate"},
     }
     return {
         "ok": True,
@@ -97,7 +97,7 @@ def release_receipt(recipient_ciphertext: bytes, recipient_public_key_der: bytes
 
 def unseal_request(release: dict[str, Any]) -> dict[str, Any]:
     payload = {
-        "apiVersion": "serverware.masterKeyUnsealRequest/v1",
+        "apiVersion": "catchplate.masterKeyUnsealRequest/v1",
         "kind": "MasterKeyUnseal",
         "material": "broker-kek",
         "releaseHandle": release["external_release"]["release_handle"],
@@ -200,7 +200,7 @@ def main() -> None:
             raise AssertionError("Nitro KMS unseal adapter omitted the recipient ciphertext binding")
         if output.get("recipientPublicKeySha256") != kms_release["recipient_public_key_sha256"]:
             raise AssertionError("Nitro KMS unseal adapter omitted the recipient key binding")
-        from serverware import crypto
+        from catchplate import crypto
 
         crypto._validate_nitro_unseal_bindings(payload["releaseReceipt"], output)
         tampered_output = json.loads(json.dumps(output))

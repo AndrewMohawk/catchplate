@@ -1,7 +1,7 @@
 # Original signed revocation bytes
 
 Source `.36` adds a private raw-byte entry point in
-[`authority_revocation_wire.py`](../serverware/authority_revocation_wire.py).
+[`authority_revocation_wire.py`](../catchplate/authority_revocation_wire.py).
 It connects bounded transport decoding to the genuine signed-plan verifier on
 the caller's existing work object. It is **unbuilt and unexecuted**, not a new
 service endpoint, durable record, registered kernel or SQL authorization.

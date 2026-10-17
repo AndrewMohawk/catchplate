@@ -1,8 +1,8 @@
 # Historical evidence-planning response admission
 
-[`authority_webauthn_evidence_plan_response_history.py`](../serverware/authority_webauthn_evidence_plan_response_history.py)
+[`authority_webauthn_evidence_plan_response_history.py`](../catchplate/authority_webauthn_evidence_plan_response_history.py)
 authenticates an original planner-signed response for historical inspection.
-It is separate from the unchanged [live response verifier](../serverware/authority_webauthn_evidence_plan_response.py).
+It is separate from the unchanged [live response verifier](../catchplate/authority_webauthn_evidence_plan_response.py).
 An expired response can be inspected here; this does not make it live again,
 authorize execution, renew a grant or establish current state. This source has
 not been built, imported, tested or executed.

@@ -1,7 +1,7 @@
-use serverware_decision_gate::{CustodyRuntime, ProtocolError};
-use serverware_decision_gate::enclave_runtime_identity_v1::EnclaveRuntimeIdentityV1;
-use serverware_decision_gate::native_jit_review_v1::{Configuration, Owner, SignedReleasePair};
-use serverware_decision_gate::native_secret_broker_v1::Owner as BrokerOwner;
+use catchplate_decision_gate::{CustodyRuntime, ProtocolError};
+use catchplate_decision_gate::enclave_runtime_identity_v1::EnclaveRuntimeIdentityV1;
+use catchplate_decision_gate::native_jit_review_v1::{Configuration, Owner, SignedReleasePair};
+use catchplate_decision_gate::native_secret_broker_v1::Owner as BrokerOwner;
 
 const _: fn(&CustodyRuntime, Configuration, &[u8], &mut BrokerOwner,
     &mut EnclaveRuntimeIdentityV1, &str, u64) -> Result<Owner, ProtocolError>

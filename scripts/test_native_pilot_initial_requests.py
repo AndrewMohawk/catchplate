@@ -21,12 +21,12 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
 
-from serverware import native_pilot_initial_requests as acquisition
-from serverware import native_pilot_initial_requests_profile as profile
+from catchplate import native_pilot_initial_requests as acquisition
+from catchplate import native_pilot_initial_requests_profile as profile
 from test_native_pilot_ordinary_commissioning import fixture as ordinary_fixture, runtimes, ENDPOINT_ROLES
 from test_native_pilot_ordinary_keys import ROLES, canonical, encoded, framed, labelled, sha
 
-REQUEST_DOMAIN = b"serverware.policyCustodyEndpointRequest/v3"
+REQUEST_DOMAIN = b"catchplate.policyCustodyEndpointRequest/v3"
 
 
 def fixture(*, complete=True):
@@ -42,7 +42,7 @@ def fixture(*, complete=True):
                 public = f["initial_policy"]["services"][target]["authorities"][kind]
                 raw = base64.urlsafe_b64decode(public["publicKeySpkiBase64"] + "==")[-32:]
                 row["credentials"].append({"name": name,
-                    "original": {"path": "/etc/serverware/synthetic-" + name, "sha256": sha(raw)},
+                    "original": {"path": "/etc/catchplate/synthetic-" + name, "sha256": sha(raw)},
                     "length": 32, "signing": None})
                 names.append(name)
             row["service"]["currentSubjects"].append({
@@ -82,7 +82,7 @@ def export(selection, kwargs):
         raw = profile.request_original(selection[role], entropy=bytes([index + 1]) * 32, issued_at_boottime_ns=issued)
         rows[role] = {name: selection[role][name] for name in profile.ROW_FIELDS[:4]}
         rows[role].update(requestOriginal=raw.decode("ascii"), requestSha256=framed(REQUEST_DOMAIN, (raw,)))
-    return {"apiVersion": "serverware.nativePilotInitialTrustRequests/v1",
+    return {"apiVersion": "catchplate.nativePilotInitialTrustRequests/v1",
         "launchSha256": sha(kwargs["launch_original"]), "preparationSha256": sha(kwargs["preparation_original"]),
         "resourcesSha256": sha(kwargs["resources_original"]), "requestedAtBoottimeNanos": issued,
         "startupDeadlineBoottimeNs": kwargs["window"]["startupDeadlineBoottimeNs"],
@@ -145,7 +145,7 @@ class InitialRequestControls(unittest.TestCase):
             if change == "checkpoint":
                 pin["signedCurrentKeyAuthorization"] = json.loads(contexts[ROLES[1]]["historyOriginal"])["initialCheckpoint"]
             elif change == "socket":
-                pin["declaredSocketPath"] = "/run/serverware-custody-business/" + ROLES[1] + "/listener.sock"
+                pin["declaredSocketPath"] = "/run/catchplate-custody-business/" + ROLES[1] + "/listener.sock"
             elif change == "time":
                 pin["consumeHeadObservedAtBoottimeNanos"] += 1
             elif change == "high":
@@ -221,7 +221,7 @@ class InitialRequestControls(unittest.TestCase):
             value = copy.deepcopy(original)
             row = value["requests"][ROLES[0]]
             if change == "api":
-                value["apiVersion"] = "serverware.nativePilotInitialTrustRequests/v2"
+                value["apiVersion"] = "catchplate.nativePilotInitialTrustRequests/v2"
             elif change == "extra":
                 value["currentness"] = True
             elif change == "missing-role":

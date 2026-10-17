@@ -31,25 +31,25 @@ def no_external_effects(event, _arguments):
 if __name__ == "__main__":
     # Import-only offline mode, not startup. Importing this fixture from another
     # suite preserves that caller's process selection.
-    os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
-    os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
+    os.environ["CATCHPLATE_PROCESS_MODE"] = "metadata-bootstrap"
+    os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
     sys.addaudithook(no_external_effects)
 
 from scripts import test_authority_jit_request as jit_fixture
-from serverware import authority_contract as contract
-from serverware import authority_jit_private_request as child
-from serverware import authority_release_private_request as private
-from serverware import authority_request_commitment as commitment
-from serverware import authority_service as service
-from serverware import authority_transition_core as core
-from serverware import db, release_authorization_profiles as profiles
-from serverware.authority_store import authority_dispatch
+from catchplate import authority_contract as contract
+from catchplate import authority_jit_private_request as child
+from catchplate import authority_release_private_request as private
+from catchplate import authority_request_commitment as commitment
+from catchplate import authority_service as service
+from catchplate import authority_transition_core as core
+from catchplate import db, release_authorization_profiles as profiles
+from catchplate.authority_store import authority_dispatch
 
 
 OPERATION = "release.reserve"
 HANDLER = "reserve_release_authorization_v2"
-INPUT_SCHEMA = "serverware.policyAuthorityPrivateReleaseWriterInput/v1"
-PUBLIC_SCHEMA = "serverware.releaseReserveCommitments/v1"
+INPUT_SCHEMA = "catchplate.policyAuthorityPrivateReleaseWriterInput/v1"
+PUBLIC_SCHEMA = "catchplate.releaseReserveCommitments/v1"
 ERROR = "Private release input is invalid"
 PIN = "sha256:" + "8" * 64
 OTHER = "sha256:" + "9" * 64
@@ -123,7 +123,7 @@ def child_original(raw):
 def expected_envelope(raw):
     original = child_original(raw)
     projected = {key: value for key, value in original.items() if key not in PRIVATE_FIELDS}
-    projected.update(schema="serverware.jitRequestCommitments/v2",
+    projected.update(schema="catchplate.jitRequestCommitments/v2",
         original_arguments_digest=sha(canonical(original)), url_commitment=sha(original["url"].encode("utf-8")),
         canonical_request_digest=sha(canonical(original["canonical_request"])),
         redacted_display_digest=sha(canonical(original["redacted_display"])))
@@ -135,13 +135,13 @@ def expected_envelope(raw):
 def typed_request(public):
     spec = contract.operation_spec(OPERATION)
     arguments = {**copy.deepcopy(public), "businessIntent": {
-        "schema": "serverware.policyAuthorityBusinessIntent/v2", "operation": OPERATION,
+        "schema": "catchplate.policyAuthorityBusinessIntent/v2", "operation": OPERATION,
         "planningAdapterId": spec["planningAdapterId"], "arguments": copy.deepcopy(public)}}
-    authorization = {"schema": "serverware.policyAuthorityV9Authorization/v1", "operation": OPERATION,
+    authorization = {"schema": "catchplate.policyAuthorityV9Authorization/v1", "operation": OPERATION,
         "handler": HANDLER, "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST, "arguments": arguments}
-    digest = framed("serverware.policyAuthorityV9Request/v1", canonical(authorization))
-    return {**authorization, "schema": "serverware.policyAuthorityV9Request/v1", "requestDigest": digest,
-        "operationId": framed("serverware.policyAuthorityOperation/v2", OPERATION.encode("ascii"), digest.encode("ascii"))}
+    digest = framed("catchplate.policyAuthorityV9Request/v1", canonical(authorization))
+    return {**authorization, "schema": "catchplate.policyAuthorityV9Request/v1", "requestDigest": digest,
+        "operationId": framed("catchplate.policyAuthorityOperation/v2", OPERATION.encode("ascii"), digest.encode("ascii"))}
 
 
 def native_raw_arguments():
@@ -154,18 +154,18 @@ def native_request_oracle(operation, public):
     # does not call contract synthesis, shared framing, or the implementation.
     handler, adapter = {
         "release.reserve": ("reserve_release_authorization_v2",
-            "serverware.policyAuthorityPlanningAdapter/reserve_release_authorization_v2/v1"),
+            "catchplate.policyAuthorityPlanningAdapter/reserve_release_authorization_v2/v1"),
         "jit.request": ("ensure_jit_approval_request",
-            "serverware.policyAuthorityPlanningAdapter/ensure_jit_approval_request/v1"),
+            "catchplate.policyAuthorityPlanningAdapter/ensure_jit_approval_request/v1"),
     }[operation]
     arguments = {**copy.deepcopy(public), "businessIntent": {
-        "schema": "serverware.policyAuthorityBusinessIntent/v2", "operation": operation,
+        "schema": "catchplate.policyAuthorityBusinessIntent/v2", "operation": operation,
         "planningAdapterId": adapter, "arguments": copy.deepcopy(public)}}
-    authorization = {"schema": "serverware.policyAuthorityV9Authorization/v1", "operation": operation,
+    authorization = {"schema": "catchplate.policyAuthorityV9Authorization/v1", "operation": operation,
         "handler": handler, "operationManifestDigest": NATIVE_MANIFEST, "arguments": arguments}
-    digest = framed("serverware.policyAuthorityV9Request/v1", canonical(authorization))
-    return {**authorization, "schema": "serverware.policyAuthorityV9Request/v1", "requestDigest": digest,
-        "operationId": framed("serverware.policyAuthorityOperation/v2", operation.encode("ascii"), digest.encode("ascii"))}
+    digest = framed("catchplate.policyAuthorityV9Request/v1", canonical(authorization))
+    return {**authorization, "schema": "catchplate.policyAuthorityV9Request/v1", "requestDigest": digest,
+        "operationId": framed("catchplate.policyAuthorityOperation/v2", operation.encode("ascii"), digest.encode("ascii"))}
 
 
 def document(wrappers):
@@ -388,11 +388,11 @@ class PrivateReleaseProjectionTests(unittest.TestCase):
 
     def test_versions_operations_and_typed_inputs_never_silently_upgrade(self):
         raw = raw_arguments(); envelope = private.prepare(raw)
-        for field, value in (("schema", "serverware.policyAuthorityControlledWriterInput/v1"),
-                ("schema", "serverware.policyAuthorityPrivateReleaseWriterInput/v2"),
+        for field, value in (("schema", "catchplate.policyAuthorityControlledWriterInput/v1"),
+                ("schema", "catchplate.policyAuthorityPrivateReleaseWriterInput/v2"),
                 ("handler", "reserve_release_authorization"), ("operationManifestDigest", OTHER)):
             self.refused(lambda: private.validate_runtime_input({**envelope, field: value}))
-        for schema in ("serverware.releaseReserveCommitments/v2", "serverware.jitRequestCommitments/v2"):
+        for schema in ("catchplate.releaseReserveCommitments/v2", "catchplate.jitRequestCommitments/v2"):
             self.refused(lambda: private.public_arguments({**envelope["arguments"], "schema": schema}))
         for value in (1, None, "true"):
             self.refused(lambda: private.public_arguments(envelope["arguments"], typed=value))
@@ -402,7 +402,7 @@ class PrivateReleaseProjectionTests(unittest.TestCase):
         for operation, handler in (("release.v1.reserve", "reserve_release_authorization"), ("jit.request", "ensure_jit_approval_request")):
             with self.assertRaises(service.AuthorityServiceError):
                 service._extract_v9_runtime_input(operation, handler, envelope)
-        generic = {"schema": "serverware.policyAuthorityControlledWriterInput/v1", "handler": HANDLER,
+        generic = {"schema": "catchplate.policyAuthorityControlledWriterInput/v1", "handler": HANDLER,
             "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST, "arguments": raw}
         with self.assertRaises(service.AuthorityServiceError):
             service._extract_v9_runtime_input(OPERATION, HANDLER, generic)
@@ -568,8 +568,8 @@ class PrivateReleaseProjectionTests(unittest.TestCase):
                 if field == "unexpected": target[field] = CANARIES[0]
                 else: del target[field]
                 with self.subTest(path=path, field=field): self.refused(lambda: private.derive_native_requests(changed))
-        for field, value in (("schema", "serverware.policyAuthorityPrivateReleaseWriterInput/v2"),
-                ("schema", "serverware.policyAuthorityControlledWriterInput/v1"),
+        for field, value in (("schema", "catchplate.policyAuthorityPrivateReleaseWriterInput/v2"),
+                ("schema", "catchplate.policyAuthorityControlledWriterInput/v1"),
                 ("handler", "reserve_release_authorization"), ("handler", "ensure_jit_approval_request"),
                 ("operationManifestDigest", OTHER)):
             self.refused(lambda: private.derive_native_requests({**envelope, field: value}))

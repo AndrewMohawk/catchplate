@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-response-runtime-proof.v2.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-response-runtime-proof.v2.schema.json",
   "title": "Native response runtime proof v2",
   "description": "Native-wide only; the independently pinned expectations v2 must select this profile. Shape is not signature, original quote, current policy, response capture or action authorization. Runtime retains the existing 128 KiB canonical envelope bound.",
   "type": "object",
@@ -15,10 +15,10 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.nativeResponseRuntimeProof/v2"
+      "const": "catchplate.nativeResponseRuntimeProof/v2"
     },
     "kind": {
-      "const": "ServerwareNativeResponseRuntimeProof"
+      "const": "CatchplateNativeResponseRuntimeProof"
     },
     "server_statement": {
       "$ref": "native-response-statements.v1.schema.json"

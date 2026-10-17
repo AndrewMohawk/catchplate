@@ -18,13 +18,13 @@ sys.path.insert(0, str(ROOT))
 from scripts import native_pilot_runtime_artifacts as artifacts
 from scripts import native_pilot_supervisor_runtime_entrypoint as entrypoint
 from scripts import run_native_pilot_current_head_worker as cli
-from serverware import native_pilot_current_head_worker_process as worker
+from catchplate import native_pilot_current_head_worker_process as worker
 
 p = worker.p
 
 
 def completed():
-    return dict(apiVersion="serverware.nativePilotCurrentHeadWorkerResult/v1", mode=cli.MODE,
+    return dict(apiVersion="catchplate.nativePilotCurrentHeadWorkerResult/v1", mode=cli.MODE,
         status="complete-eight-decisions", stage="eight-authoritative-state-decisions-published",
         decisionsPublished=8, stateUpdateOutcome="not-selected",
         pilotAcceptanceVerified=False, productionReleaseEligible=False)
@@ -82,7 +82,7 @@ class CurrentHeadWorkerProcessControls(unittest.TestCase):
             with self.assertRaises(ValueError): worker.terminal_result(p.canonical(changed) + b"\n", exit_code=1)
 
     def test_actual_runtime_admission_and_partial_process_owner_are_source_connected(self):
-        tree = ast.parse((ROOT / "serverware/native_pilot_current_head_worker_process.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/native_pilot_current_head_worker_process.py").read_text())
         cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "CurrentHeadWorkerProcess")
         methods = {node.name: ast.unparse(node) for node in cls.body if isinstance(node, ast.FunctionDef)}
         self.assertIn("owner._runtime.admit(owner._inventory.raw, supervisor=True)", methods["prepare"])
@@ -98,7 +98,7 @@ class CurrentHeadWorkerProcessControls(unittest.TestCase):
             self.assertNotIn(forbidden, source)
 
     def test_terminal_cleanup_requires_eof_exact_result_and_consuming_pidfd_reap(self):
-        tree = ast.parse((ROOT / "serverware/native_pilot_current_head_worker_process.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/native_pilot_current_head_worker_process.py").read_text())
         cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "CurrentHeadWorkerProcess")
         methods = {node.name: ast.unparse(node) for node in cls.body if isinstance(node, ast.FunctionDef)}
         observe = methods["_observe"]

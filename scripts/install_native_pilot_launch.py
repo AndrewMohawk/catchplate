@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "authority"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import native_pilot_authority_io as io
-from serverware import native_pilot_launch_publication as installation
+from catchplate import native_pilot_launch_publication as installation
 
 
 class _Parser(argparse.ArgumentParser):

@@ -108,7 +108,7 @@ pub(super) fn request(lifecycle: &ShadowRequestLifecycle, active: &FinalActiveDe
 {
     let original = active.native_original.as_ref().ok_or("actual native terminal original missing")?;
     let mut value=json!({
-        "apiVersion": "serverware.nativeRequestObservationOriginal/v2",
+        "apiVersion": "catchplate.nativeRequestObservationOriginal/v2",
         "pureActiveEvaluation": original["pureActiveEvaluation"],
         "candidateEvaluation": evaluation(&lifecycle.generation.candidate, candidate,
             lifecycle.facts.authenticated_principal_id.as_deref())?,
@@ -123,7 +123,7 @@ pub(super) fn request(lifecycle: &ShadowRequestLifecycle, active: &FinalActiveDe
         let protected=opening.protected_request(&facts,
             checked_epoch_ms_to_unix_nanos(lifecycle.facts.captured_at_epoch_ms)?)?
             .ok_or("native early sampling requires a genuine later facts commitment")?;
-        value["apiVersion"]=json!("serverware.nativeRequestObservationOriginal/v3");
+        value["apiVersion"]=json!("catchplate.nativeRequestObservationOriginal/v3");
         value["protectedRequest"]=protected;
         value["latencySamples"]=samples(lifecycle,active.active_evaluation_nanos,candidate_nanos,None)?;
     }
@@ -136,7 +136,7 @@ pub(super) fn response(job: &ShadowResponseJob, candidate_validation: Value,
 {
     let original = job.response_original.as_ref().ok_or("actual native response original missing")?;
     bounded(json!({
-        "apiVersion": "serverware.nativeResponseObservationOriginal/v2",
+        "apiVersion": "catchplate.nativeResponseObservationOriginal/v2",
         "response": {
             "responseFacts": original["responseFacts"],
             "boundActiveValidation": original["boundActiveValidation"],

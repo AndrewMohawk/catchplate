@@ -19,7 +19,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-FORBIDDEN = {"serverware.config", "serverware.db", "serverware.crypto"}
+FORBIDDEN = {"catchplate.config", "catchplate.db", "catchplate.crypto"}
 
 
 class ImportGuard(importlib.abc.MetaPathFinder):
@@ -31,8 +31,8 @@ class ImportGuard(importlib.abc.MetaPathFinder):
 if "--early-worker" in sys.argv:
     sys.meta_path.insert(0, ImportGuard())
 
-from serverware import db_common
-from serverware import operator_google_setup as setup
+from catchplate import db_common
+from catchplate import operator_google_setup as setup
 
 OPERATION = "11111111-2222-4333-8444-555555555555"
 ACTOR = "synthetic-administrator"
@@ -60,7 +60,7 @@ def database_hash_wrapper():
     parsing the rest of the large configured database module for one wrapper.
     """
     selected = []
-    with (ROOT / "serverware/db.py").open(encoding="utf-8") as stream:
+    with (ROOT / "catchplate/db.py").open(encoding="utf-8") as stream:
         for line in itertools.islice(stream, 1000):
             if line.startswith("def _audit_hash("):
                 selected.append(line)
@@ -189,7 +189,7 @@ class SetupDecoderTests(unittest.TestCase):
         self.assertEqual(item["binding"], public_binding())
         public = setup._public(setup._get(conn, OPERATION, ACTOR))
         expected = {key: value for key, value in public_binding().items() if key != "actor_id"}
-        expected.update(schema="serverware.operatorGoogleSetup/v1", status="pending", revision=8,
+        expected.update(schema="catchplate.operatorGoogleSetup/v1", status="pending", revision=8,
             completed_at=None, activation_receipt=None)
         self.assertEqual(public, expected)
         with self.assertRaises(setup.SetupNotFound):
@@ -205,7 +205,7 @@ class SetupDecoderTests(unittest.TestCase):
                 self.assertIsNone(public["activation_receipt"])
             else:
                 self.assertEqual(public["activation_receipt"], {
-                    "schema": "serverware.operatorGoogleSetupActivation/v1", "operation_id": OPERATION,
+                    "schema": "catchplate.operatorGoogleSetupActivation/v1", "operation_id": OPERATION,
                     "activated_revision": 9, "policy_hash": POLICY,
                     "profile_binding_digest": public_binding()["profile_binding_digest"],
                     "settings_digest": setup._digest(public_binding()["target_settings"]), "activated_at": COMPLETED})

@@ -13,7 +13,7 @@ const {ready, view, NOW} = require('./test_operator_catalog_browser.cjs');
 const ROOT = resolve(__dirname, '..');
 const ORIGIN = 'https://operator-catalog.example.test';
 const PATH = '/api/operator-demo/oauth/google/configuration/v2';
-const STORAGE = 'serverware.operator.google.configuration.operation.v2';
+const STORAGE = 'catchplate.operator.google.configuration.operation.v2';
 const PLAYWRIGHT = '/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright';
 const CLIENT = '123-synthetic-configuration.apps.googleusercontent.com';
 const SECRET = 'synthetic-Google-application-secret-NEVER-RETAIN';
@@ -32,7 +32,7 @@ const digest = value => 'sha256:' + createHash('sha256').update(JSON.stringify(s
 const node = (page, name) => page.locator('#google-configuration-' + name);
 
 function profile() {
-  return {schema: 'serverware.operatorGoogleProfile/v1', profile: 'operator-google-v1', provider_id: 'google',
+  return {schema: 'catchplate.operatorGoogleProfile/v1', profile: 'operator-google-v1', provider_id: 'google',
     client_id: CLIENT, redirect_uri: ORIGIN + '/api/oauth/callback/google', permission_preset: 'gmail_readonly',
     scopes: [...SCOPES], api_origins: [GMAIL], authorization_url: 'https://accounts.google.com/o/oauth2/v2/auth',
     token_url: 'https://oauth2.googleapis.com/token', revocation_url: 'https://oauth2.googleapis.com/revoke',
@@ -40,23 +40,23 @@ function profile() {
 }
 function capability() {
   const value = profile();
-  return {schema: 'serverware.operatorGoogleCapability/v1', ...Object.fromEntries(
+  return {schema: 'catchplate.operatorGoogleCapability/v1', ...Object.fromEntries(
     ['profile', 'provider_id', 'permission_preset', 'scopes', 'api_origins', 'redirect_uri'].map(key => [key, value[key]])),
     authorization_origin: 'https://accounts.google.com', authorization_path: '/o/oauth2/v2/auth',
     start_path: '/api/operator-demo/oauth/google/start', intents_path: '/api/operator-demo/oauth/google/intents'};
 }
 function review(state) {
-  return {schema: 'serverware.operatorGoogleManagedSetupReview/v2', expected_revision: state.revision,
+  return {schema: 'catchplate.operatorGoogleManagedSetupReview/v2', expected_revision: state.revision,
     expected_policy_hash: state.active, expected_settings_digest: digest(state.settings), old_settings: clone(state.settings),
     target_settings: clone(TARGET), public_url: ORIGIN, redirect_uri: profile().redirect_uri,
     provider_id: 'google', permission_preset: 'gmail_readonly', scopes: [...SCOPES], eligible: true};
 }
 function operation(state, input) {
-  return {schema: 'serverware.operatorGoogleManagedSetup/v2', operation_id: input.operation_id, client_id: CLIENT,
+  return {schema: 'catchplate.operatorGoogleManagedSetup/v2', operation_id: input.operation_id, client_id: CLIENT,
     old_settings: clone(state.settings), target_settings: clone(TARGET), expected_settings_digest: digest(state.settings),
     public_url: ORIGIN, redirect_uri: profile().redirect_uri, profile_binding: profile(), profile_binding_digest: digest(profile()),
     reviewed_revision: state.revision, staged_revision: state.revision + 1, policy_hash: state.active,
-    created_at: new Date(NOW).toISOString(), setup_contract: 'serverware.operatorGoogleManagedSetupBinding/v2',
+    created_at: new Date(NOW).toISOString(), setup_contract: 'catchplate.operatorGoogleManagedSetupBinding/v2',
     custody_ref: {owner_id: OWNER, config_version: 1, key_source: 'operator-provider-key-v1'}, secret_present: true,
     status: 'pending', revision: ++state.revision, completed_at: null, activation_receipt: null};
 }
@@ -64,7 +64,7 @@ function terminal(state, observed, status) {
   const value = {...clone(observed.operation), status, revision: ++state.revision,
     completed_at: new Date(NOW + 1000).toISOString(), activation_receipt: null};
   if (status === 'activated') {
-    value.activation_receipt = {schema: 'serverware.operatorGoogleSetupActivation/v1', operation_id: value.operation_id,
+    value.activation_receipt = {schema: 'catchplate.operatorGoogleSetupActivation/v1', operation_id: value.operation_id,
       activated_revision: value.revision, policy_hash: value.policy_hash, profile_binding_digest: value.profile_binding_digest,
       settings_digest: digest(value.target_settings), activated_at: value.completed_at};
     state.settings = clone(TARGET); state.allowedUpstreams = [...TARGET.allowed_upstreams];
@@ -76,7 +76,7 @@ function discovery(state, observed) {
   const current = observed.operation && observed.operation.status !== 'cancelled' ? observed.operation : null;
   const phase = current?.status || 'unconfigured';
   const blocked = phase === 'pending' ? 'pending_configuration' : phase === 'activated' ? 'already_configured' : observed.blockedReason;
-  return {schema: 'serverware.operatorGoogleConfiguration/v2', state: phase, revision: state.revision, policy_hash: state.active,
+  return {schema: 'catchplate.operatorGoogleConfiguration/v2', state: phase, revision: state.revision, policy_hash: state.active,
     effective_settings: clone(state.settings), effective_settings_digest: digest(state.settings), public_url: ORIGIN,
     redirect_uri: profile().redirect_uri, permission_preset: 'gmail_readonly', scopes: [...SCOPES], blocked_reason: blocked,
     review: phase === 'unconfigured' && blocked === null ? review(state) : null,
@@ -213,7 +213,7 @@ async function fixture(browser, options, exercise) {
       try {
         assert.equal(route.request().method(), 'GET'); assert(!route.request().postDataBuffer()?.length);
         assert.equal(route.request().url(), ORIGIN + '/api/operator-demo/oauth/google/intents'); assert(++observed.intentsReads <= 12);
-        await answer(route, {apiVersion: 'serverware.operatorGoogleConsent/v1', intents: [],
+        await answer(route, {apiVersion: 'catchplate.operatorGoogleConsent/v1', intents: [],
           limits: {active: 32, retained: 1024}, productionReady: false, protectedActivationSupported: false});
       } catch (_) { state.errors.push('Google configuration attempted a non-observation consent request'); await route.abort(); }
     });
@@ -221,7 +221,7 @@ async function fixture(browser, options, exercise) {
       activeStep = 'fixture-assets-reload'; await page.reload({waitUntil: 'networkidle'});
       activeStep = 'fixture-catalog-admission'; await ready(page);
       activeStep = 'fixture-shell-assertions';
-      assert.equal(await page.title(), 'Overview - Serverware operator workspace'); assert.equal(new URL(page.url()).origin, ORIGIN);
+      assert.equal(await page.title(), 'Overview - Catchplate operator workspace'); assert.equal(new URL(page.url()).origin, ORIGIN);
       await exercise(page, state, observed, {...controls, prepareArrival, releasePrepare: () => releasePrepare?.()});
       activeStep = 'fixture-final-material';
       await noMaterial(page);
@@ -507,7 +507,7 @@ const tests = [
       const response = await loaded; assert.equal(response.status(), 200); await response.finished();
       await page.waitForFunction(() => document.querySelector('#load-error').hidden &&
         document.querySelector('#credential-fields').disabled && !document.querySelector('#mutation-review-confirm').disabled);
-      assert.equal(await page.title(), 'Overview - Serverware operator workspace');
+      assert.equal(await page.title(), 'Overview - Catchplate operator workspace');
       assert(await page.locator('#overview').isVisible()); assert(await page.locator('#proxy').isHidden());
       assert(await page.locator('#mutation-review').isVisible());
       assert(await node(page, 'recovery-hint').isVisible());
@@ -565,7 +565,7 @@ const tests = [
       await view(page, 'overview');
       activeStep = 'completed-google-recovery-second-overview-reload';
       await page.reload({waitUntil: 'networkidle'}); await ready(page);
-      assert.equal(await page.title(), 'Overview - Serverware operator workspace');
+      assert.equal(await page.title(), 'Overview - Catchplate operator workspace');
       assert(await page.locator('#mutation-review').isHidden());
       assert.equal(await node(page, 'recovery-hint').count(), 0, 'completed recovery must not become a fresh hold');
       assert(await page.locator('#credential-fields').evaluate(fieldset => fieldset.disabled === false));
@@ -583,10 +583,10 @@ const tests = [
 ];
 
 async function hashes() {
-  const assets = await readdir(join(ROOT, 'serverware/operator_demo_web'));
+  const assets = await readdir(join(ROOT, 'catchplate/operator_demo_web'));
   const files = ['scripts/test_operator_google_configuration_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
-    'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
-    ...assets.filter(name => /\.(?:js|css|html)$/.test(name)).sort().map(name => 'serverware/operator_demo_web/' + name)];
+    'scripts/test_operator_ordinary_modes_browser.cjs', 'catchplate/operator_demo_portal.py',
+    ...assets.filter(name => /\.(?:js|css|html)$/.test(name)).sort().map(name => 'catchplate/operator_demo_web/' + name)];
   return Object.fromEntries(await Promise.all(files.map(async name =>
     [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')])));
 }
@@ -603,7 +603,7 @@ function selectedGroups(args) {
 }
 async function runSuite(browser, groups = selectedGroups([])) {
   const selected = tests.map(([name, test], index) => ({group: index + 1, name, test})).filter(item => groups.includes(item.group));
-  const before = await hashes(); const directory = await mkdtemp('/tmp/serverware-google-configuration-browser-');
+  const before = await hashes(); const directory = await mkdtemp('/tmp/catchplate-google-configuration-browser-');
   console.log(JSON.stringify({phase: 'source-before', hashes: before, artifactDirectory: directory,
     tests: selected.map(({group, name}) => ({group, name})), totalGroups: tests.length,
     scope: 'intercepted synthetic API, actual rendered assets'}));

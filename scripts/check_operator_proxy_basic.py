@@ -57,7 +57,7 @@ ACCEPT = {"requests": "application/json", "curl": "application/json;q=0.9",
           "bearer_opt_in": "application/json;q=0.8", "bearer_default": "application/json;q=0.7"}
 MAX_OUTPUT = 98304
 MAX_ERROR = 8192
-CURL_TRAILER = b"\nserverware-check-connect:"
+CURL_TRAILER = b"\ncatchplate-check-connect:"
 PEM = re.compile(rb"-----BEGIN CERTIFICATE-----\s+[A-Za-z0-9+/=\r\n]+-----END CERTIFICATE-----")
 
 
@@ -157,11 +157,11 @@ def parsed_response(status, headers, body, policy_hash):
             and not set(values).intersection({"content-encoding", "transfer-encoding", "trailer"})
             and not any(name in values for name, _ in V2_RESPONSE_METADATA),
             "Requests exact JSON response or framing differs")
-    require(values.get("x-serverware-policy-hash") == policy_hash
-            and values.get("x-serverware-response-body-sha256") == digest(body),
+    require(values.get("x-catchplate-policy-hash") == policy_hash
+            and values.get("x-catchplate-response-body-sha256") == digest(body),
             "Requests policy or response-body commitment differs")
-    commitments = {"requestDigest": values.get("x-serverware-request-digest"),
-                   "operationDigest": values.get("x-serverware-operation-digest")}
+    commitments = {"requestDigest": values.get("x-catchplate-request-digest"),
+                   "operationDigest": values.get("x-catchplate-operation-digest")}
     require(all(isinstance(value, str) and SHA256.fullmatch(value) for value in commitments.values()),
             "Requests request commitments unavailable")
     return {"case": "json", "status": status, "responseMode": V2_RESPONSE_MODE,
@@ -214,7 +214,7 @@ class ProxyBasicCheck(OrdinaryClientCheck):
 
     def request_headers(self, accept):
         return {"Authorization": DUMMY_AUTHORIZATION, "Content-Type": "application/json",
-                "User-Agent": "serverware-test-run/" + self.run_id, "Accept": accept,
+                "User-Agent": "catchplate-test-run/" + self.run_id, "Accept": accept,
                 "Accept-Encoding": "identity", "Connection": "close"}
 
     def requests_call(self, username, token, *, expected="success", ca=None):
@@ -262,7 +262,7 @@ class ProxyBasicCheck(OrdinaryClientCheck):
             "--http1.1", "--connect-timeout", "3", "--max-time", "8", "--retry", "0",
             "--max-filesize", "65536", "--raw", "--include", "--suppress-connect-headers",
             "--request", "POST", "--data-binary", "@" + str(self.body_file),
-            "--write-out", "\nserverware-check-connect:%{http_connect}\nserverware-check-status:%{http_code}\n"]
+            "--write-out", "\ncatchplate-check-connect:%{http_connect}\ncatchplate-check-status:%{http_code}\n"]
         for name, value in self.request_headers(ACCEPT["curl"]).items():
             arguments.extend(["--header", name + ": " + value])
         arguments.append(self.target())
@@ -270,7 +270,7 @@ class ProxyBasicCheck(OrdinaryClientCheck):
         self.clean(output)
         self.clean(error)
         wire, marker, tail = output.rpartition(CURL_TRAILER)
-        match = re.fullmatch(rb"([0-9]{3})\nserverware-check-status:([0-9]{3})\n", tail)
+        match = re.fullmatch(rb"([0-9]{3})\ncatchplate-check-status:([0-9]{3})\n", tail)
         require(marker and match, "curl connection/status receipt missing")
         connect, status = (int(value) for value in match.groups())
         if expected == "denied":
@@ -450,7 +450,7 @@ class ProxyBasicCheck(OrdinaryClientCheck):
         require(initial["revision"] == 1 and all(not initial[key] and initial["limits"][key]["retained"] == 0 for key in COLLECTIONS)
                 and self.count() == 0, "fresh private catalog and upstream required")
         capability = initial.get("capabilities", {}).get("application_proxy_authentication")
-        require(capability == {"schema": "serverware.operatorProxyAuthentication/v1",
+        require(capability == {"schema": "catchplate.operatorProxyAuthentication/v1",
                 "modes": ["bearer", BASIC], "path": PREFIX + "/applications/proxy-authentication"}
                 and V2_RESPONSE_MODE in initial.get("capabilities", {}).get("response_modes", []),
                 "paired Basic and ordinary response capabilities unavailable")
@@ -519,7 +519,7 @@ class ProxyBasicCheck(OrdinaryClientCheck):
                 "fixed actual-client request inventory differs")
         evidence = self.verify_client_audit(baseline, assigned, credential["id"])
         self.current(pins)
-        return {"ok": True, "schema": "serverware.operatorProxyBasicCheck/v1", "syntheticOnly": True,
+        return {"ok": True, "schema": "catchplate.operatorProxyBasicCheck/v1", "syntheticOnly": True,
             "productionReady": False, "realProviderVerified": False, "publicDnsVerified": False,
             "proxyTransport": "private-verified-https-edge", "proxyHostname": PROXY_HOST,
             "dataPlaneBinaryDigest": self.args.expected_binary_sha256, "curlExecutableSha256": self.curl_digest,

@@ -99,26 +99,26 @@ pub(super) fn read(runtime: &[u8], public: &[u8]) -> Result<Originals, String> {
     keys(&envelope, &["schema", "handler", "operationManifestDigest", "arguments", "privateDocuments"])?;
     let request = document(public, MAX_COMMAND)?;
     fields(&request, &["schema", "operation", "operationId", "requestDigest", "handler", "operationManifestDigest", "arguments"])?;
-    ensure(request["schema"] == "serverware.policyAuthorityV9Request/v1" && request["operation"] == "jit.request"
+    ensure(request["schema"] == "catchplate.policyAuthorityV9Request/v1" && request["operation"] == "jit.request"
         && request["handler"] == "ensure_jit_approval_request", "JIT public request purpose differs")?;
-    for (name, expected) in [("schema", json!("serverware.policyAuthorityPrivateJitWriterInput/v2")),
+    for (name, expected) in [("schema", json!("catchplate.policyAuthorityPrivateJitWriterInput/v2")),
         ("handler", request["handler"].clone()), ("operationManifestDigest", request["operationManifestDigest"].clone())] {
         ensure(document(envelope[name].get().as_bytes(), MAX_COMMAND)? == expected, "JIT private envelope differs")?;
     }
     let arguments = &request["arguments"]; fields(arguments, ARGUMENTS)?;
-    ensure(arguments["schema"] == "serverware.jitRequestCommitments/v2", "JIT public profile differs")?;
+    ensure(arguments["schema"] == "catchplate.jitRequestCommitments/v2", "JIT public profile differs")?;
     let mut unsigned = arguments.as_object().ok_or("JIT public arguments")?.clone(); unsigned.remove("businessIntent");
     let unsigned = Value::Object(unsigned);
     ensure(document(envelope["arguments"].get().as_bytes(), MAX_COMMAND)? == unsigned, "JIT public/private arguments differ")?;
     let intent = &arguments["businessIntent"];
     fields(intent, &["schema", "operation", "planningAdapterId", "arguments"])?;
-    ensure(intent["schema"] == "serverware.policyAuthorityBusinessIntent/v2" && intent["operation"] == "jit.request"
+    ensure(intent["schema"] == "catchplate.policyAuthorityBusinessIntent/v2" && intent["operation"] == "jit.request"
         && intent["arguments"] == unsigned && !text(&intent["planningAdapterId"] )?.is_empty(), "JIT business intent differs")?;
-    let auth = json!({"schema":"serverware.policyAuthorityV9Authorization/v1", "operation":"jit.request",
+    let auth = json!({"schema":"catchplate.policyAuthorityV9Authorization/v1", "operation":"jit.request",
         "handler":request["handler"], "operationManifestDigest":request["operationManifestDigest"], "arguments":arguments});
-    let request_digest = framed("serverware.policyAuthorityV9Request/v1", &[&canonical_ascii_bytes(&auth)?]);
+    let request_digest = framed("catchplate.policyAuthorityV9Request/v1", &[&canonical_ascii_bytes(&auth)?]);
     ensure(request["requestDigest"] == request_digest && request["operationId"] == framed(
-        "serverware.policyAuthorityOperation/v2", &[b"jit.request", request_digest.as_bytes()]), "JIT public commitment differs")?;
+        "catchplate.policyAuthorityOperation/v2", &[b"jit.request", request_digest.as_bytes()]), "JIT public commitment differs")?;
     let private = object(envelope["privateDocuments"].get().as_bytes())?;
     keys(&private, &["url", "canonical_request", "redacted_display"])?;
     let url: String = serde_json::from_str(private["url"].get()).map_err(|_| "JIT URL original differs")?;
@@ -136,7 +136,7 @@ pub(super) fn read(runtime: &[u8], public: &[u8]) -> Result<Originals, String> {
     let raw_arguments = join(&raw_arguments)?;
     ensure(arguments["original_arguments_digest"] == sha(&raw_arguments), "JIT original arguments commitment differs")?;
     let wrapper = join(&BTreeMap::from([
-        ("schema", b"\"serverware.jitCanonicalReviewPayload/v1\"".as_slice()),
+        ("schema", b"\"catchplate.jitCanonicalReviewPayload/v1\"".as_slice()),
         ("url", private["url"].get().as_bytes()), ("canonical_request", private["canonical_request"].get().as_bytes())]))?;
     let display = private["redacted_display"].get().as_bytes();
     Ok(Originals { request, plaintexts: [(sha(&wrapper), wrapper.len()), (sha(display), display.len())] })

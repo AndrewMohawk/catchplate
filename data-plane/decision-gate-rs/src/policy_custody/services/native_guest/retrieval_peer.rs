@@ -14,28 +14,28 @@ const MAX_IPC:usize=4096;
 pub(in crate::policy_shadow::policy_custody::services) enum EndpointKind {Retrieval,Persistence,TrustedTime,GenerationInstallEnvelope,CommitRequest,IngressAdmission,TerminalAppend,DispatchBarrier,ActiveEffectBarrier,ActiveEffectCommit,PublicationReconciliation}
 impl EndpointKind {
     pub(in crate::policy_shadow::policy_custody::services) fn socket_path(self)->&'static str {match self {
-        Self::Retrieval=>"/run/serverware-shadow-retrieval/listener.sock",
-        Self::Persistence=>"/run/serverware-shadow-persistence/listener.sock",
-        Self::TrustedTime=>"/run/serverware-shadow-trusted-time/listener.sock",
-        Self::CommitRequest=>"/run/serverware-shadow-commit-request/listener.sock",
-        Self::IngressAdmission=>"/run/serverware-shadow-ingress-admission/listener.sock",
-        Self::TerminalAppend=>"/run/serverware-shadow-terminal-append/listener.sock",
-        Self::DispatchBarrier=>"/run/serverware-shadow-dispatch-barrier/listener.sock",
-        Self::ActiveEffectBarrier=>"/run/serverware-shadow-active-effect-barrier/listener.sock",
-        Self::ActiveEffectCommit=>"/run/serverware-shadow-active-effect-commit/listener.sock",
-        Self::PublicationReconciliation=>"/run/serverware-shadow-publication-reconciliation/listener.sock",
-        Self::GenerationInstallEnvelope=>"/run/serverware-shadow-generation-install/listener.sock"}}
+        Self::Retrieval=>"/run/catchplate-shadow-retrieval/listener.sock",
+        Self::Persistence=>"/run/catchplate-shadow-persistence/listener.sock",
+        Self::TrustedTime=>"/run/catchplate-shadow-trusted-time/listener.sock",
+        Self::CommitRequest=>"/run/catchplate-shadow-commit-request/listener.sock",
+        Self::IngressAdmission=>"/run/catchplate-shadow-ingress-admission/listener.sock",
+        Self::TerminalAppend=>"/run/catchplate-shadow-terminal-append/listener.sock",
+        Self::DispatchBarrier=>"/run/catchplate-shadow-dispatch-barrier/listener.sock",
+        Self::ActiveEffectBarrier=>"/run/catchplate-shadow-active-effect-barrier/listener.sock",
+        Self::ActiveEffectCommit=>"/run/catchplate-shadow-active-effect-commit/listener.sock",
+        Self::PublicationReconciliation=>"/run/catchplate-shadow-publication-reconciliation/listener.sock",
+        Self::GenerationInstallEnvelope=>"/run/catchplate-shadow-generation-install/listener.sock"}}
     pub(in crate::policy_shadow::policy_custody::services) fn directory_path(self)->&'static str {match self {
-        Self::Retrieval=>"/run/serverware-shadow-retrieval",Self::Persistence=>"/run/serverware-shadow-persistence",
-        Self::TrustedTime=>"/run/serverware-shadow-trusted-time",
-        Self::CommitRequest=>"/run/serverware-shadow-commit-request",
-        Self::IngressAdmission=>"/run/serverware-shadow-ingress-admission",
-        Self::TerminalAppend=>"/run/serverware-shadow-terminal-append",
-        Self::DispatchBarrier=>"/run/serverware-shadow-dispatch-barrier",
-        Self::ActiveEffectBarrier=>"/run/serverware-shadow-active-effect-barrier",
-        Self::ActiveEffectCommit=>"/run/serverware-shadow-active-effect-commit",
-        Self::PublicationReconciliation=>"/run/serverware-shadow-publication-reconciliation",
-        Self::GenerationInstallEnvelope=>"/run/serverware-shadow-generation-install"}}
+        Self::Retrieval=>"/run/catchplate-shadow-retrieval",Self::Persistence=>"/run/catchplate-shadow-persistence",
+        Self::TrustedTime=>"/run/catchplate-shadow-trusted-time",
+        Self::CommitRequest=>"/run/catchplate-shadow-commit-request",
+        Self::IngressAdmission=>"/run/catchplate-shadow-ingress-admission",
+        Self::TerminalAppend=>"/run/catchplate-shadow-terminal-append",
+        Self::DispatchBarrier=>"/run/catchplate-shadow-dispatch-barrier",
+        Self::ActiveEffectBarrier=>"/run/catchplate-shadow-active-effect-barrier",
+        Self::ActiveEffectCommit=>"/run/catchplate-shadow-active-effect-commit",
+        Self::PublicationReconciliation=>"/run/catchplate-shadow-publication-reconciliation",
+        Self::GenerationInstallEnvelope=>"/run/catchplate-shadow-generation-install"}}
     pub(in crate::policy_shadow::policy_custody::services) fn listener_name(self)->&'static str {match self {
         Self::Retrieval=>"retrieval-listener",Self::Persistence=>"persistence-listener",Self::TrustedTime=>"trusted-time-listener",
         Self::CommitRequest=>"commit-request-listener",
@@ -57,17 +57,17 @@ impl EndpointKind {
         Self::PublicationReconciliation=>"publication-reconciliation-peer-directory",
         Self::GenerationInstallEnvelope=>"shadow-generation-install-directory"}}
     pub(in crate::policy_shadow::policy_custody::services) fn inspection_api(self)->&'static str {match self {
-        Self::Retrieval=>"serverware.nativeShadowRetrievalInspection/v1",
-        Self::Persistence=>"serverware.nativeShadowPersistenceInspection/v1",
-        Self::TrustedTime=>"serverware.nativeShadowTrustedTimeInspection/v1",
-        Self::CommitRequest=>"serverware.nativeShadowCommitRequestInspection/v1",
-        Self::IngressAdmission=>"serverware.nativeShadowIngressAdmissionInspection/v1",
-        Self::TerminalAppend=>"serverware.nativeShadowTerminalAppendInspection/v1",
-        Self::DispatchBarrier=>"serverware.nativeShadowDispatchBarrierInspection/v1",
-        Self::ActiveEffectBarrier=>"serverware.nativeShadowActiveEffectBarrierInspection/v1",
-        Self::ActiveEffectCommit=>"serverware.nativeShadowActiveEffectCommitInspection/v1",
-        Self::PublicationReconciliation=>"serverware.nativeShadowPublicationReconciliationInspection/v1",
-        Self::GenerationInstallEnvelope=>"serverware.nativeShadowGenerationInstallPeerInspection/v1"}}
+        Self::Retrieval=>"catchplate.nativeShadowRetrievalInspection/v1",
+        Self::Persistence=>"catchplate.nativeShadowPersistenceInspection/v1",
+        Self::TrustedTime=>"catchplate.nativeShadowTrustedTimeInspection/v1",
+        Self::CommitRequest=>"catchplate.nativeShadowCommitRequestInspection/v1",
+        Self::IngressAdmission=>"catchplate.nativeShadowIngressAdmissionInspection/v1",
+        Self::TerminalAppend=>"catchplate.nativeShadowTerminalAppendInspection/v1",
+        Self::DispatchBarrier=>"catchplate.nativeShadowDispatchBarrierInspection/v1",
+        Self::ActiveEffectBarrier=>"catchplate.nativeShadowActiveEffectBarrierInspection/v1",
+        Self::ActiveEffectCommit=>"catchplate.nativeShadowActiveEffectCommitInspection/v1",
+        Self::PublicationReconciliation=>"catchplate.nativeShadowPublicationReconciliationInspection/v1",
+        Self::GenerationInstallEnvelope=>"catchplate.nativeShadowGenerationInstallPeerInspection/v1"}}
     pub(in crate::policy_shadow::policy_custody::services) fn production_kind(self)->Option<services::production::ProductionProofEndpointKindV4> {match self {
         Self::Retrieval=>Some(services::production::ProductionProofEndpointKindV4::Retrieval),
         Self::Persistence=>Some(services::production::ProductionProofEndpointKindV4::Persistence),

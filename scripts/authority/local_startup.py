@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT))
 USAGE = """Usage: python -I -B scripts/authority/local_startup.py --plan-fd N --plan-sha256 sha256:HEX --listener-fd 3
 
 Run as root under actual one-listener systemd socket activation. The protected
-canonical serverware.authorityTrustedHostLocalStartup/v1 plan pins the installed
+canonical catchplate.authorityTrustedHostLocalStartup/v1 plan pins the installed
 /runtime Python/bootstrap files, static resource paths/digests, credential and
 initially empty exchange directories, original clocks, and three generation
 digests. No command, key, signature or database credentials are generated.
@@ -88,7 +88,7 @@ def main(argv=None):
         selected = arguments(argv)
     except (ValueError, TypeError):
         print("local startup refused: use --help", file=sys.stderr); return 2
-    from serverware.authority_local_startup import LocalAuthorityStartup, encode
+    from catchplate.authority_local_startup import LocalAuthorityStartup, encode
     owner = None
     def cancelled(signo, frame):
         raise KeyboardInterrupt()

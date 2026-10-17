@@ -24,18 +24,18 @@ _SCRATCH = tempfile.TemporaryDirectory(prefix="native-jit-sqlite-bootstrap-")
 _DATA = Path(_SCRATCH.name) / "data"
 # The real profile validates these settings before config can read any files.
 for _name in tuple(os.environ):
-    if _name.startswith("SERVERWARE_"):
+    if _name.startswith("CATCHPLATE_"):
         del os.environ[_name]
 os.environ.update({
-    "SERVERWARE_DATA_DIR": str(_DATA),
-    "SERVERWARE_DEVELOPMENT_SANDBOX": "1",
-    "SERVERWARE_RELEASE_CHANNEL": "dev",
-    "SERVERWARE_PROCESS_MODE": "serverware-control-plane",
-    "SERVERWARE_METADATA_STORE_BACKEND": "sqlite",
-    "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite",
-    "SERVERWARE_GRANT_STORE_BACKEND": "sqlite",
-    "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
-    "SERVERWARE_KEY_RELEASE_REQUIRED": "0",
+    "CATCHPLATE_DATA_DIR": str(_DATA),
+    "CATCHPLATE_DEVELOPMENT_SANDBOX": "1",
+    "CATCHPLATE_RELEASE_CHANNEL": "dev",
+    "CATCHPLATE_PROCESS_MODE": "catchplate-control-plane",
+    "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_AUDIT_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_GRANT_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
+    "CATCHPLATE_KEY_RELEASE_REQUIRED": "0",
 })
 
 
@@ -53,13 +53,13 @@ def _local_io_only(event, arguments):
 
 
 sys.addaudithook(_local_io_only)
-from serverware import development_sandbox
+from catchplate import development_sandbox
 
 development_sandbox.activate()
-from serverware import authority_contract, authority_primary_contract, config, db
-from serverware import authority_native_jit_retention_contract as retention
-from serverware import authority_native_jit_retention_schema
-from serverware.authority_store import metadata_schema_source
+from catchplate import authority_contract, authority_primary_contract, config, db
+from catchplate import authority_native_jit_retention_contract as retention
+from catchplate import authority_native_jit_retention_schema
+from catchplate.authority_store import metadata_schema_source
 
 
 TABLE = "policy_authority_native_jit_review_pairs"
@@ -106,7 +106,7 @@ def grammar_row(**updates):
 
 class NativeJitSqliteBootstrapTests(unittest.TestCase):
     def test_actual_fresh_init_constraints_and_second_init_leave_no_native_rows(self):
-        self.assertEqual(config.DB_PATH, _DATA / "serverware.sqlite3")
+        self.assertEqual(config.DB_PATH, _DATA / "catchplate.sqlite3")
         self.assertEqual((db.metadata_store_backend_name(), db.audit_store_backend_name(),
                           db.grants.backend_name()), ("sqlite", "sqlite", "sqlite"))
         self.assertEqual(config.WEBAUTHN_RECOVERY_WITNESS_BACKEND, "sqlite")

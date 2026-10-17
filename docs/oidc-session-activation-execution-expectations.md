@@ -1,6 +1,6 @@
 # Activation execution expectation data
 
-[`authority_oidc_session_activation_execution_expectations._capture_on_work`](../serverware/authority_oidc_session_activation_execution_expectations.py)
+[`authority_oidc_session_activation_execution_expectations._capture_on_work`](../catchplate/authority_oidc_session_activation_execution_expectations.py)
 owns an ordinary data graph containing exactly `request`, `scope` and
 `journalDigest`. There is no additional schema field: the request operation is
 fixed to `oidc.session.activate`.

@@ -1,0 +1,22 @@
+# Alternative owner of release.sock, never simultaneous with static or LIVE.
+[Unit]
+Description=Catchplate recovery-only private token-release ingress
+Before=catchplate-oidc-session-activation-release-recovery-dynamic.service
+After=systemd-tmpfiles-setup.service
+Conflicts=catchplate-oidc-session-activation-token-release.socket catchplate-oidc-session-activation-token-release.service catchplate-oidc-session-activation-token-release-dynamic.socket catchplate-oidc-session-activation-token-release-dynamic.service catchplate-oidc-session-activation-token-release-bootstrap.socket
+
+[Socket]
+ListenStream=/run/catchplate/oidc-session-activation-token-release/release.sock
+FileDescriptorName=catchplate-oidc-session-activation-token-release
+SocketUser=65502
+SocketGroup=65532
+SocketMode=0660
+DirectoryMode=0755
+Backlog=1
+Accept=no
+FlushPending=yes
+RemoveOnStop=yes
+Service=catchplate-oidc-session-activation-release-recovery-dynamic.service
+
+[Install]
+WantedBy=sockets.target

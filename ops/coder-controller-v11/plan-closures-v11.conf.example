@@ -1,4 +1,4 @@
-# The installer copies every /opt/serverware/controller-plans path from the
+# The installer copies every /opt/catchplate/controller-plans path from the
 # supplied plan bundle and makes it root-owned and filesystem-immutable. Static
 # plan programs need only their own exec closure entry. Dynamic programs must
 # list PT_INTERP as closure.exec.N and every DSO as closure.read.N. If a pinned
@@ -7,32 +7,32 @@
 # be one canonical root-owned, single-link, nonwritable file and is also frozen
 # immutable by the installer.
 
-plan.serverware-build-v1.executable=/opt/serverware/controller-plans/build-v1
-plan.serverware-build-v1.cwd=@SOURCE_ROOT@
-plan.serverware-build-v1.arg.0=/opt/serverware/controller-plans/build-v1
-plan.serverware-build-v1.env.PATH=/opt/serverware/controller-plans/bin
-plan.serverware-build-v1.closure.exec.0=/opt/serverware/controller-plans/build-v1
+plan.catchplate-build-v1.executable=/opt/catchplate/controller-plans/build-v1
+plan.catchplate-build-v1.cwd=@SOURCE_ROOT@
+plan.catchplate-build-v1.arg.0=/opt/catchplate/controller-plans/build-v1
+plan.catchplate-build-v1.env.PATH=/opt/catchplate/controller-plans/bin
+plan.catchplate-build-v1.closure.exec.0=/opt/catchplate/controller-plans/build-v1
 
-plan.serverware-unit-no-build-v1.executable=/opt/serverware/controller-plans/unit-no-build-v1
-plan.serverware-unit-no-build-v1.cwd=@SOURCE_ROOT@
-plan.serverware-unit-no-build-v1.arg.0=/opt/serverware/controller-plans/unit-no-build-v1
-plan.serverware-unit-no-build-v1.env.PATH=/opt/serverware/controller-plans/bin
-plan.serverware-unit-no-build-v1.closure.exec.0=/opt/serverware/controller-plans/unit-no-build-v1
+plan.catchplate-unit-no-build-v1.executable=/opt/catchplate/controller-plans/unit-no-build-v1
+plan.catchplate-unit-no-build-v1.cwd=@SOURCE_ROOT@
+plan.catchplate-unit-no-build-v1.arg.0=/opt/catchplate/controller-plans/unit-no-build-v1
+plan.catchplate-unit-no-build-v1.env.PATH=/opt/catchplate/controller-plans/bin
+plan.catchplate-unit-no-build-v1.closure.exec.0=/opt/catchplate/controller-plans/unit-no-build-v1
 
-plan.serverware-integration-no-build-v1.executable=/opt/serverware/controller-plans/integration-no-build-v1
-plan.serverware-integration-no-build-v1.cwd=@SOURCE_ROOT@
-plan.serverware-integration-no-build-v1.arg.0=/opt/serverware/controller-plans/integration-no-build-v1
-plan.serverware-integration-no-build-v1.env.PATH=/opt/serverware/controller-plans/bin
-plan.serverware-integration-no-build-v1.closure.exec.0=/opt/serverware/controller-plans/integration-no-build-v1
+plan.catchplate-integration-no-build-v1.executable=/opt/catchplate/controller-plans/integration-no-build-v1
+plan.catchplate-integration-no-build-v1.cwd=@SOURCE_ROOT@
+plan.catchplate-integration-no-build-v1.arg.0=/opt/catchplate/controller-plans/integration-no-build-v1
+plan.catchplate-integration-no-build-v1.env.PATH=/opt/catchplate/controller-plans/bin
+plan.catchplate-integration-no-build-v1.closure.exec.0=/opt/catchplate/controller-plans/integration-no-build-v1
 
-plan.serverware-e2e-no-build-v1.executable=/opt/serverware/controller-plans/e2e-no-build-v1
-plan.serverware-e2e-no-build-v1.cwd=@SOURCE_ROOT@
-plan.serverware-e2e-no-build-v1.arg.0=/opt/serverware/controller-plans/e2e-no-build-v1
-plan.serverware-e2e-no-build-v1.env.PATH=/opt/serverware/controller-plans/bin
-plan.serverware-e2e-no-build-v1.closure.exec.0=/opt/serverware/controller-plans/e2e-no-build-v1
+plan.catchplate-e2e-no-build-v1.executable=/opt/catchplate/controller-plans/e2e-no-build-v1
+plan.catchplate-e2e-no-build-v1.cwd=@SOURCE_ROOT@
+plan.catchplate-e2e-no-build-v1.arg.0=/opt/catchplate/controller-plans/e2e-no-build-v1
+plan.catchplate-e2e-no-build-v1.env.PATH=/opt/catchplate/controller-plans/bin
+plan.catchplate-e2e-no-build-v1.closure.exec.0=/opt/catchplate/controller-plans/e2e-no-build-v1
 
-plan.serverware-attestation-no-build-v1.executable=/opt/serverware/controller-plans/attestation-no-build-v1
-plan.serverware-attestation-no-build-v1.cwd=@SOURCE_ROOT@
-plan.serverware-attestation-no-build-v1.arg.0=/opt/serverware/controller-plans/attestation-no-build-v1
-plan.serverware-attestation-no-build-v1.env.PATH=/opt/serverware/controller-plans/bin
-plan.serverware-attestation-no-build-v1.closure.exec.0=/opt/serverware/controller-plans/attestation-no-build-v1
+plan.catchplate-attestation-no-build-v1.executable=/opt/catchplate/controller-plans/attestation-no-build-v1
+plan.catchplate-attestation-no-build-v1.cwd=@SOURCE_ROOT@
+plan.catchplate-attestation-no-build-v1.arg.0=/opt/catchplate/controller-plans/attestation-no-build-v1
+plan.catchplate-attestation-no-build-v1.env.PATH=/opt/catchplate/controller-plans/bin
+plan.catchplate-attestation-no-build-v1.closure.exec.0=/opt/catchplate/controller-plans/attestation-no-build-v1

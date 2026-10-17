@@ -26,22 +26,22 @@ pub const MAX_CANONICAL_STRING_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_MERKLE_PROOF_NODES: usize = 256;
 
 pub const RECEIPT_AUTHENTICATION_DOMAIN: &str =
-    "serverware/receipt-authentication/v12";
+    "catchplate/receipt-authentication/v12";
 pub const RECEIPT_TREE_HEAD_DOMAIN: &str =
-    "serverware/receipt-tree-head/v12";
+    "catchplate/receipt-tree-head/v12";
 pub const EXTERNAL_WITNESS_DOMAIN: &str =
-    "serverware/receipt-external-witness/v12";
-pub const FINAL_VERDICT_DOMAIN: &str = "serverware/final-verdict/v12";
+    "catchplate/receipt-external-witness/v12";
+pub const FINAL_VERDICT_DOMAIN: &str = "catchplate/final-verdict/v12";
 pub const CONTROLLER_RECEIVE_DOMAIN: &str =
-    "serverware/controller-trusted-receive/v12";
+    "catchplate/controller-trusted-receive/v12";
 pub const TRUST_GENERATION_AUTHORIZATION_DOMAIN: &str =
-    "serverware/trust-generation-authorization/v12";
+    "catchplate/trust-generation-authorization/v12";
 pub const TRUST_GENERATION_DOMAIN: &str =
-    "serverware/trust-generation/v12";
+    "catchplate/trust-generation/v12";
 pub const FINAL_SETTLEMENT_DOMAIN: &str =
-    "serverware/final-settlement/v12";
+    "catchplate/final-settlement/v12";
 pub const RECEIPT_LOG_TREE_DOMAIN: &str =
-    "SERVERWARE_CONTROLLER_RECEIPTS_V12";
+    "CATCHPLATE_CONTROLLER_RECEIPTS_V12";
 pub const AUTHORITY_FRAME_MAGIC: [u8; 8] = *b"SWRPC12\0";
 pub const AUTHORITY_FRAME_BYTES: usize = 96;
 pub const V11_PREALLOCATION_FRAME_BYTES: usize = 256;
@@ -1869,19 +1869,19 @@ pub fn sha256_bytes(bytes: &[u8]) -> DigestHex {
 }
 
 pub fn h12(tag: &str, parts: &[&[u8]]) -> DigestHex {
-    hash_framed(b"serverware/controller/v12/", tag, parts)
+    hash_framed(b"catchplate/controller/v12/", tag, parts)
 }
 
 pub fn h11(tag: &str, parts: &[&[u8]]) -> DigestHex {
-    hash_framed(b"serverware/controller/v11/", tag, parts)
+    hash_framed(b"catchplate/controller/v11/", tag, parts)
 }
 
 pub fn lf11(tag: &str, parts: &[&[u8]]) -> Vec<u8> {
-    framed_bytes(b"serverware/controller/v11/", tag, parts)
+    framed_bytes(b"catchplate/controller/v11/", tag, parts)
 }
 
 pub fn replay_identity_digest(replay: &ReplayIdentityV12) -> Result<DigestHex> {
-    if replay.replay_namespace != "serverware/controller-receipt/v12" {
+    if replay.replay_namespace != "catchplate/controller-receipt/v12" {
         return Err(ContractError::Invalid("wrong replay namespace"));
     }
     if replay.replay_key.len() < 16

@@ -1,6 +1,6 @@
 {
   "$schema":"https://json-schema.org/draft/2020-12/schema",
-  "$id":"https://serverware.invalid/schemas/native-oauth-measured-exchange.v1.schema.json",
+  "$id":"https://catchplate.invalid/schemas/native-oauth-measured-exchange.v1.schema.json",
   "title":"Native initial OAuth issuance data contracts",
   "$comment":"Data-only projections. Runtime additionally authenticates independent current purpose, original native role-4 COSE/signature/PCR/scope, actual same-owner TLS/browser correlation, genuine requester hardware assertion, protected complete populations, exact digest/byte/interval joins and definite durable receipts. No field or schema grants provider contact or recovers an unknown outcome.",
   "oneOf":[{"$ref":"#/$defs/configuration"},{"$ref":"#/$defs/policy"},{"$ref":"#/$defs/evidence"},{"$ref":"#/$defs/httpRequest"},{"$ref":"#/$defs/httpResponse"},{"$ref":"#/$defs/consentRequest"},{"$ref":"#/$defs/recoveryOriginalRequest"},{"$ref":"#/$defs/recoveryOriginalResponse"}],
@@ -37,7 +37,7 @@
       "type":"object","additionalProperties":false,
       "required":["schema","enrollmentRootPublicKeyBase64Url","enrollmentRootSpkiSha256","controlPlaneConfigurationDigest","deploymentId","pendingCapacity","revocationCapacity","contactMaxSeconds","retentionMaxSeconds","pendingMaxSeconds","operationMaxSeconds","recoveryMaxSeconds","trustRoots","assignments"],
       "properties":{
-        "schema":{"const":"serverware.oauthMeasuredExchangeAuthorityPolicy/v1"},"enrollmentRootPublicKeyBase64Url":{"$ref":"#/$defs/bytes32"},
+        "schema":{"const":"catchplate.oauthMeasuredExchangeAuthorityPolicy/v1"},"enrollmentRootPublicKeyBase64Url":{"$ref":"#/$defs/bytes32"},
         "enrollmentRootSpkiSha256":{"$ref":"#/$defs/digest"},"controlPlaneConfigurationDigest":{"$ref":"#/$defs/digest"},"deploymentId":{"$ref":"oauth-application-enrollment.v1.schema.json#/$defs/identifier"},
         "pendingCapacity":{"type":"integer","minimum":1,"maximum":64},"revocationCapacity":{"type":"integer","minimum":1,"maximum":64},
         "contactMaxSeconds":{"type":"integer","minimum":1,"maximum":600},"retentionMaxSeconds":{"type":"integer","minimum":1,"maximum":600},
@@ -50,7 +50,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","phase","holderId","bootId","keyId","controlPlaneResponseSigningKeyId","deploymentId","instanceId","providerId","enrollmentSha256","exchangeId","inputSha256","challenge","policyHash","dataPlaneBinarySha256","callbackOrigin","portalOrigin","ingressLeafCertificateSha256","ingressLeafSpkiSha256","issuedAtEpochNs","expiresAtEpochNs"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeOAuthExchangeStatement/v1"},"phase":{"enum":["draft","claim","capture","stage","recover","cancel"]},
+        "apiVersion":{"const":"catchplate.nativeOAuthExchangeStatement/v1"},"phase":{"enum":["draft","claim","capture","stage","recover","cancel"]},
         "holderId":{"$ref":"#/$defs/digest"},"bootId":{"$ref":"#/$defs/bytes32"},"keyId":{"$ref":"#/$defs/digest"},"controlPlaneResponseSigningKeyId":{"$ref":"#/$defs/digest"},
         "deploymentId":{"type":"string","minLength":1,"maxLength":128},"instanceId":{"$ref":"native-oauth-measured-refresh.v1.schema.json#/$defs/instance"},
         "providerId":{"$ref":"#/$defs/provider"},"enrollmentSha256":{"$ref":"#/$defs/digest"},"exchangeId":{"$ref":"#/$defs/uuid"},"inputSha256":{"$ref":"#/$defs/digest"},
@@ -58,7 +58,7 @@
         "callbackOrigin":{"$ref":"#/$defs/origin"},"portalOrigin":{"$ref":"#/$defs/origin"},"ingressLeafCertificateSha256":{"$ref":"#/$defs/digest"},"ingressLeafSpkiSha256":{"$ref":"#/$defs/digest"},
         "issuedAtEpochNs":{"$ref":"#/$defs/epoch"},"expiresAtEpochNs":{"$ref":"#/$defs/epoch"}
       },
-      "$comment":"Dedicated nativeOAuthExchange.sign/v1, not a response/refresh alias. Ed25519 preimage is schema+NUL+canonical Python-ASCII statement. Original role4 NSM nonce is SHA256(serverware/native-oauth-exchange-attestation/v1+NUL || challenge32 || SHA256(statement) || signature64). Generated browser leaf and actual listener retain the same CA owner."
+      "$comment":"Dedicated nativeOAuthExchange.sign/v1, not a response/refresh alias. Ed25519 preimage is schema+NUL+canonical Python-ASCII statement. Original role4 NSM nonce is SHA256(catchplate/native-oauth-exchange-attestation/v1+NUL || challenge32 || SHA256(statement) || signature64). Generated browser leaf and actual listener retain the same CA owner."
     },
     "evidence":{"type":"object","additionalProperties":false,"required":["statement","signature","nativeKeyEvidence"],"properties":{"statement":{"$ref":"#/$defs/statement"},"signature":{"type":"string","pattern":"^ed25519:[A-Za-z0-9_-]{86}$"},"nativeKeyEvidence":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/nativeKeyEvidence"}}},
     "prepare":{
@@ -87,12 +87,12 @@
         "control_plane_configuration_digest":{"$ref":"#/$defs/digest"},"assignment_original":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/assignment"}]},"native_evidence":{"$ref":"#/$defs/evidence"}
       },"$comment":"Canonical <=2MiB. Prepare assignment null; all other phases equal the independently current assigned original. Resource and input hashes, actor, exact protected state and phase-specific shape are runtime joined."
     },
-    "httpRequest":{"type":"object","additionalProperties":false,"required":["apiVersion","operation","arguments"],"properties":{"apiVersion":{"const":"serverware.nativeOAuthExchangeRequest/v1"},"operation":{"enum":["oauth.measured-exchange.claim","oauth.measured-exchange.capture","oauth.measured-exchange.stage","oauth.measured-exchange.recover","oauth.measured-exchange.cancel"]},"arguments":{"$ref":"#/$defs/arguments"}},"$comment":"Machine route never accepts prepare. Exact operation selects matching nested request; POST body<=3MiB."},
-    "httpResponse":{"type":"object","additionalProperties":false,"required":["apiVersion","requestOriginal","responseOriginal"],"properties":{"apiVersion":{"const":"serverware.nativeOAuthExchangeResponse/v1"},"requestOriginal":{"$ref":"#/$defs/encoded","maxLength":4194304},"responseOriginal":{"$ref":"#/$defs/encoded","maxLength":8388608}},"$comment":"Combined<=8MiB. Actual verifier-signed policyAuthorityMeasuredExchangeRuntimeResponse/v1 includes actual root-signed configuration and exact committed result/row originals. Not an HTTP caller success verdict."},
-    "mfa":{"type":"object","additionalProperties":false,"required":["nativeOAuthConsentProfile","assertion"],"properties":{"nativeOAuthConsentProfile":{"const":"serverware.nativeOAuthConsentOptions/v1"},"assertion":{"type":"object"}},"$comment":"Genuine raw assertion, current hardware/UP/UV credential and independent trust provenance verified by actual fixed writer. Aggregate<=16KiB."},
-    "consentRequest":{"type":"object","additionalProperties":false,"required":["apiVersion","arguments","mfa"],"properties":{"apiVersion":{"const":"serverware.nativeOAuthConsentOptions/v1"},"arguments":{"$ref":"#/$defs/arguments"},"mfa":{"$ref":"#/$defs/mfa"}}},
-    "recoveryOriginalRequest":{"type":"object","additionalProperties":false,"required":["apiVersion","exchangeId"],"properties":{"apiVersion":{"const":"serverware.nativeOAuthRecoveryOriginalRequest/v1"},"exchangeId":{"$ref":"#/$defs/uuid"}}},
-    "recoveryOriginalResponse":{"type":"object","additionalProperties":false,"required":["apiVersion","okForAction","exchangeOriginal","custodyOriginal"],"properties":{"apiVersion":{"const":"serverware.nativeOAuthRecoveryOriginalResponse/v1"},"okForAction":{"const":false},"exchangeOriginal":{"type":"string","minLength":1,"maxLength":1048576},"custodyOriginal":{"type":"string","minLength":1,"maxLength":4194304}},"$comment":"SELECT-only encrypted data. Cannot decrypt, contact or re-stage until fresh actual recover commit is verified by the helper. No signature over outcome is invented."},
+    "httpRequest":{"type":"object","additionalProperties":false,"required":["apiVersion","operation","arguments"],"properties":{"apiVersion":{"const":"catchplate.nativeOAuthExchangeRequest/v1"},"operation":{"enum":["oauth.measured-exchange.claim","oauth.measured-exchange.capture","oauth.measured-exchange.stage","oauth.measured-exchange.recover","oauth.measured-exchange.cancel"]},"arguments":{"$ref":"#/$defs/arguments"}},"$comment":"Machine route never accepts prepare. Exact operation selects matching nested request; POST body<=3MiB."},
+    "httpResponse":{"type":"object","additionalProperties":false,"required":["apiVersion","requestOriginal","responseOriginal"],"properties":{"apiVersion":{"const":"catchplate.nativeOAuthExchangeResponse/v1"},"requestOriginal":{"$ref":"#/$defs/encoded","maxLength":4194304},"responseOriginal":{"$ref":"#/$defs/encoded","maxLength":8388608}},"$comment":"Combined<=8MiB. Actual verifier-signed policyAuthorityMeasuredExchangeRuntimeResponse/v1 includes actual root-signed configuration and exact committed result/row originals. Not an HTTP caller success verdict."},
+    "mfa":{"type":"object","additionalProperties":false,"required":["nativeOAuthConsentProfile","assertion"],"properties":{"nativeOAuthConsentProfile":{"const":"catchplate.nativeOAuthConsentOptions/v1"},"assertion":{"type":"object"}},"$comment":"Genuine raw assertion, current hardware/UP/UV credential and independent trust provenance verified by actual fixed writer. Aggregate<=16KiB."},
+    "consentRequest":{"type":"object","additionalProperties":false,"required":["apiVersion","arguments","mfa"],"properties":{"apiVersion":{"const":"catchplate.nativeOAuthConsentOptions/v1"},"arguments":{"$ref":"#/$defs/arguments"},"mfa":{"$ref":"#/$defs/mfa"}}},
+    "recoveryOriginalRequest":{"type":"object","additionalProperties":false,"required":["apiVersion","exchangeId"],"properties":{"apiVersion":{"const":"catchplate.nativeOAuthRecoveryOriginalRequest/v1"},"exchangeId":{"$ref":"#/$defs/uuid"}}},
+    "recoveryOriginalResponse":{"type":"object","additionalProperties":false,"required":["apiVersion","okForAction","exchangeOriginal","custodyOriginal"],"properties":{"apiVersion":{"const":"catchplate.nativeOAuthRecoveryOriginalResponse/v1"},"okForAction":{"const":false},"exchangeOriginal":{"type":"string","minLength":1,"maxLength":1048576},"custodyOriginal":{"type":"string","minLength":1,"maxLength":4194304}},"$comment":"SELECT-only encrypted data. Cannot decrypt, contact or re-stage until fresh actual recover commit is verified by the helper. No signature over outcome is invented."},
     "application":{
       "type":"object","additionalProperties":false,"required":["enrollmentOriginal","material","tlsRootsPem"],
       "properties":{
@@ -105,7 +105,7 @@
       "type":"object","additionalProperties":false,
       "required":["apiVersion","sourceRevision","authorityRootPublicKey","authorityRootSpkiSha256","authorityConfigurationOriginal","controlPlaneConfigurationDigest","deploymentId","instanceId","limits","windows","applications","recoveryTargets","callbackOrigin","portalOrigin","browserVsockPort"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativeOAuthExchangeConfiguration/v1"},
+        "apiVersion":{"const":"catchplate.nativeOAuthExchangeConfiguration/v1"},
         "sourceRevision":{"type":"string","minLength":1,"maxLength":256},
         "authorityRootPublicKey":{"type":"string","pattern":"^[A-Za-z0-9_-]{43}$"},
         "authorityRootSpkiSha256":{"$ref":"#/$defs/digest"},

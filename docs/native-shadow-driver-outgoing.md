@@ -2,7 +2,7 @@
 
 `OutgoingResources.prepare(driver)` creates real unconnected outgoing resources
 for the same live `DriverBootstrap`. It consumes the fixed protected provisioning
-original `/etc/serverware/native-shadow-driver-outgoing.json`, binding the exact
+original `/etc/catchplate/native-shadow-driver-outgoing.json`, binding the exact
 bootstrap configuration, original window, actual driver observation, invocation,
 C9 cold configuration, intended runtime bytes, and explicit native launch purpose.
 It does not sign, generate keys, contact endpoints, or claim readiness.

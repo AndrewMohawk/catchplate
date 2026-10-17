@@ -9,9 +9,9 @@ The native proof cohort and its bridge are separate owners.
 ## Actual ownership and order
 
 The fixed root-protected `0400`, single-link original
-`/etc/serverware/custody-generation-five.json` selects the closed launch profile
+`/etc/catchplate/custody-generation-five.json` selects the closed launch profile
 in `custody-five-service-launch.v1.schema.json`. It pins all five independent C9
-configurations and the five existing `/usr/local/bin/serverware-policy-custody-<role>`
+configurations and the five existing `/usr/local/bin/catchplate-policy-custody-<role>`
 executables. No request, environment variable or generic executable path selects
 a different program. The executable must be an actual root-owned `0755`,
 single-link fs-verity-protected ELF. A content digest is not substituted for
@@ -34,7 +34,7 @@ and the existing service storage owners still perform their complete admission.
 Preparation allocates one real empty grant memfd per role, fixes its role
 ownership and `0400` mode, and creates the one fresh `generation-journal` below
 each preprovisioned root-owned `0711` directory
-`/var/lib/serverware/custody-generation/<role>`. The generation directory must
+`/var/lib/catchplate/custody-generation/<role>`. The generation directory must
 not already exist. Existing partial files are evidence, not restart permission.
 Only ext4, XFS and Btrfs storage is admitted by this bounded producer; the actual
 service journal also retains its own filesystem/durability checks.
@@ -49,7 +49,7 @@ The finite authoring API is:
    with the existing independently supplied C9 authority. The method checks the
    real allocated descriptors, runtime directory/listener identities, original
    boot/deadlines and invocation. It publishes the exact signed C9 original
-   exclusively at `/etc/serverware/custody-<role>-delivery.json`.
+   exclusively at `/etc/catchplate/custody-<role>-delivery.json`.
 3. Obtain the actual `guest_original(role)` and authorize the complete scope18
    grant using the independently supplied authority-history root. Call
    `seal_grant(role, approved_grant_payload_original=..., history_root_authority=...)`.
@@ -94,7 +94,7 @@ grant and runtime pin that semantic digest. These two commitments are not equal
 by definition; neither is removed or truncated. Legacy runtime-v4 is unchanged.
 
 The generation signature uses the existing custody signature framing, not the
-native envelope framing: `serverware-signature-v1` plus NUL, u64be domain length,
+native envelope framing: `catchplate-signature-v1` plus NUL, u64be domain length,
 the exact purpose domain, u64be payload length and canonical payload bytes.
 ASCII integral JSON preserves u64 values and rejects floating-point input;
 the existing epoch-nanosecond fields retain their i64 bounds. No private seed is

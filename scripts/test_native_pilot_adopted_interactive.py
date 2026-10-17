@@ -15,9 +15,9 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import native_pilot_adopted_phase_profile as jobs
-from serverware import native_pilot_adopted_supervisor_policy as policy
-from serverware import native_pilot_interactive as interval
+from catchplate import native_pilot_adopted_phase_profile as jobs
+from catchplate import native_pilot_adopted_supervisor_policy as policy
+from catchplate import native_pilot_interactive as interval
 
 p = jobs.p
 SECOND = 1_000_000_000
@@ -41,7 +41,7 @@ def fixture(*, selected=True):
         "intakeConfigurationSha256": p.sha(b"{}")}
     if selected:
         value["interactive"] = fragment
-    handoff = {"apiVersion": "serverware.nativeGenerationOriginHandoff/v1", "okForAction": False,
+    handoff = {"apiVersion": "catchplate.nativeGenerationOriginHandoff/v1", "okForAction": False,
         "automaticRetryAllowed": False, "originSha256": p.sha(b"origin")}
     action = {"action": "run-interactive", "originHandoffSha256": p.sha(p.canonical(handoff)),
         **{name: fragment[name] for name in interval.FIELDS[1:]}}
@@ -55,11 +55,11 @@ def window_fixture():
     window.update(issuedAtBoottimeNs="100000000", startupDeadlineBoottimeNs="500000000",
         lifetimeDeadlineBoottimeNs=str(10 * SECOND))
     originals = {
-        "driverConfigurationOriginal": {"apiVersion": "serverware.nativeShadowDriverBootstrapConfiguration/v4",
+        "driverConfigurationOriginal": {"apiVersion": "catchplate.nativeShadowDriverBootstrapConfiguration/v4",
             "lifecycle": {"cleanupReserveNanos": 100_000_000}},
-        "driverWindowOriginal": {"apiVersion": "serverware.nativeShadowDriverBootstrapWindow/v1", "payload": copy.deepcopy(window)},
-        "cohortPrecreationOriginal": {"apiVersion": "serverware.nativeShadowProofCohortPrecreation/v1", "payload": copy.deepcopy(window)},
-        "ordinaryLaunchOriginal": {"apiVersion": "serverware.custodyFiveServiceLaunch/v7", **window}}
+        "driverWindowOriginal": {"apiVersion": "catchplate.nativeShadowDriverBootstrapWindow/v1", "payload": copy.deepcopy(window)},
+        "cohortPrecreationOriginal": {"apiVersion": "catchplate.nativeShadowProofCohortPrecreation/v1", "payload": copy.deepcopy(window)},
+        "ordinaryLaunchOriginal": {"apiVersion": "catchplate.custodyFiveServiceLaunch/v7", **window}}
     production = {name: p.sha(name.encode("ascii")) for name in jobs.legacy.scope_authority.PRODUCTION_FIELDS}
     production.update(maximumRpcNanos=250_000_000, cleanupReserveNanos=200_000_000,
         maximumInFlightCalls=1, maximumAsyncDurabilityNanos=100_000_000)
@@ -83,7 +83,7 @@ class AdoptedInteractiveControls(unittest.TestCase):
     def test_policy_versions_purpose_and_unknown_fields_stay_closed(self):
         new, _, _ = fixture()
         cases = [dict(new, apiVersion=policy.API), dict(new, purpose=policy.PURPOSE),
-            dict(new, apiVersion="serverware.nativePilotAdoptedSupervisorPolicy/v3"),
+            dict(new, apiVersion="catchplate.nativePilotAdoptedSupervisorPolicy/v3"),
             {name: value for name, value in new.items() if name != "interactive"},
             dict(new, command="curl"), dict(new, interactive={**new["interactive"], "durationNanos": SECOND})]
         for changed in cases:
@@ -157,7 +157,7 @@ class AdoptedInteractiveControls(unittest.TestCase):
                 window[changed_field] = replacement
                 with self.subTest(field=field, changed_field=changed_field), self.assertRaises(FAILURES):
                     jobs.interactive_deadline(literal_rows(changed), production, boot=BOOT)
-        originals["ordinaryLaunchOriginal"]["apiVersion"] = "serverware.custodyFiveServiceLaunch/v6"
+        originals["ordinaryLaunchOriginal"]["apiVersion"] = "catchplate.custodyFiveServiceLaunch/v6"
         with self.assertRaises(FAILURES):
             jobs.interactive_deadline(literal_rows(originals), production, boot=BOOT)
 
@@ -183,7 +183,7 @@ class AdoptedInteractiveControls(unittest.TestCase):
         for name in ("driver-bootstrap", "driver-constructed"):
             record(name, dict(common))
         for role in jobs.g.ROLES:
-            record("ordinary-generation-" + role, {"apiVersion": "serverware.custodyServiceGenerationGrant/v1",
+            record("ordinary-generation-" + role, {"apiVersion": "catchplate.custodyServiceGenerationGrant/v1",
                 "purpose": "cold-service-generation-admission", "serviceRole": role,
                 "issuedAtBoottimeNanos": SECOND, "expiresAtBoottimeNanos": 7 * SECOND,
                 "scope": {"installationIssuedAtUnixNanos": 99 * SECOND,

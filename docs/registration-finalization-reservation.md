@@ -8,7 +8,7 @@ were run; provisioning and production acceptance remain separate.
 
 ## Original admission before signing
 
-[`authority_registration_finalization_reservation._produce_on_configuration`](../serverware/authority_registration_finalization_reservation.py)
+[`authority_registration_finalization_reservation._produce_on_configuration`](../catchplate/authority_registration_finalization_reservation.py)
 has the keyword-only contract:
 
 ```text
@@ -43,7 +43,7 @@ live checker for this same invocation. No public or private producer accepts
 that object as proof input. The existing `_verify_on_configuration` still
 returns only unchanged raw7. The reserve producer passes the original raw4,
 grant, vector and genuinely derived history to the actual
-[`authority_successor_execution_preparation`](../serverware/authority_successor_execution_preparation.py),
+[`authority_successor_execution_preparation`](../catchplate/authority_successor_execution_preparation.py),
 which performs its own full replay before the enrolled computation key signs.
 The capability digest comes from the authenticated original grant, not a
 caller-chosen digest. Snapshot commitments cover the original plan, result and
@@ -71,7 +71,7 @@ This producer opens no socket or journal and provisions no keys or authority.
 
 ## Live receiving verification
 
-[`authority_registration_finalization_reservation_response._verify_on_configuration`](../serverware/authority_registration_finalization_reservation_response.py)
+[`authority_registration_finalization_reservation_response._verify_on_configuration`](../catchplate/authority_registration_finalization_reservation_response.py)
 accepts original raw10 `(authorization, *raw7, complete-before-vector, grant)`
 and response raw3 `(reserve-request, computation-snapshot, state-acknowledgment)`.
 Its other keyword inputs are the independently admitted configuration/generation/

@@ -15,7 +15,7 @@ session.
 
 ## Fixed original exchange
 
-The [transport](../serverware/authority_registration_finalization_reservation_transport.py)
+The [transport](../catchplate/authority_registration_finalization_reservation_transport.py)
 accepts exactly ten immutable originals, in order:
 
 1. Dedicated finalization caller authorization.
@@ -28,7 +28,7 @@ computation snapshot and signed state acknowledgment. These bytes still require
 receiving authentication; socket identity is not grant or currentness evidence.
 
 Request/response magic is `SWRFRQ01` / `SWRFRR01`. The only endpoint is
-`/run/serverware/registration-finalization/reserver.sock`, with the activated
+`/run/catchplate/registration-finalization/reserver.sock`, with the activated
 listener's expected peer UID/GID `0:0` and configured timeout of 1–30 seconds.
 `_socket_request(endpoint, *, originals, deadline_ns)` requires the caller's
 existing absolute monotonic deadline and clips the exchange to it; it cannot
@@ -44,14 +44,14 @@ alternate endpoint or retry in this transport.
 
 ## Separate durable profile
 
-The [record codec](../serverware/authority_registration_finalization_reservation_records.py)
+The [record codec](../catchplate/authority_registration_finalization_reservation_records.py)
 fixes these values:
 
 | Field | Value |
 | --- | --- |
 | Operation | `webauthn.registration.finalize` |
-| Record schema | `serverware.registrationFinalizationReservationRecord/v1` |
-| Framed local identity domain | `serverware.registrationFinalizationReservationRecordIdentity/v1` |
+| Record schema | `catchplate.registrationFinalizationReservationRecord/v1` |
+| Framed local identity domain | `catchplate.registrationFinalizationReservationRecordIdentity/v1` |
 
 The canonical local request has 11 fields; the acknowledgment adds only the
 original receipt. Records are bounded to 1 MiB, 32 JSON nodes and depth two.
@@ -61,7 +61,7 @@ verified. `executionRecordDigest` is only the local finalization-grant locator:
 the codec has no grant original and cannot establish grant provenance or replay
 it from that locator.
 
-The [delivery owner](../serverware/authority_registration_finalization_reservation_delivery.py)
+The [delivery owner](../catchplate/authority_registration_finalization_reservation_delivery.py)
 is `FinalizationReservationDelivery`, constructed with the actual
 `CurrentRootJournal`, original enrollment/root key and independently current
 `expected_local_sequence` / `expected_local_head_digest`. Its directory must be

@@ -24,11 +24,11 @@ pub(super) struct NativeRuntimeLifetimeV1 {
     stopped: AtomicBool,
     state: Mutex<State>,
     wake: Condvar,
-    serving_privileges: Option<Arc<serverware_decision_gate::native_serving_privileges::Owner>>,
-    gate_cgroup: Option<Arc<serverware_decision_gate::native_gate_cgroup::Owner>>,
-    guest_inspector: Option<Arc<serverware_decision_gate::InitializedGuestInspector>>,
-    guest_cohort: Option<Arc<serverware_decision_gate::StartedGuestCohort>>,
-    shadow_workers: Option<Arc<serverware_decision_gate::native_shadow_workers::Owner>>,
+    serving_privileges: Option<Arc<catchplate_decision_gate::native_serving_privileges::Owner>>,
+    gate_cgroup: Option<Arc<catchplate_decision_gate::native_gate_cgroup::Owner>>,
+    guest_inspector: Option<Arc<catchplate_decision_gate::InitializedGuestInspector>>,
+    guest_cohort: Option<Arc<catchplate_decision_gate::StartedGuestCohort>>,
+    shadow_workers: Option<Arc<catchplate_decision_gate::native_shadow_workers::Owner>>,
     guest_cleanup: Mutex<Option<Result<(), String>>>,
 }
 
@@ -70,7 +70,7 @@ impl NativeRuntimeLifetimeV1 {
     }
 
     pub(super) fn bind_serving_privileges(owner: &mut Arc<Self>,
-        privileges: Arc<serverware_decision_gate::native_serving_privileges::Owner>) -> Result<(), String> {
+        privileges: Arc<catchplate_decision_gate::native_serving_privileges::Owner>) -> Result<(), String> {
         owner.require_creator()?;
         privileges.check()?;
         let actual = Arc::get_mut(owner).ok_or("native lifetime shared before privilege attachment")?;
@@ -86,7 +86,7 @@ impl NativeRuntimeLifetimeV1 {
     pub(super) fn deadline(&self) -> u64 { self.deadline }
 
     pub(super) fn bind_shadow_workers(owner: &mut Arc<Self>,
-        workers: Arc<serverware_decision_gate::native_shadow_workers::Owner>) -> Result<(), String> {
+        workers: Arc<catchplate_decision_gate::native_shadow_workers::Owner>) -> Result<(), String> {
         if unsafe { libc::getpid() } != owner.creator_pid { return Err("shadow worker attachment crossed creator".into()); }
         let actual = Arc::get_mut(owner).ok_or("native lifetime shared before shadow attachment")?;
         let serving = actual.serving_privileges.as_ref().ok_or("shadow worker has no permanent serving owner")?;
@@ -99,7 +99,7 @@ impl NativeRuntimeLifetimeV1 {
     }
 
     pub(super) fn bind_gate_cgroup(owner: &mut Arc<Self>,
-        cgroup: Arc<serverware_decision_gate::native_gate_cgroup::Owner>) -> Result<(), String> {
+        cgroup: Arc<catchplate_decision_gate::native_gate_cgroup::Owner>) -> Result<(), String> {
         owner.require_creator()?;
         let actual = Arc::get_mut(owner).ok_or("native lifetime shared before cgroup attachment")?;
         let serving = actual.serving_privileges.as_ref().ok_or("gate cgroup has no final serving identity")?;
@@ -112,7 +112,7 @@ impl NativeRuntimeLifetimeV1 {
     }
 
     pub(super) fn bind_guest_inspector(owner: &mut Arc<Self>,
-        inspector: Arc<serverware_decision_gate::InitializedGuestInspector>) -> Result<(), String> {
+        inspector: Arc<catchplate_decision_gate::InitializedGuestInspector>) -> Result<(), String> {
         owner.require_creator()?;
         let actual = Arc::get_mut(owner).ok_or("native lifetime shared before inspector attachment")?;
         if actual.guest_inspector.is_some() || actual.serving_privileges.is_some()
@@ -124,7 +124,7 @@ impl NativeRuntimeLifetimeV1 {
     }
 
     pub(super) fn bind_guest_cohort(owner: &mut Arc<Self>,
-        cohort: Arc<serverware_decision_gate::StartedGuestCohort>) -> Result<(), String> {
+        cohort: Arc<catchplate_decision_gate::StartedGuestCohort>) -> Result<(), String> {
         // Store the returned real owner before inspecting the other child's
         // liveness: an elapsed inspector/lifetime must not discard this cohort
         // before the outer cold-error path can explicitly stop and reap it.
@@ -141,7 +141,7 @@ impl NativeRuntimeLifetimeV1 {
     }
 
     pub(super) fn require_serving_privileges(&self,
-        owner: Option<&Arc<serverware_decision_gate::native_serving_privileges::Owner>>) -> Result<(), String> {
+        owner: Option<&Arc<catchplate_decision_gate::native_serving_privileges::Owner>>) -> Result<(), String> {
         self.check()?;
         match (&self.serving_privileges, owner) {
             (Some(held), Some(actual)) if Arc::ptr_eq(held, actual) => Ok(()),

@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MODE = "basic_and_bearer_v1"
 EVENT = "operator_catalog.application.proxy_authentication_changed"
 PATH = "/api/operator-demo/applications/proxy-authentication"
-CAPABILITY = {"schema": "serverware.operatorProxyAuthentication/v1",
+CAPABILITY = {"schema": "catchplate.operatorProxyAuthentication/v1",
     "modes": ["bearer", MODE], "path": PATH}
 
 
@@ -96,7 +96,7 @@ def legacy_defaults():
     retained = workspace.catalog(db, schema)
     assert all("proxy_authentication" not in row for row in retained["applications"])
     assert workspace.snapshot(db) == before and config.POLICY_BUNDLE_PATH.read_bytes() == policy_bytes
-    from serverware import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
+    from catchplate import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
     for extra in ({}, {"proxy_authentication": "bearer"}):
         result = mutations.create_application(inputs.ApplicationInput(**workspace.review(db, store, schema),
             name="Default transport fixture", token_lifetime_seconds=3600, **extra), workspace.common._ACTOR)

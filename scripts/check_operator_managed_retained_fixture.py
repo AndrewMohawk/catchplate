@@ -43,7 +43,7 @@ def retained_network():
             addresses.add(previous.split()[-1])
         previous = line
     need(addresses == {"127.0.0.1", *ADDRESSES})
-    for host, address in zip(("demo-upstream", "serverware", "decision-gate-rs"), ADDRESSES):
+    for host, address in zip(("demo-upstream", "catchplate", "decision-gate-rs"), ADDRESSES):
         need({row[4][0] for row in socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)} == {address})
     status = dict(line.split(":", 1) for line in Path("/proc/self/status").read_text().splitlines() if ":" in line)
     need(os.geteuid() == os.getegid() == 10001 and status["NoNewPrivs"].strip() == "1"
@@ -63,7 +63,7 @@ def retained_readiness(policy, identity_value):
     def get(url, token=None):
         headers = {"Accept": "application/json"}
         if token is not None:
-            headers.update(Authorization="Bearer " + token, Origin="https://serverware-demo.example.com")
+            headers.update(Authorization="Bearer " + token, Origin="https://catchplate-demo.example.com")
         with opener.open(urllib.request.Request(url, headers=headers, method="GET"), timeout=3) as response:
             need(response.status == 200 and response.geturl() == url)
             raw = response.read(2097153)
@@ -84,11 +84,11 @@ def retained_readiness(policy, identity_value):
     result = {"actual_gate_ready": True, "binary_digest": health["data_plane_binary_digest"],
         "managed_google": identity_value, "policy_hash": policy["policy_hash"]}
     if mode == "app":
-        need(os.environ.get("SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED") == "1"
-            and os.environ.get("SERVERWARE_OPERATOR_NOTIFICATIONS_PRIVATE_DESTINATIONS_JSON") == '{"bindings":[]}'
-            and os.environ.get("SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR") == "/notification-custody")
+        need(os.environ.get("CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED") == "1"
+            and os.environ.get("CATCHPLATE_OPERATOR_NOTIFICATIONS_PRIVATE_DESTINATIONS_JSON") == '{"bindings":[]}'
+            and os.environ.get("CATCHPLATE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR") == "/notification-custody")
         directory("/notification-custody"); need(not os.listdir("/notification-custody"))
-        path = "/run/secrets/serverware/admin.token"
+        path = "/run/secrets/catchplate/admin.token"
         before = identity(path); need(before["mode"] == 0o400 and before["size"] == 64)
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
         try:
@@ -98,7 +98,7 @@ def retained_readiness(policy, identity_value):
         finally: os.close(descriptor)
         need(identity(path) == before and token and "\n" not in token and "\r" not in token)
         catalog = get("http://172.16.249.19:3000/api/operator-demo/catalog", token)
-        need(catalog.get("schema") == "serverware.operatorCatalog/v1" and catalog.get("mode") == "operator-development"
+        need(catalog.get("schema") == "catchplate.operatorCatalog/v1" and catalog.get("mode") == "operator-development"
             and catalog.get("productionReady") is False and catalog.get("hardwareVerified") is False
             and catalog.get("allowed_upstreams") == expected_manifest["effective_settings"]["allowed_upstreams"]
             and catalog.get("capabilities", {}).get("google_oauth") is None
@@ -140,7 +140,7 @@ def emit_probe(mode, binary_sha256):
         ('    print(json.dumps(result, sort_keys=True))',
          '    result["network"] = network_observation\n'
          '    result["readiness"] = retained_readiness(result["policy"], result["managed"]["identity"])\n'
-         '    result["schema"] = "serverware.managedRetainedRuntimeObservation/v1"\n'
+         '    result["schema"] = "catchplate.managedRetainedRuntimeObservation/v1"\n'
          '    result["mode"] = mode\n'
          '    result["preservation_claimed"] = False\n'
          '    print(json.dumps(result, sort_keys=True))'),

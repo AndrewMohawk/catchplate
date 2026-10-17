@@ -9,7 +9,7 @@ admitted. No build, test, parser, signing, provisioning or runtime was executed.
 ## Fixed selection and real resources
 
 `FiveServiceLaunch.start_commitment()` alone opens root-owned0400
-`/etc/serverware/custody-commitment-five.json`. The closed eight-field cold
+`/etc/catchplate/custody-commitment-five.json`. The closed eight-field cold
 configuration preserves the original boot, time namespace, invocation,
 startup/lifetime and exact five executable/C9 pins. Version3 selects direct
 entries; version4 selects the genuine retained privileged inspection entry.
@@ -19,18 +19,18 @@ the connected isolated native bridge needs inspected mode.
 
 `BusinessResources.prepare_commitment(launcher)` admits only the exact actual
 launcher and root-owned0400
-`/etc/serverware/custody-commitment-business.json`, schema
-`serverware.custodyFiveServiceBusinessInputs/v2`. It retains the same original
+`/etc/catchplate/custody-commitment-business.json`, schema
+`catchplate.custodyFiveServiceBusinessInputs/v2`. It retains the same original
 launch SHA/invocation and independently selected client C9 configuration.
-The actual source-fixed `/run/serverware-custody-business` and
-`/var/lib/serverware/custody-business` roots remain exclusive, root-owned0711.
+The actual source-fixed `/run/catchplate-custody-business` and
+`/var/lib/catchplate/custody-business` roots remain exclusive, root-owned0711.
 Fresh listeners/business directories retain the .329 lifetime and no-adoption
 rules. Nothing manufactures final peer UID/cgroup/label/IMA observations.
 
 `resources.commitment_inputs()` supplies actual resource descriptors to the
 closed input owner. No caller-selected resource registry is accepted in this
 successor. Under each actual retained
-`/var/lib/serverware/custody-generation/<role>` root, generation-journal and
+`/var/lib/catchplate/custody-generation/<role>` root, generation-journal and
 generation-grant are prepared as before. Only the two commitment roles also
 create a fresh persistent final-role0700 `dispatch-journal` and a zero-link,
 final-role0600 `dispatch-grant` memfd. Both real identities exist before C9 is

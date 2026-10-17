@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 fn raw_headers(bytes: &[u8]) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
-        "x-serverware-response-statement-b64",
+        "x-catchplate-response-statement-b64",
         HeaderValue::from_str(&general_purpose::URL_SAFE_NO_PAD.encode(bytes)).unwrap(),
     );
     headers
@@ -33,24 +33,24 @@ fn signed_headers(snapshot: &Snapshot, key: &SigningKey, context: Value) -> (Hea
     let body_digest = sha256_prefixed(b"{}");
     let key_id = snapshot.response_signing_key_id.as_ref().unwrap();
     let statement = canonical_json_ensure_ascii(&json!({
-        "version": "serverware.responseSignature/v3", "issued_at_ms": now_epoch_ms() as u64,
+        "version": "catchplate.responseSignature/v3", "issued_at_ms": now_epoch_ms() as u64,
         "request": {"method": "POST", "path": "/api/data-plane/audit", "query_sha256": sha256_prefixed(b"")},
         "status_code": 200, "body_sha256": body_digest, "response_headers_sha256": headers_digest,
         "response_header_count": header_count, "nonce": nonce, "response_signing_key_id": key_id, "context": context,
     }));
     for (name, value) in [
-        ("x-serverware-response-key-id", key_id.clone()),
-        ("x-serverware-response-body-sha256", body_digest),
+        ("x-catchplate-response-key-id", key_id.clone()),
+        ("x-catchplate-response-body-sha256", body_digest),
         (
-            "x-serverware-response-statement-sha256",
+            "x-catchplate-response-statement-sha256",
             sha256_prefixed(statement.as_bytes()),
         ),
         (
-            "x-serverware-response-statement-b64",
+            "x-catchplate-response-statement-b64",
             general_purpose::URL_SAFE_NO_PAD.encode(statement.as_bytes()),
         ),
         (
-            "x-serverware-response-signature",
+            "x-catchplate-response-signature",
             format!(
                 "ed25519:{}",
                 general_purpose::URL_SAFE_NO_PAD.encode(key.sign(statement.as_bytes()).to_bytes())
@@ -315,11 +315,11 @@ fn audit_diagnostic_unknown_or_injected_errors_cannot_select_known_category() {
 fn audit_diagnostic_duplicate_or_oversized_headers_are_not_reparsed() {
     let snapshot = test_snapshot(1);
     let mut duplicate = headers(Value::Null);
-    let value = duplicate["x-serverware-response-statement-b64"].clone();
-    duplicate.append("x-serverware-response-statement-b64", value);
+    let value = duplicate["x-catchplate-response-statement-b64"].clone();
+    duplicate.append("x-catchplate-response-statement-b64", value);
     let mut oversized = HeaderMap::new();
     oversized.insert(
-        "x-serverware-response-statement-b64",
+        "x-catchplate-response-statement-b64",
         HeaderValue::from_str(&"a".repeat(MAX_CONTROL_PLANE_RESPONSE_HEADER_BYTES + 1)).unwrap(),
     );
     for value in [duplicate, oversized, HeaderMap::new()] {

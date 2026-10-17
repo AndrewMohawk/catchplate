@@ -1,4 +1,4 @@
-"""Read one repository through Serverware using unmodified PyGithub transport."""
+"""Read one repository through Catchplate using unmodified PyGithub transport."""
 import argparse
 from contextlib import contextmanager
 from importlib.metadata import version
@@ -18,7 +18,7 @@ import time
 from urllib.parse import quote, urlsplit
 from uuid import UUID
 
-PLACEHOLDER = "serverware-github-placeholder-v1"  # Public, not a GitHub credential.
+PLACEHOLDER = "catchplate-github-placeholder-v1"  # Public, not a GitHub credential.
 PINS = {"PyGithub": "2.10.0", "requests": "2.34.2", "urllib3": "2.8.0", "certifi": "2026.7.22"}
 FAILURE = "GitHub example failed; check configuration, proxy health and the operator audit log."
 PROXY_CA_FAILURE = "This PyGithub example cannot use a separate proxy CA; use a publicly trusted proxy endpoint or the Node/Go example."
@@ -87,25 +87,25 @@ def configuration_environment(config_file, env):
         return str((path.parent / item).resolve())
 
     selected = dict(env)
-    selected.pop("SERVERWARE_PROXY_CA_FILE", None)
-    selected.update(SERVERWARE_APP_ID=value["application_id"],
-        SERVERWARE_PROXY_URL=value.get("proxy_url"), SERVERWARE_PROXY_TOKEN=value.get("proxy_password"),
-        SERVERWARE_GITHUB_OWNER=scope["owner"], SERVERWARE_GITHUB_REPO=scope["name"],
-        SERVERWARE_CA_FILE=ca_path(value.get("ca_file")))
+    selected.pop("CATCHPLATE_PROXY_CA_FILE", None)
+    selected.update(CATCHPLATE_APP_ID=value["application_id"],
+        CATCHPLATE_PROXY_URL=value.get("proxy_url"), CATCHPLATE_PROXY_TOKEN=value.get("proxy_password"),
+        CATCHPLATE_GITHUB_OWNER=scope["owner"], CATCHPLATE_GITHUB_REPO=scope["name"],
+        CATCHPLATE_CA_FILE=ca_path(value.get("ca_file")))
     if value.get("upstream_url") != "https://api.github.com/repos/" + repository(selected) + "/issues":
         raise ValueError("GitHub upstream differs from repository")
     recipe = value.get("client_recipe", {})
     if type(recipe) is not dict:
         raise ValueError("Invalid client recipe")
     if recipe.get("proxy_ca_file") is not None:
-        selected["SERVERWARE_PROXY_CA_FILE"] = ca_path(recipe["proxy_ca_file"])
-    child_environment(selected, selected["SERVERWARE_CA_FILE"])
+        selected["CATCHPLATE_PROXY_CA_FILE"] = ca_path(recipe["proxy_ca_file"])
+    child_environment(selected, selected["CATCHPLATE_CA_FILE"])
     return selected
 
 
 def repository(env):
-    owner = env.get("SERVERWARE_GITHUB_OWNER", "")
-    name = env.get("SERVERWARE_GITHUB_REPO", "")
+    owner = env.get("CATCHPLATE_GITHUB_OWNER", "")
+    name = env.get("CATCHPLATE_GITHUB_REPO", "")
     if (not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?", owner)
             or not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", name) or name in {".", ".."}):
         raise ValueError("Explicit repository required")
@@ -115,9 +115,9 @@ def repository(env):
 def child_environment(env, ca_file):
     """Return a NEW minimal environment; never mutate or copy ambient settings."""
     repository(env)
-    if "SERVERWARE_PROXY_CA_FILE" in env:
+    if "CATCHPLATE_PROXY_CA_FILE" in env:
         raise UnsupportedProxyCA(PROXY_CA_FAILURE)
-    endpoint = env.get("SERVERWARE_PROXY_URL", "")
+    endpoint = env.get("CATCHPLATE_PROXY_URL", "")
     parts = urlsplit(endpoint)
     if (not endpoint.isascii() or any(ord(c) < 33 or c in "\\" for c in endpoint)
             or parts.scheme != "https" or not parts.hostname or parts.username is not None
@@ -125,16 +125,16 @@ def child_environment(env, ca_file):
             or "?" in endpoint or "#" in endpoint
             or parts.port is not None and not 1 <= parts.port <= 65535):
         raise ValueError("A credential-free HTTPS proxy origin is required")
-    app_id = env.get("SERVERWARE_APP_ID", "")
-    token = env.get("SERVERWARE_PROXY_TOKEN", "")
+    app_id = env.get("CATCHPLATE_APP_ID", "")
+    token = env.get("CATCHPLATE_PROXY_TOKEN", "")
     if str(UUID(app_id)) != app_id or not 1 <= len(token) <= 8192 or not all(33 <= ord(c) <= 126 for c in token):
         raise ValueError("Application login required")
     # Requests' documented Basic proxy authentication interface. Never log this URL.
     proxy = "https://" + quote(app_id, safe="") + ":" + quote(token, safe="") + "@" + parts.netloc
     return {"HTTPS_PROXY": proxy, "NO_PROXY": "",
-        "SERVERWARE_GITHUB_OWNER": env["SERVERWARE_GITHUB_OWNER"],
-        "SERVERWARE_GITHUB_REPO": env["SERVERWARE_GITHUB_REPO"],
-        "SERVERWARE_CA_FILE": str(ca_file)}
+        "CATCHPLATE_GITHUB_OWNER": env["CATCHPLATE_GITHUB_OWNER"],
+        "CATCHPLATE_GITHUB_REPO": env["CATCHPLATE_GITHUB_REPO"],
+        "CATCHPLATE_CA_FILE": str(ca_file)}
 
 
 @contextmanager
@@ -151,7 +151,7 @@ def client_ca_bundle(ca_file):
     context = ssl.create_default_context(cafile=certifi.where())
     context.load_verify_locations(cadata=extra.decode("ascii"))
     roots = Path(certifi.where()).read_bytes()
-    with tempfile.TemporaryDirectory(prefix="serverware-github-ca-") as directory:
+    with tempfile.TemporaryDirectory(prefix="catchplate-github-ca-") as directory:
         combined = Path(directory) / "ca.pem"
         with combined.open("xb") as stream:
             os.chmod(combined, 0o600)
@@ -171,7 +171,7 @@ def read_issues(env, limit):
         raise ValueError("Limit must be between 1 and 100")
     name = repository(env)
     with Github(auth=Auth.Token(PLACEHOLDER), lazy=True, per_page=30,
-                verify=env["SERVERWARE_CA_FILE"], retry=None, timeout=10,
+                verify=env["CATCHPLATE_CA_FILE"], retry=None, timeout=10,
                 api_version="2022-11-28") as client:
         repo = client.get_repo(name)
         rows = []
@@ -189,8 +189,8 @@ def read_issues(env, limit):
 def launch(env, limit):
     check_versions()
     # Validate all configuration before creating the child or its trust bundle.
-    child_environment(env, env.get("SERVERWARE_CA_FILE", ""))
-    with client_ca_bundle(env.get("SERVERWARE_CA_FILE", "")) as ca_file:
+    child_environment(env, env.get("CATCHPLATE_CA_FILE", ""))
+    with client_ca_bundle(env.get("CATCHPLATE_CA_FILE", "")) as ca_file:
         result = subprocess.run([sys.executable, "-I", "-B", str(Path(__file__).resolve()),
             "--child", "--limit", str(limit)], env=child_environment(env, ca_file),
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -211,7 +211,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="List up to 100 open issues (read only).")
     parser.add_argument("--limit", type=int, choices=range(1, 101), default=100, metavar="1..100")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--config", metavar="PATH", help="Private client JSON downloaded from Serverware")
+    parser.add_argument("--config", metavar="PATH", help="Private client JSON downloaded from Catchplate")
     args = parser.parse_args(argv)
     # Requests exceptions/debug logging may contain proxy credentials. Never emit them.
     logging.disable(logging.CRITICAL)

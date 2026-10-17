@@ -8,7 +8,7 @@ import threading
 import unittest
 from unittest import mock
 
-from serverware import authority_jit_original_service as service
+from catchplate import authority_jit_original_service as service
 from test_authority_jit_original_configuration import Fixture
 from test_authority_jit_original_pages import binding
 from test_authority_jit_original_authorization import WINDOW, EPOCH, MONOTONIC, DEADLINE, clocks, work

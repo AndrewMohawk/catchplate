@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "serverware.nativePilotInventoryPublication/v1",
+  "$id": "catchplate.nativePilotInventoryPublication/v1",
   "$ref": "#/$defs/publication",
   "$comment": "Offline independently enrolled compiler signer input, not runtime provisioning or native delivery permission. All original signatures remain complete. Controlled native intake independently checks current trust/revocation, assignment key and exact inventory roots; legacy constrained/7 and Fleet remain unchanged.",
   "$defs": {
@@ -31,7 +31,7 @@
         "authorityAnalysis":{"$ref":"policy-authority-analysis.v1.schema.json#/$defs/approvedExpansionAnalysis"},
         "pilotRestrictions":{"$ref":"#/$defs/pilot"},"issuedAtUnixNanos":{"$ref":"#/$defs/positive"},"expiresAtUnixNanos":{"$ref":"#/$defs/positive"}
       },
-      "description":"Exact existing controlled compiler-analysis14 payload with explicit native pilot successor; not the separate legacy Rust/Fleet analysis payload. Enclosing compiler signature domain remains serverware.policyAuthorityAnalysis/v1 over all fourteen fields."
+      "description":"Exact existing controlled compiler-analysis14 payload with explicit native pilot successor; not the separate legacy Rust/Fleet analysis payload. Enclosing compiler signature domain remains catchplate.policyAuthorityAnalysis/v1 over all fourteen fields."
     },
     "recordBinding": {
       "type":"object","additionalProperties":false,
@@ -47,7 +47,7 @@
     "publication": {
       "type":"object","additionalProperties":false,"required":["apiVersion","assignmentEnvelope","analysisPayload","recordBinding"],
       "properties":{
-        "apiVersion":{"const":"serverware.nativePilotInventoryPublication/v1"},
+        "apiVersion":{"const":"catchplate.nativePilotInventoryPublication/v1"},
         "assignmentEnvelope":{"$ref":"policy-shadow-assignment.v1.schema.json"},
         "analysisPayload":{"$ref":"#/$defs/analysis"},"recordBinding":{"$ref":"#/$defs/recordBinding"}
       },

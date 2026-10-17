@@ -31,8 +31,8 @@ class PolicySnapshotConcurrencyTests(unittest.TestCase):
            "trust_recheck", "high_water", "publication"]
 
     def setUp(self):
-        from serverware import policy_bundle as policy
-        from serverware import control_plane_policy_file_publication as publication
+        from catchplate import policy_bundle as policy
+        from catchplate import control_plane_policy_file_publication as publication
         self.policy = policy
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
@@ -266,7 +266,7 @@ class PolicySnapshotConcurrencyTests(unittest.TestCase):
                     replacement = self.policy.PolicyBundleLoader(self.policy.POLICY_BUNDLE_PATH)
                     changes.enter_context(patch.object(self.policy, "_POLICY_BUNDLE_LOADER", replacement))
                 elif kind == "revoked":
-                    changes.enter_context(patch.dict(os.environ, {"SERVERWARE_POLICY_REVOKED_SIGNING_KEY_IDS": "synthetic-key"}))
+                    changes.enter_context(patch.dict(os.environ, {"CATCHPLATE_POLICY_REVOKED_SIGNING_KEY_IDS": "synthetic-key"}))
                 else:
                     attribute, value = {
                         "path": ("POLICY_BUNDLE_PATH", self.path.with_name("changed.json")),

@@ -49,18 +49,18 @@ from psycopg.types.json import Jsonb
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.native_postgres_results import run_native_fixture
+from catchplate.native_postgres_results import run_native_fixture
 
-from serverware import authority_contract
-from serverware import authority_query_read_work as query_work
-from serverware import authority_revocation_retention as retained_record
-from serverware.authority_store.primary_tree_sql import canonical_json_function_sql, framed_digest_function_sql
-from serverware.authority_store.counted_store_sql import counted_store_ddl
-from serverware.authority_store.counted_hash_sql import counted_hash_functions_sql
-from serverware.authority_store.counted_projection_sql import counted_projection_functions_sql
-from serverware.authority_store.counted_path_sql import counted_path_functions_sql
-from serverware.authority_store.counted_maintenance_sql import counted_maintenance_functions_sql
-from serverware.authority_store.root_transition_sql import (
+from catchplate import authority_contract
+from catchplate import authority_query_read_work as query_work
+from catchplate import authority_revocation_retention as retained_record
+from catchplate.authority_store.primary_tree_sql import canonical_json_function_sql, framed_digest_function_sql
+from catchplate.authority_store.counted_store_sql import counted_store_ddl
+from catchplate.authority_store.counted_hash_sql import counted_hash_functions_sql
+from catchplate.authority_store.counted_projection_sql import counted_projection_functions_sql
+from catchplate.authority_store.counted_path_sql import counted_path_functions_sql
+from catchplate.authority_store.counted_maintenance_sql import counted_maintenance_functions_sql
+from catchplate.authority_store.root_transition_sql import (
     TRANSITION_PROFILE,
     TRANSITION_SCHEMA,
     assert_root_transition_after_sql,
@@ -70,23 +70,23 @@ from serverware.authority_store.root_transition_sql import (
     load_root_transition_sql,
     root_transition_declarations_sql,
 )
-from serverware.authority_store.wire_json_sql import wire_json_function_sql
-from serverware.authority_store.revocation_retained_sql import (
+from catchplate.authority_store.wire_json_sql import wire_json_function_sql
+from catchplate.authority_store.revocation_retained_sql import (
     load_revocation_retained_sql,
     revocation_retained_declarations_sql,
 )
-from serverware.authority_store.revocation_counted_sql import (
+from catchplate.authority_store.revocation_counted_sql import (
     revocation_counted_declarations_sql,
     prepare_revocation_counted_transition_sql,
     lock_and_assert_revocation_counted_before_sql,
     assert_revocation_counted_after_sql,
 )
-from serverware.authority_store.v9_schema_source import (
+from catchplate.authority_store.v9_schema_source import (
     authority_v9_schema_source,
     capability_retention_guard_sql,
     planner_retention_guard_sql,
 )
-from serverware.authority_store.metadata_schema_source import metadata_base_schema_source
+from catchplate.authority_store.metadata_schema_source import metadata_base_schema_source
 from test_webauthn_trust_projection_postgres import local_connection_parameters
 import test_authority_revocation_plan as revocation_oracle
 import test_authority_revocation_retention as retained_oracle
@@ -145,13 +145,13 @@ def production_digest_functions(namespace: str) -> list[str]:
     Never import db.py or replace either implementation with fixture SQL.
     The tree's separate length-framed digest is not the wire-domain function.
     """
-    path = ROOT / "serverware/db.py"
+    path = ROOT / "catchplate/db.py"
     if path.stat().st_size > 16 * 1024 * 1024:
         raise ValueError("database source exceeds component fixture bound")
     source = path.read_text(encoding="utf-8")
     marker = '        conn.execute(\n            f"""\n            CREATE OR REPLACE FUNCTION {guard_namespace}.\n                '
     declarations = []
-    for function_name, delimiter in (("serverware_policy_authority_domain_digest", "serverware_digest"),):
+    for function_name, delimiter in (("catchplate_policy_authority_domain_digest", "catchplate_digest"),):
         start = source.index(marker + function_name + "(")
         closing = f'            ${delimiter}$\n            """\n        )'
         end = source.index(closing, start) + len(closing)
@@ -200,7 +200,7 @@ def production_retained_immutable_sql(
             "policy_authority_webauthn_assertion_evidence",
             "policy_authority_authorization_projections"}:
         raise ValueError("custody fixture immutable target is not source-fixed")
-    path = ROOT / "serverware/db.py"
+    path = ROOT / "catchplate/db.py"
     if path.stat().st_size > 16 * 1024 * 1024:
         raise ValueError("database source exceeds component fixture bound")
     source = path.read_text(encoding="utf-8")
@@ -211,7 +211,7 @@ def production_retained_immutable_sql(
             or ast.literal_eval(declaration[0].value).count(table) != 1):
         raise ValueError("custody table is not in the actual immutable inventory")
     marker = ('        conn.execute(\n            """\n'
-              '            CREATE OR REPLACE FUNCTION serverware_reject_policy_authority_mutation()')
+              '            CREATE OR REPLACE FUNCTION catchplate_reject_policy_authority_mutation()')
     start = source.index(marker)
     end = source.index('            """\n        )', start) + len('            """\n        )')
     function = ast.parse(textwrap.dedent(source[start:end])).body[0].value
@@ -259,7 +259,7 @@ def production_writer_capability_table_sql() -> str:
 
 def production_issuer_transaction_sql() -> str:
     """Extract the real connector's first explicit statement without import."""
-    source_path = ROOT / "serverware/db.py"
+    source_path = ROOT / "catchplate/db.py"
     if source_path.stat().st_size > 16 * 1024 * 1024:
         raise ValueError("issuer connector source exceeds the fixed fixture bound")
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
@@ -284,7 +284,7 @@ def fixture_payload() -> dict:
     # These shapes start after planner admission: the component does not claim
     # this synthetic manifest, row or opaque proof is an actual operation plan.
     key = {"id": "clé-雪😀"}
-    key_digest = digest("serverware.policyAuthorityBusinessKey/v1", b"items", canonical(key))
+    key_digest = digest("catchplate.policyAuthorityBusinessKey/v1", b"items", canonical(key))
     selected = [{"table": "items", "key": key, "keyDigest": key_digest,
                  "present": True, "row": {**key, "value": "caf\u00e9"}, "contractSelector": None}]
     mutations = [{"templateId": "fixture-not-authority", "operation": "UPDATE", "table": "items",
@@ -292,9 +292,9 @@ def fixture_payload() -> dict:
                   "expectedRow": selected[0]["row"], "row": {**key, "value": "apr\u00e8s"}}]
     request_digest = token("request")
     plan = {
-        "schema": "serverware.policyAuthorityMeasuredPlan/v3",
+        "schema": "catchplate.policyAuthorityMeasuredPlan/v3",
         "plannerTransactionId": token("planner"), "operation": OPERATION,
-        "operationId": digest("serverware.policyAuthorityOperation/v2", OPERATION.encode(), request_digest.encode()),
+        "operationId": digest("catchplate.policyAuthorityOperation/v2", OPERATION.encode(), request_digest.encode()),
         "requestDigest": request_digest, "capabilityId": token("capability"),
         "sourceRevision": authority_contract.SOURCE_REVISION,
         "authoritySchemaVersion": authority_contract.SCHEMA_VERSION,
@@ -302,15 +302,15 @@ def fixture_payload() -> dict:
         "operationManifestDigest": authority_contract.OPERATION_MANIFEST_DIGEST,
         "handlerContractDigest": authority_contract.handler_contract_digest(OPERATION),
         "queryManifestDigest": token("manifest"),
-        "selectedBusinessRowsDigest": digest("serverware.policyAuthoritySelectedBusinessRows/v1", canonical(selected)),
-        "mutationPlanDigest": digest("serverware.policyAuthorityMutationPlan/v3", canonical(mutations)),
+        "selectedBusinessRowsDigest": digest("catchplate.policyAuthoritySelectedBusinessRows/v1", canonical(selected)),
+        "mutationPlanDigest": digest("catchplate.policyAuthorityMutationPlan/v3", canonical(mutations)),
         "workUnits": 1, "authorityRootSetBeforeDigest": "filled-by-seal",
         "authorizationProjectionDigest": token("projection"), "authoritySnapshotDigest": "filled-by-seal",
         "deadlineMonotonicNs": 1000000000000, "deadlineEpochNs": 2000000000000,
         "fence": 1, "rootTransitionDigest": "filled-by-seal",
     }
     return {
-        "schema": "serverware.policyAuthorityPlannerResponse/v3", "measuredPlan": plan,
+        "schema": "catchplate.policyAuthorityPlannerResponse/v3", "measuredPlan": plan,
         "typedRequest": {"component": "requête-雪😀", "control": "\n\t\x01"}, "selectedBusinessRows": selected,
         "mutationPlan": mutations, "queryMultiproofs": [{"component": "opaque before proof"}],
         "queryMultiproofsDigest": token("proofs"), "plannerTrace": {"component": "trace"},
@@ -333,13 +333,13 @@ def seal(payload: dict) -> tuple[dict, dict, dict]:
     payload = copy.deepcopy(payload)
     plan = payload["measuredPlan"]
     transition = payload["rootTransition"]
-    payload["expectedResultDigest"] = digest("serverware.policyAuthorityControlledWriterResult/v2",
+    payload["expectedResultDigest"] = digest("catchplate.policyAuthorityControlledWriterResult/v2",
                                            canonical(payload["expectedResult"]))
-    plan["authorizationProjectionDigest"] = digest("serverware.policyAuthorityAuthorizationProjection/v1",
+    plan["authorizationProjectionDigest"] = digest("catchplate.policyAuthorityAuthorizationProjection/v1",
                                                    canonical(payload["authorizationProjection"]))
     plan["rootTransitionDigest"] = digest(TRANSITION_SCHEMA, canonical(transition))
-    plan["authorityRootSetBeforeDigest"] = digest("serverware.policyAuthorityRootSet/v1", canonical(transition["businessBeforeRoots"]))
-    plan["authoritySnapshotDigest"] = digest("serverware.policyAuthoritySnapshot/v3", *[
+    plan["authorityRootSetBeforeDigest"] = digest("catchplate.policyAuthorityRootSet/v1", canonical(transition["businessBeforeRoots"]))
+    plan["authoritySnapshotDigest"] = digest("catchplate.policyAuthoritySnapshot/v3", *[
         plan[field].encode("ascii") for field in (
             "operation", "operationId", "requestDigest", "queryManifestDigest", "authorityRootSetBeforeDigest",
             "authorizationProjectionDigest", "selectedBusinessRowsDigest", "mutationPlanDigest", "rootTransitionDigest")])
@@ -384,7 +384,7 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.schema = "serverware_root_transition_" + uuid.uuid4().hex
+        cls.schema = "catchplate_root_transition_" + uuid.uuid4().hex
         cls.namespace = '"' + cls.schema + '"'
         with cls.connection() as connection:
             if connection.execute("SELECT inet_server_addr()").fetchone() != (None,):
@@ -445,11 +445,11 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
                         pg_catalog.encode(request_payload, 'base64'), E'+/=\\n\\r', '-_');
                     SELECT supplied_projection_json AS projection_json INTO authorization_projection;
                     {assert_root_transition_payload_sql(cls.namespace)}
-                    SELECT {cls.namespace}.serverware_policy_authority_wire_json(pg_catalog.jsonb_agg(
+                    SELECT {cls.namespace}.catchplate_policy_authority_wire_json(pg_catalog.jsonb_agg(
                         pg_catalog.jsonb_build_object('table',table_name,'rootRevision',root_revision,'rootDigest',root_digest,'leafCount',leaf_count)
                         ORDER BY table_name COLLATE "C")) INTO root_set_before_json
                     FROM {cls.namespace}.policy_authority_authenticated_table_roots WHERE table_name='items';
-                    SELECT {cls.namespace}.serverware_policy_authority_wire_json(pg_catalog.jsonb_agg(
+                    SELECT {cls.namespace}.catchplate_policy_authority_wire_json(pg_catalog.jsonb_agg(
                         pg_catalog.jsonb_build_object('table',table_name,'rootRevision',root_revision,'rootDigest',root_digest,'leafCount',leaf_count)
                         ORDER BY table_name COLLATE "C")) INTO authorization_root_set_json
                     FROM {cls.namespace}.policy_authority_authenticated_table_roots WHERE table_name='auth_items';
@@ -460,12 +460,12 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
                         root_digest=changed.value->>'rootDigest', leaf_count=(changed.value->>'leafCount')::bigint
                     FROM pg_catalog.jsonb_array_elements(actual_after) AS changed(value)
                     WHERE stored.table_name=changed.value->>'table';
-                    SELECT {cls.namespace}.serverware_policy_authority_wire_json(pg_catalog.jsonb_agg(
+                    SELECT {cls.namespace}.catchplate_policy_authority_wire_json(pg_catalog.jsonb_agg(
                         pg_catalog.jsonb_build_object('table',table_name,'rootRevision',root_revision,'rootDigest',root_digest,'leafCount',leaf_count)
                         ORDER BY table_name COLLATE "C")) INTO root_set_after_json
                     FROM {cls.namespace}.policy_authority_authenticated_table_roots WHERE table_name='items';
-                    root_set_after_digest := {cls.namespace}.serverware_policy_authority_domain_digest(
-                        'serverware.policyAuthorityRootSet/v1', root_set_after_json);
+                    root_set_after_digest := {cls.namespace}.catchplate_policy_authority_domain_digest(
+                        'catchplate.policyAuthorityRootSet/v1', root_set_after_json);
                     {assert_root_transition_after_sql(cls.namespace)}
                     INSERT INTO {cls.namespace}.publications VALUES (1);
                     RETURN root_set_after_digest;
@@ -541,7 +541,7 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
     def test_real_shared_sql_accepts_ascii_plan_with_escaped_unicode(self) -> None:
         raw = base64.urlsafe_b64decode(self.planner["exact_plan_base64url"] + "==")
         self.assertIn(b"caf\\u00e9", raw)
-        self.assertEqual(self.run_component(), digest("serverware.policyAuthorityRootSet/v1",
+        self.assertEqual(self.run_component(), digest("catchplate.policyAuthorityRootSet/v1",
                                                      canonical(self.payload["rootTransition"]["businessAfterRoots"])))
         self.assertEqual(self.state()[0], 1)
         self.assertEqual(self.state()[2], [(1,)])
@@ -610,24 +610,24 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
         with self.connection() as connection:
             actual = connection.execute(f"""
                 SELECT
-                    {self.namespace}.serverware_policy_authority_domain_digest(
-                        'serverware.policyAuthorityBusinessKey/v1', 'items',
-                        {self.namespace}.serverware_policy_authority_wire_json(%s::jsonb)),
-                    {self.namespace}.serverware_policy_authority_domain_digest(
-                        'serverware.policyAuthorityAuthorizationRow/v1', 'items',
-                        {self.namespace}.serverware_policy_authority_wire_json(%s::jsonb), 'present',
-                        {self.namespace}.serverware_policy_authority_wire_json(%s::jsonb)),
-                    {self.namespace}.serverware_policy_authority_domain_digest(
-                        'serverware.policyAuthorityAuthorizationProjection/v1',
-                        {self.namespace}.serverware_policy_authority_wire_json(%s::jsonb)),
-                    {self.namespace}.serverware_policy_authority_domain_digest(
-                        'serverware.policyAuthorityControlledWriterResult/v2',
-                        {self.namespace}.serverware_policy_authority_wire_json(%s::jsonb))
+                    {self.namespace}.catchplate_policy_authority_domain_digest(
+                        'catchplate.policyAuthorityBusinessKey/v1', 'items',
+                        {self.namespace}.catchplate_policy_authority_wire_json(%s::jsonb)),
+                    {self.namespace}.catchplate_policy_authority_domain_digest(
+                        'catchplate.policyAuthorityAuthorizationRow/v1', 'items',
+                        {self.namespace}.catchplate_policy_authority_wire_json(%s::jsonb), 'present',
+                        {self.namespace}.catchplate_policy_authority_wire_json(%s::jsonb)),
+                    {self.namespace}.catchplate_policy_authority_domain_digest(
+                        'catchplate.policyAuthorityAuthorizationProjection/v1',
+                        {self.namespace}.catchplate_policy_authority_wire_json(%s::jsonb)),
+                    {self.namespace}.catchplate_policy_authority_domain_digest(
+                        'catchplate.policyAuthorityControlledWriterResult/v2',
+                        {self.namespace}.catchplate_policy_authority_wire_json(%s::jsonb))
                 """, (Jsonb(key), Jsonb(key), Jsonb(row), Jsonb(self.payload["authorizationProjection"]),
                        Jsonb(self.payload["expectedResult"]))).fetchone()
         self.assertEqual(actual, (
             selected["keyDigest"],
-            digest("serverware.policyAuthorityAuthorizationRow/v1", b"items", canonical(key), b"present", canonical(row)),
+            digest("catchplate.policyAuthorityAuthorizationRow/v1", b"items", canonical(key), b"present", canonical(row)),
             self.payload["measuredPlan"]["authorizationProjectionDigest"], self.payload["expectedResultDigest"],
         ))
         # CredentialBinding/v1 is a different, historical length-domain
@@ -639,24 +639,24 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
             "attestation_leaf_sha256": None, "attestation_root_sha256": None,
             "attestation_trust_bundle_digest": token("trust"),
             "attestation_trust_bundle_sequence": 3, "revoked_at": None}
-        domain = "serverware.policyAuthorityWebAuthnCredentialBinding/v1"
+        domain = "catchplate.policyAuthorityWebAuthnCredentialBinding/v1"
         encoded_domain, encoded_row = domain.encode("ascii"), canonical(credential)
         expected = "sha256:" + hashlib.sha256(len(encoded_domain).to_bytes(8, "big") + encoded_domain
             + len(encoded_row).to_bytes(8, "big") + encoded_row).hexdigest()
         self.assertNotEqual(expected, digest(domain, encoded_row))
         with self.connection() as connection:
-            actual = connection.execute(f"SELECT {self.namespace}.serverware_policy_authority_framed_digest("
-                f"%s, {self.namespace}.serverware_policy_authority_wire_json(%s::jsonb))",
+            actual = connection.execute(f"SELECT {self.namespace}.catchplate_policy_authority_framed_digest("
+                f"%s, {self.namespace}.catchplate_policy_authority_wire_json(%s::jsonb))",
                 (domain, Jsonb(credential))).fetchone()
         self.assertEqual(actual, (expected,))
-        for path, helper in (("serverware/authority_service.py", "_framed_digest"),
-                             ("serverware/authority_store/executor_v9.py", "serverware_policy_authority_framed_digest"),
-                             ("serverware/db.py", "serverware_policy_authority_framed_digest")):
+        for path, helper in (("catchplate/authority_service.py", "_framed_digest"),
+                             ("catchplate/authority_store/executor_v9.py", "catchplate_policy_authority_framed_digest"),
+                             ("catchplate/db.py", "catchplate_policy_authority_framed_digest")):
             source_path = ROOT / path
             self.assertLessEqual(source_path.stat().st_size, 16 * 1024 * 1024)
             source = source_path.read_text(encoding="utf-8")
             self.assertRegex(source, re.escape(helper) + r"\(\s*['\"]" + re.escape(domain) + r"['\"]")
-            self.assertNotRegex(source, r"(?:_domain_digest|serverware_policy_authority_domain_digest)\(\s*['\"]"
+            self.assertNotRegex(source, r"(?:_domain_digest|catchplate_policy_authority_domain_digest)\(\s*['\"]"
                 + re.escape(domain) + r"['\"]")
 
     def test_persisted_tree_utf8_serializer_remains_distinct_and_does_not_normalize(self) -> None:
@@ -664,8 +664,8 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
         with self.connection() as connection:
             for value in (composed, decomposed):
                 actual = connection.execute(f"SELECT "
-                    f"{self.namespace}.serverware_policy_authority_canonical_json(%s::jsonb), "
-                    f"{self.namespace}.serverware_policy_authority_wire_json(%s::jsonb)",
+                    f"{self.namespace}.catchplate_policy_authority_canonical_json(%s::jsonb), "
+                    f"{self.namespace}.catchplate_policy_authority_wire_json(%s::jsonb)",
                     (Jsonb(value), Jsonb(value))).fetchone()
                 self.assertEqual(actual, (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
                                           canonical(value).decode("ascii")))
@@ -709,7 +709,7 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
     def test_old_missing_and_extra_plan_fields_are_denied(self) -> None:
         for changed in ("old", "missing", "extra"):
             self.payload, self.planner, self.capability = seal(fixture_payload())
-            if changed == "old": self.payload["schema"] = "serverware.policyAuthorityPlannerResponse/v2"
+            if changed == "old": self.payload["schema"] = "catchplate.policyAuthorityPlannerResponse/v2"
             elif changed == "missing": del self.payload["rootTransition"]
             else: self.payload["unexpected"] = None
             set_plan_bytes(self.planner, canonical(self.payload))
@@ -795,7 +795,7 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
     def test_historical_replay_ignores_later_current_heads(self) -> None:
         receipt = {"authoritySnapshotDigest": self.payload["measuredPlan"]["authoritySnapshotDigest"],
                    "authorityRootSetBeforeDigest": self.payload["measuredPlan"]["authorityRootSetBeforeDigest"],
-                   "authorityRootSetAfterDigest": digest("serverware.policyAuthorityRootSet/v1", canonical(self.payload["rootTransition"]["businessAfterRoots"]))}
+                   "authorityRootSetAfterDigest": digest("catchplate.policyAuthorityRootSet/v1", canonical(self.payload["rootTransition"]["businessAfterRoots"]))}
         self.store(receipt)
         with self.connection() as connection:
             connection.execute(f"UPDATE {self.namespace}.policy_authority_authenticated_table_roots SET root_revision=root_revision+20")
@@ -820,33 +820,33 @@ class AuthorityRootTransitionPostgresTests(unittest.TestCase):
     def test_ninth_digest_frame_is_reserved_for_snapshot_v3(self) -> None:
         with self.connection() as connection:
             frames = ["frame"] * 9
-            actual = connection.execute(f"SELECT {self.namespace}.serverware_policy_authority_domain_digest(%s,VARIADIC %s::text[])",
-                                        ("serverware.policyAuthoritySnapshot/v3", frames)).fetchone()[0]
-            self.assertEqual(actual, digest("serverware.policyAuthoritySnapshot/v3", *[b"frame"] * 9))
+            actual = connection.execute(f"SELECT {self.namespace}.catchplate_policy_authority_domain_digest(%s,VARIADIC %s::text[])",
+                                        ("catchplate.policyAuthoritySnapshot/v3", frames)).fetchone()[0]
+            self.assertEqual(actual, digest("catchplate.policyAuthoritySnapshot/v3", *[b"frame"] * 9))
             with self.assertRaisesRegex(psycopg.errors.RaiseException, "framing is outside"):
-                connection.execute(f"SELECT {self.namespace}.serverware_policy_authority_domain_digest(%s,VARIADIC %s::text[])",
-                                   ("serverware.policyAuthoritySnapshot/v2", frames))
+                connection.execute(f"SELECT {self.namespace}.catchplate_policy_authority_domain_digest(%s,VARIADIC %s::text[])",
+                                   ("catchplate.policyAuthoritySnapshot/v2", frames))
             for count in (8, 10):
                 with self.assertRaisesRegex(psycopg.errors.RaiseException, "framing is outside"):
-                    connection.execute(f"SELECT {self.namespace}.serverware_policy_authority_domain_digest(%s,VARIADIC %s::text[])",
-                                       ("serverware.policyAuthoritySnapshot/v3", ["frame"] * count))
-            previous = connection.execute(f"SELECT {self.namespace}.serverware_policy_authority_domain_digest(%s,VARIADIC %s::text[])",
-                                          ("serverware.policyAuthoritySnapshot/v2", ["frame"] * 8)).fetchone()[0]
-            self.assertEqual(previous, digest("serverware.policyAuthoritySnapshot/v2", *[b"frame"] * 8))
+                    connection.execute(f"SELECT {self.namespace}.catchplate_policy_authority_domain_digest(%s,VARIADIC %s::text[])",
+                                       ("catchplate.policyAuthoritySnapshot/v3", ["frame"] * count))
+            previous = connection.execute(f"SELECT {self.namespace}.catchplate_policy_authority_domain_digest(%s,VARIADIC %s::text[])",
+                                          ("catchplate.policyAuthoritySnapshot/v2", ["frame"] * 8)).fetchone()[0]
+            self.assertEqual(previous, digest("catchplate.policyAuthoritySnapshot/v2", *[b"frame"] * 8))
 
     def test_source_wiring_keeps_load_before_replay_and_after_guard_before_publication(self) -> None:
         # Source-only ordering, not a fabricated full executor invocation.
-        source = (ROOT / "serverware/authority_store/executor_v9.py").read_text(encoding="utf-8")
+        source = (ROOT / "catchplate/authority_store/executor_v9.py").read_text(encoding="utf-8")
         start = source.index("        CREATE OR REPLACE FUNCTION {namespace}.\n"
-                             "            serverware_policy_authority_execute_v9(")
-        end = source.index("$serverware_execute_v9$;", start)
+                             "            catchplate_policy_authority_execute_v9(")
+        end = source.index("$catchplate_execute_v9$;", start)
         body = source[start:end]
         self.assertLess(body.index("{load_root_transition_sql(namespace)}"), body.index("IF capability.status = 'committed'"))
         self.assertLess(body.index("{assert_root_transition_replay_sql(namespace)}"), body.index("RETURN execution_envelope.terminal_receipt_json"))
         self.assertLess(body.index("{assert_root_transition_after_sql(namespace)}"), body.index("receipt_value := pg_catalog.jsonb_build_object"))
         self.assertLess(body.index("{assert_root_transition_payload_sql(namespace)}"), body.index("computed_result_digest :="))
-        self.assertNotIn("serverware_policy_authority_canonical_json", source)
-        self.assertIn("serverware_policy_authority_wire_json", source)
+        self.assertNotIn("catchplate_policy_authority_canonical_json", source)
+        self.assertIn("catchplate_policy_authority_wire_json", source)
         self.assertNotIn("canonical_json(rt_payload)", body)
         loaded = load_root_transition_sql('"fixture"')
         protocol_guard = loaded.index("IF planner.plan_protocol IS DISTINCT FROM 'v3'")
@@ -888,7 +888,7 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
         self.connection = AuthorityRootTransitionPostgresTests.connection()
         self.addCleanup(self.connection.close)
         self.assertEqual(self.connection.execute("SELECT inet_server_addr()").fetchone(), (None,))
-        self.schema = "serverware_retained_" + uuid.uuid4().hex
+        self.schema = "catchplate_retained_" + uuid.uuid4().hex
         self.namespace = '"' + self.schema + '"'
         self.connection.execute("BEGIN ISOLATION LEVEL SERIALIZABLE")
         self.addCleanup(self.rollback_owned_schema)
@@ -1108,8 +1108,8 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
             "FROM pg_catalog.pg_constraint WHERE conrelid = %s::regclass "
             "AND contype = 'f' ORDER BY conname", (self.namespace + "." + self.REQUEST,)).fetchall()
         self.assertEqual(constraints, [
-            ("serverware_writer_request_execution_fk", True, True, "a", "a"),
-            ("serverware_writer_request_plan_fk", True, True, "a", "a"),
+            ("catchplate_writer_request_execution_fk", True, True, "a", "a"),
+            ("catchplate_writer_request_plan_fk", True, True, "a", "a"),
         ])
         for columns in (("intent_envelope_id",), ("relay_envelope_id",), ("execution_envelope_id",)):
             self.unique_constraint(self.REQUEST, columns)
@@ -1131,9 +1131,9 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
         self.insert_request_parents(other)
         self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
         for field, value, constraint in (
-                ("retained_record_digest", token("missing-record"), "serverware_writer_request_plan_fk"),
-                ("execution_envelope_id", token("missing-execution"), "serverware_writer_request_execution_fk"),
-                ("execution_envelope_id", other[2]["envelope_id"], "serverware_writer_request_execution_fk")):
+                ("retained_record_digest", token("missing-record"), "catchplate_writer_request_plan_fk"),
+                ("execution_envelope_id", token("missing-execution"), "catchplate_writer_request_execution_fk"),
+                ("execution_envelope_id", other[2]["envelope_id"], "catchplate_writer_request_execution_fk")):
             with self.subTest(request_fk=field, value=value), self.assertRaises(psycopg.errors.ForeignKeyViolation) as caught:
                 with self.connection.transaction():
                     self.connection.execute("SET CONSTRAINTS ALL DEFERRED")
@@ -1226,7 +1226,7 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
             "SELECT conname, condeferrable, condeferred, confupdtype, confdeltype "
             "FROM pg_catalog.pg_constraint WHERE conrelid = %s::regclass AND contype = 'f'",
             (self.namespace + "." + self.ACK,)).fetchall()
-        self.assertEqual(constraints, [("serverware_writer_ack_request_fk", True, True, "a", "a")])
+        self.assertEqual(constraints, [("catchplate_writer_ack_request_fk", True, True, "a", "a")])
         self.unique_constraint(self.ACK, ("ack_envelope_id",))
         self.unique_constraint(self.ACK, ("intent_envelope_id",))
         self.unique_constraint(self.REQUEST, ("intent_envelope_id", "configuration_digest",
@@ -1251,7 +1251,7 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
                     self.connection.execute("SET CONSTRAINTS ALL DEFERRED")
                     self.insert(self.ACK, {**ack, field: value})
                     self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
-            self.assertEqual(caught.exception.diag.constraint_name, "serverware_writer_ack_request_fk")
+            self.assertEqual(caught.exception.diag.constraint_name, "catchplate_writer_ack_request_fk")
             self.assertEqual(self.ack_rows(), ())
         # A complete but differently scoped second request cannot be spliced
         # into an ACK for the first scope, even though its intent ID exists.
@@ -1353,8 +1353,8 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
             "AND contype = 'f' ORDER BY conname",
             (self.namespace + "." + self.PARENT, self.namespace + "." + self.CHILD)).fetchall()
         self.assertEqual(constraints, [
-            ("serverware_planner_retained_record_fk", True, True, "a", "a"),
-            ("serverware_revocation_retained_parent_fk", True, True, "a", "a"),
+            ("catchplate_planner_retained_record_fk", True, True, "a", "a"),
+            ("catchplate_revocation_retained_parent_fk", True, True, "a", "a"),
         ])
         reserved, planned, child = self.records()
         self.insert(self.PARENT, reserved)
@@ -1377,13 +1377,13 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
         self.assert_ack_deferred_contract()
 
     def test_incomplete_or_mismatched_pairs_roll_back_at_deferred_boundary(self):
-        all_names = {"serverware_planner_retained_record_fk", "serverware_revocation_retained_parent_fk"}
+        all_names = {"catchplate_planner_retained_record_fk", "catchplate_revocation_retained_parent_fk"}
         for case, names in (
-                ("parent-only", {"serverware_planner_retained_record_fk"}),
-                ("child-only", {"serverware_revocation_retained_parent_fk"}),
-                ("reserved-parent", {"serverware_revocation_retained_parent_fk"}),
+                ("parent-only", {"catchplate_planner_retained_record_fk"}),
+                ("child-only", {"catchplate_revocation_retained_parent_fk"}),
+                ("reserved-parent", {"catchplate_revocation_retained_parent_fk"}),
                 ("wrong-digest", all_names), ("wrong-id", all_names),
-                ("legacy-parent", {"serverware_revocation_retained_parent_fk"})):
+                ("legacy-parent", {"catchplate_revocation_retained_parent_fk"})):
             with self.subTest(case=case):
                 reserved, planned, child = self.records(case)
                 with self.assertRaises(psycopg.errors.ForeignKeyViolation) as caught:
@@ -1481,7 +1481,7 @@ class AuthorityRevocationRetentionPostgresTests(unittest.TestCase):
             with self.connection.transaction():
                 self.connection.execute(sql.SQL("DELETE FROM {} WHERE planner_transaction_id = %s").format(
                     sql.Identifier(self.schema, self.PARENT)), (planned["planner_transaction_id"],))
-        self.assertEqual(caught.exception.diag.constraint_name, "serverware_revocation_retained_parent_fk")
+        self.assertEqual(caught.exception.diag.constraint_name, "catchplate_revocation_retained_parent_fk")
         self.assertEqual(self.snapshot(), baseline)
         self.assert_request_immutable()
         self.assert_ack_immutable()
@@ -1694,7 +1694,7 @@ class AuthorityRevocationRetainedBindingPostgresTests(unittest.TestCase):
             evaluation_context_bytes=cls.context_bytes,
             work=query_work._ValidationWork(query_work.QueryReadValidationLimits()), **expectations)
         if (actual.payload_bytes != canonical(cls.fixture.payload) or actual.header != cls.header
-                or actual.record_digest != digest("serverware.policyAuthorityRevocationRetainedPlan/v1",
+                or actual.record_digest != digest("catchplate.policyAuthorityRevocationRetainedPlan/v1",
                                                    canonical(cls.header))):
             raise AssertionError("genuine fixture replay differs from independent retained commitments")
 
@@ -1702,7 +1702,7 @@ class AuthorityRevocationRetainedBindingPostgresTests(unittest.TestCase):
         self.connection = AuthorityRootTransitionPostgresTests.connection()
         self.addCleanup(self.connection.close)
         self.assertEqual(self.connection.execute("SELECT inet_server_addr()").fetchone(), (None,))
-        self.schema = "serverware_revocation_binding_" + uuid.uuid4().hex
+        self.schema = "catchplate_revocation_binding_" + uuid.uuid4().hex
         self.namespace = '"' + self.schema + '"'
         self.connection.execute("BEGIN ISOLATION LEVEL SERIALIZABLE")
         self.addCleanup(self.rollback_owned_schema)
@@ -1775,7 +1775,7 @@ class AuthorityRevocationRetainedBindingPostgresTests(unittest.TestCase):
             "contextDigest": child["evaluation_context_bytes_digest"],
             "contextByteCount": child["evaluation_context_byte_count"]}
         parent["retained_record_digest"] = child["retained_record_digest"] = digest(
-            "serverware.policyAuthorityRevocationRetainedPlan/v1", canonical(header))
+            "catchplate.policyAuthorityRevocationRetainedPlan/v1", canonical(header))
 
     @contextmanager
     def inserted(self, parent, child):
@@ -1819,13 +1819,13 @@ class AuthorityRevocationRetainedBindingPostgresTests(unittest.TestCase):
             self.connection.execute("SET CONSTRAINTS ALL IMMEDIATE")
             result = self.bind(parent)
             measured = self.fixture.payload["measuredPlan"]
-            snapshot = digest("serverware.policyAuthoritySnapshot/v4", *(measured[name].encode("ascii")
+            snapshot = digest("catchplate.policyAuthoritySnapshot/v4", *(measured[name].encode("ascii")
                 for name in ("operation", "operationId", "requestDigest", "queryManifestDigest",
                     "authorityRootSetBeforeDigest", "authorizationProjectionDigest",
                     "selectedBusinessRowsDigest", "mutationPlanDigest", "rootTransitionDigest")))
             self.assertEqual(result, (self.fixture.payload, measured, self.context,
                 self.fixture.payload["rootTransition"], self.fixture.payload["rootTransition"]["primaryTransition"],
-                digest("serverware.policyAuthorityRevocationRetainedPlan/v1", canonical(self.header)), snapshot,
+                digest("catchplate.policyAuthorityRevocationRetainedPlan/v1", canonical(self.header)), snapshot,
                 canonical(self.fixture.payload), self.envelope_bytes, self.context_bytes))
             self.assertEqual(snapshot, measured["authoritySnapshotDigest"])
             # The pure binder reads actual custody rows and never mutates them.
@@ -1948,7 +1948,7 @@ class AuthorityRevocationRetainedBindingPostgresTests(unittest.TestCase):
                 with self.subTest(document=document, token=token_value):
                     self.denied(parent, child, message=message)
         parent, child = self.records()
-        changed = {**self.fixture.envelope, "schema": "serverware.signedPolicyAuthorityMeasuredPlan/v3"}
+        changed = {**self.fixture.envelope, "schema": "catchplate.signedPolicyAuthorityMeasuredPlan/v3"}
         self.reanchor(parent, child, envelope=canonical(changed))
         self.denied(parent, child)
 
@@ -1984,7 +1984,7 @@ class AuthorityRevocationRetainedBindingPostgresTests(unittest.TestCase):
         # coherent parent/sidecar relational digest values.
         parent, child = self.records()
         parent["retained_record_digest"] = child["retained_record_digest"] = digest(
-            "serverware.policyAuthorityRevocationRetainedPlan/v0", canonical(self.header))
+            "catchplate.policyAuthorityRevocationRetainedPlan/v0", canonical(self.header))
         self.denied(parent, child)
 
     def test_mixed_transition_and_nine_snapshot_frames_keep_their_v4_domains(self):
@@ -1997,8 +1997,8 @@ class AuthorityRevocationRetainedBindingPostgresTests(unittest.TestCase):
         fields = ("operation", "operationId", "requestDigest", "queryManifestDigest",
             "authorityRootSetBeforeDigest", "authorizationProjectionDigest",
             "selectedBusinessRowsDigest", "mutationPlanDigest", "rootTransitionDigest")
-        for domain, count in (("serverware.policyAuthoritySnapshot/v3", 9),
-                               ("serverware.policyAuthoritySnapshot/v4", 8)):
+        for domain, count in (("catchplate.policyAuthoritySnapshot/v3", 9),
+                               ("catchplate.policyAuthoritySnapshot/v4", 8)):
             payload = copy.deepcopy(self.fixture.payload)
             measured = payload["measuredPlan"]
             measured["authoritySnapshotDigest"] = digest(domain,
@@ -2011,8 +2011,8 @@ class AuthorityRevocationRetainedBindingPostgresTests(unittest.TestCase):
         with self.assertRaises(psycopg.Error) as caught:
             with self.connection.transaction():
                 self.connection.execute(sql.SQL("SELECT {}(%s, VARIADIC %s::text[])").format(
-                    sql.Identifier(self.schema, "serverware_policy_authority_domain_digest")),
-                    ("serverware.policyAuthoritySnapshot/v4", ["x"] * 9))
+                    sql.Identifier(self.schema, "catchplate_policy_authority_domain_digest")),
+                    ("catchplate.policyAuthoritySnapshot/v4", ["x"] * 9))
         self.assertEqual(caught.exception.sqlstate, "P0001")
         self.assertRegex(str(caught.exception), "digest framing is outside its fixed bound")
 
@@ -2146,7 +2146,7 @@ class AuthorityRevocationCountedTransitionPostgresTests(unittest.TestCase):
                     IF component_mutation->>'table' IN ('webauthn_credentials', 'webauthn_challenges',
                             'oidc_browser_sessions', 'approval_grants', 'control_plane_approvals',
                             'webauthn_trust_publications') THEN
-                        PERFORM {self.namespace}.serverware_policy_authority_counted_apply_event(
+                        PERFORM {self.namespace}.catchplate_policy_authority_counted_apply_event(
                             component_mutation->>'table', component_mutation->>'operation',
                             NULLIF(component_mutation->'expectedRow', 'null'::jsonb),
                             NULLIF(component_mutation->'row', 'null'::jsonb));
@@ -2536,7 +2536,7 @@ class AuthorityIssuerTransactionPostgresTests(unittest.TestCase):
         self.assertEqual(self.connection.info.transaction_status, psycopg.pq.TransactionStatus.INTRANS)
 
     def create_owned_table(self):
-        self.schema = "serverware_issuer_transaction_" + uuid.uuid4().hex
+        self.schema = "catchplate_issuer_transaction_" + uuid.uuid4().hex
         self.connection.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(self.schema)))
         self.connection.execute(sql.SQL("CREATE TABLE {} (id bigint PRIMARY KEY)").format(
             sql.Identifier(self.schema, "fixture")))
@@ -2726,8 +2726,8 @@ class AuthorityRevocationCapabilityCustodyPostgresTests(unittest.TestCase):
             "AND contype = 'f' ORDER BY conname",
             (self.namespace + "." + self.CAPABILITY, self.namespace + "." + self.SIDECAR)).fetchall()
         self.assertEqual(constraints, [(name, True, True, "a", "a") for name in (
-            "serverware_revocation_capability_envelope_fk", "serverware_revocation_capability_parent_fk",
-            "serverware_revocation_capability_plan_fk", "serverware_writer_capability_retained_fk")])
+            "catchplate_revocation_capability_envelope_fk", "catchplate_revocation_capability_parent_fk",
+            "catchplate_revocation_capability_plan_fk", "catchplate_writer_capability_retained_fk")])
         for case in ("missing-parent", "missing-sidecar", "missing-envelope", "wrong-plan",
                      "wrong-capability", "wrong-record", "wrong-transaction", "wrong-execution"):
             rows = self.records(case)

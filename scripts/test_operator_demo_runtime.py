@@ -29,23 +29,23 @@ class OperatorDemoRuntimeTests(unittest.TestCase):
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             self.port = listener.getsockname()[1]
-        self.environment = {key: value for key, value in os.environ.items() if not key.startswith("SERVERWARE_")}
+        self.environment = {key: value for key, value in os.environ.items() if not key.startswith("CATCHPLATE_")}
         self.origin = f"http://localhost:{self.port}"
-        self.environment.update(PYTHONDONTWRITEBYTECODE="1", SERVERWARE_OPERATOR_DEMO="1",
-            SERVERWARE_DATA_DIR=str(self.directory / "data"), SERVERWARE_WEB_HOST="127.0.0.1",
-            SERVERWARE_WEB_PORT=str(self.port), SERVERWARE_PUBLIC_URL=self.origin,
-            SERVERWARE_OPERATOR_DEMO_UPSTREAMS='["https://api.example.com"]',
-            SERVERWARE_OPERATOR_DEMO_PROXY_URL="https://proxy.example.com:443",
-            SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED="1")
+        self.environment.update(PYTHONDONTWRITEBYTECODE="1", CATCHPLATE_OPERATOR_DEMO="1",
+            CATCHPLATE_DATA_DIR=str(self.directory / "data"), CATCHPLATE_WEB_HOST="127.0.0.1",
+            CATCHPLATE_WEB_PORT=str(self.port), CATCHPLATE_PUBLIC_URL=self.origin,
+            CATCHPLATE_OPERATOR_DEMO_UPSTREAMS='["https://api.example.com"]',
+            CATCHPLATE_OPERATOR_DEMO_PROXY_URL="https://proxy.example.com:443",
+            CATCHPLATE_DIRECT_CA_DOWNLOAD_ENABLED="1")
         for name in TOKEN_NAMES:
-            self.environment["SERVERWARE_" + name] = secrets.token_urlsafe(32)
-        self.admin = self.environment["SERVERWARE_ADMIN_TOKEN"]
+            self.environment["CATCHPLATE_" + name] = secrets.token_urlsafe(32)
+        self.admin = self.environment["CATCHPLATE_ADMIN_TOKEN"]
         self.provider_secret = secrets.token_urlsafe(32)
 
     def request(self, method, path, *, body=None, auth=True, origin=None):
         headers = {"Connection": "close"}
         if auth:
-            headers["X-Serverware-Admin-Token"] = self.admin
+            headers["X-Catchplate-Admin-Token"] = self.admin
         if origin is not None:
             headers["Origin"] = origin
         if body is not None:
@@ -65,7 +65,7 @@ class OperatorDemoRuntimeTests(unittest.TestCase):
     @contextmanager
     def runner(self):
         with tempfile.TemporaryFile(dir=self.directory) as log:
-            process = subprocess.Popen([sys.executable, "-B", "-m", "serverware.operator_demo_runner"],
+            process = subprocess.Popen([sys.executable, "-B", "-m", "catchplate.operator_demo_runner"],
                 cwd=ROOT, env=self.environment, stdout=log, stderr=subprocess.STDOUT)
             try:
                 deadline = time.monotonic() + 35
@@ -87,7 +87,7 @@ class OperatorDemoRuntimeTests(unittest.TestCase):
                 log.seek(max(0, log.tell() - 16000))
                 diagnostic = log.read().decode(errors="replace")
                 for name in TOKEN_NAMES:
-                    diagnostic = diagnostic.replace(self.environment["SERVERWARE_" + name], "[test token]")
+                    diagnostic = diagnostic.replace(self.environment["CATCHPLATE_" + name], "[test token]")
                 diagnostic = diagnostic.replace(self.provider_secret, "[test provider secret]")
                 for token in getattr(self, "_private_client_tokens", ()):
                     diagnostic = diagnostic.replace(token, "[test client token]")
@@ -147,7 +147,7 @@ class OperatorDemoRuntimeTests(unittest.TestCase):
                 code, _, _ = self.request("GET", path, auth=False)
                 self.assertEqual(code, 401)
             initial = catalog()
-            self.assertEqual(initial["schema"], "serverware.operatorCatalog/v1")
+            self.assertEqual(initial["schema"], "catchplate.operatorCatalog/v1")
             self.assertEqual(initial["mode"], "operator-development")
             for key in collections:
                 self.assertEqual(initial[key], [])

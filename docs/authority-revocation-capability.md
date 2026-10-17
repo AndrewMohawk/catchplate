@@ -49,19 +49,19 @@ same capability would create a circular dependency.
 
 ## Wire contracts
 
-[`authority_revocation_capability.py`](../serverware/authority_revocation_capability.py)
+[`authority_revocation_capability.py`](../catchplate/authority_revocation_capability.py)
 defines a closed five-field signed envelope:
 
 ```text
 schema, sourceRevision, signerIdentity, payload, signatureBase64Url
 ```
 
-Its schema is `serverware.signedPolicyAuthorityDatabaseCapability/v4`. The
+Its schema is `catchplate.signedPolicyAuthorityDatabaseCapability/v4`. The
 signature covers the four unsigned fields, including source and signer
 identity, using the NUL-domain-framed canonical document digest. Identity is
 the existing three-field session/measurement/attestation identity.
 
-The payload uses `serverware.policyAuthorityDatabaseCapability/v4`: the
+The payload uses `catchplate.policyAuthorityDatabaseCapability/v4`: the
 existing thirty-two capability fields with the new schema, plus
 `planProtocol`, `retainedRecordDigest`, `rootTransitionDigest` and
 `exactRequestBytesDigest`. The protocol is `revocation-v4`, and the operation
@@ -100,7 +100,7 @@ independent inputs. The component does not enroll these keys or prove their
 live service roles from signature validity.
 
 The capability preserves the existing nineteen-field
-`serverware.policyAuthorityWebAuthnReceipt/v1`. That receipt is reconstructed
+`catchplate.policyAuthorityWebAuthnReceipt/v1`. That receipt is reconstructed
 from genuine retained assertion evidence and proved OLD challenge/credential
 rows; it is not the full signed assertion-evidence document. The thirteen-field
 credential binding retains the historical **length-prefixed domain** recipe,

@@ -60,7 +60,7 @@ def _stop(_number, _frame):
 
 
 def _report(status, stage):
-    raw = json.dumps(dict(apiVersion="serverware.nativePilotStartupResult/v1", status=status, stage=stage,
+    raw = json.dumps(dict(apiVersion="catchplate.nativePilotStartupResult/v1", status=status, stage=stage,
         pilotAcceptanceVerified=False, productionReleaseEligible=False),
         sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
     try:
@@ -79,10 +79,10 @@ def main():
         _require(sys.flags.isolated == 1 and sys.flags.dont_write_bytecode == 1
             and os.getresuid() == os.getresgid() == (0, 0, 0))
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from serverware import native_pilot_genesis_jobs as cold
-        from serverware import native_pilot_adopted_phase_profile as adopted
-        from serverware import native_pilot_genesis_parent_control_io as ownership
-        from serverware.native_pilot_startup import Startup, StartupError
+        from catchplate import native_pilot_genesis_jobs as cold
+        from catchplate import native_pilot_adopted_phase_profile as adopted
+        from catchplate import native_pilot_genesis_parent_control_io as ownership
+        from catchplate.native_pilot_startup import Startup, StartupError
         selected = _arguments(sys.argv[1:], cold.KEY_PURPOSES, adopted.KEY_PURPOSES)
         keys = {name: selected.pop(name) for name in ("cold_authority_key_fds", "adopted_authority_key_fds")}
         with ownership.owning():

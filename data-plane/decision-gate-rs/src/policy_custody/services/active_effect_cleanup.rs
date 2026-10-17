@@ -13,11 +13,11 @@ use super::super::production_dispatch::{ClosedProductionDispatchRequestV4 as Dis
 use crate::policy_shadow::{hash_domain_frames, AuthorityRole as Role};
 use std::os::unix::fs::{FileExt, MetadataExt};
 
-pub(super) const RUNTIME: &str = "serverware.policyCustodyServiceRuntimeConfig/v8";
-pub(super) const API: &str = "serverware.nativeActiveEffectCleanupCommand/v1";
+pub(super) const RUNTIME: &str = "catchplate.policyCustodyServiceRuntimeConfig/v8";
+pub(super) const API: &str = "catchplate.nativeActiveEffectCleanupCommand/v1";
 pub(super) const GRANT_FD: &str = "active-effect-cleanup-grant";
 pub(super) const DIRECTORY: &str = "active-effect-cleanup-journal";
-const DOMAIN: &[u8] = b"serverware.nativeActiveEffectCleanupGrant.signature/v1";
+const DOMAIN: &[u8] = b"catchplate.nativeActiveEffectCleanupGrant.signature/v1";
 const MAX_RECORDS: usize = 128;
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 
@@ -57,7 +57,7 @@ impl Grant {
     pub(super) fn verify(&self, history: &RuntimeAuthorityHistory)
         -> Result<(spool_head::Grant, VerifyingKey), ServiceError> {
         let p = &self.payload;
-        require(p.api_version == "serverware.nativeActiveEffectCleanupGrant/v1"
+        require(p.api_version == "catchplate.nativeActiveEffectCleanupGrant/v1"
             && p.purpose == "native-active-effect-cleanup"
             && p.guest.service_role == "cleanup-authorization-consumer"
             && p.runtime_configuration_sha256 == p.guest.runtime_configuration_sha256
@@ -285,7 +285,7 @@ impl Gate {
         let now = boottime_now_nanos().map_err(|_| invalid())?;
         require(command.completion.completed_at_boottime_nanos <= now && now < deadline && self.records.len() < MAX_RECORDS)?;
         let owner_state = owner.generation_state(deadline)?;
-        let nonce = hash_domain_frames(b"serverware.nativeActiveEffectCleanupSlot/v1",
+        let nonce = hash_domain_frames(b"catchplate.nativeActiveEffectCleanupSlot/v1",
             &[&self.grant_raw, &encode_canonical_frame(&command)?, self.head.as_str().as_bytes()]);
         let reply = owner.sign_active_effect_cleanup(&Input { command: command.clone(),
             epoch: self.history.current_epoch().map_err(|_| invalid())?.epoch_reference(),

@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from serverware import github_app as protocol
-from serverware.http_client import HttpResponse
+from catchplate import github_app as protocol
+from catchplate.http_client import HttpResponse
 from scripts import operator_github_app_examples_fixture as fixture
 from scripts import check_operator_github_app_examples as checker
 from scripts.test_operator_github_examples_fixture import fields as stock_fields
@@ -20,7 +20,7 @@ NOW = 1800000000
 
 def fields(authorization, *, body=None):
     value = [("Host", "api.github.com"), ("Authorization", authorization), ("Accept", "application/vnd.github+json"),
-        ("Accept-Encoding", "identity"), ("Connection", "close"), ("User-Agent", "serverware-github-app/1"),
+        ("Accept-Encoding", "identity"), ("Connection", "close"), ("User-Agent", "catchplate-github-app/1"),
         ("X-GitHub-Api-Version", "2022-11-28")]
     return value + ([] if body is None else [("Content-Type", "application/json"), ("Content-Length", str(len(body)))])
 
@@ -126,7 +126,7 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual(len(self.oracle.mints), 1)
         for when, headers, target in ((NOW + 121, issue_fields("node"), fixture.examples.target("node", 1)),
                 (NOW + 1, issue_fields("node", 1), fixture.examples.target("node", 1)),
-                (NOW + 1, issue_fields("node"), "/repos/serverware-fixture/other/issues")):
+                (NOW + 1, issue_fields("node"), "/repos/catchplate-fixture/other/issues")):
             self.oracle = fixture.Oracle(self.private.public_key(), self.replacement.public_key())
             first = self.provision(); self.reject_candidate(first.config)
             with self.assertRaises(ValueError): self.oracle.handle("GET", target, headers, b"", when)

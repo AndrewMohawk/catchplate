@@ -11,9 +11,9 @@ The isolated `oidc_session_activation_release_proof_dynamic_launcher.py`
 accepts only `--root-delivery`. It starts as root with two activated listeners,
 identified by names in either descriptor order:
 
-- `serverware-oidc-session-activation-release-proof`, the existing `proof.sock`.
-- `serverware-oidc-session-activation-release-proof-bootstrap`, fixed at
-  `/run/serverware/oidc-session-activation-token-release/proof-bootstrap.sock`.
+- `catchplate-oidc-session-activation-release-proof`, the existing `proof.sock`.
+- `catchplate-oidc-session-activation-release-proof-bootstrap`, fixed at
+  `/run/catchplate/oidc-session-activation-token-release/proof-bootstrap.sock`.
 
 The staging pathname is root:65494, mode `0660`; the sole accepted issuer peer
 is UID/GID 65494. The worker's existing public proof peer remains UID/GID
@@ -22,7 +22,7 @@ is UID/GID 65494. The worker's existing public proof peer remains UID/GID
 Before waiting, the receiver independently admits the root-signed policy and
 its exact completion bootstrap, proof enrollment and intent enrollment. These
 protected public files, plus the runtime root, live under
-`/run/serverware/oidc-session-activation-release-proof-dynamic-trust`:
+`/run/catchplate/oidc-session-activation-release-proof-dynamic-trust`:
 
 - `root-public-key.pem`
 - `issuer-policy.json`
@@ -84,7 +84,7 @@ exact proof pin rather than replacing it with an unsigned locator.
 
 The uninstalled `release-proof-bootstrap.socket`, alternate
 `release-proof-dynamic.socket` and `release-proof-dynamic.service.in` templates
-use the `serverware-oidc-session-activation-` prefix. They conflict with the
+use the `catchplate-oidc-session-activation-` prefix. They conflict with the
 fixed proof socket/service and preserve the existing key/TLS substitutions;
 only `@RELEASE_PROOF_DYNAMIC_TRUST_DIR@` supplies the five-file public trust
 directory. The production Dockerfile copies the templates and isolated launcher

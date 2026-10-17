@@ -25,13 +25,13 @@ from scripts import operator_github_fixture_network as network
 
 
 SOURCE = Path("/synthetic/source")
-BINARY = Path("/synthetic/serverware-decision-gate")
+BINARY = Path("/synthetic/catchplate-decision-gate")
 INITIALIZER = Path("/synthetic/initialize.py")
 NODE = Path("/synthetic/node")
 SDK = Path("/synthetic/sdk")
-ROOT = fixture.base.SCRATCH / "serverware-github-private.Source01"
+ROOT = fixture.base.SCRATCH / "catchplate-github-private.Source01"
 SHA = "a" * 64
-RUNTIME = {"serverware", "decision-gate-rs", "github", "edge", "check"}
+RUNTIME = {"catchplate", "decision-gate-rs", "github", "edge", "check"}
 ONE_OFF = {"initialize", "github-pki", "basic-pki"}
 IP = "93.184.216.34"
 
@@ -80,7 +80,7 @@ class GithubFixtureTests(unittest.TestCase):
                 self.assertEqual(service["labels"]["traefik.enable"], "false")
                 self.assertEqual(service["labels"]["com.centurylinklabs.watchtower.enable"], "false")
         self.assertEqual(network.FIXTURE_IP, IP)
-        self.assertEqual(network.HOSTS, ("127.0.0.1 localhost serverware decision-gate-rs "
+        self.assertEqual(network.HOSTS, ("127.0.0.1 localhost catchplate decision-gate-rs "
             "proxy.operator-basic.example.test\n93.184.216.34 api.github.com\n").encode())
         self.assertEqual(network.RESOLV, b"nameserver 127.0.0.1\noptions attempts:1 timeout:1\n")
         for name in RUNTIME | {"network"}:
@@ -132,8 +132,8 @@ class GithubFixtureTests(unittest.TestCase):
                 else:
                     self.assertEqual(service["user"], "10001:10001")
                     self.assertFalse(service.get("cap_add"))
-        for name, dependency in (("github", "network"), ("serverware", "github"),
-                                  ("decision-gate-rs", "serverware")):
+        for name, dependency in (("github", "network"), ("catchplate", "github"),
+                                  ("decision-gate-rs", "catchplate")):
             self.assertEqual(config["services"][name]["depends_on"][dependency], {"condition": "service_healthy"})
         for name in ("edge", "check"):
             self.assertEqual(config["services"][name]["profiles"], [name])
@@ -143,20 +143,20 @@ class GithubFixtureTests(unittest.TestCase):
 
     def test_only_github_origin_is_admitted_without_cidr_or_demo_exceptions(self):
         config = build()
-        for name in ("serverware", "decision-gate-rs"):
+        for name in ("catchplate", "decision-gate-rs"):
             environment = config["services"][name]["environment"]
-            self.assertEqual(json.loads(environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"]),
+            self.assertEqual(json.loads(environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"]),
                              ["https://api.github.com"])
-            self.assertNotIn("SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS", environment)
+            self.assertNotIn("CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS", environment)
             self.assertFalse(any(key.startswith("PRIVATE_OPERATOR_") for key in environment))
         serialized = json.dumps(config, sort_keys=True)
         self.assertNotIn("demo-upstream", serialized)
         self.assertNotIn("172.16.", serialized)
         self.assertNotIn("host.docker.internal", serialized)
         gate = config["services"]["decision-gate-rs"]
-        self.assertEqual(gate["environment"]["SERVERWARE_DECISION_GATE_MANAGEMENT_HOST"], "127.0.0.1")
+        self.assertEqual(gate["environment"]["CATCHPLATE_DECISION_GATE_MANAGEMENT_HOST"], "127.0.0.1")
         command = config["services"]["check"]["command"]
-        for flag, value in (("--control-base", "http://serverware:3000"),
+        for flag, value in (("--control-base", "http://catchplate:3000"),
                             ("--management-base", "http://127.0.0.1:9091"),
                             ("--proxy-url", "https://" + fixture.basic.PROXY_HOST + ":8443"),
                             ("--timeout-seconds", "180")):
@@ -167,7 +167,7 @@ class GithubFixtureTests(unittest.TestCase):
         # Constructor refusal must precede inherited token/CA/endpoint work.
         # Import is stdlib-only; its real parent constructor is never invoked.
         from scripts import check_operator_github as checker
-        args = SimpleNamespace(control_base="http://serverware:3000", management_base="http://127.0.0.1:9091",
+        args = SimpleNamespace(control_base="http://catchplate:3000", management_base="http://127.0.0.1:9091",
                                proxy_url=checker.PROXY, upstream_address=None)
         with patch.object(checker.isolated, "assert_isolated_network") as isolation, \
                 patch.object(checker.OrdinaryClientCheck, "__init__", side_effect=AssertionError(
@@ -188,11 +188,11 @@ class GithubFixtureTests(unittest.TestCase):
     def test_binary_sdk_source_and_public_trust_mounts_are_exact_and_read_only(self):
         config = build()
         services = config["services"]
-        self.assertEqual(services["serverware"]["environment"]["SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST"],
+        self.assertEqual(services["catchplate"]["environment"]["CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST"],
                          "sha256:" + SHA)
         command = services["check"]["command"]
         self.assertEqual(command[command.index("--expected-binary-sha256") + 1], "sha256:" + SHA)
-        expected = {("decision-gate-rs", "/usr/local/bin/serverware-decision-gate"): BINARY,
+        expected = {("decision-gate-rs", "/usr/local/bin/catchplate-decision-gate"): BINARY,
                     ("initialize", "/initialize.py"): INITIALIZER,
                     ("check", "/node"): NODE, ("check", "/sdk/node_modules"): SDK / "node_modules"}
         for (name, target), source in expected.items():
@@ -206,7 +206,7 @@ class GithubFixtureTests(unittest.TestCase):
                     self.assertIs(value["read_only"], True)
         client = mounts(services["check"])
         self.assertNotIn("/data", client)
-        self.assertNotIn("/run/secrets/serverware", client)
+        self.assertNotIn("/run/secrets/catchplate", client)
         self.assertEqual(set(name for name in client if name.startswith("/client-secrets/")),
                          {"/client-secrets/admin.token"})
         self.assertFalse(any("key.pem" in name for name in client))
@@ -224,14 +224,14 @@ class GithubFixtureTests(unittest.TestCase):
             lambda value: value["services"]["network"].update(network_mode="host"),
             lambda value: value["services"]["decision-gate-rs"].update(ports=["9090:9090"]),
             lambda value: value["services"]["check"].update(cap_add=["NET_ADMIN"]),
-            lambda value: value["services"]["serverware"].update(dns=["8.8.8.8"]),
+            lambda value: value["services"]["catchplate"].update(dns=["8.8.8.8"]),
             lambda value: value["services"]["network"].update(cap_add=["ALL"]),
-            lambda value: value["services"]["serverware"]["environment"].update(
-                SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS='["93.184.216.34/32"]'),
-            lambda value: value["services"]["serverware"]["environment"].update(
-                SERVERWARE_OPERATOR_DEMO_UPSTREAMS='["https://api.github.com","https://other.example"]'),
-            lambda value: value["services"]["serverware"]["environment"].update(
-                SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST="sha256:" + "b" * 64),
+            lambda value: value["services"]["catchplate"]["environment"].update(
+                CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS='["93.184.216.34/32"]'),
+            lambda value: value["services"]["catchplate"]["environment"].update(
+                CATCHPLATE_OPERATOR_DEMO_UPSTREAMS='["https://api.github.com","https://other.example"]'),
+            lambda value: value["services"]["catchplate"]["environment"].update(
+                CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST="sha256:" + "b" * 64),
             lambda value: value["services"]["check"]["volumes"].append(fixture.bind(SOURCE, "/other", False)),
         ]
         for index, mutate in enumerate(mutations):
@@ -269,7 +269,7 @@ class GithubFixtureTests(unittest.TestCase):
         files = {name: write(source / name, ("# inert source: " + name + "\n").encode()) for name in required}
         commit = "c" * 40
         source_manifest = directory / "source.json"
-        source_sha = write(source_manifest, json.dumps({"schema": "serverware.privateProxyBasicSource/v1",
+        source_sha = write(source_manifest, json.dumps({"schema": "catchplate.privateProxyBasicSource/v1",
             "sourceCommit": commit, "files": files}, sort_keys=True).encode())
         binary, node, initializer = (directory / name for name in ("gate", "node", "initialize.py"))
         binary_sha = write(binary, b"inert gate bytes, not executable\n")
@@ -279,7 +279,7 @@ class GithubFixtureTests(unittest.TestCase):
         for name, version in (("@octokit/rest", "22.0.1"), ("undici", "8.11.2")):
             write(sdk / "node_modules" / name / "package.json", json.dumps({"name": name, "version": version}).encode())
         sdk_manifest = directory / "sdk.json"
-        sdk_data = {"schema": "serverware.privateGithubDependencies/v1", "packageLockSha256": lock_sha,
+        sdk_data = {"schema": "catchplate.privateGithubDependencies/v1", "packageLockSha256": lock_sha,
                     "files": fixture.basic.inventory(sdk / "node_modules", limit=8192, byte_limit=64 * 1024**2)}
         sdk_sha = write(sdk_manifest, json.dumps(sdk_data, sort_keys=True).encode())
         stack.enter_context(patch.object(fixture.base, "SCRATCH", directory))
@@ -287,7 +287,7 @@ class GithubFixtureTests(unittest.TestCase):
         stack.enter_context(patch.object(fixture, "NODE_SHA256", node_sha))
         stack.enter_context(patch.object(fixture, "LOCK_SHA256", lock_sha))
         return SimpleNamespace(source=source, binary=binary, initializer=initializer,
-            job_root=directory / "serverware-github-private.Unit001", node_binary=node, sdk_root=sdk,
+            job_root=directory / "catchplate-github-private.Unit001", node_binary=node, sdk_root=sdk,
             expected_binary_sha256=binary_sha, source_manifest=source_manifest,
             expected_source_manifest_sha256=source_sha, expected_source_commit=commit,
             sdk_manifest=sdk_manifest, expected_sdk_manifest_sha256=sdk_sha, write=False)
@@ -458,7 +458,7 @@ class GithubFixtureTests(unittest.TestCase):
 
     @staticmethod
     def sdk_failure_document():
-        return {"schema": "serverware.privateGithubSdk/v1", "package": "@octokit/rest", "version": "22.0.1",
+        return {"schema": "catchplate.privateGithubSdk/v1", "package": "@octokit/rest", "version": "22.0.1",
             "undiciVersion": "8.11.2", "retryPlugin": False, "throttlePlugin": False, "requestRewrite": False,
             "ok": False, "phase": "job", "stage": "read_issue", "error": "stock SDK fixture operation failed",
             "observedResponses": 2, "lastObservation": {"stage": "pagination", "status": 200,

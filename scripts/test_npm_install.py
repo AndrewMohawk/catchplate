@@ -19,8 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 import test_npm_metadata as fixture  # Installs the socket/SQLite refusal hook.
-from serverware import npm_install as npm, npm_metadata, policy_bundle as pb
-from serverware import adapters, policy_engine as engine, policy_route_authority as authority
+from catchplate import npm_install as npm, npm_metadata, policy_bundle as pb
+from catchplate import adapters, policy_engine as engine, policy_route_authority as authority
 
 PACKAGES = ["@fixture/package", "fixture-package"]
 AUDIT = b'{"fixture-package":["2.0.0","1.0.0"],"@fixture/package":["1.0.0"]}'
@@ -70,8 +70,8 @@ def response(mode, body, *, status=200, media=None, fields=(), guarded=True):
     media = ("application/octet-stream" if mode == "tarball" and status == 200 else "application/json") if media is None else media
     flow.response = SimpleNamespace(status_code=status, raw_content=body, content=body, trailers=None,
         headers=fixture.ParsedHeaders([(b"Content-Type", media.encode())] + list(fields)))
-    flow.metadata.update(serverware_route=route,
-        serverware_operation=adapters.get_adapter(npm.ADAPTER).operation_fields(flow, route, params))
+    flow.metadata.update(catchplate_route=route,
+        catchplate_operation=adapters.get_adapter(npm.ADAPTER).operation_fields(flow, route, params))
     if guarded:
         guard = engine._ResponseCredentialGuard()
         guard.add_text_encodings(SECRET)
@@ -109,7 +109,7 @@ class NpmInstallTests(unittest.TestCase):
                 self.assertEqual(authority._declared(value["routes"][0]), (npm.ADAPTER, [operation]))
                 self.assertEqual(authority._builtin(npm.ADAPTER, operation), "read")
                 v2 = deepcopy(value)
-                v2["apiVersion"] = "serverware.policy/v2"
+                v2["apiVersion"] = "catchplate.policy/v2"
                 snapshot(mode, authority.prepare_unsigned(v2, []), schema=schema_enabled)
             self.assertEqual(value, before)
         self.assertIsNone(authority._builtin("generic.rest", "npm.install.audit.read"))
@@ -234,7 +234,7 @@ class NpmInstallTests(unittest.TestCase):
         snap = snapshot("audit")
         route = snap.routes[0]
         flow, params = request("audit", headers=[(b"Accept-Encoding", b"gzip"),
-            (b"Npm-Session", b"discard-me"), (b"X-Serverware-Agent", b"fixture")])
+            (b"Npm-Session", b"discard-me"), (b"X-Catchplate-Agent", b"fixture")])
         def no_implicit_decode(*args, **kwargs):
             raise AssertionError("generic decoder must not handle typed gzip")
         flow.request.get_content = no_implicit_decode

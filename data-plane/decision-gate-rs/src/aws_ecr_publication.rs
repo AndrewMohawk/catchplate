@@ -36,7 +36,7 @@ pub(crate) const PART_BYTES: usize = 10 * 1024 * 1024;
 pub(crate) const DUMMY_ACCESS_KEY: &str = "AKIAIOSFODNN7EXAMPLE";
 pub(crate) const DUMMY_SECRET: &str = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
 const TARGET_PREFIX: &str = "AmazonEC2ContainerRegistry_V20150921.";
-const PUBLICATION_PREFIX: &str = "ServerwarePublication/";
+const PUBLICATION_PREFIX: &str = "CatchplatePublication/";
 
 fn exact(object: &Map<String, Value>, keys: &[&str]) -> bool {
     object.len() == keys.len() && keys.iter().all(|key| object.contains_key(*key))
@@ -122,7 +122,7 @@ pub(crate) fn authority(config: &Value) -> Result<String, String> {
     Ok(format!("api.ecr.{value}.amazonaws.com"))
 }
 pub(crate) fn gate_capability() -> Value {
-    json!({"schema":"serverware.operatorEcrPublicationGate/v1","adapter":ADAPTER,
+    json!({"schema":"catchplate.operatorEcrPublicationGate/v1","adapter":ADAPTER,
         "operation":OPERATION,"signing":"exact_request_lease_v1","approval":"host_publication_review_v1"})
 }
 pub(crate) fn request_profile() -> ProviderRequestProfile {

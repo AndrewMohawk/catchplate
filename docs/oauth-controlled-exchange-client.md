@@ -21,14 +21,14 @@ does not authorize this profile.
 The producer chooses the exchange UUID, state, browser nonce and PKCE verifier
 before asking the authority for a genuine purpose-bound hardware WebAuthn
 challenge. It sets the state-specific Secure, HttpOnly, SameSite=Lax cookie and
-returns exactly `publicKey`, `serverware` and `request`. The first two retain the
+returns exactly `publicKey`, `catchplate` and `request`. The first two retain the
 five-field WebAuthn options and seven-field authority-options projection; the
 third is the exact 18-field `oauth.exchange.prepare` request. Private state/PKCE
 is encrypted, not exposed as review text. The echoed ciphertext is not authority.
 
 The requester then explicitly sends `POST /api/oauth/start` with exactly:
 
-- `apiVersion: serverware.oauthExchangeConsentOptions/v1`;
+- `apiVersion: catchplate.oauthExchangeConsentOptions/v1`;
 - `request`: the exact prepared request;
 - `mfa`: exactly `oauthExchangeProfile` with that same schema and the genuine
   raw `assertion`.

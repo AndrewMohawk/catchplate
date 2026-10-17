@@ -47,7 +47,7 @@ fn generation(snapshot: &Snapshot, version: u64) -> CredentialLeaseGeneration {
 fn fixture() -> (GateState, Arc<Snapshot>, CredentialLeaseScope, SigningKey) {
     let key = SigningKey::from_bytes(&[109; 32]);
     let mut snapshot = (*test_snapshot_with_control_plane_response_key(1, &key)).clone();
-    snapshot.policy_id = "serverware-operator-demo".to_owned();
+    snapshot.policy_id = "catchplate-operator-demo".to_owned();
     snapshot.principals[0].proxy_authorization = Some(ProxyAuthorizationPolicy::BearerToken {
         token_sha256: sha256_prefixed(TOKEN.as_bytes()),
         source_cidrs: vec![],
@@ -57,8 +57,8 @@ fn fixture() -> (GateState, Arc<Snapshot>, CredentialLeaseScope, SigningKey) {
     snapshot.credentials.insert("google-account".to_owned(), Credential {
         provider: "google".to_owned(), provider_subject: Some(SUBJECT.to_owned()),
         injection: json!({"type":"bearer","header":"Authorization","field":"access_token",
-            "__serverwareCredentialType":"oauth2","__serverwareOAuthClientId":CLIENT,
-            "__serverwareGrantedScopes":["email","https://www.googleapis.com/auth/gmail.readonly","openid"]}),
+            "__catchplateCredentialType":"oauth2","__catchplateOAuthClientId":CLIENT,
+            "__catchplateGrantedScopes":["email","https://www.googleapis.com/auth/gmail.readonly","openid"]}),
     });
     let route = &mut snapshot.routes[0];
     route.host = "gmail.googleapis.com".to_owned();
@@ -99,7 +99,7 @@ fn request(
 ) -> CredentialLeaseRequest {
     let public = [5u8; 32];
     CredentialLeaseRequest {
-        api_version: "serverware.credentialLeaseRequest/v3".to_owned(),
+        api_version: "catchplate.credentialLeaseRequest/v3".to_owned(),
         purpose: CredentialLeasePurpose::DispatchSecret,
         principal_id: scope.principal_id.clone(),
         route_id: scope.route_id.clone(),
@@ -120,7 +120,7 @@ fn request(
 
 fn outcome(request: &CredentialLeaseRequest, wire: &Value, version: u64) -> Value {
     let issued = now_epoch_ms() as u64;
-    json!({"apiVersion":"serverware.operatorCredentialLeaseNoEnvelope/v1",
+    json!({"apiVersion":"catchplate.operatorCredentialLeaseNoEnvelope/v1",
         "capability":"operator-google-v1","outcome":"noSecretEnvelopeIssued",
         "reason":"generationAdvancedBeforeEnvelope","purpose":"dispatchSecret",
         "profileBindingSha256":google().binding_digest(),
@@ -435,11 +435,11 @@ fn metadata_response(
     let request: CredentialLeaseRequest = strict_json_from_slice(&incoming.body).unwrap();
     assert_eq!(request.purpose, CredentialLeasePurpose::GenerationMetadata);
     let now = now_epoch_ms() as u64;
-    let aad = json!({"apiVersion":"serverware.credentialLeaseEnvelope/v2","algorithm":"X25519-HKDF-SHA256-AES-256-GCM",
+    let aad = json!({"apiVersion":"catchplate.credentialLeaseEnvelope/v2","algorithm":"X25519-HKDF-SHA256-AES-256-GCM",
         "recipientKeyId":request.recipient_key_id,"recipientNonce":request.recipient_nonce,"policyHash":request.policy_hash,
         "dataPlaneBinaryDigest":request.data_plane_binary_digest,"principalId":request.principal_id,
         "routeId":request.route_id,"credentialId":request.credential_id,"issuedAtEpochMs":now,"expiresAtEpochMs":now+4_000});
-    let plaintext = json!({"apiVersion":"serverware.credentialLeaseSet/v3","purpose":"generationMetadata",
+    let plaintext = json!({"apiVersion":"catchplate.credentialLeaseSet/v3","purpose":"generationMetadata",
         "requestBindingSha256":credential_lease_request_binding_sha256(&request),"releaseAuthorization":null,
         "recipientKeyId":request.recipient_key_id,"recipientNonce":request.recipient_nonce,"policyHash":request.policy_hash,
         "dataPlaneBinaryDigest":request.data_plane_binary_digest,"principalId":request.principal_id,
@@ -457,7 +457,7 @@ fn metadata_response(
     let secret = X25519StaticSecret::from([109u8; 32]);
     let shared = secret.diffie_hellman(&X25519PublicKey::from(recipient));
     let aad_bytes = canonical_json(&aad).into_bytes();
-    let mut info = b"serverware:credential-lease-envelope:v2\0".to_vec();
+    let mut info = b"catchplate:credential-lease-envelope:v2\0".to_vec();
     info.extend_from_slice(&Sha256::digest(&aad_bytes));
     let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, &nonce).extract(shared.as_bytes());
     let mut key_bytes = [0u8; 32];

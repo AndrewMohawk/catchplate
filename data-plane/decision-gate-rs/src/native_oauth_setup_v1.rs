@@ -8,12 +8,12 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-pub const CHANNEL: &str = "serverware.nativeOAuthSetupExchangeChannel/v1";
-pub const SCHEMA: &str = "serverware.nativeOAuthSetupExchangeStatement/v1";
-pub const ATTESTATION_DOMAIN: &[u8] = b"serverware/native-oauth-setup-exchange-attestation/v1\0";
+pub const CHANNEL: &str = "catchplate.nativeOAuthSetupExchangeChannel/v1";
+pub const SCHEMA: &str = "catchplate.nativeOAuthSetupExchangeStatement/v1";
+pub const ATTESTATION_DOMAIN: &[u8] = b"catchplate/native-oauth-setup-exchange-attestation/v1\0";
 pub const SIGN_OPERATION: &str = "nativeOAuthSetupExchange.sign/v1";
-pub const HTTP_REQUEST: &str = "serverware.nativeOAuthSetupExchangeRequest/v1";
-pub const HTTP_RESPONSE: &str = "serverware.nativeOAuthSetupExchangeResponse/v1";
+pub const HTTP_REQUEST: &str = "catchplate.nativeOAuthSetupExchangeRequest/v1";
+pub const HTTP_RESPONSE: &str = "catchplate.nativeOAuthSetupExchangeResponse/v1";
 pub(crate) use crate::native_oauth_refresh_v1::{ensure, sha};
 
 pub(crate) fn fields(value: &Value, names: &[&str]) -> Result<(), String> {
@@ -37,7 +37,7 @@ pub struct Configuration {
 }
 impl Configuration {
     pub fn validate(&self) -> Result<(), String> {
-        ensure(self.api_version == "serverware.nativeOAuthSetupExchangeConfiguration/v1" && current::identifier(&self.deployment_id)
+        ensure(self.api_version == "catchplate.nativeOAuthSetupExchangeConfiguration/v1" && current::identifier(&self.deployment_id)
             && current::digest(&self.authority_root_spki_sha256) && current::digest(&self.control_plane_configuration_digest)
             && self.instance_id.starts_with("spiffe://") && self.instance_id.len() <= 4096 && !self.instance_id.chars().any(char::is_control)
             && self.limits.pending_capacity == 64 && self.limits.revocation_capacity == 64
@@ -105,7 +105,7 @@ impl Reply {
                     fields(&value, &["apiVersion","phase","exchangeId","cookieName","cookieValue","expiresAtEpochNs"])?;
                     let name = value["cookieName"].as_str().ok_or("native cookie name")?.to_owned();
                     let nonce = value["cookieValue"].as_str().ok_or("native cookie value")?.to_owned();
-                    ensure(name == format!("__Host-serverware-native-oauth-{}", id.replace('-', "")) && current::bytes32(&nonce).is_ok(), "native cookie differs")?;
+                    ensure(name == format!("__Host-catchplate-native-oauth-{}", id.replace('-', "")) && current::bytes32(&nonce).is_ok(), "native cookie differs")?;
                     Ok(Self::DraftCookie { exchange_id: id, name, value: nonce, expires: value["expiresAtEpochNs"].as_u64().ok_or("native cookie expiry")? })
                 },
                 "authorization-redirect" => {

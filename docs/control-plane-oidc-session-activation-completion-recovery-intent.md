@@ -1,6 +1,6 @@
 # Completion-recovery release intent
 
-`serverware/control_plane_oidc_session_activation_completion_recovery_intent.py`
+`catchplate/control_plane_oidc_session_activation_completion_recovery_intent.py`
 connects one genuine release intent to the distinct fresh completion-recovery
 actor purpose `release-intent-proof`. It does not revive an activation permission,
 repeat SQL, select a release profile or checkpoint, open a token, or set a cookie.

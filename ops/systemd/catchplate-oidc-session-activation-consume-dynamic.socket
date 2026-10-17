@@ -1,0 +1,23 @@
+# Alternate to the fixed planner socket, never installed alongside it.
+# Recreating this path invalidates the independently admitted resource identity.
+[Unit]
+Description=Catchplate dynamically staged consume planner socket
+Before=catchplate-oidc-session-activation-consume-dynamic.service
+After=systemd-tmpfiles-setup.service
+Conflicts=catchplate-oidc-session-activation-delivery-planner.socket catchplate-oidc-session-activation-delivery-planner.service
+
+[Socket]
+ListenStream=/run/catchplate/oidc-session-activation/delivery-planner.sock
+FileDescriptorName=catchplate-oidc-session-activation-delivery-planner
+SocketUser=65501
+SocketGroup=65532
+SocketMode=0660
+DirectoryMode=0755
+Backlog=1
+Accept=no
+FlushPending=yes
+RemoveOnStop=yes
+Service=catchplate-oidc-session-activation-consume-dynamic.service
+
+[Install]
+WantedBy=sockets.target

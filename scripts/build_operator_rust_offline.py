@@ -32,7 +32,7 @@ IMAGE = "rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcd
 IMAGE_ID = "sha256:c8211ab4ab64eb72091912fa408ac59daaeb56d0ae1a2bf243c08753777c4382"
 DOCKER = ["/usr/bin/docker", "--host", "unix:///var/run/docker.sock"]
 ENV = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
-LABEL = "com.serverware.ordinary-rust-build"
+LABEL = "com.catchplate.ordinary-rust-build"
 MAX_LOG = 32 * 1024 * 1024
 MAX_COPY = 6 * 1024**3
 RESERVE = 16 * 1024**3
@@ -207,7 +207,7 @@ def unpack(archive, package, checksum, vendor):
 def verify_vendor(lock, vendor, digests):
     for package in lock["package"]:
         if "source" not in package:
-            need(package["name"] == "serverware-decision-gate", "unexpected local dependency")
+            need(package["name"] == "catchplate-decision-gate", "unexpected local dependency")
             continue
         need(package["source"] == "registry+https://github.com/rust-lang/crates.io-index")
         name = package["name"] + "-" + package["version"]
@@ -278,7 +278,7 @@ def docker_output(directory, name, arguments):
 def create_arguments(root, name, token, kind):
     need(kind in ("test", "normal"))
     cargo = ["cargo", "test" if kind == "test" else "build", "--release", "--frozen", "--offline",
-             "--bin", "serverware-decision-gate", "--message-format=json"]
+             "--bin", "catchplate-decision-gate", "--message-format=json"]
     if kind == "test":
         cargo.append("--no-run")
     return ["create", "--pull", "never", "--name", name, "--label", LABEL + "=" + token,
@@ -313,7 +313,7 @@ def compile_artifact(root, kind):
     directory = root / kind
     directory.mkdir(mode=0o700)
     token = secrets.token_hex(16)
-    name, cid = "serverware-ordinary-rust-" + token, None
+    name, cid = "catchplate-ordinary-rust-" + token, None
     save(directory / "ownership.json", {"name": name, "label": LABEL, "token": token})
     need(not docker_output(directory, "existing", ["ps", "-aq", "--no-trunc", "--filter", "name=^/" + name + "$"]))
     try:
@@ -355,18 +355,18 @@ def artifact(root, kind, output):
         row = document(line)
         if row.get("reason") == "build-finished":
             finished.append(row.get("success"))
-        if row.get("reason") == "compiler-artifact" and row.get("target", {}).get("name") == "serverware-decision-gate" \
+        if row.get("reason") == "compiler-artifact" and row.get("target", {}).get("name") == "catchplate-decision-gate" \
                 and row.get("target", {}).get("kind") == ["bin"] and row.get("profile", {}).get("test") is (kind == "test") \
                 and row.get("executable") is not None:
             found.append(row)
     need(finished == [True] and len(found) == 1, "missing unique successful Cargo artifact")
-    expected = r"/target/release/deps/serverware_decision_gate-[0-9a-f]{16}" if kind == "test" else r"/target/release/serverware-decision-gate"
+    expected = r"/target/release/deps/catchplate_decision_gate-[0-9a-f]{16}" if kind == "test" else r"/target/release/catchplate-decision-gate"
     need(re.fullmatch(expected, found[0]["executable"]), "unexpected artifact path")
     path = root / "target" / found[0]["executable"].removeprefix("/target/")
     inventory(root / "target", allow_internal_hardlinks=True)
     body = read(path, 512 * 1024**2, allow_hardlinks=True)
     need(body.startswith(b"\x7fELF") and path.stat().st_mode & 0o111, "artifact is not executable ELF")
-    destination = root / ("test-binary" if kind == "test" else "serverware-decision-gate")
+    destination = root / ("test-binary" if kind == "test" else "catchplate-decision-gate")
     with destination.open("xb") as stream:
         stream.write(body)
         os.fchmod(stream.fileno(), 0o555)
@@ -392,8 +392,8 @@ def run(args):
     prior = document(read(args.cache_receipt, 65536))
     pins_raw = read(args.cache_source_pins, 2 * 1024**2)
     pins = document(pins_raw)
-    need(prior["schema"] == "serverware.privateProxyRelease/v1" and prior["compilerImageId"] == IMAGE_ID
-         and prior["executable"] == str(args.cache / "release/serverware-decision-gate")
+    need(prior["schema"] == "catchplate.privateProxyRelease/v1" and prior["compilerImageId"] == IMAGE_ID
+         and prior["executable"] == str(args.cache / "release/catchplate-decision-gate")
          and prior["tested"] is True and prior["sourcePinsSha256"] == hashlib.sha256(pins_raw).hexdigest()
          and pins["sourceRoot"] == str(args.predecessor), "retained provenance receipt mismatch")
     args.output.mkdir(mode=0o700)
@@ -420,7 +420,7 @@ def run(args):
         need(missing == ADDITIONS, "unexpected missing vendor packages")
         phase = "copy"
         cache_hashes = copy_tree(args.cache, args.output / "target", cache_before)
-        need(cache_hashes["release/serverware-decision-gate"] == prior["sha256"], "retained normal binary changed")
+        need(cache_hashes["release/catchplate-decision-gate"] == prior["sha256"], "retained normal binary changed")
         vendor_hashes = copy_tree(args.vendor, args.output / "vendor", vendor_before)
         for path, package in ((args.rustls_archive, "rustls-0.23.45"), (args.webpki_archive, "rustls-webpki-0.103.14")):
             archive = snapshot._absolute(path)

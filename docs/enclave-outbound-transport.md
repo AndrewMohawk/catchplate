@@ -35,7 +35,7 @@ the remote peer; a CID or TCP address does not do that.
 The [local owner](../data-plane/decision-gate-rs/src/enclave_loopback_tunnel_v1.rs),
 `LoopbackTlsTunnelV1::open(authority, relay_port, deadline)`, binds only an
 ephemeral `127.0.0.1` port. Its configuration exposes that address and a fresh
-password derived from 32 random bytes for Basic username `serverware-relay`. It accepts only
+password derived from 32 random bytes for Basic username `catchplate-relay`. It accepts only
 localhost peers and exact configured CONNECT/Host authority, bounded to 512
 ASCII bytes; request heads are capped at 8 KiB. Four workers, a queue of 16 and
 an active shutdown inventory of at most 21 bound the connection count. The

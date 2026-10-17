@@ -41,7 +41,7 @@ def quota_flow():
 
 
 def request():
-    return {"schema": "serverware.privateXQuotaRestartRequest/v1",
+    return {"schema": "catchplate.privateXQuotaRestartRequest/v1",
         "run_id": "10000000-0000-4000-8000-000000000001", "phase": "after_three",
         "policy_hash": "sha256:" + "a" * 64,
         "credential_id": "20000000-0000-4000-8000-000000000002",
@@ -50,7 +50,7 @@ def request():
 
 
 def acknowledgement(value):
-    return {"schema": "serverware.privateXQuotaRestartAck/v1", "status": "retained_restarted",
+    return {"schema": "catchplate.privateXQuotaRestartAck/v1", "status": "retained_restarted",
         "request_sha256": "sha256:" + hashlib.sha256(network.quota_json(value)).hexdigest()}
 
 
@@ -58,7 +58,7 @@ class ProfileTests(unittest.TestCase):
     def test_preservation_key_roster_matches_actual_provider_key_owner_without_importing_app(self):
         # Read only the maintained owner's literal filename. Importing the app
         # or provider-key runtime into the snapshot helper is not necessary.
-        source = Path(__file__).resolve().parents[1] / "serverware/operator_provider_key.py"
+        source = Path(__file__).resolve().parents[1] / "catchplate/operator_provider_key.py"
         owner = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
         names = [node.value for node in owner.body if isinstance(node, ast.Assign)
             and any(isinstance(target, ast.Name) and target.id == "FILENAME" for target in node.targets)]
@@ -87,8 +87,8 @@ class ProfileTests(unittest.TestCase):
         expected = deepcopy(original)
         expected["services"]["provider"]["command"] += ["--profile", "quota"]
         expected["services"]["check"]["command"][0] = "/app/scripts/check_operator_x_quota.py"
-        for name in ("serverware", "decision-gate-rs"):
-            expected["services"][name]["environment"]["SERVERWARE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED"] = "1"
+        for name in ("catchplate", "decision-gate-rs"):
+            expected["services"][name]["environment"]["CATCHPLATE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED"] = "1"
         self.assertEqual(quota, expected)
         recipe.validate(quota, *ARGS, **PINS, quota=True)
         with self.assertRaises(ValueError): recipe.validate(quota, *ARGS, **PINS)
@@ -118,7 +118,7 @@ class ProfileTests(unittest.TestCase):
         for hint in ("access_token", "refresh_token"):
             self.assertEqual(flow.revoke(alias, hint)[0], 200)
         view = flow.state.observations()
-        self.assertEqual(view["schema"], "serverware.privateXQuotaProvider/v1")
+        self.assertEqual(view["schema"], "catchplate.privateXQuotaProvider/v1")
         self.assertEqual(view["counts"], {"total": 18, "authorize": 2, "code": 2,
             "refresh": 1, "identity": 3, "revoke": 6, "posts": 4, "rejected": 0})
         self.assertEqual(view["issuedTokenFamilies"], [{"alias": 1, "generation": 1},
@@ -226,7 +226,7 @@ class RestartTests(unittest.TestCase):
         for row in before: row["State"]["Status"] = "running"
         after = deepcopy(before)
         for row in after:
-            if row["Id"] in (IDS["serverware"], IDS["decision-gate-rs"]):
+            if row["Id"] in (IDS["catchplate"], IDS["decision-gate-rs"]):
                 row["State"]["StartedAt"] = "2026-10-12T12:00:01Z"
         value.container_rows = Mock(side_effect=[before, after])
         context = request()
@@ -246,18 +246,18 @@ class RestartTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in value.command.call_args_list],
             ["quota-stop-gate", "quota-stopped-gate", "quota-stop-app", "quota-stopped-app", "quota-start-app", "quota-start-gate"])
         self.assertEqual(value.command.call_args_list[0].args[1], ["docker", "stop", "--time", "5", IDS["decision-gate-rs"]])
-        self.assertEqual(value.command.call_args_list[2].args[1], ["docker", "stop", "--time", "5", IDS["serverware"]])
-        self.assertEqual(value.command.call_args_list[4].args[1], ["docker", "start", IDS["serverware"]])
+        self.assertEqual(value.command.call_args_list[2].args[1], ["docker", "stop", "--time", "5", IDS["catchplate"]])
+        self.assertEqual(value.command.call_args_list[4].args[1], ["docker", "start", IDS["catchplate"]])
         self.assertEqual(value.command.call_args_list[5].args[1], ["docker", "start", IDS["decision-gate-rs"]])
         self.assertEqual(value.deadline, 1285)
         self.assertEqual([call.args for call in value.quota_wait_healthy.call_args_list],
-            [(IDS["serverware"], "app", 25), (IDS["decision-gate-rs"], "gate", 15)])
+            [(IDS["catchplate"], "app", 25), (IDS["decision-gate-rs"], "gate", 15)])
         self.assertEqual(value.quota_helper.call_args_list[-1].args,
             (IDS["check"], "quota-ack", "once", "--request-sha256", acknowledgement(request())["request_sha256"]))
         receipt = value.quota_restart
         self.assertTrue(receipt["originalProviderEdgeKeeperUnchanged"] and receipt["originalDeadlineUnchanged"])
         self.assertEqual({key: row["manualRestarts"] for key, row in receipt["restarted"].items()},
-            {"serverware": 1, "decision-gate-rs": 1})
+            {"catchplate": 1, "decision-gate-rs": 1})
         with self.assertRaises(ValueError): value.restart_for_quota(IDS, request())
         self.assertEqual(value.command.call_count, 6)
 

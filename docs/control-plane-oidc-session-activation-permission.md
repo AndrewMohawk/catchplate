@@ -1,6 +1,6 @@
 # Exact retained-target activation permission
 
-[`control_plane_oidc_session_activation_permission.py`](../serverware/control_plane_oidc_session_activation_permission.py)
+[`control_plane_oidc_session_activation_permission.py`](../catchplate/control_plane_oidc_session_activation_permission.py)
 connects fresh pending-session ownership to the genuine retained finalization
 target. The [bounded public adapter](oidc-session-activation-permission-http.md)
 exposes **options only**. There is no permission-success POST, reusable approval
@@ -34,7 +34,7 @@ The fixed trust read-lock remains held during the operation.
 allowance and issues the real mutation challenge for the exact action, retained
 challenge ID and full binding digest. The resulting `allowCredentials` must
 contain only the retained credential. Only ordinary challenge/options fields
-are returned under `serverware.oidcSessionActivationPermissionOptions/v1`.
+are returned under `catchplate.oidcSessionActivationPermissionOptions/v1`.
 Options consume no assertion and grant no authority to a later action.
 
 ## Useful same-call continuation

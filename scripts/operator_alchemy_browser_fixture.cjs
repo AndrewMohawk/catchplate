@@ -10,14 +10,14 @@ const BUNDLE = 'alchemy_chain_status_read_v1';
 const CHAINS = ['eth-mainnet', 'eth-sepolia'];
 const RPC = ['eth_chainId', 'eth_blockNumber'];
 const api = chain => 'https://' + chain + '.g.alchemy.com';
-const DUMMY = 'serverware-alchemy-placeholder-v1';
+const DUMMY = 'catchplate-alchemy-placeholder-v1';
 const PRIVATE = 'synthetic-Alchemy-key-NEVER-RENDER';
 const PRIVATE_ERROR = 'synthetic-private-storage-error-NEVER-RENDER';
 const APP_TOKEN = 'synthetic_application_' + IDS.application.replaceAll('-', '') + '_generation_1';
 const BASIC = 'basic_and_bearer_v1';
 const clone = value => JSON.parse(JSON.stringify(value));
 // Closed wire descriptor is independent of all production UI helpers.
-const capability = (allowed = CHAINS) => ({schema: 'serverware.operatorAlchemyRpcRead/v1',
+const capability = (allowed = CHAINS) => ({schema: 'catchplate.operatorAlchemyRpcRead/v1',
   connection_type: 'alchemy_key_v1', create_credential_path: CREATE, create_rule_path: GRANT,
   chains: CHAINS.map(chain => ({chain, api_origin: api(chain), destination_allowed: allowed.includes(chain)})),
   operation_bundles: [BUNDLE], rpc_methods: [...RPC], sdk_auth_token: DUMMY,
@@ -34,7 +34,7 @@ const options = changes => ({credentials: [alchemyCredential()], applications: [
   responseModes: ['projected_json', 'unfiltered_json_or_empty_v2'], credentialInputModes: ['insert', 'replace_exact'], ...changes});
 function catalog(state) {
   const value = publicCatalog(state);
-  value.capabilities.application_proxy_authentication = {schema: 'serverware.operatorProxyAuthentication/v1',
+  value.capabilities.application_proxy_authentication = {schema: 'catchplate.operatorProxyAuthentication/v1',
     modes: ['bearer', BASIC], path: '/api/operator-demo/applications/proxy-authentication'};
   if (state.alchemyCapability !== undefined)
     value.capabilities.alchemy = state.loaded === state.active ? clone(state.alchemyCapability) : null;

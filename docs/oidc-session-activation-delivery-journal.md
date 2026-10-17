@@ -9,7 +9,7 @@ directory, process role or replacement authority window.
 
 ## Fixed owner and API
 
-[`authority_oidc_session_activation_delivery_journal.py`](../serverware/authority_oidc_session_activation_delivery_journal.py)
+[`authority_oidc_session_activation_delivery_journal.py`](../catchplate/authority_oidc_session_activation_delivery_journal.py)
 constructs the exact `DeliveryOriginalJournal` with keyword-only directory FD,
 independent device/inode/UID/GID pins, maximum records, byte quota,
 configuration digest, `journal_key`, `bundle_key`, `delivery_key`, and the
@@ -45,7 +45,7 @@ success. Their caller must retain its current processing guard around use.
 
 | Field | Original retained |
 | --- | --- |
-| `schema` | `serverware.oidcSessionActivationDeliveryPrivateOriginals/v1` |
+| `schema` | `catchplate.oidcSessionActivationDeliveryPrivateOriginals/v1` |
 | `sourceRevision` | Exact current-source revision |
 | `request`, `scope` | Typed consume request and exact fourteen-field plan scope |
 | `databaseNow` | Original canonical UTC database timestamp |
@@ -74,7 +74,7 @@ field. Shape/canonical/identity joins do not verify plan or completion signature
 
 ### Serialization and restoration
 
-[`authority_oidc_session_activation_delivery_retained.py`](../serverware/authority_oidc_session_activation_delivery_retained.py)
+[`authority_oidc_session_activation_delivery_retained.py`](../catchplate/authority_oidc_session_activation_delivery_retained.py)
 provides `_encode_on_work(invocation, *, envelope_bytes, plan_digest, work)`,
 returning the four-field journal scope and exact canonical document bytes.
 It accepts the actual plan's owned original capture, not its successful replay
@@ -101,7 +101,7 @@ seven-field configuration, v2 frame, filename and method signatures are unchange
 The distinct consume format is `SWODJ001`, two-byte big-endian scope length,
 eight-byte plaintext length, fresh twelve-byte nonce, canonical scope and
 AES-256-GCM ciphertext/tag. AAD is
-`serverware.oidcSessionActivationDeliveryJournal/v1` followed by NUL, the first
+`catchplate.oidcSessionActivationDeliveryJournal/v1` followed by NUL, the first
 eighteen frame bytes and the exact scope bytes. Final names are
 `delivery-<consume plan digest hex>`. Plaintext is at most 64 MiB; files add at
 most 4 KiB of scope and 46 framing bytes. Quotas are at most 1024 records/8 GiB;

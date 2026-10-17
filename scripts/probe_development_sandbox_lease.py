@@ -39,7 +39,7 @@ def request(method: str, path: str, payload=None, token: str | None = None):
     try:
         headers = {"Content-Type": "application/json"}
         if token is not None:
-            headers["X-Serverware-Data-Plane-Token"] = token
+            headers["X-Catchplate-Data-Plane-Token"] = token
         body = None if payload is None else canonical_json_bytes(payload)
         connection.request(method, path, body=body, headers=headers)
         response = connection.getresponse()
@@ -52,24 +52,24 @@ def request(method: str, path: str, payload=None, token: str | None = None):
 
 
 def main() -> None:
-    require(os.environ.get("SERVERWARE_DEVELOPMENT_SANDBOX") == "1", "not-sandbox")
-    require(os.environ.get("SERVERWARE_RELEASE_CHANNEL") == "dev", "not-dev")
-    require(os.environ.get("SERVERWARE_DATA_DIR") == "/data", "unexpected-data-root")
+    require(os.environ.get("CATCHPLATE_DEVELOPMENT_SANDBOX") == "1", "not-sandbox")
+    require(os.environ.get("CATCHPLATE_RELEASE_CHANNEL") == "dev", "not-dev")
+    require(os.environ.get("CATCHPLATE_DATA_DIR") == "/data", "unexpected-data-root")
     status, report = request("GET", "/api/sandbox/status")
     require(status == 200 and report.get("syntheticOnly") is True
             and report.get("productionReady") is False
             and report.get("hardwareVerified") is False, "inactive-synthetic-profile")
-    marker = json.loads(Path("/data/.serverware-development-sandbox.json").read_text())
-    require(marker == {"schema": "serverware.developmentSandbox/v1", "syntheticOnly": True},
+    marker = json.loads(Path("/data/.catchplate-development-sandbox.json").read_text())
+    require(marker == {"schema": "catchplate.developmentSandbox/v1", "syntheticOnly": True},
             "invalid-sandbox-marker")
-    from serverware.demo_seed_policy import require_demo_semantics
-    from serverware.policy_bundle import policy_hash
+    from catchplate.demo_seed_policy import require_demo_semantics
+    from catchplate.policy_bundle import policy_hash
     policy = json.loads(Path("/data/policy-bundle.json").read_text())
     require_demo_semantics(policy)
     bundle_hash = policy_hash(policy)
-    binary_digest = os.environ["SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST"]
-    token_path = Path(os.environ["SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN_FILE"])
-    require(token_path == Path("/run/secrets/serverware/credential-lease.token"), "unexpected-token-path")
+    binary_digest = os.environ["CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST"]
+    token_path = Path(os.environ["CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN_FILE"])
+    require(token_path == Path("/run/secrets/catchplate/credential-lease.token"), "unexpected-token-path")
     token = token_path.read_text().strip()
     private_key = X25519PrivateKey.generate()
     public_key = private_key.public_key().public_bytes(
@@ -79,7 +79,7 @@ def main() -> None:
     for purpose in ("generationMetadata", "dispatchSecret"):
         nonce = os.urandom(32)
         payload = {
-            "apiVersion": "serverware.credentialLeaseRequest/v3", "purpose": purpose,
+            "apiVersion": "catchplate.credentialLeaseRequest/v3", "purpose": purpose,
             "principalId": "agent:demo", "routeId": "demo.echo", "credentialId": "cred-demo-bearer",
             "expectedCredentialVersion": None if metadata is None else metadata["credentialVersion"],
             "expectedMetadataSha256": None if metadata is None else metadata["metadataSha256"],

@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
+from catchplate import authority_contract
 
 
 PARTICIPANTS = frozenset({
@@ -76,9 +76,9 @@ def keywords(node):
 class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.text, cls.tree = source("serverware/authority_planner.py")
-        _, cls.read_tree = source("serverware/authority_planner_read.py")
-        _, cls.trace_tree = source("serverware/authority_audit_trace.py")
+        cls.text, cls.tree = source("catchplate/authority_planner.py")
+        _, cls.read_tree = source("catchplate/authority_planner_read.py")
+        _, cls.trace_tree = source("catchplate/authority_audit_trace.py")
 
     def method(self, name, owner="TypedTransitionPlanningProgram"):
         return definition(self.read_tree if owner == "PlannerTrace" else self.tree, name, owner)
@@ -281,7 +281,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         reader = definition(self.tree, "_read_bounded_transition_rows")
         self.assertFalse(any(isinstance(node, ast.ExceptHandler) for node in ast.walk(reader)))
         imports = [node for node in self.tree.body if isinstance(node, ast.ImportFrom)
-                   and node.module == "serverware.authority_index_contract"]
+                   and node.module == "catchplate.authority_index_contract"]
         self.assertEqual(len(imports), 1)
         self.assertIn(("IndexRangeError", None), [(item.name, item.asname) for item in imports[0].names])
         handler, = [node for node in ast.walk(self.method("read_inputs"))
@@ -357,7 +357,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
 
     def test_existing_persistence_and_service_admission_still_call_payload_validator(self):
         self.assertEqual(len(calls(self.tree, "validate_measured_plan_payload")), 2)
-        _, service = source("serverware/authority_service.py")
+        _, service = source("catchplate/authority_service.py")
         self.assertEqual(len(calls(service, "authority_planner.validate_measured_plan_payload")), 2)
         for item in calls(self.tree, "validate_measured_plan_payload"):
             self.assertIn("expected_identity", keywords(item))
@@ -413,7 +413,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertIn("authority_audit_capacity.AGGREGATE_ID", complete)
         self.assertIn("required.add('write')", complete)
         imports = [node for node in self.tree.body if isinstance(node, ast.ImportFrom)
-                   and node.module == "serverware.authority_audit_trace"]
+                   and node.module == "catchplate.authority_audit_trace"]
         self.assertEqual(len(imports), 1)
         self.assertEqual({item.name for item in imports[0].names}, {
             "AuditTraceBudget", "AuditTraceError", "MAX_PLAN_TRACE_ENTRIES", "audit_capacity_scan_key",
@@ -495,7 +495,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertEqual(len(returns), 1)
         self.assertLess(validations[1].lineno, returns[0].lineno)
         self.assertEqual(ast.unparse(returns[0].value), "(selected_rows, queries, checked_reads)")
-        _, collector_tree = source("serverware/authority_complete_acquisition.py")
+        _, collector_tree = source("catchplate/authority_complete_acquisition.py")
         collector = definition(collector_tree, "verify", "_CompleteQueryAcquisition")
         genuine = call(collector, "batch._verify_complete_query_batch")
         self.assertEqual(keywords(genuine)["work"], "self._work")
@@ -503,7 +503,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertEqual(keywords(genuine)["before_proofs"], "before_proofs")
         self.assertFalse(calls(collector, "batch.verify_complete_query_batch"))
         self.assertFalse(calls(collector, "_ValidationWork"))
-        _, batch_tree = source("serverware/authority_complete_query_batch.py")
+        _, batch_tree = source("catchplate/authority_complete_query_batch.py")
         actual = definition(batch_tree, "_verify")
         primary = call(actual, "primary.evaluate_primary_radix_memberships")
         joined = call(actual, "join.join_index_range")
@@ -529,9 +529,9 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         literals = {node.targets[0].id: node.value.value for node in self.tree.body
                     if isinstance(node, ast.Assign) and len(node.targets) == 1
                     and isinstance(node.targets[0], ast.Name) and isinstance(node.value, ast.Constant)}
-        self.assertEqual(literals["PLANNER_RESPONSE_SCHEMA"], "serverware.policyAuthorityPlannerResponse/v3")
-        self.assertEqual(literals["MEASURED_PLAN_SCHEMA"], "serverware.policyAuthorityMeasuredPlan/v3")
-        self.assertEqual(literals["SIGNED_MEASURED_PLAN_SCHEMA"], "serverware.signedPolicyAuthorityMeasuredPlan/v3")
+        self.assertEqual(literals["PLANNER_RESPONSE_SCHEMA"], "catchplate.policyAuthorityPlannerResponse/v3")
+        self.assertEqual(literals["MEASURED_PLAN_SCHEMA"], "catchplate.policyAuthorityMeasuredPlan/v3")
+        self.assertEqual(literals["SIGNED_MEASURED_PLAN_SCHEMA"], "catchplate.signedPolicyAuthorityMeasuredPlan/v3")
         private = self.method("_read_revocation_inputs_with_acquisition")
         self.assertEqual(calls(self.tree, "authority_complete_acquisition._CompleteQueryAcquisition"),
                          calls(private, "authority_complete_acquisition._CompleteQueryAcquisition"))
@@ -620,7 +620,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertEqual([ast.unparse(item) for item in callbacks[0].args[1:]],
                          ["'policy_authority_authenticated_table_roots'", "{'tableName': table}"])
         self.assertEqual(callbacks[1].args[1].value,
-            "SELECT root_revision, root_digest, leaf_count FROM serverware_metadata."
+            "SELECT root_revision, root_digest, leaf_count FROM catchplate_metadata."
             "policy_authority_authenticated_table_roots WHERE table_name = %s")
         self.assertEqual(ast.unparse(callbacks[1].args[2]), "(table,)")
         for predicate in ("type(row) is not dict", "len(row) != 3",
@@ -640,9 +640,9 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertEqual(len(calls(rows, "authority_revocation_plan.contract._digest")), 1)
         committed = call(reader, "authority_revocation_plan._json_digest")
         self.assertEqual([ast.unparse(item) for item in committed.args],
-                         ["'serverware.policyAuthorityRootSet/v1'", "business_roots", "ledger"])
+                         ["'catchplate.policyAuthorityRootSet/v1'", "business_roots", "ledger"])
         self.assertEqual([ast.unparse(item) for item in call(reader, "framed_digest").args],
-                         ["'serverware.policyAuthorityRootSet/v1'", "canonical_bytes(list(business_roots))"])
+                         ["'catchplate.policyAuthorityRootSet/v1'", "canonical_bytes(list(business_roots))"])
 
     def test_private_revocation_factory_captures_exact_context_before_one_clock_and_one_generation(self):
         facade = self.method("_read_revocation_inputs")
@@ -770,7 +770,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
             self.assertIsInstance(handler.body[-1], ast.Raise)
 
     def test_private_complete_collector_reuses_exact_idle_ledger_and_poisons_original_identity(self):
-        _, tree = source("serverware/authority_complete_acquisition.py")
+        _, tree = source("catchplate/authority_complete_acquisition.py")
         init = definition(tree, "__init__", "_CompleteQueryAcquisition")
         defaults = dict(zip((arg.arg for arg in init.args.kwonlyargs), init.args.kw_defaults))
         self.assertEqual(ast.unparse(defaults["acquisition"]), "None")
@@ -791,7 +791,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
             self.assertIn("self._acquisition is not self._physical_identity", rendered)
             self.assertIn("self._acquisition.cursor, self._acquisition.trace, self._acquisition.work", rendered)
             self.assertIn("self._physical_identity.failed = True", rendered)
-        _, reader_tree = source("serverware/authority_index_reader.py")
+        _, reader_tree = source("catchplate/authority_index_reader.py")
         checked = definition(reader_tree, "require_idle", "_ReadAcquisitionBudget")
         self.assertIn("self.failed or self.active", ast.unparse(checked))
         self.assertIn("self.failed = True", ast.unparse(checked))
@@ -810,7 +810,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertNotIn("acquisition", [node.target.id for node in record.body if isinstance(node, ast.AnnAssign)])
 
     def test_private_complete_export_retains_actual_merged_proofs_and_never_reacquires_sql(self):
-        _, tree = source("serverware/authority_complete_acquisition.py")
+        _, tree = source("catchplate/authority_complete_acquisition.py")
         record = definition(tree, "CompleteAcquisitionEvidence")
         self.assertEqual([node.target.id for node in record.body if isinstance(node, ast.AnnAssign)],
             ["cutoff_us", "heads", "frontiers", "business_before_roots", "authorization_before_roots", "before_proofs"])
@@ -944,7 +944,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
             self.assertFalse(calls(method, forbidden))
 
     def test_private_packaging_attaches_current_work_and_common_body_returns_actual_graphs(self):
-        _, tree = source("serverware/authority_revocation_proof_bundle.py")
+        _, tree = source("catchplate/authority_revocation_proof_bundle.py")
         method = definition(tree, "_derive_on_work")
         attached = call(method, "_PackagingLedger._attach")
         self.assertEqual([ast.unparse(item) for item in attached.args], ["work"])
@@ -975,7 +975,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertEqual([ast.unparse(item) for item in returned.value.elts], ["derived.retained", "derived.result"])
 
     def test_configured_owner_threads_actual_manifest_prefix_and_private_trace_without_reset(self):
-        _, tree = source("serverware/authority_revocation_coordinator.py")
+        _, tree = source("catchplate/authority_revocation_coordinator.py")
         method = definition(tree, "produce_and_persist_with_cutoff", "RevocationPlanningCoordinator")
         self.assertEqual({item.arg for item in method.args.kwonlyargs},
                          {"request", "evidence", "context", "planned_at_epoch_ns", "work"})
@@ -999,7 +999,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertEqual(keywords(shared), {"planner_public_key": "configured[2]",
             "verifier_public_key": "configured[3]", "owned": "owned", "actual_context": "actual_context",
             "work": "work", "root_inventory": "root_inventory"})
-        _, planning = source("serverware/authority_revocation_planning.py")
+        _, planning = source("catchplate/authority_revocation_planning.py")
         body = definition(planning, "_produce_on_read_configuration")
         read_scope = definition(planning, "_read_scope")
         entered = call(body, "_read_scope")
@@ -1053,7 +1053,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
             self.assertFalse(calls(read_scope, forbidden))
 
     def test_configured_owner_captures_original_bytes_before_cleanup_and_only_then_persists(self):
-        _, tree = source("serverware/authority_revocation_coordinator.py")
+        _, tree = source("catchplate/authority_revocation_coordinator.py")
         method = definition(tree, "produce_and_persist_with_cutoff", "RevocationPlanningCoordinator")
         compatibility = definition(tree, "_produce_on_read_configuration")
         shared = call(compatibility, "planning._produce_on_read_configuration")
@@ -1061,7 +1061,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertEqual(keywords(shared), {"planner_public_key": "configured[2]",
             "verifier_public_key": "configured[3]", "owned": "owned", "actual_context": "actual_context",
             "work": "work", "root_inventory": "root_inventory"})
-        _, planning = source("serverware/authority_revocation_planning.py")
+        _, planning = source("catchplate/authority_revocation_planning.py")
         body = definition(planning, "_produce_on_read_configuration")
         read_scope = definition(planning, "_read_scope")
         returned, = [node for node in ast.walk(body) if isinstance(node, ast.Return)]
@@ -1129,7 +1129,7 @@ class GlobalAuditCapacityIntegrationSourceTests(unittest.TestCase):
         self.assertIs(method.body[-2].value, persistence)
 
     def test_configured_owner_receipt_facade_discards_only_the_original_cutoff(self):
-        _, tree = source("serverware/authority_revocation_coordinator.py")
+        _, tree = source("catchplate/authority_revocation_coordinator.py")
         method = definition(tree, "produce_and_persist", "RevocationPlanningCoordinator")
         self.assertEqual({item.arg for item in method.args.kwonlyargs},
                          {"request", "evidence", "context", "planned_at_epoch_ns", "work"})

@@ -33,13 +33,13 @@ GO_TARGET = "/example-go/x-post"
 NODE_DEPENDENCIES = {"@xdevplatform/xdk": "0.6.6", "undici": "8.11.2"}
 PYTHON_DEPENDENCIES = {"xdk": "0.10.6", "requests": "2.34.2", "urllib3": "2.8.0",
     "certifi": "2026.7.22", "pydantic": "2.13.4", "requests-oauthlib": "2.0.0"}
-OBSERVATION_SCHEMA = "serverware.privateXPostObservations/v1"
-CHECK_SCHEMA = "serverware.privateXPostCheck/v1"
+OBSERVATION_SCHEMA = "catchplate.privateXPostObservations/v1"
+CHECK_SCHEMA = "catchplate.privateXPostCheck/v1"
 ORIGIN = "https://api.x.com"
 TARGET = "/2/tweets"
-PLACEHOLDER = "serverware-x-post-placeholder-v1"
-TEXT = "Serverware local check: caf\u00e9 & <verified>\n"
-REFLECTION_TEXT = "Serverware local check: reflect response"
+PLACEHOLDER = "catchplate-x-post-placeholder-v1"
+TEXT = "Catchplate local check: caf\u00e9 & <verified>\n"
+REFLECTION_TEXT = "Catchplate local check: reflect response"
 USER_AGENTS = {"node": "xdk-typescript/0.6.6", "python": "xdk-python/0.10.6", "go": "Go-http-client/1.1"}
 MEDIA = {"node": "application/json", "python": "*/*", "go": "application/json"}
 SDK_HEADERS = {
@@ -50,21 +50,21 @@ SDK_HEADERS = {
 }
 _BODIES = {
     "success": {
-        "node": b'{"text":"Serverware local check: caf\xc3\xa9 & <verified>\\n"}',
-        "python": b'{"text": "Serverware local check: caf\\u00e9 & <verified>\\n"}',
-        "go": b'{"text":"Serverware local check: caf\xc3\xa9 \\u0026 \\u003cverified\\u003e\\n"}',
+        "node": b'{"text":"Catchplate local check: caf\xc3\xa9 & <verified>\\n"}',
+        "python": b'{"text": "Catchplate local check: caf\\u00e9 & <verified>\\n"}',
+        "go": b'{"text":"Catchplate local check: caf\xc3\xa9 \\u0026 \\u003cverified\\u003e\\n"}',
     },
     "reflection": {
-        "node": b'{"text":"Serverware local check: reflect response"}',
-        "python": b'{"text": "Serverware local check: reflect response"}',
-        "go": b'{"text":"Serverware local check: reflect response"}',
+        "node": b'{"text":"Catchplate local check: reflect response"}',
+        "python": b'{"text": "Catchplate local check: reflect response"}',
+        "go": b'{"text":"Catchplate local check: reflect response"}',
     },
 }
 NODE_UNKNOWN = ("Posting was not confirmed. It may have completed, including when HTTP 409 withholds a response. "
-    "Do not resubmit automatically; inspect Serverware audit and the account.")
+    "Do not resubmit automatically; inspect Catchplate audit and the account.")
 FAILURE_MESSAGES = {
     "python": b"X post outcome unknown. Do not replay; check the operator audit and X before any new action.\n",
-    "go": (b"X post outcome is unknown and it may already exist; inspect Serverware audit records and the X account "
+    "go": (b"X post outcome is unknown and it may already exist; inspect Catchplate audit records and the X account "
         b"before any further action; do not retry automatically\n"),
 }
 PHASES = (tuple(client + ":" + phase for phase in ("first", "refreshed") for client in CLIENTS)

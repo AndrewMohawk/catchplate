@@ -8,9 +8,9 @@ use std::mem::{size_of,size_of_val,zeroed};
 #[path="retrieval_pair_inputs.rs"]
 pub(super) mod inputs;
 const MAX_WIRE:usize=32768;
-const LAUNCH_PATH:&str="/etc/serverware/native-shadow-guest-launch.json";
-const IMAGE_PATH:&str="/opt/serverware/native-shadow-custody-runtime.squashfs";
-const SOURCE_API:&str="serverware.nativeShadowRetrievalPairOriginals/v1";
+const LAUNCH_PATH:&str="/etc/catchplate/native-shadow-guest-launch.json";
+const IMAGE_PATH:&str="/opt/catchplate/native-shadow-custody-runtime.squashfs";
+const SOURCE_API:&str="catchplate.nativeShadowRetrievalPairOriginals/v1";
 
 struct Control {socket:OwnedFd,peer:libc::ucred,pidfd:OwnedFd}
 impl Control {

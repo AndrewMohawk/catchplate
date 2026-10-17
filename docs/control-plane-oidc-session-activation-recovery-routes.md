@@ -9,7 +9,7 @@ activation or SQL.
 
 The request is strict immutable JSON of at most 64 KiB, requiring `schema`,
 `purpose` and `localDigest`. Schema is
-`serverware.oidcSessionActivationRecoveryRequest/v1`; purpose is
+`catchplate.oidcSessionActivationRecoveryRequest/v1`; purpose is
 `recover-oidc-session-activation`. Options reject MFA and all extra fields;
 dispatch permits only the separate optional `mfa` assertion/approval carrier,
 which the actual actor must authenticate. Neither route accepts browser root
@@ -42,7 +42,7 @@ The [actor](control-plane-oidc-session-activation-recovery-actor.md) freshly
 authenticates historical target and possession, current RBAC, sole credential,
 trust, exact session and provider expiry before issuing genuine action-bound
 WebAuthn options. The response schema is
-`serverware.oidcSessionActivationRecoveryOptions/v1`, with the exact target-key
+`catchplate.oidcSessionActivationRecoveryOptions/v1`, with the exact target-key
 publicKey data and action/payload binding. It is not recovery permission.
 
 Options failures retain the fixed recovery-unavailable contract. POST framing

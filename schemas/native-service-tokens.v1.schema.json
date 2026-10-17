@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-service-tokens.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-service-tokens.v1.schema.json",
   "title": "Purpose-fixed encrypted native startup service tokens",
   "$comment": "Source enforces actual instance/binary/policy/exact endpoint joins, distinct strong role-specific tokens, canonical encodings, full KEK commitment, one-use broker startup phase and original runtime deadline. No schema result is release or rollback authority. AES-GCM envelope protects exactly32768 padded bytes; plaintext contains a four-byte big-endian length, canonical ASCII document<=24576 bytes, then zero padding. Gate output uses a separate recipient-bound ciphertext family.",
   "$ref": "#/$defs/envelope",
@@ -21,7 +21,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeServiceTokensBinding/v1"
+          "const": "catchplate.nativeServiceTokensBinding/v1"
         },
         "instanceId": {
           "type": "string",
@@ -99,7 +99,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeServiceTokensEnvelope/v1"
+          "const": "catchplate.nativeServiceTokensEnvelope/v1"
         },
         "binding": {
           "$ref": "#/$defs/binding"
@@ -205,7 +205,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeServiceTokens/v1"
+          "const": "catchplate.nativeServiceTokens/v1"
         },
         "tokens": {
           "$ref": "#/$defs/tokens"

@@ -15,8 +15,8 @@ use super::super::production_dispatch::{ClosedProductionGenerationRequestV4 as R
     ExactSignedProductionGenerationInstallEnvelopeWireV4,ProductionGenerationAbortResultWireV4,
     PRODUCTION_AUTHORITY_ENDPOINT_PROTOCOL_VERSION,generation_service_result_binding_sha256};
 
-pub(super) const API:&str="serverware.custodyServiceGenerationCertification/v1";
-pub(super) const PROPOSAL:&str="serverware.nativeGenerationCoordinatorProposal/v1";
+pub(super) const API:&str="catchplate.custodyServiceGenerationCertification/v1";
+pub(super) const PROPOSAL:&str="catchplate.nativeGenerationCoordinatorProposal/v1";
 fn invalid()->ServiceError{ServiceError::Invalid("generation certification does not match the actual retained effect")}
 fn ensure(ok:bool)->Result<(),ServiceError>{if ok{Ok(())}else{Err(invalid())}}
 pub(super) fn digest<T:Serialize>(v:&T)->Result<Sha256Digest,ServiceError>{Ok(Sha256Digest::compute(&encode_canonical_frame(v)?))}
@@ -37,7 +37,7 @@ impl Proposal {
     }
     pub(super) fn validate(&self)->Result<(),ServiceError>{
         ensure(self.api_version==PROPOSAL && self.durable_intent_sha256==Sha256Digest::compute(&self.intent()?)
-            && self.services.api_version=="serverware.custodyGenerationServicesResult/v1"
+            && self.services.api_version=="catchplate.custodyGenerationServicesResult/v1"
             && self.services.request_sha256==self.request.request_sha256().map_err(|_|invalid())?
             && self.services.services.keys().copied().collect::<BTreeSet<_>>()==super::generation_service_client::roles()
             && self.prepared_at_boottime_nanos>0 && self.prepared_at_boottime_nanos<self.request.deadline_boottime_nanos())?;
@@ -100,11 +100,11 @@ impl Certify {
         let signature=URL_SAFE_NO_PAD.decode(&self.reply.signature_base64).map_err(|_|invalid())?;
         ensure(signature.len()==64 && URL_SAFE_NO_PAD.encode(&signature)==self.reply.signature_base64)?;
         let preimage=super::super::protocol::domain_separated_signature_preimage(
-            b"serverware.policyCustodyProductionAuthorityEndpointSignature/v4",
+            b"catchplate.policyCustodyProductionAuthorityEndpointSignature/v4",
             &self.reply.signature_payload().map_err(|_|invalid())?)?;
         key.verify_strict(&preimage,&Signature::from_slice(&signature).map_err(|_|invalid())?).map_err(|_|invalid())?;
         ensure(self.reply.result_sha256==super::super::super::hash_domain_frames(
-            b"serverware.policyCustodyProductionAuthorityEndpointResponse/v4",&[&encode_canonical_frame(&self.reply.result)?]))?;
+            b"catchplate.policyCustodyProductionAuthorityEndpointResponse/v4",&[&encode_canonical_frame(&self.reply.result)?]))?;
         let proposal=self.proposal()?;proposal.validate()?;
         let Body::GenerationAdmission{request,services}=&self.request.request else{return Err(invalid());};
         ensure(proposal.request==*request && proposal.services==*services && proposal.request.deadline_boottime_nanos()==self.deadline()

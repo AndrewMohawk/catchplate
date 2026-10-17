@@ -53,7 +53,7 @@ class Fixture:
     def __init__(self):
         (self.config, self.db, self.store, self.bundles, self.schema,
             self.inputs, self.mutations) = workspace.workspace()
-        from serverware import app, auth, oauth, operator_catalog_oauth, operator_catalog_oauth_profile
+        from catchplate import app, auth, oauth, operator_catalog_oauth, operator_catalog_oauth_profile
         self.app, self.auth, self.oauth = app, auth, oauth
         self.consent, self.profiles = operator_catalog_oauth, operator_catalog_oauth_profile
         self.profile = self.profiles.require_profile()
@@ -90,7 +90,7 @@ class Fixture:
         parsed = urlsplit(path)
         values = [(b"host", b"control.example.com")]
         if auth:
-            values.append((b"x-serverware-admin-token", ADMIN.encode()))
+            values.append((b"x-catchplate-admin-token", ADMIN.encode()))
         if origin:
             values.append((b"origin", self.config.PUBLIC_URL.encode()))
         if body is not None:
@@ -302,7 +302,7 @@ def before_contact(change):
                     conn.execute("UPDATE operator_catalog_state SET revision=revision+1")
                 else:
                     conn.execute("UPDATE operator_catalog_oauth_profile SET binding_digest=?", ("sha256:" + "0" * 64,))
-        environment = {"SERVERWARE_GOOGLE_OAUTH_CLIENT_ID": "456-drift.apps.googleusercontent.com"} if change == "profile" else {}
+        environment = {"CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID": "456-drift.apps.googleusercontent.com"} if change == "profile" else {}
         with patch.dict(os.environ, environment):
             # Direct exchange proves the after-consumption hook even when HTTP
             # admission itself would reject a changed cold profile earlier.
@@ -314,7 +314,7 @@ def before_contact(change):
 
 def rollback(target):
     f = Fixture()
-    from serverware import operator_google_cleanup as cleanup, operator_google_cleanup_store as cleanup_store
+    from catchplate import operator_google_cleanup as cleanup, operator_google_cleanup_store as cleanup_store
     targets = {"core": ("INSERT", "credentials", ""),
         "catalog": ("INSERT", "operator_catalog_credentials", ""),
         "revision": ("UPDATE", "operator_catalog_state", ""),
@@ -352,7 +352,7 @@ def rollback(target):
 
 def callback_cleanup():
     f = Fixture()
-    from serverware import operator_google_cleanup_store as cleanup_store
+    from catchplate import operator_google_cleanup_store as cleanup_store
     with patch.object(f.oauth, "request_bytes", side_effect=f.transport):
         f.begin()
         with closing(f.db.connect()) as conn, conn:
@@ -502,7 +502,7 @@ def refresh_failure_guidance():
         assert workspace.catalog(f.db, f.schema) == catalog_before
         work = f.rows("oauth_revocation_work")
         assert len(work) == 1 and work[0]["status"] == "issuance_uncertain_unreported"
-        from serverware import operator_google_cleanup_store
+        from catchplate import operator_google_cleanup_store
         retained = operator_google_cleanup_store.get_work(work[0]["id"])
         assert retained["fence"] is None and retained["material_sha256"] is None
         failed = [row for row in f.rows("audit_events")
@@ -596,7 +596,7 @@ for _change in ("missing", "broader", "duplicate", "identity", "omitted"):
 class OperatorGoogleConsentTests(unittest.TestCase):
     def setUp(self):
         google_tests.OperatorCatalogGoogleTests.setUp(self)
-        self.environment["SERVERWARE_ADMIN_TOKEN"] = ADMIN
+        self.environment["CATCHPLATE_ADMIN_TOKEN"] = ADMIN
 
     def worker(self, operation):
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation],

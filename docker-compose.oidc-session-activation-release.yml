@@ -3,11 +3,11 @@
 # This read-only bind grants no root authority, key custody or public endpoint.
 # The signed parent bootstrap uses the existing authority-trust directory mount.
 services:
-  serverware:
+  catchplate:
     volumes:
       - type: bind
-        source: ${SERVERWARE_OIDC_SESSION_ACTIVATION_RELEASE_SOCKET_DIR:?set preprovisioned private release socket directory}
-        target: /run/serverware/oidc-session-activation-token-release
+        source: ${CATCHPLATE_OIDC_SESSION_ACTIVATION_RELEASE_SOCKET_DIR:?set preprovisioned private release socket directory}
+        target: /run/catchplate/oidc-session-activation-token-release
         read_only: true
         bind:
           create_host_path: false

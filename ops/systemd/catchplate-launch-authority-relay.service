@@ -1,0 +1,53 @@
+[Unit]
+Description=Catchplate production launch authority mTLS relay
+Documentation=https://github.com/example/private-deployment
+Requires=catchplate-launch-authority-relay.socket
+After=network-online.target catchplate-launch-authority-relay.socket
+Wants=network-online.target
+ConditionFileIsExecutable=/opt/catchplate/scripts/launch_authority_relay.py
+ConditionPathExists=/etc/catchplate/launch-authority-relay.env
+
+[Service]
+Type=simple
+# Provision this locked, non-login system account before enabling the unit. The mTLS
+# client private key must be owned by this account with mode 0400 or 0600. The
+# root:root 0600 launcher socket is inherited from the socket unit, and SO_PEERCRED
+# still requires each connecting launcher process to be uid 0 and gid 0.
+User=catchplate-launch-authority-relay
+Group=catchplate-launch-authority-relay
+UMask=0077
+EnvironmentFile=/etc/catchplate/launch-authority-relay.env
+UnsetEnvironment=LD_PRELOAD LD_LIBRARY_PATH PYTHONPATH PYTHONHOME SSL_CERT_FILE SSL_CERT_DIR OPENSSL_CONF SSLKEYLOGFILE HTTPS_PROXY HTTP_PROXY ALL_PROXY NO_PROXY
+ExecStart=/usr/bin/python3 -I /opt/catchplate/scripts/launch_authority_relay.py --systemd-socket --authority-url ${CATCHPLATE_LAUNCH_AUTHORITY_URL} --server-name ${CATCHPLATE_LAUNCH_AUTHORITY_SERVER_NAME} --ca-certificate ${CATCHPLATE_LAUNCH_AUTHORITY_CA_CERTIFICATE} --client-certificate ${CATCHPLATE_LAUNCH_AUTHORITY_CLIENT_CERTIFICATE} --client-private-key ${CATCHPLATE_LAUNCH_AUTHORITY_CLIENT_PRIVATE_KEY}
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+Restart=on-failure
+RestartSec=1s
+TimeoutStartSec=10s
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=yes
+ProtectProc=invisible
+ProcSubset=pid
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

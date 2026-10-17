@@ -1587,7 +1587,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "serverware-decision-gate"
+name = "catchplate-decision-gate"
 version = "0.1.0"
 dependencies = [
  "base64",

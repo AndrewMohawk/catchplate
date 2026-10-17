@@ -16,7 +16,7 @@ listener 200, receiving custody 201, consume planner bootstrap 202, planning
 history custody 203, SQL receiving history custody 204, execution-bundle AES key
 205, historical-bundle AES key 206, delivery AES key 207 and attempt directory
 208. There is no signing key. The listener is
-`/run/serverware/oidc-session-activation-delivery-execution/sql.sock`; peer
+`/run/catchplate/oidc-session-activation-delivery-execution/sql.sock`; peer
 UID/GID 65532 is required before request bodies are read.
 
 The root launcher opens the actual construction work/window before protected

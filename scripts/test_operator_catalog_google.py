@@ -44,7 +44,7 @@ class Fixture:
     def __init__(self):
         (self.config, self.db, self.store, self.bundles, self.schema,
             self.inputs, self.mutations) = workspace.workspace()
-        from serverware import operator_catalog_google, operator_catalog_oauth_profile
+        from catchplate import operator_catalog_google, operator_catalog_oauth_profile
         self.google, self.profiles = operator_catalog_google, operator_catalog_oauth_profile
         self.profile = self.profiles.require_profile()
         self.initial_policy = self.config.POLICY_BUNDLE_PATH.read_bytes()
@@ -194,9 +194,9 @@ def profile_pin():
 def cold_drift():
     f = Fixture()
     before, core = f.snapshot(), f.core()
-    changes = {"SERVERWARE_OPERATOR_GOOGLE_PROFILE": "",
-        "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID": "456-changed.apps.googleusercontent.com",
-        "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI": "https://control.example.com/other-callback"}
+    changes = {"CATCHPLATE_OPERATOR_GOOGLE_PROFILE": "",
+        "CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID": "456-changed.apps.googleusercontent.com",
+        "CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI": "https://control.example.com/other-callback"}
     for key, value in changes.items():
         with patch.dict(os.environ, {key: value}):
             refused(lambda: f.google.validate_record(f.record, core), f.profiles.OperatorGoogleProfileError)
@@ -292,7 +292,7 @@ def lease_binding():
 
 def scope_normalization():
     f = Fixture()
-    from serverware import operator_catalog_oauth as consent
+    from catchplate import operator_catalog_oauth as consent
     canonical = " ".join(f.profile.scopes)
     alias = "https://www.googleapis.com/auth/userinfo.email"
     accepted = (canonical, " ".join(reversed(f.profile.scopes)),
@@ -312,7 +312,7 @@ def scope_normalization():
 
 def refresh_association():
     f = Fixture()
-    from serverware import operator_catalog_oauth as consent
+    from catchplate import operator_catalog_oauth as consent
     metadata = json.loads(f.core()["metadata"])
     before = f.snapshot()
     assert consent.profile_for_refresh(metadata) == f.profile
@@ -337,12 +337,12 @@ class OperatorCatalogGoogleTests(unittest.TestCase):
         secret_file = Path(self.scratch.name) / "google-client-secret"
         secret_file.write_text(CLIENT_SECRET + "\n", encoding="utf-8")
         secret_file.chmod(0o600)
-        self.environment.update({"SERVERWARE_OPERATOR_GOOGLE_PROFILE": "operator-google-v1",
-            "SERVERWARE_OPERATOR_DEMO_UPSTREAMS": '["https://api.example.com","https://gmail.googleapis.com"]',
-            "SERVERWARE_PUBLIC_URL": "https://control.example.com",
-            "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID": "123-fixture.apps.googleusercontent.com",
-            "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI": "https://control.example.com/api/oauth/callback/google",
-            "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE": str(secret_file)})
+        self.environment.update({"CATCHPLATE_OPERATOR_GOOGLE_PROFILE": "operator-google-v1",
+            "CATCHPLATE_OPERATOR_DEMO_UPSTREAMS": '["https://api.example.com","https://gmail.googleapis.com"]',
+            "CATCHPLATE_PUBLIC_URL": "https://control.example.com",
+            "CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID": "123-fixture.apps.googleusercontent.com",
+            "CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI": "https://control.example.com/api/oauth/callback/google",
+            "CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE": str(secret_file)})
 
     def run_worker(self, operation):
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation],

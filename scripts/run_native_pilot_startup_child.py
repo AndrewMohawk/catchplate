@@ -47,7 +47,7 @@ def _stop(_number, _frame):
 
 def _failure(role, status):
     # No startup originals, descriptors, private data or exception text is logged.
-    raw = json.dumps(dict(apiVersion="serverware.nativePilotStartupChildResult/v1",
+    raw = json.dumps(dict(apiVersion="catchplate.nativePilotStartupChildResult/v1",
         role=role, status=status, pilotAcceptanceVerified=False, productionReleaseEligible=False),
         sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
     try:
@@ -81,8 +81,8 @@ def main():
             and os.getresuid() == os.getresgid() == (0, 0, 0))
         selected = _arguments(sys.argv[1:]); role = selected["role"]
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from serverware import native_pilot_genesis_parent_control_io as ownership
-        from serverware.native_pilot_startup_child import StartupChild, StartupChildError
+        from catchplate import native_pilot_genesis_parent_control_io as ownership
+        from catchplate.native_pilot_startup_child import StartupChild, StartupChildError
         with ownership.owning():
             try: owner = StartupChild.open(**selected)
             except StartupChildError as error:

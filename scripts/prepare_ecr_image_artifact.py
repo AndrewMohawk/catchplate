@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 import sys
 
-from serverware.ecr_artifact_staging import ArtifactStagingError, stage_artifact
+from catchplate.ecr_artifact_staging import ArtifactStagingError, stage_artifact
 
 
 def main(argv: list[str] | None = None) -> int:

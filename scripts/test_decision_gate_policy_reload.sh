@@ -3,7 +3,7 @@ set -euo pipefail
 
 GATE="${DECISION_GATE_BASE:-http://localhost:9091}"
 BASE="${BASE:-http://localhost:3000}"
-export SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN="${SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN:-dev-rust-management-token}"
+export CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN="${CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN:-dev-rust-management-token}"
 
 python3 - "$GATE" <<'PY'
 import json
@@ -21,7 +21,7 @@ def request_json(path: str, payload: dict | None = None) -> dict:
         data=data,
         headers={
             "Content-Type": "application/json",
-            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN"],
+            "X-Catchplate-Data-Plane-Token": os.environ["CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN"],
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:
@@ -32,7 +32,7 @@ payload = {
     "clientIp": "127.0.0.1",
     "method": "GET",
     "url": "https://demo-upstream:8443/echo",
-    "headers": {"X-Serverware-Agent": "demo-agent"},
+    "headers": {"X-Catchplate-Agent": "demo-agent"},
 }
 health = request_json("/healthz")
 decision = request_json("/v1/decide", payload)
@@ -41,12 +41,12 @@ assert decision["action"] == "allow" and decision["route_id"] == "demo.echo", de
 print(json.dumps({"ok": True, "stage": "initial", "policy_hash": health["policy_hash"]}, sort_keys=True))
 PY
 
-reduced_hash="$(docker compose exec -T serverware python - <<'PY'
+reduced_hash="$(docker compose exec -T catchplate python - <<'PY'
 import os
 import time
 
-from serverware.config import POLICY_BUNDLE_PATH
-from serverware.policy_bundle import demo_policy_bundle, get_policy_snapshot, write_policy_bundle
+from catchplate.config import POLICY_BUNDLE_PATH
+from catchplate.policy_bundle import demo_policy_bundle, get_policy_snapshot, write_policy_bundle
 
 bundle = demo_policy_bundle("cred-demo-bearer")
 current = get_policy_snapshot()
@@ -77,7 +77,7 @@ def request_json(path: str, payload: dict | None = None) -> dict:
         data=data,
         headers={
             "Content-Type": "application/json",
-            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN"],
+            "X-Catchplate-Data-Plane-Token": os.environ["CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN"],
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:
@@ -88,7 +88,7 @@ payload = {
     "clientIp": "127.0.0.1",
     "method": "GET",
     "url": "https://demo-upstream:8443/echo",
-    "headers": {"X-Serverware-Agent": "demo-agent"},
+    "headers": {"X-Catchplate-Agent": "demo-agent"},
 }
 deadline = time.time() + 15
 while time.time() < deadline:
@@ -117,13 +117,13 @@ print((health.get("policy_reload") or {}).get("failed", 0))
 PY
 )"
 
-unsupported_hash="$(docker compose exec -T serverware python - <<'PY'
+unsupported_hash="$(docker compose exec -T catchplate python - <<'PY'
 import json
 import os
 import time
 
-from serverware.config import POLICY_BUNDLE_PATH
-from serverware.policy_bundle import demo_policy_bundle, get_policy_snapshot, policy_hash, sign_policy_bundle
+from catchplate.config import POLICY_BUNDLE_PATH
+from catchplate.policy_bundle import demo_policy_bundle, get_policy_snapshot, policy_hash, sign_policy_bundle
 
 bundle = demo_policy_bundle("cred-demo-bearer")
 current = get_policy_snapshot()
@@ -158,7 +158,7 @@ def request_json(path: str, payload: dict | None = None) -> dict:
         data=data,
         headers={
             "Content-Type": "application/json",
-            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN"],
+            "X-Catchplate-Data-Plane-Token": os.environ["CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN"],
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:
@@ -169,7 +169,7 @@ payload = {
     "clientIp": "127.0.0.1",
     "method": "GET",
     "url": "https://demo-upstream:8443/echo",
-    "headers": {"X-Serverware-Agent": "demo-agent"},
+    "headers": {"X-Catchplate-Agent": "demo-agent"},
 }
 deadline = time.time() + 15
 while time.time() < deadline:
@@ -206,11 +206,11 @@ print((health.get("policy_reload") or {}).get("failed", 0))
 PY
 )"
 
-docker compose exec -T serverware python - <<'PY'
+docker compose exec -T catchplate python - <<'PY'
 import os
 import time
 
-from serverware.config import POLICY_BUNDLE_PATH
+from catchplate.config import POLICY_BUNDLE_PATH
 
 POLICY_BUNDLE_PATH.write_text("{ invalid policy\n")
 now = time.time()
@@ -237,7 +237,7 @@ def request_json(path: str, payload: dict | None = None) -> dict:
         data=data,
         headers={
             "Content-Type": "application/json",
-            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN"],
+            "X-Catchplate-Data-Plane-Token": os.environ["CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN"],
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:
@@ -248,7 +248,7 @@ payload = {
     "clientIp": "127.0.0.1",
     "method": "GET",
     "url": "https://demo-upstream:8443/echo",
-    "headers": {"X-Serverware-Agent": "demo-agent"},
+    "headers": {"X-Catchplate-Agent": "demo-agent"},
 }
 deadline = time.time() + 15
 while time.time() < deadline:
@@ -271,13 +271,13 @@ assert control_health["policy_ready"] is False, control_health
 print(json.dumps({"ok": True, "stage": "invalid-policy-retained-last-good", "failed": failed}, sort_keys=True))
 PY
 
-restored_hash="$(docker compose exec -T serverware python - <<'PY'
+restored_hash="$(docker compose exec -T catchplate python - <<'PY'
 import os
 import time
 
-from serverware.config import POLICY_BUNDLE_PATH
-from serverware import db
-from serverware.policy_bundle import demo_policy_bundle, write_policy_bundle
+from catchplate.config import POLICY_BUNDLE_PATH
+from catchplate import db
+from catchplate.policy_bundle import demo_policy_bundle, write_policy_bundle
 
 bundle = demo_policy_bundle("cred-demo-bearer")
 bundle["metadata"]["sequence"] = int(db.get_policy_high_water()["sequence"]) + 1
@@ -306,7 +306,7 @@ def request_json(path: str, payload: dict | None = None) -> dict:
         data=data,
         headers={
             "Content-Type": "application/json",
-            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN"],
+            "X-Catchplate-Data-Plane-Token": os.environ["CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN"],
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:
@@ -317,7 +317,7 @@ payload = {
     "clientIp": "127.0.0.1",
     "method": "GET",
     "url": "https://demo-upstream:8443/echo",
-    "headers": {"X-Serverware-Agent": "demo-agent"},
+    "headers": {"X-Catchplate-Agent": "demo-agent"},
 }
 deadline = time.time() + 15
 while time.time() < deadline:

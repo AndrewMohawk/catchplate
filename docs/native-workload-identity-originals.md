@@ -5,7 +5,7 @@ profile does not issue a certificate or create authority by itself. The separate
 native issuer grant supplies independent issuance approval over exact originals.
 Legacy signed-packet/request v1 admission is unchanged.
 
-[`native_workload_identity_originals.py`](../serverware/native_workload_identity_originals.py)
+[`native_workload_identity_originals.py`](../catchplate/native_workload_identity_originals.py)
 accepts the exact seven-field native packet-v2 original, separately supplied
 target request, actual cold issuer PEM, independently pinned delegation/setup
 public-key PEM originals, independent expected target principal/nonce/SANs, and

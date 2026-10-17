@@ -68,7 +68,7 @@ def tuple_fields(kind="long_term", **changes):
 
 def tuple_json(fields):
     # Independent public format oracle; never call the production serializer.
-    return json.dumps({"schema": "serverware.awsSigV4Credentials/v1", **fields},
+    return json.dumps({"schema": "catchplate.awsSigV4Credentials/v1", **fields},
         sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
@@ -201,7 +201,7 @@ def saved_tuple(*, session=False):
     public = f.public()
     f.assert_public(public["credentials"][0], fields)
     assert public["capabilities"]["aws_credentials"] == {
-        "schema": "serverware.operatorAwsCredentials/v1", "connection_type": KIND,
+        "schema": "catchplate.operatorAwsCredentials/v1", "connection_type": KIND,
         "create_path": "/api/operator-demo/credentials/aws-sigv4",
         "replace_path": "/api/operator-demo/credentials/aws-sigv4/replace",
         "revoke_path": "/api/operator-demo/credentials/revoke",
@@ -265,7 +265,7 @@ def strict_inputs():
 
 def expiry():
     f = Fixture()
-    from serverware import operator_catalog_aws as aws
+    from catchplate import operator_catalog_aws as aws
     fields = tuple_fields("session")
     with patch.object(aws.time, "time_ns", return_value=(EXPIRY_SECONDS - 1) * 1_000_000_000):
         payload = f.create_payload(fields)
@@ -383,7 +383,7 @@ def rollback():
             "WHEN NEW.event_type LIKE 'operator_catalog.credential.%' "
             "BEGIN SELECT RAISE(ABORT,'synthetic AWS audit refusal'); END")
     before = f.snapshot()
-    from serverware import runtime
+    from catchplate import runtime
     with patch.object(runtime, "invalidate_secret_leases", side_effect=AssertionError("precommit eviction")) as eviction:
         refused(lambda: f.create(name="Rolled back tuple"), sqlite3.IntegrityError)
         assert f.snapshot() == before
@@ -494,7 +494,7 @@ def forged():
     before_rule = f.snapshot()
     fake = deepcopy(f.catalog())
     fake["access_rules"][0]["credential_id"] = identifier
-    from serverware import operator_catalog_policy
+    from catchplate import operator_catalog_policy
     with closing(f.db.connect()) as conn:
         refused(lambda: f.schema.validate_bindings(conn, fake), f.schema.CatalogIntegrityError)
     state = workspace.rows(f.db, "operator_demo_policy")[0]
@@ -538,7 +538,7 @@ def core_refusals():
     assert f.snapshot() == before
 
     publication = f.store.operator_publication
-    from serverware import operator_demo
+    from catchplate import operator_demo
     helpers = (
         lambda conn: f.db.create_operator_aws_credential(conn, name="Ownership control", secret=tuple_json(tuple_fields())),
         lambda conn: f.db.replace_operator_aws_credential_if_version(conn, identifier,

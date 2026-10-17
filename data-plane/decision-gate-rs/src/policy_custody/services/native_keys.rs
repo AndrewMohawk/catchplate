@@ -5,7 +5,7 @@ use crate::policy_shadow::native_custody_closure::{NativeCustodyClosureOwner,Pre
     RemoteNativeCustodyClosure,KeyMembership};
 use super::{GuestClosureAssociation,GuestClosureBinding,PreparedGuestServiceDelivery};
 use ed25519_dalek::{Signer,SigningKey};
-use serverware_decision_gate::enclave_runtime_identity_v1::{PreparedShadowNsmV1,ShadowNsmV1};
+use catchplate_decision_gate::enclave_runtime_identity_v1::{PreparedShadowNsmV1,ShadowNsmV1};
 use zeroize::Zeroizing;
 #[path="native_verifier_result.rs"]
 mod verifier_result;
@@ -21,8 +21,8 @@ pub(crate) mod admission;
 pub(crate) use encrypted::NativeShadowEncryptedKeysConfiguration;
 
 const PROFILE:&str="preassigned-final-role-originals-v1";
-const ASSIGNMENT_DOMAIN:&str="serverware.nativeShadowRoleKeyAssignment.signature/v1";
-const POSSESSION_DOMAIN:&str="serverware.nativeShadowRoleKeyPossession.signature/v1";
+const ASSIGNMENT_DOMAIN:&str="catchplate.nativeShadowRoleKeyAssignment.signature/v1";
+const POSSESSION_DOMAIN:&str="catchplate.nativeShadowRoleKeyPossession.signature/v1";
 fn fail<T>(_:T)->ShadowError {ShadowError::CustodyUnavailable}
 fn require(ok:bool)->Result<(),ShadowError> {if ok {Ok(())} else {Err(ShadowError::BindingDrift)}}
 
@@ -71,7 +71,7 @@ pub(crate) struct NativeCustodyKeyConfiguration {
 impl NativeCustodyKeyConfiguration {
     fn retain_membership(&mut self,membership:Option<KeyMembership>)->Result<(),ShadowError>{
         require(self.closure_membership.is_none())?;
-        if membership.is_some(){require(self.api_version=="serverware.nativeShadowRoleKeys/v2")?;}
+        if membership.is_some(){require(self.api_version=="catchplate.nativeShadowRoleKeys/v2")?;}
         self.closure_membership=membership;Ok(())
     }
     pub(in crate::policy_shadow::policy_custody::services) fn bind_prepared_closure(&mut self,closure:&PreparedNativeCustodyClosure)
@@ -100,9 +100,9 @@ fn verify_guest(configuration:&NativeCustodyKeyConfiguration,assignment:&Verifie
     checkpoint:&AtomicTrustCheckpoint,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError> {
     let p=&configuration.authorization.payload;let a=assignment.payload();
     let domain=match (configuration.api_version.as_str(),p.api_version.as_str(),p.profile.as_str()) {
-        ("serverware.nativeShadowRoleKeys/v1","serverware.nativeShadowRoleKeyAssignment/v1",PROFILE)=>ASSIGNMENT_DOMAIN,
-        ("serverware.nativeShadowRoleKeys/v2","serverware.nativeShadowRoleKeyAssignment/v2","preassigned-encrypted-local-v1")=>
-            "serverware.nativeShadowRoleKeyAssignment.signature/v2",
+        ("catchplate.nativeShadowRoleKeys/v1","catchplate.nativeShadowRoleKeyAssignment/v1",PROFILE)=>ASSIGNMENT_DOMAIN,
+        ("catchplate.nativeShadowRoleKeys/v2","catchplate.nativeShadowRoleKeyAssignment/v2","preassigned-encrypted-local-v1")=>
+            "catchplate.nativeShadowRoleKeyAssignment.signature/v2",
         _=>return Err(ShadowError::BindingDrift),
     };
     require(p.purpose=="shadow-role-key-possession" && p.assignment_id==a.assignment_id
@@ -110,7 +110,7 @@ fn verify_guest(configuration:&NativeCustodyKeyConfiguration,assignment:&Verifie
         && &p.guest==guest && (1..=16).contains(&p.local_roles.len())
         && p.local_roles.windows(2).all(|pair|pair[0]<pair[1]))?;
     if a.native_closure_set.is_some() {
-        require(configuration.api_version=="serverware.nativeShadowRoleKeys/v2")?;
+        require(configuration.api_version=="catchplate.nativeShadowRoleKeys/v2")?;
         configuration.closure_membership.as_ref().ok_or(ShadowError::BindingDrift)?
             .require(assignment,guest,&p.execution_closure_manifest_sha256)?;
     } else {
@@ -145,7 +145,7 @@ impl PreparedNativeCustodyKeys {
     pub(crate) fn open(configuration:NativeCustodyKeyConfiguration,assignment:&VerifiedAssignment,
         trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime,delivery:&PreparedGuestServiceDelivery)->Result<Self,ShadowError> {
         let association=delivery.closure_association().map_err(fail)?;
-        require(configuration.api_version=="serverware.nativeShadowRoleKeys/v1")?;
+        require(configuration.api_version=="catchplate.nativeShadowRoleKeys/v1")?;
         association.check_preparation().map_err(fail)?;
         let checkpoint=trust.current_checkpoint()?;let p=&configuration.authorization.payload;
         require(p.trust_checkpoint_id==checkpoint.checkpoint_id && p.revocation_generation==checkpoint.revocation_generation
@@ -178,7 +178,7 @@ impl PreparedNativeCustodyKeys {
                 configuration,&mut nsm,&checkpoint,trust,time)?;
             (keys,Some(authorization))
         } else {
-            require(self.configuration.api_version=="serverware.nativeShadowRoleKeys/v1")?;
+            require(self.configuration.api_version=="catchplate.nativeShadowRoleKeys/v1")?;
             let mut keys=BTreeMap::new();
             for role in &self.configuration.authorization.payload.local_roles {
             self.association.check_startup().map_err(fail)?;
@@ -262,7 +262,7 @@ impl NativeCustodyKeys {
         let local_keys=self.keys.iter().map(|(role,key)|PublicKey {role:*role,key_id:key.binding.key_id.clone(),
             key_spki_sha256:key.binding.key_spki_sha256.clone(),key_material_sha256:key.binding.key_material_sha256.clone(),
             public_key_base64url:URL_SAFE_NO_PAD.encode(key.public)}).collect();
-        let statement=Statement {api_version:"serverware.nativeShadowRoleKeyStatement/v1",purpose:"local-key-possession",
+        let statement=Statement {api_version:"catchplate.nativeShadowRoleKeyStatement/v1",purpose:"local-key-possession",
             assignment_id:p.assignment_id.clone(),assignment_payload_sha256:p.assignment_payload_sha256.clone(),assignment_revision:p.assignment_revision,
             key_authorization_sha256:Sha256Digest::compute(&canonical_json_bytes(&self.configuration.authorization)?),guest:self.association.binding(),
             production_configuration_binding_sha256:self.production.production_configuration_binding_sha256.clone(),
@@ -283,7 +283,7 @@ impl NativeCustodyKeys {
         let quote=self.nsm.quote_role_keys(statement_sha.raw_bytes()?,p.full_key_set_root_sha256.raw_bytes()?,local_root.raw_bytes()?,
             possession_sha.raw_bytes()?,challenge(&p.challenge_base64url)?,self.association.startup()).map_err(fail)?;
         self.association.check_startup().map_err(fail)?;self.check(trust,time)?;
-        Ok(NativeKeyEvidence {api_version:"serverware.nativeShadowRoleKeyEvidence/v1",statement,possession,
+        Ok(NativeKeyEvidence {api_version:"catchplate.nativeShadowRoleKeyEvidence/v1",statement,possession,
             attestation_document_base64url:URL_SAFE_NO_PAD.encode(quote.document()),user_data_base64url:URL_SAFE_NO_PAD.encode(quote.user_data()),
             public_key_base64url:URL_SAFE_NO_PAD.encode(quote.public_key()),nonce_base64url:URL_SAFE_NO_PAD.encode(quote.nonce())})
     }

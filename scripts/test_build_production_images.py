@@ -21,7 +21,7 @@ RFC8032_FILE_SHA256 = "sha256:40d359139cfd8af4ff3ebfbf9c8845468ca7876582189c11d3
 def build_metadata_fixture() -> dict[str, object]:
     digest = "sha256:" + "2" * 64
     return {
-        "source": "https://example.invalid/serverware",
+        "source": "https://example.invalid/catchplate",
         "revision": "1" * 40,
         "created": "2026-01-01T00:00:00Z",
         "source_date_epoch": "1767225600",
@@ -45,7 +45,7 @@ def build_metadata_fixture() -> dict[str, object]:
 
 
 def expect_invalid_trust_root(content: bytes) -> None:
-    with tempfile.TemporaryDirectory(prefix="serverware-launch-authority-test-") as raw_tmp:
+    with tempfile.TemporaryDirectory(prefix="catchplate-launch-authority-test-") as raw_tmp:
         path = Path(raw_tmp) / "launch-authority-root.ed25519.hex"
         path.write_bytes(content)
         try:
@@ -70,7 +70,7 @@ def assert_malformed_trust_roots_fail_closed() -> None:
     ):
         expect_invalid_trust_root(malformed)
 
-    with tempfile.TemporaryDirectory(prefix="serverware-launch-authority-symlink-test-") as raw_tmp:
+    with tempfile.TemporaryDirectory(prefix="catchplate-launch-authority-symlink-test-") as raw_tmp:
         tmp = Path(raw_tmp)
         target = tmp / "target"
         target.write_bytes(valid + b"\n")
@@ -85,7 +85,7 @@ def assert_malformed_trust_roots_fail_closed() -> None:
 
 
 def assert_deterministic_launch_authority_metadata() -> None:
-    with tempfile.TemporaryDirectory(prefix="serverware-launch-authority-vector-") as raw_tmp:
+    with tempfile.TemporaryDirectory(prefix="catchplate-launch-authority-vector-") as raw_tmp:
         path = Path(raw_tmp) / "launch-authority-root.ed25519.hex"
         path.write_bytes(RFC8032_PUBLIC_KEY_HEX.encode("ascii") + b"\n")
         expected = {
@@ -98,11 +98,11 @@ def assert_deterministic_launch_authority_metadata() -> None:
             raise AssertionError(f"launch authority metadata is not deterministic: {first!r}, {second!r}")
 
         gate_binding = build_production_images.image_launch_authority_binding(
-            "serverware-decision-gate", first
+            "catchplate-decision-gate", first
         )
         if gate_binding != expected:
             raise AssertionError(f"decision-gate image metadata did not bind the trust root: {gate_binding}")
-        if build_production_images.image_launch_authority_binding("serverware-control", first):
+        if build_production_images.image_launch_authority_binding("catchplate-control", first):
             raise AssertionError("control image unexpectedly repeated decision-gate trust-root metadata")
 
     committed = build_production_images.launch_authority_metadata()
@@ -114,7 +114,7 @@ def assert_launch_authority_is_not_a_build_arg() -> None:
     metadata = build_metadata_fixture()
     argv = build_production_images.build_command(
         "data-plane/decision-gate-rs/Dockerfile.production",
-        "serverware/decision-gate:test",
+        "catchplate/decision-gate:test",
         platform="linux/amd64",
         metadata=metadata,
         context=ROOT,
@@ -127,7 +127,7 @@ def assert_launch_authority_is_not_a_build_arg() -> None:
 
 
 def assert_build_contract_version() -> None:
-    if build_production_images.BUILD_API_VERSION != "serverware.productionImagesBuild/v2":
+    if build_production_images.BUILD_API_VERSION != "catchplate.productionImagesBuild/v2":
         raise AssertionError(
             f"production image build contract was not promoted to v2: {build_production_images.BUILD_API_VERSION}"
         )
@@ -142,7 +142,7 @@ def assert_native_rotation_delivery_selection() -> None:
     binding = {"public_key_pem_sha256": "sha256:" + "3" * 64,
         "public_key_spki_sha256": "sha256:" + "4" * 64}
     for rotation, target in ((False, build.NATIVE_DELIVERY_TARGET), (True, build.NATIVE_ROTATION_DELIVERY_TARGET)):
-        argv = build.build_command(build.NATIVE_DELIVERY_DOCKERFILE, "serverware/test:local",
+        argv = build.build_command(build.NATIVE_DELIVERY_DOCKERFILE, "catchplate/test:local",
             native_delivery_binding=binding, native_rotation_delivery=rotation, **arguments)
         assert argv[argv.index("--target") + 1] == target
         assert "--network=none" in argv
@@ -153,7 +153,7 @@ def assert_native_rotation_delivery_selection() -> None:
                 "native_activation_receiver_binding": {"public_inputs_sha256": "sha256:" + "5" * 64,
                     "receiver_inputs_sha256": "sha256:" + "6" * 64}}):
         try:
-            build.build_command(build.NATIVE_DELIVERY_DOCKERFILE, "serverware/test:local", **changed, **arguments)
+            build.build_command(build.NATIVE_DELIVERY_DOCKERFILE, "catchplate/test:local", **changed, **arguments)
         except RuntimeError:
             continue
         raise AssertionError("rotation delivery accepted an absent authority, non-boolean selector, or mixed purpose")
@@ -244,17 +244,17 @@ def assert_python_runtime_docker_contract() -> None:
     runtime_stage = dockerfile_stage(lines, "production-python-runtime-tree")
     artifact_stage = dockerfile_stage(lines, "production-python-runtime-artifact")
     dependency_text = "\n".join(dependency_stage)
-    if "SERVERWARE_SOURCE_" in dependency_text or "/source-contract" in dependency_text:
+    if "CATCHPLATE_SOURCE_" in dependency_text or "/source-contract" in dependency_text:
         raise AssertionError("standalone Python dependency closure still requires application source")
     source_text = "\n".join(source_stage)
     for required in (
-        "ARG SERVERWARE_SOURCE_ARCHIVE",
-        "COPY ${SERVERWARE_SOURCE_ARCHIVE} /source-contract/source.tar",
+        "ARG CATCHPLATE_SOURCE_ARCHIVE",
+        "COPY ${CATCHPLATE_SOURCE_ARCHIVE} /source-contract/source.tar",
         "sha256sum -c /source-contract/source.files.sha256",
     ):
         if required not in source_text:
             raise AssertionError(f"verified production source stage omits {required}")
-    if "COPY --from=verified-production-source /source/serverware /runtime/app/serverware" not in dockerfile:
+    if "COPY --from=verified-production-source /source/catchplate /runtime/app/catchplate" not in dockerfile:
         raise AssertionError("production runtime does not consume the verified source stage")
     required_runtime = (
         "FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS production-python-runtime-tree",
@@ -282,7 +282,7 @@ def assert_python_runtime_docker_contract() -> None:
         "PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY",
         "PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY must not already exist",
         "PRODUCTION_LAUNCHER_BUILD_DIRECTORY must not already exist",
-        "SERVERWARE_PRODUCTION_PYTHON_RUNTIME_ARTIFACT=",
+        "CATCHPLATE_PRODUCTION_PYTHON_RUNTIME_ARTIFACT=",
         "$(MAKE) build-production-python-runtime",
     ):
         if required not in makefile:
@@ -305,16 +305,16 @@ def assert_production_artifact_build_contract() -> None:
         network="none",
         platform="linux/amd64",
         metadata=metadata,
-        context=Path("/private/serverware-build-context"),
+        context=Path("/private/catchplate-build-context"),
     )
     serialized = "\0".join(command)
     for required in (
         "docker\0buildx\0build",
         "--network=none",
         "--target\0production-launcher-artifact",
-        f"SERVERWARE_SOURCE_ARCHIVE={metadata['source_archive_path']}",
-        f"SERVERWARE_SOURCE_ARCHIVE_SHA256={metadata['source_archive_digest']}",
-        f"SERVERWARE_SOURCE_TREE_DIGEST={metadata['source_tree_digest']}",
+        f"CATCHPLATE_SOURCE_ARCHIVE={metadata['source_archive_path']}",
+        f"CATCHPLATE_SOURCE_ARCHIVE_SHA256={metadata['source_archive_digest']}",
+        f"CATCHPLATE_SOURCE_TREE_DIGEST={metadata['source_tree_digest']}",
     ):
         if required not in serialized:
             raise AssertionError(f"production artifact command omits {required}")
@@ -326,7 +326,7 @@ def assert_production_artifact_build_contract() -> None:
             network="none",
             platform="linux/amd64",
             metadata=metadata,
-            context=Path("/private/serverware-build-context"),
+            context=Path("/private/catchplate-build-context"),
         )
     except RuntimeError:
         pass
@@ -342,19 +342,19 @@ def assert_native_bootstrap_client_artifact_contract() -> None:
     target = "native-bootstrap-client-artifact"
     source = (ROOT / dockerfile).read_text(encoding="utf-8")
     if (f"FROM scratch AS {target}\n"
-            "COPY --from=launcher-build /src/target/release/serverware-native-bootstrap-client /serverware-native-bootstrap-client\n") not in source:
+            "COPY --from=launcher-build /src/target/release/catchplate-native-bootstrap-client /catchplate-native-bootstrap-client\n") not in source:
         raise AssertionError("bootstrap export no longer matches its source-owned Docker stage")
-    with tempfile.TemporaryDirectory(prefix="serverware-bootstrap-export-") as raw_tmp:
+    with tempfile.TemporaryDirectory(prefix="catchplate-bootstrap-export-") as raw_tmp:
         base = Path(raw_tmp).resolve()
         destination = base / "artifact"
         output = "type=local,dest=" + str(destination)
         arguments = dict(network="none", platform="linux/amd64", metadata=metadata,
-                         context=Path("/private/serverware-build-context"))
+                         context=Path("/private/catchplate-build-context"))
         command = build.artifact_build_command(dockerfile, target, output, **arguments)
         if (command[command.index("--target") + 1] != target
                 or command[command.index("--output") + 1] != output
                 or "--network=none" not in command
-                or f"SERVERWARE_SOURCE_ARCHIVE_SHA256={metadata['source_archive_digest']}" not in command):
+                or f"CATCHPLATE_SOURCE_ARCHIVE_SHA256={metadata['source_archive_digest']}" not in command):
             raise AssertionError("bootstrap export lost its exact target/output/source binding")
         for wrong_file, wrong_target, wrong_output, overrides in (
             ("Dockerfile.production", target, output, {}),
@@ -378,13 +378,13 @@ def assert_native_bootstrap_client_artifact_contract() -> None:
             pass
         else:
             raise AssertionError("bootstrap export accepted an existing destination")
-        binary = destination / "serverware-native-bootstrap-client"
+        binary = destination / "catchplate-native-bootstrap-client"
         original = b"public inert artifact fixture, never executed"
         binary.write_bytes(original)
         binary.chmod(0o755)
         receipt = build.native_bootstrap_client_artifact_receipt(output, metadata)
         expected = {
-            "apiVersion": "serverware.nativeBootstrapClientBuildArtifact/v1",
+            "apiVersion": "catchplate.nativeBootstrapClientBuildArtifact/v1",
             "path": str(binary), "sha256": "sha256:" + hashlib.sha256(original).hexdigest(),
             "size": len(original), "mode": 0o755, "sourceCommit": metadata["revision"],
             "sourceTreeSha256": metadata["source_tree_digest"],
@@ -424,7 +424,7 @@ def assert_native_bootstrap_client_artifact_contract() -> None:
 
 
 def assert_deploy_receives_runtime_artifact() -> None:
-    with tempfile.TemporaryDirectory(prefix="serverware-deploy-runtime-") as raw_tmp:
+    with tempfile.TemporaryDirectory(prefix="catchplate-deploy-runtime-") as raw_tmp:
         temporary = Path(raw_tmp).resolve()
         artifact = temporary / "artifact"
         python = artifact / "runtime" / "python" / "bin" / "python3"
@@ -435,7 +435,7 @@ def assert_deploy_receives_runtime_artifact() -> None:
         deploy = temporary / "deploy.sh"
         deploy.write_text(
             "#!/bin/sh\n"
-            "test \"$SERVERWARE_PRODUCTION_PYTHON_RUNTIME_ARTIFACT\" = "
+            "test \"$CATCHPLATE_PRODUCTION_PYTHON_RUNTIME_ARTIFACT\" = "
             + shlex.quote(str(artifact))
             + "\n",
             encoding="ascii",
@@ -456,7 +456,7 @@ def assert_deploy_receives_runtime_artifact() -> None:
 
 
 def assert_exported_python_runtime() -> None:
-    with tempfile.TemporaryDirectory(prefix="serverware-production-python-runtime-") as raw_tmp:
+    with tempfile.TemporaryDirectory(prefix="catchplate-production-python-runtime-") as raw_tmp:
         artifact = Path(raw_tmp).resolve() / "artifact"
         artifact.mkdir()
         build = run(
@@ -499,7 +499,7 @@ def assert_exported_python_runtime() -> None:
             python.read_bytes(), "python3.11"
         )
 
-        release = "/opt/serverware/release"
+        release = "/opt/catchplate/release"
         smoke_code = (
             "import json,os,sys;"
             f"roots=['{release}',"
@@ -513,7 +513,7 @@ def assert_exported_python_runtime() -> None:
             "assert sys.path==roots;"
             "print(json.dumps({'ok':True,'version':list(sys.version_info[:2])},sort_keys=True))"
         )
-        smoke_tag = f"serverware-python-runtime-smoke:{os.getpid()}"
+        smoke_tag = f"catchplate-python-runtime-smoke:{os.getpid()}"
         load = run(
             [
                 "docker",

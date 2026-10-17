@@ -13,10 +13,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::net::SocketAddr;
 
-const ENVELOPE_VERSION: &str = "serverware.signedNativeEnrollmentBootstrapDelegation/v1";
-const PAYLOAD_VERSION: &str = "serverware.nativeEnrollmentBootstrapDelegation/v1";
+const ENVELOPE_VERSION: &str = "catchplate.signedNativeEnrollmentBootstrapDelegation/v1";
+const PAYLOAD_VERSION: &str = "catchplate.nativeEnrollmentBootstrapDelegation/v1";
 const PURPOSE: &str = "native-enrollment-bootstrap";
-const DOMAIN: &[u8] = b"serverware/native-enrollment-bootstrap-delegation/v1\0";
+const DOMAIN: &[u8] = b"catchplate/native-enrollment-bootstrap-delegation/v1\0";
 const MAX_ORIGINAL_BYTES: usize = 32 * 1024;
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_SECONDS: u64 = 9_223_372_036;

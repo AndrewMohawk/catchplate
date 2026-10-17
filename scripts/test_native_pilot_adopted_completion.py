@@ -16,20 +16,20 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import native_pilot_adopted_phase_profile as profile
-from serverware import native_pilot_interactive as interactive
-from serverware import native_pilot_supervisor_process as process
+from catchplate import native_pilot_adopted_phase_profile as profile
+from catchplate import native_pilot_interactive as interactive
+from catchplate import native_pilot_supervisor_process as process
 
 p = process.p
 
 
 def fixture(*, run=False):
-    handoff = dict(apiVersion="serverware.nativeGenerationOriginHandoff/v1", okForAction=False,
+    handoff = dict(apiVersion="catchplate.nativeGenerationOriginHandoff/v1", okForAction=False,
         automaticRetryAllowed=False, originSha256=p.sha(b"synthetic-origin-only"))
     action = dict(action="run-interactive", originHandoffSha256=p.sha(p.canonical(handoff)),
         stopAtBoottimeNanos=500, expiresAtUnixNanos=5000) if run else {"action": "stop"}
     input_raw = p.canonical(action)
-    conductor = dict(apiVersion="serverware.nativePilotOperatorRequest/v2", sequence=len(process.STAGES),
+    conductor = dict(apiVersion="catchplate.nativePilotOperatorRequest/v2", sequence=len(process.STAGES),
         phase="shutdown", payload={"originHandoff": handoff}, deadlineBoottimeNs="1000", expiresAtUnixNanos="9000")
     request = dict(apiVersion=profile.API, sequence=len(profile.BY_NAME), conductorSequence=len(process.STAGES),
         conductorRequestSha256=p.sha(p.canonical(conductor)), phase="shutdown", jobIndex=1, job="stop",
@@ -71,7 +71,7 @@ class AdoptedCompletionControls(unittest.TestCase):
         self.assertEqual(value["finalResult"]["resultOriginal"].encode("ascii"), case["result_raw"])
 
     def test_old_terminal_and_new_success_are_separate_closed_profiles(self):
-        for change in ({"apiVersion": "serverware.nativePilotAuthorityCoordinatorResult/v1"},
+        for change in ({"apiVersion": "catchplate.nativePilotAuthorityCoordinatorResult/v1"},
                 {"status": "failed-cleanup-complete"}, {"phase": "starting"},
                 {"pilotAcceptanceVerified": True}, {"productionReleaseEligible": True}, {"extra": True}):
             case = fixture(); case["value"].update(change)
@@ -126,7 +126,7 @@ class AdoptedCompletionControls(unittest.TestCase):
 
     def test_source_cancellation_gates_transcript_success_not_known_handle_retirement(self):
         # A source-only control, not a fake successful process/supervisor owner.
-        tree = ast.parse((ROOT / "serverware/native_pilot_adopted_supervisor.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/native_pilot_adopted_supervisor.py").read_text())
         owner = next(node for node in tree.body if isinstance(node, ast.ClassDef)
             and node.name == "AdoptedCommissioningSupervisor")
         close = next(node for node in owner.body if isinstance(node, ast.FunctionDef) and node.name == "close")

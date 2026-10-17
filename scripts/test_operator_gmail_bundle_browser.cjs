@@ -9,8 +9,8 @@ const {join, resolve} = require('node:path');
 const vm = require('node:vm');
 const {ready, view, openRestrictions, credential, application, rule, IDS, NOW} = require('./test_operator_catalog_browser.cjs');
 const {fixture: ordinaryFixture, publicCatalog, google, digest, pair, step, review, grant, downloadedConfig} = require('./test_operator_ordinary_modes_browser.cjs');
-const {clientCredentialInput, credentialHeaderTarget} = require('../serverware/operator_demo_web/app.js');
-const {projectGoogleCapability} = require('../serverware/operator_demo_web/workspace_google.js');
+const {clientCredentialInput, credentialHeaderTarget} = require('../catchplate/operator_demo_web/app.js');
+const {projectGoogleCapability} = require('../catchplate/operator_demo_web/workspace_google.js');
 const ROOT = resolve(__dirname, '..');
 const ORIGIN = 'https://operator-catalog.example.test';
 const GMAIL = 'https://gmail.googleapis.com';
@@ -29,7 +29,7 @@ const descriptor = () => ({operation_bundle: BUNDLE, create_path: '/api/operator
   response_contract: {mode: 'gmailReadJsonV1', body_presence: 'required', content_types: ['application/json'],
     success_status_codes: [200], error_status_codes: [400, 401, 403, 404, 429, 500, 502, 503, 504],
     max_body_bytes: 1048576, max_error_body_bytes: 65536, unlisted_header_policy: 'discardUnselectedV1'}});
-const googleCapability = () => ({schema: 'serverware.operatorGoogleCapability/v1', profile: 'operator-google-v1', provider_id: 'google',
+const googleCapability = () => ({schema: 'catchplate.operatorGoogleCapability/v1', profile: 'operator-google-v1', provider_id: 'google',
   permission_preset: 'gmail_readonly', scopes: [...SCOPES], api_origins: [GMAIL], authorization_origin: 'https://accounts.google.com',
   authorization_path: '/o/oauth2/v2/auth', redirect_uri: ORIGIN + '/api/oauth/callback/google',
   start_path: '/api/operator-demo/oauth/google/start', intents_path: '/api/operator-demo/oauth/google/intents'});
@@ -82,7 +82,7 @@ async function fixture(browser, config, exercise) {
         const bytes = request.postDataBuffer(); let result;
         if (url.pathname === '/api/operator-demo/oauth/google/intents') {
           assert.equal(request.method(), 'GET'); assert(!bytes?.length); assert(state.googleEnabled);
-          result = {apiVersion: 'serverware.operatorGoogleConsent/v1', intents: [], limits: {active: 32, retained: 1024},
+          result = {apiVersion: 'catchplate.operatorGoogleConsent/v1', intents: [], limits: {active: 32, retained: 1024},
             productionReady: false, protectedActivationSupported: false};
         } else if (url.pathname === '/api/operator-demo/catalog') {
           assert.equal(request.method(), 'GET'); assert(!bytes?.length); observed.reads++; state.catalogCalls++;
@@ -130,16 +130,16 @@ async function bundleForm(page) {
   assert.match(await page.locator('#connect-gmail-summary').innerText(), /Read Gmail.*pagination.*individual.*No age restriction/is);
 }
 const SOURCE_FILES = ['scripts/test_operator_gmail_bundle_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
-  'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py', ...['index.html', 'style.css', 'app.js',
+  'scripts/test_operator_ordinary_modes_browser.cjs', 'catchplate/operator_demo_portal.py', ...['index.html', 'style.css', 'app.js',
     'workspace_core.js', 'workspace_github.js', 'workspace_google.js', 'workspace_resources.js', 'workspace_applications.js', 'workspace_proxy_audit.js',
-    'workspace_connect.js'].map(name => 'serverware/operator_demo_web/' + name)];
+    'workspace_connect.js'].map(name => 'catchplate/operator_demo_web/' + name)];
 let artifacts;
 async function hashes() { return Object.fromEntries(await Promise.all(SOURCE_FILES.map(async path =>
   [path, createHash('sha256').update(await readFile(join(ROOT, path))).digest('hex')]))); }
 async function screenshot(page, name) { await page.screenshot({path: join(artifacts, name + '.png'), fullPage: true, mask: [page.locator('#client-token')]}); }
 function pureChecks() {
   const source = ['workspace_core.js', 'workspace_github.js']
-    .map(name => readFileSync(join(ROOT, 'serverware/operator_demo_web', name), 'utf8')).join('\n');
+    .map(name => readFileSync(join(ROOT, 'catchplate/operator_demo_web', name), 'utf8')).join('\n');
   const state = {credentials: [google({secret: PRIVATE[0]})], applications: [application()], rules: [bundleRule()],
     responseModes: ['projected_json'], credentialInputModes: ['insert', 'replace_exact'], requestBodyModes: ['preserve_json_v1'],
     revision: 1, sequence: 1, active: digest(1), loaded: digest(1), allowedUpstreams: [GMAIL], googleEnabled: true, bundles: [descriptor()]};
@@ -189,7 +189,7 @@ const tests = [
     await page.locator('#gmail-message-id').fill('../profile'); assert(await page.locator('#copy-command').isDisabled());
     await page.locator('#gmail-message-id').fill('18c4a7e8fa3a1234'); await commandReady(page);
     const command = await page.locator('#client-command').innerText(); assert(command.includes(GMAIL + PATH + '/18c4a7e8fa3a1234'));
-    assert(command.includes('Proxy-Authorization: Bearer $SERVERWARE_PROXY_TOKEN')); assert(!/--data|--insecure|--compressed/.test(command));
+    assert(command.includes('Proxy-Authorization: Bearer $CATCHPLATE_PROXY_TOKEN')); assert(!/--data|--insecure|--compressed/.test(command));
     await screenshot(page, 'gmail-message-template-desktop'); await page.setViewportSize({width: 390, height: 844});
     await screenshot(page, 'gmail-message-template-mobile'); assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   })],
@@ -305,7 +305,7 @@ async function main() {
   const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
   console.log(JSON.stringify({firstGroup: first, lastGroup: tests.length, renderedGroups: selected.length, pureGroups: args.length ? 0 : 1}));
   if (!args.length) console.log(JSON.stringify(pureChecks()));
-  const directory = '/srv/catchplate-fast/projects/serverware-operator-artifacts'; assert((await stat(directory)).isDirectory());
+  const directory = '/srv/catchplate-fast/projects/catchplate-operator-artifacts'; assert((await stat(directory)).isDirectory());
   artifacts = await mkdtemp(join(directory, 'gmail-bundle-synthetic-')); console.log(JSON.stringify({artifactDirectory: artifacts}));
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
   const browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-background-networking']}); let deadline;

@@ -1,0 +1,46 @@
+[Unit]
+Description=Catchplate Coder v12 receipt authority
+PartOf=catchplate-coder-v12.target
+After=local-fs.target catchplate-coder-runtime-v12.service catchplate-coder-receipt-authority-v12.socket catchplate-coder-log-custody-authority-v12.service catchplate-coder-trust-generation-v12.service catchplate-coder-external-witness-v12.service catchplate-coder-final-settlement-v12.service
+Requires=catchplate-coder-runtime-v12.service catchplate-coder-receipt-authority-v12.socket catchplate-coder-log-custody-authority-v12.service catchplate-coder-trust-generation-v12.service catchplate-coder-external-witness-v12.service catchplate-coder-final-settlement-v12.service
+Before=catchplate-coder-final-verdict-authority-v12.service catchplate-coder-controller-v12.service
+RequiresMountsFor=/var/lib/catchplate/coder-controller-v12
+
+[Service]
+Type=notify
+User=catchplate-coder-receipt
+Group=catchplate-coder-receipt
+SupplementaryGroups=catchplate-coder-receipt-api catchplate-coder-log-api catchplate-coder-verdict-api catchplate-coder-trust-api catchplate-coder-witness-api catchplate-coder-settlement-api
+UMask=0077
+LoadCredentialEncrypted=receipt-authority-key:@RELEASE_ROOT@/credentials/receipt-authority-key.cred
+Sockets=catchplate-coder-receipt-authority-v12.socket
+Environment=CATCHPLATE_RECEIPT_AUTHORITY_CONFIG=@RELEASE_ROOT@/config/receipt-authority-v12.conf
+ExecStart=@RELEASE_ROOT@/bin/catchplate-coder-receipt-authority-v12
+ExecStop=/bin/kill -TERM $MAINPID
+Restart=on-failure
+RestartSec=2s
+TimeoutStartSec=30s
+TimeoutStopSec=45s
+KillMode=control-group
+SendSIGKILL=yes
+FinalKillSignal=SIGKILL
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+ReadWritePaths=/run/catchplate/coder/v12/receipt-authority /var/lib/catchplate/coder-controller-v12/receipt-authority
+
+[Install]
+WantedBy=catchplate-coder-v12.target

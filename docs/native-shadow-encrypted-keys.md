@@ -50,13 +50,13 @@ final-role originals; it does not silently select encrypted delivery.
 
 `nativeShadowRoleKeys/v2` retains the18-field assignment shape but requires
 `nativeShadowRoleKeyAssignment/v2`, `preassigned-encrypted-local-v1`, and
-`serverware.nativeShadowRoleKeyAssignment.signature/v2`. Old signatures cannot
+`catchplate.nativeShadowRoleKeyAssignment.signature/v2`. Old signatures cannot
 authorize it. The independently pinned verifier accepts this exact additive
 tuple only; statement15, possession and result22 semantics remain unchanged.
 
 `NativeShadowEncryptedKeysConfiguration` is exact2 (`apiVersion`,
 `authorization`), with the separate18-field delivery assignment and signature
-domain `serverware.nativeShadowEncryptedKeyDelivery.signature/v1`. It uses the
+domain `catchplate.nativeShadowEncryptedKeyDelivery.signature/v1`. It uses the
 actual independently assigned current supervisor authority, never a local key
 or caller-selected trust source. All Ed25519 domains use the existing signed
 envelope/canonical ASCII integer preimage.
@@ -66,7 +66,7 @@ The stable public inventory is exact4: `apiVersion`, `fullKeySetRootSha256`,
 AuthorityRole order. The private plaintext is exact3 (`apiVersion`,
 `inventorySha256`, `seeds`), each seed exact3 (`role`, `keyId`, `seedBase64url`).
 AES256-GCM authenticates canonical plaintext <=16368 bytes with random nonce12
-and AAD `serverware/native-shadow-encrypted-local-keys/v1\0` plus the original
+and AAD `catchplate/native-shadow-encrypted-local-keys/v1\0` plus the original
 canonical inventory. Ciphertext <=16384 bytes. Base64url is unpadded/canonical.
 
 The inventory AAD intentionally excludes signatures/delivery digests which
@@ -76,14 +76,14 @@ digests, original nonce, native closure/executable/seccomp, full18/local roots,
 actual X25519 recipient, actual RSA recipient digest, entire signed transport8
 (including fixed helper image/interpreter/script pins), and original deadline.
 
-NSM `user_data` is `serverware/native-shadow-kms-recipient/v1\0` plus SHA256 of
+NSM `user_data` is `catchplate/native-shadow-kms-recipient/v1\0` plus SHA256 of
 the exact canonical request. NSM `public_key` is the actual helper RSA DER.
-Its nonce is SHA256(`serverware/native-shadow-kms-nonce/v1\0` plus the original
+Its nonce is SHA256(`catchplate/native-shadow-kms-nonce/v1\0` plus the original
 independent challenge32), separate from the possession nonce/domain. There is
 no generic quote, phase reset, recontact or post-uncertainty retry API.
 
 Role output uses fresh helper X25519, HKDF-SHA256 with that derived nonce as
-salt, and info/AAD `serverware/native-shadow-role-recipient-ciphertext/v1\0`
+salt, and info/AAD `catchplate/native-shadow-role-recipient-ciphertext/v1\0`
 plus requestSHA32. AES256-GCM nonce12 and ciphertext return in exact6 envelope.
 Rust seeds/canonical plaintext/shared material have zeroizing buffers. Python,
 OpenSSL and all immutable interpreter copies are NOT claimed erased; the
@@ -91,11 +91,11 @@ dedicated helper exits and never becomes a signing/decrypt service.
 
 ## Real process and packaging contract
 
-Fixed image: `/opt/serverware/native-shadow-key-delivery-runtime.squashfs`.
+Fixed image: `/opt/catchplate/native-shadow-key-delivery-runtime.squashfs`.
 The existing sealed-memfd/read-only-loop/SquashFS mechanism admits it under a
 distinct fixed purpose, <=512MiB, not legacy fs-verity/IMA. It must contain
 `/usr/local/bin/python3.11`, the fixed
-`/opt/serverware/serverware/native_shadow_key_helper.py`, this contract module,
+`/opt/catchplate/catchplate/native_shadow_key_helper.py`, this contract module,
 the shared native shadow grammar and closed CMS module, pinned cryptography
 dependencies, stdlib, loader and complete recursive DSO closure.
 
@@ -110,9 +110,9 @@ check inside the completed private root; it does not run the helper protocol.
 
 `native-shadow-key-runtime-artifact` exports the image and its canonical build
 inventory under `/shadow-key-output`. The native enclave image installs the
-inventory at `/usr/share/serverware/native-shadow-key-delivery-runtime.json`
+inventory at `/usr/share/catchplate/native-shadow-key-delivery-runtime.json`
 and the image at the fixed path above, both root-owned and mode0444. The manifest
-uses `serverware.nativeShadowKeyDeliveryRuntimeBuild/v1`, records every copied
+uses `catchplate.nativeShadowKeyDeliveryRuntimeBuild/v1`, records every copied
 file and source-manifest hash, and emits the existing five-field `helperImage`
 pins. `releaseAuthority` is false: no seed, KEK, ciphertext inventory, cloud
 configuration or signed assignment is packaged. Independently admitting the

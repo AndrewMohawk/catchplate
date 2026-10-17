@@ -1,6 +1,6 @@
 # Native principal preflight
 
-This source-only opt-in adds `serverware.nativeProxyIngress/v3` to the
+This source-only opt-in adds `catchplate.nativeProxyIngress/v3` to the
 [native proof client](native-proof-client.md). It verifies the expected
 principal and complete identity-policy commitment on the actual outer mTLS
 connection before CONNECT, then retains a private typed proof through that

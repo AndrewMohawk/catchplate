@@ -1,0 +1,22 @@
+# Candidate only: combine with docker-compose.yml and the retained environment.
+# Do not combine with docker-compose.accepted-source.yml. Root must verify the
+# immutable artifacts and preservation gates before authorizing this paired swap.
+# Fixture, edge, images, networks and persistent data remain unchanged.
+services:
+  catchplate:
+    environment:
+      CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:e7529b4484228ebdbf2be1ebb471a80a78a3e127673f0bc6dcb4921db92489e2
+    volumes:
+      - type: bind
+        source: /srv/catchplate-fast/projects/catchplate-operator-artifacts/source-c46115502e61ffb0260ea8afb42ada8c256e008a
+        target: /app
+        read_only: true
+        bind: {create_host_path: false}
+
+  decision-gate-rs:
+    volumes:
+      - type: bind
+        source: /srv/catchplate-fast/projects/catchplate-operator-artifacts/sha256-e7529b4484228ebdbf2be1ebb471a80a78a3e127673f0bc6dcb4921db92489e2/catchplate-decision-gate
+        target: /usr/local/bin/catchplate-decision-gate
+        read_only: true
+        bind: {create_host_path: false}

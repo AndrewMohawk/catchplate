@@ -21,17 +21,17 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract as authority
-from serverware import authority_query_read_work as accounting
-from serverware.authority_store import planner_connection as admission
-from serverware.authority_store import revocation_writer_request as request_store
+from catchplate import authority_contract as authority
+from catchplate import authority_query_read_work as accounting
+from catchplate.authority_store import planner_connection as admission
+from catchplate.authority_store import revocation_writer_request as request_store
 import test_authority_revocation_persistence as persistence_oracle
 import test_authority_revocation_plan as oracle
 import test_authority_revocation_reservation as reservation_oracle
 import test_authority_revocation_writer_composition as composition_oracle
 
 
-TABLE = "serverware_metadata.policy_authority_revocation_writer_requests"
+TABLE = "catchplate_metadata.policy_authority_revocation_writer_requests"
 FIELDS = (
     "intent_envelope_id", "relay_envelope_id", "execution_envelope_id",
     "planner_transaction_id", "plan_protocol", "retained_record_digest",
@@ -53,9 +53,9 @@ def expected_row(fixture):
     """All twenty-two stored fields from genuine independent original inputs."""
     arguments = fixture.action.arguments
     _, sidecar = persistence_oracle.expected_rows(fixture.plan, arguments["planned_at_epoch_ns"])
-    intent_id = oracle.framed("serverware.policyAuthorityRevocationWriterIntentEnvelope/v1",
+    intent_id = oracle.framed("catchplate.policyAuthorityRevocationWriterIntentEnvelope/v1",
         arguments["envelope_id"].encode("ascii"), arguments["planner_transaction_id"].encode("ascii"))
-    relay_id = oracle.framed("serverware.policyAuthorityRevocationWriterRelayEnvelope/v1",
+    relay_id = oracle.framed("catchplate.policyAuthorityRevocationWriterRelayEnvelope/v1",
         intent_id.encode("ascii"))
     return {
         "intent_envelope_id": intent_id, "relay_envelope_id": relay_id,
@@ -116,9 +116,9 @@ def independent_request_work(fixture, *, existing=False):
     row, prefix = expected_row(fixture), expected_prefix(fixture)
     args, add = fixture.action.arguments, oracle.add
     ids = add((0, 3 * 142, 3 * 2),
-        oracle.frame_cost("serverware.policyAuthorityRevocationWriterIntentEnvelope/v1",
+        oracle.frame_cost("catchplate.policyAuthorityRevocationWriterIntentEnvelope/v1",
             (args["envelope_id"].encode("ascii"), args["planner_transaction_id"].encode("ascii"))),
-        oracle.frame_cost("serverware.policyAuthorityRevocationWriterRelayEnvelope/v1",
+        oracle.frame_cost("catchplate.policyAuthorityRevocationWriterRelayEnvelope/v1",
             (row["intent_envelope_id"].encode("ascii"),)))
     originals = (fixture.intent_bytes, fixture.relay_bytes, fixture.history_bytes)
     materialize = add(ids, *(add((1, len(raw), 0), persistence_oracle.codec_encode(raw)) for raw in originals))

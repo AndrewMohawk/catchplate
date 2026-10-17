@@ -10,9 +10,9 @@ use super::super::production_dispatch::{ClosedProductionGenerationRequestV4 as R
 use super::super::terminal_settlement::FiveServiceHistoricalKeyringsV4;
 use super::super::authority_history::AuthorityPublicKeyV3;
 use crate::policy_shadow::{SignedEnvelope,ProductionCustodyGenerationInstallReceiptPayload,signature_preimage};
-pub(in crate::policy_shadow::policy_custody) const API:&str="serverware.nativeGenerationRecovery/v1";
-pub(in crate::policy_shadow::policy_custody) const RESPONSE_API:&str="serverware.policyCustodyProductionGeneration/v5";
-pub(in crate::policy_shadow::policy_custody) const DOMAIN:&str="serverware.nativeGenerationRecovery.signature/v1";
+pub(in crate::policy_shadow::policy_custody) const API:&str="catchplate.nativeGenerationRecovery/v1";
+pub(in crate::policy_shadow::policy_custody) const RESPONSE_API:&str="catchplate.policyCustodyProductionGeneration/v5";
+pub(in crate::policy_shadow::policy_custody) const DOMAIN:&str="catchplate.nativeGenerationRecovery.signature/v1";
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(in crate::policy_shadow::policy_custody) struct Installed {
@@ -49,7 +49,7 @@ impl Evidence {
     pub(in crate::policy_shadow::policy_custody) fn validate(&self,request:&Request,keyrings:&FiveServiceHistoricalKeyringsV4<'_>)->Result<(),&'static str>{
         let Request::Recover{install_context,..}=request else{return Err(invalid());};let p=&self.payload;
         ensure(p.api_version==API && p.purpose=="native-generation-recovery-observation" && p.request==*request
-            && p.services.api_version=="serverware.custodyGenerationServicesResult/v1" && p.services.request_sha256==request.request_sha256()?
+            && p.services.api_version=="catchplate.custodyGenerationServicesResult/v1" && p.services.request_sha256==request.request_sha256()?
             && p.services.services.keys().copied().collect::<BTreeSet<_>>()==generation_service_client::roles()
             && p.coordinator_assignment_sha256!=Sha256Digest::compute(&[]) && p.journal_head_sha256!=Sha256Digest::compute(&[])
             && p.observed_at_boottime_nanos>0 && p.observed_at_boottime_nanos<request.deadline_boottime_nanos()
@@ -97,11 +97,11 @@ impl Evidence {
                 && exchange.command.prepared_effect_sha256.is_none())?;
             let Response::Observation(value)=&exchange.response else{return Err(invalid());};let o=&value.payload;
             let history=keyrings.history(historical_service_role(*role));
-            ensure(o.api_version=="serverware.custodyServiceGenerationObservation/v1" && o.purpose=="cold-service-generation-observation"
+            ensure(o.api_version=="catchplate.custodyServiceGenerationObservation/v1" && o.purpose=="cold-service-generation-observation"
                 && o.service_role==*role && o.authority_epoch==history.current_epoch().map_err(|_|invalid())?.epoch_reference()
                 && o.command_sha256==sha(&exchange.command)? && o.observed_at_boottime_nanos>0
                 && o.observed_at_boottime_nanos<=p.observed_at_boottime_nanos && o.deadline_boottime_nanos==request.deadline_boottime_nanos())?;
-            history.verify_service_signature(&o.authority_epoch,b"serverware.custodyServiceGenerationObservation.signature/v1",
+            history.verify_service_signature(&o.authority_epoch,b"catchplate.custodyServiceGenerationObservation.signature/v1",
                 &encode_canonical_frame(o).map_err(|_|invalid())?,&value.signature_base64url).map_err(|_|invalid())?;
             if let Some((retained,installation))=&installed {
                 let prepared=o.prepared.as_ref().ok_or_else(invalid)?;let committed=o.decision.as_ref().ok_or_else(invalid)?;

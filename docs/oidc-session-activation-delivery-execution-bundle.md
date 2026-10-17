@@ -1,9 +1,9 @@
 # Encrypted consume execution originals
 
-[`authority_oidc_session_activation_delivery_execution_bundle.py`](../serverware/authority_oidc_session_activation_delivery_execution_bundle.py)
+[`authority_oidc_session_activation_delivery_execution_bundle.py`](../catchplate/authority_oidc_session_activation_delivery_execution_bundle.py)
 is a distinct private AES-GCM codec for `oidc.session.activation-delivery.consume`.
 It seals the exact canonical sixteen-field
-`serverware.oidcSessionActivationDeliveryPrivateOriginals/v1` document from the
+`catchplate.oidcSessionActivationDeliveryPrivateOriginals/v1` document from the
 [delivery journal](oidc-session-activation-delivery-journal.md). It does not
 accept the activation journal format or grant execution/release authority.
 This source is unbuilt and unexecuted; no tests or runtime checks were run.
@@ -23,7 +23,7 @@ are held before clock, hash or cryptographic callbacks. The context is exactly:
 
 | Field | Binding |
 | --- | --- |
-| `schema` | `serverware.oidcSessionActivationDeliveryExecutionOriginalsContext/v1` |
+| `schema` | `catchplate.oidcSessionActivationDeliveryExecutionOriginalsContext/v1` |
 | `operation` | `oidc.session.activation-delivery.consume` |
 | `sourceRevision` | Current source revision |
 | `configurationDigest` | Independently admitted configuration |
@@ -46,7 +46,7 @@ The fixed frame is `SWODX001`, an unsigned 64-bit big-endian plaintext length,
 a fresh 12-byte nonce, and AES-256-GCM ciphertext including its 16-byte tag.
 The overhead is exactly 44 bytes. No plaintext, key or context graph is
 serialized into the frame. Associated data is the distinct byte domain
-`serverware.oidcSessionActivationDeliveryExecutionOriginals/v1` followed by
+`catchplate.oidcSessionActivationDeliveryExecutionOriginals/v1` followed by
 NUL, the exact magic/length header and the canonical independent context.
 Opening uses the caller's expected context, never expectations learned from
 ciphertext. Wrong magic, length, key, context or tag fails closed; there is no
@@ -71,7 +71,7 @@ path and compares exact canonical original bytes. It does not renew any
 signed plan, observation, delivery or historical-custody interval.
 
 `RECORD_IDENTITY_DOMAIN` is the string
-`serverware.oidcSessionActivationDeliveryExecutionRecordIdentity/v1` for a
+`catchplate.oidcSessionActivationDeliveryExecutionRecordIdentity/v1` for a
 separate exact raw2 `(signed consume plan, encrypted bundle)` commitment.
 Exporting that constant does not add replay, grant production or execution;
 framing a ciphertext pair is not proof that its plaintext was admitted.

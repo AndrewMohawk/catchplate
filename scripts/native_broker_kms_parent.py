@@ -94,7 +94,7 @@ def protected_original(path, maximum):
 def configuration(path):
     config = document(protected_original(path, 32768), 32768)
     require(set(config) == {"apiVersion", "enclaveCid", "port", "kmsKeyId", "ciphertextBlob",
-        "encryptionContext", "region"} and config["apiVersion"] == "serverware.nativeBrokerKmsParent/v1")
+        "encryptionContext", "region"} and config["apiVersion"] == "catchplate.nativeBrokerKmsParent/v1")
     require(type(config["enclaveCid"]) is int and 3 < config["enclaveCid"] < 2**32 - 1
         and type(config["port"]) is int and 1023 < config["port"] < 2**32 - 1
         and text(config["kmsKeyId"], 2048)
@@ -130,7 +130,7 @@ def serve_one(channel, config, blob):
     request = envelope["request"]
     require(type(request) is dict and set(request) == {"apiVersion", "material", "configurationSha256",
         "kmsKeyId", "ciphertextBlobSha256", "encryptionContext", "recipientPublicKeySha256", "nonce", "deadlineBoottimeNs"}
-        and request["apiVersion"] == "serverware.nativeBrokerKmsRecipientRequest/v1" and request["material"] == "broker-kek"
+        and request["apiVersion"] == "catchplate.nativeBrokerKmsRecipientRequest/v1" and request["material"] == "broker-kek"
         and request["kmsKeyId"] == config["kmsKeyId"] and request["ciphertextBlobSha256"] == digest(blob)
         and request["encryptionContext"] == config["encryptionContext"]
         and sha(request["configurationSha256"]) and sha(request["recipientPublicKeySha256"])
@@ -150,7 +150,7 @@ def serve_one(channel, config, blob):
     require(type(text) is str and 1 <= len(text) <= 87384)
     ciphertext = base64.b64decode(text, validate=True)
     require(1 <= len(ciphertext) <= 65536)
-    response = canonical({"apiVersion": "serverware.nativeBrokerKmsRecipientCiphertext/v1",
+    response = canonical({"apiVersion": "catchplate.nativeBrokerKmsRecipientCiphertext/v1",
         "requestSha256": envelope["requestSha256"], "ciphertextForRecipient":
             base64.urlsafe_b64encode(ciphertext).rstrip(b"=").decode("ascii"),
         "ciphertextSha256": digest(ciphertext)})

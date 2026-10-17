@@ -147,7 +147,7 @@ class NpmPublishBreadcrumbTests(unittest.TestCase):
         instance.policy_hash = old_hash
         app = {"id": "synthetic-run-scoped", "principal_id": "principal-synthetic-run-scoped"}
         rule = {"id": app["id"], "route_id": "route-synthetic-run-scoped"}
-        before = {"schema": "serverware.operatorCatalog/v1", "mode": "operator-development",
+        before = {"schema": "catchplate.operatorCatalog/v1", "mode": "operator-development",
             "productionReady": False, "hardwareVerified": False, "allowed_upstreams": [check.fixture.ORIGIN],
             "revision": 10, "credentials": [], "applications": [{**app, "version": 1, "status": "active"}],
             "access_rules": [{**rule, "version": 1, "status": "active"}],
@@ -361,7 +361,7 @@ class NpmPublishBreadcrumbTests(unittest.TestCase):
         return status, json.loads(output.getvalue())
 
     def test_actual_main_failure_preserves_optional_client_fields_and_original_error(self):
-        raw = {"schema": "serverware.privateNpmPublishClient/v1", "phase": "unscoped", "npmVersion": "11.8.0",
+        raw = {"schema": "catchplate.privateNpmPublishClient/v1", "phase": "unscoped", "npmVersion": "11.8.0",
             "pacoteVersion": "21.0.4", "registryFetchVersion": "19.1.1", "strictSSL": True,
             "extraCaPreservesDefaultRoots": True, "configuredRetries": 0, "isolatedCache": True,
             "requestRewrite": False, "force": False, "dryRun": False, "provenance": False, "ok": False,
@@ -370,7 +370,7 @@ class NpmPublishBreadcrumbTests(unittest.TestCase):
             "stdoutShape": "npm_error", "stdoutCodeKind": "recognized", "stdoutContext": "http_error"}
         for failure in (check.ClientFailure("unscoped", raw), check.ClientFailure("unscoped", None), ValueError(CANARY)):
             with self.subTest(error_type=type(failure).__name__, client_details=getattr(failure, "observation", None) is not None):
-                audit = {"schema": "serverware.privateNpmPublishFailureAudit/v1", "healthReads": 0,
+                audit = {"schema": "catchplate.privateNpmPublishFailureAudit/v1", "healthReads": 0,
                          "queueState": "deadline", "counters": None, "auditRead": "deadline", "durableEventCount": None}
                 instance = SimpleNamespace(run=Mock(side_effect=failure), clean=Mock(), clients=[{"phase": "prerequisite"}],
                     failure_phase="unscoped", failure_stage="client", failure_audit=audit, deadline=10.0)

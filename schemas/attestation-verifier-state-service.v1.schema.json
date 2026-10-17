@@ -1,7 +1,7 @@
 {
-  "$id": "https://serverware.invalid/schemas/attestation-verifier-state-service.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/attestation-verifier-state-service.v1.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Serverware attestation verifier-state service v3",
+  "title": "Catchplate attestation verifier-state service v3",
   "oneOf": [
     {
       "$ref": "#/$defs/serviceConfiguration"
@@ -142,7 +142,7 @@
       "properties": {
         "apiVersion": {
           "type": "string",
-          "pattern": "^serverware\\.[A-Za-z0-9]+/v[0-9]+$"
+          "pattern": "^catchplate\\.[A-Za-z0-9]+/v[0-9]+$"
         },
         "payload": {"type": "object"},
         "payloadSha256": {"$ref": "#/$defs/digest"},
@@ -177,7 +177,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.verifierStateStoreCommitProof/v3"
+          "const": "catchplate.verifierStateStoreCommitProof/v3"
         },
         "authorizationSha256": {
           "$ref": "#/$defs/digest"
@@ -246,7 +246,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.signedVerifierStateStoreCommitProof/v3"
+          "const": "catchplate.signedVerifierStateStoreCommitProof/v3"
         },
         "payload": {
           "$ref": "#/$defs/storeCommitProof"
@@ -290,7 +290,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.verifierStateStoreCommitCandidate/v2"
+          "const": "catchplate.verifierStateStoreCommitCandidate/v2"
         },
         "assuranceSha256": {
           "$ref": "#/$defs/digest"
@@ -441,7 +441,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nonceAuthorityAssurance/v1"
+          "const": "catchplate.nonceAuthorityAssurance/v1"
         },
         "administrativeDomainSha256": {
           "$ref": "#/$defs/digest"
@@ -726,7 +726,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nonceAuthorityVerifierState/v1"
+          "const": "catchplate.nonceAuthorityVerifierState/v1"
         },
         "assuranceSha256": {
           "$ref": "#/$defs/digest"
@@ -860,7 +860,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nonceAuthorityVerifierStatePreparedAuthorization/v3"
+          "const": "catchplate.nonceAuthorityVerifierStatePreparedAuthorization/v3"
         },
         "assuranceSha256": {
           "$ref": "#/$defs/digest"
@@ -960,7 +960,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nonceAuthorityState/v1"
+          "const": "catchplate.nonceAuthorityState/v1"
         },
         "assuranceSha256": {
           "$ref": "#/$defs/digest"
@@ -999,7 +999,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nonceAuthorityHighWaterCommitment/v1"
+          "const": "catchplate.nonceAuthorityHighWaterCommitment/v1"
         },
         "assuranceSha256": {
           "$ref": "#/$defs/digest"
@@ -1080,7 +1080,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.publicAttestationNonceConsumption/v1"
+          "const": "catchplate.publicAttestationNonceConsumption/v1"
         },
         "consumedAtUnix": {
           "$ref": "#/$defs/positiveInteger"
@@ -1136,7 +1136,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationNonceConsumptionReceiptPayload/v2"
+          "const": "catchplate.attestationNonceConsumptionReceiptPayload/v2"
         },
         "consumeRequestSha256": {
           "$ref": "#/$defs/digest"
@@ -1230,7 +1230,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.signedAttestationNonceConsumptionReceipt/v2"
+          "const": "catchplate.signedAttestationNonceConsumptionReceipt/v2"
         },
         "payload": {
           "$ref": "#/$defs/nonceConsumptionReceiptPayload"
@@ -1290,7 +1290,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nonceAuthorityVerifierStateCommitReceipt/v3"
+          "const": "catchplate.nonceAuthorityVerifierStateCommitReceipt/v3"
         },
         "assuranceSha256": {
           "$ref": "#/$defs/digest"
@@ -1398,7 +1398,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.signedNonceAuthorityVerifierState/v1"
+          "const": "catchplate.signedNonceAuthorityVerifierState/v1"
         },
         "payload": {
           "$ref": "#/$defs/statePayload"
@@ -1434,7 +1434,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nonceAuthorityVerifierStatePreparedAuthorization/v3"
+          "const": "catchplate.nonceAuthorityVerifierStatePreparedAuthorization/v3"
         },
         "payload": {
           "$ref": "#/$defs/authorizationPayload"
@@ -1470,7 +1470,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nonceAuthorityVerifierStateCommitReceipt/v3"
+          "const": "catchplate.nonceAuthorityVerifierStateCommitReceipt/v3"
         },
         "payload": {
           "$ref": "#/$defs/commitReceiptPayload"
@@ -1501,7 +1501,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nonceAuthorityVerifierStateReadRequest/v2"
+          "const": "catchplate.nonceAuthorityVerifierStateReadRequest/v2"
         },
         "assuranceSha256": {
           "$ref": "#/$defs/digest"
@@ -1519,7 +1519,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nonceAuthorityVerifierStateReadResponse/v3"
+          "const": "catchplate.nonceAuthorityVerifierStateReadResponse/v3"
         },
         "nonActionable": {
           "const": true
@@ -1552,7 +1552,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateIssueChallengeResponse/v1"
+          "const": "catchplate.attestationVerifierStateIssueChallengeResponse/v1"
         },
         "challengeBase64url": {"$ref": "#/$defs/base64url32"},
         "challengeExpiresAtUnix": {"$ref": "#/$defs/positiveInteger"},
@@ -1583,7 +1583,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateIssueChallengeRequest/v1"
+          "const": "catchplate.attestationVerifierStateIssueChallengeRequest/v1"
         },
         "assuranceSha256": {"$ref": "#/$defs/digest"},
         "expectedVerifierStateSha256": {"$ref": "#/$defs/digest"},
@@ -1611,7 +1611,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateRecoverChallengeRequest/v1"
+          "const": "catchplate.attestationVerifierStateRecoverChallengeRequest/v1"
         },
         "assuranceSha256": {"$ref": "#/$defs/digest"},
         "issueRequestSha256": {"$ref": "#/$defs/digest"},
@@ -1633,7 +1633,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateRecoverChallengeResponse/v1"
+          "const": "catchplate.attestationVerifierStateRecoverChallengeResponse/v1"
         },
         "challenge": {
           "oneOf": [
@@ -1672,7 +1672,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateRecoveryIdentity/v1"
+          "const": "catchplate.attestationVerifierStateRecoveryIdentity/v1"
         },
         "assuranceSha256": {"$ref": "#/$defs/digest"},
         "callerNonceSha256": {"$ref": "#/$defs/digest"},
@@ -1697,7 +1697,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateRequestBinding/v1"
+          "const": "catchplate.attestationVerifierStateRequestBinding/v1"
         },
         "expiresAtUnix": {"$ref": "#/$defs/positiveInteger"},
         "nonceSha256": {"$ref": "#/$defs/digest"},
@@ -1722,7 +1722,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateRecoveryBinding/v1"
+          "const": "catchplate.attestationVerifierStateRecoveryBinding/v1"
         },
         "assuranceSha256": {"$ref": "#/$defs/digest"},
         "expectedVerifierStateSha256": {"$ref": "#/$defs/digest"},
@@ -1748,7 +1748,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationNonceConsumeOnceRequest/v3"
+          "const": "catchplate.attestationNonceConsumeOnceRequest/v3"
         },
         "expiresAtUnix": {"$ref": "#/$defs/positiveInteger"},
         "nonceAuthorityVerifierStateAuthorizationSha256": {
@@ -1781,7 +1781,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateSuccessorIntent/v1"
+          "const": "catchplate.attestationVerifierStateSuccessorIntent/v1"
         },
         "authorizationSha256": {"$ref": "#/$defs/digest"},
         "expectedHighWaterSequence": {"$ref": "#/$defs/positiveInteger"},
@@ -1818,7 +1818,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.publicAttestationProducerInvocation/v1"
+          "const": "catchplate.publicAttestationProducerInvocation/v1"
         },
         "callerNonceSha256": {"$ref": "#/$defs/digest"},
         "expiresAtUnix": {"$ref": "#/$defs/positiveInteger"},
@@ -1903,7 +1903,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStatePrepareRequest/v4"
+          "const": "catchplate.attestationVerifierStatePrepareRequest/v4"
         },
         "assuranceSha256": {"$ref": "#/$defs/digest"},
         "challengeIssue": {"$ref": "#/$defs/challengeIssue"},
@@ -1945,7 +1945,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStatePreparedOperation/v1"
+          "const": "catchplate.attestationVerifierStatePreparedOperation/v1"
         },
         "authorization": {"$ref": "#/$defs/signedAuthorization"},
         "authorizationSha256": {"$ref": "#/$defs/digest"},
@@ -1977,7 +1977,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStatePrepareResponse/v4"
+          "const": "catchplate.attestationVerifierStatePrepareResponse/v4"
         },
         "nonActionable": {"const": true},
         "preparedOperation": {"$ref": "#/$defs/preparedOperation"},
@@ -2015,7 +2015,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationNonceTransactionStatusEvidence/v1"
+          "const": "catchplate.attestationNonceTransactionStatusEvidence/v1"
         },
         "consumeRequestSha256": {"$ref": "#/$defs/digest"},
         "evidenceIssuedAtUnix": {"$ref": "#/$defs/positiveInteger"},
@@ -2081,7 +2081,7 @@
         {
           "properties": {
             "apiVersion": {
-              "const": "serverware.signedAttestationNonceTransactionStatusEvidence/v1"
+              "const": "catchplate.signedAttestationNonceTransactionStatusEvidence/v1"
             },
             "payload": {"$ref": "#/$defs/nonceStatusEvidencePayload"}
           }
@@ -2141,7 +2141,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateRecoveryLookupRequest/v1"
+          "const": "catchplate.attestationVerifierStateRecoveryLookupRequest/v1"
         },
         "recoveryIdentity": {"$ref": "#/$defs/recoveryIdentity"},
         "recoveryIdentitySha256": {"$ref": "#/$defs/digest"},
@@ -2169,7 +2169,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateRecoveryLookupResponse/v1"
+          "const": "catchplate.attestationVerifierStateRecoveryLookupResponse/v1"
         },
         "commitReceipt": {
           "oneOf": [
@@ -2334,7 +2334,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateMarkConsumptionRequest/v1"
+          "const": "catchplate.attestationVerifierStateMarkConsumptionRequest/v1"
         },
         "preparedOperationSha256": {"$ref": "#/$defs/digest"},
         "recoveryKeySha256": {"$ref": "#/$defs/digest"},
@@ -2356,7 +2356,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateMarkConsumptionResponse/v1"
+          "const": "catchplate.attestationVerifierStateMarkConsumptionResponse/v1"
         },
         "nonActionable": {"const": true},
         "nonceConsumeRequestSha256": {"$ref": "#/$defs/digest"},
@@ -2387,7 +2387,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateAttachNonceStatusRequest/v1"
+          "const": "catchplate.attestationVerifierStateAttachNonceStatusRequest/v1"
         },
         "nonceConsumptionReceipt": {
           "oneOf": [
@@ -2438,7 +2438,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateAttachNonceStatusResponse/v1"
+          "const": "catchplate.attestationVerifierStateAttachNonceStatusResponse/v1"
         },
         "nonActionable": {"const": true},
         "nonceConsumptionReceipt": {
@@ -2492,7 +2492,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateAbortRequest/v1"
+          "const": "catchplate.attestationVerifierStateAbortRequest/v1"
         },
         "nonceStatusEvidence": {
           "$ref": "#/$defs/signedNeverConsumedNonceStatusEvidence"
@@ -2518,7 +2518,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateAbortResponse/v1"
+          "const": "catchplate.attestationVerifierStateAbortResponse/v1"
         },
         "nonceStatusEvidence": {
           "$ref": "#/$defs/signedNeverConsumedNonceStatusEvidence"
@@ -2546,7 +2546,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateCommitRequest/v3"
+          "const": "catchplate.attestationVerifierStateCommitRequest/v3"
         },
         "authorization": {
           "$ref": "#/$defs/signedAuthorization"
@@ -2579,7 +2579,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateRecoveryRequest/v3"
+          "const": "catchplate.attestationVerifierStateRecoveryRequest/v3"
         },
         "recoveryIdentity": {"$ref": "#/$defs/recoveryIdentity"},
         "recoveryIdentitySha256": {"$ref": "#/$defs/digest"},
@@ -2610,7 +2610,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateRecoveryResponse/v3"
+          "const": "catchplate.attestationVerifierStateRecoveryResponse/v3"
         },
         "commitReceipt": {
           "oneOf": [
@@ -2939,7 +2939,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.externalVerifierStateStoreRequest/v3"
+          "const": "catchplate.externalVerifierStateStoreRequest/v3"
         },
         "operation": {
           "enum": [
@@ -3542,7 +3542,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.externalVerifierStateStoreResponse/v3"
+          "const": "catchplate.externalVerifierStateStoreResponse/v3"
         },
         "operation": {
           "$ref": "#/$defs/externalStoreRequestV3/properties/operation"
@@ -3727,7 +3727,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.externalVerifierStateStoreRequest/v2"
+          "const": "catchplate.externalVerifierStateStoreRequest/v2"
         },
         "operation": {
           "enum": [
@@ -3960,7 +3960,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.externalVerifierStateStoreResponse/v2"
+          "const": "catchplate.externalVerifierStateStoreResponse/v2"
         },
         "operation": {
           "enum": [
@@ -4289,7 +4289,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.externalVerifierStateStoreRequest/v2"
+              "const": "catchplate.externalVerifierStateStoreRequest/v2"
             },
             "operation": {
               "const": "read"
@@ -4315,7 +4315,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.externalVerifierStateStoreRequest/v2"
+              "const": "catchplate.externalVerifierStateStoreRequest/v2"
             },
             "operation": {
               "const": "issueChallenge"
@@ -4364,7 +4364,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.externalVerifierStateStoreRequest/v2"
+              "const": "catchplate.externalVerifierStateStoreRequest/v2"
             },
             "operation": {
               "const": "reserveAuthorization"
@@ -4413,7 +4413,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.externalVerifierStateStoreRequest/v2"
+              "const": "catchplate.externalVerifierStateStoreRequest/v2"
             },
             "operation": {
               "const": "commitCasCandidate"
@@ -4462,7 +4462,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.externalVerifierStateStoreRequest/v2"
+              "const": "catchplate.externalVerifierStateStoreRequest/v2"
             },
             "operation": {
               "const": "finalizeCommitArtifacts"
@@ -4511,7 +4511,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.externalVerifierStateStoreRequest/v2"
+              "const": "catchplate.externalVerifierStateStoreRequest/v2"
             },
             "operation": {
               "const": "recoverOperation"
@@ -4592,7 +4592,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.externalVerifierStateStoreResponse/v2"
+          "const": "catchplate.externalVerifierStateStoreResponse/v2"
         },
         "operation": {
           "const": "read"
@@ -4629,7 +4629,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.externalVerifierStateStoreResponse/v2"
+          "const": "catchplate.externalVerifierStateStoreResponse/v2"
         },
         "operation": {
           "const": "issueChallenge"
@@ -4673,7 +4673,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.externalVerifierStateStoreResponse/v2"
+          "const": "catchplate.externalVerifierStateStoreResponse/v2"
         },
         "operation": {
           "const": "reserveAuthorization"
@@ -4717,7 +4717,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.externalVerifierStateStoreResponse/v2"
+          "const": "catchplate.externalVerifierStateStoreResponse/v2"
         },
         "operation": {
           "const": "commitCasCandidate"
@@ -4761,7 +4761,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.externalVerifierStateStoreResponse/v2"
+          "const": "catchplate.externalVerifierStateStoreResponse/v2"
         },
         "operation": {
           "const": "finalizeCommitArtifacts"
@@ -4805,7 +4805,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.externalVerifierStateStoreResponse/v2"
+          "const": "catchplate.externalVerifierStateStoreResponse/v2"
         },
         "operation": {
           "const": "recoverOperation"
@@ -4929,7 +4929,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.remoteEd25519SignRequest/v1"
+          "const": "catchplate.remoteEd25519SignRequest/v1"
         },
         "messageBase64url": {
           "type": "string",
@@ -4955,7 +4955,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.externalVerifierStateStoreResponse/v2"
+          "const": "catchplate.externalVerifierStateStoreResponse/v2"
         },
         "operation": {
           "const": "sign"
@@ -4975,7 +4975,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.remoteEd25519SignResponse/v1"
+              "const": "catchplate.remoteEd25519SignResponse/v1"
             },
             "messageSha256": {
               "$ref": "#/$defs/digest"
@@ -5110,7 +5110,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.verifierStateRoleSeparationEvidence/v1"
+          "const": "catchplate.verifierStateRoleSeparationEvidence/v1"
         },
         "assuranceSha256": {
           "$ref": "#/$defs/digest"
@@ -5176,7 +5176,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.signedVerifierStateRoleSeparationEvidence/v1"
+          "const": "catchplate.signedVerifierStateRoleSeparationEvidence/v1"
         },
         "payload": {
           "$ref": "#/$defs/roleSeparationEvidencePayload"
@@ -5220,7 +5220,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateServiceConfiguration/v3"
+          "const": "catchplate.attestationVerifierStateServiceConfiguration/v3"
         },
         "assurance": {
           "$ref": "#/$defs/assurance"

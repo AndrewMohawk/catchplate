@@ -24,7 +24,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import webauthn_attestation_core as core
+from catchplate import webauthn_attestation_core as core
 
 
 START = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -341,13 +341,13 @@ class RegistrationAttestationCoreTests(unittest.TestCase):
         # Static wiring only. Do not import the blocked DB/registry and do not
         # replace authority checks with stubs to manufacture an enrollment.
         root = Path(__file__).resolve().parents[1]
-        pure_source = (root / "serverware/webauthn_attestation_core.py").read_text()
+        pure_source = (root / "catchplate/webauthn_attestation_core.py").read_text()
         pure_tree = ast.parse(pure_source)
         imported = {node.module for node in ast.walk(pure_tree) if isinstance(node, ast.ImportFrom)}
-        self.assertFalse(any(name and name.startswith("serverware") for name in imported))
+        self.assertFalse(any(name and name.startswith("catchplate") for name in imported))
         self.assertNotIn("datetime.now(", pure_source)
         self.assertNotIn("open(", pure_source)
-        live_source = (root / "serverware/webauthn.py").read_text()
+        live_source = (root / "catchplate/webauthn.py").read_text()
         functions = {node.name: node for node in ast.parse(live_source).body if isinstance(node, ast.FunctionDef)}
         registration = ast.get_source_segment(live_source, functions["verify_registration"])
         self.assertEqual([node.id for node in functions["verify_registration"].decorator_list], ["trust_read_locked"])

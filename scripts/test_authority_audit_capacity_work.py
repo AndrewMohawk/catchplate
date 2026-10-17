@@ -23,8 +23,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_audit_capacity as capacity
-from serverware import authority_query_read_work as accounting
+from catchplate import authority_audit_capacity as capacity
+from catchplate import authority_query_read_work as accounting
 import test_authority_global_audit_capacity as oracle
 
 
@@ -45,7 +45,7 @@ def nodes(value):
 
 
 def state_document(row):
-    return {"schema": "serverware.policyAuthorityAggregateState/v1",
+    return {"schema": "catchplate.policyAuthorityAggregateState/v1",
         "aggregateId": row["aggregate_id"], "aggregateKind": row["aggregate_kind"],
         "partitionDigest": row["partition_digest"], "revision": row["revision"],
         "liveCount": row["live_count"], "activeCount": row["active_count"],
@@ -485,7 +485,7 @@ class AuditCapacityWorkTests(unittest.TestCase):
     def test_repeated_large_new_image_exhausts_real_shared_64mib_without_fresh_helper_budgets(self):
         event = wire({"payload": "x" * (1024 * 1024)})
         row = oracle.outbox_row(event_json=event.decode("ascii"),
-            event_digest=oracle.framed("serverware.metadataAuditOutboxEvent/v1", event))
+            event_digest=oracle.framed("catchplate.metadataAuditOutboxEvent/v1", event))
         context, changes = oracle.fixture([(None, row)])
         expected = expected_work(context, changes).tuple()
         maximum = 64 * 1024 * 1024

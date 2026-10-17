@@ -18,7 +18,7 @@ before descriptors, with one input ownership boundary and one work budget.
 It does not establish that an authenticated caller requested those writes.
 
 The entry point is `verify_complete_read_write_batch` in
-[`authority_complete_read_write.py`](../serverware/authority_complete_read_write.py).
+[`authority_complete_read_write.py`](../catchplate/authority_complete_read_write.py).
 Its counted inputs use `CompleteReadWriteHead` for the one before-head union and
 `CompleteWriteFrontier` for each required write profile. Query declarations and
 frontiers retain their existing exact DTO types. These constructors describe

@@ -8,18 +8,18 @@ Native helper/signing/browser startup is a separate required producer join.
 
 ## Independent permission and original windows
 
-The cold control-plane profile is `serverware.oauthApplicationStartup/v4`.
+The cold control-plane profile is `catchplate.oauthApplicationStartup/v4`.
 It retains the actual existing enrollment/configuration/custody owners and
 encrypted client material, plus separate sealed root/grant descriptors. The fixed
-delivery paths are `/run/serverware/authority-trust/oauth-reconnect-root-public-key`
-and `/run/serverware/authority-trust/oauth-reconnect-authorizations.json`.
+delivery paths are `/run/catchplate/authority-trust/oauth-reconnect-root-public-key`
+and `/run/catchplate/authority-trust/oauth-reconnect-authorizations.json`.
 The root must differ from enrollment and runtime configuration roots. The
 authority independently checks its signed `oauthMeasuredReconnectPolicy`, enabled
 operation inventory, enrollment signature and purpose-specific family signature.
 Browser input cannot provide those roots, descriptor paths or authority URLs.
 Old startup v1–v3 and old issuance/Setup signed bytes are not widened.
 
-`serverware.oauthFamilyReconnectAuthorization/v1` has exactly25 fields. Its
+`catchplate.oauthFamilyReconnectAuthorization/v1` has exactly25 fields. Its
 independent signature commits the target ID/N, exact credential and generation
 rows, actual enrollment/client/provider/subject/account, requester, desired
 scopes, original metadata, entire affected local family and explicit external
@@ -82,9 +82,9 @@ are separate checks; full production attestation acceptance remains open.
 ## Fixed originals and bounds
 
 The schema is `schemas/oauth-measured-reconnect-authority.v1.schema.json`.
-Native statement23 uses `serverware.nativeOAuthReconnectStatement/v1`, signing
+Native statement23 uses `catchplate.nativeOAuthReconnectStatement/v1`, signing
 purpose `nativeOAuthReconnectExchange.sign/v1`, statement-schema+NUL signature
-preimage, and its own `serverware/native-oauth-reconnect-attestation/v1` NSM
+preimage, and its own `catchplate/native-oauth-reconnect-attestation/v1` NSM
 domain. Native arguments12 add the raw signed authorization (base64url) to the
 existing scalar field names; every phase request includes `fencedRowSha256`.
 Assignment is nonnull even for PREPARE and is independently re-admitted.

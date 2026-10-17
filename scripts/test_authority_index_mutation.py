@@ -19,14 +19,14 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_index_contract as contract
-from serverware import authority_index_mutation as mutation
+from catchplate import authority_index_contract as contract
+from catchplate import authority_index_mutation as mutation
 import test_authority_index_range as oracle
 
 
 WIDTH = 160
 DIGITS = "0123456789abcdef"
-INPUT_DOMAIN = "serverware.policyAuthorityIndexMutationInput/v1"
+INPUT_DOMAIN = "catchplate.policyAuthorityIndexMutationInput/v1"
 
 
 def key(prefix):
@@ -87,7 +87,7 @@ def metrics_oracle(before, after, changes, frontier):
             total += 1 if occupied == 0 else 17 - occupied
         return total
 
-    framed = [INPUT_DOMAIN, "serverware.policyAuthorityCountedIndex/v1",
+    framed = [INPUT_DOMAIN, "catchplate.policyAuthorityCountedIndex/v1",
               before.profile.index_id, before.profile.table, before.profile.projection_digest,
               "160", before.root.digest, str(before.root.count), str(len(changes)), str(len(frontier))]
     for item in changes:

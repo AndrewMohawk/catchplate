@@ -18,7 +18,7 @@ use std::os::fd::OwnedFd;
 #[path="ledger_store.rs"] mod store;
 #[path="ledger_cold_core.rs"] mod cold_core;
 #[path="genesis_retrieval.rs"] pub(crate) mod genesis;
-const DOMAIN:&str="serverware.nativeLedgerSpoolRetrievalGrant.signature/v1";
+const DOMAIN:&str="catchplate.nativeLedgerSpoolRetrievalGrant.signature/v1";
 pub(in crate::policy_shadow::policy_custody::services) const MAX_ADOPTED_CONFIGURATION:usize=3*1024*1024;
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -123,22 +123,22 @@ struct Effects {dispatch_barrier:services::spool_head_values::RoleKey,active_eff
 pub(crate) struct Configuration {payload:Payload,signature:CanonicalEd25519Signature}
 impl Configuration {
     pub(in crate::policy_shadow::policy_custody::services) fn completion_selected(&self)->bool {
-        matches!(self.payload.api_version.as_str(),"serverware.nativeLedgerSpoolRetrievalGrant/v2"|"serverware.nativeLedgerSpoolRetrievalGrant/v3"|"serverware.nativeLedgerSpoolRetrievalGrant/v4"|"serverware.nativeLedgerSpoolRetrievalGrant/v5"|"serverware.nativeLedgerSpoolRetrievalGrant/v6")
+        matches!(self.payload.api_version.as_str(),"catchplate.nativeLedgerSpoolRetrievalGrant/v2"|"catchplate.nativeLedgerSpoolRetrievalGrant/v3"|"catchplate.nativeLedgerSpoolRetrievalGrant/v4"|"catchplate.nativeLedgerSpoolRetrievalGrant/v5"|"catchplate.nativeLedgerSpoolRetrievalGrant/v6")
     }
     pub(in crate::policy_shadow::policy_custody::services) fn effects_selected(&self)->bool{
-        matches!(self.payload.api_version.as_str(),"serverware.nativeLedgerSpoolRetrievalGrant/v3"|"serverware.nativeLedgerSpoolRetrievalGrant/v4"|"serverware.nativeLedgerSpoolRetrievalGrant/v5"|"serverware.nativeLedgerSpoolRetrievalGrant/v6")
+        matches!(self.payload.api_version.as_str(),"catchplate.nativeLedgerSpoolRetrievalGrant/v3"|"catchplate.nativeLedgerSpoolRetrievalGrant/v4"|"catchplate.nativeLedgerSpoolRetrievalGrant/v5"|"catchplate.nativeLedgerSpoolRetrievalGrant/v6")
     }
-    fn fresh_ledger_selected(&self)->bool{matches!(self.payload.api_version.as_str(),"serverware.nativeLedgerSpoolRetrievalGrant/v4"|"serverware.nativeLedgerSpoolRetrievalGrant/v5"|"serverware.nativeLedgerSpoolRetrievalGrant/v6")}
+    fn fresh_ledger_selected(&self)->bool{matches!(self.payload.api_version.as_str(),"catchplate.nativeLedgerSpoolRetrievalGrant/v4"|"catchplate.nativeLedgerSpoolRetrievalGrant/v5"|"catchplate.nativeLedgerSpoolRetrievalGrant/v6")}
     pub(in crate::policy_shadow::policy_custody::services) fn publication_selected(&self)->bool{
-        matches!(self.payload.api_version.as_str(),"serverware.nativeLedgerSpoolRetrievalGrant/v5"|"serverware.nativeLedgerSpoolRetrievalGrant/v6")
+        matches!(self.payload.api_version.as_str(),"catchplate.nativeLedgerSpoolRetrievalGrant/v5"|"catchplate.nativeLedgerSpoolRetrievalGrant/v6")
     }
     pub(in crate::policy_shadow::policy_custody::services) fn adoption_selected(&self)->bool{
-        self.payload.api_version=="serverware.nativeLedgerSpoolRetrievalGrant/v6"
+        self.payload.api_version=="catchplate.nativeLedgerSpoolRetrievalGrant/v6"
     }
     fn maximum(&self)->usize{if self.adoption_selected(){MAX_ADOPTED_CONFIGURATION}else{65536}}
     pub(in crate::policy_shadow::policy_custody::services) fn validate_shape(&self)->Result<(),ShadowError>{
         let p=&self.payload;
-        require((self.completion_selected() || p.api_version=="serverware.nativeLedgerSpoolRetrievalGrant/v1")
+        require((self.completion_selected() || p.api_version=="catchplate.nativeLedgerSpoolRetrievalGrant/v1")
             && self.completion_selected()==p.terminal.is_some() && self.effects_selected()==p.effects.is_some() && p.purpose=="native-ledger-spool-retrieval"
             && p.guest.service_role=="production-bridge" && p.expected_peer.uid>0 && p.expected_peer.gid>0
             && p.expected_peer.uid!=p.guest.uid && p.proof_scope_original_base64url.len()<=21846
@@ -181,11 +181,11 @@ impl Configuration {
         let key=trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(AuthorityRole::CustodySupervisorCapability),
             &signer.key_id,&signer.key_spki_sha256)?;
         require(ed25519_public_key_material_sha256(&key)==signer.key_material_sha256)?;
-        key.verify_strict(&signature_preimage(if self.adoption_selected(){"serverware.nativeLedgerSpoolRetrievalGrant.signature/v6"}
-            else if self.publication_selected(){"serverware.nativeLedgerSpoolRetrievalGrant.signature/v5"}
-            else if self.fresh_ledger_selected(){"serverware.nativeLedgerSpoolRetrievalGrant.signature/v4"}
-            else if self.effects_selected(){"serverware.nativeLedgerSpoolRetrievalGrant.signature/v3"}
-            else if self.completion_selected(){"serverware.nativeLedgerSpoolRetrievalGrant.signature/v2"}else{DOMAIN},
+        key.verify_strict(&signature_preimage(if self.adoption_selected(){"catchplate.nativeLedgerSpoolRetrievalGrant.signature/v6"}
+            else if self.publication_selected(){"catchplate.nativeLedgerSpoolRetrievalGrant.signature/v5"}
+            else if self.fresh_ledger_selected(){"catchplate.nativeLedgerSpoolRetrievalGrant.signature/v4"}
+            else if self.effects_selected(){"catchplate.nativeLedgerSpoolRetrievalGrant.signature/v3"}
+            else if self.completion_selected(){"catchplate.nativeLedgerSpoolRetrievalGrant.signature/v2"}else{DOMAIN},
             &canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
             .map_err(|_|ShadowError::SignatureInvalid)?;
         if let Some(adoption)=p.publication.as_ref().and_then(|v|v.admission.adoption.as_ref()) {
@@ -408,7 +408,7 @@ impl OperationalService {
                     let p=&self.configuration.payload;let grant=Sha256Digest::compute(&canonical_json_bytes(&self.configuration)?);
                     let step=||{check()?;keys.check(trust,time)?;require(guest::now()?<request.deadline_boottime_nanos)};
                     let stored=self.store.put(prepared.clone(),|sequence,previous,verity|{
-                        let mut value=wire::Stored{payload:wire::StoredPayload{api_version:"serverware.nativeLedgerSpoolStorage/v1".into(),
+                        let mut value=wire::Stored{payload:wire::StoredPayload{api_version:"catchplate.nativeLedgerSpoolStorage/v1".into(),
                             guest:p.guest.clone(),grant_sha256:grant,core_sha256:prepared.core.identity().map_err(fail)?,
                             object_sha256:wire::sha(&prepared.core).map_err(fail)?,fsverity_sha256:verity,
                             retrieval_id_sha256:prepared.core.retrieval_id(self.scope.namespace()).map_err(fail)?,
@@ -432,7 +432,7 @@ impl OperationalService {
                     let own=self.retrieval_key(keys)?;
                     let step=||{check()?;keys.check(trust,time)?;require(guest::now()?<request.deadline_boottime_nanos)};
                     let stored=self.store.put_effect(prepared.clone(),|sequence,previous,verity|{
-                        let mut value=wire::Stored{payload:wire::StoredPayload{api_version:"serverware.nativeActiveEffectStorage/v1".into(),
+                        let mut value=wire::Stored{payload:wire::StoredPayload{api_version:"catchplate.nativeActiveEffectStorage/v1".into(),
                             guest:p.guest.clone(),grant_sha256:grant,core_sha256:prepared.core.identity().map_err(fail)?,object_sha256:wire::sha(&prepared.core).map_err(fail)?,
                             fsverity_sha256:verity,retrieval_id_sha256:prepared.core.retrieval_id(self.scope.namespace()).map_err(fail)?,
                             retrieval_proof_sha256:prepared.core.retrieval_proof(&self.scope_raw,&prepared.core.retrieval_id(self.scope.namespace()).map_err(fail)?).map_err(fail)?,
@@ -453,7 +453,7 @@ impl OperationalService {
                     let own=self.retrieval_key(keys)?;
                     let step=||{check()?;keys.check(trust,time)?;require(guest::now()?<request.deadline_boottime_nanos)};
                     let stored=self.store.put_publication(prepared.clone(),|sequence,previous,verity|{
-                        let mut value=wire::Stored{payload:wire::StoredPayload{api_version:"serverware.nativePublicationStorage/v1".into(),
+                        let mut value=wire::Stored{payload:wire::StoredPayload{api_version:"catchplate.nativePublicationStorage/v1".into(),
                             guest:p.guest.clone(),grant_sha256:own.grant_sha256.clone(),core_sha256:prepared.core.identity().map_err(fail)?,
                             object_sha256:wire::sha(&prepared.core).map_err(fail)?,fsverity_sha256:verity,
                             retrieval_id_sha256:prepared.core.retrieval_id(self.scope.namespace()).map_err(fail)?,
@@ -509,14 +509,14 @@ impl OperationalService {
                 }
                 _=>return Err(ShadowError::CustodyUnavailable),
             };
-            let result_sha256=hash_domain_frames(b"serverware.policyCustodyProductionAuthorityEndpointResponse/v4",&[&canonical_json_bytes(&result)?]);
+            let result_sha256=hash_domain_frames(b"catchplate.policyCustodyProductionAuthorityEndpointResponse/v4",&[&canonical_json_bytes(&result)?]);
             let mut reply=Reply{api_version:PRODUCTION_AUTHORITY_ENDPOINT_PROTOCOL_VERSION.into(),endpoint:request.endpoint,
                 request_sha256:request.request_sha256,replay_id_sha256:request.replay_id_sha256,completed_at_boottime_nanos:guest::now()?,
                 authority_key_id:local.binding.key_id.clone(),authority_key_spki_sha256:local.binding.key_spki_sha256.clone(),
                 result,result_sha256,signature_base64:String::new()};
             require(reply.completed_at_boottime_nanos<request.deadline_boottime_nanos)?;self.check(keys,trust,time)?;check()?;
             reply.signature_base64=URL_SAFE_NO_PAD.encode(local.key.sign(&domain_separated_signature_preimage(
-                b"serverware.policyCustodyProductionAuthorityEndpointSignature/v4",&reply.signature_payload().map_err(fail)?).map_err(fail)?).to_bytes());
+                b"catchplate.policyCustodyProductionAuthorityEndpointSignature/v4",&reply.signature_payload().map_err(fail)?).map_err(fail)?).to_bytes());
             let raw=services::common::encode_canonical_frame(&reply).map_err(fail)?;
             loop {
                 check()?;self.check(keys,trust,time)?;if let Some(read)=&held_legacy{read.check()?;}

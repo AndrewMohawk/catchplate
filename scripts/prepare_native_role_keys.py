@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from serverware import native_role_key_contract as contract
+from catchplate import native_role_key_contract as contract
 
 
 def protected_original(path, maximum, *, private):
@@ -82,7 +82,7 @@ def main():
     inventory = contract.inventory(contract.document(inventory_raw))
     assignment = contract.document(protected_original(args.assignment, 32768, private=True), 32768)
     contract.closed(assignment, {"apiVersion", "inventorySha256", "kekPath", "seedPaths"})
-    contract.require(assignment["apiVersion"] == "serverware.nativeGuestRoleKeyOfflineAssignment/v1"
+    contract.require(assignment["apiVersion"] == "catchplate.nativeGuestRoleKeyOfflineAssignment/v1"
         and assignment["inventorySha256"] == contract.digest(inventory_raw)
         and type(assignment["seedPaths"]) is list
         and len(assignment["seedPaths"]) == len(inventory["keys"])

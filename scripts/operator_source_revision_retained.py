@@ -32,7 +32,7 @@ ROOTS = (("data-root.tar", "persistent", "persistent"),
     ("notification-custody.tar", "notification", "custody"),
     ("provider-custody.tar", "provider", "provider_custody"),
     ("x-custody.tar", "x", "x_custody"))
-SIDES = {name + suffix for name in ("serverware.sqlite3", "webauthn-recovery-witness.sqlite3")
+SIDES = {name + suffix for name in ("catchplate.sqlite3", "webauthn-recovery-witness.sqlite3")
     for suffix in ("", "-wal", "-shm", "-journal")}
 AUXILIARY = "app-data/.public-proxy-check/public-proxy-e6e3da6abe224166863fcc3eab20254d/positive-result-import-root.json"
 AUXILIARY_INFO = {"kind": "file", "uid": 1000, "gid": 1000, "mode": 0o644, "size": 865,
@@ -111,7 +111,7 @@ def source_proof(*, git=False):
     join = strict_json(pinned(PROOFS / "source-join.json", cfg["sourceJoinSha256"]))
     need(set(join) == {"schema", "sourceCommit", "sourceFiles", "sourceBytes", "sourceFilesSha256",
         "readOnlyFrozen", "gitBlobEquality", "normalBinarySha256", "compilerInputGitAndSha256Equality"})
-    need(join["schema"] == "serverware.sourceRevisionRetainedSourceJoin/v1"
+    need(join["schema"] == "catchplate.sourceRevisionRetainedSourceJoin/v1"
         and join["sourceCommit"] == COMMIT and join["sourceFilesSha256"] == cfg["sourceFilesSha256"]
         and join["normalBinarySha256"] == BINARY_SHA
         and all(join[key] is True for key in ("readOnlyFrozen", "gitBlobEquality", "compilerInputGitAndSha256Equality")))
@@ -141,11 +141,11 @@ def source_proof(*, git=False):
         for name, digest in migration_pins["target"]["sourceFiles"].items()))
     normal = strict_json(pinned(PROOFS / "normal.json", cfg["normalReceiptSha256"]))
     selection = strict_json(pinned(PROOFS / "selection.json", cfg["normalSelectionSha256"]))
-    need(normal["schema"] == "serverware.hostedNormalRust/v1" and normal["ok"] is True
+    need(normal["schema"] == "catchplate.hostedNormalRust/v1" and normal["ok"] is True
         and normal["normalBinary"] is True and normal["sourceRevision"] == BUILD_COMMIT
         and normal["binary"]["sha256"] == BINARY_SHA and normal["binary"]["bytes"] == 42683568
         and normal["cleanup"]["allOwnedContainersRemoved"] is True)
-    need(selection["schema"] == "serverware.selectedNormalRust/v1" and selection["ok"] is True
+    need(selection["schema"] == "catchplate.selectedNormalRust/v1" and selection["ok"] is True
         and selection["buildCommit"] == BUILD_COMMIT and selection["binarySha256"] == BINARY_SHA
         and selection["receiptSha256"] == cfg["normalReceiptSha256"] and selection["reusedArtifact"] is True
         and selection["compiledInThisRun"] is False and selection["buildInputIdentity"] == normal["buildInputIdentity"])
@@ -171,9 +171,9 @@ def startup_environment():
         key, value = line.split("=", 1)
         need(key not in selected and re.fullmatch("[A-Z][A-Z0-9_]*", key) is not None)
         selected[key] = value
-    selected["SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST"] = "sha256:" + BINARY_SHA
-    need({key: value for key, value in os.environ.items() if key.startswith("SERVERWARE_")}
-        == {key: value for key, value in selected.items() if key.startswith("SERVERWARE_")})
+    selected["CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST"] = "sha256:" + BINARY_SHA
+    need({key: value for key, value in os.environ.items() if key.startswith("CATCHPLATE_")}
+        == {key: value for key, value in selected.items() if key.startswith("CATCHPLATE_")})
 
 
 def archives():
@@ -182,12 +182,12 @@ def archives():
     result = read(CAPTURE / 'result.json')
     need(set(result) == {'schema', 'captured', 'restored', 'fenced', 'captureContainerRemoved',
         'originalIds', 'baselineMatched', 'automaticRetry', 'seconds'})
-    need(result['schema'] == 'serverware.authorityPromotionCapture/v1'
+    need(result['schema'] == 'catchplate.authorityPromotionCapture/v1'
         and all(result[key] is True for key in ('captured', 'fenced', 'captureContainerRemoved', 'baselineMatched'))
         and result['restored'] is False and result['automaticRetry'] is False
         and len(result['originalIds']) == len(set(result['originalIds'])) == 4)
     proof = read(CAPTURE / 'capture-proof.json')
-    need(proof['schema'] == 'serverware.authorityPromotionRawCapture/v1'
+    need(proof['schema'] == 'catchplate.authorityPromotionRawCapture/v1'
         and proof['originalIds'] == result['originalIds'] and proof['sqliteOpened'] is False
         and proof['providerNetwork'] is False and proof['inventorySha256'] == CAPTURE_PINS['raw/inventory.json']
         and proof['appEnvSha256'] == CAPTURE_PINS['app.env']
@@ -349,7 +349,7 @@ def db_snapshot(conn, migration):
     # Load the real pure function without importing the authority package before
     # the actual managed-configuration bootstrap has selected its environment.
     configure_sqlite_metadata_connection = runpy.run_path(
-        '/app/serverware/authority_store/metadata_schema.py')['configure_sqlite_metadata_connection']
+        '/app/catchplate/authority_store/metadata_schema.py')['configure_sqlite_metadata_connection']
     configure_sqlite_metadata_connection(conn)
     need([row[0] for row in conn.execute('PRAGMA integrity_check')] == ['ok'])
     need(not conn.execute('PRAGMA foreign_key_check').fetchall())
@@ -364,7 +364,7 @@ def recovery(migration):
     before_files = migration.tree(Path('/data'))
     summaries = {}
     save('/out/custody-baseline.json', custody_snapshot())
-    for name in ('serverware.sqlite3', 'webauthn-recovery-witness.sqlite3'):
+    for name in ('catchplate.sqlite3', 'webauthn-recovery-witness.sqlite3'):
         source, target = Path('/recovery-data') / name, Path('/data') / name
         need(not target.exists())
         with closing(sqlite3.connect(source.as_uri() + '?mode=ro', uri=True, timeout=0)) as src:
@@ -392,8 +392,8 @@ def recovery(migration):
     after_files = migration.tree(Path('/data'))
     need({name: value for name, value in after_files.items() if name != migration.WITNESS} == before_files)
     save('/out/recovered-files.json', after_files)
-    save('/out/recovered-main.backup', Path('/data/serverware.sqlite3').read_bytes())
-    need(read('/out/serverware.sqlite3.baseline.json') == read('/out/capture-baseline.json')['snapshot'])
+    save('/out/recovered-main.backup', Path('/data/catchplate.sqlite3').read_bytes())
+    need(read('/out/catchplate.sqlite3.baseline.json') == read('/out/capture-baseline.json')['snapshot'])
     return summaries
 
 def custody_snapshot():
@@ -412,20 +412,20 @@ def require_startup_preservation(before, after, timestamps, current, wall_start,
     need(normalized == timestamps)
     need(after['objects'] == before['objects'] and after['orderedAudit'] == before['orderedAudit']
         and after['persistentJournalFormat'] == before['persistentJournalFormat'])
-    need([name for name in after['rows'] if after['rows'][name] != before['rows'][name]] == ['serverware_store_migrations']
+    need([name for name in after['rows'] if after['rows'][name] != before['rows'][name]] == ['catchplate_store_migrations']
         and set(after['rows']) == set(before['rows']))
 
 def startup(role, migration):
     startup_environment()
     if role == 'startup2': need(read('/out/observe1.json')['ok'] is True)
-    expected = {'SERVERWARE_OPERATOR_DEMO': '1', 'SERVERWARE_RELEASE_CHANNEL': 'dev',
-        'SERVERWARE_PROCESS_MODE': 'serverware-control-plane', 'SERVERWARE_METADATA_STORE_BACKEND': 'sqlite',
-        'SERVERWARE_AUDIT_STORE_BACKEND': 'sqlite', 'SERVERWARE_GRANT_STORE_BACKEND': 'sqlite',
-        'SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED': '0', 'SERVERWARE_KEY_RELEASE_REQUIRED': '0',
-        'SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED': '1', 'SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED': '1',
-        'SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR': '/provider-custody', 'SERVERWARE_DATA_DIR': '/data',
-        'SERVERWARE_OPERATOR_MANAGED_X_ENABLED': '1', 'SERVERWARE_OPERATOR_X_CUSTODY_DIR': '/x-custody',
-        'SERVERWARE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED': '1'}
+    expected = {'CATCHPLATE_OPERATOR_DEMO': '1', 'CATCHPLATE_RELEASE_CHANNEL': 'dev',
+        'CATCHPLATE_PROCESS_MODE': 'catchplate-control-plane', 'CATCHPLATE_METADATA_STORE_BACKEND': 'sqlite',
+        'CATCHPLATE_AUDIT_STORE_BACKEND': 'sqlite', 'CATCHPLATE_GRANT_STORE_BACKEND': 'sqlite',
+        'CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED': '0', 'CATCHPLATE_KEY_RELEASE_REQUIRED': '0',
+        'CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED': '1', 'CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED': '1',
+        'CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR': '/provider-custody', 'CATCHPLATE_DATA_DIR': '/data',
+        'CATCHPLATE_OPERATOR_MANAGED_X_ENABLED': '1', 'CATCHPLATE_OPERATOR_X_CUSTODY_DIR': '/x-custody',
+        'CATCHPLATE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED': '1'}
     need(all(os.environ.get(key) == value for key, value in expected.items()))
     expected_contract = read('/out/expected-contract.json')
     need(expected_contract['source_contract_digest'] == CONTRACT_DIGEST)
@@ -433,34 +433,34 @@ def startup(role, migration):
     need(before_files == read('/out/recovered-files.json'))
     need(custody_snapshot() == read('/out/custody-baseline.json'))
     migration.sidecars_absent(Path('/data'))
-    with closing(sqlite3.connect('file:/data/serverware.sqlite3?mode=ro&immutable=1', uri=True)) as conn:
+    with closing(sqlite3.connect('file:/data/catchplate.sqlite3?mode=ro&immutable=1', uri=True)) as conn:
         conn.row_factory = sqlite3.Row
         before = db_snapshot(conn, migration)
-        timestamps = {row['migration']: dict(row) for row in conn.execute('SELECT rowid,* FROM serverware_store_migrations')}
+        timestamps = {row['migration']: dict(row) for row in conn.execute('SELECT rowid,* FROM catchplate_store_migrations')}
         contract = dict(conn.execute('SELECT * FROM policy_authority_schema_contracts').fetchone())
     need(contract == expected_contract)
     need(before['objects'] == read('/out/migrated-database.json')['objects'])
     prior_rows = read('/out/migrated-database.json')['rows']
     need(all(before['rows'][name] == prior_rows[name] for name in prior_rows
-        if name != 'serverware_store_migrations'))
-    if role == 'startup1': need(before['rows']['serverware_store_migrations'] == prior_rows['serverware_store_migrations'])
+        if name != 'catchplate_store_migrations'))
+    if role == 'startup1': need(before['rows']['catchplate_store_migrations'] == prior_rows['catchplate_store_migrations'])
     else: need(before == read('/out/startup1-after.json'))
     need(before['orderedAudit'] == read('/out/migrated-database.json')['orderedAudit'])
     wall_start = datetime.now(timezone.utc)
     started = time.monotonic()
-    from serverware import operator_google_managed_config, operator_demo
+    from catchplate import operator_google_managed_config, operator_demo
     operator_google_managed_config.bootstrap(); operator_demo.activate()
-    from serverware.control_plane_startup import validate_control_plane_startup
+    from catchplate.control_plane_startup import validate_control_plane_startup
     validate_control_plane_startup()
     startup_seconds = time.monotonic() - started
     wall_finished = datetime.now(timezone.utc)
-    from serverware import db, operator_catalog_schema as catalog, operator_demo_store as store, policy_bundle as policy, config
+    from catchplate import db, operator_catalog_schema as catalog, operator_demo_store as store, policy_bundle as policy, config
     with closing(db.connect()) as conn:
         catalog.validate_bindings(conn)
         value = catalog.read_catalog(conn)
         retained = dict(conn.execute('SELECT * FROM operator_demo_policy WHERE singleton=1').fetchone())
         after = db_snapshot(conn, migration)
-        current = {row['migration']: dict(row) for row in conn.execute('SELECT rowid,* FROM serverware_store_migrations')}
+        current = {row['migration']: dict(row) for row in conn.execute('SELECT rowid,* FROM catchplate_store_migrations')}
         need(dict(conn.execute('SELECT * FROM policy_authority_schema_contracts').fetchone()) == contract)
     require_startup_preservation(before, after, timestamps, current, wall_start, wall_finished)
     raw = retained['signed_bundle_json'].encode()
@@ -488,7 +488,7 @@ def observe(role, migration):
     need(read('/out/' + startup_role + '.json')['ok'] is True)
     migration.sidecars_absent(Path('/data'))
     need(migration.tree(Path('/data')) == read('/out/recovered-files.json'))
-    for name in ('serverware.sqlite3', 'webauthn-recovery-witness.sqlite3'):
+    for name in ('catchplate.sqlite3', 'webauthn-recovery-witness.sqlite3'):
         with closing(sqlite3.connect('file:/data/' + name + '?mode=ro&immutable=1', uri=True)) as conn:
             conn.execute('PRAGMA query_only=ON'); conn.execute('BEGIN')
             snapshot = db_snapshot(conn, migration)

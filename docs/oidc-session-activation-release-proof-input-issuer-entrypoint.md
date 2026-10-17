@@ -9,13 +9,13 @@ issuance, staging, a proof exchange or credential release has succeeded.
 
 The launcher accepts only `--root-delivery` under the isolated production
 Python runtime. Root receives one activated listener named
-`serverware-oidc-session-activation-release-proof-input-issuer`, at
-`/run/serverware/oidc-session-activation-release-proof-inputs/grants.sock`.
+`catchplate-oidc-session-activation-release-proof-input-issuer`, at
+`/run/catchplate/oidc-session-activation-release-proof-inputs/grants.sock`.
 Its pathname is `65494:65532`, mode `0660`; the actual service authenticates the
 public peer before reading request bytes.
 
 The protected directory
-`/run/serverware/oidc-session-activation-release-proof-input-issuer-trust`
+`/run/catchplate/oidc-session-activation-release-proof-input-issuer-trust`
 contains six root-owned, single-link, mode `0444` public files:
 
 - `root-public-key.pem`
@@ -28,7 +28,7 @@ contains six root-owned, single-link, mode `0444` public files:
 Their sealed copies occupy FD 198, 199 and 201 through 204. FD 200 is the
 original listener. FD 205 is the separately protected runtime-root signer,
 read only from
-`/run/secrets/serverware-oidc-session-activation-release-proof-input-issuer-root-signing-key`.
+`/run/secrets/catchplate-oidc-session-activation-release-proof-input-issuer-root-signing-key`.
 That source file must be root-owned, single-link and mode `0400`; its exact
 size, hash and Ed25519 key pair must match the admitted launch and runtime root.
 
@@ -42,7 +42,7 @@ issuer inventory.
 ## Issuer-local read-only TLS
 
 The issuer opens only `ca.pem`, `custody.crt` and `custody.key` below the fixed
-`/run/serverware/oidc-session-activation-delivery-completion-tls` directory.
+`/run/catchplate/oidc-session-activation-delivery-completion-tls` directory.
 Sizes and bytes hashes come from the genuinely admitted completion originals.
 Public files require root ownership and mode `0444`; the private key requires
 `root:65494`, mode `0440`. Protected ancestors, single links and unchanged

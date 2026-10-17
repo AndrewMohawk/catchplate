@@ -22,9 +22,9 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_handoff as handoff
-from serverware import authority_revocation_retention as retention
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_handoff as handoff
+from catchplate import authority_revocation_retention as retention
 import test_authority_revocation_plan as oracle
 import test_authority_revocation_retention as record_oracle
 import test_authority_revocation_wire as wire_oracle
@@ -36,7 +36,7 @@ import test_authority_index_join as profile_oracle
 import test_authority_index_range as tree_oracle
 
 
-SIGNED_SCHEMA = "serverware.signedPolicyAuthorityMeasuredPlan/v4"
+SIGNED_SCHEMA = "catchplate.signedPolicyAuthorityMeasuredPlan/v4"
 PHASES = ("capture", "transport", "authentication", "bindings", "projection", "replay")
 READ_IDS = ("webauthn_control_approval_approved", "webauthn_grant_approver_active",
     "webauthn_publication_status", "webauthn_registration_unused_global", "webauthn_session_credential_status")
@@ -301,7 +301,7 @@ class RevocationHandoffTests(unittest.TestCase):
             changed["payload"]["revocationProofBundle"]["inputs"]["cutoffUs"] = value
             raw_variants.append(oracle.wire(changed))
         for changed in ({**fixture.plan.envelope, "extra": None},
-                {**fixture.plan.envelope, "schema": "serverware.signedPolicyAuthorityMeasuredPlan/v3"}):
+                {**fixture.plan.envelope, "schema": "catchplate.signedPolicyAuthorityMeasuredPlan/v3"}):
             raw_variants.append(oracle.wire(changed))
         for raw in raw_variants:
             key = oracle._CallbackPublicKey(fixture.plan.key.public_key(), lambda: None)

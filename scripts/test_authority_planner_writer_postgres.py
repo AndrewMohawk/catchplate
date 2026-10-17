@@ -29,9 +29,9 @@ from psycopg import sql
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.native_postgres_results import run_native_fixture
-from serverware.authority_store.audit_capacity_sql import AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES
-from serverware.authority_store.planner_writer_sql import (
+from catchplate.native_postgres_results import run_native_fixture
+from catchplate.authority_store.audit_capacity_sql import AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES
+from catchplate.authority_store.planner_writer_sql import (
     PLANNER_WRITER_TABLE_PRIVILEGES, PLANNER_WRITER_FUNCTION_SIGNATURES,
     planner_writer_privilege_check,
 )
@@ -57,11 +57,11 @@ REQUIRED_PRIVILEGES = {
     "policy_authority_writer_capabilities": ("SELECT", "UPDATE"),
 }
 REQUIRED_FUNCTIONS = (
-    ("serverware_policy_authority_assert_audit_capacity", ("text", "jsonb", "jsonb", "bigint")),
-    ("serverware_policy_authority_domain_digest", ("text", "text[]")),
-    ("serverware_policy_authority_wire_json", ("jsonb",)),
-    ("serverware_policy_authority_wire_string", ("text", "boolean", "bigint")),
-    ("serverware_policy_authority_wire_walk", ("jsonb", "integer", "bigint", "bigint", "boolean")),
+    ("catchplate_policy_authority_assert_audit_capacity", ("text", "jsonb", "jsonb", "bigint")),
+    ("catchplate_policy_authority_domain_digest", ("text", "text[]")),
+    ("catchplate_policy_authority_wire_json", ("jsonb",)),
+    ("catchplate_policy_authority_wire_string", ("text", "boolean", "bigint")),
+    ("catchplate_policy_authority_wire_walk", ("jsonb", "integer", "bigint", "bigint", "boolean")),
 )
 TABLE_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
 COLUMN_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "REFERENCES")

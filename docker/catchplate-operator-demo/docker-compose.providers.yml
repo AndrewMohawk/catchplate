@@ -1,0 +1,12 @@
+# Optional last override for the existing GitHub, npm and Gmail presets.
+# Before activation, use the reviewed upstream Prepare workflow for this exact
+# ordered list, then perform a controlled retained app/gate restart. Preserve
+# existing state; this layer does not create credentials, grants or OAuth setup.
+# Add after the selected source, curated-gate and notifications layers.
+services:
+  catchplate:
+    environment:
+      CATCHPLATE_OPERATOR_DEMO_UPSTREAMS: '["https://demo-upstream:8443","https://api.github.com","https://registry.npmjs.org","https://gmail.googleapis.com"]'
+  decision-gate-rs:
+    environment:
+      CATCHPLATE_OPERATOR_DEMO_UPSTREAMS: '["https://demo-upstream:8443","https://api.github.com","https://registry.npmjs.org","https://gmail.googleapis.com"]'

@@ -61,10 +61,10 @@ pub(in crate::policy_shadow) fn activate(public:&[u8],configuration:ProductionCu
     let p=&authorization.payload;let k=&keys.authorization.payload;let s=&evidence.statement;
     let full=full_bindings(assignment)?;
     let local:BTreeMap<_,_>=k.local_roles.iter().map(|role|(*role,full[role].clone())).collect();
-    require(keys.api_version=="serverware.nativeShadowRoleKeys/v2"
+    require(keys.api_version=="catchplate.nativeShadowRoleKeys/v2"
         && k.trust_checkpoint_id==checkpoint.checkpoint_id && k.revocation_generation==checkpoint.revocation_generation
         && k.revocation_root_sha256==checkpoint.revocation_root_sha256
-        && p.api_version=="serverware.nativeShadowBridgeAdmissionAssignment/v1" && p.purpose=="native-shadow-context-and-production-admission"
+        && p.api_version=="catchplate.nativeShadowBridgeAdmissionAssignment/v1" && p.purpose=="native-shadow-context-and-production-admission"
         && p.production_configuration_binding_sha256.as_ref()==Some(configuration.production_configuration_binding_sha256())
         && p.assignment_payload_sha256==*assignment.payload_sha256() && p.assignment_revision==k.assignment_revision
         && p.key_authorization_sha256==Sha256Digest::compute(&canonical_json_bytes(&keys.authorization)?)
@@ -77,10 +77,10 @@ pub(in crate::policy_shadow) fn activate(public:&[u8],configuration:ProductionCu
     require(p.signing_key_id==binding.key_id && p.signing_key_spki_sha256==binding.key_spki_sha256)?;
     let authority=trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(AuthorityRole::CustodySupervisorCapability),&binding.key_id,&binding.key_spki_sha256)?;
     require(ed25519_public_key_material_sha256(&authority)==binding.key_material_sha256)?;
-    authority.verify_strict(&signature_preimage("serverware.nativeShadowBridgeAdmissionAssignment.signature/v1",&canonical_json_bytes(p)?),
+    authority.verify_strict(&signature_preimage("catchplate.nativeShadowBridgeAdmissionAssignment.signature/v1",&canonical_json_bytes(p)?),
         &Signature::from_bytes(&authorization.signature.decode()?)).map_err(|_|ShadowError::SignatureInvalid)?;
-    require(evidence.api_version=="serverware.nativeShadowBridgeAdmissionEvidence/v1"
-        && s.api_version=="serverware.nativeShadowBridgeAdmissionStatement/v1" && s.purpose==p.purpose
+    require(evidence.api_version=="catchplate.nativeShadowBridgeAdmissionEvidence/v1"
+        && s.api_version=="catchplate.nativeShadowBridgeAdmissionStatement/v1" && s.purpose==p.purpose
         && s.assignment_id==k.assignment_id && s.assignment_payload_sha256==k.assignment_payload_sha256 && s.assignment_revision==k.assignment_revision
         && s.key_authorization_sha256==p.key_authorization_sha256 && s.admission_authorization_sha256==Sha256Digest::compute(&canonical_json_bytes(&authorization)?)
         && &s.guest==guest && s.production_configuration_binding_sha256==*configuration.production_configuration_binding_sha256()
@@ -96,17 +96,17 @@ pub(in crate::policy_shadow) fn activate(public:&[u8],configuration:ProductionCu
             && key.key_material_sha256==binding.key_material_sha256 && possession.role==*role && possession.key_id==binding.key_id)?;
         let current=trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(*role),&binding.key_id,&binding.key_spki_sha256)?;
         require(decoded(&key.public_key_base64url,32)?==current.as_bytes() && ed25519_public_key_material_sha256(&current)==binding.key_material_sha256)?;
-        current.verify_strict(&signature_preimage("serverware.nativeShadowBridgeAdmissionPossession.signature/v1",
+        current.verify_strict(&signature_preimage("catchplate.nativeShadowBridgeAdmissionPossession.signature/v1",
             &canonical_json_bytes(&(*role,&binding.key_id,&statement))?),&Signature::from_bytes(&possession.signature.decode()?))
             .map_err(|_|ShadowError::SignatureInvalid)?;
     }
-    let mut user=b"serverware/native-shadow-bridge-admission-evidence/v1\0".to_vec();
+    let mut user=b"catchplate/native-shadow-bridge-admission-evidence/v1\0".to_vec();
     for digest in [&statement,&s.full_key_set_root_sha256,&s.local_key_set_root_sha256,
         &Sha256Digest::compute(&canonical_json_bytes(&evidence.possession)?)]{user.extend_from_slice(&digest.raw_bytes()?);}
     require(decoded(&evidence.user_data_base64url,512)?==user
         && decoded(&evidence.public_key_base64url,32)?==s.local_key_set_root_sha256.raw_bytes()?
         && decoded(&evidence.nonce_base64url,32)?==challenge(&s.challenge_base64url)?
-        && combined.api_version=="serverware.nativeShadowBridgeAdmissionVerifierResult/v1")?;
+        && combined.api_version=="catchplate.nativeShadowBridgeAdmissionVerifierResult/v1")?;
     let production=super::super::verifier_result::decode(combined.production_result_original.as_bytes())?;
     result::verify_remote(combined.context_result_original.as_bytes(),&evidence,p.expires_at_unix_nanos,assignment,&production,trust,time)?;
     let verified=verify_production_custody_tee_attestation(&configuration,production,trust,time)?;

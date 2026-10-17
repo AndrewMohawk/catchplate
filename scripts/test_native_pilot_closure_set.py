@@ -25,11 +25,11 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts" / "authority"))
 
 import prepare_native_pilot_closure_set as preparation
-from serverware import native_pilot_closure_set as closure_set
-from serverware import native_pilot_assignment as assignment_profile
-from serverware import native_pilot_launch_publication as launch
-from serverware import authority_policy_canary_native_opening as opening
-from serverware import native_shadow_retrieval_artifacts as retrieval
+from catchplate import native_pilot_closure_set as closure_set
+from catchplate import native_pilot_assignment as assignment_profile
+from catchplate import native_pilot_launch_publication as launch
+from catchplate import authority_policy_canary_native_opening as opening
+from catchplate import native_shadow_retrieval_artifacts as retrieval
 
 EXPECTED_ROLES = (
     "retrieval", "persistence", "trustedTime", "generationInstall", "commitRequest",
@@ -98,25 +98,25 @@ def seccomp_fixture(*, read_allowed=False):
     rules = [{"syscallNumber": number, "action": action, "errno": 0, "argumentRules": []}
         for number, action in (((0, "allow"), (59, "kill-process"), (322, "kill-process")) if read_allowed
             else ((59, "kill-process"), (322, "kill-process")))]
-    instruction_hash = frame("serverware.policyShadowCustodySeccompInstructions/v1", instructions)
+    instruction_hash = frame("catchplate.policyShadowCustodySeccompInstructions/v1", instructions)
     raw_hash = sha(b"".join(struct.pack("<HBBI", *instruction) for instruction in program))
-    semantics_hash = frame("serverware.policyShadowCustodySeccompSemantics/v1",
+    semantics_hash = frame("catchplate.policyShadowCustodySeccompSemantics/v1",
         ["x86-64", "kill-process", True, True, rules])
     return {"architecture": "x86-64", "defaultAction": "kill-process", "noNewPrivilegesRequired": True,
         "installedBeforeUntrustedInput": True, "instructions": instructions, "syscallRules": rules,
         "exactInstructionStreamSha256": instruction_hash, "rawBpfSha256": raw_hash,
         "exactArgumentSemanticsSha256": semantics_hash,
-        "structurallyVerifiedPolicySha256": frame("serverware.policyShadowCustodySeccompPolicy/v2",
+        "structurallyVerifiedPolicySha256": frame("catchplate.policyShadowCustodySeccompPolicy/v2",
             [instruction_hash, raw_hash, semantics_hash])}
 
 
 def manifest_fixture(role, *, read_allowed=False):
     provenance = {name: synthetic("provenance/" + name) for name in PROVENANCE_FIELDS[:-2]}
     provenance["reproducibleBuildRequired"] = True
-    provenance["provenanceSha256"] = frame("serverware.policyShadowCustodyBuildProvenance/v1",
+    provenance["provenanceSha256"] = frame("catchplate.policyShadowCustodyBuildProvenance/v1",
         [provenance[name] for name in PROVENANCE_FIELDS[:-1]])
     version = "2" if role == "bridge" else "1"
-    value = {"apiVersion": "serverware.nativeCustodyExecutionClosure/v" + version,
+    value = {"apiVersion": "catchplate.nativeCustodyExecutionClosure/v" + version,
         "profile": "measured-bootstrap-late-runtime-static-amd64-v1" if role == "bridge"
             else "sealed-memfd-squashfs-static-amd64-v1",
         "imageSha256": synthetic("image/" + role), "workerExecutableSha256": synthetic("executable/" + role),
@@ -132,11 +132,11 @@ def members_fixture():
 
 def merkle_fixture(values):
     """Independent exact digest arithmetic; hashes are not key material."""
-    leaves = [hashlib.sha256(b"serverware.policyShadowMerkleLeaf/v1\0" + ordinal.to_bytes(8, "big")
+    leaves = [hashlib.sha256(b"catchplate.policyShadowMerkleLeaf/v1\0" + ordinal.to_bytes(8, "big")
         + bytes.fromhex(value[7:])).digest() for ordinal, value in enumerate(values, 1)]
     while len(leaves) > 1:
         leaves = [leaves[index] if index + 1 == len(leaves) else hashlib.sha256(
-            b"serverware.policyShadowMerkleNode/v1\1" + leaves[index] + leaves[index + 1]).digest()
+            b"catchplate.policyShadowMerkleNode/v1\1" + leaves[index] + leaves[index + 1]).digest()
             for index in range(0, len(leaves), 2)]
     return "sha256:" + leaves[0].hex()
 
@@ -151,7 +151,7 @@ def assignment_fixture(selected, *, version=2):
     for name, root in (("keyId", "keyIdSetRootSha256"), ("keySpkiSha256", "spkiSetRootSha256"),
                        ("keyMaterialSha256", "keyMaterialSetRootSha256")):
         independence[root] = merkle_fixture(sorted(row[name] for row in bindings))
-    independence["independenceRootSha256"] = frame("serverware.policyAuthorityKeyIndependence/v1",
+    independence["independenceRootSha256"] = frame("catchplate.policyAuthorityKeyIndependence/v1",
         [bindings, independence["keyIdSetRootSha256"], independence["spkiSetRootSha256"],
             independence["keyMaterialSetRootSha256"]])
     bridge = selected["members"][-1]["manifest"]
@@ -177,9 +177,9 @@ def assignment_fixture(selected, *, version=2):
         "readinessThresholds": {}, "issuedAtUnixNanos": 1, "expiresAtUnixNanos": 2}
     if version == 2:
         payload["nativeClosureSet"] = {name: selected[name] for name in ("setRootSha256", "seccompSetRootSha256")}
-    domain = "serverware.policyShadowAssignment/v" + str(version)
+    domain = "catchplate.policyShadowAssignment/v" + str(version)
     return {"apiVersion": domain, "kind": "PolicyShadowAssignment",
-        "canonicalProfile": "serverware.canonicalJson/ascii-integer-v1", "signatureDomain": domain,
+        "canonicalProfile": "catchplate.canonicalJson/ascii-integer-v1", "signatureDomain": domain,
         "payload": payload, "payloadSha256": sha(canonical(payload)), "signatureAlgorithm": "Ed25519",
         "signingKeyId": synthetic("assignment-key"), "signingKeySpkiSha256": synthetic("assignment-spki"),
         "signature": INVALID_SIGNATURE_SENTINEL}
@@ -194,7 +194,7 @@ def scope_fixture(envelope):
     payload = envelope["payload"]
     authority = payload["custodyAuthority"]
     rows = payload["authorityKeyIndependence"]["bindings"][7:]
-    key_root = merkle_fixture([frame("serverware.policyShadowCustodyAssertedKey/v1",
+    key_root = merkle_fixture([frame("catchplate.policyShadowCustodyAssertedKey/v1",
         [row[name] for name in ("role", "keyId", "keySpkiSha256", "keyMaterialSha256")]) for row in rows])
     scope = {"assignment_id": payload["assignmentId"], "assignment_payload_sha256": envelope["payloadSha256"],
         "assignment_revision": payload["assignmentRevision"], "authority_id": authority["authorityId"],
@@ -209,9 +209,9 @@ def scope_fixture(envelope):
         row = next(row for row in rows if row["role"] == role)
         scope[name] = {"role": role, "key_id": row["keyId"], "key_spki_sha256": row["keySpkiSha256"],
             "key_material_sha256": row["keyMaterialSha256"]}
-    values, domain = EXPECTED_SCOPE_VALUES, "serverware.policyShadowProductionCustodyProofScope/v1"
+    values, domain = EXPECTED_SCOPE_VALUES, "catchplate.policyShadowProductionCustodyProofScope/v1"
     if envelope["apiVersion"].endswith("/v2"):
-        domain = "serverware.policyShadowProductionCustodyProofScope/v2"
+        domain = "catchplate.policyShadowProductionCustodyProofScope/v2"
         scope.update(api_version=domain, execution_closure_set_root_sha256=payload["nativeClosureSet"]["setRootSha256"],
             structurally_verified_seccomp_set_root_sha256=payload["nativeClosureSet"]["seccompSetRootSha256"])
         values += EXPECTED_SCOPE_ROOTS
@@ -223,7 +223,7 @@ def closure_fixture(selected, *, role="retrieval", multi=True):
     index = EXPECTED_ROLES.index(role)
     manifest = copy.deepcopy(selected["members"][index]["manifest"])
     version = "3" if multi else ("2" if role == "bridge" else "1")
-    payload = {"apiVersion": "serverware.nativeCustodyClosureAssignment/v" + version,
+    payload = {"apiVersion": "catchplate.nativeCustodyClosureAssignment/v" + version,
         "purpose": "shadow-custody-closure-set-member" if multi else (
             "shadow-custody-bootstrap-late-runtime" if role == "bridge" else "shadow-custody-execution-closure"),
         "profile": "native-multi-guest-closure-set-v1" if multi else manifest["profile"],
@@ -235,8 +235,8 @@ def closure_fixture(selected, *, role="retrieval", multi=True):
     if multi:
         payload.update(guestRole=role, setRootSha256=selected["setRootSha256"],
             seccompSetRootSha256=selected["seccompSetRootSha256"],
-            leafSha256=frame("serverware.nativeCustodyExecutionClosureSetLeaf/v1", [role, manifest]))
-    value = {"apiVersion": "serverware.nativeCustodyClosure/v" + version, "manifest": manifest,
+            leafSha256=frame("catchplate.nativeCustodyExecutionClosureSetLeaf/v1", [role, manifest]))
+    value = {"apiVersion": "catchplate.nativeCustodyClosure/v" + version, "manifest": manifest,
         "authorization": {"payload": payload, "signature": INVALID_SIGNATURE_SENTINEL}}
     if multi:
         value["closureSet"] = copy.deepcopy(selected)
@@ -253,12 +253,12 @@ class ClosureSetStaticTests(unittest.TestCase):
         self.assertEqual(closure_set.ROLES, EXPECTED_ROLES)
         self.assertEqual(tuple(row["role"] for row in self.value["members"]), EXPECTED_ROLES)
         self.assertEqual(self.raw, canonical(self.value))
-        leaves = [frame("serverware.nativeCustodyExecutionClosureSetLeaf/v1", [row["role"], row["manifest"]])
+        leaves = [frame("catchplate.nativeCustodyExecutionClosureSetLeaf/v1", [row["role"], row["manifest"]])
             for row in self.members]
         policies = [[row["role"], row["manifest"]["seccompPolicy"]["structurallyVerifiedPolicySha256"]]
             for row in self.members]
-        self.assertEqual(self.value["setRootSha256"], frame("serverware.nativeCustodyExecutionClosureSetRoot/v1", leaves))
-        self.assertEqual(self.value["seccompSetRootSha256"], frame("serverware.nativeCustodySeccompSetRoot/v1", policies))
+        self.assertEqual(self.value["setRootSha256"], frame("catchplate.nativeCustodyExecutionClosureSetRoot/v1", leaves))
+        self.assertEqual(self.value["seccompSetRootSha256"], frame("catchplate.nativeCustodySeccompSetRoot/v1", policies))
         for index, role in enumerate(EXPECTED_ROLES):
             binding = closure_set.leaf_binding(self.value, role)
             self.assertEqual(binding["role"], role)
@@ -306,7 +306,7 @@ class ClosureSetStaticTests(unittest.TestCase):
         variants = (self.raw + b"\n", b" " + self.raw,
             json.dumps(self.value, indent=2, sort_keys=True).encode("ascii"),
             self.raw.replace(b'{"apiVersion":',
-                b'{"apiVersion":"serverware.nativeCustodyExecutionClosureSet/v1","apiVersion":', 1),
+                b'{"apiVersion":"catchplate.nativeCustodyExecutionClosureSet/v1","apiVersion":', 1),
             self.raw.replace(b'"members":', b'"members":[],"members":', 1))
         for raw in variants:
             with self.subTest(length=len(raw)), self.assertRaises(ValueError):
@@ -354,14 +354,14 @@ class ClosureSetSuccessorTests(unittest.TestCase):
     # These exercise static bytes and public schema only. They do not run a
     # protected FD command, sign a closure, or admit any native owner.
     PROFILES = (
-        ("serverware.nativePublicationGenesisClosureSet/v1", EXPECTED_GENESIS_ROLES,
-            "serverware.nativePublicationGenesisClosureSetLeaf/v1",
-            "serverware.nativePublicationGenesisClosureSetRoot/v1",
-            "serverware.nativePublicationGenesisSeccompSetRoot/v1"),
-        ("serverware.nativeCustodyExecutionClosureSet/v2", EXPECTED_PUBLICATION_ROLES,
-            "serverware.nativeCustodyExecutionClosureSetLeaf/v2",
-            "serverware.nativeCustodyExecutionClosureSetRoot/v2",
-            "serverware.nativeCustodySeccompSetRoot/v2"),
+        ("catchplate.nativePublicationGenesisClosureSet/v1", EXPECTED_GENESIS_ROLES,
+            "catchplate.nativePublicationGenesisClosureSetLeaf/v1",
+            "catchplate.nativePublicationGenesisClosureSetRoot/v1",
+            "catchplate.nativePublicationGenesisSeccompSetRoot/v1"),
+        ("catchplate.nativeCustodyExecutionClosureSet/v2", EXPECTED_PUBLICATION_ROLES,
+            "catchplate.nativeCustodyExecutionClosureSetLeaf/v2",
+            "catchplate.nativeCustodyExecutionClosureSetRoot/v2",
+            "catchplate.nativeCustodySeccompSetRoot/v2"),
     )
 
     def members(self, roles):
@@ -391,7 +391,7 @@ class ClosureSetSuccessorTests(unittest.TestCase):
         self.assertEqual(closure_set.GENESIS_API, self.PROFILES[0][0])
         self.assertEqual(closure_set.GENESIS_ROLES, EXPECTED_GENESIS_ROLES)
         value = self.assert_recipe(self.PROFILES[0])
-        self.assertTrue(all(row["manifest"]["apiVersion"] == "serverware.nativeCustodyExecutionClosure/v1"
+        self.assertTrue(all(row["manifest"]["apiVersion"] == "catchplate.nativeCustodyExecutionClosure/v1"
             for row in value["members"]))
 
     def test_hot_twelve_exact_order_native_hashes_and_distinct_publication_member(self):
@@ -399,8 +399,8 @@ class ClosureSetSuccessorTests(unittest.TestCase):
         self.assertEqual(closure_set.PUBLICATION_ROLES, EXPECTED_PUBLICATION_ROLES)
         value = self.assert_recipe(self.PROFILES[1])
         publication, bridge = value["members"][-2:]
-        self.assertEqual(publication["manifest"]["apiVersion"], "serverware.nativeCustodyExecutionClosure/v1")
-        self.assertEqual(bridge["manifest"]["apiVersion"], "serverware.nativeCustodyExecutionClosure/v2")
+        self.assertEqual(publication["manifest"]["apiVersion"], "catchplate.nativeCustodyExecutionClosure/v1")
+        self.assertEqual(bridge["manifest"]["apiVersion"], "catchplate.nativeCustodyExecutionClosure/v2")
         self.assertNotEqual(publication["manifest"]["manifestSha256"], bridge["manifest"]["manifestSha256"])
 
     def test_successor_selection_is_explicit_and_legacy_default_stays_closed(self):
@@ -418,7 +418,7 @@ class ClosureSetSuccessorTests(unittest.TestCase):
                     call()
             with self.assertRaises(ValueError):
                 closure_set.validate(legacy, api_version=api)
-        for api in (None, False, 2, [], "serverware.nativeCustodyExecutionClosureSet/v3"):
+        for api in (None, False, 2, [], "catchplate.nativeCustodyExecutionClosureSet/v3"):
             with self.subTest(api=api), self.assertRaises(ValueError):
                 closure_set.set_original(members_fixture(), api_version=api)
 
@@ -469,9 +469,9 @@ class ClosureSetSuccessorTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     closure_set.require_binding(raw, api_version=api, expected_set_root=wrong_root,
                         expected_seccomp_set_root=wrong_seccomp)
-            old_leaves = [frame("serverware.nativeCustodyExecutionClosureSetLeaf/v1", [row["role"], row["manifest"]])
+            old_leaves = [frame("catchplate.nativeCustodyExecutionClosureSetLeaf/v1", [row["role"], row["manifest"]])
                 for row in members]
-            value["setRootSha256"] = frame("serverware.nativeCustodyExecutionClosureSetRoot/v1", old_leaves)
+            value["setRootSha256"] = frame("catchplate.nativeCustodyExecutionClosureSetRoot/v1", old_leaves)
             with self.assertRaises(ValueError):
                 closure_set.validate(canonical(value), api_version=api)
 
@@ -480,7 +480,7 @@ class ClosureSetSuccessorTests(unittest.TestCase):
         raw = canonical(legacy)
         self.assertEqual(preparation.prepare(raw, sha(raw)), closure_set.set_original(legacy["members"]))
         for api, roles, *_ in self.PROFILES:
-            value = {"apiVersion": "serverware.nativePilotClosureSetPreparation/v2",
+            value = {"apiVersion": "catchplate.nativePilotClosureSetPreparation/v2",
                 "setApiVersion": api, "members": self.members(roles)}
             raw = canonical(value)
             self.assertEqual(preparation.prepare(raw, sha(raw)), closure_set.set_original(value["members"], api_version=api))
@@ -546,7 +546,7 @@ class AssignmentClosureContractTests(unittest.TestCase):
                 self.assertEqual(len(envelope["payload"]), 16 if version == 1 else 17)
                 self.assertEqual(assignment_profile.shape(envelope), envelope)
                 self.assertEqual(assignment_profile.version(envelope), version)
-                self.assertEqual(assignment_profile.domain(envelope), "serverware.policyShadowAssignment/v" + str(version))
+                self.assertEqual(assignment_profile.domain(envelope), "catchplate.policyShadowAssignment/v" + str(version))
                 self.assertEqual(launch.shape("native-bridge-assignment", canonical(envelope)), envelope)
         self.assertEqual(opening.assignment_payload(self.v1["payload"]), self.v1["payload"])
         with self.assertRaises(ValueError):
@@ -576,7 +576,7 @@ class AssignmentClosureContractTests(unittest.TestCase):
                 (self.v2, "apiVersion", self.v1["apiVersion"]),
                 (self.v1, "signatureDomain", self.v2["signatureDomain"]),
                 (self.v2, "signatureDomain", self.v1["signatureDomain"]),
-                (self.v2, "apiVersion", "serverware.policyShadowAssignment/v3")):
+                (self.v2, "apiVersion", "catchplate.policyShadowAssignment/v3")):
             changed = copy.deepcopy(original)
             changed[field] = replacement
             cases.append(changed)
@@ -589,8 +589,8 @@ class AssignmentClosureContractTests(unittest.TestCase):
 
     def test_both_roots_are_in_signature_preimage_and_member_join(self):
         original_message = assignment_profile.p.preimage(assignment_profile.domain(self.v2), self.v2["payload"])
-        expected = (b"serverware.signedEnvelope/v1\0serverware.policyShadowAssignment/v2\0"
-            b"serverware.canonicalJson/ascii-integer-v1\0" + canonical(self.v2["payload"]))
+        expected = (b"catchplate.signedEnvelope/v1\0catchplate.policyShadowAssignment/v2\0"
+            b"catchplate.canonicalJson/ascii-integer-v1\0" + canonical(self.v2["payload"]))
         self.assertEqual(original_message, expected)
         self.assertNotEqual(original_message,
             assignment_profile.p.preimage(assignment_profile.domain(self.v1), self.v1["payload"]))
@@ -666,7 +666,7 @@ class AssignmentClosureContractTests(unittest.TestCase):
         stale["manifest"]["runtimeConfigurationSha256"] = synthetic("tampered-member")
         cases.append(stale)
         legacy = copy.deepcopy(original)
-        legacy["apiVersion"] = "serverware.nativeCustodyClosure/v1"
+        legacy["apiVersion"] = "catchplate.nativeCustodyClosure/v1"
         cases.append(legacy)
         for index, value in enumerate(cases):
             with self.subTest(case=index), self.assertRaises(ValueError):
@@ -687,10 +687,10 @@ class ScopeReceiptContractTests(unittest.TestCase):
         self.assertEqual(retrieval.SCOPE_SET_VALUES, EXPECTED_SCOPE_ROOTS)
         values = [scope[name] for name in EXPECTED_SCOPE_VALUES + EXPECTED_SCOPE_ROOTS]
         self.assertEqual(len(values), 13)
-        expected_hash = frame("serverware.policyShadowProductionCustodyProofScope/v2", values)
+        expected_hash = frame("catchplate.policyShadowProductionCustodyProofScope/v2", values)
         self.assertEqual(scope["binding_sha256"], expected_hash)
         self.assertEqual(retrieval.scope_original(canonical(scope)), scope)
-        expected = ["serverware.policyShadowAssignmentBoundCustodyReceipt/v2", expected_hash,
+        expected = ["catchplate.policyShadowAssignmentBoundCustodyReceipt/v2", expected_hash,
             scope["execution_closure_manifest_sha256"], scope["structurally_verified_seccomp_policy_sha256"],
             scope["execution_closure_set_root_sha256"], scope["structurally_verified_seccomp_set_root_sha256"],
             "ingress-admission", sha(self.receipt)]
@@ -708,10 +708,10 @@ class ScopeReceiptContractTests(unittest.TestCase):
         self.assertEqual(len(scope), 14)
         values = [scope[name] for name in EXPECTED_SCOPE_VALUES]
         self.assertEqual(len(values), 11)
-        expected_hash = frame("serverware.policyShadowProductionCustodyProofScope/v1", values)
+        expected_hash = frame("catchplate.policyShadowProductionCustodyProofScope/v1", values)
         self.assertEqual(scope["binding_sha256"], expected_hash)
         self.assertEqual(retrieval.scope_original(canonical(scope)), scope)
-        expected = ["serverware.policyShadowAssignmentBoundCustodyReceipt/v1", expected_hash,
+        expected = ["catchplate.policyShadowAssignmentBoundCustodyReceipt/v1", expected_hash,
             scope["execution_closure_manifest_sha256"], scope["structurally_verified_seccomp_policy_sha256"],
             "ingress-admission", sha(self.receipt)]
         self.assertEqual(len(expected), 6)
@@ -733,10 +733,10 @@ class ScopeReceiptContractTests(unittest.TestCase):
             cases.append(null)
         for version in ("v1", "v3"):
             changed = copy.deepcopy(original)
-            changed["api_version"] = "serverware.policyShadowProductionCustodyProofScope/" + version
+            changed["api_version"] = "catchplate.policyShadowProductionCustodyProofScope/" + version
             cases.append(changed)
         old_hash = copy.deepcopy(original)
-        old_hash["binding_sha256"] = frame("serverware.policyShadowProductionCustodyProofScope/v1",
+        old_hash["binding_sha256"] = frame("catchplate.policyShadowProductionCustodyProofScope/v1",
             [original[name] for name in EXPECTED_SCOPE_VALUES])
         cases.append(old_hash)
         for index, scope in enumerate(cases):
@@ -750,7 +750,7 @@ class ScopeReceiptContractTests(unittest.TestCase):
             changed[field] = synthetic("changed-proof/" + field)
             with self.subTest(stale_scope_hash=field), self.assertRaises(ValueError):
                 retrieval.scope_original(canonical(changed))
-            changed["binding_sha256"] = frame("serverware.policyShadowProductionCustodyProofScope/v2",
+            changed["binding_sha256"] = frame("catchplate.policyShadowProductionCustodyProofScope/v2",
                 [changed[name] for name in EXPECTED_SCOPE_VALUES + EXPECTED_SCOPE_ROOTS])
             self.assertEqual(retrieval.scope_original(canonical(changed)), changed)
             with self.subTest(assignment_join=field), self.assertRaises(ValueError):

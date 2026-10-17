@@ -23,16 +23,16 @@ import requests
 from googleapiclient.discovery import build
 from requests.adapters import HTTPAdapter
 
-PLACEHOLDER = "serverware-gmail-placeholder-v1"  # Public replacement marker, not a token.
+PLACEHOLDER = "catchplate-gmail-placeholder-v1"  # Public replacement marker, not a token.
 ORIGIN = "https://gmail.googleapis.com"
 LIST_PATH = "/gmail/v1/users/me/messages"
 HEADERS = ["From", "Subject", "Date"]
 PINS = {"google-api-python-client": "2.201.0", "httplib2": "0.32.0",
     "requests": "2.34.2", "urllib3": "2.8.0", "certifi": "2026.7.22"}
-REQUIRED_ENV = ("SERVERWARE_PROXY_URL", "SERVERWARE_APP_ID", "SERVERWARE_PROXY_TOKEN", "SERVERWARE_CA_FILE")
+REQUIRED_ENV = ("CATCHPLATE_PROXY_URL", "CATCHPLATE_APP_ID", "CATCHPLATE_PROXY_TOKEN", "CATCHPLATE_CA_FILE")
 FAILURE = "Gmail read failed; check application permission, proxy trust and the operator audit log."
 MAX_CONFIG_BYTES = 64 * 1024
-AGE_ENV = "SERVERWARE_GMAIL_MAX_AGE_DAYS"
+AGE_ENV = "CATCHPLATE_GMAIL_MAX_AGE_DAYS"
 
 
 def age_policy_days(value):
@@ -102,7 +102,7 @@ def configuration_environment(config_file):
     age_days = age_policy_days(value.get("age_policy", {"mode": "unrestricted"}))
     recipe = value.get("client_recipe")
     if (type(recipe) is not dict
-            or recipe.get("schema") not in ("serverware.gmailSdkClient/v1", "serverware.gmailSdkClient/v2")
+            or recipe.get("schema") not in ("catchplate.gmailSdkClient/v1", "catchplate.gmailSdkClient/v2")
             or recipe.get("clear_environment") is not True
             or type(recipe.get("environment")) is not dict):
         raise ValueError("A downloaded Gmail SDK configuration is required")
@@ -123,8 +123,8 @@ def configuration_environment(config_file):
             or recipe.get("access_rule_id") != value["access_rule_id"]):
         raise ValueError("Invalid Gmail configuration scope")
     connection = recipe["environment"]
-    bindings = {"proxy_url": "SERVERWARE_PROXY_URL", "application_id": "SERVERWARE_APP_ID",
-        "proxy_password": "SERVERWARE_PROXY_TOKEN", "ca_file": "SERVERWARE_CA_FILE"}
+    bindings = {"proxy_url": "CATCHPLATE_PROXY_URL", "application_id": "CATCHPLATE_APP_ID",
+        "proxy_password": "CATCHPLATE_PROXY_TOKEN", "ca_file": "CATCHPLATE_CA_FILE"}
     selected = {}
     for field, key in bindings.items():
         if type(value.get(field)) is not str or connection.get(key) != value[field]:
@@ -132,14 +132,14 @@ def configuration_environment(config_file):
         selected[key] = value[field]
     proxy_ca = value.get("proxy_ca_file")
     if ("proxy_ca_file" not in value or proxy_ca is not None and type(proxy_ca) is not str
-            or connection.get("SERVERWARE_PROXY_CA_FILE") != proxy_ca):
+            or connection.get("CATCHPLATE_PROXY_CA_FILE") != proxy_ca):
         raise ValueError("Gmail proxy CA values disagree")
     if proxy_ca is not None:
-        selected["SERVERWARE_PROXY_CA_FILE"] = proxy_ca
+        selected["CATCHPLATE_PROXY_CA_FILE"] = proxy_ca
     if age_days:
         selected[AGE_ENV] = str(age_days)
 
-    for key in ("SERVERWARE_CA_FILE", "SERVERWARE_PROXY_CA_FILE"):
+    for key in ("CATCHPLATE_CA_FILE", "CATCHPLATE_PROXY_CA_FILE"):
         if key in selected:
             item = selected[key]
             if not item or len(item) > 512 or any(ord(c) < 32 or ord(c) == 127 for c in item):
@@ -150,7 +150,7 @@ def configuration_environment(config_file):
 
 
 def settings(env):
-    proxy = env.get("SERVERWARE_PROXY_URL", "")
+    proxy = env.get("CATCHPLATE_PROXY_URL", "")
     parts = urlsplit(proxy)
     host = parts.hostname or ""
     if (not 1 <= len(proxy) <= 2048 or not proxy.isascii()
@@ -163,14 +163,14 @@ def settings(env):
             or parts.port is not None and not 1 <= parts.port <= 65535
             or parts.netloc != host + (":" + str(parts.port) if parts.port is not None else "")):
         raise ValueError("Explicit HTTPS proxy origin required")
-    app, token = env.get("SERVERWARE_APP_ID", ""), env.get("SERVERWARE_PROXY_TOKEN", "")
+    app, token = env.get("CATCHPLATE_APP_ID", ""), env.get("CATCHPLATE_PROXY_TOKEN", "")
     identity = UUID(app)
     if (str(identity) != app or identity.version not in {1, 2, 3, 4, 5}
             or not re.fullmatch(r"[A-Za-z0-9_-]{43}", token)
             or base64.urlsafe_b64encode(base64.urlsafe_b64decode(token + "=")).decode().rstrip("=") != token):
         raise ValueError("Explicit application Basic login required")
-    for key in ("SERVERWARE_CA_FILE", "SERVERWARE_PROXY_CA_FILE"):
-        if key == "SERVERWARE_CA_FILE" or key in env:
+    for key in ("CATCHPLATE_CA_FILE", "CATCHPLATE_PROXY_CA_FILE"):
+        if key == "CATCHPLATE_CA_FILE" or key in env:
             if not env.get(key) or not Path(env[key]).is_absolute():
                 raise ValueError("Absolute public CA path required")
     # This URL stays in process memory; Requests owns Basic CONNECT authentication.
@@ -183,8 +183,8 @@ def child_environment(env):
     age_days = age_days_environment(env)
     if age_days:
         selected[AGE_ENV] = str(age_days)
-    if "SERVERWARE_PROXY_CA_FILE" in env:
-        selected["SERVERWARE_PROXY_CA_FILE"] = env["SERVERWARE_PROXY_CA_FILE"]
+    if "CATCHPLATE_PROXY_CA_FILE" in env:
+        selected["CATCHPLATE_PROXY_CA_FILE"] = env["CATCHPLATE_PROXY_CA_FILE"]
     # No ADC, netrc, environment proxy/CA override, mTLS discovery or TLS key log.
     return selected
 
@@ -315,7 +315,7 @@ class GmailHttp:
 @contextmanager
 def configured_http(env):
     proxy = settings(env)
-    public_ca(env["SERVERWARE_CA_FILE"])
+    public_ca(env["CATCHPLATE_CA_FILE"])
     with requests.Session() as session:
         session.trust_env = False
         session.max_redirects = 0
@@ -324,8 +324,8 @@ def configured_http(env):
         for adapter in session.adapters.values():
             adapter.close()
         session.adapters.clear()
-        session.mount(ORIGIN + "/", ProxyAdapter(outer_context(env.get("SERVERWARE_PROXY_CA_FILE"))))
-        yield GmailHttp(session, proxy, env["SERVERWARE_CA_FILE"])
+        session.mount(ORIGIN + "/", ProxyAdapter(outer_context(env.get("CATCHPLATE_PROXY_CA_FILE"))))
+        yield GmailHttp(session, proxy, env["CATCHPLATE_CA_FILE"])
 
 
 def page_token(value):
@@ -406,7 +406,7 @@ def launch(env):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Read a bounded INBOX sample with the official Gmail SDK.")
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--config", metavar="PATH", help="Private client JSON downloaded from Serverware")
+    parser.add_argument("--config", metavar="PATH", help="Private client JSON downloaded from Catchplate")
     args = parser.parse_args(argv)
     logging.disable(logging.CRITICAL)
     try:

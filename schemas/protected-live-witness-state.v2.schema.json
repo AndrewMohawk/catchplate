@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/protected-live-witness-state.v2.schema.json",
-  "title": "Serverware signed protected current live-witness state v2",
+  "$id": "https://catchplate.invalid/schemas/protected-live-witness-state.v2.schema.json",
+  "title": "Catchplate signed protected current live-witness state v2",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -13,7 +13,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.protectedLiveWitnessState/v2"
+      "const": "catchplate.protectedLiveWitnessState/v2"
     },
     "payload": {
       "type": "object",
@@ -168,7 +168,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.liveWitnessCasReceipt/v1"
+          "const": "catchplate.liveWitnessCasReceipt/v1"
         },
         "checkpointSha256": {
           "$ref": "#/$defs/sha256"
@@ -300,7 +300,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationWitnessInvocationBinding/v1"
+          "const": "catchplate.attestationWitnessInvocationBinding/v1"
         },
         "currentRequestSha256": {
           "$ref": "#/$defs/sha256"
@@ -348,7 +348,7 @@
       "$ref": "#/$defs/storeIdentityCommon",
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationWitnessStoreIdentity/v2"
+          "const": "catchplate.attestationWitnessStoreIdentity/v2"
         },
         "assurance": {
           "const": "nonProductionFixture"
@@ -368,7 +368,7 @@
       "$ref": "#/$defs/storeIdentityCommon",
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationWitnessStoreIdentity/v2"
+          "const": "catchplate.attestationWitnessStoreIdentity/v2"
         },
         "assurance": {
           "const": "nonProductionSqliteReference"
@@ -388,7 +388,7 @@
       "$ref": "#/$defs/storeIdentityCommon",
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationWitnessStoreIdentity/v2"
+          "const": "catchplate.attestationWitnessStoreIdentity/v2"
         },
         "assurance": {
           "const": "externallyWitnessedRollbackProtected"
@@ -416,7 +416,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationWitnessStoreIdentity/v2"
+          "const": "catchplate.attestationWitnessStoreIdentity/v2"
         },
         "assurance": {
           "enum": [

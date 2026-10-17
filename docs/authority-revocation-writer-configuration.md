@@ -34,7 +34,7 @@ the two actual public keys, planner/verifier identity triples and independent
 writer role/TLS pins. The verifier session uses the existing configuration,
 measurement and attestation framing. Writer timeouts must be finite values in
 `2..300` before flooring to the integer used by libpq. The database role is
-exactly `serverware_policy_authority_planner_writer`; TLS expectations never
+exactly `catchplate_policy_authority_planner_writer`; TLS expectations never
 come from the signed plan or the connection's own observations.
 
 The mapper uses the existing caller work: four hashes for the configuration

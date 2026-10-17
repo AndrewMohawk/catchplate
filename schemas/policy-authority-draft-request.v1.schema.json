@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-authority-draft-request.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/policy-authority-draft-request.v1.schema.json",
   "title": "Unsigned policy authority draft request",
   "description": "Operator review input only, not approval, signature, or runtime evidence. The assembler additionally checks the exact draft hash, signed bundle, predecessor and selection joins. Maximum input is 8 MiB; string byte bounds and policy semantics are enforced by consumers.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "unsignedPolicyBundle", "predecessorPolicyHash", "previewDraftHash", "selection", "dryRun", "approved", "signed"],
   "properties": {
-    "apiVersion": {"const": "serverware.policyAuthorityDraftRequest/v1"},
+    "apiVersion": {"const": "catchplate.policyAuthorityDraftRequest/v1"},
     "approved": {"const": false},
     "signed": {"const": false},
     "predecessorPolicyHash": {"$ref": "#/$defs/digest"},
@@ -16,7 +16,7 @@
       "type": "object",
       "required": ["apiVersion", "metadata", "principals", "credentials", "routes"],
       "properties": {
-        "apiVersion": {"enum": ["serverware.policy/v1", "serverware.policy/v2"]},
+        "apiVersion": {"enum": ["catchplate.policy/v1", "catchplate.policy/v2"]},
         "metadata": {
           "type": "object",
           "not": {"anyOf": [{"required": ["signature"]}, {"required": ["signingKeyId"]}]}

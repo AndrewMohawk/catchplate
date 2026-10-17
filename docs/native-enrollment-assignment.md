@@ -43,7 +43,7 @@ has exactly three envelope fields: `apiVersion`, `assignment` and
 The signature preimage is:
 
 ```text
-"serverware/native-enrollment-assignment/v1\0"
+"catchplate/native-enrollment-assignment/v1\0"
     || canonical compact sorted UTF-8 JSON(assignment), without LF
 ```
 
@@ -75,7 +75,7 @@ and reconstruction remain required before enabling signing.
 
 ## Source ownership and retained bounds
 
-The [Python producer/verifier](../serverware/native_enrollment_assignment.py)
+The [Python producer/verifier](../catchplate/native_enrollment_assignment.py)
 uses the supplied original work/window/deadline and real clock, bounded key and
 packet originals, genuine Ed25519 verification and sticky failure. The explicit
 signing helper returns only the original signed envelope, not an enrollment
@@ -102,7 +102,7 @@ replace them.
 The private signature preimage is fixed, not a caller-selected signing purpose:
 
 ```text
-"serverware/native-enrollment-packet-signature/v1\0"
+"catchplate/native-enrollment-packet-signature/v1\0"
     || SHA256(exact assignment envelope including LF)[32]
     || packet_length:u64BE || exact_packet_bytes
 ```
@@ -110,7 +110,7 @@ The private signature preimage is fixed, not a caller-selected signing purpose:
 Role 5 retains the existing runtime-key-binding layout: release/policy/config,
 actual CA certificate/SPKI, generated raw Ed25519 key hash, and one request
 commitment. That commitment is SHA-256 over the NUL-terminated
-`serverware/native-enrollment-key-binding/v1` domain, assignment SHA-256, packet
+`catchplate/native-enrollment-key-binding/v1` domain, assignment SHA-256, packet
 SHA-256, actual ingress-leaf DER SHA-256 and actual ordered framed root-set
 SHA-256, each digest exactly 32 bytes. The NSM public key is the generated raw
 32-byte Ed25519 key. The nonce uses the existing native challenge/exporter

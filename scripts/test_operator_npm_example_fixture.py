@@ -29,8 +29,8 @@ from unittest.mock import patch
 from scripts import operator_npm_example_fixture as registry
 
 
-PACKAGES = ("serverware-fixture-publish", "@serverware-fixture/publish")
-FORBIDDEN = "serverware-fixture-forbidden"
+PACKAGES = ("catchplate-fixture-publish", "@catchplate-fixture/publish")
+FORBIDDEN = "catchplate-fixture-forbidden"
 FULL = "application/json"
 CORGI = "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*"
 VENDOR = "application/vnd.npm.install-v1+json"
@@ -75,10 +75,10 @@ INSTALL_CASES = ("install_published", "ci_published", "install_audit_negative")
 AUDIT_PATH = "/-/npm/v1/security/advisories/bulk"
 AUDIT_DOCUMENT = {PACKAGES[0]: ["1.0.2"], PACKAGES[1]: ["3.0.0"]}
 INSTALL_ROWS = (
-    ("GET", "/serverware-fixture-publish", "metadata", PACKAGES[0], None),
-    ("GET", "/@serverware-fixture%2fpublish", "metadata", PACKAGES[1], None),
-    ("GET", "/serverware-fixture-publish/-/serverware-fixture-publish-1.0.2.tgz", "tarball", PACKAGES[0], "1.0.2"),
-    ("GET", "/@serverware-fixture/publish/-/publish-3.0.0.tgz", "tarball", PACKAGES[1], "3.0.0"),
+    ("GET", "/catchplate-fixture-publish", "metadata", PACKAGES[0], None),
+    ("GET", "/@catchplate-fixture%2fpublish", "metadata", PACKAGES[1], None),
+    ("GET", "/catchplate-fixture-publish/-/catchplate-fixture-publish-1.0.2.tgz", "tarball", PACKAGES[0], "1.0.2"),
+    ("GET", "/@catchplate-fixture/publish/-/publish-3.0.0.tgz", "tarball", PACKAGES[1], "3.0.0"),
     ("POST", AUDIT_PATH, "audit", None, None),
 )
 INSTALL_REQUESTS = {case: INSTALL_ROWS[2:] if case == "ci_published" else INSTALL_ROWS for case in INSTALL_CASES}
@@ -243,7 +243,7 @@ class NpmExampleFixtureTests(unittest.TestCase):
         for name in ("socket.socket", "socket.create_connection", "socket.getaddrinfo",
                 "subprocess.Popen", "subprocess.run"):
             guard.enter_context(patch(name, side_effect=AssertionError("component test attempted network/process I/O")))
-        self.directory = Path(guard.enter_context(tempfile.TemporaryDirectory(prefix="serverware-npm-example-unit-")))
+        self.directory = Path(guard.enter_context(tempfile.TemporaryDirectory(prefix="catchplate-npm-example-unit-")))
         guard.enter_context(state_directory(self.directory))
 
     def complete(self):
@@ -361,7 +361,7 @@ class NpmExampleFixtureTests(unittest.TestCase):
                 self.assertEqual(public["npm-command"], spec["operation"])
             with self.assertRaises(ValueError):
                 registry.validate_headers(changed(fields(spec), "accept", CORGI if spec["operation"] == "view" else FULL), spec, "GET", 0)
-        self.assertEqual(registry.path(PACKAGES[1]), "/@serverware-fixture%2fpublish")
+        self.assertEqual(registry.path(PACKAGES[1]), "/@catchplate-fixture%2fpublish")
 
     def test_every_profile_requires_replaced_credential_and_closed_headers(self):
         for case, method in (("view_unscoped", "GET"), ("manifest_scoped", "GET"),
@@ -483,7 +483,7 @@ class NpmExampleFixtureTests(unittest.TestCase):
         self.assertEqual((status, media), (200, FULL))
         observed = json.loads(raw)
         self.assertEqual(set(observed), {"schema", "syntheticOnly", "total", "attempts", "stored"})
-        self.assertEqual(observed["schema"], "serverware.privateNpmExampleObservations/v1")
+        self.assertEqual(observed["schema"], "catchplate.privateNpmExampleObservations/v1")
         self.assertIs(observed["syntheticOnly"], True)
         self.assertEqual((observed["total"], observed["attempts"], observed["stored"]), before)
         self.assertEqual((state.total, state.attempts, state.stored), before)
@@ -550,9 +550,9 @@ class NpmExampleFixtureTests(unittest.TestCase):
             status, raw, _ = receive(state, SPECS["publish_unscoped"], method)
             self.assertEqual((status, raw), (400, REFUSAL))
             self.assertEqual(state.attempts[-1], {"ordinal": state.total, "accepted": False})
-        for wrong in ("/serverware-fixture-publish/-/metadata-1.0.0.tgz", "/-/npm/v1/security/audits/quick",
-                "/serverware-fixture-forbidden", "/@serverware-fixture/publish", "/@serverware-fixture%2Fpublish",
-                "/serverware-fixture-publish?write=true", "/_fixture/control"):
+        for wrong in ("/catchplate-fixture-publish/-/metadata-1.0.0.tgz", "/-/npm/v1/security/audits/quick",
+                "/catchplate-fixture-forbidden", "/@catchplate-fixture/publish", "/@catchplate-fixture%2Fpublish",
+                "/catchplate-fixture-publish?write=true", "/_fixture/control"):
             fresh = server()
             status, raw, _ = receive(fresh, SPECS["view_unscoped"], path=wrong)
             self.assertEqual((status, raw, fresh.total, fresh.attempts),
@@ -583,7 +583,7 @@ class NpmExampleFixtureTests(unittest.TestCase):
         canary = "secret-body-path-error-canary"
         for kind in (ValueError, OSError, TypeError, KeyError):
             record = registry.refusal_observation(9, "PUT", "headers", kind(canary))
-            self.assertEqual(record, {"schema": "serverware.privateNpmExampleRefusal/v1", "ordinal": 9,
+            self.assertEqual(record, {"schema": "catchplate.privateNpmExampleRefusal/v1", "ordinal": 9,
                 "expectedCase": "publish_scoped", "expectedMethod": "PUT", "actualMethod": "PUT",
                 "stage": "headers", "errorClass": kind.__name__})
             self.assertNotIn(canary, json.dumps(record))

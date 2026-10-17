@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-publication-genesis-closure-set.v2.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-publication-genesis-closure-set.v2.schema.json",
   "description": "Explicit cold-three bootstrap successor. Only the coordinator uses Manifest/v2 and commits its immutable measured bootstrap runtime; its actual later runtime remains separately C9/authority bound. The two endpoint manifests remain static v1. Separate v2 leaf, set-root and seccomp-root domains; <=12MiB canonical original, <=1MiB per manifest. Static validation is not provenance, signing, installation or live owner admission.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "members", "setRootSha256", "seccompSetRootSha256"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativePublicationGenesisClosureSet/v2"},
+    "apiVersion": {"const": "catchplate.nativePublicationGenesisClosureSet/v2"},
     "setRootSha256": {"$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"},
     "seccompSetRootSha256": {"$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"},
     "members": {

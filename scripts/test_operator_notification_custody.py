@@ -12,7 +12,7 @@ from unittest.mock import patch
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import operator_notification_custody as custody
+from catchplate import operator_notification_custody as custody
 
 
 class NotificationCustodyTests(unittest.TestCase):
@@ -27,7 +27,7 @@ class NotificationCustodyTests(unittest.TestCase):
     def initialize(self):
         # Only this pure file primitive's already-reviewed ownership assertion is
         # stubbed. The connected store suite uses the real publication lock.
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             return custody.initialize(self.directory, no_retained_notification_state=True)
 
     def test_read_missing_never_initializes(self):
@@ -110,7 +110,7 @@ class NotificationCustodyTests(unittest.TestCase):
                 custody.unseal(key, slot, revision, nonce, data)
 
     def test_init_requires_explicit_empty_store_proof_and_publication(self):
-        with patch("serverware.operator_publication.assert_held"):
+        with patch("catchplate.operator_publication.assert_held"):
             with self.assertRaises(custody.CustodyError):
                 custody.initialize(self.directory, no_retained_notification_state=False)
         with self.assertRaises(custody.CustodyError):

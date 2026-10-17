@@ -1,7 +1,7 @@
 //! Combined-v27 browser listener. Public byte inputs never construct an actual
 //! accepted TLS request; private review bytes remain inside the library owner.
 use super::*;
-use serverware_decision_gate::{native_jit_review_open_v1 as opening,
+use catchplate_decision_gate::{native_jit_review_open_v1 as opening,
     native_jit_review_browser_v1::Accepted,native_secret_broker_v1 as broker,
     enclave_vsock_v1::VsockShutdownV1};
 

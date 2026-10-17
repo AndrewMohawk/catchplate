@@ -19,7 +19,7 @@ FIELD = "responseSigningPublicKeyBase64Url"
 class RevocationWriterPublicKeySourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        _, cls.service = source("serverware/authority_service.py", 2 * 1024 * 1024)
+        _, cls.service = source("catchplate/authority_service.py", 2 * 1024 * 1024)
         _, cls.generator = source("scripts/authority/generate_artifact_bundle.py", 256 * 1024)
         cls.measured = definition(cls.service, "MeasuredConfiguration")
         cls.topology = definition(cls.measured, "_verify_role_topology")
@@ -88,7 +88,7 @@ class RevocationWriterPublicKeySourceTests(unittest.TestCase):
         self.assertIsInstance(binding.body[0], ast.Raise)
         self.assertLess(guard.lineno, assigned(self.document, "response_raw").lineno)
         self.assertLess(assigned(self.document, "response_der").lineno, binding.lineno)
-        _, artifact = source("serverware/authority_artifact_spec.py", 256 * 1024)
+        _, artifact = source("catchplate/authority_artifact_spec.py", 256 * 1024)
         decoder = definition(artifact, "strict_base64url_decode")
         self.assertTrue(any(isinstance(node, ast.If) and ast.unparse(node.test) == "canonical != value"
             and isinstance(node.body[0], ast.Raise) for node in ast.walk(decoder)))
@@ -104,9 +104,9 @@ class RevocationWriterPublicKeySourceTests(unittest.TestCase):
         self.assertTrue(any(isinstance(node, ast.Compare)
             and ast.unparse(node) == "payload['sourceRevision'] != source_revision"
             for node in ast.walk(self.document)))
-        self.shape(assigned(self.service, "CONFIG_SCHEMA"), '"serverware.policyAuthorityServiceConfiguration/v6"')
+        self.shape(assigned(self.service, "CONFIG_SCHEMA"), '"catchplate.policyAuthorityServiceConfiguration/v6"')
         self.shape(assigned(self.generator, "SERVICE_CONFIGURATION_PAYLOAD_SCHEMA"),
-            '"serverware.policyAuthorityServiceConfiguration/v6"')
+            '"catchplate.policyAuthorityServiceConfiguration/v6"')
 
     def test_other_role_and_actual_launch_key_separation_remain_required(self):
         separated, = [node for node in self.topology.body if isinstance(node, ast.If)
@@ -120,7 +120,7 @@ class RevocationWriterPublicKeySourceTests(unittest.TestCase):
             == roles[other_role]["responseSigningSpkiDigest"]
             for other_role in ("verifier", "planner", "issuer", "executor"))''')
         self.assertIsInstance(generated.body[0], ast.Raise)
-        _, signer = source("serverware/authority_revocation_writer_signer.py", 64 * 1024)
+        _, signer = source("catchplate/authority_revocation_writer_signer.py", 64 * 1024)
         binder = definition(signer, "_signer_from_pem")
         launch, = [node for node in binder.body if isinstance(node, ast.If)
                    and ast.unparse(node.test) == "observed == _public_spki_digest(launch_public_key)"]
@@ -128,20 +128,20 @@ class RevocationWriterPublicKeySourceTests(unittest.TestCase):
         self.shape(assigned(binder, "observed"), "_public_spki_digest(private_key.public_key())")
 
     def test_key_is_configuration_only_not_transfer_candidate_or_new_descriptor(self):
-        text, transfer = source("serverware/authority_revocation_writer_transport.py", 64 * 1024)
+        text, transfer = source("catchplate/authority_revocation_writer_transport.py", 64 * 1024)
         self.assertNotIn(FIELD, text)
         self.shape(assigned(transfer, "TRANSFER_SCHEMA"),
-            '"serverware.policyAuthorityRevocationWriterTransfer/v1"')
-        _, launcher = source("serverware/authority_launcher.py", 256 * 1024)
+            '"catchplate.policyAuthorityRevocationWriterTransfer/v1"')
+        _, launcher = source("catchplate/authority_launcher.py", 256 * 1024)
         inventory = assigned(launcher, "ROLE_CREDENTIAL_DESCRIPTOR_NAMES")
         writer, = [value for key, value in zip(inventory.keys, inventory.values)
                    if key.value == "planner-writer"]
         self.shape(writer, '''frozenset({
-            "SERVERWARE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
-            "SERVERWARE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
-            "SERVERWARE_POLICY_AUTHORITY_CONFIG_FD",
-            "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD",
-            "SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN_FD"})''')
+            "CATCHPLATE_POLICY_AUTHORITY_LAUNCH_ROOT_PUBLIC_KEY_FD",
+            "CATCHPLATE_POLICY_AUTHORITY_ROOT_PUBLIC_KEY_FD",
+            "CATCHPLATE_POLICY_AUTHORITY_CONFIG_FD",
+            "CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_SIGNING_KEY_FD",
+            "CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN_FD"})''')
         for function in (self.writer, self.document):
             for forbidden in ("Ed25519PrivateKey.generate", "_load_ed25519_private_key", "socket.socket"):
                 self.assertFalse(calls(function, forbidden))

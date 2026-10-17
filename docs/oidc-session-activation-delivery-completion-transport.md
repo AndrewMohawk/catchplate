@@ -1,12 +1,12 @@
 # Private consume completion transport
 
-[`authority_oidc_session_activation_delivery_completion_transport.py`](../serverware/authority_oidc_session_activation_delivery_completion_transport.py)
+[`authority_oidc_session_activation_delivery_completion_transport.py`](../catchplate/authority_oidc_session_activation_delivery_completion_transport.py)
 frames one private completion recovery request and an unverified original
 response. It does not decode proofs, admit completion, renew execution permission
 or establish currentness.
 
 The only socket is
-`/run/serverware/oidc-session-activation-delivery-execution/completion.sock`, for
+`/run/catchplate/oidc-session-activation-delivery-execution/completion.sock`, for
 process `oidc-session-activation-delivery-completion`, UID/GID 65497. The server
 admits request peer **65497:65497**, a separately root-admitted completion-purpose
 receiver, before any prefix or body. This does not give generic application UID

@@ -7,11 +7,11 @@ unexecuted. It does not install an index, register a WebAuthn transition, or
 resolve the [authority startup blocker](authority-transition-startup-blocker.md).
 The implementation consists of:
 
-- [`authority_index_projection.py`](../serverware/authority_index_projection.py):
+- [`authority_index_projection.py`](../catchplate/authority_index_projection.py):
   eleven fixed selectors and row-to-index codecs;
-- [`authority_index_join.py`](../serverware/authority_index_join.py): complete
+- [`authority_index_join.py`](../catchplate/authority_index_join.py): complete
   range reconstruction joined to actual primary-row membership verification;
-- [`authority_radix_mutation.py`](../serverware/authority_radix_mutation.py): the
+- [`authority_radix_mutation.py`](../catchplate/authority_radix_mutation.py): the
   shared, bounded primary evaluator and its read-only membership entry point.
 
 Given a supplied index/primary root pair, a successful join establishes that
@@ -87,13 +87,13 @@ path. The leaf's `primary_row_digest` is the actual SQL-framed
 **AuthenticatedRow/v1** commitment from the checked primary proof. Projection
 does not rehash the row using a different JSON convention.
 
-The partition hash uses `serverware.policyAuthorityIndexPartition/v1`. Every
+The partition hash uses `catchplate.policyAuthorityIndexPartition/v1`. Every
 frame, including the domain, receives an unsigned eight-byte big-endian length.
 The remaining frames are the counted-index profile, index ID, table, projection
 digest and sorted compact UTF-8 JSON of the fixed typed partition fields.
 Descriptor and manifest domains are respectively
-`serverware.policyAuthorityIndexProjectionDescriptor/v1` and
-`serverware.policyAuthorityIndexProjectionManifest/v1`.
+`catchplate.policyAuthorityIndexProjectionDescriptor/v1` and
+`catchplate.policyAuthorityIndexProjectionManifest/v1`.
 
 Referenced text fields and selector strings must be exact strings, NUL-free,
 valid UTF-8, and at most **4,096 UTF-8 bytes** each. Partition JSON is bounded to

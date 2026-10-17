@@ -21,7 +21,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import ecr_artifact_staging as staging
+from catchplate import ecr_artifact_staging as staging
 
 
 def digest(raw):
@@ -89,7 +89,7 @@ class ImageFiles:
     def commitment(self):
         def descriptor(value):
             return {"media_type": value["mediaType"], "digest": value["digest"], "size": value["size"]}
-        return {"schema": "serverware.ecrVerifiedImage/v1",
+        return {"schema": "catchplate.ecrVerifiedImage/v1",
             "manifest": {"media_type": self.manifest_type, "digest": self.manifest_digest, "size": len(self.manifest)},
             "config": descriptor(self.config_descriptor), "layers": [descriptor(row) for row in self.layers],
             "blobs": [{"digest": name, "size": len(self.blobs[name])} for name in sorted(self.blobs)],
@@ -139,7 +139,7 @@ class EcrArtifactStagingTests(unittest.TestCase):
 
     def assert_complete(self, image, result):
         expected_artifact = image.commitment()
-        marker = {"schema": "serverware.ecrArtifactStage/v1", "artifactSha256": digest(canonical(expected_artifact)),
+        marker = {"schema": "catchplate.ecrArtifactStage/v1", "artifactSha256": digest(canonical(expected_artifact)),
             "manifestDigest": image.manifest_digest, "unsigned": True}
         self.assertEqual(type(result), dict)
         self.assertEqual(result, marker)

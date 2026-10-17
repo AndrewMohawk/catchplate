@@ -1,0 +1,20 @@
+# Optional managed-X capability for the existing ordinary Catchplate instance.
+# Append to the complete reviewed source/binary + curated-gate layer list.
+# Requires an existing app-owned 0700 directory, disjoint from all other data
+# and custody roots, including host bind aliases. Never provision it implicitly.
+# No credentials, upstream allowlist, network, auth or native-mode changes.
+services:
+  catchplate:
+    environment:
+      CATCHPLATE_OPERATOR_MANAGED_X_ENABLED: "1"
+      CATCHPLATE_OPERATOR_X_CUSTODY_DIR: /x-custody
+    volumes:
+      - type: bind
+        source: ${OPERATOR_MANAGED_X_CUSTODY_DIR:?Set the reviewed app-only X custody directory}
+        target: /x-custody
+        read_only: false
+        bind: {create_host_path: false}
+
+  decision-gate-rs:
+    environment:
+      CATCHPLATE_OPERATOR_MANAGED_X_ENABLED: "1"

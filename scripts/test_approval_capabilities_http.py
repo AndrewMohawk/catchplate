@@ -28,12 +28,12 @@ import test_operator_demo_runtime as runtime
 
 ROOT = Path(__file__).resolve().parents[1]
 PATH = "/api/approvals/capabilities"
-EXPECTED = {"schema": "serverware.approvalCapabilities/v1", "can_list": True,
+EXPECTED = {"schema": "catchplate.approvalCapabilities/v1", "can_list": True,
     "can_open_native_review": False, "can_decide": False, "reason": "protected_review_unavailable"}
-HOST_EXPECTED = {"schema": "serverware.approvalCapabilities/v2", "mode": "host_trusted_v1",
+HOST_EXPECTED = {"schema": "catchplate.approvalCapabilities/v2", "mode": "host_trusted_v1",
     "can_list": True, "can_review": False, "can_decide": False,
     "reason": "host_trusted_approvals_unavailable"}
-SOURCE = ast.parse((ROOT / "serverware/app.py").read_text())
+SOURCE = ast.parse((ROOT / "catchplate/app.py").read_text())
 ROUTE = next(node for node in SOURCE.body if isinstance(node, ast.FunctionDef)
     and node.name == "approval_capabilities")
 METADATA_ROUTE = next(node for node in SOURCE.body if isinstance(node, ast.FunctionDef)
@@ -55,7 +55,7 @@ class Identity:
 class CapabilityRouteTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.identity, self.error, self.auth_calls = Identity({"admin"}), None, 0
-        self.operator_active = self.enterContext(patch("serverware.operator_demo.active", return_value=False))
+        self.operator_active = self.enterContext(patch("catchplate.operator_demo.active", return_value=False))
         self.app = FastAPI()
 
         def authenticate():
@@ -158,7 +158,7 @@ class CapabilityRouteTests(unittest.IsolatedAsyncioTestCase):
             "operator_demo.active", "operator_host_approvals.capabilities"})
         imports = [node for node in ast.walk(ROUTE) if isinstance(node, ast.ImportFrom)]
         self.assertEqual(len(imports), 2)
-        self.assertEqual((imports[0].level, imports[0].module), (0, "serverware"))
+        self.assertEqual((imports[0].level, imports[0].module), (0, "catchplate"))
         self.assertEqual([(alias.name, alias.asname) for alias in imports[0].names],
             [("operator_demo", None), ("operator_host_approvals", None)])
         self.assertEqual([(alias.name, alias.asname) for alias in imports[1].names],
@@ -167,10 +167,10 @@ class CapabilityRouteTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_operator_profile_selects_explicit_host_capabilities_only(self):
         self.operator_active.return_value = True
-        expected = {"schema": "serverware.approvalCapabilities/v2", "mode": "host_trusted_v1",
+        expected = {"schema": "catchplate.approvalCapabilities/v2", "mode": "host_trusted_v1",
             "can_list": True, "can_review": False, "can_decide": False,
             "reason": "host_trusted_approvals_unavailable"}
-        with patch("serverware.operator_host_approvals.capabilities", return_value=expected) as host:
+        with patch("catchplate.operator_host_approvals.capabilities", return_value=expected) as host:
             result = await self.request("GET", PATH)
         self.assertEqual(result.json(), expected)
         host.assert_called_once_with(self.identity)
@@ -244,7 +244,7 @@ class OrdinaryCapabilityHTTPTests(unittest.TestCase):
     request = runtime.OperatorDemoRuntimeTests.request
 
     def snapshot(self):
-        path = self.directory / "data" / "serverware.sqlite3"
+        path = self.directory / "data" / "catchplate.sqlite3"
         with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as connection:
             connection.execute("BEGIN")
             tables = [row[0] for row in connection.execute(
@@ -277,7 +277,7 @@ class OrdinaryCapabilityHTTPTests(unittest.TestCase):
             self.assertEqual(self.snapshot(), before)
 
     def test_real_authenticated_nonreviewer_is_role_required_and_read_only(self):
-        self.environment["SERVERWARE_ADMIN_ROLES"] = "policy_author"
+        self.environment["CATCHPLATE_ADMIN_ROLES"] = "policy_author"
         with self.runner():
             before = self.snapshot()
             code, body, headers = self.request("GET", PATH)
@@ -290,7 +290,7 @@ class OrdinaryCapabilityHTTPTests(unittest.TestCase):
 
     def test_real_exact_terminal_metadata_is_read_only_and_never_decrypts_review(self):
         with self.runner():
-            path = self.directory / "data" / "serverware.sqlite3"
+            path = self.directory / "data" / "catchplate.sqlite3"
             with closing(sqlite3.connect(path)) as connection:
                 connection.execute("INSERT INTO approval_requests "
                     "(id, route_id, method, url, status, requested_at, expires_at, canonical_request, redacted_display) "

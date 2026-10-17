@@ -159,7 +159,7 @@ def _probe_served_tls(manifest: dict, certificate: bytes) -> dict:
     from . import lifecycle
     hosts = [urlsplit(manifest["config"][name]).hostname for name in ("console_origin", "proxy_origin")]
     expected = {"verified_hostnames": 2, "certificate_sha256": _leaf_pin(certificate)}
-    reply = lifecycle._compose(manifest, "exec", "-T", "serverware", "python", "-I", "-B", "-c",
+    reply = lifecycle._compose(manifest, "exec", "-T", "catchplate", "python", "-I", "-B", "-c",
         _PROBE, json.dumps([hosts, expected["certificate_sha256"]], separators=(",", ":")))
     if config.parse_json(reply) != expected:
         raise InstallError("The running edge did not confirm the replacement certificate for both hostnames.")
@@ -187,7 +187,7 @@ def replace_tls(state_dir: Path, certificate: Path, private_key: Path) -> dict:
         old_manifest = config.read_file(state_dir / "manifest.json", maximum=131072, private=True)
         was_running = lifecycle.edge_running(manifest)
         backup = _backup(state_dir, old_cert, old_key, old_manifest)
-        marker = state.encoded({"schema": "serverware.standaloneTlsReplacement/v1",
+        marker = state.encoded({"schema": "catchplate.standaloneTlsReplacement/v1",
             "instance_id": manifest["instance_id"], "backup": str(backup.relative_to(state_dir)),
             "previous_manifest_sha256": state.digest(old_manifest), "new_files": new_pins,
             "edge_was_running": was_running})

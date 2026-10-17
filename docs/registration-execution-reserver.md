@@ -15,20 +15,20 @@ The state startup and bootstrap explicitly admit 65514 for reserve and 65515
 for completion; these roles are not interchangeable.
 
 The root-activated reserver listener is fixed at
-`/run/serverware/registration-execution/reserver.sock`. The client checks its
+`/run/catchplate/registration-execution/reserver.sock`. The client checks its
 Unix peer as **0:0**, not 65514: the listener's root activation is distinct
 from the service's execution identity. The state exchange likewise checks its
 root-activated listener as 0:0, not the state process's UID/GID.
 
-The [root-signed bootstrap](../serverware/registration_execution_reserver_bootstrap.py)
+The [root-signed bootstrap](../catchplate/registration_execution_reserver_bootstrap.py)
 binds the admitted configuration/generation, three enrollment originals,
 dedicated computation-key identity/measurement and independent current-root
 predecessor sequence/head/fence. It separately pins the local reservation
 journal's sequence/head. A recovered journal or incoming grant cannot appoint
 either checkpoint. Its closed profiles are
-`serverware.signedRegistrationExecutionReserverBootstrap/v1`,
-`serverware.registrationExecutionReserverBootstrap/v1` and
-`serverware.registrationExecutionReserverLaunch/v1`, bounded to 4 MiB.
+`catchplate.signedRegistrationExecutionReserverBootstrap/v1`,
+`catchplate.registrationExecutionReserverBootstrap/v1` and
+`catchplate.registrationExecutionReserverLaunch/v1`, bounded to 4 MiB.
 This is explicitly trusted-host-local custody, not hardware, TEE or witness
 admission. The private computation key is delivered separately, not in the
 bootstrap. The signed launch lasts at most 300 seconds; each request has a
@@ -48,9 +48,9 @@ change permissions or broaden the completion peer.
 
 ## Actual cold entry and packaging
 
-The fixed isolated [launcher](../serverware/registration_execution_reserver_launcher.py)
+The fixed isolated [launcher](../catchplate/registration_execution_reserver_launcher.py)
 selects only `--root-delivery` or `--run`. The root
-[entrypoint](../serverware/registration_execution_reserver_entrypoint.py)
+[entrypoint](../catchplate/registration_execution_reserver_entrypoint.py)
 authenticates the original bootstrap before opening the private key and journal,
 joins the actual listener/journal identities, then permanently drops to
 65514:65514 with no supplementary groups. It delivers exactly five descriptors:
@@ -63,14 +63,14 @@ joins the actual listener/journal identities, then permanently drops to
 | 201 | Dedicated computation-only private key |
 | 202 | Actual protected reservation-journal directory |
 
-The [startup owner](../serverware/registration_execution_reserver_startup.py)
-performs cold admission; the [runner](../serverware/registration_execution_reserver_runner.py)
+The [startup owner](../catchplate/registration_execution_reserver_startup.py)
+performs cold admission; the [runner](../catchplate/registration_execution_reserver_runner.py)
 uses `initialize_from_environment()`, `require_started().serve_once()` and
 `close()` under a finite serial lifecycle. The reserver holds no grant-authorizer,
 current-root state-signing or completion private key.
 
-The supplied [socket unit](../ops/systemd/serverware-registration-execution-reserver.socket)
-and [service template](../ops/systemd/serverware-registration-execution-reserver.service.in)
+The supplied [socket unit](../ops/systemd/catchplate-registration-execution-reserver.socket)
+and [service template](../ops/systemd/catchplate-registration-execution-reserver.service.in)
 are uninstalled deployment inputs. The socket pathname is owned by 65514:65532
 with mode 0660; its root-created listener credentials are a separate check.
 The template uses `Restart=no`, `RuntimeMaxSec=300s` and cgroup termination;
@@ -80,7 +80,7 @@ launcher and templates without installing or activating the service.
 
 ## Original-only exchange
 
-The [transport](../serverware/authority_registration_reservation_transport.py)
+The [transport](../catchplate/authority_registration_reservation_transport.py)
 has no JSON parser, signing, work allowance or configurable operation. Its
 closed request is the existing grant bundle, in this exact order:
 

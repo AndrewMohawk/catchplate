@@ -25,7 +25,7 @@ omission or `null`; an empty string/list is not another spelling of absence.
 
 | Field | Contract |
 | --- | --- |
-| `apiVersion` | Exactly `serverware.policyHighWater/v1`. |
+| `apiVersion` | Exactly `catchplate.policyHighWater/v1`. |
 | `policyId` | 1–256 bytes; no surrounding whitespace or control characters. |
 | `sequence` | Positive `u64`. |
 | `rollbackEpoch` | Positive `u64`. |

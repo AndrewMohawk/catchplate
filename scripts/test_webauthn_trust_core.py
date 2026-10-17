@@ -25,7 +25,7 @@ from cryptography.x509.oid import NameOID
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import webauthn_trust_core as core
+from catchplate import webauthn_trust_core as core
 
 
 START = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -74,7 +74,7 @@ class WebAuthnTrustCoreTests(unittest.TestCase):
 
     def unsigned(self):
         return {
-            "apiVersion": "serverware.webauthnTrust/v1", "kind": "WebAuthnTrustBundle",
+            "apiVersion": "catchplate.webauthnTrust/v1", "kind": "WebAuthnTrustBundle",
             "metadata": {"id": "fixture-é-雪-😀", "sequence": 7, "rollbackEpoch": 2,
                 "validFrom": START.isoformat(), "validUntil": END.isoformat(),
                 "signingKeyId": digest(self.public_der)},
@@ -411,9 +411,9 @@ class WebAuthnTrustCoreTests(unittest.TestCase):
     def test_core_source_does_not_import_stateful_integration_or_read_a_clock(self):
         # Supplemental source boundary only; behavioral cases above call the
         # actual pure core. No AST result is authority or installed evidence.
-        source = (ROOT / "serverware/webauthn_trust_core.py").read_text(encoding="utf-8")
+        source = (ROOT / "catchplate/webauthn_trust_core.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
-        forbidden = {"os", "pathlib", "time", "fcntl", "serverware", "db", "config"}
+        forbidden = {"os", "pathlib", "time", "fcntl", "catchplate", "db", "config"}
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:

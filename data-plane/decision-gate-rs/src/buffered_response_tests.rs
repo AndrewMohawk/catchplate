@@ -428,7 +428,7 @@ fn buffered_passthrough_finalizer_releases_whole_success_and_error_json_with_saf
             parsed.body, body,
             "exact large-integer/escape/exponent bytes through finalizer"
         );
-        assert!(parsed.headers.contains_key("x-serverware-policy-hash"));
+        assert!(parsed.headers.contains_key("x-catchplate-policy-hash"));
         assert_eq!(
             parsed.headers.get("etag").map(|value| value.as_str()),
             Some("safe-fixture")

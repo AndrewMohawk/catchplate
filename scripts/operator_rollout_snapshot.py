@@ -39,9 +39,9 @@ import stat
 import sys
 import tempfile
 
-SCHEMA = "serverware.operatorRolloutInventory/v1"
-MANAGED_SCHEMA = "serverware.operatorRolloutInventory/v2"
-MANAGED_X_SCHEMA = "serverware.operatorRolloutInventory/v3"
+SCHEMA = "catchplate.operatorRolloutInventory/v1"
+MANAGED_SCHEMA = "catchplate.operatorRolloutInventory/v2"
+MANAGED_X_SCHEMA = "catchplate.operatorRolloutInventory/v3"
 GATE_ROOT = "app-data/gate-runtime"
 POLICY = "app-data/policy-bundle.json"
 GATE_POLICY = GATE_ROOT + "/policy-bundle.json"
@@ -49,11 +49,11 @@ GATE_GOOGLE = GATE_ROOT + "/operator-google-configuration.json"
 GATE_X = GATE_ROOT + "/operator-x-configuration.json"
 GATE_DIRECTORIES = frozenset((GATE_ROOT, GATE_ROOT + "/mitmproxy"))
 GATE_PLACEHOLDERS = frozenset(GATE_ROOT + "/" + name for name in (
-    ".operator-publication.lock", ".serverware-operator-demo.json",
+    ".operator-publication.lock", ".catchplate-operator-demo.json",
     "mitmproxy/mitmproxy-ca-cert.pem", "mitmproxy/mitmproxy-ca.pem"))
 GATE_MEMBERS = GATE_DIRECTORIES | GATE_PLACEHOLDERS | {GATE_POLICY, GATE_GOOGLE}
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
-DB_MAIN = "app-data/serverware.sqlite3"
+DB_MAIN = "app-data/catchplate.sqlite3"
 DB_FILES = frozenset(DB_MAIN + suffix for suffix in ("", "-wal", "-shm", "-journal"))
 DERIVED = frozenset("app-data/decision-gate-ca-" + kind + ".pem" for kind in ("cert", "key"))
 NOTIFICATIONS = frozenset("operator_notification_" + suffix for suffix in ("meta", "config", "operations", "deliveries", "attempts"))
@@ -369,7 +369,7 @@ def compare_databases(before, after, *, x_quota_transition=None, ecr_initializat
         new_columns, new = rows(after, table)
         require(old_columns == new_columns, "table_columns_changed", table)
         old_hash, new_hash = row_digest(old_columns, old), row_digest(new_columns, new)
-        if table == "serverware_store_migrations":
+        if table == "catchplate_store_migrations":
             require(old_columns == ["migration", "version", "applied_at"], "migration_columns_changed")
             require(Counter(row[:2] for row in old) == Counter(row[:2] for row in new), "migration_authority_changed")
             for row in old + new:
@@ -458,7 +458,7 @@ def managed_database_identity(connection, snapshot, *, managed_x_unconfigured=Fa
     policy_sha = hashlib.sha256(policy_bytes).hexdigest()
     require(snapshot["persistent"][POLICY]["size"] == len(policy_bytes)
         and snapshot["persistent"][POLICY]["sha256"] == policy_sha, "policy_not_authoritative")
-    expected = {"schema": "serverware.operatorGoogleGateConfiguration/v1", "operation": None,
+    expected = {"schema": "catchplate.operatorGoogleGateConfiguration/v1", "operation": None,
         "profile_binding": None, "profile_binding_digest": None, "effective_settings": settings,
         "effective_settings_digest": "sha256:" + digest(settings)}
     public_bytes = canonical(expected).encode("ascii")
@@ -472,7 +472,7 @@ def managed_database_identity(connection, snapshot, *, managed_x_unconfigured=Fa
     result = {"effective_settings_digest": expected["effective_settings_digest"],
         "policy_file_sha256": policy_sha, "google_public_sha256": public_sha}
     if managed_x_unconfigured:
-        x_bytes = canonical({**expected, "schema": "serverware.operatorXGateConfiguration/v1"}).encode("ascii")
+        x_bytes = canonical({**expected, "schema": "catchplate.operatorXGateConfiguration/v1"}).encode("ascii")
         x_sha = hashlib.sha256(x_bytes).hexdigest()
         if GATE_X in gate_members(snapshot):
             public = snapshot["persistent"][GATE_X]
@@ -494,7 +494,7 @@ def private_database(root, expected, scratch):
                 outgoing.write(chunk)
         require(size == expected["persistent"][name]["size"] and hashed.hexdigest() == expected["persistent"][name]["sha256"], "database_copy_changed")
     # Only scratch is writable. Private recovery precedes query_only snapshots.
-    connection = sqlite3.connect(scratch / "serverware.sqlite3", timeout=2)
+    connection = sqlite3.connect(scratch / "catchplate.sqlite3", timeout=2)
     connection.execute("SELECT count(*) FROM sqlite_master").fetchone()
     return connection
 
@@ -570,22 +570,22 @@ def compare(before_root, after_root, before_custody, after_custody, before_inven
                 == managed, "managed_identity_changed")
     require(inventory(roots[0], roots[2], **options[0]) == before
         and inventory(roots[1], roots[3], **options[1]) == after, "source_copy_changed")
-    result = {"schema": "serverware.operatorRolloutComparison/v1", "ok": True, **database,
+    result = {"schema": "catchplate.operatorRolloutComparison/v1", "ok": True, **database,
         "non_sqlite_files_and_custody_preserved": True, "custody_live_identity_preserved": True,
         "derived_ca_publication_inode_changes": recreated, "live_sqlite_opened": False,
         "whole_database_byte_equality_claimed": False, "services_stopped_verified": False}
     if managed_transition:
-        result.update(schema="serverware.operatorRolloutComparison/v2", managed_transition=managed_transition,
+        result.update(schema="catchplate.operatorRolloutComparison/v2", managed_transition=managed_transition,
             managed_unconfigured=managed, derived_gate_files_added=sorted({GATE_X} if managed_x_unconfigured else GATE_MEMBERS)
                 if managed_transition == "first" else [],
             provider_custody_empty=True, provider_custody_live_identity_preserved=True)
     if managed_x_unconfigured:
-        result.update(schema="serverware.operatorRolloutComparison/v3", managed_x_unconfigured=True,
+        result.update(schema="catchplate.operatorRolloutComparison/v3", managed_x_unconfigured=True,
             x_custody_empty=True, x_custody_live_identity_preserved=True)
     if x_quota_transition:
-        result["schema"] = "serverware.operatorRolloutComparison/v4"
+        result["schema"] = "catchplate.operatorRolloutComparison/v4"
     if ecr_initialization:
-        result.update(schema="serverware.operatorRolloutComparison/v5", ecr_artifact_directory_added=ECR_DIRECTORY)
+        result.update(schema="catchplate.operatorRolloutComparison/v5", ecr_artifact_directory_added=ECR_DIRECTORY)
     return result
 
 

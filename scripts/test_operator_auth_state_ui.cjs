@@ -8,10 +8,10 @@ const {readFileSync} = require('node:fs');
 const {resolve} = require('node:path');
 const vm = require('node:vm');
 const {context, rawCatalog, clone} = require('./test_operator_npm_ui.cjs');
-const ASSETS = resolve(__dirname, '../serverware/operator_demo_web');
+const ASSETS = resolve(__dirname, '../catchplate/operator_demo_web');
 const CATALOG = '/api/operator-demo/catalog', NOTIFICATIONS = '/api/operator-demo/notifications';
 const SEARCH = '/api/audit/search?limit=20&scanLimit=5000', VERIFY = '/api/audit/verify';
-const STORAGE = 'serverware.operator.notifications.operation.v1';
+const STORAGE = 'catchplate.operator.notifications.operation.v1';
 const OP = '11111111-1111-4111-8111-111111111111', DELIVERY = '22222222-2222-4222-8222-222222222222';
 const PRIVATE = 'https://notify.example.test/synthetic-private-draft-never-send';
 const reference = {operation_id: OP, kind: 'test', slot: 'audit_log.webhook', expected_revision: 1};
@@ -21,11 +21,11 @@ const text = node => String(node.textContent || '') + node.children.map(text).jo
 const event = id => ({id, event_type: 'operator_catalog.application.created', created_at: '2026-10-08T12:00:00Z', event: {application_id: id}});
 const history = (id = 'synthetic-current', more = false) => ({ok: true, complete: !more, has_more: more,
   next_cursor: more ? 'synthetic-cursor' : null, items: [event(id)]});
-const operation = () => ({schema: 'serverware.operatorNotificationOperation/v1', operation_id: OP, kind: 'test',
+const operation = () => ({schema: 'catchplate.operatorNotificationOperation/v1', operation_id: OP, kind: 'test',
   slot: reference.slot, revision: 1, status: 'acknowledged', delivery_id: DELIVERY, slot_state: null});
 function notificationStatus() {
   const channels = {action_required: ['approval.requested'], audit_log: ['operator_catalog.application.created']};
-  return {schema: 'serverware.operatorNotifications/v1', available: true,
+  return {schema: 'catchplate.operatorNotifications/v1', available: true,
     slots: ['action_required.slack', 'action_required.webhook', 'audit_log.slack', 'audit_log.webhook'].map(slot => {
       const [channel, adapter] = slot.split('.'); return {slot, channel, adapter, revision: 1, label: slot,
         enabled: true, secret_present: true, event_types: channels[channel], max_attempts: 1, last_delivery: null};

@@ -32,7 +32,7 @@ BUNDLE = "alchemy_chain_status_read_v1"
 CHAIN = "eth-mainnet"
 ORIGIN = "https://eth-mainnet.g.alchemy.com"
 OTHER_ORIGIN = "https://eth-sepolia.g.alchemy.com"
-DESCRIPTOR = {"schema": "serverware.operatorAlchemyRpcReadGate/v1",
+DESCRIPTOR = {"schema": "catchplate.operatorAlchemyRpcReadGate/v1",
     "adapter": "alchemy.rpc_read.v1", "operation": "alchemy.rpc.read"}
 CONFLICT = {"detail": "operator catalog or policy changed; refresh before trying again"}
 STORAGE = {"detail": "operator catalog storage unavailable; inspect saved status before retrying"}
@@ -60,7 +60,7 @@ class OperatorAlchemyApiTests(unittest.TestCase):
 
     def setUp(self):
         runtime.OperatorDemoRuntimeTests.setUp(self)
-        self.environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps([ORIGIN, OTHER_ORIGIN])
+        self.environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps([ORIGIN, OTHER_ORIGIN])
         self.health_response = (503, b'{}')
         self.health_requests = 0
         self.health_violations = []
@@ -77,7 +77,7 @@ class OperatorAlchemyApiTests(unittest.TestCase):
                 owner.health_requests += 1
                 if (self.path != "/healthz" or self.client_address[0] != "127.0.0.1"
                         or any(self.headers.get(name) is not None for name in (
-                            "Authorization", "Proxy-Authorization", "X-Serverware-Admin-Token"))
+                            "Authorization", "Proxy-Authorization", "X-Catchplate-Admin-Token"))
                         or owner.health_requests > 256):
                     owner.health_violations.append("unexpected synthetic health request")
                     self.send_error(400)
@@ -92,7 +92,7 @@ class OperatorAlchemyApiTests(unittest.TestCase):
 
         self.health_response = (503, b'{}')
         with HTTPServer(("127.0.0.1", 0), SyntheticHealth) as receiver:
-            self.environment["SERVERWARE_DECISION_GATE_BASE"] = (
+            self.environment["CATCHPLATE_DECISION_GATE_BASE"] = (
                 "http://127.0.0.1:" + str(receiver.server_port))
             thread = threading.Thread(target=receiver.serve_forever,
                 kwargs={"poll_interval": 0.05}, daemon=True)
@@ -150,7 +150,7 @@ class OperatorAlchemyApiTests(unittest.TestCase):
             for route, payload, maximum in ((CREDENTIAL, credential, 16384), (RULE, rule, 4096)):
                 cases = [
                     ({"auth": False}, payload, 401),
-                    ({"headers": [("X-Serverware-Admin-Token", "synthetic-wrong")]}, payload, 401),
+                    ({"headers": [("X-Catchplate-Admin-Token", "synthetic-wrong")]}, payload, 401),
                     ({"origin": None}, payload, 403),
                     ({"origin": "https://foreign.example.com"}, payload, 403),
                     ({"origin": self.origin + "/"}, payload, 403),
@@ -281,7 +281,7 @@ class OperatorAlchemyApiTests(unittest.TestCase):
             self.assertEqual(route["credentialRef"], credential["id"])
             self.assertEqual(route["adapter"]["type"], "alchemy.rpc_read.v1")
             self.assertEqual(route["credentialHeader"], {"mode": "replaceExact",
-                "expectedValue": "Bearer serverware-alchemy-placeholder-v1"})
+                "expectedValue": "Bearer catchplate-alchemy-placeholder-v1"})
             config = route["adapter"]["config"]
             self.assertEqual(set(config), {"credentialBinding", "chain", "request", "response"})
             self.assertEqual(config["chain"], CHAIN)
@@ -348,7 +348,7 @@ class OperatorAlchemyApiTests(unittest.TestCase):
             self.assertEqual(self.authority(), committed)
 
     def test_selected_chain_destination_and_duplicate_app_chain_are_independent(self):
-        self.environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps([OTHER_ORIGIN])
+        self.environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = json.dumps([OTHER_ORIGIN])
         with self.paired_runner():
             first = self.mutation(CREDENTIAL, self.credential_body())["credential"]
             second = self.mutation(CREDENTIAL, self.credential_body())["credential"]

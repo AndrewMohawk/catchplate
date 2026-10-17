@@ -10,12 +10,12 @@ use super::super::authority_history::{AuthorityEpochRefV3, HistoricalAuthorityRo
 use crate::policy_shadow::AuthorityRole;
 use std::os::unix::fs::{FileExt, MetadataExt};
 
-pub(super) const RUNTIME: &str = "serverware.policyCustodyServiceRuntimeConfig/v11";
-pub(super) const API: &str = "serverware.nativePublicationGenesisCommand/v1";
+pub(super) const RUNTIME: &str = "catchplate.policyCustodyServiceRuntimeConfig/v11";
+pub(super) const API: &str = "catchplate.nativePublicationGenesisCommand/v1";
 pub(super) const GRANT_FD: &str = "publication-genesis-grant";
 pub(super) const DIRECTORY: &str = "publication-genesis-journal";
 pub(super) const MAX_GRANT: usize = 256 * 1024;
-const DOMAIN: &[u8] = b"serverware.nativePublicationGenesisGrant.signature/v1";
+const DOMAIN: &[u8] = b"catchplate.nativePublicationGenesisGrant.signature/v1";
 const MAX_RECORD: usize = 2 * 1024 * 1024;
 const MAX_BYTES: usize = 32 * 1024 * 1024;
 
@@ -38,7 +38,7 @@ pub(super) struct Grant { pub(super) payload: Payload, pub(super) signature_base
 impl Grant {
     pub(super) fn verify(&self, history: &RuntimeAuthorityHistory) -> Result<(VerifyingKey, VerifyingKey), ServiceError> {
         let p = &self.payload; p.scope.guest(&p.guest)?;
-        require(p.api_version == "serverware.nativePublicationGenesisGrant/v1" && p.purpose == "native-cold-publication-genesis"
+        require(p.api_version == "catchplate.nativePublicationGenesisGrant/v1" && p.purpose == "native-cold-publication-genesis"
             && matches!(p.service_role, TrustedHostServiceRoleV3::DurableRecoveryStore | TrustedHostServiceRoleV3::CurrentSignatureAuthority)
             && p.guest.service_role == (if p.service_role == TrustedHostServiceRoleV3::DurableRecoveryStore { "durable-recovery-store" } else { "current-signature-authority" })
             && p.guest.uid > 0 && p.guest.gid > 0 && p.runtime_configuration_sha256 == p.guest.runtime_configuration_sha256

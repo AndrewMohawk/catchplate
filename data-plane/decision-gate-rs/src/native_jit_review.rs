@@ -2,7 +2,7 @@
 //! preparation and buffered CONNECT/original checks. It does not submit a
 //! reserve request, grant authority or publish/retain an approval.
 use super::*;
-use serverware_decision_gate::native_jit_review_v1::SignedReleasePair;
+use catchplate_decision_gate::native_jit_review_v1::SignedReleasePair;
 #[cfg(test)]
 #[path = "native_jit_review_tests.rs"]
 mod tests;

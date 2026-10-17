@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v21.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-startup-configuration.v21.schema.json",
   "title": "Explicit native finalization and full readiness consumer profile",
   "$comment": "Requires genuine delivery/v3, independently signed finalization and native readiness policies. Does not fabricate detailed observations or activate traffic. Missing detailed original producers fail closed. Old v19/v1 and v20/v2 remain exact.",
   "type": "object",
@@ -32,7 +32,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.nativeStartupConfiguration/v21"
+      "const": "catchplate.nativeStartupConfiguration/v21"
     },
     "gate": {
       "$ref": "native-startup-configuration.v20.schema.json#/properties/gate"

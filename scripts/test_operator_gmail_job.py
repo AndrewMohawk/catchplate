@@ -59,9 +59,9 @@ def commitment(case, generation):
 
 
 def fields(item):
-    return [("Content-Type", "application/json"), ("X-Serverware-Policy-Hash", POLICY),
-        ("X-Serverware-Request-Digest", item["requestDigest"]), ("X-Serverware-Operation-Digest", item["operationDigest"]),
-        ("X-Serverware-Response-Body-Sha256", item["responseBodySha256"])]
+    return [("Content-Type", "application/json"), ("X-Catchplate-Policy-Hash", POLICY),
+        ("X-Catchplate-Request-Digest", item["requestDigest"]), ("X-Catchplate-Operation-Digest", item["operationDigest"]),
+        ("X-Catchplate-Response-Body-Sha256", item["responseBodySha256"])]
 
 
 def observation(stage, *, prefetched=False):
@@ -98,7 +98,7 @@ def observation(stage, *, prefetched=False):
     if resources < 8 and refresh:
         event("refresh_token_rotated", timestamp=expiry - 50000, granted_scopes=check.base.SCOPES)
         event("tokens_issued", timestamp=expiry - 50000, grant_type="refresh_token", granted_scopes=check.base.SCOPES)
-    return {"schema": "serverware.privateGoogleObservations/v1", "counts": {"google": {key: value for key, value in counts.items() if value}, "x": {}},
+    return {"schema": "catchplate.privateGoogleObservations/v1", "counts": {"google": {key: value for key, value in counts.items() if value}, "x": {}},
         "active": {"authorizationCodes": 0, "grants": consent}, "events": events,
         "tokenLifetimes": {"authorizationCodeExchangeSeconds": 90, "refreshExchangeSeconds": 300},
         "initialAccessExpiresAtEpochMs": expiry if consent else None, "initialAccessExpired": stage in {"expired", "refreshed"},
@@ -153,7 +153,7 @@ class GmailJobCheckerTests(unittest.TestCase):
             for change in ({"proxies": {}}, {"verify": False}, {"verify": "/different.pem"}, {"stream": False}):
                 with self.subTest(change=change), self.assertRaises(check.CheckFailure):
                     adapter.send(request, **{**options, **change})
-            for name in ("Proxy-Authorization", "Authorization", "Cookie", "X-Serverware-Admin-Token"):
+            for name in ("Proxy-Authorization", "Authorization", "Cookie", "X-Catchplate-Admin-Token"):
                 altered = deepcopy(request); altered.headers[name] = "synthetic-private"
                 with self.subTest(name=name), self.assertRaises(check.CheckFailure):
                     adapter.send(altered, **options)
@@ -192,7 +192,7 @@ class GmailJobCheckerTests(unittest.TestCase):
                 self.assertIn("gzip", request.headers["Accept-Encoding"])
                 self.assertIsNone(request.body)
         self.assertIn("labelIds=INBOX&labelIds=UNREAD", prepared().url)
-        self.assertIn("subject%3AServerware+fixture", prepared().url)
+        self.assertIn("subject%3ACatchplate+fixture", prepared().url)
         self.assertIn("pageToken=fixture-page-2%2B%2F%3D", prepared("list_page_2").url)
 
     def test_v3_commitments_bind_raw_query_generation_and_compression_discard(self):

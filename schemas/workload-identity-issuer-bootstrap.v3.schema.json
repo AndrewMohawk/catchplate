@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/workload-identity-issuer-bootstrap.v3.schema.json",
+  "$id": "https://catchplate.invalid/schemas/workload-identity-issuer-bootstrap.v3.schema.json",
   "title": "Root-signed bounded sequential native workload issuer bootstrap v3",
   "description": "Closed canonical public original, at most 131072 bytes. Ed25519 signs the exact v3 payload-schema ASCII bytes, NUL and canonical payload. This explicit service profile preserves each separately signed native issuance grant and exact raw3 exchange; it grants no automatic retry, new key, renewed interval or checkpoint reset. The service lifetime is at most two hours from its ORIGINAL signed issuance and is further clipped to the actual CA and original cold clock. Existing v1/v2 remain separate one-exchange profiles. Schema validation is not authority.",
   "type": "object", "additionalProperties": false,
   "required": ["schema", "payload", "signature"],
   "properties": {
-    "schema": {"const": "serverware.signedWorkloadIdentityIssuerBootstrap/v3"},
+    "schema": {"const": "catchplate.signedWorkloadIdentityIssuerBootstrap/v3"},
     "payload": {"$ref": "#/$defs/payload"},
     "signature": {"$ref": "workload-identity-issuer-bootstrap.v2.schema.json#/properties/signature"}
   },
@@ -24,7 +24,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "purpose", "trustMode", "serviceUid", "serviceGid", "processMode", "configurationDigest", "journalNamespace", "issuerCertificate", "authorizationKey", "policyHash", "caPrivateKey", "journal", "launch", "issuedAtEpochNs", "expiresAtEpochNs", "nativeEnrollment", "service"],
       "properties": {
-        "schema": {"const": "serverware.workloadIdentityIssuerBootstrap/v3"},
+        "schema": {"const": "catchplate.workloadIdentityIssuerBootstrap/v3"},
         "sourceRevision": {"$ref": "workload-identity-issuer-bootstrap.v2.schema.json#/$defs/payload/properties/sourceRevision"},
         "purpose": {"const": "native-workload-identity-issuance"}, "trustMode": {"const": "trusted-host-local"},
         "serviceUid": {"const": 65492}, "serviceGid": {"const": 65492},

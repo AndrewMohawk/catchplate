@@ -12,7 +12,7 @@ pub(crate) const CONTENT_TYPE_POLICY: &str = "xPostJsonUtf8V1";
 pub(crate) const OPERATION: &str = "tweets.write";
 pub(crate) const HOST: &str = "api.x.com";
 pub(crate) const PATH: &str = "/2/tweets";
-pub(crate) const PLACEHOLDER: &str = "Bearer serverware-x-post-placeholder-v1";
+pub(crate) const PLACEHOLDER: &str = "Bearer catchplate-x-post-placeholder-v1";
 pub(crate) const HEADERS: &[&str] = &["accept", "accept-language", "content-type", "sec-fetch-mode", "user-agent"];
 pub(crate) const DISCARD: &[&str] = &["accept-encoding"];
 pub(crate) const SCOPES: &[&str] = &["offline.access", "tweet.read", "tweet.write", "users.read"];
@@ -117,7 +117,7 @@ pub(crate) fn validate_config(config: &Value, constraints: &[Value]) -> Result<(
 /// exact signed subject/client identity and granted-scope superset validation.
 pub(crate) fn validate_credential(credential: &Credential) -> Result<(), String> {
     if credential.injection.as_object().is_none_or(|object| !exact(object,
-            &["type", "header", "field", "__serverwareCredentialType", "__serverwareOAuthClientId", "__serverwareGrantedScopes"]))
+            &["type", "header", "field", "__catchplateCredentialType", "__catchplateOAuthClientId", "__catchplateGrantedScopes"]))
         || credential.kind() != "oauth2" || credential.provider != "x"
         || credential.injection["type"] != "bearer" || credential.injection["header"] != "Authorization"
         || credential.injection["field"] != "access_token" || credential.injection.get("prefix").is_some() {

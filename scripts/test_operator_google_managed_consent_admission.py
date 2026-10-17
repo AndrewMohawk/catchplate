@@ -28,7 +28,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-import serverware
+import catchplate
 
 POLICY = "sha256:" + "1" * 64
 OTHER_POLICY = "sha256:" + "2" * 64
@@ -47,7 +47,7 @@ def receipt():
 
 def definitions():
     """Execute definitions, never the configured application/module imports."""
-    source = ROOT / "serverware/operator_google_managed_readiness.py"
+    source = ROOT / "catchplate/operator_google_managed_readiness.py"
     tree = ast.parse(source.read_text(), filename=str(source))
     functions = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
     required = {"capture_start", "require_start", "_require", "_digest", "_identity", "observe"}
@@ -55,16 +55,16 @@ def definitions():
         raise AssertionError("actual consent helper definitions are missing")
     selected = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)]
         + [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.Assign))], type_ignores=[])
-    namespace = {"__name__": "inert_actual_consent_helpers", "__package__": "serverware", "re": re, "uuid": uuid}
+    namespace = {"__name__": "inert_actual_consent_helpers", "__package__": "catchplate", "re": re, "uuid": uuid}
     exec(compile(ast.fix_missing_locations(selected), str(source), "exec"), namespace)
-    schema = ROOT / "serverware/operator_catalog_schema.py"
+    schema = ROOT / "catchplate/operator_catalog_schema.py"
     classes = [node for node in ast.parse(schema.read_text()).body
         if isinstance(node, ast.ClassDef) and node.name == "CatalogConflict"]
     if len(classes) != 1:
         raise AssertionError("actual CatalogConflict class is missing")
     errors = {}
     exec(compile(ast.Module(body=classes, type_ignores=[]), str(schema), "exec"), errors)
-    custody = ast.parse((ROOT / "serverware/operator_provider_custody.py").read_text())
+    custody = ast.parse((ROOT / "catchplate/operator_provider_custody.py").read_text())
     versions = [ast.literal_eval(node.value) for node in custody.body if isinstance(node, ast.Assign)
         and any(isinstance(target, ast.Name) and target.id == "MAX_VERSIONS" for target in node.targets)]
     if len(versions) != 1 or type(versions[0]) is not int:
@@ -77,10 +77,10 @@ def owners(**modules):
     """Record any attempt to leave the explicitly inert owner inventory."""
     forbidden, effects, original_import = [], [], builtins.__import__
     def guarded(name, globals=None, locals=None, fromlist=(), level=0):
-        requested = (["serverware." + item for item in fromlist if item != "*"]
-            if name == "serverware" else [name])
+        requested = (["catchplate." + item for item in fromlist if item != "*"]
+            if name == "catchplate" else [name])
         for item in requested:
-            if item.startswith("serverware.") and item.removeprefix("serverware.") not in modules:
+            if item.startswith("catchplate.") and item.removeprefix("catchplate.") not in modules:
                 forbidden.append(item)
                 raise AssertionError("configured owner import refused by inert test")
         return original_import(name, globals, locals, fromlist, level)
@@ -88,9 +88,9 @@ def owners(**modules):
         effects.append(True)
         raise AssertionError("network or SQLite open refused by inert test")
     with ExitStack() as stack:
-        stack.enter_context(patch.dict(sys.modules, {"serverware." + name: value for name, value in modules.items()}))
+        stack.enter_context(patch.dict(sys.modules, {"catchplate." + name: value for name, value in modules.items()}))
         for name, value in modules.items():
-            stack.enter_context(patch.object(serverware, name, value, create=True))
+            stack.enter_context(patch.object(catchplate, name, value, create=True))
         for target in ("sqlite3.connect", "socket.socket", "socket.create_connection", "socket.getaddrinfo",
                 "http.client.HTTPConnection", "http.client.HTTPSConnection"):
             stack.enter_context(patch(target, side_effect=no_effect))
@@ -121,7 +121,7 @@ class ConsentAdmissionTests(unittest.TestCase):
             "operator_provider_custody": SimpleNamespace(MAX_VERSIONS=self.maximum_versions),
             "operator_publication": SimpleNamespace(assert_not_held=Mock(), assert_held=self.exclusive_owner),
             "operator_demo_store": SimpleNamespace(loaded_gate_status=self.http),
-            "config": SimpleNamespace(DB_PATH=Path("/inert/not-opened/serverware.sqlite3")),
+            "config": SimpleNamespace(DB_PATH=Path("/inert/not-opened/catchplate.sqlite3")),
         }
 
     def tearDown(self):

@@ -1689,7 +1689,7 @@ impl DockerLaneLedgerV12 {
         }
         let mut cleanup = DockerPlanCleanupRecordV12 {
             version:
-                "serverware/private-dind-plan-cleanup/v12"
+                "catchplate/private-dind-plan-cleanup/v12"
                     .to_owned(),
             boot_id_sha256: self.boot_id_sha256,
             plan_id,
@@ -1809,7 +1809,7 @@ impl DockerLaneLedgerV12 {
             &canonical_json_bytes_v11(&serde_json::json!({
                 "planId": plan_id,
                 "receipts": aggregate,
-                "version": "serverware/private-dind-scoped-terminal/v12",
+                "version": "catchplate/private-dind-scoped-terminal/v12",
             }))?,
         );
         if computed_terminal_sha256 != observed_terminal_sha256 {
@@ -2406,7 +2406,7 @@ impl DockerLaneLedgerV12 {
     ) -> PathBuf {
         let identity = sha256(
             &[
-                b"serverware/private-dind-destruction-transaction/v12\0"
+                b"catchplate/private-dind-destruction-transaction/v12\0"
                     .as_slice(),
                 owner_namespace.as_bytes(),
                 b"\0",
@@ -2426,7 +2426,7 @@ impl DockerLaneLedgerV12 {
     ) -> PathBuf {
         let identity = sha256(
             &[
-                b"serverware/private-dind-readiness-authority/v12\0"
+                b"catchplate/private-dind-readiness-authority/v12\0"
                     .as_slice(),
                 plan_id.as_slice(),
                 capability_sha256.as_slice(),
@@ -2451,7 +2451,7 @@ impl DockerLaneLedgerV12 {
     ) -> PathBuf {
         let identity = sha256(
             &[
-                b"serverware/private-dind-generation-path/v12\0"
+                b"catchplate/private-dind-generation-path/v12\0"
                     .as_slice(),
                 owner_namespace.as_bytes(),
                 b"\0",
@@ -2518,7 +2518,7 @@ impl DockerLaneLedgerV12 {
         cleanup: &DockerPlanCleanupRecordV12,
     ) -> Result<()> {
         if cleanup.version
-                != "serverware/private-dind-plan-cleanup/v12"
+                != "catchplate/private-dind-plan-cleanup/v12"
             || cleanup.boot_id_sha256 == [0; 32]
             || cleanup.plan_id == [0; 32]
             || cleanup.request_sha256_canonical == [0; 32]
@@ -2587,7 +2587,7 @@ impl DockerLaneLedgerV12 {
         observation: &DockerGenerationDestructionObservationV12,
     ) -> Result<()> {
         if observation.version
-            != "serverware/private-dind-destruction-observation/v12"
+            != "catchplate/private-dind-destruction-observation/v12"
             || observation.boot_id_sha256 != self.boot_id_sha256
             || observation.plan_id == [0; 32]
             || observation.capability_sha256 == [0; 32]
@@ -2792,7 +2792,7 @@ impl DockerLaneLedgerV12 {
         if canonical_json_bytes_v11(&receipt_value)?
                 != exact_receipt
             || receipt.version
-                != "serverware/private-dind-terminal-destruction/v12"
+                != "catchplate/private-dind-terminal-destruction/v12"
             || receipt.trust_profile
                 != "trusted-host-userspace-digest-no-ima"
             || receipt.plan_id != generation.plan_id
@@ -2873,7 +2873,7 @@ impl DockerLaneLedgerV12 {
                 )
             })?;
         if recovery.version
-                != "serverware/private-dind-legacy-destruction-recovery/v12"
+                != "catchplate/private-dind-legacy-destruction-recovery/v12"
             || recovery.recovery_boot_id_sha256
                 == [0; 32]
             || recovery.plan_id != generation.plan_id
@@ -3354,7 +3354,7 @@ impl DockerOwnershipLedgerV11 {
             ));
         }
         lease.set_len(0)?;
-        (&lease).write_all(b"serverware/docker-ownership-ledger/v12\n")?;
+        (&lease).write_all(b"catchplate/docker-ownership-ledger/v12\n")?;
         lease.sync_all()?;
         File::open(root)?.sync_all()?;
         Ok(Self {
@@ -4041,7 +4041,7 @@ impl DockerOwnershipLedgerV11 {
             current.uncertainty =
                 Some(DockerMutationUncertaintyV12::PostSendUncertain);
             current.reconciliation_sha256 = Some(sha256(
-                b"serverware/docker-reconciliation-required/v12",
+                b"catchplate/docker-reconciliation-required/v12",
             ));
             current.revision = current.revision.saturating_add(1);
             self.write_mutation(&request_path, &current, false)?;
@@ -4091,7 +4091,7 @@ impl DockerOwnershipLedgerV11 {
                         &current,
                         if observed.observation_sha256 == [0; 32] {
                             sha256(
-                                b"serverware/docker-network-observation-absent/v12",
+                                b"catchplate/docker-network-observation-absent/v12",
                             )
                         } else {
                             observed.observation_sha256
@@ -4798,7 +4798,7 @@ impl DockerOwnershipLedgerV11 {
         )?;
         let identity = sha256(
             &[
-                b"serverware/docker-network-membership-path/v12\0"
+                b"catchplate/docker-network-membership-path/v12\0"
                     .as_slice(),
                 network_logical_id.as_bytes(),
                 b"\0",
@@ -4846,7 +4846,7 @@ impl DockerOwnershipLedgerV11 {
         )?;
         let identity = sha256(
             &[
-                b"serverware/docker-oci-closure-path/v12\0".as_slice(),
+                b"catchplate/docker-oci-closure-path/v12\0".as_slice(),
                 image_id.as_bytes(),
             ]
             .concat(),

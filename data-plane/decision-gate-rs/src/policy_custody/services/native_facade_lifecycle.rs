@@ -2,7 +2,7 @@
 //! parent. Neither these records nor a successful exchange are native grants.
 use super::*;
 use guest::native_guest::{driver_lifecycle::wire, retrieval_peer as packet};
-use serverware_decision_gate::native_serving_privileges;
+use catchplate_decision_gate::native_serving_privileges;
 use std::io::{Read,Seek,SeekFrom};
 use std::os::fd::{AsFd,AsRawFd,FromRawFd,OwnedFd};
 use std::os::unix::fs::MetadataExt;
@@ -10,7 +10,7 @@ use std::sync::{Arc,Mutex};
 #[path="native_facade_receiver.rs"] pub(super) mod facade;
 #[path="native_constructed_driver.rs"] pub(super) mod constructed;
 
-const API:&str="serverware.nativeShadowCustodyLifecycleReceiver/v1";
+const API:&str="catchplate.nativeShadowCustodyLifecycleReceiver/v1";
 fn refused<T>(_:T)->String{"native custody lifecycle ownership is unavailable".into()}
 fn require(value:bool)->Result<(),String>{if value{Ok(())}else{Err(refused(()))}}
 fn ns(value:&str)->Result<u64,String>{
@@ -47,7 +47,7 @@ impl Channel {
         ->Result<(Vec<u8>,Vec<OwnedFd>),String>{
         self.live(deadline)?;
         require(socket.is_none() || matches!(self.configuration.api_version.as_str(),
-            "serverware.nativeShadowCustodyLifecycleReceiver/v2"|"serverware.nativeShadowCustodyLifecycleReceiver/v3"))?;
+            "catchplate.nativeShadowCustodyLifecycleReceiver/v2"|"catchplate.nativeShadowCustodyLifecycleReceiver/v3"))?;
         let sequence=self.sequence.checked_add(1).ok_or_else(||refused(()))?;
         let request=wire::Request{api_version:wire::API.into(),operation:operation.into(),sequence,
             configuration_sha256:self.configuration.driver_configuration_sha256.clone(),
@@ -104,11 +104,11 @@ impl Prepared {
         require(raw.len()==m.len() as usize && Sha256Digest::compute(&raw)==*expected)?;
         let selected:serde_json::Value=serde_json::from_slice(&raw).map_err(refused)?;
         if !matches!(selected.get("apiVersion").and_then(serde_json::Value::as_str),
-            Some(API)|Some("serverware.nativeShadowCustodyLifecycleReceiver/v2")|Some("serverware.nativeShadowCustodyLifecycleReceiver/v3")){return Ok(None);}
+            Some(API)|Some("catchplate.nativeShadowCustodyLifecycleReceiver/v2")|Some("catchplate.nativeShadowCustodyLifecycleReceiver/v3")){return Ok(None);}
         let configuration:Configuration=exact(&raw)?;
         let startup=ns(&configuration.startup_deadline_boottime_ns)?;
         let original_lifetime=ns(&configuration.lifetime_deadline_boottime_ns)?;
-        require(matches!(configuration.api_version.as_str(),API|"serverware.nativeShadowCustodyLifecycleReceiver/v2"|"serverware.nativeShadowCustodyLifecycleReceiver/v3")
+        require(matches!(configuration.api_version.as_str(),API|"catchplate.nativeShadowCustodyLifecycleReceiver/v2"|"catchplate.nativeShadowCustodyLifecycleReceiver/v3")
             && now()?<startup && startup<=root.deadline()
             && configuration.cleanup_reserve_nanos>=1_000_000 && configuration.cleanup_reserve_nanos<=5_000_000_000)?;
         let lifetime=original_lifetime.checked_sub(configuration.cleanup_reserve_nanos).ok_or_else(||refused(()))?;
@@ -127,7 +127,7 @@ impl Prepared {
         let mut channel=Channel{socket,parent_pidfd,parent,process:guest_original::Process::capture().map_err(refused)?,
             configuration,startup,lifetime,prepared_original:Vec::new(),sequence:0,failed:false};
         let prepared_raw=channel.exchange("prepare",startup)?;let prepared:wire::PreparedOriginal=exact(&prepared_raw)?;
-        require(prepared.api_version=="serverware.nativeShadowDriverLifecyclePrepared/v1"
+        require(prepared.api_version=="catchplate.nativeShadowDriverLifecyclePrepared/v1"
             && prepared.configuration_sha256==channel.configuration.driver_configuration_sha256
             && prepared.window_sha256==channel.configuration.driver_window_sha256
             && prepared.parent.process_id==channel.parent.pid && prepared.parent.start_time_ticks==channel.parent.start_time_ticks
@@ -141,14 +141,14 @@ impl Prepared {
         require(self.channel.lifetime<=serving.deadline())?;
         let raw=self.channel.exchange("bind",self.channel.startup)?;let bound:wire::BoundOriginal=exact(&raw)?;
         let actual=self.channel.process.native_binding().map_err(refused)?;
-        require(bound.api_version=="serverware.nativeShadowDriverLifecycleBound/v1"
+        require(bound.api_version=="catchplate.nativeShadowDriverLifecycleBound/v1"
             && bound.prepared_sha256==Sha256Digest::compute(&self.channel.prepared_original)
             && bound.gate_process_id==actual.0 && bound.gate_start_time_ticks==actual.1
             && bound.uid==native_serving_privileges::UID && bound.gid==native_serving_privileges::GID
             && ns(&bound.observed_at_boottime_ns)?<=now()?)?;
         serving.check()?;
         let selected=matches!(self.channel.configuration.api_version.as_str(),
-            "serverware.nativeShadowCustodyLifecycleReceiver/v2"|"serverware.nativeShadowCustodyLifecycleReceiver/v3");
+            "catchplate.nativeShadowCustodyLifecycleReceiver/v2"|"catchplate.nativeShadowCustodyLifecycleReceiver/v3");
         let owner=Arc::new(Owner{channel:Mutex::new(self.channel),serving,source_sha256:self.source_sha256,
             bound_original:raw,facade:Mutex::new(None)});
         if selected {
@@ -180,7 +180,7 @@ impl Owner {
         channel.failed=true; // An invalid inner original must also poison continuation.
         let observation:wire::Observation=exact(&raw)?;
         let prepared:wire::PreparedOriginal=exact(&channel.prepared_original)?;
-        require(observation.api_version=="serverware.nativeShadowDriverLifecycleObservation/v1"
+        require(observation.api_version=="catchplate.nativeShadowDriverLifecycleObservation/v1"
             && observation.configuration_sha256==channel.configuration.driver_configuration_sha256
             && observation.window_sha256==channel.configuration.driver_window_sha256
             && observation.bootstrap_observation_sha256==channel.configuration.bootstrap_observation_sha256

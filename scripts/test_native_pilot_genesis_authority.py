@@ -14,10 +14,10 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 import native_pilot_authority_runtime_entrypoint as entry
-from serverware import native_pilot_genesis_authority as cli
-from serverware import native_pilot_genesis_authority_channel as channel
-from serverware import native_pilot_genesis_execution_protocol as protocol
-from serverware import native_pilot_genesis_jobs as jobs
+from catchplate import native_pilot_genesis_authority as cli
+from catchplate import native_pilot_genesis_authority_channel as channel
+from catchplate import native_pilot_genesis_execution_protocol as protocol
+from catchplate import native_pilot_genesis_jobs as jobs
 
 p = protocol.p
 
@@ -116,7 +116,7 @@ class GenesisAuthorityTests(unittest.TestCase):
 
     def test_no_reply_substitution_future_job_or_supplied_path(self):
         _, raw = request()
-        for field, value in (("apiVersion", "serverware.nativePilotAuthorityJobReply/v1"),
+        for field, value in (("apiVersion", "catchplate.nativePilotAuthorityJobReply/v1"),
                 ("sequence", 2), ("sequence", True), ("job", jobs.JOBS[1].name),
                 ("requestSha256", p.sha(b"another request")), ("inputSha256", "sha256:" + "x" * 64),
                 ("approvalSha256", "sha256:" + "A" * 64), ("path", "/tmp/approval.json")):
@@ -147,7 +147,7 @@ class GenesisAuthorityTests(unittest.TestCase):
                 protocol.approval(p.canonical(altered), request_raw=raw, input_sha256=value["inputSha256"])
 
     def test_source_runtime_admission_precedes_keys_and_cleanup_precedes_capability_close(self):
-        tree = ast.parse((ROOT / "serverware/native_pilot_genesis_authority.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/native_pilot_genesis_authority.py").read_text())
         main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
         calls = {ast.unparse(node.func): node.lineno for node in ast.walk(main) if isinstance(node, ast.Call)}
         self.assertLess(calls["runtime.admit"], calls["executor.prepare_keys"])

@@ -189,7 +189,7 @@ def main():
             except (Exception, KeyboardInterrupt):
                 clean = False
         if failed is not None or not clean:
-            value = {"schema": "serverware.guidedHostedProvisionFailure/v1", "ok": False,
+            value = {"schema": "catchplate.guidedHostedProvisionFailure/v1", "ok": False,
                 "stage": failure_stage or "cleanup", "exceptionType": failed, "cleanup": clean,
                 "diagnostic": diagnostic, "journeyExecuted": False, "nativeAuthority": False}
         else:

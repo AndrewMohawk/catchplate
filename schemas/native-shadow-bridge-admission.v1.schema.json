@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-bridge-admission.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-bridge-admission.v1.schema.json",
   "$ref": "#/$defs/verifierConfiguration",
   "$defs": {
     "bootstrapConfiguration": {
@@ -18,7 +18,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowDriverBootstrapConfiguration/v3"
+          "const": "catchplate.nativeShadowDriverBootstrapConfiguration/v3"
         },
         "bootstrapAuthority": {
           "$ref": "native-shadow-driver-continuation.v1.schema.json#/$defs/configuration/properties/bootstrapAuthority"
@@ -52,7 +52,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowDriverContinuationPreparation/v2"
+          "const": "catchplate.nativeShadowDriverContinuationPreparation/v2"
         },
         "keyTransport": {
           "$ref": "native-shadow-driver-continuation.v1.schema.json#/$defs/preparation/properties/keyTransport"
@@ -78,7 +78,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowDriverScope/v3"
+          "const": "catchplate.nativeShadowDriverScope/v3"
         },
         "configurationSha256": {
           "$ref": "native-shadow-driver-continuation.v1.schema.json#/$defs/scopePayload/properties/configurationSha256"
@@ -130,7 +130,7 @@
           "$ref": "native-shadow-driver-continuation.v1.schema.json#/$defs/scope/properties/signatureBase64url"
         }
       },
-      "description": "Same original bootstrap lifetime and complete phase-two originals. Ed25519 signs serverware.nativeShadowDriverScope.signature/v3 followed by NUL and the full canonical payload. No old scope fallback."
+      "description": "Same original bootstrap lifetime and complete phase-two originals. Ed25519 signs catchplate.nativeShadowDriverScope.signature/v3 followed by NUL and the full canonical payload. No old scope fallback."
     },
     "admissionPayload": {
       "type": "object",
@@ -157,7 +157,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowBridgeAdmissionAssignment/v1"
+          "const": "catchplate.nativeShadowBridgeAdmissionAssignment/v1"
         },
         "purpose": {
           "const": "native-shadow-context-and-production-admission"
@@ -251,7 +251,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowBridgeAdmissionScope/v1"
+          "const": "catchplate.nativeShadowBridgeAdmissionScope/v1"
         },
         "purpose": {
           "const": "native-shadow-context-and-production-admission"
@@ -325,7 +325,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowBridgeAdmissionStatement/v1"
+          "const": "catchplate.nativeShadowBridgeAdmissionStatement/v1"
         },
         "purpose": {
           "const": "native-shadow-context-and-production-admission"
@@ -394,7 +394,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowBridgeAdmissionEvidence/v1"
+          "const": "catchplate.nativeShadowBridgeAdmissionEvidence/v1"
         },
         "statement": {
           "$ref": "#/$defs/statement"
@@ -415,7 +415,7 @@
           "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/evidence/properties/nonceBase64url"
         }
       },
-      "description": "ONE genuine NSM key quote. Fixed user data prefix serverware/native-shadow-bridge-admission-evidence/v1 then NUL then four raw SHA256 values: canonical statement, full key root, local key root, canonical ordered possession proofs. Same one-shot latch as older exclusive purposes."
+      "description": "ONE genuine NSM key quote. Fixed user data prefix catchplate/native-shadow-bridge-admission-evidence/v1 then NUL then four raw SHA256 values: canonical statement, full key root, local key root, canonical ordered possession proofs. Same one-shot latch as older exclusive purposes."
     },
     "verifierConfiguration": {
       "type": "object",
@@ -437,7 +437,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowNitroVerifierConfiguration/v3"
+          "const": "catchplate.nativeShadowNitroVerifierConfiguration/v3"
         },
         "uid": {
           "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/verifierConfiguration/properties/uid"
@@ -508,7 +508,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowBridgeContextResult/v1"
+          "const": "catchplate.nativeShadowBridgeContextResult/v1"
         },
         "purpose": {
           "const": "native-shadow-context-and-production-admission"
@@ -591,7 +591,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowBridgeContextVerifierResult/v1"
+          "const": "catchplate.nativeShadowBridgeContextVerifierResult/v1"
         },
         "payload": {
           "$ref": "#/$defs/contextResultPayload"
@@ -611,7 +611,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowBridgeAdmissionVerifierResult/v1"
+          "const": "catchplate.nativeShadowBridgeAdmissionVerifierResult/v1"
         },
         "contextResultOriginal": {
           "type": "string",

@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-enrollment-policy-requirements.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-enrollment-policy-requirements.v1.schema.json",
   "title": "Native enrollment public policy requirements v1",
   "description": "Exact Rust Snapshot projection: sorted compact ensure_ascii JSON without LF, at most 65536 original bytes, complete-or-refuse with at most128 entitled routes sorted by unique ID. Canonical strings, CIDRs, methods and path components originate in the actual compiled policy. Secret header/authentication values and arbitrary adapter/constraint/JIT values are absent, represented only by commitments and external-provisioning requirements. A signed setup commits the exact original, but parsing or signature admission alone proves neither current Snapshot provenance nor target authentication, provider permission, canary authorization or installation.",
   "type": "object", "additionalProperties": false,
   "required": ["apiVersion", "policy", "principal", "routes"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeEnrollmentPolicyRequirements/v1"},
+    "apiVersion": {"const": "catchplate.nativeEnrollmentPolicyRequirements/v1"},
     "policy": {"$ref": "#/$defs/policy"},
     "principal": {"$ref": "#/$defs/principal"},
     "routes": {"type": "array", "maxItems": 128, "items": {"$ref": "#/$defs/route"}}

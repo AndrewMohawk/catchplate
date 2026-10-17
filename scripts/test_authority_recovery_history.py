@@ -14,11 +14,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_recovery_history as history
-from serverware import authority_index_projection as projection
-from serverware.authority_index_contract import IndexLeaf, KeyInterval
-from serverware.authority_index_heads import CapturedIndexHead
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_recovery_history as history
+from catchplate import authority_index_projection as projection
+from catchplate.authority_index_contract import IndexLeaf, KeyInterval
+from catchplate.authority_index_heads import CapturedIndexHead
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 from test_authority_index_join import expected_profile, expected_leaf, expected_interval
 from test_authority_index_range import IndependentIndex
 from test_authority_index_range_count import count_frontier

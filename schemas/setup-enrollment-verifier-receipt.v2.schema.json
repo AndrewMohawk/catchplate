@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/setup-enrollment-verifier-receipt.v2.schema.json",
-  "title": "Serverware Enrollment Verifier Receipt v2",
+  "$id": "https://catchplate.invalid/schemas/setup-enrollment-verifier-receipt.v2.schema.json",
+  "title": "Catchplate Enrollment Verifier Receipt v2",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "kind", "statement", "signing_key_id", "signature"],
   "properties": {
-    "apiVersion": {"const": "serverware.enrollmentVerifierReceipt/v2"},
+    "apiVersion": {"const": "catchplate.enrollmentVerifierReceipt/v2"},
     "kind": {"const": "EnrollmentVerifierReceipt"},
     "statement": {"$ref": "#/$defs/statement"},
     "signing_key_id": {"$ref": "#/$defs/sha256"},

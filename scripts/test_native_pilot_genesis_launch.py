@@ -17,12 +17,12 @@ from cryptography.exceptions import InvalidSignature
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_genesis_closure_authority as closure
-from serverware import native_pilot_genesis_key_profile as keys
-from serverware import native_pilot_genesis_launch_profile as launch
-from serverware import native_pilot_genesis_native_service_authority as services
-from serverware import native_pilot_genesis_verifier_authority as verifier
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_genesis_closure_authority as closure
+from catchplate import native_pilot_genesis_key_profile as keys
+from catchplate import native_pilot_genesis_launch_profile as launch
+from catchplate import native_pilot_genesis_native_service_authority as services
+from catchplate import native_pilot_genesis_verifier_authority as verifier
 import test_native_pilot_genesis_closure_authority as closure_tests
 import test_native_pilot_genesis_coordinator_runtime as coordinator_tests
 import test_native_pilot_genesis_key_authority as key_tests
@@ -103,10 +103,10 @@ def _input(base, role, row, contexts, clocks):
     trust = g.document(approved["trustOriginal"].encode("ascii"), 1024 * 1024)
     public = {"deliveryConfiguration": g.canonical(source["configuration"]), "delivery": source["raw"],
         "runtime": source["runtime_raw"], "trust": approved["trustOriginal"].encode("ascii"),
-        "timeBootstrap": g.canonical({"apiVersion": "serverware.nativeShadowGuestTimeBootstrap/v1",
+        "timeBootstrap": g.canonical({"apiVersion": "catchplate.nativeShadowGuestTimeBootstrap/v1",
             "guest": role_authorization["payload"]["guest"], "signingKeyId": trust["timeKey"]["keyId"], **clock}),
         "assignment": approved["assignmentOriginal"].encode("ascii"), "closure": closure_raw,
-        "keys": g.canonical({"apiVersion": "serverware.nativeShadowRoleKeys/v2", "authorization": role_authorization}),
+        "keys": g.canonical({"apiVersion": "catchplate.nativeShadowRoleKeys/v2", "authorization": role_authorization}),
         "encryptedKeys": row["encrypted_raw"], "admission": row["pair"]["admissionOriginal"],
         "verifierTransport": row["verifier_raw"], "encryptedInventory": row["ciphertext_raw"]}
     operation = launch.SELECTORS[role][1]
@@ -123,10 +123,10 @@ def _input(base, role, row, contexts, clocks):
     pins["encryptedInventory"] = payload["credentials"][0]["original"]
     pins["verifierTransport"]["path"] = verifier.PATHS[role]
     # Independent literal native selector spelling: no producer build shortcut.
-    api, field = {"publicationGenesisRetrieval": ("serverware.nativeShadowPublicationGenesisRetrievalGuestLaunch/v1", "retrieval"),
-        "publicationGenesis": ("serverware.nativeShadowPublicationGenesisGuestLaunch/v1", "publication"),
-        "publicationGenesisCoordinator": ("serverware.nativeShadowPublicationGenesisCoordinatorGuestLaunch/v2", None)}[role]
-    selected = {"apiVersion": api, "keyAdmission": {"apiVersion": "serverware.nativeShadowGuestLaunch/v1",
+    api, field = {"publicationGenesisRetrieval": ("catchplate.nativeShadowPublicationGenesisRetrievalGuestLaunch/v1", "retrieval"),
+        "publicationGenesis": ("catchplate.nativeShadowPublicationGenesisGuestLaunch/v1", "publication"),
+        "publicationGenesisCoordinator": ("catchplate.nativeShadowPublicationGenesisCoordinatorGuestLaunch/v2", None)}[role]
+    selected = {"apiVersion": api, "keyAdmission": {"apiVersion": "catchplate.nativeShadowGuestLaunch/v1",
         **{name: pins[name] for name in ("deliveryConfiguration", "delivery", "trust", "timeBootstrap", "assignment", "closure",
             "keys", "encryptedKeys", "admission", "verifierTransport")}}}
     if field: selected[field] = pins["serviceGrant"]
@@ -189,7 +189,7 @@ class GenesisLaunchTests(unittest.TestCase):
 
     def test_closed_roles_profiles_and_required_context_rosters(self):
         role = keys.ROLES[-1]
-        for change in ({"apiVersion": "serverware.nativePilotLaunchBundle/v1"}, {"role": "bridge"}, {"fallback": None}):
+        for change in ({"apiVersion": "catchplate.nativePilotLaunchBundle/v1"}, {"role": "bridge"}, {"fallback": None}):
             self.refused(role, {**self.f["inputs"][role], **change})
         value = copy.deepcopy(self.f["inputs"][role]); del value["serviceContexts"]["retrieval"]; self.refused(role, value)
         role = keys.ROLES[0]; value = copy.deepcopy(self.f["inputs"][role])

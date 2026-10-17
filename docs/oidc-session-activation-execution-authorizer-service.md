@@ -20,7 +20,7 @@ The process is fixed to mode `oidc-session-activation-execution-authorizer`,
 UID/GID `65506`, no supplementary groups and the exact eight-variable child
 environment. The listener accepts only peer UID/GID `65532`; clients authenticate
 the root-created listener as `0:0`. The socket is fixed at
-`/run/serverware/oidc-session-activation-execution/authorizer.sock`.
+`/run/catchplate/oidc-session-activation-execution/authorizer.sock`.
 
 The seven inherited descriptors are root `198`, role bootstrap `199`, listener
 `200`, receiving-custody original `201`, bundle key `202`, delivery-custody key

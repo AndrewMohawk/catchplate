@@ -8,18 +8,18 @@ The current source remains unbuilt and unexecuted.
 
 ## Version and field contract
 
-The parent signed `serverware.signedControlPlaneEnrollmentBootstrap/v3` and
-payload `serverware.controlPlaneEnrollmentBootstrap/v3` remain unchanged and
+The parent signed `catchplate.signedControlPlaneEnrollmentBootstrap/v3` and
+payload `catchplate.controlPlaneEnrollmentBootstrap/v3` remain unchanged and
 bounded to 4 MiB. Their `registrationExecution` field may still be null to
 disable the caller purpose. Existing nested v1 remains authorizer-only; nested
 v2 adds reservation only. Neither is automatically promoted.
 
-The explicit nested `serverware.controlPlaneRegistrationExecution/v3` is a
+The explicit nested `catchplate.controlPlaneRegistrationExecution/v3` is a
 closed, twelve-field object. All fields are required and none is nullable:
 
 | Field | Contract |
 | --- | --- |
-| `schema` | Exactly `serverware.controlPlaneRegistrationExecution/v3` |
+| `schema` | Exactly `catchplate.controlPlaneRegistrationExecution/v3` |
 | `executionCallerPrivateKeyFd` | Exactly `203`; unchanged dedicated caller key |
 | `currentRootEnrollment` | Exact original `{base64Url, byteCount}`, at most 128 KiB |
 | `grantEnrollment` | Exact original `{base64Url, byteCount}`, at most 16 KiB |
@@ -34,7 +34,7 @@ closed, twelve-field object. All fields are required and none is nullable:
 
 Each endpoint has exactly `socketPath`, `requestTimeoutSeconds`, `listenerUid`
 and `listenerGid`. Its path is its named socket beneath
-`/run/serverware/registration-execution/`; timeout is an integer from 1 through
+`/run/catchplate/registration-execution/`; timeout is an integer from 1 through
 30 seconds; listener UID/GID are exactly `0:0`. These pin the root manager that
 activated the listener, not the accepting service process. Paths, peers and
 timeouts cannot be selected from a response or overridden through environment
@@ -49,7 +49,7 @@ integers. `statePredecessor.sequence` may be zero, whereas
 
 ## One independently pinned operation
 
-The [actual nested verifier](../serverware/control_plane_registration_execution_bootstrap.py)
+The [actual nested verifier](../catchplate/control_plane_registration_execution_bootstrap.py)
 authenticates the three original enrollments on the parent's existing work and
 retains their configuration, generation, caller-purpose and distinct-key joins.
 Capacity comes from the genuine current-root enrollment, not the configuration
@@ -79,7 +79,7 @@ unchanged lifetime, and enforce its durable delivery/uncertainty rules.
 
 ## Delivery and authority boundary
 
-The [early descriptor projection](../serverware/authority_fd_entrypoint.py)
+The [early descriptor projection](../catchplate/authority_fd_entrypoint.py)
 checks the exact versioned shape, fixed endpoints, scalar bounds and same-launch
 sequence/fence relationship before selecting the existing caller-key slot.
 It does not replace the child's signature, enrollment or generation checks.

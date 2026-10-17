@@ -18,10 +18,10 @@ def percentile(values: list[float], pct: float) -> float:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Benchmark Serverware proxy overhead against the demo echo route.")
+    parser = argparse.ArgumentParser(description="Benchmark Catchplate proxy overhead against the demo echo route.")
     parser.add_argument("--url", default="https://demo-upstream:8443/echo")
     parser.add_argument("--proxy", default="http://localhost:8080")
-    parser.add_argument("--ca", default=".tmp/serverware-ca.pem")
+    parser.add_argument("--ca", default=".tmp/catchplate-ca.pem")
     parser.add_argument("--requests", type=int, default=100)
     parser.add_argument("--warmup", type=int, default=10)
     args = parser.parse_args()
@@ -35,7 +35,7 @@ def main() -> None:
     latencies_ms: list[float] = []
     total = args.warmup + args.requests
     for index in range(total):
-        request = urllib.request.Request(args.url, headers={"X-Serverware-Agent": "demo-agent"})
+        request = urllib.request.Request(args.url, headers={"X-Catchplate-Agent": "demo-agent"})
         start = time.perf_counter()
         with opener.open(request, timeout=15) as response:
             body = response.read()

@@ -6,9 +6,9 @@ use base64::{
 use std::collections::BTreeSet;
 
 const NESTED_AUTHORITY_SIGNING_DOMAIN_NAME: &str =
-    "serverware.responseV2.nestedAuthorityArtifact.signature/v1";
+    "catchplate.responseV2.nestedAuthorityArtifact.signature/v1";
 const NESTED_AUTHORITY_SIGNING_DOMAIN: &[u8] =
-    b"SERVERWARE\0RESPONSE-V2-NESTED-AUTHORITY\0V1\0";
+    b"CATCHPLATE\0RESPONSE-V2-NESTED-AUTHORITY\0V1\0";
 
 pub(super) struct NestedArtifactExpectation {
     pub(super) artifact_type: &'static str,
@@ -92,9 +92,9 @@ pub(super) struct ResponseObservationV2VerifiedNestedAuthorityArtifacts {
 pub(super) fn response_observation_v2_preverify_nested_authority_artifacts(
     client: &ResponseObservationV2Client,
     release_preparation:
-        &serverware_decision_gate::SignedAuthorityArtifact,
+        &catchplate_decision_gate::SignedAuthorityArtifact,
     prerequisite_artifacts:
-        &[serverware_decision_gate::SignedAuthorityArtifact],
+        &[catchplate_decision_gate::SignedAuthorityArtifact],
     expected_attempt_id: &str,
     expected_final_revision: u64,
     expected_fencing_token: u64,
@@ -159,16 +159,16 @@ pub(super) fn response_observation_v2_preverify_nested_authority_artifacts(
 pub(super) fn response_observation_v2_verify_nested_authority_envelope(
     client: &ResponseObservationV2Client,
     descriptor:
-        &serverware_decision_gate::CanonicalAuthorityEnvelopeDescriptorV2,
+        &catchplate_decision_gate::CanonicalAuthorityEnvelopeDescriptorV2,
     release_preparation:
-        &serverware_decision_gate::SignedAuthorityArtifact,
+        &catchplate_decision_gate::SignedAuthorityArtifact,
     prerequisite_artifacts:
-        &[serverware_decision_gate::SignedAuthorityArtifact],
+        &[catchplate_decision_gate::SignedAuthorityArtifact],
     expected_public_envelope: &V2CanonicalFinalEnvelopeV1,
     verified: &ResponseObservationV2VerifiedNestedAuthorityArtifacts,
     verification_epoch_ms: u64,
 ) -> Result<(), ResponseObservationV2TransactionError> {
-    serverware_decision_gate::validate_canonical_authority_envelope(
+    catchplate_decision_gate::validate_canonical_authority_envelope(
         descriptor,
     )
     .map_err(|_| ResponseObservationV2TransactionError::InvalidResponse)?;
@@ -231,7 +231,7 @@ pub(super) fn response_observation_v2_verify_nested_authority_envelope(
 
 pub(super) fn verify_nested_authority_signature(
     client: &ResponseObservationV2Client,
-    artifact: &serverware_decision_gate::SignedAuthorityArtifact,
+    artifact: &catchplate_decision_gate::SignedAuthorityArtifact,
     expected: &NestedArtifactExpectation,
     expected_attempt_id: &str,
     expected_final_revision: u64,

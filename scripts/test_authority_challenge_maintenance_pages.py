@@ -8,9 +8,9 @@ from pathlib import Path
 import unittest
 from unittest import mock
 
-from serverware import authority_contract as authority
-from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
-from serverware.authority_store import challenge_maintenance_pages as pages
+from catchplate import authority_contract as authority
+from catchplate.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
+from catchplate.authority_store import challenge_maintenance_pages as pages
 
 
 def work():
@@ -143,7 +143,7 @@ class ChallengeMaintenancePageTests(unittest.TestCase):
             self.assertIn(name, calls)
         self.assertFalse(any(name.rsplit(".", 1)[-1] in {"connect", "commit", "rollback", "sleep"} for name in calls))
         self.assertEqual((len(pages.CONTEXT_FIELDS), len(pages.BINDING_FIELDS), len(pages.COLUMNS)), (11, 13, 15))
-        root = Path(__file__).resolve().parents[1] / "serverware"
+        root = Path(__file__).resolve().parents[1] / "catchplate"
         def literal(path, name):
             selected = ast.parse(path.read_text())
             return next(ast.literal_eval(node.value) for node in selected.body

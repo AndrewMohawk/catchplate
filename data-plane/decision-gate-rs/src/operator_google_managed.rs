@@ -13,9 +13,9 @@ use std::io::Read;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
-const FLAG: &str = "SERVERWARE_OPERATOR_MANAGED_GOOGLE_ENABLED";
+const FLAG: &str = "CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED";
 const PATH: &str = "/data/operator-google-configuration.json";
-const SCHEMA: &str = "serverware.operatorGoogleGateConfiguration/v1";
+const SCHEMA: &str = "catchplate.operatorGoogleGateConfiguration/v1";
 const MAX_BYTES: u64 = 32_768;
 const MAX_VERSIONS: u64 = 16; // operator_provider_custody.MAX_VERSIONS
 
@@ -32,7 +32,7 @@ fn selected(flag: Option<&str>, operator: bool, external_google: bool) -> Result
 }
 
 fn external_google_key(name: &str) -> bool {
-    name.starts_with("SERVERWARE_GOOGLE_") || name == "SERVERWARE_OPERATOR_GOOGLE_PROFILE"
+    name.starts_with("CATCHPLATE_GOOGLE_") || name == "CATCHPLATE_OPERATOR_GOOGLE_PROFILE"
 }
 
 pub(super) fn from_environment(operator: bool) -> Result<bool, String> {

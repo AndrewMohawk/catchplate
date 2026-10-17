@@ -15,21 +15,21 @@ availability or successful launch follows from this document.
 
 ## Existing phase and installer
 
-After service-material, the actual [operator](../serverware/native_pilot_operator.py)
+After service-material, the actual [operator](../catchplate/native_pilot_operator.py)
 admits the ordinary grants and endpoint transfers. Its `bridge-runtime` request
 then carries `bridgePreparationOriginal`, `ordinaryGenerationGrants`, `endpointLaunches`,
 `nativeGrantSha256s`, `bridgeJournal`, `cohortObservationOriginal` and
 `ordinaryParked`. The last contains parked PID/start/PIDFD-inode and retained
 target-executable facts, not final-role cgroup, security label or readiness.
 
-[Bridge installation](../serverware/native_pilot_bridge_install.py) already
+[Bridge installation](../catchplate/native_pilot_bridge_install.py) already
 accepts a closed `nativePilotBridgeRuntimeBundle/v1`: `apiVersion`,
 `driverControlSha256`, `driverObservationOriginal`, `runtimeOriginal` and
 `outgoingOriginal`. It retains the real bootstrap control/configuration/window
 and cold original, then exclusively publishes runtime followed by outgoing
 configuration. Runtime is fixed at
-`/etc/serverware/native-pilot-inputs/bridge-runtime.json`; outgoing configuration
-is `/etc/serverware/native-shadow-driver-outgoing.json`. The legacy v9 runtime
+`/etc/catchplate/native-pilot-inputs/bridge-runtime.json`; outgoing configuration
+is `/etc/catchplate/native-shadow-driver-outgoing.json`. The legacy v9 runtime
 keeps its 64 KiB bound and launch/v5. Explicit runtime/v10 uses launch/v6 and a
 4 MiB ceiling, with a 16 MiB bridge bundle; runtime/v11 uses launch/v7 under the
 same bounds and requires the fresh-helper bootstrap manifest. Outgoing remains
@@ -45,7 +45,7 @@ bootstrap original, not a new sample or a renewed window.
 ## Runtime sources, not a literal template
 
 The complete field inventory is `_RUNTIME_FIELDS` in
-[driver outgoing](../serverware/native_shadow_driver_outgoing.py), plus
+[driver outgoing](../catchplate/native_shadow_driver_outgoing.py), plus
 `commitRequest` and `spool`. Its families need these sources:
 
 | Runtime fields | Required source or independent selection |
@@ -211,8 +211,8 @@ composition. Selecting roles or repeating one head is not a substitute. Do not
 infer a complete expanded job count from the existing inventory.
 
 For later composition, the handshake wire API is
-`serverware.policyCustodyTrustedHostService/v4`, while its digest uses
-`serverware.policyCustodyTrustedHostServiceHandshakeRequest/v3`: domain, NUL,
+`catchplate.policyCustodyTrustedHostService/v4`, while its digest uses
+`catchplate.policyCustodyTrustedHostServiceHandshakeRequest/v3`: domain, NUL,
 big-endian u64 canonical-array length and the ten-field canonical array in
 [native order](../data-plane/decision-gate-rs/src/policy_custody/services/common.rs).
 Request/reply operation rights are respectively DRS 0/0, Cleanup 0/0, Recovery
@@ -249,6 +249,6 @@ authorize the bridge runtime.
 
 Broader bridge assembly must still connect the authority, measurement and
 receiver joins above to that actual pending request through the real
-[coordinator process](../serverware/native_pilot_supervisor_process.py). The
+[coordinator process](../catchplate/native_pilot_supervisor_process.py). The
 material handoff is not permission to widen every predecessor to arbitrary
 phases or to count an unsupported runtime template as bridge coverage.

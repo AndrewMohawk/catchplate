@@ -20,7 +20,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts import test_native_pilot_genesis_rendezvous as fixtures
-from serverware import native_pilot_lifecycle as lifecycle
+from catchplate import native_pilot_lifecycle as lifecycle
 
 p = lifecycle.p
 
@@ -76,7 +76,7 @@ class LifecycleSourceControls(unittest.TestCase):
     def test_sender_hash_configuration_and_exact_profile_remain_closed(self):
         value = fixture()
         for field, replacement in (("configurationSha256", p.sha(b"different")),
-                ("listenerSha256", p.sha(b"different")), ("apiVersion", "serverware.nativePilotGenesisListenerRequest/v2"),
+                ("listenerSha256", p.sha(b"different")), ("apiVersion", "catchplate.nativePilotGenesisListenerRequest/v2"),
                 ("sequence", True), ("expiresAtUnixNanos", 9000000001)):
             changed = p.document(value["sender_raw"], 8192) | {field: replacement}
             with self.assertRaises(ValueError): joined(value | {"sender_raw": p.canonical(changed)})
@@ -95,7 +95,7 @@ class LifecycleSourceControls(unittest.TestCase):
 
     def test_no_legacy_intake_or_extra_approval_field_upgrades_selection(self):
         value = fixture()
-        for changed in (value["intake"] | {"apiVersion": "serverware.nativePilotAdoptedIntakeConfiguration/v2"},
+        for changed in (value["intake"] | {"apiVersion": "catchplate.nativePilotAdoptedIntakeConfiguration/v2"},
                 value["intake"] | {"approved": True}):
             with self.assertRaises(ValueError): joined(value, intake=changed)
 

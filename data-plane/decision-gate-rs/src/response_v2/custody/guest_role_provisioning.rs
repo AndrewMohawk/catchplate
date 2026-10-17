@@ -11,9 +11,9 @@ use serde_json::{json,Value};
 use sha2::{Digest,Sha256};
 use std::{collections::{BTreeMap,BTreeSet},io::{Read,Write},path::PathBuf};
 
-const CHANNEL:&str="serverware.nativeRoleKeyProvisionerChannel/v1";
-const REQUEST:&str="serverware.nativeRoleKeyKmsRecipientRequest/v1";
-const RESPONSE:&str="serverware.nativeRoleKeyKmsRecipientCiphertext/v1";
+const CHANNEL:&str="catchplate.nativeRoleKeyProvisionerChannel/v1";
+const REQUEST:&str="catchplate.nativeRoleKeyKmsRecipientRequest/v1";
+const RESPONSE:&str="catchplate.nativeRoleKeyKmsRecipientCiphertext/v1";
 const MAX_KEYS:usize=64;
 #[derive(Deserialize,Serialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -45,14 +45,14 @@ fn decoded(value:&Value,maximum:usize,exact:Option<usize>)->Result<Vec<u8>,Strin
 }
 impl GuestRoleKeyProvisionerConfiguration {
     pub fn validate(&self)->Result<(),String>{
-        ensure(self.api_version=="serverware.nativeGuestRoleKeyProvisioner/v1" && self.kms_parent_port>1023 && self.kms_parent_port!=u32::MAX
+        ensure(self.api_version=="catchplate.nativeGuestRoleKeyProvisioner/v1" && self.kms_parent_port>1023 && self.kms_parent_port!=u32::MAX
             && text(&self.kms_key_id,2048) && self.helper_image.profile=="sealed-memfd-squashfs-v1"
-            && self.helper_image.image_path=="/opt/serverware/native-role-key-provisioner-runtime.squashfs"
-            && self.encrypted_inventory.path==PathBuf::from("/run/serverware-role-key-provisioning/inventory.enc.json"),"role provisioner fixed configuration differs")?;
+            && self.helper_image.image_path=="/opt/catchplate/native-role-key-provisioner-runtime.squashfs"
+            && self.encrypted_inventory.path==PathBuf::from("/run/catchplate-role-key-provisioning/inventory.enc.json"),"role provisioner fixed configuration differs")?;
         for pin in [&self.ciphertext_blob_sha256,&self.kek_sha256,&self.encrypted_inventory.sha256,
             &self.helper_image.image_sha256,&self.helper_image.interpreter_sha256,&self.helper_image.helper_sha256]{ensure(hash(pin),"role provisioner independent digest absent")?;}
         ensure((1..=32).contains(&self.encryption_context.len())&&canonical_ascii_bytes(&self.encryption_context)?.len()<=8192
-            && self.encryption_context.get("serverwarePurpose").map(String::as_str)==Some("guest-role-keys/v1")
+            && self.encryption_context.get("catchplatePurpose").map(String::as_str)==Some("guest-role-keys/v1")
             && self.encryption_context.iter().all(|(key,value)|text(key,1024)&&text(value,1024)),"role provisioning KMS purpose/context differs")
     }
 }
@@ -83,7 +83,7 @@ impl Owner {
         }
         let (configuration,generation_id,generation,trust,boot)=common.ok_or("role provisioning originals absent")?;
         ensure((7..=MAX_KEYS).contains(&keys.len()),"role provisioning complete seed count differs")?;live(deadline)?;
-        let inventory=json!({"apiVersion":"serverware.nativeGuestRoleKeyInventory/v1","configurationSha256":configuration,
+        let inventory=json!({"apiVersion":"catchplate.nativeGuestRoleKeyInventory/v1","configurationSha256":configuration,
             "generationId":generation_id,"generation":generation,"trustCheckpointSha256":trust,"bootId":boot,
             "deadlineBoottimeNs":deadline.to_string(),"deliveries":deliveries,"keys":keys});
         let inventory_raw=canonical_ascii_bytes(&inventory)?;
@@ -92,7 +92,7 @@ impl Owner {
         let encrypted_raw=super::guest_role_provisioning_files::ciphertext(&config.encrypted_inventory.path,&config.encrypted_inventory.sha256,deadline)?;
         let encrypted=document(&encrypted_raw,32768)?;
         fields(&encrypted,&["apiVersion","inventorySha256","nonce","ciphertext"])?;
-        ensure(encrypted["apiVersion"]=="serverware.nativeGuestRoleKeyCiphertext/v1"&&encrypted["inventorySha256"]==inventory_sha,
+        ensure(encrypted["apiVersion"]=="catchplate.nativeGuestRoleKeyCiphertext/v1"&&encrypted["inventorySha256"]==inventory_sha,
             "role ciphertext is not assigned to these complete originals")?;
         decoded(&encrypted["nonce"],12,Some(12))?;ensure(decoded(&encrypted["ciphertext"],16384,None)?.len()>16,"role ciphertext lacks authentication tag")?;
         // Reserve exact FD numbers before opening outputs or spawning a child.

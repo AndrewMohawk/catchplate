@@ -7,7 +7,7 @@ plaintext token originals. Source only: no socket, service or workload is
 provisioned or verified by this module.
 
 The request magic is `SWODSQ01`; response magic is `SWODSR01`. The sole endpoint
-is `/run/serverware/oidc-session-activation-delivery-execution/sql.sock`. The
+is `/run/catchplate/oidc-session-activation-delivery-execution/sql.sock`. The
 service runs as UID/GID 65498 and admits peer 65532 before bodies. The client
 expects the root-created listener's kernel UID/GID 0:0, not the dropped service
 identity. Timeout is an integer from 1 to 30 seconds, always intersected with the

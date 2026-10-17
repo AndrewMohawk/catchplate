@@ -1,8 +1,8 @@
 # Native workload local CONNECT sidecar
 
-`serverware-workload-sidecar` is the standalone multi-connection local adapter
+`catchplate-workload-sidecar` is the standalone multi-connection local adapter
 for applications whose HTTPS proxy clients cannot present the workload's mTLS
-identity to Serverware directly. It is separate from the existing
+identity to Catchplate directly. It is separate from the existing
 [one-CONNECT bootstrap adapter](native-application-proxy.md). It does not
 bootstrap an application, issue certificates, create a network namespace,
 install a CA, change egress rules or declare a native pilot ready.
@@ -10,7 +10,7 @@ install a CA, change egress rules or declare a native pilot ready.
 ```mermaid
 flowchart LR
     A[Application] -->|Local token, loopback CONNECT| S[Workload sidecar]
-    S -->|Workload mTLS, fresh attested session| G[Serverware native gate]
+    S -->|Workload mTLS, fresh attested session| G[Catchplate native gate]
     G -->|Policy-authorized credential use| P[Upstream provider]
 ```
 
@@ -33,7 +33,7 @@ nonce-free session scope, Nitro trust roots, workload issuer, expected principal
 and identity-policy commitment. Neither the service nor its installer generates
 keys, approves pins, retrieves replacement originals or uses supplied local
 identity headers as native authority. Existing native workload issuance and
-`serverware-enrollment --admit-native-workload-certificate` remain separate
+`catchplate-enrollment --admit-native-workload-certificate` remain separate
 provisioning steps, not actions performed at service startup.
 
 An independent provisioner supplies a nonzero 32-random-byte local token,
@@ -102,9 +102,9 @@ entries and is at most 64 MiB. The existing production artifact builder accepts
 this exact target, with the same source/dependency and build-network checks.
 Its export contains only:
 
-- `usr/local/libexec/serverware-workload-sidecar` (0555);
-- `usr/share/serverware/install_workload_sidecar_unit.py` (0444);
-- `usr/share/serverware/native-workload-sidecar.v1.schema.json` (0444).
+- `usr/local/libexec/catchplate-workload-sidecar` (0555);
+- `usr/share/catchplate/install_workload_sidecar_unit.py` (0444);
+- `usr/share/catchplate/native-workload-sidecar.v1.schema.json` (0444).
 
 This workload-side artifact is not copied into the native claimant closure or
 advertised as an enclave service. Artifact construction is not installation,
@@ -116,11 +116,11 @@ files and existing namespace, the Linux amd64 offline helper can emit one
 service unit:
 
 ```text
-python3 -I -B /usr/share/serverware/install_workload_sidecar_unit.py \
+python3 -I -B /usr/share/catchplate/install_workload_sidecar_unit.py \
   --configuration /absolute/workload/sidecar.json \
   --configuration-sha256 sha256:INDEPENDENT_CONFIG_DIGEST \
   --network-namespace /run/netns/EXISTING_WORKLOAD_NAMESPACE \
-  --output /absolute/new-owner-only-output/serverware-workload-sidecar.service
+  --output /absolute/new-owner-only-output/catchplate-workload-sidecar.service
 ```
 
 The output directory must already exist, be caller-owned mode 0700, and the

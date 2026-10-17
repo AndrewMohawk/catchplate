@@ -27,7 +27,7 @@ INTERPRETER = {"version": "3.11.15 (main, Jul 14 2026, 02:08:37) [GCC 14.2.0]",
     "versionInfo": [3, 11, 15, "final", 0], "implementation": "cpython",
     "cacheTag": "cpython-311", "magicHex": "a70d0d0a", "optimization": 0}
 SCRIPT = "scripts/prepare_operator_python_bytecode.py"
-PACKAGES = {"serverware": "cache/serverware", "serverware/authority_store": "cache/authority_store"}
+PACKAGES = {"catchplate": "cache/catchplate", "catchplate/authority_store": "cache/authority_store"}
 MAX_FILES, MAX_SOURCE, MAX_PYC, MAX_TOTAL, MAX_MANIFEST = 4096, 8 << 20, 16 << 20, 256 << 20, 2 << 20
 
 
@@ -108,7 +108,7 @@ def _source_record(source, commit, repository):
     helper = _git(repository, "cat-file", "blob", commit + ":" + SCRIPT)
     require(helper == _read(source / SCRIPT, MAX_SOURCE)[0] == _read(Path(__file__).resolve(), MAX_SOURCE)[0])
     files, total = [], 0
-    for entry in _git(repository, "ls-tree", "-rz", "--full-tree", commit, "--", "serverware").split(b"\0"):
+    for entry in _git(repository, "ls-tree", "-rz", "--full-tree", commit, "--", "catchplate").split(b"\0"):
         if not entry:
             continue
         metadata, name = entry.split(b"\t", 1)
@@ -125,13 +125,13 @@ def _source_record(source, commit, repository):
         require(len(files) <= MAX_FILES and total <= MAX_TOTAL)
     require(files)
     files.sort(key=lambda item: item["path"])
-    return {"schema": "serverware.operatorPythonBytecodeSource/v1", "sourceCommit": commit,
+    return {"schema": "catchplate.operatorPythonBytecodeSource/v1", "sourceCommit": commit,
         "image": APP_IMAGE, "helperSha256": sha(helper), "sourceTreeSha256": sha(canonical(files)), "files": files}
 
 
 def _source_check(record, source):
     require(type(record) is dict and set(record) == {"schema", "sourceCommit", "image", "helperSha256", "sourceTreeSha256", "files"}
-        and record["schema"] == "serverware.operatorPythonBytecodeSource/v1" and record["image"] == APP_IMAGE)
+        and record["schema"] == "catchplate.operatorPythonBytecodeSource/v1" and record["image"] == APP_IMAGE)
     _hex(record["sourceCommit"], 40)
     _hex(record["helperSha256"]); _hex(record["sourceTreeSha256"])
     require(sha(_read(source / SCRIPT, MAX_SOURCE)[0]) == record["helperSha256"]
@@ -181,7 +181,7 @@ def _write(path, raw):
 
 
 def _freeze(root):
-    for directory in (root / "cache/serverware", root / "cache/authority_store", root / "cache", root):
+    for directory in (root / "cache/catchplate", root / "cache/authority_store", root / "cache", root):
         if directory.exists():
             directory.chmod(0o555)
             fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -209,7 +209,7 @@ def compile_artifact(*, source, source_manifest_path, expected_source_manifest_s
     record = _json(raw); _source_check(record, source)
     require(not _path(output).is_relative_to(source) and not source.is_relative_to(_path(output)))
     root = _new_directory(output)
-    for relative in ("cache", "cache/serverware", "cache/authority_store"):
+    for relative in ("cache", "cache/catchplate", "cache/authority_store"):
         (root / relative).mkdir(mode=0o700)
     payload, total = [], 0
     for item in record["files"]:
@@ -227,7 +227,7 @@ def compile_artifact(*, source, source_manifest_path, expected_source_manifest_s
             "sourceHashHex": value[8:16].hex()})
         total += len(value); require(total <= MAX_TOTAL)
     _source_check(record, source)
-    manifest = {"schema": "serverware.operatorPythonBytecode/v1", "source": record,
+    manifest = {"schema": "catchplate.operatorPythonBytecode/v1", "source": record,
         "sourceManifestSha256": sha(raw), "interpreter": interpreter, "files": payload}
     result = canonical(manifest); require(len(result) <= MAX_MANIFEST)
     _write(root / "manifest.json", result); _freeze(root)
@@ -251,7 +251,7 @@ def _artifact(root, source, expected_manifest_sha256):
     require(sha(raw) == _hex(expected_manifest_sha256))
     manifest = _json(raw)
     require(type(manifest) is dict and set(manifest) == {"schema", "source", "sourceManifestSha256", "interpreter", "files"}
-        and manifest["schema"] == "serverware.operatorPythonBytecode/v1"
+        and manifest["schema"] == "catchplate.operatorPythonBytecode/v1"
         and canonical(manifest["interpreter"]) == canonical(INTERPRETER))
     _source_check(manifest["source"], source)
     require(manifest["sourceManifestSha256"] == sha(canonical(manifest["source"])))
@@ -269,7 +269,7 @@ def _artifact(root, source, expected_manifest_sha256):
             and value[8:16].hex() == item["sourceHashHex"])
         expected.add(item["path"]); identities.append([item["path"], identity])
         total += len(value); require(total <= MAX_TOTAL)
-    directories = {"", "cache", "cache/serverware", "cache/authority_store"}
+    directories = {"", "cache", "cache/catchplate", "cache/authority_store"}
     observed = set()
     for relative in sorted(directories):
         directory = root / relative
@@ -283,7 +283,7 @@ def _artifact(root, source, expected_manifest_sha256):
                 observed.add(name)
     require(observed == expected)
     identities.append(["manifest.json", _read(root / "manifest.json", MAX_MANIFEST, immutable=True)[1]])
-    return manifest, {"schema": "serverware.operatorPythonBytecodeValidation/v1",
+    return manifest, {"schema": "catchplate.operatorPythonBytecodeValidation/v1",
         "manifestSha256": sha(raw), "sourceCommit": manifest["source"]["sourceCommit"],
         "sourceTreeSha256": manifest["source"]["sourceTreeSha256"], "image": APP_IMAGE,
         "interpreter": INTERPRETER.copy(), "files": len(files), "bytecodeBytes": total,

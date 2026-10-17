@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-activation-webauthn-verifier-response.v1.schema.json",
-  "title": "Serverware Policy Activation Signed WebAuthn Verifier Response v1",
+  "$id": "https://catchplate.invalid/schemas/policy-activation-webauthn-verifier-response.v1.schema.json",
+  "title": "Catchplate Policy Activation Signed WebAuthn Verifier Response v1",
   "$comment": "The envelope signature must be verified against the independently pinned WebAuthn verifier key and executable identity; schema validation alone is not verification.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "assertionEvidenceSha256", "verification"],
   "properties": {
-    "apiVersion": {"const": "serverware.policyActivationWebAuthnVerification/v1"},
+    "apiVersion": {"const": "catchplate.policyActivationWebAuthnVerification/v1"},
     "assertionEvidenceSha256": {"$ref": "#/$defs/sha256"},
     "verification": {"$ref": "#/$defs/envelope"}
   },
@@ -20,7 +20,7 @@
       "additionalProperties": false,
       "required": ["schemaVersion", "status", "verifierExecutableSha256", "verificationPolicySha256", "assertionEvidenceSha256", "principalId", "credentialId", "readinessCoreChallengeSha256", "assertionObjectSha256", "authenticatorDataSha256", "clientDataJsonSha256", "assertionSignatureSha256", "cosePublicKeySha256", "rpId", "origin", "credentialStateRevision", "previousSignatureCounter", "signatureCounter", "replayStateSha256", "approvedAtUnixNanos", "hardwareBacked", "userPresent", "userVerified", "verifiedAtUnixNanos", "maximumAgeNanos", "issuedAtUnixNanos", "expiresAtUnixNanos"],
       "properties": {
-        "schemaVersion": {"const": "serverware.policyActivationWebAuthnVerification/v1"}, "status": {"const": "verified"},
+        "schemaVersion": {"const": "catchplate.policyActivationWebAuthnVerification/v1"}, "status": {"const": "verified"},
         "verifierExecutableSha256": {"$ref": "#/$defs/sha256"}, "verificationPolicySha256": {"$ref": "#/$defs/sha256"}, "assertionEvidenceSha256": {"$ref": "#/$defs/sha256"},
         "principalId": {"type": "string", "minLength": 1, "maxLength": 256}, "credentialId": {"$ref": "#/$defs/sha256"}, "readinessCoreChallengeSha256": {"$ref": "#/$defs/sha256"},
         "assertionObjectSha256": {"$ref": "#/$defs/sha256"}, "authenticatorDataSha256": {"$ref": "#/$defs/sha256"}, "clientDataJsonSha256": {"$ref": "#/$defs/sha256"}, "assertionSignatureSha256": {"$ref": "#/$defs/sha256"}, "cosePublicKeySha256": {"$ref": "#/$defs/sha256"},
@@ -35,8 +35,8 @@
       "additionalProperties": false,
       "required": ["apiVersion", "kind", "canonicalProfile", "signatureDomain", "payload", "payloadSha256", "signatureAlgorithm", "signingKeyId", "signingKeySpkiSha256", "signature"],
       "properties": {
-        "apiVersion": {"const": "serverware.policyActivationWebAuthnVerification/v1"}, "kind": {"const": "PolicyActivationWebAuthnVerification"},
-        "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"}, "signatureDomain": {"const": "serverware.policyActivationWebAuthnVerification/v1"},
+        "apiVersion": {"const": "catchplate.policyActivationWebAuthnVerification/v1"}, "kind": {"const": "PolicyActivationWebAuthnVerification"},
+        "canonicalProfile": {"const": "catchplate.canonicalJson/ascii-integer-v1"}, "signatureDomain": {"const": "catchplate.policyActivationWebAuthnVerification/v1"},
         "payload": {"$ref": "#/$defs/payload"}, "payloadSha256": {"$ref": "#/$defs/sha256"}, "signatureAlgorithm": {"const": "Ed25519"},
         "signingKeyId": {"$ref": "#/$defs/sha256"}, "signingKeySpkiSha256": {"$ref": "#/$defs/sha256"}, "signature": {"type": "string", "pattern": "^[A-Za-z0-9_-]{86}$"}
       }

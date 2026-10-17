@@ -15,7 +15,7 @@ import resource
 import stat
 import sys
 
-from serverware import native_service_tokens as wire
+from catchplate import native_service_tokens as wire
 
 
 def original(fd, maximum):

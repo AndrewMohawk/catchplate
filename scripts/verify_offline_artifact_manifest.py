@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 
-API_VERSION = "serverware.offlineArtifactManifest/v1"
+API_VERSION = "catchplate.offlineArtifactManifest/v1"
 KIND = "OfflineArtifactManifest"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SAFE_BASENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,254}$")

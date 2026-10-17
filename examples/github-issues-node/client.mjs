@@ -3,7 +3,7 @@ import { closeSync, constants, fstatSync, openSync, readFileSync, readSync } fro
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const PUBLIC_GITHUB_DUMMY = 'serverware-github-placeholder-v1';
+export const PUBLIC_GITHUB_DUMMY = 'catchplate-github-placeholder-v1';
 const OPERATIONS = new Set(['list', 'create-issue', 'create-comment']);
 const MAX_REQUESTS = 20;
 const DEADLINE_MS = 90_000;
@@ -31,30 +31,30 @@ function body(env, name) {
 export function configuration(env, operation = 'list') {
   requireValue(OPERATIONS.has(operation));
   requireValue(env.NODE_TLS_REJECT_UNAUTHORIZED === undefined || env.NODE_TLS_REJECT_UNAUTHORIZED === '1');
-  const proxyUrl = required(env, 'SERVERWARE_PROXY_URL');
+  const proxyUrl = required(env, 'CATCHPLATE_PROXY_URL');
   const proxy = new URL(proxyUrl);
   requireValue(proxy.protocol === 'https:' && proxy.hostname && !proxy.username && !proxy.password
     && proxy.pathname === '/' && !proxy.search && !proxy.hash);
-  const applicationId = required(env, 'SERVERWARE_APP_ID', 36);
+  const applicationId = required(env, 'CATCHPLATE_APP_ID', 36);
   requireValue(UUID.test(applicationId));
-  const token = required(env, 'SERVERWARE_PROXY_TOKEN', 4096);
+  const token = required(env, 'CATCHPLATE_PROXY_TOKEN', 4096);
   requireValue(/^[A-Za-z0-9_-]+$/.test(token));
-  const owner = required(env, 'SERVERWARE_GITHUB_OWNER', 39);
-  const repo = required(env, 'SERVERWARE_GITHUB_REPO', 100);
+  const owner = required(env, 'CATCHPLATE_GITHUB_OWNER', 39);
+  const repo = required(env, 'CATCHPLATE_GITHUB_REPO', 100);
   requireValue(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(owner)
     && /^[A-Za-z0-9._-]{1,100}$/.test(repo) && !['.', '..'].includes(repo));
   const config = { operation, proxyUrl, applicationId, token, owner, repo,
-    caFile: required(env, 'SERVERWARE_CA_FILE'),
-    proxyCaFile: env.SERVERWARE_PROXY_CA_FILE
-      ? required(env, 'SERVERWARE_PROXY_CA_FILE') : null };
+    caFile: required(env, 'CATCHPLATE_CA_FILE'),
+    proxyCaFile: env.CATCHPLATE_PROXY_CA_FILE
+      ? required(env, 'CATCHPLATE_PROXY_CA_FILE') : null };
   if (operation === 'create-issue') {
-    config.title = required(env, 'SERVERWARE_ISSUE_TITLE', 256);
-    config.body = body(env, 'SERVERWARE_ISSUE_BODY');
+    config.title = required(env, 'CATCHPLATE_ISSUE_TITLE', 256);
+    config.body = body(env, 'CATCHPLATE_ISSUE_BODY');
   } else if (operation === 'create-comment') {
-    const number = required(env, 'SERVERWARE_ISSUE_NUMBER', 16);
+    const number = required(env, 'CATCHPLATE_ISSUE_NUMBER', 16);
     requireValue(/^[1-9][0-9]*$/.test(number) && Number.isSafeInteger(Number(number)));
     config.issueNumber = Number(number);
-    config.body = body(env, 'SERVERWARE_COMMENT_BODY');
+    config.body = body(env, 'CATCHPLATE_COMMENT_BODY');
   }
   if (operation !== 'list') requireValue(Buffer.byteLength(JSON.stringify({
     ...(config.title ? { title: config.title } : {}), body: config.body,
@@ -109,13 +109,13 @@ export function loadClientConfig(path, env, operation = 'list', now = Date.now()
     // Only these connection/scope fields are imported. Commands, environment,
     // headers, provider credentials and write bodies in the JSON are inert.
     return configuration({ ...env,
-      SERVERWARE_PROXY_URL: value.proxy_url,
-      SERVERWARE_APP_ID: value.application_id,
-      SERVERWARE_PROXY_TOKEN: value.proxy_password,
-      SERVERWARE_CA_FILE: caPath(value.ca_file),
-      SERVERWARE_PROXY_CA_FILE: proxyCa === undefined || proxyCa === null ? undefined : caPath(proxyCa),
-      SERVERWARE_GITHUB_OWNER: value.repository.owner,
-      SERVERWARE_GITHUB_REPO: value.repository.name,
+      CATCHPLATE_PROXY_URL: value.proxy_url,
+      CATCHPLATE_APP_ID: value.application_id,
+      CATCHPLATE_PROXY_TOKEN: value.proxy_password,
+      CATCHPLATE_CA_FILE: caPath(value.ca_file),
+      CATCHPLATE_PROXY_CA_FILE: proxyCa === undefined || proxyCa === null ? undefined : caPath(proxyCa),
+      CATCHPLATE_GITHUB_OWNER: value.repository.owner,
+      CATCHPLATE_GITHUB_REPO: value.repository.name,
     }, operation);
   } catch {
     throw new Error('Example configuration or operation refused');

@@ -17,7 +17,7 @@ import threading
 
 FIXTURE_IP, LOOPBACK = "93.184.216.34", "127.0.0.1"
 PROXY_HOST = "proxy.operator-basic.example.test"
-HOSTS = ("127.0.0.1 localhost serverware decision-gate-rs " + PROXY_HOST + "\n"
+HOSTS = ("127.0.0.1 localhost catchplate decision-gate-rs " + PROXY_HOST + "\n"
          + FIXTURE_IP + " registry.npmjs.org\n").encode("ascii")
 RESOLV = b"nameserver 127.0.0.1\noptions attempts:1 timeout:1\n"
 KEEPER_SECONDS, EDGE_SECONDS = 300, 240
@@ -41,7 +41,7 @@ def assert_isolated_network(*, attached=True):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             probe.bind((FIXTURE_IP, 0))
         for host, address in (("registry.npmjs.org", FIXTURE_IP), (PROXY_HOST, LOOPBACK),
-                ("serverware", LOOPBACK), ("decision-gate-rs", LOOPBACK)):
+                ("catchplate", LOOPBACK), ("decision-gate-rs", LOOPBACK)):
             require({row[4][0] for row in socket.getaddrinfo(host, 443, socket.AF_INET,
                 socket.SOCK_STREAM)} == {address})
 
@@ -79,7 +79,7 @@ def keep_namespace():
     assert_isolated_network()
     descriptor = os.open("/fixture-network/ready", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
     with os.fdopen(descriptor, "w", encoding="ascii") as stream:
-        json.dump({"schema": "serverware.npmMetadataFixtureNetwork/v1", "network": "none",
+        json.dump({"schema": "catchplate.npmMetadataFixtureNetwork/v1", "network": "none",
             "interfaces": ["lo"], "address": FIXTURE_IP, "effectiveCapabilities": 0}, stream)
         stream.flush(); os.fsync(stream.fileno())
     stop = threading.Event()

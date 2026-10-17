@@ -2,7 +2,7 @@
 //! convert controlled readiness into Fleet authority or mutate the CP head.
 use super::*;
 use super::super::policy_shadow::native_activation as operation;
-use serverware_decision_gate::{native_policy_activation_transport as transport,native_serving_privileges};
+use catchplate_decision_gate::{native_policy_activation_transport as transport,native_serving_privileges};
 pub(crate) const PATH:&str="/v1/policy-shadow/native-activations";
 pub(crate) const MAX_BODY_BYTES:u64=8*1024*1024;
 #[derive(Deserialize)]
@@ -72,15 +72,15 @@ impl Prepared{
         prepared.check()?;
         let original=Original::open(&config.authority)?;
         let channel=match (config.api_version.as_str(),config.channel){
-            ("serverware.nativePolicyActivationClient/v1",ChannelConfiguration::Inherited(channel))=>{
+            ("catchplate.nativePolicyActivationClient/v1",ChannelConfiguration::Inherited(channel))=>{
                 if channel.version()?!=transport::ChannelVersion::UnixV1{return Err("native activation client/channel profile mismatch".into());}
                 PreparedChannel::Inherited(transport::Prepared::take(channel,prepared)?)
             },
-            ("serverware.nativePolicyActivationClient/v2",ChannelConfiguration::Inherited(channel))=>{
+            ("catchplate.nativePolicyActivationClient/v2",ChannelConfiguration::Inherited(channel))=>{
                 if channel.version()?!=transport::ChannelVersion::VsockV2{return Err("native activation client/channel profile mismatch".into());}
                 PreparedChannel::Inherited(transport::Prepared::take(channel,prepared)?)
             },
-            ("serverware.nativePolicyActivationClient/v3",ChannelConfiguration::Parent(channel))=>
+            ("catchplate.nativePolicyActivationClient/v3",ChannelConfiguration::Parent(channel))=>
                 PreparedChannel::Parent(transport::parent::Prepared::connect(channel,prepared)?),
             _=>return Err("native activation client/channel profile not explicitly selected".into()),
         };

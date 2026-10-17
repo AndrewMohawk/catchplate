@@ -1,8 +1,8 @@
 # Consume-grant private transport
 
-The [fixed transport](../serverware/authority_oidc_session_activation_delivery_execution_authorizer_transport.py)
+The [fixed transport](../catchplate/authority_oidc_session_activation_delivery_execution_authorizer_transport.py)
 uses a dedicated Unix socket at
-`/run/serverware/oidc-session-activation-delivery-execution/authorizer.sock`.
+`/run/catchplate/oidc-session-activation-delivery-execution/authorizer.sock`.
 It neither widens the activation-authorizer protocol nor performs grant admission.
 
 The `SWODGQ01` request has four immutable originals, each with a u64 big-endian

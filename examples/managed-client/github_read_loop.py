@@ -1,7 +1,7 @@
 """Long-running, read-only stock Requests example with managed pool handoff.
 
 Only one exact repository's issues-list GET is submitted. No provider write,
-transport retry, redirect, monkeypatch or private Serverware import is used.
+transport retry, redirect, monkeypatch or private Catchplate import is used.
 """
 import argparse
 from contextlib import contextmanager
@@ -19,7 +19,7 @@ from urllib.parse import quote, urlsplit
 
 from managed_client import ManagedClient, RenewalUnavailable
 
-PLACEHOLDER = "serverware-github-placeholder-v1"
+PLACEHOLDER = "catchplate-github-placeholder-v1"
 MAX_BODY_BYTES = 65536
 READ_SECONDS = 10
 
@@ -49,7 +49,7 @@ def ca_bundle(path):
         roots = stream.read(2 * 1024 * 1024 + 1)
     if len(roots) > 2 * 1024 * 1024:
         raise ValueError("CA bundle too large")
-    with tempfile.TemporaryDirectory(prefix="serverware-managed-client-ca-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="catchplate-managed-client-ca-") as temporary:
         output = Path(temporary) / "ca.pem"
         with output.open("xb") as stream:
             output.chmod(0o600)

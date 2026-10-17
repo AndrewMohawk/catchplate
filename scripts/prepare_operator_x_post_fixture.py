@@ -23,16 +23,16 @@ base, basic = inherited.base, inherited.basic
 NODE_SHA256 = profiles.NODE_SHA256
 LIBATOMIC_SHA256 = "9d8a34468e614a71a6427dbabb0ac24eb8cb1e324dc6aa3bf95eb6f59201f000"
 NODE_MODULES = profiles.NODE_MODULES
-CONTROL_ORIGIN = "https://serverware-x.example.com"
+CONTROL_ORIGIN = "https://catchplate-x.example.com"
 CHECKER = "/app/scripts/check_operator_x_post.py"
-RUNTIME_SERVICES = {"network", "provider", "serverware", "decision-gate-rs", "edge", "check"}
+RUNTIME_SERVICES = {"network", "provider", "catchplate", "decision-gate-rs", "edge", "check"}
 FAULT_MODES = ("drop-ack", "revoke-before-release")
 FAULT_RUNTIME_SERVICES = RUNTIME_SERVICES | {"quota-relay"}
 FAULT_RELAY_SECONDS = 240
 INITIAL_TOKEN_SECONDS, CHECKER_SECONDS = 120, 180
 KEEPER_SECONDS, EDGE_SECONDS = 300, 240
 CHECKER_OUTER_SECONDS, PRECHECK_SECONDS = 210, 75
-LEAVES = (".operator-publication.lock", ".serverware-operator-demo.json",
+LEAVES = (".operator-publication.lock", ".catchplate-operator-demo.json",
     "mitmproxy/mitmproxy-ca-cert.pem", "mitmproxy/mitmproxy-ca.pem")
 RUNTIME_LINKS = {"bin/python": "/usr/local/bin/python", "bin/python3": "python",
     "bin/python3.12": "python", "lib64": "lib"}
@@ -96,7 +96,7 @@ def tree_inventory(root, *, kind):
 
 
 def dependencies(node_modules, python_runtime, python_packages):
-    observed = {"schema": "serverware.privateXPostDependencies/v1",
+    observed = {"schema": "catchplate.privateXPostDependencies/v1",
         "node": tree_inventory(node_modules, kind="node"),
         "python": tree_inventory(python_packages, kind="python"),
         "pythonRuntime": tree_inventory(python_runtime, kind="runtime")}
@@ -143,13 +143,13 @@ def build(source, binary, initializer, root, node, node_modules, python_runtime,
     require(type(quota) is bool, "closed quota profile required")
     require(fault_mode is None or (type(fault_mode) is str and fault_mode in FAULT_MODES), "closed fault profile required")
     require(not (quota and fault_mode is not None), "separate fresh quota and fault fixtures required")
-    require(root.parent == base.SCRATCH and re.fullmatch(r"serverware-x-post-private\.[A-Za-z0-9]{6,32}", root.name),
+    require(root.parent == base.SCRATCH and re.fullmatch(r"catchplate-x-post-private\.[A-Za-z0-9]{6,32}", root.name),
         "fresh private X posting root required")
     for value in (expected_binary_sha256, expected_go_sha256, expected_dependencies_sha256):
         base.validated_binary_sha256(value)
     require(all(isinstance(path, Path) and path.is_absolute() and ".." not in path.parts for path in
         (source, binary, initializer, node, node_modules, python_runtime, python_packages, go)), "absolute fixed inputs required")
-    template = root.with_name("serverware-x-private." + root.name.split(".", 1)[1])
+    template = root.with_name("catchplate-x-private." + root.name.split(".", 1)[1])
     config = inherited.build(source, binary, initializer, template, node, source / "examples/x-post-node",
         expected_binary_sha256=expected_binary_sha256)
     for service in config["services"].values():
@@ -158,7 +158,7 @@ def build(source, binary, initializer, root, node, node_modules, python_runtime,
             if path.is_relative_to(template):
                 mount["source"] = str(root / path.relative_to(template))
         service.setdefault("entrypoint", [])
-    config["name"] = "serverware-x-post-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
+    config["name"] = "catchplate-x-post-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
     services, runtime = config["services"], root / "runtime"
     services["basic-pki"]["command"] += ["--runtime-profile", "managed-x-post"]
     initialize = services["initialize"]
@@ -178,22 +178,22 @@ def build(source, binary, initializer, root, node, node_modules, python_runtime,
         "r=o.open('https://api.x.com/__test__/observations',timeout=2); raise SystemExit(0 if r.status==200 else 1)"]
     services["network"]["command"] = ["python", "-B", "-m", "scripts.operator_x_post_fixture_network", "network"]
     services["edge"]["command"] = ["-m", "scripts.operator_x_post_fixture_network", "edge"]
-    app, gate = services["serverware"], services["decision-gate-rs"]
+    app, gate = services["catchplate"], services["decision-gate-rs"]
     app["depends_on"] = {"provider": {"condition": "service_healthy"}}
-    app["environment"].update(SERVERWARE_PUBLIC_URL=CONTROL_ORIGIN,
-        SERVERWARE_PROCESS_MODE="serverware-control-plane", SERVERWARE_METADATA_STORE_BACKEND="sqlite",
-        SERVERWARE_AUDIT_STORE_BACKEND="sqlite", SERVERWARE_GRANT_STORE_BACKEND="sqlite",
-        SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED="0", SERVERWARE_KEY_RELEASE_REQUIRED="0",
-        SERVERWARE_DEV_AUTHENTICATOR="0", SERVERWARE_DEV_DEMO_SEED="0",
-        SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED="1", SERVERWARE_OPERATOR_MANAGED_X_ENABLED="1",
-        SERVERWARE_OPERATOR_X_CUSTODY_DIR="/x-custody", SSL_CERT_FILE="/x-public/ca.pem")
+    app["environment"].update(CATCHPLATE_PUBLIC_URL=CONTROL_ORIGIN,
+        CATCHPLATE_PROCESS_MODE="catchplate-control-plane", CATCHPLATE_METADATA_STORE_BACKEND="sqlite",
+        CATCHPLATE_AUDIT_STORE_BACKEND="sqlite", CATCHPLATE_GRANT_STORE_BACKEND="sqlite",
+        CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED="0", CATCHPLATE_KEY_RELEASE_REQUIRED="0",
+        CATCHPLATE_DEV_AUTHENTICATOR="0", CATCHPLATE_DEV_DEMO_SEED="0",
+        CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED="1", CATCHPLATE_OPERATOR_MANAGED_X_ENABLED="1",
+        CATCHPLATE_OPERATOR_X_CUSTODY_DIR="/x-custody", SSL_CERT_FILE="/x-public/ca.pem")
     app["volumes"] += [bind(runtime / "x-custody", "/x-custody", False),
         bind(runtime / "upstream-data/x/ca.pem", "/x-public/ca.pem")]
     if with_bytecode:
         from scripts import prepare_operator_python_bytecode as bytecode
         require(app["image"] == bytecode.APP_IMAGE, "Python bytecode app image differs")
         app["volumes"] += bytecode.mounts(python_bytecode)
-    gate["environment"]["SERVERWARE_OPERATOR_MANAGED_X_ENABLED"] = "1"
+    gate["environment"]["CATCHPLATE_OPERATOR_MANAGED_X_ENABLED"] = "1"
     gate["volumes"] = [mount for mount in gate["volumes"] if mount["target"] != "/data"]
     gate["volumes"] += [bind(runtime / "app-data/gate-runtime", "/data"),
         *(bind(runtime / "app-data" / leaf, "/data/" + leaf) for leaf in LEAVES)]
@@ -218,7 +218,7 @@ def build(source, binary, initializer, root, node, node_modules, python_runtime,
         # The quota profile changes only this flag; fault wiring is below.
         # Clocks, issuer and trust remain unchanged in both profiles.
         for service in (app, gate):
-            service["environment"]["SERVERWARE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED"] = "1"
+            service["environment"]["CATCHPLATE_OPERATOR_X_POST_ATTEMPT_QUOTA_ENABLED"] = "1"
     if quota:
         provider["command"] += ["--profile", "quota"]
         check["command"][0] = "/app/scripts/check_operator_x_quota.py"
@@ -228,7 +228,7 @@ def build(source, binary, initializer, root, node, node_modules, python_runtime,
         provider["command"] += ["--profile", "fault"]
         check["command"][0] = "/app/scripts/check_operator_x_quota_fault.py"
         check["command"] += ["--fault-mode", fault_mode]
-        app["environment"]["SERVERWARE_WEB_HOST"] = "127.0.0.1"
+        app["environment"]["CATCHPLATE_WEB_HOST"] = "127.0.0.1"
         gate_hosts = [mount for mount in gate["volumes"] if mount["target"] == "/etc/hosts"]
         require(gate_hosts == [bind(runtime / "upstream-data/x-network/hosts", "/etc/hosts")],
             "original gate hosts mount differs")
@@ -236,7 +236,7 @@ def build(source, binary, initializer, root, node, node_modules, python_runtime,
         relay = services["quota-relay"] = deepcopy(provider)
         relay.update(command=["python", "-B", "-m", "scripts.operator_x_quota_fault_relay",
             "--lifetime-seconds", str(FAULT_RELAY_SECONDS)],
-            depends_on={"serverware": {"condition": "service_healthy"}},
+            depends_on={"catchplate": {"condition": "service_healthy"}},
             cpus=0.25, mem_limit="128m", memswap_limit="128m", pids_limit=32)
         relay["volumes"] = [deepcopy(mount) for mount in provider["volumes"]
             if mount["target"] in {"/app", "/etc/hosts", "/etc/resolv.conf"}]
@@ -245,7 +245,7 @@ def build(source, binary, initializer, root, node, node_modules, python_runtime,
             "import json,urllib.request; o=urllib.request.build_opener(urllib.request.ProxyHandler({})); "
             "r=o.open('http://127.0.0.1:3001/__fault/status',timeout=2); raw=r.read(4097); "
             "assert r.status==200 and len(raw)<=4096; d=json.loads(raw); "
-            "assert d['schema']=='serverware.privateXQuotaFaultStatus/v1'"],
+            "assert d['schema']=='catchplate.privateXQuotaFaultStatus/v1'"],
             "interval": "3s", "timeout": "3s", "retries": 3, "start_period": "1s"}
     runtime_services = FAULT_RUNTIME_SERVICES if fault_mode is not None else RUNTIME_SERVICES
     require(set(services) == runtime_services | {"initialize", "x-post-pki", "basic-pki"}

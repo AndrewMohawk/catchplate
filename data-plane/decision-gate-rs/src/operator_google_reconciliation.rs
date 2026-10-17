@@ -213,7 +213,7 @@ pub(super) fn verify_outcome(
     .ok_or_else(refused)?;
     if body.len() > MAX_OUTCOME_BYTES
         || request.purpose != CredentialLeasePurpose::DispatchSecret
-        || request.api_version != "serverware.credentialLeaseRequest/v3"
+        || request.api_version != "catchplate.credentialLeaseRequest/v3"
         || expected.profile != ReleaseProfile::Legacy
         || request.recipient_attestation.is_some()
     {
@@ -225,7 +225,7 @@ pub(super) fn verify_outcome(
         .map_err(|_| refused())?;
     let now = now_epoch_ms();
     if recipient_nonce.len() != 32
-        || outcome.api_version != "serverware.operatorCredentialLeaseNoEnvelope/v1"
+        || outcome.api_version != "catchplate.operatorCredentialLeaseNoEnvelope/v1"
         || outcome.capability != profile.capability()
         || outcome.outcome != "noSecretEnvelopeIssued"
         || outcome.reason != "generationAdvancedBeforeEnvelope"

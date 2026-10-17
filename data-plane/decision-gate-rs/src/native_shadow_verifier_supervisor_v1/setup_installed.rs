@@ -79,7 +79,7 @@ impl Provisioned {
         self.file.seek(SeekFrom::Start(0)).map_err(|_| "Setup input seek failed")?;
         self.file.read_exact(&mut bytes).map_err(|_| "Setup input read failed")?;
         self.check(directory)?;
-        let fd=unsafe { libc::memfd_create(c"serverware-setup-issuer-input".as_ptr(),libc::MFD_CLOEXEC|libc::MFD_ALLOW_SEALING) };
+        let fd=unsafe { libc::memfd_create(c"catchplate-setup-issuer-input".as_ptr(),libc::MFD_CLOEXEC|libc::MFD_ALLOW_SEALING) };
         ensure(fd>=0,"Setup input memfd unavailable")?;
         let mut file=unsafe { File::from_raw_fd(fd) };
         ensure(unsafe { libc::fchown(fd,uid,gid) }==0 && unsafe { libc::fchmod(fd,0o600) }==0,
@@ -139,8 +139,8 @@ fn attempt(role:Role)->Result<(),String> {
     let admission=RuntimeAdmission::open_setup(role)?;
     let watch=Watchdog::arm(&admission)?;
     let (seed_name,request_name,state_name)=names(role);
-    let directory=Directory::open(&["etc","serverware"])?;
-    let state=Directory::open(&["var","lib","serverware",state_name])?;
+    let directory=Directory::open(&["etc","catchplate"])?;
+    let state=Directory::open(&["var","lib","catchplate",state_name])?;
     ensure(directory_identity(state.files.last().unwrap())?.2 & 0o7777==0o700,"Setup state directory must be root0700")?;
     let mut seed=Provisioned::open(&directory,seed_name,32)?;
     ensure(seed.identity.size==32,"Setup provisioned seed must be raw32")?;
@@ -152,7 +152,7 @@ fn attempt(role:Role)->Result<(),String> {
     let mut inputs=inputs::Inputs::from_setup(seed.sealed(&directory,admission.uid(),admission.gid())?,
         request.sealed(&directory,admission.uid(),admission.gid())?)?;
     inputs.bind(&admission)?;
-    let intent=serde_json::json!({"apiVersion":"serverware.setupNativeInstalledIssuerAttempt/v1",
+    let intent=serde_json::json!({"apiVersion":"catchplate.setupNativeInstalledIssuerAttempt/v1",
         "role":role.name(),"launchSha256":launch_pin,"configurationSha256":configuration_pin,
         "requestSha256":request_pin,"issuedAtBoottimeNs":admission.issued_boottime_ns().to_string(),
         "deadlineBoottimeNs":admission.deadline_boottime_ns().to_string()});

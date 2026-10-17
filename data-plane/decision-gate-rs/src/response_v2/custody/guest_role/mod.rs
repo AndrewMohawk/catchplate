@@ -33,7 +33,7 @@ struct Bootstrap {
 impl Bootstrap {
     fn validate(&self)->io::Result<()> {
         let nonce=URL_SAFE_NO_PAD.decode(&self.channel_nonce).map_err(other)?;
-        require(self.api_version=="serverware.responseV2.guestRoleBootstrap/v1"
+        require(self.api_version=="catchplate.responseV2.guestRoleBootstrap/v1"
             && path(&self.configuration_path) && path(&self.delivery_path)
             && digest(&self.configuration_sha256) && digest(&self.delivery_sha256)
             && nonce.len()==32 && nonce.iter().any(|v| *v!=0)
@@ -121,7 +121,7 @@ impl Lifetime {
             require(self.progress.compare_exchange(before,after,Ordering::AcqRel,Ordering::Acquire).is_ok(),
                 "role startup progress already consumed or out of order")?;
             let digest=sha(&self.bootstrap.bytes);
-            let progress=Progress {api_version:"serverware.responseV2.guestRoleStartup/v1",
+            let progress=Progress {api_version:"catchplate.responseV2.guestRoleStartup/v1",
                 channel_nonce:&self.bootstrap.value.channel_nonce,bootstrap_sha256:&digest,
                 service_role:self.bootstrap.value.service_role,phase};
             let bytes=crate::canonical_json_bytes(&progress).map_err(other)?;

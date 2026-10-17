@@ -19,7 +19,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_radix_mutation as primary
+from catchplate import authority_radix_mutation as primary
 from test_authority_radix_mutation import (
     IndependentTree, LIMITS, batch, change, refresh_proof_digest,
 )
@@ -73,7 +73,7 @@ class PrimaryMutationInputsTests(unittest.TestCase):
 
         prefixes = set()
         for mutation in pristine["mutations"]:
-            path = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1",
+            path = sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1",
                               b"items", sql_json(mutation["key"]))[7:]
             prefixes.update(path[:depth] for depth in range(64))
         copied_input = {

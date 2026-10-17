@@ -124,7 +124,7 @@ preceding observations, original lifetimes and retained cleanup ownership.
 ## Verification
 
 Exact source `72d967916e4a1f8c07c61289e4981f4279a84c2c` passes
-`cargo check --offline --locked --frozen -j1 --bin serverware-decision-gate`
+`cargo check --offline --locked --frozen -j1 --bin catchplate-decision-gate`
 under the pinned Rust 1.88 image, with no network and one CPU. Cargo reports
 1 minute 3 seconds, with 312 library and 2,387 binary warnings including
 duplicates. The initial `5130d297` snapshot failed with five integration errors;
@@ -138,4 +138,4 @@ not test-compiled or executed. No actual journal/service transcript, native
 guest, cold-baseline commissioning, provider, cloud or paid test has run for this
 slice. The previous interactive-interval Python checks do not cover these new
 Rust paths. Archives, commands, logs and checksums are retained at
-`codex-offload/serverware/engineering-builds/72d96791-publication-2Ip2Sj/`.
+`codex-offload/catchplate/engineering-builds/72d96791-publication-2Ip2Sj/`.

@@ -26,17 +26,17 @@ import re
 from scripts import operator_github_fixture_network as isolated
 
 FIXTURE_IP, LOOPBACK, PROXY_HOST = isolated.FIXTURE_IP, isolated.LOOPBACK, isolated.PROXY_HOST
-CONTROL_HOST = "serverware-x.example.com"
+CONTROL_HOST = "catchplate-x.example.com"
 CONTROL_ORIGIN = "https://" + CONTROL_HOST
 PROVIDER_HOSTS = ("x.com", "api.x.com")
 KEEPER_SECONDS, EDGE_SECONDS = 300, 240
 ROOT, NETWORK_ROOT = Path("/fixture-runtime"), Path("/fixture-network")
-HOSTS = ("127.0.0.1 localhost serverware decision-gate-rs " + PROXY_HOST + " " + CONTROL_HOST
+HOSTS = ("127.0.0.1 localhost catchplate decision-gate-rs " + PROXY_HOST + " " + CONTROL_HOST
     + "\n" + FIXTURE_IP + " " + " ".join(PROVIDER_HOSTS) + "\n").encode("ascii")
 FAULT_GATE_IP, FAULT_GATE_HOSTS_NAME = "127.0.0.2", "hosts-fault-gate"
 FAULT_GATE_HOSTS = ("127.0.0.1 localhost decision-gate-rs " + PROXY_HOST + " " + CONTROL_HOST
     + "\n" + FIXTURE_IP + " " + " ".join(PROVIDER_HOSTS)
-    + "\n" + FAULT_GATE_IP + " serverware\n").encode("ascii")
+    + "\n" + FAULT_GATE_IP + " catchplate\n").encode("ascii")
 RESOLV = isolated.RESOLV
 QUOTA_REQUEST = "x-quota-restart.request.json"
 QUOTA_ACK = "x-quota-restart.ack.json"
@@ -66,7 +66,7 @@ def assert_isolated_network(*, attached=True, view="ordinary"):
                     relay_probe.bind((FAULT_GATE_IP, 0))
         for host, address in [(host, FIXTURE_IP) for host in PROVIDER_HOSTS] + [
                 (host, LOOPBACK) for host in (CONTROL_HOST, PROXY_HOST, "decision-gate-rs")] + [
-                ("serverware", FAULT_GATE_IP if gate else LOOPBACK)]:
+                ("catchplate", FAULT_GATE_IP if gate else LOOPBACK)]:
             require({item[4][0] for item in socket.getaddrinfo(host, 443, socket.AF_INET,
                 socket.SOCK_STREAM)} == {address})
 
@@ -87,14 +87,14 @@ def quota_checkpoint(value, *, ack=False):
     require(type(value) is dict and type(ack) is bool)
     if ack:
         require(set(value) == {"schema", "request_sha256", "status"}
-            and value["schema"] == "serverware.privateXQuotaRestartAck/v1"
+            and value["schema"] == "catchplate.privateXQuotaRestartAck/v1"
             and value["status"] == "retained_restarted"
             and type(value["request_sha256"]) is str
             and re.fullmatch(r"sha256:[0-9a-f]{64}", value["request_sha256"]))
     else:
         require(set(value) == {"schema", "run_id", "phase", "policy_hash", "credential_id",
             "application_ids", "initial_access_expires_at_epoch_ms"}
-            and value["schema"] == "serverware.privateXQuotaRestartRequest/v1"
+            and value["schema"] == "catchplate.privateXQuotaRestartRequest/v1"
             and value["phase"] == "after_three"
             and type(value["policy_hash"]) is str and re.fullmatch(r"sha256:[0-9a-f]{64}", value["policy_hash"])
             and type(value["application_ids"]) is list and len(value["application_ids"]) == 2)
@@ -134,7 +134,7 @@ def read_quota_checkpoint(*, ack=False):
 def acknowledge_quota_restart(request_sha256):
     request = read_quota_checkpoint()
     require(request is not None and request_sha256 == "sha256:" + hashlib.sha256(quota_json(request)).hexdigest())
-    value = quota_checkpoint({"schema": "serverware.privateXQuotaRestartAck/v1",
+    value = quota_checkpoint({"schema": "catchplate.privateXQuotaRestartAck/v1",
         "request_sha256": request_sha256, "status": "retained_restarted"}, ack=True)
     root = Path("/client-work")
     stage, target = root / (QUOTA_ACK + ".pending"), root / QUOTA_ACK
@@ -159,7 +159,7 @@ def quota_preservation_snapshot():
     import fcntl
     require(os.geteuid() == os.getegid() == 10001)
     require(json.loads(Path("/private-audit-fixture.json").read_bytes()) == {
-        "schema": "serverware.privateOperatorAuditFixture/v1", "syntheticOnly": True})
+        "schema": "catchplate.privateOperatorAuditFixture/v1", "syntheticOnly": True})
     def identity(path):
         row = path.lstat()
         require(stat.S_ISREG(row.st_mode) and row.st_nlink == 1 and row.st_uid == row.st_gid == 10001)
@@ -183,8 +183,8 @@ def quota_preservation_snapshot():
                 require(time.monotonic() < until)
                 time.sleep(.025)
         require([os.fstat(descriptor).st_dev, os.fstat(descriptor).st_ino] == before_lock[:2])
-        database = identity(Path("/data/serverware.sqlite3"))
-        conn = sqlite3.connect("file:/data/serverware.sqlite3?mode=ro", uri=True, timeout=2)
+        database = identity(Path("/data/catchplate.sqlite3"))
+        conn = sqlite3.connect("file:/data/catchplate.sqlite3?mode=ro", uri=True, timeout=2)
         try:
             conn.execute("PRAGMA query_only=ON"); conn.execute("BEGIN")
             tables = (*QUOTA_TABLES, "operator_catalog_state", "operator_catalog_credentials",
@@ -213,8 +213,8 @@ def quota_preservation_snapshot():
         finally:
             conn.close()
         keys = {name: file_hash(Path(name)) for name in QUOTA_KEY_FILES}
-        require(identity(lock) == before_lock and identity(Path("/data/serverware.sqlite3")) == database)
-        return {"schema": "serverware.privateXQuotaPreservation/v1", "database": database,
+        require(identity(lock) == before_lock and identity(Path("/data/catchplate.sqlite3")) == database)
+        return {"schema": "catchplate.privateXQuotaPreservation/v1", "database": database,
             "lock": before_lock, "tables": projected, "keys": keys, "claimed": 3, "outstanding": 0,
             "policy_hash": policy[0], "credential_id": credentials[0][0],
             "application_ids": sorted(row[0] for row in applications)}
@@ -278,7 +278,7 @@ def keep_namespace():
     require(all(int(status[key].strip(), 16) == 0 for key in ("CapEff", "CapPrm", "CapInh", "CapAmb"))
         and status["NoNewPrivs"].strip() == "1")
     assert_isolated_network()
-    _write(NETWORK_ROOT / "ready", json.dumps({"schema": "serverware.xPostFixtureNetwork/v1",
+    _write(NETWORK_ROOT / "ready", json.dumps({"schema": "catchplate.xPostFixtureNetwork/v1",
         "network": "none", "interfaces": ["lo"], "address": FIXTURE_IP,
         "effectiveCapabilities": 0}, sort_keys=True).encode("ascii"))
     stop = threading.Event()

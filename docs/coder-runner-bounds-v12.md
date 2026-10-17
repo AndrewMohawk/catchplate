@@ -79,7 +79,7 @@ start. The required mapping is:
 | Shared memory | Explicit `ShmSize`, private IPC |
 | Runtime scratch | Bounded private `/run` tmpfs |
 | Temporary scratch | Bounded private `/tmp` tmpfs |
-| Private workload data | Bounded private `/var/lib/serverware-runner` tmpfs |
+| Private workload data | Bounded private `/var/lib/catchplate-runner` tmpfs |
 | Aggregate lane output | Fresh controller-owned tmpfs with exact byte and inode caps, bound into the fixed output destination |
 
 The private tmpfs mounts are writable only within their declared limits and
@@ -98,7 +98,7 @@ or all kernel metadata. The inode limit also accounts for extended-attribute
 consumption. `noswap` disables this mount's swap use; it does not turn tmpfs
 into durable storage. See the primary [Linux tmpfs documentation](https://docs.kernel.org/filesystems/tmpfs.html).
 
-`/var/lib/serverware-runner` is the fixed private-data mount, not a caller-
+`/var/lib/catchplate-runner` is the fixed private-data mount, not a caller-
 selected host path. The separate source-owned PostgreSQL lifecycle creates its
 fresh `PGDATA` child there. It must not put the database or WAL in the host's root-backed `/tmp`,
 silently enlarge `/run` or `/tmp`, or fall back to an unbounded writable root
@@ -118,7 +118,7 @@ host Docker or database socket is exposed to repository code.
 ## Delegated generation cgroup ownership
 
 The source-fixed cgroup v2 root is
-`/sys/fs/cgroup/system.slice/serverware-coder-lifecycle-privileged-v12.service`.
+`/sys/fs/cgroup/system.slice/catchplate-coder-lifecycle-privileged-v12.service`.
 The unit requests `Delegate=cpu memory pids` and `DelegateSubgroup=supervisor`;
 the privileged controller must actually be in that subgroup. There is no
 fallback to a host-global Docker hierarchy or a different cgroup driver.
@@ -131,7 +131,7 @@ The source-owned layout is:
 ```text
 delegated service                         [no direct processes]
 ├─ supervisor                             [privileged controller]
-└─ serverware-coder-v12-<generation>       [no direct processes]
+└─ catchplate-coder-v12-<generation>       [no direct processes]
    ├─ daemon                             [dockerd and inherited daemon children]
    └─ containers                         [no direct processes]
       └─ Docker-created container cgroups [gated supervisors and workloads]
@@ -301,7 +301,7 @@ A candidate Python native-PG profile is:
 | Shared memory | 64 MiB |
 | `/run` | 64 MiB |
 | `/tmp` | 256 MiB |
-| `/var/lib/serverware-runner` | 2 GiB |
+| `/var/lib/catchplate-runner` | 2 GiB |
 | Aggregate output | 256 MiB, 4,096 inodes |
 
 The listed memory-backed capacities total 2,688 MiB, below the 4,096 MiB

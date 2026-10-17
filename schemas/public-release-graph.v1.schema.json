@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/public-release-graph.v1.schema.json",
-  "title": "Serverware public release graph v1",
+  "$id": "https://catchplate.invalid/schemas/public-release-graph.v1.schema.json",
+  "title": "Catchplate public release graph v1",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -14,7 +14,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.publicReleaseGraph/v1"
+      "const": "catchplate.publicReleaseGraph/v1"
     },
     "releaseIdentity": {
       "$ref": "release-identity.v1.schema.json"

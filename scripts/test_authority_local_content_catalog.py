@@ -22,9 +22,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts import test_authority_local_artifact_measure_cache as files
 from scripts.test_authority_local_startup_content_cache import RetainedFile
-from serverware import authority_local_artifact_measure as measure
-from serverware import authority_local_content_catalog as catalog
-from serverware import authority_local_startup as startup
+from catchplate import authority_local_artifact_measure as measure
+from catchplate import authority_local_content_catalog as catalog
+from catchplate import authority_local_startup as startup
 
 
 def sha(raw):
@@ -32,7 +32,7 @@ def sha(raw):
 
 
 def document(rows):
-    return json.dumps({"schema": "serverware.sealedContentCatalog/v1", "entries": rows},
+    return json.dumps({"schema": "catchplate.sealedContentCatalog/v1", "entries": rows},
         sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
 
 
@@ -121,8 +121,8 @@ class ContentCatalogTests(unittest.TestCase):
             with self.assertRaises(ValueError): measure.pinned_content_catalog(value, sha(raw))
         invalid = [raw + b"\n", b" " + raw, raw.replace(b'"schema"', b'"sche\\u006da"'),
             raw.replace(b'"size":0', b'"size":0,"size":0'),
-            raw.replace(b'"schema":"serverware.sealedContentCatalog/v1"',
-                b'"schema":"serverware.sealedContentCatalog/v1","schema":"serverware.sealedContentCatalog/v1"'),
+            raw.replace(b'"schema":"catchplate.sealedContentCatalog/v1"',
+                b'"schema":"catchplate.sealedContentCatalog/v1","schema":"catchplate.sealedContentCatalog/v1"'),
             b'[]', b'null', b'{"schema":"\xff","entries":[]}', raw.replace(b'"size":0', b'"size":0.0'),
             raw.replace(b'"size":0', b'"size":NaN')]
         for value in ({"schema": "wrong", "entries": [row]}, {"schema": catalog.SCHEMA, "entries": [row], "extra": 0},

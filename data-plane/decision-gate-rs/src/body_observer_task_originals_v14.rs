@@ -17,7 +17,7 @@ use std::ffi::CStr;
 
 pub(super) const TASK_ORIGINAL_COUNT: usize = 8;
 pub(super) const MAX_TASK_ORIGINAL_BYTES: u64 = 4 * (MAX_STATUS_BYTES as u64 + MAX_STAT_BYTES as u64);
-const BINDING_DOMAIN: &[u8] = b"serverware/controller-body-task-originals/v14\0";
+const BINDING_DOMAIN: &[u8] = b"catchplate/controller-body-task-originals/v14\0";
 
 fn invalid(message: &'static str) -> PlanProtocolError { PlanProtocolError::Invalid(message) }
 

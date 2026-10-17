@@ -11,8 +11,8 @@ from unittest import mock
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from serverware import authority_jit_original_configuration as source
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_jit_original_configuration as source
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
 
 def digest(raw):
@@ -56,7 +56,7 @@ class Fixture:
                 responseSigningSpkiDigest=spki, attestationReceiptDigest=attestation)
         roles["planner"].update(plannerSessionIdentityDigest=digest(b"planner session"),
             enabledOperations=["jit.assertion.issue"], databaseConnectTimeoutSeconds=2.75,
-            databaseRole="serverware_policy_authority_planner", tlsClientDn="CN=synthetic-planner",
+            databaseRole="catchplate_policy_authority_planner", tlsClientDn="CN=synthetic-planner",
             tlsClientSerial="17", tlsIssuerDn="CN=synthetic-ca", peerUid=65520, peerGid=65520)
         for name, uid, maximum in (("planner", 65518, 12_000_000_000),
                 ("verifier", 65520, 9_000_000_000), ("planner-writer", 65519, 10_000_000_000)):
@@ -66,7 +66,7 @@ class Fixture:
             plannerSessionIdentityDigest=roles["planner"]["plannerSessionIdentityDigest"],
             plannerSigningSpkiDigest=roles["planner"]["signingSpkiDigest"],
             plannerSigningPublicKeyBase64Url=roles["planner"]["signingPublicKeyBase64Url"],
-            databaseConnectTimeoutSeconds=2.75, databaseRole="serverware_policy_authority_planner_writer",
+            databaseConnectTimeoutSeconds=2.75, databaseRole="catchplate_policy_authority_planner_writer",
             tlsClientDn="CN=synthetic-writer", tlsClientSerial="19", tlsIssuerDn="CN=synthetic-ca")
         self.payload = dict(schema=config.CONFIG_SCHEMA,
             sourceRevision=source.evidence.authority.SOURCE_REVISION, roles=roles,

@@ -7,7 +7,7 @@ greenlet==3.2.2 \
     # via playwright
 packaging==26.0 \
     --hash=sha256:b36f1fef9334a5588b4166f8bcd26a14e521f2b55e6b9de3aaa80d3ff7a37529
-    # via Serverware browser preparation
+    # via Catchplate browser preparation
 playwright==1.61.0 \
     --hash=sha256:009588c2a7e499bc5a8b425b61fa65490968bbda9cd69e0cf2cff10f8304659a \
     --hash=sha256:35c6cc4589a5d00964a59d7b3e59641e0aac0c02f15479a7af77d20f6bc79597 \
@@ -17,7 +17,7 @@ playwright==1.61.0 \
     --hash=sha256:9f7de4536088d12037c13a52b7ea34b59270b78926bb56935070597ffac6b1af \
     --hash=sha256:e9fcbffcf557a8620fdedd92491eb59a32d18e23d6f3b4f6214b952be324fe51 \
     --hash=sha256:ff138c3a604f69911e9d42fd036e55c2a171e5616edf04c1e7f60a2a285540b0
-    # via Serverware browser preparation
+    # via Catchplate browser preparation
 pyee==13.0.1 \
     --hash=sha256:af2f8fede4171ef667dfded53f96e2ed0d6e6bd7ee3bb46437f77e3b57689228
     # via playwright

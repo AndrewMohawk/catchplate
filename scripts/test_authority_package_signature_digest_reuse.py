@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scripts.authority_history_roundtrip_fixture import build_package
-from serverware import authority_artifact_spec as spec
+from catchplate import authority_artifact_spec as spec
 
 PURPOSES = ("artifact-bundle", "generation")
 

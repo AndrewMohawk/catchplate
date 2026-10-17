@@ -1,7 +1,7 @@
 # Fixed-endpoint native parent ingress
 
 Status: source-only, unbuilt and unexecuted.
-[`serverware-native-parent-ingress`](../data-plane/decision-gate-rs/src/bin/serverware-native-parent-ingress.rs)
+[`catchplate-native-parent-ingress`](../data-plane/decision-gate-rs/src/bin/catchplate-native-parent-ingress.rs)
 accepts TCP connections on one configured address and forwards opaque bytes
 to one fixed enclave CID/port. It supplies the inbound half of the native
 transport path, not TLS termination, client authentication, Nitro attestation
@@ -23,7 +23,7 @@ Neither bridge selects a destination from TLS, HTTP or another on-wire command.
 The CLI shape is below. Paths and pins are placeholders, not an admitted launch:
 
 ```text
-serverware-native-parent-ingress \
+catchplate-native-parent-ingress \
   --configuration /approved/parent-ingress.json \
   --configuration-sha256 sha256:<exact-configuration-original-digest>
 ```
@@ -35,7 +35,7 @@ has exactly seven fields:
 
 | Field | Contract |
 | --- | --- |
-| `apiVersion` | Exactly `serverware.nativeParentIngressConfiguration/v1`. |
+| `apiVersion` | Exactly `catchplate.nativeParentIngressConfiguration/v1`. |
 | `listenAddress` | One concrete unicast `SocketAddr`, not a wildcard address; TCP port greater than 1,023. |
 | `enclaveCid` | Fixed destination CID greater than 3 and not `u32::MAX`. |
 | `enclavePort` | Fixed enclave vsock port greater than 1,023 and not `u32::MAX`. |
@@ -115,14 +115,14 @@ builds the autobin in its existing digest-pinned Rust 1.88 / Alpine 3.22 offline
 stage, using pinned Cargo/vendor/musl inputs and `cargo --frozen`. The recipe
 checks no ELF interpreter, no dynamic `NEEDED` entries and a size at most 64 MiB.
 It adds no dependency or download. `native-parent-ingress-artifact` exports
-`/serverware-native-parent-ingress`; the final image installs the static-stage
+`/catchplate-native-parent-ingress`; the final image installs the static-stage
 binary root-owned, mode 0555, at
-`/usr/local/libexec/serverware-native-parent-ingress`. The image's decision-gate
+`/usr/local/libexec/catchplate-native-parent-ingress`. The image's decision-gate
 `ENTRYPOINT` remains unchanged. The ordinary glibc output is not this export.
 
-The [service template](../ops/systemd/serverware-native-parent-ingress.service.in)
+The [service template](../ops/systemd/catchplate-native-parent-ingress.service.in)
 is review-required, unrendered and uninstalled. It names a separately precreated
-unprivileged `serverware-native-ingress` account/group and the fixed binary;
+unprivileged `catchplate-native-ingress` account/group and the fixed binary;
 only literal `@CONFIGURATION_PATH@` and `@CONFIGURATION_SHA256@` are substituted.
 It has no install section, renderer or `Restart` loop. TERM requests joined
 cancellation, followed by ten-second control-group KILL escalation; this is not

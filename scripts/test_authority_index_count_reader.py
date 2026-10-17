@@ -14,11 +14,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_index_contract as contract
-from serverware import authority_index_count_reader as counter
-from serverware import authority_index_projection as projection
-from serverware import authority_index_reader as reader
-from serverware import authority_query_read_work as measured
+from catchplate import authority_index_contract as contract
+from catchplate import authority_index_count_reader as counter
+from catchplate import authority_index_projection as projection
+from catchplate import authority_index_reader as reader
+from catchplate import authority_query_read_work as measured
 from scripts.test_authority_index_range import IndependentIndex, NIBBLES, TOP, WIDTH, digest, leaf
 
 

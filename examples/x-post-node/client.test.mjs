@@ -6,25 +6,25 @@ import { join } from 'node:path';
 import { configuration, createSdk, failure, installTransport, loadClientConfig, onePostInterceptor, parseArguments,
   perform, postText, proxyOptions, PUBLIC_X_DUMMY, X_ORIGIN } from './client.mjs';
 
-const env = () => ({ SERVERWARE_PROXY_URL: 'https://proxy.example.test',
-  SERVERWARE_APP_ID: '11111111-2222-4333-8444-555555555555',
-  SERVERWARE_PROXY_TOKEN: 'synthetic_app_token', SERVERWARE_CA_FILE: '/trusted/inner.pem',
-  SERVERWARE_X_POST_TEXT: 'An explicit synthetic post.', SERVERWARE_X_POST_CONFIRM: 'post-once' });
+const env = () => ({ CATCHPLATE_PROXY_URL: 'https://proxy.example.test',
+  CATCHPLATE_APP_ID: '11111111-2222-4333-8444-555555555555',
+  CATCHPLATE_PROXY_TOKEN: 'synthetic_app_token', CATCHPLATE_CA_FILE: '/trusted/inner.pem',
+  CATCHPLATE_X_POST_TEXT: 'An explicit synthetic post.', CATCHPLATE_X_POST_CONFIRM: 'post-once' });
 const pem = value => Buffer.from('-----BEGIN CERTIFICATE-----\n' + value + '\n-----END CERTIFICATE-----');
 const request = () => ({ origin: X_ORIGIN, path: '/2/tweets', method: 'POST', body: '{"text":"test"}' });
 const NOW = 1_791_996_000_000;
-const downloaded = () => ({ application_id: env().SERVERWARE_APP_ID,
-  access_rule_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', proxy_url: env().SERVERWARE_PROXY_URL,
-  proxy_authentication: 'basic_and_bearer_v1', proxy_username: env().SERVERWARE_APP_ID,
+const downloaded = () => ({ application_id: env().CATCHPLATE_APP_ID,
+  access_rule_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', proxy_url: env().CATCHPLATE_PROXY_URL,
+  proxy_authentication: 'basic_and_bearer_v1', proxy_username: env().CATCHPLATE_APP_ID,
   proxy_password: 'downloaded_synthetic_token', token_expires_at_epoch_ms: NOW + 60000,
-  ca_file: './serverware-ca.pem', proxy_ca_file: null, upstream_url: X_ORIGIN + '/2/tweets', methods: ['POST'],
+  ca_file: './catchplate-ca.pem', proxy_ca_file: null, upstream_url: X_ORIGIN + '/2/tweets', methods: ['POST'],
   operation_bundle: 'x_text_post_v1', credential_input: 'replace_exact', response_mode: 'x_post_json_v1',
-  client_recipe: { required_local_environment: ['SERVERWARE_X_POST_TEXT', 'SERVERWARE_X_POST_CONFIRM'],
+  client_recipe: { required_local_environment: ['CATCHPLATE_X_POST_TEXT', 'CATCHPLATE_X_POST_CONFIRM'],
     confirmation_value: 'post-once', automatic_retries: 0, sdk_auth_token: PUBLIC_X_DUMMY } });
 function configFile(t) {
-  const directory = mkdtempSync(join(tmpdir(), 'serverware-x-post-config-'));
+  const directory = mkdtempSync(join(tmpdir(), 'catchplate-x-post-config-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const path = join(directory, 'serverware-client.private.json');
+  const path = join(directory, 'catchplate-client.private.json');
   return { directory, path, write(value) { writeFileSync(path, JSON.stringify(value), { mode: 0o600 }); return path; } };
 }
 
@@ -32,18 +32,18 @@ test('downloaded config imports connection only; post content and confirmation r
   const file = configFile(t), value = downloaded();
   value.text = 'never-import'; value.request_body = { text: 'never-import' };
   value.request_headers = { Authorization: 'never-import' }; value.command = 'never-execute';
-  value.SERVERWARE_X_POST_TEXT = 'never-import'; value.SERVERWARE_X_POST_CONFIRM = 'post-once';
-  value.environment = { SERVERWARE_X_POST_TEXT: 'never-import', SERVERWARE_X_POST_CONFIRM: 'post-once' };
+  value.CATCHPLATE_X_POST_TEXT = 'never-import'; value.CATCHPLATE_X_POST_CONFIRM = 'post-once';
+  value.environment = { CATCHPLATE_X_POST_TEXT: 'never-import', CATCHPLATE_X_POST_CONFIRM: 'post-once' };
   value.client_recipe.environment = value.environment;
   const path = file.write(value);
-  for (const local of [{}, { SERVERWARE_X_POST_TEXT: 'local' }, { SERVERWARE_X_POST_CONFIRM: 'post-once' },
-    { SERVERWARE_X_POST_TEXT: 'local', SERVERWARE_X_POST_CONFIRM: 'yes' }])
+  for (const local of [{}, { CATCHPLATE_X_POST_TEXT: 'local' }, { CATCHPLATE_X_POST_CONFIRM: 'post-once' },
+    { CATCHPLATE_X_POST_TEXT: 'local', CATCHPLATE_X_POST_CONFIRM: 'yes' }])
     assert.throws(() => loadClientConfig(path, local, NOW));
-  const ambient = { ...env(), SERVERWARE_PROXY_CA_FILE: '/stale.pem' };
+  const ambient = { ...env(), CATCHPLATE_PROXY_CA_FILE: '/stale.pem' };
   assert.deepEqual(loadClientConfig(path, ambient, NOW), {
     proxyUrl: value.proxy_url, applicationId: value.application_id, token: value.proxy_password,
-    caFile: join(file.directory, 'serverware-ca.pem'), proxyCaFile: null, text: env().SERVERWARE_X_POST_TEXT });
-  assert.equal(ambient.SERVERWARE_PROXY_CA_FILE, '/stale.pem');
+    caFile: join(file.directory, 'catchplate-ca.pem'), proxyCaFile: null, text: env().CATCHPLATE_X_POST_TEXT });
+  assert.equal(ambient.CATCHPLATE_PROXY_CA_FILE, '/stale.pem');
   value.proxy_ca_file = './outer.pem';
   assert.equal(loadClientConfig(file.write(value), env(), NOW).proxyCaFile, join(file.directory, 'outer.pem'));
   delete value.proxy_ca_file;
@@ -68,7 +68,7 @@ test('downloaded config rejects mismatched identity, expired token and non-post 
 test('downloaded config is bounded regular JSON and errors omit private content', t => {
   const file = configFile(t), json = JSON.stringify(downloaded());
   writeFileSync(file.path, json.padEnd(65536, ' '));
-  assert.equal(loadClientConfig(file.path, env(), NOW).text, env().SERVERWARE_X_POST_TEXT);
+  assert.equal(loadClientConfig(file.path, env(), NOW).text, env().CATCHPLATE_X_POST_TEXT);
   for (const raw of ['', json.padEnd(65537, ' '), '{"secret":"private-canary"', 'null', '[]']) {
     writeFileSync(file.path, raw);
     assert.throws(() => loadClientConfig(file.path, env(), NOW), { message: 'X posting configuration or response refused' });
@@ -87,24 +87,24 @@ test('config CLI preserves environment invocation and cannot supply posting conf
 });
 
 test('posting requires exact confirmation and bounded text without rewriting', () => {
-  for (const patch of [{ SERVERWARE_X_POST_CONFIRM: undefined }, { SERVERWARE_X_POST_CONFIRM: 'yes' },
-    { SERVERWARE_X_POST_TEXT: '' }, { SERVERWARE_X_POST_TEXT: 'x\0y' },
-    { SERVERWARE_X_POST_TEXT: '\ud800' }, { SERVERWARE_X_POST_TEXT: '\udc00' },
-    { SERVERWARE_X_POST_TEXT: 'x'.repeat(16385) }, { SERVERWARE_X_POST_TEXT: '€'.repeat(5462) },
-    { SERVERWARE_X_POST_TEXT: '\t'.repeat(16384) }]) assert.throws(() => configuration({ ...env(), ...patch }));
+  for (const patch of [{ CATCHPLATE_X_POST_CONFIRM: undefined }, { CATCHPLATE_X_POST_CONFIRM: 'yes' },
+    { CATCHPLATE_X_POST_TEXT: '' }, { CATCHPLATE_X_POST_TEXT: 'x\0y' },
+    { CATCHPLATE_X_POST_TEXT: '\ud800' }, { CATCHPLATE_X_POST_TEXT: '\udc00' },
+    { CATCHPLATE_X_POST_TEXT: 'x'.repeat(16385) }, { CATCHPLATE_X_POST_TEXT: '€'.repeat(5462) },
+    { CATCHPLATE_X_POST_TEXT: '\t'.repeat(16384) }]) assert.throws(() => configuration({ ...env(), ...patch }));
   for (const text of ['  unchanged\n\t\r ', '🙂'.repeat(4096), 'x'.repeat(16384), 'é'.repeat(8192), 'x'.repeat(281)]) {
     assert.equal(postText(text), text);
-    assert.equal(configuration({ ...env(), SERVERWARE_X_POST_TEXT: text }).text, text);
+    assert.equal(configuration({ ...env(), CATCHPLATE_X_POST_TEXT: text }).text, text);
   }
 });
 
 test('explicit HTTPS proxy, application login and safe startup settings only', () => {
-  for (const patch of [{ SERVERWARE_PROXY_URL: 'http://proxy.example.test' },
-    { SERVERWARE_PROXY_URL: 'https://user:password@proxy.example.test' },
-    { SERVERWARE_PROXY_URL: 'https://proxy.example.test/path' },
-    { SERVERWARE_PROXY_URL: 'https://proxy.example.test?query=1' },
-    { SERVERWARE_PROXY_TOKEN: 'secret\nvalue' }, { SERVERWARE_APP_ID: 'bad' },
-    { SERVERWARE_CA_FILE: 'relative.pem' }, { SERVERWARE_PROXY_CA_FILE: 'relative.pem' },
+  for (const patch of [{ CATCHPLATE_PROXY_URL: 'http://proxy.example.test' },
+    { CATCHPLATE_PROXY_URL: 'https://user:password@proxy.example.test' },
+    { CATCHPLATE_PROXY_URL: 'https://proxy.example.test/path' },
+    { CATCHPLATE_PROXY_URL: 'https://proxy.example.test?query=1' },
+    { CATCHPLATE_PROXY_TOKEN: 'secret\nvalue' }, { CATCHPLATE_APP_ID: 'bad' },
+    { CATCHPLATE_CA_FILE: 'relative.pem' }, { CATCHPLATE_PROXY_CA_FILE: 'relative.pem' },
     { NODE_TLS_REJECT_UNAUTHORIZED: '0' }, { NODE_OPTIONS: '--require other.js' },
     { NODE_DEBUG: 'http' }, { NODE_DEBUG_NATIVE: 'tls' }, { SSLKEYLOGFILE: '/tmp/secrets' }])
     assert.throws(() => configuration({ ...env(), ...patch }));
@@ -115,7 +115,7 @@ test('explicit HTTPS proxy, application login and safe startup settings only', (
 });
 
 test('Basic CONNECT credential is separate from URL and both verified TLS legs', () => {
-  const config = configuration({ ...env(), SERVERWARE_PROXY_CA_FILE: '/trusted/outer.pem' });
+  const config = configuration({ ...env(), CATCHPLATE_PROXY_CA_FILE: '/trusted/outer.pem' });
   const options = proxyOptions(config, pem);
   assert.equal(options.uri, 'https://proxy.example.test');
   assert.equal(options.token, 'Basic ' + Buffer.from(config.applicationId + ':' + config.token).toString('base64'));
@@ -131,7 +131,7 @@ test('stock SDK receives only public user-context dummy and retries disabled', (
   createSdk(class { constructor(options) { actual = options; } });
   assert.deepEqual(actual, { baseUrl: X_ORIGIN, accessToken: PUBLIC_X_DUMMY, retry: false, timeout: 30000 });
   assert(!Object.hasOwn(actual, 'bearerToken'));
-  assert(!JSON.stringify(actual).includes(env().SERVERWARE_PROXY_TOKEN));
+  assert(!JSON.stringify(actual).includes(env().CATCHPLATE_PROXY_TOKEN));
 });
 
 test('one-dispatch guard preserves request/handler behavior and observes final status', () => {
@@ -209,14 +209,14 @@ test('201 and nonempty decimal ID required; malformed results never replay', asy
 test('withheld409/network/provider errors preserve uncertainty and redact all details', async () => {
   for (const status of [0, 409, 429, 500]) {
     const state = {}; let calls = 0;
-    const error = Object.assign(new Error('provider_secret_canary'), { status, data: { text: env().SERVERWARE_X_POST_TEXT } });
+    const error = Object.assign(new Error('provider_secret_canary'), { status, data: { text: env().CATCHPLATE_X_POST_TEXT } });
     await assert.rejects(perform(configuration(env()), { posts: { async create() { calls++; throw error; } } }, state), value => value === error);
     const result = failure(error, state);
     assert.equal(result.outcome, 'unknown'); assert.equal(result.mayHaveBeenPosted, true);
     assert.equal(result.automaticRetryAllowed, false); assert.equal(calls, 1);
     assert.equal(result.httpStatus, status || null);
     assert(!JSON.stringify(result).includes('provider_secret_canary'));
-    assert(!JSON.stringify(result).includes(env().SERVERWARE_X_POST_TEXT));
+    assert(!JSON.stringify(result).includes(env().CATCHPLATE_X_POST_TEXT));
   }
   assert.equal(failure(new Error('private_config_canary')).outcome, 'not_attempted');
   assert.equal(failure(null).mayHaveBeenPosted, false);
@@ -224,7 +224,7 @@ test('withheld409/network/provider errors preserve uncertainty and redact all de
 
 test('copied dependency lock preserves exact reviewed dependency identities', () => {
   const lock = JSON.parse(readFileSync(new URL('./package-lock.json', import.meta.url)));
-  assert.equal(lock.packages[''].name, 'serverware-x-post-example');
+  assert.equal(lock.packages[''].name, 'catchplate-x-post-example');
   assert.deepEqual(lock.packages[''].dependencies, { '@xdevplatform/xdk': '0.6.6', undici: '8.11.2' });
   for (const [name, version, integrity] of [
     ['@xdevplatform/xdk', '0.6.6', 'sha512-ced4iHSz08eQe1L0N3UWVvJyfGnmGU0CRjecoXpr27dVIyQvc637Pxm3cdP4G85PwhHn5IGVJ1DJF2YD9zWfAg=='],

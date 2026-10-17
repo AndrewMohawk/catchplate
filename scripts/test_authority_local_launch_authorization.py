@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from serverware import authority_local_launch_authorization as subject
+from catchplate import authority_local_launch_authorization as subject
 from scripts.authority import local_launch_authorization as cli
 
 
@@ -58,7 +58,7 @@ def environment_binding(*, evidence):
         startup=startup, descriptor_bindings=assignments)
     subject.stage.validate_local_argument_vector(argv, **arguments)
     initial = dict(LANG="C.UTF-8", PATH="/runtime/python/bin:/usr/bin",
-        SERVERWARE_AUTHORITY_ROLE=role)
+        CATCHPLATE_AUTHORITY_ROLE=role)
     effective = dict(initial, **{name: str(fd) for name, fd in assignments.items()})
     observed = {name: value for name, value in effective.items() if name in subject.launch.LOCAL_EXEC_ENVIRONMENT}
     return request, initial, observed, effective, argv, arguments

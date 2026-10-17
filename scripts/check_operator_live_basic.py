@@ -127,7 +127,7 @@ class LiveBasic(smoke.LiveSmoke):
     def __init__(self, args):
         self.proxy_secrets = []
         super().__init__(args)
-        self.run_id = "serverware-live-basic-" + uuid.uuid4().hex
+        self.run_id = "catchplate-live-basic-" + uuid.uuid4().hex
         self.plans = [{"route": route, "collection": collection, "name": self.run_id + "-" + kind,
                        "state": "not_submitted"} for route, collection, kind in smoke.CREATIONS]
         require(requests.__version__ == "2.31.0" and urllib3.__version__ == "2.0.7", "reviewed stock client versions differ")
@@ -164,7 +164,7 @@ class LiveBasic(smoke.LiveSmoke):
         addresses = {item[4][0] for item in socket.getaddrinfo(self.proxy.host, 443, type=socket.SOCK_STREAM)}
         require(addresses == {self.proxy.address}, "live proxy LAN resolution changed")
         headers = {"Authorization": smoke.DUMMY, "Content-Type": "application/json", "Accept": ACCEPT[client],
-                   "Accept-Encoding": "identity", "Connection": "close", "User-Agent": "serverware-test-run/" + self.run_id}
+                   "Accept-Encoding": "identity", "Connection": "close", "User-Agent": "catchplate-test-run/" + self.run_id}
         if client == "requests":
             proxy = "https://" + quote(username, safe="") + ":" + quote(token, safe="") + "@" + self.proxy.host
             self.proxy_secrets.append(proxy)
@@ -192,15 +192,15 @@ class LiveBasic(smoke.LiveSmoke):
                 "--proto", "=https", "--proto-redir", "=https", "--http1.1", "--connect-timeout", "3",
                 "--max-time", "8", "--retry", "0", "--max-filesize", "65536", "--raw", "--include", "--suppress-connect-headers",
                 "--request", "POST", "--data-binary", "@" + str(self.body_file),
-                "--write-out", "\nserverware-check-connect:%{http_connect}\nserverware-check-status:%{http_code}\n"]
+                "--write-out", "\ncatchplate-check-connect:%{http_connect}\ncatchplate-check-status:%{http_code}\n"]
             for name, value in headers.items():
                 arguments.extend(["--header", name + ": " + value])
             arguments.append(self.target())
             code, output, error = bounded_process(arguments, ('proxy-user = "' + username + ":" + token + '"\n').encode(), self.timeout())
             self.clean(output)
             self.clean(error)
-            wire, marker, tail = output.rpartition(b"\nserverware-check-connect:")
-            match = re.fullmatch(rb"([0-9]{3})\nserverware-check-status:([0-9]{3})\n", tail)
+            wire, marker, tail = output.rpartition(b"\ncatchplate-check-connect:")
+            match = re.fullmatch(rb"([0-9]{3})\ncatchplate-check-status:([0-9]{3})\n", tail)
             require(marker and match, "curl status receipt missing")
             connect, status = (int(value) for value in match.groups())
             if denied:
@@ -275,7 +275,7 @@ class LiveBasic(smoke.LiveSmoke):
         initial = self.catalog()
         smoke.preflight_catalog(initial)
         require(initial.get("capabilities", {}).get("application_proxy_authentication") == {
-            "schema": "serverware.operatorProxyAuthentication/v1", "modes": ["bearer", BASIC],
+            "schema": "catchplate.operatorProxyAuthentication/v1", "modes": ["bearer", BASIC],
             "path": PREFIX + "/applications/proxy-authentication"}, "paired Basic capability unavailable")
         self.policy_hash = initial["policy"]["policy_hash"]
         initial, _ = self.wait_catalog_loaded("live_basic_baseline")
@@ -337,7 +337,7 @@ class LiveBasic(smoke.LiveSmoke):
 
     def receipt(self, ok):
         result = super().receipt(ok)
-        result.update(schema="serverware.operatorLiveBasic/v1", dataPlaneBinaryDigest=PIN,
+        result.update(schema="catchplate.operatorLiveBasic/v1", dataPlaneBinaryDigest=PIN,
             requestsVersion=requests.__version__, urllib3Version=urllib3.__version__, curlExecutableSha256=CURL_SHA256,
             authenticationDenials=self.negative_observations, functionalRetries=0, customRequestsAdapter=False,
             manufacturedBasicHeaderUsed=False, freshApiNaturalExpiryVerified=False, allHeaderCredentialIsolationVerified=False,
@@ -354,7 +354,7 @@ def run_checks(args):
                 "explicit live Basic execution and bounded deadline required")
         require(args.run_claim_file.is_absolute() and args.run_claim_file.name == CLAIM, "exact live Basic claim required")
         args.control_base, args.management_base = "http://172.16.249.19:3000", "http://172.16.249.20:9091"
-        args.proxy_url, args.operator_origin, args.upstream_address = smoke.PROXY, "https://serverware-demo.example.com", "172.16.249.18"
+        args.proxy_url, args.operator_origin, args.upstream_address = smoke.PROXY, "https://catchplate-demo.example.com", "172.16.249.18"
         args.expected_binary_sha256 = PIN
         args.proxy_ca_file = args.control_ca_file = args.management_ca_file = None
         check = LiveBasic(args)
@@ -366,7 +366,7 @@ def run_checks(args):
         smoke.private_output(check.body_file, smoke.BODY)
         return check.run()
     except Exception as error:
-        result = check.receipt(False) if check is not None else {"ok": False, "schema": "serverware.operatorLiveBasic/v1"}
+        result = check.receipt(False) if check is not None else {"ok": False, "schema": "catchplate.operatorLiveBasic/v1"}
         result["error"] = str(error) if isinstance(error, smoke.CheckFailure) else type(error).__name__
         return result
 

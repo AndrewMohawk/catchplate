@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.local/schemas/adapters/alchemy.rpc_read.v1.schema.json",
+  "$id": "https://catchplate.local/schemas/adapters/alchemy.rpc_read.v1.schema.json",
   "title": "Closed Alchemy JSON-RPC read adapter",
   "type": "object",
   "additionalProperties": false,

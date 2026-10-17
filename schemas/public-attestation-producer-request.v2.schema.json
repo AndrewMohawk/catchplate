@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/public-attestation-producer-request.v2.schema.json",
-  "title": "Serverware public attestation producer request v2 with verifier-state saga v3",
+  "$id": "https://catchplate.invalid/schemas/public-attestation-producer-request.v2.schema.json",
+  "title": "Catchplate public attestation producer request v2 with verifier-state saga v3",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -12,7 +12,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.publicAttestationProducerRequest/v2"
+      "const": "catchplate.publicAttestationProducerRequest/v2"
     },
     "liveSessionRequest": {
       "type": "object",
@@ -36,7 +36,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.publicAttestationLiveRequest/v1"
+          "const": "catchplate.publicAttestationLiveRequest/v1"
         },
         "callerNonceBase64url": {"$ref": "#/$defs/base64url32"},
         "callerNonceSha256": {"$ref": "#/$defs/sha256"},
@@ -100,7 +100,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.publicAttestationNonceConsumption/v1"
+          "const": "catchplate.publicAttestationNonceConsumption/v1"
         },
         "consumedAtUnix": {"$ref": "#/$defs/positiveU64"},
         "nonceSha256": {"$ref": "#/$defs/sha256"},
@@ -139,7 +139,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.publicAttestationProducerInvocation/v1"
+          "const": "catchplate.publicAttestationProducerInvocation/v1"
         },
         "callerNonceSha256": {"$ref": "#/$defs/sha256"},
         "expiresAtUnix": {"$ref": "#/$defs/positiveU64"},
@@ -233,7 +233,7 @@
         "tlsStackMeasurementSha256"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.enclaveTlsScope/v2"},
+        "apiVersion": {"const": "catchplate.enclaveTlsScope/v2"},
         "bindingSha256": {"$ref": "#/$defs/sha256"},
         "connectionId": {"$ref": "#/$defs/identifier"},
         "connectionNonceSha256": {"$ref": "#/$defs/sha256"},
@@ -241,7 +241,7 @@
         "enclaveInstanceId": {"$ref": "#/$defs/identifier"},
         "expiresAtUnix": {"$ref": "#/$defs/positiveU64"},
         "exporterLabel": {
-          "const": "EXPORTER-Serverware-Attestation-v1"
+          "const": "EXPORTER-Catchplate-Attestation-v1"
         },
         "exporterSha256": {"$ref": "#/$defs/sha256"},
         "issuedAtUnix": {"$ref": "#/$defs/positiveU64"},
@@ -276,7 +276,7 @@
       "properties": {
         "apiVersion": {
           "type": "string",
-          "pattern": "^serverware\\.[A-Za-z0-9]+/v[0-9]+$"
+          "pattern": "^catchplate\\.[A-Za-z0-9]+/v[0-9]+$"
         },
         "payload": {"type": "object"},
         "payloadSha256": {"$ref": "#/$defs/sha256"},
@@ -295,7 +295,7 @@
         {
           "properties": {
             "apiVersion": {
-              "const": "serverware.signedNonceAuthorityAssuranceEvidence/v1"
+              "const": "catchplate.signedNonceAuthorityAssuranceEvidence/v1"
             },
             "payload": {
               "$ref": "public-attestation-config.v2.schema.json#/$defs/signedNonceAssuranceEvidence/properties/payload"
@@ -310,7 +310,7 @@
         {
           "properties": {
             "apiVersion": {
-              "const": "serverware.signedNonceAuthorityVerifierState/v1"
+              "const": "catchplate.signedNonceAuthorityVerifierState/v1"
             },
             "payload": {
               "$ref": "attestation-verifier-state-service.v1.schema.json#/$defs/statePayload"
@@ -325,7 +325,7 @@
         {
           "properties": {
             "apiVersion": {
-              "const": "serverware.nonceAuthorityVerifierStatePreparedAuthorization/v3"
+              "const": "catchplate.nonceAuthorityVerifierStatePreparedAuthorization/v3"
             },
             "payload": {
               "$ref": "attestation-verifier-state-service.v1.schema.json#/$defs/authorizationPayload"
@@ -340,7 +340,7 @@
         {
           "properties": {
             "apiVersion": {
-              "const": "serverware.nonceAuthorityVerifierStateCommitReceipt/v3"
+              "const": "catchplate.nonceAuthorityVerifierStateCommitReceipt/v3"
             },
             "payload": {
               "$ref": "attestation-verifier-state-service.v1.schema.json#/$defs/commitReceiptPayload"
@@ -355,7 +355,7 @@
         {
           "properties": {
             "apiVersion": {
-              "const": "serverware.signedVerifierStateStoreCommitProof/v3"
+              "const": "catchplate.signedVerifierStateStoreCommitProof/v3"
             },
             "payload": {
               "$ref": "attestation-verifier-state-service.v1.schema.json#/$defs/storeCommitProof"
@@ -375,7 +375,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nonceAuthorityVerifierStateReadResponse/v3"
+          "const": "catchplate.nonceAuthorityVerifierStateReadResponse/v3"
         },
         "nonActionable": {"const": true},
         "state": {"$ref": "#/$defs/signedVerifierState"},
@@ -403,7 +403,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.attestationVerifierStateClient/v2"
+          "const": "catchplate.attestationVerifierStateClient/v2"
         },
         "clientCertificateSpkiSha256": {"$ref": "#/$defs/sha256"},
         "endpoint": {
@@ -476,7 +476,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nonceAuthorityVerifierStateTransition/v3"
+          "const": "catchplate.nonceAuthorityVerifierStateTransition/v3"
         },
         "assurance": {
           "$ref": "public-attestation-config.v2.schema.json#/$defs/nonceAuthorityAssurance"
@@ -506,7 +506,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.attestationVerifierStateCommitRequest/v3"
+              "const": "catchplate.attestationVerifierStateCommitRequest/v3"
             },
             "authorization": {
               "$ref": "#/$defs/signedVerifierStateAuthorization"

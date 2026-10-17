@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-generation-coordinator.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-generation-coordinator.v1.schema.json",
   "$ref": "#/$defs/configuration",
   "$comment": "Source-selected coordinator and second-round certification. Existing scalar/epoch/request definitions are reused without permissions aliases. Opaque artifact bytes are independently decoded into exact existing phase structs; schema shape alone grants no effect. Whole service frame remains 4MiB; journal and complete grant limits are tighter.",
   "$defs": {
@@ -45,7 +45,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeShadowGenerationGuestLaunch/v1"
+          "const": "catchplate.nativeShadowGenerationGuestLaunch/v1"
         },
         "keyAdmission": {
           "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
@@ -289,7 +289,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeGenerationCoordinatorAssignment/v1"
+          "const": "catchplate.nativeGenerationCoordinatorAssignment/v1"
         },
         "purpose": {
           "const": "native-generation-installation"
@@ -391,7 +391,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeGenerationCoordinatorGenesis/v1"
+          "const": "catchplate.nativeGenerationCoordinatorGenesis/v1"
         },
         "guest": {
           "$ref": "#/$defs/guest"
@@ -415,7 +415,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeGenerationCoordinatorRecord/v1"
+          "const": "catchplate.nativeGenerationCoordinatorRecord/v1"
         },
         "sequence": {
           "type": "integer",
@@ -470,7 +470,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.policyCustodyProductionDispatch/v4"
+          "const": "catchplate.policyCustodyProductionDispatch/v4"
         },
         "kind": {
           "enum": [
@@ -531,7 +531,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.policyCustodyProductionGeneration/v4"
+          "const": "catchplate.policyCustodyProductionGeneration/v4"
         },
         "serviceRole": {
           "$ref": "custody-service-generation-admission.v1.schema.json#/$defs/role"
@@ -595,8 +595,8 @@
       "properties": {
         "apiVersion": {
           "enum": [
-            "serverware.policyCustodyProductionGeneration/v4",
-            "serverware.policyCustodyProductionGeneration/v5"
+            "catchplate.policyCustodyProductionGeneration/v4",
+            "catchplate.policyCustodyProductionGeneration/v5"
           ]
         },
         "requestSha256": {
@@ -620,14 +620,14 @@
         }
       },
       "allOf": [
-        {"if":{"properties":{"apiVersion":{"const":"serverware.policyCustodyProductionGeneration/v4"}}},
+        {"if":{"properties":{"apiVersion":{"const":"catchplate.policyCustodyProductionGeneration/v4"}}},
          "then":{"properties":{"serviceTransitions":{"minItems":5,"maxItems":5},"result":{"properties":{"kind":{"enum":["generation-transition-preparation","generation-install-attestation","generation-abort-settlement"]}}}}},
          "else":{"properties":{"serviceTransitions":{"maxItems":0},"result":{"properties":{"kind":{"const":"native-generation-recovery"}}}}}}
       ],
       "description": "v4 remains five real phase certificates. v5 is only explicit native recovery, zero fabricated transitions; exact five signed observations plus native signature and retained completed originals are verified in Rust."
     },
     "phaseCompletion": {
-      "allOf": [{"$ref":"#/$defs/completion"},{"properties":{"apiVersion":{"const":"serverware.policyCustodyProductionGeneration/v4"}}}]
+      "allOf": [{"$ref":"#/$defs/completion"},{"properties":{"apiVersion":{"const":"catchplate.policyCustodyProductionGeneration/v4"}}}]
     },
     "proposal": {
       "type": "object",
@@ -642,7 +642,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeGenerationCoordinatorProposal/v1"
+          "const": "catchplate.nativeGenerationCoordinatorProposal/v1"
         },
         "request": {
           "$ref": "#/$defs/request"
@@ -726,7 +726,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.policyCustodyProductionAuthorityEndpoint/v4"
+          "const": "catchplate.policyCustodyProductionAuthorityEndpoint/v4"
         },
         "endpoint": {
           "$ref": "#/$defs/endpoint"
@@ -762,7 +762,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.policyCustodyProductionAuthorityEndpoint/v4"
+          "const": "catchplate.policyCustodyProductionAuthorityEndpoint/v4"
         },
         "endpoint": {
           "$ref": "#/$defs/endpoint"
@@ -817,7 +817,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.custodyServiceGenerationCertification/v1"
+          "const": "catchplate.custodyServiceGenerationCertification/v1"
         },
         "request": {
           "$ref": "#/$defs/endpointRequest"
@@ -841,7 +841,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.custodyServiceGenerationCertified/v1"
+          "const": "catchplate.custodyServiceGenerationCertified/v1"
         },
         "certificationCommandSha256": {
           "$ref": "#/$defs/sha"
@@ -864,7 +864,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeGenerationCoordinatorConclusion/v1"
+          "const": "catchplate.nativeGenerationCoordinatorConclusion/v1"
         },
         "certification": {
           "$ref": "#/$defs/certification"
@@ -909,7 +909,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeGenerationCoordinatorCompleted/v1"
+          "const": "catchplate.nativeGenerationCoordinatorCompleted/v1"
         },
         "conclusion": {
           "$ref": "#/$defs/conclusion"
@@ -959,7 +959,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeGenerationRecovery/v1"
+          "const": "catchplate.nativeGenerationRecovery/v1"
         },
         "purpose": {
           "const": "native-generation-recovery-observation"

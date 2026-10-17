@@ -54,7 +54,7 @@ output, and it offers no adoption-signing mode.
 
 ## Actual cold-result controller
 
-`serverware-native-publication-genesis-controller` uses the existing fixed
+`catchplate-native-publication-genesis-controller` uses the existing fixed
 protected launch file and genuine C9 descriptors. It takes no arguments, runs
 under the existing root/single-thread/empty-environment contract, and requires
 an actual anonymous nonblocking write-only stdout pipe. There is no output
@@ -70,7 +70,7 @@ for operational retrieval; a Bundle is not that file or a durable adoption.
 
 ## One native adoption validator
 
-`serverware-native-publication-adoption-validator` is a public-data command,
+`catchplate-native-publication-adoption-validator` is a public-data command,
 not a signer. Invoke it with an empty environment as root and exactly
 `--input-fd N --input-sha256 SHA256`; stdout must be an anonymous nonblocking
 write-only pipe. Its purpose-fixed input pins complete originals. It reuses the
@@ -143,14 +143,14 @@ selection, legacy refusal, command syntax and synthetic package/build joins;
 they do not run the privileged entrypoint, sign an assignment or admit an owner.
 
 The same frozen source passes one offline, locked, frozen native compiler check
-for `serverware-decision-gate`, `serverware-native-publication-genesis-controller`
-and `serverware-native-publication-adoption-validator`, under pinned Rust 1.88,
+for `catchplate-decision-gate`, `catchplate-native-publication-genesis-controller`
+and `catchplate-native-publication-adoption-validator`, under pinned Rust 1.88,
 one CPU, 8 GiB memory and no network. Cargo reports 2m28s, with 312 library,
 2,520 gate, 2,805 controller and 3,063 validator warnings including duplicates.
 No Rust tests were compiled or executed; the seven new controller primitives
 remain unexecuted. No release image was rebuilt.
 
 Archive, exact harnesses, logs and checksums are retained at
-`codex-offload/serverware/engineering-builds/9676fa73-commissioning-VBipDM/`.
+`codex-offload/catchplate/engineering-builds/9676fa73-commissioning-VBipDM/`.
 No live ceremony, signing key, provider, deployment, cloud resource or paid test
 was used. These results do not establish a testable pilot or production acceptance.

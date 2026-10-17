@@ -36,7 +36,7 @@ def rule_values():
 
 def inputs_contract():
     from pydantic import ValidationError
-    from serverware.operator_catalog_inputs import RuleInput
+    from catchplate.operator_catalog_inputs import RuleInput
     base = rule_values()
     legacy = RuleInput(**base, response_fields=["status"])
     assert legacy.response_mode == "projected_json"
@@ -69,7 +69,7 @@ def _profile(route):
 
 
 def compiled_contract():
-    from serverware import operator_catalog_policy as policy
+    from catchplate import operator_catalog_policy as policy
     config, db, store, bundles, schema, inputs, mutations = workspace.workspace()
     credential = workspace.create_credential(db, store, schema, inputs, mutations)["credential"]
     application = workspace.create_application(db, store, schema, inputs, mutations)["application"]
@@ -142,7 +142,7 @@ def migration_compatibility():
     assert config.POLICY_BUNDLE_PATH.read_bytes() == original_bytes
     assert store.get_policy_high_water() == original_state
     assert all("response_mode" not in rule for rule in original["access_rules"])
-    from serverware import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
+    from catchplate import operator_catalog_inputs as inputs, operator_catalog_mutations as mutations
     _new_rule(db, store, schema, inputs, mutations, original["applications"][0], original["credentials"][0])
     current = workspace.catalog(db, schema)
     assert current["access_rules"][:2] == original["access_rules"]

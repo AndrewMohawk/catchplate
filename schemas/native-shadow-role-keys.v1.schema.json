@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-shadow-role-keys.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-shadow-role-keys.v1.schema.json",
   "$ref": "#/$defs/configuration",
   "$defs": {
     "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
@@ -31,7 +31,7 @@
         "signingKeyId", "signingKeySpkiSha256"
       ],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeShadowRoleKeyAssignment/v1" },
+        "apiVersion": { "const": "catchplate.nativeShadowRoleKeyAssignment/v1" },
         "profile": { "const": "preassigned-final-role-originals-v1" },
         "purpose": { "const": "shadow-role-key-possession" },
         "assignmentId": { "$ref": "#/$defs/sha256" }, "assignmentPayloadSha256": { "$ref": "#/$defs/sha256" },
@@ -55,7 +55,7 @@
     "configuration": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "authorization"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeShadowRoleKeys/v1" }, "authorization": { "$ref": "#/$defs/authorization" }
+        "apiVersion": { "const": "catchplate.nativeShadowRoleKeys/v1" }, "authorization": { "$ref": "#/$defs/authorization" }
       }
     },
     "publicKey": {
@@ -75,7 +75,7 @@
         "workerExecutableSha256", "fullKeySetRootSha256", "localKeySetRootSha256", "localKeys", "challengeBase64url"
       ],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeShadowRoleKeyStatement/v1" }, "purpose": { "const": "local-key-possession" },
+        "apiVersion": { "const": "catchplate.nativeShadowRoleKeyStatement/v1" }, "purpose": { "const": "local-key-possession" },
         "assignmentId": { "$ref": "#/$defs/sha256" }, "assignmentPayloadSha256": { "$ref": "#/$defs/sha256" },
         "assignmentRevision": { "$ref": "#/$defs/positive" }, "keyAuthorizationSha256": { "$ref": "#/$defs/sha256" },
         "guest": { "$ref": "#/$defs/guest" }, "productionConfigurationBindingSha256": { "$ref": "#/$defs/sha256" },
@@ -97,7 +97,7 @@
       "description": "Data-only original evidence, not a verified result or local owner constructor. Canonical base64url decoding, exact quoted framing and independently pinned Nitro verification remain mandatory.",
       "required": ["apiVersion", "statement", "possession", "attestationDocumentBase64url", "userDataBase64url", "publicKeyBase64url", "nonceBase64url"],
       "properties": {
-        "apiVersion": { "const": "serverware.nativeShadowRoleKeyEvidence/v1" }, "statement": { "$ref": "#/$defs/statement" },
+        "apiVersion": { "const": "catchplate.nativeShadowRoleKeyEvidence/v1" }, "statement": { "$ref": "#/$defs/statement" },
         "possession": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/possession" } },
         "attestationDocumentBase64url": { "type": "string", "minLength": 2, "maxLength": 16384, "pattern": "^[A-Za-z0-9_-]+$" },
         "userDataBase64url": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^[A-Za-z0-9_-]+$" },

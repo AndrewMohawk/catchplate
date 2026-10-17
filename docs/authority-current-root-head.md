@@ -1,6 +1,6 @@
 # Activation-planning current-root head observation
 
-The [head protocol](../serverware/authority_current_root_head.py) and actual
+The [head protocol](../catchplate/authority_current_root_head.py) and actual
 `CurrentRootDecisionOwner.observe_head` implement a separate read-only state
 observation for `oidc.session.activate`. This is source-only, unbuilt and
 unexecuted. It is not the completion lookup protocol, a receipt, an execution
@@ -16,8 +16,8 @@ historical APIs documented here do not accept consume observations.
 The canonical query is at most 4 KiB and has exactly seven fields:
 `schema`, `sourceRevision`, `enrollmentDigest`, `operation`, `challenge`,
 `contextDigest`, `expectedVectorDigest`. Its schema is
-`serverware.policyAuthorityCurrentRootHeadQuery/v1`; its original-byte identity
-domain is `serverware.policyAuthorityCurrentRootHeadQueryIdentity/v1`.
+`catchplate.policyAuthorityCurrentRootHeadQuery/v1`; its original-byte identity
+domain is `catchplate.policyAuthorityCurrentRootHeadQueryIdentity/v1`.
 `operation` must be `oidc.session.activate`.
 
 The actual caller must generate a fresh unpredictable 32-byte challenge for
@@ -29,8 +29,8 @@ observation or database response.
 
 The signed response is at most 8 KiB. Its exact envelope is `schema`, `payload`,
 `signatureBase64Url`, with schema/signature domain
-`serverware.signedPolicyAuthorityCurrentRootHeadObservation/v1`. The payload
-schema is `serverware.policyAuthorityCurrentRootHeadObservation/v1`. Its
+`catchplate.signedPolicyAuthorityCurrentRootHeadObservation/v1`. The payload
+schema is `catchplate.policyAuthorityCurrentRootHeadObservation/v1`. Its
 eighteen fields bind:
 
 - Schema, source revision, enrollment digest, database ID, generation digest,

@@ -22,8 +22,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import native_pilot_adopted_endpoint_publication as runtime
-from serverware import native_pilot_genesis_core_profile as core
+from catchplate import native_pilot_adopted_endpoint_publication as runtime
+from catchplate import native_pilot_genesis_core_profile as core
 from test_native_pilot_adopted_endpoint_plan import fixture
 
 p = runtime.p

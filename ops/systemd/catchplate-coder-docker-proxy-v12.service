@@ -1,0 +1,44 @@
+[Unit]
+Description=Catchplate Coder v12 unprivileged delegated-FD Docker proxy
+PartOf=catchplate-coder-v12.target
+After=local-fs.target catchplate-coder-runtime-v12.service catchplate-coder-docker-proxy-v12.socket catchplate-coder-lifecycle-v12.service
+Requires=catchplate-coder-runtime-v12.service catchplate-coder-docker-proxy-v12.socket catchplate-coder-lifecycle-v12.service
+Before=catchplate-coder-plan-executor-v12.service
+RequiresMountsFor=/var/lib/catchplate/coder-controller-v12
+
+[Service]
+Type=notify
+User=catchplate-coder-docker
+Group=catchplate-coder-docker
+SupplementaryGroups=catchplate-coder-docker-api catchplate-coder-lifecycle-api
+UMask=0077
+Sockets=catchplate-coder-docker-proxy-v12.socket
+ExecStart=@RELEASE_ROOT@/bin/catchplate-coder-docker-proxy-v12 --config @RELEASE_ROOT@/config/docker-proxy-v12.conf
+ExecStop=/bin/kill -TERM $MAINPID
+Restart=on-failure
+RestartSec=2s
+TimeoutStartSec=45s
+TimeoutStopSec=90s
+KillMode=control-group
+SendSIGKILL=yes
+FinalKillSignal=SIGKILL
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+ReadWritePaths=/run/catchplate/coder/v12/docker-proxy /var/lib/catchplate/coder-controller-v12/docker-proxy
+
+[Install]
+WantedBy=catchplate-coder-v12.target

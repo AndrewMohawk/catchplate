@@ -23,25 +23,25 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_capability as capability
-from serverware import authority_revocation_retention as retention
+from catchplate import authority_contract
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_capability as capability
+from catchplate import authority_revocation_retention as retention
 import test_authority_revocation_plan as oracle
 import test_authority_revocation_retention as record_oracle
 import test_authority_revocation_reservation as reservation_oracle
 import test_authority_revocation_wire as wire_oracle
 
 
-CAPABILITY_SCHEMA = "serverware.policyAuthorityDatabaseCapability/v4"
-SIGNED_SCHEMA = "serverware.signedPolicyAuthorityDatabaseCapability/v4"
-RECORD_SCHEMA = "serverware.policyAuthorityRevocationRetainedCapability/v1"
-REQUEST_SCHEMA = "serverware.policyAuthorityReplayWitnessRequest/v2"
-RECEIPT_SCHEMA = "serverware.policyAuthorityReplayWitnessReceipt/v2"
-HEAD_DOMAIN = "serverware.policyAuthorityReplayWitnessHead/v2"
-WITNESS_ENVELOPE_DOMAIN = "serverware.policyAuthorityReplayWitnessEnvelope/v2"
-WEBAUTHN_SCHEMA = "serverware.policyAuthorityWebAuthnReceipt/v1"
-CREDENTIAL_DOMAIN = "serverware.policyAuthorityWebAuthnCredentialBinding/v1"
+CAPABILITY_SCHEMA = "catchplate.policyAuthorityDatabaseCapability/v4"
+SIGNED_SCHEMA = "catchplate.signedPolicyAuthorityDatabaseCapability/v4"
+RECORD_SCHEMA = "catchplate.policyAuthorityRevocationRetainedCapability/v1"
+REQUEST_SCHEMA = "catchplate.policyAuthorityReplayWitnessRequest/v2"
+RECEIPT_SCHEMA = "catchplate.policyAuthorityReplayWitnessReceipt/v2"
+HEAD_DOMAIN = "catchplate.policyAuthorityReplayWitnessHead/v2"
+WITNESS_ENVELOPE_DOMAIN = "catchplate.policyAuthorityReplayWitnessEnvelope/v2"
+WEBAUTHN_SCHEMA = "catchplate.policyAuthorityWebAuthnReceipt/v1"
+CREDENTIAL_DOMAIN = "catchplate.policyAuthorityWebAuthnCredentialBinding/v1"
 PAYLOAD_FIELDS = frozenset({
     "schema", "capabilityId", "envelopeId", "plannerTransactionId",
     "authorizationProjectionDigest", "selectedBusinessRowsDigest", "mutationPlanDigest",
@@ -101,7 +101,7 @@ def webauthn_receipt(fixture):
     challenge, credential = original_rows(fixture)
     return {"schema": WEBAUTHN_SCHEMA,
         **{name: fixture.plan.payload["webauthnEvidence"][name] for name in WEBAUTHN_COPY_FIELDS},
-        "challengeRowDigest": oracle.framed("serverware.policyAuthorityWebAuthnChallengeRow/v1",
+        "challengeRowDigest": oracle.framed("catchplate.policyAuthorityWebAuthnChallengeRow/v1",
             oracle.wire(challenge)),
         "credentialBindingDigest": length_domain_digest(CREDENTIAL_DOMAIN, oracle.wire(credential))}
 
@@ -120,7 +120,7 @@ class CapabilityFixture:
         self.configuration_digest = oracle.sha(b"independently admitted authority configuration")
         self.generation_sequence = 3
         self.generation_digest = oracle.sha(b"independently admitted historical generation")
-        self.execution_envelope_id = oracle.framed("serverware.policyAuthorityExecutionEnvelope/v1",
+        self.execution_envelope_id = oracle.framed("catchplate.policyAuthorityExecutionEnvelope/v1",
             self.plan.semantic.receipt.capability_id.encode("ascii"), self.plan.planner_transaction_id.encode("ascii"))
         self.witness_request = {"schema": REQUEST_SCHEMA, "parentEnvelopeId": None, "phase": "reserve",
             "operation": "webauthn.credential.revoke", "requestDigest": self.plan.semantic.request_digest,
@@ -294,7 +294,7 @@ def independent_capability_work(fixture):
     phases["bindings"] = add(same(fixture.execution_request), (1, len(fixture.execution_bytes), 0),
         graph(fixture.plan.payload["mutationPlan"], 4, 4),
         graph(evidence["challengeId"]), graph(evidence["credentialRecordId"]),
-        oracle.json_digest_cost("serverware.policyAuthorityWebAuthnChallengeRow/v1", challenge),
+        oracle.json_digest_cost("catchplate.policyAuthorityWebAuthnChallengeRow/v1", challenge),
         graph(credential), oracle.utf8_cost(CREDENTIAL_DOMAIN), (1, 16 + len(oracle.wire(credential)), 0),
         oracle.json_digest_cost(WEBAUTHN_SCHEMA, service_receipt), same(fixture.payload))
     phases["record"] = add(oracle.frame_cost(CAPABILITY_SCHEMA, (oracle.wire(fixture.payload),)),
@@ -380,7 +380,7 @@ class RevocationCapabilityTests(unittest.TestCase):
         self.assertEqual(len(credential), 13)
         self.assertEqual(receipt, webauthn_receipt(fixture))
         self.assertEqual(receipt["challengeRowDigest"], oracle.framed(
-            "serverware.policyAuthorityWebAuthnChallengeRow/v1", oracle.wire(challenge)))
+            "catchplate.policyAuthorityWebAuthnChallengeRow/v1", oracle.wire(challenge)))
         self.assertEqual(receipt["credentialBindingDigest"], length_domain_digest(CREDENTIAL_DOMAIN, oracle.wire(credential)))
         self.assertNotEqual(receipt["credentialBindingDigest"], oracle.framed(CREDENTIAL_DOMAIN, oracle.wire(credential)))
         self.assertNotEqual(set(receipt), set(fixture.plan.payload["webauthnEvidence"]))
@@ -616,7 +616,7 @@ class RevocationCapabilityTests(unittest.TestCase):
                 bundle = fixture.plan.payload["revocationProofBundle"]
                 bundle["inputs"]["beforeProofs"][0]["rootDigest"] = oracle.sha(b"false raw primary proof")
                 fixture.plan.payload["rootTransition"]["proofBundleDigest"] = oracle.framed(
-                    "serverware.policyAuthorityRevocationProofBundle/v1", oracle.wire(bundle))
+                    "catchplate.policyAuthorityRevocationProofBundle/v1", oracle.wire(bundle))
             else:
                 fixture.plan.payload["expectedResult"] = {"false": "all outer signatures are genuine"}
             fixture.plan.rehash()

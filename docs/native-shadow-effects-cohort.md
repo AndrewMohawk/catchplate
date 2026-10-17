@@ -36,7 +36,7 @@ an inventory that cannot fit refuses before release.
 ## Actual resources
 
 `SpoolInputs` retains three additional listeners and their directories at
-`/run/serverware-shadow-{dispatch-barrier,active-effect-barrier,active-effect-commit}/listener.sock`.
+`/run/catchplate-shadow-{dispatch-barrier,active-effect-barrier,active-effect-commit}/listener.sock`.
 The corresponding child receives the fixed `<slug>-listener` activation and
 the Bridge receives `<slug>-peer-directory`. Listeners use the actual child UID
 and bridge GID, credentials and PIDFD receipt. Existing socket paths are refused,
@@ -51,7 +51,7 @@ direct old launch selection does not silently enable the effects profile.
 ## Ordinary effect owners and grants
 
 `FiveServiceLaunch.start_effects()` reads only the protected
-`/etc/serverware/custody-effects-five.json` and configuration/v6. It uses the
+`/etc/catchplate/custody-effects-five.json` and configuration/v6. It uses the
 existing real five-service business resource owner. Its DRS, Cleanup and Current
 children use runtime/v8 and `--guest-c9-effects-inspected`, with independently
 supplied final peer inspection. The other two services keep their existing

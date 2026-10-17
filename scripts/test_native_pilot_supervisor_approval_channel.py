@@ -19,14 +19,14 @@ import unittest
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import native_pilot_supervisor_approval_channel as channel
+from catchplate import native_pilot_supervisor_approval_channel as channel
 
 
 def pending(index=0, *, deadline=None, padding=0):
     deadline = channel._clock() + 10_000_000_000 if deadline is None else deadline
     name = channel.heads.JOB_NAMES[index]
     sequence = channel._SEQUENCES[name]
-    request = channel.p.canonical({"apiVersion": "serverware.nativePilotAuthorityJobRequest/v1",
+    request = channel.p.canonical({"apiVersion": "catchplate.nativePilotAuthorityJobRequest/v1",
         "sequence": sequence, "conductorSequence": 6, "conductorRequestSha256": "sha256:" + "1" * 64,
         "phase": "bridge-runtime", "jobIndex": index + 1, "job": name,
         "deadlineBoottimeNs": str(deadline), "conductorRequest": None, "previousResult": None})

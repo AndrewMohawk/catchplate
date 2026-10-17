@@ -13,7 +13,7 @@ from .config import InstallError, check_path, load_config, parse_json, read_file
 
 DIRECTORIES = ("app-data", "gate-data", "service-secrets", "provider-custody", "x-custody",
     "notification-custody", "ecr-artifacts", "edge-secrets", "edge")
-TEMPLATE = Path(__file__).resolve().parents[2] / "docker/serverware-standalone/nginx.conf.template"
+TEMPLATE = Path(__file__).resolve().parents[2] / "docker/catchplate-standalone/nginx.conf.template"
 
 
 def _inspect_image(reference: str) -> dict:
@@ -31,16 +31,16 @@ def _inspect_image(reference: str) -> dict:
 
 def _artifact(image: dict) -> dict:
     labels = image["labels"]
-    if (type(labels) is not dict or labels.get("io.serverware.artifact.schema") != "serverware.standaloneArtifact/v1"
-            or labels.get("io.serverware.artifact.path") != "/opt/serverware/artifact.json"):
-        raise InstallError("The paired image is not a standalone Serverware artifact; build it explicitly first.")
+    if (type(labels) is not dict or labels.get("io.catchplate.artifact.schema") != "catchplate.standaloneArtifact/v1"
+            or labels.get("io.catchplate.artifact.path") != "/opt/catchplate/artifact.json"):
+        raise InstallError("The paired image is not a standalone Catchplate artifact; build it explicitly first.")
     # A networkless, read-only metadata utility, not app or gate startup. There
     # are no host data mounts, provider credentials or secret command arguments.
     raw = process.run(["docker", "run", "--rm", "--pull", "never", "--network", "none", "--read-only",
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--user", "10001:10001",
         "--pids-limit", "32", "--memory", "64m", "--cpus", "0.25", "--entrypoint", "python",
         image["id"], "-I", "-B", "-c",
-        "import sys; sys.stdout.buffer.write(open('/opt/serverware/artifact.json','rb').read(8193))"], timeout=20)
+        "import sys; sys.stdout.buffer.write(open('/opt/catchplate/artifact.json','rb').read(8193))"], timeout=20)
     if len(raw) > 8192:
         raise InstallError("The paired image artifact exceeds its metadata bound.")
     value = state.artifact(parse_json(raw))
@@ -60,7 +60,7 @@ def _network_preflight(config, instance_id):
                 command.append("--internal")
             if config["network_subnets"] is not None:
                 command.extend(("--subnet", config["network_subnets"][name]))
-            command.append("serverware-preflight-" + instance_id + "-" + name)
+            command.append("catchplate-preflight-" + instance_id + "-" + name)
             identifiers = lifecycle._identifiers(process.run(command, timeout=15))
             if len(identifiers) != 1:
                 raise InstallError("Docker did not identify its temporary network.")
@@ -128,7 +128,7 @@ def initialize(config_path: Path, password: bytes) -> dict:
         files = {"compose.json": rendered, "edge/nginx.conf": edge,
             "edge-secrets/tls.crt": certificate, "edge-secrets/tls.key": key,
             "edge-secrets/htpasswd": config["admin_username"].encode() + b":" + hashed + b"\n",
-            "edge-secrets/operator-admin-header.conf": b'proxy_set_header X-Serverware-Admin-Token "' + tokens["admin.token"] + b'";\n',
+            "edge-secrets/operator-admin-header.conf": b'proxy_set_header X-Catchplate-Admin-Token "' + tokens["admin.token"] + b'";\n',
             # The app's service-credential reader requires exact bytes without
             # surrounding whitespace. These are not newline-delimited files.
             **{"service-secrets/" + name: value for name, value in tokens.items()}}

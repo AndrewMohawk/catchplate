@@ -26,14 +26,14 @@ ROOT = Path(__file__).resolve().parents[1]
 CRATE = ROOT / "data-plane/decision-gate-rs"
 SCHEMAS = ROOT / "schemas"
 LAUNCHER_SOURCE = (
-    CRATE / "src/bin/serverware-production-launcher.rs"
+    CRATE / "src/bin/catchplate-production-launcher.rs"
 )
 PRODUCTION_TRUST = CRATE / "trust/launch-authority-root.ed25519.hex"
 GENERATOR = ROOT / "scripts/generate_production_launch_manifest.py"
 PLATFORM = "linux/amd64"
-CODER_IMAGE_REF = "serverware-production-launcher-adversarial:coder-v3"
-IMAGE_REF_ENV = "SERVERWARE_ADVERSARIAL_LAUNCHER_IMAGE"
-IMAGE_ID_ENV = "SERVERWARE_ADVERSARIAL_LAUNCHER_IMAGE_ID"
+CODER_IMAGE_REF = "catchplate-production-launcher-adversarial:coder-v3"
+IMAGE_REF_ENV = "CATCHPLATE_ADVERSARIAL_LAUNCHER_IMAGE"
+IMAGE_ID_ENV = "CATCHPLATE_ADVERSARIAL_LAUNCHER_IMAGE_ID"
 RUST_SLIM_BASE = (
     "rust:1.88-slim-bookworm"
     "@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89"
@@ -59,7 +59,7 @@ def offline_build_input_sha256() -> dict[Path, str]:
     # Expected digests come only from the reviewed snapshot manifests. Hashing
     # the current cache to choose acceptance pins would trust substituted bytes.
     spec = importlib.util.spec_from_file_location(
-        "serverware_production_dependency_prefetch",
+        "catchplate_production_dependency_prefetch",
         ROOT / "production-dependencies/prefetch.py",
     )
     if spec is None or spec.loader is None:
@@ -477,7 +477,7 @@ def nonce_rollback_assurance_pins() -> tuple[bytes, str]:
         ED25519_SPKI_PREFIX + bytes.fromhex("53" * 32)
     )
     assurance = {
-        "apiVersion": "serverware.nonceAuthorityAssurance/v1",
+        "apiVersion": "catchplate.nonceAuthorityAssurance/v1",
         "administrativeDomainSha256": "sha256:" + "1" * 64,
         "assuranceEvidenceSha256": "sha256:" + "2" * 64,
         "assuranceEvidenceType": "linearizableCasOperatorAttestation",
@@ -500,7 +500,7 @@ def nonce_rollback_assurance_pins() -> tuple[bytes, str]:
     }
     assurance_sha256 = sha256_prefixed(canonical_json_bytes(assurance))
     contract = {
-        "apiVersion": "serverware.productionNonceRollbackAssurancePins/v1",
+        "apiVersion": "catchplate.productionNonceRollbackAssurancePins/v1",
         "independentVerifierPins": {
             "expectedNonceAuthorityAssuranceIssuerSpkiSha256": (
                 sha256_prefixed(evidence_spki)
@@ -552,20 +552,20 @@ import signal
 import sys
 import time
 
-STATE = "/var/lib/serverware/production-proof"
+STATE = "/var/lib/catchplate/production-proof"
 COMMITTED_NAMES = [
     "LANG",
     "LC_ALL",
     "PATH",
-    "SERVERWARE_BOOTSTRAP_RECEIPT_API_VERSION",
-    "SERVERWARE_BOOTSTRAP_RECEIPT_FD",
-    "SERVERWARE_BOOTSTRAP_RECEIPT_SHA256",
-    "SERVERWARE_LAUNCHER_IMPORT_MODE",
+    "CATCHPLATE_BOOTSTRAP_RECEIPT_API_VERSION",
+    "CATCHPLATE_BOOTSTRAP_RECEIPT_FD",
+    "CATCHPLATE_BOOTSTRAP_RECEIPT_SHA256",
+    "CATCHPLATE_LAUNCHER_IMPORT_MODE",
     "TZ",
 ]
-REQUEST_DOMAIN = b"serverware.launchAuthorizationRequest/v2\0"
+REQUEST_DOMAIN = b"catchplate.launchAuthorizationRequest/v2\0"
 RECOVERY_IDENTITY_DOMAIN = (
-    b"serverware.launchAuthorizationAttemptRecoveryIdentity/v1\0"
+    b"catchplate.launchAuthorizationAttemptRecoveryIdentity/v1\0"
 )
 EXPECTED_AUTHORITY_KEY_ID = "__AUTHORITY_KEY_ID__"
 
@@ -583,15 +583,15 @@ def digest(value):
 def validate_child(phase):
     with open(STATE + "/" + phase + "-python-started", "w", encoding="ascii") as output:
         output.write("started\n")
-    assert os.getcwd() == "/opt/serverware/release"
+    assert os.getcwd() == "/opt/catchplate/release"
     assert os.environ["LANG"] == "C.UTF-8"
     assert os.environ["LC_ALL"] == "C.UTF-8"
     assert os.environ["PATH"] == "/usr/sbin:/usr/bin:/sbin:/bin"
     assert os.environ["TZ"] == "UTC"
-    assert os.environ["SERVERWARE_LAUNCHER_IMPORT_MODE"] == "retained-fd-only"
-    assert os.environ["SERVERWARE_BOOTSTRAP_RECEIPT_API_VERSION"] == "serverware.bootstrapReceipt/v3"
+    assert os.environ["CATCHPLATE_LAUNCHER_IMPORT_MODE"] == "retained-fd-only"
+    assert os.environ["CATCHPLATE_BOOTSTRAP_RECEIPT_API_VERSION"] == "catchplate.bootstrapReceipt/v3"
     assert sorted(os.environ) == sorted(
-        COMMITTED_NAMES + ["SERVERWARE_EXECUTING_SCRIPT_FD"]
+        COMMITTED_NAMES + ["CATCHPLATE_EXECUTING_SCRIPT_FD"]
     )
     for name in ("LD_PRELOAD", "LD_AUDIT", "PYTHONPATH", "PYTHONHOME"):
         assert name not in os.environ
@@ -604,7 +604,7 @@ def validate_child(phase):
         else:
             raise AssertionError("inherited descriptor 9 reached the Python child")
 
-    receipt_fd = int(os.environ["SERVERWARE_BOOTSTRAP_RECEIPT_FD"])
+    receipt_fd = int(os.environ["CATCHPLATE_BOOTSTRAP_RECEIPT_FD"])
     assert receipt_fd == 198
     metadata = os.fstat(receipt_fd)
     assert metadata.st_size > 0
@@ -620,7 +620,7 @@ def validate_child(phase):
     while len(receipt_bytes) < metadata.st_size:
         receipt_bytes += os.read(receipt_fd, metadata.st_size - len(receipt_bytes))
     assert len(receipt_bytes) == metadata.st_size
-    assert digest(receipt_bytes) == os.environ["SERVERWARE_BOOTSTRAP_RECEIPT_SHA256"]
+    assert digest(receipt_bytes) == os.environ["CATCHPLATE_BOOTSTRAP_RECEIPT_SHA256"]
 
     receipt = json.loads(receipt_bytes.decode("utf-8"))
     assert canonical(receipt) == receipt_bytes
@@ -642,21 +642,21 @@ def validate_child(phase):
         "argv",
         "environment",
     }
-    assert receipt["apiVersion"] == "serverware.bootstrapReceipt/v3"
+    assert receipt["apiVersion"] == "catchplate.bootstrapReceipt/v3"
     assert receipt["kind"] == "ProductionBootstrapReceipt"
     assert receipt["sourceTreeDigest"] == "sha256:" + "a" * 64
     assert len(receipt["launchId"]) == 64
     int(receipt["launchId"], 16)
     assert receipt["bootIdSha256"].startswith("sha256:")
-    with open("/etc/serverware/production-release-launch.json", "rb") as source:
+    with open("/etc/catchplate/production-release-launch.json", "rb") as source:
         manifest_bytes = source.read()
     assert receipt["manifest"]["sha256"] == digest(manifest_bytes)
     manifest = json.loads(manifest_bytes.decode("utf-8"))
     assert [root["path"] for root in receipt["python"]["importRoots"]] == [
-        "/opt/serverware/release",
-        "/opt/serverware/release/runtime/python/lib/python3.11",
-        "/opt/serverware/release/runtime/python/lib/python3.11/lib-dynload",
-        "/opt/serverware/release/vendor",
+        "/opt/catchplate/release",
+        "/opt/catchplate/release/runtime/python/lib/python3.11",
+        "/opt/catchplate/release/runtime/python/lib/python3.11/lib-dynload",
+        "/opt/catchplate/release/vendor",
     ]
     for name in ("preflightSha256", "readinessSha256"):
         assert len(receipt["argv"][name]) == 71
@@ -671,7 +671,7 @@ def validate_child(phase):
     assert statement["requestSha256"] == request_sha256
     assert authorization["authorizationSha256"] == digest(canonical(envelope))
     assert request == {
-        "apiVersion": "serverware.launchAuthorizationRequest/v2",
+        "apiVersion": "catchplate.launchAuthorizationRequest/v2",
         "kind": "ProductionLaunchAuthorizationRequest",
         "launcherNonce": receipt["launchId"],
         "bootIdSha256": receipt["bootIdSha256"],
@@ -736,7 +736,7 @@ def validate_child(phase):
         "verifierStateTlsClient",
         "verifierStateTlsServer",
     ]
-    assert envelope["apiVersion"] == "serverware.launchAuthorization/v2"
+    assert envelope["apiVersion"] == "catchplate.launchAuthorization/v2"
     assert envelope["kind"] == "ProductionLaunchAuthorization"
     assert len(statement["authorizationId"]) == 64
     int(statement["authorizationId"], 16)
@@ -769,7 +769,7 @@ def validate_child(phase):
     assert pins_path.startswith("/proc/self/fd/")
     pins_fd = int(pins_path.rsplit("/", 1)[1])
     nonce_binding = receipt["nonceRollbackAssurance"]
-    assert nonce_binding["apiVersion"] == "serverware.productionNonceRollbackAssuranceBinding/v1"
+    assert nonce_binding["apiVersion"] == "catchplate.productionNonceRollbackAssuranceBinding/v1"
     assert pins_fd == nonce_binding["retainedSnapshotFd"]
     assert pins_fd != receipt_fd
     assert pins_sha256 == nonce_binding["retainedSnapshotSha256"]
@@ -783,7 +783,7 @@ def validate_child(phase):
     pins_contract = json.loads(pins_bytes.decode("utf-8"))
     assert canonical(pins_contract) + b"\n" == pins_bytes
     assert digest(canonical(pins_contract)) == contract_sha256
-    assert pins_contract["apiVersion"] == "serverware.productionNonceRollbackAssurancePins/v1"
+    assert pins_contract["apiVersion"] == "catchplate.productionNonceRollbackAssurancePins/v1"
     assert nonce_binding["pinsFile"]["sha256"] == pins_sha256
     public_config = pins_contract["publicConfigPins"]
     assert set(nonce_binding["verifierStateService"]) == {
@@ -817,7 +817,7 @@ def validate_child(phase):
     else:
         raise AssertionError("sealed nonce rollback assurance snapshot accepted a write")
 
-    script_fd = int(os.environ["SERVERWARE_EXECUTING_SCRIPT_FD"])
+    script_fd = int(os.environ["CATCHPLATE_EXECUTING_SCRIPT_FD"])
     assert script_fd not in (receipt_fd, pins_fd)
     script_metadata = os.fstat(script_fd)
     assert fcntl.fcntl(script_fd, fcntl.F_GET_SEALS) & required_seals == required_seals
@@ -844,10 +844,10 @@ def validate_child(phase):
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
         "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
-        "SERVERWARE_BOOTSTRAP_RECEIPT_API_VERSION": "serverware.bootstrapReceipt/v3",
-        "SERVERWARE_BOOTSTRAP_RECEIPT_FD": "198",
-        "SERVERWARE_BOOTSTRAP_RECEIPT_SHA256": "sha256:<bootstrap-receipt>",
-        "SERVERWARE_LAUNCHER_IMPORT_MODE": "retained-fd-only",
+        "CATCHPLATE_BOOTSTRAP_RECEIPT_API_VERSION": "catchplate.bootstrapReceipt/v3",
+        "CATCHPLATE_BOOTSTRAP_RECEIPT_FD": "198",
+        "CATCHPLATE_BOOTSTRAP_RECEIPT_SHA256": "sha256:<bootstrap-receipt>",
+        "CATCHPLATE_LAUNCHER_IMPORT_MODE": "retained-fd-only",
         "TZ": "UTC",
     }
     assert receipt["environment"] == {
@@ -867,7 +867,7 @@ def validate_child(phase):
         with open(STATE + "/launched-request", "w", encoding="ascii") as output:
             output.write(request["launcherNonce"] + "\n")
     with open(STATE + "/" + phase + "-receipt-ok", "w", encoding="ascii") as output:
-        output.write(os.environ["SERVERWARE_BOOTSTRAP_RECEIPT_SHA256"] + "\n")
+        output.write(os.environ["CATCHPLATE_BOOTSTRAP_RECEIPT_SHA256"] + "\n")
 '''
 
 PREFLIGHT = CHILD_COMMON + r'''
@@ -875,10 +875,10 @@ validate_child("preflight")
 with open(STATE + "/preflight-ran", "w", encoding="ascii") as output:
     output.write("preflight\n")
 if os.path.exists(STATE + "/mutate-readiness-source"):
-    runner_path = "/opt/serverware/release/scripts/runner.py"
+    runner_path = "/opt/catchplate/release/scripts/runner.py"
     before = os.stat(runner_path, follow_symlinks=False)
     hostile = (
-        b"open('/var/lib/serverware/production-proof/mutated-readiness-ran', 'w').write('bad\\n')\n"
+        b"open('/var/lib/catchplate/production-proof/mutated-readiness-ran', 'w').write('bad\\n')\n"
         b"raise SystemExit(91)\n"
     )
     with open(runner_path, "r+b", buffering=0) as target:
@@ -925,7 +925,7 @@ static void mark_loaded(void) __attribute__((constructor));
 static void mark_loaded(void) {
     const char marker[] = "hostile loader executed\n";
     int fd = open(
-        "/var/lib/serverware/production-proof/hostile-loader-ran",
+        "/var/lib/catchplate/production-proof/hostile-loader-ran",
         O_WRONLY | O_CREAT | O_APPEND,
         0600
     );
@@ -954,38 +954,38 @@ import time
 from pathlib import Path
 
 
-SOCKET = Path("/run/serverware/launch-authority.sock")
-LAUNCHER = Path("/opt/serverware/bin/serverware-production-launcher-test")
+SOCKET = Path("/run/catchplate/launch-authority.sock")
+LAUNCHER = Path("/opt/catchplate/bin/catchplate-production-launcher-test")
 LAUNCHER_BACKUP = LAUNCHER.with_name(LAUNCHER.name + ".authority-original")
-MANIFEST = Path("/etc/serverware/production-release-launch.json")
-NONCE_PINS = Path("/etc/serverware/nonce-rollback-assurance-pins.json")
+MANIFEST = Path("/etc/catchplate/production-release-launch.json")
+NONCE_PINS = Path("/etc/catchplate/nonce-rollback-assurance-pins.json")
 NONCE_PINS_BACKUP = NONCE_PINS.with_name(
     NONCE_PINS.name + ".authority-original"
 )
-PIPELINE_METADATA = Path("/etc/serverware/production-launch-pipeline.json")
-STATE = Path("/var/lib/serverware/production-proof")
+PIPELINE_METADATA = Path("/etc/catchplate/production-launch-pipeline.json")
+STATE = Path("/var/lib/catchplate/production-proof")
 REPLAY = STATE / "replay-authorization-envelope.json"
-PRIVATE_KEY = Path("/etc/serverware/test-launch-authority-private.pem")
-WRONG_PRIVATE_KEY = Path("/etc/serverware/test-launch-authority-wrong-private.pem")
-WITNESS_PRIVATE_KEY = Path("/etc/serverware/test-launch-witness-private.pem")
+PRIVATE_KEY = Path("/etc/catchplate/test-launch-authority-private.pem")
+WRONG_PRIVATE_KEY = Path("/etc/catchplate/test-launch-authority-wrong-private.pem")
+WITNESS_PRIVATE_KEY = Path("/etc/catchplate/test-launch-witness-private.pem")
 WITNESS_ASSURANCE_ISSUER_PRIVATE_KEY = Path(
-    "/etc/serverware/test-launch-witness-assurance-issuer-private.pem"
+    "/etc/catchplate/test-launch-witness-assurance-issuer-private.pem"
 )
 WITNESS_STORE_ASSURANCE = Path(
-    "/etc/serverware/test-launch-witness-store-assurance.json"
+    "/etc/catchplate/test-launch-witness-store-assurance.json"
 )
 GLOBAL_ROLE_REGISTRY = Path(
-    "/etc/serverware/production-launch-global-role-registry.json"
+    "/etc/catchplate/production-launch-global-role-registry.json"
 )
-TRUST_METADATA = Path("/etc/serverware/test-launch-trust-metadata.json")
+TRUST_METADATA = Path("/etc/catchplate/test-launch-trust-metadata.json")
 PUBLIC_KEY_HEX = "__PUBLIC_KEY_HEX__"
 WITNESS_PUBLIC_HEX = "__WITNESS_PUBLIC_HEX__"
 WITNESS_ASSURANCE_ISSUER_PUBLIC_HEX = (
     "__WITNESS_ASSURANCE_ISSUER_PUBLIC_HEX__"
 )
 SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
-REQUEST_DOMAIN = b"serverware.launchAuthorizationRequest/v2\0"
-AUTHORIZATION_DOMAIN = b"serverware.launchAuthorization/v2\0"
+REQUEST_DOMAIN = b"catchplate.launchAuthorizationRequest/v2\0"
+AUTHORIZATION_DOMAIN = b"catchplate.launchAuthorization/v2\0"
 REQUEST_FIELDS = {
     "apiVersion",
     "kind",
@@ -1060,9 +1060,9 @@ ROLES_OUTSIDE_CLAIM = [
     "verifierStateTlsServer",
 ]
 RECOVERY_IDENTITY_DOMAIN = (
-    b"serverware.launchAuthorizationAttemptRecoveryIdentity/v1\0"
+    b"catchplate.launchAuthorizationAttemptRecoveryIdentity/v1\0"
 )
-WITNESS_DOMAIN = b"serverware.launchAuthorityWitnessTransition/v1\0"
+WITNESS_DOMAIN = b"catchplate.launchAuthorityWitnessTransition/v1\0"
 BINDING_MUTATIONS = {
     "bind-manifest": "manifestSha256",
     "bind-nonce-contract": "nonceRollbackAssuranceContractSha256",
@@ -1118,7 +1118,7 @@ def validate_request(raw):
     require(canonical(request) == raw, "authorization request is not canonical JSON")
     require(set(request) == REQUEST_FIELDS, "authorization request fields are not closed")
     require(
-        request["apiVersion"] == "serverware.launchAuthorizationRequest/v2",
+        request["apiVersion"] == "catchplate.launchAuthorizationRequest/v2",
         "authorization request apiVersion is wrong",
     )
     require(
@@ -1137,7 +1137,7 @@ def validate_request(raw):
     )
     require(
         registry["apiVersion"]
-        == "serverware.productionLaunchGlobalRoleRegistry/v1"
+        == "catchplate.productionLaunchGlobalRoleRegistry/v1"
         and registry["claimScope"]
         == "roles-present-in-native-launch-contract"
         and registry["rolesOutsideClaim"] == ROLES_OUTSIDE_CLAIM,
@@ -1179,7 +1179,7 @@ def validate_request(raw):
     )
     require(
         request["launchAttemptJournalDomain"]
-        == "serverware.launchAuthorizationAttemptJournal/v1",
+        == "catchplate.launchAuthorizationAttemptJournal/v1",
         "launch attempt journal domain is invalid",
     )
     require(
@@ -1297,14 +1297,14 @@ def write_fixture_trust():
         "independentAdministration": True,
     }
     assurance_signed = {
-        "apiVersion": "serverware.launchAuthorityWitnessStoreAssurance/v1",
+        "apiVersion": "catchplate.launchAuthorityWitnessStoreAssurance/v1",
         "kind": "LaunchAuthorityWitnessStoreAssurance",
         "statement": assurance_statement,
     }
     assurance = {
         **assurance_signed,
         "signature": sign(
-            b"serverware.launchAuthorityWitnessStoreAssurance/v1\0"
+            b"catchplate.launchAuthorityWitnessStoreAssurance/v1\0"
             + canonical(assurance_signed),
             WITNESS_ASSURANCE_ISSUER_PRIVATE_KEY,
         ),
@@ -1343,7 +1343,7 @@ def write_fixture_trust():
         "policyActivation": digest(
             read_pem_spki(
                 Path(
-                    "/opt/serverware/release/evidence/"
+                    "/opt/catchplate/release/evidence/"
                     "policyActivationTrustedPublicKey.json"
                 )
             )
@@ -1351,7 +1351,7 @@ def write_fixture_trust():
         "policyIdentity": digest(
             read_pem_spki(
                 Path(
-                    "/opt/serverware/release/evidence/"
+                    "/opt/catchplate/release/evidence/"
                     "policyTrustedPublicKey.json"
                 )
             )
@@ -1359,7 +1359,7 @@ def write_fixture_trust():
         "reproducibleBuild": digest(
             read_pem_spki(
                 Path(
-                    "/opt/serverware/release/evidence/"
+                    "/opt/catchplate/release/evidence/"
                     "reproducibleBuildTrustedPublicKey.json"
                 )
             )
@@ -1371,7 +1371,7 @@ def write_fixture_trust():
         "fixture global role registry is not closed and pairwise distinct",
     )
     registry = {
-        "apiVersion": "serverware.productionLaunchGlobalRoleRegistry/v1",
+        "apiVersion": "catchplate.productionLaunchGlobalRoleRegistry/v1",
         "claimScope": "roles-present-in-native-launch-contract",
         "roles": roles,
         "rolesOutsideClaim": ROLES_OUTSIDE_CLAIM,
@@ -1476,7 +1476,7 @@ def build_envelope(request, mode):
         "checkpointSequence": 1,
     }
     witness_signed = {
-        "apiVersion": "serverware.launchAuthorityWitnessTransition/v1",
+        "apiVersion": "catchplate.launchAuthorityWitnessTransition/v1",
         "kind": "LaunchAuthorityWitnessTransition",
         "statement": witness_statement,
     }
@@ -1502,7 +1502,7 @@ def build_envelope(request, mode):
     if mode == "obsolete-use-limit":
         statement["useLimit"] = 1
     signed = {
-        "apiVersion": "serverware.launchAuthorization/v2",
+        "apiVersion": "catchplate.launchAuthorization/v2",
         "kind": "ProductionLaunchAuthorization",
         "statement": statement,
     }
@@ -1684,25 +1684,25 @@ import time
 from pathlib import Path
 
 
-LAUNCHER = Path("/opt/serverware/bin/serverware-production-launcher-test")
+LAUNCHER = Path("/opt/catchplate/bin/catchplate-production-launcher-test")
 LAUNCHER_BACKUP = LAUNCHER.with_name(LAUNCHER.name + ".authority-original")
 AUTHORITY = "/usr/local/libexec/launch_authority_fixture.py"
-AUTHORITY_SOCKET = Path("/run/serverware/launch-authority.sock")
-MANIFEST = Path("/etc/serverware/production-release-launch.json")
-NONCE_PINS = Path("/etc/serverware/nonce-rollback-assurance-pins.json")
+AUTHORITY_SOCKET = Path("/run/catchplate/launch-authority.sock")
+MANIFEST = Path("/etc/catchplate/production-release-launch.json")
+NONCE_PINS = Path("/etc/catchplate/nonce-rollback-assurance-pins.json")
 NONCE_PINS_BACKUP = NONCE_PINS.with_name(
     NONCE_PINS.name + ".authority-original"
 )
-PIPELINE_METADATA = Path("/etc/serverware/production-launch-pipeline.json")
-STATE = Path("/var/lib/serverware/production-proof")
+PIPELINE_METADATA = Path("/etc/catchplate/production-launch-pipeline.json")
+STATE = Path("/var/lib/catchplate/production-proof")
 ATTEMPT_JOURNAL = STATE / "launch-authorization-attempt.v1.json"
-RELEASE_ROOT = Path("/opt/serverware/release")
+RELEASE_ROOT = Path("/opt/catchplate/release")
 AUTHORITY_PRIVATE_KEY = Path(
-    "/etc/serverware/test-launch-authority-private.pem"
+    "/etc/catchplate/test-launch-authority-private.pem"
 )
-REQUEST_DOMAIN = b"serverware.launchAuthorizationRequest/v2\0"
+REQUEST_DOMAIN = b"catchplate.launchAuthorizationRequest/v2\0"
 RECOVERY_IDENTITY_DOMAIN = (
-    b"serverware.launchAuthorizationAttemptRecoveryIdentity/v1\0"
+    b"catchplate.launchAuthorizationAttemptRecoveryIdentity/v1\0"
 )
 INDEPENDENT_ADMINISTRATION_BINDINGS = (
     "launchAuthority.signingKeyId",
@@ -1857,10 +1857,10 @@ def launch(
     if hostile:
         environment.update(
             {
-                "LD_PRELOAD": "/opt/serverware/hostile/hostile.so",
-                "LD_AUDIT": "/opt/serverware/hostile/hostile.so",
-                "PYTHONPATH": "/opt/serverware/hostile/python",
-                "PYTHONHOME": "/opt/serverware/hostile/python-home",
+                "LD_PRELOAD": "/opt/catchplate/hostile/hostile.so",
+                "LD_AUDIT": "/opt/catchplate/hostile/hostile.so",
+                "PYTHONPATH": "/opt/catchplate/hostile/python",
+                "PYTHONHOME": "/opt/catchplate/hostile/python-home",
             }
         )
 
@@ -2146,14 +2146,14 @@ def launcher_locator_contract_rejected(name, mode, expected):
     original_mode = stat.S_IMODE(MANIFEST.stat().st_mode)
     manifest = json.loads(original.decode("utf-8"))
     if mode == "moved-state-directory":
-        manifest["stateDirectory"] = "/var/lib/serverware/other-production-proof"
+        manifest["stateDirectory"] = "/var/lib/catchplate/other-production-proof"
     elif mode == "moved-journal":
         manifest["launchAttemptJournal"]["path"] = (
-            "/var/lib/serverware/production-proof/other-attempt.json"
+            "/var/lib/catchplate/production-proof/other-attempt.json"
         )
     elif mode == "moved-journal-lock":
         manifest["launchAttemptJournal"]["lockPath"] = (
-            "/var/lib/serverware/production-proof/other-attempt.lock"
+            "/var/lib/catchplate/production-proof/other-attempt.lock"
         )
     else:
         raise AssertionError("unknown launcher locator mutation: " + mode)
@@ -2174,7 +2174,7 @@ def nonce_manifest_contract_rejected(name, mode, expected):
     ]
     public = binding["contract"]["publicConfigPins"]
     if mode == "v2":
-        manifest["apiVersion"] = "serverware.productionReadinessLaunch/v2"
+        manifest["apiVersion"] = "catchplate.productionReadinessLaunch/v2"
     elif mode == "unknown":
         binding["unexpected"] = True
     elif mode == "wrong-profile":
@@ -3052,16 +3052,16 @@ def dockerfile() -> str:
     )
     separator = f" {chr(92)}\n        "
     input_args = separator.join(
-        f"--{argument} /opt/serverware/release/evidence/{name}.json"
+        f"--{argument} /opt/catchplate/release/evidence/{name}.json"
         for argument, name in INPUTS
     )
     output_args = separator.join(
-        f"--{argument} /var/lib/serverware/production-proof/{filename}"
+        f"--{argument} /var/lib/catchplate/production-proof/{filename}"
         for argument, filename in OUTPUTS
     )
     names = " ".join(name for _, name in INPUTS)
     provenance = (
-        '{"provenance":{"source":"serverware-digest-pinned-production-release","source_tree":{"digest":"'
+        '{"provenance":{"source":"catchplate-digest-pinned-production-release","source_tree":{"digest":"'
         + SOURCE_TREE_DIGEST
         + '"},"version":2},"provenance_digest":"'
         + PROVENANCE_DIGEST
@@ -3090,9 +3090,9 @@ def dockerfile() -> str:
         COPY decision-gate-rs/src ./src
         COPY decision-gate-rs/trust ./trust
         COPY schemas /schemas
-        RUN cargo build --release --locked --bin serverware-production-launcher \\
-            && test "$(readelf -l /src/target/release/serverware-production-launcher | grep -c INTERP)" -eq 0 \\
-            && test "$(readelf -d /src/target/release/serverware-production-launcher | grep -c NEEDED)" -eq 0
+        RUN cargo build --release --locked --bin catchplate-production-launcher \\
+            && test "$(readelf -l /src/target/release/catchplate-production-launcher | grep -c INTERP)" -eq 0 \\
+            && test "$(readelf -d /src/target/release/catchplate-production-launcher | grep -c NEEDED)" -eq 0
 
         FROM --platform=linux/amd64 {PYTHON_SLIM_BASE} AS fixture-python-deps
         ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INDEX=1
@@ -3115,110 +3115,110 @@ def dockerfile() -> str:
                 -r requirements.lock
 
         FROM --platform=linux/amd64 {PYTHON_SLIM_BASE}
-        COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-production-launcher /opt/serverware/bin/serverware-production-launcher-test
+        COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-production-launcher /opt/catchplate/bin/catchplate-production-launcher-test
         COPY --chown=0:0 --chmod=0555 generate_production_launch_manifest.py /usr/local/libexec/generate_production_launch_manifest.py
         COPY --chown=0:0 --chmod=0500 launch_authority_fixture.py /usr/local/libexec/launch_authority_fixture.py
-        COPY --chown=0:0 --chmod=0400 test-launch-authority-private.pem /etc/serverware/test-launch-authority-private.pem
-        COPY --chown=0:0 --chmod=0400 test-launch-authority-wrong-private.pem /etc/serverware/test-launch-authority-wrong-private.pem
-        COPY --chown=0:0 --chmod=0400 test-launch-witness-private.pem /etc/serverware/test-launch-witness-private.pem
-        COPY --chown=0:0 --chmod=0400 test-launch-witness-assurance-issuer-private.pem /etc/serverware/test-launch-witness-assurance-issuer-private.pem
-        COPY --chown=0:0 --chmod=0444 policy-identity-public.pem /etc/serverware/test-policy-identity-public.pem
-        COPY --chown=0:0 --chmod=0444 policy-activation-public.pem /etc/serverware/test-policy-activation-public.pem
-        COPY --chown=0:0 --chmod=0444 reproducible-build-public.pem /etc/serverware/test-reproducible-build-public.pem
-        COPY --chown=0:0 --chmod=0400 nonce-rollback-assurance-pins.json /etc/serverware/nonce-rollback-assurance-pins.json
-        COPY --chown=0:0 --chmod=0444 {CONTEXT_MANIFEST_NAME} /etc/serverware/build-input-context-manifest.json
-        COPY --chown=0:0 --chmod=0400 preflight.py /opt/serverware/release/scripts/preflight.py
-        COPY --chown=0:0 --chmod=0400 runner.py /opt/serverware/release/scripts/runner.py
+        COPY --chown=0:0 --chmod=0400 test-launch-authority-private.pem /etc/catchplate/test-launch-authority-private.pem
+        COPY --chown=0:0 --chmod=0400 test-launch-authority-wrong-private.pem /etc/catchplate/test-launch-authority-wrong-private.pem
+        COPY --chown=0:0 --chmod=0400 test-launch-witness-private.pem /etc/catchplate/test-launch-witness-private.pem
+        COPY --chown=0:0 --chmod=0400 test-launch-witness-assurance-issuer-private.pem /etc/catchplate/test-launch-witness-assurance-issuer-private.pem
+        COPY --chown=0:0 --chmod=0444 policy-identity-public.pem /etc/catchplate/test-policy-identity-public.pem
+        COPY --chown=0:0 --chmod=0444 policy-activation-public.pem /etc/catchplate/test-policy-activation-public.pem
+        COPY --chown=0:0 --chmod=0444 reproducible-build-public.pem /etc/catchplate/test-reproducible-build-public.pem
+        COPY --chown=0:0 --chmod=0400 nonce-rollback-assurance-pins.json /etc/catchplate/nonce-rollback-assurance-pins.json
+        COPY --chown=0:0 --chmod=0444 {CONTEXT_MANIFEST_NAME} /etc/catchplate/build-input-context-manifest.json
+        COPY --chown=0:0 --chmod=0400 preflight.py /opt/catchplate/release/scripts/preflight.py
+        COPY --chown=0:0 --chmod=0400 runner.py /opt/catchplate/release/scripts/runner.py
         COPY --chown=0:0 --chmod=0500 fixture_driver.py /usr/local/libexec/fixture_driver.py
-        COPY --from=hostile-build --chown=0:0 --chmod=0555 /hostile.so /opt/serverware/hostile/hostile.so
-        COPY --from=fixture-python-deps --chown=0:0 /deps/. /opt/serverware/release/vendor/
+        COPY --from=hostile-build --chown=0:0 --chmod=0555 /hostile.so /opt/catchplate/hostile/hostile.so
+        COPY --from=fixture-python-deps --chown=0:0 /deps/. /opt/catchplate/release/vendor/
         RUN set -eu; \\
             openssl version; \\
-            mkdir -p /run/serverware \\
-                /opt/serverware/release/runtime/python/bin \\
-                /opt/serverware/release/runtime/python/lib/python3.11 \\
-                /opt/serverware/release/vendor \\
-                /opt/serverware/release/evidence \\
-                /opt/serverware/hostile/python \\
-                /opt/serverware/hostile/python-home \\
-                /var/lib/serverware/production-proof; \\
-            cp /usr/local/bin/python3.11 /opt/serverware/release/runtime/python/bin/python3; \\
-            cp /usr/local/lib/libpython3.11.so.1.0 /opt/serverware/release/runtime/python/lib/libpython3.11.so.1.0; \\
-            cp -RL /usr/local/lib/python3.11/. /opt/serverware/release/runtime/python/lib/python3.11/; \\
-            rm -rf /opt/serverware/release/runtime/python/lib/python3.11/site-packages \\
-                /opt/serverware/release/runtime/python/lib/python3.11/ensurepip \\
-                /opt/serverware/release/runtime/python/lib/python3.11/idlelib \\
-                /opt/serverware/release/runtime/python/lib/python3.11/tkinter \\
-                /opt/serverware/release/runtime/python/lib/python3.11/__pycache__; \\
-            find /opt/serverware/release/runtime/python/lib/python3.11 -type d -exec chmod 0755 {{}} +; \\
-            find /opt/serverware/release/runtime/python/lib/python3.11 -type f -exec chmod 0444 {{}} +; \\
-            test -f /opt/serverware/release/runtime/python/lib/libpython3.11.so.1.0; \\
-            test -n "$(find /opt/serverware/release/runtime/python/lib/python3.11/lib-dynload -maxdepth 1 -type f -name '*.so' -print -quit)"; \\
-            printf '__all__ = []\\n' > /opt/serverware/release/vendor/serverware_vendor.py; \\
-            find /opt/serverware/release/vendor -type d -exec chmod 0755 {{}} +; \\
-            find /opt/serverware/release/vendor -type f -exec chmod 0444 {{}} +; \\
-            chmod 0444 /opt/serverware/release/vendor/serverware_vendor.py; \\
-            chown -R 0:0 /opt/serverware /var/lib/serverware/production-proof /run/serverware; \\
-            chmod 0500 /opt/serverware/release/runtime/python/bin/python3; \\
-            chmod 0444 /opt/serverware/release/runtime/python/lib/libpython3.11.so.1.0; \\
-            chmod 0700 /var/lib/serverware/production-proof; \\
-            chmod 0755 /run/serverware; \\
-            printf 'services: {{}}\\n' > /opt/serverware/release/docker-compose.production.yml; \\
-            chmod 0444 /opt/serverware/release/docker-compose.production.yml; \\
-            printf 'SERVERWARE_TEST=1\\n' > /etc/serverware/production-readiness.env; \\
-            chmod 0400 /etc/serverware/production-readiness.env; \\
+            mkdir -p /run/catchplate \\
+                /opt/catchplate/release/runtime/python/bin \\
+                /opt/catchplate/release/runtime/python/lib/python3.11 \\
+                /opt/catchplate/release/vendor \\
+                /opt/catchplate/release/evidence \\
+                /opt/catchplate/hostile/python \\
+                /opt/catchplate/hostile/python-home \\
+                /var/lib/catchplate/production-proof; \\
+            cp /usr/local/bin/python3.11 /opt/catchplate/release/runtime/python/bin/python3; \\
+            cp /usr/local/lib/libpython3.11.so.1.0 /opt/catchplate/release/runtime/python/lib/libpython3.11.so.1.0; \\
+            cp -RL /usr/local/lib/python3.11/. /opt/catchplate/release/runtime/python/lib/python3.11/; \\
+            rm -rf /opt/catchplate/release/runtime/python/lib/python3.11/site-packages \\
+                /opt/catchplate/release/runtime/python/lib/python3.11/ensurepip \\
+                /opt/catchplate/release/runtime/python/lib/python3.11/idlelib \\
+                /opt/catchplate/release/runtime/python/lib/python3.11/tkinter \\
+                /opt/catchplate/release/runtime/python/lib/python3.11/__pycache__; \\
+            find /opt/catchplate/release/runtime/python/lib/python3.11 -type d -exec chmod 0755 {{}} +; \\
+            find /opt/catchplate/release/runtime/python/lib/python3.11 -type f -exec chmod 0444 {{}} +; \\
+            test -f /opt/catchplate/release/runtime/python/lib/libpython3.11.so.1.0; \\
+            test -n "$(find /opt/catchplate/release/runtime/python/lib/python3.11/lib-dynload -maxdepth 1 -type f -name '*.so' -print -quit)"; \\
+            printf '__all__ = []\\n' > /opt/catchplate/release/vendor/catchplate_vendor.py; \\
+            find /opt/catchplate/release/vendor -type d -exec chmod 0755 {{}} +; \\
+            find /opt/catchplate/release/vendor -type f -exec chmod 0444 {{}} +; \\
+            chmod 0444 /opt/catchplate/release/vendor/catchplate_vendor.py; \\
+            chown -R 0:0 /opt/catchplate /var/lib/catchplate/production-proof /run/catchplate; \\
+            chmod 0500 /opt/catchplate/release/runtime/python/bin/python3; \\
+            chmod 0444 /opt/catchplate/release/runtime/python/lib/libpython3.11.so.1.0; \\
+            chmod 0700 /var/lib/catchplate/production-proof; \\
+            chmod 0755 /run/catchplate; \\
+            printf 'services: {{}}\\n' > /opt/catchplate/release/docker-compose.production.yml; \\
+            chmod 0444 /opt/catchplate/release/docker-compose.production.yml; \\
+            printf 'CATCHPLATE_TEST=1\\n' > /etc/catchplate/production-readiness.env; \\
+            chmod 0400 /etc/catchplate/production-readiness.env; \\
             for name in {names}; do \\
-                printf '{{"fixture":true}}\\n' > "/opt/serverware/release/evidence/$name.json"; \\
-                chmod 0444 "/opt/serverware/release/evidence/$name.json"; \\
+                printf '{{"fixture":true}}\\n' > "/opt/catchplate/release/evidence/$name.json"; \\
+                chmod 0444 "/opt/catchplate/release/evidence/$name.json"; \\
             done; \\
-            cp /etc/serverware/test-policy-identity-public.pem /opt/serverware/release/evidence/policyTrustedPublicKey.json; \\
-            cp /etc/serverware/test-policy-activation-public.pem /opt/serverware/release/evidence/policyActivationTrustedPublicKey.json; \\
-            cp /etc/serverware/test-reproducible-build-public.pem /opt/serverware/release/evidence/reproducibleBuildTrustedPublicKey.json; \\
-            printf '%s\\n' '{provenance}' > /opt/serverware/release/evidence/releaseProvenance.json; \\
-            printf '%s\\n' 'open("/var/lib/serverware/production-proof/hostile-site-ran", "w").write("hostile site executed\\n")' \\
-                > /opt/serverware/hostile/python/sitecustomize.py; \\
-            cp /opt/serverware/hostile/python/sitecustomize.py /usr/local/lib/python3.11/sitecustomize.py; \\
-            chmod 0444 /opt/serverware/hostile/python/sitecustomize.py /usr/local/lib/python3.11/sitecustomize.py; \\
+            cp /etc/catchplate/test-policy-identity-public.pem /opt/catchplate/release/evidence/policyTrustedPublicKey.json; \\
+            cp /etc/catchplate/test-policy-activation-public.pem /opt/catchplate/release/evidence/policyActivationTrustedPublicKey.json; \\
+            cp /etc/catchplate/test-reproducible-build-public.pem /opt/catchplate/release/evidence/reproducibleBuildTrustedPublicKey.json; \\
+            printf '%s\\n' '{provenance}' > /opt/catchplate/release/evidence/releaseProvenance.json; \\
+            printf '%s\\n' 'open("/var/lib/catchplate/production-proof/hostile-site-ran", "w").write("hostile site executed\\n")' \\
+                > /opt/catchplate/hostile/python/sitecustomize.py; \\
+            cp /opt/catchplate/hostile/python/sitecustomize.py /usr/local/lib/python3.11/sitecustomize.py; \\
+            chmod 0444 /opt/catchplate/hostile/python/sitecustomize.py /usr/local/lib/python3.11/sitecustomize.py; \\
             python3 -I -S /usr/local/libexec/launch_authority_fixture.py generate-fixture-trust; \\
-            PYTHONPATH=/opt/serverware/release/vendor \\
+            PYTHONPATH=/opt/catchplate/release/vendor \\
             python3 -S /usr/local/libexec/generate_production_launch_manifest.py \\
-                --output /etc/serverware/production-release-launch.json \\
-                --release-root /opt/serverware/release \\
-                --state-directory /var/lib/serverware/production-proof \\
+                --output /etc/catchplate/production-release-launch.json \\
+                --release-root /opt/catchplate/release \\
+                --state-directory /var/lib/catchplate/production-proof \\
                 --source-tree-digest {SOURCE_TREE_DIGEST} \\
                 --deployment-audience {DEPLOYMENT_AUDIENCE} \\
                 --deployment-identity-sha256 {DEPLOYMENT_IDENTITY_DIGEST} \\
                 --release-sequence {RELEASE_SEQUENCE} \\
                 --rollback-epoch {ROLLBACK_EPOCH} \\
                 --expected-launch-authority-key-id {authority_key_id} \\
-                --global-role-registry /etc/serverware/production-launch-global-role-registry.json \\
+                --global-role-registry /etc/catchplate/production-launch-global-role-registry.json \\
                 --expected-global-role-registry-pins-sha256 "$(python3 -I -S /usr/local/libexec/launch_authority_fixture.py trust-value globalRoleRegistryPinsSha256)" \\
                 --launch-authority-witness-signing-public-key-spki-base64url "$(python3 -I -S /usr/local/libexec/launch_authority_fixture.py trust-value launchAuthorityWitnessSigningPublicKeySpkiDerBase64url)" \\
                 --expected-launch-authority-witness-key-id "$(python3 -I -S /usr/local/libexec/launch_authority_fixture.py trust-value launchAuthorityWitnessKeyId)" \\
                 --launch-authority-witness-identity-sha256 "$(python3 -I -S /usr/local/libexec/launch_authority_fixture.py trust-value launchAuthorityWitnessIdentitySha256)" \\
                 --launch-authority-witness-administrative-domain-sha256 "$(python3 -I -S /usr/local/libexec/launch_authority_fixture.py trust-value launchAuthorityWitnessAdministrativeDomainSha256)" \\
                 --launch-authority-witness-store-assurance-sha256 "$(python3 -I -S /usr/local/libexec/launch_authority_fixture.py trust-value launchAuthorityWitnessStoreAssuranceSha256)" \\
-                --launch-authority-witness-store-assurance /etc/serverware/test-launch-witness-store-assurance.json \\
+                --launch-authority-witness-store-assurance /etc/catchplate/test-launch-witness-store-assurance.json \\
                 --launch-authority-witness-store-assurance-issuer-public-key-spki-base64url "$(python3 -I -S /usr/local/libexec/launch_authority_fixture.py trust-value launchAuthorityWitnessStoreAssuranceIssuerPublicKeySpkiDerBase64url)" \\
                 --expected-launch-authority-witness-store-assurance-issuer-key-id "$(python3 -I -S /usr/local/libexec/launch_authority_fixture.py trust-value launchAuthorityWitnessStoreAssuranceIssuerKeyId)" \\
-                --production-env /etc/serverware/production-readiness.env \\
-                --nonce-rollback-assurance-pins /etc/serverware/nonce-rollback-assurance-pins.json \\
+                --production-env /etc/catchplate/production-readiness.env \\
+                --nonce-rollback-assurance-pins /etc/catchplate/nonce-rollback-assurance-pins.json \\
                 --expected-nonce-rollback-assurance-pins-sha256 {nonce_pins_sha256} \\
-                --pipeline-metadata-out /etc/serverware/production-launch-pipeline.json \\
-                --python /opt/serverware/release/runtime/python/bin/python3 \\
-                --python-import-root /opt/serverware/release \\
-                --python-import-root /opt/serverware/release/runtime/python/lib/python3.11 \\
-                --python-import-root /opt/serverware/release/runtime/python/lib/python3.11/lib-dynload \\
-                --python-import-root /opt/serverware/release/vendor \\
-                --preflight-script /opt/serverware/release/scripts/preflight.py \\
-                --runner-script /opt/serverware/release/scripts/runner.py \\
-                --compose-file /opt/serverware/release/docker-compose.production.yml \\
+                --pipeline-metadata-out /etc/catchplate/production-launch-pipeline.json \\
+                --python /opt/catchplate/release/runtime/python/bin/python3 \\
+                --python-import-root /opt/catchplate/release \\
+                --python-import-root /opt/catchplate/release/runtime/python/lib/python3.11 \\
+                --python-import-root /opt/catchplate/release/runtime/python/lib/python3.11/lib-dynload \\
+                --python-import-root /opt/catchplate/release/vendor \\
+                --preflight-script /opt/catchplate/release/scripts/preflight.py \\
+                --runner-script /opt/catchplate/release/scripts/runner.py \\
+                --compose-file /opt/catchplate/release/docker-compose.production.yml \\
                 {input_args} \\
                 {output_args}; \\
-            test "$(stat -c '%u:%g:%a' /etc/serverware/production-release-launch.json)" = '0:0:400'; \\
-            test "$(stat -c '%u:%g:%a' /etc/serverware/nonce-rollback-assurance-pins.json)" = '0:0:400'; \\
-            test "$(stat -c '%u:%g:%a' /etc/serverware/build-input-context-manifest.json)" = '0:0:444'; \\
-            test "$(stat -c '%u:%g:%a' /etc/serverware/production-launch-pipeline.json)" = '0:0:400'
+            test "$(stat -c '%u:%g:%a' /etc/catchplate/production-release-launch.json)" = '0:0:400'; \\
+            test "$(stat -c '%u:%g:%a' /etc/catchplate/nonce-rollback-assurance-pins.json)" = '0:0:400'; \\
+            test "$(stat -c '%u:%g:%a' /etc/catchplate/build-input-context-manifest.json)" = '0:0:444'; \\
+            test "$(stat -c '%u:%g:%a' /etc/catchplate/production-launch-pipeline.json)" = '0:0:400'
         ENTRYPOINT ["/usr/local/bin/python3", "/usr/local/libexec/fixture_driver.py"]
         """
     )
@@ -3414,7 +3414,7 @@ def write_context_manifest(
                     "Cargo.lock package checksums and requirements.lock hashes"
                 ),
             },
-            "schema": "serverware.launcher-adversarial-build-inputs.v1",
+            "schema": "catchplate.launcher-adversarial-build-inputs.v1",
         }
     )
     manifest_path = context / CONTEXT_MANIFEST_NAME
@@ -3699,7 +3699,7 @@ def build_fixture_image(
         "Docker availability check",
     )
 
-    with tempfile.TemporaryDirectory(prefix="serverware-launcher-adversarial-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="catchplate-launcher-adversarial-") as temporary:
         context = Path(temporary)
         public_key_hex, authority_key_id = write_test_authorities(
             context, production_trust_before
@@ -3878,7 +3878,7 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("validated standalone mode lost its builder binding")
     if args.context_manifest_out is not None:
         raise RuntimeError("standalone mode does not accept --context-manifest-out")
-    image = "serverware-production-launcher-adversarial:" + uuid.uuid4().hex[:20]
+    image = "catchplate-production-launcher-adversarial:" + uuid.uuid4().hex[:20]
     image_id: str | None = None
     try:
         image_id = build_fixture_image(image, builder_name)

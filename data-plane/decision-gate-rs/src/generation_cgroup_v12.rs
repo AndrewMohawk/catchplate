@@ -13,9 +13,9 @@ use std::ffi::{CStr, CString};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::{Component, Path};
 
-const DELEGATED_ROOT: &str = "/sys/fs/cgroup/system.slice/serverware-coder-lifecycle-privileged-v12.service";
-const HIERARCHY_ROOT: &str = "/system.slice/serverware-coder-lifecycle-privileged-v12.service";
-const GENERATION_PREFIX: &str = "serverware-coder-v12-";
+const DELEGATED_ROOT: &str = "/sys/fs/cgroup/system.slice/catchplate-coder-lifecycle-privileged-v12.service";
+const HIERARCHY_ROOT: &str = "/system.slice/catchplate-coder-lifecycle-privileged-v12.service";
+const GENERATION_PREFIX: &str = "catchplate-coder-v12-";
 const CGROUP2_MAGIC: libc::c_long = 0x6367_7270;
 const PROC_MAGIC: libc::c_long = 0x9fa0;
 const MAX_CONTROL_BYTES: usize = 128 * 1024;

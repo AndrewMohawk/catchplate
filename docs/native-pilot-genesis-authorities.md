@@ -87,7 +87,7 @@ check is retained without rebuilding it. Pure controls do not prove protected
 process launch, descriptor transfer, independent signature authority, a live
 ceremony or cleanup. No image rebuild, cloud resource or paid test was used.
 Source archive, exact harness, logs and checksums are retained at
-`codex-offload/serverware/engineering-builds/e9711b16-genesis-authorities-GTtQV0/`.
+`codex-offload/catchplate/engineering-builds/e9711b16-genesis-authorities-GTtQV0/`.
 Review corrected the valid-export EOF race: a controller exit observed after
 a nonblocking read does not imply that EOF has already been consumed. The
 caller must drain again under the same original deadline before acceptance.
@@ -106,10 +106,10 @@ runtimes, v2 initial histories and actual genesis journals. The historical
 The next connected source slice starts with the two ordinary cold services:
 real retained DRS/CSA preparation and journal resources, independently signed
 initial Wrapper/v2, runtime/v11, and exact cold C9/grant issuance. The current
-[`native_pilot_ordinary_initial_authority.py`](../serverware/native_pilot_ordinary_initial_authority.py)
+[`native_pilot_ordinary_initial_authority.py`](../catchplate/native_pilot_ordinary_initial_authority.py)
 selects the hot driver/five-service profile, and
-[`native_pilot_service_authority.py`](../serverware/native_pilot_service_authority.py)
+[`native_pilot_service_authority.py`](../catchplate/native_pilot_service_authority.py)
 requires generation admission. These cannot be relabeled as cold owners. The
-later [`native_pilot_closure_authority.py`](../serverware/native_pilot_closure_authority.py)
+later [`native_pilot_closure_authority.py`](../catchplate/native_pilot_closure_authority.py)
 also needs explicit cold roles/v6; its existing eleven-member selector is not
 permission to issue those originals.

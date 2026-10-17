@@ -42,18 +42,18 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from starlette.exceptions import HTTPException
 from starlette.responses import Response
-import serverware
-from serverware import credential_lease_profiles
+import catchplate
+from catchplate import credential_lease_profiles
 
 ID = "11111111-2222-4333-8444-555555555555"
 POLICY = "sha256:" + "a" * 64
 BINARY = "sha256:" + "b" * 64
-DEADLINE_KEY = "serverware.operator-x-lease-deadline"
+DEADLINE_KEY = "catchplate.operator-x-lease-deadline"
 ACCESS = "synthetic-x-lease-access-canary"
 REFRESH = "synthetic-x-private-refresh-canary"
 UNCONTROLLED = {"controlled": False, "issuanceKind": None, "requestAuthority": None,
     "requestAuthoritySha256": None, "releaseAuthorization": None}
-APP_TREE = ast.parse((ROOT / "serverware/app.py").read_text())
+APP_TREE = ast.parse((ROOT / "catchplate/app.py").read_text())
 
 
 def selected_functions(tree, names, namespace, filename):
@@ -81,13 +81,13 @@ def decoded(value):
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
-CRYPTO = selected_functions(ast.parse((ROOT / "serverware/crypto.py").read_text()),
+CRYPTO = selected_functions(ast.parse((ROOT / "catchplate/crypto.py").read_text()),
     {"encrypt_credential_lease_envelope", "canonical_json_bytes", "_b64e"},
     {"X25519PublicKey": X25519PublicKey, "X25519PrivateKey": X25519PrivateKey,
         "AESGCM": AESGCM, "HKDF": HKDF, "hashes": hashes, "serialization": serialization,
-        "os": os, "json": json, "hashlib": hashlib, "base64": base64}, "serverware/crypto.py")
-X_SELECTED = selected_functions(ast.parse((ROOT / "serverware/operator_x_refresh.py").read_text()),
-    {"selected"}, {}, "serverware/operator_x_refresh.py")["selected"]
+        "os": os, "json": json, "hashlib": hashlib, "base64": base64}, "catchplate/crypto.py")
+X_SELECTED = selected_functions(ast.parse((ROOT / "catchplate/operator_x_refresh.py").read_text()),
+    {"selected"}, {}, "catchplate/operator_x_refresh.py")["selected"]
 
 
 class NativeWrapper:
@@ -112,7 +112,7 @@ class Fixture:
             "kind": "bearer" if provider == "ordinary" else "oauth2", "metadata": metadata,
             "secret": ACCESS if provider == "ordinary" else canonical({"access_token": ACCESS, "refresh_token": REFRESH})}
         self.public = {key: deepcopy(value) for key, value in self.credential.items() if key != "secret"}
-        self.payload = SimpleNamespace(api_version="serverware.credentialLeaseRequest/v3", purpose=purpose,
+        self.payload = SimpleNamespace(api_version="catchplate.credentialLeaseRequest/v3", purpose=purpose,
             principal_id="app.synthetic", route_id="operator.synthetic", credential_id=ID,
             expected_credential_version=7 if purpose == "dispatchSecret" else None,
             expected_metadata_sha256=digest(metadata) if purpose == "dispatchSecret" else None,
@@ -169,7 +169,7 @@ class Fixture:
             "_credential_lease_metadata_sha256": digest, "_should_record_credential_lease_issuance": Mock(return_value="audit-key"),
             "_record_credential_lease_audit": self.audit, "encrypt_credential_lease_envelope": self.encrypt}
         selected_functions(APP_TREE, {"_canonical_json", "_decode_unpadded_base64url", "_bounded_credential_lease_request",
-            "_credential_for_lease", "_credential_secret_for_lease", "data_plane_credential_leases"}, self.ns, "serverware/app.py")
+            "_credential_for_lease", "_credential_secret_for_lease", "data_plane_credential_leases"}, self.ns, "catchplate/app.py")
 
     def _prepare(self, credential_id, expected_version, *, principal_id, route_id, policy_hash, deadline):
         self.events.append("prepare")
@@ -209,9 +209,9 @@ class Fixture:
     @contextmanager
     def installed(self):
         with ExitStack() as stack:
-            stack.enter_context(patch.dict(sys.modules, {"serverware." + key: value for key, value in self.modules.items()}))
+            stack.enter_context(patch.dict(sys.modules, {"catchplate." + key: value for key, value in self.modules.items()}))
             for key, value in self.modules.items():
-                stack.enter_context(patch.object(serverware, key, value, create=True))
+                stack.enter_context(patch.object(catchplate, key, value, create=True))
             yield
 
     def call(self):
@@ -226,7 +226,7 @@ class Fixture:
         assert envelope["ciphertextSha256"] == "sha256:" + hashlib.sha256(ciphertext).hexdigest()
         shared = self.private.exchange(X25519PublicKey.from_public_bytes(decoded(envelope["serverEphemeralPublicKey"])))
         key = HKDF(algorithm=hashes.SHA256(), length=32, salt=self.nonce,
-            info=b"serverware:credential-lease-envelope:v2\0" + hashlib.sha256(canonical(aad).encode()).digest()).derive(shared)
+            info=b"catchplate:credential-lease-envelope:v2\0" + hashlib.sha256(canonical(aad).encode()).digest()).derive(shared)
         return json.loads(AESGCM(key).decrypt(decoded(envelope["aeadNonce"]), ciphertext, canonical(aad).encode()))
 
 

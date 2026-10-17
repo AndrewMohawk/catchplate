@@ -80,7 +80,7 @@ def initialize():
         serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
     _write(ROOT / "service-secrets/google-client.secret", CLIENT_SECRET.encode("ascii"))
     _write(ROOT / ".private-google-fixture.json", (json.dumps(MARKER, sort_keys=True) + "\n").encode("ascii"))
-    hosts = "127.0.0.1 localhost serverware decision-gate-rs " + CONTROL_HOST + "\n"
+    hosts = "127.0.0.1 localhost catchplate decision-gate-rs " + CONTROL_HOST + "\n"
     hosts += GOOGLE_IP + " " + " ".join(GOOGLE_HOSTS) + "\n"
     _write(ROOT / "fixture-hosts", hosts.encode("ascii"), 0o444)
     _write(ROOT / "fixture-resolv.conf", b"nameserver 127.0.0.1\noptions attempts:1 timeout:1\n", 0o444)
@@ -128,7 +128,7 @@ def keep_namespace(lifetime_seconds):
     ready = Path("/fixture-network/ready")
     descriptor = os.open(ready, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
     with os.fdopen(descriptor, "w", encoding="ascii") as output:
-        json.dump({"schema": "serverware.googleFixtureNetwork/v1", "network": "none",
+        json.dump({"schema": "catchplate.googleFixtureNetwork/v1", "network": "none",
             "interfaces": ["lo"], "address": GOOGLE_IP, "effectiveCapabilities": 0}, output)
         output.flush()
         os.fsync(output.fileno())

@@ -76,11 +76,11 @@ impl Journal {
             head:admission.genesis_sha256.clone(),total:0,poisoned:false,limits};
         let raw=owner.retain("genesis.json".into())?;require(Sha256Digest::compute(&raw)==admission.genesis_sha256)?;
         let genesis:Genesis=guest::exact(&raw)?;
-        require(genesis.api_version=="serverware.nativeGenerationCoordinatorGenesis/v1" && genesis.guest==*guest
+        require(genesis.api_version=="catchplate.nativeGenerationCoordinatorGenesis/v1" && genesis.guest==*guest
             && genesis.assignment_payload_sha256==*assignment && genesis.services_sha256==*services)?;
         for sequence in 1..=admission.sequence {
             let raw=owner.retain(format!("record-{sequence:02}.json"))?;let record:Record=guest::exact(&raw)?;
-            require(record.api_version=="serverware.nativeGenerationCoordinatorRecord/v1" && record.sequence==sequence
+            require(record.api_version=="catchplate.nativeGenerationCoordinatorRecord/v1" && record.sequence==sequence
                 && record.previous_head_sha256==owner.head && !record.original.is_empty() && record.original.is_ascii())?;
             owner.sequence=sequence;owner.head=Sha256Digest::compute(&raw);owner.records.push(record);
         }
@@ -125,7 +125,7 @@ impl Journal {
     }
     pub(super) fn append(&mut self,original:&[u8],check:&impl Fn()->Result<(),ShadowError>)->Result<DurableOriginal,ShadowError>{
         self.check()?;check()?;require(self.sequence<MAX_RECORDS && !original.is_empty() && original.is_ascii())?;
-        let record=Record{api_version:"serverware.nativeGenerationCoordinatorRecord/v1".into(),sequence:self.sequence+1,
+        let record=Record{api_version:"catchplate.nativeGenerationCoordinatorRecord/v1".into(),sequence:self.sequence+1,
             previous_head_sha256:self.head.clone(),original:String::from_utf8(original.to_vec()).map_err(fail)?};
         let raw=canonical_json_bytes(&record)?;
         require(raw.len()<=self.limits.record() && self.total.checked_add(raw.len()).is_some_and(|n|n<=self.limits.total()))?;

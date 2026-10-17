@@ -10,12 +10,12 @@ const vm = require('node:vm');
 const {context, rawCatalog, IDS, clone} = require('./test_operator_npm_ui.cjs');
 const {credential, rule} = require('./test_operator_catalog_browser.cjs');
 const SHA = 'sha256:' + 'a'.repeat(64);
-const quota = () => ({schema: 'serverware.operatorXPostAttemptQuota/v1', field: 'daily_post_attempt_limit',
+const quota = () => ({schema: 'catchplate.operatorXPostAttemptQuota/v1', field: 'daily_post_attempt_limit',
   period: 'utc_day', scope: 'verified_x_account', unit: 'posting_attempt', minimum: 1, maximum: 1000000000});
-const capability = (limited = true) => ({schema: 'serverware.operatorXPost/v1', connection_type: 'x_user_oauth_v1',
+const capability = (limited = true) => ({schema: 'catchplate.operatorXPost/v1', connection_type: 'x_user_oauth_v1',
   create_rule_path: '/api/operator-demo/access-rules/x-post', api_origin: 'https://api.x.com', destination_allowed: true,
-  operation_bundles: ['x_text_post_v1'], sdk_auth_token: 'serverware-x-post-placeholder-v1',
-  placeholder: 'Bearer serverware-x-post-placeholder-v1', response_mode: 'x_post_json_v1', source_pair_required: true,
+  operation_bundles: ['x_text_post_v1'], sdk_auth_token: 'catchplate-x-post-placeholder-v1',
+  placeholder: 'Bearer catchplate-x-post-placeholder-v1', response_mode: 'x_post_json_v1', source_pair_required: true,
   daily_quota_available: limited, ...(limited ? {daily_quota: quota()} : {})});
 const account = () => credential({auth_type: 'x_oauth', connection_type: 'x_user_oauth_v1', provider_id: 'x',
   provider_account: '@fixture_user', provider_subject: '123456789', oauth_client_id: 'fixture-client',
@@ -23,7 +23,7 @@ const account = () => credential({auth_type: 'x_oauth', connection_type: 'x_user
 const postRule = (changes = {}) => rule({name: 'Publish text · @fixture_user', operation_bundle: 'x_text_post_v1',
   methods: ['POST'], upstream_url: 'https://api.x.com/2/tweets', request_fields: [], response_fields: [], query_keys: [],
   allowed_headers: ['accept', 'accept-language', 'content-type', 'sec-fetch-mode', 'user-agent'], response_mode: 'x_post_json_v1',
-  credential_input: 'replace_exact', placeholder: 'Bearer serverware-x-post-placeholder-v1', ...changes});
+  credential_input: 'replace_exact', placeholder: 'Bearer catchplate-x-post-placeholder-v1', ...changes});
 function catalog(cap = capability(), rules = []) {
   const value = rawCatalog({credentials: [account()], rules, capability: null, allowed: ['https://api.x.com']});
   value.capabilities.x_post = cap; return value;
@@ -31,7 +31,7 @@ function catalog(cap = capability(), rules = []) {
 function fixture({raw = catalog(), pending = false, failure = null, receiptLimit = undefined} = {}) {
   const f = context();
   for (const name of ['workspace_x_accounts.js', 'workspace_x_post.js'])
-    vm.runInContext(readFileSync(resolve(__dirname, '../serverware/operator_demo_web', name), 'utf8'), f.value, {timeout: 2000});
+    vm.runInContext(readFileSync(resolve(__dirname, '../catchplate/operator_demo_web', name), 'utf8'), f.value, {timeout: 2000});
   const calls = [];
   Object.assign(f.value, {sessionStorage: mutationReviewStorage(), AbortSignal: {timeout: () => undefined}, clearTimeout() {}, setTimeout: () => 0, fetch: async (path, init) => {
     assert.equal(init.credentials, 'same-origin'); assert.equal(init.redirect, 'error'); assert.equal(init.cache, 'no-store');

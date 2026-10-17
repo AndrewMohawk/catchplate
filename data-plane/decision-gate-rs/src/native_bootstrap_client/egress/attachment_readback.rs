@@ -8,7 +8,7 @@ use super::{attachment::PreattachmentGuard, attachment_authority::Authorization,
     attachment_backend::{AttachmentTranscript, ReplyOriginals, Snapshot},
     attachment_wire::{self as wire, AttachmentPlan, DumpKind, Side}, EgressGuard};
 use serde::Serialize;
-use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
+use catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
@@ -470,7 +470,7 @@ pub(super) fn verify_owner(guard: &AttachmentOwner<'_, '_>, plan: &AttachmentPla
     let gateways = value.host_addresses.iter().filter(|address| address.index == authority.bridge.ifindex)
         .collect::<Vec<_>>();
     let semantic = serde_json::json!({
-        "apiVersion": "serverware.nativeNetworkAttachmentSemanticOriginal/v1",
+        "apiVersion": "catchplate.nativeNetworkAttachmentSemanticOriginal/v1",
         "authorizationSha256": format!("sha256:{}", hex(&authority.original_sha256)),
         "planSha256": format!("sha256:{}", hex(&plan.sha256())),
         "bridge": value.host_links.get(&authority.bridge.ifindex),

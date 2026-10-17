@@ -12,8 +12,8 @@ network delivery, recovery permission, SQL execution or a completed browser flow
 
 ## Distinct root scope
 
-The bootstrap schemas are `serverware.signedOidcSessionActivationReleaseCustody/v1`
-and `serverware.oidcSessionActivationReleaseCustody/v1`. The fixed consumer is
+The bootstrap schemas are `catchplate.signedOidcSessionActivationReleaseCustody/v1`
+and `catchplate.oidcSessionActivationReleaseCustody/v1`. The fixed consumer is
 `token-release`; process mode is `oidc-session-activation-token-release`, UID/GID
 **65502**. The source scan found no existing use of that identity; no account,
 descriptor loader, service or filesystem is provisioned by these modules.
@@ -29,7 +29,7 @@ identities only**, not a claim that either original intent or committed
 consumption has been verified. The separate original-intent method below now
 authenticates intent; the bootstrap alone still does not. `releaseIntentDigest`
 is the domain-framed identity of the exact signed intent original under
-`serverware.oidcSessionActivationReleaseIntentIdentity/v1`, not a raw byte hash.
+`catchplate.oidcSessionActivationReleaseIntentIdentity/v1`, not a raw byte hash.
 No signed status or scalar success replaces committed-consumption admission.
 
 The original planner signature/configuration/policies/vector/enrollment are

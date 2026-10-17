@@ -4,10 +4,10 @@ use sha2::{Digest, Sha256};
 use crate::native_currentness_v1 as scalar;
 
 pub const PATH: &str = "/v1/native-setup-hardware";
-pub const ATTEMPT: &str = "serverware.setupNativeHardwareAttempt/v1";
-pub const ROTATED_ATTEMPT: &str = "serverware.setupNativeHardwareAttempt/v2";
-pub const STATEMENT: &str = "serverware.nativeSetupHardwareStatement/v1";
-pub const DOMAIN: &[u8] = b"serverware/native-setup-hardware-attestation/v1\0";
+pub const ATTEMPT: &str = "catchplate.setupNativeHardwareAttempt/v1";
+pub const ROTATED_ATTEMPT: &str = "catchplate.setupNativeHardwareAttempt/v2";
+pub const STATEMENT: &str = "catchplate.nativeSetupHardwareStatement/v1";
+pub const DOMAIN: &[u8] = b"catchplate/native-setup-hardware-attestation/v1\0";
 pub const MAX_REQUEST: usize = 8192;
 pub const MAX_EVIDENCE: usize = 65536;
 

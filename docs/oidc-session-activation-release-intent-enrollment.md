@@ -8,10 +8,10 @@ alone does not authorize token disclosure or establish a committed consumption.
 The fixed enrollment purpose is
 `enroll-oidc-session-activation-token-release-caller`, separate from the intent's
 `authorize-oidc-session-activation-token-release` purpose. The signed schema is
-`serverware.signedOidcSessionActivationReleaseIntentEnrollment/v1`; its payload
+`catchplate.signedOidcSessionActivationReleaseIntentEnrollment/v1`; its payload
 and byte-identity domains are respectively
-`serverware.oidcSessionActivationReleaseIntentEnrollment/v1` and
-`serverware.oidcSessionActivationReleaseIntentEnrollmentIdentity/v1`.
+`catchplate.oidcSessionActivationReleaseIntentEnrollment/v1` and
+`catchplate.oidcSessionActivationReleaseIntentEnrollmentIdentity/v1`.
 
 The closed payload contains the current source revision, purpose, six scope
 fields (`configurationDigest`, `databaseId`, `generationDigest`,

@@ -24,14 +24,14 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
-from serverware import authority_primary_contract
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_plan as plan
-from serverware import authority_revocation_plan_production as production
-from serverware import authority_revocation_semantics as semantics
-from serverware import authority_transition_webauthn as candidate
-from serverware import authority_webauthn_assertion as assertion
+from catchplate import authority_contract
+from catchplate import authority_primary_contract
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_plan as plan
+from catchplate import authority_revocation_plan_production as production
+from catchplate import authority_revocation_semantics as semantics
+from catchplate import authority_transition_webauthn as candidate
+from catchplate import authority_webauthn_assertion as assertion
 from authority_revocation_semantics_fixture import SemanticFixture, OPERATION, wire, framed
 import test_authority_audit_trace as trace_oracle
 import test_authority_index_trace as marker_oracle
@@ -39,12 +39,12 @@ import test_authority_index_join as index_oracle
 import test_authority_revocation_semantics as semantic_oracle
 
 
-PAYLOAD_SCHEMA = "serverware.policyAuthorityPlannerResponse/v4"
-PLAN_SCHEMA = "serverware.policyAuthorityMeasuredPlan/v4"
-SIGNED_SCHEMA = "serverware.signedPolicyAuthorityMeasuredPlan/v4"
-SNAPSHOT_DOMAIN = "serverware.policyAuthoritySnapshot/v4"
-TRACE_SCHEMA = "serverware.policyAuthorityPlannerTrace/v1"
-MIXED_SCHEMA = "serverware.policyAuthorityRevocationReadWriteTransition/v1"
+PAYLOAD_SCHEMA = "catchplate.policyAuthorityPlannerResponse/v4"
+PLAN_SCHEMA = "catchplate.policyAuthorityMeasuredPlan/v4"
+SIGNED_SCHEMA = "catchplate.signedPolicyAuthorityMeasuredPlan/v4"
+SNAPSHOT_DOMAIN = "catchplate.policyAuthoritySnapshot/v4"
+TRACE_SCHEMA = "catchplate.policyAuthorityPlannerTrace/v1"
+MIXED_SCHEMA = "catchplate.policyAuthorityRevocationReadWriteTransition/v1"
 PAYLOAD_FIELDS = {
     "schema", "measuredPlan", "typedRequest", "selectedBusinessRows", "mutationPlan",
     "queryMultiproofs", "queryMultiproofsDigest", "plannerTrace", "plannerTraceDigest",
@@ -74,7 +74,7 @@ def encoded(value):
 def source_manifest_digest():
     # Source manifest framing includes its domain as a length-prefixed frame,
     # unlike the separate domain-NUL planner/proof protocol commitments.
-    frames = (b"serverware.policyAuthorityQueryManifest/v1",
+    frames = (b"catchplate.policyAuthorityQueryManifest/v1",
               wire(authority_primary_contract.source_query_manifest()))
     return sha(b"".join(len(frame).to_bytes(8, "big") + frame for frame in frames))
 
@@ -87,7 +87,7 @@ def authorization_sources(fixture):
             continue
         result.append({"table": selected["table"], "selector": copy.deepcopy(selected["key"]),
             "present": selected["present"], "row": copy.deepcopy(selected["row"]),
-            "rowDigest": framed("serverware.policyAuthorityAuthorizationRow/v1",
+            "rowDigest": framed("catchplate.policyAuthorityAuthorizationRow/v1",
                 selected["table"].encode("ascii"), wire(selected["key"]),
                 b"present" if selected["present"] else b"absent", wire(selected["row"]))})
     return sorted(result, key=lambda item: (item["table"], wire(item["selector"])))
@@ -168,7 +168,7 @@ class PlanFixture:
         self.maximum_assertion_age_ns = 300_000_000_000
         self.fence = 7
         self.approver_policy_digest = None
-        self.planner_transaction_id = framed("serverware.policyAuthorityPlannerTransaction/v1",
+        self.planner_transaction_id = framed("catchplate.policyAuthorityPlannerTransaction/v1",
             self.semantic.operation_id.encode("ascii"), self.semantic.request_digest.encode("ascii"),
             self.semantic.receipt.capability_id.encode("ascii"))
         self.rebuild_payload()
@@ -181,10 +181,10 @@ class PlanFixture:
             "capabilityId": fixture.receipt.capability_id,
             "authorizationReads": list(authority_contract.operation_spec(OPERATION)["authorizationReads"]),
             "sourceRows": authorization_sources(fixture),
-            "sourceHighWaterDigest": framed("serverware.policyAuthorityAuthorizationRootSet/v1",
+            "sourceHighWaterDigest": framed("catchplate.policyAuthorityAuthorizationRootSet/v1",
                 wire(fixture.expected_before["authorizationBeforeRoots"])),
             "approverPolicyDigest": self.approver_policy_digest,
-            "assertionEvidenceDigest": framed("serverware.policyAuthorityWebAuthnAssertionEvidence/v1",
+            "assertionEvidenceDigest": framed("catchplate.policyAuthorityWebAuthnAssertionEvidence/v1",
                 wire(fixture.receipt.evidence)),
             "verifierSessionIdentityDigest": fixture.receipt.identity["sessionIdentityDigest"],
             "verifierMeasurementDigest": fixture.receipt.identity["measurementDigest"],
@@ -203,7 +203,7 @@ class PlanFixture:
                 "operationManifestDigest": authority_contract.OPERATION_MANIFEST_DIGEST,
                 "handlerContractDigest": authority_contract.handler_contract_digest(OPERATION),
                 "queryManifestDigest": source_manifest_digest(), "workUnits": fixture.work_units,
-                "authorityRootSetBeforeDigest": framed("serverware.policyAuthorityRootSet/v1",
+                "authorityRootSetBeforeDigest": framed("catchplate.policyAuthorityRootSet/v1",
                     wire(fixture.expected_before["businessBeforeRoots"])),
                 "deadlineMonotonicNs": self.deadline_monotonic_ns,
                 "deadlineEpochNs": self.deadline_epoch_ns, "fence": self.fence,
@@ -225,16 +225,16 @@ class PlanFixture:
         """Recommit a caller-mutated outer plan without repairing its claims."""
         payload, measured = self.payload, self.payload["measuredPlan"]
         for field, domain, value in (
-            ("selectedBusinessRowsDigest", "serverware.policyAuthoritySelectedBusinessRows/v1", payload["selectedBusinessRows"]),
-            ("mutationPlanDigest", "serverware.policyAuthorityMutationPlan/v3", payload["mutationPlan"]),
-            ("authorizationProjectionDigest", "serverware.policyAuthorityAuthorizationProjection/v1", payload["authorizationProjection"]),
+            ("selectedBusinessRowsDigest", "catchplate.policyAuthoritySelectedBusinessRows/v1", payload["selectedBusinessRows"]),
+            ("mutationPlanDigest", "catchplate.policyAuthorityMutationPlan/v3", payload["mutationPlan"]),
+            ("authorizationProjectionDigest", "catchplate.policyAuthorityAuthorizationProjection/v1", payload["authorizationProjection"]),
             ("rootTransitionDigest", MIXED_SCHEMA, payload["rootTransition"]),
         ):
             measured[field] = framed(domain, wire(value))
-        payload["queryMultiproofsDigest"] = framed("serverware.policyAuthorityRadixMultiproofSet/v3",
+        payload["queryMultiproofsDigest"] = framed("catchplate.policyAuthorityRadixMultiproofSet/v3",
             wire(payload["queryMultiproofs"]))
         payload["plannerTraceDigest"] = framed(TRACE_SCHEMA, wire(payload["plannerTrace"]))
-        payload["expectedResultDigest"] = framed("serverware.policyAuthorityControlledWriterResult/v2",
+        payload["expectedResultDigest"] = framed("catchplate.policyAuthorityControlledWriterResult/v2",
             wire(payload["expectedResult"]))
         measured["authoritySnapshotDigest"] = framed(SNAPSHOT_DOMAIN,
             *(measured[field].encode("ascii") for field in SNAPSHOT_FIELDS))
@@ -318,8 +318,8 @@ def independent_interval_work(fixture, query):
         graph_cost(selector), utf8_graph_cost(descriptor), graph_cost(partition), utf8_graph_cost(partition),
         (3, 8 * 6, 0)]
     values.extend(utf8_cost(value) for value in selector.values() if type(value) is str)
-    values.extend(utf8_cost(value) for value in ("serverware.policyAuthorityIndexPartition/v1",
-        "serverware.policyAuthorityCountedIndex/v1", query.index_id, query.table, profile.projection_digest))
+    values.extend(utf8_cost(value) for value in ("catchplate.policyAuthorityIndexPartition/v1",
+        "catchplate.policyAuthorityCountedIndex/v1", query.index_id, query.table, profile.projection_digest))
     return add(*values)
 
 
@@ -327,7 +327,7 @@ def independent_trace_work(fixture):
     """Literal real classifier constructor/append/key/suffix encoding units."""
     key = copy.deepcopy(trace_oracle.KEY)
     values = [graph_cost(key, 4, 4), utf8_cost(trace_oracle.TABLE),
-        utf8_cost("serverware.policyAuthorityAuthenticatedKey/v1"),
+        utf8_cost("catchplate.policyAuthorityAuthenticatedKey/v1"),
         (1, 24 + len(trace_oracle.TABLE.encode("ascii")) + len(wire(key)), 0)]
     # The constructor creates scan, row, write, leaf, optional root and 64 node
     # identities; ordinal is never part of the encoded classifier identity.
@@ -406,7 +406,7 @@ def independent_metrics(fixture):
     transaction_frames = tuple(measured[field].encode("ascii")
         for field in ("operationId", "requestDigest", "capabilityId"))
     bindings.extend(utf8_cost(measured[field]) for field in ("operationId", "requestDigest", "capabilityId"))
-    bindings.extend((frame_cost("serverware.policyAuthorityPlannerTransaction/v1", transaction_frames),
+    bindings.extend((frame_cost("catchplate.policyAuthorityPlannerTransaction/v1", transaction_frames),
         canonical_comparison(fixture.planner_transaction_id, measured["plannerTransactionId"])))
     bindings.extend(canonical_comparison(left, right) for left, right in (
         (payload["selectedBusinessRows"], semantic.bundle["inputs"]["selectedRows"]),
@@ -416,21 +416,21 @@ def independent_metrics(fixture):
     for item in semantic.selected_rows:
         if item["table"] in authority_contract.operation_spec(OPERATION)["authorizationReads"]:
             bindings.extend((graph_cost(item["key"], 8, 8), graph_cost(item["row"]),
-                utf8_cost(item["table"]), utf8_cost("serverware.policyAuthorityAuthorizationRow/v1"),
+                utf8_cost(item["table"]), utf8_cost("catchplate.policyAuthorityAuthorizationRow/v1"),
                 (1, 1 + 32 + len(item["table"].encode("ascii")) + len(wire(item["key"]))
                     + (7 if item["present"] else 6) + len(wire(item["row"])), 0)))
-    bindings.extend((json_digest_cost("serverware.policyAuthorityAuthorizationRootSet/v1",
+    bindings.extend((json_digest_cost("catchplate.policyAuthorityAuthorizationRootSet/v1",
         semantic.expected_before["authorizationBeforeRoots"]),
-        json_digest_cost("serverware.policyAuthorityWebAuthnAssertionEvidence/v1", payload["webauthnEvidence"]),
+        json_digest_cost("catchplate.policyAuthorityWebAuthnAssertionEvidence/v1", payload["webauthnEvidence"]),
         canonical_comparison(payload["authorizationProjection"], payload["authorizationProjection"])))
     for digest, domain, graph in (
-        (measured["selectedBusinessRowsDigest"], "serverware.policyAuthoritySelectedBusinessRows/v1", payload["selectedBusinessRows"]),
-        (measured["mutationPlanDigest"], "serverware.policyAuthorityMutationPlan/v3", payload["mutationPlan"]),
-        (measured["authorizationProjectionDigest"], "serverware.policyAuthorityAuthorizationProjection/v1", payload["authorizationProjection"]),
-        (measured["authorityRootSetBeforeDigest"], "serverware.policyAuthorityRootSet/v1", semantic.expected_before["businessBeforeRoots"]),
-        (payload["queryMultiproofsDigest"], "serverware.policyAuthorityRadixMultiproofSet/v3", payload["queryMultiproofs"]),
+        (measured["selectedBusinessRowsDigest"], "catchplate.policyAuthoritySelectedBusinessRows/v1", payload["selectedBusinessRows"]),
+        (measured["mutationPlanDigest"], "catchplate.policyAuthorityMutationPlan/v3", payload["mutationPlan"]),
+        (measured["authorizationProjectionDigest"], "catchplate.policyAuthorityAuthorizationProjection/v1", payload["authorizationProjection"]),
+        (measured["authorityRootSetBeforeDigest"], "catchplate.policyAuthorityRootSet/v1", semantic.expected_before["businessBeforeRoots"]),
+        (payload["queryMultiproofsDigest"], "catchplate.policyAuthorityRadixMultiproofSet/v3", payload["queryMultiproofs"]),
         (payload["plannerTraceDigest"], TRACE_SCHEMA, payload["plannerTrace"]),
-        (payload["expectedResultDigest"], "serverware.policyAuthorityControlledWriterResult/v2", semantic.kernel_expected["result"]),
+        (payload["expectedResultDigest"], "catchplate.policyAuthorityControlledWriterResult/v2", semantic.kernel_expected["result"]),
     ):
         bindings.extend((json_digest_cost(domain, graph), canonical_comparison(digest, digest)))
     bindings.extend(utf8_cost(measured[field]) for field in SNAPSHOT_FIELDS)
@@ -484,27 +484,27 @@ def independent_production_work(fixture):
         (semantic.request_digest, semantic.transition["requestDigest"]))]
     transaction = tuple(measured[name].encode("ascii") for name in ("operationId", "requestDigest", "capabilityId"))
     values.extend(utf8_cost(measured[name]) for name in ("operationId", "requestDigest", "capabilityId"))
-    values.extend((frame_cost("serverware.policyAuthorityPlannerTransaction/v1", transaction),
+    values.extend((frame_cost("catchplate.policyAuthorityPlannerTransaction/v1", transaction),
         canonical_comparison(fixture.planner_transaction_id, fixture.planner_transaction_id)))
     for item in semantic.selected_rows:
         if item["table"] in authority_contract.operation_spec(OPERATION)["authorizationReads"]:
             values.extend((graph_cost(item["key"], 8, 8), graph_cost(item["row"]),
-                utf8_cost(item["table"]), utf8_cost("serverware.policyAuthorityAuthorizationRow/v1"),
+                utf8_cost(item["table"]), utf8_cost("catchplate.policyAuthorityAuthorizationRow/v1"),
                 (1, 1 + 32 + len(item["table"].encode("ascii")) + len(wire(item["key"]))
                     + (7 if item["present"] else 6) + len(wire(item["row"])), 0)))
-    values.extend((json_digest_cost("serverware.policyAuthorityAuthorizationRootSet/v1",
+    values.extend((json_digest_cost("catchplate.policyAuthorityAuthorizationRootSet/v1",
         semantic.expected_before["authorizationBeforeRoots"]),
-        json_digest_cost("serverware.policyAuthorityWebAuthnAssertionEvidence/v1", payload["webauthnEvidence"])))
+        json_digest_cost("catchplate.policyAuthorityWebAuthnAssertionEvidence/v1", payload["webauthnEvidence"])))
     values.extend(graph_cost(value) for value in (semantic.selected_rows, semantic.final_mutations,
         semantic.before_proofs, payload["plannerTrace"]["entries"]))
     for domain, graph in (
-        ("serverware.policyAuthoritySelectedBusinessRows/v1", payload["selectedBusinessRows"]),
-        ("serverware.policyAuthorityMutationPlan/v3", payload["mutationPlan"]),
-        ("serverware.policyAuthorityAuthorizationProjection/v1", payload["authorizationProjection"]),
-        ("serverware.policyAuthorityRootSet/v1", semantic.expected_before["businessBeforeRoots"]),
-        ("serverware.policyAuthorityRadixMultiproofSet/v3", payload["queryMultiproofs"]),
+        ("catchplate.policyAuthoritySelectedBusinessRows/v1", payload["selectedBusinessRows"]),
+        ("catchplate.policyAuthorityMutationPlan/v3", payload["mutationPlan"]),
+        ("catchplate.policyAuthorityAuthorizationProjection/v1", payload["authorizationProjection"]),
+        ("catchplate.policyAuthorityRootSet/v1", semantic.expected_before["businessBeforeRoots"]),
+        ("catchplate.policyAuthorityRadixMultiproofSet/v3", payload["queryMultiproofs"]),
         (TRACE_SCHEMA, payload["plannerTrace"]),
-        ("serverware.policyAuthorityControlledWriterResult/v2", payload["expectedResult"]),
+        ("catchplate.policyAuthorityControlledWriterResult/v2", payload["expectedResult"]),
     ):
         values.append(json_digest_cost(domain, graph))
     values.extend(utf8_cost(measured[name]) for name in SNAPSHOT_FIELDS)
@@ -597,7 +597,7 @@ class RevocationPlanTests(unittest.TestCase):
         self.reject(fixture, expected_verifier_identity=wrong)
         fixture.payload["webauthnEvidence"]["verifierSignatureBase64url"] = encoded(bytes(64))
         fixture.payload["authorizationProjection"]["assertionEvidenceDigest"] = framed(
-            "serverware.policyAuthorityWebAuthnAssertionEvidence/v1", wire(fixture.payload["webauthnEvidence"]))
+            "catchplate.policyAuthorityWebAuthnAssertionEvidence/v1", wire(fixture.payload["webauthnEvidence"]))
         fixture.rehash()
         self.reject(fixture)
 
@@ -636,14 +636,14 @@ class RevocationPlanTests(unittest.TestCase):
             with self.subTest(part=part):
                 fixture = PlanFixture()
                 if part == "payload":
-                    fixture.payload["schema"] = "serverware.policyAuthorityPlannerResponse/v3"
+                    fixture.payload["schema"] = "catchplate.policyAuthorityPlannerResponse/v3"
                 elif part == "measured":
-                    fixture.payload["measuredPlan"]["schema"] = "serverware.policyAuthorityMeasuredPlan/v3"
+                    fixture.payload["measuredPlan"]["schema"] = "catchplate.policyAuthorityMeasuredPlan/v3"
                 elif part == "primary_only":
                     fixture.payload["rootTransition"] = copy.deepcopy(fixture.semantic.transition["primaryTransition"])
                 fixture.rehash()
                 if part == "envelope":
-                    fixture.envelope["schema"] = "serverware.signedPolicyAuthorityMeasuredPlan/v3"
+                    fixture.envelope["schema"] = "catchplate.signedPolicyAuthorityMeasuredPlan/v3"
                 self.reject(fixture)
 
     def test_independent_capability_transaction_fence_request_and_policy_pins_are_not_claims(self):
@@ -746,7 +746,7 @@ class RevocationPlanTests(unittest.TestCase):
         raw = fixture.payload["revocationProofBundle"]["inputs"]["beforeProofs"][0]
         raw["rootDigest"] = sha(b"false raw primary proof")
         fixture.payload["rootTransition"]["proofBundleDigest"] = framed(
-            "serverware.policyAuthorityRevocationProofBundle/v1", wire(fixture.payload["revocationProofBundle"]))
+            "catchplate.policyAuthorityRevocationProofBundle/v1", wire(fixture.payload["revocationProofBundle"]))
         fixture.rehash()
         with patch.object(candidate.WebAuthnCredentialRevokeKernel, "_transition",
                           wraps=candidate.WebAuthnCredentialRevokeKernel()._transition) as kernel:

@@ -24,12 +24,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_query_read_work as accounting
-from serverware import authority_webauthn_assertion as admission
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_webauthn_assertion as admission
 
 
 OPERATION = "webauthn.credential.revoke"
-DOMAIN = "serverware.policyAuthorityVerifiedWebAuthnAssertionReceipt/v1"
+DOMAIN = "catchplate.policyAuthorityVerifiedWebAuthnAssertionReceipt/v1"
 SIGNATURE_FIELDS = {"verifiedAssertionReceiptDigest", "verifierSignatureBase64url", "verifierSignatureDigest"}
 
 
@@ -72,7 +72,7 @@ class ReceiptFixture:
             "attestationReceiptDigest": digest(b"component verifier attestation")}
         self.now = 1_900_000_000_000_000_000
         self.request_digest = digest(b"component revocation request")
-        self.operation_id = framed("serverware.policyAuthorityOperation/v2",
+        self.operation_id = framed("catchplate.policyAuthorityOperation/v2",
                                    OPERATION.encode("ascii"), self.request_digest.encode("ascii"))
         self.capability_id = digest(b"component capability")
         self.challenge = bytes(range(32))

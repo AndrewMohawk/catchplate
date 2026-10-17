@@ -14,7 +14,7 @@ use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::FileExt;
 use std::time::Duration;
-use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
+use catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
 
 fn now() -> Result<u64, String> {
     super::super::guardian_process::now().ok_or("native outcome BOOTTIME unavailable".to_owned())
@@ -160,7 +160,7 @@ pub(in super::super) fn publish(permit: &StartPermit, observation: &LifecycleObs
     let complete_raw = record::marker(claim, &outcome.raw, recorded)?;
     let complete = write_once(permit, name(&claim[9..41], "complete"), complete_raw.to_vec())?;
     let result = Committed { receipt: Receipt {
-        api_version: "serverware.nativeExecutionOutcomeReceipt/v1",
+        api_version: "catchplate.nativeExecutionOutcomeReceipt/v1",
         result_scope: "local-durable-native-terminal-outcome", slot_sha256: format!("sha256:{}", hex(&claim[9..41])),
         operation_sha256: format!("sha256:{}", hex(&claim[41..])), outcome_sha256: record::digest(&record::sha(&outcome.raw)),
         raw_evidence_sha256: record::digest(&decoded.evidence), recorded_boottime_ns: recorded,
@@ -268,7 +268,7 @@ pub(in super::super::super) fn lookup(artifact: ArtifactV1, clock: &OriginalCloc
     let value = json::parse(&raw, 8192)?;
     ensure(canonical_ascii_bytes(&value)? == raw.as_slice(), "native outcome lookup configuration is not canonical")?;
     let config: Lookup = serde_json::from_value(value).map_err(|_| "native outcome lookup configuration is not closed")?;
-    ensure(config.api_version == "serverware.nativeExecutionOutcomeLookup/v1"
+    ensure(config.api_version == "catchplate.nativeExecutionOutcomeLookup/v1"
         && config.journal.device != 0 && config.journal.inode != 0
         && identifier(&config.journal.namespace) && identifier(&config.capability_id)
         && crate::is_sha256_digest(&config.expected_operation_sha256), "native outcome lookup scope differs")?;
@@ -284,7 +284,7 @@ pub(in super::super::super) fn lookup(artifact: ArtifactV1, clock: &OriginalCloc
     let inspection = inspect(&directory, config.journal.device, &slot, Some(&config.expected_operation_sha256))?;
     clock.check()?; original.recheck()?; original.require_private()?;
     for held in &inspection.held { clock.check()?; held.recheck(&directory, config.journal.device)?; }
-    let result = json!({"apiVersion":"serverware.nativeExecutionOutcomeLookupResult/v1",
+    let result = json!({"apiVersion":"catchplate.nativeExecutionOutcomeLookupResult/v1",
         "resultScope":"local-protected-native-outcome-observation", "configurationSha256":record::digest(&record::sha(&raw)),
         "slotSha256":record::digest(&slot), "expectedOperationSha256":config.expected_operation_sha256,
         "status":inspection.status, "outcomeSha256":inspection.hash, "outcome":inspection.outcome,

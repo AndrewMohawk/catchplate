@@ -8,12 +8,12 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import authority_contract
-from serverware import authority_oauth_retirement_succession as p
-from serverware import authority_oauth_retirement_succession_snapshots as snapshots
-from serverware import authority_transition_oauth_retirement_succession as transition
-from serverware import authority_oauth_family_retirement as family
-from serverware import authority_oauth_measured_pending_retirement as pending
+from catchplate import authority_contract
+from catchplate import authority_oauth_retirement_succession as p
+from catchplate import authority_oauth_retirement_succession_snapshots as snapshots
+from catchplate import authority_transition_oauth_retirement_succession as transition
+from catchplate import authority_oauth_family_retirement as family
+from catchplate import authority_oauth_measured_pending_retirement as pending
 
 
 def roots():

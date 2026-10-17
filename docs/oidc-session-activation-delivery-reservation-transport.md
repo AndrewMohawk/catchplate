@@ -4,7 +4,7 @@ This fixed protocol is source only, not a deployed or demonstrated service.
 It is distinct from activation reservation and consume-grant issuance.
 
 The listener is
-`/run/serverware/oidc-session-activation-delivery-execution/reserver.sock`.
+`/run/catchplate/oidc-session-activation-delivery-execution/reserver.sock`.
 The serving role is UID/GID 65499 and admits private peer 65532 before reading
 any body. The client verifies kernel peer 0:0 for the root-created socket; that
 is not measured service identity or a substitute for original signature checks.

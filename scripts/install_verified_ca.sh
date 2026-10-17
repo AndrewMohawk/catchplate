@@ -2,13 +2,13 @@
 set -euo pipefail
 
 TMP_DIR="${TMP_DIR:-.tmp}"
-CA_OUT="${SERVERWARE_CA_OUT:-$TMP_DIR/serverware-ca.pem}"
-VERIFY_OUT="${SERVERWARE_VERIFY_OUT:-$TMP_DIR/attestation-verify.json}"
-ADMIN_TOKEN="${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}"
-SERVICE="${SERVERWARE_COMPOSE_SERVICE:-serverware}"
-VERIFY_BASE="${SERVERWARE_VERIFY_BASE:-http://localhost:3000}"
-CONTAINER_CA_OUT="${SERVERWARE_CONTAINER_CA_OUT:-/tmp/serverware-verified-ca.pem}"
-RETRIES="${SERVERWARE_CA_VERIFY_RETRIES:-60}"
+CA_OUT="${CATCHPLATE_CA_OUT:-$TMP_DIR/catchplate-ca.pem}"
+VERIFY_OUT="${CATCHPLATE_VERIFY_OUT:-$TMP_DIR/attestation-verify.json}"
+ADMIN_TOKEN="${CATCHPLATE_ADMIN_TOKEN:-dev-admin-token}"
+SERVICE="${CATCHPLATE_COMPOSE_SERVICE:-catchplate}"
+VERIFY_BASE="${CATCHPLATE_VERIFY_BASE:-http://localhost:3000}"
+CONTAINER_CA_OUT="${CATCHPLATE_CONTAINER_CA_OUT:-/tmp/catchplate-verified-ca.pem}"
+RETRIES="${CATCHPLATE_CA_VERIFY_RETRIES:-60}"
 
 mkdir -p "$TMP_DIR" "$(dirname "$CA_OUT")" "$(dirname "$VERIFY_OUT")"
 
@@ -23,11 +23,11 @@ for _ in $(seq 1 "$RETRIES"); do
     --admin-token "$ADMIN_TOKEN"
     --ca-out "$CONTAINER_CA_OUT"
   )
-  if [[ -n "${SERVERWARE_EXPECTED_POLICY_KEY_HASH:-}" ]]; then
-    verify_cmd+=(--expected-policy-key-hash "$SERVERWARE_EXPECTED_POLICY_KEY_HASH")
+  if [[ -n "${CATCHPLATE_EXPECTED_POLICY_KEY_HASH:-}" ]]; then
+    verify_cmd+=(--expected-policy-key-hash "$CATCHPLATE_EXPECTED_POLICY_KEY_HASH")
   fi
-  if [[ -n "${SERVERWARE_EXPECTED_ROLLBACK_EPOCH:-}" ]]; then
-    verify_cmd+=(--expected-rollback-epoch "$SERVERWARE_EXPECTED_ROLLBACK_EPOCH")
+  if [[ -n "${CATCHPLATE_EXPECTED_ROLLBACK_EPOCH:-}" ]]; then
+    verify_cmd+=(--expected-rollback-epoch "$CATCHPLATE_EXPECTED_ROLLBACK_EPOCH")
   fi
 
   if "${verify_cmd[@]}" > "$verify_tmp" 2> "$verify_err"; then

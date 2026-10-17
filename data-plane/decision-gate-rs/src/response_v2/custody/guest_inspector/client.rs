@@ -205,7 +205,7 @@ impl Client {
                 require(peer::prove_pidfds_same_process(pidfd,sender,credentials.pid)? == process,
                     "packet differs from retained gate")?;
             }
-            let request = Request { api_version:"serverware.responseV2.guestInspectorRequest/v1".to_owned(),
+            let request = Request { api_version:"catchplate.responseV2.guestInspectorRequest/v1".to_owned(),
                 channel_nonce:self.bootstrap.value.channel_nonce.clone(),request_sequence:state.sequence,
                 phase:if sender.is_some() { Phase::Packet } else { Phase::Connection },
                 frame_sha256:frame.map(wire::digest),
@@ -224,7 +224,7 @@ impl Client {
                 && peer::prove_pidfds_same_process(&self.inspector,&inspector_sender,credentials_of_inspector.pid)? == self.inspector_process,
                 "response is not from retained final inspector")?;
             let result:Response = crate::decode_canonical_json(&bytes).map_err(error)?;
-            require(result.api_version == "serverware.responseV2.guestInspectorResult/v1"
+            require(result.api_version == "catchplate.responseV2.guestInspectorResult/v1"
                 && crate::canonical_json_bytes(&result.request).map_err(error)? == crate::canonical_json_bytes(&request).map_err(error)?
                 && result.measurement.uid == credentials.uid && result.measurement.gid == credentials.gid
                 && result.measurement.process_binding_sha256 == process.binding_sha256(),

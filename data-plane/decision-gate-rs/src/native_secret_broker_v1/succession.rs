@@ -67,7 +67,7 @@ impl Owner {
         relays:&NativeUpstreamRelaysV1)->Result<Reply,String>{
         wire::fields(&originals,&["apiVersion","okForAction","journalOriginal","scopeOriginal","materialOriginals","attemptOriginals",
             "exchangeOriginal","custodyOriginal","candidateOriginal"])?;
-        ensure(originals["apiVersion"]=="serverware.nativeOAuthSuccessionRecoveryOriginalResponse/v1"
+        ensure(originals["apiVersion"]=="catchplate.nativeOAuthSuccessionRecoveryOriginalResponse/v1"
             && originals["okForAction"]==false,"succession recovery acquisition is not data-only")?;
         ensure(self.succession_configuration.as_ref().is_some_and(|(config,_)|config.recovery_targets.iter().any(|item|item==id)),
             "succession recovery target is not cold-selected")?;
@@ -86,7 +86,7 @@ impl Owner {
             let mut response=document(&self.process.exchange(&raw,deadline)?,MAX_FRAME)?;
             let mut transport:Option<VsockStreamV1>=None;
             let mut sequence=0u64; let mut total=0usize;
-            while response["apiVersion"]=="serverware.nativeOAuthSuccessionTls/v1" {
+            while response["apiVersion"]=="catchplate.nativeOAuthSuccessionTls/v1" {
                 wire::fields(&response,&["apiVersion","providerId","purpose","sequence","ciphertext","read"])?;
                 let (provider,purpose)=contact.ok_or("succession TLS requires its actual committed receipt phase")?;
                 ensure(matches!(purpose,"retirement"|"token"|"identity") && response["providerId"]==provider
@@ -108,11 +108,11 @@ impl Owner {
                 let size=if read{stream.read(&mut input).map_err(|_|"succession TLS read uncertain")?}else{0}; input.truncate(size);
                 total=total.checked_add(size).ok_or("succession TLS aggregate overflow")?;
                 self.check(deadline)?;
-                response=document(&self.process.exchange(&canonical_ascii_bytes(&json!({"apiVersion":"serverware.nativeOAuthSuccessionTls/v1",
+                response=document(&self.process.exchange(&canonical_ascii_bytes(&json!({"apiVersion":"catchplate.nativeOAuthSuccessionTls/v1",
                     "sequence":sequence,"ciphertext":if input.is_empty(){Value::Null}else{json!(encoded(&input))},
                     "eof":read&&size==0}))?,deadline)?,MAX_FRAME)?;
                 if read && size==0 {
-                    ensure(response["apiVersion"]!="serverware.nativeOAuthSuccessionTls/v1","succession TLS cannot continue after EOF")?;
+                    ensure(response["apiVersion"]!="catchplate.nativeOAuthSuccessionTls/v1","succession TLS cannot continue after EOF")?;
                 }
             }
             self.check(deadline)?; ingress.check(deadline)?; Reply::parse(response,&config,&ingress)

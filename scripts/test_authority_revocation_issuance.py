@@ -20,12 +20,12 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_capability as capability
-from serverware import authority_revocation_retention as retention
-from serverware.authority_store import planner_connection as admission
-from serverware.authority_store import revocation_capability as issuance
+from catchplate import authority_contract
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_capability as capability
+from catchplate import authority_revocation_retention as retention
+from catchplate.authority_store import planner_connection as admission
+from catchplate.authority_store import revocation_capability as issuance
 import test_authority_revocation_capability as capability_oracle
 import test_authority_revocation_persistence as persistence_oracle
 import test_authority_revocation_plan as oracle
@@ -35,9 +35,9 @@ import test_authority_revocation_reservation as reservation_oracle
 LOAD_KEYS = frozenset({"planner", "retainedPlan", "execution", "assertion", "projection",
                        "capability", "retainedCapability", "witness"})
 RECEIPT_FIELDS = frozenset({"capabilityId", "capabilityDigest", "capabilityRecordDigest"})
-LOAD_SQL = ("SELECT serverware_metadata.serverware_policy_authority_load_revocation_issuance("
+LOAD_SQL = ("SELECT catchplate_metadata.catchplate_policy_authority_load_revocation_issuance("
     + ", ".join(("%s",) * 6) + ") AS issuance")
-STORE_SQL = ("SELECT serverware_metadata.serverware_policy_authority_issue_revocation_capability("
+STORE_SQL = ("SELECT catchplate_metadata.catchplate_policy_authority_issue_revocation_capability("
     + ", ".join(("%s",) * 8) + ") AS issuance")
 
 

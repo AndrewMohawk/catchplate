@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-oauth-retired-scope-succession.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-oauth-retired-scope-succession.v1.schema.json",
   "title": "Separate native retired-scope succession producer contract",
   "$comment": "Native implementation is a required separate join. This closed contract and the control-plane v5 selector do not implement or construct a native owner. Historical material must be admitted by exact signed enrollment and native assignment, not an incoming provider alias.",
   "$ref": "#/$defs/configuration",
@@ -9,7 +9,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "sourceRevision", "authorityRootPublicKey", "authorityRootSpkiSha256", "authorityConfigurationOriginal", "controlPlaneConfigurationDigest", "deploymentId", "instanceId", "limits", "successionLimits", "windows", "applications", "historicalApplications", "recoveryTargets", "callbackOrigin", "portalOrigin", "browserVsockPort"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeOAuthSuccessionConfiguration/v1"},
+        "apiVersion": {"const": "catchplate.nativeOAuthSuccessionConfiguration/v1"},
         "sourceRevision": {"$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/configuration/properties/sourceRevision"},
         "authorityRootPublicKey": {"$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/bytes32"},
         "authorityRootSpkiSha256": {"$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/digest"},

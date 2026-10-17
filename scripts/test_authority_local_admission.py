@@ -17,10 +17,10 @@ from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import authority_launcher as launcher
-from serverware import authority_fd_entrypoint as entrypoint
-from serverware import authority_stage_zero_contract as contract
-from serverware import authority_local_startup as startup
+from catchplate import authority_launcher as launcher
+from catchplate import authority_fd_entrypoint as entrypoint
+from catchplate import authority_stage_zero_contract as contract
+from catchplate import authority_local_startup as startup
 
 
 class LocalAdmissionControls(unittest.TestCase):
@@ -62,7 +62,7 @@ class LocalAdmissionControls(unittest.TestCase):
         self.assertEqual(entrypoint.LOCAL_RETAINED_FILES_MAX, launcher.MAX_CLOSURE_FILES)
         self.assertEqual(entrypoint.LOCAL_RETAINED_FILES_MAX, contract.MAX_RETAINED_FILES)
         self.assertEqual(entrypoint.LOCAL_RETAINED_DIRECTORIES_MAX, contract.MAX_RETAINED_DIRECTORIES)
-        source = (ROOT / "serverware" / "authority_fd_entrypoint.py").read_text()
+        source = (ROOT / "catchplate" / "authority_fd_entrypoint.py").read_text()
         tree = ast.parse(source)
         method = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_local_admission_sources")
         text = ast.get_source_segment(source, method)
@@ -160,14 +160,14 @@ class LocalAdmissionControls(unittest.TestCase):
     def test_environment_allowlist_matches_both_actual_consumers(self):
         self.assertEqual(launcher.LOCAL_EXEC_ENVIRONMENT, entrypoint.LOCAL_EXEC_ENVIRONMENT)
         self.assertEqual(launcher.LOCAL_EXEC_ENVIRONMENT, contract.ALLOWED_ENVIRONMENT_KEYS)
-        self.assertNotIn("SERVERWARE_POLICY_AUTHORITY_CONFIG_FD", launcher.LOCAL_EXEC_ENVIRONMENT)
+        self.assertNotIn("CATCHPLATE_POLICY_AUTHORITY_CONFIG_FD", launcher.LOCAL_EXEC_ENVIRONMENT)
 
     def test_local_boot_uses_existing_domain_not_a_new_plain_hash(self):
         self.assertEqual(launcher._local_boot(), launcher._boot_identity_digest())
 
     def test_fixed_slots_and_protocol_do_not_select_native_entry(self):
         self.assertEqual(launcher.LOCAL_SLOTS, {"manifest": 256, "certificate": 257, "evidence": 258})
-        source = (ROOT / "serverware" / "authority_launcher.py").read_text()
+        source = (ROOT / "catchplate" / "authority_launcher.py").read_text()
         tree = ast.parse(source)
         enter = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_enter")
         text = ast.get_source_segment(source, enter)
@@ -177,7 +177,7 @@ class LocalAdmissionControls(unittest.TestCase):
         self.assertLess(text.index("authority_launch_guard.activate("), text.index("parking.finish_after_identity_drop()"))
 
     def test_source_fixed_reseal_preserves_original_and_native_close_default(self):
-        source = (ROOT / "serverware" / "authority_launcher.py").read_text()
+        source = (ROOT / "catchplate" / "authority_launcher.py").read_text()
         tree = ast.parse(source)
         consume = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_consume_bootstrap_descriptor")
         self.assertEqual(ast.literal_eval(consume.args.kw_defaults[0]), True)
@@ -189,7 +189,7 @@ class LocalAdmissionControls(unittest.TestCase):
         self.assertIn("parking.credential_resealed(descriptor)", source)
 
     def test_temporary_rights_retire_before_signed_boundary_and_parent_rearms(self):
-        source = (ROOT / "serverware" / "authority_launcher.py").read_text()
+        source = (ROOT / "catchplate" / "authority_launcher.py").read_text()
         tree = ast.parse(source)
         owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "_LocalAdmission")
         methods = {node.name: ast.get_source_segment(source, node) for node in owner.body if isinstance(node, ast.FunctionDef)}

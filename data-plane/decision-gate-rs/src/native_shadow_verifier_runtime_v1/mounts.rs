@@ -10,12 +10,12 @@ const FLAGS: libc::c_ulong = libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV 
 #[repr(C)]
 struct OpenHow { flags: u64, mode: u64, resolve: u64 }
 fn fixed(root: &File, name: &'static str, directory: bool) -> Result<File, String> {
-    ensure(matches!(name, "/proc" | "/etc/serverware/native-shadow-nitro-verifier.json"
-        | "/etc/serverware/native-shadow-guest-time-issuer.json"
-        | "/etc/serverware/native-generation-origin-issuer.json"
-        | "/etc/serverware/setup-native-hardware-verifier.json"
-        | "/etc/serverware/setup-native-proxy-verifier.json"
-        | "/etc/serverware/setup-native-final-authority.json"), "verifier mount target differs")?;
+    ensure(matches!(name, "/proc" | "/etc/catchplate/native-shadow-nitro-verifier.json"
+        | "/etc/catchplate/native-shadow-guest-time-issuer.json"
+        | "/etc/catchplate/native-generation-origin-issuer.json"
+        | "/etc/catchplate/setup-native-hardware-verifier.json"
+        | "/etc/catchplate/setup-native-proxy-verifier.json"
+        | "/etc/catchplate/setup-native-final-authority.json"), "verifier mount target differs")?;
     let name = CString::new(name).unwrap();
     let how = OpenHow { flags: (libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW
         | if directory { libc::O_DIRECTORY } else { 0 }) as u64, mode: 0, resolve: 0x10 | 2 | 4 };
@@ -105,12 +105,12 @@ impl Mounts {
             | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) })?;
         protected_directory(run.as_raw_fd())?;
         let base: &[u8] = match profile {
-            Profile::Verifier => b"serverware-native-shadow-verifier\0",
-            Profile::TimeIssuer => b"serverware-native-shadow-time-issuer\0",
-            Profile::OriginIssuer => b"serverware-native-generation-origin-issuer\0",
-            Profile::Setup(super::setup_issuer::Role::Hardware) => b"serverware-setup-native-hardware-verifier\0",
-            Profile::Setup(super::setup_issuer::Role::Proxy) => b"serverware-setup-native-proxy-verifier\0",
-            Profile::Setup(super::setup_issuer::Role::Final) => b"serverware-setup-native-final-authority\0",
+            Profile::Verifier => b"catchplate-native-shadow-verifier\0",
+            Profile::TimeIssuer => b"catchplate-native-shadow-time-issuer\0",
+            Profile::OriginIssuer => b"catchplate-native-generation-origin-issuer\0",
+            Profile::Setup(super::setup_issuer::Role::Hardware) => b"catchplate-setup-native-hardware-verifier\0",
+            Profile::Setup(super::setup_issuer::Role::Proxy) => b"catchplate-setup-native-proxy-verifier\0",
+            Profile::Setup(super::setup_issuer::Role::Final) => b"catchplate-setup-native-final-authority\0",
         };
         let configuration_path = profile.configuration_path();
         within(issued, deadline)?;

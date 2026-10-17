@@ -109,7 +109,7 @@ commissioning responsibility. Computing a digest locally does not approve it.
 
 Legacy policy/v1 retains its exact eight fields and purpose
 `initial-driver-bootstrap-and-endpoint-precreation`. Explicit
-`serverware.nativePilotSupervisorCommissioningPolicy/v2` adds only
+`catchplate.nativePilotSupervisorCommissioningPolicy/v2` adds only
 `measuredRecipeSha256` and uses purpose
 `initial-driver-bootstrap-precreation-and-measured-configuration`. The pin selects
 the complete independently approved [recipe/v2](native-pilot-measured-configuration.md),

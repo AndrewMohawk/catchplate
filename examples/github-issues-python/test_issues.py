@@ -34,27 +34,27 @@ sys.addaudithook(no_network)
 
 APP_ID = "12345678-1234-4234-8234-123456789abc"
 TOKEN = "synthetic-app-password:@/?#%"
-ENV = {"SERVERWARE_PROXY_URL": "https://proxy.example.test:8443",
-    "SERVERWARE_APP_ID": APP_ID, "SERVERWARE_PROXY_TOKEN": TOKEN,
-    "SERVERWARE_GITHUB_OWNER": "example", "SERVERWARE_GITHUB_REPO": "demo",
-    "SERVERWARE_CA_FILE": "/fixture/ca.pem"}
+ENV = {"CATCHPLATE_PROXY_URL": "https://proxy.example.test:8443",
+    "CATCHPLATE_APP_ID": APP_ID, "CATCHPLATE_PROXY_TOKEN": TOKEN,
+    "CATCHPLATE_GITHUB_OWNER": "example", "CATCHPLATE_GITHUB_REPO": "demo",
+    "CATCHPLATE_CA_FILE": "/fixture/ca.pem"}
 
 
 class ConfigurationTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        self.path = Path(self.directory.name) / "serverware-client.private.json"
+        self.path = Path(self.directory.name) / "catchplate-client.private.json"
         self.value = {"application_id": APP_ID, "access_rule_id": "00000000-0000-4000-8000-000000000002",
-            "proxy_url": ENV["SERVERWARE_PROXY_URL"], "proxy_authentication": "basic_and_bearer_v1",
+            "proxy_url": ENV["CATCHPLATE_PROXY_URL"], "proxy_authentication": "basic_and_bearer_v1",
             "proxy_username": APP_ID, "proxy_password": TOKEN, "token_expires_at_epoch_ms": 2**53 - 1,
-            "ca_file": "./serverware-ca.pem", "repository": {"owner": "example", "name": "demo"},
+            "ca_file": "./catchplate-ca.pem", "repository": {"owner": "example", "name": "demo"},
             "upstream_url": "https://api.github.com/repos/example/demo/issues",
             "operation_bundle": "github_issues_read_v1", "methods": ["GET"],
             "request_headers": {"Authorization": "token " + issues.PLACEHOLDER},
             "client_recipe": {"packages": {"@octokit/rest": "22.0.1", "undici": "8.11.2"},
                 "minimum_node": "22.19", "sdk_auth_token": issues.PLACEHOLDER,
-                "proxy_ca_file": None, "destination_ca_file": "./serverware-ca.pem"}}
+                "proxy_ca_file": None, "destination_ca_file": "./catchplate-ca.pem"}}
 
     def write(self, value=None):
         self.path.write_text(json.dumps(self.value if value is None else value), encoding="utf-8")
@@ -62,10 +62,10 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_console_export_maps_scope_and_relative_ca_over_ambient_without_recipe_execution(self):
         ambient = {name: "ambient-conflict" for name in ENV}
-        ambient.update(SERVERWARE_PROXY_CA_FILE="/ambient/proxy-ca.pem", GITHUB_TOKEN="do-not-use")
+        ambient.update(CATCHPLATE_PROXY_CA_FILE="/ambient/proxy-ca.pem", GITHUB_TOKEN="do-not-use")
         original = dict(ambient)
         self.value["client_recipe"].update(entrypoint="do-not-execute", commands=["do-not-execute"],
-            environment={"SERVERWARE_GITHUB_OWNER": "untrusted-recipe", "HTTPS_PROXY": "wrong"})
+            environment={"CATCHPLATE_GITHUB_OWNER": "untrusted-recipe", "HTTPS_PROXY": "wrong"})
         for bundle in ("github_issues_read_v1", "github_issues_write_v1"):
             self.value["operation_bundle"] = bundle
             self.value["methods"] = ["GET"] if bundle == "github_issues_read_v1" else ["POST", "GET"]
@@ -73,13 +73,13 @@ class ConfigurationTests(unittest.TestCase):
                 selected = issues.configuration_environment(self.write(), ambient)
             run.assert_not_called()
             self.assertEqual(ambient, original)
-            self.assertEqual({key: selected[key] for key in ENV if key != "SERVERWARE_CA_FILE"},
-                {key: value for key, value in ENV.items() if key != "SERVERWARE_CA_FILE"})
-            self.assertEqual(selected["SERVERWARE_CA_FILE"], str(self.path.parent / "serverware-ca.pem"))
-            self.assertNotIn("SERVERWARE_PROXY_CA_FILE", selected)
-            self.assertNotIn("GITHUB_TOKEN", issues.child_environment(selected, selected["SERVERWARE_CA_FILE"]))
+            self.assertEqual({key: selected[key] for key in ENV if key != "CATCHPLATE_CA_FILE"},
+                {key: value for key, value in ENV.items() if key != "CATCHPLATE_CA_FILE"})
+            self.assertEqual(selected["CATCHPLATE_CA_FILE"], str(self.path.parent / "catchplate-ca.pem"))
+            self.assertNotIn("CATCHPLATE_PROXY_CA_FILE", selected)
+            self.assertNotIn("GITHUB_TOKEN", issues.child_environment(selected, selected["CATCHPLATE_CA_FILE"]))
         del self.value["client_recipe"]
-        self.assertNotIn("SERVERWARE_PROXY_CA_FILE", issues.configuration_environment(self.write(), ambient))
+        self.assertNotIn("CATCHPLATE_PROXY_CA_FILE", issues.configuration_environment(self.write(), ambient))
 
     def test_bundle_repository_upstream_identity_and_expiry_mismatches_refuse(self):
         for key, invalid in (("operation_bundle", "alchemy_chain_status_v1"),
@@ -116,16 +116,16 @@ class ConfigurationTests(unittest.TestCase):
                 issues.configuration_environment(self.path, ENV)
         encoded = json.dumps(self.value).encode("utf-8")
         self.path.write_bytes(encoded + b" " * (issues.MAX_CONFIG_BYTES - len(encoded)))
-        self.assertEqual(issues.configuration_environment(self.path, ENV)["SERVERWARE_APP_ID"], APP_ID)
+        self.assertEqual(issues.configuration_environment(self.path, ENV)["CATCHPLATE_APP_ID"], APP_ID)
 
     def test_config_cli_uses_parent_launcher_and_environment_only_mode_stays_available(self):
         path = self.write()
-        with patch.dict(os.environ, {"SERVERWARE_GITHUB_OWNER": "wrong"}, clear=True), \
+        with patch.dict(os.environ, {"CATCHPLATE_GITHUB_OWNER": "wrong"}, clear=True), \
                 patch.object(issues, "launch", return_value=[]) as launch, \
                 patch("sys.stdout", io.StringIO()) as output:
             self.assertEqual(issues.main(["--config", str(path), "--limit", "7"]), 0)
         launch.assert_called_once()
-        self.assertEqual(launch.call_args.args[0]["SERVERWARE_GITHUB_OWNER"], "example")
+        self.assertEqual(launch.call_args.args[0]["CATCHPLATE_GITHUB_OWNER"], "example")
         self.assertEqual(launch.call_args.args[1], 7)
         self.assertEqual(output.getvalue(), "[]\n")
         with patch.object(issues, "launch", return_value=[]) as launch, patch("sys.stdout", io.StringIO()):
@@ -168,8 +168,8 @@ class ExampleTests(unittest.TestCase):
         before = dict(source)
         child = issues.child_environment(source, "/private/combined.pem")
         self.assertEqual(source, before)
-        self.assertEqual(set(child), {"HTTPS_PROXY", "NO_PROXY", "SERVERWARE_GITHUB_OWNER",
-            "SERVERWARE_GITHUB_REPO", "SERVERWARE_CA_FILE"})
+        self.assertEqual(set(child), {"HTTPS_PROXY", "NO_PROXY", "CATCHPLATE_GITHUB_OWNER",
+            "CATCHPLATE_GITHUB_REPO", "CATCHPLATE_CA_FILE"})
         adapter = HTTPAdapter()
         expected = "Basic " + base64.b64encode((APP_ID + ":" + TOKEN).encode()).decode()
         self.assertEqual(adapter.proxy_headers(child["HTTPS_PROXY"]), {"Proxy-Authorization": expected})
@@ -177,20 +177,20 @@ class ExampleTests(unittest.TestCase):
         self.assertEqual(child["NO_PROXY"], "")
 
     def test_refuse_unsafe_configuration(self):
-        for key, value in [("SERVERWARE_PROXY_URL", "http://proxy.test"),
-                ("SERVERWARE_PROXY_URL", "https://user:pass@proxy.test"),
-                ("SERVERWARE_PROXY_URL", "https://proxy.test/path"),
-                ("SERVERWARE_PROXY_URL", "https://proxy.test?query"),
-                ("SERVERWARE_PROXY_URL", "https://proxy.test?"),
-                ("SERVERWARE_PROXY_URL", "https://proxy.test#fragment"),
-                ("SERVERWARE_PROXY_URL", "https://proxy.test:0"),
-                ("SERVERWARE_PROXY_URL", "https://proxy.test:99999"),
-                ("SERVERWARE_PROXY_URL", "https://proxy.test\n"),
-                ("SERVERWARE_APP_ID", "not-an-application-id"),
-                ("SERVERWARE_PROXY_TOKEN", "bad\npassword"),
-                ("SERVERWARE_GITHUB_OWNER", "../other"),
-                ("SERVERWARE_GITHUB_REPO", ".."),
-                ("SERVERWARE_PROXY_CA_FILE", "")]:
+        for key, value in [("CATCHPLATE_PROXY_URL", "http://proxy.test"),
+                ("CATCHPLATE_PROXY_URL", "https://user:pass@proxy.test"),
+                ("CATCHPLATE_PROXY_URL", "https://proxy.test/path"),
+                ("CATCHPLATE_PROXY_URL", "https://proxy.test?query"),
+                ("CATCHPLATE_PROXY_URL", "https://proxy.test?"),
+                ("CATCHPLATE_PROXY_URL", "https://proxy.test#fragment"),
+                ("CATCHPLATE_PROXY_URL", "https://proxy.test:0"),
+                ("CATCHPLATE_PROXY_URL", "https://proxy.test:99999"),
+                ("CATCHPLATE_PROXY_URL", "https://proxy.test\n"),
+                ("CATCHPLATE_APP_ID", "not-an-application-id"),
+                ("CATCHPLATE_PROXY_TOKEN", "bad\npassword"),
+                ("CATCHPLATE_GITHUB_OWNER", "../other"),
+                ("CATCHPLATE_GITHUB_REPO", ".."),
+                ("CATCHPLATE_PROXY_CA_FILE", "")]:
             with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                 issues.child_environment({**ENV, key: value}, "/ca.pem")
 
@@ -213,7 +213,7 @@ class ExampleTests(unittest.TestCase):
             response.url = request.url
             return response
 
-        child = issues.child_environment(ENV, ENV["SERVERWARE_CA_FILE"])
+        child = issues.child_environment(ENV, ENV["CATCHPLATE_CA_FILE"])
         with patch.dict(os.environ, child, clear=True), patch.object(HTTPAdapter, "send", send):
             rows = issues.read_issues(child, 100)
         self.assertEqual([row["number"] for row in rows], [1, 2])
@@ -229,7 +229,7 @@ class ExampleTests(unittest.TestCase):
             self.assertEqual(request.headers["X-GitHub-Api-Version"], "2022-11-28")
             self.assertNotIn("Proxy-Authorization", request.headers)
             self.assertNotIn(TOKEN, request.url)
-            self.assertEqual(kwargs["verify"], ENV["SERVERWARE_CA_FILE"])
+            self.assertEqual(kwargs["verify"], ENV["CATCHPLATE_CA_FILE"])
             self.assertEqual(kwargs["timeout"], 10)
             self.assertEqual(kwargs["proxies"]["https"], child["HTTPS_PROXY"])
             self.assertEqual(retries.total, 0)
@@ -239,15 +239,15 @@ class ExampleTests(unittest.TestCase):
             {"page": ["2"], "per_page": ["30"], "state": ["open"]})
 
     def test_stock_proxy_pool_keeps_tls_and_proxy_auth_separate(self):
-        child = issues.child_environment(ENV, ENV["SERVERWARE_CA_FILE"])
+        child = issues.child_environment(ENV, ENV["CATCHPLATE_CA_FILE"])
         adapter = HTTPAdapter()
         try:
             request = requests.Request("GET", "https://api.github.com/repos/example/demo/issues",
                 headers={"Authorization": "token " + issues.PLACEHOLDER}).prepare()
-            pool = adapter.get_connection_with_tls_context(request, verify=ENV["SERVERWARE_CA_FILE"],
+            pool = adapter.get_connection_with_tls_context(request, verify=ENV["CATCHPLATE_CA_FILE"],
                 proxies={"https": child["HTTPS_PROXY"]})
             self.assertEqual(pool.cert_reqs, "CERT_REQUIRED")
-            self.assertEqual(pool.ca_certs, ENV["SERVERWARE_CA_FILE"])
+            self.assertEqual(pool.ca_certs, ENV["CATCHPLATE_CA_FILE"])
             self.assertEqual(pool.proxy.scheme, "https")
             self.assertIsNone(pool.proxy_config.ssl_context)  # Stock inheritance, not independent outer trust.
             self.assertIn("Proxy-Authorization", pool.proxy_headers)
@@ -271,7 +271,7 @@ class ExampleTests(unittest.TestCase):
     def test_launcher_one_child_no_ambient_inheritance(self):
         @contextmanager
         def bundle(path):
-            self.assertEqual(path, ENV["SERVERWARE_CA_FILE"])
+            self.assertEqual(path, ENV["CATCHPLATE_CA_FILE"])
             yield "/private/ca.pem"
 
         result = type("Result", (), {"returncode": 0, "stdout": b"[]", "stderr": b""})()

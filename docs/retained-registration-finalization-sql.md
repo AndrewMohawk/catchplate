@@ -1,6 +1,6 @@
 # Retained finalization SQL execution
 
-The [retained facade](../serverware/control_plane_registration_finalization_handoff.py)
+The [retained facade](../catchplate/control_plane_registration_finalization_handoff.py)
 connects separately authorized public execution to the real cold SQL caller.
 This is source-only: unbuilt, unexecuted, unprovisioned and not independently
 verified. SQL commit observation is not signed current-root completion or OIDC

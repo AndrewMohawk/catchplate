@@ -14,12 +14,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware.native_postgres_batch import (
+from catchplate.native_postgres_batch import (
     MAX_LOG_BYTES, MAX_REPORT_BYTES, NativeFixtureObservation,
     NativePostgresBatchError, reconcile_native_postgres_batch,
 )
-from serverware.native_postgres_inventory import SUITES
-from serverware.native_postgres_results import NativePostgresRunner
+from catchplate.native_postgres_inventory import SUITES
+from catchplate.native_postgres_results import NativePostgresRunner
 
 
 SOURCE = tuple("sha256:" + format(index + 1, "064x") for index in range(15))
@@ -35,7 +35,7 @@ def report(index=0):
     suite = SUITES[index]
     count = len(suite.test_ids)
     return {
-        "schema": "serverware.nativePostgresFixtureResult/v1",
+        "schema": "catchplate.nativePostgresFixtureResult/v1",
         "script": suite.script,
         "sourceSha256": SOURCE[index],
         "expectedTestIds": list(suite.test_ids),
@@ -191,7 +191,7 @@ class NativePostgresBatchTests(unittest.TestCase):
             with self.subTest(sources=sources), self.assertRaises(NativePostgresBatchError):
                 reconcile(sources=sources)
         for key, value in (("script", SUITES[1].script), ("sourceSha256", SOURCE[1]),
-                           ("schema", "serverware.nativePostgresFixtureResult/v0")):
+                           ("schema", "catchplate.nativePostgresFixtureResult/v0")):
             altered = report()
             altered[key] = value
             self.assert_bad_report(altered)

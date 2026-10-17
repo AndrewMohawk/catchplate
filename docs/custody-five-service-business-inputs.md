@@ -8,7 +8,7 @@ measurements, signatures, generation commits or readiness.
 `BusinessResources.prepare(launcher)` requires the genuine `FiveServiceLaunch`
 owner from the explicit C9 launch profile. The independently installed,
 root-owned `0400`, single-link original
-`/etc/serverware/custody-generation-business.json` binds the exact retained
+`/etc/catchplate/custody-generation-business.json` binds the exact retained
 launch configuration hash and original invocation. Its `clientConfiguration`
 pins the actual independently provisioned production-bridge C9 cold
 configuration. The intended bridge UID/GID controls socket DAC only; it is not
@@ -18,8 +18,8 @@ The independently preprovisioned roots are root-owned `0711` directories:
 
 | Root | Source-created children |
 | --- | --- |
-| `/run/serverware-custody-business` | Five fresh root-owned role directories, each containing one real listening `listener.sock` |
-| `/var/lib/serverware/custody-business` | Five fresh root-owned role directories with the exact business state/journal directories below |
+| `/run/catchplate-custody-business` | Five fresh root-owned role directories, each containing one real listening `listener.sock` |
+| `/var/lib/catchplate/custody-business` | Five fresh root-owned role directories with the exact business state/journal directories below |
 
 Both roots must initially be empty and are retained/locked. Existing files,
 role directories, sockets, symlinks and unknown inventories refuse admission.
@@ -40,7 +40,7 @@ The inventory is the actual `run_*_loaded` contract:
 
 Listeners are nonblocking AF_UNIX SOCK_SEQPACKET sockets with an actual
 `listen(1)` call, bound at the source-fixed
-`/run/serverware-custody-business/<role>/listener.sock`. Socket path ownership is
+`/run/catchplate-custody-business/<role>/listener.sock`. Socket path ownership is
 the actual configured service UID and the independently configured bridge GID,
 mode `0660`; protected root-owned ancestors prevent replacement by either role.
 The receiver's credentials+rights ancillary grammar is preserved. It still

@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-egress-installation-authorization.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-egress-installation-authorization.v1.schema.json",
   "title": "Independent create-new native egress installation authorization v1",
   "description": "Original canonical sorted compact ensure_ascii JSON including escaped DEL, no LF, at most 32768 bytes and nesting depth 6. Ed25519 signs the payload schema ASCII, NUL, then exact canonical payload. Schema validity is not signature admission, genuine native proof, protected token possession, host/workload ownership, a durable claim or kernel effect. This distinct grant grants no CA-install permission, workload start, network attachment, recovery or persistent teardown.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "payload", "signature"],
   "properties": {
-    "schema": {"const": "serverware.signedNativeEgressInstallationAuthorization/v1"},
+    "schema": {"const": "catchplate.signedNativeEgressInstallationAuthorization/v1"},
     "payload": {"$ref": "#/$defs/payload"},
     "signature": {"type": "string", "minLength": 94, "maxLength": 94, "pattern": "^ed25519:[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])"}
   },
@@ -103,7 +103,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "purpose", "trustMode", "authorizationId", "setupSha256", "delegationSha256", "targetRequestSha256", "policyRequirementsSha256", "releaseRecordSha256", "policyHash", "configurationSha256", "runtimeCaCertificateSha256", "runtimeCaSpkiSha256", "ingressLeafCertificateSha256", "clientTrustBundleSha256", "clientChallengeSha256", "targetPrincipalId", "targetNonce", "targetSpkiSha256", "proxy", "networkOwner", "machineIdSha256", "workload", "ruleset", "capability", "journal", "issuedAtEpochNs", "expiresAtEpochNs"],
       "properties": {
-        "schema": {"const": "serverware.nativeEgressInstallationAuthorization/v1"},
+        "schema": {"const": "catchplate.nativeEgressInstallationAuthorization/v1"},
         "sourceRevision": {"type": "string", "minLength": 1, "maxLength": 128, "description": "Exact current shared authority source revision, supplied independently to the native reader; no rolling literal is embedded in this schema."},
         "purpose": {"const": "native-egress-installation"}, "trustMode": {"const": "trusted-host-local"},
         "authorizationId": {"$ref": "#/$defs/identifier"},

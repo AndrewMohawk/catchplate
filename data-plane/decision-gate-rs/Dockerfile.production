@@ -9,40 +9,40 @@ COPY production-dependencies/cache/liblzo2-2_2.10-2_amd64.deb /dependency-cache/
 FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS source-preparation
 
 ARG SOURCE_DATE_EPOCH="0"
-ARG SERVERWARE_SOURCE_ARCHIVE
-ARG SERVERWARE_SOURCE_ARCHIVE_SHA256
-ARG SERVERWARE_SOURCE_MANIFEST
-ARG SERVERWARE_SOURCE_MANIFEST_SHA256
-ARG SERVERWARE_SOURCE_FILE_LIST
-ARG SERVERWARE_SOURCE_FILE_LIST_SHA256
-ARG SERVERWARE_SOURCE_FILE_HASHES
-ARG SERVERWARE_SOURCE_FILE_HASHES_SHA256
-ARG SERVERWARE_SOURCE_FILE_MODES
-ARG SERVERWARE_SOURCE_FILE_MODES_SHA256
+ARG CATCHPLATE_SOURCE_ARCHIVE
+ARG CATCHPLATE_SOURCE_ARCHIVE_SHA256
+ARG CATCHPLATE_SOURCE_MANIFEST
+ARG CATCHPLATE_SOURCE_MANIFEST_SHA256
+ARG CATCHPLATE_SOURCE_FILE_LIST
+ARG CATCHPLATE_SOURCE_FILE_LIST_SHA256
+ARG CATCHPLATE_SOURCE_FILE_HASHES
+ARG CATCHPLATE_SOURCE_FILE_HASHES_SHA256
+ARG CATCHPLATE_SOURCE_FILE_MODES
+ARG CATCHPLATE_SOURCE_FILE_MODES_SHA256
 ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
     CARGO_NET_OFFLINE=true \
     RUSTFLAGS="-C link-arg=-Wl,--build-id=none"
 
 WORKDIR /src
-COPY ${SERVERWARE_SOURCE_ARCHIVE} /source-contract/source.tar
-COPY ${SERVERWARE_SOURCE_MANIFEST} /source-contract/source-manifest.json
-COPY ${SERVERWARE_SOURCE_FILE_LIST} /source-contract/source.files
-COPY ${SERVERWARE_SOURCE_FILE_HASHES} /source-contract/source.files.sha256
-COPY ${SERVERWARE_SOURCE_FILE_MODES} /source-contract/source.files.mode
+COPY ${CATCHPLATE_SOURCE_ARCHIVE} /source-contract/source.tar
+COPY ${CATCHPLATE_SOURCE_MANIFEST} /source-contract/source-manifest.json
+COPY ${CATCHPLATE_SOURCE_FILE_LIST} /source-contract/source.files
+COPY ${CATCHPLATE_SOURCE_FILE_HASHES} /source-contract/source.files.sha256
+COPY ${CATCHPLATE_SOURCE_FILE_MODES} /source-contract/source.files.mode
 COPY --from=rust-production-dependency-cache /dependency-cache /dependency-cache
 RUN --network=none set -eu; \
-    test -n "${SERVERWARE_SOURCE_ARCHIVE_SHA256}"; \
-    test -n "${SERVERWARE_SOURCE_MANIFEST_SHA256}"; \
-    test -n "${SERVERWARE_SOURCE_FILE_LIST_SHA256}"; \
-    test -n "${SERVERWARE_SOURCE_FILE_HASHES_SHA256}"; \
-    test -n "${SERVERWARE_SOURCE_FILE_MODES_SHA256}"; \
-    printf '%s  %s\n' "${SERVERWARE_SOURCE_ARCHIVE_SHA256#sha256:}" /source-contract/source.tar | sha256sum -c -; \
-    printf '%s  %s\n' "${SERVERWARE_SOURCE_MANIFEST_SHA256#sha256:}" /source-contract/source-manifest.json | sha256sum -c -; \
-    printf '%s  %s\n' "${SERVERWARE_SOURCE_FILE_LIST_SHA256#sha256:}" /source-contract/source.files | sha256sum -c -; \
-    printf '%s  %s\n' "${SERVERWARE_SOURCE_FILE_HASHES_SHA256#sha256:}" /source-contract/source.files.sha256 | sha256sum -c -; \
-    printf '%s  %s\n' "${SERVERWARE_SOURCE_FILE_MODES_SHA256#sha256:}" /source-contract/source.files.mode | sha256sum -c -; \
+    test -n "${CATCHPLATE_SOURCE_ARCHIVE_SHA256}"; \
+    test -n "${CATCHPLATE_SOURCE_MANIFEST_SHA256}"; \
+    test -n "${CATCHPLATE_SOURCE_FILE_LIST_SHA256}"; \
+    test -n "${CATCHPLATE_SOURCE_FILE_HASHES_SHA256}"; \
+    test -n "${CATCHPLATE_SOURCE_FILE_MODES_SHA256}"; \
+    printf '%s  %s\n' "${CATCHPLATE_SOURCE_ARCHIVE_SHA256#sha256:}" /source-contract/source.tar | sha256sum -c -; \
+    printf '%s  %s\n' "${CATCHPLATE_SOURCE_MANIFEST_SHA256#sha256:}" /source-contract/source-manifest.json | sha256sum -c -; \
+    printf '%s  %s\n' "${CATCHPLATE_SOURCE_FILE_LIST_SHA256#sha256:}" /source-contract/source.files | sha256sum -c -; \
+    printf '%s  %s\n' "${CATCHPLATE_SOURCE_FILE_HASHES_SHA256#sha256:}" /source-contract/source.files.sha256 | sha256sum -c -; \
+    printf '%s  %s\n' "${CATCHPLATE_SOURCE_FILE_MODES_SHA256#sha256:}" /source-contract/source.files.mode | sha256sum -c -; \
     tar -tf /source-contract/source.tar > /source-contract/archive.files; \
-    printf '%s  %s\n' "${SERVERWARE_SOURCE_FILE_LIST_SHA256#sha256:}" /source-contract/archive.files | sha256sum -c -; \
+    printf '%s  %s\n' "${CATCHPLATE_SOURCE_FILE_LIST_SHA256#sha256:}" /source-contract/archive.files | sha256sum -c -; \
     mkdir -p /source; \
     tar --no-same-owner -xf /source-contract/source.tar -C /source; \
     cd /source; \
@@ -76,15 +76,15 @@ RUN --network=none set -eu; \
     cp -R /source/schemas /schemas; \
     mkdir -p /policy-custody-assets/systemd; \
     cp -R /source/ops/policy-custody/. /policy-custody-assets/; \
-    cp /source/ops/systemd/serverware-policy-custody-sockets.target /policy-custody-assets/systemd/serverware-policy-custody-sockets.target; \
-    cp /source/ops/systemd/serverware-policy-custody.target /policy-custody-assets/systemd/serverware-policy-custody.target; \
-    cp /source/ops/systemd/serverware-policy-custody@.socket /policy-custody-assets/systemd/serverware-policy-custody@.socket; \
-    cp /source/ops/systemd/serverware-policy-custody@.service.in /policy-custody-assets/systemd/serverware-policy-custody@.service.in; \
-    cp -R /source/ops/systemd/serverware-policy-custody@durable-recovery-store.service.d /policy-custody-assets/systemd/serverware-policy-custody@durable-recovery-store.service.d; \
-    cp -R /source/ops/systemd/serverware-policy-custody@cleanup-authorization-consumer.service.d /policy-custody-assets/systemd/serverware-policy-custody@cleanup-authorization-consumer.service.d; \
-    cp -R /source/ops/systemd/serverware-policy-custody@recovery-target-provider.service.d /policy-custody-assets/systemd/serverware-policy-custody@recovery-target-provider.service.d; \
-    cp -R /source/ops/systemd/serverware-policy-custody@current-signature-authority.service.d /policy-custody-assets/systemd/serverware-policy-custody@current-signature-authority.service.d; \
-    cp -R /source/ops/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d /policy-custody-assets/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d
+    cp /source/ops/systemd/catchplate-policy-custody-sockets.target /policy-custody-assets/systemd/catchplate-policy-custody-sockets.target; \
+    cp /source/ops/systemd/catchplate-policy-custody.target /policy-custody-assets/systemd/catchplate-policy-custody.target; \
+    cp /source/ops/systemd/catchplate-policy-custody@.socket /policy-custody-assets/systemd/catchplate-policy-custody@.socket; \
+    cp /source/ops/systemd/catchplate-policy-custody@.service.in /policy-custody-assets/systemd/catchplate-policy-custody@.service.in; \
+    cp -R /source/ops/systemd/catchplate-policy-custody@durable-recovery-store.service.d /policy-custody-assets/systemd/catchplate-policy-custody@durable-recovery-store.service.d; \
+    cp -R /source/ops/systemd/catchplate-policy-custody@cleanup-authorization-consumer.service.d /policy-custody-assets/systemd/catchplate-policy-custody@cleanup-authorization-consumer.service.d; \
+    cp -R /source/ops/systemd/catchplate-policy-custody@recovery-target-provider.service.d /policy-custody-assets/systemd/catchplate-policy-custody@recovery-target-provider.service.d; \
+    cp -R /source/ops/systemd/catchplate-policy-custody@current-signature-authority.service.d /policy-custody-assets/systemd/catchplate-policy-custody@current-signature-authority.service.d; \
+    cp -R /source/ops/systemd/catchplate-policy-custody@bounded-cleanup-helper.service.d /policy-custody-assets/systemd/catchplate-policy-custody@bounded-cleanup-helper.service.d
 
 # A fresh pinned compiler filesystem imports only the verified Rust closure.
 # The full source/provenance owner still runs first, but unrelated source bytes
@@ -101,13 +101,13 @@ COPY --from=source-preparation /src /src
 COPY --from=source-preparation /schemas /schemas
 COPY --from=source-preparation /source/scripts/cargo_build_diagnostics.rs /source/scripts/cargo_build_diagnostics.rs
 COPY --from=source-preparation /policy-custody-assets /policy-custody-assets
-RUN --network=none rustc --edition=2021 /source/scripts/cargo_build_diagnostics.rs -o /usr/local/bin/serverware-cargo-build
-RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen \
-    && install -d -m 0710 /runtime-layout/serverware-custody \
-    && install -d -m 0700 /runtime-layout/serverware-custody-state \
-    && install -d -m 0755 /runtime-layout/serverware-custody-trust \
-    && SERVERWARE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY=/runtime-layout/serverware-custody-state \
-        /src/target/release/serverware-custody-runtime --initialize-attempt-ledger \
+RUN --network=none rustc --edition=2021 /source/scripts/cargo_build_diagnostics.rs -o /usr/local/bin/catchplate-cargo-build
+RUN --network=none /usr/local/bin/catchplate-cargo-build --release --frozen \
+    && install -d -m 0710 /runtime-layout/catchplate-custody \
+    && install -d -m 0700 /runtime-layout/catchplate-custody-state \
+    && install -d -m 0755 /runtime-layout/catchplate-custody-trust \
+    && CATCHPLATE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY=/runtime-layout/catchplate-custody-state \
+        /src/target/release/catchplate-custody-runtime --initialize-attempt-ledger \
     && find /policy-custody-assets -type d -exec chmod 0555 {} + \
     && find /policy-custody-assets -type f -exec chmod 0444 {} + \
     && find /policy-custody-assets -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
@@ -115,7 +115,7 @@ RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen \
 # Offline operator tool only, built by the existing glibc owner. This explicit
 # export is not copied into any claimant/default runtime or guest closure.
 FROM scratch AS native-pilot-operator-artifact
-COPY --from=build --chown=0:0 --chmod=0555 /src/target/release/serverware-export-custody-seccomp /usr/local/bin/serverware-export-custody-seccomp
+COPY --from=build --chown=0:0 --chmod=0555 /src/target/release/catchplate-export-custody-seccomp /usr/local/bin/catchplate-export-custody-seccomp
 
 FROM rust:1.88-alpine3.22@sha256:64eba3726734dcfe89e0a62a0485007a3ab7c7372ce5b38c621d8812f70215f0 AS launcher-build
 
@@ -147,135 +147,135 @@ RUN --network=none set -eu; \
         cache/musl-1.2.5-r12.apk \
         cache/musl-dev-1.2.5-r12.apk; \
     tar -xzf cache/cargo-vendor.tar.gz -C /src
-RUN --network=none rustc --edition=2021 /source/scripts/cargo_build_diagnostics.rs -o /usr/local/bin/serverware-cargo-build
-RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen \
-        --bin serverware-production-launcher --bin serverware-native-response-verifier \
-        --bin serverware-native-ingress-verifier --bin serverware-native-ingress-client \
-        --bin serverware-native-bootstrap-client --bin serverware-workload-sidecar \
-        --bin serverware-response-v2-guest-inspector \
-        --bin serverware-response-v2-guest-role \
-        --bin serverware-native-shadow-worker \
-        --bin serverware-native-runtime-attestation-verifier \
-        --bin serverware-native-publication-handoff \
-        --bin serverware-policy-shadow-custody-guest \
-        --bin serverware-native-shadow-guest-supervisor \
-        --bin serverware-native-enclave-entrypoint \
-        --bin serverware-native-shadow-proof-cohort \
-        --bin serverware-native-publication-genesis-controller \
-        --bin serverware-native-publication-adoption-validator \
-        --bin serverware-native-shadow-verifier \
-        --bin serverware-native-shadow-verifier-transport \
-        --bin serverware-native-shadow-time-issuer \
-        --bin serverware-native-generation-origin-issuer \
-        --bin serverware-native-setup-hardware --bin serverware-native-setup-proxy --bin serverware-native-setup-final \
-        --bin serverware-setup-native-hardware --bin serverware-setup-native-proxy --bin serverware-setup-native-final \
-        --bin serverware-native-parent-relay --bin serverware-native-parent-ingress \
-        --bin serverware-native-activation-relay \
-    && test "$(readelf -l /src/target/release/serverware-native-activation-relay | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-native-activation-relay | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-activation-relay)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-production-launcher | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-production-launcher | grep -c NEEDED)" -eq 0 \
-    && test "$(readelf -l /src/target/release/serverware-native-response-verifier | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-native-response-verifier | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-response-verifier)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-native-ingress-verifier | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-native-ingress-verifier | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-ingress-verifier)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-native-ingress-client | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-native-ingress-client | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-ingress-client)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-native-bootstrap-client | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-native-bootstrap-client | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-bootstrap-client)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-workload-sidecar | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-workload-sidecar | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-workload-sidecar)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-native-parent-relay | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-native-parent-relay | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-parent-relay)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-native-parent-ingress | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-native-parent-ingress | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-parent-ingress)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-response-v2-guest-inspector | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-response-v2-guest-inspector | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-response-v2-guest-inspector)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-response-v2-guest-role | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-response-v2-guest-role | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-response-v2-guest-role)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-native-shadow-worker | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-native-shadow-worker | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-shadow-worker)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-native-runtime-attestation-verifier | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-native-runtime-attestation-verifier | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-runtime-attestation-verifier)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-native-publication-handoff | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-native-publication-handoff | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-publication-handoff)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-native-shadow-verifier | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-native-shadow-verifier | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-shadow-verifier)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-native-shadow-verifier-transport | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-native-shadow-verifier-transport | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-shadow-verifier-transport)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-policy-shadow-custody-guest | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-policy-shadow-custody-guest | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-policy-shadow-custody-guest)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-native-shadow-guest-supervisor | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-native-shadow-guest-supervisor | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-shadow-guest-supervisor)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-native-shadow-proof-cohort | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-native-shadow-proof-cohort | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-shadow-proof-cohort)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-native-publication-genesis-controller | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-native-publication-genesis-controller | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-publication-genesis-controller)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-native-publication-adoption-validator | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-native-publication-adoption-validator | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-publication-adoption-validator)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-native-shadow-time-issuer | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-native-shadow-time-issuer | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-shadow-time-issuer)" -le 67108864 \
-    && test "$(readelf -l /src/target/release/serverware-native-generation-origin-issuer | grep -c INTERP)" -eq 0 \
-    && test "$(readelf -d /src/target/release/serverware-native-generation-origin-issuer | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-generation-origin-issuer)" -le 67108864 \
-    && for binary in serverware-native-setup-hardware serverware-native-setup-proxy serverware-native-setup-final \
-        serverware-setup-native-hardware serverware-setup-native-proxy serverware-setup-native-final; do \
+RUN --network=none rustc --edition=2021 /source/scripts/cargo_build_diagnostics.rs -o /usr/local/bin/catchplate-cargo-build
+RUN --network=none /usr/local/bin/catchplate-cargo-build --release --frozen \
+        --bin catchplate-production-launcher --bin catchplate-native-response-verifier \
+        --bin catchplate-native-ingress-verifier --bin catchplate-native-ingress-client \
+        --bin catchplate-native-bootstrap-client --bin catchplate-workload-sidecar \
+        --bin catchplate-response-v2-guest-inspector \
+        --bin catchplate-response-v2-guest-role \
+        --bin catchplate-native-shadow-worker \
+        --bin catchplate-native-runtime-attestation-verifier \
+        --bin catchplate-native-publication-handoff \
+        --bin catchplate-policy-shadow-custody-guest \
+        --bin catchplate-native-shadow-guest-supervisor \
+        --bin catchplate-native-enclave-entrypoint \
+        --bin catchplate-native-shadow-proof-cohort \
+        --bin catchplate-native-publication-genesis-controller \
+        --bin catchplate-native-publication-adoption-validator \
+        --bin catchplate-native-shadow-verifier \
+        --bin catchplate-native-shadow-verifier-transport \
+        --bin catchplate-native-shadow-time-issuer \
+        --bin catchplate-native-generation-origin-issuer \
+        --bin catchplate-native-setup-hardware --bin catchplate-native-setup-proxy --bin catchplate-native-setup-final \
+        --bin catchplate-setup-native-hardware --bin catchplate-setup-native-proxy --bin catchplate-setup-native-final \
+        --bin catchplate-native-parent-relay --bin catchplate-native-parent-ingress \
+        --bin catchplate-native-activation-relay \
+    && test "$(readelf -l /src/target/release/catchplate-native-activation-relay | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-native-activation-relay | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-native-activation-relay)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-production-launcher | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-production-launcher | grep -c NEEDED)" -eq 0 \
+    && test "$(readelf -l /src/target/release/catchplate-native-response-verifier | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-native-response-verifier | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-native-response-verifier)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-native-ingress-verifier | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-native-ingress-verifier | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-native-ingress-verifier)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-native-ingress-client | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-native-ingress-client | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-native-ingress-client)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-native-bootstrap-client | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-native-bootstrap-client | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-native-bootstrap-client)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-workload-sidecar | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-workload-sidecar | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-workload-sidecar)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-native-parent-relay | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-native-parent-relay | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-native-parent-relay)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-native-parent-ingress | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-native-parent-ingress | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-native-parent-ingress)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-response-v2-guest-inspector | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-response-v2-guest-inspector | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-response-v2-guest-inspector)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-response-v2-guest-role | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-response-v2-guest-role | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-response-v2-guest-role)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-native-shadow-worker | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-native-shadow-worker | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-native-shadow-worker)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-native-runtime-attestation-verifier | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-native-runtime-attestation-verifier | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-native-runtime-attestation-verifier)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-native-publication-handoff | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-native-publication-handoff | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-native-publication-handoff)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-native-shadow-verifier | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-native-shadow-verifier | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-native-shadow-verifier)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-native-shadow-verifier-transport | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-native-shadow-verifier-transport | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-native-shadow-verifier-transport)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-policy-shadow-custody-guest | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-policy-shadow-custody-guest | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-policy-shadow-custody-guest)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-native-shadow-guest-supervisor | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-native-shadow-guest-supervisor | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-native-shadow-guest-supervisor)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-native-shadow-proof-cohort | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-native-shadow-proof-cohort | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-native-shadow-proof-cohort)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-native-publication-genesis-controller | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-native-publication-genesis-controller | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-native-publication-genesis-controller)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-native-publication-adoption-validator | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-native-publication-adoption-validator | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-native-publication-adoption-validator)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-native-shadow-time-issuer | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-native-shadow-time-issuer | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-native-shadow-time-issuer)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/catchplate-native-generation-origin-issuer | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/catchplate-native-generation-origin-issuer | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/catchplate-native-generation-origin-issuer)" -le 67108864 \
+    && for binary in catchplate-native-setup-hardware catchplate-native-setup-proxy catchplate-native-setup-final \
+        catchplate-setup-native-hardware catchplate-setup-native-proxy catchplate-setup-native-final; do \
         test "$(readelf -l /src/target/release/$binary | grep -c INTERP)" -eq 0 || exit 1; \
         test "$(readelf -d /src/target/release/$binary | grep -c NEEDED)" -eq 0 || exit 1; \
         test "$(stat -c %s /src/target/release/$binary)" -le 67108864 || exit 1; \
     done
 
 FROM scratch AS production-launcher-artifact
-COPY --from=launcher-build /src/target/release/serverware-production-launcher /serverware-production-launcher
+COPY --from=launcher-build /src/target/release/catchplate-production-launcher /catchplate-production-launcher
 
 FROM scratch AS native-response-verifier-artifact
-COPY --from=launcher-build /src/target/release/serverware-native-response-verifier /serverware-native-response-verifier
+COPY --from=launcher-build /src/target/release/catchplate-native-response-verifier /catchplate-native-response-verifier
 
 FROM scratch AS native-ingress-verifier-artifact
-COPY --from=launcher-build /src/target/release/serverware-native-ingress-verifier /serverware-native-ingress-verifier
+COPY --from=launcher-build /src/target/release/catchplate-native-ingress-verifier /catchplate-native-ingress-verifier
 
 FROM scratch AS native-ingress-client-artifact
-COPY --from=launcher-build /src/target/release/serverware-native-ingress-client /serverware-native-ingress-client
+COPY --from=launcher-build /src/target/release/catchplate-native-ingress-client /catchplate-native-ingress-client
 
 FROM scratch AS native-bootstrap-client-artifact
-COPY --from=launcher-build /src/target/release/serverware-native-bootstrap-client /serverware-native-bootstrap-client
+COPY --from=launcher-build /src/target/release/catchplate-native-bootstrap-client /catchplate-native-bootstrap-client
 
 # Workload-side installation, separate from the measured claimant closure.
 FROM source-preparation AS native-workload-sidecar-runtime
-COPY --from=launcher-build /src/target/release/serverware-workload-sidecar /sidecar-build/serverware-workload-sidecar
+COPY --from=launcher-build /src/target/release/catchplate-workload-sidecar /sidecar-build/catchplate-workload-sidecar
 RUN --network=none set -eu; \
-    install -d -o 0 -g 0 -m 0755 /sidecar-runtime/usr/local/libexec /sidecar-runtime/usr/share/serverware; \
-    install -o 0 -g 0 -m 0555 /sidecar-build/serverware-workload-sidecar /sidecar-runtime/usr/local/libexec/serverware-workload-sidecar; \
-    install -o 0 -g 0 -m 0444 /source/scripts/install_workload_sidecar_unit.py /sidecar-runtime/usr/share/serverware/install_workload_sidecar_unit.py; \
-    install -o 0 -g 0 -m 0444 /source/schemas/native-workload-sidecar.v1.schema.json /sidecar-runtime/usr/share/serverware/native-workload-sidecar.v1.schema.json; \
+    install -d -o 0 -g 0 -m 0755 /sidecar-runtime/usr/local/libexec /sidecar-runtime/usr/share/catchplate; \
+    install -o 0 -g 0 -m 0555 /sidecar-build/catchplate-workload-sidecar /sidecar-runtime/usr/local/libexec/catchplate-workload-sidecar; \
+    install -o 0 -g 0 -m 0444 /source/scripts/install_workload_sidecar_unit.py /sidecar-runtime/usr/share/catchplate/install_workload_sidecar_unit.py; \
+    install -o 0 -g 0 -m 0444 /source/schemas/native-workload-sidecar.v1.schema.json /sidecar-runtime/usr/share/catchplate/native-workload-sidecar.v1.schema.json; \
     chmod 0555 /sidecar-runtime /sidecar-runtime/usr /sidecar-runtime/usr/local \
-        /sidecar-runtime/usr/local/libexec /sidecar-runtime/usr/share /sidecar-runtime/usr/share/serverware; \
+        /sidecar-runtime/usr/local/libexec /sidecar-runtime/usr/share /sidecar-runtime/usr/share/catchplate; \
     touch -d "@${SOURCE_DATE_EPOCH}" /sidecar-runtime /sidecar-runtime/usr /sidecar-runtime/usr/local \
-        /sidecar-runtime/usr/local/libexec /sidecar-runtime/usr/share /sidecar-runtime/usr/share/serverware \
-        /sidecar-runtime/usr/local/libexec/serverware-workload-sidecar \
-        /sidecar-runtime/usr/share/serverware/install_workload_sidecar_unit.py \
-        /sidecar-runtime/usr/share/serverware/native-workload-sidecar.v1.schema.json
+        /sidecar-runtime/usr/local/libexec /sidecar-runtime/usr/share /sidecar-runtime/usr/share/catchplate \
+        /sidecar-runtime/usr/local/libexec/catchplate-workload-sidecar \
+        /sidecar-runtime/usr/share/catchplate/install_workload_sidecar_unit.py \
+        /sidecar-runtime/usr/share/catchplate/native-workload-sidecar.v1.schema.json
 
 FROM scratch AS native-workload-sidecar-artifact
 # Copy the explicit child directory so its 0555 mode and nested modes survive;
@@ -283,43 +283,43 @@ FROM scratch AS native-workload-sidecar-artifact
 COPY --from=native-workload-sidecar-runtime --chown=0:0 /sidecar-runtime/ /
 
 FROM scratch AS native-parent-relay-artifact
-COPY --from=launcher-build /src/target/release/serverware-native-parent-relay /serverware-native-parent-relay
+COPY --from=launcher-build /src/target/release/catchplate-native-parent-relay /catchplate-native-parent-relay
 
 FROM scratch AS native-parent-ingress-artifact
-COPY --from=launcher-build /src/target/release/serverware-native-parent-ingress /serverware-native-parent-ingress
+COPY --from=launcher-build /src/target/release/catchplate-native-parent-ingress /catchplate-native-parent-ingress
 
 FROM scratch AS guest-inspector-artifact
-COPY --from=launcher-build /src/target/release/serverware-response-v2-guest-inspector /serverware-response-v2-guest-inspector
+COPY --from=launcher-build /src/target/release/catchplate-response-v2-guest-inspector /catchplate-response-v2-guest-inspector
 
 FROM scratch AS guest-role-artifact
-COPY --from=launcher-build /src/target/release/serverware-response-v2-guest-role /serverware-response-v2-guest-role
+COPY --from=launcher-build /src/target/release/catchplate-response-v2-guest-role /catchplate-response-v2-guest-role
 
 FROM scratch AS native-shadow-worker-artifact
-COPY --from=launcher-build /src/target/release/serverware-native-shadow-worker /serverware-native-shadow-worker
+COPY --from=launcher-build /src/target/release/catchplate-native-shadow-worker /catchplate-native-shadow-worker
 
 FROM scratch AS native-publication-handoff-artifact
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-publication-handoff /serverware-native-publication-handoff
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-publication-handoff /catchplate-native-publication-handoff
 
 FROM scratch AS native-runtime-attestation-verifier-artifact
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-runtime-attestation-verifier /serverware-native-runtime-attestation-verifier
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-runtime-attestation-verifier /catchplate-native-runtime-attestation-verifier
 
 FROM scratch AS native-shadow-verifier-supervisor-artifact
-COPY --from=launcher-build /src/target/release/serverware-native-shadow-verifier /serverware-native-shadow-verifier
+COPY --from=launcher-build /src/target/release/catchplate-native-shadow-verifier /catchplate-native-shadow-verifier
 
 FROM scratch AS native-shadow-guest-supervisor-artifact
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-guest-supervisor /serverware-native-shadow-guest-supervisor
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-shadow-guest-supervisor /catchplate-native-shadow-guest-supervisor
 
 FROM scratch AS native-shadow-proof-cohort-artifact
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-proof-cohort /serverware-native-shadow-proof-cohort
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-shadow-proof-cohort /catchplate-native-shadow-proof-cohort
 
 FROM scratch AS native-shadow-verifier-transport-artifact
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-verifier-transport /serverware-native-shadow-verifier-transport
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-shadow-verifier-transport /catchplate-native-shadow-verifier-transport
 
 FROM scratch AS native-shadow-time-issuer-supervisor-artifact
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-time-issuer /serverware-native-shadow-time-issuer
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-shadow-time-issuer /catchplate-native-shadow-time-issuer
 
 FROM scratch AS native-generation-origin-issuer-supervisor-artifact
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-generation-origin-issuer /serverware-native-generation-origin-issuer
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-generation-origin-issuer /catchplate-native-generation-origin-issuer
 
 FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS native-python-runtime-build
 ARG SOURCE_DATE_EPOCH="0"
@@ -411,28 +411,28 @@ FROM native-python-runtime-build AS native-setup-issuers-runtime
 RUN --network=none python -I -B /source/scripts/package_native_setup_issuers_runtime.py
 
 FROM scratch AS native-setup-hardware-artifact
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-setup-hardware /usr/local/libexec/serverware-native-setup-hardware
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-setup-native-hardware /usr/local/libexec/serverware-setup-native-hardware
-COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-hardware-verifier/setup-native-hardware-verifier-runtime.squashfs /opt/serverware/setup-native-hardware-verifier-runtime.squashfs
-COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-hardware-verifier/setup-native-hardware-verifier-runtime.json /usr/share/serverware/setup-native-hardware-verifier-runtime.json
-COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-hardware.service /usr/lib/systemd/system/serverware-setup-native-hardware.service
-COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-hardware.conf /usr/lib/tmpfiles.d/serverware-setup-native-hardware.conf
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-setup-hardware /usr/local/libexec/catchplate-native-setup-hardware
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-setup-native-hardware /usr/local/libexec/catchplate-setup-native-hardware
+COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-hardware-verifier/setup-native-hardware-verifier-runtime.squashfs /opt/catchplate/setup-native-hardware-verifier-runtime.squashfs
+COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-hardware-verifier/setup-native-hardware-verifier-runtime.json /usr/share/catchplate/setup-native-hardware-verifier-runtime.json
+COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/catchplate-setup-native-hardware.service /usr/lib/systemd/system/catchplate-setup-native-hardware.service
+COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/catchplate-setup-native-hardware.conf /usr/lib/tmpfiles.d/catchplate-setup-native-hardware.conf
 
 FROM scratch AS native-setup-proxy-artifact
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-setup-proxy /usr/local/libexec/serverware-native-setup-proxy
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-setup-native-proxy /usr/local/libexec/serverware-setup-native-proxy
-COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-proxy-verifier/setup-native-proxy-verifier-runtime.squashfs /opt/serverware/setup-native-proxy-verifier-runtime.squashfs
-COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-proxy-verifier/setup-native-proxy-verifier-runtime.json /usr/share/serverware/setup-native-proxy-verifier-runtime.json
-COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-proxy.service /usr/lib/systemd/system/serverware-setup-native-proxy.service
-COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-proxy.conf /usr/lib/tmpfiles.d/serverware-setup-native-proxy.conf
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-setup-proxy /usr/local/libexec/catchplate-native-setup-proxy
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-setup-native-proxy /usr/local/libexec/catchplate-setup-native-proxy
+COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-proxy-verifier/setup-native-proxy-verifier-runtime.squashfs /opt/catchplate/setup-native-proxy-verifier-runtime.squashfs
+COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-proxy-verifier/setup-native-proxy-verifier-runtime.json /usr/share/catchplate/setup-native-proxy-verifier-runtime.json
+COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/catchplate-setup-native-proxy.service /usr/lib/systemd/system/catchplate-setup-native-proxy.service
+COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/catchplate-setup-native-proxy.conf /usr/lib/tmpfiles.d/catchplate-setup-native-proxy.conf
 
 FROM scratch AS native-setup-final-artifact
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-setup-final /usr/local/libexec/serverware-native-setup-final
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-setup-native-final /usr/local/libexec/serverware-setup-native-final
-COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-final-authority/setup-native-final-authority-runtime.squashfs /opt/serverware/setup-native-final-authority-runtime.squashfs
-COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-final-authority/setup-native-final-authority-runtime.json /usr/share/serverware/setup-native-final-authority-runtime.json
-COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-final.service /usr/lib/systemd/system/serverware-setup-native-final.service
-COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-final.conf /usr/lib/tmpfiles.d/serverware-setup-native-final.conf
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-setup-final /usr/local/libexec/catchplate-native-setup-final
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-setup-native-final /usr/local/libexec/catchplate-setup-native-final
+COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-final-authority/setup-native-final-authority-runtime.squashfs /opt/catchplate/setup-native-final-authority-runtime.squashfs
+COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-final-authority/setup-native-final-authority-runtime.json /usr/share/catchplate/setup-native-final-authority-runtime.json
+COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/catchplate-setup-native-final.service /usr/lib/systemd/system/catchplate-setup-native-final.service
+COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/catchplate-setup-native-final.conf /usr/lib/tmpfiles.d/catchplate-setup-native-final.conf
 
 # Explicit static claimant image only. These public inputs must be independently
 # supplied and pinned; no keys, boot delivery, verifier policy or time authority.
@@ -448,7 +448,7 @@ FROM native-python-runtime-build AS native-shadow-custody-runtime
 ARG SHADOW_CUSTODY_INPUTS_SHA256
 ENV SHADOW_CUSTODY_INPUTS_SHA256=$SHADOW_CUSTODY_INPUTS_SHA256
 COPY --from=native-shadow-custody-inputs / /shadow-custody-inputs/
-COPY --from=launcher-build /src/target/release/serverware-policy-shadow-custody-guest /shadow-static/serverware-policy-shadow-custody-guest
+COPY --from=launcher-build /src/target/release/catchplate-policy-shadow-custody-guest /shadow-static/catchplate-policy-shadow-custody-guest
 RUN --network=none python -I -B /source/scripts/package_native_shadow_custody_runtime.py
 
 FROM scratch AS native-shadow-custody-runtime-artifact
@@ -458,90 +458,90 @@ COPY --from=native-shadow-custody-runtime /shadow-custody-output /shadow-custody
 # last target below is the native-only enclave image.
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:ce0d66bc0f64aae46e6a03add867b07f42cc7b8799c949c2e898057b7f75a151 AS production-decision-gate
 
-ARG SERVERWARE_IMAGE_SOURCE="https://github.com/example/private-deployment"
-ARG SERVERWARE_IMAGE_TITLE="invalid source identity"
-ARG SERVERWARE_IMAGE_REVISION="unknown"
-ARG SERVERWARE_IMAGE_CREATED="unknown"
-ARG SERVERWARE_SOURCE_TREE_DIGEST="unknown"
-ARG SERVERWARE_SOURCE_ARCHIVE_SHA256="unknown"
-ARG SERVERWARE_SOURCE_MANIFEST_SHA256="unknown"
-ARG SERVERWARE_SOURCE_IDENTITY_MODE="invalid"
-ARG SERVERWARE_PRODUCTION_RELEASE_ELIGIBLE="false"
+ARG CATCHPLATE_IMAGE_SOURCE="https://github.com/example/private-deployment"
+ARG CATCHPLATE_IMAGE_TITLE="invalid source identity"
+ARG CATCHPLATE_IMAGE_REVISION="unknown"
+ARG CATCHPLATE_IMAGE_CREATED="unknown"
+ARG CATCHPLATE_SOURCE_TREE_DIGEST="unknown"
+ARG CATCHPLATE_SOURCE_ARCHIVE_SHA256="unknown"
+ARG CATCHPLATE_SOURCE_MANIFEST_SHA256="unknown"
+ARG CATCHPLATE_SOURCE_IDENTITY_MODE="invalid"
+ARG CATCHPLATE_PRODUCTION_RELEASE_ELIGIBLE="false"
 ARG SOURCE_DATE_EPOCH="0"
 
-LABEL org.opencontainers.image.title="${SERVERWARE_IMAGE_TITLE}" \
-      org.opencontainers.image.source="${SERVERWARE_IMAGE_SOURCE}" \
-      org.opencontainers.image.revision="${SERVERWARE_IMAGE_REVISION}" \
-      org.opencontainers.image.created="${SERVERWARE_IMAGE_CREATED}" \
-      dev.serverware.source_tree_digest="${SERVERWARE_SOURCE_TREE_DIGEST}" \
-      dev.serverware.source_archive_digest="${SERVERWARE_SOURCE_ARCHIVE_SHA256}" \
-      dev.serverware.source_manifest_digest="${SERVERWARE_SOURCE_MANIFEST_SHA256}" \
-      dev.serverware.source_identity_mode="${SERVERWARE_SOURCE_IDENTITY_MODE}" \
-      dev.serverware.production_release_eligible="${SERVERWARE_PRODUCTION_RELEASE_ELIGIBLE}"
+LABEL org.opencontainers.image.title="${CATCHPLATE_IMAGE_TITLE}" \
+      org.opencontainers.image.source="${CATCHPLATE_IMAGE_SOURCE}" \
+      org.opencontainers.image.revision="${CATCHPLATE_IMAGE_REVISION}" \
+      org.opencontainers.image.created="${CATCHPLATE_IMAGE_CREATED}" \
+      dev.catchplate.source_tree_digest="${CATCHPLATE_SOURCE_TREE_DIGEST}" \
+      dev.catchplate.source_archive_digest="${CATCHPLATE_SOURCE_ARCHIVE_SHA256}" \
+      dev.catchplate.source_manifest_digest="${CATCHPLATE_SOURCE_MANIFEST_SHA256}" \
+      dev.catchplate.source_identity_mode="${CATCHPLATE_SOURCE_IDENTITY_MODE}" \
+      dev.catchplate.production_release_eligible="${CATCHPLATE_PRODUCTION_RELEASE_ELIGIBLE}"
 
-COPY --from=build /src/target/release/serverware-decision-gate /usr/local/bin/serverware-decision-gate
-COPY --from=build /src/target/release/serverware-proof-client /usr/local/bin/serverware-proof-client
-COPY --from=build /src/target/release/serverware-custody-runtime /usr/local/bin/serverware-custody-runtime
-COPY --from=build /src/target/release/serverware-response-observation-v2-custody /usr/local/bin/serverware-response-observation-v2-custody
-COPY --from=source-preparation /source-contract/source-manifest.json /usr/share/serverware/source-manifest.json
-COPY --from=build /src/target/release/serverware-policy-shadow-custody /usr/local/bin/serverware-policy-shadow-custody
-COPY --from=build /src/target/release/serverware-policy-custody-durable-recovery-store /usr/local/bin/serverware-policy-custody-durable-recovery-store
-COPY --from=build /src/target/release/serverware-policy-custody-recovery-target-provider /usr/local/bin/serverware-policy-custody-recovery-target-provider
-COPY --from=build /src/target/release/serverware-policy-custody-current-signature-authority /usr/local/bin/serverware-policy-custody-current-signature-authority
-COPY --from=build /src/target/release/serverware-policy-custody-cleanup-authorization-consumer /usr/local/bin/serverware-policy-custody-cleanup-authorization-consumer
-COPY --from=build /src/target/release/serverware-policy-custody-bounded-cleanup-helper /usr/local/bin/serverware-policy-custody-bounded-cleanup-helper
-COPY --from=launcher-build /src/target/release/serverware-production-launcher /usr/local/libexec/serverware-production-launcher
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-response-verifier /usr/local/libexec/serverware-native-response-verifier
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-ingress-verifier /usr/local/libexec/serverware-native-ingress-verifier
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-ingress-client /usr/local/libexec/serverware-native-ingress-client
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-bootstrap-client /usr/local/libexec/serverware-native-bootstrap-client
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-parent-relay /usr/local/libexec/serverware-native-parent-relay
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-parent-ingress /usr/local/libexec/serverware-native-parent-ingress
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-response-v2-guest-inspector /usr/local/bin/serverware-response-v2-guest-inspector
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-response-v2-guest-role /usr/local/bin/serverware-response-v2-guest-role
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-worker /usr/local/bin/serverware-native-shadow-worker
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-runtime-attestation-verifier /usr/local/bin/serverware-native-runtime-attestation-verifier
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-publication-handoff /usr/local/bin/serverware-native-publication-handoff
-COPY --from=build --chown=0:0 /policy-custody-assets /usr/share/serverware/policy-custody
-COPY --from=build --chown=65531:65530 --chmod=0710 /runtime-layout/serverware-custody /run/serverware-custody
-COPY --from=build --chown=65531:65530 --chmod=0700 /runtime-layout/serverware-custody-state /var/lib/serverware-custody
-COPY --from=build --chown=65531:65530 --chmod=0600 /runtime-layout/serverware-custody-state/manifest.json /var/lib/serverware-custody/manifest.json
-COPY --from=build --chown=65531:65530 --chmod=0600 /runtime-layout/serverware-custody-state/ledger.lock /var/lib/serverware-custody/ledger.lock
-COPY --from=build --chown=65532:65532 --chmod=0755 /runtime-layout/serverware-custody-trust /run/serverware/custody-trust
+COPY --from=build /src/target/release/catchplate-decision-gate /usr/local/bin/catchplate-decision-gate
+COPY --from=build /src/target/release/catchplate-proof-client /usr/local/bin/catchplate-proof-client
+COPY --from=build /src/target/release/catchplate-custody-runtime /usr/local/bin/catchplate-custody-runtime
+COPY --from=build /src/target/release/catchplate-response-observation-v2-custody /usr/local/bin/catchplate-response-observation-v2-custody
+COPY --from=source-preparation /source-contract/source-manifest.json /usr/share/catchplate/source-manifest.json
+COPY --from=build /src/target/release/catchplate-policy-shadow-custody /usr/local/bin/catchplate-policy-shadow-custody
+COPY --from=build /src/target/release/catchplate-policy-custody-durable-recovery-store /usr/local/bin/catchplate-policy-custody-durable-recovery-store
+COPY --from=build /src/target/release/catchplate-policy-custody-recovery-target-provider /usr/local/bin/catchplate-policy-custody-recovery-target-provider
+COPY --from=build /src/target/release/catchplate-policy-custody-current-signature-authority /usr/local/bin/catchplate-policy-custody-current-signature-authority
+COPY --from=build /src/target/release/catchplate-policy-custody-cleanup-authorization-consumer /usr/local/bin/catchplate-policy-custody-cleanup-authorization-consumer
+COPY --from=build /src/target/release/catchplate-policy-custody-bounded-cleanup-helper /usr/local/bin/catchplate-policy-custody-bounded-cleanup-helper
+COPY --from=launcher-build /src/target/release/catchplate-production-launcher /usr/local/libexec/catchplate-production-launcher
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-response-verifier /usr/local/libexec/catchplate-native-response-verifier
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-ingress-verifier /usr/local/libexec/catchplate-native-ingress-verifier
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-ingress-client /usr/local/libexec/catchplate-native-ingress-client
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-bootstrap-client /usr/local/libexec/catchplate-native-bootstrap-client
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-parent-relay /usr/local/libexec/catchplate-native-parent-relay
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-parent-ingress /usr/local/libexec/catchplate-native-parent-ingress
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-response-v2-guest-inspector /usr/local/bin/catchplate-response-v2-guest-inspector
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-response-v2-guest-role /usr/local/bin/catchplate-response-v2-guest-role
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-shadow-worker /usr/local/bin/catchplate-native-shadow-worker
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-runtime-attestation-verifier /usr/local/bin/catchplate-native-runtime-attestation-verifier
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-publication-handoff /usr/local/bin/catchplate-native-publication-handoff
+COPY --from=build --chown=0:0 /policy-custody-assets /usr/share/catchplate/policy-custody
+COPY --from=build --chown=65531:65530 --chmod=0710 /runtime-layout/catchplate-custody /run/catchplate-custody
+COPY --from=build --chown=65531:65530 --chmod=0700 /runtime-layout/catchplate-custody-state /var/lib/catchplate-custody
+COPY --from=build --chown=65531:65530 --chmod=0600 /runtime-layout/catchplate-custody-state/manifest.json /var/lib/catchplate-custody/manifest.json
+COPY --from=build --chown=65531:65530 --chmod=0600 /runtime-layout/catchplate-custody-state/ledger.lock /var/lib/catchplate-custody/ledger.lock
+COPY --from=build --chown=65532:65532 --chmod=0755 /runtime-layout/catchplate-custody-trust /run/catchplate/custody-trust
 USER nonroot:nonroot
 EXPOSE 9090
-ENTRYPOINT ["/usr/local/bin/serverware-decision-gate"]
+ENTRYPOINT ["/usr/local/bin/catchplate-decision-gate"]
 
 # Fixed pilot export only: actual guest/cohort executables and the existing
 # six-file public claimant image. No issuer, key, C9 grant or live config is
 # copied here. The ordinary five service binaries remain in the separately
 # built production gate image with their real shared-library closure.
 FROM scratch AS native-pilot-artifacts
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-policy-shadow-custody-guest /native-install/usr/local/bin/serverware-policy-shadow-custody-guest
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-proof-cohort /native-install/opt/serverware/serverware-native-shadow-proof-cohort
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-guest-supervisor /native-install/opt/serverware/serverware-native-shadow-guest-supervisor
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-policy-shadow-custody-guest /native-install/usr/local/bin/catchplate-policy-shadow-custody-guest
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-shadow-proof-cohort /native-install/opt/catchplate/catchplate-native-shadow-proof-cohort
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-shadow-guest-supervisor /native-install/opt/catchplate/catchplate-native-shadow-guest-supervisor
 # Parent utility only; never copied into the trusted claimant SquashFS.
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-activation-relay /native-install/opt/serverware/serverware-native-activation-relay
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-publication-genesis-controller /native-install/opt/serverware/serverware-native-publication-genesis-controller
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-publication-adoption-validator /native-install/opt/serverware/serverware-native-publication-adoption-validator
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-worker /native-install/usr/local/bin/serverware-native-shadow-worker
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-runtime-attestation-verifier /native-install/usr/local/bin/serverware-native-runtime-attestation-verifier
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-publication-handoff /native-install/usr/local/bin/serverware-native-publication-handoff
-COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.squashfs /native-install/opt/serverware/native-shadow-custody-runtime.squashfs
-COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.json /native-install/usr/share/serverware/native-shadow-custody-runtime.json
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-activation-relay /native-install/opt/catchplate/catchplate-native-activation-relay
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-publication-genesis-controller /native-install/opt/catchplate/catchplate-native-publication-genesis-controller
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-publication-adoption-validator /native-install/opt/catchplate/catchplate-native-publication-adoption-validator
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-shadow-worker /native-install/usr/local/bin/catchplate-native-shadow-worker
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-runtime-attestation-verifier /native-install/usr/local/bin/catchplate-native-runtime-attestation-verifier
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-publication-handoff /native-install/usr/local/bin/catchplate-native-publication-handoff
+COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.squashfs /native-install/opt/catchplate/native-shadow-custody-runtime.squashfs
+COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.json /native-install/usr/share/catchplate/native-shadow-custody-runtime.json
 
 FROM production-decision-gate AS native-enclave-base
-COPY --from=native-broker-runtime --chown=0:0 --chmod=0444 /broker-output/native-broker-runtime.squashfs /opt/serverware/native-broker-runtime.squashfs
-COPY --from=native-broker-runtime --chown=0:0 --chmod=0444 /broker-output/native-broker-runtime.json /usr/share/serverware/native-broker-runtime.json
-COPY --from=native-role-key-runtime --chown=0:0 --chmod=0444 /role-key-output/native-role-key-provisioner-runtime.squashfs /opt/serverware/native-role-key-provisioner-runtime.squashfs
-COPY --from=native-role-key-runtime --chown=0:0 --chmod=0444 /role-key-output/native-role-key-provisioner-runtime.json /usr/share/serverware/native-role-key-provisioner-runtime.json
-COPY --from=native-shadow-key-runtime --chown=0:0 --chmod=0444 /shadow-key-output/native-shadow-key-delivery-runtime.squashfs /opt/serverware/native-shadow-key-delivery-runtime.squashfs
-COPY --from=native-shadow-key-runtime --chown=0:0 --chmod=0444 /shadow-key-output/native-shadow-key-delivery-runtime.json /usr/share/serverware/native-shadow-key-delivery-runtime.json
-COPY --from=build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-enclave-entrypoint /usr/local/libexec/serverware-native-enclave-entrypoint
+COPY --from=native-broker-runtime --chown=0:0 --chmod=0444 /broker-output/native-broker-runtime.squashfs /opt/catchplate/native-broker-runtime.squashfs
+COPY --from=native-broker-runtime --chown=0:0 --chmod=0444 /broker-output/native-broker-runtime.json /usr/share/catchplate/native-broker-runtime.json
+COPY --from=native-role-key-runtime --chown=0:0 --chmod=0444 /role-key-output/native-role-key-provisioner-runtime.squashfs /opt/catchplate/native-role-key-provisioner-runtime.squashfs
+COPY --from=native-role-key-runtime --chown=0:0 --chmod=0444 /role-key-output/native-role-key-provisioner-runtime.json /usr/share/catchplate/native-role-key-provisioner-runtime.json
+COPY --from=native-shadow-key-runtime --chown=0:0 --chmod=0444 /shadow-key-output/native-shadow-key-delivery-runtime.squashfs /opt/catchplate/native-shadow-key-delivery-runtime.squashfs
+COPY --from=native-shadow-key-runtime --chown=0:0 --chmod=0444 /shadow-key-output/native-shadow-key-delivery-runtime.json /usr/share/catchplate/native-shadow-key-delivery-runtime.json
+COPY --from=build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-enclave-entrypoint /usr/local/libexec/catchplate-native-enclave-entrypoint
 # Native startup constructs the private broker mount and drops the helper's
 # privileges. No root key, credential, provider token or host socket is baked in.
 USER 0:0
-ENTRYPOINT ["/usr/local/libexec/serverware-native-enclave-entrypoint"]
+ENTRYPOINT ["/usr/local/libexec/catchplate-native-enclave-entrypoint"]
 CMD []
 
 # Separately approved public delivery trust, packaged before EIF measurement.
@@ -557,9 +557,9 @@ RUN --network=none set -eu; \
 FROM native-enclave-base AS native-enclave-delivery
 ARG NATIVE_DELIVERY_AUTHORITY_SHA256
 ARG NATIVE_DELIVERY_AUTHORITY_SPKI_SHA256
-LABEL dev.serverware.native_delivery_authority_pem_sha256="${NATIVE_DELIVERY_AUTHORITY_SHA256}" \
-      dev.serverware.native_delivery_authority_spki_sha256="${NATIVE_DELIVERY_AUTHORITY_SPKI_SHA256}"
-COPY --from=native-delivery-authority-input --chown=0:0 --chmod=0444 /native-delivery/authority.pem /usr/share/serverware/native-delivery-authority.pem
+LABEL dev.catchplate.native_delivery_authority_pem_sha256="${NATIVE_DELIVERY_AUTHORITY_SHA256}" \
+      dev.catchplate.native_delivery_authority_spki_sha256="${NATIVE_DELIVERY_AUTHORITY_SPKI_SHA256}"
+COPY --from=native-delivery-authority-input --chown=0:0 --chmod=0444 /native-delivery/authority.pem /usr/share/catchplate/native-delivery-authority.pem
 CMD ["--receive-configuration-v1"]
 
 # Explicit signed v2 rotation delivery. The legacy v1/v24 image stays fixed;
@@ -579,12 +579,12 @@ RUN --network=none python -I -B /source/scripts/package_native_activation_receiv
 # credentials or NSM. The bootstrap creates only the receiver's local pipes.
 FROM scratch AS native-activation-receiver-artifact
 COPY --from=native-activation-receiver-configuration --chown=0:0 /activation-receiver-root/ /
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-enclave-entrypoint /usr/local/libexec/serverware-native-enclave-entrypoint
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-guest-supervisor /opt/serverware/serverware-native-shadow-guest-supervisor
-COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.squashfs /opt/serverware/native-shadow-custody-runtime.squashfs
-COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.json /usr/share/serverware/native-shadow-custody-runtime.json
-COPY --from=native-shadow-key-runtime --chown=0:0 --chmod=0444 /shadow-key-output/native-shadow-key-delivery-runtime.squashfs /opt/serverware/native-shadow-key-delivery-runtime.squashfs
-COPY --from=native-shadow-key-runtime --chown=0:0 --chmod=0444 /shadow-key-output/native-shadow-key-delivery-runtime.json /usr/share/serverware/native-shadow-key-delivery-runtime.json
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-enclave-entrypoint /usr/local/libexec/catchplate-native-enclave-entrypoint
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/catchplate-native-shadow-guest-supervisor /opt/catchplate/catchplate-native-shadow-guest-supervisor
+COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.squashfs /opt/catchplate/native-shadow-custody-runtime.squashfs
+COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.json /usr/share/catchplate/native-shadow-custody-runtime.json
+COPY --from=native-shadow-key-runtime --chown=0:0 --chmod=0444 /shadow-key-output/native-shadow-key-delivery-runtime.squashfs /opt/catchplate/native-shadow-key-delivery-runtime.squashfs
+COPY --from=native-shadow-key-runtime --chown=0:0 --chmod=0444 /shadow-key-output/native-shadow-key-delivery-runtime.json /usr/share/catchplate/native-shadow-key-delivery-runtime.json
 
 # Explicit service-enclave image, separate from the decision-gate default.
 # Existing NSM, role-owned durable journal and encrypted credential resources

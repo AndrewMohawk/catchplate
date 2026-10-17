@@ -24,9 +24,9 @@ also binds two different checkpoints:
   durable executor attempt journal. It is not a reservation journal or the
   control-plane grant's local ID.
 
-The closed schemas are `serverware.signedRegistrationExecutionSqlBootstrap/v1`,
-`serverware.registrationExecutionSqlBootstrap/v1` and
-`serverware.registrationExecutionSqlLaunch/v1`. The original bootstrap is
+The closed schemas are `catchplate.signedRegistrationExecutionSqlBootstrap/v1`,
+`catchplate.registrationExecutionSqlBootstrap/v1` and
+`catchplate.registrationExecutionSqlLaunch/v1`. The original bootstrap is
 bounded to 4 MiB. Its `_verify_on_work` authenticates root originals before cold
 resource selection; `_produce_on_work` signs independently established claims,
 not evidence of their provenance or currentness.
@@ -61,7 +61,7 @@ window.
 
 The service runs as UID/GID `65512:65512`, without supplementary groups, and
 admits the control-plane peer `65532:65532`. The root-created listener is
-`/run/serverware/registration-execution/sql.sock`, with pathname ownership
+`/run/catchplate/registration-execution/sql.sock`, with pathname ownership
 `65512:65532` and mode `0660`. Client-side `SO_PEERCRED` expects the actual
 root-activated listener owner `0:0`, not the dropped service identity.
 
@@ -69,16 +69,16 @@ Root delivery retains exactly four fixed descriptors:
 
 | FD | Original owner input |
 | --- | --- |
-| 198 | Root public key from `/run/serverware/registration-sql-trust/root-public-key.pem` |
-| 199 | Signed `/run/serverware/registration-sql-trust/bootstrap.json` |
+| 198 | Root public key from `/run/catchplate/registration-sql-trust/root-public-key.pem` |
+| 199 | Signed `/run/catchplate/registration-sql-trust/bootstrap.json` |
 | 200 | Actual activated listener |
-| 201 | `/var/lib/serverware/registration-sql-attempts` directory, `65512:65512`, mode `0700` |
+| 201 | `/var/lib/catchplate/registration-sql-attempts` directory, `65512:65512`, mode `0700` |
 
 The child uses an exact cleared environment, checked at admission and lifecycle
 boundaries; ambient libpq variables are not accepted as connection authority.
 There is **no signing-key descriptor**. PostgreSQL client keys are separate
 fixed TLS originals, not completion or enrollment authority keys. All five
-files below `/run/serverware/registration-sql-tls` are root-owned and bound by
+files below `/run/catchplate/registration-sql-tls` are root-owned and bound by
 the bootstrap's hashes and byte limits:
 
 | Files | Mode and bound per file |
@@ -94,7 +94,7 @@ check. No key or credential is returned on the wire.
 
 ## Fixed raw13 request and raw4 outcome
 
-[`authority_registration_execution_sql_transport.py`](../serverware/authority_registration_execution_sql_transport.py)
+[`authority_registration_execution_sql_transport.py`](../catchplate/authority_registration_execution_sql_transport.py)
 uses request magic `SWRSQL01` and response magic `SWRSLR01`. Each frame has an
 eight-byte magic, one big-endian u64 byte length for each body, then the bodies
 in order, followed by exact EOF. The client half-closes after its request.
@@ -156,17 +156,17 @@ reservation originals is not a new public execute permission.
 ## Source packaging, not deployment
 
 The source chain is the
-[`bootstrap`](../serverware/registration_execution_sql_bootstrap.py),
-[`root entrypoint`](../serverware/registration_execution_sql_entrypoint.py),
-[`startup owner`](../serverware/registration_execution_sql_startup.py),
-[`runner`](../serverware/registration_execution_sql_runner.py) and
-[`fixed launcher`](../serverware/registration_execution_sql_launcher.py).
+[`bootstrap`](../catchplate/registration_execution_sql_bootstrap.py),
+[`root entrypoint`](../catchplate/registration_execution_sql_entrypoint.py),
+[`startup owner`](../catchplate/registration_execution_sql_startup.py),
+[`runner`](../catchplate/registration_execution_sql_runner.py) and
+[`fixed launcher`](../catchplate/registration_execution_sql_launcher.py).
 The runner uses `initialize_from_environment()`, `require_started()` and
 `close()`. The actual owner's `serve_once()` returns `False` only while idle,
 `True` after its one completed connection, and any exception ends the launch.
 [`Dockerfile.production`](../Dockerfile.production) copies the launcher and the
-uninstalled [socket](../ops/systemd/serverware-registration-execution-sql.socket)
-and [service template](../ops/systemd/serverware-registration-execution-sql.service.in);
+uninstalled [socket](../ops/systemd/catchplate-registration-execution-sql.socket)
+and [service template](../ops/systemd/catchplate-registration-execution-sql.service.in);
 it does not switch an entrypoint or activate a unit.
 
 The template requires reviewed literal substitutions for `SQL_RELEASE_ROOT`,

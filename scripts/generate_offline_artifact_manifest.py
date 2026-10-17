@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 
 
-API_VERSION = "serverware.offlineArtifactManifest/v1"
+API_VERSION = "catchplate.offlineArtifactManifest/v1"
 KIND = "OfflineArtifactManifest"
 LABEL_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 SAFE_BASENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,254}$")

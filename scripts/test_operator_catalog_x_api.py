@@ -30,7 +30,7 @@ RULE = "access-rules/x-username"
 CONNECTION = "x_app_bearer_v1"
 BUNDLE = "x_username_read_v1"
 USERNAME = "fixture_user"
-DESCRIPTOR = {"schema": "serverware.operatorXAppReadGate/v1",
+DESCRIPTOR = {"schema": "catchplate.operatorXAppReadGate/v1",
     "adapter": "x.app_read.v1", "operation": "x.username.read"}
 CONFLICT = {"detail": "operator catalog or policy changed; refresh before trying again"}
 STORAGE = {"detail": "operator catalog storage unavailable; inspect saved status before retrying"}
@@ -50,7 +50,7 @@ class OperatorCatalogXApiTests(unittest.TestCase):
 
     def setUp(self):
         runtime.OperatorDemoRuntimeTests.setUp(self)
-        self.environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.x.com"]'
+        self.environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] = '["https://api.x.com"]'
         self.health_response = (503, b'{}')
         self.health_requests = 0
         self.health_violations = []
@@ -67,7 +67,7 @@ class OperatorCatalogXApiTests(unittest.TestCase):
                 owner.health_requests += 1
                 if (self.path != "/healthz" or self.client_address[0] != "127.0.0.1"
                         or any(self.headers.get(name) is not None for name in (
-                            "Authorization", "Proxy-Authorization", "X-Serverware-Admin-Token"))
+                            "Authorization", "Proxy-Authorization", "X-Catchplate-Admin-Token"))
                         or owner.health_requests > 256):
                     owner.health_violations.append("unexpected synthetic health request")
                     self.send_error(400)
@@ -82,7 +82,7 @@ class OperatorCatalogXApiTests(unittest.TestCase):
 
         self.health_response = (503, b'{}')
         with HTTPServer(("127.0.0.1", 0), SyntheticHealth) as receiver:
-            self.environment["SERVERWARE_DECISION_GATE_BASE"] = (
+            self.environment["CATCHPLATE_DECISION_GATE_BASE"] = (
                 "http://127.0.0.1:" + str(receiver.server_port))
             thread = threading.Thread(target=receiver.serve_forever,
                 kwargs={"poll_interval": 0.05}, daemon=True)
@@ -140,7 +140,7 @@ class OperatorCatalogXApiTests(unittest.TestCase):
             for route, payload, maximum in ((CREDENTIAL, credential, 16384), (RULE, rule, 4096)):
                 cases = [
                     ({"auth": False}, payload, 401),
-                    ({"headers": [("X-Serverware-Admin-Token", "synthetic-wrong")]}, payload, 401),
+                    ({"headers": [("X-Catchplate-Admin-Token", "synthetic-wrong")]}, payload, 401),
                     ({"origin": None}, payload, 403),
                     ({"origin": "https://foreign.example.com"}, payload, 403),
                     ({"origin": self.origin + "/"}, payload, 403),
@@ -259,7 +259,7 @@ class OperatorCatalogXApiTests(unittest.TestCase):
             self.assertEqual(route["credentialRef"], credential["id"])
             self.assertEqual(route["adapter"]["type"], "x.app_read.v1")
             self.assertEqual(route["credentialHeader"], {"mode": "replaceExact",
-                "expectedValue": "Bearer serverware-x-placeholder-v1"})
+                "expectedValue": "Bearer catchplate-x-placeholder-v1"})
             committed = self.authority()
             current = self.status()
             self.assertEqual(current["policy"]["activation"], "pending")

@@ -19,7 +19,7 @@ sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
 
 from scripts import test_native_pilot_genesis_jobs as job_tests
 from scripts import test_native_pilot_ordinary_initial as initial_wire
-from serverware import native_pilot_genesis_ordinary_inputs as compiler
+from catchplate import native_pilot_genesis_ordinary_inputs as compiler
 
 jobs, g, p = compiler.jobs, compiler.g, compiler.p
 FAILURES = (ValueError, InvalidSignature, KeyError)

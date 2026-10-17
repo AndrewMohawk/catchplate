@@ -11,10 +11,10 @@ const {credential, application, rule} = require('./test_operator_catalog_browser
 const {google} = require('./test_operator_ordinary_modes_browser.cjs');
 
 const ROOT = resolve(__dirname, '..');
-const BASE = 'https://github.com/AndrewMohawk/serverware/';
+const BASE = 'https://github.com/AndrewMohawk/catchplate/';
 const BRANCH = 'main/';
-const HTML = readFileSync(resolve(ROOT, 'serverware/operator_demo_web/index.html'), 'utf8');
-const PROXY = readFileSync(resolve(ROOT, 'serverware/operator_demo_web/workspace_proxy_audit.js'), 'utf8');
+const HTML = readFileSync(resolve(ROOT, 'catchplate/operator_demo_web/index.html'), 'utf8');
+const PROXY = readFileSync(resolve(ROOT, 'catchplate/operator_demo_web/workspace_proxy_audit.js'), 'utf8');
 const f = context();
 let networkCalls = 0;
 f.value.fetch = () => { networkCalls++; throw new Error('No network permitted'); };
@@ -30,12 +30,12 @@ function github(bundle = 'github_issues_read_v1') {
     request_fields: [], response_fields: [], query_keys: ['assignee', 'creator', 'direction', 'labels', 'mentioned', 'milestone', 'page', 'per_page', 'since', 'sort', 'state'],
     allowed_headers: ['accept', 'accept-language', 'sec-fetch-mode', 'user-agent', 'x-github-api-version'],
     request_body_mode: 'preserve_json_v1', query_mode: 'githubRestV1', response_mode: 'unfiltered_json_or_empty_v2',
-    credential_input: 'replace_exact', placeholder: 'token serverware-github-placeholder-v1'});
+    credential_input: 'replace_exact', placeholder: 'token catchplate-github-placeholder-v1'});
   const value = rawCatalog({credentials: [credential({connection_type: 'github_token_v1', provider_id: 'github'})], rules: [saved], allowed: [origin]});
-  value.capabilities.github = {schema: 'serverware.operatorGithub/v1', connection_type: 'github_token_v1',
+  value.capabilities.github = {schema: 'catchplate.operatorGithub/v1', connection_type: 'github_token_v1',
     create_credential_path: '/api/operator-demo/credentials/github-token', create_rule_path: '/api/operator-demo/access-rules/github',
     api_origin: origin, destination_allowed: true, operation_bundles: ['github_issues_read_v1', 'github_issues_write_v1'],
-    sdk_auth_token: 'serverware-github-placeholder-v1', placeholder: 'token serverware-github-placeholder-v1',
+    sdk_auth_token: 'catchplate-github-placeholder-v1', placeholder: 'token catchplate-github-placeholder-v1',
     query_mode: 'githubRestV1', response_mode: 'unfiltered_json_or_empty_v2', source_pair_required: true};
   return value;
 }
@@ -59,13 +59,13 @@ function x() {
     upstream_url: origin + '/2/users/by/username/example_user', methods: ['GET'],
     request_fields: [], response_fields: [], query_keys: [],
     allowed_headers: ['accept', 'accept-language', 'sec-fetch-mode', 'user-agent'],
-    response_mode: 'x_app_read_json_v1', credential_input: 'replace_exact', placeholder: 'Bearer serverware-x-placeholder-v1'});
+    response_mode: 'x_app_read_json_v1', credential_input: 'replace_exact', placeholder: 'Bearer catchplate-x-placeholder-v1'});
   const value = rawCatalog({credentials: [credential({connection_type: 'x_app_bearer_v1', provider_id: 'x',
     credential_generation: 1})], rules: [saved], allowed: [origin]});
-  value.capabilities.x = {schema: 'serverware.operatorXAppRead/v1', connection_type: 'x_app_bearer_v1',
+  value.capabilities.x = {schema: 'catchplate.operatorXAppRead/v1', connection_type: 'x_app_bearer_v1',
     create_credential_path: '/api/operator-demo/credentials/x-app-bearer', create_rule_path: '/api/operator-demo/access-rules/x-username',
     api_origin: origin, destination_allowed: true, operation_bundles: ['x_username_read_v1'],
-    sdk_auth_token: 'serverware-x-placeholder-v1', placeholder: 'Bearer serverware-x-placeholder-v1',
+    sdk_auth_token: 'catchplate-x-placeholder-v1', placeholder: 'Bearer catchplate-x-placeholder-v1',
     response_mode: 'x_app_read_json_v1', source_pair_required: true};
   return value;
 }
@@ -76,16 +76,16 @@ function alchemy(chain = 'eth-mainnet') {
   const saved = rule({operation_bundle: 'alchemy_chain_status_read_v1', chain,
     upstream_url: origin + '/v2', methods: ['POST'], request_fields: [], response_fields: [], query_keys: [],
     allowed_headers: ['accept', 'accept-language', 'alchemy-ethers-sdk-method', 'alchemy-ethers-sdk-version', 'sec-fetch-mode', 'user-agent'],
-    response_mode: 'alchemy_rpc_read_json_v1', credential_input: 'replace_exact', placeholder: 'Bearer serverware-alchemy-placeholder-v1'});
+    response_mode: 'alchemy_rpc_read_json_v1', credential_input: 'replace_exact', placeholder: 'Bearer catchplate-alchemy-placeholder-v1'});
   const value = rawCatalog({credentials: [credential({connection_type: 'alchemy_key_v1', provider_id: 'alchemy',
     credential_generation: 1})], rules: [saved], allowed: [origin]});
-  value.capabilities.alchemy = {schema: 'serverware.operatorAlchemyRpcRead/v1', connection_type: 'alchemy_key_v1',
+  value.capabilities.alchemy = {schema: 'catchplate.operatorAlchemyRpcRead/v1', connection_type: 'alchemy_key_v1',
     create_credential_path: '/api/operator-demo/credentials/alchemy-key',
     create_rule_path: '/api/operator-demo/access-rules/alchemy-chain-status',
     chains: [{chain: 'eth-mainnet', api_origin: 'https://eth-mainnet.g.alchemy.com', destination_allowed: true},
       {chain: 'eth-sepolia', api_origin: 'https://eth-sepolia.g.alchemy.com', destination_allowed: true}],
     operation_bundles: ['alchemy_chain_status_read_v1'], rpc_methods: ['eth_chainId', 'eth_blockNumber'],
-    sdk_auth_token: 'serverware-alchemy-placeholder-v1', placeholder: 'Bearer serverware-alchemy-placeholder-v1',
+    sdk_auth_token: 'catchplate-alchemy-placeholder-v1', placeholder: 'Bearer catchplate-alchemy-placeholder-v1',
     response_mode: 'alchemy_rpc_read_json_v1', source_pair_required: true};
   return value;
 }
@@ -247,10 +247,10 @@ const tests = [
     }
   }],
   ['validated exact Gmail replacement links the three independently verified SDK projects', () => {
-    const value = gmail({credential_input: 'replace_exact', placeholder: 'Bearer serverware-gmail-placeholder-v1'});
+    const value = gmail({credential_input: 'replace_exact', placeholder: 'Bearer catchplate-gmail-placeholder-v1'});
     assert.equal(value.applications[0].proxy_authentication, 'basic_and_bearer_v1');
     assert.deepEqual(value.capabilities.application_proxy_authentication, {
-      schema: 'serverware.operatorProxyAuthentication/v1', modes: ['bearer', 'basic_and_bearer_v1'],
+      schema: 'catchplate.operatorProxyAuthentication/v1', modes: ['bearer', 'basic_and_bearer_v1'],
       path: '/api/operator-demo/applications/proxy-authentication'});
     assert.equal(value.access_rules[0].query_mode, 'orderedFormV1');
     assert.deepEqual(links(value), [
@@ -270,8 +270,8 @@ const tests = [
     assert.deepEqual(links(legacy), links(bearer));
   }],
   ['Gmail insertion and other valid dummy values retain guide-only discovery', () => {
-    for (const changes of [{}, ...['Bearer another-public-dummy', 'bearer serverware-gmail-placeholder-v1',
-      'Bearer  serverware-gmail-placeholder-v1', 'Bearer serverware-gmail-placeholder-v1-extra',
+    for (const changes of [{}, ...['Bearer another-public-dummy', 'bearer catchplate-gmail-placeholder-v1',
+      'Bearer  catchplate-gmail-placeholder-v1', 'Bearer catchplate-gmail-placeholder-v1-extra',
       'Bearer PRIVATE_DUMMY_CANARY'].map(placeholder => ({credential_input: 'replace_exact', placeholder}))]) {
       const value = gmail(changes);
       assert.equal(f.run('operatorRuleSupported(input.access_rules[0], input)', value), true);
@@ -283,10 +283,10 @@ const tests = [
       assert(!note.includes('not a runnable example project')); assert(!note.includes('PRIVATE_DUMMY_CANARY'));
     }
     for (const changes of [
-      {credential_input: 'insert', placeholder: 'Bearer serverware-gmail-placeholder-v1'},
-      {credential_input: 'replace_exact'}, {credential_input: 'replace_exact', placeholder: 'Bearer serverware-gmail-placeholder-v1 '},
+      {credential_input: 'insert', placeholder: 'Bearer catchplate-gmail-placeholder-v1'},
+      {credential_input: 'replace_exact'}, {credential_input: 'replace_exact', placeholder: 'Bearer catchplate-gmail-placeholder-v1 '},
       {credential_input: 'replace_exact', placeholder: null},
-      {credential_input: 'unsupported', placeholder: 'Bearer serverware-gmail-placeholder-v1'}])
+      {credential_input: 'unsupported', placeholder: 'Bearer catchplate-gmail-placeholder-v1'}])
       assert.deepEqual(links(gmail(changes)), []);
   }],
   ['a bundle label alone, revoked resources, or absent source capability never selects examples', () => {
@@ -302,7 +302,7 @@ const tests = [
     const manual = rawCatalog({credentials: [credential()], rules: [rule()]});
     assert.deepEqual(links(manual), []);
     for (const original of [rawCatalog({rules: [npmRule()]}), publishing(), x(), alchemy(), alchemy('eth-sepolia'),
-      gmail({credential_input: 'replace_exact', placeholder: 'Bearer serverware-gmail-placeholder-v1'})]) {
+      gmail({credential_input: 'replace_exact', placeholder: 'Bearer catchplate-gmail-placeholder-v1'})]) {
       for (const change of [value => { value.access_rules[0].status = 'revoked'; },
         value => { value.credentials[0].status = 'revoked'; }, value => { value.applications[0].status = 'revoked'; },
         value => { value.access_rules[0].methods = ['DELETE']; }]) {
@@ -323,7 +323,7 @@ const tests = [
   }],
   ['links never interpolate IDs, private tokens, custom URLs, query strings or fragments', () => {
     for (const value of [github(), rawCatalog({rules: [npmRule()]}), publishing(), x(), alchemy(), alchemy('eth-sepolia'), gmail(),
-      gmail({credential_input: 'replace_exact', placeholder: 'Bearer serverware-gmail-placeholder-v1'})]) {
+      gmail({credential_input: 'replace_exact', placeholder: 'Bearer catchplate-gmail-placeholder-v1'})]) {
       const expected = links(value);
       value.proxy_url = 'https://PRIVATE_TOKEN@private.example.test/?PRIVATE_QUERY';
       value.credentials[0].secret = 'PROVIDER_SECRET_CANARY'; value.applications[0].token = 'APP_SECRET_CANARY';
@@ -332,7 +332,7 @@ const tests = [
       assert.deepEqual(links(value), expected);
       for (const link of links(value)) {
         const url = new URL(link.href); assert.equal(url.origin, 'https://github.com');
-        assert.match(url.pathname, /^\/operator\/serverware\/(?:tree|blob)\/main\/(?:examples|docs)\//);
+        assert.match(url.pathname, /^\/operator\/catchplate\/(?:tree|blob)\/main\/(?:examples|docs)\//);
         assert.equal(url.username + url.password + url.search + url.hash, '');
         for (const forbidden of [IDS.application, IDS.credential, IDS.rule, 'PRIVATE_', 'SECRET_CANARY', 'untrusted.example.test'])
           assert(!JSON.stringify(link).includes(forbidden));

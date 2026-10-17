@@ -17,9 +17,9 @@ The source/templates are unbuilt, unexecuted, uninstalled and unprovisioned.
 | 205 | Historical delivery AES key, exactly 32 bytes |
 
 Trust originals are fixed beneath
-`/run/serverware/oidc-session-activation-delivery-completion-trust/` as
+`/run/catchplate/oidc-session-activation-delivery-completion-trust/` as
 `root-public-key.pem` and `bootstrap.json`. Private root-owned mode-0400
-originals are `/run/secrets/serverware-oidc-session-activation-delivery-completion-`
+originals are `/run/secrets/catchplate-oidc-session-activation-delivery-completion-`
 plus `signing-key`, `execution-bundle-key`, `historical-bundle-key` or `delivery-key`.
 Sealed readonly originals replace path-based access before privilege drop.
 The key helper returns `(completion_private_key, execution_bundle_key,
@@ -27,8 +27,8 @@ historical_bundle_key, delivery_key)` after genuine keypair/SPKI/hash joins.
 The completion signer is not given to the independently admitted private caller.
 
 The listener is
-`/run/serverware/oidc-session-activation-delivery-execution/completion.sock`,
-named `serverware-oidc-session-activation-delivery-completion`, with pathname
+`/run/catchplate/oidc-session-activation-delivery-execution/completion.sock`,
+named `catchplate-oidc-session-activation-delivery-completion`, with pathname
 ownership **65497:65497**, mode **0660**, for private launch v1. Explicit
 dispatch launch v2 requires ownership **65497:65532**, still mode **0660**,
 and fixes its request peer to **65532:65532**. Root first checks only the
@@ -39,11 +39,11 @@ Neither an observed group nor a request can choose or widen the profile.
 The service always runs as 65497 and keeps the same private key/FD inventory.
 The journal is the existing
 mode-0700 **65497:65497** directory
-`/var/lib/serverware/oidc-session-activation-delivery-completions`; descriptor
+`/var/lib/catchplate/oidc-session-activation-delivery-completions`; descriptor
 and protected root pathname must match its signed device/inode.
 
 The existing socket unit remains private launch v1. The separate uninstalled
-`ops/systemd/serverware-oidc-session-activation-delivery-completion.socket.d/dispatch-v2.conf`
+`ops/systemd/catchplate-oidc-session-activation-delivery-completion.socket.d/dispatch-v2.conf`
 is an explicit operator opt-in to group 65532 for a separately root-signed
 launch v2 only. It must not be installed with a v1 bootstrap: mismatched
 schema/ACL admission fails. It changes no service user, key mount, journal or
@@ -56,7 +56,7 @@ when independently provisioning that signed profile. Neither drop-in changes
 the eight private descriptors or lends AES/proof-signing custody to the caller.
 
 The five original TLS files are under
-`/run/serverware/oidc-session-activation-delivery-completion-tls/`:
+`/run/catchplate/oidc-session-activation-delivery-completion-tls/`:
 `ca.pem`, `custody.crt`, `custody.key`, `commit.crt` and `commit.key`.
 Public originals are root-owned mode 0444, bounded to 64 KiB. Private originals
 are root-owned group 65497 mode 0440, bounded to 16 KiB. All actual file lengths

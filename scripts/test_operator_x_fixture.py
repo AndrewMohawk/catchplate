@@ -16,7 +16,7 @@ from scripts import prepare_operator_x_fixture as recipe
 def fields(client, case="success"):
     result = [("Host", "api.x.com"), ("Authorization", "Bearer " + receiver.TOKEN),
         ("Accept", receiver.MEDIA[client]), ("Connection", "close"),
-        ("User-Agent", receiver.AGENTS[client] if client != "probe" else "serverware-x-probe/" + case)]
+        ("User-Agent", receiver.AGENTS[client] if client != "probe" else "catchplate-x-probe/" + case)]
     if client == "node":
         result.extend([("Content-Type", "application/json"), ("Accept-Language", "*"), ("Sec-Fetch-Mode", "cors")])
     return result
@@ -59,7 +59,7 @@ class ReceiverTests(unittest.TestCase):
                     ("User-Agent", "duplicate"), ("X-Github-Api-Version", "2022-11-28")]:
                 with self.subTest(client=client, field=name), self.assertRaises(ValueError):
                     receiver.validated_headers(client, fields(client) + [(name, value)])
-            for auth in ("Bearer serverware-x-placeholder-v1", "Bearer wrong", "Bearer nonascii-\u2603"):
+            for auth in ("Bearer catchplate-x-placeholder-v1", "Bearer wrong", "Bearer nonascii-\u2603"):
                 changed = [(name, auth if name == "Authorization" else value) for name, value in fields(client)]
                 with self.assertRaises(ValueError):
                     receiver.validated_headers(client, changed)
@@ -137,14 +137,14 @@ class ReceiverTests(unittest.TestCase):
 class RecipeTests(unittest.TestCase):
     def build(self):
         self.args = (Path("/detached/source"), Path("/pinned/gate"), Path("/pinned/initialize.py"),
-            Path("/srv/catchplate-fast/tmp/serverware-x-private.abcdef12"), Path("/pinned/node"), Path("/pinned/x-node"))
+            Path("/srv/catchplate-fast/tmp/catchplate-x-private.abcdef12"), Path("/pinned/node"), Path("/pinned/x-node"))
         return recipe.build(*self.args, expected_binary_sha256="a" * 64)
 
     def test_existing_hardened_topology_has_only_fixed_x_provider_and_no_union_ca(self):
         config = self.build()
         services = config["services"]
         runtime = {name for name, service in services.items() if not service.get("profiles") or name in {"edge", "check"}}
-        self.assertEqual(runtime, {"network", "x", "serverware", "decision-gate-rs", "edge", "check"})
+        self.assertEqual(runtime, {"network", "x", "catchplate", "decision-gate-rs", "edge", "check"})
         self.assertNotIn("networks", config)
         for name, service in services.items():
             self.assertTrue(service["read_only"])
@@ -158,8 +158,8 @@ class RecipeTests(unittest.TestCase):
                 self.assertNotIn("github", mount["source"])
                 self.assertNotIn("github", mount["target"])
                 self.assertNotEqual(mount["target"], "/client-trust/requests-ca.pem")
-        for name in ("serverware", "decision-gate-rs"):
-            self.assertEqual(services[name]["environment"]["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"], '["https://api.x.com"]')
+        for name in ("catchplate", "decision-gate-rs"):
+            self.assertEqual(services[name]["environment"]["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"], '["https://api.x.com"]')
         self.assertEqual(services["check"]["command"][0], "/app/scripts/check_operator_x_examples.py")
         self.assertEqual(sum(m["target"] == "/app/examples/x-username-node/node_modules" for m in services["check"]["volumes"]), 1)
         self.assertIn(b" api.x.com\n", network.HOSTS)
@@ -172,7 +172,7 @@ class RecipeTests(unittest.TestCase):
         changed["services"]["x"]["ports"] = ["443:443"]
         with self.assertRaises(ValueError):
             recipe.validate(changed, *self.args, expected_binary_sha256="a" * 64)
-        changed_args = (*self.args[:3], Path("/srv/catchplate-fast/tmp/serverware-github-private.abcdef12"), *self.args[4:])
+        changed_args = (*self.args[:3], Path("/srv/catchplate-fast/tmp/catchplate-github-private.abcdef12"), *self.args[4:])
         with self.assertRaises(ValueError):
             recipe.build(*changed_args, expected_binary_sha256="a" * 64)
 

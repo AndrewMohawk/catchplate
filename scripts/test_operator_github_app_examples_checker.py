@@ -145,7 +145,7 @@ class CheckerTests(unittest.TestCase):
             "header_name": "Authorization", "active_rule_count": 1, "credential_generation": 1,
             "connection_type": "github_app_v1", "provider_id": "github",
             "github_app": {"app_id": "123", "installation_id": "456", "account_id": "700",
-                "repository_id": "900", "repository": {"owner": "serverware-fixture", "name": "operator-demo"},
+                "repository_id": "900", "repository": {"owner": "catchplate-fixture", "name": "operator-demo"},
                 "issues_permission": "read", "token_refresh": "automatic"},
             "future_public_field": {"retained": [1, "unchanged"]}}
         after = {**deepcopy(before), "active_rule_count": 0}
@@ -174,7 +174,7 @@ class CheckerTests(unittest.TestCase):
             with self.assertRaises(checker.CheckFailure): checker.validate_revoked_credential(before, changed)
 
     def test_empty_policy_retains_one_expired_sentinel_and_no_credential_or_active_grant(self):
-        from serverware import operator_demo, operator_demo_store
+        from catchplate import operator_demo, operator_demo_store
         with patch.object(operator_demo, "settings", return_value={"allowed_upstreams": ["https://api.github.com"]}):
             policy = operator_demo_store._build([], 3, "sha256:" + "a" * 64)
         self.assertEqual(policy["credentials"], [])
@@ -190,7 +190,7 @@ class CheckerTests(unittest.TestCase):
         self.assertEqual(route["id"], "operator.empty")
         self.assertEqual(route["principals"], [principal["id"]])
         self.assertEqual(route["match"]["methods"], ["GET"])
-        self.assertEqual(route["match"]["paths"], ["/__serverware_operator_demo_unconfigured__"])
+        self.assertEqual(route["match"]["paths"], ["/__catchplate_operator_demo_unconfigured__"])
         self.assertNotIn("credentialRef", route)
         self.assertEqual(route["adapter"]["config"]["credentialMode"], "none")
         self.assertEqual(route["adapter"]["config"]["noCredentialProof"], {

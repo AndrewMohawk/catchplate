@@ -21,36 +21,36 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 
-API_VERSION = "serverware.productionReadinessLaunch/v3"
+API_VERSION = "catchplate.productionReadinessLaunch/v3"
 KIND = "ProductionReadinessLaunch"
 PIPELINE = "legacy-docker-dev-nsm-readiness"
 INCOMPATIBLE_FINAL_PIPELINE = "manifest-v6-promoted-oci-nitro-eif"
-PIPELINE_METADATA_API_VERSION = "serverware.launchPipelineMetadata/v1"
+PIPELINE_METADATA_API_VERSION = "catchplate.launchPipelineMetadata/v1"
 NONCE_ROLLBACK_ASSURANCE_BINDING_VERSION = (
-    "serverware.productionNonceRollbackAssuranceBinding/v1"
+    "catchplate.productionNonceRollbackAssuranceBinding/v1"
 )
 NONCE_ROLLBACK_ASSURANCE_PINS_VERSION = (
-    "serverware.productionNonceRollbackAssurancePins/v1"
+    "catchplate.productionNonceRollbackAssurancePins/v1"
 )
 CANONICAL_JSON_PROFILE = (
-    "serverware.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
+    "catchplate.canonicalJson/integer-string-bool-null-array-object-nfc-v1"
 )
 WITNESS_STORE_ASSURANCE_API_VERSION = (
-    "serverware.launchAuthorityWitnessStoreAssurance/v1"
+    "catchplate.launchAuthorityWitnessStoreAssurance/v1"
 )
 WITNESS_STORE_ASSURANCE_KIND = "LaunchAuthorityWitnessStoreAssurance"
 GLOBAL_ROLE_REGISTRY_BINDING_API_VERSION = (
-    "serverware.productionLaunchGlobalRoleRegistryBinding/v1"
+    "catchplate.productionLaunchGlobalRoleRegistryBinding/v1"
 )
 GLOBAL_ROLE_REGISTRY_API_VERSION = (
-    "serverware.productionLaunchGlobalRoleRegistry/v1"
+    "catchplate.productionLaunchGlobalRoleRegistry/v1"
 )
 GLOBAL_ROLE_REGISTRY_CLAIM_SCOPE = "roles-present-in-native-launch-contract"
 ATTEMPT_JOURNAL_API_VERSION = (
-    "serverware.launchAuthorizationAttemptJournal/v1"
+    "catchplate.launchAuthorizationAttemptJournal/v1"
 )
 ATTEMPT_JOURNAL_DOMAIN = (
-    "serverware.launchAuthorizationAttemptJournal/v1"
+    "catchplate.launchAuthorizationAttemptJournal/v1"
 )
 ATTEMPT_JOURNAL_CONSISTENCY_SCOPE = (
     "trusted-host-readiness-availability-and-consistency-only"
@@ -72,10 +72,10 @@ MAX_PRODUCTION_MANIFEST_PATH_BYTES = 4096
 SYSTEMD_SAFE_PATH_RE = PRODUCTION_MANIFEST_PATH_RE
 PYTHON_STDLIB_DIRECTORY_RE = re.compile(r"python3\.(?:0|[1-9][0-9]*)\Z", re.ASCII)
 LAUNCHER_PATH_RE = re.compile(
-    r"/opt/serverware/launchers/sha256-[0-9a-f]{64}/serverware-production-launcher\Z"
+    r"/opt/catchplate/launchers/sha256-[0-9a-f]{64}/catchplate-production-launcher\Z"
 )
-PRODUCTION_ENV_ROOT = Path("/etc/serverware")
-PRODUCTION_STATE_DIRECTORY = Path("/var/lib/serverware/production-proof")
+PRODUCTION_ENV_ROOT = Path("/etc/catchplate")
+PRODUCTION_STATE_DIRECTORY = Path("/var/lib/catchplate/production-proof")
 MAX_MEASURED_FILE_BYTES = 512 * 1024 * 1024
 MAX_PYTHON_EXECUTABLE_BYTES = 64 * 1024 * 1024
 MAX_NONCE_ROLLBACK_ASSURANCE_PINS_BYTES = 64 * 1024
@@ -127,11 +127,11 @@ INDEPENDENT_ADMINISTRATION_BINDINGS = (
 )
 
 SYSTEMD_UNIT_TEMPLATE = """[Unit]
-Description=Serverware legacy Docker NSM production-readiness proof
+Description=Catchplate legacy Docker NSM production-readiness proof
 Documentation=https://github.com/example/private-deployment
-After=network-online.target docker.service serverware-launch-authority-relay.socket
-Wants=network-online.target serverware-launch-authority-relay.socket
-Requires=docker.service serverware-launch-authority-relay.socket
+After=network-online.target docker.service catchplate-launch-authority-relay.socket
+Wants=network-online.target catchplate-launch-authority-relay.socket
+Requires=docker.service catchplate-launch-authority-relay.socket
 
 [Service]
 Type=oneshot
@@ -139,7 +139,7 @@ RemainAfterExit=yes
 User=root
 Group=root
 UMask=0077
-ExecStart=/opt/serverware/launchers/sha256-<launcher-sha256>/serverware-production-launcher --manifest /etc/serverware/production-release-launch.json
+ExecStart=/opt/catchplate/launchers/sha256-<launcher-sha256>/catchplate-production-launcher --manifest /etc/catchplate/production-release-launch.json
 StandardInput=null
 StandardOutput=journal
 StandardError=journal
@@ -177,9 +177,9 @@ BindReadOnlyPaths=-/dev/nsm
 
 # The immutable release, /etc trust material, and relay socket directory stay
 # read-only. Proof state, launch receipts, and Docker socket access are the only
-# writable paths. The relay socket unit alone owns /run/serverware lifecycle.
-ReadOnlyPaths=/run/serverware
-ReadWritePaths=/var/lib/serverware/production-proof /run/docker.sock
+# writable paths. The relay socket unit alone owns /run/catchplate lifecycle.
+ReadOnlyPaths=/run/catchplate
+ReadWritePaths=/var/lib/catchplate/production-proof /run/docker.sock
 
 [Install]
 WantedBy=multi-user.target
@@ -624,7 +624,7 @@ def hash_import_root(
     try:
         if require_extension_modules:
             require_cpython_extension_modules(descriptor)
-        digest = hashlib.sha256(b"serverware.importRoot/v1\x00")
+        digest = hashlib.sha256(b"catchplate.importRoot/v1\x00")
         hash_import_tree_fd(descriptor, b"", digest, label)
         return f"sha256:{digest.hexdigest()}"
     finally:
@@ -783,13 +783,13 @@ def render_systemd_unit(
     state_directory: Path,
 ) -> bytes:
     rendered = SYSTEMD_UNIT_TEMPLATE.replace(
-        "/opt/serverware/launchers/sha256-<launcher-sha256>/serverware-production-launcher",
+        "/opt/catchplate/launchers/sha256-<launcher-sha256>/catchplate-production-launcher",
         str(launcher_path),
     ).replace(
-        "/etc/serverware/production-release-launch.json",
+        "/etc/catchplate/production-release-launch.json",
         str(manifest_path),
     ).replace(
-        "/var/lib/serverware/production-proof",
+        "/var/lib/catchplate/production-proof",
         str(state_directory),
     )
     if re.search(r"<(?:launcher|manifest)-sha256>", rendered):
@@ -862,7 +862,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--global-role-registry",
         required=True,
-        help="absolute root-owned canonical role registry below /etc/serverware",
+        help="absolute root-owned canonical role registry below /etc/catchplate",
     )
     parser.add_argument(
         "--expected-global-role-registry-pins-sha256",
@@ -900,7 +900,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help=(
             "absolute root-owned canonical pin contract below "
-            "/etc/serverware"
+            "/etc/catchplate"
         ),
     )
     parser.add_argument(
@@ -1390,7 +1390,7 @@ def load_nonce_rollback_assurance_pins(
     # launch contract accepts only JSON-safe integers through 2^53-1.
     if (
         assurance["apiVersion"]
-        != "serverware.nonceAuthorityAssurance/v1"
+        != "catchplate.nonceAuthorityAssurance/v1"
         or assurance["productionEligible"] is not True
         or assurance["assuranceLevel"] != "productionRollbackProtected"
         or type(assurance["authorityEpoch"]) is not int
@@ -1616,7 +1616,7 @@ def generate(args: argparse.Namespace) -> tuple[dict[str, Any], bytes]:
     state_directory = existing_directory(args.state_directory, "state directory")
     if state_directory != PRODUCTION_STATE_DIRECTORY:
         raise ManifestError(
-            "state directory must be /var/lib/serverware/production-proof"
+            "state directory must be /var/lib/catchplate/production-proof"
         )
     if os.path.commonpath((str(release_root), str(state_directory))) in (
         str(release_root),
@@ -1885,7 +1885,7 @@ def main(argv: list[str] | None = None) -> int:
             "canonicalProfile": CANONICAL_JSON_PROFILE,
             "finalCompletionCompatible": False,
             "incompatibleWith": [INCOMPATIBLE_FINAL_PIPELINE],
-            "kind": "ServerwareLaunchPipelineMetadata",
+            "kind": "CatchplateLaunchPipelineMetadata",
             "manifestApiVersion": manifest["apiVersion"],
             "manifestKind": manifest["kind"],
             "manifestSha256": manifest_digest,

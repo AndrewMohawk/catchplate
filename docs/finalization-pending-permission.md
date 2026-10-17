@@ -1,6 +1,6 @@
 # Pending-session permission for finalization completion
 
-The source-only [pending permission handler](../serverware/control_plane_registration_finalization_completion_pending.py)
+The source-only [pending permission handler](../catchplate/control_plane_registration_finalization_completion_pending.py)
 separates completion permission from first enrollment, SQL execution and OIDC
 session activation. The retained finalization subject includes the exact
 `credentialId` regenerated from its authenticated signer originals; a browser
@@ -22,7 +22,7 @@ admin/approver RBAC, and the exact retained user/session ownership.
 | Extra history, foreign target, revocation or inconsistent rows | Denied by this narrow pending-session flow. |
 
 The credential branch uses the dedicated
-[completion possession helper](../serverware/control_plane_registration_finalization_permission.py)
+[completion possession helper](../catchplate/control_plane_registration_finalization_permission.py)
 and the real WebAuthn signature verifier. It creates no ordinary mutation or
 session-binding challenge row. Options expose only the actual
 target's `publicKey` options plus schema, purpose, localDigest, action, resourceId,

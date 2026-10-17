@@ -3,8 +3,8 @@ set -euo pipefail
 
 BASE="${BASE:-http://localhost:3000}"
 ANCHOR="${AUDIT_ANCHOR_BASE:-http://localhost:9100}"
-ADMIN_TOKEN="${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}"
-ANCHOR_TOKEN="${SERVERWARE_AUDIT_ANCHOR_TOKEN:-dev-audit-anchor-token}"
+ADMIN_TOKEN="${CATCHPLATE_ADMIN_TOKEN:-dev-admin-token}"
+ANCHOR_TOKEN="${CATCHPLATE_AUDIT_ANCHOR_TOKEN:-dev-audit-anchor-token}"
 
 docker compose exec -T audit-anchor python - <<'PY'
 import asyncio
@@ -76,8 +76,8 @@ original_append_anchor_batch = sink.append_anchor_batch_durably
 trusted_key_environment = {
     name: os.environ.get(name)
     for name in (
-        "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY",
-        "SERVERWARE_TRANSPARENCY_TRUSTED_PUBLIC_KEY",
+        "CATCHPLATE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY",
+        "CATCHPLATE_TRANSPARENCY_TRUSTED_PUBLIC_KEY",
     )
 }
 original_json_limits = (
@@ -458,7 +458,7 @@ os._exit(0)
         receipt_log_id = sink.sha256_prefixed_bytes(receipt_public_der)
         request_digest = "sha256:" + "9" * 64
         receipt_payload = {
-            "version": "serverware.externalTransparencyReceipt/v1",
+            "version": "catchplate.externalTransparencyReceipt/v1",
             "provider": "test-managed-log",
             "log_id": receipt_log_id,
             "external_sequence": 7,
@@ -493,16 +493,16 @@ os._exit(0)
         trusted_checkpoint_key_path = Path(tmp) / "trusted-checkpoint-public.pem"
         trusted_checkpoint_key_path.write_text(receipt_public_pem)
         sink.CHECKPOINT_MODE = "http"
-        os.environ["SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY"] = str(
+        os.environ["CATCHPLATE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY"] = str(
             trusted_checkpoint_key_path
         )
-        os.environ.pop("SERVERWARE_TRANSPARENCY_TRUSTED_PUBLIC_KEY", None)
+        os.environ.pop("CATCHPLATE_TRANSPARENCY_TRUSTED_PUBLIC_KEY", None)
         sink.EXPECTED_CHECKPOINT_LOG_ID = receipt_log_id
         trusted_checkpoint_key_info = sink.configured_checkpoint_key_info(required=True)
         assert trusted_checkpoint_key_info["log_id"] == receipt_log_id
         conflicting_trust_path = Path(tmp) / "conflicting-checkpoint-public.pem"
         conflicting_trust_path.write_text(receipt_public_pem)
-        os.environ["SERVERWARE_TRANSPARENCY_TRUSTED_PUBLIC_KEY"] = str(
+        os.environ["CATCHPLATE_TRANSPARENCY_TRUSTED_PUBLIC_KEY"] = str(
             conflicting_trust_path
         )
         try:
@@ -511,7 +511,7 @@ os._exit(0)
             assert "conflicts" in str(exc), exc
         else:
             raise AssertionError("conflicting checkpoint trust variables were accepted")
-        os.environ.pop("SERVERWARE_TRANSPARENCY_TRUSTED_PUBLIC_KEY")
+        os.environ.pop("CATCHPLATE_TRANSPARENCY_TRUSTED_PUBLIC_KEY")
         assert sink.validate_external_checkpoint_response(
             checkpoint_response,
             checkpoint_payload,
@@ -863,8 +863,8 @@ def request_json(
         return json.loads(response.read())
 
 
-admin_headers = {"X-Serverware-Admin-Token": admin_token}
-anchor_headers = {"X-Serverware-Audit-Anchor-Token": anchor_token}
+admin_headers = {"X-Catchplate-Admin-Token": admin_token}
+anchor_headers = {"X-Catchplate-Audit-Anchor-Token": anchor_token}
 
 flush = request_json(f"{base}/api/audit/anchors/flush", method="POST", headers=admin_headers, timeout=60)
 assert flush["enabled"] is True, flush

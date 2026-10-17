@@ -28,7 +28,7 @@ remains purpose-limited to creating retained resources, not admitting services.
 
 The existing retained spool input owner creates one additional unconnected
 AF_UNIX sequential-packet listener at
-`/run/serverware-shadow-terminal-append/listener.sock`. It keeps the listener and
+`/run/catchplate-shadow-terminal-append/listener.sock`. It keeps the listener and
 parent directory, socket identity and original C9 descriptor assignments until
 the cohort is reaped. Existing paths are refused, never unlinked or adopted.
 The Terminal child receives `terminal-append-listener`; the Bridge receives

@@ -13,11 +13,11 @@ import subprocess
 import sys
 import unittest
 
-from serverware import authority_planner_read as source
+from catchplate import authority_planner_read as source
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MODULE = "serverware.authority_planner_read"
+MODULE = "catchplate.authority_planner_read"
 # Exact original definition bytes, including decorators and one final newline,
 # captured immediately before the mechanical extraction. No function AST or
 # predicate was changed; only its owning module and compatibility imports move.
@@ -33,7 +33,7 @@ ORIGINALS = {
 
 
 def document(name):
-    raw = (ROOT / "serverware" / (name + ".py")).read_text("utf-8")
+    raw = (ROOT / "catchplate" / (name + ".py")).read_text("utf-8")
     return raw, ast.parse(raw)
 
 
@@ -73,18 +73,18 @@ class PlannerReadExtractionControls(unittest.TestCase):
             # Exercise the real import statement itself; this is not a fake
             # planner module and never changes sys.modules or registry state.
             exec(compile(ast.Module(body=imports, type_ignores=[]),
-                str(ROOT / "serverware" / (module + ".py")), "exec"), namespace)
+                str(ROOT / "catchplate" / (module + ".py")), "exec"), namespace)
             for name in names:
                 self.assertIs(namespace[name], getattr(source, name))
 
     def test_real_read_import_does_not_import_planner_or_registry(self):
         script = (
             "import sys; sys.path.insert(0, sys.argv[1]); "
-            "from serverware import authority_planner_read as source; "
-            "assert source.PlannerTrace.__module__ == 'serverware.authority_planner_read'; "
-            "assert 'serverware.authority_planner' not in sys.modules; "
-            "assert 'serverware.authority_transition_registry' not in sys.modules; "
-            "assert 'serverware.authority_service' not in sys.modules"
+            "from catchplate import authority_planner_read as source; "
+            "assert source.PlannerTrace.__module__ == 'catchplate.authority_planner_read'; "
+            "assert 'catchplate.authority_planner' not in sys.modules; "
+            "assert 'catchplate.authority_transition_registry' not in sys.modules; "
+            "assert 'catchplate.authority_service' not in sys.modules"
         )
         completed = subprocess.run([sys.executable, "-I", "-B", "-c", script, str(ROOT)],
             check=False, capture_output=True, text=True, timeout=30)
@@ -95,7 +95,7 @@ class PlannerReadExtractionControls(unittest.TestCase):
         default = source.PlannerTrace(operation=operation)
         with self.assertRaises(source.AuthorityPlannerError):
             default.read("webauthn_credentials",
-                {"profile": "serverware.policyAuthorityJitPrimaryChunkRead/v1"})
+                {"profile": "catchplate.policyAuthorityJitPrimaryChunkRead/v1"})
         for arguments in (
             {"operation": "webauthn.challenge.create", "_jit_successor": True},
             {"operation": operation, "_jit_successor": 1},
@@ -117,12 +117,12 @@ class PlannerReadExtractionControls(unittest.TestCase):
     def test_native_edges_move_but_full_registry_and_admission_gates_remain(self):
         _raw, native = document("authority_jit_compound_planning")
         imports = [node for node in ast.walk(native) if isinstance(node, ast.ImportFrom)]
-        self.assertTrue(any(node.module == "serverware" and any(entry.name == "authority_planner_read"
+        self.assertTrue(any(node.module == "catchplate" and any(entry.name == "authority_planner_read"
             and entry.asname == "planner" for entry in node.names) for node in imports))
         self.assertTrue(any(node.module == MODULE and any(entry.name == "_source_admission_work"
             for entry in node.names) for node in imports))
-        self.assertFalse(any(node.module == "serverware.authority_challenge_planning"
-            or node.module == "serverware" and any(entry.name == "authority_planner"
+        self.assertFalse(any(node.module == "catchplate.authority_challenge_planning"
+            or node.module == "catchplate" and any(entry.name == "authority_planner"
                 for entry in node.names) for node in imports))
         _raw, compound = document("authority_jit_compound")
         trace_imports = [node for node in ast.walk(compound) if isinstance(node, ast.ImportFrom)
@@ -146,7 +146,7 @@ class PlannerReadExtractionControls(unittest.TestCase):
             and ast.unparse(node.value) == "_registry_closure_errors()" for node in registry.body))
 
         _raw, planner = document("authority_planner")
-        self.assertTrue(any(isinstance(node, ast.ImportFrom) and node.module == "serverware"
+        self.assertTrue(any(isinstance(node, ast.ImportFrom) and node.module == "catchplate"
             and any(entry.name == "authority_transition_registry" for entry in node.names)
             for node in planner.body))
         self.assertIn("authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS",
@@ -159,7 +159,7 @@ class PlannerReadExtractionControls(unittest.TestCase):
             and ast.unparse(node.test) == "set(PLANNING_PROGRAMS) != set(authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS)"
             and isinstance(node.body[0], ast.Raise) for node in planner.body))
         _raw, service = document("authority_service")
-        self.assertTrue(any(isinstance(node, ast.ImportFrom) and node.module == "serverware"
+        self.assertTrue(any(isinstance(node, ast.ImportFrom) and node.module == "catchplate"
             and any(entry.name == "authority_transition_registry" for entry in node.names)
             for node in service.body))
         self.assertIn("authority_transition_registry.PLANNABLE_OPERATIONS",

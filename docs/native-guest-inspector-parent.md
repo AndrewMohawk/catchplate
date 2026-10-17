@@ -16,7 +16,7 @@ contents or HTTP. Older configurations and CLI modes do not acquire this owner.
 
 V8 preserves all v7 encrypted service-token Pending-to-Installed and measured
 refresh joins. It adds the closed four-field `guestInspector` object:
-`apiVersion=serverware.nativeGuestInspector/v1`, `executable`,
+`apiVersion=catchplate.nativeGuestInspector/v1`, `executable`,
 `configuration` and `delivery`. Each artifact has exact `path` and
 `sha256` fields. Configuration/delivery paths are distinct canonical absolute
 paths, distinct from the executable. The configuration is independently pinned
@@ -27,7 +27,7 @@ generation must match the selected response client. Browser metadata, an
 initialized frame or an equality of unowned digests cannot replace these owners.
 
 The only inspector executable is
-`/usr/local/bin/serverware-response-v2-guest-inspector`: protected root-owned
+`/usr/local/bin/catchplate-response-v2-guest-inspector`: protected root-owned
 ancestors, regular root:root single-link file, no group/other write, no special
 mode bits, owner execute and at most 64 MiB. The observed bytes must match the
 independent SHA-256. The supported image is native 64-bit little-endian ELF with

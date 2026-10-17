@@ -28,11 +28,11 @@ use super::protocol::{
 };
 use super::super::{canonical_json_bytes, Sha256Digest};
 use crate::policy_shadow::linux_statx;
-use serverware_decision_gate::erofs_loop_v1::{
+use catchplate_decision_gate::erofs_loop_v1::{
     self, DescriptorObservationV1, ErofsLoopErrorV1,
     ErofsLoopExpectationV1, ErofsLoopObservationV1,
 };
-use serverware_decision_gate::cgroup_control_v1::{
+use catchplate_decision_gate::cgroup_control_v1::{
     self, EventsV1, PreparedKillV1,
 };
 use serde::de::DeserializeOwned;
@@ -297,7 +297,7 @@ fn erofs_root_identity(observed: &DescriptorObservationV1) -> DescriptorIdentity
 // Keep the domain, field order, native scalar widths and u64BE framing unchanged.
 fn erofs_identity_sha256(observed: &ErofsLoopObservationV1) -> [u8; 32] {
     hash_frames(&[
-        b"serverware.policyCustodyRootfs.erofs/v1",
+        b"catchplate.policyCustodyRootfs.erofs/v1",
         &observed.root().device().to_be_bytes(),
         &observed.root().inode().to_be_bytes(),
         &observed.root().mount_id().to_be_bytes(),
@@ -515,7 +515,7 @@ impl VerifiedRootfs {
             ));
         }
         let identity_sha256 = hash_frames(&[
-            b"serverware.policyCustodyRootfs.dmVerity/v1",
+            b"catchplate.policyCustodyRootfs.dmVerity/v1",
             &mount_identity.device.to_be_bytes(),
             &mount_identity.inode.to_be_bytes(),
             &mount_identity.mount_id.to_be_bytes(),
@@ -604,7 +604,7 @@ impl VerifiedRootfs {
                     ));
                 }
                 let current_identity = hash_frames(&[
-                    b"serverware.policyCustodyRootfs.dmVerity/v1",
+                    b"catchplate.policyCustodyRootfs.dmVerity/v1",
                     &mount_identity.device.to_be_bytes(),
                     &mount_identity.inode.to_be_bytes(),
                     &mount_identity.mount_id.to_be_bytes(),
@@ -3275,12 +3275,12 @@ fn query_dm_verity_table(
         })?;
     Ok(DmVerityTableEvidence {
         table_sha256: hash_frames(&[
-            b"serverware.policyCustodyDmVerityTable/v1",
+            b"catchplate.policyCustodyDmVerityTable/v1",
             params,
         ]),
         root_hash_sha256,
         dm_uuid_sha256: hash_frames(&[
-            b"serverware.policyCustodyDmUuid/v1",
+            b"catchplate.policyCustodyDmUuid/v1",
             uuid,
         ]),
     })
@@ -4141,7 +4141,7 @@ fn watchdog_disarm_until(
 ) -> Result<(), LauncherError> {
     endpoint.revalidate()?;
     let cleanup_binding = hash_frames(&[
-        b"serverware.policyCustody.watchdogCleanup/v1",
+        b"catchplate.policyCustody.watchdogCleanup/v1",
         &ownership.registration_sha256,
         &ownership.ownership_receipt_sha256,
         &ownership.ownership_state_sha256,
@@ -4589,7 +4589,7 @@ fn cgroup_identity_sha256(
     verify_cgroup2_descriptor(fd)?;
     let identity = directory_identity(fd)?;
     Ok(hash_frames(&[
-        b"serverware.policyCustody.cgroup/v1",
+        b"catchplate.policyCustody.cgroup/v1",
         &identity.device.to_be_bytes(),
         &identity.inode.to_be_bytes(),
         &identity.mount_id.to_be_bytes(),
@@ -5629,7 +5629,7 @@ fn seccomp_authorization_binding(
         ExecutableArchitecture::Aarch64 => 2,
     }];
     hash_frames(&[
-        b"serverware.policyCustody.seccompAuthorization/v1",
+        b"catchplate.policyCustody.seccompAuthorization/v1",
         &program.sha256,
         &instruction_count,
         &architecture,
@@ -5655,7 +5655,7 @@ fn ready_proof_sha256(
         domain.time_namespace().inode().to_be_bytes();
     let deadline_nanos = deadline.absolute_nanos().to_be_bytes();
     hash_frames(&[
-        b"serverware.policyCustody.filterReady/v1",
+        b"catchplate.policyCustody.filterReady/v1",
         &nonce,
         &role,
         &executable_sha256,
@@ -5682,7 +5682,7 @@ fn cleanup_receipt_sha256(
     let time_namespace_inode =
         domain.time_namespace().inode().to_be_bytes();
     hash_frames(&[
-        b"serverware.policyCustody.cleanupReceipt/v1",
+        b"catchplate.policyCustody.cleanupReceipt/v1",
         &pid,
         &si_code,
         &status,

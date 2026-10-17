@@ -1,7 +1,7 @@
 """One explicit, non-streaming AI call using an ordinary provider SDK.
 
 The only provider credential in this process is the public replacement dummy.
-Real API keys remain in Serverware. The proxy independently enforces the scope.
+Real API keys remain in Catchplate. The proxy independently enforces the scope.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ OPERATIONS = {"openai": ("responses_text_v1", "https://api.openai.com/v1/respons
     "anthropic": ("messages_text_v1", "https://api.anthropic.com/v1/messages"),
     "gemini": ("generate_text_v1", "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"),
     "openrouter": ("chat_text_v1", "https://openrouter.ai/api/v1/chat/completions")}
-FAILURE = "AI request failed. Check Serverware's audit log; no request was automatically retried."
+FAILURE = "AI request failed. Check Catchplate's audit log; no request was automatically retried."
 
 
 def validate_scope(config, prompt):
@@ -77,7 +77,7 @@ def http_client(config, provider):
 
 
 def infer(config, prompt, *, client):
-    """Keep a validated Serverware review path without exposing SDK error bodies."""
+    """Keep a validated Catchplate review path without exposing SDK error bodies."""
     try:
         return _infer(config, prompt, client=client)
     except Exception as error:
@@ -105,13 +105,13 @@ def infer(config, prompt, *, client):
         if not valid:
             raise
         return {"status": "approval_required", "http_status": 428, "approval_path": path,
-            "instruction": "Open this path on the Serverware console and approve the request, then explicitly rerun the identical request with unchanged prompt and configuration. No retry was sent."}
+            "instruction": "Open this path on the Catchplate console and approve the request, then explicitly rerun the identical request with unchanged prompt and configuration. No retry was sent."}
 
 
 def _infer(config, prompt, *, client):
     """Supported SDK methods; injected client is also the offline-test seam."""
     provider, scope = validate_scope(config, prompt)
-    token = "serverware-" + provider + "-placeholder-v1"
+    token = "catchplate-" + provider + "-placeholder-v1"
     model, maximum = scope["model"], scope["max_output_tokens"]
     if provider in {"openai", "openrouter"}:
         from openai import OpenAI
@@ -132,7 +132,7 @@ def _infer(config, prompt, *, client):
         from anthropic import Anthropic
         # The SDK probes profile discovery even with an explicit key. An empty
         # private directory avoids ambient profiles and works without a Unix home.
-        with tempfile.TemporaryDirectory(prefix="serverware-anthropic-") as profile_dir:
+        with tempfile.TemporaryDirectory(prefix="catchplate-anthropic-") as profile_dir:
             previous = os.environ.get("ANTHROPIC_CONFIG_DIR")
             os.environ["ANTHROPIC_CONFIG_DIR"] = profile_dir
             try:
@@ -197,7 +197,7 @@ def main():
         print(json.dumps(result))
         return
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", required=True, help="Private configuration downloaded from Serverware")
+    parser.add_argument("--config", required=True, help="Private configuration downloaded from Catchplate")
     parser.add_argument("--prompt", required=True, help="Text to send to the selected provider")
     parser.add_argument("--send", action="store_true", help="Explicitly send one potentially billable request")
     args = parser.parse_args()

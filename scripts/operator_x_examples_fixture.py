@@ -21,13 +21,13 @@ import time
 from scripts import operator_github_fixture as base
 from scripts.operator_x_fixture_network import FIXTURE_IP, assert_isolated_network, prepare_network_files
 
-SCHEMA = "serverware.privateXExampleObservations/v1"
+SCHEMA = "catchplate.privateXExampleObservations/v1"
 CLIENTS = ("node", "python", "go")
 CASES = ("success", "error429", "oversize", "error-oversize", "reflection", "invalid-json")
 MAX_ATTEMPTS = 16
 ORIGIN, USERNAME = "https://api.x.com", "example_user"
 TARGET = "/2/users/by/username/" + USERNAME
-TOKEN = "serverware_x_synthetic_only_8a4671d8096a47f488aad7ee207489ab"
+TOKEN = "catchplate_x_synthetic_only_8a4671d8096a47f488aad7ee207489ab"
 USER = {"id": "123456789", "username": "Example_User", "name": "Synthetic X fixture user"}
 MEDIA = {"node": "application/json", "python": "*/*", "go": "application/json", "probe": "application/json"}
 AGENTS = {"node": "xdk-typescript/0.6.6", "python": "xdk-python/0.10.6", "go": "Go-http-client/1.1"}
@@ -69,7 +69,7 @@ def classify(method, raw_target, fields):
         if agents[0] == expected:
             return client, "success"
     for case in CASES[1:]:
-        if agents[0] == "serverware-x-probe/" + case:
+        if agents[0] == "catchplate-x-probe/" + case:
             return "probe", case
     raise ValueError("private X client fingerprint refused")
 
@@ -89,7 +89,7 @@ def validated_headers(client, fields, case="success"):
         and headers["host"] == "api.x.com"
         and hmac.compare_digest(headers["authorization"], "Bearer " + TOKEN)
         and headers["accept"] == MEDIA[client]
-        and headers["user-agent"] == ("serverware-x-probe/" + case if client == "probe" else AGENTS[client])
+        and headers["user-agent"] == ("catchplate-x-probe/" + case if client == "probe" else AGENTS[client])
         and headers.get("connection", "close") in {"close", "keep-alive"})
     semantic = {"accept", "user-agent"}
     if client == "node":
@@ -109,7 +109,7 @@ def setup(root, marker):
     require(root == Path("/upstream-data/x") and not root.exists() and not root.is_symlink()
         and root.parent.is_dir() and root.parent.stat().st_uid == os.geteuid() == 10001)
     assert_isolated_network(attached=False)
-    require(json.loads(marker.read_bytes()) == {"schema": "serverware.privateOperatorAuditFixture/v1", "syntheticOnly": True})
+    require(json.loads(marker.read_bytes()) == {"schema": "catchplate.privateOperatorAuditFixture/v1", "syntheticOnly": True})
     now = datetime.now(timezone.utc)
     key, leaf_key = ec.generate_private_key(ec.SECP256R1()), ec.generate_private_key(ec.SECP256R1())
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Private synthetic X fixture CA")])

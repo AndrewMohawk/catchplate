@@ -20,21 +20,21 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 tmpdir = tempfile.TemporaryDirectory()
-os.environ["SERVERWARE_DATA_DIR"] = tmpdir.name
-os.environ["SERVERWARE_DATA_PLANE_INSTANCE_ID"] = "spiffe://test.serverware/decision-gate/rate-limit"
-os.environ["SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN"] = "test-rate-limit-token"
-os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
-os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
+os.environ["CATCHPLATE_DATA_DIR"] = tmpdir.name
+os.environ["CATCHPLATE_DATA_PLANE_INSTANCE_ID"] = "spiffe://test.catchplate/decision-gate/rate-limit"
+os.environ["CATCHPLATE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN"] = "test-rate-limit-token"
+os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
+os.environ["CATCHPLATE_KEY_RELEASE_REQUIRED"] = "0"
 for name in (
-    "SERVERWARE_METADATA_STORE_POSTGRES_DSN",
-    "SERVERWARE_AUDIT_STORE_POSTGRES_DSN",
-    "SERVERWARE_GRANT_STORE_POSTGRES_DSN",
+    "CATCHPLATE_METADATA_STORE_POSTGRES_DSN",
+    "CATCHPLATE_AUDIT_STORE_POSTGRES_DSN",
+    "CATCHPLATE_GRANT_STORE_POSTGRES_DSN",
 ):
     os.environ.pop(name, None)
 
-legacy_db_path = Path(tmpdir.name) / "serverware.sqlite3"
+legacy_db_path = Path(tmpdir.name) / "catchplate.sqlite3"
 with sqlite3.connect(legacy_db_path) as legacy_conn:
     legacy_conn.execute(
         """
@@ -167,8 +167,8 @@ with sqlite3.connect(legacy_db_path) as legacy_conn:
         ),
     )
 
-from serverware import db
-from serverware.constraints import (
+from catchplate import db
+from catchplate.constraints import (
     evaluate_request_constraints,
     reset_local_constraint_state,
     shared_durable_budget_claims,
@@ -179,8 +179,8 @@ from serverware.constraints import (
 try:
     from fastapi import HTTPException
 
-    from serverware import app as app_module
-    from serverware.app import DataPlaneRateLimitConsume, data_plane_rate_limit_consume
+    from catchplate import app as app_module
+    from catchplate.app import DataPlaneRateLimitConsume, data_plane_rate_limit_consume
 except ModuleNotFoundError as exc:
     if exc.name != "fastapi":
         raise
@@ -534,8 +534,8 @@ def exercise_durable_budgets() -> None:
     runtime_flow = SimpleNamespace(
         id="flow:runtime-sliding:first",
         metadata={
-            "serverware_request_digest": digest("runtime-request:first"),
-            "serverware_operation_digest": digest("runtime-operation:first"),
+            "catchplate_request_digest": digest("runtime-request:first"),
+            "catchplate_operation_digest": digest("runtime-operation:first"),
         },
         request=Request(),
     )
@@ -555,8 +555,8 @@ def exercise_durable_budgets() -> None:
         SimpleNamespace(
             id="flow:runtime-sliding:second",
             metadata={
-                "serverware_request_digest": digest("runtime-request:second"),
-                "serverware_operation_digest": digest("runtime-operation:second"),
+                "catchplate_request_digest": digest("runtime-request:second"),
+                "catchplate_operation_digest": digest("runtime-operation:second"),
             },
             request=Request(),
         ),
@@ -990,7 +990,7 @@ def policy_claim_digest(claims: Any) -> str:
 
 
 def exercise_atomic_policy_state_bundles() -> None:
-    actor_id = "spiffe://test.serverware/decision-gate/rate-limit"
+    actor_id = "spiffe://test.catchplate/decision-gate/rate-limit"
 
     def release_binding(suffix: str) -> str:
         return digest(f"bundle-release-binding:{suffix}")
@@ -2019,7 +2019,7 @@ def exercise_atomic_policy_state_bundles() -> None:
 
 def exercise_release_authorization_v2_coordinator() -> None:
     actor_id = (
-        "spiffe://test.serverware/decision-gate/release-authority-v2"
+        "spiffe://test.catchplate/decision-gate/release-authority-v2"
     )
 
     def case(suffix: str) -> dict[str, Any]:
@@ -2137,7 +2137,7 @@ def exercise_release_authorization_v2_coordinator() -> None:
         }
         binding = {
             "api_version": (
-                "serverware.releaseAuthorizationBinding/v2"
+                "catchplate.releaseAuthorizationBinding/v2"
             ),
             "attempt_id": attempt_id,
             "flow_id": attempt_id,
@@ -2889,15 +2889,15 @@ def main() -> None:
             {"id": credential_id, "credential_version": 7} if credential_id == "cred-x" else None
         )
         try:
-            api_first = data_plane_rate_limit_consume(payload, x_serverware_data_plane_token="test-rate-limit-token")
-            api_second = data_plane_rate_limit_consume(payload, x_serverware_data_plane_token="test-rate-limit-token")
+            api_first = data_plane_rate_limit_consume(payload, x_catchplate_data_plane_token="test-rate-limit-token")
+            api_second = data_plane_rate_limit_consume(payload, x_catchplate_data_plane_token="test-rate-limit-token")
             assert api_first["ok"] is True and api_first["allowed"] is True, api_first
             assert api_second["ok"] is True and api_second["allowed"] is False, api_second
             tampered = payload.model_copy(update={"max_count": 999})
             try:
                 data_plane_rate_limit_consume(
                     tampered,
-                    x_serverware_data_plane_token="test-rate-limit-token",
+                    x_catchplate_data_plane_token="test-rate-limit-token",
                 )
             except HTTPException as exc:
                 assert exc.status_code == 409 and "parameters" in str(exc.detail), exc
@@ -2951,7 +2951,7 @@ def main() -> None:
             )
             calendar_preview = data_plane_rate_limit_consume(
                 calendar_payload,
-                x_serverware_data_plane_token="test-rate-limit-token",
+                x_catchplate_data_plane_token="test-rate-limit-token",
             )
             assert calendar_preview["window_kind"] == "utcDay", calendar_preview
             assert calendar_preview["window_seconds"] is None, calendar_preview
@@ -2961,7 +2961,7 @@ def main() -> None:
             try:
                 data_plane_rate_limit_consume(
                     wrong_calendar,
-                    x_serverware_data_plane_token="test-rate-limit-token",
+                    x_catchplate_data_plane_token="test-rate-limit-token",
                 )
             except HTTPException as exc:
                 assert exc.status_code == 409, exc

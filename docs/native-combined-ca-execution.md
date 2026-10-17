@@ -1,6 +1,6 @@
 # Combined native CA installation and immutable application trust
 
-The explicit `serverware.nativeBootstrapClient/v6` cold profile composes the
+The explicit `catchplate.nativeBootstrapClient/v6` cold profile composes the
 existing independently authorized host CA effect with executable-child networking
 and lifecycle. It requires all four nonnull inputs: `installation`, `egress`,
 `attachment` and `execution`. Versions v1–v5 keep their previous closed shapes;
@@ -39,11 +39,11 @@ guardian cleanup or bounded output completion.
 
 ## Immutable application trust is selected before the effect
 
-V6 selects `serverware.nativeExecutionManifest/v2`; v5 selects v1 only. V2 retains
+V6 selects `catchplate.nativeExecutionManifest/v2`; v5 selects v1 only. V2 retains
 the exact prior eight fields and adds required `applicationTrust`:
 
 ```json
-{"profile":"in-image-runtime-ca-pem-v1","path":"/etc/serverware/runtime-ca.pem","sha256":"sha256:<exact-pem-sha256>","certificateSha256":"sha256:<exact-der-sha256>"}
+{"profile":"in-image-runtime-ca-pem-v1","path":"/etc/catchplate/runtime-ca.pem","sha256":"sha256:<exact-pem-sha256>","certificateSha256":"sha256:<exact-der-sha256>"}
 ```
 
 The illustration contains placeholders, not an admitted manifest. Actual hashes
@@ -100,7 +100,7 @@ boundary; errors during an uncertain effect require inspection of the existing
 protected CA journal/destination by an authorized local operator. No terminal
 execution capture is fabricated when cleanup is uncertain.
 
-A definite terminal result uses `serverware.nativeBootstrapClientCapture/v6`,
+A definite terminal result uses `catchplate.nativeBootstrapClientCapture/v6`,
 the existing v5 ten fields plus `installation`, with scope
 `local-fixed-endpoint-bootstrap-ca-and-execution-observation`. The CA child is
 the unchanged `nativeCaInstallationReceipt/v1`; the execution child remains

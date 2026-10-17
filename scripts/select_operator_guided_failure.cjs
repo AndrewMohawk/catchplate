@@ -15,7 +15,7 @@ function main() {
   const root = process.env.GUIDED_EVIDENCE;
   if (root === undefined) return;
   need(path.dirname(root) === '/srv/catchplate-fast/tmp' &&
-    /^serverware-guided-evidence\.[A-Za-z0-9]{8}$/.test(path.basename(root)));
+    /^catchplate-guided-evidence\.[A-Za-z0-9]{8}$/.test(path.basename(root)));
   ownedDirectory(root, 0o700);
   const input = path.join(root, 'guided-browser-failure.json');
   let fd;
@@ -33,7 +33,7 @@ function main() {
     projected = publicFailureReceipt(buffer.subarray(0, length));
   } finally { fs.closeSync(fd); }
   need(typeof process.env.RUNNER_TEMP === 'string' && path.isAbsolute(process.env.RUNNER_TEMP));
-  const destination = path.join(process.env.RUNNER_TEMP, 'serverware-guided-public');
+  const destination = path.join(process.env.RUNNER_TEMP, 'catchplate-guided-public');
   ownedDirectory(destination, 0o700);
   fs.writeFileSync(path.join(destination, 'browser-failure.json'), JSON.stringify(projected) + '\n', {flag: 'wx', mode: 0o600});
 }

@@ -26,10 +26,10 @@ bootstrap provider must independently possess that latest checkpoint; it cannot
 derive authority from the journal it is about to admit, unsigned `inspect()`
 output, an empty directory or a previously valid signed prefix.
 
-The [bootstrap codec](../serverware/current_root_state_bootstrap.py) uses
-`serverware.signedCurrentRootStateBootstrap/v1`, payload
-`serverware.currentRootStateBootstrap/v1` and launch
-`serverware.currentRootStateLaunch/v1`. Original enrollment is retained as
+The [bootstrap codec](../catchplate/current_root_state_bootstrap.py) uses
+`catchplate.signedCurrentRootStateBootstrap/v1`, payload
+`catchplate.currentRootStateBootstrap/v1` and launch
+`catchplate.currentRootStateLaunch/v1`. Original enrollment is retained as
 canonical base64url with exact byte count, raw SHA-256 and its distinct framed
 enrollment identity. The checkpoint cannot exceed enrolled journal capacity.
 The provisioner-only `_produce_on_work` takes the independently supplied
@@ -53,18 +53,18 @@ durable publication can leave an accepted decision whose response was not seen.
 
 ## Fixed descriptors and Unix identities
 
-The [root delivery entrypoint](../serverware/current_root_state_entrypoint.py)
+The [root delivery entrypoint](../catchplate/current_root_state_entrypoint.py)
 starts with only systemd's activated stream FD `3` above stdio, named
-`serverware-current-root-state`, with the actual current `LISTEN_PID` and exactly
+`catchplate-current-root-state`, with the actual current `LISTEN_PID` and exactly
 one listener. The final original inherited inventory is exactly:
 
 | FD | Retained material | Fixed source or endpoint |
 | --- | --- | --- |
-| 198 | Root public key, sealed, at most 16 KiB | `/run/serverware/current-root-trust/root-public-key.pem` |
-| 199 | Original signed bootstrap, sealed, at most 256 KiB | `/run/serverware/current-root-trust/bootstrap.json` |
-| 200 | Nonblocking activated Unix stream listener | `/run/serverware/current-root/state.sock` |
-| 201 | Dedicated state private key, sealed, at most 4096 bytes | `/run/secrets/serverware-current-root-state-signing-key` |
-| 202 | Existing private journal directory | `/var/lib/serverware/current-root-state` |
+| 198 | Root public key, sealed, at most 16 KiB | `/run/catchplate/current-root-trust/root-public-key.pem` |
+| 199 | Original signed bootstrap, sealed, at most 256 KiB | `/run/catchplate/current-root-trust/bootstrap.json` |
+| 200 | Nonblocking activated Unix stream listener | `/run/catchplate/current-root/state.sock` |
+| 201 | Dedicated state private key, sealed, at most 4096 bytes | `/run/secrets/catchplate-current-root-state-signing-key` |
+| 202 | Existing private journal directory | `/var/lib/catchplate/current-root-state` |
 
 Root delivery seals the original root/bootstrap/key bytes, reserves only free
 destination slots and never overwrites another inherited descriptor. It checks
@@ -91,8 +91,8 @@ Both bindings are checked independently; one must not be substituted for the
 other. The listener's retained nonblocking state is not changed by cold startup.
 
 The rebuilt environment exposes
-`SERVERWARE_CURRENT_ROOT_STATE_ROOT_PUBLIC_KEY_FD=198` and
-`SERVERWARE_CURRENT_ROOT_STATE_BOOTSTRAP_FD=199`, process mode
+`CATCHPLATE_CURRENT_ROOT_STATE_ROOT_PUBLIC_KEY_FD=198` and
+`CATCHPLATE_CURRENT_ROOT_STATE_BOOTSTRAP_FD=199`, process mode
 `policy-authority-current-root-state`, and fixed interpreter settings. There is
 no ambient root/key path, DSN or generic-role fallback. The isolated launcher
 `/runtime/authority-bootstrap/current_root_state_launcher.py` accepts only
@@ -101,19 +101,19 @@ application/dependency paths to `/runtime/python/bin/python3 -I`.
 
 ## Actual recovery and lifecycle
 
-[Cold startup](../serverware/current_root_state_startup.py) exposes
+[Cold startup](../catchplate/current_root_state_startup.py) exposes
 `initialize_from_environment()`, `require_started()` and `close()`; the admitted
 singleton supplies `serve_once()`. There is no lazy or replacement admission.
 It verifies the bootstrap again and pairs the actual unencrypted PKCS8 Ed25519
 state key before publishing the owner. Startup constructs a fresh, unrecovered
-[`CurrentRootJournal`](../serverware/authority_current_root_journal.py) over the
+[`CurrentRootJournal`](../catchplate/authority_current_root_journal.py) over the
 borrowed directory FD and its exact identity. The journal owns an independent
 open-file description and exclusive nonblocking lease, not the borrowed FD.
 Its configured capacity is 2–1,024 records of at most 1 MiB each; unknown files,
 noncontiguous sequences or unstable immutable records deny admission.
 
 The actual
-[`CurrentRootDecisionOwner`](../serverware/authority_current_root_decisions.py)
+[`CurrentRootDecisionOwner`](../catchplate/authority_current_root_decisions.py)
 takes ownership of that journal, original enrollment, independent root key,
 actual state private key and exact expected sequence/head. It verifies the
 enrollment/key pair, requires journal capacity to equal enrollment capacity,
@@ -131,8 +131,8 @@ generation rollover, replacement decision or SQL retry.
 
 ## Deployment and remaining boundaries
 
-The [socket template](../ops/systemd/serverware-current-root-state.socket) and
-[service template](../ops/systemd/serverware-current-root-state.service.in) are
+The [socket template](../ops/systemd/catchplate-current-root-state.socket) and
+[service template](../ops/systemd/catchplate-current-root-state.service.in) are
 deployment inputs, not installed services. The service requires an approved
 complete image export at `@CURRENT_ROOT_RELEASE_ROOT@`, not a checkout.
 The production Dockerfile now packages the fixed launcher and both templates
@@ -147,7 +147,7 @@ signed identities and requires newly admitted launch material.
 `Type=exec` is not admitted readiness. `Restart=no` and the one-start limit are
 operational backoff, not durable anti-replay authority. Manually restarting or
 clearing a manager counter cannot renew the original launch or replace the
-required current checkpoint. The [runner](../serverware/current_root_state_runner.py)
+required current checkpoint. The [runner](../catchplate/current_root_state_runner.py)
 performs one cold admission and serial serving; lifecycle failure is terminal.
 An independent provisioner must supply protected original bootstrap/key/root
 material, stable journal storage, the exact latest checkpoint, accounts/groups

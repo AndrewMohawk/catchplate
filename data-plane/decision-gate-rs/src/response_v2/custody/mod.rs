@@ -129,7 +129,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const CONFIG_API_VERSION: &str =
-    "serverware.responseObservationV2CustodyConfig/v1";
+    "catchplate.responseObservationV2CustodyConfig/v1";
 const MAX_CONFIG_BYTES: u64 = 256 * 1024;
 const MAX_PROVIDER_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
@@ -137,9 +137,9 @@ const MIN_IDENTIFIER_BYTES: usize = 16;
 const MAX_IDENTIFIER_BYTES: usize = 256;
 const PROVIDER_TERMINATION_DEADLINE_MS: u64 = 2_000;
 const PROVIDER_ROUTER_API_VERSION: &str =
-    "serverware.responseObservationProviderRouter/v1";
+    "catchplate.responseObservationProviderRouter/v1";
 const PROVIDER_RPC_API_VERSION: &str =
-    "serverware.responseObservationProviderRpc/v1";
+    "catchplate.responseObservationProviderRpc/v1";
 const PROVIDER_RPC_MAX_FDS: usize = RESPONSE_OBSERVATION_V2_MAX_OBJECTS;
 const PROVIDER_RPC_SOCKET_BACKLOG: libc::c_int = 1;
 #[cfg(target_os = "linux")]
@@ -147,9 +147,9 @@ const PROVIDER_CONFIG_FD: RawFd = 198;
 #[cfg(target_os = "linux")]
 const PROVIDER_CONFIG_FD_COLLISION_SLOT: RawFd = 199;
 const PROVIDER_ORPHAN_RECORD_API_VERSION: &str =
-    "serverware.responseObservationProviderOrphan/v2";
+    "catchplate.responseObservationProviderOrphan/v2";
 const PROVIDER_PROCESS_CONFIG_API_VERSION: &str =
-    "serverware.responseObservationProviderProcess/v1";
+    "catchplate.responseObservationProviderProcess/v1";
 const PROVIDER_RECOVERY_LOCK_NAME: &str = ".recovery.lock";
 const PROVIDER_COORDINATION_DIRECTORY_NAME: &str =
     "provider-coordination";
@@ -966,7 +966,7 @@ impl RootOwnedResponseObservationV2Config {
         let mut hasher = Sha256::new();
         append_hash_frame(
             &mut hasher,
-            b"serverware.response-v2/client-identity/v1",
+            b"catchplate.response-v2/client-identity/v1",
         );
         append_hash_frame(&mut hasher, &uid.to_be_bytes());
         append_hash_frame(&mut hasher, cgroup_sha256.as_bytes());
@@ -2132,7 +2132,7 @@ fn provider_cgroup_sha256(
     let mut hasher = Sha256::new();
     append_hash_frame(
         &mut hasher,
-        b"serverware.response-v2/provider-cgroup/v1",
+        b"catchplate.response-v2/provider-cgroup/v1",
     );
     append_hash_frame(
         &mut hasher,
@@ -2623,7 +2623,7 @@ fn seal_provider_config_snapshot(
     source: &mut File,
     deadline: &OperationDeadline,
 ) -> Result<File, V2RuntimeError> {
-    let name = CString::new("serverware-response-v2-provider-config")
+    let name = CString::new("catchplate-response-v2-provider-config")
         .map_err(|_| {
             V2RuntimeError::new(
                 "provider_config_snapshot_failed",
@@ -2724,7 +2724,7 @@ fn create_sealed_emergency_manifest(
             "emergency manifest violates its exact byte bound",
         ));
     }
-    let name = CString::new("serverware-response-v2-emergency-manifest")
+    let name = CString::new("catchplate-response-v2-emergency-manifest")
         .expect("static memfd name has no NUL");
     let raw = unsafe {
         libc::memfd_create(
@@ -3151,7 +3151,7 @@ fn role_identity_root(
     let mut ordered = config.role_identities.iter().collect::<Vec<_>>();
     ordered.sort_by(|left, right| left.role.cmp(&right.role));
     let mut hasher = Sha256::new();
-    append_hash_frame(&mut hasher, b"serverware.response-v2/role-identities/v1");
+    append_hash_frame(&mut hasher, b"catchplate.response-v2/role-identities/v1");
     for identity in ordered {
         append_hash_frame(&mut hasher, identity.role.as_bytes());
         append_hash_frame(&mut hasher, identity.provider_id.as_bytes());
@@ -3212,7 +3212,7 @@ fn proof_independent_pins_root_from_pins(
     let mut hasher = Sha256::new();
     append_hash_frame(
         &mut hasher,
-        b"serverware.response-v2/proof-independent-pins/v2",
+        b"catchplate.response-v2/proof-independent-pins/v2",
     );
     for value in [
         pins.trust_root_sha256.as_bytes(),
@@ -3355,7 +3355,7 @@ fn provider_identity_digest(
     let mut hasher = Sha256::new();
     append_hash_frame(
         &mut hasher,
-        b"serverware.response-v2/provider-identity/v1",
+        b"catchplate.response-v2/provider-identity/v1",
     );
     for value in [
         identity.role.as_bytes(),
@@ -3378,7 +3378,7 @@ fn provider_operation_binding_sha256(
     let mut hasher = Sha256::new();
     append_hash_frame(
         &mut hasher,
-        b"serverware.response-v2/provider-operation-binding/v2",
+        b"catchplate.response-v2/provider-operation-binding/v2",
     );
     for value in [
         binding.role.as_bytes(),
@@ -3465,7 +3465,7 @@ fn provider_authority_scope_sha256_from_scope(
     let mut hasher = Sha256::new();
     append_hash_frame(
         &mut hasher,
-        b"serverware.response-v2/provider-authority-scope/v1",
+        b"catchplate.response-v2/provider-authority-scope/v1",
     );
     for value in [
         scope.role.as_bytes(),
@@ -3831,7 +3831,7 @@ impl InstalledProviderGeneration {
                 let mut hasher = Sha256::new();
                 append_hash_frame(
                     &mut hasher,
-                    b"serverware.response-v2/provider-role-channel/v1",
+                    b"catchplate.response-v2/provider-role-channel/v1",
                 );
                 append_hash_frame(&mut hasher, pin.role.as_bytes());
                 append_hash_frame(
@@ -7034,7 +7034,7 @@ impl InstalledProviderGeneration {
         }
         verify_provider_signed_value(
             self.role("emergency-fence-revoker")?,
-            b"serverware.response-v2/emergency-fence-revocation/v1\0",
+            b"catchplate.response-v2/emergency-fence-revocation/v1\0",
             &receipt,
             &receipt.signature,
             &receipt.signer_key_id,
@@ -7088,7 +7088,7 @@ impl InstalledProviderGeneration {
         validate_digest(&receipt.durable_fence_receipt_sha256)?;
         verify_provider_signed_value(
             self.role("emergency-fence-revoker")?,
-            b"serverware.response-v2/emergency-fence-revocation/v1\0",
+            b"catchplate.response-v2/emergency-fence-revocation/v1\0",
             &receipt,
             &receipt.signature,
             &receipt.signer_key_id,
@@ -7147,7 +7147,7 @@ impl InstalledProviderGeneration {
         }
         verify_provider_signed_value(
             self.role("linearizable-store")?,
-            b"serverware.response-v2/fence-revocation/v1\0",
+            b"catchplate.response-v2/fence-revocation/v1\0",
             &receipt,
             &receipt.signature,
             &receipt.signer_key_id,
@@ -7290,7 +7290,7 @@ fn emergency_target_from_orphan(
     let mut binding = Sha256::new();
     append_hash_frame(
         &mut binding,
-        b"serverware.response-v2/recovered-orphan-target/v1",
+        b"catchplate.response-v2/recovered-orphan-target/v1",
     );
     append_hash_frame(
         &mut binding,
@@ -7343,7 +7343,7 @@ fn process_identity_manifest_sha256<'a>(
     let mut hasher = Sha256::new();
     append_hash_frame(
         &mut hasher,
-        b"serverware.response-v2/emergency-process-manifest/v1",
+        b"catchplate.response-v2/emergency-process-manifest/v1",
     );
     for identity in identities {
         append_hash_frame(&mut hasher, identity.as_bytes());
@@ -7384,7 +7384,7 @@ fn emergency_executor_as_cleanup_receipt(
         let mut hasher = Sha256::new();
         append_hash_frame(
             &mut hasher,
-            b"serverware.response-v2/emergency-executor-closure/v1",
+            b"catchplate.response-v2/emergency-executor-closure/v1",
         );
         append_hash_frame(
             &mut hasher,
@@ -7491,7 +7491,7 @@ impl ProviderLaunchProcessGuard {
             ));
         }
         let launch_id = provider_orphan_journal_id(
-            b"serverware.response-v2/provider-launch-owner/v2",
+            b"catchplate.response-v2/provider-launch-owner/v2",
             provider_operation_id,
             launch_nonce,
         );
@@ -8064,7 +8064,7 @@ fn provider_installation_request_sha256(
     let mut hasher = Sha256::new();
     append_hash_frame(
         &mut hasher,
-        b"serverware.response-v2/provider-installation/v2",
+        b"catchplate.response-v2/provider-installation/v2",
     );
     append_hash_frame(
         &mut hasher,
@@ -8267,7 +8267,7 @@ fn validate_provider_launch_hello(
     }
     verify_provider_signed_value(
         role,
-        b"serverware.response-v2/provider-launch-hello/v1\0",
+        b"catchplate.response-v2/provider-launch-hello/v1\0",
         hello,
         &hello.signature,
         &hello.signer_key_id,
@@ -8347,7 +8347,7 @@ fn validate_provider_terminal(
     }
     verify_provider_signed_value(
         role,
-        b"serverware.response-v2/provider-terminal/v1\0",
+        b"catchplate.response-v2/provider-terminal/v1\0",
         terminal,
         &terminal.signature,
         &terminal.signer_key_id,
@@ -8412,7 +8412,7 @@ fn launch_measured_provider_subprocess(
         let mut hasher = Sha256::new();
         append_hash_frame(
             &mut hasher,
-            b"serverware.response-v2/provider-socket/v1",
+            b"catchplate.response-v2/provider-socket/v1",
         );
         append_hash_frame(
             &mut hasher,
@@ -8572,14 +8572,14 @@ fn launch_measured_provider_subprocess(
             )
         })?;
     let argv = [
-        CString::new("serverware-response-observation-v2-provider")
+        CString::new("catchplate-response-observation-v2-provider")
             .map_err(|_| {
                 V2RuntimeError::new(
                     "provider_argv_invalid",
                     "provider argv contains NUL",
                 )
             })?,
-        CString::new("--serverware-provider-rpc-v1")
+        CString::new("--catchplate-provider-rpc-v1")
             .map_err(|_| {
                 V2RuntimeError::new(
                     "provider_argv_invalid",
@@ -8589,80 +8589,80 @@ fn launch_measured_provider_subprocess(
     ];
     let environment = [
         format!(
-            "SERVERWARE_PROVIDER_RPC_SOCKET={}",
+            "CATCHPLATE_PROVIDER_RPC_SOCKET={}",
             socket_path.display()
         ),
-        format!("SERVERWARE_PROVIDER_ROLE={}", role.pin.role),
+        format!("CATCHPLATE_PROVIDER_ROLE={}", role.pin.role),
         format!(
-            "SERVERWARE_PROVIDER_OPERATION_ID={provider_operation_id}"
+            "CATCHPLATE_PROVIDER_OPERATION_ID={provider_operation_id}"
         ),
         format!(
-            "SERVERWARE_PROVIDER_REQUEST_SHA256={request_sha256}"
+            "CATCHPLATE_PROVIDER_REQUEST_SHA256={request_sha256}"
         ),
-        format!("SERVERWARE_PROVIDER_ATTEMPT_ID={attempt_id}"),
+        format!("CATCHPLATE_PROVIDER_ATTEMPT_ID={attempt_id}"),
         format!(
-            "SERVERWARE_PROVIDER_ATTEMPT_REVISION={attempt_revision}"
-        ),
-        format!(
-            "SERVERWARE_PROVIDER_FENCING_TOKEN={fencing_token}"
+            "CATCHPLATE_PROVIDER_ATTEMPT_REVISION={attempt_revision}"
         ),
         format!(
-            "SERVERWARE_PROVIDER_PREDECESSOR_STATE_SHA256={predecessor_state_sha256}"
+            "CATCHPLATE_PROVIDER_FENCING_TOKEN={fencing_token}"
         ),
         format!(
-            "SERVERWARE_PROVIDER_DEADLINE_CUSTODY_BOOT_ID={}",
+            "CATCHPLATE_PROVIDER_PREDECESSOR_STATE_SHA256={predecessor_state_sha256}"
+        ),
+        format!(
+            "CATCHPLATE_PROVIDER_DEADLINE_CUSTODY_BOOT_ID={}",
             deadline.monotonic.custody_boot_id
         ),
         format!(
-            "SERVERWARE_PROVIDER_DEADLINE_AT_BOOTTIME_NS={}",
+            "CATCHPLATE_PROVIDER_DEADLINE_AT_BOOTTIME_NS={}",
             deadline.monotonic.absolute_boottime_ns
         ),
         format!(
-            "SERVERWARE_PROVIDER_DEADLINE_AT_EPOCH_MS={}",
+            "CATCHPLATE_PROVIDER_DEADLINE_AT_EPOCH_MS={}",
             deadline.absolute_epoch_ms
         ),
         format!(
-            "SERVERWARE_PROVIDER_GENERATION={}",
+            "CATCHPLATE_PROVIDER_GENERATION={}",
             role.pin.provider_generation
         ),
         format!(
-            "SERVERWARE_PROVIDER_CONFIG_FD={provider_config_target_fd}"
+            "CATCHPLATE_PROVIDER_CONFIG_FD={provider_config_target_fd}"
         ),
         format!(
-            "SERVERWARE_PROVIDER_CONFIG_SHA256={}",
+            "CATCHPLATE_PROVIDER_CONFIG_SHA256={}",
             role.pin.provider_config_sha256
         ),
         format!(
-            "SERVERWARE_PROVIDER_EXECUTABLE_SHA256={}",
+            "CATCHPLATE_PROVIDER_EXECUTABLE_SHA256={}",
             role.pin.executable_measurement_sha256
         ),
         format!(
-            "SERVERWARE_PROVIDER_LAUNCH_NONCE={launch_nonce}"
+            "CATCHPLATE_PROVIDER_LAUNCH_NONCE={launch_nonce}"
         ),
         format!(
-            "SERVERWARE_PROVIDER_COORDINATION_STATE_DIRECTORY={}",
+            "CATCHPLATE_PROVIDER_COORDINATION_STATE_DIRECTORY={}",
             coordination_state_directory.display()
         ),
         format!(
-            "SERVERWARE_PROVIDER_IMMUTABLE_STATE_DIRECTORY={}",
+            "CATCHPLATE_PROVIDER_IMMUTABLE_STATE_DIRECTORY={}",
             immutable_state_directory.display()
         ),
         format!(
-            "SERVERWARE_PROVIDER_SHARED_STATE_GID={}",
+            "CATCHPLATE_PROVIDER_SHARED_STATE_GID={}",
             router.provider_gid
         ),
         format!(
-            "SERVERWARE_PROVIDER_UID_BASE={}",
+            "CATCHPLATE_PROVIDER_UID_BASE={}",
             router.provider_uid
         ),
         format!(
-            "SERVERWARE_PROVIDER_MUTATION_SUPERVISOR_UID={mutation_supervisor_uid}"
+            "CATCHPLATE_PROVIDER_MUTATION_SUPERVISOR_UID={mutation_supervisor_uid}"
         ),
         format!(
-            "SERVERWARE_PROVIDER_LINEARIZABLE_STORE_UID={linearizable_store_uid}"
+            "CATCHPLATE_PROVIDER_LINEARIZABLE_STORE_UID={linearizable_store_uid}"
         ),
         format!(
-            "SERVERWARE_PROVIDER_EMERGENCY_FENCE_REVOKER_UID={emergency_fence_revoker_uid}"
+            "CATCHPLATE_PROVIDER_EMERGENCY_FENCE_REVOKER_UID={emergency_fence_revoker_uid}"
         ),
         "LANG=C".to_owned(),
         "LC_ALL=C".to_owned(),
@@ -8862,7 +8862,7 @@ fn launch_measured_provider_subprocess(
         let mut hasher = Sha256::new();
         append_hash_frame(
             &mut hasher,
-            b"serverware.response-v2/provider-socket-peer/v1",
+            b"catchplate.response-v2/provider-socket-peer/v1",
         );
         append_hash_frame(&mut hasher, &peer.pid.to_be_bytes());
         append_hash_frame(&mut hasher, &peer.uid.to_be_bytes());
@@ -9287,7 +9287,7 @@ fn measured_orphan_process_identity(
     let mut identity = Sha256::new();
     append_hash_frame(
         &mut identity,
-        b"serverware.response-v2/provider-kernel-process/v1",
+        b"catchplate.response-v2/provider-kernel-process/v1",
     );
     append_hash_frame(&mut identity, &pid.to_be_bytes());
     append_hash_frame(&mut identity, &starttime.to_be_bytes());
@@ -9453,7 +9453,7 @@ fn measured_provider_process_identity(
     let mut identity = Sha256::new();
     append_hash_frame(
         &mut identity,
-        b"serverware.response-v2/provider-kernel-process/v1",
+        b"catchplate.response-v2/provider-kernel-process/v1",
     );
     append_hash_frame(&mut identity, &pid.to_be_bytes());
     append_hash_frame(&mut identity, &starttime.to_be_bytes());
@@ -10236,7 +10236,7 @@ fn emergency_kill_recovered_orphan(
         let mut hasher = Sha256::new();
         append_hash_frame(
             &mut hasher,
-            b"serverware.response-v2/recovered-orphan-pids/v1",
+            b"catchplate.response-v2/recovered-orphan-pids/v1",
         );
         for process in processes.iter() {
             append_hash_frame(
@@ -10263,19 +10263,19 @@ fn emergency_kill_recovered_orphan(
     };
     let result = LocalProviderTermination {
         cgroup_kill_receipt_sha256: receipt(
-            b"serverware.response-v2/orphan-cgroup-kill/v1",
+            b"catchplate.response-v2/orphan-cgroup-kill/v1",
             cgroup_ok,
         ),
         pidfd_kill_receipt_sha256: receipt(
-            b"serverware.response-v2/orphan-pidfd-kill/v1",
+            b"catchplate.response-v2/orphan-pidfd-kill/v1",
             pidfd_ok,
         ),
         process_group_kill_receipt_sha256: receipt(
-            b"serverware.response-v2/process-group-action-not-performed/v1",
+            b"catchplate.response-v2/process-group-action-not-performed/v1",
             false,
         ),
         process_reap_receipt_sha256: receipt(
-            b"serverware.response-v2/orphan-process-reap/v1",
+            b"catchplate.response-v2/orphan-process-reap/v1",
             all_exited && cgroup_empty,
         ),
         cgroup_events_sha256,
@@ -10445,19 +10445,19 @@ fn emergency_force_kill_and_reap_provider(
     };
     let result = LocalProviderTermination {
         cgroup_kill_receipt_sha256: receipt(
-            b"serverware.response-v2/emergency-cgroup-kill/v1",
+            b"catchplate.response-v2/emergency-cgroup-kill/v1",
             cgroup_ok,
         ),
         pidfd_kill_receipt_sha256: receipt(
-            b"serverware.response-v2/emergency-pidfd-kill/v1",
+            b"catchplate.response-v2/emergency-pidfd-kill/v1",
             pidfd_ok,
         ),
         process_group_kill_receipt_sha256: receipt(
-            b"serverware.response-v2/process-group-action-not-performed/v1",
+            b"catchplate.response-v2/process-group-action-not-performed/v1",
             false,
         ),
         process_reap_receipt_sha256: receipt(
-            b"serverware.response-v2/emergency-process-reap/v1",
+            b"catchplate.response-v2/emergency-process-reap/v1",
             reaped && cgroup_empty,
         ),
         cgroup_events_sha256,
@@ -12382,7 +12382,7 @@ impl KillableProviderProcessSupervisor for RuntimeOwnedProviderSupervisor {
                     }
                 };
                 let mut message =
-                    b"serverware.response-v2/provider-never-started/v1\0"
+                    b"catchplate.response-v2/provider-never-started/v1\0"
                         .to_vec();
                 message.extend_from_slice(&unsigned);
                 if signature.is_empty()
@@ -13226,10 +13226,10 @@ struct ProviderFreshEvidenceVerificationRequest {
 
 #[cfg(target_os = "linux")]
 const PROVIDER_TRUSTED_HOST_MEASUREMENT_EVIDENCE_API_VERSION: &str =
-    "serverware.trustedHostEvidence.measurementBundle/v1";
+    "catchplate.trustedHostEvidence.measurementBundle/v1";
 #[cfg(target_os = "linux")]
 const PROVIDER_TRUSTED_HOST_EVIDENCE_VERIFICATION_API_VERSION: &str =
-    "serverware.trustedHostEvidence.verificationReceipt/v1";
+    "catchplate.trustedHostEvidence.verificationReceipt/v1";
 
 #[cfg(target_os = "linux")]
 #[derive(Deserialize, Serialize)]
@@ -13448,7 +13448,7 @@ fn fresh_tee_report_data_sha256(
     let mut hasher = Sha256::new();
     append_hash_frame(
         &mut hasher,
-        b"serverware.response-v2/fresh-tee-report-data/v1",
+        b"catchplate.response-v2/fresh-tee-report-data/v1",
     );
     for value in [
         unsigned_response_sha256,
@@ -13695,7 +13695,7 @@ impl ConfiguredProviderAggregate {
                 )
             })?;
         let mut message =
-            b"serverware.response-v2/replay-authority-receipt/v1\0"
+            b"catchplate.response-v2/replay-authority-receipt/v1\0"
                 .to_vec();
         message.extend_from_slice(&canonical);
         if signature.is_empty()
@@ -13792,7 +13792,7 @@ impl ConfiguredProviderAggregate {
                 )
             })?;
         let mut message =
-            b"serverware.response-v2/replay-retrieval-receipt/v1\0"
+            b"catchplate.response-v2/replay-retrieval-receipt/v1\0"
                 .to_vec();
         message.extend_from_slice(&canonical);
         if signature.is_empty()
@@ -14074,7 +14074,7 @@ impl ConfiguredProviderAggregate {
             },
         )?;
         let mut signing_message =
-            b"serverware.public-release-authorization/v1\0".to_vec();
+            b"catchplate.public-release-authorization/v1\0".to_vec();
         signing_message.extend_from_slice(&unsigned);
         let signature_binding = self.bind_authority_call(
             "public-release",
@@ -14632,7 +14632,7 @@ impl ConfiguredProviderAggregate {
                     )
                 })?;
                 let mut signing_message =
-                    b"serverware.response-v2/recovery-authorization/v1\0"
+                    b"catchplate.response-v2/recovery-authorization/v1\0"
                         .to_vec();
                 signing_message.extend_from_slice(&unsigned);
                 if signature.is_empty()
@@ -15747,7 +15747,7 @@ impl ConfiguredProviderAggregate {
             )
         })?;
         let mut signing_message =
-            b"serverware.outcome-unknown/v1\0".to_vec();
+            b"catchplate.outcome-unknown/v1\0".to_vec();
         signing_message.extend_from_slice(&unsigned);
         if !self.installed.verify_outcome_unknown_ed25519(
             &durable_start_binding,
@@ -15908,7 +15908,7 @@ impl ConfiguredProviderAggregate {
             },
         )?;
         let mut signing_message =
-            b"serverware.outcome-unknown/v1\0".to_vec();
+            b"catchplate.outcome-unknown/v1\0".to_vec();
         signing_message.extend_from_slice(&unsigned);
         if signature.is_empty()
             || signature.len() > 1024
@@ -16043,7 +16043,7 @@ impl ResponseObservationV2Runtime {
         let mut hasher = Sha256::new();
         append_hash_frame(
             &mut hasher,
-            b"serverware.response-v2/authenticated-session/v1",
+            b"catchplate.response-v2/authenticated-session/v1",
         );
         append_hash_frame(&mut hasher, self.boot_id.as_bytes());
         append_hash_frame(
@@ -17841,7 +17841,7 @@ fn provider_operation_id(
     let mut hasher = Sha256::new();
     append_hash_frame(
         &mut hasher,
-        b"serverware.response-v2/provider-operation-id/v1",
+        b"catchplate.response-v2/provider-operation-id/v1",
     );
     append_hash_frame(&mut hasher, request_sha256.as_bytes());
     append_hash_frame(&mut hasher, operation.as_bytes());
@@ -17874,7 +17874,7 @@ fn provider_operation_id_from_scope(
     let mut hasher = Sha256::new();
     append_hash_frame(
         &mut hasher,
-        b"serverware.response-v2/provider-operation-id/v1",
+        b"catchplate.response-v2/provider-operation-id/v1",
     );
     append_hash_frame(&mut hasher, request_sha256.as_bytes());
     append_hash_frame(&mut hasher, operation.as_bytes());
@@ -18397,7 +18397,7 @@ fn validate_durable_recovery_decision(
             )
         })?;
     let mut signing_message =
-        b"serverware.response-v2/recovery-resolution/v1\0".to_vec();
+        b"catchplate.response-v2/recovery-resolution/v1\0".to_vec();
     signing_message.extend_from_slice(&unsigned);
     if signature.is_empty()
         || signature.len() > 1024
@@ -18533,7 +18533,7 @@ fn validate_api_durable_replay_record(
         )
     })?;
     let mut signing_message =
-        b"serverware.response-v2/durable-replay-record/v1\0"
+        b"catchplate.response-v2/durable-replay-record/v1\0"
             .to_vec();
     signing_message.extend_from_slice(&unsigned);
     if signature.is_empty()
@@ -18666,7 +18666,7 @@ fn durable_output_manifest_sha256(
     let mut hasher = Sha256::new();
     append_hash_frame(
         &mut hasher,
-        b"serverware.response-v2/durable-output-manifest/v1",
+        b"catchplate.response-v2/durable-output-manifest/v1",
     );
     append_hash_frame(&mut hasher, &canonical);
     Ok(format!("sha256:{:x}", hasher.finalize()))
@@ -19269,7 +19269,7 @@ fn durable_terminal_record_sha256(
     let mut hasher = Sha256::new();
     append_hash_frame(
         &mut hasher,
-        b"serverware.response-v2/durable-terminal-record/v1",
+        b"catchplate.response-v2/durable-terminal-record/v1",
     );
     for value in [
         record.key.stable.request_id.as_bytes(),
@@ -19568,7 +19568,7 @@ fn descriptor_manifest_sha256(
     let mut hasher = Sha256::new();
     append_hash_frame(
         &mut hasher,
-        b"serverware.response-v2/exact-object-manifest/v1",
+        b"catchplate.response-v2/exact-object-manifest/v1",
     );
     for descriptor in ordered {
         append_hash_frame(&mut hasher, &descriptor.fd_index.to_be_bytes());
@@ -21641,7 +21641,7 @@ fn validate_release_consume_outcome(
         )
     })?;
     let mut signing_message =
-        b"serverware.public-release-consume-outcome/v1\0".to_vec();
+        b"catchplate.public-release-consume-outcome/v1\0".to_vec();
     signing_message.extend_from_slice(&unsigned);
     if signature.is_empty()
         || signature.len() > 1024
@@ -24464,7 +24464,7 @@ fn contract_policy_exact_objects(
             continue;
         }
         let name = CString::new(format!(
-            "serverware-contract-policy-{part_index}"
+            "catchplate-contract-policy-{part_index}"
         ))
         .map_err(|_| {
             V2RuntimeError::new(
@@ -24835,19 +24835,19 @@ struct MeasuredProviderProcessConfig {
 
 #[cfg(target_os = "linux")]
 const PROVIDER_OPERATOR_TRUST_BUNDLE_API_VERSION: &str =
-    "serverware.responseObservationProviderTrustBundle/v1";
+    "catchplate.responseObservationProviderTrustBundle/v1";
 #[cfg(target_os = "linux")]
 const PROVIDER_OPERATOR_TRUST_CHECKPOINT_API_VERSION: &str =
-    "serverware.responseObservationProviderTrustCheckpoint/v1";
+    "catchplate.responseObservationProviderTrustCheckpoint/v1";
 #[cfg(target_os = "linux")]
 const PROVIDER_OPERATOR_REVOCATION_API_VERSION: &str =
-    "serverware.responseObservationProviderRevocation/v1";
+    "catchplate.responseObservationProviderRevocation/v1";
 #[cfg(target_os = "linux")]
 const PROVIDER_OPERATOR_TRUSTED_TIME_API_VERSION: &str =
-    "serverware.responseObservationProviderTrustedTime/v1";
+    "catchplate.responseObservationProviderTrustedTime/v1";
 #[cfg(target_os = "linux")]
 const PROVIDER_OPERATOR_TRUSTED_HOST_RUNTIME_API_VERSION: &str =
-    "serverware.responseObservationProviderTrustedHostRuntime/v1";
+    "catchplate.responseObservationProviderTrustedHostRuntime/v1";
 
 #[cfg(target_os = "linux")]
 #[derive(Clone, Deserialize, Serialize)]
@@ -24974,7 +24974,7 @@ struct VerifiedProviderOperatorTrust {
 
 #[cfg(target_os = "linux")]
 const PROVIDER_IMMUTABLE_ARTIFACT_API_VERSION: &str =
-    "serverware.responseObservationProviderImmutableArtifact/v1";
+    "catchplate.responseObservationProviderImmutableArtifact/v1";
 
 #[cfg(target_os = "linux")]
 #[derive(Clone, Deserialize, Serialize)]
@@ -25101,7 +25101,7 @@ fn verify_provider_operator_trust_bundle(
     }
     verify_provider_operator_signature(
         &root_public_key,
-        b"serverware.response-v2/provider-trust-checkpoint/v1\0",
+        b"catchplate.response-v2/provider-trust-checkpoint/v1\0",
         &bundle.checkpoint,
         &bundle.checkpoint.signature,
     )?;
@@ -25197,7 +25197,7 @@ fn verify_provider_operator_trust_bundle(
     }
     verify_provider_operator_signature(
         &root_public_key,
-        b"serverware.response-v2/provider-revocation/v1\0",
+        b"catchplate.response-v2/provider-revocation/v1\0",
         revocation,
         &revocation.signature,
     )?;
@@ -25225,7 +25225,7 @@ fn verify_provider_operator_trust_bundle(
     validate_identifier(&trusted_time.statement_id)?;
     verify_provider_operator_signature(
         &root_public_key,
-        b"serverware.response-v2/provider-trusted-time/v1\0",
+        b"catchplate.response-v2/provider-trusted-time/v1\0",
         trusted_time,
         &trusted_time.signature,
     )?;
@@ -25297,7 +25297,7 @@ fn verify_provider_operator_trust_bundle(
             }
             verify_provider_operator_signature(
                 &root_public_key,
-                b"serverware.response-v2/provider-trusted-host-runtime/v1\0",
+                b"catchplate.response-v2/provider-trusted-host-runtime/v1\0",
                 runtime,
                 &runtime.signature,
             )?;
@@ -25373,10 +25373,10 @@ fn verify_provider_trusted_role_signature(
 
 #[cfg(target_os = "linux")]
 const PROVIDER_MUTATION_OWNER_API_VERSION: &str =
-    "serverware.responseObservationProviderMutationOwner/v1";
+    "catchplate.responseObservationProviderMutationOwner/v1";
 #[cfg(target_os = "linux")]
 const PROVIDER_FENCE_AUTHORITY_STATE_API_VERSION: &str =
-    "serverware.responseObservationProviderFenceAuthority/v1";
+    "catchplate.responseObservationProviderFenceAuthority/v1";
 
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -26085,7 +26085,7 @@ fn provider_immutable_retrieval_id(
         ));
     }
     let binding = response_observation_v2_canonical_binding_sha256(
-        b"serverware.response-v2/provider-immutable-artifact/v1",
+        b"catchplate.response-v2/provider-immutable-artifact/v1",
         &serde_json::json!({
             "ownerRole":owner_role,
             "ownerProviderId":owner_provider_id,
@@ -26321,7 +26321,7 @@ fn persist_provider_immutable_artifact(
     };
     record.signature = sign_provider_process_value(
         signing_key,
-        b"serverware.response-v2/provider-immutable-artifact-record/v1\0",
+        b"catchplate.response-v2/provider-immutable-artifact-record/v1\0",
         &record,
     )?;
     let record_bytes =
@@ -26417,7 +26417,7 @@ fn retrieve_provider_immutable_artifact(
                 )
             })?;
     let mut signature_message =
-        b"serverware.response-v2/provider-immutable-artifact-record/v1\0"
+        b"catchplate.response-v2/provider-immutable-artifact-record/v1\0"
             .to_vec();
     signature_message.extend_from_slice(&unsigned);
     if record.api_version
@@ -27003,7 +27003,7 @@ fn register_provider_mutation_owner(
     };
     owner.signature = sign_provider_process_value(
         signing_key,
-        b"serverware.response-v2/mutation-owner/v1\0",
+        b"catchplate.response-v2/mutation-owner/v1\0",
         &owner,
     )?;
     persist_provider_mutation_owner(
@@ -27115,7 +27115,7 @@ fn mark_provider_mutation_terminal(
     owner.signature.clear();
     owner.signature = sign_provider_process_value(
         signing_key,
-        b"serverware.response-v2/mutation-owner/v1\0",
+        b"catchplate.response-v2/mutation-owner/v1\0",
         &owner,
     )?;
     persist_provider_mutation_owner(
@@ -27226,7 +27226,7 @@ fn revoke_provider_mutation_fence(
             })?;
         let revocation_record_sha256 =
             response_observation_v2_canonical_binding_sha256(
-                b"serverware.response-v2/provider-fence-cas/v1",
+                b"catchplate.response-v2/provider-fence-cas/v1",
                 &serde_json::json!({
                     "providerOperationId":provider_operation_id,
                     "providerGeneration":provider_generation,
@@ -27540,7 +27540,7 @@ fn run_legacy_provider_rpc_worker_from_env(
         let mut hasher = Sha256::new();
         append_hash_frame(
             &mut hasher,
-            b"serverware.response-v2/provider-launch-attestation/v1",
+            b"catchplate.response-v2/provider-launch-attestation/v1",
         );
         for value in [
             environment.executable_sha256.as_bytes(),
@@ -27586,7 +27586,7 @@ fn run_legacy_provider_rpc_worker_from_env(
     };
     hello.signature = sign_provider_process_value(
         &signing_key,
-        b"serverware.response-v2/provider-launch-hello/v1\0",
+        b"catchplate.response-v2/provider-launch-hello/v1\0",
         &hello,
     )?;
     let hello_bytes =
@@ -27824,7 +27824,7 @@ fn run_legacy_provider_rpc_worker_from_env(
     };
     terminal.signature = sign_provider_process_value(
         &signing_key,
-        b"serverware.response-v2/provider-terminal/v1\0",
+        b"catchplate.response-v2/provider-terminal/v1\0",
         &terminal,
     )?;
     let terminal_bytes =
@@ -27886,7 +27886,7 @@ fn read_provider_process_environment(
         )
     };
     let config_fd_u64 =
-        parse_u64("SERVERWARE_PROVIDER_CONFIG_FD")?;
+        parse_u64("CATCHPLATE_PROVIDER_CONFIG_FD")?;
     let config_fd = RawFd::try_from(config_fd_u64).map_err(|_| {
         V2RuntimeError::new(
             "provider_process_environment_invalid",
@@ -27895,66 +27895,66 @@ fn read_provider_process_environment(
     })?;
     let environment = ProviderProcessEnvironment {
         socket_path: PathBuf::from(provider_process_env(
-            "SERVERWARE_PROVIDER_RPC_SOCKET",
+            "CATCHPLATE_PROVIDER_RPC_SOCKET",
         )?),
-        role: provider_process_env("SERVERWARE_PROVIDER_ROLE")?,
+        role: provider_process_env("CATCHPLATE_PROVIDER_ROLE")?,
         provider_operation_id: provider_process_env(
-            "SERVERWARE_PROVIDER_OPERATION_ID",
+            "CATCHPLATE_PROVIDER_OPERATION_ID",
         )?,
         request_sha256: provider_process_env(
-            "SERVERWARE_PROVIDER_REQUEST_SHA256",
+            "CATCHPLATE_PROVIDER_REQUEST_SHA256",
         )?,
         attempt_id: provider_process_env(
-            "SERVERWARE_PROVIDER_ATTEMPT_ID",
+            "CATCHPLATE_PROVIDER_ATTEMPT_ID",
         )?,
         attempt_revision: parse_u64(
-            "SERVERWARE_PROVIDER_ATTEMPT_REVISION",
+            "CATCHPLATE_PROVIDER_ATTEMPT_REVISION",
         )?,
         fencing_token: parse_u64(
-            "SERVERWARE_PROVIDER_FENCING_TOKEN",
+            "CATCHPLATE_PROVIDER_FENCING_TOKEN",
         )?,
         predecessor_state_sha256: provider_process_env(
-            "SERVERWARE_PROVIDER_PREDECESSOR_STATE_SHA256",
+            "CATCHPLATE_PROVIDER_PREDECESSOR_STATE_SHA256",
         )?,
         monotonic_deadline: V2MonotonicDeadlineV1 {
             api_version:
                 V2_MONOTONIC_DEADLINE_VERSION.to_owned(),
             custody_boot_id: provider_process_env(
-                "SERVERWARE_PROVIDER_DEADLINE_CUSTODY_BOOT_ID",
+                "CATCHPLATE_PROVIDER_DEADLINE_CUSTODY_BOOT_ID",
             )?,
             clock_id: V2MonotonicClockId::ClockBoottime,
             absolute_boottime_ns: provider_process_env(
-                "SERVERWARE_PROVIDER_DEADLINE_AT_BOOTTIME_NS",
+                "CATCHPLATE_PROVIDER_DEADLINE_AT_BOOTTIME_NS",
             )?,
         },
         deadline_at_epoch_ms: parse_u64(
-            "SERVERWARE_PROVIDER_DEADLINE_AT_EPOCH_MS",
+            "CATCHPLATE_PROVIDER_DEADLINE_AT_EPOCH_MS",
         )?,
         generation: parse_u64(
-            "SERVERWARE_PROVIDER_GENERATION",
+            "CATCHPLATE_PROVIDER_GENERATION",
         )?,
         config_fd,
         config_sha256: provider_process_env(
-            "SERVERWARE_PROVIDER_CONFIG_SHA256",
+            "CATCHPLATE_PROVIDER_CONFIG_SHA256",
         )?,
         executable_sha256: provider_process_env(
-            "SERVERWARE_PROVIDER_EXECUTABLE_SHA256",
+            "CATCHPLATE_PROVIDER_EXECUTABLE_SHA256",
         )?,
         launch_nonce: provider_process_env(
-            "SERVERWARE_PROVIDER_LAUNCH_NONCE",
+            "CATCHPLATE_PROVIDER_LAUNCH_NONCE",
         )?,
         coordination_state_directory: PathBuf::from(
             provider_process_env(
-                "SERVERWARE_PROVIDER_COORDINATION_STATE_DIRECTORY",
+                "CATCHPLATE_PROVIDER_COORDINATION_STATE_DIRECTORY",
             )?,
         ),
         immutable_state_directory: PathBuf::from(
             provider_process_env(
-                "SERVERWARE_PROVIDER_IMMUTABLE_STATE_DIRECTORY",
+                "CATCHPLATE_PROVIDER_IMMUTABLE_STATE_DIRECTORY",
             )?,
         ),
         shared_state_gid: u32::try_from(parse_u64(
-            "SERVERWARE_PROVIDER_SHARED_STATE_GID",
+            "CATCHPLATE_PROVIDER_SHARED_STATE_GID",
         )?)
         .map_err(|_| {
             V2RuntimeError::new(
@@ -27963,7 +27963,7 @@ fn read_provider_process_environment(
             )
         })?,
         provider_uid_base: u32::try_from(parse_u64(
-            "SERVERWARE_PROVIDER_UID_BASE",
+            "CATCHPLATE_PROVIDER_UID_BASE",
         )?)
         .map_err(|_| {
             V2RuntimeError::new(
@@ -27972,7 +27972,7 @@ fn read_provider_process_environment(
             )
         })?,
         mutation_supervisor_uid: u32::try_from(parse_u64(
-            "SERVERWARE_PROVIDER_MUTATION_SUPERVISOR_UID",
+            "CATCHPLATE_PROVIDER_MUTATION_SUPERVISOR_UID",
         )?)
         .map_err(|_| {
             V2RuntimeError::new(
@@ -27981,7 +27981,7 @@ fn read_provider_process_environment(
             )
         })?,
         linearizable_store_uid: u32::try_from(parse_u64(
-            "SERVERWARE_PROVIDER_LINEARIZABLE_STORE_UID",
+            "CATCHPLATE_PROVIDER_LINEARIZABLE_STORE_UID",
         )?)
         .map_err(|_| {
             V2RuntimeError::new(
@@ -27990,7 +27990,7 @@ fn read_provider_process_environment(
             )
         })?,
         emergency_fence_revoker_uid: u32::try_from(parse_u64(
-            "SERVERWARE_PROVIDER_EMERGENCY_FENCE_REVOKER_UID",
+            "CATCHPLATE_PROVIDER_EMERGENCY_FENCE_REVOKER_UID",
         )?)
         .map_err(|_| {
             V2RuntimeError::new(
@@ -28471,7 +28471,7 @@ fn provider_fence_receipt_sha256(
     let mut hasher = Sha256::new();
     append_hash_frame(
         &mut hasher,
-        b"serverware.response-v2/provider-durable-fence/v1",
+        b"catchplate.response-v2/provider-durable-fence/v1",
     );
     append_hash_frame(
         &mut hasher,
@@ -29087,7 +29087,7 @@ fn execute_provider_trusted_host_fresh_attestation(
     verification_receipt.signature =
         sign_provider_process_value(
             signing_key,
-            b"serverware.response-v2/trusted-host-evidence-verification/v1\0",
+            b"catchplate.response-v2/trusted-host-evidence-verification/v1\0",
             &verification_receipt,
         )?;
     let verification_receipt_bytes =
@@ -29550,7 +29550,7 @@ fn execute_provider_verify_trusted_host_fresh_attestation(
             )
         })?;
     let mut receipt_message =
-        b"serverware.response-v2/trusted-host-evidence-verification/v1\0"
+        b"catchplate.response-v2/trusted-host-evidence-verification/v1\0"
             .to_vec();
     receipt_message.extend_from_slice(&unsigned_receipt);
     let trusted_runtime_statement_sha256 = config
@@ -29878,7 +29878,7 @@ fn create_provider_output_object(
             "provider output object is empty, overbound, or past deadline",
         ));
     }
-    let name = CString::new("serverware-response-v2-provider-output")
+    let name = CString::new("catchplate-response-v2-provider-output")
         .map_err(|_| {
             V2RuntimeError::new(
                 "provider_output_memfd_name_invalid",
@@ -30617,7 +30617,7 @@ fn execute_provider_process_control_operation(
             };
             receipt.signature = sign_provider_process_value(
                 signing_key,
-                b"serverware.response-v2/fence-revocation/v1\0",
+                b"catchplate.response-v2/fence-revocation/v1\0",
                 &receipt,
             )?;
             crate::canonical_json_bytes(&receipt).map_err(|_| {
@@ -30672,7 +30672,7 @@ fn execute_provider_process_control_operation(
                 };
             receipt.signature = sign_provider_process_value(
                 signing_key,
-                b"serverware.response-v2/emergency-fence-revocation/v1\0",
+                b"catchplate.response-v2/emergency-fence-revocation/v1\0",
                 &receipt,
             )?;
             crate::canonical_json_bytes(&receipt).map_err(|_| {

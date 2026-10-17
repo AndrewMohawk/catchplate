@@ -6,10 +6,10 @@ assertion that deployment inputs exist or that the pilot has passed.
 
 ## Which evidence goes where
 
-The actual `serverware-proof-client` makes the authenticated buffered request
+The actual `catchplate-proof-client` makes the authenticated buffered request
 and verifies its response, same-connection TLS bindings and original native
 quote before its independently held collector key signs
-`serverware.nativeResponseCapture/v2`. That exact file is the existing protected
+`catchplate.nativeResponseCapture/v2`. That exact file is the existing protected
 Setup native-runtime consumer's input. The Python command below is just its
 fixed caller: it has no signing implementation and never reads private keys.
 
@@ -44,7 +44,7 @@ is 1–120 and can only shorten the original attempt. Native ingress is mandator
 for this caller; the existing pinned ingress profile must actually admit the
 principal and workload identity. Old collector invocations are unchanged.
 
-The configuration's `apiVersion` is `serverware.setupNativeRuntimeCollector/v1`.
+The configuration's `apiVersion` is `catchplate.setupNativeRuntimeCollector/v1`.
 Its exact original digest and proof-client executable digest are independently
 supplied operator pins, not learned from a proxy reply. The caller seals a copy
 of those exact ELF executable bytes and invokes it directly, with no shell,
@@ -52,7 +52,7 @@ arbitrary trailing arguments or inherited loader environment. This is not a
 new binary-closure attestation or a substitute for artifact admission.
 
 Provision one persistent owner-only mode-0700 state directory for this operator
-and deployment (for example `/var/lib/serverware-pilot/collector`). Do not use a
+and deployment (for example `/var/lib/catchplate-pilot/collector`). Do not use a
 temporary directory, per-invocation empty directory, writable shared ancestry,
 symlinks or network storage with unestablished durability. The operator owns
 directory creation and durable backup. The command never clears old slots.
@@ -68,17 +68,17 @@ directory creation and durable backup. The command never clears old slots.
    displayed SHA-256. The bundle contains the already-existing exact attempt,
    scope and native expectations strings. Move the download into a protected
    operator input directory without editing or reserializing it.
-3. From the admitted Serverware source/package environment, use the actual
+3. From the admitted Catchplate source/package environment, use the actual
    module entrypoint (replace the illustrative pins/paths with admitted values):
 
    ```text
-   python3 -B -m serverware.native_setup_runtime_collector collect --help
-   python3 -B -m serverware.native_setup_runtime_collector collect \
+   python3 -B -m catchplate.native_setup_runtime_collector collect --help
+   python3 -B -m catchplate.native_setup_runtime_collector collect \
      --bundle /approved/setup-native-runtime-collector-bundle.json \
      --bundle-sha256 sha256:<exact-portal-download-digest> \
      --configuration /approved/setup-runtime-collector.json \
      --configuration-sha256 sha256:<independently-pinned-config-digest> \
-     --state-directory /var/lib/serverware-pilot/collector
+     --state-directory /var/lib/catchplate-pilot/collector
    ```
 
    The request URL, GET method, no body/custom request headers, principal,
@@ -113,10 +113,10 @@ back storage or using another host. It is not global exactly-once enforcement.
 If a genuine capture was published before caller loss, recover only its data:
 
 ```text
-python3 -B -m serverware.native_setup_runtime_collector export \
+python3 -B -m catchplate.native_setup_runtime_collector export \
   --bundle /approved/setup-native-runtime-collector-bundle.json \
   --bundle-sha256 sha256:<same-exact-portal-download-digest> \
-  --state-directory /var/lib/serverware-pilot/collector \
+  --state-directory /var/lib/catchplate-pilot/collector \
   --out /private-export/setup-native-runtime-capture.json
 ```
 

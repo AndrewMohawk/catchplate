@@ -14,7 +14,7 @@ pub(super) struct Sealed { pub(super) file: File, original: Identity, sha256: St
 impl Sealed {
     pub(super) fn new(bytes: &[u8], executable: bool) -> Result<Self, String> {
         require(!bytes.is_empty() && bytes.len() <= if executable { MAX_IMAGE } else { super::wire::MAX_INPUT })?;
-        let fd = unsafe { libc::memfd_create(c"serverware-shadow-original".as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
+        let fd = unsafe { libc::memfd_create(c"catchplate-shadow-original".as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
         require(fd >= 0)?;
         let mut file = unsafe { File::from_raw_fd(fd) };
         // Executable bytes are public release artifacts. They need execute

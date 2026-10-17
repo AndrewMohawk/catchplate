@@ -6,8 +6,8 @@ from pathlib import Path
 import unittest
 from unittest import mock
 
-from serverware import authority_jit_compound_wire as source
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import authority_jit_compound_wire as source
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -105,7 +105,7 @@ class JitCompoundWireControls(unittest.TestCase):
                 source.exchange("/bounded.sock", **arguments(work()))
 
     def test_actual_ingress_keeps_one_local_window_and_verified_owner_through_send(self):
-        parsed = tree("serverware/authority_jit_compound_ingress.py")
+        parsed = tree("catchplate/authority_jit_compound_ingress.py")
         serve = next(node for node in parsed.body if isinstance(node, ast.FunctionDef)
             and node.name == "serve_process")
         calls = [node for node in ast.walk(serve) if isinstance(node, ast.Call)]
@@ -126,7 +126,7 @@ class JitCompoundWireControls(unittest.TestCase):
             named("wire.receive_request")[0].lineno)
 
     def test_actual_listener_peer_and_writer_exception_precede_fixed_ingress(self):
-        parsed = tree("serverware/authority_service.py")
+        parsed = tree("catchplate/authority_service.py")
         server = next(node for node in parsed.body if isinstance(node, ast.ClassDef)
             and node.name == "AuthorityServer")
         serve = next(node for node in server.body if isinstance(node, ast.FunctionDef)

@@ -399,11 +399,11 @@ mod tests {
         // These bodies and expected digests/signatures are literal SDK output,
         // not expected values computed with this module or its Python peer.
         let bodies: [&[u8]; 6] = [
-            br#"{"registryId": "123456789012", "repositoryName": "serverware-fixture", "layerDigests": ["sha256:0d3c5cea1ebd719281f75c4965740c8ae30757f7e7833eeb5b1be95469ac0ebb"]}"#,
-            br#"{"registryId": "123456789012", "repositoryName": "serverware-fixture"}"#,
-            br#"{"registryId": "123456789012", "repositoryName": "serverware-fixture", "uploadId": "00000000-0000-4000-8000-000000000001", "partFirstByte": 0, "partLastByte": 21, "layerPartBlob": "c3ludGhldGljLWxheWVyLXBhcnQA/w=="}"#,
-            br#"{"registryId": "123456789012", "repositoryName": "serverware-fixture", "uploadId": "00000000-0000-4000-8000-000000000001", "layerDigests": ["sha256:0d3c5cea1ebd719281f75c4965740c8ae30757f7e7833eeb5b1be95469ac0ebb"]}"#,
-            br#"{"registryId": "123456789012", "repositoryName": "serverware-fixture", "imageManifest": "{\"config\":{\"digest\":\"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a\",\"mediaType\":\"application/vnd.oci.image.config.v1+json\",\"size\":2},\"layers\":[],\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"schemaVersion\":2}", "imageManifestMediaType": "application/vnd.oci.image.manifest.v1+json", "imageTag": "fixture", "imageDigest": "sha256:1a532c454699d73464c8a86e03915be89b826ed24cd326a0442f0a310fd496af"}"#,
+            br#"{"registryId": "123456789012", "repositoryName": "catchplate-fixture", "layerDigests": ["sha256:0d3c5cea1ebd719281f75c4965740c8ae30757f7e7833eeb5b1be95469ac0ebb"]}"#,
+            br#"{"registryId": "123456789012", "repositoryName": "catchplate-fixture"}"#,
+            br#"{"registryId": "123456789012", "repositoryName": "catchplate-fixture", "uploadId": "00000000-0000-4000-8000-000000000001", "partFirstByte": 0, "partLastByte": 21, "layerPartBlob": "c3ludGhldGljLWxheWVyLXBhcnQA/w=="}"#,
+            br#"{"registryId": "123456789012", "repositoryName": "catchplate-fixture", "uploadId": "00000000-0000-4000-8000-000000000001", "layerDigests": ["sha256:0d3c5cea1ebd719281f75c4965740c8ae30757f7e7833eeb5b1be95469ac0ebb"]}"#,
+            br#"{"registryId": "123456789012", "repositoryName": "catchplate-fixture", "imageManifest": "{\"config\":{\"digest\":\"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a\",\"mediaType\":\"application/vnd.oci.image.config.v1+json\",\"size\":2},\"layers\":[],\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"schemaVersion\":2}", "imageManifestMediaType": "application/vnd.oci.image.manifest.v1+json", "imageTag": "fixture", "imageDigest": "sha256:1a532c454699d73464c8a86e03915be89b826ed24cd326a0442f0a310fd496af"}"#,
             b"synthetic-layer-part\x00\xff",
         ];
         let body_hashes = [

@@ -18,17 +18,17 @@ from cryptography.exceptions import InvalidSignature
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import custody_generation_grants as g
-from serverware import native_pilot_genesis_encrypted_authority as encrypted
-from serverware import native_pilot_genesis_verifier_authority as verifier
-from serverware import native_pilot_genesis_key_profile as keys
-from serverware import native_shadow_key_contract as contract
+from catchplate import custody_generation_grants as g
+from catchplate import native_pilot_genesis_encrypted_authority as encrypted
+from catchplate import native_pilot_genesis_verifier_authority as verifier
+from catchplate import native_pilot_genesis_key_profile as keys
+from catchplate import native_shadow_key_contract as contract
 import test_native_pilot_genesis_key_authority as key_tests
 import test_native_pilot_genesis_parent_authority as parents
 
 p = g.p
-ENCRYPTED_DOMAIN = "serverware.nativeShadowEncryptedKeyDelivery.signature/v1"
-VERIFIER_DOMAIN = "serverware.nativeShadowVerifierTransport.signature/v1"
+ENCRYPTED_DOMAIN = "catchplate.nativeShadowEncryptedKeyDelivery.signature/v1"
+VERIFIER_DOMAIN = "catchplate.nativeShadowVerifierTransport.signature/v1"
 
 
 def clocks_for(base):
@@ -36,8 +36,8 @@ def clocks_for(base):
 
 
 def independent_signed(api, domain, payload, key):
-    message = (b"serverware.signedEnvelope/v1\0" + domain.encode("ascii")
-        + b"\0serverware.canonicalJson/ascii-integer-v1\0" + g.canonical(payload))
+    message = (b"catchplate.signedEnvelope/v1\0" + domain.encode("ascii")
+        + b"\0catchplate.canonicalJson/ascii-integer-v1\0" + g.canonical(payload))
     return g.canonical({"apiVersion": api, "authorization": {"payload": payload,
         "signature": p.encoded(key.sign(message))}})
 
@@ -64,8 +64,8 @@ def replace_c9(source, payload, *, runtime_raw=None):
         result["input"]["runtimeOriginal"] = runtime_raw.decode("ascii")
         payload["runtimeConfig"]["sha256"] = p.sha(runtime_raw)
     result["input"]["payloadOriginal"] = g.canonical(payload).decode("ascii")
-    result["raw"] = g.canonical({"apiVersion": "serverware.policyCustodyGuestDelivery/v1", "payload": payload,
-        "signatureBase64url": p.encoded(source["key"].sign(b"serverware.policyCustodyGuestDelivery.signature/v1\0" + g.canonical(payload)))})
+    result["raw"] = g.canonical({"apiVersion": "catchplate.policyCustodyGuestDelivery/v1", "payload": payload,
+        "signatureBase64url": p.encoded(source["key"].sign(b"catchplate.policyCustodyGuestDelivery.signature/v1\0" + g.canonical(payload)))})
     return result
 
 
@@ -78,9 +78,9 @@ def attach_ciphertext(base, role, *, runtime_raw=None):
     clocks = clocks_for(base)
     pair = keys.admitted_pair(role, *(base["pairs"][role][name] for name in encrypted.PAIR_FIELDS), **clocks)
     scope = pair["expectedScope"]
-    inventory_raw = g.canonical({"apiVersion": "serverware.nativeShadowLocalKeyInventory/v1",
+    inventory_raw = g.canonical({"apiVersion": "catchplate.nativeShadowLocalKeyInventory/v1",
         **{name: scope[name] for name in ("fullKeySetRootSha256", "localKeySetRootSha256", "localKeys")}})
-    ciphertext_raw = g.canonical({"apiVersion": "serverware.nativeShadowEncryptedLocalKeys/v1",
+    ciphertext_raw = g.canonical({"apiVersion": "catchplate.nativeShadowEncryptedLocalKeys/v1",
         "inventorySha256": p.sha(inventory_raw), "nonce": p.encoded(bytes([41 + keys.ROLES.index(role)]) * 12),
         "ciphertext": p.encoded(b"SYNTHETIC OPAQUE CIPHERTEXT, NOT A SECRET / " + role.encode("ascii"))})
     source = base["deliveries"][role]
@@ -90,9 +90,9 @@ def attach_ciphertext(base, role, *, runtime_raw=None):
         "length": len(ciphertext_raw), "signing": None}]
     delivery = replace_c9(source, payload, runtime_raw=runtime_raw)
     pair_raws = rebind_pair(base, role, delivery)
-    transport = {"apiVersion": "serverware.nativeShadowKeyKmsTransport/v1", "kmsParentPort": 2048,
+    transport = {"apiVersion": "catchplate.nativeShadowKeyKmsTransport/v1", "kmsParentPort": 2048,
         "kmsKeyId": "synthetic-kms-key-not-contacted", "ciphertextBlobSha256": key_tests.labelled(role + "-unexecuted-kms-blob"),
-        "encryptionContext": {"serverwarePurpose": "native-shadow-local-role-keys/v1", "testOnly": role},
+        "encryptionContext": {"catchplatePurpose": "native-shadow-local-role-keys/v1", "testOnly": role},
         "kekSha256": key_tests.labelled(role + "-unexecuted-kek"), "encryptedInventorySha256": p.sha(ciphertext_raw),
         "helperImage": {"profile": "sealed-memfd-squashfs-v1", "imagePath": contract.IMAGE,
             "imageSha256": key_tests.labelled("unexecuted-helper-image"),
@@ -103,11 +103,11 @@ def attach_ciphertext(base, role, *, runtime_raw=None):
     encrypted_input = p.canonical({"apiVersion": encrypted.API, **common,
         "transportOriginal": transport_raw.decode("ascii"), "encryptedInventoryOriginal": ciphertext_raw.decode("ascii")})
     checked = encrypted.prepare_input(role, encrypted_input, **clocks)
-    encrypted_raw = independent_signed("serverware.nativeShadowEncryptedKeyDelivery/v1", ENCRYPTED_DOMAIN,
+    encrypted_raw = independent_signed("catchplate.nativeShadowEncryptedKeyDelivery/v1", ENCRYPTED_DOMAIN,
         checked["payload"], base["supervisor_key"])
     verifier_input = p.canonical({"apiVersion": verifier.API, **common, "parentPort": 4096 + keys.ROLES.index(role)})
     checked = verifier.prepare_input(role, verifier_input, **clocks)
-    verifier_raw = independent_signed("serverware.nativeShadowVerifierTransport/v1", VERIFIER_DOMAIN,
+    verifier_raw = independent_signed("catchplate.nativeShadowVerifierTransport/v1", VERIFIER_DOMAIN,
         checked["payload"], base["supervisor_key"])
     return {"delivery": delivery, "pair": pair_raws, "inventory_raw": inventory_raw, "ciphertext_raw": ciphertext_raw,
         "transport_raw": transport_raw, "encrypted_input_raw": encrypted_input, "encrypted_raw": encrypted_raw,
@@ -159,7 +159,7 @@ class GenesisTransportAuthorityTests(unittest.TestCase):
                     ("verifierKeyMaterialSha256", "keyMaterialSha256")):
                 self.assertEqual(payload[target], selected[source])
             self.assertEqual(selected["role"], "custody-attestation-verifier")
-            self.assertEqual(context["path"], "/etc/serverware/native-pilot-inputs/native-" + role + "-verifier.json")
+            self.assertEqual(context["path"], "/etc/catchplate/native-pilot-inputs/native-" + role + "-verifier.json")
             self.assertEqual(verifier.checked_result(role, row["verifier_input_raw"],
                 {"original": row["verifier_raw"].decode("ascii"), "sha256": p.sha(row["verifier_raw"])}, **self.f["clocks"]), row["verifier_raw"])
 
@@ -192,8 +192,8 @@ class GenesisTransportAuthorityTests(unittest.TestCase):
 
     def test_only_v1_kms_local_role_profile_and_exact_supplied_helper_are_accepted(self):
         original = self.input("encrypted")
-        for mutate in (lambda v: v.update(apiVersion="serverware.nativeShadowKeyKmsTransport/v2"),
-                lambda v: v["encryptionContext"].update(serverwarePurpose="native-shadow-local-role-keys-and-request-commitment/v2"),
+        for mutate in (lambda v: v.update(apiVersion="catchplate.nativeShadowKeyKmsTransport/v2"),
+                lambda v: v["encryptionContext"].update(catchplatePurpose="native-shadow-local-role-keys-and-request-commitment/v2"),
                 lambda v: v["helperImage"].update(imagePath="/approved/arbitrary-helper.squashfs"),
                 lambda v: v.update(kmsParentPort=(1 << 32) - 1)):
             value = copy.deepcopy(original); wire = g.document(value["transportOriginal"].encode("ascii"), 16384)
@@ -203,12 +203,12 @@ class GenesisTransportAuthorityTests(unittest.TestCase):
         self.refused("encrypted", value)
 
     def test_hot_role_fallback_unknown_fields_and_output_apis_are_closed(self):
-        for kind, old_api in (("encrypted", "serverware.nativePilotEncryptedAuthorityInput/v1"),
-                ("verifier", "serverware.nativePilotVerifierAuthorityInput/v1")):
-            for changes in ({"apiVersion": old_api}, {"role": "retrieval"}, {"path": "/etc/serverware/native-shadow-public-exchange.json"}):
+        for kind, old_api in (("encrypted", "catchplate.nativePilotEncryptedAuthorityInput/v1"),
+                ("verifier", "catchplate.nativePilotVerifierAuthorityInput/v1")):
+            for changes in ({"apiVersion": old_api}, {"role": "retrieval"}, {"path": "/etc/catchplate/native-shadow-public-exchange.json"}):
                 self.refused(kind, {**self.input(kind), **changes})
         role, row = keys.ROLES[0], self.f["roles"][keys.ROLES[0]]
-        value = g.document(row["encrypted_raw"], 65536); value["apiVersion"] = "serverware.nativeShadowEncryptedKeyDelivery/v2"
+        value = g.document(row["encrypted_raw"], 65536); value["apiVersion"] = "catchplate.nativeShadowEncryptedKeyDelivery/v2"
         raw = g.canonical(value)
         with self.assertRaises(ValueError):
             encrypted.checked_result(role, row["encrypted_input_raw"], {"original": raw.decode("ascii"), "sha256": p.sha(raw)}, **self.f["clocks"])

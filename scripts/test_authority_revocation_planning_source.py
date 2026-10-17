@@ -61,7 +61,7 @@ def keywords(node):
 class RevocationPlanningSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.text, cls.tree = source("serverware/authority_revocation_planning.py", 64 * 1024)
+        cls.text, cls.tree = source("catchplate/authority_revocation_planning.py", 64 * 1024)
         cls.owner = definition(cls.tree, "RevocationObservedPlanner")
 
     def shape(self, actual, expected):
@@ -92,7 +92,7 @@ class RevocationPlanningSourceTests(unittest.TestCase):
             self.assertNotIn(forbidden, self.text)
 
     def test_private_owner_has_no_service_dispatch_or_expanded_database_credentials(self):
-        service_text, service = source("serverware/authority_service.py", 2 * 1024 * 1024)
+        service_text, service = source("catchplate/authority_service.py", 2 * 1024 * 1024)
         process = definition(service, "AuthorityProcess")
         handle = definition(process, "handle")
         admissions = calls(handle, "self._verify_internal_envelope")
@@ -112,12 +112,12 @@ class RevocationPlanningSourceTests(unittest.TestCase):
                 self.assertNotIn(forbidden, ast.unparse(public))
         credentials = definition(process, "_reject_wrong_credentials")
         self.shape(assigned(credentials, "allowed"), '''{
-            "verifier": {"SERVERWARE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN_FD"},
-            "planner": {"SERVERWARE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN_FD"},
-            "planner-writer": {"SERVERWARE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN_FD"},
-            "issuer": {"SERVERWARE_POLICY_AUTHORITY_CAPABILITY_ISSUER_POSTGRES_DSN_FD"},
-            "executor": {"SERVERWARE_POLICY_AUTHORITY_EXECUTOR_POSTGRES_DSN_FD"}}[self.role_name]''')
-        registry, tree = source("serverware/authority_transition_registry.py")
+            "verifier": {"CATCHPLATE_POLICY_AUTHORITY_VERIFIER_READ_POSTGRES_DSN_FD"},
+            "planner": {"CATCHPLATE_POLICY_AUTHORITY_PLANNER_READ_POSTGRES_DSN_FD"},
+            "planner-writer": {"CATCHPLATE_POLICY_AUTHORITY_PLANNER_WRITER_POSTGRES_DSN_FD"},
+            "issuer": {"CATCHPLATE_POLICY_AUTHORITY_CAPABILITY_ISSUER_POSTGRES_DSN_FD"},
+            "executor": {"CATCHPLATE_POLICY_AUTHORITY_EXECUTOR_POSTGRES_DSN_FD"}}[self.role_name]''')
+        registry, tree = source("catchplate/authority_transition_registry.py")
         self.assertNotIn("authority_revocation_planning", registry)
         self.shape(assigned(tree, "_CLOSURE_ERRORS"), "_registry_closure_errors()")
         guards = [node for node in tree.body if isinstance(node, ast.If)]
@@ -170,7 +170,7 @@ class RevocationPlanningSourceTests(unittest.TestCase):
             "maximumPlanAgeNs", "maximumClockSkewNs"})''')
         self.shape(assigned(self.tree, "_CALL_CONTEXT"),
             'retention.production._CONTEXT_FIELDS - _CONFIGURED_CONTEXT - {"expectedBefore"}')
-        _, production = source("serverware/authority_revocation_plan_production.py")
+        _, production = source("catchplate/authority_revocation_plan_production.py")
         fields = assigned(production, "_CONTEXT_FIELDS")
         self.assertEqual({item.value for item in fields.args[0].elts} - {
             "expectedPlannerIdentity", "expectedVerifierIdentity", "expectedBefore",
@@ -231,10 +231,10 @@ class RevocationPlanningSourceTests(unittest.TestCase):
         self.assertFalse(any("authority_planner" in ast.unparse(node) or "psycopg" in ast.unparse(node)
             for node in eager))
         lazy = [node for node in body.body if isinstance(node, (ast.Import, ast.ImportFrom))]
-        self.assertEqual([ast.unparse(node) for node in lazy], ["from serverware import authority_planner as planner"])
+        self.assertEqual([ast.unparse(node) for node in lazy], ["from catchplate import authority_planner as planner"])
         lazy = [node for node in read.body if isinstance(node, (ast.Import, ast.ImportFrom))]
         self.assertEqual([ast.unparse(node) for node in lazy], [
-            "from serverware import authority_planner as planner", "import psycopg",
+            "from catchplate import authority_planner as planner", "import psycopg",
             "from psycopg.rows import dict_row"])
         self.shape(read.decorator_list[0], "contextmanager")
         self.shape(assigned(self.tree, "_READ_OPERATIONS"), '''frozenset({"webauthn.credential.revoke",
@@ -300,7 +300,7 @@ class RevocationPlanningSourceTests(unittest.TestCase):
         self.shape(call(guarded.handlers[0], "reader._close_after_failure"), "reader._close_after_failure(connection)")
         self.assertIsInstance(guarded.handlers[0].body[-1], ast.Raise)
         self.assertIsNone(guarded.handlers[0].body[-1].exc)
-        _, lifecycle = source("serverware/authority_revocation_root_reader.py")
+        _, lifecycle = source("catchplate/authority_revocation_root_reader.py")
         connect = definition(lifecycle, "_connect")
         self.shape(call(connect, "roots._callback"), "roots._callback(work, open_connection)")
         self.shape(call(connect, "_close_after_failure"), "_close_after_failure(connection)")

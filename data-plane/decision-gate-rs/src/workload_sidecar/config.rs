@@ -36,7 +36,7 @@ fn destination(value: &str) -> bool {
 }
 impl Settings {
     fn validate(&self) -> Result<(), String> {
-        ensure(self.api_version == "serverware.nativeWorkloadSidecar/v1"
+        ensure(self.api_version == "catchplate.nativeWorkloadSidecar/v1"
             && self.profile == "native-attested-local-connect-v1", "sidecar profile differs")?;
         ensure(!self.workload_id.is_empty() && self.workload_id.len() <= 128
             && self.workload_id.as_bytes()[0].is_ascii_alphanumeric()

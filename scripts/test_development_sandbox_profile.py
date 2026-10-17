@@ -13,14 +13,14 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 _ENVIRONMENT = {
-    "SERVERWARE_DEVELOPMENT_SANDBOX": "1", "SERVERWARE_RELEASE_CHANNEL": "dev",
-    "SERVERWARE_PROCESS_MODE": "serverware-control-plane",
-    "SERVERWARE_METADATA_STORE_BACKEND": "sqlite", "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite",
-    "SERVERWARE_GRANT_STORE_BACKEND": "sqlite", "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
-    "SERVERWARE_KEY_RELEASE_REQUIRED": "0", "PYTHONDONTWRITEBYTECODE": "1",
+    "CATCHPLATE_DEVELOPMENT_SANDBOX": "1", "CATCHPLATE_RELEASE_CHANNEL": "dev",
+    "CATCHPLATE_PROCESS_MODE": "catchplate-control-plane",
+    "CATCHPLATE_METADATA_STORE_BACKEND": "sqlite", "CATCHPLATE_AUDIT_STORE_BACKEND": "sqlite",
+    "CATCHPLATE_GRANT_STORE_BACKEND": "sqlite", "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0",
+    "CATCHPLATE_KEY_RELEASE_REQUIRED": "0", "PYTHONDONTWRITEBYTECODE": "1",
 }
-_MARKER = ".serverware-development-sandbox.json"
-_MARKER_BYTES = b'{"schema": "serverware.developmentSandbox/v1", "syntheticOnly": true}\n'
+_MARKER = ".catchplate-development-sandbox.json"
+_MARKER_BYTES = b'{"schema": "catchplate.developmentSandbox/v1", "syntheticOnly": true}\n'
 
 
 def refused(call):
@@ -32,10 +32,10 @@ def refused(call):
 
 
 def worker(operation):
-    from serverware import development_sandbox as profile
+    from catchplate import development_sandbox as profile
     if operation == "inactive":
         assert not profile.active()
-        assert not Path(os.environ["SERVERWARE_DATA_DIR"]).exists()
+        assert not Path(os.environ["CATCHPLATE_DATA_DIR"]).exists()
         return
     if operation == "refuse":
         refused(profile.activate)
@@ -43,36 +43,36 @@ def worker(operation):
         return
     if operation == "refuse-before-config":
         refused(profile.activate)
-        assert "serverware.config" not in sys.modules
+        assert "catchplate.config" not in sys.modules
         assert not profile.active()
         return
     if operation == "stale-import":
-        original = os.environ["SERVERWARE_DATA_DIR"]
-        os.environ["SERVERWARE_DATA_DIR"] = original + "-old"
-        from serverware import config
-        os.environ["SERVERWARE_DATA_DIR"] = original
+        original = os.environ["CATCHPLATE_DATA_DIR"]
+        os.environ["CATCHPLATE_DATA_DIR"] = original + "-old"
+        from catchplate import config
+        os.environ["CATCHPLATE_DATA_DIR"] = original
         refused(profile.activate)
         assert not profile.active()
         return
     profile.activate()
     assert profile.active()
-    directory = Path(os.environ["SERVERWARE_DATA_DIR"])
+    directory = Path(os.environ["CATCHPLATE_DATA_DIR"])
     if operation == "activate":
         profile.activate()
         assert profile.active()
     elif operation == "change-core":
-        os.environ["SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED"] = "1"
+        os.environ["CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED"] = "1"
         refused(profile.active)
     elif operation == "add-authority":
-        os.environ["SERVERWARE_POLICY_AUTHORITY_RUNTIME_TRUST_PATH"] = "/not-opened"
+        os.environ["CATCHPLATE_POLICY_AUTHORITY_RUNTIME_TRUST_PATH"] = "/not-opened"
         refused(profile.active)
     elif operation == "add-key":
-        os.environ["SERVERWARE_POLICY_SIGNING_KEY"] = "/not-opened"
+        os.environ["CATCHPLATE_POLICY_SIGNING_KEY"] = "/not-opened"
         refused(profile.active)
     elif operation == "startup-pid":
-        os.environ["SERVERWARE_CONTROL_PLANE_STARTUP_VALIDATED_PID"] = str(os.getpid())
+        os.environ["CATCHPLATE_CONTROL_PLANE_STARTUP_VALIDATED_PID"] = str(os.getpid())
         assert profile.active()
-        os.environ["SERVERWARE_CONTROL_PLANE_STARTUP_VALIDATED_PID"] = str(os.getpid() + 1)
+        os.environ["CATCHPLATE_CONTROL_PLANE_STARTUP_VALIDATED_PID"] = str(os.getpid() + 1)
         refused(profile.active)
     elif operation == "fork":
         child = os.fork()
@@ -106,14 +106,14 @@ def worker(operation):
 
 class DevelopmentSandboxProfileTests(unittest.TestCase):
     def setUp(self):
-        self.scratch = tempfile.TemporaryDirectory(prefix="serverware-sandbox-profile-",
+        self.scratch = tempfile.TemporaryDirectory(prefix="catchplate-sandbox-profile-",
             dir=os.getenv("TMPDIR", "/srv/catchplate-fast/tmp"))
         self.addCleanup(self.scratch.cleanup)
         self.root = Path(self.scratch.name)
         self.data = self.root / "data"
         self.environment = {key: value for key, value in os.environ.items()
-                            if not key.startswith("SERVERWARE_")}
-        self.environment.update(_ENVIRONMENT, SERVERWARE_DATA_DIR=str(self.data))
+                            if not key.startswith("CATCHPLATE_")}
+        self.environment.update(_ENVIRONMENT, CATCHPLATE_DATA_DIR=str(self.data))
 
     def run_worker(self, operation, *, environment=None):
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation],
@@ -160,7 +160,7 @@ class DevelopmentSandboxProfileTests(unittest.TestCase):
         target.mkdir(mode=0o700)
         self.data.symlink_to(target, target_is_directory=True)
         self.run_worker("refuse")
-        nested = dict(self.environment, SERVERWARE_DATA_DIR=str(self.data / "nested"))
+        nested = dict(self.environment, CATCHPLATE_DATA_DIR=str(self.data / "nested"))
         self.run_worker("refuse", environment=nested)
         self.assertEqual(list(target.iterdir()), [])
 
@@ -169,7 +169,7 @@ class DevelopmentSandboxProfileTests(unittest.TestCase):
         marker = self.data / _MARKER
         variants = (_MARKER_BYTES.replace(b"true", b"1"), _MARKER_BYTES.replace(b"v1", b"v2"),
                     _MARKER_BYTES[:-2] + b', "extra": true}\n',
-                    b'{"schema":"serverware.developmentSandbox/v1","syntheticOnly":false,"syntheticOnly":true}')
+                    b'{"schema":"catchplate.developmentSandbox/v1","syntheticOnly":false,"syntheticOnly":true}')
         for payload in variants:
             with self.subTest(payload=payload):
                 marker.write_bytes(payload)
@@ -191,16 +191,16 @@ class DevelopmentSandboxProfileTests(unittest.TestCase):
         self.run_worker("refuse")
 
     def test_inherited_authority_provider_and_external_key_config_is_refused_before_import(self):
-        selections = ({"SERVERWARE_POLICY_AUTHORITY_RUNTIME_TRUST_PATH": "/not-opened"},
-            {"SERVERWARE_POLICY_SIGNING_KEY": "/not-opened"},
-            {"SERVERWARE_RESPONSE_SIGNING_KEY": "/not-opened"},
-            {"SERVERWARE_OIDC_ENABLED": "1"}, {"SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET": "synthetic-fixture"},
-            {"SERVERWARE_TWITTER_OAUTH_CLIENT_SECRET": "synthetic-fixture"},
-            {"SERVERWARE_WEBAUTHN_RECOVERY_ENABLED": "1"},
-            {"SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY": "/not-opened"},
-            {"SERVERWARE_METADATA_STORE_POSTGRES_DSN": "synthetic-not-a-dsn"},
-            {"SERVERWARE_TEE_QUOTE_COMMAND": "/not-executed"}, {"SERVERWARE_ADMIN_TOKEN_FILE": "/not-opened"},
-            {"SERVERWARE_MASTER_KEY": "synthetic-not-a-key"}, {"SERVERWARE_PRODUCTION_IMAGE": "1"})
+        selections = ({"CATCHPLATE_POLICY_AUTHORITY_RUNTIME_TRUST_PATH": "/not-opened"},
+            {"CATCHPLATE_POLICY_SIGNING_KEY": "/not-opened"},
+            {"CATCHPLATE_RESPONSE_SIGNING_KEY": "/not-opened"},
+            {"CATCHPLATE_OIDC_ENABLED": "1"}, {"CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET": "synthetic-fixture"},
+            {"CATCHPLATE_TWITTER_OAUTH_CLIENT_SECRET": "synthetic-fixture"},
+            {"CATCHPLATE_WEBAUTHN_RECOVERY_ENABLED": "1"},
+            {"CATCHPLATE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY": "/not-opened"},
+            {"CATCHPLATE_METADATA_STORE_POSTGRES_DSN": "synthetic-not-a-dsn"},
+            {"CATCHPLATE_TEE_QUOTE_COMMAND": "/not-executed"}, {"CATCHPLATE_ADMIN_TOKEN_FILE": "/not-opened"},
+            {"CATCHPLATE_MASTER_KEY": "synthetic-not-a-key"}, {"CATCHPLATE_PRODUCTION_IMAGE": "1"})
         for selection in selections:
             with self.subTest(settings=list(selection)):
                 self.run_worker("refuse-before-config", environment=dict(self.environment, **selection))
@@ -211,7 +211,7 @@ class DevelopmentSandboxProfileTests(unittest.TestCase):
         self.assertFalse(self.data.exists())
 
     def test_request_rule_blocks_get_oauth_and_preserves_fixed_synthetic_routes(self):
-        from serverware import development_sandbox as profile
+        from catchplate import development_sandbox as profile
         for method in ("GET", "HEAD", "POST"):
             for path in ("/api/auth/oidc/start", "/api/auth/oidc/callback", "/api/oauth/callback/google"):
                 self.assertFalse(profile.request_allowed(method, path))

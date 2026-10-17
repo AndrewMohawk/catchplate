@@ -27,12 +27,12 @@ def prohibit_network(event, _args):
 
 sys.addaudithook(prohibit_network)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware import ecr_image_artifact as artifact
-from serverware import ecr_publication_plan as planner
-from serverware import ecr_sdk_protocol as protocol
+from catchplate import ecr_image_artifact as artifact
+from catchplate import ecr_publication_plan as planner
+from catchplate import ecr_sdk_protocol as protocol
 
 
-REGISTRY, REGION, REPOSITORY = "123456789012", "us-east-1", "serverware-fixture"
+REGISTRY, REGION, REPOSITORY = "123456789012", "us-east-1", "catchplate-fixture"
 NOW, MONO = 1_800_000_000, 10_000_000_000
 MIB = 1024 * 1024
 PART_SIZE = MIB + 17  # Two bounded comparison reads; no claimed AWS minimum.
@@ -289,7 +289,7 @@ class EcrPublicationPlanTests(unittest.TestCase):
             missing = {key: value for key, value in document.items() if key != field}
             self.checkpoint_refuses_document(state, missing)
         self.checkpoint_refuses_document(state, {**document, "unexpected": "PRIVATE-CANARY"})
-        self.checkpoint_refuses_document(state, {**document, "schema": "serverware.ecrPublicationCheckpoint/v2"})
+        self.checkpoint_refuses_document(state, {**document, "schema": "catchplate.ecrPublicationCheckpoint/v2"})
         for field in ("revision", "calls", "part_bytes", "comparison_bytes", "comparison_calls"):
             self.checkpoint_refuses_document(state, {**document, field: True})
             self.checkpoint_refuses_document(state, {**document, field: -1})

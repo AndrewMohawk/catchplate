@@ -1,0 +1,44 @@
+[Unit]
+Description=Catchplate Coder v12 private DinD startup and shutdown reconciliation
+PartOf=catchplate-coder-v12.target
+After=local-fs.target network-online.target catchplate-coder-runtime-v12.service
+Requires=catchplate-coder-runtime-v12.service
+Wants=network-online.target
+Before=catchplate-coder-lifecycle-privileged-v12.service catchplate-coder-lifecycle-v12.service
+RequiresMountsFor=/sys/fs/cgroup /var/lib/catchplate/coder-controller-v12
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+LoadCredentialEncrypted=lifecycle-privileged-authority-key:@RELEASE_ROOT@/credentials/lifecycle-privileged-authority-key.cred
+ExecStart=@RELEASE_ROOT@/bin/catchplate-coder-lifecycle-privileged-v12 admin-reconcile-private-dind-v12 --config @RELEASE_ROOT@/config/lifecycle-privileged-v12.conf --scope destroy-all-nonterminal-lanes
+ExecStop=@RELEASE_ROOT@/bin/catchplate-coder-lifecycle-privileged-v12 admin-reconcile-private-dind-v12 --config @RELEASE_ROOT@/config/lifecycle-privileged-v12.conf --scope destroy-all-owned-lanes
+RemainAfterExit=yes
+TimeoutStartSec=180s
+TimeoutStopSec=180s
+KillMode=control-group
+SendSIGKILL=yes
+FinalKillSignal=SIGKILL
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_ADMIN CAP_KILL CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_SETUID CAP_SETGID CAP_MKNOD CAP_SYS_CHROOT
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectKernelTunables=no
+ProtectControlGroups=no
+PrivateTmp=yes
+PrivateDevices=no
+PrivateIPC=yes
+PrivateMounts=no
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+SystemCallArchitectures=native
+ReadWritePaths=/run/catchplate/coder/v12/dind /run/netns /var/lib/catchplate/coder-controller-v12/lifecycle-privileged /var/lib/catchplate/coder-controller-v12/dind -/sys/fs/cgroup/system.slice/catchplate-coder-lifecycle-privileged-v12.service
+
+[Install]
+WantedBy=catchplate-coder-v12.target

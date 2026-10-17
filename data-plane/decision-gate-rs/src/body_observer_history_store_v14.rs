@@ -25,7 +25,7 @@ use std::os::fd::OwnedFd;
 
 // Explicitly incompatible with the old four-file local v14 marker. Neither
 // signed evidence v13 nor the unsigned history v14 record formats are changed.
-const COMMIT_PREFIX: &[u8] = b"serverware.controllerBodyInitialHistoryCommit/v15\0";
+const COMMIT_PREFIX: &[u8] = b"catchplate.controllerBodyInitialHistoryCommit/v15\0";
 const COMMIT_PAYLOAD_BYTES: usize = 584;
 pub(super) const MAX_INITIAL_COMMIT_BYTES: usize = 640;
 const MAX_STORED_BYTES: u64 = MAX_MAPS_BYTES as u64 + MAX_SNAPSHOT_BYTES as u64

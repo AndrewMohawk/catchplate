@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-shadow-checkpoint.v1.schema.json",
-  "title": "Serverware Policy Shadow Checkpoint v1",
+  "$id": "https://catchplate.invalid/schemas/policy-shadow-checkpoint.v1.schema.json",
+  "title": "Catchplate Policy Shadow Checkpoint v1",
   "$comment": "Every nonempty checkpoint is cumulative from observation sequence one and the assignment's first persisted ingress sequence. Every ingress, including sampled-out, transport-excluded, and capture-failed traffic, has a signed ingress/accounting envelope so the verifier rejects all sequence gaps. A zero-ingress checkpoint instead carries explicit null heads, zero counters/work, normative empty roots, continuous signed no-ingress heartbeats, and a signed no-ingress close. Native verification recomputes observation, ingress, active-decision, authority, response, terminal-receipt, publication-receipt, and signed-heartbeat roots plus all counters and re-resolves every signer against the assignment authority-key-independence set. Readiness independently requires positive traffic sufficiency.",
   "type": "object",
   "additionalProperties": false,
@@ -18,10 +18,10 @@
     "signature"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.policyShadowCheckpoint/v1"},
+    "apiVersion": {"const": "catchplate.policyShadowCheckpoint/v1"},
     "kind": {"const": "PolicyShadowCheckpoint"},
-    "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
-    "signatureDomain": {"const": "serverware.policyShadowCheckpoint/v1"},
+    "canonicalProfile": {"const": "catchplate.canonicalJson/ascii-integer-v1"},
+    "signatureDomain": {"const": "catchplate.policyShadowCheckpoint/v1"},
     "payload": {"$ref": "#/$defs/payload"},
     "payloadSha256": {"$ref": "#/$defs/sha256"},
     "signatureAlgorithm": {"const": "Ed25519"},
@@ -452,7 +452,7 @@
         },
         "cumulativeObservationRootSha256": {
           "$ref": "#/$defs/sha256",
-          "$comment": "Leaves are SHA-256(serverware.policyShadowMerkleLeaf/v1 || 0x00 || sequence_be_u64 || digest_32); parents are SHA-256(serverware.policyShadowMerkleNode/v1 || 0x01 || left_32 || right_32); an unpaired node is promoted unchanged."
+          "$comment": "Leaves are SHA-256(catchplate.policyShadowMerkleLeaf/v1 || 0x00 || sequence_be_u64 || digest_32); parents are SHA-256(catchplate.policyShadowMerkleNode/v1 || 0x01 || left_32 || right_32); an unpaired node is promoted unchanged."
         },
         "cumulativeIngressRootSha256": {"$ref": "#/$defs/sha256"},
         "cumulativeActiveDecisionRootSha256": {
@@ -595,10 +595,10 @@
       "additionalProperties":false,
       "required":["apiVersion","kind","canonicalProfile","signatureDomain","payload","payloadSha256","signatureAlgorithm","signingKeyId","signingKeySpkiSha256","signature"],
       "properties":{
-        "apiVersion":{"const":"serverware.policyShadowHeartbeat/v1"},
+        "apiVersion":{"const":"catchplate.policyShadowHeartbeat/v1"},
         "kind":{"const":"PolicyShadowHeartbeat"},
-        "canonicalProfile":{"const":"serverware.canonicalJson/ascii-integer-v1"},
-        "signatureDomain":{"const":"serverware.policyShadowHeartbeat/v1"},
+        "canonicalProfile":{"const":"catchplate.canonicalJson/ascii-integer-v1"},
+        "signatureDomain":{"const":"catchplate.policyShadowHeartbeat/v1"},
         "payload":{"$ref":"#/$defs/heartbeatPayload"},
         "payloadSha256":{"$ref":"#/$defs/sha256"},
         "signatureAlgorithm":{"const":"Ed25519"},
@@ -764,10 +764,10 @@
         "signature"
       ],
       "properties": {
-        "apiVersion": {"const": "serverware.policyShadowWindowClosure/v1"},
+        "apiVersion": {"const": "catchplate.policyShadowWindowClosure/v1"},
         "kind": {"const": "PolicyShadowWindowClosure"},
-        "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
-        "signatureDomain": {"const": "serverware.policyShadowWindowClosure/v1"},
+        "canonicalProfile": {"const": "catchplate.canonicalJson/ascii-integer-v1"},
+        "signatureDomain": {"const": "catchplate.policyShadowWindowClosure/v1"},
         "payload": {"$ref": "#/$defs/windowClosurePayload"},
         "payloadSha256": {"$ref": "#/$defs/sha256"},
         "signatureAlgorithm": {"const": "Ed25519"},

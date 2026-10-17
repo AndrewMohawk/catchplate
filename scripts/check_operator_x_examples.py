@@ -39,9 +39,9 @@ from scripts.check_operator_ordinary_client import (
 from scripts import operator_x_examples_fixture as fixture
 from scripts import operator_x_fixture_network as isolated
 
-SCHEMA = "serverware.privateXExamplesCheck/v1"
+SCHEMA = "catchplate.privateXExamplesCheck/v1"
 PROXY = "https://proxy.operator-basic.example.test:8443"
-DESCRIPTOR = {"schema": "serverware.operatorXAppReadGate/v1",
+DESCRIPTOR = {"schema": "catchplate.operatorXAppReadGate/v1",
     "adapter": "x.app_read.v1", "operation": "x.username.read"}
 COMMANDS = {
     "node": ("/node", "/app/examples/x-username-node/client.mjs"),
@@ -74,11 +74,11 @@ def expected_output(client):
 
 def client_environment(client, application, token, *, wrong_username=False):
     require(client in fixture.CLIENTS, "unknown X example client")
-    return {"LANG": "C.UTF-8", "SERVERWARE_PROXY_URL": PROXY,
-        "SERVERWARE_APP_ID": application, "SERVERWARE_PROXY_TOKEN": token,
-        "SERVERWARE_X_USERNAME": "other_user" if wrong_username else fixture.USERNAME,
-        "SERVERWARE_CA_FILE": "/client-trust/inner-ca.pem",
-        "SERVERWARE_PROXY_CA_FILE": "/client-trust/outer-ca.pem"}
+    return {"LANG": "C.UTF-8", "CATCHPLATE_PROXY_URL": PROXY,
+        "CATCHPLATE_APP_ID": application, "CATCHPLATE_PROXY_TOKEN": token,
+        "CATCHPLATE_X_USERNAME": "other_user" if wrong_username else fixture.USERNAME,
+        "CATCHPLATE_CA_FILE": "/client-trust/inner-ca.pem",
+        "CATCHPLATE_PROXY_CA_FILE": "/client-trust/outer-ca.pem"}
 
 
 def run_example(client, environment, seconds):
@@ -163,7 +163,7 @@ class ExamplesCheck(OperatorCatalogCheck):
 
     def __init__(self, args):
         isolated.assert_isolated_network()
-        require(args.control_base == "http://serverware:3000"
+        require(args.control_base == "http://catchplate:3000"
             and args.management_base == "http://127.0.0.1:9091" and args.proxy_url == PROXY
             and args.upstream_address is None, "fixed isolated X endpoints required")
         super().__init__(argparse.Namespace(**{**vars(args), "upstream_address": isolated.LOOPBACK}))
@@ -200,7 +200,7 @@ class ExamplesCheck(OperatorCatalogCheck):
 
     def catalog(self):
         value = self.control_json(PREFIX + "/catalog", authenticated=True)
-        require(value.get("schema") == "serverware.operatorCatalog/v1" and value.get("mode") == "operator-development"
+        require(value.get("schema") == "catchplate.operatorCatalog/v1" and value.get("mode") == "operator-development"
             and value.get("productionReady") is False and value.get("hardwareVerified") is False
             and value.get("allowed_upstreams") == [fixture.ORIGIN]
             and type(value.get("revision")) is int and all(type(value.get(key)) is list for key in COLLECTIONS),
@@ -250,8 +250,8 @@ class ExamplesCheck(OperatorCatalogCheck):
         self.connections += 1
         method = "POST" if case == "wrong_method" else "GET"
         target = fixture.TARGET + ("?unexpected=1" if case == "query" else "")
-        agent = "serverware-x-probe/" + ("request-denied" if case in REQUEST_PROBES else case)
-        dummy = "Bearer wrong-public-placeholder" if case == "wrong_dummy" else "Bearer serverware-x-placeholder-v1"
+        agent = "catchplate-x-probe/" + ("request-denied" if case in REQUEST_PROBES else case)
+        dummy = "Bearer wrong-public-placeholder" if case == "wrong_dummy" else "Bearer catchplate-x-placeholder-v1"
         raw = self.proxy.connect(self.timeout(), self.proxy_ca)
         try:
             login = base64.b64encode((app["id"] + ":" + token).encode()).decode("ascii")
@@ -297,8 +297,8 @@ class ExamplesCheck(OperatorCatalogCheck):
                     else:
                         require(response.status == fixture.status(case) and body == fixture.body(case)
                             and values.get("content-type") == "application/json"
-                            and values.get("x-serverware-policy-hash") == self.scope[2]
-                            and values.get("x-serverware-response-body-sha256") == digest(body),
+                            and values.get("x-catchplate-policy-hash") == self.scope[2]
+                            and values.get("x-catchplate-response-body-sha256") == digest(body),
                             "X provider error bytes or commitment changed")
                     return values
                 finally:
@@ -315,8 +315,8 @@ class ExamplesCheck(OperatorCatalogCheck):
         validate_row(row, len(rows), client, case)
         request_digest, operation_digest = canonical_digests(row, self.scope, self.credential_id, self.proxy.address)
         if headers is not None and case not in BLOCK_ERRORS:
-            require(headers.get("x-serverware-request-digest") == request_digest
-                and headers.get("x-serverware-operation-digest") == operation_digest,
+            require(headers.get("x-catchplate-request-digest") == request_digest
+                and headers.get("x-catchplate-operation-digest") == operation_digest,
                 "X raw response canonical V2 commitments differ")
         self.wire.append({"client": client, "case": case, "requestDigest": request_digest,
             "operationDigest": operation_digest, "responseBodySha256": row["responseBodySha256"],

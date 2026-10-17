@@ -31,7 +31,7 @@ from scripts.check_operator_ordinary_client import BLOCK, CONNECT, DENIED, LEASE
 from scripts.check_operator_github import CONNECT_DENIED, KEEP_ALIVE
 from scripts.check_operator_key_replacement import authority_projection
 
-SCHEMA = "serverware.privateGithubAppExamplesCheck/v2"
+SCHEMA = "catchplate.privateGithubAppExamplesCheck/v2"
 REPLACED = "operator_catalog.credential.github_app_key_replaced"
 LEASE_CAP_MS, WAIT_SECONDS = 5000, 5.25
 READ_PHASES = {"read_initial", "read_renewed", "read_rotated"}

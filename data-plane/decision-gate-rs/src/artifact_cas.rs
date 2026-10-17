@@ -18,10 +18,10 @@ use std::os::fd::OwnedFd;
 use std::path::{Component, Path};
 
 const ARTIFACT_MANIFEST_VERSION: &str =
-    "serverware/artifact-cas-manifest/v12";
-const ARTIFACT_CAS_DOMAIN: &str = "serverware/artifact-cas/v12";
+    "catchplate/artifact-cas-manifest/v12";
+const ARTIFACT_CAS_DOMAIN: &str = "catchplate/artifact-cas/v12";
 const ARTIFACT_METADATA_NAME: &str =
-    ".serverware-artifact-cas-v12.json";
+    ".catchplate-artifact-cas-v12.json";
 const MAX_OCI_OBJECTS: usize = 512;
 const MAX_OCI_JSON_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_OCI_BLOB_BYTES: u64 = 32 * 1024 * 1024 * 1024;
@@ -465,7 +465,7 @@ pub fn artifact_context_digest(
     oci_set_sha256: &Digest,
 ) -> Digest {
     let mut hasher = Sha256::new();
-    hasher.update(b"serverware/artifact-context/v12\0");
+    hasher.update(b"catchplate/artifact-context/v12\0");
     hasher.update(source_manifest_sha256);
     hasher.update(build_plan_sha256);
     hasher.update(build_transcript_sha256);
@@ -490,7 +490,7 @@ pub fn filesystem_content_digest(
     filesystem: &FilesystemManifestV12,
 ) -> Digest {
     let mut hasher = Sha256::new();
-    hasher.update(b"serverware/artifact-files/v12\0");
+    hasher.update(b"catchplate/artifact-files/v12\0");
     for entry in &filesystem.entries {
         hasher.update(entry.relative_path.as_bytes());
         hasher.update([0]);

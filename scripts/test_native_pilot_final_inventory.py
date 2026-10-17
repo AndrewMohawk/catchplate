@@ -17,11 +17,11 @@ import unittest
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
-from serverware import native_pilot_phase_execution as execution
-from serverware import native_pilot_phase_two_publication as publication
-from serverware import native_pilot_supervisor as supervisor
-from serverware import native_pilot_supervisor_continuation as continuation
-from serverware import native_pilot_supervisor_policy as policy
+from catchplate import native_pilot_phase_execution as execution
+from catchplate import native_pilot_phase_two_publication as publication
+from catchplate import native_pilot_supervisor as supervisor
+from catchplate import native_pilot_supervisor_continuation as continuation
+from catchplate import native_pilot_supervisor_policy as policy
 from test_native_pilot_bridge_commissioning import fixture as bridge_fixture
 from test_native_pilot_generation_scope import key_fixture
 from test_native_pilot_ordinary_generations import context, build, result
@@ -40,7 +40,7 @@ def bundle_fixture():
     delivered = json.loads(bridge["common"]["delivery_raw"])
     delivered["payload"]["runtimeConfig"]["sha256"] = sha(runtime_raw)
     delivered["signatureBase64url"] = encoded(key_fixture("bridge-c9")[0].sign(
-        b"serverware.policyCustodyGuestDelivery.signature/v1\0" + canonical(delivered["payload"])))
+        b"catchplate.policyCustodyGuestDelivery.signature/v1\0" + canonical(delivered["payload"])))
     return canonical({"runtimeOriginal": runtime_raw.decode("ascii"),
         "deliveryOriginal": canonical(delivered).decode("ascii"), "generationOriginals": originals})
 
@@ -60,7 +60,7 @@ class FinalGraphControls(unittest.TestCase):
         self.assertEqual(len(policy.LAUNCH_KEY_PURPOSES), 108)
 
     def test_source_start_gate_precedes_child_creation_not_runtime_proof(self):
-        tree = ast.parse((SCRIPTS.parent / "serverware/native_pilot_supervisor.py").read_text())
+        tree = ast.parse((SCRIPTS.parent / "catchplate/native_pilot_supervisor.py").read_text())
         owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "CommissioningSupervisor")
         start = next(node for node in owner.body if isinstance(node, ast.FunctionDef) and node.name == "start")
         calls = [ast.unparse(node.value.func) for node in start.body
@@ -72,7 +72,7 @@ class FinalGraphControls(unittest.TestCase):
         bundle = bundle_fixture()
         raw = publication.build(bundle)
         self.assertEqual(publication.prepare_input(raw), bundle)
-        expected = {"pin": {"path": "/etc/serverware/native-pilot-inputs/driver-phase-two-public.json", "sha256": sha(bundle)}}
+        expected = {"pin": {"path": "/etc/catchplate/native-pilot-inputs/driver-phase-two-public.json", "sha256": sha(bundle)}}
         self.assertEqual(publication.checked_result(raw, expected), expected)
         self.assertEqual(execution.JOBS["release"][2].maximum, publication.MAX_INPUT)
         self.assertIsNone(execution.JOBS["release"][2].key)

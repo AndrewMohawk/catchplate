@@ -8,7 +8,7 @@ readiness or token delivery. Existing LIVE staging and its private issuer peer
 remain unchanged.
 
 The only endpoint is
-`/run/serverware/oidc-session-activation-token-release/recovery-bootstrap.sock`,
+`/run/catchplate/oidc-session-activation-token-release/recovery-bootstrap.sock`,
 with root server peer `0:0`, public caller peer `65532:65532`, and an exact integer
 timeout from 1 through 30 seconds that only tightens the original deadline.
 The root-created staging pathname is `0:65532`, mode `0660`. The caller selects

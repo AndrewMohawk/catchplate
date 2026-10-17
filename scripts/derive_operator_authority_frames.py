@@ -16,7 +16,7 @@ _spec.loader.exec_module(worker)
 worker.migration = migration = frames.engine
 worker.COMMITS = {"old": migration.OLD_COMMIT, "target": migration.TARGET_COMMIT}
 worker.IMAGE = migration.IMAGE
-worker.SCHEMA = "serverware.operatorAuthorityFramesDerivation/v1"
+worker.SCHEMA = "catchplate.operatorAuthorityFramesDerivation/v1"
 worker.PIN_SCHEMA = migration.PIN_SCHEMA
 require, sha, canonical = migration.require, migration.sha, migration.canonical
 

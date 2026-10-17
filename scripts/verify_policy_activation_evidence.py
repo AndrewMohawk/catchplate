@@ -20,14 +20,14 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from serverware.policy_bundle import PolicyBundleError, compile_policy_bundle  # noqa: E402
+from catchplate.policy_bundle import PolicyBundleError, compile_policy_bundle  # noqa: E402
 from verify_production_policy_identity import verify_production_policy_identity  # noqa: E402
 
 
-API_VERSION = "serverware.policyActivationEvidence/v1"
+API_VERSION = "catchplate.policyActivationEvidence/v1"
 KIND = "PolicyActivationEvidence"
-VERIFICATION_API_VERSION = "serverware.policyActivationEvidenceVerification/v1"
-AUDIT_CHECKPOINT_API_VERSION = "serverware.auditCheckpoint/v1"
+VERIFICATION_API_VERSION = "catchplate.policyActivationEvidenceVerification/v1"
+AUDIT_CHECKPOINT_API_VERSION = "catchplate.auditCheckpoint/v1"
 AUDIT_CHECKPOINT_KIND = "AuditCheckpoint"
 MAX_PUBLIC_KEY_BYTES = 64 * 1024
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -466,7 +466,7 @@ def verify_audit_export(
         },
         "audit_export.header",
     )
-    require(header.get("kind") == "serverware.auditExport.v1", "audit export header kind mismatch")
+    require(header.get("kind") == "catchplate.auditExport.v1", "audit export header kind mismatch")
     generated_at = parse_time(header.get("generated_at"), "audit_export.header.generated_at")
     require(header.get("complete") is True, "audit export scan is incomplete")
     backend = require_string(header.get("backend"), "audit_export.header.backend")
@@ -509,7 +509,7 @@ def verify_audit_export(
     for index, wrapper_value in enumerate(wrappers):
         wrapper = require_object(wrapper_value, f"audit_export.events[{index}]")
         require_exact_fields(wrapper, {"kind", "export_index", "event"}, f"audit_export.events[{index}]")
-        require(wrapper.get("kind") == "serverware.auditEvent.v1", f"audit export event {index} kind mismatch")
+        require(wrapper.get("kind") == "catchplate.auditEvent.v1", f"audit export event {index} kind mismatch")
         require(wrapper.get("export_index") == index, f"audit export event {index} index mismatch")
         record = require_object(wrapper.get("event"), f"audit_export.events[{index}].event")
         verify_audit_record(record, index)
@@ -536,7 +536,7 @@ def verify_audit_export(
     require(generated_at >= newest_time, "audit export was generated before its newest event")
 
     require_exact_fields(footer, {"kind", "count", "complete", "chain_head"}, "audit_export.footer")
-    require(footer.get("kind") == "serverware.auditExportEnd.v1", "audit export footer kind mismatch")
+    require(footer.get("kind") == "catchplate.auditExportEnd.v1", "audit export footer kind mismatch")
     require(footer.get("count") == event_count, "audit export footer count mismatch")
     require(footer.get("complete") is True, "audit export footer reports incomplete evidence")
     require(footer.get("chain_head") == chain_head, "audit export footer chain head mismatch")
@@ -591,7 +591,7 @@ def verify_real_data_plane_record(
     require(record.get("actor_type") == "data-plane", f"{label} is not a data-plane audit record")
     require(record.get("actor_id") == expected_data_plane_actor, f"{label} has the wrong data-plane audit actor")
     event = require_object(record.get("event"), f"{label}.event")
-    require(event.get("component") == "serverware-decision-gate-rs", f"{label} is not from the Rust decision gate")
+    require(event.get("component") == "catchplate-decision-gate-rs", f"{label} is not from the Rust decision gate")
     return event
 
 
@@ -1013,7 +1013,7 @@ def verify_evidence(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Verify fail-closed Serverware policy activation deployment evidence.")
+    parser = argparse.ArgumentParser(description="Verify fail-closed Catchplate policy activation deployment evidence.")
     parser.add_argument("evidence", nargs="?", help="Policy activation evidence JSON document")
     parser.add_argument("--evidence-file", dest="evidence_file", help="Policy activation evidence JSON document")
     parser.add_argument(

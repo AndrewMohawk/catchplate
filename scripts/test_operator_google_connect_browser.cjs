@@ -8,7 +8,7 @@ const {readFile, mkdtemp, stat} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
 const {fixture: baseFixture, ready, view, credential, application, IDS, NOW} = require('./test_operator_catalog_browser.cjs');
 const {publicCatalog, google} = require('./test_operator_ordinary_modes_browser.cjs');
-const pure = require('../serverware/operator_demo_web/workspace_google.js');
+const pure = require('../catchplate/operator_demo_web/workspace_google.js');
 const ROOT = resolve(__dirname, '..');
 const ORIGIN = 'https://operator-catalog.example.test';
 const INTENT = '77777777-7777-4777-8777-777777777777';
@@ -16,7 +16,7 @@ const OTHER = '88888888-8888-4888-8888-888888888888';
 const SCOPES = ['email', 'https://www.googleapis.com/auth/gmail.readonly', 'openid'];
 const PRIVATE = ['synthetic-google-provider-secret-never-render', 'synthetic-refresh-token-never-render'];
 const STATE = 'synthetic-state-' + 'a'.repeat(43);
-const capability = () => ({schema: 'serverware.operatorGoogleCapability/v1', profile: 'operator-google-v1', provider_id: 'google',
+const capability = () => ({schema: 'catchplate.operatorGoogleCapability/v1', profile: 'operator-google-v1', provider_id: 'google',
   permission_preset: 'gmail_readonly', scopes: [...SCOPES], api_origins: ['https://gmail.googleapis.com'],
   authorization_origin: 'https://accounts.google.com', authorization_path: '/o/oauth2/v2/auth', redirect_uri: ORIGIN + '/api/oauth/callback/google',
   start_path: '/api/operator-demo/oauth/google/start', intents_path: '/api/operator-demo/oauth/google/intents'});
@@ -31,7 +31,7 @@ const gmailDescriptor = () => ({operation_bundle: 'gmail_read_v1', create_path: 
     max_body_bytes: 1048576, max_error_body_bytes: 65536, unlisted_header_policy: 'discardUnselectedV1'}});
 const intent = (changes = {}) => ({id: INTENT, name: 'My Gmail account', provider_id: 'google', permission_preset: 'gmail_readonly',
   scopes: [...SCOPES], created_at: new Date(NOW).toISOString(), expires_at_epoch: NOW / 1000 + 600, status: 'awaiting_consent', ...changes});
-const status = intents => ({apiVersion: 'serverware.operatorGoogleConsent/v1', intents, limits: {active: 32, retained: 1024},
+const status = intents => ({apiVersion: 'catchplate.operatorGoogleConsent/v1', intents, limits: {active: 32, retained: 1024},
   productionReady: false, protectedActivationSupported: false});
 function startReceipt(name = 'My Gmail account') {
   const query = new URLSearchParams({response_type: 'code', client_id: 'synthetic-client.apps.googleusercontent.com',
@@ -42,9 +42,9 @@ function startReceipt(name = 'My Gmail account') {
     operatorGoogleIntent: intent({name})};
 }
 const SOURCE_FILES = ['scripts/test_operator_google_connect_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
-  'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
+  'scripts/test_operator_ordinary_modes_browser.cjs', 'catchplate/operator_demo_portal.py',
   ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js', 'workspace_google.js', 'workspace_resources.js',
-    'workspace_applications.js', 'workspace_proxy_audit.js', 'workspace_connect.js'].map(name => 'serverware/operator_demo_web/' + name)];
+    'workspace_applications.js', 'workspace_proxy_audit.js', 'workspace_connect.js'].map(name => 'catchplate/operator_demo_web/' + name)];
 let artifacts;
 async function hashes() { return Object.fromEntries(await Promise.all(SOURCE_FILES.map(async path =>
   [path, createHash('sha256').update(await readFile(join(ROOT, path))).digest('hex')]))); }
@@ -141,7 +141,7 @@ async function fixture(browser, options, exercise) {
       // endpoint, redirects, route.fetch, network continuation or cookies.
       // Use the immutable original portal rather than the current provider page.
       const {execFileSync} = require('node:child_process');
-      const portal = execFileSync('python3', ['-B', '-c', 'from serverware.operator_demo_portal import render; print(render())'],
+      const portal = execFileSync('python3', ['-B', '-c', 'from catchplate.operator_demo_portal import render; print(render())'],
         {cwd: ROOT, encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024});
       await controls.context.route(target.split('#')[0], async route => {
         assert(++observations.returns <= 2);
@@ -410,7 +410,7 @@ async function main() {
   const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
   console.log(JSON.stringify({phase: 'selection', firstGroup, lastGroup: tests.length, renderedGroups: selected.length, pureGroups: runPure ? 1 : 0}));
   if (runPure) console.log(JSON.stringify(pureChecks()));
-  const artifactRoot = '/srv/catchplate-fast/projects/serverware-operator-artifacts'; assert((await stat(artifactRoot)).isDirectory());
+  const artifactRoot = '/srv/catchplate-fast/projects/catchplate-operator-artifacts'; assert((await stat(artifactRoot)).isDirectory());
   artifacts = await mkdtemp(join(artifactRoot, 'google-connect-synthetic-')); console.log(JSON.stringify({artifactDirectory: artifacts}));
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
   const browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-background-networking']}); let deadline;

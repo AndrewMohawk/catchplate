@@ -1,9 +1,9 @@
 //! Independently assigned HMAC material, never an Ed25519-derived key or a
 //! generic MAC interface. Acquisition is only through the retained KMS owner.
 use super::*;
-const DOMAIN:&str="serverware.nativeShadowRequestCommitmentAssignment.signature/v1";
-const SAMPLING_DOMAIN:&str="serverware.nativeShadowRequestCommitmentAssignment.signature/v2";
-const SECRET_DOMAIN:&[u8]=b"serverware/native-shadow-request-commitment-secret/v1\0";
+const DOMAIN:&str="catchplate.nativeShadowRequestCommitmentAssignment.signature/v1";
+const SAMPLING_DOMAIN:&str="catchplate.nativeShadowRequestCommitmentAssignment.signature/v2";
+const SECRET_DOMAIN:&[u8]=b"catchplate/native-shadow-request-commitment-secret/v1\0";
 #[derive(Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(super) struct Descriptor {pub key_id:Sha256Digest,pub key_epoch:u64,pub secret_sha256:Sha256Digest}
@@ -21,7 +21,7 @@ pub(super) struct Authorization {payload:Payload,signature:CanonicalEd25519Signa
 impl Authorization {
     pub(super) fn descriptor(&self)->&Descriptor {&self.payload.request_commitment}
     pub(super) fn sampling_selected(&self)->bool {
-        self.payload.api_version=="serverware.nativeShadowRequestCommitmentAssignment/v2"
+        self.payload.api_version=="catchplate.nativeShadowRequestCommitmentAssignment/v2"
             && self.payload.purpose=="native-shadow-request-and-ingress-commitments"
     }
     pub(super) fn verify(&self,configuration:&NativeCustodyKeyConfiguration,assignment:&VerifiedAssignment,
@@ -29,8 +29,8 @@ impl Authorization {
         time:&dyn TrustedTime)->Result<(),ShadowError> {
         let p=&self.payload;let a=assignment.payload();let d=&p.request_commitment;
         let domain=match (p.api_version.as_str(),p.purpose.as_str()) {
-            ("serverware.nativeShadowRequestCommitmentAssignment/v1","native-shadow-request-commitment-hmac")=>DOMAIN,
-            ("serverware.nativeShadowRequestCommitmentAssignment/v2","native-shadow-request-and-ingress-commitments")=>SAMPLING_DOMAIN,
+            ("catchplate.nativeShadowRequestCommitmentAssignment/v1","native-shadow-request-commitment-hmac")=>DOMAIN,
+            ("catchplate.nativeShadowRequestCommitmentAssignment/v2","native-shadow-request-and-ingress-commitments")=>SAMPLING_DOMAIN,
             _=>return Err(ShadowError::BindingDrift),
         };
         require(p.guest==association.binding()
@@ -77,7 +77,7 @@ impl Owner {
     pub(super) fn sample_ingress(&self,context:&crate::policy_shadow::native_ingress::Context,
         generation:&ShadowGenerationIdentity,assignment:&VerifiedAssignment,runtime:&RuntimeIdentity)
         ->Result<crate::policy_shadow::native_ingress::Commitment,ShadowError>{
-        require(self.authorization.payload.api_version=="serverware.nativeShadowRequestCommitmentAssignment/v2"
+        require(self.authorization.payload.api_version=="catchplate.nativeShadowRequestCommitmentAssignment/v2"
             && self.authorization.payload.purpose=="native-shadow-request-and-ingress-commitments")?;
         crate::policy_shadow::native_ingress::commit(context,generation,assignment,runtime,&self.key)
     }

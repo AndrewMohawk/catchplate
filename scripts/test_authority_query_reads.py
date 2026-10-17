@@ -23,9 +23,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
-from serverware import authority_query_reads as reads
-from serverware import authority_transition_core as core
+from catchplate import authority_contract
+from catchplate import authority_query_reads as reads
+from catchplate import authority_transition_core as core
 
 
 OPERATION = "webauthn.credential.revoke"
@@ -48,12 +48,12 @@ def framed(domain, *frames):
 
 def selection(table, key, row):
     return {"table": table, "key": copy.deepcopy(key),
-            "keyDigest": framed("serverware.policyAuthorityBusinessKey/v1", table.encode("ascii"), canonical(key)),
+            "keyDigest": framed("catchplate.policyAuthorityBusinessKey/v1", table.encode("ascii"), canonical(key)),
             "present": row is not None, "row": copy.deepcopy(row), "contractSelector": None}
 
 
 def query(name, *, table=CREDENTIALS, predicates=(), order_by=(), maximum_rows=4, **options):
-    return core.BoundedQuery(query_id=f"serverware.policyAuthorityQuery/{OPERATION}/{name}/{table}/v1",
+    return core.BoundedQuery(query_id=f"catchplate.policyAuthorityQuery/{OPERATION}/{name}/{table}/v1",
         table=table, predicates=predicates, order_by=order_by, maximum_rows=maximum_rows, **options)
 
 
@@ -64,13 +64,13 @@ def exact(name, identifier):
 
 def encoded_value(value):
     if type(value) is core.SelectedRowFieldReference:
-        return {"schema": "serverware.policyAuthoritySelectedRowField/v1", "table": value.table,
+        return {"schema": "catchplate.policyAuthoritySelectedRowField/v1", "table": value.table,
                 "key": dict(value.key), "column": value.column}
     return value
 
 
 def query_document(value):
-    return {"schema": "serverware.policyAuthorityQueryProgram/v1", "queryId": value.query_id,
+    return {"schema": "catchplate.policyAuthorityQueryProgram/v1", "queryId": value.query_id,
             "table": value.table,
             "predicates": [{"column": item.column, "operator": item.operator, "value": encoded_value(item.value)}
                            for item in value.predicates],
@@ -113,7 +113,7 @@ class AuthorityQueryReadTests(unittest.TestCase):
         resolved_document = query_document(self.one)
         resolved_document["orderBy"] = [{"column": "id", "descending": False}]
         expected_address = reads.QueryReadAddress(CREDENTIALS, b'{"id":"a-\\u96ea"}',
-            framed("serverware.policyAuthorityBusinessKey/v1", CREDENTIALS.encode("ascii"),
+            framed("catchplate.policyAuthorityBusinessKey/v1", CREDENTIALS.encode("ascii"),
                    b'{"id":"a-\\u96ea"}'), True)
         expected = reads.QueryRead(self.one.query_id, canonical(query_document(self.one)),
             canonical(resolved_document), (expected_address,), 1)
@@ -445,7 +445,7 @@ class AuthorityQueryReadTests(unittest.TestCase):
             incomplete,
             QuerySubclass(**{field.name: getattr(self.one, field.name) for field in fields(self.one)}),
             forged(self.one, query_id=StringSubclass(self.one.query_id)),
-            forged(self.one, query_id="serverware.policyAuthorityQuery/" + "x" * reads.MAX_QUERY_ID_BYTES),
+            forged(self.one, query_id="catchplate.policyAuthorityQuery/" + "x" * reads.MAX_QUERY_ID_BYTES),
             forged(self.one, table=StringSubclass(CREDENTIALS)),
             forged(self.one, maximum_rows=True), forged(self.one, work_units=True),
             forged(self.one, require_absence=1), forged(self.one, exact_page=0),

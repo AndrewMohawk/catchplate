@@ -4,16 +4,16 @@
 //! reservation. Receivers select them from independently pinned expectations.
 //! Incoming data cannot opt an old profile into the wider principal contract.
 
-pub const NATIVE_BUFFERED: &str = "serverware.nativeProxyResponseStatement/v1";
-pub const NATIVE_STREAMING: &str = "serverware.nativeStreamingResponseStatement/v1";
-pub const NATIVE_OBSERVATION: &str = "serverware.nativeResponseObservationStatement/v1";
-pub const NATIVE_ENVELOPE: &str = "serverware.nativeResponseRuntimeProof/v2";
-pub const NATIVE_EXPECTATIONS: &str = "serverware.nativeResponseAttestationExpectations/v2";
-pub const NATIVE_STATEMENT_PROFILE: &str = "serverware.nativeResponseStatements/v1";
-pub const NATIVE_VERDICT: &str = "serverware.nativeResponseAttestationVerification/v2";
-pub const NATIVE_RECEIPT: &str = "serverware.nativeControlPlaneAuthorizationReceipt/v1";
-pub const NATIVE_RECEIPT_KIND: &str = "ServerwareNativeControlPlaneAuthorizationReceipt";
-pub const NATIVE_COMMITMENT: &str = "serverware.nativeResponseAuthorizationCommitment/v1";
+pub const NATIVE_BUFFERED: &str = "catchplate.nativeProxyResponseStatement/v1";
+pub const NATIVE_STREAMING: &str = "catchplate.nativeStreamingResponseStatement/v1";
+pub const NATIVE_OBSERVATION: &str = "catchplate.nativeResponseObservationStatement/v1";
+pub const NATIVE_ENVELOPE: &str = "catchplate.nativeResponseRuntimeProof/v2";
+pub const NATIVE_EXPECTATIONS: &str = "catchplate.nativeResponseAttestationExpectations/v2";
+pub const NATIVE_STATEMENT_PROFILE: &str = "catchplate.nativeResponseStatements/v1";
+pub const NATIVE_VERDICT: &str = "catchplate.nativeResponseAttestationVerification/v2";
+pub const NATIVE_RECEIPT: &str = "catchplate.nativeControlPlaneAuthorizationReceipt/v1";
+pub const NATIVE_RECEIPT_KIND: &str = "CatchplateNativeControlPlaneAuthorizationReceipt";
+pub const NATIVE_COMMITMENT: &str = "catchplate.nativeResponseAuthorizationCommitment/v1";
 
 /// Native principal text only. Route, credential, grant, actor and other
 /// identifiers retain their respective existing contracts.

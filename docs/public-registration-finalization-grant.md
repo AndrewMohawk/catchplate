@@ -75,7 +75,7 @@ Successful HTTP `202` is non-cacheable and contains exactly ten keys:
 
 | Field | Value or meaning |
 | --- | --- |
-| `schema` | `serverware.webAuthnRegistrationFinalizationGrantPreparation/v1` |
+| `schema` | `catchplate.webAuthnRegistrationFinalizationGrantPreparation/v1` |
 | `status` | `finalization-grant-prepared` |
 | `purpose` | `prepare-registration-finalization-grant` |
 | `localDigest` | Unchanged input evidence-admission execution locator. |
@@ -95,5 +95,5 @@ remain separate. Actual credential finalization does not itself activate an
 OIDC browser session. No service is provisioned or activated by these routes;
 frozen verification and production release gates remain outstanding.
 
-Source: [routes](../serverware/control_plane_registration_finalization_grant_routes.py)
-and [HTTP contract](../serverware/control_plane_registration_finalization_grant_http.py).
+Source: [routes](../catchplate/control_plane_registration_finalization_grant_routes.py)
+and [HTTP contract](../catchplate/control_plane_registration_finalization_grant_http.py).

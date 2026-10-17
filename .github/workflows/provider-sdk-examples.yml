@@ -164,7 +164,7 @@ jobs:
                   'sourceLocations': [{'file': file, 'line': line, 'column': column}
                       for file, line, column in sorted(locations)[:16]]})
           assert {name: digest(root / name) for name in pins} == pins
-          result = {'schema': 'serverware.providerSdkComponents/v1', 'ok': all(row['ok'] for row in rows),
+          result = {'schema': 'catchplate.providerSdkComponents/v1', 'ok': all(row['ok'] for row in rows),
               'sourceRevision': source, 'github': {key: os.environ[name] for key, name in (
                   ('repository', 'GITHUB_REPOSITORY'), ('runId', 'GITHUB_RUN_ID'), ('runAttempt', 'GITHUB_RUN_ATTEMPT'))},
               'component': 'alchemy-chain-status-node', 'dependencies': dependencies, 'sourceSha256': pins,
@@ -203,7 +203,7 @@ jobs:
           assert set(result) == {'schema', 'ok', 'sourceRevision', 'github', 'component', 'dependencies', 'sourceSha256',
               'workflowSha256', 'nodeVersion', 'nodeSha256', 'libatomicSha256', 'image', 'network', 'tests',
               'providerVerified', 'proxyVerified', 'productionReady', 'cleanupVerified'}
-          assert result['schema'] == 'serverware.providerSdkComponents/v1' and type(result['ok']) is bool
+          assert result['schema'] == 'catchplate.providerSdkComponents/v1' and type(result['ok']) is bool
           assert result['sourceRevision'] == os.environ['GITHUB_SHA']
           assert result['github'] == {key: os.environ[name] for key, name in (
               ('repository', 'GITHUB_REPOSITORY'), ('runId', 'GITHUB_RUN_ID'), ('runAttempt', 'GITHUB_RUN_ATTEMPT'))}

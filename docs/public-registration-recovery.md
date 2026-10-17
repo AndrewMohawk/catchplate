@@ -28,7 +28,7 @@ It authenticates the current operator or pending session, then genuinely
 replays the retained historical registration subject before consuming fresh
 permission. Its exact seven subject fields bind local record, user, challenge,
 session, historical mode, request digest and operation identity. The separate
-`serverware.webAuthnRegistrationCompletionRecoveryIntent/v1` adds the fixed
+`catchplate.webAuthnRegistrationCompletionRecoveryIntent/v1` adds the fixed
 recovery purpose/action to the MFA and approval digest; historical enrollment
 mode does not grant present recovery permission.
 
@@ -59,7 +59,7 @@ pending head from an acknowledgment. Prior uncertainty is not overwritten; a
 separate immutable reconciliation record retains the recovery result.
 
 Success is HTTP `202`, schema
-`serverware.webAuthnRegistrationCompletionRecovery/v1`, status
+`catchplate.webAuthnRegistrationCompletionRecovery/v1`, status
 `completion-recovered`, the fixed purpose and existing `localDigest`, with
 `observationAuthenticated: true`. `registrationCompleted`,
 `currentnessEstablished`, and `automaticRetryAllowed` remain `false`.
@@ -83,6 +83,6 @@ strict framing, wrong owner/session/purpose, no-history versus history gates,
 CSRF and stale approval/assertion/session rejection, authentic historical
 recovery and conflicting retention, redacted uncertainty, and no SQL dispatch.
 
-Source: [routes](../serverware/control_plane_registration_recovery_routes.py),
-[HTTP contract](../serverware/control_plane_registration_recovery_http.py),
+Source: [routes](../catchplate/control_plane_registration_recovery_routes.py),
+[HTTP contract](../catchplate/control_plane_registration_recovery_http.py),
 [historical planning history](historical-evidence-planning-history.md).

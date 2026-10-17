@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn manifest(active: bool) -> Value {
-    let binding = json!({"schema":"serverware.operatorGoogleProfile/v1",
+    let binding = json!({"schema":"catchplate.operatorGoogleProfile/v1",
         "profile":"operator-google-v1","provider_id":"google",
         "client_id":"synthetic-client.apps.googleusercontent.com",
         "redirect_uri":"https://console.example.com/api/oauth/callback/google",
@@ -51,11 +51,11 @@ fn operator_google_managed_flag_is_closed_development_only_and_exclusive() {
 #[test]
 fn operator_google_managed_raw_namespace_is_exclusive_even_when_empty() {
     for name in [
-        "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID",
-        "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
-        "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI",
-        "SERVERWARE_GOOGLE_UNKNOWN",
-        "SERVERWARE_OPERATOR_GOOGLE_PROFILE",
+        "CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID",
+        "CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
+        "CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI",
+        "CATCHPLATE_GOOGLE_UNKNOWN",
+        "CATCHPLATE_OPERATOR_GOOGLE_PROFILE",
     ] {
         for value in ["", "synthetic"] {
             let environment = [(name, value)];
@@ -66,7 +66,7 @@ fn operator_google_managed_raw_namespace_is_exclusive_even_when_empty() {
     }
     for name in [
         FLAG,
-        "SERVERWARE_OPERATOR_GATE_PUBLICATION_ENABLED",
+        "CATCHPLATE_OPERATOR_GATE_PUBLICATION_ENABLED",
         "UNRELATED",
     ] {
         assert!(!external_google_key(name));
@@ -256,7 +256,7 @@ impl Scratch {
     fn new() -> Self {
         static SEQUENCE: AtomicU64 = AtomicU64::new(0);
         let path = env::temp_dir().join(format!(
-            "serverware-managed-google-{}-{}-{}",
+            "catchplate-managed-google-{}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)

@@ -23,9 +23,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 ROOT = Path(__file__).resolve().parent.parent
 MAX_FIXTURE_LOG_LINE_BYTES = 8 * 1024 * 1024
 MAX_HTTP_RESPONSE_BYTES = 1024 * 1024
-CHECKPOINT_VERSION = "serverware.transparencyCheckpoint/v1"
-PUBLICATION_VERSION = "serverware.externalTransparencyCheckpointRequest/v1"
-RECEIPT_VERSION = "serverware.externalTransparencyReceipt/v1"
+CHECKPOINT_VERSION = "catchplate.transparencyCheckpoint/v1"
+PUBLICATION_VERSION = "catchplate.externalTransparencyCheckpointRequest/v1"
+RECEIPT_VERSION = "catchplate.externalTransparencyReceipt/v1"
 MAX_CHECKPOINT_INTEGER = (1 << 53) - 1
 
 
@@ -91,7 +91,7 @@ def env_bool(name: str, default: bool = False) -> bool:
 def require_authenticated_receipt_mode(required: bool) -> None:
     if required is not True:
         raise SystemExit(
-            "SERVERWARE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT must remain enabled; "
+            "CATCHPLATE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT must remain enabled; "
             "opaque checkpoint receipts are unsupported"
         )
 
@@ -104,11 +104,11 @@ def read_stdin_object() -> dict[str, Any]:
 
 
 def log_path() -> Path:
-    return Path(os.getenv("SERVERWARE_EXTERNAL_TRANSPARENCY_LOG_PATH", str(ROOT / ".tmp" / "managed-transparency-log.jsonl")))
+    return Path(os.getenv("CATCHPLATE_EXTERNAL_TRANSPARENCY_LOG_PATH", str(ROOT / ".tmp" / "managed-transparency-log.jsonl")))
 
 
 def key_path() -> Path:
-    return Path(os.getenv("SERVERWARE_EXTERNAL_TRANSPARENCY_LOG_KEY", str(log_path().with_suffix(".ed25519.pem"))))
+    return Path(os.getenv("CATCHPLATE_EXTERNAL_TRANSPARENCY_LOG_KEY", str(log_path().with_suffix(".ed25519.pem"))))
 
 
 def load_private_key() -> Ed25519PrivateKey:
@@ -169,8 +169,8 @@ def publication_request(payload: dict[str, Any]) -> dict[str, Any]:
     validate_checkpoint(payload)
     body = {
         "apiVersion": PUBLICATION_VERSION,
-        "kind": "serverware-signed-tree-head-checkpoint",
-        "canonicalization": "serverware.canonical-json.v1",
+        "kind": "catchplate-signed-tree-head-checkpoint",
+        "canonicalization": "catchplate.canonical-json.v1",
         "checkpoint_digest": sha256_prefixed_json(payload),
         "checkpoint": payload,
         "receipt_requirements": {
@@ -278,9 +278,9 @@ def normalized_response(
     provider = response.get("provider")
     if not isinstance(provider, str) or not provider:
         raise SystemExit("external checkpoint response missing provider")
-    expected_provider = os.getenv("SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER", "").strip()
+    expected_provider = os.getenv("CATCHPLATE_TRANSPARENCY_EXPECTED_PROVIDER", "").strip()
     if expected_provider and provider != expected_provider:
-        raise SystemExit("external checkpoint provider did not match SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER")
+        raise SystemExit("external checkpoint provider did not match CATCHPLATE_TRANSPARENCY_EXPECTED_PROVIDER")
     mode = response.get("mode") or "external-managed-transparency-log"
     if mode != "external-managed-transparency-log":
         raise SystemExit(f"external checkpoint response used unsupported mode: {mode!r}")
@@ -297,9 +297,9 @@ def normalized_response(
     log_id = response.get("log_id")
     if not isinstance(log_id, str) or not log_id:
         raise SystemExit("external checkpoint response missing log_id")
-    expected_log_id = os.getenv("SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID", "").strip()
+    expected_log_id = os.getenv("CATCHPLATE_TRANSPARENCY_EXPECTED_LOG_ID", "").strip()
     if expected_log_id and log_id != expected_log_id:
-        raise SystemExit("external checkpoint log_id did not match SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID")
+        raise SystemExit("external checkpoint log_id did not match CATCHPLATE_TRANSPARENCY_EXPECTED_LOG_ID")
     external_sequence = response_sequence(response)
     receipt = response.get("receipt")
     if not isinstance(receipt, dict):
@@ -337,7 +337,7 @@ def normalized_response(
 
 
 def checkpoint_fixture(checkpoint: dict[str, Any]) -> dict[str, Any]:
-    require_authenticated_receipt_mode(env_bool("SERVERWARE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT", True))
+    require_authenticated_receipt_mode(env_bool("CATCHPLATE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT", True))
     request = publication_request(checkpoint)
     path = log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -349,7 +349,7 @@ def checkpoint_fixture(checkpoint: dict[str, Any]) -> dict[str, Any]:
         )
         key = load_private_key()
         info = public_key_info(key.public_key())
-        provider = os.getenv("SERVERWARE_EXTERNAL_TRANSPARENCY_PROVIDER", "managed-transparency-log-fixture")
+        provider = os.getenv("CATCHPLATE_EXTERNAL_TRANSPARENCY_PROVIDER", "managed-transparency-log-fixture")
         receipt_body = receipt_payload(
             provider=provider,
             log_id=info["log_id"],
@@ -516,41 +516,41 @@ def validate_fixture_log_record(record: Any, expected_sequence: int, line_number
 
 def load_extra_headers() -> dict[str, str]:
     headers: dict[str, str] = {}
-    raw = os.getenv("SERVERWARE_TRANSPARENCY_LOG_HEADERS", "").strip()
+    raw = os.getenv("CATCHPLATE_TRANSPARENCY_LOG_HEADERS", "").strip()
     if raw:
         parsed = json.loads(raw)
         if not isinstance(parsed, dict):
-            raise SystemExit("SERVERWARE_TRANSPARENCY_LOG_HEADERS must be a JSON object")
+            raise SystemExit("CATCHPLATE_TRANSPARENCY_LOG_HEADERS must be a JSON object")
         for key, value in parsed.items():
             if not isinstance(key, str) or not isinstance(value, str):
-                raise SystemExit("SERVERWARE_TRANSPARENCY_LOG_HEADERS entries must be strings")
+                raise SystemExit("CATCHPLATE_TRANSPARENCY_LOG_HEADERS entries must be strings")
             lowered = key.lower()
             if lowered in {"authorization", "content-length", "host"}:
-                raise SystemExit(f"SERVERWARE_TRANSPARENCY_LOG_HEADERS cannot set {key}")
+                raise SystemExit(f"CATCHPLATE_TRANSPARENCY_LOG_HEADERS cannot set {key}")
             headers[key] = value
-    token = os.getenv("SERVERWARE_TRANSPARENCY_LOG_TOKEN", "").strip()
+    token = os.getenv("CATCHPLATE_TRANSPARENCY_LOG_TOKEN", "").strip()
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers
 
 
 def checkpoint_http(checkpoint: dict[str, Any], url: str) -> dict[str, Any]:
-    require_authenticated_receipt_mode(env_bool("SERVERWARE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT", True))
+    require_authenticated_receipt_mode(env_bool("CATCHPLATE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT", True))
     parsed = urllib.parse.urlparse(url)
-    if parsed.scheme != "https" and not env_bool("SERVERWARE_TRANSPARENCY_ALLOW_INSECURE_HTTP", False):
-        raise SystemExit("SERVERWARE_TRANSPARENCY_LOG_URL must use https unless SERVERWARE_TRANSPARENCY_ALLOW_INSECURE_HTTP=1")
+    if parsed.scheme != "https" and not env_bool("CATCHPLATE_TRANSPARENCY_ALLOW_INSECURE_HTTP", False):
+        raise SystemExit("CATCHPLATE_TRANSPARENCY_LOG_URL must use https unless CATCHPLATE_TRANSPARENCY_ALLOW_INSECURE_HTTP=1")
     if parsed.scheme not in {"https", "http"}:
-        raise SystemExit("SERVERWARE_TRANSPARENCY_LOG_URL must use http or https")
+        raise SystemExit("CATCHPLATE_TRANSPARENCY_LOG_URL must use http or https")
     request = publication_request(checkpoint)
     body = canonical_json(request).encode("utf-8")
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "User-Agent": "serverware-transparency-checkpoint/1",
+        "User-Agent": "catchplate-transparency-checkpoint/1",
     }
     headers.update(load_extra_headers())
     http_request = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    timeout = float(os.getenv("SERVERWARE_TRANSPARENCY_CHECKPOINT_TIMEOUT_SECONDS", "15"))
+    timeout = float(os.getenv("CATCHPLATE_TRANSPARENCY_CHECKPOINT_TIMEOUT_SECONDS", "15"))
     try:
         with urllib.request.urlopen(http_request, timeout=timeout) as handle:
             content_length = handle.headers.get("Content-Length")
@@ -581,23 +581,23 @@ def checkpoint_http(checkpoint: dict[str, Any], url: str) -> dict[str, Any]:
 
 
 def command_checkpoint(args: argparse.Namespace) -> dict[str, Any]:
-    require_authenticated_receipt_mode(env_bool("SERVERWARE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT", True))
+    require_authenticated_receipt_mode(env_bool("CATCHPLATE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT", True))
     checkpoint = read_stdin_object()
-    mode = args.mode or os.getenv("SERVERWARE_TRANSPARENCY_CHECKPOINT_MODE", "").strip()
-    url = args.url or os.getenv("SERVERWARE_TRANSPARENCY_LOG_URL", "").strip()
+    mode = args.mode or os.getenv("CATCHPLATE_TRANSPARENCY_CHECKPOINT_MODE", "").strip()
+    url = args.url or os.getenv("CATCHPLATE_TRANSPARENCY_LOG_URL", "").strip()
     if not mode:
         mode = "http" if url else "fixture"
     if mode == "fixture":
         return checkpoint_fixture(checkpoint)
     if mode == "http":
         if not url:
-            raise SystemExit("SERVERWARE_TRANSPARENCY_LOG_URL is required for http checkpoint mode")
+            raise SystemExit("CATCHPLATE_TRANSPARENCY_LOG_URL is required for http checkpoint mode")
         return checkpoint_http(checkpoint, url)
     raise SystemExit(f"unsupported checkpoint mode: {mode}")
 
 
 def command_verify() -> dict[str, Any]:
-    require_authenticated_receipt_mode(env_bool("SERVERWARE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT", True))
+    require_authenticated_receipt_mode(env_bool("CATCHPLATE_TRANSPARENCY_REQUIRE_VERIFIABLE_RECEIPT", True))
     request = read_stdin_object()
     checkpoint = request.get("checkpoint")
     response = request.get("response")
@@ -613,7 +613,7 @@ def command_verify() -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Publish and verify Serverware external transparency checkpoints.")
+    parser = argparse.ArgumentParser(description="Publish and verify Catchplate external transparency checkpoints.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     checkpoint_parser = subparsers.add_parser("checkpoint")
     checkpoint_parser.add_argument("--mode", choices=("fixture", "http"), default=None)

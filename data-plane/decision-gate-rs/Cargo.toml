@@ -1,20 +1,20 @@
 [package]
-name = "serverware-decision-gate"
+name = "catchplate-decision-gate"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 
 [lib]
-name = "serverware_decision_gate"
+name = "catchplate_decision_gate"
 path = "src/custody_protocol.rs"
 
 [[bin]]
-name = "serverware-coder-body-supervisor-v12"
-path = "src/bin/serverware-coder-body-supervisor-v12.rs"
+name = "catchplate-coder-body-supervisor-v12"
+path = "src/bin/catchplate-coder-body-supervisor-v12.rs"
 
 [[bin]]
-name = "serverware-native-bootstrap-client"
-path = "src/bin/serverware-native-bootstrap-client.rs"
+name = "catchplate-native-bootstrap-client"
+path = "src/bin/catchplate-native-bootstrap-client.rs"
 
 [dependencies]
 base64 = "0.22"

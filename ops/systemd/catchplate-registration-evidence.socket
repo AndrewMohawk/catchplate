@@ -1,0 +1,20 @@
+[Unit]
+Description=Catchplate independent registration evidence signer ingress
+Before=catchplate-registration-evidence.service
+After=systemd-tmpfiles-setup.service
+
+[Socket]
+ListenStream=/run/catchplate/registration-evidence/signer.sock
+FileDescriptorName=catchplate-registration-evidence
+SocketUser=65517
+SocketGroup=65532
+SocketMode=0660
+DirectoryMode=0755
+Backlog=16
+Accept=no
+FlushPending=yes
+RemoveOnStop=yes
+Service=catchplate-registration-evidence.service
+
+[Install]
+WantedBy=sockets.target

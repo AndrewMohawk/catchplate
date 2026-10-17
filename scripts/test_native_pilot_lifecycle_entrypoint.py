@@ -9,8 +9,8 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts import native_pilot_runtime_artifacts as artifacts
 from scripts import native_pilot_supervisor_runtime_entrypoint as entrypoint
-from serverware.native_pilot_adopted_phase_profile import KEY_PURPOSES as ADOPTED
-from serverware.native_pilot_genesis_jobs import KEY_PURPOSES as COLD
+from catchplate.native_pilot_adopted_phase_profile import KEY_PURPOSES as ADOPTED
+from catchplate.native_pilot_genesis_jobs import KEY_PURPOSES as COLD
 
 
 def arguments():

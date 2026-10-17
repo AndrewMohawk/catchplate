@@ -62,10 +62,10 @@ impl CustodySignerTransport {
         }
     }
 
-    pub(super) fn configure_jit_review(&self, config: serverware_decision_gate::native_jit_review_v1::Configuration,
-        assignment: &[u8], broker: &mut serverware_decision_gate::native_secret_broker_v1::Owner,
+    pub(super) fn configure_jit_review(&self, config: catchplate_decision_gate::native_jit_review_v1::Configuration,
+        assignment: &[u8], broker: &mut catchplate_decision_gate::native_secret_broker_v1::Owner,
         identity: &mut EnclaveRuntimeIdentityV1, binary: &str, deadline: u64)
-        -> Result<serverware_decision_gate::native_jit_review_v1::Owner, String> {
+        -> Result<catchplate_decision_gate::native_jit_review_v1::Owner, String> {
         let Self::Native(owner) = self else { return Err("JIT configuration refuses imported custody".into()); };
         self.verify_live()?;
         let result = owner.runtime.configure_native_jit_review(config, assignment, broker, identity, binary, deadline)
@@ -73,10 +73,10 @@ impl CustodySignerTransport {
         self.verify_live()?; Ok(result)
     }
 
-    pub(super) fn release_jit_review_evidence(&self, admitted: &mut serverware_decision_gate::native_jit_review_v1::Owner,
-        broker: &mut serverware_decision_gate::native_secret_broker_v1::Owner,
+    pub(super) fn release_jit_review_evidence(&self, admitted: &mut catchplate_decision_gate::native_jit_review_v1::Owner,
+        broker: &mut catchplate_decision_gate::native_secret_broker_v1::Owner,
         identity: &mut EnclaveRuntimeIdentityV1, runtime: &[u8], parent: &[u8], child: &[u8],
-        binary: &str, deadline: u64) -> Result<serverware_decision_gate::native_jit_review_v1::SignedReleasePair, String> {
+        binary: &str, deadline: u64) -> Result<catchplate_decision_gate::native_jit_review_v1::SignedReleasePair, String> {
         let Self::Native(owner) = self else { return Err("JIT evidence refuses imported custody".into()); };
         self.verify_live()?;
         owner.active.fetch_update(Ordering::AcqRel, Ordering::Acquire,
@@ -87,10 +87,10 @@ impl CustodySignerTransport {
         self.verify_live()?; Ok(result)
     }
 
-    pub(super) fn configure_jit_review_open(&self, config: serverware_decision_gate::native_jit_review_open_v1::Configuration,
-        assignment: &[u8], broker: &mut serverware_decision_gate::native_secret_broker_v1::Owner,
+    pub(super) fn configure_jit_review_open(&self, config: catchplate_decision_gate::native_jit_review_open_v1::Configuration,
+        assignment: &[u8], broker: &mut catchplate_decision_gate::native_secret_broker_v1::Owner,
         identity: &mut EnclaveRuntimeIdentityV1, binary: &str, deadline: u64)
-        -> Result<serverware_decision_gate::native_jit_review_open_v1::Owner, String> {
+        -> Result<catchplate_decision_gate::native_jit_review_open_v1::Owner, String> {
         let Self::Native(owner) = self else { return Err("opening configuration refuses imported custody".into()); };
         self.verify_live()?;
         let result=owner.runtime.configure_native_jit_review_open(config,assignment,broker,identity,binary,deadline)
@@ -98,9 +98,9 @@ impl CustodySignerTransport {
         self.verify_live()?;Ok(result)
     }
 
-    pub(super) fn handle_jit_review_open(&self, admitted:&mut serverware_decision_gate::native_jit_review_open_v1::Owner,
-        broker:&mut serverware_decision_gate::native_secret_broker_v1::Owner,identity:&mut EnclaveRuntimeIdentityV1,
-        request:&mut serverware_decision_gate::native_jit_review_browser_v1::Accepted,binary:&str)->Result<(),String>{
+    pub(super) fn handle_jit_review_open(&self, admitted:&mut catchplate_decision_gate::native_jit_review_open_v1::Owner,
+        broker:&mut catchplate_decision_gate::native_secret_broker_v1::Owner,identity:&mut EnclaveRuntimeIdentityV1,
+        request:&mut catchplate_decision_gate::native_jit_review_browser_v1::Accepted,binary:&str)->Result<(),String>{
         let Self::Native(owner)=self else{return Err("opening refuses imported custody".into());};
         self.verify_live()?;
         owner.active.fetch_update(Ordering::AcqRel,Ordering::Acquire,
@@ -235,7 +235,7 @@ impl CustodySignerTransport {
 
     pub(super) fn staging_evidence(&self,identity:&mut EnclaveRuntimeIdentityV1,
         prepared:&native_staging::Prepared<'_>,deadline:u64)
-        ->Result<serverware_decision_gate::native_staging_v1::NativeEvidence,String> {
+        ->Result<catchplate_decision_gate::native_staging_v1::NativeEvidence,String> {
         let Self::Native(owner)=self else {return Err("staging refuses unmeasured UDS custody".into());};
         self.verify_live()?;
         owner.active.fetch_update(Ordering::AcqRel,Ordering::Acquire,
@@ -247,9 +247,9 @@ impl CustodySignerTransport {
     }
 
     pub(super) fn canary_evidence(&self, identity: &mut EnclaveRuntimeIdentityV1,
-        tls: &serverware_decision_gate::enclave_runtime_identity_v1::NativeCanaryTlsIdentity,
-        prepared: &serverware_decision_gate::native_canary_evidence_v1::PreparedEvidence, deadline: u64)
-        -> Result<serverware_decision_gate::native_canary_evidence_v1::SignedEvidence, String> {
+        tls: &catchplate_decision_gate::enclave_runtime_identity_v1::NativeCanaryTlsIdentity,
+        prepared: &catchplate_decision_gate::native_canary_evidence_v1::PreparedEvidence, deadline: u64)
+        -> Result<catchplate_decision_gate::native_canary_evidence_v1::SignedEvidence, String> {
         let Self::Native(owner) = self else { return Err("canary refuses unmeasured UDS custody".into()); };
         self.verify_live()?;
         prepared.check(tls, deadline)?;
@@ -265,9 +265,9 @@ impl CustodySignerTransport {
     }
 
     pub(super) fn canary_delivery(&self, identity: &mut EnclaveRuntimeIdentityV1,
-        tls: &serverware_decision_gate::enclave_runtime_identity_v1::NativeCanaryTlsIdentity,
-        prepared: &serverware_decision_gate::native_canary_delivery_v1::Prepared, deadline: u64)
-        -> Result<serverware_decision_gate::native_canary_delivery_v1::Signed,String> {
+        tls: &catchplate_decision_gate::enclave_runtime_identity_v1::NativeCanaryTlsIdentity,
+        prepared: &catchplate_decision_gate::native_canary_delivery_v1::Prepared, deadline: u64)
+        -> Result<catchplate_decision_gate::native_canary_delivery_v1::Signed,String> {
         let Self::Native(owner)=self else{return Err("canary delivery refuses unmeasured custody".into());};
         self.verify_live()?;prepared.check(tls,deadline)?;
         owner.active.fetch_update(Ordering::AcqRel,Ordering::Acquire,
@@ -279,7 +279,7 @@ impl CustodySignerTransport {
     }
 
     pub(super) fn canary_heartbeat(&self,identity:&mut EnclaveRuntimeIdentityV1,
-        prepared:&serverware_decision_gate::native_canary_heartbeat_v1::Prepared,deadline:u64)->Result<Value,String>{
+        prepared:&catchplate_decision_gate::native_canary_heartbeat_v1::Prepared,deadline:u64)->Result<Value,String>{
         let Self::Native(owner)=self else{return Err("heartbeat refuses imported custody".into());};
         self.verify_live()?;prepared.check(deadline)?;
         owner.active.fetch_update(Ordering::AcqRel,Ordering::Acquire,
@@ -291,7 +291,7 @@ impl CustodySignerTransport {
     }
 
     pub(super) fn canary_finalization(&self,identity:&mut EnclaveRuntimeIdentityV1,
-        prepared:&serverware_decision_gate::native_canary_finalization_v1::Prepared,deadline:u64)->Result<Value,String>{
+        prepared:&catchplate_decision_gate::native_canary_finalization_v1::Prepared,deadline:u64)->Result<Value,String>{
         let Self::Native(owner)=self else{return Err("finalization refuses imported custody".into());};
         self.verify_live()?;prepared.check(deadline)?;
         owner.active.fetch_update(Ordering::AcqRel,Ordering::Acquire,
@@ -304,7 +304,7 @@ impl CustodySignerTransport {
 
     pub(super) fn target_dispatch_evidence(&self,identity:&mut EnclaveRuntimeIdentityV1,
         prepared:&native_target_dispatch::Prepared<'_>,deadline:u64)
-        ->Result<serverware_decision_gate::native_target_dispatch_v1::NativeCaptureEnvelope,String> {
+        ->Result<catchplate_decision_gate::native_target_dispatch_v1::NativeCaptureEnvelope,String> {
         let Self::Native(owner)=self else {return Err("target dispatch refuses unmeasured UDS custody".into());};
         self.verify_live()?;
         owner.active.fetch_update(Ordering::AcqRel,Ordering::Acquire,
@@ -316,7 +316,7 @@ impl CustodySignerTransport {
     }
 
     pub(super) fn refresh_evidence(&self, identity: &mut EnclaveRuntimeIdentityV1,
-        prepared: &serverware_decision_gate::native_oauth_refresh_v1::Prepared,
+        prepared: &catchplate_decision_gate::native_oauth_refresh_v1::Prepared,
         binary: &str, deadline: u64) -> Result<Value, String> {
         let Self::Native(owner) = self else { return Err("refresh refuses unmeasured UDS custody".to_owned()); };
         self.verify_live()?;
@@ -329,7 +329,7 @@ impl CustodySignerTransport {
     }
 
     pub(super) fn exchange_evidence(&self, identity: &mut EnclaveRuntimeIdentityV1,
-        prepared: &serverware_decision_gate::native_oauth_exchange_v1::Prepared,
+        prepared: &catchplate_decision_gate::native_oauth_exchange_v1::Prepared,
         binary: &str, deadline: u64) -> Result<Value,String> {
         let Self::Native(owner) = self else { return Err("initial issuance refuses unmeasured custody".to_owned()); };
         self.verify_live()?;
@@ -341,7 +341,7 @@ impl CustodySignerTransport {
     }
 
     pub(super) fn setup_evidence(&self, identity: &mut EnclaveRuntimeIdentityV1,
-        prepared: &serverware_decision_gate::native_oauth_setup_v1::Prepared,
+        prepared: &catchplate_decision_gate::native_oauth_setup_v1::Prepared,
         binary: &str, deadline: u64) -> Result<Value,String> {
         let Self::Native(owner) = self else { return Err("Setup issuance refuses unmeasured custody".to_owned()); };
         self.verify_live()?;
@@ -353,7 +353,7 @@ impl CustodySignerTransport {
     }
 
     pub(super) fn static_credential_evidence(&self, identity: &mut EnclaveRuntimeIdentityV1,
-        prepared: &serverware_decision_gate::native_static_credential_v1::Prepared,
+        prepared: &catchplate_decision_gate::native_static_credential_v1::Prepared,
         binary: &str, deadline: u64) -> Result<Value,String> {
         let Self::Native(owner) = self else { return Err("static credential refuses unmeasured custody".to_owned()); };
         self.verify_live()?;
@@ -365,7 +365,7 @@ impl CustodySignerTransport {
     }
 
     pub(super) fn static_credential_rotation_evidence(&self, identity: &mut EnclaveRuntimeIdentityV1,
-        prepared: &serverware_decision_gate::native_static_credential_rotation_v1::Prepared,
+        prepared: &catchplate_decision_gate::native_static_credential_rotation_v1::Prepared,
         binary: &str, deadline: u64) -> Result<Value,String> {
         let Self::Native(owner) = self else { return Err("static credential refuses unmeasured custody".to_owned()); };
         self.verify_live()?;
@@ -377,7 +377,7 @@ impl CustodySignerTransport {
     }
 
     pub(super) fn reconnect_evidence(&self, identity: &mut EnclaveRuntimeIdentityV1,
-        prepared: &serverware_decision_gate::native_oauth_reconnect_v1::Prepared,
+        prepared: &catchplate_decision_gate::native_oauth_reconnect_v1::Prepared,
         binary: &str, deadline: u64) -> Result<Value,String> {
         let Self::Native(owner) = self else { return Err("reconnect refuses unmeasured custody".to_owned()); };
         self.verify_live()?;
@@ -389,7 +389,7 @@ impl CustodySignerTransport {
     }
 
     pub(super) fn succession_evidence(&self, identity: &mut EnclaveRuntimeIdentityV1,
-        prepared: &serverware_decision_gate::native_oauth_succession_v1::Prepared,
+        prepared: &catchplate_decision_gate::native_oauth_succession_v1::Prepared,
         binary: &str, deadline: u64) -> Result<Value,String> {
         let Self::Native(owner) = self else { return Err("succession refuses unmeasured custody".to_owned()); };
         self.verify_live()?;
@@ -401,7 +401,7 @@ impl CustodySignerTransport {
     }
 
     pub(super) fn cleanup_evidence(&self, identity: &mut EnclaveRuntimeIdentityV1,
-        prepared: &serverware_decision_gate::native_oauth_cleanup_v1::Prepared,
+        prepared: &catchplate_decision_gate::native_oauth_cleanup_v1::Prepared,
         binary: &str, deadline: u64) -> Result<Value, String> {
         let Self::Native(owner) = self else { return Err("cleanup refuses unmeasured custody".to_owned()); };
         self.verify_live()?;
@@ -414,7 +414,7 @@ impl CustodySignerTransport {
     }
 
     pub(super) fn pending_retirement_evidence(&self, identity: &mut EnclaveRuntimeIdentityV1,
-        prepared: &serverware_decision_gate::native_oauth_pending_retirement_v1::Prepared,
+        prepared: &catchplate_decision_gate::native_oauth_pending_retirement_v1::Prepared,
         binary: &str, deadline: u64) -> Result<Value, String> {
         let Self::Native(owner) = self else { return Err("pending retirement refuses unmeasured custody".to_owned()); };
         self.verify_live()?;
@@ -428,7 +428,7 @@ impl CustodySignerTransport {
     }
 
     pub(super) fn capture_retirement_evidence(&self, identity: &mut EnclaveRuntimeIdentityV1,
-        prepared: &serverware_decision_gate::native_oauth_capture_retirement_v1::Prepared,
+        prepared: &catchplate_decision_gate::native_oauth_capture_retirement_v1::Prepared,
         binary: &str, deadline: u64) -> Result<Value, String> {
         let Self::Native(owner) = self else { return Err("capture retirement refuses unmeasured custody".to_owned()); };
         self.verify_live()?;
@@ -458,11 +458,11 @@ impl CustodySignerTransport {
     /// original verification and claims durably before generating a key.
     pub(super) fn sign_native_bootstrap_enrollment(&self,
         identity: &mut EnclaveRuntimeIdentityV1,
-        ingress: &serverware_decision_gate::enclave_runtime_identity_v1::QuotedMutualTlsIngressV1,
+        ingress: &catchplate_decision_gate::enclave_runtime_identity_v1::QuotedMutualTlsIngressV1,
         connection: &rustls::ServerConnection, packet_original: &[u8],
         delegation_pem: &[u8], delegation_pem_sha256: &str,
         setup_pem: &[u8], setup_pem_sha256: &str, challenge: [u8; 32], deadline: u64)
-        -> Result<serverware_decision_gate::enclave_runtime_identity_v1::BootstrapEnrollmentOriginalV1, String> {
+        -> Result<catchplate_decision_gate::enclave_runtime_identity_v1::BootstrapEnrollmentOriginalV1, String> {
         let Self::Native(owner) = self else {
             return Err("bootstrap enrollment requires its actual native custody runtime".to_owned());
         };
@@ -491,7 +491,7 @@ impl CustodySignerTransport {
                 "quote_assurance":"unverified-original",
                 "quote_sha256":owner.runtime.native_quote().map(|quote| sha256_prefixed(quote.document())),
                 "rollback_protection":"filesystem-development",
-                "response_attestation_profile":"serverware.nativeResponseRuntimeProof/v1",
+                "response_attestation_profile":"catchplate.nativeResponseRuntimeProof/v1",
                 "response_attestation_admission":"independent-client-profile-required",
             }),
         }

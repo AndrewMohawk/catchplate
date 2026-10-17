@@ -37,7 +37,7 @@ evidence-execution permission cannot substitute.
 
 ## Actual source path
 
-[`prepare_and_retain_registration_finalization_grant`](../serverware/control_plane_registration_finalization.py)
+[`prepare_and_retain_registration_finalization_grant`](../catchplate/control_plane_registration_finalization.py)
 accepts only the existing evidence-admission local locator and independently
 authenticated user/session scalars. A local locator is not ownership. Under
 the actual cold owner's lock and one work/window, the shared retained-original
@@ -52,7 +52,7 @@ must be enabled before this continuation starts. Its separately held key and
 root-signed purpose enrollment do not replace application-level permission.
 Old enrollment profiles do not silently gain this purpose.
 
-[`control_plane_registration_finalization_execution`](../serverware/control_plane_registration_finalization_execution.py)
+[`control_plane_registration_finalization_execution`](../catchplate/control_plane_registration_finalization_execution.py)
 then replays the actual signer originals to derive lookup selectors. It obtains
 bounded sibling IDs from the existing database observer, and the dedicated
 [authorization issuer](registration-finalization-authorization.md) reconstructs

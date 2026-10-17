@@ -1,6 +1,6 @@
 # Private release transport
 
-[`oidc_session_activation_release_transport.py`](../serverware/oidc_session_activation_release_transport.py)
+[`oidc_session_activation_release_transport.py`](../catchplate/oidc_session_activation_release_transport.py)
 provides one bounded local exchange for the actual
 [release startup](oidc-session-activation-release-startup.md) and
 [finite service](oidc-session-activation-release-service.md). The root-admitted
@@ -34,7 +34,7 @@ recovery method once.
 The only response is raw2 under `SWORRS01`: a canonical 71-byte ASCII
 `sha256:` request identity and the actual 64-byte token. The identity frames the
 entire exact ordered request, including its purpose, under
-`serverware.oidcSessionActivationReleaseTransportRequestIdentity/v1`.
+`catchplate.oidcSessionActivationReleaseTransportRequestIdentity/v1`.
 The client checks the echo, but echo, framing and local peer credentials are
 **not independent response authentication**. The separate
 [original-consuming response verifier](oidc-session-activation-release-response.md)
@@ -52,7 +52,7 @@ cumulative work. Available work can be less than these wire maxima.
 ## Actual guard and ownership
 
 The fixed Unix endpoint is
-`/run/serverware/oidc-session-activation-token-release/release.sock`.
+`/run/catchplate/oidc-session-activation-token-release/release.sock`.
 The service role is UID/GID 65502 and the request peer must be 65532:65532 before
 any magic, length or body is read. The private client pins the root-created
 listener peer to 0:0. Its exact endpoint tuple is `(path, timeout_seconds, 0, 0)`,

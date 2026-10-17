@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "serverware.policyCanaryControlledEvidence/v1",
+  "$id": "catchplate.policyCanaryControlledEvidence/v1",
   "title": "Native canary intake originals and cold receiver configuration",
   "$ref": "#/$defs/httpRequest",
   "$defs": {
@@ -15,7 +15,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "awsNitroRootCertificatesPem", "awsNitroCrlsDerBase64url", "nitroCertificateProfile"],
       "properties": {
-        "apiVersion": {"const": "serverware.policyCanaryNativeTrustRoots/v1"},
+        "apiVersion": {"const": "catchplate.policyCanaryNativeTrustRoots/v1"},
         "awsNitroRootCertificatesPem": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
         "awsNitroCrlsDerBase64url": {"const": []},
         "nitroCertificateProfile": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/certificateProfile"}
@@ -52,7 +52,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["schema", "deploymentId", "issuedAtEpochNs", "expiresAtEpochNs", "operationMaxSeconds", "limits", "trustRoots", "assignments"],
       "properties": {
-        "schema": {"const": "serverware.policyCanaryIntakeAuthorityPolicy/v2"},
+        "schema": {"const": "catchplate.policyCanaryIntakeAuthorityPolicy/v2"},
         "deploymentId": {"$ref": "#/$defs/component"},
         "issuedAtEpochNs": {"$ref": "#/$defs/epoch"}, "expiresAtEpochNs": {"$ref": "#/$defs/epoch"},
         "operationMaxSeconds": {"type": "integer", "minimum": 1, "maximum": 30},
@@ -101,7 +101,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.nativeCanaryEvidenceIntakeStatement/v1"
+          "const": "catchplate.nativeCanaryEvidenceIntakeStatement/v1"
         },
         "operation": {
           "enum": [
@@ -168,7 +168,7 @@
         },
         "workloadUri": {
           "type": "string",
-          "pattern": "^spiffe://serverware\\.policy-canary/[A-Za-z0-9._-]{1,128}/[A-Za-z0-9._-]{1,128}$"
+          "pattern": "^spiffe://catchplate\\.policy-canary/[A-Za-z0-9._-]{1,128}/[A-Za-z0-9._-]{1,128}$"
         },
         "clientCertificateSha256": {
           "type": "string",
@@ -221,7 +221,7 @@
           ],
           "properties": {
             "apiVersion": {
-              "const": "serverware.nativeResponseProofKeyEvidence/v1"
+              "const": "catchplate.nativeResponseProofKeyEvidence/v1"
             },
             "attestationDocumentB64": {
               "type": "string",
@@ -254,7 +254,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.policyCanaryEvidenceOriginal/v1"
+          "const": "catchplate.policyCanaryEvidenceOriginal/v1"
         },
         "requestId": {
           "type": "string",
@@ -321,7 +321,7 @@
       ],
       "properties": {
         "schema": {
-          "const": "serverware.policyCanaryIntakeReceiverConfiguration/v1"
+          "const": "catchplate.policyCanaryIntakeReceiverConfiguration/v1"
         },
         "sourceRevision": {
           "type": "string",
@@ -370,7 +370,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.policyCanaryControlledEvidence/v1"
+          "const": "catchplate.policyCanaryControlledEvidence/v1"
         },
         "batchOriginal": {
           "type": "string",
@@ -476,7 +476,7 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.policyCanaryControlledEvidenceResult/v1"
+          "const": "catchplate.policyCanaryControlledEvidenceResult/v1"
         },
         "requestId": {
           "type": "string",

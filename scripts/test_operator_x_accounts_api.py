@@ -17,9 +17,9 @@ sys.path.insert(0, str(ROOT))
 
 from fastapi import HTTPException
 from starlette.requests import Request
-from serverware import operator_x_accounts_api as api, operator_x_accounts as service
-from serverware import operator_x_oauth_profile as profiles, operator_x_oauth_protocol as protocol
-from serverware.operator_x_account_inputs import StartInput, DisconnectInput
+from catchplate import operator_x_accounts_api as api, operator_x_accounts as service
+from catchplate import operator_x_oauth_profile as profiles, operator_x_oauth_protocol as protocol
+from catchplate.operator_x_account_inputs import StartInput, DisconnectInput
 
 OPERATION = "20000000-0000-4000-8000-000000000001"
 CREDENTIAL = "20000000-0000-4000-8000-000000000002"
@@ -100,7 +100,7 @@ class XAccountApiTests(unittest.TestCase):
             "authorization_url": protocol.authorization_url(PROFILE, state=STATE, code_verifier="V" * 43),
             "state": STATE, "expires_at_epoch_ms": time.time_ns() // 1_000_000 + 590000,
             "profile_binding_digest": PROFILE.binding_digest}
-        with patch.object(api, "time", wraps=time), patch("serverware.operator_x_admission.public_origin", return_value=ORIGIN):
+        with patch.object(api, "time", wraps=time), patch("catchplate.operator_x_admission.public_origin", return_value=ORIGIN):
             response = api._start_response(value, NONCE)
             cookie = response.headers["set-cookie"]
             self.assertIn("HttpOnly", cookie)
@@ -130,7 +130,7 @@ class XAccountApiTests(unittest.TestCase):
             completed = stack.enter_context(patch.object(service, "complete_callback", return_value=operation()))
             response = api.callback_response(request(headers=[("cookie", cookie)]))
             self.assertEqual(response.status_code, 200)
-            self.assertIn(("serverware_x_operation=" + OPERATION).encode(), response.body)
+            self.assertIn(("catchplate_x_operation=" + OPERATION).encode(), response.body)
             self.assertNotIn(PRIVATE.encode(), response.body)
             self.assertNotIn(STATE.encode(), response.body)
             self.assertIn("default-src 'none'", response.headers["content-security-policy"])

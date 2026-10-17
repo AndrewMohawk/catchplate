@@ -18,8 +18,8 @@ const CONFIG = BASE + '/configuration/v1';
 const START = BASE + '/start';
 const DISCONNECT = BASE + '/disconnect';
 const GRANT = '/api/operator-demo/access-rules/x-post';
-const STORAGE = 'serverware.operator.x.account.operation.v1';
-const CONFIG_STORAGE = 'serverware.operator.x.configuration.operation.v1';
+const STORAGE = 'catchplate.operator.x.account.operation.v1';
+const CONFIG_STORAGE = 'catchplate.operator.x.configuration.operation.v1';
 const BUNDLE = 'x_text_post_v1';
 const SCOPES = ['offline.access', 'tweet.read', 'tweet.write', 'users.read'];
 const NONCE = 's'.repeat(43);
@@ -28,15 +28,15 @@ const SECRET = 'synthetic-provider-private-NEVER-RENDER';
 const CLIENT = 'synthetic-X-client';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const clone = value => JSON.parse(JSON.stringify(value));
-const oauthCapability = () => ({schema: 'serverware.operatorXOAuth/v1', connection_type: 'x_user_oauth_v1',
+const oauthCapability = () => ({schema: 'catchplate.operatorXOAuth/v1', connection_type: 'x_user_oauth_v1',
   auth_type: 'x_oauth', permission_preset: BUNDLE, start_path: START, operation_path_prefix: BASE + '/operations/',
   disconnect_review_path_template: BASE + '/accounts/{credential_id}/disconnect-review', disconnect_path: DISCONNECT,
   source_pair_required: true, automatic_refresh: true, daily_quota_available: false});
-const quotaCapability = () => ({schema: 'serverware.operatorXPostAttemptQuota/v1', field: 'daily_post_attempt_limit',
+const quotaCapability = () => ({schema: 'catchplate.operatorXPostAttemptQuota/v1', field: 'daily_post_attempt_limit',
   period: 'utc_day', scope: 'verified_x_account', unit: 'posting_attempt', minimum: 1, maximum: 1000000000});
-const postCapability = (quotaReady = false) => ({schema: 'serverware.operatorXPost/v1', connection_type: 'x_user_oauth_v1',
+const postCapability = (quotaReady = false) => ({schema: 'catchplate.operatorXPost/v1', connection_type: 'x_user_oauth_v1',
   create_rule_path: GRANT, api_origin: API, destination_allowed: true, operation_bundles: [BUNDLE],
-  sdk_auth_token: 'serverware-x-post-placeholder-v1', placeholder: 'Bearer serverware-x-post-placeholder-v1',
+  sdk_auth_token: 'catchplate-x-post-placeholder-v1', placeholder: 'Bearer catchplate-x-post-placeholder-v1',
   response_mode: 'x_post_json_v1', source_pair_required: true, daily_quota_available: quotaReady,
   ...(quotaReady ? {daily_quota: quotaCapability()} : {})});
 const account = (changes = {}) => credential({name: 'My X account', auth_type: 'x_oauth',
@@ -45,13 +45,13 @@ const account = (changes = {}) => credential({name: 'My X account', auth_type: '
 const postRule = (changes = {}) => rule({name: 'Publish text · @fixture_user', operation_bundle: BUNDLE,
   upstream_url: API + '/2/tweets', methods: ['POST'], request_fields: [], response_fields: [], query_keys: [],
   allowed_headers: ['accept', 'accept-language', 'content-type', 'sec-fetch-mode', 'user-agent'],
-  response_mode: 'x_post_json_v1', credential_input: 'replace_exact', placeholder: 'Bearer serverware-x-post-placeholder-v1', ...changes});
+  response_mode: 'x_post_json_v1', credential_input: 'replace_exact', placeholder: 'Bearer catchplate-x-post-placeholder-v1', ...changes});
 function configuration(state) {
-  const profile = {schema: 'serverware.operatorXOAuthProfile/v1', profile: 'operator-x-oauth-v1', provider_id: 'x',
+  const profile = {schema: 'catchplate.operatorXOAuthProfile/v1', profile: 'operator-x-oauth-v1', provider_id: 'x',
     client_id: CLIENT, redirect_uri: ORIGIN + '/api/oauth/callback/x', client_auth_method: 'client_secret_basic',
     permission_preset: BUNDLE, scopes: [...SCOPES], api_origins: [API], authorization_url: 'https://x.com/i/oauth2/authorize',
     token_url: API + '/2/oauth2/token', revocation_url: API + '/2/oauth2/revoke', identity_url: API + '/2/users/me'};
-  return {schema: 'serverware.operatorXConfiguration/v1', state: 'configured', revision: state.revision,
+  return {schema: 'catchplate.operatorXConfiguration/v1', state: 'configured', revision: state.revision,
     policy_hash: state.active, redirect_uri: profile.redirect_uri, permission_preset: BUNDLE, scopes: [...SCOPES],
     configuration: {config_version: 1, profile_binding_digest: digest(22), public_profile: profile, client_secret_configured: true},
     operation: null, review: null, blocked_reason: 'already_configured', consent_ready: false};
@@ -61,7 +61,7 @@ function unconfigured(state) {
     review: {expected_revision: state.revision, expected_policy_hash: state.active}, blocked_reason: null};
 }
 function configurationReceipt(state, id) {
-  return {schema: 'serverware.operatorXConfigurationOperation/v1', operation_id: id, status: 'committed',
+  return {schema: 'catchplate.operatorXConfigurationOperation/v1', operation_id: id, status: 'committed',
     config_version: 1, committed_revision: state.revision, policy_hash: state.active, profile_binding_digest: digest(22),
     public_profile: configuration(state).configuration.public_profile, client_secret_configured: true, consent_ready: false};
 }
@@ -69,12 +69,12 @@ function catalog(state) {
   const result = publicCatalog(state);
   result.capabilities.x_oauth = state.gateReady ? oauthCapability() : null;
   result.capabilities.x_post = state.gateReady ? postCapability(state.quotaReady) : null;
-  result.capabilities.application_proxy_authentication = {schema: 'serverware.operatorProxyAuthentication/v1',
+  result.capabilities.application_proxy_authentication = {schema: 'catchplate.operatorProxyAuthentication/v1',
     modes: ['bearer', 'basic_and_bearer_v1'], path: '/api/operator-demo/applications/proxy-authentication'};
   return result;
 }
 function operation(id, kind, status, changes = {}) {
-  return {schema: 'serverware.operatorXAccountOperation/v1', operation_id: id, kind, status,
+  return {schema: 'catchplate.operatorXAccountOperation/v1', operation_id: id, kind, status,
     credential_id: status === 'consent_pending' ? null : IDS.credential, reason: null,
     created_at: new Date(NOW).toISOString(), expires_at_epoch_ms: kind === 'consent' ? NOW + 600000 : null, ...changes};
 }
@@ -130,7 +130,7 @@ async function fixture(browser, options, exercise) {
     }
     const answer = (route, value, status = 200) => route.fulfill({status, contentType: 'application/json',
       headers: {'Cache-Control': 'no-store'}, body: JSON.stringify(value)});
-    const document = execFileSync('python3', ['-B', '-c', 'from serverware.operator_demo_portal import render; print(render())'],
+    const document = execFileSync('python3', ['-B', '-c', 'from catchplate.operator_demo_portal import render; print(render())'],
       {cwd: ROOT, encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024});
     const handler = async route => {
       const request = route.request(), url = new URL(request.url()), bytes = request.postDataBuffer();
@@ -161,7 +161,7 @@ async function fixture(browser, options, exercise) {
             return await answer(route, operations.get(id));
           }
           assert.equal(url.pathname, BASE + '/accounts/' + IDS.credential + '/disconnect-review');
-          return await answer(route, {schema: 'serverware.operatorXDisconnectReview/v1', credential_id: IDS.credential,
+          return await answer(route, {schema: 'catchplate.operatorXDisconnectReview/v1', credential_id: IDS.credential,
             expected_credential_generation: state.credentials[0].credential_generation, expected_revision: state.revision,
             expected_policy_hash: state.active, review_digest: digest(88), affected_credential_ids: [IDS.credential],
             affected_rule_ids: state.rules.filter(item => item.status === 'active').map(item => item.id).sort()});
@@ -194,7 +194,7 @@ async function fixture(browser, options, exercise) {
           for (const [key, value] of Object.entries({response_type: 'code', client_id: CLIENT,
             redirect_uri: ORIGIN + '/api/oauth/callback/x', scope: SCOPES.join(' '), state: NONCE,
             code_challenge: CHALLENGE, code_challenge_method: 'S256'})) authorization.searchParams.set(key, value);
-          return await answer(route, {schema: 'serverware.operatorXConsent/v1', operation_id: body.operation_id,
+          return await answer(route, {schema: 'catchplate.operatorXConsent/v1', operation_id: body.operation_id,
             status: 'consent_pending', authorization_url: authorization.href, state: NONCE,
             expires_at_epoch_ms: NOW + 600000, profile_binding_digest: digest(22)}, 201);
         }
@@ -231,10 +231,10 @@ async function fixture(browser, options, exercise) {
     };
     for (const path of ['/api/operator-demo/catalog', CONFIG, CONFIG + '/*', START, GRANT, DISCONNECT,
       BASE + '/operations/*', BASE + '/accounts/*/disconnect-review']) await controls.context.route(ORIGIN + path, handler);
-    await controls.context.route(ORIGIN + '/?serverware_x_operation=*', async route => {
+    await controls.context.route(ORIGIN + '/?catchplate_x_operation=*', async route => {
       const url = new URL(route.request().url());
       assert.equal(route.request().method(), 'GET'); assert.equal([...url.searchParams].length, 1);
-      assert(operations.has(url.searchParams.get('serverware_x_operation')));
+      assert(operations.has(url.searchParams.get('catchplate_x_operation')));
       await route.fulfill({status: 200, contentType: 'text/html', body: document});
     });
     await controls.context.route('https://x.com/**', async route => {
@@ -360,7 +360,7 @@ const tests = [
     const id = seen.starts[0].operation_id;
     state.credentials.push(account()); state.revision++;
     operations.set(id, operation(id, 'consent', 'connected'));
-    await page.goto(ORIGIN + '/?serverware_x_operation=' + id + '#credentials', {waitUntil: 'networkidle'});
+    await page.goto(ORIGIN + '/?catchplate_x_operation=' + id + '#credentials', {waitUntil: 'networkidle'});
     assert.equal(new URL(page.url()).search, ''); await privacy(page, id);
     await page.locator('#x-account-check').click();
     await page.waitForFunction(() => !document.querySelector('#x-account-acknowledge').disabled);
@@ -388,7 +388,7 @@ const tests = [
     await review(page); assert.match(await page.locator('#connect-review-details').innerText(), /No daily posting-attempt limit is set/);
     await responsive(page); await grant(page); assert.equal(seen.grants.length, 1);
     assert.deepEqual(state.rules[0], postRule());
-    const recipe = await page.locator('#client-command').innerText(); assert(recipe.includes('SERVERWARE_X_POST_CONFIRM=post-once'));
+    const recipe = await page.locator('#client-command').innerText(); assert(recipe.includes('CATCHPLATE_X_POST_CONFIRM=post-once'));
     assert(!recipe.includes(SECRET)); assert(!recipe.includes('fixture_user')); await privacy(page);
   })],
   ['advertised quota defaults to no limit and omits the field, desktop/mobile', (browser, artifacts) => fixture(browser,
@@ -495,13 +495,13 @@ const tests = [
 ];
 async function hashes() {
   const names = ['scripts/test_operator_x_accounts_browser.cjs', 'scripts/operator_x_browser_fixture.cjs',
-    'scripts/test_operator_catalog_browser.cjs', 'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
-    ...(await readdir(join(ROOT, 'serverware/operator_demo_web'))).filter(name => /\.(html|js|css)$/.test(name)).sort().map(name => 'serverware/operator_demo_web/' + name)];
+    'scripts/test_operator_catalog_browser.cjs', 'scripts/test_operator_ordinary_modes_browser.cjs', 'catchplate/operator_demo_portal.py',
+    ...(await readdir(join(ROOT, 'catchplate/operator_demo_web'))).filter(name => /\.(html|js|css)$/.test(name)).sort().map(name => 'catchplate/operator_demo_web/' + name)];
   return Object.fromEntries(await Promise.all(names.map(async name => [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')])));
 }
 async function runSuite(browser, configurationOnly = false, recoveryOnly = false) {
   const before = await hashes(); const contexts = new Set(); let timer; let finished = false; let passed = 0;
-  const artifacts = {directory: await mkdtemp('/tmp/serverware-x-accounts-browser-'), paths: [], cases: []};
+  const artifacts = {directory: await mkdtemp('/tmp/catchplate-x-accounts-browser-'), paths: [], cases: []};
   console.log(JSON.stringify({phase: 'source-before', hashes: before, artifactDirectory: artifacts.directory}));
   const bounded = {async newContext(...args) { assert(!finished); const context = await browser.newContext(...args);
     if (finished) { await context.close(); throw new Error('suite finished'); }

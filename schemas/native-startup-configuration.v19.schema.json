@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v19.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-startup-configuration.v19.schema.json",
   "title": "Explicit native succession and durable canary delivery startup",
   "$comment": "Requires a separately signed durable canary delivery configuration alongside the unchanged v18 succession/historical-key owners. Recovery targets are observation-only. Selection, parsing and transport success are never effect, intake, promotion or cleanup authority; original native and operation lifetimes remain mandatory.",
   "type": "object",
@@ -32,7 +32,7 @@
   ],
   "properties": {
     "apiVersion": {
-      "const": "serverware.nativeStartupConfiguration/v19"
+      "const": "catchplate.nativeStartupConfiguration/v19"
     },
     "gate": {
       "$ref": "native-startup-configuration.v18.schema.json#/properties/gate"

@@ -382,9 +382,9 @@ fn continuation_checks_actual_prefetch_and_authenticated_eof_without_native_admi
     // configuration or successful attestation/continuation is constructed.
     assert!(native_ingress_attestation::continuation_head_valid(&head(b""), &mut stream));
     for extra in [
-        b"x-serverware-ingress-continuation: connect-v1\r\n".as_slice(),
-        b"x-serverware-ingress-challenge: unwanted\r\n".as_slice(),
-        b"x-serverware-ingress-evidence: client-trust-v2\r\n".as_slice(),
+        b"x-catchplate-ingress-continuation: connect-v1\r\n".as_slice(),
+        b"x-catchplate-ingress-challenge: unwanted\r\n".as_slice(),
+        b"x-catchplate-ingress-evidence: client-trust-v2\r\n".as_slice(),
         b"Content-Length: 1\r\n".as_slice(),
     ] {
         assert!(!native_ingress_attestation::continuation_head_valid(&head(extra), &mut stream));

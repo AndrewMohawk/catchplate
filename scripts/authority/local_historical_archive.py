@@ -40,7 +40,7 @@ guaranteed erasure. Error output contains only a fixed refusal message.
 
 
 def arguments(argv):
-    from serverware.authority_local_historical_archive import ORIGINAL_NAMES
+    from catchplate.authority_local_historical_archive import ORIGINAL_NAMES
 
     names = ("--approval-fd", "--approval-sha256", "--signing-key-fd", *ORIGINAL_FLAGS)
     if len(argv) != 2 * len(names) or tuple(argv[::2]) != names:
@@ -71,7 +71,7 @@ def main(argv=None):
         return 0
     owner = None
     try:
-        from serverware.authority_local_historical_archive import LocalHistoricalArchiveIssuer
+        from catchplate.authority_local_historical_archive import LocalHistoricalArchiveIssuer
         try:
             owner = LocalHistoricalArchiveIssuer(**arguments(argv))
             owner.publish()

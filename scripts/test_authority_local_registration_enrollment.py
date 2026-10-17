@@ -14,8 +14,8 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from scripts.authority import local_registration_enrollment as cli
 from scripts.test_authority_local_enrollment_configuration import fixture as configuration_fixture, prepare as configure, public_row
-from serverware import authority_local_cohort as cohort_issuer
-from serverware import authority_local_registration_enrollment as local
+from catchplate import authority_local_cohort as cohort_issuer
+from catchplate import authority_local_registration_enrollment as local
 
 PIN = "sha256:" + "1" * 64
 ERRORS = (ValueError, KeyError, InvalidSignature)
@@ -87,8 +87,8 @@ def prepare(selected, ledger=None):
 
 class RegistrationEnrollmentControls(unittest.TestCase):
     def test_signer_session_cap_real_signature_and_expired_original_refusal(self):
-        from serverware import registration_evidence_signer_bootstrap as signer
-        from serverware.authority_local_limits import LOCAL_SESSION_MAX_NS
+        from catchplate import registration_evidence_signer_bootstrap as signer
+        from catchplate.authority_local_limits import LOCAL_SESSION_MAX_NS
         self.assertEqual(LOCAL_SESSION_MAX_NS, 7_200_000_000_000)
         self.assertEqual(signer.MAX_RECEIPT_AGE_NS, LOCAL_SESSION_MAX_NS)
         # Synthetic component claims and a real test-key signature; this is not
@@ -120,7 +120,7 @@ class RegistrationEnrollmentControls(unittest.TestCase):
             with self.assertRaises(signer.RegistrationEvidenceSignerBootstrapError):
                 signer._read_attestation(raw, root.public_key(), LOCAL_SESSION_MAX_NS, work())
 
-    @patch.dict(os.environ, {"SERVERWARE_RELEASE_CHANNEL": "dev"})
+    @patch.dict(os.environ, {"CATCHPLATE_RELEASE_CHANNEL": "dev"})
     def test_five_existing_producers_join_signed_outer_bootstrap(self):
         selected, root = fixture()
         plan = local._WorkPlan()

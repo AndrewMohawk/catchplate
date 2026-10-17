@@ -1,6 +1,6 @@
 # Recovery grant original admission
 
-`serverware/oidc_session_activation_release_recovery_grant_admission.py` is a
+`catchplate/oidc_session_activation_release_recovery_grant_admission.py` is a
 pure receiving boundary for one fresh recovery grant triple. It does not change
 the existing LIVE profile, access a private outcome store, open a token, perform
 an exchange, or authorize retries.

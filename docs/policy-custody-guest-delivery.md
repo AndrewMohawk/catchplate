@@ -27,7 +27,7 @@ not a fresh lookup. The held originals are checked throughout construction and
 serving. This is retained-original custody, not proof that external current
 generation/key grants remain authorized: existing service checks still own that.
 
-The root assignment is exact5 `serverware.policyCustodyGuestConfiguration/v1`:
+The root assignment is exact5 `catchplate.policyCustodyGuestConfiguration/v1`:
 apiVersion, authority, serviceRole, uid and gid. The authority is an independently
 provisioned Ed25519 public key and SHA256(raw32) key ID, distinct from every
 delivered signer. IDs 0, 65534, 64988–64990 and UINT32_MAX are refused. The future cohort must
@@ -39,7 +39,7 @@ The exact15 payload binds configuration SHA, authority key ID, closed service
 role, final UID/GID, raw16 kernel boot ID, time-namespace device/inode, original
 issued/startup/lifetime BOOTTIME decimal strings, nonzero invocation ID, exact
 runtime-config pin, credential inventory and activation inventory. Ed25519 signs
-`serverware.policyCustodyGuestDelivery.signature/v1` followed by NUL and the
+`catchplate.policyCustodyGuestDelivery.signature/v1` followed by NUL and the
 repository's exact UTF-8 canonical JSON payload (no newline). All base64url is
 unpadded and canonical. The signed startup interval is at most 30 seconds and
 must fit the existing runtime startup budget; it is never restarted at load.
@@ -69,7 +69,7 @@ peer executable/cgroup/label and current signed endpoint identities. Delivery
 does not weaken any of these checks. The future fixed-exec launcher remains
 responsible for closing all unlisted ambient descriptors before admission.
 
-The purpose-fixed exact5 `serverware.policyCustodyGuestStartup/v1` notice binds
+The purpose-fixed exact5 `catchplate.policyCustodyGuestStartup/v1` notice binds
 delivery SHA, role and signed invocation ID, with phase `constructed`. It is
 sent once on FD3 only at the original real readiness callsite, after journal
 recovery, required peer handshakes and backend construction. The future parent

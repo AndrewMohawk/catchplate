@@ -70,7 +70,7 @@ tarball reads and default auditing remain separate work.
 
 ## User workflow and defaults
 
-1. Save one npm registry credential in Serverware. For the public registry, use
+1. Save one npm registry credential in Catchplate. For the public registry, use
    a granular access token, not the historical example's automation-token label.
    Do not claim the account or token permissions are provider-verified merely
    because a user supplied them.
@@ -82,7 +82,7 @@ tarball reads and default auditing remain separate work.
    example window is daily 09:00 inclusive to 17:00 exclusive UTC. A window
    authorizes requests; it does not queue or schedule a publication. Never infer
    weekdays, unpublish, tag management, token management, or account/team writes.
-4. Generate ordinary npm configuration: the Serverware application identity and
+4. Generate ordinary npm configuration: the Catchplate application identity and
    token authenticate the proxy; a registry-scoped dummy `_authToken` produces
    the exact upstream Authorization placeholder. The protected npm token stays
    server-side. No response fields, envelopes, or handwritten HTTP adapter are
@@ -100,7 +100,7 @@ states that legacy tokens were removed, describes stage-only tokens, and
 announces removal of granular-token direct publication in January 2027. A
 direct-publish implementation must state this provider boundary. Stage/promote,
 trusted publishing, and interactive provider 2FA are separate workflows, not
-capabilities conferred by Serverware's credential replacement or approval.
+capabilities conferred by Catchplate's credential replacement or approval.
 
 ## Historical legacy review and remaining install gaps
 
@@ -122,12 +122,12 @@ and verification results.
 
 Exact implementation entry points:
 
-- [Catalog DTOs](../serverware/operator_catalog_inputs.py),
-  [creation](../serverware/operator_catalog_mutations.py),
-  [emitter](../serverware/operator_catalog_policy.py).
+- [Catalog DTOs](../catchplate/operator_catalog_inputs.py),
+  [creation](../catchplate/operator_catalog_mutations.py),
+  [emitter](../catchplate/operator_catalog_policy.py).
 - [npm schema](../schemas/adapters/npm.registry.schema.json),
-  [Python request profiles](../serverware/policy_bundle.py),
-  [Python adapter](../serverware/adapters.py).
+  [Python request profiles](../catchplate/policy_bundle.py),
+  [Python adapter](../catchplate/adapters.py).
 - [Rust main](../data-plane/decision-gate-rs/src/main.rs):
   `provider_request_profile`, `validate_provider_request_profile_config`,
   `npm_operation`, `npm_operation_fields`,

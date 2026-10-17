@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/policy-candidate-generation-intake.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/policy-candidate-generation-intake.v1.schema.json",
   "title": "Controlled native candidate generation public requests and independent purpose policy",
   "description": "Data shapes are not authority. Source enforces canonical ASCII originals, UTF-8 byte limits, exact current protected predecessors, hardware assertion, signed purpose admission and nonrenewing deadlines. The original argument JSON remains a string, not JavaScript Number-coerced data. Publication and internal verification rows retain the existing source-owned closed projections.",
   "anyOf": [{"$ref": "#/$defs/draftRequest"}, {"$ref": "#/$defs/draftResponse"}, {"$ref": "#/$defs/optionsRequest"},
@@ -15,7 +15,7 @@
     "handoff": {
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "requestId", "candidateId", "artifactEnvelopeDigest", "canaryId", "assignmentEnvelopeDigest", "loadReceiptEnvelopeDigest", "instanceId", "bootId", "runtimeAttestationHandoffDigest", "predecessorPolicyHash", "candidatePolicyBundle"],
-      "properties": {"apiVersion": {"const": "serverware.policyAuthorityCandidateHandoff/v1"}, "requestId": {"$ref": "#/$defs/requestId"},
+      "properties": {"apiVersion": {"const": "catchplate.policyAuthorityCandidateHandoff/v1"}, "requestId": {"$ref": "#/$defs/requestId"},
         "candidateId": {"$ref": "#/$defs/id"}, "canaryId": {"$ref": "#/$defs/id"}, "instanceId": {"$ref": "#/$defs/id"},
         "artifactEnvelopeDigest": {"$ref": "#/$defs/digest"}, "assignmentEnvelopeDigest": {"$ref": "#/$defs/digest"},
         "loadReceiptEnvelopeDigest": {"$ref": "#/$defs/digest"}, "bootId": {"$ref": "#/$defs/digest"},
@@ -25,18 +25,18 @@
     },
     "draftRequest": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "handoff"],
-      "properties": {"apiVersion": {"const": "serverware.policyCandidateIntakeRequest/v1"}, "handoff": {"$ref": "#/$defs/handoff"}}
+      "properties": {"apiVersion": {"const": "catchplate.policyCandidateIntakeRequest/v1"}, "handoff": {"$ref": "#/$defs/handoff"}}
     },
     "draftResponse": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "okForAction", "argumentsOriginal"],
-      "properties": {"apiVersion": {"const": "serverware.policyCandidateIntakeRequest/v1"}, "okForAction": {"const": false}, "argumentsOriginal": {"$ref": "#/$defs/argumentsOriginal"}}
+      "properties": {"apiVersion": {"const": "catchplate.policyCandidateIntakeRequest/v1"}, "okForAction": {"const": false}, "argumentsOriginal": {"$ref": "#/$defs/argumentsOriginal"}}
     },
     "optionsRequest": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "argumentsOriginal"],
-      "properties": {"apiVersion": {"const": "serverware.policyCandidateIntakeOptions/v1"}, "argumentsOriginal": {"$ref": "#/$defs/argumentsOriginal"}}
+      "properties": {"apiVersion": {"const": "catchplate.policyCandidateIntakeOptions/v1"}, "argumentsOriginal": {"$ref": "#/$defs/argumentsOriginal"}}
     },
     "optionsResponse": {
-      "type": "object", "additionalProperties": false, "required": ["publicKey", "serverware"],
+      "type": "object", "additionalProperties": false, "required": ["publicKey", "catchplate"],
       "properties": {
         "publicKey": {
           "type": "object", "additionalProperties": false, "required": ["challenge", "rpId", "allowCredentials", "timeout", "userVerification"],
@@ -45,9 +45,9 @@
               "required": ["type", "id"], "properties": {"type": {"const": "public-key"}, "id": {"type": "string", "minLength": 1, "maxLength": 4096}}}},
             "timeout": {"const": 30000}, "userVerification": {"const": "required"}}
         },
-        "serverware": {
+        "catchplate": {
           "type": "object", "additionalProperties": false, "required": ["schema", "operation", "operationId", "challengeId", "credentialRecordId", "payloadDigest", "expiresAt"],
-          "properties": {"schema": {"const": "serverware.policyCandidateIntakeOptions/v1"}, "operation": {"const": "policy.candidate.generation-claim"},
+          "properties": {"schema": {"const": "catchplate.policyCandidateIntakeOptions/v1"}, "operation": {"const": "policy.candidate.generation-claim"},
             "operationId": {"$ref": "#/$defs/digest"}, "challengeId": {"$ref": "#/$defs/digest"}, "credentialRecordId": {"$ref": "#/$defs/id"},
             "payloadDigest": {"$ref": "#/$defs/digest"}, "expiresAt": {"type": "string", "minLength": 1, "maxLength": 128}}
         }
@@ -55,14 +55,14 @@
     },
     "publishRequest": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "argumentsOriginal", "mfa"],
-      "properties": {"apiVersion": {"const": "serverware.policyCandidateIntakeOptions/v1"}, "argumentsOriginal": {"$ref": "#/$defs/argumentsOriginal"},
+      "properties": {"apiVersion": {"const": "catchplate.policyCandidateIntakeOptions/v1"}, "argumentsOriginal": {"$ref": "#/$defs/argumentsOriginal"},
         "mfa": {"type": "object", "additionalProperties": false, "required": ["policyCandidateProfile", "assertion"],
-          "properties": {"policyCandidateProfile": {"const": "serverware.policyCandidateIntakeOptions/v1"},
+          "properties": {"policyCandidateProfile": {"const": "catchplate.policyCandidateIntakeOptions/v1"},
             "assertion": {"$ref": "control-plane-publication-approval.v1.schema.json#/$defs/assertion"}}}}
     },
     "lookupRequest": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "requestId"],
-      "properties": {"apiVersion": {"const": "serverware.policyCandidateIntakeRequest/v1"}, "requestId": {"$ref": "#/$defs/requestId"}}
+      "properties": {"apiVersion": {"const": "catchplate.policyCandidateIntakeRequest/v1"}, "requestId": {"$ref": "#/$defs/requestId"}}
     },
     "recoveryRequest": {
       "$ref": "#/$defs/lookupRequest",
@@ -72,13 +72,13 @@
     "nativeLookupRequest": {
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "requestId", "replayId", "managementHandoffId", "requestSha256"],
-      "properties": {"apiVersion": {"const": "serverware.policyShadowGenerationLookup/v1"}, "requestId": {"$ref": "#/$defs/nativeLookupId"},
+      "properties": {"apiVersion": {"const": "catchplate.policyShadowGenerationLookup/v1"}, "requestId": {"$ref": "#/$defs/nativeLookupId"},
         "replayId": {"$ref": "#/$defs/nativeLookupId"}, "managementHandoffId": {"$ref": "#/$defs/nativeLookupId"}, "requestSha256": {"$ref": "#/$defs/digest"}},
       "description": "Canonical ASCII, at most 4096 bytes, authenticated management POST /v1/policy-shadow/generations/lookup. Success200 is the exact original signed publication envelope, not a new receipt. Absence/currentness/expiry refusal never establishes noncommit."
     },
     "publishResponse": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "automaticRetryAllowed", "requestId", "publication"],
-      "properties": {"apiVersion": {"const": "serverware.policyCandidateGenerationResult/v1"}, "automaticRetryAllowed": {"const": false},
+      "properties": {"apiVersion": {"const": "catchplate.policyCandidateGenerationResult/v1"}, "automaticRetryAllowed": {"const": false},
         "requestId": {"$ref": "#/$defs/requestId"}, "publication": {"$ref": "#/$defs/publication"}}
     },
     "publication": {
@@ -86,14 +86,14 @@
     },
     "recoveryResponse": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "automaticRetryAllowed", "requestId", "publication"],
-      "properties": {"apiVersion": {"const": "serverware.policyCandidateGenerationResult/v1"}, "automaticRetryAllowed": {"const": false},
+      "properties": {"apiVersion": {"const": "catchplate.policyCandidateGenerationResult/v1"}, "automaticRetryAllowed": {"const": false},
         "requestId": {"$ref": "#/$defs/requestId"}, "publication": {"allOf": [{"$ref": "#/$defs/publicationFields"},
           {"properties": {"recovered": {"const": true}}}]}}
     },
     "publicationFields": {
       "type": "object", "additionalProperties": false,
       "required": ["ok", "apiVersion", "requestId", "replayId", "managementHandoffId", "canaryId", "candidateId", "instanceId", "bootIdSha256", "requestPayloadSha256", "generationId", "publicationEnvelopeSha256", "publicationPayloadSha256", "verificationReceiptSha256", "attestationChainSha256", "signingKeySpkiSha256", "recovered"],
-      "properties": {"ok": {"const": true}, "apiVersion": {"const": "serverware.policyAuthorityCandidateHandoffResult/v2"},
+      "properties": {"ok": {"const": true}, "apiVersion": {"const": "catchplate.policyAuthorityCandidateHandoffResult/v2"},
         "requestId": {"$ref": "#/$defs/requestId"}, "replayId": {"type": "string", "pattern": "^replay:[0-9a-f]{64}$"},
         "managementHandoffId": {"type": "string", "pattern": "^handoff:[0-9a-f]{64}$"}, "canaryId": {"$ref": "#/$defs/id"},
         "candidateId": {"$ref": "#/$defs/id"}, "instanceId": {"$ref": "#/$defs/id"}, "bootIdSha256": {"$ref": "#/$defs/digest"},
@@ -104,13 +104,13 @@
     },
     "observation": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "okForAction", "automaticRetryAllowed", "claimOriginal", "publicationOriginal"],
-      "properties": {"apiVersion": {"const": "serverware.policyCandidateGenerationObservation/v1"}, "okForAction": {"const": false},
+      "properties": {"apiVersion": {"const": "catchplate.policyCandidateGenerationObservation/v1"}, "okForAction": {"const": false},
         "automaticRetryAllowed": {"const": false}, "claimOriginal": {"type": ["string", "null"], "maxLength": 2097152},
         "publicationOriginal": {"type": ["string", "null"], "maxLength": 3145728}}
     },
     "authorityPolicy": {
       "type": "object", "additionalProperties": false, "required": ["schema", "controlPlaneConfigurationDigest", "credentialPolicy", "assignments", "operationMaxSeconds", "maximumOriginalBytes"],
-      "properties": {"schema": {"const": "serverware.policyCandidateIntakeAuthorityPolicy/v1"}, "controlPlaneConfigurationDigest": {"$ref": "#/$defs/digest"},
+      "properties": {"schema": {"const": "catchplate.policyCandidateIntakeAuthorityPolicy/v1"}, "controlPlaneConfigurationDigest": {"$ref": "#/$defs/digest"},
         "credentialPolicy": {"$ref": "control-plane-publication-approval.v1.schema.json#/$defs/credentialPolicy"},
         "operationMaxSeconds": {"type": "integer", "minimum": 1, "maximum": 30}, "maximumOriginalBytes": {"const": 1048576},
         "assignments": {"type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true,

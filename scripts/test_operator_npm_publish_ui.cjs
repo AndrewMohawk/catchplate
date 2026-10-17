@@ -6,9 +6,9 @@ const {context, rawCatalog, npmRule, cap, existingPair, IDS, clone} = require('.
 const ORIGIN = 'https://registry.npmjs.org';
 const PACKAGE = '@example/package';
 const BUNDLE = 'npm_publish_v1';
-const capability = (allowed = true) => ({schema: 'serverware.operatorNpmPublish/v1', connection_type: 'npm_token_v1',
+const capability = (allowed = true) => ({schema: 'catchplate.operatorNpmPublish/v1', connection_type: 'npm_token_v1',
   create_rule_path: '/api/operator-demo/access-rules/npm-publish', registry_origin: ORIGIN, destination_allowed: allowed,
-  operation_bundles: [BUNDLE], sdk_auth_token: 'serverware-npm-placeholder-v1', placeholder: 'Bearer serverware-npm-placeholder-v1',
+  operation_bundles: [BUNDLE], sdk_auth_token: 'catchplate-npm-placeholder-v1', placeholder: 'Bearer catchplate-npm-placeholder-v1',
   response_mode: 'npm_publish_json_v1', source_pair_required: true, max_active_rules_per_application: 1, default_tag: 'latest',
   publishing_window_timezone: 'UTC', read_metadata_included: true, max_request_body_bytes: 16777216, max_tarball_bytes: 8388608});
 function publishRule(changes = {}) {
@@ -83,9 +83,9 @@ const tests = [
     const input = {proxyUrl: 'https://proxy.example.test', applicationId: IDS.application, proxyAuthentication: 'basic_and_bearer_v1',
       packageName: PACKAGE, tag: 'latest', publishingWindow: {start: '09:00', end: '17:00'}};
     const recipe = pure.run('buildNpmPublishClientRecipe(input)', input);
-    for (const expected of ['https-proxy=https://' + IDS.application + ':${SERVERWARE_PROXY_TOKEN}@proxy.example.test',
-      '//registry.npmjs.org/:_authToken=serverware-npm-placeholder-v1', 'strict-ssl=true', 'NODE_EXTRA_CA_CERTS=', 'fetch-retries=0',
-      'cache=${SERVERWARE_NPM_CACHE}', "publish ./package.tgz --access=public --tag='latest' --ignore-scripts=true --provenance=false",
+    for (const expected of ['https-proxy=https://' + IDS.application + ':${CATCHPLATE_PROXY_TOKEN}@proxy.example.test',
+      '//registry.npmjs.org/:_authToken=catchplate-npm-placeholder-v1', 'strict-ssl=true', 'NODE_EXTRA_CA_CERTS=', 'fetch-retries=0',
+      'cache=${CATCHPLATE_NPM_CACHE}', "publish ./package.tgz --access=public --tag='latest' --ignore-scripts=true --provenance=false",
       '--force=false --dry-run=false --workspaces=false --json', '09:00–17:00 UTC', 'do not automatically repeat'])
       assert(recipe.includes(expected), expected);
     assert(!recipe.includes('strict-ssl=false')); assert(!recipe.includes('curl '));

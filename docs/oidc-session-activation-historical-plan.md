@@ -8,7 +8,7 @@ cold custody path exists. No build, test or runtime execution was performed.
 
 ## Distinct original-only APIs
 
-[authority_oidc_session_activation_plan.py](../serverware/authority_oidc_session_activation_plan.py)
+[authority_oidc_session_activation_plan.py](../catchplate/authority_oidc_session_activation_plan.py)
 adds `_verify_historical_full_on_work` with the same explicit original keyword
 inputs as `_verify_full_on_work`. It requires the real signed envelope,
 independent typed request/scope and keys, original assertion/tokens/delivery
@@ -23,7 +23,7 @@ same call's retained current-processing guard and requires the same work object.
 Live `_capture`, `_produce_on_work`, `_verify_full_on_work`, `_verify_on_work`
 and their signatures retain active-expiry checks; they do not route to history.
 
-[authority_oidc_session_activation_writes.py](../serverware/authority_oidc_session_activation_writes.py)
+[authority_oidc_session_activation_writes.py](../catchplate/authority_oidc_session_activation_writes.py)
 adds `_replay_historical_on_work`: the existing original write-replay inputs plus
 `historical_plan_interval`, the exact authenticated `(issued, expires)` pair.
 Only the plan verifier supplies that pair after verifying the original signature.

@@ -161,9 +161,9 @@ class BuildTests(unittest.TestCase):
             self.assertTrue(mounts[3].endswith(",dst=/target"))
 
     def test_cargo_artifact_success_requires_terminal_record_and_retains_tested_false(self):
-        self.file("target/release/serverware-decision-gate", b"\x7fELFsynthetic-unexecuted", 0o755)
-        row = {"reason": "compiler-artifact", "target": {"name": "serverware-decision-gate", "kind": ["bin"]},
-            "profile": {"test": False}, "executable": "/target/release/serverware-decision-gate", "fresh": False}
+        self.file("target/release/catchplate-decision-gate", b"\x7fELFsynthetic-unexecuted", 0o755)
+        row = {"reason": "compiler-artifact", "target": {"name": "catchplate-decision-gate", "kind": ["bin"]},
+            "profile": {"test": False}, "executable": "/target/release/catchplate-decision-gate", "fresh": False}
         finish = {"reason": "build-finished", "success": True}
         encode = lambda rows: b"\n".join(json.dumps(item).encode() for item in rows)
         for rows in ([row], [row, row, finish], [row, {**finish, "success": False}],

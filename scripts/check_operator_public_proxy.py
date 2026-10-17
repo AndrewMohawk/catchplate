@@ -22,16 +22,16 @@ import tempfile
 import time
 from urllib.parse import urlencode
 
-ENVIRONMENT = "SERVERWARE_PUBLIC_PROXY_CHECK_JSON"
-SCHEMA = "serverware.publicProxySmokeResult/v1"
-PROXY = "https://serverware-proxy.example.com:443"
+ENVIRONMENT = "CATCHPLATE_PUBLIC_PROXY_CHECK_JSON"
+SCHEMA = "catchplate.publicProxySmokeResult/v1"
+PROXY = "https://catchplate-proxy.example.com:443"
 UPSTREAM = "https://demo-upstream:8443/echo"
 PEER = "203.0.113.10"
 BODY = b'{"public_proxy_smoke":true}'
-DUMMY = "Bearer SERVERWARE_PUBLIC_PROXY_DUMMY"
+DUMMY = "Bearer CATCHPLATE_PUBLIC_PROXY_DUMMY"
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
-TRAILER = b"\nserverware-public-proxy:"
+TRAILER = b"\ncatchplate-public-proxy:"
 FIELDS = {"schema", "run_id", "application_id", "client_token", "credential_id", "rule_id",
           "policy_hash", "authorization_sha256", "ca_pem", "ca_sha256"}
 
@@ -69,7 +69,7 @@ def parse_config(raw):
     require(type(raw) is str and 1 <= len(raw) <= 32768)
     value = document(raw)
     require(type(value) is dict and set(value) == FIELDS and all(type(item) is str for item in value.values()))
-    require(value["schema"] == "serverware.publicProxySmoke/v1"
+    require(value["schema"] == "catchplate.publicProxySmoke/v1"
         and re.fullmatch(r"public-proxy-[0-9a-f]{32}", value["run_id"])
         and re.fullmatch(r"[A-Za-z0-9_-]{43}", value["client_token"]))
     require(all(UUID.fullmatch(value[key]) for key in ("application_id", "credential_id", "rule_id"))
@@ -96,7 +96,7 @@ def curl_arguments(config, ca_path, body_path):
         "--suppress-connect-headers", "--request", "POST", "--data-binary", "@" + str(body_path),
         "--header", "Authorization: " + DUMMY, "--header", "Content-Type: application/json",
         "--header", "Accept: application/json", "--header", "Accept-Encoding: identity",
-        "--header", "User-Agent: serverware-test-run/" + config["run_id"],
+        "--header", "User-Agent: catchplate-test-run/" + config["run_id"],
         "--write-out", TRAILER.decode() + "%{http_connect}:%{http_code}:%{proxy_ssl_verify_result}:%{ssl_verify_result}:%{remote_ip}\n",
         UPSTREAM + "?" + urlencode({"expectedAuthorizationSha256": config["authorization_sha256"]})]
 
@@ -175,31 +175,31 @@ def validate_result(config, mode, exit_code, output, error):
         require(name not in headers)
         headers[name] = value
     require(not set(headers) & {"authorization", "proxy-authorization", "set-cookie", "cookie",
-        "x-serverware-data-plane-token", "x-serverware-agent", "transfer-encoding", "trailer", "location"}
+        "x-catchplate-data-plane-token", "x-catchplate-agent", "transfer-encoding", "trailer", "location"}
         and headers.get("content-length") == str(len(body))
         and headers.get("content-type", "").lower() in {"application/json", "application/json; charset=utf-8"}
         and headers.get("content-encoding", "identity").lower() == "identity")
-    require(headers.get("x-serverware-policy-hash") == config["policy_hash"]
-        and headers.get("x-serverware-response-body-sha256") == sha(body)
-        and all(DIGEST.fullmatch(headers.get(key, "")) for key in ("x-serverware-request-digest", "x-serverware-operation-digest")))
+    require(headers.get("x-catchplate-policy-hash") == config["policy_hash"]
+        and headers.get("x-catchplate-response-body-sha256") == sha(body)
+        and all(DIGEST.fullmatch(headers.get(key, "")) for key in ("x-catchplate-request-digest", "x-catchplate-operation-digest")))
     value = document(body)
     require(type(value) is dict and set(value) == {"method", "path", "authorization_present", "authorization_scheme",
         "authorization_matches_expected", "proxy_authorization_seen", "query", "credential_marker",
-        "proxy_authorization", "cookie", "x_api_key", "serverware_agent"}
+        "proxy_authorization", "cookie", "x_api_key", "catchplate_agent"}
         and value.get("method") == "POST" and value.get("path") == "/echo"
         and value.get("authorization_present") is True and value.get("authorization_scheme") == "Bearer"
         and value.get("authorization_matches_expected") is True and value.get("proxy_authorization_seen") is False
         and type(value.get("query")) is dict and set(value["query"]) == {"_data_plane_token_seen", "_cookie_seen"}
         and all(item is False for item in value["query"].values()) and value.get("credential_marker") == "other"
-        and all(key in value and value[key] is None for key in ("proxy_authorization", "cookie", "x_api_key", "serverware_agent")))
+        and all(key in value and value[key] is None for key in ("proxy_authorization", "cookie", "x_api_key", "catchplate_agent")))
     result.update(response_body_sha256=sha(body), response_body_bytes=len(body),
-        request_digest=headers["x-serverware-request-digest"], operation_digest=headers["x-serverware-operation-digest"])
+        request_digest=headers["x-catchplate-request-digest"], operation_digest=headers["x-catchplate-operation-digest"])
     return result
 
 
 def execute(config, mode):
     # Only these owned temporary public-CA/fixed-body files are created and removed.
-    with tempfile.TemporaryDirectory(prefix="serverware-public-proxy-") as directory:
+    with tempfile.TemporaryDirectory(prefix="catchplate-public-proxy-") as directory:
         paths = [Path(directory) / "ca.pem", Path(directory) / "body.json"]
         for path, content in zip(paths, (config["ca_pem"].encode("ascii"), BODY)):
             descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)

@@ -11,11 +11,11 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_challenge_retention as retention
-from serverware import authority_challenge_row_transition as transition
-from serverware import authority_index_projection as projection
-from serverware import authority_query_read_work as measured
-from serverware.authority_index_contract import IndexLeaf
+from catchplate import authority_challenge_retention as retention
+from catchplate import authority_challenge_row_transition as transition
+from catchplate import authority_index_projection as projection
+from catchplate import authority_query_read_work as measured
+from catchplate.authority_index_contract import IndexLeaf
 from test_authority_radix_mutation import IndependentTree
 from test_authority_radix_proof import sql_digest, sql_json
 
@@ -59,9 +59,9 @@ class ChallengeRowTransitionTests(unittest.TestCase):
         self.assertEqual(tuple(item.index_id for item in result.index_changes),
                          projection.index_ids_for_table("webauthn_challenges"))
         key_digest = result.mutation["keyDigest"]
-        old_digest = sql_digest("serverware.policyAuthorityAuthenticatedRow/v1",
+        old_digest = sql_digest("catchplate.policyAuthorityAuthenticatedRow/v1",
             b"webauthn_challenges", sql_json(original))
-        new_digest = None if after is None else sql_digest("serverware.policyAuthorityAuthenticatedRow/v1",
+        new_digest = None if after is None else sql_digest("catchplate.policyAuthorityAuthenticatedRow/v1",
             b"webauthn_challenges", sql_json(after))
         for item in result.index_changes:
             before = projection.project_row(item.index_id, original,

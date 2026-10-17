@@ -2,7 +2,7 @@
 
 ## Implemented boundary
 
-[`authority_counted_root_transition.py`](../serverware/authority_counted_root_transition.py)
+[`authority_counted_root_transition.py`](../catchplate/authority_counted_root_transition.py)
 now derives an operation-bound, closed document from the actual
 [combined primary/count mutation evaluator](authority-index-mutation.md).
 It records the complete primary transition and every fixed counted profile of
@@ -43,8 +43,8 @@ neither verifies proofs or authorizes a write.
 
 ## Closed wire
 
-The schema is `serverware.policyAuthorityCountedRootTransition/v1`; the profile
-is `serverware.policyAuthorityCountedRootTransitionProfile/v1`. Exact fields are:
+The schema is `catchplate.policyAuthorityCountedRootTransition/v1`; the profile
+is `catchplate.policyAuthorityCountedRootTransitionProfile/v1`. Exact fields are:
 
 - `schema`, `profile`, `scope`, `operation`, `countedProfile` and
   `projectionManifestDigest` bind this source contract.

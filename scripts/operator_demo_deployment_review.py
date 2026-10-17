@@ -18,28 +18,28 @@ import re
 import signal
 import subprocess
 
-PROJECT = "serverware-operator-demo"
-STACK = Path("/srv/catchplate-fast/projects/serverware-operator-workspace/docker/serverware-operator-demo")
-ENVFILE = "/srv/catchplate-fast/tmp/serverware-browser-handoff.67Dtng/source/docker/serverware-operator-demo/.env"
+PROJECT = "catchplate-operator-demo"
+STACK = Path("/srv/catchplate-fast/projects/catchplate-operator-workspace/docker/catchplate-operator-demo")
+ENVFILE = "/srv/catchplate-fast/tmp/catchplate-browser-handoff.67Dtng/source/docker/catchplate-operator-demo/.env"
 BASE, NOTIFICATIONS = STACK / "docker-compose.yml", STACK / "docker-compose.notifications.yml"
 CANDIDATE = STACK / "docker-compose.destinations-candidate.yml"
 PINS = {BASE: "c088fd890afd20fa2f09073913deed2f2542c58715d45a53149b6ca4ec9e5300",
     NOTIFICATIONS: "27d5d13613c9210047614db346ab00cc7b46980b4665d09650272e5e3d53254a"}
-ARTIFACTS = "/srv/catchplate-fast/projects/serverware-operator-artifacts/"
+ARTIFACTS = "/srv/catchplate-fast/projects/catchplate-operator-artifacts/"
 OLD_SOURCE = ARTIFACTS + "source-b897d1aa51c70e23afaafc57e989e3f366939548"
 NEW_COMMIT = "577badff84b32eea052c53d6df8f6fd5de61d66a"
 NEW_SOURCE = ARTIFACTS + "source-" + NEW_COMMIT
 OLD_SHA = "e7529b4484228ebdbf2be1ebb471a80a78a3e127673f0bc6dcb4921db92489e2"
 NEW_SHA = "2bfe5e384d7e9c655de70704c25350c16336c55a2584fc59f363f12164f297d6"
-OLD_BINARY, NEW_BINARY = (ARTIFACTS + "sha256-" + value + "/serverware-decision-gate" for value in (OLD_SHA, NEW_SHA))
-BINARY_TARGET = "/usr/local/bin/serverware-decision-gate"
-EXPECTED_DIGEST = "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST"
-CUSTODY = "/srv/catchplate-fast/homelab_data/serverware-operator-demo-notifications"
-SERVICES = frozenset(("serverware", "decision-gate-rs", "edge", "demo-upstream"))
-NOTIFICATION_ENV = {"SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED": "1",
-    "SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR": "/notification-custody",
-    "SERVERWARE_OPERATOR_NOTIFICATIONS_PRIVATE_DESTINATIONS_JSON": '{"bindings":[]}'}
-APP_DELTA, DIGEST_DELTA, BINARY_DELTA = "serverware /app source", "serverware expected gate digest", "decision-gate-rs executable bind"
+OLD_BINARY, NEW_BINARY = (ARTIFACTS + "sha256-" + value + "/catchplate-decision-gate" for value in (OLD_SHA, NEW_SHA))
+BINARY_TARGET = "/usr/local/bin/catchplate-decision-gate"
+EXPECTED_DIGEST = "CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST"
+CUSTODY = "/srv/catchplate-fast/homelab_data/catchplate-operator-demo-notifications"
+SERVICES = frozenset(("catchplate", "decision-gate-rs", "edge", "demo-upstream"))
+NOTIFICATION_ENV = {"CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED": "1",
+    "CATCHPLATE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR": "/notification-custody",
+    "CATCHPLATE_OPERATOR_NOTIFICATIONS_PRIVATE_DESTINATIONS_JSON": '{"bindings":[]}'}
+APP_DELTA, DIGEST_DELTA, BINARY_DELTA = "catchplate /app source", "catchplate expected gate digest", "decision-gate-rs executable bind"
 APPROVED_DELTAS = frozenset((APP_DELTA, DIGEST_DELTA, BINARY_DELTA))
 MODEL_NETWORKS = {
     "sandbox": {"name": PROJECT + "_sandbox", "internal": True,
@@ -168,7 +168,7 @@ def compare_service(name, proposed, live, image, networks, digest_file=file_dige
         "cpus", "mem_limit", "memswap_limit", "working_dir", "command", "entrypoint", "environment", "volumes",
         "depends_on", "healthcheck", "labels"}, name + " unsupported service setting")
     dependencies = proposed.get("depends_on", {})
-    expected_dependency = {"serverware": "demo-upstream", "decision-gate-rs": "serverware"}.get(name)
+    expected_dependency = {"catchplate": "demo-upstream", "decision-gate-rs": "catchplate"}.get(name)
     require(set(dependencies) == ({expected_dependency} if expected_dependency else set())
         and all(set(value) <= {"condition", "required"} and value.get("condition") == "service_healthy"
             and value.get("required", True) is True for value in dependencies.values()), name + " retained dependencies")
@@ -178,10 +178,10 @@ def compare_service(name, proposed, live, image, networks, digest_file=file_dige
     if name == "edge":
         require(expected_env.get("NGINX_ENVSUBST_FILTER") == "^TRAEFIK_IPV4$$", "edge filter model")
         expected_env["NGINX_ENVSUBST_FILTER"] = "^TRAEFIK_IPV4$"
-    if name == "serverware":
+    if name == "catchplate":
         require(actual_env.get(EXPECTED_DIGEST) == "sha256:" + old_sha
             and expected_env.get(EXPECTED_DIGEST) == "sha256:" + new_sha, "exact paired expected gate digest")
-        require({key: value for key, value in actual_env.items() if key.startswith("SERVERWARE_OPERATOR_NOTIFICATIONS_")}
+        require({key: value for key, value in actual_env.items() if key.startswith("CATCHPLATE_OPERATOR_NOTIFICATIONS_")}
             == NOTIFICATION_ENV, "retained enabled notification configuration")
         expected_env[EXPECTED_DIGEST] = actual_env[EXPECTED_DIGEST]
         deltas.add(DIGEST_DELTA)
@@ -259,7 +259,7 @@ def compare_service(name, proposed, live, image, networks, digest_file=file_dige
             and actual["Type"] == volume["type"] == "bind" and actual["RW"] == (not volume.get("read_only", False))
             and volume.get("bind", {}).get("create_host_path") is False
             and actual.get("Propagation", "rprivate") == volume.get("bind", {}).get("propagation", "rprivate"), name + " mount boundary")
-        if name == "serverware" and volume["target"] == "/app":
+        if name == "catchplate" and volume["target"] == "/app":
             require(actual["Source"] == old_source and volume["source"] == new_source and volume.get("read_only") is True, "exact app source change")
             deltas.add(APP_DELTA)
         elif name == "decision-gate-rs" and volume["target"] == BINARY_TARGET:
@@ -271,7 +271,7 @@ def compare_service(name, proposed, live, image, networks, digest_file=file_dige
         else:
             require(actual["Source"] == volume["source"], name + " retained mount source")
         if volume["source"] == CUSTODY:
-            require(name == "serverware" and volume["target"] == "/notification-custody" and actual["RW"] is True, "app-only retained notification custody")
+            require(name == "catchplate" and volume["target"] == "/notification-custody" and actual["RW"] is True, "app-only retained notification custody")
     return deltas
 
 
@@ -311,7 +311,7 @@ def main():
             and before["State"]["StartedAt"] == after["State"]["StartedAt"], name + " stable inspection identity")
     require(all(file_digest(path) == value for path, value in fingerprints.items()), "Compose layers unchanged during review")
     signal.alarm(0)
-    return {"ok": True, "schema": "serverware.operatorDemoDeploymentReview/v1", "sourceCommit": NEW_COMMIT,
+    return {"ok": True, "schema": "catchplate.operatorDemoDeploymentReview/v1", "sourceCommit": NEW_COMMIT,
         "candidateBinarySha256": NEW_SHA, "approvedDifferences": sorted(deltas),
         "notificationsRetained": True, "retainedServicesMustNotBeRecreated": ["demo-upstream", "edge"],
         "edgeTemplateBytesEqual": True, "runtimeMutationsPerformed": False, "rolloutVerified": False,

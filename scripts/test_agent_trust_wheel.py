@@ -17,9 +17,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 EVIDENCE_SOURCE = Path("scripts/verify_onboarding_evidence.py")
-EVIDENCE_MODULE = Path("serverware_agent_trust/onboarding_evidence.py")
+EVIDENCE_MODULE = Path("catchplate_agent_trust/onboarding_evidence.py")
 EVIDENCE_ENTRY_POINT = (
-    "serverware-evidence = serverware_agent_trust.onboarding_evidence:main"
+    "catchplate-evidence = catchplate_agent_trust.onboarding_evidence:main"
 )
 
 
@@ -73,7 +73,7 @@ def _build_wheel(
         cwd=source.parent,
         env=env,
     )
-    wheels = sorted(destination.glob("serverware_enrollment-*.whl"))
+    wheels = sorted(destination.glob("catchplate_enrollment-*.whl"))
     if len(wheels) != 1:
         raise AssertionError(f"expected one custom wheel, found: {wheels}")
     return wheels[0]
@@ -122,12 +122,12 @@ def _verify_wheel(wheel: Path) -> None:
 
 def main() -> None:
     python = getattr(sys, "_base_executable", None) or shutil.which("python3") or sys.executable
-    with tempfile.TemporaryDirectory(prefix="serverware-agent-trust-wheel-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="catchplate-agent-trust-wheel-") as tmp:
         temporary = Path(tmp)
         source = temporary / "source"
         source.mkdir()
         shutil.copy2(ROOT / "pyproject.toml", source / "pyproject.toml")
-        shutil.copytree(ROOT / "serverware_agent_trust", source / "serverware_agent_trust")
+        shutil.copytree(ROOT / "catchplate_agent_trust", source / "catchplate_agent_trust")
         (source / "scripts").mkdir()
         shutil.copy2(ROOT / EVIDENCE_SOURCE, source / EVIDENCE_SOURCE)
 
@@ -175,7 +175,7 @@ def main() -> None:
         )
 
         executable = scripts / (
-            "serverware-evidence.exe" if os.name == "nt" else "serverware-evidence"
+            "catchplate-evidence.exe" if os.name == "nt" else "catchplate-evidence"
         )
         help_result = _run(
             [str(executable), "--help"],
@@ -193,8 +193,8 @@ def main() -> None:
                 "-c",
                 (
                     "import importlib.metadata as metadata,json;"
-                    "import serverware_agent_trust.onboarding_evidence as evidence;"
-                    "distribution=metadata.distribution('serverware-enrollment');"
+                    "import catchplate_agent_trust.onboarding_evidence as evidence;"
+                    "distribution=metadata.distribution('catchplate-enrollment');"
                     "print(json.dumps({'module':evidence.__file__,"
                     "'classification':evidence.ASSURANCE['classification'],"
                     "'entryPoints':sorted("
@@ -213,8 +213,8 @@ def main() -> None:
         if facts["classification"] != "local-integrity-only":
             raise AssertionError(f"assurance label changed: {facts}")
         if {
-            "name": "serverware-evidence",
-            "value": "serverware_agent_trust.onboarding_evidence:main",
+            "name": "catchplate-evidence",
+            "value": "catchplate_agent_trust.onboarding_evidence:main",
         } not in facts["entryPoints"]:
             raise AssertionError(f"installed entry point missing: {facts}")
 
@@ -224,7 +224,7 @@ def main() -> None:
                     "ok": True,
                     "wheel": first.name,
                     "sha256": hashlib.sha256(first.read_bytes()).hexdigest(),
-                    "serverwareEvidenceHelp": "pass",
+                    "catchplateEvidenceHelp": "pass",
                     "record": "pass",
                     "reproducible": True,
                 },

@@ -18,40 +18,40 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 _TEMP_DIR = tempfile.TemporaryDirectory()
-os.environ["SERVERWARE_DATA_DIR"] = _TEMP_DIR.name
-os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
-os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
-os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
+os.environ["CATCHPLATE_DATA_DIR"] = _TEMP_DIR.name
+os.environ["CATCHPLATE_METADATA_STORE_BACKEND"] = "sqlite"
+os.environ["CATCHPLATE_AUDIT_STORE_BACKEND"] = "sqlite"
+os.environ["CATCHPLATE_GRANT_STORE_BACKEND"] = "sqlite"
 # This standalone suite exercises the ordinary control-plane runner and ASGI
 # hooks; their cold admission must see the actual required process mode.
-os.environ["SERVERWARE_PROCESS_MODE"] = "serverware-control-plane"
+os.environ["CATCHPLATE_PROCESS_MODE"] = "catchplate-control-plane"
 
-from serverware import control_plane_runner, control_plane_startup  # noqa: E402
-from serverware.signed_http import SignedOnlyHttpToolsProtocol  # noqa: E402
+from catchplate import control_plane_runner, control_plane_startup  # noqa: E402
+from catchplate.signed_http import SignedOnlyHttpToolsProtocol  # noqa: E402
 
 
 _SERVICE_CREDENTIALS = (
-    ("SERVERWARE_ADMIN_TOKEN", "ADMIN_TOKEN"),
-    ("SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN", "WEBAUTHN_BOOTSTRAP_TOKEN"),
+    ("CATCHPLATE_ADMIN_TOKEN", "ADMIN_TOKEN"),
+    ("CATCHPLATE_WEBAUTHN_BOOTSTRAP_TOKEN", "WEBAUTHN_BOOTSTRAP_TOKEN"),
     (
-        "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
+        "CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
         "DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
     ),
-    ("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", "DATA_PLANE_AUDIT_INGEST_TOKEN"),
+    ("CATCHPLATE_DATA_PLANE_AUDIT_TOKEN", "DATA_PLANE_AUDIT_INGEST_TOKEN"),
     (
-        "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN",
+        "CATCHPLATE_DATA_PLANE_GRANT_CONSUME_TOKEN",
         "DATA_PLANE_GRANT_CONSUME_TOKEN",
     ),
     (
-        "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
+        "CATCHPLATE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
         "DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
     ),
     (
-        "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN",
+        "CATCHPLATE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN",
         "DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN",
     ),
-    ("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN", "DATA_PLANE_MANAGEMENT_TOKEN"),
-    ("SERVERWARE_AUDIT_ANCHOR_TOKEN", "AUDIT_ANCHOR_TOKEN"),
+    ("CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN", "DATA_PLANE_MANAGEMENT_TOKEN"),
+    ("CATCHPLATE_AUDIT_ANCHOR_TOKEN", "AUDIT_ANCHOR_TOKEN"),
 )
 
 
@@ -59,8 +59,8 @@ _PRODUCTION_CONFIGURATION = {
     "RELEASE_CHANNEL": "production",
     "PRODUCTION_IMAGE": True,
     "ATOMIC_RELEASE_AUTHORIZATION_ENABLED": False,
-    "WEB_TLS_CERT_FILE": "/run/serverware/tls.crt",
-    "WEB_TLS_KEY_FILE": "/run/serverware/tls.key",
+    "WEB_TLS_CERT_FILE": "/run/catchplate/tls.crt",
+    "WEB_TLS_KEY_FILE": "/run/catchplate/tls.key",
     "WEBAUTHN_BOOTSTRAP_TOKEN": "bootstrap-token-with-at-least-32-characters",
     "CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED": True,
     "OIDC_SESSION_WEBAUTHN_REQUIRED": True,
@@ -109,11 +109,11 @@ class ServiceCredentialConfigurationTests(unittest.TestCase):
         env.update(
             {
                 "PYTHONPATH": str(ROOT),
-                "SERVERWARE_DATA_DIR": data_dir,
-                "SERVERWARE_RELEASE_CHANNEL": "production",
-                "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "1",
-                "SERVERWARE_DATA_PLANE_INSTANCE_ID": (
-                    "spiffe://prod.serverware.internal/decision-gate/test"
+                "CATCHPLATE_DATA_DIR": data_dir,
+                "CATCHPLATE_RELEASE_CHANNEL": "production",
+                "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "1",
+                "CATCHPLATE_DATA_PLANE_INSTANCE_ID": (
+                    "spiffe://prod.catchplate.internal/decision-gate/test"
                 ),
             }
         )
@@ -147,7 +147,7 @@ class ServiceCredentialConfigurationTests(unittest.TestCase):
             attributes = {name: attribute for name, attribute in _SERVICE_CREDENTIALS}
             source = (
                 "import json\n"
-                "from serverware import auth, config\n"
+                "from catchplate import auth, config\n"
                 "config.validate_internal_service_auth()\n"
                 f"attributes = {attributes!r}\n"
                 "values = {name: getattr(config, attribute) "
@@ -167,7 +167,7 @@ class ServiceCredentialConfigurationTests(unittest.TestCase):
             {name: loaded[name] for name, _ in _SERVICE_CREDENTIALS},
             values,
         )
-        self.assertEqual(loaded["admin_runtime"], values["SERVERWARE_ADMIN_TOKEN"])
+        self.assertEqual(loaded["admin_runtime"], values["CATCHPLATE_ADMIN_TOKEN"])
         self.assertIs(loaded["admin_external"], True)
         self.assertEqual(loaded["admin_source"], "file")
         self.assertEqual(
@@ -191,7 +191,7 @@ class ServiceCredentialConfigurationTests(unittest.TestCase):
                     env.update(values)
                     env[name] = ""
                     env[f"{name}_FILE"] = ""
-                    result = self._run_config(env, "import serverware.config\n")
+                    result = self._run_config(env, "import catchplate.config\n")
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn(f"must not set both {name} and {name}_FILE", result.stderr)
                     self.assertNotIn(values[name], result.stderr)
@@ -201,16 +201,16 @@ class ServiceCredentialConfigurationTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env = self._subprocess_env(tmp)
-            env["SERVERWARE_RELEASE_CHANNEL"] = "dev"
-            env.pop("SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED")
-            env.pop("SERVERWARE_DATA_PLANE_INSTANCE_ID")
-            env["SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN"] = (
+            env["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
+            env.pop("CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED")
+            env.pop("CATCHPLATE_DATA_PLANE_INSTANCE_ID")
+            env["CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN"] = (
                 " direct-data-plane-token "
             )
-            env["SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN"] = " direct-bootstrap-token "
+            env["CATCHPLATE_WEBAUTHN_BOOTSTRAP_TOKEN"] = " direct-bootstrap-token "
             source = (
                 "import json\n"
-                "from serverware import config\n"
+                "from catchplate import config\n"
                 "print(json.dumps({"
                 "'admin': config.ADMIN_TOKEN, "
                 "'admin_external': config.ADMIN_TOKEN_EXTERNALLY_CONFIGURED, "
@@ -242,30 +242,30 @@ class ServiceCredentialConfigurationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             weak_env = self._subprocess_env(tmp)
             weak_env.update(values)
-            weak_env["SERVERWARE_AUDIT_ANCHOR_TOKEN"] = "too-short"
+            weak_env["CATCHPLATE_AUDIT_ANCHOR_TOKEN"] = "too-short"
             weak = self._run_config(
                 weak_env,
-                "from serverware import config\nconfig.validate_internal_service_auth()\n",
+                "from catchplate import config\nconfig.validate_internal_service_auth()\n",
             )
             self.assertNotEqual(weak.returncode, 0)
-            self.assertIn("SERVERWARE_AUDIT_ANCHOR_TOKEN", weak.stderr)
+            self.assertIn("CATCHPLATE_AUDIT_ANCHOR_TOKEN", weak.stderr)
             self.assertNotIn("too-short", weak.stderr)
 
             duplicate_env = self._subprocess_env(tmp)
             duplicate_env.update(values)
-            duplicate_env["SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN"] = values[
-                "SERVERWARE_ADMIN_TOKEN"
+            duplicate_env["CATCHPLATE_WEBAUTHN_BOOTSTRAP_TOKEN"] = values[
+                "CATCHPLATE_ADMIN_TOKEN"
             ]
             duplicate = self._run_config(
                 duplicate_env,
-                "from serverware import config\nconfig.validate_internal_service_auth()\n",
+                "from catchplate import config\nconfig.validate_internal_service_auth()\n",
             )
             self.assertNotEqual(duplicate.returncode, 0)
             self.assertIn("distinct internal service credentials", duplicate.stderr)
-            self.assertNotIn(values["SERVERWARE_ADMIN_TOKEN"], duplicate.stderr)
+            self.assertNotIn(values["CATCHPLATE_ADMIN_TOKEN"], duplicate.stderr)
 
     def test_service_credential_file_modes_and_content_are_strict(self) -> None:
-        from serverware import config
+        from catchplate import config
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -319,7 +319,7 @@ class ServiceCredentialConfigurationTests(unittest.TestCase):
                 )
 
     def test_service_credential_file_rejects_metadata_drift(self) -> None:
-        from serverware import config
+        from catchplate import config
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "credential"
@@ -630,7 +630,7 @@ class ControlPlaneStartupTests(unittest.TestCase):
 
     def test_runner_uses_the_shared_startup_gate(self) -> None:
         import uvicorn
-        from serverware import signed_http
+        from catchplate import signed_http
         with (
             patch.object(control_plane_startup, "validate_control_plane_startup") as preflight,
             patch.object(
@@ -659,7 +659,7 @@ class ControlPlaneStartupTests(unittest.TestCase):
         self.assertFalse(runner_kwargs["date_header"])
 
     def test_fastapi_startup_uses_gate_before_workers(self) -> None:
-        from serverware import app as app_module
+        from catchplate import app as app_module
 
         with (
             patch.object(
@@ -682,7 +682,7 @@ class ControlPlaneStartupTests(unittest.TestCase):
         ca_worker.assert_not_called()
 
     def test_fastapi_startup_does_not_repeat_runner_gate(self) -> None:
-        from serverware import app as app_module
+        from catchplate import app as app_module
 
         with (
             patch.object(
@@ -870,7 +870,7 @@ class _RevocationReadCursor:
     startup/registry graph above; this responder does not bypass that gate.
     """
 
-    ROOT_SELECT = ("SELECT root_revision, root_digest, leaf_count FROM serverware_metadata."
+    ROOT_SELECT = ("SELECT root_revision, root_digest, leaf_count FROM catchplate_metadata."
                    "policy_authority_authenticated_table_roots WHERE table_name = %s")
 
     def __init__(self, fixture, *, on_clock=None, change=None):
@@ -903,7 +903,7 @@ class _RevocationReadCursor:
         self.primary = primary_oracle.StoredTreeCursor(*read.trees.values(), reverse=True)
         self.ordinary = []
         for document, members in zip(fixture.resolved_documents, fixture.ordered_rows):
-            if document["schema"] == "serverware.policyAuthorityCompleteIndexQuery/v1":
+            if document["schema"] == "catchplate.policyAuthorityCompleteIndexQuery/v1":
                 continue
             if any(item["operator"] != "eq" for item in document["predicates"]):
                 raise AssertionError("ordinary fixture escaped its literal equality-only recipe")
@@ -912,7 +912,7 @@ class _RevocationReadCursor:
             order = ", ".join(f"target.{item['column']} " + ("DESC" if item["descending"] else "ASC")
                               for item in document["orderBy"])
             sql = ("SELECT pg_catalog.to_jsonb(target) AS row_value "
-                   f"FROM serverware_metadata.{document['table']} AS target "
+                   f"FROM catchplate_metadata.{document['table']} AS target "
                    + ("WHERE " + clauses + " " if clauses else "") + f"ORDER BY {order} LIMIT %s")
             parameters = tuple(item["value"] for item in document["predicates"]) + (document["maximumRows"] + 1,)
             rows = [{"row_value": copy.deepcopy(item["row"])} for item in members if item["present"]]
@@ -940,7 +940,7 @@ class _RevocationReadCursor:
             self.kind, self.target = "clock", None
             if self.on_clock is not None:
                 self.on_clock()
-        elif any(f'FROM "serverware_metadata".{name} ' in sql for name in (
+        elif any(f'FROM "catchplate_metadata".{name} ' in sql for name in (
                 "policy_authority_authenticated_leaves", "policy_authority_authenticated_tree_nodes")):
             self.kind, self.target = "proof", self.primary
             self.target.execute(sql, parameters)
@@ -1133,11 +1133,11 @@ class _RevocationOwnerReadCursor:
             self.result = self.identity_row
         elif sql.startswith("SELECT 1 FROM pg_catalog.pg_class AS relation "):
             self.result = self.mutation_row
-        elif "FROM serverware_metadata.policy_authority_query_dependency_manifests " in sql:
+        elif "FROM catchplate_metadata.policy_authority_query_dependency_manifests " in sql:
             if parameters != (self.cursor.fixture.request["operation"], len(self.business_rows) + 1):
                 raise AssertionError("business manifest SQL lost its source count-plus-one bound")
             self.result = self.business_rows
-        elif "FROM serverware_metadata.policy_authority_authorization_dependency_manifests " in sql:
+        elif "FROM catchplate_metadata.policy_authority_authorization_dependency_manifests " in sql:
             if parameters != (self.cursor.fixture.request["operation"], len(self.authorization_rows) + 1):
                 raise AssertionError("authorization manifest SQL lost its source count-plus-one bound")
             self.result = self.authorization_rows
@@ -1167,14 +1167,14 @@ class _RevocationOwnerWriteCursor:
     """
 
     def __init__(self, recorder, database_identity):
-        from serverware import authority_revocation_writer_connection as writer
-        from serverware.authority_store.planner_writer_sql import planner_writer_privilege_check
+        from catchplate import authority_revocation_writer_connection as writer
+        from catchplate.authority_store.planner_writer_sql import planner_writer_privilege_check
 
         self.recorder, self.cursor, self.calls = recorder, recorder.cursor(), []
         role, client_dn, client_serial, issuer_dn = database_identity
         self.identity_sql = writer._IDENTITY_SQL
         self.privilege_sql, self.privilege_parameters = planner_writer_privilege_check(
-            role=role, namespace="serverware_metadata")
+            role=role, namespace="catchplate_metadata")
         self.identity_row = {"server_version_num": 160004, "role": role, "session_role": role,
             "transaction_isolation": "serializable", "transaction_read_only": "off",
             "transaction_deferrable": "off", "ssl": True, "client_dn": client_dn,
@@ -1230,8 +1230,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
     """
 
     def setUp(self) -> None:
-        from serverware import authority_planner
-        from serverware import authority_request_commitment
+        from catchplate import authority_planner
+        from catchplate import authority_request_commitment
         import test_authority_typed_request_work
 
         self.planner = authority_planner
@@ -1278,13 +1278,13 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.commitment._typed_request_digest(malformed, work=None)
 
     def query_reader_fixture(self, work):
-        from serverware import authority_contract, authority_query_staging, authority_transition_core
+        from catchplate import authority_contract, authority_query_staging, authority_transition_core
         import test_authority_root_transition as roots
 
         operation = "webauthn.counter.cas"
         inputs, _ = roots.input_fixture(operation, {})
         query = authority_transition_core.BoundedQuery(
-            query_id=f"serverware.policyAuthorityQuery/{operation}/empty-reader/webauthn_credentials/v1",
+            query_id=f"catchplate.policyAuthorityQuery/{operation}/empty-reader/webauthn_credentials/v1",
             table="webauthn_credentials", predicates=(),
             order_by=(authority_transition_core.QueryOrder("id"),), maximum_rows=1)
         request = {}
@@ -1310,8 +1310,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         # A real planner worker with a deterministic empty SQL responder, not
         # native PostgreSQL or a complete signed-plan invocation. The genuine
         # registry import in setUp must succeed; no bypass or skip is allowed.
-        from serverware import authority_query_reads as reads
-        from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
+        from catchplate import authority_query_reads as reads
+        from catchplate.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
 
         work = _ValidationWork(QueryReadValidationLimits())
         cursor, arguments = self.query_reader_fixture(work)
@@ -1329,8 +1329,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertIs(arguments["query_sources"]._query_work, work)
 
     def test_real_query_reader_exhausted_meter_denies_before_any_business_or_proof_sql(self) -> None:
-        from serverware.authority_query_reads import QueryReadError
-        from serverware.authority_query_read_work import (
+        from catchplate.authority_query_reads import QueryReadError
+        from catchplate.authority_query_read_work import (
             _ValidationWork, QueryReadValidationLimits, QueryReadWorkError,
         )
 
@@ -1365,7 +1365,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             "table": markers.ROLES[2][1], "key": {"id": "ordinary-member"}}])
 
     def test_private_revoke_trace_accepts_exact_source_markers_without_write_expansion(self) -> None:
-        from serverware import authority_audit_trace, authority_transition_registry
+        from catchplate import authority_audit_trace, authority_transition_registry
         import test_authority_index_trace as markers
 
         self.assertIs(self.planner.authority_transition_registry, authority_transition_registry)
@@ -1419,7 +1419,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertEqual((trace._budget.business_entries, trace._budget.framework_entries), (0, 0))
 
     def test_complete_markers_use_unchanged_business_trace_budget_not_framework_bonus(self) -> None:
-        from serverware import authority_audit_capacity, authority_audit_trace
+        from catchplate import authority_audit_capacity, authority_audit_trace
         import test_authority_index_trace as markers
 
         self.assertEqual((authority_audit_trace.MAX_TRACE_ENTRIES,
@@ -1453,9 +1453,9 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertEqual(len(trace._entries), 4097)
 
     def test_real_cascade_complete_inventory_denies_before_sql_without_private_acquisition(self) -> None:
-        from serverware import authority_complete_query, authority_primary_contract
-        from serverware import authority_query_staging, authority_transition_core, authority_transition_webauthn
-        from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
+        from catchplate import authority_complete_query, authority_primary_contract
+        from catchplate import authority_query_staging, authority_transition_core, authority_transition_webauthn
+        from catchplate.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
         import test_authority_complete_query as declarations
         import test_authority_root_transition as roots
 
@@ -1491,8 +1491,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
 
     def test_raw_complete_evidence_is_denied_before_real_kernel_context_or_transition(self) -> None:
         from datetime import datetime, timezone
-        from serverware import authority_complete_acquisition, authority_transition_core
-        from serverware import authority_transition_registry, authority_transition_webauthn
+        from catchplate import authority_complete_acquisition, authority_transition_core
+        from catchplate import authority_transition_registry, authority_transition_webauthn
 
         kernels = (authority_transition_registry.KERNELS["webauthn.counter.cas"],
                    authority_transition_webauthn.WebAuthnCredentialRevokeKernel())
@@ -1520,9 +1520,9 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertEqual((context.call_count, transition.call_count), (0, 0))
 
     def revocation_reader_fixture(self, *, work=None, separate_signer=False, include_audit=True):
-        from serverware import authority_transition_webauthn as candidate
-        from serverware import authority_webauthn_assertion as assertion
-        from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
+        from catchplate import authority_transition_webauthn as candidate
+        from catchplate import authority_webauthn_assertion as assertion
+        from catchplate.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
         from authority_revocation_semantics_fixture import SemanticFixture
 
         fixture = SemanticFixture(separate_signer=separate_signer, include_audit=include_audit)
@@ -1567,11 +1567,11 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertEqual(raw.frontiers, expected)
 
     def test_private_revocation_reader_uses_one_clock_one_generation_and_real_shared_workers(self):
-        from serverware import authority_complete_acquisition as acquisition
-        from serverware import authority_complete_query_batch as batch
-        from serverware import authority_query_staging as staging
-        from serverware import authority_transition_webauthn as candidate
-        from serverware import authority_transition_core as core
+        from catchplate import authority_complete_acquisition as acquisition
+        from catchplate import authority_complete_query_batch as batch
+        from catchplate import authority_query_staging as staging
+        from catchplate import authority_transition_webauthn as candidate
+        from catchplate import authority_transition_core as core
 
         fixture, cursor, program, arguments = self.revocation_reader_fixture()
         calls = []
@@ -1624,7 +1624,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
 
     def test_private_revocation_reader_retains_merged_proofs_without_reacquiring_staged_rows(self):
         import test_authority_radix_proof as proof_oracle
-        from serverware import authority_complete_query_batch as batch
+        from catchplate import authority_complete_query_batch as batch
 
         for separate, audit in ((False, True), (True, False)):
             with self.subTest(separate_signer=separate, include_audit=audit):
@@ -1633,7 +1633,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 selected, state = program._read_revocation_inputs(cursor, **arguments)
                 self.assert_revocation_read(fixture, selected, state)
                 expected = {(item["table"], proof_oracle.sql_digest(
-                    "serverware.policyAuthorityAuthenticatedKey/v1", item["table"].encode("utf-8"),
+                    "catchplate.policyAuthorityAuthenticatedKey/v1", item["table"].encode("utf-8"),
                     proof_oracle.sql_json(item["key"]))) for item in fixture.selected_rows}
                 leaf_reads = [parameters for sql, parameters in cursor.primary.calls
                               if "policy_authority_authenticated_leaves " in sql]
@@ -1680,9 +1680,9 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
 
     def test_private_revocation_reader_rejects_wrong_identity_trace_and_work_before_clock(self):
         from dataclasses import replace
-        from serverware import authority_transition_registry as registry
-        from serverware import authority_transition_webauthn as candidate
-        from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
+        from catchplate import authority_transition_registry as registry
+        from catchplate import authority_transition_webauthn as candidate
+        from catchplate.authority_query_read_work import _ValidationWork, QueryReadValidationLimits
 
         class DerivedKernel(candidate.WebAuthnCredentialRevokeKernel):
             pass
@@ -1707,7 +1707,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertEqual(cursor.calls, [])
 
     def test_private_revocation_reader_rechecks_trace_identity_after_clock_before_generation(self):
-        from serverware import authority_transition_webauthn as candidate
+        from catchplate import authority_transition_webauthn as candidate
 
         fixture, cursor, program, arguments = self.revocation_reader_fixture()
         cursor.on_clock = lambda: setattr(arguments["trace"], "_complete_queries", False)
@@ -1719,7 +1719,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
 
     def test_private_revocation_reader_denies_nonclosed_inputs_and_unverified_raw_dto_shortcuts(self):
         from collections import UserDict
-        from serverware import authority_complete_acquisition as acquisition
+        from catchplate import authority_complete_acquisition as acquisition
 
         fixture, _, program, arguments = self.revocation_reader_fixture()
         raw = acquisition.CompleteAcquisitionEvidence(cutoff_us=fixture.cutoff_us, heads=(),
@@ -1745,8 +1745,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertEqual(cursor.calls, [])
 
     def test_private_revocation_reader_uses_remaining_work_and_denies_before_clock_when_exhausted(self):
-        from serverware import authority_transition_webauthn as candidate
-        from serverware.authority_query_read_work import _ValidationWork, QueryReadValidationLimits, QueryReadWorkError
+        from catchplate import authority_transition_webauthn as candidate
+        from catchplate.authority_query_read_work import _ValidationWork, QueryReadValidationLimits, QueryReadWorkError
 
         work = _ValidationWork(QueryReadValidationLimits())
         work.charge(hashes=7, input_bytes=11, json_nodes=13)  # Explicit previously charged component work.
@@ -1778,9 +1778,9 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertEqual((cursor.calls, generation.call_count), ([], 0))
 
     def test_private_revocation_reader_wrong_roots_or_staged_proof_deny_before_reference_sql(self):
-        from serverware import authority_query_staging as staging
-        from serverware import authority_radix_mutation as primary
-        from serverware import authority_radix_proof as radix
+        from catchplate import authority_query_staging as staging
+        from catchplate import authority_radix_mutation as primary
+        from catchplate import authority_radix_proof as radix
 
         for change_root in (True, False):
             with self.subTest(change_root=change_root):
@@ -1804,13 +1804,13 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertIsInstance(raised.exception.__cause__.__cause__, primary.PrimaryRadixMutationError)
                 self.assertIsInstance(raised.exception.__cause__.__cause__.__cause__, radix.RadixProofError)
                 self.assertEqual(cursor.clock_reads, 1)
-                self.assertFalse(any("FROM serverware_metadata.webauthn_trust_publications AS target WHERE" in sql
+                self.assertFalse(any("FROM catchplate_metadata.webauthn_trust_publications AS target WHERE" in sql
                                      for sql, _ in cursor.calls))
 
     def test_actual_public_revocation_read_still_denies_complete_queries_before_proof_or_business_sql(self):
-        from serverware import authority_audit_capacity, authority_contract
-        from serverware import authority_query_staging as staging
-        from serverware import authority_transition_registry as registry
+        from catchplate import authority_audit_capacity, authority_contract
+        from catchplate import authority_query_staging as staging
+        from catchplate import authority_transition_registry as registry
 
         fixture, cursor, program, arguments = self.revocation_reader_fixture()
         # Revocation moved to the retained-evidence successor protocol. Its
@@ -1855,7 +1855,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertEqual((cursor.primary.calls, cursor.complete.calls), ([], []))
 
     def revocation_producer_fixture(self, **options):
-        from serverware import authority_index_mutation_reader as writer
+        from catchplate import authority_index_mutation_reader as writer
         import test_authority_index_mutation_reader as write_oracle
 
         fixture, cursor, program, read_arguments = self.revocation_reader_fixture(**options)
@@ -1915,12 +1915,12 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         return expectation, fixture, cursor, program, arguments, writer_scope
 
     def original_revocation_context(self, expectation, fixture):
-        from serverware import authority_contract
+        from catchplate import authority_contract
 
         # Literal transport recipe, built from independent fixture pins and
         # the original database instant, never from a producer observation.
         return {
-            "schema": "serverware.policyAuthorityRevocationEvaluationContext/v1",
+            "schema": "catchplate.policyAuthorityRevocationEvaluationContext/v1",
             "sourceRevision": authority_contract.SOURCE_REVISION,
             "databaseCutoffUs": fixture.cutoff_us,
             "expectedPlannerIdentity": copy.deepcopy(expectation.identity),
@@ -1941,9 +1941,9 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         }
 
     def revocation_owner_fixture(self, *, work=None):
-        from serverware import authority_revocation_coordinator as coordinator
-        from serverware import authority_revocation_persistence as persistence
-        from serverware import db
+        from catchplate import authority_revocation_coordinator as coordinator
+        from catchplate import authority_revocation_persistence as persistence
+        from catchplate import db
         import test_authority_revocation_persistence as store_oracle
 
         expected, fixture, cursor, _, supplied, writer_scope = self.revocation_plan_fixture(
@@ -1974,7 +1974,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             session_identity_digest=expected.identity["sessionIdentityDigest"],
             measurement_digest=expected.identity["measurementDigest"],
             attestation_receipt_digest=expected.identity["attestationReceiptDigest"])
-        writer_identity = ("serverware_policy_authority_planner_writer",
+        writer_identity = ("catchplate_policy_authority_planner_writer",
             "CN=synthetic-writer", "23", "CN=synthetic-writer-issuer")
         self.assertEqual(writer_identity[0], db._METADATA_STORE_AUTHORITY_PLANNER_WRITER_ROLE)
         persisted = persistence.RevocationPlannerPersistence(
@@ -2029,7 +2029,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
     def revocation_owner_scope(self, fixture):
         import psycopg
         from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-        from serverware.authority_store import planner_connection as admission
+        from catchplate.authority_store import planner_connection as admission
         import test_authority_revocation_plan as oracle
 
         scope = ExitStack()
@@ -2037,9 +2037,9 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         scope.enter_context(patch.object(psycopg, "connect", side_effect=fixture.connect))
         key = fixture.fixture.receipt.key.public_key()
         scope.enter_context(patch.dict(os.environ, {
-            "SERVERWARE_POLICY_AUTHORITY_VERIFIER_ED25519_PUBLIC_KEY_BASE64URL":
+            "CATCHPLATE_POLICY_AUTHORITY_VERIFIER_ED25519_PUBLIC_KEY_BASE64URL":
                 oracle.encoded(key.public_bytes(Encoding.Raw, PublicFormat.Raw)),
-            "SERVERWARE_POLICY_AUTHORITY_VERIFIER_SPKI_SHA256":
+            "CATCHPLATE_POLICY_AUTHORITY_VERIFIER_SPKI_SHA256":
                 oracle.sha(key.public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)),
         }))
         scope.enter_context(patch.object(admission.time, "time_ns", return_value=fixture.expected.now_epoch_ns))
@@ -2053,10 +2053,10 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         Its actual store operation must remain unreachable in these negative
         cases; genuine producer/replay positives remain in the owner fixture.
         """
-        from serverware import authority_query_read_work as accounting
+        from catchplate import authority_query_read_work as accounting
         import test_authority_revocation_persistence as store_oracle
 
-        identity = ("serverware_policy_authority_planner_writer",
+        identity = ("catchplate_policy_authority_planner_writer",
             "CN=synthetic-writer", "23", "CN=synthetic-writer-issuer")
         recorder, events = store_oracle.Recorder(), []
         recorder.role = identity[0]
@@ -2152,7 +2152,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
 
     def revocation_action_fixture(self, *, work=None, recorder=None):
         """Real inert action/factory plus gated store, not measured service admission."""
-        from serverware import authority_query_read_work as accounting
+        from catchplate import authority_query_read_work as accounting
         import test_authority_revocation_reservation as reservation_oracle
         import test_authority_revocation_writer_action as action_oracle
 
@@ -2219,7 +2219,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         return fixture
 
     def run_revocation_composition_components(self, fixture, *, after_preparation=None):
-        from serverware import authority_revocation_writer_composition as composition
+        from catchplate import authority_revocation_writer_composition as composition
         import test_authority_revocation_writer_composition as composition_oracle
 
         work = fixture.arguments["work"]
@@ -2284,25 +2284,25 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertEqual(signed.payload[field], expected, field)
         trace = signed.payload["plannerTrace"]
         self.assertEqual((trace["schema"], trace["operation"]), (
-            "serverware.policyAuthorityPlannerTrace/v1", "webauthn.credential.revoke"))
+            "catchplate.policyAuthorityPlannerTrace/v1", "webauthn.credential.revoke"))
         writer_entries = [entry for entry in trace["entries"] if type(entry["key"]) is dict
-            and entry["key"].get("profile") == "serverware.policyAuthorityCountedIndexMutationRead/v1"]
+            and entry["key"].get("profile") == "catchplate.policyAuthorityCountedIndexMutationRead/v1"]
         identity = lambda entry: {name: entry[name] for name in ("access", "table", "key")}
         self.assertEqual([identity(entry) for entry in writer_entries],
             [identity(entry) for entry in plan_oracle.independent_write_trace(fixture)])
         self.assertEqual(signed.payload["plannerTraceDigest"], plan_oracle.framed(
-            "serverware.policyAuthorityPlannerTrace/v1", plan_oracle.wire(trace)))
+            "catchplate.policyAuthorityPlannerTrace/v1", plan_oracle.wire(trace)))
         self.assertEqual(signed.payload_bytes, plan_oracle.wire(signed.payload))
-        self.assertEqual(signed.envelope, {"schema": "serverware.signedPolicyAuthorityMeasuredPlan/v4",
+        self.assertEqual(signed.envelope, {"schema": "catchplate.signedPolicyAuthorityMeasuredPlan/v4",
             "payload": signed.payload, "signatureBase64Url": plan_oracle.encoded(expectation.key.sign(
-                plan_oracle.framed("serverware.signedPolicyAuthorityMeasuredPlan/v4",
+                plan_oracle.framed("catchplate.signedPolicyAuthorityMeasuredPlan/v4",
                     signed.payload_bytes).encode("ascii")))})
         self.assertEqual(signed.envelope_bytes, plan_oracle.wire(signed.envelope))
         self.assertEqual((signed.signing_attempts, signed.signature_verifications), (1, 1))
 
     def test_configured_revocation_owner_closes_real_read_before_actual_retained_replay(self):
-        from serverware import authority_revocation_retention as retention
-        from serverware.authority_store import revocation_retention as store
+        from catchplate import authority_revocation_retention as retention
+        from catchplate.authority_store import revocation_retention as store
         import test_authority_revocation_plan as oracle
         import test_authority_revocation_persistence as store_oracle
         import test_authority_revocation_retention as record_oracle
@@ -2365,7 +2365,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         header = record_oracle.record_header(fixture.expected,
             produced.signed.envelope_bytes, produced.evaluation_context_bytes)
         self.assertEqual(result["retainedRecordDigest"], oracle.framed(
-            "serverware.policyAuthorityRevocationRetainedPlan/v1", oracle.wire(header)))
+            "catchplate.policyAuthorityRevocationRetainedPlan/v1", oracle.wire(header)))
         parent, _ = store_oracle.expected_rows(fixture.expected, fixture.expected.now_epoch_ns)
         for name, expected in parent.items():
             if name not in {"exact_plan_base64url", "exact_plan_bytes_digest", "exact_plan_byte_count",
@@ -2383,7 +2383,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
 
     def observed_planner_owner_fixture(self):
         """Real gated planner workers over independent synthetic populations."""
-        from serverware import authority_revocation_planning as planning
+        from catchplate import authority_revocation_planning as planning
         import test_authority_revocation_handoff as handoff_oracle
         import test_authority_revocation_plan as plan_oracle
         import test_authority_revocation_roots as root_oracle
@@ -2413,7 +2413,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         return fixture, owner, arguments, context
 
     def test_observed_planner_only_owner_returns_originals_then_genuine_independent_handoff(self):
-        from serverware import authority_revocation_handoff as handoff
+        from catchplate import authority_revocation_handoff as handoff
         import test_authority_revocation_plan as plan_oracle
 
         fixture, owner, arguments, independent = self.observed_planner_owner_fixture()
@@ -2498,7 +2498,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertGreater(fixture.arguments["work"].hash_work, 0)
 
     def test_configured_revocation_owner_captures_inputs_and_all_writer_pins_before_callbacks(self):
-        from serverware.authority_store import revocation_retention as store
+        from catchplate.authority_store import revocation_retention as store
 
         fixture = self.revocation_owner_fixture()
         original_request = copy.deepcopy(fixture.arguments["request"])
@@ -2593,7 +2593,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
 
     def test_configured_revocation_owner_keeps_original_bytes_across_read_cleanup_callbacks(self):
         from datetime import timedelta
-        from serverware.authority_store import revocation_retention as store
+        from catchplate.authority_store import revocation_retention as store
 
         fixture, observed = self.revocation_owner_fixture(), []
         original = self.planner.TypedTransitionPlanningProgram._produce_revocation_plan
@@ -2628,7 +2628,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
 
     def test_configured_revocation_owner_returns_original_cutoff_only_after_persistence(self):
         from datetime import timedelta
-        from serverware.authority_store import revocation_retention as store
+        from catchplate.authority_store import revocation_retention as store
 
         fixture, observed = self.revocation_owner_fixture(), []
         original = self.planner.TypedTransitionPlanningProgram._produce_revocation_plan
@@ -2663,9 +2663,9 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertEqual((fixture.recorder.rollbacks, fixture.recorder.releases), (0, 2))
 
     def test_configured_revocation_owner_spends_one_cumulative_allowance_and_keeps_prior_work(self):
-        from serverware import authority_query_read_work as accounting
-        from serverware import authority_revocation_plan as replay
-        from serverware.authority_store import revocation_retention as store
+        from catchplate import authority_query_read_work as accounting
+        from catchplate import authority_revocation_plan as replay
+        from catchplate.authority_store import revocation_retention as store
         import test_authority_revocation_plan as oracle
 
         results = []
@@ -2704,7 +2704,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertEqual(work.input_bytes, work.limits.max_input_bytes)
 
     def test_configured_revocation_owner_closes_connection_returned_before_meter_guard_failure(self):
-        from serverware import db
+        from catchplate import db
 
         for stage in ("read", "write"):
             fixture = self.revocation_owner_fixture()
@@ -2733,8 +2733,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
 
     def test_configured_revocation_owner_writer_failure_rolls_back_both_actual_transaction_scopes(self):
         from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-        from serverware import db
-        from serverware.authority_store import planner_connection as admission
+        from catchplate import db
+        from catchplate.authority_store import planner_connection as admission
         import test_authority_revocation_plan as oracle
 
         for failure in ("cas", "expired", "wrong_key", "wrong_spki"):
@@ -2754,13 +2754,13 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             if failure == "wrong_key":
                 key = fixture.expected.other_key.public_key()
                 current_configuration = {
-                    "SERVERWARE_POLICY_AUTHORITY_VERIFIER_ED25519_PUBLIC_KEY_BASE64URL":
+                    "CATCHPLATE_POLICY_AUTHORITY_VERIFIER_ED25519_PUBLIC_KEY_BASE64URL":
                         oracle.encoded(key.public_bytes(Encoding.Raw, PublicFormat.Raw)),
-                    "SERVERWARE_POLICY_AUTHORITY_VERIFIER_SPKI_SHA256":
+                    "CATCHPLATE_POLICY_AUTHORITY_VERIFIER_SPKI_SHA256":
                         oracle.sha(key.public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)),
                 }
             elif failure == "wrong_spki":
-                current_configuration = {"SERVERWARE_POLICY_AUTHORITY_VERIFIER_SPKI_SHA256":
+                current_configuration = {"CATCHPLATE_POLICY_AUTHORITY_VERIFIER_SPKI_SHA256":
                     oracle.sha(b"different current verifier SPKI")}
             error, message = {
                 "cas": (db.MetadataStoreError, "completion CAS failed"),
@@ -2789,11 +2789,11 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertEqual((fixture.write.transactions, fixture.recorder.rollbacks,
                               fixture.recorder.releases), (2, 2, 0))
             updates = [sql for sql, _ in fixture.recorder.statements
-                       if sql.startswith("UPDATE serverware_metadata.policy_authority_planner_transactions")]
+                       if sql.startswith("UPDATE catchplate_metadata.policy_authority_planner_transactions")]
             self.assertEqual(len(updates), int(failure == "cas"))
             for table in ("policy_authority_webauthn_assertion_evidence",
                           "policy_authority_authorization_projections"):
-                self.assertEqual(any(sql.startswith("INSERT INTO serverware_metadata." + table)
+                self.assertEqual(any(sql.startswith("INSERT INTO catchplate_metadata." + table)
                     for sql, _ in fixture.recorder.statements), failure == "cas")
             self.assertEqual((fixture.recorder.parent, fixture.recorder.sidecar), (None, None))
             self.assertEqual((fixture.recorder.assertions, fixture.recorder.projections), ({}, {}))
@@ -2802,8 +2802,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertGreater(fixture.arguments["work"].hash_work, produced[0].metrics.hash_work)
 
     def test_configured_revocation_writer_requires_closed_actual_metadata_before_store(self):
-        from serverware import authority_revocation_writer_connection as writer
-        from serverware.authority_store import revocation_retention as store
+        from catchplate import authority_revocation_writer_connection as writer
+        from catchplate.authority_store import revocation_retention as store
 
         baseline = self.revocation_writer_admission_fixture().cursor.identity_row
         self.assertEqual(len(baseline), 19)
@@ -2839,8 +2839,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assert_revocation_writer_empty(fixture.recorder)
 
     def test_configured_revocation_writer_denies_every_returned_catalog_violation(self):
-        from serverware import authority_revocation_writer_connection as writer
-        from serverware.authority_store import revocation_retention as store
+        from catchplate import authority_revocation_writer_connection as writer
+        from catchplate.authority_store import revocation_retention as store
 
         # These are returned observations, not SQL execution or actual ACL
         # evidence. Any row must deny; the native fixture owns real catalog DDL.
@@ -2860,7 +2860,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertEqual(operation.call_count, 0)
             self.assertEqual(fixture.cursor.calls, [(writer._SET_TRANSACTION, ()),
                 (fixture.cursor.identity_sql, ()),
-                (fixture.cursor.privilege_sql, (fixture.identity[0], "serverware_metadata"))])
+                (fixture.cursor.privilege_sql, (fixture.identity[0], "catchplate_metadata"))])
             self.assertEqual((fixture.recorder.statements, fixture.recorder.rollbacks,
                               fixture.recorder.releases), ([], 1, 0))
             self.assertEqual(fixture.work.metrics, entering)
@@ -2868,8 +2868,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assert_revocation_writer_empty(fixture.recorder)
 
     def test_configured_revocation_writer_denies_inactive_or_replaced_driver_scopes(self):
-        from serverware import authority_revocation_writer_connection as writer
-        from serverware.authority_store import revocation_retention as store
+        from catchplate import authority_revocation_writer_connection as writer
+        from catchplate.authority_store import revocation_retention as store
 
         variants = (("closed", True), ("autocommit", True), ("pgconn", None),
             ("status", True), ("status", 0.0), ("status", 2), ("status", 3),
@@ -2930,8 +2930,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assert_revocation_writer_empty(fixture.recorder)
 
     def test_configured_revocation_writer_guards_driver_getters_without_refunding_work(self):
-        from serverware import authority_revocation_writer_connection as writer
-        from serverware.authority_store import revocation_retention as store
+        from catchplate import authority_revocation_writer_connection as writer
+        from catchplate.authority_store import revocation_retention as store
 
         for target in ("info", "pgconn", "closed", "autocommit", "transaction", "cursor",
                        "__enter__", "execute", "fetchone"):
@@ -2963,13 +2963,13 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assert_revocation_writer_empty(fixture.recorder)
 
     def test_configured_revocation_writer_late_state_and_rowcount_getters_roll_back_custody(self):
-        from serverware import authority_revocation_writer_connection as writer
-        from serverware.authority_store import revocation_retention as store
+        from catchplate import authority_revocation_writer_connection as writer
+        from catchplate.authority_store import revocation_retention as store
 
         for failure in ("raw", "status", "autocommit", "closed", "rowcount_work", "rowcount_bool"):
             fixture, observed = self.revocation_owner_fixture(), []
             work = fixture.arguments["work"]
-            completion = "UPDATE serverware_metadata.policy_authority_planner_transactions"
+            completion = "UPDATE catchplate_metadata.policy_authority_planner_transactions"
 
             def after_sql(sql, _parameters):
                 if sql.startswith(completion):
@@ -3012,8 +3012,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assert_revocation_writer_empty(fixture.recorder)
 
     def test_configured_revocation_writer_preserves_first_driver_error_during_cleanup(self):
-        from serverware import authority_revocation_writer_connection as writer
-        from serverware.authority_store import revocation_retention as store
+        from catchplate import authority_revocation_writer_connection as writer
+        from catchplate.authority_store import revocation_retention as store
 
         fixture = self.revocation_writer_admission_fixture()
         failure = RuntimeError("synthetic metadata driver failure")
@@ -3043,8 +3043,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assert_revocation_writer_empty(fixture.recorder)
 
     def test_configured_revocation_writer_post_exit_rejection_does_not_claim_commit_rollback(self):
-        from serverware import authority_revocation_writer_connection as writer
-        from serverware.authority_store import revocation_retention as store
+        from catchplate import authority_revocation_writer_connection as writer
+        from catchplate.authority_store import revocation_retention as store
         import test_authority_revocation_plan as oracle
         import test_authority_revocation_persistence as store_oracle
 
@@ -3098,9 +3098,9 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertNotIn("write.close", fixture.events)
 
     def test_atomic_revocation_custody_replays_twice_in_one_four_manager_writer(self):
-        from serverware import authority_revocation_retention as retention
-        from serverware.authority_store import revocation_execution as reservation
-        from serverware.authority_store import revocation_retention as store
+        from catchplate import authority_revocation_retention as retention
+        from catchplate.authority_store import revocation_execution as reservation
+        from catchplate.authority_store import revocation_retention as store
         import test_authority_revocation_plan as oracle
 
         fixture = self.revocation_atomic_fixture()
@@ -3144,9 +3144,9 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertNotIn("connect.read", fixture.events)
 
     def test_atomic_revocation_second_stage_failures_restore_all_five_sets(self):
-        from serverware import authority_revocation_retention as retention
-        from serverware import db
-        from serverware.authority_store import planner_connection as admission
+        from catchplate import authority_revocation_retention as retention
+        from catchplate import db
+        from catchplate.authority_store import planner_connection as admission
         import test_authority_revocation_plan as oracle
         import test_authority_revocation_reservation as reservation_oracle
 
@@ -3192,9 +3192,9 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertEqual(fixture.write.info.transaction_status, 0)
 
     def test_atomic_revocation_common_savepoint_survives_a_caught_second_stage_error(self):
-        from serverware import authority_revocation_persistence as persistence
-        from serverware import authority_revocation_retention as retention
-        from serverware import db
+        from catchplate import authority_revocation_persistence as persistence
+        from catchplate import authority_revocation_retention as retention
+        from catchplate import db
 
         fixture, caught = self.revocation_atomic_fixture(), []
         fixture.recorder.missing_envelope_read = True
@@ -3228,9 +3228,9 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertIs(fixture.write.closed, True)
 
     def test_atomic_revocation_retry_preserves_original_custody_and_still_requires_freshness(self):
-        from serverware import authority_revocation_retention as retention
-        from serverware import db
-        from serverware.authority_store import planner_connection as admission
+        from catchplate import authority_revocation_retention as retention
+        from catchplate import db
+        from catchplate.authority_store import planner_connection as admission
         import test_authority_revocation_plan as oracle
         import test_authority_revocation_reservation as reservation_oracle
 
@@ -3277,7 +3277,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
 
     def test_atomic_revocation_captures_original_inputs_and_configuration_before_callbacks(self):
         from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-        from serverware import authority_revocation_retention as retention
+        from catchplate import authority_revocation_retention as retention
         import test_authority_revocation_plan as oracle
 
         for stage in ("connect", "between"):
@@ -3294,7 +3294,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 object.__setattr__(fixture.persistence, "persistence_dsn", "postgresql://changed.invalid/metadata")
                 object.__setattr__(fixture.persistence, "planner_public_key", fixture.expected.other_key.public_key())
                 object.__setattr__(fixture.persistence, "_database_identity",
-                    ("serverware_policy_authority_planner_writer", "changed", "29", "changed issuer"))
+                    ("catchplate_policy_authority_planner_writer", "changed", "29", "changed issuer"))
                 changed.append(stage)
 
             def open_connection(*args, **kwargs):
@@ -3323,8 +3323,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertEqual(oracle.units(fixture.arguments["work"].metrics), expected["total"])
 
     def test_atomic_revocation_between_store_driver_changes_restore_original_outer_snapshot(self):
-        from serverware import authority_revocation_retention as retention
-        from serverware import authority_revocation_writer_connection as writer
+        from catchplate import authority_revocation_retention as retention
+        from catchplate import authority_revocation_writer_connection as writer
 
         for target in ("meter", "raw"):
             fixture, changed = self.revocation_atomic_fixture(), []
@@ -3352,8 +3352,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertIs(fixture.write.closed, True)
 
     def test_atomic_revocation_exact_prior_and_each_short_composed_budget_use_real_proof_children(self):
-        from serverware import authority_query_read_work as accounting
-        from serverware import authority_revocation_retention as retention
+        from catchplate import authority_query_read_work as accounting
+        from catchplate import authority_revocation_retention as retention
         import test_authority_revocation_plan as oracle
         import test_authority_revocation_reservation as reservation_oracle
 
@@ -3396,8 +3396,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
 
     def test_atomic_revocation_repeated_call_spends_new_then_retry_work_without_cached_authority(self):
-        from serverware import authority_query_read_work as accounting
-        from serverware import authority_revocation_retention as retention
+        from catchplate import authority_query_read_work as accounting
+        from catchplate import authority_revocation_retention as retention
         import test_authority_revocation_plan as oracle
 
         for dimension in (None, 0, 1, 2):
@@ -3443,8 +3443,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
 
     def test_atomic_revocation_post_exit_errors_do_not_claim_completed_commit_rollback(self):
-        from serverware import authority_revocation_retention as retention
-        from serverware import authority_revocation_writer_connection as writer
+        from catchplate import authority_revocation_retention as retention
+        from catchplate import authority_revocation_writer_connection as writer
 
         for event in ("write.transaction1.exit", "write.connection.exit"):
             for mutation in (False, True):
@@ -3480,7 +3480,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
 
     def test_writer_action_components_feed_real_configured_atomic_custody_on_one_work(self):
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-        from serverware import authority_revocation_retention as retention
+        from catchplate import authority_revocation_retention as retention
         import test_authority_revocation_plan as oracle
 
         fixture = self.revocation_action_fixture()
@@ -3511,7 +3511,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertIs(fixture.write.closed, True)
 
     def test_writer_action_owned_inputs_survive_boundary_and_opener_alias_changes(self):
-        from serverware import authority_revocation_retention as retention
+        from catchplate import authority_revocation_retention as retention
         import test_authority_revocation_plan as oracle
 
         for stage in ("boundary", "connect"):
@@ -3548,8 +3548,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertEqual(oracle.units(fixture.arguments["work"].metrics), expected["total"])
 
     def test_writer_action_policy_denies_before_connect_and_second_replay_failure_rolls_back(self):
-        from serverware import authority_revocation_retention as retention
-        from serverware import authority_revocation_writer_action as action
+        from catchplate import authority_revocation_retention as retention
+        from catchplate import authority_revocation_writer_action as action
         import test_authority_revocation_plan as oracle
         import test_authority_revocation_writer_action as action_oracle
 
@@ -3585,8 +3585,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertIs(fixture.write.closed, True)
 
     def test_writer_action_full_composition_exact_prior_and_each_short_budget(self):
-        from serverware import authority_query_read_work as accounting
-        from serverware import authority_revocation_retention as retention
+        from catchplate import authority_query_read_work as accounting
+        from catchplate import authority_revocation_retention as retention
         import test_authority_revocation_plan as oracle
         import test_authority_revocation_reservation as reservation_oracle
 
@@ -3625,8 +3625,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
 
     def test_writer_action_repeat_rebuilds_factory_and_replays_without_new_allowance(self):
-        from serverware import authority_query_read_work as accounting
-        from serverware import authority_revocation_retention as retention
+        from catchplate import authority_query_read_work as accounting
+        from catchplate import authority_revocation_retention as retention
         import test_authority_revocation_plan as oracle
 
         for dimension in (None, 0, 1, 2):
@@ -3667,8 +3667,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
 
     def test_detached_writer_composition_authenticates_then_replays_on_actual_gated_writer(self):
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-        from serverware import authority_revocation_retention as retention
-        from serverware import authority_revocation_writer_composition as composition
+        from catchplate import authority_revocation_retention as retention
+        from catchplate import authority_revocation_writer_composition as composition
         import test_authority_revocation_plan as oracle
         import test_authority_revocation_reservation as reservation_oracle
         import test_authority_revocation_writer_request as request_oracle
@@ -3723,7 +3723,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertIs(fixture.write.closed, True)
 
     def test_detached_writer_rejections_precede_connect_and_late_replay_restores_all_five_sets(self):
-        from serverware import authority_revocation_retention as retention
+        from catchplate import authority_revocation_retention as retention
         import test_authority_revocation_plan as oracle
 
         for mode in ("signature", "body", "policy", "writer_age"):
@@ -3767,8 +3767,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertIs(fixture.write.closed, True)
 
     def test_detached_writer_fixed_snapshot_survives_owner_and_config_alias_changes(self):
-        from serverware import authority_revocation_writer_composition as composition
-        from serverware import authority_revocation_retention as retention
+        from catchplate import authority_revocation_writer_composition as composition
+        from catchplate import authority_revocation_retention as retention
         import test_authority_revocation_plan as oracle
 
         for stage in ("clock", "connect"):
@@ -3813,8 +3813,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertEqual(oracle.units(fixture.arguments["work"].metrics), expected["total"])
 
     def test_detached_writer_full_exact_prior_and_each_short_budget_keep_genuine_proof_children(self):
-        from serverware import authority_query_read_work as accounting
-        from serverware import authority_revocation_retention as retention
+        from catchplate import authority_query_read_work as accounting
+        from catchplate import authority_revocation_retention as retention
         import test_authority_revocation_plan as oracle
         import test_authority_revocation_reservation as reservation_oracle
         import test_authority_revocation_writer_request as request_oracle
@@ -3854,10 +3854,10 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertFalse(hasattr(work, "_revocation_packaging_owner"))
 
     def test_detached_writer_retry_reauthenticates_originals_and_preserves_first_custody(self):
-        from serverware import authority_query_read_work as accounting
-        from serverware import authority_revocation_retention as retention
-        from serverware import authority_revocation_writer_composition as composition
-        from serverware import authority_revocation_writer_acknowledgment as acknowledgment
+        from catchplate import authority_query_read_work as accounting
+        from catchplate import authority_revocation_retention as retention
+        from catchplate import authority_revocation_writer_composition as composition
+        from catchplate import authority_revocation_writer_acknowledgment as acknowledgment
         import test_authority_revocation_plan as oracle
 
         for axis in (None, 0, 1, 2):
@@ -3906,7 +3906,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         AuthorityProcess is constructed, admitted or monkeypatched here. The
         separate source controls bind this same ordering to the real server.
         """
-        from serverware import authority_revocation_writer_transport as transfer
+        from catchplate import authority_revocation_writer_transport as transfer
         import test_authority_revocation_writer_transport as transport_oracle
 
         deadline = fixture.expected.now_monotonic_ns + 1_000_000_000
@@ -3922,8 +3922,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         return result
 
     def test_writer_transfer_originals_replay_twice_and_release_stored_ack_only_after_owner_exit(self):
-        from serverware import authority_revocation_retention as retention
-        from serverware import authority_revocation_writer_acknowledgment as acknowledgment
+        from catchplate import authority_revocation_retention as retention
+        from catchplate import authority_revocation_writer_acknowledgment as acknowledgment
         import test_authority_revocation_writer_transport as transport_oracle
         import test_authority_revocation_writer_acknowledgment_storage as ack_oracle
         import test_authority_revocation_plan as oracle
@@ -3959,7 +3959,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertEqual(replies[0], replies[1])
 
     def test_writer_transfer_truncation_and_trailing_bytes_never_reach_actual_custody(self):
-        from serverware import authority_revocation_writer_transport as transfer
+        from catchplate import authority_revocation_writer_transport as transfer
         import test_authority_revocation_writer_transport as transport_oracle
 
         for changed in ("short_header", "short_body", "trailing"):
@@ -3984,8 +3984,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 fixture.arguments["work"].input_bytes, fixture.arguments["work"].json_nodes), (0, 0, 0))
 
     def test_writer_transfer_failure_before_ack_and_after_custody_have_distinct_storage_outcomes(self):
-        from serverware import authority_revocation_retention as retention
-        from serverware import db
+        from catchplate import authority_revocation_retention as retention
+        from catchplate import db
         import test_authority_revocation_writer_transport as transport_oracle
 
         for changed in ("ack_readback", "outer_exit", "send"):
@@ -4027,8 +4027,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertTrue(fixture.recorder.acknowledgments)
 
     def test_writer_ack_legacy_request_attachment_still_authenticates_and_replays_both_originals(self):
-        from serverware import authority_revocation_retention as retention
-        from serverware import authority_revocation_writer_acknowledgment as acknowledgment
+        from catchplate import authority_revocation_retention as retention
+        from catchplate import authority_revocation_writer_acknowledgment as acknowledgment
         import test_authority_revocation_plan as oracle
         import test_authority_revocation_reservation as reservation_oracle
         import test_authority_revocation_writer_request as request_oracle
@@ -4056,10 +4056,10 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertEqual(oracle.units(fixture.arguments["work"].metrics), expected["total"])
 
     def test_writer_ack_missing_readback_restores_seven_sets_even_when_caught_inside_outer(self):
-        from serverware import authority_revocation_persistence as persistence
-        from serverware import authority_revocation_retention as retention
-        from serverware import authority_revocation_writer_acknowledgment as acknowledgment
-        from serverware import db
+        from catchplate import authority_revocation_persistence as persistence
+        from catchplate import authority_revocation_retention as retention
+        from catchplate import authority_revocation_writer_acknowledgment as acknowledgment
+        from catchplate import db
         import test_authority_revocation_writer_acknowledgment_storage as ack_oracle
 
         for caught_inside in (False, True):
@@ -4098,7 +4098,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertIs(fixture.write.closed, True)
 
     def test_writer_ack_is_not_released_on_common_outer_or_connection_exit_uncertainty(self):
-        from serverware import authority_revocation_writer_acknowledgment as acknowledgment
+        from catchplate import authority_revocation_writer_acknowledgment as acknowledgment
         import test_authority_revocation_writer_acknowledgment_storage as ack_oracle
 
         for failed_event in (None, "write.transaction2.exit", "write.transaction1.exit", "write.connection.exit"):
@@ -4137,8 +4137,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertEqual(returned, [])
 
     def test_writer_ack_existing_corrupted_signature_denies_after_both_replays_without_resigning(self):
-        from serverware import authority_revocation_retention as retention
-        from serverware import authority_revocation_writer_acknowledgment as acknowledgment
+        from catchplate import authority_revocation_retention as retention
+        from catchplate import authority_revocation_writer_acknowledgment as acknowledgment
         import test_authority_revocation_plan as oracle
         import test_authority_revocation_writer_acknowledgment_storage as ack_oracle
 
@@ -4162,8 +4162,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertEqual(original.recorder.snapshot(), before)
 
     def test_writer_request_authentic_same_id_changes_conflict_before_either_replay(self):
-        from serverware import authority_revocation_retention as retention
-        from serverware import authority_revocation_writer_composition as composition
+        from catchplate import authority_revocation_retention as retention
+        from catchplate import authority_revocation_writer_composition as composition
         import test_authority_revocation_plan as oracle
         import test_authority_revocation_writer_request as request_oracle
 
@@ -4217,7 +4217,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertEqual(original.recorder.snapshot(), before)
 
     def test_writer_request_first_attachment_requires_the_actual_original_stored_planned_time(self):
-        from serverware import authority_revocation_retention as retention
+        from catchplate import authority_revocation_retention as retention
         import test_authority_revocation_plan as oracle
         import test_authority_revocation_writer_request as request_oracle
 
@@ -4256,9 +4256,9 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertEqual(len(request_inserts), 0 if retimed else 1)
 
     def test_writer_request_late_readback_failure_restores_six_sets_even_if_caught_inside_outer_scope(self):
-        from serverware import authority_revocation_persistence as persistence
-        from serverware import authority_revocation_retention as retention
-        from serverware import db
+        from catchplate import authority_revocation_persistence as persistence
+        from catchplate import authority_revocation_retention as retention
+        from catchplate import db
         import test_authority_revocation_writer_request as request_oracle
 
         for caught_inside in (False, True):
@@ -4304,10 +4304,10 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertIs(fixture.write.closed, True)
 
     def test_private_original_wire_replays_actual_production_with_external_expectations(self):
-        from serverware import authority_query_read_work as accounting
-        from serverware import authority_revocation_plan as replay
-        from serverware import authority_revocation_read_write as mixed
-        from serverware import authority_revocation_wire as wire
+        from catchplate import authority_query_read_work as accounting
+        from catchplate import authority_revocation_plan as replay
+        from catchplate import authority_revocation_read_write as mixed
+        from catchplate import authority_revocation_wire as wire
 
         for separate, audit in ((False, True), (True, False)):
             with self.subTest(separate_signer=separate, include_audit=audit):
@@ -4349,8 +4349,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertEqual(cursor.calls, calls_before)
 
     def test_private_original_wire_does_not_adopt_mutated_producer_graphs_or_currentness(self):
-        from serverware import authority_query_read_work as accounting
-        from serverware import authority_revocation_wire as wire
+        from catchplate import authority_query_read_work as accounting
+        from catchplate import authority_revocation_wire as wire
 
         expected, fixture, cursor, program, arguments, writer_scope = self.revocation_plan_fixture()
         with writer_scope:
@@ -4376,11 +4376,11 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 work=accounting._ValidationWork(accounting.QueryReadValidationLimits()), **supplied)
 
     def test_private_produced_original_context_replays_raw_retention_with_independent_expectations(self):
-        from serverware import authority_query_read_work as accounting
-        from serverware import authority_revocation_plan as replay
-        from serverware import authority_revocation_read_write as mixed
-        from serverware import authority_revocation_retention as retention
-        from serverware import authority_revocation_semantics as semantics
+        from catchplate import authority_query_read_work as accounting
+        from catchplate import authority_revocation_plan as replay
+        from catchplate import authority_revocation_read_write as mixed
+        from catchplate import authority_revocation_retention as retention
+        from catchplate import authority_revocation_semantics as semantics
         import test_authority_revocation_plan as plan_oracle
 
         for separate, audit in ((False, True), (True, False)):
@@ -4447,14 +4447,14 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                         work=accounting._ValidationWork(accounting.QueryReadValidationLimits()), **supplied)
 
     def test_private_plan_production_replays_real_acquisition_packaging_and_signed_verification(self):
-        from serverware import authority_revocation_plan as replay
-        from serverware import authority_revocation_plan_production as production
-        from serverware import authority_revocation_proof_bundle as retained
-        from serverware import authority_revocation_read_write as mixed
-        from serverware import authority_revocation_retention as retention
-        from serverware import authority_revocation_semantics as semantics
-        from serverware import authority_transition_webauthn as candidate
-        from serverware import authority_webauthn_assertion as assertion
+        from catchplate import authority_revocation_plan as replay
+        from catchplate import authority_revocation_plan_production as production
+        from catchplate import authority_revocation_proof_bundle as retained
+        from catchplate import authority_revocation_read_write as mixed
+        from catchplate import authority_revocation_retention as retention
+        from catchplate import authority_revocation_semantics as semantics
+        from catchplate import authority_transition_webauthn as candidate
+        from catchplate import authority_webauthn_assertion as assertion
 
         for separate, audit in ((False, True), (True, False)):
             with self.subTest(separate_signer=separate, include_audit=audit):
@@ -4518,8 +4518,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertEqual(cursor.calls, calls_before)
 
     def test_private_plan_independent_root_mismatch_denies_before_packaging_or_signing(self):
-        from serverware import authority_revocation_plan_production as production
-        from serverware import authority_revocation_proof_bundle as retained
+        from catchplate import authority_revocation_plan_production as production
+        from catchplate import authority_revocation_proof_bundle as retained
 
         for vector in ("businessBeforeRoots", "authorizationBeforeRoots", "indexBeforeHeads"):
             with self.subTest(vector=vector):
@@ -4538,7 +4538,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                     self.assertGreater(len(cursor.write_cursor.calls), 0)
 
     def test_private_plan_bad_context_request_and_receipt_never_reach_sql_or_builder(self):
-        from serverware import authority_revocation_plan_production as production
+        from catchplate import authority_revocation_plan_production as production
 
         for changed in ("extra", "fence", "deadline", "reservation", "transaction", "request", "signature"):
             with self.subTest(changed=changed):
@@ -4567,7 +4567,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                                  ([], 0, 0, 0))
 
     def test_private_plan_joint_capture_keeps_original_context_through_clock_callback(self):
-        from serverware import authority_revocation_plan as replay
+        from catchplate import authority_revocation_plan as replay
 
         expected, fixture, cursor, program, arguments, writer_scope = self.revocation_plan_fixture()
 
@@ -4594,7 +4594,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
 
     def test_private_plan_output_does_not_replace_consumer_pins_roots_or_original_cutoff(self):
         from datetime import timedelta
-        from serverware import authority_revocation_plan as replay
+        from catchplate import authority_revocation_plan as replay
 
         expected, _, cursor, program, arguments, writer_scope = self.revocation_plan_fixture()
         with writer_scope:
@@ -4617,9 +4617,9 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                     replay.verify_signed_revocation_plan(**supplied)
 
     def test_private_plan_prior_work_remains_spent_across_acquisition_packaging_and_signing(self):
-        from serverware import authority_query_read_work as accounting
-        from serverware import authority_revocation_plan_production as production
-        from serverware import authority_revocation_proof_bundle as retained
+        from catchplate import authority_query_read_work as accounting
+        from catchplate import authority_revocation_plan_production as production
+        from catchplate import authority_revocation_proof_bundle as retained
 
         observations = []
         # Explicit synthetic prior accounting supplements the actual chained
@@ -4670,10 +4670,10 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                           prior.metrics.json_nodes - plain.metrics.json_nodes), (7, 101, 13))
 
     def test_private_plan_original_context_cost_and_short_budget_deny_before_signing(self):
-        from serverware import authority_query_read_work as accounting
-        from serverware import authority_revocation_plan_production as production
-        from serverware import authority_revocation_retention as retention
-        from serverware import authority_transition_core as core
+        from catchplate import authority_query_read_work as accounting
+        from catchplate import authority_revocation_plan_production as production
+        from catchplate import authority_revocation_retention as retention
+        from catchplate import authority_transition_core as core
         import test_authority_revocation_plan as plan_oracle
         import test_webauthn_revocation_work as kernel_oracle
 
@@ -4741,13 +4741,13 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                 self.assertEqual((encodings, build.call_count, sign.call_count), ([], 0, 0))
 
     def test_private_plan_exact_final_wire_reservation_and_one_less_deny_before_signing(self):
-        from serverware import authority_query_read_work as accounting
-        from serverware import authority_revocation_plan_production as production
-        from serverware import authority_transition_core as core
+        from catchplate import authority_query_read_work as accounting
+        from catchplate import authority_revocation_plan_production as production
+        from catchplate import authority_transition_core as core
         import test_authority_revocation_plan as plan_oracle
         import test_webauthn_revocation_work as kernel_oracle
 
-        domain = "serverware.signedPolicyAuthorityMeasuredPlan/v4"
+        domain = "catchplate.signedPolicyAuthorityMeasuredPlan/v4"
         fields = ("hash_work", "input_bytes", "json_nodes")
         for deficient in (None, *fields):
             expected, fixture, cursor, program, arguments, writer_scope = self.revocation_plan_fixture()
@@ -4785,7 +4785,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
 
             def encode(value):
                 if type(value) is dict and value.get("schema") in {
-                        domain, "serverware.policyAuthorityPlannerResponse/v4"}:
+                        domain, "catchplate.policyAuthorityPlannerResponse/v4"}:
                     encodings.append(value["schema"])
                 return original_encode(value)
 
@@ -4804,8 +4804,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertIs(work.limits, entering_limits)
             if deficient is None:
                 self.assertEqual((sign.call_count, encodings), (1,
-                    ["serverware.policyAuthorityPlannerResponse/v4",
-                     "serverware.policyAuthorityPlannerResponse/v4", domain]))
+                    ["catchplate.policyAuthorityPlannerResponse/v4",
+                     "catchplate.policyAuthorityPlannerResponse/v4", domain]))
                 self.assertEqual((work.hash_work, work.input_bytes, work.json_nodes),
                     (work.limits.max_hashes, work.limits.max_input_bytes, work.limits.max_json_nodes))
                 self.assert_produced_revocation_plan(expected, fixture, produced)
@@ -4818,8 +4818,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
 
     def test_private_plan_actual_paired_key_denial_and_no_result_token_entrypoint(self):
         from cryptography.exceptions import InvalidSignature
-        from serverware import authority_revocation_plan as replay
-        from serverware import authority_revocation_plan_production as production
+        from catchplate import authority_revocation_plan as replay
+        from catchplate import authority_revocation_plan_production as production
 
         expected, _, cursor, program, arguments, writer_scope = self.revocation_plan_fixture()
         arguments["planner_public_key"] = expected.other_key.public_key()
@@ -4847,10 +4847,10 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertEqual(cursor.calls, [])
 
     def test_private_revocation_producer_runs_real_receipt_reads_effects_and_write_proofs_on_one_ledger(self):
-        from serverware import authority_webauthn_assertion as assertion
-        from serverware import authority_revocation_semantics as semantics
-        from serverware import authority_index_trace as markers
-        from serverware import authority_index_reader as reader
+        from catchplate import authority_webauthn_assertion as assertion
+        from catchplate import authority_revocation_semantics as semantics
+        from catchplate import authority_index_trace as markers
+        from catchplate import authority_index_reader as reader
 
         for separate, audit in ((False, True), (True, False)):
             with self.subTest(separate_signer=separate, include_audit=audit):
@@ -4922,9 +4922,9 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                                  [(item["table"], item["key"]) for item in result.mutations])
 
     def test_private_revocation_root_rows_deny_missing_malformed_and_drift_before_clock(self):
-        from serverware import authority_index_reader as reader
-        from serverware import authority_revocation_plan_contract as plan_shape
-        from serverware import authority_revocation_semantics as semantics
+        from catchplate import authority_index_reader as reader
+        from catchplate import authority_revocation_plan_contract as plan_shape
+        from catchplate import authority_revocation_semantics as semantics
 
         for vector in ("businessBeforeRoots", "authorizationBeforeRoots"):
             for changed in ("missing", "extra", "missing_field", "boolean", "float", "string",
@@ -5009,14 +5009,14 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
 
     def test_actual_root_reader_public_parity_and_exact_remaining_work(self):
         import time
-        from serverware import authority_query_read_work as accounting
+        from catchplate import authority_query_read_work as accounting
         import test_authority_revocation_plan as plan_oracle
         import test_webauthn_revocation_work as kernel_oracle
 
         fixture, _, _, arguments = self.revocation_reader_fixture()
         business, authorization = (tuple(sorted(copy.deepcopy(fixture.expected_before[field]),
             key=lambda root: root["table"])) for field in ("businessBeforeRoots", "authorizationBeforeRoots"))
-        domain = "serverware.policyAuthorityRootSet/v1"
+        domain = "catchplate.policyAuthorityRootSet/v1"
         expected_result = business, authorization, plan_oracle.framed(domain, plan_oracle.wire(business))
         # QueryRead copy has its own real profile: one separator byte per
         # nonempty container and two extra encodes of each numeric scalar.
@@ -5069,8 +5069,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
             self.assertLessEqual(work.json_nodes, maximum[2])
 
     def test_private_root_callbacks_cannot_spend_refund_or_retype_the_shared_meter(self):
-        from serverware import authority_query_read_work as accounting
-        from serverware import authority_revocation_semantics as semantics
+        from catchplate import authority_query_read_work as accounting
+        from catchplate import authority_revocation_semantics as semantics
 
         for phase in ("trace", "execute", "fetch"):
             for changed in ("spend", "refund", "counter_float", "widen", "limit_float"):
@@ -5130,7 +5130,7 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
                     self.assertIs(type(work.limits.max_hashes), float)
 
     def test_private_revocation_producer_denies_bad_request_or_receipt_before_database_callbacks(self):
-        from serverware import authority_webauthn_assertion as assertion
+        from catchplate import authority_webauthn_assertion as assertion
         for changed in ("request", "operation", "signature", "capability"):
             with self.subTest(changed=changed):
                 _, cursor, program, arguments, writer_scope = self.revocation_producer_fixture()
@@ -5169,8 +5169,8 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assert_revocation_read(fixture, result.selected_rows, result.state)
 
     def test_caught_nested_shared_read_during_clock_poisons_outer_before_generation_or_sql(self):
-        from serverware import authority_index_reader as reader
-        from serverware import authority_transition_webauthn as candidate
+        from catchplate import authority_index_reader as reader
+        from catchplate import authority_transition_webauthn as candidate
 
         _, cursor, program, arguments = self.revocation_reader_fixture()
         physical = reader._ReadAcquisitionBudget(cursor, arguments["trace"], work=arguments["query_work"])
@@ -5204,9 +5204,9 @@ class TypedRequestPlannerIntegrationTests(unittest.TestCase):
         self.assertEqual(cursor.clock_reads, 1)
 
     def test_genuine_write_leaf_failure_poisons_same_read_ledger_without_refund_or_output(self):
-        from serverware import authority_index_mutation_reader as writer
-        from serverware import authority_index_reader as reader
-        from serverware import authority_revocation_semantics as semantics
+        from catchplate import authority_index_mutation_reader as writer
+        from catchplate import authority_index_reader as reader
+        from catchplate import authority_revocation_semantics as semantics
 
         _, cursor, program, arguments, writer_scope = self.revocation_producer_fixture()
         contexts, corrupted = [], []

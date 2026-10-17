@@ -1,16 +1,16 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/public-webauthn-revocation-caller-enrollment.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/public-webauthn-revocation-caller-enrollment.v1.schema.json",
   "title": "Independent public revocation caller enrollment original",
   "description": "Root-signed canonical ASCII original <=16384 bytes. Source joins exact current-root/grant enrollment originals, measured planner/verifier, separate actual caller key and current mutation policy. Neither this document nor a JSON-schema result authenticates an HTTP actor. Four approval operations are explicitly enrolled; current policy chooses identity-only or asserted request/decision. No generic effect or nullable-v4 evidence authority.",
   "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
   "properties": {
-    "schema": {"const": "serverware.signedPolicyAuthorityPublicRevocationCallerAuthorizationEnrollment/v1"},
+    "schema": {"const": "catchplate.signedPolicyAuthorityPublicRevocationCallerAuthorizationEnrollment/v1"},
     "signatureBase64Url": {"type": "string", "pattern": "^[A-Za-z0-9_-]{86}$"},
     "payload": {"type": "object", "additionalProperties": false,
       "required": ["schema", "sourceRevision", "purpose", "operation", "configurationDigest", "databaseId", "generationDigest", "currentRootEnrollmentDigest", "grantEnrollmentDigest", "callerId", "audienceSpkiDigest", "callerKey", "maximumAgeNs", "maximumClockSkewNs", "mutationPolicy", "approvalOperations"],
       "properties": {
-        "schema": {"const": "serverware.policyAuthorityPublicRevocationCallerAuthorizationEnrollment/v1"},
+        "schema": {"const": "catchplate.policyAuthorityPublicRevocationCallerAuthorizationEnrollment/v1"},
         "sourceRevision": {"type": "string", "minLength": 1, "maxLength": 128},
         "purpose": {"const": "authorize-public-webauthn-revocation"}, "operation": {"const": "webauthn.credential.revoke"},
         "configurationDigest": {"$ref": "#/$defs/digest"}, "databaseId": {"$ref": "#/$defs/token"},

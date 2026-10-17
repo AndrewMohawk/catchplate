@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-proxy-ingress.v3.schema.json",
-  "title": "Serverware native proof-client principal preflight configuration v3",
+  "$id": "https://catchplate.invalid/schemas/native-proxy-ingress.v3.schema.json",
+  "title": "Catchplate native proof-client principal preflight configuration v3",
   "description": "Closed independently pinned configuration original, at most 16384 bytes. Opts into genuine principal preflight on the actual outer TLS connection before CONNECT. Shape is not a quote verdict, independently established pin provenance, CA installation permission, provider-request authorization or production acceptance. V1 and v2 remain separate closed profiles and cannot select these additional fields or silently fall back.",
   "type": "object",
   "additionalProperties": false,
@@ -10,17 +10,17 @@
     "workloadIssuer", "expectedPrincipal", "expectedIdentityPolicySha256"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeProxyIngress/v3"},
+    "apiVersion": {"const": "catchplate.nativeProxyIngress/v3"},
     "startupEvidence": {
-      "description": "Held serverware.nativeIngressPublicEvidence/v1 startup original, at most 65536 bytes; genuine still-fresh verification precedes the outer client private key.",
+      "description": "Held catchplate.nativeIngressPublicEvidence/v1 startup original, at most 65536 bytes; genuine still-fresh verification precedes the outer client private key.",
       "$ref": "native-ingress-client.v2.schema.json#/$defs/artifact"
     },
     "startupExpectations": {
-      "description": "Held serverware.nativeIngressAttestationExpectations/v1 original, at most 16384 bytes, independently binding complete startup scope and nonce.",
+      "description": "Held catchplate.nativeIngressAttestationExpectations/v1 original, at most 16384 bytes, independently binding complete startup scope and nonce.",
       "$ref": "native-ingress-client.v2.schema.json#/$defs/artifact"
     },
     "sessionScope": {
-      "description": "Held nonce-free serverware.nativeIngressSessionScope/v1 original, at most 16384 bytes. Its static scope must match startup; the client owns one newly generated challenge for the live session.",
+      "description": "Held nonce-free catchplate.nativeIngressSessionScope/v1 original, at most 16384 bytes. Its static scope must match startup; the client owns one newly generated challenge for the live session.",
       "$ref": "native-ingress-client.v2.schema.json#/$defs/artifact"
     },
     "trustRoots": {

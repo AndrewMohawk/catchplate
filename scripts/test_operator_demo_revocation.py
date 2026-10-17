@@ -411,7 +411,7 @@ class OperatorDemoRevocationTests(unittest.TestCase):
         self.run_worker("crash", expected=CRASH_EXIT)
         signed = json.loads((self.directory / "policy-bundle.json").read_bytes())
         self.assertEqual(signed["metadata"]["sequence"], 2)
-        with closing(sqlite3.connect((self.directory / "serverware.sqlite3").as_uri() + "?mode=ro", uri=True)) as connection:
+        with closing(sqlite3.connect((self.directory / "catchplate.sqlite3").as_uri() + "?mode=ro", uri=True)) as connection:
             self.assertEqual(connection.execute("SELECT sequence FROM operator_demo_policy").fetchone()[0], 3)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM credentials").fetchone()[0], 0)
         recovered = self.run_worker("reopen")

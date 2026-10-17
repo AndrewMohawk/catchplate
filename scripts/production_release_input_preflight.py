@@ -27,11 +27,11 @@ import verify_production_policy_identity  # noqa: E402
 
 NOOP_DEPLOY_COMMANDS = {":", "echo", "false", "true", "/bin/false", "/bin/true"}
 PLACEHOLDER_MARKERS = ("change-me", "changeme", "example command", "replace-me", "todo")
-EXTERNAL_SIGNATURE_API_VERSION = "serverware.externalArtifactSignature/v1"
+EXTERNAL_SIGNATURE_API_VERSION = "catchplate.externalArtifactSignature/v1"
 EXTERNAL_SIGNATURE_KIND = "ExternalArtifactSignature"
 ACTIVATION_PURPOSE = "policy-activation-verification"
 REPRODUCIBILITY_PURPOSE = "reproducible-build-verification"
-ACTIVATION_API_VERSION = "serverware.policyActivationEvidenceVerification/v1"
+ACTIVATION_API_VERSION = "catchplate.policyActivationEvidenceVerification/v1"
 ACTIVATION_KIND = "PolicyActivationEvidenceVerification"
 REPRODUCIBILITY_API_VERSION = verify_reproducible_builds.VERIFICATION_API_VERSION
 REPRODUCIBILITY_KIND = verify_reproducible_builds.VERIFICATION_KIND
@@ -339,7 +339,7 @@ def verify_inputs(
     if not clean:
         raise ValueError("production release requires a clean Git checkout")
     return {
-        "apiVersion": "serverware.productionReleaseInputPreflight/v1",
+        "apiVersion": "catchplate.productionReleaseInputPreflight/v1",
         "kind": "ProductionReleaseInputPreflight",
         "ok": True,
         "source": {"revision": revision, "clean": True},

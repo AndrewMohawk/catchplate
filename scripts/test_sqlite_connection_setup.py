@@ -21,7 +21,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import sqlite_connection_setup as setup
+from catchplate import sqlite_connection_setup as setup
 
 REAL_CONNECT = sqlite3.connect
 
@@ -60,7 +60,7 @@ class SqliteConnectionSetupTests(unittest.TestCase):
         self.addCleanup(self.stack.close)
         for name in ("socket.socket", "socket.create_connection", "socket.getaddrinfo"):
             self.stack.enter_context(patch(name, side_effect=AssertionError("SQLite setup test attempted network")))
-        directory = self.stack.enter_context(tempfile.TemporaryDirectory(prefix="serverware-sqlite-setup-"))
+        directory = self.stack.enter_context(tempfile.TemporaryDirectory(prefix="catchplate-sqlite-setup-"))
         self.path = Path(directory) / "synthetic.sqlite3"
         with closing(REAL_CONNECT(self.path)) as conn, conn:
             conn.executescript("CREATE TABLE parent(id INTEGER PRIMARY KEY);"
@@ -310,11 +310,11 @@ class SqliteConnectionSetupTests(unittest.TestCase):
         code = r'''
 import os, signal, socket, sys, threading
 sys.path.insert(0, sys.argv[1])
-from serverware import sqlite_connection_setup as setup
+from catchplate import sqlite_connection_setup as setup
 def forbidden(*args, **kwargs):
     raise AssertionError("synthetic fork control attempted network")
 socket.socket = socket.create_connection = socket.getaddrinfo = forbidden
-assert "serverware.app" not in sys.modules
+assert "catchplate.app" not in sys.modules
 signal.alarm(8)
 held, release = threading.Event(), threading.Event()
 def holder():
@@ -353,7 +353,7 @@ signal.alarm(0)
         self.assertEqual(result.stderr, b"")
 
     def test_actual_db_connect_borrowed_postgres_and_sqlite_dispatch(self):
-        from serverware import db
+        from catchplate import db
         with closing(REAL_CONNECT(self.path)) as borrowed:
             token = db._policy_candidate_offline_connection.set(borrowed)
             try:

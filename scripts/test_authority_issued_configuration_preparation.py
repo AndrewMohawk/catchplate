@@ -19,8 +19,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cryptography.exceptions import InvalidSignature
-from serverware import authority_local_configuration as local
-from serverware import authority_local_database_credentials as credentials
+from catchplate import authority_local_configuration as local
+from catchplate import authority_local_database_credentials as credentials
 from scripts.test_authority_local_configuration import SEED, fixture, sealed
 
 

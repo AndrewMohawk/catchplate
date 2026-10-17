@@ -16,7 +16,7 @@ v4 accepts workload profile `native-egress-new-execution-v1`; versions 1–3 kee
 run the workload. Manual dual-stack child network policy remains mandatory.
 
 The new canonical ASCII, no-LF launch manifest is bounded to 4096 bytes and has
-exactly four fields: `apiVersion: serverware.nativeEgressLaunchManifest/v2`,
+exactly four fields: `apiVersion: catchplate.nativeEgressLaunchManifest/v2`,
 `profile: native-egress-new-execution-v1`, `executionManifestSha256`, and
 `launcherBinarySha256`. Both pins are nonzero SHA-256 commitments. The launcher
 pin equals the signed grant and the actual retained `/proc/self/exe` original.

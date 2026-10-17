@@ -2,8 +2,8 @@
 set -euo pipefail
 
 BASE="${BASE:-http://localhost:3000}"
-ADMIN_TOKEN="${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}"
-DATA_PLANE_TOKEN="${SERVERWARE_DATA_PLANE_AUDIT_TOKEN:-dev-audit-ingest-token}"
+ADMIN_TOKEN="${CATCHPLATE_ADMIN_TOKEN:-dev-admin-token}"
+DATA_PLANE_TOKEN="${CATCHPLATE_DATA_PLANE_AUDIT_TOKEN:-dev-audit-ingest-token}"
 
 python3 - "$BASE" "$ADMIN_TOKEN" "$DATA_PLANE_TOKEN" <<'PY'
 import concurrent.futures
@@ -17,7 +17,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from serverware import db
+from catchplate import db
 
 base = sys.argv[1].rstrip("/")
 admin_token = sys.argv[2]
@@ -150,7 +150,7 @@ def verify_streaming_contract() -> None:
         assert result["ok"] is True and result["complete"] is complete, result
         assert result["count"] == expected_count and result["total"] == len(rows), result
         assert result["head"] == rows[expected_count - 1]["event_hash"], result
-    assert all(connection.named_cursor == "serverware_audit_verify" for connection in connections)
+    assert all(connection.named_cursor == "catchplate_audit_verify" for connection in connections)
     assert all(
         connection.count_cursor is not None
         and connection.count_cursor.queries[0]
@@ -337,11 +337,11 @@ def verify_streaming_contract() -> None:
                 ], stored_rows
                 migration_table = connection.execute(
                     "SELECT 1 FROM sqlite_master "
-                    "WHERE type = 'table' AND name = 'serverware_store_migrations'"
+                    "WHERE type = 'table' AND name = 'catchplate_store_migrations'"
                 ).fetchone()
                 if migration_table:
                     completed = connection.execute(
-                        "SELECT COUNT(*) FROM serverware_store_migrations "
+                        "SELECT COUNT(*) FROM catchplate_store_migrations "
                         "WHERE migration = ? AND version = ?",
                         (
                             db._AUDIT_STORAGE_REDACTION_MIGRATION,
@@ -378,7 +378,7 @@ def verify_streaming_contract() -> None:
                     event_hash TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
-                CREATE TABLE serverware_store_migrations (
+                CREATE TABLE catchplate_store_migrations (
                     migration TEXT PRIMARY KEY,
                     version BIGINT NOT NULL,
                     applied_at TEXT NOT NULL
@@ -492,7 +492,7 @@ def verify_streaming_contract() -> None:
                     event_hash TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
-                CREATE TABLE serverware_store_migrations (
+                CREATE TABLE catchplate_store_migrations (
                     migration TEXT PRIMARY KEY,
                     version BIGINT NOT NULL,
                     applied_at TEXT NOT NULL
@@ -544,8 +544,8 @@ def request_json(path: str, *, method: str = "GET", headers: dict[str, str] | No
         return json.loads(response.read())
 
 
-admin_headers = {"X-Serverware-Admin-Token": admin_token}
-data_plane_headers = {"X-Serverware-Data-Plane-Token": data_plane_token}
+admin_headers = {"X-Catchplate-Admin-Token": admin_token}
+data_plane_headers = {"X-Catchplate-Data-Plane-Token": data_plane_token}
 
 
 def producer_event_id(namespace: str, index: int) -> str:
@@ -661,14 +661,14 @@ else:
     )
 PY
 
-docker compose exec -T serverware python - <<'PY'
+docker compose exec -T catchplate python - <<'PY'
 import concurrent.futures
 import uuid
 
 from psycopg import sql
 from psycopg.errors import CheckViolation
 
-from serverware import db
+from catchplate import db
 
 
 original_connect = db._audit_pg_connect
@@ -755,7 +755,7 @@ with original_connect() as connection:
         cursor.execute(
             "SELECT COUNT(*)::bigint AS count, "
             "MAX(sequence) FILTER (WHERE id = %s)::bigint AS appended_sequence "
-            "FROM serverware_audit_events",
+            "FROM catchplate_audit_events",
             (appended["id"],),
         )
         current = cursor.fetchone()
@@ -772,7 +772,7 @@ with original_connect() as connection:
         cursor.execute(
             sql.SQL(
                 """
-                CREATE TABLE {}.serverware_audit_events (
+                CREATE TABLE {}.catchplate_audit_events (
                     sequence BIGSERIAL PRIMARY KEY,
                     id TEXT NOT NULL UNIQUE,
                     event_type TEXT NOT NULL,
@@ -789,7 +789,7 @@ with original_connect() as connection:
         cursor.execute(
             sql.SQL(
                 """
-                INSERT INTO {}.serverware_audit_events (
+                INSERT INTO {}.catchplate_audit_events (
                     id, event_type, actor_type, actor_id, event_json,
                     prev_event_hash, event_hash, created_at
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
@@ -840,14 +840,14 @@ try:
                 SELECT COUNT(*)::bigint AS count,
                        bool_and(NOT convalidated) AS all_unvalidated
                 FROM pg_constraint
-                WHERE conrelid = 'serverware_audit_events'::regclass
-                  AND conname = 'serverware_audit_events_event_json_size'
+                WHERE conrelid = 'catchplate_audit_events'::regclass
+                  AND conname = 'catchplate_audit_events_event_json_size'
                 """
             )
             constraint = cursor.fetchone()
             assert int(constraint["count"]) == 1 and constraint["all_unvalidated"] is True, constraint
             cursor.execute(
-                "SELECT id, event_json FROM serverware_audit_events"
+                "SELECT id, event_json FROM catchplate_audit_events"
             )
             stored = cursor.fetchone()
             assert stored == {
@@ -855,7 +855,7 @@ try:
                 "event_json": oversized_legacy_json,
             }, stored
             cursor.execute(
-                "SELECT COUNT(*)::bigint AS count FROM serverware_store_migrations "
+                "SELECT COUNT(*)::bigint AS count FROM catchplate_store_migrations "
                 "WHERE migration = %s AND version = %s",
                 (
                     db._AUDIT_STORAGE_REDACTION_MIGRATION,
@@ -868,7 +868,7 @@ try:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    INSERT INTO serverware_audit_events (
+                    INSERT INTO catchplate_audit_events (
                         id, event_type, actor_type, actor_id, event_json,
                         prev_event_hash, event_hash, created_at
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)

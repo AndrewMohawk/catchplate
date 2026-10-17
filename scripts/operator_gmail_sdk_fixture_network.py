@@ -23,14 +23,14 @@ KEEPER_SECONDS = 300
 EDGE_SECONDS = 240
 ROOT = Path("/fixture-runtime")
 HOSTS = Path("/etc/hosts")
-BROWSER_PROXY_HOST = "serverware-gmail-proxy.example.com"
+BROWSER_PROXY_HOST = "catchplate-gmail-proxy.example.com"
 BROWSER_PROXY_ADDRESS = "127.0.0.2"
 BROWSER_PROXY_URL = "https://" + BROWSER_PROXY_HOST
 
 
 def hosts_bytes(original, *, browser_permission=False):
     require(type(browser_permission) is bool)
-    require(original.startswith(b"127.0.0.1 localhost serverware decision-gate-rs "))
+    require(original.startswith(b"127.0.0.1 localhost catchplate decision-gate-rs "))
     first, rest = original.split(b"\n", 1)
     if browser_permission:
         # The control front already owns 127.0.0.1:443. This independent
@@ -51,7 +51,7 @@ def initialize(*, browser_permission=False):
     for name in ("app-data", "gate-data", "upstream-data", "service-secrets"):
         (scaffold / name).mkdir(mode=0o700)
         os.chown(scaffold / name, 10001, 10001)
-    marker = {"schema": "serverware.privateOperatorAuditFixture/v1", "syntheticOnly": True}
+    marker = {"schema": "catchplate.privateOperatorAuditFixture/v1", "syntheticOnly": True}
     google._write(scaffold / ".private-fixture.json", (json.dumps(marker, sort_keys=True) + "\n").encode("ascii"))
     for directory in (scaffold, ROOT):
         fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)

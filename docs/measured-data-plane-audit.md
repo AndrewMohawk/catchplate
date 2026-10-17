@@ -8,10 +8,10 @@ was delivered. Existing development event/ACK bytes remain distinct.
 
 ## Independent permission and actual mTLS
 
-The control-plane cold runner admits `serverware.measuredAuditStartup/v1`
-through `SERVERWARE_MEASURED_AUDIT_CONFIG_FD`, after its actual custody owner and
+The control-plane cold runner admits `catchplate.measuredAuditStartup/v1`
+through `CATCHPLATE_MEASURED_AUDIT_CONFIG_FD`, after its actual custody owner and
 before HTTP serving. The fixed entrypoint supplies
-`/run/serverware/authority-trust/measured-audit.json` and the separately pinned
+`/run/catchplate/authority-trust/measured-audit.json` and the separately pinned
 `measured-audit-root-public-key` in that directory. Its root must differ from the
 runtime root. An offline holder can use `data_plane_audit_authority.sign_policy`;
 neither HTTP intake nor the running control plane accepts the private key.
@@ -28,7 +28,7 @@ The new combined native startup profile's `measuredAudit` is the exact seven-fie
 `nativeMeasuredAuditConfiguration/v1` projection in the [schema](../schemas/measured-data-plane-audit.v1.schema.json).
 Its private client key is **not** a file input. The retained enclave-generated
 CA issues a fresh clientAuth-only P-256 leaf inside the original CA interval.
-The source-fixed URI is `spiffe://serverware.audit/{deploymentId}/{instanceId}`.
+The source-fixed URI is `spiffe://catchplate.audit/{deploymentId}/{instanceId}`.
 Private material moves only into the dedicated audit TLS client; public leaf
 and SPKI hashes are retained. It is never attached to the shared service client
 or sent to the parent relay. This is not a claim of erasing all TLS-library copies.
@@ -53,7 +53,7 @@ message bound. Events are exact base64url-encoded original JSON bytes, not
 floating-point values re-canonicalized across languages.
 
 The fresh original NSM nonce is SHA-256 of the dedicated
-`serverware/native-audit-attestation/v1` NUL-terminated domain, challenge32,
+`catchplate/native-audit-attestation/v1` NUL-terminated domain, challenge32,
 statement hash32 and signature64. The real Native signer checks its actual
 boot/key, policy, original process/deadline and CA identity. Receiver verification
 replays the genuine role-4 COSE/chain/PCR proof under independently admitted
@@ -69,8 +69,8 @@ TLS possession and durable-transition checks remain executable requirements.
 ## Durable sequence and restart
 
 The actual PostgreSQL audit store adds immutable
-`serverware_measured_audit_epochs` (one epoch per deployment/instance) and append-only
-`serverware_measured_audit_records`, retaining `admit`, `pending`, and `commit`
+`catchplate_measured_audit_epochs` (one epoch per deployment/instance) and append-only
+`catchplate_measured_audit_records`, retaining `admit`, `pending`, and `commit`
 originals. It uses the existing audit connection, global chain lock, transaction
 and SELECT/INSERT-only runtime ACL; no metadata DML or update/delete grant is
 introduced. Bootstrap creates the relation before ACL sealing. Strict runtime

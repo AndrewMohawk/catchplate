@@ -22,13 +22,13 @@ MESSAGE_IDS = ("18f0000000000001", "18f0000000000002")
 THREAD_IDS = ("18e0000000000001", "18e0000000000002")
 PAGE_TOKEN = "fixture-page-2+/="
 LIST_PARAMS = (("maxResults", "1"), ("labelIds", "INBOX"), ("labelIds", "UNREAD"),
-    ("q", "subject:Serverware fixture"), ("prettyPrint", "false"))
+    ("q", "subject:Catchplate fixture"), ("prettyPrint", "false"))
 FULL_PARAMS = (("format", "full"), ("prettyPrint", "false"))
 METADATA_PARAMS = (("metadataHeaders", "Subject"), ("format", "metadata"),
     ("metadataHeaders", "From"), ("prettyPrint", "false"))
 MAX_ATTEMPTS = 16
 GMAIL_PREFIX = "/gmail/v1/"
-JOB_SCHEMA = "serverware.privateGmailJobObservations/v1"
+JOB_SCHEMA = "catchplate.privateGmailJobObservations/v1"
 
 
 def _target(path, params, payload):
@@ -46,7 +46,7 @@ TARGETS = {
         "id": MESSAGE_IDS[0], "threadId": THREAD_IDS[0], "labelIds": ["INBOX", "UNREAD"],
         "snippet": "Synthetic fixture message one.", "internalDate": "1767225600000", "sizeEstimate": 128,
         "payload": {"mimeType": "text/plain", "headers": [
-            {"name": "Subject", "value": "Serverware fixture one"},
+            {"name": "Subject", "value": "Catchplate fixture one"},
             {"name": "From", "value": "fixture-sender@example.com"},
             {"name": "To", "value": "fixture-recipient@example.com"}],
             "body": {"size": 30, "data": "U3ludGhldGljIGZpeHR1cmUgbWVzc2FnZSBvbmUu"}}}),
@@ -54,7 +54,7 @@ TARGETS = {
         "id": MESSAGE_IDS[1], "threadId": THREAD_IDS[1], "labelIds": ["INBOX", "UNREAD"],
         "snippet": "Synthetic fixture message two.", "internalDate": "1767312000000", "sizeEstimate": 129,
         "payload": {"mimeType": "text/plain", "headers": [
-            {"name": "Subject", "value": "Serverware fixture two"},
+            {"name": "Subject", "value": "Catchplate fixture two"},
             {"name": "From", "value": "fixture-sender@example.com"}]}}),
 }
 

@@ -1,6 +1,6 @@
 # Original post-permission activation planning
 
-[`control_plane_oidc_session_activation_planning.py`](../serverware/control_plane_oidc_session_activation_planning.py)
+[`control_plane_oidc_session_activation_planning.py`](../catchplate/control_plane_oidc_session_activation_planning.py)
 connects the actual live permission context to the isolated planner and then
 to the existing dedicated caller signer. This is a private, source-only partial
 step 22: no public activation POST, grant, reservation, protected SQL dispatch,

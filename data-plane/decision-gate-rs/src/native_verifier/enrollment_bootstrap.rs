@@ -23,9 +23,9 @@ const MAX_INPUT_BYTES: usize = 3 * 1024 * 1024;
 const MAX_RESULT_BYTES: usize = 4096;
 const PROCESSING_NS: u64 = 30_000_000_000;
 const SECOND: u64 = 1_000_000_000;
-const RUNTIME_DOMAIN: &[u8] = b"serverware/enclave-runtime-key-binding/v1\0";
-const REQUEST_DOMAIN: &[u8] = b"serverware/native-enrollment-bootstrap-key-binding/v1\0";
-const SIGNATURE_DOMAIN: &[u8] = b"serverware/native-enrollment-bootstrap-packet-signature/v1\0";
+const RUNTIME_DOMAIN: &[u8] = b"catchplate/enclave-runtime-key-binding/v1\0";
+const REQUEST_DOMAIN: &[u8] = b"catchplate/native-enrollment-bootstrap-key-binding/v1\0";
+const SIGNATURE_DOMAIN: &[u8] = b"catchplate/native-enrollment-bootstrap-packet-signature/v1\0";
 
 /// Source-owned clock continuation, not an evidence verdict. The fixed client
 /// creates it before network IO and retains it through authenticated EOF.
@@ -132,9 +132,9 @@ impl InstallationOriginals {
         endpoint: SocketAddr, challenge: [u8; 32], deadline: u64) -> Result<(), String> {
         self.check(deadline)?;
         let exporter = client.export_keying_material([0u8; 32],
-            serverware_decision_gate::native_ingress_challenge_v1::EXPORTER_LABEL,
+            catchplate_decision_gate::native_ingress_challenge_v1::EXPORTER_LABEL,
             Some(&challenge)).map_err(|_| "native egress retained TLS exporter unavailable")?;
-        let nonce = serverware_decision_gate::native_ingress_challenge_v1::derive_nonce(challenge, exporter)?;
+        let nonce = catchplate_decision_gate::native_ingress_challenge_v1::derive_nonce(challenge, exporter)?;
         let peers = client.peer_certificates().ok_or("native egress retained peer chain absent")?;
         ensure(peers.len() == 2 && digest(peers[0].as_ref()) == self.session.leaf_certificate_sha256
             && digest(peers[1].as_ref()) == self.session.ca_certificate_sha256
@@ -166,7 +166,7 @@ fn evidence(raw: &[u8], processing: &mut Processing) -> Result<Evidence, String>
     exact(&value, &["apiVersion", "evidenceScope", "okForAction", "packetBase64url",
         "ingressSessionEvidenceBase64url", "enrollmentSignatureBase64url",
         "enrollmentPublicKeyBase64url", "enrollmentQuoteBase64url"])?;
-    ensure(text(&value, "apiVersion")? == "serverware.nativeEnrollmentBootstrapEvidence/v1"
+    ensure(text(&value, "apiVersion")? == "catchplate.nativeEnrollmentBootstrapEvidence/v1"
         && text(&value, "evidenceScope")? == "unverified-bootstrap-enrollment-public-material"
         && value.get("okForAction").and_then(Value::as_bool) == Some(false),
         "native bootstrap evidence version or scope differs")?;
@@ -368,7 +368,7 @@ pub(super) fn admit_on_processing(raw: &[u8], delegation_pem: &[u8], delegation_
     processing.restrict_until(quote.valid_until_unix_seconds.min(fresh_until)
         .min(session.valid_until_unix_seconds).min(setup.payload().expires_at_unix_seconds))?;
     let result = value!({
-        "apiVersion":"serverware.nativeEnrollmentBootstrapVerification/v1",
+        "apiVersion":"catchplate.nativeEnrollmentBootstrapVerification/v1",
         "resultScope":"local-bootstrap-signature-and-session-only", "okForAction":false,
         "evidenceSha256":digest_text(&digest(raw)), "packetSha256":digest_text(&packet_sha),
         "delegationSha256":digest_text(&setup.delegation().original_sha256()),

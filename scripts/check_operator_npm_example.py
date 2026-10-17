@@ -36,7 +36,7 @@ from scripts.check_operator_demo import CheckFailure, SHA256, require, token_fil
 from scripts.check_operator_ordinary_client import BLOCK, CONNECT, DENIED, LEASE, RELEASE, RELOAD, START, digest
 from scripts.run_operator_x_examples_fixture import failure_site
 
-SCHEMA = "serverware.privateNpmExampleCheck/v1"
+SCHEMA = "catchplate.privateNpmExampleCheck/v1"
 COMMAND = ("/node", "/app/examples/npm-registry/client.mjs")
 SOURCE_FILES = tuple("examples/npm-registry/" + name for name in
     ("client.mjs", "core.mjs", "worker.mjs", "diagnostics.mjs", "package.json", "package-lock.json"))
@@ -55,7 +55,7 @@ OUTER = "/client-trust/outer-ca.pem"
 ROW_KEYS = {"ordinal", "accepted", "case", "method", "rawTarget", "requestHeaders", "requestBodySha256",
     "requestBodyBytes", "operation", "status", "responseContentType", "responseBodySha256", "responseBodyBytes",
     "allParsedHeadersValidated"}
-DIAGNOSTIC_SCHEMA = "serverware.npmExampleDiagnostic/v1"
+DIAGNOSTIC_SCHEMA = "catchplate.npmExampleDiagnostic/v1"
 DIAGNOSTIC_ENUMS = {
     "launcherStage": frozenset({"configuration", "versions", "trust", "publication_input", "installation_input",
         "runtime_setup", "worker_process", "worker_summary", "installation_summary", "cleanup", "other"}),
@@ -104,7 +104,7 @@ def encoded(value):
 def expected_summary(spec, installation=None, *, diagnostic=None):
     if not spec["success"]:
         value = {"ok": False, "operation": spec["operation"],
-            "error": "npm example failed; check configuration, permissions and Serverware audit logs."}
+            "error": "npm example failed; check configuration, permissions and Catchplate audit logs."}
         if spec["operation"] == "publish":
             value["warning"] = "Publication may be unconfirmed. Inspect registry metadata and audit evidence; do not automatically retry."
         elif spec["case"] in fixture.INSTALL_CASES and installation is not None:
@@ -200,27 +200,27 @@ def validate_installation_process(spec, code, out, err, directory):
 def client_environment(spec, application, token, *, project=None, output=None):
     require(spec in fixture.SPECS and type(application) is str and UUID.fullmatch(application)
         and type(token) is str and re.fullmatch(r"[A-Za-z0-9_-]{43}", token), "npm example app identity differs")
-    value = {"LANG": "C.UTF-8", "SERVERWARE_PROXY_URL": metadata.PROXY, "SERVERWARE_APP_ID": application,
-        "SERVERWARE_PROXY_TOKEN": token, "SERVERWARE_NPM_PACKAGE": spec["package"], "SERVERWARE_CA_FILE": INNER,
-        "SERVERWARE_PROXY_CA_FILE": OUTER}
+    value = {"LANG": "C.UTF-8", "CATCHPLATE_PROXY_URL": metadata.PROXY, "CATCHPLATE_APP_ID": application,
+        "CATCHPLATE_PROXY_TOKEN": token, "CATCHPLATE_NPM_PACKAGE": spec["package"], "CATCHPLATE_CA_FILE": INNER,
+        "CATCHPLATE_PROXY_CA_FILE": OUTER}
     if spec["operation"] != "view":
-        value["SERVERWARE_NPM_VERSION"] = spec["version"]
+        value["CATCHPLATE_NPM_VERSION"] = spec["version"]
     if spec["operation"] == "publish":
-        value.update(SERVERWARE_NPM_TAG="fixture", SERVERWARE_NPM_TARBALL="/client-packages/" + spec["case"] + ".tgz",
-            SERVERWARE_NPM_TARBALL_SHA256=hashlib.sha256(fixture.tarball(spec)).hexdigest(),
-            SERVERWARE_NPM_PUBLISH_CONFIRM="publish-publicly")
+        value.update(CATCHPLATE_NPM_TAG="fixture", CATCHPLATE_NPM_TARBALL="/client-packages/" + spec["case"] + ".tgz",
+            CATCHPLATE_NPM_TARBALL_SHA256=hashlib.sha256(fixture.tarball(spec)).hexdigest(),
+            CATCHPLATE_NPM_PUBLISH_CONFIRM="publish-publicly")
     if spec["case"] in fixture.INSTALL_CASES:
         require(isinstance(project, Path) and isinstance(output, Path) and project.is_absolute() and output.is_absolute()
             and project != output and not output.is_relative_to(project), "npm installation output overlaps source")
-        value.update(SERVERWARE_NPM_PROJECT=str(project), SERVERWARE_NPM_OUTPUT=str(output))
+        value.update(CATCHPLATE_NPM_PROJECT=str(project), CATCHPLATE_NPM_OUTPUT=str(output))
     if spec["case"] == "wrong_outer_ca":
-        value.pop("SERVERWARE_PROXY_CA_FILE")
+        value.pop("CATCHPLATE_PROXY_CA_FILE")
     elif spec["case"] == "wrong_inner_ca":
-        value["SERVERWARE_CA_FILE"] = OUTER
+        value["CATCHPLATE_CA_FILE"] = OUTER
     elif spec["case"] == "missing_confirmation":
-        value.pop("SERVERWARE_NPM_PUBLISH_CONFIRM")
+        value.pop("CATCHPLATE_NPM_PUBLISH_CONFIRM")
     elif spec["case"] == "wrong_tarball_hash":
-        value["SERVERWARE_NPM_TARBALL_SHA256"] = "0" * 64
+        value["CATCHPLATE_NPM_TARBALL_SHA256"] = "0" * 64
     return value
 
 
@@ -484,8 +484,8 @@ def local_lease_delta(before, after, event_kinds):
 
 
 def project_bytes():
-    return fixture.encoded({"name": "serverware-fixture-consumer", "version": "1.0.0", "private": True,
-        "dependencies": {"serverware-fixture-publish": "1.0.2"}}) + b"\n"
+    return fixture.encoded({"name": "catchplate-fixture-consumer", "version": "1.0.0", "private": True,
+        "dependencies": {"catchplate-fixture-publish": "1.0.2"}}) + b"\n"
 
 
 def project_files(directory):
@@ -517,7 +517,7 @@ def project_files(directory):
 
 def validate_installation_receipt(value, spec):
     require(type(value) is dict and set(value) == {"directory", "lockSha256", "fileSha256", "sourcePreserved", "ciLockUnchanged"}
-        and type(value["directory"]) is str and re.fullmatch(r"/tmp/serverware-npm-install-[a-zA-Z0-9_]{8}/" + spec["case"], value["directory"])
+        and type(value["directory"]) is str and re.fullmatch(r"/tmp/catchplate-npm-install-[a-zA-Z0-9_]{8}/" + spec["case"], value["directory"])
         and type(value["lockSha256"]) is str and HEX.fullmatch(value["lockSha256"])
         and value["sourcePreserved"] is True and value["ciLockUnchanged"] is (spec["operation"] == "ci"),
         "npm installation receipt differs")
@@ -545,7 +545,7 @@ def inspect_installation(spec, output, source, before, clean):
     lock = fixture.publish.strict_json(lock_raw)
     expected_locations = {"", *("node_modules/" + package for package in fixture.PACKAGES)}
     require(type(lock) is dict and type(lock.get("lockfileVersion")) is int and lock["lockfileVersion"] == 3
-        and lock.get("name") == "serverware-fixture-consumer" and lock.get("version") == "1.0.0"
+        and lock.get("name") == "catchplate-fixture-consumer" and lock.get("version") == "1.0.0"
         and type(lock.get("packages")) is dict and set(lock["packages"]) == expected_locations
         and lock["packages"][""].get("dependencies") == {fixture.PACKAGES[0]: "1.0.2"},
         "npm installation exact lock closure differs")
@@ -568,8 +568,8 @@ def inspect_installation(spec, output, source, before, clean):
 def run_client(spec, environment, seconds, *, clean=None):
     require(spec in fixture.SPECS and 0 < seconds <= 25, "npm example process deadline differs")
     deadline = time.monotonic() + seconds
-    source = Path(environment["SERVERWARE_NPM_PROJECT"]) if spec["case"] in fixture.INSTALL_CASES else None
-    output = Path(environment["SERVERWARE_NPM_OUTPUT"]) if source is not None else None
+    source = Path(environment["CATCHPLATE_NPM_PROJECT"]) if spec["case"] in fixture.INSTALL_CASES else None
+    output = Path(environment["CATCHPLATE_NPM_OUTPUT"]) if source is not None else None
     before = project_files(source) if source is not None else None
     if source is not None:
         require(not output.exists() and not output.is_symlink() and callable(clean), "npm install requires fresh output and leak guard")
@@ -593,8 +593,8 @@ def run_client(spec, environment, seconds, *, clean=None):
         code = process.wait(timeout=max(0.001, deadline - time.monotonic()))
         if source is not None:
             validate_installation_process(spec, code, bytes(output["out"]), bytes(output["err"]),
-                environment["SERVERWARE_NPM_OUTPUT"])
-        installation = (inspect_installation(spec, Path(environment["SERVERWARE_NPM_OUTPUT"]), source, before, clean)
+                environment["CATCHPLATE_NPM_OUTPUT"])
+        installation = (inspect_installation(spec, Path(environment["CATCHPLATE_NPM_OUTPUT"]), source, before, clean)
             if source is not None else None)
         return validate_client_result(spec, code, bytes(output["out"]), bytes(output["err"]), installation=installation)
     finally:
@@ -628,7 +628,7 @@ class NpmExampleCheck(metadata.NpmMetadataCheck):
         from scripts.prepare_operator_npm_example_fixture import validate_dependencies
         account = pwd.getpwuid(os.geteuid())
         require(os.geteuid() == os.getegid() == account.pw_uid == account.pw_gid == 10001
-            and account.pw_name == "serverware" and account.pw_dir == "/home/serverware"
+            and account.pw_name == "catchplate" and account.pw_dir == "/home/catchplate"
             and Path(account.pw_dir).is_dir(), "npm example existing service account differs")
         require(args.ca_file == Path(INNER) and args.proxy_ca_file == Path(OUTER), "npm example trust paths differ")
         require(tuple(s["case"] for s in fixture.SPECS) == PHASES and len(fixture.ARRIVALS) == 25,
@@ -651,7 +651,7 @@ class NpmExampleCheck(metadata.NpmMetadataCheck):
         self.phase_scopes, self.bindings, self.rules, self.apps = {}, {}, {}, {}
         self.baseline, self.cutoff, self.previous_provider = {}, {}, None
         self.revocation = None
-        self.install_root = Path(tempfile.mkdtemp(prefix="serverware-npm-install-"))
+        self.install_root = Path(tempfile.mkdtemp(prefix="catchplate-npm-install-"))
         self.install_source = self.install_root / "source"
         self.install_source.mkdir(mode=0o700)
         fixture.save_new(self.install_source / "package.json", project_bytes())
@@ -800,7 +800,7 @@ class NpmExampleCheck(metadata.NpmMetadataCheck):
             and capabilities.get("npm_publish", {}).get("source_pair_required") is True
             and capabilities["npm_publish"].get("destination_allowed") is True
             and capabilities["npm_publish"].get("registry_origin") == fixture.ORIGIN
-            and capabilities.get("npm_install", {}).get("schema") == "serverware.operatorNpmInstall/v1"
+            and capabilities.get("npm_install", {}).get("schema") == "catchplate.operatorNpmInstall/v1"
             and capabilities["npm_install"].get("source_pair_required") is True
             and capabilities["npm_install"].get("destination_allowed") is True
             and capabilities["npm_install"].get("modes") == ["metadata", "tarball", "audit"]

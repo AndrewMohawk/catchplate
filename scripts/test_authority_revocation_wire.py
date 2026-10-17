@@ -19,10 +19,10 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_plan as plan
-from serverware import authority_revocation_plan_production as production
-from serverware import authority_revocation_wire as wire_reader
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_plan as plan
+from catchplate import authority_revocation_plan_production as production
+from catchplate import authority_revocation_wire as wire_reader
 import test_authority_revocation_plan as oracle
 
 

@@ -9,7 +9,7 @@ owners. These changes remain unbuilt, unexecuted and unprovisioned; no public
 successor route is activated and existing legacy gates remain closed.
 
 Source `.140` adds a separate restricted recovery role and
-[`SuccessorExecutionRecoveryReader`](../serverware/authority_successor_execution_owner.py).
+[`SuccessorExecutionRecoveryReader`](../catchplate/authority_successor_execution_owner.py).
 Its sole protected read function retrieves exact canonical packet originals by
 independently held pending-decision and packet digests, with no direct table
 or sequence access. The real PostgreSQL read-only owner preserves the caller's
@@ -77,7 +77,7 @@ signing only: their operation string cannot be repurposed into SQL permission.
 No cold process, public caller route, reserve or SQL call is added by this
 prerequisite, and credential finalization remains a separate operation.
 
-[`authority_successor_execution_preparation._produce_reserve_on_work`](../serverware/authority_successor_execution_preparation.py)
+[`authority_successor_execution_preparation._produce_reserve_on_work`](../catchplate/authority_successor_execution_preparation.py)
 connects an original grant to actual reserve production. It accepts grant and
 enrollment originals, independent authorization/history/key inputs and the
 original plan, not a supplied capability digest or verified-plan object. The
@@ -89,7 +89,7 @@ execution-grant admission by this separate path.
 
 ## One genuine plan replay at final admission
 
-[`authority_current_root_execution_admission`](../serverware/authority_current_root_execution_admission.py)
+[`authority_current_root_execution_admission`](../catchplate/authority_current_root_execution_admission.py)
 authenticates the original enrollment, reserve request and state receipt, checks
 the independently expected pending head/sequence/fence, and recomputes the
 original computation snapshot from actual seven-operation plan replay. The candidate
@@ -97,10 +97,10 @@ contains only same-call derived request, selected rows, mutations, result,
 work units, complete vectors and expected marker data. It is ordinary data, not
 a proof token or a callable database permission.
 
-[`authority_successor_execution_grant`](../serverware/authority_successor_execution_grant.py)
+[`authority_successor_execution_grant`](../catchplate/authority_successor_execution_grant.py)
 provides original enrollment/grant signature verification and a standalone
 original-plan verifier. The combined
-[`authority_successor_execution_admission._admit_on_work`](../serverware/authority_successor_execution_admission.py)
+[`authority_successor_execution_admission._admit_on_work`](../catchplate/authority_successor_execution_admission.py)
 uses the control verifier after genuine pending/plan admission, then joins all
 grant claims to the same-call reconstructed snapshot. This performs the heavy
 plan proof computation once, without accepting a successful replay carrier as
@@ -113,7 +113,7 @@ monotonic deadline. Historical plan validity is not renewed into new authority.
 
 ## Original-byte custody, not a supplied execution candidate
 
-[`authority_successor_execution_packet._prepare_on_work`](../serverware/authority_successor_execution_packet.py)
+[`authority_successor_execution_packet._prepare_on_work`](../catchplate/authority_successor_execution_packet.py)
 invokes the genuine combined admission once on the caller's existing work. It
 accepts original controls/plans and independent expectations, never an incoming
 successful candidate or packet. Its canonical exact-16-field packet binds
@@ -133,7 +133,7 @@ independently enroll their historical keys, authorization or checkpoint.
 
 ## Protected SQL and actual transaction owners
 
-[`authority_successor_execution_owner`](../serverware/authority_successor_execution_owner.py)
+[`authority_successor_execution_owner`](../catchplate/authority_successor_execution_owner.py)
 provides `SuccessorExecutionIssuer.issue(...)`, which produces that packet
 itself, and `SuccessorExecutionExecutor.execute(...)`, whose only custody
 selectors are `pending_decision_digest` and `packet_digest`. The executor does
@@ -142,14 +142,14 @@ not accept candidate JSON, mutations or a successful attempt carrier.
 The distinct fixed database roles each have only their protected function,
 with no direct relation/sequence privileges or generic function execution:
 
-- `serverware_policy_authority_successor_issuer` calls
-  `serverware_policy_authority_issue_successor_execution(text, text)`.
-- `serverware_policy_authority_successor_executor` calls
-  `serverware_policy_authority_execute_successor(text, text)`.
-- `serverware_policy_authority_successor_recovery` calls
-  `serverware_policy_authority_read_successor_execution(text, text)`.
+- `catchplate_policy_authority_successor_issuer` calls
+  `catchplate_policy_authority_issue_successor_execution(text, text)`.
+- `catchplate_policy_authority_successor_executor` calls
+  `catchplate_policy_authority_execute_successor(text, text)`.
+- `catchplate_policy_authority_successor_recovery` calls
+  `catchplate_policy_authority_read_successor_execution(text, text)`.
 
-[`authority_store.successor_execution_sql`](../serverware/authority_store/successor_execution_sql.py)
+[`authority_store.successor_execution_sql`](../catchplate/authority_store/successor_execution_sql.py)
 stores the admitted packet in immutable
 `policy_authority_successor_execution_custody`. Its executor locks that exact
 custody row, joins both identifiers and rejects an existing commit marker before
@@ -157,7 +157,7 @@ using the retained effects. SQL checks source/canonical framing and commitment
 joins; it does not replace genuine Ed25519 admission with signature-shaped JSON.
 The independently admitted dedicated issuer is the cryptographic boundary.
 
-[`authority_store.current_root_execution_sql`](../serverware/authority_store/current_root_execution_sql.py)
+[`authority_store.current_root_execution_sql`](../catchplate/authority_store/current_root_execution_sql.py)
 supplies the reused source-fixed mutation body. The atomic path locks and checks
 complete before roots, applies actual closed primary-key/full-row compare-and-swap
 mutations with maintained primary
@@ -182,9 +182,9 @@ database waits are not a hard native-call watchdog.
 The source installer now includes the exact custody schema, functions, guards
 and grants; it has not been run here. All three roles and identities must be
 independently provisioned. Offline metadata bootstrap requires the prefixes
-`SERVERWARE_POLICY_AUTHORITY_SUCCESSOR_ISSUER_`,
-`SERVERWARE_POLICY_AUTHORITY_SUCCESSOR_EXECUTOR_` and
-`SERVERWARE_POLICY_AUTHORITY_SUCCESSOR_RECOVERY_`, each with all six suffixes:
+`CATCHPLATE_POLICY_AUTHORITY_SUCCESSOR_ISSUER_`,
+`CATCHPLATE_POLICY_AUTHORITY_SUCCESSOR_EXECUTOR_` and
+`CATCHPLATE_POLICY_AUTHORITY_SUCCESSOR_RECOVERY_`, each with all six suffixes:
 `MEASUREMENT_SHA256`, `ATTESTATION_RECEIPT_SHA256`,
 `CREDENTIAL_ISSUANCE_SHA256`, `TLS_CLIENT_DN`, `TLS_CLIENT_SERIAL` and
 `TLS_ISSUER_DN`. Missing values do not fall back to legacy identity pins.
@@ -194,7 +194,7 @@ source. Legacy execution gates remain unchanged and no direct DML is granted.
 
 ## Durable attempt before database connection
 
-[`SuccessorExecutionAttempts`](../serverware/authority_successor_execution_attempts.py)
+[`SuccessorExecutionAttempts`](../catchplate/authority_successor_execution_attempts.py)
 owns a separate private preprovisioned `CurrentRootJournal` in an independent
 database-rollback domain. Construction requires an independently current exact
 local sequence/head and the expected structure-manifest digest, not a minimum
@@ -242,7 +242,7 @@ Canonical bytes, the framed packet digest and immutable row columns are joined;
 historical control expiry is not tested as fresh execution permission. The
 returned bytes still require original-signature and proof authentication.
 
-[`recover_and_deliver`](../serverware/authority_successor_completion_recovery.py)
+[`recover_and_deliver`](../catchplate/authority_successor_completion_recovery.py)
 uses the actual custody reader, committed-state reader, durable delivery owner
 and fixed state client. It captures their configurations and independent
 history/key/scope inputs before callbacks, then holds the delivery lock across

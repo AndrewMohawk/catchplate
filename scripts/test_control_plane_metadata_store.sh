@@ -2,7 +2,7 @@
 set -euo pipefail
 
 BASE="${BASE:-http://localhost:3000}"
-ADMIN_TOKEN="${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}"
+ADMIN_TOKEN="${CATCHPLATE_ADMIN_TOKEN:-dev-admin-token}"
 
 python3 - "$BASE" "$ADMIN_TOKEN" <<'PY'
 import json
@@ -13,7 +13,7 @@ import urllib.request
 
 base = sys.argv[1].rstrip("/")
 admin_token = sys.argv[2]
-admin_headers = {"X-Serverware-Admin-Token": admin_token}
+admin_headers = {"X-Catchplate-Admin-Token": admin_token}
 
 
 def request_json(path: str, *, method: str = "GET") -> dict | list:
@@ -46,9 +46,9 @@ raw = subprocess.check_output(
         "grant-store",
         "psql",
         "-U",
-        "serverware",
+        "catchplate",
         "-d",
-        "serverware",
+        "catchplate",
         "-Atc",
         sql,
     ],
@@ -68,7 +68,7 @@ import json
 import threading
 import uuid
 
-from serverware import db
+from catchplate import db
 
 
 assert db.metadata_store_backend_name() == "postgres"
@@ -181,7 +181,7 @@ print(
 )
 '''
 rbac_raw = subprocess.check_output(
-    ["docker", "compose", "exec", "-T", "serverware", "python", "-"],
+    ["docker", "compose", "exec", "-T", "catchplate", "python", "-"],
     input=rbac_probe,
     text=True,
 ).strip()

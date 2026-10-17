@@ -22,8 +22,8 @@ impl PolicyAwareExpectations {
             &["apiVersion", "statementProfile", "responseSigningKeyId", "controlPlaneResponseSigningKeyId",
                 "policyDigest", "releaseDigest", "dataPlaneBinaryDigest", "serverInstanceId", "principalId"],
             "policy-aware response expectations")?;
-        if required_string(&expected, "apiVersion")? != "serverware.policyAwareResponseExpectations/v1"
-            || required_string(&expected, "statementProfile")? != "serverware.policyAwareResponseStatements/v1"
+        if required_string(&expected, "apiVersion")? != "catchplate.policyAwareResponseExpectations/v1"
+            || required_string(&expected, "statementProfile")? != "catchplate.policyAwareResponseStatements/v1"
             || !valid_bounded_identity(principal)
             || required_string(&expected, "principalId")? != principal
             || instance != Some(required_string(&expected, "serverInstanceId")?)

@@ -18,8 +18,8 @@ from unittest.mock import patch
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-with patch.dict(os.environ, {"SERVERWARE_PROCESS_MODE": "serverware-control-plane"}):
-    from serverware import authority_service as service
+with patch.dict(os.environ, {"CATCHPLATE_PROCESS_MODE": "catchplate-control-plane"}):
+    from catchplate import authority_service as service
 from test_authority_radix_mutation import IndependentTree
 
 
@@ -29,7 +29,7 @@ IDENTITY = uuid.UUID("01234567-89ab-4def-8123-456789abcdef")
 
 
 def fixture():
-    return dict(schema="serverware.policyAuthorityControlledWriterInput/v1",
+    return dict(schema="catchplate.policyAuthorityControlledWriterInput/v1",
         handler="create_webauthn_challenge",
         operationManifestDigest=service.authority_contract.OPERATION_MANIFEST_DIGEST,
         arguments=dict(challenge="A" * 43, challenge_type="registration", user_id="synthetic-operator",
@@ -59,9 +59,9 @@ class SyntheticChallengeCursor:
         prefix, expected_parameters, rows = self.steps.pop(0)
         if not statement.startswith(prefix) or parameters != expected_parameters:
             raise AssertionError("synthetic SQL predicate or parameters changed")
-        if statement.count("serverware_metadata.") != int(bool(parameters)):
+        if statement.count("catchplate_metadata.") != int(bool(parameters)):
             raise AssertionError("synthetic SQL relation closure changed")
-        if parameters and "serverware_metadata.webauthn_challenges" not in statement:
+        if parameters and "catchplate_metadata.webauthn_challenges" not in statement:
             raise AssertionError("synthetic SQL read an undeclared relation")
         self.statements.append(statement)
         self.pending = copy.deepcopy(rows)
@@ -93,7 +93,7 @@ class ChallengeReaderProjectionControls(unittest.TestCase):
         steps = [("SELECT pg_catalog.clock_timestamp() AS database_now", (),
             [{"database_now": now}])]
         select = ("SELECT pg_catalog.to_jsonb(target) AS row_value "
-            "FROM serverware_metadata.webauthn_challenges AS target WHERE ")
+            "FROM catchplate_metadata.webauthn_challenges AS target WHERE ")
         if operation == OPERATION:
             rows = []
             steps.extend([

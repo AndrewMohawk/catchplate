@@ -105,13 +105,13 @@ impl Store {
         let mut bytes=vec![0;identity.len as usize];file.read_exact_at(&mut bytes,0).map_err(fail)?;
         require(Identity::of(&file)?==identity)?;
         let object:Object=guest::exact(&bytes)?;
-        require(object.api_version=="serverware.nativeShadowImmutableRetrievalObject/v1"
+        require(object.api_version=="catchplate.nativeShadowImmutableRetrievalObject/v1"
             && object.proof_scope_sha256==Sha256Digest::compute(scope_original) && object.signer_role==role
             && object.canonical_receipt_payload_base64url==URL_SAFE_NO_PAD.encode(receipt)
             && object.signed_authority_payload_base64url==URL_SAFE_NO_PAD.encode(authority))?;
-        let actual_id=hash_domain_frames(b"serverware.nativeShadowImmutableRetrievalId/v1",
+        let actual_id=hash_domain_frames(b"catchplate.nativeShadowImmutableRetrievalId/v1",
             &[scope.namespace().as_str().as_bytes(),&bytes]);
-        require(&actual_id==id && proof==&hash_domain_frames(b"serverware.nativeShadowImmutableRetrievalProof/v1",
+        require(&actual_id==id && proof==&hash_domain_frames(b"catchplate.nativeShadowImmutableRetrievalProof/v1",
             &[scope_original,&canonical_json_bytes(&role)?,id.as_str().as_bytes(),receipt,authority]))?;
         self.check()?;let read=Read{file,identity,bytes,verity};read.check()?;Ok(read)
     }

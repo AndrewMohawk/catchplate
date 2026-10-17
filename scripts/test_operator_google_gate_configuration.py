@@ -26,7 +26,7 @@ FILENAME = "operator-google-configuration.json"
 
 
 def refused(function):
-    from serverware import operator_google_gate_configuration as gate
+    from catchplate import operator_google_gate_configuration as gate
     try:
         function()
     except gate.GateConfigurationUnavailable as error:
@@ -47,7 +47,7 @@ def secret_guards(f):
 
 
 def project(f):
-    from serverware import operator_google_gate_configuration as gate
+    from catchplate import operator_google_gate_configuration as gate
     before = f.snapshot(), managed.key_evidence()
     with f.store.operator_publication.exclusive(), closing(f.db.connect()) as conn:
         conn.execute("PRAGMA query_only=ON")
@@ -79,7 +79,7 @@ def exact_export(f, value):
     assert info.st_uid == os.geteuid() and info.st_nlink == 1
     assert target.read_bytes() == f.setup._canonical(value).encode("ascii")
     assert set(path.name for path in target.parent.iterdir()) == {
-        FILENAME, "policy-bundle.json", "mitmproxy", ".operator-publication.lock", ".serverware-operator-demo.json"}
+        FILENAME, "policy-bundle.json", "mitmproxy", ".operator-publication.lock", ".catchplate-operator-demo.json"}
     assert (target.parent / "policy-bundle.json").read_bytes() == f.config.POLICY_BUNDLE_PATH.read_bytes()
     return target
 
@@ -157,7 +157,7 @@ def active(request):
 
 def admission(_request):
     f = managed.Fixture()
-    from serverware import operator_google_gate_configuration as gate
+    from catchplate import operator_google_gate_configuration as gate
     before = f.snapshot(), managed.key_evidence()
     with closing(f.db.connect()) as conn:
         conn.execute("PRAGMA query_only=ON")
@@ -242,7 +242,7 @@ def corrupt(request):
             conn.execute("UPDATE audit_events SET event_hash=? WHERE event_type='operator_catalog.google_setup.activated'", ("sha256:" + "0" * 64,))
         else:
             raise AssertionError("unknown corruption fixture")
-    from serverware import operator_google_gate_configuration as gate
+    from catchplate import operator_google_gate_configuration as gate
     before = f.snapshot(), managed.key_evidence()
     with f.store.operator_publication.exclusive(), closing(f.db.connect()) as conn:
         conn.execute("PRAGMA query_only=ON")
@@ -255,7 +255,7 @@ def corrupt(request):
 
 
 def failed_activation_export(request):
-    from serverware import operator_gate_publication as exporter
+    from catchplate import operator_gate_publication as exporter
     original = exporter._replace_publication
     observed = []
 
@@ -276,7 +276,7 @@ def failed_activation_export(request):
         else:
             raise AssertionError("startup ignored manifest publication failure")
     assert len(observed) == 1
-    from serverware import config, control_plane_startup
+    from catchplate import config, control_plane_startup
     with closing(sqlite3.connect(config.DB_PATH.as_uri() + "?mode=ro", uri=True)) as conn:
         row = conn.execute("SELECT status FROM operator_google_setups WHERE operation_id=?",
             (request["operation"]["operation_id"],)).fetchone()
@@ -306,7 +306,7 @@ class GoogleGateConfigurationTests(unittest.TestCase):
         data, provider = Path(self.scratch.name) / ("case-data-" + str(index)), Path(self.scratch.name) / ("case-provider-" + str(index))
         data.mkdir(mode=0o700)
         provider.mkdir(mode=0o700)
-        return {"SERVERWARE_DATA_DIR": str(data), managed.KEY_DIRECTORY: str(provider)}
+        return {"CATCHPLATE_DATA_DIR": str(data), managed.KEY_DIRECTORY: str(provider)}
 
     def test_fresh_pending_and_cancelled_are_explicit_profile_off_without_secrets(self):
         self.worker("lifecycle")

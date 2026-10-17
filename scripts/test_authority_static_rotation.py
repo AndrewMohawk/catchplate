@@ -20,21 +20,21 @@ sys.path[:0] = [str(ROOT), str(ROOT / "scripts")]
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from serverware import authority_contract as contract
-from serverware import authority_challenge_retention as retention
-from serverware import authority_credential_currentness as current
-from serverware import authority_static_credential_create as creation
-from serverware import authority_static_credential_custody as old_custody
-from serverware import authority_static_credential_rotate as rotation
-from serverware import authority_static_credential_rotation_custody as custody
-from serverware import authority_static_credential_rotation_approval as approval
-from serverware import authority_static_credential_provenance as provenance
-from serverware import authority_static_credential_assignment as assignment
-from serverware import authority_transition_core as core
-from serverware import authority_transition_quota as shared
-from serverware import authority_transition_static_credential_rotate as kernel
-from serverware import authority_webauthn_bindings as bindings
-from serverware import credential_currentness_rows as rows
+from catchplate import authority_contract as contract
+from catchplate import authority_challenge_retention as retention
+from catchplate import authority_credential_currentness as current
+from catchplate import authority_static_credential_create as creation
+from catchplate import authority_static_credential_custody as old_custody
+from catchplate import authority_static_credential_rotate as rotation
+from catchplate import authority_static_credential_rotation_custody as custody
+from catchplate import authority_static_credential_rotation_approval as approval
+from catchplate import authority_static_credential_provenance as provenance
+from catchplate import authority_static_credential_assignment as assignment
+from catchplate import authority_transition_core as core
+from catchplate import authority_transition_quota as shared
+from catchplate import authority_transition_static_credential_rotate as kernel
+from catchplate import authority_webauthn_bindings as bindings
+from catchplate import credential_currentness_rows as rows
 import authority_revocation_trust_fixture as trust
 
 C, H = creation.canonical, creation.sha256
@@ -44,7 +44,7 @@ STAMP = lambda ns: datetime.fromtimestamp(ns // 1_000_000_000, timezone.utc).iso
 
 def selected(table, key, row):
     return {"table": table, "key": key, "keyDigest": core.framed_digest(
-        "serverware.policyAuthorityBusinessKey/v1", table.encode(), C(key)),
+        "catchplate.policyAuthorityBusinessKey/v1", table.encode(), C(key)),
         "present": row is not None, "row": row, "contractSelector": None}
 
 
@@ -67,7 +67,7 @@ def fixture():
     def proof(module, statement):
         statement = {**statement, "apiVersion": module.STATEMENT_SCHEMA, "operation": module.profile.OPERATION}
         return {"statement": statement, "signature": "ed25519:" + B(key.sign(module.SIGNATURE_DOMAIN + C(statement))),
-            "nativeKeyEvidence": {"apiVersion": "serverware.nativeResponseProofKeyEvidence/v1",
+            "nativeKeyEvidence": {"apiVersion": "catchplate.nativeResponseProofKeyEvidence/v1",
                 "responseProofPublicKey": B(public.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)),
                 "attestationDocumentB64": B(b"explicit synthetic acquisition, not a Nitro quote")}}
 
@@ -88,12 +88,12 @@ def fixture():
         "created_at": STAMP(now - 50_000_000_000), "updated_at": STAMP(now - 50_000_000_000)}
     head = {"credential_id": item, "last_version": 1, "updated_at": credential["updated_at"]}
     root = current.new_root(item, 1, origin, credential["created_at"])
-    audit = {"schema": "serverware.staticCredentialCreationAudit/v1", "operation": creation.OPERATION, "requestDigest": origin,
+    audit = {"schema": "catchplate.staticCredentialCreationAudit/v1", "operation": creation.OPERATION, "requestDigest": origin,
         "credentialId": item, "credentialVersion": 1, "candidateSha256": H(b"creation candidate"),
         "intentSha256": generation1["intentSha256"], "nativeGenerationSha256": H(native1.encode()),
         "custodyStatementSha256": H(C(old["statement"])), "approvalId": None}
     outbox = {"id": provenance.outbox_id(historical), "event_type": creation.OPERATION, "actor_type": "admin",
-        "actor_id": actor, "event_json": C(audit).decode(), "event_digest": core.framed_digest("serverware.metadataAuditOutboxEvent/v1", C(audit)),
+        "actor_id": actor, "event_json": C(audit).decode(), "event_digest": core.framed_digest("catchplate.metadataAuditOutboxEvent/v1", C(audit)),
         "storage_format_version": 1, "status": "audited", "claim_id": None, "claimed_at": None, "attempts": 1,
         "audited_at": STAMP(now - 40_000_000_000), "audit_event_hash": H(b"completed audit"), "last_error": None,
         "created_at": credential["created_at"]}
@@ -131,7 +131,7 @@ def fixture():
         expectedEif="sha384:" + "a" * 96, expectedModuleId="fixture-module", maxAgeSeconds=60, futureSkewSeconds=0)
     assigned = {"schema": assignment.SCHEMA, "controlPlaneConfigurationDigest": cfg, "deploymentId": "fixture", "assignment": assignment_row,
         "issuedAtEpochNs": now - 100_000_000_000, "expiresAtEpochNs": now + 300_000_000_000}
-    from serverware import authority_request_commitment as commitment
+    from catchplate import authority_request_commitment as commitment
     signer = Ed25519PrivateKey.generate()
     native_proof["assignmentOriginal"] = C({"schema": assignment.SIGNED_SCHEMA, "payload": assigned,
         "signature": B(signer.sign(commitment.framed_digest(assignment.SIGNED_SCHEMA, C(assigned)).encode()))}).decode()
@@ -145,7 +145,7 @@ class RotationControls(unittest.TestCase):
     def context(self):
         f = self.f; now = f["now"]; values = f["values"]; actor = f["actor"]
         request_digest = rotation.request_digest(rotation.OPERATION, values)
-        operation_id = core.framed_digest("serverware.policyAuthorityOperation/v2", rotation.OPERATION.encode(), request_digest.encode())
+        operation_id = core.framed_digest("catchplate.policyAuthorityOperation/v2", rotation.OPERATION.encode(), request_digest.encode())
         credential = {"id": "hardware", "credential_id": "public-hardware", "user_id": actor, "sign_count": 2,
             "revoked_at": None, "last_used_at": None, "updated_at": STAMP(now - 20_000_000_000), "attestation_trusted": 1,
             **trust.credential_fields(), "authenticator_class": "hardware", "attestation_leaf_sha256": H(b"leaf"), "attestation_root_sha256": H(b"root")}
@@ -163,8 +163,8 @@ class RotationControls(unittest.TestCase):
             "credentialRecordId": credential["id"], "credentialId": credential["credential_id"], "challengeId": challenge["id"],
             "challengeDigest": H(C(public)), "clientChallengeDigest": H(b"challenge" * 4), "rpId": "unit.example", "origin": "https://unit.example",
             "priorCounter": 2, "counter": 3, "verifiedAtEpochNs": now - 1_000_000_000, "expiresAtEpochNs": now + 10_000_000_000,
-            "trustHighWaterDigest": trust.framed("serverware.webauthnTrustHighWater/v1", C(trust.trust_high_water_document(high))),
-            "metadataPublicationSequence": 1, "credentialPolicyDigest": trust.framed("serverware.policyAuthorityCredentialPolicy/v1", C(trust.credential_policy_document(credential, high))),
+            "trustHighWaterDigest": trust.framed("catchplate.webauthnTrustHighWater/v1", C(trust.trust_high_water_document(high))),
+            "metadataPublicationSequence": 1, "credentialPolicyDigest": trust.framed("catchplate.policyAuthorityCredentialPolicy/v1", C(trust.credential_policy_document(credential, high))),
             "verifiedAssertionReceiptDigest": H(b"fixture projection, not signed hardware receipt")}
         selection = list(trust.selected_rows())
         for table, field, row in (("credentials", "id", f["credential"]), ("credential_generations", "credential_id", f["head"]),

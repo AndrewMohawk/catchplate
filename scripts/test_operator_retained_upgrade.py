@@ -41,12 +41,12 @@ TABLES = ("credentials", "credential_generations", "operator_demo_connections",
     "operator_catalog_rules", "operator_demo_policy", "audit_events", "metadata_audit_outbox")
 FILES = ("master.key", "policy-bundle.json", "policy-signing-ed25519.pem",
     "policy-signing-ed25519.pub.pem", "mitmproxy/mitmproxy-ca.pem",
-    "mitmproxy/mitmproxy-ca-cert.pem", ".operator-publication.lock", ".serverware-operator-demo.json")
+    "mitmproxy/mitmproxy-ca-cert.pem", ".operator-publication.lock", ".catchplate-operator-demo.json")
 
 
 def select_source(source):
-    assert source.is_dir() and (source / "serverware" / "operator_demo.py").is_file()
-    assert not any(name == "serverware" or name.startswith("serverware.")
+    assert source.is_dir() and (source / "catchplate" / "operator_demo.py").is_file()
+    assert not any(name == "catchplate" or name.startswith("catchplate.")
         or name in {"test_operator_demo_persistence", "test_operator_workspace_store"} for name in sys.modules)
     # The edited harness is NOT an overlay on either immutable application.
     # Remove its directory, cwd and both roots before selected fixture imports.
@@ -65,7 +65,7 @@ def select_source(source):
 def verify_imports(source):
     count = 0
     for name, module in tuple(sys.modules.items()):
-        if name == "serverware" or name.startswith("serverware.") or name in {
+        if name == "catchplate" or name.startswith("catchplate.") or name in {
                 "test_operator_demo_persistence", "test_operator_workspace_store"}:
             path = getattr(module, "__file__", None)
             assert path and Path(path).resolve().is_relative_to(source.resolve()), "mixed old/current application imports"
@@ -103,7 +103,7 @@ def seed_saved_authority(workspace, config, db, store, schema, inputs, mutations
     for application, response_mode, credential_input in (
             (applications[0], "unfiltered_json_or_empty_v2", "replace_exact"),
             (expired, "unfiltered_json_or_empty_v1", "insert")):
-        replacement = {"placeholder": "Bearer SERVERWARE_RETAINED_FIXTURE"} if credential_input == "replace_exact" else {}
+        replacement = {"placeholder": "Bearer CATCHPLATE_RETAINED_FIXTURE"} if credential_input == "replace_exact" else {}
         mutations.create_rule(inputs.RuleInput(**workspace.review(db, store, schema),
             name="Retained " + response_mode, application_id=application["application"]["id"],
             credential_id=first["id"], upstream_url="https://demo-upstream:8443/echo", methods=["POST"],
@@ -142,8 +142,8 @@ def seed_saved_authority(workspace, config, db, store, schema, inputs, mutations
 
 def retained_snapshot(workspace, config, db, store, schema, profiles, mutations, *, notifications_enabled=False):
     assert profiles.selected() is False
-    assert os.environ.get("SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED") == ("1" if notifications_enabled else "0")
-    assert ("SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR" in os.environ) is notifications_enabled
+    assert os.environ.get("CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED") == ("1" if notifications_enabled else "0")
+    assert ("CATCHPLATE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR" in os.environ) is notifications_enabled
     with closing(db.connect()) as conn:
         schema.validate_bindings(conn)
         catalog = schema.read_catalog(conn)
@@ -187,16 +187,16 @@ def retained_snapshot(workspace, config, db, store, schema, profiles, mutations,
 
 def cold_notification_cycle(config):
     """Exercise the real post-startup worker without configuring any delivery."""
-    from serverware import operator_notifications as notifications
-    from serverware import operator_notification_transport as transport
-    directory = Path(os.environ["SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR"])
+    from catchplate import operator_notifications as notifications
+    from catchplate import operator_notification_transport as transport
+    directory = Path(os.environ["CATCHPLATE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR"])
     assert directory.resolve() == directory and directory.parent == config.DATA_DIR.parent
     assert not directory.is_relative_to(config.DATA_DIR) and not config.DATA_DIR.is_relative_to(directory)
     before = directory.lstat()
     assert stat.S_ISDIR(before.st_mode) and stat.S_IMODE(before.st_mode) == 0o700
     assert before.st_uid == os.geteuid() and list(directory.iterdir()) == []
-    assert "SERVERWARE_OPERATOR_NOTIFICATIONS_PILOT_SOURCE_JSON" not in os.environ
-    assert "SERVERWARE_OPERATOR_NOTIFICATIONS_PRIVATE_DESTINATIONS_JSON" not in os.environ
+    assert "CATCHPLATE_OPERATOR_NOTIFICATIONS_PILOT_SOURCE_JSON" not in os.environ
+    assert "CATCHPLATE_OPERATOR_NOTIFICATIONS_PRIVATE_DESTINATIONS_JSON" not in os.environ
     assert notifications._THREAD is None and notifications._LAST_CYCLE is None
     deadline = time.monotonic() + 5
     with patch.object(transport, "deliver", side_effect=AssertionError("unconfigured worker attempted delivery")) as delivery:
@@ -237,15 +237,15 @@ def worker(operation):
     intent = os.environ.get(NOTIFICATION_INTENT, "0")
     assert intent in {"0", "1"}
     notifications_enabled = intent == "1" and operation != "seed-old"
-    assert os.environ["SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED"] == ("1" if notifications_enabled else "0")
+    assert os.environ["CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED"] == ("1" if notifications_enabled else "0")
     select_source(source)
     import test_operator_workspace_store as workspace
-    from serverware import operator_demo
+    from catchplate import operator_demo
     operator_demo.activate()
-    from serverware import config, db, oauth, operator_demo_store as store, policy_bundle as bundles
-    from serverware import operator_catalog_schema as schema, operator_catalog_inputs as inputs
-    from serverware import operator_catalog_mutations as mutations, operator_catalog_oauth_profile as profiles
-    from serverware.control_plane_startup import validate_control_plane_startup
+    from catchplate import config, db, oauth, operator_demo_store as store, policy_bundle as bundles
+    from catchplate import operator_catalog_schema as schema, operator_catalog_inputs as inputs
+    from catchplate import operator_catalog_mutations as mutations, operator_catalog_oauth_profile as profiles
+    from catchplate.control_plane_startup import validate_control_plane_startup
     contacts = []
 
     def forbidden(request, **_options):
@@ -301,10 +301,10 @@ class OperatorRetainedUpgradeTests(unittest.TestCase):
         sys.path.insert(0, str(ROOT / "scripts"))
         import test_operator_demo_persistence as common
         common.OperatorDemoPersistenceTests.setUp(self)
-        self.environment.update(SERVERWARE_PUBLIC_URL="https://control.example.com",
-            SERVERWARE_OPERATOR_DEMO_UPSTREAMS='["https://api.example.com","https://demo-upstream:8443"]',
-            SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS='["127.0.0.1/32"]',
-            SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED="0")
+        self.environment.update(CATCHPLATE_PUBLIC_URL="https://control.example.com",
+            CATCHPLATE_OPERATOR_DEMO_UPSTREAMS='["https://api.example.com","https://demo-upstream:8443"]',
+            CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS='["127.0.0.1/32"]',
+            CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED="0")
         intent = self.environment.get(NOTIFICATION_INTENT, "0")
         self.assertIn(intent, {"0", "1"})
         self.enable_notifications = intent == "1"
@@ -320,8 +320,8 @@ class OperatorRetainedUpgradeTests(unittest.TestCase):
         environment = dict(self.environment)
         enabled = self.enable_notifications and operation != "seed-old"
         if enabled:
-            environment.update(SERVERWARE_OPERATOR_NOTIFICATIONS_ENABLED="1",
-                SERVERWARE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR=str(self.notification_custody))
+            environment.update(CATCHPLATE_OPERATOR_NOTIFICATIONS_ENABLED="1",
+                CATCHPLATE_OPERATOR_NOTIFICATIONS_CUSTODY_DIR=str(self.notification_custody))
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker", operation],
             cwd=source, env=environment, capture_output=True, text=True, timeout=min(60, remaining))
         self.assertEqual(result.returncode, 0, "\n".join(result.stderr.splitlines()[-40:]))

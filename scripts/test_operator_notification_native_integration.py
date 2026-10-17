@@ -29,9 +29,9 @@ import test_operator_notification_transport as tls_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = str(Path(__file__).resolve())
-PILOT_ENV = "SERVERWARE_OPERATOR_NOTIFICATIONS_PILOT_SOURCE_JSON"
+PILOT_ENV = "CATCHPLATE_OPERATOR_NOTIFICATIONS_PILOT_SOURCE_JSON"
 SELECTION, ATTEMPT, READINESS = ("sha256:" + char * 64 for char in "abc")
-NATIVE_ORIGIN = "https://serverware.example.com"
+NATIVE_ORIGIN = "https://catchplate.example.com"
 REVIEW_PATH = "/pilot-prelaunch/action-status/" + ATTEMPT[7:] + "/" + READINESS[7:]
 DESTINATION = "https://receiver.example.test/notification/SYNTHETIC_SECRET_URL_CANARY?token=PRIVATE_CANARY"
 ACK = b"HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 2\r\n\r\nok"
@@ -42,7 +42,7 @@ def canonical(value):
 
 
 def observation(expiry, *, available):
-    value = {"schema": "serverware.pilotActionStatus/v1", "attemptSha256": ATTEMPT,
+    value = {"schema": "catchplate.pilotActionStatus/v1", "attemptSha256": ATTEMPT,
         "readinessSha256": READINESS, "phase": "prepare_available" if available else "action_in_progress",
         "actionAvailable": available, "attemptNumber": 0, "sourceSha256": READINESS if available else None,
         "setupExpiresAtUnixNanos": str(expiry), "sourceExpiresAtUnixNanos": str(expiry) if available else None,
@@ -52,7 +52,7 @@ def observation(expiry, *, available):
         binding = {key: value[key] for key in ("attemptSha256", "readinessSha256", "attemptNumber",
             "eventType", "sourceSha256", "sourceExpiresAtUnixNanos")}
         value["eventId"] = "sha256:" + hashlib.sha256(canonical(binding).encode("ascii")).hexdigest()
-    return {"schema": "serverware.pilotObservationRelay/v1", "selectionSha256": SELECTION,
+    return {"schema": "catchplate.pilotObservationRelay/v1", "selectionSha256": SELECTION,
         "state": "observed", "observation": value}
 
 
@@ -122,7 +122,7 @@ def local_tls(fixture, receiver):
 
 
 def assert_no_store_lock(fixture):
-    from serverware import operator_publication
+    from catchplate import operator_publication
     try:
         operator_publication.assert_held()
     except operator_publication.PublicationError:
@@ -142,7 +142,7 @@ def run_app(scenario, raw_config):
     os.environ.clear()
     os.environ.update(case.environment)
     fixture = fixtures.Fixture()
-    from serverware import operator_notifications as worker, operator_notification_pilot_source as source
+    from catchplate import operator_notifications as worker, operator_notification_pilot_source as source
     assert fixture.store.ACTION_SOURCE_AVAILABLE is False
     for slot in ("action_required.webhook", "audit_log.webhook"):
         fixture.save(slot, url=DESTINATION, event_types=["native_pilot.prepare_available"])
@@ -238,10 +238,10 @@ def isolated(scenario):
         os.chown(app_dir, 10001, 10001)
         path = str(relay_dir / "observation.sock")
         expiry = time.time_ns() + 120_000_000_000
-        raw_config = canonical({"schema": "serverware.operatorPilotNotificationSource/v1",
+        raw_config = canonical({"schema": "catchplate.operatorPilotNotificationSource/v1",
             "socketPath": path, "relayUid": 1000, "selectionSha256": SELECTION,
             "attemptSha256": ATTEMPT, "nativeOrigin": NATIVE_ORIGIN})
-        environment = {key: value for key, value in os.environ.items() if not key.startswith("SERVERWARE_")}
+        environment = {key: value for key, value in os.environ.items() if not key.startswith("CATCHPLATE_")}
         environment.update(PYTHONDONTWRITEBYTECODE="1", TMPDIR=str(app_dir), TEST_PILOT_EXPIRY=str(expiry))
         process = subprocess.Popen([sys.executable, "-B", SCRIPT, "--relay", path, scenario, str(expiry)],
             cwd=ROOT, env=environment, user=1000, group=10001, extra_groups=[],

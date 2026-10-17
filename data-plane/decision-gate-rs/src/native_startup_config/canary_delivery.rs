@@ -5,7 +5,7 @@ use super::*;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ConfigurationV19 {
     api_version: String,
-    measured_canary_delivery: serverware_decision_gate::native_canary_delivery_v1::Configuration,
+    measured_canary_delivery: catchplate_decision_gate::native_canary_delivery_v1::Configuration,
     gate: gate::GateConfigV1,
     native: parameters::NativeSettingsV1,
     shadow: shadow::ShadowConfigV15,
@@ -14,19 +14,19 @@ struct ConfigurationV19 {
     enrollment_authorizer: EnrollmentAuthorizerV1,
     enrollment_setup_authorizer: EnrollmentAuthorizerV1,
     enrollment_proxy_endpoint: String,
-    credential_currentness: serverware_decision_gate::native_currentness_v1::Configuration,
-    secret_broker: serverware_decision_gate::native_secret_broker_v1::history::ConfigurationV2,
+    credential_currentness: catchplate_decision_gate::native_currentness_v1::Configuration,
+    secret_broker: catchplate_decision_gate::native_secret_broker_v1::history::ConfigurationV2,
     measured_audit: super::super::native_audit_transport::Configuration,
-    encrypted_service_tokens: serverware_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
-    measured_refresh: serverware_decision_gate::native_oauth_refresh_v1::Configuration,
-    guest_inspector: serverware_decision_gate::GuestInspectorConfiguration,
-    measured_succession: serverware_decision_gate::native_oauth_succession_v1::Configuration,
-    guest_cohort: serverware_decision_gate::GuestCohortConfiguration,
-    measured_cleanup: serverware_decision_gate::native_oauth_cleanup_v1::Configuration,
-    guest_role_key_provisioner: serverware_decision_gate::GuestRoleKeyProvisionerConfiguration,
-    measured_pending_retirement: serverware_decision_gate::native_oauth_pending_retirement_v1::Configuration,
-    gate_cgroup: serverware_decision_gate::native_gate_cgroup::Configuration,
-    measured_capture_retirement: serverware_decision_gate::native_oauth_capture_retirement_v1::Configuration,
+    encrypted_service_tokens: catchplate_decision_gate::native_secret_broker_v1::service_tokens::Envelope,
+    measured_refresh: catchplate_decision_gate::native_oauth_refresh_v1::Configuration,
+    guest_inspector: catchplate_decision_gate::GuestInspectorConfiguration,
+    measured_succession: catchplate_decision_gate::native_oauth_succession_v1::Configuration,
+    guest_cohort: catchplate_decision_gate::GuestCohortConfiguration,
+    measured_cleanup: catchplate_decision_gate::native_oauth_cleanup_v1::Configuration,
+    guest_role_key_provisioner: catchplate_decision_gate::GuestRoleKeyProvisionerConfiguration,
+    measured_pending_retirement: catchplate_decision_gate::native_oauth_pending_retirement_v1::Configuration,
+    gate_cgroup: catchplate_decision_gate::native_gate_cgroup::Configuration,
+    measured_capture_retirement: catchplate_decision_gate::native_oauth_capture_retirement_v1::Configuration,
 }
 
 pub(super) fn configuration(value: Value) -> Result<ConfigurationParts, String> {
@@ -39,11 +39,11 @@ pub(super) fn configuration(value: Value) -> Result<ConfigurationParts, String> 
     }
     let original: ConfigurationV19 = serde_json::from_value(value)
         .map_err(|_| "native v19 configuration violates its closed contract")?;
-    ensure(original.api_version == "serverware.nativeStartupConfiguration/v19"
-        && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
-        && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+    ensure(original.api_version == "catchplate.nativeStartupConfiguration/v19"
+        && original.enrollment_authorizer.api_version == "catchplate.nativeEnrollmentAuthorizer/v1"
+        && original.enrollment_setup_authorizer.api_version == "catchplate.nativeEnrollmentSetupAuthorizer/v1",
         "native v19 authorizer version differs")?;
-    ensure(original.measured_canary_delivery.api_version == "serverware.nativeCanaryDurableDelivery/v1",
+    ensure(original.measured_canary_delivery.api_version == "catchplate.nativeCanaryDurableDelivery/v1",
         "native v19 retains exactly the original interval-only delivery profile")?;
     original.measured_canary_delivery.validate()?;
     ensure(original.measured_canary_delivery.instance_id == original.measured_succession.instance_id

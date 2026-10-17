@@ -22,8 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def worker():
-    from serverware import operator_host_approvals as store
-    from serverware import operator_catalog_approvals as catalog_approvals
+    from catchplate import operator_host_approvals as store
+    from catchplate import operator_catalog_approvals as catalog_approvals
     f = fixture.Fixture()
     actor = f.config.ADMIN_USER_ID
     credential, application = f.credential()["credential"], f.application()
@@ -40,7 +40,7 @@ def worker():
             "route_id": route.id, "credential_ref": credential["id"], "credential_version": "1",
             "policy_hash": f.store.get_policy_high_water()["policy_hash"],
             "request": {"method": "GET", "scheme": "https", "authority": "api.github.com",
-                "path": "/repos/serverware-fixture/operator-demo/issues", "query": [],
+                "path": "/repos/catchplate-fixture/operator-demo/issues", "query": [],
                 "headers": {"accept": accept, "authorization": "secret-placeholder-canary"},
                 "body_sha256": store.digest({}), "discard_headers": [],
                 "query_mode": "githubRestV1", "query_wire": None}, "operation": {}}
@@ -131,14 +131,14 @@ def worker():
 
     async def transport():
         from fastapi import FastAPI
-        from serverware import operator_host_approvals_api as api
+        from catchplate import operator_host_approvals_api as api
         small = FastAPI()
         small.include_router(api.router)
 
         async def request(path, *, token=True, origin=True, body=b"{}", machine=False):
             headers = [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]
             if token:
-                headers.append((b"x-serverware-data-plane-token" if machine else b"x-serverware-admin-token",
+                headers.append((b"x-catchplate-data-plane-token" if machine else b"x-catchplate-admin-token",
                     (f.config.DATA_PLANE_CREDENTIAL_LEASE_TOKEN if machine else f.config.ADMIN_TOKEN).encode()))
             if origin:
                 headers.append((b"origin", f.config.PUBLIC_URL.rstrip("/").encode()))
@@ -172,10 +172,10 @@ def worker():
 class HostApprovalTests(unittest.TestCase):
     def setUp(self):
         fixture.OperatorCatalogGithubTests.setUp(self)
-        self.environment.update(SERVERWARE_HOST_TRUSTED_APPROVALS_ENABLED="1",
-            SERVERWARE_ADMIN_TOKEN="synthetic-host-approval-admin-token",
-            SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN="synthetic-host-approval-service-token",
-            SERVERWARE_DATA_PLANE_INSTANCE_ID="synthetic-host-approval-gate")
+        self.environment.update(CATCHPLATE_HOST_TRUSTED_APPROVALS_ENABLED="1",
+            CATCHPLATE_ADMIN_TOKEN="synthetic-host-approval-admin-token",
+            CATCHPLATE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN="synthetic-host-approval-service-token",
+            CATCHPLATE_DATA_PLANE_INSTANCE_ID="synthetic-host-approval-gate")
 
     def test_actual_encrypted_signed_current_transaction_and_authenticated_transport(self):
         result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve()), "--worker"],

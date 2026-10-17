@@ -26,8 +26,8 @@ FIXTURE_IMAGE = "sha256:13fba0146806ccc218afd91dbc2c9087f5d8abdb16fc8c7acbe3c344
 GATE_IMAGE = "python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea"
 BINARY_SHA256 = "c03ee35ca70ec145b23fea632ab6b73af8203272eabf48f65d16220b56a7b57a"
 INITIALIZER_SHA256 = "484e2cc7f0c4eea0439537e7a1035f7d63b389380e91a29b258a10a97b272b97"
-ORIGIN = "https://serverware-demo.example.com"
-INSTANCE = "spiffe://operator-demo.serverware/decision-gate/local"
+ORIGIN = "https://catchplate-demo.example.com"
+INSTANCE = "spiffe://operator-demo.catchplate/decision-gate/local"
 ROLES = ("admin", "credential-lease", "audit", "grant-consume", "rate-limit-consume", "release-authorization", "management")
 
 
@@ -59,7 +59,7 @@ def build(source: Path, binary: Path, initializer: Path, root: Path, subnet: str
           expected_binary_sha256: str = BINARY_SHA256):
     """Pure manifest builder: no filesystem, processes, sockets or writes."""
     expected_binary_sha256 = validated_binary_sha256(expected_binary_sha256)
-    require(root.parent == SCRATCH and re.fullmatch(r"serverware-catalog-private\.[A-Za-z0-9]{6,32}", root.name),
+    require(root.parent == SCRATCH and re.fullmatch(r"catchplate-catalog-private\.[A-Za-z0-9]{6,32}", root.name),
             "new catalog NVMe job root required")
     require(all(path.is_absolute() and ".." not in path.parts for path in (source, binary, initializer)),
             "exact source, executable and initializer paths required")
@@ -67,37 +67,37 @@ def build(source: Path, binary: Path, initializer: Path, root: Path, subnet: str
     require(network.version == 4 and network.prefixlen == 28
             and network.subnet_of(ipaddress.ip_network("172.16.0.0/12")), "private IPv4 /28 required")
     addresses = {name: str(network.network_address + offset) for name, offset in (
-        ("demo-upstream", 2), ("serverware", 3), ("decision-gate-rs", 4))}
+        ("demo-upstream", 2), ("catchplate", 3), ("decision-gate-rs", 4))}
     runtime = root / "runtime"
-    project = "serverware-catalog-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
+    project = "catchplate-catalog-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
     common = {"image": GATE_IMAGE, "pull_policy": "never", "restart": "no", "user": "10001:10001",
         "init": True, "read_only": True, "cap_drop": ["ALL"], "security_opt": ["no-new-privileges:true"],
         "pids_limit": 64, "cpus": 0.5, "mem_limit": "256m", "memswap_limit": "256m", "working_dir": "/app", "dns": ["127.0.0.1"],
         "tmpfs": ["/tmp:rw,noexec,nosuid,nodev,size=32m,uid=10001,gid=10001,mode=0700"],
         "logging": {"driver": "local", "options": {"max-size": "2m", "max-file": "2"}},
         "labels": {"traefik.enable": "false", "com.centurylinklabs.watchtower.enable": "false"}}
-    env = {"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": "/app", "SERVERWARE_OPERATOR_DEMO": "1",
-        "SERVERWARE_RELEASE_CHANNEL": "dev", "SERVERWARE_OPERATOR_DEMO_UPSTREAMS": '["https://demo-upstream:8443"]',
-        "SERVERWARE_OPERATOR_DEMO_FIXTURE_CIDRS": json.dumps([addresses["demo-upstream"] + "/32"]),
+    env = {"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": "/app", "CATCHPLATE_OPERATOR_DEMO": "1",
+        "CATCHPLATE_RELEASE_CHANNEL": "dev", "CATCHPLATE_OPERATOR_DEMO_UPSTREAMS": '["https://demo-upstream:8443"]',
+        "CATCHPLATE_OPERATOR_DEMO_FIXTURE_CIDRS": json.dumps([addresses["demo-upstream"] + "/32"]),
         # Required HTTPS profile metadata, not a tested/resolved/public endpoint.
-        "SERVERWARE_OPERATOR_DEMO_PROXY_URL": "https://serverware-proxy.example.com",
-        "SERVERWARE_DATA_PLANE_INSTANCE_ID": INSTANCE}
+        "CATCHPLATE_OPERATOR_DEMO_PROXY_URL": "https://catchplate-proxy.example.com",
+        "CATCHPLATE_DATA_PLANE_INSTANCE_ID": INSTANCE}
     services = {name: {**deepcopy(common), "networks": {"fixture": {"ipv4_address": address}}}
         for name, address in addresses.items()}
-    app = services["serverware"]
+    app = services["catchplate"]
     app.update(image=APP_IMAGE, cpus=2, mem_limit="1g", memswap_limit="1g", pids_limit=128,
-        command=["python", "-B", "-m", "serverware.operator_demo_runner"],
+        command=["python", "-B", "-m", "catchplate.operator_demo_runner"],
         depends_on={"demo-upstream": {"condition": "service_healthy"}})
-    app["environment"] = {**env, "SERVERWARE_DATA_DIR": "/data", "SERVERWARE_PUBLIC_URL": ORIGIN,
-        "SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED": "1", "SERVERWARE_ADMIN_USER": "user:operator-demo-operator",
-        "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED": "0",
-        "SERVERWARE_DECISION_GATE_BASE": "http://decision-gate-rs:9091",
-        "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST": "sha256:" + expected_binary_sha256}
+    app["environment"] = {**env, "CATCHPLATE_DATA_DIR": "/data", "CATCHPLATE_PUBLIC_URL": ORIGIN,
+        "CATCHPLATE_DIRECT_CA_DOWNLOAD_ENABLED": "1", "CATCHPLATE_ADMIN_USER": "user:operator-demo-operator",
+        "CATCHPLATE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED": "0",
+        "CATCHPLATE_DECISION_GATE_BASE": "http://decision-gate-rs:9091",
+        "CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST": "sha256:" + expected_binary_sha256}
     for role in ROLES:
         prefix = "ADMIN" if role == "admin" else "DATA_PLANE_" + role.upper().replace("-", "_")
-        app["environment"]["SERVERWARE_" + prefix + "_TOKEN_FILE"] = "/run/secrets/serverware/" + role + ".token"
+        app["environment"]["CATCHPLATE_" + prefix + "_TOKEN_FILE"] = "/run/secrets/catchplate/" + role + ".token"
     app["volumes"] = [bind(source, "/app"), bind(runtime / "app-data", "/data", False),
-        bind(runtime / "service-secrets", "/run/secrets/serverware"),
+        bind(runtime / "service-secrets", "/run/secrets/catchplate"),
         bind(runtime / "upstream-data/demo-upstream", "/demo-upstream"),
         bind(runtime / ".private-fixture.json", "/private-audit-fixture.json")]
     app["healthcheck"] = health("http://127.0.0.1:3000/healthz", start=30)
@@ -112,26 +112,26 @@ def build(source: Path, binary: Path, initializer: Path, root: Path, subnet: str
         "raise SystemExit(0 if r.status==200 else 1)"], "interval": "3s", "timeout": "3s", "retries": 10,
         "start_period": "10s"}
     gate = services["decision-gate-rs"]
-    gate.update(entrypoint=["/usr/local/bin/serverware-decision-gate"], command=[], cpus=1,
-        mem_limit="512m", memswap_limit="512m", pids_limit=128, depends_on={"serverware": {"condition": "service_healthy"}})
-    gate["environment"] = {**env, "SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES": "1",
-        "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0", "SERVERWARE_POLICY_BUNDLE": "/data/policy-bundle.json",
-        "SERVERWARE_POLICY_HIGH_WATER_FILE": "/gate-data/policy-high-water.json",
-        "SERVERWARE_POLICY_TRUST_ROOT_ATTESTATION_URL": "http://serverware:3000/attestation",
-        "SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL": "http://serverware:3000/api/data-plane/credential-leases",
-        "SERVERWARE_CONTROL_PLANE_AUDIT_URL": "http://serverware:3000/api/data-plane/audit",
-        "SERVERWARE_DATA_PLANE_AUDIT_BATCH_MAX": "16", "SERVERWARE_DATA_PLANE_AUDIT_QUEUE_MAX": "256",
-        "SERVERWARE_DATA_PLANE_AUDIT_FLUSH_MS": "500", "SERVERWARE_UPSTREAM_CA_BUNDLE": "/demo-upstream/ca.pem",
-        "SERVERWARE_MITM_CA_CERT": "/data/mitmproxy/mitmproxy-ca-cert.pem",
-        "SERVERWARE_MITM_CA_KEY": "/data/mitmproxy/mitmproxy-ca.pem",
-        "SERVERWARE_PROXY_INGRESS_MODE": "operator-demo-tls-edge", "SERVERWARE_DECISION_GATE_HOST": "0.0.0.0",
-        "SERVERWARE_DECISION_GATE_PORT": "9090", "SERVERWARE_DECISION_GATE_MANAGEMENT_HOST": addresses["decision-gate-rs"],
-        "SERVERWARE_DECISION_GATE_MANAGEMENT_PORT": "9091"}
-    gate["volumes"] = [bind(binary, "/usr/local/bin/serverware-decision-gate"), bind(runtime / "app-data", "/data"),
+    gate.update(entrypoint=["/usr/local/bin/catchplate-decision-gate"], command=[], cpus=1,
+        mem_limit="512m", memswap_limit="512m", pids_limit=128, depends_on={"catchplate": {"condition": "service_healthy"}})
+    gate["environment"] = {**env, "CATCHPLATE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES": "1",
+        "CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "0", "CATCHPLATE_POLICY_BUNDLE": "/data/policy-bundle.json",
+        "CATCHPLATE_POLICY_HIGH_WATER_FILE": "/gate-data/policy-high-water.json",
+        "CATCHPLATE_POLICY_TRUST_ROOT_ATTESTATION_URL": "http://catchplate:3000/attestation",
+        "CATCHPLATE_CONTROL_PLANE_CREDENTIAL_LEASE_URL": "http://catchplate:3000/api/data-plane/credential-leases",
+        "CATCHPLATE_CONTROL_PLANE_AUDIT_URL": "http://catchplate:3000/api/data-plane/audit",
+        "CATCHPLATE_DATA_PLANE_AUDIT_BATCH_MAX": "16", "CATCHPLATE_DATA_PLANE_AUDIT_QUEUE_MAX": "256",
+        "CATCHPLATE_DATA_PLANE_AUDIT_FLUSH_MS": "500", "CATCHPLATE_UPSTREAM_CA_BUNDLE": "/demo-upstream/ca.pem",
+        "CATCHPLATE_MITM_CA_CERT": "/data/mitmproxy/mitmproxy-ca-cert.pem",
+        "CATCHPLATE_MITM_CA_KEY": "/data/mitmproxy/mitmproxy-ca.pem",
+        "CATCHPLATE_PROXY_INGRESS_MODE": "operator-demo-tls-edge", "CATCHPLATE_DECISION_GATE_HOST": "0.0.0.0",
+        "CATCHPLATE_DECISION_GATE_PORT": "9090", "CATCHPLATE_DECISION_GATE_MANAGEMENT_HOST": addresses["decision-gate-rs"],
+        "CATCHPLATE_DECISION_GATE_MANAGEMENT_PORT": "9091"}
+    gate["volumes"] = [bind(binary, "/usr/local/bin/catchplate-decision-gate"), bind(runtime / "app-data", "/data"),
         bind(runtime / "gate-data", "/gate-data", False), bind(runtime / "upstream-data/demo-upstream", "/demo-upstream")]
     for role in ("credential-lease", "audit", "management"):
-        target = "/run/secrets/serverware/" + role + ".token"
-        gate["environment"]["SERVERWARE_DATA_PLANE_" + role.upper().replace("-", "_") + "_TOKEN_FILE"] = target
+        target = "/run/secrets/catchplate/" + role + ".token"
+        gate["environment"]["CATCHPLATE_DATA_PLANE_" + role.upper().replace("-", "_") + "_TOKEN_FILE"] = target
         gate["volumes"].append(bind(runtime / "service-secrets" / (role + ".token"), target))
     gate["healthcheck"] = health("http://" + addresses["decision-gate-rs"] + ":9091/healthz", start=20)
     services["initialize"] = {**deepcopy(common), "profiles": ["prepare"], "user": "0:0", "network_mode": "none",
@@ -153,9 +153,9 @@ def health(url, *, start):
 
 def validate(config, source, binary, initializer, root, *, expected_binary_sha256: str = BINARY_SHA256):
     expected_binary_sha256 = validated_binary_sha256(expected_binary_sha256)
-    require(set(config["services"]) == {"initialize", "serverware", "demo-upstream", "decision-gate-rs"},
+    require(set(config["services"]) == {"initialize", "catchplate", "demo-upstream", "decision-gate-rs"},
             "unexpected fixture service")
-    require(config["services"]["serverware"]["environment"].get("SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST")
+    require(config["services"]["catchplate"]["environment"].get("CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST")
             == "sha256:" + expected_binary_sha256, "expected executable digest binding differs")
     require(set(config["networks"]) == {"fixture"} and config["networks"]["fixture"].get("internal") is True
             and not config["networks"]["fixture"].get("external"), "internal-only network required")
@@ -183,19 +183,19 @@ def validate(config, source, binary, initializer, root, *, expected_binary_sha25
                     and (path in {source, binary, initializer, runtime} or runtime in path.parents), "mount scope differs")
             require(volume.get("read_only") or path == runtime or runtime in path.parents, "source or executable writable")
     gate = config["services"]["decision-gate-rs"]
-    require(gate["depends_on"] == {"serverware": {"condition": "service_healthy"}}
-            and config["services"]["serverware"]["command"][-1] == "serverware.operator_demo_runner",
+    require(gate["depends_on"] == {"catchplate": {"condition": "service_healthy"}}
+            and config["services"]["catchplate"]["command"][-1] == "catchplate.operator_demo_runner",
             "gate must target the real catalog app, not a relay")
     for name, image in (("initialize", GATE_IMAGE), ("decision-gate-rs", GATE_IMAGE),
-                       ("serverware", APP_IMAGE), ("demo-upstream", FIXTURE_IMAGE)):
+                       ("catchplate", APP_IMAGE), ("demo-upstream", FIXTURE_IMAGE)):
         require(config["services"][name]["image"] == image, "fixed image differs")
-    for key, suffix in (("SERVERWARE_POLICY_TRUST_ROOT_ATTESTATION_URL", "/attestation"),
-                       ("SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL", "/api/data-plane/credential-leases"),
-                       ("SERVERWARE_CONTROL_PLANE_AUDIT_URL", "/api/data-plane/audit")):
-        require(gate["environment"][key] == "http://serverware:3000" + suffix, "control destination differs")
-    for name in ("serverware", "decision-gate-rs"):
+    for key, suffix in (("CATCHPLATE_POLICY_TRUST_ROOT_ATTESTATION_URL", "/attestation"),
+                       ("CATCHPLATE_CONTROL_PLANE_CREDENTIAL_LEASE_URL", "/api/data-plane/credential-leases"),
+                       ("CATCHPLATE_CONTROL_PLANE_AUDIT_URL", "/api/data-plane/audit")):
+        require(gate["environment"][key] == "http://catchplate:3000" + suffix, "control destination differs")
+    for name in ("catchplate", "decision-gate-rs"):
         environment = config["services"][name]["environment"]
-        require(environment["SERVERWARE_OPERATOR_DEMO_UPSTREAMS"] == '["https://demo-upstream:8443"]'
+        require(environment["CATCHPLATE_OPERATOR_DEMO_UPSTREAMS"] == '["https://demo-upstream:8443"]'
                 and not any(key.startswith("PRIVATE_OPERATOR_") for key in environment), "fixture scope differs")
 
 
@@ -244,14 +244,14 @@ def prepare(args):
     require(space.f_bavail * space.f_frsize >= 2 * 1024**3, "at least2GiB scratch capacity required")
     network = overlaps(args.subnet)
     source_files = command(["git", "-C", str(args.source), "ls-files", "-co", "--exclude-standard", "--",
-        "serverware", "scripts", "schemas"]).splitlines()
+        "catchplate", "scripts", "schemas"]).splitlines()
     require(0 < len(source_files) <= 4096, "source manifest count exceeds bound")
     hashes = {name: digest(args.source / name) for name in sorted(set(source_files)) if (args.source / name).is_file()}
-    manifest = {"schema": "serverware.privateOperatorCatalogPreparation/v1", "project": config["name"],
+    manifest = {"schema": "catchplate.privateOperatorCatalogPreparation/v1", "project": config["name"],
         "jobRoot": str(args.job_root), "source": str(args.source),
         "sourceHead": command(["git", "-C", str(args.source), "rev-parse", "HEAD"]).strip(),
         "sourceStatus": command(["git", "-C", str(args.source), "status", "--short"]).splitlines(),
-        "sourceScope": "serverware, scripts and schemas tracked plus non-ignored files", "sourceSha256": hashes,
+        "sourceScope": "catchplate, scripts and schemas tracked plus non-ignored files", "sourceSha256": hashes,
         "binary": str(args.binary), "binarySha256": expected_binary_sha256,
         "initializer": str(args.initializer), "initializerSha256": INITIALIZER_SHA256,
         "images": {"app": APP_IMAGE, "fixture": FIXTURE_IMAGE, "gate": GATE_IMAGE},

@@ -64,7 +64,7 @@ unsafe fn child(parent: libc::pid_t, lifetime: RawFd, router: RawFd, bootstrap: 
     for fd in 0..3 { unsafe { libc::close(fd); } }
     good &= unsafe { libc::syscall(libc::SYS_close_range, 6u32, u32::MAX, 4u32) } == 0;
     if good {
-        let argv = [b"serverware-response-v2-guest-inspector\0".as_ptr().cast::<libc::c_char>(), std::ptr::null()];
+        let argv = [b"catchplate-response-v2-guest-inspector\0".as_ptr().cast::<libc::c_char>(), std::ptr::null()];
         let env: [*const libc::c_char; 1] = [std::ptr::null()];
         unsafe { libc::syscall(libc::SYS_execveat, executable, b"\0".as_ptr(), argv.as_ptr(),
             env.as_ptr(), libc::AT_EMPTY_PATH); }
@@ -154,7 +154,7 @@ impl Process {
                 .map_err(|_| "inspector initialized packet differs from owned child")?;
             let value: Initialized = crate::decode_canonical_json(&raw)
                 .map_err(|_| "inspector initialized contract differs")?;
-            if value.api_version != "serverware.responseV2.guestInspectorInitialized/v1"
+            if value.api_version != "catchplate.responseV2.guestInspectorInitialized/v1"
                 || value.channel_nonce != nonce || value.bootstrap_sha256 != sha256 {
                 return Err("inspector initialization is not bound to original bootstrap".into());
             }

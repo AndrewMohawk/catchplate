@@ -22,21 +22,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract, authority_native_activation_schema, authority_native_jit_retention_schema
-from serverware.authority_store import schema as schema_module
-from serverware.authority_store import successor_execution_sql, successor_execution_privileges
-from serverware.authority_store import policy_file_read_sql, policy_file_genesis_sql, planner_read_sql
-from serverware.authority_store.completed_v9_schema_source import (
+from catchplate import authority_contract, authority_native_activation_schema, authority_native_jit_retention_schema
+from catchplate.authority_store import schema as schema_module
+from catchplate.authority_store import successor_execution_sql, successor_execution_privileges
+from catchplate.authority_store import policy_file_read_sql, policy_file_genesis_sql, planner_read_sql
+from catchplate.authority_store.completed_v9_schema_source import (
     COMPLETED_V9_RECEIPT_TABLE,
     completed_v9_schema_programs,
     require_metadata_schema_program,
 )
-from serverware.authority_store.metadata_schema_source import (
+from catchplate.authority_store.metadata_schema_source import (
     metadata_base_schema_source,
     metadata_initialization_index_source,
     metadata_schema_source,
 )
-from serverware.authority_store.v9_schema_source import (
+from catchplate.authority_store.v9_schema_source import (
     authority_v9_schema_source, planner_retention_guard_sql, planner_retention_sqlite_guards_sql,
     capability_retention_guard_sql, capability_retention_sqlite_guards_sql,
 )
@@ -74,7 +74,7 @@ LEGACY_RECEIPT = """
                 completed_at TEXT NOT NULL,
                 CHECK (
                     contract_id =
-                    'serverware.policyCandidateAuthorityOfflineMigration/v2:v8-to-v9'
+                    'catchplate.policyCandidateAuthorityOfflineMigration/v2:v8-to-v9'
                 ),
                 CHECK (source_version = 8),
                 CHECK (target_version = 9),
@@ -154,8 +154,8 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
             require_metadata_schema_program(value, legacy_completed_v9_receipt=True)
 
     def test_postgres_namespace_canonicalization_preserves_complete_definition(self):
-        scratch = "serverware_candidate_authority_expected_v9"
-        canonical = "serverware_metadata"
+        scratch = "catchplate_candidate_authority_expected_v9"
+        canonical = "catchplate_metadata"
         definition = (
             f"CREATE FUNCTION {scratch}.guard() RETURNS void LANGUAGE plpgsql "
             f"SET search_path TO 'pg_catalog', '{scratch}', 'pg_temp' "
@@ -181,8 +181,8 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         )
 
     def test_postgres_namespace_canonicalization_preserves_unauthorized_differences(self):
-        scratch = "serverware_candidate_authority_expected_v9"
-        canonical = "serverware_metadata"
+        scratch = "catchplate_candidate_authority_expected_v9"
+        canonical = "catchplate_metadata"
 
         def normalize(value, namespace=scratch):
             return schema_module._policy_candidate_authority_canonicalize_namespace(
@@ -217,7 +217,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
     def test_postgres_required_guards_include_complete_schema_inventory(self):
         # Source-linkage control only. The disposable full-schema fixture proves
         # real business-table guard acceptance and a dropped guard's refusal.
-        _, tree = read_source("serverware/authority_store/schema.py")
+        _, tree = read_source("catchplate/authority_store/schema.py")
         validator = function(tree, "_validate_policy_candidate_authority_structure")
         updates = [node for node in calls(validator, "update")
                    if isinstance(node.func, ast.Attribute)
@@ -299,14 +299,14 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
             with self.subTest(source=name):
                 active = re.sub(r"/\*.*?\*/|--[^\n]*", "", source, flags=re.DOTALL)
                 revisions = re.findall(
-                    r"'(serverware\.policyCandidateAuthoritySource/[^']*)'", active)
+                    r"'(catchplate\.policyCandidateAuthoritySource/[^']*)'", active)
                 self.assertEqual(len(revisions), count)
                 self.assertEqual(set(revisions), {authority_contract.SOURCE_REVISION})
 
     def test_current_root_operation_inventories_cover_oidc_execution(self):
         # Source rendering only: no database, signature, custody or execution
         # admission is supplied by matching these inventories.
-        from serverware.authority_store import current_root_execution_sql as effects
+        from catchplate.authority_store import current_root_execution_sql as effects
 
         installed = ("oidc.session.activate", "oidc.session.activation-delivery.consume",
             "webauthn.credential.revoke", "webauthn.registration.evidence.admit",
@@ -345,7 +345,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         # or mistake a read/replay component for a plannable operation.
         self.assertEqual(set(declared) - set(installed), {"jit.review-open.receipt.issue"})
         self.assertEqual(set(installed) - set(declared), set())
-        _, registry = read_source("serverware/authority_transition_registry.py")
+        _, registry = read_source("catchplate/authority_transition_registry.py")
         def registry_value(name):
             matches = [node.value for node in registry.body if isinstance(node, ast.AnnAssign)
                        and isinstance(node.target, ast.Name) and node.target.id == name]
@@ -377,7 +377,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         self.assert_shape(selection_guards[0].test,
             "type(operation) is not str or operation not in SUCCESSOR_PLANNABLE_OPERATIONS")
         self.assertIsInstance(selection_guards[0].body[0], ast.Raise)
-        _, programs = read_source("serverware/authority_successor_programs.py")
+        _, programs = read_source("catchplate/authority_successor_programs.py")
         program = function(programs, "_program")
         self.assertEqual(program.args.args[-1].arg, "plan_factory")
         self.assert_shape(program.args.defaults[-1], "None")
@@ -394,7 +394,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
             self.assertEqual(len(sites), 1)
             self.assert_shape(sites[0], "_program(" + repr(operation) + ", " + reader
                 + ", 'read-replay-components', kernel_factory=" + kernel + ")")
-        rendered = effects.current_root_execution_apply_body_sql('"serverware_metadata"')
+        rendered = effects.current_root_execution_apply_body_sql('"catchplate_metadata"')
         sources = re.findall(r"crx_source\s*:=\s*'((?:[^']|'')*)'::jsonb->crx_operation;", rendered)
         self.assertEqual(len(sources), 1)
         operations = json.loads(sources[0].replace("''", "'"))
@@ -411,7 +411,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
                 self.assertTrue(writes <= set(operations[operation]["keys"]))
 
     def test_bootstrap_crypto_reads_only_the_supplied_transaction(self):
-        _, tree = read_source("serverware/db.py", 16 * 1024 * 1024)
+        _, tree = read_source("catchplate/db.py", 16 * 1024 * 1024)
         reader = function(tree, "_postgres_metadata_crypto_required")
         self.assertEqual([arg.arg for arg in reader.args.args], ["conn"])
         self.assertEqual(reader.args.defaults, [])
@@ -425,7 +425,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
             self.assert_shape(call.func.value, "conn")
 
     def test_bootstrap_crypto_runs_under_the_existing_installation_locks(self):
-        _, tree = read_source("serverware/db.py", 16 * 1024 * 1024)
+        _, tree = read_source("catchplate/db.py", 16 * 1024 * 1024)
         init = function(tree, "init_db")
         transaction = next(node for node in init.body if isinstance(node, ast.With)
                            and isinstance(node.items[0].context_expr, ast.Name)
@@ -467,7 +467,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
                         transaction.lineno)
 
     def test_runtime_readiness_and_offline_contract_guards_are_not_bypassed(self):
-        _, tree = read_source("serverware/db.py", 16 * 1024 * 1024)
+        _, tree = read_source("catchplate/db.py", 16 * 1024 * 1024)
         init = function(tree, "init_db")
         readiness = next(node for node in init.body if isinstance(node, ast.If)
                          and calls(node, "_assert_postgres_metadata_runtime_ready"))
@@ -481,7 +481,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         admission = function(tree, "_metadata_pg_bootstrap_connect_raw")
         self.assert_shape(admission.body[0].test,
                           "contract_id != _METADATA_STORE_BOOTSTRAP_CONTRACT_ID or "
-                          "os.environ.get('SERVERWARE_PROCESS_MODE', '').strip() != 'metadata-bootstrap'")
+                          "os.environ.get('CATCHPLATE_PROCESS_MODE', '').strip() != 'metadata-bootstrap'")
         self.assertIsInstance(admission.body[0].body[0], ast.Raise)
 
     def test_complete_program_includes_final_initialization_indexes(self):
@@ -500,7 +500,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
 
     def test_complete_inventory_and_receipt_boundaries_are_unique(self):
         for table in (
-            "serverware_store_migrations", "credentials",
+            "catchplate_store_migrations", "credentials",
             "policy_authority_schema_contracts", "policy_activation_revisions",
             "policy_authority_fence_heads", RECEIPT,
             *authority_contract.V9_ADDITIONAL_PROTECTED_TABLES,
@@ -516,7 +516,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
     def test_v9_source_has_only_two_named_source_owned_substitutions(self):
         # Preserve this test ID; the closed source now has a third bounded
         # substitution for the successor frame ordinal.
-        _, tree = read_source("serverware/authority_store/v9_schema_source.py")
+        _, tree = read_source("catchplate/authority_store/v9_schema_source.py")
         body = function(tree, "authority_v9_schema_source").body
         self.assertEqual(len(body), 1)
         self.assertIsInstance(body[0], ast.Return)
@@ -634,21 +634,21 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         expected = {
             "metadata_schema_source.py": {
                 ("__future__", "annotations", None),
-                ("serverware.authority_store.v9_schema_source", "authority_v9_schema_source", None),
-                ("serverware", "authority_native_activation_schema", None),
-                ("serverware", "authority_native_jit_retention_schema", None),
+                ("catchplate.authority_store.v9_schema_source", "authority_v9_schema_source", None),
+                ("catchplate", "authority_native_activation_schema", None),
+                ("catchplate", "authority_native_jit_retention_schema", None),
             },
             "v9_schema_source.py": {
-                ("__future__", "annotations", None), ("serverware", "authority_contract", None),
+                ("__future__", "annotations", None), ("catchplate", "authority_contract", None),
             },
             "completed_v9_schema_source.py": {
                 ("__future__", "annotations", None),
-                ("serverware.authority_store.metadata_schema_source", "metadata_schema_source", None),
+                ("catchplate.authority_store.metadata_schema_source", "metadata_schema_source", None),
             },
         }
         for filename, bindings in expected.items():
             with self.subTest(filename=filename):
-                _, tree = read_source("serverware/authority_store/" + filename, 16 * 1024 * 1024)
+                _, tree = read_source("catchplate/authority_store/" + filename, 16 * 1024 * 1024)
                 imports = [node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))]
                 self.assertTrue(all(isinstance(node, ast.ImportFrom) for node in imports))
                 actual = [(node.module, alias.name, alias.asname)
@@ -660,9 +660,9 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
                 self.assertTrue(names.isdisjoint({"open", "eval", "exec", "compile", "__import__"}))
 
     def test_db_initialization_preserves_late_indexes_and_compares_complete_program(self):
-        _, tree = read_source("serverware/db.py", 16 * 1024 * 1024)
+        _, tree = read_source("catchplate/db.py", 16 * 1024 * 1024)
         aliases = [alias for node in tree.body if isinstance(node, ast.ImportFrom)
-                   and node.module == "serverware.authority_store" for alias in node.names
+                   and node.module == "catchplate.authority_store" for alias in node.names
                    if alias.name == "metadata_schema_source"]
         self.assertEqual([(alias.name, alias.asname) for alias in aliases],
                          [("metadata_schema_source", "_metadata_schema_source")])
@@ -739,7 +739,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         self.assertLess(ordered[1].lineno, ordered[2].lineno)
 
     def test_expected_schema_validates_exact_variant_before_any_engine_work(self):
-        _, tree = read_source("serverware/authority_store/schema.py")
+        _, tree = read_source("catchplate/authority_store/schema.py")
         expected = function(tree, "_policy_candidate_authority_expected_structure_manifest")
         defaults = dict(zip((arg.arg for arg in expected.args.kwonlyargs), expected.args.kw_defaults))
         self.assert_shape(defaults["legacy_completed_v9_receipt"], "False")
@@ -774,7 +774,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         self.assertTrue(all(checked[0].lineno < call.lineno for call in engine_calls))
 
     def test_completed_repair_delegates_to_pure_helper_and_only_legacy_comparison_opts_in(self):
-        _, tree = read_source("serverware/authority_store/schema.py")
+        _, tree = read_source("catchplate/authority_store/schema.py")
         wrapper = function(tree, "_completed_v9_receipt_schema_programs")
         prepared = calls(wrapper, "completed_v9_schema_programs")
         self.assertEqual(len(prepared), 1)
@@ -799,7 +799,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         self.assertLess(prepared[0].lineno, compared[0].lineno)
 
     def test_source_contract_digest_binds_exact_complete_utf8_program(self):
-        _, tree = read_source("serverware/authority_store/schema.py")
+        _, tree = read_source("catchplate/authority_store/schema.py")
         digest = function(tree, "_policy_candidate_authority_source_contract_digest")
         material = [node for node in digest.body if isinstance(node, ast.Assign)
                     and any(isinstance(target, ast.Name) and target.id == "material" for target in node.targets)]
@@ -820,10 +820,10 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
                   if isinstance(key, ast.Constant) and key.value == "metadataSchemaProgramDigest"]
         self.assertEqual(len(values), 1)
         self.assert_shape(values[0],
-            "_policy_candidate_authority_framed_digest('serverware.metadataSchemaProgram/v1', "
+            "_policy_candidate_authority_framed_digest('catchplate.metadataSchemaProgram/v1', "
             "metadata_schema_source.metadata_schema_source().encode('utf-8'))")
         for key_name, expression in (
-            ("objectOwnershipContract", repr("serverware.policyAuthorityObjectOwnership/v1")),
+            ("objectOwnershipContract", repr("catchplate.policyAuthorityObjectOwnership/v1")),
             ("authorityOwnerRole", "owner_role"),
         ):
             bindings = [value for key, value in zip(mapping.keys, mapping.values)
@@ -846,12 +846,12 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         self.assert_shape(owner.value, "OWNER_ROLE")
         imports = [node for node in selected_scope.body if isinstance(node, ast.ImportFrom)]
         self.assertEqual(len(imports), 1)
-        self.assertEqual(imports[0].module, "serverware.authority_database_configuration")
+        self.assertEqual(imports[0].module, "catchplate.authority_database_configuration")
         self.assertEqual([(alias.name, alias.asname) for alias in imports[0].names],
                          [("OWNER_ROLE", None), ("require", None)])
-        _, configuration = read_source("serverware/authority_database_configuration.py")
+        _, configuration = read_source("catchplate/authority_database_configuration.py")
         self.assert_shape(assignment(configuration, "OWNER_ROLE").value,
-                          "'serverware_policy_authority_owner'")
+                          "'catchplate_policy_authority_owner'")
         self.assertLess(default_roles[0].lineno, selected_scope.lineno)
         self.assertLess(admission.lineno, owner.lineno)
         self.assertLess(selected_scope.end_lineno, material[0].lineno)
@@ -910,15 +910,15 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
                           and isinstance(call.args[0], ast.Constant)
                           and type(call.args[0].value) is str
                           and call.args[0].value.startswith(
-                              "INSERT INTO serverware_metadata.policy_authority_schema_contracts (")]
+                              "INSERT INTO catchplate_metadata.policy_authority_schema_contracts (")]
         owner_inserts = [call for call in calls(migrate, "execute") if call.args
                          and isinstance(call.args[0], ast.Constant)
                          and type(call.args[0].value) is str
                          and call.args[0].value.startswith(
-                             "INSERT INTO serverware_metadata.policy_authority_owner_contracts (")]
+                             "INSERT INTO catchplate_metadata.policy_authority_owner_contracts (")]
         self.assertEqual((len(schema_inserts), len(owner_inserts)), (1, 1))
         self.assert_shape(schema_inserts[0].args[1],
-            "('serverware.policyCandidateAuthoritySchema/v9', _NEW_SOURCE_REVISION, "
+            "('catchplate.policyCandidateAuthoritySchema/v9', _NEW_SOURCE_REVISION, "
             "db._policy_candidate_authority_source_contract_digest(), structural_manifest_json, "
             "structural_manifest_digest, receipt_digest, str(completed_at))")
         terminal = sorted(calls(migrate, "_terminal_response"), key=lambda node: node.lineno)[-1]
@@ -928,7 +928,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
             self.assertLess(before.lineno, following.lineno)
 
     def test_object_authority_pins_configured_no_login_owner_before_acl_collection(self):
-        source, tree = read_source("serverware/authority_store/schema.py")
+        source, tree = read_source("catchplate/authority_store/schema.py")
         authority = function(tree, "_policy_candidate_authority_postgres_object_authority")
         text = ast.get_source_segment(source, authority)
         self.assertNotIn("current_user", text)
@@ -979,7 +979,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
                 self.assertLess(owner.lineno, call.lineno)
 
     def test_relations_and_functions_share_the_validated_owner_oid_with_strict_boolean_denial(self):
-        _, tree = read_source("serverware/authority_store/schema.py")
+        _, tree = read_source("catchplate/authority_store/schema.py")
         authority = function(tree, "_policy_candidate_authority_postgres_object_authority")
         owner = assignment(authority, "owner_oid")
         for kind, rows_name, owner_expression, acl_name in (
@@ -1037,7 +1037,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         identity = "(planner_transaction_id, plan_protocol, retained_record_digest)"
         self.assertIn("UNIQUE " + identity, parent)
         self.assertIn("UNIQUE " + identity, sidecar)
-        self.assertIn("CONSTRAINT serverware_revocation_retained_parent_fk", sidecar)
+        self.assertIn("CONSTRAINT catchplate_revocation_retained_parent_fk", sidecar)
         self.assertIn("FOREIGN KEY " + identity, sidecar)
         self.assertIn("REFERENCES policy_authority_planner_transactions", sidecar)
         self.assertIn("DEFERRABLE INITIALLY DEFERRED", sidecar)
@@ -1062,11 +1062,11 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         parent = namespace + ".policy_authority_planner_transactions"
         sidecar = namespace + ".policy_authority_revocation_retained_plans"
         for fragment in ("ALTER TABLE " + parent,
-                "ADD CONSTRAINT serverware_planner_retained_record_fk",
+                "ADD CONSTRAINT catchplate_planner_retained_record_fk",
                 "REFERENCES " + sidecar + " (planner_transaction_id, plan_protocol, retained_record_digest)",
                 "DEFERRABLE INITIALLY DEFERRED", "RETURNS trigger LANGUAGE plpgsql",
                 "SET search_path = pg_catalog, " + namespace + ", pg_temp",
-                "BEFORE UPDATE ON " + parent, "serverware_guard_planner_retention()",
+                "BEFORE UPDATE ON " + parent, "catchplate_guard_planner_retention()",
                 "OLD.exact_plan_base64url IS NOT NULL", "OLD.status IN ('consumed', 'failed')",
                 "OLD.status = 'reserved' AND NEW.status NOT IN ('reserved', 'planned', 'failed')",
                 "OLD.status = 'planned' AND NEW.status = 'reserved'"):
@@ -1089,14 +1089,14 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
     def test_sqlite_retained_protocol_is_denied_while_v3_identity_stays_immutable(self):
         sql = planner_retention_sqlite_guards_sql()
         self.assertEqual(sql.count("CREATE TRIGGER IF NOT EXISTS"), 10)
-        for name in ("serverware_planner_retention_insert_guard", "serverware_planner_retention_guard",
-                     "serverware_retained_sqlite_insert_guard", "serverware_writer_request_sqlite_insert_guard",
-                     "serverware_writer_ack_sqlite_insert_guard",
-                     "serverware_webauthn_evidence_retained_sqlite_insert_guard",
-                     "serverware_webauthn_transition_retained_sqlite_insert_guard",
-                     "serverware_current_root_marker_sqlite_insert_guard",
-                     "serverware_successor_custody_sqlite_insert_guard",
-                     "serverware_successor_frames_sqlite_insert_guard"):
+        for name in ("catchplate_planner_retention_insert_guard", "catchplate_planner_retention_guard",
+                     "catchplate_retained_sqlite_insert_guard", "catchplate_writer_request_sqlite_insert_guard",
+                     "catchplate_writer_ack_sqlite_insert_guard",
+                     "catchplate_webauthn_evidence_retained_sqlite_insert_guard",
+                     "catchplate_webauthn_transition_retained_sqlite_insert_guard",
+                     "catchplate_current_root_marker_sqlite_insert_guard",
+                     "catchplate_successor_custody_sqlite_insert_guard",
+                     "catchplate_successor_frames_sqlite_insert_guard"):
             self.assertIn(name, sql)
         self.assertIn("NEW.plan_protocol <> 'v3' OR NEW.retained_record_digest IS NOT NULL", sql)
         self.assertIn("BEFORE INSERT ON policy_authority_revocation_retained_plans", sql)
@@ -1122,7 +1122,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         self.assertNotIn("COMMIT", sql)
 
     def test_retention_guards_are_installed_by_actual_shared_bootstrap_and_bound_into_schema_contract(self):
-        source, tree = read_source("serverware/db.py", 16 * 1024 * 1024)
+        source, tree = read_source("catchplate/db.py", 16 * 1024 * 1024)
         installer = function(tree, "_install_policy_candidate_authority_guards")
         pg = calls(installer, "planner_retention_guard_sql")
         sqlite = calls(installer, "planner_retention_sqlite_guards_sql")
@@ -1136,15 +1136,15 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
             and ast.dump(node.test) == ast.dump(ast.parse("isinstance(conn, PostgresMetadataConnection)", mode="eval").body)]
         self.assertEqual(len(blocks), 1)
         self.assertNotIn(sqlite[0], tuple(ast.walk(blocks[0])))
-        _, schema = read_source("serverware/authority_store/schema.py")
+        _, schema = read_source("catchplate/authority_store/schema.py")
         digest = function(schema, "_policy_candidate_authority_source_contract_digest")
         self.assertTrue(calls(digest, "planner_retention_guard_sql"))
         self.assertTrue(calls(digest, "planner_retention_sqlite_guards_sql"))
         required = function(schema, "_policy_candidate_authority_required_guard_names")
         literals = {node.value for node in ast.walk(required) if isinstance(node, ast.Constant) and type(node.value) is str}
-        self.assertTrue({"serverware_guard_planner_retention", "serverware_planner_retention_guard",
-                        "serverware_planner_retention_insert_guard", "serverware_retained_sqlite_insert_guard",
-                        "serverware_webauthn_evidence_retained_sqlite_insert_guard"}.issubset(literals))
+        self.assertTrue({"catchplate_guard_planner_retention", "catchplate_planner_retention_guard",
+                        "catchplate_planner_retention_insert_guard", "catchplate_retained_sqlite_insert_guard",
+                        "catchplate_webauthn_evidence_retained_sqlite_insert_guard"}.issubset(literals))
 
     def test_capability_custody_has_exact_columns_protocols_transport_and_minimal_foreign_keys(self):
         parent = self.base.split("policy_authority_writer_capabilities (", 1)[1].split(");", 1)[0]
@@ -1213,7 +1213,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         compact = " ".join(sql.split())
         parent = namespace + ".policy_authority_writer_capabilities"
         sidecar = namespace + ".policy_authority_revocation_retained_capabilities"
-        for fragment in ("ALTER TABLE " + parent, "ADD CONSTRAINT serverware_writer_capability_retained_fk",
+        for fragment in ("ALTER TABLE " + parent, "ADD CONSTRAINT catchplate_writer_capability_retained_fk",
                 "FOREIGN KEY (capability_id, capability_protocol, capability_record_digest, planner_transaction_id, envelope_id)",
                 "REFERENCES " + sidecar + " (capability_id, capability_protocol, capability_record_digest, planner_transaction_id, execution_envelope_id)",
                 "DEFERRABLE INITIALLY DEFERRED", "RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY INVOKER",
@@ -1242,8 +1242,8 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
     def test_sqlite_capability_guard_denies_successor_without_freezing_v3_recovery(self):
         sql = capability_retention_sqlite_guards_sql()
         self.assertEqual(sql.count("CREATE TRIGGER IF NOT EXISTS"), 3)
-        for name in ("serverware_capability_retention_insert_guard", "serverware_capability_retention_guard",
-                     "serverware_capability_sidecar_sqlite_insert_guard"):
+        for name in ("catchplate_capability_retention_insert_guard", "catchplate_capability_retention_guard",
+                     "catchplate_capability_sidecar_sqlite_insert_guard"):
             self.assertIn(name, sql)
         self.assertEqual(sql.count("NEW.capability_protocol <> 'v3' OR NEW.capability_record_digest IS NOT NULL"), 2)
         self.assertIn("NEW.capability_protocol IS NOT OLD.capability_protocol", sql)
@@ -1252,7 +1252,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
             self.assertNotIn(forbidden, sql)
 
     def test_capability_guards_reach_actual_installers_and_source_object_admission(self):
-        _, tree = read_source("serverware/db.py", 16 * 1024 * 1024)
+        _, tree = read_source("catchplate/db.py", 16 * 1024 * 1024)
         installer = function(tree, "_install_policy_candidate_authority_guards")
         pg = calls(installer, "capability_retention_guard_sql")
         sqlite = calls(installer, "capability_retention_sqlite_guards_sql")
@@ -1265,14 +1265,14 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
             and ast.dump(node.test) == ast.dump(ast.parse("isinstance(conn, PostgresMetadataConnection)", mode="eval").body)]
         self.assertEqual(len(blocks), 1)
         self.assertNotIn(sqlite[0], tuple(ast.walk(blocks[0])))
-        _, tree = read_source("serverware/authority_store/schema.py")
+        _, tree = read_source("catchplate/authority_store/schema.py")
         digest = function(tree, "_policy_candidate_authority_source_contract_digest")
         self.assertEqual(len(calls(digest, "capability_retention_guard_sql")), 1)
         self.assertEqual(len(calls(digest, "capability_retention_sqlite_guards_sql")), 1)
         required = function(tree, "_policy_candidate_authority_required_guard_names")
         literals = {node.value for node in ast.walk(required) if isinstance(node, ast.Constant) and type(node.value) is str}
-        self.assertTrue({"serverware_guard_capability_retention", "serverware_capability_retention_guard",
-                        "serverware_capability_retention_insert_guard", "serverware_capability_sidecar_sqlite_insert_guard"}.issubset(literals))
+        self.assertTrue({"catchplate_guard_capability_retention", "catchplate_capability_retention_guard",
+                        "catchplate_capability_retention_insert_guard", "catchplate_capability_sidecar_sqlite_insert_guard"}.issubset(literals))
 
     def test_native_successor_frame_schema_is_bounded_immutable_framework_custody(self):
         contract = authority_contract.SUCCESSOR_EXECUTION_FRAME_CONTRACT
@@ -1317,7 +1317,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
                 "sxf_stored_count IS DISTINCT FROM supplied_frame_ordinal",
                 "sxf_stored_bytes + sxf_byte_count > 100663296",
                 "successor native stream is already closed",
-                "pg_catalog.sha256(supplied_frame)", "session_user IS DISTINCT FROM 'serverware_policy_authority_successor_issuer'"):
+                "pg_catalog.sha256(supplied_frame)", "session_user IS DISTINCT FROM 'catchplate_policy_authority_successor_issuer'"):
             self.assertIn(fragment, append)
         self.assertNotIn("ON CONFLICT", append)
         for operation in (authority_contract.SUCCESSOR_ISSUE_FUNCTION, authority_contract.SUCCESSOR_EXECUTE_FUNCTION):
@@ -1349,7 +1349,7 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         self.assertNotIn("expected_functions", sql)
 
     def test_native_successor_frame_bindings_reach_existing_install_and_acl_owners(self):
-        source, tree = read_source("serverware/db.py", 16 * 1024 * 1024)
+        source, tree = read_source("catchplate/db.py", 16 * 1024 * 1024)
         seal = function(tree, "_seal_postgres_schema_acl")
         roster = assignment(seal, "successor_functions")
         self.assertIn("authority_contract.SUCCESSOR_FRAME_FUNCTION", ast.get_source_segment(source, roster))

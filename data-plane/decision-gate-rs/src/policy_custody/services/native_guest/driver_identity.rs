@@ -142,7 +142,7 @@ impl Owner {
             && unsafe{libc::fcntl(executable.as_raw_fd(),libc::F_GET_SEALS)}==seals)?;
         let mut bytes=vec![0;m.len() as usize];executable.read_exact_at(&mut bytes,0).map_err(fail)?;
         require(Sha256Digest::compute(&bytes)==*executable_sha256)?;
-        serverware_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&bytes).map_err(fail)?;
+        catchplate_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&bytes).map_err(fail)?;
         let cgroup_bytes=membership()?;let cgroup=open_cgroup(&cgroup_bytes)?;
         let handle=cgroup_handle(cgroup.as_fd())?;
         let root=File::from(retrieval_peer::duplicate(root)?);
@@ -163,7 +163,7 @@ impl Owner {
         let driver=ProductionCustodyKernelDriverIdentity::from_verified_kernel_descriptors(instance,
             self.executable_sha256.clone(),Sha256Digest::compute(&domain.authority_boot_id()),
             own.1,own.2,self.handle.0,self.handle.1,self.before[2].inode,descriptor_sha,observed)?;
-        self.observation=Some(Observation{api_version:"serverware.nativeShadowDriverObservation/v1".into(),
+        self.observation=Some(Observation{api_version:"catchplate.nativeShadowDriverObservation/v1".into(),
             configuration_sha256:prepared.configuration_sha256(),window_sha256:prepared.window_sha256(),
             invocation_id:prepared.invocation().into(),process_id:own.0,uid:prepared.uid(),gid:prepared.gid(),
             cgroup_original_sha256:Sha256Digest::compute(&self.cgroup_bytes),root:self.before[3].clone(),

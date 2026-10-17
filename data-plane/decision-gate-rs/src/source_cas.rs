@@ -18,17 +18,17 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path};
 
 const SOURCE_MANIFEST_VERSION: &str =
-    "serverware/source-cas-manifest/v12";
+    "catchplate/source-cas-manifest/v12";
 const FILESYSTEM_MANIFEST_VERSION: &str =
-    "serverware/filesystem-cas-manifest/v12";
-const SOURCE_CAS_DOMAIN: &str = "serverware/source-cas/v12";
-const SOURCE_METADATA_NAME: &str = ".serverware-source-cas-v12.json";
+    "catchplate/filesystem-cas-manifest/v12";
+const SOURCE_CAS_DOMAIN: &str = "catchplate/source-cas/v12";
+const SOURCE_METADATA_NAME: &str = ".catchplate-source-cas-v12.json";
 const PUBLICATION_CONTROL_VERSION: &str =
-    "serverware/cas-publication-control/v12";
+    "catchplate/cas-publication-control/v12";
 const PUBLICATION_JOURNAL_VERSION: &str =
-    "serverware/cas-publication-journal/v12";
+    "catchplate/cas-publication-journal/v12";
 const PUBLICATION_JOURNAL_DIRECTORY: &str =
-    ".serverware-cas-publication-journal-v12";
+    ".catchplate-cas-publication-journal-v12";
 const MAX_ENTRIES: usize = 2_000_000;
 const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024 * 1024;
@@ -531,7 +531,7 @@ impl ManifestTrustPolicy {
         signature_bytes: &[u8],
     ) -> PlanResult<()> {
         self.verify_domain(
-            b"serverware/filesystem-manifest-signature/v12\0",
+            b"catchplate/filesystem-manifest-signature/v12\0",
             key_id,
             digest,
             signature_bytes,
@@ -945,10 +945,10 @@ fn collect_cas_sealing_evidence(
     enable_fs_verity: bool,
 ) -> PlanResult<CasSealingEvidenceV12> {
     let mut userspace_evidence = Sha256::new();
-    userspace_evidence.update(b"serverware/cas-userspace-sealing-evidence/v12\0");
+    userspace_evidence.update(b"catchplate/cas-userspace-sealing-evidence/v12\0");
     userspace_evidence.update(manifest.manifest_sha256);
     let mut fs_verity_evidence = Sha256::new();
-    fs_verity_evidence.update(b"serverware/cas-fs-verity-evidence/v12\0");
+    fs_verity_evidence.update(b"catchplate/cas-fs-verity-evidence/v12\0");
     let mut measured_fs_verity = false;
 
     for entry in &manifest.entries {
@@ -1615,7 +1615,7 @@ impl DirectoryCasStore {
         append_cleanup_record(
             &self.journal_root,
             &PublicationCleanupRecordV12 {
-                version: "serverware/cas-publication-cleanup/v12".into(),
+                version: "catchplate/cas-publication-cleanup/v12".into(),
                 operation_id: operation_id.into(),
                 owner_identity_sha256: owner_identity_sha256.clone(),
                 phase: "CleanupComplete".into(),
@@ -1734,7 +1734,7 @@ pub fn filesystem_entries_digest(
     entries: &[FilesystemEntryV12],
 ) -> Digest {
     let mut hasher = Sha256::new();
-    hasher.update(b"serverware/filesystem-cas-entries/v12\0");
+    hasher.update(b"catchplate/filesystem-cas-entries/v12\0");
     for entry in entries {
         hasher.update(entry.relative_path.as_bytes());
         hasher.update([0]);
@@ -1752,7 +1752,7 @@ pub fn filesystem_entries_digest(
 pub fn directory_identity_digest(fd: RawFd) -> PlanResult<Digest> {
     let identity = directory_identity(fd)?;
     let mut hasher = Sha256::new();
-    hasher.update(b"serverware/retained-directory-identity/v12\0");
+    hasher.update(b"catchplate/retained-directory-identity/v12\0");
     hasher.update(identity.device.to_be_bytes());
     hasher.update(identity.inode.to_be_bytes());
     hasher.update(identity.mode.to_be_bytes());

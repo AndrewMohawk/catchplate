@@ -2,7 +2,7 @@
 """Offline source-package closure, not a broker launch or native admission.
 
 Use the real producer's source staging and a fresh isolated interpreter with
-only that staged serverware package. Installed third-party packages are still
+only that staged catchplate package. Installed third-party packages are still
 the test image's packages, but imports outside the producer's explicit three
 dependencies are refused. No interpreter/ELF/SquashFS build is performed.
 Historical evidence below is explicitly synthetic parser input, not a valid
@@ -67,8 +67,8 @@ if not __debug__ or sys.flags.optimize:
     raise RuntimeError("assertions disabled")
 options = json.loads(sys.stdin.buffer.read(16385))
 site = Path(options["site"]).resolve(strict=True)
-allowed = {"serverware"} | {"serverware." + name[:-3] for name in options["modules"] if name != "__init__.py"}
-assert not any(name == "serverware" or name.startswith("serverware.") for name in sys.modules)
+allowed = {"catchplate"} | {"catchplate." + name[:-3] for name in options["modules"] if name != "__init__.py"}
+assert not any(name == "catchplate" or name.startswith("catchplate.") for name in sys.modules)
 assert str(Path(options["checkout"]).resolve()) not in sys.path
 sys.path.insert(0, str(site))
 third_party = {"cryptography", "cffi", "pycparser", "_cffi_backend"}
@@ -76,7 +76,7 @@ third_party = {"cryptography", "cffi", "pycparser", "_cffi_backend"}
 class ImportBoundary:
     def find_spec(self, fullname, path=None, target=None):
         top = fullname.partition(".")[0]
-        if top == "serverware":
+        if top == "catchplate":
             if fullname not in allowed:
                 raise ImportError("unpackaged local import: " + fullname)
         elif top not in sys.stdlib_module_names and top not in third_party:
@@ -90,14 +90,14 @@ def audit(event, arguments):
         raise AssertionError("package test attempted external effect: " + event)
 
 sys.addaudithook(audit)
-import serverware.native_secret_broker_helper as broker
+import catchplate.native_secret_broker_helper as broker
 # Import every declared local module, not just the first helper import chain.
 for name in sorted(allowed):
     importlib.import_module(name)
-from serverware import authority_static_credential_create as creation
-from serverware import authority_static_credential_rotate as rotation
-from serverware import native_static_credential_rotation as material
-from serverware import native_static_credential_rotation_owner as owner
+from catchplate import authority_static_credential_create as creation
+from catchplate import authority_static_credential_rotate as rotation
+from catchplate import native_static_credential_rotation as material
+from catchplate import native_static_credential_rotation_owner as owner
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 assert broker.native_static_credential_owner.Owner._profile is creation
 assert broker.native_static_credential_rotation_owner.Owner is owner.Owner
@@ -124,14 +124,14 @@ if options["operation"] == "rotation":
         "allowedAuthenticatorClasses": ["hardware"], "hardwareRequired": True,
         "requireUserPresence": True, "requireUserVerification": True, "maxAssertionAgeSeconds": 30}
     prior = options["prior_version"]
-    root_schema = "serverware.staticCredentialCreationProvenance/v1" if prior == 1 else "serverware.staticCredentialRotationProvenance/v1"
+    root_schema = "catchplate.staticCredentialCreationProvenance/v1" if prior == 1 else "catchplate.staticCredentialRotationProvenance/v1"
     digest_field = "creationRequestDigest" if prior == 1 else "rotationRequestDigest"
-    statement_schema = "serverware.nativeStaticCredentialGenerationStatement/v1" if prior == 1 else "serverware.nativeStaticCredentialRotationStatement/v1"
+    statement_schema = "catchplate.nativeStaticCredentialGenerationStatement/v1" if prior == 1 else "catchplate.nativeStaticCredentialRotationStatement/v1"
     operation = "credential.static.create" if prior == 1 else "credential.static.rotate"
     key_id = H(b"synthetic historical key")
     boot_bytes = b"b" * 32
     statement = {"apiVersion": statement_schema, "operation": operation,
-        "holderId": H(b"serverware/credential-currentness-holder/v1\0" + boot_bytes + bytes.fromhex(key_id[7:])),
+        "holderId": H(b"catchplate/credential-currentness-holder/v1\0" + boot_bytes + bytes.fromhex(key_id[7:])),
         "bootId": B(boot_bytes), "keyId": key_id,
         "controlPlaneResponseSigningKeyId": H(b"response key"), "deploymentId": "fixture",
         "instanceId": "spiffe://fixture/native", "controlPlaneConfigurationDigest": cfg,
@@ -151,7 +151,7 @@ if options["operation"] == "rotation":
             predecessorBarrierSha256=H(b"earlier barrier"),
             predecessorCurrentnessRootSha256=H(b"earlier root"))
     evidence = {"statement": statement, "signature": "ed25519:" + B(b"s" * 64),
-        "nativeKeyEvidence": {"apiVersion": "serverware.nativeResponseProofKeyEvidence/v1",
+        "nativeKeyEvidence": {"apiVersion": "catchplate.nativeResponseProofKeyEvidence/v1",
             "responseProofPublicKey": B(b"k" * 32),
             "attestationDocumentB64": B(b"synthetic parser input; not a Nitro quote")}}
     origin = H(b"historical request")
@@ -202,11 +202,11 @@ if options["operation"] == "rotation":
 
 if options["operation"] in {"jit", "jit-refusals"}:
     from unittest.mock import patch
-    from serverware import authority_contract as contract
-    from serverware import authority_jit_private_request as private
-    from serverware import authority_jit_request as jit_request
-    from serverware import native_jit_review_owner as jit
-    from serverware import native_jit_review_material as jit_material
+    from catchplate import authority_contract as contract
+    from catchplate import authority_jit_private_request as private
+    from catchplate import authority_jit_request as jit_request
+    from catchplate import native_jit_review_owner as jit
+    from catchplate import native_jit_review_material as jit_material
     assert broker.native_jit_review_owner is jit
     C, H = jit_material.canonical, jit_material.sha256
     B = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
@@ -223,7 +223,7 @@ if options["operation"] in {"jit", "jit-refusals"}:
     envelope = private.prepare(raw)
     public, documents = private.validate_runtime_input(envelope)
     typed = {**public, "businessIntent": contract.synthesize_business_intent("jit.request", public)}
-    authorization = {"schema": "serverware.policyAuthorityV9Authorization/v1", "operation": "jit.request",
+    authorization = {"schema": "catchplate.policyAuthorityV9Authorization/v1", "operation": "jit.request",
         "handler": "ensure_jit_approval_request", "operationManifestDigest": contract.OPERATION_MANIFEST_DIGEST,
         "arguments": typed}
 
@@ -231,9 +231,9 @@ if options["operation"] in {"jit", "jit-refusals"}:
         return H(domain.encode("ascii") + b"\0" + b"".join(
             len(frame).to_bytes(8, "big") + frame for frame in frames))
 
-    request_digest = framed("serverware.policyAuthorityV9Request/v1", C(authorization))
-    request = {**authorization, "schema": "serverware.policyAuthorityV9Request/v1",
-        "requestDigest": request_digest, "operationId": framed("serverware.policyAuthorityOperation/v2",
+    request_digest = framed("catchplate.policyAuthorityV9Request/v1", C(authorization))
+    request = {**authorization, "schema": "catchplate.policyAuthorityV9Request/v1",
+        "requestDigest": request_digest, "operationId": framed("catchplate.policyAuthorityOperation/v2",
             b"jit.request", request_digest.encode("ascii"))}
     jit_request.require_public_request(request)
 
@@ -270,7 +270,7 @@ if options["operation"] in {"jit", "jit-refusals"}:
         identity = {name: H(name.encode("ascii")) for name in jit.IDENTITY_FIELDS}
         boot = b"b" * 32
         identity.update(bootId=B(boot), policyHash=raw["policy_hash"])
-        identity["holderId"] = H(b"serverware/credential-currentness-holder/v1\0" + boot
+        identity["holderId"] = H(b"catchplate/credential-currentness-holder/v1\0" + boot
             + bytes.fromhex(identity["keyId"][7:]))
         config = {"apiVersion": jit.CONFIG, "sourceContractDigest": contract.OPERATION_MANIFEST_DIGEST,
             "controlPlaneConfigurationDigest": H(b"synthetic configuration"),
@@ -322,10 +322,10 @@ if options["operation"] in {"jit", "jit-refusals"}:
 # Prove both the external and local import fences fail without relying on the
 # environment lacking these otherwise-installed modules.
 for name in ("cbor2", "sqlite3_forbidden_fixture", "fastapi", "sqlalchemy", "psycopg", "requests",
-        "db", "config", "env", "scripts.verify_nitro_tee", "serverware.app", "serverware.db",
-        "serverware.config", "serverware.authority_store", "serverware.authority_service",
-        "serverware.authority_planner", "serverware.authority_transition_registry",
-        "serverware.authority_transition_quota", "serverware.authority_primary_contract"):
+        "db", "config", "env", "scripts.verify_nitro_tee", "catchplate.app", "catchplate.db",
+        "catchplate.config", "catchplate.authority_store", "catchplate.authority_service",
+        "catchplate.authority_planner", "catchplate.authority_transition_registry",
+        "catchplate.authority_transition_quota", "catchplate.authority_primary_contract"):
     assert name not in sys.modules
     try:
         importlib.import_module(name)
@@ -333,10 +333,10 @@ for name in ("cbor2", "sqlite3_forbidden_fixture", "fastapi", "sqlalchemy", "psy
         pass
     else:
         raise AssertionError("package import fence accepted " + name)
-loaded = sorted(name for name in sys.modules if name == "serverware" or name.startswith("serverware."))
+loaded = sorted(name for name in sys.modules if name == "catchplate" or name.startswith("catchplate."))
 assert set(loaded) == allowed
 for name in loaded:
-    assert Path(sys.modules[name].__file__).resolve().is_relative_to(site / "serverware")
+    assert Path(sys.modules[name].__file__).resolve().is_relative_to(site / "catchplate")
 print(json.dumps({"ok": True, "loaded": loaded, "rotationNegativeControls": checks,
     "jitOwnerExercised": jit_exercised, "jitNegativeControls": jit_checks,
     "brokerConstructed": False, "nativeAdmissionVerified": False}, sort_keys=True))
@@ -387,19 +387,19 @@ class PackageClosureTests(unittest.TestCase):
 
     def test_real_staging_bytes_modes_inventory_and_entrypoint(self):
         root, closure, site = self.staged()
-        expected = {str(producer.SITE / "serverware" / name) for name in producer.BROKER_MODULES} | {str(producer.HELPER)}
+        expected = {str(producer.SITE / "catchplate" / name) for name in producer.BROKER_MODULES} | {str(producer.HELPER)}
         self.assertEqual(set(closure.files), expected)
         actual = {"/" + str(path.relative_to(root)) for path in root.rglob("*") if path.is_file()}
         self.assertEqual(actual, expected)
         for name in producer.BROKER_MODULES:
-            source, output = ROOT / "serverware" / name, site / "serverware" / name
+            source, output = ROOT / "catchplate" / name, site / "catchplate" / name
             raw = output.read_bytes()
             self.assertEqual(raw, source.read_bytes())
             self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o444)
-            self.assertEqual(closure.files[str(producer.SITE / "serverware" / name)],
+            self.assertEqual(closure.files[str(producer.SITE / "catchplate" / name)],
                 {"sha256": "sha256:" + hashlib.sha256(raw).hexdigest(), "size": len(raw), "mode": "0444"})
         self.assertEqual((root / str(producer.HELPER)[1:]).read_bytes(),
-            (site / "serverware/native_secret_broker_helper.py").read_bytes())
+            (site / "catchplate/native_secret_broker_helper.py").read_bytes())
 
     def test_prior_roster_reproduces_real_missing_import(self):
         _, _, site = self.staged(PRIOR_MODULES)
@@ -408,7 +408,7 @@ class PackageClosureTests(unittest.TestCase):
         self.assertIn("ImportError", result.stderr)
         self.assertIn("aws_credential_boundary", result.stderr)
         self.assertEqual(result.stdout, "")
-        self.assertNotIn(str(ROOT / "serverware"), result.stderr)
+        self.assertNotIn(str(ROOT / "catchplate"), result.stderr)
 
     def test_fixed_roster_imports_every_module_without_checkout_fallback(self):
         _, _, site = self.staged()

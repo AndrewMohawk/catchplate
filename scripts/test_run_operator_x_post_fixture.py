@@ -31,7 +31,7 @@ from scripts import run_operator_x_post_fixture as runner
 
 NOW = datetime.datetime(2026, 10, 12, 12, tzinfo=datetime.timezone.utc)
 IMAGE = "sha256:" + "d" * 64
-NAMES = ("network", "provider", "serverware", "decision-gate-rs", "edge", "check")
+NAMES = ("network", "provider", "catchplate", "decision-gate-rs", "edge", "check")
 IDS = {name: format(index, "064x") for index, name in enumerate(NAMES, 1)}
 PINS = dict(expected_binary_sha256="a" * 64, expected_go_sha256="b" * 64,
     expected_dependencies_sha256="c" * 64)
@@ -50,7 +50,7 @@ class FixedDateTime(datetime.datetime):
 def configuration():
     paths = [Path("/synthetic/" + name) for name in
         ("source", "gate", "initialize.py", "unused", "node", "modules", "python", "packages", "go")]
-    paths[3] = Path("/srv/catchplate-fast/tmp/serverware-x-post-private.abcdef12")
+    paths[3] = Path("/srv/catchplate-fast/tmp/catchplate-x-post-private.abcdef12")
     return runner.recipe.build(*paths, **PINS)
 
 
@@ -127,7 +127,7 @@ class RunnerTests(unittest.TestCase):
                     [((runner.network.FIXTURE_IP, 0),), (("127.0.0.2", 0),)])
                 self.assertEqual({call.args[0] for call in resolve.call_args_list},
                     {"x.com", "api.x.com", runner.network.CONTROL_HOST, runner.network.PROXY_HOST,
-                        "decision-gate-rs", "serverware"})
+                        "decision-gate-rs", "catchplate"})
         run()
         controls = [dict(interfaces=[(1, "lo"), (2, "eth0")]),
             dict(changed_files={"/proc/net/route": files["/proc/net/route"] + b"lo 00000000 0 0 0 0 0 0\n"}),
@@ -137,7 +137,7 @@ class RunnerTests(unittest.TestCase):
             dict(changed_files={"/proc/sys/net/ipv4/ip_nonlocal_bind": b"1\n"}),
             dict(changed_files={"/etc/hosts": runner.network.HOSTS}),
             dict(changed_files={"/etc/resolv.conf": b"nameserver 8.8.8.8\n"}),
-            dict(changed_dns={"serverware": "127.0.0.1"}),
+            dict(changed_dns={"catchplate": "127.0.0.1"}),
             dict(changed_dns={"api.x.com": [runner.network.FIXTURE_IP, "127.0.0.1"]}),
             dict(bind_failure=True)]
         for index, control in enumerate(controls):
@@ -219,7 +219,7 @@ class RunnerTests(unittest.TestCase):
         value.public_view = Mock(side_effect=lambda *a, **kw: calls.append(("publication", a, kw)) or {"pinned": True})
         value.start_app_then_gate(["docker", "compose", "-p", "synthetic"])
         self.assertEqual([row[0] for row in calls], ["app-start", "publication", "gate-start"])
-        self.assertEqual(calls[0][1][-2:], ["provider", "serverware"])
+        self.assertEqual(calls[0][1][-2:], ["provider", "catchplate"])
         self.assertIn("--no-deps", calls[-1][1]); self.assertEqual(calls[-1][1][-1], "decision-gate-rs")
         self.assertEqual(value.initial_view, {"pinned": True})
         calls.clear(); value.public_view.side_effect = ValueError("publication refused")
@@ -390,14 +390,14 @@ class RunnerTests(unittest.TestCase):
         # labels. Synthetic inspect rows here remain explicitly non-runtime.
         from scripts import prepare_operator_python_bytecode as bytecode
         config = configuration()
-        config["services"]["serverware"]["volumes"] += bytecode.mounts(Path('/synthetic/cache'))
+        config["services"]["catchplate"]["volumes"] += bytecode.mounts(Path('/synthetic/cache'))
         rows, images = inspect_rows(config)
         value = self.instance(); value.container_rows = Mock(return_value=rows)
         value.image_environments = {image: {"PATH": "/usr/bin:/bin"} for image in images}
         self.assertEqual(value.inspect_runtime(config, images, keeper_anchor=950), IDS)
-        for target in ("/app/serverware/__pycache__", "/app/serverware/authority_store/__pycache__"):
+        for target in ("/app/catchplate/__pycache__", "/app/catchplate/authority_store/__pycache__"):
             changed = deepcopy(rows)
-            app = next(row for row in changed if row["Id"] == IDS["serverware"])
+            app = next(row for row in changed if row["Id"] == IDS["catchplate"])
             next(mount for mount in app["Mounts"] if mount["Destination"] == target)["RW"] = True
             value.container_rows.return_value = changed
             with self.subTest(target=target), self.assertRaises(ValueError):
@@ -481,7 +481,7 @@ class RunnerTests(unittest.TestCase):
         expression = compile(ast.Expression(body=terminal.args[1]), str(Path(runner.__file__)), "eval")
         receipt = eval(expression, {"phase": "complete", "success": True, "clean": True, "errors": [],
             "time": runner.time, "begun": 990, "failure": None, "quota": False, "fault_mode": None})
-        self.assertEqual(receipt, {"schema": "serverware.privateXPostRun/v1", "phase": "complete", "success": True,
+        self.assertEqual(receipt, {"schema": "catchplate.privateXPostRun/v1", "phase": "complete", "success": True,
             "cleanup": True, "cleanupErrors": [], "elapsedSeconds": 10.0, "syntheticOnly": True,
             "realXVerified": False, "productionReady": False})
 

@@ -60,8 +60,8 @@ No native framed-DER commitment or interception-CA pin substitutes for the
 standard ingress's exact PEM-bundle identity.
 
 The domain-separated signed envelope is
-`serverware.signedWorkloadIdentityTrustAuthorization/v1`, containing a
-`serverware.workloadIdentityTrustAuthorization/v1` payload. The original
+`catchplate.signedWorkloadIdentityTrustAuthorization/v1`, containing a
+`catchplate.workloadIdentityTrustAuthorization/v1` payload. The original
 authorization is at most 128 KiB; issuer and bundle originals are each at most
 64 KiB, authorizer PEM 16 KiB and the separate principal-inventory original
 64 KiB. Canonical encoding and source-revision admission are mandatory.
@@ -77,7 +77,7 @@ authorization is at most 128 KiB; issuer and bundle originals are each at most
 | `serverCertificateSpkiSha256` | Actual loaded ingress server certificate |
 | `clientTrustBundleSha256` | Exact loaded CA PEM bytes |
 
-The scope schema is `serverware.workloadIdentityTrustStartupScope/v1`. Binding
+The scope schema is `catchplate.workloadIdentityTrustStartupScope/v1`. Binding
 the running binary avoids a circular commitment through a runtime manifest that
 itself reports the trust authorization. Expected identities are not copied from
 the record being verified.
@@ -122,7 +122,7 @@ from the checkout; it is not a globally installed command. Its required public
 file inputs are `--authorization`, `--authorizer-public-key`, `--issuer`,
 `--bundle` and `--principals`, each with a corresponding `-sha256` pin. The
 principal file is a canonical
-`serverware.workloadIdentityTrustPrincipals/v1` object containing `principals`.
+`catchplate.workloadIdentityTrustPrincipals/v1` object containing `principals`.
 
 Also provide `--destination`, `--expected-deployment-id`,
 `--expected-runtime-binary-sha256`,
@@ -144,22 +144,22 @@ authorized. Nothing in this guide claims this command has been executed.
 ### Standard ingress configuration
 
 The Rust settings are closed: an empty, partial or unknown setting in the
-`SERVERWARE_WORKLOAD_IDENTITY_TRUST_` namespace is an error.
+`CATCHPLATE_WORKLOAD_IDENTITY_TRUST_` namespace is an error.
 
 | Runtime setting | Value |
 | --- | --- |
-| `SERVERWARE_WORKLOAD_IDENTITY_TRUST_AUTHORIZATION` | Exact signed `authorization.json` original |
-| `SERVERWARE_WORKLOAD_IDENTITY_TRUST_AUTHORIZER_PUBLIC_KEY` | Independently provisioned canonical Ed25519 public-key PEM |
-| `SERVERWARE_WORKLOAD_IDENTITY_TRUST_AUTHORIZER_SHA256` | Independent `sha256:` pin of exact public-key PEM bytes, not its SPKI digest |
-| `SERVERWARE_WORKLOAD_IDENTITY_TRUST_DEPLOYMENT_ID` | Separately selected bounded deployment identifier |
-| `SERVERWARE_PROXY_CLIENT_CA_BUNDLE` | Exact authorized one-issuer PEM bundle |
+| `CATCHPLATE_WORKLOAD_IDENTITY_TRUST_AUTHORIZATION` | Exact signed `authorization.json` original |
+| `CATCHPLATE_WORKLOAD_IDENTITY_TRUST_AUTHORIZER_PUBLIC_KEY` | Independently provisioned canonical Ed25519 public-key PEM |
+| `CATCHPLATE_WORKLOAD_IDENTITY_TRUST_AUTHORIZER_SHA256` | Independent `sha256:` pin of exact public-key PEM bytes, not its SPKI digest |
+| `CATCHPLATE_WORKLOAD_IDENTITY_TRUST_DEPLOYMENT_ID` | Separately selected bounded deployment identifier |
+| `CATCHPLATE_PROXY_CLIENT_CA_BUNDLE` | Exact authorized one-issuer PEM bundle |
 
 The production Compose source mounts the two new public originals read-only at
-`/run/serverware/proxy-ingress/trust-authorization.json` and
-`/run/serverware/proxy-ingress/trust-authorizer-public-key.pem`. Its existing
-`/run/serverware/proxy-ingress/client-ca.pem` mount remains the bundle input.
-Host paths use `SERVERWARE_WORKLOAD_IDENTITY_TRUST_AUTHORIZATION_FILE` and
-`SERVERWARE_WORKLOAD_IDENTITY_TRUST_AUTHORIZER_PUBLIC_KEY_FILE`; they must be
+`/run/catchplate/proxy-ingress/trust-authorization.json` and
+`/run/catchplate/proxy-ingress/trust-authorizer-public-key.pem`. Its existing
+`/run/catchplate/proxy-ingress/client-ca.pem` mount remains the bundle input.
+Host paths use `CATCHPLATE_WORKLOAD_IDENTITY_TRUST_AUTHORIZATION_FILE` and
+`CATCHPLATE_WORKLOAD_IDENTITY_TRUST_AUTHORIZER_PUBLIC_KEY_FILE`; they must be
 explicitly deployed public root-owned files, not assumed-readable staging paths.
 The independently selected pin and deployment ID are required Compose inputs.
 See the source [readiness environment example](../ops/production-readiness.env.example).

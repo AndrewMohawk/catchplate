@@ -7,7 +7,7 @@
 //! an enclave clock or renewed for individual sessions.
 
 use serde::Deserialize;
-use serverware_decision_gate::enclave_parent_relay_v1::validate_parent_relay_target_v1;
+use catchplate_decision_gate::enclave_parent_relay_v1::validate_parent_relay_target_v1;
 use std::net::SocketAddr;
 
 pub(super) const MAX_CONFIGURATION_BYTES: usize = 16 * 1024;
@@ -30,7 +30,7 @@ impl ConfigurationV1 {
         let config: Self = serde_json::from_value(value)
             .map_err(|_| "parent relay configuration does not match its closed contract")?;
         super::ensure(
-            config.api_version == "serverware.nativeParentRelayConfiguration/v1"
+            config.api_version == "catchplate.nativeParentRelayConfiguration/v1"
                 && config.listen_port > 1023 && config.listen_port != u32::MAX
                 && config.expected_enclave_cid > 3 && config.expected_enclave_cid != u32::MAX
                 && (1..=16).contains(&config.workers)

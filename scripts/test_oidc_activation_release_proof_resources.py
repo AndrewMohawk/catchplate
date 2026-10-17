@@ -11,11 +11,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from serverware import oidc_session_activation_release_proof_input_issuer_policy as issuer
-from serverware import oidc_session_activation_release_proof_resources as resources
-from serverware import oidc_session_activation_release_proof_input_production as production
-from serverware import control_plane_oidc_session_activation_release_proof_acquisition_bootstrap as acquisition
-from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
+from catchplate import oidc_session_activation_release_proof_input_issuer_policy as issuer
+from catchplate import oidc_session_activation_release_proof_resources as resources
+from catchplate import oidc_session_activation_release_proof_input_production as production
+from catchplate import control_plane_oidc_session_activation_release_proof_acquisition_bootstrap as acquisition
+from catchplate.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
 
 def work():
@@ -84,7 +84,7 @@ class ProofResourceControl(unittest.TestCase):
         # The application caller remains behind its genuine process-mode
         # startup guard; inspect its exact source without bypassing that guard.
         # The actual pure producer import must remain joined to real source.
-        source_text = (ROOT / "serverware/control_plane_oidc_session_activation_release_proof.py").read_text()
+        source_text = (ROOT / "catchplate/control_plane_oidc_session_activation_release_proof.py").read_text()
         self.assertIn("requested._planner_original_on_permission(permission)", source_text)
         self.assertIn("activation_policy_bytes=resource_original", source_text)
         self.assertNotIn("owner._material =", source_text)

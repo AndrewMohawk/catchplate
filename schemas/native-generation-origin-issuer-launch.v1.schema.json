@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-generation-origin-issuer-launch.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-generation-origin-issuer-launch.v1.schema.json",
   "title": "Protected independent native generation-origin issuer launch",
   "description": "Canonical ASCII JSON without a trailing newline, independently installed at the source-fixed root-owned 0400 launch path. This object selects runtime custody only; it does not issue signing policy, keys, generation, ledger head, spool permission, or a new operation interval. The fixed issuer verifies its independent signed configuration and actual purpose-bound generation-origin NSM evidence.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "runtimeImage", "issuerConfigurationSha256"],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeGenerationOriginIssuerLaunch/v1"},
+    "apiVersion": {"const": "catchplate.nativeGenerationOriginIssuerLaunch/v1"},
     "runtimeImage": {"$ref": "#/$defs/runtimeImage"},
     "issuerConfigurationSha256": {"$ref": "#/$defs/sha256"}
   },
@@ -23,7 +23,7 @@
       "required": ["profile", "imagePath", "imageSha256", "interpreterSha256", "entrypointSha256"],
       "properties": {
         "profile": {"const": "sealed-memfd-squashfs-v1"},
-        "imagePath": {"const": "/opt/serverware/native-generation-origin-issuer-runtime.squashfs"},
+        "imagePath": {"const": "/opt/catchplate/native-generation-origin-issuer-runtime.squashfs"},
         "imageSha256": {"$ref": "#/$defs/sha256"},
         "interpreterSha256": {"$ref": "#/$defs/sha256"},
         "entrypointSha256": {"$ref": "#/$defs/sha256"}

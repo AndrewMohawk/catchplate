@@ -3,7 +3,7 @@
 ## Implemented boundary
 
 The source now has a pure combined evaluator,
-[`evaluate_indexed_primary_batch`](../serverware/authority_indexed_mutation.py).
+[`evaluate_indexed_primary_batch`](../catchplate/authority_indexed_mutation.py).
 It genuinely verifies a primary mutation batch, derives every affected fixed
 index projection from the same owned OLD/NEW images, and reconstructs the
 counted before and after roots. Its output is conditional on the supplied
@@ -34,7 +34,7 @@ are also implemented as uninstalled source.
 
 ## One actual primary snapshot
 
-[`evaluate_primary_radix_inputs`](../serverware/authority_radix_mutation.py)
+[`evaluate_primary_radix_inputs`](../catchplate/authority_radix_mutation.py)
 uses the same private engine as the existing batch and membership APIs. It
 returns `PrimaryRadixMutationInputs`: the genuine batch result plus the exact
 engine-owned selected rows, before proofs and mutations. Those dictionaries
@@ -96,7 +96,7 @@ not authenticated population completeness.
 
 ## Genuine sparse before/after reconstruction
 
-[`evaluate_index_mutations`](../serverware/authority_index_mutation.py) is the
+[`evaluate_index_mutations`](../catchplate/authority_index_mutation.py) is the
 lower-level counted engine. It accepts sorted unique `IndexLeafChange` values
 and a sparse before frontier. It has no primary-row, projection, revision or
 operation authority of its own.

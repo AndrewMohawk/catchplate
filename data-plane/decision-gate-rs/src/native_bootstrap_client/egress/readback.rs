@@ -6,7 +6,7 @@
 //! legacy noflag containers and kernel metadata are not request-byte equality.
 
 use super::{authority::Ruleset, backend::ReplyOriginals, wire::{self, Attr, DumpKind, Frame}};
-use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
+use catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -15,7 +15,7 @@ const MAX_MESSAGES: usize = 256;
 const MULTI: u16 = 2;
 const APPEND: u16 = 0x800;
 const DONE: u16 = 3;
-const DOMAIN: &[u8] = b"serverware/native-egress-observed-semantics/v1\0";
+const DOMAIN: &[u8] = b"catchplate/native-egress-observed-semantics/v1\0";
 
 pub(super) struct Readback {
     generation: u32,

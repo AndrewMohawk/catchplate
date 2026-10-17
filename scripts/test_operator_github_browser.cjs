@@ -9,7 +9,7 @@ const {join, resolve} = require('node:path');
 const vm = require('node:vm');
 const {ready, view, credential, application, rule, IDS} = require('./test_operator_catalog_browser.cjs');
 const {fixture: ordinaryFixture, publicCatalog, digest, pair, step, review, grant} = require('./test_operator_ordinary_modes_browser.cjs');
-const {clientCredentialInput, credentialHeaderTarget} = require('../serverware/operator_demo_web/app.js');
+const {clientCredentialInput, credentialHeaderTarget} = require('../catchplate/operator_demo_web/app.js');
 
 const ROOT = resolve(__dirname, '..');
 const ORIGIN = 'https://operator-catalog.example.test';
@@ -18,16 +18,16 @@ const CREATE = '/api/operator-demo/credentials/github-token';
 const GRANT = '/api/operator-demo/access-rules/github';
 const READ = 'github_issues_read_v1';
 const WRITE = 'github_issues_write_v1';
-const DUMMY = 'serverware-github-placeholder-v1';
+const DUMMY = 'catchplate-github-placeholder-v1';
 const PRIVATE = 'synthetic_github_provider_secret_NEVER_RENDER';
 const ERROR = 'synthetic_private_provider_error_NEVER_RENDER';
 const REPOSITORY = {owner: 'Example-Owner', name: 'Example.Repo'};
 const QUERY = ['assignee', 'creator', 'direction', 'labels', 'mentioned', 'milestone', 'page', 'per_page', 'since', 'sort', 'state'];
 const HEADERS = ['accept', 'accept-language', 'sec-fetch-mode', 'user-agent', 'x-github-api-version'];
-const AUTH = {schema: 'serverware.operatorProxyAuthentication/v1', modes: ['bearer', 'basic_and_bearer_v1'],
+const AUTH = {schema: 'catchplate.operatorProxyAuthentication/v1', modes: ['bearer', 'basic_and_bearer_v1'],
   path: '/api/operator-demo/applications/proxy-authentication'};
 const clone = value => JSON.parse(JSON.stringify(value));
-const capability = (destination = true) => ({schema: 'serverware.operatorGithub/v1', connection_type: 'github_token_v1',
+const capability = (destination = true) => ({schema: 'catchplate.operatorGithub/v1', connection_type: 'github_token_v1',
   create_credential_path: CREATE, create_rule_path: GRANT, api_origin: API, destination_allowed: destination,
   operation_bundles: [READ, WRITE], sdk_auth_token: DUMMY, placeholder: 'token ' + DUMMY,
   query_mode: 'githubRestV1', response_mode: 'unfiltered_json_or_empty_v2', source_pair_required: true});
@@ -140,7 +140,7 @@ async function recipe(page, create = false, basic = true) {
   assert(await page.locator('#github-client-controls').isVisible());
   const text = await page.locator('#client-command').innerText();
   assert(text.includes('@octokit/rest@22.0.1') && text.includes('undici@8.11.2'));
-  assert(text.includes('process.env.SERVERWARE_PROXY_TOKEN') && text.includes('new ProxyAgent'));
+  assert(text.includes('process.env.CATCHPLATE_PROXY_TOKEN') && text.includes('new ProxyAgent'));
   assert(text.includes('auth: "' + DUMMY + '"'));
   assert.equal(text.includes("token: 'Basic ' + Buffer.from"), basic);
   assert.equal(text.includes("token: 'Bearer ' + appToken"), !basic);
@@ -154,17 +154,17 @@ async function recipe(page, create = false, basic = true) {
 }
 
 const INPUTS = ['scripts/test_operator_github_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
-  'scripts/test_operator_ordinary_modes_browser.cjs', 'serverware/operator_demo_portal.py',
+  'scripts/test_operator_ordinary_modes_browser.cjs', 'catchplate/operator_demo_portal.py',
   ...['index.html', 'style.css', 'workspace_core.js', 'workspace_github.js', 'workspace_google.js',
     'workspace_google_reauthorization.js', 'workspace_resources.js', 'workspace_applications.js',
-    'workspace_proxy_audit.js', 'workspace_connect.js', 'app.js'].map(name => 'serverware/operator_demo_web/' + name)];
+    'workspace_proxy_audit.js', 'workspace_connect.js', 'app.js'].map(name => 'catchplate/operator_demo_web/' + name)];
 let artifacts;
 async function hashes() { return Object.fromEntries(await Promise.all(INPUTS.map(async name =>
   [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')]))); }
 async function screenshot(page, name) { await page.screenshot({path: join(artifacts, name + '.png'), fullPage: true,
   mask: [page.locator('#client-token'), page.locator('#connect-credential-secret')]}); }
 function pureChecks() {
-  const source = ['workspace_core.js', 'workspace_github.js'].map(name => readFileSync(join(ROOT, 'serverware/operator_demo_web', name), 'utf8')).join('\n');
+  const source = ['workspace_core.js', 'workspace_github.js'].map(name => readFileSync(join(ROOT, 'catchplate/operator_demo_web', name), 'utf8')).join('\n');
   const state = {...options(), revision: 1, sequence: 1, active: digest(1), loaded: digest(1), githubCapability: capability(), rules: [githubRule()]};
   const evaluate = (expression, input) => vm.runInNewContext(source + '\n' + expression,
     {input, clientCredentialInput, credentialHeaderTarget, location: {origin: ORIGIN}, URL}, {timeout: 1000});
@@ -179,7 +179,7 @@ function pureChecks() {
   const input = {proxyUrl: 'https://proxy.example.test', applicationId: IDS.application, proxyAuthentication: 'basic_and_bearer_v1',
     repository: clone(REPOSITORY), bundle: READ};
   const text = evaluate('buildGithubClientRecipe(input)', input);
-  assert(text.includes('"./serverware-ca.pem"')); assert(text.includes('22.19'));
+  assert(text.includes('"./catchplate-ca.pem"')); assert(text.includes('22.19'));
   for (const key of ['caPath', 'proxyCaPath']) for (const value of ['bad\npath', 'bad\rpath'])
     assert.throws(() => evaluate('buildGithubClientRecipe(input)', {...input, [key]: value}));
   assert.throws(() => evaluate('buildGithubClientRecipe(input)', {...input, operation: 'create'}));
@@ -226,7 +226,7 @@ const tests = [
       await page.locator('#github-proxy-ca-path').fill('./outer-proxy.pem');
       const text = await page.locator('#client-command').innerText();
       assert(text.includes('proxyTls: { ca: readFileSync("./outer-proxy.pem"), rejectUnauthorized: true }'));
-      assert(text.includes('SERVERWARE_ISSUE_TITLE') && text.includes('SERVERWARE_COMMENT_BODY'));
+      assert(text.includes('CATCHPLATE_ISSUE_TITLE') && text.includes('CATCHPLATE_COMMENT_BODY'));
       assert.equal(observed.grants.length, 1); assert.equal(observed.creates.length, 0);
       assert.equal(state.rules[0].operation_bundle, WRITE); assert.deepEqual(state.rules[0].methods, ['GET', 'POST']);
     })],
@@ -266,7 +266,7 @@ async function main() {
   assert.equal(process.argv.length, 2, 'No live target, selector or execution arguments are accepted');
   const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
   console.log(JSON.stringify(pureChecks()));
-  const directory = '/srv/catchplate-fast/projects/serverware-operator-artifacts'; assert((await stat(directory)).isDirectory());
+  const directory = '/srv/catchplate-fast/projects/catchplate-operator-artifacts'; assert((await stat(directory)).isDirectory());
   artifacts = await mkdtemp(join(directory, 'github-browser-synthetic-'));
   console.log(JSON.stringify({artifactDirectory: artifacts, pureGroups: 1, renderedGroups: tests.length}));
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');

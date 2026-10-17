@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.dev/schemas/public-webauthn-revocation-authorization.v1.schema.json",
+  "$id": "https://catchplate.dev/schemas/public-webauthn-revocation-authorization.v1.schema.json",
   "title": "Measured public WebAuthn revocation authorization aggregate",
   "description": "At most 262144 canonical ensure_ascii JSON bytes. Produced only by the measured verifier from the independently enrolled caller original. Signature, exact original request and configuration, current roles, complete authenticated cascade, clocks and one-use protected execution remain runtime requirements. Null assertion is valid only when the independently enrolled current policy does not require MFA. This does not widen assertion-only v4.",
   "type": "object", "additionalProperties": false,
   "required": ["schema", "operation", "operationId", "requestDigest", "capabilityId", "actor", "policy", "payloadDigest", "approval", "assertion", "verifierIdentity", "verifiedAtEpochNs", "expiresAtEpochNs", "signatureBase64Url"],
   "properties": {
-    "schema": {"const": "serverware.publicWebAuthnRevocationAuthorization/v1"},
+    "schema": {"const": "catchplate.publicWebAuthnRevocationAuthorization/v1"},
     "operation": {"const": "webauthn.credential.revoke"},
     "operationId": {"$ref": "#/$defs/digest"}, "requestDigest": {"$ref": "#/$defs/digest"},
     "capabilityId": {"$ref": "#/$defs/digest"}, "payloadDigest": {"$ref": "#/$defs/digest"},

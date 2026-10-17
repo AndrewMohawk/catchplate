@@ -10,7 +10,7 @@ authority grant or evidence of a successful live drain.
 
 The actual independently signed measured configuration must carry
 `credentialCurrentnessPolicy`, schema
-`serverware.credentialCurrentnessAuthorityPolicy/v1`. Its exact seven fields
+`catchplate.credentialCurrentnessAuthorityPolicy/v1`. Its exact seven fields
 are schema, deployment ID, control-plane configuration digest, original
 operation maximum (1–30 seconds), fixed maximum holder inventory (64), native
 trust roots, and independently assigned holders. The verifier and planner each
@@ -31,7 +31,7 @@ the binary expectation's meaning; it is not an extra signed NSM field.
 
 The envelope is exactly `statement`, `signature`, `nativeKeyEvidence`.
 The eighteen-field statement has profile
-`serverware.nativeCredentialCurrentnessStatement/v1`, phase `register` or
+`catchplate.nativeCredentialCurrentnessStatement/v1`, phase `register` or
 `ack`, exact credential/version/epoch, independently assigned holder/boot/key,
 one-use challenge, deployment/policy/binary and original time bounds. Epoch
 equals credential version. Barrier ID/hash are null only for registration.
@@ -39,10 +39,10 @@ Signature is `ed25519:` plus canonical base64url of the signature over the
 statement schema, NUL and sorted Python-ASCII JSON, including escaped DEL.
 
 The holder ID is SHA-256 of
-`serverware/credential-currentness-holder/v1\0`, boot32 and SPKI-SHA32.
+`catchplate/credential-currentness-holder/v1\0`, boot32 and SPKI-SHA32.
 The actual role-4 raw Ed25519 NSM document is verified using the unchanged
 COSE/chain/PCR implementation. Its nonce is SHA-256 of
-`serverware/credential-currentness-attestation/v1\0`, challenge32,
+`catchplate/credential-currentness-attestation/v1\0`, challenge32,
 SHA-256(statement ASCII) and raw signature64. The wrapper enforces the original
 role-4 key userdata, boot/CP-key commitment and quoted public key. A copied
 success object cannot substitute for this original verification.

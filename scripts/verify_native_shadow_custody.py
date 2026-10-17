@@ -10,7 +10,7 @@ import sys
 def main():
     if len(sys.argv) != 1 or sys.flags.isolated != 1 or sys.flags.ignore_environment != 1:
         raise ValueError("native shadow verifier requires isolated fixed invocation")
-    from serverware.native_shadow_nitro_verifier import run
+    from catchplate.native_shadow_nitro_verifier import run
     result = run()
     sys.stdout.buffer.write(result)
     sys.stdout.buffer.flush()

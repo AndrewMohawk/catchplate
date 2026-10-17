@@ -15,7 +15,7 @@ from pathlib import Path
 import re
 import stat
 
-API_VERSION = "serverware.nativePilotConductorRuntime/v1"
+API_VERSION = "catchplate.nativePilotConductorRuntime/v1"
 MAX_ENTRIES = 50000
 MAX_DEPTH = 32
 MAX_FILE_BYTES = 128 * 1024 * 1024
@@ -25,12 +25,12 @@ MAX_SYMLINK_HOPS = 40
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 SOURCE_FIELDS = ("revision", "source_tree_digest", "source_manifest_digest",
                  "source_archive_digest", "source_date_epoch")
-SOURCE_MANIFEST = "usr/share/serverware/source-manifest.json"
+SOURCE_MANIFEST = "usr/share/catchplate/source-manifest.json"
 INTERPRETER = "runtime/python/bin/python3"
 ENTRYPOINT = "app/scripts/native_pilot_runtime_entrypoint.py"
 CONDUCTOR = "app/scripts/run_native_pilot.py"
 COMMAND = ["/" + INTERPRETER, "-I", "-B", "/" + ENTRYPOINT, "--run-native-pilot"]
-AUTHORITY_API_VERSION = "serverware.nativePilotAuthorityRuntime/v1"
+AUTHORITY_API_VERSION = "catchplate.nativePilotAuthorityRuntime/v1"
 AUTHORITY_TARGET = "native-pilot-authority-artifact"
 AUTHORITY_ENTRYPOINT = "authority/app/scripts/native_pilot_authority_runtime_entrypoint.py"
 AUTHORITY_FILES = (
@@ -50,7 +50,7 @@ AUTHORITY_FILES = (
     "scripts/authority/prepare_native_pilot_closure_set.py",
 )
 AUTHORITY_COMMAND = ["/" + INTERPRETER, "-I", "-B", "/" + AUTHORITY_ENTRYPOINT, "--run-native-pilot"]
-SUPERVISOR_API_VERSION = "serverware.nativePilotSupervisorRuntime/v1"
+SUPERVISOR_API_VERSION = "catchplate.nativePilotSupervisorRuntime/v1"
 SUPERVISOR_TARGET = "native-pilot-supervisor-artifact"
 SUPERVISOR_ENTRYPOINT = "supervisor/app/scripts/native_pilot_supervisor_runtime_entrypoint.py"
 SUPERVISOR_FILES = (
@@ -294,7 +294,7 @@ def _bind_source(observed, source, *, authority=False, supervisor=False):
              "exported source manifest does not match the build's exact original pin")
     contract = json.loads(raw.decode("ascii"), object_pairs_hook=_object)
     _require(isinstance(contract, dict) and _canonical(contract) + b"\n" == raw
-             and contract.get("apiVersion") == "serverware.sourceArchive/v1"
+             and contract.get("apiVersion") == "catchplate.sourceArchive/v1"
              and contract.get("identityMode") == "production-commit"
              and contract.get("productionReleaseEligible") is True
              and contract.get("commit") == source["revision"]
@@ -304,7 +304,7 @@ def _bind_source(observed, source, *, authority=False, supervisor=False):
     tree = contract.get("sourceTreeManifest")
     archive = contract.get("archive")
     _require(isinstance(tree, dict) and _sha(_canonical(tree)) == source["source_tree_digest"]
-             and tree.get("version") == "serverware.sourceTree/v3"
+             and tree.get("version") == "catchplate.sourceTree/v3"
              and tree.get("identityMode") == "production-commit"
              and tree.get("productionReleaseEligible") is True
              and tree.get("commit") == source["revision"]
@@ -322,7 +322,7 @@ def _bind_source(observed, source, *, authority=False, supervisor=False):
         _path(path)
         _require(path not in seen, "runtime source manifest contains duplicate paths")
         seen.add(path)
-        if (path.startswith("serverware/") or path in (ENTRYPOINT[4:], CONDUCTOR[4:])
+        if (path.startswith("catchplate/") or path in (ENTRYPOINT[4:], CONDUCTOR[4:])
                 or (with_authority and path in AUTHORITY_FILES) or (supervisor and path in SUPERVISOR_FILES)):
             _require(entry.get("type") == "file" and entry.get("mode") in ("100644", "100755")
                      and type(entry.get("bytes")) is int and 0 <= entry["bytes"] <= MAX_FILE_BYTES
@@ -403,9 +403,9 @@ def _inventory(root: Path, metadata: dict, *, authority: bool, supervisor=False)
         for path, record in observed.records.items():
             if record["type"] == "symlink":
                 record["resolvedPath"] = observed.resolve(path)
-        for path in ("app", "app/serverware", "app/scripts", "runtime", "runtime/python", "vendor"):
+        for path in ("app", "app/catchplate", "app/scripts", "runtime", "runtime/python", "vendor"):
             _require(observed.records.get(path, {}).get("type") == "directory", "fixed runtime directory is absent")
-        _require(observed.children["app"] == {"serverware", "scripts"}
+        _require(observed.children["app"] == {"catchplate", "scripts"}
                  and observed.children["app/scripts"] == {"run_native_pilot.py", "native_pilot_runtime_entrypoint.py"},
                  "conductor application layout differs from the source-fixed target")
         if authority or supervisor:

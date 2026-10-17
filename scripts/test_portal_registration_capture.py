@@ -16,8 +16,8 @@ from unittest.mock import Mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-APP = (ROOT / "serverware/app.py").read_text()
-FRAGMENT = (ROOT / "serverware/portal_registration_capture.py").read_text()
+APP = (ROOT / "catchplate/app.py").read_text()
+FRAGMENT = (ROOT / "catchplate/portal_registration_capture.py").read_text()
 
 
 def literal(source, name):
@@ -38,7 +38,7 @@ def javascript(source, name):
 
 class RegistrationCaptureControl(unittest.TestCase):
     def test_registration_options_offer_security_key_without_changing_authority_or_freshness(self):
-        tree = ast.parse((ROOT / "serverware/webauthn.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/webauthn.py").read_text())
         function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                         and node.name == "registration_options")
         canonical = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"))
@@ -78,16 +78,16 @@ class RegistrationCaptureControl(unittest.TestCase):
         self.assertEqual(stored["scope_key"], prefixed(canonical({
             "authorization": authorization, "label": "synthetic-key", "user_id": "synthetic-user"
         }).encode()))
-        self.assertEqual(value["serverware"], {"authorizationMode": authorization["mode"],
+        self.assertEqual(value["catchplate"], {"authorizationMode": authorization["mode"],
                                               "payloadDigest": authorization["payload_digest"]})
 
     def test_explicit_cookie_capture_retains_only_real_202_locator_and_refuses_stale_work(self):
         ui = literal(APP, "UI_HTML")
         script = literal(FRAGMENT, "REGISTRATION_CAPTURE_SCRIPT")
         html = literal(FRAGMENT, "REGISTRATION_CAPTURE_HTML")
-        self.assertIn("from serverware.portal_registration_capture import REGISTRATION_CAPTURE_HTML, REGISTRATION_CAPTURE_SCRIPT", APP)
+        self.assertIn("from catchplate.portal_registration_capture import REGISTRATION_CAPTURE_HTML, REGISTRATION_CAPTURE_SCRIPT", APP)
         for name in ("HTML", "SCRIPT"):
-            marker = "__SERVERWARE_REGISTRATION_CAPTURE_" + name + "__"
+            marker = "__CATCHPLATE_REGISTRATION_CAPTURE_" + name + "__"
             self.assertEqual(ui.count(marker), 1)
             self.assertIn(f'("{marker}", REGISTRATION_CAPTURE_{name})', APP)
         self.assertIn("initRegistrationCapture();", ui)
@@ -128,7 +128,7 @@ const digest='sha256:'+'a'.repeat(64),old='sha256:'+'b'.repeat(64);
 function fixture(){
   const f={events:[],posts:[],bootstrap:'synthetic-bootstrap-only-01234567890123456789',
     hook:null,clock:10,timers:new Map(),nextTimer:0,
-    preparation:{schema:'serverware.webAuthnRegistrationExecutionPreparation/v1',
+    preparation:{schema:'catchplate.webAuthnRegistrationExecutionPreparation/v1',
       status:'retained-execution-grant',purpose:'authorize-registration-evidence-execution',
       localDigest:digest,registrationCompleted:false,executionStarted:false},prepareStatus:202};
   const elements=new Map();
@@ -156,8 +156,8 @@ function fixture(){
       assert.ok(phase,'no alternate/legacy/execute/activation route');
       if(phase!=='csrf'){
         assert.equal(options.method,'POST');
-        assert.deepEqual(Object.keys(options.headers).sort(),['Content-Type','X-Serverware-CSRF-Token']);
-        assert.equal(options.headers['X-Serverware-CSRF-Token'],'synthetic-csrf');
+        assert.deepEqual(Object.keys(options.headers).sort(),['Content-Type','X-Catchplate-CSRF-Token']);
+        assert.equal(options.headers['X-Catchplate-CSRF-Token'],'synthetic-csrf');
         f.posts.push({phase,body:JSON.parse(options.body)});
       }
       await checkpoint('fetch:'+phase);
@@ -166,7 +166,7 @@ function fixture(){
         if(phase==='csrf')return {token:'synthetic-csrf'};
         if(phase==='prepare')return structuredClone(f.preparation);
         return {publicKey:{challenge:'YQ',user:{id:'Yg'},timeout:300000},
-          serverware:{authorizationMode:'oidc-session-first-enrollment'}};}};
+          catchplate:{authorizationMode:'oidc-session-first-enrollment'}};}};
     }};
   vm.createContext(ctx);
   vm.runInContext(`

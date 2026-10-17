@@ -2,10 +2,10 @@
 //! measured helper; no generic decrypt or caller recipient constructor exists.
 use super::*;
 
-pub const CONFIGURATION: &str = "serverware.nativeSecretBrokerConfiguration/v2";
-const HISTORY_CHANNEL: &str = "serverware.nativeHistoricalBrokerChannel/v1";
-const REQUEST: &str = "serverware.nativeHistoricalBrokerKmsRecipientRequest/v1";
-const RESPONSE: &str = "serverware.nativeHistoricalBrokerKmsRecipientCiphertext/v1";
+pub const CONFIGURATION: &str = "catchplate.nativeSecretBrokerConfiguration/v2";
+const HISTORY_CHANNEL: &str = "catchplate.nativeHistoricalBrokerChannel/v1";
+const REQUEST: &str = "catchplate.nativeHistoricalBrokerKmsRecipientRequest/v1";
+const RESPONSE: &str = "catchplate.nativeHistoricalBrokerKmsRecipientCiphertext/v1";
 const MAX_CONFIGURATION: usize = 256 * 1024;
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -36,7 +36,7 @@ impl ConfigurationV2 {
     fn primary(&self) -> Configuration {
         // Data decomposition only. The original v2 commitment is retained and
         // installed in the real primary recipient request before its quote.
-        Configuration { api_version: "serverware.nativeSecretBrokerConfiguration/v1".to_owned(),
+        Configuration { api_version: "catchplate.nativeSecretBrokerConfiguration/v1".to_owned(),
             kms_parent_port: self.kms_parent_port, kms_key_id: self.kms_key_id.clone(),
             ciphertext_blob_sha256: self.ciphertext_blob_sha256.clone(), encryption_context: self.encryption_context.clone(),
             kek_sha256: self.kek_sha256.clone(), secret_kek_id: self.secret_kek_id.clone(), helper_image: self.helper_image.clone() }
@@ -49,7 +49,7 @@ impl ConfigurationV2 {
         let mut previous: Option<&str> = None;
         let mut ids = std::collections::BTreeSet::from([self.secret_kek_id.as_str()]);
         for entry in &self.historical_keys {
-            let shape = Configuration { api_version: "serverware.nativeSecretBrokerConfiguration/v1".to_owned(),
+            let shape = Configuration { api_version: "catchplate.nativeSecretBrokerConfiguration/v1".to_owned(),
                 kms_parent_port: self.kms_parent_port, kms_key_id: entry.kms_key_id.clone(),
                 ciphertext_blob_sha256: entry.ciphertext_blob_sha256.clone(), encryption_context: entry.encryption_context.clone(),
                 kek_sha256: entry.kek_sha256.clone(), secret_kek_id: entry.secret_kek_id.clone(), helper_image: self.helper_image.clone() };

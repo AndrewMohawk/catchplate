@@ -17,9 +17,9 @@ production-verified.
 
 ## Fixed purpose and originals
 
-The new [bootstrap](../serverware/oidc_session_activation_delivery_completion_custody_bootstrap.py)
-uses `serverware.signedOidcSessionActivationDeliveryCompletionCustody/v1` and the
-matching `serverware.oidcSessionActivationDeliveryCompletionCustody/v1` payload.
+The new [bootstrap](../catchplate/oidc_session_activation_delivery_completion_custody_bootstrap.py)
+uses `catchplate.signedOidcSessionActivationDeliveryCompletionCustody/v1` and the
+matching `catchplate.oidcSessionActivationDeliveryCompletionCustody/v1` payload.
 Its fixed consumer role is `consume-completion-history`, process mode
 `oidc-session-activation-delivery-completion`, and UID/GID **65497** with empty
 supplementary groups. Admission rejects collisions with independently configured
@@ -73,7 +73,7 @@ consume execution.
 
 ## Actual private owner
 
-[`OidcSessionActivationDeliveryCompletionCustody`](../serverware/authority_oidc_session_activation_delivery_completion_custody.py)
+[`OidcSessionActivationDeliveryCompletionCustody`](../catchplate/authority_oidc_session_activation_delivery_completion_custody.py)
 requires the four originals, independent root and receiver identity, actual
 consume execution-bundle/historical-bundle/delivery AES keys, and the original
 `work`, `live_window` and `transport_deadline_ns`. It genuinely constructs the

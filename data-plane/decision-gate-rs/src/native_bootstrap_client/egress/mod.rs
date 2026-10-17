@@ -36,7 +36,7 @@ mod host;
 use super::{config, ensure, native_verifier, originals::{ArtifactV1, HeldOriginal},
     transport::Connection, OriginalClock};
 use serde::{Deserialize, Serialize};
-use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
+use catchplate_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
 use std::fs::File;
@@ -276,7 +276,7 @@ pub(super) fn bind(pending: Pending, proof: native_verifier::BootstrapInstallati
         &mut token, configuration_raw)?;
     let commitments = bound.commitments;
     let mut creation_scope = Sha256::new();
-    creation_scope.update(b"serverware/native-egress-creation-operation/v1\0");
+    creation_scope.update(b"catchplate/native-egress-creation-operation/v1\0");
     for commitment in commitments { creation_scope.update(commitment); }
     let precreation = Arc::new(PrecreationOwner { clock: bound.clock, connection: bound.connection,
         proof: RefCell::new(bound.proof), host: RefCell::new(bound.host), launch: RefCell::new(pending.launch),
@@ -296,13 +296,13 @@ pub(super) fn bind(pending: Pending, proof: native_verifier::BootstrapInstallati
         "native egress child namespace is not newly separate from the launcher")?;
     let child_original = canonical_ascii_bytes(&child.identity())?;
     let mut slot = Sha256::new();
-    slot.update(b"serverware/native-egress-installation-slot/v1\0");
+    slot.update(b"catchplate/native-egress-installation-slot/v1\0");
     for scalar in [grant.journal.namespace.as_bytes(), grant.capability.capability_id.as_bytes()] {
         slot.update((scalar.len() as u64).to_be_bytes()); slot.update(scalar);
     }
     let reservation_id = slot.finalize().into();
     let mut association = Sha256::new();
-    association.update(b"serverware/native-egress-installation-operation/v1\0");
+    association.update(b"catchplate/native-egress-installation-operation/v1\0");
     for commitment in commitments { association.update(commitment); }
     association.update(digest(&child_original));
     let association_sha256 = association.finalize().into();

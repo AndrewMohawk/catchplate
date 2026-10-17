@@ -17,9 +17,9 @@ sys.path.insert(0, str(ROOT))
 
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        os.environ["SERVERWARE_DATA_DIR"] = tmp
-        import serverware.config as config
-        import serverware.ca_material as ca_material
+        os.environ["CATCHPLATE_DATA_DIR"] = tmp
+        import catchplate.config as config
+        import catchplate.ca_material as ca_material
 
         importlib.reload(config)
         importlib.reload(ca_material)

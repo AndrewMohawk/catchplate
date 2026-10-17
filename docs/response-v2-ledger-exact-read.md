@@ -1,6 +1,6 @@
 # Guest ledger exact retrieval
 
-Optional cold `ledgerExactRead: {"apiVersion":"serverware.responseV2.ledgerExactRead/v1"}`
+Optional cold `ledgerExactRead: {"apiVersion":"catchplate.responseV2.ledgerExactRead/v1"}`
 selects a purpose-specific read connection. Missing profile preserves the old
 host adapter; explicit null, an absent genuine guest delivery, or a failed guest
 connection never falls back to local filesystem access. The independently

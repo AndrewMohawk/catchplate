@@ -70,9 +70,9 @@ class OperatorHighWaterReadTests(unittest.TestCase):
         self.addCleanup(self.stack.close)
         for target in ("socket.socket", "socket.create_connection", "socket.getaddrinfo"):
             self.stack.enter_context(patch(target, side_effect=AssertionError("SQLite unit test attempted network I/O")))
-        from serverware import db, operator_demo, operator_demo_store
+        from catchplate import db, operator_demo, operator_demo_store
         self.db, self.store = db, operator_demo_store
-        directory = self.stack.enter_context(tempfile.TemporaryDirectory(prefix="serverware-high-water-unit-"))
+        directory = self.stack.enter_context(tempfile.TemporaryDirectory(prefix="catchplate-high-water-unit-"))
         self.path = Path(directory) / "synthetic.sqlite3"
         self.bundle = '{"syntheticOnly":true,"canary":"' + "synthetic-bundle-not-selected-" * 4096 + '"}'
         self.first_hash = "sha256:" + hashlib.sha256(self.bundle.encode()).hexdigest()
@@ -108,7 +108,7 @@ class OperatorHighWaterReadTests(unittest.TestCase):
         return conn
 
     def expected(self, *, sequence=7, policy_hash=None, updated_at=None):
-        return {"policy_id": "serverware-operator-demo", "sequence": sequence, "rollback_epoch": 1,
+        return {"policy_id": "catchplate-operator-demo", "sequence": sequence, "rollback_epoch": 1,
                 "policy_hash": self.first_hash if policy_hash is None else policy_hash,
                 "updated_at": self.first_time if updated_at is None else updated_at}
 

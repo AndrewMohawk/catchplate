@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-policy-canary-cumulative-checkpoint.v1.schema.json",
+  "$id": "https://catchplate.invalid/schemas/native-policy-canary-cumulative-checkpoint.v1.schema.json",
   "title": "Complete retained native receipt-prefix checkpoint",
   "$comment": "Closed native record15/accounting12. Maximum canonical record 786432 bytes; original receipt array <=524288 bytes, each receipt <=65536 bytes. Every original signature, exact load baseline, contiguous predecessor, complete roots/counters and current separately assigned heartbeat are verified. Existing complete protected journal proves predecessor and prior heartbeat/compaction consumption. No readiness, final seal, drain, client receipt or complete fleet claim. Legacy Fleet profiles remain unchanged.",
   "$ref": "#/$defs/event",
@@ -13,7 +13,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "canary_id", "instance_id", "boot_id", "assignment_envelope_digest", "assignment_payload_digest", "load_receipt_envelope_digest", "publication_envelope_digest", "checkpoint_sequence", "previous_checkpoint_sha256", "heartbeat", "heartbeat_sha256", "interval_receipt_sha256", "accounting", "signing_public_keys"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeCumulativeCheckpoint/v1"},
+        "apiVersion": {"const": "catchplate.nativeCumulativeCheckpoint/v1"},
         "canary_id": {"$ref": "#/$defs/sha256"},
         "instance_id": {"type": "string", "minLength": 1, "maxLength": 256},
         "boot_id": {"$ref": "#/$defs/sha256"},
@@ -89,7 +89,7 @@
       "type": "object", "additionalProperties": false,
       "required": ["apiVersion", "generationId", "checkpointSequence", "baselineEventOrdinal", "lastEventOrdinal", "lastHeadSha256", "originalCount", "counters", "heartbeatSha256", "recordSha256", "coverage"],
       "properties": {
-        "apiVersion": {"const": "serverware.nativeCumulativeCheckpoint/v1"}, "generationId": {"$ref": "#/$defs/sha256"},
+        "apiVersion": {"const": "catchplate.nativeCumulativeCheckpoint/v1"}, "generationId": {"$ref": "#/$defs/sha256"},
         "checkpointSequence": {"type": "integer", "minimum": 1, "maximum": 32},
         "baselineEventOrdinal": {"$ref": "#/$defs/nonnegative"}, "lastEventOrdinal": {"$ref": "#/$defs/positive"},
         "lastHeadSha256": {"$ref": "#/$defs/sha256"}, "originalCount": {"type": "integer", "minimum": 1, "maximum": 64},

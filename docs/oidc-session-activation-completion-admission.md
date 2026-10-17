@@ -8,7 +8,7 @@ provisioning evidence is claimed.
 
 ## Originals and independent scope
 
-[`authority_oidc_session_activation_completion_admission`](../serverware/authority_oidc_session_activation_completion_admission.py)
+[`authority_oidc_session_activation_completion_admission`](../catchplate/authority_oidc_session_activation_completion_admission.py)
 exposes the fixed-operation `_admit_on_work`. Inputs are the exact signed plan
 and encrypted bundle (raw2), closed request/scope/journal expectations, original
 caller authorization and caller/grant/current-root enrollments, original grant,

@@ -145,7 +145,7 @@ impl BodyCaptureV12 {
             let worker_failed = Arc::clone(&failed);
             let worker_completed = Arc::clone(&completed);
             std::thread::Builder::new()
-                .name("serverware-docker-body-capture-v12".to_owned())
+                .name("catchplate-docker-body-capture-v12".to_owned())
                 .spawn(move || {
                     // A panic must wake the concurrent start/wait transport
                     // just as a normal capture error does.

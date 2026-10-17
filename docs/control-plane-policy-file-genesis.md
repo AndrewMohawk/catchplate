@@ -8,7 +8,7 @@ for this source-only slice. O05 is not complete.
 ## Positive authority
 
 The existing genesis producer must already have independently verified its signed
-`serverware.policyAuthorityGenesis/v1` preparation, included its real transition
+`catchplate.policyAuthorityGenesis/v1` preparation, included its real transition
 in the audit ledger, and finalized its committed publication/high-water tuple.
 The new read-lock function positively joins:
 
@@ -30,7 +30,7 @@ Caller-supplied success metadata and local absence cannot substitute.
 Normal production startup still requires an active signed policy file. First
 publication instead uses the explicit root entrypoint argument
 `control-plane --policy-file-genesis-maintenance`. Its source-fixed successor is
-`serverware.control_plane_policy_genesis_runner`; no incoming request or plain
+`catchplate.control_plane_policy_genesis_runner`; no incoming request or plain
 environment boolean can enter it. Both the normal runner and ordinary app lifespan
 reject a maintenance custody profile. The restricted runner never calls the
 ordinary application lifespan or starts runtime, provider, release, CA publisher
@@ -40,8 +40,8 @@ The offline producer
 `control_plane_policy_genesis_bootstrap.sign_configuration(configuration,
 maintenance, runtime_root_private_key=...)` takes the existing v1 custody base
 and an explicit ten-field maintenance object. It creates
-`serverware.controlPlaneCustodyStartup/v3`, exact twelve fields, under the separate
-`serverware/control-plane-policy-genesis-maintenance/v1` plus NUL domain.
+`catchplate.controlPlaneCustodyStartup/v3`, exact twelve fields, under the separate
+`catchplate/control-plane-policy-genesis-maintenance/v1` plus NUL domain.
 The existing admitted root-owned sealed configuration FD is reused; no new
 signing key, browser-selected root or secret descriptor is introduced. The
 original signature covers the actual runtime configuration digest, source,
@@ -102,7 +102,7 @@ unpadded canonical base64url original decodes to at most 16MiB. The source deriv
 binding in `schemas/control-plane-policy-file-genesis.v1.schema.json`.
 
 Use `/api/policy/file-publication/webauthn/options` with
-`serverware.policyFileApprovalOptions/v1`, distinct action
+`catchplate.policyFileApprovalOptions/v1`, distinct action
 `policy.file.genesis.materialize`, resource `active-policy-file`, complete binding
 and its canonical digest. Current authenticated OIDC `policy_publisher` and CSRF
 are required. Requester and a different publisher perform fresh hardware/YubiKey
@@ -114,13 +114,13 @@ There is no assertion reuse, approval substitution or automatic request retry.
 
 ## Separate connection and writer fence
 
-The fixed role `serverware_policy_file_genesis_materializer` has only schema USAGE
-and `serverware_policy_file_genesis_lock(text,text)`. Offline protected-store
+The fixed role `catchplate_policy_file_genesis_materializer` has only schema USAGE
+and `catchplate_policy_file_genesis_lock(text,text)`. Offline protected-store
 bootstrap admits no relation/sequence rights, inheritance, DML, CREATE, TEMPORARY,
 generic SQL or activation access for it. Operators must provision this separate
 role/connection; HTTP does not. The protected UTF-8 DSN file is selected by
-`SERVERWARE_POLICY_FILE_GENESIS_DSN_PATH` and
-`SERVERWARE_POLICY_FILE_GENESIS_DSN_SHA256`.
+`CATCHPLATE_POLICY_FILE_GENESIS_DSN_PATH` and
+`CATCHPLATE_POLICY_FILE_GENESIS_DSN_SHA256`.
 
 The owner retains actual named/held DSN identities and bytes, environment pins,
 effective privileges and exact function metadata/source. The function takes the

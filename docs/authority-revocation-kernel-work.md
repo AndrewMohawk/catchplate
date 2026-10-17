@@ -3,7 +3,7 @@
 ## Scope
 
 The private measured transition in
-[`authority_transition_webauthn.py`](../serverware/authority_transition_webauthn.py)
+[`authority_transition_webauthn.py`](../catchplate/authority_transition_webauthn.py)
 executes the actual unregistered self-revocation kernel using an enclosing
 computation's remaining `_ValidationWork`. Public transition and cascade entry
 points retain their unmetered behavior. Helpers create no fresh allowance,

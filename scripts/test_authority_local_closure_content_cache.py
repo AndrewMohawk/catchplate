@@ -24,8 +24,8 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts.test_authority_local_closure import elf_bytes
-from serverware import authority_local_artifact_measure as measure
-from serverware import authority_local_closure as local
+from catchplate import authority_local_artifact_measure as measure
+from catchplate import authority_local_closure as local
 
 
 class ClosureContentCacheTests(unittest.TestCase):

@@ -11,8 +11,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_contract as authority
-from serverware.authority_store import challenge_execution_privileges as source
+from catchplate import authority_contract as authority
+from catchplate.authority_store import challenge_execution_privileges as source
 
 
 class ChallengeExecutionPrivilegeControls(unittest.TestCase):
@@ -74,7 +74,7 @@ class ChallengeExecutionPrivilegeControls(unittest.TestCase):
             pass
         for role in (None, True, b"issuer", Subclass(source.contract.ISSUER_ROLE),
                 authority.SUCCESSOR_ISSUER_ROLE, authority.SUCCESSOR_EXECUTOR_ROLE,
-                authority.SUCCESSOR_RECOVERY_ROLE, "serverware_policy_authority_planner_writer"):
+                authority.SUCCESSOR_RECOVERY_ROLE, "catchplate_policy_authority_planner_writer"):
             with self.subTest(role=role), self.assertRaises(ValueError):
                 source.challenge_execution_privilege_check(role=role, namespace="metadata")
         for namespace in (None, True, b"metadata", Subclass("metadata"), "", "a\x00b", "\ud800",

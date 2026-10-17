@@ -1,8 +1,8 @@
 {
-  "apiVersion": "serverware.policy/v1",
+  "apiVersion": "catchplate.policy/v1",
   "kind": "PolicyBundle",
   "metadata": {
-    "id": "serverware-npm-weekday-hours-example",
+    "id": "catchplate-npm-weekday-hours-example",
     "sequence": 1,
     "rollbackEpoch": 1
   },
@@ -28,7 +28,7 @@
           "example-agent.agents.example.test"
         ],
         "sanUris": [
-          "urn:serverware:agent:example"
+          "urn:catchplate:agent:example"
         ],
         "certificateSha256": "sha256:c2a5140ef6d8a3bc5472798f00b4bd22d33826d0a7d17724e68a4bb86b87c21f",
         "spkiSha256": "sha256:1f4d8c8b7a3e90d2c6f547ab16a0be23447b7bb192332eec9b3f76c93ad283fe",

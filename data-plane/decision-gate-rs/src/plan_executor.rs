@@ -60,13 +60,13 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 
 const EXECUTOR_EVIDENCE_VERSION: &str =
-    "serverware/controller-plan-executor-evidence/v12";
+    "catchplate/controller-plan-executor-evidence/v12";
 const EXECUTOR_RESULT_VERSION: &str =
-    "serverware/controller-plan-executor-result/v12";
+    "catchplate/controller-plan-executor-result/v12";
 const PROXY_PAYLOAD_VERSION: &str =
-    "serverware/controller-plan-proxy-payload/v12";
+    "catchplate/controller-plan-proxy-payload/v12";
 const EXECUTOR_RPC_FD_ENV: &str =
-    "SERVERWARE_CONTROLLER_PLAN_V12_RPC_FD";
+    "CATCHPLATE_CONTROLLER_PLAN_V12_RPC_FD";
 const MAX_INVOCATION_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ATTACHED_FDS: usize = 8;
 const F_GET_SEALS_VALUE: libc::c_int = 1034;
@@ -751,7 +751,7 @@ pub fn run_cli() -> PlanResult<()> {
             })
         }
         _ => Err(PlanProtocolError::Invalid(
-            "usage: serverware-coder-plan execute-logical-v12",
+            "usage: catchplate-coder-plan execute-logical-v12",
         )),
     }
 }
@@ -1130,7 +1130,7 @@ fn executor_terminal_evidence(
         );
         let cleanup_intent_sha256 = sha256_bytes(
             &[
-                b"serverware/executor-lane-cleanup-intent/v12\0"
+                b"catchplate/executor-lane-cleanup-intent/v12\0"
                     .as_slice(),
                 invocation.plan.plan_sha256.as_slice(),
                 lane.terminal_sha256.as_slice(),
@@ -1218,7 +1218,7 @@ pub fn run_executor_v12_cli() -> Result<(), String> {
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
     if arguments.len() < 3 || arguments[0] != "--config" {
         return Err(
-            "usage: serverware-coder-plan-executor-v12 --config ABSOLUTE_PATH \
+            "usage: catchplate-coder-plan-executor-v12 --config ABSOLUTE_PATH \
              <health|daemon|run-fixed-phase-v12>"
                 .into(),
         );
@@ -1242,7 +1242,7 @@ pub fn run_executor_v12_cli() -> Result<(), String> {
         .clone()
         .into_runtime()
         .map_err(|error| error.to_string())?;
-    if std::env::var("SERVERWARE_CODER_REQUIRE_PER_INVOCATION_READINESS_V12")
+    if std::env::var("CATCHPLATE_CODER_REQUIRE_PER_INVOCATION_READINESS_V12")
         .as_deref()
         != Ok("1")
     {
@@ -1260,7 +1260,7 @@ pub fn run_executor_v12_cli() -> Result<(), String> {
                 );
             }
             println!(
-                "{{\"version\":\"serverware/coder-plan-executor/v12\",\
+                "{{\"version\":\"catchplate/coder-plan-executor/v12\",\
                  \"config_sha256\":\"{}\",\
                  \"per_invocation_probe_order\":\"docker-upgrade,service-health,chromium,teardown\",\
                  \"readiness_before_repository_work\":true,\
@@ -1368,7 +1368,7 @@ fn run_v12_systemd_daemon() -> Result<(), String> {
         }
         if let Err(error) = result {
             eprintln!(
-                "serverware-coder-plan-executor-v12: rejected controller RPC: {error}"
+                "catchplate-coder-plan-executor-v12: rejected controller RPC: {error}"
             );
         }
     }
@@ -1485,7 +1485,7 @@ fn handle_controller_rpc(
     let evidence = execute_invocation(invocation)?;
     let evidence_bytes = canonical_bytes(&evidence)?;
     let evidence_fd = create_sealed_memfd_v12(
-        "serverware-plan-executor-evidence-v12",
+        "catchplate-plan-executor-evidence-v12",
         &evidence_bytes,
     )?;
     let response_header =
@@ -1609,7 +1609,7 @@ pub struct ExecutorStaticConfigurationV12 {
 }
 
 impl ExecutorStaticConfigurationV12 {
-    pub const VERSION: &'static str = "serverware/coder-plan-executor-config/v12";
+    pub const VERSION: &'static str = "catchplate/coder-plan-executor-config/v12";
 
     fn validate(&self) -> Result<(), String> {
         if self.version != Self::VERSION
@@ -1708,7 +1708,7 @@ pub struct DurableOperationRecordV12 {
 }
 
 impl DurableOperationRecordV12 {
-    const VERSION: &'static str = "serverware/plan-proxy-operation-ledger/v12";
+    const VERSION: &'static str = "catchplate/plan-proxy-operation-ledger/v12";
 
     fn verify(
         &self,
@@ -1786,7 +1786,7 @@ impl DurableOperationRecordV12 {
             .map_err(|_| "durable operation signature is not base64")?;
         let signature = ed25519_dalek::Signature::from_slice(&signature_bytes)
             .map_err(|_| "durable operation signature is not valid Ed25519")?;
-        let mut signed = b"serverware/plan-proxy-operation-ledger/v12\0".to_vec();
+        let mut signed = b"catchplate/plan-proxy-operation-ledger/v12\0".to_vec();
         signed.extend_from_slice(
             hex::encode(self.canonical_record_sha256).as_bytes(),
         );
@@ -2028,8 +2028,8 @@ fn pin_executor_configuration(path: &std::path::Path) -> Result<String, String> 
         return Err("executor configuration size is outside the allowed range".into());
     }
     let digest = hex::encode(sha2::Sha256::digest(&bytes));
-    let expected = std::env::var("SERVERWARE_CODER_PLAN_EXECUTOR_CONFIG_SHA256")
-        .map_err(|_| "SERVERWARE_CODER_PLAN_EXECUTOR_CONFIG_SHA256 is not set")?;
+    let expected = std::env::var("CATCHPLATE_CODER_PLAN_EXECUTOR_CONFIG_SHA256")
+        .map_err(|_| "CATCHPLATE_CODER_PLAN_EXECUTOR_CONFIG_SHA256 is not set")?;
     if expected.len() != 64
         || !expected
             .bytes()
@@ -2101,7 +2101,7 @@ fn verify_service_instances(
                 ));
             }
             trust.verify_domain(
-                b"serverware/service-instance-signature/v12\0",
+                b"catchplate/service-instance-signature/v12\0",
                 &service.signer_key_id,
                 &service.instance_sha256,
                 &service.signature,
@@ -2939,7 +2939,7 @@ fn verify_terminal_destruction_receipt_v12(
         serde_json::from_slice(exact)?;
     if canonical_bytes(&receipt)? != exact
         || receipt.version
-            != "serverware/private-dind-terminal-destruction/v12"
+            != "catchplate/private-dind-terminal-destruction/v12"
         || receipt.trust_profile
             != "trusted-host-userspace-digest-no-ima"
         || &receipt.plan_id != plan_id
@@ -3024,7 +3024,7 @@ fn verify_terminal_destruction_receipt_v12(
     signature_projection.receipt_sha256 = [0; 32];
     key.verify(
         &[
-            b"serverware/private-dind-terminal-receipt/v12\0"
+            b"catchplate/private-dind-terminal-receipt/v12\0"
                 .as_slice(),
             canonical_bytes(&signature_projection)?.as_slice(),
         ]
@@ -3714,11 +3714,11 @@ mod legacy_v11 {
     use std::time::{Duration, Instant};
 
     const CAPABILITY_ENV: &str =
-        "SERVERWARE_CONTROLLER_PLAN_CAPABILITY";
+        "CATCHPLATE_CONTROLLER_PLAN_CAPABILITY";
     const DAEMON_IDENTITY_ENV: &str =
-        "SERVERWARE_CONTROLLER_DAEMON_IDENTITY_SHA256";
+        "CATCHPLATE_CONTROLLER_DAEMON_IDENTITY_SHA256";
     const DEADLINE_ENV: &str =
-        "SERVERWARE_CONTROLLER_DEADLINE_MS";
+        "CATCHPLATE_CONTROLLER_DEADLINE_MS";
 
     pub fn run(arguments: &[String]) -> Result<()> {
         if arguments.len() != 4
@@ -3807,7 +3807,7 @@ mod legacy_v11 {
         let mut output = std::io::stdout().lock();
         writeln!(
             output,
-            "serverware/plan-result/v11 evidence_sha256={} response_sha256={}",
+            "catchplate/plan-result/v11 evidence_sha256={} response_sha256={}",
             digest_hex(&response.evidence_sha256),
             digest_hex(&response.response_sha256),
         )

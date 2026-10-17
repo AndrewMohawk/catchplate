@@ -19,7 +19,7 @@ import threading
 FIXTURE_IP = "93.184.216.34"
 LOOPBACK = "127.0.0.1"
 PROXY_HOST = "proxy.operator-basic.example.test"
-HOSTS = ("127.0.0.1 localhost serverware decision-gate-rs " + PROXY_HOST + "\n"
+HOSTS = ("127.0.0.1 localhost catchplate decision-gate-rs " + PROXY_HOST + "\n"
          + FIXTURE_IP + " api.github.com\n").encode("ascii")
 RESOLV = b"nameserver 127.0.0.1\noptions attempts:1 timeout:1\n"
 NETWORK_ROOT = Path("/fixture-network")
@@ -45,7 +45,7 @@ def assert_isolated_network(*, attached=True):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             probe.bind((FIXTURE_IP, 0))
         for hostname, expected in (("api.github.com", FIXTURE_IP), (PROXY_HOST, LOOPBACK),
-                                   ("serverware", LOOPBACK), ("decision-gate-rs", LOOPBACK)):
+                                   ("catchplate", LOOPBACK), ("decision-gate-rs", LOOPBACK)):
             require({item[4][0] for item in socket.getaddrinfo(
                 hostname, 443, socket.AF_INET, socket.SOCK_STREAM)} == {expected})
 
@@ -93,7 +93,7 @@ def keep_namespace():
     ready = NETWORK_ROOT / "ready"
     descriptor = os.open(ready, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
     with os.fdopen(descriptor, "w", encoding="ascii") as output:
-        json.dump({"schema": "serverware.githubFixtureNetwork/v1", "network": "none",
+        json.dump({"schema": "catchplate.githubFixtureNetwork/v1", "network": "none",
             "interfaces": ["lo"], "address": FIXTURE_IP, "effectiveCapabilities": 0}, output)
         output.flush()
         os.fsync(output.fileno())

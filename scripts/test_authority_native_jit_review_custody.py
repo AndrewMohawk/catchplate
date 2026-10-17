@@ -34,8 +34,8 @@ def no_external_effects(event, _arguments):
 
 
 if __name__ == "__main__":
-    os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
-    os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
+    os.environ["CATCHPLATE_PROCESS_MODE"] = "metadata-bootstrap"
+    os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
     sys.addaudithook(no_external_effects)
 
 import cbor2
@@ -46,21 +46,21 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.x509.oid import NameOID
 from scripts import test_authority_release_private_request as release_fixture
 from scripts import test_native_jit_prepare as preparation_fixture
-from serverware import authority_contract as contract
-from serverware import authority_native_jit_review_assignment as assignment
-from serverware import authority_native_jit_review_custody as custody
-from serverware import authority_release_private_request as private
-from serverware import native_jit_review_material as material
+from catchplate import authority_contract as contract
+from catchplate import authority_native_jit_review_assignment as assignment
+from catchplate import authority_native_jit_review_custody as custody
+from catchplate import authority_release_private_request as private
+from catchplate import native_jit_review_material as material
 
 SECOND = 1_000_000_000
 NOW = 1_800_000_000 * SECOND
 MONO = 500 * SECOND
 FIELD = "nativeJitReviewCustodyPolicy"
-ASSIGNMENT_SCHEMA = "serverware.nativeJitReviewAssignment/v1"
-SIGNED_ASSIGNMENT_SCHEMA = "serverware.signedNativeJitReviewAssignment/v1"
-STATEMENT_SCHEMA = "serverware.nativeReleaseJitReviewStatement/v1"
+ASSIGNMENT_SCHEMA = "catchplate.nativeJitReviewAssignment/v1"
+SIGNED_ASSIGNMENT_SCHEMA = "catchplate.signedNativeJitReviewAssignment/v1"
+STATEMENT_SCHEMA = "catchplate.nativeReleaseJitReviewStatement/v1"
 SIGNATURE_DOMAIN = STATEMENT_SCHEMA.encode("ascii") + b"\0"
-ATTESTATION_DOMAIN = b"serverware/native-release-jit-review-attestation/v1\0"
+ATTESTATION_DOMAIN = b"catchplate/native-release-jit-review-attestation/v1\0"
 IDENTITY_FIELDS = ("holderId", "bootId", "keyId", "controlPlaneResponseSigningKeyId",
     "releaseRecordSha256", "policyHash", "configurationSha256", "caCertificateSha256",
     "caPublicKeySpkiSha256", "expectedBinaryDigest")
@@ -163,27 +163,27 @@ class Fixture:
             "expectedEif": "sha384:" + "1" * 96, "maxAgeSeconds": 30, "futureSkewSeconds": 0,
             "instanceId": raw["actor_id"], "secretKekId": KEY_ID}
         self.selected = {**self.target, "bootId": encoded(boot), "keyId": key_id,
-            "holderId": sha256(b"serverware/credential-currentness-holder/v1\0" + boot + bytes.fromhex(key_id[7:])),
+            "holderId": sha256(b"catchplate/credential-currentness-holder/v1\0" + boot + bytes.fromhex(key_id[7:])),
             "configurationSha256": sha256(b"synthetic complete native configuration original"),
             "caCertificateSha256": sha256(pki.root.public_bytes(serialization.Encoding.DER)),
             "caPublicKeySpkiSha256": sha256(pki.root_key.public_key().public_bytes(
                 serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)),
             "expectedModuleId": "synthetic-jit-module"}
-        self.policy = {"schema": "serverware.nativeJitReviewCustodyAuthorityPolicy/v1",
+        self.policy = {"schema": "catchplate.nativeJitReviewCustodyAuthorityPolicy/v1",
             "sourceContractDigest": contract.OPERATION_MANIFEST_DIGEST,
             "reservationTtlSeconds": raw["reservation_ttl_seconds"] if reservation_ttl is None else reservation_ttl,
             "operationMaxSeconds": 30,
             "attemptCapacity": capacity, "deploymentId": "synthetic-jit-custody",
             "assignmentAuthorizer": key_descriptor(self.authorizer), "target": copy.deepcopy(self.target),
-            "trustRoots": {"apiVersion": "serverware.nativeJitReviewNativeTrustRoots/v1",
+            "trustRoots": {"apiVersion": "catchplate.nativeJitReviewNativeTrustRoots/v1",
                 "awsNitroRootCertificatesPem": [pki.root.public_bytes(serialization.Encoding.PEM).decode("ascii")],
                 "awsNitroCrlsDerBase64url": [], "nitroCertificateProfile": {
                     "profileId": "aws-nitro-attestation-pki-native-v1", "allowedLeafExtendedKeyUsageOids": []}}}
-        self.configuration = {"schema": "serverware.policyAuthorityServiceConfiguration/v6",
+        self.configuration = {"schema": "catchplate.policyAuthorityServiceConfiguration/v6",
             "sourceRevision": contract.SOURCE_REVISION, "roles": {"planner": {
                 "enabledOperations": ["jit.request", "release.reserve"],
                 "signingKeySpkiDigest": sha256(public_spki(self.role))}}, FIELD: self.policy}
-        self.configuration_digest = framed("serverware.policyAuthorityServiceConfiguration/v6", canonical(self.configuration))
+        self.configuration_digest = framed("catchplate.policyAuthorityServiceConfiguration/v6", canonical(self.configuration))
         self.assignment_payload = {"schema": ASSIGNMENT_SCHEMA,
             "sourceContractDigest": contract.OPERATION_MANIFEST_DIGEST,
             "controlPlaneConfigurationDigest": self.configuration_digest,
@@ -192,13 +192,13 @@ class Fixture:
         self.assignment_original = self.sign_assignment()
         # Independent literal owner configuration: do not call the verifier's
         # reconstruction helper to produce its own expected commitment.
-        broker = {"apiVersion": "serverware.nativeJitReviewConfiguration/v1",
+        broker = {"apiVersion": "catchplate.nativeJitReviewConfiguration/v1",
             "sourceContractDigest": contract.OPERATION_MANIFEST_DIGEST,
             "controlPlaneConfigurationDigest": self.configuration_digest,
             "deploymentId": self.policy["deploymentId"], "instanceId": raw["actor_id"],
             "secretKekId": KEY_ID, "attemptCapacity": capacity if owner_capacity is None else owner_capacity,
             "identity": {name: self.selected[name] for name in IDENTITY_FIELDS}}
-        self.scope = {"schema": "serverware.nativeJitReviewScope/v2", "publicRequest": self.child,
+        self.scope = {"schema": "catchplate.nativeJitReviewScope/v2", "publicRequest": self.child,
             "parentRequestSha256": sha256(canonical(self.parent)),
             "sourceContractDigest": contract.OPERATION_MANIFEST_DIGEST,
             "controlPlaneConfigurationDigest": self.configuration_digest,
@@ -231,10 +231,10 @@ class Fixture:
         statement_raw = canonical(self.statement)
         signature = signer.sign(domain + statement_raw)
         raw_key = signer.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-        boot_binding = hashlib.sha256(b"serverware/native-proof-custody-boot/v1\0" + b"b" * 32
+        boot_binding = hashlib.sha256(b"catchplate/native-proof-custody-boot/v1\0" + b"b" * 32
             + bytes.fromhex(self.selected["keyId"][7:])
             + bytes.fromhex(self.selected["controlPlaneResponseSigningKeyId"][7:])).digest()
-        user_data = b"serverware/enclave-runtime-key-binding/v1\0\x04" + b"".join(
+        user_data = b"catchplate/enclave-runtime-key-binding/v1\0\x04" + b"".join(
             bytes.fromhex(self.selected[name][7:]) for name in QUOTE_SCOPE_FIELDS)
         user_data += hashlib.sha256(raw_key).digest() + boot_binding
         arguments = {"public_key": raw_key, "user_data": user_data,
@@ -244,7 +244,7 @@ class Fixture:
         quote = self.pki.quote(**arguments)
         return {"statement": copy.deepcopy(self.statement), "signature": "ed25519:" + encoded(signature),
             "assignmentOriginal": self.assignment_original, "nativeKeyEvidence": {
-                "apiVersion": "serverware.nativeResponseProofKeyEvidence/v1", "responseProofPublicKey": encoded(raw_key),
+                "apiVersion": "catchplate.nativeResponseProofKeyEvidence/v1", "responseProofPublicKey": encoded(raw_key),
                 "attestationDocumentB64": encoded(quote)}}
 
     def arguments(self):
@@ -304,7 +304,7 @@ class NativeJitCustodyTests(unittest.TestCase):
 
     def test_closed_policy_and_exact_current_source_are_required(self):
         f = self.fixture
-        for field, value in (("extra", True), ("schema", "serverware.staticCredentialCustodyAuthorityPolicy/v2"),
+        for field, value in (("extra", True), ("schema", "catchplate.staticCredentialCustodyAuthorityPolicy/v2"),
                 ("sourceContractDigest", sha256(b"different source"))):
             changed = copy.deepcopy(f.policy); changed[field] = value
             with self.subTest(field=field):
@@ -329,7 +329,7 @@ class NativeJitCustodyTests(unittest.TestCase):
 
     def test_assignment_signature_and_purpose_domain_are_not_interchangeable(self):
         f = self.fixture
-        for original in (f.sign_assignment(domain="serverware.signedStaticCredentialAssignment/v1"),
+        for original in (f.sign_assignment(domain="catchplate.signedStaticCredentialAssignment/v1"),
                 f.sign_assignment(key=f.native)):
             self.refused(lambda: assignment.verify_original(original, configuration_payload=f.configuration,
                 root_key=f.root.public_key(), now_epoch_ns=NOW))
@@ -371,7 +371,7 @@ class NativeJitCustodyTests(unittest.TestCase):
         for key in (f.root, f.role, f.response, f.authorizer):
             changed = copy.deepcopy(f.assignment_payload)
             key_id = sha256(public_spki(key)); changed["assignment"]["keyId"] = key_id
-            changed["assignment"]["holderId"] = sha256(b"serverware/credential-currentness-holder/v1\0"
+            changed["assignment"]["holderId"] = sha256(b"catchplate/credential-currentness-holder/v1\0"
                 + b"b" * 32 + bytes.fromhex(key_id[7:]))
             before = f.assignment_payload; f.assignment_payload = changed
             original = f.sign_assignment(); f.assignment_payload = before
@@ -389,8 +389,8 @@ class NativeJitCustodyTests(unittest.TestCase):
 
     def test_statement_signature_and_attestation_nonce_have_separate_exact_domains(self):
         f = self.fixture
-        for proof in (f.sign_proof(domain=b"serverware.nativeJitReviewStatement/v1\0"),
-                f.sign_proof(nonce_domain=b"serverware/native-jit-review-attestation/v1\0"),
+        for proof in (f.sign_proof(domain=b"catchplate.nativeJitReviewStatement/v1\0"),
+                f.sign_proof(nonce_domain=b"catchplate/native-jit-review-attestation/v1\0"),
                 f.sign_proof(native_key=f.response)):
             self.refused(lambda: self.verify(evidence_original=canonical(proof).decode("ascii")))
 
@@ -421,7 +421,7 @@ class NativeJitCustodyTests(unittest.TestCase):
     def test_standalone_pair_cannot_replace_compound_pair(self):
         f = self.fixture
         scope = {key: value for key, value in f.scope.items() if key != "parentRequestSha256"}
-        scope["schema"] = "serverware.nativeJitReviewScope/v1"
+        scope["schema"] = "catchplate.nativeJitReviewScope/v1"
         pair = material.seal_pair(scope, f.runtime["privateDocuments"], key_id=KEY_ID, kek=AESGCM(KEY), now_epoch_ns=NOW)
         self.refused(lambda: self.verify(pair_original=canonical(pair).decode("ascii")))
 

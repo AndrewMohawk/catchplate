@@ -21,16 +21,16 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_index_contract as contract
-from serverware import authority_index_range as ranges
-from serverware import authority_query_read_work as measured
+from catchplate import authority_index_contract as contract
+from catchplate import authority_index_range as ranges
+from catchplate import authority_query_read_work as measured
 
 
-PROFILE = "serverware.policyAuthorityCountedIndex/v1"
-EMPTY = "serverware.policyAuthorityCountedIndexEmpty/v1"
-LEAF = "serverware.policyAuthorityCountedIndexLeaf/v1"
-BRANCH = "serverware.policyAuthorityCountedIndexNode/v1"
-INPUT = "serverware.policyAuthorityIndexRangeInput/v1"
+PROFILE = "catchplate.policyAuthorityCountedIndex/v1"
+EMPTY = "catchplate.policyAuthorityCountedIndexEmpty/v1"
+LEAF = "catchplate.policyAuthorityCountedIndexLeaf/v1"
+BRANCH = "catchplate.policyAuthorityCountedIndexNode/v1"
+INPUT = "catchplate.policyAuthorityIndexRangeInput/v1"
 WIDTH = 160
 I64 = 2**63 - 1
 NIBBLES = "0123456789abcdef"

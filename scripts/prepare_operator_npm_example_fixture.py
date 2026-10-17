@@ -26,7 +26,7 @@ DEPENDENCIES = "examples/npm-registry/node_modules"
 PACKAGES = {"npm": "11.21.1", "pacote": "21.5.1", "npm-registry-fetch": "19.1.1"}
 DEPENDENCIES_TARGET = "/app/" + DEPENDENCIES
 CHECKER = "/app/scripts/check_operator_npm_example.py"
-RUNTIME_SERVICES = {"network", "npm-registry", "serverware", "decision-gate-rs", "edge", "check"}
+RUNTIME_SERVICES = {"network", "npm-registry", "catchplate", "decision-gate-rs", "edge", "check"}
 KEEPER_SECONDS, EDGE_SECONDS = metadata.KEEPER_SECONDS, metadata.EDGE_SECONDS
 CHECKER_SECONDS, CHECKER_OUTER_SECONDS, PRECHECK_SECONDS = 180, 210, 75
 
@@ -106,14 +106,14 @@ def build(source, binary, initializer, root, node, node_modules, *,
     base.validated_binary_sha256(expected_node_modules_sha256)
     base.require(all(isinstance(path, Path) and path.is_absolute() and ".." not in path.parts
         for path in (source, binary, initializer, root, node, node_modules)), "absolute fixture paths required")
-    base.require(root.parent == base.SCRATCH and re.fullmatch(r"serverware-npm-example-private\.[A-Za-z0-9]{6,32}", root.name),
+    base.require(root.parent == base.SCRATCH and re.fullmatch(r"catchplate-npm-example-private\.[A-Za-z0-9]{6,32}", root.name),
         "fresh private npm example root required")
     base.require(node == NODE and node_modules == source / DEPENDENCIES,
         "fixed Node and source-adjacent dependencies required")
-    template = root.with_name("serverware-npm-publish-private." + root.name.split(".", 1)[1])
+    template = root.with_name("catchplate-npm-publish-private." + root.name.split(".", 1)[1])
     config = publish.build(source, binary, initializer, template, node, node_modules,
         expected_binary_sha256=expected_binary_sha256)
-    config["name"] = "serverware-npm-example-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
+    config["name"] = "catchplate-npm-example-private-" + hashlib.sha256(root.name.encode()).hexdigest()[:12]
     for service in config["services"].values():
         # Explicit empty entrypoint suppresses image defaults; commands remain
         # the existing accepted interpreter/normal application entrypoints.

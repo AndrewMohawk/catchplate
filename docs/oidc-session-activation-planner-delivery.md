@@ -39,18 +39,18 @@ ambient libpq configuration, arbitrary Python paths and caller-selected modules
 cannot amend it. This is a trusted-host-local boundary, not protection against a
 host administrator, hostile kernel or compromised installed release.
 
-The listener is `/run/serverware/oidc-session-activation/planner.sock`; its
+The listener is `/run/catchplate/oidc-session-activation/planner.sock`; its
 filesystem node must be owned by `65507:65532`, mode `0660`. The peer is the
 separately admitted control-plane UID/GID `65532`. Kernel socket identity and
 filesystem socket identity are distinct signed pins. The journal is the exact
-`/var/lib/serverware/oidc-session-activation-planner` directory, owned by
+`/var/lib/catchplate/oidc-session-activation-planner` directory, owned by
 `65507:65507`, mode `0700`, with signed device/inode/count/quota expectations.
 The separate store is
-`/var/lib/serverware/oidc-session-activation-execution-bundles`, also
+`/var/lib/catchplate/oidc-session-activation-execution-bundles`, also
 `65507:65507`, mode `0700`. Its exact path, descriptor, device/inode and quotas are
 independently signed; it must not share the journal's device/inode pair.
 The bundle key is delivered only from
-`/run/secrets/serverware-oidc-session-activation-bundle-key` into sealed FD 205.
+`/run/secrets/catchplate-oidc-session-activation-bundle-key` into sealed FD 205.
 The launcher never creates or repairs these resources.
 
 The entrypoint exposes `_execution_store(descriptor)` and
@@ -63,7 +63,7 @@ the unprivileged service retain the original launch lifetime; the child
 environment remains the same closed literal eight-variable inventory.
 
 Three fixed PostgreSQL TLS paths live below
-`/run/serverware/oidc-session-activation-planner-tls`: `ca.pem`, `client.crt` and
+`/run/catchplate/oidc-session-activation-planner-tls`: `ca.pem`, `client.crt` and
 `client.key`. Public files are root-owned mode `0444`; the private TLS key is
 root-owned mode `0440`, group `65507`, so the already dropped libpq client can
 open it. Actual content hashes are checked at cold admission; protected pathname
@@ -86,8 +86,8 @@ original. Root bootstrap lifetime, processing work and epoch/monotonic deadlines
 remain bounded; local checks do not interrupt a blocked native or kernel call.
 
 The unrendered
-[service](../ops/systemd/serverware-oidc-session-activation-planner.service.in)
-and [socket](../ops/systemd/serverware-oidc-session-activation-planner.socket)
+[service](../ops/systemd/catchplate-oidc-session-activation-planner.service.in)
+and [socket](../ops/systemd/catchplate-oidc-session-activation-planner.socket)
 templates require independent accounts, exact release, keys, signed bootstrap,
 TLS identity, database privileges, separate journal/store and resource identities.
 The new `ACTIVATION_PLANNER_BUNDLE_KEY` and

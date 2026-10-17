@@ -1,9 +1,9 @@
 # Gmail with the official Go SDK
 
-Read a small inbox sample through Serverware using the ordinary
+Read a small inbox sample through Catchplate using the ordinary
 `google.golang.org/api/gmail/v1` client. The operator connects the Google account
 and owns its OAuth client secret, access token and refresh token. This app receives
-only a Serverware application ID/token and an explicit permission.
+only a Catchplate application ID/token and an explicit permission.
 
 The app lists at most **two pages of five inbox messages**, then reads metadata
 for those returned IDs. It requests only `From`, `Subject` and `Date` headers and
@@ -29,7 +29,7 @@ delete, modification, attachment, history, profile or Calendar calls.
    The SDK's fixed header value is:
 
    ```text
-   Bearer serverware-gmail-placeholder-v1
+   Bearer catchplate-gmail-placeholder-v1
    ```
 
    This is the full, case-sensitive `Authorization` value, including one space.
@@ -55,7 +55,7 @@ This permission is GET-only for `https://gmail.googleapis.com/gmail/v1/users/me/
 and individual message paths. Age is unrestricted by default; an optional
 **Last N days** restriction is enforced by the proxy. The example's inbox filter
 and count limit do not narrow an application's saved authority.
-Serverware's existing Gmail response contract limits successful JSON
+Catchplate's existing Gmail response contract limits successful JSON
 to 1 MiB. See the [Gmail verification boundary](../../docs/operator-gmail-job-verification.md).
 
 ## Run
@@ -83,7 +83,7 @@ use those pins, not regenerate them as part of running the example. Local build
 binaries, real environment files and CA/key material are ignored; keep the
 checked-in `.env.example` free of secrets.
 
-With the binary built, set `SERVERWARE_PROXY_TOKEN` privately and paste the
+With the binary built, set `CATCHPLATE_PROXY_TOKEN` privately and paste the
 workspace's copied recipe into Bash from this project directory. It passes the
 token through stdin into the child's process environment, never a command-line
 argument, and starts `./gmail-example` with only the selected SDK settings.
@@ -102,7 +102,7 @@ by your user. With the binary already built, you can use that download directly:
 ```
 
 This accepts either the full private download or its `client_recipe` object
-(`serverware.gmailSdkClient/v1` or `/v2`), including a recipe downloaded with
+(`catchplate.gmailSdkClient/v1` or `/v2`), including a recipe downloaded with
 Node or Python selected. It always runs this Go example's fixed, read-only job;
 downloaded language, entrypoint, arguments and other environment entries are
 never executed. Relative CA paths resolve beside the JSON file, **not** relative
@@ -129,7 +129,7 @@ A full download may contain `age_policy: {"mode":"recent_internal_date_v1",
 `query_mode: "orderedFormV1"`. Missing metadata, retained standalone recipes and
 `{"mode":"unrestricted"}` retain the original no-`q` requests.
 The copied Bash recipe or manual environment can supply
-`SERVERWARE_GMAIL_MAX_AGE_DAYS='7'`; this is only a client hint, not permission.
+`CATCHPLATE_GMAIL_MAX_AGE_DAYS='7'`; this is only a client hint, not permission.
 Full downloads derive the hint from their top-level policy, not a nested recipe
 or ambient override.
 
@@ -146,10 +146,10 @@ these variables in the process environment using your private secret-injection
 method:
 
 ```sh
-export SERVERWARE_PROXY_URL='https://your-proxy.example:443'
-export SERVERWARE_APP_ID='your-saved-application-uuid'
-export SERVERWARE_CA_FILE='/absolute/path/to/serverware-ca.pem'
-# Set SERVERWARE_PROXY_TOKEN privately; do not paste it into shell history.
+export CATCHPLATE_PROXY_URL='https://your-proxy.example:443'
+export CATCHPLATE_APP_ID='your-saved-application-uuid'
+export CATCHPLATE_CA_FILE='/absolute/path/to/catchplate-ca.pem'
+# Set CATCHPLATE_PROXY_TOKEN privately; do not paste it into shell history.
 ./gmail-example
 ```
 
@@ -182,9 +182,9 @@ file or passed on a command line. Process environment/memory still contain the
 application token and must be protected from other users and diagnostic dumps.
 
 - Outer connection: verify the configured proxy DNS name against system roots,
-  optionally extended by `SERVERWARE_PROXY_CA_FILE` for a private proxy CA.
+  optionally extended by `CATCHPLATE_PROXY_CA_FILE` for a private proxy CA.
 - Inner connection: verify `gmail.googleapis.com` against **only** the downloaded
-  `SERVERWARE_CA_FILE` interception CA.
+  `CATCHPLATE_CA_FILE` interception CA.
 
 Normal TLS verification remains enabled. Because Go's transport uses one TLS
 configuration for both hops, an additional `VerifyConnection` check restricts
@@ -231,7 +231,7 @@ acceptance for this dependency repair.
 On 2026-10-10, all eight offline groups passed with those earlier
 dependencies (`GOPROXY=off go test -p 2 -count=1 -v ./...`). A separate isolated
 network run passed on 2026-10-11 UTC using this actual compiled entrypoint and
-the normal Serverware application and Rust proxy. It completed list/pagination
+the normal Catchplate application and Rust proxy. It completed list/pagination
 and returned-ID reads before and after genuine synthetic-token expiry: eight
 requests, one automatic refresh, separate HTTPS-proxy/interception trust roots,
 Basic CONNECT authentication and matching durable audit records. Wrong outer

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/response-v2-nested-authority-artifact.v1.schema.json",
-  "title": "Serverware Response v2 Nested Authority Artifact",
+  "$id": "https://catchplate.invalid/schemas/response-v2-nested-authority-artifact.v1.schema.json",
+  "title": "Catchplate Response v2 Nested Authority Artifact",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -241,7 +241,7 @@
           "$ref": "#/$defs/sha256"
         },
         "signingDomain": {
-          "const": "serverware.responseV2.nestedAuthorityArtifact.signature/v1"
+          "const": "catchplate.responseV2.nestedAuthorityArtifact.signature/v1"
         },
         "signedPayloadSha256": {
           "$ref": "#/$defs/sha256"
@@ -284,10 +284,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseV2.nestedAuthorityArtifact/v1"
+          "const": "catchplate.responseV2.nestedAuthorityArtifact/v1"
         },
         "kind": {
-          "const": "ServerwareResponseV2NestedAuthorityArtifact"
+          "const": "CatchplateResponseV2NestedAuthorityArtifact"
         },
         "schemaVersion": {
           "const": "1"

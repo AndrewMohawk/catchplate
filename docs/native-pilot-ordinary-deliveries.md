@@ -13,11 +13,11 @@ controls do not establish a running pilot or independent production approval.
 
 ## Independently selected policy
 
-`serverware.nativePilotSupervisorCommissioningPolicy/v5` adds exactly
+`catchplate.nativePilotSupervisorCommissioningPolicy/v5` adds exactly
 `ordinaryDeliveriesOriginal` to the twelve v4 fields. Its purpose is
 `initial-driver-bootstrap-precreation-endpoints-and-ordinary-deliveries`.
 The new field is a literal canonical ASCII JSON original with API
-`serverware.nativePilotOrdinaryRuntimePolicy/v1`, containing exactly `apiVersion`
+`catchplate.nativePilotOrdinaryRuntimePolicy/v1`, containing exactly `apiVersion`
 and `services`. The complete commissioning policy remains bounded to 4 MiB.
 Its 57 capability selectors are unchanged from v4; each ordinary delivery
 selector must match that role's approved cold C9 authority. V4 retains its
@@ -72,9 +72,9 @@ For each of the five roles, these three exclusive files are installed:
 
 | Fixed path | Ownership and mode | Content |
 | --- | --- | --- |
-| `/etc/serverware/custody-<role>-runtime.json` | root:root, 0400 | Complete derived public runtime, at most 4 MiB |
-| `/etc/serverware/custody-<role>-initial-history.json` | Actual cold service UID/GID, 0400 | Exact verified assembly wrapper, at most 4 MiB |
-| `/etc/serverware/custody-<role>-peer-inspection.json` | Actual cold service UID/GID, 0400 | Existing eight-field inspection policy, at most 4096 bytes |
+| `/etc/catchplate/custody-<role>-runtime.json` | root:root, 0400 | Complete derived public runtime, at most 4 MiB |
+| `/etc/catchplate/custody-<role>-initial-history.json` | Actual cold service UID/GID, 0400 | Exact verified assembly wrapper, at most 4 MiB |
+| `/etc/catchplate/custody-<role>-peer-inspection.json` | Actual cold service UID/GID, 0400 | Existing eight-field inspection policy, at most 4096 bytes |
 
 The inspection policy binds the exact runtime digest, role, service UID/GID and
 original startup/lifetime bounds. The history copy preserves the actual
@@ -123,7 +123,7 @@ to `cleanup-watchdog` preceded the successful exact-source run. Both outcomes
 are retained; the first attempt is not reported as a pass.
 
 Durable evidence:
-`/home/catchplate/codex-offload/serverware/engineering-builds/91b978fe-ordinary-commissioning-y4hUqW/`,
+`/home/catchplate/codex-offload/catchplate/engineering-builds/91b978fe-ordinary-commissioning-y4hUqW/`,
 including `first-attempt/`. All 12 copied files were byte-compared; `SHA256SUMS`
 verifies the 11 listed originals/result artifacts. The successful source archive
 is 84,766,720 bytes with SHA256

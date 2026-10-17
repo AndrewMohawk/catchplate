@@ -411,7 +411,7 @@ impl LoopbackTlsTunnelV1 {
         SystemRandom::new().fill(random.as_mut())
             .map_err(|_| error(io::ErrorKind::Other, "loopback proxy randomness unavailable"))?;
         let password = Zeroizing::new(general_purpose::URL_SAFE_NO_PAD.encode(random.as_ref()));
-        let mut credentials = Zeroizing::new(String::from("serverware-relay:"));
+        let mut credentials = Zeroizing::new(String::from("catchplate-relay:"));
         credentials.push_str(&password);
         let encoded = Zeroizing::new(general_purpose::STANDARD.encode(credentials.as_bytes()));
         let mut authorization = Zeroizing::new(String::from("Basic "));

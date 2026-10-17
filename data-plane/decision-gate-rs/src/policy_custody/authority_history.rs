@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 pub(super) const POLICY_CUSTODY_AUTHORITY_HISTORY_VERSION: &str =
-    "serverware.policyCustodyAuthorityHistory/v3";
+    "catchplate.policyCustodyAuthorityHistory/v3";
 pub(super) const MAX_AUTHORITY_HISTORY_EPOCHS: usize = 64;
 pub(super) const MAX_AUTHORITY_COMPACTION_ANCHORS: usize = 64;
 pub(super) const MAX_AUTHORITY_REPLAY_TOMBSTONES: usize = 4096;
@@ -42,27 +42,27 @@ const MAX_REPLAY_TOMBSTONE_RESPONSE_BASE64_BYTES: usize =
 const ZERO_SHA256: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 const RETAINED_EPOCH_ANCHOR_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyRetainedAuthorityEpochAnchor/v3";
+    b"catchplate.policyCustodyRetainedAuthorityEpochAnchor/v3";
 const RETAINED_EPOCH_ANCHOR_DIGEST_DOMAIN: &[u8] =
-    b"serverware.policyCustodyRetainedAuthorityEpochAnchorDigest/v3";
+    b"catchplate.policyCustodyRetainedAuthorityEpochAnchorDigest/v3";
 const ADJACENT_EPOCH_TRANSITION_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyAdjacentAuthorityEpochTransition/v3";
+    b"catchplate.policyCustodyAdjacentAuthorityEpochTransition/v3";
 const ADJACENT_EPOCH_TRANSITION_DIGEST_DOMAIN: &[u8] =
-    b"serverware.policyCustodyAdjacentAuthorityEpochTransitionDigest/v3";
+    b"catchplate.policyCustodyAdjacentAuthorityEpochTransitionDigest/v3";
 const AUTHORITY_EPOCH_STATEMENT_DOMAIN: &[u8] =
-    b"serverware.policyCustodyAuthorityEpochStatement/v3";
+    b"catchplate.policyCustodyAuthorityEpochStatement/v3";
 const COMPACTION_ANCHOR_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyAuthorityCompactionAnchor/v3";
+    b"catchplate.policyCustodyAuthorityCompactionAnchor/v3";
 const COMPACTION_ANCHOR_DIGEST_DOMAIN: &[u8] =
-    b"serverware.policyCustodyAuthorityCompactionAnchorDigest/v3";
+    b"catchplate.policyCustodyAuthorityCompactionAnchorDigest/v3";
 const REPLAY_TOMBSTONE_SIGNATURE_DOMAIN: &[u8] =
-    b"serverware.policyCustodyAuthorityReplayTombstone/v3";
+    b"catchplate.policyCustodyAuthorityReplayTombstone/v3";
 const REPLAY_TOMBSTONE_DIGEST_DOMAIN: &[u8] =
-    b"serverware.policyCustodyAuthorityReplayTombstoneDigest/v3";
+    b"catchplate.policyCustodyAuthorityReplayTombstoneDigest/v3";
 const REPLAY_TOMBSTONE_SET_DOMAIN: &[u8] =
-    b"serverware.policyCustodyAuthorityReplayTombstoneSet/v3";
+    b"catchplate.policyCustodyAuthorityReplayTombstoneSet/v3";
 const AUTHORITY_HISTORY_MANIFEST_DOMAIN: &[u8] =
-    b"serverware.policyCustodyAuthorityHistoryManifest/v3";
+    b"catchplate.policyCustodyAuthorityHistoryManifest/v3";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct AuthorityHistoryError {

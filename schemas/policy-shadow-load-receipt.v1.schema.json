@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/policy-shadow-load-receipt.v1.schema.json",
-  "title": "Serverware Policy Shadow Load Receipt v1",
+  "$id": "https://catchplate.invalid/schemas/policy-shadow-load-receipt.v1.schema.json",
+  "title": "Catchplate Policy Shadow Load Receipt v1",
   "$comment": "Wire data is unverified. Native admission pins the signer, verifies fresh TEE evidence, matches every assignment/policy/fleet/runtime binding, and rejects candidate effect capability. Installation is only ready after monotonic custody durably persists rollback/tombstone/assignment state and reserves a non-overlapping bounded ingress sequence range for the signed generation. Readiness starts no earlier than max(trusted load verification time, assignment window start), so a late load cannot inherit nominal duration.",
   "type": "object",
   "additionalProperties": false,
@@ -18,10 +18,10 @@
     "signature"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.policyShadowLoadReceipt/v1"},
+    "apiVersion": {"const": "catchplate.policyShadowLoadReceipt/v1"},
     "kind": {"const": "PolicyShadowLoadReceipt"},
-    "canonicalProfile": {"const": "serverware.canonicalJson/ascii-integer-v1"},
-    "signatureDomain": {"const": "serverware.policyShadowLoadReceipt/v1"},
+    "canonicalProfile": {"const": "catchplate.canonicalJson/ascii-integer-v1"},
+    "signatureDomain": {"const": "catchplate.policyShadowLoadReceipt/v1"},
     "payload": {"$ref": "#/$defs/payload"},
     "payloadSha256": {
       "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/sha256"

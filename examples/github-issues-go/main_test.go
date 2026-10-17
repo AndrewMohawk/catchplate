@@ -25,12 +25,12 @@ import (
 
 func environment() map[string]string {
 	return map[string]string{
-		"SERVERWARE_PROXY_URL":    "https://proxy.example.test:8443",
-		"SERVERWARE_APP_ID":       "11111111-1111-4111-8111-111111111111",
-		"SERVERWARE_PROXY_TOKEN":  base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)),
-		"SERVERWARE_CA_FILE":      "/synthetic/serverware-ca.pem",
-		"SERVERWARE_GITHUB_OWNER": "example-owner",
-		"SERVERWARE_GITHUB_REPO":  "example-repo",
+		"CATCHPLATE_PROXY_URL":    "https://proxy.example.test:8443",
+		"CATCHPLATE_APP_ID":       "11111111-1111-4111-8111-111111111111",
+		"CATCHPLATE_PROXY_TOKEN":  base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)),
+		"CATCHPLATE_CA_FILE":      "/synthetic/catchplate-ca.pem",
+		"CATCHPLATE_GITHUB_OWNER": "example-owner",
+		"CATCHPLATE_GITHUB_REPO":  "example-repo",
 		"GITHUB_TOKEN":            "must-not-be-used", "GH_TOKEN": "must-not-be-used",
 		"HTTPS_PROXY": "http://must-not-be-used.invalid", "NO_PROXY": "*",
 	}
@@ -52,24 +52,24 @@ func TestConfigRequiresExplicitBoundedInputs(t *testing.T) {
 		t.Fatal("unexpected explicit configuration")
 	}
 	for _, tc := range []struct{ key, value string }{
-		{"SERVERWARE_PROXY_URL", "http://proxy.example.test"},
-		{"SERVERWARE_PROXY_URL", "https://user:secret@proxy.example.test"},
-		{"SERVERWARE_PROXY_URL", "https://proxy.example.test/path"},
-		{"SERVERWARE_PROXY_URL", "https://proxy.example.test?"},
-		{"SERVERWARE_PROXY_URL", "https://proxy.example.test#fragment"},
-		{"SERVERWARE_PROXY_URL", "https://proxy.example.test:0"},
-		{"SERVERWARE_PROXY_URL", "https://proxy.example.test:65536"},
-		{"SERVERWARE_PROXY_URL", "https://proxy.example.test:"},
-		{"SERVERWARE_PROXY_URL", "https://api.github.com"},
-		{"SERVERWARE_PROXY_URL", "https://127.0.0.1"},
-		{"SERVERWARE_PROXY_URL", "https://[::1]"},
-		{"SERVERWARE_PROXY_URL", "https://Proxy.example.test"},
-		{"SERVERWARE_APP_ID", "not-an-application-id"},
-		{"SERVERWARE_PROXY_TOKEN", "not-an-issued-app-token"},
-		{"SERVERWARE_CA_FILE", ""},
-		{"SERVERWARE_GITHUB_OWNER", "../other"},
-		{"SERVERWARE_GITHUB_REPO", "../other"},
-		{"SERVERWARE_GITHUB_REPO", ".."},
+		{"CATCHPLATE_PROXY_URL", "http://proxy.example.test"},
+		{"CATCHPLATE_PROXY_URL", "https://user:secret@proxy.example.test"},
+		{"CATCHPLATE_PROXY_URL", "https://proxy.example.test/path"},
+		{"CATCHPLATE_PROXY_URL", "https://proxy.example.test?"},
+		{"CATCHPLATE_PROXY_URL", "https://proxy.example.test#fragment"},
+		{"CATCHPLATE_PROXY_URL", "https://proxy.example.test:0"},
+		{"CATCHPLATE_PROXY_URL", "https://proxy.example.test:65536"},
+		{"CATCHPLATE_PROXY_URL", "https://proxy.example.test:"},
+		{"CATCHPLATE_PROXY_URL", "https://api.github.com"},
+		{"CATCHPLATE_PROXY_URL", "https://127.0.0.1"},
+		{"CATCHPLATE_PROXY_URL", "https://[::1]"},
+		{"CATCHPLATE_PROXY_URL", "https://Proxy.example.test"},
+		{"CATCHPLATE_APP_ID", "not-an-application-id"},
+		{"CATCHPLATE_PROXY_TOKEN", "not-an-issued-app-token"},
+		{"CATCHPLATE_CA_FILE", ""},
+		{"CATCHPLATE_GITHUB_OWNER", "../other"},
+		{"CATCHPLATE_GITHUB_REPO", "../other"},
+		{"CATCHPLATE_GITHUB_REPO", ".."},
 	} {
 		t.Run(tc.key+"/"+tc.value, func(t *testing.T) {
 			env := environment()
@@ -84,17 +84,17 @@ func TestConfigRequiresExplicitBoundedInputs(t *testing.T) {
 func privateConfigFixture() map[string]any {
 	env := environment()
 	return map[string]any{
-		"application_id": env["SERVERWARE_APP_ID"], "access_rule_id": "22222222-2222-4222-8222-222222222222",
-		"proxy_url": env["SERVERWARE_PROXY_URL"], "proxy_authentication": "basic_and_bearer_v1",
-		"proxy_username": env["SERVERWARE_APP_ID"], "proxy_password": env["SERVERWARE_PROXY_TOKEN"],
-		"token_expires_at_epoch_ms": int64(1800000060000), "ca_file": "./serverware-ca.pem",
+		"application_id": env["CATCHPLATE_APP_ID"], "access_rule_id": "22222222-2222-4222-8222-222222222222",
+		"proxy_url": env["CATCHPLATE_PROXY_URL"], "proxy_authentication": "basic_and_bearer_v1",
+		"proxy_username": env["CATCHPLATE_APP_ID"], "proxy_password": env["CATCHPLATE_PROXY_TOKEN"],
+		"token_expires_at_epoch_ms": int64(1800000060000), "ca_file": "./catchplate-ca.pem",
 		"repository":       map[string]any{"owner": "example-owner", "name": "example-repo"},
 		"upstream_url":     "https://api.github.com/repos/example-owner/example-repo/issues",
 		"operation_bundle": "github_issues_read_v1", "methods": []string{"GET"},
 		"response_mode": "unfiltered_json_or_empty_v2", "credential_input": "replace_exact",
 		"request_headers": map[string]string{"Authorization": "token " + dummyToken},
 		"query_mode":      "githubRestV1", "request_body_mode": "preserve_json_v1",
-		"client_recipe": map[string]any{"proxy_ca_file": nil, "destination_ca_file": "./serverware-ca.pem",
+		"client_recipe": map[string]any{"proxy_ca_file": nil, "destination_ca_file": "./catchplate-ca.pem",
 			"packages":       map[string]string{"@octokit/rest": "22.0.1", "undici": "8.11.2"},
 			"sdk_auth_token": dummyToken, "minimum_node": "22.19"},
 		"note": "Synthetic unversioned console export; no provider secret.",
@@ -113,7 +113,7 @@ func writePrivateConfig(t *testing.T, path string, value map[string]any) {
 }
 
 func TestDownloadedConfigUsesOnlyExportedConnectionAndScope(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "serverware-client.private.json")
+	path := filepath.Join(t.TempDir(), "catchplate-client.private.json")
 	now := time.UnixMilli(1800000000000)
 	for _, methods := range [][]string{{"GET"}, {"GET", "POST"}, {"POST", "GET"}} {
 		saved := privateConfigFixture()
@@ -123,7 +123,7 @@ func TestDownloadedConfigUsesOnlyExportedConnectionAndScope(t *testing.T) {
 		saved["methods"] = methods
 		// Extra recipe fields are data, never a source of execution or environment.
 		saved["commands"] = []string{"must-not-run"}
-		saved["environment"] = map[string]string{"SERVERWARE_GITHUB_OWNER": "must-not-use"}
+		saved["environment"] = map[string]string{"CATCHPLATE_GITHUB_OWNER": "must-not-use"}
 		saved["client_recipe"].(map[string]any)["entrypoint"] = "must-not-run"
 		writePrivateConfig(t, path, saved)
 		getenv, err := configurationEnvironment([]string{"--config", path}, func(string) string {
@@ -134,9 +134,9 @@ func TestDownloadedConfigUsesOnlyExportedConnectionAndScope(t *testing.T) {
 			t.Fatal(err)
 		}
 		c, err := readConfig(getenv)
-		if err != nil || c.appID != environment()["SERVERWARE_APP_ID"] || c.proxyToken != environment()["SERVERWARE_PROXY_TOKEN"] ||
+		if err != nil || c.appID != environment()["CATCHPLATE_APP_ID"] || c.proxyToken != environment()["CATCHPLATE_PROXY_TOKEN"] ||
 			c.proxy.String() != "https://proxy.example.test:8443" || c.owner != "example-owner" || c.repo != "example-repo" ||
-			c.caFile != filepath.Join(filepath.Dir(path), "serverware-ca.pem") || c.proxyCAFile != "" || getenv("GITHUB_TOKEN") != "" {
+			c.caFile != filepath.Join(filepath.Dir(path), "catchplate-ca.pem") || c.proxyCAFile != "" || getenv("GITHUB_TOKEN") != "" {
 			t.Fatal("exported connection, relative CA, scope or environment isolation changed")
 		}
 	}
@@ -153,14 +153,14 @@ func TestDownloadedConfigUsesOnlyExportedConnectionAndScope(t *testing.T) {
 		if !filepath.IsAbs(want) {
 			want = filepath.Join(filepath.Dir(path), want)
 		}
-		if getenv("SERVERWARE_PROXY_CA_FILE") != want || getenv("SERVERWARE_CA_FILE") != saved["ca_file"] {
+		if getenv("CATCHPLATE_PROXY_CA_FILE") != want || getenv("CATCHPLATE_CA_FILE") != saved["ca_file"] {
 			t.Fatal("CA paths not resolved against the JSON directory")
 		}
 	}
 	// No flag preserves the original environment-only entrypoint.
 	env := environment()
 	getenv, err := configurationEnvironment(nil, func(key string) string { return env[key] }, now)
-	if err != nil || getenv("SERVERWARE_PROXY_TOKEN") != env["SERVERWARE_PROXY_TOKEN"] {
+	if err != nil || getenv("CATCHPLATE_PROXY_TOKEN") != env["CATCHPLATE_PROXY_TOKEN"] {
 		t.Fatal("environment-only mode changed")
 	}
 	for _, args := range [][]string{{"--config"}, {"--config", ""}, {"--unknown", path}, {"--config", path, "extra"}} {

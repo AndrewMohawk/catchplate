@@ -16,7 +16,7 @@ legacy. Native remains a distinct source-selected profile. The ordinary switch
 must not become reachable before the controlled-lease and independent-proof joins.
 
 `POST /api/data-plane/release-authorizations/policy-prepare` accepts only
-`serverware.policyAwareReleaseAuthorizationPrepare/v1` or `/v2`. Its closed request
+`catchplate.policyAwareReleaseAuthorizationPrepare/v1` or `/v2`. Its closed request
 contains `apiVersion`, `attemptId`, `flowId`, `principalId`, `routeId`,
 `credentialRef`, `credentialVersion`, `policyHash`, `requestDigest`,
 `operationDigest`, `operationContext` and `canonicalRequest`; v2 additionally
@@ -34,7 +34,7 @@ from route fields alone.
 The unchanged nonce-bound `responseSignature/v3` authenticates the exact body.
 The [preparation schema](../schemas/policy-aware-release-authorization-preparation.v1.schema.json)
 has eight fields: `apiVersion` is
-`serverware.policyAwareReleaseAuthorizationPreparation/v1`, followed by
+`catchplate.policyAwareReleaseAuthorizationPreparation/v1`, followed by
 `principalId`, `routeId`, `policyHash`, `requestDigest`, `operationDigest`,
 `approverPolicy` and `approverPolicySha256`. The policy is the existing normalized
 eight-field object with twelve-field `credentialPolicy`, or explicit null for
@@ -46,15 +46,15 @@ original nonrenewing deadline and bounded 96 KiB preparation-response lane.
 ## Reservation and retained transitions
 
 The existing `/reserve`, `/dispatch` and `/complete` endpoints accept separate
-`serverware.policyAwareReleaseAuthorizationReserve/v1|v2`,
-`serverware.policyAwareReleaseAuthorizationDispatch/v1|v2` and
-`serverware.policyAwareReleaseAuthorizationComplete/v1|v2` requests. Reserve has
+`catchplate.policyAwareReleaseAuthorizationReserve/v1|v2`,
+`catchplate.policyAwareReleaseAuthorizationDispatch/v1|v2` and
+`catchplate.policyAwareReleaseAuthorizationComplete/v1|v2` requests. Reserve has
 the preparation fields plus mandatory `approverPolicySha256`. The control plane
 recomputes the actual current normalized policy and refuses drift before reserve
 effects. Other closed fields and v1/v2 durable omission rules are unchanged.
 
 The full binding uses
-`serverware.policyAwareReleaseAuthorizationBinding/v1|v2` in `api_version` and
+`catchplate.policyAwareReleaseAuthorizationBinding/v1|v2` in `api_version` and
 retains `attempt_id`, `flow_id`, `principal_id`, `route_id`, `credential_id`,
 `credential_version`, `policy_hash`, `request_digest`, `operation_digest`,
 `operation_context`, `require_jit_grant`, `approver_policy` and `shared_quotas`.
@@ -64,7 +64,7 @@ effects. Every replay, dispatch, completion and controlled-lease authority check
 compares that retained representation, not merely a native boolean or durability.
 Legacy/native/policy-aware substitution is refused.
 
-Responses are `serverware.policyAwareReleaseAuthorizationResponse/v1|v2`, with
+Responses are `catchplate.policyAwareReleaseAuthorizationResponse/v1|v2`, with
 the existing response fields and signature recipe. Returned authorized/live
 results require the retained matching binding marker. Existing current-policy,
 WebAuthn, RBAC, quota, durable-bundle, uncertainty and one-use guards remain active.
@@ -73,7 +73,7 @@ selecting the explicit new profile is not an automatic legacy migration.
 
 ## Credential and proof boundary
 
-Paired `serverware.policyAwareCredentialLeaseRequest/v1|v2`,
+Paired `catchplate.policyAwareCredentialLeaseRequest/v1|v2`,
 `policyAwareCredentialLeaseRequestAuthority/v1`,
 `policyAwareCredentialLeaseReleaseAuthorization/v1|v2`,
 `policyAwareCredentialLeaseEnvelope/v1|v2` and

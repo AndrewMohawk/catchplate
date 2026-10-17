@@ -154,7 +154,7 @@ impl StableProcessIdentity {
     pub(super) fn start_time_ticks(&self) -> u64 { self.start_time_ticks }
     pub(super) fn binding_sha256(&self) -> String {
         let mut hash = Sha256::new();
-        hash.update(b"serverware.responseV2.guestInspectorProcess/v1\0");
+        hash.update(b"catchplate.responseV2.guestInspectorProcess/v1\0");
         hash.update(self.pidfd.pid.to_be_bytes());
         hash.update((self.pidfd.namespace_pids.len() as u32).to_be_bytes());
         for pid in &self.pidfd.namespace_pids { hash.update(pid.to_be_bytes()); }
@@ -704,7 +704,7 @@ fn peer_security_identity_sha256(
     )?;
     let mut hasher = Sha256::new();
     hasher.update(
-        b"serverware.response-v2/client-security-identity/v1",
+        b"catchplate.response-v2/client-security-identity/v1",
     );
     for value in [&socket_label[..], &current_label[..]] {
         hasher.update((value.len() as u64).to_be_bytes());
@@ -853,7 +853,7 @@ pub(super) fn executable_integrity_signal(
     }
     let mut hasher = Sha256::new();
     hasher.update(
-        b"serverware.response-v2/executable-integrity-signal/v1",
+        b"catchplate.response-v2/executable-integrity-signal/v1",
     );
     hasher.update(metadata.dev().to_be_bytes());
     hasher.update(metadata.ino().to_be_bytes());

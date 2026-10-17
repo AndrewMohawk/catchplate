@@ -55,9 +55,9 @@ def assigned(tree, name):
 class RevocationInvocationSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.source, cls.tree = read("serverware/authority_revocation_invocation.py")
-        cls.owner_source, cls.owner_tree = read("serverware/authority_revocation_issuance.py")
-        cls.service_source, cls.service = read("serverware/authority_service.py", 2 * 1024 * 1024)
+        cls.source, cls.tree = read("catchplate/authority_revocation_invocation.py")
+        cls.owner_source, cls.owner_tree = read("catchplate/authority_revocation_issuance.py")
+        cls.service_source, cls.service = read("catchplate/authority_service.py", 2 * 1024 * 1024)
 
     def assert_shape(self, actual, expression):
         self.assertEqual(ast.dump(actual), ast.dump(ast.parse("(" + expression.strip() + ")", mode="eval").body))
@@ -115,14 +115,14 @@ class RevocationInvocationSourceTests(unittest.TestCase):
                 self.assertNotIn(private, source)
         imports = [node for node in self.tree.body if isinstance(node, (ast.Import, ast.ImportFrom))]
         self.assertFalse(any("authority_service" in ast.unparse(node) or "authority_transition_registry" in ast.unparse(node)
-            or "serverware import db" in ast.unparse(node) for node in imports))
-        source, _tree = read("serverware/authority_transition_registry.py")
+            or "catchplate import db" in ast.unparse(node) for node in imports))
+        source, _tree = read("catchplate/authority_transition_registry.py")
         self.assertNotIn("issue-revocation-capability", source)
         self.assertNotIn("issue_authenticated", source)
 
     def test_full_wrapper_limits_and_depth_two_history_are_source_closed_and_frozen(self):
         self.assertEqual(ast.literal_eval(assigned(self.tree, "SCHEMA")),
-            "serverware.policyAuthorityRevocationIssuanceInvocation/v1")
+            "catchplate.policyAuthorityRevocationIssuanceInvocation/v1")
         self.assertEqual(ast.literal_eval(assigned(self.tree, "PURPOSE")), "issue-revocation-capability")
         for name, expected in (("ENVELOPE_FIELDS", OUTER_FIELDS), ("PAYLOAD_FIELDS", PAYLOAD_FIELDS)):
             value = assigned(self.tree, name)
@@ -134,23 +134,23 @@ class RevocationInvocationSourceTests(unittest.TestCase):
                 ("MAX_JSON_NODES", "capability.MAX_JSON_NODES"),
                 ("MAX_JSON_DEPTH", "capability.shape.MAX_JSON_DEPTH")):
             self.assert_shape(assigned(self.tree, name), expression)
-        _source, authority = read("serverware/authority_contract.py")
+        _source, authority = read("catchplate/authority_contract.py")
         self.assert_shape(assigned(authority, "MAX_REQUEST_BYTES"), "4 * 1024 * 1024")
         self.assertEqual(ast.literal_eval(assigned(authority, "INTERNAL_ENVELOPE_SCHEMA")),
-            "serverware.policyAuthorityInternalEnvelope/v3")
-        _source, capability = read("serverware/authority_revocation_capability.py")
+            "catchplate.policyAuthorityInternalEnvelope/v3")
+        _source, capability = read("catchplate/authority_revocation_capability.py")
         self.assertEqual(ast.literal_eval(assigned(capability, "MAX_JSON_NODES")), 4096)
         self.assert_shape(assigned(capability, "shape"), "plan.contract")
-        _source, plan = read("serverware/authority_revocation_plan.py")
-        self.assertIn("from serverware import authority_revocation_plan_contract as contract", ast.unparse(plan))
-        _source, shape = read("serverware/authority_revocation_plan_contract.py")
+        _source, plan = read("catchplate/authority_revocation_plan.py")
+        self.assertIn("from catchplate import authority_revocation_plan_contract as contract", ast.unparse(plan))
+        _source, shape = read("catchplate/authority_revocation_plan_contract.py")
         self.assertEqual(ast.literal_eval(assigned(shape, "MAX_JSON_DEPTH")), 128)
         self.assert_shape(assigned(self.tree, "_HISTORICAL_PAIRS"), '''(("expectedRequest", "expected_request"),
             *(pair for pair in capability.retention._CONTEXT_PAIRS
               if pair[0] not in {"expectedPlannerIdentity", "expectedVerifierIdentity"}))''')
         self.assert_shape(assigned(self.tree, "HISTORICAL_FIELDS"),
             'frozenset({"databaseCutoffUs", *(name for name, _ in _HISTORICAL_PAIRS)})')
-        _source, retention = read("serverware/authority_revocation_retention.py")
+        _source, retention = read("catchplate/authority_revocation_retention.py")
         pairs = ast.literal_eval(assigned(retention, "_CONTEXT_PAIRS"))
         actual_history = {name for name, _argument in pairs} - {"expectedPlannerIdentity", "expectedVerifierIdentity"}
         self.assertEqual(actual_history | {"expectedRequest", "databaseCutoffUs"}, HISTORICAL_FIELDS)
@@ -175,9 +175,9 @@ class RevocationInvocationSourceTests(unittest.TestCase):
         make_source = makefile.read_text(encoding="utf-8")
         closure = make_source.split("override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES :=", 1)[1].split("CODER_TIMEOUT ?=", 1)[0]
         paths = {token for token in closure.split() if token != "\\"}
-        self.assertTrue({"serverware/authority_revocation_invocation.py", "serverware/authority_revocation_issuance.py",
-            "serverware/authority_revocation_capability.py", "serverware/authority_revocation_capability_production.py",
-            "serverware/authority_revocation_plan.py", "serverware/authority_revocation_retention.py"} <= paths)
+        self.assertTrue({"catchplate/authority_revocation_invocation.py", "catchplate/authority_revocation_issuance.py",
+            "catchplate/authority_revocation_capability.py", "catchplate/authority_revocation_capability_production.py",
+            "catchplate/authority_revocation_plan.py", "catchplate/authority_revocation_retention.py"} <= paths)
 
     def test_producer_owns_claims_and_reserves_complete_three_encoder_output_before_signing(self):
         producer = definition(self.tree, "_produce_invocation_on_work")

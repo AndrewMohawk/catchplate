@@ -7,23 +7,23 @@ GATE="${DECISION_GATE_BASE:-http://localhost:9091}"
 GATE_HOST="${DECISION_GATE_HOST:-127.0.0.1}"
 GATE_PORT="${DECISION_GATE_PORT:-9090}"
 TMP_DIR="${TMP_DIR:-.tmp}"
-CA_FILE="$TMP_DIR/serverware-ca.pem"
-ADMIN_HEADER=(-H "X-Serverware-Admin-Token: ${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}")
-AGENT_HEADER=(-H "X-Serverware-Agent: demo-agent")
-AGENT_PROXY_HEADER=(--proxy-header "X-Serverware-Agent: demo-agent")
+CA_FILE="$TMP_DIR/catchplate-ca.pem"
+ADMIN_HEADER=(-H "X-Catchplate-Admin-Token: ${CATCHPLATE_ADMIN_TOKEN:-dev-admin-token}")
+AGENT_HEADER=(-H "X-Catchplate-Agent: demo-agent")
+AGENT_PROXY_HEADER=(--proxy-header "X-Catchplate-Agent: demo-agent")
 
 mkdir -p "$TMP_DIR"
 
 POLICY_RESTORE_NEEDED=0
 
 restore_demo_policy() {
-  docker compose exec -T serverware python - <<'PY'
+  docker compose exec -T catchplate python - <<'PY'
 import os
 import time
 
-from serverware.config import POLICY_BUNDLE_PATH
-from serverware.db import get_policy_high_water
-from serverware.policy_bundle import demo_policy_bundle, write_policy_bundle
+from catchplate.config import POLICY_BUNDLE_PATH
+from catchplate.db import get_policy_high_water
+from catchplate.policy_bundle import demo_policy_bundle, write_policy_bundle
 
 bundle = demo_policy_bundle("cred-demo-bearer")
 high_water = get_policy_high_water()
@@ -89,8 +89,8 @@ cleanup_policy() {
 
 trap cleanup_policy EXIT
 
-SERVERWARE_CA_OUT="$CA_FILE" \
-SERVERWARE_VERIFY_OUT="$TMP_DIR/decision-gate-approval-attestation.json" \
+CATCHPLATE_CA_OUT="$CA_FILE" \
+CATCHPLATE_VERIFY_OUT="$TMP_DIR/decision-gate-approval-attestation.json" \
   ./scripts/install_verified_ca.sh >/dev/null
 curl -fsS "${ADMIN_HEADER[@]}" -X POST "$BASE/api/dev/webauthn/credential" > "$TMP_DIR/decision-gate-webauthn-dev-credential.json"
 curl -fsS "${ADMIN_HEADER[@]}" "$BASE/api/grants/status" > "$TMP_DIR/decision-gate-grant-store-status-before.json"
@@ -105,13 +105,13 @@ assert status["consumptions"]["pending_audit"] == 0, status
 PY
 
 POLICY_RESTORE_NEEDED=1
-jit_rate_policy_hash="$(docker compose exec -T serverware python - <<'PY'
+jit_rate_policy_hash="$(docker compose exec -T catchplate python - <<'PY'
 import os
 import time
 
-from serverware.config import POLICY_BUNDLE_PATH
-from serverware.db import get_policy_high_water
-from serverware.policy_bundle import demo_policy_bundle, write_policy_bundle
+from catchplate.config import POLICY_BUNDLE_PATH
+from catchplate.db import get_policy_high_water
+from catchplate.policy_bundle import demo_policy_bundle, write_policy_bundle
 
 bundle = demo_policy_bundle("cred-demo-bearer")
 high_water = get_policy_high_water()
@@ -170,7 +170,7 @@ import json
 import sys
 
 version = sys.argv[1]
-tarball = f"serverware npm publish fixture {version}\n".encode("ascii")
+tarball = f"catchplate npm publish fixture {version}\n".encode("ascii")
 integrity = "sha512-" + base64.b64encode(hashlib.sha512(tarball).digest()).decode("ascii")
 print(
     json.dumps(
@@ -217,14 +217,14 @@ output_path = sys.argv[3]
 raw_request_path = Path(sys.argv[4])
 gate_host = sys.argv[5]
 gate_port = int(sys.argv[6])
-management_token = os.environ.get("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN", "").strip() or "dev-rust-management-token"
+management_token = os.environ.get("CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN", "").strip() or "dev-rust-management-token"
 
 
 def post(url, payload, token):
     request = urllib.request.Request(
         url,
         data=json.dumps(payload, separators=(",", ":"), sort_keys=True).encode(),
-        headers={"Content-Type": "application/json", "X-Serverware-Data-Plane-Token": token},
+        headers={"Content-Type": "application/json", "X-Catchplate-Data-Plane-Token": token},
     )
     with urllib.request.urlopen(request, timeout=10) as response:
         return json.loads(response.read())
@@ -240,7 +240,7 @@ def mutation_store():
     )
     """
     raw = subprocess.check_output(
-        ["docker", "compose", "exec", "-T", "grant-store", "psql", "-U", "serverware", "-d", "serverware", "-Atq", "-c", query],
+        ["docker", "compose", "exec", "-T", "grant-store", "psql", "-U", "catchplate", "-d", "catchplate", "-Atq", "-c", query],
         text=True,
     )
     return json.loads(raw)
@@ -260,7 +260,7 @@ def forward(raw: bytes):
 
 
 def preview_client_ip():
-    override = os.environ.get("SERVERWARE_TEST_PROXY_CLIENT_IP", "").strip()
+    override = os.environ.get("CATCHPLATE_TEST_PROXY_CLIENT_IP", "").strip()
     if override:
         return override
     container_id = subprocess.check_output(
@@ -283,7 +283,7 @@ payload = {
     "clientIp": preview_client_ip(),
     "method": "PUT",
     "url": "https://demo-upstream:8443/npm/demo-package",
-    "headers": {"X-Serverware-Agent": "demo-agent", "Content-Type": "application/json"},
+    "headers": {"X-Catchplate-Agent": "demo-agent", "Content-Type": "application/json"},
     "body": body,
     "preview": True,
 }
@@ -291,7 +291,7 @@ body_bytes = body.encode()
 raw_request = (
     "PUT https://demo-upstream:8443/npm/demo-package HTTP/1.1\r\n"
     "Host: demo-upstream:8443\r\n"
-    "X-Serverware-Agent: demo-agent\r\n"
+    "X-Catchplate-Agent: demo-agent\r\n"
     "Content-Type: application/json\r\n"
     f"Content-Length: {len(body_bytes)}\r\n"
     "Connection: close\r\n\r\n"
@@ -401,8 +401,8 @@ base = sys.argv[5].rstrip("/")
 body = sys.argv[6]
 gate_host = sys.argv[7]
 gate_port = int(sys.argv[8])
-management_token = os.environ.get("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN", "").strip() or "dev-rust-management-token"
-rate_limit_token = os.environ.get("SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN", "").strip() or "dev-rate-limit-consume-token"
+management_token = os.environ.get("CATCHPLATE_DATA_PLANE_MANAGEMENT_TOKEN", "").strip() or "dev-rust-management-token"
+rate_limit_token = os.environ.get("CATCHPLATE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN", "").strip() or "dev-rate-limit-consume-token"
 publish = approved.get("data_plane_grant_publish") or {}
 assert approved["id"] == required["approval_id"], (approved, required)
 assert approved["request_digest"] == required["request_digest"], (approved, required)
@@ -417,7 +417,7 @@ decision_payload = {
     "method": "PUT",
     "url": "https://demo-upstream:8443/npm/demo-package",
     "headers": {
-        "X-Serverware-Agent": "demo-agent",
+        "X-Catchplate-Agent": "demo-agent",
         "Content-Type": "application/json",
     },
     "body": body,
@@ -431,7 +431,7 @@ def post(path, payload):
         data=json.dumps(payload, separators=(",", ":"), sort_keys=True).encode(),
         headers={
             "Content-Type": "application/json",
-            "X-Serverware-Data-Plane-Token": management_token,
+            "X-Catchplate-Data-Plane-Token": management_token,
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:
@@ -444,7 +444,7 @@ def control_post(path, payload, token):
         data=json.dumps(payload, separators=(",", ":"), sort_keys=True).encode(),
         headers={
             "Content-Type": "application/json",
-            "X-Serverware-Data-Plane-Token": token,
+            "X-Catchplate-Data-Plane-Token": token,
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:
@@ -487,7 +487,7 @@ def release_store() -> dict:
     )
     """
     raw = subprocess.check_output(
-        ["docker", "compose", "exec", "-T", "grant-store", "psql", "-U", "serverware", "-d", "serverware", "-Atq", "-c", query],
+        ["docker", "compose", "exec", "-T", "grant-store", "psql", "-U", "catchplate", "-d", "catchplate", "-Atq", "-c", query],
         text=True,
     )
     return json.loads(raw)

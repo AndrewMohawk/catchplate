@@ -64,7 +64,7 @@ def main(argv=None):
     owner = None
     try:
         selected = arguments(argv)
-        from serverware.authority_local_audit_inclusion import LocalAuditInclusionIssuer
+        from catchplate.authority_local_audit_inclusion import LocalAuditInclusionIssuer
         owner = LocalAuditInclusionIssuer(**selected)
         owner.publish()
         owner.close()

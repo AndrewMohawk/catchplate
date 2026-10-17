@@ -8,7 +8,7 @@ import { perform } from './worker.mjs';
 import { invokeWorker } from './client.mjs';
 
 const CANARY = 'private_token_path_provider_error_canary';
-const EMPTY = { schema: 'serverware.npmExampleDiagnostic/v1', launcherStage: null, workerStage: null,
+const EMPTY = { schema: 'catchplate.npmExampleDiagnostic/v1', launcherStage: null, workerStage: null,
   processRole: null, exitCode: null, signal: null, systemCode: null, npmCode: null };
 const config = { operation: 'ci', packageName: 'fixture-package', version: '1.0.0' };
 const paths = { root: '/task', project: '/output', npmCli: '/npm/cli', npmrc: '/task/user', globalrc: '/task/global' };

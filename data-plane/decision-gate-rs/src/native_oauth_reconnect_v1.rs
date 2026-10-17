@@ -8,12 +8,12 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-pub const CHANNEL: &str = "serverware.nativeOAuthReconnectChannel/v1";
-pub const SCHEMA: &str = "serverware.nativeOAuthReconnectStatement/v1";
-pub const ATTESTATION_DOMAIN: &[u8] = b"serverware/native-oauth-reconnect-attestation/v1\0";
+pub const CHANNEL: &str = "catchplate.nativeOAuthReconnectChannel/v1";
+pub const SCHEMA: &str = "catchplate.nativeOAuthReconnectStatement/v1";
+pub const ATTESTATION_DOMAIN: &[u8] = b"catchplate/native-oauth-reconnect-attestation/v1\0";
 pub const SIGN_OPERATION: &str = "nativeOAuthReconnectExchange.sign/v1";
-pub const HTTP_REQUEST: &str = "serverware.nativeOAuthReconnectRequest/v1";
-pub const HTTP_RESPONSE: &str = "serverware.nativeOAuthReconnectResponse/v1";
+pub const HTTP_REQUEST: &str = "catchplate.nativeOAuthReconnectRequest/v1";
+pub const HTTP_RESPONSE: &str = "catchplate.nativeOAuthReconnectResponse/v1";
 pub(crate) use crate::native_oauth_refresh_v1::{ensure, sha};
 pub use crate::native_oauth_exchange_v1::{origin, Application, BrowserTls, Limits, Windows};
 
@@ -42,7 +42,7 @@ pub struct Configuration {
 }
 impl Configuration {
     pub fn validate(&self) -> Result<(), String> {
-        ensure(self.api_version == "serverware.nativeOAuthReconnectExchangeConfiguration/v1"
+        ensure(self.api_version == "catchplate.nativeOAuthReconnectExchangeConfiguration/v1"
             && !self.source_revision.is_empty() && self.source_revision.len() <= 128 && !self.source_revision.chars().any(char::is_control)
             && current::identifier(&self.deployment_id) && current::digest(&self.authority_root_spki_sha256)
             && current::digest(&self.control_plane_configuration_digest) && self.instance_id.starts_with("spiffe://")
@@ -108,7 +108,7 @@ impl Reply {
                 let nonce = value["cookieValue"].as_str().ok_or("reconnect cookie value")?.to_owned();
                 let expires = value["expiresAtEpochNs"].as_u64().ok_or("reconnect cookie expiry")?;
                 let url = url::Url::parse(&location).map_err(|_| "reconnect authorization URL")?;
-                ensure(current::uuid(&id) && name == format!("__Host-serverware-native-oauth-{}", id.replace('-', ""))
+                ensure(current::uuid(&id) && name == format!("__Host-catchplate-native-oauth-{}", id.replace('-', ""))
                     && current::bytes32(&nonce).is_ok() && expires > 0 && expires <= i64::MAX as u64
                     && location.len() <= 16384 && url.scheme() == "https" && url.username().is_empty() && url.password().is_none()
                     && url.fragment().is_none() && url.port_or_known_default() == Some(443)
@@ -142,7 +142,7 @@ impl Prepared {
         let raw = bounded_original(self.arguments["authorization_original"].as_str().ok_or("reconnect authorization absent")?,64*1024)?;
         let envelope = crate::native_oauth_refresh_v1::response_document(&raw)?;
         fields(&envelope,&["schema","payload","signatureBase64Url"])?;
-        ensure(envelope["schema"] == "serverware.signedOAuthFamilyReconnectAuthorization/v1"
+        ensure(envelope["schema"] == "catchplate.signedOAuthFamilyReconnectAuthorization/v1"
             && canonical_ascii_bytes(&envelope)? == raw, "reconnect authorization original differs")?;
         let signature = bounded_original(envelope["signatureBase64Url"].as_str().ok_or("reconnect authorization signature")?,64)?;
         ensure(signature.len() == 64,"reconnect authorization signature shape")?;
@@ -154,7 +154,7 @@ impl Prepared {
         fields(&grant,&["schema","sourceRevision","purpose","authorizationId","configurationDigest","deploymentId","credentialId","credentialVersion",
             "credentialRowSha256","generationRowSha256","providerId","providerSubject","providerAccount","clientId","enrollmentSha256","requesterId",
             "scopes","metadataSha256","familyScope","affectedLineages","issuedAtEpochNs","contactExpiresAtEpochNs","retentionExpiresAtEpochNs","pendingExpiresAtEpochNs","expiresAtEpochNs"])?;
-        ensure(grant["schema"] == "serverware.oauthFamilyReconnectAuthorization/v1" && grant["purpose"] == "measured-oauth-active-family-replacement"
+        ensure(grant["schema"] == "catchplate.oauthFamilyReconnectAuthorization/v1" && grant["purpose"] == "measured-oauth-active-family-replacement"
             && grant["authorizationId"] == self.exchange_id()? && grant["providerId"] == self.provider()?
             && grant["sourceRevision"] == self.config.source_revision && grant["configurationDigest"] == self.config.control_plane_configuration_digest
             && grant["deploymentId"] == self.config.deployment_id && grant["requesterId"] == self.arguments["actor_id"]

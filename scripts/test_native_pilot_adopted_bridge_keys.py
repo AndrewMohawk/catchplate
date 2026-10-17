@@ -21,10 +21,10 @@ from cryptography.exceptions import InvalidSignature
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS)); sys.path.insert(0, str(SCRIPTS.parent))
 
-from serverware import native_pilot_bridge_key_profile as keys
-from serverware import native_pilot_closure_authority as closure
-from serverware import native_pilot_closure_set as sets
-from serverware import native_pilot_measured_configuration as measured
+from catchplate import native_pilot_bridge_key_profile as keys
+from catchplate import native_pilot_closure_authority as closure
+from catchplate import native_pilot_closure_set as sets
+from catchplate import native_pilot_measured_configuration as measured
 from test_native_pilot_adopted_bridge import fixture as runtime_fixture
 from test_native_pilot_bridge_authorizations import (fixture as old_fixture, clocks, _cold_key,
     expected_key, pair, signed, DOMAINS)
@@ -51,10 +51,10 @@ def fixture():
     binding = json.loads(value["measured"]["configurationBindingOriginal"])
     binding.update(assignmentPayloadSha256=envelope["payloadSha256"],
         nativeClosureSet=copy.deepcopy(envelope["payload"]["nativeClosureSet"]))
-    binding_sha = frame("serverware.policyShadowProductionCustodyConfiguration/v2", binding)
+    binding_sha = frame("catchplate.policyShadowProductionCustodyConfiguration/v2", binding)
     proof = scope_fixture(envelope)
     proof["production_configuration_binding_sha256"] = binding_sha
-    proof["binding_sha256"] = frame("serverware.policyShadowProductionCustodyProofScope/v2",
+    proof["binding_sha256"] = frame("catchplate.policyShadowProductionCustodyProofScope/v2",
         [proof[name] for name in EXPECTED_SCOPE_VALUES + EXPECTED_SCOPE_ROOTS])
     value["measured"].update(configurationBindingOriginal=canonical(binding).decode("ascii"),
         configurationBindingSha256=binding_sha, proofScopeOriginal=canonical(proof).decode("ascii"))
@@ -69,12 +69,12 @@ def fixture():
     activation = [{"name": name, "fd": fd, "device": 7, "inode": 9000 + fd,
         "mode": kind | 0o700, "uid": cold["uid"], "gid": cold["gid"]}
         for fd, (name, kind) in enumerate(inventory, 6)]
-    payload.update(runtimeConfig={"path": "/etc/serverware/native-pilot-inputs/bridge-runtime.json",
+    payload.update(runtimeConfig={"path": "/etc/catchplate/native-pilot-inputs/bridge-runtime.json",
         "sha256": sha(runtime_raw)}, activation=activation)
-    raw = canonical({"apiVersion": "serverware.policyCustodyGuestDelivery/v1", "payload": payload,
+    raw = canonical({"apiVersion": "catchplate.policyCustodyGuestDelivery/v1", "payload": payload,
         "signatureBase64url": encoded(_cold_key("bridge-c9")[0].sign(
-            b"serverware.policyCustodyGuestDelivery.signature/v1\0" + canonical(payload)))})
-    source.update(apiVersion="serverware.nativePilotDeliverySigningInput/v3", runtimeOriginal=runtime_raw.decode("ascii"),
+            b"catchplate.policyCustodyGuestDelivery.signature/v1\0" + canonical(payload)))})
+    source.update(apiVersion="catchplate.nativePilotDeliverySigningInput/v3", runtimeOriginal=runtime_raw.decode("ascii"),
         payloadOriginal=canonical(payload).decode("ascii"), activationOriginal=canonical(activation).decode("ascii"))
     value.update(apiVersion=keys.ADOPTED_API, deliveryInputOriginal=canonical(source).decode("ascii"),
         deliveryOriginal=raw.decode("ascii"))
@@ -89,10 +89,10 @@ def closure_input(value, guest, manifest):
     payload = {name: key[name] for name in ("assignmentId", "assignmentPayloadSha256", "assignmentRevision", "guest",
         "trustCheckpointId", "revocationGeneration", "revocationRootSha256", "issuedAtUnixNanos", "expiresAtUnixNanos",
         "signingKeyId", "signingKeySpkiSha256")}
-    payload.update(apiVersion="serverware.nativeCustodyClosureAssignment/v5", purpose="shadow-custody-closure-set-member",
+    payload.update(apiVersion="catchplate.nativeCustodyClosureAssignment/v5", purpose="shadow-custody-closure-set-member",
         profile="native-multi-guest-closure-set-v2", guestRole="bridge", manifestSha256=manifest["manifestSha256"],
         **{name: selected[name] for name in ("setRootSha256", "seccompSetRootSha256")},
-        leafSha256=frame("serverware.nativeCustodyExecutionClosureSetLeaf/v2", ["bridge", manifest]))
+        leafSha256=frame("catchplate.nativeCustodyExecutionClosureSetLeaf/v2", ["bridge", manifest]))
     return {"apiVersion": closure.ADOPTED_BRIDGE_API, "guestRole": "bridge",
         "controlOriginal": value["controlOriginal"], "deliveryInputOriginal": value["deliveryInputOriginal"],
         "configurationOriginal": source["ownerConfigurationOriginal"], "windowOriginal": source["windowOriginal"],
@@ -102,9 +102,9 @@ def closure_input(value, guest, manifest):
         "payloadOriginal": canonical(payload).decode("ascii")}
 
 
-def closure_result(value, *, domain="serverware.nativeCustodyClosureAssignment.signature/v5"):
+def closure_result(value, *, domain="catchplate.nativeCustodyClosureAssignment.signature/v5"):
     payload = json.loads(value["payloadOriginal"])
-    raw = canonical({"apiVersion": "serverware.nativeCustodyClosure/v5",
+    raw = canonical({"apiVersion": "catchplate.nativeCustodyClosure/v5",
         "manifest": json.loads(value["manifestOriginal"]), "closureSet": json.loads(value["closureSetOriginal"]),
         "authorization": {"payload": payload, "signature": encoded(key_fixture("custody-supervisor-capability")[0].sign(
             signed_message(domain, payload)))}})
@@ -135,8 +135,8 @@ class AdoptedBridgeKeyControls(unittest.TestCase):
         values = tuple(records[name].encode("ascii") for name in
             ("roleKeyInputOriginal", "roleKeyOriginal", "admissionInputOriginal", "admissionOriginal"))
         result = keys.admitted_adopted_pair(*values, **clocks())
-        self.assertEqual(result["authorization"]["payload"]["apiVersion"], "serverware.nativeShadowRoleKeyAssignment/v2")
-        self.assertEqual(result["admissionAuthorization"]["payload"]["apiVersion"], "serverware.nativeShadowBridgeAdmissionAssignment/v1")
+        self.assertEqual(result["authorization"]["payload"]["apiVersion"], "catchplate.nativeShadowRoleKeyAssignment/v2")
+        self.assertEqual(result["admissionAuthorization"]["payload"]["apiVersion"], "catchplate.nativeShadowBridgeAdmissionAssignment/v1")
         self.assertEqual(result["expectedScope"]["productionConfigurationBindingSha256"], self.value["measured"]["configurationBindingSha256"])
         with self.assertRaises(ValueError): keys.admitted_pair(*values, **clocks())
         old, guest, manifest = old_fixture(); old_records = pair(old, guest, manifest)
@@ -148,7 +148,7 @@ class AdoptedBridgeKeyControls(unittest.TestCase):
         value = closure_input(self.value, self.guest, self.manifest)
         prepared = closure.prepare_input(canonical(value), **clocks())
         self.assertNotEqual(self.manifest["runtimeConfigurationSha256"], self.guest["runtimeConfigurationSha256"])
-        self.assertEqual(prepared["result"]["apiVersion"], "serverware.nativeCustodyClosure/v5")
+        self.assertEqual(prepared["result"]["apiVersion"], "catchplate.nativeCustodyClosure/v5")
         result = closure_result(value)
         self.assertEqual(closure.checked_result(canonical(value), result, **clocks()), result["original"].encode("ascii"))
         with self.assertRaises(InvalidSignature):
@@ -156,14 +156,14 @@ class AdoptedBridgeKeyControls(unittest.TestCase):
 
     def test_old_selectors_and_nonbridge_roles_remain_closed(self):
         value = closure_input(self.value, self.guest, self.manifest)
-        for change in ({"apiVersion": "serverware.nativePilotClosureAuthorityInput/v2"},
+        for change in ({"apiVersion": "catchplate.nativePilotClosureAuthorityInput/v2"},
                 {"apiVersion": closure.ADOPTED_API}, {"guestRole": "publicationReconciliation"}):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 closure.prepare_input(canonical({**value, **change}), **clocks())
         old = {**self.value, "apiVersion": keys.API}
         with self.assertRaises(ValueError): keys.prepare_input("role-keys", canonical(old), **clocks())
         wrong = copy.deepcopy(self.value); source = json.loads(wrong["deliveryInputOriginal"])
-        source["apiVersion"] = "serverware.nativePilotDeliverySigningInput/v1"
+        source["apiVersion"] = "catchplate.nativePilotDeliverySigningInput/v1"
         wrong["deliveryInputOriginal"] = canonical(source).decode("ascii")
         with self.assertRaises(ValueError): keys.prepare_input("role-keys", canonical(wrong), **clocks())
 

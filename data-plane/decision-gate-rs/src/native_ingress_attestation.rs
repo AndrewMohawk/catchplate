@@ -7,19 +7,19 @@
 //! request and original-owner deadline checks do not interrupt kernel work.
 
 use super::*;
-use serverware_decision_gate::enclave_public_identity_v1::{
+use catchplate_decision_gate::enclave_public_identity_v1::{
     encode_native_ingress_quote_public_evidence_v1,
     encode_native_ingress_quote_public_evidence_v2,
 };
-use serverware_decision_gate::native_ingress_challenge_v1::{
+use catchplate_decision_gate::native_ingress_challenge_v1::{
     derive_nonce, CHALLENGE_HEADER, EXPORTER_LABEL,
 };
 
 const MAX_PUBLIC_IDENTITY_BYTES: usize = 64 * 1024;
 const MAX_SESSION_EVIDENCE_BYTES: usize = 96 * 1024;
 const MAX_CONTINUATION_LIFETIME: Duration = Duration::from_secs(120);
-pub(super) const CONTINUATION_HEADER: &str = "x-serverware-ingress-continuation";
-const EVIDENCE_HEADER: &str = "x-serverware-ingress-evidence";
+pub(super) const CONTINUATION_HEADER: &str = "x-catchplate-ingress-continuation";
+const EVIDENCE_HEADER: &str = "x-catchplate-ingress-evidence";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EvidenceProfile { LegacyV1, ClientTrustV2, PrincipalV3 }
@@ -396,7 +396,7 @@ fn session_original(public_identity: &[u8], challenge: [u8; 32], exporter: [u8; 
         .ok_or(Failure::Unavailable)?;
     let encoded_principal = match principal {
         Some(original) if !original.is_empty() && original.len()
-            <= serverware_decision_gate::native_principal_preflight_v1::MAX_STATEMENT_BYTES
+            <= catchplate_decision_gate::native_principal_preflight_v1::MAX_STATEMENT_BYTES
             && client_trust_v2 => original.len().checked_mul(4).and_then(|size| size.checked_add(2))
                 .map(|size| size / 3).ok_or(Failure::Unavailable)?,
         Some(_) => return Err(Failure::Unavailable),
@@ -409,9 +409,9 @@ fn session_original(public_identity: &[u8], challenge: [u8; 32], exporter: [u8; 
     // Every variable-length input is already source-bounded before encoding.
     // The embedded publicIdentity preserves A's exact JSON original and LF.
     let mut evidence = json!({
-        "apiVersion":if principal.is_some() { "serverware.nativeIngressSessionEvidence/v3" }
-            else if client_trust_v2 { "serverware.nativeIngressSessionEvidence/v2" }
-            else { "serverware.nativeIngressSessionEvidence/v1" },
+        "apiVersion":if principal.is_some() { "catchplate.nativeIngressSessionEvidence/v3" }
+            else if client_trust_v2 { "catchplate.nativeIngressSessionEvidence/v2" }
+            else { "catchplate.nativeIngressSessionEvidence/v1" },
         "evidenceScope":"unverified-session-public-material",
         "okForAction":false,
         "clientChallengeBase64url":general_purpose::URL_SAFE_NO_PAD.encode(challenge),

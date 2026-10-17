@@ -138,7 +138,7 @@ impl NativeUpstreamRelaysV1 {
         tunnel.verify_live().map_err(|_| "native loopback tunnel is not live".to_owned())?;
         let proxy = reqwest::Proxy::https(format!("http://{}", tunnel.proxy_addr()))
             .map_err(|_| "construct fixed native HTTPS proxy".to_owned())?
-            .basic_auth("serverware-relay", tunnel.proxy_password());
+            .basic_auth("catchplate-relay", tunnel.proxy_password());
         self.remaining()?;
         Ok(proxy)
     }
@@ -258,7 +258,7 @@ impl NativeUpstreamRelaysV1 {
         service.tunnel.verify_live().map_err(|_| "native service tunnel is not live".to_owned())?;
         let proxy = reqwest::Proxy::https(format!("http://{}", service.tunnel.proxy_addr()))
             .map_err(|_| "construct fixed native service HTTPS proxy".to_owned())?
-            .basic_auth("serverware-relay", service.tunnel.proxy_password());
+            .basic_auth("catchplate-relay", service.tunnel.proxy_password());
         self.remaining()?;
         Ok(proxy)
     }

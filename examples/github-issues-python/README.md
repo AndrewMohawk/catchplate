@@ -4,9 +4,9 @@ Read up to 100 open issues from **one explicitly permitted repository**, followi
 pagination with normal PyGithub methods. This example is read only: it never
 creates an issue or comment. GitHub's issues list may include pull requests.
 
-The operator stores the real GitHub credential in Serverware. This program gets
-only a limited Serverware application login. Its GitHub authorization is the
-public placeholder `token serverware-github-placeholder-v1`; the proxy replaces
+The operator stores the real GitHub credential in Catchplate. This program gets
+only a limited Catchplate application login. Its GitHub authorization is the
+public placeholder `token catchplate-github-placeholder-v1`; the proxy replaces
 that value after checking the application's permission. Do not provide a real
 GitHub token to this program.
 
@@ -23,7 +23,7 @@ neither connection can be granted or used until the upstream is enabled.
    private-key PEM, exact repository owner/name and Issues
    access; choose `read` for this read-only client. Install the App for that
    repository with the required permission in GitHub first. Installation ID is
-   optional when first saving: Serverware can discover it for that exact
+   optional when first saving: Catchplate can discover it for that exact
    repository and retains the verified ID.
 2. Create an application with **Basic proxy authentication** enabled; retain its
    application ID and one-time application token.
@@ -36,9 +36,9 @@ neither connection can be granted or used until the upstream is enabled.
 No generic permission, repository-metadata route, `/user` or `/rate_limit` grant
 is needed. The named issues permission, not this client, is the authority boundary.
 
-Serverware keeps the App private key encrypted server-side and automatically
+Catchplate keeps the App private key encrypted server-side and automatically
 obtains and renews short-lived installation tokens. It does not renew PATs or the
-client's Serverware application token. The App's repository/Issues ceiling and
+client's Catchplate application token. The App's repository/Issues ceiling and
 the application's saved grant both apply; this remains the existing issues and
 comments preset, not arbitrary GitHub APIs, git, GraphQL or Actions/workflow
 management. This program remains read only even if the connection permits writes.
@@ -48,7 +48,7 @@ in the same call. A later separately authorized lease may attempt fresh
 authentication after a 60-second backoff; this is not a repository-request retry.
 
 A GitHub App installation is not a GitHub OAuth user-login flow, and its App ID
-is not `SERVERWARE_APP_ID`. PyGithub still receives only the public dummy. Never
+is not `CATCHPLATE_APP_ID`. PyGithub still receives only the public dummy. Never
 put the private key, JWT or installation token in this project's environment.
 The new App flow is **not yet verified against real GitHub**;
 [App lifecycle synthetic verification is recorded separately](../../docs/operator-github-client-compatibility.md#github-app-feature-verification-checkpoint).
@@ -64,23 +64,23 @@ python3 -m venv .venv
 ```
 
 In **Proxy**, select the application and its GitHub issues permission, then
-download the private client JSON and the Serverware interception CA. Keep both
+download the private client JSON and the Catchplate interception CA. Keep both
 in a private directory, outside source control. The JSON's `ca_file` must point
 to that CA; relative paths are resolved from the JSON file's directory.
 
 ```bash
-chmod 600 /path/serverware-client.private.json /path/serverware-ca.pem
-.venv/bin/python -B issues.py --config /path/serverware-client.private.json --limit 100
+chmod 600 /path/catchplate-client.private.json /path/catchplate-ca.pem
+.venv/bin/python -B issues.py --config /path/catchplate-client.private.json --limit 100
 ```
 
-The download contains the Serverware application token, not a GitHub credential.
+The download contains the Catchplate application token, not a GitHub credential.
 Use the Basic-authentication export for a `github_issues_read_v1` or
 `github_issues_write_v1` permission; this program only reads in either case.
 The application/Basic username, repository/upstream and unexpired token metadata
 must agree. The JSON is limited to 64 KiB and must be a regular file, not a
 symlink. Its connection/scope values override conflicting environment settings;
 an absent or null `client_recipe.proxy_ca_file` clears any ambient
-`SERVERWARE_PROXY_CA_FILE`. A supplied separate proxy CA is explicitly refused:
+`CATCHPLATE_PROXY_CA_FILE`. A supplied separate proxy CA is explicitly refused:
 use a publicly trusted proxy endpoint or the Node/Go example instead. Recipe
 commands, entrypoints, environment and SDK credentials are never executed or
 adopted. `--config` cannot be combined with the internal `--child` option.
@@ -89,21 +89,21 @@ Environment-only setup remains supported:
 
 ```bash
 
-export SERVERWARE_PROXY_URL='https://your-proxy-host:443'
-export SERVERWARE_APP_ID='your-application-uuid'
-export SERVERWARE_CA_FILE='/absolute/path/serverware-ca.pem'
-export SERVERWARE_GITHUB_OWNER='your-owner'
-export SERVERWARE_GITHUB_REPO='your-repository'
-read -rsp 'Serverware application token: ' SERVERWARE_PROXY_TOKEN; echo
-export SERVERWARE_PROXY_TOKEN
+export CATCHPLATE_PROXY_URL='https://your-proxy-host:443'
+export CATCHPLATE_APP_ID='your-application-uuid'
+export CATCHPLATE_CA_FILE='/absolute/path/catchplate-ca.pem'
+export CATCHPLATE_GITHUB_OWNER='your-owner'
+export CATCHPLATE_GITHUB_REPO='your-repository'
+read -rsp 'Catchplate application token: ' CATCHPLATE_PROXY_TOKEN; echo
+export CATCHPLATE_PROXY_TOKEN
 
 .venv/bin/python -B issues.py --limit 100
-unset SERVERWARE_PROXY_TOKEN
+unset CATCHPLATE_PROXY_TOKEN
 ```
 
 Use your actual values; the placeholder host and application UUID above are not
-built-in accounts. `SERVERWARE_PROXY_URL` must have no credentials, path, query or
-fragment. Leave `SERVERWARE_PROXY_CA_FILE` unset: it is explicitly rejected, even
+built-in accounts. `CATCHPLATE_PROXY_URL` must have no credentials, path, query or
+fragment. Leave `CATCHPLATE_PROXY_CA_FILE` unset: it is explicitly rejected, even
 if empty, rather than silently ignored. Ambient GitHub credentials, proxy/NO_PROXY
 settings, Python paths and Requests CA overrides are not passed into the child.
 
@@ -127,7 +127,7 @@ variables](https://requests.readthedocs.io/en/latest/user/advanced/#proxies).
 Use an application-scoped, revocable token on a trusted workstation.
 
 The launcher builds a temporary, client-only CA bundle from the pinned certifi
-roots plus the downloaded Serverware CA; it removes that file after the child
+roots plus the downloaded Catchplate CA; it removes that file after the child
 exits. PyGithub's `verify` option remains enabled. The reviewed Requests/urllib3
 transport uses this **same bundle for both the outer HTTPS proxy and the inner
 GitHub TLS connection**. These are not independently isolated trust policies.

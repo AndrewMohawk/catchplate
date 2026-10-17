@@ -6,10 +6,10 @@ import os
 import sys
 from pathlib import Path
 
-os.environ.setdefault("SERVERWARE_DATA_DIR", str(Path(".tmp/test-external-tee-provider/data").resolve()))
+os.environ.setdefault("CATCHPLATE_DATA_DIR", str(Path(".tmp/test-external-tee-provider/data").resolve()))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from serverware.attestation import attestation_document, verify_attestation_quote
-from serverware.key_release import release_material
+from catchplate.attestation import attestation_document, verify_attestation_quote
+from catchplate.key_release import release_material
 
 
 def main() -> None:

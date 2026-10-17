@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Two read-only synthetic application requests, not production acceptance.
-# Usage: SERVERWARE_PILOT_CA=/absolute/public-ca.pem bash scripts/check_development_pilot.sh
+# Usage: CATCHPLATE_PILOT_CA=/absolute/public-ca.pem bash scripts/check_development_pilot.sh
 set -euo pipefail
 
-if test "$#" -ne 0 || [[ "${SERVERWARE_PILOT_CA:-}" != /* ]] \
-    || test ! -f "$SERVERWARE_PILOT_CA" || test ! -r "$SERVERWARE_PILOT_CA"; then
-    printf '%s\n' 'FAIL: set SERVERWARE_PILOT_CA to a readable absolute public CA file; no arguments accepted' >&2
+if test "$#" -ne 0 || [[ "${CATCHPLATE_PILOT_CA:-}" != /* ]] \
+    || test ! -f "$CATCHPLATE_PILOT_CA" || test ! -r "$CATCHPLATE_PILOT_CA"; then
+    printf '%s\n' 'FAIL: set CATCHPLATE_PILOT_CA to a readable absolute public CA file; no arguments accepted' >&2
     exit 2
 fi
 if ! command -v curl >/dev/null || ! command -v python3 >/dev/null; then
@@ -31,7 +31,7 @@ try:
     if type(value) is not dict:
         raise ValueError("response shape")
     if sys.argv[1] == "allow":
-        forbidden = {"authorization", "authorization_sha256", "proxy_authorization", "serverware_agent"}
+        forbidden = {"authorization", "authorization_sha256", "proxy_authorization", "catchplate_agent"}
         valid = (status == b"200" and value.get("authorization_present") is True
             and value.get("authorization_scheme") == "Bearer"
             and value.get("credential_marker") == "initial"
@@ -53,9 +53,9 @@ request() {
     curl --disable --silent --connect-timeout 3 --max-time 10 \
         --max-filesize 65536 --proto '=https' --max-redirs 0 --noproxy '' \
         --proxy http://127.0.0.1:18080 \
-        --proxy-header 'X-Serverware-Agent: demo-token-agent' \
+        --proxy-header 'X-Catchplate-Agent: demo-token-agent' \
         --proxy-header 'Proxy-Authorization: Bearer demo-agent-proxy-token' \
-        --cacert "$SERVERWARE_PILOT_CA" --write-out '\n%{http_code}' \
+        --cacert "$CATCHPLATE_PILOT_CA" --write-out '\n%{http_code}' \
         "https://demo-upstream:8443/$1" 2>/dev/null
 }
 

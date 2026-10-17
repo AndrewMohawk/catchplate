@@ -44,7 +44,7 @@ def start_document():
 
 
 def cookie_header():
-    return [("Set-Cookie", "__Host-serverware-oauth-" + STATE + "=" + NONCE
+    return [("Set-Cookie", "__Host-catchplate-oauth-" + STATE + "=" + NONCE
         + "; HttpOnly; Max-Age=300; Path=/; SameSite=lax; Secure")]
 
 
@@ -81,7 +81,7 @@ def observations(stage, *, refresh_before_expiry=False):
     if resources == 2:
         add("resource_received", timestamp=expiry + 1001)
         add("resource_authorized", timestamp=expiry + 1001, token_generation=2, operation="gmail.messages.list")
-    return {"schema": "serverware.privateGoogleObservations/v1", "counts": {"google": {key: value for key, value in counts.items() if value}, "x": {}},
+    return {"schema": "catchplate.privateGoogleObservations/v1", "counts": {"google": {key: value for key, value in counts.items() if value}, "x": {}},
         "events": events, "active": {"authorizationCodes": 0, "grants": consent},
         "tokenLifetimes": {"authorizationCodeExchangeSeconds": 90, "refreshExchangeSeconds": 300},
         "initialAccessExpiresAtEpochMs": expiry if consent else None,
@@ -122,10 +122,10 @@ class GoogleRefreshCheckerTests(unittest.TestCase):
 
     def test_gmail_wire_oracle_retains_commitments_and_rejects_unselected_metadata(self):
         body = checker.fixture.GMAIL_RESPONSE_BODY
-        fields = [("Content-Type", "application/json"), ("X-Serverware-Policy-Hash", POLICY),
-                  ("X-Serverware-Response-Body-Sha256", "sha256:" + hashlib.sha256(body).hexdigest()),
-                  ("X-Serverware-Request-Digest", COMMITMENTS[0][0]),
-                  ("X-Serverware-Operation-Digest", COMMITMENTS[0][1])]
+        fields = [("Content-Type", "application/json"), ("X-Catchplate-Policy-Hash", POLICY),
+                  ("X-Catchplate-Response-Body-Sha256", "sha256:" + hashlib.sha256(body).hexdigest()),
+                  ("X-Catchplate-Request-Digest", COMMITMENTS[0][0]),
+                  ("X-Catchplate-Operation-Digest", COMMITMENTS[0][1])]
         self.assertEqual(checker.validate_gmail_response(200, fields, body, POLICY), COMMITMENTS[0])
         for name in ("Server", "Date", "CACHE-CONTROL"):
             with self.subTest(header=name), self.assertRaises(checker.CheckFailure):
@@ -156,7 +156,7 @@ class GoogleRefreshCheckerTests(unittest.TestCase):
                 checker.authorization_target(item)
 
     def test_browser_cookie_is_host_secure_httponly_and_exactly_one(self):
-        expected = "__Host-serverware-oauth-" + STATE + "=" + NONCE
+        expected = "__Host-catchplate-oauth-" + STATE + "=" + NONCE
         self.assertEqual(checker.browser_cookie(cookie_header(), STATE), (expected, NONCE))
         original = cookie_header()[0][1]
         candidates = [[], cookie_header() * 2]

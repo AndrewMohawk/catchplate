@@ -45,7 +45,7 @@ X_ACCOUNT_POST_LIMITS = {"/api/operator-demo/oauth/x/start": 4096,
 
 
 def classification():
-    tree = ast.parse((ROOT / "serverware/app.py").read_text())
+    tree = ast.parse((ROOT / "catchplate/app.py").read_text())
     selected = [node for node in tree.body if
         isinstance(node, ast.Assign) and any(isinstance(name, ast.Name) and
             name.id == "_OPERATOR_CATALOG_BODY_POST_PATHS" for name in node.targets)
@@ -78,7 +78,7 @@ class BodyTransport(FullASGI):
         headers = [(b"host", b"console.example.com"), (b"origin", origin.encode()),
             (b"content-type", media.encode())]
         if authenticate:
-            headers.append((b"x-serverware-admin-token", self.administrator.encode()))
+            headers.append((b"x-catchplate-admin-token", self.administrator.encode()))
         if declared is not None:
             headers.append((b"content-length", str(declared).encode()))
         scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
@@ -192,7 +192,7 @@ async def provider_body_controls(app, application, api, config, db, mode):
         require(tuple(connection.iterdump()) == before, "provider refusal changed SQLite state")
     require(config.POLICY_BUNDLE_PATH.read_bytes() == policy and not NETWORK_ATTEMPTS,
         "provider refusal changed authority or contacted network")
-    for name in ("SERVERWARE_OPERATOR_PROVIDER_CUSTODY_DIR", "SERVERWARE_OPERATOR_X_CUSTODY_DIR"):
+    for name in ("CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR", "CATCHPLATE_OPERATOR_X_CUSTODY_DIR"):
         if name in os.environ:
             require(not list(Path(os.environ[name]).iterdir()), "refused body initialized provider custody")
     return {"full_asgi": True, "provider_mode": mode, "bounded_routes": len(active),
@@ -206,17 +206,17 @@ async def connected_story(mode):
     require(interfaces == {"lo"}, "network-none required")
     os.umask(0o077)
     sys.addaudithook(no_network)
-    Path(os.environ["SERVERWARE_DATA_DIR"]).mkdir(mode=0o700, exist_ok=True)
+    Path(os.environ["CATCHPLATE_DATA_DIR"]).mkdir(mode=0o700, exist_ok=True)
     if mode == "managed":
-        from serverware import operator_google_managed_config
+        from catchplate import operator_google_managed_config
         operator_google_managed_config.bootstrap()
-    from serverware import operator_demo
+    from catchplate import operator_demo
     operator_demo.activate()
-    from serverware.control_plane_startup import validate_control_plane_startup
+    from catchplate.control_plane_startup import validate_control_plane_startup
     validate_control_plane_startup()
-    from serverware import app as application, config, db, operator_demo_store as store
-    from serverware import operator_catalog_api as api, operator_catalog_schema as schema
-    from serverware import policy_bundle
+    from catchplate import app as application, config, db, operator_demo_store as store
+    from catchplate import operator_catalog_api as api, operator_catalog_schema as schema
+    from catchplate import policy_bundle
     app = BodyTransport(application.app, ADMIN)
     await app.start()
     try:
@@ -298,9 +298,9 @@ async def connected_story(mode):
 
 class OperatorCatalogBodyRoutingTests(unittest.TestCase):
     def test_exact_registered_roster_and_actual_endpoint_guards(self):
-        from serverware import operator_catalog_api as api, operator_notification_api as notifications
-        from serverware import operator_google_configuration_api as google, operator_x_configuration_api as x
-        from serverware import operator_x_accounts_api as x_accounts
+        from catchplate import operator_catalog_api as api, operator_notification_api as notifications
+        from catchplate import operator_google_configuration_api as google, operator_x_configuration_api as x
+        from catchplate import operator_x_accounts_api as x_accounts
         roster, _ = classification()
         self.assertEqual(len(roster), 42)
         self.assertIn("/api/operator-demo/credentials/github-app/replace-key", roster)
@@ -385,17 +385,17 @@ class OperatorCatalogBodyRoutingTests(unittest.TestCase):
                 ManagedGoogleConfigurationTests.setUp(self)
                 x_directory = Path(self.scratch.name) / "x-custody"
                 x_directory.mkdir(mode=0o700)
-                self.environment.update(SERVERWARE_OPERATOR_MANAGED_X_ENABLED="1",
-                    SERVERWARE_OPERATOR_X_CUSTODY_DIR=str(x_directory))
+                self.environment.update(CATCHPLATE_OPERATOR_MANAGED_X_ENABLED="1",
+                    CATCHPLATE_OPERATOR_X_CUSTODY_DIR=str(x_directory))
             elif mode == "google":
                 from test_operator_google_consent import OperatorGoogleConsentTests
                 OperatorGoogleConsentTests.setUp(self)
-                self.environment["SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI"] = ORIGIN + "/api/oauth/callback/google"
+                self.environment["CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI"] = ORIGIN + "/api/oauth/callback/google"
             else:
                 workspace.common.OperatorDemoPersistenceTests.setUp(self)
-        self.environment.update(SERVERWARE_PUBLIC_URL=ORIGIN, SERVERWARE_ADMIN_TOKEN=ADMIN,
-            SERVERWARE_ADMIN_USER="body-routing-test", SERVERWARE_ADMIN_ROLES="admin",
-            SERVERWARE_DECISION_GATE_BASE="", TMPDIR="/tmp")
+        self.environment.update(CATCHPLATE_PUBLIC_URL=ORIGIN, CATCHPLATE_ADMIN_TOKEN=ADMIN,
+            CATCHPLATE_ADMIN_USER="body-routing-test", CATCHPLATE_ADMIN_ROLES="admin",
+            CATCHPLATE_DECISION_GATE_BASE="", TMPDIR="/tmp")
         for key in tuple(self.environment):
             if key.lower() in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}:
                 self.environment.pop(key)

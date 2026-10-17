@@ -34,18 +34,18 @@ from packaging.utils import (
 from packaging.version import InvalidVersion, Version
 
 
-SEALED_ROOT = Path("/opt/serverware/clean-room")
+SEALED_ROOT = Path("/opt/catchplate/clean-room")
 WHEELHOUSE = SEALED_ROOT / "wheelhouse"
 INSTALLED = SEALED_ROOT / "installed"
 PAYLOAD_MANIFEST = SEALED_ROOT / "payload-manifest.json"
 WHEELHOUSE_MANIFEST = WHEELHOUSE / "wheelhouse-manifest.json"
 CHECKSUMS = WHEELHOUSE / "SHA256SUMS"
 PACKAGE_CONTRACT = SEALED_ROOT / "package-install-contract.json"
-RESULT_PREFIX = "SERVERWARE_CLEAN_ROOM_RESULT="
-PAYLOAD_VERSION = "serverware.cleanRoomPayloadManifest/v1"
-WHEELHOUSE_VERSION = "serverware.cleanRoomWheelhouseManifest/v3"
-CONTRACT_VERSION = "serverware.cleanRoomInstallContract/v5"
-RESULT_VERSION = "serverware.agentTrustCleanRoomResult/v5"
+RESULT_PREFIX = "CATCHPLATE_CLEAN_ROOM_RESULT="
+PAYLOAD_VERSION = "catchplate.cleanRoomPayloadManifest/v1"
+WHEELHOUSE_VERSION = "catchplate.cleanRoomWheelhouseManifest/v3"
+CONTRACT_VERSION = "catchplate.cleanRoomInstallContract/v5"
+RESULT_VERSION = "catchplate.agentTrustCleanRoomResult/v5"
 EXPECTED_UID = 65532
 EXPECTED_GID = 65532
 MAX_JSON_BYTES = 16 * 1024 * 1024
@@ -60,12 +60,12 @@ WHEEL_RE = re.compile(
     r"[A-Za-z0-9._]+-[A-Za-z0-9._]+-[A-Za-z0-9._]+\.whl$"
 )
 EXPECTED_COMMANDS = (
-    "/opt/serverware/clean-room/installed/bin/serverware-attestation",
-    "/opt/serverware/clean-room/installed/bin/serverware-enrollment",
-    "/opt/serverware/clean-room/installed/bin/serverware-evidence",
+    "/opt/catchplate/clean-room/installed/bin/catchplate-attestation",
+    "/opt/catchplate/clean-room/installed/bin/catchplate-enrollment",
+    "/opt/catchplate/clean-room/installed/bin/catchplate-evidence",
 )
 PYTHON_SITE = "lib/python3.11/site-packages"
-PYTHON_EXECUTABLE = "/opt/serverware/clean-room/python/bin/python3"
+PYTHON_EXECUTABLE = "/opt/catchplate/clean-room/python/bin/python3"
 WHEELHOUSE_SCHEMA = {
     "apiVersion": WHEELHOUSE_VERSION,
     "fileFields": ["path", "sha256", "size"],
@@ -640,7 +640,7 @@ def _verify_wheel_record(
         raw, _ = _read_regular_at(
             root_fd,
             wheel_name,
-            label="serverware package wheel",
+            label="catchplate package wheel",
         )
     finally:
         os.close(root_fd)
@@ -1066,7 +1066,7 @@ def _resolve_requirements(
             )
     dependencies.sort(key=lambda item: (item["from"], item["requirement"]))
     resolution.sort(key=lambda item: (item["from"], item["requirement"]))
-    roots = {"serverware-enrollment"}
+    roots = {"catchplate-enrollment"}
     reachable = set(roots)
     frontier = list(roots)
     while frontier:
@@ -1283,14 +1283,14 @@ def _verify_sandbox() -> dict[str, Any]:
         "/",
         "/dev",
         "/proc",
-        "/run/serverware-runtime",
+        "/run/catchplate-runtime",
         "/tmp",
         "/work",
     }
     expected_filesystems = {
         "/dev": "tmpfs",
         "/proc": "proc",
-        "/run/serverware-runtime": "tmpfs",
+        "/run/catchplate-runtime": "tmpfs",
         "/tmp": "tmpfs",
         "/work": "tmpfs",
     }
@@ -1302,7 +1302,7 @@ def _verify_sandbox() -> dict[str, Any]:
             "sizeBytes": 16 * 1024 * 1024,
             "uid": 0,
         },
-        "/run/serverware-runtime": {
+        "/run/catchplate-runtime": {
             "gid": EXPECTED_GID,
             "mode": 0o700,
             "options": {"nodev", "noexec", "nosuid", "rw", "strictatime"},
@@ -1433,7 +1433,7 @@ def _verify_sandbox() -> dict[str, Any]:
     descriptor = -1
     try:
         descriptor = os.open(
-            ".serverware-cwd-probe",
+            ".catchplate-cwd-probe",
             os.O_WRONLY
             | os.O_CREAT
             | os.O_EXCL
@@ -1446,7 +1446,7 @@ def _verify_sandbox() -> dict[str, Any]:
         os.close(descriptor)
         descriptor = -1
         current = os.stat(
-            ".serverware-cwd-probe",
+            ".catchplate-cwd-probe",
             dir_fd=work_fd,
             follow_symlinks=False,
         )
@@ -1457,7 +1457,7 @@ def _verify_sandbox() -> dict[str, Any]:
             != (created.st_dev, created.st_ino)
         ):
             raise ValidationError("clean-room writability probe was replaced")
-        os.unlink(".serverware-cwd-probe", dir_fd=work_fd)
+        os.unlink(".catchplate-cwd-probe", dir_fd=work_fd)
     finally:
         if descriptor >= 0:
             os.close(descriptor)
@@ -1507,16 +1507,16 @@ def _run_fixed(scenario: dict[str, Any]) -> dict[str, Any]:
             "HOME": "/work/home",
             "LANG": "C",
             "LC_ALL": "C",
-            "PATH": "/opt/serverware/clean-room/installed/bin",
+            "PATH": "/opt/catchplate/clean-room/installed/bin",
             "PYTHONPATH": (
-                "/opt/serverware/clean-room/installed/"
+                "/opt/catchplate/clean-room/installed/"
                 "lib/python3.11/site-packages"
             ),
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONHASHSEED": "0",
             "PYTHONNOUSERSITE": "1",
             "TMPDIR": "/work/tmp",
-            "XDG_RUNTIME_DIR": "/run/serverware-runtime",
+            "XDG_RUNTIME_DIR": "/run/catchplate-runtime",
         },
         cwd=work_dir,
         close_fds=True,

@@ -80,7 +80,7 @@ class OperatorKeyReplacementApiTests(unittest.TestCase):
         # before any status assertion can include a returned body in diagnostics.
         values = [("Connection", "close")]
         if auth:
-            values.append(("X-Serverware-Admin-Token", self.admin))
+            values.append(("X-Catchplate-Admin-Token", self.admin))
         if origin is not None:
             values.append(("Origin", origin))
         if body is not None:
@@ -190,7 +190,7 @@ class OperatorKeyReplacementApiTests(unittest.TestCase):
     def test_shared_bearer_replacement_keeps_identity_policy_bindings_and_survives_restart(self):
         with self.runner():
             self.assertEqual(self.status()["capabilities"]["static_key_replacement"], {
-                "schema": "serverware.operatorStaticKeyReplacement/v1",
+                "schema": "catchplate.operatorStaticKeyReplacement/v1",
                 "path": REPLACE_PATH, "credential_types": ["bearer", "header"]})
             credential = self.credential()
             self.assertIs(type(credential["credential_generation"]), int)
@@ -285,7 +285,7 @@ class OperatorKeyReplacementApiTests(unittest.TestCase):
             before = self.state()
             cases = [
                 ("missing-auth", {"auth": False}, payload, 401),
-                ("wrong-auth", {"auth": False, "headers": [("X-Serverware-Admin-Token", "synthetic-wrong")]}, payload, 401),
+                ("wrong-auth", {"auth": False, "headers": [("X-Catchplate-Admin-Token", "synthetic-wrong")]}, payload, 401),
                 ("missing-origin", {"origin": None}, payload, 403),
                 ("wrong-origin", {"origin": "https://foreign.example.com"}, payload, 403),
                 ("wrong-media", {"headers": [("Content-Type", None), ("Content-Type", "text/plain")]}, payload, 415),
@@ -315,12 +315,12 @@ class OperatorKeyReplacementApiTests(unittest.TestCase):
         secret_file = self.directory / "google-client-secret"
         secret_file.write_text(google_tests.CLIENT_SECRET + "\n", encoding="utf-8")
         secret_file.chmod(0o600)
-        self.environment.update({"SERVERWARE_OPERATOR_GOOGLE_PROFILE": "operator-google-v1",
-            "SERVERWARE_OPERATOR_DEMO_UPSTREAMS": '["https://api.example.com","https://gmail.googleapis.com"]',
-            "SERVERWARE_PUBLIC_URL": self.origin,
-            "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID": "123-fixture.apps.googleusercontent.com",
-            "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI": self.origin + "/api/oauth/callback/google",
-            "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE": str(secret_file)})
+        self.environment.update({"CATCHPLATE_OPERATOR_GOOGLE_PROFILE": "operator-google-v1",
+            "CATCHPLATE_OPERATOR_DEMO_UPSTREAMS": '["https://api.example.com","https://gmail.googleapis.com"]',
+            "CATCHPLATE_PUBLIC_URL": self.origin,
+            "CATCHPLATE_GOOGLE_OAUTH_CLIENT_ID": "123-fixture.apps.googleusercontent.com",
+            "CATCHPLATE_GOOGLE_OAUTH_REDIRECT_URI": self.origin + "/api/oauth/callback/google",
+            "CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE": str(secret_file)})
         identifier = self.child("seed-google")["id"]
         with self.runner():
             credential = self.public_credential(identifier)

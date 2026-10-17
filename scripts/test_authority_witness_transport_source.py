@@ -61,7 +61,7 @@ def rejecting(node, message):
 class AuthorityWitnessTransportSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        source = ROOT / "serverware/authority_service.py"
+        source = ROOT / "catchplate/authority_service.py"
         if source.stat().st_size > 2 * 1024 * 1024:
             raise AssertionError("authority service exceeds the bounded source fixture")
         cls.tree = ast.parse(source.read_text(encoding="utf-8"))
@@ -73,7 +73,7 @@ class AuthorityWitnessTransportSourceTests(unittest.TestCase):
         cls.transport = named(cls.tree, ast.FunctionDef, "_socket_request_bytes_with_response")
         cls.receiver = named(cls.tree, ast.FunctionDef, "_recv_message_with_bytes")
         cls.service_sender = named(cls.tree, ast.FunctionDef, "_send_encoded_message")
-        framing = ROOT / "serverware/authority_transport.py"
+        framing = ROOT / "catchplate/authority_transport.py"
         if framing.stat().st_size > 64 * 1024:
             raise AssertionError("authority framing exceeds the bounded source fixture")
         cls.framing = ast.parse(framing.read_text(encoding="utf-8"))

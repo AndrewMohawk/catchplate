@@ -66,8 +66,8 @@ def main(argv=None):
     for signo in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(signo, cancelled)
     try:
-        from serverware.authority_local_artifacts import produce
-        from serverware.authority_artifact_spec import canonical_json_bytes
+        from catchplate.authority_local_artifacts import produce
+        from catchplate.authority_artifact_spec import canonical_json_bytes
         result = produce(**selected)
         print(canonical_json_bytes(result).decode("ascii"))
         return 0

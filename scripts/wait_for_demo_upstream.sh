@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RETRIES="${SERVERWARE_WAIT_RETRIES:-60}"
+RETRIES="${CATCHPLATE_WAIT_RETRIES:-60}"
 
 for _ in $(seq 1 "$RETRIES"); do
   if docker compose exec -T demo-upstream python -c '

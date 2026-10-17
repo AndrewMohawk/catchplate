@@ -8,10 +8,10 @@ pass; live bridge operation remains unverified.
 
 ## One separately approved current-head signature
 
-[The profile](../serverware/native_pilot_current_head_profile.py) and
-[one-key signer](../serverware/native_pilot_current_head_authority.py) implement
+[The profile](../catchplate/native_pilot_current_head_profile.py) and
+[one-key signer](../catchplate/native_pilot_current_head_authority.py) implement
 the existing native current-head attestation wire. The complete input is
-`serverware.nativePilotCurrentHeadAuthorityInput/v1`, bounded to 16 MiB, with
+`catchplate.nativePilotCurrentHeadAuthorityInput/v1`, bounded to 16 MiB, with
 exactly twelve fields:
 
 `apiVersion`, `serviceRole`, `driverConfigurationOriginal`,
@@ -62,7 +62,7 @@ decision or new job/key selector is added by this command.
 
 ## Explicit initial-history bridge runtime
 
-`serverware.policyCustodyProductionRpcRuntime/v10` retains v9's active-effect
+`catchplate.policyCustodyProductionRpcRuntime/v10` retains v9's active-effect
 behavior and adds `ordinaryInitialHistories`: exactly the five ordinary roles,
 each containing literal `runtimeOriginal` and `generationGrantOriginal`.
 Existing history credential names, root pins and semantic manifest digests
@@ -84,7 +84,7 @@ those guards or claim service readiness.
 
 ## Version-specific transport bounds
 
-The new [runtime profile](../serverware/native_pilot_bridge_runtime.py) centralizes
+The new [runtime profile](../catchplate/native_pilot_bridge_runtime.py) centralizes
 the public shape/version limits. These are not signature or deployment approval.
 
 | Material | Legacy limit retained | Explicit v10 path |
@@ -138,7 +138,7 @@ parent's exhaustive selection. `c54f343031ff6cdb04713070d094970d5c481a37` makes
 the single-line routing correction to the existing proof inspector. It changes
 no Python, Make inventory or checked documentation bytes; those checks were
 not repeated. The corrected source passed
-`cargo check --offline --locked --frozen -j 1 --bin serverware-decision-gate`
+`cargo check --offline --locked --frozen -j 1 --bin catchplate-decision-gate`
 in the pinned Rust 1.88 container, network disabled, one CPU and 8 GiB memory.
 Exit was **0**, from `2026-10-01T01:46:14.900419557Z` to
 `2026-10-01T01:47:15.023094764Z`; Cargo reported **57.67 seconds**. The result is
@@ -147,7 +147,7 @@ duplicates. No warning cleanup or release-artifact rebuild was included.
 
 All three source archives, original failed attempts, successful logs, exact
 harness/commands, structured result and 21-file checksums are retained at
-`codex-offload/serverware/engineering-builds/c54f3430-bridge-prerequisites-2Yj6qc/`.
+`codex-offload/catchplate/engineering-builds/c54f3430-bridge-prerequisites-2Yj6qc/`.
 The final archive is **85,616,640 bytes**, SHA-256
 `3778a05e669062c448b0ed18fec7b175f7a7b4f7d190460c72a6cccd76c705a8`.
 Every retained checksum passed. These are engineering checks using the existing

@@ -5,7 +5,7 @@
 An inbox worker should not need a new application, app token or permission rule
 when its owner renews Google consent. Reauthorization replaces the provider
 tokens for the same saved account. It is not disconnect-and-add, a permission
-expansion, or a renewal of the application's own Serverware token.
+expansion, or a renewal of the application's own Catchplate token.
 
 The account card offers **Reauthorize** only when the deployment advertises the
 supported lifecycle. The review names the account, Read Gmail permission and

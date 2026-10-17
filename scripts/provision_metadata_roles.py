@@ -16,16 +16,16 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 MODE = "metadata-bootstrap"
 REQUIRED_ROLES = (
-    "SERVERWARE_METADATA_STORE_RUNTIME_ROLE", "SERVERWARE_AUDIT_STORE_RUNTIME_ROLE",
-    "SERVERWARE_METADATA_STORE_AUTHORITY_EXECUTOR_ROLE",
-    "SERVERWARE_METADATA_STORE_AUTHORITY_VERIFIER_ROLE",
+    "CATCHPLATE_METADATA_STORE_RUNTIME_ROLE", "CATCHPLATE_AUDIT_STORE_RUNTIME_ROLE",
+    "CATCHPLATE_METADATA_STORE_AUTHORITY_EXECUTOR_ROLE",
+    "CATCHPLATE_METADATA_STORE_AUTHORITY_VERIFIER_ROLE",
 )
 USAGE = """Usage: python -I -B scripts/provision_metadata_roles.py --plan | --apply
 
-Requires explicit SERVERWARE_PROCESS_MODE=metadata-bootstrap, PostgreSQL
+Requires explicit CATCHPLATE_PROCESS_MODE=metadata-bootstrap, PostgreSQL
 metadata/audit selection and their configured runtime/executor/verifier role
 names. --plan reports source-selected names without connecting. --apply uses
-SERVERWARE_METADATA_STORE_ADMIN_POSTGRES_DSN and requires its actual same-session
+CATCHPLATE_METADATA_STORE_ADMIN_POSTGRES_DSN and requires its actual same-session
 superuser on the supported PostgreSQL version. Every selected role must be absent.
 LOGIN roles have PASSWORD NULL; no credentials, memberships or grants are issued.
 This does not establish usable runtime authentication or issue TLS identities.
@@ -34,23 +34,23 @@ Existing metadata bootstrap must separately install and admit exact schema ACLs.
 
 
 def _preflight(apply: bool) -> None:
-    if os.environ.get("SERVERWARE_PROCESS_MODE", "").strip() != MODE:
+    if os.environ.get("CATCHPLATE_PROCESS_MODE", "").strip() != MODE:
         raise ValueError("explicit offline process mode is required")
     for name in ("METADATA_STORE", "AUDIT_STORE"):
-        if os.environ.get("SERVERWARE_" + name + "_BACKEND", "").strip().lower() not in {"postgres", "postgresql"}:
+        if os.environ.get("CATCHPLATE_" + name + "_BACKEND", "").strip().lower() not in {"postgres", "postgresql"}:
             raise ValueError("PostgreSQL selection is required")
-    required = REQUIRED_ROLES + (("SERVERWARE_METADATA_STORE_ADMIN_POSTGRES_DSN",) if apply else ())
+    required = REQUIRED_ROLES + (("CATCHPLATE_METADATA_STORE_ADMIN_POSTGRES_DSN",) if apply else ())
     if any(not os.environ.get(name, "").strip() for name in required):
         raise ValueError("explicit role configuration is required")
 
 
 def _load_db():
-    from serverware import db
+    from catchplate import db
     return db
 
 
 def role_plan(db) -> tuple[tuple[str, bool], ...]:
-    from serverware.authority_store.planner_read_sql import ROLE as planner_role
+    from catchplate.authority_store.planner_read_sql import ROLE as planner_role
 
     roles = [
         (db._METADATA_STORE_RUNTIME_ROLE, True),
@@ -127,7 +127,7 @@ def _apply(db, roles) -> None:
     import psycopg
     from psycopg.rows import dict_row
     deadline = time.monotonic() + 30
-    with psycopg.connect(os.environ["SERVERWARE_METADATA_STORE_ADMIN_POSTGRES_DSN"],
+    with psycopg.connect(os.environ["CATCHPLATE_METADATA_STORE_ADMIN_POSTGRES_DSN"],
                          connect_timeout=5, row_factory=dict_row,
                          options="-c search_path=pg_catalog -c statement_timeout=5000 -c lock_timeout=1000") as connection:
         create_roles(connection, db, roles, deadline)

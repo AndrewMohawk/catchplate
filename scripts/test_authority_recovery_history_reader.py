@@ -15,13 +15,13 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from serverware import authority_index_projection as projection
-from serverware import authority_index_reader as acquisition_reader
-from serverware import authority_index_trace as index_trace
-from serverware import authority_recovery_history_reader as history
-from serverware import authority_query_read_work as measured
-from serverware import authority_transition_core as core
-from serverware.authority_index_heads import CapturedIndexHead
+from catchplate import authority_index_projection as projection
+from catchplate import authority_index_reader as acquisition_reader
+from catchplate import authority_index_trace as index_trace
+from catchplate import authority_recovery_history_reader as history
+from catchplate import authority_query_read_work as measured
+from catchplate import authority_transition_core as core
+from catchplate.authority_index_heads import CapturedIndexHead
 from test_authority_index_join import expected_profile, expected_leaf, expected_interval
 from test_authority_index_range import IndependentIndex
 from test_authority_radix_mutation import IndependentTree
@@ -73,7 +73,7 @@ class Cursor:
             self.leaf_rows.append(dict(index_id=history.INDEX_ID, projection_digest=profile.projection_digest,
                 index_key=leaf.key, primary_id=row["id"], primary_key_digest=leaf.primary_key_digest,
                 primary_row_digest=leaf.primary_row_digest, index_revision=7))
-            tree_key = sql_digest("serverware.policyAuthorityAuthenticatedKey/v1", history.TABLE.encode(),
+            tree_key = sql_digest("catchplate.policyAuthorityAuthenticatedKey/v1", history.TABLE.encode(),
                                   sql_json(selected["key"]))
             self.primary_leaves[tree_key] = dict(key_json=sql_json(selected["key"]).decode(),
                 row_digest=proof["rowDigest"], leaf_digest=proof["leafDigest"],
@@ -96,11 +96,11 @@ class Cursor:
         elif '"policy_authority_counted_index_nodes"' in sql:
             identities = tuple(zip(parameters[:-2:2], parameters[1:-2:2]))
             rows = [copy.deepcopy(self.counted_nodes[k]) for k in identities if k in self.counted_nodes]
-        elif "FROM serverware_metadata.webauthn_credentials AS target" in sql:
+        elif "FROM catchplate_metadata.webauthn_credentials AS target" in sql:
             rows = [{"row_value": copy.deepcopy(self.rows[parameters[0]])}] if parameters[0] in self.rows else []
-        elif "FROM serverware_metadata.policy_authority_authenticated_leaves" in sql:
+        elif "FROM catchplate_metadata.policy_authority_authenticated_leaves" in sql:
             rows = [copy.deepcopy(self.primary_leaves[parameters[1]])] if parameters[1] in self.primary_leaves else []
-        elif "FROM serverware_metadata.policy_authority_authenticated_tree_nodes" in sql:
+        elif "FROM catchplate_metadata.policy_authority_authenticated_tree_nodes" in sql:
             depth = parameters[1]
             rows = [dict(path_prefix=path, node_digest=self.primary.nodes[(depth, path)],
                          root_revision=self.primary.root.root_revision)
@@ -188,9 +188,9 @@ class RecoveryHistoryReaderTests(unittest.TestCase):
             with self.subTest(target=target):
                 context = self.context()
                 def corrupt(sql, rows):
-                    if target == "row" and "FROM serverware_metadata.webauthn_credentials AS target" in sql and rows:
+                    if target == "row" and "FROM catchplate_metadata.webauthn_credentials AS target" in sql and rows:
                         rows[0]["row_value"]["label"] = "tampered"
-                    if target == "node" and "FROM serverware_metadata.policy_authority_authenticated_tree_nodes" in sql and rows:
+                    if target == "node" and "FROM catchplate_metadata.policy_authority_authenticated_tree_nodes" in sql and rows:
                         rows[0]["node_digest"] = "sha256:" + "f" * 64
                     return rows
                 context[0].transform = corrupt
@@ -233,7 +233,7 @@ class RecoveryHistoryReaderTests(unittest.TestCase):
                 context = self.context()
                 if change != "boolean-count":
                     def alter(sql, rows):
-                        if "FROM serverware_metadata.webauthn_credentials AS target" in sql and rows:
+                        if "FROM catchplate_metadata.webauthn_credentials AS target" in sql and rows:
                             rows[0]["row_value"]["label" if change == "nested" else "unexpected"] = {}
                         return rows
                     context[0].transform = alter

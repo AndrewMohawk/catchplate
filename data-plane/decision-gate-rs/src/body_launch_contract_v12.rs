@@ -10,14 +10,14 @@ use super::{sha256_bytes, BodyContract, ContainerCommand, Digest, LogicalLane,
 use serde::{Deserialize, Serialize};
 use std::io::{self, Write};
 
-pub const SUPERVISOR_EXECUTABLE: &str = "/usr/libexec/serverware-coder-body-supervisor-v12";
-pub const CONTEXT_DIRECTORY: &str = "/serverware-controller-launch-v12";
+pub const SUPERVISOR_EXECUTABLE: &str = "/usr/libexec/catchplate-coder-body-supervisor-v12";
+pub const CONTEXT_DIRECTORY: &str = "/catchplate-controller-launch-v12";
 pub const CONTEXT_NAME: &str = "launch.json";
-pub const CONTEXT_PATH: &str = "/serverware-controller-launch-v12/launch.json";
+pub const CONTEXT_PATH: &str = "/catchplate-controller-launch-v12/launch.json";
 pub const RELEASE_NAME: &str = "release.json";
-pub const RELEASE_PATH: &str = "/serverware-controller-launch-v12/release.json";
-pub const BODY_LAUNCH_CONTEXT_VERSION_V12: &str = "serverware.controllerBodyLaunch/v12";
-pub const BODY_LAUNCH_RELEASE_VERSION_V12: &str = "serverware.controllerBodyRelease/v12";
+pub const RELEASE_PATH: &str = "/catchplate-controller-launch-v12/release.json";
+pub const BODY_LAUNCH_CONTEXT_VERSION_V12: &str = "catchplate.controllerBodyLaunch/v12";
+pub const BODY_LAUNCH_RELEASE_VERSION_V12: &str = "catchplate.controllerBodyRelease/v12";
 pub const MAX_CONTEXT_BYTES_V12: usize = MAX_FRAME_BYTES;
 pub const MAX_RELEASE_BYTES_V12: usize = 4096;
 

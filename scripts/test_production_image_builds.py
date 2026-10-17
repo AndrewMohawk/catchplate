@@ -22,7 +22,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import build_production_images
 import generate_release_provenance
 import package_native_broker_runtime
-import serverware_source_tree
+import catchplate_source_tree
 import verify_codebase_attestation
 import verify_reproducible_builds
 from test_development_compose import clean_environment, custody_environment
@@ -38,19 +38,19 @@ def production_compose_fixture_environment(
     environment = clean_environment()
     environment.update(base or {})
     for name in re.findall(r"\$\{([A-Z0-9_]+):\?[^}]*\}", compose):
-        environment.setdefault(name, "serverware-compose-test-value")
+        environment.setdefault(name, "catchplate-compose-test-value")
     # Each short-syntax bind source gets a distinct, nonexistent absolute path.
     # Do not confuse required host IPs with volume sources or invent named volumes.
     for name in re.findall(r"^\s*- \$\{([A-Z0-9_]+):\?[^}]*\}(?=[:/])", compose, re.MULTILINE):
         if name not in (base or {}):
-            environment[name] = f"/serverware-compose-contract/{name.lower()}"
-    if "SERVERWARE_CONTROL_PLANE_IMAGE" not in (base or {}):
-        environment["SERVERWARE_CONTROL_PLANE_IMAGE"] = "registry.test/serverware-control@sha256:" + "1" * 64
-    if "SERVERWARE_DECISION_GATE_IMAGE" not in (base or {}):
-        environment["SERVERWARE_DECISION_GATE_IMAGE"] = "registry.test/serverware-gate@sha256:" + "2" * 64
+            environment[name] = f"/catchplate-compose-contract/{name.lower()}"
+    if "CATCHPLATE_CONTROL_PLANE_IMAGE" not in (base or {}):
+        environment["CATCHPLATE_CONTROL_PLANE_IMAGE"] = "registry.test/catchplate-control@sha256:" + "1" * 64
+    if "CATCHPLATE_DECISION_GATE_IMAGE" not in (base or {}):
+        environment["CATCHPLATE_DECISION_GATE_IMAGE"] = "registry.test/catchplate-gate@sha256:" + "2" * 64
     for name, value in {
-        "SERVERWARE_POLICY_CUSTODY_DRIVER_GID": "65518",
-        "SERVERWARE_PROXY_BIND_ADDRESS": "127.0.0.1",
+        "CATCHPLATE_POLICY_CUSTODY_DRIVER_GID": "65518",
+        "CATCHPLATE_PROXY_BIND_ADDRESS": "127.0.0.1",
     }.items():
         if name not in (base or {}):
             environment[name] = value
@@ -108,7 +108,7 @@ def assert_oci_traceability(path: Path) -> None:
     required = {
         "ORG.OPENCONTAINERS.IMAGE.SOURCE",
         "ORG.OPENCONTAINERS.IMAGE.REVISION",
-        "DEV.SERVERWARE.SOURCE_TREE_DIGEST",
+        "DEV.CATCHPLATE.SOURCE_TREE_DIGEST",
     }
     joined = "\n".join(line.upper() for line in final)
     missing = sorted(item for item in required if item not in joined)
@@ -119,7 +119,7 @@ def assert_oci_traceability(path: Path) -> None:
 def assert_dockerignore() -> None:
     ignored = set((ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines())
     required = {".git", ".tmp", "**/target", "ops/production-readiness.env", "*.pem", "*.key"}
-    required.update(f"**/{part}" for part in serverware_source_tree.EXCLUDED_PARTS)
+    required.update(f"**/{part}" for part in catchplate_source_tree.EXCLUDED_PARTS)
     missing = sorted(required - ignored)
     if missing:
         raise AssertionError(f".dockerignore does not exclude local build/secrets material: {missing}")
@@ -149,9 +149,9 @@ def services_mounting_source(model: dict[str, object], source: str) -> set[str]:
 
 
 def assert_control_plane_management_is_disabled(model: dict[str, object]) -> None:
-    control = model["services"]["serverware"]
+    control = model["services"]["catchplate"]
     environment = control.get("environment") or {}
-    if environment.get("SERVERWARE_DECISION_GATE_BASE") not in (None, ""):
+    if environment.get("CATCHPLATE_DECISION_GATE_BASE") not in (None, ""):
         raise AssertionError(
             "production control plane must use shared grants, not any gate-management URL"
         )
@@ -162,13 +162,13 @@ def assert_production_dependencies() -> None:
     if "mitmproxy" in requirements:
         raise AssertionError("production requirements must not include mitmproxy")
     dockerfile = (ROOT / "Dockerfile.production").read_text(encoding="utf-8")
-    if "serverware.control_plane_runner" not in dockerfile:
+    if "catchplate.control_plane_runner" not in dockerfile:
         raise AssertionError("production image must start the control-plane runner, not the prototype mitmproxy runner")
     if "requirements.lock" not in dockerfile or "--require-hashes" not in dockerfile:
         raise AssertionError("production control-plane dependencies must use the hash-locked requirements file")
     if (
-        "serverware.productionImage/v1" not in dockerfile
-        or ".serverware-production-image" not in dockerfile
+        "catchplate.productionImage/v1" not in dockerfile
+        or ".catchplate-production-image" not in dockerfile
     ):
         raise AssertionError(
             "production control-plane image must contain its non-environment startup marker"
@@ -178,7 +178,7 @@ def assert_production_dependencies() -> None:
         or "chmod 0750 /runtime/gate-materials" not in dockerfile
         or (
             "COPY --from=runtime-tree --chown=65532:65532 --chmod=0750 "
-            "/runtime/gate-materials /run/serverware/gate"
+            "/runtime/gate-materials /run/catchplate/gate"
         )
         not in dockerfile
     ):
@@ -186,7 +186,7 @@ def assert_production_dependencies() -> None:
             "production image must seed the shared gate volume for the "
             "service-owned policy-directory lock"
         )
-    config_source = (ROOT / "serverware" / "config.py").read_text(encoding="utf-8")
+    config_source = (ROOT / "catchplate" / "config.py").read_text(encoding="utf-8")
     if "_PRODUCTION_IMAGE_MARKER_PRESENT or os.getenv" not in config_source:
         raise AssertionError(
             "control-plane production detection must prefer the baked image marker"
@@ -200,7 +200,7 @@ def assert_production_dependencies() -> None:
     ):
         raise AssertionError("default development image must use the production dependency stage, not proxy-test dependencies")
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    if "SERVERWARE_INSTALL_PROTOTYPE_MITMPROXY" in compose:
+    if "CATCHPLATE_INSTALL_PROTOTYPE_MITMPROXY" in compose:
         raise AssertionError("default docker-compose.yml must not enable the mitmproxy prototype")
     dev_result = subprocess.run(
         ["docker", "compose", "--env-file", "/dev/null", "--profile", "custody", "config", "--format", "json"],
@@ -270,7 +270,7 @@ def assert_production_dependencies() -> None:
         raise AssertionError("merged custody Compose topology was not classified exactly")
     wrong_client_uid = copy.deepcopy(custody_model)
     wrong_client_uid["services"]["custody-runtime"]["environment"][
-        "SERVERWARE_CUSTODY_EXPECTED_CLIENT_UID"
+        "CATCHPLATE_CUSTODY_EXPECTED_CLIENT_UID"
     ] = "0"
     try:
         generate_release_provenance.development_compose_services(
@@ -286,7 +286,7 @@ def assert_production_dependencies() -> None:
         (
             "unequal configured image references",
             lambda candidate: candidate["services"]["custody-runtime"].__setitem__(
-                "image", "serverware-custody:dev"
+                "image", "catchplate-custody:dev"
             ),
         ),
         (
@@ -325,59 +325,59 @@ def assert_production_dependencies() -> None:
             pass
         else:
             raise AssertionError(f"custody provenance accepted {description}")
-    if services_mounting_source(dev_model, "serverware-response-signing-private") != {"serverware"}:
+    if services_mounting_source(dev_model, "catchplate-response-signing-private") != {"catchplate"}:
         raise AssertionError("development response-signing private volume must be mounted only by the control plane")
-    if services_mounting_source(dev_model, "serverware-custody-state") != {"custody-runtime"}:
+    if services_mounting_source(dev_model, "catchplate-custody-state") != {"custody-runtime"}:
         raise AssertionError("development custody state volume must be mounted only by custody")
     if (
         (dev_model["services"]["custody-runtime"].get("environment") or {}).get(
-            "SERVERWARE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY"
+            "CATCHPLATE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY"
         )
-        != "/var/lib/serverware-custody"
+        != "/var/lib/catchplate-custody"
     ):
         raise AssertionError("development custody must use its private persistent attempt ledger")
-    dev_serverware_env = dev_model["services"]["serverware"].get("environment") or {}
+    dev_catchplate_env = dev_model["services"]["catchplate"].get("environment") or {}
     if (
-        dev_serverware_env.get("SERVERWARE_RESPONSE_SIGNING_KEY")
-        != "/run/serverware/response-signing-private/response-signing-ed25519.pem"
+        dev_catchplate_env.get("CATCHPLATE_RESPONSE_SIGNING_KEY")
+        != "/run/catchplate/response-signing-private/response-signing-ed25519.pem"
     ):
         raise AssertionError("development response-signing key must use the control-plane-only volume")
     production_compose_path = ROOT / "docker-compose.production.yml"
     production_compose = production_compose_path.read_text(encoding="utf-8")
-    if "SERVERWARE_DECISION_GATE_BASE" in production_compose:
+    if "CATCHPLATE_DECISION_GATE_BASE" in production_compose:
         raise AssertionError("production control plane must not use the decision-gate management listener")
     if (
-        "SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL: "
-        "https://serverware:3000/api/data-plane/grants/consume"
+        "CATCHPLATE_CONTROL_PLANE_GRANT_CONSUME_URL: "
+        "https://catchplate:3000/api/data-plane/grants/consume"
     ) not in production_compose:
         raise AssertionError("production decision gate must use authenticated shared grant consumption")
-    if "SERVERWARE_DECISION_GATE_MANAGEMENT_HOST: 127.0.0.1" not in production_compose:
+    if "CATCHPLATE_DECISION_GATE_MANAGEMENT_HOST: 127.0.0.1" not in production_compose:
         raise AssertionError("production decision-gate management listener must be loopback-only")
-    if "serverware-data:/data:ro" in production_compose:
+    if "catchplate-data:/data:ro" in production_compose:
         raise AssertionError("production decision gate must not mount control-plane private state")
-    if "serverware-gate-materials:/run/serverware/gate:ro" not in production_compose:
+    if "catchplate-gate-materials:/run/catchplate/gate:ro" not in production_compose:
         raise AssertionError("production decision gate must mount only the scoped gate-material volume")
     compose_env = production_compose_fixture_environment()
     bind_mount_fixtures = {
-        "SERVERWARE_CONTROL_PLANE_TLS_DIR": "/tmp/serverware-compose-test-tls",
-        "SERVERWARE_ATTESTATION_HELPER_DIR": "/tmp/serverware-compose-test-helpers",
-        "SERVERWARE_NITRO_ROOT_CERT": "/tmp/serverware-compose-test-nitro-root.pem",
-        "SERVERWARE_NITRO_KMS_MATERIALS_FILE": "/tmp/serverware-compose-test-kms-materials.json",
-        "SERVERWARE_RELEASE_PROVENANCE_FILE": "/tmp/serverware-compose-test-provenance.json",
-        "SERVERWARE_IMAGE_SIGNATURES_FILE": "/tmp/serverware-compose-test-signatures.json",
-        "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE": "/tmp/serverware-compose-test-google-oauth-secret",
-        "SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE": "/tmp/serverware-compose-test-x-oauth-secret",
-        "SERVERWARE_OIDC_CLIENT_SECRET_FILE": "/tmp/serverware-compose-test-oidc-secret",
-        "SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE": "/tmp/serverware-compose-test-response-signing-key",
-        "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY": "/tmp/serverware-compose-test-enrollment-verifier.pub.pem",
-        "SERVERWARE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY": "/tmp/serverware-compose-test-hardware-verifier.pub.pem",
-        "SERVERWARE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY": "/tmp/serverware-compose-test-final-authority.pub.pem",
-        "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY": "/tmp/serverware-compose-test-recovery-root.pub.pem",
-        "SERVERWARE_AUDIT_ANCHOR_TLS_DIR": "/tmp/serverware-compose-test-anchor-tls",
+        "CATCHPLATE_CONTROL_PLANE_TLS_DIR": "/tmp/catchplate-compose-test-tls",
+        "CATCHPLATE_ATTESTATION_HELPER_DIR": "/tmp/catchplate-compose-test-helpers",
+        "CATCHPLATE_NITRO_ROOT_CERT": "/tmp/catchplate-compose-test-nitro-root.pem",
+        "CATCHPLATE_NITRO_KMS_MATERIALS_FILE": "/tmp/catchplate-compose-test-kms-materials.json",
+        "CATCHPLATE_RELEASE_PROVENANCE_FILE": "/tmp/catchplate-compose-test-provenance.json",
+        "CATCHPLATE_IMAGE_SIGNATURES_FILE": "/tmp/catchplate-compose-test-signatures.json",
+        "CATCHPLATE_GOOGLE_OAUTH_CLIENT_SECRET_FILE": "/tmp/catchplate-compose-test-google-oauth-secret",
+        "CATCHPLATE_X_OAUTH_CLIENT_SECRET_FILE": "/tmp/catchplate-compose-test-x-oauth-secret",
+        "CATCHPLATE_OIDC_CLIENT_SECRET_FILE": "/tmp/catchplate-compose-test-oidc-secret",
+        "CATCHPLATE_RESPONSE_SIGNING_PRIVATE_KEY_FILE": "/tmp/catchplate-compose-test-response-signing-key",
+        "CATCHPLATE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY": "/tmp/catchplate-compose-test-enrollment-verifier.pub.pem",
+        "CATCHPLATE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY": "/tmp/catchplate-compose-test-hardware-verifier.pub.pem",
+        "CATCHPLATE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY": "/tmp/catchplate-compose-test-final-authority.pub.pem",
+        "CATCHPLATE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY": "/tmp/catchplate-compose-test-recovery-root.pub.pem",
+        "CATCHPLATE_AUDIT_ANCHOR_TLS_DIR": "/tmp/catchplate-compose-test-anchor-tls",
     }
     compose_env.update(bind_mount_fixtures)
-    compose_env["SERVERWARE_CONTROL_PLANE_IMAGE"] = "registry.test/serverware-control@sha256:" + "1" * 64
-    compose_env["SERVERWARE_DECISION_GATE_IMAGE"] = "registry.test/serverware-gate@sha256:" + "2" * 64
+    compose_env["CATCHPLATE_CONTROL_PLANE_IMAGE"] = "registry.test/catchplate-control@sha256:" + "1" * 64
+    compose_env["CATCHPLATE_DECISION_GATE_IMAGE"] = "registry.test/catchplate-gate@sha256:" + "2" * 64
     result = subprocess.run(
         ["docker", "compose", "--env-file", "/dev/null", "-f", str(production_compose_path), "config", "--format", "json"],
         cwd=ROOT,
@@ -396,8 +396,8 @@ def assert_production_dependencies() -> None:
         "https://management.invalid:9091",
     ):
         candidate = copy.deepcopy(model)
-        candidate["services"]["serverware"]["environment"][
-            "SERVERWARE_DECISION_GATE_BASE"
+        candidate["services"]["catchplate"]["environment"][
+            "CATCHPLATE_DECISION_GATE_BASE"
         ] = management_url
         try:
             assert_control_plane_management_is_disabled(candidate)
@@ -442,9 +442,9 @@ def assert_production_dependencies() -> None:
     def leak_private_key(candidate: dict[str, object]) -> None:
         private_mount = next(
             mount
-            for mount in candidate["services"]["serverware"]["volumes"]
+            for mount in candidate["services"]["catchplate"]["volumes"]
             if mount.get("source")
-            == bind_mount_fixtures["SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE"]
+            == bind_mount_fixtures["CATCHPLATE_RESPONSE_SIGNING_PRIVATE_KEY_FILE"]
         )
         candidate["services"]["decision-gate-rs"]["volumes"].append(
             copy.deepcopy(private_mount)
@@ -457,11 +457,11 @@ def assert_production_dependencies() -> None:
                 "source": str(
                     Path(
                         bind_mount_fixtures[
-                            "SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE"
+                            "CATCHPLATE_RESPONSE_SIGNING_PRIVATE_KEY_FILE"
                         ]
                     ).parent
                 ),
-                "target": "/run/serverware/leaked-host-parent",
+                "target": "/run/catchplate/leaked-host-parent",
                 "read_only": True,
             }
         )
@@ -470,45 +470,45 @@ def assert_production_dependencies() -> None:
         state_mount = next(
             mount
             for mount in candidate["services"]["custody-runtime"]["volumes"]
-            if mount.get("source") == "serverware-custody-state"
+            if mount.get("source") == "catchplate-custody-state"
         )
-        candidate["services"]["serverware"]["volumes"].append(copy.deepcopy(state_mount))
+        candidate["services"]["catchplate"]["volumes"].append(copy.deepcopy(state_mount))
 
     def alter_pinned_healthcheck(candidate: dict[str, object]) -> None:
-        candidate["services"]["serverware"]["healthcheck"]["test"][-1] = "socket-health"
+        candidate["services"]["catchplate"]["healthcheck"]["test"][-1] = "socket-health"
 
     for label, mutate in (
         ("custody network access", set_service_value("custody-runtime", "network_mode", None)),
         ("custody sharing the gate UID", set_service_value("custody-runtime", "user", "65532:65530")),
-        ("wrong custody client UID", set_service_env("custody-runtime", "SERVERWARE_CUSTODY_EXPECTED_CLIENT_UID", "65531")),
-        ("wrong gate custody UID", set_service_env("decision-gate-rs", "SERVERWARE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID", "65532")),
+        ("wrong custody client UID", set_service_env("custody-runtime", "CATCHPLATE_CUSTODY_EXPECTED_CLIENT_UID", "65531")),
+        ("wrong gate custody UID", set_service_env("decision-gate-rs", "CATCHPLATE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID", "65532")),
         ("missing gate socket GID", set_service_value("decision-gate-rs", "group_add", [])),
-        ("writable custody trust mount", make_mount_writable("custody-runtime", "/run/serverware/custody-trust")),
-        ("writable gate socket mount", make_mount_writable("decision-gate-rs", "/run/serverware-custody")),
+        ("writable custody trust mount", make_mount_writable("custody-runtime", "/run/catchplate/custody-trust")),
+        ("writable gate socket mount", make_mount_writable("decision-gate-rs", "/run/catchplate-custody")),
         ("private key leaked to the gate", leak_private_key),
         ("private key parent leaked to the gate", leak_private_key_parent),
         ("custody state leaked to the control plane", leak_custody_state),
         (
             "control-plane readiness without active key and HTTPS checks",
-            set_service_value("serverware", "healthcheck", {"test": ["CMD", "true"]}),
+            set_service_value("catchplate", "healthcheck", {"test": ["CMD", "true"]}),
         ),
         ("altered marker-preserving control-plane readiness", alter_pinned_healthcheck),
-        ("custody racing trust publication", lambda candidate: candidate["services"]["custody-runtime"]["depends_on"]["serverware"].__setitem__("condition", "service_started")),
+        ("custody racing trust publication", lambda candidate: candidate["services"]["custody-runtime"]["depends_on"]["catchplate"].__setitem__("condition", "service_started")),
     ):
         expect_custody_topology_rejection(label, mutate)
 
     for label, mutate, expected_error in (
         ("extra privileged gate group", set_service_value("decision-gate-rs", "group_add", ["65519", "65518", "65530", "0"]), "only the v2, custody, and declared host driver groups"),
         ("missing v2 gate group", set_service_value("decision-gate-rs", "group_add", ["65518", "65530"]), "only the v2, custody, and declared host driver groups"),
-        ("wrong host driver group", lambda candidate: candidate["x-serverware-policy-custody-host-contract"].__setitem__("driverGroupGid", "65517"), "distinct env-bound host driver group"),
+        ("wrong host driver group", lambda candidate: candidate["x-catchplate-policy-custody-host-contract"].__setitem__("driverGroupGid", "65517"), "distinct env-bound host driver group"),
         ("unbound gate namespace", set_service_value("decision-gate-rs", "network_mode", "host"), "share only the control-plane network namespace"),
         ("gate extra network", set_service_value("decision-gate-rs", "networks", {"default": {}}), "share only the control-plane network namespace"),
         ("gate-owned publication", set_service_value("decision-gate-rs", "ports", [{"target": 9090, "published": "8080"}]), "share only the control-plane network namespace"),
-        ("missing control publications", set_service_value("serverware", "ports", []), "publish only loopback control and the env-bound proxy"),
-        ("disabled healthcheck", set_service_value("serverware", "healthcheck", {"test": list(generate_release_provenance.PRODUCTION_CONTROL_HEALTHCHECK_COMMAND), "disable": True}), "exact isolated authority entrypoint"),
+        ("missing control publications", set_service_value("catchplate", "ports", []), "publish only loopback control and the env-bound proxy"),
+        ("disabled healthcheck", set_service_value("catchplate", "healthcheck", {"test": list(generate_release_provenance.PRODUCTION_CONTROL_HEALTHCHECK_COMMAND), "disable": True}), "exact isolated authority entrypoint"),
         ("changed healthcheck mode", alter_pinned_healthcheck, "exact isolated authority entrypoint"),
-        ("missing isolated healthcheck flag", set_service_value("serverware", "healthcheck", {"test": [part for part in generate_release_provenance.PRODUCTION_CONTROL_HEALTHCHECK_COMMAND if part != "-I"]}), "exact isolated authority entrypoint"),
-        ("inline healthcheck injection", set_service_value("serverware", "healthcheck", {"test": ["CMD", "/usr/bin/python3", "-c", "raise SystemExit(0)"]}), "exact isolated authority entrypoint"),
+        ("missing isolated healthcheck flag", set_service_value("catchplate", "healthcheck", {"test": [part for part in generate_release_provenance.PRODUCTION_CONTROL_HEALTHCHECK_COMMAND if part != "-I"]}), "exact isolated authority entrypoint"),
+        ("inline healthcheck injection", set_service_value("catchplate", "healthcheck", {"test": ["CMD", "/usr/bin/python3", "-c", "raise SystemExit(0)"]}), "exact isolated authority entrypoint"),
     ):
         expect_custody_topology_rejection(label, mutate, expected_error)
     for target, field, value in (
@@ -518,13 +518,13 @@ def assert_production_dependencies() -> None:
         (9090, "protocol", "udp"),
     ):
         def alter_port(candidate: dict[str, object]) -> None:
-            next(port for port in candidate["services"]["serverware"]["ports"] if port["target"] == target)[field] = value
+            next(port for port in candidate["services"]["catchplate"]["ports"] if port["target"] == target)[field] = value
         expect_custody_topology_rejection(
             f"changed {target} {field}", alter_port,
             "publish only loopback control and the env-bound proxy",
         )
     for driver_gid in ("", "0", "65519", "65530", "65532", "4294967295", "driver"):
-        candidate_env = {**compose_env, "SERVERWARE_POLICY_CUSTODY_DRIVER_GID": driver_gid}
+        candidate_env = {**compose_env, "CATCHPLATE_POLICY_CUSTODY_DRIVER_GID": driver_gid}
         try:
             generate_release_provenance.validate_production_custody_topology(model, candidate_env)
         except ValueError as exc:
@@ -534,7 +534,7 @@ def assert_production_dependencies() -> None:
             raise AssertionError(f"production accepted invalid host driver GID: {driver_gid!r}")
 
     if set(model["services"]) != {
-        "serverware",
+        "catchplate",
         "audit-anchor",
         "policy-authority-runtime",
         "policy-authority-verifier",
@@ -556,9 +556,9 @@ def assert_production_dependencies() -> None:
         raise AssertionError(f"production Compose service set is not closed and complete: {sorted(model['services'])}")
     custody = model["services"]["custody-runtime"]
     gate = model["services"]["decision-gate-rs"]
-    if model["services"]["serverware"]["healthcheck"]["test"] != list(generate_release_provenance.PRODUCTION_CONTROL_HEALTHCHECK_COMMAND):
+    if model["services"]["catchplate"]["healthcheck"]["test"] != list(generate_release_provenance.PRODUCTION_CONTROL_HEALTHCHECK_COMMAND):
         raise AssertionError("production readiness must use the exact isolated authority entrypoint")
-    health_source = ast.parse((ROOT / "serverware" / "authority_fd_entrypoint.py").read_text(encoding="utf-8"))
+    health_source = ast.parse((ROOT / "catchplate" / "authority_fd_entrypoint.py").read_text(encoding="utf-8"))
     healthcheck_command = next(
         ast.literal_eval(node.value)
         for node in health_source.body
@@ -582,73 +582,73 @@ def assert_production_dependencies() -> None:
         raise AssertionError("production custody and gate must use explicit distinct UIDs")
     if custody.get("network_mode") != "none":
         raise AssertionError("production custody must have no network namespace access")
-    if custody.get("entrypoint") != ["/usr/local/bin/serverware-custody-runtime"]:
+    if custody.get("entrypoint") != ["/usr/local/bin/catchplate-custody-runtime"]:
         raise AssertionError("production custody must override the gate entrypoint with the embedded custody runtime")
-    if services_mounting_source(model, bind_mount_fixtures["SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE"]) != {"serverware"}:
+    if services_mounting_source(model, bind_mount_fixtures["CATCHPLATE_RESPONSE_SIGNING_PRIVATE_KEY_FILE"]) != {"catchplate"}:
         raise AssertionError("production control-plane response-signing private key must not be mounted by gate or custody")
     gate_ca_mounts = [
         mount
         for mount in gate.get("volumes") or []
-        if mount.get("target") == "/run/serverware/tls/ca.pem"
+        if mount.get("target") == "/run/catchplate/tls/ca.pem"
     ]
     if (
         len(gate_ca_mounts) != 1
         or gate_ca_mounts[0].get("source")
-        != bind_mount_fixtures["SERVERWARE_CONTROL_PLANE_TLS_DIR"] + "/ca.pem"
+        != bind_mount_fixtures["CATCHPLATE_CONTROL_PLANE_TLS_DIR"] + "/ca.pem"
         or gate_ca_mounts[0].get("read_only") is not True
     ):
         raise AssertionError(
             "production decision gate must mount only the control-plane CA file"
         )
-    if services_mounting_source(model, "serverware-custody-state") != {"custody-runtime"}:
+    if services_mounting_source(model, "catchplate-custody-state") != {"custody-runtime"}:
         raise AssertionError("production custody state volume must be mounted only by custody")
-    if services_mounting_source(model, "serverware-custody-trust") != {"serverware", "custody-runtime"}:
+    if services_mounting_source(model, "catchplate-custody-trust") != {"catchplate", "custody-runtime"}:
         raise AssertionError("production custody trust volume must be shared only by control plane and custody")
-    if services_mounting_source(model, "serverware-custody-socket") != {"custody-runtime", "decision-gate-rs"}:
+    if services_mounting_source(model, "catchplate-custody-socket") != {"custody-runtime", "decision-gate-rs"}:
         raise AssertionError("production custody socket volume must be shared only by custody and decision gate")
     custody_env = custody.get("environment") or {}
-    if custody_env.get("SERVERWARE_CUSTODY_EXPECTED_CLIENT_UID") != "65532":
+    if custody_env.get("CATCHPLATE_CUSTODY_EXPECTED_CLIENT_UID") != "65532":
         raise AssertionError("production custody must authenticate the explicit decision-gate UID")
     if (
-        custody_env.get("SERVERWARE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY")
-        != "/var/lib/serverware-custody"
+        custody_env.get("CATCHPLATE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY")
+        != "/var/lib/catchplate-custody"
     ):
         raise AssertionError("production custody must use its private persistent attempt ledger")
     gate_environment = gate.get("environment") or {}
     if (
-        gate_environment.get("SERVERWARE_RESPONSE_PROOF_CUSTODY_SOCKET")
-        != "/run/serverware-custody/custody.sock"
-        or gate_environment.get("SERVERWARE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID") != "65531"
+        gate_environment.get("CATCHPLATE_RESPONSE_PROOF_CUSTODY_SOCKET")
+        != "/run/catchplate-custody/custody.sock"
+        or gate_environment.get("CATCHPLATE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID") != "65531"
     ):
         raise AssertionError("production decision gate must pin the custody socket and distinct custody UID")
     gate_dockerfile = (ROOT / "data-plane" / "decision-gate-rs" / "Dockerfile.production").read_text(encoding="utf-8")
-    if "serverware-custody-runtime /usr/local/bin/serverware-custody-runtime" not in gate_dockerfile:
+    if "catchplate-custody-runtime /usr/local/bin/catchplate-custody-runtime" not in gate_dockerfile:
         raise AssertionError("production decision-gate image must contain the custody runtime binary")
-    ports = model["services"]["serverware"].get("ports") or []
+    ports = model["services"]["catchplate"].get("ports") or []
     control_ports = [binding for binding in ports if int(binding["target"]) == 3000]
     if len(control_ports) != 1 or control_ports[0].get("host_ip") != "127.0.0.1" or str(control_ports[0].get("published")) != "3000":
         raise AssertionError(f"production control plane must be loopback-bound behind the deployment ingress: {control_ports}")
-    if gate.get("ports") or gate.get("networks") or gate.get("network_mode") != "service:serverware":
+    if gate.get("ports") or gate.get("networks") or gate.get("network_mode") != "service:catchplate":
         raise AssertionError("production gate must share the control-plane namespace without separate publication")
     if any(int(binding["target"]) == 9091 for binding in ports):
         raise AssertionError("production must not publish the decision-gate management listener")
     proxy_ports = [binding for binding in ports if int(binding["target"]) == 9090]
-    if len(ports) != 2 or len(proxy_ports) != 1 or str(proxy_ports[0].get("published")) != "8080" or proxy_ports[0].get("host_ip") != compose_env["SERVERWARE_PROXY_BIND_ADDRESS"]:
+    if len(ports) != 2 or len(proxy_ports) != 1 or str(proxy_ports[0].get("published")) != "8080" or proxy_ports[0].get("host_ip") != compose_env["CATCHPLATE_PROXY_BIND_ADDRESS"]:
         raise AssertionError(f"production must publish only container proxy port 9090 as host port 8080: {ports}")
     gate_mounts = model["services"]["decision-gate-rs"].get("volumes") or []
     gate_targets = {str(mount.get("target")) for mount in gate_mounts}
-    if "/data" in gate_targets or "/run/serverware/gate" not in gate_targets:
+    if "/data" in gate_targets or "/run/catchplate/gate" not in gate_targets:
         raise AssertionError(f"production decision gate has an unsafe private-state mount: {gate_mounts}")
     for name in (
-        "SERVERWARE_ATTESTATION_EXECUTABLE_SHA256_MANIFEST",
-        "SERVERWARE_POLICY_HIGH_WATER_FILE",
-        "SERVERWARE_POLICY_MIN_SEQUENCE",
-        "SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH",
-        "SERVERWARE_DECISION_GATE_PROXY_WORKERS",
+        "CATCHPLATE_ATTESTATION_EXECUTABLE_SHA256_MANIFEST",
+        "CATCHPLATE_POLICY_HIGH_WATER_FILE",
+        "CATCHPLATE_POLICY_MIN_SEQUENCE",
+        "CATCHPLATE_POLICY_MIN_ROLLBACK_EPOCH",
+        "CATCHPLATE_DECISION_GATE_PROXY_WORKERS",
     ):
         if not str(gate_environment.get(name) or "").strip():
             raise AssertionError(f"production decision gate is missing {name}")
-    if int(gate_environment["SERVERWARE_DECISION_GATE_PROXY_WORKERS"]) > 24:
+    if int(gate_environment["CATCHPLATE_DECISION_GATE_PROXY_WORKERS"]) > 24:
         raise AssertionError("production decision-gate worker count exceeds the 512 MiB memory safety bound")
 
 
@@ -764,7 +764,7 @@ def assert_production_schema_build_stages(dockerfile: str) -> None:
         copies = [index for index, line in enumerate(lines)
                   if line == "COPY --from=source-preparation /schemas /schemas"]
         builds = [index for index, line in enumerate(lines)
-                  if line == "RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen"]
+                  if line == "RUN --network=none /usr/local/bin/catchplate-cargo-build --release --frozen"]
         if len(copies) != 1 or len(builds) != 1 or copies[0] >= builds[0]:
             raise AssertionError(f"{name} must copy verified schemas before its offline Rust build")
         if ("COPY --from=source-preparation /source /source" in lines
@@ -843,7 +843,7 @@ def assert_reproducible_rust_binary_config() -> None:
 
 def assert_deterministic_development_ledger_seed(dockerfile: str) -> None:
     expected_payload = {
-        "apiVersion": "serverware.custodyAttemptLedger/v2",
+        "apiVersion": "catchplate.custodyAttemptLedger/v2",
         "commitSequence": 0,
         "activeBindingCount": 0,
         "activeBindingsAccumulator": "A" * 43,
@@ -857,7 +857,7 @@ def assert_deterministic_development_ledger_seed(dockerfile: str) -> None:
     if payloads[0] != expected_bytes:
         raise AssertionError("development ledger seed must be the canonical empty v2 manifest payload")
     required = (
-        "ledger_directory=/runtime-layout/serverware-custody-state;",
+        "ledger_directory=/runtime-layout/catchplate-custody-state;",
         'install -d -m 0700 "$ledger_directory";',
         'ledger_checksum="$(printf \'%s\' "$ledger_payload" | sha256sum)";',
         'ledger_checksum="${ledger_checksum%% *}";',
@@ -892,14 +892,14 @@ def assert_custody_ledger_image_seed() -> None:
     ):
         dockerfile = (ROOT / relative).read_text(encoding="utf-8")
         required = (
-            f"COPY --from=build --chown={ownership} --chmod=0700 /runtime-layout/serverware-custody-state /var/lib/serverware-custody",
-            f"COPY --from=build --chown={ownership} --chmod=0600 /runtime-layout/serverware-custody-state/manifest.json /var/lib/serverware-custody/manifest.json",
-            f"COPY --from=build --chown={ownership} --chmod=0600 /runtime-layout/serverware-custody-state/ledger.lock /var/lib/serverware-custody/ledger.lock",
+            f"COPY --from=build --chown={ownership} --chmod=0700 /runtime-layout/catchplate-custody-state /var/lib/catchplate-custody",
+            f"COPY --from=build --chown={ownership} --chmod=0600 /runtime-layout/catchplate-custody-state/manifest.json /var/lib/catchplate-custody/manifest.json",
+            f"COPY --from=build --chown={ownership} --chmod=0600 /runtime-layout/catchplate-custody-state/ledger.lock /var/lib/catchplate-custody/ledger.lock",
         )
         if relative.endswith("Dockerfile.production"):
             required += (
-                "SERVERWARE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY=/runtime-layout/serverware-custody-state",
-                "/src/target/release/serverware-custody-runtime --initialize-attempt-ledger",
+                "CATCHPLATE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY=/runtime-layout/catchplate-custody-state",
+                "/src/target/release/catchplate-custody-runtime --initialize-attempt-ledger",
             )
         else:
             assert_deterministic_development_ledger_seed(dockerfile)
@@ -953,7 +953,7 @@ def assert_gate_response_context_publish_wait() -> None:
         if "--build-id=none" not in dockerfile:
             raise AssertionError(f"{relative} must omit nondeterministic GNU linker build IDs")
         lock_mode = "--frozen" if relative.endswith("Dockerfile.production") else "--locked"
-        command = "/usr/local/bin/serverware-cargo-build" if relative.endswith("Dockerfile.production") else "cargo build"
+        command = "/usr/local/bin/catchplate-cargo-build" if relative.endswith("Dockerfile.production") else "cargo build"
         if f"{command} --release {lock_mode}" not in dockerfile:
             raise AssertionError(f"{relative} must build the lockfile-pinned Rust release")
 
@@ -964,18 +964,18 @@ def assert_static_launcher_artifact_embedded() -> None:
     required = (
         "FROM rust:1.88-alpine3.22@sha256:64eba3726734dcfe89e0a62a0485007a3ab7c7372ce5b38c621d8812f70215f0 AS launcher-build",
         "COPY production-dependencies/cache/musl-1.2.5-r12.apk",
-        "RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen \\\n        --bin serverware-production-launcher",
+        "RUN --network=none /usr/local/bin/catchplate-cargo-build --release --frozen \\\n        --bin catchplate-production-launcher",
         "FROM scratch AS production-launcher-artifact",
-        "COPY --from=launcher-build /src/target/release/serverware-production-launcher /serverware-production-launcher",
-        "COPY --from=launcher-build /src/target/release/serverware-production-launcher /usr/local/libexec/serverware-production-launcher",
-        "--bin serverware-native-bootstrap-client --bin serverware-workload-sidecar",
-        'test "$(readelf -l /src/target/release/serverware-workload-sidecar | grep -c INTERP)" -eq 0',
-        'test "$(readelf -d /src/target/release/serverware-workload-sidecar | grep -c NEEDED)" -eq 0',
-        'test "$(stat -c %s /src/target/release/serverware-workload-sidecar)" -le 67108864',
+        "COPY --from=launcher-build /src/target/release/catchplate-production-launcher /catchplate-production-launcher",
+        "COPY --from=launcher-build /src/target/release/catchplate-production-launcher /usr/local/libexec/catchplate-production-launcher",
+        "--bin catchplate-native-bootstrap-client --bin catchplate-workload-sidecar",
+        'test "$(readelf -l /src/target/release/catchplate-workload-sidecar | grep -c INTERP)" -eq 0',
+        'test "$(readelf -d /src/target/release/catchplate-workload-sidecar | grep -c NEEDED)" -eq 0',
+        'test "$(stat -c %s /src/target/release/catchplate-workload-sidecar)" -le 67108864',
         "FROM scratch AS native-workload-sidecar-artifact",
         "FROM source-preparation AS native-workload-sidecar-runtime",
-        "install -o 0 -g 0 -m 0555 /sidecar-build/serverware-workload-sidecar /sidecar-runtime/usr/local/libexec/serverware-workload-sidecar",
-        "install -o 0 -g 0 -m 0444 /source/scripts/install_workload_sidecar_unit.py /sidecar-runtime/usr/share/serverware/install_workload_sidecar_unit.py",
+        "install -o 0 -g 0 -m 0555 /sidecar-build/catchplate-workload-sidecar /sidecar-runtime/usr/local/libexec/catchplate-workload-sidecar",
+        "install -o 0 -g 0 -m 0444 /source/scripts/install_workload_sidecar_unit.py /sidecar-runtime/usr/share/catchplate/install_workload_sidecar_unit.py",
         "chmod 0555 /sidecar-runtime /sidecar-runtime/usr /sidecar-runtime/usr/local",
         "COPY --from=native-workload-sidecar-runtime --chown=0:0 /sidecar-runtime/ /",
     )
@@ -1168,8 +1168,8 @@ def assert_launcher_digest_measurement_contract() -> None:
     }:
         raise AssertionError(f"production image build did not declare both decision-gate binary digests: {digests}")
     expected_calls = [
-        mock.call("sha256:" + "a" * 64, "/usr/local/bin/serverware-decision-gate"),
-        mock.call("sha256:" + "a" * 64, "/usr/local/libexec/serverware-production-launcher"),
+        mock.call("sha256:" + "a" * 64, "/usr/local/bin/catchplate-decision-gate"),
+        mock.call("sha256:" + "a" * 64, "/usr/local/libexec/catchplate-production-launcher"),
     ]
     if measured.call_args_list != expected_calls:
         raise AssertionError(f"production image build measured the wrong binary paths: {measured.call_args_list}")
@@ -1196,7 +1196,7 @@ def independent_lock_inventory(path: Path) -> dict[str, str]:
 
 
 def expect_lock_failure(content: str, expected: str, *, forbidden: str | None = None) -> None:
-    with tempfile.TemporaryDirectory(prefix="serverware-lock-test-") as raw_tmp:
+    with tempfile.TemporaryDirectory(prefix="catchplate-lock-test-") as raw_tmp:
         path = Path(raw_tmp) / "requirements.lock"
         path.write_text(content, encoding="utf-8")
         try:
@@ -1250,7 +1250,7 @@ def assert_release_python_dependency_inventory() -> None:
     if len(production_items) <= len(development_items):
         raise AssertionError("production provenance did not expand direct dependencies to the transitive lock set")
 
-    with tempfile.TemporaryDirectory(prefix="serverware-lock-digest-test-") as raw_tmp:
+    with tempfile.TemporaryDirectory(prefix="catchplate-lock-digest-test-") as raw_tmp:
         mutated_path = Path(raw_tmp) / "requirements.lock"
         mutated_path.write_bytes(lock_bytes + b"# digest-binding probe\n")
         mutated_items, mutated_manifest = generate_release_provenance.python_dependency_inventory(
@@ -1270,9 +1270,9 @@ def assert_release_python_dependency_inventory() -> None:
         python_manifest=manifest,
     )
     properties = {item["name"]: item["value"] for item in cyclonedx["metadata"]["properties"]}
-    if properties.get("serverware:pythonDependencyManifestSha256") != manifest["sha256"]:
+    if properties.get("catchplate:pythonDependencyManifestSha256") != manifest["sha256"]:
         raise AssertionError("CycloneDX metadata does not bind requirements.lock")
-    if properties.get("serverware:pythonDependencyManifestRequiresHashes") != "true":
+    if properties.get("catchplate:pythonDependencyManifestRequiresHashes") != "true":
         raise AssertionError("CycloneDX metadata does not require lock hashes")
     components = {
         component["name"]: component["version"]
@@ -1286,7 +1286,7 @@ def assert_release_python_dependency_inventory() -> None:
         raise AssertionError("CycloneDX contains duplicate component references")
     for component in cyclonedx["components"]:
         component_properties = {item["name"]: item["value"] for item in component["properties"]}
-        if "serverware:pipArtifactHashesSha256" not in component_properties:
+        if "catchplate:pipArtifactHashesSha256" not in component_properties:
             raise AssertionError(f"CycloneDX component does not bind its lock hashes: {component['name']}")
 
 
@@ -1458,7 +1458,7 @@ def assert_production_copy_classification(dockerfile: str, *, family: str) -> No
         (cache_stage, source, f"/dependency-cache/cache/{Path(source).name}")
         for source in cache_inputs
     ] + [
-        (source_stage, "${SERVERWARE_SOURCE_" + suffix + "}", f"/source-contract/{destination}")
+        (source_stage, "${CATCHPLATE_SOURCE_" + suffix + "}", f"/source-contract/{destination}")
         for suffix, destination, _ in SOURCE_CONTRACT_INPUTS
     ]
     if actual != expected:
@@ -1468,7 +1468,7 @@ def assert_production_copy_classification(dockerfile: str, *, family: str) -> No
 
     extraction = "tar --no-same-owner -xf /source-contract/source.tar -C /source"
     for suffix, destination, _ in SOURCE_CONTRACT_INPUTS:
-        variable = "SERVERWARE_SOURCE_" + suffix
+        variable = "CATCHPLATE_SOURCE_" + suffix
         digest_check = (
             "printf '%s  %s\\n' \"${" + variable + "_SHA256#sha256:}\" "
             + f"/source-contract/{destination} | sha256sum -c -"
@@ -1481,7 +1481,7 @@ def assert_production_copy_classification(dockerfile: str, *, family: str) -> No
         ))
     require_stage_order(stages, source_stage, (
         "tar -tf /source-contract/source.tar > /source-contract/archive.files",
-        "printf '%s  %s\\n' \"${SERVERWARE_SOURCE_FILE_LIST_SHA256#sha256:}\" /source-contract/archive.files | sha256sum -c -",
+        "printf '%s  %s\\n' \"${CATCHPLATE_SOURCE_FILE_LIST_SHA256#sha256:}\" /source-contract/archive.files | sha256sum -c -",
         extraction,
         "sha256sum -c /source-contract/source.files.sha256",
         'test -n "${expected_mode}"', 'test -n "${relative}"',
@@ -1517,8 +1517,8 @@ def assert_production_copy_classification(dockerfile: str, *, family: str) -> No
             "COPY --from=source-preparation /schemas /schemas",
             "COPY --from=source-preparation /source/scripts/cargo_build_diagnostics.rs /source/scripts/cargo_build_diagnostics.rs",
             "COPY --from=source-preparation /policy-custody-assets /policy-custody-assets",
-            "RUN --network=none rustc --edition=2021 /source/scripts/cargo_build_diagnostics.rs -o /usr/local/bin/serverware-cargo-build",
-            "RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen",
+            "RUN --network=none rustc --edition=2021 /source/scripts/cargo_build_diagnostics.rs -o /usr/local/bin/catchplate-cargo-build",
+            "RUN --network=none /usr/local/bin/catchplate-cargo-build --release --frozen",
         ))
         require_stage_order(stages, "launcher-build", (
             "COPY --from=source-preparation /src/Cargo.toml /src/Cargo.lock /src/",
@@ -1538,9 +1538,9 @@ def assert_production_copy_classification(dockerfile: str, *, family: str) -> No
             "apk", "--no-network", "--repositories-file /dev/null", "add",
             "cache/musl-1.2.5-r12.apk", "cache/musl-dev-1.2.5-r12.apk",
             "tar -xzf cache/cargo-vendor.tar.gz -C /src",
-            "RUN --network=none rustc --edition=2021 /source/scripts/cargo_build_diagnostics.rs -o /usr/local/bin/serverware-cargo-build",
-            "RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen",
-            "--bin serverware-production-launcher --bin serverware-native-response-verifier",
+            "RUN --network=none rustc --edition=2021 /source/scripts/cargo_build_diagnostics.rs -o /usr/local/bin/catchplate-cargo-build",
+            "RUN --network=none /usr/local/bin/catchplate-cargo-build --release --frozen",
+            "--bin catchplate-production-launcher --bin catchplate-native-response-verifier",
         ))
 
 
@@ -1559,7 +1559,7 @@ def assert_copy_input_manifests_and_arguments() -> None:
     if {"production-dependencies/" + relative for relative in entries} != expected_cache:
         raise AssertionError("Docker cache COPY inputs differ from the four pinned artifacts")
     for source in (*COMMITTED_COPY_INPUTS, "production-dependencies/rust-linux-amd64.sha256"):
-        if not serverware_source_tree.is_source_file(ROOT / source, ROOT):
+        if not catchplate_source_tree.is_source_file(ROOT / source, ROOT):
             raise AssertionError(f"dependency authority input is not covered by source identity: {source}")
     tracked = subprocess.run(
         ["git", "ls-tree", "-rz", "--name-only", "HEAD", "--", *COMMITTED_COPY_INPUTS],
@@ -1585,8 +1585,8 @@ def assert_copy_input_manifests_and_arguments() -> None:
     for index, (suffix, destination, key) in enumerate(SOURCE_CONTRACT_INPUTS, 1):
         metadata[key + "_path"] = "production-dependencies/cache/source-contract/" + destination
         metadata[key + "_digest"] = "sha256:" + str(index) * 64
-        expected_arguments["SERVERWARE_SOURCE_" + suffix] = metadata[key + "_path"]
-        expected_arguments["SERVERWARE_SOURCE_" + suffix + "_SHA256"] = metadata[key + "_digest"]
+        expected_arguments["CATCHPLATE_SOURCE_" + suffix] = metadata[key + "_path"]
+        expected_arguments["CATCHPLATE_SOURCE_" + suffix + "_SHA256"] = metadata[key + "_digest"]
     arguments = build_production_images.source_build_arguments(metadata)
     if len(arguments) % 2 or any(flag != "--build-arg" for flag in arguments[::2]):
         raise AssertionError("source-contract argument transport changed")
@@ -1612,20 +1612,20 @@ def assert_source_tree_covers_production_copy_surface() -> None:
             ("unbound build argument", source + "\nCOPY ${UNBOUND_INPUT} /extra\n", "root COPY inventory"),
             ("wrong destination", source.replace(first_copy, first_copy + "-wrong", 1), "root COPY inventory"),
             ("wrong stage", source.replace(first_copy + "\n", "", 1) + "\n" + first_copy + "\n", "root COPY inventory"),
-            ("wrong generated destination", source.replace("COPY ${SERVERWARE_SOURCE_ARCHIVE} /source-contract/source.tar", "COPY ${SERVERWARE_SOURCE_ARCHIVE} /unverified/source.tar", 1), "root COPY inventory"),
+            ("wrong generated destination", source.replace("COPY ${CATCHPLATE_SOURCE_ARCHIVE} /source-contract/source.tar", "COPY ${CATCHPLATE_SOURCE_ARCHIVE} /unverified/source.tar", 1), "root COPY inventory"),
             ("external COPY stage", source + "\nCOPY --from=unverified-image /payload /extra\n", "earlier declared stage"),
             ("ADD input", source + "\nADD unclassified /extra\n", "does not permit ADD"),
         ]
         for suffix, destination, _ in SOURCE_CONTRACT_INPUTS:
             check = (
-                "printf '%s  %s\\n' \"${SERVERWARE_SOURCE_" + suffix
+                "printf '%s  %s\\n' \"${CATCHPLATE_SOURCE_" + suffix
                 + "_SHA256#sha256:}\" /source-contract/" + destination + " | sha256sum -c -"
             )
             if source.count(check) != 1:
                 raise AssertionError("generated-input mutation fixture lacks its exact checksum guard")
             cases.append((f"missing {suffix} digest", source.replace(check, ":", 1), "input guard"))
         digest_line = next(line for line in source.splitlines(keepends=True)
-                           if '"${SERVERWARE_SOURCE_ARCHIVE_SHA256#sha256:}"' in line)
+                           if '"${CATCHPLATE_SOURCE_ARCHIVE_SHA256#sha256:}"' in line)
         extract_line = next(line for line in source.splitlines(keepends=True)
                             if "tar --no-same-owner -xf /source-contract/source.tar -C /source" in line)
         cases.append(("late archive digest", source.replace(digest_line, "", 1).replace(
@@ -1648,7 +1648,7 @@ def assert_source_tree_covers_production_copy_surface() -> None:
             else:
                 raise AssertionError(f"{family} Docker input contract accepted {label}")
 
-    with tempfile.TemporaryDirectory(prefix="serverware-source-copy-surface-") as checkout_raw:
+    with tempfile.TemporaryDirectory(prefix="catchplate-source-copy-surface-") as checkout_raw:
         checkout = Path(checkout_raw)
         (checkout / "scripts").mkdir()
         (checkout / "policies").mkdir()
@@ -1656,7 +1656,7 @@ def assert_source_tree_covers_production_copy_surface() -> None:
         subprocess.run(["git", "init", "-q", str(checkout)], check=True)
         subprocess.run(["git", "-C", str(checkout), "add", ".gitignore"], check=True)
 
-        baseline = serverware_source_tree.source_tree_digest(
+        baseline = catchplate_source_tree.source_tree_digest(
             checkout,
             production=False,
         )
@@ -1668,14 +1668,14 @@ def assert_source_tree_covers_production_copy_surface() -> None:
         )
         if ignored_check.returncode != 0:
             raise AssertionError("ignored source-tree adversarial fixture is not ignored by Git")
-        ignored_digest = serverware_source_tree.source_tree_digest(
+        ignored_digest = catchplate_source_tree.source_tree_digest(
             checkout,
             production=False,
         )
         ignored_entry = next(
             (
                 item
-                for item in serverware_source_tree.source_tree_files(checkout)
+                for item in catchplate_source_tree.source_tree_files(checkout)
                 if item["path"] == "scripts/ignored-build-input"
             ),
             None,
@@ -1684,7 +1684,7 @@ def assert_source_tree_covers_production_copy_surface() -> None:
             raise AssertionError("source-tree manifest omitted an ignored opaque file under a production COPY root")
         ignored.write_bytes(b"ignored opaque input\x00v2\n")
         if (
-            serverware_source_tree.source_tree_digest(
+            catchplate_source_tree.source_tree_digest(
                 checkout,
                 production=False,
             )
@@ -1701,14 +1701,14 @@ def assert_source_tree_covers_production_copy_surface() -> None:
         ).stdout.split(b"\0")
         if b"policies/emergency-policy" not in untracked:
             raise AssertionError("opaque policy adversarial fixture is not untracked")
-        policy_digest = serverware_source_tree.source_tree_digest(
+        policy_digest = catchplate_source_tree.source_tree_digest(
             checkout,
             production=False,
         )
         policy_entry = next(
             (
                 item
-                for item in serverware_source_tree.source_tree_files(checkout)
+                for item in catchplate_source_tree.source_tree_files(checkout)
                 if item["path"] == "policies/emergency-policy"
             ),
             None,
@@ -1717,7 +1717,7 @@ def assert_source_tree_covers_production_copy_surface() -> None:
             raise AssertionError("source-tree manifest omitted an opaque untracked policy file")
         opaque_policy.write_bytes(b"opaque untracked policy\x00v2\n")
         if (
-            serverware_source_tree.source_tree_digest(
+            catchplate_source_tree.source_tree_digest(
                 checkout,
                 production=False,
             )
@@ -1729,15 +1729,15 @@ def assert_source_tree_covers_production_copy_surface() -> None:
 def source_fixture_git(checkout: Path, *arguments: str) -> bytes:
     return subprocess.run(
         [
-            str(serverware_source_tree.GIT_EXECUTABLE),
+            str(catchplate_source_tree.GIT_EXECUTABLE),
             "-C", str(checkout),
             "-c", "core.hooksPath=/dev/null",
             "-c", "commit.gpgsign=false",
-            "-c", "user.name=Serverware Test",
-            "-c", "user.email=serverware@example.invalid",
+            "-c", "user.name=Catchplate Test",
+            "-c", "user.email=catchplate@example.invalid",
             *arguments,
         ],
-        env=serverware_source_tree.GIT_ENVIRONMENT,
+        env=catchplate_source_tree.GIT_ENVIRONMENT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=True,
@@ -1766,16 +1766,16 @@ def assert_production_source_tree_manifest() -> None:
         source_fixture_git(checkout, "commit", "-q", "-m", "production source fixture")
         output = checkout / ".tmp" / "source-contract"
 
-        first = serverware_source_tree.production_source_contract(checkout, output)
+        first = catchplate_source_tree.production_source_contract(checkout, output)
         archive_bytes = (checkout / first["archivePath"]).read_bytes()
-        second = serverware_source_tree.production_source_contract(checkout, output)
+        second = catchplate_source_tree.production_source_contract(checkout, output)
         if first != second:
             raise AssertionError("production source contract is not deterministic at the same clean commit")
         if (checkout / second["archivePath"]).read_bytes() != archive_bytes:
             raise AssertionError("production source archive bytes are not deterministic")
         manifest = first["sourceTreeManifest"]
         if (
-            manifest["version"] != "serverware.sourceTree/v3"
+            manifest["version"] != "catchplate.sourceTree/v3"
             or first["identityMode"] != "production-commit"
             or manifest["identityMode"] != first["identityMode"]
             or first["productionReleaseEligible"] is not True
@@ -1812,7 +1812,7 @@ def assert_production_source_tree_manifest() -> None:
 
         def rejected(expected_error: str) -> None:
             try:
-                serverware_source_tree.production_source_contract(checkout, output)
+                catchplate_source_tree.production_source_contract(checkout, output)
             except ValueError as exc:
                 if expected_error not in str(exc):
                     raise AssertionError(f"production source failed at the wrong guard: {exc}") from exc
@@ -1838,7 +1838,7 @@ def assert_production_source_tree_manifest() -> None:
         opaque.write_bytes(expected["tracked-build-input.opaque"])
         rejected("index differs from the exact HEAD tree")
         source_fixture_git(checkout, "add", "tracked-build-input.opaque")
-        if serverware_source_tree.production_source_contract(checkout, output) != first:
+        if catchplate_source_tree.production_source_contract(checkout, output) != first:
             raise AssertionError("restoring source fixture bytes/index did not restore the original contract")
 
         # Commit the symlink so the regular-tracked-file guard, not dirtiness, rejects it.
@@ -1861,12 +1861,12 @@ def assert_development_source_tree_manifest() -> None:
         launcher = exported / "scripts" / "release-tool"
         launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         launcher.chmod(0o755)
-        first = serverware_source_tree.source_tree_summary(exported, production=False)
-        second = serverware_source_tree.source_tree_summary(exported, production=False)
+        first = catchplate_source_tree.source_tree_summary(exported, production=False)
+        second = catchplate_source_tree.source_tree_summary(exported, production=False)
         if first != second:
             raise AssertionError("development source manifest is not deterministic outside a Git checkout")
         if (
-            first["version"] != "serverware.sourceTree/v3"
+            first["version"] != "catchplate.sourceTree/v3"
             or first["identityMode"] != "development-dirty-tree"
             or first["productionReleaseEligible"] is not False
             or any(first[key] is not None for key in ("commit", "commitTimestamp", "gitTree"))
@@ -1880,16 +1880,16 @@ def assert_development_source_tree_manifest() -> None:
             raise AssertionError("development source manifest omitted executable mode")
         source_fixture_git(exported, "init", "--object-format=sha1", "-q")
         source_fixture_git(exported, "add", ".dockerignore", "ops/production-readiness.env.example", "scripts/release-tool")
-        if serverware_source_tree.source_tree_summary(exported, production=False) != first:
+        if catchplate_source_tree.source_tree_summary(exported, production=False) != first:
             raise AssertionError("development filesystem identity changed after Git metadata/index creation")
         launcher.chmod(0o644)
-        if serverware_source_tree.source_tree_digest(exported, production=False) == first["digest"]:
+        if catchplate_source_tree.source_tree_digest(exported, production=False) == first["digest"]:
             raise AssertionError("development source digest did not commit to executable mode")
         launcher.chmod(0o755)
         symlink = exported / "scripts" / "release-tool-link"
         symlink.symlink_to("release-tool")
         try:
-            serverware_source_tree.source_tree_summary(exported, production=False)
+            catchplate_source_tree.source_tree_summary(exported, production=False)
         except ValueError as exc:
             if "development source forbids symlinks: scripts/release-tool-link" not in str(exc):
                 raise AssertionError(f"development source symlink failed at the wrong guard: {exc}") from exc
@@ -1897,7 +1897,7 @@ def assert_development_source_tree_manifest() -> None:
             raise AssertionError("development source unexpectedly accepted a symlink")
         symlink.unlink()
         launcher.unlink()
-        missing = serverware_source_tree.source_tree_summary(exported, production=False)
+        missing = catchplate_source_tree.source_tree_summary(exported, production=False)
         if (
             any(item["path"] == "scripts/release-tool" for item in missing["files"])
             or missing["digest"] == first["digest"]
@@ -1914,7 +1914,7 @@ def assert_source_tree_manifest_metadata_and_git_fallback() -> None:
 
 
 def assert_source_contract_output_hardening() -> None:
-    with tempfile.TemporaryDirectory(prefix="serverware-source-contract-output-") as checkout_raw:
+    with tempfile.TemporaryDirectory(prefix="catchplate-source-contract-output-") as checkout_raw:
         checkout = Path(checkout_raw)
         (checkout / "scripts").mkdir()
         (checkout / "scripts" / "release-tool.py").write_text(
@@ -1927,7 +1927,7 @@ def assert_source_contract_output_hardening() -> None:
         source_fixture_git(checkout, "commit", "-q", "-m", "source contract fixture")
 
         valid_output = checkout / ".tmp" / "source-contract"
-        contract = serverware_source_tree.production_source_contract(
+        contract = catchplate_source_tree.production_source_contract(
             checkout,
             valid_output,
         )
@@ -1946,7 +1946,7 @@ def assert_source_contract_output_hardening() -> None:
         )
         for output, expected_error in invalid_outputs:
             try:
-                serverware_source_tree.production_source_contract(checkout, output)
+                catchplate_source_tree.production_source_contract(checkout, output)
             except ValueError as exc:
                 if expected_error not in str(exc):
                     raise AssertionError(
@@ -2054,7 +2054,7 @@ def assert_production_release_key_is_pinned() -> None:
 
 
 def assert_release_key_short_writes_are_completed() -> None:
-    with tempfile.TemporaryDirectory(prefix="serverware-release-key-write-") as tmp_raw:
+    with tempfile.TemporaryDirectory(prefix="catchplate-release-key-write-") as tmp_raw:
         key_path = Path(tmp_raw) / "release-signing.pem"
         original_write = generate_release_provenance.os.write
 
@@ -2084,10 +2084,10 @@ def assert_production_reproducibility_binds_image_outputs() -> None:
     launch_authority = build_production_images.launch_authority_metadata()
     source_tree_digest = digest("1")
     expected_images = {
-        "serverware-control": {
+        "catchplate-control": {
             "local_build_image_id": digest("2"),
         },
-        "serverware-decision-gate": {
+        "catchplate-decision-gate": {
             "local_build_image_id": digest("3"),
             "binary_digest": digest("4"),
             "launcher_binary_digest": digest("5"),
@@ -2126,20 +2126,20 @@ def assert_production_reproducibility_binds_image_outputs() -> None:
         "comparison_sha256": digest("8"),
         "images": [
             {
-                "service": "serverware-control",
-                "image_id": expected_images["serverware-control"][
+                "service": "catchplate-control",
+                "image_id": expected_images["catchplate-control"][
                     "local_build_image_id"
                 ],
             },
             {
-                "service": "serverware-decision-gate",
-                "image_id": expected_images["serverware-decision-gate"][
+                "service": "catchplate-decision-gate",
+                "image_id": expected_images["catchplate-decision-gate"][
                     "local_build_image_id"
                 ],
-                "rust_binary_sha256": expected_images["serverware-decision-gate"][
+                "rust_binary_sha256": expected_images["catchplate-decision-gate"][
                     "binary_digest"
                 ],
-                "launcher_binary_sha256": expected_images["serverware-decision-gate"][
+                "launcher_binary_sha256": expected_images["catchplate-decision-gate"][
                     "launcher_binary_digest"
                 ],
                 **launch_authority,
@@ -2173,7 +2173,7 @@ def assert_production_reproducibility_binds_image_outputs() -> None:
                 encoding="utf-8",
             )
             payload = {
-                "apiVersion": "serverware.externalArtifactSignature/v1",
+                "apiVersion": "catchplate.externalArtifactSignature/v1",
                 "artifactSha256": "sha256:" + hashlib.sha256(verification_path.read_bytes()).hexdigest(),
                 "purpose": "reproducible-build-verification",
             }
@@ -2241,8 +2241,8 @@ def assert_production_reproducibility_binds_image_outputs() -> None:
         verify_binding()
 
         mutations = (
-            (0, "image_id", digest("9"), "serverware-control image ID"),
-            (1, "image_id", digest("a"), "serverware-decision-gate image ID"),
+            (0, "image_id", digest("9"), "catchplate-control image ID"),
+            (1, "image_id", digest("a"), "catchplate-decision-gate image ID"),
             (
                 1,
                 "rust_binary_sha256",
@@ -2308,7 +2308,7 @@ def main() -> None:
         raise AssertionError(f"production build plan did not bind a source tree digest: {plan}")
     for item in plan.get("commands") or []:
         argv = item.get("argv") or []
-        if "SERVERWARE_SOURCE_TREE_DIGEST=" not in " ".join(argv):
+        if "CATCHPLATE_SOURCE_TREE_DIGEST=" not in " ".join(argv):
             raise AssertionError(f"production build command did not pass traceability build args: {item}")
         if "SOURCE_DATE_EPOCH=" not in " ".join(argv):
             raise AssertionError(f"production build command did not pass a deterministic timestamp: {item}")

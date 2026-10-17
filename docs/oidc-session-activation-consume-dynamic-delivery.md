@@ -10,15 +10,15 @@ been built, installed or executed as part of this change.
 The isolated `oidc_session_activation_consume_dynamic_launcher.py
 --root-delivery` entrypoint starts as root with exactly two activated sockets.
 Descriptor names, not their order, select the existing
-`serverware-oidc-session-activation-delivery-planner` listener and the new
-`serverware-oidc-session-activation-consume-bootstrap` listener. The latter is
-fixed at `/run/serverware/oidc-session-activation/consume-bootstrap.sock`, with
+`catchplate-oidc-session-activation-delivery-planner` listener and the new
+`catchplate-oidc-session-activation-consume-bootstrap` listener. The latter is
+fixed at `/run/catchplate/oidc-session-activation/consume-bootstrap.sock`, with
 root:65495 pathname ownership, mode `0660`, and issuer peer UID/GID 65495.
 
 Before waiting, the receiver authenticates the independent signed issuer
 policy against the fixed runtime root and historical activation planner
 original. These three protected public files live under
-`/run/serverware/oidc-session-activation-consume-dynamic-trust`:
+`/run/catchplate/oidc-session-activation-consume-dynamic-trust`:
 
 - `root-public-key.pem`
 - `issuer-policy.json`

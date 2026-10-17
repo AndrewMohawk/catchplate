@@ -7,7 +7,7 @@ Setup deployment, or runtime verification.
 
 ## Independent authority and cold selection
 
-The actual admitted `serverware.oauthApplicationStartup/v3` config selects
+The actual admitted `catchplate.oauthApplicationStartup/v3` config selects
 encrypted application material and **Setup-only new issuance**. Its closed six
 fields, independent enrollment root, inherited protected descriptors and real
 custody/configuration association remain mandatory. Versions1/2 retain their
@@ -16,7 +16,7 @@ intent/consent/effect endpoints refuse a v3 enrollment; neither callback bytes
 nor recovery observations switch purpose.
 
 The independently signed authority configuration/v6 must explicitly include
-`oauthMeasuredSetupPolicy` (`serverware.oauthMeasuredSetupAuthorityPolicy/v1`)
+`oauthMeasuredSetupPolicy` (`catchplate.oauthMeasuredSetupAuthorityPolicy/v1`)
 and enable the new source-fixed operations:
 
 - `oauth.setup.create`, `oauth.setup.activation-request`,
@@ -31,8 +31,8 @@ consumes an exact approval by a different credential owner plus a new requester
 assertion. This does not fabricate optional MFA evidence or change unrelated
 authentication modes. The separate fixed native signing purpose is
 `nativeOAuthSetupExchange.sign/v1`, with statement
-`serverware.nativeOAuthSetupExchangeStatement/v1` and its own schema+NUL Ed25519
-domain and `serverware/native-oauth-setup-exchange-attestation/v1` NSM nonce
+`catchplate.nativeOAuthSetupExchangeStatement/v1` and its own schema+NUL Ed25519
+domain and `catchplate/native-oauth-setup-exchange-attestation/v1` NSM nonce
 domain. A legacy exchange statement, refresh assignment, HTTP status or copied
 row is not this permission.
 
@@ -41,10 +41,10 @@ owner, not two listeners on one port. CP v3 expects the explicitly provisioned
 Setup callback origin. Native cold configuration and lifecycle are separate
 source owners; source composition and runtime verification remain required.
 The Setup draft returns through `#nativeOAuthSetupDraft=` and must contain
-`serverware.nativeOAuthSetupDraft/v1`; the old fragment cannot carry it. The
+`catchplate.nativeOAuthSetupDraft/v1`; the old fragment cannot carry it. The
 portal subsequently matches the actual cold-selected provider profile before
 requesting options. The native-only authorization page consumes the distinct
-`serverware.nativeOAuthSetupAuthorizationRedirect/v1` response; the CP portal
+`catchplate.nativeOAuthSetupAuthorizationRedirect/v1` response; the CP portal
 does not interpret that response or choose a provider redirect from it.
 
 ## Actual row and original-byte connection
@@ -114,8 +114,8 @@ carrier. After uncertainty, keep session/pending/approval/event IDs and inspect;
 neither a missing row nor loss of acknowledgement authorizes execution retry.
 
 The native recovery acquisition request is
-`serverware.nativeOAuthSetupRecoveryOriginalRequest/v1` + exchangeId. Its
-response is `serverware.nativeOAuthSetupRecoveryOriginalResponse/v1`,
+`catchplate.nativeOAuthSetupRecoveryOriginalRequest/v1` + exchangeId. Its
+response is `catchplate.nativeOAuthSetupRecoveryOriginalResponse/v1`,
 `okForAction:false`, and the exact three row originals. This SELECT-only response
 is data, not permission to decrypt, contact or re-stage. A separately verified
 fresh recover operation must consume actual retained capture/custody/current

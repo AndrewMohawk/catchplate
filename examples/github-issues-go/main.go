@@ -24,7 +24,7 @@ import (
 )
 
 const githubHost = "api.github.com"
-const dummyToken = "serverware-github-placeholder-v1" // Public placeholder, not a credential.
+const dummyToken = "catchplate-github-placeholder-v1" // Public placeholder, not a credential.
 const maxPages = 100
 
 var (
@@ -43,15 +43,15 @@ type config struct {
 
 func readConfig(getenv func(string) string) (config, error) {
 	c := config{
-		appID: getenv("SERVERWARE_APP_ID"), proxyToken: getenv("SERVERWARE_PROXY_TOKEN"),
-		caFile: getenv("SERVERWARE_CA_FILE"), proxyCAFile: getenv("SERVERWARE_PROXY_CA_FILE"),
-		owner: getenv("SERVERWARE_GITHUB_OWNER"), repo: getenv("SERVERWARE_GITHUB_REPO"),
+		appID: getenv("CATCHPLATE_APP_ID"), proxyToken: getenv("CATCHPLATE_PROXY_TOKEN"),
+		caFile: getenv("CATCHPLATE_CA_FILE"), proxyCAFile: getenv("CATCHPLATE_PROXY_CA_FILE"),
+		owner: getenv("CATCHPLATE_GITHUB_OWNER"), repo: getenv("CATCHPLATE_GITHUB_REPO"),
 	}
-	p, err := url.Parse(getenv("SERVERWARE_PROXY_URL"))
+	p, err := url.Parse(getenv("CATCHPLATE_PROXY_URL"))
 	if err != nil || p.Scheme != "https" || p.Opaque != "" || p.User != nil ||
 		p.Host == "" || p.RawQuery != "" || p.ForceQuery || p.Fragment != "" ||
 		(p.Path != "" && p.Path != "/") || p.RawPath != "" {
-		return config{}, errors.New("SERVERWARE_PROXY_URL must be an HTTPS origin without credentials, query, or fragment")
+		return config{}, errors.New("CATCHPLATE_PROXY_URL must be an HTTPS origin without credentials, query, or fragment")
 	}
 	// Exact DNS names let the TLS callback distinguish the proxy from GitHub.
 	host := p.Hostname()
@@ -74,11 +74,11 @@ func readConfig(getenv func(string) string) (config, error) {
 	decoded, err := base64.RawURLEncoding.DecodeString(c.proxyToken)
 	if !uuidPattern.MatchString(c.appID) || err != nil || len(decoded) != 32 ||
 		base64.RawURLEncoding.EncodeToString(decoded) != c.proxyToken {
-		return config{}, errors.New("set the saved application UUID and its issued SERVERWARE_PROXY_TOKEN")
+		return config{}, errors.New("set the saved application UUID and its issued CATCHPLATE_PROXY_TOKEN")
 	}
 	if c.caFile == "" || !ownerPattern.MatchString(c.owner) || !repoPattern.MatchString(c.repo) ||
 		c.repo == "." || c.repo == ".." {
-		return config{}, errors.New("set SERVERWARE_CA_FILE and the exact permitted GitHub owner and repository")
+		return config{}, errors.New("set CATCHPLATE_CA_FILE and the exact permitted GitHub owner and repository")
 	}
 	p.Path = ""
 	c.proxy = p
@@ -101,7 +101,7 @@ func readCAFile(path string) ([]byte, error) {
 func clientTLS(proxyHost string, proxyRoots *x509.CertPool, innerPEM []byte) (*tls.Config, error) {
 	innerRoots := x509.NewCertPool()
 	if proxyRoots == nil || !innerRoots.AppendCertsFromPEM(innerPEM) {
-		return nil, errors.New("configured Serverware CA file is not a PEM certificate bundle")
+		return nil, errors.New("configured Catchplate CA file is not a PEM certificate bundle")
 	}
 	outerRoots := proxyRoots.Clone()
 	combined := outerRoots.Clone()
@@ -191,7 +191,7 @@ func listIssues(ctx context.Context, client *github.Client, owner, repo string, 
 	for result.Pages < pageLimit {
 		issues, response, err := client.Issues.ListByRepo(ctx, owner, repo, options)
 		if err != nil || response == nil || response.StatusCode != http.StatusOK {
-			return summary{}, errors.New("GitHub issue read failed; inspect Serverware audit records and the saved permission (no automatic retry)")
+			return summary{}, errors.New("GitHub issue read failed; inspect Catchplate audit records and the saved permission (no automatic retry)")
 		}
 		result.Pages++
 		for _, issue := range issues {

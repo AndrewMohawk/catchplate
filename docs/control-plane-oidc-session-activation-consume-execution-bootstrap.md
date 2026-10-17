@@ -2,36 +2,36 @@
 
 Explicit control-plane enrollment bootstrap v8 adds nullable
 `oidcSessionActivationConsumeExecution`. Its signed envelope and payload use
-`serverware.signedControlPlaneEnrollmentBootstrap/v8` and
-`serverware.controlPlaneEnrollmentBootstrap/v8`. Versions v2–v7 keep their
+`catchplate.signedControlPlaneEnrollmentBootstrap/v8` and
+`catchplate.controlPlaneEnrollmentBootstrap/v8`. Versions v2–v7 keep their
 exact prior fields and behavior. The complete envelope remains bounded to
 4 MiB; v8 reserves FD206 even when consume execution is null. An issuer or
 bootstrap cannot occupy that slot, and a disabled lane rejects any inherited
 or open-but-undeclared FD206. Existing purpose reservations remain unchanged.
 
-The nested `serverware.controlPlaneOidcSessionActivationConsumeExecution/v1`
+The nested `catchplate.controlPlaneOidcSessionActivationConsumeExecution/v1`
 object has exactly `schema`, `callerPrivateKeyFd`, `grantEnrollment`,
 `authorizationEnrollment`, and `authorizerEndpoint`. The only key slot is
 206. Each enrollment wrapper contains original `base64Url` and `byteCount`,
 with a 16 KiB original bound and canonical base64url encoding. The endpoint
 contains exactly `socketPath`, `requestTimeoutSeconds`, `listenerUid`, and
 `listenerGid`: fixed path
-`/run/serverware/oidc-session-activation-delivery-execution/authorizer.sock`,
+`/run/catchplate/oidc-session-activation-delivery-execution/authorizer.sock`,
 an integer timeout of 1–30 seconds, and root-created listener peer 0:0.
 Configuration is not permission to contact that endpoint.
 
 ## Explicit downstream profile
 
 Source `.187` adds the distinct nested
-`serverware.controlPlaneOidcSessionActivationConsumeExecution/v2` under the
+`catchplate.controlPlaneOidcSessionActivationConsumeExecution/v2` under the
 same parent v8. It contains exactly the v1 fields plus `reservationEndpoint`,
 `reservationPredecessor`, and `sqlEndpoint`. Nested v1 remains closed and
 authorization-only. No parent version, key, descriptor or processing allowance
 is added.
 
 The two new endpoints use the same closed timeout/peer grammar. Their only
-paths are `/run/serverware/oidc-session-activation-delivery-execution/reserver.sock`
-and `/run/serverware/oidc-session-activation-delivery-execution/sql.sock`,
+paths are `/run/catchplate/oidc-session-activation-delivery-execution/reserver.sock`
+and `/run/catchplate/oidc-session-activation-delivery-execution/sql.sock`,
 respectively, with integer timeouts of 1–30 seconds and root listener peers
 0:0. The existing read-only socket-directory overlay already covers all three
 fixed paths. It creates no listener and does not choose or authorize a profile.
@@ -60,13 +60,13 @@ custody, token release or current-session claim follows from configuration.
 ## Explicit completion dispatch profile
 
 Source `.188` adds nested
-`serverware.controlPlaneOidcSessionActivationConsumeExecution/v3`: exactly the
+`catchplate.controlPlaneOidcSessionActivationConsumeExecution/v3`: exactly the
 v2 fields plus `completionEndpoint`. Parent v8, FD206 and all enrollment/key
 purposes remain unchanged. Nested v1 and v2 stay closed; their material has
 `completion_endpoint=None` and cannot select this continuation.
 
 The new endpoint is only
-`/run/serverware/oidc-session-activation-delivery-execution/completion.sock`,
+`/run/catchplate/oidc-session-activation-delivery-execution/completion.sock`,
 with integer timeout 1–30 seconds and root-created listener peer 0:0. Material
 appends `completion_endpoint` as the same exact `(path, timeout, 0, 0)` tuple.
 The stdlib selector recognizes this closed data shape without crypto imports
@@ -136,7 +136,7 @@ as authority; the actual child performs root and enrollment admission.
 The real control-plane entrypoint calls
 `_open_control_plane_oidc_session_activation_consume_key`. That fixed helper
 reads only the already-provisioned root-owned mode0400
-`/run/secrets/serverware-oidc-session-activation-consume-caller-key`, using the
+`/run/secrets/catchplate-oidc-session-activation-consume-caller-key`, using the
 existing bounded sealed-source, no-follow ancestor and non-overwriting
 descriptor-reservation machinery. It supplies only FD206, never an environment
 key or caller-selected path. An occupied slot is rejected, never overwritten.

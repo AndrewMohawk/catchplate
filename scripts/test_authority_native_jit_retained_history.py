@@ -31,20 +31,20 @@ def no_external_effects(event, _arguments):
 
 
 if __name__ == "__main__":
-    os.environ["SERVERWARE_PROCESS_MODE"] = "metadata-bootstrap"
-    os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
+    os.environ["CATCHPLATE_PROCESS_MODE"] = "metadata-bootstrap"
+    os.environ["CATCHPLATE_RELEASE_CHANNEL"] = "dev"
     sys.addaudithook(no_external_effects)
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from scripts import test_authority_native_jit_review_custody as crypto
 from scripts import test_native_jit_prepare as preparation
-from serverware import authority_contract as installed_contract
-from serverware import authority_native_jit_retained_history as history
-from serverware import native_jit_review_material as material
+from catchplate import authority_contract as installed_contract
+from catchplate import authority_native_jit_retained_history as history
+from catchplate import native_jit_review_material as material
 
 MANIFEST = "sha256:b708d9f97ca989abf0411054bbc23d02262fb5a67bcab345246650a925e776e0"
-REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.349"
+REVISION = "catchplate.policyCandidateAuthoritySource/2026-07-30.349"
 NOW = 1_800_000_000_000_000_000
 SECOND = 1_000_000_000
 OTHER = "sha256:" + "9" * 64
@@ -68,18 +68,18 @@ def request(operation, public, manifest):
     handler = {"release.reserve": "reserve_release_authorization_v2",
         "jit.request": "ensure_jit_approval_request"}[operation]
     arguments = {**copy.deepcopy(public), "businessIntent": {
-        "schema": "serverware.policyAuthorityBusinessIntent/v2", "operation": operation,
-        "planningAdapterId": "serverware.policyAuthorityPlanningAdapter/" + handler + "/v1",
+        "schema": "catchplate.policyAuthorityBusinessIntent/v2", "operation": operation,
+        "planningAdapterId": "catchplate.policyAuthorityPlanningAdapter/" + handler + "/v1",
         "arguments": copy.deepcopy(public)}}
-    authorization = {"schema": "serverware.policyAuthorityV9Authorization/v1", "operation": operation,
+    authorization = {"schema": "catchplate.policyAuthorityV9Authorization/v1", "operation": operation,
         "handler": handler, "operationManifestDigest": manifest, "arguments": arguments}
-    digest = framed("serverware.policyAuthorityV9Request/v1", canonical(authorization))
-    return {**authorization, "schema": "serverware.policyAuthorityV9Request/v1", "requestDigest": digest,
-        "operationId": framed("serverware.policyAuthorityOperation/v2", operation.encode(), digest.encode())}
+    digest = framed("catchplate.policyAuthorityV9Request/v1", canonical(authorization))
+    return {**authorization, "schema": "catchplate.policyAuthorityV9Request/v1", "requestDigest": digest,
+        "operationId": framed("catchplate.policyAuthorityOperation/v2", operation.encode(), digest.encode())}
 
 
 def identity(digest):
-    raw = hashlib.sha256(canonical({"schema": "serverware.policyAuthorityDeterministicIdentity/v1",
+    raw = hashlib.sha256(canonical({"schema": "catchplate.policyAuthorityDeterministicIdentity/v1",
         "operation": "jit.request", "requestDigest": digest, "purpose": "jit-approval-request"})).hexdigest()
     value = list(raw[:32]); value[12] = "5"; value[16] = format((int(value[16], 16) & 3) | 8, "x")
     value = "".join(value)
@@ -105,11 +105,11 @@ class Fixture:
         original_child = {**inherited, **raw["jit_approval_request"]}
         self.documents = {name: original_child[name] for name in ("url", "canonical_request", "redacted_display")}
         child_public = {name: value for name, value in original_child.items() if name not in self.documents}
-        child_public.update(schema="serverware.jitRequestCommitments/v2", original_arguments_digest=sha(canonical(original_child)),
+        child_public.update(schema="catchplate.jitRequestCommitments/v2", original_arguments_digest=sha(canonical(original_child)),
             url_commitment=sha(self.documents["url"].encode()),
             canonical_request_digest=sha(canonical(self.documents["canonical_request"])),
             redacted_display_digest=sha(canonical(self.documents["redacted_display"])))
-        parent_public = {**raw, "schema": "serverware.releaseReserveCommitments/v1",
+        parent_public = {**raw, "schema": "catchplate.releaseReserveCommitments/v1",
             "original_arguments_digest": sha(canonical(raw)), "jit_approval_request": child_public}
         self.parent = request("release.reserve", parent_public, manifest)
         self.child = request("jit.request", child_public, manifest)
@@ -121,23 +121,23 @@ class Fixture:
             "instanceId": raw["actor_id"], "secretKekId": crypto.KEY_ID}
         key_id = sha(crypto.public_spki(self.native))
         self.selected = {**self.target, "bootId": crypto.encoded(b"b" * 32), "keyId": key_id,
-            "holderId": sha(b"serverware/credential-currentness-holder/v1\0" + b"b" * 32 + bytes.fromhex(key_id[7:])),
+            "holderId": sha(b"catchplate/credential-currentness-holder/v1\0" + b"b" * 32 + bytes.fromhex(key_id[7:])),
             "configurationSha256": sha(b"historical native config"), "caCertificateSha256": sha(b"historical cert"),
             "caPublicKeySpkiSha256": sha(b"historical CA public key"), "expectedModuleId": "synthetic-jit-module"}
         configuration = sha(b"historical independently admitted control plane config")
-        self.assignment_payload = {"schema": "serverware.nativeJitReviewAssignment/v1",
+        self.assignment_payload = {"schema": "catchplate.nativeJitReviewAssignment/v1",
             "sourceContractDigest": manifest, "controlPlaneConfigurationDigest": configuration,
             "deploymentId": "synthetic-jit-custody", "assignment": self.selected,
             "issuedAtEpochNs": NOW - SECOND, "expiresAtEpochNs": NOW + 60 * SECOND}
         self.assignment_original = self.sign_assignment()
-        self.scope = {"schema": "serverware.nativeJitReviewScope/v2", "publicRequest": self.child,
+        self.scope = {"schema": "catchplate.nativeJitReviewScope/v2", "publicRequest": self.child,
             "parentRequestSha256": sha(canonical(self.parent)), "sourceContractDigest": manifest,
             "controlPlaneConfigurationDigest": configuration, "ownerScopeDigest": sha(b"historical broker config"),
             "issuedAtEpochNs": NOW, "sealExpiresAtEpochNs": NOW + 30 * SECOND,
             "documentExpiresAtEpochNs": NOW + 299 * SECOND + document_tail_ns}
         self.pair = material.seal_release_pair(self.scope, self.documents,
             key_id=crypto.KEY_ID, kek=AESGCM(crypto.KEY), now_epoch_ns=NOW)
-        self.statement = {"apiVersion": "serverware.nativeReleaseJitReviewStatement/v1",
+        self.statement = {"apiVersion": "catchplate.nativeReleaseJitReviewStatement/v1",
             "operation": "nativeReleaseJitReview.sign/v1", **{name: self.selected[name] for name in crypto.IDENTITY_FIELDS},
             "sourceContractDigest": manifest, "controlPlaneConfigurationDigest": configuration,
             "ownerScopeDigest": self.scope["ownerScopeDigest"], "deploymentId": "synthetic-jit-custody",
@@ -162,7 +162,7 @@ class Fixture:
             "document_expires_at_epoch_ns": self.scope["documentExpiresAtEpochNs"],
             "recorded_at_epoch_ns": NOW + SECOND, "source_revision": REVISION}
         policy = preparation.approver_policy()
-        policy_digest = framed("serverware.jitApproverPolicy/v1", canonical(policy))
+        policy_digest = framed("catchplate.jitApproverPolicy/v1", canonical(policy))
         pending = {"routeId": raw["route_id"], "method": child_public["method"],
             "urlCommitment": child_public["url_commitment"], "principalId": raw["principal_id"],
             "credentialId": raw["credential_id"], "credentialVersion": raw["credential_version"],
@@ -176,12 +176,12 @@ class Fixture:
             "url": child_public["url_commitment"], "status": "pending",
             "requested_at": (epoch + timedelta(microseconds=self.row["recorded_at_epoch_ns"] // 1000)).isoformat(),
             "expires_at": (epoch + timedelta(microseconds=self.scope["documentExpiresAtEpochNs"] // 1000)).isoformat(),
-            "pending_key": framed("serverware.jitPendingApproval/v2", canonical(pending)),
+            "pending_key": framed("catchplate.jitPendingApproval/v2", canonical(pending)),
             "approver_policy_json": canonical(policy).decode(), "approver_policy_digest": policy_digest,
             **dict.fromkeys(("approved_until", "decision_note", "approved_by", "approval_authn",
                 "approver_webauthn_credential_id", "verified_assertion_receipt_digest", "approval_challenge_id"))}
         for name, kind in (("canonical_request", "approval-secret-json/v1"), ("redacted_display", "approval-review-json/v1")):
-            self.approval[name] = "native-jit:v1:" + canonical({"schema": "serverware.nativeJitReviewReference/v1",
+            self.approval[name] = "native-jit:v1:" + canonical({"schema": "catchplate.nativeJitReviewReference/v1",
                 "approvalRequestId": approval_id, "parentRequestDigest": self.parent["requestDigest"],
                 "pairSha256": self.row["pair_sha256"], "valueKind": kind}).decode()
 
@@ -213,7 +213,7 @@ class HistoricalRetentionTests(unittest.TestCase):
         self.assertEqual(material.open_release_pair(fixture.pair, expected_scope=fixture.scope,
             key_id=crypto.KEY_ID, kek=AESGCM(crypto.KEY), now_epoch_ns=NOW + 90 * SECOND), fixture.documents)
         fixture.native.public_key().verify(crypto.assignment.decoded(fixture.proof["signature"][8:], 64, 64),
-            b"serverware.nativeReleaseJitReviewStatement/v1\0" + canonical(fixture.statement))
+            b"catchplate.nativeReleaseJitReviewStatement/v1\0" + canonical(fixture.statement))
         self.assertEqual(self.parse(), (fixture.parent, fixture.child, fixture.pair, fixture.proof))
         self.assertLess(fixture.assignment_payload["expiresAtEpochNs"], NOW + 90 * SECOND)
 
@@ -229,9 +229,9 @@ class HistoricalRetentionTests(unittest.TestCase):
         self.assertEqual(history.SEALED_PROFILES, (
             (MANIFEST, REVISION),
             ("sha256:ed6d471a03516c96aa4968b89e4d220f9d5aaa0dfc4c1f848acfcc58343de4f0",
-                "serverware.policyCandidateAuthoritySource/2026-07-30.350"),
+                "catchplate.policyCandidateAuthoritySource/2026-07-30.350"),
             ("sha256:bb0f9a53066e10042f83a1576d2c44b1dcf497eee457bb8d3146d86f4d526256",
-                "serverware.policyCandidateAuthoritySource/2026-07-30.351"),
+                "catchplate.policyCandidateAuthoritySource/2026-07-30.351"),
         ))
         # This assertion remains meaningful after installed metadata advances;
         # it never patches it or regenerates the fixture with its digest.

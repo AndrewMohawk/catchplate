@@ -19,9 +19,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
-from serverware.authority_primary_contract import PRIMARY_KEY_COLUMNS
-from serverware.authority_store.audit_capacity_sql import (
+from catchplate import authority_contract
+from catchplate.authority_primary_contract import PRIMARY_KEY_COLUMNS
+from catchplate.authority_store.audit_capacity_sql import (
     AUDIT_CAPACITY_FUNCTION_NAME,
     AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES,
     MAX_COUNTER_BYTES,
@@ -90,7 +90,7 @@ class GlobalAuditCapacitySqlSourceTests(unittest.TestCase):
                         "predicate": item["predicate"], "cardinality": item["cardinality"],
                     } for item in spec["mutationTemplates"]},
                 })
-        self.assertNotRegex(self.sql, r'FROM "fixture"\.(?!serverware_policy_authority_wire_walk\s*\()[a-z_]')
+        self.assertNotRegex(self.sql, r'FROM "fixture"\.(?!catchplate_policy_authority_wire_walk\s*\()[a-z_]')
         self.assertNotIn("policy_authority_operation_mutation_templates", self.sql)
 
     def test_rendering_is_deterministic_and_namespace_is_closed(self):
@@ -121,26 +121,26 @@ class GlobalAuditCapacitySqlSourceTests(unittest.TestCase):
             work_units_sql="supplied_work_units")
         installed = audit_capacity_function_sql('"fixture"')
         self.assertEqual(installed.count(body), 1)
-        self.assertEqual(AUDIT_CAPACITY_FUNCTION_NAME, "serverware_policy_authority_assert_audit_capacity")
+        self.assertEqual(AUDIT_CAPACITY_FUNCTION_NAME, "catchplate_policy_authority_assert_audit_capacity")
         self.assertIn(f'CREATE OR REPLACE FUNCTION "fixture".{AUDIT_CAPACITY_FUNCTION_NAME}(', installed)
         self.assertRegex(installed, r"supplied_operation text,\s+supplied_selected_rows pg_catalog\.jsonb,\s+supplied_mutations pg_catalog\.jsonb,\s+supplied_work_units bigint")
         self.assertIn("RETURNS void", installed)
         self.assertIn("SECURITY INVOKER", installed)
         self.assertNotIn("SECURITY DEFINER", installed)
-        header = installed.split("AS $serverware_audit_capacity$", 1)[0]
+        header = installed.split("AS $catchplate_audit_capacity$", 1)[0]
         self.assertNotRegex(header, r"\bSTRICT\b")  # SQL NULL inputs must reach rejecting guards.
         self.assertNotIn("DO $", installed)
         self.assertNotIn("%s", installed)
 
     def test_planner_invoker_dependencies_are_an_exact_read_only_signature_set(self):
         self.assertEqual(AUDIT_CAPACITY_PLANNER_FUNCTION_SIGNATURES, (
-            ("serverware_policy_authority_assert_audit_capacity", ("text", "jsonb", "jsonb", "bigint")),
-            ("serverware_policy_authority_domain_digest", ("text", "text[]")),
-            ("serverware_policy_authority_wire_json", ("jsonb",)),
-            ("serverware_policy_authority_wire_string", ("text", "boolean", "bigint")),
-            ("serverware_policy_authority_wire_walk", ("jsonb", "integer", "bigint", "bigint", "boolean")),
+            ("catchplate_policy_authority_assert_audit_capacity", ("text", "jsonb", "jsonb", "bigint")),
+            ("catchplate_policy_authority_domain_digest", ("text", "text[]")),
+            ("catchplate_policy_authority_wire_json", ("jsonb",)),
+            ("catchplate_policy_authority_wire_string", ("text", "boolean", "bigint")),
+            ("catchplate_policy_authority_wire_walk", ("jsonb", "integer", "bigint", "bigint", "boolean")),
         ))
-        db_source = (ROOT / "serverware/db.py").read_text(encoding="utf-8")
+        db_source = (ROOT / "catchplate/db.py").read_text(encoding="utf-8")
         db_tree = ast.parse(db_source)
         seal = next(node for node in db_tree.body if isinstance(node, ast.FunctionDef)
                     and node.name == "_seal_postgres_schema_acl")
@@ -157,7 +157,7 @@ class GlobalAuditCapacitySqlSourceTests(unittest.TestCase):
         self.assertIn('"LEFT JOIN pg_catalog.pg_roles AS grantee "', unexpected_source)
         self.assertIn('"AND NOT COALESCE(("', unexpected_source)
         self.assertIn('"), FALSE) LIMIT 1"', unexpected_source)
-        schema_source = (ROOT / "serverware/authority_store/schema.py").read_text(encoding="utf-8")
+        schema_source = (ROOT / "catchplate/authority_store/schema.py").read_text(encoding="utf-8")
         self.assertIn('"authorityPlannerWriterFunctionSignatures"', schema_source)
         self.assertEqual(schema_source.count("authority_planner_writer_function_signatures=("), 2)
         self.assertEqual(db_source.count("authority_planner_writer_function_signatures=("), 1)
@@ -165,16 +165,16 @@ class GlobalAuditCapacitySqlSourceTests(unittest.TestCase):
     def test_executor_wiring_preserves_historical_inputs_and_narrow_ddl_budgets(self):
         # Source wiring only: neither importing the registry nor substituting
         # a database connection proves a successful planner transaction.
-        source = (ROOT / "serverware/authority_store/executor_v9.py").read_text(encoding="utf-8")
+        source = (ROOT / "catchplate/authority_store/executor_v9.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
         functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
         self.assertNotIn("authority_v9_schema_source", functions)
         aliases = [alias for node in tree.body if isinstance(node, ast.ImportFrom)
-                   and node.module == "serverware.authority_store.v9_schema_source"
+                   and node.module == "catchplate.authority_store.v9_schema_source"
                    for alias in node.names]
         self.assertEqual([(alias.name, alias.asname) for alias in aliases],
                          [("authority_v9_schema_source", None)])
-        ddl_path = ROOT / "serverware/authority_store/v9_schema_source.py"
+        ddl_path = ROOT / "catchplate/authority_store/v9_schema_source.py"
         self.assertLessEqual(ddl_path.stat().st_size, 2 * 1024 * 1024)
         ddl_source = ddl_path.read_text(encoding="utf-8")
         ddl_tree = ast.parse(ddl_source)
@@ -196,7 +196,7 @@ class GlobalAuditCapacitySqlSourceTests(unittest.TestCase):
         replay = installed.index("IF capability.status = 'committed' THEN")
         self.assertLess(loaded, guarded)
         self.assertLess(guarded, replay)
-        root_sql = (ROOT / "serverware/authority_store/root_transition_sql.py").read_text(encoding="utf-8")
+        root_sql = (ROOT / "catchplate/authority_store/root_transition_sql.py").read_text(encoding="utf-8")
         protocol_guard = root_sql.index("IF planner.plan_protocol IS DISTINCT FROM 'v3'")
         self.assertIn("OR planner.retained_record_digest IS NOT NULL", root_sql)
         self.assertLess(protocol_guard, root_sql.index("IF planner.exact_plan_base64url IS NULL"))
@@ -216,7 +216,7 @@ class GlobalAuditCapacitySqlSourceTests(unittest.TestCase):
         self.assertIn('raise _db_value("MetadataStoreError")', legacy_guard)
         # The unchanged v1 service receipt stays on that denying legacy
         # reader. This is source linkage, not a service/runtime assertion.
-        service = (ROOT / "serverware/authority_service.py").read_text(encoding="utf-8")
+        service = (ROOT / "catchplate/authority_service.py").read_text(encoding="utf-8")
         service_methods = {node.name: node for node in ast.walk(ast.parse(service))
                            if isinstance(node, ast.FunctionDef)}
         replay_source = ast.get_source_segment(service, service_methods["_handle_read_persisted_plan"])
@@ -231,8 +231,8 @@ class GlobalAuditCapacitySqlSourceTests(unittest.TestCase):
         self.assertIn("planner.selected_business_rows_json::pg_catalog.jsonb", installed[guarded:replay])
         self.assertIn("planner.mutation_plan_json::pg_catalog.jsonb", installed[guarded:replay])
         self.assertIn("planner.work_units", installed[guarded:replay])
-        for name, dml in (("reserve_authority_planner_transaction", "INSERT INTO serverware_metadata."),
-                          ("complete_authority_planner_transaction", "UPDATE serverware_metadata.")):
+        for name, dml in (("reserve_authority_planner_transaction", "INSERT INTO catchplate_metadata."),
+                          ("complete_authority_planner_transaction", "UPDATE catchplate_metadata.")):
             method = ast.get_source_segment(source, functions[name])
             self.assertEqual(method.count("authority_audit_capacity.validate_capacity_transition("), 1)
             self.assertEqual(method.count("authority_audit_capacity.validate_transition_work_units("), 1)
@@ -259,11 +259,11 @@ class GlobalAuditCapacitySqlSourceTests(unittest.TestCase):
         self.assertLess(self.sql.index("selected presence is not exact"), self.sql.index("FOR ac_mutation IN"))
 
     def test_entire_inventory_uses_the_shared_bounded_integer_wire_walk(self):
-        self.assertIn("serverware_policy_authority_wire_walk(", self.sql)
+        self.assertIn("catchplate_policy_authority_wire_walk(", self.sql)
         self.assertRegex(self.sql, r"jsonb_build_array\(ac_selected, ac_mutations\),\s+128, 1000000, 67108864, FALSE")
         self.assertIn("ac_inventory_bytes NOT BETWEEN 1 AND 67108864", self.sql)
-        self.assertLess(self.sql.index("operation bound is exceeded"), self.sql.index("serverware_policy_authority_wire_walk("))
-        self.assertLess(self.sql.index("serverware_policy_authority_wire_walk("), self.sql.index("FOR ac_selection IN"))
+        self.assertLess(self.sql.index("operation bound is exceeded"), self.sql.index("catchplate_policy_authority_wire_walk("))
+        self.assertLess(self.sql.index("catchplate_policy_authority_wire_walk("), self.sql.index("FOR ac_selection IN"))
 
     def test_full_before_cas_source_templates_and_no_key_moves_precede_arithmetic(self):
         for guard in (
@@ -328,7 +328,7 @@ class GlobalAuditCapacitySqlSourceTests(unittest.TestCase):
         self.assertIn("ac_mutation->>'operation' IS DISTINCT FROM 'UPDATE'", self.sql)
         self.assertIn("global mutation is crossed or bootstrapped", self.sql)
         self.assertIn(f"'{KIND}:' || ac_partition", self.sql)
-        self.assertIn("'serverware.metadataAuditOutboxCapacityPartition/v1', 'global'", self.sql)
+        self.assertIn("'catchplate.metadataAuditOutboxCapacityPartition/v1', 'global'", self.sql)
         self.assertNotIn("'metadata-audit-outbox-capacity:'", self.sql)
 
     def test_compact_profile_state_and_framing_are_source_closed(self):
@@ -342,16 +342,16 @@ class GlobalAuditCapacitySqlSourceTests(unittest.TestCase):
             "ac_row->'committed_units_json' IS DISTINCT FROM pg_catalog.to_jsonb('{}'::text)",
             "ac_row->'minimum_expiry_epoch_ns' IS DISTINCT FROM 'null'::pg_catalog.jsonb",
             "ac_row->'work_page_id' IS DISTINCT FROM 'null'::pg_catalog.jsonb",
-            "'serverware.policyAuthorityAggregateExpiryIndex/v1', '[]'",
-            "serverware_policy_authority_wire_json(ac_state)",
-            "'serverware.policyAuthorityAggregateState/v1', ac_state_text",
+            "'catchplate.policyAuthorityAggregateExpiryIndex/v1', '[]'",
+            "catchplate_policy_authority_wire_json(ac_state)",
+            "'catchplate.policyAuthorityAggregateState/v1', ac_state_text",
             "ac_row->'state_json' IS DISTINCT FROM pg_catalog.to_jsonb(ac_state_text)",
             authority_contract.SOURCE_REVISION,
         ):
             self.assertIn(fragment, self.sql)
         self.assertEqual(MAX_COUNTER_BYTES, 4096)
-        self.assertIn("serverware_policy_authority_wire_json(ac_row)) > 4096", self.sql)
-        self.assertNotIn("serverware_policy_authority_canonical_json", self.sql)
+        self.assertIn("catchplate_policy_authority_wire_json(ac_row)) > 4096", self.sql)
+        self.assertNotIn("catchplate_policy_authority_canonical_json", self.sql)
 
     def test_exact_numbers_and_derived_bounds_precede_bigint_arithmetic(self):
         self.assertIn("pg_catalog.jsonb_typeof(ac_row->ac_field) IS DISTINCT FROM 'number'", self.sql)
@@ -367,14 +367,14 @@ class GlobalAuditCapacitySqlSourceTests(unittest.TestCase):
     def test_guard_is_read_only_and_has_no_hidden_authority_or_io_import(self):
         self.assertNotRegex(self.sql, r"(?mi)^\s*(INSERT|UPDATE|DELETE|TRUNCATE|CREATE|ALTER|DROP|EXECUTE|COMMIT|ROLLBACK|PERFORM)\b")
         self.assertNotRegex(self.sql, r"\b(clock_timestamp|transaction_timestamp|now|pg_advisory_xact_lock)\s*\(")
-        path = ROOT / "serverware/authority_store/audit_capacity_sql.py"
+        path = ROOT / "catchplate/authority_store/audit_capacity_sql.py"
         self.assertLess(path.stat().st_size, 64 * 1024)
         source = path.read_text(encoding="utf-8")
         imports = {node.module for node in ast.walk(ast.parse(source)) if isinstance(node, ast.ImportFrom)}
         self.assertEqual(imports, {
-            "__future__", "serverware", "serverware.audit_outbox_contract",
-            "serverware.authority_primary_contract", "serverware.authority_store.mutation_sql",
-            "serverware.authority_store.wire_json_sql",
+            "__future__", "catchplate", "catchplate.audit_outbox_contract",
+            "catchplate.authority_primary_contract", "catchplate.authority_store.mutation_sql",
+            "catchplate.authority_store.wire_json_sql",
         })
         self.assertNotIn("authority_audit_capacity", source)
 

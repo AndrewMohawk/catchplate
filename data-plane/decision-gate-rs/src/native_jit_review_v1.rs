@@ -16,11 +16,11 @@ mod assignment;
 #[cfg(test)]
 #[path = "native_jit_review_v1_tests.rs"]
 mod tests;
-pub const SIGNED_ASSIGNMENT: &str = "serverware.signedNativeJitReviewAssignment/v1";
+pub const SIGNED_ASSIGNMENT: &str = "catchplate.signedNativeJitReviewAssignment/v1";
 pub const MAX_ASSIGNMENT: usize = 64 * 1024;
-pub const SCHEMA: &str = "serverware.nativeReleaseJitReviewStatement/v1";
+pub const SCHEMA: &str = "catchplate.nativeReleaseJitReviewStatement/v1";
 pub const SIGN_OPERATION: &str = "nativeReleaseJitReview.sign/v1";
-pub const ATTESTATION_DOMAIN: &[u8] = b"serverware/native-release-jit-review-attestation/v1\0";
+pub const ATTESTATION_DOMAIN: &[u8] = b"catchplate/native-release-jit-review-attestation/v1\0";
 pub(crate) fn require(ok: bool) -> Result<(), String> {
     if ok { Ok(()) } else { Err("native JIT purpose admission or retained scope differs".into()) }
 }
@@ -98,9 +98,9 @@ impl Configuration {
     }
     pub fn validate(&self) -> Result<(), String> {
         let p = &self.native_jit_review_custody_policy;
-        require(self.api_version == "serverware.nativeJitReviewConfiguration/v2"
+        require(self.api_version == "catchplate.nativeJitReviewConfiguration/v2"
             && current::digest(&self.control_plane_configuration_digest)
-            && p.schema == "serverware.nativeJitReviewCustodyAuthorityPolicy/v1"
+            && p.schema == "catchplate.nativeJitReviewCustodyAuthorityPolicy/v1"
             && current::digest(&p.source_contract_digest) && (1..=300).contains(&p.reservation_ttl_seconds)
             && (1..=30).contains(&p.operation_max_seconds) && (1..=16).contains(&p.attempt_capacity)
             && !p.deployment_id.is_empty() && p.deployment_id.len() <= 128
@@ -112,7 +112,7 @@ impl Configuration {
     }
     fn broker(&self) -> Result<broker::jit_review::Configuration, String> {
         let p = &self.native_jit_review_custody_policy;
-        serde_json::from_value(json!({"apiVersion":"serverware.nativeJitReviewConfiguration/v1",
+        serde_json::from_value(json!({"apiVersion":"catchplate.nativeJitReviewConfiguration/v1",
             "sourceContractDigest":p.source_contract_digest,"controlPlaneConfigurationDigest":self.control_plane_configuration_digest,
             "deploymentId":p.deployment_id,"instanceId":self.instance_id,"secretKekId":self.secret_kek_id,
             "attemptCapacity":p.attempt_capacity})).map_err(|_| "JIT broker cold projection".into())

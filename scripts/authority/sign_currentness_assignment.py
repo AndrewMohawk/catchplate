@@ -3,7 +3,7 @@
 
 Run python3 -I -B as root with --input-fd, its independently approved complete
 --input-sha256, and a distinct preprovisioned sealed 32-byte --authority-key-fd.
-Input is canonical serverware.currentnessAssignmentAuthorityInput/v1 containing
+Input is canonical catchplate.currentnessAssignmentAuthorityInput/v1 containing
 payloadOriginal, configurationOriginal (signed v6 authority configuration), and
 configurationRoot {publicKeyPem, publicKeyPemSha256, publicKeySpkiSha256}.
 
@@ -31,17 +31,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import native_pilot_authority_io as io
-from serverware import authority_contract as contract
-from serverware import authority_credential_currentness as p
-from serverware import authority_credential_currentness_assignment as assignment
-from serverware import authority_credential_currentness_policy as native
-from serverware import authority_oauth_setup as codec
-from serverware import authority_policy_canary_policy as configuration
-from serverware import authority_request_commitment as commitment
-from serverware import native_shadow_nitro_originals as originals
+from catchplate import authority_contract as contract
+from catchplate import authority_credential_currentness as p
+from catchplate import authority_credential_currentness_assignment as assignment
+from catchplate import authority_credential_currentness_policy as native
+from catchplate import authority_oauth_setup as codec
+from catchplate import authority_policy_canary_policy as configuration
+from catchplate import authority_request_commitment as commitment
+from catchplate import native_shadow_nitro_originals as originals
 
-API = "serverware.currentnessAssignmentAuthorityInput/v1"
-SIGNED_CONFIGURATION = "serverware.signedPolicyAuthorityServiceConfiguration/v6"
+API = "catchplate.currentnessAssignmentAuthorityInput/v1"
+SIGNED_CONFIGURATION = "catchplate.signedPolicyAuthorityServiceConfiguration/v6"
 MAX_INPUT = 2 * contract.MAX_REQUEST_BYTES + 2 * assignment.MAX_ORIGINAL_BYTES + 16384
 
 

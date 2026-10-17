@@ -9,25 +9,25 @@ const {context, rawCatalog, IDS, clone} = require('./test_operator_npm_ui.cjs');
 const {credential, rule, NOW} = require('./test_operator_catalog_browser.cjs');
 const ORIGIN = 'https://operator.example.test';
 const OP = '77777777-7777-4777-8777-777777777777';
-const KEY = 'serverware.operator.x.account.operation.v1';
+const KEY = 'catchplate.operator.x.account.operation.v1';
 const SHA = 'sha256:' + 'a'.repeat(64);
 const scopes = ['offline.access', 'tweet.read', 'tweet.write', 'users.read'];
-const cap = () => ({schema: 'serverware.operatorXOAuth/v1', connection_type: 'x_user_oauth_v1', auth_type: 'x_oauth',
+const cap = () => ({schema: 'catchplate.operatorXOAuth/v1', connection_type: 'x_user_oauth_v1', auth_type: 'x_oauth',
   permission_preset: 'x_text_post_v1', start_path: '/api/operator-demo/oauth/x/start',
   operation_path_prefix: '/api/operator-demo/oauth/x/operations/',
   disconnect_review_path_template: '/api/operator-demo/oauth/x/accounts/{credential_id}/disconnect-review',
   disconnect_path: '/api/operator-demo/oauth/x/disconnect', source_pair_required: true, automatic_refresh: true, daily_quota_available: false});
-const postCap = () => ({schema: 'serverware.operatorXPost/v1', connection_type: 'x_user_oauth_v1',
+const postCap = () => ({schema: 'catchplate.operatorXPost/v1', connection_type: 'x_user_oauth_v1',
   create_rule_path: '/api/operator-demo/access-rules/x-post', api_origin: 'https://api.x.com', destination_allowed: true,
-  operation_bundles: ['x_text_post_v1'], sdk_auth_token: 'serverware-x-post-placeholder-v1',
-  placeholder: 'Bearer serverware-x-post-placeholder-v1', response_mode: 'x_post_json_v1', source_pair_required: true, daily_quota_available: false});
+  operation_bundles: ['x_text_post_v1'], sdk_auth_token: 'catchplate-x-post-placeholder-v1',
+  placeholder: 'Bearer catchplate-x-post-placeholder-v1', response_mode: 'x_post_json_v1', source_pair_required: true, daily_quota_available: false});
 const account = (changes = {}) => credential({auth_type: 'x_oauth', connection_type: 'x_user_oauth_v1', provider_id: 'x',
   provider_account: '@fixture_user', provider_subject: '123456789', oauth_client_id: 'fixture-client',
   permission_preset: 'x_text_post_v1', scopes: [...scopes], credential_generation: 1, ...changes});
 const postRule = (changes = {}) => rule({operation_bundle: 'x_text_post_v1', methods: ['POST'], upstream_url: 'https://api.x.com/2/tweets',
   request_fields: [], response_fields: [], query_keys: [], allowed_headers: ['accept', 'accept-language', 'content-type', 'sec-fetch-mode', 'user-agent'],
-  response_mode: 'x_post_json_v1', credential_input: 'replace_exact', placeholder: 'Bearer serverware-x-post-placeholder-v1', ...changes});
-const operation = (changes = {}) => ({schema: 'serverware.operatorXAccountOperation/v1', operation_id: OP, kind: 'consent',
+  response_mode: 'x_post_json_v1', credential_input: 'replace_exact', placeholder: 'Bearer catchplate-x-post-placeholder-v1', ...changes});
+const operation = (changes = {}) => ({schema: 'catchplate.operatorXAccountOperation/v1', operation_id: OP, kind: 'consent',
   status: 'connected', credential_id: IDS.credential, reason: null, created_at: new Date(NOW).toISOString(), expires_at_epoch_ms: NOW + 600000, ...changes});
 function catalog() {
   const value = rawCatalog({credentials: [account()], rules: [postRule()], capability: null, allowed: ['https://api.x.com']});
@@ -36,13 +36,13 @@ function catalog() {
 function fixture({saved = null, returned = null, response = operation(), onFetch = null, value = catalog(), catalogResponse = null} = {}) {
   const f = context();
   for (const name of ['workspace_upstreams.js', 'workspace_x_accounts.js', 'workspace_x_post.js', 'workspace_x_configuration.js'])
-    vm.runInContext(readFileSync(resolve(__dirname, '../serverware/operator_demo_web', name), 'utf8'), f.value, {timeout: 2000});
+    vm.runInContext(readFileSync(resolve(__dirname, '../catchplate/operator_demo_web', name), 'utf8'), f.value, {timeout: 2000});
   const storage = new Map(saved === null ? [] : [[KEY, saved]]); const calls = [], catalogReads = []; const navigations = []; const replacements = [];
   Object.assign(f.value, {sessionStorage: {getItem: key => storage.get(key) ?? null, setItem: (key, val) => storage.set(key, val), removeItem: key => storage.delete(key)},
     AbortSignal: {timeout: () => undefined}, clearTimeout() {},
     setTimeout(_callback, delay) { assert.equal(delay, 2000); return 0; }, // Admit, never run, bounded catalog activation polling.
     crypto: {randomUUID: () => OP},
-    location: {origin: ORIGIN, protocol: 'https:', hash: '#overview', href: ORIGIN + '/' + (returned ? '?serverware_x_operation=' + returned : '') + '#overview',
+    location: {origin: ORIGIN, protocol: 'https:', hash: '#overview', href: ORIGIN + '/' + (returned ? '?catchplate_x_operation=' + returned : '') + '#overview',
       assign: url => navigations.push(url)}, history: {replaceState: (_a, _b, url) => replacements.push(url)},
     fetch: async (path, init) => {
       assert.equal(init.credentials, 'same-origin'); assert.equal(init.cache, 'no-store'); assert.equal(init.redirect, 'error');
@@ -85,7 +85,7 @@ const tests = [
     assert.deepEqual(clone(f.run('xPostRulePayload(input)', postRule())), {name: postRule().name, application_id: IDS.application,
       credential_id: IDS.credential, operation_bundle: 'x_text_post_v1'});
     for (const change of [{daily_quota: 5}, {request_body_mode: 'preserve_json_v1'}, {request_fields: ['text']},
-      {placeholder: 'Bearer serverware-x-placeholder-v1'}, {upstream_url: 'https://api.x.com/2/users/me'}])
+      {placeholder: 'Bearer catchplate-x-placeholder-v1'}, {upstream_url: 'https://api.x.com/2/users/me'}])
       assert.equal(f.run('xPostRuleValid(input.rule,input.account)', {rule: postRule(change), account: account()}), false);
     const raw = catalog(); raw.capabilities.x_post = null; const projected = f.run('projectCatalog(input)', raw);
     assert.equal(projected.access_rules.length, 1); assert.equal(f.run('operatorRuleSupported(input.access_rules[0],input)', projected), false);
@@ -125,7 +125,7 @@ const tests = [
     const f = fixture(); const configuration = {profile_binding_digest: SHA, public_profile: {client_id: 'fixture-client'}};
     const pairs = {response_type: 'code', client_id: 'fixture-client', redirect_uri: ORIGIN + '/api/oauth/callback/x',
       scope: scopes.join(' '), state: 's'.repeat(43), code_challenge: 'c'.repeat(43), code_challenge_method: 'S256'};
-    const start = {schema: 'serverware.operatorXConsent/v1', operation_id: OP, status: 'consent_pending',
+    const start = {schema: 'catchplate.operatorXConsent/v1', operation_id: OP, status: 'consent_pending',
       authorization_url: 'https://x.com/i/oauth2/authorize?' + new URLSearchParams(pairs), state: pairs.state,
       expires_at_epoch_ms: NOW + 600000, profile_binding_digest: SHA};
     const parse = value => f.run('projectXConsentStart(input.value,input.id,input.configuration)', {value, id: OP, configuration});
@@ -134,11 +134,11 @@ const tests = [
       {...start, expires_at_epoch_ms: NOW}, {...start, authorization_url: start.authorization_url.replace('https://x.com/', 'https://wrong.invalid/')}]) assert.throws(() => parse(value));
   }],
   ['actual start handler saves UUID before its single POST and never retains authorization material', async () => {
-    const configProfile = {schema: 'serverware.operatorXOAuthProfile/v1', profile: 'operator-x-oauth-v1', provider_id: 'x',
+    const configProfile = {schema: 'catchplate.operatorXOAuthProfile/v1', profile: 'operator-x-oauth-v1', provider_id: 'x',
       client_id: 'fixture-client', redirect_uri: ORIGIN + '/api/oauth/callback/x', client_auth_method: 'client_secret_basic',
       permission_preset: 'x_text_post_v1', scopes: [...scopes], api_origins: ['https://api.x.com'], authorization_url: 'https://x.com/i/oauth2/authorize',
       token_url: 'https://api.x.com/2/oauth2/token', revocation_url: 'https://api.x.com/2/oauth2/revoke', identity_url: 'https://api.x.com/2/users/me'};
-    const config = {schema: 'serverware.operatorXConfiguration/v1', state: 'configured', revision: 1,
+    const config = {schema: 'catchplate.operatorXConfiguration/v1', state: 'configured', revision: 1,
       policy_hash: catalog().policy.policy_hash, redirect_uri: configProfile.redirect_uri, permission_preset: 'x_text_post_v1', scopes: [...scopes],
       configuration: {config_version: 1, profile_binding_digest: SHA, public_profile: configProfile, client_secret_configured: true},
       operation: null, review: null, blocked_reason: 'already_configured', consent_ready: false};
@@ -149,7 +149,7 @@ const tests = [
       if (call.method === 'GET') { assert.equal(call.path, '/api/operator-demo/oauth/x/configuration/v1'); return config; }
       assert.equal(f.storage.get(KEY), OP); assert.equal(call.path, '/api/operator-demo/oauth/x/start');
       assert.deepEqual(call.body, {operation_id: OP, name: 'My X account', expected_revision: 1, expected_policy_hash: config.policy_hash});
-      return {schema: 'serverware.operatorXConsent/v1', operation_id: OP, status: 'consent_pending', authorization_url: url,
+      return {schema: 'catchplate.operatorXConsent/v1', operation_id: OP, status: 'consent_pending', authorization_url: url,
         state: pairs.state, expires_at_epoch_ms: NOW + 600000, profile_binding_digest: SHA};
     }});
     f.start(); f.node('x-account-name').value = 'My X account'; await f.event('x-account-start');
@@ -163,7 +163,7 @@ const tests = [
     assert.equal(lost.navigations.length, 0);
   }],
   ['disconnect scope is closed and bound to reviewed same-client account resources', () => {
-    const f = fixture(); const value = {schema: 'serverware.operatorXDisconnectReview/v1', credential_id: IDS.credential,
+    const f = fixture(); const value = {schema: 'catchplate.operatorXDisconnectReview/v1', credential_id: IDS.credential,
       expected_credential_generation: 1, expected_revision: 1, expected_policy_hash: f.workspace.state.catalog.policy.policy_hash,
       review_digest: SHA, affected_credential_ids: [IDS.credential], affected_rule_ids: [IDS.rule]};
     const parse = review => f.run('projectXDisconnectReview(input.review,input.account,input.catalog)', {review, account: account(), catalog: f.workspace.state.catalog});
@@ -171,7 +171,7 @@ const tests = [
     for (const change of [{expected_revision: 2}, {affected_credential_ids: []}, {affected_rule_ids: [IDS.other]}, {extra: true}]) assert.throws(() => parse({...value, ...change}));
   }],
   ['actual disconnect handler uses reviewed digest and one retained UUID; lost reply is GET-only', async () => {
-    const review = {schema: 'serverware.operatorXDisconnectReview/v1', credential_id: IDS.credential,
+    const review = {schema: 'catchplate.operatorXDisconnectReview/v1', credential_id: IDS.credential,
       expected_credential_generation: 1, expected_revision: 1, expected_policy_hash: catalog().policy.policy_hash,
       review_digest: SHA, affected_credential_ids: [IDS.credential], affected_rule_ids: [IDS.rule]};
     const f = fixture({onFetch: call => {
@@ -194,7 +194,7 @@ const tests = [
           quarantine_reason: 'operator_x_cleanup_fence', provider_revocation_status: 'not_proven'})];
         value.access_rules = [postRule({status: 'revoked'})];
       }
-      const review = {schema: 'serverware.operatorXDisconnectReview/v1', credential_id: IDS.credential,
+      const review = {schema: 'catchplate.operatorXDisconnectReview/v1', credential_id: IDS.credential,
         expected_credential_generation: 1, expected_revision: 1, expected_policy_hash: value.policy.policy_hash,
         review_digest: SHA, affected_credential_ids: [IDS.credential], affected_rule_ids: status === 'active' ? [IDS.rule] : []};
       const f = fixture({value, onFetch: call => {
@@ -222,7 +222,7 @@ const tests = [
     const view = refused.start(); await view.disconnect(IDS.credential);
     assert.equal(refused.node('x-disconnect-submit').disabled, true); await refused.event('x-disconnect-submit');
     assert.equal(refused.calls.length, 1); assert.equal(refused.calls[0].method, 'GET'); assert.equal(refused.storage.size, 0);
-    const review = {schema: 'serverware.operatorXDisconnectReview/v1', credential_id: IDS.credential,
+    const review = {schema: 'catchplate.operatorXDisconnectReview/v1', credential_id: IDS.credential,
       expected_credential_generation: 1, expected_revision: 1, expected_policy_hash: value.policy.policy_hash,
       review_digest: SHA, affected_credential_ids: [IDS.credential], affected_rule_ids: [IDS.rule]};
     const stale = fixture({value, response: review}); const managed = stale.start(); await managed.disconnect(IDS.credential);
@@ -233,10 +233,10 @@ const tests = [
   }],
   ['SDK recipe carries public config only, explicit local post-once and verified TLS', () => {
     const f = fixture(); const args = {proxyUrl: 'https://proxy.example.test:8443', applicationId: IDS.application,
-      proxyAuthentication: 'basic_and_bearer_v1', caPath: './serverware-ca.pem', proxyCaPath: ''};
+      proxyAuthentication: 'basic_and_bearer_v1', caPath: './catchplate-ca.pem', proxyCaPath: ''};
     const recipe = f.run('buildXPostClientRecipe(input)', args);
-    assert.match(recipe, /SERVERWARE_X_POST_CONFIRM=post-once node client\.mjs/);
-    assert.match(recipe, /SERVERWARE_X_POST_TEXT:\?/); assert.match(recipe, /Do not repeat automatically/);
+    assert.match(recipe, /CATCHPLATE_X_POST_CONFIRM=post-once node client\.mjs/);
+    assert.match(recipe, /CATCHPLATE_X_POST_TEXT:\?/); assert.match(recipe, /Do not repeat automatically/);
     assert.doesNotMatch(recipe, /rejectUnauthorized|NODE_TLS_REJECT_UNAUTHORIZED|access_token|refresh_token/);
     assert.throws(() => f.run('buildXPostClientRecipe(input)', {...args, proxyAuthentication: 'bearer'}));
   }],
@@ -270,7 +270,7 @@ const tests = [
   }],
   ['X refresh activity accepts recorded success only; unsupported failures stay unavailable', () => {
     const f = fixture();
-    const value = {schema: 'serverware.operatorAccountActivity/v1', status: 'available', observed_at_epoch_ms: NOW,
+    const value = {schema: 'catchplate.operatorAccountActivity/v1', status: 'available', observed_at_epoch_ms: NOW,
       chain_verification: 'not_checked', window: {row_limit: 256, event_byte_limit: 16384, byte_limit: 2097152,
         rows_scanned: 1, bytes_read: 256, has_older_rows: false, byte_budget_exhausted: false, incomplete: false,
         oversized_events: 0, invalid_events: 0, unmatched_responses: 0},

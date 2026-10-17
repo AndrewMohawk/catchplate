@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/response-v2-resume-release-replay.v1.schema.json",
-  "title": "Serverware Response v2 Stable Resume and Release Replay Records",
+  "$id": "https://catchplate.invalid/schemas/response-v2-resume-release-replay.v1.schema.json",
+  "title": "Catchplate Response v2 Stable Resume and Release Replay Records",
   "oneOf": [
     {
       "$ref": "#/$defs/resumeRecord"
@@ -78,10 +78,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseV2.resumeRecord/v1"
+          "const": "catchplate.responseV2.resumeRecord/v1"
         },
         "kind": {
-          "const": "ServerwareResponseV2ResumeRecord"
+          "const": "CatchplateResponseV2ResumeRecord"
         },
         "schemaVersion": {
           "const": "1"
@@ -141,10 +141,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseV2.releasePreparationReplay/v1"
+          "const": "catchplate.responseV2.releasePreparationReplay/v1"
         },
         "kind": {
-          "const": "ServerwareResponseV2ReleasePreparationReplay"
+          "const": "CatchplateResponseV2ReleasePreparationReplay"
         },
         "schemaVersion": {
           "const": "1"
@@ -225,10 +225,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseV2.releaseRetrievalReplay/v1"
+          "const": "catchplate.responseV2.releaseRetrievalReplay/v1"
         },
         "kind": {
-          "const": "ServerwareResponseV2ReleaseRetrievalReplay"
+          "const": "CatchplateResponseV2ReleaseRetrievalReplay"
         },
         "schemaVersion": {
           "const": "1"
@@ -292,10 +292,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseV2.replayStateQuery/v1"
+          "const": "catchplate.responseV2.replayStateQuery/v1"
         },
         "kind": {
-          "const": "ServerwareResponseV2ReplayStateQuery"
+          "const": "CatchplateResponseV2ReplayStateQuery"
         },
         "schemaVersion": {
           "const": "1"
@@ -337,10 +337,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseV2.replayResolutionMutation/v1"
+          "const": "catchplate.responseV2.replayResolutionMutation/v1"
         },
         "kind": {
-          "const": "ServerwareResponseV2ReplayResolutionMutation"
+          "const": "CatchplateResponseV2ReplayResolutionMutation"
         },
         "schemaVersion": {
           "const": "1"
@@ -391,10 +391,10 @@
       ],
       "properties": {
         "apiVersion": {
-          "const": "serverware.responseV2.replayResolutionResult/v1"
+          "const": "catchplate.responseV2.replayResolutionResult/v1"
         },
         "kind": {
-          "const": "ServerwareResponseV2ReplayResolutionResult"
+          "const": "CatchplateResponseV2ReplayResolutionResult"
         },
         "schemaVersion": {
           "const": "1"

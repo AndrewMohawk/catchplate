@@ -22,9 +22,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
-from serverware import native_pilot_phase_execution as old
-from serverware import native_pilot_adopted_phase_profile as profile
-from serverware import native_pilot_adopted_phase_execution as execution
+from catchplate import native_pilot_phase_execution as old
+from catchplate import native_pilot_adopted_phase_profile as profile
+from catchplate import native_pilot_adopted_phase_execution as execution
 from test_native_pilot_adopted_current_head import fixture
 
 p = profile.p
@@ -73,9 +73,9 @@ class AdoptedPhaseControls(unittest.TestCase):
         self.assertEqual(len(profile.AUTH_INFO), 34)
 
     def test_shared_publication_census_and_independent_aggregate_byte_bound(self):
-        from serverware import native_pilot_publication as publication
-        from serverware import native_pilot_public_inputs as public_inputs
-        from serverware import native_pilot_adopted_endpoint_plan as endpoints
+        from catchplate import native_pilot_publication as publication
+        from catchplate import native_pilot_public_inputs as public_inputs
+        from catchplate import native_pilot_adopted_endpoint_plan as endpoints
 
         # Only purpose-bearing signed outputs use the executor's shared owner.
         # Precreation, ordinary/runtime/material and each native launch install
@@ -158,7 +158,7 @@ class AdoptedPhaseControls(unittest.TestCase):
         payload = {"authority": {"keyId": digest, "keySpkiSha256": digest, "publicKeyBase64url": p.encoded(public)},
             "syntheticDecision": "signature-helper-only-not-native-validation"}
         prepared = {"payload": payload, "payloadOriginal": p.canonical(payload),
-            "domain": "serverware.nativePublicationAdoptionAuthorization.signature/v2"}
+            "domain": "catchplate.nativePublicationAdoptionAuthorization.signature/v2"}
         result = {"payload": payload, "signature": p.encoded(key.sign(profile.adoption.message(prepared)))}
         raw = p.canonical(result)
         self.assertEqual(profile._adoption_result(raw, prepared), raw)
@@ -175,7 +175,7 @@ class AdoptedPhaseControls(unittest.TestCase):
         for literal in ("--run-native-pilot", "--run-adopted-native-pilot", "--run-native-genesis-listener",
                 "--intake-configuration-fd", "ProcessPreparationError"):
             self.assertIn(literal, script)
-        tree = ast.parse((ROOT / "serverware/native_pilot_adopted_phase_execution.py").read_text())
+        tree = ast.parse((ROOT / "catchplate/native_pilot_adopted_phase_execution.py").read_text())
         method = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "_adoption")
         calls = [(node.lineno, node.func.attr) for node in ast.walk(method)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in ("validate", "sign")]

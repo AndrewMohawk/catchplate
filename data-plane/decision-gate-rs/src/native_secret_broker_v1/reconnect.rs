@@ -63,7 +63,7 @@ impl Owner {
     pub fn recover_reconnect(&mut self, id:&str, originals:Value, deadline:u64,
         relays:&NativeUpstreamRelaysV1)->Result<Reply,String>{
         wire::fields(&originals,&["apiVersion","okForAction","journalOriginal","exchangeOriginal","custodyOriginal","candidateOriginal"])?;
-        ensure(originals["apiVersion"]=="serverware.nativeOAuthReconnectRecoveryOriginalResponse/v1"
+        ensure(originals["apiVersion"]=="catchplate.nativeOAuthReconnectRecoveryOriginalResponse/v1"
             && originals["okForAction"]==false,"reconnect recovery acquisition is not data-only")?;
         ensure(self.reconnect_configuration.as_ref().is_some_and(|(config,_)|config.recovery_targets.iter().any(|item|item==id)),
             "reconnect recovery target is not cold-selected")?;
@@ -84,7 +84,7 @@ impl Owner {
             let mut response=document(&self.process.exchange(&raw,deadline)?,MAX_FRAME)?;
             let mut transport:Option<VsockStreamV1>=None;
             let mut sequence=0u64; let mut total=0usize;
-            while response["apiVersion"]=="serverware.nativeOAuthReconnectTls/v1" {
+            while response["apiVersion"]=="catchplate.nativeOAuthReconnectTls/v1" {
                 wire::fields(&response,&["apiVersion","providerId","purpose","sequence","ciphertext","read"])?;
                 let (provider,purpose)=contact.ok_or("reconnect TLS requires its actual committed receipt phase")?;
                 ensure(matches!(purpose,"token"|"identity") && response["providerId"]==provider
@@ -105,11 +105,11 @@ impl Owner {
                 let size=if read{stream.read(&mut input).map_err(|_|"reconnect TLS read uncertain")?}else{0}; input.truncate(size);
                 total=total.checked_add(size).ok_or("reconnect TLS aggregate overflow")?;
                 self.check(deadline)?;
-                response=document(&self.process.exchange(&canonical_ascii_bytes(&json!({"apiVersion":"serverware.nativeOAuthReconnectTls/v1",
+                response=document(&self.process.exchange(&canonical_ascii_bytes(&json!({"apiVersion":"catchplate.nativeOAuthReconnectTls/v1",
                     "sequence":sequence,"ciphertext":if input.is_empty(){Value::Null}else{json!(encoded(&input))},
                     "eof":read&&size==0}))?,deadline)?,MAX_FRAME)?;
                 if read && size==0 {
-                    ensure(response["apiVersion"]!="serverware.nativeOAuthReconnectTls/v1","reconnect TLS cannot continue after EOF")?;
+                    ensure(response["apiVersion"]!="catchplate.nativeOAuthReconnectTls/v1","reconnect TLS cannot continue after EOF")?;
                 }
             }
             self.check(deadline)?; ingress.check(deadline)?; Reply::parse(response,&config,&ingress)

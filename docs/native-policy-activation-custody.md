@@ -8,7 +8,7 @@ not been executed.
 
 ## Actual ownership and contact
 
-The fixed native guest parent selects `serverware.nativeShadowActivationGuestLaunch/v1`.
+The fixed native guest parent selects `catchplate.nativeShadowActivationGuestLaunch/v1`.
 Its unchanged `keyAdmission` original admits the C9 delivery, static closure,
 encrypted local key inventory, original boot/lifetime, independent time issuer
 and external Nitro verifier result. The separate `activation` pin names a
@@ -26,7 +26,7 @@ or generic inspected-peer claim. Existing retrieval inspector profiles remain
 unchanged. Parent PIDFD, private FD3 and the original absolute watchdog stay
 owned throughout acquisition, service construction, publication and cleanup.
 
-The native gate explicitly selects nested `serverware.nativeShadowConfiguration/v3`
+The native gate explicitly selects nested `catchplate.nativeShadowConfiguration/v3`
 in outer v15 or later. Old outer v1-v14 and nested v1/v2 bytes do not select the
 new path. `nativeActivation` admits a separately protected authority original
 and the actual channel at FD70 under the same root `Prepared`; both originals
@@ -55,7 +55,7 @@ hardware requester, a distinct currently authorized hardware approver, and an
 actual one-use consume transaction. The native verifier authenticates the full
 root-signed CP v6 configuration and its separate planner/verifier/witness keys;
 the PREPARE response purpose is
-`serverware.policyAuthorityNativeActivationRuntimeResponse/v1`.
+`catchplate.policyAuthorityNativeActivationRuntimeResponse/v1`.
 
 `activationOriginals` is exact5: signed measured plan, executor completion,
 witness request, witness response and `nativeEffectHoldOriginal`, all raw ASCII.
@@ -97,11 +97,11 @@ proof, a CP-finalized high-water, or a mutation of the gate's immutable policy.
 
 ## Provisioning and unresolved outcomes
 
-`serverware.native_policy_activation_inputs.ActivationInputs.prepare` is the
+`catchplate.native_policy_activation_inputs.ActivationInputs.prepare` is the
 purpose-fixed launch-input producer. Under the unchanged original BOOTTIME
 startup deadline it creates an actual socket pair and a fresh `journal` beneath
 the existing protected root:root 0711 directory
-`/var/lib/serverware/native-policy-activation`. It writes and fsyncs the independently
+`/var/lib/catchplate/native-policy-activation`. It writes and fsyncs the independently
 supplied and pinned initial publication7, creates the real lock, assigns the
 exact final UID/GID, and retains process-start/boot/file/socket originals.
 It refuses a preexisting journal; failure never cleans up or reuses an unknown
@@ -122,8 +122,8 @@ Independent provisioning of the initial publication tuple, signed C9/grant
 approval, fixed launch originals and CP/guest key authority remains required.
 No source path generates supervisor/verifier trust or self-approves keys. The schema is
 `native-policy-activation-custody.v1.schema.json`; signedEnvelope framing is
-`serverware.signedEnvelope/v1`, NUL, purpose domain, NUL,
-`serverware.canonicalJson/ascii-integer-v1`, NUL, full canonical payload.
+`catchplate.signedEnvelope/v1`, NUL, purpose domain, NUL,
+`catchplate.canonicalJson/ascii-integer-v1`, NUL, full canonical payload.
 
 Any partial journal write, failed readback, lost reply or expired interval is an
 unresolved effect, never retry permission. This initial owner is fresh-only and

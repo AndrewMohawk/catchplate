@@ -18,9 +18,9 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts.test_authority_local_prepared_install import PreparedTree, digest
-from serverware import authority_artifact_spec as spec
-from serverware import authority_local_artifact_measure as measure
-from serverware import authority_local_content_catalog as catalog
+from catchplate import authority_artifact_spec as spec
+from catchplate import authority_local_artifact_measure as measure
+from catchplate import authority_local_content_catalog as catalog
 
 
 def observed_catalog():

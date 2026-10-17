@@ -8,7 +8,7 @@ import { certificate, CHAINS, configuration, failure, summary } from './client.m
 
 export const SDK_VERSION = '2.57.6';
 export const UNDICI_VERSION = '8.12.1';
-export const PUBLIC_ALCHEMY_DUMMY = 'serverware-alchemy-placeholder-v1';
+export const PUBLIC_ALCHEMY_DUMMY = 'catchplate-alchemy-placeholder-v1';
 export const REQUEST_TIMEOUT_MS = 15_000;
 export const RESPONSE_LIMIT = 65_536;
 

@@ -32,8 +32,8 @@ PROVIDER_HEADERS = {"accept": "*/*", "host": "gmail.googleapis.com", **SDK_HEADE
 MESSAGE_IDS = ("msg_1", "msg-2")
 THREAD_IDS = ("thread_1", "thread-2")
 PAGE_TOKEN = "next+page /="
-SDK_SCHEMA = "serverware.privateGmailSdkObservations/v1"
-REQUEST_SCHEMA = "serverware.privateGmailSdkRequest/v1"
+SDK_SCHEMA = "catchplate.privateGmailSdkObservations/v1"
+REQUEST_SCHEMA = "catchplate.privateGmailSdkRequest/v1"
 MAX_ATTEMPTS = 32
 EMPTY_SHA256 = "sha256:" + hashlib.sha256(b"").hexdigest()
 READY_MESSAGE = "Isolated synthetic Gmail SDK fixture ready; no provider values emitted."

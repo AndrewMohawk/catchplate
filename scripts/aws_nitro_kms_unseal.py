@@ -82,7 +82,7 @@ def validate_request(payload: dict[str, Any]) -> dict[str, Any]:
     }
     if set(payload) != allowed:
         raise SystemExit("master-key unseal request has an invalid object shape")
-    if payload.get("apiVersion") != "serverware.masterKeyUnsealRequest/v1":
+    if payload.get("apiVersion") != "catchplate.masterKeyUnsealRequest/v1":
         raise SystemExit("master-key unseal request has an unexpected apiVersion")
     if payload.get("kind") != "MasterKeyUnseal" or payload.get("material") != "broker-kek":
         raise SystemExit("master-key unseal request is not for broker-kek")
@@ -172,7 +172,7 @@ def run_unseal_command(
     allow_fixtures_for_test: bool,
 ) -> bytes:
     if not template.strip():
-        raise SystemExit("--command-template or SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE is required")
+        raise SystemExit("--command-template or CATCHPLATE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE is required")
     if not allow_fixtures_for_test and command_mentions(template, "fixture", "test_aws_nitro_kms_unseal.py"):
         raise SystemExit("Nitro NSM unseal adapter must not use fixture helpers")
     if "{recipient_ciphertext_path}" not in template:
@@ -257,7 +257,7 @@ def unseal(args: argparse.Namespace) -> None:
         raise SystemExit("Nitro NSM unseal timeout must be between 0 and 60 seconds")
     request = read_request()
     bindings = validate_request(request)
-    template = args.command_template or os.getenv("SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE", "")
+    template = args.command_template or os.getenv("CATCHPLATE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE", "")
     raw_key = decoded_key(
         run_unseal_command(
             template=template,
@@ -274,7 +274,7 @@ def unseal(args: argparse.Namespace) -> None:
     print(
         canonical_json(
             {
-                "apiVersion": "serverware.unsealedMaterial/v1",
+                "apiVersion": "catchplate.unsealedMaterial/v1",
                 "kind": "UnsealedMaterial",
                 "ok": True,
                 "material": "broker-kek",
@@ -302,10 +302,10 @@ def main() -> None:
     unseal_parser.add_argument(
         "--output-format",
         choices=("auto", "raw", "b64", "json"),
-        default=os.getenv("SERVERWARE_NITRO_NSM_UNSEAL_OUTPUT_FORMAT", "auto"),
+        default=os.getenv("CATCHPLATE_NITRO_NSM_UNSEAL_OUTPUT_FORMAT", "auto"),
     )
     unseal_parser.add_argument(
-        "--timeout", type=float, default=float(os.getenv("SERVERWARE_NITRO_NSM_UNSEAL_TIMEOUT_SECONDS", "10"))
+        "--timeout", type=float, default=float(os.getenv("CATCHPLATE_NITRO_NSM_UNSEAL_TIMEOUT_SECONDS", "10"))
     )
     unseal_parser.add_argument("--allow-fixtures-for-test", action="store_true")
     args = parser.parse_args()

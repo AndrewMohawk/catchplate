@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const {readFileSync} = require('node:fs');
 const {resolve} = require('node:path');
 const vm = require('node:vm');
-const source = readFileSync(resolve(__dirname, '../serverware/app.py'), 'utf8');
+const source = readFileSync(resolve(__dirname, '../catchplate/app.py'), 'utf8');
 const clone = value => JSON.parse(JSON.stringify(value));
 function section(start, end) {
   const a = source.indexOf(start), b = source.indexOf(end, a + start.length);
@@ -45,7 +45,7 @@ const ID = '11111111-1111-4111-8111-111111111111';
 const OTHER = '44444444-4444-4444-8444-444444444444';
 const RECEIPT = '22222222-2222-4222-8222-222222222222';
 const CHALLENGE = '33333333-3333-4333-8333-333333333333';
-const MARKER = `serverware.approvalDecisionUncertain.${ID}`;
+const MARKER = `catchplate.approvalDecisionUncertain.${ID}`;
 const NOW = Date.parse('2030-01-01T00:00:00Z');
 const digest = char => 'sha256:' + char.repeat(64);
 const date = offset => new Date(NOW + offset).toISOString();
@@ -72,9 +72,9 @@ function review(id = ID) {
 }
 function options(kind = 'deny') {
   return {publicKey: {challenge: Buffer.alloc(32, 3).toString('base64url'),
-    rpId: 'serverware.example.test', allowCredentials: [{type: 'public-key', id: credentialId, transports: ['usb']}],
+    rpId: 'catchplate.example.test', allowCredentials: [{type: 'public-key', id: credentialId, transports: ['usb']}],
     timeout: 120000, userVerification: 'required'},
-  serverware: {authorityChallengeId: CHALLENGE, operation: kind === 'approve' ? 'jit.decide' : 'jit.deny'}};
+  catchplate: {authorityChallengeId: CHALLENGE, operation: kind === 'approve' ? 'jit.decide' : 'jit.deny'}};
 }
 function approvalResult(status = 'approved', threshold = 1) {
   return {...metadata(), status, approved_until: status === 'approved' ? date(30000) : null,
@@ -219,7 +219,7 @@ group('exact options, assertion and denial payload through actual guarded API', 
   assert.equal(f.prompts[0].publicKey.timeout, 30000);
   assert.deepEqual([...f.prompts[0].publicKey.challenge], [...Buffer.alloc(32, 3)]);
   assert.deepEqual([...f.prompts[0].publicKey.allowCredentials[0].id], [...Buffer.from('test-credential')]);
-  assert.equal(writes(f)[1].headers['X-Serverware-CSRF-Token'], 'synthetic-csrf');
+  assert.equal(writes(f)[1].headers['X-Catchplate-CSRF-Token'], 'synthetic-csrf');
   assert.ok(f.events.findIndex(event => event[0] === 'store') < f.events.findIndex(event => event[1]?.endsWith('/deny')));
   assert.equal(f.calls[2].cache, 'no-store'); assert.equal(f.state.approvalReview, null);
   assert.equal(f.storage.size, 0); assert.equal(f.ui.held(ID), false); noPrivateStorage(f);
@@ -279,8 +279,8 @@ group('WebAuthn unavailable or authority options refused produces no final write
   await refused(f); assert.equal(writes(f).length, 1); assert.equal(f.prompts.length, 0);
 });
 group('malformed authority-bound options fail closed before prompting', async () => {
-  const changes = [o => { o.serverware.operation = 'jit.approve'; }, o => { o.serverware.authorityChallengeId = ''; },
-    o => { o.serverware.authorityChallengeId = 'x'.repeat(513); }, o => { o.publicKey.challenge = 'bad='; },
+  const changes = [o => { o.catchplate.operation = 'jit.approve'; }, o => { o.catchplate.authorityChallengeId = ''; },
+    o => { o.catchplate.authorityChallengeId = 'x'.repeat(513); }, o => { o.publicKey.challenge = 'bad='; },
     o => { o.publicKey.challenge = ''; }, o => { o.publicKey.challenge = 'AB'; },
     o => { o.publicKey.rpId = 'bad host'; }, o => { o.publicKey.rpId = ''; },
     o => { o.publicKey.userVerification = 'preferred'; }, ...[0, 120001, 1.5, '1000'].map(n => o => { o.publicKey.timeout = n; }),
@@ -499,8 +499,8 @@ group('approval cannot omit WebAuthn or continue after authority options refusal
   await refusedApprove(f); assert.equal(writes(f).length, 1); assert.equal(f.prompts.length, 0);
 });
 group('approval rejects wrong operation, unbound credentials and malformed options', async () => {
-  const changes = [o => { o.serverware.operation = 'jit.deny'; }, o => { o.serverware.operation = 'jit.approve'; },
-    o => { o.serverware.authorityChallengeId = ''; }, o => { o.publicKey.allowCredentials = []; },
+  const changes = [o => { o.catchplate.operation = 'jit.deny'; }, o => { o.catchplate.operation = 'jit.approve'; },
+    o => { o.catchplate.authorityChallengeId = ''; }, o => { o.publicKey.allowCredentials = []; },
     o => { o.publicKey.allowCredentials[0].id = 'AB'; }, o => { o.publicKey.allowCredentials[0].type = 'other'; },
     o => { o.publicKey.challenge = ''; }, o => { o.publicKey.userVerification = 'preferred'; },
     o => { o.publicKey.rpId = 'bad host'; }, o => { o.publicKey.timeout = 120001; }];

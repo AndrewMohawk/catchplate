@@ -18,7 +18,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-REGION, REGISTRY, REPOSITORY = "us-east-1", "123456789012", "serverware-fixture"
+REGION, REGISTRY, REPOSITORY = "us-east-1", "123456789012", "catchplate-fixture"
 ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE"
 SECRET_KEY = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
 PART = b"synthetic-layer-part\x00\xff"

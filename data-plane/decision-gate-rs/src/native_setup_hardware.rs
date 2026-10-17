@@ -1,6 +1,6 @@
 //! Fixed Setup hardware challenge from the actual live gate and role-4 owners.
 use super::*;
-use serverware_decision_gate::native_setup_hardware_v1 as wire;
+use catchplate_decision_gate::native_setup_hardware_v1 as wire;
 
 // Only this actual GateState path may prepare the binary's signing call.
 pub(super) struct Prepared { statement:wire::Statement }

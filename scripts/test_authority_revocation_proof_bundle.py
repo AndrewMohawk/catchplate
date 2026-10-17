@@ -22,20 +22,20 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_query_read_work as accounting
-from serverware import authority_revocation_proof_bundle as retained
+from catchplate import authority_query_read_work as accounting
+from catchplate import authority_revocation_proof_bundle as retained
 import authority_revocation_observation_fixture as fixture_oracle
 import test_authority_counted_root_transition as root_oracle
 import test_authority_query_reads_measured as work_oracle
 import test_authority_revocation_read_write as mixed_oracle
 
 
-BUNDLE_SCHEMA = "serverware.policyAuthorityRevocationProofBundle/v1"
-BUNDLE_PROFILE = "serverware.policyAuthorityRevocationProofBundleProfile/v1"
-TRANSITION_SCHEMA = "serverware.policyAuthorityRevocationReadWriteTransition/v1"
-TRANSITION_PROFILE = "serverware.policyAuthorityRevocationReadWriteTransitionProfile/v1"
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.351"
-COUNTED_PROFILE = "serverware.policyAuthorityCountedIndex/v1"
+BUNDLE_SCHEMA = "catchplate.policyAuthorityRevocationProofBundle/v1"
+BUNDLE_PROFILE = "catchplate.policyAuthorityRevocationProofBundleProfile/v1"
+TRANSITION_SCHEMA = "catchplate.policyAuthorityRevocationReadWriteTransition/v1"
+TRANSITION_PROFILE = "catchplate.policyAuthorityRevocationReadWriteTransitionProfile/v1"
+SOURCE_REVISION = "catchplate.policyCandidateAuthoritySource/2026-07-30.351"
+COUNTED_PROFILE = "catchplate.policyAuthorityCountedIndex/v1"
 PHASES = (("generation", "generation"), ("declarationBinding", "declaration_binding"),
     ("observationValidation", "observation_validation"), ("pointBinding", "point_binding"),
     ("proofWork", "proof_work"), ("completeBinding", "complete_binding"))
@@ -93,8 +93,8 @@ def root_document(root):
 def primary_document(fixture):
     composition = fixture.read_write
     reader = composition.read
-    value = {"schema": "serverware.policyAuthorityPrimaryRootTransition/v1",
-             "profile": "serverware.policyAuthorityPrimaryRootTransitionProfile/v2"}
+    value = {"schema": "catchplate.policyAuthorityPrimaryRootTransition/v1",
+             "profile": "catchplate.policyAuthorityPrimaryRootTransitionProfile/v2"}
     for root_class, prefix in (("business", "business"), ("authorization", "authorization")):
         tables = [item.table for item in reader.contracts if item.root_class == root_class]
         value[prefix + "BeforeRoots"] = [root_document(reader.trees[table].root) for table in tables]
@@ -550,7 +550,7 @@ class RevocationProofBundleTests(unittest.TestCase):
             permuted["inputs"]["queries"][1], permuted["inputs"]["queries"][0]
         extra = copy.deepcopy(bundle)
         record = copy.deepcopy(extra["inputs"]["queryReads"][0])
-        record["queryId"] = "serverware.policyAuthorityQuery/unknown-extra/v1"
+        record["queryId"] = "catchplate.policyAuthorityQuery/unknown-extra/v1"
         extra["inputs"]["queryReads"].append(record)
         wrong_context = copy.deepcopy(bundle)
         wrong_context["inputs"]["assertionBinding"]["challengeId"] = "other-challenge"

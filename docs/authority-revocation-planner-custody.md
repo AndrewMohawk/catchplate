@@ -49,7 +49,7 @@ ACK verification establishes custody only, not a fresh execution window. Every
 process invocation uses its actual cumulative work allowance without subordinate
 resets.
 
-`serverware.policyAuthorityRevocationPlannerCustodyTransfer/v1` has two fixed
+`catchplate.policyAuthorityRevocationPlannerCustodyTransfer/v1` has two fixed
 actions. All magics below are eight bytes; lengths are big-endian unsigned
 64-bit integers, followed by opaque originals.
 

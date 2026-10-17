@@ -96,9 +96,9 @@ struct PolicyTrustConfigV1 {
 
 impl GateConfigV1 {
     pub(super) fn into_inputs(self,
-        secret_broker: Option<serverware_decision_gate::native_secret_broker_v1::Configuration>,
+        secret_broker: Option<catchplate_decision_gate::native_secret_broker_v1::Configuration>,
         measured_audit: Option<super::super::native_audit_transport::Configuration>,
-        measured_refresh: Option<serverware_decision_gate::native_oauth_refresh_v1::Configuration>,
+        measured_refresh: Option<catchplate_decision_gate::native_oauth_refresh_v1::Configuration>,
         service_tokens: super::super::native_service_tokens::Source)
         -> Result<(GateStateInputs, ControlPlaneClientConfig), String>
     {
@@ -131,7 +131,7 @@ impl GateConfigV1 {
             }
         }
         let high_water = self.policy_high_water;
-        if high_water.api_version != "serverware.policyHighWater/v1"
+        if high_water.api_version != "catchplate.policyHighWater/v1"
             || high_water.policy_id.is_empty()
             || high_water.policy_id.len() > MAX_POLICY_ID_BYTES
             || high_water.policy_id.trim() != high_water.policy_id

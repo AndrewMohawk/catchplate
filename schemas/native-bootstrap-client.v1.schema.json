@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://serverware.invalid/schemas/native-bootstrap-client.v1.schema.json",
-  "title": "Serverware fixed native bootstrap acquisition client v1",
+  "$id": "https://catchplate.invalid/schemas/native-bootstrap-client.v1.schema.json",
+  "title": "Catchplate fixed native bootstrap acquisition client v1",
   "description": "Closed configuration original, at most 16384 bytes. Runtime retains independently pinned originals, verifies real native startup evidence before private-key loading/network, then makes one fixed bootstrap POST on a full TLS1.3 connection. Explicit challenge is independently pinned before delegation/setup issuance, never generated or learned from a response. Schema shape is not pin provenance, native verification, installation permission or enrollment completion.",
   "type": "object",
   "additionalProperties": false,
@@ -12,7 +12,7 @@
     "expectedCallerPrincipal", "expectedTargetPrincipal", "expectedTargetNonce", "expectedTargetRequestSha256"
   ],
   "properties": {
-    "apiVersion": {"const": "serverware.nativeBootstrapClient/v1"},
+    "apiVersion": {"const": "catchplate.nativeBootstrapClient/v1"},
     "endpoint": {
       "description": "Canonical literal unicast SocketAddr with nonzero port. Runtime rejects unspecified/multicast/broadcast and scoped IPv6 including mapped IPv4 exclusions; private and loopback addresses remain permitted. This is not DNS or a URL.",
       "type": "string", "minLength": 3, "maxLength": 64,
@@ -25,7 +25,7 @@
     },
     "startupExpectations": {"description": "Independent native startup expectations, at most 16384 bytes.", "$ref": "#/$defs/artifact"},
     "sessionScope": {
-      "description": "Independent nonce-free serverware.nativeIngressSessionScope/v1 original, at most 16384 bytes. Complete scope must agree with startup expectations; explicit client challenge must differ from startup nonce.",
+      "description": "Independent nonce-free catchplate.nativeIngressSessionScope/v1 original, at most 16384 bytes. Complete scope must agree with startup expectations; explicit client challenge must differ from startup nonce.",
       "$ref": "#/$defs/artifact"
     },
     "trustRoots": {"description": "Independent Nitro attestation roots original, at most 1048576 bytes; not the caller issuer.", "$ref": "#/$defs/artifact"},
@@ -44,7 +44,7 @@
     "delegationAuthorizer": {"description": "Independent dedicated delegation Ed25519 public PEM, at most 16384 bytes; its artifact pin is retained as the expected root pin.", "$ref": "#/$defs/artifact"},
     "setupAuthorizer": {"description": "Separate independent setup Ed25519 public PEM, at most 16384 bytes. Not selected by evidence or learned from another root.", "$ref": "#/$defs/artifact"},
     "request": {
-      "description": "Pinned exact serverware.nativeEnrollmentBootstrapRequest/v1 original, canonical ASCII JSON plus one LF, at most 196608 bytes. Contains exact signed delegation/setup and target request originals bounded 32768/32768/65536 bytes. These same bytes are POSTed without rewriting; receiver compares all three component originals.",
+      "description": "Pinned exact catchplate.nativeEnrollmentBootstrapRequest/v1 original, canonical ASCII JSON plus one LF, at most 196608 bytes. Contains exact signed delegation/setup and target request originals bounded 32768/32768/65536 bytes. These same bytes are POSTed without rewriting; receiver compares all three component originals.",
       "$ref": "#/$defs/artifact"
     },
     "clientChallengeBase64url": {

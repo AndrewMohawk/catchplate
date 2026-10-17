@@ -23,15 +23,15 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from serverware import authority_contract
-from serverware import authority_native_activation_schema
-from serverware import authority_primary_contract as primary
-from serverware.authority_store.metadata_schema_source import (
+from catchplate import authority_contract
+from catchplate import authority_native_activation_schema
+from catchplate import authority_primary_contract as primary
+from catchplate.authority_store.metadata_schema_source import (
     metadata_base_schema_source,
     metadata_initialization_index_source,
     metadata_schema_source,
 )
-from serverware.authority_store.v9_schema_source import authority_v9_schema_source
+from catchplate.authority_store.v9_schema_source import authority_v9_schema_source
 
 
 def independent_digest(domain: str, value: object) -> str:
@@ -47,8 +47,8 @@ def manifest_row_fixture(operation: str, *, authorization: bool) -> tuple[list[d
     """Spell the SQL row encoding independently from the admission helper."""
     manifest = (primary.source_authorization_manifest() if authorization
                 else primary.source_query_manifest())
-    domain = ("serverware.policyAuthorityAuthorizationManifest" if authorization
-              else "serverware.policyAuthorityQueryManifest")
+    domain = ("catchplate.policyAuthorityAuthorizationManifest" if authorization
+              else "catchplate.policyAuthorityQueryManifest")
     manifest_digest = independent_digest(domain + "/v1", manifest)
     entries = [entry for entry in manifest if entry["operation"] == operation]
     rows = []
@@ -77,7 +77,7 @@ def committed_schema_literals() -> str:
     for filename, maximum in (("authority_store/metadata_schema_source.py", 16 * 1024 * 1024),
                               ("authority_store/v9_schema_source.py", 2 * 1024 * 1024),
                               ("authority_native_activation_schema.py", 1024 * 1024)):
-        if (ROOT / "serverware" / filename).stat().st_size > maximum:
+        if (ROOT / "catchplate" / filename).stat().st_size > maximum:
             raise AssertionError("schema source exceeded the bounded source fixture")
     database_sql = metadata_schema_source()
     if database_sql != (metadata_base_schema_source() + authority_native_activation_schema.source()
@@ -118,7 +118,7 @@ class AuthorityPrimaryContractTests(unittest.TestCase):
             }
             preimage.update(sourceRevision=authority_contract.SOURCE_REVISION, operation=operation)
             self.assertEqual(entry["handlerDigest"], independent_digest(
-                "serverware.policyAuthorityHandlerContract/v1", preimage
+                "catchplate.policyAuthorityHandlerContract/v1", preimage
             ), operation)
 
     def test_returned_manifests_do_not_alias_later_projections(self) -> None:
@@ -283,7 +283,7 @@ class AuthorityPrimaryContractTests(unittest.TestCase):
                 self.assertEqual(set(entry), fields)
                 self.assertEqual(entry["ordinal"], ordinal)
                 self.assertEqual(entry["predicateId"],
-                                 f"serverware.policyAuthorityQuery/{operation}/{ordinal}/{entry['table']}/v3")
+                                 f"catchplate.policyAuthorityQuery/{operation}/{ordinal}/{entry['table']}/v3")
                 self.assertEqual(entry["handlerDigest"], authority_contract.handler_contract_digest(operation))
                 self.assertEqual(entry["keyColumns"], list(primary.PRIMARY_KEY_COLUMNS[entry["table"]]))
                 self.assertEqual(entry["selectorPaths"], [list(path) for path in spec["selectors"].get(entry["table"], ())])
@@ -308,9 +308,9 @@ class AuthorityPrimaryContractTests(unittest.TestCase):
 
     def test_manifest_and_entry_digests_keep_existing_length_framing(self) -> None:
         for manifest, domain, digest, entry_digest in (
-            (primary.source_query_manifest(), "serverware.policyAuthorityQueryManifest",
+            (primary.source_query_manifest(), "catchplate.policyAuthorityQueryManifest",
              primary.source_query_manifest_digest(), primary.query_manifest_entry_digest),
-            (primary.source_authorization_manifest(), "serverware.policyAuthorityAuthorizationManifest",
+            (primary.source_authorization_manifest(), "catchplate.policyAuthorityAuthorizationManifest",
              primary.source_authorization_manifest_digest(), primary.authorization_manifest_entry_digest),
         ):
             self.assertEqual(digest, independent_digest(domain + "/v1", manifest))
@@ -352,7 +352,7 @@ class AuthorityPrimaryContractTests(unittest.TestCase):
             expected = tuple({
                 "ordinal": entry["ordinal"],
                 "predicateId": (
-                    f"serverware.policyAuthorityAuthorizationQuery/{operation}/{entry['ordinal']}/{entry['table']}/v1"
+                    f"catchplate.policyAuthorityAuthorizationQuery/{operation}/{entry['ordinal']}/{entry['table']}/v1"
                     if authorization else entry["predicateId"]
                 ),
                 "table": entry["table"], "keyColumns": entry["keyColumns"],
@@ -376,8 +376,8 @@ class AuthorityPrimaryContractTests(unittest.TestCase):
             primary.validate_planner_manifest_rows(operation, rows, authorization=authorization)
             copied_manifest_label = rows[0]["manifest_digest"]
             changed_entry = {**entries[0], "keyColumns": ["untrusted_primary_key"]}
-            domain = ("serverware.policyAuthorityAuthorizationManifestEntry/v1" if authorization
-                      else "serverware.policyAuthorityQueryManifestEntry/v1")
+            domain = ("catchplate.policyAuthorityAuthorizationManifestEntry/v1" if authorization
+                      else "catchplate.policyAuthorityQueryManifestEntry/v1")
             rows[0] = {**rows[0], "key_columns_json": '["untrusted_primary_key"]',
                        "entry_digest": independent_digest(domain, changed_entry)}
             self.assertEqual(rows[0]["manifest_digest"], copied_manifest_label)
@@ -482,7 +482,7 @@ class AuthorityPrimaryContractTests(unittest.TestCase):
     def test_both_live_loaders_use_the_directly_tested_manifest_admission(self) -> None:
         # Source wiring is distinct from the real pure admission calls above;
         # this does not import or bypass the deliberately closed registry.
-        path = ROOT / "serverware/authority_planner_read.py"
+        path = ROOT / "catchplate/authority_planner_read.py"
         self.assertLess(path.stat().st_size, 2 * 1024 * 1024)
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for name, authorization in (("_load_manifest", False), ("_load_authorization_manifest", True)):
@@ -500,7 +500,7 @@ class AuthorityPrimaryContractTests(unittest.TestCase):
             self.assertIs(ast.literal_eval(admission[0].keywords[0].value), authorization)
 
     def test_production_module_has_no_database_registry_or_source_file_reader(self) -> None:
-        tree = ast.parse((ROOT / "serverware/authority_primary_contract.py").read_text(encoding="utf-8"))
+        tree = ast.parse((ROOT / "catchplate/authority_primary_contract.py").read_text(encoding="utf-8"))
         imports = []
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

@@ -6,7 +6,7 @@ The complete parent remains limited to 4 MiB, including the encoded archive,
 current provenance and all operation enrollment originals. This is not another
 4 MiB allowance and does not provision keys, descriptors or a recovery service.
 
-The nested `serverware.controlPlaneRegistrationHistory/v1` object has exactly
+The nested `catchplate.controlPlaneRegistrationHistory/v1` object has exactly
 `schema`, `currentEntry`, `archive` and `registrations`. `archive` is the existing
 `{base64Url, byteCount}` original carrier. `currentEntry` has the existing
 historical archive entry shape: actual artifact package/trust state, signed

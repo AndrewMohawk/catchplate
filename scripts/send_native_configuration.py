@@ -42,15 +42,15 @@ MAX_MANIFEST = 64 * 1024 * 1024
 MAX_FILE = 16 * 1024 * 1024
 MAX_TOTAL = 32 * 1024 * 1024
 MAX_INTERVAL = 86_400_000_000_000
-HELLO_API = "serverware.nativeConfigurationDeliveryChallenge/v1"
-SIGNED_API = "serverware.signedNativeConfigurationDelivery/v1"
-PAYLOAD_API = "serverware.nativeConfigurationDelivery/v1"
+HELLO_API = "catchplate.nativeConfigurationDeliveryChallenge/v1"
+SIGNED_API = "catchplate.signedNativeConfigurationDelivery/v1"
+PAYLOAD_API = "catchplate.nativeConfigurationDelivery/v1"
 SCOPE = {"challengeBase64Url", "bootId", "receiverStartedBoottimeNs", "deliveryKeySpkiSha256"}
 STATIC_PROFILE = "postboot-static-v24"
 ROTATION_PROFILE = "static-credential-rotation-v25"
-ROTATION_HELLO_API = "serverware.nativeConfigurationDeliveryChallenge/v2"
-ROTATION_SIGNED_API = "serverware.signedNativeConfigurationDelivery/v2"
-ROTATION_PAYLOAD_API = "serverware.nativeConfigurationDelivery/v2"
+ROTATION_HELLO_API = "catchplate.nativeConfigurationDeliveryChallenge/v2"
+ROTATION_SIGNED_API = "catchplate.signedNativeConfigurationDelivery/v2"
+ROTATION_PAYLOAD_API = "catchplate.nativeConfigurationDelivery/v2"
 
 
 def require(value):
@@ -195,11 +195,11 @@ def manifest(raw, challenge, budget, *, profile=STATIC_PROFILE):
         pins[row["label"]] = row["sha256"]
         if profile == ROTATION_PROFILE and row["label"] == "configuration":
             configuration = document(content, MAX_FILE)
-            require(configuration.get("apiVersion") == "serverware.nativeStartupConfiguration/v25"
+            require(configuration.get("apiVersion") == "catchplate.nativeStartupConfiguration/v25"
                 and "measuredStaticCredential" not in configuration
                 and type(configuration.get("measuredStaticCredentialRotation")) is dict
                 and configuration["measuredStaticCredentialRotation"].get("apiVersion")
-                == "serverware.nativeStaticCredentialRotationConfiguration/v1")
+                == "catchplate.nativeStaticCredentialRotationConfiguration/v1")
         del content
         budget.remaining()
     require(pins.get("configuration") == payload["configurationSha256"]

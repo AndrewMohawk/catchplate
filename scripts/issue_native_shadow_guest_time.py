@@ -6,7 +6,7 @@ import sys
 def main():
     if len(sys.argv) != 1 or sys.flags.isolated != 1 or sys.flags.ignore_environment != 1:
         raise ValueError("native guest time issuer requires isolated fixed invocation")
-    from serverware.native_shadow_time_issuer import run
+    from catchplate.native_shadow_time_issuer import run
     run()
 
 

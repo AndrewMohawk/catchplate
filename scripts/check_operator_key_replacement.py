@@ -122,7 +122,7 @@ class KeyReplacementCheck(OrdinaryClientCheck):
         self.timeout()
         headers = [f"POST {target} HTTP/1.1", f"Host: {AUTHORITY}",
                    "Connection: " + ("close" if close else "keep-alive"),
-                   f"User-Agent: serverware-test-run/{self.run_id}", "Accept: application/json",
+                   f"User-Agent: catchplate-test-run/{self.run_id}", "Accept: application/json",
                    "Content-Type: application/json", f"Content-Length: {len(REQUEST_BODY)}",
                    "Authorization: " + DUMMY_AUTHORIZATION]
         tls.sendall(("\r\n".join(headers) + "\r\n\r\n").encode("ascii") + REQUEST_BODY)
@@ -339,7 +339,7 @@ class KeyReplacementCheck(OrdinaryClientCheck):
         require(self.count() == 4, "four and only four upstream dispatches required")
         evidence = self.verify_replacement_audit(baseline, assigned, unassigned, credential["id"])
         require(authority_projection(self.catalog()) == authority_projection(after), "catalog authority changed during final verification")
-        return {"ok": True, "schema": "serverware.operatorKeyReplacementCheck/v1", "syntheticOnly": True,
+        return {"ok": True, "schema": "catchplate.operatorKeyReplacementCheck/v1", "syntheticOnly": True,
             "productionReady": False, "publicDnsVerified": False, "realProviderVerified": False,
             "dataPlaneBinaryDigest": PIN, "responseMode": V2_RESPONSE_MODE,
             "credentialId": credential["id"], "initialCredentialGeneration": 1, "replacementCredentialGeneration": 2,

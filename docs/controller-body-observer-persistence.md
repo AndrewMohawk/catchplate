@@ -64,7 +64,7 @@ snapshot/event identities use their distinct
 All original bytes remain stored; a digest cannot replace a missing file.
 
 The marker starts with the exact NUL-terminated bytes
-`serverware.controllerBodyInitialHistoryCommit/v15`, followed by this fixed
+`catchplate.controllerBodyInitialHistoryCommit/v15`, followed by this fixed
 584-byte payload in order:
 
 - Context digest, 32 bytes.
@@ -82,7 +82,7 @@ The marker starts with the exact NUL-terminated bytes
   32 bytes.
 
 The task binding commits the fixed NUL-terminated domain
-`serverware/controller-body-task-originals/v14`, the stop-original length
+`catchplate/controller-body-task-originals/v14`, the stop-original length
 (u64BE) and exact stop bytes, then each task index (u32BE), length (u64BE) and
 exact original bytes. Retaining `stop.json` preserves that binding's preimage,
 rather than retaining only its digest.

@@ -22,7 +22,7 @@ class Crash(BaseException):
 
 class ClientTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="serverware-managed-client-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="catchplate-managed-client-")
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name) / "private"
         self.token_file = Path(self.temporary.name) / "bootstrap-token"
@@ -377,11 +377,11 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(self.manager.status()["recovery_pending"])
 
     def test_wire_parity_with_frozen_server_contract(self):
-        # Test-only import. The copied standalone client never imports serverware.
+        # Test-only import. The copied standalone client never imports catchplate.
         root = str(Path(__file__).resolve().parents[2])
         sys.path.insert(0, root)
         try:
-            from serverware import operator_workload_renewal as wire
+            from catchplate import operator_workload_renewal as wire
             self.leave_unknown()
             raw = self.calls[0]
             parsed = wire.RenewalRequest.model_validate_json(raw)

@@ -1,0 +1,48 @@
+# Ordinary GitHub App/PAT setup on retained-compatible authority; Google unconfigured.
+# Do not deploy unrelated authority-contract changes without a reviewed migration.
+# AWS credentials are storage-only: no signing, grants or ECR publication.
+# Required order: base + this SINGLE source layer + curated-gate + notifications + providers.
+# This pair includes the genuinely rebuilt provider and response-media fixes; the historical
+# npm-publish-candidate retains the previous Rust executable and is not equivalent.
+# Never combine source overrides or add the legacy google layer. Preserve the
+# original private environment and explicit notification interpolation settings.
+# Provider custody must already exist, app-owned 0700 and distinct from other
+# retained roots. Do not initialize a key or reset existing custody/state.
+# On first migration, start/verify app publication before creating the gate;
+# keep the edge closed until paired and retained-state checks pass. See README.
+services:
+  catchplate:
+    environment:
+      CATCHPLATE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:7101d7e367ecaa398bf057a6cb12f24497670625dd0b0d4ca843f6a0ab6f4da6
+      CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED: "1"
+      CATCHPLATE_OPERATOR_PROVIDER_CUSTODY_DIR: /provider-custody
+      CATCHPLATE_PROCESS_MODE: catchplate-control-plane
+      CATCHPLATE_METADATA_STORE_BACKEND: sqlite
+      CATCHPLATE_AUDIT_STORE_BACKEND: sqlite
+      CATCHPLATE_GRANT_STORE_BACKEND: sqlite
+      CATCHPLATE_RELEASE_CHANNEL: dev
+      CATCHPLATE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED: "0"
+      CATCHPLATE_KEY_RELEASE_REQUIRED: "0"
+      CATCHPLATE_DEV_AUTHENTICATOR: "0"
+      CATCHPLATE_DEV_DEMO_SEED: "0"
+    volumes:
+      - type: bind
+        source: /srv/catchplate-fast/projects/catchplate-operator-artifacts/source-bf33afce290aba279033c4c1f78c486312516632
+        target: /app
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${OPERATOR_MANAGED_PROVIDER_CUSTODY_DIR:?Set the reviewed empty app-only provider custody directory}
+        target: /provider-custody
+        read_only: false
+        bind: {create_host_path: false}
+
+  decision-gate-rs:
+    environment:
+      CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED: "1"
+    volumes:
+      - type: bind
+        source: /srv/catchplate-fast/projects/catchplate-operator-artifacts/sha256-7101d7e367ecaa398bf057a6cb12f24497670625dd0b0d4ca843f6a0ab6f4da6/catchplate-decision-gate
+        target: /usr/local/bin/catchplate-decision-gate
+        read_only: true
+        bind: {create_host_path: false}

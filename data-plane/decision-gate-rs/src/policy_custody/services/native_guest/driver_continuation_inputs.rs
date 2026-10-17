@@ -34,10 +34,10 @@ pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) stru
 impl Operation {
     pub(super) fn parse(phase:&PhaseTwo)->Result<Self,ShadowError>{
         phase.check()?;let signed:SignedScope=exact(phase.scope())?;
-        require(matches!(signed.payload.api_version.as_str(),"serverware.nativeShadowDriverScope/v2"|"serverware.nativeShadowDriverScope/v3"
-            |"serverware.nativeShadowDriverScope/v4"))?;
+        require(matches!(signed.payload.api_version.as_str(),"catchplate.nativeShadowDriverScope/v2"|"catchplate.nativeShadowDriverScope/v3"
+            |"catchplate.nativeShadowDriverScope/v4"))?;
         let value=signed.payload.operation.ok_or(ShadowError::BindingDrift)?;
-        require(value.api_version=="serverware.nativeShadowDriverOperation/v1"
+        require(value.api_version=="catchplate.nativeShadowDriverOperation/v1"
             && !value.descriptors.is_empty() && value.descriptors.len()<=MAX_RIGHTS-2
             && value.descriptors.windows(2).all(|p|p[0].name<p[1].name))?;
         Ok(value)

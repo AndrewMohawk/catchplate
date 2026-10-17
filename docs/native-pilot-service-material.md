@@ -7,13 +7,13 @@ bridge. The focused local check passed; live installation remains unverified.
 
 ## Exact sources and fixed destinations
 
-[Service material](../serverware/native_pilot_service_material.py) copies literal
+[Service material](../catchplate/native_pilot_service_material.py) copies literal
 bytes from the actual approved Persistence and GenerationInstall authority
 inputs, after revalidating those complete inputs and their actual signed grants.
 The earlier fresh-only service policy already selected initialization; this step
 does not manufacture a different genesis or accept restored records.
 
-All four destinations are below `/etc/serverware/native-pilot-inputs/`:
+All four destinations are below `/etc/catchplate/native-pilot-inputs/`:
 
 | Filename | Existing input field | Maximum |
 | --- | --- | --- |
@@ -36,20 +36,20 @@ purpose `initial-driver-bootstrap-precreation-endpoints-generations-and-service-
 The nested policy is bounded to 4 KiB and has exactly:
 
 ```json
-{"apiVersion":"serverware.nativePilotServiceMaterialPolicy/v1","initialization":"fresh-persistence-and-generation"}
+{"apiVersion":"catchplate.nativePilotServiceMaterialPolicy/v1","initialization":"fresh-persistence-and-generation"}
 ```
 
 It adds no signing selector or new key. Earlier policy versions do not acquire
 this publication authority.
 
-The canonical bundle is `serverware.nativePilotServiceMaterialBundle/v1`, with
+The canonical bundle is `catchplate.nativePilotServiceMaterialBundle/v1`, with
 exactly `apiVersion`, `serviceContexts` and `endpointLaunches`. Both maps contain
 only `persistence` and `generationInstall`. Each service context contains literal
 ASCII `inputOriginal` and `grantOriginal`; each launch entry is the actual fixed
 launch pin. The complete bundle limit is 64 MiB, not a filesystem-write allowance.
 Existing 128 MiB retained-owner and 128-original/32 MiB public-file bounds remain.
 
-The new result is `serverware.nativePilotServiceMaterialInstallation/v1`, with
+The new result is `catchplate.nativePilotServiceMaterialInstallation/v1`, with
 exactly `apiVersion`, `bundleSha256`, `startupDeadlineBoottimeNs`,
 `lifetimeDeadlineBoottimeNs`, `material` and `pins`. `pins` is the exact four-slot
 map. `material` retains the conductor's existing contract:
@@ -83,7 +83,7 @@ failure consumes the attempt and partial public files remain.
 
 ## Retained job120 and the next phase
 
-[The material owner](../serverware/native_pilot_supervisor_service_material.py)
+[The material owner](../catchplate/native_pilot_supervisor_service_material.py)
 accepts only the real policy, coordinator and opaque pending job120 request.
 It first verifies the completed ten-launch and eleven-service handoffs, retains
 the selected two actual input/result pairs and launch records, and derives one
@@ -99,7 +99,7 @@ call old service owners under an invented request or grant bridge installation
 authority. No bridge composer or additional bridge coverage is included.
 
 Actual durable initialization remains later in
-[`admit_services`](../serverware/native_pilot_service_inputs.py):
+[`admit_services`](../catchplate/native_pilot_service_inputs.py):
 the retained generation owner checks the supplied genesis/record chain against
 the installed grant before exclusive journal writes; the retained persistence
 owner validates and installs its exact genesis, then admits its operational
@@ -128,7 +128,7 @@ continuation, exclusive publication or journal initialization.
 
 The exact source archive, harness, command, log, source revision, structured
 result and checksums are retained at
-`codex-offload/serverware/engineering-builds/2e7cc269-service-material-u0LH6H/`.
+`codex-offload/catchplate/engineering-builds/2e7cc269-service-material-u0LH6H/`.
 The source archive is **85,524,480 bytes**, SHA-256
 `8358d5e485144b91a0ccbb722e56fc1ea6cce5281aee7abb6d77d9da02c3978f`.
 No DB/app/authority-store modules, signing entrypoints, protected owners,

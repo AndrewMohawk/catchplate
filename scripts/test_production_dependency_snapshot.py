@@ -19,7 +19,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 PREFETCH_PATH = ROOT / "production-dependencies/prefetch.py"
 LAUNCHER_PATH = ROOT / "scripts/test_production_launcher_adversarial.py"
-SNAPSHOT_ID = "serverware-production-dependencies-test-v2"
+SNAPSHOT_ID = "catchplate-production-dependencies-test-v2"
 SNAPSHOT_URL = "https://artifacts.example.invalid/" + SNAPSHOT_ID
 PYTHON_ARCHIVE = "cache/python-wheelhouse-linux-amd64.tar.gz"
 CARGO_ARCHIVE = "cache/cargo-vendor.tar.gz"
@@ -49,7 +49,7 @@ def archive_fixture(member: str, content: bytes) -> bytes:
 
 class DependencySnapshotTests(unittest.TestCase):
     def setUp(self) -> None:
-        temporary = tempfile.TemporaryDirectory(prefix="serverware-dependency-unit-")
+        temporary = tempfile.TemporaryDirectory(prefix="catchplate-dependency-unit-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.dependencies = self.root / "production-dependencies"
@@ -103,7 +103,7 @@ class DependencySnapshotTests(unittest.TestCase):
     @staticmethod
     def metadata(artifacts: dict[str, dict[str, str]]) -> dict[str, object]:
         return {
-            "apiVersion": "serverware.offlineDependencyManifest/v2",
+            "apiVersion": "catchplate.offlineDependencyManifest/v2",
             "artifacts": artifacts,
             "platform": "linux/amd64",
             "snapshotId": SNAPSHOT_ID,

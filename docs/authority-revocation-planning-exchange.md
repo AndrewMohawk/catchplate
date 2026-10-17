@@ -59,7 +59,7 @@ derived from planner transaction ID and request digest. The full root inventory
 has the existing ordered seven business roots, two authorization roots and
 nine counted heads; its wire does not establish reader provenance by itself.
 
-`serverware.policyAuthorityRevocationPlanningTransfer/v1` uses an eight-byte
+`catchplate.policyAuthorityRevocationPlanningTransfer/v1` uses an eight-byte
 `SWRP\0\0\0\1` request magic, five big-endian 64-bit lengths and five originals.
 The response uses `SWRS\0\0\0\1`, two lengths and the original pair.
 

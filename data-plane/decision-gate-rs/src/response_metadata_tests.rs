@@ -129,7 +129,7 @@ fn response_metadata_v2_contract_pairs_both_directions_and_every_selection() {
         buffered_response::validate_v2_header_selection(&selected, &[first.clone()]).unwrap();
         assert!(buffered_response::validate_v2_header_selection(&selected, &[first, envelope()]).is_err());
     }
-    for reserved in ["x-serverware-policy-hash", "x_serverware_policy_hash", "content_type", "set_cookie", "proxy_authorization"] {
+    for reserved in ["x-catchplate-policy-hash", "x_catchplate_policy_hash", "content_type", "set_cookie", "proxy_authorization"] {
         let mut invalid = envelope(); invalid["allowedResponseHeaderNames"] = json!([reserved]);
         invalid["responseHeaderRules"] = json!([{"name":reserved,"required":false,"predicate":{"kind":"equals","value":"x"}}]);
         assert!(buffered_response::validate_v2_header_selection(&profile(), &[invalid]).is_err());
@@ -172,8 +172,8 @@ fn response_metadata_v2_physical_limits_and_ascii_are_inclusive() {
 fn response_metadata_v2_reserved_aliases_and_listed_duplicates_never_discard() {
     let extras = headers(&[("server", b"synthetic"), ("x-cache", b"one"), ("x-cache", b"two")]);
     assert!(prepare(&extras).unwrap().is_empty());
-    for name in ["authorization", "proxy-authorization", "cookie", "set-cookie", "x-serverware-proof",
-        "proxy_authorization", "set_cookie", "x_serverware_proof", "content_type", "proxy_connection", "transfer_encoding"]
+    for name in ["authorization", "proxy-authorization", "cookie", "set-cookie", "x-catchplate-proof",
+        "proxy_authorization", "set_cookie", "x_catchplate_proof", "content_type", "proxy_connection", "transfer_encoding"]
     {
         assert_eq!(prepare(&headers(&[(name,b"synthetic")])).unwrap_err()["error"], "response_metadata_reserved_header");
     }
@@ -217,7 +217,7 @@ fn response_metadata_v2_real_finalizer_preserves_json_error_and_empty204_bytes()
         let wire = finalize(&snapshot,&state,&decision,&url,upstream(status,&extra,body),&ResponseSecretGuard::default());
         let parsed = parse_buffered_response(&wire).unwrap();
         assert_eq!(parsed.status,status); assert_eq!(parsed.body,body);
-        assert!(parsed.headers.contains_key("x-serverware-policy-hash"));
+        assert!(parsed.headers.contains_key("x-catchplate-policy-hash"));
         assert!(!parsed.headers.contains_key("server")); assert!(!parsed.headers.contains_key("x-cache"));
         assert!(!String::from_utf8_lossy(&wire).contains("synthetic\r\n"));
         if status == 204 {
@@ -277,7 +277,7 @@ fn response_metadata_json_media_parameters_real_finalizer_preserves_v1_v2_bytes(
                 let parsed = parse_buffered_response(&wire).unwrap();
                 assert_eq!(parsed.status, status, "{mode}: {media}");
                 assert_eq!(parsed.body, body);
-                assert!(parsed.headers.contains_key("x-serverware-policy-hash"));
+                assert!(parsed.headers.contains_key("x-catchplate-policy-hash"));
             }
         }
     }
@@ -304,7 +304,7 @@ fn response_metadata_json_media_parameters_real_finalizer_refuses_ambiguity() {
                 let parsed = parse_buffered_response(&wire).unwrap();
                 assert_eq!(parsed.status, 502, "{mode}: {extra}");
                 assert_eq!(serde_json::from_slice::<Value>(parsed.body).unwrap()["error"], error);
-                assert!(!parsed.headers.contains_key("x-serverware-policy-hash"));
+                assert!(!parsed.headers.contains_key("x-catchplate-policy-hash"));
             }
         }
     }
@@ -320,11 +320,11 @@ fn response_metadata_json_media_parameters_real_finalizer_keeps_legacy_exact() {
             let parsed = parse_buffered_response(&wire).unwrap();
             if media == "application/json" {
                 assert_eq!(parsed.status, 200);
-                assert!(parsed.headers.contains_key("x-serverware-policy-hash"));
+                assert!(parsed.headers.contains_key("x-catchplate-policy-hash"));
             } else {
                 assert_eq!(parsed.status, 502, "{mode}: {media}");
                 assert_eq!(serde_json::from_slice::<Value>(parsed.body).unwrap()["error"], "response_envelope_content_type_denied");
-                assert!(!parsed.headers.contains_key("x-serverware-policy-hash"));
+                assert!(!parsed.headers.contains_key("x-catchplate-policy-hash"));
             }
         }
     }
@@ -341,7 +341,7 @@ fn response_metadata_v2_real_finalizer_blocks_framing_secrets_and_semantic_bypas
         let wire = finalize(&snapshot,&state,&decision,&url,upstream(204,extra,b""),&guard);
         let parsed = parse_buffered_response(&wire).unwrap(); assert_eq!(parsed.status,502);
         assert!(!String::from_utf8_lossy(&wire).contains("synthetic-provider-secret"));
-        assert!(!parsed.headers.contains_key("x-serverware-policy-hash"));
+        assert!(!parsed.headers.contains_key("x-catchplate-policy-hash"));
         let queue = state.audit_queue.lock().unwrap();
         assert!(queue.iter().all(|event| !event.event.to_string().contains("synthetic-provider-secret")));
     }

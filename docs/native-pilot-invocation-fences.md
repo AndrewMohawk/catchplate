@@ -111,5 +111,5 @@ acceptance and all six independent production gates remain open.
 Exact source archive: **86,579,200 bytes**, SHA-256
 `09429ca955a89f5a1d8aa1e6c8eea06eaf2b9680160b86f1f343cbeb18b22b12`.
 Archive, scripts, logs, test executables and checksums are retained outside the
-checkout at `codex-offload/serverware/engineering-builds/475dc70e-invocation-fences-E8DRTz/`.
+checkout at `codex-offload/catchplate/engineering-builds/475dc70e-invocation-fences-E8DRTz/`.
 No cloud, paid test, new dependency resolution or unchanged broad suite ran.
